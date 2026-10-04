@@ -21,7 +21,8 @@ import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './app
 import { instanceSideIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
-import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
+import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 액자가 알려 온 리스트 즐겨찾기 변경
+import { appPinnedKeys, applyFavList, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
 import { canMoveSess, dotCls, findSessIn, isInvitedSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
@@ -483,6 +484,10 @@ export async function bootV2(): Promise<void> {
       applyProjectName(Number(m.id), m.name);
       return;
     }
+    //  #3870 — 액자 안 보드의 ☆ · ⌄ 메뉴로 리스트 즐겨찾기를 바꿨다. 사이드바의 즐겨찾기 줄을 그 순간 맞춘다(종전엔 새로고침해야 섰다).
+    //   프로젝트 이름과 같이 이 창의 표시만 고치는 알림이다 — 서버는 액자가 이미 고쳤다.
+    const fav = readListFavMsg(m);
+    if (fav) { applyFavList(fav.id, fav.on, ev.source); return; }
     // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
     //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
     if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {

@@ -44,6 +44,7 @@ import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData }
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
+import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 리스트 즐겨찾기: 셸 ↔ 액자 알림 한 줄 · 연달아 누를 때의 저장 순서
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
@@ -346,7 +347,8 @@ export interface SideInstance {
 //  project-sidebar-unify-5-proposals-2043). 2026-09-19 원준 지시로 스위치를 걷고 **폴더 · 리스트 하나로 고정**했다 —
 //  도는 세션은 [홈]·[AI 세션] 구역이 보여 준다. 클래식 패널은 액자 안에서 더는 그리지 않는다(projects/board.ts renderProjectV2Board).
 //  · **리스트까지만**(프로젝트 행 없음) — 리스트를 누르면 가운데 보드가 그 리스트로 간다(#/projects2/l/<id>).
-//  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정·즐겨찾기 토글은 보드 머리줄의 ⌄ · ☆ 가 한다(#1067).
+//  · 끌어다 놓기·리스트 ⋯ 메뉴는 1차에서 뺐다 — 리스트 설정은 보드 머리줄의 ⌄ 가 한다(#1067).
+//  · 즐겨찾기는 이 사이드바의 그 줄에서 바로 넣고 뺀다(#3870 — 줄에 올리면 수 자리의 ★ · 우클릭 메뉴, 아래 toggleFavList).
 const LENS_STORE_LEGACY = 'lively_v2_proj_lens';   // 스위치가 남긴 고른 쪽 기록 — 이제 고를 것이 없어 치운다
 const FOLD_CLOSED_STORE = shellPrefStore('lively_v2_proj_fold_closed', 'list'); // 접어 둔 폴더 id
 let foldClosed = new Set<string>();
@@ -1782,10 +1784,57 @@ export function loadFavLists(): void {
   favLoading = true;
   void api('/api/ui/v6/favorites').then((d: any) => {
     favLists = new Set<number>(((d && d.project_lists) || []).map((x: unknown) => Number(x)).filter((n: number) => Number.isFinite(n)));
+    for (const id of favLists) favSaver.know(id, true);
     favLoading = false;
     saveFavTop();
     if (last && (hooks.section?.() || 'home') === 'proj') redraw();
-  }).catch(() => { favLoading = false; favLists = new Set<number>(); });
+  }).catch(() => { favLoading = false; });   // #3870 — 못 받았으면 «모른다» 로 둔다(빈 집합 = «즐겨찾기 없음» 이 아니다). 다음에 그릴 때 다시 받는다
+}
+
+// ── 리스트 즐겨찾기 넣고 빼기 (#3870, lib/list-fav 머리말) ───────────────────────────
+//  종전엔 이 사이드바에 넣는 길이 없었다 — 리스트를 연 뒤 본문(액자) 브레드크럼 옆 ☆ 를 눌러야 했고, 눌러도 여기 즐겨찾기 줄은
+//  새로고침 전까지 그대로였다(매니지드 실측). 이제 그 줄에서 바로 바꾸고, 어느 쪽에서 바꾸든 양쪽이 곧바로 맞는다.
+//   · 누르면 화면부터 바꾸고(낙관) 저장은 리스트마다 한 줄로 세운다. 실패하면 서버가 아는 값으로 되돌리고 알린다.
+//   · 저장이 되면 열려 있는 액자들에 알린다(보드의 ☆ 가 맞춰진다). 액자가 바꾼 것은 applyFavList 로 받는다 — 되알리지 않는다.
+function paintFav(id: number, on: boolean): void {
+  if (!favLists) return;
+  if (on) favLists.add(id); else favLists.delete(id);
+  saveFavTop();
+  if (last && (hooks.section?.() || 'home') === 'proj') redraw();
+}
+/** 같은 오리진의 액자들에 «이 리스트의 즐겨찾기가 바뀌었다» 를 알린다. skip = 그 소식을 보낸 창(되돌려 보내지 않는다). */
+function tellFavFrames(id: number, on: boolean, skip?: unknown): void {
+  for (const f of Array.from(document.querySelectorAll('iframe'))) {
+    const w = f.contentWindow;
+    if (!w || w === skip) continue;
+    try { w.postMessage(listFavMsg(id, on), location.origin); } catch (_) { /* 다른 오리진 · 닫힌 액자 */ }
+  }
+}
+const favSaver = createFavSaver({
+  save: (id, on) => api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind: 'project_list', id, on }) }),
+  saved: (id, on) => tellFavFrames(id, on),
+  failed: (id, back, err: any) => { paintFav(id, back); toast('즐겨찾기 저장 실패 — ' + ((err && err.message) || err), true); },
+});
+/** 이 리스트가 즐겨찾기인가. 즐겨찾기를 아직 못 받았으면 null(모른다 — «추가» 라고 말하지 않는다). */
+export function isFavList(id: number): boolean | null { return favLists ? favLists.has(id) : null; }
+/** 사람이 눌렀다 — 넣거나 뺀다. 모를 때는 아무것도 하지 않는다. */
+export function toggleFavList(id: number): void {
+  if (!favLists || !(id > 0)) return;
+  const on = !favLists.has(id);
+  paintFav(id, on);
+  favSaver.want(id, on);
+}
+/** 액자(보드의 ☆ · ⌄ 메뉴)가 이미 저장하고 알려 왔다 — 화면만 맞추고, 다른 액자에 전한다. */
+export function applyFavList(id: number, on: boolean, from?: unknown): void {
+  favSaver.know(id, on);
+  if (!favSaver.busy(id)) paintFav(id, on);   // 여기서 누른 것이 저장 중이면 그 결과가 정한다
+  tellFavFrames(id, on, from);
+}
+/** 우클릭 메뉴의 한 줄(ctx-shell 'plist'). 모르면 없다. */
+export function listFavCtxRow(id: number): CtxRow | null {
+  const on = isFavList(id);
+  if (on == null || !(id > 0)) return null;
+  return { label: on ? '즐겨찾기에서 빼기' : '즐겨찾기에 추가', icon: 'star', run: () => toggleFavList(id) };
 }
 
 // ── [프로젝트] 구역의 기본 착지 = 즐겨찾기 맨 위 리스트 (#2061) ───────────────────────
@@ -1907,11 +1956,33 @@ function renderProjects(): void {
   const allRow = el('a', { class: 'v2-wcat v2-ptl v2-kview' + (allOn ? ' on' : ''), href: '#/projects2/all',
     title: '모든 프로젝트 — 폴더 · 리스트와 상관없이 한 화면에서 봅니다', ...(allOn ? { 'aria-current': 'true' } : {}) },
     icon('proj', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), ready ? cnt(plan.allN) : null);
+  //  #3870 — 리스트 줄의 ★. 올리면 수 자리에 서고(위키 분류 줄의 ✎ 와 같은 문법), 누르면 그 자리에서 즐겨찾기에 넣고 뺀다.
+  //   줄 자체가 링크라 안에 단추를 또 두지 않고 누름만 받는다. 즐겨찾기를 아직 못 받았으면 없다(모르는 것을 «추가» 라고 하지 않는다).
+  const favBtn = (l: TreeList, row: 'fav' | 'card'): HTMLElement | null => {
+    const fav = isFavList(l.id);
+    if (fav == null) return null;
+    const press = (ev: Event): void => {
+      ev.preventDefault(); ev.stopPropagation();
+      const byKey = ev.type === 'keydown';
+      toggleFavList(l.id);
+      //  다시 그려져 누른 단추가 사라졌다 — 키보드로 눌렀으면 같은 리스트의 ★ 로 초점을 돌려 준다(같은 줄 먼저).
+      //   ★ 는 줄에 초점이 있을 때만 서므로(CSS) 줄부터 잡고 ★ 로 옮긴다 — 숨은 것에는 초점이 안 간다.
+      if (!byKey) return;
+      const again = host.querySelector<HTMLElement>('.v2-p' + (row === 'fav' ? 'fav' : 'tl.v2-kcat') + '[data-lid="' + l.id + '"]')
+        || host.querySelector<HTMLElement>('.v2-ptl[data-lid="' + l.id + '"]');
+      again?.focus();
+      again?.querySelector<HTMLElement>('.v2-pstar')?.focus();
+    };
+    return el('span', { class: 'v2-pstar' + (fav ? ' on' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(fav),
+      'aria-label': l.name + (fav ? ' — 즐겨찾기에서 빼기' : ' — 즐겨찾기에 추가'), title: fav ? '즐겨찾기에서 빼기' : '즐겨찾기에 추가',
+      onclick: press, onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Enter' || ev.key === ' ') press(ev); } },
+      icon('star', 'v2-pstar-ic'));
+  };
   const favRow = (l: TreeList): HTMLElement => {
     const on = plan.onKey === 'fav:' + l.id;
     return el('a', { class: 'v2-wcat v2-ptl v2-kview v2-pfav' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name,
       title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
-      icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0));
+      icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0), favBtn(l, 'fav'));
   };
   //  #3870 — 즐겨찾기 · 기타 줄도 받은 뒤에만. 프로젝트만 오고 리스트가 아직이면 전부 «기타 (미분류) 311» 로 세어진다.
   const fixed: HTMLElement[] = [allRow, ...(ready ? plan.favs.map(favRow) : [])];
@@ -1932,7 +2003,7 @@ function renderProjects(): void {
       emoji ? el('span', { class: 'v2-ptl-emoji', 'aria-hidden': 'true', text: emoji }) : icon('list', 'v2-ptl-ic'),
       el('span', { class: 'n', text: l.name }),
       l.visibility === 'members' ? lockIc() : null,
-      cnt(n));
+      cnt(n), favBtn(l, 'card'));
   };
   const cards = plan.groups.flatMap((g) => g.cards);
   const order = cards.filter((c) => c.open && !c.full).map((c) => c.key);

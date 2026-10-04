@@ -41,7 +41,8 @@ import { pjvSelReset } from './selection.js';
 import { PJV_GROUPBY_FIELDS, pjvColSortCmp, pjvContainerCmp, pjvGetAlsoList, pjvGetGroupBy, pjvManualCmp, pjvProjAddRow, pjvProjRow, pjvRenderStatusGroups, pjvSetAlsoList, pjvSetGroupBy } from './rows.js';
 import { pjvTableDefaultCmp, pjvTimelineView } from './timeline.js';
 import { openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace } from './list-forms.js';
-import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
+import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
+import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
 
 // ════════════════════════════════════════════
@@ -60,6 +61,21 @@ import { openProjectV2Form } from './project-form.js';
 //  사이드바 맨 아래 폴더형 항목으로 내렸다(상단에 통째로 비던 한 줄·여백 제거). → 헤드 없음(null).
 function projectPageHead() {
   return null;
+}
+
+// #3870 — 바깥 셸의 [프로젝트] 사이드바에서 리스트 즐겨찾기를 바꾸면 한 줄 알려 온다(lib/list-fav). 지금 선 보드의 ☆ · ⌄ 메뉴가 같은 값을
+//  보게 맞춘다 — 저장은 셸이 이미 했으니 여기서는 보내지 않는다. 듣는 귀는 하나(모듈 수명), 받는 손은 보드가 설 때마다 갈아 끼운다.
+//  바깥 창이 없거나(단독 화면) 바깥 창이 보낸 것이 아니거나 오리진이 다르면 듣지 않는다.
+let pjvShellFavApply: ((id: number, on: boolean) => void) | null = null;
+let pjvShellFavBound = false;
+function pjvListenShellFav() {
+  if (pjvShellFavBound) return;
+  pjvShellFavBound = true;
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (window.parent === window || ev.source !== window.parent || ev.origin !== location.origin) return;
+    const m = readListFavMsg(ev.data);
+    if (m && pjvShellFavApply) pjvShellFavApply(m.id, m.on);
+  });
 }
 
 // 프로젝트(v2) 진입 — 하위 탭(탐색) 폐지: 상세(p) 외 모든 진입은 프로젝트 보드로. 옛 worklog→터미널(#609) 유지, 옛 browse URL 도 보드로 흡수.
@@ -1347,6 +1363,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     }
     crumbPath.replaceChildren(el('span', { class: 'pjv-crumb-path' }, ...pathNodes), el('span', { class: 'pjv-crumb-leaf' }, ...nodes));
   };
+  //  #3870 — 셸이 바꾼 즐겨찾기 한 건: 이 보드가 든 목록(favData) · ⌄ 메뉴가 읽는 캐시를 고치고 브레드크럼(☆)만 다시 그린다.
+  pjvShellFavApply = (id, on) => {
+    if (!favData || !wrapper.isConnected) return;   // 이 보드가 화면에서 내려갔다(다른 화면으로 갔다) — 고칠 것이 없다
+    const ids = new Set<number>(((favData.project_lists) || []).map((x: any) => Number(x)));
+    if (on) ids.add(id); else ids.delete(id);
+    favData.project_lists = [...ids];
+    pjvFavListCacheSet(id, on);
+    syncCrumbs();
+  };
+  pjvListenShellFav();
 
   // 툴바 — 사이드바 여닫이와 무관하게 늘 셸 본문 컬럼 상단(#607/#1067). render() 가 그때그때 main 에 얹는다.
   //  좌(데이터 구조: 그룹·계층·열) / 우(데이터 좁히기 + 생성) 로 역할을 가른다.

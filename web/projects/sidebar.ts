@@ -15,6 +15,7 @@ import { overlayBox } from '../learn.js';
 import { pjvApplyToolbarFilters } from './filters.js';
 import { pjvBundleIcon } from './icons.js';
 import { ICONS } from '../lib/icon-paths.js';   // #4233 — 리스트 = 점과 줄 셋(새 화면과 한 벌)
+import { listFavMsg } from '../lib/list-fav.js';   // #3870 — 셸 ↔ 액자 즐겨찾기 알림 한 줄
 import { PJV_LIST_COLORS, openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace, pjvHarmonizeColor, pjvListStatusEditor, pjvSaveListMembers } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { pjvContainerCmp, pjvProjAddRow, pjvProjDelete, pjvProjRow, pjvProjTeamControl, pjvRenderStatusGroups } from './rows.js';
@@ -487,8 +488,15 @@ function pjvMoveNear(ids, movingId, targetId, after) {
   return rest;
 }
 // 즐겨찾기 토글 저장(#670) — 서버 POST(/api/ui/v6/favorites). WIKI 사이드바도 동일 엔드포인트 공유.
+//  #3870 — 리스트 즐겨찾기가 저장되면 바깥 셸에 한 줄 알린다. 셸 [프로젝트] 사이드바의 즐겨찾기 줄이 그 순간 맞춰진다
+//   (종전엔 셸이 알 길이 없어 새로고침해야 줄이 섰다). 단독 화면(바깥 창 없음)에서는 보내지 않는다. 실패하면 알리지 않는다.
 function pjvSetFavorite(kind: string, id: number, on: boolean) {
-  return api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind, id, on }) });
+  return api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind, id, on }) }).then((r) => {
+    if (kind === 'project_list' && window.parent !== window) {
+      try { window.parent.postMessage(listFavMsg(Number(id), !!on), location.origin); } catch (_) { /* 부모가 닫혔다 */ }
+    }
+    return r;
+  });
 }
 // 즐겨찾기 리스트 id 캐시(#1115) — renderArea 가 로드마다 채우고, 사이드바 밖 ⋯ 메뉴 호출부(인라인 그룹 헤더·브레드크럼)가
 //  현재 즐겨찾기 상태를 읽는다. (구 pjvFavStar 행 호버 별은 #1115 로 제거 — 토글은 pjvListSettingsMenu 항목으로.)
@@ -496,6 +504,8 @@ let pjvFavListCache = new Set<number>();
 // 통째 교체의 유일한 창구(#1313 R31) — 캐시를 세우는 쪽은 보드 렌더다. 세터를 거치게 해 두면 보드가 별도 모듈로
 //  떨어져도(ESM import 바인딩은 재할당 불가) 호출부를 그대로 둘 수 있다.
 function setFavListCache(v: Set<number>) { pjvFavListCache = v; }
+//  #3870 — 바깥 셸이 바꾼 한 건을 캐시에 맞춘다(통째 교체가 아니라 그 Set 을 그대로 고친다 — renderArea 가 같은 Set 을 든다).
+function pjvFavListCacheSet(id: number, on: boolean) { if (on) pjvFavListCache.add(Number(id)); else pjvFavListCache.delete(Number(id)); }
 // 사이드바 즐겨찾기 구역 접힘(#1113 후속) — 기본 펼침, 사용자가 접으면 localStorage 로 유지(폴더 접힘이 세션 Map 인 것과 달리
 //  이 구역은 '늘 맨 위'라 새로고침마다 되살아나면 거슬린다).
 function pjvFavSecOpen() {
@@ -646,6 +656,7 @@ export {
   pjvArchiveDropTarget,
   pjvArchiveFolderIds,
   pjvBuildListGroups,
+  pjvFavListCacheSet,
   pjvFavSecOpen,
   pjvFindArchiveFolder,
   pjvFolderDropTarget,
