@@ -1,0 +1,112 @@
+/* ── 「세션 이력」 앱(#4553) — 가로탭 셋: 대화 찾기 · 작업 일지 · 세션 목록. 화면: web/sessions-*.ts ──
+   대화록 그 자체(.sess-*)는 05-admin.css 에 있다 — 여기는 앱 틀과 탭 세 개, 그리고 칸 안에 실린 대화록의 덧칠만 쥔다.
+   색은 전부 토큰이다(다크 테마를 따라간다). 폭 판정은 칸의 폭으로 한다(container query) — 셸 액자는 창보다 좁다. */
+body[data-route="sessions"] main { max-width: none; }
+.shx { max-width: 1480px; margin: 0 auto; padding: 4px 4px 40px; }
+.shx-head { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.shx-head h2 { margin: 0 0 8px; font-size: 17px; font-weight: 800; color: var(--ink); }
+.shx-head .shx-tabs { border-bottom: 0; margin: 0; }
+.shx-tabpanel[hidden] { display: none; }
+
+/* 두 칸(왼쪽 목록 · 오른쪽 대화록) — 왼쪽은 문서 스크롤을 따르고, 오른쪽은 붙어서 제 안에서 스크롤한다. */
+.shx-cols { display: grid; grid-template-columns: minmax(300px, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; }
+.shx-col { min-width: 0; }
+.shx-one { max-width: 980px; }
+.shx-pane { position: sticky; top: 8px; max-height: calc(100vh - 20px); overflow: auto; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); container-type: inline-size; }
+.shx-pane-empty { margin: 30px 8px; }
+@media (max-width: 900px) {
+  .shx-cols { grid-template-columns: minmax(0, 1fr); }
+  .shx-pane { position: static; max-height: none; }
+}
+
+/* 입력 · 고르개 · 나란한 단추 */
+.shx-input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-net); border-radius: 8px; padding: 8px 11px; }
+.shx-input:focus { outline: 2px solid var(--blue); outline-offset: -1px; }
+.shx-filters, .shx-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.shx-grow { flex: 1; }
+.shx-select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-net); border-radius: 7px; padding: 5px 8px; max-width: 220px; }
+.shx-seg { display: inline-flex; border: 1px solid var(--line-net); border-radius: 8px; overflow: hidden; }
+.shx-seg-b { font: inherit; font-size: 13px; font-weight: 600; color: var(--muted-head); background: var(--surface); border: 0; padding: 5px 12px; cursor: pointer; }
+.shx-seg-b + .shx-seg-b { border-left: 1px solid var(--line-net); }
+.shx-seg-b.on { color: var(--blue); background: var(--bg-tint-2); }
+.shx-count, .shx-range { font-size: 12.5px; color: var(--muted); margin: 4px 0; min-height: 18px; }
+.shx-more { margin: 10px 0; }
+
+/* 목록 줄(대화 찾기 · 최근 대화) */
+.shx-grp { font-size: 12px; font-weight: 700; color: var(--muted-head); margin: 16px 0 4px; }
+.shx-row { display: block; padding: 8px 10px; border-radius: 7px; border-bottom: 1px solid var(--line-row); color: inherit; text-decoration: none; cursor: pointer; }
+.shx-row:hover, .shx-row.sel { background: var(--bg-sel); }
+.shx-row.sel { box-shadow: inset 2px 0 0 var(--blue); }
+.shx-row-t { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shx-row-m { font-size: 12px; font-weight: 400; color: var(--muted); }
+.shx-hit { font-size: 13.5px; line-height: 1.5; color: var(--ink); margin: 2px 0; overflow-wrap: anywhere; }
+.shx-ctx { font-size: 12px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-hl { background: var(--md-mark-bg); color: inherit; border-radius: 3px; padding: 0 1px; }
+
+/* 「남긴 것」 — 지식 · 태스크 · 커밋 · 고친 파일 */
+.shx-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.shx-chips:empty { display: none; }
+.shx-chip { font-size: 11.5px; line-height: 1.5; border-radius: 20px; padding: 1px 9px; background: var(--bg-tint-2); color: var(--muted-head); text-decoration: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shx-chip.k { background: var(--bg-success); color: var(--mint-deep); }
+.shx-chip.t { background: var(--bg-note); color: var(--ink-note); }
+a.shx-chip:hover { text-decoration: underline; }
+.shx-act { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; }
+.shx-act-type { flex: none; font-size: 11px; font-weight: 700; color: var(--muted-head); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
+.shx-act-body { min-width: 0; }
+.shx-act-title { font-size: 13.5px; color: var(--ink); overflow-wrap: anywhere; }
+.shx-act-sum { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.shx-left { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
+.shx-left-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.shx-left h4 { margin: 0; font-size: 13px; color: var(--ink); }
+.shx-left-open { font-size: 12.5px; color: var(--blue); text-decoration: none; white-space: nowrap; }
+.shx-left-open:hover { text-decoration: underline; }
+
+/* 작업 일지 */
+.shx-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+.shx-stat { flex: 1 1 110px; border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; background: var(--surface); }
+.shx-stat b { display: block; font-size: 20px; color: var(--ink); }
+.shx-stat span { font-size: 12px; color: var(--muted); }
+.shx-jrow { padding: 8px 10px; border-bottom: 1px solid var(--line-row); border-radius: 7px; }
+.shx-jrow:hover { background: var(--bg-sel); }
+.shx-jhead { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.shx-jsum { font-size: 13.5px; color: var(--ink); margin-top: 2px; overflow-wrap: anywhere; }
+.shx-jsum.none { color: var(--muted-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shx-jmore { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.shx-jmore[hidden] { display: none; }
+.shx-jacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.shx-first { font-size: 12.5px; color: var(--ink-sub); margin: 6px 0; overflow-wrap: anywhere; }
+.shx-first-k { font-weight: 700; color: var(--muted-head); margin-right: 6px; }
+
+/* 세션 목록 */
+.shx-tablewrap { overflow-x: auto; }
+.shx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.shx-table th { text-align: left; padding: 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.shx-th { font: inherit; font-size: 12px; font-weight: 700; color: var(--muted-head); background: none; border: 0; padding: 7px 8px; cursor: pointer; }
+.shx-th.on { color: var(--ink); }
+.shx-table td { padding: 8px; border-bottom: 1px solid var(--line-row); vertical-align: top; color: var(--ink-sub); white-space: nowrap; }
+.shx-table td.shx-td-name { white-space: normal; color: var(--ink); overflow-wrap: anywhere; min-width: 150px; }
+.shx-tr { cursor: pointer; }
+.shx-tr:hover, .shx-tr.sel { background: var(--bg-sel); }
+.shx-tr:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.shx-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted-3-line); vertical-align: 1px; }
+.shx-dot.busy { background: var(--blue); }
+.shx-dot.wait { background: var(--warn); }
+.shx-dot.done { background: var(--mint); }
+.shx-dot.log { background: none; border: 1.5px solid var(--muted-3-line); box-sizing: border-box; }
+.shx-detail-title { margin: 4px 0 10px; font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+.shx-info { width: 100%; border-collapse: collapse; font-size: 13px; }
+.shx-info th { text-align: left; font-weight: 600; color: var(--muted-head); padding: 6px 12px 6px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+.shx-info td { padding: 6px 0; color: var(--ink); overflow-wrap: anywhere; }
+.shx-info tr + tr th, .shx-info tr + tr td { border-top: 1px solid var(--line-row); }
+
+/* 칸 안에 실린 대화록 — 이 대화 안에서 찾기 줄 · 좁은 칸에서는 질문 목차를 위로 */
+.sess-find { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--bg-tint); font-size: 12.5px; color: var(--ink-sub); }
+.sess-find[hidden] { display: none; }
+.sess-find-q { font-weight: 700; color: var(--ink); }
+.sess-find-n { flex: 1; min-width: 120px; }
+.sess-embed .sess-side { flex-basis: 190px; width: 190px; top: 0; max-height: calc(100vh - 80px); }
+@container (max-width: 640px) {
+  .sess-embed .sess-layout { flex-direction: column; }
+  .sess-embed .sess-side { position: static; width: auto; flex: none; max-height: 24vh; border-right: none; border-bottom: 1px solid var(--line); padding-right: 0; padding-bottom: 8px; }
+  .sess-embed .sess-main { padding-left: 20px; }
+}

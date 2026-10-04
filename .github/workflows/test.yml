@@ -124,6 +124,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/conv-index.pg-test.mjs
+      # ④-d1b 세션 이력 앱(#4553)의 두 저장 경로 — 맞은 말 단위 검색(searchConvMessages) · 작업 일지(sessionJournal).
+      #    목으로는 못 보는 것: 약속이 전부 SQL 조건이다 — «볼 수 있는 세션의 말만(주인 + 초대 · 가려진 프로젝트 · 휴지통 ·
+      #    워크스페이스)» · «앞뒤 말은 대화 순서(at_offset, idx)의 바로 옆 말» · «기간 경계» · «가려진 프로젝트·잠긴 지식의
+      #    이름을 싣지 않는다» · «갈아탄 박스의 기록은 그때 돌던 대화에만». 실제 행을 넣고 돌려받은 줄로 판정한다.
+      - name: 세션 이력 앱 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/session-history.pg-test.mjs
       # ④-d2 프로젝트 본문 가드 저장(#4084 곁칸 태스크) — 목으로는 못 보는 것: **합치기와 충돌 판정이 UPDATE 한 문장이다**.
       #    «고치기 시작한 글 뒤에 꼬리만 붙었으면 그 꼬리를 살려 합친다 · 다른 데가 바뀌었으면 아무것도 안 쓴다(같은 요청의
       #    다른 키도)» 가 SET·WHERE 에 들어 있다. 곁칸 본문 편집은 일하는 세션 옆에서 돌아, 가드가 없으면 세션이 덧붙인
