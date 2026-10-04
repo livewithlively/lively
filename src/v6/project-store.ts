@@ -1169,10 +1169,14 @@ const P_PARENT_SEL = "pp.name AS parent_name, (p.archived_at IS NOT NULL OR pr.a
 // 내부 보드 앵커(__board__)는 검색 대상 아님(listProjects 도 제외) — task/subtask 는 folder NULL 이라 통과.
 //  ★ 휴지통도 검색 대상이 아니다(#4530) — 목록(listProjects)은 trashed_at 을 빼는데 검색 경로들만 안 빼서, 버린 프로젝트가
 //   표시 없이 결과에 섞였다. 게다가 버리는 순간 updated_at 이 갱신돼 글자 검색(최신순)에서 오히려 1위로 올랐다(실측 #4304).
-//   태스크·서브태스크는 표식이 뿌리에만 있으므로 부모·조부모 중 버려진 것이 있으면 함께 뺀다(NOT EXISTS — 맞은 행에만 도는 PK 조회).
+//   태스크·서브태스크는 표식이 뿌리에만 있으므로 부모·조부모 중 버려진 것이 있으면 함께 뺀다.
+//  ⚠ 부모(tp)를 번호로 바로 찾고 조부모(tg)는 그 부모에서 잇는다 — 상관 조건은 `tp.id = p.parent_id` 하나뿐이다.
+//   처음 꼴(`tr.trashed_at IS NOT NULL AND (tr.id = p.parent_id OR tr.id = (SELECT … ))`)은 실행 계획에 따라 «맞은 줄 × 휴지통 줄 전부»
+//   를 대조하며 줄마다 부모를 다시 찾았다(PG17 실측: «세션» 1,511줄 × 134 = 202,297번). 매니지드에서 «세션» 7.3초 · «배포» 3.5초
+//   (배포 뒤 실측, 같은 WHERE 의 개수 세기는 0.8초 · 0.5초 — 계획이 달랐다). 이 꼴은 어떤 계획이든 줄마다 번호 조회 한두 번이다.
 const P_SEARCH_BASE = `p.folder IS DISTINCT FROM '__board_anchor__' AND p.trashed_at IS NULL
-  AND NOT EXISTS (SELECT 1 FROM project tr WHERE tr.trashed_at IS NOT NULL
-                   AND (tr.id = p.parent_id OR tr.id = (SELECT tp.parent_id FROM project tp WHERE tp.id = p.parent_id)))`;
+  AND NOT EXISTS (SELECT 1 FROM project tp LEFT JOIN project tg ON tg.id = tp.parent_id
+                   WHERE tp.id = p.parent_id AND (tp.trashed_at IS NOT NULL OR tg.trashed_at IS NOT NULL))`;
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
 function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
