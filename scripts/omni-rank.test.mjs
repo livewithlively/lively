@@ -75,6 +75,11 @@ eq(M.cleanSnippet("> ▤ 세션의 첫 지시에서 **자동 생성**된 프로�
   "지금 우리 검색 (cmd+k)에 불편한게 너무 많아.", "R7 한 줄로 접힌 안내문 — 첫 지시는 남는다");
 eq(M.cleanSnippet("# 통합검색 결함 점검 ## 메타데이터 - 상태: active > 인용 **굵게** `code`"), "통합검색 결함 점검 메타데이터 상태: active 인용 굵게 code", "R7 한 줄로 접힌 발췌 속 줄머리 기호");
 eq(M.cleanSnippet("omni-rank.ts 와 a-b, x->y"), "omni-rank.ts 와 a-b, x->y", "R7 낱말 속 기호는 둔다");
+eq(M.cleanSnippet("CP control 배포 ⋯ > | 1 | 랜딩 화면이 **다른** 배포에 덮임 | 커밋 `c9fa687` |"), "CP control 배포 … 1 · 랜딩 화면이 다른 배포에 덮임 · 커밋 c9fa687", "R7 표 조각 — 칸막이는 가운뎃점");
+eq(M.cleanSnippet("| 회차 | 언제 | |---|---| | 2 | 8월 |"), "회차 · 언제 · 2 · 8월", "R7 표 구분 줄은 버린다");
+eq(M.focusSnippet("앞의 글이 길게 이어진다 그리고 표 · 큰따옴표 구절 배포 절차", ["큰따옴표"], 3), "…큰따옴표 구절 배포 절차", "R7 잘린 자리가 가운뎃점이면 버린다");
+eq(M.cleanSnippet("- [ ] 큰따옴표 구절 넣기"), "큰따옴표 구절 넣기", "R7 체크 목록 머리");
+eq([M.cleanSnippet("a | b 한 번은 그대로"), M.cleanSnippet("src/__init__.py 의 __dirname 과 a**b")], ["a | b 한 번은 그대로", "src/__init__.py 의 __dirname 과 a**b"], "R7 글 속의 세로줄 하나 · 식별자의 밑줄 · 곱셈은 글자다");
 eq(M.cleanSnippet("가".repeat(200), 10), "가".repeat(10) + "…", "R7 길이 상한");
 //  둘째 줄은 첫 맞은 낱말 조금 앞에서 — 폰에서 맞은 낱말이 줄임표 뒤로 밀려 왜 떴는지 안 보였다(배포 뒤 실화면)
 {
