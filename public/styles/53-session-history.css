@@ -80,12 +80,18 @@ a.shx-chip:hover { text-decoration: underline; }
 
 /* 세션 목록 */
 .shx-tablewrap { overflow-x: auto; }
-.shx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* 열 폭을 고정한다 — 프로젝트 이름이 길면(한 줄로 두면) 상태·마지막 활동 열이 표 밖으로 밀려 안 보였다(매니지드 실화면). */
+.shx-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.shx-table th:nth-child(1) { width: 38%; }
+.shx-table th:nth-child(2) { width: 30%; }
+.shx-table th:nth-child(3) { width: 17%; }
+.shx-table th:nth-child(4) { width: 15%; }
+.shx-table td.shx-td-proj { overflow: hidden; text-overflow: ellipsis; }
 .shx-table th { text-align: left; padding: 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .shx-th { font: inherit; font-size: 12px; font-weight: 700; color: var(--muted-head); background: none; border: 0; padding: 7px 8px; cursor: pointer; }
 .shx-th.on { color: var(--ink); }
 .shx-table td { padding: 8px; border-bottom: 1px solid var(--line-row); vertical-align: top; color: var(--ink-sub); white-space: nowrap; }
-.shx-table td.shx-td-name { white-space: normal; color: var(--ink); overflow-wrap: anywhere; min-width: 150px; }
+.shx-table td.shx-td-name { white-space: normal; color: var(--ink); overflow-wrap: anywhere; }
 .shx-tr { cursor: pointer; }
 .shx-tr:hover, .shx-tr.sel { background: var(--bg-sel); }
 .shx-tr:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
@@ -106,6 +112,8 @@ a.shx-chip:hover { text-decoration: underline; }
 .sess-find-q { font-weight: 700; color: var(--ink); }
 .sess-find-n { flex: 1; min-width: 120px; }
 .sess-embed .sess-layout { flex-direction: row; }
+/* 도구 호출 줄(도구 이름이 길다)이 칸 밖으로 나가지 않게 */
+.sess-embed .sess-main .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-embed .sess-side { position: sticky; top: 0; flex: 0 0 190px; width: 190px; max-height: calc(100vh - 80px); border-right: 1px solid var(--line); border-bottom: none; padding-right: 10px; padding-bottom: 0; }
 /* 칸 안에서는 **칸의 폭**으로만 세로로 쌓는다. 05-admin.css 의 창 폭 판정(≤820px)을 그대로 두면 칸이 넉넉한데도 목차가
    위로 올라가고, 가로일 때의 폭(190px)이 높이로 읽혀 빈 자리가 생긴다. */

@@ -195,6 +195,10 @@ try {
     const r = await find(A, "코끼리 하마");
     eq("M14 낱말 둘 — 둘 다 든 말이 먼저다(더 오래됐어도)", r.hits.map((h) => [h.text, h.terms]), [["코끼리와 하마가 함께 든 옛 말", 2], ["코끼리만 든 새 말", 1]]);
     eq("M14 한 줄만 받아도 둘 다 든 말이 그 한 줄이다(자르기 전에 줄 세운다)", texts(await find(A, "코끼리 하마", { limit: 1 })), ["코끼리와 하마가 함께 든 옛 말"]);
+    //  긴 말 — 한 낱말이 먼저 혼자 나오고 한참 뒤에 둘이 함께 나온다. 발췌는 둘이 함께 나오는 자리여야 한다.
+    await put(SID(13), A, U("타조 이야기로 시작한다. " + "가나다라마바사아자차 ".repeat(80) + "끝에 가서야 타조와 펭귄을 함께 말한다.", ago(0)));
+    const both = (await find(A, "타조 펭귄")).hits[0];
+    chk("M14 긴 말의 발췌는 두 낱말이 함께 나오는 자리다(첫 낱말이 처음 나온 자리가 아니다)", both.terms === 2 && /타조와 펭귄을 함께/.test(both.text) && both.text.length <= C.MSG_HIT_TEXT_MAX + 2, JSON.stringify(both.text));
     const l1 = await find(A, "얼룩말", { limit: 1 });
     eq("M15 limit=1 — 줄은 하나 · 총계는 전체", [l1.hits.length, l1.total], [1, 5]);
     const capped = await find(A, "얼룩말", { cap: 1 });
