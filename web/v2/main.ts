@@ -46,7 +46,7 @@ import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
-import { confirmSessionArchive } from '../session-actions.js';
+import { confirmSessionArchive, watchSessionTrash } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
@@ -55,13 +55,15 @@ import { takeCreated } from './created-cache.js';
 import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { createSideTruth } from '../lib/side-boot.js';   // #3870 — 목록의 정본을 다 받았을 때만 loadedAt 을 찍는다
+import { createWriteHolds } from '../lib/write-hold.js'; // #3870 — 방금 치운 · 버린 줄을 떠 있던 읽기가 되세우지 않게
+import { markTrashed, stampTrashedRows, trashedTabKeys, unmarkTrashed } from './trash-hold.js';   // #3870 — 휴지통 표식을 목록 재료에 비추기(순수)
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
-import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedSessionRefs, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
@@ -728,6 +730,35 @@ let appInstances: AppInstanceRecord[] = [];   // #1883 — 서버가 아는 내 
 //  #3855·#3857 — **내가 목록에서 치운 세션 id**(서버 정본: org_app_instance closed·사유 user). 인스턴스 목록과 한 왕복에 온다.
 //   실패한 판은 직전 값을 그대로 쓴다 — 빈 집합으로 덮으면 치운 세션이 한 틱에 전부 되살아난다(#869 와 같은 모양).
 let dismissedSess = new Set<string>();
+//  ★ 방금 내가 치운 · 휴지통으로 보낸 세션(#3870, lib/write-hold 머리말). 목록 읽기는 겹쳐 뜨고(8초 폴링 · 클릭 · 스트림)
+//   종전엔 답이 도착한 순서대로 화면에 적혔다 — 누르는 순간 떠 있던 읽기의 답이 방금 치운 줄을 되세웠다(매니지드 실측:
+//   줄 넷을 연달아 치우면 사라진 줄이 2번 다시 섰다). 누른 것은 여기 붙들어 서버 답 위에 덧씌우고, 그 쓰기가 끝난 뒤에
+//   출발한 읽기가 올 때 놓는다. 읽기도 출발 순서를 지킨다 — 먼저 출발한 판이 늦게 와서 새 답을 덮지 않는다.
+//   · dismiss — ids = 치운 세션 id(인스턴스 축에 덧씌운다)
+//   · trash   — ids = 그 세션의 이름들(박스 id · 대화 uuid), at = 붙인 표식(라이브 · 기록 두 축에 덧씌운다)
+interface SideWrite { kind: 'dismiss' | 'trash'; ids: string[]; at: string }
+const sideWrites = createWriteHolds<SideWrite>();
+const heldIds = (kind: SideWrite['kind']): Set<string> => new Set(sideWrites.values().filter((w) => w.kind === kind).flatMap((w) => w.ids));
+/** 인스턴스 축 한 판을 적는다 — 더 늦게 출발한 판이 이미 적었으면 버린다(false). 붙든 치움은 그 위에 다시 덧씌운다. */
+function takeInstances(rows: AppInstanceRecord[], seq: number): boolean {
+  if (!sideWrites.take('instances', seq)) return false;
+  appInstances = rows;
+  //  치운 세션 id 는 **그 판과 한 왕복에 온 것**만 쓴다. 안 실려 온 판이면 직전 값을 그대로 쓴다(위 «실패한 판» 과 같은 뜻).
+  const gone = dismissedRefsOf(rows);
+  if (gone) dismissedSess = new Set(gone);
+  overlayDismissHolds();
+  return true;
+}
+function overlayDismissHolds(): void {
+  const ids = heldIds('dismiss');
+  if (!ids.size) return;
+  for (const x of ids) dismissedSess.add(x);
+  appInstances = appInstances.filter((x) => !(x.subject_kind === 'session' && !!x.subject_ref && ids.has(x.subject_ref)));
+}
+/** 붙든 휴지통 표식을 세션 목록에 덧씌운다 — 세션의 어느 이름(박스 id · 대화 uuid · 접힌 옛 박스 id)으로든 맞으면 그 세션이다. */
+function overlayTrashHolds(sessions: Sess[]): void {
+  for (const w of sideWrites.values()) if (w.kind === 'trash') markTrashed(sessions, new Set(w.ids), w.at);
+}
 //  ★ 그 축의 정본을 **한 번이라도 성공해 받았나**(#2460). 아래 ③(열린 창)이 «서버가 모르는 창»을 거를 때
 //   이 값을 먼저 본다 — 아직 못 받은 판에서 거르면 콜드 스타트에 멀쩡한 행이 잠깐 사라진다.
 //   실패한 판은 세지 않는다(loadData 는 실패를 직전 목록으로 덮으므로 '받았다'가 아니다).
@@ -770,6 +801,37 @@ let lastLogs: any[] = [];
 //  세션 id → 마지막으로 **관측된** 그 행(#2544 후속). 중계가 못 본 판(observed:false)이 오면 이 값으로 잇는다 —
 //  «못 봤다» 가 화면에서 «작업 완료» 로 둔갑하던 자리다(obs-carry.ts 머리말). 오래 못 보면 그 기억은 스스로 버려진다.
 const obsMemory = new Map<string, ObsMemory>();
+
+// ── 휴지통으로 보내기의 낙관 반영(#3870) ─────────────────────────────────────────
+//  보내는 순간 그 세션에 표식을 붙여 붙든다 — 사이드바 · 전체 목록이 곧바로 뺀다. 서버가 받은 이름으로 굳히고(ack),
+//   못 받았으면 표식을 떼고 되세운다(fail — 이유는 보낸 자리가 말한다). 놓는 것은 그 뒤에 출발한 읽기다(sideWrites 머리말).
+//  ⚠ ack 때 **받아 둔 답(lastLive · lastLogs)에도 표식을 적는다**(trash-hold.ts stampTrashedRows 머리말 — 오래된 기록만 남은
+//   세션은 깊은 판이 올 때까지 최대 5분 표식 없이 캐시에 남는다).
+//  ⚠ 되돌리기 · 완전 삭제 · 비우기는 붙들지 않는다(그 화면이 제 줄을 스스로 뺀다). 다만 **다음 기록 읽기를 깊게** 받는다 —
+//   같은 까닭으로, 얕은 판 밖의 줄은 캐시에 옛 표식(내가 적은 것이든 서버가 준 것이든)을 그대로 들고 있다.
+watchSessionTrash((op, ids) => {
+  if (op !== 'trash') return { ack: () => { logsDeepAt = 0; }, fail: () => { /* 바뀐 것이 없다 */ } };
+  const w: SideWrite = { kind: 'trash', ids: [...ids], at: new Date().toISOString() };
+  const hold = sideWrites.hold(w, ['live', 'logs']);
+  const repaint = (): void => { drawSide(); tabsApi?.paint(); };
+  overlayTrashHolds(data.sessions);
+  repaint();
+  return {
+    ack: (done) => {
+      const got = new Set(done);
+      //  서버가 건너뛴 이름으로만 붙어 있던 표식은 뗀다 — 받은 이름으로 다시 덧씌운다.
+      unmarkTrashed(data.sessions, w.at); w.ids = [...got]; overlayTrashHolds(data.sessions);
+      stampTrashedRows(lastLive, lastLogs, got, w.at);
+      hold.ack();
+      //  버린 세션의 창을 닫는다 — × (치우기)와 같은 길이다(closeRowTabs). 보던 화면이면 최근에 보던 곳으로 간다.
+      //   안 닫으면 보고 있는 줄은 ③(열린 창)이 계속 세워 «버렸는데 그대로» 가 된다. 팝아웃 창은 그 세션 하나가 창의 전부라 둔다.
+      if (!SOLO) closeRowTabs(trashedTabKeys(data.sessions, got));
+      repaint();
+    },
+    fail: () => { hold.fail(); unmarkTrashed(data.sessions, w.at); repaint(); },
+  };
+});
+
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   //  #3870 — 리스트 축을 아직 못 받았으면 TTL 을 안 기다린다. 프로젝트만 성공하고 리스트가 실패한 첫 판 뒤엔 5분 동안
   //   리스트를 다시 안 물어, 막대 아래 «다시 받는 중» 이 거짓이 된다. 목록이 선 뒤(포기 포함)엔 종전 TTL 로 돌아간다.
@@ -782,11 +844,12 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   //  E2E 실측(2026-08-26, dev): 세션 목록 두 축을 막고 첫 그림을 그리자, 서버가 이름을 아는 세션인데도
   //  좌측 행이 `세션 c368bd` 로 떨어졌다. 값·배선 테스트는 전부 통과하는데 화면만 틀린 자리였다.
   //  ⇒ 도착 즉시 얹고, **아직 아무 세션도 못 그린 판에서만** 다시 그린다(매 폴링마다 덧그리지 않게).
+  //  #3870 — 이 판의 출발 번호. 아래에서 답을 적을 때마다 «더 늦게 출발한 판이 이미 적었나» 를 축마다 묻는다(lib/write-hold).
+  const seq = sideWrites.readStart();
   const instsP = listAppInstances().catch(() => null);
   void instsP.then((rows) => {
     if (!Array.isArray(rows)) return;
-    appInstances = rows;
-    dismissedSess = new Set(dismissedSessionRefs());
+    if (!takeInstances(rows, seq)) return;
     if (data.sessions.length) return;   // 이미 목록이 있는 판이면 아래 정상 경로가 그린다
     drawSide();
     tabsApi?.paint();
@@ -818,7 +881,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }
-  if (Array.isArray(insts0)) { appInstances = insts0; dismissedSess = new Set(dismissedSessionRefs()); instTruthSeen = true; }
+  if (Array.isArray(insts0)) { takeInstances(insts0, seq); instTruthSeen = true; }
   let lists = data.lists || [];
   let folders = data.folders || [];
   if (Array.isArray(lists0)) { lists = lists0 as any[]; listsTruthSeen = true; }
@@ -830,16 +893,21 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   //  ⚠ **«못 본 판» 은 성공한 판이 아니다**(#2544 후속). 서버는 중계가 끊긴 틱에도 200 으로 DB 행을 채워 주는데,
   //   그 행의 관측값은 지어낸 것이라 그대로 쓰면 목록이 한 틱에 통째로 뒤집힌다. 지어낸 필드만 직전 관측으로
   //   되돌린다 — 위 '실패한 축은 직전 응답을 그대로 쓴다'와 같은 뜻이고, 축이 아니라 **행마다**라는 것만 다르다.
-  if (Array.isArray(live)) { lastLive = keepObserved(live as any[], obsMemory); sessTruthSeen = true; }
+  //  ⚠ 먼저 출발한 판이 늦게 도착하면 그 답은 버린다(#3870) — 받았다는 사실(…TruthSeen)만 남긴다. 버려진 깊은 판은
+  //   logsDeepAt 을 안 찍으므로 다음 판이 다시 깊게 받는다.
+  if (Array.isArray(live)) { if (sideWrites.take('live', seq)) lastLive = keepObserved(live as any[], obsMemory); sessTruthSeen = true; }
   if (Array.isArray(logs)) {
-    //  깊은 판은 캐시를 통째로 갈고, 얕은 판은 그 위에 얹는다(위 mergeLogRows 주석).
-    if (wantDeepLogs) { lastLogs = logs as any[]; logsDeepAt = Date.now(); }
-    else lastLogs = mergeLogRows(lastLogs, logs as any[]);
+    if (sideWrites.take('logs', seq)) {
+      //  깊은 판은 캐시를 통째로 갈고, 얕은 판은 그 위에 얹는다(위 mergeLogRows 주석).
+      if (wantDeepLogs) { lastLogs = logs as any[]; logsDeepAt = Date.now(); }
+      else lastLogs = mergeLogRows(lastLogs, logs as any[]);
+    }
     logsTruthSeen = true;
   }
   const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   applyArchivePins(sessions);  // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
+  overlayTrashHolds(sessions); // 방금 휴지통으로 보낸 세션을 **떠 있던 응답이 되세우지 않게**(위 sideWrites, #3870)
   const truth = sideTruth.note({ projects: projLoadedAt > 0, lists: listsTruthSeen, sessions: sessTruthSeen, logs: logsTruthSeen, instances: instTruthSeen }, Date.now());
   data = { projects, sessions, lists, folders, loadedAt: truth.ready ? Date.now() : 0, loadFailed: truth.failed };
   if (!wantProj) {
@@ -1758,7 +1826,9 @@ async function migrateSessionDismissals(): Promise<void> {
   dismissed = withoutSessionKeys(dismissed);
   sessDismissMigrated = true;
   saveDismissed();
-  for (const id of plan.sessionIds) dismissedSess.add(id);
+  //  #3870 — 옮기는 동안 떠 있던 읽기의 답(옮기기 전 사실)이 늦게 와서 이 줄들을 되세우지 않게 붙든다. 서버는 이미 받았다.
+  if (plan.sessionIds.length) sideWrites.hold({ kind: 'dismiss', ids: plan.sessionIds, at: '' }, ['instances']).ack();
+  overlayDismissHolds();
   drawSide();
 }
 
@@ -1877,7 +1947,10 @@ const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/
  */
 function tabTargetAlive(route: string): boolean {
   const k = routeKey(route);
-  if (k.startsWith('s:')) return !sessTruthSeen || !!findSess(k.slice(2));
+  //  #3870 — **휴지통에 있는 세션은 «없는 대상» 이다.** ①(내 세션)은 버린 세션을 안 세우는데 여기는 «찾아지나» 만 봐서,
+  //   한 번이라도 열어 본 세션(탭 줄을 안 그리므로 안 보이는 창이 남는다)은 휴지통으로 보내도 줄이 그대로 섰다(매니지드 실측:
+  //   기록만 남은 세션을 열었다 홈으로 돌아와 휴지통으로 보냄 → 30초 뒤에도 줄이 있음). 착지 후보(canLand)에서도 빠진다.
+  if (k.startsWith('s:')) { const s = findSess(k.slice(2)); return !sessTruthSeen || (!!s && !isTrashedSess(s)); }
   if (k.startsWith('i:')) { const id = k.slice(2); return !instTruthSeen || appInstances.some((x) => x.id === id); }
   return true;
 }
@@ -2097,14 +2170,19 @@ async function dismissSessionRow(key: string): Promise<void> {
   const names = new Set([sid, ...(s ? [s.logId || '', ...(s.altIds || [])] : [])].filter(Boolean));
   const held = appInstances.filter((x) => x.subject_kind === 'session' && !!x.subject_ref && names.has(x.subject_ref));
   const ids = [...new Set([sid, ...held.map((x) => String(x.subject_ref))])];
-  for (const x of ids) dismissedSess.add(x);
-  appInstances = appInstances.filter((x) => !held.includes(x));
+  //  #3870 — 낙관 반영을 **붙든다**(sideWrites 머리말). 종전엔 그 자리에서 한 번 고쳐 적기만 해서, 누르는 순간 떠 있던
+  //   읽기의 답(치우기 전 사실)이 도착하면 줄이 다시 섰다가 다음 판에 사라졌다. 놓는 것은 이 요청이 끝난 뒤에 출발한 읽기다.
+  const hold = sideWrites.hold({ kind: 'dismiss', ids, at: '' }, ['instances']);
+  overlayDismissHolds();
   closeRowTabs(key);
   drawSide();
-  try { await dismissSessions(ids); }
+  try { await dismissSessions(ids); hold.ack(); }
   catch (e: any) {
+    hold.fail();
     for (const x of ids) dismissedSess.delete(x);
-    appInstances = [...appInstances, ...held];
+    const have = new Set(appInstances.map((x) => x.id));
+    appInstances = [...appInstances, ...held.filter((x) => !have.has(x.id))];
+    overlayDismissHolds();   // 같은 세션을 붙든 다른 치움이 남아 있으면 그건 그대로 둔다
     toast('목록에서 치우지 못했어요 — ' + ((e && e.message) || '다시 시도해 주세요'), true);
     drawSide();
   }
@@ -2119,10 +2197,12 @@ async function dismissSessionRow(key: string): Promise<void> {
  *  #3890 — 닫은 뒤 갈 곳(tabs.ts close → lib/tab-landing)은 **보던 창이 닫히는 순간 한 번** 정해진다. 그때 같은 행의
  *   다른 창이 남아 있으면 그게 «가장 최근에 보던 창» 으로 뽑혀 한 번 그려졌다가(대화 폴링까지 붙었다가) 곧바로 닫힌다.
  */
-function closeRowTabs(key: string): void {
+function closeRowTabs(key: string | string[]): void {
   if (!tabsApi) return;
   const cur = tabsApi.current();
-  const row = tabsApi.tabs.filter((t) => sideRowKey(t.route) === key);
+  //  키가 여럿일 수 있다(#3870) — 한 세션의 창은 그 세션의 어느 이름(박스 id · 대화 uuid · 접힌 옛 박스 id)으로든 열려 있다.
+  const keys = new Set(typeof key === 'string' ? [key] : key);
+  const row = tabsApi.tabs.filter((t) => keys.has(sideRowKey(t.route)));
   for (const t of row.sort((a, b) => Number(a === cur) - Number(b === cur))) tabsApi.close(t);
 }
 

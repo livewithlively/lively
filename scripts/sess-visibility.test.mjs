@@ -144,7 +144,10 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
     "W7 옛 맵 옮기기는 세션 목록을 받은 뒤에만 — 목록 없이 돌면 전부 «없는 세션» 으로 버려진다");
   ok(/if \(sessDismissMigrated\) dismissed = withoutSessionKeys\(dismissed\);/.test(MAIN),
     "W8 옮긴 뒤의 저장만 세션 키를 걸러낸다 — 옮기기 전에 걸러내면 옮길 것을 잃는다");
-  ok(/if \(Array\.isArray\(out\?\.dismissed_sessions\)\) dismissedRefs =/.test(INST),
+  //  #3870 — 치운 세션 id 는 그 판의 배열에 묶여 온다(dismissedRefsOf — 겹쳐 뜬 읽기끼리 섞이지 않게). 뜻은 그대로다:
+  //   서버가 실어 보낸 판에서만 갈아 끼우고, 안 실려 온 판(null)엔 직전 값을 그대로 쓴다.
+  ok(/if \(Array\.isArray\(out\?\.dismissed_sessions\)\) dismissedOf\.set\(rows, /.test(INST)
+    && /const gone = dismissedRefsOf\(rows\);\s*if \(gone\) dismissedSess = new Set\(gone\);/.test(MAIN),
     "W9 치운 세션 id 는 성공한 판에서만 갈아 끼운다 — 실패 판에 빈 집합으로 덮으면 한 틱에 전부 되살아난다");
   //  #3778(2026-09-19) — 「아카이브 ▸ 치운 세션」 표는 「지난 세션」 화면의 **한 표**로 합쳐졌다.
   //   치운 것은 그 표에 「치움」 꼬리표를 달고 서고, 칩 하나로 그것만 골라 볼 수 있다.
