@@ -164,10 +164,29 @@ export async function confirmSessionPurgeLocal(opts: { title: string }): Promise
 
 /** 휴지통 조작 한 곳(#1851) — POST /api/ui/terminal/session-trash. ids 는 그 세션의 모든 이름(박스 id + 대화 uuid)을 넘긴다
  *  (서버도 desired-state 의 uuid 를 덧붙이지만, 기록만 남은 세션은 프론트가 아는 uuid 가 전부다). */
-export async function sessionTrashOp(op: 'trash' | 'untrash' | 'purge' | 'empty', ids: string[] = []): Promise<{ done: string[]; skipped: Array<{ id: string; why: string }> }> {
-  const r = await api('/api/ui/terminal/session-trash', { method: 'POST', body: JSON.stringify({ op, ids }) });
-  return { done: Array.isArray(r && r.done) ? r.done : [], skipped: Array.isArray(r && r.skipped) ? r.skipped : [] };
+export async function sessionTrashOp(op: SessionTrashOpName, ids: string[] = []): Promise<{ done: string[]; skipped: Array<{ id: string; why: string }> }> {
+  //  #3870 — 휴지통으로 보내기는 **누르는 순간** 목록에서 빠진다(아래 watchSessionTrash). 서버가 받은 것만 굳히고(ack),
+  //   하나도 못 받았거나 요청이 실패하면 되돌린다(fail) — 부르는 쪽은 종전대로 이유를 말한다.
+  const held = trashWatch && (op !== 'trash' || ids.length) ? trashWatch(op, ids) : null;
+  let r: any;
+  try { r = await api('/api/ui/terminal/session-trash', { method: 'POST', body: JSON.stringify({ op, ids }) }); }
+  catch (e) { if (held) held.fail(); throw e; }
+  const out = { done: Array.isArray(r && r.done) ? r.done.map((x: unknown) => String(x)) : [], skipped: Array.isArray(r && r.skipped) ? r.skipped : [] };
+  if (held) { if (out.done.length || op !== 'trash') held.ack(out.done); else held.fail(); }
+  return out;
 }
+export type SessionTrashOpName = 'trash' | 'untrash' | 'purge' | 'empty';
+/**
+ * 휴지통 조작을 지켜보는 자리(#3870) — 새 셸(v2/main.ts)이 한 번 건다.
+ *  종전엔 서버 답과 목록 한 판을 다 받은 뒤에야 줄이 빠졌다(매니지드 실측 0.6~1.2초 — 그동안 누른 줄이 그대로 서 있다).
+ *  보내는 자리가 여럿이라(사이드바 · 곁칸 세션 목록 · 대화창 · 지난 세션 화면) 낙관 반영을 자리마다 두지 않고 이 한 곳에 건다.
+ *  · 보내기(trash) — 부르면 그 이름들의 세션을 곧바로 목록에서 뺀다. ack(done) 은 서버가 받은 이름으로 굳히고, fail() 은 되돌린다.
+ *  · 그 밖(되돌리기 · 완전 삭제 · 비우기) — 서버가 답하면 ack 로 알린다(셸이 받아 둔 목록의 옛 표식을 다시 받는다).
+ *  · 안 걸려 있으면(클래식 화면 — 액자 안은 문서가 달라 이 값이 비어 있다) 종전 그대로다.
+ */
+export type SessionTrashWatch = (op: SessionTrashOpName, ids: string[]) => { ack: (done: string[]) => void; fail: () => void };
+let trashWatch: SessionTrashWatch | null = null;
+export function watchSessionTrash(fn: SessionTrashWatch | null): void { trashWatch = fn; }
 /** 세션의 모든 이름 — 휴지통 표식은 두 이름에 다 붙어야 한다(views.ts mergeSessions 가 둘을 한 장으로 접는다). */
 export const sessionNames = (s: { id: string; logId?: string | null }): string[] => [s.id, ...(s.logId ? [s.logId] : [])];
 
