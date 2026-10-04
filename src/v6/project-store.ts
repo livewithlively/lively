@@ -1235,7 +1235,17 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
     const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     const tf = titleFirst("p.name", p, params);              // 이름에 모든 낱말이 든 것이 본문만 스친 최근 것에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool, `SELECT ${sel}, ${P_PARENT_SEL} FROM project p ${P_PARENT_JOIN} WHERE ${where} ORDER BY ${first}${tf}p.updated_at DESC LIMIT $${params.length}`, params);
+    //  ★ 두 번에 나눈다 — ① 맞은 것 중 n 개의 번호만 고르고 ② 그 n 줄에만 상위(부모 이름·뿌리 보관)를 붙인다(#4530 배포 뒤 실측).
+    //   한 문장일 때 매니지드에서 흔한 낱말이 느렸다 — «세션»(맞는 줄 1,502) 6.5~7.3초 · «배포»(679) 3.2~3.5초. 같은 WHERE 로
+    //   개수만 세면 0.8초 · 0.5초, 종류(level)·상태로 좁히면 0.1~0.6초 — JS 경로는 같고 SQL 만 달랐다. 로컬(PG17, 같은 데이터)에선
+    //   재현되지 않아 실행 계획을 특정하지 못했다 — 그래서 어느 계획이 골라지든 JOIN 이 n 줄에만 돌게 문장을 나눈다.
+    const ids = (await q(itemsPool,
+      `SELECT p.id FROM project p WHERE ${where} ORDER BY ${first}${tf}p.updated_at DESC, p.id DESC LIMIT $${params.length}`, params))
+      .map((r) => Number(r.id));
+    if (!ids.length) return [];
+    const byId = new Map((await q(itemsPool,
+      `SELECT ${sel}, ${P_PARENT_SEL} FROM project p ${P_PARENT_JOIN} WHERE p.id = ANY($1::int[])`, [ids])).map((r) => [Number(r.id), r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is Record<string, unknown> => !!r);
   }, { plain: opts.plain });
   return rows.map((r) => {
     const base = toProjectRow(r);
