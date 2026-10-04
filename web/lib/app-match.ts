@@ -27,3 +27,21 @@ export function appRank(a: AppSearchable, query: string): number {
   if ((a.aka || []).some((k) => fold(k).includes(q))) return 2;
   return 3;
 }
+
+// ── 앱 찾기의 두 묶음(#4554) ──
+//  base = 라이블리에 기본으로 들어 있는 앱. workspace = 이 워크스페이스의 앱(세션이 만들었거나 관리자가 설치한 앱 · 대시보드).
+export type PadGroup = 'base' | 'workspace';
+
+/** 설치된 앱(org_app)이 서는 묶음. 제품에 실려 온 것(source.kind='builtin')만 기본 앱이고, 출처를 모르면 워크스페이스 앱이다 —
+ *  남이 만든 앱을 «기본» 이라 부르는 쪽이 더 나쁜 거짓말이다. */
+export function padGroupOfInstalled(sourceKind: string | undefined | null): PadGroup {
+  return sourceKind === 'builtin' ? 'base' : 'workspace';
+}
+
+/** 검색 중 Enter 로 열릴 칸 — 화면 순서로 늘어선 칸들의 rank(작을수록 잘 맞음) 가운데 가장 잘 맞은 칸의 자리. 동점은 앞 칸. 칸이 없으면 -1.
+ *  묶음이 둘이라 «맨 앞 칸» 으로 정하면, 위 묶음의 설명에만 맞은 앱이 아래 묶음의 이름이 맞은 앱을 이긴다. */
+export function padBestIndex(ranks: readonly number[]): number {
+  let best = -1;
+  for (let i = 0; i < ranks.length; i++) if (best < 0 || ranks[i] < ranks[best]) best = i;
+  return best;
+}
