@@ -42,6 +42,8 @@ export interface FavSaverDeps {
  *  · 돌고 있는 저장이 끝났을 때 마지막으로 고른 값이 서버가 아는 값과 같으면 더 보내지 않는다(켰다 껐다 켰다 = 한 번).
  *  · 실패하면 그 리스트의 밀린 것을 버리고 failed 로 알린다 — 실패한 요청 뒤에 또 보내 봐야 사람이 본 화면과 어긋난다.
  *  · know(id, on) — 서버가 아는 값을 밖에서 알려 준다(처음 받은 목록 · 다른 창이 바꿨다는 알림).
+ *    ⚠ 저장이 도는 중에 알려 온 값은 그 저장이 끝나면 덮인다(여기서 누른 것이 나중이라고 본다). 두 창에서 같은 리스트를 한 왕복 안에
+ *     엇갈려 누르면 서버엔 늦게 닿은 쪽이 남는다 — 드문 일이라 다시 받아 맞추지는 않는다.
  */
 export function createFavSaver(deps: FavSaverDeps): { want(id: number, on: boolean): void; know(id: number, on: boolean): void; busy(id: number): boolean } {
   const known = new Map<number, boolean>();
@@ -50,16 +52,19 @@ export function createFavSaver(deps: FavSaverDeps): { want(id: number, on: boole
   const run = async (id: number): Promise<void> => {
     if (running.has(id)) return;
     running.add(id);
+    let broke: { err: unknown } | null = null;
     try {
       for (;;) {
         const on = wanted.get(id);
         if (on == null || on === (known.get(id) ?? false)) break;
         try { await deps.save(id, on); }
-        catch (err) { wanted.delete(id); deps.failed(id, known.get(id) ?? false, err); break; }
+        catch (err) { broke = { err }; break; }
         known.set(id, on);
         deps.saved(id, on);
       }
     } finally { running.delete(id); wanted.delete(id); }
+    //  줄을 비운 뒤에 알린다 — failed 안에서 다시 고르면(want) 새 줄로 선다. 줄이 선 채로 부르면 그 고름이 위 finally 에 지워진다.
+    if (broke) deps.failed(id, known.get(id) ?? false, broke.err);
   };
   return {
     want(id, on) { wanted.set(id, on); void run(id); },

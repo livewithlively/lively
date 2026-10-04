@@ -1785,7 +1785,7 @@ export function loadFavLists(): void {
     favLoading = false;
     saveFavTop();
     if (last && (hooks.section?.() || 'home') === 'proj' && projLens === 'tree') redraw();
-  }).catch(() => { favLoading = false; favLists = new Set<number>(); });
+  }).catch(() => { favLoading = false; });   // #3870 — 못 받았으면 «모른다» 로 둔다(빈 집합 = «즐겨찾기 없음» 이 아니다). 다음에 그릴 때 다시 받는다
 }
 
 // ── 리스트 즐겨찾기 넣고 빼기 (#3870, lib/list-fav 머리말) ───────────────────────────

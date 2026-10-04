@@ -747,6 +747,11 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-pstar:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .v2-ptl:hover .v2-pstar, .v2-ptl:focus-within .v2-pstar { display: inline-grid; }
 .v2-ptl:hover .v2-cnt:has(+ .v2-pstar), .v2-ptl:focus-within .v2-cnt:has(+ .v2-pstar) { display: none; }
+/* 터치(올릴 수 없다) — ★ 가 늘 수 옆에 선다. 줄을 누르면 곧 그 리스트로 가 버려 올려서 드러내는 길이 없다(카드 머리의 [폴더 보기]와 같은 처리). */
+@media (hover: none) {
+  .v2-pstar { display: inline-grid; margin-left: 2px; }
+  .v2-ptl:hover .v2-cnt:has(+ .v2-pstar), .v2-ptl:focus-within .v2-cnt:has(+ .v2-pstar) { display: revert; }
+}
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
    원준 2026-09-09: *"맥락관리 앱으로 들어간 다음에도 사이드바가 보이는데 굳이 필요가 없을 것 같아 …
     대신 뒤로가기 앞으로가기 검색 창은 전체 가로 다 차지하게 맨 상단에(슬랙처럼)."*
