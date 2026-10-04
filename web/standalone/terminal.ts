@@ -48,8 +48,87 @@ export function urlMatches(text: string): { start: number; end: number; url: str
   return out;
 }
 export function urlAtColumn(lineText: string, col: number): string | null {
-  const m = urlMatches(lineText).find((x) => col >= x.start && col < x.end);
+  const m = linkMatches(lineText).find((x) => col >= x.start && col < x.end);
   return m ? m.url : null;
+}
+
+// (순수 — 테스트 대상) 글 속 **파일 경로** — AI 가 파일을 만들고 «여기 저장했어요» 하고 찍어 준 자리(#4562 원준님
+//  «정리해서 경로 알려주잖아. 그거 클릭하면 링크 클릭하듯이 … 곁칸에서 자료랑 그거 보는 뷰어 바로»).
+//  두 형태만 링크로 본다 — 눌렀을 때 **열 수 있는 것만** 밑줄을 긋는다(열리지 않는 밑줄은 고장으로 읽힌다):
+//   ① 프로젝트 자료 — `project/<번호>/` 마디가 있는 경로. 절대(`/work/shared/project/12/a.md` · 노드 `/Users/…/project/12/a.md`)
+//      · `~/…` · 공유 루트 기준(`project/12/a.md`). 셸이 같은 프로젝트면 곁칸 뷰어로 연다.
+//   ② 세션 폴더 기준 상대 경로 — `docs/a.md` · `./a.md`. 셸이 세션 파일 API 로 연다(그 API 의 기준이 세션 폴더다).
+//  경로는 **확장자로 끝나야** 한다(`.md` · `.hwp` …, 글자가 하나는 섞인 것) — 한국어 조사가 붙어도(`a.md에`) 확장자에서 끊고,
+//   `1/2.5` 같은 숫자는 안 잡는다. 이름에 빈칸이 든 경로는 못 잡는다(빈칸에서 끊긴다 — 빈칸 뒤가 이름인지 말인지 모른다).
+//  절대 경로인데 `project/<번호>/` 가 없으면 잡지 않는다 — 게이트웨이가 그 자리를 열 길이 없다.
+//  url 은 **화면에 찍힌 경로 그대로**다(넓은 글자 자리표만 뺀다) — [링크 복사]가 그 경로를 복사하고, 여는 쪽이 판정한다.
+export function pathMatches(text: string): { start: number; end: number; url: string }[] {
+  //  덩어리는 **끊기지 않는 글자 줄 전체**다. 괄호는 경로 글자로 치지 않는다 — Claude Code 의 도구 머리 `Write(/…/a.md)` 에서
+  //   `Write(` 를 경로에 붙이지 않게(그래서 `a(1).md` 같은 이름은 괄호에서 끊긴다).
+  const re = /[^\s"'`<>|()[\]{}\u3000\u0001]+/g;
+  const out: { start: number; end: number; url: string }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    let chunk = m[0], at = m.index;
+    //  URL 이 든 덩어리는 URL 의 몫이다 — `url=https://…/a.html` · `→https://…` 처럼 앞에 글자가 붙어도(리뷰 지적: 종전엔 경로가
+    //   먼저 시작해 URL 을 밀어냈다).
+    if (chunk.includes('://')) continue;
+    //  `src/a.ts:12:5` 의 줄·칸 꼬리는 먼저 뗀다 — 코드를 짚는 가장 흔한 꼴이고, 안 떼면 아래 `:` 가르기가 `5` 만 남긴다(리뷰 지적).
+    chunk = chunk.replace(/(?::\d+){1,2}:?$/, '');
+    //  `path=/…` · `저장:/…` · `--out=docs/a.md` — 마지막 `=`·`:` 뒤가 경로다.
+    const eq = Math.max(chunk.lastIndexOf('='), chunk.lastIndexOf(':'));
+    if (eq >= 0) { at += eq + 1; chunk = chunk.slice(eq + 1); }
+    //  꾸밈 글자(`**/…**` · `→/…` · `- `)를 앞에서 뗀다. 셸 변수(`$HOME/…`)는 열 자리를 모르니 버린다.
+    const lead = /^[^A-Za-z0-9_~./\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF]*/.exec(chunk)![0];
+    if (lead.includes('$')) continue;
+    at += lead.length; chunk = chunk.slice(lead.length);
+    //  확장자 뒤에서 끊는다 — 가장 뒤의 «.확장자»(글자로 시작) 중 뒤에 영숫자가 안 붙는 것(`a.md)` · `a.md에` · `a.md**` → `a.md`).
+    const cut = /^(.*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_])/.exec(chunk);
+    if (!cut) continue;
+    const raw = cut[1];
+    const p = raw.replace(/\u0000/g, '');
+    if (!pathLinkTarget(p)) continue;
+    out.push({ start: at, end: at + raw.length, url: p });
+  }
+  return out;
+}
+
+// (순수 — 테스트 대상) 경로 → 어디서 열까. 프로젝트 자료면 그 번호와 프로젝트 폴더 기준 경로, 세션 폴더 기준이면 그 경로. 못 열면 null.
+//  ⚠ 상대 경로의 `src/project/12/x.ts` 는 프로젝트 12 가 아니다(레포 안의 폴더 이름) — 상대 경로는 **맨 앞**이 `project/<번호>/` 일 때만.
+export function pathLinkTarget(p: string): { kind: 'project'; id: number; rel: string } | { kind: 'session'; rel: string } | null {
+  const s = String(p || '').replace(/\\/g, '/');
+  if (!s || /^[a-z][a-z0-9+.-]*:/i.test(s)) return null;   // 스킴이 붙은 것(URL·윈도우 드라이브)은 경로 링크가 아니다
+  if (!/\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(s)) return null;  // 파일만 — 확장자(글자로 시작)로 끝나야 한다
+  const abs = s.startsWith('/') || s.startsWith('~/');
+  const m = abs ? /^.*?\/project\/(\d+)\/(.+)$/.exec(s) : /^(?:\.\/)?project\/(\d+)\/(.+)$/.exec(s);
+  const safe = (r: string): boolean => !!r && !r.split('/').some((x) => x === '' || x === '..' || x === '.');
+  if (m) {
+    const id = Number(m[1]);
+    return id > 0 && safe(m[2]) ? { kind: 'project', id, rel: m[2] } : null;
+  }
+  if (abs) return null;
+  const rel = s.replace(/^\.\//, '');
+  //  `./` 없는 상대 경로는 `/` 가 하나는 있어야 한다 — 글 속 `package.json` 같은 낱말마다 밑줄이 그어지지 않게.
+  if (!s.startsWith('./') && !rel.includes('/')) return null;
+  //  상대 경로는 열어 보기 전엔 있는지 모르는 짐작이다 — 확장자를 더 좁힌다(소문자 2자 이상): `yes/no.Then` · `e.g./i.e.` ·
+  //   `TCP/IP.Next` 를 링크로 읽지 않게. 프로젝트 경로는 `project/<번호>/` 가 이미 증거라 대문자 확장자(.HWP)도 받는다.
+  if (!/\.[a-z][a-z0-9]{1,9}$/.test(rel)) return null;
+  return safe(rel) ? { kind: 'session', rel } : null;
+}
+
+// 경로 링크인가 — URL 은 늘 스킴이 붙어 온다(urlMatches 가 https:// 를 붙인다). 스킴 없는 것은 pathMatches 가 낸 경로다.
+export function isPathLink(link: string): boolean {
+  return !!link && !/^[a-z][a-z0-9+.-]*:/i.test(link);
+}
+
+// (순수 — 테스트 대상) 한 글 속 링크 전부 — URL 과 경로를 함께, 겹치면 **먼저 시작한 것**(같으면 URL)이 이긴다.
+//  `example.com/a.md` 는 URL 과 상대 경로 둘 다로 읽히는데 종전대로 URL 이다. 경로 속 `report.final/a.md` 가 URL 로 잡히는 것은
+//  경로가 더 먼저 시작하므로 경로가 이긴다.
+export function linkMatches(text: string): { start: number; end: number; url: string }[] {
+  const all = [...urlMatches(text), ...pathMatches(text)];
+  all.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const out: { start: number; end: number; url: string }[] = [];
+  for (const m of all) if (!out.length || m.start >= out[out.length - 1].end) out.push(m);
+  return out;
 }
 
 // (순수 — 테스트 대상) 터미널 속 링크를 어디서 열지 — 'shell' 부모 셸 안 이동 · 'pane' 곁칸 웹 칸 · 'tab' 새 창(브라우저=새 탭).
@@ -132,7 +211,7 @@ export function urlAtCell(rows: string[], soft: boolean[], row: number, col: num
   const seg = segs.find((g) => g.row === row);
   if (!seg || col < seg.cut) return null;
   const at = seg.at + col - seg.cut;
-  const m = urlMatches(text.padEnd(at + 1)).find((x) => at >= x.start && at < x.end);
+  const m = linkMatches(text.padEnd(at + 1)).find((x) => at >= x.start && at < x.end);
   return m ? m.url : null;
 }
 
@@ -146,7 +225,7 @@ export function urlSpansAt(rows: string[], soft: boolean[], row: number, cols: n
     return g ? { row: g.row, col: idx - g.at + g.cut } : null;
   };
   const out: { url: string; startRow: number; startCol: number; endRow: number; endCol: number }[] = [];
-  for (const m of urlMatches(text)) {
+  for (const m of linkMatches(text)) {
     const s = back(m.start), e = back(m.end - 1);
     if (!s || !e) continue;
     if (row < s.row || row > e.row) continue;            // 이 행에 안 걸치면 이 행의 링크가 아니다
@@ -165,6 +244,14 @@ export function spanToRange(span: { startRow: number; startCol: number; endRow: 
 }
 
 function openLinkFromTerminal(uri: string): void {
+  //  파일 경로(#4562) — 곁칸의 자료·뷰어로. OSC 8 의 file:// 도 같은 길(하네스가 경로를 하이퍼링크로 심어 오는 판).
+  //  스킴 없는 OSC 8 주소(`#anchor` · `/foo`)는 경로가 아니면 종전 길로 간다.
+  if (isPathLink(uri) && pathLinkTarget(uri)) { openPathFromTerminal(uri); return; }
+  if (/^file:\/\//i.test(uri)) {
+    let p = '';
+    try { p = decodeURIComponent(new URL(uri).pathname); } catch (_) { /* 깨진 주소 */ }
+    if (p && pathLinkTarget(p)) { openPathFromTerminal(p); return; }
+  }
   try {
     const u = new URL(uri, location.href);
     const where = linkTargetHere(uri);
@@ -188,6 +275,48 @@ function openLinkFromTerminal(uri: string): void {
     }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
+}
+// 경로 링크 열기(#4562) — 셸이 곁칸에 [자료] 탭을 세우고 그 파일을 뷰어 탭으로 편다(panes.ts onMsg 'lively:open-file-in-pane').
+//  ⚠ 열 수 있나는 **셸이 정한다**(그 곁칸이 어느 프로젝트의 것인지는 셸만 안다) — 셸이 못 연다고 답하거나(handled:false)
+//   답이 없으면(구 셸·단독 페이지) 여기서 떨어진다: 프로젝트 자료는 공유 폴더 뷰어(#/f)로, 세션 파일은 안내만.
+// (순수 — 테스트 대상) 트래킹 pane(Claude Code TUI)에서 이 클릭으로 열 링크. 세션 폴더 기준 상대 경로(#4562)는 짐작이라
+//  **맨클릭**은 TUI 에 돌려준다(Claude Code 의 선택지 줄에 `src/a.ts` 같은 이름이 흔하다) — ⌘/Ctrl+클릭이면 연다.
+//  URL 과 `project/<번호>/` 가 든 경로는 증거가 있으니 맨클릭으로도 연다.
+export function bareClickLink(link: string | null, modifier: boolean): string | null {
+  if (!link || modifier) return link;
+  return isPathLink(link) && pathLinkTarget(link)?.kind === 'session' ? null : link;
+}
+//  같은 경로를 연달아 누르면(더블클릭) 답을 기다리는 동안 두 번째는 버린다 — 둘 다 폴백하면 새 탭이 둘 뜬다(리뷰 지적).
+const pathOpening = new Set<string>();
+export function openPathFromTerminal(p: string): void {
+  const t = pathLinkTarget(p);
+  if (!t || pathOpening.has(p)) return;
+  const fallback = (): void => {
+    if (t.kind === 'project') {
+      const ui = location.origin + location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+      openLinkFromTerminal(ui + '#/f?root=shared&path=' + encodeURIComponent('project/' + t.id + '/' + t.rel));
+    } else toast('세션 화면에서 열 수 있어요 — 이 경로는 세션 폴더 기준이에요.');
+  };
+  if (window.parent === window) { fallback(); return; }
+  pathOpening.add(p);
+  //  답이 오면 그 답을 따르고, 400ms 안에 안 오면 폴백한다. 폴백한 뒤 늦게 온 답은 **버린다**(이미 열었다) — 그래서 듣기는
+  //   잠시 더 남겨 둔다(늦은 답이 다음 클릭의 답으로 읽히지 않게).
+  let settled = false;
+  const settle = (handled: boolean): void => {
+    if (settled) return;
+    settled = true;
+    pathOpening.delete(p);
+    if (!handled) fallback();
+  };
+  const ack = (e: MessageEvent): void => {
+    if (e.origin !== location.origin || e.source !== window.parent) return;   // 부모(셸)의 답만
+    if (!e.data || e.data.type !== 'lively:open-file-in-pane:ok' || e.data.path !== p) return;
+    settle(!!e.data.handled);
+  };
+  window.addEventListener('message', ack);
+  try { window.parent.postMessage({ type: 'lively:open-file-in-pane', path: p, target: t, sid: SESSION_ID }, location.origin); } catch (_) { /* 부모 없음 — 아래 폴백 */ }
+  window.setTimeout(() => settle(false), 400);
+  window.setTimeout(() => window.removeEventListener('message', ack), 5000);
 }
 declare const CanvasAddon: any;
 // 빌드 스탬프 — 빌드 시 esbuild define 이 주입한다(scripts/build-standalone.mjs). 종전엔 손으로 고치는 상수였다.
@@ -3899,6 +4028,7 @@ export async function boot() {
     if (ev.button !== 0) { pendingLink = null; return; }
     const wantsLink = (ev.metaKey || ev.ctrlKey) || mouseTracked();
     pendingLink = wantsLink ? linkAtEvent(ev) : null;
+    pendingLink = bareClickLink(pendingLink, ev.metaKey || ev.ctrlKey);   // #4562 세션 상대 경로는 ⌘/Ctrl 로만
     // modifier 클릭은 URL 밖이어도 삼킨다(pty 로 새면 TUI 가 press 를 받는다) — 맨클릭은 URL 위일 때만.
     if (pendingLink || (ev.metaKey || ev.ctrlKey)) { ev.stopPropagation(); ev.preventDefault(); }
   }, true);
@@ -4128,6 +4258,8 @@ export function ctxCopyPlan(sel: string, appSel: boolean, link: string): { copy:
 // 메뉴 힌트용 짧은 주소 — 스킴을 떼고 앞부분만(메뉴 폭 320px 안에서 이름을 밀어내지 않게).
 export function shortLink(url: string): string {
   const s = String(url || '').replace(/^https?:\/\//i, '');
+  //  경로는 **끝**이 이름이다(#4562) — 앞을 자르면 `/work/shared/project/…` 만 남아 무슨 파일인지 모른다.
+  if (isPathLink(String(url || ''))) return s.length > 26 ? '…' + s.slice(-25) : s;   // 스킴을 떼기 **전** 값으로 본다
   return s.length > 26 ? s.slice(0, 25) + '…' : s;
 }
 
@@ -4166,7 +4298,8 @@ function wireTermCtxMenu(host: HTMLElement): void {
     const url = plan.openUrl;
     //  'pane' 은 셸의 [웹] 탭으로 간다. 그 탭은 곁칸(자리바꿈으로 왼쪽에 설 수 있다) · 가운데 · 아래 칸 어디에도 있을 수 있고
     //   이 번들(셸 밖 iframe)은 그 자리를 모른다. 그래서 자리를 말하지 않고 탭 이름으로 적는다(#4233).
-    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
+    //  파일 경로(#4562)는 셸의 [뷰어] 탭으로 간다 — 웹 칸과 같은 이유로 자리 대신 탭 이름.
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isPathLink(url) ? 'file' : linkTargetHere(url)];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
