@@ -187,144 +187,260 @@
   padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ③ 통합검색(스포트라이트) — 화면 가운데 위. 한 칸에 치고, 종류는 결과가 말한다.
-   ════════════════════════════════════════════════════════════════════════ */
-/*  크기 — 상민님 2026-08-25 "30~50% 키우되 창모드(작은 윈도우)에서도 대응". 옛 값은 640px / 상단 12vh / 70vh.
-    치수를 그냥 키우면 작은 창에서 카드 몫이 여백에 눌리므로, 셋 다 **화면에 비례시키되 위아래로 물린다**:
-     · 폭   = 880px + max-width:100%  — 640→880(+37.5%). 좁은 창에선 스스로 준다(760px 창에서 740px 실측).
-     · 상단 = clamp(18px, 9vh, 108px) — 12vh 고정은 세로로 긴 창에서 여백만 늘었다(1440×1600 에서 192px 실측 → 108px).
-     · 높이 = min(78vh, 100%)         — 78vh 가 평소 값이고, 100% 는 이 덮개의 **패딩 안쪽**이라 어떤 창에서도
-       '상단 여백 + 카드'가 화면을 넘을 수 없다는 보험이다(현실 창 크기에선 78vh 쪽이 이긴다).
-    실측(dev, 결과 20행): 1440×900 폭 640→880·카드 630→702px / 1100×620 434→484px / 960×560 392→437px, 넘침 0. */
-/*  #4530 — 겹침 순서 120 → 1550: 런치패드(900)·[나] 창·확인 창(.ov-back 1450) 위에서 ⌘K 를 누르면 통합검색이 그 뒤에 숨어
-    친 글자가 보이지 않는 칸으로 들어갔다(점검). 기간 메뉴(ctx-menu 1600)·토스트(2000)보다는 아래.
-    창 맨 윗줄의 «끌기» 영역(데스크톱 42px)이 덮개를 이기지 않게 no-drag — 바깥을 눌러 닫으려는 클릭이 창 끌기로 먹힐 수 있었다. */
+   ③ 통합검색(스포트라이트) — 목록 + 미리보기 두 칸(#4530 안 A, 원준 2026-10-04 «A안으로 가자»).
+   ════════════════════════════════════════════════════════════════════════
+   왜 두 칸인가 — 목록 한 줄(이름 + 발췌 한 조각)로는 «이게 내가 찾던 것인가» 를 못 가려 열어 봐야 했고, 열면 검색 창이 닫혀
+    다시 찾아야 했다(지금 화면 진단: 결과 8줄 · 줄 높이 52~78px 들쭉날쭉 · 세션은 여섯째 줄부터 · 손잡이 9개가 한 줄).
+   · 왼쪽 = 결과 목록. 모든 줄이 같은 높이(50px) 한 줄 제목 + 한 줄 «어디에 있는 것인가».
+   · 오른쪽 = 고른 결과의 안(web/v2/omni-preview.ts — 종류마다 다른 레이아웃).
+   · 위 = 입력칸 / 탭(전체·세션·프로젝트·지식·자료 + 숫자) · 기간 · 정렬. 아래 = 키 안내 · 상태 한 줄.
+   · 폰(≤640) = 목록이 화면 전체, 줄을 누르면 미리보기가 아래에서 판으로 올라온다.
+   크기 — 폭 980px(좁은 창에선 스스로 준다) · 높이는 고정(min(680px, 창 안)) — 결과 수에 따라 카드가 출렁이면 미리보기 칸이 같이 흔들린다.
+   겹침 순서 1550(#4530): 런치패드(900)·[나] 창·확인 창(.ov-back 1450) 위, 기간 메뉴(ctx-menu 1600)·토스트(2000) 아래.
+   창 맨 윗줄의 «끌기» 영역(데스크톱 42px)이 덮개를 이기지 않게 no-drag. */
 .v2-omni { position: fixed; inset: 0; z-index: 1550; display: flex; justify-content: center; align-items: flex-start;
-  padding: clamp(18px, 9vh, 108px) 16px 24px; background: rgba(var(--shadow-ink), .34); -webkit-app-region: no-drag; }
-.v2-omni-card { width: 880px; max-width: 100%; max-height: min(78vh, 100%); display: flex; flex-direction: column;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
-  box-shadow: 0 24px 64px rgba(16, 32, 64, .26), 0 3px 10px rgba(16, 32, 64, .10); }
-.v2-omni-top { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.v2-omni-lens { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
-.v2-omni-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 16px; color: var(--ink); }
+  padding: clamp(18px, 8vh, 96px) 16px 24px; background: rgba(var(--shadow-ink), .34); -webkit-app-region: no-drag; }
+.v2-omni-card { width: 980px; max-width: 100%; height: min(680px, 100%); display: flex; flex-direction: column; position: relative;
+  background: var(--surface); border: 1px solid var(--line-net); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 28px 70px rgba(var(--shadow-ink), .28), 0 2px 6px rgba(var(--shadow-ink), .08); }
+.v2-omni-top { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 14px 0 18px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-omni-lens { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 17px; font-weight: 500; color: var(--ink); }
+.v2-omni-in::placeholder { font-weight: 400; color: var(--muted-2); }
 .v2-omni-in:focus { outline: none; }
 .v2-omni-esc { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; padding: 2px 6px;
-  border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
-/* 종류 칩 — 검색창 바로 아래 한 줄. 기본(선택 없음)은 **전부 켜진 모습**이다(모두 포함이므로).
-   하나를 누르면 그것만 켜지고 나머지가 꺼진 모습이 된다 — 지금 무엇을 찾고 있는지 화면이 늘 말한다. */
-.v2-omni-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 14px; border-bottom: 1px solid var(--line, #E6ECF5); }
-.v2-omni-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px 0 7px;
-  border: 1px solid var(--line-net, #DCE6F5); border-radius: 999px; background: var(--bg, #fff);
-  font: inherit; font-size: 11.5px; color: var(--muted, #8A99B5); cursor: pointer; white-space: nowrap; }
-.v2-omni-chip:hover { border-color: var(--blue); color: var(--ink-sub, #5A6B85); }
-.v2-omni-chip.on { border-color: var(--blue); background: var(--bg-tint-2, #EEF5FF); color: var(--ink); font-weight: 600; }
-/*  보조 축(자료·세션이력)은 구분선 뒤에 선다 — 켜진 모습이 기본인 왼쪽 칩들과 성격이 다르다(더하는 손잡이).
-    꺼져 있을 때가 기본이라 점선 테두리로 '아직 안 켠 것'임을 말한다(꺼진 주 축 칩과 헷갈리지 않게). */
-.v2-omni-chipsep { width: 1px; align-self: stretch; margin: 2px 3px; background: var(--line, #E6ECF5); }
-.v2-omni-chip.aux:not(.on) { border-style: dashed; }
-.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
-.v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
-.v2-omni-gh { padding: 8px 8px 4px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted); }
-.v2-omni-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; cursor: pointer; }
-.v2-omni-row.on { background: var(--bg-tint-2); }
-.v2-omni-ic { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px;
-  background: var(--canvas); color: var(--muted-head); }
-.v2-omni-row.on .v2-omni-ic { background: var(--bg); color: var(--blue); }
-.v2-omni-kic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
-.v2-omni-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.v2-omni-t { font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.v2-omni-s { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 일치 부분 — 바탕만 옅게 깐다(글자색·굵기는 그대로). 한 줄에 여러 군데가 칠해져도 줄이 시끄러워지지 않는다.
-   ⚠ <mark> 의 브라우저 기본값(노랑 바탕·검정 글자)은 다크모드를 그대로 뚫고 나오므로 둘 다 덮어쓴다. */
-.v2-omni-hl { background: var(--bg-tint-2); color: inherit; border-radius: 3px; padding: 0 1px; box-shadow: inset 0 -1px 0 var(--blue); }
-.v2-omni-row.on .v2-omni-hl { background: var(--bg); }
-/* key(지식 이름 · 프로젝트 번호) — 사람이 옮겨 적는 이름이라 고정폭으로. 정확히 맞았으면 테두리로 그렇다고 말한다. */
-.v2-omni-key { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-head);
-  background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
-.v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
-.v2-omni-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); }
-/* ── #4517 정렬 · 기간 · 시각 ──────────────────────────────────────────────────────────
-   정렬(관련도순 | 최신순)과 기간은 칩 줄의 **오른쪽 끝**에 선다 — 종류 칩(무엇을)과 성격이 다른 손잡이(어떤 순서로 · 언제)라
-   떨어뜨려 둔다. 좁은 창에선 칩 줄이 접히며 다음 줄 오른쪽으로 내려간다(margin-left:auto).
-   정렬은 두 값이라 드롭다운이 아니라 나란한 두 단추 — 켜진 쪽이 늘 보인다. 모양은 칩과 같은 알약·같은 틴트다. */
-.v2-omni-kinds { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
-.v2-omni-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
-.v2-omni-seg { display: inline-flex; align-items: center; gap: 2px; height: 26px; padding: 2px;
-  border: 1px solid var(--line-net); border-radius: 999px; background: var(--bg); }
-.v2-omni-segb { height: 20px; padding: 0 9px; border: 0; border-radius: 999px; background: none;
-  font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-.v2-omni-segb:hover { color: var(--ink-sub); }
-.v2-omni-segb.on { background: var(--bg-tint-2); color: var(--ink); font-weight: 600; }
-.v2-omni-segb:focus-visible, .v2-omni-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-/* 줄 오른쪽 시각 — 슬랙처럼 줄마다(정렬과 무관하게). 숫자 폭을 고정해 줄마다 들쭉날쭉하지 않게. */
-.v2-omni-when { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* 대화 결과의 «누구의 말인가»(지시 · AI) — key 표시와 같은 작은 이름표. */
-.v2-omni-role { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 4px;
-  font-size: 10.5px; font-weight: 700; color: var(--ink-sub); background: var(--gray-bg-2); }
-.v2-omni-note { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
-.v2-omni-note[hidden] { display: none; }
-@media (max-width: 900px) {
-  .v2-omni { padding: clamp(14px, 6vh, 64px) 10px 16px; }
-  .v2-omni-card { max-height: min(86vh, 100%); }
-}
-
-/* ── #4530 통합검색 3차 — 줄 하나 · 닫기 · 찾는 중 · 폰 전체 화면 ─────────────────────────────────────
-   원준 2026-10-01: «폰에서는 애초에 보이는 화면이 별로 없을걸?» · 점검 46건(지식 omni-search-audit-defects-4530).
-   · 제목 줄 = [머리말(작게)] 제목 [완료·보관·초안]. 지식 제목의 «as-built(#…):» 머리말을 떼어 작게 두니 제목이 제 이름을 보인다.
-     제목이 길면 두 줄까지(한 줄로 자르면 1440 폭에서도 91~98자만 보였다 — 실측).
-   · 오른쪽 = 시각 위 · 종류 아래(한 칸에 쌓는다) — 종류 글자가 제목 칸을 먹지 않게.
-   · 찾는 중 = 카드 맨 위 가는 줄. 앞 결과는 흐리게 두고 새 결과가 자리 잡으면 한 번에 바꾼다(목록이 비었다 차는 깜빡임 없음). */
+  border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--bg-tint-2); }
 .v2-omni-close { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 8px;
   border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
-.v2-omni-close:hover { background: var(--canvas); color: var(--ink-sub); }
+.v2-omni-close:hover { background: var(--bg-tint-2); color: var(--ink-sub); }
 .v2-omni-close:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .v2-omni-close-t { display: none; }
-.v2-omni-bar { height: 2px; background: transparent; position: relative; overflow: hidden; }
+/* 찾는 중 — 카드 맨 위 가는 줄. 앞 결과는 흐리게 두고 새 결과가 자리 잡으면 한 번에 바꾼다(목록이 비었다 차는 깜빡임 없음). */
+.v2-omni-bar { height: 2px; flex: none; background: transparent; position: relative; overflow: hidden; margin-top: -2px; }
 .v2-omni-bar.on::after { content: ''; position: absolute; inset: 0 auto 0 0; width: 30%; background: var(--blue);
   animation: v2-omni-bar 1.1s ease-in-out infinite; }
 @keyframes v2-omni-bar { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 @media (prefers-reduced-motion: reduce) { .v2-omni-bar.on::after { animation: none; width: 100%; opacity: .5; } }
+
+/* 탭 줄 — 왼쪽 종류(전체·세션·프로젝트·지식·자료 + 숫자), 오른쪽 기간·정렬. 켜진 탭 하나가 «지금 무엇을 보고 있나» 를 말한다. */
+.v2-omni-filters { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-omni-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.v2-omni-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: none;
+  font: inherit; font-size: 13px; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.v2-omni-tab:hover { background: var(--bg-tint-2); }
+.v2-omni-tab.on { background: var(--bg-punch); color: var(--blue); font-weight: 600; }
+/*  자료는 눌렀을 때만 찾는다(느리고 많다) — 점선 테두리로 «아직 안 찾은 것» 임을 말한다. */
+.v2-omni-tab.aux:not(.on) { border: 1px dashed var(--line-net); color: var(--muted-2); height: 28px; margin-left: 4px; }
+.v2-omni-tabn { font-style: normal; font-size: 11.5px; font-weight: 500; color: var(--muted-3); font-variant-numeric: tabular-nums; }
+.v2-omni-tab.on .v2-omni-tabn { color: var(--blue); }
+.v2-omni-tabn[hidden] { display: none; }
+.v2-omni-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.v2-omni-opt { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.v2-omni-opt:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.v2-omni-opt.on { border-color: var(--blue); color: var(--blue); background: var(--bg-punch); font-weight: 600; }
+.v2-omni-opt-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-opt-ic:last-child { width: 11px; height: 11px; opacity: .7; }
+.v2-omni-tab:focus-visible, .v2-omni-opt:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* 몸통 — 목록 | 미리보기 */
+.v2-omni-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.v2-omni-col { flex: 0 0 41%; min-width: 300px; max-width: 420px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 8px; }
 .v2-omni-list.stale { opacity: .55; transition: opacity .12s; }
-.v2-omni-tl { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.v2-omni-tl .v2-omni-t { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.v2-omni-head { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); background: var(--gray-bg-2);
-  border-radius: 4px; padding: 0 5px; white-space: nowrap; }
-.v2-omni-st { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-head); border: 1px solid var(--line-net);
-  border-radius: 999px; padding: 0 6px; white-space: nowrap; }
-.v2-omni-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 52px; }
-.v2-omni-ctx { color: var(--ink-sub); }
-.v2-omni-edit { color: var(--muted-head); }
+.v2-omni-gh { padding: 12px 10px 4px; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.v2-omni-row { display: flex; align-items: center; gap: 11px; height: 50px; padding: 0 10px; border-radius: 9px; cursor: pointer; }
+.v2-omni-row.on { background: var(--bg-sel); box-shadow: inset 0 0 0 1px var(--line-note); }
+/*  종류는 그림의 색이 말한다(앱 아이콘 색 토큰) — 세션 파랑 · 프로젝트 보라 · 지식 초록 · 자료 갈색 · 바로 가기 회색. */
+.v2-omni-ic { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 8px; background: var(--bg-tint-2); color: var(--muted-head); }
+.v2-omni-ic.k-sess { color: var(--gi-c-chat); } .v2-omni-ic.k-proj { color: var(--gi-c-proj); }
+.v2-omni-ic.k-know { color: var(--gi-c-wiki); } .v2-omni-ic.k-src { color: var(--gi-c-src); }
+.v2-omni-row.on .v2-omni-ic { background: var(--surface); }
+.v2-omni-kic { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-omni-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.v2-omni-tl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.v2-omni-t { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .v2-omni-row.sim .v2-omni-t { font-weight: 500; }
-.v2-omni-more { display: block; width: calc(100% - 28px); margin: 0 14px 10px; height: 30px; border: 1px solid var(--line-net);
-  border-radius: 8px; background: var(--bg); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; }
+.v2-omni-s { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-omni-head { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted); background: var(--bg-tint-2); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+.v2-omni-st { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-head); border: 1px solid var(--line-net); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+.v2-omni-sub { font-weight: 600; color: var(--muted-head); }
+.v2-omni-ctx { color: var(--ink-sub); }
+/*  어디에 있는 것인가(세션의 프로젝트 · 자료의 출처) — 뒤에 맞은 글이 이어지므로 긴 이름은 줄여 자리를 남긴다. */
+.v2-omni-where { display: inline-block; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; color: var(--ink-sub); }
+.v2-omni-where.solo { display: inline; max-width: none; }
+.v2-omni-edit { color: var(--muted-head); }
+/* 일치 부분 — 형광펜 밑줄(글자색·굵기는 그대로). ⚠ <mark> 의 브라우저 기본값(노랑 바탕·검정 글자)은 다크모드를 뚫고 나오므로 덮어쓴다. */
+.v2-omni-hl { background: transparent; color: inherit; border-radius: 2px; box-shadow: inset 0 -.42em 0 var(--md-mark-bg); }
+/* key(지식 이름 · 프로젝트 번호) — 사람이 옮겨 적는 이름이라 고정폭으로. 정확히 맞았으면 테두리로 그렇다고 말한다. */
+.v2-omni-key { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-head);
+  background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
+.v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
+.v2-omni-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.v2-omni-when { flex: none; font-size: 11.5px; color: var(--muted-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/*  종류 이름은 그림이 말한다 — 눈에는 숨기고 화면 읽기 프로그램에만 읽힌다. */
+.v2-omni-badge { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/*  결과가 없다 · 찾는 중 — 목록 **위**에 선다(목록 아래에 두면 칸 맨 밑에 붙어 보였다, 실화면). */
+.v2-omni-none { flex: none; padding: 22px 18px 10px; color: var(--muted); font-size: 13px; }
+.v2-omni-none b { display: block; font-size: 14px; color: var(--ink-sub); margin-bottom: 4px; }
+.v2-omni-none p { margin: 0; line-height: 1.6; }
+.v2-omni-none[hidden] { display: none; }
+.v2-omni-none-go { margin-top: 10px; height: 30px; padding: 0 12px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 12.5px; color: var(--blue); cursor: pointer; }
+.v2-omni-none-go:hover { border-color: var(--blue); }
+.v2-omni-none-go:focus-visible, .v2-omni-more:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-omni-more { flex: none; margin: 0 10px 10px; height: 30px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; }
 .v2-omni-more:hover { border-color: var(--blue); }
 .v2-omni-more[hidden] { display: none; }
-.v2-omni-note span { display: block; }
+
+/* 아래 줄 — 왼쪽 키 안내, 오른쪽 상태(색인 중 · 가져오지 못함). */
+.v2-omni-foot { flex: none; display: flex; align-items: center; gap: 14px; min-height: 36px; padding: 6px 14px; border-top: 1px solid var(--line);
+  background: var(--bg-tint); font-size: 11.5px; color: var(--muted); }
+.v2-omni-hints { display: flex; align-items: center; gap: 14px; flex: none; white-space: nowrap; }
+.v2-omni-hints kbd, .v2-opv-kbd { font: 600 10.5px/1 var(--mono, ui-monospace, monospace); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 2px 5px; margin-right: 3px; }
+.v2-omni-note { margin-left: auto; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.v2-omni-note[hidden] { display: none; }
+
+/* ── 미리보기 칸(web/v2/omni-preview.ts) ── 머리(종류·제목) / 스크롤되는 안 / 단추 */
+.v2-omni-pvw { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.v2-omni-grab, .v2-omni-sheetbg { display: none; }
+.v2-opv { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-opv.empty { justify-content: center; align-items: center; }
+.v2-opv-h { flex: none; padding: 18px 22px 0; }
+.v2-opv-kline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.v2-opv-kind { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; padding: 2px 8px; }
+.v2-opv-kic { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-opv-tag { font-size: 11px; font-weight: 700; color: var(--muted); background: var(--bg-tint-2); border-radius: 5px; padding: 2px 6px; }
+.v2-opv-pill { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-net); color: var(--muted-head); }
+.v2-opv-pill.done { color: var(--ok); border-color: var(--ok-line-2); background: var(--ok-bg); }
+.v2-opv-pill.doing { color: var(--blue); border-color: var(--line-note); background: var(--bg-punch); }
+.v2-opv-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-sub); }
+.v2-opv-t { margin: 8px 0 0; font-size: 18px; line-height: 1.4; font-weight: 700; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.v2-opv-b { flex: 1; min-height: 0; overflow: auto; padding: 10px 22px 16px; display: flex; flex-direction: column; gap: 8px; }
+.v2-opv-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted); }
+.v2-opv-fact { display: inline-flex; align-items: center; gap: 5px; min-width: 0; border: 0; background: none; padding: 0; font: inherit; color: inherit; }
+.v2-opv-fact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.v2-opv-fact.link { cursor: pointer; color: var(--blue); }
+.v2-opv-fact.link:hover span { text-decoration: underline; }
+.v2-opv-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-opv-sec { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--muted-head); }
+.v2-opv-sec em { font-style: normal; font-weight: 500; color: var(--muted-3); }
+.v2-opv-when { font-weight: 500; color: var(--muted-3); }
+.v2-opv-nav { margin-left: auto; display: inline-flex; gap: 4px; }
+.v2-opv-navb { width: 24px; height: 22px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink-sub); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.v2-opv-navb:hover { border-color: var(--blue); color: var(--blue); }
+.v2-opv-first { margin: 2px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.v2-opv-first b { font-weight: 700; color: var(--muted-head); }
+.v2-opv-sum { margin: 2px 0 0; font-size: 13px; line-height: 1.65; color: var(--ink-sub); }
+/* 세션 — 대화 모양. 맞은 말은 카드로 돋우고, 앞뒤 말은 흐리게. */
+.v2-opv-conv { display: flex; flex-direction: column; gap: 6px; }
+.v2-opv-msg { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; border-radius: 10px; font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
+.v2-opv-msg p { margin: 0; overflow-wrap: anywhere; }
+.v2-opv-msg.dim { color: var(--muted); }
+/*  앞뒤 말은 세 줄까지만 — 길면 맞은 말이 화면 아래로 밀린다(폰 캡처로 확인). */
+.v2-opv-msg.dim p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.v2-opv-msg.hit { background: var(--surface); border: 1px solid var(--line-note); color: var(--ink); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .05); }
+.v2-opv-msg.plain { background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.v2-opv-who { flex: none; margin-top: 2px; font-size: 10.5px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
+.v2-opv-who.user { background: var(--bg-punch); color: var(--blue); }
+.v2-opv-who.ai { background: var(--bg-tint-2); color: var(--muted); }
+.v2-opv-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-opv-files code { font: 12px/1.4 var(--mono, ui-monospace, monospace); background: var(--bg-tint-2); color: var(--ink-sub); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+.v2-opv-files code.hit { border-color: var(--line-note); background: var(--surface); }
+/* 본문에서 맞은 곳 — 그 줄이 속한 제목(절) 아래에, 맞은 줄은 진하게 · 이웃 줄은 흐리게. */
+.v2-opv-blocks { display: flex; flex-direction: column; gap: 8px; }
+.v2-opv-block { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+.v2-opv-crumb { font-size: 11.5px; font-weight: 700; color: var(--muted-head); margin-bottom: 3px; }
+.v2-opv-line { margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
+.v2-opv-line.hit { color: var(--ink); }
+.v2-opv-toc { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 18px; font-size: 12.5px; color: var(--ink-sub); }
+.v2-opv-toc li { break-inside: avoid; padding: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-opv-toc li.l1 { padding-left: 12px; color: var(--muted); }
+/* 태스크 진행 — 끝남(초록) · 하는 중(파랑) · 남은 것(바탕). */
+.v2-opv-prog { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line-row); }
+.v2-opv-prog i { display: block; height: 100%; }
+.v2-opv-prog i.done { background: var(--ok-fill); } .v2-opv-prog i.doing { background: var(--blue-fill); }
+.v2-opv-rows { display: flex; flex-direction: column; }
+.v2-opv-trow { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 3px 8px; border: 0; border-radius: 7px; background: none;
+  font: inherit; font-size: 13px; color: var(--ink-sub); text-align: left; width: 100%; }
+button.v2-opv-trow { cursor: pointer; } button.v2-opv-trow:hover { background: var(--bg-tint-2); }
+.v2-opv-trow .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-opv-trow .s { flex: none; font-size: 11.5px; color: var(--muted-3); white-space: nowrap; }
+.v2-opv-sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; border: 1.5px solid var(--muted-3-line); }
+.v2-opv-sdot.done { background: var(--ok-fill); border-color: var(--ok-fill); } .v2-opv-sdot.doing { background: var(--blue-fill); border-color: var(--blue-fill); }
+.v2-opv-link { display: block; width: 100%; border: 0; background: none; padding: 4px 8px; border-radius: 7px; font: inherit; font-size: 13px; color: var(--blue);
+  text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-opv-link:hover { background: var(--bg-tint-2); }
+.v2-opv-note { margin: 0; font-size: 12px; color: var(--muted-3); }
+.v2-opv-empty { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.v2-opv-empty.big { padding: 0 28px; text-align: center; }
+.v2-opv-skel { display: flex; flex-direction: column; gap: 10px; padding-top: 6px; }
+.v2-opv-skel i { display: block; height: 12px; border-radius: 6px; background: var(--line-row); }
+.v2-opv-act { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 22px 14px; border-top: 1px solid var(--line); background: var(--bg); }
+.v2-opv-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
+.v2-opv-btn:hover { border-color: var(--blue); }
+.v2-opv-btn.pri { background: var(--blue-fill); border-color: var(--blue-fill); color: var(--on-fill); }
+.v2-opv-btn.pri:hover { background: var(--blue-fill-deep); border-color: var(--blue-fill-deep); }
+.v2-opv-btn.pri .v2-opv-kbd { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .3); color: var(--on-fill); }
+.v2-opv-btn .v2-opv-kbd { margin: 0 0 0 2px; }
+.v2-opv-btn:focus-visible, .v2-opv-navb:focus-visible, .v2-opv-link:focus-visible, button.v2-opv-trow:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+@media (max-width: 900px) {
+  .v2-omni { padding: clamp(12px, 5vh, 56px) 10px 14px; }
+  .v2-omni-col { flex-basis: 44%; min-width: 260px; }
+  .v2-omni-hints span:nth-child(n+4) { display: none; }
+}
 
 /*  폰(≤640) — 카드를 화면 전체로, 높이는 **키보드 위까지**(visualViewport 높이 → --omni-vh, omni.ts). 바깥 여백이 사라지므로
-    닫기는 위 오른쪽 «닫기» 단추로. 칩 줄은 한 줄 가로 스크롤(두 줄로 접히면 결과가 그만큼 밀린다). 줄은 두 줄 구성:
-    제목(두 줄까지) / 둘째 줄 + 시각. 종류 글자는 아이콘이 말하므로 숨긴다. */
+    닫기는 위 오른쪽 «닫기» 단추로. 목록이 화면 전체를 쓰고, 줄을 누르면 미리보기가 아래에서 판으로 올라온다([열기]로 들어간다).
+    탭 줄은 한 줄 가로 스크롤 — 기간·정렬은 그 줄 끝에 선다. 키 안내는 폰에 없다. */
 @media (max-width: 640px) {
-  .v2-omni { padding: 0; align-items: stretch; background: var(--bg); }
+  .v2-omni { padding: 0; align-items: stretch; background: var(--surface); }
   .v2-omni-card { width: 100%; max-width: none; height: var(--omni-vh, 100dvh); max-height: none; margin-top: var(--omni-vt, 0px);
     border: 0; border-radius: 0; box-shadow: none; }
-  .v2-omni-top { padding: 8px 8px 8px 12px; gap: 8px; }
-  .v2-omni-in { font-size: 16px; }   /* 16px 아래면 iOS 가 칸을 확대한다 */
-  .v2-omni-close { height: 34px; padding: 0 10px; font-size: 14px; color: var(--ink-sub); }
+  .v2-omni-top { height: 52px; padding: 0 8px 0 14px; gap: 8px; }
+  .v2-omni-in { font-size: 17px; }   /* 16px 아래면 iOS 가 칸을 확대한다 */
+  .v2-omni-close { height: 36px; padding: 0 10px; font-size: 15px; color: var(--blue); }
   .v2-omni-close-t { display: inline; }
   .v2-omni-close .v2-omni-esc { display: none; }
-  .v2-omni-filters { flex-wrap: nowrap; overflow-x: auto; padding: 6px 10px; gap: 5px; scrollbar-width: none; }
+  .v2-omni-filters { height: 46px; padding: 0 10px; overflow-x: auto; scrollbar-width: none; }
   .v2-omni-filters::-webkit-scrollbar { display: none; }
-  .v2-omni-kinds { flex-wrap: nowrap; flex: none; }   /* 줄어들면 칩이 정렬 단추 밑으로 겹쳤다(캡처로 확인) — 가로 스크롤로 */
-  .v2-omni-tools { margin-left: 6px; flex: none; }
-  .v2-omni-list { padding: 4px; }
-  .v2-omni-row { align-items: flex-start; gap: 8px; padding: 8px 6px; }
-  .v2-omni-ic { width: 24px; height: 24px; margin-top: 1px; }
-  .v2-omni-t { font-size: 14px; }
-  .v2-omni-s { font-size: 12px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
-  .v2-omni-meta { min-width: 0; }
-  .v2-omni-badge { display: none; }
+  .v2-omni-tabs { flex: none; gap: 4px; }
+  /*  탭 다섯이 390px 한 화면에 다 보이게 — 안 여백과 숫자 간격을 줄인다(«자료» 가 잘려 있었다, 실화면). */
+  .v2-omni-tab { height: 32px; border: 1px solid var(--line); border-radius: 999px; padding: 0 9px; gap: 4px; font-size: 12.5px; }
+  .v2-omni-tabn { font-size: 11px; }
+  .v2-omni-tab.on { border-color: var(--line-note); }
+  .v2-omni-tab.aux:not(.on) { height: 32px; margin-left: 0; }
+  .v2-omni-tools { margin-left: 6px; }
+  .v2-omni-opt { height: 32px; border-radius: 999px; }
+  .v2-omni-col { flex: 1 1 auto; min-width: 0; max-width: none; border-right: 0; }
+  .v2-omni-row { height: 56px; }
+  .v2-omni-t { font-size: 15px; }
   .v2-omni-head { display: none; }
+  .v2-omni-hints { display: none; }
+  .v2-omni-foot { min-height: 0; padding: 6px 12px; }
+  .v2-omni-foot:has(.v2-omni-note[hidden]) { display: none; }
+  .v2-omni-note { margin-left: 0; text-align: left; }
+  /* 미리보기 판 — 평소엔 아래에 내려가 있다가 줄을 누르면 올라온다. 뒤 목록은 어둡게, 누르면 내려간다. */
+  .v2-omni-sheetbg { display: block; position: absolute; inset: 0; background: rgba(var(--shadow-ink), .30); opacity: 0; pointer-events: none; transition: opacity .16s; }
+  .v2-omni-pvw { position: absolute; left: 0; right: 0; bottom: 0; max-height: 82%; min-height: 46%; border-radius: 16px 16px 0 0; background: var(--surface);
+    border-top: 1px solid var(--line); box-shadow: 0 -12px 40px rgba(var(--shadow-ink), .22); transform: translateY(102%); transition: transform .18s ease-out; visibility: hidden; }
+  .v2-omni-card.sheet .v2-omni-pvw { transform: none; visibility: visible; }
+  .v2-omni-card.sheet .v2-omni-sheetbg { opacity: 1; pointer-events: auto; }
+  /*  손잡이 — 누르거나 아래로 끌면 판이 내려간다(끄는 동안 화면이 따라 밀리지 않게 touch-action: none). */
+  .v2-omni-grab { display: block; flex: none; width: 100%; height: 28px; border: 0; background: none; position: relative; cursor: pointer; touch-action: none; }
+  .v2-omni-grab::after { content: ''; position: absolute; left: 50%; top: 10px; width: 40px; height: 5px; margin-left: -20px; border-radius: 3px; background: var(--line-net); }
+  .v2-opv-h { padding: 0 18px 0; }
+  .v2-opv-b { padding: 10px 18px 14px; }
+  .v2-opv-act { padding: 10px 18px calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .v2-opv-btn { flex: 1; justify-content: center; height: 42px; font-size: 15px; }
+  .v2-opv-btn .v2-opv-kbd { display: none; }
+  .v2-opv-toc { columns: 1; }
+  @media (prefers-reduced-motion: reduce) { .v2-omni-pvw, .v2-omni-sheetbg { transition: none; } }
 }
 
 /* ── ①-c #3830 맥락 관리에서는 이 줄이 **창을 가로지른다**(슬랙) ────────────────────
