@@ -13,21 +13,23 @@
 //  Q3 저장 줄 — 켰다 껐다 켰다(응답 전) = 요청 1건(마지막 값이 서버가 아는 값과 같아지면 더 안 보낸다)
 //  Q4 저장 줄 — 실패하면 failed(id, 서버가 아는 값) · 밀린 것은 버린다 · 그 뒤 다시 고르면 다시 보낸다
 //  Q5 저장 줄 — 서버가 이미 아는 값을 고르면(밖에서 알려 준 뒤) 요청 0건 · 리스트끼리는 서로 안 기다린다
+//  Q6 저장 줄 — 실패를 알리는 자리(failed) 안에서 다시 고르면 그 요청이 나간다(유실되지 않는다)
 //  F1 즐겨찾기를 받은 뒤, 즐겨찾기 아닌 리스트 줄 — 별 단추가 있다(안 눌림)
 //  F2 즐겨찾기 줄(고정 줄) · 카드 안의 즐겨찾기한 리스트 줄 — 별 단추가 있다(눌림)
 //  F3 즐겨찾기를 아직 못 받았다 — 별 단추가 없다 · 우클릭 행도 없다
+//  F3b 즐겨찾기 받기가 실패했다 — «즐겨찾기 없음» 이 아니라 «모른다»: 별 단추가 없고, 다음에 그릴 때 다시 받아 선다
 //  F4 별 누름(추가) — 저장 응답 전에 고정 줄에 선다 · 요청 1건(kind=project_list · id · on=true) · 주소는 안 바뀐다
 //  F5 별 누름(빼기, 고정 줄에서) — 고정 줄에서 사라진다 · 요청 on=false
 //  F6 저장 실패 — 되돌린다(추가였으면 줄이 사라진다)
 //  F7 응답 전에 연달아 두 번 — 요청이 true → false 순서로 하나씩, 끝 상태 = 즐겨찾기 아님
 //  F8 키보드(Enter) — 누름과 같다 · 주소는 안 바뀐다 · 초점이 같은 리스트의 별에 남는다
 //  F9 전체 · 기타(미분류) 줄 — 별 단추가 없다
-//  F10 사이드바에서 바꿈 — 저장이 된 뒤에 액자에 알린다(id · on). 실패한 저장은 알리지 않는다
+//  F10 사이드바에서 바꿈 — 저장이 된 뒤에 액자에 알린다(id · on · 받는 곳은 이 오리진만). 실패한 저장은 알리지 않는다
 //  F11 액자가 알려 옴(applyFavList) — 즉시 반영 · 저장 요청 0건 · 보낸 액자엔 되알리지 않고 다른 액자엔 전한다
 //  F12 우클릭 행 — 즐겨찾기 아니면 «추가», 맞으면 «빼기» · 누르면 넣고 뺀다
 //  F13 착지 — 즐겨찾기 맨 위가 바뀌면 [프로젝트] 구역의 착지 주소가 그 리스트다(이번 화면 · 다음 진입이 읽는 저장값 둘 다)
 //  C1 별은 평소엔 안 보이고(display none) 줄에 올리면 수 자리에 선다 — 올려도 줄 높이가 안 바뀐다
-//  B1 액자: 본문 ☆ 누름 → 저장 성공 — 바깥 셸에 알린다(id · on)
+//  B1 액자: 본문 ☆ 누름 → 저장 성공 — 바깥 셸에 알린다(id · on · 받는 곳은 이 오리진만)
 //  B1x 액자: 저장 실패 — 알리지 않는다
 //  B2 액자: 셸이 알려 옴(보고 있는 리스트) — ☆ 눌림 상태가 맞춰진다 · 저장 요청 0건
 //  B3 액자: 오리진이 다른 알림 · 바깥 창이 아닌 곳에서 온 알림 · 모양이 틀린 알림 — 무시
@@ -93,6 +95,12 @@ else {
   { const r = rig(); r.s.know(1, true); r.s.want(1, true); await r.tick(); const none = r.calls.length;
     r.s.want(1, false); r.s.want(2, true); await r.tick(); const both = j(r.calls); r.gates[0]?.ok(); r.gates[1]?.ok(); await r.tick();
     check(none === 0 && both === "[[1,false],[2,true]]" && j(r.saved) === "[[1,false],[2,true]]", "Q5 서버가 아는 값을 고르면 요청 0건 · 리스트끼리는 서로 안 기다린다", j([none, both, r.saved])); }
+  { const calls = [], gates = []; let again = true;
+    const s = createFavSaver({ save: (id, on) => new Promise((res, rej) => { calls.push([id, on]); gates.push({ ok: res, no: () => rej(new Error("boom")) }); }),
+      saved: () => {}, failed: (id) => { if (again) { again = false; s.want(id, true); } } });
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    s.want(1, true); await tick(); gates[0]?.no(); await tick(); await tick(); const after = j(calls); gates[1]?.ok(); await tick();
+    check(after === "[[1,true],[1,true]]" && s.busy(1) === false, "Q6 실패를 알리는 자리에서 다시 고르면 그 요청이 나간다", j([after, s.busy(1)])); }
 }
 
 // ───────────────────────── W. 배선(주석을 걷고 본다)
@@ -120,12 +128,12 @@ const run = async (html, prefix) => {
 };
 //  가짜 서버(두 페이지 공통) — /favorites GET 은 window.__favs, POST 는 기록하고 window.__hold 면 손으로 풀 때까지 붙든다. __failNext 면 500.
 const SERVER = `
-  window.__posts = []; window.__gates = []; window.__favs = [10]; window.__favGets = 0; window.__hold = false; window.__failNext = false; window.__favDelay = null;
+  window.__posts = []; window.__gates = []; window.__favs = [10]; window.__favGets = 0; window.__hold = false; window.__failNext = false; window.__favDelay = null; window.__favGetFail = false;
   window.fetch = async (url, opts) => {
     const u = String(url), method = (opts && opts.method) || 'GET';
     const json = (o, status) => new Response(JSON.stringify(o), { status: status || 200, headers: { 'Content-Type': 'application/json' } });
     if (/\\/api\\/ui\\/v6\\/favorites/.test(u)) {
-      if (method === 'GET') { window.__favGets++; if (window.__favDelay) await window.__favDelay; return json({ project_lists: window.__favs.slice() }); }
+      if (method === 'GET') { window.__favGets++; if (window.__favDelay) await window.__favDelay; if (window.__favGetFail) return json({ error: 'boom' }, 500); return json({ project_lists: window.__favs.slice() }); }
       window.__posts.push(JSON.parse(opts.body));
       const failing = window.__failNext; window.__failNext = false;
       if (window.__hold) await new Promise((r) => window.__gates.push(r));
@@ -155,7 +163,8 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
     const host = document.getElementById('host');
     //  액자 둘 — 받은 알림을 적는다(실제 postMessage 대신: file:// 는 오리진이 'null' 이라 진짜로는 못 보낸다).
     const told = { fa: [], fb: [] };
-    for (const k of ['fa', 'fb']) document.getElementById(k).contentWindow.postMessage = (m) => { told[k].push(m); };
+    const origins = [];
+    for (const k of ['fa', 'fb']) document.getElementById(k).contentWindow.postMessage = (m, o) => { told[k].push(m); origins.push(o); };
     const FA = document.getElementById('fa').contentWindow;
     const lists = [{ id: 10, name: 'LIST-TEN', folder_id: 5 }, { id: 11, name: 'LIST-ELEVEN', folder_id: 5 }, { id: 12, name: 'LIST-TWELVE', folder_id: 5 }];
     const folders = [{ id: 1, name: 'TOP-FOLDER', parent_id: null }, { id: 5, name: 'SUB-FOLDER', parent_id: 1 }];
@@ -172,12 +181,18 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
     const snap = () => ({ favs: favNames(), posts: window.__posts.slice(), hash: location.hash, fa: told.fa.slice(), fb: told.fb.slice() });
     const open = async () => { while (window.__gates.length) window.__gates.shift()(); await sleep(40); };
 
+    // ── F3b — 즐겨찾기 받기가 실패한다(500) → 모른다. 실패가 걷히면 다음에 그릴 때 다시 받는다(아래 F3 이 그 요청을 붙든다)
+    window.__favGetFail = true; location.hash = '#/projects2/all';
+    await draw(); await sleep(120); await draw(); await sleep(60);
+    R.f3b = { stars: host.querySelectorAll('.v2-pstar').length, rows: host.querySelectorAll('a.v2-kcat').length, isFav: Side.isFavList ? Side.isFavList(10) : 'no-export', gets: window.__favGets };
+    window.__favGetFail = false;
     // ── F3 — 즐겨찾기를 아직 못 받았다
     let letGo; window.__favDelay = new Promise((r) => { letGo = r; });
     location.hash = '#/projects2/all';
     await draw();
     R.f3 = { stars: host.querySelectorAll('.v2-pstar').length, rows: host.querySelectorAll('a.v2-kcat').length, ctx: Side.listFavCtxRow ? Side.listFavCtxRow(11) : 'no-export', isFav: Side.isFavList ? Side.isFavList(11) : 'no-export' };
     window.__favDelay = null; letGo(); await sleep(60); await draw();
+    R.getsLoaded = window.__favGets;
 
     // ── F1 · F2 · F9 · C1
     R.f1 = { card11: pressed(CARD(11)), card10: pressed(CARD(10)), fav10: pressed(FAV(10)), favs: favNames(),
@@ -236,7 +251,7 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
     { const p4 = window.__posts.length, a = told.fa.length, b = told.fb.length;
       if (Side.applyFavList) Side.applyFavList(10, false, FA); await sleep(40);
       R.f11 = { favs: favNames(), posts: window.__posts.slice(p4), toFa: told.fa.slice(a), toFb: told.fb.slice(b), landing: Side.projLandingRoute(), stored: stored() }; }
-    R.gets = window.__favGets;
+    R.gets = window.__favGets; R.origins = [...new Set(origins)]; R.origin = location.origin;
   } catch (e) { R.error = String((e && e.stack) || e).slice(0, 700); }
   document.getElementById('out').textContent = 'RESULT' + JSON.stringify(R) + 'ENDRESULT';
 })();
@@ -247,6 +262,8 @@ const msg = (id, on) => j({ type: "lively:list-fav", id, on });
 check(S.f1.card11 === "false" && S.f1.label === "즐겨찾기에 추가", "F1 즐겨찾기 아닌 리스트 줄 — 별 단추(안 눌림)", j(S.f1));
 check(S.f1.card10 === "true" && S.f1.fav10 === "true" && j(S.f1.favs) === '["LIST-TEN"]' && S.f1.labelOn === "즐겨찾기에서 빼기", "F2 즐겨찾기 줄 · 카드 안의 즐겨찾기한 줄 — 별 단추(눌림)", j(S.f1));
 check(S.f3.stars === 0 && S.f3.rows === 3 && S.f3.ctx === null && S.f3.isFav === null, "F3 즐겨찾기를 못 받았으면 별 단추 · 우클릭 행이 없다(줄은 선다)", j(S.f3));
+check(!!S.f3b && S.f3b.stars === 0 && S.f3b.rows === 3 && S.f3b.isFav === null && S.f3b.gets >= 2 && S.getsLoaded > S.f3b.gets && S.f1.fav10 === "true",
+  "F3b 받기가 실패하면 «모른다» — 별 단추가 없고, 그릴 때마다 다시 받아 보다가 되면 선다", j([S.f3b, S.getsLoaded, S.f1.fav10]));
 check(j(S.f4_mid.favs) === '["LIST-TEN","LIST-ELEVEN"]' && j(S.f4_mid.posts) === '[{"kind":"project_list","id":11,"on":true}]' && S.f4_mid.hash === "#/projects2/all"
   && S.f4_mid.card11 === "true" && S.f4_mid.fav11 === "true", "F4 추가 — 응답 전에 고정 줄에 서고 요청 1건 · 주소는 그대로", j(S.f4_mid));
 check(j(S.f5_mid.favs) === '["LIST-ELEVEN"]' && j(S.f5_mid.posts.slice(-1)) === '[{"kind":"project_list","id":10,"on":false}]' && S.f5_mid.card10 === "false" && S.f5_mid.hash === "#/projects2/all",
@@ -262,6 +279,7 @@ check(S.f1.allStar === 0 && S.f1.noneStar === 0 && S.f1.noneRow === 1, "F9 전�
 check(S.f4_mid.fa.length === 0 && j(S.f4_done.fa) === "[" + msg(11, true) + "]" && j(S.f4_done.fb) === "[" + msg(11, true) + "]"
   && j(S.f5_done.fa.slice(-1)) === "[" + msg(10, false) + "]" && S.f6.told.length === 0 && j(S.f7.told) === "[" + msg(12, true) + "," + msg(12, false) + "]",
   "F10 저장이 된 뒤에 액자들에 알린다 · 실패한 저장은 알리지 않는다", j([S.f4_mid.fa, S.f4_done.fa, S.f4_done.fb, S.f5_done.fa, S.f6.told, S.f7.told]));
+check(S.origins.length === 1 && S.origins[0] === S.origin, "F10o 알림을 받는 곳은 이 오리진만이다(아무 곳 '*' 이 아니다)", j([S.origins, S.origin]));
 check(!S.f11.favs.includes("LIST-TEN") && S.f11.posts.length === 0 && S.f11.toFa.length === 0 && j(S.f11.toFb) === "[" + msg(10, false) + "]",
   "F11 액자가 알려 오면 즉시 반영 · 저장 0건 · 보낸 액자엔 되알리지 않고 다른 액자엔 전한다", j(S.f11));
 check(S.f12.add === "즐겨찾기에 추가" && S.f12.rem === "즐겨찾기에서 빼기" && S.f12.icon === "star" && j(S.f12.posts) === '[{"kind":"project_list","id":10,"on":true}]' && S.f12.favs.includes("LIST-TEN"),
@@ -270,7 +288,7 @@ check(S.f13.landing === "#/projects2/l/10" && S.f13.stored === "10" && S.f11.lan
   "F13 즐겨찾기 맨 위가 바뀌면 착지 주소도 그 리스트다 — 다음 진입이 쓰는 저장값까지", j([S.f13, S.f11.landing, S.f11.stored]));
 check(!!S.c1 && S.c1.d0 === "none" && S.c1.d1 !== "none" && S.c1.c0 !== "none" && S.c1.c1 === "none" && S.c1.w1 >= 18 && Math.abs(S.c1.h1 - S.c1.h0) < 0.5 && S.c1.hoverRule,
   "C1 별은 평소엔 안 보이고 줄에 올리면(초점이 오면) 수 자리에 선다 — 줄 높이는 그대로", j(S.c1 || "별이 없다"));
-check(S.gets === 1, "W2 사이드바는 즐겨찾기를 한 번만 받고도 맞는다(바꿀 때마다 다시 받지 않는다)", "GET " + S.gets + "회");
+check(S.gets === S.getsLoaded, "W2 사이드바는 즐겨찾기를 받은 뒤 다시 받지 않고도 맞는다(바꿀 때마다 받지 않는다)", "받은 직후 GET " + S.getsLoaded + "회 → 끝 " + S.gets + "회");
 
 // ───────────────────────── B. 액자(보드)
 const BOARD_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><style>${css("01-base.css", "29-projects-board-header.css")} html,body{margin:0}</style>
@@ -311,7 +329,7 @@ const BOARD_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8
     R.b1 = { before: starOn() };
     const p0 = window.__posts.length;
     view.querySelector('.pjv-crumb-fav').click(); await sleep(80);
-    R.b1.after = starOn(); R.b1.posts = window.__posts.slice(p0); R.b1.up = up.map((x) => x.m);
+    R.b1.after = starOn(); R.b1.posts = window.__posts.slice(p0); R.b1.up = up.map((x) => x.m); R.b1.to = up.map((x) => x.o); R.b1.origin = location.origin;
 
     // ── B1x — 실패
     const u0 = up.length; window.__failNext = true;
@@ -339,7 +357,7 @@ const BOARD_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8
 </script></html>`;
 
 const B = await run(BOARD_PAGE, "list-fav-board-");
-check(B.parentSwapped && B.b1.before === "true" && B.b1.after === "false" && j(B.b1.posts) === '[{"kind":"project_list","id":10,"on":false}]' && j(B.b1.up) === "[" + msg(10, false) + "]",
+check(B.parentSwapped && B.b1.before === "true" && B.b1.after === "false" && j(B.b1.posts) === '[{"kind":"project_list","id":10,"on":false}]' && j(B.b1.up) === "[" + msg(10, false) + "]" && B.b1.to.length === 1 && B.b1.to[0] === B.b1.origin,
   "B1 액자: ☆ 누름 → 저장 성공 — 바깥 셸에 알린다(id · on)", j(B.b1));
 check(B.b1x.posts === 2 && B.b1x.up === 0, "B1x 액자: 저장 실패 — 알리지 않는다", j(B.b1x));
 check(B.b2.before === "false" && B.b2.on === "true" && B.b2.otherList === "true" && B.b2.off === "false" && B.b2.posts === 0 && B.b2.up === 0,

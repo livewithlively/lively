@@ -1365,7 +1365,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   };
   //  #3870 — 셸이 바꾼 즐겨찾기 한 건: 이 보드가 든 목록(favData) · ⌄ 메뉴가 읽는 캐시를 고치고 브레드크럼(☆)만 다시 그린다.
   pjvShellFavApply = (id, on) => {
-    if (!favData) return;
+    if (!favData || !wrapper.isConnected) return;   // 이 보드가 화면에서 내려갔다(다른 화면으로 갔다) — 고칠 것이 없다
     const ids = new Set<number>(((favData.project_lists) || []).map((x: any) => Number(x)));
     if (on) ids.add(id); else ids.delete(id);
     favData.project_lists = [...ids];

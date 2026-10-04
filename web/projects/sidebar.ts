@@ -14,8 +14,8 @@ import { api, busy, el, sv, toast, visAxisOn } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { pjvApplyToolbarFilters } from './filters.js';
 import { pjvBundleIcon } from './icons.js';
-import { ICONS } from '../lib/icon-paths.js';
-import { listFavMsg } from '../lib/list-fav.js';   // #3870 — 셸 ↔ 액자 즐겨찾기 알림 한 줄   // #4233 — 리스트 = 점과 줄 셋(새 화면과 한 벌)
+import { ICONS } from '../lib/icon-paths.js';   // #4233 — 리스트 = 점과 줄 셋(새 화면과 한 벌)
+import { listFavMsg } from '../lib/list-fav.js';   // #3870 — 셸 ↔ 액자 즐겨찾기 알림 한 줄
 import { PJV_LIST_COLORS, openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace, pjvHarmonizeColor, pjvListStatusEditor, pjvSaveListMembers } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { pjvContainerCmp, pjvProjAddRow, pjvProjDelete, pjvProjRow, pjvProjTeamControl, pjvRenderStatusGroups } from './rows.js';
