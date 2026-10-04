@@ -9,16 +9,22 @@
 //    · 지식 — 그 작업 기록이 산출(produced)로 이은 지식(activity_knowledge).
 //    · 태스크 — 그 박스가 맡은 태스크(execution_session.task_id · execution_session_task).
 //    · 질문 수 · 고친 파일 수 — 대화 색인(session_msg)에서 센다.
-//   질의는 줄 수와 무관하게 일곱 번이다(배열 한 번씩).
+//   질의는 줄 수와 무관하게 일곱 번이다(배열 한 번씩). 전부 한 연결에서 시간 상한(JOURNAL_QUERY_TIMEOUT_MS)을 걸고 돈다 —
+//   대화 검색(conv-index-store boundedQuery)과 같은 까닭이다: 공유 풀을 오래 쥐지 않는다(#936). 넘으면 57014 → 라우트가 503.
+//
+//  ── 기간과 «한 일» ──
+//   줄은 **마지막 활동이 그 기간에 든 세션**이고, 줄에 싣는 작업 기록은 **그 기간에 적은 것**이다. 지난주부터 이어진 세션의
+//   지난주 기록을 이번 주 합계·요약에 섞지 않는다(격리 리뷰). 기간보다 앞서 적은 기록은 수(activities_before)로만 준다 —
+//   화면이 «기록된 작업 없음» 이라고 틀리게 말하지 않게.
 //
 //  ── 누가 보나 ──
 //   **세션 주인만**(owner = 요청자) — 일지는 «내가 한 일» 이다. 워크스페이스 격리는 세션 목록과 같은 한 벌(sessionWorkspaceWhere),
 //   휴지통에 있는 세션은 뺀다(대화 uuid 표식 · 그 대화를 돌린 박스 id 표식 둘 다 — session-trash-ops resolveMine 과 같은 뜻).
 //   지식은 지식의 공개범위(knowledgeVisWhere)를, 프로젝트·태스크는 가려진 프로젝트(hiddenProjects)를 다시 잰다 — 내 세션이 만든
 //   것이어도 그 뒤에 잠겼으면 제목을 싣지 않는다.
-import { itemsPool } from "../db/client.js";
+import { withTx } from "../db/client.js";
 import { sessionWorkspaceWhere, withNamedLabels } from "./session-log-store.js";
-import { assignActivities, clampJournalLimit, type JournalBoxLink } from "./session-journal.js";
+import { assignActivities, clampJournalLimit, inJournalRange, JOURNAL_QUERY_TIMEOUT_MS, JOURNAL_ACTIVITY_MAX, type JournalBoxLink } from "./session-journal.js";
 import { knowledgeVisWhere } from "./knowledge-common.js";
 import { hiddenProjects } from "./visibility.js";
 import { sessionNameFromPrompt } from "../terminal/session-name.js";
@@ -42,8 +48,11 @@ export interface JournalRow {
   /** 사람 말 수 · 고친 파일 수(대화 색인 기준 — 색인이 밀려 있으면 적게 나온다). */
   asks: number;
   edits: number;
+  /** 이 기간에 적은 작업 기록(시각 순). 기간이 없으면(세션 하나만 물을 때) 전부. */
   activities: JournalActivity[];
-  /** 이 세션의 작업 기록이 산출로 이은 지식(겹치지 않게). */
+  /** 기간보다 **앞서** 적은 작업 기록 수 — 지난 기간부터 이어진 세션. */
+  activities_before: number;
+  /** 이 세션의 (이 기간) 작업 기록이 산출로 이은 지식(겹치지 않게). */
   knowledge: JournalKnowledge[];
   tasks: JournalTask[];
 }
@@ -56,6 +65,8 @@ export interface JournalInput {
   limit?: number;
   /** 세션 하나만 — 기간·상한을 보지 않는다. */
   only?: { nodeId: string; sessionId: string } | null;
+  /** 문장 하나의 시간 상한(기본 JOURNAL_QUERY_TIMEOUT_MS) — 시험이 줄여 «상한이 실제로 걸리는가» 를 잰다. */
+  timeoutMs?: number;
 }
 
 const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : new Date(String(v)).toISOString());
@@ -65,17 +76,30 @@ const isoOrNull = (v: unknown): string | null => {
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 };
 
+type Query = (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+
 export async function sessionJournal(input: JournalInput): Promise<{ rows: JournalRow[]; truncated: boolean }> {
   if (!input.owner) return { rows: [], truncated: false };
+  //  한 연결 · 문장마다 시간 상한. 읽기뿐이라 트랜잭션은 SET LOCAL 을 담는 그릇이다.
+  return withTx(async (client) => {
+    await client.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(input.timeoutMs ?? JOURNAL_QUERY_TIMEOUT_MS))}`);
+    return journalWith((sql, params) => client.query(sql, params as unknown[]) as unknown as ReturnType<Query>, input);
+  });
+}
+
+async function journalWith(query: Query, input: JournalInput): Promise<{ rows: JournalRow[]; truncated: boolean }> {
   const want = clampJournalLimit(input.limit);
 
   // ① 내 세션 — 목록과 같은 조건(내용 있음 · 서브에이전트 아님 · 자동 실행 아님 · 이 워크스페이스) + 휴지통 제외.
   const params: unknown[] = [input.owner];
+  //  ★ 휴지통은 **집합으로 한 번** 셈한다(WITH trashed) — 세션마다 «이 대화를 돌린 박스가 버려졌나» 를 하위 질의로 다시 재면
+  //   세션 수 × 표식 수 × 대화 사슬 표 전체로 늘어난다(대화 검색 visibleSql 이 같은 자리에서 4초 상한에 걸렸던 그 모양, #4517).
+  const trashedCte = `trashed AS (
+       SELECT t.session_id AS sid FROM org_session_trash t WHERE t.owner = $1
+       UNION SELECT c.conv_uuid FROM org_session_trash t JOIN org_session_conv c ON c.box_id = t.session_id WHERE t.owner = $1)`;
   const wh = [
     `s.owner = $1`, `l.bytes > 0`, `s.parent_session_id IS NULL`, `s.run_kind IS DISTINCT FROM 'task'`,
-    `NOT EXISTS (SELECT 1 FROM org_session_trash t WHERE t.owner = s.owner
-                  AND (t.session_id = s.session_id
-                       OR t.session_id IN (SELECT c.box_id FROM org_session_conv c WHERE c.conv_uuid = s.session_id)))`,
+    `NOT EXISTS (SELECT 1 FROM trashed x WHERE x.sid = s.session_id)`,
   ];
   if (input.workspaceId) wh.push(sessionWorkspaceWhere(params, input.workspaceId));
   if (input.only) {
@@ -86,8 +110,9 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
     if (input.until) { params.push(input.until); wh.push(`s.last_seen < $${params.length}::timestamptz`); }
   }
   params.push(input.only ? 1 : want + 1); const limP = `$${params.length}`;
-  const sr = await itemsPool.query(
-    `SELECT s.node_id, s.session_id, s.harness, s.title, s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes,
+  const sr = await query(
+    `WITH ${trashedCte}
+     SELECT s.node_id, s.session_id, s.harness, s.title, s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes,
             proj.project_id, proj.project_name
        FROM session s
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
@@ -115,7 +140,7 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
       harness: (x.harness as string | null) ?? null,
       first_seen: iso(x.first_seen), last_seen: iso(x.last_seen), bytes: Number(x.bytes) || 0,
       project_id: projOk(pid) ? pid : null, project_name: projOk(pid) ? ((x.project_name as string | null) ?? null) : null,
-      box_id: null, asks: 0, edits: 0, activities: [], knowledge: [], tasks: [],
+      box_id: null, asks: 0, edits: 0, activities: [], activities_before: 0, knowledge: [], tasks: [],
     };
   });
   if (!rows.length) return { rows, truncated };
@@ -127,7 +152,7 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
 
   // ② 박스 ↔ 대화 — 이 대화들을 돌린 박스의 **모든** 대화(목록 밖 형제 대화까지: 그 대화의 기록을 형제에게 싣지 않으려면 알아야 한다)
   //    + 박스의 «지금 대화» 폴백(대화 사슬 표가 생기기 전 세션). owner 로 잠근다.
-  const lr = await itemsPool.query(
+  const lr = await query(
     `SELECT c.box_id, c.conv_uuid, c.first_seen, c.last_seen
        FROM org_session_conv c
       WHERE c.owner = $1 AND c.box_id IN (SELECT c2.box_id FROM org_session_conv c2 WHERE c2.owner = $1 AND c2.conv_uuid = ANY($2::text[]))
@@ -147,23 +172,30 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
   for (const r of rows) r.box_id = boxSeen.get(r.session_id)?.box ?? null;
   const boxIds = [...new Set(links.map((l) => l.box_id))];
 
-  // ③ 작업 기록 — 박스 id 로도, 대화 uuid 로도 적힐 수 있다.
-  const ar = await itemsPool.query(
+  // ③ 작업 기록 — 박스 id 로도, 대화 uuid 로도 적힐 수 있다. **늦은 것부터** 상한까지 읽는다 — 오래 산 박스에 기록이 많이
+  //    쌓여도 잘리는 쪽은 옛 기록이다(이른 것부터 읽으면 새 기록이 잘리고 «가장 늦은 기록» 이 틀린다, 격리 리뷰).
+  const ar = await query(
     `SELECT a.id, a.type, a.title, a.summary, a.session_id, a.commit_sha, a.created_at
        FROM activity a
       WHERE a.session_id = ANY($1::text[])
-      ORDER BY a.created_at NULLS LAST, a.id
-      LIMIT 5000`, [[...boxIds, ...convIds]]);
-  const assigned = assignActivities(links, ar.rows.map((x) => ({ id: Number(x.id), box: String(x.session_id), at: isoOrNull(x.created_at) })), convSet);
+      ORDER BY a.created_at DESC NULLS LAST, a.id DESC
+      LIMIT $2`, [[...boxIds, ...convIds], JOURNAL_ACTIVITY_MAX]);
+  const acts = [...ar.rows].reverse();   // 시각 순(이른 것부터)
+  const assigned = assignActivities(links, acts.map((x) => ({ id: Number(x.id), box: String(x.session_id), at: isoOrNull(x.created_at) })), convSet);
+  const range = input.only ? { since: null, until: null } : { since: input.since ?? null, until: input.until ?? null };
   const actById = new Map<number, JournalActivity>();
   const actConv = new Map<number, string>();
-  for (const x of ar.rows) {
+  for (const x of acts) {
     const id = Number(x.id);
     const conv = assigned.get(id);
     if (!conv || !convSet.has(conv)) continue;   // 목록에 없는 대화의 기록 — 버린다
+    const at = isoOrNull(x.created_at);
+    const where = inJournalRange(at, range.since, range.until);
+    if (where === "before") { for (const r of byConv.get(conv) ?? []) r.activities_before++; continue; }
+    if (where === "after") continue;             // 이 기간 뒤에 적은 기록 — 그 기간의 일지에 선다
     actById.set(id, {
       id, type: String(x.type ?? "other"), title: String(x.title ?? ""), summary: (x.summary as string | null) ?? null,
-      at: isoOrNull(x.created_at), commit: !!x.commit_sha, knowledge: [],
+      at, commit: !!x.commit_sha, knowledge: [],
     });
     actConv.set(id, conv);
   }
@@ -172,7 +204,7 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
   if (actById.size) {
     const kp: unknown[] = [[...actById.keys()]];
     const vis = await knowledgeVisWhere(input.owner, kp);
-    const kr = await itemsPool.query(
+    const kr = await query(
       `SELECT ak.activity_id, k.name, k.title
          FROM activity_knowledge ak
          JOIN knowledge k ON k.name = ak.name
@@ -189,7 +221,7 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
 
   // ⑤ 맡은 태스크 — 박스의 «지금 태스크» + 순서 목록. 태스크가 속한 프로젝트가 가려져 있으면 뺀다.
   if (boxIds.length) {
-    const tr = await itemsPool.query(
+    const tr = await query(
       `WITH tk AS (
          SELECT es.id AS box, es.task_id, 0 AS pos FROM execution_session es WHERE es.id = ANY($1::text[]) AND es.task_id IS NOT NULL
          UNION
@@ -214,7 +246,7 @@ export async function sessionJournal(input: JournalInput): Promise<{ rows: Journ
   }
 
   // ⑥ 질문 수 · 고친 파일 수 — 대화 색인에서.
-  const cr = await itemsPool.query(
+  const cr = await query(
     `SELECT m.node_id, m.session_id,
             count(*) FILTER (WHERE m.role = 'user')::int AS asks,
             count(DISTINCT m.body) FILTER (WHERE m.role = 'edit')::int AS edits

@@ -3,17 +3,17 @@
 //  누르면 오른쪽 칸에 대화록이 그 말의 자리로 열린다. 검색어가 없으면 최근 대화를 날짜 묶음으로 보여 준다.
 //  ⚠ 대화 본문은 신뢰할 수 없다 — 글은 전부 textContent 로만 넣는다(innerHTML 금지).
 import { api, el, toast } from './core.js';
-import { mountTranscript } from './sessions.js';
-import { loadMySessions, dropMySessions, leftPanel, selectOf, transcriptHref } from './sessions-kit.js';
+import { mountTranscript, setTranscriptDoor } from './sessions.js';
+import { loadMySessions, dropMySessions, leftPanel, selectOf, shellHref, transcriptHref } from './sessions-kit.js';
 import { markRanges, type HitRef } from './session-history.js';
 import { PERIODS, periodSince, dayBucket, whenLabel, inPeriod, type OmniPeriod } from './lib/omni-order.js';
 
 interface Hit {
-  node_id: string; session_id: string; name: string | null; project: string | null; project_id: number | null;
+  node_id: string; session_id: string; name: string | null; project: string | null;
   role: 'user' | 'assistant'; ts: string | null; text: string; terms: number;
   before: { role: string; text: string } | null; after: { role: string; text: string } | null;
 }
-interface Picked { sid: string; node: string; name: string; hit: HitRef | null; words: string[] }
+interface Picked { sid: string; node: string; name: string; hit: HitRef | null; words: string[]; /** 줄을 가르는 열쇠의 꼬리 — 시각이 같은 두 말(한 줄의 글 블록들)을 가른다. */ mark?: string }
 
 const HIT_STEP = 30, HIT_MAX = 100, RECENT_STEP = 50;
 type RoleKey = '' | 'user' | 'assistant';
@@ -70,14 +70,15 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     if (!p) { pane.replaceChildren(el('p', { class: 'admin-hint shx-pane-empty', text: '왼쪽에서 줄을 누르면 대화록이 그 자리로 열립니다.' })); return; }
     void mountTranscript(pane, { sid: p.sid, node: p.node, q: '', ln: '' }, {
       embedded: true, words: p.words, hit: p.hit, name: p.name,
-      footer: () => leftPanel(p.sid, p.node),
+      //  그 대화를 돌리는 박스를 알게 되면 머리의 「이어 질문하기」를 「세션 열기」로 바꾼다 — 세션으로 가는 문은 하나다.
+      footer: () => leftPanel(p.sid, p.node, (r) => { if (r.box_id && st.picked === p) setTranscriptDoor(pane, r.box_id); }),
       onTrashed: () => { dropMySessions(); openPicked(null); void run(); },
     });
     if (scroll && pane.getBoundingClientRect().top > window.innerHeight * 0.6) pane.scrollIntoView({ behavior: 'smooth', block: 'start' });   // 좁은 화면(한 칸)에서는 대화록이 아래에 있다
   };
-  const pickKey = (p: Picked): string => p.sid + '|' + p.node + '|' + (p.hit ? p.hit.role + '|' + (p.hit.ts || '') : '');
+  const pickKey = (p: Picked): string => p.sid + '|' + p.node + '|' + (p.hit ? p.hit.role + '|' + (p.hit.ts || '') : '') + '|' + (p.mark || '');
   const rowLink = (p: Picked, ...kids: unknown[]): HTMLElement => {
-    const a = el('a', { class: 'shx-row' + (st.picked && pickKey(st.picked) === pickKey(p) ? ' sel' : ''), href: transcriptHref(p.sid, p.node), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
+    const a = el('a', { class: 'shx-row' + (st.picked && pickKey(st.picked) === pickKey(p) ? ' sel' : ''), href: shellHref(transcriptHref(p.sid, p.node)), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
     a.addEventListener('click', (e: MouseEvent) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } return; }
       e.preventDefault();
@@ -144,7 +145,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
       const text = el('div', { class: 'shx-hit' });
       markInto(text, h.text, words);
       const ctx = (l: { role: string; text: string } | null): HTMLElement | null => l ? el('div', { class: 'shx-ctx', text: who(l.role) + ' · ' + l.text }) : null;
-      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words },
+      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words, mark: h.text.slice(0, 48) },
         el('div', { class: 'shx-row-m', text: [name, h.project || '프로젝트 없음', whenLabel(h.ts ? Date.parse(h.ts) : undefined, now), h.role === 'user' ? '내 지시' : 'AI 답'].filter(Boolean).join(' · ') }),
         ctx(h.before), text, ctx(h.after));
     });
@@ -168,7 +169,11 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
   let timer: ReturnType<typeof setTimeout> | null = null;
   const fire = (now: boolean): void => {
     if (timer) { clearTimeout(timer); timer = null; }
-    const go = (): void => { st.limit = HIT_STEP; st.shown = RECENT_STEP; if (opts.onQuery) opts.onQuery(st.q.trim()); void run(); };
+    const go = (): void => {
+      //  이 탭이 화면에서 떨어진 뒤(다른 화면으로 갔다)에 도는 늦은 타이머 — 남의 화면 주소를 덮거나 새로 선 탭의 순번을 흔들지 않는다.
+      if (!host.isConnected) return;
+      st.limit = HIT_STEP; st.shown = RECENT_STEP; if (opts.onQuery) opts.onQuery(st.q.trim()); void run();
+    };
     if (now) go(); else timer = setTimeout(go, 250);
   };
   input.addEventListener('input', () => { st.q = input.value; fire(false); });

@@ -70,3 +70,21 @@ export function parseJournalRange(since: unknown, until: unknown): { since: stri
 /** 한 번에 주는 일지 줄 상한 — 넘으면 truncated 로 말한다. */
 export const JOURNAL_MAX = 500;
 export const clampJournalLimit = (v: unknown): number => Math.min(Math.max(Math.floor(Number(v)) || 200, 1), JOURNAL_MAX);
+
+/** 일지 질의 한 문장의 시간 상한 — 대화 검색(CONV_QUERY_TIMEOUT_MS)과 같은 값. 넘으면 Postgres 가 끊고(57014) 라우트가 503 으로 답한다. */
+export const JOURNAL_QUERY_TIMEOUT_MS = 4_000;
+/** 한 번에 읽는 작업 기록 상한 — 늦은 것부터 이만큼. */
+export const JOURNAL_ACTIVITY_MAX = 5_000;
+
+/**
+ * 작업 기록 시각이 일지 기간(since ≤ 시각 < until)의 어디인가. 시각을 모르는 기록은 기간 안으로 본다(버리면 영영 안 보인다).
+ *  끝이 없는 쪽(null)은 그쪽으로 열려 있다.
+ */
+export function inJournalRange(at: string | null, since: string | null, until: string | null): "in" | "before" | "after" {
+  const t = msOf(at);
+  if (Number.isNaN(t)) return "in";
+  const s = msOf(since), u = msOf(until);
+  if (!Number.isNaN(s) && t < s) return "before";
+  if (!Number.isNaN(u) && t >= u) return "after";
+  return "in";
+}

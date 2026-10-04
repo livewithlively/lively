@@ -7,6 +7,7 @@ import { api, el, state, toast, renderMarkdown } from './core.js';
 import { hitAnchor, markRanges, type HitRef } from './session-history.js';
 import { requestOpenRoute } from './v2/ctx-registry.js';
 import { EMBEDDED } from './v2/embed.js';
+import { sessionLink } from './sessions-kit.js';
 // #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
 import { confirmSessionTrash, eulReul, sessionTrashOp } from './session-actions.js';
 
@@ -255,9 +256,24 @@ export async function resumeSessionRecord(sid: string, node: string, btn?: HTMLB
     const newId = r?.session?.id ? String(r.session.id) : '';
     if (EMBEDDED && newId) requestOpenRoute('#/s/' + encodeURIComponent(newId), true);
     else location.hash = r?.projectId ? '#/projects2/p/' + r.projectId : '#/terminal';
-  } catch (e: any) { toast(e?.message || '이어받기 세션을 만들지 못했습니다.'); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; } }
+    //  성공한 뒤엔 단추를 곧바로 되살리지 않는다 — 액자 안에서는 이 화면이 그대로 남아, 연달아 누르면 같은 대화의 세션이 둘 생긴다.
+    if (btn) { btn.textContent = '열었습니다'; setTimeout(() => { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; }, 5000); }
+  } catch (e: any) {
+    toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
+    if (btn) { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; }
+  }
 }
+
+/** 대화록 머리의 「이어 질문하기」를 「세션 열기」로 바꾼다 — 그 대화를 돌리는 박스를 알게 됐을 때(세션으로 가는 문은 하나다:
+ *  박스가 있는 대화를 기록으로 하나 더 열면 같은 대화가 둘이 된다). host = 대화록을 실은 자리. */
+export function setTranscriptDoor(host: HTMLElement, boxId: string): void {
+  const btn = host.querySelector('.sess-resume');
+  if (!btn || !boxId) return;
+  btn.replaceWith(sessionLink(boxId, { class: 'btn btn-primary btn-sm sess-door' }, '세션 열기'));
+}
+
+/** 숨어 있던 칸이 보이게 됐다 — 그 사이 실린 대화록의 접기(10줄 캡)를 이제 잰다. */
+export function refreshTranscripts(root: HTMLElement): void { finalizeCaps(root); }
 
 export async function renderTranscriptPage(view: any, sel: { sid: string; node: string; q: string; ln: string }): Promise<void> {
   return mountTranscript(view, sel, {});
@@ -268,7 +284,7 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
   const { sid, node } = sel;
   const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
   copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
-  const resumeBtn = el('button', { class: 'btn btn-primary btn-sm', text: '💬 이어 질문하기' }) as HTMLButtonElement;
+  const resumeBtn = el('button', { class: 'btn btn-primary btn-sm sess-resume', text: '💬 이어 질문하기' }) as HTMLButtonElement;
   resumeBtn.addEventListener('click', () => { void resumeSessionRecord(sid, node, resumeBtn); });
   let returnTo = '#/sessions';
   try { returnTo = sessionStorage.getItem('sessReturn') || '#/sessions'; } catch { /* */ }
@@ -454,6 +470,9 @@ function aiTurnBubble(aiTexts: Item[], turnIdx: number, sid: string, node: strin
 function finalizeCaps(root: any): void {
   root.querySelectorAll('.sess-body.clamp').forEach((body: any) => {
     if (body.dataset.capReady) return;
+    //  감춰진 칸(다른 탭)에서는 높이가 0 으로 재진다 — «안 넘친다» 로 읽어 접기를 영영 풀어 버리면 안 된다(격리 리뷰).
+    //   확정하지 않고 둔다. 그 칸이 보이게 될 때 refreshTranscripts 가 다시 잰다.
+    if (!body.getClientRects().length) return;
     body.dataset.capReady = '1';
     if (body.scrollHeight <= body.clientHeight + 4) { body.classList.remove('clamp'); return; }   // 안 넘침 → 펼쳐둠
     const btn = el('button', { class: 'btn btn-ghost btn-sm sess-more', style: 'font-size:12px;margin-top:4px', text: '더보기 ▾' });

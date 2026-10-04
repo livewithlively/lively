@@ -15,9 +15,9 @@
 //  M6 프로젝트 · M7 프로젝트 없음(0) · M8 남의 세션 · M9 초대받은 세션(attach) · M10 가려진 프로젝트의 초대 세션(총계에도 없음) ·
 //  M11 휴지통 · M12 다른 워크스페이스 · M13 고친 파일 행에만 든 낱말 · M14 낱말 둘 — 둘 다 든 말 먼저 · M15 limit=1(경계값) ·
 //  M16 세션 상한 · M17 빈 검색어 · M18 서브에이전트·작업 상자
-//  J1 작업 기록 · J2 산출 지식만 · J3 맡은 태스크 · J4 남의 세션 · J5 휴지통(대화·박스 표식) · J6 기간 경계 · J7 갈아탄 대화 ·
+//  J1 작업 기록 · J2 산출 지식만 · J3 맡은 태스크 · J4 남의 세션 · J5 휴지통(대화·박스 표식 · 남의 표식은 무관) · J6 기간 경계 · J7 갈아탄 대화 ·
 //  J8 목록 밖 형제 대화의 기록 · J9 연결이 빈 세션 · J10 질문 수·고친 파일 수 · J11 가려진 프로젝트 · J12 다른 워크스페이스 ·
-//  J13 limit=1 + truncated · J14 서브에이전트·작업 상자 · J15 사람이 지은 이름 · J16 잠긴 지식
+//  J13 limit=1 + truncated · J14 서브에이전트·작업 상자 · J15 사람이 지은 이름 · J16 잠긴 지식 · J17 기간 안에 적은 기록만 · J18 시간 상한
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
@@ -121,7 +121,8 @@ try {
     eq("M3 첫 말의 앞 · 마지막 말의 뒤는 null", [first.before, first.after?.text, last.before?.text, last.after], [null, "얼룩말 둘째 대답", "그냥 다른 말", null]);
     const other = (await find(A, "그냥")).hits[0];
     eq("M2 앞 말은 바로 앞 창의 말이다(더 앞 창의 말이 아니다) · 창 안의 고친 파일 행은 건너뛴다", [other.before?.text, other.after?.text], ["얼룩말 둘째 대답", "마지막 얼룩말 셋째"]);
-    eq("M1 줄마다 세션 좌표와 말한 쪽·시각이 실린다", [last.node_id, last.session_id, last.role, last.ts, last.project, last.project_id], ["", SID(1), "assistant", ago(3, 40), null, null]);
+    eq("M1 줄마다 세션 좌표와 말한 쪽·시각이 실린다", [last.node_id, last.session_id, last.role, last.ts, last.project], ["", SID(1), "assistant", ago(3, 40), null]);
+    eq("M1 화면이 그리는 칸만 싣는다(주인·프로젝트 id 같은 메타 없음)", Object.keys(last).sort(), ["after", "before", "name", "node_id", "project", "role", "session_id", "terms", "text", "ts"]);
     const u = await find(A, "얼룩말", { role: "user" });
     eq("M4 말한 쪽=사람 — 그쪽 말만 · 총계도 그쪽만", [texts(u), u.total], [["얼룩말 하나를 찾아 줘"], 1]);
     const a = await find(A, "얼룩말", { role: "assistant" });
@@ -137,14 +138,28 @@ try {
   await q(`INSERT INTO session_project(session_id, project_id) VALUES($1, $2)`, [SID(2), P_OPEN]);
   {
     const p = await find(A, "얼룩말", { projectId: P_OPEN });
-    eq("M6 프로젝트 — 그 프로젝트에 붙은 세션의 말만 · 이름이 실린다", [sids(p), p.total, p.hits[0].project, p.hits[0].project_id], [[SID(2)], 1, PN("open"), P_OPEN]);
+    eq("M6 프로젝트 — 그 프로젝트에 붙은 세션의 말만 · 이름이 실린다", [sids(p), p.total, p.hits[0].project], [[SID(2)], 1, PN("open")]);
     const none = await find(A, "얼룩말", { projectId: 0 });
     eq("M7 프로젝트 없음(0) — 프로젝트에 안 붙은 세션의 말만", [sids(none), none.total], [[SID(1)], 3]);
     eq("M6 대조: 거르개가 없으면 둘 다", sids(await find(A, "얼룩말")), [SID(1), SID(2)]);
   }
+  // 프로젝트를 옮긴 세션 · 프로젝트에서 뗀 세션 — 거르개는 «지금 붙어 있는 프로젝트»(마지막 구간)를 본다
+  {
+    const P_NEXT = await project(PN("next"));
+    await put(SID(11), A, U("옮긴 세션의 기러기", ago(2)));
+    await q(`INSERT INTO session_project(session_id, project_id, valid_from) VALUES($1,$2,$3), ($1,$4,$5)`, [SID(11), P_OPEN, ago(6), P_NEXT, ago(5)]);
+    await put(SID(12), A, U("뗀 세션의 기러기", ago(2)));
+    await q(`INSERT INTO session_project(session_id, project_id, valid_from) VALUES($1,$2,$3), ($1,NULL,$4)`, [SID(12), P_OPEN, ago(6), ago(5)]);
+    eq("M6 옮긴 세션은 옛 프로젝트로는 안 나오고(뗀 세션도) 새 프로젝트로 나온다", [sids(await find(A, "기러기", { projectId: P_OPEN })), sids(await find(A, "기러기", { projectId: P_NEXT }))], [[], [SID(11)]]);
+    eq("M7 프로젝트에서 뗀 세션(마지막 구간이 없음)은 「프로젝트 없음」이다", sids(await find(A, "기러기", { projectId: 0 })), [SID(12)]);
+    const moved = (await find(A, "기러기")).hits.find((h) => h.session_id === SID(11));
+    eq("M6 줄의 프로젝트 이름도 지금 붙어 있는 프로젝트", moved.project, PN("next"));
+  }
   // 남의 세션 · 초대받은 세션 · 가려진 프로젝트의 초대 세션
   await put(SID(3), B, U("B 혼자 쓰는 얼룩말", ago(1)));
-  await put(SID(4), B, U("B 가 A 를 초대한 얼룩말", ago(1)));
+  //  ⚠ 초대받은 두 세션(4 · 5)의 말 시각을 다르게 둔다 — 같으면 «늦게 맞은 세션부터 상한까지» 의 순서가 정해지지 않아
+  //   M16(상한 1)이 어느 쪽을 집느냐에 따라 흔들린다(stage 판에서 실제로 가려진 쪽을 집어 빨갰다).
+  await put(SID(4), B, U("B 가 A 를 초대한 얼룩말", ago(1, 60)));
   await box(4, B, SID(4), { invites: [A] }); await convLink(4, SID(4), B);
   await put(SID(5), B, U("가려진 프로젝트의 얼룩말", ago(1)));
   await box(5, B, SID(5), { invites: [A], projectId: P_HIDDEN, dir: dirOf(P_HIDDEN) }); await convLink(5, SID(5), B);
@@ -219,6 +234,21 @@ try {
     chk("J11 가려진 프로젝트의 태스크는 안 실린다", !r.tasks.some((t) => t.id === T_HID), JSON.stringify(r.tasks));
     eq("J10 질문 수 = 사람 말 수 · 고친 파일 수 = 서로 다른 파일 수", [r.asks, r.edits], [2, 2]);
     eq("J15 사람이 지은 이름이 선다 · 박스 id · 프로젝트", [r.name, r.box_id, r.project_id, r.project_name, r.title], ["사람이 지은 이름", BOX(20), P_OPEN, PN("open"), "일지 첫 지시"]);
+    eq("J17 기간이 없으면 앞선 기록 수는 0", r.activities_before, 0);
+  }
+  // 기간을 주면 줄의 «한 일» 은 그 기간에 적은 기록만 — 앞선 기간의 기록은 수로만, 뒤 기간의 기록은 싣지 않는다
+  {
+    const cut = ago(2, 30);                                     // a1(2일 전 +10초)과 a2(+50초) 사이
+    const part = rowOf(await journal(A, { since: cut }), SID(20));
+    eq("J17 기간 안에 적은 기록만 실린다 · 앞선 기록은 수로", [part.activities.map((x) => x.title), part.activities_before], [["나중에 한 일"], 1]);
+    eq("J17 지식도 그 기간의 기록이 산출한 것만(먼저 한 일의 지식은 이 기간 것이 아니다 — 같은 지식을 나중 기록도 산출했다)", part.knowledge, [{ name: KN("made"), title: "산출 지식" }]);
+    const edge = rowOf(await journal(A, { since: ago(2, 50) }), SID(20));
+    eq("J17 경계 — 기간 시작 시각에 적은 기록은 기간 안", [edge.activities.map((x) => x.title), edge.activities_before], [["나중에 한 일"], 1]);
+    await activity(BOX(20), "기간 뒤에 적은 일", ago(0, -5));
+    await seen(SID(20), ago(2), ago(1, -100));                  // 마지막 활동을 until(1일 전) 바로 앞에 둔다
+    const closed = rowOf(await journal(A, { since: ago(3), until: ago(1) }), SID(20));
+    eq("J17 기간 뒤에 적은 기록은 싣지 않는다(끝 시각은 기간 밖)", closed.activities.map((x) => x.title), ["먼저 한 일", "나중에 한 일"]);
+    eq("J17 대조: 기간이 없으면 셋 다", rowOf(await journal(A), SID(20)).activities.map((x) => x.title), ["먼저 한 일", "나중에 한 일", "기간 뒤에 적은 일"]);
   }
   // 남의 세션 · 휴지통 둘 · 다른 워크스페이스 · 서브에이전트 · 작업 상자 · 연결이 빈 세션 · 가려진 프로젝트에 붙은 내 세션
   await put(SID(21), B, U("B 의 세션", ago(2)));
@@ -233,6 +263,7 @@ try {
   await put(SID(26), A, U("작업 상자", ago(2)));
   await q(`UPDATE session SET run_kind='task' WHERE node_id='' AND session_id=$1`, [SID(26)]);
   await put(SID(27), A, U("아무 연결도 없는 세션", ago(2)));
+  await q(`INSERT INTO org_session_trash(session_id, owner) VALUES($1, $2)`, [SID(27), B]);   // 남(B)이 제 휴지통에 넣은 표식 — 주인(A)의 일지와 무관하다
   await put(SID(28), A, U("가려진 프로젝트에 붙은 내 세션", ago(2)));
   await q(`INSERT INTO session_project(session_id, project_id) VALUES($1, $2)`, [SID(28), P_HIDDEN]);
   {
@@ -243,6 +274,7 @@ try {
     eq("J4 대조: 내 세션은 하나만 물으면 그 줄", (await journal(A, { only: { nodeId: "", sessionId: SID(20) } })).rows.map((r) => r.session_id), [SID(20)]);
     chk("J5 휴지통 — 대화 uuid 표식도 박스 id 표식도 빠진다", !got.includes(SID(22)) && !got.includes(SID(23)), JSON.stringify(got));
     eq("J5 휴지통 세션은 하나만 물어도 빈 결과", (await journal(A, { only: { nodeId: "", sessionId: SID(22) } })).rows, []);
+    chk("J5 휴지통 표식은 주인의 것 — 남이 붙인 표식은 내 일지를 가리지 않는다", got.includes(SID(27)), JSON.stringify(got));
     chk("J12 다른 워크스페이스 세션은 없다", !got.includes(SID(24)), JSON.stringify(got));
     chk("J14 서브에이전트·작업 상자 세션은 없다", !got.includes(SID(25)) && !got.includes(SID(26)), JSON.stringify(got));
     const bare = rowOf(all, SID(27));
@@ -278,6 +310,20 @@ try {
     const recent = await journal(A, { since: ago(3) });
     eq("J8 앞 대화가 기간 밖이면 그 기록을 뒤 대화로 끌어오지 않는다", rowOf(recent, SID(41)).activities.map((x) => x.id), [late]);
     chk("J8 기간 밖 대화는 목록에 없다", !rowOf(recent, SID(40)));
+  }
+  // 시간 상한 — 일지가 읽는 표 하나를 잠가 두면 첫 문장이 그 잠금을 기다린다. 상한이 걸려 있으면 끊기고(57014), 없으면 매달린다.
+  {
+    const locker = await itemsPool.connect();
+    try {
+      await locker.query("BEGIN");
+      await locker.query("LOCK TABLE org_session_trash IN ACCESS EXCLUSIVE MODE");
+      const got = await Promise.race([
+        journal(A, { timeoutMs: 300 }).then(() => "끝남", (e) => e?.code || String(e)),
+        new Promise((z) => setTimeout(() => z("매달림"), 5000)),
+      ]);
+      eq("J18 문장이 시간 상한을 넘으면 끊긴다(57014) — 풀의 연결을 쥔 채 매달리지 않는다", got, "57014");
+    } finally { await locker.query("ROLLBACK").catch(() => {}); locker.release(); }
+    eq("J18 대조: 잠금이 풀리면 다시 읽힌다", (await journal(A, { only: { nodeId: "", sessionId: SID(27) } })).rows.length, 1);
   }
 } catch (e) {
   bad("예외", (e && e.stack) || String(e));

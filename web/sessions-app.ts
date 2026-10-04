@@ -6,7 +6,7 @@
 //  남겼는지 말하지 못했다. 그 한 장을 세 가지 일로 갈랐다: 말을 찾는다 · 한 일을 본다 · 세션을 고른다.
 //  탭마다 자기 상태(검색어·고른 줄·기간)를 모듈에 쥐고 있어, 탭을 오가거나 대화록 화면에 다녀와도 보던 자리가 그대로다.
 import { el } from './core.js';
-import { parseSel, renderTranscriptPage } from './sessions.js';
+import { parseSel, refreshTranscripts, renderTranscriptPage } from './sessions.js';
 import { mountFind } from './sessions-find.js';
 import { mountJournal } from './sessions-journal.js';
 import { mountList } from './sessions-list.js';
@@ -53,6 +53,7 @@ function renderApp(view: HTMLElement): void {
       b.tabIndex = on ? 0 : -1;
       hosts.get(t.key)!.hidden = !on;
     }
+    refreshTranscripts(hosts.get(next)!);   // 감춰져 있던 사이 실린 대화록의 접기를 이제 잰다
     //  처음 여는 탭만 그린다 — 안 본 탭의 조회를 미리 하지 않는다. 한 번 그린 탭은 감춰 둘 뿐이라 보던 자리가 남는다.
     if (!mounted.has(next)) {
       mounted.add(next);

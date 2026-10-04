@@ -4,7 +4,7 @@
 //  ⚠ «한 일» 은 지어낸 요약이 아니다 — 세션이 스스로 적은 작업 기록의 제목이다. 기록이 없는 세션은 그렇다고 말하고 첫 지시를 보인다.
 import { api, el, toast } from './core.js';
 import { resumeSessionRecord } from './sessions.js';
-import { activityLine, fmtBytes, leftChips, routeLink, segOf, sessionHref, transcriptHref } from './sessions-kit.js';
+import { activityLine, fmtBytes, leftChips, segOf, sessionLink, shellHref, transcriptHref } from './sessions-kit.js';
 import {
   JOURNAL_PRESETS, journalCopyText, journalGroups, journalHeadline, journalRange, journalStats,
   type JRow, type JournalMode, type JournalPreset,
@@ -16,6 +16,7 @@ const st = { preset: 'week' as JournalPreset, mode: 'day' as JournalMode, open: 
 const cache = new Map<JournalPreset, { at: number; rows: JRow[]; truncated: boolean }>();
 const TTL_MS = 30_000;
 let seq = 0;
+let aborter: AbortController | null = null;
 const rowKey = (r: JRow): string => r.node_id + '|' + r.session_id;
 
 export function mountJournal(host: HTMLElement): void {
@@ -52,26 +53,37 @@ export function mountJournal(host: HTMLElement): void {
     const more = el('div', { class: 'shx-jmore', hidden: !st.open.has(key) });
     const fillMore = (): void => {
       if (more.childElementCount) return;
-      const acts = r.activities.length ? r.activities.map(activityLine) : [el('p', { class: 'admin-hint', text: '이 세션이 적어 둔 작업 기록이 없습니다.' })];
-      const resume = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이어 질문하기' }) as HTMLButtonElement;
+      const acts = r.activities.length ? r.activities.map(activityLine)
+        : [el('p', { class: 'admin-hint', text: (r.activities_before || 0) > 0 ? `이 기간에 적은 작업 기록이 없습니다. 그 전에 적은 기록이 ${r.activities_before}건 있습니다.` : '이 세션이 적어 둔 작업 기록이 없습니다.' })];
+      //  세션으로 가는 문은 하나 — 그 대화를 돌리는 박스가 있으면 [세션 열기], 기록만 남았으면 [이어 질문하기].
+      //   박스가 있는 대화를 기록으로 하나 더 열면 같은 대화가 둘이 된다.
+      const resume = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '이어 질문하기' }) as HTMLButtonElement;
       resume.addEventListener('click', () => { void resumeSessionRecord(r.session_id, r.node_id, resume); });
-      const transcript = el('a', { class: 'btn btn-ghost btn-sm', href: transcriptHref(r.session_id, r.node_id), text: '대화록 열기' });
-      transcript.addEventListener('click', () => { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } });
+      const door = r.box_id ? sessionLink(r.box_id, { class: 'btn btn-primary btn-sm' }, '세션 열기') : resume;
+      //  대화록은 이 앱 안(이 액자)에서 연다 — 새 탭으로 열 때만 셸 주소다.
+      const transcript = el('a', { class: 'btn btn-ghost btn-sm', href: shellHref(transcriptHref(r.session_id, r.node_id)), text: '대화록 열기' }) as HTMLAnchorElement;
+      transcript.addEventListener('click', (e: MouseEvent) => {
+        try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ }
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        location.hash = transcriptHref(r.session_id, r.node_id);
+      });
       //  ⚠ 노드의 append 는 null 을 글자 «null» 로 넣는다 — el() 의 자식 규칙이 아니다. 없는 칸은 미리 걷는다.
       const first = r.title ? el('div', { class: 'shx-first' }, el('span', { class: 'shx-first-k', text: '첫 지시' }), el('span', { text: r.title })) : null;
       const btns = el('div', { class: 'shx-jacts' },
-        r.box_id ? routeLink(sessionHref(r.box_id), { class: 'btn btn-primary btn-sm' }, '세션 열기') : null,
-        transcript, resume,
+        door, transcript,
         el('span', { class: 'shx-row-m', text: [r.harness, fmtBytes(r.bytes)].filter(Boolean).join(' · ') }));
       more.append(...acts, ...(first ? [first] : []), btns);
     };
     if (st.open.has(key)) fillMore();
     const headBtn = el('button', { class: 'shx-jhead', type: 'button', 'aria-expanded': st.open.has(key) ? 'true' : 'false' },
-      el('div', { class: 'shx-row-t' }, name,
+      //  단추 안에는 흐름 요소(div)를 둘 수 없다 — span 을 블록으로 그린다(53-session-history.css).
+      el('span', { class: 'shx-row-t' }, name,
         el('span', { class: 'shx-row-m', text: ' · ' + [st.mode === 'day' ? (r.project_name || '프로젝트 없음') : '', whenLabel(Date.parse(r.last_seen), now), r.asks ? `질문 ${r.asks}개` : ''].filter(Boolean).join(' · ') })),
       head.source === 'activity'
-        ? el('div', { class: 'shx-jsum', text: head.text + (head.more ? ` 외 ${head.more}건` : '') })
-        : el('div', { class: 'shx-jsum none', text: head.source === 'prompt' ? '기록된 작업 없음 · 첫 지시: ' + head.text : '기록된 작업 없음' }));
+        ? el('span', { class: 'shx-jsum', text: head.text + (head.more ? ` 외 ${head.more}건` : '') })
+        : el('span', { class: 'shx-jsum none', text: head.source === 'earlier' ? `이 기간에 적은 기록 없음 · 이전 기록 ${head.more}건`
+          : head.source === 'prompt' ? '기록된 작업 없음 · 첫 지시: ' + head.text : '기록된 작업 없음' }));
     headBtn.addEventListener('click', () => {
       const on = !st.open.has(key);
       if (on) { st.open.add(key); fillMore(); } else st.open.delete(key);
@@ -105,15 +117,17 @@ export function mountJournal(host: HTMLElement): void {
     list.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
     const qs = new URLSearchParams({ since: new Date(r.since).toISOString(), limit: '500' });
     if (r.until != null) qs.set('until', new Date(r.until).toISOString());
+    if (aborter) aborter.abort();   // 기간을 연달아 바꾸면 앞 요청을 끊는다(일곱 문장짜리 조회가 서버에 쌓이지 않게)
+    const mine = aborter = new AbortController();
     try {
-      const d: any = await api('/api/ui/v6/session-journal?' + qs.toString());
+      const d: any = await api('/api/ui/v6/session-journal?' + qs.toString(), { signal: mine.signal });
       const got: JRow[] = Array.isArray(d?.rows) ? d.rows : [];
       cache.set(preset, { at: Date.now(), rows: got, truncated: !!d?.truncated });
       if (mySeq !== seq) return;
       rows = got;
       draw();
     } catch (e: any) {
-      if (mySeq !== seq) return;
+      if (mySeq !== seq || (e && e.name === 'AbortError')) return;
       rows = [];
       stats.replaceChildren();
       list.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '작업 일지를 불러오지 못했습니다.' }));

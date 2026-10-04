@@ -3,18 +3,26 @@
 import { api, el } from './core.js';
 import { requestOpenRoute } from './v2/ctx-registry.js';
 import { EMBEDDED } from './v2/embed.js';
+import { openSessionWindow } from './lib/session-open.js';
 import type { JActivity, JRow } from './session-history.js';
 
 export const fmtBytes = (b: number): string => !b ? '' : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b >= 1024 ? Math.round(b / 1024) + 'KB' : b + 'B';
 
-/** 이 주소를 연다 — 셸 안(액자)이면 셸에 부탁한다. 액자 안에서 주소를 바꾸면 세션 이력 앱 자리에 그 화면이 그려진다. */
+/** 이 화면이 v2 셸 안에 있나 — 셸 액자(?embed=1)로 실렸거나 셸 문서(#v2-root) 그 자체(projects/detail-hub-kit inShell 과 같은 판정). */
+function inShell(): boolean {
+  try { if (EMBEDDED && window.parent && window.parent !== window) return true; } catch { /* 못 보면 아래로 */ }
+  try { return !!document.getElementById('v2-root'); } catch { return false; }
+}
+/** 이 주소를 연다 — 셸 안(액자)이면 셸에 부탁한다. 액자 안에서 주소를 바꾸면 세션 이력 앱 자리에 그 화면이 그려진다(#3870). */
 export function openRoute(href: string): void {
-  if (EMBEDDED) requestOpenRoute(href, true);
+  if (inShell()) requestOpenRoute(href, true);
   else location.hash = href;
 }
+/** 새 탭·가운데 클릭이 여는 주소 — 액자 안이면 액자 표식(?embed=1&shell=classic)을 뗀 셸 주소로. 그대로 두면 셸 없는 액자판이 새 탭에 뜬다. */
+export const shellHref = (hash: string): string => (EMBEDDED ? location.pathname + hash : hash);
 /** 셸 주소로 가는 링크 — 가운데 클릭·새 탭은 브라우저에 맡기고, 그냥 누르면 openRoute. */
 export function routeLink(href: string, attrs: Record<string, unknown>, ...kids: unknown[]): HTMLAnchorElement {
-  const a = el('a', { href, ...attrs }, ...kids) as HTMLAnchorElement;
+  const a = el('a', { href: shellHref(href), ...attrs }, ...kids) as HTMLAnchorElement;
   a.addEventListener('click', (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
@@ -24,6 +32,21 @@ export function routeLink(href: string, attrs: Record<string, unknown>, ...kids:
 }
 export const sessionHref = (boxId: string): string => '#/s/' + encodeURIComponent(boxId);
 export const transcriptHref = (sid: string, node: string): string => '#/sessions/' + encodeURIComponent(sid) + (node ? '?node=' + encodeURIComponent(node) : '');
+/**
+ * 세션 화면으로 가는 문. 셸 안이면 그 세션 화면(#/s/<id> — 멈춘 세션은 그 화면이 열면서 되살린다), 셸 밖(클래식 단독 화면)은
+ *  `#/s/` 주소를 모르므로 세션 터미널 창을 연다(projects/detail-hub-kit enterSession 과 같은 규칙).
+ */
+export function sessionLink(boxId: string, attrs: Record<string, unknown>, ...kids: unknown[]): HTMLAnchorElement {
+  const href = sessionHref(boxId);
+  const a = el('a', { href: shellHref(href), ...attrs }, ...kids) as HTMLAnchorElement;
+  a.addEventListener('click', (e: MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    if (inShell()) requestOpenRoute(href, true);
+    else openSessionWindow(boxId);
+  });
+  return a;
+}
 
 // ── 내 세션 목록(중앙 기록) — 탭 셋이 같은 한 번의 응답을 쓴다 ──
 //  깊이는 서버 상한(2,000)까지 — 종전 목록면은 기본 200행만 받고 «더 있다»(truncated)를 읽지 않았다.
@@ -64,8 +87,9 @@ export function activityLine(a: JActivity): HTMLElement {
       a.summary && a.summary !== a.title ? el('div', { class: 'shx-act-sum', text: a.summary }) : null));
 }
 
-/** 「이 세션이 남긴 것」 칸 — 세션 하나의 일지 줄을 받아 그린다. 내 세션이 아니면(404) 칸을 세우지 않는다. */
-export function leftPanel(sid: string, node: string): HTMLElement {
+/** 「이 세션이 남긴 것」 칸 — 세션 하나의 일지 줄을 받아 그린다. 내 세션이 아니면(404) 칸을 세우지 않는다.
+ *  onRow — 줄을 받았을 때(그 대화를 돌린 박스를 알게 됐을 때) 부르는 쪽이 할 일(대화록 머리의 문을 바꾼다). */
+export function leftPanel(sid: string, node: string, onRow?: (r: JRow) => void): HTMLElement {
   const body = el('div', { class: 'admin-hint', text: '불러오는 중…' });
   const head = el('div', { class: 'shx-left-head' }, el('h4', { text: '이 세션이 남긴 것' }));
   const box = el('div', { class: 'shx-left' }, head, body);
@@ -74,7 +98,8 @@ export function leftPanel(sid: string, node: string): HTMLElement {
       const r: JRow | null = d && d.row ? d.row : null;
       if (!r) { box.remove(); return; }
       //  이 대화를 돌린 박스를 알면 세션 화면으로 가는 문을 머리에 단다(멈춘 세션은 그 화면이 열면서 되살린다).
-      if (r.box_id) head.append(routeLink(sessionHref(r.box_id), { class: 'shx-left-open' }, '세션 열기 →'));
+      if (r.box_id) head.append(sessionLink(r.box_id, { class: 'shx-left-open' }, '세션 열기 →'));
+      if (onRow) onRow(r);
       const has = r.activities.length || r.knowledge.length || r.tasks.length || r.edits;
       if (!has) { body.textContent = '적어 둔 작업 기록 · 만든 지식 · 맡은 태스크가 없습니다.'; return; }
       body.className = '';

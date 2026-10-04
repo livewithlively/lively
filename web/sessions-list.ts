@@ -4,7 +4,7 @@
 //  두 목록을 한 줄로 접는 규칙은 session-history.ts mergeHistoryRows(순수) — 셸의 세션 목록과 같은 규칙이다.
 import { api, el } from './core.js';
 import { mountTranscript, resumeSessionRecord } from './sessions.js';
-import { dropMySessions, fmtBytes, leftPanel, loadMySessions, routeLink, segOf, sessionHref } from './sessions-kit.js';
+import { dropMySessions, fmtBytes, leftPanel, loadMySessions, routeLink, segOf, sessionLink } from './sessions-kit.js';
 import { histFilter, mergeHistoryRows, type HistFilter, type HistRow } from './session-history.js';
 import { findMatcher } from './lib/find.js';
 import { whenLabel } from './lib/omni-order.js';
@@ -110,7 +110,7 @@ export function mountList(host: HTMLElement): void {
     const head = el('div', { class: 'shx-bar' }, tabs, el('span', { class: 'shx-grow' }),
       //  도는 세션·멈춘 박스는 세션 화면으로 간다(멈춘 세션은 그 화면이 열면서 되살린다). 기록만 남은 세션은 기록으로 새 세션을 연다.
       //  세션으로 가는 문은 이 머리에 **하나만** 선다 — 아래 대화록 머리의 「이어 질문하기」는 달지 않는다(noResume).
-      r.boxId ? routeLink(sessionHref(r.boxId), { class: 'btn btn-primary btn-sm' }, '세션 열기') : null,
+      r.boxId ? sessionLink(r.boxId, { class: 'btn btn-primary btn-sm' }, '세션 열기') : null,
       !r.boxId && r.convId && r.mine ? resume : null);
     function fill(): void {
       if (st.tab === 'info') {

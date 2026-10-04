@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { assignActivities, parseJournalRange, clampJournalLimit, JOURNAL_MAX, type JournalBoxLink, type JournalActRef } from "./session-journal.js";
+import { assignActivities, parseJournalRange, clampJournalLimit, inJournalRange, JOURNAL_MAX, type JournalBoxLink, type JournalActRef } from "./session-journal.js";
 
 // #4553 — 세션 이력 앱 «작업 일지» 의 순수 규칙. 원준 2026-10-04: «그 A,B,C안을 … 상위 가로탭으로 만들어가지고 셋 다 구현해».
 //  작업 기록(activity)은 박스에 붙고 일지의 한 줄은 대화다 — 한 박스가 대화를 갈아타면(/clear · resume) 기록이 어느 대화의
@@ -9,6 +9,7 @@ import { assignActivities, parseJournalRange, clampJournalLimit, JOURNAL_MAX, ty
 //   A5 첫 대화보다 이른 기록 · A6 시각 없는 기록 · A7 모르는 박스 · A8 시각 모르는 대화는 가장 이른 것 · A9 같은 쌍이 두 번(시각 아는 쪽) ·
 //   A10 목록 밖 형제 대화의 기록을 끌어오지 않는다 · A11 순서 없이 온 사슬 · A12 박스끼리 섞이지 않는다
 //   R1~R2 기간 · L1 상한
+//   I1 기록이 기간 앞·안·뒤 · I2 경계(since 는 들고 until 은 빠진다) · I3 끝이 없는 쪽은 열려 있다 · I4 시각 모르는 기록은 기간 안
 
 const T = (min: number): string => new Date(Date.parse("2026-10-04T00:00:00Z") + min * 60_000).toISOString();
 const link = (box: string, conv: string, min: number | null): JournalBoxLink => ({ box_id: box, conv_uuid: conv, first_seen: min == null ? null : T(min) });
@@ -72,4 +73,23 @@ test("[L1] 상한 — 기본 200 · 1 이상 · JOURNAL_MAX 이하", () => {
   assert.equal(clampJournalLimit(-5), 1);
   assert.equal(clampJournalLimit(3.9), 3);
   assert.equal(clampJournalLimit(99999), JOURNAL_MAX);
+});
+
+test("[I1] 작업 기록이 일지 기간의 앞 · 안 · 뒤 어디인가", () => {
+  assert.equal(inJournalRange(T(5), T(10), T(20)), "before");
+  assert.equal(inJournalRange(T(15), T(10), T(20)), "in");
+  assert.equal(inJournalRange(T(25), T(10), T(20)), "after");
+});
+test("[I2] 경계값 — 시작 시각은 기간 안, 끝 시각은 기간 뒤(since ≤ 시각 < until)", () => {
+  assert.equal(inJournalRange(T(10), T(10), T(20)), "in");
+  assert.equal(inJournalRange(T(20), T(10), T(20)), "after");
+});
+test("[I3] 끝이 없는 쪽(null)은 열려 있다", () => {
+  assert.equal(inJournalRange(T(5), null, T(20)), "in");
+  assert.equal(inJournalRange(T(99), T(10), null), "in");
+  assert.equal(inJournalRange(T(99), null, null), "in");
+});
+test("[I4] 시각을 모르는 기록은 기간 안으로 본다(버리면 영영 안 보인다)", () => {
+  assert.equal(inJournalRange(null, T(10), T(20)), "in");
+  assert.equal(inJournalRange("언젠가", T(10), T(20)), "in");
 });
