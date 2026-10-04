@@ -53,7 +53,7 @@ import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js
 import { takeCreated } from './created-cache.js';
 import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
-import { sideTruthVerdict } from '../lib/side-boot.js';   // #3870 — 목록의 정본을 다 받았을 때만 loadedAt 을 찍는다
+import { createSideTruth } from '../lib/side-boot.js';   // #3870 — 목록의 정본을 다 받았을 때만 loadedAt 을 찍는다
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -729,12 +729,12 @@ let dismissedSess = new Set<string>();
 let sessTruthSeen = false;
 let instTruthSeen = false;
 //  ★ 사이드바가 목록을 그려도 되는가(#3870, lib/side-boot 머리말). 종전엔 loadData 가 요청이 전부 실패해도 끝나며
-//   loadedAt 을 찍어, «받았다» 와 «시도가 끝났다» 가 같은 값이었다. 이제 네 축을 한 번씩 다 받았을 때(또는 기다릴 만큼
-//   기다렸을 때)만 찍는다 — 그 전의 data.loadedAt 은 0 이고 사이드바는 줄 대신 막대를 둔다.
+//   loadedAt 을 찍어, «받았다» 와 «시도가 끝났다» 가 같은 값이었다. 이제 다섯 축(프로젝트 · 리스트 · 세션 · 기록 · 인스턴스)을
+//   한 번씩 다 받았을 때(또는 기다릴 만큼 기다렸을 때)만 찍는다 — 그 전의 data.loadedAt 은 0 이고 사이드바는 줄 대신 막대를 둔다.
+//   판정과 장부(판 수 · 시간 · 한 번 되면 안 돌아감)는 lib/side-boot createSideTruth 가 쥔다.
 let logsTruthSeen = false;
 let listsTruthSeen = false;
-let loadRounds = 0;         // 끝난 loadData 판 수(성공 · 실패 무관)
-let sideTruthAt = 0;        // «그려도 된다» 가 된 시각 — 한 번 찍히면 실패한 폴링이 와도 안 지워진다
+const sideTruth = createSideTruth();
 // ── 기록 목록은 **두 겹**이다(#2022 후속) ───────────────────────────────────────
 //  종전엔 매 틱 `/api/ui/v6/sessions` 를 부르고 서버가 **말없이 200행에서 잘랐다**. 실측 2026-08-26:
 //  한 사람의 200행이 **7.7일**치밖에 안 돼(하루 ~26세션) 그보다 오래된 지난 세션이 트리에서 통째로 사라졌다.
@@ -766,7 +766,9 @@ let lastLogs: any[] = [];
 //  «못 봤다» 가 화면에서 «작업 완료» 로 둔갑하던 자리다(obs-carry.ts 머리말). 오래 못 보면 그 기억은 스스로 버려진다.
 const obsMemory = new Map<string, ObsMemory>();
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
-  const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
+  //  #3870 — 리스트 축을 아직 못 받았으면 TTL 을 안 기다린다. 프로젝트만 성공하고 리스트가 실패한 첫 판 뒤엔 5분 동안
+  //   리스트를 다시 안 물어, 막대 아래 «다시 받는 중» 이 거짓이 된다. 목록이 선 뒤(포기 포함)엔 종전 TTL 로 돌아간다.
+  const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS || (!sideTruth.ready() && !listsTruthSeen));
   const wantDeepLogs = Date.now() - logsDeepAt > LOGS_DEEP_TTL_MS;   // #2022 후속 — 오래된 지난 세션이 사라지지 않게 이따금 전량
   // ── 앱 인스턴스는 **먼저 도착하는 대로** 반영한다(#2022) ──────────────────────────
   //  종전엔 아래 Promise.all 이 여섯 축을 한 덩어리로 묶어, 세션 목록이 느린 판에서 **이미 도착한**
@@ -833,9 +835,8 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   applyArchivePins(sessions);  // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
-  loadRounds++;
-  if (!sideTruthAt && sideTruthVerdict({ projects: projLoadedAt > 0, lists: listsTruthSeen, sessions: sessTruthSeen, logs: logsTruthSeen }, loadRounds) !== 'wait') sideTruthAt = Date.now();
-  data = { projects, sessions, lists, folders, loadedAt: sideTruthAt ? Date.now() : 0, loadFailed: !sideTruthAt };
+  const truth = sideTruth.note({ projects: projLoadedAt > 0, lists: listsTruthSeen, sessions: sessTruthSeen, logs: logsTruthSeen, instances: instTruthSeen }, Date.now());
+  data = { projects, sessions, lists, folders, loadedAt: truth.ready ? Date.now() : 0, loadFailed: truth.failed };
   if (!wantProj) {
     const known = new Set(projects.map((p) => p.id));
     const fresh = sessions.filter((s) => s.projectId && !known.has(s.projectId) && !projRetried.has(s.projectId)).map((s) => s.projectId as number);

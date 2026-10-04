@@ -10,10 +10,15 @@
 //  A1 잣대 — 자료가 없거나(null · undefined · {}) loadedAt 이 0 · null 이면 «못 받았다»
 //  A2 잣대 — loadedAt 이 1(경계) 이상이면 «받았다»
 //  A3 막대 — 세 줄 이상 · 폭 1~100% · 길이가 서로 다르다
-//  V1 네 축(프로젝트 · 리스트 · 세션 · 기록)을 다 받았으면 첫 판이든 몇 판째든 «그려도 된다»
-//  V2 한 축이라도 못 받았으면 «기다린다» — 축마다(넷 다 따로) · 판 수가 상한 미만일 때
-//  V3 상한(SIDE_BOOT_GIVEUP_ROUNDS) 판째에도 못 받았으면 «가진 것으로 그린다» — 정확히 상한에서 바뀐다(상한 − 1 은 기다림)
-//  V4 배선 — 셸(main.ts loadData)이 그 판정으로만 loadedAt 을 찍는다: 실패한 첫 판이 «받았다» 가 되지 않는다
+//  V1 다섯 축(프로젝트 · 리스트 · 세션 · 기록 · 인스턴스)을 다 받았으면 첫 판이든 몇 판째든 «그려도 된다»
+//  V2 한 축이라도 못 받았으면 «기다린다» — 축마다(다섯 다 따로)
+//  V3 포기는 판 수와 시간 **둘 다** 찼을 때만 — 판만 찼거나(클릭 · 스트림이 몇 초 만에 세 판을 채운다) 시간만 찼으면 기다린다.
+//     정확히 상한(세 판 · 15,000ms)에서 바뀐다
+//  K1 장부 — 첫 판에 다 받으면 그 판부터 «받았다»
+//  K2 장부 — 한 번 «받았다» 가 되면 그 뒤 판이 전부 실패해도 안 돌아간다(막대로 깜빡이지 않는다)
+//  K3 장부 — 못 받은 판은 «못 받았다 · 실패» 로 답하고, 판 수 · 시간이 차면 포기해 «받았다» 가 된다(그 뒤로도 유지)
+//  K4 장부 — 늦게 온 축(인스턴스만 둘째 판에)이 오면 그 판부터 «받았다»
+//  V4 배선 — 셸(main.ts loadData)이 그 장부로만 loadedAt 을 찍는다: 실패한 첫 판이 «받았다» 가 되지 않는다
 //  F1 받으려다 실패한 판이 있었으면 막대 아래에 못 받았다고 말한다 / 아직 한 판도 안 끝났으면 말하지 않는다
 //  H1 홈 · 받기 전 · 셸이 줄을 내밀어도(저장돼 있던 창) 한 줄도 안 선다 — 그 이름이 화면에 없다
 //  H2 홈 · 받기 전 · 「앱 N」 숫자가 없다 / «열린 앱이 없어요» 도 없다(줄이 0개여도) / 자리 표시 막대가 선다
@@ -25,6 +30,7 @@
 //  S2 세션 목록 · 받은 뒤 0건 — «아직 세션이 없어요» · 「전체 0」
 //  P1 프로젝트 · 받기 전 — «아직 리스트가 없어요» 도 「전체 0」 도 없다 · 막대
 //  P2 프로젝트 · 받은 뒤 0건 — «아직 리스트가 없어요» · 「전체 0」
+//  P3 프로젝트 · 프로젝트만 오고 리스트가 아직(받기 전) — 「기타 (미분류) N」 줄이 안 선다 / 받은 뒤엔 선다
 //  T1 발치 「휴지통」 숫자 — 받기 전엔 없다 · 받은 뒤엔 선다
 //  C1 막대는 실제 스타일시트에서 보인다(높이 · 폭 · 바탕이 있다) — 클래스만 달고 CSS 가 없으면 빈칸이다
 //  W1 배선 — 셸이 내민 줄이 실제로 화면까지 가는 길이 살아 있다(H5 가 겸한다: 받은 뒤엔 그 이름이 선다).
@@ -36,8 +42,8 @@
 //  (H1~H4 · S1 · P1 · T1 · C1 — 받기 전 화면에 «STALE-ALPHA» 두 줄 · 「앱 2」 · 「전체 0」 · 「휴지통 1」 이 서 있었다).
 //  변이 7종도 빨강: 홈 붓의 판정 제거(H1~H4 · C1) · bootKids 빈 배열(H2 · H4 · S1 · P1 · C1) · 막대 CSS 삭제(C1) ·
 //   잣대가 늘 참(A1 외 8) · 경계 > 0 → > 1(A2) · 휴지통 숫자 판정 제거(T1) · 세션 목록 판정 제거(S1).
-//  2차(실패한 첫 판): 옛 main.ts(MAIN_SRC)에서 V4 빨강 · 변이 4종 빨강 — 상한 >= → >(V3) · 기록 축을 안 봄(V2 · V3) ·
-//   실패 안내 제거(F1) · 실패 안내가 늘 뜸(F1).
+//  2차(실패한 첫 판 · 리뷰 반영): 옛 main.ts(MAIN_SRC)에서 V4 빨강. 변이도 빨강 — 판 상한 >= → > · 시간 조건 제거 · 인스턴스 축을 안 봄 ·
+//   장부가 안 붙든다(실패한 판에 되돌아감) · 실패 안내 제거 · 실패 안내가 늘 뜸 · 셸이 인스턴스 축을 안 넘김.
 // ⚠ 글자는 ASCII 만 쓴다(줄 이름) — 글꼴 없는 면에서 한글 조판이 크롬을 죽인 적이 있다(side-past-dim-runtime 머리말).
 // 크롬이 없는 면에서는 런타임 절을 조용히 건너뛴다.
 import { execFileSync } from "node:child_process";
@@ -61,29 +67,47 @@ else {
   const out = mkdtempSync(path.join(tmpdir(), "side-boot-"));
   execFileSync(path.join(ROOT, "node_modules/.bin/tsc"),
     [LIB, "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"], { stdio: "inherit" });
-  const { sideTruthReady, SIDE_BOOT_BARS, sideTruthVerdict, SIDE_BOOT_GIVEUP_ROUNDS: G } = await import(path.join(out, "side-boot.js"));
+  const { sideTruthReady, SIDE_BOOT_BARS, sideTruthVerdict, createSideTruth, SIDE_BOOT_GIVEUP_ROUNDS: G, SIDE_BOOT_GIVEUP_MS: MS } = await import(path.join(out, "side-boot.js"));
   check([null, undefined, {}, { loadedAt: 0 }, { loadedAt: null }].every((d) => sideTruthReady(d) === false),
     "A1 자료 없음 · loadedAt 0 = 못 받았다");
   check(sideTruthReady({ loadedAt: 1 }) === true && sideTruthReady({ loadedAt: Date.now() }) === true,
     "A2 loadedAt 1 이상 = 받았다");
   check(Array.isArray(SIDE_BOOT_BARS) && SIDE_BOOT_BARS.length >= 3 && SIDE_BOOT_BARS.every((w) => w > 0 && w <= 100) && new Set(SIDE_BOOT_BARS).size > 1,
     "A3 막대는 세 줄 이상 · 폭 1~100% · 길이가 서로 다르다");
-  if (typeof sideTruthVerdict !== "function" || !(G >= 2)) bad("V0 lib/side-boot 가 sideTruthVerdict · SIDE_BOOT_GIVEUP_ROUNDS(2 이상)를 내보낸다", "없다");
+  if (typeof sideTruthVerdict !== "function" || typeof createSideTruth !== "function" || !(G >= 2) || !(MS > 0)) bad("V0 lib/side-boot 가 sideTruthVerdict · createSideTruth · SIDE_BOOT_GIVEUP_ROUNDS · _MS 를 내보낸다", "없다");
   else {
-    const all = { projects: true, lists: true, sessions: true, logs: true };
-    check([1, 2, G - 1, G, G + 5].every((r) => sideTruthVerdict(all, r) === "ready"), "V1 네 축을 다 받았으면 몇 판째든 그려도 된다");
+    const all = { projects: true, lists: true, sessions: true, logs: true, instances: true };
+    const none = { projects: false, lists: false, sessions: false, logs: false, instances: false };
     const missing = Object.keys(all).map((k) => ({ ...all, [k]: false }));
-    check(missing.every((ax) => sideTruthVerdict(ax, 1) === "wait" && sideTruthVerdict(ax, G - 1) === "wait")
-      && sideTruthVerdict({ projects: false, lists: false, sessions: false, logs: false }, 1) === "wait",
-      "V2 한 축이라도 못 받았으면 기다린다(네 축 각각 · 상한 미만)");
-    check(missing.every((ax) => sideTruthVerdict(ax, G) === "giveup" && sideTruthVerdict(ax, G + 1) === "giveup"),
-      "V3 상한 판째부터는 가진 것으로 그린다(막대에 가두지 않는다)");
+    check(Object.keys(all).length === 5 && [[1, 0], [2, 100], [G, MS], [G + 5, MS * 9]].every(([r, ms]) => sideTruthVerdict(all, r, ms) === "ready"),
+      "V1 다섯 축을 다 받았으면 몇 판째든 그려도 된다");
+    check(missing.every((ax) => sideTruthVerdict(ax, 1, 0) === "wait" && sideTruthVerdict(ax, G - 1, MS * 9) === "wait") && sideTruthVerdict(none, 1, 0) === "wait",
+      "V2 한 축이라도 못 받았으면 기다린다(다섯 축 각각)", JSON.stringify(missing.map((ax) => sideTruthVerdict(ax, 1, 0))));
+    check(missing.every((ax) => sideTruthVerdict(ax, G, MS) === "giveup" && sideTruthVerdict(ax, G + 4, MS + 1) === "giveup")
+      && sideTruthVerdict(none, G + 9, MS - 1) === "wait" && sideTruthVerdict(none, G - 1, MS) === "wait" && sideTruthVerdict(none, G, MS - 1) === "wait",
+      "V3 포기는 판 수와 시간이 둘 다 찼을 때만 — 정확히 상한에서 바뀐다");
+    const T0 = 1_000_000;
+    { const t = createSideTruth(); const a = t.note(all, T0);
+      check(t.ready() === true && a.ready === true && a.failed === false, "K1 첫 판에 다 받으면 그 판부터 받았다"); }
+    { const t = createSideTruth(); t.note(all, T0);
+      const later = [t.note(none, T0 + 8000), t.note(none, T0 + 16000), t.note(none, T0 + 999000)];
+      check(later.every((x) => x.ready === true && x.failed === false) && t.ready() === true, "K2 한 번 받았으면 그 뒤 실패한 판이 와도 안 돌아간다", JSON.stringify(later)); }
+    { const t = createSideTruth(); const seq = [];
+      seq.push(t.note(none, T0)); seq.push(t.note(none, T0 + 300)); seq.push(t.note(none, T0 + 600)); seq.push(t.note(none, T0 + 900));   // 몇 초 만에 네 판
+      const fast = seq.every((x) => x.ready === false && x.failed === true) && t.ready() === false;
+      const edge = t.note(none, T0 + MS - 1), gave = t.note(none, T0 + MS), after = t.note(none, T0 + MS + 8000);
+      check(fast && edge.ready === false && gave.ready === true && gave.failed === false && after.ready === true,
+        "K3 못 받은 판은 실패로 답하고, 판 수 · 시간이 차면 포기해 그린다", JSON.stringify([seq, edge, gave, after])); }
+    { const t = createSideTruth(); const a = t.note({ ...all, instances: false }, T0), b = t.note(all, T0 + 8000);
+      check(a.ready === false && a.failed === true && b.ready === true, "K4 늦게 온 축(인스턴스)이 오면 그 판부터 받았다", JSON.stringify([a, b])); }
   }
-  //  V4 — 셸이 loadedAt 을 **무조건** 찍지 않는다. 주석을 걷고 본다(설명 주석의 낱말이 거짓 초록을 만든다).
+  //  V4 — 셸이 loadedAt 을 **무조건** 찍지 않고 장부에 다섯 축을 넘긴다. 주석을 걷고 본다(설명 주석의 낱말이 거짓 초록을 만든다).
   const MAIN = readFileSync(process.env.MAIN_SRC || path.join(ROOT, "web/v2/main.ts"), "utf8").replace(/^[ \t]*\/\/.*$/gm, "");
   const stamps = MAIN.match(/^\s*data = \{[^\n]*loadedAt:[^\n]*$/gm) || [];
-  check(stamps.length === 1 && !/loadedAt:\s*Date\.now\(\)\s*[,}]/.test(stamps[0]) && /sideTruthVerdict\(/.test(MAIN),
-    "V4 셸은 판정(sideTruthVerdict)이 허락할 때만 loadedAt 을 찍는다", `loadedAt 을 찍는 줄 ${stamps.length}개: ${stamps.map((x) => x.trim().slice(0, 120)).join(" / ")}`);
+  const noted = /\.note\(\{([^}]*)\}/.exec(MAIN);
+  check(stamps.length === 1 && !/loadedAt:\s*Date\.now\(\)\s*[,}]/.test(stamps[0]) && /createSideTruth\(\)/.test(MAIN)
+    && !!noted && ["projects", "lists", "sessions", "logs", "instances"].every((k) => new RegExp("\\b" + k + ":").test(noted[1])),
+    "V4 셸은 장부(createSideTruth)가 허락할 때만 loadedAt 을 찍고, 다섯 축을 다 넘긴다", `loadedAt 을 찍는 줄 ${stamps.length}개 · note 인자: ${noted ? noted[1].trim().slice(0, 160) : "없음"}`);
 }
 
 // ───────────────────────── 런타임
@@ -123,7 +147,7 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
     const n = (s) => host.querySelectorAll(s).length;
     const txt = (s) => { const e = q(s); return e ? e.textContent : null; };
     const snap = () => ({ text: host.textContent || '', rows: n('.v2-app-inst'), boot: n('.v2-side-boot'), bars: n('.v2-side-boot > i'),
-      note: n('.v2-side-boot-note'), empty: n('.v2-app-empty') + n('.v2-empty'), count: txt('.v2-app-count'), allCnt: txt('.v2-kviews .v2-cnt'), dockN: txt('.v2-dock-n') });
+      note: n('.v2-side-boot-note'), noneRow: n('.v2-ptl--none'), empty: n('.v2-app-empty') + n('.v2-empty'), count: txt('.v2-app-count'), allCnt: txt('.v2-kviews .v2-cnt'), dockN: txt('.v2-dock-n') });
 
     // ── 홈
     sec = 'home'; rows = stale; calls = 0;
@@ -143,6 +167,9 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
     // ── 프로젝트
     sec = 'proj'; await draw({ ...before, projects: [] }); await sleep(60); R.p_pre = snap();
     await draw({ ...after, projects: [] }); await sleep(60); R.p_post = snap();
+    const loose = { id: 9, name: 'LOOSE-PROJ', status: null, status_category: null, list_id: null, trashed_at: null, archived_at: null, member_ids: [] };
+    await draw({ ...before, projects: [loose], loadFailed: true }); await sleep(60); R.p_pre_loose = snap();
+    await draw({ ...after, projects: [loose] }); await sleep(60); R.p_post_loose = snap();
   } catch (e) { R.error = String((e && e.stack) || e).slice(0, 600); }
   document.getElementById('out').textContent = 'RESULT' + JSON.stringify(R) + 'ENDRESULT';
 })();
@@ -175,6 +202,8 @@ check(R.s_pre.empty === 0 && R.s_pre.allCnt === null && R.s_pre.boot === 1, "S1 
 check(R.s_post.empty === 1 && R.s_post.allCnt === "0" && R.s_post.boot === 0, "S2 세션 목록 · 받은 뒤 0건 — 빈 안내 · 「전체 0」", j(R.s_post));
 check(R.p_pre.empty === 0 && R.p_pre.allCnt === null && R.p_pre.boot === 1, "P1 프로젝트 · 받기 전 — 빈 안내 · 「전체 0」 없음 · 막대", j(R.p_pre));
 check(R.p_post.empty === 1 && R.p_post.allCnt === "0" && R.p_post.boot === 0, "P2 프로젝트 · 받은 뒤 0건 — 빈 안내 · 「전체 0」", j(R.p_post));
+check(!!R.p_pre_loose && R.p_pre_loose.noneRow === 0 && R.p_pre_loose.allCnt === null && R.p_pre_loose.boot === 1 && !!R.p_post_loose && R.p_post_loose.noneRow === 1,
+  "P3 프로젝트 · 리스트를 받기 전엔 「기타 (미분류)」 줄이 안 선다 · 받은 뒤엔 선다", j([R.p_pre_loose, R.p_post_loose]));
 
 // ───────────────────────── F. 못 받았다고 말하나
 check(!!R.h_pre_failed && R.h_pre_failed.boot === 1 && R.h_pre_failed.note === 1 && R.h_pre_failed.rows === 0 && R.h_pre_failed.empty === 0
