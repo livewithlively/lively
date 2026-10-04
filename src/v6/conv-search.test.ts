@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  extractConvMessages, clipBody, snippetAround, recencyBoost, editTail, rankConvAggs, convRelevance, parseConvSort, editedPaths,
+  extractConvMessages, clipBody, snippetAround, snippetAroundMost, recencyBoost, editTail, rankConvAggs, convRelevance, parseConvSort, editedPaths,
   editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, type ConvSessionAgg,
 } from "./conv-search.js";
 import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns } from "./query-terms.js";
@@ -275,4 +275,45 @@ test("[E1] 고친 파일은 파일 이름 + 바로 위 폴더로 보인다", () 
 test("[P1] 정렬 파라미터 — recent 만 최신순, 나머지는 관련도순", () => {
   assert.equal(parseConvSort("recent"), "recent");
   for (const v of ["relevance", "", undefined, "RECENT", "score"]) assert.equal(parseConvSort(v), "relevance");
+});
+
+// ── #4553 세션 이력 앱 «대화 찾기» — 발췌는 낱말이 가장 많이 모인 자리에서 ──
+//  S5 낱말 둘이 멀리 떨어져 먼저 하나씩 나오고 뒤에서 함께 나온다 → 함께 나오는 자리 · S6 낱말 하나면 snippetAround 와 같다 ·
+//  S7 낱말이 한 번도 안 나오면 글의 앞머리 · S8 짧은 글은 그대로 · S9 경계값(뒤 낱말이 창 안에 끝까지 들어야 한 창) · S10 같은 수면 앞쪽 자리
+const FILL = (n: number): string => "가나다라마바사아자차".repeat(Math.ceil(n / 10)).slice(0, n);
+test("[S5] 낱말 둘 — 따로 먼저 나오고 뒤에서 함께 나오면, 함께 나오는 자리를 발췌한다", () => {
+  const text = `세션 이야기로 시작한다 ${FILL(400)} 한참 뒤에 세션 이력 앱을 고친다 ${FILL(200)}`;
+  const first = snippetAround(text, ["세션", "이력"], 80, 20);
+  const most = snippetAroundMost(text, ["세션", "이력"], 80, 20);
+  assert.ok(first.includes("세션") && !first.includes("이력"), `대조: 첫 자리 발췌에는 한 낱말뿐 — ${first}`);
+  assert.ok(most.includes("세션 이력 앱"), most);
+});
+test("[S6] 낱말이 하나면 첫 자리 발췌와 같다", () => {
+  const text = `${FILL(300)} 검색을 고친다 ${FILL(300)} 검색을 또 고친다`;
+  assert.equal(snippetAroundMost(text, ["검색"], 80, 20), snippetAround(text, ["검색"], 80, 20));
+});
+test("[S7] 낱말이 한 번도 안 나오면 글의 앞머리다", () => {
+  const text = FILL(500);
+  assert.equal(snippetAroundMost(text, ["없는말"], 80, 20), text.slice(0, 80) + "…");
+  assert.equal(snippetAroundMost(text, [], 80, 20), text.slice(0, 80) + "…");
+});
+test("[S8] 상한보다 짧은 글은 그대로다", () => {
+  assert.equal(snippetAroundMost("세션  이력\n앱", ["세션", "이력"], 80, 20), "세션 이력 앱");
+});
+test("[S9] 경계값 — 뒤 낱말이 창 폭(max - lead = 60) 안에 끝까지 들어야 한 창이다(한 글자라도 넘치면 아니다)", () => {
+  //  뒤쪽(400 근처)에 두 낱말이 넉넉히 함께 나오는 자리를 하나 더 둔다 — 앞 자리가 한 창인지 아닌지에 따라 고르는 자리가 갈린다.
+  const LATER = `${FILL(240)}세션 이력 함께${FILL(100)}`;
+  //  «세션»(100~102) 뒤로 «이력» 이 158~160 → 창 [100, 160) 에 끝까지 든다 → 앞 자리가 이미 둘 다 든 창이다(앞쪽이 이긴다).
+  const fits = `${FILL(100)}세션${FILL(56)}이력${LATER}`;
+  const s1 = snippetAroundMost(fits, ["세션", "이력"], 80, 20);
+  assert.equal(s1, snippetAround(fits, ["세션", "이력"], 80, 20));
+  assert.ok(s1.includes("세션") && s1.includes("이력") && !s1.includes("함께"), s1);
+  //  한 글자 밀리면(159~161) «이» 만 걸친다 → 앞 자리는 한 창이 아니다 → 둘 다 끝까지 드는 뒤 자리를 고른다.
+  const spills = `${FILL(100)}세션${FILL(57)}이력${LATER}`;
+  const s2 = snippetAroundMost(spills, ["세션", "이력"], 80, 20);
+  assert.ok(s2.includes("세션 이력 함께"), s2);
+});
+test("[S10] 낱말 수가 같은 창이 여럿이면 앞쪽 자리다", () => {
+  const text = `${FILL(100)}세션 이력 하나${FILL(300)}세션 이력 둘${FILL(100)}`;
+  assert.ok(snippetAroundMost(text, ["세션", "이력"], 80, 20).includes("세션 이력 하나"));
 });

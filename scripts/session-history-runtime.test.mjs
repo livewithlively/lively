@@ -19,7 +19,7 @@
 //  R9  「작업 일지」 — 기간(since·until)으로 청하고 · 합계 · 날짜 묶음 · 줄을 누르면 기록이 펼쳐지고 · 기록 없는 세션은 그렇다고 ·
 //      프로젝트별로 다시 묶고 · [요약 복사]가 그 기간의 글을 클립보드에 · 줄의 문은 하나(박스 있으면 [세션 열기], 없으면
 //      「이어 질문하기」) · 앞선 기간에만 기록이 있는 세션은 그렇다고 · 기간을 연달아 바꾸면 앞 요청을 끊는다
-//  R10 「세션 목록」 — 도는 세션 + 기록을 한 줄로 · 실행 중/기록만 거르개 · 이름 거르기 · 열 머리 정렬 ·
+//  R10 「세션 목록」 — 도는 세션 + 기록을 한 줄로(남의 세션은 없다) · 실행 중/오프라인/기록만 거르개 · 이름 거르기 · 열 머리 정렬 ·
 //      세션으로 가는 문은 줄마다 하나 — 박스 있는 줄은 [세션 열기](「이어 질문하기」 없음), 기록만 남은 줄은 「이어 질문하기」 · 정보 탭
 //  R11 탭을 오가도 보던 자리가 남는다(검색어·결과·고른 줄) · 주소에 탭이 적힌다 · 주소의 ?tab= 으로 그 탭이 열린다
 //  R12 대화록 단독 화면(#/sessions/<sid>)은 그대로 — 「← 뒤로」가 있다
@@ -28,6 +28,7 @@
 //  R15 두 탭이 같은 세션의 대화록을 들고 있어도 질문 목차는 **제 칸의** 그 질문으로 간다
 //  R16 [세션 열기] — 셸 밖(클래식 단독)에서는 세션 터미널 창, 셸 안에서는 그 세션 화면 주소
 //  R17 글자를 치고 곧바로 다른 화면으로 가면, 늦게 도는 찾기 타이머가 그 화면의 주소를 덮지 않고 요청도 안 낸다
+//  R18 「이번 주」가 비어 있으면(주가 막 바뀌었다) 그렇다고 말하고 [지난 주 보기]로 간다
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
@@ -87,6 +88,8 @@ async function PAGE_MAIN() {
   const LIVE = [
     { id: "box-1", label: "검색 고치기", harness: "claude", owned: true, created: sec(TODAY - 3_600_000), lastActive: sec(TODAY), attached: true, agentState: "busy", working: true, claudeSessionId: "c1", projectId: 3870 },
     { id: "box-3", label: "덱 재시안", harness: "claude", owned: true, created: sec(NOW - 4 * D), lastActive: sec(NOW - 3 * D), attached: false, agentState: "offline", restorable: true, claudeSessionId: "c3" },
+    { id: "box-7", label: "오프라인 세션", harness: "claude", owned: true, created: sec(NOW - 3 * D), lastActive: sec(NOW - 2 * D), attached: false, agentState: "offline" },   // 박스는 있지만 아무도 안 보고 있다
+    { id: "box-x", label: "남의 세션 박스", harness: "claude", owned: false, created: sec(NOW), lastActive: sec(NOW), attached: true, agentState: "idle", lastViewed: sec(NOW) + 1 },
     { id: "box-9", label: "기록 없는 새 세션", harness: "claude", owned: true, created: sec(NOW), lastActive: sec(NOW), attached: true, agentState: "idle", lastViewed: sec(NOW) + 1 },
   ];
   const TS = (n) => iso(NOW - 3 * D + n * 1000);   // 대화 속 말들의 시각 — 묶음과 무관한 고정된 과거
@@ -141,6 +144,7 @@ async function PAGE_MAIN() {
     if (u.startsWith("/api/ui/v6/session-journal")) {
       if (P.get("session_id")) { const r = JOURNAL.find((x) => x.session_id === P.get("session_id")); return Promise.resolve(r ? json({ row: r }) : json({ error: "세션을 찾을 수 없습니다" }, 404)); }
       if (MODE.journal === "500") return Promise.resolve(json({ error: "internal_error" }, 500));
+      if (MODE.journal === "empty") return Promise.resolve(json({ rows: [], truncated: false }));
       journalSignals.push(init && init.signal ? init.signal : null);
       //  조금 늦게 답한다 — 연달아 기간을 바꿨을 때 앞 요청이 아직 떠 있게.
       return new Promise((resolve, reject) => {
@@ -351,6 +355,7 @@ async function PAGE_MAIN() {
     R.lCount = $(".shx-count", ls).textContent;
     const seg = (t) => $$(".shx-bar .shx-seg-b", ls).find((b) => b.textContent === t);
     seg("실행 중").click(); await sleep(30); R.lLive = rowsOf().map((r) => r[0]);
+    seg("오프라인").click(); await sleep(30); R.lOff = rowsOf().map((r) => r[0]);
     seg("기록만").click(); await sleep(30); R.lRec = rowsOf().map((r) => r[0]);
     seg("전체").click(); await sleep(30);
     type($(".shx-input", ls), "ㄷ 재시안"); await sleep(30); R.lFind = rowsOf().map((r) => r[0]);
@@ -403,6 +408,24 @@ async function PAGE_MAIN() {
     await open("#/sessions?tab=find&q=" + encodeURIComponent("검색"));
     await waitFor(() => $$(".shx-hit", panel("find")).length === 3);
     R.deepQ = { q: $(".shx-input", panel("find")).value, hits: $$(".shx-hit", panel("find")).length };
+    // ── R18 — 일지 캐시(30초)가 지난 뒤, 「이번 주」가 비어 있는 서버 ──
+    await sleep(31_000);
+    await open("#/sessions?tab=journal");                   // 앞 장면이 고른 기간(지난 주)으로 다시 열린다 — 줄이 선다
+    await waitFor(() => $(".shx-jrow", panel("journal")));
+    {
+      const jr2 = panel("journal");
+      MODE.journal = "empty";                                // 「이번 주」만 비어 있다
+      $$(".shx-seg-b", jr2).find((b) => b.textContent === "이번 주").click();
+      await waitFor(() => /아직 없습니다/.test($(".shx-journal", jr2).textContent));
+      R.emptyWeek = { text: $(".shx-journal .admin-hint", jr2).textContent, btn: $$(".shx-journal button", jr2).map((b) => b.textContent) };
+      MODE.journal = "ok";
+      $$(".shx-journal button", jr2).find((b) => b.textContent === "지난 주 보기").click();
+      await waitFor(() => $(".shx-jrow", panel("journal")));
+      const jr3 = panel("journal");
+      R.afterLastWeek = { rows: $$(".shx-jrow", jr3).length, on: $$(".shx-bar .shx-seg-b.on", jr3).map((b) => b.textContent) };
+    }
+    await open("#/sessions?tab=find");
+
     // ── R17 ──
     reqs = [];
     type($(".shx-input", panel("find")), "늦은말");          // 디바운스(250ms)가 걸린 채로
@@ -511,14 +534,15 @@ check(!!R.jD30Req && param(R.jD30Req, "until") === null && Number.isFinite(Date.
 same(R.back, { hash: "#/sessions?tab=find&q=%EA%B2%80%EC%83%89", q: "검색", hits: 3, paneTitle: "검색 고치기", hidden: [false, true, true] }, "R11 탭을 오가도 검색어·결과·고른 대화록이 그대로다 · 주소에 검색어");
 // R10
 check((R.lReqs?.live || []).length === 1 && /includeProjects=1/.test(R.lReqs.live[0]) && R.lReqs.logs === 0, "R10 세션 목록 탭 — 도는 세션을 한 번 청하고 기록은 이미 받은 것을 쓴다", JSON.stringify(R.lReqs));
-same(R.lRows, [["기록 없는 새 세션", "", "대기 중"], ["검색 고치기", "통합검색", "작업 중"], ["위젯 기획", "UI 수정", "기록만"], ["덱 재시안", "", "중단됨"], ["옛 조사", "통합검색", "기록만"]], "R10 도는 세션과 기록이 한 줄씩 — 마지막 활동이 늦은 것부터 · 휴지통·빈 세션 없음");
-check(/세션 5개/.test(R.lCount || "") && /실행 중 2/.test(R.lCount) && /기록만 3/.test(R.lCount), "R10 수 — 전체 · 실행 중 · 기록만", R.lCount);
-same(R.lLive, ["기록 없는 새 세션", "검색 고치기"], "R10 「실행 중」");
-same(R.lRec, ["위젯 기획", "덱 재시안", "옛 조사"], "R10 「기록만」 = 돌지 않고 읽을 기록이 있는 것");
+same(R.lRows, [["기록 없는 새 세션", "", "대기 중"], ["검색 고치기", "통합검색", "작업 중"], ["위젯 기획", "UI 수정", "기록만"], ["오프라인 세션", "", "오프라인"], ["덱 재시안", "", "중단됨"], ["옛 조사", "통합검색", "기록만"]], "R10 도는 세션과 기록이 한 줄씩 — 마지막 활동이 늦은 것부터 · 휴지통·빈 세션·남의 세션 없음");
+check(/세션 6개/.test(R.lCount || "") && /실행 중 2/.test(R.lCount) && /오프라인 1/.test(R.lCount) && /기록만 3/.test(R.lCount), "R10 수 — 전체 · 실행 중 · 오프라인 · 기록만", R.lCount);
+same(R.lLive, ["기록 없는 새 세션", "검색 고치기"], "R10 「실행 중」 = 지금 쓰이는 것(오프라인은 아니다)");
+same(R.lOff, ["오프라인 세션"], "R10 「오프라인」 = 박스는 있지만 지금 쓰이지 않는 것");
+same(R.lRec, ["위젯 기획", "덱 재시안", "옛 조사"], "R10 「기록만」 = 박스가 없고 읽을 기록이 있는 것");
 same(R.lFind, ["덱 재시안"], "R10 이름으로 거르기(초성 · 낱말 둘)");
-same(R.lSortAsc, ["검색 고치기", "기록 없는 새 세션", "덱 재시안", "옛 조사", "위젯 기획"], "R10 열 머리 — 세션 이름 오름차순");
+same(R.lSortAsc, ["검색 고치기", "기록 없는 새 세션", "덱 재시안", "옛 조사", "오프라인 세션", "위젯 기획"], "R10 열 머리 — 세션 이름 오름차순");
 same(R.lAriaSort, ["ascending", "none", "none", "none"], "R10 정렬 열이 aria-sort 로 실린다");
-same(R.lSortDesc, ["위젯 기획", "옛 조사", "덱 재시안", "기록 없는 새 세션", "검색 고치기"], "R10 같은 열을 다시 누르면 내림차순");
+same(R.lSortDesc, ["위젯 기획", "오프라인 세션", "옛 조사", "덱 재시안", "기록 없는 새 세션", "검색 고치기"], "R10 같은 열을 다시 누르면 내림차순");
 same(R.lBox, { resume: false, open: ["#/s/box-1"], turns: 2 }, "R10 박스 있는 줄 — 대화록에 「이어 질문하기」가 없고 [세션 열기]가 그 세션으로");
 check((R.lInfo?.rows || []).some((r) => r[0] === "상태" && r[1] === "작업 중") && R.lInfo.rows.some((r) => r[0] === "프로젝트" && r[1] === "통합검색") && R.lInfo.rows.some((r) => r[0] === "첫 지시") && R.lInfo.left === true, "R10 정보 탭 — 상태·프로젝트·첫 지시 + 남긴 것", JSON.stringify(R.lInfo));
 same(R.lRecOnly, { resume: 1, open: 0 }, "R10 기록만 남은 줄 — 「이어 질문하기」가 하나 있고 [세션 열기]는 없다");
@@ -530,6 +554,8 @@ same(R.openInShell && [R.openInShell.asked, R.openInShell.opened], [["#/s/box-1"
 // R11 · R12
 same(R.deep, { selected: ["작업 일지"], findKids: 0, findReqs: 0 }, "R11 주소의 ?tab= 으로 그 탭이 열린다 — 다른 탭은 그리지 않는다");
 same(R.deepQ, { q: "검색", hits: 3 }, "R11 주소의 q 로 찾던 말이 되살아난다");
+same(R.emptyWeek, { text: "이번 주에 한 세션이 아직 없습니다.", btn: ["지난 주 보기"] }, "R18 빈 「이번 주」 — 그렇다고 말하고 지난 주로 가는 문을 둔다");
+same(R.afterLastWeek, { rows: 3, on: ["지난 주", "프로젝트별"] }, "R18 [지난 주 보기] → 지난 주가 켜지고 그 줄이 선다(묶는 기준은 고른 그대로)");
 same(R.lateTimer, { hash: "#/sessions/c1?node=", reqs: 0 }, "R17 떠난 화면의 찾기 타이머는 주소를 덮지 않고 요청도 내지 않는다");
 check(!!R.page && R.page.back.length === 1 && /^#\/sessions/.test(R.page.back[0]) && R.page.tabs === 0 && R.page.card === true && R.page.embed === false && R.page.resume === true, "R12 대화록 단독 화면은 그대로 — 「← 뒤로」 · 탭 없음", JSON.stringify(R.page));
 // W

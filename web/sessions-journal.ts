@@ -96,7 +96,13 @@ export function mountJournal(host: HTMLElement): void {
     const now = Date.now();
     const s = journalStats(rows);
     stats.replaceChildren(tile(s.sessions, '세션'), tile(s.projects, '프로젝트'), tile(s.activities, '한 일(기록)'), tile(s.knowledge, '만든 지식'), tile(s.tasks, '태스크'));
-    if (!rows.length) { list.replaceChildren(el('p', { class: 'admin-hint', text: '이 기간에 한 세션이 없습니다.' })); return; }
+    if (!rows.length) {
+      //  주가 막 바뀐 때(월요일 아침)의 「이번 주」는 비어 있는 게 맞다 — 고장으로 읽히지 않게 지난 주로 가는 문을 함께 둔다.
+      const kids: HTMLElement[] = [el('p', { class: 'admin-hint', text: st.preset === 'week' ? '이번 주에 한 세션이 아직 없습니다.' : '이 기간에 한 세션이 없습니다.' })];
+      if (st.preset === 'week') kids.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '지난 주 보기', onclick: () => { st.preset = 'last-week'; mountJournal(host); } }));
+      list.replaceChildren(...kids);
+      return;
+    }
     const kids: HTMLElement[] = [];
     for (const g of journalGroups(rows, st.mode, now)) {
       kids.push(el('div', { class: 'shx-grp', text: `${g.label} · ${g.rows.length}` }));

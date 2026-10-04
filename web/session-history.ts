@@ -4,6 +4,7 @@
 //  «무엇이 어느 묶음에 서나 · 어떤 줄이 한 줄로 접히나 · 맞은 말이 대화록의 어느 자리인가» 는 여기서 정한다.
 import { sessIsDead, sessLabel, sessStateKey, type SessLike } from './session-status.js';
 import { dayStart, daysAgoStart } from './lib/omni-order.js';
+import { isIdLabel } from './lib/sess-name.js';
 
 // ── 「세션 목록」 탭 — 도는 세션(terminal/sessions)과 중앙 기록(v6/sessions)을 한 목록으로 ─────────────────────
 //  같은 세션이 두 목록에 있으면 한 줄이다: 도는 세션의 claudeSessionId(그 박스가 지금 도는 대화 uuid)가 기록의 session_id 면
@@ -24,8 +25,10 @@ export interface HistRow {
   /** session-status 의 key, 또는 'log'(기록만 남음). */
   stateKey: string;
   stateLabel: string;
-  /** 지금 도는가 — 「실행 중」 거르개. */
+  /** 박스가 살아 있나(되살릴 것 없이 열 수 있다). 아무도 안 보고 있는 「오프라인」도 여기 든다. */
   alive: boolean;
+  /** 지금 쓰이고 있나 — 확인 필요 · 작업 중 · 작업 완료 · 대기 중. 「실행 중」 거르개(프로젝트 허브의 «사용 중» 과 같은 뜻). */
+  live: boolean;
   mine: boolean;
   lastMs: number;
   firstMs: number;
@@ -58,7 +61,11 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
   for (const r of liveRows || []) {
     if (!r || !r.id) continue;
     if (r.trashedAt) { if (r.claudeSessionId) trashedConv.add(String(r.claudeSessionId)); continue; }
+    //  이 앱은 «내 세션» 의 이력이다 — 프로젝트를 같이 쓰는 남의 세션(includeProjects)은 싣지 않는다. 사람 열이 없는 표에 섞이면
+    //   누구 것인지 알 수 없고, 그 대화록은 초대받지 않았으면 열리지도 않는다.
+    if (!r.owned) continue;
     const key = sessStateKey(r as SessLike, nowMs);
+    const alive = r.observed === false ? false : !sessIsDead(r as SessLike, nowMs);
     const pid = r.projectId ? Number(r.projectId) : null;
     const row: HistRow = {
       key: String(r.id), name: String(r.label || r.title || r.id), boxId: String(r.id),
@@ -66,8 +73,8 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
       projectId: pid, projectName: pid != null ? (projNames.get(pid) ?? null) : null,
       stateKey: key, stateLabel: sessLabel(r as SessLike, nowMs),
       //  못 본 판의 행(observed=false)은 «돈다» 고 말하지 않는다 — 서버가 DB 행으로 지어낸 것이다(session-status SessLike.observed).
-      alive: r.observed === false ? false : !sessIsDead(r as SessLike, nowMs),
-      mine: !!r.owned, lastMs: epochMs(r.lastActive || r.created), firstMs: epochMs(r.created),
+      alive, live: alive && (key === 'waiting' || key === 'busy' || key === 'done' || key === 'idle'),
+      mine: true, lastMs: epochMs(r.lastActive || r.created), firstMs: epochMs(r.created),
       bytes: 0, harness: r.harness ? String(r.harness) : null, title: null,
     };
     //  같은 대화를 두 박스가 갖고 있다 — 살아 있는 쪽, 같으면 최근 쪽.
@@ -93,6 +100,8 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
     if (owner) {
       if (r.trashed_at) { out.delete(owner.key); byConv.delete(conv); continue; }   // 두 이름 중 한쪽에만 표식이 있어도 그 세션은 휴지통이다
       owner.node = String(r.node_id || '');
+      //  박스 이름이 id 그대로면(이름을 안 지은 세션) 기록이 아는 이름을 쓴다.
+      if (isIdLabel(owner.name) && r.name) owner.name = String(r.name);
       owner.bytes = Number(r.bytes) || 0;
       owner.title = r.title ? String(r.title) : null;
       //  되살린 박스의 created 는 다시 연 때다 — 이른 쪽이 «만든 때», 늦은 쪽이 «마지막 활동».
@@ -106,17 +115,26 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
     out.set(conv, {
       key: conv, name: String(r.name || r.title || conv), boxId: null, convId: conv, node: String(r.node_id || ''),
       projectId: r.project_id != null ? Number(r.project_id) : null, projectName: r.project_name ? String(r.project_name) : null,
-      stateKey: 'log', stateLabel: '기록만', alive: false, mine: true,
+      stateKey: 'log', stateLabel: '기록만', alive: false, live: false, mine: true,
       lastMs, firstMs, bytes: Number(r.bytes) || 0, harness: r.harness ? String(r.harness) : null, title: r.title ? String(r.title) : null,
     });
   }
-  return [...out.values()].sort((a, b) => b.lastMs - a.lastMs);
+  const rows = [...out.values()].sort((a, b) => b.lastMs - a.lastMs);
+  //  끝내 이름이 id 뿐인 줄(이름을 안 지었고 기록도 이름을 모른다)은 그렇다고 적는다 — uuid 를 이름 자리에 걸지 않는다.
+  for (const r of rows) if (isIdLabel(r.name)) r.name = '이름 없는 세션';
+  return rows;
 }
 
-export type HistFilter = 'all' | 'live' | 'rec';
-/** 「전체 · 실행 중 · 기록만」. 기록만 = 지금 돌지 않는 것(중단됨·종료됨·기록만 남은 것) 중 읽을 기록이 있는 것. */
+export type HistFilter = 'all' | 'live' | 'off' | 'rec';
+/**
+ * 「전체 · 실행 중 · 오프라인 · 기록만」.
+ *  실행 중 = 지금 쓰이는 것(확인 필요·작업 중·작업 완료·대기 중). 오프라인 = 박스는 있지만 아무도 안 보고 있거나 그 컴퓨터가 안 닿는 것
+ *  (셸만 남은 것도 여기). 기록만 = 박스가 없는 것(중단됨·종료됨·기록만 남은 것) 중 읽을 기록이 있는 것.
+ *  ⚠ 「실행 중」에 오프라인을 넣지 않는다 — 실측(매니지드, 한 사람): 박스가 남은 세션 136 중 지금 쓰이는 것은 16 이었다.
+ */
 export function histFilter(rows: HistRow[], f: HistFilter): HistRow[] {
-  if (f === 'live') return rows.filter((r) => r.alive);
+  if (f === 'live') return rows.filter((r) => r.live);
+  if (f === 'off') return rows.filter((r) => r.alive && !r.live);
   if (f === 'rec') return rows.filter((r) => !r.alive && !!r.convId);
   return rows;
 }
