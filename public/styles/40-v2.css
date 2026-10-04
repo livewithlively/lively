@@ -1519,7 +1519,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
    목록의 리듬만 만든다(.v2-app-group 과 같은 무게) — 흐린 바탕 위라 글자색은 잉크 쪽(--ink-sub)이다. */
 .v2-pad-body { width: min(920px, 100%); display: flex; flex-direction: column; align-items: center; gap: 26px; }
 .v2-pad-sec { width: 100%; }
-.v2-pad-sec-h { margin: 0 0 8px; padding: 0 14px; font-size: 12px; font-weight: 700; letter-spacing: 0; color: var(--ink-sub); }
+.v2-pad-sec-h { margin: 0 0 2px; padding: 0 14px; font-size: 13px; font-weight: 700; letter-spacing: 0; color: var(--ink-sub); }   /* 칸의 위 여백(14px)이 이미 숨을 준다 */
 .v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
 .v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px 12px; background: none; border: 0; border-radius: 18px; text-decoration: none; color: var(--ink); text-align: center; }
 .v2-pad-item:hover { background: rgba(var(--tint-ink), .12); }

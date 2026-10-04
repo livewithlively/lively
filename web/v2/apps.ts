@@ -11,7 +11,8 @@ import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 �
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
-import { appMatches, appRank } from '../lib/app-match.js';
+import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
+export type { PadGroup };
 
 export interface AppDef {
   key: string;        // 안정 키(= 클래식 data-tab 슬러그 또는 페이지 이름)
@@ -43,7 +44,6 @@ export interface AppDef {
 //  workspace = 이 워크스페이스의 앱: 세션이 만들었거나(app_save) 관리자가 설치한 앱(빌트인이 아닌 org_app) + 대시보드.
 //   이름을 「만든 앱」이라 하지 않는 이유: 남이 만든 앱을 설치한 것도, 위젯을 골라 꾸미는 대시보드도 여기 선다.
 //   공통점은 «누가 만들었나» 가 아니라 «이 워크스페이스의 것» 이다.
-export type PadGroup = 'base' | 'workspace';
 export const PAD_GROUPS: ReadonlyArray<{ key: PadGroup; title: string }> = [
   { key: 'base', title: '기본 앱' },
   { key: 'workspace', title: '워크스페이스 앱' },
@@ -235,7 +235,7 @@ export function openLaunchpad(): void {
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
       //  묶음은 출처가 정한다(#4554): 제품에 실려 온 것(builtin)은 기본 앱, 그 밖(세션이 만든 것 · 설치한 것)은 워크스페이스 앱.
-      return { node, rank: rank(a.title), group: (a.source.kind === 'builtin' ? 'base' : 'workspace') as PadGroup };
+      return { node, rank: rank(a.title), group: padGroupOfInstalled(a.source.kind) };
     });
     const tiles = [...screen, ...session];   // 묶음 안의 차례: 화면 앱 먼저, 설치된 앱이 뒤(종전 격자와 같다)
     body.replaceChildren(...PAD_GROUPS.map((g) => {
@@ -249,7 +249,7 @@ export function openLaunchpad(): void {
     //   위 묶음의 설명에만 맞은 앱이 아래 묶음의 이름이 맞은 앱을 이기면 안 된다. 동점은 화면 순서(위 묶음 먼저).
     if (q && tiles.length) {
       const shown = PAD_GROUPS.flatMap((g) => tiles.filter((t) => t.group === g.key));
-      shown.reduce((best, t) => (t.rank < best.rank ? t : best)).node.classList.add('is-first');
+      shown[padBestIndex(shown.map((t) => t.rank))].node.classList.add('is-first');
     }
     if (!tiles.length) body.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
   };
