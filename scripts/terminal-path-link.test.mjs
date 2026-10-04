@@ -14,8 +14,8 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const m = await importTerminalModule();
-const { pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal } = m;
-for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal]) assert.equal(typeof f, "function");
+const { pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink } = m;
+for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink]) assert.equal(typeof f, "function");
 
 const LIB = process.env.PATH_OPEN_SRC || join(root, "web/lib/path-open.ts");
 const out = mkdtempSync(join(tmpdir(), "path-open-"));
@@ -121,6 +121,14 @@ t("F9 경로 링크 표지 · 메뉴 힌트는 끝(파일 이름)을 보인다 �
   assert.equal(shortLink("https://a.io/x"), "a.io/x");
   //  스킴을 뗀 뒤의 값을 경로로 착각하면 안 된다(그렇게 짠 첫 판을 기존 시험이 잡았다).
   assert.equal(shortLink("https://" + "b".repeat(27)), "b".repeat(25) + "…");
+});
+
+t("F10 트래킹 pane 맨클릭 — 세션 상대 경로는 TUI 에 돌려주고(⌘/Ctrl 이면 연다), URL·프로젝트 경로는 연다", () => {
+  assert.equal(bareClickLink("src/a.ts", false), null);
+  assert.equal(bareClickLink("src/a.ts", true), "src/a.ts");
+  assert.equal(bareClickLink("/work/shared/project/9/a.md", false), "/work/shared/project/9/a.md");
+  assert.equal(bareClickLink("https://a.io/x", false), "https://a.io/x");
+  assert.equal(bareClickLink(null, true), null);
 });
 
 // ── L. 이 곁칸이 열 수 있나(셸의 판정) ───────────────────────────────
