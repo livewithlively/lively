@@ -2,6 +2,7 @@
 //  detail-hub.ts(격자·편집 모드)와 위젯 채움 모듈(detail-hub-tasks·detail-hub-sessions …)이 여기서 같은 아이콘·단추·줄·세션 상태를 받는다.
 //  ⚠ 리프만 문다(core · lib/session-open · v2/sess-tail · session-status · popover · detail-hub-layout 타입). 섹션 모듈은 detail.ts 가 공장(HubOpts)으로 넘긴다.
 import { el, sv, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 — 공유 폴더 = 우측 사이드바 「자료」와 같은 둥근 폴더(한 벌)
 import { openSessionWindow } from '../lib/session-open.js';
 import { copyText, type CtxRow } from '../v2/ctx-menu.js';
 import { bindCtx, bindCtxSurface, requestOpenRoute } from '../v2/ctx-registry.js';
@@ -72,13 +73,14 @@ export const HUB_ICON: Record<string, string> = {
   tasks: '<path d="M4 6.5h9M4 12h9M4 17.5h6"/><path d="M15 12.5l2.4 2.4L22 10"/>',
   sessions: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
   body: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
-  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  folder: `<path d="${ICONS.folder}"/>`,
   knowledge: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h7"/>',
   timeline: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
   right: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   left: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   chevr: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  sessNew: `<path d="${ICONS.sessNew}"/>`,   // #4233 — 새 세션 = 말풍선과 더하기
   x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
   grid: '<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
   monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
@@ -86,9 +88,8 @@ export const HUB_ICON: Record<string, string> = {
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
   chev: '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
-  // 작업 공간(세션) — 터미널 창 + 프롬프트. 새로 여는 쪽은 우상단 ＋ 배지(selection.ts pjvActIcon('session') 과 같은 붓).
+  // 작업 공간(세션) — 터미널 창 + 프롬프트. 새로 여는 쪽은 sessNew(말풍선과 더하기, #4233).
   term: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.6"/><path d="M6.8 9.6l3 2.6-3 2.6"/><path d="M12.4 15h4.4"/>',
-  termnew: '<rect x="1.5" y="4.5" width="16" height="14" rx="2.4"/><path d="M5.2 9.4l3 2.6-3 2.6"/><path d="M10.6 15.4h3.8"/><path d="M20.6 2.6v5"/><path d="M18.1 5.1h5"/>',
   link: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19.5"/>',
   pen: '<path d="M4 20h4L18 10l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',

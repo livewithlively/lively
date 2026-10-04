@@ -119,10 +119,10 @@ ok(/shorten\(s\.raw\.lastPrompt\)/.test(lastAskFn) && !/cleanAskText/.test(lastA
   && /const INJ_RE = INJECTED_RE;/.test(ST),
   "W3 ★서버 칸(lastPrompt)과 꼬리 조회가 같은 식(lib/ask-text)으로 끼운 글을 거른다 · 서버 칸은 shorten 안에서 한 번만");
 const IC = read("web/lib/icon-paths.ts"), CSS40 = read("public/styles/40-v2.css");
-ok(IC.includes("folderRows: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M7 12h10 M7 15h6'")
-  && /icon\('folderRows', 'v2-axisbtn-ic'\)/.test(cut(SIDE, "function axisBtn(", "\n}\n"))
+ok(/\n  projGroup: 'M5\.18 1\.61 A4\.93 4\.93 0 1 0 10\.11 6\.54 /.test(IC) && !/\n  folderRows:/.test(IC)
+  && /icon\('projGroup', 'v2-axisbtn-ic'\)/.test(cut(SIDE, "function axisBtn(", "\n}\n"))
   && /\.v2-axisbtn-ic \{ width: 15px; height: 15px;[^}]*stroke-width: 1\.9;/.test(CSS40),
-  "W4 묶기 토글 아이콘 = 폴더 안 줄 둘(검토판 1판 그림 · 15px · 1.9 선)");
+  "W4 묶기 토글 아이콘 = 작은 과녁과 아래 줄 둘(projGroup · #4233 2026-10-04 고른 그림 · 15px · 1.9 선)");
 const tp = cut(SIDE, "function togglePin(", "\n}\n");
 ok(/repaintList\(\);/.test(tp) && !/if \(groupProj\) repaintList\(\);/.test(tp), "W5 프로젝트 압정은 두 축 모두 다시 그린다(세션별 축도 이 핀을 쓴다)");
 const CSS = read("public/styles/47-v2-rail.css");

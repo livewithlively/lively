@@ -8,6 +8,7 @@
 //  import 방향: core(프리미티브) ← 이 모듈. projects.ts 에서 fmtDateTime 하나를 되받는 역엣지가 남아 있다
 //   (check-imports 의 ALLOWED_CYCLES 등재 — 그 심볼이 내려오면 사라진다). 새 역엣지를 늘리지 마라.
 import { ACTIVITY_TYPE_LABEL, api, el, fmtNum, relTime, renderMarkdown, sv } from './core.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 — 「진척시킨 프로젝트」는 프로젝트 그림(과녁)
 import { sessionTermUrl } from './lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { fmtDateTime } from './projects.js';
 
@@ -34,7 +35,9 @@ function activityHasDetail(a) {
 //  그게 지식인지 프로젝트인지 화면 어디에도 안 적혀 있었다(#1610 신고).
 const ACT_LNK_ICON = {
   knowledge: ['M6.6 3.9h6.2l4.6 4.6v11.6H6.6z', 'M12.8 3.9v4.6h4.6', 'M9.1 13.3h6.1', 'M9.1 16.5h4'],
-  project: ['M12 3.9a8.1 8.1 0 1 1 0 16.2 8.1 8.1 0 0 1 0-16.2z', 'M8.7 12.2l2.4 2.4 4.3-4.9'],
+  project: ['M12 3.9a8.1 8.1 0 1 1 0 16.2 8.1 8.1 0 0 1 0-16.2z', 'M8.7 12.2l2.4 2.4 4.3-4.9'],   // 원 안의 체크 = 진척시킨 태스크
+  //  #4233(원준 2026-10-04): 진척시킨 «프로젝트» 는 다른 화면과 같은 프로젝트 그림(과녁). 태스크는 원 안의 체크 그대로.
+  projectLevel: [ICONS.proj],
   code: ['M9.2 8.4 5.6 12l3.6 3.6', 'M14.8 8.4 18.4 12l-3.6 3.6', 'M13.3 6.7l-2.6 10.6'],
   session: ['M4.5 5.5h15v13h-15z', 'M8.1 10.2l2.6 2.3-2.6 2.3', 'M13.2 14.8h3.5'],
   external: ['M13.9 5.3h4.8v4.8', 'M18.7 5.3 11.4 12.6', 'M16.7 13.9v3.9a1.4 1.4 0 0 1-1.4 1.4H6.6a1.4 1.4 0 0 1-1.4-1.4V9.1a1.4 1.4 0 0 1 1.4-1.4h3.9'],
@@ -137,7 +140,7 @@ function activityDetailView(a, nameOf, opts?) {
   // 프로젝트/태스크 — 참조가 아니라 이동이라 같은 탭.
   for (const t of (a.tasks || [])) {
     const s = splitRefTitle(t.title || ('#' + t.id));
-    addLink(actLinkRow('project', t.level === 'project' ? '진척시킨 프로젝트' : '진척시킨 태스크',
+    addLink(actLinkRow(t.level === 'project' ? 'projectLevel' : 'project', t.level === 'project' ? '진척시킨 프로젝트' : '진척시킨 태스크',
       s.name, s.sub, '#/projects2/p/' + t.id, false));
   }
   // 코드 — 갈 곳이 없는 사실이라 링크가 아니다.

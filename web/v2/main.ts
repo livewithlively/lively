@@ -18,7 +18,7 @@ import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './apps.js';
-import { builtinAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
+import { instanceSideIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { appPinnedKeys, bySeen, drawSide as drawSideTree, isAppPinned, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
@@ -1675,12 +1675,12 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'archive') { icon = 'archive'; meta = '멈춘 세션 · 치운 세션'; }
   else if (page === 'trash') { icon = 'trash'; meta = '버린 세션과 프로젝트'; }
   else if (page === 'liv') { icon = 'liv'; meta = '워크스페이스 담당자'; }
-  //  설치한 앱(#/i/<id>) — 런치패드와 같은 그림(glass-icon builtinAppIcon: 웹 브라우저 = 지구본, 화면이 있으면 liv, 없으면 term).
+  //  설치한 앱(#/i/<id>) — 런치패드와 같은 그림(glass-icon instanceSideIcon: 웹 브라우저 = 지구본, 화면이 있으면 liv, 없으면 term).
   //   인스턴스를 아직 못 받았으면 'app'(「앱」 그림)으로 둔다. 확인할 것(bell)은 정본 주소로 서서 여기 오지 않지만 오면 받은 편지함 그림이다.
   else if (page === 'i' && segs[1]) {
     const id = decodeURIComponent(segs[1]);
     const inst = cachedAppInstance(id) || appInstances.find((x) => x.id === id) || null;
-    if (inst) { const g = builtinAppIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length)); icon = (g === 'bell' ? 'inbox' : g) as SideInstance['icon']; }
+    if (inst) icon = instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length)) as SideInstance['icon'];
   }
   else {
     const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];

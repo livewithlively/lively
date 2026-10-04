@@ -91,7 +91,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
   if (canForkSess(s)) rows.push({ label: '세션 복제', icon: 'copy', hint: '대화를 아는 새 세션', run: () => hooks?.forkSession(hit.el, s.id) });
-  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
+  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'projMove', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
@@ -102,7 +102,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
 function projectMenu(p: Proj | undefined, pid: number): { rows: CtxRow[]; title?: string; sub?: string } {
   const href = '#/p/' + pid;
   const board = '#/projects2/p/' + pid;
-  const rows: CtxRow[] = [...openRows(href), { label: '보드로 열기', icon: 'proj', hint: '할 일·상세', run: () => hooks?.openRoute(board) }];
+  const rows: CtxRow[] = [...openRows(href), { label: '보드로 열기', icon: 'board', hint: '할 일·상세', run: () => hooks?.openRoute(board) }];
   if (p) rows.push({ sep: true, label: '' }, ...projectCtxRows(p));
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
   return { rows, title: p ? p.name : '프로젝트 #' + pid, sub: p ? (p.status_category === 'done' ? '끝남' : p.status_category === 'unstarted' ? '시작 전' : '진행 중') : undefined };
