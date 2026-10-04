@@ -67,7 +67,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     { sep: true, label: '' },
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
-  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'projMove', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
+  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'sessMove', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));

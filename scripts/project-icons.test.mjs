@@ -4,7 +4,7 @@
 //  큰 화면 함수 안의 자리는 줄의 글(이름표)로 자리를 찾아 그 줄이 부르는 그림 이름을 본다.
 //
 //  사양 · 엣지 표(spec-failfirst):
-//   V1 고른 그림 일곱(projMini · projNone · projNew · projMove · projGroup · sessNew · board)이 표에 있고 path 가 고른 것과 글자까지 같다
+//   V1 고른 그림 일곱(projMini · projNone · projNew · sessMove · projGroup · sessNew · board)이 표에 있고 path 가 고른 것과 글자까지 같다
 //   V2 프로젝트 그림(proj)은 5차 3안 그대로다. 쓰지 않게 된 group · folderRows 는 표에 없다
 //   R1 크기 규칙(Q2): projGlyph(px) 는 13px 이하에서 작은 과녁(projMini), 14px 이상에서 과녁(proj)
 //   R2 엣지: 모르는 크기(NaN)는 과녁, 0 은 작은 과녁. 경계 값은 PROJ_MINI_MAX_PX = 13 한 곳에 있다
@@ -17,7 +17,8 @@
 //   Q6 진척시킨 프로젝트 = 과녁, 진척시킨 태스크 = 원 안의 체크 그대로(값으로 읽는다)
 //   Q7 홈 사이드바 「프로젝트로 묶기」 토글 = projGroup
 //   Q8 사이드바 새 프로젝트 줄 = projNew(새 폴더는 폴더, 새 리스트는 리스트)
-//   Q9 세션을 프로젝트로 옮기기 = projMove. 칸(탭) 옮기기는 moveto 그대로
+//   Q9 세션 옮기기 = sessMove(속 빈 굵은 오른쪽 화살표, 원준 2026-10-04 «프로젝트 느낌은 빼고 옮기기만»). 칸(탭) 옮기기는 moveto 그대로
+//      M1 옛 projMove 는 표에도 부르는 곳에도 없다 · M2 sessMove 는 얇은 화살표(goto)와 다른 그림이다
 //   Q10 새 세션 = sessNew: 사이드바 [＋](값으로 부른다) · 우클릭 두 줄 · 탭 · 우측 사이드바 문 · 대시보드 · 클래식 · 프로젝트 화면
 //   Q11 폴더 = 둥근 선 폴더(ICONS.folder), 정해 둔 색은 선 색(클래식 · 대시보드 팝오버를 값으로 부른다)
 //   Q12 리스트 = 점과 줄 셋(ICONS.list), 색은 선 색, 이모지는 그대로(대시보드 · 클래식 · 일괄 · 사실 칩 · 분류체계)
@@ -26,7 +27,7 @@
 //   Q15 지난 세션 「프로젝트」 열에 Q2 그림이 선다
 //   Q16 세션 옮기기(프로젝트 고르개) 줄에 Q2 그림이 서고, 떼기 줄은 점선 원
 //   A  옛 그림이 그 자리에 남아 있지 않다(Lucide 폴더 · 채운 클래식 폴더 · 체크 두 줄 리스트 · 터미널과 더하기)
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -75,7 +76,7 @@ const PICKED = {
   projMini: "M11 4.5a8.5 8.5 0 1 0 8.5 8.5 M11 11.6a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8z M12.6 11.4 20.5 3.5 M17 3.5V7h3.5",
   projNone: "M13.11 3.57A8.5 8.5 0 0 1 17.17 5.26 M18.74 6.83A8.5 8.5 0 0 1 20.43 10.89 M20.43 13.11A8.5 8.5 0 0 1 18.74 17.17 M17.17 18.74A8.5 8.5 0 0 1 13.11 20.43 M10.89 20.43A8.5 8.5 0 0 1 6.83 18.74 M5.26 17.17A8.5 8.5 0 0 1 3.57 13.11 M3.57 10.89A8.5 8.5 0 0 1 5.26 6.83 M6.83 5.26A8.5 8.5 0 0 1 10.89 3.57 M12 11.3a.7.7 0 1 0 0 1.4a.7.7 0 1 0 0-1.4z",
   projNew: "M6.7 3.45 A5.95 5.95 0 1 0 12.65 9.4 M6.7 8.42 A0.98 0.98 0 1 0 6.7 10.38 A0.98 0.98 0 1 0 6.7 8.42 Z M7.82 8.28 L13.35 2.75 M10.9 2.75 L10.9 5.2 L13.35 5.2 M19 15v7 M15.5 18.5h7",
-  projMove: "M14.2 3.45 A5.95 5.95 0 1 0 20.15 9.4 M14.2 8.42 A0.98 0.98 0 1 0 14.2 10.38 A0.98 0.98 0 1 0 14.2 8.42 Z M15.32 8.28 L20.85 2.75 M18.4 2.75 L18.4 5.2 L20.85 5.2 M2 18.5h8 M7 15.5l3 3-3 3",
+  sessMove: "M4 9h9V5l7 7-7 7v-4H4z",
   projGroup: "M5.18 1.61 A4.93 4.93 0 1 0 10.11 6.54 M5.18 5.728 A0.812 0.812 0 1 0 5.18 7.352 A0.812 0.812 0 1 0 5.18 5.728 Z M6.108 5.612 L10.69 1.03 M8.66 1.03 L8.66 3.06 L10.69 3.06 M11 17h10 M11 21h7 M5.2 13.5V19H8",
   sessNew: "M6.162 15.6 A7.02 7.02 0 1 0 3.12 12.558 L1.56 17.16 Z M19 14.5v7 M15.5 18h7",
   board: "M4 5h4v14H4z M10 5h4v8h-4z M16 5h4v11h-4z",
@@ -182,9 +183,17 @@ let pjv = null, dash = null;
 
 // ── Q9 옮기기 ──
 {
-  ok(/label: s\.projectId \? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'projMove'/.test(cut(CTX, "function sessionMenu(", "\n}\n")), "Q9 우클릭 「프로젝트 바꾸기·떼기 · 프로젝트 연결」 = projMove");
-  ok(/icon\('projMove', 'pn-i sm'\), el\('span', \{ class: 'pn-move-t', text: loose \? '프로젝트에 붙이기' : '세션 옮기기' \}\)/.test(PANES), "Q9 우측 사이드바 [세션 옮기기 · 프로젝트에 붙이기] = projMove");
+  ok(/label: s\.projectId \? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'sessMove'/.test(cut(CTX, "function sessionMenu(", "\n}\n")), "Q9 우클릭 「프로젝트 바꾸기·떼기 · 프로젝트 연결」 = sessMove");
+  ok(/icon\('sessMove', 'pn-i sm'\), el\('span', \{ class: 'pn-move-t', text: loose \? '프로젝트에 붙이기' : '세션 옮기기' \}\)/.test(PANES), "Q9 우측 사이드바 [세션 옮기기 · 프로젝트에 붙이기] = sessMove");
   ok(/label: `\$\{toZone\[z\]\} 보내기`, icon: 'moveto'/.test(PANES) && /label: '위치', icon: 'moveto'/.test(read("web/v2/pane-dock.ts")), "Q9 칸(탭) 옮기기는 moveto 그대로");
+  {
+    const files = [];
+    const walk = (dir) => { for (const n of readdirSync(join(root, dir))) { const p = dir + "/" + n; if (statSync(join(root, p)).isDirectory()) walk(p); else if (/\.ts$/.test(n)) files.push(p); } };
+    walk("web");
+    const callers = files.filter((f) => /['"]projMove['"]/.test(read(f)));
+    ok(!has("projMove") && callers.length === 0, "M1 옛 projMove(작은 과녁과 화살표)는 표에도 부르는 곳에도 없다", callers.join(","));
+    ok(has("sessMove") && has("goto") && ICONS.sessMove !== ICONS.goto && /z$/i.test(ICONS.sessMove.trim()), "M2 sessMove 는 닫힌 굵은 화살표이고 얇은 화살표(goto)와 다른 그림이다");
+  }
 }
 
 // ── Q10 새 세션 ──

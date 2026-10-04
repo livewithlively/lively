@@ -1505,7 +1505,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       ? el('button', { class: 'pn-move', type: 'button', 'aria-label': loose ? '이 세션을 프로젝트에 붙이기' : '이 세션을 다른 프로젝트로 옮기기',
           title: loose ? '이 세션을 프로젝트에 붙입니다' : '이 세션을 다른 프로젝트로 옮기거나 프로젝트에서 뗍니다',
           onclick: () => opts.onMoveSession!(sid) },
-          icon('projMove', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))   // #4233 — 칸 옮기기(moveto)와 나눈다
+          icon('sessMove', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))   // #4233 — 칸 옮기기(moveto)와 나눈다
       : null;
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
