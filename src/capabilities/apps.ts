@@ -11,15 +11,11 @@ import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
-import { makeDeployDeps } from "../apps/deploy.js";
-import { dropAppTables, appSchemaFor } from "../apps/store-schema.js";
+import { removeInstalledApp } from "../apps/remove-run.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
-import { pruneAppInstances } from "../org/store/app-instances.js";
-import { pruneSessionApps } from "../apps/session-apps.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
-import { snapshotAppData, listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
-import { logger } from "../log.js";
+import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import type { LivelyUser } from "../context.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
@@ -285,36 +281,8 @@ const appRemove: Capability = {
       if (!app) throw new HttpError(404, `앱 없음: ${id}`);
       const src = (app.source ?? {}) as { kind?: string };
       if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
-      await stopWorkersForApp(id, "app_removed");
-      const deps = makeDeployDeps(id, wctx(user, ctx));
-      const comps = await store.listComponents(id);
-      for (const c of comps) {
-        try { await deps.reclaim({ kind: c.kind, ref: c.ref, orig_name: c.orig_name ?? undefined }); }
-        catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
-      }
-      await store.pruneUiAssets(id, []);   // UI 자산은 FK CASCADE 대상이 아니므로(스키마 주석) 명시 삭제.
-      // #4226 — 테이블을 지우기 전에 데이터를 떠 둔다(7일 보관). 같은 id 로 다시 설치하면 app_data_restore 로 되돌린다.
-      //  떠 두기가 실패해도 제거는 막지 않는다 — 관리자가 명시로 요청한 제거다(로그는 남긴다).
-      let snapError: string | null = null;
-      const snap = await snapshotAppData(id, "before-remove").catch((err) => {
-        logger.warn({ err, id }, "제거 전 앱 데이터 떠 두기 실패");
-        snapError = (err as Error)?.message ?? String(err);
-        return null;
-      });
-      // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
-      const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
-      //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
-      try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
-      await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
-      await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
-      await store.deleteApp(id, wctx(user, ctx));
-      return {
-        ok: true, removed: id, components: comps.length,
-        snapshot: snap?.taken_at ? { taken_at: snap.taken_at, tables: snap.tables } : null,
-        //  못 떠 뒀으면 왜인지 — 관리자가 «되돌릴 수 없는 제거였나» 를 알아야 한다.
-        ...(snap && !snap.taken_at ? { snapshot_skipped: snap.skipped ?? null } : {}),
-        ...(snapError ? { snapshot_error: snapError } : {}),
-      };
+      //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
+      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx))) };
     });
   },
 };

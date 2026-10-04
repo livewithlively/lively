@@ -37,7 +37,7 @@ try {
     `INSERT INTO org_member(id, email, state, scopes) VALUES($1,$2,'active','["context","memory"]'::jsonb)`,
     [MEMBER, "tester@example.com"],
   );
-  const seeded = await seedBuiltinApps();
+  const seeded = await seedBuiltinApps(new URL("./fixtures/apps", import.meta.url).pathname);   // #4554 — hello 는 시험 픽스처다
   assert.ok(seeded.seeded.includes("hello") || seeded.skipped.includes("hello"), "hello 앱 시드");
   ok("멤버 + hello 앱 준비");
 
