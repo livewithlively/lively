@@ -471,8 +471,10 @@ function instanceIcon(inst: SideInstance): SVGElement {
   if (inst.icon === 'inbox') return glyph('inbox', cls);
   if (inst.icon === 'link') return glyph('link', cls);
   if (inst.icon === 'archive' || inst.icon === 'trash') return glyph(inst.icon, cls);
-  const k = inst.icon === 'app' ? 'proj' : inst.icon;
-  return appIcon(k as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
+  //  'app' = 무엇인지 모르는 앱 화면(라이블리 앱). 종전엔 프로젝트 그림(폴더)으로 접었는데, 프로젝트 그림이 과녁이 된 뒤로
+  //   (#4233 원준 2026-10-04) 프로젝트가 아닌 줄이 프로젝트처럼 보였다. 「앱」 그림(사각 넷)으로 그린다.
+  if (inst.icon === 'app') return icon('apps', cls);
+  return appIcon(inst.icon as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 
 
@@ -2298,7 +2300,7 @@ function renderLegacy(): void {
       updateSlot(),
       // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
       el('div', { class: 'v2-foot-k', text: '도구' }),
-      el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
+      el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, icon('apps', 'v2-ic v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
       // [나] — 한 줄 전체가 **내 프로필 · 환경설정**을 여는 단추다(#1843, 원준 2026-08-21).
       //  종전엔 이름 옆에 [로그아웃]만 있었고 그 아래로 테마 3단·클래식 링크가 늘어서, 발치가 '내 것'을 모아 둔
       //  자리가 아니라 잡동사니 줄이 되어 있었다. 슬랙·노션·리니어가 다 그렇듯 개인 설정은 **얼굴을 눌러 여는 창**
