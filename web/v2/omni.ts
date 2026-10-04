@@ -45,7 +45,7 @@ import {
 import { isOmniChordLike, OMNI_MSG, OMNI_CLOSED_MSG, type ChordLike } from '../lib/omni-chord.js';   // #4530 여는 키 판정 · 신호 이름 한 벌
 import { projHitHref } from '../lib/proj-page.js';   // #3870 프로젝트 줄은 프로젝트 화면으로(사이드바 [→] 와 같은 문)
 
-type Kind = 'proj' | 'know' | 'src' | 'sess' | 'conv' | 'app';
+type Kind = 'proj' | 'know' | 'src' | 'sess' | 'app';
 
 interface Hit {
   kind: Kind;
@@ -75,6 +75,8 @@ interface Hit {
   /** 뜻만 비슷해서 온 줄(맨 아래 묶음 전용) · 그 점수. */
   sim?: boolean;
   score?: number;
+  /** 종류 그림 대신 쓸 그림(표의 패스) — 최근 검색은 시계. 종류(app)의 창 그림이 «왜 저 그림이냐» 였다(원준 2026-10-04). */
+  icon?: string[];
 }
 
 interface OmniHooks {
@@ -89,13 +91,12 @@ interface OmniHooks {
 
 const GROUPS: Array<{ kind: Kind; label: string }> = [
   { kind: 'sess', label: '세션' },
-  { kind: 'conv', label: '대화' },
   { kind: 'proj', label: '프로젝트' },
   { kind: 'know', label: '지식' },
   { kind: 'src', label: '자료' },
   { kind: 'app', label: '바로 가기' },
 ];
-const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', conv: '대화', app: '화면' };
+const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', app: '화면' };
 const CHIP_LABEL = (k: Kind): string => (k === 'app' ? '바로 가기' : KIND_LABEL[k]);
 // 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
 const KIND_PATH: Record<Kind, string[]> = {
@@ -103,11 +104,10 @@ const KIND_PATH: Record<Kind, string[]> = {
   know: [ICONS.wiki],
   src: [ICONS.src],
   sess: [ICONS.chat],
-  conv: [ICONS.sess],   // 말풍선 둘 — 오간 말(대화)
   app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
-const icon = (k: Kind, cls: string): SVGElement =>
-  sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...KIND_PATH[k].map((d) => sv('path', { d })));
+const icon = (k: Kind, cls: string, paths: string[] = KIND_PATH[k]): SVGElement =>
+  sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
 
 //  뜻만 비슷한 지식을 맨 아래 묶음에 세우는 문턱 — 관련도순 맨 위에 쓰던 0.48 은 무관한 것을 0.49~0.66 으로 통과시켰다
 //   (점검 실측). 이제 이 묶음은 순위에 끼지 않으므로 문턱은 «보여 줄 만한가» 만 가른다.
@@ -123,10 +123,12 @@ const holdsSettle = (pending: Set<string>): boolean => [...pending].some((s) => 
 const DEBOUNCE_MS = 160;
 
 // ── 종류 필터 — 칩 하나 = 종류 하나, 누른 것만 켜진다 (#4156) ─────────────
-//  아무것도 안 누름 = 기본 검색(세션·대화·프로젝트·지식·바로 가기). 칩을 누르면 그 종류만, 이어서 누르면 더해진다.
+//  아무것도 안 누름 = 기본 검색(세션·프로젝트·지식·바로 가기). 세션은 이름·첫 지시와 **그 안의 대화·고친 파일**까지 한 종류다 —
+//   대화를 따로 칩·배지로 나눴더니 같은 세션이 어떤 때는 «세션», 어떤 때는 «대화» 로 떠서 헷갈렸다(원준 2026-10-04: «대화도 세션 안의
+//   대화인데 굳이 나눌 필요가 있나»). 찾는 곳(셸 목록 · 서버 대화 색인)은 여전히 둘이고, 화면에서만 하나다. 칩을 누르면 그 종류만, 이어서 누르면 더해진다.
 //  자료는 기본 검색에 들어가지 않는다(결과가 많고 덜 정제돼 잡음이 된다) — 칩으로만.
 //  선택은 페이지 수명이다(창을 닫았다 열어도 유지). 켜져 있으면 안내 문구(placeholder)가 그 사실을 말한다(#4530).
-const MAIN_KINDS: Kind[] = ['sess', 'conv', 'proj', 'know', 'app'];
+const MAIN_KINDS: Kind[] = ['sess', 'proj', 'know', 'app'];
 const AUX_KINDS: Kind[] = ['src'];
 const isAux = (k: Kind): boolean => AUX_KINDS.includes(k);
 let kindSel = new Set<Kind>();
@@ -201,7 +203,8 @@ const ALL_KINDS: Kind[] = [...MAIN_KINDS, ...AUX_KINDS];
 function loadOpened(): OpenedRow[] {
   const v = readJson(OPENED_STORE());
   if (!Array.isArray(v)) return [];
-  return v.filter((x: any) => x && typeof x.key === 'string' && typeof x.href === 'string' && x.href.startsWith('#/')
+  return v.map((x: any) => (x && x.kind === 'conv' ? { ...x, kind: 'sess' } : x))   // #4530 전 저장값 — 대화는 이제 세션이다
+    .filter((x: any) => x && typeof x.key === 'string' && typeof x.href === 'string' && x.href.startsWith('#/')
     && typeof x.title === 'string' && ALL_KINDS.includes(x.kind)).slice(0, 8) as OpenedRow[];
 }
 function rememberOpened(h: Hit): void {
@@ -291,7 +294,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     }
     input.placeholder = kindSel.size
       ? [...kindSel].map(CHIP_LABEL).join(' · ') + '에서 찾습니다 (칩을 다시 누르면 풀립니다)'
-      : '세션 · 대화 · 프로젝트 · 지식 · 화면에서 찾기';
+      : '세션(대화 내용 포함) · 프로젝트 · 지식 · 화면에서 찾기';
   }
   // ── 정렬 · 기간 (#4517) ──
   const sortBtns = (['recent', 'rel'] as OmniSort[]).map((m) => el('button', {
@@ -411,7 +414,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
           onmousemove: (e: MouseEvent) => { if ((e.movementX || e.movementY) && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); } },
           onclick: (e: MouseEvent) => go(i, e.metaKey || e.ctrlKey || e.altKey),
         },
-          el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic')),
+          el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic', h.icon)),
           el('span', { class: 'v2-omni-tt' },
             el('span', { class: 'v2-omni-tl' },
               h.head ? el('span', { class: 'v2-omni-head', text: h.head }) : null,
@@ -467,7 +470,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   function paintEmpty(draw: (label: string, rows: Hit[]) => void): void {
     const qs = loadQueries();
     if (qs.length && !kindSel.size) {
-      draw('최근 검색', qs.map((q): Hit => ({ kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', run: () => { input.value = q; run(true); } })));
+      draw('최근 검색', qs.map((q): Hit => ({ kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', icon: [ICONS.clock], run: () => { input.value = q; run(true); } })));
     }
     draw('최근 연 것', loadOpened().filter((o) => kindOn(o.kind)).slice(0, 5).map((o): Hit => ({ kind: o.kind, key: o.key, title: o.title, sub: '', href: o.href, at: o.at })));
     if (kindOn('sess')) draw('내 최근 세션', recentSessions().slice(0, 6));
@@ -540,7 +543,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         if (prev) {
           //  같은 항목이 다른 채널에서 또 오면 빈 칸만 채운다(셸 목록 사본엔 시각·상태가 없을 수 있다).
           //  세션이 이름으로도 대화로도 맞았으면 **왜 맞았는지**(대표 말·고친 파일)를 대화 쪽에서 가져온다.
-          if (h.kind === 'conv' && prev.kind === 'sess') {
+          if (src === 'conv' && prev.kind === 'sess') {
             prev.role = h.role; prev.hits = h.hits; prev.edit = h.edit; prev.serverTop = h.serverTop;
             if (h.sub) prev.sub = h.sub;
             if ((h.at || 0) > (prev.at || 0)) prev.at = h.at;
@@ -684,7 +687,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const face = s ? sessText(s, projName(d, s.projectId)) : null;
     const best = (r && r.best) || null;
     return {
-      kind: 'conv', key: s ? 's:' + s.id : 'c:' + node + ':' + sid,
+      kind: 'sess', key: s ? 's:' + s.id : 'c:' + node + ':' + sid,
       title: (face && (face.main || face.sub)) || String(r.name || r.title || '이름 없는 세션'),
       sub: best ? cleanSnippet(String(best.text || ''), 160) : '',
       href: s ? '#/s/' + encodeURIComponent(s.id) : '#/sessions/' + encodeURIComponent(sid) + (node ? '?node=' + encodeURIComponent(node) : ''),
@@ -728,7 +731,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const lim = (n: number): string => String(Math.min(50, n * moreFactor));
     const full = (src: string, n: number, rows: unknown[]): void => { if (rows.length >= Math.min(50, n * moreFactor)) fullSrc.add(src); };
     const qs = encodeURIComponent(q);
-    call('conv', 'conv', () => {
+    call('conv', 'sess', () => {
       if (q.length > 200) { convNoteText = '검색어가 길어(200자 넘음) 대화에서는 찾지 않았습니다.'; window.setTimeout(() => put('conv', [], my)); return; }
       const p = new URLSearchParams({ q, sort: sortMode === 'rel' ? 'relevance' : 'recent', limit: lim(20) });
       if (sinceMs) p.set('since', new Date(sinceMs).toISOString());
