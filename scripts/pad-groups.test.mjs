@@ -7,6 +7,7 @@
 //   B1~B5  Enter 로 열릴 칸: 가장 잘 맞은 칸 · 동점은 앞 칸 · 아래 묶음의 이름 일치가 위 묶음의 설명 일치를 이긴다 · 빈 목록 -1
 //   D1~D5  대시보드 줄: 이름 · 묶음 · 옛 이름 검색 · 표의 맨 끝 · 키와 주소는 그대로
 //   W1~W4  배선: 묶음 제목 둘 · 화면이 같은 잣대를 쓴다 · 표시와 Enter 가 같은 칸 · 가이드 문서
+//   K1~K3  배지는 「세션 앱」에만 · 가이드에서 「안녕 앱」과 「앱」 표시를 뺐다
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,6 +80,16 @@ check(/padGroupOfInstalled\(a\.source\.kind\)/.test(body) && /padBestIndex\(/.te
   const b = docs.indexOf("{#builtin}"), w = docs.indexOf("## 워크스페이스 앱 {#workspace}");
   check(b >= 0 && w > b && !/\|\s*(홈\(클래식\)|대시보드)\s*\|/.test(docs.slice(b, w)) && /\|\s*대시보드\s*\|/.test(docs.slice(w)),
     "W4 가이드: 대시보드는 「기본으로 들어 있는 앱」 표가 아니라 「워크스페이스 앱」 절에 있다");
+}
+
+// ───────────────────────── K. 배지 · 은퇴한 예시 앱 (원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘. 안녕앱은 그냥 지워버려줘")
+{
+  const badges = [...body.matchAll(/class: 'v2-pad-badge', text: ([^}]*)\}/g)].map((m) => m[1].trim());
+  check(badges.length === 1 && badges[0] === "'세션 앱'", "K1 앱 찾기의 배지 글은 「세션 앱」 하나뿐이다(「앱」 배지 없음)", JSON.stringify(badges));
+  check(/isScreen \? null : el\('span', \{ class: 'v2-pad-badge'/.test(body), "K2 화면이 뜨는 앱에는 배지를 달지 않는다");
+  const docs = read("web/docs-content.ts");
+  check(!docs.includes("안녕 앱") && /\|\s*표시 없음\s*\|/.test(docs) && !/\n\| 앱 \| 그 앱의 화면이 열립니다/.test(docs),
+    "K3 가이드: 「안녕 앱」 언급이 없고, 표시 표가 「표시 없음 · 세션 앱」 이다");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

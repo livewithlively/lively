@@ -12,11 +12,32 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
-import { getApp } from "../org/store/apps.js";
+import { getApp, withAppInstallLock } from "../org/store/apps.js";
 import { loadAppPackage } from "./loader.js";
 import { installLoadedApp, persistUiAssets, persistRuntimeAsset } from "./install-run.js";
+import { removeInstalledApp } from "./remove-run.js";
+import { isBuiltinSource } from "./store-ddl.js";
 
-export interface SeedBuiltinAppsResult { seeded: string[]; skipped: string[]; updated: string[] }
+export interface SeedBuiltinAppsResult { seeded: string[]; skipped: string[]; updated: string[]; retired: string[] }
+
+// 은퇴한 빌트인 앱(#4554) — 패키지를 제품에서 뺀 앱. 패키지 폴더를 지우는 것만으로는 이미 설치된 워크스페이스에 그대로 남는다
+//  (시더는 있는 폴더만 돌고, 제거 verb 는 builtin 을 막는다). 그래서 뺀 앱은 여기 적고 시더가 회수한다.
+//   · hello(「안녕 앱」) — 앱이 어떻게 도는지 보여 주던 예시 앱(원준 2026-10-04 "안녕앱은 그냥 지워버려줘").
+//  ⚠ «폴더에 없는 builtin 은 전부 회수» 로 일반화하지 않는다 — 폴더가 통째로 빠진 배포(seed-shipped.test.ts 가 막는 사고)에서
+//   빌트인 앱 전부를 지우게 된다. 지울 앱은 이름으로 적는다.
+export const RETIRED_BUILTIN_APPS: readonly string[] = ["hello"];
+
+/**
+ * 은퇴한 빌트인 앱을 회수할지 — 순수 판정.
+ *  · 은퇴 목록에 없으면 안 지운다.
+ *  · 이번에 읽은 패키지 폴더에 **아직 있으면** 안 지운다(되살린 앱 · 시험 픽스처를 방금 심고 곧바로 지우지 않는다).
+ *  · 설치돼 있지 않으면 지울 것이 없다.
+ *  · 설치된 것이 builtin 이 아니면 안 지운다 — 워크스페이스가 같은 id 로 직접 만든 앱은 그 워크스페이스의 것이다.
+ */
+export function shouldRetireBuiltin(id: string, present: ReadonlySet<string>, existing: { source?: unknown } | null | undefined,
+  retired: readonly string[] = RETIRED_BUILTIN_APPS): boolean {
+  return retired.includes(id) && !present.has(id) && !!existing && isBuiltinSource(existing.source);
+}
 
 // apps/builtin 의 절대 경로 — 모듈 기준(cwd 무관: blue/green 심링크·다른 cwd 에서도 자기 레포의 파일을 읽는다).
 function builtinAppsRoot(): string {
@@ -24,15 +45,16 @@ function builtinAppsRoot(): string {
 }
 
 /**
- * apps/builtin/<id> 를 열거해 각 앱을 설치/갱신한다.
+ * apps/builtin/<id> 를 열거해 각 앱을 설치/갱신하고, 은퇴한 빌트인 앱을 회수한다.
  *  - existing 없음        → runInstall(신규 설치).                            → seeded
  *  - content_hash 동일 & status=active → 아무것도 안 함.                       → skipped
  *  - 그 외(변경·이전 실패) → 새 계획으로 runInstall(멱등 재전개) + drop 회수.  → updated
- * 멱등: 변경 없는 앱은 다음 호출부터 전부 skipped.
+ *  - 은퇴 목록(RETIRED_BUILTIN_APPS)의 앱이 builtin 으로 남아 있음 → 회수.  → retired
+ * 멱등: 변경 없는 앱은 다음 호출부터 전부 skipped, 회수한 앱은 다음 호출부터 없다.
+ * @param root 패키지 폴더(기본 = 이 레포의 apps/builtin). 시험이 픽스처 폴더를 심을 때만 준다.
  */
-export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
-  const res: SeedBuiltinAppsResult = { seeded: [], skipped: [], updated: [] };
-  const root = builtinAppsRoot();
+export async function seedBuiltinApps(root: string = builtinAppsRoot()): Promise<SeedBuiltinAppsResult> {
+  const res: SeedBuiltinAppsResult = { seeded: [], skipped: [], updated: [], retired: [] };
 
   let dirents: string[];
   try {
@@ -42,6 +64,7 @@ export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
   }
 
   const ctx: WriteCtx = { actor: "system", source: "migration" };
+  const present = new Set<string>();   // 이번에 읽은 패키지의 앱 id — 은퇴 판정이 «아직 있는 앱» 을 건드리지 않게 한다
 
   for (const name of dirents) {
     const dir = path.join(root, name);
@@ -54,6 +77,7 @@ export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
     }
 
     const id = loaded.manifest.id;
+    present.add(id);
     const existing = await getApp(id);
     if (existing && existing.content_hash === loaded.contentHash && existing.status === "active") {
       // 패키지는 안 바뀌었지만 UI 자산은 뒤늦게 도입됐다(PR5) — 없으면 백필(멱등, 기존 설치 앱 마이그레이션).
@@ -70,6 +94,21 @@ export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
     } catch (err) {
       // runInstall 은 실패 시 저널 status=failed 를 남기고 보상한다 — 부팅 스위퍼가 잔재를 회수한다. 다음 시딩이 재시도.
       logger.warn({ err, id }, "빌트인 앱 설치 실패(비치명 — 다음 시딩이 재시도)");
+    }
+  }
+
+  // 은퇴한 빌트인 앱 회수(#4554) — 제거 verb 와 같은 코어(전개물 회수 → 데이터 떠 두기 → 앱 행). 실패는 비치명(다음 시딩이 재시도).
+  for (const id of RETIRED_BUILTIN_APPS) {
+    try {
+      const done = await withAppInstallLock(id, async () => {
+        const existing = await getApp(id);   // 락 안에서 다시 읽는다 — 그새 다른 경로가 지웠거나 다시 깔았을 수 있다
+        if (!existing || !shouldRetireBuiltin(id, present, existing)) return false;
+        await removeInstalledApp(existing, ctx);
+        return true;
+      });
+      if (done) res.retired.push(id);
+    } catch (err) {
+      logger.warn({ err, id }, "은퇴한 빌트인 앱 회수 실패(비치명 — 다음 시딩이 재시도)");
     }
   }
 
