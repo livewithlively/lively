@@ -49,7 +49,8 @@ t("U6 ★ 스킴 없는 링크(실측: TUI 가 developer.apple.com/… 로 찍�
 });
 t("U7 스킴 없는 형태의 오탐 경계 — 경로 없는 점-이름·파일 경로는 링크가 아니다", () => {
   assert.equal(urlAtColumn("package.json 을 여세요", 4), null, "경로(/) 없는 점-이름");
-  assert.equal(urlAtColumn("src/foo.ts 수정", 4), null, "일반 파일 경로(호스트 형태 아님)");
+  //  일반 파일 경로는 URL 이 아니다(https:// 를 붙이지 않는다) — #4562 부터는 **경로 링크**로 잡혀 곁칸 뷰어로 간다(terminal-path-link.test).
+  assert.equal(urlAtColumn("src/foo.ts 수정", 4), "src/foo.ts", "일반 파일 경로(호스트 형태 아님) = URL 아닌 경로 그대로");
   assert.equal(urlAtColumn("버전 1.2.3/4 확인", 4), null, "숫자.숫자/… 는 TLD 가 아니다");
 });
 t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {

@@ -52,6 +52,7 @@ import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
+import { isAbs, pathOpenPlan, slash } from '../lib/path-open.js';
 import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
@@ -382,8 +383,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const sessRow = (sid: string): Sess | null => opts.data().sessions.find((x) => x.id === sid) ?? null;
   /** 세션 폴더 기준 상대경로. 그 밖(다른 폴더의 절대경로)이면 null — 열 수 없는 것에 버튼을 달지 않기 위해서다. */
   /** 경로 구분자 무관 정규화 — 노드가 윈도우면 `C:\Users\…\project\3966` 처럼 온다(src/terminal/node-upload-coord.ts 와 같은 규칙). */
-  const slash = (p: string): string => String(p ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
-  const isAbs = (p: string): boolean => p.startsWith('/') || /^[A-Za-z]:\//.test(p);
+  //  (slash · isAbs 는 lib/path-open 의 것 — 터미널 경로 열기와 한 벌이다.)
   /** 세션 작업 폴더. ⚠ 목록 행(Sess)은 dir 을 안 옮겨 싣는다(views.ts mergeSessions) — 서버가 준 원본(raw)에만 있다.
    *  종전엔 `row.dir` 을 읽어 **늘 빈 문자열**이었고, 도구가 준 절대경로가 전부 «세션 폴더 밖» 으로 떨어졌다(2026-09-23 실측). */
   const sessDir = (sid: string): string => slash(String(sessRow(sid)?.raw?.dir ?? ''));
@@ -969,9 +969,35 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     for (const f of scope.querySelectorAll('iframe')) if ((f as HTMLIFrameElement).contentWindow === w) return true;
     return false;
   };
+  // 터미널 속 **파일 경로**를 눌렀다(#4562 원준 10-04 «경로 클릭하면 … 곁칸에서 자료랑 그거 보는 뷰어 바로») — 곁칸에
+  //  [자료] 탭을 세우고(이미 있으면 그대로) 그 파일을 뷰어 탭으로 편다. 경로 판정은 터미널이 해서 보낸다(terminal.ts pathLinkTarget).
+  //  · 그 세션의 작업 폴더 안(상대 경로 · 세션 폴더 밑의 절대 경로)이면 **산출물과 같은 길**(openOut) — 노드 세션은 노드의 파일을
+  //    직접 읽고(게이트웨이 사본은 Stop 훅이 밀 때까지 늦다), 프로젝트 세션이면 프로젝트 자료로 연다(고치기·기억이 산다).
+  //  · 그 밖의 `project/<번호>/` 경로는 **이 곁칸의 프로젝트**일 때만 프로젝트 자료로. 남의 프로젝트 번호면 이 뷰어는 그 자료를
+  //    못 읽는다(ctx.id 로 읽는다) → 못 연다고 답하고, 터미널이 공유 폴더 뷰어(#/f)로 연다.
+  //  ⚠ 열 수 있나는 **곧바로** 정하고 할 일은 미뤄서 돌려준다 — 답(ack)을 일보다 먼저 보내야 한다. 칸을 세우는 일이 터미널의
+  //   기다림(400ms)보다 길어지면 터미널이 새 탭을 한 번 더 연다(리뷰 지적).
+  //  어디서 열지는 lib/path-open 한 곳(순수 — 시험 대상)이 정한다. 경로는 터미널이 걸렀어도 거기서 다시 거른다.
+  function planPathOpen(d: any): (() => void) | null {
+    const plan = pathOpenPlan(d || {}, { projectId: id, loose, sessDir: (sid) => (sessRow(sid) ? sessDir(sid) : null) });
+    if (!plan) return null;
+    const ensureFiles = (): void => {
+      const type: PartType = loose ? 'sessfiles' : 'files';
+      if (!findTab(type)) addPart(showZone('side', { bottomOn: lay.bottomOn, narrow: narrow() }), type);
+    };
+    if (plan.via === 'session') return () => { ensureFiles(); openOut(plan.sid, { kind: 'file', label: plan.rel.split('/').pop() || plan.rel, ext: '', path: plan.rel }); };
+    return () => { ensureFiles(); openViewerAt({ path: plan.rel }); };
+  }
   const onMsg = (e: MessageEvent): void => {
     if (e.origin !== location.origin) return;
     const d: any = e.data;
+    if (d && d.type === 'lively:open-file-in-pane' && typeof d.path === 'string') {
+      if (!ownsFrame(e.source)) return;         // 남의 탭 터미널 — 그 탭의 곁칸이 받는다
+      const run = planPathOpen(d);
+      try { (e.source as Window | null)?.postMessage({ type: 'lively:open-file-in-pane:ok', path: d.path, handled: !!run }, e.origin); } catch (_) { /* 이미 닫힘 */ }
+      if (run) window.setTimeout(run, 0);   // 답을 먼저 — 위 머리말
+      return;
+    }
     if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string') return;
     if (!ownsFrame(e.source)) return;           // 남의 탭 터미널이 보낸 것 — 그 탭의 곁칸이 받는다
     // 남의 사이트(claude.ai 아티팩트 등)는 **앱에서만** 칸에 들어간다 — 브라우저 iframe 은 상대가 막는다
