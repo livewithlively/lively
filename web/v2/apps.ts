@@ -65,7 +65,8 @@ export const APPS: AppDef[] = [
   { key: 'taxonomy', title: '분류체계', desc: '분류와 묶음 · 분류마다 붙은 지식과 프로젝트 · 정의 고치기', route: 'taxonomy', tab: null, icon: 'tags', kind: 'native' },
   //  #4233(원준 2026-09-27). 이름을 「맥락 관리」에서 바꿨다. 옛 이름은 검색어(aka)로만 남아 앱 찾기 · 통합검색이 옛 이름으로도 찾는다.
   { key: 'context', title: CTX_APP_NAME, desc: '여러 원천에서 맥락이 수집되고 증류되는 것을 실시간으로 보고 설정합니다', route: 'context', tab: 'context', icon: 'ctx', aka: CTX_OLD_NAMES },
-  { key: 'sessions', title: '세션 이력', desc: '중앙에 기록된 내 세션 대화 이어보기', route: 'sessions', tab: 'terminal', icon: 'sess' },
+  //  세션 이력(#4553, 원준 2026-10-04). 한 장짜리 목록이던 것을 가로탭 셋으로 갈랐다(web/sessions-app.ts).
+  { key: 'sessions', title: '세션 이력', desc: '지난 대화에서 말 찾기 · 한 일 일지 · 세션 목록', route: 'sessions', tab: 'terminal', icon: 'sess', aka: ['대화 찾기', '작업 일지', '대화 기록'] },
   // 설정 — 앱 목록에서 **뺐다**(#2199, 원준 2026-08-27 "앱에 설정을 없애고 … 모달 사이드바에 고급설정 하나 만들어서").
   //  설정은 할 일이 있는 화면이 아니라 환경을 손보는 자리라, 문은 [나] 창 ▸ [고급 설정] 하나다(같은 문이 둘이면 어느 쪽이
   //  진짜인지 화면이 말하지 못한다). 줄은 남긴다 — 위 hidden 주석.

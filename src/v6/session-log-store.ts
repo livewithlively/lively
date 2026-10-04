@@ -394,7 +394,8 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
 //  ⚠ 왕복을 행 수에 비례시키지 않는다 — 대화 uuid 배열 하나로 한 번만 묻는다(#2234 의 교훈).
 //  ⚠ **owner 로 잠근다** — 목록과 같은 소유자의 행만 본다(대화 uuid 가 겹쳐도 남의 이름이 실리지 않게).
 //  ⚠ rule·id 출처는 일부러 무시한다 — 그건 이 목록이 title 에서 이미 같은 규칙으로 만들어 내는 값이다.
-async function withNamedLabels(rows: SessionListRow[], owner: string): Promise<SessionListRow[]> {
+//  작업 일지(session-journal-store.ts)도 같은 한 벌을 쓴다(#4553) — 목록과 일지에서 같은 세션의 이름이 갈리지 않게.
+export async function withNamedLabels<T extends { session_id: string; name: string | null }>(rows: T[], owner: string): Promise<T[]> {
   const ids = [...new Set(rows.map((r) => r.session_id).filter(Boolean))];
   if (!ids.length) return rows;
   try {

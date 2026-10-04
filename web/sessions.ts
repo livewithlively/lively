@@ -1,7 +1,12 @@
-// sessions.ts — 세션이력 웹뷰(#905 C1 슬⑤b). `#/sessions`(내 세션 목록) · `#/sessions/<sid>[?node=&q=&ln=]`(대화록·공유).
+// sessions.ts — 세션이력 웹뷰(#905 C1 슬⑤b)의 **대화록**과 세션 기록 줄. `#/sessions/<sid>[?node=&q=&ln=]`(대화록·공유).
 //  설계(사용자 요청): 스키밍 — 질문·답변 모두 10줄 하드 캡(더보기)·질문 사이드바 네비·마크다운 렌더·질문/줄 단위 링크.
 //  ⚠ 트랜스크립트 본문은 신뢰 불가 → el({text})(textContent) 또는 renderMarkdown(core, textContent 기반)로만 렌더(innerHTML 금지, XSS 방어).
+//  #4553(원준 2026-10-04) — 목록면(#/sessions)은 가로탭 셋(대화 찾기 · 작업 일지 · 세션 목록)인 앱이 됐다(sessions-app.ts).
+//   이 파일은 그 탭들이 함께 쓰는 대화록(mountTranscript)과, 프로젝트·터미널 화면의 「세션 기록」 모달이 쓰는 줄 목록을 쥔다.
 import { api, el, state, toast, renderMarkdown } from './core.js';
+import { hitAnchor, markRanges, type HitRef } from './session-history.js';
+import { requestOpenRoute } from './v2/ctx-registry.js';
+import { EMBEDDED } from './v2/embed.js';
 // #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
 import { confirmSessionTrash, eulReul, sessionTrashOp } from './session-actions.js';
 
@@ -33,33 +38,13 @@ const shortId = (sid: string): string => sid.length > 12 ? sid.slice(0, 8) + '�
 const meId = (): string => String((state.me && (state.me.userId || state.me.email)) || '');
 
 // #/sessions/<sid>[?node=&q=&ln=] 파싱 — 없으면(=목록) null. q=질문(턴) 앵커, ln=줄/블록 앵커.
-function parseSel(): { sid: string; node: string; q: string; ln: string } | null {
+export function parseSel(): { sid: string; node: string; q: string; ln: string } | null {
   const h = location.hash.replace(/^#\/?/, '');
   const path = h.split('?')[0];
   const segs = path.split('/').filter(Boolean);
   if (segs[0] !== 'sessions' || !segs[1]) return null;
   const params = new URLSearchParams(h.includes('?') ? h.slice(h.indexOf('?') + 1) : '');
   return { sid: decodeURIComponent(segs[1]), node: params.get('node') || '', q: params.get('q') || '', ln: params.get('ln') || '' };
-}
-
-export async function renderSessions(view: any): Promise<void> {
-  const sel = parseSel();
-  if (sel) return renderTranscriptPage(view, sel);
-  return renderList(view);
-}
-
-// ── 목록면(#/sessions) ──
-async function renderList(view: any): Promise<void> {
-  const listEl = el('div', { class: 'admin-hint', text: '불러오는 중…' });
-  view.replaceChildren(el('div', { class: 'card', style: 'max-width:940px;margin:24px auto' },
-    el('div', { class: 'card-head' }, el('h2', { text: '세션 이력' })),
-    el('p', { class: 'guide-lead', text: '어느 환경/멤버 노드에서 만들었든 중앙에 기록된 내 세션들. 클릭하면 대화를 이어봅니다.' }),
-    listEl));
-  let data: any;
-  try { data = await api('/api/ui/v6/sessions'); }
-  catch (e: any) { listEl.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '목록을 불러오지 못했습니다.' })); return; }
-  const sessions: SessRow[] = Array.isArray(data?.sessions) ? data.sessions : [];
-  renderSessionListInto(listEl, sessions, '중앙에 기록된 세션이 없습니다. (관리 ▸ 세션 공유를 켜고 `lively backfill` 로 기존 기록을 올리세요.)');
 }
 
 // 세션 목록을 컨테이너에 렌더 — 페이지네이션 + 빈 세션(0바이트) 방어적 제외. onGo: 행 진입 시 콜백(모달 닫기 등).
@@ -180,44 +165,122 @@ async function copyLink(url: string): Promise<void> {
   catch { window.prompt('이 링크를 복사하세요:', url); }
 }
 // 앵커(줄/블록·질문)로 스크롤 + 잠깐 하이라이트. 접힌 답변 안이면 먼저 펼친다.
-function gotoAnchor(sel: { q: string; ln: string }): void {
-  let target: HTMLElement | null = null;
-  if (sel.ln) target = document.getElementById('ln-' + sel.ln);
-  else if (sel.q) target = document.getElementById('turn-' + sel.q);
-  if (!target) return;
+//  ⚠ 찾기는 **이 대화록이 실린 자리(host) 안에서만** 한다 — 세션 이력 앱은 탭마다 대화록을 따로 싣는다(#4553). 문서 전체에서
+//   id 로 찾으면 감춰 둔 다른 탭의 같은 번호(turn-0 …)에 걸린다.
+const byId = (host: HTMLElement, id: string): HTMLElement | null => {
+  try { return host.querySelector('#' + CSS.escape(id)) as HTMLElement | null; } catch { return null; }
+};
+/** 다음 그리기 뒤에 한다. 그리기가 돌지 않는 자리(뒤에 가려진 탭 · 헤드리스)에서는 requestAnimationFrame 이 영영 안 불린다 —
+ *  그러면 접기 확정도, 그 자리로 가기도 안 일어난다. 그래서 짧은 타이머로도 건다(먼저 온 쪽이 한 번만 한다). */
+function afterPaint(fn: () => void): void {
+  let done = false;
+  const run = (): void => { if (done) return; done = true; fn(); };
+  requestAnimationFrame(run);
+  setTimeout(run, 120);
+}
+function reveal(target: HTMLElement): void {
   const body = target.closest('.sess-body') as HTMLElement | null;   // 접힌 답변 속이면 펼치기
   if (body && body.classList.contains('clamp')) { const more = body.parentElement?.querySelector('.sess-more') as HTMLButtonElement | null; if (more) more.click(); }
-  requestAnimationFrame(() => {
-    target!.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    target!.classList.add('sess-flash');
-    setTimeout(() => target!.classList.remove('sess-flash'), 2600);
+  afterPaint(() => {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('sess-flash');
+    setTimeout(() => target.classList.remove('sess-flash'), 2600);
   });
 }
+function gotoAnchor(host: HTMLElement, sel: { q: string; ln: string }): void {
+  let target: HTMLElement | null = null;
+  if (sel.ln) target = byId(host, 'ln-' + sel.ln);
+  if (!target && sel.q) target = byId(host, 'turn-' + sel.q);
+  if (target) reveal(target);
+}
 
-async function renderTranscriptPage(view: any, sel: { sid: string; node: string; q: string; ln: string }): Promise<void> {
+// ── 낱말 색칠 + 이 대화 안에서 찾기(#4553 「대화 찾기」) ──
+//  색칠은 **글 노드만** 만진다(innerHTML 금지 — 대화록 본문은 신뢰할 수 없다). 코드 블록·표 안의 글도 글 노드라 함께 칠해진다.
+function paintWords(root: HTMLElement, words: string[]): HTMLElement[] {
+  if (!words.length) return [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n as Text;
+    if (!t.data.trim() || (t.parentElement && t.parentElement.closest('.sess-line-copy'))) continue;
+    texts.push(t);
+  }
+  const lines = new Set<HTMLElement>();
+  for (const t of texts) {
+    const ranges = markRanges(t.data, words);
+    if (!ranges.length) continue;
+    const frag = document.createDocumentFragment();
+    let at = 0;
+    for (const [s, e] of ranges) {
+      if (s > at) frag.append(t.data.slice(at, s));
+      frag.append(el('mark', { class: 'sess-hl', text: t.data.slice(s, e) }));
+      at = e;
+    }
+    if (at < t.data.length) frag.append(t.data.slice(at));
+    const line = t.parentElement ? (t.parentElement.closest('.sess-line') as HTMLElement | null) : null;
+    t.replaceWith(frag);
+    if (line) lines.add(line);
+  }
+  //  문서 순서로 — Set 은 넣은 순서인데 글 노드를 문서 순서로 돌았으므로 이미 그렇다.
+  return [...lines];
+}
+
+export interface TranscriptOpts {
+  /** 세션 이력 앱의 칸 안에 실린 판 — 「← 뒤로」가 없고 칸을 채운다. */
+  embedded?: boolean;
+  /** 색칠할 낱말(「대화 찾기」의 검색어). 있으면 이 대화 안의 맞은 자리를 오가는 줄이 선다. */
+  words?: string[];
+  /** 이 말의 자리로 간다(「대화 찾기」에서 고른 맞은 말). */
+  hit?: HitRef | null;
+  /** 목록이 아는 세션 이름 — 없으면 첫 질문으로 짓는다. */
+  name?: string;
+  /** 휴지통으로 보낸 뒤 할 일 — 없으면 목록(#/sessions)으로 간다. */
+  onTrashed?: () => void;
+  /** 대화록 아래에 덧붙일 칸(「이 세션이 남긴 것」). */
+  footer?: () => HTMLElement | null;
+  /** 「이어 질문하기」를 달지 않는다 — 세션으로 가는 문을 부르는 쪽이 따로 세운 자리(세션 목록 탭: 박스가 있으면 [세션 열기],
+   *  기록만 남았으면 [이어 질문하기] 하나). 박스가 도는 대화를 기록으로 하나 더 열면 같은 대화가 둘이 된다. */
+  noResume?: boolean;
+}
+
+/** 이어 질문하기 — 원본 박스에서 이 세션을 잇는다(원격·불가면 같은 프로젝트 새 세션 폴백). 만든 세션으로 간다. */
+export async function resumeSessionRecord(sid: string, node: string, btn?: HTMLButtonElement): Promise<void> {
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
+  try {
+    const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
+    if (r?.mode === 'resume') toast('이어서 대화할 세션을 열었습니다.');
+    else toast(r?.reason || '같은 프로젝트에 새 세션을 만들었습니다.');
+    //  셸 안(액자)이면 만든 세션 화면으로 간다 — 액자 안 주소를 바꾸면 세션 이력 앱 자리에 다른 화면이 그려진다(#3870 과 같은 자리).
+    const newId = r?.session?.id ? String(r.session.id) : '';
+    if (EMBEDDED && newId) requestOpenRoute('#/s/' + encodeURIComponent(newId), true);
+    else location.hash = r?.projectId ? '#/projects2/p/' + r.projectId : '#/terminal';
+  } catch (e: any) { toast(e?.message || '이어받기 세션을 만들지 못했습니다.'); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; } }
+}
+
+export async function renderTranscriptPage(view: any, sel: { sid: string; node: string; q: string; ln: string }): Promise<void> {
+  return mountTranscript(view, sel, {});
+}
+
+/** 대화록을 host 에 싣는다 — 단독 페이지(#/sessions/<sid>)와 세션 이력 앱의 칸(embedded)이 같은 한 벌을 쓴다. */
+export async function mountTranscript(host: HTMLElement, sel: { sid: string; node: string; q: string; ln: string }, opts: TranscriptOpts = {}): Promise<void> {
   const { sid, node } = sel;
   const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
   copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
-  // 이어 질문하기 — 원본 박스에서 이 세션을 claude --resume 로 잇는다(원격/불가면 같은 프로젝트 새 세션 폴백).
   const resumeBtn = el('button', { class: 'btn btn-primary btn-sm', text: '💬 이어 질문하기' }) as HTMLButtonElement;
-  resumeBtn.addEventListener('click', async () => {
-    const orig = resumeBtn.textContent; resumeBtn.disabled = true; resumeBtn.textContent = '여는 중…';
-    try {
-      const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
-      if (r?.mode === 'resume') toast('원본 박스에 이어보기 세션을 만들었습니다 — 터미널에서 이어서 대화하세요.');
-      else toast(r?.reason || '같은 프로젝트에 새 세션을 만들었습니다.');
-      location.hash = r?.projectId ? '#/projects2/p/' + r.projectId : '#/terminal';
-    } catch (e: any) { toast(e?.message || '이어받기 세션을 만들지 못했습니다.'); resumeBtn.disabled = false; resumeBtn.textContent = orig || '💬 이어 질문하기'; }
-  });
+  resumeBtn.addEventListener('click', () => { void resumeSessionRecord(sid, node, resumeBtn); });
   let returnTo = '#/sessions';
   try { returnTo = sessionStorage.getItem('sessReturn') || '#/sessions'; } catch { /* */ }
-  const back = el('a', { class: 'btn btn-ghost btn-sm', href: returnTo, text: '← 뒤로' });
+  const back = opts.embedded ? null : el('a', { class: 'btn btn-ghost btn-sm', href: returnTo, text: '← 뒤로' });
+  const acts = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, ...(opts.noResume ? [] : [resumeBtn]), copyBtn, ...(back ? [back] : []));
+  const titleEl = el('h2', { class: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: opts.name || '세션 ' + shortId(sid) });
+  const findSlot = el('div', { class: 'sess-find', hidden: true });
   const sideSlot = el('nav', { class: 'sess-side' });
   const convo = el('div', { class: 'sess-main', style: 'min-width:0' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-  view.replaceChildren(el('div', { class: 'card', style: 'max-width:1160px;margin:20px auto' },
-    el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' },
-      el('h2', { id: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: '세션 ' + shortId(sid) }),
-      el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, resumeBtn, copyBtn, back)),
+  host.replaceChildren(el('div', { class: opts.embedded ? 'sess-embed' : 'card', style: opts.embedded ? '' : 'max-width:1160px;margin:20px auto' },
+    el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, titleEl, acts),
+    findSlot,
     el('div', { class: 'sess-layout', style: 'display:flex;gap:20px;align-items:flex-start;margin-top:8px' }, sideSlot, convo)));
 
   const qy = new URLSearchParams({ node, view: 'render' }).toString();
@@ -230,20 +293,21 @@ async function renderTranscriptPage(view: any, sel: { sid: string; node: string;
   if (data?.isOwner) {
     const trashBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '휴지통으로' }) as HTMLButtonElement;
     trashBtn.addEventListener('click', async () => {
-      const name = document.getElementById('sess-title')?.textContent || shortId(sid);
+      const name = titleEl.textContent || shortId(sid);
       if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
       trashBtn.disabled = true;
       try {
         const r = await sessionTrashOp('trash', [sid]);
         if (!r.done.length) { toast(r.skipped[0]?.why || '휴지통으로 보내지 못했습니다.'); trashBtn.disabled = false; return; }
         toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
-        location.hash = '#/sessions';   // 휴지통으로 간 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다.
+        //  휴지통으로 간 대화록에 머물러 있으면 화면이 사실과 어긋난다 — 목록으로 돌아간다(칸 안이면 그 탭이 줄을 걷는다).
+        if (opts.onTrashed) opts.onTrashed(); else location.hash = '#/sessions';
       } catch (e: any) {
         toast(e?.message || '휴지통으로 보내지 못했습니다.');
         trashBtn.disabled = false;
       }
     });
-    copyBtn.parentElement?.insertBefore(trashBtn, back);
+    acts.insertBefore(trashBtn, back);
   }
   if (!items.length) { convo.replaceChildren(el('p', { class: 'admin-hint', text: '표시할 대화가 없습니다.' })); return; }
 
@@ -252,10 +316,46 @@ async function renderTranscriptPage(view: any, sel: { sid: string; node: string;
   //  이어지는 다른 질문이 있다는 뜻(=취소하고 다시 보냄). 마지막 턴·선행 AI(user=null)·답변 있는 턴은 유지.
   const turns = grouped.filter((t, i) => i === grouped.length - 1 || !t.user || t.ai.some((x) => x.role === 'assistant' && !!x.text));
   const firstQ = turns.find((t) => t.user)?.user?.text;
-  if (firstQ) { const h = document.getElementById('sess-title'); if (h) h.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ; }
-  sideSlot.replaceChildren(sidebar(turns, sid, node));
+  if (firstQ && !opts.name) titleEl.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ;
+  sideSlot.replaceChildren(sidebar(turns, sid, node, convo));
   convo.replaceChildren(...turns.map((t, i) => turnEl(t, i, sid, node)));
-  requestAnimationFrame(() => { finalizeCaps(convo); if (sel.q || sel.ln) setTimeout(() => gotoAnchor(sel), 60); });
+  const foot = opts.footer ? opts.footer() : null;
+  if (foot) convo.append(foot);
+
+  //  낱말 색칠 · 이 대화 안에서 찾기 — 고른 맞은 말의 자리(시각으로 찾는다)에서 시작한다.
+  const words = (opts.words || []).filter(Boolean);
+  const hitLines = paintWords(convo, words);
+  const want = hitAnchor(turns, opts.hit ?? null, words);
+  if (words.length) {
+    let cur = -1;
+    const count = el('span', { class: 'sess-find-n' });
+    const paint = (): void => { count.textContent = hitLines.length ? `이 대화에서 ${hitLines.length}곳${cur >= 0 ? ` · ${cur + 1}번째` : ''}` : '이 대화의 보이는 글에는 그 낱말이 없습니다'; };
+    const go = (i: number): void => {
+      if (!hitLines.length) return;
+      cur = (i + hitLines.length) % hitLines.length;
+      paint();
+      reveal(hitLines[cur]!);
+    };
+    const prev = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '‹ 이전' }) as HTMLButtonElement;
+    const next = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다음 ›' }) as HTMLButtonElement;
+    prev.addEventListener('click', () => go(cur < 0 ? hitLines.length - 1 : cur - 1));
+    next.addEventListener('click', () => go(cur + 1));
+    prev.disabled = next.disabled = hitLines.length < 1;
+    findSlot.replaceChildren(el('span', { class: 'sess-find-q', text: '「' + words.join(' ') + '」' }), count, prev, next);
+    findSlot.hidden = false;
+    //  시작 자리 — 고른 말의 블록이 맞은 줄 가운데 있으면 그 번호부터 센다.
+    if (want) {
+      const target = (want.ln && byId(convo, 'ln-' + want.ln)) || byId(convo, 'turn-' + want.q);
+      const idx = target ? hitLines.findIndex((l) => l === target || target.contains(l)) : -1;
+      if (idx >= 0) cur = idx;
+    }
+    paint();
+  }
+  afterPaint(() => {
+    finalizeCaps(convo);
+    const to = sel.q || sel.ln ? { q: sel.q, ln: sel.ln } : want;
+    if (to) setTimeout(() => gotoAnchor(convo, to), 60);
+  });
 
   // 서브에이전트 트리(#905 C1 슬⑥) — 이 세션이 스폰한 서브에이전트들. 접힌 목록, 클릭 시 각자 대화록으로.
   api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/subagents${node ? '?node=' + encodeURIComponent(node) : ''}`)
@@ -296,14 +396,14 @@ function groupTurns(items: Item[]): Turn[] {
 }
 
 // 질문 사이드바(skimming/navigate) — 항상 보이는 세로 목록. 항목 클릭 = 그 질문으로 스크롤, 🔗 = 질문 링크 복사.
-function sidebar(turns: Turn[], sid: string, node: string): any {
+function sidebar(turns: Turn[], sid: string, node: string, convo: HTMLElement): any {
   const qs = turns.map((t, i) => ({ i, text: t.user?.text || '' })).filter((x) => x.text);
   const box = el('div', {},
     el('div', { class: 'sess-side-head', text: `질문 ${qs.length}개` }));
   if (!qs.length) { box.append(el('p', { class: 'admin-hint', style: 'font-size:12px', text: '(질문 없음)' })); return box; }
   for (const q of qs) {
     const label = el('button', { class: 'sess-side-item', title: q.text, text: `${q.i + 1}. ${q.text}` });
-    label.addEventListener('click', () => document.getElementById('turn-' + q.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    label.addEventListener('click', () => byId(convo, 'turn-' + q.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     const cp = el('button', { class: 'sess-side-copy', title: '이 질문 링크 복사', text: '🔗' });
     cp.addEventListener('click', (e: any) => { e.stopPropagation(); copyLink(buildShareLink(sid, node, { q: String(q.i) })); });
     box.append(el('div', { class: 'sess-side-row' }, label, cp));
