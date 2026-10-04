@@ -28,7 +28,10 @@
 //  F11 액자가 알려 옴(applyFavList) — 즉시 반영 · 저장 요청 0건 · 보낸 액자엔 되알리지 않고 다른 액자엔 전한다
 //  F12 우클릭 행 — 즐겨찾기 아니면 «추가», 맞으면 «빼기» · 누르면 넣고 뺀다
 //  F13 착지 — 즐겨찾기 맨 위가 바뀌면 [프로젝트] 구역의 착지 주소가 그 리스트다(이번 화면 · 다음 진입이 읽는 저장값 둘 다)
-//  C1 별은 평소엔 안 보이고(display none) 줄에 올리면 수 자리에 선다 — 올려도 줄 높이가 안 바뀐다
+//  C1 마우스가 있는 화면 — 별은 평소엔 안 보이고(display none) 줄에 올리면 수 자리에 선다 — 올려도 줄 높이가 안 바뀐다
+//  C2 터치 화면(올릴 수 없다) — 별이 늘 수 옆에 선다(수도 보인다) · 줄 높이는 별이 없을 때와 같다 · 줄에 초점이 와도 수가 안 숨는다
+//     ⚠ 헤드리스 크롬은 면마다 «올릴 수 있나» 가 다르다(리눅스 CI = 못 올림, 맥 = 올림 — 첫 판이 CI 에서 그 때문에 빨갰다).
+//      그래서 두 환경을 크롬 인자로 못박아 각각 잰다(HOVER_ARGS · TOUCH_ARGS).
 //  B1 액자: 본문 ☆ 누름 → 저장 성공 — 바깥 셸에 알린다(id · on · 받는 곳은 이 오리진만)
 //  B1x 액자: 저장 실패 — 알리지 않는다
 //  B2 액자: 셸이 알려 옴(보고 있는 리스트) — ☆ 눌림 상태가 맞춰진다 · 저장 요청 0건
@@ -118,8 +121,11 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules
 const pack = (entry, name) => execFileSync(ESBUILD, [path.join(WEB, entry), "--bundle", "--format=iife", "--global-name=" + name, "--platform=browser",
   "--define:import.meta.url=\"file:///x.js\"", "--log-level=error"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).replace(/<\/script/gi, "<\\/script");
 const css = (...fs) => fs.map((f) => readFileSync(path.join(STYLES, f), "utf8")).join("\n").replace(/<\/style/gi, "<\\/style");
-const run = async (html, prefix) => {
-  const dom = await dumpDom(chrome, { html, prefix, args: ["--window-size=1400,900"] });
+//  올릴 수 있는 화면(마우스) / 못 올리는 화면(터치) — blink 설정값: hover none=1 · hover=2, pointer coarse=2 · fine=4.
+const HOVER_ARGS = ["--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4"];
+const TOUCH_ARGS = ["--blink-settings=primaryHoverType=1,availableHoverTypes=1,primaryPointerType=2,availablePointerTypes=2"];
+const run = async (html, prefix, extra = HOVER_ARGS) => {
+  const dom = await dumpDom(chrome, { html, prefix, args: ["--window-size=1400,900", ...extra] });
   const m = /RESULT(\{.*\})ENDRESULT/s.exec(dom.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
   if (!m) { console.error("FAIL  결과 표지를 못 받았다 — 페이지가 끝까지 못 돌았다\n" + dom.slice(-600)); process.exit(1); }
   const R = JSON.parse(m[1]);
@@ -204,7 +210,8 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
       //  :hover 는 스크립트로 못 건다 — 같은 규칙의 다른 문(줄에 초점)으로 잰다: 줄에 초점이 오면 별이 서고 수가 숨는다.
       row.focus(); const h1 = row.getBoundingClientRect().height, d1 = getComputedStyle(s).display, c1 = getComputedStyle(c).display, w1 = s.getBoundingClientRect().width;
       row.blur();
-      R.c1 = { h0, h1, d0, d1, c0, c1, w1, hoverRule: [...document.styleSheets].some((ss) => [...ss.cssRules].some((r) => /\\.v2-ptl:hover \\.v2-pstar/.test(r.selectorText || ''))) }; } }
+      s.style.display = 'none'; const hBare = row.getBoundingClientRect().height; s.style.display = '';
+      R.c1 = { h0, h1, d0, d1, c0, c1, w1, hBare, canHover: matchMedia('(hover: hover)').matches, hoverRule: [...document.styleSheets].some((ss) => [...ss.cssRules].some((r) => /\\.v2-ptl:hover \\.v2-pstar/.test(r.selectorText || ''))) }; } }
 
     // ── F4 — 추가(응답 전)
     window.__hold = true;
@@ -258,6 +265,8 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
 </script></html>`;
 
 const S = await run(SIDE_PAGE, "list-fav-side-");
+//  같은 페이지를 터치 화면으로 한 번 더 — C1 자리의 잰 값만 쓴다(나머지 장면은 위 마우스 화면 판이 판정한다).
+const T = await run(SIDE_PAGE, "list-fav-touch-", TOUCH_ARGS);
 const msg = (id, on) => j({ type: "lively:list-fav", id, on });
 check(S.f1.card11 === "false" && S.f1.label === "즐겨찾기에 추가", "F1 즐겨찾기 아닌 리스트 줄 — 별 단추(안 눌림)", j(S.f1));
 check(S.f1.card10 === "true" && S.f1.fav10 === "true" && j(S.f1.favs) === '["LIST-TEN"]' && S.f1.labelOn === "즐겨찾기에서 빼기", "F2 즐겨찾기 줄 · 카드 안의 즐겨찾기한 줄 — 별 단추(눌림)", j(S.f1));
@@ -286,8 +295,11 @@ check(S.f12.add === "즐겨찾기에 추가" && S.f12.rem === "즐겨찾기에�
   "F12 우클릭 행 — 아니면 «추가», 맞으면 «빼기» · 누르면 넣는다", j(S.f12));
 check(S.f13.landing === "#/projects2/l/10" && S.f13.stored === "10" && S.f11.landing === "#/projects2/l/11" && S.f11.stored === "11",
   "F13 즐겨찾기 맨 위가 바뀌면 착지 주소도 그 리스트다 — 다음 진입이 쓰는 저장값까지", j([S.f13, S.f11.landing, S.f11.stored]));
-check(!!S.c1 && S.c1.d0 === "none" && S.c1.d1 !== "none" && S.c1.c0 !== "none" && S.c1.c1 === "none" && S.c1.w1 >= 18 && Math.abs(S.c1.h1 - S.c1.h0) < 0.5 && S.c1.hoverRule,
-  "C1 별은 평소엔 안 보이고 줄에 올리면(초점이 오면) 수 자리에 선다 — 줄 높이는 그대로", j(S.c1 || "별이 없다"));
+check(!!S.c1 && S.c1.canHover === true && S.c1.d0 === "none" && S.c1.d1 !== "none" && S.c1.c0 !== "none" && S.c1.c1 === "none" && S.c1.w1 >= 18 && Math.abs(S.c1.h1 - S.c1.h0) < 0.5 && S.c1.hoverRule,
+  "C1 마우스 화면 — 별은 평소엔 안 보이고 줄에 올리면(초점이 오면) 수 자리에 선다 — 줄 높이는 그대로", j(S.c1 || "별이 없다"));
+check(!!T.c1 && T.c1.canHover === false && T.c1.d0 !== "none" && T.c1.c0 !== "none" && T.c1.c1 !== "none" && T.c1.w1 >= 18 && Math.abs(T.c1.h0 - T.c1.hBare) < 0.5
+  && j(T.f4_mid.favs) === '["LIST-TEN","LIST-ELEVEN"]',
+  "C2 터치 화면 — 별이 늘 수 옆에 서고(수도 보인다) 줄 높이는 별이 없을 때와 같다 · 눌러서 넣어진다", j([T.c1 || "별이 없다", T.f4_mid && T.f4_mid.favs]));
 check(S.gets === S.getsLoaded, "W2 사이드바는 즐겨찾기를 받은 뒤 다시 받지 않고도 맞는다(바꿀 때마다 받지 않는다)", "받은 직후 GET " + S.getsLoaded + "회 → 끝 " + S.gets + "회");
 
 // ───────────────────────── B. 액자(보드)
