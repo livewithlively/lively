@@ -5,6 +5,7 @@ import { el, sv, toast } from '../core.js';
 import { openSessionWindow } from '../lib/session-open.js';
 import { copyText, type CtxRow } from '../v2/ctx-menu.js';
 import { bindCtx, bindCtxSurface, requestOpenRoute } from '../v2/ctx-registry.js';
+import { EMBEDDED } from '../v2/embed.js';
 import { fetchTurns } from '../v2/sess-tail.js';
 import { SESS_STATES, rowDotCls, sessRank, sessStateKey } from '../session-status.js';
 import type { HubTool, HubView } from './detail-hub-layout.js';
@@ -143,8 +144,19 @@ export function sessView(s: any, nowMs = Date.now()): SessView {
 }
 export const sessDot = (v: SessView): HTMLElement =>
   v.dot === 'busy' ? el('span', { class: 'pjh-pulse', title: v.label }) : el('span', { class: 'pjh-dot ' + (v.dot === 'quiet' ? 'off' : v.dot), title: v.label });
-/** 세션 «입장» — 세션 터미널로 가는 단 하나의 문(lib/session-open, #1820): 죽은 세션 복원은 도착지가 책임진다. */
-export const enterSession = (s: any): void => { openSessionWindow(String(s.id), { label: s.label, node: s.node && s.node.id ? String(s.node.id) : null }); };
+/** 세션 «입장» — **셸 안의 세션 화면(#/s/<id>)** 으로 간다. 사이드바가 있는 그 창이다(원준 2026-10-04 «새 창에서 그거만 있는
+ *  세션으로 열려서 너무 어색해 — 세션 입력하는 이 창 같은 곳으로»). 액자 안이면 부모 셸에 부탁한다(openSessionRoute).
+ *  죽은 세션 복원은 도착지(세션 화면 autoResume)가 책임진다 — 터미널 창 쪽과 같은 규칙(#1820).
+ *  셸 밖(클래식 단독 화면 — 셸이 없어 부탁을 받을 곳이 없다)에서만 종전처럼 세션 터미널 창을 연다. */
+export const enterSession = (s: any): void => {
+  if (inShell()) { openSessionRoute(String(s.id)); return; }
+  openSessionWindow(String(s.id), { label: s.label, node: s.node && s.node.id ? String(s.node.id) : null });
+};
+/** 이 허브가 v2 셸 안에 있나 — 셸 액자(?embed=1)로 실렸거나 셸 문서(#v2-root) 그 자체. */
+function inShell(): boolean {
+  try { if (EMBEDDED && window.parent && window.parent !== window) return true; } catch (_) { /* 못 보면 아래로 */ }
+  try { return !!document.getElementById('v2-root'); } catch (_) { return false; }
+}
 /** 도는 세션의 마지막 AI 줄 — v2 셸의 꼬리 읽기(v2/sess-tail)를 빌린다. 좌표(uuid·노드)가 없으면 빈 채로 둔다(꾸미지 않는다). */
 export async function lastLine(s: any, max = 180): Promise<string> {
   try {
