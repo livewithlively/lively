@@ -57,7 +57,7 @@ import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
-import { instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
+import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { mountAppUiFrame } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedSessionRefs, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
@@ -1912,6 +1912,8 @@ function sideInstances(): SideInstance[] {
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
   const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string, past?: boolean): void => {
+    //  #4135(원준 2026-10-04) — 앱 인스턴스 행은 홈 사이드바의 대상이 아니다. 고정·열린 창·치움 판정보다 먼저 뺀다.
+    if (homeRowExcluded(route)) return;
     const prev = rows.get(key);
     //  기준값은 **그 행을 처음 세우는 줄기**(세션이면 ①)가 든 원본 stateKey 에서 뜬다. ③은 prev 의 것을 잇는다 —
     //   ③이 넘기는 stateKey 는 이미 그려진 status.key(표시용 가공을 거친 값)라, 여기서 다시 뜨면 자가 어긋난다.

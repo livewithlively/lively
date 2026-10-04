@@ -14,11 +14,9 @@
 //  S5  #/app/<key> 첫 화면                → 안 섬 (1차: 레일·런치패드가 문)
 //  S6  #/app/<key>/<더>                   → 선다 (어디까지 봤나)
 //  S7  #/sources · #/sources/<id>         → 안 섬 · 선다
-//  S8  #/i 브라우저, url == home          → **안 섬** (3차: 열어만 보고 둔 것)
-//  S9  #/i 브라우저, url != home          → 선다
-//  S10 #/i 그 밖, state 비었음             → 안 섬
-//  S11 #/i 그 밖, state 있음               → 선다
-//  S12 #/i 캐시에 없음                     → 안 섬 («안 보이는 쪽으로 틀린다» 규약)
+//  S8~S12 #/i 앱 인스턴스(브라우저 · 메모 …)  → **어떤 경우에도 안 섬** (#4135 원준 2026-10-04 «홈 사이드바에서 아예 빼자»)
+//         종전: 브라우저는 첫 주소를 떠났을 때 · 그 밖은 state 가 있을 때 섰다.
+//  X1  homeRowExcluded — 앱 인스턴스만 참(고정·열린 창보다 먼저 본다) · 세션 · 홈 · 앱 깊은 자리는 거짓
 //  S13 모르는 주소                         → **안 섬** (기본값을 뒤집은 것 자체)
 //  S14 쿼리스트링이 붙어도 판정이 같다
 //  T1  브라우저 인스턴스 제목 = 호스트(www. 뗌)
@@ -34,6 +32,7 @@ type Facts = { renderer?: string | null; home?: string | null; state?: Record<st
 type Deps = { hasDraft: boolean; isClassicPage(p: string): boolean; inst(id: string): Facts | null };
 type Mod = {
   rowStands: (route: string, deps: Deps) => boolean;
+  homeRowExcluded: (route: string) => boolean;
   instHasState: (inst: Facts | null) => boolean;
   instBrowserHost: (inst: Facts | null) => string;
 };
@@ -88,25 +87,31 @@ test("S7 정본 주소 빌트인·클래식 딥링크도 같은 자", async () =
   assert.equal(m.rowStands("#/knowledge/some-doc", deps()), true);
 });
 
-test("S8·S9 브라우저 인스턴스는 첫 주소를 떠났을 때만 선다", async () => {
+test("S8~S12 앱 인스턴스는 무엇을 들고 있어도 안 선다(#4135 — 홈 사이드바에서 뺐다)", async () => {
   const m = await load();
   const home = "https://www.google.com/";
   const at = (url: string) => ({ renderer: "browser", home, state: { url } });
-  assert.equal(m.rowStands("#/i/a", deps({ insts: { a: at(home) } })), false, "열어만 보고 둔 브라우저가 선다");
-  assert.equal(m.rowStands("#/i/a", deps({ insts: { a: at("https://news.ycombinator.com/") } })), true);
-  //  주소가 아직 안 실린 브라우저도 «두고 온 것 없음».
-  assert.equal(m.rowStands("#/i/a", deps({ insts: { a: { renderer: "browser", home, state: {} } } })), false);
-});
-
-test("S10·S11 그 밖의 앱은 state 가 비었으면 안 선다", async () => {
-  const m = await load();
-  assert.equal(m.rowStands("#/i/h", deps({ insts: { h: { renderer: null, state: {} } } })), false);
-  assert.equal(m.rowStands("#/i/h", deps({ insts: { h: { renderer: null, state: { step: 2 } } } })), true);
-});
-
-test("S12 아직 못 읽은 인스턴스는 안 선다", async () => {
-  const m = await load();
+  assert.equal(m.rowStands("#/i/a", deps({ insts: { a: at(home) } })), false);
+  assert.equal(m.rowStands("#/i/a", deps({ insts: { a: at("https://app.lvly.io/") } })), false, "첫 주소를 떠난 브라우저가 선다 — 신고된 «app.lvly.io» 줄");
+  assert.equal(m.rowStands("#/i/h", deps({ insts: { h: { renderer: null, state: { step: 2 } } } })), false, "들고 있는 게 있는 앱이 선다");
   assert.equal(m.rowStands("#/i/unknown", deps()), false);
+});
+
+test("X1 homeRowExcluded — 앱 인스턴스만 뺀다(고정·열린 창보다 먼저)", async () => {
+  const m = await load();
+  assert.equal(m.homeRowExcluded("#/i/8350b37c"), true);
+  assert.equal(m.homeRowExcluded("#/i/8350b37c?x=1"), true);
+  for (const r of ["#/s/box-abc", "#/", "#/p/3778", "#/app/knowledge/k/doc", "#/sources/12", "#/inbox/3", "#/knowledge/doc"]) {
+    assert.equal(m.homeRowExcluded(r), false, r + " 가 빠진다 — 앱 인스턴스만 빼야 한다");
+  }
+});
+
+test("X2 배선 — 행을 세우는 put 이 고정·치움 판정보다 먼저 homeRowExcluded 를 본다", () => {
+  const src = readFileSync(webPath("v2/main.ts"), "utf8");
+  const i = src.indexOf("const put = (key: string, route: string");
+  assert.ok(i > 0, "put 을 못 찾았다");
+  const body = src.slice(i, src.indexOf("isAppPinned(key) && !standsHere", i));
+  assert.match(body, /if \(homeRowExcluded\(route\)\) return;/);
 });
 
 test("S13 모르는 주소는 안 선다 — 기본값이 «안 섬»이다", async () => {
