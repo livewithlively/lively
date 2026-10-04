@@ -32,6 +32,10 @@
 //   B1 설치한 앱 가운데 우리가 만든 것: 확인할 것(inbox) = 종(bell) · 웹 브라우저(browser) = 지구본(web)
 //   B2 그 밖의 앱(남이 만든 앱 · 그림을 정하지 않은 빌트인)은 기본 그림: 화면이 있으면 liv, 없으면 term
 //   B3 새 값 비었음: 앱 id 가 비었거나 표의 열쇠가 아닌 이름(constructor)이어도 기본 그림이다(던지지 않는다)
+//   A1 사이드바의 설치한 앱 줄(인스턴스 아이콘 'app'): 프로젝트 그림(proj)을 그리지 않고 「앱」 그림(apps)을 그린다.
+//      #4233 프로젝트 그림이 과녁으로 바뀌자 프로젝트가 아닌 앱 줄이 과녁으로 서던 것(종전엔 'app' → proj 폴더로 접었다).
+//   A2 설치한 앱의 주소(#/i/<id>)로 선 줄은 런치패드와 같은 그림(builtinAppIcon)을 쓴다
+//   A3 옛 사이드바의 [앱] 단추도 프로젝트 그림을 쓰지 않는다
 //   F1 사이드바 glyph() · 외부 앱 연결 icon() · icon(): 표에 없는 이름이면 「앱」 그림을 그린다(d 가 빈 path 를 그리지 않는다)
 //   F2 표에 있는 이름은 그 그림을 그린다(예비 그림이 제 그림을 덮지 않는다)
 //   L1 표지 카드의 빈 글: 칸이 세 칸 격자(30px)여도 빈 글은 한 줄 폭을 다 쓴다(모든 폭). 글에 긴 줄표가 없다
@@ -312,6 +316,29 @@ const GLYPH_OF = { home: "dashboard", sys: "gear" };
     for (const bad of ["nope", "", "constructor"]) { let d = "!throw"; try { d = dOf(fn(bad, "c")); } catch { /* 빨간불 */ } ok(!!ICONS.apps && d === ICONS.apps, `F1 ${label}: 표에 없는 이름 ${JSON.stringify(bad)} 는 「앱」 그림`, String(d).slice(0, 30)); }
     ok(dOf(fn(known, "c")) === want, `F2 ${label}: 표에 있는 이름(${known})은 그 그림`);
   }
+}
+// ── A. 설치한 앱 줄 ──
+{
+  const fakeSv = (tag, attrs, ...kids) => ({ tag, attrs: attrs || {}, kids });
+  const dOf = (n) => (n && n.kids && n.kids[0] && n.kids[0].attrs ? n.kids[0].attrs.d : undefined);
+  const SIDE = srcOf["web/v2/side.ts"] || "", MAIN = srcOf["web/v2/main.ts"] || "";
+  const APP_GLYPH = { home: "dashboard", sys: "gear" };
+  const stubAppIcon = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[APP_GLYPH[k] || k] }));
+  const stubIcon = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[k] || ICONS.apps }));
+  const stubGlyph = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[k] || ICONS.apps }));
+  let instanceIcon = null;
+  { const i = SIDE.indexOf("function instanceIcon("), j = i < 0 ? -1 : SIDE.indexOf("\n}\n", i);
+    try { if (i >= 0 && j > i) instanceIcon = new Function("glyph", "appIcon", "icon", transpile(SIDE.slice(i, j + 3)) + "\nreturn instanceIcon;")(stubGlyph, stubAppIcon, stubIcon); } catch { /* 빨간불 */ } }
+  ok(typeof instanceIcon === "function", "A1 사이드바 instanceIcon 을 값으로 부를 수 있다");
+  if (typeof instanceIcon === "function") {
+    const d = dOf(instanceIcon({ icon: "app" }));
+    ok(d !== ICONS.proj && d === ICONS.apps, "A1 설치한 앱 줄('app')은 프로젝트 그림이 아니라 「앱」 그림", String(d).slice(0, 30));
+    ok(dOf(instanceIcon({ icon: "wiki" })) === ICONS.wiki && dOf(instanceIcon({ icon: "chat" })) === ICONS.chat, "A1 다른 줄(위키 · 세션)은 제 그림 그대로");
+  }
+  const face = (() => { const i = MAIN.indexOf("function sideRowFace("); return i < 0 ? "" : MAIN.slice(i, MAIN.indexOf("\n}\n", i)); })();
+  ok(/page === 'i'/.test(face) && /builtinAppIcon\(/.test(face), "A2 설치한 앱 주소(#/i/<id>)의 줄은 런치패드와 같은 그림(builtinAppIcon)");
+  const legacy = (() => { const i = SIDE.indexOf("function renderLegacy("); return i < 0 ? "" : SIDE.slice(i, SIDE.indexOf("\n}\n", i)); })();
+  ok(!!legacy && !/appIcon\('proj'/.test(legacy) && /v2-apps-btn/.test(legacy), "A3 옛 사이드바의 [앱] 단추가 프로젝트 그림을 쓰지 않는다");
 }
 // ── L. 넘침 · 줄 바꿈(글과 CSS 규칙으로 본다. 실제 줄 수 · 넘침 폭은 브라우저로 따로 쟀다) ──
 {
