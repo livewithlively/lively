@@ -1438,7 +1438,7 @@ function renderHomeApps(): void {
   const { host } = last;
   //  #3870 — 세션 · 프로젝트 목록을 받기 전엔 줄을 세우지 않는다(lib/side-boot 머리말). 그 판의 재료는 이 브라우저에
   //   저장돼 있던 창뿐이라, 세우면 옛 이름 · 「AI 세션」 · 지운 세션이 「오늘」 아래 줄로 섰다가 정본이 오면 통째로 바뀐다.
-  //   붓(listPaint)도 같은 판정을 **그릴 때마다** 다시 본다 — 받기 전에 걸린 붓이 받은 뒤에 불릴 수 있다.
+  //   붓(listPaint)도 같은 판정을 탄다 — 받기 전 판에서 목록만 다시 그려도(묶기 단추 · «마지막으로 시킨 말» 도착) 줄이 안 선다.
   const ready = (): boolean => !!last && sideTruthReady(last.data);
   const count = ready() ? hooks.instances!().length : null;
   //  목록만 다시 그리는 붓은 **여기 재료로** 짓는다(#2534) — 묶음 토글이 홈의 목록을 홈의 것으로 채우게.
@@ -1887,8 +1887,9 @@ function renderProjects(): void {
       title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
       icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0));
   };
-  const fixed: HTMLElement[] = [allRow, ...plan.favs.map(favRow)];
-  if (plan.noneN) {
+  //  #3870 — 즐겨찾기 · 기타 줄도 받은 뒤에만. 프로젝트만 오고 리스트가 아직이면 전부 «기타 (미분류) 311» 로 세어진다.
+  const fixed: HTMLElement[] = [allRow, ...(ready ? plan.favs.map(favRow) : [])];
+  if (ready && plan.noneN) {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
       title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
