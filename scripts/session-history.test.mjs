@@ -2,7 +2,7 @@
 //  위에 상위 가로탭으로 만들어가지고 셋 다 구현해.» 가로탭 셋 — 대화 찾기 · 작업 일지 · 세션 목록.
 //  엣지 표(행마다 시험 하나):
 //   H1~H12 세션 목록 탭 — 도는 세션과 중앙 기록을 한 줄로 · F1~F3 거르개
-//   W1~W4 일지 기간 · G1~G3 일지 묶음 · S1 합계 · HL1~HL4 «한 일» 한 줄 · C1 복사 글
+//   W1~W4 일지 기간 · G1~G3 일지 묶음 · S1 합계 · HL1~HL5 «한 일» 한 줄 · C1~C2 복사 글
 //   N1~N7 맞은 말의 대화록 자리 · K1~K4 낱말 색칠 자리 · T1 탭 값
 //  ⚠ 날짜 경계는 현지 시각 자정이다 — 시험도 현지 시각 생성자(new Date(y, m, d, …))로 만든다(CI 의 TZ 와 무관하게).
 import { execFileSync } from "node:child_process";
@@ -121,6 +121,10 @@ eq(M.journalHeadline(jr("a", NOW, { activities: [act(1, "처음 한 일"), act(2
 eq(M.journalHeadline(jr("a", NOW)), { text: "첫 지시 a", source: "prompt", more: 0 }, "HL2 기록이 없으면 첫 지시(시킨 말임을 밝힌다)");
 eq(M.journalHeadline(jr("a", NOW, { title: "  " })), { text: "", source: "none", more: 0 }, "HL3 기록도 첫 지시도 없으면 none");
 eq(M.journalHeadline(jr("a", NOW, { activities: [act(1, "", { summary: "요약 글" })] })).text, "요약 글", "HL4 제목이 빈 기록은 요약으로");
+eq(M.journalHeadline(jr("a", NOW, { activities_before: 3 })), { text: "", source: "earlier", more: 3 }, "HL5 이 기간엔 기록이 없고 앞선 기간에만 있으면 그 수(«기록 없음» 이라고 말하지 않는다)");
+eq(M.journalHeadline(jr("a", NOW, { activities_before: 3, activities: [act(1, "이번 기록")] })).source, "activity", "HL5b 이 기간 기록이 있으면 그 기록이 먼저다");
+eq(M.journalCopyText([jr("x", at(8, 30, 9), { activities_before: 2 }), jr("y", at(8, 30, 8))], "기간", NOW).split("\n").slice(3),
+  ["[프로젝트 없음]", "- 세션 y (기록 없음)", "- 세션 x (이 기간에 적은 기록 없음)"], "C2 복사 글 — 앞선 기간에만 기록이 있는 세션은 그렇다고 적는다");
 {
   const k = { name: "omni", title: "통합검색 as-built" };
   const shared = act(3, "같은 기록");

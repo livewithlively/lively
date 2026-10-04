@@ -69,6 +69,7 @@ a.shx-chip:hover { text-decoration: underline; }
 .shx-jrow { padding: 8px 10px; border-bottom: 1px solid var(--line-row); border-radius: 7px; }
 .shx-jrow:hover { background: var(--bg-sel); }
 .shx-jhead { display: block; width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.shx-jhead > .shx-row-t, .shx-jhead > .shx-jsum { display: block; }
 .shx-jsum { font-size: 13.5px; color: var(--ink); margin-top: 2px; overflow-wrap: anywhere; }
 .shx-jsum.none { color: var(--muted-2); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shx-jmore { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
@@ -104,9 +105,12 @@ a.shx-chip:hover { text-decoration: underline; }
 .sess-find[hidden] { display: none; }
 .sess-find-q { font-weight: 700; color: var(--ink); }
 .sess-find-n { flex: 1; min-width: 120px; }
-.sess-embed .sess-side { flex-basis: 190px; width: 190px; top: 0; max-height: calc(100vh - 80px); }
+.sess-embed .sess-layout { flex-direction: row; }
+.sess-embed .sess-side { position: sticky; top: 0; flex: 0 0 190px; width: 190px; max-height: calc(100vh - 80px); border-right: 1px solid var(--line); border-bottom: none; padding-right: 10px; padding-bottom: 0; }
+/* 칸 안에서는 **칸의 폭**으로만 세로로 쌓는다. 05-admin.css 의 창 폭 판정(≤820px)을 그대로 두면 칸이 넉넉한데도 목차가
+   위로 올라가고, 가로일 때의 폭(190px)이 높이로 읽혀 빈 자리가 생긴다. */
 @container (max-width: 640px) {
   .sess-embed .sess-layout { flex-direction: column; }
-  .sess-embed .sess-side { position: static; width: auto; flex: none; max-height: 24vh; border-right: none; border-bottom: 1px solid var(--line); padding-right: 0; padding-bottom: 8px; }
+  .sess-embed .sess-side { position: static; align-self: stretch; width: auto; flex: none; max-height: 24vh; border-right: none; border-bottom: 1px solid var(--line); padding-right: 0; padding-bottom: 8px; }
   .sess-embed .sess-main { padding-left: 20px; }
 }

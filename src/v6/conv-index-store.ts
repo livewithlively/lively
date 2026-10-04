@@ -656,7 +656,8 @@ export interface ConvMsgSearchInput {
 export interface ConvMsgHit extends SessionHitLine {
   node_id: string; session_id: string;
   name: string | null;
-  project: string | null; project_id: number | null;
+  /** 이 세션이 붙어 있는 프로젝트 이름. 화면이 그리는 것만 싣는다 — id 는 싣지 않는다(거르개의 id 는 세션 목록에서 온다). */
+  project: string | null;
   /** 이 말에 든 낱말 수(많을수록 앞). */
   terms: number;
   before: SessionHitLine | null;
@@ -722,11 +723,11 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
         GROUP BY m.node_id, m.session_id
         ORDER BY max(${w1.k}) DESC, max(m.ts) DESC NULLS LAST
         LIMIT ${capP})
-     SELECT agg.node_id, agg.session_id, agg.n, vis.owner, vis.title, proj.project_id, proj.project_name, nm.label
+     SELECT agg.node_id, agg.session_id, agg.n, vis.owner, vis.title, proj.project_name, nm.label
        FROM agg
        JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
        LEFT JOIN LATERAL (
-         SELECT p.id AS project_id, p.name AS project_name
+         SELECT p.name AS project_name
            FROM (SELECT sp.project_id FROM session_project sp
                   WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
            JOIN project p ON p.id = last.project_id
@@ -741,7 +742,7 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
   const ok = await allowedInvites(
     [...new Set(r1.rows.filter((x) => (x.owner as string | null) !== input.requester).map((x) => String(x.session_id)))], input.requester);
   const key = (n: unknown, s: unknown): string => String(n ?? "") + "\u0001" + String(s);
-  const sess = new Map<string, { node_id: string; session_id: string; n: number; name: string | null; project: string | null; project_id: number | null }>();
+  const sess = new Map<string, { node_id: string; session_id: string; n: number; name: string | null; project: string | null }>();
   for (const x of r1.rows) {
     if ((x.owner as string | null) !== input.requester && !ok.has(String(x.session_id))) continue;
     const label = (x.label as string | null) ?? null;
@@ -749,7 +750,6 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
       node_id: String(x.node_id ?? ""), session_id: String(x.session_id), n: Number(x.n) || 0,
       name: (label && label.trim()) || sessionNameFromPrompt(String(x.title ?? "")) || null,
       project: (x.project_name as string | null) ?? null,
-      project_id: x.project_id == null ? null : Number(x.project_id),
     });
   }
   if (!sess.size) return { ...empty, capped };
@@ -761,8 +761,9 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
   const p2: unknown[] = [list.map((s) => s.node_id), list.map((s) => s.session_id)];
   const w2 = msgWhere(p2);
   p2.push(limit); const limP = `$${p2.length}`;
+  //  앞뒤 말은 짧게만 보인다 — 한 말이 20,000자까지라 통째로 끌어오지 않고 SQL 에서 앞머리만 받는다.
   const neighbor = (cmp: string, dir: string): string =>
-    `SELECT x.role, x.ts, x.body FROM session_msg x
+    `SELECT x.role, x.ts, left(x.body, ${MSG_HIT_NEIGHBOR_MAX * 8}) AS body FROM session_msg x
       WHERE x.node_id = t.node_id AND x.session_id = t.session_id AND x.role <> 'edit'
         AND (x.at_offset, x.idx) ${cmp} (t.at_offset, t.idx)
       ORDER BY x.at_offset ${dir}, x.idx ${dir} LIMIT 1`;
@@ -791,7 +792,7 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
     const s = sess.get(key(x.node_id, x.session_id));
     if (!s) continue;
     hits.push({
-      node_id: s.node_id, session_id: s.session_id, name: s.name, project: s.project, project_id: s.project_id,
+      node_id: s.node_id, session_id: s.session_id, name: s.name, project: s.project,
       ...line(x.role, x.ts, x.body, MSG_HIT_TEXT_MAX), terms: Number(x.k) || 0,
       before: x.prole ? line(x.prole, x.pts, x.pbody, MSG_HIT_NEIGHBOR_MAX) : null,
       after: x.nrole ? line(x.nrole, x.nts, x.nbody, MSG_HIT_NEIGHBOR_MAX) : null,

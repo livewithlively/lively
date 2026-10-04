@@ -131,6 +131,8 @@ export interface JRow {
   project_id: number | null; project_name: string | null; box_id: string | null;
   asks: number; edits: number;
   activities: JActivity[]; knowledge: JKnowledge[]; tasks: JTask[];
+  /** 이 기간보다 앞서 적은 작업 기록 수(지난 기간부터 이어진 세션). */
+  activities_before?: number;
 }
 
 export type JournalPreset = 'week' | 'last-week' | 'd30';
@@ -208,14 +210,16 @@ export function journalStats(rows: JRow[]): JournalStats {
 }
 
 /**
- * 줄의 «한 일» 한 줄. 세션이 적은 작업 기록이 있으면 **가장 늦은 기록의 제목**(마무리 기록이 그 세션을 가장 잘 말한다),
- *  없으면 첫 지시. 무엇에서 온 말인지(source)를 함께 준다 — 화면이 «기록» 과 «시킨 말» 을 다르게 그린다(지어낸 요약이 아니다).
+ * 줄의 «한 일» 한 줄. 세션이 (이 기간에) 적은 작업 기록이 있으면 **가장 늦은 기록의 제목**(마무리 기록이 그 세션을 가장 잘
+ *  말한다), 이 기간엔 없고 앞선 기간에만 있으면 그 수(earlier — «기록 없음» 이라고 틀리게 말하지 않는다), 아예 없으면 첫 지시.
+ *  무엇에서 온 말인지(source)를 함께 준다 — 화면이 «기록» 과 «시킨 말» 을 다르게 그린다(지어낸 요약이 아니다).
  */
-export function journalHeadline(r: JRow): { text: string; source: 'activity' | 'prompt' | 'none'; more: number } {
+export function journalHeadline(r: JRow): { text: string; source: 'activity' | 'earlier' | 'prompt' | 'none'; more: number } {
   if (r.activities.length) {
     const lastAct = r.activities[r.activities.length - 1]!;
     return { text: lastAct.title || lastAct.summary || '', source: 'activity', more: r.activities.length - 1 };
   }
+  if ((r.activities_before || 0) > 0) return { text: '', source: 'earlier', more: r.activities_before || 0 };
   const t = String(r.title || '').trim();
   return t ? { text: t, source: 'prompt', more: 0 } : { text: '', source: 'none', more: 0 };
 }
@@ -232,7 +236,7 @@ export function journalCopyText(rows: JRow[], rangeLabel: string, nowMs: number)
     const body: string[] = [];
     //  묶음 안은 화면과 달리 **이른 것부터** — 보고는 한 순서대로 읽는다.
     for (const r of [...g.rows].reverse()) {
-      if (!r.activities.length) { body.push(`- ${r.name || r.title || '이름 없는 세션'} (기록 없음)`); continue; }
+      if (!r.activities.length) { body.push(`- ${r.name || r.title || '이름 없는 세션'} (${(r.activities_before || 0) > 0 ? '이 기간에 적은 기록 없음' : '기록 없음'})`); continue; }
       for (const a of r.activities) {
         if (seen.has(a.id)) continue;
         seen.add(a.id);

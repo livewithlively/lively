@@ -281,6 +281,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
   //  질문 수 · 고친 파일 수)을 한 번에 준다. **세션 주인만**(일지는 «내가 한 일» 이다) — 남의 세션은 session_id 로 물어도 404.
   //  기간은 마지막 활동 기준(since ≤ last_seen < until). session_id 를 주면 그 세션 한 줄만(기간 무시).
   //  ⚠ 경로를 `/v6/sessions/…` 아래에 두지 않는다 — 위 session-search 와 같은 까닭(테넌트 미들웨어가 세션 id 로 읽는다).
+  //  시간 상한(statement_timeout → 57014)에 걸렸다 — «한 일이 없다» 가 아니라 «끝까지 못 읽었다» 다.
+  const journalTimeout = (e: unknown): never => {
+    if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "작업 일지를 시간 안에 만들지 못했습니다 — 기간을 좁히거나 잠시 뒤 다시 열어 주세요");
+    throw e;
+  };
   app.get("/api/ui/v6/session-journal", auth, wrap(async (req, res) => {
     const requester = idOf(userOf(req));
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
@@ -291,7 +296,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
       const nodeId = String(req.query.node_id ?? "");
       if (nodeId && !NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
-      const one = await sessionJournal({ owner: requester, workspaceId, only: { nodeId, sessionId } });
+      const one = await sessionJournal({ owner: requester, workspaceId, only: { nodeId, sessionId } }).catch(journalTimeout);
       if (!one.rows.length) throw new HttpError(404, "세션을 찾을 수 없습니다");
       res.json({ row: one.rows[0] });
       return;
@@ -300,7 +305,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       if (req.query[k] && !Number.isFinite(Date.parse(String(req.query[k])))) throw new HttpError(400, `${k} 는 ISO 시각이어야 합니다`);
     }
     const range = parseJournalRange(req.query.since, req.query.until);
-    const out = await sessionJournal({ owner: requester, workspaceId, since: range.since, until: range.until, limit: Number(req.query.limit) || undefined });
+    const out = await sessionJournal({ owner: requester, workspaceId, since: range.since, until: range.until, limit: Number(req.query.limit) || undefined }).catch(journalTimeout);
     res.json({ rows: out.rows, truncated: out.truncated });
   }));
 
