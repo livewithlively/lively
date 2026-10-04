@@ -29,7 +29,7 @@ import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
 import { sessionInvitesMember, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { executionSessionProject } from "../v6/execution-session-store.js";
-import { searchConversations, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색
+import { searchConversations, sessionHits, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색
 import { parseConvSort } from "../v6/conv-search.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
@@ -207,6 +207,34 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
     res.json({ results: found.results, pending, capped: found.capped, cap: found.cap });
+  }));
+
+  // 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A). 목록 한 줄로는 «그 세션이 맞나» 를 못 가려 열어 봐야 했다.
+  //  고른 세션의 맞은 말과 앞뒤 말 · 고친 파일 · 첫 지시를 준다. 볼 수 있는가는 검색과 같은 축(sessionHits 안) — 못 보면 404
+  //  (있다·없다를 가르지 않는다). 검색어가 없으면 처음·마지막 말과 고친 파일만(이름으로만 맞은 세션의 미리보기).
+  app.get("/api/ui/v6/session-search/hits", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const sessionId = String(req.query.session_id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node_id ?? "");
+    if (nodeId && !NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const q = String(req.query.q ?? "").trim();
+    if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
+    res.setHeader("Cache-Control", "no-store");
+    const cfg = (await getRuntimeConfig()).session_share;
+    let out: Awaited<ReturnType<typeof sessionHits>>;
+    try {
+      out = await sessionHits({
+        requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID,
+        nodeId, sessionId, q, limit: Number(req.query.limit) || undefined,
+      });
+    } catch (e) {
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "미리보기를 시간 안에 만들지 못했습니다 — 잠시 뒤 다시 골라 주세요");
+      throw e;
+    }
+    if (!out) throw new HttpError(404, "세션을 찾을 수 없습니다");
+    res.json(out);
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).
