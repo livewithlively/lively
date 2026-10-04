@@ -167,7 +167,7 @@ export const ICONS: Record<string, string> = {
 export const iconPath = (name: string, fallback = 'apps'): string =>
   (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS[fallback]);
 
-/** 앱 표(v2/apps.ts APPS)의 icon 이름 → 이 표의 이름. 「홈(클래식)」의 icon 은 home 이지만 그림은 판 넷(dashboard)이다.
+/** 앱 표(v2/apps.ts APPS)의 icon 이름 → 이 표의 이름. 「대시보드」(옛 「홈(클래식)」)의 icon 은 home 이지만 그림은 판 넷(dashboard)이다.
  *  레일 · 앱 화면 · 구역 메뉴가 같은 앱을 같은 그림으로 그리게 이 함수 하나를 지난다. */
 const APP_GLYPH: Record<string, string> = { home: 'dashboard', sys: 'gear' };
 export const appGlyphName = (icon: string): string => (Object.prototype.hasOwnProperty.call(APP_GLYPH, icon) ? APP_GLYPH[icon] : icon);

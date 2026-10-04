@@ -3,7 +3,7 @@
 //  그 표에 있는 이름만 쓴다. 표에 없는 이름은 다른 그림으로 떨어진다: 사이드바의 리스트 줄이 「앱」 그림(사각 넷)으로 나오던 것이 그 예다.
 //
 //  사양 · 엣지 표(spec-failfirst):
-//   V1 고른 그림: 표의 path 가 고른 path 와 글자까지 같다(홈 · 위키 · 자료 · 분류체계 · 맥락 관리 · 세션 이력 · 홈(클래식) ·
+//   V1 고른 그림: 표의 path 가 고른 path 와 글자까지 같다(홈 · 위키 · 자료 · 분류체계 · 맥락 관리 · 세션 이력 · 대시보드 ·
 //      사용 가이드 · 앱 · 사이드바 접기 · 알림 · 지난 세션 · 휴지통 · 외부 앱 연결 · 세션 앱 · 리스트)
 //   V2 「지금」을 고른 그림은 종전 path 그대로다(말풍선 · 프로젝트 · 리브 · 톱니 · 묶음 · 압정 · 반짝임 · 연필)
 //   V3 우측 사이드바 부품 12개가 고른 그림의 이름을 쓴다(세션 = chat · 지식 = wiki · 리브 = liv · 지난 세션 = archive · 앱 = apps …)
@@ -23,7 +23,7 @@
 //   H5 증류기 카드의 「모든 자료」 그림 · 클래식 AI 세션의 「세션 기록」 단추 · 가이드의 집과 책이 표의 그림이다
 //   H6 손으로 그린 옛 그림(집 · 깔때기 · 상자 · 휴지통 · 가로 고리 · 종 · 책 · 태그 묶음)이 web/ 에 남아 있지 않다
 //   P1 앱 아이콘: 타일 하나 + 그 앱의 선 그림 + 그 앱의 색 토큰
-//   P2 앱 아이콘: 앱 이름 → 선 그림 이름(홈(클래식) = dashboard, 설정 = gear, 나머지는 같은 이름)
+//   P2 앱 아이콘: 앱 이름 → 선 그림 이름(대시보드 = dashboard, 설정 = gear, 나머지는 같은 이름)
 //   P3 앱 아이콘: 모르는 이름 · 빈 이름은 apps 로 떨어진다(던지지 않는다)
 //   P4 타일: 모서리 반지름이 한 변의 26%(±1%)이고, 유리 겹침 그림의 흔적(GLASS_ART · 기울기 · 흐림)이 없다
 //   P5 색 토큰: 이름 14개가 라이트(01-base) · 다크(90-dark 두 블록)에 전부 있다
@@ -182,9 +182,9 @@ ok(appIcons.every((n) => glassNames.includes(n)), "G4 앱 표의 icon 이 전부
 const appIconRefs = [...appIconMap.matchAll(/ICONS\.([A-Za-z]+)/g)].map((m) => m[1]);
 ok(appIconRefs.length >= 10 && appIconRefs.every((n) => n in ICONS), "G4 appIcon 의 표가 가리키는 이름이 전부 그림 표에 있다", appIconRefs.filter((n) => !(n in ICONS)).join(","));
 {
-  // 레일 · 구역 메뉴는 앱의 icon 을 그대로 부르지 않는다. 그대로 부르면 「홈(클래식)」이 「홈」과 같은 집 그림이 된다.
+  // 레일 · 구역 메뉴는 앱의 icon 을 그대로 부르지 않는다. 그대로 부르면 「대시보드」이 「홈」과 같은 집 그림이 된다.
   const RAIL = srcOf["web/v2/rail.ts"] || "";
-  ok(!/\b(item|row)\(a\.key, a\.title, a\.icon\b/.test(RAIL) && (RAIL.match(/appGlyphName\(a\.icon\)/g) || []).length >= 2, "G4 레일 · 구역 메뉴의 앱 줄이 앱 화면과 같은 그림 이름을 쓴다(홈(클래식) = dashboard)");
+  ok(!/\b(item|row)\(a\.key, a\.title, a\.icon\b/.test(RAIL) && (RAIL.match(/appGlyphName\(a\.icon\)/g) || []).length >= 2, "G4 레일 · 구역 메뉴의 앱 줄이 앱 화면과 같은 그림 이름을 쓴다(대시보드 = dashboard)");
   const m = PATHS_SRC.match(/const APP_GLYPH[^=]*=\s*(\{[^}]*\})/); let g = {}; try { g = m ? new Function("return " + m[1])() : {}; } catch { /* 빨간불 */ }
   ok(g.home === "dashboard" && g.sys === "gear" && ICONS.home !== ICONS.dashboard, "P2 앱 이름 → 그림 이름: home = dashboard · sys = gear, 나머지는 같은 이름");
 }
