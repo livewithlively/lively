@@ -1515,10 +1515,16 @@ input.v2-pad-search::placeholder { color: var(--muted); font-weight: 400; }
 input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .v2-pad-esc { flex: none; font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
   background: rgba(var(--tint-ink), .07); border: 1px solid var(--v2-pad-field-line); border-radius: 6px; padding: 3px 7px; }
+/* 묶음 둘(#4554) — 「기본 앱」 · 「워크스페이스 앱」. 묶음 = 제목 한 줄 + 격자. 제목은 격자의 왼쪽 끝에 맞춰 서고,
+   목록의 리듬만 만든다(.v2-app-group 과 같은 무게) — 흐린 바탕 위라 글자색은 잉크 쪽(--ink-sub)이다. */
+.v2-pad-body { width: min(920px, 100%); display: flex; flex-direction: column; align-items: center; gap: 26px; }
+.v2-pad-sec { width: 100%; }
+.v2-pad-sec-h { margin: 0 0 8px; padding: 0 14px; font-size: 12px; font-weight: 700; letter-spacing: 0; color: var(--ink-sub); }
 .v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
 .v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px 12px; background: none; border: 0; border-radius: 18px; text-decoration: none; color: var(--ink); text-align: center; }
 .v2-pad-item:hover { background: rgba(var(--tint-ink), .12); }
-.v2-pad-grid--q .v2-pad-item:first-child { background: rgba(var(--tint-ink), .12); }
+/* 검색 중 Enter 로 열릴 칸 — 묶음이 둘이라 «격자의 첫 칸» 이 아니라 가장 잘 맞은 칸 하나에 표시한다(apps.ts draw). */
+.v2-pad-item.is-first { background: rgba(var(--tint-ink), .12); }
 .v2-pad-item b { font-size: 12.5px; font-weight: 700; line-height: 1.35; }
 .v2-pad-ico { width: 60px; height: 60px; display: grid; place-items: center; color: var(--ink-sub); }
 .v2-pad-ico .v2-ic { width: 30px; height: 30px; }
@@ -1751,6 +1757,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   /* 런치패드 — 화면 가득, 격자는 촘촘히. */
   .v2-pad { padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
   .v2-pad-top { margin-bottom: 16px; }
+  .v2-pad-body { gap: 18px; }
+  .v2-pad-sec-h { padding: 0 6px; }
   .v2-pad-field { height: 50px; border-radius: 14px; }
   .v2-pad-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
   .v2-pad-item { padding: 14px 10px 12px; }

@@ -34,11 +34,25 @@ export interface AppDef {
   hidden?: boolean;
   /** 화면에 안 보이는 검색어(#4233). 이름을 바꾼 앱이 옛 이름으로도 찾히게 한다(lib/app-match.ts). */
   aka?: readonly string[];
+  /** 앱 찾기에서 서는 묶음(#4554). 없으면 'base'(기본 앱) — 아래 PAD_GROUPS. */
+  group?: PadGroup;
 }
 
-// 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
+// 앱 찾기의 두 묶음(#4554, 원준 2026-10-04 "기본 앱과 직접 만든 앱 … 둘로 나눠서 보여줘").
+//  base = 라이블리에 기본으로 들어 있는 앱: 이 표의 화면 앱 + 설치된 앱 가운데 빌트인(source.kind='builtin').
+//  workspace = 이 워크스페이스의 앱: 세션이 만들었거나(app_save) 관리자가 설치한 앱(빌트인이 아닌 org_app) + 대시보드.
+//   이름을 「만든 앱」이라 하지 않는 이유: 남이 만든 앱을 설치한 것도, 위젯을 골라 꾸미는 대시보드도 여기 선다.
+//   공통점은 «누가 만들었나» 가 아니라 «이 워크스페이스의 것» 이다.
+export type PadGroup = 'base' | 'workspace';
+export const PAD_GROUPS: ReadonlyArray<{ key: PadGroup; title: string }> = [
+  { key: 'base', title: '기본 앱' },
+  { key: 'workspace', title: '워크스페이스 앱' },
+];
+/** 대시보드의 옛 이름(#4554). 화면에는 안 쓰고 앱 찾기 · 통합검색의 검색어(aka)로만 남는다. */
+export const DASH_OLD_NAMES: readonly string[] = ['홈(클래식)', '홈 클래식', '클래식 홈', '옛 홈'];
+
+// 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS: AppDef[] = [
-  { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
   { key: 'terminal', title: '세션 목록', desc: '지금까지 만든 세션 전체 · 묶기 · 정렬 · 찾기', route: 'terminal', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26 "터미널 아이콘 말고 말풍선으로 통일")
   { key: 'projects2', title: '프로젝트', desc: '보드 · 리스트 · 타임라인 · 태스크', route: 'projects2', tab: 'projects2', icon: 'proj' },
   { key: 'knowledge', title: 'WIKI', desc: '지식 트리 · 문서 · 검토 큐', route: 'knowledge', tab: 'knowledge', icon: 'wiki' },
@@ -58,6 +72,10 @@ export const APPS: AppDef[] = [
   { key: 'system', title: '설정', desc: '조직 · 구성원 · AI 능력 · 데이터 연결 · 운영', route: 'system', tab: 'system', icon: 'sys', hidden: true },
   //  사용 가이드(#4179). 셸이 직접 그리는 native 앱이다(web/guide/app.ts). 클래식 화면(#/start · #/onboarding)은 아래 CLASSIC_PAGES 가 종전대로 액자에 싣는다.
   { key: 'learn', title: '사용 가이드', desc: '처음 시작하는 방법 · 화면별 사용법 · 용어', route: 'learn', tab: null, icon: 'learn', kind: 'native', aka: ['도움말', '설명서', '매뉴얼'] },
+  //  대시보드(#4554, 원준 2026-10-04). 이름을 「홈(클래식)」에서 바꿨고 기본 앱에서 뺐다 — 앱 찾기의 「워크스페이스 앱」 묶음에 선다.
+  //   표의 맨 끝에 둔다: 최근 연 앱이 모자랄 때 채우는 순서가 표 순서라(recentApps · 레일), 맨 앞에 두면 처음 온 사람의
+  //   최근 줄 첫 칸이 기본 앱이 아닌 이 앱이 된다. 옛 이름은 검색어(aka)로만 남는다. 키 · 주소(#/app/dashboard)는 그대로다.
+  { key: 'dashboard', title: '대시보드', desc: '내 프로젝트 · 알림 · 세션 · 팀 로그 위젯을 한 판에', route: 'dashboard', tab: 'dashboard', icon: 'home', group: 'workspace', aka: DASH_OLD_NAMES },
 ];
 
 // 클래식 라우트 첫 세그먼트 → 앱 키. 새 셸에서 옛 딥링크(#/knowledge/…, #/projects2/p/12 …)가 들어오면
@@ -141,7 +159,7 @@ export function soloSessionUrl(id: string): string {
 
 // ── 아이콘(라인, 채움 없음 — DS 규약) ──
 const ICON_PATHS: Record<AppDef['icon'], string> = {
-  //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 홈(클래식)은 옛 대시보드라 위젯 판 넷, 설정은 이빨 있는 톱니.
+  //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 대시보드(icon 이름은 home)는 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
   sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src, tags: ICONS.tags,
 };
@@ -179,29 +197,32 @@ export function openLaunchpad(): void {
   closeLaunchpad();
   const apps = visibleApps();
   let sApps: SessionApp[] = [];
-  const grid = el('div', { class: 'v2-pad-grid', role: 'list' });
+  //  묶음 둘(#4554) — 「기본 앱」 · 「워크스페이스 앱」. 묶음마다 제목 한 줄 + 격자 하나. 빈 묶음은 제목째 안 선다.
+  const body = el('div', { class: 'v2-pad-body' });
   const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' }) as HTMLInputElement;
   const draw = () => {
     const q = input.value.trim().toLowerCase();
     // 이름에 맞은 것이 설명에만 맞은 것보다 앞에 온다 — Enter 가 맨 앞을 여니 순서가 곧 정답이어야 한다.
     //  ('프' 를 치면 설명에 '프로젝트'가 든 홈이 아니라 프로젝트 앱이 먼저다.) sort 는 안정 정렬이라 동점은 원래 차례.
     const rank = (t: string) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
+    type Tile = { node: HTMLElement; rank: number; group: PadGroup };
     //  화면 앱은 이름 · 설명 · 옛 이름(aka)으로 거른다(#4233). 통합검색(omni.ts)과 같은 잣대다.
-    const screen = apps.filter((a) => appMatches(a, q))
-      .sort((a, b) => appRank(a, q) - appRank(b, q)).map((a) =>
-      el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
-        el('b', { text: a.title })));
+    const screen: Tile[] = apps.filter((a) => appMatches(a, q))
+      .sort((a, b) => appRank(a, q) - appRank(b, q)).map((a) => ({
+        rank: appRank(a, q), group: a.group || 'base',
+        node: el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
+          el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
+          el('b', { text: a.title })) }));
     //  ⚠ 화면 앱 표(APPS)에 이미 있는 빌트인은 여기서 뺀다 — 안 그러면 같은 앱이 격자에 두 번 선다(자료, #2423).
     //   표 쪽이 이긴다: 아이콘·설명·최근·독 고정이 전부 그 줄에 달려 있다.
-    const session = sApps.filter((a) => a.id !== 'ai-session' && !APPS.some((x) => x.kind === 'native' && x.key === a.id))
+    const session: Tile[] = sApps.filter((a) => a.id !== 'ai-session' && !APPS.some((x) => x.kind === 'native' && x.key === a.id))
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
       //  정본 주소를 갖는 빌트인(확인할 것·자료)은 **화면 앱**이다 — UI 페이지가 없다고 «세션 앱» 이라 부르면
       //   배지가 거짓말을 한다(그 앱을 열어도 AI 세션은 안 뜬다). 셋을 가르는 축은 pages 가 아니라 '무엇으로 뜨나'다.
       const isScreen = !!a.system?.route || hasUi;
-      return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
+      const node = el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => {
           closeLaunchpad();
@@ -213,16 +234,30 @@ export function openLaunchpad(): void {
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
         el('b', { text: a.title }),
         el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
+      //  묶음은 출처가 정한다(#4554): 제품에 실려 온 것(builtin)은 기본 앱, 그 밖(세션이 만든 것 · 설치한 것)은 워크스페이스 앱.
+      return { node, rank: rank(a.title), group: (a.source.kind === 'builtin' ? 'base' : 'workspace') as PadGroup };
     });
-    grid.replaceChildren(...screen, ...session);
-    grid.classList.toggle('v2-pad-grid--q', !!q);   // 검색 중이면 첫 칸이 Enter 로 열릴 자리 — 그걸 보인다.
-    if (!grid.childElementCount) grid.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
+    const tiles = [...screen, ...session];   // 묶음 안의 차례: 화면 앱 먼저, 설치된 앱이 뒤(종전 격자와 같다)
+    body.replaceChildren(...PAD_GROUPS.map((g) => {
+      const mine = tiles.filter((t) => t.group === g.key);
+      if (!mine.length) return null;
+      return el('section', { class: 'v2-pad-sec', 'data-group': g.key, 'aria-label': g.title },
+        el('h3', { class: 'v2-pad-sec-h', text: g.title }),
+        el('div', { class: 'v2-pad-grid', role: 'list' }, ...mine.map((t) => t.node)));
+    }).filter((n): n is HTMLElement => !!n));
+    //  검색 중이면 Enter 로 열릴 칸 하나를 보인다. 묶음이 둘이라 «맨 앞 칸» 이 아니라 **가장 잘 맞은 칸**이다 —
+    //   위 묶음의 설명에만 맞은 앱이 아래 묶음의 이름이 맞은 앱을 이기면 안 된다. 동점은 화면 순서(위 묶음 먼저).
+    if (q && tiles.length) {
+      const shown = PAD_GROUPS.flatMap((g) => tiles.filter((t) => t.group === g.key));
+      shown.reduce((best, t) => (t.rank < best.rank ? t : best)).node.classList.add('is-first');
+    }
+    if (!tiles.length) body.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
   };
   input.addEventListener('input', draw);
-  // 스포트라이트처럼 Enter 는 맨 앞 결과를 연다 — 이름을 몇 글자 치고 바로 들어가는 길.
+  // 스포트라이트처럼 Enter 는 가장 잘 맞은 결과를 연다 — 이름을 몇 글자 치고 바로 들어가는 길.
   input.addEventListener('keydown', (e) => {
     if ((e as KeyboardEvent).key !== 'Enter') return;
-    const first = grid.querySelector('.v2-pad-item') as HTMLElement | null;
+    const first = (body.querySelector('.v2-pad-item.is-first') || body.querySelector('.v2-pad-item')) as HTMLElement | null;
     if (first) { e.preventDefault(); first.click(); }
   });
   void listSessionApps().then((a) => { if (padEl) { sApps = a; draw(); } });
@@ -230,8 +265,9 @@ export function openLaunchpad(): void {
   //  데스크톱의 닫기는 Esc 와 배경 클릭이고, 칸 오른쪽 esc 키캡이 그걸 알린다.
   //  ⚠ 폰·태블릿엔 Esc 가 없고 격자가 화면을 거의 다 덮어 «배경» 을 누를 자리도 없다 — 나갈 길이 없었다(#4230).
   //   그래서 칸 오른쪽에 [취소](아이폰 스포트라이트와 같은 자리)를 두고, 터치 화면에서만 세운다(40-v2.css).
-  //   격자의 빈칸(항목 사이·마지막 줄 뒤)을 누르는 것도 배경을 누른 것으로 친다.
-  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기', onclick: (e) => { if (e.target === padEl || e.target === grid) closeLaunchpad(); } },
+  //   격자의 빈칸(항목 사이·마지막 줄 뒤 · 묶음 사이)을 누르는 것도 배경을 누른 것으로 친다 — 앱 칸 · 검색 줄 · 묶음 제목만 뺀다.
+  padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기',
+    onclick: (e) => { if (!(e.target as Element).closest('.v2-pad-item, .v2-pad-top, .v2-pad-sec-h')) closeLaunchpad(); } },
     el('div', { class: 'v2-pad-top' },
       el('div', { class: 'v2-pad-field' },
         sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' },
@@ -240,7 +276,7 @@ export function openLaunchpad(): void {
         input,
         el('kbd', { class: 'v2-pad-esc', text: 'esc' })),
       el('button', { class: 'v2-pad-cancel', type: 'button', text: '취소', 'aria-label': '앱 찾기 닫기', onclick: () => closeLaunchpad() })),
-    grid);
+    body);
   document.body.append(padEl as HTMLElement); draw(); input.focus();
   document.addEventListener('keydown', padKey);
 }
