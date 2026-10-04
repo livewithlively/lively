@@ -237,8 +237,9 @@ try {
       rec[0] === SID(13) && recR.results[0].top === true && rec[1] === SID(14) && recR.results[1].top === false, JSON.stringify(recR.results.map((x) => [x.session_id, x.top])));
     const hit = (await search(A, "코끼리 달리기")).results[0];
     chk("D15 줄에 이름·대표 말·시각이 실린다", !!hit.name && hit.best.role === "user" && hit.best.text.includes("코끼리") && typeof hit.at === "string", JSON.stringify(hit));
-    chk("D15 화면이 안 쓰는 메타(프로젝트·주인·점수)는 싣지 않는다",
+    chk("D15 화면이 안 쓰는 메타(프로젝트 id·주인·점수)는 싣지 않는다",
       !["project_id", "project_name", "owner", "owner_name", "harness", "score"].some((k) => k in hit), JSON.stringify(Object.keys(hit)));
+    chk("D15 프로젝트에 안 붙은 세션은 project 가 null(#4530 안 A — 목록 줄의 «어디에 있는 것인가»)", hit.project === null, JSON.stringify(hit.project));
   }
 
   // ── D16 초대받았어도 그 프로젝트가 나에게 가려져 있으면 못 찾는다(#1291 — 목록·입장과 같은 sessionVisible) ──
@@ -265,6 +266,13 @@ try {
     chk("D16 대조: 열린 프로젝트의 초대 세션은 찾는다(프로젝트 세션을 통째로 닫은 게 아니다)", a.includes(SID(19)), JSON.stringify(a));
     const b = ids(await search(B, "기린"));
     chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
+    //  미리보기(세션 하나의 맞은 말, #4530 안 A)도 같은 판정 — 초대받았어도 그 프로젝트가 가려져 있으면 안을 보여 주지 않는다.
+    //   (돌연변이 확인: sessionHits 의 allowedInvites 판정을 빼면 이 줄이 빨강이다.)
+    const pvHidden = await C.sessionHits({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: SID(18), q: "기린" });
+    const pvOpen = await C.sessionHits({ requester: A, attach: true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: SID(19), q: "기린" });
+    const pvOwner = await C.sessionHits({ requester: B, attach: true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: SID(18), q: "기린" });
+    chk("D16 미리보기: 가려진 프로젝트의 초대 세션은 null · 열린 프로젝트의 초대 세션과 주인은 본다",
+      pvHidden === null && !!pvOpen && pvOpen.hits.length === 1 && !!pvOwner && pvOwner.hits.length === 1, JSON.stringify({ hidden: pvHidden, open: pvOpen && pvOpen.total, owner: pvOwner && pvOwner.total }));
 
     //  D16f — 가려진 프로젝트를 못 재면(조회 실패) 프로젝트 폴더의 초대 세션은 닫는다(fail-closed). 개인 폴더의 초대 세션은 그대로.
     //   그 조회 한 줄만 이 프로세스 안에서 실패시킨다 — 표를 건드리지 않는다(개발 DB 를 함께 쓰는 게이트웨이에 영향이 없게).
@@ -428,6 +436,49 @@ try {
     await itemsPool.query(`UPDATE session SET title = '제목에만있는말 정리' WHERE node_id='' AND session_id=$1`, [SID(40)]);
     const t = await search(A, "흔한낱말 제목에만있는말", { cap: 3, sort: "recent" });
     chk("D26 드문 낱말이 첫 지시(제목)에만 있어도 상한 앞 줄 세우기에 든다", ids(t).includes(SID(40)), JSON.stringify(ids(t)));
+  }
+
+  // ── D27~D31 세션 하나의 «맞은 말»(통합검색 미리보기, #4530 안 A) ──
+  //  사양: 맞은 말은 낱말이 많이 든 것부터 · 앞뒤 말은 대화 순서의 이웃(고친 파일 행은 이웃이 아니다) · 고친 파일은
+  //   낱말이 맞은 것 먼저(횟수는 싣지 않는다) · 못 보는 세션은 null · 낱말이 말에 없으면 처음·마지막 말로 무슨 세션인지 알려 준다.
+  {
+    const E = (path, ts) => J({ type: "assistant", timestamp: ts, message: { role: "assistant", content: [{ type: "tool_use", id: "e1", name: "Edit", input: { file_path: path, old_string: "a", new_string: "b" } }] } });
+    const t = (m) => new Date(NOW - 3_600_000 + m * 60_000).toISOString();
+    await put(SID(41), A,
+      U("처음 시킨 말 미리보기낱말 없음", t(0)) + AI("알겠습니다 살펴보겠습니다", t(1)) +
+      U("배포 절차가 어떻게 되지", t(2)) + AI("배포 절차는 스테이지 다음 메인입니다", t(3)) + E("/w/web/v2/omni.ts", t(4)) + E("/w/web/v2/omni.ts", t(5)) + E("/w/src/절차/store.ts", t(6)) +
+      U("그럼 배포만 먼저 해 줘", t(7)) + AI("마지막 말입니다", t(8)));
+    await C.indexConvSession("", SID(41));
+    const hits = (who, sid, q, o = {}) => C.sessionHits({ requester: who, attach: o.attach ?? true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: sid, q, limit: o.limit });
+    const r = await hits(A, SID(41), "배포 절차");
+    chk("D27 맞은 말 셋 · 말 수 6 · 낱말 둘 든 말이 앞(사람 말 먼저)", !!r && r.total === 3 && r.msgs === 6 && r.hits.length === 3
+      && r.hits[0].text === "배포 절차가 어떻게 되지" && r.hits[0].terms === 2 && r.hits[0].role === "user"
+      && r.hits[1].text === "배포 절차는 스테이지 다음 메인입니다" && r.hits[2].terms === 1, JSON.stringify(r && r.hits.map((h) => [h.role, h.terms, h.text])));
+    chk("D28 앞뒤 말 = 대화 순서의 이웃(고친 파일 행은 건너뛴다)", !!r
+      && r.hits[0].before?.text === "알겠습니다 살펴보겠습니다" && r.hits[0].after?.text === "배포 절차는 스테이지 다음 메인입니다"
+      && r.hits[1].after?.text === "그럼 배포만 먼저 해 줘" && r.hits[1].after?.role === "user", JSON.stringify(r && r.hits.map((h) => [h.before?.text, h.after?.text])));
+    chk("D29 고친 파일 = 같은 파일은 한 줄 · 낱말이 맞은 파일 먼저 · 끝 두 마디", !!r && r.edits.length === 2
+      && r.edits[0].path === "절차/store.ts" && r.edits[0].hit === true && r.edits[1].path === "v2/omni.ts" && r.edits[1].hit === false, JSON.stringify(r && r.edits));
+    chk("D29 처음 시킨 말 · 마지막 말", !!r && r.first?.text === "처음 시킨 말 미리보기낱말 없음" && r.last?.text === "마지막 말입니다" && r.last?.role === "assistant", JSON.stringify(r && [r.first, r.last]));
+    const one = await hits(A, SID(41), "배포 절차", { limit: 1 });
+    chk("D27 limit 1 → 맞은 말 하나(총수는 그대로 3)", !!one && one.hits.length === 1 && one.total === 3, JSON.stringify(one && [one.hits.length, one.total]));
+    const none = await hits(A, SID(41), "어디에도없는말zz");
+    chk("D30 낱말이 말에 없으면 맞은 말 0 · 처음·마지막 말과 말 수는 준다", !!none && none.hits.length === 0 && none.total === 0 && none.msgs === 6 && !!none.first && !!none.last, JSON.stringify(none));
+    const empty = await hits(A, SID(41), "");
+    chk("D30 검색어가 없어도 처음·마지막 말 · 고친 파일은 준다", !!empty && empty.hits.length === 0 && empty.msgs === 6 && empty.edits.length === 2 && empty.edits.every((e) => !e.hit), JSON.stringify(empty));
+    const josa = await hits(A, SID(41), "절차는");
+    chk("D27 조사를 붙여 쳐도 맞은 말을 찾는다", !!josa && josa.total === 2, JSON.stringify(josa && josa.total));
+    //  권한 — 검색과 같은 축: 남의 세션은 초대받았을 때만(attach) · 없는 세션 · 다른 워크스페이스는 null
+    chk("D31 남(B)은 A 의 세션 미리보기를 못 본다", (await hits(B, SID(41), "배포")) === null);
+    chk("D31 초대받은 사람(attach)은 본다 · attach 가 꺼져 있으면 못 본다", (await hits(A, SID(5), "슬랙")) !== null && (await hits(A, SID(5), "슬랙", { attach: false })) === null);
+    chk("D31 초대 안 받은 남의 세션 · 없는 세션은 null", (await hits(A, SID(6), "슬랙")) === null && (await hits(A, "convpg-없는세션", "슬랙")) === null);
+    //  D32 검색 결과 줄에 프로젝트 이름이 실린다 — 세션이 붙어 있는 가장 늦은 프로젝트.
+    const PJ = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [PROJ_NAMES[1], A])).rows[0].id;
+    await itemsPool.query(`INSERT INTO session_project(session_id, project_id) VALUES($1, $2)`, [SID(41), PJ]);
+    const withProj = (await search(A, "미리보기낱말")).results.find((x) => x.session_id === SID(41));
+    chk("D32 검색 결과 줄에 그 세션의 프로젝트 이름이 실린다", !!withProj && withProj.project === PROJ_NAMES[1], JSON.stringify(withProj && withProj.project));
+    const otherWs = await C.sessionHits({ requester: A, attach: true, workspaceId: W2, nodeId: "", sessionId: SID(41), q: "배포" });
+    chk("D31 다른 워크스페이스에서는 못 본다", otherWs === null, JSON.stringify(otherWs));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

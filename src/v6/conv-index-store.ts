@@ -302,6 +302,9 @@ export interface ConvSearchResult {
   fields: ConvField[];
   /** 고친 파일로 맞았으면 그 파일(이름 + 바로 위 폴더). */
   edit: string | null;
+  /** 이 세션이 붙어 있는 프로젝트 이름 — 목록 줄의 «어디에 있는 것인가»(#4530 안 A). 볼 수 있는 세션만 결과에 서므로 새는 것이 아니다
+   *  (초대받은 세션은 그 프로젝트가 가려져 있으면 allowedInvites 가 세션째 뺀다). */
+  project: string | null;
 }
 
 /**
@@ -469,9 +472,149 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       name: (x.agg.label && x.agg.label.trim()) || sessionNameFromPrompt(String(x.agg.title ?? "")) || null,
       title: x.agg.title, hits: x.agg.hits, at: x.agg.lastHit,
       best: b?.msg ?? null, top: x.top, fields: x.fields, edit: b?.edit ?? null,
+      project: x.agg.project,
     };
   });
   return { results, capped: r.rows.length >= cap, cap };
+}
+
+// ── 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A, 원준 2026-10-04) ─────────────────────────────────
+//  목록 한 줄의 발췌 한 조각으로는 «그 세션이 맞나» 를 못 가려 결국 열어 봐야 했다. 고른 세션의 **맞은 말과 그 앞뒤 말** ·
+//   고친 파일 · 첫 지시를 한 번에 준다. 볼 수 있는가는 검색과 같은 축(visibleSql + 초대받은 세션은 allowedInvites) — 못 보면 null.
+export interface SessionHitsInput {
+  requester: string;
+  attach: boolean;
+  workspaceId?: string | null;
+  nodeId: string;
+  sessionId: string;
+  q: string;
+  /** 맞은 말 수 상한(기본 6). */
+  limit?: number;
+}
+export interface SessionHitLine { role: "user" | "assistant"; ts: string | null; text: string }
+export interface SessionHit extends SessionHitLine {
+  /** 맞은 낱말 수(많을수록 앞). */
+  terms: number;
+  /** 바로 앞·뒤의 말(대화 순서) — 없으면 null. */
+  before: SessionHitLine | null;
+  after: SessionHitLine | null;
+}
+export interface SessionHitsResult {
+  /** 이 세션의 사람·AI 말 수 · 그중 낱말이 든 말 수. */
+  msgs: number;
+  total: number;
+  hits: SessionHit[];
+  /** 이 세션에서 고친 파일(낱말이 맞은 것 먼저 · 그다음 자주 나온 것). ⚠ 횟수는 싣지 않는다 — 색인이 같은 파일을 한 묶음에서
+   *  한 번만 담아(conv-search seenEdit) «몇 번 고쳤나» 가 아니다. */
+  edits: Array<{ path: string; hit: boolean }>;
+  /** 처음 시킨 말 · 마지막 말 — 낱말이 말에 안 들었을 때(이름으로만 맞은 세션) 무슨 세션인지 알려 준다. */
+  first: SessionHitLine | null;
+  last: SessionHitLine | null;
+}
+/** 미리보기 한 조각의 글자 상한 — 맞은 말은 넉넉히, 앞뒤 말은 짧게. */
+export const HIT_TEXT_MAX = 420;
+export const HIT_NEIGHBOR_MAX = 220;
+const HIT_LIMIT_MAX = 20;
+
+export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsResult | null> {
+  if (!input.requester || !input.sessionId) return null;
+  //  ① 볼 수 있나 — 검색과 같은 조건으로 이 세션 한 줄을 잰다.
+  const vp: unknown[] = [];
+  const v = visibleSql(vp, input);
+  vp.push(input.nodeId); const nP = `$${vp.length}`;
+  vp.push(input.sessionId); const sP = `$${vp.length}`;
+  const vis = await boundedQuery(
+    `WITH ${v.ctes}
+     SELECT s.owner FROM session s
+      WHERE s.node_id = ${nP} AND s.session_id = ${sP} AND ${v.where}`, vp);
+  const owner = vis.rows[0] ? ((vis.rows[0].owner as string | null) ?? null) : undefined;
+  if (owner === undefined) return null;
+  if (owner !== input.requester && !(await allowedInvites([input.sessionId], input.requester)).has(input.sessionId)) return null;
+
+  const terms = parseQueryTerms(input.q);
+  const words = snippetTerms(terms);
+  const limit = Math.min(Math.max(Math.floor(input.limit ?? 6), 1), HIT_LIMIT_MAX);
+  const line = (role: unknown, ts: unknown, body: unknown, max: number): SessionHitLine => ({
+    role: String(role) === "assistant" ? "assistant" : "user",
+    ts: ts ? new Date(ts as string).toISOString() : null,
+    text: snippetAround(String(body ?? ""), words, max, Math.floor(max / 4)),
+  });
+
+  //  ② 맞은 말 + 앞뒤 말. 대화 순서는 (at_offset, idx) — 고친 파일 행(role='edit')은 대화가 아니라 뺀다.
+  const hits: SessionHit[] = [];
+  let msgs = 0, total = 0;
+  if (terms.length) {
+    const params: unknown[] = [input.nodeId, input.sessionId];
+    const ts = termSql(params, terms, "c.body", false);
+    const anyHit = ts.map((x) => `(${x.any})`).join(" OR ");
+    const k = ts.map((x) => `(${x.any})::int`).join(" + ");
+    params.push(limit); const limP = `$${params.length}`;
+    const r = await boundedQuery(
+      `WITH conv AS (
+         SELECT m.role, m.ts, m.body, row_number() OVER (ORDER BY m.at_offset, m.idx) AS rn
+           FROM session_msg m
+          WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit'),
+       hit AS (
+         SELECT c.rn, c.role, c.ts, c.body, (${k}) AS k
+           FROM conv c WHERE (${anyHit})
+          ORDER BY (${k}) DESC, (c.role = 'user') DESC, c.ts DESC NULLS LAST, c.rn DESC
+          LIMIT ${limP})
+       SELECT h.rn, h.role, h.ts, h.body, h.k,
+              p.role AS prole, p.ts AS pts, p.body AS pbody,
+              n.role AS nrole, n.ts AS nts, n.body AS nbody,
+              (SELECT count(*) FROM conv) AS msgs,
+              (SELECT count(*) FROM conv c WHERE (${anyHit})) AS total
+         FROM hit h
+         LEFT JOIN conv p ON p.rn = h.rn - 1
+         LEFT JOIN conv n ON n.rn = h.rn + 1
+        ORDER BY h.k DESC, (h.role = 'user') DESC, h.ts DESC NULLS LAST, h.rn DESC`, params);
+    for (const x of r.rows) {
+      msgs = Number(x.msgs) || 0; total = Number(x.total) || 0;
+      hits.push({
+        ...line(x.role, x.ts, x.body, HIT_TEXT_MAX), terms: Number(x.k) || 0,
+        before: x.prole ? line(x.prole, x.pts, x.pbody, HIT_NEIGHBOR_MAX) : null,
+        after: x.nrole ? line(x.nrole, x.nts, x.nbody, HIT_NEIGHBOR_MAX) : null,
+      });
+    }
+  }
+
+  //  ③ 처음 시킨 말 · 마지막 말 · 말 수(맞은 말이 없을 때도 무슨 세션인지 보인다).
+  const ends = await boundedQuery(
+    `WITH conv AS (
+       SELECT m.role, m.ts, m.body, row_number() OVER (ORDER BY m.at_offset, m.idx) AS rn, count(*) OVER () AS n
+         FROM session_msg m
+        WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit')
+     (SELECT 'first' AS which, role, ts, body, n FROM conv WHERE role = 'user' ORDER BY rn LIMIT 1)
+     UNION ALL
+     (SELECT 'last' AS which, role, ts, body, n FROM conv ORDER BY rn DESC LIMIT 1)`, [input.nodeId, input.sessionId]);
+  let first: SessionHitLine | null = null, last: SessionHitLine | null = null;
+  for (const x of ends.rows) {
+    if (!msgs) msgs = Number(x.n) || 0;
+    const l = line(x.role, x.ts, x.body, HIT_NEIGHBOR_MAX);
+    if (String(x.which) === "first") first = l; else last = l;
+  }
+
+  //  ④ 고친 파일 — 같은 파일은 한 줄. 낱말이 맞은 파일을 먼저.
+  const ep: unknown[] = [input.nodeId, input.sessionId];
+  let hitCol = "false";
+  if (terms.length) hitCol = `bool_or(${termSql(ep, terms, "m.body", false).map((x) => `(${x.any})`).join(" OR ")})`;
+  const er = await boundedQuery(
+    `SELECT m.body, count(*)::int AS n, ${hitCol} AS hit
+       FROM session_msg m
+      WHERE m.node_id = $1 AND m.session_id = $2 AND m.role = 'edit'
+      GROUP BY m.body
+      ORDER BY 3 DESC, 2 DESC, 1
+      LIMIT 12`, ep);
+  //  화면엔 끝 두 마디만 보인다 — 색인은 끝 세 마디라 두 마디로 줄이면 같은 줄이 될 수 있다. 합친다.
+  const byPath = new Map<string, { path: string; hit: boolean }>();
+  for (const x of er.rows) {
+    const path = editLabel(String(x.body ?? ""));
+    if (!path) continue;
+    const cur = byPath.get(path) ?? { path, hit: false };
+    cur.hit = cur.hit || x.hit === true || x.hit === "t";
+    byPath.set(path, cur);
+  }
+  return { msgs, total, hits, edits: [...byPath.values()].slice(0, 8), first, last };
 }
 
 /**
