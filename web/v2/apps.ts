@@ -190,7 +190,7 @@ export { appGlassIcon };
 //   · 화면 앱(APPS 표) 클릭 = #/app/<key> 로 이동(가운데 iframe).
 //   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
 //     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
-//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다(glass-icon.ts builtinAppIcon). 남의 앱만 종류(앱/세션 앱)로 뭉뚱그린다.
+//  설치된 앱(org_app) 중 **우리가 만든 빌트인**은 제 아이콘을 갖는다(glass-icon.ts builtinAppIcon). 남의 앱은 기본 그림이고, 세션 앱에만 배지가 붙는다.
 
 let padEl: HTMLElement | null = null;
 export function openLaunchpad(): void {
@@ -233,7 +233,9 @@ export function openLaunchpad(): void {
         } },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
         el('b', { text: a.title }),
-        el('span', { class: 'v2-pad-badge', text: isScreen ? '앱' : '세션 앱' }));
+        //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
+        //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.
+        isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }));
       //  묶음은 출처가 정한다(#4554): 제품에 실려 온 것(builtin)은 기본 앱, 그 밖(세션이 만든 것 · 설치한 것)은 워크스페이스 앱.
       return { node, rank: rank(a.title), group: padGroupOfInstalled(a.source.kind) };
     });

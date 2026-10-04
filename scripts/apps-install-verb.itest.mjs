@@ -86,11 +86,11 @@ try {
 
   // ── 5) builtin 은 제거 차단(409) ──
   await seedBuiltinApps();
-  if (await getApp("hello")) {
-    await assert.rejects(() => removeCap.handler({ app_id: "hello" }, user, ctx), /builtin|재시드|409/i, "builtin 제거는 차단");
-    ok("builtin(hello) 제거 차단");
+  if (await getApp("inbox")) {   // #4554 — 예시 앱 hello 는 은퇴했다. 제품에 실린 빌트인으로 잰다
+    await assert.rejects(() => removeCap.handler({ app_id: "inbox" }, user, ctx), /builtin|재시드|409/i, "builtin 제거는 차단");
+    ok("builtin(inbox) 제거 차단");
   } else {
-    console.log("skip builtin 차단 검사(hello 시드 안 됨)");
+    console.log("skip builtin 차단 검사(inbox 시드 안 됨)");
   }
 
   console.log(`\n✓ ${pass} passed`);

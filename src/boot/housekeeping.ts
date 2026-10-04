@@ -219,7 +219,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  seed-default-content 의 형제 best-effort 스텝: 앱 레지스트리(org_app)+전개 대상(org_harness_asset·org_cron 등)
   //  스키마가 준비된 뒤(스키마 체인 완료 후 이 자리). 실패는 부팅을 막지 않는다(비치명 — 다음 부팅 시딩이 재시도).
   { name: "seed-builtin-apps", gate: "always", tenancy: "per-tenant", run: () => seedBuiltinApps()
-      .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
+      .then((r) => { if (r.seeded.length || r.updated.length || r.retired.length) logger.info(r, "빌트인 앱 시딩"); })
       .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
   // AppInstance worker 부팅복구(#1780 Stage B) — 시딩 뒤 최신 package hash가 확정된 다음 중앙 run을 되살리고,
   // 이미 연결됐거나 이후 연결되는 최신 RemoteNode의 fail-closed 종료 run도 같은 계약으로 재시작한다.
