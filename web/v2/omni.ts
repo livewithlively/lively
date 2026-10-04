@@ -29,7 +29,7 @@
 //  · 세션·화면·분류·리스트·설정·명령 — 셸이 쥔 목록에서(네트워크 0)
 //  공개범위는 **전부 서버가 시행한다**(#1291) — 여기서 거르지 않는다.
 import { api, el, sv, wsKey } from '../core.js';
-import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { appHref, visibleApps } from './apps.js';
 import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
@@ -99,14 +99,17 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', app: '화면' };
 const CHIP_LABEL = (k: Kind): string => (k === 'app' ? '바로 가기' : KIND_LABEL[k]);
 // 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
+//  프로젝트는 과녁(#4233, 원준 2026-10-04). 크기에 따라 과녁 · 작은 과녁을 고른다(종류 칩 13px · 결과 줄 15px).
 const KIND_PATH: Record<Kind, string[]> = {
-  proj: [ICONS.folder],
+  proj: [ICONS.proj],
   know: [ICONS.wiki],
   src: [ICONS.src],
   sess: [ICONS.chat],
   app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
-const icon = (k: Kind, cls: string, paths: string[] = KIND_PATH[k]): SVGElement =>
+const KIND_PX: Record<string, number> = { 'v2-omni-chip-ic': 13, 'v2-omni-kic': 15 };
+const kindPaths = (k: Kind, cls: string): string[] => (k === 'proj' ? [ICONS[projGlyph(KIND_PX[cls] || 15)]] : KIND_PATH[k]);
+const icon = (k: Kind, cls: string, paths: string[] = kindPaths(k, cls)): SVGElement =>
   sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
 
 //  뜻만 비슷한 지식을 맨 아래 묶음에 세우는 문턱 — 관련도순 맨 위에 쓰던 0.48 은 무관한 것을 0.49~0.66 으로 통과시켰다

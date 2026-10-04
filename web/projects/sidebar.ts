@@ -14,6 +14,7 @@ import { api, busy, el, sv, toast, visAxisOn } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { pjvApplyToolbarFilters } from './filters.js';
 import { pjvBundleIcon } from './icons.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 — 리스트 = 점과 줄 셋(새 화면과 한 벌)
 import { PJV_LIST_COLORS, openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace, pjvHarmonizeColor, pjvListStatusEditor, pjvSaveListMembers } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { pjvContainerCmp, pjvProjAddRow, pjvProjDelete, pjvProjRow, pjvProjTeamControl, pjvRenderStatusGroups } from './rows.js';
@@ -237,10 +238,9 @@ function pjvListGlyph(list) {
   const emoji = list && list.settings && list.settings.icon;
   if (emoji) return el('span', { class: 'pjv-side-listemoji', text: String(emoji) });
   const color = pjvHarmonizeColor((list && list.color) || pjvListAutoColor(list ? list.id : 0));
+  //  #4233(원준 2026-10-04 「리스트: 모두 점과 줄 셋」): 새 화면 사이드바와 같은 그림(ICONS.list). 리스트 색은 선 색으로 남긴다.
   const n = sv('svg', { class: 'pjv-side-listglyph', viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(
-    sv('path', { d: 'M4 7l1.6 1.6L8.4 5.6' }), sv('path', { d: 'M11 7h9' }),
-    sv('path', { d: 'M4 15l1.6 1.6L8.4 13.6' }), sv('path', { d: 'M11 15h9' }));
+  n.append(sv('path', { d: ICONS.list }));
   return n;
 }
 

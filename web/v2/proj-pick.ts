@@ -6,7 +6,8 @@
 //
 //  찾기 칸·떼기 행·목록 행은 **여기 한 곳**에서 만든다 — 입구마다 따로 두면 한쪽만 고쳐져 두 모양으로 갈린다.
 //  찾기 규칙은 홈 컴포저와 같은 lib/proj-match.ts. 실행(서버 요청·화면 갱신)은 부르는 쪽(main.ts)이 onPick 으로 쥔다.
-import { anchoredPopover, el } from '../core.js';
+import { anchoredPopover, el, sv } from '../core.js';
+import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 — 프로젝트 줄 앞의 과녁
 import { projMatches, type ProjLike } from '../lib/proj-match.js';
 
 export interface ProjPickRow { proj: ProjLike & { name: string }; done: boolean }
@@ -39,16 +40,18 @@ function pickBody(o: ProjPickOpts, done: () => void): { input: HTMLInputElement;
     note.textContent = '';
   }
 
+  //  #4233(원준 2026-10-04): 줄 앞에 프로젝트 그림을 세운다(사이드바 · 통합검색과 같은 그림). 15px 자리라 큰 과녁.
+  const ic = (d: string): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-pjpick-ic', 'aria-hidden': 'true' }, sv('path', { d })) as SVGElement;
   const render = (): void => {
     const hits = projMatches(o.rows, input.value.trim());
     const kids: HTMLElement[] = [];
     if (o.currentId) kids.push(el('button', { class: 'v2-pjpick-row v2-pjpick-none', type: 'button', role: 'option', onclick: () => void pick(null) },
-      el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
+      ic(ICONS.projNone), el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
     for (const r of hits.slice(0, LIMIT)) {
       const cur = Number(o.currentId) === Number(r.proj.id);
       kids.push(el('button', { class: 'v2-pjpick-row' + (cur ? ' cur' : ''), type: 'button', role: 'option', 'aria-selected': String(cur), onclick: () => { if (!cur) void pick(r.proj.id); },
         title: r.proj.name + ' · #' + r.proj.id },
-        el('span', { class: 'n', text: r.proj.name }),
+        ic(ICONS[projGlyph(15)]), el('span', { class: 'n', text: r.proj.name }),
         el('span', { class: 'm' }, el('span', { class: 'mono', text: '#' + r.proj.id }), r.done ? el('span', { class: 'v2-pjpick-done', text: '완료' }) : null, cur ? el('span', { class: 'v2-pjpick-cur', text: '✓ 지금' }) : null)));
     }
     if (hits.length > LIMIT) kids.push(el('p', { class: 'v2-fine', text: `외 ${hits.length - LIMIT}개 — 더 좁혀 검색하세요.` }));

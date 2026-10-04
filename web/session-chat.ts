@@ -347,7 +347,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 우측 사이드바에서 봅니다. 세션이 만든 파일을 보고 내려받아요.',
     onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
-      sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),
+      sv('path', { d: ICONS.folder })),   // #4233 — 우측 사이드바 「자료」 탭과 같은 둥근 폴더(원준 2026-10-04)
     el('span', { text: opts.filesLabel || '자료' })) as HTMLButtonElement;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).

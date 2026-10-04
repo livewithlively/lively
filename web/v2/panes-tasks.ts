@@ -525,7 +525,7 @@ export function tasksPart(ctx: PartCtx): Part {
   }, pnIcon('more', 'pn-i sm'));
   const copyName = (t: any): CtxRow => ({ label: '이름 복사', icon: 'copy', run: () => void copyText(String(t.name || '')).then((ok) => { if (ok) toast('복사했어요'); }) });
   const copyTaskBody = (t: any): void => { void copyText(taskPromptText(t)).then((ok) => { if (ok) toast('태스크 이름과 본문을 복사했어요.'); }); };
-  const boardRow: CtxRow = { label: '보드에서 보기', icon: 'proj', run: () => requestOpenRoute('#/projects2/p/' + ctx.id) };
+  const boardRow: CtxRow = { label: '보드에서 보기', icon: 'board', run: () => requestOpenRoute('#/projects2/p/' + ctx.id) };
 
   /** 줄의 속 — 본문(읽기 · 누르면 고치기) · 할 일. */
   function detailOf(t: any, primary: HTMLElement | null): HTMLElement {
@@ -563,7 +563,7 @@ export function tasksPart(ctx: PartCtx): Part {
       primary,
       el('button', { class: 'btn-text pj-dact', type: 'button', onclick: () => copyTaskBody(t) }, pnIcon('copy', 'pn-i sm'), el('span', { text: '본문 복사' })),
       el('span', { class: 'grow' }),
-      el('button', { class: 'btn-text pj-dact', type: 'button', title: '체크리스트·댓글·연결은 보드에서 봅니다', onclick: () => requestOpenRoute('#/projects2/p/' + ctx.id) }, pnIcon('proj', 'pn-i sm'), el('span', { text: '보드' })));
+      el('button', { class: 'btn-text pj-dact', type: 'button', title: '체크리스트·댓글·연결은 보드에서 봅니다', onclick: () => requestOpenRoute('#/projects2/p/' + ctx.id) }, pnIcon('board', 'pn-i sm'), el('span', { text: '보드' })));
     return el('div', { class: 'pn-tk-detail pj-detail' }, inner, subBox, acts);
   }
 

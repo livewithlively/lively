@@ -161,7 +161,7 @@ function stRow(task: string, state: string, stateCls: string, sess: string, sess
 function figSessionTask(): HTMLElement {
   return figure('session-task', '예시입니다. 태스크마다 세션이 하나씩 붙고, 세션이 없는 태스크는 세션을 열 때 붙습니다.',
     el('div', { class: 'gd-st' },
-      el('div', { class: 'gd-st-h' }, guideIcon('folder', 'gd-node-ic'), el('b', { text: '프로젝트: 가을 메뉴 출시' })),
+      el('div', { class: 'gd-st-h' }, guideIcon('proj', 'gd-node-ic'), el('b', { text: '프로젝트: 가을 메뉴 출시' })),   // #4233 — 프로젝트 = 과녁(17px)
       el('div', { class: 'gd-st-cols' }, el('span', { text: '태스크' }), el('span', { text: '태스크 상태' }), el('span'), el('span', { text: '맡은 세션' })),
       stRow('메뉴 가격표 정리', '완료', 'is-done', '가격표 정리', 'is-done'),
       stRow('매장 안내문 작성', '진행 중', 'is-doing', '안내문 작성', 'is-doing'),
