@@ -78,6 +78,38 @@ if (pins) {
   eq([ids(plan4.cardRows), plan4.dated.map((d) => ids(d.rows))], [["q"], [["a"]]], "P4 자기 화면 줄이 없으면 나누기 그대로");
   const plan5 = planSessAxis(null, isP, self);
   ok(!plan5.pinRows.length && !plan5.cardRows.length && !plan5.dated.length, "P5 행이 없으면 셋 다 빈 배열");
+
+  //  N — 프로젝트별 축의 카드 나누기(planNowCards · #4551, 원준 2026-10-04 «지금 볼 것만 올리고 나머지는 아래에»).
+  //   「지금 볼 것」 줄만 프로젝트별 조각 카드(now:p:<id>)로 올라가고, 그 프로젝트의 나머지 줄은 제 날짜 카드(p:<id>)에 남는다.
+  const { planNowCards } = pins;
+  ok(typeof planNowCards === "function", "N0 카드 나누기 잣대(planNowCards)가 잎 모듈에 있다");
+  if (typeof planNowCards === "function") {
+    const NOW = "지금 볼 것";
+    const shape = (cs) => cs.map((c) => [c.key, c.now, c.fold, ids(c.rows)]);
+    const n1 = planNowCards([R("w", { group: NOW }), R("a"), R("b"), R("c", { group: "어제" })], isP, NOW);
+    eq(shape(n1), [["now:p:1", true, false, ["w"]], ["p:1", false, true, ["a", "b", "c"]]],
+      "N1 ★★ 볼 일 있는 한 줄만 「지금 볼 것」 조각 카드로 — 같은 프로젝트의 나머지는 제 카드에 남는다(카드째 올라가지 않는다)");
+    const n2 = planNowCards([R("w1", { group: NOW }), R("x", { group: NOW, project: { id: 2 } }), R("w2", { group: NOW }), R("a")], isP, NOW);
+    eq(shape(n2), [["now:p:1", true, false, ["w1", "w2"]], ["now:p:2", true, true, ["x"]], ["p:1", false, true, ["a"]]],
+      "N2 ★ 같은 프로젝트의 「지금 볼 것」 줄 여럿은 한 카드에 묶인다 · 카드 순서는 처음 나온 순서");
+    const n3 = planNowCards([R("w", { group: NOW })], isP, NOW);
+    eq(shape(n3), [["now:p:1", true, true, ["w"]]], "N3 ★ 줄이 전부 「지금 볼 것」이면 조각 카드 하나뿐 — 「지난 세션」 접힘은 이 카드가 든다(안 그러면 그 세션들이 어디에도 없다)");
+    const n4 = planNowCards([R("a"), R("b", { group: "어제" })], isP, NOW);
+    eq(shape(n4), [["p:1", false, true, ["a", "b"]]], "N4 볼 일이 없는 프로젝트는 종전 그대로 카드 하나");
+    const n5 = planNowCards([R("w", { group: NOW, project: { id: 7 } }), R("q", { project: { id: 7 } })], isP, NOW);
+    eq(shape(n5), [["p:7", false, true, ["w", "q"]]], "N5 ★ 고정한 프로젝트는 나누지 않는다 — 고정한 단위가 그대로 움직인다");
+    const n6 = planNowCards([R("w", { group: NOW, project: null }), R("z", { project: { id: 0 } })], () => true, NOW);
+    eq(shape(n6), [["now:p:0", true, false, ["w"]], ["p:0", false, true, ["z"]]], "N6 경계: 「프로젝트 없음」(null · id 0)도 같은 규칙으로 나눈다(고정할 수 없으므로 늘 나눈다)");
+    eq(n1.map((c) => [c.pkey, c.id]), [["p:1", 1], ["p:1", 1]], "N7 두 조각 모두 프로젝트 키(pkey)는 같다 — 압정 · 「지난 세션」 통은 프로젝트 단위");
+    ok(planNowCards(null, isP, NOW).length === 0 && planNowCards([], isP, NOW).length === 0, "N8 행이 없거나 null 이면 빈 결과");
+    const n9 = planNowCards([R("a"), R("w", { group: NOW }), R("b")], isP, NOW);
+    eq(shape(n9), [["p:1", false, true, ["a", "b"]], ["now:p:1", true, false, ["w"]]], "N9 경계: 정렬이 안 된 입력도 줄을 잃지 않는다(순서를 지어내지 않는다 — 줄 세우기는 orderCards 의 몫)");
+    for (const [name, cs] of [["N1", n1], ["N2", n2], ["N3", n3], ["N4", n4], ["N5", n5], ["N6", n6], ["N9", n9]]) {
+      const per = new Map();
+      for (const c of cs) per.set(c.pkey, (per.get(c.pkey) || 0) + (c.fold ? 1 : 0));
+      ok([...per.values()].every((n) => n === 1), `N10·${name} ★★ 「지난 세션」 접힘을 드는 카드는 프로젝트마다 정확히 한 장(두 번도 0번도 아니다)`);
+    }
+  }
 }
 
 if (ask) {
@@ -124,6 +156,20 @@ ok(/\n  projGroup: 'M5\.18 1\.61 A4\.93 4\.93 0 1 0 10\.11 6\.54 /.test(IC) && !
   && /icon\('projGroup', 'v2-axisbtn-ic'\)/.test(cut(SIDE, "function axisBtn(", "\n}\n"))
   && /\.v2-axisbtn-ic \{ width: 15px; height: 15px;[^}]*stroke-width: 1\.9;/.test(CSS40),
   "W4 묶기 토글 아이콘 = 작은 과녁과 아래 줄 둘(projGroup · #4233 2026-10-04 고른 그림 · 15px · 1.9 선)");
+//  #4551 — 「지금 볼 것」 조각 카드 배선.
+const pgs = cut(SIDE, "function projGroups(", "function grpSums(");
+ok(/planNowCards\(rest, projPinnedId, PRIORITY_GROUP\)/.test(pgs), "W7a ★프로젝트 카드 묶기는 잎 모듈(planNowCards)이 한다 — 「지금 볼 것」 줄만 조각 카드로");
+ok(/if \(hold\) for \(const k of \[\.\.\.nowClosed\]\) if \(!byKey\.has\(k\)\) nowClosed\.delete\(k\);/.test(pgs),
+  "W7f 조각 카드의 접힘은 프로젝트별 축의 판에서만 정리한다 — 세션별 축을 다녀와도 접은 것이 남는다");
+ok(/if \(g\.now\) \{ g\.open = searching \|\| !nowClosed\.has\(g\.key\); continue; \}/.test(pgs),
+  "W7b 조각 카드는 기본이 펴짐 — 올라온 줄이 곧 그 카드의 내용이다(사람이 접은 것만 이 페이지 동안 접힘)");
+ok(/if \(key\.startsWith\(NOW_CARD\)\) \{ if \(wasOpen\) nowClosed\.add\(key\); else nowClosed\.delete\(key\); repaintList\(\); return; \}\s*if \(allPast\)/.test(cut(SIDE, "function toggleGrp(", "\n}\n")),
+  "W7c 조각 카드 접기·펴기는 페이지 수명(nowClosed)만 — 영속 기억(grpClosed·grpOpened)에 안 적힌다");
+ok(/pinBtn\(g\.pkey,/.test(cut(SIDE, "function projGrpHead(", "function grpFacesEl(")) && !/pinBtn\(g\.key,/.test(SIDE),
+  "W7d 압정은 프로젝트 키(pkey)로 — 조각 카드에서 눌러도 그 프로젝트가 고정된다");
+ok(/g\.now \? \{ now: [^}]*folded: \[\], open: false \}/.test(card)
+  && /pastSet\.has\(g\.pkey\)/.test(card) && !/pastSet\.has\(g\.key\)/.test(card) && /cardPastHead\(g\.pkey,/.test(card),
+  "W7e ★조각 카드는 줄을 접지 않고, 「지난 세션」 통은 프로젝트 키로 본다(stage 판 — 카드에 «지난 세션 전량» 이 아직 없어 fold 배선은 main 에서만 잰다)");
 const tp = cut(SIDE, "function togglePin(", "\n}\n");
 ok(/repaintList\(\);/.test(tp) && !/if \(groupProj\) repaintList\(\);/.test(tp), "W5 프로젝트 압정은 두 축 모두 다시 그린다(세션별 축도 이 핀을 쓴다)");
 const CSS = read("public/styles/47-v2-rail.css");
