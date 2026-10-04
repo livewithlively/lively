@@ -300,8 +300,9 @@ test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projec
   const body = SIDE.slice(a, SIDE.indexOf("\n}\n", a));
   assert.match(body, /const allOn = plan\.onKey === 'all';/);
   assert.match(body, /href: '#\/projects2\/all'/);
-  assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), cnt\(plan\.allN\)\)/);
-  assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.plan\.favs\.map\(favRow\)\];/);
+  //  #3870 — 수와 즐겨찾기 줄은 목록의 정본을 받은 뒤(ready)에만 선다(lib/side-boot). 「전체」 줄 자신은 받기 전에도 맨 앞에 선다.
+  assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), ready \? cnt\(plan\.allN\) : null\)/);
+  assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.\(ready \? plan\.favs\.map\(favRow\) : \[\]\)\];/);
   assert.match(body, /if \(!plan\.groups\.length\) return \(plan\.favs\.length \|\| plan\.noneN\) \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
 });
 
