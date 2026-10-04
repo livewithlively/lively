@@ -34,7 +34,7 @@ import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배�
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
@@ -524,7 +524,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const z = (ev.target.closest('.pn-pane') as HTMLElement | null)?.dataset.zone;
     const zone: Zone = z === 'bottom' && !narrow() ? 'bottom' : 'side';   // 가운데 칸(세션)에서 부르면 곁칸에 넣는다(좁은 폭엔 아래 칸이 없다)
     const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
-      label: d.name, icon: d.type === 'files' || d.type === 'sessfiles' ? 'folder' : d.type === 'knowledge' ? 'doc' : d.type === 'web' ? 'web' : d.type === 'apps' ? 'apps' : d.type === 'liv' ? 'liv' : d.type === 'timeline' ? 'clock' : d.type === 'archive' ? 'archive' : d.type === 'editor' ? 'eye' : d.type === 'preview' ? 'window' : 'layers',
+      //  #4233: 탭 · [+] 고르기와 같은 그림(PART_DEFS.icon). 종전엔 여기서 따로 고르다 「프로젝트」만 묶음 그림(layers)으로 떨어졌다.
+      label: d.name, icon: pnIconName(d.icon),
       hint: d.hint, run: () => { openZone(zone); addPart(zone, d.type); },
     }));
     void hit;
@@ -1504,7 +1505,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       ? el('button', { class: 'pn-move', type: 'button', 'aria-label': loose ? '이 세션을 프로젝트에 붙이기' : '이 세션을 다른 프로젝트로 옮기기',
           title: loose ? '이 세션을 프로젝트에 붙입니다' : '이 세션을 다른 프로젝트로 옮기거나 프로젝트에서 뗍니다',
           onclick: () => opts.onMoveSession!(sid) },
-          icon('moveto', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))
+          icon('projMove', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))   // #4233 — 칸 옮기기(moveto)와 나눈다
       : null;
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
@@ -1529,7 +1530,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         //  칠한 버튼, 가끔 보는 것(상세)은 테두리 버튼. 위계가 색으로 먼저 읽힌다.
         el('span', { class: 'pn-door-sep', 'aria-hidden': 'true' }),
         swap ? swap.button() : null,
-        el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })),
+        el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('sessNew', 'pn-i sm'), el('span', { text: '세션' })),   // #4233 — 새 세션 = 말풍선과 더하기
         // 이름은 '정보'가 아니라 **프로젝트 상세** — 개요 부품을 없앤 뒤로 본문·할 일·상태를 보는 유일한 입구다.
         //  '정보'만 있으면 무엇에 대한 정보인지 안 말해 준다(원준 2026-08-20).
         loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' }))));

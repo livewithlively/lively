@@ -25,6 +25,11 @@ const BUILTIN_APP_ICON: Record<string, string> = { browser: 'web', inbox: 'bell'
 export function builtinAppIcon(id: string, hasUi: boolean): string {
   return Object.prototype.hasOwnProperty.call(BUILTIN_APP_ICON, id) ? BUILTIN_APP_ICON[id] : (hasUi ? 'liv' : 'term');
 }
+/** 사이드바의 설치한 앱 줄(#/i/<id>)에 그릴 그림 이름. 런치패드와 같은 그림이고, 종(bell)만 사이드바 이름 inbox 로 바꾼다. */
+export function instanceSideIcon(id: string, hasUi: boolean): string {
+  const g = builtinAppIcon(id, hasUi);
+  return g === 'bell' ? 'inbox' : g;
+}
 
 /** 앱 아이콘 SVG 의 속(문자열). 64 뷰박스: 타일(모서리 반지름 = 한 변의 26%) + 가운데 선 아이콘(24 격자를 1.44배). */
 export function appGlassMarkup(icon: string): string {

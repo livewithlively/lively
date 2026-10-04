@@ -34,7 +34,8 @@
 //   B3 새 값 비었음: 앱 id 가 비었거나 표의 열쇠가 아닌 이름(constructor)이어도 기본 그림이다(던지지 않는다)
 //   A1 사이드바의 설치한 앱 줄(인스턴스 아이콘 'app'): 프로젝트 그림(proj)을 그리지 않고 「앱」 그림(apps)을 그린다.
 //      #4233 프로젝트 그림이 과녁으로 바뀌자 프로젝트가 아닌 앱 줄이 과녁으로 서던 것(종전엔 'app' → proj 폴더로 접었다).
-//   A2 설치한 앱의 주소(#/i/<id>)로 선 줄은 런치패드와 같은 그림(builtinAppIcon)을 쓴다
+//   A2 설치한 앱의 주소(#/i/<id>)로 선 줄은 런치패드와 같은 그림을 쓴다. 그림 이름은 instanceSideIcon 을 값으로 불러 본다
+//      (웹 브라우저 = web · 확인할 것 = inbox · 그 밖은 liv/term · 늘 표에 있는 이름이고 proj 가 아니다)
 //   A3 옛 사이드바의 [앱] 단추도 프로젝트 그림을 쓰지 않는다
 //   F1 사이드바 glyph() · 외부 앱 연결 icon() · icon(): 표에 없는 이름이면 「앱」 그림을 그린다(d 가 빈 path 를 그리지 않는다)
 //   F2 표에 있는 이름은 그 그림을 그린다(예비 그림이 제 그림을 덮지 않는다)
@@ -220,7 +221,8 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
     "H1 「사용 가이드」 화면 머리(앱 · 클래식 문서 셸): 표의 learn");
   const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
   //  #4517 — 「세션 이력」(hist) 종류가 「대화」(conv)로 바뀌었다가, #4530 에서 대화는 세션의 일부로 합쳐졌다(종류 sess 하나).
-  const want = { proj: "folder", know: "wiki", src: "src", sess: "chat" };
+  //  #4233(원준 2026-10-04) — 프로젝트는 과녁(proj). 칩 크기에 따른 작은 과녁은 scripts/project-icons.test.mjs Q2 가 값으로 본다.
+  const want = { proj: "proj", know: "wiki", src: "src", sess: "chat" };
   for (const [k, n] of Object.entries(want)) ok(new RegExp("\\b" + k + ": \\[ICONS\\." + n + "\\]").test(kp), `H2 통합검색 ${k} = 표의 ${n}`);
   ok(/key: 'notify', label: '알림', icon: \[ICONS\.bell\]/.test(srcOf["web/v2/me-modal.ts"] || ""), "H3 [나] 창 「알림」 = 표의 bell");
   ok(/PJV_TM_ICONS\.bell = \{ p: \[\['path', \{ d: ICONS\.bell \}\]\] \}/.test(srcOf["web/taskmodal/composer.ts"] || ""), "H3 태스크 창 활동 구독 = 표의 bell");
@@ -335,8 +337,19 @@ const GLYPH_OF = { home: "dashboard", sys: "gear" };
     ok(d !== ICONS.proj && d === ICONS.apps, "A1 설치한 앱 줄('app')은 프로젝트 그림이 아니라 「앱」 그림", String(d).slice(0, 30));
     ok(dOf(instanceIcon({ icon: "wiki" })) === ICONS.wiki && dOf(instanceIcon({ icon: "chat" })) === ICONS.chat, "A1 다른 줄(위키 · 세션)은 제 그림 그대로");
   }
+  // A2: 설치한 앱 주소(#/i/<id>)의 줄 그림을 값으로 부른다(glass-icon instanceSideIcon). 런치패드(builtinAppIcon)와 같고 종만 inbox.
+  const side = glass && glass.instanceSideIcon;
+  const sideCall = (id, ui) => { try { return side ? side(id, ui) : "!none"; } catch { return "!throw"; } };
+  ok(typeof side === "function", "A2 설치한 앱 줄의 그림(instanceSideIcon)을 값으로 부를 수 있다");
+  ok(sideCall("browser", false) === "web" && sideCall("browser", true) === "web", "A2 웹 브라우저 줄 = web(런치패드와 같은 지구본)", sideCall("browser", false));
+  ok(sideCall("inbox", false) === "inbox", "A2 확인할 것 줄 = inbox(종 bell 은 사이드바 이름 inbox 로)", sideCall("inbox", false));
+  ok(sideCall("hello", true) === "liv" && sideCall("some-third-party", false) === "term", "A2 그 밖의 앱 줄은 런치패드 기본 그림(화면이 있으면 liv, 없으면 term)", sideCall("hello", true) + "," + sideCall("some-third-party", false));
+  for (const id of ["browser", "inbox", "hello", "constructor"]) for (const ui of [true, false]) {
+    const n = sideCall(id, ui);
+    ok(n !== "proj" && Object.prototype.hasOwnProperty.call(ICONS, n), `A2 ${id}(${ui ? "화면 있음" : "화면 없음"}) 줄 그림 ${n} 은 표에 있는 그림이고 프로젝트 그림이 아니다`, n);
+  }
   const face = (() => { const i = MAIN.indexOf("function sideRowFace("); return i < 0 ? "" : MAIN.slice(i, MAIN.indexOf("\n}\n", i)); })();
-  ok(/page === 'i'/.test(face) && /builtinAppIcon\(/.test(face), "A2 설치한 앱 주소(#/i/<id>)의 줄은 런치패드와 같은 그림(builtinAppIcon)");
+  ok(/page === 'i'/.test(face) && /instanceSideIcon\(inst\.app\.id/.test(face) && !/=== 'bell'/.test(face), "A2 sideRowFace 의 #/i/<id> 줄이 instanceSideIcon 을 부른다(종 바꾸기를 따로 하지 않는다)");
   const legacy = (() => { const i = SIDE.indexOf("function renderLegacy("); return i < 0 ? "" : SIDE.slice(i, SIDE.indexOf("\n}\n", i)); })();
   ok(!!legacy && !/appIcon\('proj'/.test(legacy) && /v2-apps-btn/.test(legacy), "A3 옛 사이드바의 [앱] 단추가 프로젝트 그림을 쓰지 않는다");
 }

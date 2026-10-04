@@ -15,6 +15,7 @@
 //   소유하므로(#808) 해시를 바꾸면 라우터가 모달을 닫는다.
 import { api, el, personFace, relTime, sv, toast } from '../core.js';
 import { openSessionWindow } from '../lib/session-open.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 — 공유 폴더 · 새 세션 = 새 화면과 같은 그림(한 벌)
 import { fetchTurns } from '../v2/sess-tail.js';
 import { fileThumb } from './files-icons.js';
 import { fmtSize } from './files-format.js';
@@ -46,7 +47,7 @@ const HUB_ICON: Record<string, string> = {
   tasks: '<path d="M4 6.5h9M4 12h9M4 17.5h6"/><path d="M15 12.5l2.4 2.4L22 10"/>',
   sessions: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
   body: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
-  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  folder: `<path d="${ICONS.folder}"/>`,
   knowledge: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h7"/>',
   timeline: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
   right: '<path d="M5 12h14M13 6l6 6-6 6"/>',
@@ -59,9 +60,9 @@ const HUB_ICON: Record<string, string> = {
   comment: '<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>',
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
   chev: '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
-  // 작업 공간(세션) — 터미널 창 + 프롬프트. 새로 여는 쪽은 우상단 ＋ 배지(selection.ts pjvActIcon('session') 과 같은 붓).
+  // 작업 공간(세션) — 터미널 창 + 프롬프트. 새로 여는 쪽은 아래 sessNew(말풍선과 더하기, #4233).
   term: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.6"/><path d="M6.8 9.6l3 2.6-3 2.6"/><path d="M12.4 15h4.4"/>',
-  termnew: '<rect x="1.5" y="4.5" width="16" height="14" rx="2.4"/><path d="M5.2 9.4l3 2.6-3 2.6"/><path d="M10.6 15.4h3.8"/><path d="M20.6 2.6v5"/><path d="M18.1 5.1h5"/>',
+  sessNew: `<path d="${ICONS.sessNew}"/>`,   // #4233 — 새 세션 = 말풍선과 더하기
 };
 const TOOL_TONE: Record<HubTool, string> = { tasks: 'amber', sessions: 'mint', body: '', folder: 'blue', knowledge: 'mint', timeline: '' };
 function hubIcon(name: string, size = 14): SVGElement {
@@ -225,7 +226,7 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const goLabel = sess.length ? '맡은 세션으로 가기' : '이 태스크로 세션 열기';
     const go = o.goTask && t.level !== 'subtask'
       ? el('button', { class: 'pjh-go', type: 'button', title: goLabel + (sess.length && sess[0].label ? ' — ' + sess[0].label : ''), 'aria-label': goLabel,
-        onclick: (e: Event) => { e.stopPropagation(); o.goTask!(t); } }, hubIcon(sess.length ? 'term' : 'termnew', 15))
+        onclick: (e: Event) => { e.stopPropagation(); o.goTask!(t); } }, hubIcon(sess.length ? 'term' : 'sessNew', 15))   // #4233(원준 2026-10-04): 새 세션 = 말풍선과 더하기
       : null;
     return row(pjvStatusIconStd(t.status, 'sm'), nameEl,
       !slim && t.subtasks && t.subtasks.length ? el('span', { class: 'pjv-trow-subcount', text: String(t.subtasks.length) }) : null,

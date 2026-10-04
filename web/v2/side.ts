@@ -57,7 +57,7 @@ import { type CtxRow } from './ctx-menu.js';   // #3784 우클릭 메뉴 행 타
 import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — refreshStatusCount: 문패 배지는 인원 수에서 나온다
 import { openSectionMenu, railIsHidden, sectionDef, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
-import { iconPath } from '../lib/icon-paths.js';
+import { iconPath, projGlyph } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
@@ -455,7 +455,9 @@ let outsideBound = false;
 const PIN_NEEDLE = 'M12 17v5';
 const PIN_BODY = 'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1z';
 
-function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash' | 'sess', cls: string): SVGElement {
+type GlyphKind = 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash' | 'sess'
+  | 'proj' | 'projMini' | 'projNone' | 'projNew' | 'sessNew';
+function glyph(kind: GlyphKind, cls: string): SVGElement {
   //  #4233: 그림은 lib/icon-paths.ts 한 벌에서만 온다. 여기 있던 예비 표는 걷었다(표에 없으면 다른 모양이 나오던 길).
   //   표에 없는 이름은 icon() 과 같이 「앱」 그림으로 떨어진다(d 가 빈 path 를 그리지 않는다).
   //   열린 폴더는 접힌 폴더와 같은 자리(x 3~21 · y 5~20)를 쓰고 왼쪽 세로선까지 그린다. 16px 에서 납작하게 잘려 보이지 않는다.
@@ -567,7 +569,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
     one ? null
       : o.projLine && inst.icon === 'chat'
         ? el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (inst.project && !inst.project.self ? inst.project.name : '프로젝트 없음') },
-            glyph('folder', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || '프로젝트 없음' }))
+            glyph(inst.project && !inst.project.self ? projGlyph(11) : 'projNone', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || '프로젝트 없음' }))
       : inst.icon === 'chat'
         ? (inst.ask
             ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '', !!o.projTail)
@@ -576,7 +578,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
           ? el('button', { class: 'v2-app-inst-project', type: 'button',
               title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
               onclick: () => hooks.onOpenProject?.(inst.project!.id) },
-              glyph('folder', 'v2-app-inst-project-ic'),
+              glyph(projGlyph(12), 'v2-app-inst-project-ic'),   // #4233 — 12px 자리라 작은 과녁
               el('span', { class: 'v2-app-inst-pname', text: inst.project.name }))
           : el('span', { class: 'v2-app-inst-meta', text: inst.meta || '라이블리 앱' })) as HTMLElement;
 }
@@ -736,7 +738,8 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
-      glyph(g.open ? 'folder-open' : 'folder', 'v2-pg-ic'),
+      //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
+      glyph(g.id ? 'proj' : 'projNone', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
@@ -1569,7 +1572,7 @@ function renderSessions(): void {
     return el('button', { class: 'v2-wcat v2-ptl v2-kcat v2-sproj' + (l.pid ? '' : ' v2-ptl--none') + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
       title: `${pname(l.pid)} — 이 ${group === null ? '' : '묶음의 '}프로젝트 세션만 가운데 목록에 보여요`,
       onclick: () => pick({ by: sc.by, group, proj: l.pid }) },
-      l.pid ? glyph('folder', 'v2-ptl-ic') : glyph('inbox', 'v2-ptl-ic'),
+      l.pid ? glyph(projGlyph(16), 'v2-ptl-ic') : glyph('projNone', 'v2-ptl-ic'),   // #4233 — 16px 줄 · 「프로젝트 없음」은 점선 원
       el('span', { class: 'n', text: pname(l.pid) }),
       l.wait ? el('span', { class: 'v2-dot wait', title: '확인 필요 세션이 있어요', 'aria-label': '확인 필요' }) : null,
       el('span', { class: 'v2-cnt', text: fmtN(l.n) }));
@@ -1919,7 +1922,7 @@ function renderProjTree(): void {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
       title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
-      glyph('inbox', 'v2-ptl-ic'), el('span', { class: 'n', text: '기타 (미분류)' }), cnt(plan.noneN)));
+      glyph('projNone', 'v2-ptl-ic'), el('span', { class: 'n', text: '기타 (미분류)' }), cnt(plan.noneN)));   // #4233 — 「프로젝트 없음」과 같은 점선 원
   }
 
   // ── 카드 — 하위 폴더 · 리스트 모음. 줄 나누기는 위키와 같은 fitWikiList.
@@ -2571,7 +2574,8 @@ function newProjRow(): HTMLElement {
   }) as HTMLInputElement;
   const line = el('div', { class: 'v2-npj-l' + (newSending ? ' sending' : '') },
     el('span', { class: 'v2-car none', 'aria-hidden': 'true' }),
-    newKind === 'list' ? icon('list', 'v2-pj-ic') : glyph(newKind === 'folder' ? 'folder-open' : 'folder', 'v2-pj-ic'),
+    //  #4233(원준 2026-10-04): 새 프로젝트 = 작은 과녁과 더하기 · 새 폴더 = 폴더 · 새 리스트 = 리스트. 열린 폴더는 «펼침»에만 쓴다.
+    newKind === 'list' ? icon('list', 'v2-pj-ic') : glyph(newKind === 'folder' ? 'folder' : 'projNew', 'v2-pj-ic'),
     inp);
   const create = async (): Promise<void> => {
     const name = newDraft.trim();
@@ -2702,7 +2706,8 @@ function axisBtn(): HTMLElement {
     } },
     //  그림은 하나다 — 켜짐/꺼짐은 **채움**이 말한다(켜지면 파랑을 채운다). 두 얼굴로 바꾸면
     //   '지금 이 상태'인지 '누르면 이렇게 된다'인지가 애매해진다.
-    icon('folderRows', 'v2-axisbtn-ic')) as HTMLElement;   // #4233 — 원준 «V1 에 그려준 게 더 맘에 든다»
+    //  #4233(원준 2026-10-04): 프로젝트가 과녁이 되어, 폴더와 줄 둘(9-25)을 작은 과녁과 아래로 이어진 줄 둘로 바꿨다.
+    icon('projGroup', 'v2-axisbtn-ic')) as HTMLElement;
 }
 
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
@@ -2927,7 +2932,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') },
-    caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
+    caret, glyph(p ? 'proj' : 'projNone', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),   // #4233 — 펼침은 꺾쇠가 말한다
     r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '보관한 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,
@@ -2998,7 +3003,8 @@ function newSessBtn(projectId: number): HTMLElement {
     class: 'v2-newb', type: 'button', 'aria-label': '이 프로젝트에서 새 세션 열기',
     title: '새 세션 — 이 프로젝트에 붙은 AI 세션을 엽니다',
     onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); hooks.onNewSession?.(projectId); } },
-    sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
+    //  #4233(원준 2026-10-04): 새 세션 = 말풍선과 더하기. 다른 것을 만드는 ＋ 와 그림을 나눈다.
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' }, sv('path', { d: iconPath('sessNew') })));
 }
 
 // 고정 단추 — 자리는 늘 차지한다(눌러야 보이는 것이 나타나며 행을 밀면 목록 전체가 흔들린다).
@@ -3196,7 +3202,7 @@ export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projec
     if (next != null && next.trim() && next.trim() !== s.label) void hooks.onRenameSession?.(s.id, next.trim());
   } });
   rows.push({ label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) });
-  if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'plus', run: () => hooks.onNewSession?.(Number(s.projectId)) });
+  if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'sessNew', run: () => hooks.onNewSession?.(Number(s.projectId)) });
   //  #3857 — 사람이 고르는 동사는 보임 축뿐이다: 치움(어느 세션이든) · 휴지통(지난 세션). «지난 세션으로 보내기»(회수)는 걷었다.
   if (mine) rows.push({ sep: true, label: '' }, { label: '목록에서 치우기', icon: 'x', run: () => hooks.onCloseInstance?.('sess:' + s.id) });
   if (mine && !live && !isTrashedSess(s)) rows.push({ label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
@@ -3210,7 +3216,7 @@ export function projectCtxRows(p: Proj): CtxRow[] {
   const liveMine = all.filter((x) => isLive(x) && isMine(x)).length;
   const archived = isArchivedProj(p);
   return [
-    { label: '새 세션', icon: 'plus', run: () => hooks.onNewSession?.(p.id) },
+    { label: '새 세션', icon: 'sessNew', run: () => hooks.onNewSession?.(p.id) },
     { label: '이름 바꾸기', icon: 'pen', hint: '더블클릭', run: () => {
       const nameEl = document.querySelector<HTMLElement>('.v2-pj-row[data-nav="' + pk + '"] .n');
       if (nameEl) { beginRenameProject(pk, p); return; }

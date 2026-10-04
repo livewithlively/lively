@@ -19,6 +19,7 @@
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, replaceKids, sv, toast } from './core.js';
+import { ICONS } from './lib/icon-paths.js';   // #4233 — [자료] = 우측 사이드바 「자료」와 같은 둥근 폴더
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { registerSessionInput } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
@@ -329,7 +330,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 우측 사이드바에서 봅니다. 세션이 만든 파일을 보고 내려받아요.',
     onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
-      sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),
+      sv('path', { d: ICONS.folder })),   // #4233 — 우측 사이드바 「자료」 탭과 같은 둥근 폴더(원준 2026-10-04)
     el('span', { text: opts.filesLabel || '자료' })) as HTMLButtonElement;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).

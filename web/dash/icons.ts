@@ -9,19 +9,31 @@ function dashListGlyph(list) {
   const emoji = list && list.settings && list.settings.icon;
   if (emoji) return el('span', { class: 'pjv-side-listemoji', text: String(emoji) });
   const color = (list && list.color) || 'var(--muted-2)';
+  //  #4233 — 리스트 = 점과 줄 셋(ICONS.list). 리스트 색은 선 색으로 남긴다.
   const n = sv('svg', { class: 'pjv-side-listglyph', viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('path', { d: 'M4 7l1.6 1.6L8.4 5.6' }), sv('path', { d: 'M11 7h9' }),
-    sv('path', { d: 'M4 15l1.6 1.6L8.4 13.6' }), sv('path', { d: 'M11 15h9' }));
+  n.append(sv('path', { d: ICONS.list }));
   return n;
 }
 // 새 세션 아이콘(#1236) — 프로젝트 탭 pjvActIcon('session') 동형: 터미널 창(>_ 프롬프트) + 우상단 ＋ 배지(만들기).
 //  가운데 ＋만 넣으면 그냥 네모+더하기로 읽혀 터미널 느낌이 없다는 피드백으로 프롬프트를 살렸다.
 //  크기 피드백 2회: 15→18→20px + 도형이 뷰박스를 꽉 채우게(창이 60%만 차지해 같은 px 여도 작아 보였다).
 function dashSessAddIcon() {
+  //  #4233(원준 2026-10-04 「새 세션 열기: 모두 말풍선과 더하기」): 새 화면과 같은 그림(ICONS.sessNew).
   const n = sv('svg', { viewBox: '0 0 24 24', width: 20, height: 20, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  n.append(sv('rect', { x: 1.5, y: 4.5, width: 16, height: 14, rx: 2.4 }),
-    sv('path', { d: 'M5.2 9.4l3 2.6-3 2.6' }), sv('path', { d: 'M10.6 15.4h3.8' }),
-    sv('path', { d: 'M20.6 2.6v5' }), sv('path', { d: 'M18.1 5.1h5' }));
+  n.append(sv('path', { d: ICONS.sessNew }));
+  return n;
+}
+// 프로젝트 폴더(「내 프로젝트 설정」 폴더 트리) — #4233: 새 화면 프로젝트 사이드바와 같은 둥근 선 폴더.
+//  아래 dashFolderThumb(맥 스타일 채운 폴더)는 파일이 든 폴더(팀 공유 폴더 · 파일 화면)에만 쓴다.
+function dashProjFolderIcon() {
+  const n = sv('svg', { class: 'dash-pop-foldline', viewBox: '0 0 24 24', width: 17, height: 17, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: ICONS.folder }));
+  return n;
+}
+// 즐겨찾기 별 — #4233: 새 화면과 같은 별(ICONS.star). 켠 것은 안을 채운다(⭐ 이모지를 걷었다).
+function dashStarIcon(on = true) {
+  const n = sv('svg', { class: 'dash-pop-star', viewBox: '0 0 24 24', width: 13, height: 13, fill: on ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: ICONS.star }));
   return n;
 }
 // 하위 태스크 아이콘 — 프로젝트 탭 pjvSubtaskIcon 동형(서브카운트 배지 안).
@@ -156,6 +168,8 @@ function dashViewListIcon() {
 export {
   dashListGlyph,
   dashSessAddIcon,
+  dashProjFolderIcon,
+  dashStarIcon,
   dashSubtaskIcon,
   dashGripIcon,
   DASH_FILE_META,

@@ -13,6 +13,7 @@
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
 import { api, el, personFace, relTime, renderMarkdown, replaceKids, state, sv, toast } from '../core.js';
+import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 — 프로젝트 = 과녁
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, confirmSessionTrash, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, trashProjectsFlow, eulReul } from '../session-actions.js';
@@ -40,7 +41,10 @@ const whenMs = (ms: number): string => (ms ? relTime(new Date(ms).toISOString())
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 const PAGE = 50;
 const DOC_TYPE: Record<string, string> = { decision: '결정', concept: '개념', 'how-to': '절차', reference: '참조', research: '조사', entity: '사람·조직' };
-const folderIcon = () => sv('svg', { viewBox: '0 0 24 24', class: 'v2-bin-fold sm', 'aria-hidden': 'true' }, sv('path', { d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }));
+//  프로젝트 표시(#4233, 원준 2026-10-04): 종전 폴더를 과녁으로. 자리가 15px(.v2-bin-fold.sm)이라 큰 과녁이고,
+//   프로젝트에 붙지 않은 묶음은 점선 원(「프로젝트 없음」)이다.
+const BIN_PROJ_PX = 15;
+const projIcon = (has = true) => sv('svg', { viewBox: '0 0 24 24', class: 'v2-bin-fold sm', 'aria-hidden': 'true' }, sv('path', { d: has ? ICONS[projGlyph(BIN_PROJ_PX)] : ICONS.projNone }));
 const sessIcon = () => sv('svg', { viewBox: '0 0 24 24', class: 'v2-bin-fold sm', 'aria-hidden': 'true' }, sv('path', { d: 'M4 5h16v11H8l-4 4z' }));
 
 // 날짜 묶음 — 오늘 · 어제 · 이번 주(7일) · 이전. 긴 목록의 눈금(OS 휴지통과 같은 문법).
@@ -381,7 +385,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
     if (!visSess.length) { replaceKids(body, emptyNote('세션', '[지난 세션] 화면이나 사이드바 지난 세션 행의 휴지통 단추로 보낼 수 있어요.')); return; }
     const groups = groupByProject(visSess.slice(0, ui.shown), (s) => s.projectId, (pid) => projName(data, pid) || `#${pid}`);
     replaceKids(body, ...groups.map((g) => el('section', { class: 'v2-trash-grp' },
-      el('div', { class: 'gh' }, folderIcon(), el('b', { text: g.name }), el('span', { class: 'c', text: `${g.rows.length}개` }), el('span', { class: 'sp' }),
+      el('div', { class: 'gh' }, projIcon(!!g.id), el('b', { text: g.name }), el('span', { class: 'c', text: `${g.rows.length}개` }), el('span', { class: 'sp' }),
         tx('이 묶음 되돌리기', `「${g.name}」에 있던 ${g.rows.length}개를 지난 세션으로 되돌립니다`, () => void restoreItems(g.rows.map(sessItem)))),
       ...g.rows.map((s) => el('div', { class: 'v2-trash-row' }, pick('s:' + s.id, sessName(s)), sessIcon(),
         el('a', { class: 't', href: '#/s/' + encodeURIComponent(s.id), text: sessName(s), title: (s.label || '') + '\n세션 대화를 엽니다' }),
@@ -405,7 +409,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         el('div', { class: 'v2-trash-row p' }, pick('p:' + p.id, p.name),
           bundle.length ? el('button', { class: 'v2-bin-gt', type: 'button', 'aria-expanded': String(open), title: open ? '안의 세션 접기' : '안의 세션 펴기',
             onclick: () => { ui.projOpen.set(p.id, !open); renderTrash(host, data, hooks, aside); } }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' })) : null,
-          folderIcon(), el('span', { class: 't', text: p.name, title: p.name }), el('span', { class: 'mono', text: `#${p.id}` }),
+          projIcon(), el('span', { class: 't', text: p.name, title: p.name }), el('span', { class: 'mono', text: `#${p.id}` }),
           el('span', { class: 'm', text: bundle.length ? `세션 ${bundle.length}개와 함께` : '안에 든 세션 없음' }),
           el('span', { class: 'sp' }),
           acts(tx('복원', '프로젝트와 함께 들어간 세션이 원래 자리로 돌아갑니다', () => void restoreItems([it])),
@@ -424,7 +428,7 @@ export function renderTrash(host: HTMLElement, data: V2Data, hooks: BinHooks = {
         el('button', { class: 'v2-bin-gt', type: 'button', 'aria-expanded': String(ui.oldOpen), onclick: () => { ui.oldOpen = !ui.oldOpen; renderTrash(host, data, hooks, aside); } },
           el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), el('b', { text: '이름과 본문만 되살릴 수 있는 것' }), el('span', { class: 'c', text: ` · ${visOld.length}` })),
         el('p', { class: 'd', text: '프로젝트 앱에서 [삭제]로 지운 프로젝트와 태스크예요. 태스크·팀원·연결은 지울 때 함께 사라져서, 되살려도 이름과 본문만 돌아옵니다.' }),
-        ui.oldOpen ? el('div', { class: 'v2-trash-grp' }, ...visOld.slice(0, ui.shown).map((d) => el('div', { class: 'v2-trash-row' }, pick('project:' + d.key, d.label), folderIcon(),
+        ui.oldOpen ? el('div', { class: 'v2-trash-grp' }, ...visOld.slice(0, ui.shown).map((d) => el('div', { class: 'v2-trash-row' }, pick('project:' + d.key, d.label), projIcon(),
           el('span', { class: 't', text: d.label, title: d.label }), el('span', { class: 'mono', text: `#${d.key}` }), el('span', { class: 'chip', text: levelLabel(d.level) }),
           el('span', { class: 'sp' }),
           acts(tx('복원', '이름과 본문만 되살립니다', () => void restoreLoose([oldLoose(d)], '항목', OLD_BACK)), tx('완전 삭제', '남은 이름과 본문을 지웁니다', () => void purgeLoose([oldLoose(d)], '항목', OLD_LOST), true)),
@@ -690,7 +694,7 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
       el('td', { class: 'c-name' }, sessIcon(),
         el('a', { class: 't', href: '#/s/' + encodeURIComponent(it.key), text: it.name, title: '세션을 엽니다 — 그때 대화를 그대로 이어서 계속할 수 있어요', onclick: (ev: Event) => { ev.stopPropagation(); dismissedAt = 0; } }),
         it.dismissed ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요 — [홈 목록으로]를 누르면 다시 섭니다' }) : null),
-      ...(ui.group ? [] : [el('td', { class: 'c-in' }, el('span', { text: it.projectId ? projName(data, it.projectId) : '프로젝트 없음' }))]),
+      ...(ui.group ? [] : [el('td', { class: 'c-in' }, projIcon(!!it.projectId), el('span', { text: it.projectId ? projName(data, it.projectId) : '프로젝트 없음' }))]),   // #4233 — 세션 목록의 같은 열과 맞춘다
       el('td', { class: 'c-kind' }, dot(it.stateKey), el('span', { text: it.stateLabel || '지난 세션' })),
       el('td', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(it.lastSeen) || 0), title: it.lastSeen ? new Date(Number(it.lastSeen)).toLocaleString() : '' })),
       el('td', { class: 'c-acts' }, el('span', { class: 'acts' },
@@ -716,7 +720,7 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
       el('td', { colspan: '3' },
         el('button', { class: 'v2-bin-gt', type: 'button', 'aria-expanded': String(!closed), title: closed ? '펴기' : '접기',
           onclick: () => { if (closed) ui.closed.delete(g.id); else ui.closed.add(g.id); paint(); } },
-          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), folderIcon(), el('b', { text: name })),
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), projIcon(!!g.id), el('b', { text: name })),
         p && isArchivedProj(p) ? el('span', { class: 'v2-bin-tag', text: '보관됨', title: '보관한 프로젝트예요 — [보관한 프로젝트] 칩에서 해제할 수 있어요' }) : null,
         el('span', { class: 'n', text: ` · ${g.rows.length}` })),
       el('td', { class: 'c-acts' }, g.id
@@ -857,7 +861,7 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
     const ss = sessOf(p); const live = liveOf(p);
     const tr = el('tr', { class: (ui.focus === p.id ? 'focus' : '') },
       el('td', { class: 'c-cb' }, cb(ui.sel.has(p.id), p.name + ' 선택', (on) => { if (on) ui.sel.add(p.id); else ui.sel.delete(p.id); repaint(); })),
-      el('td', { class: 'c-name' }, folderIcon(),
+      el('td', { class: 'c-name' }, projIcon(),
         el('a', { class: 't', href: '#/p/' + p.id, text: p.name, title: '프로젝트 화면을 엽니다', onclick: (ev: Event) => ev.stopPropagation() }),
         el('span', { class: 'mono', text: `#${p.id}` })),
       el('td', { class: 'c-in' }, live ? dot('busy') : null, el('span', { text: ss.length ? `${ss.length}${live ? ` · 도는 중 ${live}` : ''}` : '없음' })),
@@ -906,7 +910,7 @@ function archivedProjects(tblWrap: HTMLElement, barEl: HTMLElement, countEl: HTM
   }
   const ss = sessOf(p);
   const detail = el('div', { class: 'v2-bin-side-detail' },
-    el('div', { class: 'h' }, folderIcon(), el('b', { text: p.name }), el('span', { class: 'tag', text: `#${p.id}` })),
+    el('div', { class: 'h' }, projIcon(), el('b', { text: p.name }), el('span', { class: 'tag', text: `#${p.id}` })),
     el('p', { class: 'meta', text: `보관 ${when(p.archived_at)} · 세션 ${ss.length}개` }));
   if (ss.length) {
     detail.append(el('h5', { text: '세션' }));
@@ -1104,7 +1108,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       el('div', { class: 'c-name' }, sessIcon(),
         el('a', { class: 't' + (it.untitled ? ' un' : ''), href: '#/s/' + encodeURIComponent(s.id), text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name, onclick: nameClick }),
         v === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
-      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, s.projectId ? folderIcon() : null, el('span', { text: projName(data, s.projectId) || '프로젝트 없음' })) : null,
+      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, projIcon(!!s.projectId), el('span', { text: projName(data, s.projectId) || '프로젝트 없음' })) : null,
       el('div', { class: 'c-kind' }, stateCell(s)),
       el('div', { class: 'c-who' }, personFace(it.owner === 'me' ? meId : it.owner, 'v2-sall-face', ownerName(it.owner))),
       el('div', { class: 'c-ai', text: harnessName(s) }),
