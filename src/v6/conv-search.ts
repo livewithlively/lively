@@ -121,12 +121,45 @@ export function snippetAround(text: string, terms: string[], max = 140, lead = 3
   const low = flat.toLowerCase();
   let at = -1;
   for (const t of terms) { const i = t ? low.indexOf(t) : -1; if (i >= 0 && (at < 0 || i < at)) at = i; }
+  return cutAt(flat, at, max, lead);
+}
+/** flat(공백을 편 글)을 at 자리 조금 앞에서 max 글자로 자른다 — 두 발췌 함수가 같은 자르기를 쓴다. */
+function cutAt(flat: string, at: number, max: number, lead: number): string {
   let start = at <= lead ? 0 : at - lead;
   let end = Math.min(flat.length, start + max);
   if (end - start < max) start = Math.max(0, end - max);
   if (start > 0 && isLowSurrogate(flat.charCodeAt(start))) start++;
   if (end < flat.length && isLowSurrogate(flat.charCodeAt(end))) end--;
   return (start > 0 ? "…" : "") + flat.slice(start, end).trim() + (end < flat.length ? "…" : "");
+}
+/** 낱말 자리를 세는 상한 — 긴 말(20,000자)에 흔한 낱말이 수천 번 나와도 일이 늘지 않게. */
+const SNIPPET_OCC_MAX = 2000;
+/**
+ * 발췌문 — **서로 다른 낱말이 가장 많이 모인 자리**에서 자른다(같으면 앞쪽). 세션 이력 앱 «대화 찾기»(#4553)의 줄:
+ *  낱말 둘로 찾았는데 발췌가 첫 낱말이 처음 나온 자리만 보이면, 두 낱말이 다 든 말인데도 한 낱말만 칠해져 «왜 이 줄이 위인가» 를
+ *  못 읽는다(매니지드 실화면). 낱말이 하나이거나 한 번도 안 나오면 snippetAround 와 같은 결과다.
+ */
+export function snippetAroundMost(text: string, terms: string[], max = 140, lead = 36): string {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const low = flat.toLowerCase();
+  const occ: Array<{ pos: number; end: number; t: number }> = [];
+  terms.forEach((t, ti) => {
+    if (!t) return;
+    for (let i = low.indexOf(t); i >= 0 && occ.length < SNIPPET_OCC_MAX; i = low.indexOf(t, i + t.length)) occ.push({ pos: i, end: i + t.length, t: ti });
+  });
+  if (!occ.length) return cutAt(flat, -1, max, lead);
+  occ.sort((a, b) => a.pos - b.pos);
+  //  발췌는 at 조금 앞(lead)에서 시작해 max 글자다 — at 뒤로 보이는 폭은 max - lead. 낱말이 **끝까지** 그 폭 안에 들어야 센다
+  //   (첫 글자만 걸치면 발췌에서 잘려 칠해지지 않는다).
+  const span = Math.max(1, max - lead);
+  let best = occ[0]!.pos, bestN = 0;
+  for (let i = 0; i < occ.length; i++) {
+    const seen = new Set<number>();
+    for (let j = i; j < occ.length && occ[j]!.pos - occ[i]!.pos < span; j++) if (occ[j]!.end - occ[i]!.pos <= span) seen.add(occ[j]!.t);
+    if (seen.size > bestN) { bestN = seen.size; best = occ[i]!.pos; }
+  }
+  return cutAt(flat, best, max, lead);
 }
 
 // ── 나이 가산 ──────────────────────────────────────────────────────────────────────────────

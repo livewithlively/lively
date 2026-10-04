@@ -26,7 +26,7 @@ import { readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
 import { readAlignedWindow, prefetchReader, type ByteReader } from "../terminal/harness-io/window.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { parseJsonLines, type ChatLine, type ParseResult, type ParseState } from "../terminal/harness-io/chat-line.js";
-import { extractConvMessages, rankConvAggsCounted, snippetAround, snippetTerms, editLabel, type ConvMsg, type ConvRole, type ConvField, type ConvSessionAgg, type ConvSort } from "./conv-search.js";
+import { extractConvMessages, rankConvAggsCounted, snippetAround, snippetAroundMost, snippetTerms, editLabel, type ConvMsg, type ConvRole, type ConvField, type ConvSessionAgg, type ConvSort } from "./conv-search.js";
 import { parseQueryTerms, termPatterns, likePattern, type QueryTerm } from "./query-terms.js";
 import { hiddenProjects, type HiddenProjects } from "./visibility.js";
 import { sessionVisible } from "../terminal/write-cap.js";
@@ -793,7 +793,9 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
     if (!s) continue;
     hits.push({
       node_id: s.node_id, session_id: s.session_id, name: s.name, project: s.project,
-      ...line(x.role, x.ts, x.body, MSG_HIT_TEXT_MAX), terms: Number(x.k) || 0,
+      //  맞은 말의 발췌는 낱말이 가장 많이 모인 자리에서 — 둘 다 든 말이면 둘 다 보이게.
+      ...line(x.role, x.ts, x.body, MSG_HIT_TEXT_MAX), text: snippetAroundMost(String(x.body ?? ""), words, MSG_HIT_TEXT_MAX, Math.floor(MSG_HIT_TEXT_MAX / 4)),
+      terms: Number(x.k) || 0,
       before: x.prole ? line(x.prole, x.pts, x.pbody, MSG_HIT_NEIGHBOR_MAX) : null,
       after: x.nrole ? line(x.nrole, x.nts, x.nbody, MSG_HIT_NEIGHBOR_MAX) : null,
     });

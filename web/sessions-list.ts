@@ -10,7 +10,7 @@ import { findMatcher } from './lib/find.js';
 import { whenLabel } from './lib/omni-order.js';
 import { rowDotCls } from './session-status.js';
 
-const FILTERS: ReadonlyArray<{ key: HistFilter; label: string }> = [{ key: 'all', label: '전체' }, { key: 'live', label: '실행 중' }, { key: 'rec', label: '기록만' }];
+const FILTERS: ReadonlyArray<{ key: HistFilter; label: string }> = [{ key: 'all', label: '전체' }, { key: 'live', label: '실행 중' }, { key: 'off', label: '오프라인' }, { key: 'rec', label: '기록만' }];
 type SortCol = 'name' | 'proj' | 'state' | 'last';
 type DetailTab = 'rec' | 'info';
 const COLS: ReadonlyArray<{ key: SortCol; label: string }> = [
@@ -70,13 +70,12 @@ export function mountList(host: HTMLElement): void {
     drawHead();
     const now = Date.now();
     const vis = visible();
-    const live = rows.filter((r) => r.alive).length;
-    count.textContent = `세션 ${vis.length}개` + (st.filter === 'all' && !st.q ? ` · 실행 중 ${live} · 기록만 ${histFilter(rows, 'rec').length}` : '');
+    count.textContent = `세션 ${vis.length}개` + (st.filter === 'all' && !st.q ? ` · 실행 중 ${histFilter(rows, 'live').length} · 오프라인 ${histFilter(rows, 'off').length} · 기록만 ${histFilter(rows, 'rec').length}` : '');
     tbody.replaceChildren(...vis.slice(0, st.shown).map((r) => {
       const dot = rowDotCls(r.stateKey);
       const tr = el('tr', { class: 'shx-tr' + (r.key === st.sel ? ' sel' : ''), tabindex: '0', 'data-key': r.key },
         el('td', { class: 'shx-td-name' }, el('b', { text: r.name })),
-        el('td', { text: r.projectName || (r.projectId != null ? '#' + r.projectId : '') }),
+        el('td', { class: 'shx-td-proj', title: r.projectName || '', text: r.projectName || (r.projectId != null ? '#' + r.projectId : '') }),
         el('td', {}, el('span', { class: 'shx-dot ' + (r.stateKey === 'log' ? 'log' : dot) }), r.stateLabel),
         el('td', { text: whenLabel(r.lastMs || undefined, now) }));
       const pick = (): void => { st.sel = r.key; for (const x of Array.from(tbody.children) as HTMLElement[]) x.classList.toggle('sel', x.dataset.key === r.key); openDetail(true); };

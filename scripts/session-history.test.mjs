@@ -1,7 +1,7 @@
 // #4553 — 「세션 이력」 앱의 화면 순수 규칙(web/session-history.ts). 원준 2026-10-04: «그 A,B,C안을 그거 들어간 다음에
 //  위에 상위 가로탭으로 만들어가지고 셋 다 구현해.» 가로탭 셋 — 대화 찾기 · 작업 일지 · 세션 목록.
 //  엣지 표(행마다 시험 하나):
-//   H1~H12 세션 목록 탭 — 도는 세션과 중앙 기록을 한 줄로 · F1~F3 거르개
+//   H1~H14 세션 목록 탭 — 도는 세션과 중앙 기록을 한 줄로(내 세션만 · id 꼴 이름) · F1~F4 거르개(실행 중 · 오프라인 · 기록만)
 //   W1~W4 일지 기간 · G1~G3 일지 묶음 · S1 합계 · HL1~HL5 «한 일» 한 줄 · C1~C2 복사 글
 //   N1~N7 맞은 말의 대화록 자리 · K1~K4 낱말 색칠 자리 · T1 탭 값
 //  ⚠ 날짜 경계는 현지 시각 자정이다 — 시험도 현지 시각 생성자(new Date(y, m, d, …))로 만든다(CI 의 TZ 와 무관하게).
@@ -82,11 +82,23 @@ eq(merge([live("box-11", { lastActive: Math.floor(at(8, 30, 8) / 1000) })], [log
 eq([merge([], []), merge(null, undefined)], [[], []], "H11 빈 입력");
 eq(merge([live("box-17", { created: 1_700_000_000, lastActive: 1_700_000_500_000 })], [])[0].firstMs, 1_700_000_000_000, "H12 초 단위 시각은 ms 로");
 eq(merge([live("box-17", { created: 1_700_000_000, lastActive: 1_700_000_500_000 })], [])[0].lastMs, 1_700_000_500_000, "H12b 밀리초는 그대로");
+eq(merge([live("box-mine"), live("box-theirs", { owned: false })], []).map((r) => r.key), ["box-mine"], "H13 남의 세션(프로젝트를 같이 써서 목록에 온 것)은 싣지 않는다 — 이 앱은 내 세션의 이력이다");
 {
-  const rows = merge([live("box-live", { claudeSessionId: "cl" }), live("box-dead", { restorable: true, attached: false }), live("box-dead2", { restorable: true, attached: false, claudeSessionId: "cd" })], [log("cl"), log("cd"), log("crec")]);
-  eq(M.histFilter(rows, "live").map((r) => r.key), ["box-live"], "F1 실행 중 = 지금 도는 것");
-  eq(M.histFilter(rows, "rec").map((r) => r.key).sort(), ["box-dead2", "crec"], "F2 기록만 = 돌지 않고 읽을 기록이 있는 것(기록 없는 멈춘 박스는 빠진다)");
-  eq(M.histFilter(rows, "all").length, 4, "F3 전체");
+  const rows = merge([live("box-abc12345", { label: "box-abc12345", claudeSessionId: "cn" }), live("0195f0aa-7c80-7e00-ae3b-2c2229acec94", { label: "0195f0aa-7c80-7e00-ae3b-2c2229acec94" })], [log("cn", { name: "기록이 아는 이름" })]);
+  eq(rows.map((r) => r.name).sort(), ["기록이 아는 이름", "이름 없는 세션"], "H14 이름이 id 그대로인 줄 — 기록이 아는 이름을 쓰고, 그것도 없으면 «이름 없는 세션»(uuid 를 이름 자리에 걸지 않는다)");
+}
+{
+  const off = { attached: false, agentState: "offline", lastActive: Math.floor(at(8, 20) / 1000), lastViewed: 0 };   // 박스는 있지만 아무도 안 보고 있다(하루 넘게 지남)
+  const rows = merge([
+    live("box-busy", { agentState: "busy", working: true, claudeSessionId: "cl" }), live("box-idle"), live("box-wait", { awaiting: true }),
+    live("box-off", off), live("box-shell", { agentState: "shell" }),
+    live("box-dead", { restorable: true, attached: false }), live("box-dead2", { restorable: true, attached: false, claudeSessionId: "cd" }),
+  ], [log("cl"), log("cd"), log("crec")]);
+  eq(M.histFilter(rows, "live").map((r) => r.key).sort(), ["box-busy", "box-idle", "box-wait"], "F1 실행 중 = 지금 쓰이는 것(확인 필요·작업 중·작업 완료·대기 중) — 오프라인·셸은 아니다");
+  eq(M.histFilter(rows, "off").map((r) => r.key).sort(), ["box-off", "box-shell"], "F4 오프라인 = 박스는 있지만 지금 쓰이지 않는 것");
+  eq(M.histFilter(rows, "rec").map((r) => r.key).sort(), ["box-dead2", "crec"], "F2 기록만 = 박스가 없고 읽을 기록이 있는 것(기록 없는 멈춘 박스는 빠진다)");
+  eq(M.histFilter(rows, "all").length, 8, "F3 전체");
+  eq(M.histFilter(rows, "live").length + M.histFilter(rows, "off").length + M.histFilter(rows, "rec").length, 7, "F3b 세 묶음은 겹치지 않는다(기록 없는 멈춘 박스 하나만 어느 묶음에도 없다)");
 }
 
 // ── 작업 일지 탭 ────────────────────────────────────────────────────────────────────────────
