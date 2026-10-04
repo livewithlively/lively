@@ -186,7 +186,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     const q = String(req.query.q ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
-    if (!q) { res.json({ results: [], pending: 0, capped: false }); return; }
+    if (!q) { res.json({ results: [], total: 0, pending: 0, capped: false }); return; }
     if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
     const since = req.query.since ? String(req.query.since) : null;
     if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
@@ -206,7 +206,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const pending = await convIndexPending(base).catch(() => null);
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
-    res.json({ results: found.results, pending, capped: found.capped, cap: found.cap });
+    res.json({ results: found.results, total: found.total, pending, capped: found.capped, cap: found.cap });
   }));
 
   // 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A). 목록 한 줄로는 «그 세션이 맞나» 를 못 가려 열어 봐야 했다.
@@ -221,13 +221,15 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (nodeId && !NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const q = String(req.query.q ?? "").trim();
     if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
+    const since = req.query.since ? String(req.query.since) : null;
+    if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
     res.setHeader("Cache-Control", "no-store");
     const cfg = (await getRuntimeConfig()).session_share;
     let out: Awaited<ReturnType<typeof sessionHits>>;
     try {
       out = await sessionHits({
         requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID,
-        nodeId, sessionId, q, limit: Number(req.query.limit) || undefined,
+        nodeId, sessionId, q, since, limit: Number(req.query.limit) || undefined,
       });
     } catch (e) {
       if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "미리보기를 시간 안에 만들지 못했습니다 — 잠시 뒤 다시 골라 주세요");
