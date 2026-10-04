@@ -5,7 +5,7 @@
 import { toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
-import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
+import { isInstancePinned, listFavCtxRow, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
 import { canMoveSess, findSessIn, isLiveSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { SESS_STATES } from '../session-status.js';
 import { omniAvailable, omniOpen } from './omni.js';
@@ -155,7 +155,8 @@ export function mountCtxShell(h: CtxShellHooks): void {
   });
   registerCtx('plist', (hit) => {
     const href = '#/projects2/l/' + String(hit.data.lid || '');
-    return { rows: [...openRows(href), { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '리스트'), sub: '리스트' };
+    const fav = listFavCtxRow(Number(hit.data.lid));   // #3870 — 그 줄에서 바로 즐겨찾기에 넣고 뺀다(모르면 행 없음)
+    return { rows: [...openRows(href), ...(fav ? [fav] : []), { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '리스트'), sub: '리스트' };
   });
   registerCtx('pfolder', (hit) => {
     const href = '#/projects2/f/' + String(hit.data.fid || '');
