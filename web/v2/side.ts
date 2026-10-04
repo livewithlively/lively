@@ -43,6 +43,7 @@ import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
+import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
@@ -969,6 +970,15 @@ function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
   return kids;
 }
 
+/** 정본을 받기 전 목록 자리(#3870, lib/side-boot 머리말) — 이름처럼 안 보이는 막대 몇 줄. 줄도 숫자도 «없어요» 도 아니다. */
+function bootKids(): HTMLElement[] {
+  const bars = el('div', { class: 'v2-side-boot', role: 'status', 'aria-busy': 'true', 'aria-label': '불러오는 중' },
+    ...SIDE_BOOT_BARS.map((w) => el('i', { style: `width:${w}%` }))) as HTMLElement;
+  //  받으려다 실패한 판이 있었다(게이트웨이 배포 직후 등) — 막대만 두면 멈춘 화면으로 읽힌다. 8초마다 다시 받는다(main.ts 폴링).
+  const failed = !!last && !!last.data.loadFailed;
+  return failed ? [bars, el('p', { class: 'v2-side-boot-note', text: '목록을 아직 못 받았어요. 다시 받는 중이에요.' }) as HTMLElement] : [bars];
+}
+
 /** 목록 안에 들어갈 것 전부 — 묶음 머리글 + 행, 하나도 없으면 빈 화면 한 장. */
 function appListKids(shown: SideInstance[], o: RowOpts = {}, empty?: { none: string }): HTMLElement[] {
   //  #4233 — 두 축 모두 **모든 줄이 카드 안**에 선다(원준 «V1 의 1안»). 세션별 축의 줄 세우기는 sessAxisKids.
@@ -1151,7 +1161,8 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
   const me = meId();
   //  휴지통 개수 = 네 탭의 합(#3778) — 화면이 아는 절반(통째로 버린 프로젝트 + 따로 버린 내 세션)에 서버가 센 나머지(자료·지식·
   //   옛 길로 지운 프로젝트)를 더한다. 종전엔 앞 절반만 세어 지식만 든 휴지통이 «0» 으로 보였다.
-  const trashedN = data ? trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
+  //  #3870 — 목록을 받기 전엔 숫자를 안 붙인다. 서버가 센 절반이 먼저 와서 «450» 이 섰다가 목록이 오면 «609» 로 바뀌었다.
+  const trashedN = data && sideTruthReady(data) ? trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
     + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts()) : 0;
   const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
     el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') },
@@ -1428,9 +1439,13 @@ function renderTaxonomySection(): void {
 function renderHomeApps(): void {
   if (!last) return;
   const { host } = last;
-  const instances = hooks.instances!();
+  //  #3870 — 세션 · 프로젝트 목록을 받기 전엔 줄을 세우지 않는다(lib/side-boot 머리말). 그 판의 재료는 이 브라우저에
+  //   저장돼 있던 창뿐이라, 세우면 옛 이름 · 「AI 세션」 · 지운 세션이 「오늘」 아래 줄로 섰다가 정본이 오면 통째로 바뀐다.
+  //   붓(listPaint)도 같은 판정을 탄다 — 받기 전 판에서 목록만 다시 그려도(묶기 단추 · «마지막으로 시킨 말» 도착) 줄이 안 선다.
+  const ready = (): boolean => !!last && sideTruthReady(last.data);
+  const count = ready() ? hooks.instances!().length : null;
   //  목록만 다시 그리는 붓은 **여기 재료로** 짓는다(#2534) — 묶음 토글이 홈의 목록을 홈의 것으로 채우게.
-  const kids = (): HTMLElement[] => appListKids(hooks.instances!());
+  const kids = (): HTMLElement[] => (ready() ? appListKids(hooks.instances!()) : bootKids());
   listPaint = () => paintList(kids);
   const keep = listBefore();
   const listEl = el('div', { class: 'v2-app-list v2-home-cards', role: 'list', 'aria-label': '열린 앱' }, ...kids());   // #4233 — 홈 목록의 카드 간격 한 벌(47-v2-rail.css)
@@ -1451,7 +1466,7 @@ function renderHomeApps(): void {
   host.replaceChildren(
     ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': '앱' },
-      secHead('앱', instances.length,
+      secHead('앱', count,
         //  새 작업은 목록 위 큰 버튼이 아니라 머리글의 ＋ 하나다(#1954) — 목록이 세로를 더 쓴다.
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 작업 열기', title: '새 작업 — 무엇이든 시키거나 앱을 고릅니다',
           onclick: () => hooks.onNewTask?.() },
@@ -1571,6 +1586,7 @@ function renderSessions(): void {
       owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''), listId: p ? (p.list_id ?? null) : null };
   });
   const total = items.length;
+  const ready = sideTruthReady(data);   // #3870 — 받기 전엔 «전체 0 · 아직 세션이 없어요» 라고 말하지 않는다
   let sc = sessScope();
   const cards = sideCards(items, sc.by, now, rankOf);
   const lines = projectLines(items);
@@ -1604,7 +1620,7 @@ function renderSessions(): void {
   const allOn = sc.group === null && sc.proj === null;
   const allRow = el('button', { class: 'v2-wcat v2-ptl v2-kview v2-sproj' + (allOn ? ' on' : ''), type: 'button', 'aria-pressed': String(allOn),
     title: '모든 세션 — 가운데 목록의 거르개를 풉니다', onclick: () => pick({ by: sc.by, group: null, proj: null }) },
-    icon('chat', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), el('span', { class: 'v2-cnt', text: fmtN(total) }));
+    icon('chat', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), ready ? el('span', { class: 'v2-cnt', text: fmtN(total) }) : null);
 
   //  카드 안 줄 — 프로젝트. 누르면 그 묶음 × 그 프로젝트(묶지 않음이면 그 프로젝트).
   const lineRow = (group: string | null, l: SideCardProj): HTMLElement => {
@@ -1665,6 +1681,7 @@ function renderSessions(): void {
   };
   const planFor = (fit: number) => planSideCards(plans.map((x) => x.key), fit, sc.by === 'none' ? null : sc.group, cardsOpen || sc.by === 'none');
   const build = (shownKeys: string[], hidden: number) => (alloc: Record<string, number>): HTMLElement[] => {
+    if (!ready) return bootKids();
     if (!total) return [el('p', { class: 'v2-empty', text: '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' })];
     const shownPlans = plans.filter((x) => shownKeys.includes(x.key));
     return [
@@ -1845,6 +1862,7 @@ function renderProjects(): void {
 
   const lists = (data.lists || []) as unknown as TreeList[];
   const folders = (data.folders || []) as unknown as TreeFolder[];
+  const ready = sideTruthReady(data);   // #3870 — 받기 전엔 «전체 0 · 아직 리스트가 없어요» 라고 말하지 않는다
   // 열린 프로젝트 수 — 보관·버림·완료는 빼고 센다. 매일 보는 숫자는 '남은 일'이다(완료까지 센 숫자는 보드의 Closed 토글이 말한다).
   const openByList = new Map<number, number>();
   let noneN = 0;
@@ -1865,15 +1883,16 @@ function renderProjects(): void {
   const allOn = plan.onKey === 'all';
   const allRow = el('a', { class: 'v2-wcat v2-ptl v2-kview' + (allOn ? ' on' : ''), href: '#/projects2/all',
     title: '모든 프로젝트 — 폴더 · 리스트와 상관없이 한 화면에서 봅니다', ...(allOn ? { 'aria-current': 'true' } : {}) },
-    icon('proj', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), cnt(plan.allN));
+    icon('proj', 'v2-ptl-ic'), el('span', { class: 'n', text: '전체' }), ready ? cnt(plan.allN) : null);
   const favRow = (l: TreeList): HTMLElement => {
     const on = plan.onKey === 'fav:' + l.id;
     return el('a', { class: 'v2-wcat v2-ptl v2-kview v2-pfav' + (on ? ' on' : ''), href: '#/projects2/l/' + l.id, 'data-ctx': 'plist', 'data-lid': String(l.id), 'data-name': l.name,
       title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
       icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0));
   };
-  const fixed: HTMLElement[] = [allRow, ...plan.favs.map(favRow)];
-  if (plan.noneN) {
+  //  #3870 — 즐겨찾기 · 기타 줄도 받은 뒤에만. 프로젝트만 오고 리스트가 아직이면 전부 «기타 (미분류) 311» 로 세어진다.
+  const fixed: HTMLElement[] = [allRow, ...(ready ? plan.favs.map(favRow) : [])];
+  if (ready && plan.noneN) {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
       title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
@@ -1950,6 +1969,7 @@ function renderProjects(): void {
   const slot = newOpen ? newRowSlot(plan.groups, newIn) : { at: 'top' as const };
   const build = (alloc: Record<string, number>): HTMLElement[] => {
     //  「전체」는 늘 서므로 빈 안내는 즐겨찾기 · 기타 줄로 가른다(전체 한 줄만 있으면 아직 정리할 것이 없다는 뜻이다).
+    if (!ready) return bootKids();
     if (!plan.groups.length) return (plan.favs.length || plan.noneN) ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
     return plan.groups.flatMap((g) => [label(g),
       ...(newOpen && slot.at === 'label' && slot.folderId === g.folderId ? [newProjRow()] : []),
@@ -2803,7 +2823,8 @@ function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
   // 휴지통 개수 = 통째로 버린 프로젝트(각 1) + **따로** 버린 내 세션(묶음 세션은 프로젝트 안에 든 것이라 안 센다). 세션은 소유자 단위.
   //  ＋ 서버가 센 나머지(자료·지식·옛 길로 지운 프로젝트, #3778) — 배지 = 휴지통 화면 네 탭의 합.
-  const trashedN = trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
+  //  #3870 — 목록을 받기 전엔 숫자를 안 붙인다(secFoot 과 같은 판정).
+  const trashedN = !sideTruthReady(data) ? 0 : trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
     + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts());
   const ak = last ? last.activeKey() : '';
   const row = (key: 'archive' | 'trash', label: string, n: number, title: string): HTMLElement =>
