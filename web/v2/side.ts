@@ -46,8 +46,8 @@ import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 �
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
-import { orderCards, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
-import { pinnedFirst, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수)
+import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
 import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
@@ -104,7 +104,10 @@ const grpAuto = new Set<string>();
 //  끝난 세션만 든 카드를 사람이 이 페이지에서 폈나(true)·접었나(false) — **페이지 수명만**(#3870, lib/sess-fold cardOpenVerdict).
 //   그 카드는 기본이 접힘이라, 편 것을 브라우저에 남기면 «한 번 편 카드가 영영 펴져 흐린 줄을 늘어놓는» 신고가 되돌아온다.
 const pastPeek = new Map<string, boolean>();
-//  카드 자리 자물쇠(#3856) — 카드 키('p:<id>') → 그 카드가 선 묶음·순위·들어온 시각. **페이지 수명만**
+//  「지금 볼 것」 조각 카드(#4551)를 사람이 접었나 — **페이지 수명만**, 그 카드가 목록을 떠나면 버린다.
+//   조각 카드는 볼 일이 생길 때마다 새로 서는 카드라, 접은 것을 남기면 다음 볼 일이 접힌 채 올라온다.
+const nowClosed = new Set<string>();
+//  카드 자리 자물쇠(#3856) — 카드 키('p:<id>' · 조각 카드는 'now:p:<id>') → 그 카드가 선 묶음·순위·들어온 시각. **페이지 수명만**
 //   (main.ts 의 행 holds·orderPin 과 같다 — 새로 열면 사실대로 다시 잡는다).
 const cardHolds = new Map<string, CardHold>();
 
@@ -583,7 +586,10 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 
 // ══ 프로젝트 축 — 묶기·펼침 (#2033) ══════════════════════════════════════════
 /** 한 프로젝트 묶음. rows 는 이미 정렬돼 들어온다(아래 projGroups 머리말). */
-interface ProjGrp { key: string; id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
+interface ProjGrp { key: string;
+  /** 프로젝트 키('p:<id>') · 「지금 볼 것」 조각인가 · 「지난 세션」 접힘을 이 카드가 드나(#4551, lib/home-pins planNowCards). */
+  pkey: string; now: boolean; fold: boolean;
+  id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
   /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
   live: number; past: number;
   /** 카드 자리(#3856) — 묶음 안 순위 · 그 묶음에 들어온 순간의 시각(hold-rules stepCardHold). */
@@ -627,26 +633,30 @@ const PINNED_BUCKET = '고정';
  *   딸린 세션 전부를 데리고 카드가 이사한다(원준 2026-09-02 «중간중간 튄다»). 그래서 카드 키에도 행과 같은
  *   한 방향 자물쇠를 준다(hold-rules stepCardHold). 줄 세우기(orderCards)의 키가 세션 축과 같은 층 → 순위 → 시각이라,
  *   자물쇠가 아무것도 안 붙든 판에서는 **정의상** 세션 축의 첫 행 순서와 같다 — 위 규율은 그대로 지켜진다.
+ *  ★ 「지금 볼 것」에는 **볼 일 있는 줄만** 올라간다(#4551, 원준 2026-10-04). 종전엔 카드가 첫 행의 묶음을 따라
+ *   통째로 올라가, 세션이 많은 프로젝트는 하나만 돌아도 전부가 「지금 볼 것」에 섰다. 이제 그 줄만 조각 카드로 서고
+ *   나머지는 제 날짜 카드에 남는다(나누기 · 사유는 lib/home-pins planNowCards 머리말). 고정한 프로젝트는 안 나눈다.
+ *   ⇒ 카드는 이제 「지금 볼 것」과 날짜 묶음 사이를 **오가지 않는다**(오가는 것은 줄이고, 그 자리는 main.ts 의 행 자물쇠가 붙든다).
+ *    stepCardHold 의 «보고 있으면 안 내려간다» 갈래는 고정을 푼 카드처럼 통째로 선 카드에만 남는다.
+ *   ⇒ 하나만 도는 프로젝트의 나머지 카드는 흔히 끝난 세션뿐이라, #3870 규칙대로 접힌 채 이름만 선다(목록이 짧아지는 쪽).
  */
 function projGroups(rest: SideInstance[], searching: boolean, hold = true): ProjGrp[] {
   const groups: ProjGrp[] = [];
   const byKey = new Map<string, ProjGrp>();
-  for (const r of rest) {
-    const id = (r.project && r.project.id) || 0;
-    const key = 'p:' + id;
-    let g = byKey.get(key);
-    if (!g) {
-      //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 프로젝트의 가장 급한 행이다.
-      g = { key, id, name: id ? (r.project as { name: string }).name : '프로젝트 없음',
-        //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
-        bucket: r.group || '', rows: [], open: false, active: false, pinned: !!id && isPinned(key), counts: {}, live: 0, past: 0,
-        rank: r.rank ?? QUIET_RANK, at: r.at || 0 };
-      byKey.set(key, g); groups.push(g);
+  for (const c of planNowCards(rest, projPinnedId, PRIORITY_GROUP)) {
+    //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 카드의 가장 급한 행이다.
+    const first = c.rows[0];
+    const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, id: c.id,
+      name: c.id ? (first.project as { name: string }).name : '프로젝트 없음',
+      //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
+      bucket: first.group || '', rows: c.rows, open: false, active: false, pinned: !!c.id && isPinned(c.pkey), counts: {}, live: 0, past: 0,
+      rank: first.rank ?? QUIET_RANK, at: first.at || 0 };
+    byKey.set(g.key, g); groups.push(g);
+    for (const r of c.rows) {
+      if (r.active) g.active = true;
+      if (r.past) g.past++; else g.live++;
+      if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
     }
-    g.rows.push(r);
-    if (r.active) g.active = true;
-    if (r.past) g.past++; else g.live++;
-    if (r.status) g.counts[r.status.key] = (g.counts[r.status.key] || 0) + 1;
   }
 
   //  ★ 카드 자리(#3856) — 위 머리말. **홈 구역에서만, 찾는 중이 아닐 때만** 기억을 건드린다:
@@ -670,6 +680,8 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
 
   //  이 판에 없는 카드의 자동 걸쇠는 버린다 — 목록에서 빠진 프로젝트가 돌아오면 그때 다시 판정한다.
   for (const k of [...grpAuto]) if (!byKey.has(k)) grpAuto.delete(k);
+  //  ⚠ 조각 카드의 접힘은 프로젝트별 축의 판(hold)에서만 정리한다 — 세션별 축은 고정한 카드만 들고 와서, 거기서 정리하면 전부 지워진다.
+  if (hold) for (const k of [...nowClosed]) if (!byKey.has(k)) nowClosed.delete(k);
   for (const g of groups) {
     //  펼침 — 사람의 결정이 언제나 이긴다. 그 위의 자동 판정 둘은 **한 번만** 말한다(위 grpAuto 머리말).
     //  ★ 선택으로 펴진 카드는 **사람이 접을 때까지** 펴져 있다 — 트리와 같은 규율(원준 2026-08-24
@@ -678,6 +690,9 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
     //   그때 카드까지 도로 접히면 방금 읽던 자리가 눈앞에서 사라진다.
     //  ★ 끝난 세션만 든 카드는 **접힌 채 이름만**(#3870, 원준 2026-09-27) — 위 기억들을 안 본다. 잣대·사유는
     //   lib/sess-fold cardOpenVerdict 머리말. 도는 세션이 생기면 엿보기(pastPeek)를 비워, 다시 끝났을 때 또 접힌다.
+    //  ★ 「지금 볼 것」 조각 카드(#4551)는 **기본이 펴짐**이다 — 그 카드는 올라온 줄 때문에 서 있으므로, 접혀 있으면
+    //   올린 것을 도로 가린다. 사람이 접으면 그 카드가 서 있는 동안만 접힌다(nowClosed 머리말).
+    if (g.now) { g.open = searching || !nowClosed.has(g.key); continue; }
     const allPast = !g.live && g.past > 0;
     if (!allPast) pastPeek.delete(g.key);
     const v = cardOpenVerdict({
@@ -751,7 +766,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //   여기 숫자가 없으면 «세션이 몇 개 있는지» 를 펴 봐야만 알 수 있다(원준 2026-09-12: "개수로라도 보여야").
       headN > 1 ? el('span', { class: 'v2-cnt', text: String(headN) }) : null),
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
-    g.id ? pinBtn(g.key, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
+    g.id ? pinBtn(g.pkey, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null,
     //  ★프로젝트 상세로 가는 문(#3778, 원준 2026-09-09) — 종전엔 머리줄에 **이름이 눈앞에 있는데 거기로 가는 길이
     //   없었다**(눌러도 접기/펴기뿐). 그렇다고 이름 클릭을 항해로 바꾸지는 않는다: 이 줄은 습관적으로 누르는 자리라
@@ -801,6 +816,8 @@ function beginRenameProjGrp(g: ProjGrp): void {
 
 /** 사람이 묶음을 접거나 폈다. 사람의 결정은 브라우저에 남고, 그 뒤로 자동 판정이 이 묶음을 안 뒤집는다. */
 function toggleGrp(key: string, wasOpen: boolean, allPast = false): void {
+  //  「지금 볼 것」 조각 카드(#4551)도 이 페이지 동안만 — 볼 일이 생길 때마다 새로 서는 카드다(nowClosed 머리말).
+  if (key.startsWith(NOW_CARD)) { if (wasOpen) nowClosed.add(key); else nowClosed.delete(key); repaintList(); return; }
   //  끝난 세션만 든 카드는 이 페이지 동안만 편다·접는다 — 기억(grpClosed·grpOpened)을 안 건드린다(pastPeek 머리말).
   if (allPast) { pastPeek.set(key, !wasOpen); repaintList(); return; }
   if (wasOpen) { grpClosed.add(key); grpOpened.delete(key); grpAuto.delete(key); }
@@ -810,7 +827,8 @@ function toggleGrp(key: string, wasOpen: boolean, allPast = false): void {
   repaintList();   // ⚠ **그 구역의** 붓으로 — paintAppList 는 늘 홈의 재료로 채웠다(위 listPaint 머리말)
 }
 
-/** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다. */
+/** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다.
+ *  「지금 볼 것」 아래엔 볼 일 있는 줄만 든 조각 카드가 서고, 같은 프로젝트의 나머지는 제 날짜 아래 카드에 남는다(#4551 — projGroups 머리말). */
 function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
@@ -872,7 +890,10 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
   //  #4233 — 고정한 프로젝트 안에서 또 고정한 세션은 카드 안 **맨 위**에 서고, 「지난 세션」 뒤로 접히지 않는다
   //   (사람이 꽂은 자리를 자동 규칙이 걷지 않는다 — #3870 · #3778 의 그 원칙).
   const pinIn = pinnedFirst(g.rows).filter((r) => r.pinned);
-  const fold = foldCardRows(g.rows.filter((r) => !r.pinned), { searching, opened: pastSet.has(g.key) });
+  //  ★ 「지금 볼 것」 조각 카드(#4551)는 줄을 접지 않는다 — 거기 선 줄은 저마다 볼 일이 있어 올라온 것이라,
+  //   끝난 줄이라고 「지난 세션」 뒤로 넣으면 올린 것을 도로 가린다.
+  const fold = g.now ? { now: g.rows.filter((r) => !r.pinned), folded: [], open: false }
+    : foldCardRows(g.rows.filter((r) => !r.pinned), { searching, opened: pastSet.has(g.pkey) });
   const row = (r: SideInstance) => appRowEl(r, { ...o, one: true });
   //  ★ 접힘 안쪽은 **그 프로젝트의 지난 세션 전량**이다(#3778 4판, 원준 2026-09-12).
   //   종전엔 카드가 받는 재료 자체가 «오늘 것 + 내가 안 닫은 것» 이라, 어제 이전 세션은 접힘 **숫자에도**
@@ -890,14 +911,16 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
     for (const r of g.rows) if (r.id.startsWith('sess:')) own.add(r.id.slice(5));
     return own;
   })();
-  const extra = projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
+  //  ★ 한 프로젝트에 「지난 세션」 접힘은 **한 번**(#4551) — 어느 카드가 드는지는 잎 모듈이 정한다(planNowCards 의 fold).
+  const extra = !g.fold ? { rows: [], total: 0 }
+    : projectPastRows(last?.data.sessions as PastRowLike[] | undefined, g.id, standing, MAX_SESS);
   const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
   const folded = [...fold.folded, ...extraRows];
   //  ★ **앞면이 하나도 없으면 접힘을 펴 둔다**(#3778 5판) — foldCardRows 의 "본문이 없으면 덮을 것이 없다" 와
   //   같은 규율을 카드 전체에 적용한 것이다. 줄이 안 선 프로젝트의 카드는 내용이 「지난 세션 n」 하나뿐이라,
   //   접어 두면 펴도 **뚜껑만 나오고** 세션을 보려면 한 번 더 눌러야 한다 — 「폴더를 펼쳐도 그 세션이 안
   //   보였다」(#762·#1808)로 이미 두 번 고친 그 증상이다.
-  const foldOpen = fold.open || (!fold.now.length && !pinIn.length) || (!!extra.total && pastSet.has(g.key));
+  const foldOpen = fold.open || (!fold.now.length && !pinIn.length) || (!!extra.total && pastSet.has(g.pkey));
   //  「외 n개」 — 상한을 넘는 만큼은 프로젝트 화면이 받는다(트리의 v2-ss-more 와 같은 규약).
   const over = extra.total - extra.rows.length;
   //  #4233 — 카드 틀은 role=presentation(줄이 목록의 항목으로 남게).
@@ -906,7 +929,7 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
     g.open ? el('div', { class: 'v2-pg-list', role: 'presentation' },
       ...pinIn.map(row),
       ...fold.now.map(row),
-      folded.length ? cardPastHead(g.key, folded.length + Math.max(0, over), foldOpen) : null,
+      folded.length ? cardPastHead(g.pkey, folded.length + Math.max(0, over), foldOpen) : null,
       ...(foldOpen ? folded.map(row) : []),
       foldOpen && over > 0
         ? el('a', { class: 'v2-ss-more', href: '#/p/' + g.id, text: `외 ${over}개` }) : null) : null) as HTMLElement;

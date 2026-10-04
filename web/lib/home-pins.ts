@@ -87,3 +87,51 @@ export function planSessAxis<T extends PinRowLike>(rows: readonly T[] | null | u
   const back = all.filter((r) => !upTop.has(r));
   return { pinRows, cardRows, dated: splitSessAxis(back, () => false).dated };
 }
+
+// ── 프로젝트별 축: 「지금 볼 것」에는 **볼 일 있는 줄만** 올라간다 (#4551, 원준 2026-10-04) ─────────────
+//
+//  신고: "프로젝트로 묶은 상태에서 지금 볼 것에 저 많은 것 중에 한두 개만 올려주면 되는데 프로젝트로 묶인 게 전체 다 올라온다."
+//
+//  ★ 원인 — 카드의 자리가 **첫 행의 묶음** 하나로 정해졌다. 세션 열다섯 개짜리 프로젝트에서 하나만 돌아도
+//   그 한 줄이 카드의 첫 행이라, 나머지 열넷을 데리고 카드가 통째로 「지금 볼 것」에 섰다. 세션별 축에서는 그 한 줄만
+//   올라가므로, 같은 목록인데 묶는 축에 따라 「지금 볼 것」의 길이가 달랐다.
+//  ⇒ 카드를 **조각**으로 나눈다. 「지금 볼 것」 줄은 프로젝트마다 조각 카드 하나(같은 프로젝트의 줄 여럿은 한 카드)로
+//   올라가고, 그 프로젝트의 나머지 줄은 제 날짜 묶음의 카드에 남는다. 두 축의 「지금 볼 것」이 **같은 줄 집합**이 된다.
+//  ⚠ 고정한 프로젝트는 나누지 않는다 — 고정한 단위가 그대로 움직인다(이 파일 머리말).
+//  ⚠ 순서를 짓지 않는다 — 카드는 처음 나온 순서, 카드 안 줄은 들어온 순서(줄 세우기는 hold-rules orderCards).
+
+/** 「지금 볼 것」 조각 카드의 키 머리 — 같은 프로젝트의 나머지 카드('p:<id>')와 접힘·자리 기억이 섞이지 않게. */
+export const NOW_CARD = 'now:';
+
+/** 프로젝트 카드 한 장의 설계. */
+export interface ProjCardPlan<T> {
+  /** 카드 키 — 조각 카드는 `now:p:<id>`, 그 밖은 `p:<id>`. 접힘·자리 기억·스크롤 앵커가 이 키를 쓴다. */
+  key: string;
+  /** 프로젝트 키(`p:<id>`) — 압정 · 「지난 세션」 통처럼 프로젝트 단위인 것이 쓴다. */
+  pkey: string;
+  /** 프로젝트 id — 「프로젝트 없음」은 0. */
+  id: number;
+  /** 「지금 볼 것」 조각인가. */
+  now: boolean;
+  /** 이 카드가 그 프로젝트의 「지난 세션」 접힘을 드나 — **한 프로젝트에 한 장만** 참이다. 나머지 카드가 있으면 그 카드가,
+   *  조각 카드만 섰으면(줄이 전부 「지금 볼 것」) 조각 카드가 든다 — 둘 다 들면 같은 세션이 두 번 서고, 아무도 안 들면 어디에도 없다. */
+  fold: boolean;
+  rows: T[];
+}
+
+/** 줄을 프로젝트 카드로 묶는다 — `nowGroup` 묶음의 줄은 조각 카드로(고정한 프로젝트는 빼고). */
+export function planNowCards<T extends PinRowLike>(rows: readonly T[] | null | undefined, isProjPinned: (id: number) => boolean, nowGroup: string): ProjCardPlan<T>[] {
+  const cards: ProjCardPlan<T>[] = [];
+  const byKey = new Map<string, ProjCardPlan<T>>();
+  for (const r of rows || []) {
+    const id = Number(r.project && r.project.id) || 0;
+    const pkey = 'p:' + id;
+    const now = r.group === nowGroup && !inPinnedProject(r, isProjPinned);
+    const key = now ? NOW_CARD + pkey : pkey;
+    let c = byKey.get(key);
+    if (!c) { c = { key, pkey, id, now, fold: true, rows: [] }; byKey.set(key, c); cards.push(c); }
+    c.rows.push(r);
+  }
+  for (const c of cards) c.fold = !(c.now && byKey.has(c.pkey));
+  return cards;
+}
