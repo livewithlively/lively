@@ -50,7 +50,10 @@ export interface Sess {
 export interface V2Data {
   projects: Proj[];
   sessions: Sess[];
+  /** 목록의 정본을 받은 시각 — **0 이면 아직 못 받았다**(#3870, lib/side-boot). 사이드바는 그동안 줄 · 숫자 · «없어요» 를 안 그린다. */
   loadedAt: number;
+  /** 받으려다 실패한 판이 있었고 아직 못 받았다 — 사이드바가 막대 아래에 그 사실을 말한다. */
+  loadFailed?: boolean;
   /** 열린 앱 행의 프로젝트 경로(스페이스 › 리스트 › 프로젝트)에만 쓰는 가벼운 계층 메타. */
   lists?: ProjList[];
   folders?: ProjFolder[];

@@ -55,6 +55,7 @@ import { canForkSess } from './ctx-shell.js';   // #4135 — 세션 복제 가�
 import { openForkPopover } from './session-fork.js';
 import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
+import { sideTruthVerdict } from '../lib/side-boot.js';   // #3870 — 목록의 정본을 다 받았을 때만 loadedAt 을 찍는다
 import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870 프로젝트 화면 주소 한 벌(사이드바 [→]·통합검색)
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
@@ -747,6 +748,13 @@ let dismissedSess = new Set<string>();
 //   실패한 판은 세지 않는다(loadData 는 실패를 직전 목록으로 덮으므로 '받았다'가 아니다).
 let sessTruthSeen = false;
 let instTruthSeen = false;
+//  ★ 사이드바가 목록을 그려도 되는가(#3870, lib/side-boot 머리말). 종전엔 loadData 가 요청이 전부 실패해도 끝나며
+//   loadedAt 을 찍어, «받았다» 와 «시도가 끝났다» 가 같은 값이었다. 이제 네 축을 한 번씩 다 받았을 때(또는 기다릴 만큼
+//   기다렸을 때)만 찍는다 — 그 전의 data.loadedAt 은 0 이고 사이드바는 줄 대신 막대를 둔다.
+let logsTruthSeen = false;
+let listsTruthSeen = false;
+let loadRounds = 0;         // 끝난 loadData 판 수(성공 · 실패 무관)
+let sideTruthAt = 0;        // «그려도 된다» 가 된 시각 — 한 번 찍히면 실패한 폴링이 와도 안 지워진다
 // ── 기록 목록은 **두 겹**이다(#2022 후속) ───────────────────────────────────────
 //  종전엔 매 틱 `/api/ui/v6/sessions` 를 부르고 서버가 **말없이 200행에서 잘랐다**. 실측 2026-08-26:
 //  한 사람의 200행이 **7.7일**치밖에 안 돼(하루 ~26세션) 그보다 오래된 지난 세션이 트리에서 통째로 사라졌다.
@@ -826,7 +834,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   if (Array.isArray(insts0)) { appInstances = insts0; dismissedSess = new Set(dismissedSessionRefs()); instTruthSeen = true; }
   let lists = data.lists || [];
   let folders = data.folders || [];
-  if (Array.isArray(lists0)) lists = lists0 as any[];
+  if (Array.isArray(lists0)) { lists = lists0 as any[]; listsTruthSeen = true; }
   if (Array.isArray(folders0)) folders = folders0 as any[];
   // 실패한 축은 **직전 응답을 그대로 쓴다**(상민님 신고 2026-08-20). 게이트웨이를 재배포하면 이 두 요청이
   //  몇 초간 실패하는데, 그때 빈 목록으로 덮으면 살아 있는 세션이 화면에서 통째로 사라졌다가 돌아온다 —
@@ -840,11 +848,14 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     //  깊은 판은 캐시를 통째로 갈고, 얕은 판은 그 위에 얹는다(위 mergeLogRows 주석).
     if (wantDeepLogs) { lastLogs = logs as any[]; logsDeepAt = Date.now(); }
     else lastLogs = mergeLogRows(lastLogs, logs as any[]);
+    logsTruthSeen = true;
   }
   const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   applyArchivePins(sessions);  // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
-  data = { projects, sessions, lists, folders, loadedAt: Date.now() };
+  loadRounds++;
+  if (!sideTruthAt && sideTruthVerdict({ projects: projLoadedAt > 0, lists: listsTruthSeen, sessions: sessTruthSeen, logs: logsTruthSeen }, loadRounds) !== 'wait') sideTruthAt = Date.now();
+  data = { projects, sessions, lists, folders, loadedAt: sideTruthAt ? Date.now() : 0, loadFailed: !sideTruthAt };
   if (!wantProj) {
     const known = new Set(projects.map((p) => p.id));
     const fresh = sessions.filter((s) => s.projectId && !known.has(s.projectId) && !projRetried.has(s.projectId)).map((s) => s.projectId as number);
