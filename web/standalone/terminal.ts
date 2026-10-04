@@ -279,6 +279,13 @@ function openLinkFromTerminal(uri: string): void {
 // 경로 링크 열기(#4562) — 셸이 곁칸에 [자료] 탭을 세우고 그 파일을 뷰어 탭으로 편다(panes.ts onMsg 'lively:open-file-in-pane').
 //  ⚠ 열 수 있나는 **셸이 정한다**(그 곁칸이 어느 프로젝트의 것인지는 셸만 안다) — 셸이 못 연다고 답하거나(handled:false)
 //   답이 없으면(구 셸·단독 페이지) 여기서 떨어진다: 프로젝트 자료는 공유 폴더 뷰어(#/f)로, 세션 파일은 안내만.
+// (순수 — 테스트 대상) 트래킹 pane(Claude Code TUI)에서 이 클릭으로 열 링크. 세션 폴더 기준 상대 경로(#4562)는 짐작이라
+//  **맨클릭**은 TUI 에 돌려준다(Claude Code 의 선택지 줄에 `src/a.ts` 같은 이름이 흔하다) — ⌘/Ctrl+클릭이면 연다.
+//  URL 과 `project/<번호>/` 가 든 경로는 증거가 있으니 맨클릭으로도 연다.
+export function bareClickLink(link: string | null, modifier: boolean): string | null {
+  if (!link || modifier) return link;
+  return isPathLink(link) && pathLinkTarget(link)?.kind === 'session' ? null : link;
+}
 //  같은 경로를 연달아 누르면(더블클릭) 답을 기다리는 동안 두 번째는 버린다 — 둘 다 폴백하면 새 탭이 둘 뜬다(리뷰 지적).
 const pathOpening = new Set<string>();
 export function openPathFromTerminal(p: string): void {
@@ -4021,9 +4028,7 @@ export async function boot() {
     if (ev.button !== 0) { pendingLink = null; return; }
     const wantsLink = (ev.metaKey || ev.ctrlKey) || mouseTracked();
     pendingLink = wantsLink ? linkAtEvent(ev) : null;
-    //  세션 폴더 기준 상대 경로(#4562)는 짐작이라 — 트래킹 pane 의 **맨클릭**은 TUI 에 돌려준다(Claude Code 의 선택지 줄에
-    //   `src/a.ts` 같은 이름이 흔하다). ⌘/Ctrl+클릭이면 연다. `project/<번호>/` 가 든 경로는 증거가 있으니 맨클릭으로도 연다.
-    if (pendingLink && !(ev.metaKey || ev.ctrlKey) && isPathLink(pendingLink) && pathLinkTarget(pendingLink)?.kind === 'session') pendingLink = null;
+    pendingLink = bareClickLink(pendingLink, ev.metaKey || ev.ctrlKey);   // #4562 세션 상대 경로는 ⌘/Ctrl 로만
     // modifier 클릭은 URL 밖이어도 삼킨다(pty 로 새면 TUI 가 press 를 받는다) — 맨클릭은 URL 위일 때만.
     if (pendingLink || (ev.metaKey || ev.ctrlKey)) { ev.stopPropagation(); ev.preventDefault(); }
   }, true);
