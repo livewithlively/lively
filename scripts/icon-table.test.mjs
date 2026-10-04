@@ -219,8 +219,8 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   ok(/guideIcon\('learn', 'gd-crumb-ic'\)/.test(GUIDE_APP) && /d: iconPath\(name\)/.test(GUIDE_ICON) && /guideIcon\('learn', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN),
     "H1 「사용 가이드」 화면 머리(앱 · 클래식 문서 셸): 표의 learn");
   const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
-  //  #4517 — 「세션 이력」(hist) 종류가 「대화」(conv)로 바뀌었다. 그림은 그대로 표의 sess(말풍선 둘)다.
-  const want = { proj: "folder", know: "wiki", src: "src", sess: "chat", conv: "sess" };
+  //  #4517 — 「세션 이력」(hist) 종류가 「대화」(conv)로 바뀌었다가, #4530 에서 대화는 세션의 일부로 합쳐졌다(종류 sess 하나).
+  const want = { proj: "folder", know: "wiki", src: "src", sess: "chat" };
   for (const [k, n] of Object.entries(want)) ok(new RegExp("\\b" + k + ": \\[ICONS\\." + n + "\\]").test(kp), `H2 통합검색 ${k} = 표의 ${n}`);
   ok(/key: 'notify', label: '알림', icon: \[ICONS\.bell\]/.test(srcOf["web/v2/me-modal.ts"] || ""), "H3 [나] 창 「알림」 = 표의 bell");
   ok(/PJV_TM_ICONS\.bell = \{ p: \[\['path', \{ d: ICONS\.bell \}\]\] \}/.test(srcOf["web/taskmodal/composer.ts"] || ""), "H3 태스크 창 활동 구독 = 표의 bell");

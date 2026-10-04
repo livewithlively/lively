@@ -2603,7 +2603,7 @@ function navRow(): HTMLElement {
     el('button', {
       class: 'v2-omnib', type: 'button',
       //  #4530 — 설명은 **기본으로 찾는 것**만 적는다. 자료는 칩을 눌러야 찾으므로 «한 번에» 에 넣으면 거짓말이 된다(점검 6번).
-      title: '통합검색: 세션 · 대화 · 프로젝트 · 지식 · 화면을 한 번에 찾습니다. 자료는 칩을 눌러 찾습니다. '
+      title: '통합검색: 세션(대화 내용과 고친 파일까지) · 프로젝트 · 지식 · 화면을 한 번에 찾습니다. 자료는 칩을 눌러 찾습니다. '
         + (mac ? '(⌘K)' : '(Alt+K · 터미널 밖에서는 Ctrl+K 도 됩니다)'),
       'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.() },
       sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' },

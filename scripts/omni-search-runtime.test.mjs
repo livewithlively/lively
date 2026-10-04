@@ -30,6 +30,9 @@
 //  G23 지식 채널이 실패하면 «결과가 없습니다» 대신 실패를 말한다(전엔 말없이 빈 결과)
 //  G24 칩 하나만 켜도 서버가 꽉 채워 보내면 «결과 더 보기» 가 뜨고, 누르면 더 많이 청한다(전엔 줄 40개 넘을 때만)
 //  G25 Alt+Enter 는 새 화면으로 연다(가이드 표기 · 고치기 전 동작)
+//  G26 대화는 세션의 일부다 — «대화» 칩·배지·묶음이 없다 · 대화로 걸린 세션도 «세션» 배지 · 세션 칩 하나가 대화 검색까지 부른다
+//      (원준 2026-10-04 «대화도 세션 안의 대화인데 굳이 나눌 필요가 있나»)
+//  G27 최근 검색 줄은 시계 그림(표의 clock) — 종류(바로 가기)의 창 그림이 아니다(원준 2026-10-04 «최근 검색 아이콘이 왜 저거인지»)
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 언제 무엇이 열리나 · 초점이 어디 있나»
@@ -213,6 +216,17 @@ async function PAGE_MAIN() {
     R.catOpen = OPENED.length > nOpen ? OPENED[OPENED.length - 1] : null;
     await search("슬랙");
 
+    // ── G26 세션 = 대화 포함 ──
+    R.chipLabels = [...document.querySelectorAll(".v2-omni-chip")].map((b) => b.textContent.trim());
+    R.badges = [...document.querySelectorAll(".v2-omni-row .v2-omni-badge")].map((b) => b.textContent);
+    n0 = log.length;
+    [...document.querySelectorAll(".v2-omni-chip")].find((b) => b.dataset.kind === "sess")?.click();
+    await sleep(60); await waitFor(isSettled); await sleep(40);
+    R.sessChipReqs = since(n0);
+    R.sessChipShape = shape();
+    [...document.querySelectorAll(".v2-omni-chip")].find((b) => b.dataset.kind === "sess")?.click();
+    await sleep(60); await waitFor(isSettled);
+
     // ── G15 관련도순 + 저장 ──
     [...document.querySelectorAll(".v2-omni-segb")].find((b) => /관련도순/.test(b.textContent))?.click();
     await sleep(60); await waitFor(isSettled); await sleep(40);
@@ -256,6 +270,7 @@ async function PAGE_MAIN() {
     inp.value = ""; inp.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(60);
     R.empty = shape();
+    R.recentIcon = (() => { const r = rowEl("다른말"); return r ? [...r.querySelectorAll(".v2-omni-ic path")].map((p) => p.getAttribute("d")).join(" | ") : ""; })();
 
     // ── G11 고른 줄은 늦게 온 채널이 끼어들어도 그대로 ──
     DELAY.sim = 1600;                     // 자리 잡기 상한(1.2초)을 넘겨 늦게 온다
@@ -475,6 +490,14 @@ check(/상민의 세션/.test(row(R.def, "슬랙 팀원 세션")?.ctx || ""), "G
   check(!!k && k.head === "as-built · #4135", "G8 지식 제목 머리말은 따로 작게", JSON.stringify(k));
   check(!!k && !/[#*`]|L3:/.test(k.sub), "G8 둘째 줄에 마크다운 기호·줄 번호가 없다", JSON.stringify(k));
 }
+// G27
+check(/a10 10 0 1 0 0 20/.test(R.recentIcon || "") && /M12 7v5l3\.5 2/.test(R.recentIcon || "") && !/M4 5h16v12H4z/.test(R.recentIcon || ""), "G27 최근 검색 줄은 시계 그림", JSON.stringify(R.recentIcon));
+// G26
+check(!R.chipLabels.includes("대화") && R.chipLabels.includes("세션"), "G26 «대화» 칩이 없다(세션 하나)", JSON.stringify(R.chipLabels));
+check(!R.badges.includes("대화") && allRows(R.def).some((r) => r.t === "모르는 세션" && r.badge === "세션"), "G26 대화로 걸린 세션도 «세션» 배지", JSON.stringify(R.badges));
+check(reqOf(R.sessChipReqs, "/api/ui/v6/session-search?").length >= 1 && !reqOf(R.sessChipReqs, "/api/ui/v6/projects/search").length
+  && allRows(R.sessChipShape).some((r) => r.t === "모르는 세션"), "G26 세션 칩 하나가 대화 검색까지 부른다(프로젝트는 안 부른다)", JSON.stringify(R.sessChipReqs));
+check(!(R.rel || []).some((g) => g.h === "대화"), "G26 관련도순에도 «대화» 묶음이 없다", JSON.stringify((R.rel || []).map((g) => g.h)));
 // G15
 {
   const heads = (R.rel || []).map((g) => g.h);
