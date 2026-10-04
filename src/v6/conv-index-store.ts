@@ -26,7 +26,7 @@ import { readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
 import { readAlignedWindow, prefetchReader, type ByteReader } from "../terminal/harness-io/window.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { parseJsonLines, type ChatLine, type ParseResult, type ParseState } from "../terminal/harness-io/chat-line.js";
-import { extractConvMessages, rankConvAggs, snippetAround, snippetTerms, editLabel, type ConvMsg, type ConvRole, type ConvField, type ConvSessionAgg, type ConvSort } from "./conv-search.js";
+import { extractConvMessages, rankConvAggsCounted, snippetAround, snippetTerms, editLabel, type ConvMsg, type ConvRole, type ConvField, type ConvSessionAgg, type ConvSort } from "./conv-search.js";
 import { parseQueryTerms, termPatterns, likePattern, type QueryTerm } from "./query-terms.js";
 import { hiddenProjects, type HiddenProjects } from "./visibility.js";
 import { sessionVisible } from "../terminal/write-cap.js";
@@ -384,9 +384,11 @@ function termSql(params: unknown[], terms: QueryTerm[], col: string, withFull = 
   });
 }
 
-export async function searchConversations(input: ConvSearchInput): Promise<{ results: ConvSearchResult[]; capped: boolean; cap: number }> {
+/** total = 맞은 세션 수 — **모든 낱말이 맞고 볼 수 있는** 세션만(목록에 서는 것과 같은 문턱 · 상한 cap 안에서 — capped 면 그보다 많다).
+ *  화면의 «세션» 탭 숫자(#4530 안 A). */
+export async function searchConversations(input: ConvSearchInput): Promise<{ results: ConvSearchResult[]; total: number; capped: boolean; cap: number }> {
   const terms = parseQueryTerms(input.q);
-  if (!terms.length || !input.requester) return { results: [], capped: false, cap: input.sessionCap ?? CONV_SESSION_CAP };
+  if (!terms.length || !input.requester) return { results: [], total: 0, capped: false, cap: input.sessionCap ?? CONV_SESSION_CAP };
   const params: unknown[] = [];
   const v = visibleSql(params, input);
   const ts = termSql(params, terms, "m.body");
@@ -463,7 +465,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
   }));
   const ok = await allowedInvites([...new Set(aggs.filter((x) => x.owner !== input.requester).map((x) => x.session_id))], input.requester);
   aggs = aggs.filter((x) => x.owner === input.requester || ok.has(x.session_id));
-  const ranked = rankConvAggs(aggs, { terms, sort: input.sort, nowMs: input.nowMs ?? Date.now(), requester: input.requester, limit: input.limit });
+  const { rows: ranked, total } = rankConvAggsCounted(aggs, { terms, sort: input.sort, nowMs: input.nowMs ?? Date.now(), requester: input.requester, limit: input.limit });
   const best = await bestLines(ranked.map((x) => x.agg), terms, sinceSql ? new Date(sinceMs).toISOString() : null);
   const results: ConvSearchResult[] = ranked.map((x) => {
     const b = best.get(x.agg.node_id + "\u0001" + x.agg.session_id);
@@ -475,7 +477,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       project: x.agg.project,
     };
   });
-  return { results, capped: r.rows.length >= cap, cap };
+  return { results, total, capped: r.rows.length >= cap, cap };
 }
 
 // ── 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A, 원준 2026-10-04) ─────────────────────────────────
@@ -490,6 +492,8 @@ export interface SessionHitsInput {
   q: string;
   /** 맞은 말 수 상한(기본 6). */
   limit?: number;
+  /** 이 시각(ISO) 뒤의 말에서만 «맞은 말» 을 고른다 — 검색을 기간으로 좁혔을 때 목록과 미리보기가 같은 근거를 보인다. */
+  since?: string | null;
 }
 export interface SessionHitLine { role: "user" | "assistant"; ts: string | null; text: string }
 export interface SessionHit extends SessionHitLine {
@@ -510,6 +514,8 @@ export interface SessionHitsResult {
   /** 처음 시킨 말 · 마지막 말 — 낱말이 말에 안 들었을 때(이름으로만 맞은 세션) 무슨 세션인지 알려 준다. */
   first: SessionHitLine | null;
   last: SessionHitLine | null;
+  /** 요청자가 이 세션의 주인인가 — 화면이 사람 말에 «나» 를 붙일지 가른다(초대받아 보는 남의 세션은 false). */
+  mine: boolean;
 }
 /** 미리보기 한 조각의 글자 상한 — 맞은 말은 넉넉히, 앞뒤 말은 짧게. */
 export const HIT_TEXT_MAX = 420;
@@ -546,7 +552,12 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
   if (terms.length) {
     const params: unknown[] = [input.nodeId, input.sessionId];
     const ts = termSql(params, terms, "c.body", false);
-    const anyHit = ts.map((x) => `(${x.any})`).join(" OR ");
+    const sinceMs = input.since ? Date.parse(input.since) : NaN;
+    let sinceSql = "";
+    if (Number.isFinite(sinceMs)) { params.push(new Date(sinceMs).toISOString()); sinceSql = ` AND c.ts >= $${params.length}::timestamptz`; }
+    //  기간은 «맞은 말» 에만 건다 — 앞뒤 말은 대화 순서의 이웃이라 기간 밖이어도 보인다. 고친 파일(④)의 맞음 표시도 기간을 타지 않는다
+    //   (그 세션에서 고친 파일 전부를 보여 주는 자리다).
+    const hitWhere = `(${ts.map((x) => `(${x.any})`).join(" OR ")})${sinceSql}`;
     const k = ts.map((x) => `(${x.any})::int`).join(" + ");
     params.push(limit); const limP = `$${params.length}`;
     const r = await boundedQuery(
@@ -556,14 +567,14 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
           WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit'),
        hit AS (
          SELECT c.rn, c.role, c.ts, c.body, (${k}) AS k
-           FROM conv c WHERE (${anyHit})
+           FROM conv c WHERE ${hitWhere}
           ORDER BY (${k}) DESC, (c.role = 'user') DESC, c.ts DESC NULLS LAST, c.rn DESC
           LIMIT ${limP})
        SELECT h.rn, h.role, h.ts, h.body, h.k,
               p.role AS prole, p.ts AS pts, p.body AS pbody,
               n.role AS nrole, n.ts AS nts, n.body AS nbody,
               (SELECT count(*) FROM conv) AS msgs,
-              (SELECT count(*) FROM conv c WHERE (${anyHit})) AS total
+              (SELECT count(*) FROM conv c WHERE ${hitWhere}) AS total
          FROM hit h
          LEFT JOIN conv p ON p.rn = h.rn - 1
          LEFT JOIN conv n ON n.rn = h.rn + 1
@@ -578,23 +589,28 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
     }
   }
 
-  //  ③ 처음 시킨 말 · 마지막 말 · 말 수(맞은 말이 없을 때도 무슨 세션인지 보인다).
+  //  ③ 처음 시킨 말 · 마지막 말 · 말 수(맞은 말이 없을 때도 무슨 세션인지 보인다). 양 끝 한 줄씩만 읽는다 — 세션 전체에 번호를 매겨
+  //   본문까지 펴지 않는다(말이 수천 개인 세션에서 낭비였다, 격리 리뷰).
   const ends = await boundedQuery(
-    `WITH conv AS (
-       SELECT m.role, m.ts, m.body, row_number() OVER (ORDER BY m.at_offset, m.idx) AS rn, count(*) OVER () AS n
-         FROM session_msg m
-        WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit')
-     (SELECT 'first' AS which, role, ts, body, n FROM conv WHERE role = 'user' ORDER BY rn LIMIT 1)
+    `(SELECT 'first' AS which, m.role, m.ts, m.body FROM session_msg m
+       WHERE m.node_id = $1 AND m.session_id = $2 AND m.role = 'user' ORDER BY m.at_offset, m.idx LIMIT 1)
      UNION ALL
-     (SELECT 'last' AS which, role, ts, body, n FROM conv ORDER BY rn DESC LIMIT 1)`, [input.nodeId, input.sessionId]);
+     (SELECT 'last' AS which, m.role, m.ts, m.body FROM session_msg m
+       WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit' ORDER BY m.at_offset DESC, m.idx DESC LIMIT 1)
+     UNION ALL
+     (SELECT 'n' AS which, NULL, NULL, count(*)::text FROM session_msg m
+       WHERE m.node_id = $1 AND m.session_id = $2 AND m.role <> 'edit')`, [input.nodeId, input.sessionId]);
   let first: SessionHitLine | null = null, last: SessionHitLine | null = null;
   for (const x of ends.rows) {
-    if (!msgs) msgs = Number(x.n) || 0;
+    const which = String(x.which);
+    if (which === "n") { if (!msgs) msgs = Number(x.body) || 0; continue; }
     const l = line(x.role, x.ts, x.body, HIT_NEIGHBOR_MAX);
-    if (String(x.which) === "first") first = l; else last = l;
+    if (which === "first") first = l; else last = l;
   }
 
-  //  ④ 고친 파일 — 같은 파일은 한 줄. 낱말이 맞은 파일을 먼저.
+  //  ④ 고친 파일 — 같은 파일은 한 줄. 낱말이 맞은 파일을 먼저, 그다음 **작업 폴더의 파일**(임시 폴더 scratchpad·tmp 의 것은 맨 뒤 —
+  //   실화면에서 «scratchpad/gen-report.mjs» 같은 임시 파일이 앞자리를 차지해 정작 고친 코드가 잘렸다).
+  //   ⚠ 색인은 경로의 끝 세 마디만 담는다(conv-search) — 임시 폴더 아래로 세 단계보다 깊은 파일은 가리지 못하고, 이름이 tmp 인 진짜 폴더는 뒤로 밀린다.
   const ep: unknown[] = [input.nodeId, input.sessionId];
   let hitCol = "false";
   if (terms.length) hitCol = `bool_or(${termSql(ep, terms, "m.body", false).map((x) => `(${x.any})`).join(" OR ")})`;
@@ -603,7 +619,7 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
        FROM session_msg m
       WHERE m.node_id = $1 AND m.session_id = $2 AND m.role = 'edit'
       GROUP BY m.body
-      ORDER BY 3 DESC, 2 DESC, 1
+      ORDER BY 3 DESC, (m.body ~ '(^|/)(scratchpad|tmp)/') ASC, 2 DESC, 1
       LIMIT 12`, ep);
   //  화면엔 끝 두 마디만 보인다 — 색인은 끝 세 마디라 두 마디로 줄이면 같은 줄이 될 수 있다. 합친다.
   const byPath = new Map<string, { path: string; hit: boolean }>();
@@ -614,7 +630,7 @@ export async function sessionHits(input: SessionHitsInput): Promise<SessionHitsR
     cur.hit = cur.hit || x.hit === true || x.hit === "t";
     byPath.set(path, cur);
   }
-  return { msgs, total, hits, edits: [...byPath.values()].slice(0, 8), first, last };
+  return { msgs, total, hits, edits: [...byPath.values()].slice(0, 8), first, last, mine: owner === input.requester };
 }
 
 /**

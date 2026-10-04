@@ -225,6 +225,11 @@ export const CONV_TOP_RATIO = 0.8;
  *  · recent(기본, 슬랙 Recent + Top Results) — 맨 위에 관련도 앞 셋(1등의 80% 이상), 그 아래는 맞은 때가 늦은 것부터.
  */
 export function rankConvAggs(aggs: ConvSessionAgg[], opts: { terms: QueryTerm[]; sort: ConvSort; nowMs: number; requester?: string; limit: number }): ConvRanked[] {
+  return rankConvAggsCounted(aggs, opts).rows;
+}
+/** rankConvAggs + **문턱을 넘은 세션 수**(자르기 전) — 화면의 «세션» 탭 숫자다. 후보 수(aggs.length)는 «낱말 중 하나라도 든 세션» 이라
+ *  낱말이 둘 이상이면 목록보다 큰 숫자가 선다(#4530 격리 리뷰). */
+export function rankConvAggsCounted(aggs: ConvSessionAgg[], opts: { terms: QueryTerm[]; sort: ConvSort; nowMs: number; requester?: string; limit: number }): { rows: ConvRanked[]; total: number } {
   const rows: ConvRanked[] = [];
   for (const a of aggs) {
     const r = convRelevance(a, opts.terms, opts);
@@ -235,11 +240,11 @@ export function rankConvAggs(aggs: ConvSessionAgg[], opts: { terms: QueryTerm[];
   const atOf = (x: ConvRanked): number => (x.at == null ? -Infinity : x.at);
   const byRel = [...rows].sort((x, y) => y.rel - x.rel || atOf(y) - atOf(x));
   const limit = Math.max(0, opts.limit);
-  if (opts.sort === "relevance") return byRel.slice(0, limit);
+  if (opts.sort === "relevance") return { rows: byRel.slice(0, limit), total: rows.length };
   const top = byRel.slice(0, CONV_TOP_MAX).filter((x, i) => i === 0 || x.rel >= byRel[0].rel * CONV_TOP_RATIO);
   for (const x of top) x.top = true;
   const rest = rows.filter((x) => !x.top).sort((x, y) => atOf(y) - atOf(x) || y.rel - x.rel);
-  return [...top, ...rest].slice(0, limit);
+  return { rows: [...top, ...rest].slice(0, limit), total: rows.length };
 }
 
 /** 대표 발췌문에서 색칠·자를 낱말 — 친 그대로와 조사 뗀 꼴 둘 다. */

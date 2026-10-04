@@ -112,7 +112,8 @@ let omniIcon = null, binProjIcon = null;
   try { if (i >= 0 && k > j) omniIcon = new Function("sv", "ICONS", "projGlyph", transpile(OMNI.slice(i, k + 5)) + "\nreturn icon;")(mk, ICONS, projGlyph); } catch (e) { console.error("  (통합검색 icon 을 부르지 못했다: " + e.message + ")"); }
   ok(typeof omniIcon === "function", "Q2 통합검색의 종류 그림(icon)을 값으로 부를 수 있다");
   if (omniIcon) {
-    ok(dOf(omniIcon("proj", "v2-omni-chip-ic")) === ICONS.projMini, "Q2 통합검색 종류 칩(13px)의 프로젝트 = 작은 과녁", String(dOf(omniIcon("proj", "v2-omni-chip-ic"))).slice(0, 24));
+    //  #4530 안 A — 종류 칩은 탭(글자)이 됐다. 13px 자리는 미리보기 칸의 종류 이름표(v2-opv-kic)다.
+    ok(dOf(omniIcon("proj", "v2-opv-kic")) === ICONS.projMini, "Q2 통합검색 미리보기의 종류 이름표(13px)의 프로젝트 = 작은 과녁", String(dOf(omniIcon("proj", "v2-opv-kic"))).slice(0, 24));
     ok(dOf(omniIcon("proj", "v2-omni-kic")) === ICONS.proj, "Q2 통합검색 결과 줄(15px)의 프로젝트 = 과녁");
     ok(dOf(omniIcon("know", "v2-omni-kic")) === ICONS.wiki && dOf(omniIcon("proj", "v2-omni-kic", [ICONS.clock])) === ICONS.clock, "Q2 다른 종류와 따로 넘긴 그림(최근 검색의 시계)은 그대로");
   }

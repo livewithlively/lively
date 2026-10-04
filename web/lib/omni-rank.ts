@@ -81,7 +81,8 @@ export function focusSnippet(text: string, words: string[], lead = 14): string {
   const sp = s.indexOf(' ', from);
   if (sp >= 0 && sp < at) from = sp + 1;
   if (/[\udc00-\udfff]/.test(s[from] || '')) from++;   // 서로게이트 쌍을 가르지 않는다
-  return '…' + s.slice(from);
+  //  잘린 자리가 가운뎃점(표의 칸막이였던 것)이면 그 점은 버린다 — «…· 큰따옴표» 로 보였다(실화면).
+  return '…' + s.slice(from).replace(/^[·\s]+/, '');
 }
 
 // ── 지식 제목의 머리말 ─────────────────────────────────────────────────────────────
@@ -106,6 +107,27 @@ export function splitKnowTitle(title: string): { head: string; main: string } {
 //  안내문은 «… 보강됩니다.» 에서 끝난다 — 줄 끝까지 지우면 서버가 본문 앞부분을 한 줄로 접어 보낸 발췌(search-util grepSnippet 폴백)에서
 //   뒤의 첫 지시까지 지워 둘째 줄이 비었다(#4530 항목 확인).
 const AUTO_DESC_RE = /(?:>\s*)?(?:[⚙▤]\s*)*세션의 첫 지시에서\s*\**자동 생성\**된 프로젝트입니다(?:[^\n]*?보강됩니다\.?)?/g;
+/**
+ * 굵게·코드 표시만 걷는다 — **짝이 맞는 것만**. 식별자 안의 밑줄(`__init__` · `foo__bar`) · 곱셈(`a**b`) · 인자 풀기(`f(**opts)`) ·
+ *  글롭(`src/**`)은 글자다. 종전엔 `**`·`__` 를 어디서든 지워 «src/__init__.py» 가 «src/init.py» 로 보였다 — 서버는 원문으로 맞췄는데
+ *  화면 글이 달라져 색칠도 안 되고 보이는 이름도 틀렸다(#4530 격리 리뷰).
+ *   · 백틱 안은 코드다 — 백틱만 걷고 안의 글자는 그대로 둔다(`**kwargs` · `**\/*.ts`).
+ *   · 밑줄 굵게(`__굵게__`)는 걷지 않는다(파일 이름과 가를 수 없다).
+ *   · 짝 없는 `**` 는 잘린 발췌의 것만 걷는다 — 한글에 붙어 있고 글 끝까지 짝이 없을 때.
+ *  ⚠ 뒤돌아보기((?<!…))를 쓰지 않는다 — 옛 사파리(16.4 미만)는 그 정규식을 읽지 못해 화면 묶음 전체가 멈춘다.
+ */
+const CODE_SPAN_RE = /(`+)([^`\n]*?)\1/g;
+export function stripEmphasis(raw: string): string {
+  const codes: string[] = [];
+  //  코드 조각은 자리표(\uE000n\uE001)로 빼 두었다가 되돌린다 — 그 안의 ** 는 건드리지 않는다.
+  let s = String(raw ?? '').replace(CODE_SPAN_RE, (_m, _t, body: string) => { codes.push(body); return '\uE000' + (codes.length - 1) + '\uE001'; });
+  s = s.replace(/`+/g, '')                                               // 짝 없는 백틱(잘린 발췌)
+    .replace(/(^|[^\w*])\*\*(?=\S)([^*\n]*?\S)\*\*(?!\*)/g, '$1$2')       // **굵게**
+    //  잘린 발췌에 한쪽만 남은 표시 — 한글로 시작하는(끝나는) 것만 걷는다. «**kwargs» · «tmp/**» 는 코드다.
+    .replace(/(^|[\s«"'…])\*\*(?=[^\x00-\x7F])([^*\n]*)$/, '$1$2')       // 닫는 표시가 잘려 나갔다
+    .replace(/([^\x00-\x7F]|[:.!?)\]])\*\*$/, '$1');                    // 여는 표시가 잘려 나갔다
+  return s.replace(/\uE000(\d+)\uE001/g, (_m, i: string) => codes[Number(i)] ?? '');
+}
 export function cleanSnippet(raw: string, max = 160): string {
   let s = String(raw || '');
   s = s.replace(AUTO_DESC_RE, ' ');
@@ -116,7 +138,14 @@ export function cleanSnippet(raw: string, max = 160): string {
   s = s.replace(/^\s{0,3}(?:#{1,6}|>+|[-*+]|\d+\.)\s+/gm, '');    // 줄머리 기호
   s = s.replace(/(^|\s)(?:#{1,6}|>+|[-*+])(?=\s)/g, '$1');         // 한 줄로 접힌 발췌 속의 줄머리 기호
   s = s.replace(/[▤⚙]/g, ' ');
-  s = s.replace(/\*\*|__|`+/g, '');                               // 굵게·코드 표시
+  s = s.replace(/(^|\s)\[[ xX]\]\s+/g, '$1');                      // 체크 목록 머리([ ] · [x])
+  //  표 조각 — 구분 줄(|---|---|)은 버리고 칸막이는 가운뎃점으로. 목록 둘째 줄에 «| 1 | 랜딩 화면이 …» 가 날것으로 보였다(실화면).
+  //   칸막이가 둘 이상일 때만(글 속의 세로줄 하나는 그대로 둔다).
+  s = s.replace(/\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?/g, ' ');
+  if ((s.match(/\|/g) || []).length >= 2) {
+    s = s.replace(/\s*\|\s*/g, ' · ').replace(/(?:·\s*){2,}/g, '· ').replace(/([…⋯])\s*·\s*/g, '$1 ').replace(/^\s*·\s*|\s*·\s*$/g, '');
+  }
+  s = stripEmphasis(s);                                           // 굵게·코드 표시
   s = s.replace(/\[\[([^\]]+)\]\]/g, '$1');                       // 위키 링크
   s = s.replace(/\[([^\]]+)\]\((?:[^)]+)\)/g, '$1');              // 마크다운 링크
   s = s.replace(/\s*⋯\s*/g, ' … ');

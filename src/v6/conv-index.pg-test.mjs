@@ -261,8 +261,16 @@ try {
     const pNew = await pend();
     chk("D16 밀린 수에도 가려진 프로젝트의 초대 세션은 세지 않는다(열린 쪽 하나만 는다)", pNew - pBase === 1, JSON.stringify({ pBase, pNew }));
     for (const n of [18, 19]) await C.indexConvSession("", SID(n));
-    const a = ids(await search(A, "기린"));
+    const aAll = await search(A, "기린");
+    const a = ids(aAll);
     chk("D16 초대받았어도 가려진 프로젝트의 세션은 대화로 못 찾는다", !a.includes(SID(18)), JSON.stringify(a));
+    //  D36 — 맞은 세션 수(«세션» 탭의 숫자)에도 가려진 세션은 들지 않는다(세면 «있다» 는 사실이 숫자로 샌다).
+    chk("D36 맞은 세션 수(total)는 보이는 것만 센다 — 가려진 프로젝트의 초대 세션은 빼고", aAll.total === a.length && (await search(B, "기린")).total === 2, JSON.stringify([aAll.total, a]));
+    //   낱말이 둘이면 **둘 다 맞은** 세션만 센다(목록에 서는 것과 같은 문턱) — «기린» 만 든 세션은 후보이지만 숫자에 들지 않는다.
+    await put(SID(43), B, U("기린과 물소가 같이 나오는 이야기"));
+    await C.indexConvSession("", SID(43));
+    const two = await search(B, "기린 물소");
+    chk("D36 낱말 둘 — 숫자는 둘 다 맞은 세션만(하나만 맞은 세션은 세지 않는다)", two.total === 1 && ids(two).join() === SID(43) && (await search(B, "기린")).total === 3, JSON.stringify([two.total, ids(two)]));
     chk("D16 대조: 열린 프로젝트의 초대 세션은 찾는다(프로젝트 세션을 통째로 닫은 게 아니다)", a.includes(SID(19)), JSON.stringify(a));
     const b = ids(await search(B, "기린"));
     chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
@@ -449,7 +457,7 @@ try {
       U("배포 절차가 어떻게 되지", t(2)) + AI("배포 절차는 스테이지 다음 메인입니다", t(3)) + E("/w/web/v2/omni.ts", t(4)) + E("/w/web/v2/omni.ts", t(5)) + E("/w/src/절차/store.ts", t(6)) +
       U("그럼 배포만 먼저 해 줘", t(7)) + AI("마지막 말입니다", t(8)));
     await C.indexConvSession("", SID(41));
-    const hits = (who, sid, q, o = {}) => C.sessionHits({ requester: who, attach: o.attach ?? true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: sid, q, limit: o.limit });
+    const hits = (who, sid, q, o = {}) => C.sessionHits({ requester: who, attach: o.attach ?? true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: sid, q, limit: o.limit, since: o.since });
     const r = await hits(A, SID(41), "배포 절차");
     chk("D27 맞은 말 셋 · 말 수 6 · 낱말 둘 든 말이 앞(사람 말 먼저)", !!r && r.total === 3 && r.msgs === 6 && r.hits.length === 3
       && r.hits[0].text === "배포 절차가 어떻게 되지" && r.hits[0].terms === 2 && r.hits[0].role === "user"
@@ -479,6 +487,24 @@ try {
     chk("D32 검색 결과 줄에 그 세션의 프로젝트 이름이 실린다", !!withProj && withProj.project === PROJ_NAMES[1], JSON.stringify(withProj && withProj.project));
     const otherWs = await C.sessionHits({ requester: A, attach: true, workspaceId: W2, nodeId: "", sessionId: SID(41), q: "배포" });
     chk("D31 다른 워크스페이스에서는 못 본다", otherWs === null, JSON.stringify(otherWs));
+    //  D33 누구의 세션인가 — 화면이 사람 말에 «나» 를 붙일지 가른다. 초대받아 보는 남의 세션은 false.
+    const invited = await hits(A, SID(5), "슬랙");
+    chk("D33 주인이 보면 mine=true · 초대받은 사람이 보면 mine=false", !!r && r.mine === true && !!invited && invited.mine === false, JSON.stringify([r && r.mine, invited && invited.mine]));
+    //  D34 기간 — «맞은 말» 은 그 시각 뒤의 것만(총수도). 앞 말은 대화 순서의 이웃이라 기간 밖이어도 보인다.
+    const late = await hits(A, SID(41), "배포 절차", { since: t(5) });
+    chk("D34 기간(since) 뒤의 맞은 말만 고른다 · 앞 말은 기간 밖이어도 이웃으로 보인다", !!late && late.total === 1 && late.hits.length === 1
+      && late.hits[0].text === "그럼 배포만 먼저 해 줘" && late.hits[0].before?.text === "배포 절차는 스테이지 다음 메인입니다" && late.msgs === 6,
+      JSON.stringify(late && [late.total, late.msgs, late.hits.map((h) => [h.text, h.before?.text])]));
+    //  D35 고친 파일 순서 — 임시 폴더(scratchpad · tmp)의 파일은 작업 폴더의 파일 뒤(이름순으로는 앞이어도). 낱말이 맞으면 임시 파일도 앞.
+    await put(SID(42), A, U("임시파일순서 확인", t(0)) + E("/w/a/scratchpad/gen.mjs", t(1)) + E("/w/b/tmp/out.json", t(2)) + E("/w/web/v2/panes.ts", t(3)) + AI("끝", t(4)));
+    await C.indexConvSession("", SID(42));
+    const ord = await hits(A, SID(42), "");
+    chk("D35 고친 파일 — 작업 폴더의 파일이 임시 폴더(scratchpad·tmp)의 파일보다 앞", !!ord && ord.edits.map((e) => e.path).join(",") === "v2/panes.ts,scratchpad/gen.mjs,tmp/out.json", JSON.stringify(ord && ord.edits));
+    const ordHit = await hits(A, SID(42), "gen.mjs");
+    chk("D35 낱말이 맞은 임시 파일은 그래도 맨 앞", !!ordHit && ordHit.edits[0]?.path === "scratchpad/gen.mjs" && ordHit.edits[0]?.hit === true, JSON.stringify(ordHit && ordHit.edits));
+    //  D36 검색이 맞은 세션 수를 준다(«세션» 탭의 숫자) — 못 보는 세션은 세지 않는다.
+    const tot = await search(A, "미리보기낱말"), totB = await search(B, "미리보기낱말");
+    chk("D36 검색 결과에 맞은 세션 수(total) — 주인은 1 · 남은 0", tot.total === 1 && totB.total === 0, JSON.stringify([tot.total, totB.total]));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──

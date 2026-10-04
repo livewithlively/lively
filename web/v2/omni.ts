@@ -30,7 +30,7 @@
 //  공개범위는 **전부 서버가 시행한다**(#1291) — 여기서 거르지 않는다.
 import { api, el, sv, wsKey } from '../core.js';
 import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
-import { appHref, visibleApps } from './apps.js';
+import { appHref, embedUrl, visibleApps } from './apps.js';
 import { appMatches } from '../lib/app-match.js';   // #4233 옛 이름으로도 찾는다(런치패드와 같은 잣대)
 import { sessText } from './side.js';
 import { projName, findSessByConv, isTrashedSess, isMineSess, type Sess, type V2Data } from './views.js';
@@ -43,6 +43,9 @@ import {
   type Term, parseTerms, matchAll, matchAllAcross, highlightWords, splitKnowTitle, cleanSnippet, focusSnippet, identKind, pickTop,
 } from '../lib/omni-rank.js';   // #4530 순서·줄 다듬기 규칙(순수)
 import { isOmniChordLike, OMNI_MSG, OMNI_CLOSED_MSG, type ChordLike } from '../lib/omni-chord.js';   // #4530 여는 키 판정 · 신호 이름 한 벌
+import { createPreview, type PvRef, type PvOpenMode } from './omni-preview.js';   // #4530 안 A — 고른 결과의 안을 옆 칸에
+import { canOpenInAside, openInAside } from './aside-slot.js';
+import { pinGuest } from '../lib/wiki-list.js';
 import { projHitHref } from '../lib/proj-page.js';   // #3870 프로젝트 줄은 프로젝트 화면으로(사이드바 [→] 와 같은 문)
 
 type Kind = 'proj' | 'know' | 'src' | 'sess' | 'app';
@@ -77,6 +80,10 @@ interface Hit {
   score?: number;
   /** 종류 그림 대신 쓸 그림(표의 패스) — 최근 검색은 시계. 종류(app)의 창 그림이 «왜 저 그림이냐» 였다(원준 2026-10-04). */
   icon?: string[];
+  /** 목록 둘째 줄 — 이 항목이 **어디에 있는 것인가**(세션의 프로젝트 · 태스크의 상위). 없으면 발췌(sub)가 그 자리를 받는다. */
+  meta?: string;
+  /** 미리보기 칸이 안을 읽을 좌표(#4530 안 A). */
+  pv?: PvRef;
 }
 
 interface OmniHooks {
@@ -96,10 +103,12 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
   { kind: 'src', label: '자료' },
   { kind: 'app', label: '바로 가기' },
 ];
+/** 자료의 출처를 사람 말로 — 목록 둘째 줄(종전엔 github_issue · local_file 같은 내부 이름이 그대로 보였다). */
+const SRC_SYS: Record<string, string> = { slack: 'Slack', github: 'GitHub', gitlab: 'GitLab', notion: 'Notion', google: 'Google', gdrive: 'Google Drive', gmail: 'Gmail',
+  linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', local: '올린 파일', local_file: '올린 파일' };
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', app: '화면' };
-const CHIP_LABEL = (k: Kind): string => (k === 'app' ? '바로 가기' : KIND_LABEL[k]);
 // 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
-//  프로젝트는 과녁(#4233, 원준 2026-10-04). 크기에 따라 과녁 · 작은 과녁을 고른다(종류 칩 13px · 결과 줄 15px).
+//  프로젝트는 과녁(#4233, 원준 2026-10-04). 크기에 따라 과녁 · 작은 과녁을 고른다(미리보기의 종류 이름표 13px · 결과 줄 16px).
 const KIND_PATH: Record<Kind, string[]> = {
   proj: [ICONS.proj],
   know: [ICONS.wiki],
@@ -107,7 +116,7 @@ const KIND_PATH: Record<Kind, string[]> = {
   sess: [ICONS.chat],
   app: ['M4 5h16v12H4z', 'M4 9h16'],
 };
-const KIND_PX: Record<string, number> = { 'v2-omni-chip-ic': 13, 'v2-omni-kic': 15 };
+const KIND_PX: Record<string, number> = { 'v2-opv-kic': 13, 'v2-omni-kic': 15 };
 const kindPaths = (k: Kind, cls: string): string[] => (k === 'proj' ? [ICONS[projGlyph(KIND_PX[cls] || 15)]] : KIND_PATH[k]);
 const icon = (k: Kind, cls: string, paths: string[] = kindPaths(k, cls)): SVGElement =>
   sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...paths.map((d) => sv('path', { d })));
@@ -125,28 +134,34 @@ const SETTLE_MS = 2500;
 const holdsSettle = (pending: Set<string>): boolean => [...pending].some((s) => s !== 'sim');
 const DEBOUNCE_MS = 160;
 
-// ── 종류 필터 — 칩 하나 = 종류 하나, 누른 것만 켜진다 (#4156) ─────────────
-//  아무것도 안 누름 = 기본 검색(세션·프로젝트·지식·바로 가기). 세션은 이름·첫 지시와 **그 안의 대화·고친 파일**까지 한 종류다 —
-//   대화를 따로 칩·배지로 나눴더니 같은 세션이 어떤 때는 «세션», 어떤 때는 «대화» 로 떠서 헷갈렸다(원준 2026-10-04: «대화도 세션 안의
-//   대화인데 굳이 나눌 필요가 있나»). 찾는 곳(셸 목록 · 서버 대화 색인)은 여전히 둘이고, 화면에서만 하나다. 칩을 누르면 그 종류만, 이어서 누르면 더해진다.
-//  자료는 기본 검색에 들어가지 않는다(결과가 많고 덜 정제돼 잡음이 된다) — 칩으로만.
-//  선택은 페이지 수명이다(창을 닫았다 열어도 유지). 켜져 있으면 안내 문구(placeholder)가 그 사실을 말한다(#4530).
-const MAIN_KINDS: Kind[] = ['sess', 'proj', 'know', 'app'];
-const AUX_KINDS: Kind[] = ['src'];
-const isAux = (k: Kind): boolean => AUX_KINDS.includes(k);
-let kindSel = new Set<Kind>();
-/** 이 종류를 지금 찾는가 — 빈 선택이면 주 축만, 고른 게 있으면 고른 것만. */
-export function kindActive(sel: Set<Kind>, k: Kind): boolean {
-  return sel.size === 0 ? !isAux(k) : sel.has(k);
+// ── 탭 — 한 번에 종류 하나(#4530 안 A, 원준 2026-10-04 «A안으로 가자») ─────────────
+//  종전 칩은 «누른 것만 켜지는» 여러 개 고르기였다 — 손잡이 다섯이 한 줄에 서고(폰에선 잘렸다), 지금 무엇을 보고 있는지가 칩의
+//   켜짐 조합으로만 보였다. 탭은 하나만 고른다: 전체 · 세션 · 프로젝트 · 지식 · 자료. 숫자가 탭마다 서서 어디에 몇 개 있는지 보인다.
+//  ★ 세션·프로젝트·지식은 **어느 탭에서든 함께 묻는다** — 탭을 넘길 때 다시 기다리지 않고 숫자도 늘 선다.
+//   자료만 그 탭을 눌렀을 때 묻는다(결과가 많고 느리다 — 실측 2~3초).
+type OmniTab = 'all' | 'sess' | 'proj' | 'know' | 'src';
+const OMNI_TABS: ReadonlyArray<{ key: OmniTab; label: string }> = [
+  { key: 'all', label: '전체' }, { key: 'sess', label: '세션' }, { key: 'proj', label: '프로젝트' }, { key: 'know', label: '지식' }, { key: 'src', label: '자료' },
+];
+let tab: OmniTab = 'all';
+/** 이 탭이 이 종류의 줄을 보이나 — 전체는 자료만 빼고 다, 나머지는 그 종류만(화면·명령 같은 바로 가기는 전체에서만). */
+function tabShows(t: OmniTab, k: Kind): boolean { return t === 'all' ? k !== 'src' : k === t; }
+/** 이 탭에서 이 종류를 서버에 묻나 — 자료는 그 탭에서만. */
+function tabFetches(t: OmniTab, k: Kind): boolean { return k === 'src' ? t === 'src' : true; }
+/** Tab(다음) · Shift+Tab(앞) 으로 넘길 탭 — 끝에서 처음으로 돈다. */
+function nextTab(cur: OmniTab, d: number): OmniTab {
+  const i = OMNI_TABS.findIndex((x) => x.key === cur);
+  return OMNI_TABS[(Math.max(0, i) + d + OMNI_TABS.length) % OMNI_TABS.length].key;
 }
-const kindOn = (k: Kind): boolean => kindActive(kindSel, k);
-/** 칩 하나를 눌렀을 때의 다음 상태 — 규칙을 한 곳에서만 구현한다(화면·테스트가 같은 것을 본다). */
-export function nextKindSel(cur: Set<Kind>, k: Kind): Set<Kind> {
-  const next = new Set(cur);
-  if (next.has(k)) next.delete(k); else next.add(k);
-  if (next.size === MAIN_KINDS.length && MAIN_KINDS.every((m) => next.has(m))) return new Set();
-  return next;
-}
+const kindOn = (k: Kind): boolean => tabFetches(tab, k);
+const kindShown = (k: Kind): boolean => tabShows(tab, k);
+const ALL_KINDS: Kind[] = ['sess', 'proj', 'know', 'app', 'src'];
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(String((navigator as any).platform || navigator.userAgent || ''));
+/** 폰 폭인가 — 미리보기가 옆 칸이 아니라 아래에서 올라오는 판이 된다(CSS 와 같은 문턱 640px). */
+const isNarrow = (): boolean => typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+/** 손가락으로 쓰는 넓은 화면(태블릿)인가 — 마우스를 올려 고를 수 없으니 첫 누름은 고르기(미리보기), 고른 줄을 다시 누르면 연다. */
+const noHover = (): boolean => typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(hover: none)').matches;
+const fmtN = (n: number): string => n.toLocaleString('ko-KR');
 
 // ── 일치 부분 색칠 ─────────────────────────────────────────────────────────────
 //  정규식을 쓰지 않는다 — 질의에 `c++`·`(`·`.` 같은 글자가 들어오면 정규식은 깨지거나 엉뚱한 데를 칠한다.
@@ -195,14 +210,13 @@ const LAST_QUERY_MS = 10 * 60_000;
 //   바꾼 뒤 빈 칸 화면에 다른 워크스페이스의 제목이 섰다(격리 리뷰). 정렬은 취향이라 나누지 않는다.
 const OPENED_STORE = (): string => wsKey('lively.omni.opened');
 const QUERIES_STORE = (): string => wsKey('lively.omni.queries');
-interface OpenedRow { kind: Kind; key: string; title: string; href: string; at: number }
+interface OpenedRow { kind: Kind; key: string; title: string; href: string; at: number; label?: string }
 function readJson(key: string): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
 }
 function writeJson(key: string, v: unknown): void {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* 막힌 저장소 — 이번 페이지에서만 */ }
 }
-const ALL_KINDS: Kind[] = [...MAIN_KINDS, ...AUX_KINDS];
 function loadOpened(): OpenedRow[] {
   const v = readJson(OPENED_STORE());
   if (!Array.isArray(v)) return [];
@@ -212,7 +226,7 @@ function loadOpened(): OpenedRow[] {
 }
 function rememberOpened(h: Hit): void {
   if (!h.href) return;
-  const row: OpenedRow = { kind: h.kind, key: h.key, title: h.title, href: h.href, at: Date.now() };
+  const row: OpenedRow = { kind: h.kind, key: h.key, title: h.title, href: h.href, at: Date.now(), ...(h.label ? { label: h.label } : {}) };
   writeJson(OPENED_STORE(), [row, ...loadOpened().filter((x) => x.key !== row.key)].slice(0, 8));
 }
 function loadQueries(): string[] {
@@ -254,6 +268,7 @@ let openerFrame: Window | null = null;
 let onHash: (() => void) | null = null;
 let onCloseTimers: (() => void) | null = null;   // 창의 타이머(입력 기다림 · 자리 잡기)를 닫을 때 끊는다
 let onViewport: (() => void) | null = null;
+let onSheetEsc: (() => boolean) | null = null;   // 폰 — 미리보기 판이 올라와 있으면 Esc 는 판만 내린다
 
 export function omniOpen(seed?: string, opener?: Window | null): void {
   if (box) {
@@ -275,52 +290,73 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   const list = el('div', { class: 'v2-omni-list', id: 'v2-omni-list', role: 'listbox', 'aria-label': '검색 결과' });
   const bar = el('div', { class: 'v2-omni-bar', 'aria-hidden': 'true' });   // 찾는 중 — 맨 위의 가는 줄(글보다 덜 흔들린다)
   const note = el('div', { class: 'v2-omni-note', role: 'status', 'aria-live': 'polite' });
-  const moreBtn = el('button', { class: 'v2-omni-more', type: 'button', hidden: true, onclick: () => { moreFactor++; input.focus(); run(true); } },
+  //  더 가져온 뒤에도 고른 줄은 그대로다 — 맨 아래에서 ↓ 로 이어 내려가는 중에 선택이 맨 위로 돌아가면 처음부터 다시 내려와야 한다(격리 리뷰).
+  const loadMore = (): void => { const keep = selKey; moreFactor++; input.focus(); run(true); if (keep) { selKey = keep; userMoved = true; } };
+  const moreBtn = el('button', { class: 'v2-omni-more', type: 'button', hidden: true, title: '결과 더 보기 (맨 아래 줄에서 ↓)', onclick: () => loadMore() },
     el('span', { text: '결과 더 보기' })) as HTMLButtonElement;
 
-  // ── 칩 — 한 번만 만들고 켜짐 표시만 바꾼다(다시 만들면 누른 단추가 사라져 초점이 날아갔다 — 점검 실측) ──
-  const chipBtns = new Map<Kind, HTMLButtonElement>();
-  for (const k of ALL_KINDS) {
-    chipBtns.set(k, el('button', {
-      class: 'v2-omni-chip' + (isAux(k) ? ' aux' : ''), type: 'button', 'data-kind': k,
-      onclick: () => { kindSel = nextKindSel(kindSel, k); paintChips(); input.focus(); run(true); },
-    }, icon(k, 'v2-omni-chip-ic'), el('span', { text: CHIP_LABEL(k) })) as HTMLButtonElement);
+  // ── 탭 — 한 번만 만들고 켜짐·숫자만 바꾼다(다시 만들면 누른 단추가 사라져 초점이 날아갔다 — 점검 실측) ──
+  const tabBtns = new Map<OmniTab, HTMLButtonElement>();
+  const tabNums = new Map<OmniTab, HTMLElement>();
+  for (const t of OMNI_TABS) {
+    const n = el('em', { class: 'v2-omni-tabn' }) as HTMLElement;
+    tabNums.set(t.key, n);
+    tabBtns.set(t.key, el('button', {
+      class: 'v2-omni-tab' + (t.key === 'src' ? ' aux' : ''), type: 'button', role: 'tab', 'data-tab': t.key, 'aria-controls': 'v2-omni-list',
+      title: t.key === 'src' ? '수집한 원문과 올린 파일에서 찾습니다 (이 탭을 눌렀을 때만 찾습니다)' : t.key === 'all' ? '세션 · 프로젝트 · 지식 · 화면을 함께 봅니다' : `${t.label}만 봅니다`,
+      onclick: () => setTab(t.key),
+    }, el('span', { text: t.label }), n) as HTMLButtonElement);
   }
-  const chips = el('span', { class: 'v2-omni-kinds', role: 'group', 'aria-label': '종류 필터' },
-    ...MAIN_KINDS.map((k) => chipBtns.get(k)!), el('span', { class: 'v2-omni-chipsep', 'aria-hidden': 'true' }), ...AUX_KINDS.map((k) => chipBtns.get(k)!));
-  function paintChips(): void {
-    for (const [k, b] of chipBtns) {
-      const picked = kindSel.has(k);
-      b.classList.toggle('on', picked);
-      b.setAttribute('aria-pressed', String(picked));
-      b.title = picked ? `${CHIP_LABEL(k)} 빼기` : kindSel.size === 0 ? `${CHIP_LABEL(k)}만 보기` + (isAux(k) ? ' (기본 검색에는 들어가지 않습니다)' : '') : `${CHIP_LABEL(k)} 더하기`;
+  const tabs = el('div', { class: 'v2-omni-tabs', role: 'tablist', 'aria-label': '종류' }, ...OMNI_TABS.map((t) => tabBtns.get(t.key)!));
+  function paintTabs(): void {
+    for (const [k, b] of tabBtns) { const on = k === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }
+    input.placeholder = tab === 'all' ? '세션(대화 내용 포함) · 프로젝트 · 지식 · 화면에서 찾기'
+      : tab === 'src' ? '수집한 자료와 올린 파일에서 찾기' : `${OMNI_TABS.find((x) => x.key === tab)!.label}에서 찾기 (Tab 으로 종류를 바꿉니다)`;
+  }
+  /** 탭을 바꾼다 — 받아 둔 결과를 그 종류만 다시 세운다(기다림 없음). 자료는 처음 고를 때 **자료만** 서버에 묻는다. */
+  function setTab(t: OmniTab): void {
+    input.focus();
+    if (tab === t) return;
+    tab = t;
+    paintTabs();
+    closeSheet();
+    //  자료 탭에 처음 들어왔다 — 다른 채널(세션·프로젝트·지식)은 받아 둔 것을 그대로 두고 자료만 묻는다. 종전엔 검색 전체를 다시 돌려
+    //   탭 숫자가 비었다 차고, 자료(실측 2~4초)가 자리 잡기 상한보다 늦으면 «결과가 없습니다» 가 먼저 떴다(격리 리뷰 · 실화면).
+    const q = input.value.trim();
+    if (t === 'src' && q && q === ranQuery && inflight && !buckets.has('src') && !pending.has('src')) {
+      pending.add('src');
+      bar.classList.add('on');
+      fetchSrc(q, seq, inflight.signal);
     }
-    input.placeholder = kindSel.size
-      ? [...kindSel].map(CHIP_LABEL).join(' · ') + '에서 찾습니다 (칩을 다시 누르면 풀립니다)'
-      : '세션(대화 내용 포함) · 프로젝트 · 지식 · 화면에서 찾기';
+    userMoved = false; selKey = '';
+    paint();
+    refreshNote();
   }
-  // ── 정렬 · 기간 (#4517) ──
-  const sortBtns = (['recent', 'rel'] as OmniSort[]).map((m) => el('button', {
-    type: 'button', class: 'v2-omni-segb', 'data-sort': m,
-    title: m === 'rel' ? '가장 잘 맞는 것부터 종류별로 보여 줍니다' : '맨 위에 가장 맞는 결과를 두고, 그 아래는 최근 것부터 보여 줍니다',
-    onclick: () => { if (sortMode === m) return; sortMode = m; saveSort(m); paintSort(); input.focus(); run(true); },
-  }, el('span', { text: SORT_LABEL[m] })) as HTMLButtonElement);
-  const sortSeg = el('div', { class: 'v2-omni-seg' }, ...sortBtns);
+  // ── 기간 · 정렬(#4517) — 탭 줄 오른쪽의 작은 단추 둘 ──
+  const optIcon = (d: string): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-opt-ic', 'aria-hidden': 'true' }, sv('path', { d }));
+  const sortBtn = el('button', { type: 'button', class: 'v2-omni-opt v2-omni-sort', 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: () => openSortMenu() }) as HTMLButtonElement;
   function paintSort(): void {
-    for (const b of sortBtns) { const on = b.dataset.sort === sortMode; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }
+    sortBtn.dataset.sort = String(sortMode);
+    sortBtn.title = sortMode === 'rel' ? '가장 잘 맞는 것부터 종류별로 보여 줍니다 — 눌러서 바꿉니다' : '맨 위에 가장 맞는 결과를 두고, 그 아래는 최근 것부터 보여 줍니다 — 눌러서 바꿉니다';
+    sortBtn.replaceChildren(optIcon('M7 4v16 M3 8l4-4 4 4 M17 20V4 M13 16l4 4 4-4'), el('span', { text: SORT_LABEL[sortMode as OmniSort] }), optIcon(ICONS.chevD));
+  }
+  function openSortMenu(): void {
+    const r = sortBtn.getBoundingClientRect();
+    sortBtn.setAttribute('aria-expanded', 'true');
+    showCtxMenu(r.left, r.bottom + 4, (['recent', 'rel'] as OmniSort[]).map((m) => ({
+      label: SORT_LABEL[m], checked: sortMode === m,
+      run: () => { if (sortMode === m) return; sortMode = m; saveSort(m); paintSort(); run(true); },
+    })), { minWidth: 150, onClose: () => { sortBtn.setAttribute('aria-expanded', 'false'); if (box) input.focus(); } });
   }
   const periodBtn = el('button', {
-    type: 'button', class: 'v2-omni-chip v2-omni-period', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+    type: 'button', class: 'v2-omni-opt v2-omni-period', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     onclick: () => openPeriodMenu(),
   }) as HTMLButtonElement;
   function paintPeriod(): void {
     const on = period !== 'all';
     periodBtn.classList.toggle('on', on);
     periodBtn.title = on ? `${periodLabel(period)} 안에서만 찾습니다 — 눌러서 바꿉니다` : '기간으로 좁힙니다';
-    periodBtn.replaceChildren(
-      sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-chip-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.clock })),
-      el('span', { text: on ? periodLabel(period) : '기간' }),
-      sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-chip-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.chevD })));
+    periodBtn.replaceChildren(optIcon(ICONS.clock), el('span', { text: on ? periodLabel(period) : '기간' }), optIcon(ICONS.chevD));
   }
   function openPeriodMenu(): void {
     const r = periodBtn.getBoundingClientRect();
@@ -330,22 +366,38 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       run: () => { if (period === p.key) return; period = p.key; paintPeriod(); run(true); },
     })), { minWidth: 150, onClose: () => { periodBtn.setAttribute('aria-expanded', 'false'); if (box) input.focus(); } });
   }
-  const tools = el('span', { class: 'v2-omni-tools', role: 'group', 'aria-label': '정렬과 기간' }, sortSeg, periodBtn);
-  const filters = el('div', { class: 'v2-omni-filters' }, chips, tools);
+  const tools = el('span', { class: 'v2-omni-tools', role: 'group', 'aria-label': '기간과 정렬' }, periodBtn, sortBtn);
+  const filters = el('div', { class: 'v2-omni-filters' }, tabs, tools);
   //  닫기 — 눌리는 단추다(종전 «Esc» 는 글자 표시라 폰에서 닫을 길이 바깥 여백뿐이었다 — 점검 실측).
   const closeBtn = el('button', { class: 'v2-omni-close', type: 'button', title: '닫기 (Esc)', 'aria-label': '통합검색 닫기', onclick: () => omniClose() },
     el('span', { class: 'v2-omni-close-t', text: '닫기' }), el('kbd', { class: 'v2-omni-esc', text: 'Esc' }));
+  //  결과가 없을 때의 말은 목록 자리에 선다(아래 줄은 색인·실패 같은 상태만 말한다).
+  const none = el('div', { class: 'v2-omni-none', hidden: true }) as HTMLElement;
+  //  미리보기 칸 — 넓은 화면에선 목록 옆, 폰에선 아래에서 올라오는 판(줄을 누르면 올라온다).
+  const pvWrap = el('div', { class: 'v2-omni-pvw' }) as HTMLElement;
+  const sheetBg = el('div', { class: 'v2-omni-sheetbg', 'aria-hidden': 'true', onclick: () => closeSheet() }) as HTMLElement;
+  const kbdEl = (t: string): HTMLElement => el('kbd', { text: t }) as HTMLElement;
+  const hints = el('div', { class: 'v2-omni-hints', 'aria-hidden': 'true' },
+    el('span', {}, kbdEl('↑'), kbdEl('↓'), document.createTextNode(' 고르기')),
+    el('span', {}, kbdEl('Enter'), document.createTextNode(' 열기')),
+    el('span', {}, kbdEl((IS_MAC ? '⌘' : 'Ctrl') + ' Enter'), document.createTextNode(' 새 탭')),
+    el('span', {}, kbdEl('Tab'), document.createTextNode(' 종류 바꾸기')),
+    el('span', {}, kbdEl('Esc'), document.createTextNode(' 닫기')));
+  const card = el('div', { class: 'v2-omni-card' },
+    el('div', { class: 'v2-omni-top' },
+      sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-lens', 'aria-hidden': 'true' },
+        sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
+      input, closeBtn),
+    bar, filters,
+    el('div', { class: 'v2-omni-body' },
+      el('div', { class: 'v2-omni-col' }, none, list, moreBtn),
+      sheetBg, pvWrap),
+    el('div', { class: 'v2-omni-foot' }, hints, note)) as HTMLElement;
 
   box = el('div', {
     class: 'v2-omni', role: 'dialog', 'aria-modal': 'true', 'aria-label': '통합검색',
     onmousedown: (e: MouseEvent) => { if (e.target === box) omniClose(); },
-  },
-    el('div', { class: 'v2-omni-card' },
-      el('div', { class: 'v2-omni-top' },
-        sv('svg', { viewBox: '0 0 24 24', class: 'v2-omni-lens', 'aria-hidden': 'true' },
-          sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
-        input, closeBtn),
-      bar, filters, list, note, moreBtn)) as HTMLElement;
+  }, card) as HTMLElement;
 
   //  이 창 — 닫았다 다시 열면 새 창이다. 옛 창의 타이머·응답이 새 창을 건드리지 않게 모든 진입점이 이걸 본다(격리 리뷰:
   //   결과 전 Enter 후 닫고 1.2초 안에 다시 열면 옛 settle 이 새 창을 닫았다).
@@ -362,10 +414,10 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   let terms: Term[] = [];
   let words: string[] = [];         // 색칠할 낱말
   let sinceMs = 0;
-  let frozenTop: string[] | null = null;   // 자리 잡은 뒤의 맨 위 셋(늦게 온 줄이 바꾸지 않는다)
+  const frozenTop = new Map<OmniTab, string[]>();   // 자리 잡은 뒤의 맨 위 셋(탭마다 — 늦게 온 줄이 바꾸지 않는다)
   let selKey = '';                  // 고른 줄의 열쇠
   let userMoved = false;            // 이 질의에서 사람이 화살표·마우스로 골랐나
-  let enterWant: { newTab: boolean } | null = null;   // 자리 잡으면 열 Enter
+  let enterWant: { mode: PvOpenMode } | null = null;   // 자리 잡으면 열 Enter
   let convNoteText = '';            // 대화 채널이 남긴 말(색인 중 · 실패 · 상한)
   let simDegraded = false;
   let moreFactor = 1;               // «결과 더 보기» 를 누른 횟수 + 1
@@ -375,6 +427,10 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   //   전엔 줄이 40개 넘을 때만 단추가 떠서 칩 하나만 켜면(지식 20줄) 더 볼 길이 없었다(#4530 항목 22).
   const fullSrc = new Set<string>();
   let truncated = false;
+  //  종류마다 **모두** 몇 개인가(서버가 센 것) — 줄은 20개씩만 받아 오므로 받은 수만 세면 탭마다 «20+» 만 섰다(실화면).
+  const totals = new Map<string, number>();
+  let convCapped = false;
+  let totalsFor = '';               // 그 개수가 어느 검색어·기간의 것인가(같으면 «더 보기»·정렬 바꾸기에서 다시 묻지 않는다)
 
   const rowNodes: HTMLElement[] = [];
   const rowHits: Hit[] = [];        // ⚠ 그려진 줄과 짝 — i 번째 줄이 무엇인지는 이것만 안다(#1960)
@@ -382,20 +438,72 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   const hl = (text: string): Node[] => hlParts(text, words).map((p) =>
     (p.hit ? el('mark', { class: 'v2-omni-hl', text: p.t }) : document.createTextNode(p.t)) as Node);
 
-  function subLine(h: Hit): HTMLElement | null {
+  /** 목록 둘째 줄 — 어디에 있는 것인가(프로젝트 · 상위 · 주인) + 맞은 글 한 조각. 앞뒤 말까지는 미리보기 칸이 보인다. */
+  function metaLine(h: Hit): HTMLElement | null {
     const bits: Node[] = [];
-    const dot = (): void => { if (bits.length) bits.push(document.createTextNode(' · ')); };
-    if (h.role) bits.push(el('span', { class: 'v2-omni-role', text: h.role === 'user' ? '지시' : 'AI' }));
-    if (h.context) { if (bits.length) bits.push(document.createTextNode(' ')); bits.push(el('span', { class: 'v2-omni-ctx', text: h.context })); }
+    let glue = ' · ';
+    const dot = (): void => { if (bits.length) bits.push(document.createTextNode(glue)); glue = ' · '; };
+    if (h.label) bits.push(el('span', { class: 'v2-omni-sub', text: h.label }));
+    //  상위 프로젝트 «이름 ›» 뒤에는 가운뎃점을 찍지 않는다(«… › · …» 로 보였다, 실화면).
+    if (h.context) { dot(); bits.push(el('span', { class: 'v2-omni-ctx', text: h.context })); if (h.context.endsWith('›')) glue = ' '; }
     const id = identKind(h.ident, terms);
     if (id && h.ident) { dot(); bits.push(el('code', { class: 'v2-omni-key' + (id === 'exact' ? ' exact' : '') }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident))); }
-    if (h.sub) { if (bits.length && !(h.role && bits.length === 1)) dot(); else if (bits.length) bits.push(document.createTextNode(' ')); bits.push(...hl(focusSnippet(h.sub, words))); }
+    //  어디에 있는 것인가(세션의 프로젝트 · 자료의 출처) 뒤에 **왜 맞았는지**(고친 파일 · 맞은 말 한 조각)를 잇는다. 프로젝트 이름만 서면
+    //   줄마다 미리보기를 봐야 맞은 말을 알았다 — 주로 쓰는 일이 대화 일부로 세션을 찾는 것이고, 폰에는 옆 칸이 없다(격리 리뷰).
+    //   뒤에 이을 것이 없으면(자료 줄) 줄 전체를 쓴다(solo).
+    if (h.meta) { dot(); bits.push(el('span', { class: 'v2-omni-where' + (h.edit || h.sub ? '' : ' solo') }, ...hl(h.meta))); }
     if (h.edit) { dot(); bits.push(el('span', { class: 'v2-omni-edit', text: '고친 파일 ' }), el('code', { class: 'v2-omni-key' }, ...hl(h.edit))); }
-    if ((h.hits || 0) > 1) bits.push(document.createTextNode(` · 맞은 곳 ${h.hits}`));
+    else if (h.sub) { dot(); bits.push(...hl(focusSnippet(h.sub, words))); }
     return bits.length ? el('span', { class: 'v2-omni-s' }, ...bits) : null;
   }
 
+  // ── 미리보기 칸(#4530 안 A) ──
+  const pv = createPreview({
+    api: (path, opts) => api(path, opts),
+    data: () => hooks!.data(),
+    query: () => ranQuery,
+    words: () => words,
+    since: () => sinceMs,
+    hl,
+    icon: (h, cls) => icon((h as Hit).kind, cls, (h as Hit).icon),
+    kindLabel: (h) => (h as Hit).label || KIND_LABEL[(h as Hit).kind],
+    when: (ms) => whenLabel(ms, Date.now()),
+    open: (h, mode) => { const i = rowHits.findIndex((x) => x.key === h.key); if (i >= 0) go(i, mode); },
+    openHref: (href, title) => {
+      const q = input.value.trim();
+      if (q) { rememberQuery(q); lastQuery = { q, at: Date.now() }; }
+      omniClose({ restoreFocus: false });
+      hooks!.open(href, false, title);
+    },
+    canAside: () => canOpenInAside(),
+    mac: IS_MAC,
+  });
+  const grab = el('button', { class: 'v2-omni-grab', type: 'button', 'aria-label': '미리보기 내리기', title: '미리보기 내리기', onclick: () => closeSheet() }) as HTMLElement;
+  pvWrap.append(grab, pv.el);
+  //  미리보기 안의 단추를 마우스로 눌러도 초점은 입력칸에 남는다 — 초점이 단추로 가면(‹ › 는 누르는 순간 다시 그려져 사라진다)
+  //   방향키·Enter 가 듣지 않아 입력칸을 다시 눌러야 했다(격리 리뷰). 글을 긁어 복사하는 것은 막지 않는다(단추에서만).
+  pvWrap.addEventListener('mousedown', (e: MouseEvent) => { if ((e.target as Element | null)?.closest?.('button')) e.preventDefault(); });
+  //  폰 — 손잡이를 아래로 끌면 판이 내려간다(끌 수 있게 생겼는데 눌러야만 내려갔다, 격리 리뷰).
+  let dragY = -1;
+  grab.addEventListener('touchstart', (e: TouchEvent) => { dragY = e.touches[0].clientY; pvWrap.style.transition = 'none'; }, { passive: true });
+  grab.addEventListener('touchmove', (e: TouchEvent) => { if (dragY >= 0) pvWrap.style.transform = `translateY(${Math.max(0, e.touches[0].clientY - dragY)}px)`; }, { passive: true });
+  const endDrag = (e: TouchEvent): void => {
+    if (dragY < 0) return;
+    const dy = (e.changedTouches[0] ? e.changedTouches[0].clientY : dragY) - dragY;
+    dragY = -1; pvWrap.style.transition = ''; pvWrap.style.transform = '';
+    if (dy > 60) closeSheet();
+  };
+  grab.addEventListener('touchend', endDrag);
+  grab.addEventListener('touchcancel', endDrag);
+  /** 안을 읽을 것이 있는 줄인가(화면·명령·최근 검색은 한두 줄 설명뿐이다 — 폰에선 바로 연다). */
+  const hasInside = (h: Hit): boolean => !!h.pv && h.pv.t !== 'text';
+  function openSheet(): void { card.classList.add('sheet'); }
+  function closeSheet(): void { card.classList.remove('sheet'); }
+
   // ── 그리기 ──
+  /** 지금 탭에 보일 줄(뜻만 비슷한 것 제외). */
+  const shownLexical = (): Hit[] => hits.filter((h) => !h.sim && kindShown(h.kind));
+  const isReal = (h: Hit): boolean => !h.key.startsWith('cmd:') && !h.key.startsWith('q:');
   function paint(): void {
     rowNodes.length = 0;
     rowHits.length = 0;
@@ -410,23 +518,32 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         shown.add(h.key);
         const i = rowNodes.length;
         const when = typeof h.at === 'number' ? whenLabel(h.at, now) : '';
+        const kindName = h.label || KIND_LABEL[h.kind];
         const node = el('div', {
-          class: 'v2-omni-row' + (h.sim ? ' sim' : ''), role: 'option', id: 'v2-omni-opt-' + i, 'aria-selected': 'false',
-          title: (h.head ? h.head + ': ' : '') + h.title + (h.sub ? ' — ' + h.sub : ''),
+          class: 'v2-omni-row' + (h.sim ? ' sim' : ''), role: 'option', id: 'v2-omni-opt-' + i, 'aria-selected': 'false', 'data-kind': h.kind,
+          title: (h.head ? h.head + ': ' : '') + h.title,
           //  마우스가 **실제로 움직였을 때만** 고른다 — 목록이 그 아래로 지나가는 것은 고른 것이 아니다.
           onmousemove: (e: MouseEvent) => { if ((e.movementX || e.movementY) && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); } },
-          onclick: (e: MouseEvent) => go(i, e.metaKey || e.ctrlKey || e.altKey),
+          onclick: (e: MouseEvent) => {
+            //  폰 — 줄을 누르면 미리보기 판이 올라오고 [열기]로 들어간다(안 A). 안을 읽을 것이 없는 줄(화면·명령)은 바로 연다.
+            const plain = !(e.metaKey || e.ctrlKey || e.altKey);
+            if (isNarrow() && hasInside(h) && plain) { selKey = h.key; userMoved = true; mark(false); pv.show(h); openSheet(); return; }
+            //  태블릿(넓고 손가락) — 마우스를 올려 고를 수 없다. 첫 누름은 고르기(옆 칸에 미리보기), 고른 줄을 다시 누르면 연다.
+            if (noHover() && hasInside(h) && plain && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); return; }
+            go(i, e.altKey ? 'aside' : e.metaKey || e.ctrlKey ? 'tab' : 'here');
+          },
         },
-          el('span', { class: 'v2-omni-ic' }, icon(h.kind, 'v2-omni-kic', h.icon)),
+          el('span', { class: 'v2-omni-ic k-' + h.kind }, icon(h.kind, 'v2-omni-kic', h.icon)),
           el('span', { class: 'v2-omni-tt' },
             el('span', { class: 'v2-omni-tl' },
               h.head ? el('span', { class: 'v2-omni-head', text: h.head }) : null,
               el('b', { class: 'v2-omni-t' }, ...hl(h.title)),
               h.status ? el('span', { class: 'v2-omni-st', text: h.status }) : null),
-            subLine(h)),
+            metaLine(h)),
           el('span', { class: 'v2-omni-meta' },
             when ? el('span', { class: 'v2-omni-when', text: when, title: new Date(h.at as number).toLocaleString('ko-KR') }) : null,
-            el('span', { class: 'v2-omni-badge', text: h.label || KIND_LABEL[h.kind] }))) as HTMLElement;
+            //  종류 이름 — 그림(색)이 말하므로 눈에는 숨기고 화면 읽기 프로그램에만 읽힌다.
+            el('span', { class: 'v2-omni-badge', text: kindName }))) as HTMLElement;
         rowNodes.push(node);
         rowHits.push(h);
         kids.push(node);
@@ -436,7 +553,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (!input.value.trim()) {
       paintEmpty(draw);
     } else {
-      const lexical = hits.filter((h) => !h.sim);
+      const lexical = shownLexical();
       draw('가장 맞는 결과', topHits(lexical));
       if (sortMode === 'recent') {
         //  그 아래는 낱말이 모두 맞은 것을 최근 것부터 — 시각이 없는 바로 가기(화면·명령)는 맨 아래 따로.
@@ -453,30 +570,77 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       } else {
         for (const g of GROUPS) draw(g.label, lexical.filter((h) => h.kind === g.kind).slice(0, 12 * moreFactor));
       }
-      draw('뜻이 비슷한 지식', hits.filter((h) => h.sim).slice(0, SIM_MAX_ROWS));
+      if (kindShown('know')) draw('뜻이 비슷한 지식', hits.filter((h) => h.sim).slice(0, SIM_MAX_ROWS));
       truncated = lexical.some((h) => !shown.has(h.key));   // 그리기 상한(최신순 60 · 관련도순 묶음당 12)에 잘린 줄이 있다
     }
     list.replaceChildren(...kids);
+    paintCounts();
     //  선택은 열쇠로 이어 간다. 고른 줄이 사라졌으면 첫 줄.
     if (!rowHits.some((h) => h.key === selKey)) selKey = rowHits[0]?.key || '';
     mark(false);
   }
-  /** 맨 위 셋 — 자리 잡은 뒤에는 굳힌다(늦게 온 채널이 첫 줄을 바꾸면 Enter 가 엉뚱한 것을 연다). */
+  /** 탭마다 몇 개 있는지 — 서버가 센 전체 개수(받은 줄 수가 아니다). 못 셌으면 받은 만큼 + «+»(더 있을 수 있다). 명령·최근 검색은 결과가 아니다. */
+  function paintCounts(): void {
+    const q = !!input.value.trim();
+    const lex = hits.filter((h) => !h.sim && isReal(h));
+    const n = (k: Kind): number => lex.filter((h) => h.kind === k).length;
+    const cnt = (k: Kind, src: string): { n: number; plus: boolean } => {
+      const got = n(k), tot = totals.get(src);
+      //  이름으로만 맞은 셸 목록 줄(세션·프로젝트)은 서버 개수에 없을 수 있다 — 보이는 줄보다 작은 숫자를 세우지 않는다.
+      return tot === undefined ? { n: got, plus: fullSrc.has(src) } : { n: Math.max(tot, got), plus: src === 'conv' && convCapped };
+    };
+    const text = (c: { n: number; plus: boolean }): string => fmtN(c.n) + (c.plus ? '+' : '');
+    const set = (t: OmniTab, v: string): void => { const e = tabNums.get(t)!; e.textContent = v; e.hidden = !v; };
+    if (!q) { for (const t of OMNI_TABS) set(t.key, ''); return; }
+    const cs = cnt('sess', 'conv'), cp = cnt('proj', 'proj'), ck = cnt('know', 'know');
+    //  «전체» 에는 바로 가기(화면 · 리스트 · 폴더 · 분류 · 설정) 줄도 선다 — 숫자에서 빼면 화면 이름만 맞은 검색이 «전체 0» 위에 줄이 서는 꼴이 된다.
+    set('all', text({ n: cs.n + cp.n + ck.n + n('app'), plus: cs.plus || cp.plus || ck.plus }));
+    set('sess', text(cs));
+    set('proj', text(cp));
+    set('know', text(ck));
+    set('src', buckets.has('src') ? text(cnt('src', 'src')) : '');
+  }
+  /** 맨 위 셋 — 자리 잡은 뒤에는 탭마다 굳힌다(늦게 온 채널이 첫 줄을 바꾸면 Enter 가 엉뚱한 것을 연다). */
   function topHits(lexical: Hit[]): Hit[] {
-    if (frozenTop) return frozenTop.map((k) => lexical.find((h) => h.key === k)).filter((h): h is Hit => !!h);
+    const frozen = frozenTop.get(tab);
+    if (frozen) return frozen.map((k) => lexical.find((h) => h.key === k)).filter((h): h is Hit => !!h);
     //  명령 줄(«…로 새 세션 시작»)은 이름에 검색어가 그대로 들어 있어 «이름에 모두» 층에 붙는다 — 결과가 아니므로 후보에서 뺀다
     //   (캡처로 확인: 맨 위 셋을 명령 둘이 차지했다).
     const ranked = pickTop(lexical.filter((h) => !h.key.startsWith('cmd:')).map((h) => ({ ...h, name: h.title })), terms, input.value);
-    return ranked.map((r) => lexical.find((h) => h.key === r.key)).filter((h): h is Hit => !!h);
+    const top = ranked.map((r) => lexical.find((h) => h.key === r.key)).filter((h): h is Hit => !!h);
+    //  «전체» 의 맨 위 셋에는 세션이 하나는 선다 — 주로 찾는 것이 세션인데(원준 2026-10-01), 이름에 낱말이 든 지식·태스크 셋이
+    //   자리를 다 차지하면 대화로 가장 잘 맞은 세션이 여섯째 줄 아래로 밀렸다(«배포 절차» 실화면). 서버가 표시한 세션(top)을 끝자리에 세운다.
+    if (tab === 'all' && !top.some((h) => h.kind === 'sess')) {
+      const best = lexical.find((h) => h.kind === 'sess' && h.serverTop);
+      if (best) { if (top.length >= 3) top[top.length - 1] = best; else top.push(best); }
+    }
+    //  이 탭의 채널이 아직 오는 중이고 세울 줄이 없으면 굳히지 않는다(자료 탭 — 빈 채로 굳으면 온 뒤에도 맨 위가 비었다).
+    if (settled && input.value.trim() && !(top.length === 0 && tabWaiting())) frozenTop.set(tab, top.map((h) => h.key));
+    return top;
   }
-  /** 빈 칸 — 최근 검색어 · 최근 연 것 · 내 최근 세션(칩을 따른다). 스포트라이트를 열자마자 빈 판이면 무엇을 칠지가 안 보인다. */
+  /** 빈 칸 — 최근 검색어 · 최근 연 것 · 내 최근 세션(탭을 따른다). 스포트라이트를 열자마자 빈 판이면 무엇을 칠지가 안 보인다. */
   function paintEmpty(draw: (label: string, rows: Hit[]) => void): void {
     const qs = loadQueries();
-    if (qs.length && !kindSel.size) {
-      draw('최근 검색', qs.map((q): Hit => ({ kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', icon: [ICONS.clock], run: () => { input.value = q; run(true); } })));
+    if (qs.length && tab === 'all') {
+      draw('최근 검색', qs.map((q): Hit => ({
+        kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', icon: [ICONS.clock],
+        pv: { t: 'text', lines: ['이 검색어로 다시 찾습니다.'], act: '다시 찾기' },
+        run: () => { input.value = q; run(true); },
+      })));
     }
-    draw('최근 연 것', loadOpened().filter((o) => kindOn(o.kind)).slice(0, 5).map((o): Hit => ({ kind: o.kind, key: o.key, title: o.title, sub: '', href: o.href, at: o.at })));
-    if (kindOn('sess')) draw('내 최근 세션', recentSessions().slice(0, 6));
+    draw('최근 연 것', loadOpened().filter((o) => kindShown(o.kind)).slice(0, 5).map((o): Hit => openedHit(o)));
+    if (kindShown('sess')) draw('내 최근 세션', recentSessions().slice(0, 6));
+  }
+  /** 저장해 둔 «최근 연 것» 한 줄 → 미리보기 좌표를 열쇠에서 되찾는다. */
+  function openedHit(o: OpenedRow): Hit {
+    const d = hooks!.data();
+    const base: Hit = { kind: o.kind, key: o.key, title: o.title, sub: '', href: o.href, at: o.at, label: o.label };
+    if (o.key.startsWith('s:')) { const s = d.sessions.find((x) => x.id === o.key.slice(2)); if (s) return { ...sessHit(d, s), title: o.title, at: o.at }; }
+    else if (o.key.startsWith('c:')) { const m = /^c:([^:]*):(.+)$/.exec(o.key); if (m) base.pv = { t: 'sess', node: m[1], sid: m[2] }; }
+    else if (o.key.startsWith('k:')) base.pv = { t: 'know', name: o.key.slice(2) };
+    else if (o.key.startsWith('p:')) { const id = Number(o.key.slice(2)); if (id) base.pv = o.label ? { t: 'task', id } : { t: 'proj', id }; }
+    else if (o.key.startsWith('src:')) base.pv = { t: 'src', id: o.key.slice(4) };
+    return base;
   }
 
   function mark(scroll = true): void {
@@ -489,42 +653,63 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     });
     if (selIdx >= 0) { input.setAttribute('aria-activedescendant', rowNodes[selIdx].id); if (scroll) rowNodes[selIdx].scrollIntoView({ block: 'nearest' }); }
     else input.removeAttribute('aria-activedescendant');
+    //  미리보기는 고른 줄을 따라간다. 폰에서는 판이 올라와 있을 때만(줄을 눌러야 올라온다).
+    if (!isNarrow() || card.classList.contains('sheet')) pv.show(selIdx >= 0 ? rowHits[selIdx] : null);
   }
   function moveSel(d: number): void {
-    if (!rowNodes.length) return;
     const cur = rowHits.findIndex((h) => h.key === selKey);
+    //  맨 위에서 ↑ = 탭 줄로 올라간다 — 탭 · 기간 · 정렬과 그 뒤의 단추들에 키보드로 닿는 길이다(입력칸의 Tab 은 종류를 넘기는 데 쓴다.
+    //   종전 칩·기간·정렬은 Tab 으로 닿았는데 그 길이 사라졌었다, 격리 리뷰).
+    if (d < 0 && cur <= 0) { tabBtns.get(tab)!.focus(); return; }
+    if (!rowNodes.length) return;
+    //  맨 아래에서 ↓ = 더 있으면 더 가져온다(«결과 더 보기» 와 같은 일 — 그 단추가 12줄·60줄 너머를 보는 유일한 길이다).
+    if (d > 0 && cur === rowNodes.length - 1 && !moreBtn.hidden) { loadMore(); return; }
     const next = cur < 0 ? 0 : (cur + d + rowNodes.length) % rowNodes.length;
     selKey = rowHits[next].key;
     userMoved = true;
     mark();
   }
 
-  // ── 안내 줄 ──
-  const emptyNote = (): string => {
+  // ── 안내 ── 결과가 없다는 말은 목록 자리에, 색인·실패 같은 상태는 아래 줄에.
+  /** 이 탭이 보이는 채널이 아직 오는 중인가(뜻 비슷은 빼고). */
+  const tabWaiting = (): boolean => [...pending].some((x) => x !== 'sim' && (x === 'conv' ? kindShown('sess') : kindShown(x as Kind)));
+  const tabLabel = (): string => OMNI_TABS.find((x) => x.key === tab)!.label;
+  /** 다른 탭에는 몇 개 있나(자료 빼고) — 이 탭이 비었을 때 «전체에서 보기» 로 건넌다. */
+  const otherCount = (): number => (tab === 'all' ? 0 : hits.filter((h) => !h.sim && isReal(h) && h.kind !== 'src' && !kindShown(h.kind)).length);
+  const emptyWhy = (): string => {
     const why: string[] = [];
-    if (kindSel.size > 0) why.push('고른 종류에서만 찾았습니다 — 칩을 다시 누르면 풀립니다');
-    else why.push('자료는 기본 검색에 들어가지 않습니다 — 자료 칩을 누르면 찾습니다');
-    if (period !== 'all') why.push(`${periodLabel(period)} 안의 결과만 봤습니다 — 기간을 넓히면 더 나올 수 있습니다`);
-    return `결과가 없습니다. (${why.join(' · ')})`;
+    if (tab !== 'all') why.push(otherCount() ? `«${tabLabel()}» 에는 없고 다른 종류에 있습니다.` : `«${tabLabel()}» 에서만 찾았습니다.`);
+    else why.push('자료는 «자료» 탭을 눌러야 찾습니다.');
+    if (period !== 'all') why.push(`${periodLabel(period)} 안의 결과만 봤습니다. 기간을 넓히면 더 나올 수 있습니다.`);
+    return why.join(' ');
   };
   function refreshNote(): void {
     const q = input.value.trim();
     const parts: string[] = [];
-    if (enterWant && !settled) parts.push('결과가 다 오면 첫 줄을 엽니다…');
+    if (enterWant && (!settled || tabWaiting())) parts.push('결과가 다 오면 첫 줄을 엽니다…');
     //  명령 줄(«…로 새 세션» 등)은 결과가 아니다 — 그것만 있으면 «결과가 없습니다» 를 말한다.
-    const real = rowHits.filter((h) => !h.key.startsWith('cmd:') && !h.key.startsWith('q:')).length;
-    if (failedSrc.size) {
-      const names = [...failedSrc].map((x) => KIND_LABEL[x as Kind] || x).join(' · ');
-      parts.push(`${names} 결과를 가져오지 못했습니다. 잠시 뒤 다시 찾아 주세요.`);
-    } else if (settled && q && !real) parts.push(emptyNote());
-    if (q && convNoteText) parts.push(convNoteText);
-    if (q && simDegraded && kindOn('know')) parts.push('뜻이 비슷한 지식은 지금 가져오지 못했습니다.');
+    const real = rowHits.filter(isReal).length;
+    const failNames = [...failedSrc].filter((x) => kindShown(x as Kind)).map((x) => KIND_LABEL[x as Kind] || x).join(' · ');
+    if (failNames) parts.push(`${failNames} 결과를 가져오지 못했습니다. 잠시 뒤 다시 찾아 주세요.`);
+    //  아직 오는 중이면 «없습니다» 가 아니라 «찾는 중» 이다 — 자료는 자리 잡기 상한(2.5초)보다 늦게 올 때가 있다(실측 2~4초).
+    const waiting = settled && !!q && !real && !failNames && tabWaiting();
+    const showNone = settled && !!q && !real && !failNames && !waiting;
+    none.hidden = !(showNone || waiting);
+    const other = showNone ? otherCount() : 0;
+    none.replaceChildren(...(waiting ? [el('p', { text: `${tab === 'all' ? '' : tabLabel() + '에서 '}찾는 중입니다…` })]
+      : showNone ? [el('b', { text: '결과가 없습니다' }), el('p', { text: emptyWhy() }),
+        ...(other ? [el('button', { class: 'v2-omni-none-go', type: 'button', onclick: () => setTab('all') }, el('span', { text: `전체에서 ${fmtN(other)}개 보기` }))] : [])]
+        : []));
+    if (q && convNoteText && kindShown('sess')) parts.push(convNoteText);
+    if (q && simDegraded && kindShown('know')) parts.push('뜻이 비슷한 지식은 지금 가져오지 못했습니다.');
     note.hidden = !parts.length;
     note.replaceChildren(...(parts.length ? [el('span', { text: parts.join(' ') })] : []));
-    moreBtn.hidden = !(settled && q && (truncated || (fullSrc.size > 0 && Math.min(50, 20 * moreFactor) < 50)));
+    moreBtn.hidden = !(settled && q && (truncated || (shownFull() && Math.min(50, 20 * moreFactor) < 50)));
   }
+  /** 지금 탭에 보이는 채널 중 청한 만큼 꽉 채워 온 것이 있나(더 있을 수 있다). */
+  const shownFull = (): boolean => [...fullSrc].some((x) => (x === 'conv' ? kindShown('sess') : kindShown(x as Kind)));
 
-  function go(i: number, newTab: boolean): void {
+  function go(i: number, mode: PvOpenMode): void {
     const h = rowHits[i];
     if (!h) return;
     if (h.run) { h.run(); return; }
@@ -532,8 +717,16 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const q = input.value.trim();
     if (q) { rememberQuery(q); lastQuery = { q, at: Date.now() }; }
     rememberOpened(h);
+    //  곁칸에 고정 — 지식 문서만(위키 덧창의 [우측 사이드바에 고정]과 같은 문, lib/wiki-list pinGuest). 못 쓰면 그 자리에서 연다.
+    if (mode === 'aside' && h.pv && h.pv.t === 'know' && canOpenInAside()) {
+      const g = pinGuest(h.pv.name, h.title);
+      omniClose({ restoreFocus: false });
+      if (!openInAside({ key: g.key, title: g.title, url: embedUrl(g.hash), label: g.label, sticky: g.sticky })) hooks!.open(h.href, false, h.title);
+      return;
+    }
     omniClose({ restoreFocus: false });
-    hooks!.open(h.href, newTab, h.title);
+    //  곁칸에 못 여는 종류의 Alt+Enter 는 새 탭이다(가이드 표기 «⌘·Ctrl·Alt+Enter = 새 화면»).
+    hooks!.open(h.href, mode !== 'here', h.title);
   }
 
   // ── 결과 담기 ──
@@ -548,6 +741,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
           //  세션이 이름으로도 대화로도 맞았으면 **왜 맞았는지**(대표 말·고친 파일)를 대화 쪽에서 가져온다.
           if (src === 'conv' && prev.kind === 'sess') {
             prev.role = h.role; prev.hits = h.hits; prev.edit = h.edit; prev.serverTop = h.serverTop;
+            if (h.pv) prev.pv = h.pv;   // 대화 좌표는 서버가 준 것으로(셸 목록의 것과 다르면 미리보기가 404 다, 격리 리뷰)
             if (h.sub) prev.sub = h.sub;
             if ((h.at || 0) > (prev.at || 0)) prev.at = h.at;
           }
@@ -570,8 +764,18 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (mySeq !== seq || box !== mine) return;
     buckets.set(src, sinceMs ? rows.filter((h) => h.sim || inPeriod(h.at, sinceMs)) : rows);
     pending.delete(src);
-    if (settled) { rebuild(); paint(); refreshNote(); }   // 자리 잡은 뒤 늦게 온 채널 — 제 자리에 끼운다(맨 위는 굳어 있다)
-    else if (!holdsSettle(pending)) settle(mySeq);
+    if (settled) {
+      //  자리 잡은 뒤 늦게 온 채널 — 제 자리에 끼운다(맨 위는 굳어 있다).
+      rebuild(); paint();
+      //  이 탭의 채널을 기다리던 Enter(자료 탭에 들어오자마자 누른 것) — 다 왔으면 첫 줄을 연다.
+      if (enterWant && !tabWaiting()) {
+        const w = enterWant; enterWant = null;
+        const i = rowHits.findIndex((h) => h.key === selKey);
+        if (rowHits.length) { go(i < 0 ? 0 : i, w.mode); return; }
+      }
+      refreshNote();
+      if (!holdsSettle(pending)) bar.classList.remove('on');
+    } else if (!holdsSettle(pending)) settle(mySeq);
   }
   function settle(mySeq: number): void {
     if (mySeq !== seq || box !== mine) return;
@@ -579,16 +783,15 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const first = !settled;
     settled = true;
     rebuild();
-    if (first) { frozenTop = null; if (!userMoved) selKey = ''; }
-    paint();
-    if (first && input.value.trim()) frozenTop = topHits(hits.filter((h) => !h.sim)).map((h) => h.key);
+    if (first) { frozenTop.clear(); if (!userMoved) selKey = ''; }
+    paint();   // 자리 잡은 뒤의 첫 그리기가 맨 위 셋을 굳힌다(topHits)
     list.classList.remove('stale');
-    bar.classList.remove('on');
+    if (!holdsSettle(pending)) bar.classList.remove('on');   // 상한에 걸려 자리 잡았으면 아직 오는 채널이 있다 — 막대는 다 올 때까지
     refreshNote();
     if (enterWant) {
       const w = enterWant; enterWant = null;
       const i = rowHits.findIndex((h) => h.key === selKey);
-      go(i < 0 ? 0 : i, w.newTab);
+      go(i < 0 ? 0 : i, w.mode);
     }
   }
 
@@ -599,11 +802,23 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   }
   function sessHit(d: V2Data, s: Sess): Hit {
     const t = sessText(s, projName(d, s.projectId));
+    const proj = s.projectId ? projName(d, s.projectId) : '';   // 프로젝트가 없으면 빈 칸 — «프로젝트 없음» 을 줄마다 되풀이하지 않는다
     return {
       kind: 'sess', key: 's:' + s.id, title: t.main || t.sub || s.id,
-      sub: [projName(d, s.projectId), t.main && t.sub ? t.sub : ''].filter(Boolean).join(' · '),
+      sub: t.main && t.sub ? t.sub : '', meta: proj || undefined,
       href: '#/s/' + encodeURIComponent(s.id), at: s.lastSeen || undefined,
       context: isMineSess(s) ? undefined : ownerOf(s),
+      pv: sessRef(s, proj),
+    };
+  }
+  /** 세션의 대화 좌표(대화 uuid · 노드) — 접힌 기록(logId)이 없으면 터미널 행의 대화 id, 기록만 남은 행은 id 자체가 uuid 다(sess-tail 과 같은 규칙). */
+  function sessRef(s: Sess, proj: string): PvRef {
+    const raw = s.raw || {};
+    return {
+      t: 'sess', sid: String(s.logId || raw.claudeSessionId || raw.chatId || s.id), node: String((s.logNode ?? s.node) || ''),
+      project: proj || undefined, owner: isMineSess(s) ? undefined : ownerOf(s),
+      hint: sessText(s, proj).sub || undefined,
+      ...(s.live && s.alive ? { stateKey: s.stateKey, stateLabel: s.stateLabel } : {}),
     };
   }
   function localHits(): Hit[] {
@@ -625,32 +840,39 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         .map((p) => ({
           kind: 'proj' as const, key: 'p:' + p.id, title: String(p.name || ''), sub: cleanSnippet(String(p.description || ''), 120), href: projHitHref(p),
           at: atOf(p.updated_at), ident: String(p.id), status: p.archived_at ? '보관' : undefined,
+          pv: { t: 'proj' as const, id: Number(p.id) },
         })));
     }
     if (kindOn('app')) {
       const nq = q.toLowerCase();
       out.push(...visibleApps().filter((a) => appMatches(a, nq)).slice(0, 4)
-        .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: appHref(a), label: '화면' })));
+        .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: appHref(a), label: '화면',
+          pv: { t: 'text' as const, lines: [a.desc, '이 화면을 엽니다.'] } })));
       //  프로젝트 리스트 · 폴더(보드의 묶음) · 분류 — 이름으로(#4530: 종전엔 찾을 수 없었다).
       for (const l of (d.lists || []).filter((x) => matchAll(String(x.name || ''), terms)).slice(0, 4)) {
-        out.push({ kind: 'app', key: 'l:' + l.id, title: String(l.name), sub: '프로젝트 리스트', href: '#/projects2/l/' + l.id, label: '리스트' });
+        out.push({ kind: 'app', key: 'l:' + l.id, title: String(l.name), sub: '프로젝트 리스트', href: '#/projects2/l/' + l.id, label: '리스트', pv: { t: 'list', id: Number(l.id) } });
       }
       for (const f of (d.folders || []).filter((x) => matchAll(String(x.name || ''), terms)).slice(0, 3)) {
-        out.push({ kind: 'app', key: 'f:' + f.id, title: String(f.name), sub: '프로젝트 폴더', href: '#/projects2/f/' + f.id, label: '폴더' });
+        out.push({ kind: 'app', key: 'f:' + f.id, title: String(f.name), sub: '프로젝트 폴더', href: '#/projects2/f/' + f.id, label: '폴더', pv: { t: 'folder', id: Number(f.id) } });
       }
       //  분류 화면 주소는 **숫자 id** 를 받는다(taxonomy.ts catHref · side.ts 와 같은 문) — key 를 넣으면 «이 분류를 찾지 못했어요»(격리 리뷰).
       for (const c of categories.filter((x) => matchAllAcross([x.name, x.key], terms)).slice(0, 4)) {
-        out.push({ kind: 'app', key: 'c:' + c.id, title: c.name, sub: c.desc ? cleanSnippet(c.desc, 80) : '분류', href: '#/taxonomy/' + encodeURIComponent(c.id), label: '분류' });
+        out.push({ kind: 'app', key: 'c:' + c.id, title: c.name, sub: c.desc ? cleanSnippet(c.desc, 80) : '', href: '#/taxonomy/' + encodeURIComponent(c.id), label: '분류', pv: { t: 'cat', id: c.id } });
       }
       if (hooks!.openMe) {
         for (const m of ME_TABS.filter((x) => matchAllAcross([x.title, x.aka], terms)).slice(0, 3)) {
-          out.push({ kind: 'app', key: 'me:' + m.tab, title: m.title, sub: '[나] 창에서 엽니다', label: '설정', run: () => { omniClose({ restoreFocus: false }); hooks!.openMe!(m.tab); } });
+          out.push({ kind: 'app', key: 'me:' + m.tab, title: m.title, sub: '[나] 창에서 엽니다', label: '설정',
+            pv: { t: 'text', lines: [`[나] 창의 «${m.title}» 칸을 엽니다.`], act: '열기' },
+            run: () => { omniClose({ restoreFocus: false }); hooks!.openMe!(m.tab); } });
         }
       }
       //  명령 — 찾는 것이 없을 때 바로 할 수 있는 일. 늘 맨 아래(시각이 없어 «바로 가기» 묶음).
       const short = q.length > 40 ? q.slice(0, 40) + '…' : q;
-      if (q && hooks!.newSession) out.push({ kind: 'app', key: 'cmd:new-session', title: `«${short}» 로 새 세션 시작`, sub: '이 글을 첫 지시로 새 AI 세션을 엽니다', label: '명령', run: () => { omniClose({ restoreFocus: false }); hooks!.newSession!(q); } });
-      if (q) out.push({ kind: 'app', key: 'cmd:new-know', title: `«${short}» 제목으로 새 지식 쓰기`, sub: '새 지식 문서를 엽니다', label: '명령', href: '#/knowledge/new?title=' + encodeURIComponent(q) });
+      if (q && hooks!.newSession) out.push({ kind: 'app', key: 'cmd:new-session', title: `«${short}» 로 새 세션 시작`, sub: '이 글을 첫 지시로 새 AI 세션을 엽니다', label: '명령',
+        pv: { t: 'text', lines: ['찾는 것이 없으면 바로 시킬 수 있습니다.', `새 탭에 홈을 열고 입력칸에 «${short}» 를 넣어 둡니다. 보내기 전에 고칠 수 있습니다.`], act: '새 세션 시작' },
+        run: () => { omniClose({ restoreFocus: false }); hooks!.newSession!(q); } });
+      if (q) out.push({ kind: 'app', key: 'cmd:new-know', title: `«${short}» 제목으로 새 지식 쓰기`, sub: '새 지식 문서를 엽니다', label: '명령', href: '#/knowledge/new?title=' + encodeURIComponent(q),
+        pv: { t: 'text', lines: [`제목이 «${short}» 인 새 지식 문서를 엽니다.`] } });
     }
     return out.filter((h) => !sinceMs || h.kind === 'app' || inPeriod(h.at, sinceMs));
   }
@@ -669,6 +891,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       sub: cleanSnippet(Array.isArray(p.snippets) ? p.snippets.join(' ') : (p.snippet || p.description || ''), 140),
       href: projHitHref(p), ident: String(p.id), at: atOf(p.updated_at), order,
       label: level === 'project' ? undefined : level === 'task' ? '태스크' : '서브태스크',
+      pv: level === 'project' ? { t: 'proj', id: Number(p.id) } : { t: 'task', id: Number(p.id) },
       //  상위 프로젝트 이름 + « ›» — «↳» 는 글꼴에 없어 네모로 깨졌다(캡처로 확인).
       context: level !== 'project' && p.parent_name ? String(p.parent_name) + ' ›' : undefined,
       status: st,
@@ -679,7 +902,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     return {
       kind: 'know', key: 'k:' + e.name, title: sp.main, head: sp.head || undefined,
       sub: cleanSnippet(Array.isArray(e.snippets) ? e.snippets.join(' ') : (e.snippet || e.summary || ''), 140),
-      href: '#/k/' + encodeURIComponent(e.name), ident: String(e.name || ''), at: atOf(e.updated_at), order, ...extra,
+      href: '#/k/' + encodeURIComponent(e.name), ident: String(e.name || ''), at: atOf(e.updated_at), order,
+      pv: { t: 'know', name: String(e.name || '') }, ...extra,
     };
   };
   function convHit(r: any, order: number): Hit {
@@ -689,7 +913,10 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const s = findSessByConv(d.sessions, sid);
     const face = s ? sessText(s, projName(d, s.projectId)) : null;
     const best = (r && r.best) || null;
+    const proj = (s && s.projectId ? projName(d, s.projectId) : '') || String(r.project || '');
     return {
+      meta: proj || undefined,
+      pv: s ? { ...(sessRef(s, proj) as Extract<PvRef, { t: 'sess' }>), sid, node } : { t: 'sess', sid, node, project: proj || undefined },
       kind: 'sess', key: s ? 's:' + s.id : 'c:' + node + ':' + sid,
       title: (face && (face.main || face.sub)) || String(r.name || r.title || '이름 없는 세션'),
       sub: best ? cleanSnippet(String(best.text || ''), 160) : '',
@@ -700,6 +927,30 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   }
 
   // ── 검색 ──
+  const lim = (n: number): string => String(Math.min(50, n * moreFactor));
+  const full = (src: string, n: number, rows: unknown[]): void => { if (rows.length >= Math.min(50, n * moreFactor)) fullSrc.add(src); };
+  const failOf = (src: string, my: number, signal: AbortSignal) => (e: any): void => {
+    if (my !== seq || signal.aborted) return;
+    if (src === 'conv') convNoteText = '대화 결과를 가져오지 못했습니다 — ' + failText(e) + '.';
+    if (src === 'sim') simDegraded = true;
+    if (src === 'proj' || src === 'know' || src === 'src') failedSrc.add(src);
+    put(src, [], my);
+  };
+  /** 자료 채널 — 검색을 돌릴 때(자료 탭에서) 와 자료 탭에 처음 들어올 때(setTab) 가 같이 쓴다. */
+  function fetchSrc(q: string, my: number, signal: AbortSignal): void {
+    api(`/api/ui/sources?limit=${lim(20)}&q=` + encodeURIComponent(q), { signal }).then((r: any) => {
+      if (my !== seq || signal.aborted) return;
+      const rows: any[] = (r && r.entries) || [];
+      full('src', 20, rows);
+      if (r && typeof r.total === 'number' && !sinceMs) totals.set('src', r.total);
+      put('src', rows.map((x: any, i: number) => ({
+        kind: 'src' as const, key: 'src:' + x.id, title: String(x.title || ('자료 #' + x.id)),
+        sub: '', meta: [SRC_SYS[String(x.external_system || '')] || SRC_SYS[String(x.kind || '')] || '', (x.fields && (x.fields.container_name || x.fields.repo)) ? String(x.fields.container_name || x.fields.repo) : ''].filter(Boolean).join(' · ') || '자료',
+        href: '#/sources/' + x.id, at: atOf(x.occurred_at, x.updated_at), order: i,
+        pv: { t: 'src' as const, id: String(x.id) },
+      })), my);
+    }, failOf('src', my, signal));
+  }
   function run(force = false): void {
     if (box !== mine) return;
     const q = input.value.trim();
@@ -716,7 +967,12 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     words = highlightWords(terms);
     sinceMs = periodSince(period, Date.now());
     convNoteText = ''; simDegraded = false; failedSrc.clear(); fullSrc.clear();
-    frozenTop = null;
+    //  개수는 검색어와 기간에만 달려 있다 — «결과 더 보기»·정렬 바꾸기로 다시 돌 때는 받아 둔 것을 쓴다(서버 검색을 두 번 시키지 않는다).
+    const countsKey = q + '\u0001' + period;
+    //   받다가 끊긴 개수(바로 이어 «더 보기» 를 누른 때)는 받아 둔 것이 아니다 — 둘 다 와 있을 때만 건너뛴다.
+    const askCounts = countsKey !== totalsFor || !(totals.has('proj') && totals.has('know'));
+    if (askCounts) { totals.clear(); convCapped = false; totalsFor = countsKey; }
+    frozenTop.clear();
     userMoved = false;
     enterWant = enterWant && q ? enterWant : null;
     buckets.clear();
@@ -724,15 +980,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (!q) { hits = []; settled = true; list.classList.remove('stale'); bar.classList.remove('on'); paint(); refreshNote(); return; }
     buckets.set('local', localHits());
     const call = (src: string, k: Kind, fn: () => void): void => { if (kindOn(k)) { pending.add(src); fn(); } };
-    const fail = (src: string) => (e: any): void => {
-      if (my !== seq || signal.aborted) return;
-      if (src === 'conv') convNoteText = '대화 결과를 가져오지 못했습니다 — ' + failText(e) + '.';
-      if (src === 'sim') simDegraded = true;
-      if (src === 'proj' || src === 'know' || src === 'src') failedSrc.add(src);
-      put(src, [], my);
-    };
-    const lim = (n: number): string => String(Math.min(50, n * moreFactor));
-    const full = (src: string, n: number, rows: unknown[]): void => { if (rows.length >= Math.min(50, n * moreFactor)) fullSrc.add(src); };
+    const fail = (src: string) => failOf(src, my, signal);
     const qs = encodeURIComponent(q);
     call('conv', 'sess', () => {
       if (q.length > 200) { convNoteText = '검색어가 길어(200자 넘음) 대화에서는 찾지 않았습니다.'; window.setTimeout(() => put('conv', [], my)); return; }
@@ -754,6 +1002,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         }
         convNoteText = notes.join(' ');
         full('conv', 20, (r && r.results) || []);
+        if (r && typeof r.total === 'number') { totals.set('conv', r.total); convCapped = !!r.capped; }
         put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
     });
@@ -772,13 +1021,18 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         put('sim', ((r && r.entries) || []).map((e: any, i: number) => knowRow(e, i, { sim: true, score: Number(e.similarity) || 0 })), my);
       }, fail('sim'));
     });
-    call('src', 'src', () => {
-      api(`/api/ui/sources?limit=${lim(20)}&q=` + qs, { signal }).then((r: any) => (full('src', 20, (r && r.entries) || []), put('src', ((r && r.entries) || []).map((s: any, i: number) => ({
-        kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
-        sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
-        href: '#/sources/' + s.id, at: atOf(s.occurred_at, s.updated_at), order: i,
-      })), my)), fail('src'));
-    });
+    call('src', 'src', () => fetchSrc(q, my, signal));
+    //  종류마다 모두 몇 개인가 — 줄은 20개씩만 받으므로 따로 센다(실측 0.3~0.8초). 자리 잡기를 기다리게 하지 않고, 늦게 와도 탭의 숫자만 바뀐다.
+    //   기간으로 좁혔을 때는 묻지 않는다(프로젝트·지식의 기간은 화면이 거른다 — 서버 개수와 다르다). 못 세면 받은 만큼만 센다.
+    if (!sinceMs && askCounts) {
+      for (const [src, url] of [['proj', '/api/ui/v6/projects/search?plain=1&mode=count&q='], ['know', '/api/ui/knowledge/search?plain=1&mode=count&q=']] as const) {
+        api(url + qs, { signal }).then((r: any) => {
+          if (my !== seq || signal.aborted || box !== mine || !r || typeof r.total !== 'number') return;
+          totals.set(src, r.total);
+          paintCounts();
+        }, () => { /* 받은 만큼만 센다 */ });
+      }
+    }
     settled = false;
     if (!holdsSettle(pending)) { settle(my); return; }
     //  앞 결과는 흐리게 둔 채 기다린다 — 다 오거나 상한이 되면 한 번에 바꾼다. 앞 결과가 없으면(첫 글자) 셸 목록부터 보인다.
@@ -792,27 +1046,51 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   input.addEventListener('input', () => {
     window.clearTimeout(timer);
     moreFactor = 1;
+    closeSheet();   // 폰 — 다시 치기 시작하면 미리보기 판은 내린다
     if (!input.value.trim()) { run(true); return; }
     timer = window.setTimeout(() => run(), DEBOUNCE_MS);
   });
   input.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.isComposing) return;                       // 한글 조합 중 키는 입력기의 것이다
+    //  Tab = 다음 종류 · Shift+Tab = 앞 종류(#4530 안 A). 입력칸에서만 — 다른 단추에 초점이 있으면 Tab 은 창 안을 돈다(아래).
+    if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); setTab(nextTab(tab, e.shiftKey ? -1 : 1)); return; }
+    //  Shift+↑↓ = 미리보기의 앞·다음 «맞은 말»(세션). 넘길 것이 없으면 평소대로 줄을 고른다.
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.shiftKey && pv.nav(e.key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); return; }
     if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) { e.preventDefault(); moveSel(1); }
     else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) { e.preventDefault(); moveSel(-1); }
     else if (e.key === 'Enter') {
       e.preventDefault();
-      const newTab = e.metaKey || e.ctrlKey || e.altKey;   // 가이드 표기 «⌘·Ctrl·Alt+Enter = 새 화면»
+      //  Enter = 열기 · ⌘/Ctrl+Enter = 새 탭 · Alt+Enter = 곁칸에 고정(지식 문서 — 그 밖의 종류는 새 탭).
+      const mode: PvOpenMode = e.altKey ? 'aside' : e.metaKey || e.ctrlKey ? 'tab' : 'here';
       //  결과가 지금 친 글의 것이 아니면(아직 안 돌렸거나 오는 중) 다 온 뒤의 줄을 연다 — 엉뚱한 것을 여는 것보다 잠깐 기다리는 게 낫다.
       if (input.value.trim() !== ranQuery) run();
-      if (!settled) { enterWant = { newTab }; refreshNote(); return; }
+      if (!settled) { enterWant = { mode }; refreshNote(); return; }
+      //  자리 잡았어도 이 탭이 보일 채널이 아직 오는 중이고 세울 줄이 없으면(자료 탭 — 그 채널만 따로 묻는다) 기다린다.
+      //   그냥 두면 Enter 가 조용히 버려진다(격리 리뷰).
+      if (!rowHits.some(isReal) && tabWaiting()) { enterWant = { mode }; refreshNote(); return; }
       const i = rowHits.findIndex((h) => h.key === selKey);
-      go(i < 0 ? 0 : i, newTab);
+      go(i < 0 ? 0 : i, mode);
     }
   });
-  //  Tab 은 창 안에서만 돈다(aria-modal 인데 뒤 화면으로 빠지던 것, #4530).
+  //  탭 줄 — ←→ 로 탭 · 기간 · 정렬을 오가고 ↓ 로 입력칸에 돌아온다(맨 위 줄에서 ↑ 로 올라온다, moveSel).
+  filters.addEventListener('keydown', (e: KeyboardEvent) => {
+    const btns: HTMLElement[] = [...OMNI_TABS.map((t) => tabBtns.get(t.key)!), periodBtn, sortBtn];
+    const i = btns.indexOf(document.activeElement as HTMLElement);
+    if (i < 0) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); btns[(i + (e.key === 'ArrowRight' ? 1 : -1) + btns.length) % btns.length].focus(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); input.focus(); }
+  });
+  //  Tab 은 창 안에서만 돈다(aria-modal 인데 뒤 화면으로 빠지던 것, #4530). 입력칸의 Tab 은 위에서 종류 넘기기로 받았으므로 여기는
+  //   초점이 단추·링크에 있을 때다 — 켜지지 않은 탭(tabindex -1) · 보이지 않는 것(폰의 내려간 판)은 건너뛴다.
   box.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key !== 'Tab' || !box) return;
-    const f = [...box.querySelectorAll<HTMLElement>('input, button:not([hidden])')].filter((x) => x.offsetParent !== null);
+    if (!box) return;
+    //  단추에 초점이 있을 때 글자를 치면 입력칸으로 돌아가 그 글자가 들어간다(탭 줄에 올라갔다가 이어 치는 흐름).
+    //   한글 입력기가 켜져 있으면 첫 keydown 의 key 가 글자가 아니라 'Process'(keyCode 229)다 — 그것도 입력칸으로 보낸다.
+    const typing = (e.key.length === 1 && e.key !== ' ') || e.key === 'Process' || e.keyCode === 229;
+    if (document.activeElement !== input && typing && !e.ctrlKey && !e.metaKey && !e.altKey) { input.focus(); return; }
+    if (e.key !== 'Tab') return;
+    const f = [...box.querySelectorAll<HTMLElement>('input, button:not([hidden]), a[href]')]
+      .filter((x) => x.tabIndex >= 0 && x.getClientRects().length > 0 && getComputedStyle(x).visibility !== 'hidden');
     if (!f.length) return;
     const i = f.indexOf(document.activeElement as HTMLElement);
     e.preventDefault();
@@ -821,7 +1099,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
 
   document.body.append(box);
   document.addEventListener('keydown', onEsc, true);
-  onCloseTimers = () => { window.clearTimeout(timer); window.clearTimeout(settleTimer); enterWant = null; };
+  onCloseTimers = () => { window.clearTimeout(timer); window.clearTimeout(settleTimer); enterWant = null; pv.dispose(); };
+  onSheetEsc = () => { if (!card.classList.contains('sheet')) return false; closeSheet(); return true; };
   //  주소가 바뀌면(뒤로 가기 · 다른 문으로 이동) 창은 이제 그 화면의 것이 아니다 — 닫는다(#4530).
   onHash = () => omniClose({ restoreFocus: false });
   window.addEventListener('hashchange', onHash);
@@ -835,7 +1114,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   }
   paintSort();
   paintPeriod();
-  paintChips();
+  paintTabs();
   //  분류는 셸 목록 줄에만 쓰인다 — 도착하면 그 줄만 다시 만든다(검색 전체를 다시 돌리면 고른 줄·맨 위 셋이 풀렸다, 격리 리뷰).
   void loadCategories().then((fresh) => {
     if (!fresh || box !== mine || !input.value.trim()) return;
@@ -876,12 +1155,14 @@ async function loadCategories(): Promise<boolean> {
 function onEsc(e: KeyboardEvent): void {
   if (e.key !== 'Escape' || !box) return;
   if (ctxIsOpen()) return;
-  e.stopPropagation(); e.preventDefault(); omniClose();
+  e.stopPropagation(); e.preventDefault();
+  if (onSheetEsc && onSheetEsc()) return;
+  omniClose();
 }
 export function omniClose(opts: { restoreFocus?: boolean } = {}): void {
   if (!box) return;
   inflight?.abort(); inflight = null;
-  onCloseTimers?.(); onCloseTimers = null;
+  onCloseTimers?.(); onCloseTimers = null; onSheetEsc = null;
   closeCtxMenu();
   box.remove(); box = null;
   document.removeEventListener('keydown', onEsc, true);
