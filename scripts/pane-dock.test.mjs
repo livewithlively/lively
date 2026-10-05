@@ -196,7 +196,7 @@ check(/show: \(k\) => bringUp\(zoneOf\(k\) \|\| 'side', k\)/.test(PANES) && !/sh
 check(/if \(!found\) \{ addPart\('side', type\); return; \}\s*(?:if \(zoneVisible\(found\.zone\) && reselect\(found\.zone, found\.key\)\) return;\s*)?bringUp\(found\.zone, found\.key\);/.test(PANES) && /const key = lay\[z\]\.find\(\(k\) => tabBase\(k\) === 'web'\)!;\s*bringUp\(z, key\);/.test(PANES)
   //  stage 판엔 붙은 앱(#4225) 감시가 없다 — 있을 때만 그 두 길도 본다.
   && (!/watchSessionApps\(/.test(PANES) || (/if \(added\.length\) \{ bringUp\(z, SESSAPP_TAB\); return; \}/.test(PANES) && /if \(!z\) return;\s*bringUp\(z, SESSAPP_TAB\);/.test(PANES)))
-  && /const zone: Zone = showZone\(found \? found\.zone : \(findTab\('editor'\)\?\.zone \?\? 'side'\), \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\);/.test(PANES),
+  && /const zone: Zone = found \? showZone\(found\.zone, \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\) : landZone\(findTab\('editor'\)\?\.zone \?\? 'side'\);/.test(PANES),   // #4443 10-05 — 새 뷰어는 아래 칸에 아예 안 선다(landZone)
   "W12c 머리줄 단추(showPart) · 웹 칸 · 붙은 앱(새로 붙음 · 다시 누름) · 파일 뷰어도 같은 길 — 닫힌 아래 칸을 펼치지 않는다");
 //  곁칸 아래 독은 내용 위에 떠 있다(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게») — 본문을 올리지 않고, 목록은 끝에만 · 입력칸 앱은 앱 끝에 빈 자리.
 //   런타임(pane-dock-runtime R2b · R2c)은 자료 · 프로젝트 둘로 재고, 여기선 나머지 앱의 목록 상자가 목록에서 빠지지 않았는지 본다.
