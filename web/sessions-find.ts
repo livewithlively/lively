@@ -2,9 +2,11 @@
 //  앱의 일: 지난 대화에서 **그 말**을 찾아 그 자리로 간다. 결과는 세션이 아니라 맞은 말 하나가 한 줄이고(앞뒤 말과 함께),
 //  누르면 오른쪽 칸에 대화록이 그 말의 자리로 열린다. 검색어가 없으면 최근 대화를 날짜 묶음으로 보여 준다.
 //  ⚠ 대화 본문은 신뢰할 수 없다 — 글은 전부 textContent 로만 넣는다(innerHTML 금지).
+//  모양(원준 2026-10-05): 왼쪽 카드 = 찾기 칸 · 알약 고르개 · 결과(그 안에서 스크롤), 오른쪽 카드 = 대화록. 맞은 말 한 줄은
+//   «말한 쪽 · 세션 · 언제» 머리 아래 앞 말 – 맞은 말 – 뒤 말이 한 가닥으로 서고, 맞은 말만 가닥 위에 파랗게 선다.
 import { api, el, toast } from './core.js';
 import { mountTranscript, setTranscriptDoor } from './sessions.js';
-import { loadMySessions, dropMySessions, leftPanel, selectOf, shellHref, transcriptHref } from './sessions-kit.js';
+import { btnOf, dropMySessions, emptyBox, errBox, ico, leftPanel, loadMySessions, pickOf, searchBox, selectOf, shellHref, skelRows, transcriptHref } from './sessions-kit.js';
 import { markRanges, type HitRef } from './session-history.js';
 import { PERIODS, periodSince, dayBucket, whenLabel, inPeriod, type OmniPeriod } from './lib/omni-order.js';
 
@@ -13,7 +15,7 @@ interface Hit {
   role: 'user' | 'assistant'; ts: string | null; text: string; terms: number;
   before: { role: string; text: string } | null; after: { role: string; text: string } | null;
 }
-interface Picked { sid: string; node: string; name: string; hit: HitRef | null; words: string[]; /** 줄을 가르는 열쇠의 꼬리 — 시각이 같은 두 말(한 줄의 글 블록들)을 가른다. */ mark?: string }
+interface Picked { sid: string; node: string; name: string; hit: HitRef | null; words: string[]; /** 줄을 가르는 열쇠의 꼬리 — 시각이 같은 두 말(한 줄의 글 블록들)을 가른다. */ mark?: string; /** 대화록 머리의 부제(프로젝트 · 언제). */ sub?: string }
 
 const HIT_STEP = 30, HIT_MAX = 100, RECENT_STEP = 50;
 type RoleKey = '' | 'user' | 'assistant';
@@ -39,19 +41,22 @@ const who = (role: string): string => (role === 'assistant' ? 'AI' : '나');
 
 export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: string) => void } = {}): void {
   if (typeof opts.q === 'string' && opts.q !== st.q) { st.q = opts.q; st.limit = HIT_STEP; }
-  const input = el('input', { type: 'text', class: 'shx-input', placeholder: '대화 내용으로 찾기', value: st.q, 'aria-label': '대화 내용으로 찾기' }) as HTMLInputElement;
+  const input = el('input', { type: 'text', class: 'shx-input', placeholder: '대화 내용으로 찾기', value: st.q, 'aria-label': '대화 내용으로 찾기', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
   const projSel = el('select', { class: 'shx-select', 'aria-label': '프로젝트' }, el('option', { value: '', text: '모든 프로젝트' })) as HTMLSelectElement;
   const count = el('div', { class: 'shx-count', role: 'status' });
   const list = el('div', { class: 'shx-results' });
-  const pane = el('div', { class: 'shx-pane' });
+  const pane = el('section', { class: 'shx-card shx-pane', 'aria-label': '대화록' }) as HTMLElement;
   const rerun = (): void => { st.limit = HIT_STEP; st.shown = RECENT_STEP; void run(); };
+  const projPick = pickOf(projSel, 'projMini') as HTMLElement & { repaint?: () => void };
   const filters = el('div', { class: 'shx-filters' },
-    selectOf(PERIODS, st.period, (v) => { st.period = v; rerun(); }, '기간'),
-    projSel,
-    selectOf(ROLES, st.role, (v) => { st.role = v; rerun(); }, '말한 쪽'));
+    pickOf(selectOf(PERIODS, st.period, (v) => { st.period = v; rerun(); }, '기간'), 'clock'),
+    projPick,
+    pickOf(selectOf(ROLES, st.role, (v) => { st.role = v; rerun(); }, '말한 쪽'), 'person'));
   projSel.addEventListener('change', () => { st.project = projSel.value; rerun(); });
-  host.replaceChildren(el('div', { class: 'shx-cols' },
-    el('div', { class: 'shx-col' }, input, filters, count, list),
+  host.replaceChildren(el('div', { class: 'shx-split' },
+    el('section', { class: 'shx-card shx-master', 'aria-label': '대화 찾기' },
+      el('div', { class: 'shx-mhead' }, searchBox(input, () => { st.q = ''; fire(true); }), filters, count),
+      list),
     pane));
 
   // 프로젝트 고르개 — 내 세션이 붙어 있는 프로젝트들(최근에 쓴 것부터) + 「프로젝트 없음」.
@@ -62,23 +67,27 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     projSel.append(el('option', { value: '0', text: '프로젝트 없음' }));
     projSel.value = st.project;
     if (projSel.value !== st.project) { st.project = ''; projSel.value = ''; }   // 고른 프로젝트가 더는 없다
+    if (projPick.repaint) projPick.repaint();
   }).catch(() => { /* 목록을 못 받아도 찾기는 된다 */ });
 
   const openPicked = (p: Picked | null, scroll = false): void => {
     st.picked = p;
-    for (const a of Array.from(list.querySelectorAll('.shx-row')) as HTMLElement[]) a.classList.toggle('sel', !!p && a.dataset.pick === pickKey(p));
-    if (!p) { pane.replaceChildren(el('p', { class: 'admin-hint shx-pane-empty', text: '왼쪽에서 줄을 누르면 대화록이 그 자리로 열립니다.' })); return; }
+    for (const a of Array.from(list.querySelectorAll('.shx-row')) as HTMLElement[]) markSel(a, !!p && a.dataset.pick === pickKey(p));
+    if (!p) { pane.replaceChildren(emptyBox({ icon: 'chat', big: true, title: '대화록이 여기 열립니다', text: '왼쪽에서 줄을 누르면 그 말의 자리로 대화록이 열립니다.' })); return; }
     void mountTranscript(pane, { sid: p.sid, node: p.node, q: '', ln: '' }, {
-      embedded: true, words: p.words, hit: p.hit, name: p.name,
+      embedded: true, words: p.words, hit: p.hit, name: p.name, sub: p.sub,
       //  그 대화를 돌리는 박스를 알게 되면 머리의 「이어 질문하기」를 「세션 열기」로 바꾼다 — 세션으로 가는 문은 하나다.
-      footer: () => leftPanel(p.sid, p.node, (r) => { if (r.box_id && st.picked === p) setTranscriptDoor(pane, r.box_id); }),
+      rail: () => leftPanel(p.sid, p.node, (r) => { if (r.box_id && st.picked === p) setTranscriptDoor(pane, r.box_id); }),
       onTrashed: () => { dropMySessions(); openPicked(null); void run(); },
     });
     if (scroll && pane.getBoundingClientRect().top > window.innerHeight * 0.6) pane.scrollIntoView({ behavior: 'smooth', block: 'start' });   // 좁은 화면(한 칸)에서는 대화록이 아래에 있다
   };
   const pickKey = (p: Picked): string => p.sid + '|' + p.node + '|' + (p.hit ? p.hit.role + '|' + (p.hit.ts || '') : '') + '|' + (p.mark || '');
+  /** 고른 줄 — 모양(.sel)과 이름표(aria-current)를 함께. */
+  const markSel = (a: HTMLElement, on: boolean): void => { a.classList.toggle('sel', on); if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); };
   const rowLink = (p: Picked, ...kids: unknown[]): HTMLElement => {
-    const a = el('a', { class: 'shx-row' + (st.picked && pickKey(st.picked) === pickKey(p) ? ' sel' : ''), href: shellHref(transcriptHref(p.sid, p.node)), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
+    const a = el('a', { class: 'shx-row', href: shellHref(transcriptHref(p.sid, p.node)), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
+    markSel(a, !!st.picked && pickKey(st.picked) === pickKey(p));
     a.addEventListener('click', (e: MouseEvent) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } return; }
       e.preventDefault();
@@ -86,31 +95,41 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     });
     return a;
   };
-  const moreBtn = (text: string, onClick: () => void): HTMLElement => el('button', { class: 'btn btn-ghost btn-sm shx-more', type: 'button', text, onclick: onClick });
+  const moreBtn = (text: string, onClick: () => void): HTMLElement => { const b = btnOf(text, { kind: 'ghost', cls: 'shx-more' }); b.addEventListener('click', onClick); return b; };
+  const grpEl = (label: string, n: number): HTMLElement => el('div', { class: 'shx-grp' }, el('span', { class: 'shx-grp-l', text: label }), el('span', { class: 'shx-grp-n', text: String(n) })) as HTMLElement;
+  const projEl = (name: string | null | undefined): HTMLElement => el('span', { class: 'shx-proj' + (name ? '' : ' none') }, ico(name ? 'projMini' : 'projNone'), el('span', { text: name || '프로젝트 없음' })) as HTMLElement;
 
   // ── 검색어 없음: 최근 대화 ──
   async function drawRecent(mySeq: number): Promise<void> {
     count.textContent = '불러오는 중…';
+    if (!list.childElementCount) list.replaceChildren(skelRows(6));
     let d;
     try { d = await loadMySessions(); }
-    catch (e: any) { if (mySeq === seq) { count.textContent = ''; list.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '세션 목록을 불러오지 못했습니다.' })); } return; }
+    catch (e: any) { if (mySeq === seq) { count.textContent = ''; list.replaceChildren(errBox(e?.message || '세션 목록을 불러오지 못했습니다.')); } return; }
     if (mySeq !== seq) return;
     const now = Date.now(), since = periodSince(st.period, now);
     const rows = d.sessions.filter((s: any) => inPeriod(Date.parse(s.last_seen), since)
       && (st.project === '' || (st.project === '0' ? s.project_id == null : String(s.project_id) === st.project)));
-    count.textContent = `최근 대화 ${rows.length}개` + (d.truncated ? ' · 더 오래된 세션은 여기 다 서지 않습니다(2,000개까지)' : '');
+    count.replaceChildren(el('span', { class: 'shx-count-m' }, '최근 대화 ', el('b', { text: `${rows.length}개` })),
+      ...(d.truncated ? [el('span', { class: 'shx-count-note' }, ico('info'), el('span', { text: '더 오래된 세션은 여기 다 서지 않습니다(2,000개까지)' }))] : []));
     const kids: HTMLElement[] = [];
+    //  묶음 머리의 수는 그 묶음 전체의 수다(지금 보이는 줄 수가 아니다).
+    const perBucket = new Map<string, number>();
+    for (const s of rows) { const b = dayBucket(Date.parse(s.last_seen), now); perBucket.set(b, (perBucket.get(b) || 0) + 1); }
     let bucket = '';
     for (const s of rows.slice(0, st.shown)) {
       const at = Date.parse(s.last_seen);
       const b = dayBucket(at, now);
-      if (b !== bucket) { bucket = b; kids.push(el('div', { class: 'shx-grp', text: b })); }
+      if (b !== bucket) { bucket = b; kids.push(grpEl(b, perBucket.get(b) || 0)); }
       const name = String(s.name || s.title || s.session_id);
-      kids.push(rowLink({ sid: String(s.session_id), node: String(s.node_id || ''), name, hit: null, words: [] },
-        el('div', { class: 'shx-row-t', text: name }),
-        el('div', { class: 'shx-row-m', text: [s.project_name || '프로젝트 없음', whenLabel(at, now)].filter(Boolean).join(' · ') })));
+      const when = whenLabel(at, now);
+      kids.push(rowLink({ sid: String(s.session_id), node: String(s.node_id || ''), name, hit: null, words: [], sub: [s.project_name || '프로젝트 없음', when].filter(Boolean).join(' · ') },
+        el('div', { class: 'shx-row-h' }, el('div', { class: 'shx-row-t', text: name, title: name }), el('span', { class: 'shx-row-when', text: when })),
+        el('div', { class: 'shx-row-f' }, projEl(s.project_name))));
     }
-    if (!rows.length) kids.push(el('p', { class: 'admin-hint', text: d.sessions.length ? '이 기간·프로젝트에 맞는 대화가 없습니다.' : '중앙에 기록된 세션이 없습니다. (관리 ▸ 세션 공유를 켜고 `lively backfill` 로 기존 기록을 올리세요.)' }));
+    if (!rows.length) kids.push(emptyBox(d.sessions.length
+      ? { icon: 'search', title: '이 기간·프로젝트에 맞는 대화가 없습니다.', text: '기간이나 프로젝트를 넓혀 보세요.' }
+      : { icon: 'sess', title: '중앙에 기록된 세션이 없습니다.', text: '관리 ▸ 세션 공유를 켜고 `lively backfill` 로 기존 기록을 올리세요.' }));
     if (rows.length > st.shown) kids.push(moreBtn(`더 보기 (${rows.length - st.shown}개 남음)`, () => { st.shown += RECENT_STEP; void run(); }));
     list.replaceChildren(...kids);
   }
@@ -118,6 +137,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
   // ── 검색어 있음: 맞은 말 ──
   async function drawHits(mySeq: number, q: string): Promise<void> {
     count.textContent = '찾는 중…';
+    list.classList.add('busy');
     const qs = new URLSearchParams({ q, limit: String(st.limit) });
     const since = periodSince(st.period, Date.now());
     if (since) qs.set('since', new Date(since).toISOString());
@@ -129,30 +149,37 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     catch (e: any) {
       if (mySeq !== seq || (e && e.name === 'AbortError')) return;
       count.textContent = '';
-      list.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '대화를 찾지 못했습니다.' }));
+      list.classList.remove('busy');
+      list.replaceChildren(errBox(e?.message || '대화를 찾지 못했습니다.'));
       return;
     }
     if (mySeq !== seq) return;
+    list.classList.remove('busy');
     const hits: Hit[] = Array.isArray(d?.hits) ? d.hits : [];
     const words: string[] = Array.isArray(d?.words) ? d.words.map(String) : [];
     const now = Date.now();
-    const notes: string[] = [];
-    if (hits.length) notes.push(`맞은 말 ${d.total}곳${d.capped ? ' 이상' : ''} · 세션 ${d.sessions}개`);
-    if (typeof d?.pending === 'number' && d.pending > 0) notes.push(`대화 색인을 만드는 중입니다 — 세션 ${d.pending}개의 대화는 아직 못 찾을 수 있습니다`);
-    count.textContent = notes.join(' · ');
+    //  수 한 줄 + (색인이 아직 따라오는 중이면) 안내 한 줄 — 안내가 수를 밀어내지 않게 줄을 가른다.
+    count.replaceChildren(
+      ...(hits.length ? [el('span', { class: 'shx-count-m' }, '맞은 말 ', el('b', { text: `${d.total}곳${d.capped ? ' 이상' : ''}` }), ' · 세션 ', el('b', { text: `${d.sessions}개` }))] : []),
+      ...(typeof d?.pending === 'number' && d.pending > 0 ? [el('span', { class: 'shx-count-note' }, ico('info'), el('span', { text: `대화 색인을 만드는 중입니다 — 세션 ${d.pending}개의 대화는 아직 못 찾을 수 있습니다` }))] : []));
     const kids: HTMLElement[] = hits.map((h) => {
       const name = String(h.name || '이름 없는 세션');
       const text = el('div', { class: 'shx-hit' });
       markInto(text, h.text, words);
-      const ctx = (l: { role: string; text: string } | null): HTMLElement | null => l ? el('div', { class: 'shx-ctx', text: who(l.role) + ' · ' + l.text }) : null;
-      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words, mark: h.text.slice(0, 48) },
-        el('div', { class: 'shx-row-m', text: [name, h.project || '프로젝트 없음', whenLabel(h.ts ? Date.parse(h.ts) : undefined, now), h.role === 'user' ? '내 지시' : 'AI 답'].filter(Boolean).join(' · ') }),
-        ctx(h.before), text, ctx(h.after));
+      const ctx = (l: { role: string; text: string } | null): HTMLElement | null => l ? el('div', { class: 'shx-ctx' }, el('b', { text: who(l.role) }), el('span', { text: l.text })) : null;
+      const when = whenLabel(h.ts ? Date.parse(h.ts) : undefined, now);
+      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words, mark: h.text.slice(0, 48), sub: [h.project || '프로젝트 없음', when].filter(Boolean).join(' · ') },
+        el('div', { class: 'shx-row-h' },
+          el('span', { class: 'shx-role ' + (h.role === 'user' ? 'me' : 'ai'), text: h.role === 'user' ? '내 지시' : 'AI 답' }),
+          el('b', { class: 'shx-row-n', text: name, title: name }),
+          el('span', { class: 'shx-row-when', text: when })),
+        el('div', { class: 'shx-thread' }, ctx(h.before), text, ctx(h.after)),
+        el('div', { class: 'shx-row-f' }, projEl(h.project)));
     });
-    if (!hits.length) kids.push(el('p', { class: 'admin-hint', text: '맞은 말이 없습니다. 기간이나 프로젝트를 넓히거나 다른 낱말로 찾아 보세요.' }));
+    if (!hits.length) kids.push(emptyBox({ icon: 'search', title: '맞은 말이 없습니다.', text: '기간이나 프로젝트를 넓히거나 다른 낱말로 찾아 보세요.' }));
     else if (hits.length < Number(d.total || 0)) {
       if (st.limit < HIT_MAX) kids.push(moreBtn('더 보기', () => { st.limit = Math.min(HIT_MAX, st.limit + HIT_STEP); void run(); }));
-      else kids.push(el('p', { class: 'admin-hint', text: `앞의 ${HIT_MAX}곳만 보여 줍니다. 기간·프로젝트·말한 쪽으로 좁혀 보세요.` }));
+      else kids.push(el('p', { class: 'shx-note', text: `앞의 ${HIT_MAX}곳만 보여 줍니다. 기간·프로젝트·말한 쪽으로 좁혀 보세요.` }));
     }
     list.replaceChildren(...kids);
   }
@@ -161,8 +188,9 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     const mySeq = ++seq;
     if (aborter) { aborter.abort(); aborter = null; }   // 글자를 더 치면 앞 요청을 끊는다
     const q = st.q.trim();
+    list.classList.remove('busy');
     if (!q) return drawRecent(mySeq);
-    if (q.length > 200) { count.textContent = ''; list.replaceChildren(el('p', { class: 'install-token-err', text: '검색어가 너무 깁니다(200자 이하).' })); return; }
+    if (q.length > 200) { count.textContent = ''; list.replaceChildren(errBox('검색어가 너무 깁니다(200자 이하).')); return; }
     return drawHits(mySeq, q);
   }
 

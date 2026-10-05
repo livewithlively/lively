@@ -3,11 +3,13 @@
 //  ⚠ 트랜스크립트 본문은 신뢰 불가 → el({text})(textContent) 또는 renderMarkdown(core, textContent 기반)로만 렌더(innerHTML 금지, XSS 방어).
 //  #4553(원준 2026-10-04) — 목록면(#/sessions)은 가로탭 셋(대화 찾기 · 작업 일지 · 세션 목록)인 앱이 됐다(sessions-app.ts).
 //   이 파일은 그 탭들이 함께 쓰는 대화록(mountTranscript)과, 프로젝트·터미널 화면의 「세션 기록」 모달이 쓰는 줄 목록을 쥔다.
+//  디자인(원준 2026-10-05 «프로젝트 본문 창 참고해서 그 디자인 언어로»): 대화록 = 본문 창의 결 — 머리(타일 · 이름 · 부제 · 도구) 아래
+//   읽기 칸(폭 760)과 옆 칸(「이 세션이 남긴 것」 · 질문 목차)이 나란히 선다. 칸마다 제 안에서 스크롤한다. 모양은 53-session-history.css.
 import { api, el, state, toast, renderMarkdown } from './core.js';
 import { hitAnchor, markRanges, type HitRef } from './session-history.js';
 import { requestOpenRoute } from './v2/ctx-registry.js';
 import { EMBEDDED } from './v2/embed.js';
-import { sessionLink } from './sessions-kit.js';
+import { btnOf, errBox, fitHeight, ibtnOf, ico, leftPanel, paneHead, sessionLink, setBtnLabel, skelRows, type PaneHead } from './sessions-kit.js';
 // #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
 import { confirmSessionTrash, eulReul, sessionTrashOp } from './session-actions.js';
 
@@ -196,14 +198,16 @@ function gotoAnchor(host: HTMLElement, sel: { q: string; ln: string }): void {
 }
 
 // ── 낱말 색칠 + 이 대화 안에서 찾기(#4553 「대화 찾기」) ──
-//  색칠은 **글 노드만** 만진다(innerHTML 금지 — 대화록 본문은 신뢰할 수 없다). 코드 블록·표 안의 글도 글 노드라 함께 칠해진다.
+//  색칠은 **대화의 글(.sess-line) 안의 글 노드만** 만진다(innerHTML 금지 — 대화록 본문은 신뢰할 수 없다). 코드 블록·표 안의 글도
+//  글 노드라 함께 칠해진다. 질문 번호 · 도구 호출 줄 · 옆 칸의 글은 대화의 글이 아니라 칠하지 않는다.
 function paintWords(root: HTMLElement, words: string[]): HTMLElement[] {
   if (!words.length) return [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const texts: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const t = n as Text;
-    if (!t.data.trim() || (t.parentElement && t.parentElement.closest('.sess-line-copy'))) continue;
+    const p = t.parentElement;
+    if (!t.data.trim() || !p || !p.closest('.sess-line') || p.closest('.sess-line-copy')) continue;
     texts.push(t);
   }
   const lines = new Set<HTMLElement>();
@@ -227,7 +231,7 @@ function paintWords(root: HTMLElement, words: string[]): HTMLElement[] {
 }
 
 export interface TranscriptOpts {
-  /** 세션 이력 앱의 칸 안에 실린 판 — 「← 뒤로」가 없고 칸을 채운다. */
+  /** 칸·창 안에 실린 판 — 「뒤로」가 없고 그 자리를 채운다. */
   embedded?: boolean;
   /** 색칠할 낱말(「대화 찾기」의 검색어). 있으면 이 대화 안의 맞은 자리를 오가는 줄이 선다. */
   words?: string[];
@@ -235,19 +239,27 @@ export interface TranscriptOpts {
   hit?: HitRef | null;
   /** 목록이 아는 세션 이름 — 없으면 첫 질문으로 짓는다. */
   name?: string;
+  /** 머리 부제에 먼저 설 말(프로젝트 · 언제) — 뒤에 «질문 n개» 가 붙는다. */
+  sub?: string;
   /** 휴지통으로 보낸 뒤 할 일 — 없으면 목록(#/sessions)으로 간다. */
   onTrashed?: () => void;
-  /** 대화록 아래에 덧붙일 칸(「이 세션이 남긴 것」). */
-  footer?: () => HTMLElement | null;
+  /** 옆 칸 맨 위에 설 칸(「이 세션이 남긴 것」). */
+  rail?: () => HTMLElement | null;
   /** 「이어 질문하기」를 달지 않는다 — 세션으로 가는 문을 부르는 쪽이 따로 세운 자리(세션 목록 탭: 박스가 있으면 [세션 열기],
    *  기록만 남았으면 [이어 질문하기] 하나). 박스가 도는 대화를 기록으로 하나 더 열면 같은 대화가 둘이 된다. */
   noResume?: boolean;
+  /** 부르는 쪽이 세운 머리(세션 목록 탭의 상세) — 대화록은 제 머리를 세우지 않고 그 머리의 도구 자리에 제 단추만 단다. */
+  head?: PaneHead;
+  /** 이 대화를 돌리는 박스를 이미 안다 — 문이 처음부터 [세션 열기]다. */
+  boxId?: string | null;
+  /** 창으로 열린 판 — 머리 끝에 닫기 단추. */
+  onClose?: () => void;
 }
 
 /** 이어 질문하기 — 원본 박스에서 이 세션을 잇는다(원격·불가면 같은 프로젝트 새 세션 폴백). 만든 세션으로 간다. */
 export async function resumeSessionRecord(sid: string, node: string, btn?: HTMLButtonElement): Promise<void> {
-  const orig = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
+  const orig = btn ? (btn.querySelector('.shx-btn-l')?.textContent ?? btn.textContent) : null;
+  if (btn) { btn.disabled = true; setBtnLabel(btn, '여는 중…'); }
   try {
     const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
     if (r?.mode === 'resume') toast('이어서 대화할 세션을 열었습니다.');
@@ -257,57 +269,178 @@ export async function resumeSessionRecord(sid: string, node: string, btn?: HTMLB
     if (EMBEDDED && newId) requestOpenRoute('#/s/' + encodeURIComponent(newId), true);
     else location.hash = r?.projectId ? '#/projects2/p/' + r.projectId : '#/terminal';
     //  성공한 뒤엔 단추를 곧바로 되살리지 않는다 — 액자 안에서는 이 화면이 그대로 남아, 연달아 누르면 같은 대화의 세션이 둘 생긴다.
-    if (btn) { btn.textContent = '열었습니다'; setTimeout(() => { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; }, 5000); }
+    if (btn) { setBtnLabel(btn, '열었습니다'); setTimeout(() => { btn.disabled = false; setBtnLabel(btn, orig || '이어 질문하기'); }, 5000); }
   } catch (e: any) {
     toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
-    if (btn) { btn.disabled = false; btn.textContent = orig || '이어 질문하기'; }
+    if (btn) { btn.disabled = false; setBtnLabel(btn, orig || '이어 질문하기'); }
   }
 }
+
+/** 세션으로 가는 문 — [세션 열기](그 대화를 돌리는 박스의 세션 화면으로). */
+const doorLink = (boxId: string): HTMLAnchorElement => sessionLink(boxId, { class: 'shx-btn sess-door' }, ico('open'), el('span', { class: 'shx-btn-l', text: '세션 열기' }));
 
 /** 대화록 머리의 「이어 질문하기」를 「세션 열기」로 바꾼다 — 그 대화를 돌리는 박스를 알게 됐을 때(세션으로 가는 문은 하나다:
  *  박스가 있는 대화를 기록으로 하나 더 열면 같은 대화가 둘이 된다). host = 대화록을 실은 자리. */
 export function setTranscriptDoor(host: HTMLElement, boxId: string): void {
   const btn = host.querySelector('.sess-resume');
   if (!btn || !boxId) return;
-  btn.replaceWith(sessionLink(boxId, { class: 'btn btn-primary btn-sm sess-door' }, '세션 열기'));
+  btn.replaceWith(doorLink(boxId));
 }
 
-/** 숨어 있던 칸이 보이게 됐다 — 그 사이 실린 대화록의 접기(10줄 캡)를 이제 잰다. */
-export function refreshTranscripts(root: HTMLElement): void { finalizeCaps(root); }
+/** 숨어 있던 칸이 보이게 됐다 — 그 사이 실린 대화록의 폭(옆 칸을 세울지)과 접기(10줄 캡)를 이제 잰다. */
+export function refreshTranscripts(root: HTMLElement): void {
+  for (const w of Array.from(root.querySelectorAll('.sess-wrap')) as HTMLElement[]) placers.get(w)?.();
+  finalizeCaps(root);
+}
+/** 대화록의 폭이 이보다 좁으면 옆 칸을 세우지 않는다(목차는 서랍으로, 「남긴 것」은 읽기 칸 맨 위로). */
+const RAIL_MIN_PX = 820;
+/** 대화록(.sess-wrap)마다 «폭을 다시 재는 일». 감춰진 칸에서는 폭이 0 이라 못 잰다 — 보일 때 refreshTranscripts 가 부른다. */
+const placers = new WeakMap<HTMLElement, () => void>();
+/** 대화록을 실은 자리(host)마다 «지켜보던 것을 걷는 일»(폭 · 읽는 자리). 그 자리에 다음 대화록이 설 때와 창이 닫힐 때 부른다. */
+const watchers = new WeakMap<HTMLElement, () => void>();
+let sideSeq = 0;
 
 export async function renderTranscriptPage(view: any, sel: { sid: string; node: string; q: string; ln: string }): Promise<void> {
-  return mountTranscript(view, sel, {});
+  const host = view as HTMLElement;
+  //  내 세션이면 옆 칸에 「남긴 것」이 서고, 그 대화를 돌리는 박스를 알게 되면 문이 [세션 열기] 하나로 바뀐다(칸 안의 판과 같은 규칙).
+  return mountTranscript(host, sel, { rail: () => leftPanel(sel.sid, sel.node, (r) => { if (r.box_id) setTranscriptDoor(host, r.box_id); }) });
 }
 
-/** 대화록을 host 에 싣는다 — 단독 페이지(#/sessions/<sid>)와 세션 이력 앱의 칸(embedded)이 같은 한 벌을 쓴다. */
+/**
+ * 대화록을 창으로 연다 — 화면을 옮기지 않는다(프로젝트 「본문」 창과 같은 결: 읽고 Esc 로 닫으면 보던 자리가 그대로다).
+ *  작업 일지의 [대화록 열기]가 쓴다. 새 탭·가운데 클릭은 부르는 쪽 링크가 단독 화면(#/sessions/<sid>)으로 보낸다.
+ */
+export function openTranscriptWindow(sel: { sid: string; node: string }, o: { name?: string; sub?: string; boxId?: string | null; onTrashed?: () => void } = {}): void {
+  const win = el('div', { class: 'shx-win', role: 'dialog', 'aria-modal': 'true', 'aria-label': (o.name || '대화록') + ' 대화록', tabindex: '-1' }) as HTMLElement;
+  const back = el('div', { class: 'shx-mback' }, win) as HTMLElement;
+  const prev = document.activeElement as HTMLElement | null;
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    back.remove();
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('hashchange', close);
+    watchers.get(win)?.();
+    try { if (prev && prev.isConnected) prev.focus(); } catch { /* 돌아갈 자리가 사라졌다 */ }
+  };
+  //  위에 뜬 것(확인창 .ov-back · 우클릭 메뉴 .pn-ctx · 태스크 창)이 있으면 그 Esc 는 그쪽 몫이다 — 프로젝트 「본문」 창과 같은 규칙
+  //   (projects/detail-hub). 그래서 버블 단계에서 듣고 전파를 막지 않는다. 종전엔 캡처 단계에서 가로채 확인창 대신 이 창이 닫혔다(격리 리뷰).
+  const above = (): boolean => !!document.querySelector('.ov-back, .pn-ctx, .pjv-menu, .pjv-tm-back');
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') { if (!e.defaultPrevented && !e.isComposing && !above()) close(); return; }
+    if (e.key !== 'Tab' || above()) return;
+    //  초점은 창 안에서 돈다(뒤에 깔린 일지로 새지 않는다).
+    const f = (Array.from(win.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')) as HTMLElement[]).filter((n) => n.getClientRects().length > 0);
+    if (!f.length) return;
+    const first = f[0]!, last = f[f.length - 1]!, at = document.activeElement;
+    if (!win.contains(at) || at === win) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+    else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+  };
+  back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onKey);
+  //  주소가 바뀌면(뒤로 가기 · 다른 화면으로) 창을 걷는다 — 다른 화면 위에 남은 창에서 한 일이 떠난 화면의 것을 건드린다.
+  window.addEventListener('hashchange', close);
+  document.body.append(back);
+  try { win.focus(); } catch { /* */ }
+  void mountTranscript(win, { sid: sel.sid, node: sel.node, q: '', ln: '' }, {
+    embedded: true, name: o.name, sub: o.sub, boxId: o.boxId, onClose: close,
+    rail: () => leftPanel(sel.sid, sel.node, (r) => { if (r.box_id) setTranscriptDoor(win, r.box_id); }),
+    onTrashed: () => { close(); if (o.onTrashed) o.onTrashed(); },
+  });
+}
+
+/** 말의 시각 — «10월 3일 14:10». 읽을 수 없으면 빈 글. */
+function fmtAt(iso?: string): string {
+  const d = iso ? new Date(iso) : null;
+  if (!d || !Number.isFinite(d.getTime())) return '';
+  const p2 = (n: number): string => (n < 10 ? '0' : '') + n;
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+
+/** 대화록을 host 에 싣는다 — 단독 페이지(#/sessions/<sid>) · 세션 이력 앱의 칸 · 창(embedded)이 같은 한 벌을 쓴다. */
 export async function mountTranscript(host: HTMLElement, sel: { sid: string; node: string; q: string; ln: string }, opts: TranscriptOpts = {}): Promise<void> {
   const { sid, node } = sel;
-  const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
-  copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
-  const resumeBtn = el('button', { class: 'btn btn-primary btn-sm sess-resume', text: '💬 이어 질문하기' }) as HTMLButtonElement;
+  watchers.get(host)?.();   // 이 자리에 서 있던 대화록이 지켜보던 것을 걷는다
+  const own = !opts.head;
+  const head = opts.head ?? paneHead(opts.name || '세션 ' + shortId(sid), { sub: opts.sub });
+  const titleEl = head.title;
+  head.tools.replaceChildren();
+  // 세션으로 가는 문 — 박스를 알면 [세션 열기], 모르면 「이어 질문하기」(박스를 알게 되면 setTranscriptDoor 가 바꾼다).
+  //  부르는 쪽이 세운 머리에는 달지 않는다: 그 머리의 문은 그쪽이 세운다(같은 머리에 다시 실릴 때마다 문이 겹쳐 서고,
+  //  setTranscriptDoor 는 host 밖의 머리를 찾지 못한다).
+  const resumeBtn = btnOf('이어 질문하기', { icon: 'chat', cls: 'sess-resume' });
   resumeBtn.addEventListener('click', () => { void resumeSessionRecord(sid, node, resumeBtn); });
+  if (own && !opts.noResume) head.acts.append(opts.boxId ? doorLink(opts.boxId) : resumeBtn);
+  const sideId = 'sess-side-' + (++sideSeq);
+  const railBtn = btnOf('목차', { icon: 'list', kind: 'ghost', cls: 'sess-rail-btn', title: '질문 목차 여닫기' });
+  railBtn.hidden = true;   // 폭을 재서 좁을 때만 세운다(넓으면 옆 칸이 늘 서 있다)
+  railBtn.setAttribute('aria-expanded', 'false');
+  railBtn.setAttribute('aria-controls', sideId);
+  const copyBtn = ibtnOf('link', '링크 복사');
+  copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
+  head.tools.append(railBtn, copyBtn);
   let returnTo = '#/sessions';
   try { returnTo = sessionStorage.getItem('sessReturn') || '#/sessions'; } catch { /* */ }
-  const back = opts.embedded ? null : el('a', { class: 'btn btn-ghost btn-sm', href: returnTo, text: '← 뒤로' });
-  const acts = el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, ...(opts.noResume ? [] : [resumeBtn]), copyBtn, ...(back ? [back] : []));
-  const titleEl = el('h2', { class: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: opts.name || '세션 ' + shortId(sid) });
-  const findSlot = el('div', { class: 'sess-find', hidden: true });
-  const sideSlot = el('nav', { class: 'sess-side' });
-  const convo = el('div', { class: 'sess-main', style: 'min-width:0' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-  host.replaceChildren(el('div', { class: opts.embedded ? 'sess-embed' : 'card', style: opts.embedded ? '' : 'max-width:1160px;margin:20px auto' },
-    el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, titleEl, acts),
-    findSlot,
-    el('div', { class: 'sess-layout', style: 'display:flex;gap:20px;align-items:flex-start;margin-top:8px' }, sideSlot, convo)));
+  if (!opts.embedded) head.el.prepend(el('a', { class: 'shx-btn ghost sess-back', href: returnTo }, ico('chevL'), el('span', { class: 'shx-btn-l', text: '뒤로' })));
+  if (own && opts.onClose) { const x = ibtnOf('x', '닫기 (Esc)', 'sess-close'); x.addEventListener('click', opts.onClose); head.el.append(x); }
+
+  const findSlot = el('div', { class: 'sess-find', hidden: true }) as HTMLElement;
+  const sideSlot = el('nav', { class: 'sess-side', id: sideId, 'aria-label': '질문 목차 · 남긴 것' }) as HTMLElement;
+  const convo = el('div', { class: 'sess-main' }, skelRows(4, 'read')) as HTMLElement;
+  const wrap = el('div', { class: 'sess-wrap ' + (opts.embedded ? 'sess-embed' : 'sess-page shx-card') },
+    ...(own ? [head.el] : []), findSlot,
+    el('div', { class: 'sess-layout' }, convo, sideSlot)) as HTMLElement;
+  host.replaceChildren(wrap);
+  if (!opts.embedded) fitHeight(wrap);
+  //  좁은 칸에서는 질문 목차가 서랍이 된다(머리의 [목차]로 여닫는다 · Esc 로 닫는다). 「남긴 것」은 서랍에 감추지 않고 읽기 칸
+  //  맨 위에 세운다 — 셸 액자 안의 칸은 늘 좁아서, 서랍에 넣으면 기본 화면에서 아무도 못 본다(격리 리뷰). 넓으면 둘 다 옆 칸에 선다.
+  let railTop: HTMLElement | null = null;
+  const setRail = (on: boolean, focus = false): void => {
+    wrap.classList.toggle('rail-open', on);
+    railBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on && focus) (sideSlot.querySelector('.sess-side-item') as HTMLElement | null)?.focus();
+  };
+  railBtn.addEventListener('click', () => setRail(!wrap.classList.contains('rail-open'), true));
+  const onEsc = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !wrap.classList.contains('rail-open')) return;
+    e.preventDefault();   // 이 Esc 는 서랍이 썼다 — 바깥(대화록 창)이 닫히지 않는다
+    setRail(false);
+    railBtn.focus();
+  };
+  wrap.addEventListener('keydown', onEsc);
+  railBtn.addEventListener('keydown', onEsc);
+  const place = (): void => {
+    const w = wrap.clientWidth;
+    if (!w) return;   // 감춰진 칸 — 보일 때 다시 잰다(refreshTranscripts)
+    const narrow = w < RAIL_MIN_PX;
+    wrap.classList.toggle('narrow', narrow);
+    railBtn.hidden = !narrow;
+    if (!narrow) setRail(false);
+    //  「남긴 것」 — 넓으면 옆 칸 맨 위, 좁으면 읽기 칸 맨 위. 내 세션이 아니라 걷힌 칸(부모가 없다)은 다시 세우지 않는다.
+    if (railTop && railTop.parentElement) { const to = narrow ? convo : sideSlot; if (railTop.parentElement !== to) to.prepend(railTop); }
+  };
+  placers.set(wrap, place);
+  let ro: ResizeObserver | null = null;
+  let io: IntersectionObserver | null = null;
+  const stop = (): void => { if (ro) ro.disconnect(); if (io) io.disconnect(); ro = io = null; };
+  //  화면에서 떨어지면(다른 줄을 골라 칸째 갈렸다) 크기가 0 이 되며 한 번 불린다 — 그때 스스로 걷는다.
+  if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => { if (wrap.isConnected) place(); else stop(); }); ro.observe(wrap); }
+  watchers.set(host, stop);
+  place();
 
   const qy = new URLSearchParams({ node, view: 'render' }).toString();
   let data: any;
   try { data = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${qy}`); }
-  catch (e: any) { convo.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '대화록을 불러오지 못했습니다(열람 권한이 없을 수 있습니다).' })); return; }
+  catch (e: any) { if (wrap.isConnected) convo.replaceChildren(errBox(e?.message || '대화록을 불러오지 못했습니다(열람 권한이 없을 수 있습니다).')); return; }
+  //  답이 오기 전에 이 자리에 다른 대화록이 실렸다 — 늦은 답이 부르는 쪽의 머리(도구 자리)를 건드리지 않게 여기서 그친다.
+  if (!wrap.isConnected) return;
   const items: Item[] = Array.isArray(data?.items) ? data.items : [];
-  // 휴지통으로(#3778 — 종전 [완전 삭제]) — 서버가 판정한 isOwner 일 때만 헤더에 단다. 이 화면은 공유 링크로도 열리므로
+  // 휴지통으로(#3778 — 종전 [완전 삭제]) — 서버가 판정한 isOwner 일 때만 머리에 단다. 이 화면은 공유 링크로도 열리므로
   //  '내가 로그인해 있다'가 '내 대화다'를 뜻하지 않는다(view_policy=attach 면 팀원의 대화도 여기서 열린다).
   if (data?.isOwner) {
-    const trashBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '휴지통으로' }) as HTMLButtonElement;
+    const trashBtn = ibtnOf('trash', '휴지통으로');
     trashBtn.addEventListener('click', async () => {
       const name = titleEl.textContent || shortId(sid);
       if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
@@ -323,20 +456,27 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
         trashBtn.disabled = false;
       }
     });
-    acts.insertBefore(trashBtn, back);
+    head.tools.append(trashBtn);
   }
-  if (!items.length) { convo.replaceChildren(el('p', { class: 'admin-hint', text: '표시할 대화가 없습니다.' })); return; }
+  railTop = opts.rail ? opts.rail() : null;
+  if (!items.length) {
+    sideSlot.replaceChildren(...(railTop ? [railTop] : []));
+    convo.replaceChildren(el('p', { class: 'shx-note', text: '표시할 대화가 없습니다.' }));
+    place();
+    return;
+  }
 
   const grouped = groupTurns(items);
   // 답변 없이 취소된(보냈다 esc) 질문 숨김 — 사용자 발화가 있는데 어시스턴트 '답변 텍스트'가 없고 마지막 턴이 아니면
   //  이어지는 다른 질문이 있다는 뜻(=취소하고 다시 보냄). 마지막 턴·선행 AI(user=null)·답변 있는 턴은 유지.
   const turns = grouped.filter((t, i) => i === grouped.length - 1 || !t.user || t.ai.some((x) => x.role === 'assistant' && !!x.text));
   const firstQ = turns.find((t) => t.user)?.user?.text;
-  if (firstQ && !opts.name) titleEl.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ;
-  sideSlot.replaceChildren(sidebar(turns, sid, node, convo));
+  if (firstQ && !opts.name) { titleEl.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ; titleEl.title = firstQ.slice(0, 300); }
+  //  부제 — 부르는 쪽이 아는 말(프로젝트 · 언제) 뒤에 이 대화의 크기를 붙인다. 부르는 쪽 머리(세션 목록 상세)는 그쪽이 쓴다.
+  if (own) head.sub.textContent = [opts.sub, `질문 ${turns.filter((t) => t.user).length}개`].filter(Boolean).join(' · ');
   convo.replaceChildren(...turns.map((t, i) => turnEl(t, i, sid, node)));
-  const foot = opts.footer ? opts.footer() : null;
-  if (foot) convo.append(foot);
+  sideSlot.replaceChildren(...(railTop ? [railTop] : []), sidebar(turns, sid, node, convo, () => setRail(false)));
+  place();   // 「남긴 것」을 제자리에(좁은 칸이면 읽기 칸 맨 위로 옮긴다)
 
   //  낱말 색칠 · 이 대화 안에서 찾기 — 고른 맞은 말의 자리(시각으로 찾는다)에서 시작한다.
   const words = (opts.words || []).filter(Boolean);
@@ -352,12 +492,12 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
       paint();
       reveal(hitLines[cur]!);
     };
-    const prev = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '‹ 이전' }) as HTMLButtonElement;
-    const next = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다음 ›' }) as HTMLButtonElement;
+    const prev = ibtnOf('chevL', '이전 자리');
+    const next = ibtnOf('chevR', '다음 자리');
     prev.addEventListener('click', () => go(cur < 0 ? hitLines.length - 1 : cur - 1));
     next.addEventListener('click', () => go(cur + 1));
     prev.disabled = next.disabled = hitLines.length < 1;
-    findSlot.replaceChildren(el('span', { class: 'sess-find-q', text: '「' + words.join(' ') + '」' }), count, prev, next);
+    findSlot.replaceChildren(ico('search'), el('span', { class: 'sess-find-q', text: words.join(' ') }), count, el('span', { class: 'sess-find-nav' }, prev, next));
     findSlot.hidden = false;
     //  시작 자리 — 고른 말의 블록이 맞은 줄 가운데 있으면 그 번호부터 센다.
     if (want) {
@@ -372,6 +512,7 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
     const to = sel.q || sel.ln ? { q: sel.q, ln: sel.ln } : want;
     if (to) setTimeout(() => gotoAnchor(convo, to), 60);
   });
+  io = spyTurns(convo, sideSlot);
 
   // 서브에이전트 트리(#905 C1 슬⑥) — 이 세션이 스폰한 서브에이전트들. 접힌 목록, 클릭 시 각자 대화록으로.
   api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/subagents${node ? '?node=' + encodeURIComponent(node) : ''}`)
@@ -379,25 +520,47 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
     .catch(() => { /* 서브에이전트 없음/권한없음 — 조용히 */ });
 }
 
-// 서브에이전트 트리 섹션 — 기본 접힘 '🌿 서브에이전트 N개', 펼치면 각 서브에이전트(제목·크기) 링크(자기 대화록으로).
+/** 읽는 자리의 질문을 목차에서 켠다. 그리기가 없는 자리(헤드리스 · 옛 브라우저)에서는 아무것도 하지 않는다.
+ *  ⚠ 목차 쪽은 scrollTop 만 만진다 — scrollIntoView 는 바깥(문서 · 셸 액자)까지 굴린다. */
+function spyTurns(convo: HTMLElement, side: HTMLElement): IntersectionObserver | null {
+  if (typeof IntersectionObserver !== 'function') return null;
+  const seen = new Set<string>();
+  const mark = (): void => {
+    let top = '';
+    for (const t of Array.from(convo.querySelectorAll('.sess-turn')) as HTMLElement[]) if (seen.has(t.id)) { top = t.id.slice(5); break; }
+    for (const b of Array.from(side.querySelectorAll('.sess-side-item')) as HTMLElement[]) {
+      const on = b.dataset.turn === top;
+      if (on && !b.classList.contains('on')) {
+        const r = b.getBoundingClientRect(), s = side.getBoundingClientRect();
+        if (r.top < s.top || r.bottom > s.bottom) side.scrollTop += r.top - s.top - s.height / 3;
+      }
+      b.classList.toggle('on', on);
+      if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    }
+  };
+  const io = new IntersectionObserver((es) => {
+    if (!convo.isConnected) { io.disconnect(); return; }
+    for (const e of es) { if (e.isIntersecting) seen.add((e.target as HTMLElement).id); else seen.delete((e.target as HTMLElement).id); }
+    mark();
+  }, { root: convo, rootMargin: '0px 0px -55% 0px' });
+  for (const t of Array.from(convo.querySelectorAll('.sess-turn'))) io.observe(t);
+  return io;   // 이 자리에 다음 대화록이 설 때 부르는 쪽이 걷는다 — 통째로 떨어진 나무에서는 콜백이 안 불려 스스로 못 걷는다
+}
+
+// 서브에이전트 트리 섹션 — 기본 접힘 「서브에이전트 N개」, 펼치면 각 서브에이전트(제목·크기) 링크(자기 대화록으로).
 function subagentsSection(subs: SessRow[]): any {
-  const list = el('div', { style: 'display:none;margin:4px 0 4px 8px;border-left:2px solid rgba(22,163,74,.3);padding-left:10px' },
+  const list = el('div', { class: 'sess-subs-d', hidden: true },
     ...subs.map((s) => {
       const link = '#/sessions/' + encodeURIComponent(s.session_id) + (s.node_id ? '?node=' + encodeURIComponent(s.node_id) : '');
-      const title = s.title || shortId(s.session_id);
-      const a = el('a', { href: link, style: 'display:block;padding:4px 0;text-decoration:none;color:inherit;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-        el('span', { text: '🌿 ' + title }),
-        el('span', { class: 'admin-hint', style: 'font-size:11px;margin-left:6px', text: fmtBytes(s.bytes) }));
+      const a = el('a', { class: 'sess-sub', href: link }, ico('layers'),
+        el('span', { class: 'sess-sub-t', text: s.title || shortId(s.session_id) }),
+        el('span', { class: 'sess-sub-m', text: fmtBytes(s.bytes) }));
       a.addEventListener('click', () => { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } });
       return a;
     }));
-  const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin:8px 0 2px;font-size:12px', text: `🌿 서브에이전트 ${subs.length}개 ▸` });
-  btn.addEventListener('click', () => {
-    const open = list.style.display === 'none';
-    list.style.display = open ? 'block' : 'none';
-    btn.textContent = `🌿 서브에이전트 ${subs.length}개 ${open ? '▾' : '▸'}`;
-  });
-  return el('div', { style: 'margin-top:10px;border-top:1px solid rgba(127,127,127,.15);padding-top:6px' }, btn, list);
+  const btn = el('button', { class: 'sess-tools', type: 'button', 'aria-expanded': 'false' }, ico('layers'), el('b', { text: `서브에이전트 ${subs.length}개` }), ico('chevR', 'sess-tools-c'));
+  btn.addEventListener('click', () => { const open = list.hidden; list.hidden = !open; btn.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+  return el('div', { class: 'sess-subs' }, btn, list);
 }
 
 // 사람 발화마다 새 턴 시작, 뒤따르는 AI/툴은 그 턴에 붙인다(첫 사람 발화 이전 AI 는 user=null 턴).
@@ -411,16 +574,17 @@ function groupTurns(items: Item[]): Turn[] {
   return turns;
 }
 
-// 질문 사이드바(skimming/navigate) — 항상 보이는 세로 목록. 항목 클릭 = 그 질문으로 스크롤, 🔗 = 질문 링크 복사.
-function sidebar(turns: Turn[], sid: string, node: string, convo: HTMLElement): any {
+// 질문 목차(skimming/navigate) — 옆 칸의 세로 목록. 항목 클릭 = 그 질문으로 스크롤, 링크 단추 = 질문 링크 복사.
+function sidebar(turns: Turn[], sid: string, node: string, convo: HTMLElement, onGo?: () => void): any {
   const qs = turns.map((t, i) => ({ i, text: t.user?.text || '' })).filter((x) => x.text);
-  const box = el('div', {},
-    el('div', { class: 'sess-side-head', text: `질문 ${qs.length}개` }));
-  if (!qs.length) { box.append(el('p', { class: 'admin-hint', style: 'font-size:12px', text: '(질문 없음)' })); return box; }
+  const box = el('div', { class: 'sess-toc' },
+    el('div', { class: 'shx-rail-h sess-side-head' }, '질문 ', el('b', { text: String(qs.length) })));
+  if (!qs.length) { box.append(el('p', { class: 'shx-note', text: '질문이 없는 대화입니다.' })); return box; }
   for (const q of qs) {
-    const label = el('button', { class: 'sess-side-item', title: q.text, text: `${q.i + 1}. ${q.text}` });
-    label.addEventListener('click', () => byId(convo, 'turn-' + q.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-    const cp = el('button', { class: 'sess-side-copy', title: '이 질문 링크 복사', text: '🔗' });
+    const label = el('button', { class: 'sess-side-item', type: 'button', title: q.text.slice(0, 300), 'data-turn': String(q.i) },
+      el('span', { class: 'sess-side-no', text: String(q.i + 1) }), el('span', { class: 'sess-side-tx', text: q.text }));
+    label.addEventListener('click', () => { byId(convo, 'turn-' + q.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); if (onGo) onGo(); });
+    const cp = ibtnOf('link', '이 질문 링크 복사', 'sess-side-copy');
     cp.addEventListener('click', (e: any) => { e.stopPropagation(); copyLink(buildShareLink(sid, node, { q: String(q.i) })); });
     box.append(el('div', { class: 'sess-side-row' }, label, cp));
   }
@@ -428,8 +592,15 @@ function sidebar(turns: Turn[], sid: string, node: string, convo: HTMLElement): 
 }
 
 function turnEl(t: Turn, idx: number, sid: string, node: string): any {
-  const box = el('div', { class: 'sess-turn', id: 'turn-' + idx, style: 'margin:8px 0 14px' });
-  if (t.user) box.append(userBubble(t.user.text, idx, sid, node));
+  const box = el('div', { class: 'sess-turn', id: 'turn-' + idx });
+  if (t.user) {
+    //  질문 머리 — 목차의 번호와 같은 번호 · 말한 때. 대화의 글이 아니다(낱말 색칠·찾기에 걸리지 않는다).
+    const at = fmtAt(t.user.ts);
+    box.append(el('div', { class: 'sess-turn-h' },
+      el('span', { class: 'sess-turn-n', text: '질문 ' + (idx + 1) }),
+      at ? el('span', { class: 'sess-turn-at', text: at }) : null));
+    box.append(userBubble(t.user.text, idx, sid, node));
+  }
   // 이 턴의 AI 답변 '전체'(다음 질문 전까지의 모든 어시스턴트 텍스트)를 하나의 10줄 캡으로 묶는다.
   const aiTexts = t.ai.filter((x) => x.role === 'assistant' && !!x.text);
   if (aiTexts.length) box.append(aiTurnBubble(aiTexts, idx, sid, node));
@@ -438,35 +609,35 @@ function turnEl(t: Turn, idx: number, sid: string, node: string): any {
   return box;
 }
 
-// 한 줄/블록을 앵커(id)+호버 링크복사(🔗)로 감싼다 — 질문/답변의 특정 지점으로 링크 전달.
+// 한 줄/블록을 앵커(id)+호버 링크복사로 감싼다 — 질문/답변의 특정 지점으로 링크 전달.
 function lineWrap(content: any, anchor: string, sid: string, node: string): any {
-  const cp = el('button', { class: 'sess-line-copy', title: '이 지점 링크 복사', text: '🔗' });
+  const cp = el('button', { class: 'sess-line-copy', type: 'button', title: '이 지점 링크 복사', 'aria-label': '이 지점 링크 복사' }, ico('link'));
   cp.addEventListener('click', () => copyLink(buildShareLink(sid, node, { ln: anchor })));
   return el('div', { class: 'sess-line', id: 'ln-' + anchor }, cp, content);
 }
 
-// 사람 질문 — 파란 배경(라벨 없음). 원문 그대로(줄 단위 앵커), 10줄 넘으면 접힘.
+// 사람 질문 — tint 상자(본문 창의 인용 상자와 같은 결). 원문 그대로(줄 단위 앵커), 10줄 넘으면 접힘.
 function userBubble(text: string, turnIdx: number, sid: string, node: string): any {
-  const body = el('div', { class: 'sess-body clamp', style: 'font-size:14px' });
+  const body = el('div', { class: 'sess-body clamp' });
   const lines = text.split('\n');
-  lines.forEach((ln, li) => body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text: ln || ' ' }), `${turnIdx}-q-${li}`, sid, node)));
+  lines.forEach((ln, li) => body.append(lineWrap(el('span', { class: 'sess-pre', text: ln || ' ' }), `${turnIdx}-q-${li}`, sid, node)));
   return el('div', { class: 'sess-bubble sess-user' }, body);
 }
 
 // AI 답변(턴 전체) — 이 턴의 모든 어시스턴트 텍스트를 **하나의** 10줄 캡 컨테이너에 담는다(질문 사이의 답변 통짜 캡).
 //  마크다운 렌더(**/목록/코드/표, textContent 기반 안전) + 블록 단위 앵커. 여러 답변 블록은 세로로 이어 붙인다.
 function aiTurnBubble(aiTexts: Item[], turnIdx: number, sid: string, node: string): any {
-  const body = el('div', { class: 'sess-body clamp', style: 'font-size:13.5px' });
+  const body = el('div', { class: 'sess-body clamp' });
   aiTexts.forEach((it, aiIdx) => {
     const md = renderMarkdown(it.text);                   // <div class=md> — 안전 렌더(core)
     const blocks = Array.from(md.children) as any[];       // 블록 요소만(스냅샷 — append 가 원소를 옮기므로)
-    if (!blocks.length) body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text: it.text }), `${turnIdx}-a${aiIdx}-0`, sid, node));
+    if (!blocks.length) body.append(lineWrap(el('span', { class: 'sess-pre', text: it.text }), `${turnIdx}-a${aiIdx}-0`, sid, node));
     else blocks.forEach((b, bi) => body.append(lineWrap(b, `${turnIdx}-a${aiIdx}-${bi}`, sid, node)));
   });
   return el('div', { class: 'sess-bubble sess-ai' }, body);
 }
 
-// 마운트 후 실제 높이로 캡 확정 — 안 넘치면 clamp 해제(버튼 없음), 넘치면 [더보기]/[접기]. (CSS 로 처음부터 접혀 플리커 없음)
+// 마운트 후 실제 높이로 캡 확정 — 안 넘치면 clamp 해제(버튼 없음), 넘치면 [더 보기]/[접기]. (CSS 로 처음부터 접혀 플리커 없음)
 function finalizeCaps(root: any): void {
   root.querySelectorAll('.sess-body.clamp').forEach((body: any) => {
     if (body.dataset.capReady) return;
@@ -475,25 +646,27 @@ function finalizeCaps(root: any): void {
     if (!body.getClientRects().length) return;
     body.dataset.capReady = '1';
     if (body.scrollHeight <= body.clientHeight + 4) { body.classList.remove('clamp'); return; }   // 안 넘침 → 펼쳐둠
-    const btn = el('button', { class: 'btn btn-ghost btn-sm sess-more', style: 'font-size:12px;margin-top:4px', text: '더보기 ▾' });
+    const label = el('span', { class: 'sess-more-l', text: '더 보기' });
+    const btn = el('button', { class: 'sess-more', type: 'button', 'aria-expanded': 'false' }, label, ico('chevD'));
     let expanded = false;
-    btn.addEventListener('click', () => { expanded = !expanded; body.classList.toggle('clamp', !expanded); btn.textContent = expanded ? '접기 ▴' : '더보기 ▾'; });
+    btn.addEventListener('click', () => {
+      expanded = !expanded;
+      body.classList.toggle('clamp', !expanded);
+      btn.classList.toggle('on', expanded);
+      btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      label.textContent = expanded ? '접기' : '더 보기';
+    });
     if (body.parentElement) body.parentElement.append(btn);
   });
 }
 
-// 툴 호출 — 기본 접힘. [펼치기] 하면 이름+요약 목록(노이즈 제거하되 볼 수는 있게).
+// 툴 호출 — 기본 접힘. 누르면 이름+요약 목록(노이즈 제거하되 볼 수는 있게). 이름이 길어도 왼쪽부터 읽히고 끝에서 줄인다.
 function toolsChip(tools: Item[]): any {
   const names = [...new Set(tools.map((t) => t.tool).filter(Boolean))].slice(0, 4).join(', ');
-  const detail = el('div', { style: 'display:none;margin:4px 0 4px 8px;padding:6px 10px;border-left:2px solid rgba(161,98,7,.35);background:rgba(161,98,7,.06);border-radius:4px' },
-    ...tools.map((t) => el('div', { style: 'font-size:12px;padding:2px 0;font-family:ui-monospace,Menlo,monospace' },
-      el('span', { style: 'color:var(--warn-ink);font-weight:600', text: (t.tool || 'tool') + ' ' }),
-      el('span', { style: 'opacity:.8', text: t.text || '' }))));
-  const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin:2px 0 2px 8px;font-size:12px', text: `🔧 도구 ${tools.length}개${names ? ' · ' + names : ''} ▸` });
-  btn.addEventListener('click', () => {
-    const open = detail.style.display === 'none';
-    detail.style.display = open ? 'block' : 'none';
-    btn.textContent = `🔧 도구 ${tools.length}개${names ? ' · ' + names : ''} ${open ? '▾' : '▸'}`;
-  });
-  return el('div', {}, btn, detail);
+  const detail = el('div', { class: 'sess-tools-d', hidden: true },
+    ...tools.map((t) => el('div', { class: 'sess-tool' }, el('b', { text: t.tool || 'tool' }), el('span', { text: t.text || '' }))));
+  const btn = el('button', { class: 'sess-tools', type: 'button', 'aria-expanded': 'false' },
+    ico('term'), el('b', { text: `도구 ${tools.length}개` }), names ? el('span', { class: 'sess-tools-n', text: names }) : null, ico('chevR', 'sess-tools-c'));
+  btn.addEventListener('click', () => { const open = detail.hidden; detail.hidden = !open; btn.setAttribute('aria-expanded', open ? 'true' : 'false'); });
+  return el('div', { class: 'sess-toolbox' }, btn, detail);
 }
