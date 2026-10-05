@@ -3566,6 +3566,43 @@ async function loadSessionMeta() {
 //  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
 //  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
 //   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+// ── 새 판 자가 적용 (#4562 원준 10-05 «이전에 열었던 세션에서도 적용되게») ─────────────────────────────
+//  셸에는 낡은 화면 자가복구(web/gen-watch.ts)가 있지만 **이 터미널 프레임엔 없었다** — 배포 전에 연 세션은 페이지를 통째로
+//  새로고침하기 전까지 옛 터미널 코드(링크 판정 등)로 돌았다. 그래서 이 프레임이 스스로 묻고 다시 싣는다.
+//  ★ 언제: ① **재연결 직후** — 매니지드 롤은 터미널 웹소켓을 한 번 끊는다(무중단 롤의 유일한 경계). 그 끊김이 곧 «새 판이
+//   나왔다» 는 자리라, 사람이 아무것도 안 해도 롤 몇 초 뒤 열린 세션이 전부 새 코드로 넘어간다. ② 창이 다시 보일 때.
+//  ★ 셸의 «알림만(notify)» 정책(#2126)을 따르지 않는 이유: 그 정책이 지키는 것은 **화면에 쓰던 글**인데, 터미널에서 친 글은
+//   서버(tmux 팬)에 있고 글칸 초안은 sessionStorage 에 남는다(MDRAFT_KEY) — 다시 실어도 잃는 글이 없다. 잃는 것은 로컬
+//   스크롤백 중 백필(BACKFILL_LINES) 너머뿐이다. 선택 중(복사하려는 중)이면 미룬다.
+//  ⚠ 같은 세대로 두 번 싣지 않는다(sessionStorage) — 스탬프가 어긋난 배포에서 재연결마다 다시 싣는 고리를 막는다.
+//  자기 세대 = 이 문서가 실은 terminal.js 의 `?v=`(HTML 스탬퍼가 `/ui/__gen` 과 같은 값을 붙인다 — 2026-10-05 실측 일치).
+function myAssetGen(): string {
+  try {
+    const sc = document.querySelector('script[src*="terminal.js?v="]') as HTMLScriptElement | null;
+    return sc ? (new URL(sc.src, location.href).searchParams.get('v') || '') : '';
+  } catch (_) { return ''; }
+}
+const GEN_RELOADED_KEY = 'lively:term-gen-reloaded';
+let genAskAt = 0;
+export async function reloadIfNewBuild(why: string): Promise<void> {
+  const mine = myAssetGen();
+  if (!mine || Date.now() - genAskAt < 5000) return;
+  genAskAt = Date.now();
+  try {
+    const r = await fetch(location.pathname.replace(/[^/]*$/, '') + '__gen', { cache: 'no-store', credentials: 'same-origin' });
+    const j = await r.json().catch(() => null);   // 오류 응답엔 세대가 없다 — 그대로 둔다
+    const v = j && typeof j.v === 'string' ? j.v : '';
+    if (!v || v === mine) return;
+    let tried = '';
+    try { tried = sessionStorage.getItem(GEN_RELOADED_KEY) || ''; } catch (_) { /* noop */ }
+    if (tried === v) return;                                   // 이미 이 세대로 한 번 실었다 — 고리 금지
+    if (term && term.hasSelection && term.hasSelection()) return;   // 복사하려고 고르는 중
+    try { sessionStorage.setItem(GEN_RELOADED_KEY, v); } catch (_) { /* noop */ }
+    dlog('gen', why + ' — 새 판 ' + mine + ' → ' + v + ' · 다시 싣는다');
+    location.reload();
+  } catch (_) { /* 못 물었다 — 다음 기회에 */ }
+}
+
 function setupEmbedBridge() {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || ev.source !== window.parent) return;
@@ -3659,7 +3696,7 @@ export async function boot() {
   } catch (_) { /* BroadcastChannel 미지원 — 포커스 복귀/새로고침 시 서버값으로 보정 */ }
   // 폴백 보정 — 이 탭이 다시 보일 때 서버의 현재 이름을 다시 읽는다(BroadcastChannel 미지원·타 브라우저·기기 케이스).
   //  한 창의 탭 전환은 window 'focus' 가 안 뜨고 'visibilitychange' 만 뜨므로 둘 다 건다.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionMeta(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadSessionMeta(); void reloadIfNewBuild('다시 보임'); } });
   window.addEventListener('focus', () => { loadSessionMeta(); });
 
   // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
@@ -4325,6 +4362,7 @@ async function connectNow() {
   });
   sock.onopen = () => {
     dlog('ws', 'open');
+    if (didBackfill) void reloadIfNewBuild('재연결');   // 재연결 = 롤의 흔적일 수 있다(위 «새 판 자가 적용»)
     connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
     hideRetryBar(); // #3870 — 포기가 풀리는 이 자리에서 «연결하지 못했습니다» 배너도 걷는다(상단은 '연결됨'인데 배너가 남아 화면을 밀던 것)
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄

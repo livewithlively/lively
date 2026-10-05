@@ -6,6 +6,7 @@
 //   B   — 터미널 ↔ 셸 왕복(답 · 무응답 · 늦은 답 · 연타 · 남의 답) — 가짜 부모 프레임과 가짜 시계로 실제 함수를 돌린다
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -15,7 +16,7 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const m = await importTerminalModule();
 const { pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink,
-  knowledgeCandidates, knowledgeMatches, learnKnowledge, isKnowledgeLink, openLinkFromTerminal } = m;
+  knowledgeCandidates, knowledgeMatches, learnKnowledge, isKnowledgeLink, openLinkFromTerminal, reloadIfNewBuild } = m;
 for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink]) assert.equal(typeof f, "function");
 
 const LIB = process.env.PATH_OPEN_SRC || join(root, "web/lib/path-open.ts");
@@ -457,5 +458,53 @@ await tK("K8 «없다» 는 60초만 믿는다 — 그 뒤 호버는 다시 묻�
   assert.equal(isKnowledgeLink("later-kn-name-six"), true);
   Date.now = realNow;
 });
+
+// ── G. 새 판 자가 적용(원준님 10-05 «이전에 열었던 세션에서도 적용되게») — 재연결·다시 보일 때 서버 세대와 견준다 ───────
+{
+  const realNow = Date.now;
+  let now = realNow() + 1_000_000;
+  Date.now = () => now;
+  const store = new Map();
+  g.sessionStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  let reloads = 0, serverV = "bbb", mineV = "aaa";
+  g.location.reload = () => { reloads++; };
+  g.document.querySelector = (sel) => (String(sel).includes("terminal.js?v=") ? { src: "https://gw.test/ui/terminal.js?v=" + mineV } : null);
+  const savedFetch = g.fetch;
+  let asks = 0;
+  g.fetch = async (url) => { asks++; assert.match(String(url), /\/ui\/__gen$/); return { ok: true, json: async () => ({ v: serverV, reload: "notify" }) }; };
+  await tK("G1 서버 세대가 다르면 한 번 다시 싣는다(셸의 notify 정책과 무관 — 터미널은 잃는 글이 없다)", async () => {
+    await reloadIfNewBuild("재연결");
+    assert.equal(reloads, 1);
+  });
+  await tK("G2 같은 세대로는 두 번 싣지 않는다(스탬프가 어긋난 배포에서 재연결마다 싣는 고리 금지) · 5초 안엔 묻지도 않는다", async () => {
+    const a0 = asks;
+    await reloadIfNewBuild("재연결");
+    assert.equal(asks, a0, "5초 안엔 서버에 묻지도 않는다");
+    assert.equal(reloads, 1, "5초 안");
+    now += 6000;
+    await reloadIfNewBuild("재연결");
+    assert.equal(reloads, 1, "이미 이 세대로 실었다");
+    serverV = "ccc"; now += 6000;
+    await reloadIfNewBuild("다시 보임");
+    assert.equal(reloads, 2, "더 새 세대면 다시 싣는다");
+  });
+  await tK("G3 같은 세대 · 자기 세대를 못 읽음 · 서버가 못 답함 — 싣지 않는다", async () => {
+    serverV = mineV; now += 6000;
+    await reloadIfNewBuild("다시 보임");
+    mineV = ""; serverV = "zzz"; now += 6000;
+    await reloadIfNewBuild("다시 보임");
+    mineV = "aaa"; now += 6000;
+    g.fetch = async () => ({ ok: false, json: async () => { throw new Error("html 오류 쪽"); } });
+    await reloadIfNewBuild("다시 보임");
+    assert.equal(reloads, 2);
+  });
+  t("G4 배선 — 재연결(onopen, 앞선 연결이 있었을 때)과 다시 보일 때 묻는다", () => {
+    const src = readFileSync(join(root, "web/standalone/terminal.ts"), "utf8");
+    assert.match(src, /sock\.onopen = \(\) => \{[\s\S]{0,1200}if \(didBackfill\) void reloadIfNewBuild\('재연결'\)/);
+    assert.match(src, /visibilitychange', \(\) => \{ if \(!document\.hidden\) \{ loadSessionMeta\(\); void reloadIfNewBuild\('다시 보임'\); \} \}/);
+  });
+  g.fetch = savedFetch;
+  Date.now = realNow;
+}
 
 console.log(`\n${pass} passed`);
