@@ -69,7 +69,7 @@ const rows = [{ id: "b", pid: null }, { id: "a", pid: 5 }, { id: "c", pid: 9 }, 
 const groups = groupByProject(rows, (r) => r.pid, (pid) => "P" + pid);
 eq(groups.map((g) => g.id), [5, 9, 0], "E18 ★있던 프로젝트로 묶고, 「프로젝트 없음」은 늘 맨 끝(먼저 나왔어도)");
 eq(groups.map((g) => g.rows.map((r) => r.id)), [["a", "d"], ["c"], ["b", "e"]], "E19 묶음 안 순서는 들어온 순서 그대로");
-eq(groups.map((g) => g.name), ["P5", "P9", "프로젝트 없음"], "E20 이름은 호출자가 준 것, 없는 쪽은 「프로젝트 없음」");
+eq(groups.map((g) => g.name), ["P5", "P9", "기타 (미분류)"], "E20 이름은 호출자가 준 것, 없는 쪽은 「프로젝트 없음」");
 eq(groupByProject([], (r) => r.pid, String), [], "E20b 빈 목록 → 빈 묶음");
 
 // ── 찾기 (E21~E22) ─────────────────────────────────────────────────────────

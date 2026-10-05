@@ -9,6 +9,7 @@ import { mountTranscript, setTranscriptDoor } from './sessions.js';
 import { btnOf, dropMySessions, emptyBox, errBox, ico, leftPanel, loadMySessions, pickOf, searchBox, selectOf, shellHref, skelRows, transcriptHref } from './sessions-kit.js';
 import { markRanges, type HitRef } from './session-history.js';
 import { PERIODS, periodSince, dayBucket, whenLabel, inPeriod, type OmniPeriod } from './lib/omni-order.js';
+import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 interface Hit {
   node_id: string; session_id: string; name: string | null; project: string | null;
@@ -64,7 +65,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     const seen = new Map<string, string>();
     for (const s of d.sessions) if (s.project_id != null && !seen.has(String(s.project_id))) seen.set(String(s.project_id), String(s.project_name || '#' + s.project_id));
     for (const [id, name] of seen) projSel.append(el('option', { value: id, text: name }));
-    projSel.append(el('option', { value: '0', text: '프로젝트 없음' }));
+    projSel.append(el('option', { value: '0', text: NO_PROJECT_NAME }));
     projSel.value = st.project;
     if (projSel.value !== st.project) { st.project = ''; projSel.value = ''; }   // 고른 프로젝트가 더는 없다
     if (projPick.repaint) projPick.repaint();
@@ -97,7 +98,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
   };
   const moreBtn = (text: string, onClick: () => void): HTMLElement => { const b = btnOf(text, { kind: 'ghost', cls: 'shx-more' }); b.addEventListener('click', onClick); return b; };
   const grpEl = (label: string, n: number): HTMLElement => el('div', { class: 'shx-grp' }, el('span', { class: 'shx-grp-l', text: label }), el('span', { class: 'shx-grp-n', text: String(n) })) as HTMLElement;
-  const projEl = (name: string | null | undefined): HTMLElement => el('span', { class: 'shx-proj' + (name ? '' : ' none') }, ico(name ? 'projMini' : 'projNone'), el('span', { text: name || '프로젝트 없음' })) as HTMLElement;
+  const projEl = (name: string | null | undefined): HTMLElement => el('span', { class: 'shx-proj' + (name ? '' : ' none') }, ico(name ? 'projMini' : 'projNone'), el('span', { text: name || NO_PROJECT_NAME })) as HTMLElement;
 
   // ── 검색어 없음: 최근 대화 ──
   async function drawRecent(mySeq: number): Promise<void> {
@@ -123,7 +124,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
       if (b !== bucket) { bucket = b; kids.push(grpEl(b, perBucket.get(b) || 0)); }
       const name = String(s.name || s.title || s.session_id);
       const when = whenLabel(at, now);
-      kids.push(rowLink({ sid: String(s.session_id), node: String(s.node_id || ''), name, hit: null, words: [], sub: [s.project_name || '프로젝트 없음', when].filter(Boolean).join(' · ') },
+      kids.push(rowLink({ sid: String(s.session_id), node: String(s.node_id || ''), name, hit: null, words: [], sub: [s.project_name || NO_PROJECT_NAME, when].filter(Boolean).join(' · ') },
         el('div', { class: 'shx-row-h' }, el('div', { class: 'shx-row-t', text: name, title: name }), el('span', { class: 'shx-row-when', text: when })),
         el('div', { class: 'shx-row-f' }, projEl(s.project_name))));
     }
@@ -168,7 +169,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
       markInto(text, h.text, words);
       const ctx = (l: { role: string; text: string } | null): HTMLElement | null => l ? el('div', { class: 'shx-ctx' }, el('b', { text: who(l.role) }), el('span', { text: l.text })) : null;
       const when = whenLabel(h.ts ? Date.parse(h.ts) : undefined, now);
-      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words, mark: h.text.slice(0, 48), sub: [h.project || '프로젝트 없음', when].filter(Boolean).join(' · ') },
+      return rowLink({ sid: h.session_id, node: h.node_id, name, hit: { role: h.role, ts: h.ts }, words, mark: h.text.slice(0, 48), sub: [h.project || NO_PROJECT_NAME, when].filter(Boolean).join(' · ') },
         el('div', { class: 'shx-row-h' },
           el('span', { class: 'shx-role ' + (h.role === 'user' ? 'me' : 'ai'), text: h.role === 'user' ? '내 지시' : 'AI 답' }),
           el('b', { class: 'shx-row-n', text: name, title: name }),

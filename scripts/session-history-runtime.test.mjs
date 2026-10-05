@@ -685,7 +685,7 @@ same(R.recent, ["# 오늘", "검색 고치기", "위젯 기획", "# 최근 7일"
 check(/최근 대화 4개/.test(R.recentCount || ""), "R2 수를 말한다", R.recentCount);
 same(R.recentGrpN, ["오늘 · 2", "최근 7일 · 1", "그 이전 · 1"], "R2 묶음 머리에 그 묶음의 수가 선다");
 check((R.listReq || []).length === 1 && /limit=2000/.test(R.listReq[0]), "R2 목록은 서버 상한까지 한 번 청한다", JSON.stringify(R.listReq));
-same(R.projOptions, [["", "모든 프로젝트"], ["3870", "통합검색"], ["4135", "UI 수정"], ["0", "프로젝트 없음"]], "R2 프로젝트 고르개 = 내 세션이 붙은 프로젝트(겹치지 않게) + 프로젝트 없음");
+same(R.projOptions, [["", "모든 프로젝트"], ["3870", "통합검색"], ["4135", "UI 수정"], ["0", "기타 (미분류)"]], "R2 프로젝트 고르개 = 내 세션이 붙은 프로젝트(겹치지 않게) + 프로젝트 없음");
 same(R.recentProj, ["# 오늘", "검색 고치기", "# 그 이전", "옛 조사"], "R2 프로젝트로 좁힌 최근 대화");
 same(R.recentNoProj, ["# 최근 7일", "덱 재시안"], "R2 「프로젝트 없음」으로 좁힌 최근 대화");
 same(R.recentD7, ["# 오늘", "검색 고치기", "위젯 기획", "# 최근 7일", "덱 재시안"], "R2 기간으로 좁힌 최근 대화");
@@ -695,7 +695,7 @@ check((R.findReqs || []).length === 1 && param(R.findReqs[0], "q") === "검색" 
 same((R.hits || []).map((h) => h.text), ["검색 배포를 마쳤습니다", "검색을 고쳐 줘", "<img src=x onerror=window.PWNED=1> 검색 <b>굵게</b>"], "R3 줄 = 맞은 말");
 same((R.hits || [])[0] && [R.hits[0].marks, R.hits[0].ctx], [["검색"], ["나 · 배포까지 해 줘"]], "R3 낱말 색칠 · 앞 말(말한 쪽 + 글 · 뒤 말이 없으면 없다)");
 same((R.hits || [])[1] && R.hits[1].ctx, ["AI · 먼저 살펴보겠습니다"], "R3 첫 말은 뒤 말만");
-check(/검색 고치기/.test(R.hits?.[0]?.meta || "") && /통합검색/.test(R.hits[0].meta) && /AI 답/.test(R.hits[0].meta) && /내 지시/.test(R.hits[1].meta) && /프로젝트 없음/.test(R.hits[2].meta), "R3 줄 머리 = 세션 · 프로젝트 · 시각 · 말한 쪽", JSON.stringify((R.hits || []).map((h) => h.meta)));
+check(/검색 고치기/.test(R.hits?.[0]?.meta || "") && /통합검색/.test(R.hits[0].meta) && /AI 답/.test(R.hits[0].meta) && /내 지시/.test(R.hits[1].meta) && /기타 \(미분류\)/.test(R.hits[2].meta), "R3 줄 머리 = 세션 · 프로젝트 · 시각 · 말한 쪽", JSON.stringify((R.hits || []).map((h) => h.meta)));
 check(/맞은 말 7곳/.test(R.findCount || "") && /세션 2개/.test(R.findCount) && /색인을 만드는 중/.test(R.findCount) && /3개/.test(R.findCount), "R3 총계와 색인 중 안내", R.findCount);
 // R8
 same(R.xss, { pwned: false, imgs: 0, text: "<img src=x onerror=window.PWNED=1> 검색 <b>굵게</b>" }, "R8 대화 본문의 태그는 글자로만 선다");
@@ -751,7 +751,7 @@ same(R.jHeadTags, ["SPAN", "SPAN", "SPAN"], "R9 줄 머리 단추 안에는 span
 same(R.jLine, { type: "문서", noneType: 0, time: true, openCls: [true, false] }, "R9 «한 일» 앞에 그 기록의 종류 · 기록 없는 줄엔 종류가 없다 · 날짜별 묶음의 때는 시각(HH:MM) · 펼친 줄만 열린 모양");
 check(!!R.rail && R.rail.days === 7 && R.rail.weekdays === "월화수목금토일" && R.rail.today === 1 && R.rail.todayN === 2 && R.rail.inWeek >= 2 && R.rail.counted === R.rail.inWeek && R.rail.zeroDisabled === true && R.rail.track === true, "R19 옆 칸 — 한 주의 하루하루: 일곱 칸(빈 날 포함) · 오늘 칸에 오늘의 두 세션 · 합 = 이번 주에 든 세션 수 · 빈 날은 못 누른다", JSON.stringify(R.rail));
 same(R.rail && { heads: R.rail.heads, projs: R.rail.projs, links: R.rail.links }, { heads: ["하루하루", "프로젝트 3", "만든 지식 1", "태스크 1"],
-  projs: [["통합검색", "1"], ["UI 수정", "1"], ["프로젝트 없음", "1"]], links: [["통합검색 as-built", "#/k/omni-asbuilt", false], ["#4517 대화 검색", "#/projects2/t/4517", true]] }, "R19 옆 칸 — 프로젝트(「프로젝트 없음」이 맨 아래) · 만든 지식 · 태스크(끝난 것 표시)");
+  projs: [["통합검색", "1"], ["UI 수정", "1"], ["기타 (미분류)", "1"]], links: [["통합검색 as-built", "#/k/omni-asbuilt", false], ["#4517 대화 검색", "#/projects2/t/4517", true]] }, "R19 옆 칸 — 프로젝트(「프로젝트 없음」이 맨 아래) · 만든 지식 · 태스크(끝난 것 표시)");
 check(!!R.railGo && R.railGo.afterDay.bars === 30 && R.railGo.afterDay.enabled === 2 && R.railGo.afterDay.firstIsLive === false && R.railGo.afterDay.on.join() === "최근 30일,날짜별" && R.railGo.afterDay.flashed.length === 1 && R.railGo.afterDay.flashed[0] === R.railGo.afterDay.want && R.railGo.afterDay.focus.join() === "true,true,true", "R19 막대를 누르면 날짜별로 바뀌고 그날(3일 전) 묶음으로 간다 — 「최근 30일」은 서른 칸 · 다시 선 옆 칸의 같은 막대로 초점이 돌아온다", JSON.stringify(R.railGo?.afterDay));
 same(R.railGo?.afterProj, { on: ["최근 30일", "프로젝트별"], flashed: ["UI 수정 · 1"] }, "R19 프로젝트 줄을 누르면 프로젝트별로 바뀌고 그 프로젝트 묶음으로 간다");
 same(R.win, { open: true, dialog: true, hashSame: true, title: "검색 고치기", logReq: 1, door: ["#/s/box-1"], resume: 0, back: false, close: true, journalStill: 3 }, "R20 [대화록 열기] — 창으로 열린다(주소 그대로 · 일지 그대로) · 박스를 아는 줄은 문이 처음부터 [세션 열기]");
@@ -764,7 +764,7 @@ same(R.winTrash, { post: 1, gone: true, reloaded: 1, rows: 3, stillOpen: true },
 same(R.winNoBox, { resume: 1, door: 0, inside: true, gone: true, backdrop: true }, "R20 박스를 모르는 줄의 창 — 문은 「이어 질문하기」 · 창 안을 눌러서는 안 닫히고 [닫기] 단추·바깥 누르기로 닫힌다");
 same(R.jRows?.[2] && [R.jRows[2].sum, R.jRows[2].none], ["이 기간에 적은 기록 없음 · 이전 기록 2건", true], "R9 앞선 기간에만 기록이 있는 세션은 그렇다고 말한다(«기록된 작업 없음» 이 아니다)");
 same(R.jAbort && [R.jAbort.made, R.jAbort.firstAborted, R.jAbort.secondAborted, R.jAbort.rows], [2, true, false, 3], "R9 기간을 연달아 바꾸면 앞 요청을 끊고 뒤 것만 그린다");
-check((R.jByProj || []).length === 3 && /^통합검색/.test(R.jByProj[0]) && /^UI 수정/.test(R.jByProj[1]) && /^프로젝트 없음/.test(R.jByProj[2]), "R9 프로젝트별 — 「프로젝트 없음」이 맨 아래", JSON.stringify(R.jByProj));
+check((R.jByProj || []).length === 3 && /^통합검색/.test(R.jByProj[0]) && /^UI 수정/.test(R.jByProj[1]) && /^기타 \(미분류\)/.test(R.jByProj[2]), "R9 프로젝트별 — 「프로젝트 없음」이 맨 아래", JSON.stringify(R.jByProj));
 same(R.jStillOpen, { open: true, acts: 2 }, "R9 다시 묶어도 펼친 줄은 펼쳐져 있고 내용도 그대로다");
 check(/^작업 일지 · /.test(R.copied || "") && /세션 3 · 프로젝트 2 · 한 일 2 · 지식 1 · 태스크 1/.test(R.copied) && /\[통합검색\]\n- 대화 검색 추가 \(지식: 통합검색 as-built\)\n- 배포 기록/.test(R.copied) && /- 위젯 기획 \(기록 없음\)/.test(R.copied), "R9 [요약 복사] — 그 기간의 글이 클립보드에", JSON.stringify(R.copied));
 check(Date.parse(param(R.jLastWeekReq, "until") || "") <= Date.parse(param(R.jReq?.[0], "since") || "") + 1000, "R9 지난 주 = 이번 주 시작 전까지", JSON.stringify([R.jLastWeekReq, R.jReq]));

@@ -100,7 +100,7 @@ ok(/sessFallback\(id\)\.projectId/.test(PROJ_FOR()) && /if \(s\) return s\.proje
   "E12 소속도 폴백을 본다. 단 목록에 **있는** 세션의 0(프로젝트 없음)은 사실이라 폴백이 덮지 않는다");
 
 const ROW_FACE = () => slice(MAIN, "function sideRowFace(route: string", "\n//  행 키 → 그 행을 여는 route");
-ok(/info\.unresolved \? 'AI 세션' : 'AI 세션 · 프로젝트 없음'/.test(ROW_FACE()),
+ok(/info\.unresolved \? 'AI 세션' : 'AI 세션 · ' \+ NO_PROJECT_NAME/.test(ROW_FACE()),
   "E13 모르는 것을 '프로젝트 없음' 이라 단정하지 않는다 — 모르는 것과 없는 것은 다르다");
 
 const PAINT = () => slice(TABS, "function paint(): void {", "\n  function openTabMenu(");

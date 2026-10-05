@@ -63,6 +63,7 @@ import { iconPath, projGlyph } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -577,8 +578,8 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
     //  둘째 줄 — 세션이면 **내 마지막 말**(#2016 6차, 아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
     one ? null
       : o.projLine && inst.icon === 'chat'
-        ? el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (inst.project && !inst.project.self ? inst.project.name : '프로젝트 없음') },
-            glyph(inst.project && !inst.project.self ? projGlyph(11) : 'projNone', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || '프로젝트 없음' }))
+        ? el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (inst.project && !inst.project.self ? inst.project.name : NO_PROJECT_NAME) },
+            glyph(inst.project && !inst.project.self ? projGlyph(11) : 'projNone', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || NO_PROJECT_NAME }))
       : inst.icon === 'chat'
         ? (inst.ask
             ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '', !!o.projTail)
@@ -655,7 +656,7 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
     //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 카드의 가장 급한 행이다.
     const first = c.rows[0];
     const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, id: c.id,
-      name: c.id ? (first.project as { name: string }).name : '프로젝트 없음',
+      name: c.id ? (first.project as { name: string }).name : NO_PROJECT_NAME,
       //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
       bucket: first.group || '', rows: c.rows, open: false, active: false, pinned: !!c.id && isPinned(c.pkey), counts: {}, live: 0, past: 0,
       rank: first.rank ?? QUIET_RANK, at: first.at || 0 };
@@ -1584,7 +1585,7 @@ function renderSessions(): void {
   const pick = (next: SessScope, keepDrawer = false): void => { setSessScope(next); redraw(); hooks.onSessProject?.({ keepDrawer }); };
   const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
   const byLabel = (SESS_GROUP_BYS.find((b) => b.key === sc.by) || SESS_GROUP_BYS[0]).label;
-  const pname = (pid: number): string => (pid ? ((projOf.get(pid) || { name: '' }).name || `#${pid}`) : '프로젝트 없음');
+  const pname = (pid: number): string => (pid ? ((projOf.get(pid) || { name: '' }).name || `#${pid}`) : NO_PROJECT_NAME);
 
   //  머리 드롭다운 — 기준 넷, 구분선 아래 묶지 않음. 칸 오른쪽 흐린 글은 그 기준의 묶음 수.
   const byBtn = el('button', { class: 'v2-sgb', type: 'button', 'aria-haspopup': 'menu', 'data-grpby': sc.by, title: '묶는 기준을 고릅니다',
@@ -2036,7 +2037,7 @@ function renderProjTree(): void {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
       title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
-      glyph('projNone', 'v2-ptl-ic'), el('span', { class: 'n', text: '기타 (미분류)' }), cnt(plan.noneN)));   // #4233 — 「프로젝트 없음」과 같은 점선 원
+      glyph('projNone', 'v2-ptl-ic'), el('span', { class: 'n', text: NO_PROJECT_NAME }), cnt(plan.noneN)));   // #4233 — 「프로젝트 없음」과 같은 점선 원
   }
 
   // ── 카드 — 하위 폴더 · 리스트 모음. 줄 나누기는 위키와 같은 fitWikiList.

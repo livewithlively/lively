@@ -5,6 +5,7 @@
 import { SESS_SCOPE0, type SessGroupBy, type SessScope } from '../lib/sess-all.js';
 import { SESS_STATES } from '../session-status.js';
 import type { V2Data } from './views.js';
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 let cur: SessScope = { ...SESS_SCOPE0 };
 
@@ -15,7 +16,7 @@ export function setSessScope(next: SessScope): void { cur = next; }
 export function sessGroupName(by: SessGroupBy, key: string, data: V2Data, ownerLabel: (k: string) => string): string {
   if (by === 'day') return key;
   if (by === 'list') return key === '0' ? '리스트 없음' : ((data.lists || []).find((l) => String(l.id) === key)?.name || `리스트 #${key}`);
-  if (by === 'project') return key === '0' ? '프로젝트 없음' : (data.projects.find((p) => String(p.id) === key)?.name || `#${key}`);
+  if (by === 'project') return key === '0' ? NO_PROJECT_NAME : (data.projects.find((p) => String(p.id) === key)?.name || `#${key}`);
   if (by === 'owner') return ownerLabel(key);
   if (by === 'state') return SESS_STATES[key] ? SESS_STATES[key].label : key === 'log' ? '기록' : '지난 세션';
   return '전체';
