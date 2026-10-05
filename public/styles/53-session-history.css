@@ -24,6 +24,9 @@ body[data-route="sessions"] main { max-width: none; padding-top: 16px; padding-b
 .shx-brand .shx-tile .shx-ic { width: 18px; height: 18px; }
 /* 셸 액자 안에서는 액자 머리가 이미 앱 이름을 말한다 — 이름을 두 번 세우지 않고 탭부터 선다. */
 .shx.embedded .shx-brand { display: none; }
+/* 빵부스러기(셸 액자 안) — 사이드바에서 고른 범위를 말한다. 부품은 셸 「세션 목록」 화면의 .v2-sa-top(47-v2-rail.css) 그대로다.
+   그쪽은 화면 가장자리에서 재고(56px 띠 · 좌우 24px), 여기는 앱이 이미 여백을 쥐고 있어 띠의 높이와 좌우만 앱에 맞춘다. */
+.shx > .v2-sa-top { height: 32px; padding: 0 2px; }
 .shx-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--bg-tint-2); }
 .shx-tab { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: none; font: inherit; font-size: 13.5px; font-weight: 700; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .shx-tab:hover { color: var(--ink); }

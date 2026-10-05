@@ -74,6 +74,7 @@ const project = async (name, o = {}) => Number((await one(
 const find = (requester, text, o = {}) => C.searchConvMessages({
   requester, q: text, attach: o.attach ?? true, workspaceId: PRIMARY_TENANT_ID, limit: o.limit ?? 50,
   since: o.since ?? null, role: o.role ?? null, projectId: o.projectId ?? null, ...(o.cap ? { sessionCap: o.cap } : {}),
+  ...(o.sessionIds !== undefined ? { sessionIds: o.sessionIds } : {}),
 });
 const sids = (r) => [...new Set(r.hits.map((h) => h.session_id))].sort();
 const texts = (r) => r.hits.map((h) => h.text);
@@ -143,6 +144,20 @@ try {
     eq("M7 프로젝트 없음(0) — 프로젝트에 안 붙은 세션의 말만", [sids(none), none.total], [[SID(1)], 3]);
     eq("M6 대조: 거르개가 없으면 둘 다", sids(await find(A, "얼룩말")), [SID(1), SID(2)]);
   }
+  // 세션 거르개(#4553 — 세션 이력 앱의 사이드바에서 고른 범위): 주어진 세션들 안에서만 찾는다
+  {
+    const one1 = await find(A, "얼룩말", { sessionIds: [SID(1)] });
+    eq("M19 세션 거르개 — 그 세션의 말만 · 총계도 그 안에서", [sids(one1), one1.total, one1.sessions], [[SID(1)], 3, 1]);
+    const two = await find(A, "얼룩말", { sessionIds: [SID(2), SID(1), SID(1)] });
+    eq("M19 여럿 · 같은 id 가 두 번 — 그 세션들의 말 전부(한 번씩)", [sids(two), two.total, two.sessions], [[SID(1), SID(2)], 4, 2]);
+    const none = await find(A, "얼룩말", { sessionIds: [] });
+    eq("M20 빈 목록은 «거르개 없음» 이 아니다 — 결과 없음", [none.hits.length, none.total, none.sessions], [0, 0, 0]);
+    eq("M20 대조: 거르개가 없으면(null) 종전 그대로 둘 다", sids(await find(A, "얼룩말", { sessionIds: null })), [SID(1), SID(2)]);
+    eq("M21 모르는 세션 id 만 주면 결과 없음", (await find(A, "얼룩말", { sessionIds: ["shxpg-no-such-session"] })).total, 0);
+    eq("M22 다른 거르개와 함께 — 둘 다 맞아야 한다(세션 1 은 그 프로젝트가 아니다)", (await find(A, "얼룩말", { sessionIds: [SID(1)], projectId: P_OPEN })).total, 0);
+    eq("M22 프로젝트와 맞으면 나온다", sids(await find(A, "얼룩말", { sessionIds: [SID(1), SID(2)], projectId: P_OPEN })), [SID(2)]);
+    eq("M22 말한 쪽과 함께", texts(await find(A, "얼룩말", { sessionIds: [SID(1)], role: "user" })), ["얼룩말 하나를 찾아 줘"]);
+  }
   // 프로젝트를 옮긴 세션 · 프로젝트에서 뗀 세션 — 거르개는 «지금 붙어 있는 프로젝트»(마지막 구간)를 본다
   {
     const P_NEXT = await project(PN("next"));
@@ -168,6 +183,10 @@ try {
     const r = await find(A, "얼룩말");
     chk("M8 초대 안 받은 남의 세션의 말은 안 나온다", !sids(r).includes(SID(3)), JSON.stringify(sids(r)));
     chk("M9 초대받은 세션(attach)의 말은 나온다", sids(r).includes(SID(4)), JSON.stringify(sids(r)));
+    {
+      const named = sids(await find(A, "얼룩말", { sessionIds: [SID(3), SID(1)] }));
+      chk("M23 세션 거르개에 남의 세션 id 를 적어도 안 보인다(적었다고 볼 수 있게 되지 않는다)", !named.includes(SID(3)) && named.includes(SID(1)), JSON.stringify(named));
+    }
     chk("M9 view_policy 가 attach 가 아니면 초대받아도 안 나온다", !sids(await find(A, "얼룩말", { attach: false })).includes(SID(4)));
     chk("M10 초대받았어도 가려진 프로젝트의 세션은 안 나온다", !sids(r).includes(SID(5)), JSON.stringify(sids(r)));
     eq("M10 총계에도 세지 않는다(내 것 3+1 · 초대 1)", [r.total, r.sessions], [5, 3]);

@@ -8,6 +8,9 @@ import { api, el, toast } from './core.js';
 import { mountTranscript, setTranscriptDoor } from './sessions.js';
 import { btnOf, dropMySessions, emptyBox, errBox, ico, leftPanel, loadMySessions, pickOf, searchBox, selectOf, shellHref, skelRows, transcriptHref } from './sessions-kit.js';
 import { markRanges, type HitRef } from './session-history.js';
+import { dropHistRows, histBridgeOn, histScope, loadHistRows, scopedConvs } from './sessions-scope.js';
+import { histScopeOn } from './lib/hist-scope.js';
+import type { TabHandle } from './sessions-list.js';
 import { PERIODS, periodSince, dayBucket, whenLabel, inPeriod, type OmniPeriod } from './lib/omni-order.js';
 import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -40,7 +43,7 @@ function markInto(parent: HTMLElement, text: string, words: string[]): void {
 }
 const who = (role: string): string => (role === 'assistant' ? 'AI' : '나');
 
-export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: string) => void } = {}): void {
+export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: string) => void } = {}): TabHandle {
   if (typeof opts.q === 'string' && opts.q !== st.q) { st.q = opts.q; st.limit = HIT_STEP; }
   const input = el('input', { type: 'text', class: 'shx-input', placeholder: '대화 내용으로 찾기', value: st.q, 'aria-label': '대화 내용으로 찾기', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
   const projSel = el('select', { class: 'shx-select', 'aria-label': '프로젝트' }, el('option', { value: '', text: '모든 프로젝트' })) as HTMLSelectElement;
@@ -49,10 +52,17 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
   const pane = el('section', { class: 'shx-card shx-pane', 'aria-label': '대화록' }) as HTMLElement;
   const rerun = (): void => { st.limit = HIT_STEP; st.shown = RECENT_STEP; void run(); };
   const projPick = pickOf(projSel, 'projMini') as HTMLElement & { repaint?: () => void };
+  const periodPick = pickOf(selectOf(PERIODS, st.period, (v) => { st.period = v; rerun(); }, '기간'), 'clock') as HTMLElement;
   const filters = el('div', { class: 'shx-filters' },
-    pickOf(selectOf(PERIODS, st.period, (v) => { st.period = v; rerun(); }, '기간'), 'clock'),
+    periodPick,
     projPick,
     pickOf(selectOf(ROLES, st.role, (v) => { st.role = v; rerun(); }, '말한 쪽'), 'person'));
+  //  사이드바가 쥔 갈래의 고르개는 본문에서 걷는다 — 시간 묶음을 골랐으면 기간, 프로젝트 줄을 골랐으면 프로젝트.
+  //   둘이 함께 서면 «9월» 을 골라 놓고 「최근 7일」에 걸려 빈 화면이 된다. 걷힌 고르개의 값은 쓰지 않는다(usePeriod · useProject).
+  const syncPicks = (): void => { const sc = histScope(); periodPick.hidden = sc.by === 'day' && sc.group !== null; projPick.hidden = sc.proj !== null; };
+  const usePeriod = (): boolean => !periodPick.hidden;
+  const useProject = (): boolean => !projPick.hidden && st.project !== '';
+  syncPicks();
   projSel.addEventListener('change', () => { st.project = projSel.value; rerun(); });
   host.replaceChildren(el('div', { class: 'shx-split' },
     el('section', { class: 'shx-card shx-master', 'aria-label': '대화 찾기' },
@@ -79,7 +89,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
       embedded: true, words: p.words, hit: p.hit, name: p.name, sub: p.sub,
       //  그 대화를 돌리는 박스를 알게 되면 머리의 「이어 질문하기」를 「세션 열기」로 바꾼다 — 세션으로 가는 문은 하나다.
       rail: () => leftPanel(p.sid, p.node, (r) => { if (r.box_id && st.picked === p) setTranscriptDoor(pane, r.box_id); }),
-      onTrashed: () => { dropMySessions(); openPicked(null); void run(); },
+      onTrashed: () => { dropMySessions(); dropHistRows(); openPicked(null); void run(); },
     });
     if (scroll && pane.getBoundingClientRect().top > window.innerHeight * 0.6) pane.scrollIntoView({ behavior: 'smooth', block: 'start' });   // 좁은 화면(한 칸)에서는 대화록이 아래에 있다
   };
@@ -108,18 +118,26 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     try { d = await loadMySessions(); }
     catch (e: any) { if (mySeq === seq) { count.textContent = ''; list.replaceChildren(errBox(e?.message || '세션 목록을 불러오지 못했습니다.')); } return; }
     if (mySeq !== seq) return;
+    //  셸 액자 안이면 사이드바와 같은 줄에서 범위를 읽는다(scopedConvs) — 범위를 고르지 않았으면 받지 않는다.
+    //   셸 밖에서는 도는 세션을 조회하지 않는다(안 연 탭의 조회를 미리 하지 않는다).
+    const hist = histBridgeOn() && histScopeOn(histScope()) ? await loadHistRows() : null;
+    if (mySeq !== seq) return;
     const now = Date.now(), since = periodSince(st.period, now);
-    const rows = d.sessions.filter((s: any) => inPeriod(Date.parse(s.last_seen), since)
-      && (st.project === '' || (st.project === '0' ? s.project_id == null : String(s.project_id) === st.project)));
+    const conv = hist ? scopedConvs(hist.rows, now) : null;
+    const atOf = (s: any): number => Date.parse(s.last_seen);   // 기록의 시각 — 사이드바의 시간 묶음도 이 시각으로 가른다
+    if (conv && st.picked && !conv.has(st.picked.sid)) openPicked(null);   // 열어 둔 대화가 범위 밖으로 나갔다
+    const rows = d.sessions.filter((s: any) => (!usePeriod() || inPeriod(atOf(s), since))
+      && (!useProject() || (st.project === '0' ? s.project_id == null : String(s.project_id) === st.project))
+      && (!conv || conv.has(String(s.session_id))));
     count.replaceChildren(el('span', { class: 'shx-count-m' }, '최근 대화 ', el('b', { text: `${rows.length}개` })),
       ...(d.truncated ? [el('span', { class: 'shx-count-note' }, ico('info'), el('span', { text: '더 오래된 세션은 여기 다 서지 않습니다(2,000개까지)' }))] : []));
     const kids: HTMLElement[] = [];
     //  묶음 머리의 수는 그 묶음 전체의 수다(지금 보이는 줄 수가 아니다).
     const perBucket = new Map<string, number>();
-    for (const s of rows) { const b = dayBucket(Date.parse(s.last_seen), now); perBucket.set(b, (perBucket.get(b) || 0) + 1); }
+    for (const s of rows) { const b = dayBucket(atOf(s), now); perBucket.set(b, (perBucket.get(b) || 0) + 1); }
     let bucket = '';
     for (const s of rows.slice(0, st.shown)) {
-      const at = Date.parse(s.last_seen);
+      const at = atOf(s);
       const b = dayBucket(at, now);
       if (b !== bucket) { bucket = b; kids.push(grpEl(b, perBucket.get(b) || 0)); }
       const name = String(s.name || s.title || s.session_id);
@@ -128,7 +146,9 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
         el('div', { class: 'shx-row-h' }, el('div', { class: 'shx-row-t', text: name, title: name }), el('span', { class: 'shx-row-when', text: when })),
         el('div', { class: 'shx-row-f' }, projEl(s.project_name))));
     }
-    if (!rows.length) kids.push(emptyBox(d.sessions.length
+    if (!rows.length) kids.push(emptyBox(conv && d.sessions.length
+      ? { icon: 'search', title: '이 범위에 맞는 대화가 없습니다.', text: '사이드바에서 「전체」를 누르면 범위가 풀립니다.' }
+      : d.sessions.length
       ? { icon: 'search', title: '이 기간·프로젝트에 맞는 대화가 없습니다.', text: '기간이나 프로젝트를 넓혀 보세요.' }
       : { icon: 'sess', title: '중앙에 기록된 세션이 없습니다.', text: '관리 ▸ 세션 공유를 켜고 `lively backfill` 로 기존 기록을 올리세요.' }));
     if (rows.length > st.shown) kids.push(moreBtn(`더 보기 (${rows.length - st.shown}개 남음)`, () => { st.shown += RECENT_STEP; void run(); }));
@@ -139,14 +159,33 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
   async function drawHits(mySeq: number, q: string): Promise<void> {
     count.textContent = '찾는 중…';
     list.classList.add('busy');
-    const qs = new URLSearchParams({ q, limit: String(st.limit) });
-    const since = periodSince(st.period, Date.now());
-    if (since) qs.set('since', new Date(since).toISOString());
-    if (st.role) qs.set('role', st.role);
-    if (st.project !== '') qs.set('project', st.project);
-    aborter = new AbortController();
+    //  사이드바에서 범위를 골랐으면 그 범위의 세션 안에서만 찾는다 — 세션 id 를 본문에 실어 보낸다(POST). 받은 줄을 여기서 거르면
+    //   상한(100곳) 밖의 맞은 말이 조용히 빠진다. 고른 것이 없으면 종전 그대로(GET).
+    let conv: Set<string> | null = null;
+    if (histBridgeOn() && histScopeOn(histScope())) {
+      const hist = await loadHistRows();
+      if (mySeq !== seq) return;
+      conv = scopedConvs(hist.rows, Date.now());
+    }
+    if (conv && st.picked && !conv.has(st.picked.sid)) openPicked(null);
+    if (conv && !conv.size) {
+      count.textContent = '';
+      list.classList.remove('busy');
+      list.replaceChildren(emptyBox({ icon: 'search', title: '이 범위에는 찾을 대화가 없습니다.', text: '사이드바에서 「전체」를 누르면 범위가 풀립니다.' }));
+      return;
+    }
+    const args: Record<string, string> = { q, limit: String(st.limit) };
+    const since = usePeriod() ? periodSince(st.period, Date.now()) : 0;
+    if (since) args.since = new Date(since).toISOString();
+    if (st.role) args.role = st.role;
+    if (useProject()) args.project = st.project;
+    const mine = aborter = new AbortController();
     let d: any;
-    try { d = await api('/api/ui/v6/session-search/messages?' + qs.toString(), { signal: aborter.signal }); }
+    try {
+      d = conv
+        ? await api('/api/ui/v6/session-search/messages', { method: 'POST', body: JSON.stringify({ ...args, sessions: [...conv] }), signal: mine.signal })
+        : await api('/api/ui/v6/session-search/messages?' + new URLSearchParams(args).toString(), { signal: mine.signal });
+    }
     catch (e: any) {
       if (mySeq !== seq || (e && e.name === 'AbortError')) return;
       count.textContent = '';
@@ -177,7 +216,9 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
         el('div', { class: 'shx-thread' }, ctx(h.before), text, ctx(h.after)),
         el('div', { class: 'shx-row-f' }, projEl(h.project)));
     });
-    if (!hits.length) kids.push(emptyBox({ icon: 'search', title: '맞은 말이 없습니다.', text: '기간이나 프로젝트를 넓히거나 다른 낱말로 찾아 보세요.' }));
+    if (!hits.length) kids.push(emptyBox(conv
+      ? { icon: 'search', title: '이 범위에는 맞은 말이 없습니다.', text: '사이드바에서 범위를 넓히거나 다른 낱말로 찾아 보세요.' }
+      : { icon: 'search', title: '맞은 말이 없습니다.', text: '기간이나 프로젝트를 넓히거나 다른 낱말로 찾아 보세요.' }));
     else if (hits.length < Number(d.total || 0)) {
       if (st.limit < HIT_MAX) kids.push(moreBtn('더 보기', () => { st.limit = Math.min(HIT_MAX, st.limit + HIT_STEP); void run(); }));
       else kids.push(el('p', { class: 'shx-note', text: `앞의 ${HIT_MAX}곳만 보여 줍니다. 기간·프로젝트·말한 쪽으로 좁혀 보세요.` }));
@@ -214,4 +255,6 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
 
   openPicked(st.picked);
   void run().catch((e) => toast(e?.message || '대화 찾기를 열지 못했습니다.'));
+  //  범위가 바뀌었다 — 걷을 고르개를 맞추고 처음 쪽부터 다시 찾는다.
+  return { rescope: () => { syncPicks(); st.limit = HIT_STEP; st.shown = RECENT_STEP; void run(); } };
 }

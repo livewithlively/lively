@@ -1068,6 +1068,11 @@ export interface ConvMsgSearchInput {
   role?: "user" | "assistant" | null;
   /** 세션이 지금 붙어 있는 프로젝트 — 0 = «프로젝트 없음», 없으면 전부. */
   projectId?: number | null;
+  /**
+   * 이 세션들 안에서만 찾는다(세션 이력 앱의 사이드바에서 고른 범위, #4553). 없으면(null · undefined) 거르지 않는다.
+   *  ⚠ 빈 목록은 «거르개 없음» 이 아니다 — 찾을 세션이 없다는 뜻이라 결과도 없다. 볼 수 있는 세션인지는 종전 판정 그대로 따로 본다(여기 적었다고 보이지 않는다).
+   */
+  sessionIds?: readonly string[] | null;
   limit: number;
   /** 모으는 세션 상한(기본 CONV_SESSION_CAP) — 시험이 줄여 잰다. */
   sessionCap?: number;
@@ -1103,6 +1108,8 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
   const words = snippetTerms(terms);
   const empty: ConvMsgSearchResult = { hits: [], total: 0, sessions: 0, capped: false, cap, words };
   if (!terms.length || !input.requester) return empty;
+  const only = input.sessionIds == null ? null : [...new Set(input.sessionIds.map((x) => String(x)))];
+  if (only && !only.length) return empty;
   const role = input.role === "user" || input.role === "assistant" ? input.role : null;
   const sinceMs = input.since ? Date.parse(input.since) : NaN;
   const sinceIso = Number.isFinite(sinceMs) ? new Date(sinceMs).toISOString() : null;
@@ -1125,6 +1132,8 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
     if (input.projectId === 0) projSql = ` AND ${lastProj} IS NULL`;
     else { p1.push(input.projectId); projSql = ` AND ${lastProj} = $${p1.length}`; }
   }
+  let onlySql = "";
+  if (only) { p1.push(only); onlySql = ` AND s.session_id = ANY($${p1.length}::text[])`; }
   const w1 = msgWhere(p1);
   p1.push(cap); const capP = `$${p1.length}`;
   const r1 = await boundedQuery(
@@ -1133,7 +1142,7 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
        SELECT s.node_id, s.session_id, s.owner, s.title
          FROM session s
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
-        WHERE ${v.where}${projSql}),
+        WHERE ${v.where}${projSql}${onlySql}),
      agg AS (
        SELECT m.node_id, m.session_id, count(*)::int AS n
          FROM vis

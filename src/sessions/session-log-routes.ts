@@ -32,7 +32,7 @@ import { executionSessionProject } from "../v6/execution-session-store.js";
 import { searchConversations, searchConvMessages, sessionHits, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색 · #4553 맞은 말 단위
 import { sessionJournal } from "../v6/session-journal-store.js";   // #4553 — 세션 이력 앱 «작업 일지»
 import { parseJournalRange } from "../v6/session-journal.js";
-import { parseConvSort } from "../v6/conv-search.js";
+import { parseConvSort, parseSessionIds, SESSION_ID_RE } from "../v6/conv-search.js";
 import { logSearch, searchLogSummary } from "../v6/search-log-store.js";   // #4530 검색 품질 — 무엇을 쳤고 무엇을 열었나
 import { isAdmin } from "../capabilities/principal.js";
 
@@ -120,7 +120,7 @@ export function checkPurgeGate(g: { requester: string; owner: string | null }): 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 // 세션 uuid 형식(claude/codex) — 경로 인젝션·잡값 차단. 관대하게: 영숫자·-·_ (40자 이하).
-const SID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const SID_RE = SESSION_ID_RE;   // 세션 id 의 꼴 — 맞은 말 검색의 `sessions`(conv-search.ts parseSessionIds)와 한 벌
 const NODE_RE = /^[A-Za-z0-9._-]{0,64}$/;   // 빈 문자열('' = 게이트웨이 로컬) 허용
 
 // raw 바디를 Buffer 로 수집(상한 초과 시 413). 이 라우트는 octet-stream 전용(핸들러가 content-type 게이트)이라 전역
@@ -271,29 +271,37 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
   // 맞은 말 단위 검색 — 세션 이력 앱 «대화 찾기»(#4553, 원준 2026-10-04). ⌘K 는 세션마다 한 줄이라 «그 말이 어디 있었나» 를
   //  못 짚는다. 이 채널은 맞은 말 하나가 한 줄이고 앞뒤 말을 함께 준다. 볼 수 있는 세션은 위 검색과 같은 축(저장 쪽 SQL·판정).
   //  거르개: since(기간) · role(말한 쪽) · project(지금 붙어 있는 프로젝트 id, 0 = 프로젝트 없음).
-  app.get("/api/ui/v6/session-search/messages", auth, wrap(async (req, res) => {
+  //  POST 도 같은 일을 한다 — 인자를 본문(JSON)으로 받고, `sessions`(세션 id 목록)가 더 있다: 그 세션들 안에서만 찾는다
+  //   (세션 이력 앱의 사이드바에서 고른 범위, #4553). 목록이 수백 개라 주소에 못 싣는다. 빈 목록은 결과 없음이다.
+  const searchMessages = wrap(async (req, res) => {
     const requester = idOf(userOf(req));
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
-    const q = String(req.query.q ?? "").trim();
+    const post = req.method === "POST";
+    const src: Record<string, unknown> = post ? (req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {}) : req.query;
+    const q = String(src.q ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
     if (!q) { res.json({ hits: [], total: 0, sessions: 0, capped: false, words: [], pending: 0 }); return; }
     if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
-    const since = req.query.since ? String(req.query.since) : null;
+    const since = src.since ? String(src.since) : null;
     if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
-    const roleRaw = String(req.query.role ?? "");
+    const roleRaw = String(src.role ?? "");
     if (roleRaw && roleRaw !== "user" && roleRaw !== "assistant") throw new HttpError(400, "role 은 user 또는 assistant 여야 합니다");
     let projectId: number | null = null;
-    if (req.query.project !== undefined && String(req.query.project) !== "") {
-      projectId = Number(req.query.project);
+    if (src.project !== undefined && String(src.project) !== "") {
+      projectId = Number(src.project);
       if (!Number.isInteger(projectId) || projectId < 0) throw new HttpError(400, "project 는 0 이상 정수여야 합니다");
     }
+    //  세션 거르개는 본문으로만 받는다(GET 의 주소에 실린 것은 읽지 않는다 — 종전 그대로).
+    const only = post ? parseSessionIds(src.sessions) : { ok: true as const, ids: null };
+    if (!only.ok) throw new HttpError(400, only.error);
+    const sessionIds = only.ids;
     const cfg = (await getRuntimeConfig()).session_share;
     const base = { requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID };
     let found: Awaited<ReturnType<typeof searchConvMessages>>;
     try {
       found = await searchConvMessages({
-        ...base, q, since, role: (roleRaw || null) as "user" | "assistant" | null, projectId,
-        limit: Number(req.query.limit) || 30,
+        ...base, q, since, role: (roleRaw || null) as "user" | "assistant" | null, projectId, sessionIds,
+        limit: Number(src.limit) || 30,
       });
     } catch (e) {
       if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 기간을 좁히거나 잠시 뒤 다시 찾아 주세요");
@@ -302,7 +310,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const pending = await convIndexPending(base).catch(() => null);
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
     res.json({ ...found, pending });
-  }));
+  });
+  app.get("/api/ui/v6/session-search/messages", auth, searchMessages);
+  app.post("/api/ui/v6/session-search/messages", auth, searchMessages);
 
   // 작업 일지 — 세션 이력 앱(#4553). 내 세션마다 «한 일»(그 세션이 적은 작업 기록)과 «남긴 것»(산출 지식 · 맡은 태스크 ·
   //  질문 수 · 고친 파일 수)을 한 번에 준다. **세션 주인만**(일지는 «내가 한 일» 이다) — 남의 세션은 session_id 로 물어도 404.

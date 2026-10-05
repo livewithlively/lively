@@ -177,6 +177,24 @@ export function recencyBoost(tsMs: number, nowMs: number): number {
 export type ConvSort = "relevance" | "recent";
 export const parseConvSort = (v: unknown): ConvSort => (v === "recent" ? "recent" : "relevance");
 
+// ── 맞은 말 검색의 세션 거르개(#4553 — 세션 이력 앱의 사이드바에서 고른 범위) ──
+/** 세션 id 의 꼴(대화 uuid · 박스 id). 라우트(session-log-routes.ts)가 같은 식으로 주소의 id 를 본다. */
+export const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+/** 한 번에 받는 세션 id 수 상한 — 중앙 기록 목록의 상한(2,000)보다 넉넉히. */
+export const SEARCH_SESSION_IDS_MAX = 5000;
+/**
+ * 맞은 말 검색의 `sessions` 를 읽는다. 없으면(undefined · null) ids = null — 거르지 않는다. 빈 배열은 그대로 빈 배열이다(찾을 세션이 없다).
+ *  배열이 아니거나 · 상한을 넘거나 · id 꼴이 아닌 것이 섞였으면 틀렸다고 답한다.
+ *  ⚠ 틀린 것을 조용히 버리지 않는다 — 버리고 남은 것으로 찾으면 «그 범위 안에서 찾았다» 는 답이 거짓이 된다.
+ */
+export function parseSessionIds(v: unknown): { ok: true; ids: string[] | null } | { ok: false; error: string } {
+  if (v === undefined || v === null) return { ok: true, ids: null };
+  if (!Array.isArray(v)) return { ok: false, error: "sessions 는 세션 id 배열이어야 합니다" };
+  if (v.length > SEARCH_SESSION_IDS_MAX) return { ok: false, error: `sessions 가 너무 많습니다(${SEARCH_SESSION_IDS_MAX}개 이하)` };
+  for (const x of v) if (typeof x !== "string" || !SESSION_ID_RE.test(x)) return { ok: false, error: "sessions 에 세션 id 가 아닌 값이 있습니다" };
+  return { ok: true, ids: [...new Set(v as string[])] };
+}
+
 // ── 세션 단위 관련도(#4530) ───────────────────────────────────────────────────────────────
 //  SQL(conv-index-store searchConversations)이 세션마다 «낱말 i 가 사람 말·AI 말·고친 파일 어디에, 그대로/조사 뗀 꼴로 들었나»,
 //   «한 말에 함께 든 낱말 수의 최댓값», «맞은 말 수», «맞은 말 중 가장 늦은 시각» 을 모아 온다. 이름·첫 지시·프로젝트 이름은
