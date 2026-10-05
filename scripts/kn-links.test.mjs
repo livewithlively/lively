@@ -9,6 +9,9 @@
 //  KL5 이름이 빈 [[ ]] · 닫히지 않은 [[a · 대괄호가 낀 [[a|x]y]] — 그대로
 //  KL6 이름의 ( ) 는 %28 %29 — renderMarkdown 링크 파서가 첫 ')' 에서 주소를 끊지 않게 · 앞뒤 공백은 턴다
 //  KL7 knHref ↔ knNameOfHref 왕복(한글 · 공백 · 괄호) · ?· # 꼬리는 버린다 · 지식 주소가 아니거나 % 가 깨졌으면 null
+//  KL8 plainMd — **굵게** · `코드` 표식만 뗀다 · __ 는 그대로(mcp__lively__tool · __init__) · 짝 없는 표식 그대로 · 빈 값
+//  KL9 dropTitleH1 — 맨 앞 H1 이 제목(짧은 · 원)을 되풀이할 때만 뗀다 · 다른 말이면 둔다 · 한 줄뿐인 본문(경계) · CRLF ·
+//      맨 앞이 아니거나 H2 면 그대로 · 빈 본문 · 제목 칸이 비어도 던지지 않는다
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +43,17 @@ const names = ["kn-a", "회의 메모 (10월)", "a/b?c"];
 eq(names.map((n) => L.knNameOfHref(L.knHref(n))), names, "KL7a knHref ↔ knNameOfHref 왕복(한글 · 공백 · 괄호 · / ?)");
 eq([L.knNameOfHref("#/k/kn-a?x=1"), L.knNameOfHref("#/k/kn-a#sec"), L.knNameOfHref("#/p/7"), L.knNameOfHref("https://x.y"), L.knNameOfHref("#/k/%E0%A4%A"), L.knNameOfHref(""), L.knNameOfHref(null)],
   ["kn-a", "kn-a", null, null, null, null, null], "KL7b ?·# 꼬리는 버린다 · 지식 주소가 아니거나 % 가 깨졌으면 null");
+
+const P = (x) => L.plainMd(x);
+eq([P("이름 **굵게** · `코드`"), P("mcp__lively__tool 호출 규칙"), P("`__init__` 정리"), P("짝 없는 ** 별"), P(""), P(null)],
+  ["이름 굵게 · 코드", "mcp__lively__tool 호출 규칙", "__init__ 정리", "짝 없는 ** 별", "", ""], "KL8 plainMd — ** · ` 표식만 · __ 는 그대로 · 짝 없는 표식 그대로 · 빈 값");
+const D = (md, t) => L.dropTitleH1(md, t);
+eq([D("# 문서 A\n\n본문", ["as-built: 문서 A — 설명", "문서 A"]), D("# **굵은** 제목\n본문", ["굵은 제목"]), D("# 문서 A #\n\n본문", ["문서 A"])],
+  ["본문", "본문", "본문"], "KL9a 맨 앞 H1 이 제목(짧은 · 원 · 강조 표식 뗀 것)과 같으면 뗀다 · 닫는 # 도");
+eq(D("# 개요 설명\n\n본문", ["제목 하나", "제목 하나"]), "# 개요 설명\n\n본문", "KL9b 제목과 다른 H1 은 둔다(긴 설명이 본문 첫 헤딩일 수 있다)");
+eq([D("# 문서 A", ["문서 A"]), D("# 문서 A\r\n\r\n본문", ["문서 A"])], ["", "본문"], "KL9c 한 줄뿐인 본문(경계) · CRLF");
+eq([D("본문\n# 문서 A", ["문서 A"]), D("## 문서 A\n본문", ["문서 A"]), D("", ["x"]), D("# 문서 A\n본문", [null, undefined, ""])],
+  ["본문\n# 문서 A", "## 문서 A\n본문", "", "# 문서 A\n본문"], "KL9d 맨 앞이 아니거나 H2 면 그대로 · 빈 본문 · 제목 칸이 비어도 던지지 않는다");
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);
 process.exit(fail ? 1 : 0);

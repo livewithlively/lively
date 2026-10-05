@@ -19,6 +19,22 @@ export function knNameOfHref(href: string | null | undefined): string | null {
   try { return decodeURIComponent(m[1]) || null; } catch (_) { return null; }
 }
 
+/** 한 줄 글(제목)의 마크다운 강조 표식만 뗀다 — **굵게** · `코드` → 글자. 짝이 안 맞는 표식은 그대로.
+ *  ⚠ __ 는 건드리지 않는다 — mcp__lively__tool · __init__ 같은 이름이 제목에 든다(렌더러도 __x__ 를 굵게로 읽지 않는다). */
+export function plainMd(s: string): string {
+  return String(s || '').replace(/\*\*([^*\n]+?)\*\*/g, '$1').replace(/`([^`\n]+?)`/g, '$1');
+}
+
+/** 본문 맨 앞의 H1 이 제목을 **되풀이할 때만** 뗀다(읽기 화면 머리에 이미 있다). 다른 말이면 그대로 —
+ *  지식 저장 지침이 «제목은 짧게, 긴 설명은 본문 첫 헤딩으로» 라 그 H1 이 곧 설명일 수 있다(격리 리뷰 지적). */
+export function dropTitleH1(md: string, titles: Array<string | null | undefined>): string {
+  const s = String(md || '');
+  const m = /^\s*#[ \t]+(.+?)[ \t]*#*[ \t]*(?:\r?\n|$)/.exec(s);
+  if (!m) return s;
+  const h = plainMd(m[1]).trim();
+  return titles.some((t) => !!t && plainMd(t).trim() === h) ? s.slice(m[0].length).replace(/^\s*\n/, '') : s;
+}
+
 /** 본문의 [[이름]] · [[이름|라벨]] 을 [라벨](#/k/이름) 으로. 코드 안은 건드리지 않는다. */
 export function wikiLinksToMd(md: string): string {
   const s = String(md || '');

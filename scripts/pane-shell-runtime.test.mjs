@@ -53,6 +53,11 @@
 //  K8 켜진 지식 탭 다시 누르기 — 읽던 중 → 목록 · 목록 → 맨 위 · K9 마우스 뒤로 단추 · K10 실패 안내 + 위키에서 열기
 //  K11 늦게 온 응답은 지금 화면을 덮지 않는다 · K12 우클릭 «여기서 읽기» · K15 떠 있는 독 높이만큼 스크롤 끝 빈자리
 //  K16 제목의 마크다운 강조 표식(** · `)은 글자로 안 선다(목록 줄 · 읽기 머리) · 원 제목은 세 줄까지, 누르면 펼친다
+//  K0 연결된 지식이 없으면 첫 그림부터 안내 · K3b 제목과 다른 맨 앞 H1 은 남는다 · K5s 뒤로 오면 앞 문서의 스크롤 자리
+//  K18 바깥 주소(새 탭) · 메일 · 위키 단추 · 보조키는 가로채지 않는다 · 같은 문서 링크는 맨 위로만
+//  K19 열어 둔 문서가 서버에서 고쳐지면 다음 확인(30초 · 셸 8초 틱)에 새 판으로
+//  (K13 위키에서 열기 주소는 K2 가, K14 위키 링크 변환 도우미는 kn-links.test.mjs 가 본다)
+//  K17 초점 — 줄에서 열면 [‹] 에, 돌아오면 그 문서 줄에(숨는 칸에 초점이 남으면 키보드가 길을 잃는다)
 //  E1 페이지 오류 없음(그리는 중에 던진 것). 마운트 자체가 던지면(TDZ 등) 그 장면이 «장면이 던졌다» 로 실패한다
 //
 //  fail-first(2026-10-01): 변경 전 판(SRC_ROOT 로 cc81bfd7~1 을 세움)에서 A1–A3 · A5 · A7 · A8 · M1 · M2 · R1 · R2 · H1 · H2 · I1 빨강,
@@ -114,6 +119,7 @@ async function PAGE_MAIN() {
     const mm = /\/projects\/(\d+)(\/.*)?$/.exec(u.pathname);
     if (mm && mm[2] === "/files") { const q = u.searchParams.get("path") || ""; return J({ items: kids(q).map((p) => { const e = FS.get(p); return { name: p.split("/").pop(), type: e.type, size: e.size, mtime: e.mtime }; }) }); }
     if (mm && !mm[2]) return J({ project: { id: Number(mm[1]), name: "P", status_category: "started", ...(window.__kn ? { knowledge: window.__kn } : {}) } });
+    if (u.pathname === "/api/ui/knowledge") { window.__knColl = (window.__knColl || 0) + 1; return J({ entries: [] }); }   // 본문 :::collection 의 목록 조회 — 그려졌는지 센다
     const kd = /^\/api\/ui\/knowledge\/([^/]+)$/.exec(u.pathname);
     if (kd) {
       const nm = decodeURIComponent(kd[1]);
@@ -387,12 +393,19 @@ async function PAGE_MAIN() {
 
   // ── K — 지식은 그 칸 안에서 읽는다(원준 10-05 «오른쪽에서 칸 튀어나오듯이 … 하지말고 그냥 곁칸에서 마크다운 이쁘게») ──
   try {
+    const kn = {}; R.k = kn;
+    const part = () => $('#app .pn-pane[data-zone="side"] .pn-kn');
+    //  K0 연결된 지식이 없으면 안내 — 첫 그림부터(빈 서명이 첫 그림을 막던 옛 결함)
+    fresh(); window.__kn = { required: [], produced: [] }; await mount();
+    await clk(tabBtn("side", "지식")); await sleep(60);
+    kn.K0 = !!part() && !!$(".pn-empty", part()) && /연결된 지식이 아직 없어요/.test(part().textContent);
     fresh();
     const longTail = "가".repeat(6200) + " 끝 문장 표식";
     window.__kn = {
       required: [{ name: "kn-a", title: "as-built(#4443): 문서 A — 긴 설명이 붙은 원 제목", type: "decision" }],
       produced: [{ name: "kn-b", title: "문서 B" }, { name: "kn-err", title: "못 읽는 문서" }, { name: "kn-slow", title: "느린 문서" },
         { name: "kn-md", title: "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**" },
+        { name: "kn-h1", title: "제목 하나" }, { name: "kn-links", title: "링크 모음" }, { name: "kn-live", title: "고쳐지는 문서" },
         ...Array.from({ length: 30 }, (_, i) => ({ name: "kn-f" + i, title: "채움 문서 " + i }))],
     };
     window.__knDocs = {
@@ -400,13 +413,15 @@ async function PAGE_MAIN() {
         categories: [{ name: "분류1" }, { name: "분류2" }, { name: "분류3" }], updated_at: new Date(Date.now() - 3 * 3600e3).toISOString(),
         body_md: "# 문서 A\n\n## 절 하나\n\n- 항목 하나\n- 항목 둘\n\n```\n[[kn-y]]\n```\n\n| 열 | 값 |\n|---|---|\n| a | 1 |\n\n이어 읽기 [[kn-b]] · [[kn-c|라벨 C]] · 코드 `[[kn-x]]` · 주소 [B 로](#/k/kn-b)\n\n" + longTail },
       "kn-b": { name: "kn-b", title: "문서 B", body_md: "B 본문입니다." },
-      "kn-slow": { name: "kn-slow", title: "느린 문서", body_md: "느림" },
+      "kn-slow": { name: "kn-slow", title: "느린 문서", body_md: "느림\n\n:::collection type=decision\n:::" },
+      "kn-h1": { name: "kn-h1", title: "제목 하나", body_md: "# 개요 설명\n\n본문" },
+      "kn-links": { name: "kn-links", title: "링크 모음", body_md: "[밖](https://example.com/x) · [메일](mailto:a@b.c) · [여기](#/k/kn-links) · [B](#/k/kn-b)\n\n" + "줄\n\n".repeat(80) },
+      "kn-live": { name: "kn-live", title: "고쳐지는 문서", body_md: "첫 판", updated_at: "2026-10-05T00:00:00Z" },
       "kn-md": { name: "kn-md", title: "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**", body_md: "본문" },
     };
     window.__knDelay = { "kn-slow": 500 };
+    window.__knColl = 0;
     await mount();
-    const kn = {}; R.k = kn;
-    const part = () => $('#app .pn-pane[data-zone="side"] .pn-kn');
     const rowOf = (nm) => $$('#app .pn-pane[data-zone="side"] .pn-knrow').find((r) => r.querySelector(".n")?.textContent.trim() === nm) || null;
     const rd = () => { const p = part(); return { reading: !!p && p.classList.contains("reading"), listShown: !!p && shown($(".pn-knlist", p)), readerShown: !!p && shown($(".pn-knr", p)),
       title: (p && $(".pn-knr-t", p)?.textContent) || null, back: (p && $(".pn-knr-back", p)?.textContent.trim()) || null }; };
@@ -421,15 +436,19 @@ async function PAGE_MAIN() {
       h2: !!md && $$(".md-h2", md).map((n) => n.textContent).includes("절 하나"), list: !!md && !!$(".md-list", md), pre: !!md && !!$(".md-pre", md), table: !!md && !!$(".md-table", md),
       name: $(".pn-knr-name", p)?.textContent || null, open: $(".pn-knr-open", p)?.getAttribute("href") || null, mdCls: md ? md.className : null };
     kn.K3 = !!md && !$$(".md-h1", md).some((n) => n.textContent.includes("문서 A"));
+    //  K5s 앞 문서의 스크롤 자리 — A 를 900 까지 굴리고 링크로 B → 뒤로 오면 900
     kn.K4 = { tail: !!md && md.textContent.includes("끝 문장 표식"), cut: /여기까지만/.test(p.textContent) };
     kn.K6 = { links: md ? $$("a", md).map((a) => [a.getAttribute("href"), a.textContent]) : [],
       codeKept: !!md && $$("code", md).some((c) => c.textContent.includes("[[kn-x]]")), preKept: !!md && $$(".md-pre", md).some((c) => c.textContent.includes("[[kn-y]]")) };
     //  K5 본문의 [[kn-b]] 링크 — 주소는 그대로, 그 자리에서 B · 뒤로는 한 칸씩
     const hash0 = location.hash;
+    $(".pn-knr-scroll", part()).scrollTop = 900; kn.K5s0 = $(".pn-knr-scroll", part()).scrollTop;
     md && $$("a", md).find((a) => a.getAttribute("href") === "#/k/kn-b")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
     await waitFor(() => rd().title === "문서 B");
     kn.K5b = { ...rd(), hashSame: location.hash === hash0 };
-    await backBtn(); await waitFor(() => rd().title === "문서 A"); kn.K5a = rd();
+    await backBtn(); await waitFor(() => rd().title === "문서 A"); kn.K5a = rd(); kn.K5s = $(".pn-knr-scroll", part()).scrollTop;
+    //  K7 목록 자리 — 크롬은 display:none 을 지나도 자리를 지키므로, 자리를 잃은 상황을 손으로 만든 뒤 돌아온다
+    { const L = $(".pn-knlist", part()); L.style.display = "block"; L.scrollTop = 0; L.style.removeProperty("display"); }
     await backBtn(); kn.K5list = rd();
     kn.K7 = $(".pn-knlist", part()).scrollTop;
     //  K8 켜진 지식 탭 다시 누르기 — 읽던 중 → 목록 · 목록 → 맨 위
@@ -437,7 +456,7 @@ async function PAGE_MAIN() {
     await clk(tabBtn("side", "지식")); kn.K8a = rd();
     await clk(tabBtn("side", "지식")); kn.K8b = $(".pn-knlist", part()).scrollTop;
     //  K9 마우스 뒤로 단추
-    rowOf("문서 B").click(); await waitFor(() => rd().title === "문서 B");
+    rowOf("문서 B").click(); await waitFor(() => rd().title === "문서 B"); kn.K9pre = rd().reading;
     part().dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 3 })); await sleep(60);
     kn.K9 = rd();
     //  K10 불러오기 실패(서버 500)
@@ -449,7 +468,7 @@ async function PAGE_MAIN() {
     rowOf("문서 B").click(); await sleep(700); kn.K11 = rd();
     await backBtn();
     rowOf("느린 문서").click(); await sleep(30); await backBtn(); await sleep(700);
-    kn.K11b = { ...rd(), readerKids: $(".pn-knr", part()).children.length };
+    kn.K11b = { ...rd(), readerKids: $(".pn-knr", part()).children.length, coll: window.__knColl };
     //  K12 우클릭 «여기서 읽기» — 배선(mountCtxMenus)은 main.ts 몫이라 여기서 이 마운트의 모듈로 건다
     const unCtx = window.__PN.mountCtxMenus(document.body, {});
     rowOf("문서 B").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 })); await sleep(80);
@@ -463,6 +482,36 @@ async function PAGE_MAIN() {
     const fullEl = $(".pn-knr-full", part());
     kn.K16 = { title: rd().title, full: fullEl?.textContent || null, tip: fullEl?.getAttribute("title") || null };
     fullEl?.click(); kn.K16open = !!fullEl && fullEl.classList.contains("open");
+    //  K17 초점 — 줄에서 열면 [‹] 로(누른 줄은 숨는다) · [‹] 로 돌아오면 그 문서 줄로
+    await backBtn();
+    const fRow = rowOf("문서 B"); fRow.focus(); fRow.click(); await waitFor(() => rd().title === "문서 B" && $(".pn-knr-md", part()));
+    kn.K17open = document.activeElement?.classList.contains("pn-knr-back") || false;
+    $(".pn-knr-back", part()).click(); await sleep(40);
+    kn.K17back = document.activeElement?.getAttribute?.("data-kn") || null;
+    //  K3b 제목과 다른 맨 앞 H1 은 남는다(긴 설명이 본문 첫 헤딩일 수 있다)
+    await backBtn(); rowOf("제목 하나").click(); await waitFor(() => $(".pn-knr-md", part()));
+    kn.K3b = $$(".pn-knr-md .md-h1", part()).map((n) => n.textContent);
+    //  K18 가로채지 않는 것 — 바깥 주소 · 메일 · 위키 단추 · 보조키는 그대로 둔다(문서 바닥에서 기록하고 실제 이동만 막는다) · 같은 문서 링크는 맨 위로만
+    await backBtn(); rowOf("링크 모음").click(); await waitFor(() => $(".pn-knr-md", part()));
+    const rec = []; const onDoc = (e) => { const a = e.target.closest?.("a[href]"); if (a) { rec.push([a.getAttribute("href") + (e.ctrlKey ? " +ctrl" : ""), e.defaultPrevented]); e.preventDefault(); } };
+    document.addEventListener("click", onDoc);
+    const A = (h) => $$(".pn-knr-md a", part()).find((a) => a.getAttribute("href") === h);
+    const hit = (a, ctrl = false) => a?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ctrlKey: ctrl }));
+    kn.K18ext = { target: A("https://example.com/x")?.getAttribute("target") || null, rel: A("https://example.com/x")?.getAttribute("rel") || null };
+    hit(A("https://example.com/x")); hit(A("mailto:a@b.c")); hit($(".pn-knr-open", part())); hit(A("#/k/kn-b"), true); await sleep(30);
+    kn.K18keep = rd().title;
+    $(".pn-knr-scroll", part()).scrollTop = 300; hit(A("#/k/kn-links")); await sleep(30);
+    kn.K18self = { title: rd().title, back: rd().back, top: $(".pn-knr-scroll", part()).scrollTop };
+    hit(A("#/k/kn-b")); await waitFor(() => rd().title === "문서 B");
+    kn.K18 = rec.slice(); kn.K18follow = rd().title;
+    document.removeEventListener("click", onDoc);
+    //  K19 열어 둔 문서가 서버에서 고쳐지면 — 다음 확인(30초 간격 · 셸 8초 틱)에 보던 자리를 지키며 새 판으로
+    await backBtn(); await backBtn(); rowOf("고쳐지는 문서").click(); await waitFor(() => $(".pn-knr-md", part()));
+    kn.K19a = $(".pn-knr-md", part()).textContent;
+    window.__knDocs["kn-live"] = { ...window.__knDocs["kn-live"], body_md: "둘째 판", updated_at: "2026-10-05T01:00:00Z" };
+    const realNow = Date.now; Date.now = () => realNow() + 31000;
+    try { await waitFor(() => /둘째 판/.test($(".pn-knr-md", part())?.textContent || ""), 9500); } finally { Date.now = realNow; }
+    kn.K19b = $(".pn-knr-md", part())?.textContent || null; kn.K19reading = rd().reading;
     //  K15 떠 있는 독 — 독 높이(--pn-dock-b)만큼 읽기 스크롤 끝에 빈자리가 선다
     if (!$(".pn-knr-scroll", part())) { await backBtn(); rowOf("문서 B")?.click(); await waitFor(() => $(".pn-knr-scroll", part())); }   // 앞 행이 깨져도 이 행은 제 힘으로 잰다
     zone("side").style.setProperty("--pn-dock-b", "37px"); await sleep(20);
@@ -551,24 +600,34 @@ check(/^웹/.test(d.hover || "") && !!d.more && d.more.closed && d.more.tabs.inc
 check(d.esc === true, "AD9 Esc 로 닫힌다");
 check(t.enabled === true && t.note === "AI 도 같이 써요 · 누르면 사이드바에 붙어요" && /^메모/.test(t.desc || "") && t.closed === true && J(t.calls) === J([{ sid: "s1", body: { app_id: "memo" } }]),
   "T1 세션이 있으면 «이 세션에 붙이기» 를 고른다 — 누르면 그 세션에 붙이기 요청이 나가고 서랍이 닫힌다", t);
+check(kn.K0 === true, "K0 연결된 지식이 없으면 첫 그림부터 안내가 선다", kn.K0);
 check(!!kn.K1 && kn.K1.reading && !kn.K1.listShown && kn.K1.readerShown && !kn.K1.modal && kn.K1.title === "문서 A", "K1 지식 줄을 누르면 그 칸 안에서 읽는다 — 앱 위에 시트 · 덮개가 없다 · 목록은 숨는다", kn.K1);
 check(!!kn.K2 && kn.K2.full === "as-built(#4443): 문서 A — 긴 설명이 붙은 원 제목" && J(kn.K2.meta.slice(0, 4)) === J(["필요", "decision", "분류1", "분류2"]) && kn.K2.meta.length === 5 && /갱신$/.test(kn.K2.meta[4] || "")
   && kn.K2.sum === "문서 A 의 요약입니다." && kn.K2.h2 && kn.K2.list && kn.K2.pre && kn.K2.table && kn.K2.name === "kn-a" && kn.K2.open === "#/k/kn-a" && /\bmd-rendered\b/.test(kn.K2.mdCls || ""),
   "K2 짧은 제목 · 원 제목 · 메타(필요 · 유형 · 분류 2개 · 갱신) · 요약 · 본문(위키와 같은 렌더러 · 모양) · 이름 · 위키에서 열기", kn.K2);
 check(kn.K3 === true, "K3 본문 첫 줄의 H1(제목 되풀이)은 안 보인다");
+check(J(kn.K3b) === J(["개요 설명"]), "K3b 제목과 다른 맨 앞 H1 은 남는다(긴 설명이 본문 첫 헤딩일 수 있다)", kn.K3b);
 check(!!kn.K4 && kn.K4.tail && !kn.K4.cut, "K4 6000자 넘는 본문도 끝까지 — 잘림 안내 없음", kn.K4);
 check(!!kn.K6 && J(kn.K6.links) === J([["#/k/kn-b", "kn-b"], ["#/k/kn-c", "라벨 C"], ["#/k/kn-b", "B 로"]]) && kn.K6.codeKept && kn.K6.preKept, "K6 [[이름]] · [[이름|라벨]] 은 링크 · 코드 안의 [[…]] 는 글자 그대로", kn.K6);
 check(!!kn.K5b && kn.K5b.title === "문서 B" && kn.K5b.hashSame && kn.K5b.back === "뒤로" && !!kn.K5a && kn.K5a.title === "문서 A" && kn.K5a.back === "지식" && !!kn.K5list && !kn.K5list.reading && kn.K5list.listShown,
   "K5 본문 링크는 주소를 안 바꾸고 그 자리에서 이어 읽는다 · 뒤로는 한 칸씩 · 마지막이면 목록", { b: kn.K5b, a: kn.K5a, list: kn.K5list });
-check(kn.listTop0 > 0 && kn.K7 === kn.listTop0, "K7 목록에 돌아오면 보던 스크롤 자리 그대로", { before: kn.listTop0, after: kn.K7 });
+check(kn.K5s0 >= 890 && Math.abs((kn.K5s || 0) - kn.K5s0) <= 2, "K5s 뒤로 오면 앞 문서의 스크롤 자리 그대로", { before: kn.K5s0, after: kn.K5s });
+check(kn.listTop0 > 0 && kn.K7 === kn.listTop0, "K7 목록에 돌아오면 보던 스크롤 자리 그대로(브라우저가 자리를 잃어도)", { before: kn.listTop0, after: kn.K7 });
 check(!!kn.K8a && !kn.K8a.reading && kn.K8a.listShown && kn.K8b === 0, "K8 켜진 지식 탭 다시 누르기 — 읽던 중이면 목록 · 목록이면 맨 위", { a: kn.K8a, top: kn.K8b });
-check(!!kn.K9 && !kn.K9.reading && kn.K9.listShown, "K9 마우스 뒤로 단추 — 한 칸 뒤로", kn.K9);
+check(kn.K9pre === true && !!kn.K9 && !kn.K9.reading && kn.K9.listShown, "K9 마우스 뒤로 단추 — 읽던 문서에서 한 칸 뒤로", { pre: kn.K9pre, k9: kn.K9 });
 check(!!kn.K10 && /불러오지 못했어요/.test(kn.K10.err || "") && kn.K10.href === "#/k/kn-err", "K10 불러오기 실패 — 안내와 위키에서 열기", kn.K10);
-check(!!kn.K11 && kn.K11.reading && kn.K11.title === "문서 B" && !!kn.K11b && !kn.K11b.reading && kn.K11b.readerKids === 0, "K11 늦게 온 응답은 지금 화면을 덮지 않는다 — B 가 남고, 목록에 머물면 아무것도 안 열린다", { k11: kn.K11, k11b: kn.K11b });
+check(!!kn.K11 && kn.K11.reading && kn.K11.title === "문서 B" && !!kn.K11b && !kn.K11b.reading && kn.K11b.readerKids === 0 && kn.K11b.coll === 0,
+  "K11 늦게 온 응답은 지금 화면을 덮지 않고, 버려진 문서는 그리지도 않는다(본문의 모음 조회 0건)", { k11: kn.K11, k11b: kn.K11b });
 check(kn.K12item === true && !!kn.K12 && kn.K12.reading && kn.K12.title === "문서 B", "K12 우클릭 «여기서 읽기» — 그 칸 안에서 읽는다", kn.K12);
 check(kn.K16row === true && !!kn.K16 && kn.K16.title === "원인·수정: 이름 굵게 · 코드" && kn.K16.full === "원인·수정(#9, 2026-09-12): 이름 굵게 · 코드 — 긴 설명 강조"
   && kn.K16.tip === "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**" && kn.K16open === true,
   "K16 제목의 마크다운 강조 표식(** · `)은 글자로 안 선다 · «이름 : 설명» 띄어쓰기 · 원 제목은 눌러 펼친다(전문은 title)", { row: kn.K16row, k16: kn.K16, open: kn.K16open });
+check(!!kn.K18ext && kn.K18ext.target === "_blank" && /noopener/.test(kn.K18ext.rel || "") && kn.K18keep === "링크 모음"
+  && J(kn.K18) === J([["https://example.com/x", false], ["mailto:a@b.c", false], ["#/k/kn-links", false], ["#/k/kn-b +ctrl", false], ["#/k/kn-links", true], ["#/k/kn-b", true]])
+  && !!kn.K18self && kn.K18self.title === "링크 모음" && kn.K18self.back === "지식" && kn.K18self.top === 0 && kn.K18follow === "문서 B",
+  "K18 바깥 주소(새 탭) · 메일 · 위키 단추 · 보조키는 가로채지 않는다 · 같은 문서 링크는 맨 위로만 · 본문의 지식 링크만 이 칸에서 연다", { ext: kn.K18ext, rec: kn.K18, self: kn.K18self, keep: kn.K18keep, follow: kn.K18follow });
+check(/첫 판/.test(kn.K19a || "") && /둘째 판/.test(kn.K19b || "") && kn.K19reading === true, "K19 열어 둔 문서가 고쳐지면 다음 확인에 새 판으로 — 읽기 화면에 머문 채", { a: kn.K19a, b: kn.K19b, reading: kn.K19reading });
+check(kn.K17open === true && kn.K17back === "kn-b", "K17 초점 — 줄에서 열면 [‹] 에 · 돌아오면 그 문서 줄에(숨는 칸에 초점이 남지 않는다)", { open: kn.K17open, back: kn.K17back });
 check(kn.K15 === "37px", "K15 떠 있는 독이 마지막 줄을 가리지 않는다 — 읽기 스크롤 끝에 독 높이만큼 빈자리", kn.K15);
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "E1 페이지 오류 없음(마운트 · 그리기)", R.pageErrors);
 
