@@ -21,6 +21,9 @@
 //  H12 찾기 단추 → 액자에 찾기 신호
 //  H13 카드가 많다(달이 쌓인다) — 들어가는 만큼만 세우고 «기간 N개 더» · 누르면 전부
 //  H14 다른 화면이 활성 — 세션 이력 사이드바가 아니다(종전 구역 그대로)
+//  H15 한 축만 받은 판(partial) — 고른 카드가 그 줄에 없어도 풀지 않는다(수가 덜 찬 것이지 사라진 것이 아니다)
+//  H16 액자가 줄을 못 받았다고 알려 온다 — 받아 둔 줄이 없으면 «받는 중» 대신 그렇다고 말한다 · 줄이 오면 걷힌다
+//  H17 «사람이 눌렀다» 는 지금 보이는 액자에만 — 감춰 둔 셸 탭의 액자에는 범위만 간다
 //  W   페이지 예외 없음 · 배선(액자로 가는 신호가 실제로 잡혔다)
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(사이드바가 없던 origin/main 에서 H1~H13 이 빨갛다).
@@ -54,8 +57,8 @@ async function PAGE_MAIN() {
   const $$ = (s, r = host) => [...r.querySelectorAll(s)];
   const txt = (n) => (n ? n.textContent.trim() : null);
   //  액자 셋 — 세션 이력 앱의 액자 · 다른 앱의 액자 · 액자가 아닌 창. 받은 신호를 적는다(file:// 는 오리진이 'null' 이라 진짜로는 못 보낸다).
-  const told = { fr: [], other: [] };
-  for (const k of ["fr", "other"]) document.getElementById(k).contentWindow.postMessage = (m) => { told[k].push(JSON.parse(JSON.stringify(m))); };
+  const told = { fr: [], other: [], fr2: [] };
+  for (const k of ["fr", "other", "fr2"]) document.getElementById(k).contentWindow.postMessage = (m) => { told[k].push(JSON.parse(JSON.stringify(m))); };
   const FR = document.getElementById("fr").contentWindow, OTHER = document.getElementById("other").contentWindow;
   const say = (data, o = {}) => window.dispatchEvent(new MessageEvent("message", { data, origin: o.origin === undefined ? location.origin : o.origin, source: o.source === undefined ? FR : o.source }));
   const lastScope = () => { const m = told.fr.filter((x) => x.type === "lively:hist-scope"); return m.length ? m[m.length - 1].scope : null; };
@@ -109,10 +112,16 @@ async function PAGE_MAIN() {
     await sleep(40);
     R.h10 = { boot: !!$(".v2-side-boot"), cards: cards().length, count: head().count, otherTold: told.other.length };
 
+    // ── H16 — 액자가 줄을 못 받았다고 알려 온다(받아 둔 줄이 없다) ──
+    say({ type: "lively:hist-rows", failed: true });
+    await sleep(40);
+    R.h16 = { boot: !!$(".v2-side-boot"), empty: txt($(".v2-empty")), count: head().count };
+
     // ── H3 · H4 ──
     const before = nScope();
     say({ type: "lively:hist-rows", rows: ROWS, kinds: false });
     await sleep(60);
+    R.h16b = { empty: txt($(".v2-empty")) };
     R.h3 = { head: head(), all: all(), label: txt($(".v2-kgroup")), cards: cards(), replied: nScope() - before, scope: lastScope(), replyPick: lastPick(),
       parts: { shelf: !!$(".v2-app-list.v2-kshelf.v2-sshelf"), card: $$(".v2-ksp.v2-pcard.v2-scard.open").length, line: $$(".v2-wcat.v2-ptl.v2-kcat.v2-sproj").length, none: $$(".v2-kcat.v2-ptl--none").length, view: !!$(".v2-wcat.v2-ptl.v2-kview.v2-sproj"), sgb: !!$(".v2-sgb[aria-haspopup=menu]") } };
     for (const m of $$(".v2-ksp .v2-pg-past:not(.v2-scards-more)")) m.click();
@@ -125,6 +134,7 @@ async function PAGE_MAIN() {
     $(".v2-ksp-t", cardOf("어제")).click();
     await sleep(40);
     R.h5 = { scope: lastScope(), on: onN(), headOn: cards().find((c) => c.name === "어제").on, allOn: all().on, picked: picks.slice(p0), pick: lastPick() };
+    { const m = told.fr2.filter((x) => x.type === "lively:hist-scope"); const lastHidden = m[m.length - 1] || {}; R.h17 = { scope: lastHidden.scope || null, pick: lastHidden.pick === true }; }
 
     // ── H6 ──
     lineOf(cardOf("어제"), "통합검색").click();
@@ -182,6 +192,11 @@ async function PAGE_MAIN() {
     await pickBy("시간별");
     $(".v2-ksp-t", cardOf("어제")).click(); await sleep(40);
     R.h11a = lastScope();
+    //  H15 — 한 축만 받은 판: 어제 것이 빠져 있어도 고른 것을 풀지 않는다
+    const n15 = nScope();
+    say({ type: "lively:hist-rows", rows: ROWS.filter((r) => r.last >= T0.getTime() || r.last < dayAt(2)), kinds: true, partial: true });
+    await sleep(60);
+    R.h15 = { scope: lastScope(), sent: nScope() - n15, cards: cards().map((c) => c.name) };
     say({ type: "lively:hist-rows", rows: ROWS.filter((r) => r.last >= T0.getTime() || r.last < dayAt(2)), kinds: true });   // 어제 것이 사라졌다
     await sleep(60);
     R.h11 = { scope: lastScope(), allOn: all().on, cards: cards().map((c) => c.name), count: head().count, picks: told.fr.filter((x) => x.type === "lively:hist-scope").slice(-2).map((x) => x.pick === true) };
@@ -215,6 +230,7 @@ const PAGE = `<!doctype html><html data-theme="light" lang="ko"><meta charset="u
 </style>
 <div id="v2-root"><nav class="v2-side stu-side" id="v2-side"><div class="stu-panel"><div class="stu-panel-tree" id="host"></div></div></nav></div>
 <iframe id="fr" class="v2-frame" data-app-key="sessions"></iframe><iframe id="other" class="v2-frame" data-app-key="projects2"></iframe>
+<iframe id="fr2" class="v2-frame" data-app-key="sessions" style="display:none"></iframe>
 <pre id="out">PENDING</pre>
 <script>window.fetch = async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });</script>
 <script>${pack("v2/side.ts", "Side")}</script>
@@ -296,6 +312,13 @@ same(R.h11a, { by: "day", group: "d1", proj: null }, "H11 대조: 어제를 골�
 same(R.h11 && [R.h11.scope, R.h11.allOn, R.h11.count], [S0, true, "5"], "H11 고른 카드가 새 줄에 없으면 풀리고(전체) 액자에 그렇게 알린다");
 same(R.h11 && R.h11.picks, [false, false], "H11 그 신호는 사람이 누른 것이 아니다 — 보던 화면을 옮기지 않는다");
 check(!!R.h11 && !R.h11.cards.includes("어제"), "H11 사라진 카드는 서지 않는다", JSON.stringify(R.h11 && R.h11.cards));
+
+// ── H15 · H16 · H17 ──
+same(R.h15 && [R.h15.scope, R.h15.sent], [{ by: "day", group: "d1", proj: null }, 1], "H15 한 축만 받은 판에서는 고른 것을 풀지 않는다 — 가는 신호는 줄에 대한 답 하나뿐");
+check(!!R.h15 && !R.h15.cards.includes("어제"), "H15 대조: 그 판의 줄에는 어제 것이 없다(그래도 범위는 그대로)", JSON.stringify(R.h15 && R.h15.cards));
+same(R.h16 && [R.h16.boot, R.h16.empty, R.h16.count], [false, "세션 이력을 불러오지 못했어요. 본문의 「세션 목록」 탭에서 새로 고침을 눌러 주세요.", null], "H16 액자가 줄을 못 받았다고 알려 오면 «받는 중» 대신 그렇다고 말한다");
+same(R.h16b && R.h16b.empty, null, "H16 줄이 오면 그 말이 걷힌다");
+same(R.h17, { scope: { by: "day", group: "d1", proj: null }, pick: false }, "H17 감춰 둔 액자에는 범위만 간다 — «사람이 눌렀다» 는 보이는 액자에만(감춰 둔 대화록 화면이 앱으로 튕기지 않는다)");
 
 // ── H12 ──
 same(R.h12 && R.h12.sent, 1, "H12 찾기 단추 → 액자에 찾기 신호");

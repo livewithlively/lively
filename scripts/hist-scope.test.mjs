@@ -23,6 +23,7 @@
 //
 //  ⚠ 단언을 하나씩 끝까지 센다(첫 실패에서 멈추지 않는다). fail-first: 규칙 파일이 없던 트리(origin/main)에서 전부 빨갛고,
 //   규칙을 한 줄씩 깨뜨린 변이에서도 그 줄을 재는 단언이 빨갛다(스크래치패드 mut-hist-scope.mjs).
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -163,6 +164,18 @@ eq(histGroupLabel("kind", "?", NOW), "확인 중", "L14 그 묶음의 이름은 
 eq(unknown.filter((r) => inHistScope(r, { by: "kind", group: "n", proj: null }, NOW)).length, 0, "L14 모르는 줄을 «남긴 기록이 없는 세션» 으로 세지 않는다");
 eq(histGroupKey(row("x", 0), "none", NOW), "", "L14 묶지 않음의 묶음 key 는 빈 글자");
 eq([hiddenHistCardsLabel("day", 3), hiddenHistCardsLabel("state", 2)], ["기간 3개 더", "묶음 2개 더"], "L14 접힌 카드 줄의 글");
+
+// ── W 배선(주석을 걷고 본다) — 화면 시험의 가짜 서버는 범위를 스스로 거른다. 진짜 서버에서 이 줄이 빠지면 «어제» 를 골라 놓고 전체에서 찾는다 ──
+{
+  const strip = (f) => { try { return readFileSync(join(root, f), "utf8").replace(/^[ \t]*\/\/.*$/gm, ""); } catch { return ""; } };
+  const ROUTE = strip("src/sessions/session-log-routes.ts"), STORE = strip("src/v6/conv-index-store.ts");
+  ok(/const only = post \? parseSessionIds\(src\.sessions\)/.test(ROUTE) && /searchConvMessages\(\{[\s\S]{0,260}\bsessionIds\b/.test(ROUTE),
+    "W1 라우트가 POST 본문의 sessions 를 읽어 저장 쪽에 넘긴다(searchConvMessages 의 sessionIds)");
+  ok(/app\.get\("\/api\/ui\/v6\/session-search\/messages", auth, searchMessages\)/.test(ROUTE) && /app\.post\("\/api\/ui\/v6\/session-search\/messages", auth, searchMessages\)/.test(ROUTE),
+    "W1 GET 과 POST 가 같은 처리기다(인증 포함) — 거르개만 다르다");
+  ok(/onlySql = ` AND s\.session_id = ANY\(\$\$\{p1\.length\}::text\[\]\)`/.test(STORE) && /WHERE \$\{v\.where\}\$\{projSql\}\$\{onlySql\}/.test(STORE),
+    "W2 저장 쪽은 볼 수 있는 세션(v.where) **안에서** 그 세션들로 좁힌다(AND) — id 를 적었다고 보이게 되지 않는다");
+}
 
 console.log(`\n#4553 세션 이력 사이드바 규칙: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);

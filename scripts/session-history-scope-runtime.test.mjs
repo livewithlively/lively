@@ -16,7 +16,7 @@
 //  S7  범위 안에 기록이 하나도 없다 + 검색어 — 요청을 내지 않고 까닭을 말한다
 //  S8  「작업 일지」 + 시간 묶음 — 기간 고르개가 걷히고 · 그 묶음의 기록 시각을 덮는 구간으로 청하고 · 범위 안 세션만 · 범위 글 «어제 · M월 D일»
 //  S9  「작업 일지」 + 시간이 아닌 범위(상태) — 기간 고르개는 남고 · 범위 안 세션만 · 비면 까닭을 말한다
-//  S10 감춰 둔 탭 — 범위가 바뀌어도 조회하지 않는다 · 볼 때 다시 그린다
+//  S10 감춰 둔 탭 — 범위가 바뀌어도 조회하지 않는다(일지 · 검색어가 든 대화 찾기) · 볼 때 다시 그린다
 //  S11 「전체」로 풀기 — 줄이 돌아오고 걷혔던 고르개가 다시 선다
 //  S12 남긴 것별 — 범위 신호를 받으면 일지를 받아 줄을 다시 보낸다(kind 가 찬다) · «지식을 남긴 세션» = 그 세션만
 //  S13 찾기 신호 — 「대화 찾기」 탭으로 가고 찾기 칸에 초점
@@ -24,7 +24,12 @@
 //  S16 남이 보낸 신호(오리진 · 창이 다름) · 모양이 틀린 범위 — 무시
 //  S17 대화록 단독 화면(#/sessions/<sid>) — 사람이 사이드바에서 고르면 앱으로 돌아온다(그 화면에는 범위를 보일 자리가 없다) · 찾기 단추는 「대화 찾기」로
 //  S18 그 화면에서 셸이 맞춰 주는 신호(사람이 누른 것이 아니다) — 범위만 맞추고 화면은 옮기지 않는다(막 연 대화록이 앱으로 튕기지 않는다)
-//  S19 남긴 것을 못 받는다(일지 500) — 그렇다고 셸에 알리고 · 셸의 답에는 다시 청하지 않고 · 사람이 다시 고르면 다시 청한다
+//  S20 줄을 못 받는다(도는 세션 · 기록 둘 다 500) + 범위 — «범위에 아무것도 없다» 가 아니라 «못 받았다» 고 말하고 요청을 내지 않는다 · 셸에도 그렇게 알린다
+//  S21 보이는 동안 1분마다 줄을 다시 받아 셸에 보낸다 · 화면이 가려져 있으면 받지 않는다 · 「세션 목록」도 새 줄로 맞춘다
+//  S23 연달아 받을 때 늦게 끝난 옛 판이 새 판을 덮지 않는다
+//  S22 한 축만 받은 판(도는 세션 실패) — 셸에 그렇다고 알린다(사이드바가 고른 것을 풀지 않게)
+//  S19 «남긴 것» 묶음을 골랐는데 일지가 아직 없다 — 본문은 «없다» 가 아니라 «세는 중» 이라 말하고 수를 적지 않는다 · 일지를 못 받으면(500)
+//      그렇다고 말하고 셸에 알리고 · 셸의 답에는 다시 청하지 않고 · 사람이 다시 고르면 다시 청한다
 //  S15 셸 밖(단독 탭) — 빵부스러기 없음 · 줄을 안 보낸다 · 범위 신호를 받아도 그대로 · 「대화 찾기」는 도는 세션을 조회하지 않는다 · 검색은 GET ·
 //      대화록 단독 화면에서도 다리가 없다(신호를 받아도 주소가 그대로)
 //  W   통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸고, 셸로 가는 신호가 실제로 잡혔다)
@@ -108,7 +113,17 @@ async function PAGE_MAIN() {
     jrow(LOGS[4], { acts: [act(3, "research", "옛 조사 정리")] }),
   ];
   let reqs = [];
-  const MODE = { kinds: "ok" };   // "500" = 전 기간 일지(남긴 것을 세는 조회)가 실패한다
+  //  kinds: "hang" = 전 기간 일지(남긴 것을 세는 조회)를 붙들어 둔다(releaseKinds 로 500 을 낸다) · "500" = 곧바로 실패
+  //  rows: "500" = 줄의 두 축(도는 세션 · 기록)이 다 실패 · "live500" = 도는 세션 축만 실패
+  const MODE = { kinds: "ok", rows: "ok" };
+  let releaseKinds = null;
+  let liveHang = null;       // 도는 세션 조회 한 번을 붙들어 둘 약속(늦게 끝나는 옛 판 장면)
+  //  1분 타이머는 잡아 두고 손으로 돌린다(가상 시간에 저절로 돌면 장면이 흔들린다). 화면이 보이나도 손으로 정한다.
+  const TICKS = [];
+  const realSetInterval = window.setInterval.bind(window);
+  window.setInterval = (fn, ms, ...rest) => (ms === 60000 ? (TICKS.push(fn), -1) : realSetInterval(fn, ms, ...rest));
+  let VISIBLE = "visible";
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => VISIBLE });
   const bodies = [];         // POST 로 온 본문(읽은 것)
   const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
   window.fetch = (url, init) => {
@@ -124,14 +139,20 @@ async function PAGE_MAIN() {
     }
     if (u.startsWith("/api/ui/v6/session-journal")) {
       if (P.get("session_id")) { const r = JOURNAL.find((x) => x.session_id === P.get("session_id")); return Promise.resolve(r ? json({ row: r }) : json({ error: "세션을 찾을 수 없습니다" }, 404)); }
-      if (!P.get("since") && MODE.kinds === "500") return Promise.resolve(json({ error: "internal_error" }, 500));
+      if (!P.get("since") && MODE.kinds !== "ok") {
+        const fail = () => json({ error: "internal_error" }, 500);
+        return MODE.kinds === "hang" ? new Promise((z) => { releaseKinds = () => z(fail()); }) : Promise.resolve(fail());
+      }
       const since = P.get("since") ? Date.parse(P.get("since")) : -Infinity, until = P.get("until") ? Date.parse(P.get("until")) : Infinity;
       return Promise.resolve(json({ rows: JOURNAL.filter((r) => { const t = Date.parse(r.last_seen); return t >= since && t < until; }), truncated: false }));
     }
-    if (u.startsWith("/api/ui/terminal/sessions")) return Promise.resolve(json({ sessions: LIVE }));
+    if (u.startsWith("/api/ui/terminal/sessions")) {
+      if (liveHang) { const wait = liveHang; liveHang = null; return wait.then(() => json({ sessions: LIVE })); }
+      return Promise.resolve(MODE.rows !== "ok" ? json({ error: "internal_error" }, 500) : json({ sessions: LIVE }));
+    }
     if (/^\/api\/ui\/v6\/sessions\/[^/]+\/log/.test(u)) return Promise.resolve(json({ from: 0, bytes: 100, isOwner: true, items: ITEMS }));
     if (/^\/api\/ui\/v6\/sessions\/[^/]+\/subagents/.test(u)) return Promise.resolve(json({ subagents: [] }));
-    if (u.startsWith("/api/ui/v6/sessions")) return Promise.resolve(json({ sessions: LOGS, truncated: false }));
+    if (u.startsWith("/api/ui/v6/sessions")) return Promise.resolve(MODE.rows === "500" ? json({ error: "internal_error" }, 500) : json({ sessions: LOGS, truncated: false }));
     return Promise.resolve(json({ error: "없는 경로 " + u }, 404));
   };
   //  셸로 가는 신호 — 이 시험 문서에는 부모가 없어(window.parent === window) 제 창에 보낸다. 보내는 자리에서 잡는다.
@@ -160,6 +181,8 @@ async function PAGE_MAIN() {
   const listChips = () => $$("#shx-panel-list .shx-fchip").map((c) => c.textContent);
   const jNames = () => $$("#shx-panel-journal .shx-jname").map((n) => n.textContent);
   const rowsMsgs = () => POSTS.filter((m) => m && m.type === "lively:hist-rows");
+  const searchN = () => reqs.filter((u) => /session-search\/messages/.test(u)).length;
+  const listProj = (name) => { const tr = $$("#shx-panel-list .shx-tr").find((x) => $(".shx-tname", x).textContent === name); return tr ? $(".shx-td-proj", tr).textContent : null; };
 
   try {
     //  셸 안 장면은 「작업 일지」 탭에서 연다 — 줄을 스스로 받지 않는 탭에서 열어도 사이드바가 그릴 줄이 가야 한다.
@@ -177,6 +200,10 @@ async function PAGE_MAIN() {
       type($("#shx-panel-find .shx-input"), "검색");
       await waitFor(() => $("#shx-panel-find .shx-hit"));
       R.s15c = { search: reqOf("/api/ui/v6/session-search/messages").length, post: reqs.filter((u) => u.startsWith("POST ")).length, hits: findNames().length };
+      //  「세션 목록」의 프로젝트 칸 — 셸 밖은 종전 그대로 박스의 프로젝트를 적는다(c3 의 박스에는 9001 이 붙어 있다).
+      tabBtn("list").click();
+      await waitFor(() => listNames().length >= 5);
+      R.s15list = { c3: listProj("덱 재시안"), c1: listProj("검색 고치기"), count: $("#shx-panel-list .shx-count").textContent };
       //  대화록 단독 화면 — 여기서도 다리가 없다.
       location.hash = "#/sessions/c1?node=";
       await APP.renderSessions(view);
@@ -200,15 +227,15 @@ async function PAGE_MAIN() {
       await waitFor(() => jNames().length === 5);
       tabBtn("list").click();
       await waitFor(() => listNames().length >= 5);
-      R.listAll = { names: listNames().slice().sort(), chips: listChips(), count: $("#shx-panel-list .shx-count").textContent };
+      R.listAll = { names: listNames().slice().sort(), chips: listChips(), count: $("#shx-panel-list .shx-count").textContent, c3: listProj("덱 재시안"), c1: listProj("검색 고치기"), ticks: TICKS.length };
       tabBtn("find").click();
       await waitFor(() => findNames().length === 5);
-      const jBefore = jList().length, sBefore = reqOf("/api/ui/v6/session-search/messages").length;
+      const jBefore = jList().length;
       scope("day", "d1");
       await waitFor(() => findNames().length === 2);
       await sleep(60);
       R.s2 = { names: findNames().slice().sort(), picks: findPicks(), crumb: crumb(), count: $("#shx-panel-find .shx-count").textContent };
-      R.s10 = { journalWhileHidden: jList().length - jBefore, searchWhileHidden: reqOf("/api/ui/v6/session-search/messages").length - sBefore, listStale: listNames().length };
+      R.s10 = { journalWhileHidden: jList().length - jBefore, listStale: listNames().length };
 
       // ── S8 — 「작업 일지」를 다시 보면 그때 범위에 맞춰 받는다 ──
       tabBtn("journal").click();
@@ -250,6 +277,17 @@ async function PAGE_MAIN() {
       R.s5 = { posts: reqs.filter((u) => u.startsWith("POST /api/ui/v6/session-search/messages")).length, sessions: (b.sessions || []).slice().sort(), q: b.q, since: b.since === undefined, project: b.project === undefined,
         hits: findNames().slice().sort(), count: $("#shx-panel-find .shx-count").textContent };
 
+      // ── S10(검색) — 검색어가 든 「대화 찾기」를 감춰 두고 범위를 바꾼다: 그동안은 찾지 않고, 다시 볼 때 한 번 찾는다 ──
+      tabBtn("list").click();
+      await sleep(40);
+      const sHidden0 = searchN();
+      scope("day", "d0");
+      await sleep(100);
+      const sHidden1 = searchN();
+      tabBtn("find").click();
+      await waitFor(() => searchN() > sHidden1 && $$("#shx-panel-find .shx-hit").length === 1);
+      R.s10b = { whileHidden: sHidden1 - sHidden0, onShow: searchN() - sHidden1, hits: findNames(), sessions: ((bodies[bodies.length - 1] || {}).sessions || []).slice().sort() };
+
       // ── S7 — 범위 안에 기록이 없다 ──
       const sN = reqOf("/api/ui/v6/session-search/messages").length + reqs.filter((u) => u.startsWith("POST ")).length;
       scope("day", "m:2019-01");
@@ -277,20 +315,33 @@ async function PAGE_MAIN() {
       $('#shx-panel-journal .shx-seg-b[data-key="d30"]').click();
       await waitFor(() => jNames().length === 1);
 
-      // ── S19 — 남긴 것을 못 받는다 ──
+      // ── S19 — «남긴 것» 묶음을 골랐는데 일지가 아직 없다 → 세는 중 → 못 받았다 ──
       tabBtn("list").click();
       await waitFor(() => listNames().length === 1);   // 아직 「오프라인」 범위
-      MODE.kinds = "500";
+      MODE.kinds = "hang";
       const failBefore = jAll();
       scope("kind", "k", null, { pick: true });
-      await waitFor(() => rowsMsgs().some((m) => m.kindsFailed === true));
+      await waitFor(() => /세는 중/.test($("#shx-panel-list .shx-table").textContent));
+      R.s19wait = { list: /남긴 것을 세는 중입니다/.test($("#shx-panel-list .shx-table").textContent), names: listNames(), crumb: crumb(), none: /이 범위에 세션이 없습니다/.test($("#shx-panel-list .shx-table").textContent) };
+      releaseKinds();
+      await waitFor(() => rowsMsgs().some((m) => m.kindsFailed === true) && /불러오지 못했습니다/.test($("#shx-panel-list .shx-table").textContent));
       const failAsked = jAll() - failBefore;
       scope("kind", "k");   // 셸이 그 줄에 답한다(맞춰 주는 신호) — 여기에 또 청하면 끝없이 돈다
       await sleep(80);
-      { const m = rowsMsgs()[rowsMsgs().length - 1]; R.s19 = { asked: failAsked, again: jAll() - failBefore - failAsked, last: [m.kinds, m.kindsFailed === true], names: listNames() }; }
+      { const m = rowsMsgs()[rowsMsgs().length - 1]; R.s19 = { asked: failAsked, again: jAll() - failBefore - failAsked, last: [m.kinds, m.kindsFailed === true], names: listNames(),
+        list: /남긴 것을 불러오지 못했습니다/.test($("#shx-panel-list .shx-table").textContent), crumb: crumb() }; }
+      const pendS = searchN(), pendJ = jList().length;
+      tabBtn("find").click();
+      await sleep(80);
+      R.s19find = { text: /남긴 것을 불러오지 못했습니다/.test($("#shx-panel-find .shx-results").textContent), asked: searchN() - pendS };
+      tabBtn("journal").click();
+      await sleep(80);
+      R.s19journal = { text: /남긴 것을 불러오지 못했습니다/.test($("#shx-panel-journal .shx-journal").textContent), asked: jList().length - pendJ, rows: jNames().length };
       MODE.kinds = "ok";
 
       // ── S12 — 남긴 것별. 일지를 받기 **전에** 그 묶음을 골라 둔 채다 — 사람이 다시 고르면 다시 청하고, 일지가 오면 줄을 다시 보내고 화면도 다시 그려야 한다 ──
+      tabBtn("list").click();
+      await sleep(40);
       const kindBefore = rowsMsgs().length, jAllBefore = jAll();
       scope("kind", "k", null, { pick: true });
       await waitFor(() => rowsMsgs().length > kindBefore && rowsMsgs()[rowsMsgs().length - 1].kinds === true);
@@ -318,6 +369,59 @@ async function PAGE_MAIN() {
       send("lively:hist-scope");
       await sleep(80);
       R.s16 = { same: JSON.stringify(crumb()) === before, names: findNames().length };
+
+      // ── S21 — 보이는 동안 1분마다 줄을 다시 받는다 ──
+      tabBtn("list").click();
+      await waitFor(() => listNames().length >= 5);
+      const live0 = reqOf("/api/ui/terminal/sessions").length, msg0 = rowsMsgs().length;
+      VISIBLE = "hidden";
+      TICKS[0]();
+      await sleep(80);
+      const liveHidden = reqOf("/api/ui/terminal/sessions").length - live0;
+      VISIBLE = "visible";
+      LOGS.push(logRow("c9", "방금 올라온 대화", NOW - 1000, { pid: 4135, pname: "UI 수정" }));
+      TICKS[0]();
+      await waitFor(() => listNames().includes("방금 올라온 대화"));
+      R.s21 = { ticks: TICKS.length, hidden: liveHidden, shown: reqOf("/api/ui/terminal/sessions").length - live0, msgs: rowsMsgs().length - msg0, rows: (rowsMsgs()[rowsMsgs().length - 1].rows || []).length, crumb: crumb() };
+
+      // ── S23 — 늦게 끝난 옛 판 ──
+      let releaseOld; liveHang = new Promise((z) => { releaseOld = z; });
+      TICKS[0]();                                  // 첫째 — 기록은 곧 받고(6줄), 도는 세션 조회가 붙들린다
+      await sleep(40);
+      LOGS.push(logRow("c10", "더 새로 올라온 대화", NOW - 500, { pid: 4135, pname: "UI 수정" }));
+      TICKS[0]();                                  // 둘째 — 곧바로 끝난다(7줄)
+      await waitFor(() => (rowsMsgs()[rowsMsgs().length - 1].rows || []).length === 7);
+      const before23 = rowsMsgs().length;
+      releaseOld();                                // 첫째가 이제야 끝난다(6줄짜리 옛 판)
+      await sleep(100);
+      R.s23 = { last: (rowsMsgs()[rowsMsgs().length - 1].rows || []).length, extra: rowsMsgs().length - before23, list: listNames().includes("더 새로 올라온 대화"), crumb: crumb() };
+
+      // ── S22 — 한 축만 받은 판 ──
+      MODE.rows = "live500";
+      TICKS[0]();
+      await waitFor(() => rowsMsgs()[rowsMsgs().length - 1].partial === true);
+      { const m = rowsMsgs()[rowsMsgs().length - 1]; R.s22 = { partial: m.partial === true, rows: (m.rows || []).length, states: [...new Set((m.rows || []).map((r) => r.state))] }; }
+      MODE.rows = "ok";
+      TICKS[0]();
+      await waitFor(() => rowsMsgs()[rowsMsgs().length - 1].partial !== true);
+      R.s22b = { partial: rowsMsgs()[rowsMsgs().length - 1].partial === true };
+
+      // ── S20 — 줄을 못 받는다 + 범위 ──
+      MODE.rows = "500";
+      $$("#shx-panel-list .shx-ibtn").find((b) => /새로 고침/.test(b.getAttribute("aria-label") || b.title || "")).click();   // 다시 받는다 — 둘 다 실패
+      await waitFor(() => /불러오지 못했습니다/.test($("#shx-panel-list .shx-table").textContent));
+      scope("day", "d1");
+      tabBtn("find").click();
+      type($("#shx-panel-find .shx-input"), "검색");
+      const askedBefore = reqs.filter((u) => /session-search\/messages/.test(u)).length;
+      await waitFor(() => /범위를 정할/.test($("#shx-panel-find .shx-results").textContent));
+      R.s20 = { find: $("#shx-panel-find .shx-results").textContent.trim(), asked: reqs.filter((u) => /session-search\/messages/.test(u)).length - askedBefore };
+      tabBtn("journal").click();
+      await waitFor(() => /범위를 정할/.test($("#shx-panel-journal .shx-journal").textContent));   // 앞 장면(S19)의 글이 남아 있을 수 있다 — 이 장면의 글을 기다린다
+      R.s20.journal = $("#shx-panel-journal .shx-journal").textContent.trim();
+      R.s20.jrows = jNames().length;
+      R.s20.told = rowsMsgs().some((m) => m.failed === true && m.rows === undefined);
+      MODE.rows = "ok";
 
       // ── S17 · S18 — 대화록 단독 화면 ──
       location.hash = "#/sessions/c1?node=";
@@ -384,13 +488,16 @@ same(A.s1 && A.s1.crumb, C([], "세션 이력", "5개"), "S1 빵부스러기 «�
 check(!!A.s1 && A.s1.live >= 1, "S1 사이드바가 그릴 줄을 어느 탭에서 열든 받는다(도는 세션 조회)", JSON.stringify(A.s1 && A.s1.live));
 same(A.listAll && A.listAll.names, ["검색 고치기", "기록 없는 새 세션", "덱 재시안", "어제 검색 정리", "옛 조사", "위젯 기획"], "S1 고른 것이 없으면 「세션 목록」은 종전 그대로 — 박스만 있는 세션도 선다");
 check(!!A.listAll && /세션 6개 · 기록이 있는 세션 5개/.test(A.listAll.count), "S1 그 차이를 한마디로 적는다(세션 6개 · 기록이 있는 세션 5개)", JSON.stringify(A.listAll && A.listAll.count));
+same(A.listAll && [A.listAll.c3, A.listAll.c1], ["", "통합검색"], "S1 셸 안의 「세션 목록」 프로젝트 칸은 줄의 프로젝트(기록의 것) — c3 은 비어 있다(사이드바가 «기타» 로 센다)");
 
 // ── S2 · S10 ──
 same(A.s2 && A.s2.names, ["덱 재시안", "어제 검색 정리"], "S2 시간 묶음(어제) — 「대화 찾기」가 그 묶음의 대화만");
 same(A.s2 && A.s2.picks, [false, true, true], "S2 기간 고르개가 걷힌다(사이드바가 기간을 쥐었다) · 프로젝트 · 말한 쪽은 그대로");
 same(A.s2 && A.s2.crumb, C(["세션 이력", "시간별"], "어제", "2개"), "S2 빵부스러기 «세션 이력 / 시간별 / 어제 2개»");
 check(!!A.s2 && /최근 대화 2개/.test(A.s2.count), "S2 수도 범위 안", JSON.stringify(A.s2 && A.s2.count));
-same(A.s10 && [A.s10.journalWhileHidden, A.s10.searchWhileHidden], [0, 0], "S10 감춰 둔 탭은 범위가 바뀌어도 조회하지 않는다");
+same(A.s10 && A.s10.journalWhileHidden, 0, "S10 감춰 둔 「작업 일지」는 범위가 바뀌어도 조회하지 않는다");
+same(A.s10b && [A.s10b.whileHidden, A.s10b.onShow], [0, 1], "S10 검색어가 든 「대화 찾기」도 감춰 둔 동안은 찾지 않는다 — 다시 볼 때 한 번 찾는다");
+same(A.s10b && [A.s10b.hits, A.s10b.sessions], [["검색 고치기"], ["c1", "c2"]], "S10 그때 찾는 범위는 새 범위(오늘)다");
 same(A.s10 && A.s10.listStale, 6, "S10 감춰 둔 「세션 목록」은 그대로 둔다(볼 때 다시 그린다)");
 
 // ── S8 ──
@@ -435,8 +542,12 @@ check(!!A.s9b && (A.s9b.names.length === 1 ? A.s9b.names[0] === "어제 검색 �
   "S9 기간을 좁혀 비면 까닭을 말한다(범위 탓) — 범위 밖 세션이 끼지 않는다", JSON.stringify(A.s9b));
 
 // ── S19 ──
+same(A.s19wait && [A.s19wait.list, A.s19wait.names, A.s19wait.none], [true, [], false], "S19 일지가 오기 전 — «세는 중» 이라 말한다(«이 범위에 세션이 없습니다» 가 아니다)");
+same(A.s19wait && A.s19wait.crumb, C(["세션 이력", "남긴 것별"], "지식을 남긴 세션", null), "S19 그동안 빵부스러기는 수를 적지 않는다(«0개» 라 하지 않는다)");
 same(A.s19 && [A.s19.asked, A.s19.again, A.s19.last], [1, 0, [false, true]], "S19 일지를 못 받으면 그렇다고 셸에 알리고 · 셸의 답(맞춰 주는 신호)에는 다시 청하지 않는다");
-same(A.s19 && A.s19.names, [], "S19 그동안 «지식을 남긴 세션» 범위는 비어 있다(모르는 줄을 세지 않는다)");
+same(A.s19 && [A.s19.list, A.s19.names, A.s19.crumb && A.s19.crumb.desc], [true, [], null], "S19 본문도 «못 받았다» 고 말한다 — 줄도 수도 없다");
+same(A.s19find && [A.s19find.text, A.s19find.asked], [true, 0], "S19 「대화 찾기」도 같다 — 찾는 요청을 내지 않는다");
+same(A.s19journal && [A.s19journal.text, A.s19journal.asked, A.s19journal.rows], [true, 0, 0], "S19 「작업 일지」도 같다 — 일지를 청하지 않는다");
 
 // ── S12 ──
 same(A.s12 && [A.s12.asked, A.s12.kinds], [1, ["c1:k", "c2:a", "c3:n", "c4:n", "c5:a"]], "S12 사람이 다시 고르면 다시 청한다 — 일지를 한 번 받아 줄을 다시 보낸다(지식 · 작업 기록만 · 없음)");
@@ -451,6 +562,18 @@ same(A.s13 && [A.s13.tab, A.s13.focus], [["true", "false", "false"], true], "S13
 // ── S16 ──
 same(A.s16 && [A.s16.same, A.s16.names], [true, 5], "S16 남의 오리진 · 다른 창이 보낸 것 · 없는 기준 · 범위 없는 신호는 무시한다");
 
+// ── S21 · S22 ──
+same(A.s21 && [A.s21.ticks, A.s21.hidden, A.s21.shown, A.s21.msgs >= 1, A.s21.rows], [1, 0, 1, true, 6], "S21 1분 타이머 하나 — 가려져 있으면 받지 않고, 보이면 다시 받아 셸에 보낸다(새 기록까지 6줄)");
+same(A.s21 && A.s21.crumb, C([], "세션 이력", "6개"), "S21 「세션 목록」과 빵부스러기도 새 줄로 맞춘다");
+same(A.s23 && [A.s23.last, A.s23.extra, A.s23.list], [7, 0, true], "S23 늦게 끝난 옛 판은 버린다 — 셸에 다시 보내지 않고 표도 새 판 그대로다");
+same(A.s22 && [A.s22.partial, A.s22.rows, A.s22.states], [true, 7, ["rec"]], "S22 도는 세션을 못 받은 판 — 줄은 전부 «기록만» 으로 가되 «한 축만 받았다» 고 알린다");
+same(A.s22b && A.s22b.partial, false, "S22 다시 다 받으면 그 표가 걷힌다");
+
+// ── S20 ──
+same(A.s20 && [A.s20.find, A.s20.asked], ["범위를 정할 세션 목록을 불러오지 못했습니다.", 0], "S20 줄을 못 받았는데 범위가 걸려 있으면 「대화 찾기」는 못 받았다고 말한다 — 찾는 요청을 내지 않는다(범위가 비었다고 하지 않는다)");
+same(A.s20 && [A.s20.journal, A.s20.jrows], ["범위를 정할 세션 목록을 불러오지 못했습니다.", 0], "S20 「작업 일지」도 같다");
+same(A.s20 && A.s20.told, true, "S20 셸에도 못 받았다고 알린다(줄 없이) — 사이드바가 «받는 중» 으로 영영 서 있지 않게");
+
 // ── S17 ──
 same(A.s17a && [A.s17a.hash, A.s17a.tabs], ["#/sessions/c1?node=", 0], "S17 대조: 대화록 단독 화면이 섰다(탭 없음)");
 same(A.s18 && A.s18.hash, "#/sessions/c1?node=", "S18 셸이 맞춰 주는 신호에는 화면을 옮기지 않는다 — 막 연 대화록이 앱으로 튕기지 않는다");
@@ -463,6 +586,8 @@ same(B.s15 && [B.s15.names.length, B.s15.picks], [5, [true, true, true]], "S15 �
 same(B.s15b && [B.s15b.names.length, B.s15b.picks, B.s15b.crumb, B.s15b.tab], [5, [true, true, true], false, ["true", "false", "false"]], "S15 범위 · 찾기 신호를 받아도 그대로다(다리가 없다)");
 same(B.s15c && [B.s15c.search >= 1, B.s15c.post, B.s15c.hits], [true, 0, 4], "S15 검색은 종전 GET — 전부에서 찾는다");
 
+same(B.s15list && [B.s15list.c3, B.s15list.c1], ["#9001", "통합검색"], "S15 셸 밖의 「세션 목록」 프로젝트 칸은 종전 그대로 박스의 프로젝트(c3 → #9001)");
+check(!!B.s15list && !/기록이 있는 세션/.test(B.s15list.count), "S15 셸 밖에는 «기록이 있는 세션 N개» 를 덧붙이지 않는다(사이드바가 없다)", JSON.stringify(B.s15list && B.s15list.count));
 same(B.s15d && [B.s15d.hash, B.s15d.posts], ["#/sessions/c1?node=", 0], "S15 대화록 단독 화면에서도 다리가 없다 — 신호를 받아도 주소가 그대로 · 셸에 보낸 것 0");
 
 // ── W ──

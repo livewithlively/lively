@@ -35,19 +35,26 @@ export interface HistLoad {
 const ROWS_TTL_MS = 20_000;
 let rowsCache: { at: number; p: Promise<HistLoad> } | null = null;
 let lastRows: HistRow[] | null = null;
+/** 마지막으로 받은 판이 한 축만 받은 것인가(도는 세션 · 기록 가운데 하나가 실패) — 셸에 그렇다고 알린다(사이드바가 고른 것을 풀지 않게). */
+let lastPartial = false;
+let rowsSeq = 0;
 const rowSubs = new Set<() => void>();
 
 /** 줄을 받는다 — 20초 안의 것은 다시 쓴다(탭 셋과 사이드바가 같은 줄을 읽는다). 받을 때마다 셸에 보낸다. */
 export function loadHistRows(force = false): Promise<HistLoad> {
   if (!force && rowsCache && Date.now() - rowsCache.at < ROWS_TTL_MS) return rowsCache.p;
+  const mine = ++rowsSeq;
   const p = Promise.all([
     api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (Array.isArray(d?.sessions) ? d.sessions : [])).catch(() => null),
     loadMySessions(force).then((d) => d).catch(() => null),
   ]).then(([live, logs]): HistLoad => {
     const out: HistLoad = { rows: !live && !logs ? [] : mergeHistoryRows(live || [], logs ? logs.sessions : [], Date.now()), live: !!live, logs: !!logs, truncated: !!(logs && logs.truncated) };
-    //  둘 다 실패한 판은 기억하지 않는다 — 다음에 부르면 다시 받는다.
-    if (!out.live && !out.logs) { if (rowsCache && rowsCache.p === p) rowsCache = null; return out; }
+    //  둘 다 실패한 판은 기억하지 않는다 — 다음에 부르면 다시 받는다. 셸에는 못 받았다고 알린다(사이드바가 «받는 중» 으로 영영 서 있지 않게).
+    if (!out.live && !out.logs) { if (rowsCache && rowsCache.p === p) rowsCache = null; if (mine === rowsSeq) publishFailed(); return out; }
+    //  연달아 청한 것 가운데 늦게 끝난 옛 판이 새 판을 덮지 않는다.
+    if (mine !== rowsSeq) return out;
     lastRows = out.rows;
+    lastPartial = !out.live || !out.logs;
     publish();
     for (const fn of [...rowSubs]) fn();
     return out;
@@ -104,7 +111,7 @@ export function ensureHistKinds(force = false): Promise<void> {
   if (kindsP) return kindsP;
   kindsFailed = false;
   const p = fetchKinds().then((m) => { kinds = m; kindsAt = Date.now(); publish(); if (scope.by === 'kind' && scope.group !== null) notify(); })
-    .catch(() => { kindsFailed = true; publish(); })
+    .catch(() => { kindsFailed = true; publish(); if (scope.by === 'kind' && scope.group !== null) notify(); })
     .finally(() => { if (kindsP === p) kindsP = null; });
   kindsP = p;
   return p;
@@ -130,6 +137,19 @@ export function histScope(): HistScope { return scope; }
 export function onHistScope(fn: () => void): () => void { scopeSubs.add(fn); return () => { scopeSubs.delete(fn); }; }
 function notify(): void { for (const fn of [...scopeSubs]) fn(); }
 
+/**
+ * 고른 범위를 아직 정할 수 없나 — «남긴 것» 묶음을 골랐는데 일지가 아직 없다. 'wait' = 받는 중 · 'failed' = 받다가 실패 · null = 정해졌다.
+ *  ⚠ 이때 범위 안의 줄은 0 으로 나온다(모르는 줄을 세지 않는다). 탭은 «없다» 가 아니라 «세는 중» · «못 받았다» 고 말해야 한다.
+ */
+export function histScopePending(): 'wait' | 'failed' | null {
+  if (scope.by !== 'kind' || scope.group === null || kinds) return null;
+  return kindsFailed ? 'failed' : 'wait';
+}
+export const PENDING_TEXT = { wait: '남긴 것을 세는 중입니다…', failed: '남긴 것을 불러오지 못했습니다. 사이드바에서 묶는 기준을 다시 골라 주세요.' } as const;
+
+/** 줄을 하나도 못 받았다(두 축이 다 실패) — 범위를 정할 수 없다. 탭은 «범위에 아무것도 없다» 가 아니라 «못 받았다» 고 말해야 한다. */
+export const histLoadFailed = (h: HistLoad): boolean => !h.live && !h.logs;
+
 /** 범위 안의 줄만(기록이 있는 줄 가운데). 고른 것이 없으면 그대로 돌려준다 — 기록 없는 줄까지. */
 export function scopedRows(rows: HistRow[], now: number = Date.now()): HistRow[] {
   return histScopeOn(scope) ? rows.filter((r) => hasRecord(r) && inHistScope(sideRowOf(r), scope, now)) : rows;
@@ -148,7 +168,15 @@ export function scopedConvs(rows: HistRow[], now: number = Date.now()): Set<stri
 
 function publish(): void {
   if (!IN_SHELL || !lastRows) return;
-  try { window.parent.postMessage({ type: HIST_ROWS_MSG, rows: lastRows.filter(hasRecord).map(sideRowOf), kinds: !!kinds, ...(kindsFailed && !kinds ? { kindsFailed: true } : {}) }, location.origin); } catch { /* 셸이 없다 */ }
+  try {
+    window.parent.postMessage({ type: HIST_ROWS_MSG, rows: lastRows.filter(hasRecord).map(sideRowOf), kinds: !!kinds,
+      ...(kindsFailed && !kinds ? { kindsFailed: true } : {}), ...(lastPartial ? { partial: true } : {}) }, location.origin);
+  } catch { /* 셸이 없다 */ }
+}
+/** 줄을 하나도 못 받았다고 셸에 알린다 — 줄은 싣지 않는다(셸이 앞서 받은 줄이 있으면 그대로 둔다). */
+function publishFailed(): void {
+  if (!IN_SHELL) return;
+  try { window.parent.postMessage({ type: HIST_ROWS_MSG, failed: true }, location.origin); } catch { /* 셸이 없다 */ }
 }
 
 let bridged = false;

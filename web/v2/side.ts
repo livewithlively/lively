@@ -33,7 +33,7 @@ import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-ca
 import { hiddenCardsLabel, planSideCards, projectLines, SESS_GROUP_BYS, settleScope, sideCards, withGroupBy, type SessScope, type SideCardProj } from '../lib/sess-all.js';   // #4158 · #4233 2안 — [AI 세션] 사이드바 카드 · 묶기 기준(순수)
 import { sessGroupName, sessScope, setSessScope } from './sess-scope.js';   // #4233 2안 — 사이드바에서 고른 것의 한 자리(가운데 목록이 같은 값을 읽는다)
 import { HIST_GROUP_BYS, hiddenHistCardsLabel, histByLabel, histCards, histGroupLabel, histLines, pickHistScope, settleHistScope, withHistGroupBy, type HistLine, type HistScope } from '../lib/hist-scope.js';   // #4553 안 A — 세션 이력 앱 사이드바의 규칙
-import { askHistFind, bindHistSide, histSideKinds, histSideKindsFailed, histSideRows, histSideScope, setHistSideScope } from './hist-side.js';   // #4553 — 액자 안 앱이 보낸 줄 · 고른 것   // #4233 2안 — 사이드바에서 고른 것의 한 자리(가운데 목록이 같은 값을 읽는다)
+import { askHistFind, bindHistSide, histSideFailed, histSideKinds, histSideKindsFailed, histSidePartial, histSideRows, histSideScope, setHistSideScope } from './hist-side.js';   // #4553 — 액자 안 앱이 보낸 줄 · 고른 것
 import { splitFolderRows, foldCardRows, cardOpenVerdict } from '../lib/sess-fold.js';   // #762 — 폴더에 그대로 설 것 / 「지난 세션」 뒤로 접힐 것 · #3778 — 홈 카드 안에서 같은 물음
 import { deviceStore, shellPrefStore, shellPrefsPush, shellPrefsTouch } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버다(선언 한 줄이 그걸 말한다)
 import { confirmDialog } from '../ui-primitives.js';
@@ -1112,7 +1112,8 @@ function render(): void {
   //  #4233 분류체계 앱도 앱 소유 사이드바다(자료와 같은 판정 · 같은 틀).
   if (last.activeKey() === 'taxonomy') { sideRoot?.setAttribute('data-sec', 'taxonomy'); renderTaxonomySection(); return; }
   //  #4553 안 A — 세션 이력 앱도 앱 소유 사이드바다. 종전엔 제 것이 없어 직전 구역(홈 등)의 목록이 그대로 남았다.
-  if (last.activeKey() === 'app:sessions') { sideRoot?.setAttribute('data-sec', 'sessions'); renderHistorySection(); return; }
+  //   ⚠ 목록만 다시 그리는 붓(listPaint)을 여기서 비운다 — 직전 구역(홈)의 붓이 남아 있으면 늦게 온 답이 이 목록 자리에 홈의 줄을 그린다.
+  if (last.activeKey() === 'app:sessions') { sideRoot?.setAttribute('data-sec', 'sessions'); listPaint = null; renderHistorySection(); return; }
   const sec: RailSection = hooks.section?.() || 'home';
   sideRoot?.setAttribute('data-sec', sec);
   //  목록만 다시 그리는 붓은 **그 구역이 자기 것을 건다** — 여기서 먼저 비워, 붓이 없는 구역(트리·서가)에서
@@ -1770,7 +1771,8 @@ function renderHistorySection(): void {
   const waitKinds = sc.by === 'kind' && !histSideKinds();
   const cards = waitKinds ? [] : histCards(items, sc.by, now);
   const lines = histLines(items);
-  if (ready && !waitKinds) {
+  //  한 축만 받은 판(도는 세션을 못 받아 전부 «기록만» 으로 선 판 등)에서는 고른 것을 풀지 않는다 — 수가 덜 찬 것이지 그 묶음이 사라진 것이 아니다.
+  if (ready && !waitKinds && !histSidePartial()) {
     const settled = settleHistScope(sc, cards, lines);
     if (settled !== sc) { setHistSideScope(settled); sc = settled; }
   }
@@ -1864,7 +1866,8 @@ function renderHistorySection(): void {
   const planFor = (fit: number) => planSideCards(plans.map((x) => x.key), fit, sc.by === 'none' ? null : sc.group, cardsOpen || sc.by === 'none');
   const label = (): HTMLElement => el('div', { class: 'v2-app-group v2-kgroup', role: 'presentation' }, el('span', { class: 'n', text: sc.by === 'none' ? '프로젝트' : byLabel })) as HTMLElement;
   const build = (shownKeys: string[], hidden: number) => (alloc: Record<string, number>): HTMLElement[] => {
-    if (!ready) return bootKids();
+    //  액자가 줄을 못 받았다고 알려 왔고 받아 둔 줄도 없다 — «받는 중» 막대로 영영 서 있지 않는다.
+    if (!ready) return histSideFailed() ? [el('p', { class: 'v2-empty', text: '세션 이력을 불러오지 못했어요. 본문의 「세션 목록」 탭에서 새로 고침을 눌러 주세요.' })] : bootKids();
     if (!total) return [el('p', { class: 'v2-empty', text: '아직 기록된 세션이 없어요.' })];
     if (waitKinds) return [label(), el('p', { class: 'v2-empty', text: histSideKindsFailed() ? '남긴 것을 불러오지 못했어요. 묶는 기준을 다시 골라 주세요.' : '남긴 것을 세는 중…' })];
     const shownPlans = plans.filter((x) => shownKeys.includes(x.key));

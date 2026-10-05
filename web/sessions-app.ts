@@ -14,12 +14,14 @@ import { parseSel, refreshTranscripts, renderTranscriptPage } from './sessions.j
 import { mountFind } from './sessions-find.js';
 import { mountJournal } from './sessions-journal.js';
 import { mountList, type TabHandle } from './sessions-list.js';
-import { histBridgeOn, histRowsNow, histScope, installHistBridge, loadHistRows, onHistRows, onHistScope, scopedCount } from './sessions-scope.js';
+import { histBridgeOn, histRowsNow, histScope, histScopePending, installHistBridge, loadHistRows, onHistRows, onHistScope, scopedCount } from './sessions-scope.js';
 import { histCrumb } from './lib/hist-scope.js';
 import { HIST_TABS, readHistTab, rowProject, type HistTab } from './session-history.js';
 import { fitHeight, ico, tileOf } from './sessions-kit.js';
 import { EMBEDDED } from './v2/embed.js';
 
+/** 셸 액자 안에서 줄을 다시 받는 간격 — 사이드바가 그 줄로 수를 센다. */
+const ROWS_REFRESH_MS = 60_000;
 const TAB_STORE = 'lively.sessions.tab';   // 이 브라우저에서 마지막으로 본 탭(취향) — 주소에 ?tab= 이 없을 때만 쓴다
 function hashParams(): URLSearchParams {
   const h = location.hash;
@@ -116,8 +118,8 @@ function renderApp(view: HTMLElement): void {
     const kids: HTMLElement[] = [];
     for (const piece of c.trail) kids.push(el('span', { class: 'crumb', text: piece }) as HTMLElement, el('span', { class: 'sl', 'aria-hidden': 'true', text: '/' }) as HTMLElement);
     kids.push(el('b', { class: 'now', text: c.now }) as HTMLElement);
-    //  수는 사이드바가 세는 그 수(범위 안의 기록) — 줄을 받기 전에는 적지 않는다(0 이라 말하지 않는다).
-    if (rows) kids.push(el('span', { class: 'desc', text: `${scopedCount(rows, now).toLocaleString('en-US')}개` }) as HTMLElement);
+    //  수는 사이드바가 세는 그 수(범위 안의 기록) — 줄을 받기 전에는, 범위를 아직 못 정했을 때(«남긴 것» 을 세는 중)는 적지 않는다(0 이라 말하지 않는다).
+    if (rows && !histScopePending()) kids.push(el('span', { class: 'desc', text: `${scopedCount(rows, now).toLocaleString('en-US')}개` }) as HTMLElement);
     crumb.replaceChildren(...kids);
   };
   const root = el('div', { class: 'shx' + (EMBEDDED ? ' embedded' : '') + (inShell ? ' inshell' : '') },
@@ -145,6 +147,11 @@ function renderApp(view: HTMLElement): void {
     });
     paintCrumb();
     void loadHistRows();   // 사이드바가 그릴 줄 — 어느 탭에서 열든 보낸다
+    //  사이드바의 수(실행 중 · 오프라인 …)가 낡지 않게, 화면이 보이는 동안 1분마다 줄을 다시 받아 보낸다. 떠난 화면의 것은 걷는다.
+    const tick = window.setInterval(() => {
+      if (!root.isConnected) { window.clearInterval(tick); return; }
+      if (document.visibilityState === 'visible') void loadHistRows(true);
+    }, ROWS_REFRESH_MS);
   }
   show(tab, false);
 }
