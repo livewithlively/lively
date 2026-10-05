@@ -36,7 +36,7 @@ import { ctxIsOpen, type CtxRow } from './ctx-menu.js';
 import { bindCtx, type CtxResult } from './ctx-registry.js';
 import { iconPath } from '../lib/icon-paths.js';
 import { appMatches, appRank } from '../lib/app-match.js';
-import { appHref, openLaunchpad, visibleApps, type AppDef } from './apps.js';
+import { openLaunchpad } from './apps.js';
 import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
 import { listSessionApps, type SessionApp } from './app-session.js';
 import {
@@ -136,6 +136,8 @@ function tile(glyph: string, color: string): SVGElement {
   return svg;
 }
 const fallbackApp = (type: string): DockApp => ({ type, name: type, glyph: 'apps', hint: '', multi: false, pickable: false });
+/** 앱 타일 그림 — 독 · ⊞ · 곁칸 탭 줄 [＋] 의 앱 서랍(v2/pane-drawer)이 같은 그림을 쓴다(#4443). glyph = 부품의 아이콘 이름. */
+export function dockTile(glyph: string, type: string): SVGElement { return tile(glyph, appColor(type)); }
 
 export function mountDock(host: DockHost): DockHandle {
   let dead = false;
@@ -783,16 +785,11 @@ export function mountDock(host: DockHost): DockHandle {
           hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요` : '세션을 열면 붙일 수 있어요',
           onClick: () => { close(); void host.attach?.({ id: a.id, title: a.title }); },
         }))) : null;
-      //  ③ 새 탭으로 여는 앱 — 런치패드와 같은 표(visibleApps). 곁칸이 아니라 위쪽 탭에 열린다.
-      const full = byQ(visibleApps());
-      const secFull = full.length ? section('새 탭으로 여는 앱', '사이드바가 아니라 위쪽 탭에 열려요', full.map((a) => fullTile(a))) : null;
-      body.replaceChildren(...[secSide, secAtt, secFull].filter(Boolean) as HTMLElement[]);
+      //  «새 탭으로 여는 앱»(런치패드 표)은 걷었다 — 여기서 여는 것은 모두 사이드바에 선다(원준 10-05 «그게 왜 필요하겠어»).
+      //   위쪽 탭 앱은 발치의 [전체 앱 화면](런치패드)이 맡는다.
+      body.replaceChildren(...[secSide, secAtt].filter(Boolean) as HTMLElement[]);
       if (!body.querySelector('.pn-dock-tile')) body.append(el('p', { class: 'pn-fine pn-dock-more-none', text: q ? `「${q}」에 맞는 앱이 없어요.` : '열 수 있는 앱이 없어요.' }));
     };
-    const fullTile = (a: AppDef): HTMLElement => el('a', { class: 'pn-dock-tile', href: appHref(a), title: a.desc, onclick: () => close() },
-      el('span', { class: 'pn-dock-tile-ic' }, appGlassIcon(a.icon)),
-      el('span', { class: 'pn-dock-tile-n', text: a.title }),
-      el('span', { class: 'pn-dock-tile-dot', 'aria-hidden': 'true' })) as HTMLElement;
 
     input.addEventListener('input', draw);
     input.addEventListener('keydown', (e: KeyboardEvent) => {
