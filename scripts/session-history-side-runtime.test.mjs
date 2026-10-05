@@ -69,7 +69,7 @@ async function PAGE_MAIN() {
   const monthsAgo = (n) => { const d = new Date(T0); d.setDate(1); d.setMonth(d.getMonth() - n); d.setHours(12, 0, 0, 0); return d.getTime(); };
   let seq = 0;
   const row = (last, pid, pname, state = "rec", kind = null) => ({ key: "k" + (++seq), conv: "c" + seq, last, pid, pname, state, kind });
-  //  오늘 3(통합검색 2 · UI 수정 1) · 어제 4(프로젝트 없음 2 · 통합검색 1 · UI 수정 1) · 두 달 전 2(통합검색 2)
+  //  오늘 3(통합검색 2 · UI 수정 1) · 어제 4(기타 2 · 통합검색 1 · UI 수정 1) · 두 달 전 2(통합검색 2)
   const ROWS = [
     row(TODAY, 7, "통합검색", "live", "k"), row(TODAY - 60_000, 7, "통합검색", "off", "a"), row(TODAY - 120_000, 9, "UI 수정", "off", "n"),
     row(dayAt(1), 0, "", "rec", "n"), row(dayAt(1) - 1000, 0, "", "rec", "n"), row(dayAt(1) - 2000, 7, "통합검색", "rec", "k"), row(dayAt(1) - 3000, 9, "UI 수정", "rec", "a"),
@@ -135,10 +135,10 @@ async function PAGE_MAIN() {
     R.h6head = { scope: lastScope(), headOn: cards().find((c) => c.name === "어제").on, on: onN() };
     $(".v2-ksp-t", cardOf("어제")).click(); await sleep(40);
     R.h6head2 = { scope: lastScope(), allOn: all().on };
-    lineOf(cardOf("어제"), "프로젝트 없음").click();
+    lineOf(cardOf("어제"), "기타 (미분류)").click();
     await sleep(40);
     R.h6none = { scope: lastScope() };
-    lineOf(cardOf("어제"), "프로젝트 없음").click();   // 고른 줄을 다시
+    lineOf(cardOf("어제"), "기타 (미분류)").click();   // 고른 줄을 다시
     await sleep(40);
     R.h6b = { scope: lastScope(), allOn: all().on, on: onN() };
     $(".v2-ksp-t", cardOf("오늘")).click(); await sleep(30);
@@ -251,7 +251,7 @@ same(R.h3 && [R.h3.head.count, R.h3.all, R.h3.label], ["9", { text: "전체", n:
 check(!!R.h3 && R.h3.cards.length === 3 && R.h3.cards[0].name === "오늘" && R.h3.cards[0].n === "3" && R.h3.cards[1].name === "어제" && R.h3.cards[1].n === "4" && /월$/.test(R.h3.cards[2].name) && R.h3.cards[2].n === "2",
   "H3 카드 — 오늘 3 → 어제 4 → 그 달 2(최근부터)", JSON.stringify(R.h3 && R.h3.cards.map((c) => c.name + " " + c.n)));
 same(R.h3 && R.h3.cards[0].lines.slice(0, 2), ["통합검색 2", "UI 수정 1"], "H3 카드 안 줄 = 프로젝트, 많은 순");
-same(R.h3 && R.h3.cards[1].lines[0], "프로젝트 없음 2", "H3 «프로젝트 없음» 도 제 수대로 선다(어제는 그것이 가장 많다)");
+same(R.h3 && R.h3.cards[1].lines[0], "기타 (미분류) 2", "H3 프로젝트에 안 붙은 것도 제 수대로 선다 — 이름은 다른 화면과 같은 「기타 (미분류)」(어제는 그것이 가장 많다)");
 same(R.h3 && [R.h3.replied, R.h3.scope, R.h3.replyPick], [1, S0, false], "H3 줄을 받으면 그 액자에 지금 고른 것을 알려 준다 — 맞춰 주는 신호다(사람이 누른 것이 아니다)");
 check(!!R.h3 && R.h3.parts.shelf && R.h3.parts.card === 3 && R.h3.parts.line >= 5 && R.h3.parts.none >= 1 && R.h3.parts.view && R.h3.parts.sgb,
   "H3 부품은 「세션 목록」 사이드바의 것 그대로(.v2-sshelf · .v2-ksp.v2-pcard.v2-scard · .v2-kcat.v2-sproj · .v2-ptl--none · .v2-kview · .v2-sgb)", JSON.stringify(R.h3 && R.h3.parts));
@@ -269,7 +269,7 @@ same(R.h5 && R.h5.pick, true, "H5 액자에 가는 신호에 «사람이 눌렀�
 same(R.h6a && [R.h6a.scope, R.h6a.on, R.h6a.line, R.h6a.headOn], [{ by: "day", group: "d1", proj: 7 }, 1, ["통합검색 1 ●"], false], "H6 줄 → 그 묶음 × 그 프로젝트 · 켜진 것은 그 줄 하나(카드 머리는 꺼진다)");
 same(R.h6head && [R.h6head.scope, R.h6head.headOn, R.h6head.on], [{ by: "day", group: "d1", proj: null }, true, 1], "H6 줄을 고른 채 그 카드의 머리를 누르면 카드 전체(줄이 풀린다)");
 same(R.h6head2 && [R.h6head2.scope, R.h6head2.allOn], [S0, true], "H6 고른 카드의 머리를 다시 누르면 풀린다(전체)");
-same(R.h6none && R.h6none.scope, { by: "day", group: "d1", proj: 0 }, "H6 «프로젝트 없음» 줄 → proj 0(없음이지 «안 골랐다» 가 아니다)");
+same(R.h6none && R.h6none.scope, { by: "day", group: "d1", proj: 0 }, "H6 「기타 (미분류)」 줄 → proj 0(없음이지 «안 골랐다» 가 아니다)");
 same(R.h6b && [R.h6b.scope, R.h6b.allOn, R.h6b.on], [S0, true, 1], "H6 고른 줄을 다시 누르면 풀린다(전체)");
 same(R.h6c && [R.h6c.scope, R.h6c.allOn, R.h6c.on], [S0, true, 1], "H6 「전체」 = 풀기");
 
@@ -288,7 +288,7 @@ same(R.h8b && [R.h8b.cards, R.h8b.empty], [["지식을 남긴 세션 2", "작업
 
 // ── H9 ──
 same(R.h9 && [R.h9.label, R.h9.heads, R.h9.plain], ["프로젝트", 0, 1], "H9 묶지 않음 — 머리 없는 카드 하나 · 이름표 «프로젝트»");
-same(R.h9 && R.h9.lines, ["통합검색 5", "UI 수정 2", "프로젝트 없음 2"], "H9 줄 = 프로젝트, 많은 순 · 같으면 최근 활동 순(UI 수정은 오늘, 프로젝트 없음은 어제)");
+same(R.h9 && R.h9.lines, ["통합검색 5", "UI 수정 2", "기타 (미분류) 2"], "H9 줄 = 프로젝트, 많은 순 · 같으면 최근 활동 순(UI 수정은 오늘, 기타는 어제)");
 same(R.h9b && [R.h9b.scope, R.h9b.on], [{ by: "none", group: null, proj: 9 }, 1], "H9 줄 → 그 프로젝트");
 
 // ── H11 ──

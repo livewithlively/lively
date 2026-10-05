@@ -225,7 +225,7 @@ async function PAGE_MAIN() {
       scope("day", "d1", 3870);
       await waitFor(() => listNames().length === 1);
       R.s3 = { names: listNames(), chips: listChips(), crumb: crumb() };
-      scope("day", "d1", 0);   // 프로젝트 없음 — 박스에는 프로젝트(9001)가 붙어 있지만 기록에는 없다
+      scope("day", "d1", 0);   // 프로젝트에 안 붙은 것(기타) — 박스에는 프로젝트(9001)가 붙어 있지만 기록에는 없다
       await waitFor(() => listNames()[0] === "덱 재시안");
       R.s3none = { names: listNames(), proj: $$("#shx-panel-list .shx-td-proj").map((n) => n.textContent), crumb: crumb() };
 
@@ -405,9 +405,9 @@ same(A.s3a && A.s3a.names, ["덱 재시안", "어제 검색 정리"], "S3 「세
 check(!!A.s3a && /^전체\s*2/.test(A.s3a.chips[0]) && /기록만\s*1/.test(A.s3a.chips[3]) && /오프라인\s*1/.test(A.s3a.chips[2]), "S3 칩의 수도 범위 안(전체 2 · 오프라인 1 · 기록만 1)", JSON.stringify(A.s3a && A.s3a.chips));
 same(A.s3 && A.s3.names, ["어제 검색 정리"], "S3 묶음 × 프로젝트 — 그 줄만");
 same(A.s3 && A.s3.crumb, C(["세션 이력", "시간별", "어제"], "통합검색", "1개"), "S3 빵부스러기에 프로젝트 이름");
-same(A.s3none && A.s3none.names, ["덱 재시안"], "S3 프로젝트 없음(0) — 기록에 프로젝트가 없는 세션(박스에는 붙어 있어도)");
-same(A.s3none && A.s3none.proj, [""], "S3 그 줄의 프로젝트 칸도 기록의 것(비어 있다) — «프로젝트 없음» 을 골랐는데 프로젝트 번호가 서지 않는다");
-same(A.s3none && A.s3none.crumb, C(["세션 이력", "시간별", "어제"], "프로젝트 없음", "1개"), "S3 빵부스러기 «… / 어제 / 프로젝트 없음»");
+same(A.s3none && A.s3none.names, ["덱 재시안"], "S3 「기타 (미분류)」(0) — 기록에 프로젝트가 없는 세션(박스에는 붙어 있어도)");
+same(A.s3none && A.s3none.proj, [""], "S3 그 줄의 프로젝트 칸도 기록의 것(비어 있다) — 「기타 (미분류)」를 골랐는데 프로젝트 번호가 서지 않는다");
+same(A.s3none && A.s3none.crumb, C(["세션 이력", "시간별", "어제"], "기타 (미분류)", "1개"), "S3 빵부스러기 «… / 어제 / 기타 (미분류)»");
 
 // ── S14 ──
 same(A.s14 && [A.s14.opened, !!A.s14.pane], ["덱 재시안", true], "S14 고른 줄이 범위 밖으로 나가면 오른쪽 칸이 비워진다");

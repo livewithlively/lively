@@ -1788,7 +1788,7 @@ function renderHistorySection(): void {
   const pick = (next: HistScope, keepDrawer = false): void => { setHistSideScope(next, true); redraw(); hooks.onHistPick?.({ keepDrawer }); };
   const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
   const byLabel = histByLabel(sc.by);
-  const pname = (l: HistLine): string => (l.pid ? l.name || `#${l.pid}` : '프로젝트 없음');
+  const pname = (l: HistLine): string => (l.pid ? l.name || `#${l.pid}` : NO_PROJECT_NAME);
 
   const byBtn = el('button', { class: 'v2-sgb', type: 'button', 'aria-haspopup': 'menu', 'data-grpby': sc.by, title: '묶는 기준을 고릅니다',
     onclick: (ev: MouseEvent) => {

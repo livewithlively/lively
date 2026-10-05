@@ -11,9 +11,9 @@
 //   L3  달 이름 — 올해는 «9월», 다른 해는 «2025년 12월»
 //   L4  카드 순서(시간별) — 오늘 → 어제 → 이번 주 → 최근 달 → 오래된 달 → 이전 · 빈 묶음은 없다
 //   L5  카드 순서(남긴 것별 · 상태별) — 정해진 순서
-//   L6  카드 안 줄 — 많은 순 · 같으면 최근 · 같으면 id · «프로젝트 없음» 도 제 수대로
+//   L6  카드 안 줄 — 많은 순 · 같으면 최근 · 같으면 id · 프로젝트에 안 붙은 것(「기타 (미분류)」)도 제 수대로
 //   L7  합 — 카드의 합 = 줄 수 · 카드 안 줄의 합 = 카드
-//   L8  범위 판정 — 전체 · 묶음 · 묶음 × 프로젝트 · 묶지 않음 × 프로젝트 · 프로젝트 없음
+//   L8  범위 판정 — 전체 · 묶음 · 묶음 × 프로젝트 · 묶지 않음 × 프로젝트 · 프로젝트에 안 붙은 것(0)
 //   L9  고르기 — 다시 누르면 전체 · 기준을 바꾸면 풀림
 //   L10 가라앉히기 — 고른 카드 · 줄이 사라졌을 때
 //   L11 구간 — 묶음의 [since, until) · 이번 주와 겹치는 달 · 통째로 이번 주 안인 달
@@ -95,12 +95,12 @@ const keysIn = (sc) => ROWS.filter((r) => inHistScope(r, sc, NOW)).map((r) => r.
 eq(keysIn(HIST_SCOPE0).length, ROWS.length, "L8 전체 — 다 든다");
 eq(keysIn({ by: "day", group: "d1", proj: null }), ["y1", "y2"], "L8 묶음(어제)");
 eq(keysIn({ by: "day", group: "d0", proj: 7 }), ["t1", "t2"], "L8 묶음 × 프로젝트(오늘의 7)");
-eq(keysIn({ by: "day", group: "d1", proj: 0 }), ["y1"], "L8 묶음 × 프로젝트 없음(0) — 0 은 «없음» 이지 «아무거나» 가 아니다");
+eq(keysIn({ by: "day", group: "d1", proj: 0 }), ["y1"], "L8 묶음 × 프로젝트에 안 붙은 것(0) — 0 은 «없음» 이지 «아무거나» 가 아니다");
 eq(keysIn({ by: "none", group: null, proj: 3 }), ["s3", "a1", "o1"], "L8 묶지 않음 × 프로젝트");
-eq(keysIn({ by: "none", group: null, proj: 0 }), ["y1", "s1", "s2"], "L8 묶지 않음 × 프로젝트 없음");
+eq(keysIn({ by: "none", group: null, proj: 0 }), ["y1", "s1", "s2"], "L8 묶지 않음 × 프로젝트에 안 붙은 것(0)");
 eq(keysIn({ by: "kind", group: "k", proj: null }), ["t1", "y2"], "L8 남긴 것(지식)");
 eq(keysIn({ by: "state", group: "rec", proj: 9 }), ["y2", "w1"], "L8 상태 × 프로젝트");
-eq([histScopeOn(HIST_SCOPE0), histScopeOn({ by: "day", group: "d0", proj: null }), histScopeOn({ by: "none", group: null, proj: 0 })], [false, true, true], "L8 골랐나 — 프로젝트 없음(0)을 고른 것도 고른 것이다");
+eq([histScopeOn(HIST_SCOPE0), histScopeOn({ by: "day", group: "d0", proj: null }), histScopeOn({ by: "none", group: null, proj: 0 })], [false, true, true], "L8 골랐나 — 0 을 고른 것도 고른 것이다");
 
 // ── L9 고르기 ──
 const A = { by: "day", group: "d1", proj: null };
@@ -108,7 +108,7 @@ eq(pickHistScope(HIST_SCOPE0, "d1", null), A, "L9 카드 머리를 누르면 그
 eq(pickHistScope(A, "d1", null), { by: "day", group: null, proj: null }, "L9 고른 것을 다시 누르면 전체");
 eq(pickHistScope(A, "d1", 9), { by: "day", group: "d1", proj: 9 }, "L9 같은 카드의 줄을 누르면 그 줄");
 eq(pickHistScope({ by: "day", group: "d1", proj: 9 }, "d1", null), A, "L9 줄을 고른 채 카드 머리를 누르면 카드 전체(풀리지 않는다)");
-eq(pickHistScope({ by: "none", group: null, proj: 0 }, null, 0), { by: "none", group: null, proj: null }, "L9 묶지 않음 — 프로젝트 없음(0) 줄을 다시 누르면 풀린다");
+eq(pickHistScope({ by: "none", group: null, proj: 0 }, null, 0), { by: "none", group: null, proj: null }, "L9 묶지 않음 — 0 줄(기타)을 다시 누르면 풀린다");
 eq(withHistGroupBy(A, "kind"), { by: "kind", group: null, proj: null }, "L9 기준을 바꾸면 고른 것이 풀린다");
 ok(withHistGroupBy(A, "day") === A, "L9 같은 기준이면 그대로(같은 객체)");
 
@@ -139,7 +139,7 @@ const pn = (pid) => ({ 7: "통합검색", 9: "UI 수정" }[pid] || "");
 eq(histCrumb(HIST_SCOPE0, NOW, pn), { trail: [], now: "세션 이력" }, "L12 전체 — 앱 이름만");
 eq(histCrumb(A, NOW, pn), { trail: ["세션 이력", "시간별"], now: "어제" }, "L12 묶음");
 eq(histCrumb({ by: "day", group: "d1", proj: 9 }, NOW, pn), { trail: ["세션 이력", "시간별", "어제"], now: "UI 수정" }, "L12 묶음 × 프로젝트");
-eq(histCrumb({ by: "kind", group: "k", proj: 0 }, NOW, pn), { trail: ["세션 이력", "남긴 것별", "지식을 남긴 세션"], now: "프로젝트 없음" }, "L12 프로젝트 없음");
+eq(histCrumb({ by: "kind", group: "k", proj: 0 }, NOW, pn), { trail: ["세션 이력", "남긴 것별", "지식을 남긴 세션"], now: "기타 (미분류)" }, "L12 프로젝트에 안 붙은 것(0)은 「기타 (미분류)」 — 다른 화면과 같은 이름(lib/proj-none)");
 eq(histCrumb({ by: "none", group: null, proj: 7 }, NOW, pn), { trail: ["세션 이력", "프로젝트"], now: "통합검색" }, "L12 묶지 않음 × 프로젝트");
 eq(histCrumb({ by: "none", group: null, proj: 3 }, NOW, pn).now, "#3", "L12 이름을 모르는 프로젝트는 번호로");
 
@@ -152,7 +152,7 @@ eq([parseHistScope(null), parseHistScope("day"), parseHistScope({ by: "owner" })
 eq(parseHistRows("nope"), null, "L13 줄이 배열이 아니면 받지 않는다");
 eq(parseHistRows([{ key: "a", conv: "c", last: 5, pid: 2, pname: "P", state: "live", kind: "k" }, null, { key: "" }, { conv: "x" }, { key: "b", last: "x", pid: -3, state: "weird", kind: "zzz" }]),
   [{ key: "a", conv: "c", last: 5, pid: 2, pname: "P", state: "live", kind: "k" }, { key: "b", conv: null, last: 0, pid: 0, pname: "", state: "none", kind: null }],
-  "L13 모양이 틀린 줄은 버리고 · 모르는 값은 안전한 쪽으로(시각 0 · 프로젝트 없음 · 상태 none · 남긴 것 모름)");
+  "L13 모양이 틀린 줄은 버리고 · 모르는 값은 안전한 쪽으로(시각 0 · 프로젝트 0 · 상태 none · 남긴 것 모름)");
 eq(parseHistRows(Array.from({ length: 12 }, (_, i) => ({ key: "k" + i })), 10).length, 10, "L13 한 번에 받는 줄 수에 상한이 있다");
 
 // ── L14 비었을 때 ──
