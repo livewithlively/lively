@@ -13,8 +13,8 @@
 //      휴지통 · 지난 세션 표(15px) · 가이드 그림(17px)이 크기 규칙을 따른다(값으로 부른 통합검색 · 휴지통 부품의 path 를 본다)
 //   Q3 「프로젝트 없음」 · 「기타 (미분류)」 = 점선 원(projNone): 사이드바 · 휴지통 · 클래식 기타 폴더(값으로 부른다)
 //   Q4 우측 사이드바 「프로젝트」 = 프로젝트 과녁(원준 2026-10-05 «독에는 아이콘은 왜 안 바꿨나»). 부품 표의 이름은 proj 이고
-//      glyphAt(이름, px) 가 13px 이하 자리에서 projMini 로 바꾼다: 탭 머리(14) · 탭 목록(13) · 내용 더하기(13) · 칸에 넣기(15) ·
-//      칸 머리와 크게 보기 머리(13) · 빈 화면(26). 독 타일은 부품 표의 이름 그대로(큰 타일 = proj). 옛 projtask 는 표에도 부르는 곳에도 없다
+//      glyphAt(이름, px) 가 13px 이하 자리에서 projMini 로 바꾼다: 탭 머리(14) · 탭 목록(13) · 칸에 넣기(15) ·
+//      칸 머리와 크게 보기 머리(13) · 빈 화면(26). 독 타일 · ＋ 앱 서랍(#4443)은 부품 표의 이름 그대로(큰 타일 = proj). 옛 projtask 는 표에도 부르는 곳에도 없다
 //   Q4b 앱 = 각진 사각 넷(apps): 독 [모든 앱] · 앱 칸의 줄. 둥근 사각(grid)은 자료의 「아이콘으로 보기」에만 남는다
 //   Q5 보드로 열기 · 보드에서 보기 · [보드] = board
 //   Q6 진척시킨 프로젝트 = 과녁, 진척시킨 태스크 = 원 안의 체크 그대로(값으로 읽는다)
@@ -165,7 +165,9 @@ let pjv = null, dash = null;
   const lead = PANES.split("\n").filter((l) => l.includes("'pn-tab-lead'") || l.includes("lead.replaceChildren("));
   ok(lead.length === 2 && lead.every((l) => /pnIcon\(glyphAt\(ic, 14\), 'pn-i sm'\)/.test(l)), "Q4 탭 머리(그릴 때 · 다시 그릴 때) = glyphAt(ic, 14)", lead.map((l) => l.trim().slice(0, 60)).join(" | "));
   ok(/pnIcon\(glyphAt\(tabIcon\(t\), 13\), 'pn-i sm'\)/.test(PANES), "Q4 탭 목록 줄(13px) = glyphAt(tabIcon(t), 13)");
-  ok(/pnIcon\(glyphAt\(d\.icon, 13\), 'pn-i sm'\)/.test(PANES), "Q4 ＋ 내용 더하기 줄(13px) = glyphAt(d.icon, 13)");
+  //  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 는 13px 줄이 아니라 독 ⊞ 와 같은 타일 격자 — 독과 같은 큰 과녁.
+  const DRAWER = read("web/v2/pane-drawer.ts");
+  ok(/glyph: d\.icon, more: has\(d\.type\)/.test(PANES) && /dockTile\(it\.glyph, it\.type\)/.test(DRAWER), "Q4 ＋ 앱 서랍 = 독과 같은 타일 — 부품 표의 이름(proj)을 64 칸 타일로(큰 과녁)");
   const adds = cut(PANES, "const adds: CtxRow[] = PART_DEFS", "}));");
   ok(/label: d\.name, icon: pnIconName\(glyphAt\(d\.icon, 15\)\)/.test(adds) && !/'layers'/.test(adds), "Q4 「칸에 넣기」 줄(15px) = 탭과 같은 이름을 glyphAt(d.icon, 15) 로(「프로젝트」가 layers 로 떨어지지 않는다)");
   ok(!/pnIcon\((ic|d\.icon|tabIcon\(t\)), /.test(PANES), "Q4 우측 사이드바 부품 그림을 크기 규칙 없이 그리는 자리가 없다");
