@@ -23,6 +23,11 @@ export interface HistRow {
   node: string;
   projectId: number | null;
   projectName: string | null;
+  /** 중앙 기록이 말하는 프로젝트(그 대화에 붙은 것) — 기록이 없거나 붙은 프로젝트가 없으면 null. 박스의 것(projectId)과 다를 수 있다:
+   *  실측 2026-10-05, 기록 323개 가운데 72개는 박스에만 프로젝트가 있고 기록에는 없다. 대화 찾기 · 작업 일지 · 맞은 말 검색은 기록의 것으로 말하고
+   *  거르므로, 기록이 있는 줄은 사이드바와 「세션 목록」 탭도 이것으로 세고 보인다(rowProject) — 탭마다 다른 프로젝트를 말하지 않게. */
+  recProjectId: number | null;
+  recProjectName: string | null;
   /** session-status 의 key, 또는 'log'(기록만 남음). */
   stateKey: string;
   stateLabel: string;
@@ -32,6 +37,8 @@ export interface HistRow {
   live: boolean;
   mine: boolean;
   lastMs: number;
+  /** 중앙 기록의 마지막 활동(ms) — 기록이 없으면 0. lastMs 는 박스의 활동까지 본 값이라 이보다 늦을 수 있다(일지는 기록의 시각으로 묻는다). */
+  recMs: number;
   firstMs: number;
   bytes: number;
   harness: string | null;
@@ -71,11 +78,11 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
     const row: HistRow = {
       key: String(r.id), name: String(r.label || r.title || r.id), boxId: String(r.id),
       convId: r.claudeSessionId ? String(r.claudeSessionId) : null, node: '',
-      projectId: pid, projectName: pid != null ? (projNames.get(pid) ?? null) : null,
+      projectId: pid, projectName: pid != null ? (projNames.get(pid) ?? null) : null, recProjectId: null, recProjectName: null,
       stateKey: key, stateLabel: sessLabel(r as SessLike, nowMs),
       //  못 본 판의 행(observed=false)은 «돈다» 고 말하지 않는다 — 서버가 DB 행으로 지어낸 것이다(session-status SessLike.observed).
       alive, live: alive && (key === 'waiting' || key === 'busy' || key === 'done' || key === 'idle'),
-      mine: true, lastMs: epochMs(r.lastActive || r.created), firstMs: epochMs(r.created),
+      mine: true, lastMs: epochMs(r.lastActive || r.created), recMs: 0, firstMs: epochMs(r.created),
       bytes: 0, harness: r.harness ? String(r.harness) : null, title: null,
     };
     //  같은 대화를 두 박스가 갖고 있다 — 살아 있는 쪽, 같으면 최근 쪽.
@@ -108,6 +115,9 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
       //  되살린 박스의 created 는 다시 연 때다 — 이른 쪽이 «만든 때», 늦은 쪽이 «마지막 활동».
       if (firstMs && (!owner.firstMs || firstMs < owner.firstMs)) owner.firstMs = firstMs;
       if (lastMs > owner.lastMs) owner.lastMs = lastMs;
+      owner.recMs = lastMs;
+      owner.recProjectId = r.project_id != null ? Number(r.project_id) : null;
+      owner.recProjectName = r.project_id != null ? (r.project_name ? String(r.project_name) : (projNames.get(Number(r.project_id)) ?? null)) : null;
       if (owner.projectId == null && r.project_id != null) owner.projectId = Number(r.project_id);
       if (owner.projectId != null && !owner.projectName) owner.projectName = projNames.get(owner.projectId) ?? null;
       continue;
@@ -116,14 +126,24 @@ export function mergeHistoryRows(liveRows: any[], logRows: any[], nowMs: number)
     out.set(conv, {
       key: conv, name: String(r.name || r.title || conv), boxId: null, convId: conv, node: String(r.node_id || ''),
       projectId: r.project_id != null ? Number(r.project_id) : null, projectName: r.project_name ? String(r.project_name) : null,
+      recProjectId: r.project_id != null ? Number(r.project_id) : null, recProjectName: r.project_id != null && r.project_name ? String(r.project_name) : null,
       stateKey: 'log', stateLabel: '기록만', alive: false, live: false, mine: true,
-      lastMs, firstMs, bytes: Number(r.bytes) || 0, harness: r.harness ? String(r.harness) : null, title: r.title ? String(r.title) : null,
+      lastMs, recMs: lastMs, firstMs, bytes: Number(r.bytes) || 0, harness: r.harness ? String(r.harness) : null, title: r.title ? String(r.title) : null,
     });
   }
   const rows = [...out.values()].sort((a, b) => b.lastMs - a.lastMs);
   //  끝내 이름이 id 뿐인 줄(이름을 안 지었고 기록도 이름을 모른다)은 그렇다고 적는다 — uuid 를 이름 자리에 걸지 않는다.
   for (const r of rows) if (isIdLabel(r.name)) r.name = '이름 없는 세션';
   return rows;
+}
+
+/** 읽을 기록이 있는 줄인가 — 중앙에 올라온 대화가 있다. 대화 찾기 · 작업 일지 · 사이드바는 이런 줄만 센다(박스만 있고 기록이 없는 세션은 「세션 목록」 탭에만 선다). */
+export const hasRecord = (r: HistRow): boolean => r.bytes > 0 && !!r.convId;
+/** 이 줄의 프로젝트 — 기록이 있는 줄은 기록의 것(없으면 «없음»), 기록이 없는 줄은 박스의 것. name 은 화면에 적을 글(이름을 모르면 #번호, 없으면 빈 글). */
+export function rowProject(r: HistRow): { id: number | null; name: string } {
+  const id = hasRecord(r) ? r.recProjectId : r.projectId;
+  const name = hasRecord(r) ? r.recProjectName : r.projectName;
+  return { id, name: name || (id != null ? '#' + id : '') };
 }
 
 export type HistFilter = 'all' | 'live' | 'off' | 'rec';

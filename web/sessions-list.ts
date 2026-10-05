@@ -4,10 +4,12 @@
 //  두 목록을 한 줄로 접는 규칙은 session-history.ts mergeHistoryRows(순수) — 셸의 세션 목록과 같은 규칙이다.
 //  모양(원준 2026-10-05 «프로젝트 본문 창 참고해서 그 디자인 언어로»): 왼쪽 카드 = 수가 선 거르개 칩 · 찾기 칸 · 두 줄짜리 줄(이름 /
 //   프로젝트 · 상태 알약 · 마지막 활동), 오른쪽 카드 = 머리 하나(타일 · 이름 · 부제 · 도구 · 문) 아래 [기록 보기 | 정보].
-import { api, el } from './core.js';
+import { el } from './core.js';
 import { mountTranscript, resumeSessionRecord } from './sessions.js';
-import { btnOf, dropMySessions, emptyBox, errBox, filterChips, fmtBytes, ibtnOf, ico, leftPanel, loadMySessions, paneHead, routeLink, searchBox, segOf, sessionLink, skelRows } from './sessions-kit.js';
-import { histFilter, mergeHistoryRows, type HistFilter, type HistRow } from './session-history.js';
+import { btnOf, dropMySessions, emptyBox, errBox, filterChips, fmtBytes, ibtnOf, ico, leftPanel, paneHead, routeLink, searchBox, segOf, sessionLink, skelRows } from './sessions-kit.js';
+import { hasRecord, histFilter, rowProject, type HistFilter, type HistRow } from './session-history.js';
+import { histBridgeOn, histRowsNow, histScope, histScopePending, loadHistRows, onHistRows, PENDING_TEXT, scopedRows } from './sessions-scope.js';
+import { histScopeOn } from './lib/hist-scope.js';
 import { findMatcher } from './lib/find.js';
 import { whenLabel } from './lib/omni-order.js';
 import { rowDotCls } from './session-status.js';
@@ -21,13 +23,18 @@ const COLS: ReadonlyArray<{ key: SortCol; label: string }> = [
 ];
 const STEP = 100;
 const st = { filter: 'all' as HistFilter, q: '', sort: 'last' as SortCol, asc: false, sel: '' as string, tab: 'rec' as DetailTab, shown: STEP };
-let rowsCache: { at: number; rows: HistRow[] } | null = null;
-const TTL_MS = 20_000;
 let seq = 0;
+/** 탭이 앱에 돌려주는 손잡이 — 사이드바에서 고른 범위가 바뀌면 앱이 부른다. */
+export interface TabHandle { rescope(): void }
 
+/**
+ * 표에 적는 프로젝트. 셸 액자 안에서는 줄의 프로젝트(rowProject — 기록이 있는 줄은 기록의 것)라 사이드바 · 대화 찾기 · 작업 일지와 같은 말을 한다
+ *  («기타» 를 골랐는데 프로젝트 번호가 서지 않는다). 셸 밖(단독 탭)에는 사이드바가 없다 — 종전 그대로 박스의 프로젝트를 적는다.
+ */
+const projOf = (r: HistRow): string => (histBridgeOn() ? rowProject(r).name : r.projectName || (r.projectId != null ? '#' + r.projectId : ''));
 const cmp = (a: HistRow, b: HistRow, col: SortCol): number => {
   if (col === 'name') return a.name.localeCompare(b.name, 'ko');
-  if (col === 'proj') return String(a.projectName || '￿').localeCompare(String(b.projectName || '￿'), 'ko');
+  if (col === 'proj') return (projOf(a) || '￿').localeCompare(projOf(b) || '￿', 'ko');
   if (col === 'state') return a.stateLabel.localeCompare(b.stateLabel, 'ko');
   return a.lastMs - b.lastMs;
 };
@@ -36,7 +43,7 @@ const fmtAt = (ms: number): string => (ms ? new Date(ms).toLocaleString('ko-KR',
 const stateTone = (key: string): string => (key === 'waiting' ? 'wait' : key === 'busy' ? 'busy' : key === 'done' ? 'done' : key === 'log' ? 'log' : key === 'idle' ? 'idle' : 'off');
 const tileTone = (key: string): string => (key === 'waiting' ? 'amber' : key === 'busy' ? 'blue' : key === 'done' ? 'mint' : '');
 
-export function mountList(host: HTMLElement): void {
+export function mountList(host: HTMLElement): TabHandle {
   const input = el('input', { type: 'text', class: 'shx-input', placeholder: '이름·프로젝트로 거르기', value: st.q, 'aria-label': '이름·프로젝트로 거르기', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
   const count = el('div', { class: 'shx-count', role: 'status' });
   const tbody = el('div', { class: 'shx-tbody', role: 'rowgroup' });
@@ -48,6 +55,8 @@ export function mountList(host: HTMLElement): void {
   const pane = el('section', { class: 'shx-card shx-pane', 'aria-label': '세션' }) as HTMLElement;
   const refresh = ibtnOf('refresh', '새로 고침');
   let rows: HistRow[] = [];
+  /** 사이드바에서 고른 범위 안의 줄 — 칩의 수 · 거르기 · 정렬이 전부 이 안에서 돈다. 고른 것이 없으면 rows 그대로. */
+  let inScope: HistRow[] = [];
   const chips = filterChips(FILTERS, st.filter, (v) => { st.filter = v; st.shown = STEP; draw(); }, '세션 거르기');
 
   host.replaceChildren(el('div', { class: 'shx-split' },
@@ -61,7 +70,7 @@ export function mountList(host: HTMLElement): void {
 
   const visible = (): HistRow[] => {
     const match = findMatcher(st.q);
-    const out = histFilter(rows, st.filter).filter((r) => match(r.name, r.projectName, r.title));
+    const out = histFilter(inScope, st.filter).filter((r) => match(r.name, projOf(r), r.title));
     out.sort((a, b) => (st.asc ? 1 : -1) * cmp(a, b, st.sort) || b.lastMs - a.lastMs);
     return out;
   };
@@ -80,13 +89,18 @@ export function mountList(host: HTMLElement): void {
   function draw(): void {
     drawHead();
     const now = Date.now();
+    const scoped = histScopeOn(histScope());
+    inScope = scopedRows(rows, now);
     const vis = visible();
-    chips.setCounts({ all: rows.length, live: histFilter(rows, 'live').length, off: histFilter(rows, 'off').length, rec: histFilter(rows, 'rec').length });
-    count.textContent = st.q || st.filter !== 'all' ? `세션 ${vis.length}개` + (vis.length !== rows.length ? ` · 전체 ${rows.length}개 가운데` : '') : `세션 ${vis.length}개`;
+    chips.setCounts({ all: inScope.length, live: histFilter(inScope, 'live').length, off: histFilter(inScope, 'off').length, rec: histFilter(inScope, 'rec').length });
+    //  사이드바는 기록이 있는 세션만 센다 — 고른 것이 없을 때 이 표가 더 많으면(박스만 있는 세션) 그 차이를 한마디로 적는다.
+    const recN = !scoped && histBridgeOn() && !st.q && st.filter === 'all' ? inScope.filter(hasRecord).length : inScope.length;
+    count.textContent = st.q || st.filter !== 'all' ? `세션 ${vis.length}개` + (vis.length !== inScope.length ? ` · ${scoped ? '이 범위' : '전체'} ${inScope.length}개 가운데` : '')
+      : `세션 ${vis.length}개` + (recN !== inScope.length ? ` · 기록이 있는 세션 ${recN}개` : '');
     tbody.replaceChildren(...vis.slice(0, st.shown).map((r) => {
       //  점 — 나를 기다리는 셋(확인 필요 · 작업 중 · 작업 완료)은 색, 열려 있는 세션(대기 중)은 채운 회색, 그 밖은 빈 고리.
       const dot = r.stateKey === 'log' ? 'log' : r.stateKey === 'idle' ? '' : rowDotCls(r.stateKey);
-      const proj = r.projectName || (r.projectId != null ? '#' + r.projectId : '');
+      const proj = projOf(r);
       const tr = el('div', { class: 'shx-tr', role: 'row', tabindex: '0', 'data-key': r.key },
         el('div', { class: 'shx-td shx-td-name', role: 'cell' }, el('span', { class: 'shx-dot' + (dot ? ' ' + dot : '') }), el('b', { class: 'shx-tname', text: r.name, title: r.name })),
         el('div', { class: 'shx-td shx-td-proj' + (proj ? '' : ' none'), role: 'cell', title: proj }, proj),
@@ -98,7 +112,12 @@ export function mountList(host: HTMLElement): void {
       tr.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
       return tr;
     }));
-    if (!vis.length) tbody.replaceChildren(noteRow(emptyBox({ icon: 'search', title: rows.length ? '조건에 맞는 세션이 없습니다.' : '세션이 없습니다.', text: rows.length ? '거르개를 풀거나 다른 이름으로 찾아 보세요.' : '' })));
+    //  «남긴 것» 묶음을 골랐는데 일지가 아직 없으면 범위를 정할 수 없다 — «없다» 가 아니라 «세는 중» · «못 받았다» 고 말한다.
+    const pending = histScopePending();
+    if (pending) tbody.replaceChildren(noteRow(pending === 'failed' ? errBox(PENDING_TEXT.failed) : emptyBox({ icon: 'timeline', title: PENDING_TEXT.wait })));
+    else if (!vis.length) tbody.replaceChildren(noteRow(emptyBox(scoped && !inScope.length && rows.length
+      ? { icon: 'search', title: '이 범위에 세션이 없습니다.', text: '사이드바에서 「전체」를 누르면 범위가 풀립니다.' }
+      : { icon: 'search', title: rows.length ? '조건에 맞는 세션이 없습니다.' : '세션이 없습니다.', text: rows.length ? '거르개를 풀거나 다른 이름으로 찾아 보세요.' : '' })));
     const left = vis.length - st.shown;
     more.hidden = left <= 0;
     if (left > 0) { const b = btnOf(`더 보기 (${left}개 남음)`, { kind: 'ghost', cls: 'shx-more' }); b.addEventListener('click', () => { st.shown += STEP; draw(); }); more.replaceChildren(el('div', { role: 'cell' }, b)); }
@@ -126,7 +145,7 @@ export function mountList(host: HTMLElement): void {
     const head = paneHead(r.name, { icon: r.stateKey === 'log' ? 'doc' : 'chat', tone: tileTone(r.stateKey) });
     head.sub.replaceChildren(
       el('span', { class: 'shx-state ' + stateTone(r.stateKey), text: r.stateLabel }),
-      el('span', { text: [r.projectName || (r.projectId != null ? '#' + r.projectId : NO_PROJECT_NAME), whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
+      el('span', { text: [projOf(r) || NO_PROJECT_NAME, whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
     const tabs = segOf<DetailTab>([{ key: 'rec', label: '기록 보기' }, { key: 'info', label: '정보' }], st.tab, (v) => { st.tab = v; fill(); }, '세션 보기');
     const resume = btnOf('이어 질문하기', { icon: 'chat' });
     resume.addEventListener('click', () => { if (r.convId) void resumeSessionRecord(r.convId, r.node, resume); });
@@ -154,28 +173,43 @@ export function mountList(host: HTMLElement): void {
 
   async function load(force: boolean): Promise<void> {
     const mySeq = ++seq;
-    if (!force && rowsCache && Date.now() - rowsCache.at < TTL_MS) { rows = rowsCache.rows; draw(); openDetail(); return; }
     count.textContent = '불러오는 중…';
     if (!tbody.childElementCount) tbody.replaceChildren(noteRow(skelRows(7)));
     refresh.disabled = true;
     refresh.classList.add('spin');
     try {
-      //  도는 세션 축이 실패해도 기록은 보여 준다(그 반대도) — 둘 다 실패하면 그렇다고 말한다.
-      const [live, logs] = await Promise.all([
-        api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (Array.isArray(d?.sessions) ? d.sessions : [])).catch(() => null),
-        loadMySessions(force).then((d) => d.sessions).catch(() => null),
-      ]);
+      //  도는 세션 축이 실패해도 기록은 보여 준다(그 반대도) — 둘 다 실패하면 그렇다고 말한다. 조회와 접기는 sessions-scope.ts 한 벌
+      //   (사이드바가 같은 줄을 읽는다 — 따로 받으면 사이드바의 수와 이 표의 수가 갈린다).
+      const got = await loadHistRows(force);
       if (mySeq !== seq) return;
-      if (!live && !logs) { count.textContent = ''; tbody.replaceChildren(noteRow(errBox('세션 목록을 불러오지 못했습니다.'))); return; }
-      rows = mergeHistoryRows(live || [], logs || [], Date.now());
-      rowsCache = { at: Date.now(), rows };
+      if (!got.live && !got.logs) { count.textContent = ''; tbody.replaceChildren(noteRow(errBox('세션 목록을 불러오지 못했습니다.'))); return; }
+      rows = got.rows;
       draw();
       openDetail();
-      if (!live) count.textContent += ' · 실행 중인 세션을 불러오지 못해 기록만 보여 줍니다';
-      else if (!logs) count.textContent += ' · 중앙 기록을 불러오지 못해 실행 중인 세션만 보여 줍니다';
+      if (!got.live) count.textContent += ' · 실행 중인 세션을 불러오지 못해 기록만 보여 줍니다';
+      else if (!got.logs) count.textContent += ' · 중앙 기록을 불러오지 못해 실행 중인 세션만 보여 줍니다';
     } finally { refresh.disabled = false; refresh.classList.remove('spin'); }
   }
   refresh.addEventListener('click', () => { void load(true); });
   input.addEventListener('input', () => { st.q = input.value; st.shown = STEP; draw(); });
   void load(false);
+  //  줄이 다른 길로 새로 왔다(셸 액자 안에서는 1분마다 다시 받는다 — 사이드바의 수가 그 줄로 선다). 이 표도 같은 줄로 맞춘다.
+  //   달라진 것이 없으면 다시 그리지 않는다(보던 줄의 초점을 흔들지 않는다). 떠난 화면은 듣기를 걷는다.
+  const sigOf = (rs: HistRow[]): string => rs.map((r) => r.key + ':' + r.stateKey + ':' + r.lastMs + ':' + r.name).join('|');
+  const offRows = onHistRows(() => {
+    if (!host.isConnected) { offRows(); return; }
+    const got = histRowsNow();
+    if (!got || got === rows || sigOf(got) === sigOf(rows)) return;
+    rows = got;
+    draw();
+    if (st.sel && !rows.some((r) => r.key === st.sel)) { st.sel = ''; openDetail(); }
+  });
+  return {
+    //  범위가 바뀌었다 — 줄만 다시 세운다(다시 받지 않는다). 고른 줄이 범위 밖으로 나갔으면 오른쪽 칸을 비운다.
+    rescope: () => {
+      st.shown = STEP;
+      draw();
+      if (st.sel && !inScope.some((r) => r.key === st.sel)) { st.sel = ''; openDetail(); }
+    },
+  };
 }
