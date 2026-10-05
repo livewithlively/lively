@@ -20,7 +20,8 @@ import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, openInViewerPart, pnIcon, pnNote, seedSessName, sessNameCache } from './panes-kit.js';
+import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, openInViewerPart, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
 import { createPreviewKit } from './file-preview.js';
 import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
@@ -37,7 +38,7 @@ import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { attachAppToSession, createSessionAppDock, SESSION_APPS_EVT } from './session-app-dock.js';   // #4225 세션 오른쪽 앱 칸
 import { type Sess, type V2Data } from './views.js';
-import { bindCtx, requestOpenRoute } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
+import { bindCtx } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
 import { copyText } from './ctx-menu.js';
 
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
@@ -399,105 +400,7 @@ function sessionsPart(ctx: PartCtx): Part {
   };
 }
 
-// ══ 지식 — 이 프로젝트에 연결된 문서 ══════════════════════════════════════════
-function knowledgePart(ctx: PartCtx): Part {
-  const root = el('div', { class: 'pn-part pn-kn' });
-  const note = pnNote('lively_pn_kn_note',
-    '지식은 세션들이 일하면서 계속 쓰고 고치는 글이고, 이 워크스페이스의 모든 세션이 함께 봅니다. 쌓일수록 맥락이 촘촘해져요.');
-  const list = el('div', { class: 'pn-knlist' });
-  root.append(note, list);
-  let sig = '';
-
-  type KnRow = { name: string; title: string; rel: string; type?: string | null; lifecycle?: string | null };
-
-  function paint(): void {
-    const kn = (ctx.detail()?.project || {}).knowledge || {};
-    const pick = (arr: any[], rel: string): KnRow[] => (arr || []).map((k: any) => ({
-      name: String(k.name), title: String(k.title || ''), rel,
-      type: k.type ?? null, lifecycle: k.lifecycle ?? null,
-    }));
-    const all: KnRow[] = [...pick(kn.required, '필요'), ...pick(kn.produced, '산출')];
-    const s2 = all.map((k) => k.rel + k.name + k.title).join('|');
-    if (s2 === sig) return;
-    sig = s2;
-    if (!all.length) {
-      list.replaceChildren(el('div', { class: 'pn-empty' },
-        pnIcon('doc', 'pn-i big'),
-        el('b', { text: '연결된 지식이 아직 없어요.' }),
-        el('p', { class: 'pn-fine', text: '세션이 만든 결론을 지식으로 남기면 여기 모입니다.' })));
-      return;
-    }
-    list.replaceChildren(...all.map((k) => {
-      // 제목은 **한 줄**만 — 전문은 title 속성과 상세 창이 갖는다(knTitle 머리말 참조).
-      const row = el('button', {
-        class: 'pn-knrow', type: 'button', title: (k.title || k.name) + '\n눌러서 요약을 봅니다',
-        onclick: () => void openKnModal(k),
-      }, pnIcon('doc', 'pn-i sm'),
-        el('span', { class: 'n ell1', text: knTitle(k.title, k.name) }),
-        el('span', { class: 'pn-knrel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel }));
-      // #3784 우클릭 — 요약(그 자리) · 위키에서 열기 · 새 탭 · 제목/이름/링크 복사
-      const href = '#/k/' + encodeURIComponent(k.name);
-      bindCtx(row, () => ({
-        title: knTitle(k.title, k.name), sub: `${k.rel} 지식` + (k.type ? ' · ' + k.type : ''),
-        rows: [
-          { label: '요약 보기', icon: 'eye', hint: '이 자리에서', run: () => void openKnModal(k) },
-          { label: '위키에서 열기', icon: 'wiki', run: () => requestOpenRoute(href) },
-          { label: '새 탭에서 열기', icon: 'columns', run: () => requestOpenRoute(href, true) },
-          { sep: true, label: '' },
-          { label: '제목 복사', icon: 'copy', run: () => void copyText(k.title || k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
-          { label: '지식 이름 복사', icon: 'copy', hint: k.name.length > 18 ? k.name.slice(0, 18) + '…' : k.name, run: () => void copyText(k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
-          { label: '링크 복사', icon: 'link', run: () => void copyText(new URL(href, location.href).toString()).then((ok) => { if (ok) toast('링크를 복사했어요'); }) },
-        ],
-      }));
-      return row;
-    }));
-  }
-
-  // ── 상세 창 — 누르면 위키로 튀지 않고 **여기서 먼저 본다**(원준 2026-08-20) ──────────
-  //  곁칸에서 지식을 누르는 이유는 대개 "이게 뭐였더라"이지 "정독하겠다"가 아니다. 위키로 보내면 보던 화면
-  //  (세션·자료)이 통째로 사라지고 돌아올 길이 뒤로가기뿐이었다. 요약을 그 자리에서 보이고, 정독은 [전체 보기]로.
-  async function openKnModal(k: KnRow): Promise<void> {
-    const bodyEl = el('div', { class: 'pn-knm-body' }, el('p', { class: 'pn-fine', text: '불러오는 중…' }));
-    const back = el('div', { class: 'pn-modal-back' });
-    const close = (): void => { back.remove(); box.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
-    const box = el('div', { class: 'pn-modal pn-knm', role: 'dialog', 'aria-label': '지식 요약' },
-      el('div', { class: 'pn-modal-h' },
-        el('h2', { text: knTitle(k.title, k.name) }),
-        el('button', { class: 'pn-modal-x', type: 'button', 'aria-label': '닫기', onclick: () => close() }, pnIcon('x', 'pn-i sm'))),
-      el('div', { class: 'pn-modal-b' }, bodyEl),
-      el('div', { class: 'pn-modal-f' },
-        el('span', { class: 'pn-fine ell', text: k.name }),
-        el('a', { class: 'btn btn-primary btn-sm', href: '#/k/' + encodeURIComponent(k.name), onclick: () => close() }, el('span', { text: '전체 보기' }))));
-    back.onclick = () => close();
-    document.addEventListener('keydown', onKey);
-    document.body.append(back, box);
-
-    const d: any = await api('/api/ui/knowledge/' + encodeURIComponent(k.name)).catch(() => null);
-    if (!box.isConnected) return;
-    const kd = (d && (d.knowledge || d)) || null;
-    if (!kd) { bodyEl.replaceChildren(el('p', { class: 'pn-fine', text: '내용을 불러오지 못했어요 — [전체 보기]로 열어 주세요.' })); return; }
-    const meta = el('div', { class: 'pn-knm-meta' },
-      el('span', { class: 'pn-knrel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel }),
-      ...(kd.type ? [el('span', { class: 'pn-knm-tag', text: String(kd.type) })] : []),
-      ...((kd.categories || []).slice(0, 2).map((c: any) => el('span', { class: 'pn-knm-tag', text: String(c.name || c.key) }))),
-      ...(kd.updated_at ? [el('span', { class: 'pn-fine', text: relTime(String(kd.updated_at)) + ' 갱신' })] : []));
-    // 전문 제목은 한 줄로 줄인 제목 아래에 그대로 — 줄인 것 때문에 원문을 못 보게 되면 안 된다.
-    const full = String(kd.title || '');
-    const short = knTitle(k.title, k.name);
-    // 본문 첫 줄의 H1 은 대개 제목을 되풀이한다 — 창 머리에 이미 있으므로 턴다.
-    const md = String(kd.body_md || '').replace(/^\s*#\s+.*\n+/, '');
-    bodyEl.replaceChildren(
-      ...(full && full !== short ? [el('p', { class: 'pn-knm-full', text: full })] : []),
-      meta,
-      ...(kd.summary ? [el('p', { class: 'pn-knm-sum', text: String(kd.summary) })] : []),
-      el('div', { class: 'pn-md' }, renderMarkdown(md.slice(0, 6000))),
-      ...(md.length > 6000 ? [el('p', { class: 'pn-fine', text: '…여기까지만 보여요. 전문은 [전체 보기]에서.' })] : []));
-  }
-
-  paint();
-  return { root, tick: paint, destroy: () => { document.querySelector('.pn-knm')?.remove(); document.querySelectorAll('.pn-modal-back').forEach((n) => n.remove()); } };
-}
+// ══ 지식 — 이 프로젝트에 연결된 문서 · 그 칸 안의 읽기 화면(#4443) 은 제 파일에 산다: panes-knowledge.ts ══════════
 
 // ══ 태스크 — 보는 세션의 프로젝트 태스크(#4084) 는 제 파일에 산다: panes-tasks.ts ══════════════════════
 
