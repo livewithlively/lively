@@ -67,14 +67,15 @@ async function PAGE_MAIN() {
 
   const D = 86_400_000, NOW = Date.now();
   const T0 = new Date(NOW); T0.setHours(0, 0, 0, 0);
-  const TODAY = Math.round((T0.getTime() + NOW) / 2);
+  //  «오늘» 의 세 시각 — 오늘 0시와 지금 사이를 나눈 자리(고정된 분을 빼면 자정 직후에 어제로 넘어간다).
+  const TODAY = Math.round((T0.getTime() + NOW) / 2), EARLIER = Math.round((T0.getTime() + TODAY) / 2), EARLIEST = Math.round((T0.getTime() + EARLIER) / 2);
   const dayAt = (n) => { const d = new Date(T0); d.setDate(d.getDate() - n); d.setHours(12, 0, 0, 0); return d.getTime(); };
   const monthsAgo = (n) => { const d = new Date(T0); d.setDate(1); d.setMonth(d.getMonth() - n); d.setHours(12, 0, 0, 0); return d.getTime(); };
   let seq = 0;
   const row = (last, pid, pname, state = "rec", kind = null) => ({ key: "k" + (++seq), conv: "c" + seq, last, pid, pname, state, kind });
   //  오늘 3(통합검색 2 · UI 수정 1) · 어제 4(기타 2 · 통합검색 1 · UI 수정 1) · 두 달 전 2(통합검색 2)
   const ROWS = [
-    row(TODAY, 7, "통합검색", "live", "k"), row(TODAY - 60_000, 7, "통합검색", "off", "a"), row(TODAY - 120_000, 9, "UI 수정", "off", "n"),
+    row(TODAY, 7, "통합검색", "live", "k"), row(EARLIER, 7, "통합검색", "off", "a"), row(EARLIEST, 9, "UI 수정", "off", "n"),
     row(dayAt(1), 0, "", "rec", "n"), row(dayAt(1) - 1000, 0, "", "rec", "n"), row(dayAt(1) - 2000, 7, "통합검색", "rec", "k"), row(dayAt(1) - 3000, 9, "UI 수정", "rec", "a"),
     row(monthsAgo(2), 7, "통합검색", "rec", "n"), row(monthsAgo(2) - 1000, 7, "통합검색", "rec", "n"),
   ];
