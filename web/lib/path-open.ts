@@ -40,3 +40,28 @@ export function pathOpenPlan(
   if (t.kind === 'project' && !here.loose && here.projectId > 0 && Number(t.id) === here.projectId) return { via: 'project', rel: t.rel };
   return null;
 }
+
+/**
+ * 후보 여럿 → 여는 길 여럿(순서 그대로, 같은 것은 한 번). 터미널은 빈칸 앞 낱말을 붙인 상대 경로 후보를 긴 것 먼저, 화면에 그어진
+ *  경로를 맨 끝에 싣는다(terminal.ts pathMatches 머리말). 둘 이상이면 셸이 **실제로 있는 첫 것**을 연다 — 글만으로는 `파일은 docs/a.md`
+ *  와 `데모데이 발표덱/a.md` 를 가를 수 없다. 후보가 없는 옛 터미널이면 path·target 하나로 본다.
+ */
+export function pathOpenPlans(
+  msg: { path?: unknown; target?: unknown; sid?: unknown; cands?: unknown },
+  here: { projectId: number; loose: boolean; sessDir: (sid: string) => string | null },
+): PathOpenPlan[] {
+  const cands = Array.isArray(msg.cands) && msg.cands.length
+    ? (msg.cands as Array<{ path?: unknown; target?: unknown }>).slice(0, 8)
+    : [{ path: msg.path, target: msg.target }];
+  const out: PathOpenPlan[] = [];
+  const seen = new Set<string>();
+  for (const c of cands) {
+    const plan = pathOpenPlan({ path: c && c.path, target: c && c.target, sid: msg.sid }, here);
+    if (!plan) continue;
+    const k = plan.via === 'session' ? 's:' + plan.sid + ':' + plan.rel : 'p:' + plan.rel;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(plan);
+  }
+  return out;
+}

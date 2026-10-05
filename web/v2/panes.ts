@@ -52,7 +52,7 @@ import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
-import { isAbs, pathOpenPlan, slash } from '../lib/path-open.js';
+import { isAbs, pathOpenPlans, slash, type PathOpenPlan } from '../lib/path-open.js';
 import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
@@ -979,14 +979,45 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   기다림(400ms)보다 길어지면 터미널이 새 탭을 한 번 더 연다(리뷰 지적).
   //  어디서 열지는 lib/path-open 한 곳(순수 — 시험 대상)이 정한다. 경로는 터미널이 걸렀어도 거기서 다시 거른다.
   function planPathOpen(d: any): (() => void) | null {
-    const plan = pathOpenPlan(d || {}, { projectId: id, loose, sessDir: (sid) => (sessRow(sid) ? sessDir(sid) : null) });
-    if (!plan) return null;
+    const plans = pathOpenPlans(d || {}, { projectId: id, loose, sessDir: (sid) => (sessRow(sid) ? sessDir(sid) : null) });
+    if (!plans.length) return null;
     const ensureFiles = (): void => {
       const type: PartType = loose ? 'sessfiles' : 'files';
       if (!findTab(type)) addPart(showZone('side', { bottomOn: lay.bottomOn, narrow: narrow() }), type);
     };
-    if (plan.via === 'session') return () => { ensureFiles(); openOut(plan.sid, { kind: 'file', label: plan.rel.split('/').pop() || plan.rel, ext: '', path: plan.rel }); };
-    return () => { ensureFiles(); openViewerAt({ path: plan.rel }); };
+    const open = (plan: PathOpenPlan): void => {
+      ensureFiles();
+      if (plan.via === 'session') openOut(plan.sid, { kind: 'file', label: plan.rel.split('/').pop() || plan.rel, ext: '', path: plan.rel });
+      else openViewerAt({ path: plan.rel });
+    };
+    if (plans.length === 1) return () => open(plans[0]);
+    //  후보가 여럿(빈칸 든 상대 경로) — 실제로 있는 첫 것을 연다. 하나도 없으면 화면에 그어진 경로(맨 끝)를 연다(뷰어가 «못 읽었어요»).
+    //  묻기는 한꺼번에(노드 세션의 목록은 노드 왕복이라 줄 세우면 후보 수만큼 늦다), 고르기는 후보 순서대로.
+    return () => { void (async () => {
+      const found = await Promise.all(plans.map((plan) => pathExists(plan)));
+      const i = found.indexOf(true);
+      open(plans[i >= 0 ? i : plans.length - 1]);
+    })(); };
+  }
+  /** 그 자리에 파일이 있나 — 프로젝트 자료는 HEAD(몸통 없이), 세션 폴더는 부모 폴더 목록(세션 파일 API 의 HEAD 는 몸통까지 흘린다).
+   *  이름은 NFC 로 견준다(맥 노드의 목록은 NFD 로 올 수 있다). 묻지 못하면 «없다» — 다음 후보로 간다.
+   *  ⚠ 세션 목록(ls)은 `.` 으로 시작하는 이름을 숨긴다 — 그런 후보는 늘 «없다» 로 읽혀 화면의 경로(맨 끝)로 떨어진다(무해). */
+  async function pathExists(plan: PathOpenPlan): Promise<boolean> {
+    const headers: Record<string, string> = {};
+    const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
+    try {
+      if (plan.via === 'project') {
+        const r = await fetch(apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(plan.rel)), { method: 'HEAD', headers, credentials: 'same-origin', cache: 'no-store' });
+        return r.ok;
+      }
+      const cut = plan.rel.lastIndexOf('/');
+      const dir = cut < 0 ? '' : plan.rel.slice(0, cut), name = plan.rel.slice(cut + 1).normalize('NFC');
+      const node = sessNode(plan.sid);
+      const r = await fetch(apiUrl('/api/ui/terminal/sessions/' + encodeURIComponent(plan.sid) + '/ls?path=' + encodeURIComponent(dir) + (node ? '&node=' + encodeURIComponent(node) : '')), { headers, credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) return false;
+      const j = await r.json();
+      return Array.isArray(j?.items) && j.items.some((x: any) => x && x.type !== 'dir' && String(x.name || '').normalize('NFC') === name);
+    } catch (_) { return false; }
   }
   const onMsg = (e: MessageEvent): void => {
     if (e.origin !== location.origin) return;
