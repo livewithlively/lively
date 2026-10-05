@@ -17,10 +17,15 @@
 //  A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 자료 · 프로젝트 · 지식
 //  A8 다른 세션이 «열림» 을 기억해도 내용이 비었으면 빈 칸이 올라오지 않는다
 //  ★ 아래 칸은 줄기만 한다(같은 말 · lib landZone) — 옛 배치에 남은 아래 칸이 보일 때 닿던 남은 길도 새 탭을 곁칸에 세운다.
+//  B0 (배선) 옛 배치 — 아래 칸에 타임라인 · 웹 · 뷰어가 보인다(아래 행들이 헛돌지 않는다)
 //  B1 아래 칸 «웹» 탭 우클릭 › «웹 하나 더» — 새 웹 탭은 곁칸에 서고 켜진다 · 아래 칸 그대로
 //  B2 곁칸 탭(지식)을 끌어 아래 칸 탭 줄에 놓아도 아무 일 없다(놓기 표시도 안 뜬다) · B2w (배선) 아래 칸 «웹» 을 끌어 곁칸에 놓으면 옮겨진다
 //  B3 열린 아래 칸에 뷰어(readme.md)가 있을 때 다른 파일을 열면 새 뷰어는 곁칸 · B3b 같은 파일을 다시 열면 아래 칸의 그 뷰어를 켠다(새 탭 없음)
-//  B4 아래 칸에서 닫은 탭을 «닫은 탭 다시 열기» 하면 곁칸으로 돌아온다 · B4b 마지막 탭(경계)이면 아래 칸은 다시 서지 않는다
+//  B4 아래 칸에서 닫은 탭을 «닫은 탭 다시 열기» 하면 곁칸 맨 끝으로 돌아온다 · B4b 마지막 탭(경계)이면 아래 칸은 다시 서지 않는다
+//  B3c 닫힌 아래 칸에 그 파일의 뷰어가 있으면 펼치지 않고 곁칸으로 데려와 켠다
+//  B5 다시 열 탭과 같은 파일의 뷰어가 닫힌 아래 칸에 있으면 — 아래 칸을 펼치지 않고 그 뷰어를 곁칸으로 데려와 켠다(격리 리뷰)
+//  B6 배치를 저장한 적 없는 프로젝트가 옛 아래 칸이 있는 배치를 물려받으면 — 아래 칸은 서지 않고 그 탭은 곁칸 뒤에 선다(격리 리뷰)
+//  N1 좁은 폭(서랍) — 아래 칸에 뷰어만 있을 때 다른 파일을 열어도 저장된 아래 칸은 그대로, 새 뷰어는 곁칸 배치에 적힌다
 //  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다(원준 10-05 «기본배치 아니게»)
 //  M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다
 //  M3 한 번 걷으면 다시 열어도 저장소를 다시 쓰지 않는다(표식) · 표식 뒤 사람이 둔 타임라인은 그대로
@@ -147,7 +152,7 @@ async function PAGE_MAIN() {
   };
   const goBack = (root) => root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 3 }));   // 마우스 옆 단추(뒤로)
   const clk = async (el) => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); await sleep(150); };
-  const fresh = () => { localStorage.removeItem(LAYOUT); localStorage.removeItem(VIEW); seedFs(); };
+  const fresh = () => { for (const k of [LAYOUT, VIEW, "pn_act_by_sess", "pn_ed_path"]) localStorage.removeItem(k); seedFs(); };   // 장면끼리 기억을 물려주지 않는다
 
   // ── A — 처음 쓰는 브라우저 · 아래 칸에는 새로 열지 않는다 ──
   try {
@@ -205,7 +210,7 @@ async function PAGE_MAIN() {
       const P = (type, x, y) => (type === "pointerdown" ? w.querySelector(".pn-tab") : window).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 7, pointerType: "mouse" }));
       const x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2, x1 = bar.left + Math.min(40, bar.width / 2), y1 = bar.top + bar.height / 2;
       P("pointerdown", x0, y0); P("pointermove", x0 + 8, y0 + 30); P("pointermove", (x0 + x1) / 2, (y0 + y1) / 2); P("pointermove", x1, y1); await sleep(30);
-      const lit = !!$(`#app .pn-pane[data-zone="${toZone}"] .pn-bar.drop, #app .pn-pane[data-zone="${toZone}"] .drop`);
+      const lit = !!$(`#app .pn-pane[data-zone="${toZone}"] .pn-tabbar.drop`);
       P("pointerup", x1, y1); await sleep(150);
       return lit;
     };
@@ -219,6 +224,31 @@ async function PAGE_MAIN() {
     if (lastKey) { wrapOf("bottom", lastKey).querySelector(".pn-tab-x").click(); await sleep(150); }
     b.B4bClosed = snap();
     b.reopen2 = await pick("side", "files", /^닫은 탭 다시 열기/); b.B4b = snap();
+    const plant = async (lay, ed, id = 7) => {
+      fresh(); localStorage.setItem(LAYOUT, JSON.stringify({ last: lay, p: { [id]: lay }, seeded: { tasks: 1, bottom: 1, apps: 1 } }));
+      localStorage.setItem("pn_ed_path", JSON.stringify(ed)); await mount(id);
+    };
+    //  B3c 닫힌 아래 칸에 readme.md 뷰어 — 같은 파일을 연다
+    await plant({ main: ["sessions"], side: ["files"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, pin: [] }, { p7: "readme.md" });
+    b.B3c0 = snap(); await viewer("readme.md"); b.B3c = snap();
+    //  B5 같은 파일(notes.txt)의 뷰어가 곁칸(editor#2)과 닫힌 아래 칸(editor)에 하나씩 — 곁칸 것을 닫고 되살린다
+    await plant({ main: ["sessions"], side: ["files", "editor#2"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, pin: [] }, { p7: "notes.txt", "p7#2": "notes.txt" });
+    b.B50 = snap();
+    wrapOf("side", "editor#2").querySelector(".pn-tab-x").click(); await sleep(150);
+    b.reopen5 = await pick("side", "files", /^닫은 탭 다시 열기/); b.B5 = snap();
+    //  B6 새 프로젝트(9) — last 에 옛 아래 칸이 있다
+    fresh();
+    const old7 = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web"], act: { main: "sessions", side: "files", bottom: "web" }, sideOn: true, bottomOn: true, pin: [] };
+    localStorage.setItem(LAYOUT, JSON.stringify({ last: old7, p: { 7: old7 }, seeded: { tasks: 1, bottom: 1, apps: 1 } }));
+    await mount(9); b.B6 = snap(); await clk(tabBtn("side", "지식")); const s6 = store(); b.B6store = { p9: s6.p && s6.p[9] ? s6.p[9].bottom : null, p7: s6.p[7].bottom };
+    //  N1 좁은 폭 — 모바일 질의만 맞다고 답한다(셸은 matchMedia(MOBILE_MQ) 로 좁은 폭을 안다)
+    const realMM = window.matchMedia.bind(window);
+    window.matchMedia = (q) => (/max-width/.test(q) ? { matches: true, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } } : realMM(q));
+    try {
+      await plant({ main: ["sessions"], side: ["files"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: true, pin: [] }, { p7: "readme.md" });
+      b.N1narrow = handle && $$("#app .pn-pane[data-zone=\"side\"] .pn-tabwrap").some((w) => w.dataset.tab === "timeline");   // 서랍이 아래 칸 탭까지 든다 = 좁은 폭으로 섰다
+      await viewer("notes.txt", true); const sn = store(); b.N1 = { bottom: sn.p[7].bottom, side: sn.p[7].side };   // stage 판: 새 뷰어는 newTab 으로만(#4135 없음)
+    } finally { window.matchMedia = realMM; }
   } catch (e) { R.errB = String(e && e.stack || e); }
 
   // ── M — 옛 기본값이 저장된 브라우저(한 번 걷기) ──
@@ -376,10 +406,18 @@ check(!!b.B3 && J(b.B3.bottom) === J(B0) && b.B3.side.length === 4 && /^editor#\
 check(!!b.B3b && J(b.B3b.bottom) === J(B0) && J(b.B3b.side) === J(b.B3 && b.B3.side), "B3b 새 탭이 아니면 보던 뷰어에 편다 — 새 탭 없음 · 아래 칸 그대로(stage 판: #4135 없음)", b.B3b);
 check(b.litToBottom === false && !!b.B2 && J(b.B2.bottom) === J(B0) && b.B2.side.includes("knowledge"), "B2 곁칸 탭을 끌어 아래 칸 줄에 놓아도 아무 일 없다 — 놓기 표시도 안 뜬다", { lit: b.litToBottom, B2: b.B2 });
 check(b.litToSide === true && !!b.B2w && J(b.B2w.bottom) === J(["timeline", "editor"]) && b.B2w.side.includes("web"), "B2w (배선) 아래 칸의 옛 탭은 끌어서 곁칸으로 옮길 수 있다 — 끌기 장치가 실제로 돈다", { lit: b.litToSide, B2w: b.B2w });
-check(!!b.B4closed && J(b.B4closed.bottom) === J(["editor"]) && b.reopen1 === true && !!b.B4 && J(b.B4.bottom) === J(["editor"]) && b.B4.side.includes("timeline") && b.B4.actSide === "timeline",
-  "B4 아래 칸에서 닫은 탭을 다시 열면 곁칸으로 돌아온다 · 아래 칸 다른 탭 그대로", { closed: b.B4closed, B4: b.B4 });
-check(b.lastKey === "editor" && !!b.B4bClosed && down(b.B4bClosed.up) && b.reopen2 === true && !!b.B4b && J(b.B4b.bottom) === "[]" && down(b.B4b.up) && b.B4b.side.includes("editor") && b.B4b.actSide === "editor",
-  "B4b 마지막 탭(경계)을 닫고 다시 열어도 아래 칸은 다시 서지 않는다 — 곁칸으로", { closed: b.B4bClosed, B4b: b.B4b });
+check(!!b.B4closed && J(b.B4closed.bottom) === J(["editor"]) && b.reopen1 === true && !!b.B4 && J(b.B4.bottom) === J(["editor"]) && b.B4.side.at(-1) === "timeline" && b.B4.actSide === "timeline",
+  "B4 아래 칸에서 닫은 탭을 다시 열면 곁칸 맨 끝으로 돌아온다 · 아래 칸 다른 탭 그대로", { closed: b.B4closed, B4: b.B4 });
+check(b.lastKey === "editor" && !!b.B4bClosed && down(b.B4bClosed.up) && b.reopen2 === true && !!b.B4b && J(b.B4b.bottom) === "[]" && down(b.B4b.up) && b.B4b.side.at(-1) === "editor" && b.B4b.actSide === "editor",
+  "B4b 마지막 탭(경계)을 닫고 다시 열어도 아래 칸은 다시 서지 않는다 — 곁칸 맨 끝으로", { closed: b.B4bClosed, B4b: b.B4b });
+check(!!b.B3c0 && J(b.B3c0.side) === J(["files"]) && down(b.B3c0.up) && !!b.B3c && J(b.B3c.bottom) === J(["timeline"]) && down(b.B3c.up) && J(b.B3c.side) === J(["files", "editor"]) && b.B3c.actSide === "editor",
+  "B3c 닫힌 아래 칸에 그 파일의 뷰어가 있으면 펼치지 않고 그 뷰어만 곁칸으로 데려와 켠다(남은 타임라인은 닫힌 칸에 그대로)", { before: b.B3c0, after: b.B3c });
+check(!!b.B50 && J(b.B50.side) === J(["files", "editor#2"]) && b.reopen5 === true && !!b.B5 && down(b.B5.up) && J(b.B5.bottom) === J(["timeline"]) && b.B5.side.includes("editor") && b.B5.actSide === "editor" && !b.B5.side.includes("editor#2"),
+  "B5 다시 열 탭과 같은 파일의 뷰어가 닫힌 아래 칸에 있으면 — 펼치지 않고 그 뷰어를 곁칸으로 데려와 켠다", { before: b.B50, after: b.B5 });
+check(!!b.B6 && down(b.B6.up) && J(b.B6.bottom) === "[]" && J(b.B6.side) === J(["files", "knowledge", "timeline", "web"]) && !!b.B6store && J(b.B6store.p9) === "[]" && J(b.B6store.p7) === J(["timeline", "web"]),
+  "B6 저장한 적 없는 프로젝트가 옛 아래 칸을 물려받으면 — 아래 칸은 서지 않고 그 탭은 곁칸 뒤에 · 원래 프로젝트(p7)는 그대로", { ui: b.B6, store: b.B6store });
+check(b.N1narrow === true && !!b.N1 && J(b.N1.bottom) === J(["timeline", "editor"]) && b.N1.side.length === 2 && /^editor#\d+$/.test(b.N1.side[1]),
+  "N1 좁은 폭 — 저장된 아래 칸은 그대로, 새 뷰어는 곁칸 배치에 적힌다", { narrow: b.N1narrow, N1: b.N1 });
 check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge"]) && m.store.seeded?.apps === 1, "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다", m.store);
 check(down(m.b), "M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다", m.b);
 check(m.same === true && J(m.afterMarker) === J(["timeline"]) && !!m.p8 && up(m.p8.b) && J(m.p8.tabs) === J(["타임라인"]), "M3 한 번 걷으면 저장소를 다시 쓰지 않는다 · 표식 뒤 둔 타임라인 · 열린 p8 은 그대로", { same: m.same, afterMarker: m.afterMarker, p8: m.p8 });

@@ -158,14 +158,25 @@ export function bottomShown(o: { bottomOn: boolean; count: number; narrow: boole
   return !o.narrow && o.bottomOn && o.count > 0;
 }
 /**
- * 새로 서는 탭 · 옮겨 오는 탭이 설 칸 — **아래 칸은 새 탭을 받지 않는다**(곁칸으로).
+ * 새로 서는 탭이 설 칸 — **아래 칸은 새 탭을 받지 않는다**(곁칸으로).
  *  원준(2026-10-05): «아래칸에 여는거 우리 안하기로 했잖음». 옛 배치에서 아래 칸에 남은 탭은 그대로 보이고 곁칸으로 보낼 수
- *   있지만, 무엇도 새로 아래 칸에 서지 않는다 — 탭 메뉴 «하나 더» · 뷰어 · 닫은 탭 다시 열기가 이 답을 따르고, 끌어 놓기는
- *   곁칸만 과녁으로 삼는다(셸 dragHost.canGo). 그래서 아래 칸은 줄기만 하고, 비면 사라진다(bottomShown).
- *  가운데 칸은 그대로 둔다(세션 전용 — 고르는 쪽이 이미 막는다). 모르는 값은 곁칸 — 저장소에서 온 이상한 값이 아래 칸으로 새지 않게.
+ *   있지만, 무엇도 새로 아래 칸에 서지 않는다. 셸에서 이 답을 쓰는 곳은 탭 메뉴 «하나 더» · 새 뷰어이고, 같은 규칙을
+ *   나머지 길은 제자리에서 지킨다 — 옮기기(끌어 놓기 · «보내기»)는 곁칸만 과녁, 닫은 탭 다시 열기는 늘 곁칸,
+ *   물려받는 배치는 foldBottom. 그래서 아래 칸은 줄기만 하고, 비면 사라진다(bottomShown).
+ *  가운데 칸은 그대로 둔다(세션 전용 — 고르는 쪽이 이미 막는다). 그 밖의 값은 곁칸 — 엉뚱한 값이 아래 칸으로 새지 않게.
  */
-export function landZone(zone: unknown): 'main' | 'side' {
+export function landZone(zone: 'main' | 'side' | 'bottom'): 'main' | 'side' {
   return zone === 'main' ? 'main' : 'side';
+}
+/**
+ * 물려받는 배치에서 아래 칸을 걷는다 — 아래 칸의 탭은 곁칸 뒤로 합치고 아래 칸은 비운다(같은 규칙 · #4443).
+ *  배치를 저장한 적 없는 프로젝트는 마지막으로 쓰던 배치(last · 옛 전역 한 벌)를 물려받는데, 거기 옛 아래 칸이 있으면
+ *   새 프로젝트에 아래 칸이 새로 섰다(격리 리뷰 지적). 사람이 둔 것은 잃지 않게 곁칸으로 — 순서는 곁칸 다음 아래 칸.
+ *  고정 탭을 맨 앞으로 모으는 정리는 부르는 쪽(셸 normalizeLayout)이 한다. 아래 칸이 비었으면 받은 것을 그대로 돌려준다.
+ */
+export function foldBottom<T extends { side: Key[]; bottom: Key[]; act: { bottom: Key | null } }>(lay: T): T {
+  if (!lay.bottom.length) return lay;
+  return { ...lay, side: [...lay.side, ...lay.bottom.filter((k) => !lay.side.includes(k))], bottom: [], act: { ...lay.act, bottom: null } };
 }
 /**
  * 저장된 배치 묶음({last, p})에서 **옛 기본값** — 닫힌 아래 칸에 타임라인 하나만 — 을 **한 번만** 걷는다(표식 seeded.bottom).
@@ -284,7 +295,7 @@ export function planTabs(tabs: readonly TabIn[], avail: number, m: Metrics = TAB
 export interface ClosedTab {
   key: Key;
   zone: string;
-  /** 닫기 직전 그 칸에서의 자리 — 되살릴 때 그 자리에 끼운다. */
+  /** 닫기 직전 그 칸에서의 자리 — 같은 칸에 되살릴 때 그 자리에 끼운다(다른 칸이면 맨 끝 — 셸 reopenClosed). */
   at: number;
   /** 뷰어면 펴 두었던 파일(열쇠 번호는 그 사이 다른 파일이 가져갔을 수 있다). */
   path?: string;
