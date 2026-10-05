@@ -45,7 +45,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -204,14 +204,15 @@ function seedLayoutStore(): void {
     if (r.changed || u.changed || a.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(a.store));
   } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
-/** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본. */
+/** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본.
+ *  물려받을 때는 아래 칸을 곁칸 뒤로 합친다(lib/pane-tabs foldBottom · #4443) — 새 프로젝트에 아래 칸을 새로 세우지 않는다. */
 function loadLayout(id: number): Layout {
   const st = layoutStore();
   const mine = parseLayout(st.p ? st.p[String(id)] : null);
   if (mine) return mine;
   const last = parseLayout(st.last);
-  if (last) return last;
-  try { const v1 = parseLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY_V1) || 'null')); if (v1) return v1; } catch (_) { /* noop */ }
+  if (last) return normalizeLayout(foldBottom(last));
+  try { const v1 = parseLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY_V1) || 'null')); if (v1) return normalizeLayout(foldBottom(v1)); } catch (_) { /* noop */ }
   return DEF_LAYOUT();
 }
 
@@ -1152,7 +1153,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     saveLayout(); paintAll();
     if (keys.length > 1) toast(`탭 ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
   }
-  /** [닫은 탭 다시 열기] — 가장 최근에 닫은 묶음을 닫기 전 자리에 되살린다. 뷰어는 펴 두었던 파일로 돌아온다. */
+  /** [닫은 탭 다시 열기] — 가장 최근에 닫은 묶음을 닫기 전 자리에 되살린다. 뷰어는 펴 두었던 파일로 돌아온다.
+   *  늘 곁칸으로 — 아래 칸에서 닫은 탭은 곁칸 맨 끝에 선다(아래 칸은 새 탭을 받지 않는다 · lib/pane-tabs landZone). */
   function reopenClosed(): void {
     const r = popClosed(closedStack);
     if (!r) return;
@@ -1172,15 +1174,15 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const key = allKeys().includes(t.key) ? nextTabKey(base, allKeys()) : t.key;
       if (t.path) rememberViewerPath(ctx.memKey(), key, t.path);
       if (t.pinned && !isPinned(key)) lay.pin = [...lay.pin, key];   // 고정했던 탭은 고정한 채로 돌아온다
-      lay[zone] = placeKey(lay[zone], key, t.at, pinSet());
+      //  그 자리 숫자는 닫은 칸 줄의 것이다 — 다른 칸(아래 칸)에서 닫은 탭은 곁칸 맨 끝에(«곁칸으로 보내기» 와 같다).
+      lay[zone] = placeKey(lay[zone], key, t.zone === zone ? t.at : lay[zone].length, pinSet());
       last = { zone, key };
     }
     if (!last) return;
-    lay.act[last.zone] = last.key;
-    saveAct(last.zone, last.key);
-    if (last.zone !== 'main') { sideActNarrow = last.key; revealZone(last.zone); }
     thawAll();
-    saveLayout(); paintAll();
+    //  켜기는 bringUp 한 길로 — 이미 있던 탭(그 사이 생긴 twin · 같은 파일의 뷰어)이 닫힌 아래 칸에 살면 펼치지 않고
+    //   곁칸으로 데려온다(원준 10-01 «밑에서 나오는거 없게» · 격리 리뷰 지적 — 종전엔 revealZone 이 아래 칸을 다시 열었다).
+    bringUp(last.zone, last.key);
   }
   /** [닫은 탭 다시 열기] 오른쪽에 적을 말 — 무엇이 돌아오는지(한 개면 이름, 여럿이면 개수). */
   function closedHint(): string {
