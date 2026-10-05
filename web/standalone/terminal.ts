@@ -54,16 +54,33 @@ export function urlAtColumn(lineText: string, col: number): string | null {
 //      · `~/…` · 공유 루트 기준(`project/12/a.md`). 셸이 같은 프로젝트면 곁칸 뷰어로 연다.
 //   ② 세션 폴더 기준 상대 경로 — `docs/a.md` · `./a.md`. 셸이 세션 파일 API 로 연다(그 API 의 기준이 세션 폴더다).
 //  경로는 **확장자로 끝나야** 한다(`.md` · `.hwp` …, 글자가 하나는 섞인 것) — 한국어 조사가 붙어도(`a.md에`) 확장자에서 끊고,
-//   `1/2.5` 같은 숫자는 안 잡는다. 이름에 빈칸이 든 경로는 못 잡는다(빈칸에서 끊긴다 — 빈칸 뒤가 이름인지 말인지 모른다).
+//   `1/2.5` 같은 숫자는 안 잡는다.
+//  ★ 이름에 **빈칸**이 든 경로(원준님 10-05 «파일 경로 클릭해도 안되는데?» — `데모데이 발표덱/원준수정/…_B.html` 이 빈칸 뒤
+//   `발표덱/…` 만 링크가 되어 «파일을 읽지 못했어요»). 이 조직의 폴더 이름엔 빈칸이 흔하다. 두 갈래로 잇는다:
+//   · 절대·프로젝트 경로(`/…` · `~/…` · `./…` · `project/<번호>/…`)는 시작이 분명하다 — 빈칸 **한 칸**을 건너 뒤 낱말을 붙여 가다가
+//     처음으로 확장자에서 끝나는 자리에서 멈춘다(최대 5낱말). 밑줄도 경로 전체에 그어진다.
+//   · 상대 경로는 시작을 글만으로 모른다(`파일은 docs/a.md` 와 `데모데이 발표덱/a.md` 가 같은 꼴) — 앞 낱말을 붙인 후보(alts,
+//     긴 것 먼저)를 함께 실어 보내고, **셸이 실제로 있는 것**을 고른다(셸 pathExists).
 //  절대 경로인데 `project/<번호>/` 가 없으면 잡지 않는다 — 게이트웨이가 그 자리를 열 길이 없다.
 //  url 은 **화면에 찍힌 경로 그대로**다(넓은 글자 자리표만 뺀다) — [링크 복사]가 그 경로를 복사하고, 여는 쪽이 판정한다.
-export function pathMatches(text: string): { start: number; end: number; url: string }[] {
+export function pathMatches(text: string): { start: number; end: number; url: string; alts?: string[] }[] {
   //  덩어리는 **끊기지 않는 글자 줄 전체**다. 괄호는 경로 글자로 치지 않는다 — Claude Code 의 도구 머리 `Write(/…/a.md)` 에서
   //   `Write(` 를 경로에 붙이지 않게(그래서 `a(1).md` 같은 이름은 괄호에서 끊긴다).
   const re = /[^\s"'`<>|()[\]{}\u3000\u0001]+/g;
-  const out: { start: number; end: number; url: string }[] = [];
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    let chunk = m[0], at = m.index;
+  const toks: { s: string; at: number }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) toks.push({ s: m[0], at: m.index });
+  //  경로 속 빈칸은 **한 칸**이다 — 두 칸·탭·줄바꿈을 건너 잇지 않는다.
+  const oneSpace = (a: { s: string; at: number }, b: { at: number }): boolean => text[a.at + a.s.length] === ' ' && b.at === a.at + a.s.length + 1;
+  //  확장자 뒤에서 끊는다 — 가장 뒤의 «.확장자»(글자로 시작) 중 뒤에 영숫자가 안 붙는 것(`a.md)` · `a.md에` · `a.md**` → `a.md`).
+  //   그 자리까지가 열 수 있는 경로면 화면 글(넓은 글자 자리표 포함)을 돌려준다.
+  const fileAt = (chunk: string): string | null => {
+    const cut = /^(.*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_])/.exec(chunk);
+    return cut && pathLinkTarget(cut[1].replace(/\u0000/g, '')) ? cut[1] : null;
+  };
+  const clean = (raw: string): string => raw.replace(/\u0000/g, '');
+  const out: { start: number; end: number; url: string; alts?: string[] }[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    let chunk = toks[i].s, at = toks[i].at;
     //  URL 이 든 덩어리는 URL 의 몫이다 — `url=https://…/a.html` · `→https://…` 처럼 앞에 글자가 붙어도(리뷰 지적: 종전엔 경로가
     //   먼저 시작해 URL 을 밀어냈다).
     if (chunk.includes('://')) continue;
@@ -76,15 +93,51 @@ export function pathMatches(text: string): { start: number; end: number; url: st
     const lead = /^[^A-Za-z0-9_~./\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF]*/.exec(chunk)![0];
     if (lead.includes('$')) continue;
     at += lead.length; chunk = chunk.slice(lead.length);
-    //  확장자 뒤에서 끊는다 — 가장 뒤의 «.확장자»(글자로 시작) 중 뒤에 영숫자가 안 붙는 것(`a.md)` · `a.md에` · `a.md**` → `a.md`).
-    const cut = /^(.*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_])/.exec(chunk);
-    if (!cut) continue;
-    const raw = cut[1];
-    const p = raw.replace(/\u0000/g, '');
-    if (!pathLinkTarget(p)) continue;
-    out.push({ start: at, end: at + raw.length, url: p });
+    const trimmed = at !== toks[i].at;
+    const one = fileAt(chunk);
+    if (one) {
+      const p = clean(one);
+      //  상대 경로면 앞 낱말을 붙인 후보 — 앞에서 아무것도 안 뗀 덩어리일 때만(`path=docs/a.md` 의 앞은 이름표다).
+      const alts: string[] = [];
+      if (!trimmed && pathLinkTarget(p)?.kind === 'session') {
+        let lead2 = '';
+        for (let k = i - 1; k >= 0 && k >= i - 3; k--) {
+          const w = toks[k].s;
+          if (!oneSpace(toks[k], toks[k + 1]) || w.includes('/') || /[:=]$/.test(w) || !/[A-Za-z0-9\u3131-\u318E\uAC00-\uD7A3]/.test(w)) break;   // 목록 표지(`-`·`•`·`├──`)는 이름이 아니다
+          lead2 = clean(w) + ' ' + lead2;
+          const cand = lead2 + p;
+          if (pathLinkTarget(cand)) alts.unshift(cand);
+        }
+      }
+      out.push(alts.length ? { start: at, end: at + one.length, url: p, alts } : { start: at, end: at + one.length, url: p });
+      continue;
+    }
+    //  시작이 분명한 경로만 빈칸 너머로 잇는다.
+    if (!/^(?:\/|~\/|\.\/|project\/\d+\/)/.test(chunk) || /[.,!?;:]$/.test(chunk)) continue;   // 문장부호로 끝난 경로는 거기서 끝났다
+    //  산문을 경로로 삼키지 않게(리뷰 지적: `/…/out then open a.md` 가 한 링크가 됐다) — 이은 끝 낱말에 `/` 가 있거나(빈칸 든
+    //   폴더: `데모데이 발표덱/원준수정/x.html`), 딱 두 낱말일 때(빈칸 하나 든 파일 이름: `사업 계획서.hwp`)만 잇는다. 문장부호로
+    //   끝난 낱말·새 경로의 시작(`project/<번호>/` · `./` · `~/` · `/`)에서 멈춘다.
+    let joined = chunk;
+    for (let j = i + 1; j < toks.length && j <= i + 5; j++) {
+      const w = toks[j].s;
+      if (!oneSpace(toks[j - 1], toks[j]) || w.includes('://') || /^(?:\/|~\/|\.\/|project\/\d+\/)/.test(w)) break;
+      joined += ' ' + w;
+      const hit = fileAt(joined);
+      if (hit) {
+        if (j === i + 1 || w.includes('/')) { out.push({ start: at, end: at + hit.length, url: clean(hit) }); i = j; }
+        break;
+      }
+      if (/[.,!?;:]$/.test(w)) break;
+    }
   }
+  //  여는 쪽(openPathFromTerminal)이 후보를 찾을 수 있게 적어 둔다 — 클릭·우클릭·호버는 모두 이 함수를 지난 직후에 연다.
+  for (const m of out) if (m.alts) rememberPathAlts(m.url, m.alts); else pathAltsMemo.delete(m.url);   // 낡은 후보를 남기지 않는다
   return out;
+}
+const pathAltsMemo = new Map<string, string[]>();
+function rememberPathAlts(p: string, alts: string[]): void {
+  if (pathAltsMemo.size > 64) pathAltsMemo.clear();
+  pathAltsMemo.set(p, alts);
 }
 
 // (순수 — 테스트 대상) 경로 → 어디서 열까. 프로젝트 자료면 그 번호와 프로젝트 폴더 기준 경로, 세션 폴더 기준이면 그 경로. 못 열면 null.
@@ -169,18 +222,37 @@ function linkTargetHere(uri: string): 'shell' | 'pane' | 'tab' {
 //    ① 앞 행이 폭을 채웠다(끝 칸 −1 까지 — 오른쪽 여백 1칸 허용)  ② 앞 행 끝 덩어리와 뒤 행 첫 덩어리(들여쓰기 ≤ 8칸 뒤)가 둘 다
 //    URL 글자(ASCII)  ③ 그 둘을 이은 길이가 뒤 행의 글 폭(cols − 들여쓰기)보다 길다 — hard:true 는 **폭보다 긴 토큰만** 자른다.
 //    ③ 이 없으면 보통 줄바꿈이 우연히 폭을 꽉 채운 행(실측 흔하다)의 끝 URL 에 다음 행 첫 낱말이 붙는다.
+//  · space — (#4562) 이름에 **빈칸**이 든 경로(`…/데모데이 발표덱/…`)는 Claude Code 가 그 빈칸에서 낱말 단위로 끊는다. 다음 행이
+//    `발표덱/…` 으로 시작해 엉뚱한 경로가 링크가 됐다(원준님 10-05 «파일 경로 클릭해도 안되는데?»). 빈칸 한 칸으로 잇는 조건:
+//    ① 앞 행이 **시작이 분명한 경로의 앞부분**(`/…` · `~/…` · `project/<번호>/…`)으로 끝났다(확장자로 끝났어도 무해하다 —
+//       뒤에 붙은 낱말은 pathMatches 가 확장자에서 끊거나 따로 읽는다)
+//    ② 다음 행 첫 낱말(들여쓰기 ≤ 8칸 뒤)이 앞 행에 안 들어갔을 만큼 길다 — 낱말 줄바꿈이 일어난 자리다.
 export function joinRows(rows: string[], soft: boolean[], row: number, cols: number): { text: string; segs: { row: number; at: number; cut: number; len: number }[] } {
   const URLCH = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
   const trimEnd = (s: string): string => (s || '').replace(/ +$/, '');
-  const joinKind = (i: number): 'soft' | 'hard' | null => {   // i 행이 i-1 행에 이어지나
+  const joinKind = (i: number): 'soft' | 'hard' | 'space' | null => {   // i 행이 i-1 행에 이어지나
     if (i <= 0 || i >= rows.length) return null;
     if (soft[i]) return 'soft';
+    return urlJoin(i) || pathJoin(i);
+  };
+  const urlJoin = (i: number): 'hard' | null => {
     const a = trimEnd(rows[i - 1]);
     if (a.length < cols - 1) return null;                                   // ①
     const tail = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/.exec(a)?.[0] || '';
     const m = /^( {0,8})(\S+)/.exec(rows[i] || '');
     if (!tail || !m || !URLCH.test(m[2])) return null;                       // ②
     return tail.length + m[2].length > cols - m[1].length ? 'hard' : null;   // ③
+  };
+  //  (#4562) 경로 앞부분으로 끝난 행 — 한 낱말이 폭보다 길어 잘렸으면(한글이 든 긴 경로) 빈칸 없이, 아니면 빈칸에서 끊긴 것.
+  const pathJoin = (i: number): 'hard' | 'space' | null => {
+    const a = trimEnd(rows[i - 1]);
+    const head = /(?:^|[\s:=(*→])((?:\/|~\/|project\/\d+\/)\S*)$/.exec(a)?.[1] || '';
+    const nw = /^( {0,8})(\S+)/.exec(rows[i] || '');
+    const tok = /\S*$/.exec(a)![0];
+    //  URL 이 든 낱말(`https://…` 의 `:` 뒤도 `/` 로 시작한다)은 URL 이음(urlJoin)의 몫이다.
+    if (!head || tok.includes('://') || !nw) return null;   // ① (`/clear` 같은 명령 뒤에 이어 붙어도 pathMatches 가 경로로 안 읽는다)
+    if (a.length >= cols - 1 && tok.length + nw[2].length > cols - nw[1].length) return 'hard';         // 낱말 하나가 폭보다 길다
+    return a.length + 1 + nw[2].length > cols - 1 ? 'space' : null;                                     // ② 낱말 줄바꿈
   };
   let top = row;
   for (let g = 0; g < 12 && joinKind(top); g++) top--;
@@ -191,7 +263,8 @@ export function joinRows(rows: string[], soft: boolean[], row: number, cols: num
     if (!kind) break;
     let r = trimEnd(rows[i]);
     let cut = 0;
-    if (kind === 'hard') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
+    if (kind === 'hard' || kind === 'space') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
+    if (kind === 'space') text += ' ';   // 끊긴 자리의 빈칸 — 어느 행의 칸도 아니다(segs 밖)
     // soft 로 이어지는 행은 폭까지 채운다(빈 칸도 그 줄의 글이다) — hard 조각은 사이에 빈칸 없이 붙는다.
     const piece = joinKind(i + 1) === 'soft' ? r.padEnd(cols - cut) : r;
     segs.push({ row: i, at: text.length, cut, len: piece.length });
@@ -309,7 +382,9 @@ export function openPathFromTerminal(p: string): void {
     settle(!!e.data.handled);
   };
   window.addEventListener('message', ack);
-  try { window.parent.postMessage({ type: 'lively:open-file-in-pane', path: p, target: t, sid: SESSION_ID }, location.origin); } catch (_) { /* 부모 없음 — 아래 폴백 */ }
+  //  후보(빈칸 앞 낱말을 붙인 상대 경로 — pathMatches 머리말)는 긴 것 먼저, 화면에 그어진 경로는 맨 끝. 셸이 있는 것을 고른다.
+  const cands = [...(pathAltsMemo.get(p) || []), p].map((x) => ({ path: x, target: pathLinkTarget(x) })).filter((c) => c.target);
+  try { window.parent.postMessage({ type: 'lively:open-file-in-pane', path: p, target: t, sid: SESSION_ID, cands }, location.origin); } catch (_) { /* 부모 없음 — 아래 폴백 */ }
   window.setTimeout(() => settle(false), 400);
   window.setTimeout(() => window.removeEventListener('message', ack), 5000);
 }

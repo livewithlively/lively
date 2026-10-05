@@ -20,7 +20,7 @@ for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt
 const LIB = process.env.PATH_OPEN_SRC || join(root, "web/lib/path-open.ts");
 const out = mkdtempSync(join(tmpdir(), "path-open-"));
 execFileSync(join(root, "node_modules/.bin/tsc"), [LIB, "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"], { stdio: "inherit" });
-const { pathOpenPlan } = await import(join(out, path.basename(LIB).replace(/\.ts$/, ".js")));
+const { pathOpenPlan, pathOpenPlans } = await import(join(out, path.basename(LIB).replace(/\.ts$/, ".js")));
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -131,6 +131,89 @@ t("F10 트래킹 pane 맨클릭 — 세션 상대 경로는 TUI 에 돌려주고
   assert.equal(bareClickLink(null, true), null);
 });
 
+// ── S. 이름에 빈칸이 든 경로(원준님 10-05 «파일 경로 클릭해도 안되는데?» — `데모데이 발표덱/…` 이 빈칸 뒤만 링크였다) ──────
+const DECK = "/work/shared/project/4100/데모데이 발표덱/원준수정/데모데이덱_원준수정_시안_검토판12_B.html";
+t("S1 절대 경로 속 빈칸 — 경로 전체가 한 링크, 밑줄도 전체", () => {
+  const L = `저장했어요: ${DECK} 입니다`;
+  const ms = linkMatches(L);
+  assert.deepEqual(ms.map((x) => x.url), [DECK]);
+  assert.equal(L.slice(ms[0].start, ms[0].end), DECK);
+  assert.deepEqual(urls(`${DECK}을 열어 보세요`), [DECK]);
+});
+t("S2 파일 이름 속 빈칸 · ~ · ./ · project/<번호>/ 도", () => {
+  assert.deepEqual(urls("/w/project/1/사업 계획서.hwp를 고쳤다"), ["/w/project/1/사업 계획서.hwp"]);
+  assert.deepEqual(urls("~/workspace/project/1/2026 GovTech 창업경진대회/a.pdf"), ["~/workspace/project/1/2026 GovTech 창업경진대회/a.pdf"]);
+  assert.deepEqual(urls("project/1/지원 서류/a.md"), ["project/1/지원 서류/a.md"]);
+});
+t("S3 잇지 않는 자리 — 두 칸 · 다른 절대 경로 · 경로 둘이 나란히(앞 것이 이미 파일)", () => {
+  assert.deepEqual(urls("/w/project/1/out  a.md"), []);
+  assert.deepEqual(urls("/w/project/1/out /w/project/1/a.md"), ["/w/project/1/a.md"]);
+  assert.deepEqual(urls("/w/project/1/a.md 와 b.md"), ["/w/project/1/a.md"]);
+});
+t("S4 잇는 낱말은 5개까지", () => {
+  assert.deepEqual(urls("/w/project/1/a b c d e f/x.md"), ["/w/project/1/a b c d e f/x.md"]);
+  assert.deepEqual(urls("/w/project/1/a b c d e f g/x.md"), ["g/x.md"], "6낱말째는 잇지 않고, 끝 낱말은 제 혼자 상대 경로");
+});
+t("S4b 산문을 경로로 삼키지 않는다 — 끝 낱말에 `/` 가 없는 셋 이상 · 문장부호 · 새 경로의 시작에서 멈춘다(리뷰 지적)", () => {
+  assert.deepEqual(urls("saved to /work/shared/project/12/out then open a.md"), []);
+  assert.deepEqual(urls("/work/shared/project/12/docs 폴더에 정리했어요 → plan.md"), []);
+  assert.deepEqual(urls("/work/shared/project/12/docs, 그리고 a/b.md"), ["a/b.md"]);
+  assert.deepEqual(urls("/work/shared/project/12/docs see project/12/a.md"), ["project/12/a.md"]);
+  assert.deepEqual(urls("/work/shared/project/12/out 끝. 그리고 a/b.md"), ["a/b.md"]);
+  assert.deepEqual(urls("/work/shared/project/12/2026 GovTech 창업경진대회/a.pdf"), ["/work/shared/project/12/2026 GovTech 창업경진대회/a.pdf"]);
+});
+t("S5 상대 경로 — 앞 낱말을 붙인 후보(긴 것 먼저)를 함께 싣는다 · 이름표(`:`·`=`)·두 칸·경로 앞에선 안 붙인다 · 3낱말까지", () => {
+  const alts = (line) => linkMatches(line).map((x) => x.alts || []);
+  assert.deepEqual(urls("데모데이 발표덱/원준수정/a.html"), ["발표덱/원준수정/a.html"]);
+  assert.deepEqual(alts("데모데이 발표덱/원준수정/a.html"), [["데모데이 발표덱/원준수정/a.html"]]);
+  assert.deepEqual(alts("x 2026 GovTech 창업경진대회/a.md"), [["x 2026 GovTech 창업경진대회/a.md", "2026 GovTech 창업경진대회/a.md", "GovTech 창업경진대회/a.md"]]);
+  assert.deepEqual(alts("a x 2026 GovTech 창업경진대회/a.md")[0].length, 3, "3낱말까지");
+  assert.deepEqual(alts("경로: docs/a.md"), [[]]);
+  assert.deepEqual(alts("파일은  docs/a.md"), [[]]);
+  assert.deepEqual(alts("/w/x.md docs/a.md"), [[]]);
+  assert.deepEqual(alts("- docs/a.md"), [[]], "목록 표지는 이름이 아니다");
+  assert.deepEqual(alts("├── docs/a.md"), [[]]);
+});
+
+// ── R. 빈칸에서 줄이 바뀐 경로 — Claude Code 는 낱말 단위로 끊는다(빈칸 든 경로가 두 행으로 갈린다) ──────────────
+//  행은 화면 그대로 칸 정렬로 만든다: 넓은 글자(한글)는 두 칸이라 뒤 칸에 \0 (cellRow 와 같은 규칙).
+const cellsOf = (s) => [...s].map((ch) => (/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3\u4E00-\u9FFF]/.test(ch) ? ch + "\0" : ch)).join("");
+const R0 = cellsOf("저장: /work/shared/project/7/데모데이"), R1 = cellsOf("  발표덱/원준수정/a.html 입니다");
+const WRAP = "/work/shared/project/7/데모데이 발표덱/원준수정/a.html";
+t("R1 빈칸에서 갈린 두 행 — 어느 행을 눌러도 경로 전체, 밑줄은 두 행에 걸친다", () => {
+  const cols = R0.length + 3;   // 다음 행 첫 낱말(발표덱/…)이 앞 행에 안 들어간다 — 낱말 줄바꿈이 일어난 폭
+  const rows = [R0, R1], soft = [false, false];
+  assert.equal(urlAtCell(rows, soft, 1, R1.indexOf("발"), cols), WRAP);
+  assert.equal(urlAtCell(rows, soft, 0, R0.indexOf("데"), cols), WRAP);
+  const sp = urlSpansAt(rows, soft, 1, cols);
+  assert.equal(sp.length, 1);
+  assert.equal(sp[0].url, WRAP);
+  assert.deepEqual([sp[0].startRow, sp[0].endRow], [0, 1]);
+});
+t("R2 앞 행에 들어갈 수 있었던 낱말이면 잇지 않는다(우연히 경로 앞부분으로 끝난 짧은 행)", () => {
+  const cols = 200;
+  assert.equal(urlAtCell([R0, R1], [false, false], 1, R1.indexOf("발"), cols), "발표덱/원준수정/a.html");
+});
+t("R3 확장자로 이미 끝난 행 · 시작이 분명하지 않은 행은 잇지 않는다", () => {
+  const A = cellsOf("/work/shared/project/7/a.md"), B = cellsOf("  docs/b.md");
+  assert.equal(urlAtCell([A, B], [false, false], 1, 3, A.length + 3), "docs/b.md");
+  const C = cellsOf("파일은 데모데이"), D = cellsOf("  발표덱/a.md");
+  assert.equal(urlAtCell([C, D], [false, false], 1, 3, C.length + 3), "발표덱/a.md");
+});
+t("R3c 잇지 않는 이웃 행 — 짧은 경로 앞부분 행 뒤의 산문 · 꽉 찬 행이 파일로 끝난 뒤의 다른 줄 · 명령(/clear) 뒤", () => {
+  const A = cellsOf("결과: /work/shared/project/7/out"), B = cellsOf("  다음은 docs/a.md 를 보세요");
+  assert.equal(urlAtCell([A, B], [false, false], 1, B.indexOf("d"), 200), "docs/a.md");
+  const C = cellsOf("저장: /work/shared/project/7/a.md"), D = cellsOf("  다음 단계는 배포입니다 x/y.md");
+  assert.equal(urlAtCell([C, D], [false, false], 1, D.indexOf("x"), C.length), "x/y.md");
+  const E = cellsOf("  /clear"), F = cellsOf("  docs/a.md");
+  assert.equal(urlAtCell([E, F], [false, false], 1, 3, E.length + 2), "docs/a.md");
+});
+t("R4 한 낱말이 폭보다 길어 잘린 한글 경로 — 빈칸 없이 잇는다(빈칸을 지어 넣지 않는다)", () => {
+  const A = cellsOf("/w/project/7/원준수정원준수정"), B = cellsOf("  검토판.html");
+  const cols = A.length;      // 앞 행이 폭을 꽉 채웠고, 잘린 낱말+다음 조각은 폭보다 길다
+  assert.equal(urlAtCell([A, B], [false, false], 1, 3, cols), "/w/project/7/원준수정원준수정검토판.html");
+});
+
 // ── L. 이 곁칸이 열 수 있나(셸의 판정) ───────────────────────────────
 const here = (o = {}) => ({ projectId: 4562, loose: false, sessDir: (sid) => (sid === "s1" ? "/work/shared/project/4562" : sid === "s2" ? "/w/sessions/s2" : null), ...o });
 const msg = (p, sid = "s1") => ({ path: p, target: pathLinkTarget(p), sid });
@@ -150,6 +233,13 @@ t("L3 세션 폴더 밖의 같은 프로젝트 경로 → 프로젝트 자료 ·
 t("L4 세션 폴더 «이름이 앞만 같은» 옆 폴더는 그 세션 폴더가 아니다", () => {
   assert.deepEqual(pathOpenPlan(msg("/work/shared/project/45620/a.md"), here({ projectId: 45620 })), { via: "project", rel: "a.md" });
   assert.deepEqual(pathOpenPlan(msg("/w/sessions/s2xy/project/4562/a.md", "s2"), here()), { via: "project", rel: "a.md" });
+});
+t("L6 후보 여럿 → 길 여럿(순서 그대로, 같은 길은 한 번) · 후보가 없는 옛 터미널은 path 하나로", () => {
+  const c = (p) => ({ path: p, target: pathLinkTarget(p) });
+  const plans = pathOpenPlans({ sid: "s1", cands: [c("데모데이 발표덱/a.md"), c("발표덱/a.md"), c("./발표덱/a.md")] }, here());
+  assert.deepEqual(plans, [{ via: "session", sid: "s1", rel: "데모데이 발표덱/a.md" }, { via: "session", sid: "s1", rel: "발표덱/a.md" }]);
+  assert.deepEqual(pathOpenPlans(msg("docs/a.md"), here()), [{ via: "session", sid: "s1", rel: "docs/a.md" }]);
+  assert.deepEqual(pathOpenPlans({ sid: "남의세션", cands: [c("docs/a.md")] }, here()), []);
 });
 t("L5 셸이 다시 거른다 — 터미널을 거치지 않은 알림의 .. · 빈 마디 · 절대 rel", () => {
   for (const rel of ["../x.md", "a/../../x.md", "a//x.md", "/etc/passwd", ""]) {
@@ -224,6 +314,24 @@ t("B5 부모가 아닌 프레임의 답은 듣지 않는다 — 폴백이 그대
   answer({ type: "lively:open-file-in-pane:ok", path: P, handled: true }, { postMessage() {} });
   tick(400);
   assert.deepEqual(opened, [SHARED]);
+  tick(10000);
+});
+t("B7 빈칸 든 상대 경로 — 앞 낱말 붙인 후보를 먼저, 화면의 경로를 맨 끝에 실어 보낸다", () => {
+  reset();
+  linkMatches("데모데이 발표덱/원준수정/a.html");      // 클릭 직전의 판정(호버·클릭이 늘 먼저 부른다)
+  openPathFromTerminal("발표덱/원준수정/a.html");
+  assert.deepEqual(posted[0].cands.map((x) => x.path), ["데모데이 발표덱/원준수정/a.html", "발표덱/원준수정/a.html"]);
+  assert.ok(posted[0].cands.every((x) => x.target && x.target.kind === "session"));
+  answer({ type: "lively:open-file-in-pane:ok", path: "발표덱/원준수정/a.html", handled: true });
+  tick(10000);
+});
+t("B8 낡은 후보를 싣지 않는다 — 앞서 `파일은 docs/a.md` 로 본 경로를 이번엔 맨몸으로 눌렀다(리뷰 지적)", () => {
+  reset();
+  linkMatches("파일은 docs/a.md");
+  linkMatches("docs/a.md");
+  openPathFromTerminal("docs/a.md");
+  assert.deepEqual(posted[0].cands.map((x) => x.path), ["docs/a.md"]);
+  answer({ type: "lively:open-file-in-pane:ok", path: "docs/a.md", handled: true });
   tick(10000);
 });
 t("B6 경로가 아닌 것 · 다른 경로의 답 — 아무것도 안 하거나, 남의 답에 끌려가지 않는다", () => {
