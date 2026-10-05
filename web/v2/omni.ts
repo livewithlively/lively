@@ -28,6 +28,14 @@
 //  · 자료      GET /api/ui/sources?q=                  (칩으로만)
 //  · 세션·화면·분류·리스트·설정·명령 — 셸이 쥔 목록에서(네트워크 0)
 //  공개범위는 **전부 서버가 시행한다**(#1291) — 여기서 거르지 않는다.
+//
+//  ── 4차(#4530 검색 품질, 원준 2026-10-05) — «결국 세션을 해야함» · «어느 정도 이상 되는 애들 찾고 그 다음은 시간순» ──
+//   실측(매니지드): 붙여 쓰면 6% · 한 글자 틀리면 0% · 군말을 더하면 48% 만 그 세션을 찾았다. 서버(conv-index-store)가 이제
+//    ① 글자가 조금 달라도 찾고(붙여 쓰기 · 한 글자 틀림 · 배포 = deploy · 군말은 없어도 됨) ② 결과를 두 층으로 준다:
+//    **맞는 결과**(문턱을 넘은 것 — 맨 위 셋 + 시간순) · **덜 맞는 결과**(낱말 일부만 · 비슷한 글자로 · AI 가 스친 말로만).
+//   화면은 덜 맞는 결과를 날짜 묶음 아래 «덜 맞는 결과» 로 따로 세우고, 줄마다 왜 그런지 한마디를 붙인다. 맨 위 셋·탭 숫자에는 넣지 않는다.
+//   다른 제품(Slack · Outlook · Gmail 모바일 · Yahoo 메일)의 표준이 «시간순 목록 + 맨 위 몇 개», Algolia 가 «층을 나누고 층 안에서 다른 기준» 이다.
+//   무엇을 쳤고 무엇을 열었는지는 한 번의 찾기에 한 줄 남긴다(POST /api/ui/v6/search-log) — 다음 판을 수치로 견주려고.
 import { api, el, sv, wsKey } from '../core.js';
 import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { appHref, embedUrl, visibleApps } from './apps.js';
@@ -84,6 +92,15 @@ interface Hit {
   meta?: string;
   /** 미리보기 칸이 안을 읽을 좌표(#4530 안 A). */
   pv?: PvRef;
+  /** 층(#4530 검색 품질) — weak = 덜 맞는 결과(낱말 일부만 · 비슷한 글자로 · AI 가 스친 말로만). 없으면 맞는 결과. */
+  tier?: 'match' | 'weak';
+  /** 왜 덜 맞는가 — 둘째 줄 앞에 붙는 한마디(«‘물소’ 없음» · «‘귤나무 정원’ 으로 찾음»). */
+  why?: string;
+  /** 빈 칸 맨 위의 «최근 검색» 한 줄에 서는 칩인가 — 줄이 아니라 옆으로 늘어선다(←→ 로 옮긴다). */
+  chip?: boolean;
+  /** 친 번호로 온 세션(그 번호의 프로젝트에 묶였거나 그 번호의 태스크를 맡았다) — 둘째 줄에 «#4530» 을 단다.
+   *  ⚠ ident 에 넣지 않는다 — ident 는 «그 번호의 주인»(프로젝트·태스크 자신)이고 맨 위 셋의 첫 층이다. 세션은 그 주인 다음에 선다. */
+  num?: string;
 }
 
 interface OmniHooks {
@@ -107,6 +124,8 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
 const SRC_SYS: Record<string, string> = { slack: 'Slack', github: 'GitHub', gitlab: 'GitLab', notion: 'Notion', google: 'Google', gdrive: 'Google Drive', gmail: 'Gmail',
   linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', local: '올린 파일', local_file: '올린 파일' };
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', app: '화면' };
+/** 문턱 밖의 결과를 세우는 묶음 — 날짜 묶음 아래, 바로 가기 위. */
+const WEAK_LABEL = '덜 맞는 결과';
 // 아이콘은 사이드바 · 레일과 같은 그림이다(#4233, lib/icon-paths.ts 한 벌). 「화면」만 여기서 그린다(그 표에 없는 뜻).
 //  프로젝트는 과녁(#4233, 원준 2026-10-04). 크기에 따라 과녁 · 작은 과녁을 고른다(미리보기의 종류 이름표 13px · 결과 줄 16px).
 const KIND_PATH: Record<Kind, string[]> = {
@@ -430,12 +449,23 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   //  종류마다 **모두** 몇 개인가(서버가 센 것) — 줄은 20개씩만 받아 오므로 받은 수만 세면 탭마다 «20+» 만 섰다(실화면).
   const totals = new Map<string, number>();
   let convCapped = false;
+  //  서버가 비슷한 글자로 찾아 준 자리의 실제 글(«통합 검색» · «프로젝트») — 친 글과 달라서 따로 칠한다. 덜 맞는 세션의 수 · 느슨하게 본 낱말.
+  let extraWords: string[] = [];
+  let convWeak = 0;
+  let convLoosened: string[] = [];
+  //  검색 기록 — 마지막 글자를 친 때 · 자리 잡기까지 걸린 시간 · 이 창에서 무엇을 열었나.
+  let typedAt = 0;
+  let typedFresh = false;   // 마지막 검색 뒤에 글자를 쳤나 — 아니면(정렬·기간·더 보기로 다시 돈다) 그 검색이 시작된 때부터 잰다
+  let startAt = 0;
+  let settleMs: number | null = null;
+  let logged = false;
   let totalsFor = '';               // 그 개수가 어느 검색어·기간의 것인가(같으면 «더 보기»·정렬 바꾸기에서 다시 묻지 않는다)
 
   const rowNodes: HTMLElement[] = [];
   const rowHits: Hit[] = [];        // ⚠ 그려진 줄과 짝 — i 번째 줄이 무엇인지는 이것만 안다(#1960)
 
-  const hl = (text: string): Node[] => hlParts(text, words).map((p) =>
+  //  extra = 그 글에서만 더 칠할 낱말(미리보기의 «비슷한 글자로 맞은 자리»).
+  const hl = (text: string, extra?: string[]): Node[] => hlParts(text, extra && extra.length ? [...words, ...extraWords, ...extra] : extraWords.length ? [...words, ...extraWords] : words).map((p) =>
     (p.hit ? el('mark', { class: 'v2-omni-hl', text: p.t }) : document.createTextNode(p.t)) as Node);
 
   /** 목록 둘째 줄 — 어디에 있는 것인가(프로젝트 · 상위 · 주인) + 맞은 글 한 조각. 앞뒤 말까지는 미리보기 칸이 보인다. */
@@ -444,10 +474,14 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     let glue = ' · ';
     const dot = (): void => { if (bits.length) bits.push(document.createTextNode(glue)); glue = ' · '; };
     if (h.label) bits.push(el('span', { class: 'v2-omni-sub', text: h.label }));
+    //  덜 맞는 결과 — 왜 그런지가 먼저다(«‘물소’ 없음» · «‘귤나무 정원’ 으로 찾음»). 말없이 섞으면 «왜 이게 떴지» 가 된다.
+    if (h.why) { dot(); bits.push(el('span', { class: 'v2-omni-why', text: h.why })); }
     //  상위 프로젝트 «이름 ›» 뒤에는 가운뎃점을 찍지 않는다(«… › · …» 로 보였다, 실화면).
     if (h.context) { dot(); bits.push(el('span', { class: 'v2-omni-ctx', text: h.context })); if (h.context.endsWith('›')) glue = ' '; }
     const id = identKind(h.ident, terms);
     if (id && h.ident) { dot(); bits.push(el('code', { class: 'v2-omni-key' + (id === 'exact' ? ' exact' : '') }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident))); }
+    //  번호로 온 세션 — 왜 떴는지(그 번호의 프로젝트·태스크의 세션이다)를 번호로 말한다.
+    if (h.num) { dot(); bits.push(el('code', { class: 'v2-omni-key exact', text: '#' + h.num })); }
     //  어디에 있는 것인가(세션의 프로젝트 · 자료의 출처) 뒤에 **왜 맞았는지**(고친 파일 · 맞은 말 한 조각)를 잇는다. 프로젝트 이름만 서면
     //   줄마다 미리보기를 봐야 맞은 말을 알았다 — 주로 쓰는 일이 대화 일부로 세션을 찾는 것이고, 폰에는 옆 칸이 없다(격리 리뷰).
     //   뒤에 이을 것이 없으면(자료 줄) 줄 전체를 쓴다(solo).
@@ -472,6 +506,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     openHref: (href, title) => {
       const q = input.value.trim();
       if (q) { rememberQuery(q); lastQuery = { q, at: Date.now() }; }
+      //  미리보기 안의 다른 항목(상위 프로젝트 · 연결 지식)으로 간 것도 «그 줄을 골라 들어간 것» 으로 남긴다.
+      const si = rowHits.findIndex((h) => h.key === selKey);
+      if (q && q === ranQuery && si >= 0) sendLog('open', rowHits[si], si + 1);
       omniClose({ restoreFocus: false });
       hooks!.open(href, false, title);
     },
@@ -520,7 +557,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         const when = typeof h.at === 'number' ? whenLabel(h.at, now) : '';
         const kindName = h.label || KIND_LABEL[h.kind];
         const node = el('div', {
-          class: 'v2-omni-row' + (h.sim ? ' sim' : ''), role: 'option', id: 'v2-omni-opt-' + i, 'aria-selected': 'false', 'data-kind': h.kind,
+          class: 'v2-omni-row' + (h.sim ? ' sim' : '') + (h.tier === 'weak' ? ' weak' : ''), role: 'option', id: 'v2-omni-opt-' + i, 'aria-selected': 'false', 'data-kind': h.kind,
           title: (h.head ? h.head + ': ' : '') + h.title,
           //  마우스가 **실제로 움직였을 때만** 고른다 — 목록이 그 아래로 지나가는 것은 고른 것이 아니다.
           onmousemove: (e: MouseEvent) => { if ((e.movementX || e.movementY) && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); } },
@@ -549,14 +586,37 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         kids.push(node);
       }
     };
+    //  빈 칸 맨 위의 «최근 검색» — **한 줄의 칩**으로(원준 2026-10-05 «최근 검색 기록이 차지하는 부분이 너무 많다 … 너무 저게 전부야»).
+    //   종전엔 검색어마다 한 줄(여섯 줄)이라 목록을 다 차지해 «최근 연 것» · «내 최근 세션» 이 화면 밖으로 밀렸다.
+    //   칩도 고르는 대상이다(rowHits 에 든다) — 목록 맨 위에서 ↑ 로 올라오고 ←→ 로 옮기고 Enter 로 다시 찾는다.
+    const drawChips = (label: string, rows: Hit[]): void => {
+      if (!rows.length) return;
+      const strip = el('div', { class: 'v2-omni-recent', role: 'group', 'aria-label': label }, el('span', { class: 'v2-omni-recent-l', text: label })) as HTMLElement;
+      for (const h of rows) {
+        shown.add(h.key);
+        const i = rowNodes.length;
+        const node = el('div', {
+          class: 'v2-omni-chip', role: 'option', id: 'v2-omni-opt-' + i, 'aria-selected': 'false', title: h.title + ' — 다시 찾기',
+          onmousemove: (e: MouseEvent) => { if ((e.movementX || e.movementY) && selKey !== h.key) { selKey = h.key; userMoved = true; mark(false); } },
+          onclick: () => go(i, 'here'),
+        }, icon(h.kind, 'v2-omni-chip-ic', h.icon), el('span', { class: 'v2-omni-chip-t', text: h.title })) as HTMLElement;
+        rowNodes.push(node);
+        rowHits.push(h);
+        strip.append(node);
+      }
+      kids.push(strip);
+    };
     truncated = false;
     if (!input.value.trim()) {
-      paintEmpty(draw);
+      paintEmpty(draw, drawChips);
     } else {
-      const lexical = shownLexical();
+      const all = shownLexical();
+      //  덜 맞는 결과(서버가 가른 층)는 맨 위 셋에도 시간 줄에도 끼지 않는다 — 날짜 묶음 아래 따로.
+      const lexical = all.filter((h) => h.tier !== 'weak');
+      const weak = all.filter((h) => h.tier === 'weak');
       draw('가장 맞는 결과', topHits(lexical));
       if (sortMode === 'recent') {
-        //  그 아래는 낱말이 모두 맞은 것을 최근 것부터 — 시각이 없는 바로 가기(화면·명령)는 맨 아래 따로.
+        //  그 아래는 맞는 결과를 최근 것부터 — 시각이 없는 바로 가기(화면·명령)는 맨 아래 따로.
         const timed = lexical.filter((h) => h.kind !== 'app').sort(byRecent).slice(0, 60 * moreFactor);
         let bucket = '';
         let group: Hit[] = [];
@@ -566,23 +626,25 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
           group.push(h);
         }
         draw(bucket, group);
+        draw(WEAK_LABEL, weak);
         draw('바로 가기', lexical.filter((h) => h.kind === 'app'));
       } else {
         for (const g of GROUPS) draw(g.label, lexical.filter((h) => h.kind === g.kind).slice(0, 12 * moreFactor));
+        draw(WEAK_LABEL, weak);
       }
       if (kindShown('know')) draw('뜻이 비슷한 지식', hits.filter((h) => h.sim).slice(0, SIM_MAX_ROWS));
       truncated = lexical.some((h) => !shown.has(h.key));   // 그리기 상한(최신순 60 · 관련도순 묶음당 12)에 잘린 줄이 있다
     }
     list.replaceChildren(...kids);
     paintCounts();
-    //  선택은 열쇠로 이어 간다. 고른 줄이 사라졌으면 첫 줄.
-    if (!rowHits.some((h) => h.key === selKey)) selKey = rowHits[0]?.key || '';
+    //  선택은 열쇠로 이어 간다. 고른 줄이 사라졌으면 첫 줄 — 빈 칸에서는 칩이 아닌 첫 줄(Enter 가 가장 최근에 연 것을 연다).
+    if (!rowHits.some((h) => h.key === selKey)) selKey = (rowHits.find((h) => !h.chip) || rowHits[0])?.key || '';
     mark(false);
   }
   /** 탭마다 몇 개 있는지 — 서버가 센 전체 개수(받은 줄 수가 아니다). 못 셌으면 받은 만큼 + «+»(더 있을 수 있다). 명령·최근 검색은 결과가 아니다. */
   function paintCounts(): void {
     const q = !!input.value.trim();
-    const lex = hits.filter((h) => !h.sim && isReal(h));
+    const lex = hits.filter((h) => !h.sim && isReal(h) && h.tier !== 'weak');   // 덜 맞는 결과는 숫자에 넣지 않는다(서버의 total 도 맞는 결과만 센다)
     const n = (k: Kind): number => lex.filter((h) => h.kind === k).length;
     const cnt = (k: Kind, src: string): { n: number; plus: boolean } => {
       const got = n(k), tot = totals.get(src);
@@ -619,16 +681,17 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     return top;
   }
   /** 빈 칸 — 최근 검색어 · 최근 연 것 · 내 최근 세션(탭을 따른다). 스포트라이트를 열자마자 빈 판이면 무엇을 칠지가 안 보인다. */
-  function paintEmpty(draw: (label: string, rows: Hit[]) => void): void {
+  function paintEmpty(draw: (label: string, rows: Hit[]) => void, drawChips: (label: string, rows: Hit[]) => void): void {
     const qs = loadQueries();
     if (qs.length && tab === 'all') {
-      draw('최근 검색', qs.map((q): Hit => ({
-        kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', icon: [ICONS.clock],
+      drawChips('최근 검색', qs.map((q): Hit => ({
+        kind: 'app', key: 'q:' + q, title: q, sub: '', label: '검색', icon: [ICONS.clock], chip: true,
         pv: { t: 'text', lines: ['이 검색어로 다시 찾습니다.'], act: '다시 찾기' },
         run: () => { input.value = q; run(true); },
       })));
     }
-    draw('최근 연 것', loadOpened().filter((o) => kindShown(o.kind)).slice(0, 5).map((o): Hit => openedHit(o)));
+    //  최근 검색이 한 줄로 줄어 자리가 났다 — 최근 연 것은 기억해 둔 여덟 개를 다 보인다(종전 다섯).
+    draw('최근 연 것', loadOpened().filter((o) => kindShown(o.kind)).slice(0, 8).map((o): Hit => openedHit(o)));
     if (kindShown('sess')) draw('내 최근 세션', recentSessions().slice(0, 6));
   }
   /** 저장해 둔 «최근 연 것» 한 줄 → 미리보기 좌표를 열쇠에서 되찾는다. */
@@ -651,15 +714,39 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       n.classList.toggle('on', on);
       n.setAttribute('aria-selected', String(on));
     });
-    if (selIdx >= 0) { input.setAttribute('aria-activedescendant', rowNodes[selIdx].id); if (scroll) rowNodes[selIdx].scrollIntoView({ block: 'nearest' }); }
+    if (selIdx >= 0) { input.setAttribute('aria-activedescendant', rowNodes[selIdx].id); if (scroll) rowNodes[selIdx].scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
     else input.removeAttribute('aria-activedescendant');
     //  미리보기는 고른 줄을 따라간다. 폰에서는 판이 올라와 있을 때만(줄을 눌러야 올라온다).
     if (!isNarrow() || card.classList.contains('sheet')) pv.show(selIdx >= 0 ? rowHits[selIdx] : null);
+  }
+  let lastChip = '';
+  /** 칩 사이를 ←→ 로 옮긴다. 칩을 고르고 있지 않으면 false(입력칸의 커서 이동을 막지 않는다). */
+  function moveChip(d: number): boolean {
+    const cur = rowHits.findIndex((h) => h.key === selKey);
+    if (cur < 0 || !rowHits[cur].chip) return false;
+    const next = cur + d;
+    if (next >= 0 && next < rowHits.length && rowHits[next].chip) { selKey = rowHits[next].key; lastChip = selKey; userMoved = true; mark(); }
+    return true;
   }
   function moveSel(d: number): void {
     const cur = rowHits.findIndex((h) => h.key === selKey);
     //  맨 위에서 ↑ = 탭 줄로 올라간다 — 탭 · 기간 · 정렬과 그 뒤의 단추들에 키보드로 닿는 길이다(입력칸의 Tab 은 종류를 넘기는 데 쓴다.
     //   종전 칩·기간·정렬은 Tab 으로 닿았는데 그 길이 사라졌었다, 격리 리뷰).
+    //  빈 칸의 «최근 검색» 칩들은 **한 줄**이다 — 위아래로는 한 번에 지나간다(칩 사이는 ←→, moveChip).
+    //   칩에서 ↑ = 탭 줄 · 칩에서 ↓ = 첫 줄 · 첫 줄에서 ↑ = 칩(마지막에 있던 칩, 없으면 첫 칩).
+    const chipAt = (i: number): boolean => !!rowHits[i]?.chip;
+    if (cur >= 0 && chipAt(cur)) {
+      if (d < 0) { tabBtns.get(tab)!.focus(); return; }
+      const firstRow = rowHits.findIndex((h) => !h.chip);
+      if (firstRow < 0) return;
+      lastChip = selKey; selKey = rowHits[firstRow].key; userMoved = true; mark();
+      return;
+    }
+    if (d < 0 && cur > 0 && chipAt(cur - 1)) {
+      selKey = (rowHits.find((h) => h.chip && h.key === lastChip) || rowHits.find((h) => h.chip)!).key;
+      userMoved = true; mark();
+      return;
+    }
     if (d < 0 && cur <= 0) { tabBtns.get(tab)!.focus(); return; }
     if (!rowNodes.length) return;
     //  맨 아래에서 ↓ = 더 있으면 더 가져온다(«결과 더 보기» 와 같은 일 — 그 단추가 12줄·60줄 너머를 보는 유일한 길이다).
@@ -700,6 +787,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
       : showNone ? [el('b', { text: '결과가 없습니다' }), el('p', { text: emptyWhy() }),
         ...(other ? [el('button', { class: 'v2-omni-none-go', type: 'button', onclick: () => setTab('all') }, el('span', { text: `전체에서 ${fmtN(other)}개 보기` }))] : [])]
         : []));
+    if (q && convLoosened.length && kindShown('sess') && rowHits.some((h) => h.tier === 'weak')) parts.push(`«${convLoosened.join('» · «')}» 은(는) 글자 그대로는 없어 비슷한 글자로 찾았습니다.`);
     if (q && convNoteText && kindShown('sess')) parts.push(convNoteText);
     if (q && simDegraded && kindShown('know')) parts.push('뜻이 비슷한 지식은 지금 가져오지 못했습니다.');
     note.hidden = !parts.length;
@@ -709,6 +797,16 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   /** 지금 탭에 보이는 채널 중 청한 만큼 꽉 채워 온 것이 있나(더 있을 수 있다). */
   const shownFull = (): boolean => [...fullSrc].some((x) => (x === 'conv' ? kindShown('sess') : kindShown(x as Kind)));
 
+  /** 검색 기록 한 줄(#4530 검색 품질) — 무엇을 쳤고 무엇을 열었나(또는 안 열고 닫았나). 실패는 삼킨다(기록은 덤이다). */
+  function sendLog(action: 'open' | 'close', h?: Hit, rank?: number): void {
+    if (logged || !ranQuery) return;
+    logged = true;
+    const num = (k: string): number | null => (totals.has(k) ? (totals.get(k) as number) : null);
+    const body = { q: ranQuery, tab, sort: sortMode, period, action, settle_ms: settleMs, loosened: convLoosened,
+      counts: { sess: num('conv'), weak: totals.has('conv') ? convWeak : null, proj: num('proj'), know: num('know'), src: num('src') },
+      opened: h ? { kind: h.kind, key: h.key, rank: rank || null, tier: h.tier || 'match' } : null };
+    try { void api('/api/ui/v6/search-log', { method: 'POST', body: JSON.stringify(body), keepalive: true }).catch(() => { /* 기록은 덤이다 */ }); } catch { /* 같은 까닭 */ }
+  }
   function go(i: number, mode: PvOpenMode): void {
     const h = rowHits[i];
     if (!h) return;
@@ -716,6 +814,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (!h.href) return;
     const q = input.value.trim();
     if (q) { rememberQuery(q); lastQuery = { q, at: Date.now() }; }
+    if (q && q === ranQuery) sendLog('open', h, i + 1);
     rememberOpened(h);
     //  곁칸에 고정 — 지식 문서만(위키 덧창의 [우측 사이드바에 고정]과 같은 문, lib/wiki-list pinGuest). 못 쓰면 그 자리에서 연다.
     if (mode === 'aside' && h.pv && h.pv.t === 'know' && canOpenInAside()) {
@@ -742,6 +841,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
           if (src === 'conv' && prev.kind === 'sess') {
             prev.role = h.role; prev.hits = h.hits; prev.edit = h.edit; prev.serverTop = h.serverTop;
             if (h.pv) prev.pv = h.pv;   // 대화 좌표는 서버가 준 것으로(셸 목록의 것과 다르면 미리보기가 404 다, 격리 리뷰)
+            if (h.num) prev.num = h.num;
+            //  이름으로 모든 낱말이 맞은 세션(셸 줄)은 맞는 결과다 — 서버가 대화만 보고 «덜 맞는다» 고 했어도 층·까닭을 옮겨 오지 않는다.
             if (h.sub) prev.sub = h.sub;
             if ((h.at || 0) > (prev.at || 0)) prev.at = h.at;
           }
@@ -782,6 +883,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     window.clearTimeout(settleTimer);
     const first = !settled;
     settled = true;
+    if (first && startAt && settleMs === null) settleMs = Math.max(0, Math.round(performance.now() - startAt));
     rebuild();
     if (first) { frozenTop.clear(); if (!userMoved) selKey = ''; }
     paint();   // 자리 잡은 뒤의 첫 그리기가 맨 위 셋을 굳힌다(topHits)
@@ -913,17 +1015,32 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const s = findSessByConv(d.sessions, sid);
     const face = s ? sessText(s, projName(d, s.projectId)) : null;
     const best = (r && r.best) || null;
+    const nums: number[] = Array.isArray(r && r.nums) ? r.nums.filter((n: unknown) => typeof n === 'number') : [];
     const proj = (s && s.projectId ? projName(d, s.projectId) : '') || String(r.project || '');
     return {
       meta: proj || undefined,
       pv: s ? { ...(sessRef(s, proj) as Extract<PvRef, { t: 'sess' }>), sid, node } : { t: 'sess', sid, node, project: proj || undefined },
       kind: 'sess', key: s ? 's:' + s.id : 'c:' + node + ':' + sid,
       title: (face && (face.main || face.sub)) || String(r.name || r.title || '이름 없는 세션'),
-      sub: best ? cleanSnippet(String(best.text || ''), 160) : '',
+      //  맞은 말이 없는 줄(번호로 온 세션 · 뜻으로만 온 세션)은 첫 지시를 보여 무슨 세션인지 알린다.
+      sub: best ? cleanSnippet(String(best.text || ''), 160) : (nums.length || typeof r.sem === 'number' ? cleanSnippet(String(r.title || ''), 160) : ''),
+      ...(nums.length ? { num: String(nums[0]) } : {}),
       href: s ? '#/s/' + encodeURIComponent(s.id) : '#/sessions/' + encodeURIComponent(sid) + (node ? '?node=' + encodeURIComponent(node) : ''),
       at: atOf(r.at, best && best.ts), role: best ? (best.role === 'assistant' ? 'assistant' : 'user') : undefined,
       hits: Number(r.hits) || 1, edit: r.edit || null, serverTop: !!r.top, order,
+      ...(r.tier === 'weak' ? { tier: 'weak' as const, why: weakWhy(r) } : {}),
     };
+  }
+  /** 덜 맞는 까닭 한마디 — 빠진 낱말 > 비슷한 글자로 찾음 > AI 가 스친 말. */
+  function weakWhy(r: any): string {
+    const q = (xs: unknown): string[] => (Array.isArray(xs) ? xs.filter((x): x is string => typeof x === 'string' && !!x) : []);
+    const missing = q(r.missing), loose = q(r.loose), marks = q(r.marks);
+    const parts: string[] = [];
+    if (missing.length) parts.push(`«${missing.join('» · «')}» 없음`);
+    if (loose.length) parts.push(marks.length ? `«${marks.join('» · «')}» (으)로 찾음` : '비슷한 글자로 찾음');
+    //  글자로는 맞은 자리가 없고 뜻으로만 가까운 세션(서버가 세션 요약과 검색어의 뜻을 견줬다).
+    if (!parts.length && typeof r.sem === 'number' && !(Array.isArray(r.fields) && r.fields.length)) return '뜻이 비슷함';
+    return parts.join(' · ') || 'AI 가 잠깐 한 말';
   }
 
   // ── 검색 ──
@@ -967,6 +1084,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     words = highlightWords(terms);
     sinceMs = periodSince(period, Date.now());
     convNoteText = ''; simDegraded = false; failedSrc.clear(); fullSrc.clear();
+    extraWords = []; convWeak = 0; convLoosened = []; settleMs = null;
+    startAt = typedFresh ? typedAt : performance.now(); typedFresh = false;
     //  개수는 검색어와 기간에만 달려 있다 — «결과 더 보기»·정렬 바꾸기로 다시 돌 때는 받아 둔 것을 쓴다(서버 검색을 두 번 시키지 않는다).
     const countsKey = q + '\u0001' + period;
     //   받다가 끊긴 개수(바로 이어 «더 보기» 를 누른 때)는 받아 둔 것이 아니다 — 둘 다 와 있을 때만 건너뛴다.
@@ -1001,9 +1120,15 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
             : `맞는 세션이 많아 최근 세션 ${cap}개 안에서 골랐습니다 — 낱말을 하나 더 넣거나 기간을 좁히면 정확해집니다.`);
         }
         convNoteText = notes.join(' ');
-        full('conv', 20, (r && r.results) || []);
+        const rows: any[] = (r && r.results) || [];
+        //  «더 있을 수 있다» 는 맞는 결과로만 잰다(덜 맞는 결과는 limit 밖에 따로 붙어 온다).
+        full('conv', 20, rows.filter((x) => x && x.tier !== 'weak'));
         if (r && typeof r.total === 'number') { totals.set('conv', r.total); convCapped = !!r.capped; }
-        put('conv', ((r && r.results) || []).map((x: any, i: number) => convHit(x, i)), my);
+        convWeak = Number(r && r.weak) || 0;
+        convLoosened = Array.isArray(r && r.loosened) ? r.loosened.filter((x: unknown) => typeof x === 'string') : [];
+        //  비슷한 글자로 맞은 자리의 실제 글 — 친 글과 달라서 따로 칠한다(두 글자 이상만).
+        extraWords = [...new Set(rows.flatMap((x) => (Array.isArray(x && x.marks) ? x.marks : [])).filter((m: unknown): m is string => typeof m === 'string' && [...m].length >= 2).map((m: string) => m.toLowerCase()))];
+        put('conv', rows.map((x: any, i: number) => convHit(x, i)), my);
       }, fail('conv'));
     });
     call('proj', 'proj', () => {
@@ -1045,6 +1170,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
 
   input.addEventListener('input', () => {
     window.clearTimeout(timer);
+    typedAt = performance.now(); typedFresh = true;
+    logged = false;   // 검색어를 고쳐 치면 새 찾기다
     moreFactor = 1;
     closeSheet();   // 폰 — 다시 치기 시작하면 미리보기 판은 내린다
     if (!input.value.trim()) { run(true); return; }
@@ -1056,6 +1183,8 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); setTab(nextTab(tab, e.shiftKey ? -1 : 1)); return; }
     //  Shift+↑↓ = 미리보기의 앞·다음 «맞은 말»(세션). 넘길 것이 없으면 평소대로 줄을 고른다.
     if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.shiftKey && pv.nav(e.key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); return; }
+    //  ←→ = «최근 검색» 칩 사이(칩을 고르고 있을 때만 — 빈 칸이라 커서가 갈 곳이 없다).
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !input.value && moveChip(e.key === 'ArrowRight' ? 1 : -1)) { e.preventDefault(); return; }
     if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) { e.preventDefault(); moveSel(1); }
     else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) { e.preventDefault(); moveSel(-1); }
     else if (e.key === 'Enter') {
@@ -1099,7 +1228,11 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
 
   document.body.append(box);
   document.addEventListener('keydown', onEsc, true);
-  onCloseTimers = () => { window.clearTimeout(timer); window.clearTimeout(settleTimer); enterWant = null; pv.dispose(); };
+  onCloseTimers = () => {
+    //  아무것도 안 열고 닫았다 — 결과가 자리 잡은 검색만 남긴다(치다 만 글자는 찾기가 아니다).
+    if (settled && ranQuery) sendLog('close');
+    window.clearTimeout(timer); window.clearTimeout(settleTimer); enterWant = null; pv.dispose();
+  };
   onSheetEsc = () => { if (!card.classList.contains('sheet')) return false; closeSheet(); return true; };
   //  주소가 바뀌면(뒤로 가기 · 다른 문으로 이동) 창은 이제 그 화면의 것이 아니다 — 닫는다(#4530).
   onHash = () => omniClose({ restoreFocus: false });

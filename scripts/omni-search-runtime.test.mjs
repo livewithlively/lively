@@ -55,6 +55,18 @@
 //  A19 자료가 오는 동안 누른 Enter 는 버려지지 않는다 — 다 오면 첫 줄을 연다 / «결과 더 보기» 뒤에도 고른 줄은 그대로 · 개수는 다시 묻지 않는다
 //      / ‹ › 는 Tab 길에 없다(누르면 사라져 초점이 샌다 — 키보드는 Shift+↑↓) / 한글 입력기의 첫 키(Process)도 입력칸으로
 //  A18 태블릿(넓고 손가락) — 첫 누름은 고르기(미리보기), 고른 줄을 다시 누르면 연다 / 폰 — 줄을 누르면 판이 올라오고 Esc 는 판만 내린다
+// 검색 품질(#4530, 원준 2026-10-05 «결국 세션을 해야함» · «어느정도 이상 되는 애들 찾고 그 다음은 시간순 정렬이 맞지않나»):
+//  Q1  서버가 «덜 맞는다»(weak) 고 한 세션은 맨 위 셋에도 시간 줄에도 끼지 않는다 — 가장 최근 것이어도 날짜 묶음 아래 «덜 맞는 결과» 에
+//  Q2  덜 맞는 줄의 둘째 줄 앞에 왜 그런지 — «‘물소’ 없음» · «‘층 시험’ (으)로 찾음» · «AI 가 잠깐 한 말»
+//  Q3  비슷한 글자로 맞은 자리의 실제 글(«층 시험»)을 목록과 미리보기에서 칠한다(친 글 «층시험» 과 다르다)
+//  Q4  «세션» 탭 숫자 = 맞는 결과만(덜 맞는 결과는 세지 않는다) · 아래 줄이 «비슷한 글자로 찾았다» 고 말한다
+//  Q5  결과를 열면 기록 한 줄(무엇을 쳤나 · 종류 · 자리 · 층 · 그때의 수) — 한 번의 찾기에 한 줄만
+//  Q6  아무것도 안 열고 닫으면 «안 열고 닫았다» 한 줄 · 검색어 없이 닫으면 남기지 않는다
+//  Q7  군말이 섞인 검색어 — 셸 목록의 이름 찾기도 군말 없이 맞춘다 · 다른 표기(deploy)도 칠한다
+//  Q8  뜻으로만 온 세션(글자가 맞은 자리 없음) = «덜 맞는 결과» 에 «뜻이 비슷함» · 둘째 줄은 첫 지시
+//  Q9  번호로 찾기 — 그 번호의 프로젝트가 맨 위, 그 프로젝트의 세션이 그다음 · 세션 줄에 «#번호» · 맞은 말이 없으면 첫 지시
+//  Q10 빈 칸의 «최근 검색» 은 한 줄의 칩(원준 2026-10-05 «최근 검색 기록이 차지하는 부분이 너무 많다») — 줄을 차지하지 않는다 ·
+//      처음 고른 것은 칩이 아닌 첫 줄 · 첫 줄에서 ↑ = 칩 · ←→ = 칩 사이 · ↓ = 첫 줄 · 칩에서 ↑ = 탭 줄 · Enter = 그 검색어로 다시
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 언제 무엇이 열리나 · 초점이 어디 있나»
@@ -136,6 +148,15 @@ async function PAGE_MAIN() {
   let CONV_FAIL = false;            // true = 503(사람 말) · "500" = internal_error
   let CONV_HANG = false;
   let SLOW_BODY = false;
+  const LOGS = [];                  // 화면이 보낸 검색 기록(POST /api/ui/v6/search-log)
+  //  Q1~Q4 — 서버가 층을 나눠 준 응답. 덜 맞는 세션 하나(conv-w1)가 **가장 최근**이다.
+  const TIERED = [
+    { node_id: "n1", session_id: "conv-m1", name: "맞는 세션 최근", title: null, at: iso(TODAY), hits: 4, top: true, tier: "match", missing: [], loose: [], alias: [], marks: [], best: { role: "user", ts: iso(TODAY), text: "층시험 물소 이야기를 했다" }, edit: null, project: null },
+    { node_id: "n1", session_id: "conv-m2", name: "맞는 세션 옛날", title: null, at: iso(NOW - 20 * D), hits: 2, top: false, tier: "match", missing: [], loose: [], alias: [], marks: [], best: { role: "user", ts: iso(NOW - 20 * D), text: "예전의 층시험 물소" }, edit: null, project: null },
+    { node_id: "n1", session_id: "conv-w1", name: "빠진 낱말 세션", title: null, at: iso(TODAY + 5000), hits: 1, top: false, tier: "weak", missing: ["물소"], loose: [], alias: [], marks: [], best: { role: "user", ts: iso(TODAY + 5000), text: "층시험만 말했다" }, edit: null, project: null },
+    { node_id: "n1", session_id: "conv-w2", name: "비슷한 글자 세션", title: null, at: iso(NOW - 2 * D), hits: 1, top: false, tier: "weak", missing: [], loose: ["층시험"], alias: [], marks: ["층 시험"], best: { role: "user", ts: iso(NOW - 2 * D), text: "여기 층 시험 물소 이야기가 있다" }, edit: null, project: null },
+    { node_id: "n1", session_id: "conv-w3", name: "스친 세션", title: null, at: iso(NOW - 3 * D), hits: 1, top: false, tier: "weak", missing: [], loose: [], alias: [], marks: [], best: { role: "assistant", ts: iso(NOW - 3 * D), text: "참고로 층시험 물소 도 있었습니다" }, edit: null, project: null },
+  ];
   let HANGING = 0, HANG_ABORTED = false;
   const DELAY = {};                 // 채널별 지연(ms) — 흔들림·Enter·선택 장면
   const log = [];
@@ -147,6 +168,7 @@ async function PAGE_MAIN() {
     const q = u.searchParams.get("q") || u.searchParams.get("text") || "";
     const hit = q.includes("슬랙");
     const p = u.pathname;
+    if (p.endsWith("/api/ui/v6/search-log")) { try { LOGS.push(JSON.parse(String((opts && opts.body) || "{}"))); } catch (_) { LOGS.push({ bad: true }); } return J({ ok: true }); }
     if (p.endsWith("/api/ui/categories")) return J({ categories: [{ id: 77, key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
     if (p.endsWith("/api/ui/knowledge/similar")) { await later("sim"); return J({ entries: hit ? SIM : [] }); }
     if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
@@ -159,6 +181,9 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/knowledge/search") && q.includes("꽉")) { const n = Number(u.searchParams.get("limit")) || 20; return J({ entries: Array.from({ length: n }, (_, i) => ({ name: "k-full-" + i, title: "꽉 찬 문서 " + i, snippet: "", updated_at: iso(TODAY - i * 1000) })) }); }
     if (p.endsWith("/api/ui/knowledge/search")) { await later("know"); return J({ entries: hit ? GREP : q.includes("다른말") ? [{ name: "k-other", title: "다른말 문서", snippet: "", updated_at: iso(TODAY) }] : [] }); }
     if (/\/api\/ui\/v6\/projects\/(similar|semantic)$/.test(p)) return J({ projects: [] });
+    if (p.endsWith("/api/ui/v6/projects/search") && q.replace(/^#/, "") === "4530") return J({ projects: [
+      { id: 4530, level: "project", name: "통합검색 결함 점검", status_category: "started", description: "검색 점검", updated_at: iso(NOW - D) },
+      { id: 4531, level: "task", parent_id: 4530, parent_name: "통합검색 결함 점검", name: "검색 결함 점검", status_category: "started", updated_at: iso(NOW - 2 * D) }] });
     if (p.endsWith("/api/ui/v6/projects/search")) { await later("proj"); return J({ projects: hit ? PROJ : [] }); }
     if (p.endsWith("/api/ui/sources")) { await later("src"); return J({ entries: hit ? [
       { id: 501, title: "슬랙 수집 원문", external_system: "slack", fields: { container_name: "general" }, occurred_at: iso(NOW - 2 * D) },
@@ -166,6 +191,7 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/v6/session-search/hits")) {
       const sid = u.searchParams.get("session_id");
       if (sid === "conv-b") return new Response(JSON.stringify({ error: "세션을 찾을 수 없습니다" }), { status: 404, headers: { "content-type": "application/json" } });
+      if (sid === "conv-w2") return J({ mine: true, msgs: 2, total: 1, marks: ["층 시험"], hits: [{ role: "user", ts: iso(NOW - 2 * D), text: "여기 층 시험 물소 이야기가 있다", terms: 1, before: null, after: null }], edits: [], first: null, last: null });
       if (sid === "conv-a") return J({ mine: true, msgs: 5, total: 2, hits: [
         { role: "user", ts: iso(TODAY + 2000), text: "슬랙처럼 검색 고쳐 줘", terms: 1, before: { role: "assistant", ts: null, text: "무엇을 도와드릴까요" }, after: { role: "assistant", ts: null, text: "네 순서를 고치겠습니다" } },
         { role: "assistant", ts: iso(TODAY + 3000), text: "슬랙 방식으로 바꿨습니다", terms: 1, before: null, after: null }],
@@ -187,6 +213,13 @@ async function PAGE_MAIN() {
       project: { id: 11, name: "슬랙 연동" }, feed: [], checklists: [] });
     if (p.endsWith("/api/ui/v6/session-search")) {
       await later("conv");
+      if (q.includes("층시험")) return J({ results: TIERED, total: 2, weak: 3, pending: 0, capped: false, loosened: ["층시험"] });
+      //  Q8 — 뜻으로만 온 세션 하나(맞은 자리·발췌 없음)
+      if (q.includes("뜻시험")) return J({ results: [{ node_id: "n1", session_id: "conv-sem", name: "뜻으로 온 세션", title: "세션을 지우면 목록이 깜빡거려", at: iso(NOW - 6 * D), hits: 0, top: false, tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], sem: 0.71, fields: [], best: null, edit: null, project: "UI 버그" }], total: 0, weak: 1, pending: 0, capped: false, loosened: [] });
+      //  Q9 — 번호로 온 세션 둘(대화에 그 숫자는 없다)
+      if (q.replace(/^#/, "") === "4530") return J({ results: [
+        { node_id: "n1", session_id: "conv-n1", name: "번호 세션 최근", title: "검색이 불편해 싹 훑어봐 줘", at: iso(TODAY), hits: 0, top: true, tier: "match", missing: [], loose: [], alias: [], marks: [], nums: [4530], fields: ["ident"], best: null, edit: null, project: "통합검색 결함 점검" },
+        { node_id: "n1", session_id: "conv-n2", name: "번호 세션 예전", title: "디자인 시안 세 개 줘", at: iso(NOW - 8 * D), hits: 0, top: false, tier: "match", missing: [], loose: [], alias: [], marks: [], nums: [4530], fields: ["ident"], best: null, edit: null, project: "통합검색 결함 점검" }], total: 2, weak: 0, pending: 0, capped: false, loosened: [] });
       if (q.includes("보장")) return J({ results: [{ node_id: "n1", session_id: "conv-g", name: "대화로만 맞은 세션", title: null, at: iso(NOW - 9 * D), hits: 2, top: true, best: { role: "assistant", ts: iso(NOW - 9 * D), text: "그건 보장되지 않습니다" }, edit: null, fields: ["assistant"], project: "어떤 프로젝트" }], pending: 0, capped: false });
       if (q.includes("어렴풋")) return J({ results: [{ node_id: "n1", session_id: "conv-v", name: "어렴풋한 대화", title: null, at: iso(TODAY), hits: 1, top: true, best: { role: "user", ts: iso(TODAY), text: "지난주에 이야기했던 것들 중에서 어렴풋 기억나는 그 얘기" }, edit: null, fields: ["user"] }], pending: 0, capped: false });
       if (CONV_FAIL === "500") return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
@@ -237,6 +270,8 @@ async function PAGE_MAIN() {
   function shape() {
     const out = [];
     for (const n of $(".v2-omni-list").children) {
+      //  빈 칸의 «최근 검색» 한 줄 — 칩들을 그 묶음의 줄로 읽는다(Q10).
+      if (n.classList.contains("v2-omni-recent")) { out.push({ h: n.querySelector(".v2-omni-recent-l")?.textContent || "", chips: true, rows: [...n.querySelectorAll(".v2-omni-chip")].map((c) => ({ t: c.querySelector(".v2-omni-chip-t")?.textContent || "", sel: c.getAttribute("aria-selected") === "true", chip: true, badge: "", sub: "", marks: [] })) }); continue; }
       if (n.classList.contains("v2-omni-gh")) out.push({ h: n.textContent, rows: [] });
       else if (n.classList.contains("v2-omni-row")) {
         const g = out[out.length - 1] || (out.push({ h: "", rows: [] }), out[out.length - 1]);
@@ -464,7 +499,7 @@ async function PAGE_MAIN() {
     inp.value = ""; inp.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(60);
     R.empty = shape();
-    R.recentIcon = (() => { const r = rowEl("다른말"); return r ? [...r.querySelectorAll(".v2-omni-ic path")].map((p) => p.getAttribute("d")).join(" | ") : ""; })();
+    R.recentIcon = (() => { const r = [...document.querySelectorAll(".v2-omni-chip")].find((c) => c.querySelector(".v2-omni-chip-t")?.textContent === "다른말"); return r ? [...r.querySelectorAll(".v2-omni-chip-ic path")].map((p) => p.getAttribute("d")).join(" | ") : ""; })();
 
     // ── G11 고른 줄은 늦게 온 채널이 끼어들어도 그대로 ──
     DELAY.sim = 1600;                     // 자리 잡기 상한(1.2초)을 넘겨 늦게 온다
@@ -609,6 +644,51 @@ async function PAGE_MAIN() {
     R.sheet.cmd = NEWSESS.length - nNew;
     MQ.narrow = false;
 
+    // ── Q1~Q6 검색 품질 — 층 · 까닭 · 실제 글 색칠 · 기록 ── (앞 장면의 기간 «오늘» 을 풀고 잰다)
+    {
+      await search("슬랙");   // 앞 장면(폰의 명령 줄)이 창을 닫았다 — 다시 열고 기간을 푼다
+      $(".v2-omni-period")?.click(); await waitFor(() => !!$(".pn-ctx")); await sleep(120);
+      [...document.querySelectorAll(".pn-ctx .pn-ctx-i")].find((b) => /전체 기간/.test(b.textContent))?.click();
+      await sleep(240); await waitFor(isSettled); await sleep(40);
+      await search("층시험 물소");
+      R.tiered = shape();
+      R.tieredNums = Object.fromEntries([...document.querySelectorAll(".v2-omni-tab")].map((b) => [b.dataset.tab, b.querySelector(".v2-omni-tabn")?.hidden ? "" : (b.querySelector(".v2-omni-tabn")?.textContent || "")]));
+      R.tieredNote = $(".v2-omni-note")?.hidden ? "" : ($(".v2-omni-note")?.textContent || "");
+      R.tieredWeakCls = [...document.querySelectorAll(".v2-omni-row.weak .v2-omni-t")].map((x) => x.textContent);
+      R.tieredWhy = Object.fromEntries([...document.querySelectorAll(".v2-omni-row")].map((r) => [r.querySelector(".v2-omni-t")?.textContent, r.querySelector(".v2-omni-why")?.textContent || ""]));
+      await hover("비슷한 글자 세션");
+      R.tieredPv = { marks: pvShape()?.marks, msgs: pvShape()?.msgs };
+      //  Q5 — 덜 맞는 줄을 열면 기록 한 줄
+      const nL = LOGS.length, nO = OPENED.length;
+      const rank = allRowsNow().findIndex((r) => r.t === "비슷한 글자 세션") + 1;
+      rowEl("비슷한 글자 세션")?.click();
+      await sleep(60);
+      R.logOpen = { n: LOGS.length - nL, row: LOGS[LOGS.length - 1] || null, rank, opened: OPENED.length - nO, closed: !OM.omniIsOpen() };
+      //  Q6 — 안 열고 닫으면 한 줄 · 검색어 없이 닫으면 남기지 않는다
+      await search("층시험 물소");
+      const nL2 = LOGS.length;
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      await sleep(60);
+      R.logClose = { n: LOGS.length - nL2, row: LOGS[LOGS.length - 1] || null };
+      OM.omniOpen(); await sleep(40);
+      const inpQ = $(".v2-omni-in"); inpQ.value = ""; inpQ.dispatchEvent(new Event("input", { bubbles: true })); await sleep(80);
+      const nL3 = LOGS.length;
+      OM.omniClose(); await sleep(40);
+      R.logEmpty = LOGS.length - nL3;
+      //  Q7 — 군말 · 다른 표기(셸 목록의 이름 찾기와 색칠)
+      await search("슬랙 방법");
+      R.fillerLocal = allRowsNow().filter((r) => r.badge === "세션").map((r) => r.t);
+      await search("slack");
+      R.aliasNone = allRowsNow().filter((r) => r.badge === "세션").length;   // slack 은 다른 표기 묶음에 없다 — 대조(억지로 맞추지 않는다)
+      //  Q8 — 뜻으로만 온 세션
+      await search("뜻시험");
+      R.semRow = { heads: shape().map((g) => g.h), row: allRowsNow().find((r) => r.t === "뜻으로 온 세션") || null, why: document.querySelector(".v2-omni-row.weak .v2-omni-why")?.textContent || "" };
+      //  Q9 — 번호로 찾기
+      await search("4530");
+      R.numShape = shape();
+      R.numKeys = Object.fromEntries([...document.querySelectorAll(".v2-omni-row")].map((r) => [r.querySelector(".v2-omni-t")?.textContent, [...r.querySelectorAll(".v2-omni-key")].map((k) => k.textContent).join(",")]));
+    }
+
     // ── G19 최근 연 것은 워크스페이스별 열쇠(wsKey) — 다른 워크스페이스에선 «@슬러그» 열쇠에만 ──
     localStorage.setItem("lively.workspace", "ws2");
     const baseBefore = localStorage.getItem("lively.omni.opened") || "";
@@ -638,6 +718,38 @@ async function PAGE_MAIN() {
     await sleep(80);
     R.hangAborted = HANG_ABORTED;
     CONV_HANG = false;
+
+    // ── Q10 빈 칸의 «최근 검색» 은 한 줄의 칩 ──
+    {
+      OM.omniOpen();
+      await waitFor(isSettled); await sleep(40);
+      const inp2 = $(".v2-omni-in");
+      inp2.value = ""; inp2.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(60);
+      const chips = () => [...document.querySelectorAll(".v2-omni-recent .v2-omni-chip")];
+      const sel = () => document.querySelector('.v2-omni-list [aria-selected="true"]');
+      const selChip = () => (sel() && sel().classList.contains("v2-omni-chip") ? sel().querySelector(".v2-omni-chip-t").textContent : "");
+      const selRow = () => (sel() && sel().classList.contains("v2-omni-row") ? sel().querySelector(".v2-omni-t").textContent : "");
+      const texts = chips().map((c) => c.querySelector(".v2-omni-chip-t").textContent);
+      const firstRow = document.querySelector(".v2-omni-list .v2-omni-row")?.querySelector(".v2-omni-t")?.textContent || "";
+      R.chip = { strips: document.querySelectorAll(".v2-omni-recent").length, texts, firstRow,
+        queryRows: [...document.querySelectorAll(".v2-omni-row")].filter((r) => texts.includes(r.querySelector(".v2-omni-t")?.textContent || "") && r.querySelector(".v2-omni-badge")?.textContent === "검색").length,
+        listFirst: $(".v2-omni-list").firstElementChild?.className || "", start: { chip: selChip(), row: selRow() } };
+      key("ArrowUp"); R.chip.up = selChip();
+      key("ArrowRight"); R.chip.right = selChip();
+      key("ArrowRight"); R.chip.right2 = selChip();
+      key("ArrowLeft"); R.chip.left = selChip();
+      key("ArrowDown"); R.chip.down = { chip: selChip(), row: selRow() };
+      key("ArrowUp"); R.chip.back = selChip();
+      key("ArrowUp"); R.chip.tabFocus = !!document.activeElement && document.activeElement.classList.contains("v2-omni-tab");
+      inp2.focus();
+      key("Enter");
+      await sleep(60); await waitFor(isSettled); await sleep(40);
+      R.chip.enterValue = inp2.value;
+      R.chip.enterChip = R.chip.back;
+      OM.omniClose();
+      await sleep(60);
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
 
   R.pageErrors = pageErrors;
@@ -808,6 +920,58 @@ check(JSON.stringify(R.topGuar) === JSON.stringify(["보장 문서 1", "보장 �
 check(!!R.guarRow && /어떤 프로젝트/.test(R.guarRow.sub) && /보장되지/.test(R.guarRow.sub) && R.guarRow.marks.includes("보장"), "A9 셸이 모르는 세션 줄의 둘째 줄 = 서버가 준 프로젝트 이름 + 맞은 말 한 조각(색칠)", JSON.stringify(R.guarRow));
 check(R.pvCmd?.kind === "명령" && JSON.stringify(R.pvCmd.btns) === JSON.stringify(["새 세션 시작"]) && (R.pvCmd.lines || []).some((x) => /입력칸에 «슬랙» 를 넣어 둡니다/.test(x)) && JSON.stringify(R.cmdRan) === JSON.stringify(["슬랙"]),
   "A10 명령 줄 = 무엇을 하는지 + [새 세션 시작] — 누르면 그 글로 새 세션", JSON.stringify({ pv: R.pvCmd, ran: R.cmdRan }));
+// 검색 품질 Q1~Q7
+{
+  const heads = (R.tiered || []).map((g) => g.h);
+  const weakG = group(R.tiered, "덜 맞는 결과");
+  const BUCKETS = ["오늘", "어제", "최근 7일", "최근 30일", "그 이전", "시각 모름"];
+  const timeline = (R.tiered || []).filter((g) => BUCKETS.includes(g.h) || g.h === "가장 맞는 결과").flatMap((g) => g.rows).map((r) => r.t);
+  check(!!weakG && JSON.stringify(weakG.rows.map((r) => r.t)) === JSON.stringify(["빠진 낱말 세션", "비슷한 글자 세션", "스친 세션"])
+    && !timeline.includes("빠진 낱말 세션") && timeline.includes("맞는 세션 최근") && timeline.includes("맞는 세션 옛날"),
+    "Q1 덜 맞는 세션은 맨 위 셋·시간 줄에 끼지 않는다(가장 최근이어도) — «덜 맞는 결과» 에 서버가 준 순서로", JSON.stringify({ heads, timeline, weak: weakG && weakG.rows.map((r) => r.t) }));
+  check(heads.indexOf("덜 맞는 결과") > Math.max(...heads.map((h, i) => (BUCKETS.includes(h) ? i : -1))) && (heads.indexOf("바로 가기") < 0 || heads.indexOf("덜 맞는 결과") < heads.indexOf("바로 가기")),
+    "Q1 «덜 맞는 결과» 는 날짜 묶음 아래 · 바로 가기 위", JSON.stringify(heads));
+  check((group(R.tiered, "가장 맞는 결과")?.rows || []).every((r) => !/빠진|비슷한|스친/.test(r.t)), "Q1 맨 위 «가장 맞는 결과» 에 덜 맞는 세션이 없다", JSON.stringify(group(R.tiered, "가장 맞는 결과")));
+  const w = R.tieredWhy || {};
+  check(w["빠진 낱말 세션"] === "«물소» 없음" && w["비슷한 글자 세션"] === "«층 시험» (으)로 찾음" && w["스친 세션"] === "AI 가 잠깐 한 말" && w["맞는 세션 최근"] === "",
+    "Q2 덜 맞는 줄의 둘째 줄 앞에 왜 그런지 — 맞는 줄에는 없다", JSON.stringify(w));
+  check(JSON.stringify(R.tieredWeakCls) === JSON.stringify(["빠진 낱말 세션", "비슷한 글자 세션", "스친 세션"]), "Q2 덜 맞는 줄은 가볍게 그린다(weak)", JSON.stringify(R.tieredWeakCls));
+  const w2 = row(R.tiered, "비슷한 글자 세션");
+  check(!!w2 && w2.marks.includes("층 시험") && (R.tieredPv?.marks || []).includes("층 시험") && /층 시험 물소/.test((R.tieredPv?.msgs || []).join()),
+    "Q3 비슷한 글자로 맞은 자리의 실제 글(«층 시험»)을 목록과 미리보기에서 칠한다", JSON.stringify({ row: w2, pv: R.tieredPv }));
+  check(R.tieredNums?.sess === "2", "Q4 «세션» 탭 숫자 = 맞는 결과만(덜 맞는 셋은 세지 않는다)", JSON.stringify(R.tieredNums));
+  check(/«층시험» 은\(는\) 글자 그대로는 없어 비슷한 글자로 찾았습니다/.test(R.tieredNote || ""), "Q4 아래 줄이 비슷한 글자로 찾았다고 말한다", JSON.stringify(R.tieredNote));
+  const o = R.logOpen?.row || {};
+  check(R.logOpen?.n === 1 && R.logOpen.opened === 1 && R.logOpen.closed === true && o.action === "open" && o.q === "층시험 물소" && o.tab === "all" && o.opened?.kind === "sess"
+    && o.opened.key === "c:n1:conv-w2" && o.opened.rank === R.logOpen.rank && o.opened.tier === "weak" && o.counts?.sess === 2 && o.counts.weak === 3 && JSON.stringify(o.loosened) === JSON.stringify(["층시험"]),
+    "Q5 결과를 열면 기록 한 줄 — 검색어 · 종류 · 열쇠 · 자리 · 층 · 그때의 수(한 번의 찾기에 한 줄만)", JSON.stringify(R.logOpen));
+  const c = R.logClose?.row || {};
+  check(R.logClose?.n === 1 && c.action === "close" && c.q === "층시험 물소" && c.opened === null && R.logEmpty === 0, "Q6 안 열고 닫으면 «안 열고 닫았다» 한 줄 · 검색어 없이 닫으면 남기지 않는다", JSON.stringify({ close: R.logClose, empty: R.logEmpty }));
+  check((R.fillerLocal || []).includes("슬랙 검색 고치기") && (R.fillerLocal || []).includes("슬랙 팀원 세션") && R.aliasNone === 0,
+    "Q7 군말(«방법»)이 섞여도 셸 목록의 이름 찾기가 맞춘다 · 묶음에 없는 표기는 억지로 맞추지 않는다", JSON.stringify({ filler: R.fillerLocal, alias: R.aliasNone }));
+}
+{
+  const r = R.semRow?.row;
+  check(!!r && (R.semRow.heads || []).includes("덜 맞는 결과") && R.semRow.why === "뜻이 비슷함" && /세션을 지우면 목록이 깜빡거려/.test(r.sub) && /UI 버그/.test(r.sub),
+    "Q8 뜻으로만 온 세션 = «덜 맞는 결과» 에 «뜻이 비슷함» · 둘째 줄은 프로젝트와 첫 지시", JSON.stringify(R.semRow));
+  const top = (group(R.numShape, "가장 맞는 결과")?.rows || []).map((x) => x.badge + ":" + x.t);
+  check(top[0] === "프로젝트:통합검색 결함 점검" && top.includes("세션:번호 세션 최근") && titles(R.numShape).includes("번호 세션 예전") && titles(R.numShape).includes("검색 결함 점검"),
+    "Q9 번호로 찾기 — 그 번호의 프로젝트가 맨 위, 그 프로젝트의 세션과 태스크가 뒤따른다", JSON.stringify({ top, all: titles(R.numShape) }));
+  const k = R.numKeys || {};
+  check(k["번호 세션 최근"] === "#4530" && k["번호 세션 예전"] === "#4530" && /검색이 불편해 싹 훑어봐 줘/.test(row(R.numShape, "번호 세션 최근")?.sub || ""),
+    "Q9 번호로 온 세션 줄에 «#4530» · 맞은 말이 없으면 첫 지시를 보인다", JSON.stringify({ keys: k, row: row(R.numShape, "번호 세션 최근") }));
+}
+{
+  const c = R.chip || {};
+  const t = c.texts || [];
+  check(c.strips === 1 && t.length >= 2 && c.queryRows === 0 && /v2-omni-recent/.test(c.listFirst || ""),
+    "Q10 빈 칸의 «최근 검색» 은 목록 맨 위 한 줄의 칩 — 검색어마다 줄을 차지하지 않는다", JSON.stringify(c));
+  check(c.start?.chip === "" && !!c.firstRow && c.start?.row === c.firstRow, "Q10 처음 고른 것은 칩이 아니라 첫 줄(최근 연 것)", JSON.stringify(c.start));
+  check(c.up === t[0] && c.right === t[1] && c.right2 === (t[2] ?? t[1]) && c.left === (t[2] ? t[1] : t[0]), "Q10 첫 줄에서 ↑ = 첫 칩 · ←→ = 칩 사이(끝에서는 멈춘다)", JSON.stringify(c));
+  check(c.down?.chip === "" && c.down?.row === c.firstRow && c.back === c.left, "Q10 칩에서 ↓ = 첫 줄 · 다시 ↑ = 있던 칩으로", JSON.stringify(c));
+  check(c.tabFocus === true, "Q10 칩에서 ↑ = 탭 줄(키보드로 탭·기간·정렬에 닿는 길은 그대로)", JSON.stringify(c.tabFocus));
+  check(!!c.enterChip && c.enterValue === c.enterChip, "Q10 칩에서 Enter = 그 검색어로 다시 찾는다", JSON.stringify({ chip: c.enterChip, value: c.enterValue }));
+}
 // G26
 check(JSON.stringify(R.tabLabels) === JSON.stringify(["전체", "세션", "프로젝트", "지식", "자료"]), "G26 탭 = 전체·세션·프로젝트·지식·자료 — «대화» 는 없다", JSON.stringify(R.tabLabels));
 check(!R.badges.includes("대화") && allRows(R.def).some((r) => r.t === "모르는 세션" && r.badge === "세션"), "G26 대화로 걸린 세션도 «세션» 배지", JSON.stringify(R.badges));

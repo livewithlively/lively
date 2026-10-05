@@ -1184,8 +1184,16 @@ function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unkno
   //   본문에 우연히 그 숫자가 없으면 자기 번호로 자기를 못 찾았다. 정확일치만 OR 로 얹는다(부분일치는 idEquals 주석 참고).
   //   공개범위·앵커 제외 같은 **기본 필터는 그대로 AND** 다 — 번호를 안다고 안 보이는 것이 보이면 안 된다.
   const idPred = raw ? idEquals("p.id", raw, params) : null;
+  //  **번호의 식구도 함께**(#4530 검색 품질, 원준 2026-10-05 «프로젝트나 세션의 4자리 … 검색하면 어떤게 나올지는 너가 알아서 좀 잘») —
+  //   화면 검색(plain)에서 번호를 치면 그 번호 한 줄만 나왔다. 프로젝트 번호면 그 태스크·서브태스크가, 태스크 번호면 바로 위 프로젝트가
+  //   같이 나와야 «그 번호의 일» 이 한눈에 보인다. 번호의 주인은 exactFirst 가 맨 위에 세운다(searchProjects). 에이전트 grep 은 종전 그대로.
+  const idParam = idPred ? `$${params.length}` : "";
+  const family = idPred && opts.plain
+    ? ` OR p.parent_id = ${idParam} OR p.id = (SELECT x.parent_id FROM project x WHERE x.id = ${idParam})`
+      + ` OR p.parent_id IN (SELECT y.id FROM project y WHERE y.parent_id = ${idParam})`
+    : "";
   const match = grepWhere(["p.name", "p.description"], plan, params);
-  const wh: string[] = [idPred ? `((${match}) OR ${idPred})` : match, P_SEARCH_BASE];
+  const wh: string[] = [idPred ? `((${match}) OR ${idPred}${family})` : match, P_SEARCH_BASE];
   if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
   if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
   if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }

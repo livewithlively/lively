@@ -33,6 +33,8 @@ import { searchConversations, searchConvMessages, sessionHits, convIndexPending,
 import { sessionJournal } from "../v6/session-journal-store.js";   // #4553 — 세션 이력 앱 «작업 일지»
 import { parseJournalRange } from "../v6/session-journal.js";
 import { parseConvSort } from "../v6/conv-search.js";
+import { logSearch, searchLogSummary } from "../v6/search-log-store.js";   // #4530 검색 품질 — 무엇을 쳤고 무엇을 열었나
+import { isAdmin } from "../capabilities/principal.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
 export function sessionLogProjectClaim(
@@ -188,7 +190,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     const q = String(req.query.q ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
-    if (!q) { res.json({ results: [], total: 0, pending: 0, capped: false }); return; }
+    if (!q) { res.json({ results: [], total: 0, weak: 0, pending: 0, capped: false, loosened: [] }); return; }
     if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
     const since = req.query.since ? String(req.query.since) : null;
     if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
@@ -208,7 +210,32 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const pending = await convIndexPending(base).catch(() => null);
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
-    res.json({ results: found.results, total: found.total, pending, capped: found.capped, cap: found.cap });
+    res.json({ results: found.results, total: found.total, weak: found.weak, pending, capped: found.capped, cap: found.cap, loosened: found.loosened });
+  }));
+
+  // 통합검색 기록(#4530 검색 품질, 원준 2026-10-05) — 한 번의 찾기에 한 줄(결과를 열었나 · 안 열고 닫았나). 화면이 닫히는 길에 보낸다.
+  //  남기기는 누구나(제 것만 — member 는 요청자다), 요약은 관리자만(검색어는 그 사람이 찾던 것이다). 실패해도 화면에는 알리지 않는다
+  //  (기록은 덤이다 — 검색을 막지 않는다).
+  app.post("/api/ui/v6/search-log", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const b = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+    const counts = (b.counts && typeof b.counts === "object" ? b.counts : {}) as Record<string, unknown>;
+    const opened = (b.opened && typeof b.opened === "object" ? b.opened : null) as Record<string, unknown> | null;
+    const ok = await logSearch({
+      member: requester, q: String(b.q ?? ""), tab: String(b.tab ?? "all"),
+      sort: typeof b.sort === "string" ? b.sort : null, period: typeof b.period === "string" ? b.period : null,
+      counts: { sess: counts.sess as number, weak: counts.weak as number, proj: counts.proj as number, know: counts.know as number, src: counts.src as number },
+      action: b.action === "open" ? "open" : "close",
+      opened: opened ? { kind: opened.kind as string, key: opened.key as string, rank: opened.rank as number, tier: opened.tier as string } : null,
+      settleMs: b.settle_ms as number, loosened: Array.isArray(b.loosened) ? (b.loosened as string[]) : null,
+    });
+    res.json({ ok });
+  }));
+  app.get("/api/ui/v6/search-log/summary", auth, wrap(async (req, res) => {
+    if (!isAdmin(userOf(req))) throw new HttpError(403, "관리자만 볼 수 있습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await searchLogSummary(Number(req.query.days) || 14));
   }));
 
   // 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A). 목록 한 줄로는 «그 세션이 맞나» 를 못 가려 열어 봐야 했다.
