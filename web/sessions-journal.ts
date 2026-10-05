@@ -12,6 +12,7 @@ import {
   type JRow, type JournalMode, type JournalPreset,
 } from './session-history.js';
 import { whenLabel } from './lib/omni-order.js';
+import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 const MODES: ReadonlyArray<{ key: JournalMode; label: string }> = [{ key: 'day', label: '날짜별' }, { key: 'project', label: '프로젝트별' }];
 const st = { preset: 'week' as JournalPreset, mode: 'day' as JournalMode, open: new Set<string>() };
@@ -88,7 +89,7 @@ export function mountJournal(host: HTMLElement): void {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } return; }
         e.preventDefault();
         openTranscriptWindow({ sid: r.session_id, node: r.node_id }, {
-          name, boxId: r.box_id, sub: [r.project_name || '프로젝트 없음', whenLabel(Date.parse(r.last_seen), Date.now())].filter(Boolean).join(' · '),
+          name, boxId: r.box_id, sub: [r.project_name || NO_PROJECT_NAME, whenLabel(Date.parse(r.last_seen), Date.now())].filter(Boolean).join(' · '),
           onTrashed: () => { cache.delete(st.preset); void load(true); },
         });
       });
@@ -105,7 +106,7 @@ export function mountJournal(host: HTMLElement): void {
     const headBtn = el('button', { class: 'shx-jhead', type: 'button', 'aria-expanded': isOpen ? 'true' : 'false' },
       el('span', { class: 'shx-row-t' },
         el('span', { class: 'shx-jname', text: name, title: name }),
-        st.mode === 'day' ? el('span', { class: 'shx-proj' + (r.project_name ? '' : ' none') }, ico(r.project_name ? 'projMini' : 'projNone'), el('span', { text: r.project_name || '프로젝트 없음' })) : null,
+        st.mode === 'day' ? el('span', { class: 'shx-proj' + (r.project_name ? '' : ' none') }, ico(r.project_name ? 'projMini' : 'projNone'), el('span', { text: r.project_name || NO_PROJECT_NAME })) : null,
         r.asks ? el('span', { class: 'shx-jasks', text: `질문 ${r.asks}개` }) : null),
       el('span', { class: 'shx-jline' },
         head.source === 'activity' && lastAct ? actTypePill(lastAct.type) : null,

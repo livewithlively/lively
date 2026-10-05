@@ -45,8 +45,9 @@ function pickBody(o: ProjPickOpts, done: () => void): { input: HTMLInputElement;
   const render = (): void => {
     const hits = projMatches(o.rows, input.value.trim());
     const kids: HTMLElement[] = [];
-    if (o.currentId) kids.push(el('button', { class: 'v2-pjpick-row v2-pjpick-none', type: 'button', role: 'option', onclick: () => void pick(null) },
-      ic(ICONS.projNone), el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
+    //  ★ 「프로젝트에서 떼기」 줄은 걷었다(#4551, 원준 2026-10-05 «그냥 빼는 건 애초에 불가능하게 해야»). 떼어도 세션의
+    //   작업 폴더는 그 프로젝트 폴더 그대로라(cwd 는 한 번 정하면 못 바꾼다) 목록에서만 갈 곳을 잃는다. 잘못 붙였으면
+    //   다른 프로젝트로 옮기면 된다 — 이 창이 하는 일이 그것이다.
     for (const r of hits.slice(0, LIMIT)) {
       const cur = Number(o.currentId) === Number(r.proj.id);
       kids.push(el('button', { class: 'v2-pjpick-row' + (cur ? ' cur' : ''), type: 'button', role: 'option', 'aria-selected': String(cur), onclick: () => { if (!cur) void pick(r.proj.id); },

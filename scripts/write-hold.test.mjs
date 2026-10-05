@@ -360,7 +360,7 @@ ok(holdAt > 0 && sendAt > holdAt && failAt > sendAt && /overlayDismissHolds\(\);
   "W3 × 는 보내기 전에 붙들고, 답을 받으면 ack, 실패하면 fail 하고 되돌린다");
 ok(/sideWrites\.hold\(\{ kind: 'dismiss', ids: plan\.sessionIds, at: '' \}, \['instances'\]\)\.ack\(\);/.test(cut(MAIN, "async function migrateSessionDismissals(", "\nfunction dismissKey")),
   "W3′ 옛 치움 맵을 옮긴 것도 붙든다");
-ok(/const sessions = mergeSessions\(lastLive, lastLogs\);[\s\S]{0,200}overlayTrashHolds\(sessions\);/.test(LOAD),
+ok(/const merged = mergeSessions\(lastLive, lastLogs\);[\s\S]{0,400}overlayTrashHolds\(sessions\);/.test(LOAD),
   "W4 loadData 가 세션을 합친 뒤 붙든 휴지통 표식을 덧씌운다");
 const WATCH = cut(MAIN, "watchSessionTrash((op, ids) => {", "\nasync function loadData(");
 const ackAt = WATCH.indexOf("hold.ack();");

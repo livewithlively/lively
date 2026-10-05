@@ -28,6 +28,7 @@ import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 
 import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
 import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
 import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 export interface BinHooks { onChanged?: () => void }
 
@@ -689,7 +690,7 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
       el('td', { class: 'c-name' }, sessIcon(),
         el('a', { class: 't', href: '#/s/' + encodeURIComponent(it.key), text: it.name, title: '세션을 엽니다 — 그때 대화를 그대로 이어서 계속할 수 있어요', onclick: (ev: Event) => { ev.stopPropagation(); dismissedAt = 0; } }),
         it.dismissed ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요 — [홈 목록으로]를 누르면 다시 섭니다' }) : null),
-      ...(ui.group ? [] : [el('td', { class: 'c-in' }, projIcon(!!it.projectId), el('span', { text: it.projectId ? projName(data, it.projectId) : '프로젝트 없음' }))]),   // #4233 — 세션 목록의 같은 열과 맞춘다
+      ...(ui.group ? [] : [el('td', { class: 'c-in' }, projIcon(!!it.projectId), el('span', { text: it.projectId ? projName(data, it.projectId) : NO_PROJECT_NAME }))]),   // #4233 — 세션 목록의 같은 열과 맞춘다
       el('td', { class: 'c-kind' }, dot(it.stateKey), el('span', { text: it.stateLabel || '지난 세션' })),
       el('td', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(it.lastSeen) || 0), title: it.lastSeen ? new Date(Number(it.lastSeen)).toLocaleString() : '' })),
       el('td', { class: 'c-acts' }, el('span', { class: 'acts' },
@@ -708,7 +709,7 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
   const projHead = (g: { id: number; rows: PastItem[] }): HTMLElement => {
     const p = g.id ? data.projects.find((x) => x.id === g.id) : null;
     const closed = ui.closed.has(g.id);
-    const name = g.id ? (p ? p.name : `#${g.id}`) : '프로젝트 없음';
+    const name = g.id ? (p ? p.name : `#${g.id}`) : NO_PROJECT_NAME;
     const sel = g.rows.every((it) => ui.sel.has(it.key));
     return el('tr', { class: 'g' + (closed ? ' closed' : '') },
       el('td', { class: 'c-cb' }, cb(sel, `${name} 전체 선택`, (on) => { for (const it of g.rows) { if (on) ui.sel.add(it.key); else ui.sel.delete(it.key); } paint(); }, !sel && g.rows.some((it) => ui.sel.has(it.key)))),
@@ -788,7 +789,7 @@ export function renderPast(host: HTMLElement, data: V2Data, hooks: BinHooks = {}
     }
     const detail = el('div', { class: 'v2-bin-side-detail' },
       el('div', { class: 'h' }, sessIcon(), el('b', { text: it.name }), it.dismissed ? el('span', { class: 'tag', text: '치움' }) : null),
-      el('p', { class: 'meta', text: `${it.projectId ? projName(data, it.projectId) : '프로젝트 없음'} · ${it.stateLabel || '지난 세션'} · 마지막 ${whenMs(Number(it.lastSeen) || 0)}` }));
+      el('p', { class: 'meta', text: `${it.projectId ? projName(data, it.projectId) : NO_PROJECT_NAME} · ${it.stateLabel || '지난 세션'} · 마지막 ${whenMs(Number(it.lastSeen) || 0)}` }));
     detail.append(el('div', { class: 'act' },
       el('a', { class: 'btn btn-ghost btn-sm', href: '#/s/' + encodeURIComponent(it.key), text: '이어서 열기', onclick: () => { dismissedAt = 0; } }),
       it.dismissed ? el('button', { class: 'btn-text', type: 'button', text: '홈 목록으로', onclick: () => void restoreRows([it]) }) : null,
@@ -1020,7 +1021,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     || it.name.toLowerCase().includes(needle) || projName(data, it.projectId).toLowerCase().includes(needle));
   //  빵부스러기 — «AI 세션 / 기준 / 고른 것». 고른 것이 없으면 «전체».
   const byLabel = (SESS_GROUP_BYS.find((b) => b.key === sc.by) || SESS_GROUP_BYS[0]).label;
-  const pickedProj = sc.proj === null ? '' : (projName(data, sc.proj) || '프로젝트 없음');
+  const pickedProj = sc.proj === null ? '' : (projName(data, sc.proj) || NO_PROJECT_NAME);
   const crumbs = [sc.group !== null ? sessGroupName(sc.by, sc.group, data, ownerName) : '', pickedProj].filter(Boolean);
   const byState = (k: string): number => inProj.filter((it) => it.owner === 'me' && it.stateKey === k).length;
   const open = (s: Sess): void => hooks.onOpen(s);
@@ -1104,7 +1105,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       el('div', { class: 'c-name' }, sessIcon(),
         el('a', { class: 't' + (it.untitled ? ' un' : ''), href: '#/s/' + encodeURIComponent(s.id), text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name, onclick: nameClick }),
         v === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
-      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, projIcon(!!s.projectId), el('span', { text: projName(data, s.projectId) || '프로젝트 없음' })) : null,
+      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, projIcon(!!s.projectId), el('span', { text: projName(data, s.projectId) || NO_PROJECT_NAME })) : null,
       el('div', { class: 'c-kind' }, stateCell(s)),
       el('div', { class: 'c-who' }, personFace(it.owner === 'me' ? meId : it.owner, 'v2-sall-face', ownerName(it.owner))),
       el('div', { class: 'c-made' }, madeCell(Number(s.createdAt) || 0)),

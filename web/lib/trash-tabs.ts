@@ -8,6 +8,7 @@
 //   · 지식     = 감사 스냅샷의 knowledge
 //  «얼마나 돌아오나» 가 출처마다 달라서, 합치되 출처(origin)를 줄마다 들고 다닌다 — 화면이 그 차이를 말해야 한다(#1582).
 
+import { NO_PROJECT_NAME } from './proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 export type TrashTab = 'sess' | 'proj' | 'src' | 'know';
 
 export const TRASH_TABS: ReadonlyArray<{ key: TrashTab; label: string; unit: string; back: string }> = [
@@ -125,7 +126,7 @@ export function groupByProject<T>(rows: ReadonlyArray<T>, pidOf: (r: T) => numbe
   for (const r of rows) {
     const pid = Number(pidOf(r)) || 0;
     let g = map.get(pid);
-    if (!g) { g = { id: pid, name: pid ? nameOf(pid) : '프로젝트 없음', rows: [] }; map.set(pid, g); }
+    if (!g) { g = { id: pid, name: pid ? nameOf(pid) : NO_PROJECT_NAME, rows: [] }; map.set(pid, g); }
     g.rows.push(r);
   }
   const out = Array.from(map.values());

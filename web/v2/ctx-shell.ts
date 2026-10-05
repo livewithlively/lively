@@ -16,6 +16,7 @@ import { omniKeyHint } from '../lib/omni-chord.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
 import { openSharePopover, shareSessOf } from './share-session.js';
 import { markNotificationsRead } from './notifications.js';
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // ── 통합검색 열기 (#4530) ──
 //  셸 문서면 바로 연다. 액자(클래식 ?embed=1) 문서는 같은 메뉴를 쓰지만 통합검색 훅이 없다 — 종전엔 «「…」 검색» 을 눌러도
@@ -95,7 +96,7 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
-  return { rows, title: text.main || s.label || s.id, sub: [st ? st.label : s.stateLabel, s.projectId ? pn : '프로젝트 없음', isLiveSess(s) ? '' : '지난 세션'].filter(Boolean).join(' · ') };
+  return { rows, title: text.main || s.label || s.id, sub: [st ? st.label : s.stateLabel, s.projectId ? pn : NO_PROJECT_NAME, isLiveSess(s) ? '' : '지난 세션'].filter(Boolean).join(' · ') };
 }
 
 // ── 프로젝트 ────────────────────────────────────────────────────────────────

@@ -401,7 +401,7 @@ a.shx-chip:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 4
 .shx-td-name { grid-area: name; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .shx-tname { min-width: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shx-td-proj { grid-area: proj; min-width: 0; margin-left: 16px; font-size: 12.5px; line-height: 18px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.shx-td-proj.none::before { content: '프로젝트 없음'; color: var(--muted-3); }
+.shx-td-proj.none::before { content: '기타 (미분류)'; color: var(--muted-3); }
 .shx-td-state { grid-area: state; justify-self: end; }
 .shx-td-last { grid-area: last; justify-self: end; padding-right: 6px; font-size: 12.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .shx-trnote, .shx-tmore { display: block; }
