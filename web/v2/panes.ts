@@ -34,8 +34,10 @@ import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름.
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
-import { mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
-import { openAppDrawer } from './pane-drawer.js';                                // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
+import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
+import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
+import { listSessionApps } from './app-session.js';
+import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
@@ -43,7 +45,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -121,8 +123,9 @@ const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 
 //  #4084 — 곁칸 기본에 «태스크»가 선다(원준 2026-09-20: "연동되어서 자동으로 보이게"). 종전엔 [+] 로 넣어야만 보였다.
 //  #4443(원준 2026-10-01) — **아래 칸은 비워 둔다**. 종전엔 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를
 //   누르면 넣은 적 없는 타임라인이 터미널 밑에 있었다. 타임라인은 독에서 누르면 곁칸에 열린다. 저장된 옛 기본은 unparkBottom.
+//  #4443(원준 10-05) — «앱» 탭도 뺀다. 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 맡는다. 저장된 것은 dropAppsTab.
 const DEF_LAYOUT = (): Layout => ({
-  main: ['sessions'], side: ['files', 'tasks', 'knowledge', 'apps'], bottom: [],
+  main: ['sessions'], side: ['files', 'tasks', 'knowledge'], bottom: [],
   act: { main: 'sessions', side: 'files', bottom: null },
   sideOn: true, bottomOn: false, pin: [],
 });
@@ -197,7 +200,8 @@ function seedLayoutStore(): void {
   try {
     const r = seedTasksTab(layoutStore());
     const u = unparkBottom(r.store);             // #4443 — 닫힌 아래 칸에 숨겨 둔 옛 기본 타임라인을 한 번만 걷는다
-    if (r.changed || u.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(u.store));
+    const a = dropAppsTab(u.store);              // #4443 — «앱» 탭(옛 기본에서 물려받은 것)을 한 번만 걷는다
+    if (r.changed || u.changed || a.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(a.store));
   } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
 /** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본. */
@@ -535,8 +539,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // #3784 — 곁칸 빈 자리 우클릭 = 이 화면의 배치 조작(＋ 칸에 넣기 · 새 세션 · 배치 되돌리기 · 프로젝트 설정).
   //  탭마다 곁칸이 한 벌씩 살므로(#1819) 표면도 **이 wrap 에 묶는다**(전역 이름이 아니라 닫힌 값).
   bindCtxSurface(wrap, (hit, ev) => {
-    const z = (ev.target.closest('.pn-pane') as HTMLElement | null)?.dataset.zone;
-    const zone: Zone = z === 'bottom' && !narrow() ? 'bottom' : 'side';   // 가운데 칸(세션)에서 부르면 곁칸에 넣는다(좁은 폭엔 아래 칸이 없다)
+    //  어디서 불러도 곁칸에 넣는다 — 가운데 칸(세션)은 세션만, 아래 칸에는 새로 열지 않는다(#4443 원준 10-05 «아래칸에 여는거 우리 안하기로»).
+    const zone: Zone = 'side';
     const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions' && d.pickable !== false).map((d) => ({
       //  #4233: 탭 · [+] 고르기와 같은 그림(PART_DEFS.icon). 종전엔 여기서 따로 고르다 「프로젝트」만 묶음 그림(layers)으로 떨어졌다.
       label: d.name, icon: pnIconName(glyphAt(d.icon, 15)),
@@ -1287,7 +1291,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       [
         ...(derived ? [] : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
         ...(d.multi && d.pickable !== false ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(zone, type); } }] : []),
-        ...(['side', 'bottom'] as Zone[]).filter(canGo).map((z) => ({
+        //  #4443(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — 아래 칸으로는 보내지 않는다. 아래 칸에 남은 옛 탭은 곁칸으로 보낼 수 있다.
+        ...(['side'] as Zone[]).filter(canGo).map((z) => ({
           label: `${toZone[z]} 보내기`, icon: 'moveto', run: () => { openZone(z); moveTab(key, zone, z); },
         })),
       ],
@@ -1374,32 +1379,44 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     b.onclick = () => openPicker(b, zone);
     return b;
   }
-  /** 그 칸에 넣을 것을 고르는 «앱 서랍» — [＋] 가 열고, 빈 아래 칸의 «아래 칸 열기» 도 이걸 연다(빈 칸을 펴지 않는다).
-   *  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): 독 ⊞ 와 같은 판 · 같은 타일(v2/pane-drawer). 이 칸에 넣을 수 있는 것만 — 모두 사이드바에 선다. */
+  /** 그 칸에 넣을 것을 고르는 «앱 서랍» — 탭 줄 [＋] 가 연다(v2/pane-drawer · 독 ⊞ 와 같은 판 · 같은 타일 · 같은 묶음).
+   *  #4443(원준 10-05): 묶음 둘 — «사이드바 앱»(이 칸에 탭으로) · «이 세션에 붙이기»(설치 앱 · AI 도 같이 쓴다).
+   *  여기서 여는 것은 모두 사이드바에 선다 — «새 탭으로 여는 앱» 도, 아래 칸도 없다(«아래칸에 여는거 우리 안하기로 했잖음»). */
   function openPicker(anchor: HTMLElement, zone: Zone): void {
     //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
     const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
-    const rest = PART_DEFS.filter((d) => d.pickable !== false && (d.multi || !has(d.type))   // pickable:false(뷰어) — 파일에서만 열린다(#4135)
+    //  «앱» 칸은 pickable:false — 세션에 앱을 붙이는 일은 아래 «이 세션에 붙이기» 묶음이 한다(원준 10-05 «애초에 어떻게 앱을 +해서 탭으로»).
+    const rest = PART_DEFS.filter((d) => d.pickable !== false && (d.multi || !has(d.type))   // pickable:false(뷰어 · 앱) — 파일에서만 · 묶음으로 연다
       && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
       && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
-    const toBottom = zone === 'bottom' && !bottomVisible();   // 빈 아래 칸에 넣기(«아래 칸 열기» 에서 왔다)
-    openAppDrawer(anchor, {
-      title: toBottom ? '아래 칸에 넣기' : '이 칸에 열기',
-      note: toBottom ? '고르면 아래 칸이 열리고 거기 탭으로 서요' : '누르면 이 칸에 탭으로 열려요',
-      placeholder: toBottom ? '아래 칸에 넣을 앱 찾기' : '이 칸에 열 앱 찾기',
-      items: rest.map((d) => ({ type: d.type, name: d.name, hint: d.hint, glyph: d.icon, more: has(d.type) })),
-      onPick: (t) => { addPart(zone, t as PartType); },
-      // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
-      //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
-      //  #4443 — 아래 칸이 안 보일 때만. 내용이 있으면 펴고, **비었으면 넣을 것부터 고른다**(빈 칸이 터미널 밑에 서지 않는다 · lib/pane-tabs bottomShown).
-      foot: [
-        ...(zone === 'bottom' || loose || narrow() || bottomVisible() ? [] : [{ label: '아래 칸 열기', title: '터미널 밑의 아래 칸을 엽니다', icon: 'window', flip: true, run: () => {
-          if (!lay.bottom.length) { openPicker(anchor, 'bottom'); return; }
-          lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll();
-        } }]),
-        { label: '기본 배치로', title: '기본 배치로 되돌리기 — 이 프로젝트의 탭 배치를 처음처럼', icon: 'undo', run: () => resetLayout() },
-      ],
+    const side: DrawerItem[] = rest.map((d) => ({ id: d.type, name: d.name, hint: d.hint, more: has(d.type), ic: () => dockTile(d.icon, d.type), pick: () => { addPart(zone, d.type); } }));
+    const sid = curSession();
+    const attachSec = (apps: Awaited<ReturnType<typeof listSessionApps>> | null) => ({
+      title: '이 세션에 붙이기', note: sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요',
+      //  독 ⊞ 와 같은 표 — 화면이 있거나 AI 가 쓸 데이터가 있는 설치 앱(시스템 앱 · 이 세션 앱 자신 제외)
+      items: apps === null ? null : apps.filter((a) => a.id !== 'ai-session' && !a.system && (a.pages.length > 0 || a.tables.length > 0)).map((a): DrawerItem => ({
+        id: a.id, name: a.title, off: !sid, ic: () => appGlassIcon(builtinAppIcon(a.id, a.pages.length > 0)),
+        hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요 — AI 도 같은 화면을 씁니다.` : '세션을 열면 붙일 수 있어요',
+        pick: () => { void attachApp({ id: a.id, title: a.title }); },
+      })),
     });
+    const h = openAppDrawer(anchor, {
+      label: '사이드바에 열 앱', placeholder: '앱 찾기',
+      sections: [{ title: '사이드바 앱', note: '누르면 사이드바에 탭으로 열려요', items: side }, attachSec(null)],
+      // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를 고르는 자리는 여기뿐이라
+      //  되돌리기를 이 발치에 둔다. #4443 — «아래 칸 열기» 는 걷었다(아래 칸에는 새로 열지 않는다).
+      foot: [{ label: '기본 배치로', title: '기본 배치로 되돌리기 — 이 프로젝트의 탭 배치를 처음처럼', icon: 'undo', run: () => resetLayout() }],
+    });
+    void listSessionApps().then((apps) => h.setSection(1, attachSec(apps))).catch(() => h.setSection(1, attachSec([])));
+  }
+  /** 이 세션에 앱을 붙인다 — 붙으면 셸이 «새로 붙음»을 보고 그 앱 탭을 세워 켠다. 독 ⊞ · [＋] 앱 서랍이 같은 길로 부른다. */
+  async function attachApp(a: { id: string; title: string }): Promise<void> {
+    const sid = curSession();
+    if (!sid) return;
+    if (await attachAppToSession(sid, a.id, a.title)) {
+      wrap.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+    }
   }
 
 
@@ -1457,7 +1474,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
     pane.tail.replaceChildren(...[
       pane.tabs.childElementCount > 1 ? moreBtn(zone) : null,
-      sessionOnly ? null : addBtn(zone),
+      sessionOnly || zone === 'bottom' ? null : addBtn(zone),   // #4443 아래 칸에는 새로 열지 않는다(남은 옛 탭만 보인다)
       hideBtn,
     ].filter(Boolean) as HTMLElement[]);
     // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
@@ -1778,15 +1795,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (keys.length > 1) toast(`${partDef(type as PartType).name} ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
     },
     curSession: () => curSession(),
-    //  [더보기]의 «이 세션에 붙이기» — [앱] 칸이 붙이던 길 그대로(붙으면 셸이 «새로 붙음»을 보고 그 앱 탭을 세워 켠다).
-    attach: async (a) => {
-      const sid = curSession();
-      if (!sid) return;
-      if (await attachAppToSession(sid, a.id, a.title)) {
-        wrap.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
-        toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
-      }
-    },
+    //  [더보기]의 «이 세션에 붙이기» — [＋] 앱 서랍과 같은 길(attachApp).
+    attach: (a) => attachApp(a),
     //  이음매(원준 10-01: 기본은 4안 «이음매 독») = 세션 열과 곁칸 사이 분할선. 좁은 폭(서랍) · 곁칸 접힘 · 카드 모드(곁칸이 격자 전체,
     //   분할선 display:none)엔 이음매가 없다 — 독은 곁칸 아래로 선다. 자리바꿈(sw-left)이면 분할선이 곁칸 오른쪽에 있다(독이 스스로 읽는다).
     seam: () => (narrow() || !lay.sideOn || body.classList.contains('cm') ? null : splitX),
