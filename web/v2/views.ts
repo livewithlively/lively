@@ -14,6 +14,7 @@ import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../ses
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
 import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, onUnread, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력 · #4180 종의 시계
 import { notifyBell } from './notify-bell.js';   // #4180 — 「확인할 것」의 입구는 홈 머리줄의 종
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -459,7 +460,7 @@ async function paintNotifications(host: HTMLElement): Promise<void> {
 }
 
 export function projName(data: V2Data, id: number | null): string {
-  if (!id) return '프로젝트 없음';
+  if (!id) return NO_PROJECT_NAME;
   const p = data.projects.find((x) => Number(x.id) === Number(id));
   return p ? p.name : `프로젝트 #${id}`;
 }

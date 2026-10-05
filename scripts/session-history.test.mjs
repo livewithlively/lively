@@ -127,7 +127,7 @@ const act = (id, title, over = {}) => ({ id, type: "feature", title, summary: nu
 {
   const rows = [jr("a", at(8, 30, 14)), jr("b", at(8, 29, 9), { project_id: 5, project_name: "통합검색" }), jr("c", at(8, 30, 9), { project_id: 9, project_name: "데모데이" }), jr("d", at(8, 28, 9), { project_id: 9, project_name: "데모데이" })];
   const g = M.journalGroups(rows, "project", NOW);
-  eq(g.map((x) => [x.label, x.rows.map((r) => r.session_id)]), [["데모데이", ["c", "d"]], ["통합검색", ["b"]], ["프로젝트 없음", ["a"]]], "G2 프로젝트별 — 최근에 일한 프로젝트가 위 · 「프로젝트 없음」은 가장 최근이어도 맨 아래");
+  eq(g.map((x) => [x.label, x.rows.map((r) => r.session_id)]), [["데모데이", ["c", "d"]], ["통합검색", ["b"]], ["기타 (미분류)", ["a"]]], "G2 프로젝트별 — 최근에 일한 프로젝트가 위 · 「프로젝트 없음」은 가장 최근이어도 맨 아래");
   eq(M.journalGroups([jr("x", NOW, { project_id: 42 })], "project", NOW)[0].label, "#42", "G3 프로젝트 이름을 모르면 번호로");
 }
 {
@@ -143,7 +143,7 @@ eq(M.journalHeadline(jr("a", NOW, { activities: [act(1, "", { summary: "요약 �
 eq(M.journalHeadline(jr("a", NOW, { activities_before: 3 })), { text: "", source: "earlier", more: 3 }, "HL5 이 기간엔 기록이 없고 앞선 기간에만 있으면 그 수(«기록 없음» 이라고 말하지 않는다)");
 eq(M.journalHeadline(jr("a", NOW, { activities_before: 3, activities: [act(1, "이번 기록")] })).source, "activity", "HL5b 이 기간 기록이 있으면 그 기록이 먼저다");
 eq(M.journalCopyText([jr("x", at(8, 30, 9), { activities_before: 2 }), jr("y", at(8, 30, 8))], "기간", NOW).split("\n").slice(3),
-  ["[프로젝트 없음]", "- 세션 y (기록 없음)", "- 세션 x (이 기간에 적은 기록 없음)"], "C2 복사 글 — 앞선 기간에만 기록이 있는 세션은 그렇다고 적는다");
+  ["[기타 (미분류)]", "- 세션 y (기록 없음)", "- 세션 x (이 기간에 적은 기록 없음)"], "C2 복사 글 — 앞선 기간에만 기록이 있는 세션은 그렇다고 적는다");
 {
   const k = { name: "omni", title: "통합검색 as-built" };
   const shared = act(3, "같은 기록");
@@ -157,7 +157,7 @@ eq(M.journalCopyText([jr("x", at(8, 30, 9), { activities_before: 2 }), jr("y", a
     "작업 일지 · 9월 28일 ~ 10월 4일",
     "세션 3 · 프로젝트 1 · 한 일 3 · 지식 2 · 태스크 0",
     "", "[통합검색]", "- 색인 추가", "- 같은 기록", "- 배포 (지식: 통합검색 as-built, runbook)",
-    "", "[프로젝트 없음]", "- 세션 none (기록 없음)",
+    "", "[기타 (미분류)]", "- 세션 none (기록 없음)",
   ], "C1 복사 글 — 머리 두 줄 · 프로젝트 묶음 · 묶음 안은 이른 것부터 · 같은 기록은 한 번 · 기록 없는 세션은 그렇다고");
 }
 
@@ -217,7 +217,7 @@ eq(["journal", "list", "find", "", null, undefined, "zzz"].map(M.readHistTab), [
     jr("c1", NOW, { project_id: 42 }),
   ];
   const p = M.journalProjects(rows);
-  eq(p.map((x) => [x.name, x.sessions, x.activities]), [["통합검색", 2, 2], ["데모데이", 2, 1], ["#42", 1, 0], ["프로젝트 없음", 3, 0]], "P1·P2·P3 세션 많은 순(같으면 기록 많은 순) · 같은 기록은 한 번 · 이름 모르면 번호 · 「프로젝트 없음」은 가장 많아도 맨 아래");
+  eq(p.map((x) => [x.name, x.sessions, x.activities]), [["통합검색", 2, 2], ["데모데이", 2, 1], ["#42", 1, 0], ["기타 (미분류)", 3, 0]], "P1·P2·P3 세션 많은 순(같으면 기록 많은 순) · 같은 기록은 한 번 · 이름 모르면 번호 · 「프로젝트 없음」은 가장 많아도 맨 아래");
   eq(p.map((x) => [x.key, x.id]), [["p:5", 5], ["p:9", 9], ["p:42", 42], ["p:0", null]], "P1b 열쇠 = 프로젝트별 묶음의 열쇠(줄을 누르면 그 묶음으로 간다)");
   eq(M.journalGroups(rows, "project", NOW).map((g) => g.key).sort(), p.map((x) => x.key).sort(), "P1c 배선 — 요약의 열쇠가 실제 프로젝트 묶음의 열쇠와 같다");
   eq(M.journalProjects([jr("x", NOW, { project_id: 1, project_name: "나" }), jr("y", NOW, { project_id: 2, project_name: "가" })]).map((x) => x.name), ["가", "나"], "P1d 세션·기록 수가 같으면 이름 순");

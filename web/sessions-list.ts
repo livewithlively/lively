@@ -11,6 +11,7 @@ import { histFilter, mergeHistoryRows, type HistFilter, type HistRow } from './s
 import { findMatcher } from './lib/find.js';
 import { whenLabel } from './lib/omni-order.js';
 import { rowDotCls } from './session-status.js';
+import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 const FILTERS: ReadonlyArray<{ key: HistFilter; label: string }> = [{ key: 'all', label: '전체' }, { key: 'live', label: '실행 중' }, { key: 'off', label: '오프라인' }, { key: 'rec', label: '기록만' }];
 type SortCol = 'name' | 'proj' | 'state' | 'last';
@@ -125,7 +126,7 @@ export function mountList(host: HTMLElement): void {
     const head = paneHead(r.name, { icon: r.stateKey === 'log' ? 'doc' : 'chat', tone: tileTone(r.stateKey) });
     head.sub.replaceChildren(
       el('span', { class: 'shx-state ' + stateTone(r.stateKey), text: r.stateLabel }),
-      el('span', { text: [r.projectName || (r.projectId != null ? '#' + r.projectId : '프로젝트 없음'), whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
+      el('span', { text: [r.projectName || (r.projectId != null ? '#' + r.projectId : NO_PROJECT_NAME), whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
     const tabs = segOf<DetailTab>([{ key: 'rec', label: '기록 보기' }, { key: 'info', label: '정보' }], st.tab, (v) => { st.tab = v; fill(); }, '세션 보기');
     const resume = btnOf('이어 질문하기', { icon: 'chat' });
     resume.addEventListener('click', () => { if (r.convId) void resumeSessionRecord(r.convId, r.node, resume); });

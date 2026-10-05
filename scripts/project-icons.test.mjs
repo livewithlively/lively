@@ -139,7 +139,7 @@ let omniIcon = null, binProjIcon = null;
 // ── Q3 프로젝트 없음 · 기타 ──
 let pjv = null, dash = null;
 {
-  ok(/glyph\('projNone', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '기타 \(미분류\)' \}\)/.test(SIDE), "Q3 사이드바 「기타 (미분류)」 줄 = 점선 원");
+  ok(/glyph\('projNone', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: NO_PROJECT_NAME \}\)/.test(SIDE), "Q3 사이드바 「기타 (미분류)」 줄 = 점선 원");
   ok(/glyph\(p \? 'proj' : 'projNone', 'v2-pj-ic'\)/.test(cut(SIDE, "function projRow(", "\n}\n")), "Q3 프로젝트 트리의 「프로젝트 없는 세션」 줄 = 점선 원, 프로젝트 줄 = 과녁");
   pjv = await loadWithStubs("web/projects/icons.ts");
   ok(!!pjv && typeof pjv.pjvBundleIcon === "function", "Q3 클래식 아이콘 모듈을 값으로 부를 수 있다");
@@ -298,9 +298,11 @@ let pjv = null, dash = null;
 
 // ── Q15 지난 세션 「프로젝트」 열 · Q16 세션 옮기기 ──
 {
-  ok(/el\('td', \{ class: 'c-in' \}, projIcon\(!!it\.projectId\), el\('span', \{ text: it\.projectId \? projName\(data, it\.projectId\) : '프로젝트 없음' \}\)\)/.test(cut(BINS, "export function renderPast(", "\n}\n")), "Q15 지난 세션 「프로젝트」 열에 프로젝트 그림(없으면 점선 원)");
+  ok(/el\('td', \{ class: 'c-in' \}, projIcon\(!!it\.projectId\), el\('span', \{ text: it\.projectId \? projName\(data, it\.projectId\) : NO_PROJECT_NAME \}\)\)/.test(cut(BINS, "export function renderPast(", "\n}\n")), "Q15 지난 세션 「프로젝트」 열에 프로젝트 그림(없으면 점선 원)");
   const body = cut(PICK, "function pickBody(", "\n}\n");
-  ok(/ic\(ICONS\.projNone\), el\('span', \{ class: 'n', text: '프로젝트에서 떼기' \}\)/.test(body), "Q16 세션 옮기기 「프로젝트에서 떼기」 줄 = 점선 원");
+  const noCmt = (src) => src.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  //  #4551(원준 2026-10-05) — 「프로젝트에서 떼기」 줄은 걷었다(떼어도 작업 폴더는 그대로라 목록에서만 갈 곳을 잃는다).
+  ok(!/pick\(null\)/.test(noCmt(body)) && !/프로젝트에서 떼기/.test(noCmt(body)), "Q16 세션 옮기기에 「프로젝트에서 떼기」 줄이 없다 — 옮기기만 된다");
   ok(/ic\(ICONS\[projGlyph\(15\)\]\), el\('span', \{ class: 'n', text: r\.proj\.name \}\)/.test(body), "Q16 세션 옮기기 프로젝트 줄 = 15px 크기 규칙의 그림(과녁)");
   ok(/\.v2-pjpick-ic \{[^}]*stroke-width: var\(--ic-stroke\)/.test(read("public/styles/40-v2.css")), "Q16 고르개 줄 그림이 선 굵기 토큰(--ic-stroke)을 읽는다");
 }

@@ -71,6 +71,7 @@ import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { refreshUnread, startNotificationBanners, startUnreadWatch } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다 · #4180 — 홈 종의 안 읽은 수 시계
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
+import { NO_PROJECT_NAME, isSpentLoginSess } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -924,7 +925,9 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     }
     logsTruthSeen = true;
   }
-  const sessions = mergeSessions(lastLive, lastLogs);
+  const merged = mergeSessions(lastLive, lastLogs);
+  //  끝난 로그인 세션은 목록에 세우지 않는다(#4551 — lib/proj-none 머리말). 도는 것은 둔다(지금 로그인 중인 창이다).
+  const sessions = merged.filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive));
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   applyArchivePins(sessions);  // 방금 보관한 세션을 **되살리지 않게**(아래 archivePins)
   overlayTrashHolds(sessions); // 방금 휴지통으로 보낸 세션을 **떠 있던 응답이 되세우지 않게**(위 sideWrites, #3870)
@@ -1747,7 +1750,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   //  ⚠ 소속을 **모르는 것**과 **없는 것**은 다르다(#2022) — 목록에도 서버 정본에도 아직 못 닿은 세션
   //   (unresolved)에 '프로젝트 없음' 을 붙이면 화면이 거짓말을 한다. 그때는 소속 줄을 비운다.
   else if (page === 's' || page === 'p') {
-    icon = 'chat'; meta = project ? '' : (info.unresolved ? 'AI 세션' : 'AI 세션 · 프로젝트 없음');
+    icon = 'chat'; meta = project ? '' : (info.unresolved ? 'AI 세션' : 'AI 세션 · ' + NO_PROJECT_NAME);
     //  둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts) — 아직 모르면 null(행은 프로젝트명을 글자로 둔다).
     if (page === 's') { const s = findSess(decodeURIComponent(segs[1] || '')); if (s) ask = lastAsk(s); }
   }
@@ -2585,7 +2588,7 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
   const raw = s.raw || {};
   const factsEl = el('div', { class: 'v2-sfacts' },
     el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
-    el('span', { class: 'sep', text: '·' }), s.projectId ? el('a', { href: '#/p/' + s.projectId, text: projName(data, s.projectId) }) : el('span', { text: '프로젝트 없음' }),
+    el('span', { class: 'sep', text: '·' }), s.projectId ? el('a', { href: '#/p/' + s.projectId, text: projName(data, s.projectId) }) : el('span', { text: NO_PROJECT_NAME }),
     raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null,
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);

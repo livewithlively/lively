@@ -5,6 +5,7 @@
 import { sessIsDead, sessLabel, sessStateKey, type SessLike } from './session-status.js';
 import { dayStart, daysAgoStart } from './lib/omni-order.js';
 import { isIdLabel } from './lib/sess-name.js';
+import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // ── 「세션 목록」 탭 — 도는 세션(terminal/sessions)과 중앙 기록(v6/sessions)을 한 목록으로 ─────────────────────
 //  같은 세션이 두 목록에 있으면 한 줄이다: 도는 세션의 claudeSessionId(그 박스가 지금 도는 대화 uuid)가 기록의 session_id 면
@@ -202,7 +203,7 @@ export function journalGroups(rows: JRow[], mode: JournalMode, nowMs: number): J
   for (const r of rows) {
     const none = mode === 'project' && r.project_id == null;
     const key = mode === 'day' ? dayKey(last(r)) : (none ? 'p:0' : 'p:' + r.project_id);
-    const label = mode === 'day' ? dayLabel(last(r), nowMs) : (none ? '프로젝트 없음' : String(r.project_name || '#' + r.project_id));
+    const label = mode === 'day' ? dayLabel(last(r), nowMs) : (none ? NO_PROJECT_NAME : String(r.project_name || '#' + r.project_id));
     const g = groups.get(key) ?? { key, label, rows: [], at: 0, none };
     g.rows.push(r);
     if (last(r) > g.at) g.at = last(r);
@@ -258,7 +259,7 @@ export function journalProjects(rows: JRow[]): JournalProject[] {
   for (const r of rows) {
     const none = r.project_id == null;
     const key = none ? 'p:0' : 'p:' + r.project_id;
-    const g = by.get(key) ?? { id: none ? null : r.project_id!, key, name: none ? '프로젝트 없음' : String(r.project_name || '#' + r.project_id), sessions: 0, activities: 0, acts: new Set<number>() };
+    const g = by.get(key) ?? { id: none ? null : r.project_id!, key, name: none ? NO_PROJECT_NAME : String(r.project_name || '#' + r.project_id), sessions: 0, activities: 0, acts: new Set<number>() };
     g.sessions++;
     for (const a of r.activities) g.acts.add(a.id);
     by.set(key, g);
