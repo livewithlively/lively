@@ -69,7 +69,8 @@ import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { startNotificationBanners } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
-import { NO_PROJECT_NAME, isSpentLoginSess } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { NO_PROJECT_NAME, isSpentLoginSess } from '../lib/proj-none.js';
+import { isLooseLivWork, livWorkName, livWorkNote } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -1710,6 +1711,9 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   let icon: SideInstance['icon'] = 'app';
   let meta = '라이블리 앱';
   let ask: string | null = null;
+  //  위탁 워커 줄(#4551) — 리브 그림 · «리브 작업 #N» · 둘째 줄이 누가 넘긴 일인지. 잣대는 lib/liv-work.
+  let livTitle = '';
+  let liv = false;
   //  쓰다 만 지시가 있으면 그 첫 줄이 부제다(#2037) — [새 작업] 창이 여럿이어도 '내가 뭘 쓰다 만 창'을 찾아간다.
   if (!page || page === 'dashboard') { icon = 'home'; meta = draftLine(draft) || '아직 시작하지 않은 작업'; }
   //  ⚠ 소속을 **모르는 것**과 **없는 것**은 다르다(#2022) — 목록에도 서버 정본에도 아직 못 닿은 세션
@@ -1717,7 +1721,11 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 's' || page === 'p') {
     icon = 'chat'; meta = project ? '' : (info.unresolved ? 'AI 세션' : 'AI 세션 · ' + NO_PROJECT_NAME);
     //  둘째 줄 = 내가 마지막으로 시킨 말(#2016 6차, last-ask.ts) — 아직 모르면 null(행은 프로젝트명을 글자로 둔다).
-    if (page === 's') { const s = findSess(decodeURIComponent(segs[1] || '')); if (s) ask = lastAsk(s); }
+    if (page === 's') {
+      const s = findSess(decodeURIComponent(segs[1] || ''));
+      if (s && s.task) { icon = 'liv'; ask = livWorkNote(s.task); livTitle = livWorkName(s.label, s.task); liv = isLooseLivWork(s); if (liv) meta = ''; }
+      else if (s) ask = lastAsk(s);
+    }
   }
   else if (page === 'inbox') { icon = 'inbox'; meta = '답과 확인을 기다리는 작업'; }
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
@@ -1751,7 +1759,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
     const id = String((s.raw && (s.raw.owner ?? s.raw.owner_id)) || '');
     return id ? { id, name: String((s.raw && s.raw.owner_name) || id) } : null;
   })();
-  return { title: (!page || page === 'dashboard') ? '새 작업' : info.title, icon, state: info.state, meta, project, owner, ask };
+  return { title: (!page || page === 'dashboard') ? '새 작업' : (livTitle || info.title), icon, state: info.state, meta, project, owner, ask, liv };
 }
 
 //  행 키 → 그 행을 여는 route · 그 행이 쥔 AppInstance. 활성화·닫기가 이 두 표로 되돌아간다.

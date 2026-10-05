@@ -575,6 +575,10 @@ async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
   try {
     const headers = { authorization: `Bearer ${tok}` };
     if (body !== undefined) headers["content-type"] = "application/json";
+    //  #4551 — 이 명령을 부른 세션을 함께 싣는다(MCP 가 싣는 그 헤더). 세션 안의 AI 가 `lively delegate` 로 넘긴 위탁이
+    //   «어느 세션이 시켰나» 를 남겨, 사이드바가 그 워커를 시킨 세션의 프로젝트 아래에 세운다. 세션 밖이면 없다.
+    const sess = (process.env.LIVELY_SESSION_ID || "").trim();
+    if (sess) headers["x-lively-session"] = sess;
     // ⚠ undici 는 진짜 원인을 `e.cause` 에 숨긴다 — 그대로 두면 사용자에게 보이는 건 'fetch failed' 뿐이고
     //  DNS·프록시·TLS·방화벽을 구별할 수 없다. #1505 윈도우 실측이 정확히 그 벽이었다: `Claude MCP 연결 ✓`(붙는다)
     //  인데 `게이트웨이 도달 ✗ fetch failed`(CLI 만 못 붙는다) — 원인 코드가 없어 진단이 거기서 멈췄다.

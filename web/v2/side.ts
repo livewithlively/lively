@@ -63,7 +63,8 @@ import { iconPath, projGlyph } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
-import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';
+import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -324,6 +325,8 @@ export interface SideInstance {
    *   행에는 그걸 말해 주는 표식이 없어 "내가 만들지도 않은 게 왜 뜨지"가 됐다(상민님 2026-08-26).
    *   프로젝트 트리 행은 이미 같은 얼굴을 달고 있다(sessRow) — 두 목록이 같은 사실을 같은 방식으로 말한다. */
   owner?: { id: string; name: string } | null;
+  /** 「리브가 한 일」 묶음에 설 줄인가 — 시킨 프로젝트를 모르는 위탁 워커(#4551, lib/liv-work isLooseLivWork). */
+  liv?: boolean;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
   /** 묶음 안 순위 — main.ts 가 자물쇠까지 반영한 값(#3856). 점이 꺼진 채 붙들린 행도 순위를 들고 있어, 카드 자리가 이걸로 잰다. */
@@ -465,7 +468,7 @@ let outsideBound = false;
 const PIN_NEEDLE = 'M9 15l-4.5 4.5 M14.5 4l5.5 5.5';
 const PIN_BODY = 'M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4';
 
-type GlyphKind = 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash' | 'sess'
+type GlyphKind = 'liv' | 'folder' | 'folder-open' | 'chat' | 'ask' | 'home' | 'inbox' | 'link' | 'archive' | 'trash' | 'sess'
   | 'proj' | 'projMini' | 'projNone' | 'projNew' | 'sessNew';
 function glyph(kind: GlyphKind, cls: string): SVGElement {
   //  #4233: 그림은 lib/icon-paths.ts 한 벌에서만 온다. 여기 있던 예비 표는 걷었다(표에 없으면 다른 모양이 나오던 길).
@@ -619,6 +622,8 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
 interface ProjGrp { key: string;
   /** 프로젝트 키('p:<id>') · 「지금 볼 것」 조각인가 · 「지난 세션」 접힘을 이 카드가 드나(#4551, lib/home-pins planNowCards). */
   pkey: string; now: boolean; fold: boolean;
+  /** 「리브가 한 일」 묶음인가(#4551) — 프로젝트가 아니라 id 는 0 이다(압정 · ＋ · [→] 가 없다). */
+  liv: boolean;
   id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
   /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
   live: number; past: number;
@@ -676,8 +681,8 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
   for (const c of planNowCards(rest, projPinnedId, PRIORITY_GROUP)) {
     //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 카드의 가장 급한 행이다.
     const first = c.rows[0];
-    const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, id: c.id,
-      name: c.id ? (first.project as { name: string }).name : NO_PROJECT_NAME,
+    const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, liv: c.liv, id: c.id,
+      name: c.id ? (first.project as { name: string }).name : c.liv ? LIV_BUCKET_NAME : NO_PROJECT_NAME,
       //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
       bucket: first.group || '', rows: c.rows, open: false, active: false, pinned: !!c.id && isPinned(c.pkey), counts: {}, live: 0, past: 0,
       rank: first.rank ?? QUIET_RANK, at: first.at || 0 };
@@ -776,13 +781,13 @@ function projGrpHead(g: ProjGrp): HTMLElement {
   const allPast = !g.live && g.past > 0;
   const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),
-      title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : '\n프로젝트에 붙지 않은 세션과 화면'),
+      title: g.name + (g.id ? `\n#${g.id} · 세션 ${g.rows.length}` : g.liv ? '\n리브가 대신 처리한 작업 — 예약 작업이거나, 넘긴 세션에 프로젝트가 없는 것' : '\n프로젝트에 붙지 않은 세션과 화면'),
       //  ⚠ **두 번째 클릭은 삼킨다** — 더블클릭은 «이름 고치기»(아래 dblclick)라, 접기가 두 번 일어나면 사람이 고른
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
-      glyph(g.id ? 'proj' : 'projNone', 'v2-pg-ic'),
+      glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),
       el('span', { class: 'n', text: g.name }),
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
@@ -1502,6 +1507,8 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
   const t = sessText(s, p ? p.name : '');
   const ak = last!.activeKey();
+  //  위탁 워커 줄(#4551) — 홈 행(main.ts sideRowFace)과 같은 얼굴. 잣대는 lib/liv-work.
+  const mark = s.task || null;
   //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
   //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
   const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
@@ -1509,12 +1516,13 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   return {
     id: 'sess:' + s.id,
     route: '#/s/' + encodeURIComponent(s.id),
-    title: t.main,
+    title: mark ? livWorkName(s.label, mark) : t.main,
     active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
-    icon: 'chat',
+    icon: mark ? 'liv' : 'chat',
     meta: t.sub || when(s.lastSeen),
-    ask: lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
+    ask: mark ? livWorkNote(mark) : lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
     project: p ? { id: p.id, name: p.name } : null,
+    liv: isLooseLivWork(s),
     group,
     status: st ? { key: st, label: stLabel(st) } : null,
     //  ★ 끝난 세션이라는 사실을 **행에 실어 보낸다**(#3778). 이 함수는 그걸 이미 알고 있었는데(pastRow)
