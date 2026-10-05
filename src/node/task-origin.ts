@@ -34,15 +34,58 @@ export function taskOriginOf(row: { id: number | string; requester_session?: str
   return { taskId: Number(row.id), originSession: originSessionOf(row.requester_session), cronJobId: cronJobIdOf(row.requester_session) };
 }
 
-/** 이 세션들이 위탁 워커이면 그 출처 — 워커 세션 id → 출처. 같은 세션에 위탁이 여럿이면 가장 나중 것. */
-export async function taskOriginsBySession(sessionIds: readonly string[]): Promise<Map<string, TaskOrigin>> {
+//  위탁 워커의 작업 폴더 — 스케줄러가 `…/delegated/task-<번호>[/<레포>]` 로 잡는다(src/node/tasks.ts). 사람이 고를 수 없는 자리다.
+const TASK_DIR_RE = /(?:^|[\\/])delegated[\\/]task-(\d+)(?:[\\/]|$)/;
+
+/** 순수 — 작업 폴더가 위탁 워커의 것이면 그 위탁 번호. 아니면 null. */
+export function taskIdFromDir(dir: string | null | undefined): number | null {
+  const m = TASK_DIR_RE.exec(String(dir || ""));
+  const n = m ? Number(m[1]) : 0;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+/** 이 조회가 목록 행에게 묻는 것. */
+export interface WorkerRowLike { id: string; dir?: string | null; owner?: string | null }
+
+/**
+ * 순수 — 위탁 행들에서 «워커 세션 id → 출처» 를 짠다.
+ *  ① `session_id` 가 그 행이면 그 위탁이다(가장 나중 것).
+ *  ② 못 찾은 행은 **작업 폴더의 위탁 번호**로 찾는다 — 단 그 위탁을 낸 사람이 그 세션의 주인일 때만.
+ *  ★ ②가 왜 필요한가(매니지드 실측 2026-10-05, 원준 계정): 워커 53개 중 32개가 ①로 안 잡혔다.
+ *   실패 · 노드 유실로 되돌린 위탁은 `session_id` 가 비고(#4868 · #4767), 재시도한 위탁은 마지막 시도의 세션만 남는다
+ *   (#4411 은 세션이 넷). 그 워커들은 표식 없이 「기타 (미분류)」에 그대로 섰다.
+ *  ⚠ 주인을 맞춰 보는 이유 — 폴더 이름은 번호뿐이라, 다른 사람의 위탁 번호와 같은 폴더가 있어도 그 출처를 빌려 쓰지 않는다.
+ */
+export function originsForRows(
+  rows: readonly WorkerRowLike[],
+  tasks: ReadonlyArray<{ id: number | string; session_id?: string | null; requester?: string | null; requester_session?: string | null }>,
+): Map<string, TaskOrigin> {
   const out = new Map<string, TaskOrigin>();
-  const ids = [...new Set(sessionIds.filter(Boolean))];
-  if (!ids.length) return out;
-  const r = await itemsPool.query(
-    `SELECT id, session_id, requester_session FROM org_task WHERE session_id = ANY($1::text[]) ORDER BY id`, [ids]);
-  for (const row of r.rows as Array<{ id: number; session_id: string; requester_session: string | null }>) out.set(String(row.session_id), taskOriginOf(row));
+  const bySession = new Map<string, (typeof tasks)[number]>();
+  const byId = new Map<number, (typeof tasks)[number]>();
+  for (const t of [...tasks].sort((a, b) => Number(a.id) - Number(b.id))) {
+    byId.set(Number(t.id), t);
+    if (t.session_id) bySession.set(String(t.session_id), t);
+  }
+  for (const r of rows) {
+    const direct = bySession.get(r.id);
+    if (direct) { out.set(r.id, taskOriginOf(direct)); continue; }
+    const tid = taskIdFromDir(r.dir);
+    const t = tid ? byId.get(tid) : undefined;
+    const owner = String(r.owner || "");
+    if (t && owner && String(t.requester || "") === owner) out.set(r.id, taskOriginOf(t));
+  }
   return out;
+}
+
+/** 이 목록 행들 중 위탁 워커의 출처 — 워커 세션 id → 출처. 조회는 한 번이다(session_id 또는 폴더의 위탁 번호). */
+export async function taskOriginsForRows(rows: readonly WorkerRowLike[]): Promise<Map<string, TaskOrigin>> {
+  const ids = [...new Set(rows.map((r) => r.id).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const taskIds = [...new Set(rows.map((r) => taskIdFromDir(r.dir)).filter((n): n is number => n != null))];
+  const r = await itemsPool.query(
+    `SELECT id, session_id, requester, requester_session FROM org_task WHERE session_id = ANY($1::text[]) OR id = ANY($2::bigint[])`, [ids, taskIds]);
+  return originsForRows(rows, r.rows as Array<{ id: number; session_id: string | null; requester: string | null; requester_session: string | null }>);
 }
 
 /** 목록의 한 행이 이 붙이기에 내놓는 것. */
