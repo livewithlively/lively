@@ -128,8 +128,9 @@ export const PART_DEFS: PartDef[] = [
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
   // #4084 — 종전 «할 일». 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
-  //  #4135(원준 2026-09-27) — «태스크» → «프로젝트»: 본문을 늘 펼쳐 읽고, 이 세션의 태스크를 순서대로 둔다. 그림은 폴더 안의 태스크.
-  { type: 'tasks', name: '프로젝트', icon: 'projtask', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
+  //  #4135(원준 2026-09-27) — «태스크» → «프로젝트»: 본문을 늘 펼쳐 읽고, 이 세션의 태스크를 순서대로 둔다.
+  //   그림은 프로젝트 과녁(#4233, 원준 2026-10-05). 그리는 자리의 크기에 맞춰 glyphAt() 이 13px 이하에선 작은 과녁으로 바꾼다.
+  { type: 'tasks', name: '프로젝트', icon: 'proj', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
@@ -1603,7 +1604,7 @@ function appsPart(ctx: PartCtx): Part {
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
         onclick: () => { if (attachable && ctx.curSession()) void attach(a); else openTab(); } },
-        el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
+        el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'apps' : 'chat', 'pn-i')),   // #4233 앱 = 레일의 앱과 같은 각진 사각 넷
         el('b', { text: a.title }),
         el('span', { class: 'pn-fine', text: attachable ? '세션에 붙이기' : hasUi ? '앱 탭' : '앱 세션 탭' }));
       // #3784 우클릭 — 붙이기 · 열기(앱 화면 / 앱 세션) · 이름 복사

@@ -166,7 +166,7 @@ const fn = (head) => { const i = PANES.indexOf(head); if (i < 0) return ""; cons
 const tabElFn = fn("  function tabEl(zone: Zone, key: TabKey, on: boolean): HTMLElement {");
 check(tabElFn.length > 0, "S0 (배선) tabEl 을 찾았다 — 아래 단언이 무언가를 보고 있다");
 check(/const x = pinned \|\| \(detachX && !on\) \? null : el\('button', \{\s*class: 'pn-tab-x'/.test(tabElFn), "S1 × 는 고정 탭과 «안 켠 붙은 앱 탭» 만 빼고 모든 탭에 선다 — 켜졌는지와 무관하다");
-check(/el\('span', \{ class: 'pn-tab-lead'[^)]*\}, pnIcon\(ic, 'pn-i sm'\)\), el\('span', \{ class: 'pn-tab-t'/.test(tabElFn), "S1b 탭 = 아이콘 칸(pn-tab-lead) + 이름(pn-tab-t) — 런타임 기하 시험이 재는 그 구조");
+check(/el\('span', \{ class: 'pn-tab-lead'[^)]*\}, pnIcon\(glyphAt\(ic, 14\), 'pn-i sm'\)\), el\('span', \{ class: 'pn-tab-t'/.test(tabElFn), "S1b 탭 = 아이콘 칸(pn-tab-lead) + 이름(pn-tab-t) — 런타임 기하 시험이 재는 그 구조(그림은 14px 자리 크기에 맞춘 이름, #4233)");
 check(/addEventListener\('auxclick'[\s\S]*?e\.button !== 1[\s\S]*?if \(!pinned && !\(detachX && !on\)\) closeTab\(zone, key, \{ pointer: true \}\)/.test(tabElFn), "S2 휠 클릭(가운데 버튼) = 닫기 · 고정 탭과 안 켠 붙은 앱 탭은 제외");
 check(/beginTabDrag\(dragHost, zone, key, w, e\)/.test(tabElFn) && !/draggable/.test(tabElFn), "S3 끌기는 포인터 끌기(pane-tabdrag) — HTML5 draggable 이 아니다");
 check(/if \(consumeDragClick\(\)\) return; (?:if \(reselect\(zone, key\)\) return; )?activate\(zone, key\)/.test(tabElFn), "S3b 끌기로 끝난 누름은 켜기로 치지 않는다(«처음으로»보다도 먼저 거른다 — X5)");

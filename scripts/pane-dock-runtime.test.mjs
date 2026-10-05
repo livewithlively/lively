@@ -37,6 +37,7 @@
 //  HD5 좁은 폭(서랍)엔 손잡이가 없다
 //  HF1 곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다
 //  HF2 그 손잡이를 잡고 경계선으로 끌면 이음매로(R11 이 손잡이에서 시작) · HF3 그 손잡이 위에선 확대하지 않는다
+//  GL1 「프로젝트」 타일 = 과녁(proj) · GL2 [모든 앱] 타일 = 각진 사각 넷(apps)(#4233 원준 2026-10-05 «독에는 아이콘은 왜 안 바꿨나»)
 //
 // 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
 // fail-first(2026-10-01 이음매 판): 바꾸기 전 판(떠 있는 알약 기본 · 막대 · 손잡이 — lib · 독 · CSS 셋 다 git show HEAD 를 제자리에)에 물리면
@@ -121,7 +122,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   let narrowNow=false; let seamOn=true;
   const calls=[];
   const APPS=[
-    {type:'tasks',name:'프로젝트',glyph:'projtask',hint:'태스크',multi:false,pickable:true},
+    {type:'tasks',name:'프로젝트',glyph:'proj',hint:'태스크',multi:false,pickable:true},
     {type:'files',name:'자료',glyph:'folder',hint:'자료',multi:true,pickable:true},
     {type:'knowledge',name:'지식',glyph:'wiki',hint:'지식',multi:false,pickable:true},
     {type:'web',name:'웹',glyph:'web',hint:'웹 페이지',multi:true,pickable:true},
@@ -158,6 +159,9 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r1_info=[Math.round(cx(sr)-seamX()), Math.round(cy(sr)-(sp0.top+sp0.bottom)/2), root.dataset.home, root.parentElement&&root.parentElement.id, Math.round(sr.width), Math.round(sr.height)];
   R.r1=root.dataset.home==='seam' && root.parentElement===grid && Math.abs(cx(sr)-seamX())<=1 && Math.abs(cy(sr)-(sp0.top+sp0.bottom)/2)<=2 && sr.height>sr.width*3;
   R.r1b_nogrip=!document.querySelector('.pn-dock-grip') && !document.querySelector('.pn-dock-reveal');
+  //  GL 독 타일의 그림(#4233): 프로젝트 = 과녁 · [모든 앱] = 각진 사각 넷. 실제로 그린 path 를 읽는다.
+  const gd=(n)=>{const p=n&&n.querySelector('.pn-dock-ic .v2-gi-glyph'); return p?p.getAttribute('d'):null;};
+  R.gl_tasks=gd(it('tasks')); R.gl_more=gd(root.querySelector('.pn-dock-more-btn'));
   // R2 — 이음매 독은 아무도 안 비킨다
   R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(tkAdd).bottom+mb(tkAdd)-rc(pane).bottom)<=1;
   // HD1 — 이음매 독 맨 위의 손잡이: 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다
@@ -562,6 +566,13 @@ let pass = 0, fail = 0;
 const check = (cond, n, info = "") => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n}${info ? " — " + info : ""}`); } };
 if (R.error) { console.error("FAIL  페이지 스크립트가 넘어졌다 — " + R.error); process.exit(1); }
 check(R.r1, "R1 기본 = 이음매 — 세션과 곁칸 사이 분할선 한가운데 · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙은 세로 알약", JSON.stringify(R.r1_info));
+{
+  //  GL 은 표(web/lib/icon-paths.ts)의 글자 그대로와 견준다.
+  const ICON_SRC = readFileSync(path.join(ROOT, "web/lib/icon-paths.ts"), "utf8");
+  const want = (k) => (new RegExp("^  " + k + ": '([^']+)'", "m").exec(ICON_SRC) || [])[1] || "(표에 없음)";
+  check(R.gl_tasks === want("proj"), "GL1 독의 「프로젝트」 타일 = 프로젝트 과녁(proj, #4233)", String(R.gl_tasks).slice(0, 40));
+  check(R.gl_more === want("apps") && R.gl_more !== want("grid"), "GL2 독의 [모든 앱] 타일 = 각진 사각 넷(apps), 둥근 사각(grid)이 아니다(#4233)", String(R.gl_more).slice(0, 40));
+}
 check(R.r1b_nogrip, "R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «바닥 왼쪽 탭 … 없애줘»)");
 check(R.r2, "R2 이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0 · «태스크 추가» 가 곁칸 바닥에");
 check(R.hd1, "HD1 이음매 독 맨 위에 손잡이 — 첫 아이콘 위 · 경계선 한가운데의 짧은 가로 막대 · 잡는 손 모양 · 앱 단추가 아니다(탭 순서 밖)", JSON.stringify(R.hd1_info));

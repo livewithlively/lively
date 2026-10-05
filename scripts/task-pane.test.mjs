@@ -113,7 +113,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/JSON\.stringify\(\{ \.\.\.st, last: lay, p: map \}\)/.test(panes), true,
     "W3 배치를 저장할 때 표식(seeded)을 지우지 않는다 — 지우면 다음에 열 때 닫은 탭이 되살아난다");
   const parts = read("web/v2/panes-parts.ts");
-  eq(/\{ type: 'tasks', name: '프로젝트', icon: 'projtask'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 프로젝트(#4135) · 그림은 폴더 안의 태스크");
+  eq(/\{ type: 'tasks', name: '프로젝트', icon: 'proj'/.test(parts), true, "W4 종류 이름은 'tasks' 그대로(저장된 배치가 이 이름으로 기억한다) · 표시 이름은 프로젝트(#4135) · 그림은 프로젝트 과녁(#4233)");
   eq(/import \{ tasksPart \} from '\.\/panes-tasks\.js';/.test(parts) && !/function tasksPart\(/.test(parts), true, "W5 부품은 한 벌 — 옛 tasksPart 가 남아 있지 않다");
   const tk = read("web/v2/panes-tasks.ts");
   eq(/description: text \|\| null, description_base: bodyBase/.test(tk), true, "W6 곁칸 본문 저장은 고치기 시작한 글을 함께 보낸다(세션의 덧붙임을 지우지 않게)");

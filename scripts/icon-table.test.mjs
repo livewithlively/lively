@@ -164,7 +164,7 @@ ok(miss2.length === 0, "G2 pnIcon('이름') 으로 부르는 이름이 전부 �
 
 const partIcons = [...PARTS.matchAll(/\{ type: '([a-z]+)', name: '([^']+)', icon: '([a-z-]+)'/g)].map((m) => ({ type: m[1], name: m[2], icon: m[3] }));
 ok(partIcons.length >= 12 && partIcons.every((p) => pnHas(p.icon)), "G3 우측 사이드바 부품의 icon 이 전부 표에 닿는다", partIcons.filter((p) => !pnHas(p.icon)).map((p) => p.name + "=" + p.icon).join(" | "));
-const WANT = { sessions: "chat", files: "folder", sessfiles: "sessfiles", knowledge: "wiki", tasks: "projtask", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
+const WANT = { sessions: "chat", files: "folder", sessfiles: "sessfiles", knowledge: "wiki", tasks: "proj", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
 for (const [type, want] of Object.entries(WANT)) {
   const p = partIcons.find((x) => x.type === type);
   ok(!!p && pnName(p.icon) === want && !oldPn, `V3 우측 사이드바 ${type} 의 그림 = ${want}`, p ? p.icon : "없음");

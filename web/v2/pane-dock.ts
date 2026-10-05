@@ -314,7 +314,7 @@ export function mountDock(host: DockHost): DockHandle {
 
   function moreBtn(): HTMLElement {
     const b = el('button', { class: 'pn-dock-it pn-dock-more-btn', type: 'button', 'data-type': '·more', 'aria-label': '모든 앱', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' },
-      el('span', { class: 'pn-dock-ic' }, tile('grid', 'apps')), el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' })) as HTMLElement;
+      el('span', { class: 'pn-dock-ic' }, tile('apps', 'apps')), el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' })) as HTMLElement;   // #4233 앱 = 각진 사각 넷
     b.dataset.name = '모든 앱';
     b.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } toggleMore(b); });
     bindCtx(b, () => settingsResult());
