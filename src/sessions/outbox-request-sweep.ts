@@ -89,7 +89,9 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
     run: () => import("../org/store.js")
       .then((c) => c.getRuntimeConfig())
       .then((cfg) => import("../v6/session-log-store.js")
-        .then((m) => m.reapSessionLogs(cfg.session_share.retention_days))) },
+        .then((m) => m.reapSessionLogs(cfg.session_share.retention_days)))
+      //  검색 기록(#4530)도 같은 박자로 — 180일 넘은 검색어를 지운다. 앞의 정리가 실패해도 이건 돈다.
+      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ })) },
   // 세션 제목 소급 채움(#905 C1) — 멱등이고 다 채우면 no-op. 원래는 부팅 35초 후 1회였는데,
   //  요청에 얹는 세계에는 '부팅 1회'가 없다 — 긴 주기로 두면 같은 뜻이 된다(다 채우면 아무것도 안 한다).
   { key: "session-title-backfill", intervalMs: SIX_HOURS_MS,
@@ -136,6 +138,10 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,
     run: () => import("../v6/conv-index-store.js").then((m) => m.sweepConvIndex()) },
+  // 세션 요약 카드(#4530 검색 품질 «뜻으로 찾기») — 대화 색인이 나아간 세션의 카드(사람이 한 말을 모은 글)를 다시 만들고 임베딩
+  //  대기로 돌린다. 세션을 뜻으로 찾는 재료다. ⚠ 테넌트 스코프 — 카드도 그 워크스페이스 것이다(RLS).
+  { key: "session-card", intervalMs: CONV_INDEX_SWEEP_MS,
+    run: () => import("../v6/session-card-store.js").then((m) => m.sweepSessionCards()) },
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.

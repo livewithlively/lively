@@ -1,10 +1,10 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  extractConvMessages, clipBody, snippetAround, snippetAroundMost, recencyBoost, editTail, rankConvAggs, convRelevance, parseConvSort, editedPaths,
+  extractConvMessages, clipBody, snippetAround, snippetAroundMost, recencyBoost, editTail, rankConvAggs, rankConvAggsCounted, convRelevance, parseConvSort, editedPaths,
   editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, type ConvSessionAgg,
 } from "./conv-search.js";
-import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns } from "./query-terms.js";
+import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns, loosePatterns, looseStrength, looseFind, requiredTerms, likeToRegExp } from "./query-terms.js";
 import type { ChatLine } from "../terminal/harness-io/chat-line.js";
 
 // #4517 — ⌘K 대화 검색의 순수 규칙. 원준 2026-09-30: «cmd+K 검색 안에 세션의 대화내용으로도 세션을 검색하고 싶어.
@@ -180,7 +180,8 @@ test("[Q7] 괄호·물음표는 글자 그대로 한 낱말이다(정규식으�
 test("[Q8] 낱말은 8개까지 · 빈 글은 낱말 없음", () => {
   assert.equal(parseQueryTerms("a b c d e f g h i j").length, 8);
   assert.equal(parseQueryTerms("   ").length, 0);
-  assert.deepEqual(snippetTerms(parseQueryTerms("검색을 omni")), ["검색을", "검색", "omni"]);
+  //  다른 표기(검색 = search · 서치)도 발췌에서 칠한다(#4530 3차).
+  assert.deepEqual(snippetTerms(parseQueryTerms("검색을 omni")), ["검색을", "검색", "search", "서치", "omni"]);
 });
 
 // ── 세션 단위 관련도 · 순서(#4530) ──
@@ -196,8 +197,10 @@ test("★ [K1] 낱말이 서로 다른 말에 있어도 같은 세션이면 맞�
   const r = rank([agg("a", [{ user: 1 }, { assistant: 1 }], { maxCo: 1, coAll: 0 })], "슬랙 검색");
   assert.deepEqual(r.map((x) => x.agg.session_id), ["a"]);
 });
-test("[K2] 낱말 하나라도 그 세션 어디에도 없으면 빠진다", () => {
-  assert.equal(rank([agg("a", [{ user: 1 }, {}])], "슬랙 검색").length, 0);
+test("[K2] 낱말 하나가 그 세션 어디에도 없으면 맞는 결과가 아니다 — «덜 맞는 결과» 로만(빠진 낱말을 말한다)", () => {
+  const r = rankConvAggsCounted([agg("a", [{ user: 1 }, {}])], { terms: parseQueryTerms("슬랙 검색"), sort: "recent", nowMs: NOW, requester: "me", limit: 20 });
+  assert.equal(r.total, 0);
+  assert.deepEqual(r.rows.map((x) => [x.agg.session_id, x.tier, x.missing]), [["a", "weak", ["검색"]]]);
 });
 test("★ [K3] 고친 파일로 맞은 낱말도 센다 — 자리에 'edit' 가 실린다(종전: 고친 대상은 색인에 없었다 — 실측 1위 2%)", () => {
   const r = rank([agg("a", [{ edit: 1 }, { user: 1 }])], "omni.ts 칩");
@@ -316,4 +319,136 @@ test("[S9] 경계값 — 뒤 낱말이 창 폭(max - lead = 60) 안에 끝까지
 test("[S10] 낱말 수가 같은 창이 여럿이면 앞쪽 자리다", () => {
   const text = `${FILL(100)}세션 이력 하나${FILL(300)}세션 이력 둘${FILL(100)}`;
   assert.ok(snippetAroundMost(text, ["세션", "이력"], 80, 20).includes("세션 이력 하나"));
+});
+
+// ── #4530 3차 — 글자가 조금 달라도 찾는다 · 충분히 맞는 것만 추려 시간순 ──
+//  원준 2026-10-05: «검색의 퀄리티가 너무 구린 것 같은데» · «결국 세션을 해야함» · «어느정도 이상 되는 애들 찾고 그 다음은 시간순 정렬이 맞지않나».
+//  엣지 표(행마다 시험 하나):
+//   | L1 | 군말(«방법» · «세션»)                    | 없어도 되는 낱말 — 전부 군말이면 전부 있어야 한다 |
+//   | L2 | 다른 표기(배포 = deploy)                  | 세기 0.7 로 맞는다 · 같을 때만(일부가 아니라)      |
+//   | L3 | 붙여 쓴 말(«통합검색» ↔ «통합 검색»)       | 느슨한 꼴로 맞는다(0.5) · 실제 글을 찾아 준다      |
+//   | L4 | 한 글자 틀림 · 자리 바뀜 · 빠뜨림 · 더 침  | 세 글자(영문 다섯)부터 · 두 글자 낱말은 안 느슨해진다 |
+//   | L5 | LIKE 메타문자가 든 낱말                    | 글자 그대로(와일드카드가 되지 않는다)              |
+//   | T1 | AI 가 한두 번 스친 말로만 맞은 세션         | 덜 맞는 결과 · 세 번 이상이면 맞는 결과            |
+//   | T2 | 느슨하게 맞은 세션                         | 덜 맞는 결과(무엇을 느슨하게 봤는지 말한다)        |
+//   | T3 | 낱말 일부만 맞은 세션                      | 맞는 결과가 적을 때만 · 사람 자리에 맞았을 때만    |
+//   | T4 | 순서                                       | 맞는 결과(맨 위 셋 + 시간순) 뒤에 덜 맞는 결과(관련도순) |
+//   | T5 | 군말이 섞인 검색어                         | 군말이 없는 세션도 맞는 결과 · 있으면 더 위(관련도) |
+test("[L1] 군말은 없어도 되는 낱말 — 전부 군말이면 전부 있어야 하는 낱말로 돌아간다", () => {
+  assert.deepEqual(parseQueryTerms("배포 절차 방법").map((t) => [t.t, !!t.optional]), [["배포", false], ["절차", false], ["방법", true]]);
+  assert.deepEqual(parseQueryTerms("배포 세션을").map((t) => [t.t, !!t.optional]), [["배포", false], ["세션을", true]]);
+  assert.deepEqual(parseQueryTerms("문제 해결").map((t) => !!t.optional), [false, false]);
+  assert.deepEqual(parseQueryTerms('"방법" 배포').map((t) => !!t.optional), [false, false]);   // 구절은 군말이 아니다
+  assert.deepEqual(requiredTerms(parseQueryTerms("로그인 문제 어떻게")).map((t) => t.t), ["로그인"]);
+});
+test("[L2] 다른 표기 — 그 표기로 든 글도 맞는다(0.7) · 낱말이 묶음의 표기와 같을 때만", () => {
+  const [t] = parseQueryTerms("배포를");
+  assert.deepEqual(t.alts, ["deploy", "디플로이", "deployment"]);
+  assert.equal(termStrength("we deploy on friday", t), 0.7);
+  assert.equal(termStrength("배포 절차", t), 0.8);
+  assert.equal(parseQueryTerms("재배포")[0].alts, undefined);            // 일부가 같은 것은 묶음이 아니다
+  assert.equal(parseQueryTerms("log")[0].alts, undefined);               // login 에 맞아 버리는 짧은 표기는 묶음에 없다
+});
+test("[L3] 붙여 쓴 말은 띄어 쓴 글과 느슨하게 맞는다 · 실제 글을 찾아 준다", () => {
+  const [t] = parseQueryTerms("통합검색");
+  assert.equal(termStrength("새 통합 검색 창", t), 0);
+  assert.equal(looseStrength("새 통합 검색 창", t), 0.5);
+  assert.equal(looseFind("새 통합 검색 창", t), "통합 검색");
+  assert.equal(looseStrength("통합 프로젝트 검사", t), 0);
+});
+test("[L4] 한 글자 틀림 · 자리 바뀜 · 빠뜨림 · 더 침 — 세 글자(영문 다섯)부터", () => {
+  const T = (q: string) => parseQueryTerms(q)[0];
+  assert.equal(looseStrength("새 프로젝트 만들기", T("프로잭트")), 0.5);   // 한 글자 틀림
+  assert.equal(looseStrength("미리보기 칸", T("미리기보")), 0.5);          // 이웃 글자 자리 바뀜
+  assert.equal(looseStrength("새 프로젝트", T("프젝트")), 0.5);            // 한 글자 빠뜨림
+  assert.equal(looseStrength("새 프로젝트", T("프로젝젝트")), 0.5);        // 한 글자 더 침
+  assert.equal(looseFind("새 프로젝트 만들기", T("프로잭트")), "프로젝트");
+  assert.deepEqual(loosePatterns(T("검색")), []);                          // 두 글자 — «검_» 이 «검사»·«검토» 를 다 잡는다
+  assert.deepEqual(loosePatterns(T("omni")), ["%omni%"]);                  // 영문 네 글자 — 붙여 쓴 꼴만
+  assert.equal(looseStrength("the sidebar closes", T("sidebor")), 0.5);
+  assert.deepEqual(loosePatterns(parseQueryTerms('"통합 검색"')[0]), []);  // 구절은 친 그대로만
+  assert.deepEqual(loosePatterns(parseQueryTerms("배포 방법")[1]), []);    // 군말은 느슨하게 찾지 않는다
+});
+test("[L5] LIKE 메타문자가 든 낱말은 글자 그대로 — 느슨한 꼴에서도 와일드카드가 되지 않는다", () => {
+  const [t] = parseQueryTerms("100%_");
+  assert.ok(loosePatterns(t).every((p) => !/[^\\][%_]/.test(p.slice(1, -1).replace(/\\[%_\\]/g, "").replace(/_/g, ""))), "탈출 안 된 % 가 없다");
+  assert.ok(likeToRegExp(loosePatterns(t)[0]).test("100%_"));
+  assert.equal(likeToRegExp(loosePatterns(t)[0]).test("100xx"), false);
+});
+const judge = (a: ConvSessionAgg, q: string, loose: number[] = []) => convRelevance(a, parseQueryTerms(q), { nowMs: NOW, requester: "me", looseIdx: new Set(loose) });
+test("★ [T1] AI 가 한두 번 스친 말로만 맞은 세션은 문턱 밖 — 세 번 이상 이야기했으면 문턱 안", () => {
+  assert.equal(judge(agg("a", [{ assistant: 1 }], { aiHits: 2, hits: 2 }), "배포").strong, false);
+  assert.equal(judge(agg("a", [{ assistant: 1 }], { aiHits: 3, hits: 3 }), "배포").strong, true);
+  assert.equal(judge(agg("a", [{ user: 1 }], { userHits: 1 }), "배포").strong, true);                       // 사람이 한 말
+  assert.equal(judge(agg("a", [{ edit: 1 }]), "omni.ts").strong, true);                                     // 고친 파일
+  assert.equal(judge(agg("a", [{ assistant: 1 }, { assistant: 1 }], { coAll: 0, aiHits: 2 }), "배포 절차").strong, false);   // AI 말에 흩어져
+  assert.equal(judge(agg("a", [{ assistant: 1 }, { assistant: 1 }], { coAll: 1, maxCo: 2, aiHits: 1 }), "배포 절차").strong, true);   // 한 말에 함께
+  assert.equal(judge(agg("a", [{ user: 1 }, { assistant: 1 }], { coAll: 0 }), "배포 절차").strong, true);    // K1 — 사람 말에 하나라도
+});
+test("[T2] 느슨하게만 맞은 낱말이 있으면 문턱 밖 — 무엇을 느슨하게 봤는지 싣는다", () => {
+  const j = judge(agg("a", [{ user: 0.5 }, { user: 1 }], { coAll: 1, maxCo: 2 }), "통합검색 창", [0]);
+  assert.equal(j.all, true); assert.equal(j.strong, false); assert.deepEqual(j.loose, [0]);
+  //  이름·첫 지시에도 느슨한 맞춤을 본다(looseIdx 의 낱말만)
+  const named = { ...agg("b", [{}, { user: 1 }]), label: "통합 검색 고치기" };
+  assert.deepEqual(judge(named, "통합검색 창", [0]).loose, [0]);
+  assert.deepEqual(judge(named, "통합검색 창").missing, [0]);
+});
+test("[T3] 낱말 일부만 맞은 세션 — 맞는 결과가 다섯보다 적을 때만 · 맞은 낱말이 사람 자리에 있을 때만 · 절반 이상 맞았을 때만", () => {
+  const full = (id: string) => agg(id, [{ user: 1 }, { user: 1 }], { coAll: 1, maxCo: 2 });
+  const half = agg("p", [{ user: 1 }, {}]);
+  const aiHalf = agg("q", [{ assistant: 1 }, {}], { aiHits: 9 });
+  const few = rankConvAggsCounted([full("a"), half, aiHalf], { terms: parseQueryTerms("슬랙 검색"), sort: "recent", nowMs: NOW, requester: "me", limit: 20 });
+  assert.deepEqual(few.rows.map((x) => [x.agg.session_id, x.tier]), [["a", "match"], ["p", "weak"]]);
+  const many = rankConvAggsCounted([full("a"), full("b"), full("c"), full("d"), full("e"), half], { terms: parseQueryTerms("슬랙 검색"), sort: "recent", nowMs: NOW, requester: "me", limit: 20 });
+  assert.equal(many.rows.some((x) => x.agg.session_id === "p"), false);
+  const third = rankConvAggsCounted([agg("t", [{ user: 1 }, {}, {}])], { terms: parseQueryTerms("슬랙 검색 순서"), sort: "recent", nowMs: NOW, requester: "me", limit: 20 });
+  assert.equal(third.rows.length, 0);   // 셋 중 하나만 — 절반이 안 된다
+});
+test("★ [T4] 순서 — 맞는 결과(맨 위 셋 + 그 아래 시간순)가 먼저, 덜 맞는 결과(관련도순)가 뒤 · limit 은 맞는 결과에만", () => {
+  const D = 86_400_000;
+  const strongOld = agg("old", [{ user: 1 }, { user: 1 }], { coAll: 3, maxCo: 2, phrase: true, hits: 9, lastHit: iso(NOW - 200 * D) });
+  const okNew = agg("new", [{ user: 1 }, { assistant: 1 }], { lastHit: iso(NOW - D) });
+  const okMid = agg("mid", [{ user: 1 }, { assistant: 1 }], { lastHit: iso(NOW - 30 * D) });
+  const weakNew = agg("weak", [{ assistant: 1 }, { assistant: 1 }], { aiHits: 2, lastHit: iso(NOW) });
+  const r = rankConvAggsCounted([weakNew, okMid, okNew, strongOld], { terms: parseQueryTerms("슬랙 검색"), sort: "recent", nowMs: NOW, requester: "me", limit: 20 });
+  //  옛 세션은 맨 위 «가장 맞는 결과» 로만 선다(점수가 압도적일 때) — 그 아래는 최근 것부터. 방금 스친 세션은 맨 아래.
+  assert.deepEqual(r.rows.map((x) => [x.agg.session_id, x.tier, x.top]), [["old", "match", true], ["new", "match", false], ["mid", "match", false], ["weak", "weak", false]]);
+  assert.deepEqual([r.total, r.weak], [3, 1]);
+  const cut = rankConvAggsCounted([weakNew, okMid, okNew, strongOld], { terms: parseQueryTerms("슬랙 검색"), sort: "recent", nowMs: NOW, requester: "me", limit: 2 });
+  assert.deepEqual(cut.rows.map((x) => x.agg.session_id), ["old", "new", "weak"]);
+});
+test("[T5] 군말이 섞인 검색어 — 군말이 없는 세션도 맞는 결과 · 군말까지 든 세션은 관련도가 더 높다", () => {
+  const without = agg("a", [{ user: 1 }, {}]);
+  const withIt = agg("b", [{ user: 1 }, { user: 1 }]);
+  assert.equal(judge(without, "배포 방법").all, true);
+  assert.equal(judge(without, "배포 방법").strong, true);
+  assert.ok(judge(withIt, "배포 방법").rel > judge(without, "배포 방법").rel);
+});
+
+// ── #4530 번호로 찾기 — 친 번호가 그 세션이 묶인 프로젝트·맡은 태스크의 번호다 ──
+test("[N1] 번호로 묶인 세션은 문턱 안(지목이다) — 대화에 그 숫자가 없어도 · 자리에 'ident' 가 실린다", () => {
+  const bound = { ...agg("a", [{}], { hits: 0 }), ident: [true] };
+  const j = judge(bound, "4530");
+  assert.equal(j.all, true); assert.equal(j.strong, true); assert.ok(j.fields.includes("ident"));
+  //  번호 + 낱말 — 낱말이 없으면 낱말 일부만 맞은 세션이다(문턱 밖).
+  const half = { ...agg("b", [{}, {}], { hits: 0 }), ident: [true, false] };
+  assert.equal(judge(half, "4530 배포").all, false);
+  assert.deepEqual(judge(half, "4530 배포").missing, [1]);
+  //  AI 가 그 숫자를 한 번 스친 세션은 여전히 문턱 밖 — 묶인 세션이 그 위에 선다.
+  const mention = agg("c", [{ assistant: 1 }], { aiHits: 1 });
+  assert.equal(judge(mention, "4530").strong, false);
+  assert.ok(judge(bound, "4530").rel > judge(mention, "4530").rel);
+});
+
+test("[N2] 숫자만으로 된 낱말은 느슨하게 찾지 않는다 — 한 글자 다른 번호는 다른 번호다", () => {
+  assert.deepEqual(loosePatterns(parseQueryTerms("4530")[0]!), []);
+  assert.deepEqual(loosePatterns(parseQueryTerms("#123456")[0]!), []);
+  assert.ok(loosePatterns(parseQueryTerms("통합검색")[0]!).length > 1, "대조 — 글자 낱말은 느슨한 꼴이 있다");
+});
+test("[N3] rankConvAggsCounted 는 층이 매겨진 세션 전부를 돌려준다 — 줄 수 상한에 잘린 것도(뜻으로만 온 세션과 가르는 근거)", () => {
+  const many = Array.from({ length: 5 }, (_, i) => agg("s" + i, [{ user: 1 }], { hits: 2, lastHit: new Date(NOW - i * 3_600_000).toISOString() }));
+  const r = rankConvAggsCounted(many, { terms: parseQueryTerms("물소"), sort: "recent", nowMs: NOW, limit: 2 });
+  assert.equal(r.rows.length, 2);
+  assert.equal(r.total, 5);
+  assert.deepEqual(r.judged.map((a) => a.session_id).sort(), ["s0", "s1", "s2", "s3", "s4"]);
 });

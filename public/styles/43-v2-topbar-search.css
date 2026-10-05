@@ -249,6 +249,19 @@
 .v2-omni-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 8px; }
 .v2-omni-list.stale { opacity: .55; transition: opacity .12s; }
 .v2-omni-gh { padding: 12px 10px 4px; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+/* 빈 칸 맨 위의 «최근 검색» — 한 줄의 칩(#4530, 원준 2026-10-05 «최근 검색 기록이 차지하는 부분이 너무 많다»). 종전엔 검색어마다 한 줄이라
+   목록을 다 차지했다. 넘치면 옆으로 민다(막대는 숨긴다) — 고른 칩은 scrollIntoView 가 데려온다. */
+.v2-omni-recent { display: flex; align-items: center; gap: 6px; padding: 10px 28px 2px 10px; overflow-x: auto; scrollbar-width: none;
+  /* 오른쪽 끝은 흐려서 «더 있다» 를 알린다(끝까지 밀면 오른쪽 여백 덕에 마지막 칩은 또렷하다). */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent); }
+.v2-omni-recent::-webkit-scrollbar { display: none; }
+.v2-omni-recent-l { flex: none; margin-right: 4px; font-size: 11.5px; font-weight: 700; color: var(--muted-head); }
+.v2-omni-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 180px; height: 28px; padding: 0 10px 0 8px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-sub); font-size: 12.5px; cursor: pointer; }
+.v2-omni-chip:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.v2-omni-chip.on { border-color: var(--blue); background: var(--bg-sel); color: var(--ink); }
+.v2-omni-chip-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.v2-omni-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omni-row { display: flex; align-items: center; gap: 11px; height: 50px; padding: 0 10px; border-radius: 9px; cursor: pointer; }
 .v2-omni-row.on { background: var(--bg-sel); box-shadow: inset 0 0 0 1px var(--line-note); }
 /*  종류는 그림의 색이 말한다(앱 아이콘 색 토큰) — 세션 파랑 · 프로젝트 보라 · 지식 초록 · 자료 갈색 · 바로 가기 회색. */
@@ -269,6 +282,9 @@
 /*  어디에 있는 것인가(세션의 프로젝트 · 자료의 출처) — 뒤에 맞은 글이 이어지므로 긴 이름은 줄여 자리를 남긴다. */
 .v2-omni-where { display: inline-block; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; color: var(--ink-sub); }
 .v2-omni-where.solo { display: inline; max-width: none; }
+/*  덜 맞는 결과 — 왜 그런지 한마디(«‘물소’ 없음» · «‘귤나무 정원’ 으로 찾음»)가 둘째 줄 맨 앞에 선다. 제목은 한 단계 가볍게. */
+.v2-omni-why { font-weight: 600; color: var(--muted-head); background: var(--bg-tint-2); border-radius: 4px; padding: 0 5px; }
+.v2-omni-row.weak .v2-omni-t { font-weight: 500; color: var(--ink-sub); }
 .v2-omni-edit { color: var(--muted-head); }
 /* 일치 부분 — 형광펜 밑줄(글자색·굵기는 그대로). ⚠ <mark> 의 브라우저 기본값(노랑 바탕·검정 글자)은 다크모드를 뚫고 나오므로 덮어쓴다. */
 .v2-omni-hl { background: transparent; color: inherit; border-radius: 2px; box-shadow: inset 0 -.42em 0 var(--md-mark-bg); }
@@ -417,6 +433,7 @@ button.v2-opv-trow { cursor: pointer; } button.v2-opv-trow:hover { background: v
   .v2-omni-tab.aux:not(.on) { height: 32px; margin-left: 0; }
   .v2-omni-tools { margin-left: 6px; }
   .v2-omni-opt { height: 32px; border-radius: 999px; }
+  .v2-omni-chip { height: 32px; font-size: 13.5px; }   /* 손가락으로 누르는 크기 */
   .v2-omni-col { flex: 1 1 auto; min-width: 0; max-width: none; border-right: 0; }
   .v2-omni-row { height: 56px; }
   .v2-omni-t { font-size: 15px; }

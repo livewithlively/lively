@@ -75,6 +75,31 @@ async function main(): Promise<void> {
     } finally { close(); }
   }
 
+  // ── ⑥ 검색 기록 요약(#4530)은 관리자만 — 검색어는 그 사람이 찾던 것이다. 가드가 DB 앞에 있어 이 경로는 DB 무접촉. ──
+  //   이 줄(isAdmin)이 사라지면 모든 구성원의 검색어가 누구에게나 보인다 — 저장소 시험(search-log.pg-test)은 이걸 못 잡는다(격리 리뷰).
+  {
+    const app = express();
+    app.use(express.json({ limit: "1mb" }));
+    registerSessionLogRoutes(app, fakeVerifier);        // u1 — 권한(scopes) 없음 = 관리자 아님
+    const { port, close } = await listen(app);
+    try {
+      const r = await new Promise<Resp>((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port, method: "GET", path: "/api/ui/v6/search-log/summary?days=7", headers: { authorization: "Bearer x" } }, (res) => {
+          let data = ""; res.setEncoding("utf8");
+          res.on("data", (c) => (data += c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+        });
+        const to = setTimeout(() => req.destroy(new Error("client-timeout")), 2000);
+        req.on("close", () => clearTimeout(to));
+        req.on("error", reject);
+        req.end();
+      });
+      assert.equal(r.status, 403, "🔴 관리자가 아니면 403 — 남의 검색어를 보여 주면 안 된다");
+      assert.doesNotMatch(r.body, /"abandoned"|"total"/, "요약 본문이 실려 나가지 않는다");
+      ok("⑥ 검색 기록 요약 — 관리자가 아니면 403");
+    } finally { close(); }
+  }
+
   // ── readRawBody 격리 검증(전역 express.json 뒤에 둔 라우트에서) — 세 가지 ──
   const LIMIT = 16;
   const rawApp = express();
