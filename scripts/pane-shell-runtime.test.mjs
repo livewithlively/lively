@@ -8,15 +8,15 @@
 //  가짜는 셋뿐: fetch(자료 목록 · 프로젝트) · ResizeObserver · IntersectionObserver. 부품 · 셸 · CSS 는 제품 그대로.
 //
 // 사양(엣지 표 — 행마다 단언 하나 이상):
-//  A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다(경계선 · no-bottom 까지) · 옛 기본 걷기 표식이 찍힌다
-//  A2 [＋] › «아래 칸 열기» — 비었으면 빈 칸을 펴지 않고 «아래 칸에 넣을 것»부터 고른다
-//  A3 고른 것이 아래 칸에 서야 그제서야 아래 칸이 열린다
-//  A4 ✕ 로 닫은 뒤 «아래 칸 열기» — 내용이 있으니 고르기 없이 바로 연다
-//  A5 아래 칸의 마지막 탭을 닫으면 빈 칸이 남지 않는다 · 그 뒤 «아래 칸 열기» 는 다시 고르기부터
-//  A6 아래 칸이 보이는 동안 [＋] 발치에 «아래 칸 열기» 가 없다
-//  A7 «기본 배치로 되돌리기» — 아래 칸이 비고 숨는다
-//  A8 다른 세션이 «열림» 을 기억해도 내용이 비었으면 빈 칸이 올라오지 않는다 · 우클릭 «아래 칸으로 보내기» 를 하면 그 순간 선다
-//  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다
+//  ★ 아래 칸에는 새로 열지 않는다(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — [＋] · 탭 우클릭 · 빈 자리 메뉴 어디에도 길이 없다.
+//  A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다(경계선 · no-bottom 까지) · 기본 곁칸 = 자료 · 프로젝트 · 지식(«앱» 없음) · 한 번 걷기 표식 셋
+//  A2 [＋] 발치엔 «기본 배치로» 만 — «아래 칸 열기» 가 없다
+//  A3 탭 우클릭에 «아래 칸으로 보내기» 가 없다
+//  A4 옛 배치(아래 칸에 사람이 둔 탭)는 그대로 보이되 그 탭 줄엔 [＋] 가 없다
+//  A5 아래 칸의 옛 탭은 우클릭으로 곁칸에 보낼 수 있다 · A6 마지막 탭을 닫으면 빈 칸이 남지 않는다
+//  A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 자료 · 프로젝트 · 지식
+//  A8 다른 세션이 «열림» 을 기억해도 내용이 비었으면 빈 칸이 올라오지 않는다
+//  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다(원준 10-05 «기본배치 아니게»)
 //  M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다
 //  M3 한 번 걷으면 다시 열어도 저장소를 다시 쓰지 않는다(표식) · 표식 뒤 사람이 둔 타임라인은 그대로
 //  R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로»(마우스 옆 단추) 로 하위 폴더에 돌아간다
@@ -28,10 +28,13 @@
 //  H2 곁칸이 접혀 있으면 펴기만(폴더 그대로) · 다른 탭이 켜져 있으면 자료를 켜기만(폴더 그대로)
 //  I1 자료가 둘이면 누른 탭의 자료만 맨 위로 — 다른 자료는 보던 폴더 그대로
 //  AD1 [＋] = 앱 서랍(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점
-//  AD2 원준 화면 상태(곁칸에 자료만)에서 타일 열 개 — 독과 같은 앱 색 타일 · 이미 열린 자료엔 ＋(하나 더) · 첫 타일이 Enter 의 과녁 · 설명 한 줄
-//  AD3 «새 탭으로 여는 앱» 은 없다 — 여기서 여는 것은 모두 사이드바에 선다(원준 10-05)
+//  AD2 묶음 둘(원준 10-05 «세션에 붙인다는 개념으로 두개 나눈건 … 살려줘») — «사이드바 앱» 아홉(독과 같은 앱 색 타일 · 이미 열린 자료엔 ＋
+//      · 첫 타일이 Enter 의 과녁 · 설명 한 줄) + «이 세션에 붙이기»(화면 · 데이터가 있는 설치 앱 — 시스템 · ai-session · 도구만 · 꺼짐 제외,
+//      세션이 없으면 흐리고 고를 수 없다)
+//  AD3 «새 탭으로 여는 앱» 도, «앱» 칸도 없다 — 여기서 여는 것은 모두 사이드바에 선다
 //  AD4 치면 거르고 Enter 로 연다(그 칸에 탭 · 서랍 닫힘) · AD5 한글 조합 중의 Enter 는 열지 않는다 · AD6 없는 이름 — 타일 0 · 안내 한 줄
 //  AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸 · AD8 올리면 설명 · 이미 열린 자료를 누르면 «자료 2» · AD9 Esc 로 닫힌다
+//  T1 세션이 있으면 «이 세션에 붙이기» 타일을 고를 수 있고, 누르면 그 세션에 붙이기 요청(POST …/apps/attach {app_id})이 나가고 서랍이 닫힌다
 //  E1 페이지 오류 없음(그리는 중에 던진 것). 마운트 자체가 던지면(TDZ 등) 그 장면이 «장면이 던졌다» 로 실패한다
 //
 //  fail-first(2026-10-01): 변경 전 판(SRC_ROOT 로 cc81bfd7~1 을 세움)에서 A1–A3 · A5 · A7 · A8 · M1 · M2 · R1 · R2 · H1 · H2 · I1 빨강,
@@ -39,6 +42,7 @@
 //   bottomVisible 을 첫 paintAll 아래로 옮긴 돌연변이에서 마운트가 던져 모든 장면 빨강(S11 도 함께).
 //  fail-first(2026-10-05 앱 서랍): 바꾸기 전 판(옛 고르기)에서 AD1–AD9 빨강. 돌연변이 — 한글 조합 중 Enter 막기를 빼면 AD4 · AD5,
 //   격자 화살표를 빼면 AD7, ＋(하나 더) 배지를 빼면 AD2 가 빨갛다.
+//  fail-first(2026-10-05 두 묶음 · 아래 칸 · «앱» 탭): 바꾸기 전 판에서 A1–A4 · A7 · M1 · AD2 · AD2b · AD3 · T1 빨강(A5 · A6 · A8 은 원래 그랬다).
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildSync } from "esbuild";
@@ -70,8 +74,22 @@ async function PAGE_MAIN() {
   const seedFs = () => { FS.clear(); const put = (p, type, d) => FS.set(p, { type, size: d || 0, mtime: 1000 }); put("docs", "dir"); put("docs/inner.txt", "file", 5); put("docs/sub", "dir"); put("docs/sub/deep.txt", "file", 5); put("readme.md", "file", 8); put("notes.txt", "file", 5); };
   const kids = (dir) => [...FS.keys()].filter((p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") === dir);
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
-  window.fetch = async (url) => {
+  //  설치 앱 — 붙일 수 있는 것은 화면(ui.pages)이나 데이터(data.tables)가 있는 것. 나머지는 묶음에 서면 안 된다.
+  const APPS = [
+    { id: "memo", title: "메모", status: "active", manifest: { ui: { pages: [{ key: "main", title: "메모" }] } } },
+    { id: "check", title: "보고서 점검표", status: "active", manifest: { data: { tables: [{ name: "checks" }] } } },
+    { id: "ai-session", title: "AI 세션", status: "active", manifest: { ui: { pages: [{ key: "m" }] } } },
+    { id: "sys", title: "시스템 앱", status: "active", source: { kind: "builtin" }, manifest: { system: "inbox", ui: { pages: [{ key: "m" }] } } },
+    { id: "tool", title: "도구만", status: "active", manifest: { permissions: { tools: ["t"] } } },
+    { id: "off", title: "꺼진 앱", status: "disabled", manifest: { ui: { pages: [{ key: "m" }] } } },
+  ];
+  window.__attach = [];
+  window.fetch = async (url, init) => {
     const u = new URL(url, "http://x/");
+    if (u.pathname === "/api/ui/apps") return J({ apps: APPS });
+    const sa = /^\/api\/ui\/terminal\/sessions\/([^/]+)\/apps(\/attach)?$/.exec(u.pathname);
+    if (sa && sa[2] && (init?.method || "GET") === "POST") { window.__attach.push({ sid: decodeURIComponent(sa[1]), body: JSON.parse(init.body || "{}") }); return J({ ok: true }); }
+    if (sa && !sa[2]) return J({ apps: [] });
     const mm = /\/projects\/(\d+)(\/.*)?$/.exec(u.pathname);
     if (mm && mm[2] === "/files") { const q = u.searchParams.get("path") || ""; return J({ items: kids(q).map((p) => { const e = FS.get(p); return { name: p.split("/").pop(), type: e.type, size: e.size, mtime: e.mtime }; }) }); }
     if (mm && !mm[2]) return J({ project: { id: Number(mm[1]), name: "P", status_category: "started" } });
@@ -82,14 +100,14 @@ async function PAGE_MAIN() {
   window.IntersectionObserver = class { constructor(cb) { this.cb = cb; } observe(e) { setTimeout(() => this.cb([{ target: e, isIntersecting: true }]), 0); } unobserve() {} disconnect() {} };
 
   let handle = null;
-  const mount = async (id = 7) => {
+  const mount = async (id = 7, sid = null) => {
     if (handle) { try { handle.destroy(); } catch (_) { /* 이미 */ } handle = null; }
     document.getElementById("app")?.remove();
     const host = document.createElement("div");
     host.id = "app"; host.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;display:flex;flex-direction:column;background:var(--bg)";
     document.body.append(host);
     const PN = (new Function(SRC + "\n;return PN;"))();
-    handle = PN.mountPanes(host, { id, detail: { project: { id, name: "P" } }, data: () => ({ projects: [{ id, name: "P" }], sessions: [], loadedAt: Date.now() }), sessionId: null, onOpenDrawer: () => {}, onCloseDrawer: () => {} });
+    handle = PN.mountPanes(host, { id, detail: { project: { id, name: "P" } }, data: () => ({ projects: [{ id, name: "P" }], sessions: [], loadedAt: Date.now() }), sessionId: sid, onOpenDrawer: () => {}, onCloseDrawer: () => {} });
     await sleep(350);
     return handle;
   };
@@ -126,30 +144,31 @@ async function PAGE_MAIN() {
   const clk = async (el) => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); await sleep(150); };
   const fresh = () => { localStorage.removeItem(LAYOUT); localStorage.removeItem(VIEW); seedFs(); };
 
-  // ── A — 처음 쓰는 브라우저 · 아래 칸은 넣은 것이 있을 때만 ──
+  // ── A — 처음 쓰는 브라우저 · 아래 칸에는 새로 열지 않는다 ──
   try {
     fresh(); await mount();
     const a = {}; R.a = a;
     const s0 = store(); a.store0 = { bottom: s0?.last?.bottom ?? null, act: s0?.last?.act?.bottom ?? null, seeded: s0?.seeded || null };
-    a.b0 = bottomUp();
-    await openAdd(); a.foot0 = popFoot();
-    a.clickOpen = await clickFoot("아래 칸 열기"); a.pickHead = popHead(); a.b1 = bottomUp();
-    a.picked = await clickRow("타임라인"); a.b2 = bottomUp(); a.bottomTabs2 = tabNames("bottom");
-    await openAdd(); a.footVisible = popFoot(); popClose();
-    $('#app .pn-pane[data-zone="bottom"] .pn-pane-hide').click(); await sleep(80); a.b3 = bottomUp();
-    await openAdd(); await clickFoot("아래 칸 열기"); a.reopenHead = popHead(); a.b4 = bottomUp(); popClose();
+    a.b0 = bottomUp(); a.side0 = tabNames("side");
+    await openAdd(); a.foot0 = popFoot(); popClose();
+    const menuOf = async (z, nm) => { tabBtn(z, nm).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 })); await sleep(80); return $$(".pn-ctx .pn-ctx-i, .pn-ctx button").filter((b) => b.textContent.trim()); };
+    a.menu = (await menuOf("side", "지식")).map((b) => b.textContent.trim());
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(60);
+    //  옛 배치 — 아래 칸에 사람이 둔 탭(이 판 전에 둔 것)
+    const legacy = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: true, pin: [] };
+    localStorage.setItem(LAYOUT, JSON.stringify({ last: legacy, p: { 7: legacy }, seeded: { tasks: 1, bottom: 1, apps: 1 } })); localStorage.removeItem(VIEW);
+    await mount();
+    a.legacy = { b: bottomUp(), add: !!$('#app .pn-pane[data-zone="bottom"] .pn-tab-add'), tabs: tabNames("bottom") };
+    const send = (await menuOf("bottom", "웹")).find((b) => /로 보내기/.test(b.textContent));
+    a.sendLabel = send ? send.textContent.trim() : null;
+    if (send) { send.click(); await sleep(150); }
+    a.afterSend = { side: tabNames("side"), bottom: tabNames("bottom"), b: bottomUp() };
     tabBtn("bottom", "타임라인").parentElement.querySelector(".pn-tab-x").click(); await sleep(120);
-    a.b5 = bottomUp();
-    await openAdd(); await clickFoot("아래 칸 열기"); a.emptyHead = popHead(); popClose();
-    await openAdd(); await clickRow("타임라인"); await sleep(60);                        // 되돌리기가 곁칸도 기본으로 돌리는지 보려고 하나 더 둔다
+    a.lastClosed = bottomUp();
     await openAdd(); await clickFoot("기본 배치로"); await sleep(150);
     const sr = store(); a.reset = { b: bottomUp(), bottom: sr.last.bottom, side: tabNames("side") };
     localStorage.setItem(VIEW, JSON.stringify({ p7: { bottomOn: true } }));          // 다른 세션의 «열림» 기억 + 빈 내용
     await mount(); a.remembered = bottomUp();
-    tabBtn("side", "지식").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 })); await sleep(80);
-    const row = $$(".pn-ctx .pn-ctx-i, .pn-ctx button").find((b) => /아래 칸으로 보내기/.test(b.textContent));
-    a.sendRow = !!row; if (row) { row.click(); await sleep(150); }
-    a.afterSend = { b: bottomUp(), bottom: tabNames("bottom") };
   } catch (e) { R.errA = String(e && e.stack || e); }
 
   // ── M — 옛 기본값이 저장된 브라우저(한 번 걷기) ──
@@ -225,10 +244,13 @@ async function PAGE_MAIN() {
     const dr = $(DR); const inp = dr && dr.querySelector("input");
     const add = $('#app .pn-pane[data-zone="side"] .pn-tab-add').getBoundingClientRect(), pr = zone("side").getBoundingClientRect(), rr = dr ? dr.getBoundingClientRect() : null;
     d.open = { has: !!dr, focus: !!inp && document.activeElement === inp, top: rr ? Math.round(rr.top - add.bottom) : null, inPane: !!rr && rr.left >= pr.left - 0.5 && rr.right <= pr.right + 0.5 };
-    const tiles = () => $$(DR + " .pn-dock-tile").map((t) => ({ n: t.querySelector(".pn-dock-tile-n").textContent, plus: !!t.querySelector(".pn-adraw-plus"), sel: t.getAttribute("aria-selected") === "true",
-      gi: !!t.querySelector('svg.v2-gi .v2-gi-glyph[stroke^="var(--gi-c-"]') }));
-    d.tiles = tiles(); d.desc0 = descNow();
-    d.noNewTab = !!dr && !dr.querySelector("a") && !/새 탭으로/.test(dr.textContent);
+    await waitFor(() => !$(DR + " .pn-adraw-wait"));                              // «이 세션에 붙이기» 목록이 온다
+    const info = (t) => ({ n: t.querySelector(".pn-dock-tile-n").textContent, plus: !!t.querySelector(".pn-adraw-plus"), sel: t.getAttribute("aria-selected") === "true", off: t.disabled,
+      gi: !!t.querySelector('svg.v2-gi .v2-gi-glyph[stroke^="var(--gi-c-"]') });
+    const tiles = () => $$(DR + " .pn-dock-tile:not([disabled])").map(info);
+    d.secs = $$(DR + " .pn-dock-more-sec").map((sec) => ({ t: sec.querySelector(".pn-dock-more-sh b").textContent, note: sec.querySelector(".pn-dock-more-sh .pn-fine").textContent, tiles: [...sec.querySelectorAll(".pn-dock-tile")].map(info) }));
+    d.desc0 = descNow();
+    d.noNewTab = !!dr && !dr.querySelector("a") && !/새 탭으로/.test(dr.textContent) && !tileOf("앱");
     inp.value = "타임"; inp.dispatchEvent(new Event("input", { bubbles: true })); await sleep(30);
     d.typed = { tiles: tiles().map((t) => t.n + (t.sel ? "*" : "")), desc: descNow() };
     inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })); await sleep(60);
@@ -253,6 +275,19 @@ async function PAGE_MAIN() {
     d.esc = !$(DR);
   } catch (e) { R.errD = String(e && e.stack || e); }
 
+  // ── T — 세션이 있으면 «이 세션에 붙이기» 를 고른다 ──
+  try {
+    fresh(); await mount(7, "s1");
+    const t = {}; R.t = t;
+    await openAdd(); await waitFor(() => !$(DR + " .pn-adraw-wait"));
+    const memo = tileOf("메모");
+    t.enabled = !!memo && !memo.disabled;
+    t.note = ($$(DR + " .pn-dock-more-sec")[1]?.querySelector(".pn-dock-more-sh .pn-fine") || {}).textContent || null;
+    memo?.dispatchEvent(new MouseEvent("mouseenter")); await sleep(20); t.desc = descNow();
+    memo?.click(); await sleep(250);
+    t.closed = !$(DR); t.calls = window.__attach.slice();
+  } catch (e) { R.errT = String(e && e.stack || e); }
+
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
@@ -273,18 +308,18 @@ const J = (v) => JSON.stringify(v);
 const check = (cond, n, got) => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n} — 실제 ${J(got)}`); } };
 const down = (b) => !!b && !b.pane && b.split === false && !b.col;       // 칸 · 경계선 · 가운데 열 모두 «없음»
 const up = (b) => !!b && b.pane && b.split === true && b.col;
-for (const k of ["errA", "errM", "errR", "errH", "errI", "errD", "fatal"]) if (R[k]) { fail++; console.error(`FAIL  장면이 던졌다(${k}) — ${R[k].split("\n")[0]}`); }
-const a = R.a || {}, m = R.m || {}, r = R.r || {}, h = R.h || {}, i = R.i || {}, d = R.d || {};
+for (const k of ["errA", "errM", "errR", "errH", "errI", "errD", "errT", "fatal"]) if (R[k]) { fail++; console.error(`FAIL  장면이 던졌다(${k}) — ${R[k].split("\n")[0]}`); }
+const a = R.a || {}, m = R.m || {}, r = R.r || {}, h = R.h || {}, i = R.i || {}, d = R.d || {}, t = R.t || {};
 
-check(J(a.store0) === J({ bottom: [], act: null, seeded: { tasks: 1, bottom: 1 } }) && down(a.b0), "A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다 · 옛 기본 걷기 표식", { store: a.store0, b: a.b0 });
-check(a.clickOpen && a.pickHead === "아래 칸에 넣기" && down(a.b1), "A2 «아래 칸 열기» — 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다", { head: a.pickHead, b: a.b1 });
-check(a.picked && up(a.b2) && J(a.bottomTabs2) === J(["타임라인"]), "A3 고른 것이 아래 칸에 서야 아래 칸이 열린다", { b: a.b2, tabs: a.bottomTabs2 });
-check(down(a.b3) && a.reopenHead === null && up(a.b4), "A4 ✕ 로 닫은 뒤 «아래 칸 열기» — 내용이 있으니 고르기 없이 연다", { closed: a.b3, head: a.reopenHead, b: a.b4 });
-check(down(a.b5) && a.emptyHead === "아래 칸에 넣기", "A5 마지막 탭을 닫으면 빈 칸이 남지 않고, 다시 열기는 고르기부터", { b: a.b5, head: a.emptyHead });
-check(Array.isArray(a.footVisible) && !a.footVisible.includes("아래 칸 열기") && a.footVisible.includes("기본 배치로"), "A6 아래 칸이 보이는 동안 «아래 칸 열기» 가 없다", a.footVisible);
-check(!!a.reset && down(a.reset.b) && J(a.reset.bottom) === "[]" && J(a.reset.side) === J(["자료", "프로젝트", "지식", "앱"]), "A7 «기본 배치로 되돌리기» — 아래 칸이 비고 숨는다", a.reset);
-check(down(a.remembered) && a.sendRow && !!a.afterSend && up(a.afterSend.b) && J(a.afterSend.bottom) === J(["지식"]), "A8 다른 세션의 «열림» 기억 + 빈 내용 → 안 올라온다 · «아래 칸으로 보내기» 하면 그 순간 선다", { remembered: a.remembered, send: a.afterSend });
-check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge", "apps"]), "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다", m.store);
+check(J(a.store0) === J({ bottom: [], act: null, seeded: { tasks: 1, bottom: 1, apps: 1 } }) && down(a.b0) && J(a.side0) === J(["자료", "프로젝트", "지식"]), "A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다 · 기본 곁칸에 «앱» 이 없다 · 한 번 걷기 표식", { store: a.store0, b: a.b0, side: a.side0 });
+check(J(a.foot0) === J(["기본 배치로"]), "A2 [＋] 발치엔 «기본 배치로» 만 — «아래 칸 열기» 가 없다", a.foot0);
+check(Array.isArray(a.menu) && a.menu.some((x) => /닫기/.test(x)) && !a.menu.some((x) => /아래 칸으로/.test(x)), "A3 탭 우클릭에 «아래 칸으로 보내기» 가 없다", a.menu);
+check(!!a.legacy && up(a.legacy.b) && a.legacy.add === false && J(a.legacy.tabs) === J(["타임라인", "웹"]), "A4 옛 배치의 아래 칸 탭은 그대로 보이되 그 탭 줄엔 [＋] 가 없다", a.legacy);
+check(/사이드바로 보내기$/.test(a.sendLabel || "") && !!a.afterSend && a.afterSend.side.includes("웹") && J(a.afterSend.bottom) === J(["타임라인"]) && up(a.afterSend.b), "A5 아래 칸의 옛 탭은 우클릭으로 곁칸에 보낼 수 있다", { label: a.sendLabel, after: a.afterSend });
+check(down(a.lastClosed), "A6 아래 칸의 마지막 탭을 닫으면 빈 칸이 남지 않는다", a.lastClosed);
+check(!!a.reset && down(a.reset.b) && J(a.reset.bottom) === "[]" && J(a.reset.side) === J(["자료", "프로젝트", "지식"]), "A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 자료 · 프로젝트 · 지식", a.reset);
+check(down(a.remembered), "A8 다른 세션의 «열림» 기억 + 빈 내용 → 아무것도 안 올라온다", a.remembered);
+check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge"]) && m.store.seeded?.apps === 1, "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다", m.store);
 check(down(m.b), "M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다", m.b);
 check(m.same === true && J(m.afterMarker) === J(["timeline"]) && !!m.p8 && up(m.p8.b) && J(m.p8.tabs) === J(["타임라인"]), "M3 한 번 걷으면 저장소를 다시 쓰지 않는다 · 표식 뒤 둔 타임라인 · 열린 p8 은 그대로", { same: m.same, afterMarker: m.afterMarker, p8: m.p8 });
 check(r.in === "자료/docs" && r.R1 === "자료" && r.R1back === "자료/docs", "R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로» 로 하위 폴더에 돌아간다", { in: r.in, R1: r.R1, back: r.R1back });
@@ -295,12 +330,15 @@ check(r.R7 === "프로젝트", "R7 «처음으로» 가 없는 탭은 다시 눌
 check(h.H1 === "자료", "H1 머리줄 [자료] — 보이고 켜져 있으면 맨 위 폴더", h.H1);
 check(h.collapsed === true && !!h.H2a && h.H2a.side && h.H2a.crumb === "자료/docs" && !!h.H2b && h.H2b.act === "자료" && h.H2b.crumb === "자료/docs", "H2 곁칸이 접혀 있거나 다른 탭이 켜져 있으면 보이게만(폴더 그대로)", { a: h.H2a, b: h.H2b });
 check(i.count === 2 && i.first === "자료" && i.second === "자료/docs", "I1 자료가 둘이면 누른 탭의 자료만 맨 위로", i);
-//  stage 판엔 부품의 pickable(#4135 — 뷰어는 파일에서만 열린다)이 없어 뷰어도 고를 수 있다 — main 은 열 개.
-const WANT = ["자료", "세션 파일", "지식", "프로젝트", "타임라인", "리브", "지난 세션", "웹", "미리보기", "뷰어", "앱"];
+//  stage 판엔 부품의 pickable(#4135 — 뷰어는 파일에서만 열린다)이 없어 뷰어도 고를 수 있다 — main 은 아홉.
+const WANT = ["자료", "세션 파일", "지식", "프로젝트", "타임라인", "리브", "지난 세션", "웹", "미리보기", "뷰어"];
 check(J(d.sideTabs) === J(["자료"]) && !!d.open && d.open.has && d.open.focus && d.open.top >= 0 && d.open.top <= 12 && d.open.inPane, "AD1 [＋] = 앱 서랍 — [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점", d.open);
-check(Array.isArray(d.tiles) && J(d.tiles.map((t) => t.n)) === J(WANT) && d.tiles.every((t) => t.gi) && d.tiles.filter((t) => t.plus).map((t) => t.n).join() === "자료"
-  && d.tiles[0].sel && d.tiles.filter((t) => t.sel).length === 1 && /^자료 하나 더/.test(d.desc0 || ""), "AD2 타일 열 개 — 독과 같은 앱 색 타일 · 이미 열린 자료엔 ＋ · 첫 타일이 Enter 의 과녁 · 설명 한 줄", { tiles: d.tiles, desc: d.desc0 });
-check(d.noNewTab === true, "AD3 «새 탭으로 여는 앱» 이 없다 — 여기서 여는 것은 모두 사이드바에 선다");
+const s1 = (d.secs || [])[0] || { tiles: [] }, s2 = (d.secs || [])[1] || { tiles: [] };
+check(J((d.secs || []).map((x) => x.t)) === J(["사이드바 앱"]) && J(s1.tiles.map((x) => x.n)) === J(WANT) && s1.tiles.every((x) => x.gi && !x.off)
+  && s1.tiles.filter((x) => x.plus).map((x) => x.n).join() === "자료" && s1.tiles[0].sel && s1.tiles.filter((x) => x.sel).length === 1 && /^자료 하나 더/.test(d.desc0 || ""),
+  "AD2 묶음 둘 — «사이드바 앱» 아홉(독과 같은 타일 · 이미 열린 자료엔 ＋ · 첫 타일이 Enter 의 과녁 · 설명 한 줄)", { secs: d.secs && d.secs.map((x) => [x.t, x.tiles.map((y) => y.n + (y.plus ? "+" : "") + (y.sel ? "*" : "") + (y.off ? "~" : ""))]), desc: d.desc0 });
+console.log("skip  AD2b «이 세션에 붙이기» — stage 판엔 붙은 앱(#4225)이 아직 없다(main 에서 잰다)");
+check(d.noNewTab === true, "AD3 «새 탭으로 여는 앱» 도, «앱» 칸도 없다 — 여기서 여는 것은 모두 사이드바에 선다");
 check(!!d.typed && J(d.typed.tiles) === J(["타임라인*"]) && /^타임라인/.test(d.typed.desc || "") && !!d.entered && d.entered.closed && d.entered.tabs.includes("타임라인") && d.entered.act === "타임라인",
   "AD4 치면 거르고 Enter 로 연다 — 그 칸에 탭 · 서랍 닫힘", { typed: d.typed, entered: d.entered });
 check(d.imeKept === true, "AD5 한글 조합 중의 Enter 는 열지 않는다(글자 확정)");
@@ -308,6 +346,7 @@ check(!!d.none && d.none.tiles === 0 && d.none.desc === "「zzz」에 맞는 앱
 check(!!d.arrows && d.arrows.first === "자료" && d.arrows.now === "세션 파일" && /^세션 파일/.test(d.arrows.desc || "") && d.backToInput === true, "AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸", { arrows: d.arrows, back: d.backToInput });
 check(/^웹/.test(d.hover || "") && !!d.more && d.more.closed && d.more.tabs.includes("자료 2"), "AD8 올리면 그 앱의 설명 · 이미 열린 자료를 누르면 «자료 2» 가 선다", { hover: d.hover, more: d.more });
 check(d.esc === true, "AD9 Esc 로 닫힌다");
+console.log("skip  T1 «이 세션에 붙이기» 고르기 — stage 판엔 붙은 앱(#4225)이 아직 없다(main 에서 잰다)");
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "E1 페이지 오류 없음(마운트 · 그리기)", R.pageErrors);
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);

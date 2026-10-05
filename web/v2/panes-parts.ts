@@ -138,6 +138,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'web', name: '웹', icon: 'web', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
+  //  #4443(원준 10-05) — [＋] · 빈 자리 메뉴로 탭을 못 연다(셸이 이름으로 거른다 — stage 판엔 부품의 pickable 이 없다).
   { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션 오른쪽에 붙어요 — AI 도 그 앱을 같이 씁니다. × 로 떼면 세션만 남아요.' },
 ];
 

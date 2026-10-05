@@ -146,6 +146,20 @@ let brokenOk = true; try { pk = L.unparkBottom(broken); } catch (_) { brokenOk =
 eq([brokenOk, pk.store.last.bottom, pk.store.p[3], pk.store.p[4].bottom, "act" in pk.store.p[4], pk.cleared], [true, "timeline", null, [], false, 1], "PK11 망가진 항목(배열 아닌 bottom · null · act 없음) — 던지지 않고, 없는 act 는 만들지 않는다");
 eq(L.unparkBottom({ last: parked({ bottom: ["timeline#2"] }) }).store.last.bottom, ["timeline#2"], "PK12 사람이 만든 둘째 타임라인 — 옛 기본은 'timeline' 정확히 하나뿐");
 
+// «앱» 탭 한 번 걷기 (DA1–DA7) — #4443 원준(10-05): «기본배치 탭에는 앱이 있는데 그거 기본배치 아니게 없애줄래? 애초에 어떻게 앱을 +해서 탭으로»
+const withApps = (extra = {}) => ({ main: ["sessions"], side: ["files", "tasks", "knowledge", "apps"], bottom: [], act: { main: "sessions", side: "apps", bottom: null }, pin: ["apps", "files"], ...extra });
+let da = L.dropAppsTab({ last: withApps() });
+eq([da.store.last.side, da.store.last.act.side, da.store.last.pin, da.dropped, da.changed, da.store.seeded.apps], [["files", "tasks", "knowledge"], "files", ["files"], 1, true, 1], "DA1 «앱» 탭을 걷고, 켜져 있었으면 그 칸 첫 탭을 켠다 · 고정에서도 뺀다 · 표식");
+eq(L.dropAppsTab({ last: withApps({ side: ["files", "apps", "apps#2"], act: { side: "files" } }) }).store.last, { main: ["sessions"], side: ["files"], bottom: [], act: { side: "files" }, pin: ["files"] }, "DA2 «앱» 이 둘(apps · apps#2)이어도 모두 · 켜짐이 다른 탭이면 그대로");
+eq(L.dropAppsTab({ last: withApps({ side: ["files"], bottom: ["apps"], act: { side: "files", bottom: "apps" } }) }).store.last.act.bottom, null, "DA3 아래 칸에 있던 «앱» 도 걷는다 — 비면 켜짐도 비운다");
+da = L.dropAppsTab({ last: withApps(), p: { 1: withApps(), 2: withApps({ side: ["files", "web"], act: { side: "web" }, pin: [] }) } });
+eq([da.store.p[1].side, da.store.p[2].side, da.dropped], [["files", "tasks", "knowledge"], ["files", "web"], 2], "DA4 프로젝트마다 — «앱» 이 없는 배치는 그대로");
+da = L.dropAppsTab({ last: withApps(), seeded: { tasks: 1, bottom: 1, apps: 1 } });
+eq([da.store.last.side, da.changed, da.dropped], [["files", "tasks", "knowledge", "apps"], false, 0], "DA5 이미 걷었으면(표식) 손대지 않는다");
+eq([L.dropAppsTab({}).changed, L.dropAppsTab(null).store.seeded.apps, L.dropAppsTab({ seeded: { tasks: 1 } }).store.seeded], [true, 1, { tasks: 1, apps: 1 }], "DA6 빈 저장소 · null — 던지지 않고 표식만 · 다른 표식은 그대로");
+let daOk = true; try { da = L.dropAppsTab({ last: { side: "apps", main: null }, p: { 3: null, 4: { side: ["apps"] } } }); } catch (_) { daOk = false; }
+eq([daOk, da.store.last.side, da.store.p[4].side, "act" in da.store.p[4]], [true, "apps", [], false], "DA7 망가진 항목(배열 아닌 칸 · null · act 없음) — 던지지 않고 없는 act 는 만들지 않는다");
+
 // 닫은 탭 다시 열기 (U1–U5)
 let st = L.pushClosed([], [{ key: "a", zone: "side", at: 4 }]);
 st = L.pushClosed(st, [{ key: "c", zone: "side", at: 6 }, { key: "b", zone: "side", at: 5 }]);
@@ -205,19 +219,27 @@ check(/pin: TabKey\[\];/.test(PANES) && /pin: arr\(s\.pin\)/.test(PANES) && /nor
 const defAt = PANES.indexOf("const DEF_LAYOUT = (): Layout => ({");
 const defBlock = defAt >= 0 ? PANES.slice(defAt, PANES.indexOf("});", defAt)) : "";
 check(defAt >= 0 && /bottom: \[\],/.test(defBlock) && /bottom: null/.test(defBlock) && !/'timeline'/.test(defBlock), "X1 기본 배치의 아래 칸은 비어 있다 — 타임라인을 닫힌 아래 칸에 숨겨 두지 않는다");
+check(/side: \['files', 'tasks', 'knowledge'\],/.test(defBlock) && !/'apps'/.test(defBlock), "X1b 기본 배치에 «앱» 탭이 없다(원준 10-05 «기본배치 아니게 없애줄래»)");
 const seedAt = PANES.indexOf("function seedLayoutStore(): void {");
 const seedFn = seedAt >= 0 ? PANES.slice(seedAt, PANES.indexOf("\n}\n", seedAt)) : "";
-check(/const u = unparkBottom\(r\.store\);/.test(seedFn) && /if \(r\.changed \|\| u\.changed\) localStorage\.setItem\(LAYOUT_KEY, JSON\.stringify\(u\.store\)\);/.test(seedFn), "X2 저장된 배치의 옛 기본(숨긴 타임라인)을 한 번 걷어 저장한다");
+check(/const u = unparkBottom\(r\.store\);/.test(seedFn) && /const a = dropAppsTab\(u\.store\);/.test(seedFn) && /if \(r\.changed \|\| u\.changed \|\| a\.changed\) localStorage\.setItem\(LAYOUT_KEY, JSON\.stringify\(a\.store\)\);/.test(seedFn), "X2 저장된 배치의 옛 기본(숨긴 타임라인 · «앱» 탭)을 한 번 걷어 저장한다");
 const paintFn = fn("  function paintAll(): void {");
 check(/const bShow = bottomVisible\(\);/.test(paintFn) && /colMain\.classList\.toggle\('no-bottom', !bShow\);/.test(paintFn) && /bottomPane\.root\.hidden = !bShow;/.test(paintFn) && /splitY\.hidden = !bShow;/.test(paintFn), "X3 아래 칸 · 경계선은 «열려 있고 탭이 있을 때만» 선다");
 check(/const bottomVisible = \(\): boolean => bottomShown\(\{ bottomOn: lay\.bottomOn, count: lay\.bottom\.length, narrow: narrow\(\) \}\);/.test(PANES), "X3b 그 판정은 lib bottomShown — 탭 수는 아래 칸의 배치");
 const pickFn = fn("  function openPicker(anchor: HTMLElement, zone: Zone): void {");
-check(/zone === 'bottom' \|\| loose \|\| narrow\(\) \|\| bottomVisible\(\) \? \[\]/.test(pickFn) && /if \(!lay\.bottom\.length\) \{ openPicker\(anchor, 'bottom'\); return; \}/.test(pickFn), "X4 «아래 칸 열기» — 아래 칸이 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다");
+check(!!pickFn && !/label: '아래 칸 열기'/.test(pickFn) && !/openPicker\(anchor, 'bottom'\)/.test(pickFn) && /foot: \[\{ label: '기본 배치로'/.test(pickFn), "X4 [＋] 발치엔 «기본 배치로» 만 — «아래 칸 열기» 는 없다(원준 10-05 «아래칸에 여는거 우리 안하기로»)");
 //  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 는 앱 서랍(v2/pane-drawer) — 이 칸에 넣을 수 있는 것만, 타일 그림은 독과 같은 것(glyph = 부품 아이콘).
-check(/openAppDrawer\(anchor, \{/.test(pickFn) && /items: rest\.map\(\(d\) => \(\{ type: d\.type, name: d\.name, hint: d\.hint, glyph: d\.icon, more: has\(d\.type\) \}\)\)/.test(pickFn)
-  && /onPick: \(t\) => \{ addPart\(zone, t as PartType\); \}/.test(pickFn) && !/anchoredPopover\(/.test(pickFn),
-  "X4c [＋] 는 앱 서랍 — 넣을 수 있는 부품(rest)만 타일로 · 이미 열린 multi 는 «하나 더» · 고르면 그 칸에 더한다");
+check(/(const h = )?openAppDrawer\(anchor, \{/.test(pickFn) && /more: has\(d\.type\), ic: \(\) => dockTile\(d\.icon, d\.type\), pick: \(\) => \{ addPart\(zone, d\.type\); \}/.test(pickFn)
+  && /sections: \[\{ title: '사이드바 앱', note: '누르면 사이드바에 탭으로 열려요', items: side \}\]/.test(pickFn) && !/anchoredPopover\(/.test(pickFn),
+  "X4c [＋] 는 앱 서랍 — «사이드바 앱»(넣을 수 있는 부품 · 독과 같은 타일 · 이미 열린 multi 는 하나 더) · stage 판은 묶음 하나");
+console.log("skip  X4d «이 세션에 붙이기» 묶음 — stage 판엔 붙은 앱(#4225)이 아직 없다(main 에서 잰다)");
 check(/b\.onclick = \(\) => openPicker\(b, zone\);/.test(PANES), "X4b [＋] 는 같은 고르기를 연다");
+const tabMenuFn = fn("  function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {");
+check(/\.\.\.\(\['side'\] as Zone\[\]\)\.filter\(canGo\)\.map\(/.test(tabMenuFn) && !/\['side', 'bottom'\] as Zone\[\]\)\.filter\(canGo\)/.test(tabMenuFn), "X10 탭 우클릭에 «아래 칸으로 보내기» 가 없다 — 아래 칸의 옛 탭은 곁칸으로 보낼 수 있다");
+check(/sessionOnly \|\| zone === 'bottom' \? null : addBtn\(zone\)/.test(PANES), "X11 아래 칸 탭 줄엔 [＋] 가 없다 — 아래 칸에는 새로 열지 않는다(남은 옛 탭만 보인다)");
+check(/const zone: Zone = 'side';/.test(PANES) && !/z === 'bottom' && !narrow\(\) \? 'bottom' : 'side'/.test(PANES), "X12 빈 자리 우클릭 «칸에 넣기» 는 어디서 불러도 곁칸에 넣는다");
+const PARTS_SRC = readFileSync(process.env.PANES_PARTS_SRC || path.join(root, "web/v2/panes-parts.ts"), "utf8");
+check(/PART_DEFS\.filter\(\(d\) => d\.type !== 'apps' && \(d\.multi \|\| !has\(d\.type\)\)/.test(pickFn) && /PART_DEFS\.filter\(\(d\) => d\.type !== 'sessions' && d\.type !== 'apps'\)/.test(PANES), "X13 «앱» 칸은 [＋] · 빈 자리 메뉴로 탭을 못 연다(stage 판엔 pickable 이 없어 이름으로 거른다)");
 check(/onclick: \(\) => \{ if \(consumeDragClick\(\)\) return; if \(reselect\(zone, key\)\) return; activate\(zone, key\); \}/.test(PANES), "X5 탭 누르기 — 끈 뒤면 무시, 켜진 탭이면 «처음으로», 아니면 켠다");
 const reFn = fn("  function reselect(zone: Zone, key: TabKey): boolean {");
 check(/if \(!pane \|\| pane\.act !== key\) return false;/.test(reFn) && /if \(!part \|\| !part\.reselect\) return false;/.test(reFn) && /part\.reselect\(\);/.test(reFn), "X6 «처음으로»는 켜진 탭이고 앱이 그걸 가졌을 때만 — 아니면 종전대로 켠다");
