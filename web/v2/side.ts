@@ -64,7 +64,7 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
-import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -1504,7 +1504,9 @@ function renderHomeApps(): void {
  *   홈은 탭을 재사용하는데 여기는 주소로 곧장 갈아탔다.
  */
 function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
-  const p = s.projectId ? last!.data.projects.find((x) => x.id === s.projectId) : null;
+  //  줄이 **설** 프로젝트(#4551) — 위탁 워커는 소속이 아니라 시킨 세션의 프로젝트 아래에 선다. 사람 세션은 소속 그대로다.
+  const sid = sideProjectId(s);
+  const p = sid ? last!.data.projects.find((x) => x.id === sid) : null;
   const t = sessText(s, p ? p.name : '');
   const ak = last!.activeKey();
   //  위탁 워커 줄(#4551) — 홈 행(main.ts sideRowFace)과 같은 얼굴. 잣대는 lib/liv-work.

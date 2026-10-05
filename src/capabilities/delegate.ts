@@ -13,7 +13,7 @@ import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
 import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
-import { requesterSessionFrom } from "../node/task-origin.js";   // #4551 — 시킨 세션을 적어 둔다(목록이 그 세션의 프로젝트 아래에 워커를 세운다)
+import { originSessionOf } from "../node/task-origin.js";   // #4551 — 시킨 세션을 적어 둔다(목록이 그 세션의 프로젝트 아래에 워커를 세운다)
 
 // 밖으로 나가는 태스크 행은 **읽는 순간** 가린다(#4422) — 결과·오류에 남은 자격 리스가 delegate_status·list 응답으로 새지 않게.
 //  저장 직전 가림(markFinished·noteAssignFailure)이 들어가기 전에 쌓인 옛 행(2026-09-22 #4074 처럼)도 DB 를 건드리지 않고 여기서 가려진다.
@@ -86,7 +86,7 @@ const run: Capability = {
     const harness = await resolveHeadlessHarness(requester, explicitHarness);
     const task = await createTask({
       //  #4551 — 이 위탁을 **시킨 세션**(요청의 x-lively-session). 세션 밖에서 부른 위탁(터미널에서 직접 등)은 null 그대로다.
-      requester, requesterSession: requesterSessionFrom(ctx?.session), prompt: String(input.prompt), harness,
+      requester, requesterSession: originSessionOf(ctx?.session), prompt: String(input.prompt), harness,
       subpath: input.subpath, repo: input.repo ?? null, gitRef: input.ref ?? null, flags: input.flags,
       needCpu: input.need_cpu ?? null, needRamMb: input.need_ram_mb ?? null, needDiskMb: input.need_disk_mb ?? null,
       needsDocker: !!input.needs_docker, nodePref: input.node ?? null,

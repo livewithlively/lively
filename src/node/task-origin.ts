@@ -9,7 +9,7 @@
 //   크론만 `cron:<잡>[#<레인>]` 표식으로 썼다. 그 칸을 읽는 자리는 전부 `cron:` 접두만 본다(cronJobIdOf · 중첩 가드 ·
 //   자동 실행 기록), 그래서 세션 id 가 들어가도 그쪽은 종전과 같다.
 import { itemsPool } from "../db/client.js";
-import { cronJobIdOf } from "../scheduler/cron-task-feedback.js";
+import { cronJobIdFromMarker as cronJobIdOf } from "./task-failure.js";   // stage 판 — 같은 규칙(`cron:<잡>[#<레인>]`)
 import { EXECUTION_SESSION_ID_RE } from "../org/auth/agent-identity.js";
 
 /** 위탁 한 건의 출처. */
@@ -32,15 +32,6 @@ export function originSessionOf(requesterSession: string | null | undefined): st
 /** 순수 — 위탁 행 → 출처. */
 export function taskOriginOf(row: { id: number | string; requester_session?: string | null }): TaskOrigin {
   return { taskId: Number(row.id), originSession: originSessionOf(row.requester_session), cronJobId: cronJobIdOf(row.requester_session) };
-}
-
-/**
- * 순수 — 위탁을 만들 때 `requester_session` 에 적을 값. 요청이 실어 온 세션 id(x-lively-session)를 그대로 쓴다.
- *  ⚠ `cron:` 으로 시작하는 값은 적지 않는다 — 그 접두는 크론 표식의 것이라, 밖에서 온 값이 그 자리를 흉내 내면
- *   크론 중첩 가드(같은 표식의 대기 · 실행 중 위탁이 있으면 건너뜀)를 건드린다.
- */
-export function requesterSessionFrom(ctxSession: string | null | undefined): string | null {
-  return originSessionOf(ctxSession);
 }
 
 /** 이 세션들이 위탁 워커이면 그 출처 — 워커 세션 id → 출처. 같은 세션에 위탁이 여럿이면 가장 나중 것. */
@@ -70,7 +61,9 @@ export interface TaskMark {
 
 /**
  * 순수 — 목록 행에 위탁 표식을 얹는다(그 자리에서 고친다). 워커가 아닌 행은 안 건드린다.
- *  · 시킨 세션의 프로젝트 · 이름은 **같은 목록의 그 행**에서 먼저 찾고, 목록에 없으면(끝나서 빠졌거나 남의 것) `fallback` 에서 찾는다.
+ *  · 시킨 세션의 프로젝트 · 이름은 **같은 목록의 그 행**에서 먼저 찾고, 목록에 없으면(끝나서 빠진 것) `fallback` 에서 찾는다.
+ *  ⚠ `fallback` 은 **보는 사람의 세션만** 담아야 한다(아래 visibleOriginStates) — 헤더(x-lively-session)는 꼴만 검사된 값이라
+ *   남의 세션 id 를 실어 보낼 수 있고, 그대로 풀면 그 세션의 이름 · 프로젝트가 내 목록으로 샌다.
  *  ⚠ 워커 자신의 `projectId` 는 안 고친다 — 소속을 지어내지 않는다. 화면이 표식(originProject)을 보고 자리를 정한다.
  */
 export function applyTaskMarks<T extends OriginRowLike>(
@@ -99,4 +92,26 @@ export function missingOrigins(rows: readonly OriginRowLike[], origins: Readonly
   const out = new Set<string>();
   for (const r of rows) { const o = origins.get(r.id); if (o && o.originSession && !have.has(o.originSession)) out.add(o.originSession); }
   return [...out];
+}
+
+/** 시킨 세션의 기억(org_session_state)이 이 판정에 내놓는 것. */
+export interface OriginStateLike { owner?: string | null; invites?: readonly string[] | null; project_id?: number | null; label?: string | null }
+
+/**
+ * 순수 — 목록에 없는 시킨 세션 중 **보는 사람이 볼 수 있는 것만** fallback 으로 추린다(주인이거나 초대받았다).
+ *  ⚠ 왜 여기서 거르나: 위탁을 만들 때 실어 오는 세션 id 는 꼴만 검사된다(delegate 는 세션 주인 검사를 안 지난다).
+ *   남의 세션 id 를 적어 둔 위탁이 있어도, 그 세션의 이름과 프로젝트 번호는 그 세션을 볼 수 있는 사람에게만 풀린다.
+ *   못 푼 워커는 「리브가 한 일」 묶음에 선다 — 사실(누가 시켰는지 모른다)과 같다.
+ */
+export function visibleOriginStates(
+  states: ReadonlyMap<string, OriginStateLike>, viewer: string,
+): Map<string, { projectId: number | null; label: string | null }> {
+  const out = new Map<string, { projectId: number | null; label: string | null }>();
+  const me = String(viewer || "").trim();
+  if (!me) return out;
+  for (const [id, st] of states) {
+    const mine = String(st.owner || "") === me || (Array.isArray(st.invites) && st.invites.includes(me));
+    if (mine) out.set(id, { projectId: st.project_id ?? null, label: st.label ?? null });
+  }
+  return out;
 }

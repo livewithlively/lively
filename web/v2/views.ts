@@ -14,7 +14,7 @@ import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../ses
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
 import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
-import { standingProjectId, taskMarkOf, type TaskMark } from '../lib/liv-work.js';   // #4551 — 위탁 워커는 시킨 세션의 프로젝트 아래에 선다
+import { taskMarkOf, type TaskMark } from '../lib/liv-work.js';   // #4551 — 위탁 워커 표식(누가 시켰나)
 
 export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
@@ -46,6 +46,8 @@ export interface Sess {
   trashedWith?: number | null;
   /** 위탁 워커이면 «누가 시켰나» 표식(#4551, lib/liv-work). 사람이 연 세션은 없다. */
   task?: TaskMark | null;
+  /** 위탁 워커가 사이드바에서 **설** 프로젝트(#4551, lib/liv-work placeLivWork). ⚠ 소속(projectId)이 아니다 — 자리만 정한다. */
+  standId?: number | null;
 }
 export interface V2Data {
   projects: Proj[];
@@ -559,10 +561,9 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
   const byUuid = new Map<string, Sess>();
   for (const r of liveRows || []) {
     const k = sessStateKey(r, now);
-    //  위탁 워커는 제 소속이 없으면 **시킨 세션의 프로젝트** 아래에 선다(#4551 — lib/liv-work standingProjectId).
-    const task = taskMarkOf(r.task);
     const s: Sess = {
-      id: String(r.id), label: String(r.label || r.title || r.id), projectId: standingProjectId(r.projectId, task), task,
+      id: String(r.id), label: String(r.label || r.title || r.id), projectId: r.projectId ? Number(r.projectId) : null,
+      task: taskMarkOf(r.task),   // #4551 — 위탁 워커 표식. 소속(projectId)은 서버가 준 그대로 둔다
       // 노드 세션의 node 는 {id,name,online} 객체다 — id 만 든다(터미널 URL·중앙 기록 좌표에 문자열로 쓴다).
       node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
       //  ⚠ **관측 못 한 행은 «살아 있다» 고도 말하지 않는다**(#2544 후속). 폴백 행은 `restorable` 을 안 실어

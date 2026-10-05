@@ -58,7 +58,7 @@ import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta, getSessionStates } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
-import { applyTaskMarks, missingOrigins, taskOriginsBySession, type OriginRowLike } from "../node/task-origin.js";   // #4551 — 위탁 워커에 «누가 시켰나» 표식
+import { applyTaskMarks, missingOrigins, taskOriginsBySession, visibleOriginStates, type OriginRowLike } from "../node/task-origin.js";   // #4551 — 위탁 워커에 «누가 시켰나» 표식
 import { cleanLastPrompt } from "./last-prompt.js";
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
@@ -589,9 +589,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const origins = await taskOriginsBySession(merged.map((s) => s.id));
       if (origins.size) {
         const miss = missingOrigins(merged, origins);
-        const states = miss.length ? await getSessionStates(miss) : new Map<string, SessionState>();
-        const fallback = new Map([...states].map(([id, st]) => [id, { projectId: st.project_id ?? null, label: st.label ?? null }]));
-        applyTaskMarks(merged as Array<(typeof merged)[number] & OriginRowLike>, origins, fallback);
+        const states = miss.length ? await getSessionStates(miss) : new Map<string, Awaited<ReturnType<typeof getSessionStates>> extends Map<string, infer V> ? V : never>();
+        //  ⚠ 내 세션(주인 · 초대)만 푼다 — 남의 세션 이름 · 프로젝트가 표식으로 새지 않게(visibleOriginStates 머리말).
+        applyTaskMarks(merged as Array<(typeof merged)[number] & OriginRowLike>, origins, visibleOriginStates(states, idOf(userOf(req))));
       }
     } catch (e) { logger.warn({ err: e }, "세션 목록 위탁 표식 실패 — 표식 없이 나간다(비치명)"); }
     res.json({ sessions: merged });
