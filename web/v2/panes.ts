@@ -13,8 +13,8 @@
 //  ── 구도 ──
 //   문패(door) — 프로젝트 이름·요약, 오른쪽에 [정보](이름·상태·본문·할 일을 한곳에 모은 창).
 //   가운데 칸(main) — 기본 [세션]. 위는 **지금 보는 세션의 화면 그 자체**, 아래는 세션 서랍.
-//   아래 칸(bottom) — 기본 닫힘. 여닫이는 각 칸 [+] 발치의 [아래 칸 열기]와 칸의 ×.
-//   곁칸(side) — 기본 [자료][지식] 탭. 경계를 끌어 폭 조절, 탭 줄 끝 손잡이로 접고 오른쪽 위 손잡이로 편다.
+//   아래 칸(bottom) — 기본 비어 숨는다. **새로 열지 않는다**(#4443 원준 10-05) — 옛 배치에 남은 탭만 보이고, 비면 사라진다.
+//   곁칸(side) — 기본 [자료][프로젝트][지식] 탭. 경계를 끌어 폭 조절, 탭 줄 끝 손잡이로 접고 오른쪽 위 손잡이로 편다.
 //   (문패의 [칸] 버튼은 뺐다 — 원준 2026-08-20 "그냥 지워도 될 것 같다". 배치 복구는 [+] 발치로 옮겼다.)
 //
 //  ── ★ 프로젝트 화면과 세션 화면은 하나다(원준 2026-08-20) ──
@@ -45,7 +45,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -255,8 +255,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     bars: (): DragBar[] => [...panes.values()]
       .filter((p) => !p.bar.hidden && !p.root.hidden && p.root.getClientRects().length > 0)
       .map((p) => ({ zone: p.zone, bar: p.bar, tabs: p.tabs, pane: p.root })),
-    //  곁칸 ↔ 아래 칸만 — 가운데 칸은 세션 전용이다(tabMenu 의 canGo 와 같은 규칙).
-    canGo: (key, from, to) => !narrow() && from !== to && to !== 'main' && tabBase(key) !== 'sessions',
+    //  곁칸으로만 — 가운데 칸은 세션 전용, 아래 칸은 새 탭을 받지 않는다(lib/pane-tabs landZone · tabMenu 의 «보내기» 와 같은 규칙).
+    //   아래 칸에 남은 옛 탭은 곁칸으로 끌어낼 수 있다.
+    canGo: (key, from, to) => !narrow() && from !== to && to === 'side' && tabBase(key) !== 'sessions',
     range: (zone, key) => {
       const list = zoneTabs(zone as Zone);
       const pc = list.filter((k) => isPinned(k)).length;
@@ -943,10 +944,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function openViewerAt(d: ViewerOpen | undefined): void {
     const path = String(d?.path || '');
     const found = path && !d?.sid ? viewerTabs().find((t) => rememberedViewerPath(ctx.memKey(), t.key) === path) ?? null : null;
-    //  새 탭은 **이미 뷰어가 사는 칸**에 나란히 세운다 — 아래 칸에 뷰어를 두고 쓰는 사람에게 곁칸이 튀어나오면
-    //   그건 나란히 보기가 아니라 자리 뺏기다. 뷰어가 하나도 없으면 곁칸.
-    //  ⚠ 단 닫힌 아래 칸이면 펼치지 않는다 — 곁칸에서 연다(원준 10-01 «밑에서 나오는거 없게» · lib/pane-tabs showZone).
-    const zone: Zone = showZone(found ? found.zone : (findTab('editor')?.zone ?? 'side'), { bottomOn: lay.bottomOn, narrow: narrow() });
+    //  새 탭은 **이미 뷰어가 사는 칸**에 나란히 세운다(뷰어가 하나도 없으면 곁칸) — 단 아래 칸에는 새로 세우지 않는다
+    //   (lib/pane-tabs landZone · 원준 10-05 «아래칸에 여는거 우리 안하기로»). 그 파일의 뷰어가 이미 있으면 그 탭을 켠다 —
+    //   열린 아래 칸에 있으면 거기서, 닫힌 아래 칸이면 펼치지 않고 곁칸으로 데려온다(원준 10-01 «밑에서 나오는거 없게» · showZone).
+    const zone: Zone = found ? showZone(found.zone, { bottomOn: lay.bottomOn, narrow: narrow() }) : landZone(findTab('editor')?.zone ?? 'side');
     //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 화면을
     //   한 번 그렸다가 신호를 받고 다시 그린다(화면이 깜빡인다).
     const key = found ? found.key : nextTabKey('editor', allKeys());
@@ -1160,7 +1161,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     for (const t of r.batch) {
       const base = tabBase(t.key);
       if (!ALL.has(base)) continue;
-      const zone: Zone = t.zone === 'bottom' ? 'bottom' : 'side';
+      const zone: Zone = 'side';                 // 아래 칸에서 닫은 탭도 곁칸으로 돌아온다 — 아래 칸은 새 탭을 받지 않는다(landZone)
       //  한 벌만 사는 부품(자료·지식…)을 그 사이 [+] 로 다시 넣었으면 그것을 켠다 — 둘을 세우지 않는다.
       const twin = !partDef(base as PartType).multi ? allKeys().find((k) => tabBase(k) === base) : undefined;
       if (twin) { last = { zone: zoneOf(twin) || zone, key: twin }; continue; }
@@ -1290,7 +1291,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       ],
       [
         ...(derived ? [] : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
-        ...(d.multi && d.pickable !== false ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(zone, type); } }] : []),
+        //  하나 더 — 아래 칸의 옛 탭에서 불러도 새 탭은 곁칸에 선다(landZone).
+        ...(d.multi && d.pickable !== false ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(landZone(zone), type); } }] : []),
         //  #4443(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — 아래 칸으로는 보내지 않는다. 아래 칸에 남은 옛 탭은 곁칸으로 보낼 수 있다.
         ...(['side'] as Zone[]).filter(canGo).map((z) => ({
           label: `${toZone[z]} 보내기`, icon: 'moveto', run: () => { openZone(z); moveTab(key, zone, z); },
@@ -1465,8 +1467,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       return [];       // 세션은 탭을 만들지 않는다 — 고르기는 사이드바가 한다(위 주석)
     };
     // '＋'가 한 줄에 둘이면 무엇이 열리는지 읽히지 않는다(원준 2026-08-20). 이 칸이 **세션 전용**이면
-    //  일반 [+](칸에 내용 더하기)를 빼고 [+ 새 세션] 하나만 둔다 — 다른 것을 넣고 싶으면 곁칸·아래 칸의 [+]로 넣거나
-    //  그 탭을 이 칸으로 끌어오면 된다(탭 끌어 옮기기는 그대로 산다).
+    //  일반 [+](칸에 내용 더하기)를 빼고 [+ 새 세션] 하나만 둔다 — 다른 것을 넣고 싶으면 곁칸의 [+]로 넣는다.
     const sessionOnly = list.length === 1 && tabBase(list[0]) === 'sessions';
     pane.tabs.replaceChildren(...list.flatMap(tabsOf));
     // 손잡이는 띠 **밖**이라 탭이 몇 개가 되든 밀려나지 않는다(위 makePane 주석). [모두 보기]는 탭이 둘 이상일
