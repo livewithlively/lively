@@ -452,3 +452,16 @@ test("[N3] rankConvAggsCounted 는 층이 매겨진 세션 전부를 돌려준�
   assert.equal(r.total, 5);
   assert.deepEqual(r.judged.map((a) => a.session_id).sort(), ["s0", "s1", "s2", "s3", "s4"]);
 });
+
+// ── #4530 배포 뒤 — 한 글자 낱말은 다른 있어야 하는 낱말이 둘 이상이면 없어도 되는 낱말 ──
+test("[N4] 한 글자 낱말 — 다른 낱말이 둘 이상이면 없어도 되는 낱말 · 둘뿐이면 그대로 · 따옴표·숫자 한 자는 그대로", () => {
+  const opt = (q: string): string[] => parseQueryTerms(q).filter((t) => t.optional).map((t) => t.t);
+  assert.deepEqual(opt("미리 보기 환경이 안 뜸"), ["안", "뜸"]);
+  assert.deepEqual(opt("폰 터미널 사진 첨부"), ["폰"]);
+  assert.deepEqual(opt("폰에서 터미널 사진 첨부"), [], "조사가 붙은 한 글자(«폰에서»)는 조사를 떼지 않으므로(한 글자로 줄지 않는다) 그대로 있어야 하는 낱말");
+  assert.deepEqual(opt("앱 삭제"), [], "낱말이 둘뿐이면 한 글자도 있어야 하는 낱말이다");
+  assert.deepEqual(opt("앱"), []);
+  assert.deepEqual(opt('터미널 사진 "폰"'), [], "따옴표로 묶으면 그대로 찾는다");
+  assert.deepEqual(opt("터미널 사진 3"), [], "숫자 한 자는 번호일 수 있다");
+  assert.deepEqual(opt("a 터미널 사진"), ["a"]);
+});

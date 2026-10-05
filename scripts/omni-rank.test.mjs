@@ -125,6 +125,10 @@ eq(M.pickTop([H("a", "x"), H("b", "y")], T("z"), "z").length, 0, "R9 근거가 �
 
 // ── R11 군말 · 다른 표기 ──
 eq([...M.FILLER_WORDS], [...S.FILLER_WORDS], "R11 군말 표가 서버와 같다");
+//  한 글자 낱말 규칙(다른 낱말이 둘 이상이면 없어도 되는 낱말)도 서버와 같다 — 화면의 이름 찾기가 서버와 다른 판정을 하지 않게.
+for (const q of ["미리 보기 환경이 안 뜸", "폰 터미널 사진 첨부", "폰에서 터미널 사진 첨부", "앱 삭제", '터미널 사진 "폰"', "터미널 사진 3"]) eq(M.parseTerms(q), S.parseQueryTerms(q), `R11 한 글자 낱말 규칙 같음 «${q}»`);
+eq(M.parseTerms("미리 보기 환경이 안 뜸").filter((t) => t.optional).map((t) => t.t), ["안", "뜸"], "R11 한 글자 낱말은 다른 낱말이 둘 이상이면 없어도 되는 낱말");
+eq(M.matchAll("미리 보기 환경을 켰다", M.parseTerms("미리 보기 환경이 안 뜸")), true, "R11 한 글자 낱말이 없어도 이름이 맞는다");
 eq(M.TERM_ALIAS_GROUPS, S.TERM_ALIAS_GROUPS, "R11 다른 표기 표가 서버와 같다");
 eq(M.matchAll("배포 절차를 정리했다", M.parseTerms("배포 절차 방법")), true, "R11 군말(«방법»)은 없어도 맞는다");
 eq(M.matchAllAcross(["로그인이 안 된다", "UI 버그"], M.parseTerms("로그인 문제 어떻게")), true, "R11 군말만 빠진 것은 맞는다(여러 자리)");

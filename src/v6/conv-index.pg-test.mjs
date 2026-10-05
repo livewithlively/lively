@@ -27,8 +27,8 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 76 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 76 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 84 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 84 }, (_, i) => BOX(i));
 const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
 const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__", "__convpg_num_proj__", "__convpg_num_task__"];
 
@@ -776,6 +776,55 @@ try {
     await C.indexConvSession("", SID(74));
     const spaced = await search(A, "987654");
     chk("D53 숫자 낱말은 느슨하게 찾지 않는다(띄어 쓴 숫자는 다른 것이다)", !ids(spaced).includes(SID(74)) && spaced.loosened.length === 0, JSON.stringify({ ids: ids(spaced), loosened: spaced.loosened }));
+  }
+
+  // ── D54~D56 #4530 배포 뒤 — 한 글자 낱말 · 군말만 든 말은 훑지 않는다 · 뜻이 꽤 가까운 세션의 자리 ───────────────
+  //  매니지드 실측(판 bbe59161): «미리 보기 환경이 안 뜸» 이 4초 상한에 걸려 실패했고(한 글자 낱말이 말을 거의 다 훑게 했다),
+  //   «세션 지우면 깜빡거림» 으로 0.76 까지 가까운 «세션 삭제 깜빡임» 이 낱말 일부만 맞은 두 세션 뒤에 섰다.
+  {
+    const t = (m) => new Date(NOW - 7_200_000 + m * 60_000).toISOString();
+    //  D54 한 글자 낱말 — 다른 낱말이 둘 이상이면 없어도 되는 낱말. 둘뿐이면 있어야 한다.
+    await put(SID(76), A, U("북어 국물 끓이는 이야기", t(0)));                  // «쌀» 이 없다
+    await put(SID(77), A, U("북어 국물 에 쌀 을 넣는 이야기", t(1)));            // «쌀» 도 있다
+    for (const n of [76, 77]) await C.indexConvSession("", SID(n));
+    const three = await search(A, "북어 국물 쌀");
+    chk("D54 낱말 셋 중 한 글자(쌀)는 없어도 맞는 결과 — 있는 세션이 관련도에서 앞", matchIds(three).includes(SID(76)) && matchIds(three).includes(SID(77))
+      && ids(three).indexOf(SID(77)) < ids(three).indexOf(SID(76)) && !three.results.find((x) => x.session_id === SID(76)).missing.length, JSON.stringify(three.results.map((x) => [x.session_id, x.tier, x.missing])));
+    const two = await search(A, "북어 쌀");
+    chk("D54 낱말이 둘뿐이면 한 글자도 있어야 한다(없는 세션은 맞는 결과가 아니다)", matchIds(two).includes(SID(77)) && !matchIds(two).includes(SID(76)), JSON.stringify(two.results.map((x) => [x.session_id, x.tier, x.missing])));
+
+    //  D55 군말만 든 말은 훑지 않는다 — 군말(«방법»)이 다른 말에만 있어도 결과는 같다(맞는 결과 · 맞은 수는 있어야 하는 낱말이 든 말만 센다).
+    await put(SID(78), A, U("청국장 띄우는 이야기", t(2)) + U("방법 을 알려 줘", t(3)) + U("방법 이 궁금해", t(4)));
+    await C.indexConvSession("", SID(78));
+    const fil = await search(A, "청국장 방법");
+    const r78 = fil.results.find((x) => x.session_id === SID(78));
+    chk("D55 군말만 든 말은 맞은 수에 들지 않는다 — 있어야 하는 낱말이 든 말 하나", !!r78 && r78.tier === "match" && r78.hits === 1, JSON.stringify(r78 && [r78.tier, r78.hits]));
+
+    //  D57 다른 표기 · 느슨한 꼴은 사람이 한 말에만 댄다 — AI 만 «branch» 라고 쓴 세션은 «브랜치» 로 찾는 세션이 아니다(길고 많은 AI 의 말을
+    //   꼴마다 훑지 않는다). 사람이 쓴 것은 대소문자와 상관없이 찾는다(글을 한 번 소문자로 바꿔 견준다).
+    await put(SID(82), A, U("급한 수정 zqbr 이야기", t(8)) + AI("zqbr branch 를 만들었습니다", t(9)) + AI("zqbr branch 를 올렸습니다", t(9)) + AI("zqbr branch 끝", t(9)));
+    await put(SID(83), A, U("zqbr Branch 하나 따 줘", t(10)) + U("이번엔 ZQCASE 값을 확인해 줘", t(11)));
+    for (const n of [82, 83]) await C.indexConvSession("", SID(n));
+    const ko = await search(A, "zqbr 브랜치");
+    chk("D57 다른 표기는 사람 말에만 — AI 만 쓴 세션은 맞는 결과가 아니고, 사람이 (대문자를 섞어) 쓴 세션은 맞는 결과다", matchIds(ko).includes(SID(83)) && !matchIds(ko).includes(SID(82))
+      && (ko.results.find((x) => x.session_id === SID(82))?.missing || []).includes("브랜치"), JSON.stringify(ko.results.map((x) => [x.session_id, x.tier, x.missing])));
+    chk("D57 첫 지시가 아닌 말의 대문자 낱말도 소문자로 쳐서 찾는다", matchIds(await search(A, "zqcase")).includes(SID(83)));
+    const en = await search(A, "zqbr branch");
+    chk("D57 친 낱말 그대로는 AI 의 말에서도 찾는다(대소문자 무관)", matchIds(en).includes(SID(82)) && matchIds(en).includes(SID(83)), JSON.stringify(en.results.map((x) => [x.session_id, x.tier])));
+
+    //  D56 뜻이 꽤 가까운(0.6 이상) 세션은 «덜 맞는 결과» 의 맨 앞 — 낱말 일부만 맞은 세션보다 앞. 그보다 먼 것은 끝.
+    await put(SID(79), A, U("도토리묵 쑤는 이야기", t(5)));                    // 낱말 일부만(도토리묵) — 덜 맞는 결과
+    await put(SID(80), A, U("뜻으로 아주 가까운 세션", t(6)));
+    await put(SID(81), A, U("뜻으로 조금 가까운 세션", t(7)));
+    for (const n of [79, 80, 81]) await C.indexConvSession("", SID(n));
+    await plant(SID(80), { 21: 0.95, 22: Math.sqrt(1 - 0.95 * 0.95) });
+    await plant(SID(81), { 21: 0.9, 23: Math.sqrt(1 - 0.9 * 0.9) });
+    const near = await search(A, "도토리묵 양념장", { vec: { 21: 1 } });
+    chk("D56 뜻이 꽤 가까운 세션(0.95 · 0.9)이 낱말 일부만 맞은 세션보다 앞 — 모두 덜 맞는 결과", ids(near).join() === [SID(80), SID(81), SID(79)].join() && near.results.every((x) => x.tier === "weak"), JSON.stringify(near.results.map((x) => [x.session_id, x.tier, x.sem ?? null])));
+    await plant(SID(80), { 21: 0.58, 22: Math.sqrt(1 - 0.58 * 0.58) });
+    await plant(SID(81), { 21: 0.55, 23: Math.sqrt(1 - 0.55 * 0.55) });
+    const far = await search(A, "도토리묵 양념장", { vec: { 21: 1 } });
+    chk("D56 그보다 먼 것(0.58 · 0.55)은 낱말 일부만 맞은 세션 뒤", ids(far).join() === [SID(79), SID(80), SID(81)].join(), JSON.stringify(far.results.map((x) => [x.session_id, x.tier, x.sem ?? null])));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──
