@@ -574,11 +574,11 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
     무슨 그림인지 안 읽힌다 — 트리 행의 휴지통(.v2-ss-trash)과 같은 값으로 조금 키우고 가늘게 한다. */
 .v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
 /*  내 세션 줄의 두 단추(#3870, 원준 2026-10-05) — ✓ 완료 · 휴지통.
-    ✓ 는 종전 × 의 부품(.v2-app-inst-close) 그대로라 자리(오른쪽 5px) · 보이는 때(호버 · 켜진 줄 · 터치)를 물려받는다.
-    휴지통은 그 왼쪽(29px)에 호버 때만 서고, 압정은 한 칸 더 왼쪽(53px)으로 물러난다. 제목은 그 셋만큼 먼저 줄인다
+    ✓ 는 종전 × 의 부품(.v2-app-inst-close) 그대로라 보이는 때(호버 · 켜진 줄 · 터치)를 물려받는다. 자리는 아래에서 다시 정한다.
+    휴지통은 호버 때만 서고, 압정은 둘의 왼쪽(53px)으로 물러난다. 제목은 그 셋만큼 먼저 줄인다
     (위 «덮지 말고 줄인다» — 46px 는 단추 둘의 몫이었다).
     ⚠ 켜진 줄(손을 안 얹은)은 ✓ 만 서 있다 — 휴지통까지 늘 세우면 보고 있는 세션 옆에 «버리기» 가 늘 떠 있게 된다. */
-.v2-app-inst-trash { position: absolute; top: 7px; right: 29px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
+.v2-app-inst-trash { position: absolute; top: 7px; right: 5px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
   border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
 .v2-app-inst:hover .v2-app-inst-trash, .v2-app-inst-trash:focus-visible { display: inline-grid; }
 .v2-app-inst-trash:hover { background: color-mix(in srgb, var(--danger, #d14343) 12%, transparent); color: var(--danger, #d14343); }
@@ -586,6 +586,11 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-trash svg { width: 12.5px; height: 12.5px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-app-inst-close--done svg { width: 12.5px; height: 12.5px; stroke-width: 2.1; stroke-linejoin: round; }
 .v2-app-inst-close--done:hover { background: color-mix(in srgb, var(--mint-deep) 14%, transparent); color: var(--mint-deep); }
+/*  순서는 [압정] [✓] [휴지통] 이다(원준 2026-10-05 «순서 [압정] [✓] [휴지통]으로 바꿔줘» — 첫 판은 ✓ 가 맨 오른쪽이었다).
+    휴지통이 맨 오른쪽(5px), ✓ 가 그 왼쪽(29px). ✓ 는 손을 얹든 말든 **같은 자리**에 선다 — 켜진 줄(손을 안 얹은)은 ✓ 만
+    서 있고 오른쪽 한 칸이 비는데, 손을 얹으면 그 칸에 휴지통이 뜬다(✓ 가 커서 밑에서 움직이지 않는다). */
+.v2-app-inst--acts .v2-app-inst-close--done { right: 29px; }
+.v2-app-inst--acts.on:not(:hover) .v2-app-inst-open { padding-right: 48px; }
 .v2-app-inst--acts .v2-app-inst-pin:not(.on) { right: 53px; }
 .v2-app-inst--acts:hover .v2-app-inst-open { padding-right: 70px; }
 /*  고정된 줄 — 압정이 그리드 칸에 늘 서 있다(위 .v2-app-inst-pin.on, 오른쪽에서 29px = 휴지통이 설 자리). 손을 얹는 동안만
