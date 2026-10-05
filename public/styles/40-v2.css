@@ -411,7 +411,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-pinb.on { opacity: 1; color: var(--blue); }
 .v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke);
   stroke-linejoin: round; stroke-linecap: round; }
-/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘(M12 17v5)은 선이라 fill 로는 안 그려져서,
+/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘 · 머리 선(side.ts PIN_NEEDLE)은 선이라 fill 로는 안 그려져서,
    stroke:none 이면 바늘이 통째로 사라진 '머리만 남은 핀'이 된다. */
 .v2-pinb.on .v2-pinb-ic { fill: currentColor; }
 /* 고정 묶음과 나머지 사이 — 실선 하나면 충분하다(머리글을 두지 않는다). */
@@ -565,7 +565,8 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-pin:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-pin.on:hover { color: var(--blue); }
 .v2-app-inst-pin svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.v2-app-inst-pin.on svg { fill: currentColor; fill-opacity: .18; }
+/*  고정됨 = **속이 찬** 압정(#3870). 종전엔 채움이 18% 라 13px 에서 빈 압정과 구별이 안 됐다 — 고정했는지는 색 하나에 기댔다. */
+.v2-app-inst-pin.on svg { fill: currentColor; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 /*  휴지통 글리프(#3568 — [AI 세션] 구역의 지난 세션 행)는 × 보다 획이 많다. 11px·2.2 로 그리면 뭉쳐서
@@ -2100,6 +2101,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg-row.past:hover .v2-pg-t .n, .v2-pg-row.past.act .v2-pg-t .n { color: var(--ink); }
 .v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
 .v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }
+/*  #3870(원준 2026-10-05 «프로젝트 이름 우측에는 깜빡이지 않아도 될 것 같고, 세션 오른쪽만 깜빡이면 될 것 같아») —
+    카드 머리의 «작업 중» 점은 서 있기만 한다. 깜빡임은 세션 줄(.v2-app-inst-st)의 몫이다: 카드를 펴면 같은 일을 두 점이
+    함께 깜빡였고, 조각 카드(「지금 볼 것」)는 늘 펴져 있어 늘 그랬다. 점 자체는 남긴다 — 접힌 카드에선 그게 유일한 표식이다. */
+.v2-pg-row .v2-dot.busy { animation: none; }
 .v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }
 /*  ⚠ ＋ 는 **머리글 흐름 밖(절대위치)** 에 띄우고 안 보일 땐 display:none 이라 자리도 안 먹는다.
     opacity:0 로 숨기면 안 보이는데도 폭(18+2px)을 그대로 차지해 **상태 점·개수가 오른쪽 끝에 못 붙는다** —

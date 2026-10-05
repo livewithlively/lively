@@ -115,7 +115,11 @@ const KEPT = {
   eye: "M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z M12 9.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2z",
 };
 for (const [k, d] of Object.entries(KEPT)) ok(ICONS[k] === d, `V2 「지금」을 고른 그림 ${k} 는 그대로`, String(ICONS[k]).slice(0, 40));
-ok(/^M12 17v5 M9 10\.76/.test(ICONS.pin || "") && /^M12\.22 2h-\.44/.test(ICONS.gear || ""), "V2 압정 · 톱니는 종전 그림");
+//  #3870(원준 2026-10-05 «핀 지금 아이콘 너무 별로야») — 압정은 비스듬히 꽂힌 그림으로 바꿨다. 사이드바 압정 단추(side.ts PIN_*)와 같은 그림이어야 한다.
+const SIDE_SRC = readFileSync(join(root, "web/v2/side.ts"), "utf8");
+const pinPart = (k) => (new RegExp("const " + k + " = '([^']+)';").exec(SIDE_SRC) || [])[1] || "";
+ok(/^M9 15l-4\.5 4\.5 /.test(ICONS.pin || "") && ICONS.pin === pinPart("PIN_NEEDLE") + " " + pinPart("PIN_BODY") && /^M12\.22 2h-\.44/.test(ICONS.gear || ""),
+  "V2 압정은 비스듬한 그림 — 메뉴와 사이드바 단추가 같은 그림 · 톱니는 종전 그림");
 ok(!!ICONS.sys && ICONS.sys === ICONS.gear, "V5 설정(sys)과 톱니(gear)는 같은 그림");
 
 // ── 부르는 이름 ──
