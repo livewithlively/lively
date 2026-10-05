@@ -40,7 +40,10 @@ export function mountList(host: HTMLElement): void {
   const count = el('div', { class: 'shx-count', role: 'status' });
   const tbody = el('div', { class: 'shx-tbody', role: 'rowgroup' });
   const thead = el('div', { class: 'shx-thead', role: 'row' });
-  const more = el('div', { class: 'shx-tmore' });
+  const more = el('div', { class: 'shx-tmore', role: 'row', hidden: true });
+  /** 줄이 아닌 것(빈 자리 · 받는 중 · 실패 · 더 보기)도 표 안에서는 줄·칸에 담는다 — 표의 자식은 줄이어야 한다. */
+  const noteRow = (node: HTMLElement): HTMLElement => el('div', { class: 'shx-trnote', role: 'row' }, el('div', { role: 'cell' }, node)) as HTMLElement;
+  const markSel = (x: HTMLElement, on: boolean): void => { x.classList.toggle('sel', on); if (on) x.setAttribute('aria-current', 'true'); else x.removeAttribute('aria-current'); };
   const pane = el('section', { class: 'shx-card shx-pane', 'aria-label': '세션' }) as HTMLElement;
   const refresh = ibtnOf('refresh', '새로 고침');
   let rows: HistRow[] = [];
@@ -83,19 +86,21 @@ export function mountList(host: HTMLElement): void {
       //  점 — 나를 기다리는 셋(확인 필요 · 작업 중 · 작업 완료)은 색, 열려 있는 세션(대기 중)은 채운 회색, 그 밖은 빈 고리.
       const dot = r.stateKey === 'log' ? 'log' : r.stateKey === 'idle' ? '' : rowDotCls(r.stateKey);
       const proj = r.projectName || (r.projectId != null ? '#' + r.projectId : '');
-      const tr = el('div', { class: 'shx-tr' + (r.key === st.sel ? ' sel' : ''), role: 'row', tabindex: '0', 'data-key': r.key },
+      const tr = el('div', { class: 'shx-tr', role: 'row', tabindex: '0', 'data-key': r.key },
         el('div', { class: 'shx-td shx-td-name', role: 'cell' }, el('span', { class: 'shx-dot' + (dot ? ' ' + dot : '') }), el('b', { class: 'shx-tname', text: r.name, title: r.name })),
         el('div', { class: 'shx-td shx-td-proj' + (proj ? '' : ' none'), role: 'cell', title: proj }, proj),
         el('div', { class: 'shx-td shx-td-state', role: 'cell' }, el('span', { class: 'shx-state ' + stateTone(r.stateKey), text: r.stateLabel })),
         el('div', { class: 'shx-td shx-td-last', role: 'cell', text: whenLabel(r.lastMs || undefined, now) }));
-      const pick = (): void => { st.sel = r.key; for (const x of Array.from(tbody.children) as HTMLElement[]) x.classList.toggle('sel', x.dataset.key === r.key); openDetail(true); };
+      markSel(tr as HTMLElement, r.key === st.sel);
+      const pick = (): void => { st.sel = r.key; for (const x of Array.from(tbody.children) as HTMLElement[]) markSel(x, x.dataset.key === r.key); openDetail(true); };
       tr.addEventListener('click', pick);
       tr.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
       return tr;
     }));
-    if (!vis.length) tbody.replaceChildren(emptyBox({ icon: 'search', title: rows.length ? '조건에 맞는 세션이 없습니다.' : '세션이 없습니다.', text: rows.length ? '거르개를 풀거나 다른 이름으로 찾아 보세요.' : '' }));
+    if (!vis.length) tbody.replaceChildren(noteRow(emptyBox({ icon: 'search', title: rows.length ? '조건에 맞는 세션이 없습니다.' : '세션이 없습니다.', text: rows.length ? '거르개를 풀거나 다른 이름으로 찾아 보세요.' : '' })));
     const left = vis.length - st.shown;
-    if (left > 0) { const b = btnOf(`더 보기 (${left}개 남음)`, { kind: 'ghost', cls: 'shx-more' }); b.addEventListener('click', () => { st.shown += STEP; draw(); }); more.replaceChildren(b); }
+    more.hidden = left <= 0;
+    if (left > 0) { const b = btnOf(`더 보기 (${left}개 남음)`, { kind: 'ghost', cls: 'shx-more' }); b.addEventListener('click', () => { st.shown += STEP; draw(); }); more.replaceChildren(el('div', { role: 'cell' }, b)); }
     else more.replaceChildren();
   }
 
@@ -150,7 +155,7 @@ export function mountList(host: HTMLElement): void {
     const mySeq = ++seq;
     if (!force && rowsCache && Date.now() - rowsCache.at < TTL_MS) { rows = rowsCache.rows; draw(); openDetail(); return; }
     count.textContent = '불러오는 중…';
-    if (!tbody.childElementCount) tbody.replaceChildren(skelRows(7));
+    if (!tbody.childElementCount) tbody.replaceChildren(noteRow(skelRows(7)));
     refresh.disabled = true;
     refresh.classList.add('spin');
     try {
@@ -160,7 +165,7 @@ export function mountList(host: HTMLElement): void {
         loadMySessions(force).then((d) => d.sessions).catch(() => null),
       ]);
       if (mySeq !== seq) return;
-      if (!live && !logs) { count.textContent = ''; tbody.replaceChildren(errBox('세션 목록을 불러오지 못했습니다.')); return; }
+      if (!live && !logs) { count.textContent = ''; tbody.replaceChildren(noteRow(errBox('세션 목록을 불러오지 못했습니다.'))); return; }
       rows = mergeHistoryRows(live || [], logs || [], Date.now());
       rowsCache = { at: Date.now(), rows };
       draw();

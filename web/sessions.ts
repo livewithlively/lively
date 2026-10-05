@@ -287,8 +287,18 @@ export function setTranscriptDoor(host: HTMLElement, boxId: string): void {
   btn.replaceWith(doorLink(boxId));
 }
 
-/** 숨어 있던 칸이 보이게 됐다 — 그 사이 실린 대화록의 접기(10줄 캡)를 이제 잰다. */
-export function refreshTranscripts(root: HTMLElement): void { finalizeCaps(root); }
+/** 숨어 있던 칸이 보이게 됐다 — 그 사이 실린 대화록의 폭(옆 칸을 세울지)과 접기(10줄 캡)를 이제 잰다. */
+export function refreshTranscripts(root: HTMLElement): void {
+  for (const w of Array.from(root.querySelectorAll('.sess-wrap')) as HTMLElement[]) placers.get(w)?.();
+  finalizeCaps(root);
+}
+/** 대화록의 폭이 이보다 좁으면 옆 칸을 세우지 않는다(목차는 서랍으로, 「남긴 것」은 읽기 칸 맨 위로). */
+const RAIL_MIN_PX = 820;
+/** 대화록(.sess-wrap)마다 «폭을 다시 재는 일». 감춰진 칸에서는 폭이 0 이라 못 잰다 — 보일 때 refreshTranscripts 가 부른다. */
+const placers = new WeakMap<HTMLElement, () => void>();
+/** 대화록을 실은 자리(host)마다 «지켜보던 것을 걷는 일»(폭 · 읽는 자리). 그 자리에 다음 대화록이 설 때와 창이 닫힐 때 부른다. */
+const watchers = new WeakMap<HTMLElement, () => void>();
+let sideSeq = 0;
 
 export async function renderTranscriptPage(view: any, sel: { sid: string; node: string; q: string; ln: string }): Promise<void> {
   const host = view as HTMLElement;
@@ -304,14 +314,34 @@ export function openTranscriptWindow(sel: { sid: string; node: string }, o: { na
   const win = el('div', { class: 'shx-win', role: 'dialog', 'aria-modal': 'true', 'aria-label': (o.name || '대화록') + ' 대화록', tabindex: '-1' }) as HTMLElement;
   const back = el('div', { class: 'shx-mback' }, win) as HTMLElement;
   const prev = document.activeElement as HTMLElement | null;
+  let closed = false;
   const close = (): void => {
+    if (closed) return;
+    closed = true;
     back.remove();
-    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('hashchange', close);
+    watchers.get(win)?.();
     try { if (prev && prev.isConnected) prev.focus(); } catch { /* 돌아갈 자리가 사라졌다 */ }
   };
-  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing) { e.stopPropagation(); close(); } };
+  //  위에 뜬 것(확인창 .ov-back · 우클릭 메뉴 .pn-ctx · 태스크 창)이 있으면 그 Esc 는 그쪽 몫이다 — 프로젝트 「본문」 창과 같은 규칙
+  //   (projects/detail-hub). 그래서 버블 단계에서 듣고 전파를 막지 않는다. 종전엔 캡처 단계에서 가로채 확인창 대신 이 창이 닫혔다(격리 리뷰).
+  const above = (): boolean => !!document.querySelector('.ov-back, .pn-ctx, .pjv-menu, .pjv-tm-back');
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') { if (!e.defaultPrevented && !e.isComposing && !above()) close(); return; }
+    if (e.key !== 'Tab' || above()) return;
+    //  초점은 창 안에서 돈다(뒤에 깔린 일지로 새지 않는다).
+    const f = (Array.from(win.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])')) as HTMLElement[]).filter((n) => n.getClientRects().length > 0);
+    if (!f.length) return;
+    const first = f[0]!, last = f[f.length - 1]!, at = document.activeElement;
+    if (!win.contains(at) || at === win) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+    else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+  };
   back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) close(); });
-  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keydown', onKey);
+  //  주소가 바뀌면(뒤로 가기 · 다른 화면으로) 창을 걷는다 — 다른 화면 위에 남은 창에서 한 일이 떠난 화면의 것을 건드린다.
+  window.addEventListener('hashchange', close);
   document.body.append(back);
   try { win.focus(); } catch { /* */ }
   void mountTranscript(win, { sid: sel.sid, node: sel.node, q: '', ln: '' }, {
@@ -332,34 +362,73 @@ function fmtAt(iso?: string): string {
 /** 대화록을 host 에 싣는다 — 단독 페이지(#/sessions/<sid>) · 세션 이력 앱의 칸 · 창(embedded)이 같은 한 벌을 쓴다. */
 export async function mountTranscript(host: HTMLElement, sel: { sid: string; node: string; q: string; ln: string }, opts: TranscriptOpts = {}): Promise<void> {
   const { sid, node } = sel;
+  watchers.get(host)?.();   // 이 자리에 서 있던 대화록이 지켜보던 것을 걷는다
   const own = !opts.head;
   const head = opts.head ?? paneHead(opts.name || '세션 ' + shortId(sid), { sub: opts.sub });
   const titleEl = head.title;
   head.tools.replaceChildren();
   // 세션으로 가는 문 — 박스를 알면 [세션 열기], 모르면 「이어 질문하기」(박스를 알게 되면 setTranscriptDoor 가 바꾼다).
+  //  부르는 쪽이 세운 머리에는 달지 않는다: 그 머리의 문은 그쪽이 세운다(같은 머리에 다시 실릴 때마다 문이 겹쳐 서고,
+  //  setTranscriptDoor 는 host 밖의 머리를 찾지 못한다).
   const resumeBtn = btnOf('이어 질문하기', { icon: 'chat', cls: 'sess-resume' });
   resumeBtn.addEventListener('click', () => { void resumeSessionRecord(sid, node, resumeBtn); });
-  if (!opts.noResume) head.acts.append(opts.boxId ? doorLink(opts.boxId) : resumeBtn);
-  const railBtn = ibtnOf('panel', '질문 목차 · 남긴 것', 'sess-rail-btn');
+  if (own && !opts.noResume) head.acts.append(opts.boxId ? doorLink(opts.boxId) : resumeBtn);
+  const sideId = 'sess-side-' + (++sideSeq);
+  const railBtn = btnOf('목차', { icon: 'list', kind: 'ghost', cls: 'sess-rail-btn', title: '질문 목차 여닫기' });
+  railBtn.hidden = true;   // 폭을 재서 좁을 때만 세운다(넓으면 옆 칸이 늘 서 있다)
+  railBtn.setAttribute('aria-expanded', 'false');
+  railBtn.setAttribute('aria-controls', sideId);
   const copyBtn = ibtnOf('link', '링크 복사');
   copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
   head.tools.append(railBtn, copyBtn);
   let returnTo = '#/sessions';
   try { returnTo = sessionStorage.getItem('sessReturn') || '#/sessions'; } catch { /* */ }
   if (!opts.embedded) head.el.prepend(el('a', { class: 'shx-btn ghost sess-back', href: returnTo }, ico('chevL'), el('span', { class: 'shx-btn-l', text: '뒤로' })));
-  if (opts.onClose) { const x = ibtnOf('x', '닫기 (Esc)', 'sess-close'); x.addEventListener('click', opts.onClose); head.el.append(x); }
+  if (own && opts.onClose) { const x = ibtnOf('x', '닫기 (Esc)', 'sess-close'); x.addEventListener('click', opts.onClose); head.el.append(x); }
 
   const findSlot = el('div', { class: 'sess-find', hidden: true }) as HTMLElement;
-  const sideSlot = el('nav', { class: 'sess-side', 'aria-label': '질문 목차 · 남긴 것' }) as HTMLElement;
+  const sideSlot = el('nav', { class: 'sess-side', id: sideId, 'aria-label': '질문 목차 · 남긴 것' }) as HTMLElement;
   const convo = el('div', { class: 'sess-main' }, skelRows(4, 'read')) as HTMLElement;
   const wrap = el('div', { class: 'sess-wrap ' + (opts.embedded ? 'sess-embed' : 'sess-page shx-card') },
     ...(own ? [head.el] : []), findSlot,
     el('div', { class: 'sess-layout' }, convo, sideSlot)) as HTMLElement;
   host.replaceChildren(wrap);
   if (!opts.embedded) fitHeight(wrap);
-  //  좁은 칸에서는 옆 칸이 서랍이 된다(이 단추로 여닫는다). 넓은 칸에서는 늘 서 있고 단추는 감춰진다(CSS · 칸의 폭으로 판정).
-  const setRail = (on: boolean): void => { wrap.classList.toggle('rail-open', on); railBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); };
-  railBtn.addEventListener('click', () => setRail(!wrap.classList.contains('rail-open')));
+  //  좁은 칸에서는 질문 목차가 서랍이 된다(머리의 [목차]로 여닫는다 · Esc 로 닫는다). 「남긴 것」은 서랍에 감추지 않고 읽기 칸
+  //  맨 위에 세운다 — 셸 액자 안의 칸은 늘 좁아서, 서랍에 넣으면 기본 화면에서 아무도 못 본다(격리 리뷰). 넓으면 둘 다 옆 칸에 선다.
+  let railTop: HTMLElement | null = null;
+  const setRail = (on: boolean, focus = false): void => {
+    wrap.classList.toggle('rail-open', on);
+    railBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on && focus) (sideSlot.querySelector('.sess-side-item') as HTMLElement | null)?.focus();
+  };
+  railBtn.addEventListener('click', () => setRail(!wrap.classList.contains('rail-open'), true));
+  const onEsc = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !wrap.classList.contains('rail-open')) return;
+    e.preventDefault();   // 이 Esc 는 서랍이 썼다 — 바깥(대화록 창)이 닫히지 않는다
+    setRail(false);
+    railBtn.focus();
+  };
+  wrap.addEventListener('keydown', onEsc);
+  railBtn.addEventListener('keydown', onEsc);
+  const place = (): void => {
+    const w = wrap.clientWidth;
+    if (!w) return;   // 감춰진 칸 — 보일 때 다시 잰다(refreshTranscripts)
+    const narrow = w < RAIL_MIN_PX;
+    wrap.classList.toggle('narrow', narrow);
+    railBtn.hidden = !narrow;
+    if (!narrow) setRail(false);
+    //  「남긴 것」 — 넓으면 옆 칸 맨 위, 좁으면 읽기 칸 맨 위. 내 세션이 아니라 걷힌 칸(부모가 없다)은 다시 세우지 않는다.
+    if (railTop && railTop.parentElement) { const to = narrow ? convo : sideSlot; if (railTop.parentElement !== to) to.prepend(railTop); }
+  };
+  placers.set(wrap, place);
+  let ro: ResizeObserver | null = null;
+  let io: IntersectionObserver | null = null;
+  const stop = (): void => { if (ro) ro.disconnect(); if (io) io.disconnect(); ro = io = null; };
+  //  화면에서 떨어지면(다른 줄을 골라 칸째 갈렸다) 크기가 0 이 되며 한 번 불린다 — 그때 스스로 걷는다.
+  if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => { if (wrap.isConnected) place(); else stop(); }); ro.observe(wrap); }
+  watchers.set(host, stop);
+  place();
 
   const qy = new URLSearchParams({ node, view: 'render' }).toString();
   let data: any;
@@ -389,10 +458,11 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
     });
     head.tools.append(trashBtn);
   }
-  const railTop = opts.rail ? opts.rail() : null;
+  railTop = opts.rail ? opts.rail() : null;
   if (!items.length) {
     sideSlot.replaceChildren(...(railTop ? [railTop] : []));
     convo.replaceChildren(el('p', { class: 'shx-note', text: '표시할 대화가 없습니다.' }));
+    place();
     return;
   }
 
@@ -404,8 +474,9 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
   if (firstQ && !opts.name) { titleEl.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ; titleEl.title = firstQ.slice(0, 300); }
   //  부제 — 부르는 쪽이 아는 말(프로젝트 · 언제) 뒤에 이 대화의 크기를 붙인다. 부르는 쪽 머리(세션 목록 상세)는 그쪽이 쓴다.
   if (own) head.sub.textContent = [opts.sub, `질문 ${turns.filter((t) => t.user).length}개`].filter(Boolean).join(' · ');
-  sideSlot.replaceChildren(...(railTop ? [railTop] : []), sidebar(turns, sid, node, convo, () => setRail(false)));
   convo.replaceChildren(...turns.map((t, i) => turnEl(t, i, sid, node)));
+  sideSlot.replaceChildren(...(railTop ? [railTop] : []), sidebar(turns, sid, node, convo, () => setRail(false)));
+  place();   // 「남긴 것」을 제자리에(좁은 칸이면 읽기 칸 맨 위로 옮긴다)
 
   //  낱말 색칠 · 이 대화 안에서 찾기 — 고른 맞은 말의 자리(시각으로 찾는다)에서 시작한다.
   const words = (opts.words || []).filter(Boolean);
@@ -441,7 +512,7 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
     const to = sel.q || sel.ln ? { q: sel.q, ln: sel.ln } : want;
     if (to) setTimeout(() => gotoAnchor(convo, to), 60);
   });
-  spyTurns(convo, sideSlot);
+  io = spyTurns(convo, sideSlot);
 
   // 서브에이전트 트리(#905 C1 슬⑥) — 이 세션이 스폰한 서브에이전트들. 접힌 목록, 클릭 시 각자 대화록으로.
   api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/subagents${node ? '?node=' + encodeURIComponent(node) : ''}`)
@@ -451,8 +522,8 @@ export async function mountTranscript(host: HTMLElement, sel: { sid: string; nod
 
 /** 읽는 자리의 질문을 목차에서 켠다. 그리기가 없는 자리(헤드리스 · 옛 브라우저)에서는 아무것도 하지 않는다.
  *  ⚠ 목차 쪽은 scrollTop 만 만진다 — scrollIntoView 는 바깥(문서 · 셸 액자)까지 굴린다. */
-function spyTurns(convo: HTMLElement, side: HTMLElement): void {
-  if (typeof IntersectionObserver !== 'function') return;
+function spyTurns(convo: HTMLElement, side: HTMLElement): IntersectionObserver | null {
+  if (typeof IntersectionObserver !== 'function') return null;
   const seen = new Set<string>();
   const mark = (): void => {
     let top = '';
@@ -464,6 +535,7 @@ function spyTurns(convo: HTMLElement, side: HTMLElement): void {
         if (r.top < s.top || r.bottom > s.bottom) side.scrollTop += r.top - s.top - s.height / 3;
       }
       b.classList.toggle('on', on);
+      if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
     }
   };
   const io = new IntersectionObserver((es) => {
@@ -472,6 +544,7 @@ function spyTurns(convo: HTMLElement, side: HTMLElement): void {
     mark();
   }, { root: convo, rootMargin: '0px 0px -55% 0px' });
   for (const t of Array.from(convo.querySelectorAll('.sess-turn'))) io.observe(t);
+  return io;   // 이 자리에 다음 대화록이 설 때 부르는 쪽이 걷는다 — 통째로 떨어진 나무에서는 콜백이 안 불려 스스로 못 걷는다
 }
 
 // 서브에이전트 트리 섹션 — 기본 접힘 「서브에이전트 N개」, 펼치면 각 서브에이전트(제목·크기) 링크(자기 대화록으로).

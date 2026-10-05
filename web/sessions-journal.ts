@@ -33,15 +33,20 @@ export function mountJournal(host: HTMLElement): void {
   const range = el('span', { class: 'shx-range' });
   const stats = el('div', { class: 'shx-stats' });
   const list = el('div', { class: 'shx-journal' });
-  const rail = el('aside', { class: 'shx-card shx-jrail', 'aria-label': '기간 요약' }) as HTMLElement;
+  const rail = el('aside', { class: 'shx-card shx-jrail', 'aria-label': '기간 요약', hidden: true }) as HTMLElement;   // 줄이 설 때 세운다
   const copyBtn = btnOf('요약 복사', { icon: 'copy', kind: 'ghost', title: '이 기간에 한 일을 프로젝트별로 정리한 글을 복사합니다' });
+  //  화면에 선 줄과 그 줄의 기간은 한 몸이다 — 새 기간을 받는 동안에는 앞 기간의 줄과 앞 기간의 범위가 그대로 남는다
+  //   (범위만 먼저 바꾸면, 받는 중에 묶는 기준을 눌렀을 때 앞 줄이 새 범위의 막대 아래 그려진다 — 격리 리뷰).
   let rows: JRow[] = [];
   let label = '';
   let span: { since: number; until: number | null } = { since: 0, until: null };
-  const makeModeSeg = (): HTMLElement => segOf(MODES, st.mode, (v) => { st.mode = v; draw(); }, '묶는 기준');
+  let loading = false;
+  const makeModeSeg = (): HTMLElement => segOf(MODES, st.mode, (v) => { st.mode = v; if (!loading) draw(); }, '묶는 기준');
   let modeSeg = makeModeSeg();
+  const wrapEl = el('div', { class: 'shx-jwrap norail' }) as HTMLElement;
 
-  host.replaceChildren(el('div', { class: 'shx-jwrap' },
+  host.replaceChildren(wrapEl);
+  wrapEl.append(
     el('section', { class: 'shx-card shx-jmain', 'aria-label': '작업 일지' },
       el('div', { class: 'shx-bar' },
         segOf(JOURNAL_PRESETS, st.preset, (v) => { st.preset = v; void load(false); }, '기간'),
@@ -50,7 +55,7 @@ export function mountJournal(host: HTMLElement): void {
         el('span', { class: 'shx-grow' }),
         copyBtn),
       stats, list),
-    rail));
+    rail);
 
   copyBtn.addEventListener('click', async () => {
     if (!rows.length) { toast('이 기간에 복사할 세션이 없습니다.'); return; }
@@ -123,9 +128,14 @@ export function mountJournal(host: HTMLElement): void {
   }
 
   // ── 옆 칸 — 기간 요약 ──
-  /** 묶음으로 간다 — 그 묶음이 지금 화면에 없으면(다른 기준으로 묶여 있다) 기준을 바꿔 다시 그린 뒤 간다. */
+  /** 묶음으로 간다 — 그 묶음이 지금 화면에 없으면(다른 기준으로 묶여 있다) 기준을 바꿔 다시 그린 뒤 간다.
+   *  다시 그리면 옆 칸도 새로 선다 — 누른 단추(같은 열쇠)에 초점을 돌려준다(키보드로 누른 사람이 자리를 잃지 않게). */
   function goGroup(mode: JournalMode, key: string): void {
-    if (st.mode !== mode) { st.mode = mode; const next = makeModeSeg(); modeSeg.replaceWith(next); modeSeg = next; draw(); }
+    if (st.mode !== mode) {
+      st.mode = mode; const next = makeModeSeg(); modeSeg.replaceWith(next); modeSeg = next; draw();
+      const again = (Array.from(rail.querySelectorAll(mode === 'day' ? '.shx-day' : '.shx-rail-r.proj')) as HTMLElement[]).find((x) => x.dataset.key === key);
+      if (again) again.focus();
+    }
     const g = (Array.from(list.querySelectorAll('.shx-jgroup')) as HTMLElement[]).find((x) => x.dataset.key === key);
     if (!g) return;
     //  문서(셸 액자)까지 굴리지 않게 일지 칸 안에서만 굴린다.
@@ -146,6 +156,7 @@ export function mountJournal(host: HTMLElement): void {
     return box as HTMLElement;
   }
   function drawRail(now: number): void {
+    wrapEl.classList.toggle('norail', !rows.length);
     if (!rows.length) { rail.replaceChildren(); rail.hidden = true; return; }
     rail.hidden = false;
     // 하루하루 — 그날이 마지막 활동인 세션 수(날짜 묶음과 같은 셈). 막대를 누르면 그날로 간다.
@@ -153,7 +164,7 @@ export function mountJournal(host: HTMLElement): void {
     const max = Math.max(1, ...days.map((d) => d.n));
     const bars = el('div', { class: 'shx-days' + (days.length > 10 ? ' many' : ''), role: 'group', 'aria-label': '하루하루 세션 수' },
       ...days.map((d) => {
-        const b = el('button', { class: 'shx-day' + (d.today ? ' today' : '') + (d.n ? '' : ' zero'), type: 'button', title: `${d.label} · 세션 ${d.n}개`, 'aria-label': `${d.label} 세션 ${d.n}개`, disabled: !d.n },
+        const b = el('button', { class: 'shx-day' + (d.today ? ' today' : '') + (d.n ? '' : ' zero'), type: 'button', 'data-key': d.key, title: `${d.label} · 세션 ${d.n}개`, 'aria-label': `${d.label} 세션 ${d.n}개`, disabled: !d.n },
           el('span', { class: 'shx-day-n', text: d.n ? String(d.n) : '' }),
           el('span', { class: 'shx-day-bar', style: '--v:' + (d.n ? Math.max(8, Math.round((d.n / max) * 100)) : 0) + '%' }),
           el('span', { class: 'shx-day-l', text: d.weekday }));
@@ -163,7 +174,7 @@ export function mountJournal(host: HTMLElement): void {
     const projs = journalProjects(rows);
     const pmax = Math.max(1, ...projs.map((p) => p.sessions));
     const projBox = railList('프로젝트', projs, (p) => {
-      const b = el('button', { class: 'shx-rail-r proj', type: 'button', title: `${p.name} — 세션 ${p.sessions}개 · 기록 ${p.activities}건` },
+      const b = el('button', { class: 'shx-rail-r proj', type: 'button', 'data-key': p.key, title: `${p.name} — 세션 ${p.sessions}개 · 기록 ${p.activities}건` },
         el('span', { class: 'shx-rail-k' }, ico(p.id == null ? 'projNone' : 'projMini'), el('span', { class: 'shx-rail-tn', text: p.name })),
         el('b', { text: String(p.sessions) }),
         el('span', { class: 'shx-rail-bar', style: '--v:' + Math.round((p.sessions / pmax) * 100) + '%' }));
@@ -207,11 +218,11 @@ export function mountJournal(host: HTMLElement): void {
     const mySeq = ++seq;
     const preset = st.preset;
     const r = journalRange(preset, Date.now());
-    label = r.label;
-    span = { since: r.since, until: r.until };
     range.textContent = r.label;
+    const show = (got: JRow[]): void => { rows = got; label = r.label; span = { since: r.since, until: r.until }; loading = false; draw(); };
     const hit = cache.get(preset);
-    if (!force && hit && Date.now() - hit.at < TTL_MS) { rows = hit.rows; draw(); return; }
+    if (!force && hit && Date.now() - hit.at < TTL_MS) { show(hit.rows); return; }
+    loading = true;
     list.replaceChildren(skelRows(5, 'cards'));
     const qs = new URLSearchParams({ since: new Date(r.since).toISOString(), limit: '500' });
     if (r.until != null) qs.set('until', new Date(r.until).toISOString());
@@ -222,13 +233,14 @@ export function mountJournal(host: HTMLElement): void {
       const got: JRow[] = Array.isArray(d?.rows) ? d.rows : [];
       cache.set(preset, { at: Date.now(), rows: got, truncated: !!d?.truncated });
       if (mySeq !== seq) return;
-      rows = got;
-      draw();
+      show(got);
     } catch (e: any) {
       if (mySeq !== seq || (e && e.name === 'AbortError')) return;
       rows = [];
+      loading = false;
       stats.replaceChildren();
       rail.replaceChildren(); rail.hidden = true;
+      wrapEl.classList.add('norail');
       list.replaceChildren(errBox(e?.message || '작업 일지를 불러오지 못했습니다.'));
     }
   }
