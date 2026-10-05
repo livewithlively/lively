@@ -6,6 +6,7 @@ import { TOKEN_KEY, el, sv } from '../core.js';
 import { EMBEDDED } from './embed.js';
 import { tabNum, type TabKey } from '../lib/tab-key.js';
 import { iconPath } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
+import { plainMd } from '../lib/kn-links.js';         // #4443 지식 제목의 마크다운 강조 표식 떼기
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 //  #4233: 그림은 lib/icon-paths.ts 한 벌에서 온다. 여기 있던 표는 그리로 옮겼다(같은 뜻이 두 모양으로 갈리지 않게).
@@ -144,19 +145,15 @@ export function pnNote(key: string, text: string): HTMLElement {
 //  위키 제목은 「짧은 이름 — 긴 설명」 규약을 따른다(실측: 표본 18건 중 15건이 ' — ' 를 가졌고 앞머리는
 //  11~44자). 곁칸은 폭이 300px 남짓이라 전문을 그대로 걸면 슬러그처럼 읽히는 글자 덩어리가 된다.
 //  그래서 **앞머리만** 남기고 이슈번호 같은 기계용 표식을 턴다. 전문은 title 속성과 읽기 화면이 갖는다.
-//  제목에 적힌 마크다운 강조(**굵게** · __굵게__ · `코드`)는 표식만 뗀다 — 화면에 별표가 글자로 서면 안 된다(#4443 읽기 화면).
+//  제목에 적힌 마크다운 강조(**굵게** · `코드`)는 표식만 뗀다 — 화면에 별표가 글자로 서면 안 된다(#4443 읽기 화면 · lib/kn-links plainMd).
 //  ⚠ 저장된 제목을 바꾸지 않는다 — 화면에서만 줄인다(위키·검색·외부 미러의 정본은 그대로여야 한다).
-/** 한 줄 글의 마크다운 강조 표식만 뗀다 — **굵게** · __굵게__ · `코드` → 글자. 짝이 안 맞는 표식은 그대로 둔다. */
-export function plainMd(s: string): string {
-  return String(s || '').replace(/\*\*([^*\n]+?)\*\*/g, '$1').replace(/__([^_\n]+?)__/g, '$1').replace(/`([^`\n]+?)`/g, '$1');
-}
-
 export function knTitle(raw: string, name: string): string {
   let t = String(raw || '').trim();
   if (!t) t = String(name || '').replace(/[-_]+/g, ' ');       // 제목이 없으면 슬러그를 말처럼 편다
   t = t.split(/\s+[—–]\s+/)[0];                                // 「이름 — 설명」의 이름만
+  t = t.replace(/\s*\(#\d+[^)]*\)\s*(?=[:：,])/g, '');          // 「이름(#9, …): 설명」 — 쌍점 앞 표식은 띄어쓰기째(「이름 : 설명」 이 안 남게)
   t = t.replace(/\(?#\d+[^)]*\)?/g, ' ');                      // (#1819) · #1819 같은 표식은 사람에게 뜻이 없다
-  t = plainMd(t).replace(/\s+([:：,])/g, '$1');                    // 표식을 뗀 자리의 「이름 : 설명」 → 「이름: 설명」
+  t = plainMd(t);                                              // **굵게** · `코드` 표식은 글자로 서면 안 된다
   t = t.replace(/^(as-built|as built)\s*[::]\s*/i, '');         // 문서 종류 접두어는 아래 배지가 말한다
   t = t.replace(/\s{2,}/g, ' ').replace(/[\s·,:;]+$/, '').trim();
   return t || String(name || '');
