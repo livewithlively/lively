@@ -111,20 +111,28 @@ export const errBox = (text: string): HTMLElement => el('div', { class: 'shx-err
 /** 받는 동안의 자리 — 줄 모양 뼈대 n 개. */
 export function skelRows(n = 5, cls = ''): HTMLElement {
   return el('div', { class: 'shx-skel' + (cls ? ' ' + cls : ''), 'aria-busy': 'true', 'aria-label': '불러오는 중' },
-    ...Array.from({ length: n }, (_, i) => el('div', { class: 'shx-skel-r', style: '--i:' + i }, el('i', {}), el('i', {})))) as HTMLElement;
+    ...Array.from({ length: n }, () => el('div', { class: 'shx-skel-r' }, el('i', {}), el('i', {})))) as HTMLElement;
 }
 /**
  * 이 요소를 창 바닥까지 채운다 — 앱은 문서를 스크롤하지 않고 칸마다 제 안에서 스크롤한다(본문 창과 같은 결).
  *  높이는 CSS 변수(--shx-h)로만 준다: 좁은 화면(한 칸)에서는 CSS 가 그 값을 쓰지 않고 문서 스크롤로 돌아간다.
  */
 export function fitHeight(node: HTMLElement, bottom = 14): void {
-  const apply = (): void => {
-    if (!node.isConnected) { window.removeEventListener('resize', apply); return; }
-    const top = node.getBoundingClientRect().top + (window.scrollY || 0);
-    node.style.setProperty('--shx-h', Math.max(420, Math.round(window.innerHeight - top - bottom)) + 'px');
-  };
-  window.addEventListener('resize', apply);
-  apply();
+  //  창 크기 듣기는 하나만 건다 — 화면마다 따로 걸면, 액자 안에서는 창 크기가 거의 안 바뀌어 떨어진 화면(대화록까지 든 나무)이
+  //   듣개에 붙들린 채 쌓인다(격리 리뷰). 떨어진 것은 다음 화면이 설 때와 창 크기가 바뀔 때 걷는다.
+  for (const n of fitted.keys()) if (!n.isConnected) fitted.delete(n);
+  fitted.set(node, bottom);
+  if (!fitBound) {
+    fitBound = true;
+    window.addEventListener('resize', () => { for (const [n, b] of [...fitted]) { if (!n.isConnected) fitted.delete(n); else applyFit(n, b); } });
+  }
+  applyFit(node, bottom);
+}
+const fitted = new Map<HTMLElement, number>();
+let fitBound = false;
+function applyFit(node: HTMLElement, bottom: number): void {
+  const top = node.getBoundingClientRect().top + (window.scrollY || 0);
+  node.style.setProperty('--shx-h', Math.max(420, Math.round(window.innerHeight - top - bottom)) + 'px');
 }
 
 // ── 「남긴 것」 — 한 일(작업 기록) · 산출 지식 · 맡은 태스크 · 커밋 · 고친 파일 ──
@@ -163,6 +171,9 @@ export function leftPanel(sid: string, node: string, onRow?: (r: JRow) => void):
   const box = el('section', { class: 'shx-left', 'aria-label': '이 세션이 남긴 것' }, el('div', { class: 'shx-rail-h', text: '이 세션이 남긴 것' }), body);
   api('/api/ui/v6/session-journal?session_id=' + encodeURIComponent(sid) + '&node_id=' + encodeURIComponent(node))
     .then((d: any) => {
+      //  답이 오기 전에 이 칸이 화면에서 떨어졌다(다른 대화록 · 다른 화면으로 갔다) — 늦은 답으로 부르는 쪽의 문을 바꾸지 않는다.
+      //   부르는 쪽이 host 안에서 단추를 찾아 바꾸는데, 그 host 에는 이미 다른 대화록이 서 있을 수 있다(격리 리뷰).
+      if (!box.isConnected) return;
       const r: JRow | null = d && d.row ? d.row : null;
       if (!r) { box.remove(); return; }
       if (onRow) onRow(r);

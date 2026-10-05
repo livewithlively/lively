@@ -233,6 +233,7 @@ const JOURNAL_DAYS_MAX = 62;
 /**
  * 기간의 하루하루 — 날마다 «그날이 마지막 활동인 세션» 수(일지의 날짜 묶음과 같은 셈). 기간의 끝이 열려 있으면(until null)
  *  오늘까지다. 세션이 없는 날도 0 으로 선다(막대 줄에 빈 날이 보여야 한다). 달력으로 센다(서머타임 날에도 하루에 한 칸).
+ *  칸은 62개까지 — 그보다 긴 기간은 끝에서부터 62일을 보인다.
  */
 export function journalDayBars(rows: JRow[], since: number, until: number | null, nowMs: number): JournalDay[] {
   const end = until == null ? addDays(dayStart(nowMs), 1) : until;
@@ -240,7 +241,11 @@ export function journalDayBars(rows: JRow[], since: number, until: number | null
   for (const r of rows) { const k = dayKey(isoMs(r.last_seen)); counts.set(k, (counts.get(k) || 0) + 1); }
   const today = dayKey(nowMs);
   const out: JournalDay[] = [];
-  for (let d = dayStart(since); d < end && out.length < JOURNAL_DAYS_MAX; d = addDays(d, 1)) {
+  //  상한보다 긴 기간이면 **늦은 날**을 남긴다 — 이른 날부터 세면 오늘이 잘린다.
+  let start = dayStart(since);
+  const floor = addDays(dayStart(end - 1), -(JOURNAL_DAYS_MAX - 1));
+  if (floor > start) start = floor;
+  for (let d = start; d < end && out.length < JOURNAL_DAYS_MAX; d = addDays(d, 1)) {
     const k = dayKey(d), dt = new Date(d);
     out.push({ key: k, ms: d, label: `${dt.getMonth() + 1}월 ${dt.getDate()}일 (${WEEKDAY[dt.getDay()]})`, weekday: WEEKDAY[dt.getDay()]!, n: counts.get(k) || 0, today: k === today });
   }

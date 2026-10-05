@@ -198,7 +198,11 @@ eq(["journal", "list", "find", "", null, undefined, "zzz"].map(M.readHistTab), [
   const d30 = M.journalDayBars([jr("x", NOW), jr("y", at(8, 1, 0, 0))], m.since, m.until, NOW);
   eq([d30.length, d30[0].key, d30[d30.length - 1].key, d30[d30.length - 1].today, d30[0].n, d30[d30.length - 1].n], [30, "2026-09-01", "2026-09-30", true, 1, 1], "D2 끝이 열린 기간(최근 30일) = 오늘까지 서른 칸 — 내일 칸은 없다");
   eq(M.journalDayBars([], wk.since, wk.until, NOW).map((x) => x.n), [0, 0, 0, 0, 0, 0, 0], "D4 줄이 없어도 칸은 선다(전부 0)");
-  eq(M.journalDayBars([], at(0, 1), null, NOW).length, 62, "D5 칸 수 상한 62 — 긴 기간을 받아도 막대가 끝없이 서지 않는다");
+  {
+    const long = M.journalDayBars([jr("t", NOW)], at(0, 1), null, NOW);   // 1월 1일부터 오늘(9/30)까지 — 273일
+    eq([long.length, long[0].key, long[61].key, long[61].today, long[61].n], [62, "2026-07-31", "2026-09-30", true, 1], "D5 칸 수 상한 62 — 긴 기간은 끝에서부터 62일(오늘이 잘리지 않는다)");
+    eq(M.journalDayBars([], at(8, 1), at(9, 1), NOW).length, 30, "D5b 상한보다 짧은 기간은 그 기간 그대로(9월 = 서른 칸)");
+  }
   eq(M.journalDayBars([jr("z", NOW, { last_seen: "엉뚱한 값" }), jr("n", NOW, { last_seen: null })], wk.since, wk.until, NOW).reduce((n, x) => n + x.n, 0), 0, "D6 읽을 수 없는 시각의 줄은 어느 칸에도 세지 않는다(던지지 않는다)");
 }
 {
@@ -246,7 +250,7 @@ eq(["journal", "list", "find", "", null, undefined, "zzz"].map(M.readHistTab), [
   }
   const missing = [...names].filter((n) => !Object.prototype.hasOwnProperty.call(ICONS, n));
   eq(missing, [], "I2 화면이 부르는 그림 이름이 전부 그림 표에 있다");
-  if (names.size >= 25 && ["search", "chevD", "projMini", "projNone", "wiki", "task", "check", "trash", "link", "panel", "clock", "person", "copy", "term", "layers"].every((n) => names.has(n))) ok(`I2b 배선 — 그림 이름을 실제로 읽었다(${names.size}개)`);
+  if (names.size >= 25 && ["search", "chevD", "projMini", "projNone", "wiki", "task", "check", "trash", "link", "list", "clock", "person", "copy", "term", "layers"].every((n) => names.has(n))) ok(`I2b 배선 — 그림 이름을 실제로 읽었다(${names.size}개)`);
   else bad("I2b 배선 — 그림 이름을 실제로 읽었다", `읽은 이름 ${names.size}개: ${[...names].join(",")}`);
 }
 

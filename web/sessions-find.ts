@@ -72,7 +72,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
 
   const openPicked = (p: Picked | null, scroll = false): void => {
     st.picked = p;
-    for (const a of Array.from(list.querySelectorAll('.shx-row')) as HTMLElement[]) a.classList.toggle('sel', !!p && a.dataset.pick === pickKey(p));
+    for (const a of Array.from(list.querySelectorAll('.shx-row')) as HTMLElement[]) markSel(a, !!p && a.dataset.pick === pickKey(p));
     if (!p) { pane.replaceChildren(emptyBox({ icon: 'chat', big: true, title: '대화록이 여기 열립니다', text: '왼쪽에서 줄을 누르면 그 말의 자리로 대화록이 열립니다.' })); return; }
     void mountTranscript(pane, { sid: p.sid, node: p.node, q: '', ln: '' }, {
       embedded: true, words: p.words, hit: p.hit, name: p.name, sub: p.sub,
@@ -83,8 +83,11 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     if (scroll && pane.getBoundingClientRect().top > window.innerHeight * 0.6) pane.scrollIntoView({ behavior: 'smooth', block: 'start' });   // 좁은 화면(한 칸)에서는 대화록이 아래에 있다
   };
   const pickKey = (p: Picked): string => p.sid + '|' + p.node + '|' + (p.hit ? p.hit.role + '|' + (p.hit.ts || '') : '') + '|' + (p.mark || '');
+  /** 고른 줄 — 모양(.sel)과 이름표(aria-current)를 함께. */
+  const markSel = (a: HTMLElement, on: boolean): void => { a.classList.toggle('sel', on); if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); };
   const rowLink = (p: Picked, ...kids: unknown[]): HTMLElement => {
-    const a = el('a', { class: 'shx-row' + (st.picked && pickKey(st.picked) === pickKey(p) ? ' sel' : ''), href: shellHref(transcriptHref(p.sid, p.node)), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
+    const a = el('a', { class: 'shx-row', href: shellHref(transcriptHref(p.sid, p.node)), 'data-pick': pickKey(p) }, ...kids) as HTMLAnchorElement;
+    markSel(a, !!st.picked && pickKey(st.picked) === pickKey(p));
     a.addEventListener('click', (e: MouseEvent) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } return; }
       e.preventDefault();
