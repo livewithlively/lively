@@ -14,6 +14,10 @@ let rows: HistSideRow[] | null = null;
 let kinds = false;
 /** 액자가 일지를 받으려다 실패했다 — «세는 중» 대신 그렇다고 말한다. */
 let kindsFailed = false;
+/** 줄이 한 축만 받은 판이다(도는 세션 · 기록 가운데 하나가 실패) — 수가 덜 찼을 수 있어 고른 것을 풀지 않는다. */
+let partial = false;
+/** 액자가 줄을 하나도 못 받았다고 알려 왔다 — 받아 둔 줄이 없을 때만 읽는다(«받는 중» 대신 그렇다고 말한다). 줄이 한 번 오면 더는 안 읽힌다. */
+let failed = false;
 let scope: HistScope = { ...HIST_SCOPE0 };
 let onChange: (() => void) | null = null;
 let bound = false;
@@ -26,6 +30,14 @@ function frames(): Window[] {
   }
   return out;
 }
+/** 그 가운데 지금 화면에 보이는 것(감춰 둔 셸 탭의 액자는 뺀다). */
+function visibleFrames(): Window[] {
+  const out: Window[] = [];
+  for (const f of Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe.v2-frame'))) {
+    if (f.dataset.appKey === 'sessions' && f.contentWindow && f.getClientRects().length > 0) out.push(f.contentWindow);
+  }
+  return out;
+}
 function post(msg: unknown, to: Window[] = frames()): void {
   for (const w of to) { try { w.postMessage(msg, location.origin); } catch { /* 떠난 액자 */ } }
 }
@@ -33,6 +45,8 @@ function post(msg: unknown, to: Window[] = frames()): void {
 export function histSideRows(): HistSideRow[] | null { return rows; }
 export function histSideKinds(): boolean { return kinds; }
 export function histSideKindsFailed(): boolean { return kindsFailed && !kinds; }
+export function histSidePartial(): boolean { return partial; }
+export function histSideFailed(): boolean { return failed; }
 export function histSideScope(): HistScope { return scope; }
 /**
  * 고른 것을 바꾸고 액자에 알린다. pick = 사람이 방금 눌렀다 — 액자가 대화록 단독 화면이면 앱으로 돌아와 그 범위를 보인다.
@@ -41,7 +55,11 @@ export function histSideScope(): HistScope { return scope; }
 export function setHistSideScope(next: HistScope, pick = false): void {
   scope = next;
   if (next.by === 'kind' && !kinds) kindsFailed = false;   // 다시 청한다 — 답이 올 때까지는 «세는 중»
-  post({ type: HIST_SCOPE_MSG, scope, ...(pick ? { pick: true } : {}) });
+  //  «사람이 눌렀다» 는 지금 보이는 액자에만 싣는다 — 감춰 둔 셸 탭의 액자가 대화록 단독 화면이면 그 표에 앱으로 튕긴다.
+  const all = frames();
+  const seen = pick ? visibleFrames() : [];
+  post({ type: HIST_SCOPE_MSG, scope, pick: true }, seen);
+  post({ type: HIST_SCOPE_MSG, scope }, all.filter((w) => !seen.includes(w)));
 }
 /** 사이드바의 찾기 단추 — 액자의 「대화 찾기」 탭으로. */
 export function askHistFind(): void { post({ type: HIST_FIND_MSG }); }
@@ -57,15 +75,16 @@ export function bindHistSide(cb: () => void): void {
     if (!m || typeof m !== 'object' || m.type !== HIST_ROWS_MSG) return;
     const src = ev.source as Window | null;
     if (!src || !frames().includes(src)) return;   // 세션 이력 액자가 보낸 것만
-    //  줄 없는 신호는 인사다 — 지금 고른 것만 알려 준다(액자가 첫 화면을 그 범위로 그린다).
+    //  줄 없는 신호는 인사다 — 지금 고른 것만 알려 준다(액자가 첫 화면을 그 범위로 그린다). failed = 줄을 못 받았다는 알림(받아 둔 줄은 그대로 둔다).
     if (m.rows !== undefined) {
       const got = parseHistRows(m.rows);
       if (!got) return;
       rows = got;
       kinds = !!m.kinds;
       kindsFailed = !!m.kindsFailed;
-    }
+      partial = !!m.partial;
+    } else if (m.failed === true) failed = true;
     post({ type: HIST_SCOPE_MSG, scope }, [src]);
-    if (m.rows !== undefined && onChange) onChange();
+    if ((m.rows !== undefined || m.failed === true) && onChange) onChange();
   });
 }

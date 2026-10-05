@@ -13,7 +13,7 @@ import {
 } from './session-history.js';
 import { whenLabel } from './lib/omni-order.js';
 import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
-import { histBridgeOn, histScope, loadHistRows, scopedConvs, scopedRows } from './sessions-scope.js';
+import { histBridgeOn, histLoadFailed, histScope, histScopePending, loadHistRows, PENDING_TEXT, scopedConvs, scopedRows } from './sessions-scope.js';
 import { histGroupLabel, histScopeOn, histScopeSpan } from './lib/hist-scope.js';
 import type { TabHandle } from './sessions-list.js';
 
@@ -243,9 +243,28 @@ export function mountJournal(host: HTMLElement): TabHandle {
     let conv: Set<string> | null = null;
     let r = journalRange(preset, now);
     let key: string = preset;
+    //  «남긴 것» 묶음을 골랐는데 일지(전 기간)가 아직 없으면 범위를 정할 수 없다 — «없다» 가 아니라 «세는 중» · «못 받았다» 고 말한다.
+    const pending = on ? histScopePending() : null;
+    if (pending) {
+      rows = []; loading = false;
+      range.textContent = r.label;
+      stats.replaceChildren();
+      rail.replaceChildren(); rail.hidden = true;
+      wrapEl.classList.add('norail');
+      list.replaceChildren(pending === 'failed' ? errBox(PENDING_TEXT.failed) : emptyBox({ icon: 'timeline', big: true, title: PENDING_TEXT.wait }));
+      return;
+    }
     if (on) {
       const hist = await loadHistRows();
       if (mySeq !== seq) return;
+      if (histLoadFailed(hist)) {
+        rows = []; loading = false;
+        stats.replaceChildren();
+        rail.replaceChildren(); rail.hidden = true;
+        wrapEl.classList.add('norail');
+        list.replaceChildren(errBox('범위를 정할 세션 목록을 불러오지 못했습니다.'));
+        return;
+      }
       conv = scopedConvs(hist.rows, now);
       if (spanOf) {
         //  묶음은 «마지막 활동»(박스의 활동까지 본 값)으로 갈랐지만 일지는 기록의 시각으로 묻는다 — 범위 안 줄의 기록 시각을 덮는 구간을 청한다.

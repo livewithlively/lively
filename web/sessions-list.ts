@@ -8,7 +8,7 @@ import { el } from './core.js';
 import { mountTranscript, resumeSessionRecord } from './sessions.js';
 import { btnOf, dropMySessions, emptyBox, errBox, filterChips, fmtBytes, ibtnOf, ico, leftPanel, paneHead, routeLink, searchBox, segOf, sessionLink, skelRows } from './sessions-kit.js';
 import { hasRecord, histFilter, rowProject, type HistFilter, type HistRow } from './session-history.js';
-import { histBridgeOn, histScope, loadHistRows, scopedRows } from './sessions-scope.js';
+import { histBridgeOn, histRowsNow, histScope, histScopePending, loadHistRows, onHistRows, PENDING_TEXT, scopedRows } from './sessions-scope.js';
 import { histScopeOn } from './lib/hist-scope.js';
 import { findMatcher } from './lib/find.js';
 import { whenLabel } from './lib/omni-order.js';
@@ -27,9 +27,14 @@ let seq = 0;
 /** 탭이 앱에 돌려주는 손잡이 — 사이드바에서 고른 범위가 바뀌면 앱이 부른다. */
 export interface TabHandle { rescope(): void }
 
+/**
+ * 표에 적는 프로젝트. 셸 액자 안에서는 줄의 프로젝트(rowProject — 기록이 있는 줄은 기록의 것)라 사이드바 · 대화 찾기 · 작업 일지와 같은 말을 한다
+ *  («기타» 를 골랐는데 프로젝트 번호가 서지 않는다). 셸 밖(단독 탭)에는 사이드바가 없다 — 종전 그대로 박스의 프로젝트를 적는다.
+ */
+const projOf = (r: HistRow): string => (histBridgeOn() ? rowProject(r).name : r.projectName || (r.projectId != null ? '#' + r.projectId : ''));
 const cmp = (a: HistRow, b: HistRow, col: SortCol): number => {
   if (col === 'name') return a.name.localeCompare(b.name, 'ko');
-  if (col === 'proj') return (rowProject(a).name || '￿').localeCompare(rowProject(b).name || '￿', 'ko');
+  if (col === 'proj') return (projOf(a) || '￿').localeCompare(projOf(b) || '￿', 'ko');
   if (col === 'state') return a.stateLabel.localeCompare(b.stateLabel, 'ko');
   return a.lastMs - b.lastMs;
 };
@@ -65,7 +70,7 @@ export function mountList(host: HTMLElement): TabHandle {
 
   const visible = (): HistRow[] => {
     const match = findMatcher(st.q);
-    const out = histFilter(inScope, st.filter).filter((r) => match(r.name, rowProject(r).name, r.title));
+    const out = histFilter(inScope, st.filter).filter((r) => match(r.name, projOf(r), r.title));
     out.sort((a, b) => (st.asc ? 1 : -1) * cmp(a, b, st.sort) || b.lastMs - a.lastMs);
     return out;
   };
@@ -95,8 +100,7 @@ export function mountList(host: HTMLElement): TabHandle {
     tbody.replaceChildren(...vis.slice(0, st.shown).map((r) => {
       //  점 — 나를 기다리는 셋(확인 필요 · 작업 중 · 작업 완료)은 색, 열려 있는 세션(대기 중)은 채운 회색, 그 밖은 빈 고리.
       const dot = r.stateKey === 'log' ? 'log' : r.stateKey === 'idle' ? '' : rowDotCls(r.stateKey);
-      //  프로젝트 칸은 그 줄의 프로젝트(rowProject) — 기록이 있는 줄은 기록의 것이라 대화 찾기 · 작업 일지 · 사이드바와 같은 말을 한다.
-      const proj = rowProject(r).name;
+      const proj = projOf(r);
       const tr = el('div', { class: 'shx-tr', role: 'row', tabindex: '0', 'data-key': r.key },
         el('div', { class: 'shx-td shx-td-name', role: 'cell' }, el('span', { class: 'shx-dot' + (dot ? ' ' + dot : '') }), el('b', { class: 'shx-tname', text: r.name, title: r.name })),
         el('div', { class: 'shx-td shx-td-proj' + (proj ? '' : ' none'), role: 'cell', title: proj }, proj),
@@ -108,7 +112,10 @@ export function mountList(host: HTMLElement): TabHandle {
       tr.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
       return tr;
     }));
-    if (!vis.length) tbody.replaceChildren(noteRow(emptyBox(scoped && !inScope.length && rows.length
+    //  «남긴 것» 묶음을 골랐는데 일지가 아직 없으면 범위를 정할 수 없다 — «없다» 가 아니라 «세는 중» · «못 받았다» 고 말한다.
+    const pending = histScopePending();
+    if (pending) tbody.replaceChildren(noteRow(pending === 'failed' ? errBox(PENDING_TEXT.failed) : emptyBox({ icon: 'timeline', title: PENDING_TEXT.wait })));
+    else if (!vis.length) tbody.replaceChildren(noteRow(emptyBox(scoped && !inScope.length && rows.length
       ? { icon: 'search', title: '이 범위에 세션이 없습니다.', text: '사이드바에서 「전체」를 누르면 범위가 풀립니다.' }
       : { icon: 'search', title: rows.length ? '조건에 맞는 세션이 없습니다.' : '세션이 없습니다.', text: rows.length ? '거르개를 풀거나 다른 이름으로 찾아 보세요.' : '' })));
     const left = vis.length - st.shown;
@@ -119,9 +126,8 @@ export function mountList(host: HTMLElement): TabHandle {
 
   function infoTable(r: HistRow): HTMLElement {
     const line = (k: string, v: unknown): HTMLElement | null => (v == null || v === '' ? null : el('div', { class: 'shx-kv' }, el('dt', { text: k }), el('dd', {}, v as any)));
-    const proj = rowProject(r);   // 표의 프로젝트 칸과 같은 것(기록이 있는 줄은 기록의 프로젝트)
     return el('dl', { class: 'shx-info' },
-      line('프로젝트', proj.id != null ? routeLink('#/projects2/p/' + proj.id, { class: 'shx-link' }, proj.name) : '없음'),
+      line('프로젝트', r.projectId != null ? routeLink('#/projects2/p/' + r.projectId, { class: 'shx-link' }, r.projectName || '#' + r.projectId) : '없음'),
       line('상태', r.stateLabel),
       line('만든 때', fmtAt(r.firstMs)),
       line('마지막 활동', fmtAt(r.lastMs)),
@@ -139,7 +145,7 @@ export function mountList(host: HTMLElement): TabHandle {
     const head = paneHead(r.name, { icon: r.stateKey === 'log' ? 'doc' : 'chat', tone: tileTone(r.stateKey) });
     head.sub.replaceChildren(
       el('span', { class: 'shx-state ' + stateTone(r.stateKey), text: r.stateLabel }),
-      el('span', { text: [rowProject(r).name || NO_PROJECT_NAME, whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
+      el('span', { text: [projOf(r) || NO_PROJECT_NAME, whenLabel(r.lastMs || undefined, now)].filter(Boolean).join(' · ') }));
     const tabs = segOf<DetailTab>([{ key: 'rec', label: '기록 보기' }, { key: 'info', label: '정보' }], st.tab, (v) => { st.tab = v; fill(); }, '세션 보기');
     const resume = btnOf('이어 질문하기', { icon: 'chat' });
     resume.addEventListener('click', () => { if (r.convId) void resumeSessionRecord(r.convId, r.node, resume); });
@@ -187,6 +193,17 @@ export function mountList(host: HTMLElement): TabHandle {
   refresh.addEventListener('click', () => { void load(true); });
   input.addEventListener('input', () => { st.q = input.value; st.shown = STEP; draw(); });
   void load(false);
+  //  줄이 다른 길로 새로 왔다(셸 액자 안에서는 1분마다 다시 받는다 — 사이드바의 수가 그 줄로 선다). 이 표도 같은 줄로 맞춘다.
+  //   달라진 것이 없으면 다시 그리지 않는다(보던 줄의 초점을 흔들지 않는다). 떠난 화면은 듣기를 걷는다.
+  const sigOf = (rs: HistRow[]): string => rs.map((r) => r.key + ':' + r.stateKey + ':' + r.lastMs + ':' + r.name).join('|');
+  const offRows = onHistRows(() => {
+    if (!host.isConnected) { offRows(); return; }
+    const got = histRowsNow();
+    if (!got || got === rows || sigOf(got) === sigOf(rows)) return;
+    rows = got;
+    draw();
+    if (st.sel && !rows.some((r) => r.key === st.sel)) { st.sel = ''; openDetail(); }
+  });
   return {
     //  범위가 바뀌었다 — 줄만 다시 세운다(다시 받지 않는다). 고른 줄이 범위 밖으로 나갔으면 오른쪽 칸을 비운다.
     rescope: () => {

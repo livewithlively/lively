@@ -8,7 +8,7 @@ import { api, el, toast } from './core.js';
 import { mountTranscript, setTranscriptDoor } from './sessions.js';
 import { btnOf, dropMySessions, emptyBox, errBox, ico, leftPanel, loadMySessions, pickOf, searchBox, selectOf, shellHref, skelRows, transcriptHref } from './sessions-kit.js';
 import { markRanges, type HitRef } from './session-history.js';
-import { dropHistRows, histBridgeOn, histScope, loadHistRows, scopedConvs } from './sessions-scope.js';
+import { dropHistRows, histBridgeOn, histLoadFailed, histScope, histScopePending, loadHistRows, PENDING_TEXT, scopedConvs } from './sessions-scope.js';
 import { histScopeOn } from './lib/hist-scope.js';
 import type { TabHandle } from './sessions-list.js';
 import { PERIODS, periodSince, dayBucket, whenLabel, inPeriod, type OmniPeriod } from './lib/omni-order.js';
@@ -122,6 +122,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     //   셸 밖에서는 도는 세션을 조회하지 않는다(안 연 탭의 조회를 미리 하지 않는다).
     const hist = histBridgeOn() && histScopeOn(histScope()) ? await loadHistRows() : null;
     if (mySeq !== seq) return;
+    if (hist && histLoadFailed(hist)) { count.textContent = ''; list.replaceChildren(errBox('범위를 정할 세션 목록을 불러오지 못했습니다.')); return; }
     const now = Date.now(), since = periodSince(st.period, now);
     const conv = hist ? scopedConvs(hist.rows, now) : null;
     const atOf = (s: any): number => Date.parse(s.last_seen);   // 기록의 시각 — 사이드바의 시간 묶음도 이 시각으로 가른다
@@ -165,6 +166,7 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     if (histBridgeOn() && histScopeOn(histScope())) {
       const hist = await loadHistRows();
       if (mySeq !== seq) return;
+      if (histLoadFailed(hist)) { count.textContent = ''; list.classList.remove('busy'); list.replaceChildren(errBox('범위를 정할 세션 목록을 불러오지 못했습니다.')); return; }
       conv = scopedConvs(hist.rows, Date.now());
     }
     if (conv && st.picked && !conv.has(st.picked.sid)) openPicked(null);
@@ -231,6 +233,9 @@ export function mountFind(host: HTMLElement, opts: { q?: string; onQuery?: (q: s
     if (aborter) { aborter.abort(); aborter = null; }   // 글자를 더 치면 앞 요청을 끊는다
     const q = st.q.trim();
     list.classList.remove('busy');
+    //  «남긴 것» 묶음을 골랐는데 일지가 아직 없으면 범위를 정할 수 없다 — «없다» 가 아니라 «세는 중» · «못 받았다» 고 말한다(일지가 오면 다시 불린다).
+    const pending = histBridgeOn() ? histScopePending() : null;
+    if (pending) { count.textContent = ''; list.replaceChildren(pending === 'failed' ? errBox(PENDING_TEXT.failed) : emptyBox({ icon: 'timeline', title: PENDING_TEXT.wait })); return; }
     if (!q) return drawRecent(mySeq);
     if (q.length > 200) { count.textContent = ''; list.replaceChildren(errBox('검색어가 너무 깁니다(200자 이하).')); return; }
     return drawHits(mySeq, q);

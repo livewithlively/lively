@@ -295,6 +295,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const only = post ? parseSessionIds(src.sessions) : { ok: true as const, ids: null };
     if (!only.ok) throw new HttpError(400, only.error);
     const sessionIds = only.ids;
+    //  빈 목록 = 찾을 세션이 없다 — 저장 쪽에 묻지 않고 빈 답을 준다(저장 쪽도 같은 답을 한다).
+    if (sessionIds && !sessionIds.length) { res.json({ hits: [], total: 0, sessions: 0, capped: false, words: [], pending: 0 }); return; }
     const cfg = (await getRuntimeConfig()).session_share;
     const base = { requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID };
     let found: Awaited<ReturnType<typeof searchConvMessages>>;
