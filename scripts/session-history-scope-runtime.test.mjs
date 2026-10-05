@@ -94,7 +94,9 @@ async function PAGE_MAIN() {
   const LIVE = [
     { id: "box-1", label: "검색 고치기", harness: "claude", owned: true, created: sec(TODAY - 3_600_000), lastActive: sec(TODAY), attached: true, agentState: "busy", working: true, claudeSessionId: "c1", projectId: 3870 },
     { id: "box-3", label: "덱 재시안", harness: "claude", owned: true, created: sec(YDAY - 3_600_000), lastActive: sec(YDAY), attached: false, agentState: "offline", restorable: true, claudeSessionId: "c3", projectId: 9001 },
-    { id: "box-4", label: "어제 검색 정리", harness: "claude", owned: true, created: sec(YDAY2 - 3_600_000), lastActive: sec(YDAY2), attached: false, agentState: "offline", claudeSessionId: "c4", projectId: 3870 },
+    //  ⚠ 박스만 남은 세션은 «본 뒤로 한 일이 없다»(lastViewed ≥ lastActive)로 둔다 — 안 그러면 24시간 안에 한 일이 «작업 완료»(실행 중)로 읽혀,
+    //   하루 중 언제 돌리느냐에 따라 상태가 갈린다(CI 에서 실제로 밟았다: 어제 낮이 20시간 전이던 시각).
+    { id: "box-4", label: "어제 검색 정리", harness: "claude", owned: true, created: sec(YDAY2 - 3_600_000), lastActive: sec(YDAY2), lastViewed: sec(YDAY2) + 1, attached: false, agentState: "offline", claudeSessionId: "c4", projectId: 3870 },
     { id: "box-5", label: "옛 조사", harness: "claude", owned: true, created: sec(OLD - 3_600_000), lastActive: sec(TODAY), lastViewed: sec(TODAY) + 1, attached: false, agentState: "offline", claudeSessionId: "c5", projectId: 3870 },   // 옛 대화를 오늘 열어 보기만 했다 — 기록은 40일 전 그대로
     { id: "box-9", label: "기록 없는 새 세션", harness: "claude", owned: true, created: sec(NOW), lastActive: sec(NOW), attached: true, agentState: "idle", lastViewed: sec(NOW) + 1 },
     { id: "box-x", label: "남의 세션 박스", harness: "claude", owned: false, created: sec(NOW), lastActive: sec(NOW), attached: true, agentState: "idle", lastViewed: sec(NOW) + 1, claudeSessionId: "cx" },
