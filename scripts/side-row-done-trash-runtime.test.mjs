@@ -23,7 +23,8 @@
 //  T5 휴지통 · 끝난 세션 · «묻지 않기» 끔 — 종전 창이 뜬다(멈춘다는 말이 없다)
 //  T6 휴지통 · 화면은 끝난 줄로 아는데 서버가 «돌고 있다» 고 거절 — 멈출지 묻고, 확인하면 stop_live 로 다시 보낸다 · 취소하면 안 보낸다
 //  C1 손을 안 얹은 줄 — 휴지통은 안 보인다(display none) · 켜진 줄은 ✓ 만 서 있다
-//  C2 손을 얹은 줄 — 왼쪽부터 압정 · 휴지통 · ✓ 순서로 서고 서로 안 겹친다 · 제목이 그 셋 밑으로 안 들어간다
+//  C2 손을 얹은 줄 — 왼쪽부터 압정 · ✓ · 휴지통 순서로 서고 서로 안 겹친다 · 제목이 그 셋 밑으로 안 들어간다(원준 2026-10-05 «순서 [압정] [✓] [휴지통]으로»)
+//  C6 ✓ 는 손을 얹든 말든 같은 자리다(켜진 줄 — 손을 얹을 때 ✓ 가 움직이지 않는다) · 켜진 줄의 제목이 ✓ 밑으로 안 들어간다
 //  C3 한 줄 모드(프로젝트 카드 안)에서도 휴지통이 ✓ 와 같은 높이에 선다
 //  C4 고정된 줄에 손을 얹음 — 고정 압정 · 휴지통 · ✓ 가 안 겹친다
 //  C5 터치 화면(호버 없음) — 휴지통이 늘 보이고 ✓ 와 안 겹치며, 제목 · 상태 점이 두 단추 밑으로 안 들어간다
@@ -143,9 +144,10 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
       row('sess:box-live2', 'ROW-ACTIVE', { active: true }),
       row('sess:box-pin', 'ROW-PINNED-WITH-A-VERY-LONG-TITLE-THAT-MUST-ELLIPSIZE-0123456789', { pinned: true }),
       row('sess:box-long', 'ROW-LONG-WITH-A-VERY-LONG-TITLE-THAT-MUST-ELLIPSIZE-0123456789'),
+      row('sess:box-on', 'ROW-ON-WITH-A-VERY-LONG-TITLE-THAT-MUST-ELLIPSIZE-0123456789', { active: true }),
       row('sess:box-past2', 'ROW-OWN-TRASH', { past: true, close: { kind: 'trash', label: 'OWN-TRASH', title: 'OWN-TRASH', run: () => { ownRuns.push('ran'); } } }),
     ];
-    data.sessions.push(sess('box-pin'), sess('box-long'));
+    data.sessions.push(sess('box-pin'), sess('box-long'), sess('box-on'));
     data.sessions.push(sess('box-past2', { alive: false, stateKey: 'restorable', raw: { id: 'box-past2', owner: 'me', owned: true, restorable: true } }));
     data.sessions.push(sess('box-live2'));
     const closed = [];
@@ -171,6 +173,9 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
     const geo = (id) => { const e = rowEl(id); e.classList.add('h'); const g = (sel) => { const x = e.querySelector(sel); const r = x.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width), d: getComputedStyle(x).display }; };
       const out = { pin: g('.v2-app-inst-pin'), trash: g('.v2-app-inst-trash'), done: g('.v2-app-inst-close--done'), title: g('.v2-app-inst-title') }; e.classList.remove('h'); return out; };
     R.geo = { plain: geo('sess:box-long'), pinned: geo('sess:box-pin') };
+    { const e = rowEl('sess:box-on'); const g = (sel) => { const x = e.querySelector(sel); const r = x.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right), d: getComputedStyle(x).display }; };
+      const snap = () => ({ done: g('.v2-app-inst-close--done'), trash: g('.v2-app-inst-trash'), title: g('.v2-app-inst-title') });
+      const idle = snap(); e.classList.add('h'); const hover = snap(); e.classList.remove('h'); R.geoOn = { idle: idle, hover: hover }; }
     // ── D. ✓
     const toasts = () => Array.from(document.querySelectorAll('#toasts .toast')).map((t) => ({ err: t.classList.contains('coral') }));
     const click = (id, sel) => { const b = rowEl(id).querySelector(sel); b.click(); };
@@ -226,7 +231,7 @@ const parse = (dom) => {
 const R = parse(await dumpDom(chrome, { html: PAGE, prefix: "side-row-acts-", args: ["--window-size=1200,900"] }));
 
 // 배선 — 줄이 실제로 그려졌다(안 그려지면 아래 «없다» 단언이 전부 거짓 초록이다)
-check(R.rowsDrawn === 9 && !!R.shape.live && !!R.shape.other && !!R.shape.app && !!R.shape.ghost && !!R.own, "W0 줄 아홉이 그려졌다", j([R.rowsDrawn, R.shape]));
+check(R.rowsDrawn === 10 && !!R.shape.live && !!R.shape.other && !!R.shape.app && !!R.shape.ghost && !!R.own, "W0 줄 열이 그려졌다", j([R.rowsDrawn, R.shape]));
 const two = (s) => !!s && s.done === 1 && s.trash === 1 && s.x === 0 && s.acts === true;
 const onlyX = (s) => !!s && s.done === 0 && s.trash === 0 && s.x === 1 && s.acts === false;
 check(two(R.shape.live), "B1 내 세션 줄(도는 것) — ✓ 와 휴지통 · × 없음", j(R.shape.live));
@@ -274,9 +279,12 @@ check(R.c1.trashIdle === "none" && R.c1.doneIdle === "none" && R.c1.trashOn === 
 {
   const g = R.geo.plain, pn = R.geo.pinned;
   const seq = (x) => x.pin.d !== "none" && x.trash.d !== "none" && x.done.d !== "none" && x.pin.w > 0 && x.trash.w > 0 && x.done.w > 0
-    && x.pin.r <= x.trash.l && x.trash.r <= x.done.l && x.title.r <= x.pin.l;
-  check(seq(g), "C2 손을 얹은 줄 — 압정 · 휴지통 · ✓ 순서로 안 겹치고, 제목이 그 밑으로 안 들어간다", j(g));
-  check(seq(pn), "C4 고정된 줄에 손을 얹음 — 고정 압정 · 휴지통 · ✓ 가 안 겹친다", j(pn));
+    && x.pin.r <= x.done.l && x.done.r <= x.trash.l && x.title.r <= x.pin.l;
+  check(seq(g), "C2 손을 얹은 줄 — 압정 · ✓ · 휴지통 순서로 안 겹치고, 제목이 그 밑으로 안 들어간다", j(g));
+  const on = R.geoOn;
+  check(!!on && on.idle.done.d !== "none" && on.idle.trash.d === "none" && on.idle.done.l === on.hover.done.l && on.idle.title.r <= on.idle.done.l,
+    "C6 ✓ 는 손을 얹든 말든 같은 자리 · 켜진 줄의 제목이 ✓ 밑으로 안 들어간다", j(on));
+  check(seq(pn), "C4 고정된 줄에 손을 얹음 — 고정 압정 · ✓ · 휴지통 순서로 안 겹친다", j(pn));
 }
 // ── C3 — 한 줄 모드(프로젝트 카드 안)의 높이. 그 모드는 묶는 축이 프로젝트일 때만 서서, 여기서는 줄을 손으로 지어 높이만 본다.
 {
@@ -330,7 +338,7 @@ check(R.c1.trashIdle === "none" && R.c1.doneIdle === "none" && R.c1.trashOn === 
   })();
   </script></html>`;
   const tc = parse(await dumpDom(chrome, { html: PAGE3, prefix: "side-row-acts-touch-", args: ["--window-size=1200,900"] })).touch;
-  check(tc.trash.d !== "none" && tc.done.d !== "none" && tc.trash.w > 0 && tc.trash.r <= tc.done.l && tc.title.r <= tc.trash.l && tc.st.r <= tc.trash.l,
+  check(tc.trash.d !== "none" && tc.done.d !== "none" && tc.trash.w > 0 && tc.done.r <= tc.trash.l && tc.title.r <= tc.done.l && tc.st.r <= tc.done.l,
     "C5 터치 화면 — 휴지통이 늘 보이고 ✓ 와 안 겹치며, 제목 · 상태 점이 두 단추 밑으로 안 들어간다", j(tc));
 }
 done();
