@@ -68,7 +68,8 @@ import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode,
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
-import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta, getSessionStates } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { applyTaskMarks, missingOrigins, taskOriginsBySession, visibleOriginStates, type OriginRowLike } from "../node/task-origin.js";   // #4551 — 위탁 워커에 «누가 시켰나» 표식
 import { cleanLastPrompt } from "./last-prompt.js";
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
@@ -825,6 +826,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const wsMap = await sessionWorkspaceIds(merged.map((s) => s.id));
       merged = merged.filter((s) => sessionInWorkspace(wsMap.get(s.id), curWs));
     } catch (e) { logger.warn({ err: e }, "세션 목록 워크스페이스 필터 실패 — 격리 없이 나간다(v6/sessions 가 이중 방어)"); }
+    // #4551 — 위탁 워커에 «누가 시켰나» 표식을 얹는다(src/node/task-origin.ts 머리말). 화면이 그 워커를 시킨 세션의
+    //  프로젝트 아래에 세우고 «리브가 한 일» 로 그린다. 조회 실패는 표식 없이 나간다(best-effort — 종전 화면 그대로).
+    try {
+      const origins = await taskOriginsBySession(merged.map((s) => s.id));
+      if (origins.size) {
+        const miss = missingOrigins(merged, origins);
+        const states = miss.length ? await getSessionStates(miss) : new Map<string, SessionState>();
+        //  ⚠ 내 세션(주인 · 초대)만 푼다 — 남의 세션 이름 · 프로젝트가 표식으로 새지 않게(visibleOriginStates 머리말).
+        applyTaskMarks(merged as Array<(typeof merged)[number] & OriginRowLike>, origins, visibleOriginStates(states, idOf(userOf(req))));
+      }
+    } catch (e) { logger.warn({ err: e }, "세션 목록 위탁 표식 실패 — 표식 없이 나간다(비치명)"); }
     res.json({ sessions: merged });
   }));
   // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).

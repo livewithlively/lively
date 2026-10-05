@@ -8,12 +8,16 @@
 //     압정이 아무 일도 안 했다 — #4233 홈 사이드바 2판 진단).
 //  잎 모듈인 이유는 sess-fold · hold-rules 와 같다 — 이 잣대가 화면 코드 안에 있으면 시험할 데가 없다(scripts/home-pins.test.mjs).
 
+import { LIV_CARD } from './liv-work.js';   // #4551 — 「리브가 한 일」 카드 키
+
 /** 이 나누기가 한 줄에게 묻는 것 전부. */
 export interface PinRowLike {
   pinned?: boolean;
   project?: { id: number } | null;
   /** 시간축이 준 묶음 이름(고정 · 지금 볼 것 · 오늘 · 어제 …). */
   group?: string;
+  /** 「리브가 한 일」 묶음에 설 줄인가 — 시킨 프로젝트를 모르는 위탁 워커(#4551, lib/liv-work). */
+  liv?: boolean;
 }
 
 /** 그 줄이 고정한 프로젝트 안에 있나. 프로젝트 없음(id 0 · null)은 고정할 수 없다. */
@@ -109,8 +113,10 @@ export interface ProjCardPlan<T> {
   key: string;
   /** 프로젝트 키(`p:<id>`) — 압정 · 「지난 세션」 통처럼 프로젝트 단위인 것이 쓴다. */
   pkey: string;
-  /** 프로젝트 id — 「프로젝트 없음」은 0. */
+  /** 프로젝트 id — 「프로젝트 없음」은 0. 「리브가 한 일」 묶음도 0 이다(프로젝트가 아니다 — `liv` 로 가른다). */
   id: number;
+  /** 「리브가 한 일」 묶음인가(#4551) — 프로젝트에 안 붙은 줄 중 위탁 워커만 따로 모은 카드. pkey 는 'liv'. */
+  liv: boolean;
   /** 「지금 볼 것」 조각인가. */
   now: boolean;
   /** 이 카드가 그 프로젝트의 「지난 세션」 접힘을 드나 — **한 프로젝트에 한 장만** 참이다. 나머지 카드가 있으면 그 카드가,
@@ -125,11 +131,13 @@ export function planNowCards<T extends PinRowLike>(rows: readonly T[] | null | u
   const byKey = new Map<string, ProjCardPlan<T>>();
   for (const r of rows || []) {
     const id = Number(r.project && r.project.id) || 0;
-    const pkey = 'p:' + id;
+    //  프로젝트에 안 붙은 줄 중 위탁 워커는 「리브가 한 일」 카드로 따로 모은다(#4551) — 사람이 연 세션과 섞이지 않게.
+    const liv = !id && !!r.liv;
+    const pkey = liv ? LIV_CARD : 'p:' + id;
     const now = r.group === nowGroup && !inPinnedProject(r, isProjPinned);
     const key = now ? NOW_CARD + pkey : pkey;
     let c = byKey.get(key);
-    if (!c) { c = { key, pkey, id, now, fold: true, rows: [] }; byKey.set(key, c); cards.push(c); }
+    if (!c) { c = { key, pkey, id, liv, now, fold: true, rows: [] }; byKey.set(key, c); cards.push(c); }
     c.rows.push(r);
   }
   for (const c of cards) c.fold = !(c.now && byKey.has(c.pkey));

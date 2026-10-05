@@ -64,7 +64,7 @@ const MAIN = code(read("web/v2/main.ts"));
 ok(/const merged = mergeSessions\(lastLive, lastLogs\);\s*const sessions = merged\.filter\(\(s\) => !isSpentLoginSess\(s\.raw, s\.live && s\.alive\)\);/.test(MAIN) && /data = \{ projects, sessions, lists,/.test(MAIN),
   "W1 ★ 셸이 세션 목록을 짤 때 끝난 로그인 세션을 걷는다(사이드바 · 세션 목록 · 카드 접힘이 전부 이 목록을 쓴다)");
 ok(/if \(!id\) return NO_PROJECT_NAME;/.test(code(read("web/v2/views.ts"))), "W2 이름 풀이(projName)가 그 이름을 쓴다");
-ok(/name: c\.id \? \(first\.project as \{ name: string \}\)\.name : NO_PROJECT_NAME,/.test(code(read("web/v2/side.ts")))
+ok(/name: c\.id \? \(first\.project as \{ name: string \}\)\.name : c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME,/.test(code(read("web/v2/side.ts")))
   && /text: NO_PROJECT_NAME \}\), cnt\(plan\.noneN\)/.test(code(read("web/v2/side.ts"))),
   "W3 ★ 홈 카드와 [프로젝트] 사이드바의 리스트 없는 묶음이 **같은 이름 값**을 쓴다");
 //  옛 이름이 화면 코드 어디에도 글자로 남아 있지 않다 — 한 곳이라도 남으면 같은 묶음이 두 이름으로 불린다.
