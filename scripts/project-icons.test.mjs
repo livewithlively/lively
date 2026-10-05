@@ -12,7 +12,10 @@
 //   Q2 칩: 홈 고정 세션 둘째 줄(11px) · 프로젝트 단추(12px) · 세션 목록 사이드바 줄(16px) · 통합검색(13 · 15px) · 탭(15px) ·
 //      휴지통 · 지난 세션 표(15px) · 가이드 그림(17px)이 크기 규칙을 따른다(값으로 부른 통합검색 · 휴지통 부품의 path 를 본다)
 //   Q3 「프로젝트 없음」 · 「기타 (미분류)」 = 점선 원(projNone): 사이드바 · 휴지통 · 클래식 기타 폴더(값으로 부른다)
-//   Q4 우측 사이드바 「프로젝트」 탭은 projtask 그대로이고, 「칸에 넣기」 줄도 탭과 같은 이름(pnIconName(d.icon))을 쓴다(종전엔 layers)
+//   Q4 우측 사이드바 「프로젝트」 = 프로젝트 과녁(원준 2026-10-05 «독에는 아이콘은 왜 안 바꿨나»). 부품 표의 이름은 proj 이고
+//      glyphAt(이름, px) 가 13px 이하 자리에서 projMini 로 바꾼다: 탭 머리(14) · 탭 목록(13) · 내용 더하기(13) · 칸에 넣기(15) ·
+//      칸 머리와 크게 보기 머리(13) · 빈 화면(26). 독 타일은 부품 표의 이름 그대로(큰 타일 = proj). 옛 projtask 는 표에도 부르는 곳에도 없다
+//   Q4b 앱 = 각진 사각 넷(apps): 독 [모든 앱] · 앱 칸의 줄. 둥근 사각(grid)은 자료의 「아이콘으로 보기」에만 남는다
 //   Q5 보드로 열기 · 보드에서 보기 · [보드] = board
 //   Q6 진척시킨 프로젝트 = 과녁, 진척시킨 태스크 = 원 안의 체크 그대로(값으로 읽는다)
 //   Q7 홈 사이드바 「프로젝트로 묶기」 토글 = projGroup
@@ -146,16 +149,40 @@ let pjv = null, dash = null;
   }
 }
 
-// ── Q4 우측 사이드바 「프로젝트」 탭 ──
+// ── Q4 우측 사이드바 「프로젝트」 = 프로젝트 과녁(크기에 맞춰 작은 과녁) ──
 {
-  const PARTS = read("web/v2/panes-parts.ts"), KIT = read("web/v2/panes-kit.ts");
-  ok(/\{ type: 'tasks', name: '프로젝트', icon: 'projtask'/.test(PARTS) && has("projtask"), "Q4 우측 사이드바 「프로젝트」 탭은 projtask 그대로");
+  const PARTS = read("web/v2/panes-parts.ts"), KIT = read("web/v2/panes-kit.ts"), DOCK = read("web/v2/pane-dock.ts");
+  ok(/\{ type: 'tasks', name: '프로젝트', icon: 'proj'[,\s]/.test(PARTS), "Q4 우측 사이드바 부품 표의 「프로젝트」 그림 이름 = proj");
+  const glyphAt = typeof paths.glyphAt === "function" ? paths.glyphAt : null;
+  ok(!!glyphAt && glyphAt("proj", 13) === "projMini" && glyphAt("proj", 11) === "projMini", "Q4 glyphAt: proj 를 13px 이하 자리에서 그리면 작은 과녁(projMini)");
+  ok(!!glyphAt && glyphAt("proj", 14) === "proj" && glyphAt("proj", 15) === "proj" && glyphAt("proj", 26) === "proj", "Q4 glyphAt: 14px 이상 자리에선 과녁(proj)");
+  ok(!!glyphAt && glyphAt("wiki", 13) === "wiki" && glyphAt("folder", 11) === "folder" && glyphAt("apps", 26) === "apps", "Q4 glyphAt: proj 아닌 이름은 크기와 상관없이 그대로");
+  ok(!!glyphAt && glyphAt("proj", NaN) === "proj", "Q4 glyphAt 엣지: 모르는 크기(NaN)는 과녁(projGlyph 와 같은 규칙)");
   let pnIconName = null;
   { const i = KIT.indexOf("const PN_NAME"), j = KIT.indexOf("\n", KIT.indexOf("export const pnIconName", i));
     try { if (i >= 0 && j > i) pnIconName = new Function(transpile(KIT.slice(i, j + 1).replace("export const pnIconName", "const pnIconName")) + "\nreturn pnIconName;")(); } catch { /* 빨간불 */ } }
-  ok(typeof pnIconName === "function" && pnIconName("projtask") === "projtask", "Q4 우측 사이드바 이름 projtask 는 표의 projtask 로 닿는다");
+  ok(typeof pnIconName === "function" && pnIconName("proj") === "proj" && pnIconName("projMini") === "projMini" && has("proj") && has("projMini"), "Q4 우측 사이드바 이름 proj · projMini 가 표의 그 그림으로 닿는다");
+  const lead = PANES.split("\n").filter((l) => l.includes("'pn-tab-lead'") || l.includes("lead.replaceChildren("));
+  ok(lead.length === 2 && lead.every((l) => /pnIcon\(glyphAt\(ic, 14\), 'pn-i sm'\)/.test(l)), "Q4 탭 머리(그릴 때 · 다시 그릴 때) = glyphAt(ic, 14)", lead.map((l) => l.trim().slice(0, 60)).join(" | "));
+  ok(/pnIcon\(glyphAt\(tabIcon\(t\), 13\), 'pn-i sm'\)/.test(PANES), "Q4 탭 목록 줄(13px) = glyphAt(tabIcon(t), 13)");
+  ok(/pnIcon\(glyphAt\(d\.icon, 13\), 'pn-i sm'\)/.test(PANES), "Q4 ＋ 내용 더하기 줄(13px) = glyphAt(d.icon, 13)");
   const adds = cut(PANES, "const adds: CtxRow[] = PART_DEFS", "}));");
-  ok(/label: d\.name, icon: pnIconName\(d\.icon\)/.test(adds) && !/'layers'/.test(adds), "Q4 「칸에 넣기」 줄이 탭과 같은 그림 이름(pnIconName(d.icon))을 쓴다(「프로젝트」가 layers 로 떨어지지 않는다)");
+  ok(/label: d\.name, icon: pnIconName\(glyphAt\(d\.icon, 15\)\)/.test(adds) && !/'layers'/.test(adds), "Q4 「칸에 넣기」 줄(15px) = 탭과 같은 이름을 glyphAt(d.icon, 15) 로(「프로젝트」가 layers 로 떨어지지 않는다)");
+  ok(!/pnIcon\((ic|d\.icon|tabIcon\(t\)), /.test(PANES), "Q4 우측 사이드바 부품 그림을 크기 규칙 없이 그리는 자리가 없다");
+  ok((PTASK.match(/pnIcon\(projGlyph\(13\), 'pn-i sm'\)/g) || []).length === 2 && /class: 'pn-tk-head-row' \}, pnIcon\(projGlyph\(13\)/.test(PTASK) && /class: 'pj-modal-h' \}, pnIcon\(projGlyph\(13\)/.test(PTASK), "Q4 「프로젝트」 칸 머리 · 크게 보기 머리(13px) = 작은 과녁(projGlyph(13))");
+  ok((PTASK.match(/class: 'pn-empty' \}, pnIcon\(projGlyph\(26\), 'pn-i big'\)/g) || []).length === 2, "Q4 「프로젝트」 칸 빈 화면 둘(26px) = 과녁(projGlyph(26))");
+  ok(/glyph: d\.icon,/.test(PANES) && /tile\(app\.glyph, appColor\(it\.type\)\)/.test(DOCK), "Q4 독 타일은 부품 표의 이름(proj)을 그대로 그린다(64 칸 타일이라 큰 과녁)");
+  {
+    const files = [];
+    const walk = (dir) => { for (const n of readdirSync(join(root, dir))) { const p = dir + "/" + n; if (statSync(join(root, p)).isDirectory()) walk(p); else if (/\.ts$/.test(n)) files.push(p); } };
+    walk("web");
+    const callers = files.filter((f) => /['"]projtask['"]/.test(read(f)));
+    ok(!has("projtask") && callers.length === 0, "Q4 옛 projtask(폴더 안 태스크)는 표에도 부르는 곳에도 없다", callers.join(","));
+  }
+  // Q4b 앱 = 각진 사각 넷
+  ok(/class: 'pn-dock-ic' \}, tile\('apps', 'apps'\)/.test(DOCK) && !/tile\('grid'/.test(DOCK), "Q4b 독 [모든 앱] = apps(둥근 사각 grid 가 아니다)");
+  ok(/\{ type: 'apps', name: '[^']+', icon: 'apps'/.test(PARTS) && /pnIcon\(hasUi \? 'apps' : 'chat', 'pn-i'\)/.test(PARTS) && !/'grid'/.test(PARTS), "Q4b 앱 칸의 탭과 앱 줄 = apps");
+  ok(/view === 'icon' \? 'rows' : 'grid'/.test(read("web/v2/panes-files.ts")), "Q4b 자료의 「아이콘으로 보기」 단추는 grid 그대로(앱 뜻이 아니다)");
 }
 
 // ── Q5 보드 ──

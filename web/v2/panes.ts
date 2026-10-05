@@ -57,6 +57,7 @@ import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
+import { glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -537,7 +538,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const zone: Zone = z === 'bottom' && !narrow() ? 'bottom' : 'side';   // 가운데 칸(세션)에서 부르면 곁칸에 넣는다(좁은 폭엔 아래 칸이 없다)
     const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions' && d.pickable !== false).map((d) => ({
       //  #4233: 탭 · [+] 고르기와 같은 그림(PART_DEFS.icon). 종전엔 여기서 따로 고르다 「프로젝트」만 묶음 그림(layers)으로 떨어졌다.
-      label: d.name, icon: pnIconName(d.icon),
+      label: d.name, icon: pnIconName(glyphAt(d.icon, 15)),
       hint: d.hint, run: () => { openZone(zone); addPart(zone, d.type); },
     }));
     void hit;
@@ -1223,7 +1224,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       onclick: () => { if (consumeDragClick()) return; if (reselect(zone, key)) return; activate(zone, key); },
       //  우클릭 = 이 탭을 어떻게 할까(#762 · #3870) — 닫기 · 한꺼번에 닫기 · 고정 · 다른 칸으로 보내기 · 다시 열기.
       oncontextmenu: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); tabMenu(e, zone, key); },
-    }, el('span', { class: 'pn-tab-lead', 'data-ic': ic }, pnIcon(ic, 'pn-i sm')), el('span', { class: 'pn-tab-t', text: nm })) as HTMLElement;
+    }, el('span', { class: 'pn-tab-lead', 'data-ic': ic }, pnIcon(glyphAt(ic, 14), 'pn-i sm')), el('span', { class: 'pn-tab-t', text: nm })) as HTMLElement;
     const detachX = tabBase(key) === SESSAPP_TAB;   // #4225 붙은 앱 탭의 × 는 «닫기» 가 아니라 «이 세션에서 떼기»
     //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
     //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
@@ -1311,7 +1312,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           const pinned = isPinned(t);
           return el('div', { class: 'pn-pop-line' + (act === t ? ' on' : '') },
             el('button', { class: 'pn-pop-row', type: 'button', title: nm, onclick: () => { close(); activate(zone, t); } },
-              pnIcon(tabIcon(t), 'pn-i sm'),
+              pnIcon(glyphAt(tabIcon(t), 13), 'pn-i sm'),
               el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: pinned ? '고정한 탭' : nm === d.name ? d.hint : d.name }))),
             pinned ? null : el('button', {
               class: 'pn-pop-x', type: 'button', title: `${nm} 탭 닫기`, 'aria-label': `${nm} 닫기`,
@@ -1383,7 +1384,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       el('p', { class: 'pn-pop-h', text: zone === 'bottom' && !bottomVisible() ? '아래 칸에 넣을 것을 고르세요.' : '이 칸에 넣을 것을 고르세요.' }),
       rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>
         el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addPart(zone, d.type); } },
-          pnIcon(d.icon, 'pn-i sm'),
+          pnIcon(glyphAt(d.icon, 13), 'pn-i sm'),
           el('span', { class: 'n' },
             el('b', { text: has(d.type) ? `${d.name} 하나 더` : d.name }),
             el('span', { class: 'pn-fine', text: has(d.type) ? '같은 것을 하나 더 띄워 나란히 봅니다.' : d.hint })))))
@@ -1501,7 +1502,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       //  뷰어는 파일 이름이 서야 종류(그림·문서…)를 안다 — 이름이 바뀌면 아이콘도 갈아 낀다.
       const lead = b?.querySelector('.pn-tab-lead') as HTMLElement | null;
       const ic = tabIcon(key);
-      if (lead && lead.dataset.ic !== ic) { lead.dataset.ic = ic; lead.replaceChildren(pnIcon(ic, 'pn-i sm')); }
+      if (lead && lead.dataset.ic !== ic) { lead.dataset.ic = ic; lead.replaceChildren(pnIcon(glyphAt(ic, 14), 'pn-i sm')); }
       wrapEl.classList.toggle('on', key === act);
     }
     fit(pane);

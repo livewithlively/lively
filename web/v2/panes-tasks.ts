@@ -33,6 +33,7 @@ import { autoSaveCore, type FailVerdict } from '../lib/autosave.js';
 import { putIntoSession } from './sess-input.js';
 import { onTaskPicks, setTaskPicks, taskPicks, toggleTaskPick } from './task-picks.js';
 import { TASK_DRAG_TYPE } from './compose-tasks.js';
+import { projGlyph } from '../lib/icon-paths.js';   // #4233 «프로젝트» 칸 그림 = 프로젝트 과녁(13px 머리는 작은 과녁)
 
 const refsOf = (t: any): TaskSessRef[] => (Array.isArray(t && t.sessions) ? t.sessions : []);
 const DONE_OPEN_KEY = 'pn_tasks_done_open';   // 취향(완료 묶음을 펴 둘까) — 내용이 아니라 워크스페이스로 가르지 않는다
@@ -108,7 +109,7 @@ function openBodyModal(title: string, md: string, acts: Array<{ label: string; i
   const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
   const body = el('div', { class: 'pj-modal-b md-rendered' }, renderMarkdown(stripLeadNotice(md) || '_(본문이 비어 있어요)_'));
   const box = el('div', { class: 'pj-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    el('div', { class: 'pj-modal-h' }, pnIcon('projtask', 'pn-i sm'), el('b', { class: 'ell', text: title }), el('span', { class: 'grow' }),
+    el('div', { class: 'pj-modal-h' }, pnIcon(projGlyph(13), 'pn-i sm'), el('b', { class: 'ell', text: title }), el('span', { class: 'grow' }),
       ...acts.map((a) => el('button', { class: 'btn-text pj-dact' + (a.primary ? ' pri' : ''), type: 'button', onclick: () => { close(); a.run(); } },
         pnIcon(a.icon, 'pn-i sm'), el('span', { text: a.label }))),
       el('button', { class: 'pj-ib pj-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', onclick: close }, pnIcon('x', 'pn-i sm'))),
@@ -122,7 +123,7 @@ function openBodyModal(title: string, md: string, acts: Array<{ label: string; i
 export function tasksPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-tk pj' });
   if (!(ctx.id > 0)) {
-    root.append(el('div', { class: 'pn-empty' }, pnIcon('projtask', 'pn-i big'),
+    root.append(el('div', { class: 'pn-empty' }, pnIcon(projGlyph(26), 'pn-i big'),
       el('b', { text: '프로젝트에 붙은 세션에서 보여요.' }),
       el('p', { class: 'pn-fine', text: '세션을 프로젝트에 붙이면 그 프로젝트의 본문과 태스크가 여기 섭니다.' })));
     return { root };
@@ -189,7 +190,7 @@ export function tasksPart(ctx: PartCtx): Part {
   const countEl = el('span', { class: 'pn-fine pn-tk-count' });
   const barFill = el('div', { class: 'pn-tk-bar-fill' });
   const head = el('div', { class: 'pn-tk-head' },
-    el('div', { class: 'pn-tk-head-row' }, pnIcon('projtask', 'pn-i sm'), nameBtn, countEl),
+    el('div', { class: 'pn-tk-head-row' }, pnIcon(projGlyph(13), 'pn-i sm'), nameBtn, countEl),
     el('div', { class: 'pn-tk-bar', role: 'progressbar', 'aria-label': '끝낸 태스크' }, barFill));
   function paintHead(): void {
     const g = groupTasks(tasks(), null);
@@ -763,7 +764,7 @@ export function tasksPart(ctx: PartCtx): Part {
     const tops: HTMLElement[] = [bodyBox];
     const kids: HTMLElement[] = [];
     if (!all.length) {
-      tops.push(el('div', { class: 'pn-empty' }, pnIcon('projtask', 'pn-i big'),
+      tops.push(el('div', { class: 'pn-empty' }, pnIcon(projGlyph(26), 'pn-i big'),
         el('b', { text: '태스크가 아직 없어요.' }),
         el('p', { class: 'pn-fine', text: '이 프로젝트에서 세션을 열면 그 세션의 태스크가 저절로 생깁니다. 아래에서 직접 더해도 돼요.' })));
     } else if (newMode) {

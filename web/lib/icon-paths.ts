@@ -129,10 +129,9 @@ export const ICONS: Record<string, string> = {
   folderup: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M12 18v-6 M9.4 14.4L12 11.8l2.6 2.6',
   save: 'M5 4h11l3 3v13H5z M9 4v5h6V4 M8 20v-6h8v6',
   ext: 'M14 4h6v6 M20 4l-8 8 M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
-  //  #4135 곁칸 «프로젝트» 앱 — 폴더 안에 태스크(체크와 줄) · 끌기 손잡이 · 입력칸에 넣기 · 그리로 가기 · 크게 보기.
-  //  폴더는 곁칸 탭 줄의 이웃(자료 = folder)과 **같은 윤곽**이어야 여백이 맞는다 — 레일 proj 의 큰 폴더를 쓰면 이 아이콘만 커 보인다
-  //   (원준 2026-09-27 «폴더 그림이랑 여백이 달라 이상해»). 속은 태스크(체크 + 줄)를 폴더 몸통 가운데에.
-  projtask: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M7 13.4l1.8 1.8 3.4-3.6 M14.2 13.6h3',
+  //  #4135 곁칸 «프로젝트» 앱 — 끌기 손잡이 · 입력칸에 넣기 · 그리로 가기 · 크게 보기.
+  //   그 앱의 탭 · 독 · 머리 그림은 프로젝트 과녁(proj · 작으면 projMini)이다(원준 2026-10-05 «독 아이콘은 왜 안 바꿨나»).
+  //   종전의 «폴더 안 태스크»(projtask)는 걷었다.
   grip: 'M9 6h.01 M9 12h.01 M9 18h.01 M15 6h.01 M15 12h.01 M15 18h.01',
   insert: 'M4 12h11 M11 8l4 4-4 4 M19 5v14',
   goto: 'M5 12h14 M13 6l6 6-6 6',
@@ -176,3 +175,6 @@ export const appGlyphName = (icon: string): string => (Object.prototype.hasOwnPr
  *  과녁(proj)은 깃이 두 겹이라 13px 아래에서 한 덩어리로 보인다. 자리마다 따로 정하지 말고 이 함수 하나를 지난다. */
 export const PROJ_MINI_MAX_PX = 13;
 export const projGlyph = (px: number): 'proj' | 'projMini' => (px <= PROJ_MINI_MAX_PX ? 'projMini' : 'proj');
+/** 이름을 그 자리 크기에 맞춘다: 'proj' 만 projGlyph 를 지나고 나머지는 그대로. 곁칸 부품처럼 이름을 표에서 받아
+ *  여러 크기로 그리는 곳(탭 머리 14px · 탭 목록 13px · 우클릭 15px)이 자리마다 따로 정하지 않게 한다. */
+export const glyphAt = (name: string, px: number): string => (name === 'proj' ? projGlyph(px) : name);
