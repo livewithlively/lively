@@ -13,11 +13,18 @@ import {
 } from './session-history.js';
 import { whenLabel } from './lib/omni-order.js';
 import { NO_PROJECT_NAME } from './lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { histBridgeOn, histScope, loadHistRows, scopedConvs, scopedRows } from './sessions-scope.js';
+import { histGroupLabel, histScopeOn, histScopeSpan } from './lib/hist-scope.js';
+import type { TabHandle } from './sessions-list.js';
 
 const MODES: ReadonlyArray<{ key: JournalMode; label: string }> = [{ key: 'day', label: '날짜별' }, { key: 'project', label: '프로젝트별' }];
 const st = { preset: 'week' as JournalPreset, mode: 'day' as JournalMode, open: new Set<string>() };
-const cache = new Map<JournalPreset, { at: number; rows: JRow[]; truncated: boolean }>();
+//  받아 둔 줄 — 열쇠는 기간 고르개의 칸, 또는 사이드바가 정한 조회 구간(r:<since>:<until>). 범위로 거르기는 받은 뒤에 한다.
+const cache = new Map<string, { at: number; rows: JRow[]; truncated: boolean }>();
 const TTL_MS = 30_000;
+/** 지금 선 일지를 범위에 맞춰 다시 받는 손잡이 — 화면이 제자리에서 다시 설 수 있어(「지난 주 보기」) 모듈에 하나만 둔다. */
+let rescopeNow: (() => void) | null = null;
+const md = (ms: number): string => { const d = new Date(ms); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
 const RAIL_TOP = 6;   // 옆 칸의 목록마다 먼저 보이는 줄 수 — 나머지는 [n개 더]
 let seq = 0;
 let aborter: AbortController | null = null;
@@ -30,7 +37,7 @@ function rowTime(iso: string, mode: JournalMode): string {
   return mode === 'day' ? `${p2(d.getHours())}:${p2(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-export function mountJournal(host: HTMLElement): void {
+export function mountJournal(host: HTMLElement): TabHandle {
   const range = el('span', { class: 'shx-range' });
   const stats = el('div', { class: 'shx-stats' });
   const list = el('div', { class: 'shx-journal' });
@@ -42,6 +49,10 @@ export function mountJournal(host: HTMLElement): void {
   let label = '';
   let span: { since: number; until: number | null } = { since: 0, until: null };
   let loading = false;
+  /** 지금 화면의 줄이 사이드바 범위로 걸러진 것인가 · 그 범위가 기간까지 정했나(시간 묶음) — 빈 화면의 말이 달라진다. */
+  let scoped = false, byScopeSpan = false;
+  let cacheKey = '';
+  const presetSeg = segOf(JOURNAL_PRESETS, st.preset, (v) => { st.preset = v; void load(false); }, '기간');
   const makeModeSeg = (): HTMLElement => segOf(MODES, st.mode, (v) => { st.mode = v; if (!loading) draw(); }, '묶는 기준');
   let modeSeg = makeModeSeg();
   const wrapEl = el('div', { class: 'shx-jwrap norail' }) as HTMLElement;
@@ -50,7 +61,7 @@ export function mountJournal(host: HTMLElement): void {
   wrapEl.append(
     el('section', { class: 'shx-card shx-jmain', 'aria-label': '작업 일지' },
       el('div', { class: 'shx-bar' },
-        segOf(JOURNAL_PRESETS, st.preset, (v) => { st.preset = v; void load(false); }, '기간'),
+        presetSeg,
         modeSeg,
         range,
         el('span', { class: 'shx-grow' }),
@@ -90,7 +101,7 @@ export function mountJournal(host: HTMLElement): void {
         e.preventDefault();
         openTranscriptWindow({ sid: r.session_id, node: r.node_id }, {
           name, boxId: r.box_id, sub: [r.project_name || NO_PROJECT_NAME, whenLabel(Date.parse(r.last_seen), Date.now())].filter(Boolean).join(' · '),
-          onTrashed: () => { cache.delete(st.preset); void load(true); },
+          onTrashed: () => { cache.clear(); void load(true); },
         });
       });
       //  ⚠ 노드의 append 는 null 을 글자 «null» 로 넣는다 — el() 의 자식 규칙이 아니다. 없는 칸은 미리 걷는다.
@@ -201,8 +212,12 @@ export function mountJournal(host: HTMLElement): void {
     if (!rows.length) {
       //  주가 막 바뀐 때(월요일 아침)의 「이번 주」는 비어 있는 게 맞다 — 고장으로 읽히지 않게 지난 주로 가는 문을 함께 둔다.
       let action: HTMLElement | null = null;
-      if (st.preset === 'week') { action = btnOf('지난 주 보기', { kind: 'ghost' }); action.addEventListener('click', () => { st.preset = 'last-week'; mountJournal(host); }); }
-      list.replaceChildren(emptyBox({ icon: 'timeline', big: true, title: st.preset === 'week' ? '이번 주에 한 세션이 아직 없습니다.' : '이 기간에 한 세션이 없습니다.', action }));
+      if (!byScopeSpan && st.preset === 'week') { action = btnOf('지난 주 보기', { kind: 'ghost' }); action.addEventListener('click', () => { st.preset = 'last-week'; mountJournal(host); }); }
+      //  사이드바에서 범위를 골랐으면 그 까닭을 말한다 — 기간까지 사이드바가 정했으면(시간 묶음) 넓힐 것은 범위뿐이다.
+      list.replaceChildren(emptyBox(scoped
+        ? { icon: 'timeline', big: true, title: byScopeSpan ? '이 범위에 한 세션이 없습니다.' : '이 범위에는 이 기간에 한 세션이 없습니다.',
+            text: byScopeSpan ? '사이드바에서 「전체」를 누르면 범위가 풀립니다.' : '기간을 넓히거나 사이드바에서 「전체」를 눌러 보세요.', action }
+        : { icon: 'timeline', big: true, title: st.preset === 'week' ? '이번 주에 한 세션이 아직 없습니다.' : '이 기간에 한 세션이 없습니다.', action }));
       return;
     }
     const kids: HTMLElement[] = [];
@@ -211,17 +226,48 @@ export function mountJournal(host: HTMLElement): void {
         el('div', { class: 'shx-grp' }, st.mode === 'project' ? ico(g.key === 'p:0' ? 'projNone' : 'projMini') : null, el('span', { class: 'shx-grp-l', text: g.label }), el('span', { class: 'shx-grp-n', text: String(g.rows.length) })),
         el('div', { class: 'shx-jlist' }, ...g.rows.map((r) => rowEl(r, now)))) as HTMLElement);
     }
-    const c = cache.get(st.preset);
+    const c = cache.get(cacheKey);
     if (c && c.truncated) kids.push(el('p', { class: 'shx-note', text: '세션이 많아 최근 500개까지만 보여 줍니다.' }));
     list.replaceChildren(...kids);
   }
   async function load(force: boolean): Promise<void> {
     const mySeq = ++seq;
     const preset = st.preset;
-    const r = journalRange(preset, Date.now());
+    const now = Date.now();
+    //  사이드바의 범위(셸 액자 안에서만) — 범위 안 대화만 남긴다. 시간 묶음을 골랐으면 기간도 그 묶음이 정한다(기간 고르개를 걷는다):
+    //   «9월» 을 골라 놓고 「이번 주」에 걸려 빈 화면이 되지 않게.
+    const sc = histScope();
+    const on = histBridgeOn() && histScopeOn(sc);
+    const spanOf = on ? histScopeSpan(sc, now) : null;
+    presetSeg.hidden = !!spanOf;
+    let conv: Set<string> | null = null;
+    let r = journalRange(preset, now);
+    let key: string = preset;
+    if (on) {
+      const hist = await loadHistRows();
+      if (mySeq !== seq) return;
+      conv = scopedConvs(hist.rows, now);
+      if (spanOf) {
+        //  묶음은 «마지막 활동»(박스의 활동까지 본 값)으로 갈랐지만 일지는 기록의 시각으로 묻는다 — 범위 안 줄의 기록 시각을 덮는 구간을 청한다.
+        const rec = scopedRows(hist.rows, now).map((x) => x.recMs).filter((n) => n > 0);
+        const last = spanOf.until - 1;
+        const name = histGroupLabel('day', sc.group as string, now);
+        r = { since: rec.length ? Math.min(...rec) : spanOf.since, until: rec.length ? Math.max(...rec) + 1 : spanOf.until,
+          label: md(spanOf.since) === md(last) ? `${name} · ${md(last)}` : `${name} · ${md(spanOf.since)} ~ ${md(last)}` };
+        key = `r:${r.since}:${r.until}`;
+      }
+    }
     range.textContent = r.label;
-    const show = (got: JRow[]): void => { rows = got; label = r.label; span = { since: r.since, until: r.until }; loading = false; draw(); };
-    const hit = cache.get(preset);
+    const show = (got: JRow[]): void => {
+      rows = conv ? got.filter((x) => conv!.has(String(x.session_id))) : got;
+      label = r.label; scoped = on; byScopeSpan = !!spanOf; cacheKey = key;
+      //  막대의 구간 — 시간 묶음이면 그 묶음의 날짜들(조회 구간이 아니다).
+      span = spanOf ? { since: spanOf.since, until: spanOf.until } : { since: r.since, until: r.until };
+      loading = false; draw();
+    };
+    //  범위 안에 기록이 하나도 없으면 물을 것이 없다.
+    if (conv && !conv.size) { show([]); return; }
+    const hit = cache.get(key);
     if (!force && hit && Date.now() - hit.at < TTL_MS) { show(hit.rows); return; }
     loading = true;
     list.replaceChildren(skelRows(5, 'cards'));
@@ -232,7 +278,8 @@ export function mountJournal(host: HTMLElement): void {
     try {
       const d: any = await api('/api/ui/v6/session-journal?' + qs.toString(), { signal: mine.signal });
       const got: JRow[] = Array.isArray(d?.rows) ? d.rows : [];
-      cache.set(preset, { at: Date.now(), rows: got, truncated: !!d?.truncated });
+      for (const [k, v] of cache) if (Date.now() - v.at >= TTL_MS) cache.delete(k);   // 묵은 구간을 쌓아 두지 않는다
+      cache.set(key, { at: Date.now(), rows: got, truncated: !!d?.truncated });
       if (mySeq !== seq) return;
       show(got);
     } catch (e: any) {
@@ -245,5 +292,7 @@ export function mountJournal(host: HTMLElement): void {
       list.replaceChildren(errBox(e?.message || '작업 일지를 불러오지 못했습니다.'));
     }
   }
+  rescopeNow = () => { if (host.isConnected) void load(false); };
   void load(false);
+  return { rescope: () => { if (rescopeNow) rescopeNow(); } };
 }

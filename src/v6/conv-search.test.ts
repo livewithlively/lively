@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   extractConvMessages, clipBody, snippetAround, snippetAroundMost, recencyBoost, editTail, rankConvAggs, rankConvAggsCounted, convRelevance, parseConvSort, editedPaths,
-  editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, type ConvSessionAgg,
+  editLabel, snippetTerms, CONV_BODY_MAX, RECENCY_MAX, CONV_TOP_MAX, parseSessionIds, SEARCH_SESSION_IDS_MAX, SESSION_ID_RE, type ConvSessionAgg,
 } from "./conv-search.js";
 import { parseQueryTerms, stemKo, termStrength, likePattern, termPatterns, loosePatterns, looseStrength, looseFind, requiredTerms, likeToRegExp } from "./query-terms.js";
 import type { ChatLine } from "../terminal/harness-io/chat-line.js";
@@ -451,4 +451,34 @@ test("[N3] rankConvAggsCounted 는 층이 매겨진 세션 전부를 돌려준�
   assert.equal(r.rows.length, 2);
   assert.equal(r.total, 5);
   assert.deepEqual(r.judged.map((a) => a.session_id).sort(), ["s0", "s1", "s2", "s3", "s4"]);
+});
+
+// #4553 — 맞은 말 검색의 세션 거르개(세션 이력 앱의 사이드바에서 고른 범위). 원준 2026-10-05 «A안으로 고고».
+//  엣지 표(스크래치패드 spec-side.md V): V1 없음 = 거르지 않음 · V2 빈 목록 = 빈 목록(결과 없음) · V3 틀린 것은 400 감 ·
+//   V4 중복은 한 번 · V5 경계(정확히 상한 개). 저장 쪽(그 세션의 말만)은 session-history.pg-test.mjs M19~M23 이 SQL 로 잰다.
+test("[V1] sessions 가 없으면 거르지 않는다(null) — undefined · null 둘 다", () => {
+  assert.deepEqual(parseSessionIds(undefined), { ok: true, ids: null });
+  assert.deepEqual(parseSessionIds(null), { ok: true, ids: null });
+});
+test("[V2] 빈 목록은 «없음» 이 아니다 — 빈 목록 그대로(찾을 세션이 없다)", () => {
+  assert.deepEqual(parseSessionIds([]), { ok: true, ids: [] });
+});
+test("[V3] 배열이 아니거나 세션 id 꼴이 아닌 값이 섞이면 틀렸다고 답한다 — 조용히 버리지 않는다", () => {
+  for (const bad of ["c1", 5, { 0: "c1" }, true]) assert.equal(parseSessionIds(bad).ok, false, JSON.stringify(bad));
+  for (const bad of [["c1", 5], ["c1", ""], ["c1", null], ["a b"], ["c1", "x".repeat(65)], ["c1", ["c2"]], ["../etc"], ["c1,c2"]]) {
+    const r = parseSessionIds(bad);
+    assert.equal(r.ok, false, JSON.stringify(bad));
+    if (!r.ok) assert.match(r.error, /sessions/);
+  }
+});
+test("[V4] 같은 id 가 두 번 와도 한 번만 · 순서는 온 순서", () => {
+  assert.deepEqual(parseSessionIds(["b", "a", "b", "a.b_c-1"]), { ok: true, ids: ["b", "a", "a.b_c-1"] });
+});
+test("[V5] 경계 — 정확히 상한 개는 받고, 하나 더 많으면 틀렸다고 답한다", () => {
+  const ids = Array.from({ length: SEARCH_SESSION_IDS_MAX }, (_, i) => "s" + i);
+  const at = parseSessionIds(ids);
+  assert.equal(at.ok && at.ids?.length, SEARCH_SESSION_IDS_MAX);
+  assert.equal(parseSessionIds([...ids, "one-more"]).ok, false);
+  assert.equal(SESSION_ID_RE.test("x".repeat(64)), true);
+  assert.equal(SESSION_ID_RE.test("x".repeat(65)), false);
 });
