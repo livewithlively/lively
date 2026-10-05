@@ -11,6 +11,7 @@
 //     (실측 2026-10-05: 기록 323개 가운데 227개).
 //   · 카드 안 줄은 **많은 순**이다(세션 목록은 최근 순). 지난 기록에서 묻는 것은 «어디에 많이 썼나» 다.
 //  묶기 기준에 «사람별» 은 없다(이 앱은 내 기록만 본다). «리스트별» 도 없다 — 리스트에 든 프로젝트의 기록이 드물다(실측 27/323).
+import { NO_PROJECT_NAME } from './proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리(「기타 (미분류)」)
 
 /** 묶기 기준. 'none' = 묶지 않음(카드 없이 프로젝트 줄만). */
 export type HistGroupBy = 'day' | 'kind' | 'state' | 'none';
@@ -33,7 +34,7 @@ export interface HistSideRow {
   conv: string | null;
   /** 마지막 활동(ms). 모르면 0. */
   last: number;
-  /** 프로젝트 id. 0 = 프로젝트 없음. */
+  /** 프로젝트 id. 0 = 프로젝트에 안 붙었다(「기타 (미분류)」). */
   pid: number;
   pname: string;
   state: HistState;
@@ -41,7 +42,7 @@ export interface HistSideRow {
   kind: HistKind | null;
 }
 
-/** 사이드바에서 고른 것. group = 고른 카드(그 기준의 묶음 key, null = 전체) · proj = 고른 줄(프로젝트 id, 0 = 프로젝트 없음, null = 카드 전체). */
+/** 사이드바에서 고른 것. group = 고른 카드(그 기준의 묶음 key, null = 전체) · proj = 고른 줄(프로젝트 id, 0 = 「기타 (미분류)」, null = 카드 전체). */
 export interface HistScope { by: HistGroupBy; group: string | null; proj: number | null }
 export const HIST_SCOPE0: HistScope = { by: 'day', group: null, proj: null };
 /** 무엇인가 골랐나(전체가 아니다). */
@@ -114,7 +115,7 @@ function groupRank(by: HistGroupBy, key: string): number {
 export interface HistLine { pid: number; name: string; n: number; top: number }
 export interface HistCard { key: string; n: number; top: number; lines: HistLine[] }
 
-/** 줄들을 프로젝트별로 센다 — 많은 순, 같으면 최근 활동 순, 그다음 id 순. «프로젝트 없음»(0)도 제 수대로 선다. */
+/** 줄들을 프로젝트별로 센다 — 많은 순, 같으면 최근 활동 순, 그다음 id 순. 프로젝트에 안 붙은 것(0, 「기타 (미분류)」)도 제 수대로 선다. */
 export function histLines(rows: readonly HistSideRow[] | null | undefined): HistLine[] {
   const m = new Map<number, HistLine>();
   for (const r of rows || []) {
@@ -188,7 +189,7 @@ export function histScopeSpan(sc: HistScope, now: number): { since: number; unti
 
 /** 본문 빵부스러기의 조각 — trail = 앞의 흐린 조각들, now = 지금 자리(굵게). 고른 것이 없으면 trail 이 비고 now 는 앱 이름이다. */
 export function histCrumb(sc: HistScope, now: number, projName: (pid: number) => string, app = '세션 이력'): { trail: string[]; now: string } {
-  const pn = (pid: number): string => (pid ? projName(pid) || `#${pid}` : '프로젝트 없음');
+  const pn = (pid: number): string => (pid ? projName(pid) || `#${pid}` : NO_PROJECT_NAME);
   const grouped = sc.by !== 'none' && sc.group !== null;
   if (!grouped && sc.proj === null) return { trail: [], now: app };
   if (!grouped) return { trail: [app, '프로젝트'], now: pn(sc.proj as number) };
