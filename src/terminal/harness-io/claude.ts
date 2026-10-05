@@ -21,13 +21,18 @@ const CONV_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 //    끝난 턴     ✻ Worked for 47m 43s · done 9:20 PM                  ← 상태줄 = 완료 줄
 //    백그라운드  ✻ Cogitated for 45s · done 5:50 PM · 1 shell still running
 //                (백그라운드 에이전트·워크플로가 남으면 완료 줄 대신 «Waiting for 1 background agent to finish»)
-//  «to interrupt» 는 키 바인딩 표시(기본 esc)에 붙는 꼬리라 키가 바뀌어도 남는다. 입력 중이면 «enter to interrupt and send» 로
-//  바뀌는데 그것도 도는 턴이다. 스피너 줄은 창이 좁아 푸터가 잘릴 때(곁칸 작은 창)를 위한 두 번째 근거다.
+//    끊은 턴      ⎿  Interrupted · What should Claude do instead?    ← 입력창 **바로 위 줄**(실측 2.1.289, 2026-10-05)
+//  «to interrupt» 는 키 바인딩 표시(기본 esc)에 붙는 꼬리라 키가 바뀌어도 남는다. 스피너 줄은 창이 좁아 푸터가 잘릴 때(곁칸 작은 창)를
+//  위한 두 번째 근거다.
+//  ⚠ **입력창에 글자가 있으면 푸터의 안내가 통째로 사라진다**(#3870 실측 2.1.289 — «⏸ manual mode on · 1 shell» 만 남는다. «esc to
+//   interrupt» 도 «? for shortcuts» 도 없다). 답을 흘려 쓰는 중이면 스피너 줄도 없어 이 화면으론 턴을 못 읽는다(null) — 그 구간은
+//   훅 보고(busy)가 받친다. 그래서 «안내가 없다» 를 «안 돈다» 의 근거로 쓰면 안 된다. 끊긴 턴은 제 줄(Interrupted)로만 읽는다.
 //  ⚠ 상태줄은 **기호 글리프로 시작한다**(✻ ✽ ✶ ✳ ✢ · * — 스피너 프레임과 완료 표시). 대화(⏺)·도구 결과(⎿)·입력(❯ · 옛 판 >)·
 //   글자·숫자로 시작하는 줄은 상태줄이 아니다 — 대화에 «still running»·«…(»·«to interrupt» 가 적혀 있어도 세지 않으려고 줄머리를 가린다.
 //   상태줄이 좁은 창에서 접히면 이어지는 줄은 들여쓰기로 시작하므로(«⎿ Tip: …» 도 같다) 그 머리까지 올라가 붙여 읽는다.
 const INPUT_RULE = /^\s*[╭╰]?─{3,}/;                    // 옛 판은 입력창이 둥근 상자(╭───╮ … ╰───╯)였다
 const STATUS_HEAD = /^[^\s\p{L}\p{N}⏺⎿❯│─>]/u;
+const INTERRUPTED = /^\s*⎿\s+Interrupted\b/;
 export function claudeRun(tail: string[]): ScreenRun | null {
   const rules = tail.flatMap((l, i) => (INPUT_RULE.test(l) ? [i] : []));
   if (rules.length < 2) return null;                     // 입력창이 안 보인다(대화상자·부팅) — 모른다
@@ -38,6 +43,8 @@ export function claudeRun(tail: string[]): ScreenRun | null {
   const status = head >= 0 && STATUS_HEAD.test(tail[head]) ? tail.slice(head, top).join(" ") : "";
   if (/\bto interrupt\b/i.test(footer) || /\bto interrupt\b/i.test(status) || /…\s*\(/.test(status)) return "turn";
   if (/\bstill running\b/i.test(status) || /\bWaiting for\b.*\bto finish\b/i.test(status)) return "background";
+  //  끊은 턴 — 입력창 바로 위 줄이 도구 결과 꼴(⎿)의 «Interrupted» 다. 다음 지시를 넣으면 그 줄 밑에 새 줄이 쌓여 자리를 내준다.
+  if (top > 0 && INTERRUPTED.test(tail[top - 1])) return "stopped";
   return null;
 }
 

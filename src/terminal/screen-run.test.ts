@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { claudeRun } from "./harness-io/claude.js";
 import { harnessIo } from "./harness-io/adapter.js";
-import { detectRun, readScreen, screenRunEffects, resolveAgentPhase, PHASE_TTL_SEC } from "./phase.js";
+import { detectRun, readScreen, screenRunEffects, resolveAgentPhase, screenReadPlan, STOPPED_SETTLE_SEC, PHASE_TTL_SEC } from "./phase.js";
 import { RUN_FROM_SCREEN_LINES } from "./harness-io/screen-run.js";
 import { projectNodeSession } from "../node/protocol.js";
 
@@ -24,6 +24,30 @@ const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`o
 
 const RULE = "─".repeat(118);
 const lines = (s: string): string[] => s.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+
+// ── 실측 화면(Claude Code 2.1.289 · 폭 110) — #3870 ──
+const RULE110 = "─".repeat(110);
+//  답을 흘려 쓰는 중에 «abc» 를 치고 Esc 한 번.
+const STOPPED = [
+  "  The fundamental cause of tides lies in the gravitational attraction between celestial bodies—primarily the",
+  "  Moon and the Sun,",
+  "  ⎿  Interrupted · What should Claude do instead?",
+  RULE110, "❯ abc", RULE110,
+  "  ⏸ manual mode on · 1 shell",
+].join("\n");
+//  턴이 끝난 뒤 «abc test» 를 쳐 둠 — 푸터에서 «? for shortcuts» 가 사라진다.
+const TYPED_DONE = [
+  "❯ say hi in one word", "⏺ Hello!", "✻ Cogitated for 5s · done 2:57 PM",
+  RULE110, "❯ abc test", RULE110,
+  "  ⏸ manual mode on",
+].join("\n");
+//  답을 흘려 쓰는 중에 «abc» 를 침 — 스피너 줄이 없고 푸터에서 «esc to interrupt» 가 사라진다.
+const TYPED_STREAMING = [
+  "  shaped human civilization and continue to influence our world in ways both visible and subtle.",
+  "  The Gravitational Foundations of Tides",
+  RULE110, "❯ abc", RULE110,
+  "  ⏸ manual mode on · 1 shell",
+].join("\n");
 
 // ── 실측 화면(Claude Code 2.1.285) ──
 //  R1 도는 턴 — 이 세션 자신(맥북에어, 도구 실행 중).
@@ -63,6 +87,24 @@ t("R1 도는 턴(푸터 «esc to interrupt») → turn", () => assert.equal(clau
 t("R2 스피너 밑 팁 줄이 붙어도 → turn", () => assert.equal(claudeRun(lines(TURN_TIP)), "turn"));
 t("R3 ★ 턴이 끝났는데 백그라운드 셸이 남았다(신고 화면) → background", () => assert.equal(claudeRun(lines(BACKGROUND)), "background"));
 t("R4 끝난 턴·남은 작업 없음 → null(대기)", () => assert.equal(claudeRun(lines(DONE)), null));
+// ── #3870 — 끊은 턴 · 입력창에 글자가 있을 때(실측 Claude Code 2.1.289, 2026-10-05, 맥미니 격리 tmux) ──
+t("R20 ★ 끊은 턴(입력창 바로 위 «⎿ Interrupted») → stopped — 입력창이 비었든 글자가 있든", () => {
+  assert.equal(claudeRun(lines(STOPPED)), "stopped");
+  assert.equal(claudeRun(lines(STOPPED.replace("❯ abc", "❯ ").replace("manual mode on · 1 shell", "manual mode on · ? for shortcuts · ← for agents"))), "stopped");
+});
+t("R21 끊은 뒤 다음 지시가 돈다(Interrupted 줄 밑에 새 줄 · 푸터 «esc to interrupt») → turn", () => {
+  assert.equal(claudeRun(lines(STOPPED.replace(RULE110 + "\n❯ abc", "❯ 다시 해 줘\n✽ Honking… (6s · ↓ 326 tokens · thinking)\n" + RULE110 + "\n❯ ").replace("manual mode on · 1 shell", "manual mode on · esc to interrupt · ← for agents"))), "turn");
+});
+t("R22 «Interrupted» 가 입력창 바로 위가 아니다(그 밑에 답이 더 쌓였다) · 도구 결과 꼴(⎿)이 아니다(대화 글) → stopped 가 아니다", () => {
+  assert.equal(claudeRun(lines(STOPPED.replace(RULE110 + "\n❯ abc", "⏺ 네, 다시 할게요.\n✻ Worked for 8s · done 2:59 PM\n" + RULE110 + "\n❯ abc"))), null);
+  assert.equal(claudeRun(lines(STOPPED.replace("  ⎿  Interrupted · What should Claude do instead?", "  Interrupted · What should Claude do instead?"))), null);
+});
+t("R23 입력창에 글자가 있고 끝난 턴(푸터 안내가 통째로 없다) → null — «안내 없음» 은 아무 근거가 아니다", () => {
+  assert.equal(claudeRun(lines(TYPED_DONE)), null);
+});
+t("R24 입력창에 글자가 있고 답을 흘려 쓰는 중(스피너 줄도 푸터 안내도 없다) → null(모른다 — 훅 보고가 받친다) · stopped 로 읽지 않는다", () => {
+  assert.equal(claudeRun(lines(TYPED_STREAMING)), null);
+});
 
 // ── 모양을 한 칸씩 비튼 행 ──
 t("R5 ★ 좁은 창에서 푸터가 잘려도 스피너 줄이 있으면 → turn(R1 에서 푸터의 «esc to interrupt» 를 뺐다)", () => {
@@ -140,15 +182,19 @@ t("S1 ★ 사람이 답할 화면이면 실행 상태를 내지 않는다 — �
 
 // ── 화면 실행 상태가 행에 주는 것(phase.screenRunEffects) ──
 t("E1 turn → 작업 중(working·harnessWorking·마지막 작업 시각) · 표식 없음", () => {
-  assert.deepEqual(screenRunEffects("turn", false), { turn: true, background: false });
+  assert.deepEqual(screenRunEffects("turn", false), { turn: true, background: false, stopped: false });
 });
 t("E2 ★ background → 표식 하나만(파란 점) — working 이 아니다(리브 2턴·대화창·회수·CP 유휴가 «턴이 돈다» 로 읽는다)", () => {
-  assert.deepEqual(screenRunEffects("background", false), { turn: false, background: true });
+  assert.deepEqual(screenRunEffects("background", false), { turn: false, background: true, stopped: false });
 });
 t("E3 모른다 → 아무것도 없다 · app-server 세션은 화면이 정본이 아니다", () => {
-  assert.deepEqual(screenRunEffects(null, false), { turn: false, background: false });
-  assert.deepEqual(screenRunEffects("turn", true), { turn: false, background: false });
-  assert.deepEqual(screenRunEffects("background", true), { turn: false, background: false });
+  assert.deepEqual(screenRunEffects(null, false), { turn: false, background: false, stopped: false });
+  assert.deepEqual(screenRunEffects("turn", true), { turn: false, background: false, stopped: false });
+  assert.deepEqual(screenRunEffects("background", true), { turn: false, background: false, stopped: false });
+});
+t("E4 stopped → 표식 하나(낡은 busy 보고를 누르는 재료) · 작업 중도 백그라운드도 아니다 · app-server 는 아무것도 없다", () => {
+  assert.deepEqual(screenRunEffects("stopped", false), { turn: false, background: false, stopped: true });
+  assert.deepEqual(screenRunEffects("stopped", true), { turn: false, background: false, stopped: false });
 });
 
 // ── 우선순위표(phase.resolveAgentPhase 5번) ──
@@ -166,9 +212,54 @@ t("E3 모른다 → 아무것도 없다 · app-server 세션은 화면이 정본
     assert.equal(phase({ reported: { phase: "waiting", at: T - 5 }, scrapedTurn: true }), "waiting");
     assert.equal(phase({ scrapedWaiting: true, scrapedTurn: true }), "waiting");
   });
+  //  #3870 — 사람이 끊은 턴. Stop 훅이 안 떠 마지막 보고가 busy 로 남는다(원준 2026-10-05 «중단도 안 되는 것 같고 깜빡이는 불도 이상»).
+  t("P5 ★ 신선한 busy 보고 + 화면 stopped → idle(끊긴 턴의 보고는 끝난 턴의 것이다)", () => {
+    assert.equal(phase({ reported: { phase: "busy", at: T - 5 }, scrapedStopped: true }), "idle");
+    assert.equal(phase({ reported: { phase: "busy", at: T - PHASE_TTL_SEC }, scrapedStopped: true }), "idle", "경계 — 만료 직전의 보고도");
+  });
+  t("P6 stopped 가 아니면(false · 안 줌) 신선한 busy 보고는 종전대로 busy", () => {
+    assert.equal(phase({ reported: { phase: "busy", at: T - 5 }, scrapedStopped: false }), "busy");
+    assert.equal(phase({ reported: { phase: "busy", at: T - 5 } }), "busy");
+  });
+  t("P7 stopped 여도 waiting 보고 · 스피너 · 화면 대기는 그대로 이긴다(끊은 뒤 실제로 벌어진 일)", () => {
+    assert.equal(phase({ reported: { phase: "waiting", at: T - 5 }, scrapedStopped: true }), "waiting");
+    assert.equal(phase({ reported: { phase: "busy", at: T - 5 }, spinning: true, scrapedStopped: true }), "busy");
+    assert.equal(phase({ scrapedWaiting: true, scrapedStopped: true }), "waiting");
+  });
+  t("P8 보고가 없거나 idle 인데 stopped → idle(더할 것이 없다)", () => {
+    assert.equal(phase({ scrapedStopped: true }), "idle");
+    assert.equal(phase({ reported: { phase: "idle", at: T - 5 }, scrapedStopped: true }), "idle");
+  });
   t("P4 화면이 turn 이 아니다(false)·안 줬다(undefined) → 종전 그대로 idle", () => {
     assert.equal(phase({ scrapedTurn: false }), "idle");
     assert.equal(phase({}), "idle");
+  });
+}
+
+// ── #3870 무엇을 알려고 화면을 읽나(phase.screenReadPlan) ──
+{
+  const T = 1_700_000_000;
+  const plan = (i: Partial<Parameters<typeof screenReadPlan>[0]>): string => screenReadPlan({ offline: false, spinning: false, reported: null, nowSec: T, ...i });
+  t("Q1 보고 없음 · idle 보고 · 만료된 busy 보고 → full(종전 그대로)", () => {
+    assert.equal(plan({}), "full");
+    assert.equal(plan({ reported: { phase: "idle", at: T - 5 } }), "full");
+    assert.equal(plan({ reported: { phase: "busy", at: T - PHASE_TTL_SEC - 1 } }), "full");
+  });
+  t("Q2 ★ 신선한 busy 보고(가라앉은 것) → stopped — 종전엔 안 읽어 끊은 세션이 10분을 «작업 중» 으로 섰다", () => {
+    assert.equal(plan({ reported: { phase: "busy", at: T - 60 } }), "stopped");
+    assert.equal(plan({ reported: { phase: "busy", at: T - PHASE_TTL_SEC } }), "stopped", "경계 — 만료 직전");
+  });
+  t("Q3 방금 온 busy 보고는 안 읽는다 — 정확히 STOPPED_SETTLE_SEC 에서 바뀐다(끊은 직후 시작된 새 턴을 끊긴 턴으로 읽지 않게)", () => {
+    assert.equal(plan({ reported: { phase: "busy", at: T } }), "none");
+    assert.equal(plan({ reported: { phase: "busy", at: T - STOPPED_SETTLE_SEC + 1 } }), "none");
+    assert.equal(plan({ reported: { phase: "busy", at: T - STOPPED_SETTLE_SEC } }), "stopped");
+  });
+  t("Q4 waiting 보고 · 꺼진 세션 · 스피너가 도는 세션 → none", () => {
+    assert.equal(plan({ reported: { phase: "waiting", at: T - 60 } }), "none");
+    assert.equal(plan({ offline: true }), "none");
+    assert.equal(plan({ offline: true, reported: { phase: "busy", at: T - 60 } }), "none");
+    assert.equal(plan({ spinning: true, reported: { phase: "busy", at: T - 60 } }), "none");
+    assert.equal(plan({ spinning: true }), "none");
   });
 }
 
@@ -178,11 +269,15 @@ t("E3 모른다 → 아무것도 없다 · app-server 세션은 화면이 정본
 t("W1 화면 판정이 대기 판정과 같은 캡처에서 나와 screenRunEffects 를 거쳐 목록 행의 다섯 자리에 실린다", () => {
   const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
   const src = readFileSync(`${here}sessions.ts`, "utf8");
-  assert.match(src, /const v = await scrapePane\(r\.name, harnessIo\(r\.harness\)\);[\s\S]{0,120}if \(v\.run\) screenRuns\.set\(r\.name, v\.run\);/, "캡처 한 번에서 run 을 모은다");
+  assert.match(src, /const v = await scrapePane\(r\.name, harnessIo\(r\.harness\)\);[\s\S]{0,260}if \(v\.run\) screenRuns\.set\(r\.name, v\.run\);/, "캡처 한 번에서 run 을 모은다");
+  //  #3870 — 읽을 행은 screenReadPlan 이 고른다(busy 보고가 있는 행도 든다). 그 행에선 stopped 만 받고 대기 판정은 안 받는다(#853 오탐).
+  assert.match(src, /plan: screenReadPlan\(\{ offline: r\.offline, spinning: r\.busy, reported: r\.reportedFresh, nowSec \}\) \}\)\)\.filter\(\(x\) => x\.plan !== "none"\)/, "읽을 행은 screenReadPlan 이 고른다");
+  assert.match(src, /if \(plan === "stopped"\) \{ if \(v\.run === "stopped"\) screenRuns\.set\(r\.name, v\.run\); return; \}\s*if \(v\.waiting\) waitingIds\.add\(r\.name\);/, "busy 보고 행에선 stopped 만 — 대기 · turn · background 는 안 받는다");
+  assert.ok(!/const needScrape = rows\.filter\(/.test(src), "busy 보고 행을 통째로 빼던 옛 고르기가 남아 있지 않다");
   assert.match(src, /const screen = screenRunEffects\(screenRuns\.get\(r\.name\) \?\? null, appServer\);/, "행에 주는 것은 screenRunEffects 가 정한다");
-  assert.match(src, /resolveAgentPhase\(\{[^}]*scrapedTurn: screen\.turn \}\)/, "단계 판정(agentState)엔 turn 만");
-  assert.match(src, /working: appServer \? asPhase === "busy" : !!\([^)]*\|\| screen\.turn\)/, "working 엔 turn 만");
-  assert.match(src, /harnessWorking: appServer \? asPhase === "busy" : !!r\.harnessBusy \|\| screen\.turn,/, "하네스가 말하는 작업 중도 turn 만");
+  assert.match(src, /resolveAgentPhase\(\{[^}]*scrapedTurn: screen\.turn, scrapedStopped: screen\.stopped \}\)/, "단계 판정(agentState)엔 turn 과 stopped");
+  assert.match(src, /working: appServer \? asPhase === "busy" : !!\(r\.busy \|\| r\.shellWorking \|\| \(r\.reportedFresh\?\.phase === "busy" && !screen\.stopped\) \|\| screen\.turn\)/, "working — turn 은 더하고, stopped 는 busy 보고만 누른다(스피너 · pane 추정은 그대로)");
+  assert.match(src, /harnessWorking: appServer \? asPhase === "busy" : !!r\.harnessBusy && !\(screen\.stopped && !r\.busy\) \|\| screen\.turn,/, "하네스가 말하는 작업 중 — stopped 는 스피너 없는 보고만 누른다");
   assert.match(src, /\.\.\.\(screen\.background \? \{ background: true \} : \{\}\)/, "background 는 따로 실린다(사이드바 점)");
   assert.match(src, /if \(screen\.turn\) \{[^\n]*\n\s*r\.lastBusy = nowSec;/, "turn 만 마지막 작업 시각을 민다");
   const pushAt = src.indexOf("sessions.push({");
