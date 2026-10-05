@@ -315,7 +315,7 @@ const HNSW_MAX_DIMS = 2000; // pgvector HNSW 인덱스 차원 한계(초과 시 
 // 임베딩 컬럼을 얹을 수 있는 테이블 — 내부 상수만 넘긴다(knowledge·project). SQL 인터폴레이션 안전 가드.
 // category(#1153) — 분류의 **정의(should)** 를 벡터로 둔다. 소속 지식 벡터와의 거리가 곧 '정의-내용 불일치'다.
 //  (지식·프로젝트처럼 '검색 대상'이라서가 아니라, 그 분류 안 지식을 재는 **고정점**이라서 임베딩한다.)
-const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category"]);
+const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category", "session_card"]);   // session_card = 세션 요약 카드(#4530 «뜻으로 찾기»)
 
 // 가드 마이그레이션 — pgvector 확장 + <table> 임베딩 컬럼/인덱스(embedding_vector/model/updated_at + <table>_embedding_hnsw).
 //  기본 table='knowledge'. 프로젝트 등 다른 임베딩 타깃도 같은 컬럼셋을 재사용(#631).

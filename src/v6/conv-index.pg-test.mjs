@@ -14,6 +14,7 @@ const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
 const C = await import(`${DIST}/v6/conv-index-store.js`);
+const K = await import(`${DIST}/v6/session-card-store.js`);
 const { PRIMARY_TENANT_ID } = await import(`${DIST}/org/tenancy/registry.js`);
 const { PROJECT_SHARED_BASE, PROJECT_SUBDIR } = await import(`${DIST}/project/project-fs.js`);
 const { invalidateVisibilityCache } = await import(`${DIST}/v6/visibility.js`);
@@ -26,10 +27,10 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 45 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 45 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 76 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 76 }, (_, i) => BOX(i));
 const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
-const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__"];
+const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__", "__convpg_num_proj__", "__convpg_num_task__"];
 
 const J = (o) => JSON.stringify(o) + "\n";
 const NOW = Date.now();
@@ -46,20 +47,36 @@ async function put(sid, owner, text, parent = null) {
 }
 const msgs = async (sid) => (await itemsPool.query(
   `SELECT role, body FROM session_msg WHERE node_id='' AND session_id=$1 ORDER BY at_offset, idx`, [sid])).rows;
+/** 세션 요약 카드 한 줄(없으면 null). */
+const cardOf = async (sid) => (await itemsPool.query(
+  `SELECT card, src_bytes, ver, (embedding_vector IS NOT NULL) AS has_vec, updated_at FROM session_card WHERE node_id='' AND session_id=$1`, [sid])).rows[0] ?? null;
+/** 1024차원 벡터 글 — 지정한 자리만 값이 있다(뜻 검색 시험: 방향이 같으면 가깝고 직각이면 0). */
+const vecOf = (parts) => { const a = new Array(1024).fill(0); for (const [i, v] of Object.entries(parts)) a[Number(i)] = v; return a; };
+const vecLit = (parts) => "[" + vecOf(parts).join(",") + "]";
+/** 카드에 벡터를 직접 심는다(임베딩 서버 없이 뜻 검색을 잰다). 카드 줄이 없으면 만든다. */
+const plant = (sid, parts, card = "심은 카드") => itemsPool.query(
+  `INSERT INTO session_card(node_id, session_id, card_id, card, src_bytes, ver, embedding_vector) VALUES('', $1, $2, $3, 1, 1, $4::vector)
+   ON CONFLICT (tenant_id, node_id, session_id) DO UPDATE SET card = EXCLUDED.card, embedding_vector = EXCLUDED.embedding_vector`, [sid, "|" + sid, card, vecLit(parts)]);
 const cursorOf = async (sid) => (await itemsPool.query(
   `SELECT indexed_to FROM session_msg_cursor WHERE node_id='' AND session_id=$1`, [sid])).rows[0]?.indexed_to ?? null;
 const search = (requester, q, o = {}) => C.searchConversations({
-  requester, q, sort: o.sort ?? "relevance", since: o.since ?? null, limit: 20, workspaceId: PRIMARY_TENANT_ID, attach: o.attach ?? true,
+  requester, q, sort: o.sort ?? "relevance", since: o.since ?? null, limit: o.limit ?? 20, workspaceId: PRIMARY_TENANT_ID, attach: o.attach ?? true,
   ...(o.cap ? { sessionCap: o.cap } : {}),
+  //  뜻으로 찾기는 기본으로 끈다(임베딩 서버가 없다) — 재는 장면만 벡터를 직접 넣는다(o.vec).
+  semantic: o.vec ? { vec: vecOf(o.vec) } : "off",
 });
 const ids = (r) => r.results.map((x) => x.session_id);
+/** 맞는 결과(문턱을 넘은 것)만 — «찾는다» 의 뜻. 권한·가림은 ids(전부)로 잰다(덜 맞는 결과로도 새면 안 된다). */
+const matchIds = (r) => r.results.filter((x) => x.tier !== "weak").map((x) => x.session_id);
 
 async function cleanup() {
-  for (const t of ["session_msg", "session_msg_cursor", "session_log_chunk", "session_log", "session", "session_purged", "gw_session_map"]) {
+  for (const t of ["session_msg", "session_msg_cursor", "session_card", "session_log_chunk", "session_log", "session", "session_purged", "gw_session_map"]) {
     await itemsPool.query(`DELETE FROM ${t} WHERE session_id = ANY($1::text[])`, [ALL]);
   }
   await itemsPool.query(`DELETE FROM org_session_trash WHERE session_id = ANY($1::text[]) OR session_id = ANY($2::text[])`, [ALL, ALL_BOX]);
   await itemsPool.query(`DELETE FROM org_session_conv WHERE box_id = ANY($1::text[])`, [ALL_BOX]);
+  await itemsPool.query(`DELETE FROM execution_session_task WHERE session_id = ANY($1::text[])`, [ALL_BOX]);
+  await itemsPool.query(`DELETE FROM session_project WHERE session_id = ANY($1::text[])`, [ALL]);
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ALL_BOX]);
   await itemsPool.query(`DELETE FROM gw_workspace WHERE id = ANY($1::uuid[])`, [[W2, W3]]);
   await itemsPool.query(`DELETE FROM project WHERE name = ANY($1::text[])`, [PROJ_NAMES]);
@@ -172,11 +189,15 @@ try {
 
   // ── D11 완전 삭제 → 색인·커서도 사라진다 ──
   {
+    //  #4530 «뜻으로 찾기» — 세션 요약 카드(대화에서 뽑은 글)도 사본이다. 지우기 전에 만들어 두고 함께 사라지는지 본다.
+    const built9 = await K.buildCardFor("", SID(9));
+    const card9 = await cardOf(SID(9));
     await S.purgeSessionLog("", SID(9), A);
     const left = (await msgs(SID(9))).length;
     const cur = await cursorOf(SID(9));
     const a = ids(await search(A, "슬랙", { since: ago(30) }));
     chk("D11 완전 삭제 뒤 색인·커서가 없고 검색에도 안 나온다", left === 0 && cur === null && !a.includes(SID(9)), JSON.stringify({ left, cur, a }));
+    chk("D11 완전 삭제 뒤 세션 요약 카드도 없다", built9 === "built" && !!card9 && (await cardOf(SID(9))) === null, JSON.stringify({ built9, card9: !!card9, after: await cardOf(SID(9)) }));
   }
 
   // ── D12 보존 정리(reap) → 색인·커서도 사라진다 ──
@@ -184,10 +205,13 @@ try {
     await put(SID(10), A, U("보존기간이 지날 슬랙 이야기"));
     await C.indexConvSession("", SID(10));
     const before = (await msgs(SID(10))).length;
+    await K.buildCardFor("", SID(10));
+    const card10 = await cardOf(SID(10));
     await itemsPool.query(`UPDATE session_log SET updated_at = now() - interval '40 days' WHERE node_id='' AND session_id=$1`, [SID(10)]);
     const r = await S.reapSessionLogs(30);
     const after = (await msgs(SID(10))).length;
     chk("D12 reap 뒤 그 세션의 색인·커서가 사라진다", before === 1 && after === 0 && (await cursorOf(SID(10))) === null && r.logs >= 1, JSON.stringify({ before, after, r }));
+    chk("D12 reap 뒤 세션 요약 카드도 사라진다", !!card10 && (await cardOf(SID(10))) === null, JSON.stringify({ had: !!card10, after: await cardOf(SID(10)) }));
   }
 
   // ── D13 밀린 색인 수 — 큰 꼬리만 센다 · 색인 뒤 0 ──
@@ -270,7 +294,10 @@ try {
     await put(SID(43), B, U("기린과 물소가 같이 나오는 이야기"));
     await C.indexConvSession("", SID(43));
     const two = await search(B, "기린 물소");
-    chk("D36 낱말 둘 — 숫자는 둘 다 맞은 세션만(하나만 맞은 세션은 세지 않는다)", two.total === 1 && ids(two).join() === SID(43) && (await search(B, "기린")).total === 3, JSON.stringify([two.total, ids(two)]));
+    chk("D36 낱말 둘 — 숫자는 둘 다 맞은 세션만(하나만 맞은 세션은 세지 않는다)", two.total === 1 && matchIds(two).join() === SID(43) && (await search(B, "기린")).total === 3, JSON.stringify([two.total, ids(two)]));
+    //  #4530 3차 — 하나만 맞은 세션은 «덜 맞는 결과» 로(맞는 결과가 적을 때) · 빠진 낱말을 말한다 · 숫자(total)에는 들지 않는다.
+    chk("D36 하나만 맞은 세션은 덜 맞는 결과 — 빠진 낱말 «물소»", two.weak === 2 && two.results.filter((x) => x.tier === "weak").every((x) => x.missing.join() === "물소" && [SID(18), SID(19)].includes(x.session_id)),
+      JSON.stringify(two.results.map((x) => [x.session_id, x.tier, x.missing])));
     chk("D16 대조: 열린 프로젝트의 초대 세션은 찾는다(프로젝트 세션을 통째로 닫은 게 아니다)", a.includes(SID(19)), JSON.stringify(a));
     const b = ids(await search(B, "기린"));
     chk("D16 주인은 자기 세션을 늘 찾는다(가려짐 판정은 초대받은 사람에게만)", b.includes(SID(18)) && b.includes(SID(19)), JSON.stringify(b));
@@ -402,7 +429,10 @@ try {
     const m = await msgs(SID(32));
     chk("D21 고친 파일은 role 'edit' 한 줄(경로 끝 세 마디) · 읽기만 한 파일은 없다",
       m.filter((x) => x.role === "edit").map((x) => x.body).join() === "web/v2/omni.ts" && !m.some((x) => /읽기만한파일/.test(x.body)), JSON.stringify(m));
-    chk("D21 경로 앞부분(work 등)으로는 그 세션이 고친 파일 때문에 맞지 않는다", !ids(await search(A, "lively 키보드")).includes(SID(32)));
+    //  #4530 3차 — 낱말 일부만 맞은 세션은 «덜 맞는 결과» 로는 설 수 있다(맞는 결과가 적을 때). 여기서 재는 것은 «맞는 결과» 가 아니라는 것.
+    const pre = await search(A, "lively 키보드");
+    chk("D21 경로 앞부분(work 등)으로는 그 세션이 고친 파일 때문에 맞지 않는다(맞는 결과 아님 · 빠진 낱말은 lively)",
+      !matchIds(pre).includes(SID(32)) && (pre.results.find((x) => x.session_id === SID(32))?.missing ?? ["lively"]).join() === "lively", JSON.stringify(pre.results.map((x) => [x.session_id, x.tier, x.missing])));
     const r = await search(A, "omni.ts 키보드");
     const hit = r.results.find((x) => x.session_id === SID(32));
     chk("D21 고친 파일 이름 + 사람 말의 낱말로 그 세션을 찾고, 맞은 파일을 줄에 싣는다",
@@ -413,7 +443,7 @@ try {
     await put(SID(33), A, U("기린 그림을 고쳐 줘", ago(2)) + AI("달팽이 모양으로 바꿨습니다", ago(2)));
     await C.indexConvSession("", SID(33));
     chk("D22 «기린 달팽이» — 사람 말과 AI 말에 나뉜 낱말", ids(await search(A, "기린 달팽이")).includes(SID(33)));
-    chk("D22 한 낱말이라도 세션 어디에도 없으면 빠진다", !ids(await search(A, "기린 코뿔소")).includes(SID(33)));
+    chk("D22 한 낱말이라도 세션 어디에도 없으면 맞는 결과가 아니다", !matchIds(await search(A, "기린 코뿔소")).includes(SID(33)));
   }
   // ── D23 조사를 붙여 쳐도 찾는다 · D24 첫 지시(세션 제목)에 든 낱말도 센다 ──
   {
@@ -505,6 +535,247 @@ try {
     //  D36 검색이 맞은 세션 수를 준다(«세션» 탭의 숫자) — 못 보는 세션은 세지 않는다.
     const tot = await search(A, "미리보기낱말"), totB = await search(B, "미리보기낱말");
     chk("D36 검색 결과에 맞은 세션 수(total) — 주인은 1 · 남은 0", tot.total === 1 && totB.total === 0, JSON.stringify([tot.total, totB.total]));
+  }
+
+  // ── D37~D44 #4530 3차 — 글자가 조금 달라도 찾는다 · 충분히 맞는 것만 «맞는 결과» ──────────────────────
+  //  원준 2026-10-05: «검색의 퀄리티가 너무 구린 것 같은데» · «결국 세션을 해야함». 매니지드 실측: 붙여 쓰면 6% · 한 글자 틀리면 0% ·
+  //   군말을 더하면 48% · 영어↔한글 58% 만 찾았다. 낱말은 이 시험에만 있는 것으로 쓴다(다른 장면의 세션이 섞이지 않게).
+  {
+    const t = (m) => new Date(NOW - 3_600_000 + m * 60_000).toISOString();
+    await put(SID(44), A, U("귤나무 정원 창을 다시 짜 줘", t(0)) + AI("목록과 미리 보기 두 칸으로 바꿨습니다", t(1)));
+    await put(SID(45), A, U("deploy 순서를 알려 줘", t(2)) + AI("스테이지 다음 메인입니다", t(3)) + U("그리고 rollback 은 어떻게 해", t(3.5)));
+    await put(SID(46), A, U("이 방법 말고 다른 길로 가자", t(4)));
+    await put(SID(47), A, U("아무 말이나 하나", t(5)) + AI("참고로 석류즙 이야기도 있었습니다", t(6)));
+    await put(SID(48), A, U("다른 말 하나", t(7)) + AI("석류즙 하나", t(8)) + AI("석류즙 둘", t(9)) + AI("석류즙 셋", t(10)));
+    await put(SID(49), B, U("귤나무 정원 비밀 이야기", t(11)));   // 남(B)의 세션 — A 는 초대받지 않았다
+    for (const n of [44, 45, 46, 47, 48, 49]) await C.indexConvSession("", SID(n));
+    const row = (r, sid) => r.results.find((x) => x.session_id === sid);
+
+    //  D37 붙여 쓴 말 — 엄격하게는 0건, 느슨한 2차가 «귤나무 정원» 을 찾는다. 추측이므로 덜 맞는 결과 · 무엇을 느슨하게 봤는지 말한다.
+    const joined = await search(A, "귤나무정원");
+    const j44 = row(joined, SID(44));
+    chk("D37 붙여 쓴 말(«귤나무정원») → 띄어 쓴 글의 세션을 찾는다(덜 맞는 결과 · loose · 실제 글)", !!j44 && j44.tier === "weak" && j44.loose.join() === "귤나무정원"
+      && j44.marks.join() === "귤나무 정원" && /귤나무 정원/.test(j44.best?.text ?? "") && joined.total === 0 && joined.loosened.join() === "귤나무정원",
+      JSON.stringify([joined.total, joined.loosened, joined.results.map((x) => [x.session_id, x.tier, x.loose, x.marks])]));
+    chk("D37 느슨한 2차에서도 남의 세션은 안 나온다", !ids(joined).includes(SID(49)), JSON.stringify(ids(joined)));
+
+    //  D38 한 글자 틀림 — 다른 낱말(«정원»)로 좁혀진 세션 안에서만 틀린 낱말을 느슨하게 본다.
+    const typo = await search(A, "귤나므 정원");
+    const t44 = row(typo, SID(44));
+    chk("D38 한 글자 틀린 낱말(«귤나므») → 그 세션을 찾는다(덜 맞는 결과 · 실제 글 «귤나무»)", !!t44 && t44.tier === "weak" && t44.loose.join() === "귤나므" && t44.marks.includes("귤나무")
+      && !ids(typo).includes(SID(49)), JSON.stringify(typo.results.map((x) => [x.session_id, x.tier, x.loose, x.marks])));
+    const typoOnly = await search(A, "귤나므");
+    chk("D38 틀린 낱말 하나만 쳐도(좁힐 낱말 없음) 사람 말에서 찾는다", row(typoOnly, SID(44))?.tier === "weak" && !ids(typoOnly).includes(SID(49)), JSON.stringify(typoOnly.results.map((x) => [x.session_id, x.tier])));
+
+    //  D39 다른 표기 — «배포» 로 쳐도 «deploy» 라고 말한 세션을 찾는다(맞는 결과 · alias).
+    const alias = await search(A, "배포 순서");
+    const a45 = row(alias, SID(45));
+    chk("D39 다른 표기(배포 = deploy) → 맞는 결과 · alias 에 친 낱말", !!a45 && a45.tier === "match" && a45.alias.join() === "배포" && /deploy/.test(a45.best?.text ?? ""), JSON.stringify(alias.results.map((x) => [x.session_id, x.tier, x.alias])));
+
+    //   첫 지시(제목)가 아닌 말에만 있는 다른 표기도 찾는다 — 제목은 화면 밖(JS)에서도 재므로, 이 줄이 SQL 쪽 맞춤을 잠근다.
+    const alias2 = await search(A, "롤백 순서");
+    chk("D39 다른 표기가 첫 지시가 아닌 말에만 있어도 맞는 결과(롤백 = rollback)", row(alias2, SID(45))?.tier === "match" && row(alias2, SID(45))?.alias.join() === "롤백", JSON.stringify(alias2.results.map((x) => [x.session_id, x.tier, x.alias, x.missing])));
+
+    //  D40 군말 — «방법» 은 없어도 된다. 군말만 든 세션은 후보가 아니다.
+    const filler = await search(A, "귤나무 방법");
+    chk("D40 군말(«방법»)이 없는 세션도 맞는 결과 · 군말만 든 세션은 나오지 않는다", row(filler, SID(44))?.tier === "match" && !ids(filler).includes(SID(46)) && filler.total === 1,
+      JSON.stringify([filler.total, filler.results.map((x) => [x.session_id, x.tier, x.missing])]));
+
+    //  D41 AI 가 한두 번 스친 말로만 맞은 세션은 덜 맞는 결과 — 세 번 이상 이야기했으면 맞는 결과. 숫자(total)는 맞는 결과만.
+    const ai = await search(A, "석류즙");
+    chk("D41 AI 가 한 번 스친 세션은 덜 맞는 결과 · 세 번 이야기한 세션은 맞는 결과", row(ai, SID(47))?.tier === "weak" && row(ai, SID(48))?.tier === "match" && ai.total === 1 && ai.weak === 1
+      && ids(ai).indexOf(SID(48)) < ids(ai).indexOf(SID(47)), JSON.stringify([ai.total, ai.weak, ai.results.map((x) => [x.session_id, x.tier])]));
+
+    //  D42 가려진 프로젝트의 초대 세션(D16 의 18번)은 느슨한 2차로도 안 나온다 — 열린 프로젝트의 초대 세션(19번)은 나온다.
+    const hid = await search(A, "기린이야기");
+    chk("D42 느슨한 2차도 가려진 프로젝트의 초대 세션을 감춘다(열린 쪽은 찾는다)", !ids(hid).includes(SID(18)) && ids(hid).includes(SID(19)), JSON.stringify(hid.results.map((x) => [x.session_id, x.tier, x.loose])));
+
+    //  D43 미리보기 — 느슨하게 찾은 세션의 맞은 말도 보인다(실제 글을 준다) · 다른 표기로도 맞은 말을 센다.
+    const hits = (who, sid, q) => C.sessionHits({ requester: who, attach: true, workspaceId: PRIMARY_TENANT_ID, nodeId: "", sessionId: sid, q });
+    const pv = await hits(A, SID(44), "귤나무정원");
+    chk("D43 미리보기 — 붙여 쓴 말로도 맞은 말이 선다(marks = 실제 글)", !!pv && pv.hits.length === 1 && pv.total === 1 && pv.marks.join() === "귤나무 정원" && /귤나무 정원/.test(pv.hits[0].text), JSON.stringify(pv && [pv.total, pv.marks, pv.hits.map((h) => h.text)]));
+    const pvAlias = await hits(A, SID(45), "배포");
+    chk("D43 미리보기 — 다른 표기(deploy)로 맞은 말을 센다 · 엄격하게 맞으면 marks 는 비어 있다", !!pvAlias && pvAlias.total === 1 && pvAlias.marks.length === 0, JSON.stringify(pvAlias && [pvAlias.total, pvAlias.marks]));
+
+    //  D44 엄격하게 충분히 찾았으면 느슨한 2차는 돌지 않는다 — 띄어 쓴 다른 세션이 끼지 않는다.
+    await put(SID(50), A, U("감나무 가지치기 하나", t(12)));
+    await put(SID(51), A, U("감나무 가지치기 둘", t(13)));
+    await put(SID(52), A, U("감나무 가지치기 셋", t(14)));
+    await put(SID(53), A, U("감 나무 옮겨 심기", t(15)));
+    for (const n of [50, 51, 52, 53]) await C.indexConvSession("", SID(n));
+    const enough = await search(A, "감나무");
+    chk("D44 엄격하게 셋을 찾았으면 느슨한 2차는 돌지 않는다", enough.total === 3 && enough.loosened.length === 0 && !ids(enough).includes(SID(53)), JSON.stringify([enough.total, enough.loosened, ids(enough)]));
+  }
+
+  // ── D45~D50 #4530 «뜻으로 찾기» — 세션 요약 카드 · 벡터로 찾기 ───────────────────────────────────
+  //  원준 2026-10-05: «결국 세션을 해야함 … 다를 전부 하도록». 매니지드 실측: 어렴풋한 말 15개 중 세션은 7개만 5위 안(글자가 맞아야만 찾혀서).
+  //  임베딩 서버 없이 잰다 — 카드에 벡터를 직접 심고(plant) 검색어의 벡터를 넣는다(o.vec). 방향이 같으면 1, 직각이면 0.
+  {
+    const t = (m) => new Date(NOW - 3_600_000 + m * 60_000).toISOString();
+    const E = (path, ts) => J({ type: "assistant", timestamp: ts, message: { role: "assistant", content: [{ type: "tool_use", id: "e1", name: "Edit", input: { file_path: path, old_string: "a", new_string: "b" } }] } });
+    //  D45 카드 만들기 — 이름·사람이 한 말·고친 파일·마지막 답이 글이 되고, 색인 위치와 판이 적힌다.
+    await put(SID(54), A, U("세션을 지우면 목록이 깜빡거려", t(0)) + AI("원인을 찾겠습니다", t(1)) + E("/w/web/v2/side.ts", t(2)) + U("고쳐서 올려 줘", t(3)) + AI("깜빡임을 없앴습니다", t(4)));
+    await C.indexConvSession("", SID(54));
+    const b54 = await K.buildCardFor("", SID(54));
+    const c54 = await cardOf(SID(54));
+    chk("D45 카드 = 처음 시킨 말 · 이어서 한 말 · 고친 파일 · 마지막 답 — 색인 위치·판이 적힌다", b54 === "built" && !!c54
+      && /처음 시킨 말: 세션을 지우면 목록이 깜빡거려/.test(c54.card) && /이어서 한 말: 고쳐서 올려 줘/.test(c54.card) && /고친 파일: v2\/side\.ts/.test(c54.card)
+      && /마지막 답: 깜빡임을 없앴습니다/.test(c54.card) && Number(c54.src_bytes) === Number(await cursorOf(SID(54))) && c54.ver >= 1 && c54.has_vec === false,
+      JSON.stringify({ b54, c54 }));
+    chk("D45 대화가 그대로면 다시 만들어도 same", (await K.buildCardFor("", SID(54))) === "same");
+    await put(SID(54), A, U("다른 화면에서도 같은지 봐 줘", t(5)));
+    await C.indexConvSession("", SID(54));
+    chk("D45 대화가 늘면 글이 바뀐다(built)", (await K.buildCardFor("", SID(54))) === "built" && /다른 화면에서도 같은지 봐 줘/.test((await cardOf(SID(54))).card));
+    //  글이 바뀌면 옛 벡터는 버린다(임베딩 대기로) — 옛 글의 벡터로 찾아 주면 안 된다. 글이 그대로면 벡터도 그대로.
+    //   임베딩이 켜져 있을 때의 일이라 설정을 잠깐 켠다(서버를 부르지는 않는다 — 벡터를 비우기만 한다).
+    {
+      const cfg0 = (await itemsPool.query(`SELECT embedding_config FROM org_runtime_config WHERE id = 1`)).rows[0]?.embedding_config ?? null;
+      await itemsPool.query(`INSERT INTO org_runtime_config(id) VALUES(1) ON CONFLICT DO NOTHING`);
+      await itemsPool.query(`UPDATE org_runtime_config SET embedding_config = $1::jsonb WHERE id = 1`, [JSON.stringify({ provider: "http", base_url: "http://127.0.0.1:9", model: "test", dimensions: 1024 })]);
+      try {
+        await itemsPool.query(`UPDATE session_card SET embedding_vector = $2::vector WHERE node_id='' AND session_id=$1`, [SID(54), vecLit({ 3: 1 })]);
+        const keep = (await K.buildCardFor("", SID(54))) === "same" && (await cardOf(SID(54))).has_vec === true;
+        await put(SID(54), A, U("마지막으로 하나만 더", t(5.5)));
+        await C.indexConvSession("", SID(54));
+        const reset = (await K.buildCardFor("", SID(54))) === "built" && (await cardOf(SID(54))).has_vec === false;
+        chk("D45 글이 그대로면 벡터를 두고, 글이 바뀌면 옛 벡터를 비운다(임베딩 대기)", keep && reset, JSON.stringify({ keep, reset }));
+      } finally {
+        await itemsPool.query(`UPDATE org_runtime_config SET embedding_config = $1::jsonb WHERE id = 1`, [cfg0 === null ? null : JSON.stringify(cfg0)]);
+      }
+    }
+    //  긴 세션 — 파일을 아주 많이 고친 뒤에 한 말도 카드에 든다(앞에서만 읽으면 뒤의 말이 영영 못 들어왔다, 격리 리뷰).
+    {
+      let big = U("긴세션 맨 처음에 시킨 말", t(20));
+      for (let i = 0; i < 3100; i++) big += E(`/w/long/f${i}.ts`, t(21));
+      big += U("긴세션 맨 나중에 덧붙인 말입니다", t(22));
+      await put(SID(72), A, big);
+      await C.indexConvSession("", SID(72));
+      await K.buildCardFor("", SID(72));
+      const c72 = (await cardOf(SID(72)))?.card ?? "";
+      chk("D45 파일을 3,100번 고친 뒤에 한 말도 카드에 든다 · 처음 말도 그대로", /긴세션 맨 처음에 시킨 말/.test(c72) && /긴세션 맨 나중에 덧붙인 말입니다/.test(c72) && /고친 파일: /.test(c72), c72.slice(0, 200) + " … " + c72.slice(-160));
+    }
+    //  카드 글의 토큰 모양은 가린다 — 임베딩 서버로 나가는 글이다.
+    await put(SID(73), A, U("이 키로 올려 줘 ghp_abcdefghijklmnopqrstuvwxyz0123456789 부탁해", t(23)));
+    await C.indexConvSession("", SID(73));
+    await K.buildCardFor("", SID(73));
+    chk("D45 카드에 토큰 모양이 남지 않는다", !/ghp_abcdefghijklmnopqrstuvwxyz0123456789/.test((await cardOf(SID(73)))?.card ?? "x ghp_abcdefghijklmnopqrstuvwxyz0123456789") && /이 키로 올려 줘/.test((await cardOf(SID(73))).card));
+
+    //  사람이 한 말이 없는 세션은 빈 카드로 적어 둔다(정비가 되풀이해 집지 않게) · 없는 세션은 gone.
+    await put(SID(55), A, AI("혼자 한 말", t(6)));
+    await C.indexConvSession("", SID(55));
+    chk("D45 사람이 한 말이 없으면 empty(빈 카드 줄) · 없는 세션은 gone", (await K.buildCardFor("", SID(55))) === "empty" && (await cardOf(SID(55)))?.card === "" && (await K.buildCardFor("", "convpg-없는세션")) === "gone");
+
+    //  D46 정비 — 카드가 없는 세션을 집는다 · 서브에이전트 세션은 안 집는다 · 방금 만든 카드는 대화가 늘어도 곧바로 다시 만들지 않는다.
+    await put(SID(56), A, U("정비가 집을 세션의 첫 말", t(7)));
+    await put(SID(57), A, U("서브에이전트가 한 말", t(8)), SID(56));
+    for (const n of [56, 57]) await C.indexConvSession("", SID(n));
+    const sw = await K.sweepSessionCards({ max: 200 });
+    chk("D46 정비가 카드 없는 세션의 카드를 만든다 · 서브에이전트 세션은 만들지 않는다", !!(await cardOf(SID(56))) && (await cardOf(SID(57))) === null && sw.built >= 1, JSON.stringify(sw));
+    await put(SID(56), A, U("조금 뒤에 한 말", t(9)));
+    await C.indexConvSession("", SID(56));
+    await K.sweepSessionCards({ max: 200 });
+    const fresh = (await cardOf(SID(56))).card;
+    await itemsPool.query(`UPDATE session_card SET updated_at = now() - interval '11 minutes' WHERE node_id='' AND session_id=$1`, [SID(56)]);
+    await K.sweepSessionCards({ max: 200 });
+    chk("D46 방금 만든 카드는 대화가 늘어도 곧바로 다시 만들지 않는다 — 10분이 지나면 다시 만든다", !/조금 뒤에 한 말/.test(fresh) && /조금 뒤에 한 말/.test((await cardOf(SID(56))).card), JSON.stringify({ fresh }));
+
+    //  D47 뜻으로 찾기 — 글자가 하나도 안 맞아도 벡터가 가까운 세션을 «덜 맞는 결과» 로 준다. 문턱: 0.5 미만은 버리고, 1등과 0.08 넘게
+    //   떨어진 것도 버린다. 못 보는 세션(남의 것)은 안 나온다.
+    await put(SID(58), A, U("뜻검색 과녁 하나", t(10)));
+    await put(SID(59), A, U("뜻검색 과녁 둘", t(11)));
+    await put(SID(60), A, U("뜻검색 조금 먼 것", t(12)));
+    await put(SID(61), A, U("뜻검색 직각", t(13)));
+    await put(SID(62), B, U("뜻검색 남의 세션", t(14)));
+    for (const n of [58, 59, 60, 61, 62]) await C.indexConvSession("", SID(n));
+    await plant(SID(58), { 0: 1 });
+    await plant(SID(59), { 0: 1, 1: 0.3 });        // 코사인 0.958
+    await plant(SID(60), { 0: 1, 1: 1 });          // 0.707 — 1등(1.0)과 0.08 넘게 떨어진다
+    await plant(SID(61), { 2: 1 });                // 0
+    await plant(SID(62), { 0: 1 });                // 남(B)의 세션
+    const semr = await search(A, "어디에도없는말zz", { vec: { 0: 1 } });
+    const semIds = ids(semr);
+    chk("D47 뜻으로만 가까운 세션 = 덜 맞는 결과 · sem 값 · 맞은 자리 없음 — 가까운 순", semIds.join() === [SID(58), SID(59)].join() && semr.results.every((x) => x.tier === "weak" && x.fields.length === 0 && x.best === null)
+      && semr.results[0].sem === 1 && semr.results[1].sem === 0.96 && semr.total === 0 && semr.weak === 2, JSON.stringify(semr.results.map((x) => [x.session_id, x.tier, x.sem])));
+    chk("D47 1등과 멀리 떨어진 것 · 직각인 것 · 남의 세션은 안 나온다", !semIds.includes(SID(60)) && !semIds.includes(SID(61)) && !semIds.includes(SID(62)), JSON.stringify(semIds));
+    chk("D47 뜻 검색을 끄면 뜻으로만 온 줄이 없다", (await search(A, "어디에도없는말zz")).results.length === 0);
+    const lowOnly = await search(A, "어디에도없는말zz", { vec: { 0: 1, 9: 3 } });   // 가장 가까운 것도 0.32 — 문턱(0.5) 아래
+    chk("D47 가장 가까운 것도 문턱 아래면 아무것도 주지 않는다", lowOnly.results.length === 0, JSON.stringify(lowOnly.results.map((x) => [x.session_id, x.sem])));
+
+    //  D48 가려진 프로젝트의 초대 세션(D16 의 18번)은 뜻으로도 안 나온다 — 열린 프로젝트의 초대 세션(19번)은 나온다.
+    await plant(SID(18), { 5: 1 });
+    await plant(SID(19), { 5: 1 });
+    const semHid = ids(await search(A, "어디에도없는말zz", { vec: { 5: 1 } }));
+    chk("D48 뜻 검색도 가려진 프로젝트의 초대 세션을 감춘다(열린 쪽은 찾는다)", !semHid.includes(SID(18)) && semHid.includes(SID(19)), JSON.stringify(semHid));
+
+    //  D49 글자로 맞은 세션이 뜻으로도 가까우면 맨 위 셋을 고르는 관련도에 얹는다 — 뜻이 가까운 옛 세션이 맨 위로, 줄에 sem 이 실린다.
+    await put(SID(63), A, U("매실청 담그는 이야기 옛날", ago(20)));
+    await put(SID(64), A, U("매실청 담그는 이야기 요즘", ago(0)));
+    for (const n of [63, 64]) await C.indexConvSession("", SID(n));
+    const plain = await search(A, "매실청", { sort: "recent" });
+    await plant(SID(63), { 7: 1 });
+    const boosted = await search(A, "매실청", { sort: "recent", vec: { 7: 1 } });
+    chk("D49 뜻이 가까운 옛 세션이 맨 위 «가장 맞는 결과» 로 — 뜻 검색 없이는 최근 것이 먼저", ids(plain)[0] === SID(64) && ids(boosted)[0] === SID(63) && boosted.results[0].top === true
+      && boosted.results[0].sem === 1 && boosted.results[0].tier === "match" && boosted.total === 2 && boosted.weak === 0, JSON.stringify([ids(plain), boosted.results.map((x) => [x.session_id, x.top, x.sem, x.tier])]));
+
+    //  D49b 줄 수 상한에 잘린 «맞는 결과» 는 «뜻이 비슷함» 으로 다시 나오지 않는다 — 같은 세션을 두 번 세지 않는다(격리 리뷰).
+    //   71번 = AI 가 세 번 말해 «맞는 결과» 이지만(이름에는 없다) 관련도가 낮아 상한(2)에 잘린다 · 뜻으로는 가깝다(0.55 — 가산을 얹어도 못 올라온다).
+    await put(SID(69), A, U("살구잼 만드는 이야기 하나", ago(1)));
+    await put(SID(70), A, U("살구잼 만드는 이야기 둘", ago(2)));
+    await put(SID(71), A, U("과일로 무언가 만드는 이야기", ago(3)) + AI("살구잼 을 만들 수 있습니다", ago(3)) + AI("살구잼 은 설탕이 듭니다", ago(3)) + AI("살구잼 을 병에 담습니다", ago(3)));
+    for (const n of [69, 70, 71]) await C.indexConvSession("", SID(n));
+    await plant(SID(71), { 11: 0.55, 13: Math.sqrt(1 - 0.55 * 0.55) });
+    await plant(SID(60), { 11: 0.56, 14: Math.sqrt(1 - 0.56 * 0.56) }, "글자로는 안 맞는 카드");   // 대조 — 글자로 안 맞은 세션은 뜻으로 온다
+    const cut = await search(A, "살구잼", { sort: "relevance", limit: 2, vec: { 11: 1 } });
+    chk("D49b 잘린 맞는 결과는 «뜻이 비슷함» 으로 다시 서지 않는다 · 수도 한 번만 센다(글자로 안 맞은 세션은 뜻으로 온다)",
+      cut.total === 3 && matchIds(cut).join() === [SID(69), SID(70)].join() && !ids(cut).includes(SID(71))
+      && cut.results.some((x) => x.session_id === SID(60) && x.tier === "weak" && x.sem === 0.56) && cut.weak === 1,
+      JSON.stringify({ total: cut.total, weak: cut.weak, rows: cut.results.map((x) => [x.session_id, x.tier, x.sem ?? null]) }));
+
+    //  D50 기간 — 뜻으로만 온 줄도 기간 밖(마지막 활동 기준)이면 빠진다.
+    await itemsPool.query(`UPDATE session SET last_seen = now() - interval '40 days' WHERE node_id='' AND session_id=$1`, [SID(58)]);
+    const semSince = ids(await search(A, "어디에도없는말zz", { vec: { 0: 1 }, since: ago(10) }));
+    chk("D50 기간으로 좁히면 기간 밖의 세션은 뜻으로도 안 나온다", !semSince.includes(SID(58)) && semSince.includes(SID(59)), JSON.stringify(semSince));
+  }
+
+  // ── D51~D53 #4530 번호로 찾기 — 그 번호의 프로젝트에 묶인 세션 · 그 번호의 태스크를 맡은 세션 ──────────────────
+  //  원준 2026-10-05: «프로젝트나 세션의 4자리? 더 늘어날수도있긴한. 검색하면 어떤게 나올지는 너가 알아서 좀 잘».
+  //  종전엔 대화 안에 그 숫자가 적힌 세션만 걸렸다 — 그 프로젝트에서 일한 세션인데도 번호를 말하지 않았으면 안 나왔다.
+  {
+    const t = (m) => new Date(NOW - 3_600_000 + m * 60_000).toISOString();
+    const NP = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [PROJ_NAMES[2], A])).rows[0].id;
+    const NT = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by, parent_id) VALUES('task', $1, 'todo', $2, $3) RETURNING id`, [PROJ_NAMES[3], A, NP])).rows[0].id;
+    await put(SID(65), A, U("번호시험 첫째 세션", t(0)));                 // 프로젝트 NP 에 묶였다(대화에 번호는 없다)
+    await put(SID(66), A, U("번호시험 둘째 세션", t(1)));                 // 태스크 NT 를 맡았다(박스 66 이 돌린 대화)
+    await put(SID(67), B, U("번호시험 남의 세션", t(2)));                 // B 의 세션 — 같은 프로젝트에 묶였지만 A 는 못 본다
+    await put(SID(68), A, U(`대화에 ${NP} 번호를 적은 세션`, t(3)));      // 묶이지 않았지만 대화에 그 숫자가 있다
+    for (const n of [65, 66, 67, 68]) await C.indexConvSession("", SID(n));
+    await itemsPool.query(`INSERT INTO session_project(session_id, project_id) VALUES($1, $2), ($3, $2)`, [SID(65), NP, SID(67)]);
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(66), SID(66), A]);
+    await itemsPool.query(`INSERT INTO execution_session_task(session_id, task_id, pos) VALUES($1, $2, 0)`, [BOX(66), NT]);
+    const row = (r, sid) => r.results.find((x) => x.session_id === sid);
+
+    const byP = await search(A, String(NP));
+    chk("D51 프로젝트 번호 → 그 프로젝트에 묶인 세션이 맞는 결과로(대화에 번호가 없어도) · nums 에 그 번호 · 맞은 말은 없다",
+      row(byP, SID(65))?.tier === "match" && JSON.stringify(row(byP, SID(65))?.nums) === JSON.stringify([NP]) && row(byP, SID(65))?.best === null && row(byP, SID(65))?.fields.includes("ident"),
+      JSON.stringify(byP.results.map((x) => [x.session_id, x.tier, x.nums, x.fields])));
+    chk("D51 대화에 그 숫자를 적은 세션도 그대로 찾는다 · 남의 세션은 묶여 있어도 안 나온다 · 태스크만 맡은 세션은 프로젝트 번호로는 안 나온다",
+      row(byP, SID(68))?.tier === "match" && !ids(byP).includes(SID(67)) && !ids(byP).includes(SID(66)), JSON.stringify(ids(byP)));
+    //  가려진 프로젝트의 초대 세션(18번)은 번호로 묶여 있어도 안 나온다 — 열린 프로젝트의 초대 세션(19번)은 나온다(같은 2차 판정).
+    await itemsPool.query(`INSERT INTO session_project(session_id, project_id) VALUES($1, $2), ($3, $2)`, [SID(18), NP, SID(19)]);
+    const hidNum = ids(await search(A, String(NP)));
+    chk("D51 번호로 찾기도 가려진 프로젝트의 초대 세션을 감춘다(열린 쪽은 찾는다)", !hidNum.includes(SID(18)) && hidNum.includes(SID(19)), JSON.stringify(hidNum));
+    const byT = await search(A, "#" + NT);
+    chk("D52 태스크 번호(#붙여도) → 그 태스크를 맡은 세션(박스가 돌린 대화)", row(byT, SID(66))?.tier === "match" && JSON.stringify(row(byT, SID(66))?.nums) === JSON.stringify([NT]) && !ids(byT).includes(SID(65)),
+      JSON.stringify(byT.results.map((x) => [x.session_id, x.tier, x.nums])));
+    const mix = await search(A, `${NP} 첫째`);
+    chk("D53 번호 + 낱말 — 번호는 묶음으로 · 낱말은 대화로 맞아야 맞는 결과(둘째 세션은 아니다)", row(mix, SID(65))?.tier === "match" && !matchIds(mix).includes(SID(66)) && !matchIds(mix).includes(SID(68)),
+      JSON.stringify(mix.results.map((x) => [x.session_id, x.tier, x.missing])));
+    chk("D53 아무 데도 없는 번호는 아무것도 주지 않는다", (await search(A, "2147480000")).results.length === 0);
+    //  숫자는 번호다 — 띄어 쓴 숫자(«98 76 54»)를 «비슷한 글자» 로 찾지 않는다(글자 낱말은 그렇게 찾는다 — D37 이 대조).
+    await put(SID(74), A, U("번호시험 전화는 98 76 54 로 걸어 줘", t(4)));
+    await C.indexConvSession("", SID(74));
+    const spaced = await search(A, "987654");
+    chk("D53 숫자 낱말은 느슨하게 찾지 않는다(띄어 쓴 숫자는 다른 것이다)", !ids(spaced).includes(SID(74)) && spaced.loosened.length === 0, JSON.stringify({ ids: ids(spaced), loosened: spaced.loosened }));
   }
 
   // ── 주기 정비 — 밀린 세션을 집어 색인한다 ──
