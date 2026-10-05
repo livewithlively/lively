@@ -177,11 +177,105 @@ export function isPathLink(link: string): boolean {
 //  `example.com/a.md` 는 URL 과 상대 경로 둘 다로 읽히는데 종전대로 URL 이다. 경로 속 `report.final/a.md` 가 URL 로 잡히는 것은
 //  경로가 더 먼저 시작하므로 경로가 이긴다.
 export function linkMatches(text: string): { start: number; end: number; url: string }[] {
-  const all = [...urlMatches(text), ...pathMatches(text)];
+  //  지식 이름은 **있다고 확인된 것만**(knowledgeKnown) — 셋 중 가장 뒤에 서므로 URL·경로 속 낱말은 거기에 진다.
+  const all = [...urlMatches(text), ...pathMatches(text), ...knowledgeMatches(text, (n) => knowledgeKnown.get(n) === true)];
   all.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
   const out: { start: number; end: number; url: string }[] = [];
   for (const m of all) if (!out.length || m.start >= out[out.length - 1].end) out.push(m);
   return out;
+}
+
+// ── 지식 이름 링크(#4562 원준 10-05 «산출 지식 저것도 클릭하면 뜨게하자») ─────────────────────────────
+//  AI 가 «산출지식 `terminal-path-link-to-pane-viewer-4562`» 처럼 찍어 준 지식 이름을 누르면 곁칸 웹 칸에 그 문서(`#/k/<이름>`)를 띄운다.
+//  ★ 지식 이름(`a-b-c` 꼴 슬러그)은 글 속 평범한 낱말과 생김새가 같다(`diff-reviewer` · 브랜치 이름 · CSS 클래스) — 생김새만으로
+//   밑줄을 그으면 가짜 링크가 넘친다. 그래서 **서버에 있다고 확인된 이름에만** 긋는다: 호버(링크 제공자)가 후보를 물어보고
+//   (`GET /api/ui/knowledge/<이름>?limit=1` — 없거나 못 보는 지식은 404), 답을 기억해 두고, 클릭·우클릭은 그 기억만 본다.
+//  후보 꼴: 하이픈으로 이은 마디 셋 이상(소문자·숫자·한글), 8자 이상. 경로·URL 속(`/`·`.` 에 붙은 것)은 아니다.
+//   한글 조사가 붙은 이름(`…-4562에`)은 조사를 뗀 꼴도 함께 묻는다.
+const KN_CH = 'a-z0-9\\u0000\\u3131-\\u318E\\uAC00-\\uD7A3';   // \0 = 넓은 글자(한글)의 뒤 칸 자리표(칸 정렬 글)
+export function knowledgeCandidates(text: string): { start: number; names: { name: string; end: number }[] }[] {
+  //  첫 글자는 자리표(\0)가 아니다 — 이모지(넓은 글자) 바로 뒤의 이름이 그 뒤 칸부터 밑줄을 긋지 않게(리뷰 지적).
+  const re = new RegExp(`(?<![A-Za-z0-9_/.\\-\\u3131-\\u318E\\uAC00-\\uD7A3])[a-z0-9\\u3131-\\u318E\\uAC00-\\uD7A3][${KN_CH}]*(?:-[${KN_CH}]+){2,}(?![A-Za-z0-9_/\\-]|\\.[A-Za-z0-9])`, 'g');
+  const out: { start: number; names: { name: string; end: number }[] }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const raw = m[0], full = raw.replace(/\u0000/g, '');
+    if (full.length < 8 || full.length > 64) continue;
+    //  묻기 전에 거른다(묻는 값이 서버 왕복이다) — UUID · 날짜·번호 줄(`2026-10-05-00`)처럼 글자 든 마디가 둘 못 되는 것은 이름이 아니다.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(full)) continue;
+    if (full.split('-').filter((x) => /[a-z\u3131-\u318E\uAC00-\uD7A3]/.test(x)).length < 2) continue;
+    const names = [{ name: full, end: m.index + raw.length }];
+    const tail = /[a-z0-9]((?:[\u3131-\u318E\uAC00-\uD7A3]\u0000?){1,3})$/.exec(raw);   // `…-4562에` → `…-4562`
+    if (tail) {
+      const rawBare = raw.slice(0, raw.length - tail[1].length), bare = rawBare.replace(/\u0000/g, '');
+      if (bare.length >= 8) names.push({ name: bare, end: m.index + rawBare.length });
+    }
+    out.push({ start: m.index, names });
+  }
+  return out;
+}
+// (순수 — 테스트 대상) 확인된 지식 이름만 링크로. 조사를 뗀 꼴이 있는 것이면 밑줄도 그 꼴까지만.
+export function knowledgeMatches(text: string, known: (name: string) => boolean): { start: number; end: number; url: string }[] {
+  const out: { start: number; end: number; url: string }[] = [];
+  for (const c of knowledgeCandidates(text)) {
+    const n = c.names.find((x) => known(x.name));
+    if (n) out.push({ start: c.start, end: n.end, url: n.name });
+  }
+  return out;
+}
+//  이름 → 있나(true/false) · 묻는 중(Promise). 못 물었으면(망·5xx·시간 초과) 기억하지 않는다 — 다음 호버에 다시 묻는다.
+//  «없다» 는 60초만 믿는다 — AI 가 이름을 먼저 말하고 문서를 나중에 쓰는 판이 있다(그동안 호버한 이름이 영영 안 그어지면 안 된다).
+const knowledgeKnown = new Map<string, boolean | Promise<boolean>>();
+const knowledgeNoAt = new Map<string, number>();
+const KN_NO_TTL = 60_000, KN_ASK_MS = 1500;
+export function isKnowledgeLink(s: string): boolean { return knowledgeKnown.get(s) === true; }
+/** 이 이름을 (다시) 물어야 하나 — 모르거나, 묻는 중이거나(기다려야 하므로), «없다» 가 낡았거나. */
+function knowledgeNeedsAsk(n: string): boolean {
+  const v = knowledgeKnown.get(n);
+  if (v === undefined || v instanceof Promise) return true;
+  return v === false && Date.now() - (knowledgeNoAt.get(n) || 0) > KN_NO_TTL;
+}
+/** 후보 이름들을 물어 기억한다(이미 아는 것은 건너뛴다). **반드시 끝난다** — 묻기마다 1.5초 상한이 있다(리뷰 차단 지적: 멎은
+ *  요청 하나가 그 행의 밑줄 답(cb)을 영영 막으면, 같은 행의 URL·경로 밑줄까지 같이 죽는다 — xterm 은 앞선 제공자의 답을 기다린다). */
+export async function learnKnowledge(names: string[]): Promise<void> {
+  const ask = (n: string): Promise<boolean> => {
+    const had = knowledgeKnown.get(n);
+    if (had instanceof Promise) return had;
+    if (had !== undefined && !knowledgeNeedsAsk(n)) return Promise.resolve(had);
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const req = fetchAuth('/api/ui/knowledge/' + encodeURIComponent(n) + '?limit=1', { cache: 'no-store', signal: ctrl?.signal })
+      .then((r): boolean | null => (r.ok ? true : r.status === 404 ? false : null))
+      .catch((): null => null);
+    const late = new Promise<null>((res) => window.setTimeout(() => { try { ctrl?.abort(); } catch (_) { /* noop */ } res(null); }, KN_ASK_MS));
+    const p = Promise.race([req, late]).then((v) => {
+      if (v === null) { knowledgeKnown.delete(n); return false; }   // 답을 못 받았다 — 기억하지 않는다
+      knowledgeKnown.set(n, v);
+      if (!v) knowledgeNoAt.set(n, Date.now()); else knowledgeNoAt.delete(n);
+      return v;
+    });
+    knowledgeKnown.set(n, p);
+    return p;
+  };
+  if (knowledgeKnown.size > 500) { knowledgeKnown.clear(); knowledgeNoAt.clear(); }
+  await Promise.all(names.slice(0, 12).map((n) => ask(n).catch(() => false)));
+}
+// 지식 문서를 곁칸 웹 칸에 — 미리보기·아티팩트와 같은 길(셸 onMsg 'lively:open-in-pane'). 우리 화면이라 칸이 `?embed=1` 을 붙여 싣는다.
+//  ⚠ 같은 게이트웨이의 /ui/ 화면 링크는 브라우저에선 새 탭이 규칙이다(linkOpenTarget, 원준님 09-19). 지식 이름은 **일부러** 그 규칙을
+//   타지 않는다 — 요청이 «곁칸에서 뜨게»(원준님 10-05)이고, 이름은 주소가 아니라 터미널이 지식으로 확인한 낱말이다.
+function openKnowledgeFromTerminal(name: string): void {
+  const ui = location.origin + location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+  postToPane(ui + '#/k/' + encodeURIComponent(name));
+}
+// 셸에 «곁칸 웹 칸에 실어라» — 셸이 400ms 안에 받았다고 답하지 않으면(구 셸·단독 페이지) 새 탭으로 떨어진다.
+function postToPane(url: string): void {
+  if (window.parent === window) { window.open(url, '_blank', 'noopener'); return; }
+  let taken = false;
+  const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
+  window.addEventListener('message', ack);
+  window.parent.postMessage({ type: 'lively:open-in-pane', url }, location.origin);
+  window.setTimeout(() => {
+    window.removeEventListener('message', ack);
+    if (!taken) window.open(url, '_blank', 'noopener');
+  }, 400);
 }
 
 // (순수 — 테스트 대상) 터미널 속 링크를 어디서 열지 — 'shell' 부모 셸 안 이동 · 'pane' 곁칸 웹 칸 · 'tab' 새 창(브라우저=새 탭).
@@ -316,8 +410,10 @@ export function spanToRange(span: { startRow: number; startCol: number; endRow: 
   };
 }
 
-function openLinkFromTerminal(uri: string): void {
+export function openLinkFromTerminal(uri: string): void {
   //  파일 경로(#4562) — 곁칸의 자료·뷰어로. OSC 8 의 file:// 도 같은 길(하네스가 경로를 하이퍼링크로 심어 오는 판).
+  //  지식 이름(#4562) — 있다고 확인된 것만 여기 온다(linkMatches).
+  if (isKnowledgeLink(uri)) { openKnowledgeFromTerminal(uri); return; }
   //  스킴 없는 OSC 8 주소(`#anchor` · `/foo`)는 경로가 아니면 종전 길로 간다.
   if (isPathLink(uri) && pathLinkTarget(uri)) { openPathFromTerminal(uri); return; }
   if (/^file:\/\//i.test(uri)) {
@@ -335,17 +431,7 @@ function openLinkFromTerminal(uri: string): void {
     // 곁칸 — 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
     //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
     //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
-    if (where === 'pane') {
-      let taken = false;
-      const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
-      window.addEventListener('message', ack);
-      window.parent.postMessage({ type: 'lively:open-in-pane', url: u.href }, location.origin);
-      window.setTimeout(() => {
-        window.removeEventListener('message', ack);
-        if (!taken) window.open(uri, '_blank', 'noopener');
-      }, 400);
-      return;
-    }
+    if (where === 'pane') { postToPane(u.href); return; }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
 }
@@ -4053,17 +4139,27 @@ export async function boot() {
   try {
     term.registerLinkProvider({
       provideLinks: (y: number, cb: (links: any[] | undefined) => void): void => {
-        let links: any[] | undefined;
-        try {
+        const draw = (): void => {
+          let links: any[] | undefined;
+          try {
+            const w = readRows(y - 1);
+            const spans = w ? urlSpansAt(w.rows, w.soft, w.at, term.cols) : [];
+            links = spans.map((sp) => ({
+              range: spanToRange(sp, w!.from), text: sp.url,
+              activate: (e: MouseEvent) => { e.preventDefault(); openLinkFromTerminal(sp.url); },
+            }));
+            if (!links.length) links = undefined;
+          } catch (_) { links = undefined; }   // 한 번의 실패가 호버를 영영 죽이지 않게
+          cb(links);
+        };
+        //  지식 이름 후보(#4562)는 서버에 물어본 뒤에 긋는다 — 처음 한 번만 기다리고, 그 뒤엔 기억으로 곧바로.
+        let ask: string[] = [];
+        try {   // 잇는 행(긴 이름이 두 행으로 잘린 것)까지 본다 — 밑줄 판정(urlSpansAt)과 같은 글
           const w = readRows(y - 1);
-          const spans = w ? urlSpansAt(w.rows, w.soft, w.at, term.cols) : [];
-          links = spans.map((sp) => ({
-            range: spanToRange(sp, w!.from), text: sp.url,
-            activate: (e: MouseEvent) => { e.preventDefault(); openLinkFromTerminal(sp.url); },
-          }));
-          if (!links.length) links = undefined;
-        } catch (_) { links = undefined; }   // 한 번의 실패가 호버를 영영 죽이지 않게
-        cb(links);
+          ask = w ? knowledgeCandidates(joinRows(w.rows, w.soft, w.at, term.cols).text).flatMap((c) => c.names.map((x) => x.name)) : [];
+        } catch (_) { ask = []; }
+        if (!ask.some(knowledgeNeedsAsk)) { draw(); return; }
+        learnKnowledge(ask).catch(() => { /* 묻기가 깨져도 밑줄은 긋는다 */ }).finally(draw);
       },
     });
   } catch (_) { /* 구 xterm(제공자 API 없음) — 아래 애드온이 종전대로 한 행씩 긋는다 */ }
@@ -4374,7 +4470,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
     //  'pane' 은 셸의 [웹] 탭으로 간다. 그 탭은 곁칸(자리바꿈으로 왼쪽에 설 수 있다) · 가운데 · 아래 칸 어디에도 있을 수 있고
     //   이 번들(셸 밖 iframe)은 그 자리를 모른다. 그래서 자리를 말하지 않고 탭 이름으로 적는다(#4233).
     //  파일 경로(#4562)는 셸의 [뷰어] 탭으로 간다 — 웹 칸과 같은 이유로 자리 대신 탭 이름.
-    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isPathLink(url) ? 'file' : linkTargetHere(url)];
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'pane' : isPathLink(url) ? 'file' : linkTargetHere(url)];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
