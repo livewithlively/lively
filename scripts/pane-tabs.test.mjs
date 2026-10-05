@@ -123,6 +123,19 @@ eq(L.bottomShown({ bottomOn: false, count: 3, narrow: false }), false, "BS3 닫�
 eq(L.bottomShown({ bottomOn: true, count: 2, narrow: true }), false, "BS4 좁은 폭은 서랍이 아래 칸 탭을 든다 — 아래 칸은 안 보인다");
 eq(L.bottomShown({ bottomOn: false, count: 0, narrow: true }), false, "BS5 닫힘 · 빈 칸 · 좁은 폭 — 안 보인다");
 
+// 새 탭이 설 칸 (LZ1–LZ3) — #4443 원준(10-05) «아래칸에 여는거 우리 안하기로 했잖음»: 아래 칸은 새 탭을 받지 않는다(줄기만 한다)
+eq(L.landZone("bottom"), "side", "LZ1 아래 칸으로 가려던 새 탭은 곁칸에 선다");
+eq([L.landZone("side"), L.landZone("main")], ["side", "main"], "LZ2 곁칸 · 가운데 칸은 그대로");
+eq(["", undefined, null, "BOTTOM", {}].map((z) => L.landZone(z)), ["side", "side", "side", "side", "side"], "LZ3 그 밖의 값(빈 값 · 엉뚱한 값)은 곁칸 — 아래 칸으로 새지 않는다");
+// 물려받는 배치의 아래 칸 걷기 (FB1–FB4) — 저장한 적 없는 프로젝트가 last 를 물려받을 때 옛 아래 칸을 새로 세우지 않는다(격리 리뷰)
+const inh = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web"], act: { main: "sessions", side: "knowledge", bottom: "web" }, sideOn: true, bottomOn: true };
+const fb = L.foldBottom(inh);
+eq([fb.side, fb.bottom, fb.act, fb.sideOn, fb.bottomOn], [["files", "knowledge", "timeline", "web"], [], { main: "sessions", side: "knowledge", bottom: null }, true, true], "FB1 아래 칸의 탭은 곁칸 뒤로(순서 그대로) · 아래 칸은 비고 그 켜짐도 비운다 · 곁칸 켜짐 · 나머지는 그대로");
+eq(inh.bottom, ["timeline", "web"], "FB2 받은 배치는 고치지 않는다(새 판을 돌려준다)");
+eq(L.foldBottom({ ...inh, side: ["files", "web"] }).side, ["files", "web", "timeline"], "FB3 곁칸에 이미 있는 열쇠는 두 번 세우지 않는다");
+const empty = { ...inh, bottom: [], act: { ...inh.act, bottom: null } };
+check(L.foldBottom(empty) === empty, "FB4 아래 칸이 비었으면(경계) 받은 것을 그대로 돌려준다");
+
 // 옛 기본값 걷기 (PK1–PK12) — 닫힌 아래 칸에 타임라인 하나만 숨겨 둔 옛 기본 배치를 한 번만 걷는다
 const parked = (extra = {}) => ({ main: ["sessions"], side: ["files", "tasks"], bottom: ["timeline"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, ...extra });
 let pk = L.unparkBottom({ last: parked() });
@@ -240,7 +253,23 @@ check(/b\.onclick = \(\) => openPicker\(b, zone\);/.test(PANES), "X4b [＋] 는 
 const tabMenuFn = fn("  function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {");
 check(/\.\.\.\(\['side'\] as Zone\[\]\)\.filter\(canGo\)\.map\(/.test(tabMenuFn) && !/\['side', 'bottom'\] as Zone\[\]\)\.filter\(canGo\)/.test(tabMenuFn), "X10 탭 우클릭에 «아래 칸으로 보내기» 가 없다 — 아래 칸의 옛 탭은 곁칸으로 보낼 수 있다");
 check(/sessionOnly \|\| zone === 'bottom' \? null : addBtn\(zone\)/.test(PANES), "X11 아래 칸 탭 줄엔 [＋] 가 없다 — 아래 칸에는 새로 열지 않는다(남은 옛 탭만 보인다)");
-check(/const zone: Zone = 'side';/.test(PANES) && !/z === 'bottom' && !narrow\(\) \? 'bottom' : 'side'/.test(PANES), "X12 빈 자리 우클릭 «칸에 넣기» 는 어디서 불러도 곁칸에 넣는다");
+const ctxAt = PANES.indexOf("bindCtxSurface(wrap, (hit, ev) => {");
+const ctxEnd = ctxAt >= 0 ? PANES.indexOf("{ label: '칸에 넣기'", ctxAt) : -1;
+const ctxBlock = ctxAt >= 0 && ctxEnd > ctxAt ? PANES.slice(ctxAt, ctxEnd) : "";       // 끝을 못 찾으면 비운다 — 파일 끝까지 잡으면 다른 곳의 같은 줄이 대신 맞는다(격리 리뷰)
+check(/const zone: Zone = 'side';/.test(ctxBlock) && !/z === 'bottom' && !narrow\(\) \? 'bottom' : 'side'/.test(PANES), "X12 빈 자리 우클릭 «칸에 넣기» 는 어디서 불러도 곁칸에 넣는다");
+//  아래 칸은 줄기만 한다(X14–X17) — 옛 배치에 남은 아래 칸이 보일 때 닿던 남은 길도 곁칸으로(lib landZone · 원준 10-05)
+check(/canGo: \(key, from, to\) => !narrow\(\) && from !== to && to === 'side' && tabBase\(key\) !== 'sessions',/.test(PANES), "X14 끌어 놓기의 과녁은 곁칸뿐 — 아래 칸으로는 끌어 넣지 못한다(아래 칸의 옛 탭은 곁칸으로 끌어낼 수 있다)");
+check(/label: `\$\{d\.name\} 하나 더`, icon: 'plus', run: \(\) => \{ addPart\(landZone\(zone\), type\); \}/.test(tabMenuFn), "X15 탭 우클릭 «하나 더» — 아래 칸의 옛 탭에서 불러도 새 탭은 곁칸(landZone)");
+const viewerFn = fn("  function openViewerAt(d: ViewerOpen | undefined): void {");
+check(/const zone: Zone = found \? showZone\(found\.zone, \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\) : landZone\(findTab\('editor'\)\?\.zone \?\? 'side'\);/.test(viewerFn), "X16 새 뷰어는 아래 칸에 서지 않는다 — 그 파일의 뷰어가 이미 있으면 그 탭을 켠다(닫힌 아래 칸이면 곁칸으로)");
+const reopenFn = fn("  function reopenClosed(): void {");
+check(/const zone: Zone = 'side';/.test(reopenFn) && !/t\.zone === 'bottom'/.test(reopenFn) && /lay\[zone\] = placeKey\(lay\[zone\], key, t\.zone === zone \? t\.at : lay\[zone\]\.length, pinSet\(\)\);/.test(reopenFn)
+  && /thawAll\(\);\s*(?:\/\/[^\n]*\n\s*)*bringUp\(last\.zone, last\.key\);/.test(reopenFn) && !/revealZone\(last\.zone\)/.test(reopenFn),
+  "X17 닫은 탭 다시 열기 — 아래 칸에서 닫은 탭도 곁칸(맨 끝)으로 · 켜기는 bringUp(닫힌 아래 칸을 펼치지 않는다)");
+const loadAt = PANES.indexOf("function loadLayout(id: number): Layout {");
+const loadFn = loadAt >= 0 ? PANES.slice(loadAt, PANES.indexOf("\n}\n", loadAt)) : "";
+check(/if \(last\) return normalizeLayout\(foldBottom\(last\)\);/.test(loadFn) && /if \(v1\) return normalizeLayout\(foldBottom\(v1\)\);/.test(loadFn) && /if \(mine\) return mine;/.test(loadFn),
+  "X18 물려받는 배치(last · 옛 전역)는 아래 칸을 곁칸 뒤로 합친다 — 제 배치(mine)는 그대로");
 const PARTS_SRC = readFileSync(process.env.PANES_PARTS_SRC || path.join(root, "web/v2/panes-parts.ts"), "utf8");
 check(/\{ type: 'apps', name: '앱', icon: 'apps', pickable: false,/.test(PARTS_SRC), "X13 «앱» 칸은 pickable:false — [＋] · 빈 자리 메뉴로 탭을 못 연다(붙이기는 «이 세션에 붙이기» 묶음)");
 check(/onclick: \(\) => \{ if \(consumeDragClick\(\)\) return; if \(reselect\(zone, key\)\) return; activate\(zone, key\); \}/.test(PANES), "X5 탭 누르기 — 끈 뒤면 무시, 켜진 탭이면 «처음으로», 아니면 켠다");
