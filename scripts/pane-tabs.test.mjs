@@ -212,7 +212,11 @@ const paintFn = fn("  function paintAll(): void {");
 check(/const bShow = bottomVisible\(\);/.test(paintFn) && /colMain\.classList\.toggle\('no-bottom', !bShow\);/.test(paintFn) && /bottomPane\.root\.hidden = !bShow;/.test(paintFn) && /splitY\.hidden = !bShow;/.test(paintFn), "X3 아래 칸 · 경계선은 «열려 있고 탭이 있을 때만» 선다");
 check(/const bottomVisible = \(\): boolean => bottomShown\(\{ bottomOn: lay\.bottomOn, count: lay\.bottom\.length, narrow: narrow\(\) \}\);/.test(PANES), "X3b 그 판정은 lib bottomShown — 탭 수는 아래 칸의 배치");
 const pickFn = fn("  function openPicker(anchor: HTMLElement, zone: Zone): void {");
-check(/zone === 'bottom' \|\| loose \|\| narrow\(\) \|\| bottomVisible\(\) \? null/.test(pickFn) && /if \(!lay\.bottom\.length\) \{ openPicker\(anchor, 'bottom'\); return; \}/.test(pickFn), "X4 «아래 칸 열기» — 아래 칸이 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다");
+check(/zone === 'bottom' \|\| loose \|\| narrow\(\) \|\| bottomVisible\(\) \? \[\]/.test(pickFn) && /if \(!lay\.bottom\.length\) \{ openPicker\(anchor, 'bottom'\); return; \}/.test(pickFn), "X4 «아래 칸 열기» — 아래 칸이 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다");
+//  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 는 앱 서랍(v2/pane-drawer) — 이 칸에 넣을 수 있는 것만, 타일 그림은 독과 같은 것(glyph = 부품 아이콘).
+check(/openAppDrawer\(anchor, \{/.test(pickFn) && /items: rest\.map\(\(d\) => \(\{ type: d\.type, name: d\.name, hint: d\.hint, glyph: d\.icon, more: has\(d\.type\) \}\)\)/.test(pickFn)
+  && /onPick: \(t\) => \{ addPart\(zone, t as PartType\); \}/.test(pickFn) && !/anchoredPopover\(/.test(pickFn),
+  "X4c [＋] 는 앱 서랍 — 넣을 수 있는 부품(rest)만 타일로 · 이미 열린 multi 는 «하나 더» · 고르면 그 칸에 더한다");
 check(/b\.onclick = \(\) => openPicker\(b, zone\);/.test(PANES), "X4b [＋] 는 같은 고르기를 연다");
 check(/onclick: \(\) => \{ if \(consumeDragClick\(\)\) return; if \(reselect\(zone, key\)\) return; activate\(zone, key\); \}/.test(PANES), "X5 탭 누르기 — 끈 뒤면 무시, 켜진 탭이면 «처음으로», 아니면 켠다");
 const reFn = fn("  function reselect(zone: Zone, key: TabKey): boolean {");

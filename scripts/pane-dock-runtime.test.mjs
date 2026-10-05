@@ -24,7 +24,7 @@
 //  R10c 곁칸 아래 독은 확대해도 알약 높이는 그대로(아이콘이 위로 솟는다, macOS)
 //  R11 곁칸 아래에서 경계선 가까이(세로 30% 높이)로 끌어 놓으면 → 이음매, 그 높이(at 0.3)
 //  R12 아이콘을 끌어 순서를 바꾼다(이음매는 세로) · R13 독 밖으로(옆으로) 끌어내면 고정이 풀린다
-//  R14 [더보기] — 이음매 독이면 알약 옆 곁칸 쪽으로 부풀어 곁칸 안에 · 검색 · Enter · R15 Esc
+//  R14 [더보기] — 이음매 독이면 알약 옆 곁칸 쪽으로 부풀어 곁칸 안에 · 사이드바 앱만(«새 탭으로 여는 앱» 없음, 원준 10-05) · 검색 · Enter · R15 Esc
 //  H2  곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에
 //  R16 곁칸 탭 줄 높이 = 세션 머리줄 높이 · C1 어느 자리에서도 틀(탭 칸)에 스크롤이 안 생긴다
 //  R17 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 · R17b 자리바꿈(곁칸이 왼쪽 · sw-left)이면 오른쪽 분할선 위 · 이름표는 세션 쪽(오른쪽)
@@ -374,7 +374,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
   const more=grid.querySelector('.pn-dock-more');
   const mtext=more?more.textContent:'';
-  R.r14_open=!!more && more.classList.contains('open') && mtext.includes('사이드바 앱') && mtext.includes('타임라인') && mtext.includes('새 탭으로 여는 앱');
+  R.r14_open=!!more && more.classList.contains('open') && mtext.includes('사이드바 앱') && mtext.includes('타임라인') && !mtext.includes('새 탭으로 여는 앱') && !more.querySelector('a.pn-dock-tile');
   if(more){ const mr=rc(more), sr2=rc(shelf), p2=rc(pane), s2=span();
     R.r14_beside=mr.left>=sr2.right-0.5 && mr.left>=p2.left && mr.right<=p2.right+0.5 && mr.top>=s2.top-0.5 && mr.bottom<=s2.bottom+0.5;
     R.r14_info=[Math.round(mr.left),Math.round(mr.right),Math.round(sr2.right),Math.round(p2.left),Math.round(p2.right)]; }
@@ -619,7 +619,7 @@ check(R.d3_blur && R.d3_nothing_saved, "D3 끄는 중에 창을 떠나면(blur) 
 check(R.d4_other_pointer, "D4 다른 포인터의 이동은 모른 척");
 check(R.d5_nothing, "D5 끄는 중에 독이 걷히면 놓아도 아무것도 안 적는다 · 조각이 안 남는다");
 check(R.d6_one_drag && R.d6_clean, "D6 끌기는 한 번에 하나 — 아이콘을 누른 채 알약 끝을 또 눌러도 독 끌기가 안 선다");
-check(R.r14_open, "R14 [더보기] — 사이드바 앱 · 새 탭 앱 구획");
+check(R.r14_open, "R14 [더보기] — 사이드바 앱 구획 · «새 탭으로 여는 앱» 은 없다(여기서 여는 것은 모두 사이드바에 선다, 원준 10-05)");
 check(R.r14_beside, "R14a 이음매 독의 [더보기]는 알약 옆 곁칸 쪽으로 — 곁칸 안 · 곁칸 세로 구간 안", JSON.stringify(R.r14_info));
 check(R.r14_filter, "R14b 검색이 거른다", R.r14_tiles);
 check(R.r14_enter, "R14c Enter = 첫 앱을 연다 · 창이 닫힌다", R.r14_info2);

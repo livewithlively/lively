@@ -33,6 +33,7 @@ import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름.
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
+import { openAppDrawer } from './pane-drawer.js';                                // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
@@ -1351,32 +1352,32 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     b.onclick = () => openPicker(b, zone);
     return b;
   }
-  /** 그 칸에 넣을 것을 고르는 팝오버 — [＋] 가 열고, 빈 아래 칸의 «아래 칸 열기» 도 이걸 연다(빈 칸을 펴지 않는다). */
+  /** 그 칸에 넣을 것을 고르는 «앱 서랍» — [＋] 가 열고, 빈 아래 칸의 «아래 칸 열기» 도 이걸 연다(빈 칸을 펴지 않는다).
+   *  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): 독 ⊞ 와 같은 판 · 같은 타일(v2/pane-drawer). 이 칸에 넣을 수 있는 것만 — 모두 사이드바에 선다. */
   function openPicker(anchor: HTMLElement, zone: Zone): void {
     //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
     const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
     const rest = PART_DEFS.filter((d) => (d.multi || !has(d.type))
       && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
       && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
-    const close = anchoredPopover(anchor, el('div', { class: 'pn-pop' },
-      el('p', { class: 'pn-pop-h', text: zone === 'bottom' && !bottomVisible() ? '아래 칸에 넣을 것을 고르세요.' : '이 칸에 넣을 것을 고르세요.' }),
-      rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>
-        el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addPart(zone, d.type); } },
-          pnIcon(glyphAt(d.icon, 13), 'pn-i sm'),
-          el('span', { class: 'n' },
-            el('b', { text: has(d.type) ? `${d.name} 하나 더` : d.name }),
-            el('span', { class: 'pn-fine', text: has(d.type) ? '같은 것을 하나 더 띄워 나란히 봅니다.' : d.hint })))))
-        : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }),
+    const toBottom = zone === 'bottom' && !bottomVisible();   // 빈 아래 칸에 넣기(«아래 칸 열기» 에서 왔다)
+    openAppDrawer(anchor, {
+      title: toBottom ? '아래 칸에 넣기' : '이 칸에 열기',
+      note: toBottom ? '고르면 아래 칸이 열리고 거기 탭으로 서요' : '누르면 이 칸에 탭으로 열려요',
+      placeholder: toBottom ? '아래 칸에 넣을 앱 찾기' : '이 칸에 열 앱 찾기',
+      items: rest.map((d) => ({ type: d.type, name: d.name, hint: d.hint, glyph: d.icon, more: has(d.type) })),
+      onPick: (t) => { addPart(zone, t as PartType); },
       // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
       //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
       //  #4443 — 아래 칸이 안 보일 때만. 내용이 있으면 펴고, **비었으면 넣을 것부터 고른다**(빈 칸이 터미널 밑에 서지 않는다 · lib/pane-tabs bottomShown).
-      el('div', { class: 'pn-pop-foot' },
-        zone === 'bottom' || loose || narrow() || bottomVisible() ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => {
-          close();
+      foot: [
+        ...(zone === 'bottom' || loose || narrow() || bottomVisible() ? [] : [{ label: '아래 칸 열기', title: '터미널 밑의 아래 칸을 엽니다', icon: 'window', flip: true, run: () => {
           if (!lay.bottom.length) { openPicker(anchor, 'bottom'); return; }
           lay.bottomOn = true; saveLayout(); saveView({ bottomOn: true }); paintAll();
-        } }),
-        el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
+        } }]),
+        { label: '기본 배치로', title: '기본 배치로 되돌리기 — 이 프로젝트의 탭 배치를 처음처럼', icon: 'undo', run: () => resetLayout() },
+      ],
+    });
   }
 
 
