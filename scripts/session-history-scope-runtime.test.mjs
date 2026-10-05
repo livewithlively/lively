@@ -428,10 +428,10 @@ async function PAGE_MAIN() {
       await APP.renderSessions(view);
       await waitFor(() => $(".sess-turn"));
       R.s17a = { hash: location.hash, tabs: $$("[role=tab]").length };
-      scope("day", "d1");                       // 셸이 맞춰 주는 신호 — 범위는 바뀌지만 화면은 그대로다
+      scope("day", "d0");                       // 셸이 맞춰 주는 신호 — 범위가 바뀌어도(어제 → 오늘) 화면은 그대로다
       await sleep(80);
       R.s18 = { hash: location.hash };
-      scope("day", "d1", null, { pick: true });  // 같은 범위라도 사람이 누른 것이면 앱으로
+      scope("day", "d0", null, { pick: true });  // 같은 범위라도 사람이 누른 것이면 앱으로
       await sleep(80);
       R.s17 = { hash: location.hash };
       location.hash = "#/sessions/c1?node=";
