@@ -125,6 +125,9 @@ export function foldCardRows<T extends CardRow>(
 export interface PastRowLike {
   id: string;
   projectId?: number | null;
+  /** 위탁 워커가 사이드바에서 **설** 프로젝트(#4551, lib/liv-work). 있으면 소속보다 앞선다 — 카드는 «어디에 서나» 로 묶는다. */
+  standId?: number | null;
+  task?: unknown;
   /** views.ts 의 두 칸 — 도는 세션은 둘 다 참이다. */
   live?: boolean;
   alive?: boolean;
@@ -173,7 +176,8 @@ export function projectPastRows<T extends PastRowLike>(
   //   라 0 도 정확히 걸린다 — 프로젝트 없는 세션끼리만 모인다.
   const hit: T[] = [];
   for (const s of all || []) {
-    if (!s || Number(s.projectId || 0) !== projectId) continue;
+    //  묶는 잣대는 «설 자리» 다 — 위탁 워커는 시킨 세션의 프로젝트 카드 접힘에 든다(#4551). 사람 세션은 소속 그대로.
+    if (!s || Number((s.task ? (s.standId ?? s.projectId) : s.projectId) || 0) !== projectId) continue;
     if (s.trashedAt) continue;                             // 휴지통은 도는 중이어도 뺀다(#1851)
     if (pick && !pick(s)) continue;
     const names = [s.id, s.logId || '', ...(s.altIds || [])].filter(Boolean);

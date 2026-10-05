@@ -10,7 +10,8 @@
 //   O3 null · undefined · 빈 문자열 · 공백                   → 없음
 //   O4 세션 id 꼴이 아닌 값(임의 문자열 · 주입 시도)          → 없음
 //   O5 앞뒤 공백이 붙은 세션 id                              → 그 id(다듬는다)
-//   R1 적을 값 — 요청이 실어 온 세션 id 는 그대로, `cron:` 접두 · 꼴이 아닌 값은 null(크론 표식 자리를 흉내 못 낸다)
+//   R1 적을 값 — 요청이 실어 온 값도 같은 함수로 거른다: `cron:` 접두 · 꼴이 아닌 값 · 없음은 null
+//   V1~V6 ★ 목록에 없는 시킨 세션은 **보는 사람이 주인이거나 초대받은 것만** 푼다 — 남의 세션 이름 · 프로젝트가 새지 않는다
 //   M1 워커가 아닌 행은 안 건드린다(kind · task 가 안 생긴다)
 //   M2 시킨 세션이 같은 목록에 있으면 그 행의 프로젝트 · 이름을 쓴다
 //   M3 시킨 세션이 목록에 없으면 fallback 에서 찾는다 / 거기도 없으면 프로젝트 · 이름은 null 이고 세션 id 는 남는다
@@ -21,7 +22,7 @@
 //   M8 목록 행이 fallback 보다 앞선다(라이브 관측이 기억보다 새롭다)
 //   X1 missingOrigins — 목록에 없는 시킨 세션만, 겹치지 않게. 크론 · 목록에 있는 것은 안 나온다
 import assert from "node:assert/strict";
-import { applyTaskMarks, missingOrigins, originSessionOf, requesterSessionFrom, taskOriginOf, type OriginRowLike, type TaskOrigin } from "./task-origin.js";
+import { applyTaskMarks, missingOrigins, originSessionOf, taskOriginOf, visibleOriginStates, type OriginRowLike, type TaskOrigin } from "./task-origin.js";
 
 const SID = "box-wonjoon-jang-8923ed5b";
 
@@ -39,11 +40,30 @@ assert.deepEqual(taskOriginOf({ id: "41", requester_session: SID }), { taskId: 4
 assert.deepEqual(taskOriginOf({ id: 42, requester_session: "cron:distill#slack" }), { taskId: 42, originSession: null, cronJobId: "distill" }, "O2 크론 행 → 잡 id 만");
 assert.deepEqual(taskOriginOf({ id: 43, requester_session: null }), { taskId: 43, originSession: null, cronJobId: null }, "O3 기록이 없던 때의 위탁 → 둘 다 없음");
 
-// ── R. 적을 값 ──
-assert.equal(requesterSessionFrom(SID), SID, "R1 요청이 실어 온 세션 id 를 적는다");
-assert.equal(requesterSessionFrom(undefined), null, "R1 세션 밖에서 부른 위탁은 null");
-assert.equal(requesterSessionFrom("cron:distill"), null, "R1 ★ 밖에서 온 값이 크론 표식을 흉내 내지 못한다");
-assert.equal(requesterSessionFrom("not a session"), null, "R1 꼴이 아닌 값은 적지 않는다");
+// ── R. 적을 값 — 위탁을 만들 때 요청이 실어 온 값을 같은 함수로 거른다 ──
+assert.equal(originSessionOf(undefined), null, "R1 세션 밖에서 부른 위탁은 null");
+assert.equal(originSessionOf("cron:distill"), null, "R1 ★ 밖에서 온 값이 크론 표식을 흉내 내지 못한다");
+
+// ── V. 남의 세션은 풀지 않는다 ──
+{
+  const states = new Map([
+    ["mine", { owner: "wonjoon-jang", invites: [], project_id: 7, label: "내 세션" }],
+    ["invited", { owner: "sangmin-yoon", invites: ["wonjoon-jang"], project_id: 8, label: "초대받은 세션" }],
+    ["theirs", { owner: "sangmin-yoon", invites: ["someone-else"], project_id: 9, label: "남의 비밀 세션" }],
+    ["noowner", { owner: null, invites: null, project_id: 10, label: "주인 모름" }],
+    ["bare", { owner: "wonjoon-jang" }],
+  ]);
+  const v = visibleOriginStates(states, "wonjoon-jang");
+  assert.deepEqual([...v.keys()], ["mine", "invited", "bare"], "V1 ★★ 주인이거나 초대받은 세션만 푼다 — 남의 세션 · 주인 모르는 세션은 빠진다");
+  assert.deepEqual(v.get("mine"), { projectId: 7, label: "내 세션" }, "V2 푼 값은 프로젝트 · 이름");
+  assert.deepEqual(v.get("bare"), { projectId: null, label: null }, "V3 칸이 없으면 null");
+  assert.equal(visibleOriginStates(states, "").size, 0, "V4 보는 사람을 모르면 아무것도 안 푼다(빈 주인과 빈 사람이 맞아떨어지지 않는다)");
+  assert.equal(visibleOriginStates(states, "sang").size, 0, "V5 이름 일부가 겹친다고 풀지 않는다");
+  //  남의 세션 id 를 실어 만든 위탁 — 표식에 그 세션의 이름 · 프로젝트가 안 실린다.
+  const rows: OriginRowLike[] = [{ id: "w", projectId: null, label: "위탁 #1" }];
+  applyTaskMarks(rows, new Map([["w", { taskId: 1, originSession: "theirs", cronJobId: null }]]), visibleOriginStates(states, "wonjoon-jang"));
+  assert.deepEqual(rows[0].task, { id: 1, originSession: "theirs", originLabel: null, originProject: null, cron: null }, "V6 ★★ 남의 세션을 가리키는 위탁은 이름 · 프로젝트가 null 이다(새지 않는다)");
+}
 
 // ── M. 표식 얹기 ──
 const origins = (...xs: Array<[string, TaskOrigin]>): Map<string, TaskOrigin> => new Map(xs);

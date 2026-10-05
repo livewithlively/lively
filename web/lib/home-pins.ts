@@ -8,9 +8,9 @@
 //     압정이 아무 일도 안 했다 — #4233 홈 사이드바 2판 진단).
 //  잎 모듈인 이유는 sess-fold · hold-rules 와 같다 — 이 잣대가 화면 코드 안에 있으면 시험할 데가 없다(scripts/home-pins.test.mjs).
 
-/** 이 나누기가 한 줄에게 묻는 것 전부. */
 import { LIV_CARD } from './liv-work.js';   // #4551 — 「리브가 한 일」 카드 키
 
+/** 이 나누기가 한 줄에게 묻는 것 전부. */
 export interface PinRowLike {
   pinned?: boolean;
   project?: { id: number } | null;
