@@ -14,7 +14,8 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const m = await importTerminalModule();
-const { pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink } = m;
+const { pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink,
+  knowledgeCandidates, knowledgeMatches, learnKnowledge, isKnowledgeLink, openLinkFromTerminal } = m;
 for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt, isPathLink, shortLink, openPathFromTerminal, bareClickLink]) assert.equal(typeof f, "function");
 
 const LIB = process.env.PATH_OPEN_SRC || join(root, "web/lib/path-open.ts");
@@ -343,6 +344,118 @@ t("B6 경로가 아닌 것 · 다른 경로의 답 — 아무것도 안 하거�
   tick(400);
   assert.deepEqual(opened, [SHARED], "다른 경로의 답은 이 클릭의 답이 아니다");
   tick(10000);
+});
+
+// ── K. 지식 이름 링크(원준님 10-05 «산출 지식 저것도 클릭하면 뜨게하자») — 있다고 확인된 이름에만 ─────────────
+const tK = async (n, fn) => { await fn(); pass++; console.log(`ok  ${n}`); };
+const names = (line) => knowledgeCandidates(line).map((c) => c.names.map((x) => x.name));
+t("K1 후보 꼴 — 하이픈 마디 셋 이상 · 8~64자 · 한글 이름 · 조사 붙은 꼴은 뗀 것도", () => {
+  assert.deepEqual(names("산출지식 terminal-path-link-to-pane-viewer-4562 참고"), [["terminal-path-link-to-pane-viewer-4562"]]);
+  assert.deepEqual(names("terminal-path-link-to-pane-viewer-4562에 남겼다"), [["terminal-path-link-to-pane-viewer-4562에", "terminal-path-link-to-pane-viewer-4562"]]);
+  assert.deepEqual(names(cellsOf("지식 터미널-여러세션-한탭-그리드-열기-745 참고")), [["터미널-여러세션-한탭-그리드-열기-745"]]);
+});
+t("K2 후보가 아닌 것 — 마디 둘 · 짧은 것 · 경로·URL·파일 이름 속 · 대문자", () => {
+  for (const line of ["diff-reviewer 를 돌렸다", "a-b-c", "/x/terminal-path-link-4562.md", "https://a.io/x-y-z-w", "see terminal-path-link.md", "Big-Name-Here-Yes", "https://a.io/terminal-path-link-to-pane 보기", "/w/project/1/terminal-path-link-to-pane",
+    "550e8400-e29b-41d4-a716-446655440000", "2026-10-05-00-00", "12345-678-90-abc"]) {
+    assert.deepEqual(names(line), [], line);
+  }
+});
+t("K3 확인된 이름만 링크 · 조사 붙은 꼴은 밑줄도 이름까지 · 한글 이름은 칸 범위 그대로", () => {
+  const known = (n) => n === "terminal-path-link-to-pane-viewer-4562" || n === "터미널-여러세션-한탭-그리드-열기-745";
+  const L = "terminal-path-link-to-pane-viewer-4562에 · unknown-name-here-x";
+  const ms = knowledgeMatches(L, known);
+  assert.deepEqual(ms.map((x) => x.url), ["terminal-path-link-to-pane-viewer-4562"]);
+  assert.equal(L.slice(ms[0].start, ms[0].end), "terminal-path-link-to-pane-viewer-4562");
+  const C = cellsOf("지식 터미널-여러세션-한탭-그리드-열기-745 참고");
+  const [k] = knowledgeMatches(C, known);
+  assert.equal(C.slice(k.start, k.end).replace(/\0/g, ""), "터미널-여러세션-한탭-그리드-열기-745");
+  //  이모지(넓은 글자) 바로 뒤 — 밑줄이 이모지의 뒤 칸에서 시작하지 않는다(리뷰 지적)
+  const E = "✅\0terminal-path-link-to-pane-viewer-4562 끝";
+  const [e] = knowledgeMatches(E, known);
+  assert.equal(E.slice(e.start, e.end), "terminal-path-link-to-pane-viewer-4562");
+  //  칸 정렬 글에서 조사 붙은 꼴 — 조사의 뒤 칸(\0)은 밑줄 밖
+  const P = cellsOf("terminal-path-link-to-pane-viewer-4562에");
+  const [q] = knowledgeMatches(P, known);
+  assert.equal(P.slice(q.start, q.end), "terminal-path-link-to-pane-viewer-4562");
+});
+const fetched = [];
+let fetchPlan = {};
+g.fetch = async (url) => {
+  const name = decodeURIComponent(String(url).split("/api/ui/knowledge/")[1].split("?")[0]);
+  fetched.push(name);
+  const v = fetchPlan[name];
+  if (v === "throw") throw new Error("net");
+  return { ok: v === 200, status: v ?? 404 };
+};
+await tK("K4 서버에 묻고 기억한다 — 200=있음 · 404=없음(기억) · 5xx·끊김=기억 안 함(다음에 다시) · 같은 이름은 한 번만", async () => {
+  fetchPlan = { "yes-kn-name-one": 200, "no-kn-name-two": 404, "err-kn-name-three": 500, "net-kn-name-four": "throw" };
+  fetched.length = 0;
+  await Promise.all([learnKnowledge(["yes-kn-name-one", "no-kn-name-two", "err-kn-name-three", "net-kn-name-four"]), learnKnowledge(["yes-kn-name-one"])]);
+  assert.deepEqual(fetched.filter((n) => n === "yes-kn-name-one").length, 1, "같은 이름을 두 번 묻지 않는다");
+  assert.equal(isKnowledgeLink("yes-kn-name-one"), true);
+  assert.equal(isKnowledgeLink("no-kn-name-two"), false);
+  fetched.length = 0;
+  await learnKnowledge(["yes-kn-name-one", "no-kn-name-two", "err-kn-name-three", "net-kn-name-four"]);
+  assert.deepEqual(fetched.sort(), ["err-kn-name-three", "net-kn-name-four"], "답을 못 받은 것만 다시 묻는다");
+});
+await tK("K5 확인된 이름은 linkMatches 에 든다 — 확인 전엔 안 든다(가짜 밑줄 없음)", async () => {
+  fetchPlan = { "yes-kn-name-one": 200, "no-kn-name-two": 404 };
+  await learnKnowledge(["yes-kn-name-one", "no-kn-name-two"]);
+  assert.deepEqual(urls("산출지식 yes-kn-name-one 참고"), ["yes-kn-name-one"]);
+  assert.deepEqual(urls("no-kn-name-two · never-asked-name-x"), []);
+  assert.deepEqual(urls("/w/project/1/yes-kn-name-one.md"), ["/w/project/1/yes-kn-name-one.md"], "경로 속 이름은 경로의 몫");
+});
+t("K6 누르면 곁칸 웹 칸으로 `#/k/<이름>` — 답이 없으면 새 탭", () => {
+  reset();
+  openLinkFromTerminal("yes-kn-name-one");
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].type, "lively:open-in-pane");
+  assert.equal(posted[0].url, "https://gw.test/ui/#/k/yes-kn-name-one");
+  answer({ type: "lively:open-in-pane:ok" });
+  tick(400);
+  assert.deepEqual(opened, []);
+  reset();
+  openLinkFromTerminal("yes-kn-name-one");
+  tick(400);
+  assert.deepEqual(opened, ["https://gw.test/ui/#/k/yes-kn-name-one"]);
+});
+
+await tK("K7 멎은 요청 — 1.5초 상한에서 끝나고(밑줄 답이 막히지 않는다), 기억하지 않아 다음에 다시 묻는다(리뷰 차단 지적)", async () => {
+  const savedFetch = g.fetch;
+  let asked = 0;
+  g.fetch = () => { asked++; return new Promise(() => {}); };   // 영영 답이 없다
+  timers = [];
+  let done = false;
+  const p = learnKnowledge(["stuck-kn-name-five"]).then(() => { done = true; });
+  await Promise.resolve();
+  assert.equal(done, false);
+  tick(1500);                       // 상한
+  await p;
+  assert.equal(done, true);
+  assert.equal(isKnowledgeLink("stuck-kn-name-five"), false);
+  g.fetch = savedFetch;
+  fetchPlan = { "stuck-kn-name-five": 200 };
+  await learnKnowledge(["stuck-kn-name-five"]);
+  assert.equal(isKnowledgeLink("stuck-kn-name-five"), true, "다음 호버엔 다시 물어 알아낸다");
+  assert.equal(asked, 1);
+});
+await tK("K8 «없다» 는 60초만 믿는다 — 그 뒤 호버는 다시 묻는다(이름을 먼저 말하고 문서를 나중에 쓰는 판)", async () => {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  fetchPlan = { "later-kn-name-six": 404 };
+  await learnKnowledge(["later-kn-name-six"]);
+  assert.equal(isKnowledgeLink("later-kn-name-six"), false);
+  fetchPlan = { "later-kn-name-six": 200 };
+  fetched.length = 0;
+  now += 30_000;
+  await learnKnowledge(["later-kn-name-six"]);
+  assert.deepEqual(fetched, [], "60초 안엔 다시 묻지 않는다");
+  now += 31_000;
+  await learnKnowledge(["later-kn-name-six"]);
+  assert.deepEqual(fetched, ["later-kn-name-six"]);
+  assert.equal(isKnowledgeLink("later-kn-name-six"), true);
+  Date.now = realNow;
 });
 
 console.log(`\n${pass} passed`);
