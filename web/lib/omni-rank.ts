@@ -23,7 +23,43 @@ export function stemKo(word: string): string {
   for (const j of KO_JOSA) if (w.length >= j.length + 2 && w.endsWith(j)) return w.slice(0, -j.length);
   return w;
 }
-export interface Term { t: string; stem: string; quoted: boolean }
+export interface Term { t: string; stem: string; quoted: boolean; optional?: boolean; alts?: string[] }
+
+// ── 군말 · 다른 표기(#4530 검색 품질, 원준 2026-10-05) — 서버 query-terms.ts 의 표와 **글자 하나까지 같다**(시험 R11 이 잰다) ──
+//  군말(«방법» · «세션» …)은 없어도 되는 낱말, 다른 표기(배포 = deploy)는 그 표기로 든 글도 맞은 것으로 친다(세기 0.7).
+//  셸 목록의 이름 찾기(세션·프로젝트 이름)와 색칠이 서버와 같은 규칙으로 돌아야 «서버는 찾았는데 화면은 안 칠한다» 가 없다.
+export const FILLER_WORDS: ReadonlySet<string> = new Set([
+  '방법', '어떻게', '어떡해', '왜', '뭐', '뭐지', '뭐였지', '뭐더라', '무엇', '어디', '언제', '누가',
+  '관련', '관련된', '관련한', '대한', '대해', '관해', '관한', '위한', '위해',
+  '그', '그거', '그것', '그때', '저번', '저번에', '지난번', '지난번에', '예전', '예전에', '전에', '아까',
+  '좀', '것', '거', '건', '때', '하는', '했던', '하던', '있는', '있던', '하는법', '하기',
+  '이유', '원인', '내용', '얘기', '이야기', '말', '말한', '말했던', '문제', '정리', '해결', '안됨', '안돼', '안되는',
+  '세션', '대화', '채팅', '그리고', '및',
+  'how', 'why', 'what', 'where', 'when', 'the', 'a', 'an', 'to', 'of', 'for', 'about', 'with', 'session', 'chat',
+]);
+export const TERM_ALIAS_GROUPS: ReadonlyArray<readonly string[]> = [
+  ['배포', 'deploy', '디플로이', 'deployment'], ['검색', 'search', '서치'], ['세션', 'session'], ['프로젝트', 'project'], ['지식', 'knowledge'],
+  ['로그인', 'login', 'signin'], ['로그아웃', 'logout', 'signout'], ['가입', 'signup'], ['사이드바', 'sidebar', '곁칸'], ['터미널', 'terminal'],
+  ['알림', 'notification', '노티'], ['미리보기', 'preview', '프리뷰'], ['색인', 'index', '인덱스'], ['권한', 'permission', '퍼미션'],
+  ['온보딩', 'onboarding'], ['설정', 'settings', '세팅'], ['대시보드', 'dashboard'], ['워크스페이스', 'workspace'], ['테넌트', 'tenant'],
+  ['수집', 'collect'], ['분류', 'category', '카테고리'], ['태스크', 'task'], ['댓글', 'comment', '코멘트'], ['업로드', 'upload'],
+  ['다운로드', 'download'], ['토큰', 'token'], ['위젯', 'widget'], ['빌드', 'build'], ['캐시', 'cache'],
+  ['머지', 'merge', '병합'], ['브랜치', 'branch'], ['커밋', 'commit'], ['디자인', 'design'], ['임베딩', 'embedding'], ['리뷰', 'review'],
+  ['모바일', 'mobile'], ['버튼', 'button', '단추'], ['모달', 'modal'], ['메뉴', 'menu'], ['핸드오버', 'handover', '인수인계'],
+  ['스킬', 'skill'], ['하네스', 'harness'], ['게이트웨이', 'gateway'], ['에러', 'error', '오류'],
+  ['스크린샷', 'screenshot', '캡처'], ['폴더', 'folder'], ['데이터베이스', 'database', '디비'],
+  ['마이그레이션', 'migration'], ['롤백', 'rollback'], ['프롬프트', 'prompt'], ['에이전트', 'agent'],
+];
+const ALIAS_OF: ReadonlyMap<string, readonly string[]> = (() => {
+  const m = new Map<string, string[]>();
+  for (const g of TERM_ALIAS_GROUPS) for (const w of g) m.set(w, [...(m.get(w) || []), ...g.filter((x) => x !== w)]);
+  return m;
+})();
+function aliasesOf(t: string, stem: string): string[] {
+  const out: string[] = [];
+  for (const k of [t, stem]) for (const a of ALIAS_OF.get(k) || []) if (a !== t && a !== stem && !out.includes(a)) out.push(a);
+  return out;
+}
 export function parseTerms(q: string, max = 8): Term[] {
   const out: Term[] = [];
   const s = String(q ?? '').toLowerCase();
@@ -33,34 +69,46 @@ export function parseTerms(q: string, max = 8): Term[] {
     const quoted = m[1] !== undefined;
     const t = (quoted ? m[1] : m[2]).trim().replace(/\s+/g, ' ');
     if (!t || out.some((x) => x.t === t)) continue;
-    out.push({ t, stem: quoted ? t : stemKo(t), quoted });
+    const stem = quoted ? t : stemKo(t);
+    const term: Term = { t, stem, quoted };
+    if (!quoted) {
+      if (FILLER_WORDS.has(t) || FILLER_WORDS.has(stem)) term.optional = true;
+      const alts = aliasesOf(t, stem);
+      if (alts.length) term.alts = alts;
+    }
+    out.push(term);
   }
+  //  전부 군말이면 군말이 아니다 — «문제 해결» 로 찾는 사람은 그 두 낱말을 찾는다.
+  if (out.length && out.every((x) => x.optional)) for (const x of out) delete x.optional;
   return out;
 }
-/** 1 = 친 그대로 · 0.8 = 조사 뗀 꼴만 · 0 = 없음. */
+/** 1 = 친 그대로 · 0.8 = 조사 뗀 꼴만 · 0.7 = 다른 표기 · 0 = 없음. */
 export function termStrength(textLower: string, term: Term): number {
   if (!term.t) return 0;
   if (textLower.includes(term.t)) return 1;
   if (term.stem !== term.t && term.stem.length >= 2 && textLower.includes(term.stem)) return 0.8;
+  if (term.alts) for (const a of term.alts) if (textLower.includes(a)) return 0.7;
   return 0;
 }
-/** 모든 낱말이 (그대로 또는 조사 뗀 꼴로) 들어 있나. 낱말이 없으면 false. */
+/** 있어야 하는 낱말(군말 제외)이 모두 (그대로 · 조사 뗀 꼴 · 다른 표기로) 들어 있나. 낱말이 없으면 false. */
 export function matchAll(text: string, terms: Term[]): boolean {
-  if (!terms.length) return false;
+  const req = terms.filter((t) => !t.optional);
+  if (!req.length) return false;
   const low = String(text || '').toLowerCase();
-  return terms.every((t) => termStrength(low, t) > 0);
+  return req.every((t) => termStrength(low, t) > 0);
 }
-/** 여러 자리 중 어디에든 낱말마다 있으면 true(세션 이름·하는 일·프로젝트 이름처럼 나뉜 자리). */
+/** 여러 자리 중 어디에든 있어야 하는 낱말마다 있으면 true(세션 이름·하는 일·프로젝트 이름처럼 나뉜 자리). */
 export function matchAllAcross(texts: Array<string | null | undefined>, terms: Term[]): boolean {
-  if (!terms.length) return false;
+  const req = terms.filter((t) => !t.optional);
+  if (!req.length) return false;
   const lows = texts.map((x) => String(x || '').toLowerCase());
-  return terms.every((t) => lows.some((l) => termStrength(l, t) > 0));
+  return req.every((t) => lows.some((l) => termStrength(l, t) > 0));
 }
-/** 색칠할 낱말 — 친 그대로와 조사 뗀 꼴. 한 글자 낱말은 색칠하지 않는다(«창» 이 «대화창» 속에서 칠해지는 잡음). */
+/** 색칠할 낱말 — 친 그대로 · 조사 뗀 꼴 · 다른 표기. 한 글자 낱말은 색칠하지 않는다(«창» 이 «대화창» 속에서 칠해지는 잡음). */
 export function highlightWords(terms: Term[]): string[] {
   const out: string[] = [];
   for (const t of terms) {
-    for (const w of [t.t, t.stem]) if (w && [...w].length >= 2 && !out.includes(w)) out.push(w);
+    for (const w of [t.t, t.stem, ...(t.alts || [])]) if (w && [...w].length >= 2 && !out.includes(w)) out.push(w);
   }
   return out.sort((a, b) => b.length - a.length);
 }

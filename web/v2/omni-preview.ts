@@ -51,8 +51,8 @@ export interface PvDeps {
   words(): string[];
   /** 기간으로 좁혔으면 그 시작(ms) — 세션의 맞은 말도 그 기간 안에서 고른다. 아니면 0. */
   since(): number;
-  /** 글에서 맞은 낱말을 칠한 노드들. */
-  hl(text: string): Node[];
+  /** 글에서 맞은 낱말을 칠한 노드들. extra = 그 글에서만 더 칠할 낱말(서버가 비슷한 글자로 맞춘 자리의 실제 글). */
+  hl(text: string, extra?: string[]): Node[];
   /** 종류 그림과 이름(목록 줄과 같은 것). */
   icon(h: PvHit, cls: string): SVGElement;
   kindLabel(h: PvHit): string;
@@ -196,7 +196,9 @@ export function createPreview(deps: PvDeps): Preview {
     const mine = d && typeof d.mine === 'boolean' ? d.mine : !ref.owner;
     const who = (role: string): HTMLElement => el('span', { class: 'v2-opv-who ' + (role === 'assistant' ? 'ai' : 'user'), text: role === 'assistant' ? 'AI' : mine ? '나' : '지시' }) as HTMLElement;
     //  말은 마크다운 원문이다 — 굵게·코드 표시(** `)를 걷어 글만 보인다(실화면: «**파일:** `…`» 가 그대로 보였다).
-    const msg = (m: any, cls: string): HTMLElement | null => m ? el('div', { class: 'v2-opv-msg ' + cls }, who(String(m.role)), el('p', {}, ...deps.hl(cleanInline(String(m.text || ''))))) as HTMLElement : null;
+    //  marks = 비슷한 글자로(붙여 쓰기 · 한 글자 틀림) 맞은 자리의 실제 글 — 친 글과 달라서 따로 칠한다.
+    const marks: string[] = (d && Array.isArray(d.marks) ? d.marks : []).filter((x: unknown): x is string => typeof x === 'string' && [...x].length >= 2);
+    const msg = (m: any, cls: string): HTMLElement | null => m ? el('div', { class: 'v2-opv-msg ' + cls }, who(String(m.role)), el('p', {}, ...deps.hl(cleanInline(String(m.text || '')), marks))) as HTMLElement : null;
     const host = el('div', { class: 'v2-opv-conv' }) as HTMLElement;
     if (hits.length) {
       const i = Math.max(0, Math.min(hitIdx, hits.length - 1));

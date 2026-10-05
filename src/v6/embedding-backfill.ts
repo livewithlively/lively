@@ -71,6 +71,19 @@ export const CATEGORY_TARGET: EmbeddingTarget = {
   }),
 };
 
+// 세션 요약 카드(#4530 검색 품질 «뜻으로 찾기») — 세션마다 «무엇이었나» 를 모은 글(v6/session-card.ts)을 임베딩한다.
+//  카드 글은 v6/session-card-store.ts 가 대화 색인(session_msg)에서 만들어 둔다 — 여기는 그 글을 벡터로 바꾸기만 한다.
+//  idCol='card_id'(노드 + 세션 id 를 이은 한 칸 — 이 표의 기본키는 (node_id, session_id) 두 칸이라 백필의 한 칸짜리 키로 못 쓴다).
+//  빈 카드(사람이 한 말이 없는 세션)는 대상이 아니다.
+export const SESSION_CARD_TARGET: EmbeddingTarget = {
+  name: "session_card",
+  table: "session_card",
+  idCol: "card_id",
+  activeFilter: "card <> ''",
+  selectCols: "card_id, card",
+  buildText: (r) => embeddingInputText({ body_md: (r as { card?: string | null }).card }),
+};
+
 export interface BackfillProgress { total: number; done: number }
 
 // ok=false 면 reason 으로 사유 구분: off(provider 미설정)·schema(pgvector 부재)·unavailable(엔드포인트)·error:*(배치 실패).
@@ -304,7 +317,7 @@ export async function runAutoBackfillSweep(): Promise<void> {
         return;
       }
     }
-    for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET, CATEGORY_TARGET]) {
+    for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET, CATEGORY_TARGET, SESSION_CARD_TARGET]) {
       if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
       let pending = 0;
       try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }

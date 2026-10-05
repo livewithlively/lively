@@ -14,6 +14,7 @@
 //  | R8  | 식별자 — 번호 정확 · 번호 부분 · key 같은 말 · 평범한 낱말  | exact · null · partial · null(«session» 이 key 일부라도)       |
 //  | R9  | 맨 위 셋 — 번호 > 이름 같음 > 이름에 모두 > 서버 표시 대화 > key 일부 | 그 층 순서 · 최대 셋                                |
 //  | R10 | 이름에 모두 든 것끼리 — 낱말이 앞에 놓인 것, 그다음 짧은 것 | «회의록» 에서 «811회의록» > «0810회의록» > «우리 825 회의록이랑…» |
+//  | R11 | 군말 · 다른 표기(#4530 검색 품질)                          | 표가 서버와 같다 · 군말은 없어도 맞음 · 다른 표기로도 맞고 칠한다 |
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,8 +36,9 @@ const bad = (n, why) => { fail++; console.error(`FAIL  ${n} — ${why}`); };
 const eq = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringify(want); a === b ? ok(n) : bad(n, `기대 ${b} · 실제 ${a}`); };
 
 // ── R1 화면 규칙 = 서버 규칙 ──
-const TABLE = ["검색을 omni.ts에서", '"관련도 순" 세션이', "통합검색(⌘K) 왜?", "100% a_b", "화면에서는 프로젝트로", "이가 나는 검색", "OMNI omni", "   "];
-for (const q of TABLE) eq(M.parseTerms(q), S.parseQueryTerms(q).map(({ t, stem, quoted }) => ({ t, stem, quoted })), `R1 낱말 같음 «${q}»`);
+const TABLE = ["검색을 omni.ts에서", '"관련도 순" 세션이', "통합검색(⌘K) 왜?", "100% a_b", "화면에서는 프로젝트로", "이가 나는 검색", "OMNI omni", "   ",
+  "배포 절차 방법", "deploy 순서를", "문제 해결", '"방법" 배포', "로그인 문제 어떻게", "세션 삭제"];
+for (const q of TABLE) eq(M.parseTerms(q), S.parseQueryTerms(q), `R1 낱말 같음 «${q}»`);
 for (const w of ["검색을", "세션이", "화면에서는", "omni.ts에서", "이가", "검색"]) eq(M.stemKo(w), S.stemKo(w), `R1 조사 떼기 같음 «${w}»`);
 for (const [text, q] of [["통합검색 결함", "검색을"], ["세션 목록", "세션이"], ["omni.ts", "omni.ts에서"], ["없음", "검색"]]) {
   eq(M.termStrength(text.toLowerCase(), M.parseTerms(q)[0]), S.termStrength(text.toLowerCase(), S.parseQueryTerms(q)[0]), `R1 세기 같음 «${q}» in «${text}»`);
@@ -54,7 +56,8 @@ eq(M.matchAll("아무거나", []), false, "R3 낱말 없음 = 아님");
 
 // ── R4 색칠 ──
 eq(M.highlightWords(M.parseTerms("관측 창")), ["관측"], "R4 한 글자 «창» 은 칠하지 않는다");
-eq(M.highlightWords(M.parseTerms("검색을 omni")), ["omni", "검색을", "검색"], "R4 조사 뗀 꼴도 · 긴 것 먼저(겹칠 때 긴 낱말이 먼저 잡히게)");
+eq(M.highlightWords(M.parseTerms("검색을 omni")), ["search", "omni", "검색을", "검색", "서치"], "R4 조사 뗀 꼴 · 다른 표기(검색 = search · 서치)도 · 긴 것 먼저(겹칠 때 긴 낱말이 먼저 잡히게)");
+eq(M.highlightWords(M.parseTerms("회의록을 omni")), ["회의록을", "omni", "회의록"], "R4 다른 표기가 없는 낱말은 종전대로");
 
 // ── R5·R6 지식 제목 머리말 ──
 eq(M.splitKnowTitle("as-built(#4135, 2026-09-28): 세션 신원은 세션을 연 사람 것"), { head: "as-built · #4135", main: "세션 신원은 세션을 연 사람 것" }, "R5 as-built(#…, 날짜):");
@@ -119,6 +122,16 @@ eq(top2.map((x) => x.key), ["same", "names", "conv"], "R9 이름 같음 > 이름
 const top3 = M.pickTop([H("a", "우리 825 회의록이랑 그 바로 이전 회의록 참고해서"), H("b", "0810회의록"), H("c", "811회의록"), H("d", "회의록에서 세션 프로젝트 정리안 찾기")], T("회의록"), "회의록");
 eq(top3.map((x) => x.key), ["d", "c", "b"], "R10 이름에 모두 든 것끼리 — 낱말이 앞에 놓인 것 먼저, 그다음 짧은 것");
 eq(M.pickTop([H("a", "x"), H("b", "y")], T("z"), "z").length, 0, "R9 근거가 없으면 맨 위가 비어 있다");
+
+// ── R11 군말 · 다른 표기 ──
+eq([...M.FILLER_WORDS], [...S.FILLER_WORDS], "R11 군말 표가 서버와 같다");
+eq(M.TERM_ALIAS_GROUPS, S.TERM_ALIAS_GROUPS, "R11 다른 표기 표가 서버와 같다");
+eq(M.matchAll("배포 절차를 정리했다", M.parseTerms("배포 절차 방법")), true, "R11 군말(«방법»)은 없어도 맞는다");
+eq(M.matchAllAcross(["로그인이 안 된다", "UI 버그"], M.parseTerms("로그인 문제 어떻게")), true, "R11 군말만 빠진 것은 맞는다(여러 자리)");
+eq(M.matchAll("배포 얘기", M.parseTerms("배포 절차 방법")), false, "R11 있어야 하는 낱말이 빠지면 아니다");
+eq(M.termStrength("we deploy today", M.parseTerms("배포를")[0]), 0.7, "R11 다른 표기로 든 글은 0.7");
+eq(M.termStrength("we deploy today", M.parseTerms("배포를")[0]), S.termStrength("we deploy today", S.parseQueryTerms("배포를")[0]), "R11 다른 표기의 세기가 서버와 같다");
+eq(M.highlightWords(M.parseTerms("배포")), ["deployment", "deploy", "디플로이", "배포"], "R11 다른 표기도 칠한다(긴 것 먼저)");
 
 console.log(`\n${pass} 통과 · ${fail} 실패`);
 if (fail) process.exit(1);
