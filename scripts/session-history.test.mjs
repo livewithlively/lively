@@ -4,6 +4,12 @@
 //   H1~H14 세션 목록 탭 — 도는 세션과 중앙 기록을 한 줄로(내 세션만 · id 꼴 이름) · F1~F4 거르개(실행 중 · 오프라인 · 기록만)
 //   W1~W4 일지 기간 · G1~G3 일지 묶음 · S1 합계 · HL1~HL5 «한 일» 한 줄 · C1~C2 복사 글
 //   N1~N7 맞은 말의 대화록 자리 · K1~K4 낱말 색칠 자리 · T1 탭 값
+//   (디자인 개편 2026-10-05 — 일지 옆 칸의 규칙)
+//   D1~D6 하루하루 막대: 한 주 일곱 칸(빈 날 포함) · 끝이 열린 기간은 오늘까지 · 경계(since 는 든다 · until 은 안 든다) ·
+//         줄이 없어도 칸은 선다 · 칸 수 상한 · 읽을 수 없는 시각
+//   P1~P4 프로젝트 요약: 세션 많은 순(같으면 기록 많은 순) · 「프로젝트 없음」 맨 아래 · 같은 기록은 한 번 · 이름 모르면 번호 · 묶음과 같은 열쇠
+//   L1~L3 만든 지식 · 태스크 목록: 겹치지 않게 · 늦게 일한 세션의 것부터 · 빈 입력
+//   I1~I2 그림 이름: 탭의 그림과 화면이 부르는 그림 이름이 전부 그림 표(lib/icon-paths)에 있다
 //  ⚠ 날짜 경계는 현지 시각 자정이다 — 시험도 현지 시각 생성자(new Date(y, m, d, …))로 만든다(CI 의 TZ 와 무관하게).
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -15,10 +21,11 @@ const WEB = process.env.SESSION_HISTORY_WEB || path.join(root, "web");
 const out = mkdtempSync(path.join(tmpdir(), "session-history-"));
 execFileSync(
   path.join(root, "node_modules/.bin/tsc"),
-  [path.join(WEB, "session-history.ts"), "--rootDir", WEB, "--outDir", out, "--module", "esnext", "--moduleResolution", "bundler", "--target", "es2022", "--skipLibCheck"],
+  [path.join(WEB, "session-history.ts"), path.join(WEB, "lib/icon-paths.ts"), "--rootDir", WEB, "--outDir", out, "--module", "esnext", "--moduleResolution", "bundler", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
 const M = await import(path.join(out, "session-history.js"));
+const { ICONS } = await import(path.join(out, "lib/icon-paths.js"));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -174,6 +181,74 @@ eq(M.markRanges("통합검색엔진", ["통합검색", "검색엔진", "엔진"]
 eq(M.markRanges("가나다 가나다", ["나", "가"]), [[0, 2], [4, 6]], "K3 낱말이 여럿이면 앞에서부터");
 eq([M.markRanges("글", []), M.markRanges("", ["가"]), M.markRanges("글", ["", null])], [[], [], []], "K4 빈 낱말·빈 글");
 eq(["journal", "list", "find", "", null, undefined, "zzz"].map(M.readHistTab), ["journal", "list", "find", "find", "find", "find", "find"], "T1 탭 값 — 모르는 값은 첫 탭");
+
+
+// ── 일지 옆 칸(기간 요약) ────────────────────────────────────────────────────────────────────
+{
+  //  이번 주 = 9/28(월) 0시 ~ 10/5(월) 0시. 오늘 = 9/30(수).
+  const wk = M.journalRange("week", NOW);
+  const rows = [jr("a", at(8, 28, 0, 0)), jr("b", at(8, 30, 9)), jr("c", at(8, 30, 14)), jr("d", at(9, 4, 23, 59, 59, 999)), jr("e", at(9, 5, 0, 0)), jr("f", at(8, 27, 23, 59))];
+  const d = M.journalDayBars(rows, wk.since, wk.until, NOW);
+  eq(d.map((x) => x.weekday + x.n).join(" "), "월1 화0 수2 목0 금0 토0 일1", "D1 한 주 = 일곱 칸(월~일) · 그날이 마지막 활동인 세션 수 · 빈 날도 0 으로 선다");
+  eq([d.filter((x) => x.today).map((x) => x.label), d[0].label, d[6].label], [["9월 30일 (수)"], "9월 28일 (월)", "10월 4일 (일)"], "D1b 오늘 칸 하나 · 칸의 이름표는 날짜와 요일");
+  eq([d[0].n, d[6].n, d.reduce((n, x) => n + x.n, 0)], [1, 1, 4], "D3 경계 — 기간의 첫 순간(월 0시)은 첫 칸에 · 끝 직전(일 23:59:59.999)은 끝 칸에 · 끝 순간(다음 월 0시)과 그 전 주는 어느 칸에도 없다");
+  eq(d.map((x) => x.key), ["2026-09-28", "2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"], "D1c 칸의 열쇠 = 날짜별 묶음의 열쇠(막대를 누르면 그 묶음으로 간다)");
+  eq(M.journalGroups(rows, "day", NOW).map((g) => g.key).filter((k) => d.some((x) => x.key === k)).length, 3, "D1d 배선 — 세션이 있는 칸의 열쇠가 실제 날짜 묶음에 있다");
+  const m = M.journalRange("d30", NOW);
+  const d30 = M.journalDayBars([jr("x", NOW), jr("y", at(8, 1, 0, 0))], m.since, m.until, NOW);
+  eq([d30.length, d30[0].key, d30[d30.length - 1].key, d30[d30.length - 1].today, d30[0].n, d30[d30.length - 1].n], [30, "2026-09-01", "2026-09-30", true, 1, 1], "D2 끝이 열린 기간(최근 30일) = 오늘까지 서른 칸 — 내일 칸은 없다");
+  eq(M.journalDayBars([], wk.since, wk.until, NOW).map((x) => x.n), [0, 0, 0, 0, 0, 0, 0], "D4 줄이 없어도 칸은 선다(전부 0)");
+  eq(M.journalDayBars([], at(0, 1), null, NOW).length, 62, "D5 칸 수 상한 62 — 긴 기간을 받아도 막대가 끝없이 서지 않는다");
+  eq(M.journalDayBars([jr("z", NOW, { last_seen: "엉뚱한 값" }), jr("n", NOW, { last_seen: null })], wk.since, wk.until, NOW).reduce((n, x) => n + x.n, 0), 0, "D6 읽을 수 없는 시각의 줄은 어느 칸에도 세지 않는다(던지지 않는다)");
+}
+{
+  const a1 = act(1, "하나"), a2 = act(2, "둘"), a3 = act(3, "셋");
+  const rows = [
+    jr("n1", NOW), jr("n2", NOW), jr("n3", NOW),                                                    // 프로젝트 없음 3 — 가장 많아도 맨 아래
+    //  세션 수가 같은 두 프로젝트 — 기록이 많은 쪽(통합검색)이 위다. 이름 순이면 데모데이가 위라서, 기록 수를 안 보면 순서가 뒤집힌다.
+    jr("a1", NOW, { project_id: 5, project_name: "통합검색", activities: [a1] }),
+    jr("a2", NOW, { project_id: 5, project_name: "통합검색", activities: [a1, a2] }),                // 같은 기록(박스의 대화 둘) — 한 번만 센다
+    jr("b1", NOW, { project_id: 9, project_name: "데모데이", activities: [a3] }),
+    jr("b2", NOW, { project_id: 9, project_name: "데모데이" }),
+    jr("c1", NOW, { project_id: 42 }),
+  ];
+  const p = M.journalProjects(rows);
+  eq(p.map((x) => [x.name, x.sessions, x.activities]), [["통합검색", 2, 2], ["데모데이", 2, 1], ["#42", 1, 0], ["프로젝트 없음", 3, 0]], "P1·P2·P3 세션 많은 순(같으면 기록 많은 순) · 같은 기록은 한 번 · 이름 모르면 번호 · 「프로젝트 없음」은 가장 많아도 맨 아래");
+  eq(p.map((x) => [x.key, x.id]), [["p:5", 5], ["p:9", 9], ["p:42", 42], ["p:0", null]], "P1b 열쇠 = 프로젝트별 묶음의 열쇠(줄을 누르면 그 묶음으로 간다)");
+  eq(M.journalGroups(rows, "project", NOW).map((g) => g.key).sort(), p.map((x) => x.key).sort(), "P1c 배선 — 요약의 열쇠가 실제 프로젝트 묶음의 열쇠와 같다");
+  eq(M.journalProjects([jr("x", NOW, { project_id: 1, project_name: "나" }), jr("y", NOW, { project_id: 2, project_name: "가" })]).map((x) => x.name), ["가", "나"], "P1d 세션·기록 수가 같으면 이름 순");
+  eq(M.journalProjects([]), [], "P4 줄이 없으면 빈 목록");
+}
+{
+  const k1 = { name: "k-one", title: "지식 하나" }, k2 = { name: "k-two", title: null }, k3 = { name: "k-three", title: "지식 셋" };
+  const t1 = { id: 7, name: "끝난 태스크", status: "done", project_id: 5 }, t2 = { id: 8, name: "하는 태스크", status: "in_progress", project_id: 5 };
+  //  입력 순서는 섞여 있다 — 늦게 일한 세션(c)의 것부터 선다.
+  const rows = [jr("a", at(8, 28, 9), { knowledge: [k1, k2], tasks: [t1] }), jr("c", at(8, 30, 9), { knowledge: [k3, k1], tasks: [t2, t1] }), jr("b", at(8, 29, 9), { knowledge: [k2] })];
+  eq(M.journalKnowledgeList(rows).map((k) => k.name), ["k-three", "k-one", "k-two"], "L1 만든 지식 — 겹치지 않게 · 늦게 일한 세션의 것부터");
+  eq(M.journalTaskList(rows).map((t) => [t.id, t.status]), [[8, "in_progress"], [7, "done"]], "L2 태스크 — 겹치지 않게 · 늦게 일한 세션의 것부터 · 상태를 싣는다");
+  eq([M.journalKnowledgeList([]), M.journalTaskList([]), M.journalKnowledgeList([jr("x", NOW)])], [[], [], []], "L3 줄이 없거나 남긴 것이 없으면 빈 목록");
+  eq(rows.map((r) => r.session_id), ["a", "c", "b"], "L1b 받은 줄의 순서를 바꾸지 않는다(화면이 같은 배열을 다시 쓴다)");
+}
+{
+  eq(M.HIST_TABS.map((t) => [t.key, t.icon]), [["find", "search"], ["journal", "timeline"], ["list", "list"]], "I1 탭마다 그림 이름");
+  //  화면이 부르는 그림 이름 — 표에 없는 이름은 다른 그림(「앱」)으로 떨어진다(icon-table 의 G1 이 icon('…') 만 본다).
+  const { readFileSync } = await import("node:fs");
+  const files = ["sessions.ts", "sessions-app.ts", "sessions-find.ts", "sessions-journal.ts", "sessions-list.ts", "sessions-kit.ts"];
+  const names = new Set(M.HIST_TABS.map((t) => t.icon));
+  //  견주는 값(=== 'done')은 그림 이름이 아니다 — 걷고 읽는다.
+  const quoted = (expr) => [...expr.replace(/[!=]==?\s*'[^']*'/g, "").matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]);
+  for (const f of files) {
+    const src = readFileSync(path.join(WEB, f), "utf8");
+    for (const m of src.matchAll(/\b(?:ico|ibtnOf|tileOf)\(([^,)]*)/g)) for (const n of quoted(m[1])) names.add(n);
+    for (const m of src.matchAll(/\bicon: ([^,}]+)/g)) for (const n of quoted(m[1])) names.add(n);
+    for (const line of src.split("\n").filter((l) => l.includes("pickOf("))) for (const m of line.matchAll(/(?:\)|pickOf\(\w+), ('[A-Za-z]+')\)/g)) for (const n of quoted(m[1])) names.add(n);
+    for (const m of src.matchAll(/\btile\([^,]+, '[^']*', ('[A-Za-z]+')/g)) for (const n of quoted(m[1])) names.add(n);
+  }
+  const missing = [...names].filter((n) => !Object.prototype.hasOwnProperty.call(ICONS, n));
+  eq(missing, [], "I2 화면이 부르는 그림 이름이 전부 그림 표에 있다");
+  if (names.size >= 25 && ["search", "chevD", "projMini", "projNone", "wiki", "task", "check", "trash", "link", "panel", "clock", "person", "copy", "term", "layers"].every((n) => names.has(n))) ok(`I2b 배선 — 그림 이름을 실제로 읽었다(${names.size}개)`);
+  else bad("I2b 배선 — 그림 이름을 실제로 읽었다", `읽은 이름 ${names.size}개: ${[...names].join(",")}`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

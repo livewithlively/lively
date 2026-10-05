@@ -5,12 +5,16 @@
 //  종전 목록면은 내 세션을 15개씩 넘겨 보는 한 장이었다 — 찾기·거르개가 없고, 「세션 목록」 앱의 표보다 못했고, 세션이 무엇을
 //  남겼는지 말하지 못했다. 그 한 장을 세 가지 일로 갈랐다: 말을 찾는다 · 한 일을 본다 · 세션을 고른다.
 //  탭마다 자기 상태(검색어·고른 줄·기간)를 모듈에 쥐고 있어, 탭을 오가거나 대화록 화면에 다녀와도 보던 자리가 그대로다.
+//  틀(원준 2026-10-05 «프로젝트 본문 창 참고해서 그 디자인 언어로»): 앱은 창 바닥까지 채우고 문서를 스크롤하지 않는다 — 칸마다 제 안에서
+//   스크롤한다(본문 창과 같은 결). 머리 = 타일 · 이름 · 가로탭(트랙 위의 알약). 모양은 53-session-history.css.
 import { el } from './core.js';
 import { parseSel, refreshTranscripts, renderTranscriptPage } from './sessions.js';
 import { mountFind } from './sessions-find.js';
 import { mountJournal } from './sessions-journal.js';
 import { mountList } from './sessions-list.js';
 import { HIST_TABS, readHistTab, type HistTab } from './session-history.js';
+import { fitHeight, ico, tileOf } from './sessions-kit.js';
+import { EMBEDDED } from './v2/embed.js';
 
 const TAB_STORE = 'lively.sessions.tab';   // 이 브라우저에서 마지막으로 본 탭(취향) — 주소에 ?tab= 이 없을 때만 쓴다
 function hashParams(): URLSearchParams {
@@ -40,7 +44,7 @@ function renderApp(view: HTMLElement): void {
   const hosts = new Map<HistTab, HTMLElement>();
   const mounted = new Set<HistTab>();
   const body = el('div', { class: 'shx-body' });
-  const tabsEl = el('div', { class: 'seg-tabs shx-tabs', role: 'tablist', 'aria-label': '세션 이력' });
+  const tabsEl = el('div', { class: 'shx-tabs', role: 'tablist', 'aria-label': '세션 이력' });
   const btns = new Map<HistTab, HTMLButtonElement>();
 
   const show = (next: HistTab, write: boolean): void => {
@@ -72,7 +76,7 @@ function renderApp(view: HTMLElement): void {
     const host = el('div', { class: 'shx-tabpanel', role: 'tabpanel', id: 'shx-panel-' + t.key, 'aria-labelledby': 'shx-tab-' + t.key, hidden: true }) as HTMLElement;
     hosts.set(t.key, host);
     body.append(host);
-    const b = el('button', { type: 'button', role: 'tab', id: 'shx-tab-' + t.key, 'aria-controls': 'shx-panel-' + t.key, title: t.hint, text: t.label }) as HTMLButtonElement;
+    const b = el('button', { type: 'button', role: 'tab', class: 'shx-tab', id: 'shx-tab-' + t.key, 'aria-controls': 'shx-panel-' + t.key, title: t.hint }, ico(t.icon), el('span', { text: t.label })) as HTMLButtonElement;
     b.addEventListener('click', () => show(t.key, true));
     //  탭 줄의 표준 키 — ← → 로 옆 탭.
     b.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -86,8 +90,10 @@ function renderApp(view: HTMLElement): void {
     btns.set(t.key, b);
     tabsEl.append(b);
   }
-  view.replaceChildren(el('div', { class: 'shx' },
-    el('div', { class: 'shx-head' }, el('h2', { text: '세션 이력' }), tabsEl),
-    body));
+  const root = el('div', { class: 'shx' + (EMBEDDED ? ' embedded' : '') },
+    el('div', { class: 'shx-head' }, el('div', { class: 'shx-brand' }, tileOf('sess', 'blue'), el('h2', { text: '세션 이력' })), tabsEl),
+    body) as HTMLElement;
+  view.replaceChildren(root);
+  fitHeight(root);
   show(tab, false);
 }

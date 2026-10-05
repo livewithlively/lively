@@ -227,6 +227,54 @@ export function journalStats(rows: JRow[]): JournalStats {
   return { sessions: rows.length, projects: proj.size, activities: act.size, knowledge: kn.size, tasks: tk.size, commits: cm.size };
 }
 
+// ── 일지 옆 칸(기간 요약) — 하루하루 · 프로젝트 · 만든 지식 · 태스크 ─────────────────────────────────
+export interface JournalDay { key: string; ms: number; label: string; weekday: string; n: number; today: boolean }
+const JOURNAL_DAYS_MAX = 62;
+/**
+ * 기간의 하루하루 — 날마다 «그날이 마지막 활동인 세션» 수(일지의 날짜 묶음과 같은 셈). 기간의 끝이 열려 있으면(until null)
+ *  오늘까지다. 세션이 없는 날도 0 으로 선다(막대 줄에 빈 날이 보여야 한다). 달력으로 센다(서머타임 날에도 하루에 한 칸).
+ */
+export function journalDayBars(rows: JRow[], since: number, until: number | null, nowMs: number): JournalDay[] {
+  const end = until == null ? addDays(dayStart(nowMs), 1) : until;
+  const counts = new Map<string, number>();
+  for (const r of rows) { const k = dayKey(isoMs(r.last_seen)); counts.set(k, (counts.get(k) || 0) + 1); }
+  const today = dayKey(nowMs);
+  const out: JournalDay[] = [];
+  for (let d = dayStart(since); d < end && out.length < JOURNAL_DAYS_MAX; d = addDays(d, 1)) {
+    const k = dayKey(d), dt = new Date(d);
+    out.push({ key: k, ms: d, label: `${dt.getMonth() + 1}월 ${dt.getDate()}일 (${WEEKDAY[dt.getDay()]})`, weekday: WEEKDAY[dt.getDay()]!, n: counts.get(k) || 0, today: k === today });
+  }
+  return out;
+}
+export interface JournalProject { id: number | null; key: string; name: string; sessions: number; activities: number }
+/** 프로젝트마다 세션 수 · 적은 기록 수 — 세션이 많은 프로젝트가 위(같으면 기록이 많은 쪽), 「프로젝트 없음」은 맨 아래. key 는 일지 묶음의 열쇠와 같다. */
+export function journalProjects(rows: JRow[]): JournalProject[] {
+  const by = new Map<string, JournalProject & { acts: Set<number> }>();
+  for (const r of rows) {
+    const none = r.project_id == null;
+    const key = none ? 'p:0' : 'p:' + r.project_id;
+    const g = by.get(key) ?? { id: none ? null : r.project_id!, key, name: none ? '프로젝트 없음' : String(r.project_name || '#' + r.project_id), sessions: 0, activities: 0, acts: new Set<number>() };
+    g.sessions++;
+    for (const a of r.activities) g.acts.add(a.id);
+    by.set(key, g);
+  }
+  const list = [...by.values()].map(({ acts, ...g }) => ({ ...g, activities: acts.size }));
+  list.sort((a, b) => ((a.id == null) !== (b.id == null) ? (a.id == null ? 1 : -1) : b.sessions - a.sessions || b.activities - a.activities || a.name.localeCompare(b.name, 'ko')));
+  return list;
+}
+/** 기간에 만든 지식 — 겹치지 않게, 늦게 일한 세션의 것부터. */
+export function journalKnowledgeList(rows: JRow[]): JKnowledge[] {
+  const seen = new Set<string>(), out: JKnowledge[] = [];
+  for (const r of [...rows].sort((a, b) => isoMs(b.last_seen) - isoMs(a.last_seen))) for (const k of r.knowledge) { if (seen.has(k.name)) continue; seen.add(k.name); out.push(k); }
+  return out;
+}
+/** 기간에 맡은 태스크 — 겹치지 않게, 늦게 일한 세션의 것부터. */
+export function journalTaskList(rows: JRow[]): JTask[] {
+  const seen = new Set<number>(), out: JTask[] = [];
+  for (const r of [...rows].sort((a, b) => isoMs(b.last_seen) - isoMs(a.last_seen))) for (const t of r.tasks) { if (seen.has(t.id)) continue; seen.add(t.id); out.push(t); }
+  return out;
+}
+
 /**
  * 줄의 «한 일» 한 줄. 세션이 (이 기간에) 적은 작업 기록이 있으면 **가장 늦은 기록의 제목**(마무리 기록이 그 세션을 가장 잘
  *  말한다), 이 기간엔 없고 앞선 기간에만 있으면 그 수(earlier — «기록 없음» 이라고 틀리게 말하지 않는다), 아예 없으면 첫 지시.
@@ -327,9 +375,9 @@ export function markRanges(text: string, words: string[]): Array<[number, number
 
 /** 가로탭 — 주소의 ?tab= 값. 모르는 값은 첫 탭. */
 export type HistTab = 'find' | 'journal' | 'list';
-export const HIST_TABS: ReadonlyArray<{ key: HistTab; label: string; hint: string }> = [
-  { key: 'find', label: '대화 찾기', hint: '지난 대화에서 그 말을 찾아 그 자리로 갑니다' },
-  { key: 'journal', label: '작업 일지', hint: '언제 무슨 일을 했고 무엇이 남았는지 봅니다' },
-  { key: 'list', label: '세션 목록', hint: '실행 중인 세션과 기록만 남은 세션을 한 목록으로 봅니다' },
+export const HIST_TABS: ReadonlyArray<{ key: HistTab; label: string; hint: string; icon: string }> = [
+  { key: 'find', label: '대화 찾기', hint: '지난 대화에서 그 말을 찾아 그 자리로 갑니다', icon: 'search' },
+  { key: 'journal', label: '작업 일지', hint: '언제 무슨 일을 했고 무엇이 남았는지 봅니다', icon: 'timeline' },
+  { key: 'list', label: '세션 목록', hint: '실행 중인 세션과 기록만 남은 세션을 한 목록으로 봅니다', icon: 'list' },
 ];
 export const readHistTab = (v: unknown): HistTab => (v === 'journal' || v === 'list' ? v : 'find');
