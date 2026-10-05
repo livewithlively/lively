@@ -81,8 +81,12 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules
 const SRC = process.env.SIDE_SRC || path.join(ROOT, "web/v2/side.ts");
 const bundle = execFileSync(ESBUILD, [SRC, "--bundle", "--format=iife", "--global-name=Side", "--platform=browser", "--log-level=error"],
   { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-const CSS = ["01-base.css", "40-v2.css", "47-v2-rail.css"].map((f) =>
+const RAW_CSS = ["01-base.css", "40-v2.css", "47-v2-rail.css"].map((f) =>
   readFileSync(f === "40-v2.css" && process.env.V2_CSS ? process.env.V2_CSS : path.join(ROOT, "public/styles", f), "utf8")).join("\n");
+//  ⚠ 헤드리스 크롬은 면마다 포인터가 다르다 — 리눅스 CI 는 (hover: none) 이 참이라 터치 규칙(× · ✓ 가 늘 보인다)이 걸리고, 맥은 거짓이다
+//   (CI 에서 C1 이 «손을 안 얹은 줄의 ✓ 가 보인다» 로 빨갰다). 마우스 화면을 재는 장면에선 그 미디어 조건을 늘 거짓으로 못박고,
+//   터치 화면(C5)은 따로 늘 참으로 못박아 잰다.
+const CSS = RAW_CSS.replace(/@media \(hover: none\)/g, "@media not all");
 
 //  손을 얹은 모양 — 헤드리스 dump 로는 :hover 를 못 만든다. 같은 스타일시트에서 :hover 를 클래스(.h)로 바꾼 사본을 뒤에 얹고,
 //   **실제로 그려진 줄**에 .h 를 달아 잰다(손으로 지은 줄은 그리드 · 여백이 실제와 달라 고정된 줄의 자리가 11px 어긋났다).
@@ -303,7 +307,7 @@ check(R.c1.trashIdle === "none" && R.c1.doneIdle === "none" && R.c1.trashOn === 
 // ── C5 터치 화면 — 헤드리스 dump 는 (hover: none) 을 못 만든다. 모바일 스타일시트의 그 미디어 조건을 늘 참으로 바꿔 잰다(손은 안 얹은 줄).
 {
   const MOB = readFileSync(process.env.MOBILE_CSS || path.join(ROOT, "public/styles/50-mobile.css"), "utf8");
-  const TCSS = (CSS + "\n" + MOB).replace(/@media \(hover: none\)/g, "@media all");
+  const TCSS = (RAW_CSS + "\n" + MOB).replace(/@media \(hover: none\)/g, "@media all");
   const PAGE3 = `<!doctype html><html data-theme="light"><meta charset="utf-8"><style>${TCSS.replace(/<\/style/gi, "<\\/style")}
     html,body{margin:0} #v2-root{display:block} .v2-side{width:300px;height:400px}</style>
   <div id="v2-root"><nav class="v2-side stu-side"><div class="stu-panel"><div class="stu-panel-tree"><div class="v2-app-list" id="l"></div></div></div></nav></div>
