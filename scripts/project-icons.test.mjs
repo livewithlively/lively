@@ -166,8 +166,7 @@ let pjv = null, dash = null;
   ok(lead.length === 2 && lead.every((l) => /pnIcon\(glyphAt\(ic, 14\), 'pn-i sm'\)/.test(l)), "Q4 탭 머리(그릴 때 · 다시 그릴 때) = glyphAt(ic, 14)", lead.map((l) => l.trim().slice(0, 60)).join(" | "));
   ok(/pnIcon\(glyphAt\(tabIcon\(t\), 13\), 'pn-i sm'\)/.test(PANES), "Q4 탭 목록 줄(13px) = glyphAt(tabIcon(t), 13)");
   //  #4443(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 는 13px 줄이 아니라 독 ⊞ 와 같은 타일 격자 — 독과 같은 큰 과녁.
-  const DRAWER = read("web/v2/pane-drawer.ts");
-  ok(/glyph: d\.icon, more: has\(d\.type\)/.test(PANES) && /dockTile\(it\.glyph, it\.type\)/.test(DRAWER), "Q4 ＋ 앱 서랍 = 독과 같은 타일 — 부품 표의 이름(proj)을 64 칸 타일로(큰 과녁)");
+  ok(/more: has\(d\.type\), ic: \(\) => dockTile\(d\.icon, d\.type\)/.test(PANES), "Q4 ＋ 앱 서랍 = 독과 같은 타일 — 부품 표의 이름(proj)을 64 칸 타일로(큰 과녁)");
   const adds = cut(PANES, "const adds: CtxRow[] = PART_DEFS", "}));");
   ok(/label: d\.name, icon: pnIconName\(glyphAt\(d\.icon, 15\)\)/.test(adds) && !/'layers'/.test(adds), "Q4 「칸에 넣기」 줄(15px) = 탭과 같은 이름을 glyphAt(d.icon, 15) 로(「프로젝트」가 layers 로 떨어지지 않는다)");
   ok(!/pnIcon\((ic|d\.icon|tabIcon\(t\)), /.test(PANES), "Q4 우측 사이드바 부품 그림을 크기 규칙 없이 그리는 자리가 없다");

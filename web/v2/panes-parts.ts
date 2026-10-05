@@ -146,7 +146,8 @@ export const PART_DEFS: PartDef[] = [
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
-  { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
+  //  #4443(원준 10-05) — 탭으로는 더 못 연다(pickable:false). 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 한다.
+  { type: 'apps', name: '앱', icon: 'apps', pickable: false, hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
   // #4225 — 이 세션에 붙은 앱. [+] 로 넣지 않는다 — 앱을 붙이면 셸이 세우고 떼면 걷는다(배치에 저장하지 않는 탭, panes.ts DERIVED_TABS).
   { type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false, hint: '이 세션에 붙은 앱이에요 — AI 도 같은 화면을 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
 ];

@@ -185,6 +185,35 @@ export function unparkBottom(store: any): { store: any; changed: boolean; cleare
   return { store: st, changed: true, cleared };
 }
 /**
+ * 저장된 배치 묶음에서 **«앱» 탭**을 **한 번만** 걷는다(표식 seeded.apps).
+ *  원준(2026-10-05): «기본배치 탭에는 앱이 있는데 그거 기본배치 아니게 없애줄래? 애초에 어떻게 앱을 +해서 탭으로 열수가 있기는해?»
+ *  «앱» 칸은 세션에 붙일 앱의 목록일 뿐이다 — 그 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 맡는다. 그래서 탭으로는 더 못 열고
+ *  (부품 표 pickable:false), 기본 배치에서도 뺐다. 이미 저장된 배치(옛 기본에서 물려받은 것)에 남은 것도 한 번 걷는다 —
+ *  남겨 두면 닫는 순간 다시 열 길이 없는 탭이 된다. 켜져 있던 칸은 그 칸의 첫 탭으로, 고정 목록에서도 뺀다.
+ *  store · lay 가 any 인 것은 localStorage 에서 읽은 믿을 수 없는 JSON 이라서다(seedTasksTab · unparkBottom 과 같다).
+ */
+export function dropAppsTab(store: any): { store: any; changed: boolean; dropped: number } {
+  const st = store && typeof store === 'object' ? store : {};
+  if (st.seeded && st.seeded.apps) return { store: st, changed: false, dropped: 0 };
+  const isApps = (k: unknown): boolean => typeof k === 'string' && k.split('#')[0] === 'apps';
+  let dropped = 0;
+  const drop = (lay: any): void => {
+    if (!lay || typeof lay !== 'object') return;
+    for (const z of ['main', 'side', 'bottom']) {
+      if (!Array.isArray(lay[z])) continue;
+      const kept = lay[z].filter((k: unknown) => !isApps(k));
+      dropped += lay[z].length - kept.length;
+      lay[z] = kept;
+      if (lay.act && typeof lay.act === 'object' && isApps(lay.act[z])) lay.act[z] = kept.length ? kept[0] : null;
+    }
+    if (Array.isArray(lay.pin)) lay.pin = lay.pin.filter((k: unknown) => !isApps(k));
+  };
+  drop(st.last);
+  if (st.p && typeof st.p === 'object') for (const k of Object.keys(st.p)) drop(st.p[k]);
+  st.seeded = { ...(st.seeded || {}), apps: 1 };
+  return { store: st, changed: true, dropped };
+}
+/**
  * 탭 띠 안에서 탭들이 실제로 나눠 쓸 폭 — 띠의 좌우 안 여백과 탭 사이 간격(n-1 개)을 뺀다.
  *  #4443(2026-10-01 리뷰): 탭 새 옷에서 띠에 안 여백(2+2)과 간격(2)이 생겼는데 clientWidth(안 여백 포함 · 간격 모름)를 그대로
  *   planTabs 에 넘겨, 탭 여섯 개면 «들어간다» 고 셈한 줄이 실제로는 넘쳐 마지막 탭이 삐져나왔다.
