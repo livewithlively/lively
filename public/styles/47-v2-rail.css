@@ -786,7 +786,7 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title { font-size: 13px; font-weight: 600; }
 .v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 22px 16px; row-gap: 0; padding: 3px 8px 3px 8px; }
 .v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 13px; }
-.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin { top: 3px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin, .v2-home-cards .v2-pg--rows .v2-app-inst-trash { top: 3px; }
 .v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 16px; }
 /* 「고정」 세션 카드의 둘째 줄 = 소속 프로젝트(카드 머리가 없으니 줄이 소속을 말한다). 마지막 말 줄과 같은 기둥에 선다. */
 .v2-app-inst-pj { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; }

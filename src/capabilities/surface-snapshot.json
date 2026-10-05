@@ -3924,7 +3924,7 @@
   "rest": [
    "POST /api/ui/terminal/sessions/:id/task"
   ],
-  "input_hash": "f002ac84267737ac"
+  "input_hash": "06cac6ec69e2dcc3"
  },
  {
   "name": "preview_env_list",

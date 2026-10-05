@@ -432,6 +432,12 @@
   .v2-app-inst:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open { padding-right: 0; }
   .v2-app-inst:hover .v2-app-inst-st, .v2-app-inst.on .v2-app-inst-st { visibility: visible; }
   .v2-app-inst:hover .v2-app-inst-pin:not(.on) { display: none; }
+  /*  #3870 — 내 세션 줄의 휴지통도 늘 보인다(✓ 왼쪽). 터치엔 호버가 없어 안 띄우면 닿을 길이 길게 눌러 뜨는 메뉴뿐이다.
+      두 단추 몫(오른쪽 5~51px)만큼 줄 안쪽을 더 비운다. 고정된 압정은 그리드 칸에 서므로 밀지 않는다(위 padding 이 받는다). */
+  .v2-app-inst--acts .v2-app-inst-trash { display: inline-grid; }
+  .v2-app-inst.v2-app-inst--acts, .v2-app-inst--1.v2-app-inst--acts, .v2-home-cards .v2-pg--rows .v2-app-inst.v2-app-inst--acts:not(.v2-app-inst--1) { padding-right: 56px; }
+  .v2-app-inst--acts:hover .v2-app-inst-open, .v2-app-inst--acts:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open { padding-right: 0; }
+  .v2-app-inst--acts:hover .v2-app-inst-pin.on { position: static; margin-right: 5px; }
   .pn-fmore { display: inline-flex; }
   .fx-acts { opacity: 1; }
   .pn-arow-x { opacity: 1; }

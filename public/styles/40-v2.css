@@ -572,6 +572,28 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 /*  휴지통 글리프(#3568 — [AI 세션] 구역의 지난 세션 행)는 × 보다 획이 많다. 11px·2.2 로 그리면 뭉쳐서
     무슨 그림인지 안 읽힌다 — 트리 행의 휴지통(.v2-ss-trash)과 같은 값으로 조금 키우고 가늘게 한다. */
 .v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
+/*  내 세션 줄의 두 단추(#3870, 원준 2026-10-05) — ✓ 완료 · 휴지통.
+    ✓ 는 종전 × 의 부품(.v2-app-inst-close) 그대로라 자리(오른쪽 5px) · 보이는 때(호버 · 켜진 줄 · 터치)를 물려받는다.
+    휴지통은 그 왼쪽(29px)에 호버 때만 서고, 압정은 한 칸 더 왼쪽(53px)으로 물러난다. 제목은 그 셋만큼 먼저 줄인다
+    (위 «덮지 말고 줄인다» — 46px 는 단추 둘의 몫이었다).
+    ⚠ 켜진 줄(손을 안 얹은)은 ✓ 만 서 있다 — 휴지통까지 늘 세우면 보고 있는 세션 옆에 «버리기» 가 늘 떠 있게 된다. */
+.v2-app-inst-trash { position: absolute; top: 7px; right: 29px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.v2-app-inst:hover .v2-app-inst-trash, .v2-app-inst-trash:focus-visible { display: inline-grid; }
+.v2-app-inst-trash:hover { background: color-mix(in srgb, var(--danger, #d14343) 12%, transparent); color: var(--danger, #d14343); }
+.v2-app-inst-trash:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-app-inst-trash svg { width: 12.5px; height: 12.5px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-app-inst-close--done svg { width: 12.5px; height: 12.5px; stroke-width: 2.1; stroke-linejoin: round; }
+.v2-app-inst-close--done:hover { background: color-mix(in srgb, var(--mint-deep) 14%, transparent); color: var(--mint-deep); }
+.v2-app-inst--acts .v2-app-inst-pin:not(.on) { right: 53px; }
+.v2-app-inst--acts:hover .v2-app-inst-open { padding-right: 70px; }
+/*  고정된 줄 — 압정이 그리드 칸에 늘 서 있다(위 .v2-app-inst-pin.on, 오른쪽에서 29px = 휴지통이 설 자리). 손을 얹는 동안만
+    고정 안 된 압정과 **같은 절대 자리**(53px)로 옮긴다 — 그리드 칸 안에서 여백으로 밀면 줄이 놓인 목록마다(홈 카드 · 맨 목록)
+    칸 끝이 달라 어긋난다(실측 11px 겹침). 칸이 비는 만큼 제목이 늘어나므로 여백은 고정 안 된 줄과 같은 70px 를 준다.
+    ⚠ top 은 안 적는다 — 한 줄 모드 · 홈 카드가 정한 높이(.v2-app-inst--1 … · 47-v2-rail)를 그대로 물려받는다. */
+.v2-app-inst--acts:hover .v2-app-inst-pin.on { position: absolute; right: 53px; margin-right: 0; }
+.v2-app-inst--acts:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open { padding-right: 70px; }
+.v2-app-inst--1 .v2-app-inst-trash { top: 4px; }
 .v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / -1; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
 /*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),

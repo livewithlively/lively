@@ -127,9 +127,10 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   const ctxRows = SIDE.slice(SIDE.indexOf("export function sessionCtxRows("), SIDE.indexOf("export function projectCtxRows("));
   ok(asInst.length > 0 && ctxRows.length > 0
     && !/doArchive|reclaim=1/.test(code(asInst)) && /hooks\.onCloseInstance\?\.\('sess:' \+ s\.id\)/.test(asInst)
-    && !/doArchive|reclaim=1/.test(code(ctxRows)) && /label: '목록에서 치우기'/.test(ctxRows)
+    && !/doArchive|reclaim=1/.test(code(ctxRows)) && /label: '완료 — 목록에서 내리기'[^\n]*run: \(\) => doDone\(s\)/.test(ctxRows)
+    && /hooks\.onCloseInstance\?\.\('sess:' \+ s\.id\);/.test(SIDE.slice(SIDE.indexOf("function doDone(s: Sess)"), SIDE.indexOf("async function doTrash(")))
     && /isMine\(s\) \? dismissBtn\(s\)/.test(SIDE) && !/function (doArchive|archiveBtn)\(/.test(code(SIDE)),
-    "W4 세션 × 의 자리([AI 세션] 행·프로젝트 트리 행·우클릭)는 전부 치움 — 사람이 누르는 × 가 박스를 내리지 않는다");
+    "W4 세션 × · ✓ 의 자리([AI 세션] 행·프로젝트 트리 행·우클릭)는 전부 치움 — 박스를 내리지 않는다(#3870: 우클릭의 치움은 «완료» 가 됐고 같은 치움 길을 탄다. 박스를 멈추는 건 묻고 나서 가는 휴지통뿐)");
   const reg = ROUTES.indexOf("await registerSessionInstance(session.id, st.owner");
   const carry = ROUTES.indexOf("await carrySessionDismissals(id, session.id)");
   const shut = ROUTES.indexOf('await closeSessionAppInstances(id, "restore")');

@@ -131,6 +131,30 @@ export async function confirmSessionTrash(opts: { title: string; n?: number }): 
   return ok;
 }
 
+/**
+ * 도는 세션을 휴지통으로(#3870, 원준 2026-10-05) — **늘 묻는다.** 위 창의 «다음부터 묻지 않기» 는 잃는 것이 없는 동작이라 둔 것인데,
+ *  여기는 잃는 것이 있다: 하던 작업이 그 자리에서 멈춘다. 그래서 건너뛰기 표식(trashConfirmSkipped)을 읽지도 적지도 않는다.
+ *  대화는 남는다 — 휴지통에서 되돌리면 지난 세션으로 돌아오고 이어서 열 수 있다.
+ */
+export async function confirmSessionTrashLive(opts: { title: string }): Promise<boolean> {
+  return confirmDialog({
+    title: opts.title, danger: true, confirmText: '멈추고 휴지통으로', cancelText: '취소',
+    message: '아직 켜져 있는 세션이에요. 하던 작업이 멈추고 휴지통으로 갑니다.',
+    lines: ['대화는 그대로 남아요 — 휴지통에서 [되돌리기]를 누르면 지난 세션으로 돌아오고, 이어서 열 수 있어요.'],
+  });
+}
+
+/**
+ * 세션의 태스크를 완료 처리한다(#3870 — 사이드바 ✓). 세션 = 태스크(#4084)라 «이 일 끝났다» 는 태스크에도 적혀야 한다.
+ *  **있는 태스크만** 끝낸다(only_existing) — 태스크가 없는 세션(프로젝트 밖 · 이름 전 · 세션=태스크 이전에 만든 것)에 새로 만들어
+ *  끝내지 않는다. 서버가 task:null 로 답하고, 그건 실패가 아니다(false).
+ *  @returns 완료 처리한 태스크가 있었나. 요청 실패는 던진다.
+ */
+export async function completeSessionTask(sessionId: string): Promise<boolean> {
+  const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/task', { method: 'POST', body: JSON.stringify({ status: 'done', reason: '사이드바에서 완료 처리', only_existing: true }) });
+  return !!(r && r.task);
+}
+
 // ── 완전 삭제(휴지통 안에서만, #1851) — 두 창. 어느 쪽도 keepNote(종료·지우기용)를 쓰지 않는다: 그 문구는 "대화 기록은 안 지워진다"가
 //  핵심 약속인데, 여기선 **지운다**(중앙 기록이 있으면 #1850 파기까지 함께 간다). 사실과 반대인 안심 문구가 제일 나쁘다(#1582 규약).
 //  · confirmSessionPurgeLocal — 중앙 기록이 **없는** 세션 하나(되살리기 좌표만 있는 것). 잃는 것 = 되살리기.
@@ -145,12 +169,13 @@ export async function confirmSessionPurgeLocal(opts: { title: string }): Promise
 
 /** 휴지통 조작 한 곳(#1851) — POST /api/ui/terminal/session-trash. ids 는 그 세션의 모든 이름(박스 id + 대화 uuid)을 넘긴다
  *  (서버도 desired-state 의 uuid 를 덧붙이지만, 기록만 남은 세션은 프론트가 아는 uuid 가 전부다). */
-export async function sessionTrashOp(op: SessionTrashOpName, ids: string[] = []): Promise<{ done: string[]; skipped: Array<{ id: string; why: string }> }> {
+export async function sessionTrashOp(op: SessionTrashOpName, ids: string[] = [], opts: { stopLive?: boolean } = {}): Promise<{ done: string[]; skipped: Array<{ id: string; why: string }> }> {
   //  #3870 — 휴지통으로 보내기는 **누르는 순간** 목록에서 빠진다(아래 watchSessionTrash). 서버가 받은 것만 굳히고(ack),
   //   하나도 못 받았거나 요청이 실패하면 되돌린다(fail) — 부르는 쪽은 종전대로 이유를 말한다.
   const held = trashWatch && (op !== 'trash' || ids.length) ? trashWatch(op, ids) : null;
   let r: any;
-  try { r = await api('/api/ui/terminal/session-trash', { method: 'POST', body: JSON.stringify({ op, ids }) }); }
+  //  stopLive(#3870) — 도는 세션을 멈추고 넣는다. 화면이 confirmSessionTrashLive 로 묻고 나서만 켠다(서버 기본은 거부).
+  try { r = await api('/api/ui/terminal/session-trash', { method: 'POST', body: JSON.stringify(opts.stopLive && op === 'trash' ? { op, ids, stop_live: true } : { op, ids }) }); }
   catch (e) { if (held) held.fail(); throw e; }
   const out = { done: Array.isArray(r && r.done) ? r.done.map((x: unknown) => String(x)) : [], skipped: Array.isArray(r && r.skipped) ? r.skipped : [] };
   if (held) { if (out.done.length || op !== 'trash') held.ack(out.done); else held.fail(); }
