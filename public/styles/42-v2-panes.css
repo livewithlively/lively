@@ -42,7 +42,7 @@
    · 맨 아래에 붙은 입력칸이 있는 앱(프로젝트 «태스크 추가» · 리브 입력창)은 앱 끝에 같은 빈 자리 — 그 칸은 늘 독 위에 선다.
    · 웹 · 붙은 앱 · 그린 HTML 처럼 우리가 못 미는 액자는 독이 그 위에 뜬다(독을 경계선으로 옮기면 비킨다). */
 .pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) 0 var(--pn-dock-l, 0px); }
-.pn-pane[data-zone="side"] :is(.pn-fbody, .pn-knlist, .pn-tl .tl-scroll, .pn-prev, .pn-md, .pn-ed-pre, .pn-ed-pick2 .pn-flist, .pn-apps-grid, .fx-scroll)::after,
+.pn-pane[data-zone="side"] :is(.pn-fbody, .pn-knlist, .pn-knr-scroll, .pn-tl .tl-scroll, .pn-prev, .pn-md, .pn-ed-pre, .pn-ed-pick2 .pn-flist, .pn-apps-grid, .fx-scroll)::after,
 .pn-pane[data-zone="side"] :is(.pn-tk, .pn-liv)::after { content: ""; display: block; flex: none; grid-column: 1 / -1; height: var(--pn-dock-b, 0px); }
 .pn-pane[data-zone="side"] .pn-ed-ta { padding-bottom: calc(12px + var(--pn-dock-b, 0px)); }
 .pn-pane[hidden] { display: none; }
@@ -842,15 +842,43 @@ webview.pn-webframe { display: flex; }
 .pn-editpol-person:hover { background: var(--bg-tint); }
 .pn-editpol-person .pn-fine { margin-left: auto; font-size: 11px; }
 
-/* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
-.pn-knm { width: min(680px, 96vw); }
-.pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }
-.pn-knm-full { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted-head); }
-.pn-knm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
-.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
-.pn-knm-sum { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); }
-.pn-knm-body .pn-md { padding: 0; }
-.pn-knm .pn-modal-f .pn-fine { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+/* ══ 지식 읽기 — 그 칸 안에서 (#4443 원준 10-05 «오른쪽에서 칸 튀어나오듯이 … 하지말고 그냥 곁칸에서 마크다운 이쁘게») ══
+   목록과 읽기는 한 칸의 두 화면이다(.pn-kn.reading). 본문은 위키와 같은 렌더러 · 같은 모양(md-rendered)을 사이드바 폭으로 줄인다. */
+.pn-kn.reading > .pn-fnote, .pn-kn.reading > .pn-knlist { display: none; }
+.pn-kn:not(.reading) > .pn-knr { display: none; }
+.pn-knr { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pn-knr-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 6px; border-bottom: 1px solid var(--line); }
+.pn-knr-back { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 10px 0 4px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted-head); cursor: pointer; }
+.pn-knr-back:hover { background: var(--bg-punch); color: var(--ink); }
+.pn-knr-open { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.pn-knr-open:hover { background: var(--bg-punch); color: var(--ink); }
+.pn-knr-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 18px; }
+.pn-knr-head { margin-bottom: 14px; }
+.pn-knr-t { margin: 0; font-size: 18px; font-weight: 800; line-height: 1.35; color: var(--ink); text-wrap: balance; overflow-wrap: anywhere; }
+.pn-knr-full { margin: 6px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted-head); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; cursor: pointer; }
+.pn-knr-full.open { display: block; -webkit-line-clamp: unset; }
+.pn-knr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.pn-knr-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
+.pn-knr-sum { margin: 0 0 16px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); }
+.pn-knr-md.md-rendered { font-size: 13.5px; line-height: 1.72; }
+.pn-knr-md .md-h { margin: 22px 0 8px; }
+.pn-knr-md .md-h1 { font-size: 17px; }
+.pn-knr-md .md-h2 { font-size: 15.5px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.pn-knr-md .md-h3 { font-size: 14px; }
+.pn-knr-md :is(.md-h4, .md-h5, .md-h6) { font-size: 13.5px; }
+.pn-knr-md .md-p { margin: 0 0 11px; }
+.pn-knr-md .md-list { margin-bottom: 11px; padding-left: 20px; }
+.pn-knr-md .md-pre { padding: 10px 12px; border-radius: 8px; }
+.pn-knr-md .md-pre code { font-size: 12px; }
+.pn-knr-md .md-table { max-width: 100%; font-size: 12.5px; }
+.pn-knr-md .md-table :is(th, td) { padding: 5px 8px; }
+.pn-knr-md img { max-width: 100%; height: auto; border-radius: 6px; }
+.pn-knr-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pn-knr-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted-2); }
+.pn-knr-foot .btn-text { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.pn-knr-wait { margin: 6px 0; }
+.pn-knr-err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: 13px; color: var(--muted-head); }
+.pn-knr-err p { margin: 0; }
 
 /* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
 /*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
