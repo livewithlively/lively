@@ -26,6 +26,7 @@ const sessionTaskInput = {
   reason: z.string().max(1000).optional().describe(
     "done 으로 닫을 때 무엇을 끝냈는지 한두 문장(예: 'MR !123 머지, CI 그린 확인'). ClickUp 에 미러된 태스크면 코멘트로 남는다. 생략하면 어느 세션이 끝냈다고 보고했는지만 남는다"),
   session_id: z.string().max(128).optional().describe("대상 세션 id — 보통 생략한다(기본 = 이 요청을 보낸 세션 자신). 남의 세션의 태스크는 다룰 수 없다"),
+  only_existing: z.boolean().optional().describe("true 면 맡은 태스크가 없을 때 새로 만들지 않는다(task:null · reason:'no-task'). 화면의 «완료» 단추가 쓴다 — 보통 생략한다"),
 };
 type SessionTaskInput = z.infer<z.ZodObject<typeof sessionTaskInput>>;
 
@@ -34,7 +35,7 @@ export interface SessionTaskResult {
   /** 이 세션이 맡은 태스크. 프로젝트 밖 세션이거나 이름이 아직 없으면 null. */
   task: (SessionTask & { created?: boolean }) | null;
   /** task 가 null 인 이유(모델이 헛돌지 않게 한 줄로). */
-  reason?: "no-project" | "no-name";
+  reason?: "no-project" | "no-name" | "no-task";
   /** #4135 — 끝냈더니(done) 이 세션의 순서 목록에서 넘어간 다음 태스크. 없으면 null(다 끝났다) · 목록이 하나면 생략. */
   next?: SessionTask | null;
   /** #4135 — 이 세션이 순서대로 맡은 태스크(둘 이상일 때만). */
@@ -60,6 +61,7 @@ const sessionTask: Capability = {
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
         return { session_id: String(req.params?.id ?? ""), status: b.status == null || b.status === "" ? undefined : String(b.status),
+          ...(b.only_existing === true ? { only_existing: true } : {}),
           reason: b.reason == null || b.reason === "" ? undefined : String(b.reason).slice(0, 1000) };
       } }],
   },
@@ -70,6 +72,9 @@ const sessionTask: Capability = {
     if (!me) throw new HttpError(403, "사용자 신원이 없습니다");
 
     let task: (SessionTask & { created?: boolean }) | null = await sessionTaskOf(sid, me);
+    //  #3870 — 사이드바 ✓(완료)는 **있는 태스크만** 끝낸다. 없다고 만들어서 끝내면, 예전 세션에 ✓ 를 누를 때마다 프로젝트 보드에
+    //   완료된 태스크가 하나씩 새로 생긴다(격리 리뷰 지적). 세션이 스스로 부를 때(only_existing 없음)는 종전대로 만든다.
+    if (!task && input.only_existing) return { ok: true, task: null, reason: "no-task" };
     if (!task) {
       // 아직 없다 — 이름짓기와 같은 규칙으로 이 세션 이름을 태스크로. 이름이 세션 id 그대로면(아직 안 지었다) 재료가 없다.
       const st = await getSessionState(sid).catch(() => undefined);

@@ -75,7 +75,19 @@ async function resolveMine(id: string, me: string): Promise<{ ids: string[]; has
  *  · untrash — 되돌리기. · purge/empty — 완전 삭제(멈추고 지운다).
  *  결과는 done/skipped — 못 한 이름은 예외가 아니라 skipped(이유) 로 돌아온다. 호출자는 반드시 읽는다.
  */
-export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp, ids: string[], opts: { projectId?: number | null; stopLive?: boolean } = {}): Promise<TrashOutcome> {
+/**
+ * #3870 — «멈추고 휴지통으로» 를 **멈출 수 있을 때만** 받는다(순수 — 표는 session-trash-stop.test).
+ *  stopForPurge 는 노드가 꺼져 있으면 아무것도 못 멈추고 true 를 준다. 완전 삭제엔 맞는 규칙이다(표식이 purged 라 그 노드가
+ *  돌아와 다시 보고해도 목록에 안 뜬다). 휴지통엔 틀리다 — 사람에게 «하던 작업이 멈춘다» 고 묻고 나서 보내는 길인데, 꺼진 PC 의
+ *  세션은 못 멈춘 채 표식만 붙어 **목록에서 사라진 채 그 PC 에서 계속 돈다.** 그 경우엔 건너뛰고 이유를 말한다.
+ *  mustStop 은 세션 하나를 버리는 길(휴지통 단추)만 켠다 — 프로젝트를 통째로 버리는 길은 종전 그대로다(묶음을 반쯤 남기지 않는다).
+ */
+export function liveTrashRefusal(i: { op: TrashOp; mustStop: boolean; nodeId: string | null; nodeOnline: boolean }): string | null {
+  if (i.op !== "trash" || !i.mustStop || !i.nodeId || i.nodeOnline) return null;
+  return "그 세션이 도는 컴퓨터가 꺼져 있어 멈추지 못했어요 — 컴퓨터를 켠 뒤 다시 보내 주세요";
+}
+
+export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp, ids: string[], opts: { projectId?: number | null; stopLive?: boolean; mustStop?: boolean } = {}): Promise<TrashOutcome> {
     // 도는 세션은 휴지통에 못 넣고 완전 삭제도 못 한다 — 먼저 ×(지난 세션으로)로 멈춰야 한다(휴지통은 '지난 세션'의 다음 단계).
     //  살아 있는 것의 판정은 라이브 목록(중앙 tmux + 노드 스냅샷). 되돌리기(untrash)는 검사할 것이 없다.
     let liveIds = new Set<string>();
@@ -104,6 +116,8 @@ export async function applySessionTrashOp(u: LivelyUser, me: string, op: TrashOp
         const boxId = r.boxId ?? id;   // 멈추는 것은 tmux/노드 — 그쪽이 아는 이름으로만 부른다
         const st = await getSessionState(boxId).catch(() => undefined);
         const nodeId = relayNodeId(st?.node_id, isSelfNode) || nodeSessionsFor(me).find((x) => x.id === boxId)?.node?.id || null;   // #2592 — 셀프 좌표는 중앙(tmux 직접)으로
+        const refused = liveTrashRefusal({ op, mustStop: !!opts.mustStop, nodeId, nodeOnline: !!nodeId && nodeOnline(nodeId) });
+        if (refused) { skipped.push({ id, why: refused }); continue; }
         const stopped = await stopForPurge(u, me, boxId, nodeId);
         if (stopped !== true) { skipped.push({ id, why: stopped }); continue; }
       }

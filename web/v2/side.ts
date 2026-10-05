@@ -46,12 +46,12 @@ import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 �
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
 import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 리스트 즐겨찾기: 셸 ↔ 액자 알림 한 줄 · 연달아 누를 때의 저장 순서
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
-import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
-import { confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
+import { completeSessionTask, confirmProjectArchive, confirmProjectTrash, confirmSessionTrash, confirmSessionTrashLive, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 휴지통·아카이브
 import { trashBadgeN } from '../lib/trash-tabs.js';
 import { trashExtraCounts, watchTrashCounts } from './trash-counts.js';
 import { ctxMenu } from './panes-kit.js';
@@ -523,6 +523,14 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   //   × 가 안 서는 행에서 상태 점을 호버에 숨기면 그 자리가 빈다.
   const act = inst.close;
   const canClose = o.close !== false && act !== null;
+  //  ★ 내 세션 줄의 단추는 둘이다(#3870, 원준 2026-10-05): **✓ 완료**(목록에서 내리고 태스크를 끝낸다 — 종전 × 의 자리) ·
+  //   **휴지통**(도는 세션이면 멈추고 버린다). 종전엔 × 하나였고 휴지통은 지난 세션 줄에만 있어, 잘못 만든 세션을 버리려면
+  //   «치우기 → 지난 세션 화면에서 찾기 → 휴지통» 을 거쳐야 했다. 남의 세션 · 세션 아닌 줄은 종전 그대로(× 하나)다.
+  //  ⚠ 줄이 제 뜻을 들고 온 목록(inst.close — 카드 안 «지난 세션» 전량 줄의 휴지통 등)은 그 뜻 그대로 둔다: 거기 맨 오른쪽은
+  //   이미 휴지통이라, ✓ 로 갈아 끼우면 버리려던 손이 태스크를 끝낸다.
+  const mySess = canClose && act === undefined && inst.icon === 'chat' && inst.id.startsWith('sess:') && !inst.owner && last
+    ? (findSessIn(last.data.sessions, inst.id.slice(5)) || null) : null;
+  const acts = mySess && isMine(mySess) && !isTrashedSess(mySess) ? mySess : null;
   //  남의 세션이면 주인 얼굴(#2026) — 이름은 이 목록이 이미 쓰는 people 맵이 가장 정확하다(main 은 폴백만 준다).
   const ownerNm = inst.owner ? ((people[inst.owner.id] && people[inst.owner.id].display_name) || inst.owner.name || inst.owner.id) : '';
   const tip = [
@@ -535,7 +543,7 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   return el('div',
     //  ⚠ `--plain` = **행 조작이 없는 목록**(압정·× 안 그림). 그 CSS 가 '상태 점은 호버에도 안 숨는다'를
     //   이미 갖고 있다 — 홈에서 점이 숨는 건 그 자리를 × 가 받기 때문이고, 받을 것이 없으면 숨을 이유도 없다.
-    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id, 'data-ctx': 'inst' },
+    { class: 'v2-app-inst' + (one ? ' v2-app-inst--1' : '') + (acts ? ' v2-app-inst--acts' : '') + (!canPin && !canClose ? ' v2-app-inst--plain' : '') + (inst.active ? ' on' : '') + (inst.status ? ' st-' + inst.status.key : '') + (inst.past ? ' v2-app-inst--past' : '') + (inst.owner ? ' other' : ''), role: 'listitem', 'data-instance': inst.id, 'data-anch': inst.id, 'data-ctx': 'inst' },
     el('button', { class: 'v2-app-inst-open', type: 'button', title: tip, 'aria-current': inst.active ? 'page' : null,
       onclick: () => hooks.onActivateInstance?.(inst.id, inst.route) },
       instanceIcon(inst), el('span', { class: 'v2-app-inst-title', text: inst.title })),
@@ -561,7 +569,20 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
     //  × 는 **이 목록 안에서는** 어느 행에나 있고 뜻도 하나다 — 목록에서 치우기(#1954).
     //  ⚠ 그 '하나의 뜻'은 **목록마다** 다르다(#3568): 홈은 열린 목록에서 치우기지만, [AI 세션]은 전수 명부라
     //   치울 목록이 없다 — 거기서는 행이 프로젝트 트리와 같은 뜻(보관 · 휴지통)을 들고 온다(inst.close).
-    !canClose ? null : el('button', { class: 'v2-app-inst-close' + (act && act.kind === 'trash' ? ' v2-app-inst-close--trash' : ''), type: 'button',
+    //  휴지통(#3870) — ✓ 왼쪽, 손을 얹었을 때만. 맨 오른쪽(종전 × 의 자리)은 ✓ 가 받는다: 가장 자주 누르는 것이 익숙한 자리에,
+    //   되돌리기 번거로운 것이 가장자리에서 한 칸 안쪽에 선다.
+    !acts ? null : el('button', { class: 'v2-app-inst-trash', type: 'button',
+      'aria-label': `「${inst.title}」 휴지통으로`,
+      title: isLive(acts) ? '휴지통으로 보내기 — 켜져 있는 세션이라 멈추고 보냅니다(묻고 나서). 휴지통에서 되돌릴 수 있어요'
+        : '휴지통으로 보내기 — 목록에서 빠지고, 휴지통에서 되돌리거나 완전히 지울 수 있어요',
+      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); void doTrash(acts); } },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICONS.trash }))),
+    acts ? el('button', { class: 'v2-app-inst-close v2-app-inst-close--done', type: 'button',
+      'aria-label': `「${inst.title}」 완료`,
+      title: '완료 — 목록에서 내리고 태스크를 끝냅니다. 세션은 그대로 두고, 「지난 세션」 에서 다시 열 수 있어요',
+      onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); doDone(acts); } },
+      sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: ICONS.check })))
+    : !canClose ? null : el('button', { class: 'v2-app-inst-close' + (act && act.kind === 'trash' ? ' v2-app-inst-close--trash' : ''), type: 'button',
       'aria-label': act ? act.label : `「${inst.title}」 목록에서 치우기`,
       title: act ? act.title : inst.status ? '목록에서 치우기 — 하던 일은 계속되고, 상태가 바뀌면 다시 올라와요.' : '목록에서 치우기',
       onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); if (act) act.run(); else hooks.onCloseInstance?.(inst.id); } },
@@ -3222,11 +3243,33 @@ function trashBtn(s: Sess): HTMLElement {
   return btn;
 }
 
+/**
+ * 완료(#3870, 원준 2026-10-05 «완료돼서 지난 세션으로 보내는 그런 느낌이 드는 버튼» · «태스크도 완료 처리») — 줄의 ✓ 와 우클릭 메뉴.
+ *  · 목록에서 내린다 — 종전 × 와 같은 길(hooks.onCloseInstance → 치움). 세션 · 박스는 건드리지 않는다(#3857).
+ *  · 그 세션의 태스크를 끝낸다(세션 = 태스크 #4084). 태스크가 없는 세션(프로젝트 밖 · 이름 전)은 내리기만 한다.
+ *  내리기는 누르는 즉시 보이고(낙관 반영), 태스크는 뒤에서 간다 — 못 끝냈으면 그 사실만 말한다(줄을 되세우지 않는다: 내린 것은 됐다).
+ */
+function doDone(s: Sess): void {
+  hooks.onCloseInstance?.('sess:' + s.id);
+  void completeSessionTask(s.id).then(
+    (had) => { toast(had ? '완료했어요 — 태스크를 끝내고 목록에서 내렸어요' : '목록에서 내렸어요 — 「지난 세션」 에서 다시 열 수 있어요'); },
+    (e: any) => { toast('목록에서는 내렸지만 태스크를 완료 처리하지 못했어요 — ' + ((e && e.message) || '다시 시도해 주세요'), true); });
+}
+
 async function doTrash(s: Sess): Promise<void> {
   const name = sessText(s, '').main || s.label || s.id;
-  if (!await confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` })) return;
+  //  도는 세션이면 **멈춘다는 것을 늘 묻는다**(#3870 — «다음부터 묻지 않기» 가 안 듣는 창). 끝난 세션은 종전 창 그대로.
+  const live = isLive(s);
+  if (!await (live ? confirmSessionTrashLive({ title: `「${name}」${eulReul(name)} 멈추고 휴지통으로 보낼까요?` })
+    : confirmSessionTrash({ title: `「${name}」${eulReul(name)} 휴지통으로 보낼까요?` }))) return;
   try {
-    const r = await sessionTrashOp('trash', sessionNames(s));
+    let r = await sessionTrashOp('trash', sessionNames(s), live ? { stopLive: true } : {});
+    //  화면은 끝난 줄로 알았는데 서버는 돈다고 한다(목록이 한 박자 늦다 · 방금 되살아났다) — «먼저 지난 세션으로» 라는 옛 안내로
+    //   돌려보내지 않고, 그 자리에서 멈출지 묻고 다시 보낸다.
+    if (!live && !r.done.length && r.skipped.some((x) => /돌고 있는/.test(x.why || ''))) {
+      if (!await confirmSessionTrashLive({ title: `「${name}」${eulReul(name)} 멈추고 휴지통으로 보낼까요?` })) return;
+      r = await sessionTrashOp('trash', sessionNames(s), { stopLive: true });
+    }
     if (r.skipped.length && !r.done.length) { toast(r.skipped[0].why || '휴지통으로 보내지 못했습니다', true); return; }
     toast('휴지통으로 보냈어요 — 휴지통에서 되돌릴 수 있어요');
     hooks.onArchived?.();
@@ -3251,8 +3294,10 @@ export function sessionCtxRows(s: Sess, o: { nameEl?: HTMLElement | null; projec
   rows.push({ label: isPinned(pk) ? '고정 해제' : '위에 고정', icon: 'pin', checked: isPinned(pk) || undefined, run: () => togglePin(pk) });
   if (s.projectId && Number(s.projectId) > 0) rows.push({ label: '같은 프로젝트에 새 세션', icon: 'sessNew', run: () => hooks.onNewSession?.(Number(s.projectId)) });
   //  #3857 — 사람이 고르는 동사는 보임 축뿐이다: 치움(어느 세션이든) · 휴지통(지난 세션). «지난 세션으로 보내기»(회수)는 걷었다.
-  if (mine) rows.push({ sep: true, label: '' }, { label: '목록에서 치우기', icon: 'x', run: () => hooks.onCloseInstance?.('sess:' + s.id) });
-  if (mine && !live && !isTrashedSess(s)) rows.push({ label: '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
+  //  #3870(원준 2026-10-05) — 그 치움이 «완료» 가 됐다(목록에서 내리고 태스크를 끝낸다 — doDone). 휴지통은 도는 세션에도 연다:
+  //   잘못 만든 세션을 완료를 거치지 않고 버릴 길이 있어야 한다(멈춘다는 것은 doTrash 가 묻는다).
+  if (mine && !isTrashedSess(s)) rows.push({ sep: true, label: '' }, { label: '완료 — 목록에서 내리기', icon: 'check', hint: '태스크도 완료', run: () => doDone(s) });
+  if (mine && !isTrashedSess(s)) rows.push({ label: live ? '멈추고 휴지통으로 보내기' : '휴지통으로 보내기', icon: 'trash', danger: true, run: () => void doTrash(s) });
   void name;
   return rows;
 }
