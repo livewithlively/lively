@@ -482,3 +482,16 @@ test("[V5] 경계 — 정확히 상한 개는 받고, 하나 더 많으면 틀�
   assert.equal(SESSION_ID_RE.test("x".repeat(64)), true);
   assert.equal(SESSION_ID_RE.test("x".repeat(65)), false);
 });
+
+// ── #4530 배포 뒤 — 한 글자 낱말은 다른 있어야 하는 낱말이 둘 이상이면 없어도 되는 낱말 ──
+test("[N4] 한 글자 낱말 — 다른 낱말이 둘 이상이면 없어도 되는 낱말 · 둘뿐이면 그대로 · 따옴표·숫자 한 자는 그대로", () => {
+  const opt = (q: string): string[] => parseQueryTerms(q).filter((t) => t.optional).map((t) => t.t);
+  assert.deepEqual(opt("미리 보기 환경이 안 뜸"), ["안", "뜸"]);
+  assert.deepEqual(opt("폰 터미널 사진 첨부"), ["폰"]);
+  assert.deepEqual(opt("폰에서 터미널 사진 첨부"), [], "조사가 붙은 한 글자(«폰에서»)는 조사를 떼지 않으므로(한 글자로 줄지 않는다) 그대로 있어야 하는 낱말");
+  assert.deepEqual(opt("앱 삭제"), [], "낱말이 둘뿐이면 한 글자도 있어야 하는 낱말이다");
+  assert.deepEqual(opt("앱"), []);
+  assert.deepEqual(opt('터미널 사진 "폰"'), [], "따옴표로 묶으면 그대로 찾는다");
+  assert.deepEqual(opt("터미널 사진 3"), [], "숫자 한 자는 번호일 수 있다");
+  assert.deepEqual(opt("a 터미널 사진"), ["a"]);
+});

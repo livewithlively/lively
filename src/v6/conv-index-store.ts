@@ -412,19 +412,28 @@ interface TermPred {
   full: string; stem: string | null; alt: string | null; loose: string | null;
 }
 /** looseIdx 에 든 낱말만 느슨한 꼴을 본다(띄어쓰기를 지운 글에 꼴 여럿을 대므로 비싸다). ⚠ 쓰지 않을 매개변수는 싣지 않는다(termSql 주석). */
-function termPreds(params: unknown[], terms: QueryTerm[], col: string, looseIdx: ReadonlySet<number>): TermPred[] {
+/**
+ * 낱말마다의 술어. `lb` = **소문자로 굳힌 글**의 열 이름(본 질의의 rows0.lb), `role` = 그 행의 역할 열.
+ *  ⚠ ILIKE 가 아니라 **소문자 글에 LIKE** 다(#4530 배포 뒤 실측) — ILIKE 는 부를 때마다 글 전체를 소문자로 바꾼다. AI 의 말은 2만 자까지라
+ *   낱말 꼴마다 그 값을 다시 냈다(로컬 실측: 다른 표기 4꼴 1.87초 → 한 번만 바꾸면 0.7초). 낱말·다른 표기·느슨한 꼴은 이미 소문자다
+ *   (parseQueryTerms 가 소문자로 읽는다).
+ *  ⚠ 다른 표기 · 느슨한 꼴은 **사람이 한 말·고친 파일에만** 댄다 — 글의 대부분은 AI 의 말이고(길다), AI 만 «deploy» 라고 쓴 세션은
+ *   «배포» 로 찾는 세션이 아니다(그런 세션은 뜻으로 찾는 쪽이 받는다). 로컬 실측 0.7초 → 0.44초(꼴 하나와 같다).
+ */
+function termPreds(params: unknown[], terms: QueryTerm[], lb: string, role: string, looseIdx: ReadonlySet<number>): TermPred[] {
+  const human = `${role} <> 'assistant'`;
   return terms.map((t, i) => {
     const pats = termPatterns(t);
-    params.push(pats[0]); const full = `${col} ILIKE $${params.length} ESCAPE '\\'`;
+    params.push(pats[0]); const full = `${lb} LIKE $${params.length} ESCAPE '\\'`;
     let stem: string | null = null;
-    if (pats.length > 1) { params.push(pats[1]); stem = `${col} ILIKE $${params.length} ESCAPE '\\'`; }
+    if (pats.length > 1) { params.push(pats[1]); stem = `${lb} LIKE $${params.length} ESCAPE '\\'`; }
     let alt: string | null = null;
     const ap = termAltPatterns(t);
-    //  ILIKE ANY 는 ESCAPE 절을 못 받는다 — 기본 탈출 글자가 역슬래시라 likePattern 의 탈출이 그대로 듣는다.
-    if (ap.length) { params.push(ap); alt = `${col} ILIKE ANY($${params.length}::text[])`; }
+    //  LIKE ANY 는 ESCAPE 절을 못 받는다 — 기본 탈출 글자가 역슬래시라 likePattern 의 탈출이 그대로 듣는다.
+    if (ap.length) { params.push(ap); alt = `(${human} AND ${lb} LIKE ANY($${params.length}::text[]))`; }
     let loose: string | null = null;
     const lp = looseIdx.has(i) ? loosePatterns(t) : [];
-    if (lp.length) { params.push(lp); loose = `translate(${col}, ${WS_SQL}, '') ILIKE ANY($${params.length}::text[])`; }
+    if (lp.length) { params.push(lp); loose = `(${human} AND translate(${lb}, ${WS_SQL}, '') LIKE ANY($${params.length}::text[]))`; }
     const hit = [stem ?? full, alt, loose].filter((x): x is string => !!x).map((x) => `(${x})`).join(" OR ");
     return { hit, full, stem, alt, loose };
   });
@@ -439,6 +448,18 @@ function termHit(params: unknown[], t: QueryTerm, col: string, loose: boolean): 
   if (ap.length) { params.push(ap); parts.push(`${col} ILIKE ANY($${params.length}::text[])`); }
   const lp = loose ? loosePatterns(t) : [];
   if (lp.length) { params.push(lp); parts.push(`translate(${col}, ${WS_SQL}, '') ILIKE ANY($${params.length}::text[])`); }
+  return parts.map((x) => `(${x})`).join(" OR ");
+}
+/** 같은 «맞음» 술어를 **소문자로 굳힌 글**(lb)에 — 본 질의(termPreds)와 같은 규칙(LIKE · 다른 표기와 느슨한 꼴은 사람 말에만). 쓰는 매개변수만 싣는다. */
+function termHitLowered(params: unknown[], t: QueryTerm, lb: string, role: string, loose: boolean): string {
+  const human = `${role} <> 'assistant'`;
+  const pats = termPatterns(t);
+  params.push(pats[pats.length - 1]);
+  const parts = [`${lb} LIKE $${params.length} ESCAPE '\\'`];
+  const ap = termAltPatterns(t);
+  if (ap.length) { params.push(ap); parts.push(`${human} AND ${lb} LIKE ANY($${params.length}::text[])`); }
+  const lp = loose ? loosePatterns(t) : [];
+  if (lp.length) { params.push(lp); parts.push(`${human} AND translate(${lb}, ${WS_SQL}, '') LIKE ANY($${params.length}::text[])`); }
   return parts.map((x) => `(${x})`).join(" OR ");
 }
 
@@ -461,29 +482,44 @@ interface CollectOpts {
 async function collectAggs(input: ConvSearchInput, terms: QueryTerm[], o: CollectOpts, timeoutMs: number = CONV_QUERY_TIMEOUT_MS): Promise<{ aggs: ConvSessionAgg[]; rows: number; cap: number }> {
   const params: unknown[] = [];
   const v = visibleSql(params, input);
-  const ps = termPreds(params, terms, "m.body", o.loose);
+  const ps = termPreds(params, terms, "r.lb", "r.role", o.loose);
   const req = terms.map((t, i) => (t.optional ? -1 : i)).filter((i) => i >= 0);
-  const anyRow = ps.map((x) => `(${x.hit})`).join(" OR ");
+  //  ⚠ 글은 **한 번만 소문자로** 바꾼다(rows0.lb — OFFSET 0 이 그 줄을 따로 계산하게 붙든다) · 낱말마다 «맞았나» 도 **행마다 한 번만** 잰다
+  //   (#4530 배포 뒤 실측) — 안쪽(hitrows)에서 깃발로 굳히고 바깥은 깃발만 센다.
+  //   종전엔 같은 ILIKE 식이 집계마다 되풀이돼(세기 · 함께 든 수 · 맞은 수 · 순서) 낱말 하나를 행마다 아홉 번쯤 쟀다. AI 의 말은 2만 자까지라
+  //   그 값이 컸다 — 다른 표기(ILIKE ANY)가 붙은 «배포» 는 따옴표로 묶은 것의 두 배(0.6초 → 1.2초), 낱말 둘이면 2.4초가 걸렸다.
+  //  ⚠ 행은 **있어야 하는 낱말**이 든 것만 고른다(군말만 든 행은 훑지 않는다) — «배포 방법» 이 «방법» 이 든 말까지 다 훑어 0.6초를 더 썼다.
+  //   군말의 세기는 그 행들 안에서만 잰다(있어야 하는 낱말과 같은 세션에 든 군말 — 덤 점수의 뜻 그대로).
   const reqRow = req.map((i) => `(${ps[i]!.hit})`).join(" OR ");
-  const k = req.map((i) => `(${ps[i]!.hit})::int`).join(" + ");
+  const flagCols: string[] = [];
+  const flagHit: string[] = [];        // 낱말 i 가 그 행에 맞았나(깃발로)
+  ps.forEach((x, i) => {
+    flagCols.push(`(${x.full}) AS f${i}`);
+    if (x.stem) flagCols.push(`(${x.stem}) AS s${i}`);
+    if (x.alt) flagCols.push(`(${x.alt}) AS x${i}`);
+    if (x.loose) flagCols.push(`(${x.loose}) AS l${i}`);
+    flagHit.push("(" + [x.stem ? `h.s${i}` : `h.f${i}`, x.alt ? `h.x${i}` : null, x.loose ? `h.l${i}` : null].filter((y): y is string => !!y).join(" OR ") + ")");
+  });
+  const k = req.map((i) => `${flagHit[i]}::int`).join(" + ");
   const aggCols: string[] = [];
   ps.forEach((x, i) => {
     for (const [role, tag] of [["user", "u"], ["assistant", "a"], ["edit", "e"]] as const) {
-      aggCols.push(`bool_or(m.role = '${role}' AND ${x.full}) AS ${tag}f${i}`);
-      //  조사를 뗀 꼴이 없는 낱말은 «그대로» 와 «맞음» 이 같은 식이다 — 한 번만 잰다(맞은 행마다 ILIKE 를 줄인다, 격리 리뷰).
-      if (x.stem) aggCols.push(`bool_or(m.role = '${role}' AND ${x.stem}) AS ${tag}a${i}`);
-      if (x.alt) aggCols.push(`bool_or(m.role = '${role}' AND ${x.alt}) AS ${tag}x${i}`);
-      if (x.loose) aggCols.push(`bool_or(m.role = '${role}' AND ${x.loose}) AS ${tag}l${i}`);
+      aggCols.push(`bool_or(h.role = '${role}' AND h.f${i}) AS ${tag}f${i}`);
+      if (x.stem) aggCols.push(`bool_or(h.role = '${role}' AND h.s${i}) AS ${tag}a${i}`);
+      if (x.alt) aggCols.push(`bool_or(h.role = '${role}' AND h.x${i}) AS ${tag}x${i}`);
+      if (x.loose) aggCols.push(`bool_or(h.role = '${role}' AND h.l${i}) AS ${tag}l${i}`);
     }
   });
   //  세션마다 «말·고친 파일·첫 지시(제목)에 든 **있어야 하는** 낱말 수» — 상한(400)보다 먼저 이걸로 줄 세운다. 최근순으로만 자르면 흔한
   //   낱말 하나만 든 최근 세션 400개가 자리를 다 차지해, 흔한 낱말과 드문 낱말이 둘 다 든 옛 세션(사람이 찾는 바로 그 세션)이 판정 전에
-  //   잘렸다(격리 리뷰). 첫 지시(session.title)는 같은 규칙으로 함께 잰다. ⚠ 사람·에이전트가 **지은 이름**과 프로젝트 이름은 상한 뒤에
-  //   붙으므로 이 줄 세우기에 들지 않는다 — 그 이름의 낱말만으로 후보에 남기는 것은 셸 목록의 이름 찾기가 받는다.
-  const cover = req.map((i) => `(bool_or(${ps[i]!.hit}) OR bool_or(${termHit(params, terms[i]!, "coalesce(vis.title, '')", o.loose.has(i))}))::int`).join(" + ");
-  let phrase = "false";
+  //   잘렸다(격리 리뷰). 첫 지시(session.title)는 같은 규칙으로 함께 잰다 — 볼 수 있는 세션을 굳힐 때 한 번(vis.t<i>).
+  //   ⚠ 사람·에이전트가 **지은 이름**과 프로젝트 이름은 상한 뒤에 붙으므로 이 줄 세우기에 들지 않는다 — 그 이름의 낱말만으로 후보에 남기는
+  //   것은 셸 목록의 이름 찾기가 받는다.
+  const titleCols = req.map((i) => `(${termHit(params, terms[i]!, "coalesce(s.title, '')", o.loose.has(i))}) AS t${i}`);
+  const cover = req.map((i) => `(bool_or(${flagHit[i]}) OR bool_or(vis.t${i}))::int`).join(" + ");
+  let phraseCol = "false AS ph";
   const typed = req.map((i) => terms[i]!.t);
-  if (typed.length > 1) { params.push(likePattern(typed.join(" "))); phrase = `bool_or(m.role <> 'edit' AND m.body ILIKE $${params.length} ESCAPE '\\')`; }
+  if (typed.length > 1) { params.push(likePattern(typed.join(" "))); phraseCol = `(r.role <> 'edit' AND r.lb LIKE $${params.length} ESCAPE '\\') AS ph`; }
   const sinceMs = input.since ? Date.parse(input.since) : NaN;
   let sinceSql = "";
   if (Number.isFinite(sinceMs)) { params.push(new Date(sinceMs).toISOString()); sinceSql = ` AND m.ts >= $${params.length}::timestamptz`; }
@@ -502,27 +538,35 @@ async function collectAggs(input: ConvSearchInput, terms: QueryTerm[], o: Collec
   const r = await boundedQuery(
     `WITH ${v.ctes},
      vis AS MATERIALIZED (
-       SELECT s.node_id, s.session_id, s.owner, s.title
+       SELECT s.node_id, s.session_id, s.owner, s.title${titleCols.length ? ", " + titleCols.join(", ") : ""}
          FROM session s
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
         WHERE ${v.where}),
      ${candCte}
-     agg AS (
-       SELECT m.node_id, m.session_id, ${aggCols.join(", ")},
-              max(CASE WHEN m.role <> 'edit' THEN ${k} ELSE 0 END) AS maxco,
-              count(*) FILTER (WHERE m.role <> 'edit' AND ${k} = ${req.length}) AS coall,
-              ${phrase} AS phrase,
-              count(*) FILTER (WHERE ${reqRow}) AS hits,
-              count(*) FILTER (WHERE m.role = 'user' AND (${reqRow})) AS uhits,
-              count(*) FILTER (WHERE m.role = 'assistant' AND (${reqRow})) AS ahits,
-              max(m.ts) FILTER (WHERE ${reqRow}) AS last_hit
+     rows0 AS (
+       SELECT m.node_id, m.session_id, m.role, m.ts, lower(m.body) AS lb
          FROM vis
          JOIN session_msg m ON m.node_id = vis.node_id AND m.session_id = vis.session_id
          ${candJoin}
-        WHERE (${anyRow})${sinceSql}${o.humanOnly ? " AND m.role IN ('user', 'edit')" : ""}
-        GROUP BY m.node_id, m.session_id
-       HAVING bool_or(${reqRow})
-        ORDER BY ${cover} DESC, max(m.ts) DESC NULLS LAST
+        WHERE true${sinceSql}${o.humanOnly ? " AND m.role IN ('user', 'edit')" : ""}
+       OFFSET 0),
+     hitrows AS MATERIALIZED (
+       SELECT r.node_id, r.session_id, r.role, r.ts, ${flagCols.join(", ")}, ${phraseCol}
+         FROM rows0 r
+        WHERE (${reqRow})),
+     agg AS (
+       SELECT h.node_id, h.session_id, ${aggCols.join(", ")},
+              max(CASE WHEN h.role <> 'edit' THEN ${k} ELSE 0 END) AS maxco,
+              count(*) FILTER (WHERE h.role <> 'edit' AND ${k} = ${req.length}) AS coall,
+              bool_or(h.ph) AS phrase,
+              count(*) AS hits,
+              count(*) FILTER (WHERE h.role = 'user') AS uhits,
+              count(*) FILTER (WHERE h.role = 'assistant') AS ahits,
+              max(h.ts) AS last_hit
+         FROM hitrows h
+         JOIN vis ON vis.node_id = h.node_id AND vis.session_id = h.session_id
+        GROUP BY h.node_id, h.session_id
+        ORDER BY ${cover} DESC, max(h.ts) DESC NULLS LAST
         LIMIT ${capP})
      SELECT agg.*, vis.owner, vis.title, proj.project_name, nm.label
        FROM agg
@@ -646,6 +690,8 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
 //   CONV_SEM_MIN 아래는 버리고, 1등과 CONV_SEM_SPREAD 넘게 떨어진 것도 버린다(1등 대비 상대값). 뜻으로만 온 줄은 «덜 맞는 결과» 다.
 /** 이보다 낮으면 «비슷하다» 고 하지 않는다 · 1등과 이만큼 넘게 떨어지면 뺀다 · 뜻으로만 온 줄의 상한 · 검색어 임베딩을 기다리는 상한. */
 export const CONV_SEM_MIN = 0.5;
+/** 뜻으로만 온 세션을 «덜 맞는 결과» 의 맨 앞에 세우는 문턱 — 이만큼 가까우면 낱말 일부만 맞은 세션보다 앞이다. */
+export const CONV_SEM_FRONT = 0.6;
 export const CONV_SEM_SPREAD = 0.08;
 export const CONV_SEM_MAX = 6;
 export const CONV_SEM_TIMEOUT_MS = 900;
@@ -815,14 +861,19 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
   //    같은 세션을 두 번 세고(total 과 weak) 층도 틀린다(격리 리뷰).
   const have = new Set(ranked.judged.map((a) => aggKey(a)));
   const semOnly = sem.filter((r) => !have.has(aggKey(r))).slice(0, CONV_SEM_MAX);
-  for (const r of semOnly) {
-    results.push({
-      node_id: r.node_id, session_id: r.session_id,
-      name: (r.label && r.label.trim()) || sessionNameFromPrompt(String(r.title ?? "")) || null,
-      title: r.title, hits: 0, at: r.last_seen, best: null, top: false, fields: [], edit: null,
-      tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], sem: Math.round(r.sim * 100) / 100, project: r.project,
-    });
-  }
+  //   뜻이 **꽤 가까운** 것(CONV_SEM_FRONT 이상)은 덜 맞는 결과의 맨 앞에 세운다 — 낱말 일부만 맞은 세션보다 찾던 세션일 가능성이 높다
+  //   (배포 뒤 실측: «세션 지우면 깜빡거림» 으로 찾으면 «세션 삭제 깜빡임» 이 0.76 으로 왔는데 낱말 일부만 맞은 두 세션 뒤에 섰다).
+  //   그보다 먼 것은 종전대로 끝에.
+  const semRow = (r: SemRow): ConvSearchResult => ({
+    node_id: r.node_id, session_id: r.session_id,
+    name: (r.label && r.label.trim()) || sessionNameFromPrompt(String(r.title ?? "")) || null,
+    title: r.title, hits: 0, at: r.last_seen, best: null, top: false, fields: [], edit: null,
+    tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], sem: Math.round(r.sim * 100) / 100, project: r.project,
+  });
+  const front = semOnly.filter((r) => r.sim >= CONV_SEM_FRONT).map(semRow);
+  const firstWeak = results.findIndex((r) => r.tier === "weak");
+  results.splice(firstWeak < 0 ? results.length : firstWeak, 0, ...front);
+  for (const r of semOnly) if (r.sim < CONV_SEM_FRONT) results.push(semRow(r));
   return { results, total: ranked.total, weak: ranked.weak + semOnly.length, capped: first.rows >= first.cap, cap: first.cap, loosened: [...looseIdx].map((i) => terms[i]!.t) };
 }
 
@@ -1190,17 +1241,31 @@ async function bestLines(aggs: ConvSessionAgg[], terms: QueryTerm[], sinceIso: s
   const out = new Map<string, BestLine>();
   if (!aggs.length) return out;
   const params: unknown[] = [aggs.map((a) => a.node_id), aggs.map((a) => a.session_id)];
-  const ps = terms.map((t, i) => ({ hit: termHit(params, t, "m.body", looseIdx.has(i)) }));
+  //  본 질의와 같은 방식(#4530 배포 뒤 실측) — 글은 한 번만 소문자로 바꾸고(rows0.lb), 다른 표기 · 느슨한 꼴은 사람 말에만 댄다.
+  //   종전엔 결과 세션들의 말 전부에 낱말 꼴마다 ILIKE 를 다시 댔다(로컬 실측: 다른 표기가 붙으면 본 질의만큼 더 걸렸고, 느슨한 꼴 24개는
+  //   그 몇 배였다). 고르는 동안에는 글을 들고 다니지 않는다 — 열쇠로 고른 뒤 뽑힌 말의 글만 읽는다(말 하나가 2만 자까지다).
+  const ps = terms.map((t, i) => ({ hit: termHitLowered(params, t, "r.lb", "r.role", looseIdx.has(i)) }));
   const k = ps.map((x) => `(${x.hit})::int`).join(" + ");
   let since = "";
   if (sinceIso) { params.push(sinceIso); since = ` AND m.ts >= $${params.length}::timestamptz`; }
   const r = await boundedQuery(
-    `SELECT DISTINCT ON (m.node_id, m.session_id, m.role = 'edit')
-            m.node_id, m.session_id, m.role, m.ts, m.body
-       FROM unnest($1::text[], $2::text[]) AS v(node_id, session_id)
-       JOIN session_msg m ON m.node_id = v.node_id AND m.session_id = v.session_id
-      WHERE (${ps.map((x) => `(${x.hit})`).join(" OR ")})${since}
-      ORDER BY m.node_id, m.session_id, m.role = 'edit', ${k} DESC, (m.role = 'user') DESC, m.ts DESC NULLS LAST`, params);
+    `WITH rows0 AS (
+       SELECT m.node_id, m.session_id, m.at_offset, m.idx, m.role, m.ts, lower(m.body) AS lb
+         FROM unnest($1::text[], $2::text[]) AS v(node_id, session_id)
+         JOIN session_msg m ON m.node_id = v.node_id AND m.session_id = v.session_id
+        WHERE true${since}
+       OFFSET 0),
+     flagged AS MATERIALIZED (
+       SELECT r.node_id, r.session_id, r.at_offset, r.idx, r.role, r.ts, (${k}) AS k
+         FROM rows0 r
+        WHERE (${ps.map((x) => `(${x.hit})`).join(" OR ")})),
+     best AS (
+       SELECT DISTINCT ON (f.node_id, f.session_id, f.role = 'edit') f.node_id, f.session_id, f.at_offset, f.idx
+         FROM flagged f
+        ORDER BY f.node_id, f.session_id, f.role = 'edit', f.k DESC, (f.role = 'user') DESC, f.ts DESC NULLS LAST)
+     SELECT m.node_id, m.session_id, m.role, m.ts, m.body
+       FROM best b
+       JOIN session_msg m ON m.node_id = b.node_id AND m.session_id = b.session_id AND m.at_offset = b.at_offset AND m.idx = b.idx`, params);
   const words = snippetTerms(terms);
   const looseTerms = [...looseIdx].map((i) => terms[i]!);
   for (const x of r.rows) {

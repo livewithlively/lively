@@ -80,6 +80,9 @@ export function parseTerms(q: string, max = 8): Term[] {
   }
   //  전부 군말이면 군말이 아니다 — «문제 해결» 로 찾는 사람은 그 두 낱말을 찾는다.
   if (out.length && out.every((x) => x.optional)) for (const x of out) delete x.optional;
+  //  한 글자 낱말은 다른 있어야 하는 낱말이 둘 이상이면 없어도 되는 낱말(서버 query-terms.ts 와 같은 규칙 — 까닭은 거기에).
+  const solid = out.filter((x) => !x.optional && !x.quoted && [...x.stem].length >= 2).length;
+  if (solid >= 2) for (const x of out) if (!x.optional && !x.quoted && [...x.stem].length < 2 && !/^[0-9]$/.test(x.stem)) x.optional = true;
   return out;
 }
 /** 1 = 친 그대로 · 0.8 = 조사 뗀 꼴만 · 0.7 = 다른 표기 · 0 = 없음. */

@@ -123,6 +123,11 @@ export function parseQueryTerms(q: string, max = 8): QueryTerm[] {
   }
   //  전부 군말이면 군말이 아니다 — «문제 해결» 로 찾는 사람은 그 두 낱말을 찾는다.
   if (out.length && out.every((x) => x.optional)) for (const x of out) delete x.optional;
+  //  한 글자 낱말(«안» · «뜸» · «폰» · «앱»)은 **다른 있어야 하는 낱말이 둘 이상이면** 없어도 되는 낱말로 본다(#4530 배포 뒤 실측):
+  //   한 글자는 거의 모든 말에 들어 있어 가르는 힘이 없고(«안» 은 «안녕» · «안에» 에도 든다), 그 낱말 때문에 세션의 말을 거의 다 훑게 돼
+  //   낱말 다섯 개짜리 검색(«미리 보기 환경이 안 뜸»)이 4초 상한에 걸려 실패했다. 낱말이 둘뿐이면(«앱 삭제») 그대로 둔다 — 그 한 글자가 절반이다.
+  const solid = out.filter((x) => !x.optional && !x.quoted && [...x.stem].length >= 2).length;
+  if (solid >= 2) for (const x of out) if (!x.optional && !x.quoted && [...x.stem].length < 2 && !/^[0-9]$/.test(x.stem)) x.optional = true;
   return out;
 }
 

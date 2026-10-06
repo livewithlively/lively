@@ -8,7 +8,9 @@
 //   과녁이 «맞는 결과» 로 섰는지와 «덜 맞는 결과» 까지 넣으면 섰는지를 따로 센다.
 //  읽기만 한다(GET). 시험이 아니라 도구다 — CI 는 돌리지 않는다.
 //
-//  쓰는 법:  LIVELY_TOKEN=… node scripts/search-quality-eval.mjs [--url https://<게이트웨이>] [--n 50] [--json out.json]
+//  쓰는 법:  LIVELY_TOKEN=… node scripts/search-quality-eval.mjs [--url https://<게이트웨이>] [--n 50] [--json out.json] [--replay 전.json]
+//   --replay — 앞서 --json 으로 남긴 파일의 **같은 과녁 · 같은 검색어**로 다시 잰다. 판을 바꾸기 전후를 견줄 때는 이걸 쓴다
+//   (과녁을 새로 고르면 그사이 생긴 세션 때문에 검색어가 달라진다).
 //   (기본 url = LIVELY_URL 환경변수. 토큰은 화면에 찍지 않는다.)
 import fs from "node:fs";
 
@@ -16,6 +18,7 @@ const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? proces
 const BASE = String(arg("--url", process.env.LIVELY_URL || "")).replace(/\/$/, "");
 const N = Number(arg("--n", 50));
 const OUT = arg("--json", "");
+const REPLAY = arg("--replay", "");
 const TOKEN = process.env.LIVELY_TOKEN || "";
 if (!BASE || !TOKEN) { console.error("LIVELY_URL(또는 --url)과 LIVELY_TOKEN 이 필요합니다."); process.exit(2); }
 const H = { authorization: "Bearer " + TOKEN };
@@ -57,13 +60,18 @@ function variants(text, seed) {
   return out;
 }
 
-const list = await get("/api/ui/v6/sessions?limit=2000");
-const S = (list.sessions || []).filter((s) => String(s.title || "").length >= 30 && Number(s.bytes) > 20000);
-if (!S.length) { console.error("과녁으로 삼을 세션이 없습니다(목록 응답:", JSON.stringify(list).slice(0, 120), ")"); process.exit(1); }
-const targets = S.filter((_, i) => i % Math.max(1, Math.floor(S.length / N)) === 0).slice(0, N);
 const jobs = [];
-targets.forEach((s, i) => { const v = variants(String(s.title).slice(0, 220), i); if (!v) return; for (const [kind, q] of Object.entries(v)) jobs.push({ kind, q, id: s.session_id }); });
-console.error(`과녁 세션 ${targets.length}개 · 검색 ${jobs.length}번 (${BASE})`);
+if (REPLAY) {
+  for (const r of JSON.parse(fs.readFileSync(REPLAY, "utf8"))) if (r && r.kind && r.q && r.id) jobs.push({ kind: r.kind, q: r.q, id: r.id });
+  console.error(`앞서 잰 검색어 ${jobs.length}개를 그대로 다시 잽니다 (${BASE})`);
+} else {
+  const list = await get("/api/ui/v6/sessions?limit=2000");
+  const S = (list.sessions || []).filter((s) => String(s.title || "").length >= 30 && Number(s.bytes) > 20000);
+  if (!S.length) { console.error("과녁으로 삼을 세션이 없습니다(목록 응답:", JSON.stringify(list).slice(0, 120), ")"); process.exit(1); }
+  const targets = S.filter((_, i) => i % Math.max(1, Math.floor(S.length / N)) === 0).slice(0, N);
+  targets.forEach((s, i) => { const v = variants(String(s.title).slice(0, 220), i); if (!v) return; for (const [kind, q] of Object.entries(v)) jobs.push({ kind, q, id: s.session_id }); });
+  console.error(`과녁 세션 ${targets.length}개 · 검색 ${jobs.length}번 (${BASE})`);
+}
 
 const res = [];
 let next = 0;
