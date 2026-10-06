@@ -9,14 +9,13 @@
 //  이름 셋과 번호로 찾기). 목 풀로는 식의 가지 하나를 지워도 초록이다. 실제 행을 넣고 **돌려받은 값**으로 판정한다.
 //
 // 엣지 표(행마다 시험 — 스크래치패드 spec-convproj.md):
-//  P1 대화에 적힌 것이 박스보다 먼저 · P2 마지막이 «뗌» 이면 없음(박스를 보지 않는다) · P3 지금 그 대화를 돌리는 박스 ·
-//  P4 대화 사슬로만 이어진 박스 · P5 박스 없음 · P6 박스에 프로젝트 없음 · P7 둘이면 늦게 본 쪽 · P8 늦게 본 쪽에 프로젝트가 없으면 이른 쪽 ·
-//  P9 남의 박스 · P10 옛 계열(org) 번호 · P11 지워진 프로젝트를 가리키는 박스 · P12 대화 id 가 곧 박스 id · P13 기록의 주인이 비었다 ·
-//  P14 본 시각이 같다(경계)
-//  R1 기록 목록 · R2 작업 일지 · R3 맞은 말 찾기의 이름 · R4 맞은 말 찾기의 프로젝트 거르개 · R5 ⌘K 세션 찾기(이름 · 번호 · 뜻) · R6 배선
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
+//  P1 대화에 적힌 것이 박스보다 먼저 · P2 마지막이 «뗌» 이면 없음(박스를 보지 않는다) · 뗐다 다시 붙이면 다시 붙인 것 ·
+//  P3 지금 그 대화를 돌리는 박스 · P4 대화 사슬로만 이어진 박스 · P5 박스 없음 · P6 박스에 프로젝트 없음 · P7 둘이면 늦게 본 쪽 ·
+//  P8 늦게 본 쪽에 프로젝트가 없으면 이른 쪽 · P9 남의 박스 · 남이 적은 사슬 · P10 옛 계열(org) 번호 ·
+//  P11 지워진 프로젝트 · 휴지통에 든 프로젝트를 가리키는 박스 · P12 대화 id 가 곧 박스 id · P13 기록의 주인이 비었다 ·
+//  P14 본 시각이 같다(경계) · P15 보는 사람이 주인이 아니면 박스를 읽지 않는다
+//  R1 기록 목록 · R2 작업 일지 · R3 맞은 말 찾기의 이름 · R4 맞은 말 찾기의 프로젝트 거르개 · R5 ⌘K 세션 찾기(이름 · 번호 · 뜻) ·
+//  R6 시험이 실제 행으로 돌았다 · R7 초대받아 보는 사람 — 초대하지 않은 박스의 프로젝트가 이름 · 거르개 · 번호 · 뜻 어디로도 안 샌다
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const S = await import(`${DIST}/v6/session-log-store.js`);
@@ -56,8 +55,8 @@ async function put(sid, owner, text) {
 }
 /** 박스 한 줄. conv = 그 박스가 지금 돌리는 대화(없으면 null) · seen = 마지막으로 살아 있는 것을 본 때. */
 const box = (id, owner, conv, o = {}) => q(
-  `INSERT INTO org_session_state(id, owner, project_id, project_src, claude_session_id, last_seen) VALUES($1,$2,$3,$4,$5,$6)`,
-  [id, owner, o.projectId ?? null, o.projectId != null ? (o.src ?? "v6") : null, conv, o.seen ?? ago(0)]);
+  `INSERT INTO org_session_state(id, owner, project_id, project_src, claude_session_id, last_seen, invites) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+  [id, owner, o.projectId ?? null, o.projectId != null ? (o.src ?? "v6") : null, conv, o.seen ?? ago(0), JSON.stringify(o.invites ?? [])]);
 /** 대화 사슬 한 줄 — 그 박스가 그 대화를 돌렸다. */
 const link = (boxId, conv, owner, last = ago(0)) => q(
   `INSERT INTO org_session_conv(box_id, conv_uuid, owner, first_seen, last_seen) VALUES($1,$2,$3,$4,$4)`, [boxId, conv, owner, last]);
@@ -65,9 +64,9 @@ const bind = (sid, pid, at) => q(`INSERT INTO session_project(session_id, projec
 const project = async (name) => Number((await one(
   `INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [name, A])).id);
 
-/** 식 그대로 — 기록 한 줄의 «지금 프로젝트» 번호. */
-const projOf = async (sid) => {
-  const r = await one(`SELECT ${S.convProjectIdSql()} AS pid FROM session s WHERE s.node_id = '' AND s.session_id = $1`, [sid]);
+/** 식 그대로 — viewer 가 볼 때 기록 한 줄의 «지금 프로젝트» 번호. */
+const projOf = async (sid, viewer = A) => {
+  const r = await one(`SELECT ${S.convProjectIdSql("$2")} AS pid FROM session s WHERE s.node_id = '' AND s.session_id = $1`, [sid, viewer]);
   if (!r) throw new Error(`기록이 없다: ${sid}`);
   return r.pid == null ? null : Number(r.pid);
 };
@@ -78,6 +77,7 @@ async function cleanup() {
   }
   await q(`DELETE FROM org_session_conv WHERE box_id = ANY($1::text[]) OR box_id = ANY($2::text[])`, [ALL_BOX, ALL]);
   await q(`DELETE FROM org_session_state WHERE id = ANY($1::text[]) OR id = ANY($2::text[])`, [ALL_BOX, ALL]);
+  await q(`DELETE FROM execution_session_task WHERE session_id = ANY($1::text[])`, [ALL_BOX]);
   await q(`DELETE FROM project WHERE name LIKE '\\_\\_cpjpg\\_%' ESCAPE '\\'`);
 }
 
@@ -86,9 +86,13 @@ try {
   invalidateVisibilityCache();
   const PA = await project(PN("a")), PB = await project(PN("b")), PC = await project(PN("c"));
   const nameOf = { [PA]: PN("a"), [PB]: PN("b"), [PC]: PN("c") };
+  //  휴지통에 든 프로젝트 · 번호로 찾기에 쓸 태스크(프로젝트 A 밑).
+  const PT = await project(PN("trashed"));
+  await q(`UPDATE project SET trashed_at = now() WHERE id = $1`, [PT]);
+  const NT = Number((await one(`INSERT INTO project(level, name, status, created_by, parent_id) VALUES('task', $1, 'todo', $2, $3) RETURNING id`, [PN("task"), A, PA])).id);
 
   // ── 재료: 기록마다 낱말 「코뿔소」 하나(찾기가 전부를 후보로 삼게) ─────────────────────────────────────
-  const CONVS = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19];
+  const CONVS = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22];
   for (const n of CONVS) await put(SID(n), A, U(`코뿔소 ${n}번 대화`, ago(2, n)));
 
   // P1 — 대화에 A 가 적혀 있고 박스는 B.
@@ -127,9 +131,21 @@ try {
   await box(BOX(16), A, SID(16), { projectId: PB });
   await q(`UPDATE session SET owner = NULL WHERE node_id = '' AND session_id = $1`, [SID(16)]);
   // P14 — 두 박스가 그 대화를 본 시각이 같다(대화 사슬 둘 · 같은 시각). id 가 앞인 쪽이 B.
+  //  ⚠ id 가 뒤인 쪽(C)을 **먼저** 넣는다 — 넣은 순서대로 읽혀서 B 가 나오는 것이 아니라 id 순으로 정해져서 B 여야 한다.
   const SAME = ago(2);
-  await box(BOX(33), A, "cpjpg-other-conv-17a", { projectId: PB }); await link(BOX(33), SID(17), A, SAME);
   await box(BOX(34), A, "cpjpg-other-conv-17b", { projectId: PC }); await link(BOX(34), SID(17), A, SAME);
+  await box(BOX(33), A, "cpjpg-other-conv-17a", { projectId: PB }); await link(BOX(33), SID(17), A, SAME);
+  // P2 — 뗐다가 다시 붙였다(A → 뗌 → C). 박스는 B.
+  await bind(SID(21), PA, ago(6)); await bind(SID(21), null, ago(5)); await bind(SID(21), PC, ago(4));
+  await box(BOX(21), A, SID(21), { projectId: PB });
+  // P11 — 하나뿐인 박스가 휴지통에 든 프로젝트를 가리킨다.
+  await box(BOX(22), A, SID(22), { projectId: PT });
+  // P15 · R7 — A 의 대화 20 을 박스 둘이 돌렸다. 박스 35 는 B 를 초대했고 프로젝트가 없다. 박스 36 은 B 를 초대하지 않았고
+  //  프로젝트 B 가 붙어 있으며 더 늦게 봤다. B 는 35 덕분에 이 대화를 본다 — 36 의 프로젝트는 B 가 알 것이 아니다.
+  //  박스 35 는 태스크 NT 도 맡았다(B 가 번호로 찾으면 이 대화가 잡힌다 — 그 줄의 프로젝트 이름을 잰다).
+  await box(BOX(35), A, SID(20), { invites: [B], seen: ago(3) }); await link(BOX(35), SID(20), A, ago(3));
+  await box(BOX(36), A, "cpjpg-other-conv-20", { projectId: PB }); await link(BOX(36), SID(20), A, ago(1));
+  await q(`INSERT INTO execution_session_task(session_id, task_id, pos) VALUES($1, $2, 0)`, [BOX(35), NT]);
 
   // ══ P. 판정(식 그대로) ═══════════════════════════════════════════════════════════════════
   eq("P1 대화에 적힌 소속이 박스보다 먼저다", await projOf(SID(1)), PA);
@@ -148,7 +164,12 @@ try {
   eq("P11 그 박스뿐이면 없음", await projOf(SID(14)), null);
   eq("P12 대화 id 가 곧 박스 id 인 세션", await projOf(SID(15)), PB);
   eq("P13 기록의 주인이 비었으면 박스를 읽지 않는다", await projOf(SID(16)), null);
-  eq("P14 본 시각이 같으면 박스 id 순 — 매번 같은 답", [await projOf(SID(17)), await projOf(SID(17))], [PB, PB]);
+  eq("P14 본 시각이 같으면 박스 id 순(넣은 순서가 아니다)", await projOf(SID(17)), PB);
+  eq("P2 뗐다가 다시 붙였으면 다시 붙인 것(마지막 구간)", await projOf(SID(21)), PC);
+  eq("P11 휴지통에 든 프로젝트를 가리키는 박스는 건너뛴다", await projOf(SID(22)), null);
+  eq("P15 주인이 보면 박스의 프로젝트", await projOf(SID(20), A), PB);
+  eq("P15 주인이 아닌 사람이 보면 박스를 읽지 않는다", await projOf(SID(20), B), null);
+  eq("P15 대조: 대화에 적힌 소속은 누가 보든 같다", [await projOf(SID(1), B), await projOf(SID(2), B)], [PA, null]);
   //  대조: 박스로 읽던 대화에 소속이 적히면(세션을 옮김 · 기록을 올림) 그때부터는 적힌 것이 이긴다 — 뗌도 마찬가지.
   await put(SID(18), A, U("코뿔소 18번 대화", ago(2, 18)));
   await box(BOX(18), A, SID(18), { projectId: PB });
@@ -160,7 +181,7 @@ try {
 
   // ══ R. 읽는 자리 ═════════════════════════════════════════════════════════════════════════
   //  기대 — 주인이 A 인 기록 전부(16번은 주인이 비어 A 의 목록에 없다 — 그 줄은 위 P13 이 식으로 잰다).
-  const WANT = { 1: PA, 2: null, 3: PB, 4: PB, 5: null, 6: null, 7: PB, 9: PC, 10: null, 11: null, 12: null, 13: PC, 14: null, 15: PB, 17: PB, 18: null, 19: null };
+  const WANT = { 1: PA, 2: null, 3: PB, 4: PB, 5: null, 6: null, 7: PB, 9: PC, 10: null, 11: null, 12: null, 13: PC, 14: null, 15: PB, 17: PB, 18: null, 19: null, 20: PB, 21: PC, 22: null };
   const wantIds = Object.fromEntries(Object.entries(WANT).map(([n, p]) => [SID(n), p]));
   const wantNames = Object.fromEntries(Object.entries(WANT).map(([n, p]) => [SID(n), p == null ? null : nameOf[p]]));
   const mine = (rows) => rows.filter((x) => ALL.includes(x.session_id));
@@ -176,7 +197,7 @@ try {
   eqMap("R2 작업 일지 — 줄마다 프로젝트 이름", Object.fromEntries(jr.map((x) => [x.session_id, x.project_name])), wantNames);
 
   // R3 · R4 맞은 말 찾기
-  const find = (o = {}) => C.searchConvMessages({ requester: A, q: "코뿔소", attach: true, workspaceId: PRIMARY_TENANT_ID, limit: 100, since: null, role: null, projectId: o.projectId ?? null });
+  const find = (o = {}) => C.searchConvMessages({ requester: o.as ?? A, q: "코뿔소", attach: true, workspaceId: PRIMARY_TENANT_ID, limit: 100, since: null, role: null, projectId: o.projectId ?? null });
   const sids = (r) => [...new Set(r.hits.map((h) => h.session_id))].sort();
   const withProj = (p) => Object.entries(WANT).filter(([, v]) => v === p).map(([n]) => SID(n)).sort();
   const all = await find();
@@ -188,7 +209,7 @@ try {
 
   // R5 ⌘K 세션 찾기 — 이름(글자로 맞은 줄) · 번호로 찾기 · 뜻으로 찾기
   const search = (text, o = {}) => C.searchConversations({
-    requester: A, q: text, sort: "relevance", since: null, limit: 100, workspaceId: PRIMARY_TENANT_ID, attach: true, semantic: o.vec ? { vec: o.vec } : "off" });
+    requester: o.as ?? A, q: text, sort: "relevance", since: null, limit: 100, workspaceId: PRIMARY_TENANT_ID, attach: true, semantic: o.vec ? { vec: o.vec } : "off" });
   const byWord = await search("코뿔소");
   eqMap("R5 ⌘K 글자로 찾기 — 줄마다 프로젝트 이름", Object.fromEntries(byWord.results.map((x) => [x.session_id, x.project])), wantNames);
   const numHit = (r) => r.results.filter((x) => x.nums.length).map((x) => x.session_id).sort();
@@ -206,15 +227,30 @@ try {
   const sem = Object.fromEntries(bySem.results.filter((x) => x.sem != null).map((x) => [x.session_id, x.project]));
   eqMap("R5 ⌘K 뜻으로 온 줄의 프로젝트 이름", sem, { [SID(2)]: null, [SID(3)]: nameOf[PB] });
 
-  // R6 배선 — 읽는 자리가 전부 같은 식을 쓴다 · 시험이 실제 행으로 돌았다.
-  const src = (f) => readFileSync(fileURLToPath(new URL(`./${f}`, import.meta.url)), "utf8");
-  const OLD = /FROM\s*\(\s*SELECT\s+sp\.project_id\s+FROM\s+session_project\s+sp/;
-  for (const f of ["session-log-store.ts", "session-journal-store.ts", "conv-index-store.ts"]) {
-    const text = src(f);
-    chk(`R6 ${f} — «대화에 적힌 것만 읽는» 옛 조회가 남아 있지 않다`, !OLD.test(text), "옛 조회가 남아 있다");
-    chk(`R6 ${f} — 같은 식(convProjectIdSql)을 쓴다`, /\$\{convProjectIdSql\(/.test(text) || /= convProjectIdSql\(/.test(text), "식을 쓰는 자리가 없다");
-  }
-  eq("R6 시험이 실제 행으로 돌았다 — 목록 · 일지 · 찾기가 돌려준 줄 수", [list.length, jr.length, all.hits.length, byWord.results.length], [17, 17, 17, 17]);
+  // R6 — 시험이 실제 행으로 돌았다(읽는 자리마다 기대한 줄 수만큼 돌려받았다).
+  eq("R6 목록 · 일지 · 찾기가 돌려준 줄 수", [list.length, jr.length, all.hits.length, byWord.results.length], [20, 20, 20, 20]);
+
+  // R7 초대받아 보는 사람(B) — 대화 20 은 보이지만, 초대하지 않은 박스(36)의 프로젝트는 어디로도 안 샌다.
+  const row20 = (r) => r.results.find((x) => x.session_id === SID(20));
+  const bFind = await find({ as: B });
+  eq("R7 B 의 맞은 말 찾기 — 대화 20 이 보이고 프로젝트 이름은 없다", bFind.hits.filter((h) => h.session_id === SID(20)).map((h) => h.project), [null]);
+  eq("R7 B 가 프로젝트 B 로 걸러도 대화 20 은 안 잡힌다", sids(await find({ as: B, projectId: PB })).includes(SID(20)), false);
+  eq("R7 B 가 «프로젝트 없음» 으로 거르면 대화 20 이 잡힌다", sids(await find({ as: B, projectId: 0 })).includes(SID(20)), true);
+  const bWord = await search("코뿔소", { as: B });
+  eq("R7 B 의 ⌘K 글자로 찾기 — 대화 20 의 프로젝트 이름은 없다", [!!row20(bWord), row20(bWord)?.project ?? null], [true, null]);
+  eq("R7 B 가 프로젝트 번호(B)로 찾아도 대화 20 은 안 잡힌다", numHit(await search(String(PB), { as: B })).includes(SID(20)), false);
+  const bTask = await search(String(NT), { as: B });
+  eq("R7 B 가 태스크 번호로 찾으면 대화 20 이 잡히고 프로젝트 이름은 없다", [row20(bTask)?.nums ?? null, row20(bTask)?.project ?? null], [[NT], null]);
+  await q(
+    `INSERT INTO session_card(node_id, session_id, card_id, card, src_bytes, ver, embedding_vector) VALUES('', $1, $2, '심은 카드', 1, 1, $3::vector)
+     ON CONFLICT (tenant_id, node_id, session_id) DO UPDATE SET card = EXCLUDED.card, embedding_vector = EXCLUDED.embedding_vector`, [SID(20), "|" + SID(20), "[" + vec(9).join(",") + "]"]);
+  const bSem = await search("하마", { as: B, vec: vec(9) });
+  eq("R7 B 의 ⌘K 뜻으로 찾기 — 대화 20 의 프로젝트 이름은 없다", [row20(bSem)?.sem != null, row20(bSem)?.project ?? null], [true, null]);
+  //  대조: 주인(A)에게는 같은 자리들이 박스의 프로젝트를 말한다(위 R3 · R5 가 글자 · 번호를 잰다 — 여기서는 태스크 번호 · 뜻).
+  const aTask = await search(String(NT));
+  eq("R7 대조: A 가 태스크 번호로 찾으면 그 줄의 프로젝트 이름은 B", row20(aTask)?.project ?? null, nameOf[PB]);
+  const aSem = await search("하마", { vec: vec(9) });
+  eq("R7 대조: A 가 뜻으로 찾으면 그 줄의 프로젝트 이름은 B", row20(aSem)?.project ?? null, nameOf[PB]);
 } catch (e) {
   bad("예외", (e && e.stack) || String(e));
 } finally {

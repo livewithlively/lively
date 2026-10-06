@@ -365,18 +365,24 @@ export function sessionWorkspaceWhere(params: unknown[], workspaceId: string, se
  *  작업 일지(session-journal-store)가 **같은 한 벌**을 쓴다. 사본이 갈리면 같은 세션이 화면마다 다른 프로젝트 밑에 선다.
  *  ① 대화 id 로 적힌 소속(session_project)이 하나라도 있으면 그 **마지막 구간**. 해제(NULL)면 프로젝트 없음이다(#1867 — 마지막
  *     non-null 을 현재로 연장하지 않는다). 이때는 박스를 보지 않는다.
- *  ② 한 번도 안 적혔으면 그 대화를 돌린 **같은 주인의 박스** 가운데 프로젝트가 붙은 것 — 여럿이면 그 대화를 가장 늦게 본 박스
- *     (작업 일지가 박스를 고르는 잣대와 같다). 박스의 프로젝트는 org_session_state.project_id 다(세션 목록이 읽는 그 값).
- *     옛 계열(project_src='org')의 번호는 project 표의 번호가 아니라 읽지 않는다. 프로젝트가 안 붙은 박스와 지워진 프로젝트를
- *     가리키는 박스(이 열에는 FK 가 없다)는 EXISTS 한 줄이 함께 건너뛴다 — 그 뒤의 박스에 프로젝트가 있으면 그것을 읽는다.
+ *  ② 한 번도 안 적혔고 **보는 사람이 그 기록의 주인이면**, 그 대화를 돌린 자기 박스 가운데 프로젝트가 붙은 것 — 여럿이면 그 대화를
+ *     가장 늦게 본 박스(작업 일지가 박스를 고르는 잣대와 같다), 본 시각이 같으면 박스 id 순. 박스의 프로젝트는
+ *     org_session_state.project_id 다(세션 목록이 읽는 그 값 — «지금» 의 것이라, 박스가 그 대화 뒤에 다른 프로젝트로 옮겨졌으면
+ *     옛 대화도 지금 프로젝트로 읽힌다. 박스 상태에는 이력이 없다).
+ *     옛 계열(project_src='org')의 번호는 project 표의 번호가 아니라 읽지 않는다. 프로젝트가 안 붙은 박스 · 지워진 프로젝트를
+ *     가리키는 박스(이 열에는 FK 가 없다) · 휴지통에 든 프로젝트의 박스는 EXISTS 한 줄이 함께 건너뛴다 — 그 뒤의 박스에 프로젝트가
+ *     있으면 그것을 읽는다.
  *  왜 ②가 있어야 하나: 대화 축에는 «기록을 올릴 때» 와 «세션을 옮길 때» 만 소속이 적힌다(session-log-routes append ·
  *   session-project-routes). 프로젝트를 달고 태어난 박스가 올린 옛 기록에는 한 번도 안 적혀서, 세션 목록에는 프로젝트가 서는데
  *   세션 이력 앱에서만 「기타 (미분류)」 로 섰다(실측 2026-10-06 원준 계정: 기록 323 가운데 72 — 대화 축 구간 0건).
+ *  ⚠ ②는 **주인 본인에게만** 읽어 준다(viewerExpr = 보는 사람). 초대는 박스마다 따로라, 초대받은 사람이 보는 남의 대화에 ②를 쓰면
+ *   그 사람을 초대하지 않은 박스의 프로젝트(그 사람에게 가려져 있을 수 있다)가 이름으로도 거르개로도 샌다(격리 리뷰가 재현).
+ *   남의 기록은 종전대로 대화에 적힌 것만 읽는다 — 누가 무엇을 아는가는 이 식으로 바뀌지 않는다.
  *  배열로 감싸는 까닭: «구간이 없다»(NULL)와 «마지막 구간이 해제다»(ARRAY[NULL])를 COALESCE 가 가르게 한다. COALESCE 는 앞이
  *   NULL 일 때만 뒤를 셈하므로 박스 조회는 소속이 안 적힌 대화에만 돈다.
- *  ⚠ 보이는 범위는 여기서 정하지 않는다 — 이 식은 이름과 프로젝트 거르개가 읽는 값일 뿐이다(누가 그 세션을 보나는 호출자의 조건).
+ *  ⚠ 안쪽 별칭(sp · oc · cur · own · b · st · bp)과 같은 이름의 식을 인자로 넘기지 않는다 — 안쪽 것이 바깥을 가린다.
  */
-export function convProjectIdSql(convExpr = "s.session_id", ownerExpr = "s.owner"): string {
+export function convProjectIdSql(viewerExpr: string, convExpr = "s.session_id", ownerExpr = "s.owner"): string {
   return `(COALESCE(
         (SELECT ARRAY[sp.project_id] FROM session_project sp
           WHERE sp.session_id = ${convExpr} ORDER BY sp.valid_from DESC LIMIT 1),
@@ -390,9 +396,10 @@ export function convProjectIdSql(convExpr = "s.session_id", ownerExpr = "s.owner
                  SELECT own.id, own.last_seen FROM org_session_state own
                   WHERE own.id = ${convExpr} AND own.owner = ${ownerExpr}) b
            JOIN org_session_state st ON st.id = b.box AND st.owner = ${ownerExpr}
-          WHERE st.project_src IS DISTINCT FROM 'org'
-            AND EXISTS (SELECT 1 FROM project bp WHERE bp.id = st.project_id)
-          ORDER BY b.at DESC NULLS LAST, b.box
+          WHERE ${ownerExpr} = ${viewerExpr}
+            AND st.project_src IS DISTINCT FROM 'org'
+            AND EXISTS (SELECT 1 FROM project bp WHERE bp.id = st.project_id AND bp.trashed_at IS NULL)
+          ORDER BY b.at DESC, b.box
           LIMIT 1)))[1]`;
 }
 
@@ -410,7 +417,7 @@ export async function listSessionsForOwner(owner: string, limit = 200, workspace
        LEFT JOIN LATERAL (
          -- 대화에 적힌 마지막 소속(해제면 없음 #1867) · 한 번도 안 적혔으면 그 대화를 돌린 박스의 소속(convProjectIdSql).
          SELECT p.id AS project_id, p.name AS project_name
-           FROM project p WHERE p.id = ${convProjectIdSql()}
+           FROM project p WHERE p.id = ${convProjectIdSql("$1")}
        ) proj ON true
       WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL AND s.run_kind IS DISTINCT FROM 'task' ${wsClause}
       ORDER BY s.last_seen DESC
