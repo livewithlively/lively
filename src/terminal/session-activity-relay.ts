@@ -23,9 +23,9 @@ export interface ActivityReportDeps {
   /** 이 세션을 맡을 호스트 — 없으면 null(종전 경로) */
   hostFor: (id: string) => string | null;
   /** 호스트에 `markActive` 를 맡긴다 */
-  rpc: (host: string, args: { id: string; state: ReportedPhase | undefined }) => Promise<unknown>;
+  rpc: (host: string, args: { id: string; state: ReportedPhase | undefined; bg?: number }) => Promise<unknown>;
   /** 종전 경로 — 게이트웨이가 직접 새긴다 */
-  local: (id: string, phase: ReportedPhase | undefined) => Promise<SessionPhaseChange | null>;
+  local: (id: string, phase: ReportedPhase | undefined, bg?: number | null) => Promise<SessionPhaseChange | null>;
   /** 활동 시각 DB 미러 */
   touch: (id: string, sec: number) => Promise<void>;
   nowSec: () => number;
@@ -48,22 +48,23 @@ export function relayedChange(r: unknown): SessionPhaseChange | null {
 /**
  * 활동 보고 하나 — 전이(prev→phase)가 있으면 돌려준다(알림은 호출자가 정한다, `markSessionActive` 와 같은 계약).
  */
+//  #4588 — bg = 턴 끝(idle)에 하네스가 센 «대화가 띄우고 아직 안 끝난 백그라운드 작업 수». 호스트에도 그대로 넘긴다(phase.formatReportedPhase).
 export async function reportSessionActivity(
-  id: string, phase: ReportedPhase | undefined, deps: Partial<ActivityReportDeps> = {},
+  id: string, phase: ReportedPhase | undefined, deps: Partial<ActivityReportDeps> = {}, bg: number | null = null,
 ): Promise<SessionPhaseChange | null> {
   const hostFor = deps.hostFor ?? ((sid: string) => sessionHostFor(sid, "markActive"));
-  const local = deps.local ?? markSessionActive;
+  const local = deps.local ?? ((sid: string, p: ReportedPhase | undefined, b?: number | null) => markSessionActive(sid, p, undefined, b));
   const host = hostFor(id);
-  if (!host) return local(id, phase);
+  if (!host) return local(id, phase, bg);
 
-  const rpc = deps.rpc ?? ((h: string, args: { id: string; state: ReportedPhase | undefined }) => nodeRpc(h, "markActive", args));
+  const rpc = deps.rpc ?? ((h: string, args: { id: string; state: ReportedPhase | undefined; bg?: number }) => nodeRpc(h, "markActive", args));
   const warn = deps.warn ?? ((o: Record<string, unknown>, msg: string) => logger.warn(o, msg));
   let change: SessionPhaseChange | null;
   try {
-    change = relayedChange(await rpc(host, { id, state: phase }));
+    change = relayedChange(await rpc(host, bg === null ? { id, state: phase } : { id, state: phase, bg }));
   } catch (e) {
     warn({ err: e, id, host }, "활동 보고를 세션 호스트에 맡기지 못했다 — 게이트웨이가 직접 새긴다");
-    return local(id, phase);
+    return local(id, phase, bg);
   }
   //  prev 되찾기: 전이가 있으면 그 prev, 없으면(같은 단계 재보고) 호스트가 본 단계가 지금 단계와 같았다는 뜻이다.
   if (isActivityProgress(phase, change ? change.prev : (phase ?? null))) {

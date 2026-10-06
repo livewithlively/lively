@@ -50,7 +50,7 @@ import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, mo
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
-import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase } from "./phase.js";
+import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase, backgroundHolds } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
@@ -392,6 +392,8 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
       offline, busy, shellWorking, lastBusy, persistedLastBusy: persisted,
       reportedFresh, harnessBusy, lastAttached: p.lastAttached, lastViewed: p.lastViewed,
+      //  #4588 — 만료와 무관한 마지막 보고(턴 끝의 열린 백그라운드 작업 수 bg 를 싣는다 — phase.backgroundHolds). AI 가 안 돌면 없다.
+      reportedLast: offline ? null : parseReportedPhase(p.stateRaw),
       //  #2439 — 이 세션이 어느 모드로 떴나. ⚠ 이 push 는 필드를 **하나씩 골라** 담는다 —
       //   위에서 만들어 둔 값이라도 여기 안 적으면 조용히 사라진다(실측: 386행 중 0행만 값을 가졌다).
       runtimeChoice: p.runtimeChoice,
@@ -492,7 +494,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       paneWorking: !!r.shellWorking,
       //  #4502 — 턴은 끝났지만 하네스가 띄운 백그라운드 작업이 남아 AI 가 스스로 이어 간다(«… · 1 shell still running»).
       //   사이드바 점만 이걸 «작업 중» 으로 그린다 — working 에 안 넣는 이유는 phase.screenRunEffects 머리말. 값이 없으면 키를 뺀다.
-      ...(screen.background ? { background: true } : {}),
+      //  #4588 — 단, 턴 끝에 하네스가 대화 기록으로 센 «열린 백그라운드 작업» 이 0 이면 싣지 않는다(화면 숫자가 AI 가 기다리는 작업과
+      //   어긋난 세션이 몇 시간씩 «작업 중» 으로 깜빡였다 — phase.backgroundHolds 머리말).
+      ...(backgroundHolds(screen.background, r.reportedLast) ? { background: true } : {}),
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.
