@@ -23,9 +23,11 @@ export interface HistRow {
   node: string;
   projectId: number | null;
   projectName: string | null;
-  /** 중앙 기록이 말하는 프로젝트(그 대화에 붙은 것) — 기록이 없거나 붙은 프로젝트가 없으면 null. 박스의 것(projectId)과 다를 수 있다:
-   *  실측 2026-10-05, 기록 323개 가운데 72개는 박스에만 프로젝트가 있고 기록에는 없다. 대화 찾기 · 작업 일지 · 맞은 말 검색은 기록의 것으로 말하고
-   *  거르므로, 기록이 있는 줄은 사이드바와 「세션 목록」 탭도 이것으로 세고 보인다(rowProject) — 탭마다 다른 프로젝트를 말하지 않게. */
+  /** 중앙 기록이 말하는 프로젝트(그 대화의 지금 프로젝트) — 기록이 없거나 프로젝트가 없으면 null. 박스의 것(projectId)과 다를 수 있다
+   *  (대화에 적힌 소속이 박스보다 먼저다 · 한 대화를 돌린 박스가 여럿일 수 있다). 대화에 한 번도 안 적힌 기록은 서버가 그 대화를 돌린
+   *  박스의 프로젝트로 읽어 준다(v6/session-log-store.ts convProjectIdSql — 종전엔 그런 기록 72개가 여기서만 프로젝트 없음이었다, 실측 2026-10-05).
+   *  대화 찾기 · 작업 일지 · 맞은 말 검색은 기록의 것으로 말하고 거르므로, 기록이 있는 줄은 사이드바와 「세션 목록」 탭도 이것으로 세고
+   *  보인다(rowProject) — 탭마다 다른 프로젝트를 말하지 않게. */
   recProjectId: number | null;
   recProjectName: string | null;
   /** session-status 의 key, 또는 'log'(기록만 남음). */

@@ -22,7 +22,7 @@
 //   완전 삭제(purgeSessionLog)·보존기간 정리(reapSessionLogs)가 이 두 표도 함께 지운다(session-log-store.ts).
 //   색인이 남으면 지운 대화가 검색으로 되살아난다.
 import { itemsPool, withTx } from "../db/client.js";
-import { readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
+import { convProjectIdSql, readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
 import { readAlignedWindow, prefetchReader, type ByteReader } from "../terminal/harness-io/window.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { parseJsonLines, type ChatLine, type ParseResult, type ParseState } from "../terminal/harness-io/chat-line.js";
@@ -573,9 +573,7 @@ async function collectAggs(input: ConvSearchInput, terms: QueryTerm[], o: Collec
        JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql("agg.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -625,7 +623,7 @@ export function termNumber(t: QueryTerm): number | null {
 interface IdentRow { node_id: string; session_id: string; owner: string | null; title: string | null; label: string | null; project: string | null; last_seen: string | null; nums: number[] }
 /**
  * 그 번호들에 묶인 세션(볼 수 있는 것만 · 최근 것부터 200개까지).
- *  · 프로젝트 번호 — 지금 그 프로젝트에 묶여 있는 세션(session_project 의 가장 늦은 묶음).
+ *  · 프로젝트 번호 — 지금 그 프로젝트에 묶여 있는 세션(«이 대화의 지금 프로젝트» — 세션 목록과 같은 한 벌, convProjectIdSql).
  *  · 태스크 번호 — 그 태스크를 맡은 실행 세션(execution_session_task)이 돌린 대화. 실행 세션 id 는 박스 id 라, 그 박스가 돌린 대화
  *    (org_session_conv · org_session_state.claude_session_id)로 편다(기록만 남은 행은 id 자체가 대화 id 다).
  */
@@ -642,10 +640,9 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
         WHERE ${v.where}),
      bound AS (
-       SELECT sp.session_id AS conv, sp.project_id AS num
-         FROM session_project sp
-        WHERE sp.project_id = ANY(${nP}::int[])
-          AND NOT EXISTS (SELECT 1 FROM session_project later WHERE later.session_id = sp.session_id AND later.valid_from > sp.valid_from)
+       SELECT vis.session_id AS conv, cp.num
+         FROM vis CROSS JOIN LATERAL (SELECT ${convProjectIdSql("vis.session_id", "vis.owner")} AS num) cp
+        WHERE cp.num = ANY(${nP}::int[])
        UNION
        SELECT c.conv, t.task_id
          FROM execution_session_task t
@@ -664,9 +661,7 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
        JOIN vis ON vis.node_id = hit.node_id AND vis.session_id = hit.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = hit.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql("hit.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -725,9 +720,7 @@ async function semanticSessions(input: ConvSearchInput, vec: number[]): Promise<
        JOIN vis ON vis.node_id = near.node_id AND vis.session_id = near.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = near.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql("near.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -1125,8 +1118,8 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
   // ① 낱말이 든 말이 있는 세션 — 낱말이 많이 모인 말이 있는 세션, 그다음 늦게 맞은 세션부터 상한까지.
   const p1: unknown[] = [];
   const v = visibleSql(p1, input);
-  //  프로젝트 거르개는 «지금 붙어 있는 프로젝트»(마지막 구간) — 세션 목록이 프로젝트를 읽는 자와 같다(listSessionsForOwner).
-  const lastProj = `(SELECT sp.project_id FROM session_project sp WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1)`;
+  //  프로젝트 거르개는 «이 대화의 지금 프로젝트» — 세션 목록이 프로젝트를 읽는 자와 같은 한 벌이다(convProjectIdSql).
+  const lastProj = convProjectIdSql();
   let projSql = "";
   if (input.projectId != null && Number.isInteger(input.projectId) && input.projectId >= 0) {
     if (input.projectId === 0) projSql = ` AND ${lastProj} IS NULL`;
@@ -1156,9 +1149,7 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
        JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql("agg.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
