@@ -189,7 +189,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const { store, base } = await projStore(Number(req.params.id), req);
     res.setHeader("Cache-Control", "no-store");
     const q = String(req.query.q ?? "").trim();
-    if (q) { res.json({ search: q, items: await store.search(q) }); return; }
+    //  `skip=heavy` — node_modules·git 레포 속은 걷지 않는다(터미널 경로 열기의 꼬리 찾기, #4562). 자료 탭 검색은 안 붙인다.
+    if (q) { res.json({ search: q, items: await store.search(q, undefined, { skipHeavy: req.query.skip === "heavy" }) }); return; }
     const abs = resolveIn(base, req.query.path, false);
     //  멤버 저장소에선 세션이 심은 링크를 따라 폴더 밖 목록이 나가지 않게 — 다른 파일 라우트·브라우즈 목록과 같은 관문.
     await jailIfMember(store, abs);
