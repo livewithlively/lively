@@ -23,7 +23,7 @@
 //   지식은 지식의 공개범위(knowledgeVisWhere)를, 프로젝트·태스크는 가려진 프로젝트(hiddenProjects)를 다시 잰다 — 내 세션이 만든
 //   것이어도 그 뒤에 잠겼으면 제목을 싣지 않는다.
 import { withTx } from "../db/client.js";
-import { sessionWorkspaceWhere, withNamedLabels } from "./session-log-store.js";
+import { convProjectIdSql, sessionWorkspaceWhere, withNamedLabels } from "./session-log-store.js";
 import { assignActivities, clampJournalLimit, inJournalRange, JOURNAL_QUERY_TIMEOUT_MS, JOURNAL_ACTIVITY_MAX, type JournalBoxLink } from "./session-journal.js";
 import { knowledgeVisWhere } from "./knowledge-common.js";
 import { hiddenProjects } from "./visibility.js";
@@ -117,10 +117,9 @@ async function journalWith(query: Query, input: JournalInput): Promise<{ rows: J
        FROM session s
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN LATERAL (
+         -- 기록 목록과 같은 한 벌(convProjectIdSql) — 같은 세션이 일지와 목록에서 다른 프로젝트 밑에 서지 않게.
          SELECT p.id AS project_id, p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql()}
        ) proj ON true
       WHERE ${wh.join(" AND ")}
       ORDER BY s.last_seen DESC
