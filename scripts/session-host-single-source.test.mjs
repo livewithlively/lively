@@ -398,7 +398,8 @@ t("[S18] /active 는 reportSessionActivity 로 맡기고 알림 이름은 st.lab
   const next = src.indexOf("\n  app.", at + sig.length);
   const body = src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
   assert.ok(body.length > 10, `/active 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
-  assert.ok(body.some((l) => /reportSessionActivity\s*\(\s*id\s*,\s*phase\s*\)/.test(l)),
+  //  #4588 — 뒤에 deps·bg(턴 끝의 열린 백그라운드 작업 수)가 붙을 수 있다. 지키는 것은 «맡길 곳 판정을 거친다» 하나다.
+  assert.ok(body.some((l) => /reportSessionActivity\s*\(\s*id\s*,\s*phase\s*[,)]/.test(l)),
     `/active 가 reportSessionActivity 를 안 부른다 — 세션 호스트가 서 있어도 게이트웨이가 tmux 를 세 번 친다`);
   assert.ok(!body.some((l) => /\bmarkSessionActive\s*\(/.test(l)),
     `/active 가 markSessionActive 를 직접 부른다 — 맡길 곳 판정을 건너뛴다`);

@@ -185,13 +185,38 @@ export function isReportedPhase(v: unknown): v is ReportedPhase { return typeof 
 //  만료돼도 손실은 없다 — 아래 폴백(스피너·capture-pane)이 종전과 똑같이 답한다.
 export const PHASE_TTL_SEC = 10 * 60;
 
-// "<phase> <epoch초>" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
+// "<phase> <epoch초>[ bg=<n>]" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
 //  phase 와 시각을 **한 옵션에 묶은** 이유: 따로 쓰면 두 write 사이에 목록 조회가 끼어 '옛 상태 + 새 시각'이라는
 //  있을 수 없는 조합이 나온다(그 조합은 만료 판정을 속인다). 한 문자열이면 원자적이다.
-export function parseReportedPhase(raw: string): { phase: ReportedPhase; at: number } | null {
-  const [p, t] = String(raw || "").trim().split(/\s+/);
+//  #4588 — 세 번째 토큰 `bg=<n>` 은 턴 끝(idle)에 하네스가 센 «대화가 띄우고 아직 안 끝난 백그라운드 작업 수»다(formatReportedPhase).
+//   옛 파서는 앞의 둘만 읽어 이 토큰을 모른 채 지나간다(무회귀). 없으면 bg 키가 없다(= 모른다).
+export function parseReportedPhase(raw: string): { phase: ReportedPhase; at: number; bg?: number } | null {
+  const [p, t, x] = String(raw || "").trim().split(/\s+/);
   const at = Number(t);
-  return isReportedPhase(p) && Number.isFinite(at) && at > 0 ? { phase: p, at } : null;
+  if (!isReportedPhase(p) || !Number.isFinite(at) || at <= 0) return null;
+  const bg = p === "idle" ? /^bg=(\d{1,4})$/.exec(x || "")?.[1] : undefined;
+  return bg === undefined ? { phase: p, at } : { phase: p, at, bg: Number(bg) };
+}
+/** parseReportedPhase 의 짝. bg 는 idle 에만 싣는다 — 도는 턴·대기의 작업 수는 턴이 끝나야 정해진다. */
+export function formatReportedPhase(phase: ReportedPhase, nowSec: number, bg?: number | null): string {
+  return phase === "idle" && isBgCount(bg) ? `${phase} ${nowSec} bg=${bg}` : `${phase} ${nowSec}`;
+}
+/** 보고에 실린 작업 수가 쓸 만한가(0 이상 정수 · 상한 9999 — 형식은 `bg=\d{1,4}`). */
+export function isBgCount(v: unknown): v is number { return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 9999; }
+
+/**
+ * #4588 — 화면의 «백그라운드 작업이 남았다»(screen run = background)를 사이드바 점에 실을지.
+ *  화면 숫자(Claude Code 의 «… · 1 shell still running»)는 AI 가 기다리는 작업과 어긋날 수 있다. 실측(2026-10-06, 맥미니 2.1.289
+ *  세션 둘): 대화가 띄운 작업이 전부 완료 알림을 받았는데 화면은 몇 시간째 «1 shell still running» 이었고, AI 는 사람의 답을
+ *  기다린다고 말했다 — 점은 그동안 «작업 중» 으로 깜빡였다. AI 가 스스로 이어 가는 근거는 알림이고 알림은 대화가 띄운 작업에만
+ *  오므로, 턴 끝에 하네스가 대화 기록으로 센 수(bg)가 정본이다.
+ *  · 마지막 보고가 idle 이고 bg=0 → 기다릴 작업이 없다 → 끈다. **만료(TTL)를 보지 않는다** — idle 보고는 다음 이벤트까지 사실이다.
+ *    (작업이 끝나면 알림이 새 턴을 열어 busy→idle 로 다시 센다. 사람이 작업 관리 창에서 직접 끄면 화면이 먼저 «still running» 을 지운다.)
+ *  · bg 가 없거나(구 훅 · 못 셈) 1 이상 → 종전대로 화면을 믿는다. 틀리는 방향을 «한 번 더 깜빡인다» 쪽에 둔다.
+ */
+export function backgroundHolds(screenBackground: boolean, reported: { phase: ReportedPhase; bg?: number } | null): boolean {
+  if (!screenBackground) return false;
+  return !(reported?.phase === "idle" && reported.bg === 0);
 }
 // ⚠ 미래 시각도 만료로 본다 — 노드(#869)의 훅은 **멤버 PC 시계**로 찍히므로 스큐가 있으면 now-at 이 음수가 되어
 //  "영원히 신선한" 보고가 굳는다. 60초 여유는 정상 스큐 흡수용.
@@ -272,11 +297,13 @@ export function isActivityProgress(phase: ReportedPhase | undefined, prev: Repor
 //  #1842 — **전이(prev→phase)를 반환한다.** 이 함수가 곧 "지금 단계가 바뀌었다"를 아는 유일한 자리라서,
 //   실시간 알림은 이 값 없이는 30초 폴링으로 같은 사실을 다시 발견해야 한다. 알림 관심사를 이 파일에
 //   들이지 않으려고(여긴 tmux 계층이다) **판단은 하지 않고 사실만 돌려준다** — 무엇이 알림인지는 호출자가 정한다.
-export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<SessionPhaseChange | null> {
+export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000), bg?: number | null): Promise<SessionPhaseChange | null> {
   let prev: ReportedPhase | null = null;
   if (phase) {
     prev = parseReportedPhase(await getOpt(id, "@box_state"))?.phase ?? null;   // 전이 여부 판정용(아래)
-    await tmuxQuiet(["set-option", "-t", id, "@box_state", `${phase} ${nowSec}`]);
+    //  #4588 idle 엔 bg=<n>. ⚠ bg 없는 idle 에 직전 bg 를 잇지 않는다 — 훅이 «못 셌다»(띄움 문구를 못 알아봄 등)고 말한 idle 에
+    //   옛 bg=0 을 이으면 기다리는 세션의 점이 꺼진다(격리 리뷰). 새 훅은 모든 idle 보고에서 센다(work-flag).
+    await tmuxQuiet(["set-option", "-t", id, "@box_state", formatReportedPhase(phase, nowSec, bg)]);
   }
   const changed = !!phase && phase !== prev;
   if (!isActivityProgress(phase, prev)) return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)

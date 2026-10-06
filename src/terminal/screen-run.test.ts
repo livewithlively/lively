@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { claudeRun } from "./harness-io/claude.js";
 import { harnessIo } from "./harness-io/adapter.js";
-import { detectRun, readScreen, screenRunEffects, resolveAgentPhase, screenReadPlan, STOPPED_SETTLE_SEC, PHASE_TTL_SEC } from "./phase.js";
+import { detectRun, readScreen, screenRunEffects, resolveAgentPhase, screenReadPlan, STOPPED_SETTLE_SEC, PHASE_TTL_SEC, parseReportedPhase, formatReportedPhase, backgroundHolds } from "./phase.js";
 import { RUN_FROM_SCREEN_LINES } from "./harness-io/screen-run.js";
 import { projectNodeSession } from "../node/protocol.js";
 
@@ -263,6 +263,54 @@ t("E4 stopped → 표식 하나(낡은 busy 보고를 누르는 재료) · 작�
   });
 }
 
+// ── #4588 턴 끝에 센 열린 백그라운드 작업(bg) — 화면의 «still running» 을 점에 실을지 ──
+//  신고(원준님 2026-10-06): «이 세션 끝났는데도 계속 파란불 깜빡거려. 돌고있지도 않데» — box-wonjoon-jang-8923ed5b(맥미니, 2.1.289).
+//  화면은 «✻ Cogitated for 11s · done 5:09 PM · 1 shell still running» · 푸터 «1 shell» 인데, 그 대화가 띄운 셸 3건 · 에이전트 4건은
+//  전부 완료 알림을 받았다(대화 기록 대조). 같은 노드 c6f65b07 도 셸 6건 전부 완료 · 화면은 «1 shell still running».
+t("B1 @box_state 세 번째 토큰 bg=<n> — idle 에만 읽고, 없으면 키가 없다(옛 값 무회귀)", () => {
+  assert.deepEqual(parseReportedPhase("idle 1791274163 bg=0"), { phase: "idle", at: 1791274163, bg: 0 });
+  assert.deepEqual(parseReportedPhase("idle 1791274163 bg=3"), { phase: "idle", at: 1791274163, bg: 3 });
+  assert.deepEqual(parseReportedPhase("idle 1791274163"), { phase: "idle", at: 1791274163 }, "구 훅 보고 — bg 를 모른다");
+  assert.deepEqual(parseReportedPhase("busy 1791274163 bg=0"), { phase: "busy", at: 1791274163 }, "도는 턴의 수는 안 읽는다");
+  assert.deepEqual(parseReportedPhase("idle 1791274163 bg=x"), { phase: "idle", at: 1791274163 }, "형식이 틀리면 모른다");
+  assert.deepEqual(parseReportedPhase("idle 1791274163 bg=-1"), { phase: "idle", at: 1791274163 });
+  assert.equal(parseReportedPhase("idle x bg=0"), null, "시각이 깨지면 보고가 없다(종전 그대로)");
+});
+t("B2 formatReportedPhase — idle 에만 bg 를 붙이고, 쓸 수 없는 수는 버린다 · parse 와 왕복", () => {
+  assert.equal(formatReportedPhase("idle", 100, 0), "idle 100 bg=0");
+  assert.equal(formatReportedPhase("idle", 100, 2), "idle 100 bg=2");
+  assert.equal(formatReportedPhase("idle", 100, null), "idle 100");
+  assert.equal(formatReportedPhase("idle", 100, undefined), "idle 100");
+  assert.equal(formatReportedPhase("busy", 100, 0), "busy 100");
+  assert.equal(formatReportedPhase("waiting", 100, 1), "waiting 100");
+  assert.equal(formatReportedPhase("idle", 100, 1.5), "idle 100");
+  assert.equal(formatReportedPhase("idle", 100, 10000), "idle 100");
+  assert.equal(formatReportedPhase("idle", 100, -1), "idle 100", "음수는 버린다(하한 경계)");
+  for (const bg of [0, 1, 9999]) assert.deepEqual(parseReportedPhase(formatReportedPhase("idle", 100, bg)), { phase: "idle", at: 100, bg });
+});
+t("B3 backgroundHolds — 마지막 보고가 idle·bg=0 일 때만 화면의 background 를 끈다(만료와 무관)", () => {
+  assert.equal(backgroundHolds(true, { phase: "idle", bg: 0 }), false, "신고 세션 — 기다릴 작업이 없다");
+  assert.equal(backgroundHolds(true, { phase: "idle", bg: 1 }), true, "#4502 신고 세션 — 머지 대기 셸이 정말 남았다");
+  assert.equal(backgroundHolds(true, { phase: "idle" }), true, "구 훅 · 못 셈 — 종전대로 화면");
+  assert.equal(backgroundHolds(true, null), true, "보고 없음 — 종전대로 화면");
+  assert.equal(backgroundHolds(true, { phase: "busy" }), true);
+  assert.equal(backgroundHolds(true, { phase: "waiting" }), true);
+  assert.equal(backgroundHolds(false, { phase: "idle", bg: 3 }), false, "화면이 말하지 않으면 켜지 않는다 — bg 는 끄기만 한다");
+  assert.equal(backgroundHolds(false, null), false);
+  //  끝에서 끝: 신고 세션의 화면 → 어댑터 run → 효과 → 점
+  const run = claudeRun(lines(`⏺ 지금은 프로젝트 #4551을 완료 처리할지에 대한 답을 기다리는 상태입니다.
+✻ Cogitated for 11s · done 5:09 PM · 1 shell still running
+                                                                               ✔ Update installed · Restart to update
+${RULE}
+❯
+${RULE}
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents · ↓ to manage`));
+  assert.equal(run, "background", "화면은 여전히 background 로 읽힌다(어댑터는 바꾸지 않았다)");
+  const screen = screenRunEffects(run, false);
+  assert.equal(backgroundHolds(screen.background, parseReportedPhase("idle 1791274163 bg=0")), false);
+  assert.equal(backgroundHolds(screen.background, parseReportedPhase("idle 1791274163")), true);
+});
+
 // ── 배선 — 판정이 목록 행(agentState·working·harnessWorking·lastActive)까지 간다 ──
 //  collectSessions 는 tmux 를 직접 부르는 함수라 여기서 못 돌린다(가짜 tmux 없음). harness-reports-busy.test H8 과 같은 방식으로
 //  **소스 자리를 못박는다** — 값이 만들어지고도 rows·SessionInfo 에 안 적혀 조용히 사라진 사고(#2439)가 이 자리였다.
@@ -278,7 +326,8 @@ t("W1 화면 판정이 대기 판정과 같은 캡처에서 나와 screenRunEffe
   assert.match(src, /resolveAgentPhase\(\{[^}]*scrapedTurn: screen\.turn, scrapedStopped: screen\.stopped \}\)/, "단계 판정(agentState)엔 turn 과 stopped");
   assert.match(src, /working: appServer \? asPhase === "busy" : !!\(r\.busy \|\| r\.shellWorking \|\| \(r\.reportedFresh\?\.phase === "busy" && !screen\.stopped\) \|\| screen\.turn\)/, "working — turn 은 더하고, stopped 는 busy 보고만 누른다(스피너 · pane 추정은 그대로)");
   assert.match(src, /harnessWorking: appServer \? asPhase === "busy" : !!r\.harnessBusy && !\(screen\.stopped && !r\.busy\) \|\| screen\.turn,/, "하네스가 말하는 작업 중 — stopped 는 스피너 없는 보고만 누른다");
-  assert.match(src, /\.\.\.\(screen\.background \? \{ background: true \} : \{\}\)/, "background 는 따로 실린다(사이드바 점)");
+  assert.match(src, /\.\.\.\(backgroundHolds\(screen\.background, r\.reportedLast\) \? \{ background: true \} : \{\}\)/, "background 는 따로 실린다(사이드바 점) — 턴 끝에 센 열린 작업이 0 이면 빠진다(#4588)");
+  assert.match(src, /reportedLast: offline \? null : parseReportedPhase\(p\.stateRaw\),/, "#4588 만료와 무관한 마지막 보고가 행까지 온다");
   assert.match(src, /if \(screen\.turn\) \{[^\n]*\n\s*r\.lastBusy = nowSec;/, "turn 만 마지막 작업 시각을 민다");
   const pushAt = src.indexOf("sessions.push({");
   assert.ok(pushAt > 0 && src.indexOf("if (screen.turn) {") < pushAt, "시각을 민 뒤에 행을 만든다(lastActive 에 실린다)");

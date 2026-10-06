@@ -7,7 +7,7 @@
 //  실행: node kit/hooks/work-flag-lifecycle.test.mjs  (npm test 체인에 포함)
 //  오프라인: 게이트웨이는 127.0.0.1 인프로세스 스텁. 실제 ~/.lively·/tmp 무접촉(샌드박스 HOME/TMPDIR).
 //  ⚠ 인프로세스 스텁이 응답하려면 이벤트루프가 돌아야 하므로 훅은 **비동기 spawn**으로 띄운다(execFileSync 는 루프를 막아 못 받음).
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -292,6 +292,48 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
   states(r1).length === 1 && states(r2).length === 0
     ? ok("E17 같은 상태(busy)의 반복은 이벤트가 달라도 60초 스로틀")
     : bad("E17 동일상태 스로틀", `1차=${JSON.stringify(states(r1))} 2차=${JSON.stringify(states(r2))}`);
+}
+
+// ── E18(#4588): 턴 끝(Stop)엔 **이 대화가 띄우고 아직 안 끝난 백그라운드 작업 수**(bg)를 함께 보낸다 ──────────
+// 사이드바 점이 화면의 «… · 1 shell still running» 만 보고 몇 시간씩 «작업 중» 으로 깜빡였다(대화가 띄운 작업은 전부 끝났는데).
+//  bg 는 대화 기록(transcript_path)으로 센다(bg-jobs.mjs). 못 세면 보내지 않는다(=서버는 종전대로 화면을 믿는다).
+{
+  const bodies = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/active`)
+    .map((x) => { try { return JSON.parse(x.body); } catch { return null; } });
+  const conv = join(SANDBOX, "conv.jsonl");
+  const res = (text) => JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: text }] } }) + "\n";
+  const done = (id) => JSON.stringify({ type: "queue-operation", content: `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n</task-notification>` }) + "\n";
+  writeFileSync(conv, res("Command running in background with ID: b1. Output …") + done("b1"));
+  fresh();
+  const sid = `bg${++n}`;
+  const r1 = await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv });
+  const b1 = bodies(r1);
+  b1.length === 1 && b1[0].state === "idle" && b1[0].bg === 0
+    ? ok("E18 Stop → {state:idle, bg:0} — 띄운 작업이 전부 끝났다") : bad("E18 bg=0", `실제=${JSON.stringify(b1)}`);
+  //  작업 수만 바뀐 idle 은 60초 스로틀을 뚫는다(같은 idle 이라도 새 사실이다).
+  appendFileSync(conv, res("Monitor started (task m1, timeout 3000000ms). You will be notified on each event."));
+  const r2 = await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv });
+  const b2 = bodies(r2);
+  b2.length === 1 && b2[0].bg === 1 ? ok("E18 작업 수가 바뀐 idle 은 스로틀에 안 걸린다(bg=1)") : bad("E18 스로틀", `실제=${JSON.stringify(b2)}`);
+  const r3 = await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv });
+  bodies(r3).length === 0 ? ok("E18 같은 idle·같은 수의 반복은 스로틀") : bad("E18 반복", `실제=${JSON.stringify(bodies(r3))}`);
+  //  ★ 입력창이 오래 놀면 오는 idle_prompt 도 idle 보고다 — 여기서 bg 를 안 실으면 Stop 의 bg=0 을 덮어 점이 되살아난다(격리 리뷰).
+  fresh();
+  const r8 = await runHook({ session_id: sid, hook_event_name: "Notification", notification_type: "idle_prompt", message: "Claude is waiting for your input", transcript_path: conv });
+  const b8 = bodies(r8);
+  b8.length === 1 && b8[0].state === "idle" && b8[0].bg === 1 ? ok("E18 idle_prompt 알림도 bg 를 센다") : bad("E18 idle_prompt", `실제=${JSON.stringify(b8)}`);
+  //  못 세면 bg 를 안 싣는다 — 경로 없음 · 없는 파일 · claude 아닌 하네스 · idle 아닌 보고
+  fresh();
+  const r4 = await runHook({ session_id: `bg${++n}`, hook_event_name: "Stop", stop_hook_active: false });
+  fresh();
+  const r5 = await runHook({ session_id: `bg${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: join(SANDBOX, "nope.jsonl") });
+  fresh();
+  const r6 = await runHook({ session_id: `bg${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }, { LIVELY_HARNESS: "codex" });
+  fresh();
+  const r7 = await runHook({ session_id: `bg${++n}`, hook_event_name: "UserPromptSubmit", prompt: "x", transcript_path: conv });
+  const noBg = [r4, r5, r6, r7].map((r) => bodies(r));
+  noBg.every((b) => b.length === 1 && !("bg" in b[0]))
+    ? ok("E18 못 세면 bg 를 싣지 않는다(경로 없음 · 없는 파일 · codex · 도는 턴)") : bad("E18 noBg", `실제=${JSON.stringify(noBg)}`);
 }
 
 server.close();
