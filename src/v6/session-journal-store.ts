@@ -119,7 +119,7 @@ async function journalWith(query: Query, input: JournalInput): Promise<{ rows: J
        LEFT JOIN LATERAL (
          -- 기록 목록과 같은 한 벌(convProjectIdSql) — 같은 세션이 일지와 목록에서 다른 프로젝트 밑에 서지 않게.
          SELECT p.id AS project_id, p.name AS project_name
-           FROM project p WHERE p.id = ${convProjectIdSql()}
+           FROM project p WHERE p.id = ${convProjectIdSql("$1")}
        ) proj ON true
       WHERE ${wh.join(" AND ")}
       ORDER BY s.last_seen DESC
