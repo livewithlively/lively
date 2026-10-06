@@ -203,6 +203,8 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  활동 시 (box-id, claude session_id)를 보고해 last-write-wins 로 갱신(한 box 안에서 branch·resume·/clear 로 UUID 가
   //  바뀔 수 있으므로 최신만 유지). 복원 시 이 값으로 `claude --resume <uuid>` 정밀 이어받기. null=미상(셸·코덱스·미보고)→picker 폴백.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS claude_session_id TEXT;`);
+  // 대화 uuid 로 그 박스를 찾는 길(#4553 — 기록의 프로젝트 · 지어진 이름을 대화마다 읽는다). 값이 있는 행만 담는다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_state_conv_idx ON org_session_state(claude_session_id) WHERE claude_session_id IS NOT NULL;`);
   // #1746 — 하네스 대화 파일의 절대경로(훅 보고). 대화창이 하네스 무관하게 그 파일을 읽는 근거(harness-io/locate.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS transcript_path TEXT;`);
   // #1059 — **사용자 정상 종료** 표시(exited_at). claude SessionEnd 훅이 reason=prompt_input_exit(/exit·Ctrl-D)·logout

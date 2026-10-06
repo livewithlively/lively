@@ -22,7 +22,7 @@
 //   완전 삭제(purgeSessionLog)·보존기간 정리(reapSessionLogs)가 이 두 표도 함께 지운다(session-log-store.ts).
 //   색인이 남으면 지운 대화가 검색으로 되살아난다.
 import { itemsPool, withTx } from "../db/client.js";
-import { readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
+import { convProjectIdSql, readSessionLog, sessionWorkspaceWhere } from "./session-log-store.js";
 import { readAlignedWindow, prefetchReader, type ByteReader } from "../terminal/harness-io/window.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { parseJsonLines, type ChatLine, type ParseResult, type ParseState } from "../terminal/harness-io/chat-line.js";
@@ -320,7 +320,8 @@ export interface ConvSearchResult {
    *  글자로는 안 맞고 **뜻으로만** 온 줄은 fields 가 비고 best 가 없다 — 화면이 «뜻이 비슷함» 이라고 말한다. */
   sem?: number;
   /** 이 세션이 붙어 있는 프로젝트 이름 — 목록 줄의 «어디에 있는 것인가»(#4530 안 A). 볼 수 있는 세션만 결과에 서므로 새는 것이 아니다
-   *  (초대받은 세션은 그 프로젝트가 가려져 있으면 allowedInvites 가 세션째 뺀다). */
+   *  (초대받은 세션은 그 프로젝트가 가려져 있으면 allowedInvites 가 세션째 뺀다). 값은 «이 대화의 지금 프로젝트»(convProjectIdSql) —
+   *  대화에 안 적힌 기록을 박스의 프로젝트로 읽어 주는 것은 내 기록뿐이다(초대받아 보는 남의 기록은 대화에 적힌 것만). */
   project: string | null;
 }
 
@@ -333,7 +334,7 @@ export interface ConvSearchResult {
  *  ⚠ 휴지통 표식은 주인의 것이다(t.owner = s.owner) — 주인이 버린 세션은 초대받은 사람의 검색에서도 빠진다(지운 것으로 다룬다).
  *   표식은 대화 uuid 로도, 그 대화를 돌린 박스 id 로도 붙는다(session-trash-ops resolveMine).
  */
-function visibleSql(params: unknown[], input: Pick<ConvSearchInput, "requester" | "attach" | "workspaceId">): { ctes: string; where: string } {
+function visibleSql(params: unknown[], input: Pick<ConvSearchInput, "requester" | "attach" | "workspaceId">): { ctes: string; where: string; me: string } {
   params.push(input.requester); const me = `$${params.length}`;
   params.push(!!input.attach); const att = `$${params.length}`;
   const ctes = `inv AS (
@@ -351,7 +352,8 @@ function visibleSql(params: unknown[], input: Pick<ConvSearchInput, "requester" 
     `NOT EXISTS (SELECT 1 FROM trashed x WHERE x.owner = s.owner AND x.sid = s.session_id)`,
   ];
   if (input.workspaceId) wh.push(sessionWorkspaceWhere(params, input.workspaceId));
-  return { ctes, where: wh.join(" AND ") };
+  //  me = 보는 사람의 자리표 — «이 대화의 지금 프로젝트»(convProjectIdSql)가 박스를 주인 본인에게만 읽어 주는 데 쓴다.
+  return { ctes, where: wh.join(" AND "), me };
 }
 
 /** 시간 상한을 건 읽기 — 공유 풀(최대 20)을 오래 쥐지 않는다(#936 자료 검색이 풀을 말린 사고와 같은 자리).
@@ -573,9 +575,7 @@ async function collectAggs(input: ConvSearchInput, terms: QueryTerm[], o: Collec
        JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql(v.me, "agg.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -625,7 +625,7 @@ export function termNumber(t: QueryTerm): number | null {
 interface IdentRow { node_id: string; session_id: string; owner: string | null; title: string | null; label: string | null; project: string | null; last_seen: string | null; nums: number[] }
 /**
  * 그 번호들에 묶인 세션(볼 수 있는 것만 · 최근 것부터 200개까지).
- *  · 프로젝트 번호 — 지금 그 프로젝트에 묶여 있는 세션(session_project 의 가장 늦은 묶음).
+ *  · 프로젝트 번호 — 지금 그 프로젝트에 묶여 있는 세션(«이 대화의 지금 프로젝트» — 세션 목록과 같은 한 벌, convProjectIdSql).
  *  · 태스크 번호 — 그 태스크를 맡은 실행 세션(execution_session_task)이 돌린 대화. 실행 세션 id 는 박스 id 라, 그 박스가 돌린 대화
  *    (org_session_conv · org_session_state.claude_session_id)로 편다(기록만 남은 행은 id 자체가 대화 id 다).
  */
@@ -641,32 +641,33 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
          FROM session s
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id AND l.bytes > 0
         WHERE ${v.where}),
-     bound AS (
-       SELECT sp.session_id AS conv, sp.project_id AS num
-         FROM session_project sp
-        WHERE sp.project_id = ANY(${nP}::int[])
-          AND NOT EXISTS (SELECT 1 FROM session_project later WHERE later.session_id = sp.session_id AND later.valid_from > sp.valid_from)
-       UNION
-       SELECT c.conv, t.task_id
-         FROM execution_session_task t
-         JOIN LATERAL (
-           SELECT t.session_id AS conv
-           UNION SELECT oc.conv_uuid FROM org_session_conv oc WHERE oc.box_id = t.session_id
-           UNION SELECT st.claude_session_id FROM org_session_state st WHERE st.id = t.session_id AND st.claude_session_id IS NOT NULL
-         ) c ON true
-        WHERE t.task_id = ANY(${nP}::int[])),
+     byproj AS (
+       -- 보이는 세션마다 «지금 프로젝트» 를 한 번 재고 그 줄을 그대로 싣는다 — vis 와 다시 잇지 않는다(잇는 쪽은 줄 수 추정이 없어
+       --  중첩 루프로 풀린다: 격리 리뷰 실측, 보이는 세션 6천 · 한 프로젝트에 1600 → 411ms).
+       SELECT vis.node_id, vis.session_id, cp.num
+         FROM vis CROSS JOIN LATERAL (SELECT ${convProjectIdSql(v.me, "vis.session_id", "vis.owner")} AS num) cp
+        WHERE cp.num = ANY(${nP}::int[])),
+     bytask AS (
+       SELECT vis.node_id, vis.session_id, b.num
+         FROM (SELECT c.conv, t.task_id AS num
+                 FROM execution_session_task t
+                 JOIN LATERAL (
+                   SELECT t.session_id AS conv
+                   UNION SELECT oc.conv_uuid FROM org_session_conv oc WHERE oc.box_id = t.session_id
+                   UNION SELECT st.claude_session_id FROM org_session_state st WHERE st.id = t.session_id AND st.claude_session_id IS NOT NULL
+                 ) c ON true
+                WHERE t.task_id = ANY(${nP}::int[])) b
+         JOIN vis ON vis.session_id = b.conv),
      hit AS (
-       SELECT vis.node_id, vis.session_id, array_agg(DISTINCT bound.num) AS nums
-         FROM bound JOIN vis ON vis.session_id = bound.conv
-        GROUP BY vis.node_id, vis.session_id)
+       SELECT u.node_id, u.session_id, array_agg(DISTINCT u.num) AS nums
+         FROM (SELECT node_id, session_id, num FROM byproj UNION ALL SELECT node_id, session_id, num FROM bytask) u
+        GROUP BY u.node_id, u.session_id)
      SELECT hit.node_id, hit.session_id, hit.nums, vis.owner, vis.title, vis.last_seen, proj.project_name, nm.label
        FROM hit
        JOIN vis ON vis.node_id = hit.node_id AND vis.session_id = hit.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = hit.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql(v.me, "hit.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -725,9 +726,7 @@ async function semanticSessions(input: ConvSearchInput, vec: number[]): Promise<
        JOIN vis ON vis.node_id = near.node_id AND vis.session_id = near.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = near.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql(v.me, "near.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
@@ -1125,8 +1124,8 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
   // ① 낱말이 든 말이 있는 세션 — 낱말이 많이 모인 말이 있는 세션, 그다음 늦게 맞은 세션부터 상한까지.
   const p1: unknown[] = [];
   const v = visibleSql(p1, input);
-  //  프로젝트 거르개는 «지금 붙어 있는 프로젝트»(마지막 구간) — 세션 목록이 프로젝트를 읽는 자와 같다(listSessionsForOwner).
-  const lastProj = `(SELECT sp.project_id FROM session_project sp WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1)`;
+  //  프로젝트 거르개는 «이 대화의 지금 프로젝트» — 세션 목록이 프로젝트를 읽는 자와 같은 한 벌이다(convProjectIdSql).
+  const lastProj = convProjectIdSql(v.me);
   let projSql = "";
   if (input.projectId != null && Number.isInteger(input.projectId) && input.projectId >= 0) {
     if (input.projectId === 0) projSql = ` AND ${lastProj} IS NULL`;
@@ -1156,9 +1155,7 @@ export async function searchConvMessages(input: ConvMsgSearchInput): Promise<Con
        JOIN vis ON vis.node_id = agg.node_id AND vis.session_id = agg.session_id
        LEFT JOIN LATERAL (
          SELECT p.name AS project_name
-           FROM (SELECT sp.project_id FROM session_project sp
-                  WHERE sp.session_id = agg.session_id ORDER BY sp.valid_from DESC LIMIT 1) last
-           JOIN project p ON p.id = last.project_id
+           FROM project p WHERE p.id = ${convProjectIdSql(v.me, "agg.session_id", "vis.owner")}
        ) proj ON true
        LEFT JOIN LATERAL (
          SELECT st.label FROM org_session_state st
