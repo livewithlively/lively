@@ -59,6 +59,9 @@ import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta, getSessionStates } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { applyTaskMarks, missingOrigins, taskOriginsForRows, visibleOriginStates, type OriginRowLike } from "../node/task-origin.js";   // #4551 — 위탁 워커에 «누가 시켰나» 표식
+import { projectIdForSessionCoord } from "../project/folder-bind.js";   // #4551 — 프로젝트 폴더에서 여는 세션은 그 프로젝트의 세션이다
+import { isWorkSession } from "../sessions/session-kind.js";
+import { viewerOf } from "../capabilities/principal.js";
 import { cleanLastPrompt } from "./last-prompt.js";
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
@@ -1100,6 +1103,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // 홈 컴포저(첫 지시를 이미 들고 여는 미소속 세션)는 **프로젝트를 먼저 만들고 그 폴더에서** 연다(#1867).
     //  종전엔 개인 루트에서 열고 훅이 뒤늦게 소속만 붙여, 그 세션의 파일·워크트리가 개인 루트에 흩어졌다.
     //  실패하면 그냥 종전 경로(개인 루트) — 세션 생성을 막지 않는다. 빈 세션·앱·로그인·읽기전용은 대상이 아니다(순수 판정).
+    //  #4551 — 프로젝트 폴더를 좌표로 골라 여는 세션은 그 프로젝트에 묶는다(src/project/folder-bind.ts 머리말).
+    //   사람의 작업 세션만(위탁 · 앱 · 로그인은 프로젝트를 갖지 않는다 — session-kind.ts). 실행 모드(읽기전용 · 인코그니토)는
+    //   가리지 않는다 — 프로젝트 입구도 그 모드의 세션을 그 프로젝트에 묶는다. 같은 폴더면 어느 문으로 오든 같은 소속이다.
+    //   볼 수 없는 프로젝트면 아무것도 안 한다 — 종전대로 소속 없이 열린다.
+    //   ⚠ 노드에서 여는 세션은 뺀다 — 그 좌표의 subpath 는 **그 컴퓨터의** 경로라 서버의 프로젝트 폴더와 뜻이 다르다.
+    if (!input.projectId && isWorkSession(input.kind) && !String(b.node ?? "").trim()) {
+      const pid = await projectIdForSessionCoord(input.rootKey, input.subpath, viewerOf(userOf(req)));
+      if (pid) { input.projectId = pid; input.projectSrc = "v6"; }
+    }
     const shellSpec = firstPromptProjectPlan(input);
     //  #4302 — 아래에서 만든 껍데기의 손잡이. 세션 띄우기가 실패하면 이걸로 프로젝트를 되돌린다.
     let shell: ShellHandle | null = null;
