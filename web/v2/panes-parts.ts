@@ -23,7 +23,7 @@ import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세�
 import { tasksPart } from './panes-tasks.js';
 import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
 import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
-import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
+import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
@@ -1320,7 +1320,10 @@ function viewerPart(ctx: PartCtx): Part {
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
-        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))), 'scale', () => 0);
+        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000), {
+          //  #4582 — md 의 상대경로 그림(`![](img/a.png)`)은 이 파일 폴더 기준으로 같은 파일 API 로 받는다.
+          imgFetch: mdImgFetch(p2, (p) => fetch(fileUrl(p), fetchOpts)),
+        })), 'scale', () => 0);
       } else {
         show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
       }
@@ -1363,6 +1366,7 @@ function viewerPart(ctx: PartCtx): Part {
       size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      path: p2, fetchRel: (p) => fetch(fileUrl(p), fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
       mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),
     }).catch(() => null);

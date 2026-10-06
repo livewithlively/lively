@@ -159,6 +159,7 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
         name, size,
         fetchView: () => authFetch(viewUrl),
         fetchDownload: () => authFetch(dlUrl),
+        path: rel, fetchRel: (p: string) => authFetch(sUrl('/file?path=' + encodeURIComponent(p))),   // #4582 md 상대경로 그림
         cls: { img: 'fx-p-img', pdf: 'fx-p-pdf', md: 'fx-p-md', code: 'fx-p-code', html: 'fx-p-pdf', table: 'fx-p-table', audio: 'fx-p-audio', video: 'fx-p-video', msg: 'fx-p-msg' },
         pdfHash: '#navpanes=0&toolbar=1&view=FitH',   // 우패널은 좁다 — 썸네일 사이드바를 끈다
         mkBtn,

@@ -165,6 +165,7 @@ async function showFile(root: string, rel: string, name: string, entry: any, sta
       name, size,
       fetchView: () => fileFetch(viewUrl),
       fetchDownload: () => fileFetch(dlUrl),
+      path: rel, fetchRel: (p) => fileFetch('/api/ui/terminal/browse/file?' + browseQs(root, p)),   // #4582 md 상대경로 그림
       cls: { img: 'fpg-img', pdf: 'fpg-pdf', html: 'fpg-html', md: 'fpg-md', code: 'fpg-code', table: 'fpg-table', audio: 'fpg-audio', video: 'fpg-video', msg: 'fpg-msg' },
       pdfHash: '#toolbar=1&view=FitH',
       mkBtn,

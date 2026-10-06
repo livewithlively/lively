@@ -682,6 +682,8 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       size: Number(f.bytes) || undefined,
       fetchView: () => ffetch(viewUrl),
       fetchDownload: () => ffetch(dlUrl),
+      //  #4582 md 상대경로 그림 — 공유 폴더 좌표(co)를 알 때만. 원본 주소(orig)뿐이면 폴더를 모른다.
+      ...(orig ? {} : { path: co.path, fetchRel: (p: string) => ffetch('/api/ui/terminal/browse/file?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(p)) }),
       cls: { img: 'v2-srd-img', pdf: 'v2-srd-pdf', html: 'v2-srd-html', md: 'md-rendered', code: 'v2-srd-code', table: 'v2-srd-table', audio: 'v2-srd-media', video: 'v2-srd-media', msg: 'v2-srd-msg' },
       mkBtn: (label, onClick) => el('button', { class: 'btn btn-sm', type: 'button', text: label, onclick: onClick }),
     }).then((out) => { if (document.contains(bodyBox)) bodyBox.replaceChildren(out.body); })

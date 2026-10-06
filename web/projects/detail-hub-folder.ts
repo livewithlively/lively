@@ -88,6 +88,7 @@ function previewStage(pid: number, B: string, f: Picked): { node: HTMLElement; s
       const out = await buildFilePreview({
         name: f.name, size: f.size || undefined,
         fetchView: () => get(url), fetchDownload: () => get(url + '&download=1'),
+        path: f.path, fetchRel: (p) => get(B + pid + '/file?path=' + encodeURIComponent(p)),   // #4582 md 상대경로 그림
         mkBtn: (label: string, onClick: () => void) => el('button', { class: 'pjh-sbtn ghost', type: 'button', text: label, onclick: onClick }),
       });
       if (!node.isConnected) return;
