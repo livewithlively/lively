@@ -58,7 +58,9 @@ export interface ProjectStorage {
   /** 디렉터리 한 칸(숨김 제외). 못 읽으면 null */
   list(abs: string): Promise<StorageEntry[] | null>;
   /** 이름에 q 가 든 파일·폴더(숨김 제외, 깊이·결과 상한) */
-  search(q: string, limit?: number): Promise<StorageHit[]>;
+  /** skipHeavy — `node_modules`·git 레포 서브트리에 들어가지 않는다(#4562 터미널 경로 열기의 «뒤쪽만 준 경로» 찾기 — 한 번 클릭에
+   *  레포 전체를 걷지 않게). 자료 탭 검색은 종전대로(옵션 없음). */
+  search(q: string, limit?: number, opts?: { skipHeavy?: boolean }): Promise<StorageHit[]>;
   /** 동기화 매니페스트(project-manifest 규칙) */
   manifest(limit?: number): Promise<Manifest>;
   stat(abs: string): Promise<StorageStat | null>;
@@ -128,7 +130,7 @@ export async function localList(abs: string): Promise<StorageEntry[] | null> {
 }
 
 // 이름에 q 가 든 파일/폴더 재귀 검색(숨김 제외, 깊이·결과 상한). 종전 project-routes.searchFiles 그대로.
-export async function localSearch(base: string, q: string, limit = 100): Promise<StorageHit[]> {
+export async function localSearch(base: string, q: string, limit = 100, skipHeavy = false): Promise<StorageHit[]> {
   const out: StorageHit[] = [];
   const needle = q.toLowerCase();
   async function walk(dir: string, rel: string, depth: number): Promise<void> {
@@ -145,6 +147,7 @@ export async function localSearch(base: string, q: string, limit = 100): Promise
         out.push({ name: e.name, path: childRel, type: isDir ? "dir" : "file", size, mtime });
         if (out.length >= limit) return;
       }
+      if (isDir && skipHeavy && (e.name === "node_modules" || await fsp.access(path.join(dir, e.name, ".git")).then(() => true, () => false))) continue;
       if (isDir) await walk(path.join(dir, e.name), childRel, depth + 1);
     }
   }
@@ -156,7 +159,7 @@ function localStorage(base: string, project: StorageProject | null): ProjectStor
   return {
     base, osUser: null, localBase: base, project,
     list: localList,
-    search: (q, limit) => localSearch(base, q, limit),
+    search: (q, limit, opts) => localSearch(base, q, limit, !!opts?.skipHeavy),
     manifest: (limit = MANIFEST_FILE_CAP) => manifestFiles(base, limit),
     async stat(abs) {
       try { const s = await fsp.stat(abs); return { file: s.isFile(), dir: s.isDirectory(), size: s.size, mtime: Math.floor(s.mtimeMs) }; }
@@ -225,6 +228,7 @@ export const PROJECT_SEARCH_JS = stdinJs(
   "for(const e of es){if(e.name.startsWith('.'))continue;const cr2=rel?rel+'/'+e.name:e.name;const isDir=e.isDirectory();" +
   "if(e.name.toLowerCase().includes(n)){let s=0,m=0;try{const st=fs.statSync(p.join(dir,e.name));m=Math.floor(st.mtimeMs);if(!isDir)s=st.size}catch(x){}" +
   "r.push({name:e.name,path:cr2,type:isDir?'dir':'file',size:s,mtime:m});if(r.length>=q.limit)return}" +
+  "if(isDir&&q.skipHeavy&&(e.name==='node_modules'||fs.existsSync(p.join(dir,e.name,'.git'))))continue;" +
   "if(isDir)walk(p.join(dir,e.name),cr2,depth+1)}};walk(q.base,'',0);" + out("r"));
 
 /** project-manifest.manifestFiles 와 같은 사양 — 파일만 · 숨김 제외 · git 레포 서브트리 제외 · 상한이면 truncated */
@@ -274,7 +278,7 @@ function memberStorage(base: string, osUser: string, localBase: string, project:
   const self: ProjectStorage = {
     base, osUser, localBase, project,
     list: (abs) => memberNodeJson<StorageEntry[] | null>(osUser, PROJECT_LIST_JS, { dir: abs }),
-    search: async (q, limit = 100) => (await memberNodeJson<StorageHit[] | null>(osUser, PROJECT_SEARCH_JS, { base, q, limit })) ?? [],
+    search: async (q, limit = 100, opts) => (await memberNodeJson<StorageHit[] | null>(osUser, PROJECT_SEARCH_JS, { base, q, limit, skipHeavy: !!opts?.skipHeavy })) ?? [],
     manifest: async (limit = MANIFEST_FILE_CAP) =>
       (await memberNodeJson<Manifest | null>(osUser, PROJECT_MANIFEST_JS, { base, limit })) ?? { files: [], truncated: false },
     async stat(abs) {

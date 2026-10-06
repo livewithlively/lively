@@ -53,7 +53,7 @@ import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
-import { isAbs, pathOpenPlans, slash, type PathOpenPlan } from '../lib/path-open.js';
+import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../lib/path-open.js';
 import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
@@ -961,6 +961,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  ⚠ 열 수 있나는 **곧바로** 정하고 할 일은 미뤄서 돌려준다 — 답(ack)을 일보다 먼저 보내야 한다. 칸을 세우는 일이 터미널의
   //   기다림(400ms)보다 길어지면 터미널이 새 탭을 한 번 더 연다(리뷰 지적).
   //  어디서 열지는 lib/path-open 한 곳(순수 — 시험 대상)이 정한다. 경로는 터미널이 걸렀어도 거기서 다시 거른다.
+  let pathOpenSeq = 0;   // 터미널 경로 열기 — 가장 나중에 누른 것만 연다(planPathOpen)
   function planPathOpen(d: any): (() => void) | null {
     const plans = pathOpenPlans(d || {}, { projectId: id, loose, sessDir: (sid) => (sessRow(sid) ? sessDir(sid) : null) });
     if (!plans.length) return null;
@@ -973,18 +974,50 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (plan.via === 'session') openOut(plan.sid, { kind: 'file', label: plan.rel.split('/').pop() || plan.rel, ext: '', path: plan.rel });
       else openViewerAt({ path: plan.rel });
     };
-    if (plans.length === 1) return () => open(plans[0]);
-    //  후보가 여럿(빈칸 든 상대 경로) — 실제로 있는 첫 것을 연다. 하나도 없으면 화면에 그어진 경로(맨 끝)를 연다(뷰어가 «못 읽었어요»).
-    //  묻기는 한꺼번에(노드 세션의 목록은 노드 왕복이라 줄 세우면 후보 수만큼 늦다), 고르기는 후보 순서대로.
+    //  실제로 있는 첫 후보를 연다(빈칸 든 상대 경로는 후보가 여럿). 묻기는 한꺼번에(노드 세션의 목록은 노드 왕복이라 줄 세우면
+    //   후보 수만큼 늦다), 고르기는 후보 순서대로.
+    //  ★ 하나도 없으면 — AI 가 경로의 **뒤쪽만** 준 것일 수 있다(원준님 10-06 «풀링크를 안주고 경로의 뒤쪽만 요약해서»).
+    //   프로젝트 자료에서 그 꼴로 끝나는 파일을 찾아 연다(lib/path-open pickTailHit). 그래도 없으면 화면의 경로(맨 끝)를 연다 —
+    //   뷰어가 «찾을 수 없다» 를 그 경로와 함께 보여 준다(조용히 아무 일도 안 하는 것보다 낫다).
+    //  ⚠ 묻는 사이(최대 몇 초) 사람이 다른 경로를 또 눌렀으면 **나중 것이 이긴다**(openSeq) · 그 사이 탭이 닫혔으면 아무것도 안 한다.
+    const my = ++pathOpenSeq;
+    const live = (): boolean => my === pathOpenSeq && wrap.isConnected;
     return () => { void (async () => {
       const found = await Promise.all(plans.map((plan) => pathExists(plan)));
+      if (!live()) return;
       const i = found.indexOf(true);
-      open(plans[i >= 0 ? i : plans.length - 1]);
+      if (i >= 0) { open(plans[i]); return; }
+      const hit = await findByTail(plans.map((plan) => plan.rel));
+      if (!live()) return;
+      if (hit) { open({ via: 'project', rel: hit }); return; }
+      open(plans[plans.length - 1]);
     })(); };
+  }
+  /** 프로젝트 자료에서 이 꼴(들)로 끝나는 파일 — 자료 검색(이름에 낱말이 든 것)으로 후보를 받아 마디 경계로 견준다. 없으면 null.
+   *  프로젝트 없는 화면이면 찾을 자리가 없다. 맥 노드의 NFD 이름도 걸리게 NFC·NFD 두 꼴로 묻는다. */
+  //  ⚠ 못 찾은 검색은 프로젝트 폴더를 끝까지 걷는다 — 그래서 `skip=heavy`(node_modules·git 레포 속은 안 걷는다), 두 꼴을 한꺼번에,
+  //   3초 상한(넘으면 «못 찾았다»). `.` 으로 시작하는 이름은 서버 검색이 애초에 건너뛰므로 묻지 않는다(리뷰 차단 지적).
+  async function findByTail(tails: string[]): Promise<string | null> {
+    if (loose || !(id > 0)) return null;
+    const name = (tails[0] || '').split('/').pop() || '';
+    if (!name || name.startsWith('.')) return null;
+    const headers: Record<string, string> = {};
+    const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(3000) : undefined;
+    const ask = async (q: string): Promise<Array<{ path?: unknown; type?: unknown; mtime?: unknown }>> => {
+      try {
+        const r = await fetch(apiUrl('/api/ui/v6/projects/' + id + '/files?skip=heavy&q=' + encodeURIComponent(q)), { headers, credentials: 'same-origin', cache: 'no-store', signal });
+        const j = r.ok ? await r.json() : null;
+        return Array.isArray(j?.items) ? j.items : [];
+      } catch (_) { return []; }   // 못 물었다·3초 넘었다 — 못 찾은 것으로
+    };
+    const lists = await Promise.all([...new Set([name.normalize('NFC'), name.normalize('NFD')])].map(ask));
+    return pickTailHit(lists.flat(), tails, lists.some((l) => l.length >= 100));   // 상한(100)에 닿았으면 다 못 본 것
   }
   /** 그 자리에 파일이 있나 — 프로젝트 자료는 HEAD(몸통 없이), 세션 폴더는 부모 폴더 목록(세션 파일 API 의 HEAD 는 몸통까지 흘린다).
    *  이름은 NFC 로 견준다(맥 노드의 목록은 NFD 로 올 수 있다). 묻지 못하면 «없다» — 다음 후보로 간다.
-   *  ⚠ 세션 목록(ls)은 `.` 으로 시작하는 이름을 숨긴다 — 그런 후보는 늘 «없다» 로 읽혀 화면의 경로(맨 끝)로 떨어진다(무해). */
+   *  ⚠ 세션 목록(ls)은 `.` 으로 시작하는 이름을 숨긴다 — 그런 후보는 늘 «없다» 로 읽힌다. 꼬리 찾기(findByTail)도 그 이름은
+   *   묻지 않으므로 화면의 경로(맨 끝)로 떨어진다. */
   async function pathExists(plan: PathOpenPlan): Promise<boolean> {
     const headers: Record<string, string> = {};
     const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
