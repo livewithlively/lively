@@ -22,7 +22,7 @@ for (const f of [pathLinkTarget, linkMatches, urlAtColumn, urlAtCell, urlSpansAt
 const LIB = process.env.PATH_OPEN_SRC || join(root, "web/lib/path-open.ts");
 const out = mkdtempSync(join(tmpdir(), "path-open-"));
 execFileSync(join(root, "node_modules/.bin/tsc"), [LIB, "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"], { stdio: "inherit" });
-const { pathOpenPlan, pathOpenPlans } = await import(join(out, path.basename(LIB).replace(/\.ts$/, ".js")));
+const { pathOpenPlan, pathOpenPlans, pickTailHit } = await import(join(out, path.basename(LIB).replace(/\.ts$/, ".js")));
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -242,6 +242,22 @@ t("L6 후보 여럿 → 길 여럿(순서 그대로, 같은 길은 한 번) · �
   assert.deepEqual(plans, [{ via: "session", sid: "s1", rel: "데모데이 발표덱/a.md" }, { via: "session", sid: "s1", rel: "발표덱/a.md" }]);
   assert.deepEqual(pathOpenPlans(msg("docs/a.md"), here()), [{ via: "session", sid: "s1", rel: "docs/a.md" }]);
   assert.deepEqual(pathOpenPlans({ sid: "남의세션", cands: [c("docs/a.md")] }, here()), []);
+});
+t("L7 뒤쪽만 준 경로 — 자료에서 그 꼴로 끝나는 파일을 고른다(원준님 10-06 «풀링크를 안주고 경로의 뒤쪽만»)", () => {
+  const F = (p, m = 0, type = "file") => ({ path: p, type, mtime: m });
+  const hits = [F("데모데이 발표덱/원준수정/x.html", 100), F("옛판/원준수정/x.html", 50), F("x.html", 10), F("ab/원준수정/x.html", 1), F("원준수정/x.html", 0, "dir")];
+  assert.equal(pickTailHit(hits, ["원준수정/x.html"]), "데모데이 발표덱/원준수정/x.html", "그 꼴로 끝나는 것 중 가장 최근");
+  assert.equal(pickTailHit(hits, ["x.html"]), null, "이름 하나뿐인 꼴이 여럿에 맞으면 고르지 않는다(엉뚱한 파일보다 «못 찾았다»)");
+  assert.equal(pickTailHit([F("a/b/보고서.md", 3)], ["보고서.md"]), "a/b/보고서.md", "이름 하나뿐이어도 딱 하나면 연다");
+  assert.equal(pickTailHit([F("a/b/보고서.md", 3)], ["보고서.md"], true), null, "검색이 상한에서 끊겼으면 «딱 하나» 를 믿지 않는다");
+  assert.equal(pickTailHit([F("a/원준수정/x.html", 3)], ["원준수정/x.html"], true), "a/원준수정/x.html", "마디 둘 이상이면 끊겼어도 연다");
+  assert.equal(pickTailHit([F("node_modules/x/README.md", 9), F("docs/README.md", 1)], ["README.md"]), "docs/README.md", "node_modules 속은 보지 않는다");
+  assert.equal(pickTailHit([F("app/node_modules/a/b.md", 9)], ["a/b.md"]), null);
+  assert.equal(pickTailHit([F("ab/x.md", 9)], ["b/x.md"]), null, "마디 경계로만 — ab/x.md 는 b/x.md 가 아니다");
+  assert.equal(pickTailHit([F("docs/x.md", 1)], ["docs/x.md"]), "docs/x.md", "그대로 같은 것");
+  assert.equal(pickTailHit([F("a/원준수정/x.html".normalize("NFD"), 5)], ["원준수정/x.html"]), "a/원준수정/x.html".normalize("NFD"), "맥 노드의 NFD 이름");
+  assert.equal(pickTailHit([F("원준수정", 5, "dir")], ["원준수정"]), null, "폴더는 열지 않는다");
+  assert.equal(pickTailHit([F("p/긴 이름/x.md", 1), F("q/x.md", 9)], ["긴 이름/x.md", "x.md"]), "p/긴 이름/x.md", "후보 순서(긴 것 먼저)가 최근보다 앞선다");
 });
 t("L5 셸이 다시 거른다 — 터미널을 거치지 않은 알림의 .. · 빈 마디 · 절대 rel", () => {
   for (const rel of ["../x.md", "a/../../x.md", "a//x.md", "/etc/passwd", ""]) {

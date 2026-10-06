@@ -209,6 +209,24 @@ test("S2c 검색 — 대소문자 무시 · 숨김 제외 · 깊이 상한 · �
   assert.deepEqual(await S.localSearch(TREE, "secret", 100), [], "숨김 파일은 이름이 맞아도 안 나온다");
 });
 
+test("S2c2 무거운 곳 건너뛰기(skipHeavy, #4562 터미널 경로 꼬리 찾기) — node_modules·git 레포 속은 안 걷는다 · 두 구현이 같다", async () => {
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), "pstore-heavy-"));
+  for (const f of ["docs/a.md", "node_modules/pkg/a.md", "repo/.git/HEAD", "repo/src/a.md", "deep/x/a.md"]) {
+    fs.mkdirSync(path.dirname(path.join(T, f)), { recursive: true });
+    fs.writeFileSync(path.join(T, f), "x");
+  }
+  try {
+    const all = (await S.localSearch(T, "a.md", 100)).map((h) => h.path).sort();
+    assert.deepEqual(all, ["deep/x/a.md", "docs/a.md", "node_modules/pkg/a.md", "repo/src/a.md"], "옵션 없으면 종전대로 전부(자료 탭 검색)");
+    const light = (await S.localSearch(T, "a.md", 100, true)).map((h) => h.path).sort();
+    assert.deepEqual(light, ["deep/x/a.md", "docs/a.md"]);
+    const member = (runJs(S.PROJECT_SEARCH_JS, { base: T, q: "a.md", limit: 100, skipHeavy: true }) as Array<{ path: string }>).map((h) => h.path).sort();
+    assert.deepEqual(member, light, "멤버 저장소 구현도 같은 답");
+    const memberAll = (runJs(S.PROJECT_SEARCH_JS, { base: T, q: "a.md", limit: 100 }) as Array<{ path: string }>).map((h) => h.path).sort();
+    assert.deepEqual(memberAll, all);
+  } finally { fs.rmSync(T, { recursive: true, force: true }); }
+});
+
 test("S2d 매니페스트 — 파일만 · 숨김 제외 · 레포 서브트리 제외", async () => {
   const local = await manifestFiles(TREE);
   assert.deepEqual(runJs(S.PROJECT_MANIFEST_JS, { base: TREE, limit: 5000 }), local);
