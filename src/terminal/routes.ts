@@ -16,7 +16,7 @@ import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, isBgCount, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
@@ -1590,6 +1590,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const id = req.params.id;
     const raw = ((req.body ?? {}) as Record<string, unknown>).state;
     const phase = isReportedPhase(raw) ? raw : undefined;   // 모르는 값은 조용히 무시(활동 보고만) — 훅이 앞서갈 수 있다
+    //  #4588 — 턴 끝(idle)의 «열린 백그라운드 작업 수». 형식이 틀리거나 없으면 null(=모른다 → 목록은 종전대로 화면을 믿는다).
+    const rawBg = ((req.body ?? {}) as Record<string, unknown>).bg;
+    const bg = phase === "idle" && isBgCount(rawBg) ? rawBg : null;
     const me = idOf(userOf(req));
     const st = await getSessionState(id);
     // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
@@ -1597,7 +1600,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const stNodeId = relayNodeId(st?.node_id, isSelfNode);
     if (st && !stNodeId) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
-      const change = await markSessionActive(id, phase).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      const change = await markSessionActive(id, phase, undefined, bg).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       if (change) void notifyPhaseChange(id, me, change);   // 응답을 막지 않는다 — 훅은 핫패스다
@@ -1614,7 +1617,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
     if (nodeSupports(ns.node.id, "markActive")) {
-      const relay = await nodeRpc(ns.node.id, "markActive", { id, state: phase })
+      const relay = await nodeRpc(ns.node.id, "markActive", bg === null ? { id, state: phase } : { id, state: phase, bg })
         .catch((e) => { logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"); return null; });
       // #1842 — 노드가 돌려준 전이를 그대로 민다. 구 노드는 change 를 안 보내므로 undefined → 폴링이 커버한다(무회귀).
       const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;

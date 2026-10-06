@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
+import { countOpenJobs } from "./bg-jobs.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -330,12 +331,22 @@ try {
     const phase = reportedPhase(input, event);
     const jobs = [];
     if (token && phase) {
+      //  #4588 — idle 보고(턴 끝 Stop · 입력창이 오래 논다는 Notification idle_prompt)엔 **이 대화가 띄우고 아직 안 끝난
+      //   백그라운드 작업 수**를 함께 싣는다(bg-jobs.mjs 머리말). 화면의 «… · 1 shell still running» 은 AI 가 기다리는 작업과
+      //   어긋날 수 있다 — 서버는 이 수가 0 이면 그 화면으로 파란 점을 켜지 않는다. ⚠ Stop 에서만 세면 idle_prompt 의 bg 없는 idle 이
+      //   서버의 bg=0 을 덮어 점이 되살아난다(격리 리뷰 지적 — 몇 시간 노는 세션은 반드시 이 알림을 거친다).
+      //   대화 기록 문구가 Claude Code 의 것이라 claude 만 센다. 못 세면(null) 안 싣는다(=종전대로 화면을 믿는다).
+      const bg = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
+        ? countOpenJobs(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
+      const report = bg === null ? { state: phase } : { state: phase, bg };
+      //  같은 보고의 반복만 스로틀한다 — 작업 수가 바뀐 idle 은 새 보고다.
+      const key = bg === null ? phase : `${phase} bg=${bg}`;
       const stateFile = join(FLAG_DIR, `${boxId}.state`);
       let last = ""; try { last = readFileSync(stateFile, "utf8").trim(); } catch { /* 첫 보고 */ }
-      if (last !== phase || !cooling(stateFile, 60_000)) {
+      if (last !== key || !cooling(stateFile, 60_000)) {
         mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
-        writeFileSync(stateFile, phase);
-        jobs.push(post("/active", { state: phase }));
+        writeFileSync(stateFile, key);
+        jobs.push(post("/active", report));
       }
     }
     // #2197 — 사람이 **방금 친 말**을 그 순간 보고한다(사이드바 세션 행 둘째 줄의 정본 — 종전엔 화면이 대화 꼬리를 뒤졌고,

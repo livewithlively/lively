@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd·UserPromptSubmit·Notification·Stop
-//  으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
+//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact))으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
 //  (종전엔 게이트웨이가 tmux 화면을 훔쳐보는 휴리스틱이었다 — reportedPhase 주석 참조). 이벤트별 동작:
 //  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
 //      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
@@ -11,6 +11,9 @@
 //  - Edit/Write 류 툴       → <session_id>.worked   (이 세션에서 의미있는 파일 작업을 했다)
 //  - lively MCP 쓰기 툴     → <session_id>.writeback (이미 컨텍스트 스토어에 기록했다)
 //  - lively MCP 아무 툴      → <session_id>.lively    (이 세션은 'lively work' 세션 — 자가 게이팅 신호, 읽기/쓰기 무관)
+//  - 기록 fork 백그라운드 띄움 → <session_id>.writeback-pending.<자식 id> (그 자식의 SubagentStop 이 걷는다, #4217)
+//  - 기록 넛지(#4219, record-nudge.mjs) → 메인이 인라인 텍스트 기록을 한 턴에 1,000자 이상 쓰면 PostToolUse 교정 문구,
+//      압축 때 미기록 작업이 있으면 claude PreCompact 요약 지시문 + 압축 직후 SessionStart(compact) 알림. 막지는 않는다.
 // stop-writeback-gate.mjs 가 이 플래그로 종료 시점에 1회 기록 너지를 결정한다(결정적, LLM 호출 0).
 //   .lively 는 게이트 자가 게이팅(등록 work-root 밖에서도 lively 세션이면 게이트 작동)에 쓰인다.
 // 게이트웨이 호출 없음(경로→도메인 lookup 엔드포인트 부재 — 스코프 fallback 조항대로 플래그만).
@@ -19,9 +22,30 @@
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
 // ⚠ argv 는 안 본다 — session-preload 가 자체설치 MCP 커버용 엔트리를 `work-flag.mjs --ext-pull` 로 배선하는데(#959),
 //  그 sentinel 인자는 settings 엔트리를 회수-교체하기 위한 **정체성 discriminator**일 뿐 이 스크립트는 무시한다(판정 동일).
-import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+// 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
+//  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName } from "./harness-registry.mjs";
+import { hostEffects } from "./host-effects-port.mjs";
+import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
+import { countOpenJobs } from "./bg-jobs.mjs";
+
+const fetch = (...args) => hostEffects.fetch(...args);
+
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
+//  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 camelCase 페이로드 오파싱 + 이중 기록).
+if (isForeignGrokInvocation()) process.exit(0);
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 이 훅 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -48,16 +72,23 @@ const WRITE_TOOLS_DEFAULT = [
   // 프로젝트·태스크(맥락의 변화)
   "project_create_v6", "project_set_status_v6", "project_link_knowledge_v6",
   "project_link_category_v6", "project_set_members_v6", "task_create_v6", "task_set_status_v6",
+  // 본문 보강·댓글(#4217) — 텍스트를 가장 많이 쓰는 쓰기 툴인데 빠져 있어서, 이것만 부르고 끝낸 세션이
+  //  «기록 없음»으로 막혔다(#4201 실측). 호출 수로도 knowledge_save 다음이다(project_update 275·task_update 210·task_comment 88).
+  "project_update_v6", "task_update_v6", "task_comment_v6",
   // 팀 공유 메모리
   "memory_save",
   // 외부 원본 회수(#906) — ext MCP 등으로 끌어온 자료를 SoT 에 남긴 것도 '기록함'이다. 이게 없으면
   //  "노션 읽고 → source_save 로 남기고 종료"한 모범 세션이 기록 안 한 것으로 판정돼 너지를 맞는다.
   "source_save", "source_link_knowledge",
 ];
-// 하네스 무관 파일-편집 툴 집합: Claude(Edit/Write/MultiEdit/NotebookEdit) + Codex(apply_patch).
-//   Codex 0.138+ 는 파일 편집을 apply_patch 로 보고한다(tool_name:"apply_patch"). 추가는 가산적·무해 —
-//   Claude 는 apply_patch 를 내지 않고, Codex 는 Edit/Write 등을 내지 않으므로 양쪽 모두 정확.
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"]);
+// 이 세션의 하네스 — MCP 툴 접두어 판정에 쓴다(설치기가 훅 command 에 박아 준다: env LIVELY_HARNESS / --harness).
+const HARNESS = resolveHarness(process.argv, process.env);
+// 하네스 무관 파일-편집 툴 집합 = **전 하네스 합집합**(표에서 파생).
+//   Claude(Edit/Write/MultiEdit/NotebookEdit) + Codex(apply_patch) + OpenCode(edit/write).
+//   합집합이 안전한 이유는 종전 주석 그대로다 — 이름 공간이 겹치지 않아 추가가 가산적·무해하다
+//   (Claude 는 apply_patch 를 안 내고, Codex 는 Edit/Write 를 안 낸다).
+//   ⚠ 손으로 적으면 하네스를 추가할 때 여기가 스테일해져 **그 하네스에서만** 작업 판정이 조용히 빠진다.
+const EDIT_TOOLS = allToolNames("edit");
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp — 공유 /tmp 미사용
 
 // 기록 인정 툴의 effective 목록 — hooks-config.json 의 write_tools 가 비어있지 않으면 그걸, 아니면 내장 기본(fail-open).
@@ -149,6 +180,9 @@ try {
       const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
       if ((reason === "prompt_input_exit" || reason === "logout") && boxId && /^box-/.test(boxId)) {
         const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+        // 자격·주소는 **env 가 이긴다** — 이 분기는 라이블리가 띄운 box pane(LIVELY_SESSION_ID=box-*)에서만 돈다. 거기 env 는
+        //  띄운 쪽이 그 세션 주인 몫으로 실은 훅 토큰이고, 공유 홈의 파일은 키트를 깐 사람 것이다(#1719 · #959 리뷰).
+        //  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
         const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
         const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
         if (token) {
@@ -157,7 +191,7 @@ try {
           try {
             await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}/exited`, {
               method: "POST", signal: ctl.signal,
-              headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+              headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...SCOPE_HDRS },
               body: JSON.stringify({ reason }),
             });
           } catch { /* fail-open — 미보고 시 복원목록에 '복원 가능(중단됨)'으로 남을 뿐(무해) */ }
@@ -174,14 +208,21 @@ try {
 
   // 한 PostToolUse 가 여러 플래그를 만들 수 있다(예: lively 쓰기 툴 → .lively + .writeback).
   const flags = new Set();
-  if (tool.startsWith("mcp__lively__")) {
+  // 우리 MCP 서버 툴인가 — 접두어 형태가 하네스마다 다르므로(`mcp__lively__whoami` vs `lively_whoami`)
+  //  표에서 파생해 벗긴다. bare = 서버 접두어를 뗀 이름(둘 다 `knowledge_save`·`ext__slack__…` 형태로 수렴).
+  const bare = mcpToolName(HARNESS, "lively", tool);
+  if (bare !== null) {
     flags.add("lively"); // 자가 게이팅 신호 — 읽기/쓰기 무관, 이 세션은 lively work.
     // writeback = **우리 스토어에 썼다** → 그래서 lively 서버로 스코프한다(.lively 와 같은 기준). suffix 만 보면
     //  남의 MCP 의 `...__knowledge_save` 같은 동명 툴이 우리 스토어엔 아무것도 안 쓰고 게이트를 조용히 끈다 —
     //  실패가 '유실' 방향이라 치명적이다. 구 matcher(mcp__lively__.*)일 땐 tool 이 항상 우리 것이라 안 드러나던
     //  잠재 버그였고, #906 이 matcher 를 mcp__.* 로 넓히며 실재화됐다.
-    if (effectiveWriteTools().some((w) => tool.endsWith(`__${w}`))) flags.add("writeback");
-  } else if (EDIT_TOOLS.has(tool)) {
+    //  정확일치 + `__` 경계 suffix 둘 다 본다: 전자는 우리 v6 툴(knowledge_save), 후자는 ext 프록시
+    //  (ext__slack__send_message)를 덮는다 — 종전 `tool.endsWith("__"+w)` 와 같은 결과다.
+    if (effectiveWriteTools().some((w) => bare === w || bare.endsWith(`__${w}`))) flags.add("writeback");
+  } else if (EDIT_TOOLS.has(tool) || isShellEdit(HARNESS, tool, input?.tool_input)) {
+    // 두 번째 갈래(#1884): codex 0.149.1+gpt-5.6 은 편집을 `apply_patch` **툴이 아니라 셸 명령**으로 낸다(tool_name=Bash).
+    //  툴명만 보면 그 세션의 편집이 전부 셸로 분류돼 .worked 가 안 서고 종료 게이트를 조용히 통과한다. 표의 editShellRe 가 판정.
     flags.add("worked");
   }
   // 외부 맥락 인입(#906) — 파일 편집과 동급의 '의미있는 작업'으로 본다.
@@ -193,6 +234,45 @@ try {
     mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
     for (const flag of flags) writeFileSync(join(FLAG_DIR, `${sid}.${flag}`), "");
   }
+
+  // #4217 — 기록 fork 진행 중 표시(<sid>.writeback-pending.<자식 id>, 자식마다 파일 하나). 종료 게이트는 이게 있으면 막지 않는다.
+  //  왜: 기록을 fork 에 백그라운드로 맡기면 fork 가 쓰는 중에 메인이 턴을 끝내고, 게이트가 «기록 없음»으로 막아 메인이
+  //   같은 내용을 중복 기록했다(#4201 실측). fork 의 쓰기는 부모 세션 id 로 오니 .writeback 은 결국 서지만 **늦게** 선다.
+  //  세우기 = 기록 fork 를 백그라운드로 띄운 PostToolUse(이름 머리 `기록:` — harness-registry.recordForkLaunch).
+  //  걷기   = 그 자식의 SubagentStop. 기록 없이 끝났으면 다음 Stop 에서 게이트가 평소처럼 1회 넛지한다.
+  //  SubagentStop 이 영영 안 오는 경우(자식 중단 — codex 는 abort 에 SubagentStop 을 안 낸다)는 게이트가 mtime TTL 로 무시한다.
+  //  자식마다 파일인 이유는 recordPendingFileName 주석(병렬로 띄운 두 fork 의 등록이 서로를 덮지 않게).
+  try {
+    const fork = recordForkLaunch(HARNESS, tool, input?.tool_input, input?.tool_response);
+    if (fork) {
+      mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
+      const id = fork.agentId || String(input?.tool_use_id ?? "");
+      writeFileSync(join(FLAG_DIR, recordPendingFileName(sid, id)), "");   // 매번 쓴다 — mtime 이 TTL 의 기준이다
+    } else if (event === "SubagentStop") {
+      const id = subagentIdOf(HARNESS, input);
+      if (id) { try { unlinkSync(join(FLAG_DIR, recordPendingFileName(sid, id))); } catch { /* 기록 fork 가 아니었다 */ } }
+    }
+  } catch { /* fail-open — 표시를 못 남기면 게이트가 종전대로 동작할 뿐 */ }
+
+  // #4219 기록 넛지(record-nudge.mjs 머리말) — 이 훅이 **말을 하는** 유일한 자리다(나머지는 플래그·보고뿐). 출력은 이벤트별 봉투:
+  //  PostToolUse·SessionStart = hookSpecificOutput.additionalContext(claude·codex 공통 JSON), claude PreCompact = 평문(압축 요약 지시문에 붙는다).
+  //  교정 넛지가 기존 `mcp__lively__.*` 엔트리에 얹힌 이유: codex 는 훅 신뢰가 (이벤트·matcher·명령) 해시라 스크립트 내용만 바뀌면
+  //  멤버가 이미 신뢰한 훅이 그대로 돈다 — 새 엔트리였다면 멤버마다 다시 신뢰해야 켜진다.
+  try {
+    const ctx = { flagDir: FLAG_DIR, sid, harnessId: HARNESS, payload: input, env: process.env };
+    const say = (hookEventName, additionalContext) => process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }) + "\n");
+    if (event === "UserPromptSubmit") resetInlineTurn(FLAG_DIR, sid, input);
+    else if (event === "PostToolUse" && bare !== null) {
+      const text = inlineWriteNudge({ ...ctx, bare });
+      if (text) say("PostToolUse", text);
+    } else if (event === "PreCompact" && HARNESS === "claude") {
+      const text = preCompactInstructions(ctx);
+      if (text) process.stdout.write(text + "\n");
+    } else if (event === "SessionStart") {
+      const text = compactResumeContext(ctx);
+      if (text) say("SessionStart", text);
+    }
+  } catch { /* fail-open — 넛지를 못 내도 툴 흐름·플래그는 그대로 */ }
 
   // #1059 정밀 복원 — 이 box 세션이 지금 도는 **claude 자신의 세션 UUID(sid)**를 게이트웨이에 보고한다. box-id(LIVELY_SESSION_ID)
   //  ≠ claude UUID 라, 복원(restore)이 정확히 이어받으려면(--resume <uuid>) 이 매핑이 필요하다(box-id 를 주면 "검색 결과 없음").
@@ -208,6 +288,8 @@ try {
     const mappedFlag = join(FLAG_DIR, `${boxId}.${sid}.mapped`);
     const isBox = boxId && /^box-/.test(boxId);
     const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+    // 자격·주소는 **env 가 이긴다** — 보고는 box pane(라이블리가 띄운 세션)에서만 나가고, 거기 env 는 그 세션 주인 몫이다
+    //  (#1719 · #959 리뷰 — 위 SessionEnd 분기와 같은 이유).
     const token = isBox ? ((process.env.LIVELY_TOKEN || "").trim() || readCfg("token")) : "";
     const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
     // 최근 N ms 안에 시도했나 — 실패를 영구화하지 않으면서 핫패스 스톨도 막는 쿨다운(플래그 mtime).
@@ -218,7 +300,7 @@ try {
       try {
         const r = await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}${path}`, {
           method: "POST", signal: ctl.signal,
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...SCOPE_HDRS },
           body: JSON.stringify(body),
         });
         return !!r?.ok;
@@ -233,7 +315,11 @@ try {
       if (!cooling(tryFlag, 60_000)) {
         mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
         writeFileSync(tryFlag, "");
-        if (await post("/claude-uuid", { uuid: sid })) writeFileSync(mappedFlag, "");
+        // #1746 — 대화 파일 경로도 함께 보고한다(payload 의 transcript_path: claude 원조 · grok/antigravity 어댑터가 transcriptPath 를
+        //  이 이름으로 번역). 세션 안에서 보고하므로 어느 홈(공유·프로필·격리)에 있는지 서버가 짐작하지 않아도 된다 — 대화창이 하네스
+        //  무관하게 그 파일을 읽는 근거(harness-io/locate.ts). 없으면 안 싣는다(서버가 규약으로 폴백).
+        const tpath = typeof input?.transcript_path === "string" && input.transcript_path.trim() ? input.transcript_path.trim() : "";
+        if (await post("/claude-uuid", tpath ? { uuid: sid, transcript_path: tpath } : { uuid: sid })) writeFileSync(mappedFlag, "");
       }
     }
     // #1059/#1221 — **상태 보고**: 이 세션이 지금 어느 단계인지(busy·waiting·idle)와 활동 시각을 알린다.
@@ -243,15 +329,35 @@ try {
     //  되고, 툴마다 실행되는 핫패스에 왕복을 얹지 않는다). 종전 `.active` 플래그를 `.state`(내용=마지막 보고 상태)로
     //  대체 — 전이 판정에 '지난번에 뭐라고 했나'가 필요하기 때문.
     const phase = reportedPhase(input, event);
+    const jobs = [];
     if (token && phase) {
+      //  #4588 — idle 보고(턴 끝 Stop · 입력창이 오래 논다는 Notification idle_prompt)엔 **이 대화가 띄우고 아직 안 끝난
+      //   백그라운드 작업 수**를 함께 싣는다(bg-jobs.mjs 머리말). 화면의 «… · 1 shell still running» 은 AI 가 기다리는 작업과
+      //   어긋날 수 있다 — 서버는 이 수가 0 이면 그 화면으로 파란 점을 켜지 않는다. ⚠ Stop 에서만 세면 idle_prompt 의 bg 없는 idle 이
+      //   서버의 bg=0 을 덮어 점이 되살아난다(격리 리뷰 지적 — 몇 시간 노는 세션은 반드시 이 알림을 거친다).
+      //   대화 기록 문구가 Claude Code 의 것이라 claude 만 센다. 못 세면(null) 안 싣는다(=종전대로 화면을 믿는다).
+      const bg = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
+        ? countOpenJobs(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
+      const report = bg === null ? { state: phase } : { state: phase, bg };
+      //  같은 보고의 반복만 스로틀한다 — 작업 수가 바뀐 idle 은 새 보고다.
+      const key = bg === null ? phase : `${phase} bg=${bg}`;
       const stateFile = join(FLAG_DIR, `${boxId}.state`);
       let last = ""; try { last = readFileSync(stateFile, "utf8").trim(); } catch { /* 첫 보고 */ }
-      if (last !== phase || !cooling(stateFile, 60_000)) {
+      if (last !== key || !cooling(stateFile, 60_000)) {
         mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
-        writeFileSync(stateFile, phase);
-        await post("/active", { state: phase });
+        writeFileSync(stateFile, key);
+        jobs.push(post("/active", report));
       }
     }
+    // #2197 — 사람이 **방금 친 말**을 그 순간 보고한다(사이드바 세션 행 둘째 줄의 정본 — 종전엔 화면이 대화 꼬리를 뒤졌고,
+    //  노드 세션은 기록이 턴 끝에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다). 스로틀 없음 — 사람 손 속도다.
+    //  페이로드 이름: claude 원조 `prompt` · 어댑터/구버전 `prompt_text`. 서버가 다시 다듬으므로(300자) 여긴 상한만 건다.
+    //  /active 와 **나란히** 보낸다 — 이 훅은 프롬프트 처리 앞에서 도는 핫패스라 왕복을 직렬로 쌓지 않는다.
+    if (token && event === "UserPromptSubmit") {
+      const p = String(input?.prompt ?? input?.prompt_text ?? "").replace(/\s+/g, " ").trim();
+      if (p) jobs.push(post("/last-prompt", { prompt: Array.from(p).slice(0, 600).join("") }));
+    }
+    await Promise.all(jobs);
   } catch { /* fail-open */ }
 } catch { /* fail-open */ }
 process.exit(0);

@@ -63,6 +63,11 @@
 - 게이트웨이는 `@box_state`(tmux 세션 옵션, `"<phase> <epoch초>"`)에 새긴다 — 재기동 생존 + 목록 조회가 어차피
   읽는 `LIST_FMT` 한 줄에 딸려 와 조회 비용 0. **phase 와 시각을 한 문자열에 묶은 건 원자성** 때문이다(따로 쓰면
   두 write 사이에 조회가 끼어 '옛 상태 + 새 시각'이 나온다).
+- #4588 — **idle 보고(Stop · `idle_prompt` 알림)엔 `bg`**(이 대화가 띄우고 아직 안 끝난 백그라운드 작업 수 — Bash 백그라운드·시간 초과로
+  넘어간 Bash·백그라운드 에이전트·Monitor 의 띄움 − 완료 알림·TaskStop)를 함께 싣는다(`kit/hooks/bg-jobs.mjs`, 대화 기록 증분 읽기).
+  게이트웨이는 `"idle <epoch초> bg=<n>"` 으로 새긴다(옛 파서는 앞 두 토큰만 읽는다). bg 없는 idle 에 직전 bg 를 **잇지 않는다**(못 센 훅이 옛 0 을 물려받으면 안 된다).
+  목록은 마지막 보고가 idle·`bg=0` 이면 화면의 «… · 1 shell still running»(#4502 background)을 사이드바 점에 싣지 않는다 — 화면 숫자가
+  AI 가 기다리는 작업과 어긋나 끝난 세션이 몇 시간씩 «작업 중» 으로 깜빡였다. 못 세면 bg 를 안 싣고 종전대로 화면을 믿는다.
 - **판정 우선순위**(`terminal-sessions.ts resolveAgentPhase`, 표는 `terminal-sessions.test.ts` 가 고정):
   신선한 `waiting` 보고 → 신선한 `busy` 보고 → 스피너(레거시) → capture-pane 대기(레거시) → `idle`.
   스피너가 보고된 `idle` 보다 위인 건 **Stop 게이트가 block 해 턴이 이어진 경우**를 구제하기 위해서다.
