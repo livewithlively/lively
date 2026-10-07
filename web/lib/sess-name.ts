@@ -24,7 +24,9 @@ export const isMachineLabel = (s: string) => /^이어보기\s*[·:]/.test(s) || 
 function echoesProject(label: string, proj: string): boolean {
   const a = norm(label); const b = norm(proj);
   if (!a || !b) return false;
-  if (a === b || b.startsWith(a) || a.startsWith(b)) return true;
+  //  ⚠ 이름이 프로젝트명으로 **시작만** 하는 것(a.startsWith(b))은 되풀이가 아니다 — 뒤에 붙은 말이 그 세션의 이름이다
+  //   (프로젝트 «장표 수정 앱» 의 세션 «장표 수정 앱 만들기, 앱의 생태계», 원준 2026-10-07).
+  if (a === b || b.startsWith(a)) return true;
   const ca = a.replace(/[^\p{L}\p{N}]/gu, ''); const cb = b.replace(/[^\p{L}\p{N}]/gu, '');
   if (ca.length < 6 || !cb) return false;
   let head = 0; while (head < ca.length && head < cb.length && ca[head] === cb[head]) head++;
@@ -55,8 +57,11 @@ export function sessNameFace(s: SessNameInput, projName: string): SessFace {
   //  (= 그 세션에 처음 시킨 말)이 받는다. 없으면 종전대로 이름만 남는다.
   const work = String(s.work || '').trim();
   let name = label;
-  // '프로젝트명 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
-  if (projName && label.startsWith(projName)) name = label.slice(projName.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
+  // '프로젝트명 + 구분 기호 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
+  //  ★구분 기호가 있어야 꼬리다. 빈칸만 두고 말이 이어지면 프로젝트명으로 시작하는 **한 문장**이라 자르지 않는다 —
+  //   «장표 수정 앱 만들기, 앱의 생태계» 가 «만들기, 앱의 생태계» 로 서던 것(사이드바 · 세션 머리줄 둘 다).
+  const tail = projName && label.startsWith(projName) ? /^\s*[·:\-–—_/|][\s·:\-–—_/|]*(.*)$/s.exec(label.slice(projName.length)) : null;
+  if (tail) name = tail[1].trim();
   if (projName && name && echoesProject(name, projName)) name = '';
   if (isMachineLabel(name)) name = '';
   const job = work && !HARNESS_TITLES.has(norm(work)) && !restates(work, name) ? work : '';
