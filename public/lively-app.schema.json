@@ -111,6 +111,10 @@
             "notifications": {
               "type": "boolean",
               "default": false
+            },
+            "chat_send": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,

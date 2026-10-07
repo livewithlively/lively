@@ -364,8 +364,18 @@ t("[S17] 프롬프트·런타임·전환 라우트와 deliverPrompt 는 remoteNo
     const next = src.indexOf("\n  app.", at + sig.length);
     return src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
   };
+  //  프롬프트 라우트는 판정 + 배달을 `deliverPromptForMember`(deliver-prompt.ts) 한 벌에 넘긴다(#4594 — 앱 화면의 chat-send 도 같은 함수를 탄다).
+  //   그래서 라우트에서는 «그 함수를 부르나 · 좌표만으로 가르는 옛 판정이 없나» 를, 판정 자체는 그 함수 안에서 본다(아래).
+  {
+    const body = handler('app.post("/api/ui/terminal/sessions/:id/prompt"');
+    assert.ok(body.some((l) => /deliverPromptForMember\s*\(\s*req\.params\.id\s*,\s*uid\s*,\s*text\s*\)/.test(l)),
+      "프롬프트 라우트가 deliverPromptForMember(req.params.id, uid, text) 를 안 부른다 — 판정 한 벌(remoteNodeOfSession)을 건너뛴다");
+    assert.ok(!body.some((l) => /\bdeliverPrompt\s*\(/.test(l)),
+      "프롬프트 라우트가 deliverPrompt 를 직접 부른다 — 접근 판정(canAttach·nodeCanAttach) 없이 배달된다");
+    assert.ok(!body.some((l) => /\bnodeOfSession\s*\(\s*(req\.params\.id|id)\s*\)/.test(l)),
+      "프롬프트 라우트에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(…) 이 남아 있다");
+  }
   for (const [name, sig] of [
-    ["프롬프트", 'app.post("/api/ui/terminal/sessions/:id/prompt"'],
     ["런타임", 'app.post("/api/ui/terminal/sessions/:id/runtime"'],
     ["전환", 'app.post("/api/ui/terminal/sessions/:id/handoff"'],
   ]) {
@@ -377,8 +387,21 @@ t("[S17] 프롬프트·런타임·전환 라우트와 deliverPrompt 는 remoteNo
       `${name} 라우트에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(…) 이 남아 있다`);
   }
   const deliver = codeLines(DELIVER);
-  assert.ok(deliver.some((l) => /remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(l)),
-    `${DELIVER} 의 좌표 되찾기가 remoteNodeOfSession 이 아니다 — 좌표를 안 준 호출(리브 2턴)이 아웃박스를 건너뛴다`);
+  //  좌표 되찾기는 두 자리다 — 사람 요청(deliverPromptForMember: 접근 판정까지) · 좌표를 안 준 내부 호출(deliverPrompt: 리브 2턴).
+  assert.ok(deliver.filter((l) => /remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(l)).length >= 2,
+    `${DELIVER} 의 좌표 되찾기 두 자리(deliverPromptForMember · deliverPrompt) 중 remoteNodeOfSession 이 아닌 곳이 있다 — 말이 아웃박스를 건너뛴다`);
+  //  deliverPromptForMember 본문만 잘라 본다 — 노드면 nodeCanAttach, 아니면 canAttach, 그 뒤에 배달.
+  {
+    const srcD = read(DELIVER);
+    const at = srcD.indexOf("export async function deliverPromptForMember(");
+    assert.ok(at >= 0, `${DELIVER} 에 deliverPromptForMember 가 없다`);
+    const end = srcD.indexOf("\nexport async function deliverPrompt(", at);
+    const fn = srcD.slice(at, end < 0 ? undefined : end);
+    assert.ok(/remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(fn), "deliverPromptForMember 가 remoteNodeOfSession 으로 저쪽 기계를 가르지 않는다");
+    assert.ok(/nodeCanAttach\s*\(\s*nodeId\s*,\s*sessionId\s*,\s*memberId\s*\)/.test(fn), "deliverPromptForMember 가 노드 세션의 접근을 nodeCanAttach 로 판정하지 않는다");
+    assert.ok(/canAttach\s*\(\s*sessionId\s*,\s*memberId\s*\)/.test(fn), "deliverPromptForMember 가 중앙 세션의 접근을 canAttach 로 판정하지 않는다");
+    assert.ok(/deliverPrompt\s*\(\s*sessionId\s*,\s*text\s*,\s*\{\s*owner:\s*memberId\s*,\s*nodeId\s*\}\s*\)/.test(fn), "deliverPromptForMember 가 판정한 nodeId 를 배달에 넘기지 않는다(다시 되찾으면 판정이 갈린다)");
+  }
   assert.ok(!deliver.some((l) => /\bnodeOfSession\s*\(\s*sessionId\s*\)/.test(l)),
     `${DELIVER} 에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(sessionId) 이 남아 있다`);
 });
