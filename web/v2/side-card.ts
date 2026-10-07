@@ -139,10 +139,16 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     foldBtn.setAttribute('aria-expanded', String(!card.fold));
   }
 
+  /** 최소화한 카드의 보이는 높이(머리줄 + 테두리) — 자리의 세로 범위를 이 높이로 센다(lib clampCard). 펴 있으면 undefined. */
+  const foldH = (): number | undefined => {
+    if (!card.fold) return undefined;
+    const head = colMain.querySelector('.sc-head') as HTMLElement | null;
+    return (head?.offsetHeight || 42) + 2;
+  };
   /** 카드의 자리와 크기를 화면에 입힌다. */
   function paintRect(): void {
     if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
-    const c = clampCard(card, vw(), vh());
+    const c = clampCard(card, vw(), vh(), foldH());
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');
@@ -159,7 +165,8 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   }
 
   function setFold(v: boolean): void {
-    card = { ...card, fold: v };
+    //  펼 때: 최소화한 채 창 위쪽에 올려 둔 카드는 편 높이로 다시 세어 창 안으로 내려온다 — 그 자리를 적어 둔다.
+    card = v ? { ...card, fold: true } : { ...clampCard(card, vw(), vh()), fold: false };
     save();
     paint();
   }
@@ -289,14 +296,15 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   function dragStart(e: PointerEvent, kind: 'move' | CardEdge, grab: HTMLElement): void {
     if (e.button !== 0 || !shown() || busy || stopDrag || !(bw() > 0)) return;     // 끌기는 한 번에 하나(손가락 둘이 서로 다른 손잡이를 잡지 않게)
     e.preventDefault();
-    const base = clampCard(card, vw(), vh());
+    const fh = foldH();
+    const base = clampCard(card, vw(), vh(), fh);
     const x0 = e.clientX, y0 = e.clientY;
     try { grab.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
     document.body.classList.add('cm-dragging');
     const move = (ev: PointerEvent): void => {
       if (dead || !shown() || !(bw() > 0)) return;
       const dx = ev.clientX - x0, dy = ev.clientY - y0;
-      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh()) : resizeCard(base, kind, dx, dy, vw(), vh());
+      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh(), fh) : resizeCard(base, kind, dx, dy, vw(), vh());
       card = { ...c, fold: card.fold };
       paintRect();
     };
@@ -333,10 +341,11 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   keyGrip.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!shown() || busy) return;
     const d: Record<string, [number, number]> = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] };
-    const base = clampCard(card, vw(), vh());
+    const fh = foldH();
+    const base = clampCard(card, vw(), vh(), fh);
     let next = null as ReturnType<typeof clampCard> | null;
     if (e.key === 'Home') next = clampCard(CARD_DEF, vw(), vh());
-    else if (d[e.key]) next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh()) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh());
+    else if (d[e.key]) next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh(), fh) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh());
     if (!next) return;
     e.preventDefault();
     card = { ...next, fold: card.fold };

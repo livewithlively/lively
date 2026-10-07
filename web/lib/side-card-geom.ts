@@ -54,15 +54,20 @@ export function overProgress(overPx: number, bodyW: number): number {
 /** 손을 놓았을 때 카드로 바꿀까. */
 export const shouldCommit = (p: number): boolean => p > COMMIT;
 
-/** 카드를 격자 안에 넣는다. 크기를 먼저 맞추고 자리를 맞춘다. */
-export function clampCard(c: CardRect, bodyW: number, bodyH: number): CardRect {
+/** 카드를 격자 안에 넣는다. 크기를 먼저 맞추고 자리를 맞춘다.
+ *  foldH = 최소화한 카드(머리줄만 남는다)의 보이는 높이. 주면 자리의 세로 범위를 **그 높이**로 센다 — 카드는 아래 가장자리(b)에
+ *  서므로 머리줄만 남은 카드는 편 카드보다 (h − foldH) 만큼 더 위로 갈 수 있다. 종전엔 최소화해도 편 높이로 세어서 창 위쪽
+ *  (편 높이 − 머리줄)만큼은 갈 수 없었다(원준 2026-10-07 «최소화 상태에서는 또 … 이동 범위에 제약»). 크기(h)는 그대로 둔다 — 펴면 그 크기다.
+ *  그렇게 올려 둔 카드를 펴면 foldH 없이 다시 세어 창 안으로 내려온다. */
+export function clampCard(c: CardRect, bodyW: number, bodyH: number, foldH?: number): CardRect {
   //  격자가 카드 최소 크기보다 작으면(왼쪽 사이드바를 아주 넓게 편 좁은 창) 최소 크기를 고집하지 않는다. 격자 안에 넣는 것이 먼저다.
   const maxW = Math.max(1, Math.round(bodyW) - CARD_PAD * 2);
   const maxH = Math.max(1, Math.round(bodyH) - CARD_PAD * 2);
   const w = clamp(Math.round(num(c.w, CARD_DEF.w)), Math.min(CARD_MIN.w, maxW), maxW);
   const h = clamp(Math.round(num(c.h, CARD_DEF.h)), Math.min(CARD_MIN.h, maxH), maxH);
   const r = clamp(Math.round(num(c.r, CARD_DEF.r)), CARD_PAD, Math.round(bodyW) - w - CARD_PAD);
-  const b = clamp(Math.round(num(c.b, CARD_DEF.b)), CARD_PAD, Math.round(bodyH) - h - CARD_PAD);
+  const seen = foldH !== undefined && foldH > 0 ? Math.min(h, Math.round(foldH)) : h;
+  const b = clamp(Math.round(num(c.b, CARD_DEF.b)), CARD_PAD, Math.round(bodyH) - seen - CARD_PAD);
   return { w, h, r, b };
 }
 
@@ -81,9 +86,9 @@ export function resizeCard(c: CardRect, edge: CardEdge, dx: number, dy: number, 
   return clampCard({ w: right - left, h: bottom - top, r: BW - right, b: BH - bottom }, BW, BH);
 }
 
-/** 카드를 (dx, dy) 만큼 옮겼을 때. 크기는 그대로다. */
-export function moveCard(c: CardRect, dx: number, dy: number, bodyW: number, bodyH: number): CardRect {
-  return clampCard({ w: c.w, h: c.h, r: c.r - dx, b: c.b - dy }, bodyW, bodyH);
+/** 카드를 (dx, dy) 만큼 옮겼을 때. 크기는 그대로다. foldH = 최소화한 카드의 보이는 높이(clampCard). */
+export function moveCard(c: CardRect, dx: number, dy: number, bodyW: number, bodyH: number, foldH?: number): CardRect {
+  return clampCard({ w: c.w, h: c.h, r: c.r - dx, b: c.b - dy }, bodyW, bodyH, foldH);
 }
 
 /** 브라우저에 적어 둔 카드(JSON 글자)를 읽는다. 깨졌거나 없으면 기본값이다. */

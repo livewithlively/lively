@@ -113,6 +113,21 @@ if (lib) {
   ok(mv.w === 420 && mv.h === 560 && mv.r === 324 && mv.b === 224, "K6a 옮기면 크기는 그대로", JSON.stringify(mv));
   ok(inside(moveCard(base, -5000, -5000, ...B)) && inside(moveCard(base, 5000, 5000, ...B)), "K6b 격자 밖으로 못 나간다");
 
+  // 최소화한 카드(머리줄 44px 만 남는다) — 세로 범위를 보이는 높이로 센다(원준 2026-10-07 «최소화 상태에서는 또 … 이동 범위에 제약»)
+  const [BW, BH] = B;
+  const up = moveCard(base, 0, -5000, ...B), upF = moveCard(base, 0, -5000, ...B, 44);
+  ok(up.b === BH - 560 - CARD_PAD && upF.b === BH - 44 - CARD_PAD && upF.h === 560, "F1 최소화한 카드는 머리줄이 창 맨 위(여백 8)까지 간다 — 편 카드는 편 높이만큼만 · 크기는 그대로", JSON.stringify([up, upF]));
+  ok(moveCard(base, 0, 5000, ...B, 44).b === CARD_PAD && moveCard(base, -5000, 0, ...B, 44).r === BW - 420 - CARD_PAD && moveCard(base, 5000, 0, ...B, 44).r === CARD_PAD, "F2 최소화해도 아래 · 좌우 끝은 그대로(여백 8)");
+  const back = clampCard(upF, ...B);
+  ok(inside(back) && back.b === BH - 560 - CARD_PAD, "F3 위에 올려 둔 카드를 펴면 창 안으로 내려온다", JSON.stringify(back));
+  ok(JSON.stringify(clampCard(base, ...B, undefined)) === JSON.stringify(clampCard(base, ...B)) && clampCard({ ...base, b: 9000 }, ...B, 0).b === BH - 560 - CARD_PAD && clampCard({ ...base, b: 9000 }, ...B, 9999).b === BH - 560 - CARD_PAD,
+    "F4 경계 — 높이를 안 주거나 0 이면 편 카드와 같고, 편 높이보다 큰 값은 편 높이로 센다");
+
+  const cardUi = read("web/v2/side-card.ts") || "";
+  ok(/const c = clampCard\(card, vw\(\), vh\(\), foldH\(\)\);/.test(cardUi) && /moveCard\(base, dx, dy, vw\(\), vh\(\), fh\)/.test(cardUi) && /moveCard\(base, d\[e\.key\]\[0\], d\[e\.key\]\[1\], vw\(\), vh\(\), fh\)/.test(cardUi),
+    "F5 side-card: 그리기 · 머리줄 끌기 · Shift+화살표가 모두 최소화한 높이로 센다");
+  ok(/card = v \? \{ \.\.\.card, fold: true \} : \{ \.\.\.clampCard\(card, vw\(\), vh\(\)\), fold: false \};/.test(cardUi), "F6 side-card: 펼 때 편 높이로 다시 세어 창 안 자리를 적는다");
+
   const d = parseCard(null);
   ok(d.w === CARD_DEF.w && d.h === CARD_DEF.h && d.r === CARD_DEF.r && d.b === CARD_DEF.b && d.fold === false, "S1a 없으면 기본값", JSON.stringify(d));
   ok(JSON.stringify(parseCard("{깨진")) === JSON.stringify(d) && JSON.stringify(parseCard("[1,2]")) !== "", "S1b 깨진 글자면 기본값");
