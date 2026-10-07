@@ -64,7 +64,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     await drag(0,-5000); let r=rc(col); const fullH=r.height;
     R.m1_info=[Math.round(r.top),Math.round(r.height)]; R.m1=Math.abs(r.top-8)<=1.5 && r.height>=200;
     // M2 — 최소화
-    col.querySelector('.cm-min-b').click(); await sleep(30); r=rc(col);
+    col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30); r=rc(col);
     R.m2_info=[Math.round(r.top),Math.round(r.height)]; R.m2=grid.classList.contains('cm-fold') && r.height<80 && r.height>=30;
     // M3 — 최소화한 카드를 맨 위로
     await drag(0,-5000); r=rc(col);
@@ -77,7 +77,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     await drag(-5000,5000); r=rc(col);
     R.m4_info=[Math.round(r.left),Math.round(VH-r.bottom)]; R.m4=Math.abs(r.left-8)<=1.5 && Math.abs(VH-r.bottom-8)<=1.5;
     // M5 — 위에 올려 둔 채 펴면 창 안으로
-    await drag(0,-5000); col.querySelector('.cm-min-b').click(); await sleep(30); r=rc(col); const sv=saved();
+    await drag(0,-5000); col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30); r=rc(col); const sv=saved();
     R.m5_info=[Math.round(r.top),Math.round(r.bottom),VH,JSON.stringify(sv)];
     R.m5=!grid.classList.contains('cm-fold') && r.top>=8-1.5 && r.bottom<=VH-8+1.5 && Math.abs(r.height-fullH)<=1 && !!sv && sv.fold===false && sv.b+sv.h<=VH-8+1;
   }catch(e){R.err=String(e&&e.stack||e);}
