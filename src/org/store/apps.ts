@@ -279,6 +279,22 @@ export async function deleteAppVersions(appId: string, versionNos: number[]): Pr
   await itemsPool.query(`DELETE FROM org_app_version WHERE app_id=$1 AND version_no = ANY($2::int[])`, [appId, versionNos]);
 }
 
+/** 워크스페이스 전체 판 묶음(files)의 바이트 합 — 총량 상한 판정(#4600 7d). RLS 가 이 테넌트 행만 센다. */
+export async function appVersionBytesTotal(): Promise<number> {
+  const r = await itemsPool.query(`SELECT COALESCE(SUM(octet_length(files::text)), 0)::bigint AS n FROM org_app_version`);
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** 구성원 판을 오래된 순으로(앱 불문) — 총량 상한을 넘겼을 때 지울 후보. 지금 서빙 중인 판(org_app.current_version_no)은 표시만 하고 호출부가 건너뛴다. */
+export async function listMemberVersionsOldestFirst(): Promise<Array<{ app_id: string; version_no: number; bytes: number; is_current: boolean }>> {
+  const r = await itemsPool.query(
+    `SELECT v.app_id, v.version_no, octet_length(v.files::text)::bigint AS bytes, (a.current_version_no = v.version_no) AS is_current
+       FROM org_app_version v LEFT JOIN org_app a ON a.id = v.app_id
+      WHERE v.origin = 'member'
+      ORDER BY v.saved_at ASC, v.app_id ASC, v.version_no ASC`);
+  return r.rows.map((x) => ({ app_id: String(x.app_id), version_no: Number(x.version_no), bytes: Number(x.bytes ?? 0), is_current: x.is_current === true }));
+}
+
 /** 이 앱의 판 이력 전부 삭제 — 앱 제거 때(빌트인은 제거가 막혀 있어 거의 안 불린다). */
 export async function pruneAllAppVersions(appId: string, client?: pg.PoolClient): Promise<void> {
   const exec: Q = client ?? itemsPool;

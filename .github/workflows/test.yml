@@ -336,6 +336,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/vis-personal-unlock.pg-test.mjs
+      # ④-d2 앱 판(#4600 · 장표 수정 앱 #4592) — 목으로는 못 보는 것: 덮어쓴 빌트인의 source 가 kind builtin 을 **유지**한 채 overrides_builtin 이 붙어
+      #    데이터 표 스키마가 안 바뀌는지 · 시더가 그 행을 건너뛰는지 · 되돌리기가 폴더에서 빌트인으로 재설치하는지 · 보관 20 과 판 행이 설치 전에 쓰이는지.
+      - name: 앱 판(덮어쓰기·이력·되돌리기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-versions.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
