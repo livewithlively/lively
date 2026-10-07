@@ -1,0 +1,49 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "deck-edit",
+  "title": "장표 수정",
+  "version": "1.0.0",
+  "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "optional",
+    "multiplicity": "multiple"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": ["store_query", "store_insert", "store_update", "store_delete", "store_tables"]
+  },
+  "ui": {
+    "pages": [{ "key": "main", "title": "장표 수정", "entry": "ui/index.html", "display": ["inline", "fullscreen"] }]
+  },
+  "data": {
+    "tables": [
+      { "name": "docs", "columns": [
+        { "name": "doc", "type": "text" }, { "name": "title", "type": "text" }, { "name": "session", "type": "text" },
+        { "name": "latest_ver", "type": "int" }, { "name": "source_path", "type": "text" },
+        { "name": "created_at", "type": "timestamp" }, { "name": "updated_at", "type": "timestamp" } ],
+        "indexes": [{ "columns": ["doc"] }] },
+      { "name": "versions", "columns": [
+        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "kind", "type": "text" }, { "name": "seq", "type": "int" },
+        { "name": "slide_id", "type": "text" }, { "name": "variant", "type": "text" }, { "name": "body", "type": "text" }, { "name": "summary", "type": "text" },
+        { "name": "session", "type": "text" }, { "name": "created_at", "type": "timestamp" } ],
+        "indexes": [{ "columns": ["doc", "ver", "seq"] }] },
+      { "name": "assets", "columns": [
+        { "name": "sha", "type": "text" }, { "name": "seq", "type": "int" }, { "name": "body", "type": "text" }, { "name": "bytes", "type": "int" }, { "name": "mime", "type": "text" } ],
+        "indexes": [{ "columns": ["sha", "seq"], "unique": true }] },
+      { "name": "comments", "columns": [
+        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "slide_id", "type": "text" }, { "name": "unit_key", "type": "text" },
+        { "name": "orig", "type": "text" }, { "name": "edited", "type": "text" }, { "name": "note", "type": "text" }, { "name": "scope", "type": "text" },
+        { "name": "bundle", "type": "int" }, { "name": "status", "type": "text" }, { "name": "reply", "type": "text" }, { "name": "session", "type": "text" },
+        { "name": "created_at", "type": "timestamp" }, { "name": "sent_at", "type": "timestamp" }, { "name": "replied_at", "type": "timestamp" } ],
+        "indexes": [{ "columns": ["doc", "ver"] }, { "columns": ["doc", "bundle"] }] },
+      { "name": "picks", "columns": [
+        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "slide_id", "type": "text" }, { "name": "variant", "type": "text" }, { "name": "session", "type": "text" } ] },
+      { "name": "pins", "columns": [
+        { "name": "doc", "type": "text" }, { "name": "slide_id", "type": "text" }, { "name": "match", "type": "text" }, { "name": "memo", "type": "text" },
+        { "name": "author", "type": "text" }, { "name": "created_at", "type": "timestamp" } ] }
+    ]
+  },
+  "agent": {
+    "instructions": "[장표 수정 앱이 이 세션에 붙어 있습니다] 사람이 HTML 산출물(장표·보고서·시안)을 장 단위로 보며 글을 고치고 의견을 다는 화면입니다. 사람도 같은 화면을 보고 있습니다.\n1. HTML 을 만들거나 다시 조립하면 이 앱에 새 판으로 올립니다(파일 경로만 알려 주고 끝내지 않습니다). 올리는 법: app_pull deck-edit 로 받은 bin/deck-push.mjs 를 `node bin/deck-push.mjs --doc <문서이름> <html경로>` 로 실행(이 세션 토큰으로 REST 에 올립니다). 끝나면 채팅엔 「판 N 올렸습니다 · 바뀐 장 …」 한 줄만.\n2. 「(앱 「장표 수정」에서 보냄) [장표 수정] … (묶음 #K)」 글을 받으면 store_query comments {doc, bundle:K} 로 그 묶음을 읽습니다. edited 가 있으면 그 글을 그대로 넣고, note 는 해석해 **원본 소스**를 고칩니다(out 파일을 손으로 고치지 않습니다). 다시 조립해 새 판을 올리고, 행마다 status 를 applied(반영함) · declined(반영 안 함 — reply 에 이유 한 줄) · options(안 N개를 그 장에 variant 로 올림) 으로 store_update 하고 reply · replied_at 을 적습니다. 채팅엔 요약만: 「판 N+1 올림 · 반영 a · 보류 b(이유는 앱에) · 안 올린 장 …」.\n3. 한 장에 안을 여럿 만들 때는 같은 판에 variant 를 붙여 올립니다(deck-push --variant). 사람이 앱에서 고릅니다.\n4. 특정 글에 메모를 남길 때(예: 다른 사람 확인 대기)는 pins 표에 {doc, slide_id, match:그 글에 든 말, memo} 로 적습니다.\n5. 사람이 보고 있던 판과 최신 판이 다르면 먼저 알립니다.\n6. 사람이 이 앱의 모양·배치·기능을 바꿔 달라고 하면(「글 줄 칸을 아래로」 「의견에 사진도」 등) 문서가 아니라 **앱을 고치라는 말**입니다. app_pull deck-edit 로 소스를 받아 ui/index.html 을 고치고 app_save {files, note:\"요지 한 줄\"} 로 저장합니다(워크스페이스 판). 저장 전에 다른 구성원도 쓰는 앱이면 「모두에게 적용됩니다. 진행할까요?」를 한 번 묻고, 배치·크기만 바꾸는 요청이면 표시 설정(⚙)으로 나에게만 적용할 수 있다고 함께 말합니다. 표(data.tables)를 바꾸면 어떤 칸이 늘고 무엇이 보관되는지 먼저 말합니다. 폼 제출은 쓰지 않습니다(click·keydown). 끝나면 「고쳤습니다 · 장표 수정 N판 · 바뀐 것 두 줄 · 되돌리기는 앱 탭 ⋯ 에서」만 남깁니다.\n표: docs · versions · assets · comments · picks · pins. 앱이 하나면 app_id 는 생략해도 됩니다."
+  }
+}
