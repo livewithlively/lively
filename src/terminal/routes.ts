@@ -1227,21 +1227,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
-    if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
     //  #2600 T2 d6 — «좌표가 있다» 가 아니라 **«정말 저쪽 기계다»** 로 가른다(remoteNodeOfSession — 대화창·키 라우트와 같은 함수).
     //   세션 호스트가 상주하면 매니지드 세션 전부에 호스트 좌표가 붙는데, 그걸 노드 세션으로 읽으면 말이 아웃박스(#1753 —
     //   입력창 확인·에코 확정·재시도)를 건너뛰고 호스트 send-keys 로 곧바로 친다(2026-09-11 실측: 응답이 `queued·outbox_id`
     //   가 아니라 `{ok:true}` 였다). 로그인·대화상자에 멈춘 세션이면 그 글자가 조용히 사라지는 바로 그 경로다.
-    const nodeId = (await remoteNodeOfSession(req.params.id, sessionGone)) ?? "";
-    if (nodeId) {
-      const v = await nodeCanAttach(nodeId, req.params.id, uid);
-      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-    } else if (!(await canAttach(req.params.id, uid))) {
-      throw new HttpError(404, SESSION_NOT_FOUND);
-    }
-    // 배달 본체는 deliver-prompt.ts(#1631 — 리브 2턴이 같은 통로를 탄다). 접근 판정은 위에서 끝났다.
-    const { deliverPrompt } = await import("./deliver-prompt.js");
-    res.json(await deliverPrompt(req.params.id, text, { owner: uid, nodeId }));
+    //  판정 + 배달은 deliverPromptForMember(deliver-prompt.ts) 한 벌 — 앱 화면의 chat-send(#4594)도 같은 함수를 탄다.
+    //   배달 본체는 deliver-prompt.ts(#1631 — 리브 2턴이 같은 통로를 탄다).
+    const { deliverPromptForMember } = await import("./deliver-prompt.js");
+    res.json(await deliverPromptForMember(req.params.id, uid, text));
   }));
   // 이미 떠 있는 세션의 **모델·추론강도**를 바꾼다(#1758) — 대화창 입력칸 아래 드롭다운이 부른다.
   //  세션은 이미 argv 로 떠 있어 플래그로는 못 바꾼다. 사람이 터미널에서 치는 것과 **같은 슬래시 명령**을 넣는 수밖에 없고,

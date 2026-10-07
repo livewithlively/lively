@@ -23,7 +23,19 @@ import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
-import { registerSessionInput } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+import { registerSessionInput, putIntoSession } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+
+//  #4594 — 같은 오리진 신호 `lively:compose-draft` {session, text}: 앱 화면(app-ui.ts — 멈춘 세션에 보내려다 409 draft)·앱 탭 ⋯ 메뉴
+//   («AI에게 고치기»)가 **그 세션의 입력칸에 글을 넣어 둔다**(보내지 않는다 — 사람이 읽고 보낸다). 넣는 법은 세션 화면이 뜰 때
+//   registerSessionInput 에 올려 둔 것(대화창이면 글칸 끝에, 터미널이면 붙여넣기)을 그대로 쓴다. 창에 한 번만 건다(화면은 여럿 뜬다).
+if (typeof window !== 'undefined' && !(window as unknown as { __lvComposeDraft?: boolean }).__lvComposeDraft) {
+  (window as unknown as { __lvComposeDraft?: boolean }).__lvComposeDraft = true;
+  window.addEventListener('lively:compose-draft', (e: Event) => {
+    const d = ((e as CustomEvent<{ session?: unknown; text?: unknown }>).detail ?? {}) as { session?: unknown; text?: unknown };
+    const sid = String(d.session ?? ''), text = String(d.text ?? '');
+    if (sid && text) putIntoSession([sid], text);
+  });
+}
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).

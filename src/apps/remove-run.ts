@@ -50,6 +50,7 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
   try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
   await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
+  await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
   await store.deleteApp(id, ctx);
   return {
     components: comps.length,

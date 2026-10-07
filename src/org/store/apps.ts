@@ -319,3 +319,25 @@ function rowToGrant(r: Record<string, unknown>): AppGrantRow {
     revoked_at: r.revoked_at == null ? null : String(r.revoked_at),
   };
 }
+
+// ── org_app_member_pref — 앱 × 보는 사람의 개인 설정(#4601) ────────────────────
+//  읽기·쓰기 둘뿐. 병합·크기 규칙은 apps/app-prefs.ts 가 쥐고 여기는 저장만. 값은 JSON 문자열로 받아 jsonb 에 넣는다(직렬화 한 번).
+export async function getMemberPref(appId: string, memberId: string): Promise<Record<string, unknown>> {
+  const r = await itemsPool.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2`, [appId, memberId]);
+  const v = r.rows[0]?.prefs;
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/** ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, app_id, member_id)로 재작성한다(attachAppRow 와 같은 규약). */
+export async function setMemberPref(appId: string, memberId: string, prefsJson: string): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO org_app_member_pref(app_id, member_id, prefs, updated_at) VALUES($1,$2,$3::jsonb,now())
+     ON CONFLICT (tenant_id, app_id, member_id) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`,
+    [appId, memberId, prefsJson]);
+}
+
+/** 앱 제거 때 — 그 앱의 개인 설정을 전부 지운다(FK 가 없어 CASCADE 대신 명시 회수, schema/apps.ts 주석). */
+export async function pruneMemberPrefs(appId: string, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(`DELETE FROM org_app_member_pref WHERE app_id=$1`, [appId]);
+}
