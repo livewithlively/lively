@@ -407,19 +407,43 @@ function rowToGrant(r: Record<string, unknown>): AppGrantRow {
 }
 
 // ── org_app_member_pref — 앱 × 보는 사람의 개인 설정(#4601) ────────────────────
-//  읽기·쓰기 둘뿐. 병합·크기 규칙은 apps/app-prefs.ts 가 쥐고 여기는 저장만. 값은 JSON 문자열로 받아 jsonb 에 넣는다(직렬화 한 번).
-export async function getMemberPref(appId: string, memberId: string): Promise<Record<string, unknown>> {
-  const r = await itemsPool.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2`, [appId, memberId]);
+//  읽기 하나, 쓰기 하나. 병합·크기 규칙은 apps/app-prefs.ts 가 쥐고(순수), 여기는 **한 트랜잭션** 안에서 지금 값을 잠그고(FOR UPDATE)
+//  → 병합 → 검사 → upsert 한다. 두 탭이 동시에 다른 키를 고쳐도 마지막 쓰기가 앞의 것을 지우지 않는다(격리 리뷰 비차단 2).
+export async function getMemberPref(appId: string, memberId: string, client?: pg.PoolClient): Promise<Record<string, unknown>> {
+  const exec: Q = client ?? itemsPool;
+  const r = await exec.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2`, [appId, memberId]);
   const v = r.rows[0]?.prefs;
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-/** ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, app_id, member_id)로 재작성한다(attachAppRow 와 같은 규약). */
-export async function setMemberPref(appId: string, memberId: string, prefsJson: string): Promise<void> {
-  await itemsPool.query(
-    `INSERT INTO org_app_member_pref(app_id, member_id, prefs, updated_at) VALUES($1,$2,$3::jsonb,now())
-     ON CONFLICT (tenant_id, app_id, member_id) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`,
-    [appId, memberId, prefsJson]);
+/**
+ * 지금 값을 잠근 채 merge 로 새 값을 만들어 저장한다. merge 가 던지면(400·413) 롤백 — 아무것도 안 바뀐다.
+ *  ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, app_id, member_id)로 재작성한다(attachAppRow 와 같은 규약).
+ *  돌려주는 값 = 저장된 전체.
+ */
+export async function updateMemberPref(
+  appId: string, memberId: string,
+  merge: (cur: Record<string, unknown>) => { prefs: Record<string, unknown>; json: string },
+): Promise<Record<string, unknown>> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2 FOR UPDATE`, [appId, memberId]);
+    const v = r.rows[0]?.prefs;
+    const cur = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+    const next = merge(cur);
+    await client.query(
+      `INSERT INTO org_app_member_pref(app_id, member_id, prefs, updated_at) VALUES($1,$2,$3::jsonb,now())
+       ON CONFLICT (tenant_id, app_id, member_id) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`,
+      [appId, memberId, next.json]);
+    await client.query("COMMIT");
+    return next.prefs;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /** 앱 제거 때 — 그 앱의 개인 설정을 전부 지운다(FK 가 없어 CASCADE 대신 명시 회수, schema/apps.ts 주석). */

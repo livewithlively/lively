@@ -43,6 +43,8 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn"] as const;
 /** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
 export const NOTIFY_TOOL = "app_notify";
+/** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
+export const CHAT_SEND_TOOL = "app_chat_send";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -74,6 +76,9 @@ const permissionsSchema = z.object({
   // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
   //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
   notifications: z.boolean().default(false),
+  // #4594 — 이 앱 화면이 **붙은 세션에 글을 바로 보낼** 수 있나(lively.chat.send). 기본 false(fail-closed). 그 사람의 AI 세션에 말이
+  //  들어가는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_chat_send 가 있어야 한다(apps/app-chat-send.ts).
+  chat_send: z.boolean().default(false),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -259,6 +264,10 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   //  여기서 파생한다 — 사람에게 보이는 권한은 '알림'이고, 도구 이름은 배관이다.
   if (m.permissions.notifications && !m.permissions.tools.includes(NOTIFY_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, NOTIFY_TOOL];
+  }
+  // #4594 — `chat_send: true` 는 `app_chat_send` 도구를 함의한다(알림과 같은 규약 — 사람에게 보이는 권한은 「세션에 글 보내기」, 도구 이름은 배관).
+  if (m.permissions.chat_send && !m.permissions.tools.includes(CHAT_SEND_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, CHAT_SEND_TOOL];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

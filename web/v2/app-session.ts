@@ -28,6 +28,7 @@ export interface SessionApp {
   system: { renderer: 'session' | 'browser' | 'classic'; home?: string; route?: string } | null;
   source: { kind?: string };
   notifications: boolean;   // #1891 — 이 앱이 알림을 보낼 수 있나(동의 창이 제 줄로 보여 준다)
+  chatSend: boolean;        // #4594 — 이 앱 화면이 붙은 세션에 글을 바로 보낼 수 있나(동의 창이 제 줄로 보여 준다)
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -53,7 +54,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           scopes: (perm.scopes || []).map(String), tools, pages, tables, sites, net, instances, system, source,
           editMode: a.edit_mode === 'members' ? 'members' as const : 'all' as const,
           editMembers: Array.isArray(a.edit_members) ? a.edit_members.map(String) : [], canEdit: a.can_edit === true,
-          notifications: perm.notifications === true };   // #1891 — 동의 창이 제 줄로 보여 준다
+          notifications: perm.notifications === true,     // #1891 — 동의 창이 제 줄로 보여 준다
+          chatSend: perm.chat_send === true };             // #4594 — 같은 자리에 제 줄로
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -82,7 +84,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false,
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false,
         editMode: 'all' as const, editMembers: [], canEdit: false,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
@@ -165,6 +167,10 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.notifications ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '알림' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '데스크톱 알림을 보낼 수 있어요' }))) : null,
+        // 세션에 글 보내기(#4594) — 이것도 성격이 다르다: '앱이 내 AI 세션을 움직이나'. 붙은 세션에만, 내가 누른 동작에서만 들어간다.
+        app.chatSend ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '세션에 글 보내기' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션에 글을 바로 보낼 수 있어요(내가 누를 때만)' }))) : null,
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
           el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,

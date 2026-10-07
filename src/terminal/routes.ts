@@ -238,7 +238,7 @@ const lookupTicket: TicketLookup = (cookieHeader) => {
  *  프라이버시 이득(닫힌 소켓의 코드 한 자리)보다 회귀 위험이 크다. 두 사유를 코드에서 가를 수 있게 된
  *  뒤에 다시 본다.
  */
-const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";
+import { SESSION_NOT_FOUND } from "./deliver-prompt.js";   // 한 벌 — 프롬프트 배달(deliverPromptForMember)과 같은 문구
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";

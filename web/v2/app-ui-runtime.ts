@@ -16,8 +16,9 @@
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
-//    await lively.chat.send(text, { mark })  → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602.
-//                                                { sent, session, transport } · 멈춘 세션이면 { sent:false, draft:true }(호스트가 입력칸에 넣어 둔다).
+//    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
+//                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·
+//                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
 //    await lively.prefs.get() / .set(patch)  → 이 앱 × 보는 사람의 작은 설정(#4601 — 배치·글자·접기). set 은 얕은 병합, null 키 삭제, 16KB.
 //    lively.ui.onPrefsOpen(function () {…})  → 사람이 앱 탭 ⋯ 메뉴에서 「표시 설정」을 눌렀다 — 앱이 설정 패널을 연다. 돌려주는 함수로 끊는다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
@@ -92,7 +93,7 @@ export const APP_RUNTIME_JS = `
       onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); }
     },
     chat: {
-      send: function (text, opts) { var o = opts || {}; return post('chat/send', o.mark == null ? { text: String(text) } : { text: String(text), mark: String(o.mark) }); }
+      send: function (text) { return post('chat/send', { text: String(text) }); }
     },
     prefs: {
       get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },

@@ -75,10 +75,13 @@ export interface LivelyApp {
      * 붙은 세션에 글을 **바로 보낸다**(채우기가 아니다 — 사람이 Enter 를 치지 않는다). 서버가 글 앞에 「(앱 「제목」에서 보냄)」 한 줄을 붙여
      *  대화 기록에서 사람이 친 말과 구별되고, 세션의 AI 는 그 표식으로 이 앱의 지침을 다시 받는다.
      *  · 긴 내용은 앱 표(store_*)에 두고 **한 줄**만 보낸다(4,000자 · 앱마다 분당 20회).
-     *  · 세션이 멈춰 있으면 reject 하지 않고 `{ sent:false, draft:true }` — 호스트가 그 세션 화면의 입력칸에 글을 넣어 둔다(사람이 보내면 세션이 깨어난다).
+     *  · 앱은 매니페스트에 `permissions.chat_send: true` 를 선언해야 하고(동의 창에 「세션에 글 보내기」로 보인다), 사람이 그 범위에 동의해야 한다.
+     *  · **사람이 누른 동작(click·keydown) 안에서만** 보낼 수 있다 — 타이머나 데이터 변경 콜백에서 부르면 reject(code -32001).
+     *  · 세션이 멈춰 있으면 reject 하지 않고 `{ sent:false, draft }` — draft=true 면 호스트가 그 세션 화면의 입력칸에 글을 넣어 두었다
+     *    (사람이 보내면 세션이 깨어난다), false 면 그 세션 화면이 떠 있지 않아 못 넣었다(앱이 「세션 화면을 열고 다시」 라고 말하면 된다).
      *  · 붙은 세션이 없으면 reject(code -32602).
      */
-    send(text: string, opts?: { mark?: string }): Promise<{ sent: boolean; session: string; transport?: string | null; draft?: boolean }>;
+    send(text: string): Promise<{ sent: boolean; session: string; transport?: string | null; draft?: boolean }>;
   };
 
   /**

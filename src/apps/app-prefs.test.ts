@@ -29,6 +29,13 @@ test("S3-4 patch 가 객체가 아니면 400 · 지금 값이 깨져 있어도(�
   assert.deepEqual(mergePrefs(["junk"], { a: 1 }), { a: 1 });
 });
 
+test("S3-4b 값 어디든 NUL 문자(\\u0000)가 있으면 400 — jsonb 가 못 담아 500 이 날 자리를 앞에서 막는다", () => {
+  assert.equal(status(() => mergePrefs({}, { a: "x\u0000y" })), 400);
+  assert.equal(status(() => mergePrefs({}, { a: { deep: ["\u0000"] } })), 400);
+  assert.equal(status(() => mergePrefs({}, { "k\u0000": 1 })), 400);
+  assert.deepEqual(mergePrefs({}, { a: "\\u0000 라는 글자" }), { a: "\\u0000 라는 글자" }, "역슬래시 u0000 글자(실제 NUL 아님)는 된다");
+});
+
 test("S3-5 16KB 초과 → 413 · 그 아래는 직렬화 문자열을 돌려준다", () => {
   const ok = { note: "가".repeat(5000) };            // 한글 3바이트 × 5000 = 15,000B + 틀 < 16,384B
   assert.equal(serializePrefs(ok), JSON.stringify(ok));

@@ -11,6 +11,7 @@
 import { api, el, toast } from '../core.js';
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
 import { ensureAppGrant } from './app-session.js';
+import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 보내려던 글을 그 세션 화면의 입력칸에 넣어 둔다(잎 모듈)
 //  #4530 앱 화면 안의 ⌘K → 셸 통합검색. omni.ts 를 직접 들이지 않는다 — 셸 화면 모듈 묶음(사이드바·자료 …)이 통째로 딸려 와
 //   앱 화면 묶음이 커지고, 창이 없는 곳에서 이 모듈을 실으면 그 묶음이 터진다(scripts/session-app-pane.test.mjs 가 잡았다).
 //   대신 셸이 듣는 같은 오리진 신호(OMNI_MSG, 가벼운 lib/omni-chord.ts 에 한 벌)를 이 창에 보낸다 — 셸의 bindOmniKey 가 받아 연다.
@@ -125,23 +126,30 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
       // #4594 — 앱 화면이 **붙은 세션**에 글을 바로 보낸다(원준: 채우기가 아니라 보내기). 세션에 붙어 열린 화면에만 세션이 있다.
       //  서버가 세 겹(동의·주인·붙음)을 다시 보고 표식 한 줄을 붙여 /prompt 와 같은 통로로 넣는다. 멈춘 세션(409 draft)은 실패로
       //  끝내지 않고 그 세션 화면의 입력칸에 글을 넣어 둔다 — 사람이 보내면 그 말이 세션을 깨운다(#2439 되살리기 규칙).
+      //  ★ 세션은 **이 프레임을 띄운 쪽(opts)** 이 안다 — 앱이 params 로 세션 id 를 말해도 믿지 않는다(남의 세션에 보내는 통로가 된다).
+      //  ★ 사람이 누른 동작에서만 보낸다(격리 리뷰 차단 2b): iframe 안의 클릭은 부모 창의 transient activation 으로 전파되므로
+      //   `navigator.userActivation.isActive` 가 거짓이면 앱 코드가 저 혼자(타이머·데이터 변경 콜백) 보내는 것이다 → 거부.
+      //   그 API 가 없는 옛 브라우저는 막지 않는다(막으면 기능이 통째로 죽는다 — 서버의 빈도 상한이 남는다).
       const sid = opts?.sessionId ?? '';
       const text = String((msg.params as { text?: unknown } | undefined)?.text ?? '');
-      const mark = (msg.params as { mark?: unknown } | undefined)?.mark;
       if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다' } }); return; }
-      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/chat-send', { method: 'POST', body: JSON.stringify({ session_id: sid, text, ...(mark == null ? {} : { mark: String(mark) }) }) });
+      const ua = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation;
+      if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 보낼 수 있습니다' } }); return; }
+      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/chat-send', { method: 'POST', body: JSON.stringify({ session_id: sid, text }) });
       void send()
         .catch(async (e: any) => {
-          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // tools/call 과 같은 «그 자리에서 동의» 규칙
+          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // tools/call 과 같은 «그 자리에서 동의» 규칙(예전 범위 동의 포함)
           if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
           return send();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: true, session: sid, transport: out?.transport ?? null } }))
         .catch((e: any) => {
           if (e?.status === 409 && e?.body?.draft) {
-            window.dispatchEvent(new CustomEvent('lively:compose-draft', { detail: { session: sid, text } }));
-            toast('세션이 멈춰 있어 입력칸에 넣어 두었어요 — 보내면 세션이 깨어납니다.');
-            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: false, session: sid, draft: true } });
+            //  멈춘 세션 — 서버가 표식을 붙인 글(draft_text)을 그 세션 화면의 입력칸에 넣어 둔다(sess-input 잎 모듈 — 화면이 떠 있어야 넣힌다).
+            const draft = String(e.body.draft_text || text);
+            const put = putIntoSession([sid], draft);
+            toast(put ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 — 보내면 세션이 깨어납니다.' : '세션이 멈춰 있어요 — 세션 화면을 열고 다시 보내 주세요.');
+            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: false, session: sid, draft: put } });
             return;
           }
           reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
