@@ -61,8 +61,10 @@ export interface SideCardHandle {
   active: () => boolean;
   /** 끄는 중. 상한을 넘긴 거리(px, 0 이상). */
   onOver: (overPx: number) => void;
-  /** 손을 놓았다. 카드 전환 구간에서 놓았으면 true(자리바꿈 판정을 건너뛴다). */
-  onRelease: () => boolean;
+  /** 손을 놓았다. 카드 전환 구간에서 놓았으면 true. 덜 넘겨 놓았으면(카드가 안 된다) 사이드바가 상한으로 물러난 **뒤**
+   *  `back` 을 부른다 — 셸은 거기서 자리바꿈을 판정하고 폭을 적는다. 세션 열이 최소 폭에 닿고 손이 조금이라도 더 가면
+   *  이 구간이라, 여기서 판정을 건너뛰면 자리바꿈이 사라진다(원준 2026-10-01 «세션이 30% 로 작아져도 좌우가 안 바뀐다»). */
+  onRelease: (back?: () => void) => boolean;
   /** 세션에 들어올 때. 움직임 없이 그 세션의 상태를 입힌다. */
   restore: (card: boolean) => void;
   /** 사이드바 여닫기 · 폭 문턱이 바뀐 뒤 다시 그린다. */
@@ -124,7 +126,11 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   let card: CardState = ((): CardState => { try { return parseCard(localStorage.getItem(KEY_CARD)); } catch (_) { return parseCard(null); } })();
 
   const bw = (): number => body.clientWidth;
-  const bh = (): number => body.clientHeight;
+  //  카드가 움직일 수 있는 범위는 **창 전체**다(원준 2026-10-07 «곁칸 안쪽으로 너무 제한적»). 카드는 position: fixed 라
+  //   자리(r · b)도 창의 오른쪽 · 아래 가장자리에서 센다. 사이드바 폭 셈(상한 · 전환 구간)은 그대로 격자(bw)로 한다.
+  //   격자가 화면에 없으면(다른 탭) 카드도 없다 — 창 크기는 늘 재지므로 판정은 bw() > 0 으로 한다.
+  const vw = (): number => document.documentElement.clientWidth || window.innerWidth;
+  const vh = (): number => document.documentElement.clientHeight || window.innerHeight;
   //  이 칸 셸이 화면에 없을 수 있다(다른 탭을 보고 있다). 그때 격자 폭은 0 이고, 0 으로 센 상한은 뜻이 없다.
   //  폭을 못 재면 사이드바 폭을 적지 않는다(잴 수 있을 때 다시 맞춘다).
   const capNow = (): number | null => (bw() > 0 ? sideCap(bw()) : null);
@@ -155,8 +161,8 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
 
   /** 카드의 자리와 크기를 화면에 입힌다. */
   function paintRect(): void {
-    if (!(bw() > 0 && bh() > 0)) return;
-    const c = clampCard(card, bw(), bh());
+    if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
+    const c = clampCard(card, vw(), vh());
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');
@@ -272,24 +278,25 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     hint.hidden = false;
   }
 
-  function onRelease(): boolean {
+  function onRelease(back?: () => void): boolean {
     hint.hidden = true;
     if (dead || busy || on || over <= 0) { over = 0; return false; }
     const from = over;
     over = 0;
     if (shouldCommit(overProgress(from, bw()))) void enter(from);
-    else void cancel(from);
+    else void cancel(from, back);
     return true;
   }
 
-  /** 덜 넘기고 놓았다. 사이드바가 상한으로 물러난다. */
-  async function cancel(from: number): Promise<void> {
+  /** 덜 넘기고 놓았다. 사이드바가 상한으로 물러난 뒤 back(자리바꿈 판정)을 부른다 — 물러나는 동안 자리가 미끄러지면 두 움직임이 겹친다. */
+  async function cancel(from: number, back?: () => void): Promise<void> {
     const g = ++gen, alive = (): boolean => !dead && g === gen;
     busy = true;
     await tween(200, EASE, (t) => paintOver(from * (1 - t)), alive);
     if (!alive()) return;
     clearOver();
     busy = false;
+    back?.();
   }
 
   /** 카드로 바꾼다. from = 놓은 순간 넘겨 있던 거리. */
@@ -385,14 +392,14 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   function dragStart(e: PointerEvent, kind: 'move' | CardEdge, grab: HTMLElement): void {
     if (e.button !== 0 || !shown() || busy || stopDrag || !(bw() > 0)) return;     // 끌기는 한 번에 하나(손가락 둘이 서로 다른 손잡이를 잡지 않게)
     e.preventDefault();
-    const base = clampCard(card, bw(), bh());
+    const base = clampCard(card, vw(), vh());
     const x0 = e.clientX, y0 = e.clientY;
     try { grab.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
     document.body.classList.add('cm-dragging');
     const move = (ev: PointerEvent): void => {
       if (dead || !shown() || !(bw() > 0)) return;
       const dx = ev.clientX - x0, dy = ev.clientY - y0;
-      const c = kind === 'move' ? moveCard(base, dx, dy, bw(), bh()) : resizeCard(base, kind, dx, dy, bw(), bh());
+      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh()) : resizeCard(base, kind, dx, dy, vw(), vh());
       card = { ...c, fold: card.fold };
       paintRect();
     };
@@ -444,10 +451,10 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   keyGrip.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!shown() || busy) return;
     const d: Record<string, [number, number]> = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] };
-    const base = clampCard(card, bw(), bh());
+    const base = clampCard(card, vw(), vh());
     let next = null as ReturnType<typeof clampCard> | null;
-    if (e.key === 'Home') next = clampCard(CARD_DEF, bw(), bh());
-    else if (d[e.key]) next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], bw(), bh()) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], bw(), bh());
+    if (e.key === 'Home') next = clampCard(CARD_DEF, vw(), vh());
+    else if (d[e.key]) next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh()) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh());
     if (!next) return;
     e.preventDefault();
     card = { ...next, fold: card.fold };
@@ -465,7 +472,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   };
   colMain.addEventListener('dblclick', onHeadDbl, true);
 
-  // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 격자 안으로 다시 넣는다.
+  // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 창 안으로 다시 넣는다.
   let ro: ResizeObserver | null = null;
   if (typeof ResizeObserver === 'function') {
     ro = new ResizeObserver(() => {
@@ -475,6 +482,9 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     });
     ro.observe(body);
   }
+  //  카드는 창 기준이라 창 크기가 바뀌면 창 안으로 다시 넣는다(격자 폭이 그대로여도 창 높이는 바뀔 수 있다).
+  const onWinResize = (): void => { if (!dead && shown() && !busy) paintRect(); };
+  window.addEventListener('resize', onWinResize);
 
   paint();
 
@@ -495,6 +505,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);
       window.removeEventListener('message', onFrameMsg);
+      window.removeEventListener('resize', onWinResize);
       window.clearInterval(watchFocus);
       watchFocus = 0;
       document.body.classList.remove('cm-dragging');

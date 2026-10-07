@@ -109,8 +109,12 @@
   .pn-body.cm { grid-template-columns: minmax(0, 1fr) 0 0; }
   .pn-body.cm > .pn-pane[data-zone="side"] { grid-column: 1 / -1; grid-row: 1; border-left: 0; border-right: 0; }
   .pn-body.cm > .v2-split-x { display: none; }
+  /* 카드는 창 전체에서 움직인다(원준 2026-10-07 «곁칸 안쪽으로 너무 제한적») — position: fixed, 자리(--cm-r · --cm-b)는 창 가장자리에서
+     센다. 조상(.v2-main overflow:hidden · .v2-tabpane overflow:auto)에 transform · filter · contain 이 없어 fixed 가 창을 기준으로 선다
+     (매니지드 실측). ⚠ 조상에 그런 속성을 새로 걸면 카드가 다시 그 안에 갇힌다.
+     z-index 55 = 레일 · 왼쪽 사이드바 위, 레일 메뉴(.v2-ws-menu 60 · .v2-wspop 70) · 팝오버(.dash-pop 80) · 모달 아래. */
   .pn-body.cm > .pn-col {
-    position: absolute; z-index: 60; grid-column: auto; grid-row: auto;
+    position: fixed; z-index: 55; grid-column: auto; grid-row: auto;
     right: var(--cm-r, 24px); bottom: var(--cm-b, 24px); width: var(--cm-w, 320px); height: var(--cm-h, 240px);
     overflow: hidden; background: var(--bg);
     border: 1px solid var(--line-net); border-radius: 14px;
