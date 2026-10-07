@@ -74,6 +74,11 @@ export function attachedDiff(prev: readonly string[] | null, next: readonly stri
   return { added, changed };
 }
 
+/** 같은 앱이라도 **보이는 재료**가 바뀌었나 — 판 번호 · 원본 덮어씀 · 쓸 수 있음 · 이름(#4600). id 만 비교하면 앱을 고쳐 판이 올라도 머리줄이 옛 판을 보인다. 순수. */
+export function attachedSignature(rows: ReadonlyArray<AttachedApp>): string {
+  return rows.map((a) => `${a.app_id}@${a.version_no ?? ''}:${a.overrides_builtin ? 1 : 0}:${a.usable ? 1 : 0}:${a.title}`).join('|');
+}
+
 export function refreshSessionApps(sid: string): void {
   const e = entries.get(sid);
   if (!e) return;
@@ -81,8 +86,10 @@ export function refreshSessionApps(sid: string): void {
   void listAttached(sid).then((rows) => {
     if (mine !== e.seq || entries.get(sid) !== e) return;          // 늦게 온 판 · 구독이 다 끊긴 뒤의 판
     const d = attachedDiff(e.apps ? e.apps.map((a) => a.app_id) : null, rows.map((a) => a.app_id));
+    //  #4600 — id 는 그대로인데 판·이름이 바뀐 경우(app_save · app_revert 뒤)도 다시 그린다. «새로 붙음»(added)은 아니라 탭을 켜지 않는다.
+    const redrawn = !!e.apps && attachedSignature(e.apps) !== attachedSignature(rows);
     e.apps = rows;
-    if (!d.changed) return;
+    if (!d.changed && !redrawn) return;
     for (const fn of [...e.subs]) { try { fn(rows, d.added); } catch { /* 한 구독이 다른 구독을 막지 않는다 */ } }
   }).catch(() => { /* 판정 불가 — 받던 대로 둔다(빈 목록으로 덮으면 탭이 사라졌다 돌아온다) */ });
 }
@@ -155,6 +162,8 @@ export function sessAppPart(ctx: PartCtx): Part {
   const body = el('div', { class: 'pn-sessapp-body' });
   root.append(tabs, head, band, body);
   let bandTimer = 0;
+  //  되돌리기(메뉴·띠)로 **이 화면이 이미 다시 띄운** 판 번호 — 뒤따라 오는 'updated' 사건이 같은 번호면 다시 띄우지 않는다(두 번 깜빡이지 않게).
+  let reloadedFor: number | null = null;
 
   let sid: string | null = null;
   let apps: AttachedApp[] = [];
@@ -211,14 +220,23 @@ export function sessAppPart(ctx: PartCtx): Part {
     }
   }
 
+  //  되돌린 직후 — 서버 사건을 기다리지 않고 그 자리에서 다시 띄운다(스트림이 없는 게이트웨이도 있다). 번호를 적어 두어 사건이 겹쳐 와도 한 번만.
+  const afterRevert = (versionNo: number): void => {
+    reloadedFor = versionNo;
+    mounted?.frame?.reload();
+  };
+
   function openMenu(cur: AttachedApp, x: number, y: number): void {
     const s = sid;
     if (!s) return;
-    const rows = sessAppMenuRows({ title: cur.title, hasFrame: !!mounted?.frame && mounted.appId === cur.app_id, overridesBuiltin: !!cur.overrides_builtin, versionNo: cur.version_no ?? null }, {
+    const frame = mounted && mounted.appId === cur.app_id ? mounted.frame : null;
+    //  표시 설정은 앱이 **받겠다고 구독**했을 때만(SDK lively.ui.onPrefsOpen → ui/subscribe {topic:'prefs-open'}). 안 했으면 보내 봐야 받을 곳이 없다.
+    const hasPrefs = !!frame && frame.subscribed('prefs-open');
+    const rows = sessAppMenuRows({ title: cur.title, hasPrefs, overridesBuiltin: !!cur.overrides_builtin, versionNo: cur.version_no ?? null }, {
       edit: () => { composeDraft(s, draftTextFor(cur.title)); toast('세션 입력칸에 채워 두었어요 — 어떻게 고칠지 이어서 적고 보내세요.'); },
-      prefs: () => { mounted?.frame?.notify('ui/notifications/prefs-open', {}); },
-      versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }); },
-      original: () => { void revertToOrigin(cur.app_id, cur.title); },
+      prefs: () => { frame?.notify('ui/notifications/prefs-open', {}); },
+      versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }, afterRevert); },
+      original: () => { void revertToOrigin(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); },
       big: () => { void openAppUi(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },
       detach: () => { void detachAppFromSession(s, cur.app_id).then((ok) => { if (ok) toast(`「${cur.title}」을(를) 이 세션에서 뗐어요 — 앱의 데이터는 그대로 남아요.`); }); },
     });
@@ -245,7 +263,7 @@ export function sessAppPart(ctx: PartCtx): Part {
     band.hidden = false;
     band.replaceChildren(
       el('span', { class: 'pn-sessapp-band-t ell', text: bandText(ev) }),
-      el('button', { class: 'pn-sessapp-band-b', type: 'button', text: '되돌리기', onclick: () => { void revertToPrevious(cur.app_id, cur.title); } }),
+      el('button', { class: 'pn-sessapp-band-b', type: 'button', text: '되돌리기', onclick: () => { void revertToPrevious(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); } }),
       el('button', { class: 'pn-sessapp-band-x', type: 'button', 'aria-label': '닫기', onclick: () => { band.hidden = true; } }, pnIcon('x', 'pn-i sm')));
     bandTimer = window.setTimeout(() => { bandTimer = 0; band.hidden = true; }, 60_000);
   }
@@ -293,7 +311,9 @@ export function sessAppPart(ctx: PartCtx): Part {
     if (ev.kind === 'updated') {
       const m = mounted;
       if (!m || !m.frame || ev.app_id !== m.appId) return;
-      m.frame.reload();
+      //  내가 방금 되돌려 이미 다시 띄운 판이면(afterRevert) 건너뛴다 — 같은 화면을 두 번 띄워 깜빡이지 않게. 번호를 모르는 사건은 늘 다시 띄운다.
+      if (ev.version_no == null || ev.version_no !== reloadedFor) m.frame.reload();
+      reloadedFor = null;
       const cur = current();
       if (cur && cur.app_id === ev.app_id) showBand(cur, ev);
       return;
