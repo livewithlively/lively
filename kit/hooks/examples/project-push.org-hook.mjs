@@ -223,13 +223,21 @@ function readLedger(projDir) {
       return Object.fromEntries(Object.entries(v).map(([kk, vv]) => [nk(kk), vv]));   // 구 원장(NFD 키)도 여기서 접힌다
     };
     return { files: pick("files"), tombs: pick("tombs") };
-  } catch { return { files: {}, tombs: {} }; }   // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe)
+  } catch (e) {
+    // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe). bad = 파일은 있는데 못 읽었다(쓰는 중·깨짐) —
+    //  빈 원장 위에 «덧쓰기»를 하면 다른 기준선·묘비가 다 지워지므로, 덧쓰기만 하는 자리(healBaselines)는 이때 쓰지 않는다(#4609).
+    return { files: {}, tombs: {}, bad: !(e && e.code === "ENOENT") };
+  }
 }
 function writeLedger(projDir, files, tombs) {
+  // 임시 파일 → rename(#4609). 그 자리에 바로 쓰면 같은 폴더의 다른 받기·올리기가 쓰다 만 원장을 읽어 «빈 원장»으로
+  //  보고, 그 위에 쓰면서 다른 기준선·묘비를 지운다(묘비가 지워지면 중앙에서 지운 문서를 다시 올린다 — #3787 진동).
+  const file = path.join(projDir, ".lively", "sync-ledger.json");
+  const tmp = `${file}.${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   try {
-    fs.writeFileSync(path.join(projDir, ".lively", "sync-ledger.json"),
-      JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
-  } catch { /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
+    fs.writeFileSync(tmp, JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
+    fs.renameSync(tmp, file);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* */ } /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
 }
 /** 로컬 파일이 이 기준선과 **바이트 동일한 그 파일**인가 — pull·push 가 mtime 을 서버 값으로 맞추므로 정확히 일치한다. */
 function sameAsBaseline(st, base) {

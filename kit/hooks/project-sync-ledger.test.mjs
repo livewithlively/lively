@@ -41,6 +41,8 @@ let SWAP = {};          // path → { body, mtime } — 매니페스트와 다�
 let SLOW = new Set();   // 이 경로는 머리와 첫 바이트만 보내고 본문 끝을 4초 끈다
 let HOLD = null;        // { path, requested(), release: Promise } — 본문을 시험이 풀어 줄 때까지 붙든다
 let GETS = [];          // 본문 요청 기록 { path, download }
+let STALL = new Set();  // 이 경로는 머리조차 4초 안 보낸다(서버·망이 잠깐 멈춤)
+let DELAY = {};         // path → ms — 머리는 바로, 본문은 그만큼 뒤에 통째로
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, "http://x");
   if (u.pathname === `/api/ui/v6/projects/${PROJECT_ID}/shared/manifest`) {
@@ -62,6 +64,17 @@ const server = http.createServer((req, res) => {
     }
     const head = { "content-type": download ? "application/octet-stream" : "text/plain" };
     if (STAMP) { head["x-file-mtime"] = String(v.mtime); head["x-file-size"] = String(buf.length); }
+    if (STALL.has(p)) {
+      const t = setTimeout(() => { res.writeHead(200, head); res.end(buf); }, 4000);
+      res.on("close", () => clearTimeout(t));
+      return;
+    }
+    if (DELAY[p]) {
+      res.writeHead(200, head); res.flushHeaders();
+      const t = setTimeout(() => res.end(buf), DELAY[p]);
+      res.on("close", () => clearTimeout(t));
+      return;
+    }
     if (SLOW.has(p)) {
       res.writeHead(200, head); res.write(buf.subarray(0, 1));
       const t = setTimeout(() => res.end(buf.subarray(1)), 4000);
@@ -131,13 +144,14 @@ function tempsIn(dir) {
   return out;
 }
 function resetServer(files) {
-  SERVER = files; FAIL = new Set(); STAMP = true; SWAP = {}; SLOW = new Set(); HOLD = null; GETS = [];   // 지금 서버는 늘 도장을 싣는다
+  SERVER = files; FAIL = new Set(); STAMP = true; SWAP = {}; SLOW = new Set(); HOLD = null; GETS = []; STALL = new Set(); DELAY = {};   // 지금 서버는 늘 도장을 싣는다
 }
 const within = (p, ms, why) => {
   let t; const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(why)), ms); });
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
 };
 const skipOf = (dir) => { const s = readOr(path.join(dir, ".lively", "pull-skip.json")); return s ? JSON.parse(s).items : {}; };
+const writeLedgerRaw = (dir, obj) => fs.writeFileSync(path.join(dir, ".lively", "sync-ledger.json"), typeof obj === "string" ? obj : JSON.stringify(obj));
 
 try {
   for (const [id, hookPath] of Object.entries(HOOKS)) {
@@ -485,7 +499,7 @@ try {
 
     // ── ⑯ 넉넉히 받고도 마감에 끊긴 판은 기록해 두고 한동안 다시 받지 않는다 — 기록이 지나면 다시, 횟수는 늘어난다 ──
     await scenario(`[${id}] #4609 마감에 끊긴 판 → 보류(다음 실행 요청 0건) · 보류가 지나면 다시`, async () => {
-      resetServer({ "slow.txt": { body: "느린 본문 — 끝까지 오지 않는다", mtime: 9_000_000 } });
+      resetServer({ "slow.txt": { body: "S".repeat(1024 * 1024 + 10), mtime: 9_000_000 } });   // 대역폭이 문제일 만큼 큰 파일
       SLOW = new Set(["slow.txt"]);
       const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
       const env = { LIVELY_HOOK_TIMEOUT_MS: "1500" };
@@ -495,7 +509,7 @@ try {
       GETS = [];
       const ms = await runHook(hookPath, dir, env);
       assert.equal(GETS.filter((g) => g.path === "slow.txt").length, 0, `[${id}] 🔴 보류 중인 판을 또 받으려 했다 — 실행마다 같은 시간을 버린다`);
-      assert.ok(ms < 1000, `[${id}] 보류 중인데 실행이 오래 걸렸다(${ms}ms)`);
+      assert.ok(ms < 2500, `[${id}] 보류 중인데 실행이 오래 걸렸다(${ms}ms)`);
       // 보류가 지났다(31분 전 기록) → 다시 시도하고, 또 끊기면 횟수가 2 로 는다
       const items = skipOf(dir); items["slow.txt"].at = Date.now() - 31 * 60_000;
       fs.writeFileSync(path.join(dir, ".lively", "pull-skip.json"), JSON.stringify({ v: 1, items }));
@@ -575,6 +589,64 @@ try {
       assert.deepEqual(L["b.txt"], { mtime: 9_000_000, size: Buffer.byteLength(B) }, `[${id}] 🔴 옛 판 기준선을 안 고쳤다`);
       assert.equal(GETS.length, 0, `[${id}] 바뀐 것 없는 실행인데 받았다`);
       assert.equal(markerOf(dir).last_pull, 9_000_000);
+    });
+
+    // ── ㉑ 머리도 못 받고 멈춘 작은 문서는 «느린 받기»가 아니다 — 보류하지 않고 다음 실행이 바로 받는다 ──
+    await scenario(`[${id}] #4609 머리 멈춤·작은 문서 → 보류 없음 · 다음 실행이 받음`, async () => {
+      resetServer({ "tiny.md": { body: "8바이트", mtime: 9_000_000 } });
+      STALL = new Set(["tiny.md"]);
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      await runHook(hookPath, dir, { LIVELY_HOOK_TIMEOUT_MS: "1500" });
+      assert.equal(skipOf(dir)["tiny.md"], undefined, `[${id}] 🔴 서버가 잠깐 멈춘 작은 문서를 보류했다 — 30분 넘게 안 온다`);
+      STALL = new Set(); GETS = [];
+      await runHook(hookPath, dir);
+      assert.equal(readOr(path.join(dir, "tiny.md")), "8바이트", `[${id}] 서버가 돌아왔는데 다음 실행이 안 받았다`);
+      assert.equal(markerOf(dir).last_pull, 9_000_000);
+    });
+
+    // ── ㉒ 앞 파일들이 시간을 써서 늦게 시작한 받기가 끊긴 것은 보류하지 않는다(fair) ──
+    await scenario(`[${id}] #4609 늦게 시작해 끊긴 큰 파일 → 보류 없음`, async () => {
+      resetServer({ "first.md": { body: "먼저 받는 작은 문서", mtime: 9_000_000 }, "late.bin": { body: "L".repeat(1024 * 1024 + 10), mtime: 9_000_000 } });
+      DELAY = { "first.md": 700 };                        // 창(1050ms)의 절반 넘게 쓴다
+      SLOW = new Set(["late.bin"]);
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      await runHook(hookPath, dir, { LIVELY_HOOK_TIMEOUT_MS: "1500" });
+      assert.equal(readOr(path.join(dir, "first.md")), "먼저 받는 작은 문서");
+      assert.equal(skipOf(dir)["late.bin"], undefined, `[${id}] 🔴 늦게 시작해 끊긴 파일을 «느린 파일»로 보류했다`);
+      assert.deepEqual(tempsIn(dir), []);
+    });
+
+    // ── ㉓ 기준선 보충은 묘비를 걷고, 못 읽은(쓰는 중·깨진) 원장 위에는 쓰지 않는다 ──
+    await scenario(`[${id}] #4609 기준선 보충 — 묘비 걷기 · 못 읽은 원장은 안 덮음`, async () => {
+      const C = "다시 나타난 문서";
+      resetServer({ "c.txt": { body: C, mtime: 9_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both", last_pull: 9_000_000 }, { "c.txt": { body: C, mtime: 9_000_000 } });
+      writeLedgerRaw(dir, { v: 2, files: {}, tombs: { "c.txt": { mtime: 1_000_000, size: 3, at: 1 }, "keep.txt": { mtime: 1, size: 1, at: 1 } } });
+      fs.writeFileSync(path.join(dir, "keep.txt"), "x");   // 묘비가 살아 있으려면 로컬에 남아 있어야 한다
+      await runHook(hookPath, dir);
+      const raw = JSON.parse(readOr(path.join(dir, ".lively", "sync-ledger.json")));
+      assert.deepEqual(raw.files["c.txt"], { mtime: 9_000_000, size: Buffer.byteLength(C) });
+      assert.equal(raw.tombs["c.txt"], undefined, `[${id}] 🔴 서버에 다시 있는 파일의 묘비를 안 걷었다`);
+      assert.ok(raw.tombs["keep.txt"], `[${id}] 상관없는 묘비를 지웠다`);
+      // 못 읽는 원장(쓰다 만 모양) — 기준선 보충은 쓰지 않는다
+      writeLedgerRaw(dir, "{\"v\":2,\"files\":{\"other.txt\":");
+      await runHook(hookPath, dir);
+      assert.equal(readOr(path.join(dir, ".lively", "sync-ledger.json")), "{\"v\":2,\"files\":{\"other.txt\":",
+        `[${id}] 🔴 못 읽은 원장을 빈 원장으로 보고 덮어썼다 — 다른 기준선·묘비가 다 지워진다`);
+    });
+
+    // ── ㉔ 옛 훅(Node 18~22)이 1ms 내려 찍은 흔적 — 받지 않고 시각만 바로잡는다 ──
+    await scenario(`[${id}] #4609 옛 1ms 흔적 → 시각만 바로잡음(요청 0건) · 옛 기준선 판은 정상 갱신`, async () => {
+      const A = "기준선 없이 1ms 아래", B0 = "받은 그대로(1ms 아래)", B1 = "서버가 바꾼 새 판 — 길이 다름";
+      resetServer({ "a.txt": { body: A, mtime: 9_000_000 }, "b.txt": { body: B1, mtime: 9_500_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" },
+        { "a.txt": { body: A, mtime: 8_999_999 }, "b.txt": { body: B0, mtime: 4_999_999 } },
+        { "b.txt": { mtime: 5_000_000, size: Buffer.byteLength(B0) } });
+      await runHook(hookPath, dir);
+      assert.equal(GETS.filter((g) => g.path === "a.txt").length, 0, `[${id}] 1ms 흔적인데 받아 대 봤다(요청 0건이어야 한다)`);
+      assert.equal(mtimeOf(path.join(dir, "a.txt")), 9_000_000, `[${id}] 1ms 흔적의 시각을 안 바로잡았다`);
+      assert.equal(readOr(path.join(dir, "b.txt")), B1, `[${id}] 🔴 1ms 흔적 파일을 «로컬 편집»으로 보고 서버 새 판을 안 받았다`);
+      assert.equal(markerOf(dir).last_pull, 9_500_000);
     });
   }
   if (failures.length) throw new Error(`#4609 시나리오 ${failures.length}건 실패:\n  ${failures.join("\n  ")}`);

@@ -186,13 +186,21 @@ function readLedger(projDir) {
       return Object.fromEntries(Object.entries(v).map(([kk, vv]) => [nk(kk), vv]));   // 구 원장(NFD 키)도 여기서 접힌다
     };
     return { files: pick("files"), tombs: pick("tombs") };
-  } catch { return { files: {}, tombs: {} }; }   // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe)
+  } catch (e) {
+    // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe). bad = 파일은 있는데 못 읽었다(쓰는 중·깨짐) —
+    //  빈 원장 위에 «덧쓰기»를 하면 다른 기준선·묘비가 다 지워지므로, 덧쓰기만 하는 자리(healBaselines)는 이때 쓰지 않는다(#4609).
+    return { files: {}, tombs: {}, bad: !(e && e.code === "ENOENT") };
+  }
 }
 function writeLedger(projDir, files, tombs) {
+  // 임시 파일 → rename(#4609). 그 자리에 바로 쓰면 같은 폴더의 다른 받기·올리기가 쓰다 만 원장을 읽어 «빈 원장»으로
+  //  보고, 그 위에 쓰면서 다른 기준선·묘비를 지운다(묘비가 지워지면 중앙에서 지운 문서를 다시 올린다 — #3787 진동).
+  const file = path.join(projDir, ".lively", "sync-ledger.json");
+  const tmp = `${file}.${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   try {
-    fs.writeFileSync(path.join(projDir, ".lively", "sync-ledger.json"),
-      JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
-  } catch { /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
+    fs.writeFileSync(tmp, JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
+    fs.renameSync(tmp, file);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* */ } /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
 }
 /** 로컬 파일이 이 기준선과 **바이트 동일한 그 파일**인가 — pull·push 가 mtime 을 서버 값으로 맞추므로 정확히 일치한다. */
 function sameAsBaseline(st, base) {
@@ -240,11 +248,15 @@ function sweepTemps(dir) {
   } catch { /* 폴더 없음 등 — 지울 것도 없다 */ }
 }
 
-/** 서버 파일 하나를 숨김 임시 파일로 받는다 → { tmp, mtime, size }(받은 판) · 마감에 끊김 → { err: "deadline" } · 그 밖의 실패 → null.
+// 이보다 작은 파일이 끊긴 건 대역폭 탓이 아니다(서버·망이 잠깐 멈춘 것) — «느린 받기»로 보류하지 않고 다음 실행이 바로 다시 받는다.
+const SLOW_MIN_BYTES = 1024 * 1024;
+
+/** 서버 파일 하나를 숨김 임시 파일로 받는다 → { tmp, mtime, size }(받은 판) · 느린 받기로 끊김 → { err: "slow" } · 그 밖의 실패 → null.
  *  어느 실패든 임시 파일은 남기지 않는다. */
 async function fetchToTemp(getFile, f, dest, hardDeadline) {
   const left = hardDeadline - Date.now();
   if (left <= 0) return null;
+  const t0 = Date.now();
   let late = false;
   const ctl = new AbortController(); const t = setTimeout(() => { late = true; ctl.abort(); }, left);
   let tmp = null;
@@ -262,7 +274,14 @@ async function fetchToTemp(getFile, f, dest, hardDeadline) {
     if (fs.statSync(tmp).size !== size) { drop(tmp); return null; }   // 받는 사이 판이 바뀌었거나 끊겼다 → 다음 실행에
     if (mtime) stampMtime(tmp, mtime);
     return { tmp, mtime, size };
-  } catch { if (tmp) drop(tmp); return late ? { err: "deadline" } : null; }
+  } catch {
+    let got = 0;
+    if (tmp) { try { got = fs.statSync(tmp).size; } catch { /* */ } drop(tmp); }
+    // «느린 받기» = 본문이 흐르다가(바이트가 왔다) 마감에 끊겼거나 2초 넘게 받다 끊겼고, 대역폭이 문제일 만큼 크다.
+    //  머리도 못 받고 멈춘 것·작은 파일은 그냥 실패다 — 보류하면 작은 문서 하나가 30분 넘게 안 온다(재검토 실측).
+    const slow = got > 0 && (f.size || 0) >= SLOW_MIN_BYTES && (late || Date.now() - t0 > 2000);
+    return slow ? { err: "slow" } : null;
+  }
   finally { clearTimeout(t); }
 }
 
@@ -330,19 +349,31 @@ function skipNow(memo, f, local) {
  *  굳는다. 기준선이 서버 판과 이미 같은 파일은 stat 도 하지 않으므로 평소 비용은 원장 읽기 한 번이다. */
 function healBaselines(projDir, files, keyOf) {
   const led = readLedger(projDir), fix = {};
+  if (led.bad) return;                                                // 못 읽었다(쓰는 중·깨짐) — 빈 원장 위에 덧쓰면 다 지운다
   for (const f of files) {
     const dest = path.join(projDir, f.path);
     if (path.relative(projDir, dest).startsWith("..")) continue;
     const k = keyOf(f), b = led.files[k];
     if (b && b.mtime === f.mtime && b.size === f.size) continue;     // 이미 맞다
     let st = null; try { st = fs.statSync(dest); } catch { continue; }
-    if (st.size === f.size && Math.floor(st.mtimeMs) === f.mtime) fix[k] = { mtime: f.mtime, size: f.size };
+    if (st.size !== f.size) continue;
+    const m = Math.floor(st.mtimeMs);
+    if (m === f.mtime - 1) { try { stampMtime(dest, f.mtime); } catch { continue; } }   // 옛 훅의 1ms 흔적 — 아래 판정 절 주석
+    else if (m !== f.mtime) continue;
+    fix[k] = { mtime: f.mtime, size: f.size };
   }
   if (!Object.keys(fix).length) return;
   const cur = readLedger(projDir);                                    // 다시 읽어 그 위에 얹는다(그 사이 쓴 기록을 덮지 않게)
-  const tombs = { ...cur.tombs };
-  for (const k of Object.keys(fix)) delete tombs[k];                  // 서버에 다시 있고 로컬도 같다 → 묘비가 아니다
-  writeLedger(projDir, { ...cur.files, ...fix }, tombs);
+  if (cur.bad) return;
+  const next = { ...cur.files }, tombs = { ...cur.tombs };
+  let n = 0;
+  for (const [k, v] of Object.entries(fix)) {
+    const a = led.files[k], c = cur.files[k];
+    // 처음 읽은 뒤 다른 실행(예: 방금 올린 push)이 이 키를 고쳤으면 그쪽이 새것이다 — 덮지 않는다.
+    if (!(a === c || (a && c && a.mtime === c.mtime && a.size === c.size))) continue;
+    next[k] = v; delete tombs[k]; n++;                                // 서버에 다시 있고 로컬도 같다 → 묘비가 아니다
+  }
+  if (n) writeLedger(projDir, next, tombs);
 }
 
 (async () => {
@@ -437,6 +468,14 @@ function healBaselines(projDir, files, keyOf) {
     //  받을 것도 지킬 것도 없다 → 기준선만 서버 판으로. 🔴 옛 판일 때를 빼면, 원장 갱신 하나가 유실된 파일(pull 과
     //  push 가 원장을 따로 다시 쓰다 한쪽 기록이 덮인 경우)이 «로컬도 서버도 바뀜»으로 판정돼 영영 수렴하지 못한다
     //  (#4609 실측: 서버와 크기·시각까지 같은데 기준선이 옛 판인 파일 4개가 last_pull 을 막고 있었다).
+    // (#4609) Node 18~22 의 옛 훅은 받은 파일 시각을 절반쯤 1ms 내려 찍었다(stampMtime 주석). 정확히 1ms 아래인 흔적은
+    //  우리가 찍은 그 판으로 보고 시각만 바로잡는다 — 사람이 고친 파일은 시각이 «고친 때»라 정확히 1ms 아래일 수 없다.
+    //  안 고치면 그 파일은 영영 «로컬 편집»으로 보이고, push 는 중앙에서 지운 그 파일을 «고친 것»으로 보고 되살린다.
+    if (ledger && local) {
+      const lm = Math.floor(local.mtimeMs), want = local.size === f.size && lm === f.mtime - 1 ? f.mtime
+        : base && local.size === base.size && lm === base.mtime - 1 ? base.mtime : 0;
+      if (want) { try { stampMtime(dest, want); local = fs.statSync(dest); } catch { /* 못 고치면 종전 판정 그대로 */ } }
+    }
     if (ledger && local && local.size === f.size && Math.floor(local.mtimeMs) === f.mtime) {
       held[key] = { mtime: f.mtime, size: f.size };
       if (skip[key]) skipDel.add(key);
@@ -500,7 +539,7 @@ function healBaselines(projDir, files, keyOf) {
     const got = await fetchToTemp(getFile, q.f, q.dest, hardDeadline);
     if (!got || got.err) {                                           // 개별 실패 → last_pull 미갱신 → 다음 실행 재시도
       completed = false;
-      if (got && got.err === "deadline" && fair) {
+      if (got && got.err === "slow" && fair) {
         const prev = skip[q.key];
         const n = prev && prev.why === "slow" && sameVer(prev.s, q.f.size, q.f.mtime) ? (Number(prev.n) || 1) + 1 : 1;
         skipSet[q.key] = { why: "slow", s: [q.f.size, q.f.mtime], at: Date.now(), n };
