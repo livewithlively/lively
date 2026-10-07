@@ -33,7 +33,7 @@ import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
 import { listSessionApps } from './app-session.js';
@@ -60,7 +60,7 @@ import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
-import { glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
+import { appGlyphName, glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -826,6 +826,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // ── 탭 ──
   //  탭이 스스로 단 이름(뷰어=파일명·웹=사이트) — 열쇠마다 하나. 부품이 setTabTitle 로 적는다(#762).
   const tabTitles = new Map<TabKey, string>();
+  //  탭이 스스로 단 얼굴(#4592) — 앱 아이콘 이름 하나가 그림과 색을 함께 정한다. 붙은 앱 탭이 쓴다(setTabFace). 없으면 종류의 기본.
+  const tabFaces = new Map<TabKey, string>();
   /** 그 탭 앞으로 만든 ctx — 셸이 쥔 한 벌에 **이 탭의 정체**만 얹는다. */
   function ctxFor(slot: TabKey): PartCtx {
     return {
@@ -839,6 +841,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         if (next) tabTitles.set(slot, next); else tabTitles.delete(slot);
         //  띠만 다시 그린다 — paintAll 이면 부품이 통째로 다시 서서 보던 자리가 튄다.
         for (const z of ['main', 'side', 'bottom'] as Zone[]) if (zoneTabs(z).includes(slot)) paintTabs(z);
+      },
+      setTabFace: (icon: string | null) => {
+        const next = String(icon || '');
+        if ((tabFaces.get(slot) || '') === next) return;
+        if (next) tabFaces.set(slot, next); else tabFaces.delete(slot);
+        for (const z of ['main', 'side', 'bottom'] as Zone[]) if (zoneTabs(z).includes(slot)) paintTabs(z);
+        dock?.sync();                                   // 독 아이콘도 같은 얼굴이다
       },
     };
   }
@@ -1141,6 +1150,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  부품은 **그려진 칸**에 산다 — 접힌 탭은 아래 칸의 열쇠라도 곁칸에 서 있다. 어디 있든 걷는다.
     for (const pane of panes.values()) dropPartFrom(pane, key);
     tabTitles.delete(key);
+    tabFaces.delete(key);
     //  켜진 탭을 닫았으면 **가장 최근에 보던 탭**으로 — 기록이 없으면 오른쪽 이웃(크롬), 그것도 없으면 왼쪽(lib/pane-tabs).
     //   종전엔 늘 왼쪽 이웃이었다: 자료에서 파일을 열어 보고 닫으면 자료가 아니라 그 앞에 열어 둔 다른 파일이 켜졌다.
     //  ⚠ 여기서 saveAct 를 부르지 않는다 — dropTab 은 세션을 갈아 끼울 때도 불린다(syncSessApps 가 옛 세션의 앱 탭을 걷는다).
@@ -1249,6 +1259,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** 탭 아이콘 — 뷰어는 **파일 종류**로 그린다(그림 · 문서 · 코드 · 시안 · 영상). 종전엔 뷰어가 전부 같은 눈 아이콘이라
    *  접힌 줄에서 서로를 가릴 길이 아이콘 어깨의 작은 번호뿐이었다(그 번호가 아이콘을 한쪽으로 치우쳐 보이게 했다 — 원준 신고). */
   function tabIcon(key: TabKey): string {
+    const face = tabFaces.get(key);
+    if (face) return appGlyphName(face);               // 붙은 앱 = 그 앱의 그림(앱 찾기와 같은 그림)
     const d = partDef(tabBase(key) as PartType);
     if (tabBase(key) !== 'editor') return d.icon;
     const nm = tabTitles.get(key) || rememberedViewerPath(ctx.memKey(), key);
@@ -1256,6 +1268,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const k = kindOf(nm);
     return k.kind === 'img' ? 'img' : k.kind === 'video' || k.kind === 'audio' ? 'play' : k.kind === 'page' ? 'window' : k.type === '코드' ? 'code' : 'doc';
   }
+  /** 탭의 색 토큰 이름(--gi-c-<이름>) — 탭이 단 얼굴이 있으면 그 앱의 색, 없으면 종류의 색(lib/pane-dock appColor). */
+  const tabColor = (key: TabKey): string => tabFaces.get(key) || appColor(tabBase(key));
   /** 탭 툴팁 — 이름이 줄어 있거나 아이콘만 남았을 때 여기서 온전한 이름을 읽는다. */
   function tabTip(key: TabKey): string {
     const d = partDef(tabBase(key) as PartType);
@@ -1288,7 +1302,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     }, pnIcon('x', 'pn-i xs'));
     //  #4443 — 앱마다 한 색(--ac): 아이콘 칩의 선 · 켜진 탭의 옅은 물. 독 아이콘과 같은 토큰이라 같은 앱으로 읽힌다(lib/pane-dock appColor).
     //   단추에도 건다 — 끌 때 뜨는 조각(pane-tabdrag 의 고스트)은 단추만 복제한다.
-    const ac = `--ac: var(--gi-c-${appColor(tabBase(key))})`;
+    const ac = `--ac: var(--gi-c-${tabColor(key)})`;
     b.setAttribute('style', ac);
     const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, style: ac, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
@@ -1566,6 +1580,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const lead = b?.querySelector('.pn-tab-lead') as HTMLElement | null;
       const ic = tabIcon(key);
       if (lead && lead.dataset.ic !== ic) { lead.dataset.ic = ic; lead.replaceChildren(pnIcon(glyphAt(ic, 14), 'pn-i sm')); }
+      //  얼굴이 바뀌면 색도 같이 바뀐다(붙은 앱이 바뀌었다) — 단추와 감싼 칸 둘 다(끌 때 뜨는 조각은 단추만 복제한다).
+      const ac = `--ac: var(--gi-c-${tabColor(key)})`;
+      if (b && b.getAttribute('style') !== ac) { b.setAttribute('style', ac); wrapEl.style.setProperty('--ac', `var(--gi-c-${tabColor(key)})`); }
       wrapEl.classList.toggle('on', key === act);
     }
     fit(pane);
@@ -1776,6 +1793,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const z = zoneOf(SESSAPP_TAB)!;
       //  탭 이름 — 부품은 켜질 때 서므로, 한 번도 안 켠 탭은 기본 이름(«붙은 앱»)으로 남는다. 목록으로 셸이 먼저 건다.
       tabTitles.set(SESSAPP_TAB, sessAppTabTitle(apps));
+      //  얼굴도 같은 때에 — 하나면 그 앱의 아이콘, 여럿이면 기본 그림(부품이 서면 보이는 앱의 것으로 다시 건다).
+      { const f = sessAppTabFace(apps); if (f) tabFaces.set(SESSAPP_TAB, f); else tabFaces.delete(SESSAPP_TAB); }
       if (added.length) { bringUp(z, SESSAPP_TAB); return; }
       if (!had) {
         const mine = readActs()[actKey()];
@@ -1826,6 +1845,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     act: () => panes.get('side')?.act ?? null,
     recent: () => [...recent.side, ...recent.bottom],
     title: (k) => tabName(k),
+    face: (k) => tabFaces.get(k) ?? null,
     //  독은 곁칸의 문 — 닫힌 아래 칸(터미널 밑)에 있던 탭이면 아래 칸을 펼치지 않고 곁칸으로 옮겨 켠다(원준 10-01:
     //   «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와» — 옛 기본 배치가 타임라인을 닫힌 아래 칸에 두었다. 지금 기본은 비어 있다).
     show: (k) => bringUp(zoneOf(k) || 'side', k),

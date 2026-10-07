@@ -61,7 +61,7 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules
 const SRC = process.env.DOCK_UI_SRC || path.join(ROOT, "web/v2/pane-dock.ts");
 const CTX = process.env.CTX_SRC || path.join(ROOT, "web/v2/ctx-registry.ts");
 //  독과 셸의 메뉴 엔진을 **한 묶음**으로 — 둘이 같은 제공자 표(bindCtx)와 같은 «열린 메뉴» 를 봐야 한다(따로 묶으면 표가 둘이 된다).
-const entry = `export * from ${JSON.stringify(SRC)};\nexport { mountCtxMenus, bindCtxSurface, registerCtxCommon } from ${JSON.stringify(CTX)};\n`;
+const entry = `export * from ${JSON.stringify(SRC)};\nexport { mountCtxMenus, bindCtxSurface, registerCtxCommon } from ${JSON.stringify(CTX)};\nexport { iconPath } from ${JSON.stringify(path.join(ROOT, "web/lib/icon-paths.ts"))};\n`;
 //  입구는 절대 경로만 쓴다(stdin 이라 기준 폴더가 없다).
 const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-name=Dock", "--platform=browser", "--log-level=error", "--loader=ts", "--sourcefile=dock-test-entry.ts"],
   { input: entry, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -619,6 +619,27 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const m2=document.querySelector('.pn-dock-more');
   R.r19=!!m2 && m2.textContent.includes('사이드바 앱') && !m2.textContent.includes('이 세션에 붙이기');
   dock2.destroy();
+  // R20 — 붙은 앱 칸은 그 앱의 얼굴로 선다(#4592): 얼굴이 있으면 그 그림 · 그 색, 없으면(옛 셸 · 앱이 여럿) 종류의 기본(네모 넷)
+  try{
+    const APPS20=[...APPS,{type:'sessapp',name:'붙은 앱',glyph:'apps',hint:'',multi:false,pickable:false}];
+    const st20={tabs:[{key:'files',type:'files'},{key:'sessapp',type:'sessapp'}]};
+    let face20='deck';
+    const host20={...host, apps:()=>APPS20, tabs:()=>st20.tabs, act:()=>'files', title:(k)=>k==='sessapp'?'장표 수정':'T:'+k, face:(k)=>k==='sessapp'?face20:null};
+    const dock20=Dock.mountDock(host20); await frame(); await sleep(40);
+    const it=()=>document.querySelector('.pn-dock-it[data-type="sessapp"]');
+    const dOf=(b)=>b&&b.querySelector('.v2-gi-glyph').getAttribute('d'); const sOf=(b)=>b&&b.querySelector('.v2-gi-glyph').getAttribute('stroke');
+    const appsD='M4 4h6v6H4z';
+    R.r20_face=!!it() && !dOf(it()).startsWith(appsD) && dOf(it())===Dock.iconPath('deck') && sOf(it())==='var(--gi-c-deck)' && it().getAttribute('style').includes('--gi-c-deck') && it().getAttribute('aria-label').startsWith('장표 수정');
+    R.r20_info={d:String(dOf(it())).slice(0,24),s:sOf(it()),st:it()&&it().getAttribute('style')};
+    face20=null; dock20.sync(); await frame(); await sleep(40);
+    R.r20_back=!!it() && dOf(it()).startsWith(appsD) && sOf(it())==='var(--gi-c-liv)';
+    face20='deck'; dock20.sync(); await frame(); await sleep(40);
+    R.r20_again=!!it() && dOf(it())===Dock.iconPath('deck');
+    const host21={...host20}; delete host21.face; dock20.destroy();
+    const dock21=Dock.mountDock(host21); await frame(); await sleep(40);
+    R.r20_nohost=!!it() && dOf(it()).startsWith(appsD);
+    dock21.destroy();
+  }catch(e){R.err_r20=String(e&&e.message||e);}
   // D5 — 끄는 중에 독이 걷혔다(탭을 닫았다) → 놓아도 아무것도 안 적는다 · 조각이 안 남는다
   try{
     await setPins(['files','knowledge','tasks','web']);
@@ -744,6 +765,10 @@ check(R.r17b_tip, "R17c 자리바꿈이면 이름표는 세션 쪽(오른쪽)");
 check(R.r17c, "R17d 곁칸이 접히면 독도 여백도 빈 자리도 없다");
 check(R.destroyed, "R18 걷으면 흔적이 없다(이름표까지)");
 check(R.r19, "R19 붙이기 수단이 없으면(옛 판 게이트웨이) [더보기]에 그 구획이 없다 — 독은 그대로 쓴다");
+check(R.r20_face, "R20a ★ 붙은 앱 칸은 그 앱의 그림 · 그 앱의 색으로 선다(장표 수정 = deck) — 네모 넷이 아니다", JSON.stringify(R.r20_info));
+check(R.r20_back, "R20b 얼굴이 없어지면(앱이 여럿) 종류의 기본 그림 · 색으로 돌아간다");
+check(R.r20_again, "R20c 얼굴이 다시 서면 독도 다시 그린다(서명에 얼굴이 들어 있다)");
+check(R.r20_nohost, "R20d 얼굴을 안 주는 셸에서도 독은 선다(기본 그림)");
 const errs = Object.keys(R).filter((k) => k.startsWith("err_")).map((k) => `${k}: ${R[k]}`);
 check(!errs.length, "(배선) 시나리오 묶음이 넘어지지 않았다 — 위 판정이 실제로 끝까지 돌았다", errs.join(" | "));
 console.log(`\n${pass} ok · ${fail} fail`);

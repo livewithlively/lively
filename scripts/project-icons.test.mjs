@@ -172,7 +172,10 @@ let pjv = null, dash = null;
   ok(!/pnIcon\((ic|d\.icon|tabIcon\(t\)), /.test(PANES), "Q4 우측 사이드바 부품 그림을 크기 규칙 없이 그리는 자리가 없다");
   ok((PTASK.match(/pnIcon\(projGlyph\(13\), 'pn-i sm'\)/g) || []).length === 2 && /class: 'pn-tk-head-row' \}, pnIcon\(projGlyph\(13\)/.test(PTASK) && /class: 'pj-modal-h' \}, pnIcon\(projGlyph\(13\)/.test(PTASK), "Q4 「프로젝트」 칸 머리 · 크게 보기 머리(13px) = 작은 과녁(projGlyph(13))");
   ok((PTASK.match(/class: 'pn-empty' \}, pnIcon\(projGlyph\(26\), 'pn-i big'\)/g) || []).length === 2, "Q4 「프로젝트」 칸 빈 화면 둘(26px) = 과녁(projGlyph(26))");
-  ok(/glyph: d\.icon,/.test(PANES) && /tile\(app\.glyph, appColor\(it\.type\)\)/.test(DOCK), "Q4 독 타일은 부품 표의 이름(proj)을 그대로 그린다(64 칸 타일이라 큰 과녁)");
+  //  #4592 — 붙은 앱 칸만 그 앱의 얼굴(face)로 선다. 얼굴이 없는 칸(부품 전부)은 종전대로 부품 표의 이름을 그대로 그린다.
+  ok(/glyph: d\.icon,/.test(PANES) && /tile\(face \? appGlyphName\(face\) : app\.glyph, color\)/.test(DOCK) && /const color = face \|\| appColor\(it\.type\);/.test(DOCK)
+    && /const face = it\.type === 'sessapp' \? host\.face\?\.\('sessapp'\) \|\| null : null;/.test(DOCK),
+    "Q4 독 타일은 부품 표의 이름(proj)을 그대로 그린다(64 칸 타일이라 큰 과녁) — 얼굴은 붙은 앱 칸에만");
   {
     const files = [];
     const walk = (dir) => { for (const n of readdirSync(join(root, dir))) { const p = dir + "/" + n; if (statSync(join(root, p)).isDirectory()) walk(p); else if (/\.ts$/.test(n)) files.push(p); } };

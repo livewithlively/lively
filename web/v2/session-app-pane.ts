@@ -20,6 +20,8 @@ import { ctxMenu, pnIcon } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versions.js';
 import { bandText, draftTextFor, sessAppMenuRows } from '../lib/app-menu.js';
+import { builtinAppIcon } from './glass-icon.js';
+import { appGlyphName } from '../lib/icon-paths.js';
 
 export interface AttachedApp {
   app_id: string;
@@ -49,6 +51,19 @@ export const SHOW_SESSAPP_EVT = 'pn:show-sessapp';
 /** 탭에 걸 이름 — 하나면 그 앱 이름, 여럿이면 «앱 n개». 부품이 서기 전(탭을 한 번도 안 켰을 때)에도 이름이 맞게 셸이 건다. */
 export function sessAppTabTitle(apps: ReadonlyArray<{ title: string }>): string {
   return apps.length === 1 ? apps[0].title : `앱 ${apps.length}개`;
+}
+/** 붙은 앱 하나의 앱 아이콘 이름 — 앱 찾기 · [이 세션에 붙이기] 목록과 **같은 그림 · 같은 색**(glass-icon builtinAppIcon). */
+export const sessAppFace = (a: { app_id: string; has_ui: boolean }): string => builtinAppIcon(a.app_id, a.has_ui);
+/** 탭에 걸 얼굴 — 하나면 그 앱의 아이콘, 여럿이면 null(«앱 n개» 는 어느 한 앱이 아니다 → 종류의 기본 그림). 이름과 같은 때에 셸이 건다. */
+export function sessAppTabFace(apps: ReadonlyArray<{ app_id: string; has_ui: boolean }>): string | null {
+  return apps.length === 1 ? sessAppFace(apps[0]) : null;
+}
+/** 앱 아이콘의 선 그림을 그 앱 색으로(머리줄 · 앱이 둘 이상일 때의 안쪽 탭). */
+function faceIcon(a: { app_id: string; has_ui: boolean }, cls: string): SVGElement {
+  const face = sessAppFace(a);
+  const svg = pnIcon(appGlyphName(face), cls);
+  svg.setAttribute('style', `color: var(--gi-c-${face})`);
+  return svg;
 }
 
 const sessPath = (sid: string, tail = ''): string => '/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/apps' + tail;
@@ -249,7 +264,7 @@ export function sessAppPart(ctx: PartCtx): Part {
     const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 판 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
       onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openMenu(cur, r.right, r.bottom + 4); } }, pnIcon('more', 'pn-i sm'));
     head.replaceChildren(
-      pnIcon('apps', 'pn-i sm'),
+      faceIcon(cur, 'pn-i sm'),
       el('b', { class: 'pn-sessapp-title ell', text: cur.title }),
       ...(cur.version_no ? [el('span', { class: 'pn-sessapp-ver', text: `${cur.version_no}판` })] : []),
       el('span', { class: 'pn-sp' }),
@@ -271,13 +286,14 @@ export function sessAppPart(ctx: PartCtx): Part {
   function paint(): void {
     const cur = current();
     ctx.setTabTitle?.(cur ? cur.title : null);
+    ctx.setTabFace?.(cur ? sessAppFace(cur) : null);
     paintHead(cur);
     tabs.hidden = apps.length < 2;
     tabs.replaceChildren(...(apps.length < 2 ? [] : apps.map((a) => el('button', {
       class: 'pn-sessapp-tab' + (cur && a.app_id === cur.app_id ? ' on' : ''), type: 'button', role: 'tab',
       'aria-selected': cur && a.app_id === cur.app_id ? 'true' : 'false', title: a.title,
       onclick: () => { if (sid) { pick.set(sid, a.app_id); paint(); } },
-    }, pnIcon('apps', 'pn-i sm'), el('span', { text: a.title })))));
+    }, faceIcon(a, 'pn-i sm'), el('span', { text: a.title })))));
     if (!cur) {
       unmount();
       body.replaceChildren(el('div', { class: 'pn-empty' }, pnIcon('apps', 'pn-i big'),

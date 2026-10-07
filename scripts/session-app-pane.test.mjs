@@ -120,6 +120,16 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   eq(attachedDiff([], ["a"]), { added: ["a"], changed: true }, "S9-5 빈 목록에서 붙음 — 새로 붙음 [a]");
   const { sessAppTabTitle } = await import(join(root, "public/app/v2/session-app-pane.js"));
   eq([sessAppTabTitle([{ title: "메모" }]), sessAppTabTitle([{ title: "a" }, { title: "b" }])], ["메모", "앱 2개"], "S9-6 탭 이름 — 하나면 그 앱 이름, 여럿이면 «앱 n개»(탭을 한 번도 안 켜도)");
+  //  #4592 탭 · 독의 얼굴 — 원준 2026-10-07 "지금 <앱>이랑 아이콘 똑같은 네모4갠데 장표수정과 관계가 없잖아 … 탭이랑 Dock에 그렇게 보여".
+  const { sessAppTabFace, sessAppFace } = await import(join(root, "public/app/v2/session-app-pane.js"));
+  const { builtinAppIcon, APP_ICON_NAMES } = await import(join(root, "public/app/v2/glass-icon.js"));
+  eq(sessAppTabFace([{ app_id: "deck-edit", has_ui: true }]), "deck", "S9-7 ★ 붙은 앱이 하나면 탭의 얼굴은 그 앱의 아이콘(장표 수정 = deck) — 네모 넷(apps)이 아니다");
+  eq([sessAppTabFace([{ app_id: "memo", has_ui: true }]), sessAppTabFace([{ app_id: "helper", has_ui: false }])], ["liv", "term"],
+    "S9-8 그림을 정하지 않은 앱은 앱 찾기와 같은 기본 그림(화면 앱 liv · 세션 앱 term)");
+  eq(sessAppTabFace([{ app_id: "deck-edit", has_ui: true }, { app_id: "memo", has_ui: true }]), null, "S9-9 여럿이면 얼굴 없음(«앱 n개» 는 어느 한 앱이 아니다 → 종류의 기본 그림)");
+  eq(sessAppTabFace([]), null, "S9-10 빈 목록 — 얼굴 없음");
+  ok(sessAppFace({ app_id: "deck-edit", has_ui: true }) === builtinAppIcon("deck-edit", true) && APP_ICON_NAMES.includes("deck"),
+    "S9-11 얼굴은 앱 찾기 · [이 세션에 붙이기] 목록과 같은 함수에서 온다(같은 앱이 자리마다 다른 그림으로 서지 않는다)");
 }
 
 // ══ S10 곁칸 배선 — 줄 맨 앞의 실제 코드만 인정한다(주석 속 이름으로 통과하지 않게) ══════════════
@@ -145,6 +155,14 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   ok(/^\s*ctx\.paneRoot\(\)\.dispatchEvent\(new CustomEvent\(SHOW_SESSAPP_EVT, \{ detail: \{ app_id: a\.id \} \}\)\);/m.test(PARTS)
     && /^\s*wrap\.addEventListener\(SHOW_SESSAPP_EVT, onShowSessApp\);/m.test(PANES), "S10-8 이미 붙은 앱을 다시 누르면 그 탭을 켠다(«새로 붙음» 이 없어도)");
   ok(/^\s*tabTitles\.set\(SESSAPP_TAB, sessAppTabTitle\(apps\)\);/m.test(PANES), "S10-9 탭 이름은 셸이 목록으로 먼저 건다(부품이 서기 전에도 앱 이름)");
+  ok(/^\s*\{ const f = sessAppTabFace\(apps\); if \(f\) tabFaces\.set\(SESSAPP_TAB, f\); else tabFaces\.delete\(SESSAPP_TAB\); \}/m.test(PANES),
+    "S10-10 탭의 얼굴도 셸이 목록으로 먼저 건다(탭을 한 번도 안 켜도 그 앱의 아이콘)");
+  ok(/^\s*const face = tabFaces\.get\(key\);\n\s*if \(face\) return appGlyphName\(face\);/m.test(PANES) && /const tabColor = \(key: TabKey\): string => tabFaces\.get\(key\) \|\| appColor\(tabBase\(key\)\);/.test(PANES),
+    "S10-11 탭의 그림 · 색은 얼굴이 있으면 그 앱의 것(없으면 종류의 기본)");
+  ok(/^\s*face: \(k\) => tabFaces\.get\(k\) \?\? null,/m.test(PANES), "S10-12 독도 같은 얼굴을 받는다(host.face)");
+  ok(/^\s*tabFaces\.delete\(key\);/m.test(PANES), "S10-13 탭이 빠지면 얼굴도 지운다(다음 세션의 앱 탭에 옛 앱의 아이콘이 안 남게)");
+  ok(/^\s*ctx\.setTabFace\?\.\(cur \? sessAppFace\(cur\) : null\);/m.test(PANE) && !/pnIcon\('apps', 'pn-i sm'\)/.test(PANE),
+    "S10-14 부품은 보이는 앱의 얼굴을 건다 · 머리줄과 안쪽 탭에 네모 넷이 남지 않았다");
   ok(PANES.indexOf("let sessAppOff") > 0 && PANES.indexOf("let sessAppOff") < PANES.indexOf("function announceSession"), "S10-7 구독 상태는 announceSession 보다 먼저 선언된다(TDZ)");
   ok(/^\s*const offLive = onAppEvent\(/m.test(PANE), "앱 탭이 실시간 앱 사건(데이터 변경)을 듣는다");
 }

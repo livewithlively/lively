@@ -99,6 +99,9 @@ export interface PartCtx {
   /** 탭에 걸릴 이름을 부품이 정한다(null = 부품 기본 이름). 뷰어는 파일 이름, 웹 칸은 사이트 이름을 건다 —
    *  같은 종류가 둘 이상 뜨는 순간 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 알 수 없다. */
   setTabTitle?: (t: string | null) => void;
+  /** 이 탭의 얼굴 — 앱 아이콘 이름(glass-icon APP_ICON_NAMES: 그림과 색이 한 이름). null 이면 종류의 기본 그림으로 돌아간다.
+   *  붙은 앱 탭이 쓴다(#4592): 종전엔 어느 앱이 붙든 탭 · 독이 «앱» 의 네모 넷이라 무슨 앱인지 그림으로는 알 수 없었다. */
+  setTabFace?: (icon: string | null) => void;
 }
 
 export interface Part {

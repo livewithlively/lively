@@ -3,13 +3,15 @@
 //  원준 2026-10-04: "앱 화면 … 기본 앱과 직접 만든 앱 … 적당히 이름 붙여서 둘로 나눠서 보여줘.
 //   그리고 홈(클래식) -> 대시보드로 이름을 바꾸고 얘는 후자에 있는 기본 앱이 아니게 바꿔주고."
 //  시나리오 번호는 사양의 엣지 표 행이다.
-//   G1~G4  설치된 앱의 묶음: builtin 만 기본 앱 · 그 밖(inline · git · path · 출처 없음)은 워크스페이스 앱
+//   G1~G4  설치된 앱의 묶음: 셸이 그리는 builtin 만 기본 앱 · 그 밖(inline · git · path · 출처 없음)은 워크스페이스 앱
+//   G5~G7  #4592(원준 2026-10-07 "이런 장표 수정 앱은 … 워크스페이스 앱에도 나오게"): 제품에 실려 와도 워크스페이스가 고쳐 쓰는 앱
+//          (system 선언이 없는 빌트인)은 워크스페이스 앱 · 실은 매니페스트로 보면 그런 앱은 「장표 수정」 하나
 //   B1~B5  Enter 로 열릴 칸: 가장 잘 맞은 칸 · 동점은 앞 칸 · 아래 묶음의 이름 일치가 위 묶음의 설명 일치를 이긴다 · 빈 목록 -1
 //   D1~D5  대시보드 줄: 이름 · 묶음 · 옛 이름 검색 · 표의 맨 끝 · 키와 주소는 그대로
 //   W1~W4  배선: 묶음 제목 둘 · 화면이 같은 잣대를 쓴다 · 표시와 Enter 가 같은 칸 · 가이드 문서
 //   K1~K3  배지는 「세션 앱」에만 · 가이드에서 「안녕 앱」과 「앱」 표시를 뺐다
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -31,11 +33,23 @@ const read = (f) => readFileSync(path.join(root, f), "utf8");
 const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
 
 // ───────────────────────── G. 설치된 앱의 묶음
-check(padGroupOfInstalled("builtin") === "base", "G1 제품에 실려 온 앱(builtin)은 기본 앱");
-check(padGroupOfInstalled("inline") === "workspace", "G2 세션이 만든 앱(inline)은 워크스페이스 앱");
-check(padGroupOfInstalled("git") === "workspace" && padGroupOfInstalled("path") === "workspace", "G3 설치한 앱(git · path)은 워크스페이스 앱");
-check(padGroupOfInstalled(undefined) === "workspace" && padGroupOfInstalled(null) === "workspace" && padGroupOfInstalled("") === "workspace",
+check(padGroupOfInstalled("builtin", true) === "base", "G1 제품에 실려 왔고 셸이 그리는 앱(builtin + system)은 기본 앱");
+check(padGroupOfInstalled("inline") === "workspace" && padGroupOfInstalled("inline", true) === "workspace", "G2 세션이 만든 앱(inline)은 워크스페이스 앱 — system 을 선언했어도");
+check(padGroupOfInstalled("git") === "workspace" && padGroupOfInstalled("path") === "workspace" && padGroupOfInstalled("git", true) === "workspace", "G3 설치한 앱(git · path)은 워크스페이스 앱");
+check(padGroupOfInstalled(undefined) === "workspace" && padGroupOfInstalled(null) === "workspace" && padGroupOfInstalled("") === "workspace" && padGroupOfInstalled(undefined, true) === "workspace",
   "G4 출처를 모르는 앱은 기본 앱이라 부르지 않는다");
+check(padGroupOfInstalled("builtin", false) === "workspace" && padGroupOfInstalled("builtin") === "workspace",
+  "G5 ★ 제품에 실려 왔어도 워크스페이스가 고쳐 쓰는 앱(system 없음)은 워크스페이스 앱");
+{
+  //  실은 매니페스트로 본다 — 이름이 아니라 선언이 묶음을 정한다. 새 빌트인을 넣을 때 어느 묶음에 서는지 여기서 드러난다.
+  const dir = path.join(root, "apps/builtin");
+  const ms = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => JSON.parse(read(`apps/builtin/${d.name}/lively-app.json`)));
+  const ws = ms.filter((m) => padGroupOfInstalled("builtin", !!m.system) === "workspace").map((m) => m.id).sort();
+  check(JSON.stringify(ws) === JSON.stringify(["deck-edit"]), "G6 ★ 실은 앱 가운데 워크스페이스 앱에 서는 것은 「장표 수정」(deck-edit) 하나", JSON.stringify(ws));
+  const de = ms.find((m) => m.id === "deck-edit");
+  check(!!de && !de.system && !!de.ui && Array.isArray(de.ui.pages) && de.ui.pages.length > 0,
+    "G7 그 앱은 화면 코드가 앱 안에 있다(ui.pages) — 워크스페이스가 app_save 로 고칠 것이 있는 앱이라 워크스페이스 앱이다");
+}
 
 // ───────────────────────── B. Enter 로 열릴 칸 (rank: 0 이름 시작 · 1 이름 안 · 2 옛 이름 · 3 설명에만)
 check(padBestIndex([3, 0]) === 1, "B1 ★ 위 묶음의 설명 일치(3)보다 아래 묶음의 이름 일치(0)가 열린다");
@@ -68,7 +82,7 @@ check(/key: 'dashboard'/.test(dash) && /route: 'dashboard'/.test(dash) && /tab: 
   const base = APPS.indexOf("key: 'base', title: '기본 앱'"), ws = APPS.indexOf("key: 'workspace', title: '워크스페이스 앱'");
   check(base >= 0 && ws > base, "W1 묶음 제목 둘: 「기본 앱」이 위, 「워크스페이스 앱」이 아래");
 }
-check(/padGroupOfInstalled\(a\.source\.kind\)/.test(body) && /padBestIndex\(/.test(body) && /group: a\.group \|\| 'base'/.test(body),
+check(/padGroupOfInstalled\(a\.source\.kind, !!a\.system\)/.test(body) && /padBestIndex\(/.test(body) && /group: a\.group \|\| 'base'/.test(body),
   "W2 화면이 같은 잣대를 쓴다(설치된 앱의 묶음 · Enter 로 열릴 칸 · 표의 기본값은 기본 앱)");
 {
   const css = read("public/styles/40-v2.css");
