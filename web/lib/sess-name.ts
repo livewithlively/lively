@@ -21,13 +21,19 @@ export const isMachineLabel = (s: string) => /^이어보기\s*[·:]/.test(s) || 
  *   ② 만들 때 잘린 것      "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도…"(프로젝트명의 앞부분)
  *   ③ 조각만 이어붙인 변형  "app.lvly.io 와이어프레임" ⊂ "APP. lvly. io 셀프서브 방식 와이어프레임"
  *  ③은 글자·숫자만 남긴 뒤 공통 앞머리 + 공통 꼬리가 이름 전체를 덮으면 되풀이로 본다(우연 일치를 막으려 6자 미만은 제외). */
+const CUT_MIN = 24;
 function echoesProject(label: string, proj: string): boolean {
   const a = norm(label); const b = norm(proj);
   if (!a || !b) return false;
   //  ⚠ 이름이 프로젝트명으로 **시작만** 하는 것(a.startsWith(b))은 되풀이가 아니다 — 뒤에 붙은 말이 그 세션의 이름이다
   //   (프로젝트 «장표 수정 앱» 의 세션 «장표 수정 앱 만들기, 앱의 생태계», 원준 2026-10-07).
-  if (a === b || b.startsWith(a)) return true;
+  if (a === b) return true;
   const ca = a.replace(/[^\p{L}\p{N}]/gu, ''); const cb = b.replace(/[^\p{L}\p{N}]/gu, '');
+  if (ca && ca === cb) return true;
+  //  이름이 프로젝트명의 **앞부분**일 때 — 만들 때 잘린 것(②)만 되풀이다. 자른 자리는 말줄임(…)이 붙거나 28자 · 80자
+  //   (app-session.ts · session-autoname.ts · sessions.ts cleanLabel)라, 그보다 짧고 말줄임도 없으면 사람이 지은 이름이다
+  //   (프로젝트 «UI 버그 해결» 의 세션 «UI» — 종전엔 하던 일이 있으면 이름이 사라졌다).
+  if (ca && cb.startsWith(ca)) return /…\s*$/.test(a) || a.length >= CUT_MIN;
   if (ca.length < 6 || !cb) return false;
   let head = 0; while (head < ca.length && head < cb.length && ca[head] === cb[head]) head++;
   let tail = 0; while (tail < ca.length - head && tail < cb.length - head && ca[ca.length - 1 - tail] === cb[cb.length - 1 - tail]) tail++;
