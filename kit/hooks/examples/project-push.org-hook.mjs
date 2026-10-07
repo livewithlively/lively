@@ -421,6 +421,8 @@ async function localFiles(base) {
   }
 
   // 7) 판정 — 지울 것. **원장에 있는 것만** 후보다(= pull 이 실제로 받아준 것 = '한때 우리가 들고 있던 것').
+  //    (#4609 부터 pull 은 «바이트가 같다고 확인한» 로컬 파일도 원장에 적는다 — 같은 경로에 같은 내용이면 받은 파일과
+  //     같게 본다. 그 로컬 파일을 지우면 여기서 서버본 삭제가 전파된다.)
   const del = [], ledgerDrop = [], ledgerDropAfterPush = [];
   if (complete) {
     for (const [p, baseline] of Object.entries(ledger)) {
@@ -459,8 +461,9 @@ async function localFiles(base) {
       //  push 가 자기 업로드를 '남의 변경'으로 오인해 **영구 거짓 충돌**을 낸다. 같은 파일 두 번 고치는 게 안 된다는 뜻.
       const meta2 = await r.json().catch(() => ({}));
       if (typeof meta2.mtime === "number") {
-        const t = new Date(meta2.mtime);
-        try { fs.utimesSync(f.abs, t, t); } catch { /* 실패해도 아래 기준선이 안 맞을 뿐 — 다음 pull 이 바로잡는다 */ }
+        // 초 단위 수 + 0.5ms 로 찍는다 — Date 를 넘기면 Node 18~22 에서 절반쯤이 1ms 내려 찍혀 «받은 그대로» 판정이
+        //  어긋난다(#4609 실측, pull 훅 stampMtime 과 같은 이유).
+        try { const s = (meta2.mtime + 0.5) / 1000; fs.utimesSync(f.abs, s, s); } catch { /* 실패해도 아래 기준선이 안 맞을 뿐 — 다음 pull 이 바로잡는다 */ }
         ledgerSet[nk(f.path)] = { mtime: meta2.mtime, size: typeof meta2.size === "number" ? meta2.size : f.size };
       } else {
         // 구 게이트웨이(mtime 미반환) → 기준선을 **모른다**. 거짓 기준선을 적느니 지운다(원장 없음 = fail-safe).

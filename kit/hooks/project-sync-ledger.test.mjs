@@ -94,7 +94,8 @@ async function mkProj(marker, files = {}, ledger = null) {
     const body = typeof spec === "string" ? spec : spec.body;
     await fsp.mkdir(path.dirname(path.join(dir, p)), { recursive: true });
     await fsp.writeFile(path.join(dir, p), body);
-    if (spec && spec.mtime) { const t = new Date(spec.mtime); await fsp.utimes(path.join(dir, p), t, t); }
+    // 초 단위 수 + 0.5ms — Date 를 넘기면 Node 18~22 에서 절반쯤이 1ms 내려 찍힌다(훅의 stampMtime 과 같은 이유, #4609).
+    if (spec && spec.mtime) { const t = (spec.mtime + 0.5) / 1000; await fsp.utimes(path.join(dir, p), t, t); }
   }
   return dir;
 }
@@ -130,9 +131,13 @@ function tempsIn(dir) {
   return out;
 }
 function resetServer(files) {
-  SERVER = files; FAIL = new Set(); STAMP = false; SWAP = {}; SLOW = new Set(); HOLD = null; GETS = [];
+  SERVER = files; FAIL = new Set(); STAMP = true; SWAP = {}; SLOW = new Set(); HOLD = null; GETS = [];   // 지금 서버는 늘 도장을 싣는다
 }
-const within = (p, ms, why) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(why)), ms))]);
+const within = (p, ms, why) => {
+  let t; const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(why)), ms); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+};
+const skipOf = (dir) => { const s = readOr(path.join(dir, ".lively", "pull-skip.json")); return s ? JSON.parse(s).items : {}; };
 
 try {
   for (const [id, hookPath] of Object.entries(HOOKS)) {
@@ -360,6 +365,7 @@ try {
     // ── ⑥-옛 서버 같은 경우인데 응답 도장이 없다 → 매니페스트와 크기가 다른 본문은 버린다 ──
     await scenario(`[${id}] #4609 받는 사이 서버본 바뀜(도장 없음) → 버림 · 기준선 없음 · last_pull 없음`, async () => {
       resetServer({ "race2.txt": { body: "v1", mtime: 9_000_000 } });
+      STAMP = false;   // 옛 서버
       SWAP = { "race2.txt": { body: "v2 — 더 긴 새 판", mtime: 9_500_000 } };
       const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
       await runHook(hookPath, dir);
@@ -410,8 +416,8 @@ try {
     await scenario(`[${id}] #4609 옛 임시 파일(10분 초과)만 정리`, async () => {
       resetServer({ "sw.txt": { body: "새 판", mtime: 9_000_000 } });
       const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
-      const old = path.join(dir, `.sw.txt.lively-pull-${Date.now() - 11 * 60_000}-1-dead`);
-      const fresh = path.join(dir, `.sw.txt.lively-pull-${Date.now() - 60_000}-2-live`);
+      const old = path.join(dir, `.lively-pull-${Date.now() - 11 * 60_000}-1-dead`);
+      const fresh = path.join(dir, `.lively-pull-${Date.now() - 60_000}-2-live`);
       fs.writeFileSync(old, "x"); fs.writeFileSync(fresh, "y");
       await runHook(hookPath, dir);
       assert.equal(fs.existsSync(old), false, `[${id}] 10분 넘은 임시 파일을 안 지웠다`);
@@ -442,6 +448,133 @@ try {
       await runHook(hookPath, dir);
       assert.equal(readOr(path.join(dir, "pbig.bin")), BIG, `[${id}] 🔴 pull 모드에서 상한 넘는 파일을 못 받았다`);
       assert.equal(markerOf(dir).last_pull, 5_000_000);
+    });
+
+    // ── ⑭ 밀리초 아래까지 있는 서버 시각 — 받은 파일의 시각이 정확히 같아야 다음 실행이 «같은 판»으로 본다 ──
+    //  (Node 18~22 에서 Date 로 찍으면 절반쯤 1ms 내려 찍혀, 받은 파일이 «내가 고친 파일»로 보이고 수렴이 깨진다)
+    await scenario(`[${id}] #4609 밀리초 시각 정확히 찍기 → 다음 실행은 받지 않음`, async () => {
+      const MS = 1771945237727;
+      resetServer({ "subms.txt": { body: "밀리초 판", mtime: MS } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      await runHook(hookPath, dir);
+      assert.equal(mtimeOf(path.join(dir, "subms.txt")), MS, `[${id}] 🔴 받은 파일의 시각이 서버와 1ms 라도 다르다 — 다음 실행부터 «로컬 편집»으로 보인다`);
+      assert.deepEqual(ledgerMust(dir, "밀리초 기준선")["subms.txt"], { mtime: MS, size: Buffer.byteLength("밀리초 판") });
+      assert.equal(markerOf(dir).last_pull, MS);
+      SERVER["subms.txt"] = { body: "밀리초 판 v2", mtime: MS + 5_000 }; GETS = [];
+      await runHook(hookPath, dir);
+      assert.equal(readOr(path.join(dir, "subms.txt")), "밀리초 판 v2", `[${id}] 🔴 서버가 바꾼 새 판을 안 받았다(로컬을 «고친 파일»로 오판)`);
+      assert.equal(markerOf(dir).last_pull, MS + 5_000);
+    });
+
+    // ── ⑮ 25MB 넘는 파일 — 턴 판은 받지 않고(턴마다 수 초를 쓰지 않게) 세션 시작 판이 받는다 ──
+    await scenario(`[${id}] #4609 25MB 초과 파일 → ${id === "project-pull-turn" ? "턴 판은 건너뜀" : "세션 시작 판이 받음"}`, async () => {
+      const HUGE = "H".repeat(25 * 1024 * 1024 + 1);
+      resetServer({ "huge.bin": { body: HUGE, mtime: 5_000_000 }, "doc.md": { body: "문서", mtime: 5_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      await runHook(hookPath, dir);
+      assert.equal(readOr(path.join(dir, "doc.md")), "문서");
+      if (id === "project-pull-turn") {
+        assert.equal(GETS.filter((g) => g.path === "huge.bin").length, 0, `[${id}] 🔴 턴 판이 25MB 넘는 파일을 받으려 했다 — 느린 회선에선 턴마다 수 초씩 늦어진다`);
+        assert.equal(fs.existsSync(path.join(dir, "huge.bin")), false);
+        assert.equal(markerOf(dir).last_pull, undefined, `[${id}] 못 받은 파일이 있는데 last_pull 을 적었다`);
+      } else {
+        assert.equal(fs.statSync(path.join(dir, "huge.bin")).size, HUGE.length, `[${id}] 세션 시작 판이 큰 파일을 못 받았다`);
+        assert.equal(markerOf(dir).last_pull, 5_000_000);
+      }
+    });
+
+    // ── ⑯ 넉넉히 받고도 마감에 끊긴 판은 기록해 두고 한동안 다시 받지 않는다 — 기록이 지나면 다시, 횟수는 늘어난다 ──
+    await scenario(`[${id}] #4609 마감에 끊긴 판 → 보류(다음 실행 요청 0건) · 보류가 지나면 다시`, async () => {
+      resetServer({ "slow.txt": { body: "느린 본문 — 끝까지 오지 않는다", mtime: 9_000_000 } });
+      SLOW = new Set(["slow.txt"]);
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      const env = { LIVELY_HOOK_TIMEOUT_MS: "1500" };
+      await runHook(hookPath, dir, env);
+      const m1 = skipOf(dir)["slow.txt"];
+      assert.ok(m1 && m1.why === "slow" && m1.n === 1, `[${id}] 끊긴 판을 기록하지 않았다: ${JSON.stringify(m1)}`);
+      GETS = [];
+      const ms = await runHook(hookPath, dir, env);
+      assert.equal(GETS.filter((g) => g.path === "slow.txt").length, 0, `[${id}] 🔴 보류 중인 판을 또 받으려 했다 — 실행마다 같은 시간을 버린다`);
+      assert.ok(ms < 1000, `[${id}] 보류 중인데 실행이 오래 걸렸다(${ms}ms)`);
+      // 보류가 지났다(31분 전 기록) → 다시 시도하고, 또 끊기면 횟수가 2 로 는다
+      const items = skipOf(dir); items["slow.txt"].at = Date.now() - 31 * 60_000;
+      fs.writeFileSync(path.join(dir, ".lively", "pull-skip.json"), JSON.stringify({ v: 1, items }));
+      GETS = [];
+      await runHook(hookPath, dir, env);
+      assert.equal(GETS.filter((g) => g.path === "slow.txt").length, 1, `[${id}] 보류가 지났는데 다시 시도하지 않았다`);
+      assert.equal(skipOf(dir)["slow.txt"].n, 2, `[${id}] 다시 끊겼는데 보류 횟수가 늘지 않았다`);
+      assert.equal(markerOf(dir).last_pull, undefined);
+      assert.deepEqual(tempsIn(dir), []);
+    });
+
+    // ── ⑰ 바이트가 달랐던 (서버 판, 로컬 판) 짝은 기억한다 — 둘 다 그대로면 다시 받아 대 보지 않는다 ──
+    await scenario(`[${id}] #4609 내용 다름 판정 기억 → 다시 안 받음 · 로컬이 바뀌면 다시 대 봄`, async () => {
+      resetServer({ "twin.txt": { body: "서버본AB", mtime: 7_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" }, { "twin.txt": { body: "로컬본CD", mtime: 6_000_000 } });
+      await runHook(hookPath, dir);
+      assert.equal(GETS.filter((g) => g.path === "twin.txt").length, 1, `[${id}] 처음엔 한 번 받아 대 봐야 한다`);
+      assert.equal((skipOf(dir)["twin.txt"] || {}).why, "differs");
+      GETS = [];
+      await runHook(hookPath, dir);
+      assert.equal(GETS.filter((g) => g.path === "twin.txt").length, 0, `[${id}] 🔴 이미 다르다고 본 짝을 또 받았다 — 큰 파일이면 실행마다 통째로 받는다`);
+      assert.equal(readOr(path.join(dir, "twin.txt")), "로컬본CD");
+      fs.writeFileSync(path.join(dir, "twin.txt"), "로컬본EF");   // 같은 크기, 새 시각 → 다른 짝
+      GETS = [];
+      await runHook(hookPath, dir);
+      assert.equal(GETS.filter((g) => g.path === "twin.txt").length, 1, `[${id}] 로컬이 바뀌었는데 다시 대 보지 않았다`);
+      assert.equal(markerOf(dir).last_pull, undefined);
+    });
+
+    // ── ⑱ 같은 폴더에 받기 둘이 동시에 돈다 — 반쪽·남은 임시 파일 없이 끝나고, 다음 실행이 수렴한다 ──
+    await scenario(`[${id}] #4609 동시 실행 둘 → 내용 온전 · 임시 파일 없음 · 다음 실행 수렴`, async () => {
+      const BODY = "동".repeat(400_000);
+      resetServer({ "both.txt": { body: BODY, mtime: 9_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      const [a, b] = await Promise.all([spawnHook(hookPath, dir), spawnHook(hookPath, dir)]);
+      assert.equal(a.code, 0); assert.equal(b.code, 0);
+      assert.equal(readOr(path.join(dir, "both.txt")), BODY, `[${id}] 동시 실행 뒤 내용이 깨졌다`);
+      assert.deepEqual(tempsIn(dir), [], `[${id}] 동시 실행 뒤 임시 파일이 남았다`);
+      await runHook(hookPath, dir);
+      assert.deepEqual(ledgerMust(dir, "동시 실행 뒤 수렴")["both.txt"], { mtime: 9_000_000, size: Buffer.byteLength(BODY) });
+      assert.equal(markerOf(dir).last_pull, 9_000_000);
+    });
+
+    // ── ⑲ 판정 뒤 받는 동안 로컬 파일이 지워졌다 → 되살리지 않는다(삭제는 사람의 결정) ──
+    await scenario(`[${id}] #4609 받는 사이 로컬 삭제 → 되살리지 않음 · last_pull 그대로`, async () => {
+      const OLD = "옛 서버본";
+      resetServer({ "gone.txt": { body: "새 서버본", mtime: 9_000_000 } });
+      let requested; const req = new Promise((r) => { requested = r; });
+      let release; const rel = new Promise((r) => { release = r; });
+      HOLD = { path: "gone.txt", requested, release: rel };
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both", last_pull: 5_000_000 },
+        { "gone.txt": { body: OLD, mtime: 5_000_000 } },
+        { "gone.txt": { mtime: 5_000_000, size: Buffer.byteLength(OLD) } });
+      const run = spawnHook(hookPath, dir);
+      try {
+        await within(req, 10_000, `[${id}] 훅이 gone.txt 본문을 요청하지 않았다`);
+        fs.unlinkSync(path.join(dir, "gone.txt"));
+      } finally { release(); }
+      const { code } = await run;
+      assert.equal(code, 0);
+      assert.equal(fs.existsSync(path.join(dir, "gone.txt")), false, `[${id}] 🔴 받는 사이 지운 파일을 되살렸다`);
+      assert.equal(markerOf(dir).last_pull, 5_000_000);
+      assert.deepEqual(tempsIn(dir), []);
+    });
+
+    // ── ⑳ 서버가 안 바뀐 실행(newest <= last_pull)에서도 빠졌거나 옛 판인 기준선을 로컬=서버면 바로잡는다 ──
+    //  (동시 실행으로 원장 기록이 덮여 기준선이 빠지면, 바로 끝나는 실행만 이어져 아무도 못 채우고 서버가 바꾸는 순간 굳는다)
+    await scenario(`[${id}] #4609 바뀐 것 없는 실행에서도 빠진·옛 기준선 보충 · 요청 0건`, async () => {
+      const A = "기준선이 빠진 파일", B = "기준선이 옛 판인 파일";
+      resetServer({ "a.txt": { body: A, mtime: 9_000_000 }, "b.txt": { body: B, mtime: 9_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both", last_pull: 9_000_000 },
+        { "a.txt": { body: A, mtime: 9_000_000 }, "b.txt": { body: B, mtime: 9_000_000 } },
+        { "b.txt": { mtime: 5_000_000, size: 3 } });
+      await runHook(hookPath, dir);
+      const L = ledgerMust(dir, "기준선 보충");
+      assert.deepEqual(L["a.txt"], { mtime: 9_000_000, size: Buffer.byteLength(A) }, `[${id}] 🔴 빠진 기준선을 안 채웠다 — 서버가 바꾸는 순간 «독립 판본»으로 굳는다`);
+      assert.deepEqual(L["b.txt"], { mtime: 9_000_000, size: Buffer.byteLength(B) }, `[${id}] 🔴 옛 판 기준선을 안 고쳤다`);
+      assert.equal(GETS.length, 0, `[${id}] 바뀐 것 없는 실행인데 받았다`);
+      assert.equal(markerOf(dir).last_pull, 9_000_000);
     });
   }
   if (failures.length) throw new Error(`#4609 시나리오 ${failures.length}건 실패:\n  ${failures.join("\n  ")}`);

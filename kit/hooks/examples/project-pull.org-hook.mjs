@@ -215,10 +215,15 @@ function untouched(st, base) {
 //  받은 판의 신원은 응답 도장(X-File-Mtime · X-File-Size)이다. 매니페스트를 읽은 뒤 서버본이 바뀌었으면 그 새 판을
 //   받은 것이라, 매니페스트 값을 찍으면 로컬이 기준선과 어긋나 «내가 고친 파일»로 보호돼 영영 안 바뀐다.
 //   도장이 없는 옛 서버면 매니페스트 값을 쓰되, 받은 바이트 수가 그 크기와 다르면 버린다(다음 실행에 다시).
-const TMP_TAG = ".lively-pull-";
+//  크기 제한은 없다 — 턴 판(project-pull-turn)은 25MB 넘는 파일을 이 판에 맡긴다. 진행 중인 받기는 제한 시간의 70% 에
+//   끊고, 넉넉히 받고도 끊긴 판은 «받기 보류 기록»으로 한동안 다시 받지 않는다(세션 시작마다 수십 초를 먹지 않게).
+const TMP_TAG = ".lively-pull-";   // 임시 파일 이름 머리. 원래 이름은 안 넣는다 — 긴 한글 이름 + 꼬리가 255바이트를 넘으면 못 만든다
 const TMP_STALE_MS = 10 * 60_000;
-const tmpPrefix = (dest) => `.${path.basename(dest)}${TMP_TAG}`;
 const drop = (p) => { try { fs.unlinkSync(p); } catch { /* 이미 없음 */ } };
+
+/** 판 시각(ms)을 그대로 찍는다. Date 를 넘기면 Node 18~22 에서 절반쯤이 1ms 내려 찍힌다(#4609 실측: 2만 번 중 약 1만 번,
+ *  24·26 은 0번). 초 단위 수에 0.5ms 를 더해 넘기면 모든 판에서 정확하다 — «크기·밀리초 시각이 같으면 같은 판» 규칙이 여기에 기댄다. */
+function stampMtime(p, ms) { const s = (ms + 0.5) / 1000; fs.utimesSync(p, s, s); }
 
 /** 강제 종료로 남은 옛 임시 파일을 지운다 — 폴더마다 실행당 한 번, 이름에 적힌 시각 기준 10분. 실패는 무해.
  *  (받을 파일마다 폴더를 다시 읽으면 파일 많은 폴더의 첫 동기화가 폴더 크기 × 파일 수만큼 느려진다.) */
@@ -228,35 +233,36 @@ function sweepTemps(dir) {
   sweptDirs.add(dir);
   try {
     for (const n of fs.readdirSync(dir)) {
-      const i = n.lastIndexOf(TMP_TAG);
-      if (!n.startsWith(".") || i < 0) continue;
-      const born = Number(n.slice(i + TMP_TAG.length).split("-")[0]);
+      if (!n.startsWith(TMP_TAG)) continue;
+      const born = Number(n.slice(TMP_TAG.length).split("-")[0]);
       if (Number.isFinite(born) && Date.now() - born > TMP_STALE_MS) drop(path.join(dir, n));
     }
   } catch { /* 폴더 없음 등 — 지울 것도 없다 */ }
 }
 
-/** 서버 파일 하나를 숨김 임시 파일로 받는다 → { tmp, mtime, size }(받은 판) · 실패·마감 → null(임시 파일 안 남김). */
+/** 서버 파일 하나를 숨김 임시 파일로 받는다 → { tmp, mtime, size }(받은 판) · 마감에 끊김 → { err: "deadline" } · 그 밖의 실패 → null.
+ *  어느 실패든 임시 파일은 남기지 않는다. */
 async function fetchToTemp(getFile, f, dest, hardDeadline) {
   const left = hardDeadline - Date.now();
   if (left <= 0) return null;
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), left);
+  let late = false;
+  const ctl = new AbortController(); const t = setTimeout(() => { late = true; ctl.abort(); }, left);
   let tmp = null;
   try {
     const r = await getFile(f.path, ctl.signal);
     if (!r.ok || !r.body) { try { await r.body?.cancel(); } catch { /* */ } return null; }   // 연결을 붙들지 않게 본문을 닫는다
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     sweepTemps(path.dirname(dest));
-    tmp = path.join(path.dirname(dest), `${tmpPrefix(dest)}${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
+    tmp = path.join(path.dirname(dest), `${TMP_TAG}${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
     await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(tmp, { flags: "wx" }));
     const hm = Number(r.headers.get("x-file-mtime")), hs = Number(r.headers.get("x-file-size"));
     const stamped = r.headers.has("x-file-mtime") && r.headers.has("x-file-size")
       && Number.isFinite(hm) && hm > 0 && Number.isInteger(hs) && hs >= 0;
     const mtime = stamped ? Math.floor(hm) : f.mtime, size = stamped ? hs : f.size;
     if (fs.statSync(tmp).size !== size) { drop(tmp); return null; }   // 받는 사이 판이 바뀌었거나 끊겼다 → 다음 실행에
-    if (mtime) { const tt = new Date(mtime); fs.utimesSync(tmp, tt, tt); }
+    if (mtime) stampMtime(tmp, mtime);
     return { tmp, mtime, size };
-  } catch { if (tmp) drop(tmp); return null; }
+  } catch { if (tmp) drop(tmp); return late ? { err: "deadline" } : null; }
   finally { clearTimeout(t); }
 }
 
@@ -266,7 +272,9 @@ async function sameBytes(a, b) {
   try { return (await digest(a)) === (await digest(b)); } catch { return false; }
 }
 
-/** 받은 임시 파일을 제자리로 옮긴다. 판정 때 본 로컬(seen)과 지금이 다르면 — 받는 사이 사람·AI 가 고쳤다 — 덮지 않는다. */
+/** 받은 임시 파일을 제자리로 옮긴다. 판정 때 본 로컬(seen)과 지금이 다르면 — 받는 사이 사람·AI 가 고쳤다 — 덮지 않는다.
+ *  갈아 끼우기라 그 자리 덮어쓰기(종전)와 셋이 다르다: 권한 비트는 아래에서 잇고, 심볼릭 링크는 링크 대상을 고치는 대신
+ *  보통 파일로 바뀌며(폴더 밖 대상을 덮던 위험이 사라진다), 읽기 전용 파일도 갈아 끼워진다(종전엔 EACCES 로 영영 실패). */
 function placeTemp(got, dest, seen) {
   let now = null; try { now = fs.statSync(dest); } catch { /* 없음 */ }
   const unchanged = now
@@ -276,6 +284,65 @@ function placeTemp(got, dest, seen) {
   // 갈아 끼우면 새 파일의 권한이 된다 — 그 자리 덮어쓰기(종전 writeFile)처럼 기존 권한(실행 비트 등)을 잇는다.
   if (now) { try { fs.chmodSync(got.tmp, now.mode & 0o7777); } catch { /* */ } }
   try { fs.renameSync(got.tmp, dest); return true; } catch { drop(got.tmp); return false; }
+}
+
+// ── 받기 보류 기록(#4609) — `.lively/pull-skip.json`. 매 실행 같은 헛수고를 되풀이하지 않게 한다. ──
+//  slow:    시간을 넉넉히 받고 시작했는데도 마감에 끊긴 서버 판 — 30분·2시간·8시간·24시간 동안 다시 받지 않는다.
+//           느린 회선에서 큰 파일 하나가 프롬프트·도구 호출마다 수 초씩, 세션 시작마다 수십 초씩 먹던 자리다.
+//           서버 판이 바뀌면 기록은 무효다(새 판은 다시 시도한다). 서버가 이어받기(Range)를 지원하지 않아 끊긴 만큼은 버려진다.
+//  differs: 바이트를 대 보니 달랐던 (서버 판, 로컬 판) 짝 — 둘 다 그대로인 동안 다시 받아 대 보지 않는다.
+//  캐시일 뿐이다 — 없거나 깨지거나 동시 실행에 덮여도 한 번 더 받는 것 말고는 일이 없다(원장과 달리 판정 근거가 아니다).
+const SKIP_FILE = "pull-skip.json";
+const SLOW_BACKOFF_MS = [30 * 60_000, 2 * 3_600_000, 8 * 3_600_000, 24 * 3_600_000];
+const sameVer = (v, size, mtime) => Array.isArray(v) && v[0] === size && v[1] === mtime;
+function readSkip(projDir) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(projDir, ".lively", SKIP_FILE), "utf8"));
+    return o && o.items && typeof o.items === "object" && !Array.isArray(o.items) ? o.items : {};
+  } catch { return {}; }
+}
+/** 이번 실행이 바꾼 것만 **다시 읽은** 기록 위에 얹는다(동시 실행의 기록을 덜 덮게). alive 를 주면 서버에 없는 경로는 정리한다. */
+function writeSkip(projDir, set, del, alive) {
+  if (!Object.keys(set).length && !del.size) return;
+  try {
+    const items = readSkip(projDir);
+    for (const k of del) delete items[k];
+    Object.assign(items, set);
+    if (alive) for (const k of Object.keys(items)) if (!alive.has(k)) delete items[k];
+    fs.writeFileSync(path.join(projDir, ".lively", SKIP_FILE), JSON.stringify({ v: 1, items }, null, 2) + "\n");
+  } catch { /* 무해 — 다음에 한 번 더 받을 뿐이다 */ }
+}
+/** 이 서버 판(과 로컬 판)을 지금 건너뛸까. */
+function skipNow(memo, f, local) {
+  if (!memo || !sameVer(memo.s, f.size, f.mtime)) return false;   // 기록이 없거나 서버 판이 바뀌었다
+  if (memo.why === "slow") {
+    const n = Math.min(Math.max(1, Number(memo.n) || 1), SLOW_BACKOFF_MS.length);
+    return Date.now() < Number(memo.at || 0) + SLOW_BACKOFF_MS[n - 1];
+  }
+  if (memo.why === "differs") return !!local && sameVer(memo.l, local.size, Math.floor(local.mtimeMs));
+  return false;
+}
+
+/** 서버가 안 바뀌어 받을 것이 없는 실행에서도 기준선만 바로잡는다(#4609). 로컬이 서버 판과 크기·밀리초 시각까지 같은데
+ *  기준선이 없거나 옛 판인 파일이 대상이다. 원장은 받기·올리기가 저마다 통째로 다시 쓰므로, 같은 폴더에 세션이 둘이면
+ *  한쪽 기록이 덮여 기준선이 빠진다(실측: 동시 실행 둘 → 이긴 쪽이 last_pull 을 적고 진 쪽이 그 파일 없는 원장을 씀).
+ *  그대로 두면 다음 실행부터 «서버 안 바뀜»으로 바로 끝나 아무도 못 채우고, 서버가 그 파일을 바꾸는 순간 «독립 판본»으로
+ *  굳는다. 기준선이 서버 판과 이미 같은 파일은 stat 도 하지 않으므로 평소 비용은 원장 읽기 한 번이다. */
+function healBaselines(projDir, files, keyOf) {
+  const led = readLedger(projDir), fix = {};
+  for (const f of files) {
+    const dest = path.join(projDir, f.path);
+    if (path.relative(projDir, dest).startsWith("..")) continue;
+    const k = keyOf(f), b = led.files[k];
+    if (b && b.mtime === f.mtime && b.size === f.size) continue;     // 이미 맞다
+    let st = null; try { st = fs.statSync(dest); } catch { continue; }
+    if (st.size === f.size && Math.floor(st.mtimeMs) === f.mtime) fix[k] = { mtime: f.mtime, size: f.size };
+  }
+  if (!Object.keys(fix).length) return;
+  const cur = readLedger(projDir);                                    // 다시 읽어 그 위에 얹는다(그 사이 쓴 기록을 덮지 않게)
+  const tombs = { ...cur.tombs };
+  for (const k of Object.keys(fix)) delete tombs[k];                  // 서버에 다시 있고 로컬도 같다 → 묘비가 아니다
+  writeLedger(projDir, { ...cur.files, ...fix }, tombs);
 }
 
 (async () => {
@@ -339,7 +406,11 @@ function placeTemp(got, dest, seen) {
   try { const r = await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`); if (!r.ok) return; manifest = await r.json(); }
   catch { return; }
   const files = Array.isArray(manifest.files) ? manifest.files : [];
-  if ((manifest.newest || 0) <= lastPull) return; // pull 불필요
+  if ((manifest.newest || 0) <= lastPull) { // pull 불필요
+    // 받을 것은 없다. 다만 기준선이 빠졌거나 옛 판인데 로컬이 서버와 같은 파일은 여기서 바로잡는다(#4609 — healBaselines).
+    if (mode === "both") healBaselines(projDir, files, (f) => nk(f.path));
+    return;
+  }
 
   // 5) 변경분만 다운로드(단방향 — 삭제·worktree 미관여: 매니페스트에 없는 로컬 파일은 안 건드림)
   //    판정을 먼저 끝내고(stat 만 — 싸다) 받기는 그 뒤에 **작은 파일부터** 한다(#4609). 큰 파일 하나가 시간을 다 써서
@@ -351,6 +422,7 @@ function placeTemp(got, dest, seen) {
   // 🔴 매니페스트가 상한에 잘렸으면 **전량 수렴을 주장할 수 없다** — newest 는 목록 밖 파일의 mtime 까지 반영할 수
   //  있어, last_pull 을 올리면 "s.mtime <= last_pull ⟹ 우리가 그 버전을 갖고 있다"(push 충돌검사의 근거)가 거짓이 된다.
   if (manifest.truncated) completed = false;
+  const skip = readSkip(projDir), skipSet = {}, skipDel = new Set();   // 받기 보류 기록 — 위 「받기 보류 기록」 절
   const queue = [];         // 받을 것 — { f, dest, key, seen: 판정 때 본 로컬 stat, compare: 바이트가 같으면 시각만 맞출 후보 }
   for (const f of files) {
     const dest = path.join(projDir, f.path);
@@ -367,6 +439,7 @@ function placeTemp(got, dest, seen) {
     //  (#4609 실측: 서버와 크기·시각까지 같은데 기준선이 옛 판인 파일 4개가 last_pull 을 막고 있었다).
     if (ledger && local && local.size === f.size && Math.floor(local.mtimeMs) === f.mtime) {
       held[key] = { mtime: f.mtime, size: f.size };
+      if (skip[key]) skipDel.add(key);
       continue;
     }
     if (ledger && !base) {
@@ -421,13 +494,29 @@ function placeTemp(got, dest, seen) {
   queue.sort((a, b) => (a.f.size || 0) - (b.f.size || 0));
   for (const q of queue) {
     if (Date.now() >= hardDeadline) { completed = false; break; }   // 남은 것은 다음 세션에
+    if (skipNow(skip[q.key], q.f, q.seen)) { completed = false; continue; }   // 보류 중 — 같은 헛수고를 되풀이하지 않는다
+    // 시간을 넉넉히 받고 시작했나 — 앞의 파일들이 시간을 써서 늦게 시작한 받기가 끊긴 것까지 «느린 파일»로 적지 않게.
+    const fair = hardDeadline - Date.now() >= (hardDeadline - startedAt) / 2;
     const got = await fetchToTemp(getFile, q.f, q.dest, hardDeadline);
-    if (!got) { completed = false; continue; }                      // 개별 파일 실패 → last_pull 미갱신 → 다음 세션 재시도
-    // 비교 후보인데 내용이 다르다 — 종전대로 손대지 않는다(독립 판본·로컬 편집 보호).
-    if (q.compare && !(await sameBytes(got.tmp, q.dest))) { drop(got.tmp); completed = false; continue; }
+    if (!got || got.err) {                                           // 개별 실패 → last_pull 미갱신 → 다음 실행 재시도
+      completed = false;
+      if (got && got.err === "deadline" && fair) {
+        const prev = skip[q.key];
+        const n = prev && prev.why === "slow" && sameVer(prev.s, q.f.size, q.f.mtime) ? (Number(prev.n) || 1) + 1 : 1;
+        skipSet[q.key] = { why: "slow", s: [q.f.size, q.f.mtime], at: Date.now(), n };
+      }
+      continue;
+    }
+    if (q.compare && !(await sameBytes(got.tmp, q.dest))) {          // 내용이 다르다 → 종전대로 손대지 않는다(독립 판본·로컬 편집 보호)
+      drop(got.tmp); completed = false;
+      skipSet[q.key] = { why: "differs", s: [q.f.size, q.f.mtime], l: [q.seen.size, Math.floor(q.seen.mtimeMs)], at: Date.now() };
+      continue;
+    }
     if (!placeTemp(got, q.dest, q.seen)) { completed = false; continue; }   // 받는 사이 로컬이 바뀌었다 → 덮지 않는다
+    if (skip[q.key]) skipDel.add(q.key);
     if (ledger) held[q.key] = { mtime: got.mtime, size: got.size };
   }
+  writeSkip(projDir, skipSet, skipDel, manifest.truncated ? null : new Set(files.map((f) => nk(f.path))));
 
   // 6) 원장 갱신(both 전용) — 완주했으면 통째 교체(서버에서 사라진 항목은 자연히 빠진다), 끊겼으면 도달분만 병합.
   //    "안 받은 걸 받았다고 주장하지 않는다" — 원장은 삭제 전파의 유일한 근거라 과다 주장이 곧 파괴다.
