@@ -41,15 +41,19 @@ export interface LiveSessionEvent {
   ts?: number;
 }
 
-/** 앱 사건(#4225, src/v6/notify-bus.ts NotifyAppEvent) — 세션에 앱이 붙었다·떨어졌다·그 앱 데이터가 바뀌었다. */
+/** 앱 사건(#4225, src/v6/notify-bus.ts NotifyAppEvent) — 세션에 앱이 붙었다·떨어졌다·그 앱 데이터가 바뀌었다.
+ *  #4600 updated — 앱 **자체**(화면 코드)가 새 판으로 저장됐거나 되돌려졌다(app_save · app_revert). 붙은 앱 탭이 받으면 그 화면을 다시 띄운다. */
 export interface LiveAppEvent {
   type: 'app';
-  kind: 'attach' | 'detach' | 'data';
+  kind: 'attach' | 'detach' | 'data' | 'updated';
   app_id: string;
   session: string | null;
   table?: string;
   op?: 'insert' | 'update' | 'delete';
   source?: string;
+  /** updated — 저장된 판 번호와 요지(app_versions 의 version_no · note). */
+  version_no?: number;
+  note?: string;
   key?: string;
   ts?: number;
 }

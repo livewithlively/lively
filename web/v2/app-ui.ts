@@ -149,7 +149,8 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
 let uiEl: HTMLElement | null = null;
 let openFrame: AppUiFrame | null = null;
 
-export async function openAppUi(appId: string, opts?: { page?: string; title?: string }): Promise<boolean> {
+//  #4600 sessionId — 붙은 앱 탭의 「크게 보기」가 같은 세션에 붙은 채로 크게 띄운다(앱 안의 lively.session 이 그대로 선다).
+export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string }): Promise<boolean> {
   try {
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
