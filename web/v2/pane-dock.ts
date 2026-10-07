@@ -34,7 +34,7 @@ import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';
 import { ctxMenu, pnIcon, pnIconName } from './panes-kit.js';
 import { ctxIsOpen, type CtxRow } from './ctx-menu.js';
 import { bindCtx, type CtxResult } from './ctx-registry.js';
-import { iconPath } from '../lib/icon-paths.js';
+import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 import { appMatches, appRank } from '../lib/app-match.js';
 import { openLaunchpad } from './apps.js';
 import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
@@ -57,6 +57,8 @@ export interface DockHost {
   recent(): readonly string[];
   /** 탭 이름(뷰어 = 파일명 · 웹 = 사이트 · 붙은 앱 = 앱 이름). */
   title(key: string): string;
+  /** 그 탭이 단 얼굴(앱 아이콘 이름 — 그림과 색이 한 이름) 또는 null. 붙은 앱이 쓴다(#4592): 독의 그 칸이 «앱» 의 네모 넷이 아니라 그 앱의 아이콘으로 선다. */
+  face?(key: string): string | null;
   show(key: string): void;
   open(type: string): void;
   close(key: string): void;
@@ -231,7 +233,7 @@ export function mountDock(host: DockHost): DockHandle {
     floatW = floatWidth(n, size, extra + (host.narrow() ? 0 : HANDLE_FLOAT));
     const side = geom?.side ?? 'right';
     const s = [home, side, prefs.mag, size, act, host.narrow(),
-      ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') : ''}`)].join('|');
+      ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') + '/' + (host.face?.('sessapp') || '') : ''}`)].join('|');
     if (force || s !== sig) {
       sig = s;
       build(cat, side);
@@ -296,14 +298,17 @@ export function mountDock(host: DockHost): DockHandle {
 
   function itemBtn(it: DockItem, app: DockApp): HTMLElement {
     const name = it.type === 'sessapp' ? host.title('sessapp') : app.name;
+    //  붙은 앱은 제 얼굴로 선다 — 그림 · 색 둘 다 그 앱의 것(앱 찾기 · 탭과 같아야 한 앱으로 읽힌다).
+    const face = it.type === 'sessapp' ? host.face?.('sessapp') || null : null;
+    const color = face || appColor(it.type);
     const n = it.keys.length;
     const b = el('button', {
       class: 'pn-dock-it' + (it.active ? ' on' : '') + (n ? ' run' : '') + (it.pinned ? ' pin' : ''),
-      type: 'button', 'data-type': it.type, style: `--ac: var(--gi-c-${appColor(it.type)})`,
+      type: 'button', 'data-type': it.type, style: `--ac: var(--gi-c-${color})`,
       'aria-label': name + (n > 1 ? ` — 열린 창 ${n}개` : n ? ' — 열려 있음' : ''),
       'aria-pressed': String(it.active),
     },
-    el('span', { class: 'pn-dock-ic' }, tile(app.glyph, appColor(it.type))),
+    el('span', { class: 'pn-dock-ic' }, tile(face ? appGlyphName(face) : app.glyph, color)),
     el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' }, ...Array.from({ length: Math.min(3, n) }, () => el('i')))) as HTMLElement;
     b.dataset.name = name;
     b.addEventListener('click', (e) => onItemClick(e as MouseEvent, it, app));
