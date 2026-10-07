@@ -4802,7 +4802,37 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "f86cf7a7f136fb27"
+  "input_hash": "cba677a050e2819f"
+ },
+ {
+  "name": "app_pull",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/pull"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_versions",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/versions"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_revert",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/revert"
+  ],
+  "input_hash": "354df45edf0f2d77"
  },
  {
   "name": "app_edit_policy_set",
@@ -4964,5 +4994,35 @@
    "POST /api/ui/terminal/sessions/:id/apps/detach"
   ],
   "input_hash": "915c12efe88f26fd"
+ },
+ {
+  "name": "org_app_chat_send",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/chat-send"
+  ],
+  "input_hash": "82eabf0cf92afa0a"
+ },
+ {
+  "name": "app_prefs_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/prefs"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_prefs_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/prefs"
+  ],
+  "input_hash": "ae606a987e382959"
  }
 ]
