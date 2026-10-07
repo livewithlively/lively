@@ -12,6 +12,7 @@ import type { WriteCtx } from "../org/store/audit.js";
 import { diffComponents, type AppComponentRef } from "./install-plan.js";
 import { runInstall, type InstallAppMeta } from "./install.js";
 import { makeDeployDeps } from "./deploy.js";
+import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
@@ -70,6 +71,18 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
     //  #4226 — 자유 SQL 역할도 여기서 맞춘다(비치명 — 못 만들면 report.sql_role 에 까닭이 남고 store_sql 만 막힌다).
     await ensureAppTables(id, tableSpecs, { schema, strict: true, report, sqlRole: true });
     tables = { ...report, dropped: [], archived: [], failed: [], schema };
+  } else if (isOverrideSource(source)) {
+    // #4600 — 워크스페이스가 덮어쓴 빌트인: 표는 그대로 빌트인 스키마에 살지만(코드가 구조의 주인이던 자리), 구성원이 **새로 선언한 표**는
+    //  워크스페이스 앱과 같은 관문을 지난다 — 이름 사전검증(63자·식별자)과 퓨즈(워크스페이스 표 상한). 릴리스가 만든 기존 표는 그대로.
+    //  생성 자체는 아래 빌트인 경로(비치명 ensureAppTables)가 한다 — 덮어쓰기가 표 하나 못 만들었다고 화면까지 안 바뀌면 안 된다.
+    const fresh = newTablesForOverride(existing?.manifest, tableSpecs.map((t) => t.table));
+    for (const t of fresh) physicalTableName(id, t);
+    if (fresh.length) {
+      const fuse = await checkAppTableFuse(id, fresh, schema);
+      if (!fuse.ok) {
+        throw new HttpError(409, `앱 '${id}' 저장 거절: 새 표 ${fresh.length}개로 이 워크스페이스의 앱 테이블이 상한(${fuse.limit}개)을 넘게 됩니다 — 지금 ${fuse.current}개 · 보관 ${fuse.archived}개`);
+      }
+    }
   }
 
   let drop: AppComponentRef[] = [];

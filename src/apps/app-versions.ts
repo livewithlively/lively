@@ -18,6 +18,8 @@ import { isBuiltinSource } from "./store-ddl.js";
 
 /** 앱당 보관하는 구성원 판 수. 원본(origin 'builtin') 판은 세지 않고 지우지 않는다 — 「원본으로」 의 목적지라서. */
 export const APP_VERSION_KEEP = 20;
+/** 워크스페이스 전체 판 묶음(files) 합의 상한 — 넘으면 앱을 가리지 않고 오래된 구성원 판부터 더 지운다(앱당 20 과 별개). 지금 서빙 중인 판은 안 지운다. */
+export const APP_VERSION_TOTAL_MAX_BYTES = 64 * 1024 * 1024;
 
 export type AppVersionOrigin = "builtin" | "member";
 export interface AppFile { path: string; content: string; encoding?: "utf8" | "base64" }
@@ -43,6 +45,34 @@ export function overrideSourceMeta(stageMeta: Record<string, unknown>, builtinId
 export function versionsToPrune(rows: ReadonlyArray<{ version_no: number; origin: AppVersionOrigin | string }>, keep: number = APP_VERSION_KEEP): number[] {
   const members = rows.filter((r) => r.origin !== "builtin").map((r) => r.version_no).sort((a, b) => b - a);
   return members.slice(Math.max(0, keep));
+}
+
+/**
+ * 워크스페이스 총량 상한을 넘겼을 때 지울 판(순수) — 오래된 것부터(rows 는 오래된 순), 지금 서빙 중인 판(is_current)은 건너뛰며,
+ *  합이 limit 이하가 될 때까지. 원본 판은 rows 에 넣지 않는다(호출부가 origin 'member' 만 준다).
+ */
+export function versionsToPruneForQuota(
+  rows: ReadonlyArray<{ app_id: string; version_no: number; bytes: number; is_current: boolean }>, total: number, limit: number = APP_VERSION_TOTAL_MAX_BYTES,
+): Array<{ app_id: string; version_no: number }> {
+  const out: Array<{ app_id: string; version_no: number }> = [];
+  let left = total;
+  for (const r of rows) {
+    if (left <= limit) break;
+    if (r.is_current) continue;
+    out.push({ app_id: r.app_id, version_no: r.version_no });
+    left -= Math.max(0, r.bytes);
+  }
+  return out;
+}
+
+/**
+ * 덮어쓴 빌트인이 **새로 선언한** 표(순수) — 릴리스 매니페스트에 없던 이름. 설치 코어가 이 표들에만 워크스페이스 앱과 같은 관문
+ *  (이름 사전검증 · 퓨즈)을 지나게 한다. 기존 표(릴리스가 만든 것)는 그대로. 모양이 어긋나도 던지지 않는다.
+ */
+export function newTablesForOverride(existingManifest: unknown, declared: ReadonlyArray<string>): string[] {
+  const t = (existingManifest as { data?: { tables?: Array<{ name?: unknown }> } } | null)?.data?.tables;
+  const prev = new Set((Array.isArray(t) ? t : []).map((x) => String(x?.name ?? "")).filter(Boolean));
+  return declared.filter((n) => !prev.has(n));
 }
 
 /** 매니페스트의 화면 entry 들(페이지·위젯) — DB 에 보존된 UI 자산을 패키지 파일 경로로 되돌릴 때 쓴다. 모양이 어긋나도 던지지 않는다. */
