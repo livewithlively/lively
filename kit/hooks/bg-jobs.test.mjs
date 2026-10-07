@@ -4,11 +4,12 @@
 //  줄 모양은 **실측 원문**이다(Claude Code 2.1.289 · 2.1.291 대화 기록에서 옮겼다 — 경로·본문만 줄였다).
 //  행 이름이 엣지 표다 — L 띄움 · C 끝남 · N 세지 않는 것 · F 파일(증분·덩어리 경계·못 읽음) · W work-flag 배선.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync, readFileSync, realpathSync as realpath } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { jobEventsOf, feedLines, countOpenJobs } from "./bg-jobs.mjs";
+import { mkdirSync, symlinkSync } from "node:fs";
+import { jobEventsOf, feedLines, countOpenJobs, heldFiles, deadShells } from "./bg-jobs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 //  띄움·끝남 두 칸만 본다(띄우라고 부른 호출의 짝 맞추기는 U1 이 따로 본다).
@@ -163,6 +164,77 @@ t("U1 띄우라고 부른 호출(Bash run_in_background · Monitor)의 답을 �
     appendFileSync(f, res("tu8", "Started shell bzz in the background."));
     assert.equal(countOpenJobs(f, c("g")), null, "앞 증분의 기대를 잊으면 0 으로 센다");
   } finally { rmSync(dir2, { recursive: true, force: true }); }
+});
+
+// ── 살아 있나(#4588 2차 — 사람 요청 «실제로 도는지 체크해서 센다») ──
+//  신고 세션 두 개는 하루 이틀 전에 띄운 대기 반복문이 완료 알림 없이 남아 «1 shell still running» 이었다. 셸 작업은 출력 파일을
+//  쥔 프로세스가 있어야 살아 있다(실측 2.1.291 macOS lsof — 도는 셸은 zsh·자식이 fd 1·2 로 쥐고, 끝난 셸은 0).
+t("S1 셸 띄움 두 갈래는 출력 파일을 기억하고, 에이전트·Monitor 는 기억하지 않는다 · 끝나면 지운다", () => {
+  assert.deepEqual(jobEventsOf(result(BASH)).outputs, { bdkb93vju: "/private/tmp/x/tasks/bdkb93vju.output" });
+  assert.deepEqual(jobEventsOf(result(MOVED)).outputs, { bvpluxnie: "/private/tmp/x/tasks/bvpluxnie.output" });
+  assert.deepEqual(jobEventsOf(result(AGENT)).outputs, {});
+  assert.deepEqual(jobEventsOf(result(MONITOR)).outputs, {});
+  let st = feedLines([JSON.stringify(result(BASH)), JSON.stringify(result(MOVED)), JSON.stringify(result(AGENT))].join("\n"), { open: [], closed: [] });
+  assert.deepEqual(Object.keys(st.shells).sort(), ["bdkb93vju", "bvpluxnie"]);
+  st = feedLines(JSON.stringify({ type: "queue-operation", content: notice("bdkb93vju", "completed") }), st);
+  assert.deepEqual(Object.keys(st.shells), ["bvpluxnie"], "끝난 셸은 잴 대상에서 빠진다");
+});
+
+t("S2 heldFiles(리눅스) — /proc/<pid>/fd 링크가 가리키는 파일만 «쥐었다» · 못 읽는 프로세스는 건너뛴다 · /proc 이 없으면 모른다", () => {
+  const root = mkdtempSync(join(tmpdir(), "bg-proc-"));
+  try {
+    mkdirSync(join(root, "100", "fd"), { recursive: true });
+    symlinkSync("/tmp/a.output", join(root, "100", "fd", "1"));
+    symlinkSync("/dev/null", join(root, "100", "fd", "0"));
+    mkdirSync(join(root, "200"), { recursive: true });                // fd 를 못 읽는 프로세스
+    mkdirSync(join(root, "self", "fd"), { recursive: true });         // 숫자가 아닌 항목
+    symlinkSync("/tmp/b.output", join(root, "self", "fd", "1"));
+    assert.deepEqual([...heldFiles(["/tmp/a.output", "/tmp/b.output"], { platform: "linux", procRoot: root })], ["/tmp/a.output"]);
+    assert.equal(heldFiles(["/tmp/a.output"], { platform: "linux", procRoot: join(root, "nope") }), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+t("S3 heldFiles(macOS) — lsof 의 n 줄 · 아무도 안 쥐면 종료코드 1 은 빈 집합 · lsof 가 없거나 막히면 모른다 · 윈도우는 모른다", () => {
+  const calls = [];
+  const ok = (cmd, args) => { calls.push([cmd, ...args]); return "p10449\nn/private/tmp/a.output\np10450\nn/private/tmp/a.output\n"; };
+  assert.deepEqual([...heldFiles(["/private/tmp/a.output", "/private/tmp/b.output"], { platform: "darwin", exec: ok })], ["/private/tmp/a.output"]);
+  assert.deepEqual(calls[0].slice(0, 5), ["lsof", "-w", "-F", "n", "--"], "파일 여러 개를 한 번에 묻는다");
+  const none = () => { const e = new Error("exit 1"); e.status = 1; e.stdout = ""; throw e; };
+  assert.deepEqual([...heldFiles(["/private/tmp/b.output"], { platform: "darwin", exec: none })], []);
+  const missing = () => { const e = new Error("spawn lsof ENOENT"); e.code = "ENOENT"; throw e; };
+  assert.equal(heldFiles(["/private/tmp/b.output"], { platform: "darwin", exec: missing }), null);
+  assert.equal(heldFiles(["C:\\x.output"], { platform: "win32" }), null);
+  assert.deepEqual([...heldFiles([], { platform: "win32" })], [], "잴 것이 없으면 묻지 않는다");
+});
+
+t("S4 deadShells — 쥔 프로세스가 없는 셸만 끝났다 · 파일이 없거나 못 재면 끝났다고 하지 않는다", () => {
+  const d = mkdtempSync(join(tmpdir(), "bg-dead-"));
+  try {
+    for (const n of ["live", "dead"]) writeFileSync(join(d, `${n}.output`), "");
+    const shells = { L: join(d, "live.output"), D: join(d, "dead.output"), G: join(d, "gone.output") };
+    const liveReal = realpath(join(d, "live.output"));
+    assert.deepEqual(deadShells(shells, { held: () => new Set([liveReal]) }), ["D"], "지워진 파일(G)은 도는 셸이 쥐고 있을 수 있다");
+    assert.deepEqual(deadShells(shells, { held: () => null }), [], "못 재면 전부 살아 있다");
+    assert.deepEqual(deadShells({}, { held: () => { throw new Error("불리면 안 된다"); } }), [], "잴 것이 없으면 묻지 않는다");
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+t("S5 countOpenJobs — 신고 세션 모양(완료 알림 없이 남은 대기 셸): 죽었으면 0 · 살아 있으면 1 · 못 재면 1 · 매번 다시 잰다", () => {
+  const d = mkdtempSync(join(tmpdir(), "bg-count-"));
+  try {
+    const out = join(d, "b5wils0wr.output");
+    writeFileSync(out, "");
+    const f = join(d, "c.jsonl"), c = join(d, "c.json");
+    writeFileSync(f, JSON.stringify(result(`Command did not complete within its 420s timeout and was moved to the background (ID: b5wils0wr). Output is being written to: ${out}. You will be notified when it completes.`)) + "\n"
+      + JSON.stringify(result(AGENT)) + "\n" + JSON.stringify({ type: "queue-operation", content: notice("a43e481f202df93e9", "completed") }) + "\n");
+    const real = realpath(out);
+    assert.equal(countOpenJobs(f, c, { held: () => new Set() }), 0, "아무도 출력 파일을 안 쥐었다 — 끝난 셸");
+    assert.equal(countOpenJobs(f, c, { held: () => new Set([real]) }), 1, "쥔 프로세스가 있다 — 정말 도는 셸(캐시에서 다시 잰다)");
+    assert.equal(countOpenJobs(f, c, { held: () => null }), 1, "못 잰다 — 종전대로");
+    assert.equal(countOpenJobs(f, c, { held: () => new Set() }), 0, "캐시에서 이어 읽어도 셸의 출력 파일을 기억한다");
+    appendFileSync(f, JSON.stringify(result(MONITOR)) + "\n");
+    assert.equal(countOpenJobs(f, c, { held: () => new Set() }), 1, "Monitor 는 쥘 파일이 없어 대화 기록 셈 그대로다");
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
 t("W1 work-flag 배선 — idle 보고(Stop · idle_prompt) · claude 에서만 세고, 못 세면 싣지 않으며, 작업 수가 바뀐 idle 은 스로틀에 안 걸린다", () => {

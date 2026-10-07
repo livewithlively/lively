@@ -77,7 +77,9 @@ The **phase itself** is now sent over the same path (`POST …/active`) that #10
   land between the two writes and see 'old state + new time').
 - #4588 — **idle reports (Stop · the `idle_prompt` notification) carry `bg`**: the number of background jobs this conversation launched
   that have not finished yet (Bash in background · Bash moved to the background on timeout · background agents · Monitor, minus
-  completion notifications and TaskStop), read incrementally from the transcript (`kit/hooks/bg-jobs.mjs`). The gateway writes
+  completion notifications and TaskStop), read incrementally from the transcript (`kit/hooks/bg-jobs.mjs`). **Shell jobs count only while
+  a process still holds their output file** (`tasks/<id>.output` — Linux `/proc/<pid>/fd`, macOS `lsof`; unknown or missing file → counted):
+  a wait loop that lost its completion notice must not keep the dot blinking for days (2026-10-07). The gateway writes
   `"idle <epoch seconds> bg=<n>"` (old parsers read only the first two tokens) and does **not** carry a previous bg over a report that has
   none (a hook that could not count must not inherit an old 0). The session list drops the screen's «… · 1 shell still running» (#4502 background) from the sidebar dot when the
   last report is idle with `bg=0` — the screen counter can disagree with what the AI is actually waiting for. No count → no `bg` → the screen is trusted as before.
