@@ -54,3 +54,13 @@ test("D4 워크스페이스 판으로 덮어쓴 빌트인 → overrides_builtin 
   assert.equal(d.source_kind, "inline");
   assert.equal(d.version, "1.0.1");
 });
+
+test("D5 판 번호·저장한 사람 — current_version_no 가 version_no 로, 저장자는 넘겨준 그대로 · 판 이력 없으면 null (#4595 신뢰 경계)", () => {
+  const d = describeAttached(row, app({}, { current_version_no: 3 }), "sangmin");
+  assert.equal(d.version_no, 3);
+  assert.equal(d.saved_by, "sangmin");
+  const none = describeAttached(row, app({}, { current_version_no: null }));
+  assert.equal(none.version_no, null);
+  assert.equal(none.saved_by, null);
+  assert.equal(describeAttached(row, null).version_no, null);
+});

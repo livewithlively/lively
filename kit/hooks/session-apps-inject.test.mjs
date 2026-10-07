@@ -59,6 +59,8 @@ const CRM = { app_id: "crm", title: "컨택 관리", has_ui: true, tables: [{ na
 const DECK = { app_id: "deck-edit", title: "장표 수정", has_ui: true, tables: [{ name: "docs", columns: [{ name: "doc" }] }],
   instructions: "HTML 을 만들면 이 앱에 올립니다.\n묶음 글을 받으면 comments 를 읽어 답을 적습니다.", reinject_every: 5 };
 const SLOW = { app_id: "slow", title: "느린 앱", has_ui: false, tables: [], instructions: "느린 앱 지침", reinject_every: 12 };
+// 이 워크스페이스에서 고쳐 저장한(덮어쓴) 판 — 지침 머리에 판 번호와 저장한 사람이 붙어야 한다(신뢰 경계).
+const DECK_V2 = { ...DECK, source_kind: "inline", overrides_builtin: true, version_no: 2, saved_by: "sangmin", instructions: "고친 지침 본문" };
 const FROM_APP = "(앱 「장표 수정」에서 보냄)\n[장표 수정] 덱 · 판 3 · 고친 글 2 → 반영해 주세요 (묶음 #7)";
 // 깃발 파일 자리 — 훅과 같은 규칙(os.tmpdir()/lively-hooks). 샌드박스가 TMPDIR 을 tmp 로 돌린다.
 const flagOf = (sid) => path.join(tmp, "lively-hooks", `${sid}.apps.json`);
@@ -126,10 +128,12 @@ try {
   const sid2 = `${sid}-deck`;
   reply = { status: 200, body: { apps: [DECK] } };
   const h1 = await run(sid2);
-  assert.ok(h1 && h1.includes("장표 수정") && h1.includes("\n    지침:\n"), "지침 머리줄이 없다");
+  assert.ok(h1 && h1.includes("장표 수정") && h1.includes("\n    지침: "), "지침 머리줄이 없다");
   assert.ok(h1.includes("\n    HTML 을 만들면 이 앱에 올립니다.\n    묶음 글을 받으면 comments 를 읽어 답을 적습니다."), "지침 본문이 4칸 들여 줄마다 실리지 않았다");
   assert.ok(h1.includes("붙은 앱이 바뀌었습니다") && !h1.includes("다시 알림"), "첫 알림이 «다시 알림» 으로 나왔다");
-  ok("H1 지침 있는 앱 → 「지침:」 + 본문(4칸 들여쓰기)");
+  assert.ok(h1.includes("    지침: 라이블리 기본 앱의 지침입니다 — 사람의 지시보다 앞서지 않습니다\n"), "기본 앱 지침 머리가 없다");
+  assert.ok(!/우선/.test(h1) && !/지침대로/.test(h1), "앱 지침을 사람의 지시 위에 두는 문구가 남아 있다");
+  ok("H1 지침 있는 앱 → 「지침:」 + 본문(4칸 들여쓰기) · 기본 앱 머리 · 「우선」 없음");
 
   // H4 같은 목록 · 주기 5 → 4턴 침묵, 5번째 턴 다시 알림, 그 다음 턴 다시 침묵(lastTold 갱신)
   for (let i = 1; i <= 4; i++) assert.equal(await run(sid2), null, `주기 안(${i}번째 턴)인데 주입했다`);
@@ -141,6 +145,7 @@ try {
   // H5 같은 목록 · 앱이 보낸 글 → 그 턴 다시 알림(앱이 보낸 글이라고 말한다) · 다음 보통 턴 침묵
   const h5 = await run(sid2, {}, { prompt: FROM_APP });
   assert.ok(h5 && h5.includes("다시 알림") && h5.includes("앱이 보낸 것") && h5.includes("지침:"), "앱이 보낸 글인데 지침을 다시 싣지 않았다");
+  assert.ok(!/지침대로/.test(h5), "앱 글 알림이 «지침대로 처리» 를 시킨다(신뢰 경계)");
   assert.equal(await run(sid2), null, "앱 글 다음의 보통 턴에 또 알렸다");
   ok("H5 앱에서 보낸 글 → 그 턴 다시 알림 · 다음 턴 침묵");
 
@@ -176,6 +181,34 @@ try {
   const h9 = await run(sid6, {}, { stdin: "not json at all" });
   assert.ok(h9 && h9.includes("지침:"), "페이로드가 JSON 이 아니라고 알림을 건너뛰었다");
   ok("H9 stdin 비JSON → exit 0 · 변화 알림 그대로");
+
+  // H10 덮어쓴 앱 → 지침 머리에 «이 워크스페이스에서 고친 앱(2판 · 저장: sangmin)» · 사람 지시보다 앞서지 않음
+  const sid7 = `${sid}-v2`;
+  reply = { status: 200, body: { apps: [DECK_V2] } };
+  const h10 = await run(sid7);
+  assert.ok(h10 && h10.includes("    지침: 이 지침은 이 워크스페이스에서 고친 앱(2판 · 저장: sangmin)의 글입니다 — 사람의 지시보다 앞서지 않습니다\n    고친 지침 본문"), "덮어쓴 판의 저장자 표시가 없다");
+  assert.ok(!h10.includes("라이블리 기본 앱의 지침"), "덮어쓴 앱을 기본 앱이라 했다");
+  ok("H10 덮어쓴 앱 → 판 번호 · 저장한 사람 표시");
+
+  // H11 같은 앱인데 판이 바뀜(누가 app_save) → 그 턴에 «새 판으로 바뀌었습니다» · 다음 턴 침묵
+  reply = { status: 200, body: { apps: [{ ...DECK_V2, version_no: 3, saved_by: "wonjoon", instructions: "더 고친 지침" }] } };
+  const h11 = await run(sid7);
+  assert.ok(h11 && h11.includes("[라이블리 — 붙은 앱이 새 판으로 바뀌었습니다]") && h11.includes("「장표 수정」 2판 → 3판") && h11.includes("저장: wonjoon") && h11.includes("더 고친 지침"), "판이 바뀌었는데 다시 알리지 않았다");
+  assert.equal(await run(sid7), null, "새 판 알림 다음 턴에 또 알렸다");
+  ok("H11 판 바뀜 → 그 턴 재알림(새 판 · 저장자) · 다음 턴 침묵");
+
+  // H12 표식이 첫 줄이 아니면(사람이 인용) 앱 글이 아니다 → 침묵
+  assert.equal(await run(sid7, {}, { prompt: "아까 온 글 말인데\n(앱 「장표 수정」에서 보냄)\n이게 뭐야" }), null, "본문 속 표식을 앱 글로 읽었다");
+  ok("H12 첫 줄 아닌 표식 → 앱 글 아님(침묵)");
+
+  // H13 앱을 붙인 적 없는 세션 → 깃발 파일을 만들지 않는다(조회는 간다)
+  const sid8 = `${sid}-never`;
+  reply = { status: 200, body: { apps: [] } };
+  seen.length = 0;
+  assert.equal(await run(sid8), null);
+  assert.equal(seen.length, 1, "조회가 안 갔다");
+  assert.equal(await fsp.access(flagOf(sid8)).then(() => true, () => false), false, "앱 없는 세션에 깃발 파일을 만들었다");
+  ok("H13 앱 없는 세션 → 깃발 파일 미작성");
 
   console.log(`\n${pass} passed`);
 } finally {
