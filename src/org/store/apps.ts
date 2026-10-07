@@ -258,6 +258,24 @@ export async function insertAppVersion(
   return Number(r.rows[0].version_no);
 }
 
+/**
+ * 「원본 · 릴리스」 판을 **지금 실린 릴리스**로 갱신한다(번호는 그대로) — «원본으로» 되돌릴 때 부른다.
+ *  떠 둔 원본은 처음 고친 날의 릴리스인데, 되돌리기는 폴더의 **지금** 릴리스를 깐다. 둘이 다르면(그 사이 릴리스가 올랐다)
+ *  서빙 중인 내용이 어느 판과도 맞지 않아 판 이력에 «지금» 이 사라지고, 다음 되돌리기가 원본을 한 벌 더 떠 둔다.
+ *  원본 판(origin='builtin')만 고친다 — 구성원 판은 사람이 저장한 그대로여야 한다.
+ */
+export async function refreshOriginVersion(
+  appId: string, versionNo: number,
+  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null },
+): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now()
+      WHERE app_id=$1 AND version_no=$2 AND origin='builtin'`,
+    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** 판 목록(파일 제외) — 최신 먼저. */
 export async function listAppVersions(appId: string): Promise<AppVersionMeta[]> {
   const r = await itemsPool.query(

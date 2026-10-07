@@ -424,6 +424,16 @@ const appRevert: Capability = {
         //  원본으로 — 폴더(지금 실린 릴리스)에서 빌트인으로 재설치. 덮어쓰기 표식이 걷힌다.
         const loaded = await loadAppPackage(dir);
         await installLoadedApp(loaded, { kind: "builtin" }, wctx(user, ctx));
+        //  떠 둔 원본 판은 처음 고친 날의 릴리스다. 그 사이 릴리스가 올랐으면 방금 깐 것과 다르다 — 원본 판을 **지금 깐 것**으로 맞춘다
+        //   (안 맞추면 판 이력에 «지금» 이 없고, 다음 되돌리기가 원본을 한 벌 더 떠 둔다). 실패해도 되돌리기 자체는 끝났다(로그만).
+        const fresh = await store.getApp(id);
+        if (fresh && !isCurrentVersion(fresh, ver)) {
+          await currentPackageFiles(fresh)
+            .then(({ files }) => store.refreshOriginVersion(id, target, {
+              version: fresh.version, manifest: fresh.manifest, files, content_hash: fresh.content_hash, note: `원본 · 릴리스 ${fresh.version}`,
+            }))
+            .catch((err) => logger.warn({ err, id, target }, "원본 판을 지금 릴리스로 맞추지 못했다(비치명 — 되돌리기는 끝났다)"));
+        }
       } else {
         const staged = await stageAppSource(parseAppSource({ kind: "inline", files: filesToInline(ver.files) }));
         try {

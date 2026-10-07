@@ -33,6 +33,7 @@ const { initAllSchemas } = await import(`${D}/boot/schemas.js`);
 await initAllSchemas({ quiet: true });
 const { appCapabilities } = await import(`${D}/capabilities/apps.js`);
 const { seedBuiltinApps } = await import(`${D}/apps/seed.js`);
+const { setBuiltinAppsRootForTest } = await import(`${D}/apps/builtin-root.js`);
 const { itemsPool } = await import(`${D}/db/client.js`);
 const cap = (n) => appCapabilities.find((c) => c.name === n);
 const bob = { userId: "pgt-bob", email: "b@x", scopes: ["memory"], projects: ["*"] };
@@ -44,6 +45,8 @@ const q = async (sql, params = []) => (await itemsPool.query(sql, params)).rows;
 // 픽스처 빌트인 — 화면 + 데이터 + bin/ 스크립트(장표 수정 앱과 같은 꼴)
 const ROOT = mkdtempSync(path.join(tmpdir(), "pgt-app-versions-"));
 const APP = path.join(ROOT, "memo2");
+//  app_pull · app_revert(«원본으로») 는 인자 없이 빌트인 자리를 본다 — 픽스처 폴더를 그 자리로 세운다(시더에 ROOT 를 넘기는 것과 같은 뜻).
+setBuiltinAppsRootForTest(ROOT);
 const manifest = (version, tables = [{ name: "notes", columns: [{ name: "text", type: "text" }] }]) => JSON.stringify({
   id: "memo2", title: "메모2", version, publisher: { name: "Lively" },
   permissions: { scopes: [], tools: ["store_insert", "store_query"] },
@@ -98,9 +101,19 @@ try {
   // P6
   const rv1 = await cap("app_revert").handler({ app_id: "memo2", version_no: 1 }, bob, ctx);
   a = await app(); vs = await versions();
-  chk("P6 app_revert 1 — 릴리스 원본(1.1.0) 재설치 · 표식 걷힘 · 「되돌리기 직전」 판",
+  //  되돌리기 직전 상태(3판)는 이미 판으로 있으므로 «되돌리기 직전» 을 한 벌 더 뜨지 않는다(구성원 판은 여전히 둘).
+  //  원본 판(1)은 처음 고친 날의 릴리스(1.0.0)였다 — 방금 깐 릴리스(1.1.0)로 갱신돼 판 이력의 «지금» 이 된다.
+  const o1 = vs.find((v) => v.version_no === 1);
+  chk("P6 app_revert 1 — 릴리스 원본(1.1.0) 재설치 · 표식 걷힘 · 원본 판이 지금 릴리스로 · 군더더기 판 없음",
     rv1.changed === true && a.source.overrides_builtin === undefined && a.source.kind === "builtin" && a.version === "1.1.0" && (await ui()).includes("release 1.1.0")
-      && vs.some((v) => v.note === "되돌리기 직전"), JSON.stringify({ rv1: rv1.changed, a, notes: vs.map((v) => v.note) }));
+      && a.current_version_no === 1 && o1?.is_current === true && o1?.version === "1.1.0" && o1?.note === "원본 · 릴리스 1.1.0"
+      && vs.filter((v) => v.origin === "member").length === 2 && vs.filter((v) => v.origin === "builtin").length === 1,
+    JSON.stringify({ rv1: rv1.changed, a, vs: vs.map((v) => [v.version_no, v.origin, v.version, v.is_current, v.note]) }));
+  //  원본으로 돌아온 앱의 app_pull 은 폴더에서(구성원이 고친 bin/ 이 아니라 릴리스의 것).
+  const p6 = await cap("app_pull").handler({ app_id: "memo2" }, bob, ctx);
+  chk("P6b 원본으로 돌아온 뒤 app_pull — 폴더의 릴리스(bin/ 포함) · 덮어쓰기 아님",
+    p6.overrides_builtin === false && p6.files.find((f) => f.path === "bin/push.mjs")?.content === "console.log('push')"
+      && p6.files.find((f) => f.path === "ui/index.html")?.content.includes("release 1.1.0"), JSON.stringify({ from: p6.from, ov: p6.overrides_builtin, paths: p6.files.map((f) => f.path) }));
 
   // P7
   const rv2 = await cap("app_revert").handler({ app_id: "memo2", version_no: 2 }, bob, ctx);
@@ -141,6 +154,7 @@ finally {
   await dbc.end().catch(() => {});
   await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch((e) => console.error("정리 실패", e));
   await su.end();
+  setBuiltinAppsRootForTest(null);
   rmSync(ROOT, { recursive: true, force: true });
 }
 console.log(`\n${pass} 통과 · ${fail} 실패`);
