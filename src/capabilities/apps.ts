@@ -16,6 +16,13 @@ import { isBuiltinSource } from "../apps/store-ddl.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
 import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
+import { builtinAppDir } from "../apps/builtin-root.js";
+import {
+  filesFromStored, filesToInline, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
+  readPackageDir, versionsToPrune, versionsToPruneForQuota, APP_VERSION_TOTAL_MAX_BYTES, type AppFile,
+} from "../apps/app-versions.js";
+import { publishAppEvent } from "../apps/session-apps.js";
+import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
@@ -49,6 +56,59 @@ const appsIndex: Capability = {
 function safeManifest(a: store.OrgApp): ReturnType<typeof parseAppManifest> | null {
   try { return parseAppManifest(a.manifest); } catch { return null; }
 }
+
+// ── 앱 판(#4600) 보조 — 지금 서빙 중인 패키지 파일 묶음 · 판 떠 두기 ──
+//  빌트인은 폴더(apps/builtin/<id>)가 전부다(bin/·README 포함). DB 에는 매니페스트·화면만 남으므로, 덮어쓴 빌트인은 폴더 위에
+//  DB 의 매니페스트·화면을 덮어 «지금 서빙 중인 것» 을 만든다. 폴더가 없는 앱(세션이 만든 앱)은 DB 가 전부다.
+async function currentPackageFiles(app: store.OrgApp): Promise<{ files: AppFile[]; from: "version" | "folder" | "folder+db" | "db" }> {
+  //  덮어쓴 빌트인은 구성원이 저장한 **판의 파일 묶음 그대로**가 지금 서빙본이다(bin/ 을 고쳤어도 거기 있다 — DB 에는 매니페스트·화면만 남아
+  //  폴더+DB 로 되살리면 구성원이 고친 bin/ 이 릴리스 것으로 돌아간다. 격리 리뷰 7a). 그 판이 지금 내용과 같을 때만(해시) 믿는다.
+  if (isOverrideSource(app.source) && app.current_version_no != null) {
+    const cur = await store.getAppVersion(app.id, app.current_version_no);
+    if (cur && cur.content_hash != null && cur.content_hash === app.content_hash) return { files: cur.files, from: "version" };
+  }
+  const stored = filesFromStored(app.manifest, await store.listUiAssetsFull(app.id));
+  if (isBuiltinSource(app.source)) {
+    const dir = builtinAppDir(app.id);
+    if (await hasPackageDir(dir)) {
+      const folder = await readPackageDir(dir);
+      return isOverrideSource(app.source) ? { files: overlayFiles(folder, stored), from: "folder+db" } : { files: folder, from: "folder" };
+    }
+  }
+  return { files: stored, from: "db" };
+}
+
+/** 지금 상태를 판으로 떠 둔다(저장·되돌리기 직전). 호출부가 설치 락 안에서 부른다. 반환 = 판 번호. */
+async function snapshotCurrentVersion(app: store.OrgApp, savedBy: string, note: string): Promise<number> {
+  const { files } = await currentPackageFiles(app);
+  return store.insertAppVersion(app.id, {
+    origin: originOfCurrent(app.source), version: app.version, manifest: app.manifest, files,
+    content_hash: app.content_hash, note, saved_by: savedBy,
+  });
+}
+
+/** app_save 입력 파일을 판에 적을 모양으로(순수) — 경로·내용·인코딩만 남긴다. */
+function inputFilesForVersion(files: unknown): AppFile[] {
+  return (Array.isArray(files) ? files : []).map((f) => {
+    const o = (f ?? {}) as Record<string, unknown>;
+    const enc = o.encoding === "base64" ? "base64" as const : undefined;
+    return enc ? { path: String(o.path ?? ""), content: String(o.content ?? ""), encoding: enc } : { path: String(o.path ?? ""), content: String(o.content ?? "") };
+  });
+}
+
+/** 구성원 판을 보관 수만큼만 남기고(원본 판은 세지 않는다), 워크스페이스 총량 상한을 넘겼으면 앱 불문 오래된 구성원 판부터 더 지운다. */
+async function pruneVersions(appId: string): Promise<void> {
+  await store.deleteAppVersions(appId, versionsToPrune(await store.listAppVersions(appId)));
+  const total = await store.appVersionBytesTotal();
+  if (total <= APP_VERSION_TOTAL_MAX_BYTES) return;
+  const victims = versionsToPruneForQuota(await store.listMemberVersionsOldestFirst(), total);
+  const byApp = new Map<string, number[]>();
+  for (const v of victims) byApp.set(v.app_id, [...(byApp.get(v.app_id) ?? []), v.version_no]);
+  for (const [id, nos] of byApp) await store.deleteAppVersions(id, nos);
+}
+
+/** 지금 서빙 중인 내용이 이 판 그대로인가 — 번호가 아니라 **내용(해시)** 으로 본다(관리자 org_app_install 이 내용을 바꿔도 맞게 · 격리 리뷰 7b). */
+const isCurrentVersion = (app: store.OrgApp, v: { content_hash: string | null }): boolean => v.content_hash != null && v.content_hash === app.content_hash;
 
 // ── 앱 상세(+구성요소) ──
 const appGet: Capability = {
@@ -200,13 +260,21 @@ const appSave: Capability = {
   description: "세션이 만든 앱 파일 묶음을 이 워크스페이스에 저장한다 — 새 id 면 만들고, 있는 id 면 고친다(재설치 = 갱신, 롤 불필요). " +
     "files=[{path, content, encoding?:'utf8'|'base64'}] · lively-app.json 필수. 구성원 누구나 쓸 수 있고, 담을 수 있는 것은 **화면(ui.pages) + 데이터(data.tables) + " +
     "선언한 라이블리 도구(permissions.tools — 쓰는 사람이 동의한 만큼만)**까지다. 스킬·훅·정기 작업·MCP/HTTP 도구·서버 worker·외부 호스트·화면의 직접 네트워크는 관리자 설치(org_app_install)로만. " +
-    "있는 앱은 그 앱의 고치기 설정(기본 전원 · 관리자가 지정한 사람만으로 좁힐 수 있음)을 따른다. 기본 앱(빌트인)은 고칠 수 없다. " +
+    "있는 앱은 그 앱의 고치기 설정(기본 전원 · 관리자가 지정한 사람만으로 좁힐 수 있음)을 따른다. " +
+    "기본 앱(빌트인)도 화면·데이터만으로 된 앱이면 고칠 수 있다 — 그러면 이 워크스페이스의 판이 릴리스 원본을 덮고(데이터 표는 그대로), " +
+    "원본으로 되돌리려면 app_revert(원본 판). 저장마다 판이 남는다(app_versions · note 에 요지 한 줄). " +
     "앱 화면은 샌드박스라 폼 제출이 막힌다 — 입력은 버튼 click · Enter keydown 으로. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관.",
   scope: null,
-  input: { files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })) },
+  input: {
+    files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })),
+    note: z.string().max(500).optional().describe("이 판의 요지 한 줄(판 이력에 남는다 — 예: «글 줄 칸을 아래로 · 보낸 줄 접힘»)"),
+  },
   expose: {
     mcp: true,
-    rest: [{ method: "POST", paths: ["/api/ui/apps/save"], parse: (req) => ({ files: (req.body as Record<string, unknown>)?.files }) }],
+    rest: [{ method: "POST", paths: ["/api/ui/apps/save"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { files: b.files, note: b.note };
+    } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     const source = parseAppSource({ kind: "inline", files: input.files });
@@ -217,20 +285,173 @@ const appSave: Capability = {
       if (bad.length) {
         throw new HttpError(403, `이 앱은 화면·데이터 밖의 기능을 선언해서 app_save 로 저장할 수 없습니다: ${bad.join(" · ")} — 빼고 저장하거나 관리자 설치(org_app_install)를 부탁하세요`);
       }
+      const id = loaded.manifest.id;
       const who = { userId: actorOf(user), scopes: user?.scopes };
-      const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
-        const existing = await store.getApp(loaded.manifest.id);
+      const note = input.note == null || String(input.note).trim() === "" ? null : String(input.note).trim();
+      const { outcome, versionNo } = await store.withAppInstallLock(id, async () => {
+        const existing = await store.getApp(id);
         if (existing) {
           const why = editDenial(existing, who, safeManifest(existing));
           if (why) throw new HttpError(403, why);
         }
-        return installLoadedApp(loaded, staged.meta, wctx(user, ctx));
+        //  #4600 — 이력이 비어 있는 앱을 처음 고치면 **지금 상태를 먼저 판 1로** 떠 둔다. 빌트인이면 그것이 「원본 · 릴리스」 판(되돌리기의 목적지).
+        if (existing && (await store.listAppVersions(id)).length === 0) {
+          await snapshotCurrentVersion(existing, who.userId, originOfCurrent(existing.source) === "builtin" ? `원본 · 릴리스 ${existing.version}` : "저장 전 상태");
+        }
+        //  빌트인을 고치면 source 는 kind 'builtin' 을 유지한 채 overrides_builtin 이 붙는다(app-versions.ts 머리 — 데이터 표가 사는 스키마가 그 값으로 갈린다).
+        //  그러면 부팅 시딩이 이 앱을 덮지 않는다(seed.ts seedShouldSkipOverride).
+        const meta = existing && isBuiltinSource(existing.source) ? overrideSourceMeta(staged.meta, id) : staged.meta;
+        //  판 행을 **설치 전에** 먼저 쓴다(격리 리뷰 7c) — 설치가 됐는데 판 기록이 없는 상태(되돌릴 곳 없음)를 만들지 않는다.
+        //  설치가 실패하면 그 행을 거둔다(best-effort — 남아도 current_version_no 가 안 가리키므로 is_current 가 아니다).
+        const versionNo = await store.insertAppVersion(id, {
+          origin: "member", version: loaded.manifest.version, manifest: loaded.manifest, files: inputFilesForVersion(input.files),
+          content_hash: loaded.contentHash, note, saved_by: who.userId,
+        });
+        let outcome;
+        try {
+          outcome = await installLoadedApp(loaded, meta, wctx(user, ctx));
+        } catch (e) {
+          await store.deleteAppVersions(id, [versionNo]).catch((err) => logger.warn({ err, id, versionNo }, "설치 실패 뒤 판 행 회수 실패(비치명)"));
+          throw e;
+        }
+        await store.setAppCurrentVersion(id, versionNo);
+        await pruneVersions(id).catch((err) => logger.warn({ err, id }, "판 보관 정리 실패(비치명 — 다음 저장이 다시 정리)"));
+        return { outcome, versionNo };
       });
+      //  세션 옆 앱 칸이 이 사건을 받아 그 앱 화면을 다시 띄운다(«N판 · 방금 고침 · 되돌리기»).
+      publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
       const app = await store.getApp(outcome.id);
-      return { app, created: outcome.created, tables: outcome.tables ?? null };
+      return { app, created: outcome.created, tables: outcome.tables ?? null, version_no: versionNo };
     } finally {
       await staged.cleanup();
     }
+  },
+};
+
+// ── 앱 소스 내려받기(#4600) — 「AI 에게 고치기」 의 첫 걸음 ──
+//  지금 서빙 중인 판의 파일 묶음을 그대로 준다. 세션의 AI 가 이걸 폴더에 풀어 고친 뒤 app_save 로 올린다.
+//  빌트인은 폴더 전체(bin/·README 포함 — 장표 수정 앱의 세션 스크립트가 거기 있다), 덮어쓴 빌트인은 폴더 위에 DB 의 매니페스트·화면,
+//  세션이 만든 앱은 DB(매니페스트 + 화면)만 — 설치가 보존하는 것이 그 둘뿐이다.
+const appPull: Capability = {
+  name: "app_pull",
+  title: "앱 소스 내려받기",
+  description: "앱의 지금 서빙 중인 판을 파일 묶음(files=[{path, content, encoding?}])으로 준다 — 고치려면 이걸 폴더에 풀어 고치고 app_save {files, note} 로 올린다. " +
+    "기본 앱(빌트인)은 패키지 폴더 전체(bin/ 의 세션 스크립트 · README 포함), 워크스페이스가 덮어쓴 기본 앱은 그 위에 지금 화면, 세션이 만든 앱은 매니페스트 + 화면. " +
+    "source_kind · overrides_builtin · builtin_version(폴더의 릴리스 판) · current_version_no 도 함께. 구성원 누구나.",
+  scope: null,
+  input: { app_id: z.string() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/apps/:id/pull"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = appId(input.app_id);
+    const app = await store.getApp(id);
+    if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    const { files, from } = await currentPackageFiles(app);
+    const src = (app.source ?? {}) as { kind?: unknown };
+    return {
+      app_id: id, title: app.title, version: app.version, source_kind: String(src.kind ?? ""), overrides_builtin: isOverrideSource(app.source),
+      builtin_version: app.builtin_version, current_version_no: app.current_version_no, from, files,
+    };
+  },
+};
+
+// ── 앱 판 이력(#4600) ──
+const appVersions: Capability = {
+  name: "app_versions",
+  title: "앱 판 이력",
+  description: "앱 코드의 판 목록(최신 먼저) — version_no · origin('builtin'=릴리스 원본 · 'member'=구성원이 저장) · version · note(요지) · saved_by · saved_at · is_current. " +
+    "되돌리기는 app_revert {app_id, version_no}. 구성원 판은 최근 20개만 남고 원본 판은 늘 남는다. 구성원 누구나.",
+  scope: null,
+  input: { app_id: z.string() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/apps/:id/versions"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = appId(input.app_id);
+    const app = await store.getApp(id);
+    if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    const versions = (await store.listAppVersions(id)).map((v) => ({ ...v, is_current: isCurrentVersion(app, v) }));
+    return { app_id: id, current_version_no: app.current_version_no, builtin_version: app.builtin_version, overrides_builtin: isOverrideSource(app.source), versions };
+  },
+};
+
+// ── 앱 되돌리기(#4600) — 어느 판으로든, 원본(릴리스)으로도 ──
+//  권한은 app_save 와 같다(editDenial). 되돌리기 직전의 지금 상태도 판으로 떠 둔다(되돌리기도 되돌릴 수 있게) — 다만 지금 상태가
+//  이미 어떤 판 그대로면(current_version_no 의 content_hash 일치) 같은 것을 두 번 적지 않는다.
+//  원본 판(origin 'builtin')으로 가면 패키지 폴더에서 **빌트인으로 재설치**한다 — 덮어쓰기 표식이 걷히고 부팅 시딩이 다시 따라붙는다.
+const appRevert: Capability = {
+  name: "app_revert",
+  title: "앱 되돌리기",
+  description: "앱 코드를 app_versions 의 어느 판으로 되돌린다(데이터 표는 그대로). 원본 판(origin 'builtin')이면 릴리스 원본으로 재설치돼 워크스페이스 덮어쓰기가 풀린다. " +
+    "되돌리기 직전 지금 상태를 먼저 판으로 떠 둔다. 권한은 app_save 와 같다(그 앱의 고치기 설정).",
+  scope: null,
+  input: { app_id: z.string(), version_no: z.number().int().positive() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/revert"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { app_id: (req.params as Record<string, string>)?.id, version_no: Number(b.version_no) };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const id = appId(input.app_id);
+    const target = Number(input.version_no);
+    if (!Number.isInteger(target) || target < 1) throw new HttpError(400, "version_no 는 1 이상의 정수여야 합니다");
+    const who = { userId: actorOf(user), scopes: user?.scopes };
+    const result = await store.withAppInstallLock(id, async () => {
+      const app = await store.getApp(id);
+      if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+      const why = editDenial(app, who, safeManifest(app));
+      if (why) throw new HttpError(403, why);
+      const ver = await store.getAppVersion(id, target);
+      if (!ver) throw new HttpError(404, `앱 '${id}' 에 ${target}판이 없습니다`);
+      //  «이미 그 판» 은 내용(해시)으로 — 번호가 달라도 내용이 같으면 할 일이 없다(가리키는 번호만 맞춘다).
+      if (isCurrentVersion(app, ver)) {
+        if (app.current_version_no !== target) await store.setAppCurrentVersion(id, target);
+        return { app, version_no: target, changed: false };
+      }
+
+      // 지금 상태가 어느 판 그대로가 아니면 먼저 떠 둔다.
+      const cur = app.current_version_no == null ? null : await store.getAppVersion(id, app.current_version_no);
+      if (!cur || !isCurrentVersion(app, cur)) await snapshotCurrentVersion(app, who.userId, "되돌리기 직전");
+
+      const builtinLineage = isBuiltinSource(app.source);
+      const dir = builtinAppDir(id);
+      if (ver.origin === "builtin" && builtinLineage && (await hasPackageDir(dir))) {
+        //  원본으로 — 폴더(지금 실린 릴리스)에서 빌트인으로 재설치. 덮어쓰기 표식이 걷힌다.
+        const loaded = await loadAppPackage(dir);
+        await installLoadedApp(loaded, { kind: "builtin" }, wctx(user, ctx));
+        //  떠 둔 원본 판은 처음 고친 날의 릴리스다. 그 사이 릴리스가 올랐으면 방금 깐 것과 다르다 — 원본 판을 **지금 깐 것**으로 맞춘다
+        //   (안 맞추면 판 이력에 «지금» 이 없고, 다음 되돌리기가 원본을 한 벌 더 떠 둔다). 실패해도 되돌리기 자체는 끝났다(로그만).
+        const fresh = await store.getApp(id);
+        if (fresh && !isCurrentVersion(fresh, ver)) {
+          await currentPackageFiles(fresh)
+            .then(({ files }) => store.refreshOriginVersion(id, target, {
+              version: fresh.version, manifest: fresh.manifest, files, content_hash: fresh.content_hash, note: `원본 · 릴리스 ${fresh.version}`,
+            }))
+            .catch((err) => logger.warn({ err, id, target }, "원본 판을 지금 릴리스로 맞추지 못했다(비치명 — 되돌리기는 끝났다)"));
+        }
+      } else {
+        const staged = await stageAppSource(parseAppSource({ kind: "inline", files: filesToInline(ver.files) }));
+        try {
+          const loaded = await loadAppPackage(staged.dir);
+          if (loaded.manifest.id !== id) throw new HttpError(409, `${target}판의 매니페스트 id(${loaded.manifest.id})가 앱 id 와 다릅니다`);
+          const bad = memberAppViolations(loaded.manifest);
+          if (bad.length) throw new HttpError(403, `${target}판은 화면·데이터 밖의 기능을 선언해서 app_save 경로로 되돌릴 수 없습니다: ${bad.join(" · ")}`);
+          await installLoadedApp(loaded, builtinLineage ? overrideSourceMeta(staged.meta, id) : staged.meta, wctx(user, ctx));
+        } finally {
+          await staged.cleanup();
+        }
+      }
+      await store.setAppCurrentVersion(id, target).catch((err) => logger.warn({ err, id, target }, "되돌린 판 번호 기록 실패(비치명 — is_current 는 해시로 판정)"));
+      await pruneVersions(id).catch((err) => logger.warn({ err, id }, "판 보관 정리 실패(비치명)"));
+      return { app: await store.getApp(id), version_no: target, changed: true };
+    });
+    if (result.changed) publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
+    return { ok: true, app_id: id, version_no: result.version_no, changed: result.changed, app: result.app };
   },
 };
 
@@ -253,7 +474,11 @@ const appEditPolicySet: Capability = {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
-    if (isBuiltinSource(app.source)) throw new HttpError(400, "기본 앱(빌트인)은 여기서 고칠 수 없어 고치기 설정이 없습니다");
+    //  #4600 — 화면·데이터만으로 된 빌트인은 이제 고칠 수 있으므로 고치기 설정도 뜻이 있다. 셸 렌더러 같은 그 밖 빌트인만 설정 대상이 아니다.
+    if (isBuiltinSource(app.source)) {
+      const m = safeManifest(app);
+      if (!m || memberAppViolations(m).length) throw new HttpError(400, "이 기본 앱(빌트인)은 화면·데이터만으로 된 앱이 아니라 고칠 수 없어 고치기 설정이 없습니다");
+    }
     const mode = input.mode === "members" ? "members" : "all";
     const members = Array.isArray(input.members) ? (input.members as unknown[]).map(String) : [];
     const after = await store.setAppEditPolicy(id, mode, members, wctx(user, ctx));
@@ -385,4 +610,4 @@ const appDataRestore: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appEditPolicySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert, appEditPolicySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];

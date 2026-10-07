@@ -1581,6 +1581,22 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item--app:hover { background: rgba(var(--tint-ink), .12); }
 .v2-pad-item--app .v2-pad-ico { color: var(--mint-deep); }
 .v2-pad-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep); background: var(--bg-success); border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; }
+/* #4600 앱 찾기에서 빼기·다시 넣기 — 칸 호버에 뜨는 ⋯(우클릭과 같은 메뉴) · 검색 중 뺀 칸의 표시 · 격자 아래 접힌 「뺀 앱」 묶음 */
+.v2-pad-item { position: relative; }
+.v2-pad-more { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; color: var(--ink-sub); background: rgba(var(--tint-ink), .10); opacity: 0; transition: opacity .12s; cursor: pointer; }
+.v2-pad-more .v2-ic { width: 14px; height: 14px; }
+.v2-pad-item:hover .v2-pad-more, .v2-pad-item:focus-within .v2-pad-more, .v2-pad-more:focus-visible { opacity: 1; }
+.v2-pad-more:hover { background: rgba(var(--tint-ink), .18); color: var(--ink); }
+@media (hover: none) { .v2-pad-more { opacity: 1; } }   /* 누를 수 없는 호버 대신 늘 보인다(폰·태블릿) */
+.v2-pad-badge--hidden { color: var(--muted-head); background: rgba(var(--tint-ink), .08); border-color: var(--line); }
+.v2-pad-hid { width: min(920px, 100%); }
+.v2-pad-hid-sum { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; color: var(--muted-head); }
+.v2-pad-hid-sum::-webkit-details-marker { display: none; }
+.v2-pad-hid-sum::before { content: ""; width: 6px; height: 6px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(-45deg); transition: transform .12s; margin: 0 4px 0 2px; }
+.v2-pad-hid[open] .v2-pad-hid-sum::before { transform: rotate(45deg); }
+.v2-pad-hid-note { margin: 6px 14px 10px; font-size: 12px; color: var(--muted-head); }
+.v2-pad-hid .v2-pad-item { opacity: .78; }
+.v2-pad-hid .v2-pad-item:hover { opacity: 1; }
 
 /* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
 .v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(var(--shadow-ink), .32); padding: 20px; }

@@ -62,6 +62,38 @@ export interface LivelyApp {
   ui: {
     /** 새 탭으로 연다 — 샌드박스 안에선 앱이 직접 못 하는 일을 호스트가 대신한다(http/https 만). */
     openExternal(url: string): Promise<{ opened: boolean }>;
+    /**
+     * 사람이 앱 탭의 ⋯ 메뉴에서 「표시 설정」을 눌렀다(#4601) — 앱이 설정 패널을 연다. 돌려주는 함수를 부르면 끊는다.
+     *  설정 값 자체는 lively.prefs 에 두면 다른 기기에서 열어도 그대로다.
+     */
+    onPrefsOpen(cb: () => void): () => void;
+  };
+
+  /** 이 화면이 붙은 세션과 말하기(#4594). 세션 오른쪽 앱 칸에서 열렸을 때만(lively.session 이 있을 때) 된다. */
+  chat: {
+    /**
+     * 붙은 세션에 글을 **바로 보낸다**(채우기가 아니다 — 사람이 Enter 를 치지 않는다). 서버가 글 앞에 「(앱 「제목」에서 보냄)」 한 줄을 붙여
+     *  대화 기록에서 사람이 친 말과 구별되고, 세션의 AI 는 그 표식으로 이 앱의 지침을 다시 받는다.
+     *  · 긴 내용은 앱 표(store_*)에 두고 **한 줄**만 보낸다(4,000자 · 앱마다 분당 20회).
+     *  · 앱은 매니페스트에 `permissions.chat_send: true` 를 선언해야 하고(동의 창에 「세션에 글 보내기」로 보인다), 사람이 그 범위에 동의해야 한다.
+     *  · **사람이 누른 동작(click·keydown) 안에서만** 보낼 수 있다 — 타이머나 데이터 변경 콜백에서 부르면 reject(code -32001).
+     *  · 세션이 멈춰 있으면 reject 하지 않고 `{ sent:false, draft }` — draft=true 면 호스트가 그 세션 화면의 입력칸에 글을 넣어 두었다
+     *    (사람이 보내면 세션이 깨어난다), false 면 그 세션 화면이 떠 있지 않아 못 넣었다(앱이 「세션 화면을 열고 다시」 라고 말하면 된다).
+     *  · 붙은 세션이 없으면 reject(code -32602).
+     */
+    send(text: string): Promise<{ sent: boolean; session: string; transport?: string | null; draft?: boolean }>;
+  };
+
+  /**
+   * 이 앱 × **보는 사람**의 작은 설정(#4601 — 배치 2열/2행 · 글자 크기 · 접기 · 마지막으로 보던 장). 다른 사람은 자기 설정을 본다.
+   *  왜 여기인가: 앱 화면은 불투명 오리진이라 localStorage 가 SecurityError 로 막히고, 앱 표에 두자니 SDK 에 보는 사람 신원이 없다.
+   *  16KB 상한 — 설정이지 데이터가 아니다(문서·행은 store_* 에).
+   */
+  prefs: {
+    /** 없으면 {}. */
+    get<T extends Record<string, unknown> = Record<string, unknown>>(): Promise<T>;
+    /** 얕은 병합 — patch 의 키만 바뀐다. 값이 null 인 키는 지운다(「기본값으로」). 병합 뒤 전체를 돌려준다. 16KB 초과면 reject. */
+    set<T extends Record<string, unknown> = Record<string, unknown>>(patch: Record<string, unknown>): Promise<T>;
   };
 }
 

@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
-import { getApp, getActiveGrant, type OrgApp } from "../org/store/apps.js";
+import { getApp, getActiveGrant, getAppVersion, type OrgApp } from "../org/store/apps.js";
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEvent, requireSessionOwner, requireUsableApp,
@@ -37,13 +37,22 @@ interface ManifestView {
   ui?: { pages?: Array<{ key?: string; title?: string }> };
   data?: { tables?: Array<{ name?: string; columns?: unknown[] }> };
   runtime?: unknown;
+  agent?: { instructions?: unknown; reinject_every?: unknown };
 }
 
-/** 붙은 앱 한 줄 — 화면(앱 칸)이 그리고, AI 가 무엇을 읽고 쓸 수 있는지 아는 재료. */
-export function describeAttached(row: SessionAppRow, app: OrgApp | null): Record<string, unknown> {
+/**
+ * 붙은 앱 한 줄 — 화면(앱 칸)이 그리고, AI 가 무엇을 읽고 쓸 수 있는지 아는 재료.
+ *  #4595 — `instructions`(매니페스트 agent.instructions · 없으면 null)와 `reinject_every` 를 함께 실어, 시드 훅
+ *   session-apps-inject 가 테이블 안내 뒤에 **그 앱의 행동 규칙**을 붙이게 한다(종전엔 테이블 이름만 알려 AI 가 앱의
+ *   목적을 짐작해야 했다). `version`·`source_kind`·`overrides_builtin` 은 앱 탭이 「N판 · 워크스페이스 판」을 그리는 재료(#4600).
+ */
+export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy: string | null = null): Record<string, unknown> {
   const m = (app?.manifest ?? {}) as ManifestView;
   const pages = (m.ui?.pages ?? []).map((p) => ({ key: String(p.key ?? ""), title: String(p.title ?? p.key ?? "") })).filter((p) => p.key);
   const tables = (m.data?.tables ?? []).map((t) => ({ name: String(t.name ?? ""), columns: Array.isArray(t.columns) ? t.columns : [] })).filter((t) => t.name);
+  const instructions = typeof m.agent?.instructions === "string" && m.agent.instructions.trim() ? m.agent.instructions : null;
+  const every = Number(m.agent?.reinject_every);
+  const source = (app?.source ?? {}) as { kind?: unknown; overrides_builtin?: unknown };
   return {
     app_id: row.app_id,
     title: app?.title || row.app_id,
@@ -53,11 +62,27 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null): Record
     has_ui: pages.length > 0,
     pages,
     tables,
+    instructions,
+    reinject_every: instructions && Number.isInteger(every) && every > 0 ? every : null,
+    version: app?.version ?? null,
+    source_kind: typeof source.kind === "string" ? source.kind : null,
+    overrides_builtin: source.overrides_builtin === true,
+    // #4595 신뢰 경계 — 지침이 **누구 글인지** 훅이 말해야 한다. 다른 구성원이 app_save 로 바꾼 지침이 내 AI 에 「앱 지침」이라는
+    //  이름으로 들어가는 자리라, 판 번호와 저장한 사람을 함께 실어 훅이 「이 워크스페이스에서 고친 앱(N판 · 저장: 누구)」 로 적는다.
+    version_no: app?.current_version_no ?? null,
+    saved_by: savedBy,
   };
 }
 
+/** 한 줄 + 그 판을 저장한 사람(org_app_version.saved_by). 판 이력이 없는 앱(릴리스 그대로)은 null. 조회 실패도 null — 목록을 막지 않는다. */
+async function describeOne(row: SessionAppRow, app: OrgApp | null): Promise<Record<string, unknown>> {
+  const no = app?.current_version_no;
+  const ver = app && no != null ? await getAppVersion(app.id, no).catch(() => null) : null;
+  return describeAttached(row, app, ver?.saved_by ?? null);
+}
+
 async function describeAll(rows: SessionAppRow[]): Promise<Array<Record<string, unknown>>> {
-  return Promise.all(rows.map(async (r) => describeAttached(r, await getApp(r.app_id).catch(() => null))));
+  return Promise.all(rows.map(async (r) => describeOne(r, await getApp(r.app_id).catch(() => null))));
 }
 
 const HINT = "붙어 있는 동안 이 세션에서 store_query·store_insert·store_update·store_delete·store_tables 로 그 앱의 테이블을 읽고 쓸 수 있다"
@@ -111,7 +136,7 @@ const sessionAppAttach: Capability = {
     const fresh = await attachAppRow(sid, appId, member);
     if (fresh) publishAppEvent(member, { kind: "attach", app_id: appId, session: sid, source: ctx?.source });
     const row = (await listAttachedApps(sid)).find((r) => r.app_id === appId);
-    return { session_id: sid, attached: fresh, app: row ? describeAttached(row, app) : null, hint: HINT };
+    return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app) : null, hint: HINT };
   },
 };
 

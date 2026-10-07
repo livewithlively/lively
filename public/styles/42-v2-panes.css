@@ -829,6 +829,25 @@ webview.pn-webframe { display: flex; }
 .pn-sessapp-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .pn-sessapp-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 
+/* ── 붙은 앱 탭 머리줄 · ⋯ 메뉴 · 방금 고침 띠(#4600 — 각자 AI 에게 시켜 고쳐 쓰는 앱) ──
+   머리줄은 앱이 하나여도 선다: «이 앱은 고칠 수 있다» 를 알려 주는 자리가 이것뿐이다. 띠는 app_save·app_revert 뒤 60초. */
+.pn-sessapp-head { flex: none; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); font-size: 12.5px; color: var(--ink); }
+.pn-sessapp-head[hidden] { display: none; }
+.pn-sessapp-head .pn-i { color: var(--blue); }
+.pn-sessapp-head .pn-sp { flex: 1; min-width: 0; }
+.pn-sessapp-title { font-weight: 700; min-width: 0; }
+.pn-sessapp-ver { flex: none; font-size: 10.5px; font-weight: 800; color: var(--muted-head); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.pn-sessapp-more { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-more:hover { background: var(--bg-tint); color: var(--ink); }
+.pn-sessapp-more .pn-i { color: inherit; }
+.pn-sessapp-band { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border-bottom: 1px solid var(--line-note); background: var(--bg-note); color: var(--blue-deep); font-size: 11.5px; font-weight: 700; }
+.pn-sessapp-band[hidden] { display: none; }
+.pn-sessapp-band-t { flex: 1; min-width: 0; }
+.pn-sessapp-band-b { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue-deep); background: var(--bg); border: 1px solid var(--line-note); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.pn-sessapp-band-b:hover { background: var(--bg-sel); }
+.pn-sessapp-band-x { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-band-x:hover { background: var(--bg-tint); }
+
 /* ── 앱 고치기 설정 창(#4225) — 누가 이 앱을 고칠 수 있나(기본 전원 · 지정한 사람만) ── */
 .pn-editpol { width: min(460px, 94vw); }
 .pn-editpol .pn-modal-b { display: flex; flex-direction: column; gap: 10px; }

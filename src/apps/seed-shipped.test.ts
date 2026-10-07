@@ -15,7 +15,7 @@ import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 
 const RELEASE_YML = ".github/workflows/release.yml";
-/** 시더가 읽는 경로(`src/apps/seed.ts` 의 `builtinAppsRoot`)와 **같은 문자열**이어야 한다. */
+/** 시더가 읽는 경로(`src/apps/builtin-root.ts` 의 `builtinAppsRoot` — seed.ts 가 가져다 쓴다)와 **같은 문자열**이어야 한다. */
 const BUILTIN_DIR = "apps/builtin";
 
 /** release.yml 의 `tar -czf lively.tgz …` 에 나열된 토큰들. */
@@ -32,10 +32,17 @@ test("[L1] 빌트인 앱 디렉터리가 배포 번들에 실린다", () => {
 });
 
 test("[L2] 시더가 읽는 경로와 번들에 싣는 경로가 같은 문자열이다", () => {
+  //  경로 조립은 builtin-root.ts 한 곳에 있다(#4600 — app_pull · 원본으로 되돌리기도 같은 자리를 봐야 해서 seed.ts 에서 옮겼다).
+  //   `path.resolve(<dist/apps>, "..", "..", "apps", "builtin")` 의 마지막 두 조각.
+  const root = readFileSync("src/apps/builtin-root.ts", "utf8");
+  assert.match(root, /"apps",\s*"builtin"/,
+    "builtin-root.ts 의 경로 조립이 바뀌었다 — 번들에 싣는 경로도 함께 바뀌어야 한다");
+  //  그리고 시더가 **그 함수를** 쓴다 — 시더가 제 경로를 따로 조립하기 시작하면 위 단언이 엉뚱한 파일을 지키게 된다.
   const seed = readFileSync("src/apps/seed.ts", "utf8");
-  //  `path.resolve(<dist/apps>, "..", "..", "apps", "builtin")` 의 마지막 두 조각.
-  assert.match(seed, /"apps",\s*"builtin"/,
-    "seed.ts 의 경로 조립이 바뀌었다 — 번들에 싣는 경로도 함께 바뀌어야 한다");
+  assert.match(seed, /import \{ builtinAppsRoot \} from "\.\/builtin-root\.js"/,
+    "seed.ts 가 builtin-root.ts 의 builtinAppsRoot 를 쓰지 않는다 — 경로 가드가 시더를 지키지 못한다");
+  assert.match(seed, /root: string = builtinAppsRoot\(\)/,
+    "seedBuiltinApps 의 기본 폴더가 builtinAppsRoot() 가 아니다");
 });
 
 test("[L3] 실을 빌트인 앱이 실제로 있다 — 0개면 위 두 시험이 공허하다", () => {

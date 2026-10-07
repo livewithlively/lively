@@ -10,7 +10,7 @@
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 
 /** 색 토큰이 있는 이름. 모르는 이름은 apps 로 그린다. */
-export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell'] as const;
+export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell', 'deck'] as const;
 
 /** 앱 아이콘의 선 그림(path d). 시험과 그리는 쪽이 함께 쓴다. */
 export function appGlyphPath(icon: string): string {
@@ -20,7 +20,7 @@ export function appGlyphPath(icon: string): string {
 
 /** 설치한 앱(org_app) 가운데 **우리가 만든 것**의 그림. 남이 만든 앱과 그림을 정하지 않은 빌트인은 여기 없다.
  *  확인할 것 = 종(홈 머리의 알림과 같은 그림) · 웹 브라우저 = 지구본. 자료 · 분류체계는 앱 표(APPS)의 앱이라 이 길로 오지 않는다. */
-const BUILTIN_APP_ICON: Record<string, string> = { browser: 'web', inbox: 'bell' };
+const BUILTIN_APP_ICON: Record<string, string> = { browser: 'web', inbox: 'bell', 'deck-edit': 'deck' };   // 장표 수정(#4596) = 장표에 연필
 /** 설치한 앱 하나의 앱 아이콘 이름. 정한 그림이 없으면 기본 그림: 화면이 있는 앱은 liv, 세션 앱은 term. */
 export function builtinAppIcon(id: string, hasUi: boolean): string {
   return Object.prototype.hasOwnProperty.call(BUILTIN_APP_ICON, id) ? BUILTIN_APP_ICON[id] : (hasUi ? 'liv' : 'term');

@@ -55,6 +55,10 @@ export const SHELL_PREF_STORES: Readonly<Record<string, ShellPrefKind>> = {
   //   사람의 결정이라 계정에 묶인다 — 노트북에서 오른쪽에 옮겨 둔 독이 사무실 데스크톱에서 다시 바닥으로 돌아가면 그게 더 이상하다.
   lively_v2_dock: "map",
   lively_v2_dock_apps: "list",
+  //  #4602 앱 찾기(런치패드)에서 «목록에서 뺀» 앱(`<앱키>` · 설치한 앱은 `i:<id>`). 뺀 것은 지운 게 아니라 접어 둔 것이라
+  //   「뺀 앱」 묶음에서 다시 넣는다. 사람의 결정이라 계정에 묶인다 — 노트북에서 뺀 앱이 데스크톱에서 다시 서 있으면 그게 더 이상하다.
+  //   새로 뺀 것을 뒤에 붙이므로 넘치면 뒤(새것)를 남긴다(KEEP_FRONT 아님).
+  lively_v2_pad_hidden: "list",
 };
 
 /**

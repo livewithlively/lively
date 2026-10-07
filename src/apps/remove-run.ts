@@ -36,6 +36,7 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
     catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
   }
   await store.pruneUiAssets(id, []);   // UI 자산은 FK CASCADE 대상이 아니므로(스키마 주석) 명시 삭제.
+  await store.pruneAllAppVersions(id); // #4600 판 이력도 같은 규칙(FK 없음) — 앱이 사라지면 되돌릴 곳이 없다.
   // #4226 — 테이블을 지우기 전에 데이터를 떠 둔다(7일 보관). 같은 id 로 다시 설치하면 app_data_restore 로 되돌린다.
   //  떠 두기가 실패해도 제거는 막지 않는다 — 명시로 요청한 제거다(로그는 남긴다).
   let snapError: string | null = null;
@@ -50,6 +51,7 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
   try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
   await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
+  await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
   await store.deleteApp(id, ctx);
   return {
     components: comps.length,

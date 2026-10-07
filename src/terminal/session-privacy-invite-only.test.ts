@@ -120,8 +120,15 @@ test("★ E16 세션 스코프 거부는 존재를 확인해 주지 않는다(40
   const src = read("src/terminal/routes.ts");
   assert.doesNotMatch(src, /HttpError\(403, "세션에 접근할 수 없습니다"\)/,
     "★403 이 남아 있다 — 그 세션이 존재한다는 사실을 알려 준다(id 열거)");
-  assert.match(src, /const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";/, "통일 문구가 없다");
+  //  문구의 정의는 deliver-prompt.ts 한 곳이다(#4594 — 프롬프트 라우트와 앱 화면의 chat-send 가 같은 판정·같은 문구를 쓴다).
+  //   routes.ts 는 그것을 가져다 쓰고, 제 문구를 따로 두지 않는다(두 벌이 되면 한쪽만 바뀌어 존재 여부가 문구로 샌다).
+  const deliver = read("src/terminal/deliver-prompt.ts");
+  assert.match(deliver, /export const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";/, "통일 문구가 없다");
+  assert.match(src, /import \{ SESSION_NOT_FOUND \} from "\.\/deliver-prompt\.js";/, "routes.ts 가 통일 문구를 가져다 쓰지 않는다");
+  assert.doesNotMatch(src, /const SESSION_NOT_FOUND\s*=/, "routes.ts 에 문구가 한 벌 더 있다 — 두 벌이면 갈린다");
   assert.match(src, /HttpError\(404, SESSION_NOT_FOUND\)/, "404 통일이 안 됐다");
+  assert.match(deliver, /HttpError\(404, SESSION_NOT_FOUND\)/, "프롬프트 배달의 접근 거부가 404 통일 문구가 아니다");
+  assert.doesNotMatch(deliver, /HttpError\(403, "세션에 접근할 수 없습니다"\)/, "★프롬프트 배달에 403 이 남아 있다(id 열거)");
 });
 
 test("E17 초대 창구가 살아 있다 — 「공유」가 invites 를 쓴다(잠그기만 하고 열 길이 없으면 안 된다)", () => {

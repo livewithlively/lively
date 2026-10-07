@@ -12,6 +12,9 @@ import { listSessionApps, openAppSession, type SessionApp } from './app-session.
 import { openInstalledApp } from './app-instance.js';
 import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
+import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
+import { ctxMenu } from './panes-kit.js';
+import { icon as lineIcon } from './icons.js';
 export type { PadGroup };
 
 export interface AppDef {
@@ -101,6 +104,21 @@ export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden &&
 export const RECENT_STORE_KEY = shellPrefStore('lively_v2_recent_apps', 'list');
 const RECENT_STORE = RECENT_STORE_KEY;
 const RECENT_MAX = 12;
+//  #4600 — 앱 찾기에서 **뺀 앱**(원준 2026-10-07 «원하면 삭제하거나, 삭제했던 거 나중에 추가하는 방식»). 지우는 게 아니라 내 격자에서
+//   치우는 것이라 **계정에 둔다**(shell-prefs — 최근 앱과 같은 길): 노트북에서 뺀 앱이 데스크톱에서도 빠져 있어야 «내가 정리한 목록»이다.
+//   값은 lib/pad-hidden.ts padTileId(화면 앱 key · 설치 앱 `i:<id>`). 격자 아래 접힌 「뺀 앱」 묶음에서 다시 넣는다.
+export const PAD_HIDDEN_STORE = shellPrefStore('lively_v2_pad_hidden', 'list');
+export function readPadHidden(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(PAD_HIDDEN_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
+  catch { return []; }
+}
+/** 뺀 목록에 넣거나 빼고(토글) 계정에 올린다. */
+export function togglePadHidden(tileId: string): string[] {
+  const next = padHiddenToggle(readPadHidden(), tileId);
+  try { if (next.length) localStorage.setItem(PAD_HIDDEN_STORE, JSON.stringify(next)); else localStorage.removeItem(PAD_HIDDEN_STORE); } catch { /* 못 남겨도 이번 화면은 된다 */ }
+  shellPrefsPush();
+  return next;
+}
 function readRecent(): string[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
   catch { return []; }
@@ -203,17 +221,38 @@ export function openLaunchpad(): void {
   const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' }) as HTMLInputElement;
   const draw = () => {
     const q = input.value.trim().toLowerCase();
+    const hidden = new Set(readPadHidden());
     // 이름에 맞은 것이 설명에만 맞은 것보다 앞에 온다 — Enter 가 맨 앞을 여니 순서가 곧 정답이어야 한다.
     //  ('프' 를 치면 설명에 '프로젝트'가 든 홈이 아니라 프로젝트 앱이 먼저다.) sort 는 안정 정렬이라 동점은 원래 차례.
     const rank = (t: string) => { const i = t.toLowerCase().indexOf(q); return i === 0 ? 0 : i > 0 ? 1 : 2; };
-    type Tile = { node: HTMLElement; rank: number; group: PadGroup };
+    type Tile = { node: HTMLElement; rank: number; group: PadGroup; tid: string };
+    //  #4600 칸마다 「목록에서 빼기 / 다시 넣기」 — 우클릭, 또는 호버에 뜨는 ⋯. 뺀 칸은 격자 아래 접힌 묶음으로 가고(검색 중엔 제 자리에 표시로),
+    //   다시 넣으면 돌아온다. 지우는 게 아니다 — 주소로는 그대로 열린다.
+    const decorate = (node: HTMLElement, tid: string, title: string): HTMLElement => {
+      const isHidden = hidden.has(tid);
+      const menu = (x: number, y: number) => ctxMenu(x, y, [
+        { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '격자로 돌아와요' : '앱은 그대로 · 눈앞에서만',
+          run: () => { togglePadHidden(tid); draw(); } },
+      ], { title });
+      node.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); menu(e.clientX, e.clientY); });
+      const more = el('span', { class: 'v2-pad-more', role: 'button', tabindex: '0', title: isHidden ? '다시 넣기' : '목록에서 빼기', 'aria-label': `「${title}」 — ${isHidden ? '다시 넣기' : '목록에서 빼기'}`,
+        onclick: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); menu(r.right, r.bottom + 4); },
+        onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); menu(r.right, r.bottom + 4); } } },
+        lineIcon('more', 'v2-ic'));
+      node.append(more);
+      if (isHidden && q) node.append(el('span', { class: 'v2-pad-badge v2-pad-badge--hidden', text: '뺀 앱' }));
+      return node;
+    };
     //  화면 앱은 이름 · 설명 · 옛 이름(aka)으로 거른다(#4233). 통합검색(omni.ts)과 같은 잣대다.
     const screen: Tile[] = apps.filter((a) => appMatches(a, q))
-      .sort((a, b) => appRank(a, q) - appRank(b, q)).map((a) => ({
-        rank: appRank(a, q), group: a.group || 'base',
-        node: el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
+      .sort((a, b) => appRank(a, q) - appRank(b, q)).map((a) => {
+        const tid = padTileId('screen', a.key);
+        return {
+        rank: appRank(a, q), group: a.group || 'base', tid,
+        node: decorate(el('a', { class: 'v2-pad-item', role: 'listitem', href: appHref(a), title: a.desc, onclick: () => closeLaunchpad() },
           el('span', { class: 'v2-pad-ico' }, appGlassIcon(a.icon)),
-          el('b', { text: a.title })) }));
+          el('b', { text: a.title })), tid, a.title) };
+      });
     //  ⚠ 화면 앱 표(APPS)에 이미 있는 빌트인은 여기서 뺀다 — 안 그러면 같은 앱이 격자에 두 번 선다(자료, #2423).
     //   표 쪽이 이긴다: 아이콘·설명·최근·독 고정이 전부 그 줄에 달려 있다.
     const session: Tile[] = sApps.filter((a) => a.id !== 'ai-session' && !APPS.some((x) => x.kind === 'native' && x.key === a.id))
@@ -238,9 +277,14 @@ export function openLaunchpad(): void {
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.
         isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }));
       //  묶음은 출처가 정한다(#4554): 제품에 실려 온 것(builtin)은 기본 앱, 그 밖(세션이 만든 것 · 설치한 것)은 워크스페이스 앱.
-      return { node, rank: rank(a.title), group: padGroupOfInstalled(a.source.kind) };
+      const tid = padTileId('installed', a.id);
+      return { node: decorate(node, tid, a.title), rank: rank(a.title), group: padGroupOfInstalled(a.source.kind), tid };
     });
-    const tiles = [...screen, ...session];   // 묶음 안의 차례: 화면 앱 먼저, 설치된 앱이 뒤(종전 격자와 같다)
+    const all = [...screen, ...session];   // 묶음 안의 차례: 화면 앱 먼저, 설치된 앱이 뒤(종전 격자와 같다)
+    //  #4600 뺀 칸은 검색 중이 아니면 격자에서 빠져 아래 묶음으로(lib/pad-hidden.ts padPlacement). 검색 중엔 제 묶음에 「뺀 앱」 표시로 선다 —
+    //   이름을 쳐서 찾았는데 안 보이면 «없어졌다» 로 읽히기 때문이다.
+    const tiles = all.filter((t) => padPlacement(t.tid, hidden, !!q) !== 'hidden');
+    const gone = all.filter((t) => padPlacement(t.tid, hidden, !!q) === 'hidden');
     body.replaceChildren(...PAD_GROUPS.map((g) => {
       const mine = tiles.filter((t) => t.group === g.key);
       if (!mine.length) return null;
@@ -248,13 +292,21 @@ export function openLaunchpad(): void {
         el('h3', { class: 'v2-pad-sec-h', text: g.title }),
         el('div', { class: 'v2-pad-grid', role: 'list' }, ...mine.map((t) => t.node)));
     }).filter((n): n is HTMLElement => !!n));
+    if (gone.length) {
+      //  접힌 채로 선다 — 뺐다는 사실은 보이되 자리는 안 차지하게. 펴면 칸이 그대로(누르면 열리고, ⋯ · 우클릭으로 다시 넣는다).
+      body.append(el('details', { class: 'v2-pad-sec v2-pad-hid', 'data-group': 'hidden' },
+        el('summary', { class: 'v2-pad-sec-h v2-pad-hid-sum', text: `뺀 앱 ${gone.length}` }),
+        el('p', { class: 'v2-pad-hid-note', text: '격자에서 뺀 앱이에요. 앱은 그대로 있고 주소로도 열려요. ⋯ 또는 우클릭 → 「다시 넣기」.' }),
+        el('div', { class: 'v2-pad-grid', role: 'list' }, ...gone.map((t) => t.node))));
+    }
     //  검색 중이면 Enter 로 열릴 칸 하나를 보인다. 묶음이 둘이라 «맨 앞 칸» 이 아니라 **가장 잘 맞은 칸**이다 —
     //   위 묶음의 설명에만 맞은 앱이 아래 묶음의 이름이 맞은 앱을 이기면 안 된다. 동점은 화면 순서(위 묶음 먼저).
     if (q && tiles.length) {
       const shown = PAD_GROUPS.flatMap((g) => tiles.filter((t) => t.group === g.key));
       shown[padBestIndex(shown.map((t) => t.rank))].node.classList.add('is-first');
     }
-    if (!tiles.length) body.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
+    if (!tiles.length && !gone.length) body.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
+    else if (!tiles.length) body.prepend(el('p', { class: 'v2-pad-empty', text: '전부 뺀 앱이에요 — 아래에서 다시 넣을 수 있어요.' }));
   };
   input.addEventListener('input', draw);
   // 스포트라이트처럼 Enter 는 가장 잘 맞은 결과를 연다 — 이름을 몇 글자 치고 바로 들어가는 길.
@@ -270,7 +322,7 @@ export function openLaunchpad(): void {
   //   그래서 칸 오른쪽에 [취소](아이폰 스포트라이트와 같은 자리)를 두고, 터치 화면에서만 세운다(40-v2.css).
   //   격자의 빈칸(항목 사이·마지막 줄 뒤 · 묶음 사이)을 누르는 것도 배경을 누른 것으로 친다 — 앱 칸 · 검색 줄 · 묶음 제목만 뺀다.
   padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱 찾기',
-    onclick: (e) => { if (!(e.target as Element).closest('.v2-pad-item, .v2-pad-top, .v2-pad-sec-h')) closeLaunchpad(); } },
+    onclick: (e) => { if (!(e.target as Element).closest('.v2-pad-item, .v2-pad-top, .v2-pad-sec-h, .v2-pad-hid-note, .pn-ctx')) closeLaunchpad(); } },
     el('div', { class: 'v2-pad-top' },
       el('div', { class: 'v2-pad-field' },
         sv('svg', { class: 'v2-pad-mag', viewBox: '0 0 24 24', 'aria-hidden': 'true' },
