@@ -3,44 +3,300 @@
   "id": "deck-edit",
   "title": "장표 수정",
   "version": "1.0.0",
-  "publisher": { "name": "Lively" },
+  "publisher": {
+    "name": "Lively"
+  },
   "instances": {
     "project": "optional",
     "multiplicity": "multiple"
   },
   "permissions": {
     "scopes": [],
-    "tools": ["store_query", "store_insert", "store_update", "store_delete", "store_tables"]
+    "tools": [
+      "store_query",
+      "store_insert",
+      "store_update",
+      "store_delete",
+      "store_tables"
+    ],
+    "chat_send": true
   },
   "ui": {
-    "pages": [{ "key": "main", "title": "장표 수정", "entry": "ui/index.html", "display": ["inline", "fullscreen"] }]
+    "pages": [
+      {
+        "key": "main",
+        "title": "장표 수정",
+        "entry": "ui/index.html",
+        "display": [
+          "inline",
+          "fullscreen"
+        ]
+      }
+    ]
   },
   "data": {
     "tables": [
-      { "name": "docs", "columns": [
-        { "name": "doc", "type": "text" }, { "name": "title", "type": "text" }, { "name": "session", "type": "text" },
-        { "name": "latest_ver", "type": "int" }, { "name": "source_path", "type": "text" },
-        { "name": "created_at", "type": "timestamp" }, { "name": "updated_at", "type": "timestamp" } ],
-        "indexes": [{ "columns": ["doc"] }] },
-      { "name": "versions", "columns": [
-        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "kind", "type": "text" }, { "name": "seq", "type": "int" },
-        { "name": "slide_id", "type": "text" }, { "name": "variant", "type": "text" }, { "name": "body", "type": "text" }, { "name": "summary", "type": "text" },
-        { "name": "session", "type": "text" }, { "name": "created_at", "type": "timestamp" } ],
-        "indexes": [{ "columns": ["doc", "ver", "seq"] }] },
-      { "name": "assets", "columns": [
-        { "name": "sha", "type": "text" }, { "name": "seq", "type": "int" }, { "name": "body", "type": "text" }, { "name": "bytes", "type": "int" }, { "name": "mime", "type": "text" } ],
-        "indexes": [{ "columns": ["sha", "seq"], "unique": true }] },
-      { "name": "comments", "columns": [
-        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "slide_id", "type": "text" }, { "name": "unit_key", "type": "text" },
-        { "name": "orig", "type": "text" }, { "name": "edited", "type": "text" }, { "name": "note", "type": "text" }, { "name": "scope", "type": "text" },
-        { "name": "bundle", "type": "int" }, { "name": "status", "type": "text" }, { "name": "reply", "type": "text" }, { "name": "session", "type": "text" },
-        { "name": "created_at", "type": "timestamp" }, { "name": "sent_at", "type": "timestamp" }, { "name": "replied_at", "type": "timestamp" } ],
-        "indexes": [{ "columns": ["doc", "ver"] }, { "columns": ["doc", "bundle"] }] },
-      { "name": "picks", "columns": [
-        { "name": "doc", "type": "text" }, { "name": "ver", "type": "int" }, { "name": "slide_id", "type": "text" }, { "name": "variant", "type": "text" }, { "name": "session", "type": "text" } ] },
-      { "name": "pins", "columns": [
-        { "name": "doc", "type": "text" }, { "name": "slide_id", "type": "text" }, { "name": "match", "type": "text" }, { "name": "memo", "type": "text" },
-        { "name": "author", "type": "text" }, { "name": "created_at", "type": "timestamp" } ] }
+      {
+        "name": "docs",
+        "columns": [
+          {
+            "name": "doc",
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "type": "text"
+          },
+          {
+            "name": "session",
+            "type": "text"
+          },
+          {
+            "name": "latest_ver",
+            "type": "int"
+          },
+          {
+            "name": "source_path",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "doc"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "versions",
+        "columns": [
+          {
+            "name": "doc",
+            "type": "text"
+          },
+          {
+            "name": "ver",
+            "type": "int"
+          },
+          {
+            "name": "kind",
+            "type": "text"
+          },
+          {
+            "name": "seq",
+            "type": "int"
+          },
+          {
+            "name": "slide_id",
+            "type": "text"
+          },
+          {
+            "name": "variant",
+            "type": "text"
+          },
+          {
+            "name": "body",
+            "type": "text"
+          },
+          {
+            "name": "summary",
+            "type": "text"
+          },
+          {
+            "name": "session",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "doc",
+              "ver",
+              "seq"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "assets",
+        "columns": [
+          {
+            "name": "sha",
+            "type": "text"
+          },
+          {
+            "name": "seq",
+            "type": "int"
+          },
+          {
+            "name": "body",
+            "type": "text"
+          },
+          {
+            "name": "bytes",
+            "type": "int"
+          },
+          {
+            "name": "mime",
+            "type": "text"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "sha",
+              "seq"
+            ],
+            "unique": true
+          }
+        ]
+      },
+      {
+        "name": "comments",
+        "columns": [
+          {
+            "name": "doc",
+            "type": "text"
+          },
+          {
+            "name": "ver",
+            "type": "int"
+          },
+          {
+            "name": "slide_id",
+            "type": "text"
+          },
+          {
+            "name": "unit_key",
+            "type": "text"
+          },
+          {
+            "name": "orig",
+            "type": "text"
+          },
+          {
+            "name": "edited",
+            "type": "text"
+          },
+          {
+            "name": "note",
+            "type": "text"
+          },
+          {
+            "name": "scope",
+            "type": "text"
+          },
+          {
+            "name": "bundle",
+            "type": "int"
+          },
+          {
+            "name": "status",
+            "type": "text"
+          },
+          {
+            "name": "reply",
+            "type": "text"
+          },
+          {
+            "name": "session",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "sent_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "replied_at",
+            "type": "timestamp"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": [
+              "doc",
+              "ver"
+            ]
+          },
+          {
+            "columns": [
+              "doc",
+              "bundle"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "picks",
+        "columns": [
+          {
+            "name": "doc",
+            "type": "text"
+          },
+          {
+            "name": "ver",
+            "type": "int"
+          },
+          {
+            "name": "slide_id",
+            "type": "text"
+          },
+          {
+            "name": "variant",
+            "type": "text"
+          },
+          {
+            "name": "session",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "name": "pins",
+        "columns": [
+          {
+            "name": "doc",
+            "type": "text"
+          },
+          {
+            "name": "slide_id",
+            "type": "text"
+          },
+          {
+            "name": "match",
+            "type": "text"
+          },
+          {
+            "name": "memo",
+            "type": "text"
+          },
+          {
+            "name": "author",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          }
+        ]
+      }
     ]
   },
   "agent": {
