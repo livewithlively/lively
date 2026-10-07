@@ -16,6 +16,10 @@
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
+//    await lively.chat.send(text, { mark })  → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602.
+//                                                { sent, session, transport } · 멈춘 세션이면 { sent:false, draft:true }(호스트가 입력칸에 넣어 둔다).
+//    await lively.prefs.get() / .set(patch)  → 이 앱 × 보는 사람의 작은 설정(#4601 — 배치·글자·접기). set 은 얕은 병합, null 키 삭제, 16KB.
+//    lively.ui.onPrefsOpen(function () {…})  → 사람이 앱 탭 ⋯ 메뉴에서 「표시 설정」을 눌렀다 — 앱이 설정 패널을 연다. 돌려주는 함수로 끊는다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
 //  ⚠ onChange 를 안 쓰는 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
 //   화면 상태(입력 중인 글·스크롤)를 지키고 싶은 앱은 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
@@ -49,6 +53,7 @@ export const APP_RUNTIME_JS = `
     if (!m || typeof m !== 'object') return;
     if (m.id == null) {
       if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
+      else if (m.method === 'ui/notifications/prefs-open') fire('prefs-open', m.params || {});
       return;
     }
     var p = pend[m.id];
@@ -83,7 +88,15 @@ export const APP_RUNTIME_JS = `
       call: function (name, args) { return post('tools/call', { name: String(name), arguments: args || {} }); }
     },
     ui: {
-      openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); }
+      openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
+      onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); }
+    },
+    chat: {
+      send: function (text, opts) { var o = opts || {}; return post('chat/send', o.mark == null ? { text: String(text) } : { text: String(text), mark: String(o.mark) }); }
+    },
+    prefs: {
+      get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },
+      set: function (patch) { return post('prefs/set', { patch: patch || {} }).then(function (r) { return (r && r.prefs) || {}; }); }
     }
   };
   api.store = {

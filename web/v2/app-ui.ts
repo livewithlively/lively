@@ -121,6 +121,41 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out?.result ?? out }))
         .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+    } else if (msg.method === 'chat/send') {
+      // #4594 — 앱 화면이 **붙은 세션**에 글을 바로 보낸다(원준: 채우기가 아니라 보내기). 세션에 붙어 열린 화면에만 세션이 있다.
+      //  서버가 세 겹(동의·주인·붙음)을 다시 보고 표식 한 줄을 붙여 /prompt 와 같은 통로로 넣는다. 멈춘 세션(409 draft)은 실패로
+      //  끝내지 않고 그 세션 화면의 입력칸에 글을 넣어 둔다 — 사람이 보내면 그 말이 세션을 깨운다(#2439 되살리기 규칙).
+      const sid = opts?.sessionId ?? '';
+      const text = String((msg.params as { text?: unknown } | undefined)?.text ?? '');
+      const mark = (msg.params as { mark?: unknown } | undefined)?.mark;
+      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다' } }); return; }
+      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/chat-send', { method: 'POST', body: JSON.stringify({ session_id: sid, text, ...(mark == null ? {} : { mark: String(mark) }) }) });
+      void send()
+        .catch(async (e: any) => {
+          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // tools/call 과 같은 «그 자리에서 동의» 규칙
+          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          return send();
+        })
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: true, session: sid, transport: out?.transport ?? null } }))
+        .catch((e: any) => {
+          if (e?.status === 409 && e?.body?.draft) {
+            window.dispatchEvent(new CustomEvent('lively:compose-draft', { detail: { session: sid, text } }));
+            toast('세션이 멈춰 있어 입력칸에 넣어 두었어요 — 보내면 세션이 깨어납니다.');
+            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: false, session: sid, draft: true } });
+            return;
+          }
+          reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
+        });
+    } else if (msg.method === 'prefs/get' || msg.method === 'prefs/set') {
+      // #4601 — 앱 × 보는 사람의 개인 설정. 샌드박스 화면은 localStorage 가 없고(불투명 오리진) SDK 에 신원이 없어 서버가 든다.
+      //  동의와 무관하다(설정은 라이블리 데이터가 아니라 그 사람이 앱을 보는 방식) — 그래서 tools/call 이 아니라 별도 경로.
+      const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/prefs';
+      const req = msg.method === 'prefs/get'
+        ? api(path)
+        : api(path, { method: 'POST', body: JSON.stringify({ patch: (msg.params as { patch?: unknown } | undefined)?.patch ?? {} }) });
+      void req
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { prefs: (out && out.prefs) || {} } }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 413 ? -32602 : -32000, message: (e && e.message ? e.message : String(e)) } }));
     } else if (msg.method === 'ui/openExternal') {
       // 샌드박스(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다. http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');
