@@ -14,8 +14,12 @@
 //   SW2 넓은 격자(1042 · 1600): 문턱은 종전 그대로 52 / 46
 //   SW3 끌 거리가 없는 격자(상한 = 하한, ≤ 586): 넘어가지 않는다 · 왼쪽이면 돌아온다
 //   SW4 모든 격자 폭(600~3000)에서: 상한에 닿으면 넘어가고, 하한까지 줄이면 돌아온다, 돌아오는 문턱 < 넘어가는 문턱
-//   SW5 되살릴 때도 그 격자의 문턱으로 판정한다
-//   SW6 side-swap: 놓을 때 · 끄는 중 예고 · 되살릴 때 · 첫 측정이 모두 그 격자의 문턱을 쓴다
+//   SW5 «상한에 닿으면 넘어간다» 는 사람이 끌어 놓을 때만이다 — 세션에 들어올 때는 종전 문턱(52 / 46).
+//       좁은 격자에서는 기본 340px 사이드바도 상한에 걸려, 아무것도 안 끌었는데 왼쪽으로 뒤집히고 안내가 떴다(격리 리뷰 blocking).
+//       끌어서 바꾼 자리(적어 둔 «왼쪽»)는 되살릴 때 그대로 산다(좁은 격자의 상한 폭 49% > 46%)
+//   SW6 side-swap: 놓을 때(byHand) · 끄는 중 예고만 좁은 격자 문턱. 되살릴 때 · 격자 폭이 바뀔 때 · 켜기 · 첫 측정은 종전 문턱
+//   SR3 panes: 물러나는 동안 다시 끌어 놓으면 늦게 온 앞 판정은 버린다(마지막으로 놓은 것만 적는다)
+//   T4 터미널: 치는 중(한글 조합 · 1초 안 입력)에는 재맞춤을 미룬다(재캡처가 입력 사이에 끼지 않게)
 //   SR1 panes: 카드 구간에서 덜 넘겨 놓아도 자리바꿈을 판정하고 폭을 적는다(카드가 물러난 뒤)
 //   SR2 side-card: 덜 넘겨 놓으면 물러나는 움직임이 끝나고(판이 살아 있을 때만) back 을 부른다. 카드가 될 때는 부르지 않는다
 //   V1 side-card: 카드의 자리 · 크기 셈은 창 크기(vw · vh)로 한다. 사이드바 폭 셈은 격자(bw)
@@ -80,25 +84,31 @@ if (geom && thOk) {
   }
   ok(!bad, "SW4 격자 600~3000 전부: 상한이면 넘어가고, 하한이면 돌아오고, 돌아오는 문턱이 더 낮다", bad);
 
-  const P = (o) => placeOnRestore({ enabled: true, remembered: undefined, measurable: true, cur: false, th: th(w718), ...o });
-  ok(P({ ratio: cap718 / w718 }) === true, "SW5a 되살릴 때(적어 둔 자리 없음): 좁은 격자의 상한 폭이면 왼쪽");
-  ok(P({ remembered: true, ratio: cap718 / w718 }) === true, "SW5b 되살릴 때: 적어 둔 «왼쪽» 이 좁은 격자의 상한 폭이면 그대로 왼쪽(46% 로 뒤집지 않는다)");
+  const P = (o) => placeOnRestore({ enabled: true, remembered: undefined, measurable: true, cur: false, ...o });
+  ok(P({ ratio: Math.min(340, cap718) / w718 }) === false && P({ ratio: cap718 / w718 }) === false, "SW5a 되살릴 때(적어 둔 자리 없음): 좁은 격자에서 상한에 걸린 폭이어도 저절로 왼쪽으로 가지 않는다");
+  const w650 = 650;
+  ok(P({ ratio: Math.min(340, sideCap(w650)) / w650 }) === false, "SW5b 되살릴 때: 격자 650 에서 기본 폭(상한에 걸림)도 오른쪽");
+  ok(P({ remembered: true, ratio: cap718 / w718 }) === true, "SW5c 되살릴 때: 끌어서 바꾼 «왼쪽» 은 좁은 격자의 상한 폭에서 그대로 왼쪽");
 }
 
 const swap = code(read("web/v2/side-swap.ts"));
 const seg = (a, b) => { const i = swap.indexOf(a); return i < 0 ? "" : swap.slice(i, b ? swap.indexOf(b, i + a.length) : i + 600); };
-const fnEnd = seg("function onEnd(", "function onDrag("), fnDrag = seg("function onDrag(", "function hideHint("), fnRst = seg("function restore(", "function onEnd(");
-ok(/judgeSwap\(ratio\(px\), swapped, thFor\(body\.clientWidth\)\)/.test(fnEnd), "SW6a side-swap onEnd: 그 격자의 문턱으로 판정한다", fnEnd.slice(0, 200));
-ok(/judgeSwap\([^)]*,\s*thFor\(body\.clientWidth\)\)/.test(fnDrag), "SW6b side-swap onDrag: 예고도 같은 문턱");
-ok(/th:\s*thFor\(body\.clientWidth\)/.test(fnRst), "SW6c side-swap restore: 되살릴 때도 같은 문턱");
-ok(/if \(first\) \{[^\n]*thFor\(w\)\.off/.test(swap) && !/\bTH\.off\b/.test(swap), "SW6d side-swap 첫 측정: 같은 문턱");
-ok(/const thFor = \(bodyW: number\) => swapThFor\(bodyW, sideCap\(bodyW\), SIDE_MIN\)/.test(swap), "SW6e side-swap: 문턱은 상한(sideCap) · 하한(SIDE_MIN)으로 센다");
+const fnJudge = seg("function judge(", "function onDrag("), fnDrag = seg("function onDrag(", "function hideHint("), fnRst = seg("function restore(", "function judge(");
+ok(/function judge\(px: number, byHand: boolean\)/.test(fnJudge) && /judgeSwap\(ratio\(px\), swapped, byHand \? thByHand\(body\.clientWidth\) : TH\)/.test(fnJudge), "SW6a side-swap: 놓을 때 사람이 놓았을 때만 좁은 격자 문턱", fnJudge.slice(0, 260));
+ok(/onEnd: \(px: number\) => judge\(px, true\)/.test(swap), "SW6b side-swap: 밖으로 내놓은 onEnd(손잡이를 놓음)는 byHand");
+ok(/judgeSwap\(r, swapped, thByHand\(body\.clientWidth\)\)/.test(fnDrag), "SW6c side-swap onDrag: 끄는 중 예고는 놓을 때와 같은 문턱");
+ok(!/\bth:/.test(fnRst) && !/thByHand/.test(fnRst), "SW6d side-swap restore: 되살릴 때는 종전 문턱");
+const nonHand = swap.match(/judge\(curSideW\(\), (true|false)\)/g) || [];
+ok(nonHand.length === 2 && nonHand.every((x) => /false/.test(x)) && !/\bonEnd\(curSideW\(\)\)/.test(swap), "SW6e side-swap: 격자 폭이 바뀔 때 · 켜기 단추는 byHand 가 아니다", nonHand.join(" | "));
+ok(/if \(first\) \{[^\n]*TH\.off/.test(swap) && !/thByHand\(w\)/.test(swap), "SW6f side-swap 첫 측정: 종전 문턱");
+ok(/const thByHand = \(bodyW: number\) => swapThFor\(bodyW, sideCap\(bodyW\), SIDE_MIN\)/.test(swap), "SW6g side-swap: 좁은 격자 문턱은 상한(sideCap) · 하한(SIDE_MIN)으로 센다");
 
 // ── ① 카드 구간에서 덜 넘겨 놓기 ──
 const panes = code(read("web/v2/panes.ts"));
-const endWire = (() => { const i = panes.indexOf("onEnd: (px) => {\n      const settle"); return i < 0 ? "" : panes.slice(i, panes.indexOf("\n    },", i)); })();
-ok(/const settle = \(\): void => \{\s*swap\?\.onEnd\(px\);\s*saveView\(\{\s*sideW: Math\.round\(px\)\s*\}\);\s*\};/.test(endWire)
+const endWire = (() => { const i = panes.indexOf("onEnd: (px) => {\n      const seq"); return i < 0 ? "" : panes.slice(i, panes.indexOf("\n    },", i)); })();
+ok(/const settle = \(\): void => \{\s*if \(seq !== releaseSeq\) return;\s*swap\?\.onEnd\(px\);\s*saveView\(\{\s*sideW: Math\.round\(px\)\s*\}\);\s*\};/.test(endWire)
   && /if \(card\?\.onRelease\(settle\)\) return;\s*settle\(\);/.test(endWire), "SR1 panes: 카드가 받아도(덜 넘김) 자리바꿈 판정과 폭 적기를 넘긴다", endWire.slice(0, 160));
+ok(/const seq = \+\+releaseSeq;/.test(endWire) && /let releaseSeq = 0;/.test(panes), "SR3 panes: 놓을 때마다 차례를 올리고, 늦게 온 앞 판정은 버린다");
 
 const card = code(read("web/v2/side-card.ts"));
 const fnBody = (name) => { const a = card.indexOf(name); if (a < 0) return ""; const b = card.indexOf("\n  }\n", a); return card.slice(a, b); };
@@ -131,6 +141,7 @@ const setGlass = (() => { const i = term.indexOf("function setGlass("); return i
 ok(/settleRedrawSoon\(\);\s*$/.test(setGlass), "T2 터미널 setGlass: 카드가 되거나 풀릴 때도 재맞춤을 건다", setGlass.slice(-160));
 const settle = (() => { const i = term.indexOf("function settleRedrawSoon("); return i < 0 ? "" : term.slice(i, term.indexOf("\n}\n", i)); })();
 ok(/clearTimeout\(settleRedrawTimer\)/.test(settle) && /setTimeout\(/.test(settle) && /if \(ws && ws\.readyState === 1\) forceRedraw\(\)/.test(settle), "T3 터미널: 재맞춤은 디바운스 · 연결이 열려 있을 때만 forceRedraw");
+ok(/if \(imeComposing \|\| Date\.now\(\) - lastInputAt < SETTLE_QUIET_MS\) \{ settleRedrawSoon\(\); return; \}/.test(settle) && /function emitInput\(d: string\): void \{\s*lastInputAt = Date\.now\(\);/.test(term), "T4 터미널: 치는 중(조합 · 1초 안 입력)에는 재맞춤을 미룬다");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
