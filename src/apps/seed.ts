@@ -9,14 +9,15 @@
 //   apps/builtin 은 src 밖(코드 소유 데이터)이라 컴파일되지 않고 레포 루트에 그대로 있다.
 import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
-import { getApp, withAppInstallLock } from "../org/store/apps.js";
+import { getApp, setAppBuiltinVersion, withAppInstallLock } from "../org/store/apps.js";
 import { loadAppPackage } from "./loader.js";
 import { installLoadedApp, persistUiAssets, persistRuntimeAsset } from "./install-run.js";
 import { removeInstalledApp } from "./remove-run.js";
 import { isBuiltinSource } from "./store-ddl.js";
+import { builtinAppsRoot } from "./builtin-root.js";
+import { isOverrideSource, seedShouldSkipOverride } from "./app-versions.js";
 
 export interface SeedBuiltinAppsResult { seeded: string[]; skipped: string[]; updated: string[]; retired: string[] }
 
@@ -33,15 +34,11 @@ export const RETIRED_BUILTIN_APPS: readonly string[] = ["hello"];
  *  · 이번에 읽은 패키지 폴더에 **아직 있으면** 안 지운다(되살린 앱 · 시험 픽스처를 방금 심고 곧바로 지우지 않는다).
  *  · 설치돼 있지 않으면 지울 것이 없다.
  *  · 설치된 것이 builtin 이 아니면 안 지운다 — 워크스페이스가 같은 id 로 직접 만든 앱은 그 워크스페이스의 것이다.
+ *  · 빌트인을 워크스페이스가 **덮어쓴** 것(#4600 source.overrides_builtin)도 안 지운다 — 사람이 고쳐 쓰는 그 워크스페이스의 판이다.
  */
 export function shouldRetireBuiltin(id: string, present: ReadonlySet<string>, existing: { source?: unknown } | null | undefined,
   retired: readonly string[] = RETIRED_BUILTIN_APPS): boolean {
-  return retired.includes(id) && !present.has(id) && !!existing && isBuiltinSource(existing.source);
-}
-
-// apps/builtin 의 절대 경로 — 모듈 기준(cwd 무관: blue/green 심링크·다른 cwd 에서도 자기 레포의 파일을 읽는다).
-function builtinAppsRoot(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "apps", "builtin");
+  return retired.includes(id) && !present.has(id) && !!existing && isBuiltinSource(existing.source) && !isOverrideSource(existing.source);
 }
 
 /**
@@ -79,10 +76,18 @@ export async function seedBuiltinApps(root: string = builtinAppsRoot()): Promise
     const id = loaded.manifest.id;
     present.add(id);
     const existing = await getApp(id);
+    // #4600 — 워크스페이스가 이 빌트인을 덮어썼다(app_save). 부팅 시딩이 덮으면 사람이 고친 판이 릴리스 원본으로 조용히 돌아간다.
+    //  설치는 건너뛰고 폴더의 릴리스 판 번호만 적어 둔다 — 화면이 「원본에 새 판이 있다」 를 알리는 재료. 되돌아가는 길은 app_revert(원본 판).
+    if (seedShouldSkipOverride(existing)) {
+      await setAppBuiltinVersion(id, loaded.manifest.version).catch((err) => logger.warn({ err, id }, "빌트인 판 번호 기록 실패(비치명)"));
+      res.skipped.push(id);
+      continue;
+    }
     if (existing && existing.content_hash === loaded.contentHash && existing.status === "active") {
       // 패키지는 안 바뀌었지만 UI 자산은 뒤늦게 도입됐다(PR5) — 없으면 백필(멱등, 기존 설치 앱 마이그레이션).
       if (loaded.uiAssets.length > 0) await persistUiAssets(loaded);
       if (loaded.runtimeAsset) await persistRuntimeAsset(loaded);
+      await setAppBuiltinVersion(id, loaded.manifest.version).catch(() => undefined);   // 판 이력 도입 전 설치 백필(같은 값이면 안 쓴다)
       res.skipped.push(id);
       continue;
     }
@@ -90,6 +95,7 @@ export async function seedBuiltinApps(root: string = builtinAppsRoot()): Promise
     try {
       // builtin 은 코드 소유 → source={kind:'builtin'}. 공용 코어가 저널드 설치 + update-diff 를 처리한다.
       const outcome = await installLoadedApp(loaded, { kind: "builtin" }, ctx);
+      await setAppBuiltinVersion(id, loaded.manifest.version).catch((err) => logger.warn({ err, id }, "빌트인 판 번호 기록 실패(비치명)"));
       (outcome.created ? res.seeded : res.updated).push(id);
     } catch (err) {
       // runInstall 은 실패 시 저널 status=failed 를 남기고 보상한다 — 부팅 스위퍼가 잔재를 회수한다. 다음 시딩이 재시도.
