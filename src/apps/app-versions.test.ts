@@ -8,8 +8,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  APP_VERSION_KEEP, entriesOfManifest, filesFromStored, filesToInline, hasPackageDir, isOverrideSource, isTextPath, originOfCurrent,
-  overlayFiles, overrideSourceMeta, readPackageDir, seedShouldSkipOverride, versionsToPrune, PACKAGE_FILE_MAX_BYTES,
+  APP_VERSION_KEEP, APP_VERSION_TOTAL_MAX_BYTES, entriesOfManifest, filesFromStored, filesToInline, hasPackageDir, isOverrideSource, isTextPath,
+  newTablesForOverride, originOfCurrent, overlayFiles, overrideSourceMeta, readPackageDir, seedShouldSkipOverride, versionsToPrune,
+  versionsToPruneForQuota, PACKAGE_FILE_MAX_BYTES,
 } from "./app-versions.js";
 import { isBuiltinSource } from "./store-ddl.js";
 import { shouldRetireBuiltin } from "./seed.js";
@@ -55,6 +56,27 @@ test("[V5] 보관 수 안이면 아무것도 안 지운다 · 순서가 섞여 �
   assert.deepEqual(versionsToPrune([{ version_no: 3, origin: "member" }, { version_no: 1, origin: "builtin" }, { version_no: 2, origin: "member" }]), []);
   const shuffled = [5, 2, 4, 1, 3].map((n) => ({ version_no: n, origin: "member" }));
   assert.deepEqual(versionsToPrune(shuffled, 2).sort((a, b) => a - b), [1, 2, 3]);
+});
+
+test("[V15] 워크스페이스 총량 상한 — 오래된 구성원 판부터 합이 상한 아래가 될 때까지, 지금 서빙 중인 판은 건너뛴다(앱 불문)", () => {
+  assert.equal(APP_VERSION_TOTAL_MAX_BYTES, 64 * 1024 * 1024);
+  const rows = [
+    { app_id: "a", version_no: 2, bytes: 30, is_current: false },
+    { app_id: "b", version_no: 5, bytes: 30, is_current: true },     // 지금 서빙 중 — 건너뛴다
+    { app_id: "a", version_no: 3, bytes: 30, is_current: false },
+    { app_id: "b", version_no: 6, bytes: 30, is_current: false },
+  ];
+  assert.deepEqual(versionsToPruneForQuota(rows, 120, 70), [{ app_id: "a", version_no: 2 }, { app_id: "a", version_no: 3 }], "120 → 90 → 60 ≤ 70 에서 멈춘다");
+  assert.deepEqual(versionsToPruneForQuota(rows, 60, 70), [], "상한 안이면 아무것도 안 지운다");
+  assert.deepEqual(versionsToPruneForQuota(rows, 1000, 70).map((v) => `${v.app_id}:${v.version_no}`), ["a:2", "a:3", "b:6"], "모자라도 서빙 중인 판은 끝까지 안 지운다");
+});
+
+test("[V16] 덮어쓴 빌트인이 새로 선언한 표만 관문을 지난다 — 릴리스에 있던 표는 그대로", () => {
+  const release = { data: { tables: [{ name: "notes" }, { name: "tags" }] } };
+  assert.deepEqual(newTablesForOverride(release, ["notes", "tags", "comments"]), ["comments"]);
+  assert.deepEqual(newTablesForOverride(release, ["notes"]), []);
+  assert.deepEqual(newTablesForOverride(null, ["a", "b"]), ["a", "b"], "릴리스 매니페스트를 모르면 전부 새 표로 본다(보수적)");
+  assert.deepEqual(newTablesForOverride({ data: {} }, []), []);
 });
 
 // ── 시더 · 은퇴 ────────────────────────────────────────────────────────────────
