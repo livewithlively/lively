@@ -737,6 +737,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  곁칸이 지금 왼쪽에 서 있나(side-swap 이 격자에 sw-left 를 건다). 칸 이름을 부르는 글은 전부 이것으로 고른다.
   const isLeft = (): boolean => body.classList.contains('sw-left');
   let sideHide: HTMLElement | null = null;   // 곁칸 머리의 접기 단추(paintPane 이 새로 만들 때마다 바꿔 든다)
+  let releaseSeq = 0;   // 곁칸 손잡이를 놓은 차례(늦게 온 판정이 새 판정을 덮지 않게)
   const splitX = makeSplitter({
     axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: SIDE_DEF, min: 220,
     max: () => swap?.maxSideW() ?? 620,
@@ -746,8 +747,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onDrag: (px) => { if (!body.classList.contains('cm-over')) swap?.onDrag(px); },
     //  놓는 순간 **이 세션의 폭**으로 적는다. makeSplitter 는 전역 키에도 그대로 남기는데(그건 '마지막으로 쓰던 값'),
     //  그게 다음에 처음 여는 세션이 물려받을 값이다 — 둘은 싸우지 않는다(읽을 때 세션 값이 먼저다).
-    //  카드 전환 구간에서 놓았으면 카드가 받는다. 그때는 자리바꿈을 판정하지 않는다(자리는 카드가 된 뒤 조용히 정한다).
-    onEnd: (px) => { if (card?.onRelease()) return; swap?.onEnd(px); saveView({ sideW: Math.round(px) }); },
+    //  카드 전환 구간에서 놓았으면 카드가 받는다. 카드가 되면 자리는 카드가 된 뒤 조용히 정한다(settle).
+    //  덜 넘겨 놓았으면(카드가 안 된다) 사이드바가 상한으로 물러난 뒤 여느 때처럼 자리를 판정하고 폭을 적는다 — 세션을 최소 폭까지
+    //  줄이다 손이 조금 더 가면 늘 이 구간이라, 건너뛰면 자리바꿈이 사라진다(원준 2026-10-01).
+    //  ⚠ 물러나는 0.2초 사이에 다시 끌어 놓으면 앞 판정이 늦게 와서 새 폭을 덮는다 — 마지막으로 놓은 것만 적는다(격리 리뷰).
+    onEnd: (px) => {
+      const seq = ++releaseSeq;
+      const settle = (): void => { if (seq !== releaseSeq) return; swap?.onEnd(px); saveView({ sideW: Math.round(px) }); };
+      if (card?.onRelease(settle)) return;
+      settle();
+    },
   });
   const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이',
     onEnd: (px) => saveView({ bottomH: Math.round(px) }) });

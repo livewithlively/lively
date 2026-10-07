@@ -124,7 +124,7 @@ ok(["minus", "window", "expand"].every((n) => new RegExp("\\n\\s+" + n + ": '").
 // ── panes.ts: 기본 폭은 한 값 ──
 const panes = code(read("web/v2/panes.ts"));
 const swapSrc = code(read("web/v2/side-swap.ts"));
-ok(/const DEF_SIDE_W = SIDE_DEF;/.test(swapSrc) && /import \{ SIDE_DEF, sideCap \} from '\.\.\/lib\/side-card-geom\.js'/.test(swapSrc), "R2b side-swap 의 기본 폭도 SIDE_DEF");
+ok(/const DEF_SIDE_W = SIDE_DEF;/.test(swapSrc) && /import \{ SIDE_DEF,[^}]*\bsideCap \} from '\.\.\/lib\/side-card-geom\.js'/.test(swapSrc), "R2b side-swap 의 기본 폭도 SIDE_DEF");
 ok(/import \{ SIDE_DEF \} from '\.\.\/lib\/side-card-geom\.js'/.test(panes) && /def: SIDE_DEF, min: 220/.test(panes) && /Number\(v\.sideW\) \|\| SIDE_DEF/.test(panes) && !/\|\| 340\b/.test(panes) && !/def: 340\b/.test(panes), "R2 panes 의 곁칸 기본 폭도 SIDE_DEF");
 
 // ── CSS ──

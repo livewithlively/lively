@@ -695,6 +695,8 @@ function setGlass(on: boolean): void {
   applyGlassScheme();
   if (!term) return;                                               // 아직 안 떴다 — 만들 때 glassOn 을 읽는다
   try { term.options.allowTransparency = on; term.options.theme = themeFor(prefs().theme); } catch (_) { /* 렌더러 준비 전 */ }
+  //  카드가 되거나 풀리면 크기가 크게 바뀐다. 카드에서 풀릴 때는 glassOn 이 이미 꺼져 applyFit 이 부르지 않으므로 여기서 건다.
+  settleRedrawSoon();
 }
 /** 앱 테마가 바뀌었다 — 비치는 중이면 이름 있는 테마를 고른 사람도 앱 색을 따라간다(syncAppTheme 은 auto 만 본다). */
 function syncGlassTheme(): void {
@@ -1259,7 +1261,28 @@ export function applyFit() {
     lastCols = term.cols; lastRows = term.rows;
     dlog('fit', term.cols + 'x' + term.rows);
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
+    if (glassOn) settleRedrawSoon();
   }
+}
+// ── 카드에서 크기가 바뀐 뒤 화면을 다시 맞춘다(원준 2026-10-07 «창으로 띄워서 대화할 때 커서가 랙걸려서 새로고침·화면복구를 해야 한다») ──
+//  카드가 되면 터미널이 한 번에 크게 줄고(세션 열 ~45줄 → 카드 ~11줄), 카드 크기를 끌거나 접었다 펴도 크기가 바뀐다.
+//  크기가 바뀌는 순간 xterm 은 제 버퍼를 새 폭으로 다시 접고, 서버 쪽 tmux 는 제 방식으로 다시 접는다. 둘이 어긋나면
+//  그 뒤의 커서 이동이 엉뚱한 줄을 지워 입력줄 · 커서가 제자리에 안 선다. [화면 복구]가 그것을 푸는 것은 tmux 의 화면을
+//  다시 받아 오기 때문이다 — 사람이 누르기 전에 같은 일을 한다. 크기가 멈춘 뒤 한 번만(끄는 동안 여러 번 바뀌어도).
+//  카드에서만 한다(glassOn = 카드인 동안 부모가 켠다). 세션 열의 터미널은 크기가 드물게 바뀌어 종전대로 둔다.
+//  ⚠ 치는 중에는 미룬다(격리 리뷰): 재캡처는 화면을 지우고 다시 받는다 — 한글 조합 중이거나 방금(1초 안) 친 글자가 있으면
+//   그 사이에 끼어 커서를 오히려 흔든다. 손이 멈출 때까지 다시 건다.
+const SETTLE_REDRAW_MS = 800;
+const SETTLE_QUIET_MS = 1000;
+let settleRedrawTimer: ReturnType<typeof setTimeout> | null = null;
+let lastInputAt = 0;   // 사람이 마지막으로 친 때(emitInput) — 재맞춤을 미룰지 가른다
+function settleRedrawSoon(): void {
+  if (settleRedrawTimer) clearTimeout(settleRedrawTimer);
+  settleRedrawTimer = setTimeout(() => {
+    settleRedrawTimer = null;
+    if (imeComposing || Date.now() - lastInputAt < SETTLE_QUIET_MS) { settleRedrawSoon(); return; }
+    if (ws && ws.readyState === 1) forceRedraw();
+  }, SETTLE_REDRAW_MS);
 }
 // 창 드래그 중 리사이즈 폭주 방지 — 디바운스.
 function doResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyFit, 130); }
@@ -2310,6 +2333,7 @@ function drawAppSel(): void {
 }
 /** 모든 PTY 입력의 한 문 — op 가 도는 동안은 줄 세운다(⌫ 보다 먼저 친 글자가 나가면 엉뚱한 자리에 들어간다). */
 function emitInput(d: string): void {
+  lastInputAt = Date.now();
   if (opBusy) { opQueue.push(d); return; }
   rawInput(d);
 }
