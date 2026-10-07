@@ -27,6 +27,10 @@ export interface OrgApp {
   /** #4225 누가 이 앱을 고칠 수 있나 — 'all'(구성원 전원, 기본) · 'members'(edit_members 에 든 사람 + 관리자). */
   edit_mode: AppEditMode;
   edit_members: string[];
+  /** #4600 패키지 폴더에 실린 릴리스 판 번호(시더가 적음). 빌트인 아닌 앱은 null. */
+  builtin_version: string | null;
+  /** #4600 지금 서빙 중인 상태 = org_app_version 의 이 판. 판 이력 도입 전 설치는 null. */
+  current_version_no: number | null;
 }
 export type AppEditMode = "all" | "members";
 
@@ -47,6 +51,8 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     updated_by: r.updated_by == null ? null : String(r.updated_by),
     edit_mode: r.edit_mode === "members" ? "members" : "all",
     edit_members: Array.isArray(r.edit_members) ? (r.edit_members as unknown[]).map(String) : [],
+    builtin_version: r.builtin_version == null ? null : String(r.builtin_version),
+    current_version_no: r.current_version_no == null ? null : Number(r.current_version_no),
   };
 }
 
@@ -207,6 +213,86 @@ export async function pruneUiAssets(appId: string, keep: string[], client?: pg.P
   const exec: Q = client ?? itemsPool;
   if (keep.length === 0) { await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1`, [appId]); return; }
   await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1 AND page_key <> ALL($2::text[])`, [appId, keep]);
+}
+
+/** 이 앱의 UI 자산 전부(html 포함) — 판으로 떠 두거나 패키지 파일을 재구성할 때(#4600). */
+export async function listUiAssetsFull(appId: string): Promise<AppUiAssetRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_ui_asset WHERE app_id=$1 ORDER BY kind, page_key`, [appId]);
+  return r.rows.map((x) => ({ app_id: String(x.app_id), page_key: String(x.page_key), kind: x.kind as "page" | "widget",
+    title: x.title == null ? null : String(x.title), html: String(x.html),
+    content_hash: x.content_hash == null ? null : String(x.content_hash), updated_at: String(x.updated_at) }));
+}
+
+// ── org_app_version — 앱 코드의 판 이력(#4600) ──────────────────────────────────
+//  판 하나 = 파일 묶음 전체(files) + 그때의 매니페스트. 설치가 보존하는 것은 매니페스트·화면뿐이라 되돌리기는 이 묶음으로 한다.
+export type AppVersionOrigin = "builtin" | "member";
+export interface AppVersionMeta {
+  app_id: string; version_no: number; origin: AppVersionOrigin; version: string; content_hash: string | null;
+  note: string | null; saved_by: string | null; saved_at: string;
+}
+export interface AppVersionRow extends AppVersionMeta { manifest: unknown; files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }> }
+
+function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
+  return {
+    app_id: String(x.app_id), version_no: Number(x.version_no), origin: x.origin === "builtin" ? "builtin" : "member",
+    version: String(x.version ?? "0.0.0"), content_hash: x.content_hash == null ? null : String(x.content_hash),
+    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by), saved_at: String(x.saved_at),
+  };
+}
+
+/**
+ * 판을 하나 더 적는다 — 번호는 그 앱의 다음 번호(앱당 1부터). 호출부가 withAppInstallLock 안에서 부른다(번호 경쟁 없음).
+ *  반환 = 새 판 번호.
+ */
+export async function insertAppVersion(
+  appId: string,
+  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null },
+): Promise<number> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at)
+       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now()
+         FROM org_app_version WHERE app_id = $1
+     RETURNING version_no`,
+    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by],
+  );
+  return Number(r.rows[0].version_no);
+}
+
+/** 판 목록(파일 제외) — 최신 먼저. */
+export async function listAppVersions(appId: string): Promise<AppVersionMeta[]> {
+  const r = await itemsPool.query(
+    `SELECT app_id, version_no, origin, version, content_hash, note, saved_by, saved_at FROM org_app_version WHERE app_id=$1 ORDER BY version_no DESC`, [appId]);
+  return r.rows.map(rowToVersionMeta);
+}
+
+/** 판 1건(파일 포함) — 되돌리기용. 없으면 null. */
+export async function getAppVersion(appId: string, versionNo: number): Promise<AppVersionRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  if (!x) return null;
+  return { ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [] };
+}
+
+/** 판 여럿 삭제(보관 수 넘긴 구성원 판). 비면 아무것도 안 한다. */
+export async function deleteAppVersions(appId: string, versionNos: number[]): Promise<void> {
+  if (!versionNos.length) return;
+  await itemsPool.query(`DELETE FROM org_app_version WHERE app_id=$1 AND version_no = ANY($2::int[])`, [appId, versionNos]);
+}
+
+/** 이 앱의 판 이력 전부 삭제 — 앱 제거 때(빌트인은 제거가 막혀 있어 거의 안 불린다). */
+export async function pruneAllAppVersions(appId: string, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(`DELETE FROM org_app_version WHERE app_id=$1`, [appId]);
+}
+
+/** 패키지 폴더에 실린 릴리스 판 번호를 적는다(시더). 같은 값이면 쓰지 않는다 — 부팅마다 updated_at 을 흔들지 않게. */
+export async function setAppBuiltinVersion(appId: string, version: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET builtin_version=$2 WHERE id=$1 AND builtin_version IS DISTINCT FROM $2`, [appId, version]);
+}
+
+/** 지금 서빙 중인 상태가 어느 판인가. null = 모름(판 밖의 상태). */
+export async function setAppCurrentVersion(appId: string, versionNo: number | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET current_version_no=$2 WHERE id=$1`, [appId, versionNo]);
 }
 
 // ── org_app_runtime_asset — 실행할 worker 번들(Stage B) ──────────────────────

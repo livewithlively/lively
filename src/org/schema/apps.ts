@@ -123,6 +123,34 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ui_asset_app_idx ON org_app_ui_asset(app_id);`);
 
+  // ── org_app_version — 앱 코드의 판 이력(#4600, 「장표 수정 앱」 #4592) ──
+  //  원준(2026-10-07): «개개인도 AI 에게 시켜 앱을 고칠 수 있어야 한다». 그런데 화면 코드는 org_app_ui_asset 에 한 벌뿐이라
+  //  고치면 전 것이 사라졌고, 빌트인은 아예 못 고쳤다. 판마다 **파일 묶음 전체**(files JSONB — 매니페스트·화면·bin/ 까지)를 적어 둔다:
+  //  설치가 보존하는 것은 매니페스트와 화면뿐이라, 되돌리기가 그 둘만으로는 세션 스크립트 같은 나머지를 잃기 때문이다.
+  //  origin 'builtin' = 릴리스 원본 그대로였던 상태(「원본으로」 의 목적지 · 지우지 않는다) · 'member' = 구성원이 저장한 판(최근 20개 보관).
+  //  FK 는 org_app_ui_asset 과 같은 이유로 걸지 않는다. 제거 verb 가 명시로 지운다(빌트인은 제거가 막혀 있어 사실상 남는다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_version(
+      app_id TEXT NOT NULL,
+      version_no INT NOT NULL,
+      origin TEXT NOT NULL CHECK (origin IN ('builtin','member')),
+      version TEXT NOT NULL DEFAULT '0.0.0',
+      manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+      files JSONB NOT NULL DEFAULT '[]'::jsonb,
+      content_hash TEXT,
+      note TEXT,
+      saved_by TEXT,
+      saved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, version_no)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_version_app_idx ON org_app_version(app_id);`);
+  //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
+  //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
+  //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS builtin_version TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS current_version_no INT;`);
+
   // ── org_app_runtime_asset — 설치 stage가 사라진 뒤에도 정확한 package hash의 worker를 실행한다 ──
   //  코드는 단일 ESM 번들(8MiB 이하). FK 대신 remove/reclaim에서 명시 회수(v2.1 신규표 규약).
   await pool.query(`
