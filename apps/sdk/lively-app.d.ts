@@ -31,6 +31,7 @@ export interface LivelyApp {
     tables(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string }>; indexes?: Array<{ columns: string[]; unique?: boolean }> }>>;
     query<T = Record<string, unknown>>(table: string, opts?: { match?: Record<string, unknown>; limit?: number }): Promise<T[]>;
     insert(table: string, row: Record<string, unknown>): Promise<{ id: string | number | null }>;
+    /** match 에는 선언한 칸과 시스템 칸 `id` · `created_at` 을 쓸 수 있다 — 한 행만 고치려면 `{ id }`(insert 가 돌려준 값). set 에는 선언한 칸만. */
     update(table: string, match: Record<string, unknown>, set: Record<string, unknown>): Promise<{ changed: number }>;
     /** ⚠ match 는 필수다(전량 삭제 방지). */
     delete(table: string, match: Record<string, unknown>): Promise<{ deleted: number }>;
