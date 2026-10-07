@@ -380,9 +380,10 @@ try {
         { "hold.txt": { body: OLD, mtime: 5_000_000 } },
         { "hold.txt": { mtime: 5_000_000, size: Buffer.byteLength(OLD) } });
       const run = spawnHook(hookPath, dir);
-      await within(req, 10_000, `[${id}] 훅이 hold.txt 본문을 요청하지 않았다`);   // 훅이 판정을 끝내고 받는 중
-      fs.writeFileSync(path.join(dir, "hold.txt"), MINE);                          // 그 사이 사람이 고친다
-      release();
+      try {
+        await within(req, 10_000, `[${id}] 훅이 hold.txt 본문을 요청하지 않았다`);   // 훅이 판정을 끝내고 받는 중
+        fs.writeFileSync(path.join(dir, "hold.txt"), MINE);                          // 그 사이 사람이 고친다
+      } finally { release(); }   // 실패해도 붙든 응답을 풀어 준다(안 풀면 열린 연결이 시험 프로세스를 붙든다)
       const { code } = await run;
       assert.equal(code, 0);
       assert.equal(readOr(path.join(dir, "hold.txt")), MINE, `[${id}] 🔴 받는 사이 고친 로컬을 서버본으로 덮었다`);
@@ -416,6 +417,21 @@ try {
       assert.equal(fs.existsSync(old), false, `[${id}] 10분 넘은 임시 파일을 안 지웠다`);
       assert.equal(fs.existsSync(fresh), true, `[${id}] 10분 안 된 임시 파일을 지웠다(다른 실행이 쓰는 중일 수 있다)`);
       assert.equal(readOr(path.join(dir, "sw.txt")), "새 판");
+    });
+
+    // ── ⑬ 서버본으로 갈아 끼워도 기존 파일의 권한(실행 비트)을 잇는다 — 종전 그 자리 덮어쓰기와 같게 ──
+    await scenario(`[${id}] #4609 서버본으로 갈아 끼워도 실행 권한 유지`, async () => {
+      if (process.platform === "win32") return;   // 권한 비트가 없는 OS
+      const OLD = "#!/bin/sh\necho old\n", NEW = "#!/bin/sh\necho new — 서버가 고친 판\n";
+      resetServer({ "run.sh": { body: NEW, mtime: 9_000_000 } });
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both", last_pull: 5_000_000 },
+        { "run.sh": { body: OLD, mtime: 5_000_000 } },
+        { "run.sh": { mtime: 5_000_000, size: Buffer.byteLength(OLD) } });
+      fs.chmodSync(path.join(dir, "run.sh"), 0o755);   // chmod 은 mtime 을 안 바꾼다 — 로컬은 여전히 «받은 그대로»
+      await runHook(hookPath, dir);
+      assert.equal(readOr(path.join(dir, "run.sh")), NEW, `[${id}] 손 안 댄 로컬인데 서버본을 안 받았다`);
+      assert.equal(fs.statSync(path.join(dir, "run.sh")).mode & 0o777, 0o755, `[${id}] 🔴 서버본을 받으면서 실행 권한이 사라졌다`);
+      assert.equal(markerOf(dir).last_pull, 9_000_000);
     });
 
     // ── ⑫ pull 모드도 상한 넘는 파일을 받는다 ──

@@ -222,13 +222,17 @@ const TMP_STALE_MS = 10 * 60_000;
 const tmpPrefix = (dest) => `.${path.basename(dest)}${TMP_TAG}`;
 const drop = (p) => { try { fs.unlinkSync(p); } catch { /* 이미 없음 */ } };
 
-/** 강제 종료로 남은 같은 자리의 옛 임시 파일을 지운다(이름에 적힌 시각 기준 10분). 실패는 무해. */
-function sweepTemps(dest) {
+/** 강제 종료로 남은 옛 임시 파일을 지운다 — 폴더마다 실행당 한 번, 이름에 적힌 시각 기준 10분. 실패는 무해.
+ *  (받을 파일마다 폴더를 다시 읽으면 파일 많은 폴더의 첫 동기화가 폴더 크기 × 파일 수만큼 느려진다.) */
+const sweptDirs = new Set();
+function sweepTemps(dir) {
+  if (sweptDirs.has(dir)) return;
+  sweptDirs.add(dir);
   try {
-    const dir = path.dirname(dest), pre = tmpPrefix(dest);
     for (const n of fs.readdirSync(dir)) {
-      if (!n.startsWith(pre)) continue;
-      const born = Number(n.slice(pre.length).split("-")[0]);
+      const i = n.lastIndexOf(TMP_TAG);
+      if (!n.startsWith(".") || i < 0) continue;
+      const born = Number(n.slice(i + TMP_TAG.length).split("-")[0]);
       if (Number.isFinite(born) && Date.now() - born > TMP_STALE_MS) drop(path.join(dir, n));
     }
   } catch { /* 폴더 없음 등 — 지울 것도 없다 */ }
@@ -242,9 +246,9 @@ async function fetchToTemp(getFile, f, dest, hardDeadline) {
   let tmp = null;
   try {
     const r = await getFile(f.path, ctl.signal);
-    if (!r.ok || !r.body) return null;
+    if (!r.ok || !r.body) { try { await r.body?.cancel(); } catch { /* */ } return null; }   // 연결을 붙들지 않게 본문을 닫는다
     await fsp.mkdir(path.dirname(dest), { recursive: true });
-    sweepTemps(dest);
+    sweepTemps(path.dirname(dest));
     tmp = path.join(path.dirname(dest), `${tmpPrefix(dest)}${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`);
     await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(tmp, { flags: "wx" }));
     const hm = Number(r.headers.get("x-file-mtime")), hs = Number(r.headers.get("x-file-size"));
@@ -271,6 +275,8 @@ function placeTemp(got, dest, seen) {
     ? !!seen && now.size === seen.size && Math.floor(now.mtimeMs) === Math.floor(seen.mtimeMs)
     : !seen;
   if (!unchanged) { drop(got.tmp); return false; }
+  // 갈아 끼우면 새 파일의 권한이 된다 — 그 자리 덮어쓰기(종전 writeFile)처럼 기존 권한(실행 비트 등)을 잇는다.
+  if (now) { try { fs.chmodSync(got.tmp, now.mode & 0o7777); } catch { /* */ } }
   try { fs.renameSync(got.tmp, dest); return true; } catch { drop(got.tmp); return false; }
 }
 
