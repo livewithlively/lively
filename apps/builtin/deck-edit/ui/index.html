@@ -677,7 +677,7 @@
   function nowIso() { return new Date().toISOString(); }
   async function loadDocs() {
     var rows = await q('docs', {}, 200);
-    rows.sort(function (a, b) { return String(b.updated_at || '').localeCompare(String(a.updated_at || '')); });
+    rows.sort(function (a, b) { return String(b.changed_at || b.created_at || '').localeCompare(String(a.changed_at || a.created_at || '')); });
     st.docs = rows;
     return rows;
   }
@@ -776,7 +776,7 @@
       await sdk.store.update('comments', { id: r.id }, set); Object.assign(r, set);
     } else {
       if (empty) return;
-      var row = Object.assign({}, want, { edited: edited, note: note || '', bundle: null, reply: '', created_at: nowIso() });
+      var row = Object.assign({}, want, { edited: edited, note: note || '', bundle: null, reply: '' });
       var ins = await sdk.store.insert('comments', row); row.id = ins && ins.id != null ? ins.id : ('tmp' + Date.now()); st.comments.push(row);
     }
   }
@@ -785,7 +785,7 @@
     var r = scopeRow(scope, sid); var t = String(note || '').trim();
     if (r) { if (!t) { await sdk.store['delete']('comments', { id: r.id }); st.comments = st.comments.filter(function (c) { return c.id !== r.id; }); } else { await sdk.store.update('comments', { id: r.id }, { note: t }); r.note = t; } return; }
     if (!t) return;
-    var row = { doc: st.doc, ver: st.ver, slide_id: scope === 'slide' ? sid : '', unit_key: '', orig: '', edited: null, note: t, scope: scope, bundle: null, status: 'draft', reply: '', session: L.session || '', created_at: nowIso() };
+    var row = { doc: st.doc, ver: st.ver, slide_id: scope === 'slide' ? sid : '', unit_key: '', orig: '', edited: null, note: t, scope: scope, bundle: null, status: 'draft', reply: '', session: L.session || '' };
     var ins = await sdk.store.insert('comments', row); row.id = ins && ins.id != null ? ins.id : ('tmp' + Date.now()); st.comments.push(row);
   }
   function drafts() { return st.comments.filter(function (c) { return c.doc === st.doc && c.status === 'draft' && ((c.edited != null) || (c.note && String(c.note).trim())); }); }

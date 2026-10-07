@@ -245,11 +245,11 @@ async function main() {
     newAssets++;
   }
   // 판 행.
-  for (const r of p.rows) await ins("versions", { doc: a.doc, ver, ...r, session: sid, created_at: now });
+  for (const r of p.rows) await ins("versions", { doc: a.doc, ver, ...r, session: sid });   // created_at 은 시스템 칸(저절로 붙는다) — 적지 않는다
   // 문서 행.
   const title = a.title || (existing[0] && existing[0].title) || titleOf(html) || a.doc;
-  if (existing.length) await upd("docs", { id: existing[0].id }, { latest_ver: ver, title, source_path: file, updated_at: now, session: sid });
-  else await ins("docs", { doc: a.doc, title, session: sid, latest_ver: ver, source_path: file, created_at: now, updated_at: now });
+  if (existing.length) await upd("docs", { id: existing[0].id }, { latest_ver: ver, title, source_path: file, changed_at: now, session: sid });
+  else await ins("docs", { doc: a.doc, title, session: sid, latest_ver: ver, source_path: file, changed_at: now });
   console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}`);
 }
 

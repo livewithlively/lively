@@ -14,7 +14,7 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { itemsPool } from "../db/client.js";
 import { getApp } from "../org/store/apps.js";
-import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex } from "../apps/store-ddl.js";
+import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
 import { appSchemaFor, ensureAppTables, type AppTableSpec } from "../apps/store-schema.js";
 import { logger } from "../log.js";
 import { requireAttachedApp, publishAppEvent } from "../apps/session-apps.js";
@@ -23,6 +23,8 @@ import { runAppSql, takeAppCall, assertAppDataQuota, appSqlTenantId } from "../a
 import { ensureAppSqlRole } from "../apps/store-schema.js";
 import { physicalAppPrefix } from "../apps/store-ddl.js";
 
+/** match 한 칸의 값 — `id` 는 정수만(아니면 400), 그 밖은 준 그대로(파라미터로 넘어간다). */
+const matchValue = (key: string, value: unknown): unknown => (key === "id" ? assertMatchId(value) : value);
 const qi = (n: string): string => { if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(n)) throw new HttpError(400, `안전하지 않은 식별자: ${n}`); return `"${n}"`; };
 
 /** 이 호출이 어느 앱의 데이터로 들어가나 — 머리말의 두 길. 판정은 매 호출(캐시 없음). */
@@ -120,11 +122,11 @@ const storeQuery: Capability = {
     const target = await resolveDeclaredTable(appId, table);
     if (!target.builtin) takeAppCall(appId);
     const match = (input.match ?? {}) as Record<string, unknown>;
-    const keys = Object.keys(match).map((k) => assertIdent("column", k));
+    const keys = Object.keys(match).map((k) => assertMatchIdent(k));
     const where = keys.length ? " WHERE " + keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ") : "";
     const limit = Math.max(1, Math.min(1000, Math.round(Number(input.limit) || 100)));
     const r = await withTableRepair(appId, target, () =>
-      itemsPool.query(`SELECT * FROM ${target.rel}${where} ORDER BY id DESC LIMIT ${limit}`, keys.map((k) => match[k])));
+      itemsPool.query(`SELECT * FROM ${target.rel}${where} ORDER BY id DESC LIMIT ${limit}`, keys.map((k) => matchValue(k, match[k]))));
     return { rows: r.rows };
   },
 };
@@ -132,7 +134,7 @@ const storeQuery: Capability = {
 const storeUpdate: Capability = {
   name: "store_update",
   title: "앱 데이터 수정",
-  description: "앱 자기 데이터 테이블의 행을 수정(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화)로 대상 지정, set(컬럼=새값). match 없으면 거부(전량 수정 방지). 반환 changed(행수).",
+  description: "앱 자기 데이터 테이블의 행을 수정(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화 — 선언 칸과 시스템 칸 id·created_at)로 대상 지정, set(컬럼=새값). 한 행만 고치려면 match:{id}. match 없으면 거부(전량 수정 방지). 반환 changed(행수).",
   scope: null,
   input: { table: z.string(), match: z.record(z.unknown()), set: z.record(z.unknown()), app_id: APP_ID },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/update"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, set: b.set, app_id: appIdOf(b) }; } }] },
@@ -145,12 +147,12 @@ const storeUpdate: Capability = {
     const set = (input.set ?? {}) as Record<string, unknown>;
     const match = (input.match ?? {}) as Record<string, unknown>;
     const setCols = Object.keys(set).map((c) => assertIdent("column", c));
-    const matchKeys = Object.keys(match).map((k) => assertIdent("column", k));
+    const matchKeys = Object.keys(match).map((k) => assertMatchIdent(k));
     if (!setCols.length) throw new HttpError(400, "수정할 컬럼이 없습니다");
     if (!matchKeys.length) throw new HttpError(400, "match 가 필요합니다(전량 수정 방지)");
     const params: unknown[] = [];
     const setSql = setCols.map((c) => { params.push(set[c]); return `${qi(c)}=$${params.length}`; }).join(",");
-    const whereSql = matchKeys.map((k) => { params.push(match[k]); return `${qi(k)}=$${params.length}`; }).join(" AND ");
+    const whereSql = matchKeys.map((k) => { params.push(matchValue(k, match[k])); return `${qi(k)}=$${params.length}`; }).join(" AND ");
     const r = await withTableRepair(appId, target, () => itemsPool.query(`UPDATE ${target.rel} SET ${setSql} WHERE ${whereSql}`, params));
     if (r.rowCount) announce(user, appId, table, "update", ctx);
     return { changed: r.rowCount ?? 0 };
@@ -160,7 +162,7 @@ const storeUpdate: Capability = {
 const storeDelete: Capability = {
   name: "store_delete",
   title: "앱 데이터 삭제",
-  description: "앱 자기 데이터 테이블의 행을 삭제(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화)로 대상 지정 — match 없으면 거부(전량 삭제 방지). 반환 deleted(행수).",
+  description: "앱 자기 데이터 테이블의 행을 삭제(app.<appId>__<table>). 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. match(컬럼=값 등가, 파라미터화 — 선언 칸과 시스템 칸 id·created_at)로 대상 지정 — 한 행만 지우려면 match:{id}. match 없으면 거부(전량 삭제 방지). 반환 deleted(행수).",
   scope: null,
   input: { table: z.string(), match: z.record(z.unknown()), app_id: APP_ID },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/delete"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, app_id: appIdOf(b) }; } }] },
@@ -170,10 +172,10 @@ const storeDelete: Capability = {
     const target = await resolveDeclaredTable(appId, table);
     if (!target.builtin) takeAppCall(appId);
     const match = (input.match ?? {}) as Record<string, unknown>;
-    const keys = Object.keys(match).map((k) => assertIdent("column", k));
+    const keys = Object.keys(match).map((k) => assertMatchIdent(k));
     if (!keys.length) throw new HttpError(400, "match 가 필요합니다(전량 삭제 방지)");
     const where = keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ");
-    const r = await withTableRepair(appId, target, () => itemsPool.query(`DELETE FROM ${target.rel} WHERE ${where}`, keys.map((k) => match[k])));
+    const r = await withTableRepair(appId, target, () => itemsPool.query(`DELETE FROM ${target.rel} WHERE ${where}`, keys.map((k) => matchValue(k, match[k]))));
     if (r.rowCount) announce(user, appId, table, "delete", ctx);
     return { deleted: r.rowCount ?? 0 };
   },
