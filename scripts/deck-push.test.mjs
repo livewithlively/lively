@@ -6,6 +6,12 @@
 //   ④ 외부 참조를 잡는다 — 네 가지를 고정한다.
 //  실행: node scripts/deck-push.test.mjs
 import assert from "node:assert/strict";
+import vm from "node:vm";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { assembleHtml } from "../apps/builtin/deck-edit/bin/deck-pull.mjs";
 import { splitHtml, assetize, fontAlias, checkExternal, chunk, plan, usedFamilies, CHUNK } from "../apps/builtin/deck-edit/bin/deck-push.mjs";
 
 let pass = 0;
@@ -86,6 +92,53 @@ const deck = `<!doctype html><html><head><meta charset="utf-8"><title>덱</title
   ok(v.rows.length === 1 && v.rows[0].kind === "slide" && v.rows[0].slide_id === "s2" && v.rows[0].variant === "2안", "S6c 안(variant)은 고른 장 행만, 머리·꼬리 없이");
   const huge = deck.replace("<p>글</p>", `<p><img src="data:image/png;base64,${"B".repeat(CHUNK + 10)}"></p>`);
   ok(plan(huge).warnings.some((w) => w.includes("한 행 상한")), "S6d 장 하나가 상한을 넘으면 경고");
+}
+
+// ── #4592 앱 화면도 같은 나누기를 쓴다(사람이 폴더의 HTML 을 눌러 바로 올린다) ──
+//  틀렸을 때 나는 일: 앱에서 올린 판과 세션 스크립트가 올린 판이 다르게 나뉜다 → 같은 글꼴이 다른 sha 로 두 번 들거나(자원 중복),
+//   장 경계가 달라 의견이 다른 장에 붙는다. 그래서 ① 두 파일의 블록이 같은 글인지 ② 화면의 sha256 이 node 와 같은 값인지
+//   ③ 화면 쪽 블록을 그대로 돌린 plan() 이 스크립트의 plan() 과 같은지 본다.
+{
+  const here = dirname(fileURLToPath(import.meta.url));
+  const PUSH = readFileSync(join(here, "../apps/builtin/deck-edit/bin/deck-push.mjs"), "utf8");
+  const UI = readFileSync(join(here, "../apps/builtin/deck-edit/ui/index.html"), "utf8");
+  const cutBlock = (src) => { const i = src.indexOf("// ⟦deck-split⟧ —"), j = src.indexOf("// ⟦/deck-split⟧"); return i < 0 || j < 0 ? null : src.slice(src.indexOf("\n", src.indexOf("\n", i) + 1) + 1, src.lastIndexOf("\n", j)); };
+  const pb = cutBlock(PUSH), ub = cutBlock(UI);
+  ok(!!pb && !!ub && pb.length > 4000, "P1a 두 파일에 ⟦deck-split⟧ 블록이 있다");
+  const dedent = (t) => t.split("\n").map((l) => (l.startsWith("  ") ? l.slice(2) : l)).join("\n");
+  ok(dedent(ub) === pb, "P1b ★ 화면(ui/index.html)의 블록 = 스크립트(deck-push.mjs)의 블록 — 들여쓰기 두 칸만 다르다",
+    (() => { const A = dedent(ub || "").split("\n"), B = (pb || "").split("\n"); const k = A.findIndex((l, i) => l !== B[i]); return k < 0 ? `줄 수 ${A.length} vs ${B.length}` : `첫 차이 ${k + 1}번째 줄\n  화면: ${A[k]}\n  스크립트: ${B[k]}`; })());
+  ok(!/<\/script/i.test(ub) && !ub.includes("<!--"), "P1c 블록 안에 스크립트를 닫는 글자열이 없다(HTML 안의 <script> 에 그대로 실린다)");
+  // 화면의 sha256 · byteLen 을 떼어 node 에서 돌린다
+  const shaSrc = UI.slice(UI.indexOf("  var byteLen = function"), UI.indexOf("  // ⟦deck-split⟧ —"));
+  const box = vm.createContext({ TextEncoder, Uint8Array, Int32Array, DataView, Math, String, console });
+  vm.runInContext(shaSrc + "\n" + ub + "\nthis.__api = { sha256: sha256, byteLen: byteLen, plan: plan };", box);
+  const api = box.__api;
+  const node = (x) => createHash("sha256").update(x).digest("hex");
+  const cases = ["", "abc", "한글 문장입니다", "a".repeat(55), "a".repeat(56), "a".repeat(63), "a".repeat(64), "a".repeat(65), "가".repeat(1000), "data:font/woff2;base64," + "Qk1".repeat(400_000), "😀 이모지 𝒳"];
+  const bad = cases.filter((c) => api.sha256(c) !== node(c));
+  ok(bad.length === 0, "P2 ★ 화면의 sha256 이 node 와 같은 값이다(빈 글 · 한글 · 55/56/63/64/65 바이트 경계 · 1.2MB · 이모지)", bad.map((c) => `${c.slice(0, 12)}…(${c.length})`).join(", "));
+  ok(api.byteLen("가a😀") === Buffer.byteLength("가a😀"), "P2b 화면의 byteLen = UTF-8 바이트 수");
+  const a1 = JSON.parse(JSON.stringify(api.plan(deck))), a2 = JSON.parse(JSON.stringify(plan(deck)));
+  ok(JSON.stringify(a1) === JSON.stringify(a2) && a1.rows.length > 2 && a1.assets.length > 0, "P3 ★ 화면에서 돌린 plan() = 스크립트의 plan() (행 · 자원 조각 · sha · 경고 · 별칭까지)");
+}
+
+// ── #4592 받기(deck-pull): 올린 것을 다시 이으면 원본이다 ──
+{
+  const p = plan(deck);
+  const assets = new Map(); for (const r of p.assets) assets.set(r.sha, (assets.get(r.sha) || "") + r.body);
+  ok(assembleHtml(p.rows, assets) === deck, "L1 ★ 올림(plan) → 받음(assembleHtml) = 원본과 글자까지 같다(자원 메움 · 글꼴 별칭 스타일은 뺀다)");
+  ok(p.alias === true && p.rows[0].body.includes('data-deck-edit="alias"') && !assembleHtml(p.rows, assets).includes('data-deck-edit="alias"'), "L1b 시험 덱은 별칭이 걸리는 덱이고, 받은 파일에는 별칭이 없다");
+  const shuffled = p.rows.slice().reverse();
+  ok(assembleHtml(shuffled, assets) === deck, "L2 행 순서가 뒤섞여 와도(seq 로 다시 세운다) 같다");
+  const first = p.rows.find((r) => r.kind === "slide");
+  const alt = { ...first, variant: "2안", body: first.body.replace(/<h[12][^>]*>/, (m) => m + "[2안] ") };
+  ok(alt.body !== first.body, "(전제) 안의 본문이 기본과 다르다");
+  ok(assembleHtml([...p.rows, alt], assets) === deck, "L3 고른 안이 없으면 기본 안으로 잇는다");
+  ok(assembleHtml([...p.rows, alt], assets, { [first.slide_id]: "2안" }).includes("[2안] "), "L4 사람이 고른 안이 있으면 그 안으로 잇는다");
+  ok(assembleHtml([...p.rows, alt], assets, { [first.slide_id]: "없는 안" }) === deck, "L5 고른 안이 그 판에 없으면 기본 안");
+  const some = new Map(); 
+  ok(/__ASSET:[0-9a-f]{64}__/.test(assembleHtml(p.rows, some)), "L6 자원 조각이 없으면 자리표를 남긴다(조용히 빈 글꼴로 바꾸지 않는다 — 스크립트가 세어 경고한다)");
 }
 
 // ── 빨간불 확인: 나누기가 어긋나면 S1d 가 잡는다(변이 1발) ──

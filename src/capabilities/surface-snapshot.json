@@ -4996,6 +4996,26 @@
   "input_hash": "915c12efe88f26fd"
  },
  {
+  "name": "org_app_project_files",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/files"
+  ],
+  "input_hash": "fd5047ae1e36047f"
+ },
+ {
+  "name": "org_app_project_file",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/file"
+  ],
+  "input_hash": "3f0f97da32fb2635"
+ },
+ {
   "name": "org_app_chat_send",
   "scope": null,
   "mcp": false,

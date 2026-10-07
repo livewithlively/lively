@@ -13,22 +13,27 @@
 //    node bin/deck-push.mjs --doc <문서이름> --variant <안 이름> [--slides a,b] <html>   ← 같은 판에 안(variant)을 덧붙인다
 //  토큰·게이트웨이 기본값은 ~/.lively/token · ~/.lively/gateway-url, 세션은 LIVELY_SESSION_ID. 표준 모듈만 쓴다(node 18+).
 //  순수 함수(splitHtml · assetize · fontAlias · checkExternal · chunk · plan)는 export 해 scripts/deck-push.test.mjs 가 시험한다.
+//  같은 함수들을 앱 화면(ui/index.html)도 쓴다 — 사람이 앱에서 폴더의 HTML 을 눌러 바로 올릴 때. 그래서 ⟦deck-split⟧ 블록으로 묶어 두 파일에 같은 글로 둔다.
+//  받는 쪽은 bin/deck-pull.mjs(앱의 최신 판을 HTML 파일로 — 원본이 이 세션에 없을 때).
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const APP_ID = "deck-edit";
-export const CHUNK = 990_000;          // 조각 상한 — 요청 본문 1,048,576B 아래에 JSON 포장 여유를 둔 값
-export const ASSET_MIN = 20_000;       // 이보다 큰 data: URL 만 자원으로 뺀다(작은 아이콘은 그 자리에 둔다)
+export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
+const byteLen = (s) => Buffer.byteLength(s);
+
+// ⟦deck-split⟧ — 이 표식 사이는 ui/index.html 의 같은 표식 사이와 **글자 하나 다르지 않아야** 한다(scripts/deck-push.test.mjs 가 본다).
+//  바깥에서 주는 것: sha256(문자열 → 16진수) · byteLen(문자열 → UTF-8 바이트 수). 여기를 고치면 두 파일을 함께 고친다.
+const CHUNK = 990_000;          // 조각 상한 — 요청 본문 1,048,576B 아래에 JSON 포장 여유를 둔 값
+const ASSET_MIN = 20_000;       // 이보다 큰 data: URL 만 자원으로 뺀다(작은 아이콘은 그 자리에 둔다)
 const GENERIC_FONTS = new Set(["sans-serif", "serif", "monospace", "system-ui", "-apple-system", "blinkmacsystemfont", "ui-monospace",
   "ui-sans-serif", "ui-serif", "apple sd gothic neo", "segoe ui", "roboto", "helvetica", "helvetica neue", "arial", "noto sans kr",
   "malgun gothic", "sfmono-regular", "menlo", "monaco", "consolas", "courier new", "cursive", "fantasy", "inherit", "initial", "unset"]);
 
-export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
-
 /** 문자열을 n 글자 조각으로. 조각은 UTF-16 코드 단위 기준이라 바이트는 그보다 클 수 있다 — data: URL 은 ASCII 라 같다. */
-export function chunk(s, n = CHUNK) {
+function chunk(s, n = CHUNK) {
   const out = [];
   for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n));
   return out.length ? out : [""];
@@ -40,7 +45,7 @@ export function chunk(s, n = CHUNK) {
  *  그 장에 딸려 간다. 그래서 head + slides + tail 을 이으면 원본과 글자 하나 다르지 않다(앱이 한 장만 보일 때는 CSS 로 가린다).
  *  section.page 가 없으면 body 안쪽 전체가 장 하나(slide_id 'doc').
  */
-export function splitHtml(html) {
+function splitHtml(html) {
   const starts = [];
   const re = /<section\b[^>]*>/gi;
   let m;
@@ -94,12 +99,12 @@ function titleOf(html) { const t = /<title>([\s\S]*?)<\/title>/i.exec(html); ret
  * 머리(head) 안의 큰 data: URL 을 자원으로 뺀다. @font-face 블록 안의 것은 글꼴(family · weight 를 기억한다).
  *  반환 head 에는 `__ASSET:<sha>__` 자리표가 들어가고, assets 는 sha 하나당 하나(같은 자원이 두 번 쓰이면 한 번만).
  */
-export function assetize(head, min = ASSET_MIN) {
+function assetize(head, min = ASSET_MIN) {
   const assets = new Map();
   const fonts = [];
   const take = (dataUrl, meta) => {
     const sha = sha256(dataUrl);
-    if (!assets.has(sha)) assets.set(sha, { sha, body: dataUrl, bytes: Buffer.byteLength(dataUrl), mime: mimeOf(dataUrl), ...(meta || {}) });
+    if (!assets.has(sha)) assets.set(sha, { sha, body: dataUrl, bytes: byteLen(dataUrl), mime: mimeOf(dataUrl), ...(meta || {}) });
     return `__ASSET:${sha}__`;
   };
   let out = head.replace(/@font-face\s*\{[^}]*\}/gi, (block) => {
@@ -121,7 +126,7 @@ export function assetize(head, min = ASSET_MIN) {
 function mimeOf(dataUrl) { const m = /^data:([^;,]+)/.exec(dataUrl); return m ? m[1] : "application/octet-stream"; }
 
 /** 문서가 쓰는 글꼴 이름(font-family 선언의 첫 이름 · --font 류 변수값)을 모은다. 일반 이름(sans-serif 등)은 뺀다. */
-export function usedFamilies(html) {
+function usedFamilies(html) {
   const names = new Set();
   const add = (list) => {
     for (const raw of list.split(",")) {
@@ -141,7 +146,7 @@ export function usedFamilies(html) {
  * 별칭 스타일 — @font-face 로 선언되지 않은 채 쓰이는 글꼴 이름을 첫 글꼴 자원에 건다. 글꼴 자원이 없으면 빈 문자열.
  *  (문서가 CDN 의 Pretendard 를 쓰고 파일 안엔 Pretendard Variable 만 있을 때, 앱 안에서 Pretendard 가 비는 것을 막는다.)
  */
-export function fontAlias(html, fonts) {
+function fontAlias(html, fonts) {
   if (!fonts.length) return "";
   const declared = new Set(fonts.map((f) => f.family.toLowerCase()).filter(Boolean));
   const first = fonts[0];
@@ -153,7 +158,7 @@ export function fontAlias(html, fonts) {
 }
 
 /** 앱 안에서 막힐 외부 참조 — 경고용. 같은 주소는 한 번만(먼저 잡힌 종류로). */
-export function checkExternal(html) {
+function checkExternal(html) {
   const out = [];
   const seen = new Set();
   const push = (kind, url) => { if (seen.has(url)) return; seen.add(url); out.push({ kind, url }); };
@@ -169,7 +174,7 @@ export function checkExternal(html) {
  *  rows: versions 표 행(kind head|slide|tail · seq · slide_id · variant · body · summary) — 자리표가 든 머리, 장들, 꼬리.
  *  assets: assets 표 행(sha · seq · body · bytes · mime) — 조각으로 나눈 것.
  */
-export function plan(html, opts = {}) {
+function plan(html, opts = {}) {
   const variant = String(opts.variant || "");
   const only = opts.slides ? new Set(String(opts.slides).split(",").map((s) => s.trim()).filter(Boolean)) : null;
   const sp = splitHtml(html);
@@ -184,11 +189,14 @@ export function plan(html, opts = {}) {
   });
   if (!variant) rows.push({ kind: "tail", seq: sp.slides.length + 1, slide_id: "", variant: "", body: sp.tail, summary: "" });
   const assetRows = [];
-  for (const a of assets) chunk(a.body).forEach((part, i) => assetRows.push({ sha: a.sha, seq: i, body: part, bytes: Buffer.byteLength(part), mime: a.mime }));
+  for (const a of assets) chunk(a.body).forEach((part, i) => assetRows.push({ sha: a.sha, seq: i, body: part, bytes: byteLen(part), mime: a.mime }));
   const warnings = checkExternal(html).map((e) => `외부 참조 ${e.kind} ${e.url} — 앱 안에서는 막힙니다(네트워크 0). 파일 안에 넣어 두세요.`);
-  const big = rows.filter((r) => Buffer.byteLength(r.body) > CHUNK).map((r) => `${r.kind} ${r.slide_id || r.seq} 가 ${Buffer.byteLength(r.body)}B 로 한 행 상한(${CHUNK}B)을 넘습니다 — 장 안의 큰 data: 그림을 파일 밖으로 빼거나 장을 나누세요.`);
+  const big = rows.filter((r) => byteLen(r.body) > CHUNK).map((r) => `${r.kind} ${r.slide_id || r.seq} 가 ${byteLen(r.body)}B 로 한 행 상한(${CHUNK}B)을 넘습니다 — 장 안의 큰 data: 그림을 파일 밖으로 빼거나 장을 나누세요.`);
   return { mode: sp.mode, rows, assets: assetRows, warnings: warnings.concat(big), slides: sp.slides.map((s) => ({ slide_id: s.slide_id, no: s.no, summary: s.summary })), fonts, alias: !!alias };
 }
+// ⟦/deck-split⟧
+
+export { CHUNK, ASSET_MIN, chunk, splitHtml, assetize, usedFamilies, fontAlias, checkExternal, plan };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {

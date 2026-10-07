@@ -68,6 +68,28 @@ export interface LivelyApp {
      *  설정 값 자체는 lively.prefs 에 두면 다른 기기에서 열어도 그대로다.
      */
     onPrefsOpen(cb: () => void): () => void;
+    /**
+     * 호스트가 이 화면의 가장자리를 가리는 폭(px) — 지금은 세션 사이드바 아래의 독이 바닥을 가릴 때 bottom 이 선다(#4592).
+     *  같은 값이 CSS 변수 `--lively-inset-top` · `-right` · `-bottom` · `-left` 로도 심긴다. 바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면
+     *  가려지지 않는다: `padding-bottom: calc(12px + var(--lively-inset-bottom, 0px))`. 호스트가 알린 적이 없으면 전부 0.
+     */
+    insets: { top: number; right: number; bottom: number; left: number };
+    /** 가려진 폭이 바뀌었다(독을 옮겼다 · 크기를 바꿨다). 돌려주는 함수를 부르면 끊는다. CSS 변수만 쓰면 구독하지 않아도 된다. */
+    onInsets(cb: (i: { top: number; right: number; bottom: number; left: number }) => void): () => void;
+  };
+
+  /**
+   * 이 화면이 붙은 세션의 **프로젝트 자료**(사이드바 「자료」 — 프로젝트 공유 폴더)에서 파일 읽기(#4592). 읽기뿐이다(쓰기는 앱 표 store_* 로).
+   *  · 매니페스트에 읽을 확장자를 선언한다: `permissions.project_files: ["html"]`(점 없이 소문자 · 동의 창에 「프로젝트 자료 읽기」로 보인다).
+   *  · 세션에 붙어 열린 화면에서만 된다(lively.session 이 있을 때). 붙은 세션이 없으면 reject(code -32602).
+   *  · 세션이 프로젝트에 속해 있지 않거나 그 사람이 그 프로젝트를 볼 수 없으면 빈 목록 — 오류가 아니다.
+   *  · 숨김 파일(점으로 시작)과 git 레포 폴더 안은 목록에 없다.
+   */
+  files: {
+    /** 선언한 확장자의 파일들, **최신순**. ext 로 선언한 것 가운데 고르고(생략 = 전부), limit 기본 200 · 최대 500. */
+    list(opts?: { ext?: string[]; limit?: number }): Promise<{ project_id: number | null; files: Array<{ path: string; name: string; size: number; mtime: string }>; truncated: boolean }>;
+    /** 한 파일의 글 내용(UTF-8). path 는 list 가 준 상대경로. 선언하지 않은 확장자는 reject(-32001), 8MB 초과 · 없는 파일도 reject. */
+    read(path: string): Promise<{ path: string; content: string; size: number; mtime: string }>;
   };
 
   /** 이 화면이 붙은 세션과 말하기(#4594). 세션 오른쪽 앱 칸에서 열렸을 때만(lively.session 이 있을 때) 된다. */
