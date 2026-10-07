@@ -10,7 +10,7 @@ import type { SessionAppRow } from "./session-apps.js";
 
 const app = (id: string, over: Partial<OrgApp> = {}): OrgApp => ({
   id, title: "장표 수정", version: "1.0.0", manifest: {}, source: { kind: "builtin" }, content_hash: null,
-  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [], ...over,
+  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, ...over,
 });
 const grant: AppGrantRow = { app_id: "deck-edit", member_id: "alice", scopes: [], tools: ["store_*"], granted_at: "", granted_by: null, revoked_at: null };
 const row = (appId: string): SessionAppRow => ({ session_id: "box-a", app_id: appId, member_id: "alice", attached_at: "" });
