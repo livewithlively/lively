@@ -209,6 +209,15 @@ export function sessAppPart(ctx: PartCtx): Part {
     insetObs = new MutationObserver(pushInsets);
     insetObs.observe(p, { attributes: true, attributeFilter: ['style'] });
   };
+  //  #4592 앱이 호스트 머리줄을 접어 달라고 했나(lively.ui.chrome {head:false}) — 제 머리줄이 있는 앱이 두 줄이 되지 않게. 접으면 ⋯ 메뉴는
+  //   앱이 lively.ui.openMenu 로 대신 연다(아래 openMenu 의 extra). 새 문서가 인사하면(다시 불러옴) 잠깐 기다렸다가 — 그 문서가 다시 청하지
+  //   않으면 — 머리줄을 되돌린다(앱이 새 판에서 제 ⋯ 를 없앴는데 호스트 메뉴까지 사라지는 일이 없게).
+  let headless = false, headT = 0;
+  const onChrome = (c: { head: boolean; init?: boolean }): void => {
+    if (headT) { window.clearTimeout(headT); headT = 0; }
+    if (c.init) { if (headless) headT = window.setTimeout(() => { headT = 0; headless = false; paintHead(current()); }, 700); return; }
+    headless = !c.head; paintHead(current());
+  };
   const unmount = (): void => {
     mountSeq++;
     if (reloadTimer) { window.clearTimeout(reloadTimer); reloadTimer = 0; }
@@ -244,7 +253,8 @@ export function sessAppPart(ctx: PartCtx): Part {
     }
     body.replaceChildren(el('p', { class: 'pn-fine pn-sessapp-wait', text: '앱을 여는 중…' }));
     try {
-      const frame = await mountAppUiFrame(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key });
+      const frame = await mountAppUiFrame(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key, onChrome,
+        onMenu: (req) => new Promise<string | null>((done) => { const now = current(); if (!now || now.app_id !== cur.app_id) { done(null); return; } openMenu(now, req.x, req.y, { extra: req.items, done }); }) });
       if (ctx.dead() || mine !== mountSeq) { frame.destroy(); return; }
       mounted = { sid: s, appId: cur.app_id, frame };
       body.replaceChildren(frame.root);
@@ -263,9 +273,11 @@ export function sessAppPart(ctx: PartCtx): Part {
     mounted?.frame?.reload();
   };
 
-  function openMenu(cur: AttachedApp, x: number, y: number): void {
+  function openMenu(cur: AttachedApp, x: number, y: number, o?: { extra: Array<{ id: string; label: string }>; done: (picked: string | null) => void }): void {
     const s = sid;
-    if (!s) return;
+    if (!s) { o?.done(null); return; }
+    let answered = false;
+    const answer = (v: string | null): void => { if (!answered) { answered = true; o?.done(v); } };
     const frame = mounted && mounted.appId === cur.app_id ? mounted.frame : null;
     //  표시 설정은 앱이 **받겠다고 구독**했을 때만(SDK lively.ui.onPrefsOpen → ui/subscribe {topic:'prefs-open'}). 안 했으면 보내 봐야 받을 곳이 없다.
     const hasPrefs = !!frame && frame.subscribed('prefs-open');
@@ -277,11 +289,16 @@ export function sessAppPart(ctx: PartCtx): Part {
       big: () => { void openAppUi(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },
       detach: () => { void detachAppFromSession(s, cur.app_id).then((ok) => { if (ok) toast(`「${cur.title}」을(를) 이 세션에서 뗐어요 — 앱의 데이터는 그대로 남아요.`); }); },
     });
-    ctxMenu(x, y, rows, { title: cur.title, sub: cur.version_no ? `${cur.version_no}판 · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220 });
+    //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.
+    const extra = (o?.extra ?? []).map((it) => ({ label: it.label, run: () => answer(it.id) }));
+    const all = extra.length ? [...extra, { label: '', sep: true }, ...rows] : rows;
+    ctxMenu(x, y, all, { title: cur.title, sub: cur.version_no ? `${cur.version_no}판 · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220,
+      //  메뉴 엔진은 줄을 누르면 «닫고 나서» 그 줄의 일을 한다 — 닫힘에서 곧바로 null 을 돌려주면 고른 것이 묻힌다. 한 박자 늦춰 고른 것이 먼저 가게 한다.
+      onClose: () => { window.setTimeout(() => answer(null), 60); } });
   }
 
   function paintHead(cur: AttachedApp | null): void {
-    head.hidden = !cur;
+    head.hidden = !cur || headless;
     if (!cur) { head.replaceChildren(); return; }
     const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 판 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
       onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openMenu(cur, r.right, r.bottom + 4); } }, pnIcon('more', 'pn-i sm'));
@@ -380,7 +397,7 @@ export function sessAppPart(ctx: PartCtx): Part {
 
   return {
     root,
-    destroy: () => { off?.(); off = null; offLive(); offSess(); ctx.paneRoot().removeEventListener(SHOW_SESSAPP_EVT, onShow); if (bandTimer) window.clearTimeout(bandTimer); insetObs?.disconnect(); insetObs = null; unmount(); },
+    destroy: () => { off?.(); off = null; offLive(); offSess(); ctx.paneRoot().removeEventListener(SHOW_SESSAPP_EVT, onShow); if (bandTimer) window.clearTimeout(bandTimer); if (headT) window.clearTimeout(headT); insetObs?.disconnect(); insetObs = null; unmount(); },
     onTabClose: () => {
       const s = sid, cur = current();
       if (!s || !cur) return;

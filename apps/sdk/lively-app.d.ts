@@ -19,7 +19,7 @@ export interface LivelyApp {
   /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
   readonly session: string | null;
   /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean } }>;
+  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean } }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -68,6 +68,18 @@ export interface LivelyApp {
      *  설정 값 자체는 lively.prefs 에 두면 다른 기기에서 열어도 그대로다.
      */
     onPrefsOpen(cb: () => void): () => void;
+    /**
+     * 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접거나(`{ head: false }`) 다시 편다(#4592). 제 머리줄이 있는 앱이 두 줄이 되지 않게.
+     *  접으면 그 ⋯ 메뉴(고치기 · 판 이력 · 크게 보기 · 떼기)에 닿을 길이 앱 쪽에 있어야 한다 — 아래 openMenu 로 앱의 ⋯ 가 대신 연다.
+     *  인사(`await lively.ready`)의 `capabilities.chrome` 이 true 인 자리(세션의 앱 칸)에서만 먹는다. 새 문서(다시 불러옴)는 다시 청해야 한다.
+     */
+    chrome(opts: { head: boolean }): Promise<{ ok: boolean }>;
+    /**
+     * 호스트의 앱 메뉴를 그 자리(이 화면 기준 x · y)에 연다. items 는 그 메뉴 맨 위에 서는 앱의 항목(글자뿐 · 12개까지 · 라벨 60자).
+     *  사람이 앱의 항목을 고르면 `{ picked: id }`, 호스트의 것을 고르거나 닫으면 `{ picked: null }`.
+     *  인사의 `capabilities.menu` 가 false 인 자리(앱 찾기에서 연 화면 · 크게 보기)에서는 reject(code -32601) — 앱이 제 메뉴를 낸다.
+     */
+    openMenu(items: Array<{ id: string; label: string }>, at: { x: number; y: number }): Promise<{ picked: string | null }>;
     /**
      * 호스트가 이 화면의 가장자리를 가리는 폭(px) — 지금은 세션 사이드바 아래의 독이 바닥을 가릴 때 bottom 이 선다(#4592).
      *  같은 값이 CSS 변수 `--lively-inset-top` · `-right` · `-bottom` · `-left` 로도 심긴다. 바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면

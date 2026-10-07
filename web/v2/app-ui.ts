@@ -76,7 +76,16 @@ export interface AppInsets { top: number; right: number; bottom: number; left: n
  * 앱 UI 를 샌드박스 iframe 으로 만들어 **프레임 + 정리 함수**를 돌려준다(호출부가 원하는 자리에 붙인다).
  *  브리지(postMessage)는 이 프레임에만 반응하는 핸들러로 걸리고 destroy() 가 떼어 낸다 — 여러 앱 UI 공존 안전.
  */
-export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string; instanceId?: string; sessionId?: string }): Promise<AppUiFrame> {
+/** 앱이 호스트에 메뉴를 열어 달라고 했다 — items 는 앱의 항목(맨 위에 선다), x · y 는 **이 창** 기준 자리. 고른 앱 항목의 id 또는 null. */
+export interface AppMenuRequest { items: Array<{ id: string; label: string }>; x: number; y: number }
+export interface AppUiMountOpts {
+  page?: string; title?: string; instanceId?: string; sessionId?: string;
+  /** 앱이 호스트의 머리줄을 접거나 펴 달라고 했다(lively.ui.chrome). init = 새 문서가 막 인사했다(아직 아무것도 청하지 않았다). 없으면 그 능력이 없는 자리다. */
+  onChrome?: (c: { head: boolean; init?: boolean }) => void;
+  /** 앱이 호스트 메뉴를 열어 달라고 했다(lively.ui.openMenu). 없으면 못 여는 자리(인사의 capabilities.menu = false · 부르면 -32601). */
+  onMenu?: (req: AppMenuRequest) => Promise<string | null>;
+}
+export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
@@ -111,7 +120,8 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome } } });
+      opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
       if (insets.top || insets.right || insets.bottom || insets.left) sendInsets();
     } else if (msg.method === 'tools/call') {
@@ -161,6 +171,24 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
           }
           reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
         });
+    } else if (msg.method === 'ui/chrome') {
+      // #4592 — 제 머리줄이 있는 앱이 호스트의 앱 머리줄(이름 · 판 · ⋯)을 접어 달라고 한다. 그 줄을 그리는 쪽(세션의 앱 칸)만 받는다.
+      const headOn = (msg.params as { head?: unknown } | undefined)?.head !== false;
+      if (opts?.onChrome) opts.onChrome({ head: headOn });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { ok: !!opts?.onChrome } });
+    } else if (msg.method === 'ui/menu') {
+      // #4592 — 앱의 ⋯ 가 호스트의 앱 메뉴를 연다(앱의 항목이 맨 위). 자리는 프레임 안의 좌표로 오고, 여기서 이 창의 좌표로 옮긴다.
+      //  항목은 글자뿐이다(라벨 60자 · 12개까지) — 앱이 호스트 메뉴에 그림 · 마크업을 넣을 길이 없다. 고른 것은 id 만 돌려준다.
+      if (!opts?.onMenu) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: '이 화면에서는 호스트 메뉴를 열 수 없습니다' } }); return; }
+      const mp = (msg.params ?? {}) as { items?: unknown; x?: unknown; y?: unknown };
+      const items = (Array.isArray(mp.items) ? mp.items : []).slice(0, 12)
+        .map((it) => ({ id: String((it as { id?: unknown })?.id ?? '').slice(0, 40), label: String((it as { label?: unknown })?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) }))
+        .filter((it) => it.id && it.label);
+      const r = frame.getBoundingClientRect();
+      const num = (v: unknown, max: number): number => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : 0; };
+      void opts.onMenu({ items, x: r.left + num(mp.x, r.width), y: r.top + num(mp.y, r.height) })
+        .then((picked) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { picked: picked && items.some((it) => it.id === picked) ? picked : null } }))
+        .catch(() => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { picked: null } }));
     } else if (msg.method === 'files/list' || msg.method === 'files/read') {
       // #4592 — 앱 화면이 **붙은 세션의 프로젝트 자료**에서 파일 목록 · 내용을 읽는다(읽기만). 서버가 선언 · 동의 · 주인 · 붙음 · 프로젝트 가시성을 다시 본다.
       //  ★ 세션은 이 프레임을 띄운 쪽(opts)이 안다 — chat/send 와 같은 까닭(앱이 말한 세션 id 를 믿으면 남의 세션 프로젝트를 읽는 통로가 된다).

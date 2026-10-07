@@ -24,6 +24,11 @@
 //    await lively.files.list({ ext:['html'], limit:200 }) → { project_id, files:[{ path, name, size, mtime }], truncated }
 //    await lively.files.read(path)           → { path, content, size, mtime }   (#4592 — 붙은 세션의 **프로젝트 자료**에서 읽기만.
 //                                                매니페스트 permissions.project_files 에 선언한 확장자만 · 8MB 까지 · 붙은 세션이 없으면 -32602)
+//    await lively.ui.chrome({ head:false })  → 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접어 달라고 한다(#4592 — 제 머리줄이 있는 앱이
+//                                                두 줄이 되지 않게). 접으면 그 ⋯ 메뉴는 아래 openMenu 로 앱이 대신 연다. { ok } — 못 접는 자리면 false.
+//    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
+//                                                [{ id, label }] 는 그 메뉴 맨 위에 선다 — 사람이 그걸 고르면 { picked: id }, 호스트 것을 고르거나
+//                                                닫으면 { picked: null }. 못 여는 자리(인사의 capabilities.menu 가 false)면 reject(-32601).
 //    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
 //                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
 //                                                바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면 가려지지 않는다.
@@ -107,6 +112,8 @@ export const APP_RUNTIME_JS = `
     ui: {
       openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
       onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
+      chrome: function (opts) { return post('ui/chrome', { head: !(opts && opts.head === false) }); },
+      openMenu: function (items, at) { return post('ui/menu', { items: items || [], x: at && at.x, y: at && at.y }); },
       insets: { top: 0, right: 0, bottom: 0, left: 0 },
       onInsets: function (cb) { return subscribe('insets', cb); }
     },
