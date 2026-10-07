@@ -188,6 +188,27 @@ export function sessAppPart(ctx: PartCtx): Part {
   let reloadTimer = 0;
   let off: (() => void) | null = null;
 
+  //  #4592 곁칸 아래 독이 이 칸의 바닥을 가리는 폭 — 독이 곁칸(section.pn-pane)에 --pn-dock-* 로 적는다(pane-dock applyInset).
+  //   다른 부품은 CSS 가 스크롤 끝에 빈 자리를 두어 비키지만(42-v2-panes), 앱은 샌드박스 프레임이라 그 변수가 안 넘어간다 → 프레임에 알린다.
+  //   앱은 바닥 막대와 스크롤 끝을 그만큼 올린다(화면은 독 유리 밑까지 흐른다 — 10-02 «액자는 독이 그 위에 뜬다» 를 지키면서 단추만 안 가린다).
+  const paneEl = (): HTMLElement | null => root.closest('.pn-pane') as HTMLElement | null;
+  const readInsets = (): { top: number; right: number; bottom: number; left: number } => {
+    const p = paneEl(); const z = { top: 0, right: 0, bottom: 0, left: 0 };
+    if (!p) return z;
+    const cs = getComputedStyle(p); const px = (k: string): number => parseFloat(cs.getPropertyValue(k)) || 0;
+    return { top: px('--pn-dock-t'), right: px('--pn-dock-r'), bottom: px('--pn-dock-b'), left: px('--pn-dock-l') };
+  };
+  const pushInsets = (): void => { mounted?.frame?.setInsets(readInsets()); };
+  let insetObs: MutationObserver | null = null;
+  let insetOn: HTMLElement | null = null;
+  const watchInsets = (): void => {
+    const p = paneEl();
+    if (p === insetOn) return;                      // 같은 칸이면 그대로(탭을 다른 칸으로 옮기면 다시 건다)
+    insetObs?.disconnect(); insetObs = null; insetOn = p;
+    if (!p || typeof MutationObserver === 'undefined') return;
+    insetObs = new MutationObserver(pushInsets);
+    insetObs.observe(p, { attributes: true, attributeFilter: ['style'] });
+  };
   const unmount = (): void => {
     mountSeq++;
     if (reloadTimer) { window.clearTimeout(reloadTimer); reloadTimer = 0; }
@@ -227,6 +248,7 @@ export function sessAppPart(ctx: PartCtx): Part {
       if (ctx.dead() || mine !== mountSeq) { frame.destroy(); return; }
       mounted = { sid: s, appId: cur.app_id, frame };
       body.replaceChildren(frame.root);
+      watchInsets(); pushInsets();
     } catch (e: any) {
       if (mine !== mountSeq) return;
       mounted = null;
@@ -358,7 +380,7 @@ export function sessAppPart(ctx: PartCtx): Part {
 
   return {
     root,
-    destroy: () => { off?.(); off = null; offLive(); offSess(); ctx.paneRoot().removeEventListener(SHOW_SESSAPP_EVT, onShow); if (bandTimer) window.clearTimeout(bandTimer); unmount(); },
+    destroy: () => { off?.(); off = null; offLive(); offSess(); ctx.paneRoot().removeEventListener(SHOW_SESSAPP_EVT, onShow); if (bandTimer) window.clearTimeout(bandTimer); insetObs?.disconnect(); insetObs = null; unmount(); },
     onTabClose: () => {
       const s = sid, cur = current();
       if (!s || !cur) return;

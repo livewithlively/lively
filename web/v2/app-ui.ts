@@ -67,7 +67,10 @@ export interface AppUiFrame {
   subscribed(topic: string): boolean;
   /** 같은 HTML 로 앱 화면을 처음부터 다시 띄운다 — 구독하지 않은 앱에 «최신을 보여 주는» 가장 단순한 길. */
   reload(): void;
+  /** 이 프레임의 가장자리를 호스트가 가리는 폭(px)을 앱에 알린다(#4592 — 곁칸의 독). 다시 불러온 새 문서에도 처음에 한 번 다시 알린다. */
+  setInsets(i: AppInsets): void;
 }
+export interface AppInsets { top: number; right: number; bottom: number; left: number }
 
 /**
  * 앱 UI 를 샌드박스 iframe 으로 만들어 **프레임 + 정리 함수**를 돌려준다(호출부가 원하는 자리에 붙인다).
@@ -84,6 +87,8 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     srcdoc: doc,
   }) as HTMLIFrameElement;
   const topics = new Set<string>();   // 앱이 구독한 주제(ui/subscribe) — 다시 불러오면 비운다(새 문서가 다시 구독한다)
+  let insets: AppInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+  const sendInsets = (): void => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/insets', params: insets }, '*'); };
   let loads = 0;
 
   // 브리지 — 이 프레임(불투명 오리진)에서 온 메시지만. 응답 target 은 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
@@ -107,6 +112,8 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     }
     if (msg.method === 'ui/initialize') {
       reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true } } });
+      //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
+      if (insets.top || insets.right || insets.bottom || insets.left) sendInsets();
     } else if (msg.method === 'tools/call') {
       const name = String(msg.params?.name ?? '');
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
@@ -154,6 +161,28 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
           }
           reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
         });
+    } else if (msg.method === 'files/list' || msg.method === 'files/read') {
+      // #4592 — 앱 화면이 **붙은 세션의 프로젝트 자료**에서 파일 목록 · 내용을 읽는다(읽기만). 서버가 선언 · 동의 · 주인 · 붙음 · 프로젝트 가시성을 다시 본다.
+      //  ★ 세션은 이 프레임을 띄운 쪽(opts)이 안다 — chat/send 와 같은 까닭(앱이 말한 세션 id 를 믿으면 남의 세션 프로젝트를 읽는 통로가 된다).
+      const sid = opts?.sessionId ?? '';
+      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다' } }); return; }
+      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown };
+      const qs = new URLSearchParams({ session_id: sid });
+      const list = msg.method === 'files/list';
+      if (list) {
+        const ext = (Array.isArray(p.ext) ? p.ext : (p.ext == null ? [] : [p.ext])).map((x) => String(x)).filter(Boolean);
+        if (ext.length) qs.set('ext', ext.join(','));
+        if (p.limit != null && Number.isFinite(Number(p.limit))) qs.set('limit', String(Math.round(Number(p.limit))));
+      } else qs.set('path', String(p.path ?? ''));
+      const read = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + (list ? '/files?' : '/file?') + qs.toString());
+      void read()
+        .catch(async (e: any) => {
+          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // «그 자리에서 동의» — 앱이 갱신돼 이 권한을 새로 얻었을 때도
+          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          return read();
+        })
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
     } else if (msg.method === 'prefs/get' || msg.method === 'prefs/set') {
       // #4601 — 앱 × 보는 사람의 개인 설정. 샌드박스 화면은 localStorage 가 없고(불투명 오리진) SDK 에 신원이 없어 서버가 든다.
       //  동의와 무관하다(설정은 라이블리 데이터가 아니라 그 사람이 앱을 보는 방식) — 그래서 tools/call 이 아니라 별도 경로.
@@ -185,6 +214,12 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
     //  WindowProxy 는 같은 프레임이면 그대로라 브리지(ev.source 비교)는 새 문서에도 그대로 맞는다.
     reload: () => { topics.clear(); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+    setInsets: (i) => {
+      const n = (v: number): number => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+      const next = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };
+      if (next.top === insets.top && next.right === insets.right && next.bottom === insets.bottom && next.left === insets.left) return;
+      insets = next; sendInsets();
+    },
   };
 }
 

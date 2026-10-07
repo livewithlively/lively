@@ -29,6 +29,7 @@ import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
 import { sessionAppsCapabilities } from "./session-apps.js";
 import { appChatSendCapabilities } from "./app-chat-send.js";
+import { appProjectFilesCapabilities } from "./app-project-files.js";
 import { appPrefsCapabilities } from "./app-prefs.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
@@ -150,6 +151,7 @@ const all: Capability[] = [
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
   ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
   ...sessionAppsCapabilities, // #4225 세션에 앱 붙이기·떼기 — 붙어 있는 동안 그 세션의 AI 가 그 앱 테이블을 store_* 로 쓴다.
+  ...appProjectFilesCapabilities, // #4592 붙은 앱 화면이 그 세션 프로젝트의 자료에서 파일 목록 · 내용을 읽는다(org_app_project_files · org_app_project_file, REST 전용 · 읽기만).
   ...appChatSendCapabilities, // #4594 붙은 앱 화면이 그 세션에 글을 바로 보낸다(org_app_chat_send, REST 전용) — 서버가 「(앱 「제목」에서 보냄)」 표식을 붙인다.
   ...appPrefsCapabilities, // #4601 앱 × 보는 사람 개인 설정(app_prefs_get/set, REST 전용) — 샌드박스 앱 화면은 localStorage 가 없고 SDK 에 신원이 없어 서버가 든다.
 ];

@@ -45,6 +45,8 @@ export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "
 export const NOTIFY_TOOL = "app_notify";
 /** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
 export const CHAT_SEND_TOOL = "app_chat_send";
+/** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
+export const PROJECT_FILES_TOOL = "app_project_files";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -79,6 +81,10 @@ const permissionsSchema = z.object({
   // #4594 — 이 앱 화면이 **붙은 세션에 글을 바로 보낼** 수 있나(lively.chat.send). 기본 false(fail-closed). 그 사람의 AI 세션에 말이
   //  들어가는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_chat_send 가 있어야 한다(apps/app-chat-send.ts).
   chat_send: z.boolean().default(false),
+  // #4592 — 이 앱 화면이 **붙은 세션의 프로젝트 자료(공유 폴더)** 에서 읽을 수 있는 파일 확장자(점 없이 · 소문자). 빈 배열 = 못 읽는다(fail-closed).
+  //  목록(최신순)과 내용 읽기뿐이고 쓰기는 없다(lively.files.list / .read). 그 사람이 볼 수 있는 프로젝트의 파일이 앱으로 들어오는 능력이라
+  //  동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_project_files 가 있어야 한다(apps/app-project-files.ts).
+  project_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -268,6 +274,10 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   // #4594 — `chat_send: true` 는 `app_chat_send` 도구를 함의한다(알림과 같은 규약 — 사람에게 보이는 권한은 「세션에 글 보내기」, 도구 이름은 배관).
   if (m.permissions.chat_send && !m.permissions.tools.includes(CHAT_SEND_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, CHAT_SEND_TOOL];
+  }
+  // #4592 — `project_files: ["html"]` 은 `app_project_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「프로젝트 자료에서 파일 읽기」).
+  if (m.permissions.project_files.length && !m.permissions.tools.includes(PROJECT_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, PROJECT_FILES_TOOL];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

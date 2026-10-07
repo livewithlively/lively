@@ -101,6 +101,54 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   eq(data, 1, "S2-4b data-changed 는 종전대로");
 }
 
+// ══ S2-10 files.list / files.read — 붙은 세션의 프로젝트 자료(#4592) ══
+{
+  const { lively, posted, deliver } = boot();
+  ok(lively.files && typeof lively.files.list === "function" && typeof lively.files.read === "function", "S2-10 lively.files.list/read 가 있다");
+  const pl = lively.files.list({ ext: ["html", "htm"], limit: 50, session_id: "box-victim" });
+  const rl = posted.find((m) => m.method === "files/list");
+  eq(rl.params, { ext: ["html", "htm"], limit: 50 }, "S2-10 list 는 ext · limit 만 보낸다(앱이 세션을 말할 자리가 없다)");
+  const out = { project_id: 4577, files: [{ path: "out/덱.html", name: "덱.html", size: 10, mtime: "2026-10-07T00:00:00.000Z" }], truncated: false };
+  deliver({ jsonrpc: "2.0", id: rl.id, result: out });
+  eq(await pl, out, "S2-10 list 는 서버의 답 그대로");
+  const p0 = lively.files.list();
+  eq(posted.filter((m) => m.method === "files/list")[1].params, {}, "S2-10 인자 없이 불러도 된다");
+  deliver({ jsonrpc: "2.0", id: posted.filter((m) => m.method === "files/list")[1].id, result: { project_id: null, files: [], truncated: false } });
+  eq((await p0).files, [], "S2-10 프로젝트 없는 세션은 빈 목록");
+  const pr = lively.files.read("out/덱.html");
+  const rr = posted.find((m) => m.method === "files/read");
+  eq(rr.params, { path: "out/덱.html" }, "S2-10 read 는 path 만");
+  deliver({ jsonrpc: "2.0", id: rr.id, error: { code: -32001, message: "이 앱은 .json 파일을 읽을 수 없습니다" } });
+  let caught = null; try { await pr; } catch (e) { caught = e; }
+  ok(caught instanceof Error && caught.code === -32001, "S2-10 서버가 거부하면 code 와 함께 reject");
+}
+
+// ══ S2-11 insets — 호스트가 가리는 가장자리(#4592 곁칸의 독) ══
+{
+  const posted = []; const listeners = { message: [] }; const vars = {};
+  const win = { addEventListener: (type, fn) => { (listeners[type] || (listeners[type] = [])).push(fn); } };
+  const doc = { documentElement: { style: { setProperty: (k, v) => { vars[k] = v; } } } };
+  const ctx = vm.createContext({ window: win, document: doc, parent: { postMessage: (m) => posted.push(m) }, setTimeout, Promise, Error, Object, String });
+  vm.runInContext(runtimeSource(), ctx);
+  const lively = win.lively; const deliver = (data) => { for (const fn of listeners.message) fn({ data }); };
+  eq(lively.ui.insets, { top: 0, right: 0, bottom: 0, left: 0 }, "S2-11 알린 적이 없으면 전부 0");
+  const got = []; const off = lively.ui.onInsets((i) => got.push(i));
+  deliver({ jsonrpc: "2.0", method: "ui/notifications/insets", params: { top: 0, right: 0, bottom: 70.4, left: 0 } });
+  await tick();
+  eq(lively.ui.insets, { top: 0, right: 0, bottom: 70, left: 0 }, "S2-11 알림이 오면 lively.ui.insets 가 바뀐다(정수 px)");
+  eq(vars, { "--lively-inset-top": "0px", "--lively-inset-right": "0px", "--lively-inset-bottom": "70px", "--lively-inset-left": "0px" }, "S2-11 ★ 같은 값이 CSS 변수로 심긴다 — 앱은 CSS 만으로 비킨다");
+  eq(got, [{ top: 0, right: 0, bottom: 70, left: 0 }], "S2-11 onInsets 콜백");
+  deliver({ jsonrpc: "2.0", method: "ui/notifications/insets", params: { bottom: -5, left: "x", top: null } });
+  await tick();
+  eq([lively.ui.insets, vars["--lively-inset-bottom"]], [{ top: 0, right: 0, bottom: 0, left: 0 }, "0px"], "S2-11 음수 · 숫자 아닌 값 · 빠진 값은 0");
+  off(); deliver({ jsonrpc: "2.0", method: "ui/notifications/insets", params: { bottom: 10 } }); await tick();
+  eq([got.length, vars["--lively-inset-bottom"]], [2, "10px"], "S2-11 구독을 끊어도 변수는 계속 맞춘다");
+  // document 가 없는 자리(옛 시험 vm)에서도 넘어지지 않는다
+  const { lively: l2, deliver: d2 } = boot();
+  d2({ jsonrpc: "2.0", method: "ui/notifications/insets", params: { bottom: 8 } }); await tick();
+  eq(l2.ui.insets.bottom, 8, "S2-11b 문서가 없어도 값은 선다");
+}
+
 // ══ S2-5 이름이 양쪽에서 같다(소스) · d.ts · 403 동의 재시도가 그 분기 안에 있다 ══
 {
   const host = read("web/v2/app-ui.ts");
@@ -119,6 +167,14 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(/chat_send: z\.boolean\(\)\.default\(false\)/.test(manifest) && /CHAT_SEND_TOOL = "app_chat_send"/.test(manifest), "S2-5 매니페스트 permissions.chat_send(기본 false) → app_chat_send");
   const consent = read("web/v2/app-session.ts");
   ok(/chatSend: perm\.chat_send === true/.test(consent) && /세션에 글 보내기/.test(consent), "S2-5 동의 창에 「세션에 글 보내기」 줄이 선다");
+  // #4592 — 프로젝트 자료 읽기 · 가려진 가장자리
+  const fbranch = (host.split("msg.method === 'files/list' || msg.method === 'files/read'")[1] || "").split("msg.method === 'prefs/get'")[0];
+  ok(fbranch.length > 0 && /\/files\?/.test(fbranch) && /\/file\?/.test(fbranch) && /session_id: sid/.test(fbranch) && !/params[^;]*session/.test(fbranch.replace(/session_id: sid/g, "")),
+    "S2-5b files/* 는 /api/ui/apps/:id/files · /file 로, 세션은 opts 의 sid 로만 간다");
+  ok(/ensureAppGrant\(appId/.test(fbranch) && /동의\|grant/.test(fbranch), "S2-5b 403 「동의」 면 그 자리에서 동의 창 → 1회 재시도(앱이 갱신돼 권한을 새로 얻었을 때)");
+  ok(/files:\s*\{[\s\S]*list\(opts\?:[\s\S]*read\(path: string\)/.test(dts) && /insets: \{ top: number/.test(dts) && /onInsets\(/.test(dts), "S2-5b d.ts 에 files.list/read · ui.insets · ui.onInsets");
+  ok(/project_files: z\.array\(/.test(manifest) && /PROJECT_FILES_TOOL = "app_project_files"/.test(manifest), "S2-5b 매니페스트 permissions.project_files(기본 빈 배열) → app_project_files");
+  ok(/projectFiles: Array\.isArray\(perm\.project_files\)/.test(consent) && /프로젝트 자료 읽기/.test(consent) && /쓰지는 못해요/.test(consent), "S2-5b 동의 창에 「프로젝트 자료 읽기」 줄이 선다(읽기뿐임을 말한다)");
 }
 
 // ══ S2-6~9 호스트 다리를 **실제로** 돌린다(컴파일된 app-ui.js + 가짜 iframe) ══
@@ -239,6 +295,55 @@ if (!existsSync(built)) {
     eq(call && call.body, { patch: { layout: "rows" } }, "S2-10 prefs/set → POST /prefs {patch}");
     eq(lastReply(), { jsonrpc: "2.0", id: 7, result: { prefs: { layout: "rows" } } }, "S2-10 앱에는 prefs 만");
   }
+  // S2-12 files/list · files/read — 세션은 띄운 쪽의 것 · 쿼리로 간다 · 답은 그대로 (#4592)
+  {
+    const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
+    const out = { project_id: 4577, files: [{ path: "out/덱.html", name: "덱.html", size: 10, mtime: "2026-10-07T00:00:00.000Z" }], truncated: false };
+    plan = { "/files?": { status: 200, json: out }, "/file?": { status: 200, json: { path: "out/덱.html", content: "<html></html>", size: 13, mtime: "2026-10-07T00:00:00.000Z" } } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 21, method: "files/list", params: { ext: ["html", "htm"], limit: 50, session_id: "box-victim" } });
+    await settle();
+    const c1 = fetches.find((x) => x.url.includes("/api/ui/apps/deck-edit/files?"));
+    ok(c1, "S2-12 호스트가 /api/ui/apps/deck-edit/files 를 부른다");
+    const q1 = new URL("http://x" + c1.url.slice(c1.url.indexOf("/api"))).searchParams;
+    eq([q1.get("session_id"), q1.get("ext"), q1.get("limit")], ["box-mine", "html,htm", "50"], "S2-12 ★ 세션은 opts 의 것(앱이 말한 session_id 는 버린다) · ext 는 쉼표로 · limit");
+    eq(lastReply(), { jsonrpc: "2.0", id: 21, result: out }, "S2-12 앱에는 서버의 답 그대로");
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 22, method: "files/read", params: { path: "out/덱 1.html" } });
+    await settle();
+    const c2 = fetches.find((x) => x.url.includes("/api/ui/apps/deck-edit/file?"));
+    const q2 = new URL("http://x" + c2.url.slice(c2.url.indexOf("/api"))).searchParams;
+    eq([q2.get("session_id"), q2.get("path")], ["box-mine", "out/덱 1.html"], "S2-12 read 는 path 를 쿼리로(빈칸 · 한글 그대로 되돌아온다)");
+    eq(lastReply().result.content, "<html></html>", "S2-12 내용이 앱에 닿는다");
+    plan = { "/file?": { status: 403, json: { error: "이 앱은 .json 파일을 읽을 수 없습니다" } } };
+    fire({ jsonrpc: "2.0", id: 23, method: "files/read", params: { path: "a.json" } });
+    await settle();
+    ok(lastReply().error && lastReply().error.code === -32001, "S2-12 서버의 403(동의 문제가 아닌 것)은 -32001 로 전한다");
+    const { fire: fire2 } = await mount({});
+    fetches.length = 0;
+    fire2({ jsonrpc: "2.0", id: 24, method: "files/list", params: {} });
+    await settle();
+    ok(fetches.length === 0 && lastReply().error && lastReply().error.code === -32602, "S2-12b 붙은 세션이 없는 화면은 서버를 부르지 않고 -32602");
+  }
+  // S2-13 setInsets — 바뀔 때만 알리고, 새 문서(ui/initialize)에는 다시 알린다 (#4592)
+  {
+    const { f, fire } = await mount({ sessionId: "box-mine" });
+    const notes = () => replies.filter((m) => m && m.method === "ui/notifications/insets");
+    f.setInsets({ top: 0, right: 0, bottom: 70.3, left: 0 });
+    eq(notes().map((m) => m.params), [{ top: 0, right: 0, bottom: 70, left: 0 }], "S2-13 가려진 폭을 프레임에 알린다(정수 px)");
+    f.setInsets({ top: 0, right: 0, bottom: 70, left: 0 });
+    eq(notes().length, 1, "S2-13 같은 값이면 다시 알리지 않는다");
+    fire({ jsonrpc: "2.0", id: 31, method: "ui/initialize", params: {} });
+    await settle();
+    eq(notes().length, 2, "S2-13 ★ 새 문서가 인사하면(다시 불러옴) 지금 값을 다시 알린다");
+    f.setInsets({ top: 0, right: 0, bottom: 0, left: 0 });
+    eq(notes()[2].params.bottom, 0, "S2-13 가리는 것이 없어지면 0 을 알린다");
+    const { fire: fire3 } = await mount({ sessionId: "box-mine" });
+    fire3({ jsonrpc: "2.0", id: 32, method: "ui/initialize", params: {} });
+    await settle();
+    eq(replies.filter((m) => m && m.method === "ui/notifications/insets").length, 0, "S2-13b 가리는 것이 없는 프레임에는 인사 때 알림을 보내지 않는다");
+  }
+
 }
 
 console.log(`app-sdk-bridge: ${pass} 단언 통과`);

@@ -40,7 +40,8 @@ const CSS = ["01-base.css", "40-v2.css", "42-v2-panes.css", "49-v2-ctx.css"].map
 //  앱 문서 — 호스트가 머리에 SDK 를 끼워 넣는다. 여기선 prefs-open 알림이 **문서에 닿았는지**만 부모에게 되알린다.
 //  ⚠ 시험 페이지의 <script> 안에 JSON 으로 실리므로 닫는 태그를 `<\/script>` 로 가린다(아니면 바깥 스크립트가 거기서 끊겨 서버 흉내가 통째로 안 선다 — 실측).
 const APP_HTML = `<!doctype html><meta charset="utf-8"><title>앱</title><body>앱 화면<script>
-addEventListener('message', function (e) { var m = e.data; if (m && m.method === 'ui/notifications/prefs-open') parent.postMessage({ __probe: 'prefs-open-got' }, '*'); });
+addEventListener('message', function (e) { var m = e.data; if (m && m.method === 'ui/notifications/prefs-open') parent.postMessage({ __probe: 'prefs-open-got' }, '*');
+  if (m && m.method === 'ui/notifications/insets') setTimeout(function () { parent.postMessage({ __probe: 'insets', css: getComputedStyle(document.documentElement).getPropertyValue('--lively-inset-bottom').trim(), api: window.lively.ui.insets.bottom }, '*'); }, 0); });
 parent.postMessage({ __probe: 'app-ready' }, '*');
 </script></body>`;
 const APP_P1 = { app_id: "deck-edit", title: "장표 수정", attached_at: "2026-10-07T00:00:00Z", attached_by: "me", usable: true, has_ui: true,
@@ -115,6 +116,20 @@ window.addEventListener('error',(e)=>window.__errs.push(String(e.message)));
   await until(()=>appReady>0, 3000); R.R3_appReady=appReady;
   row('표시 설정').click(); await until(()=>prefsGot>0, 3000); R.R3_prefsGot=prefsGot; R.R3_rpc=rpcMsgs;
   await until(()=>!document.querySelector('.pn-ctx'));
+  // R3i — 곁칸의 독이 바닥을 가린다(--pn-dock-b) → 앱 문서에 --lively-inset-bottom 으로 닿는다 (#4592)
+  {
+    const got=[]; window.addEventListener('message',(e)=>{ if(e.data&&e.data.__probe==='insets') got.push(e.data); });
+    pane.style.setProperty('--pn-dock-b','70px');
+    await until(()=>got.some((g)=>g.css==='70px'), 1200); R.R3i_set=got.slice(-1)[0]||null;
+    pane.style.setProperty('--pn-dock-b','36px');
+    await until(()=>got.some((g)=>g.css==='36px'), 1200); R.R3i_change=got.slice(-1)[0]||null;
+    pane.style.removeProperty('--pn-dock-b');
+    await until(()=>got.some((g)=>g.css==='0px'), 1200); R.R3i_clear=got.slice(-1)[0]||null;
+    pane.style.setProperty('--pn-dock-b','52px'); await until(()=>got.some((g)=>g.css==='52px'), 1200);
+    const n0=got.length; iframe.srcdoc=iframe.srcdoc+'<!-- again -->';     // 새 문서(다시 불러옴) — 인사 뒤에 지금 값을 다시 받는다
+    await until(()=>got.length>n0 && got.slice(-1)[0].css==='52px', 1500); R.R3i_reload=got.length>n0?got.slice(-1)[0]:null;
+    pane.style.removeProperty('--pn-dock-b'); await sleep(60);
+  }
   // R4 — 목록이 바뀌었다(판 3 · 원본 덮어씀) → 붙이기 사건으로 다시 읽게
   window.__apps=[${JSON.stringify(APP_P2)}];
   window.__push('event: app\\ndata: '+JSON.stringify({type:'app',kind:'attach',app_id:'deck-edit',session:'sid-1'})+'\\n\\n');
@@ -166,6 +181,9 @@ t(JSON.stringify(R.R2_rows) === JSON.stringify(["AI에게 고치기…", "표시
 t(R.R2_prefsOff === true && R.R2_prefsHint === "이 앱은 표시 설정이 없어요", "R2 구독 전 「표시 설정」은 흐리고 까닭을 힌트로(리뷰 (1))", [R.R2_prefsOff, R.R2_prefsHint]);
 t(R.R2_verHint === null && R.R2_origOff === true, "R2 판을 모르면 「판 이력…」 힌트 없음 · 원본 그대로면 「원본으로」 흐림(리뷰 (3))", [R.R2_verHint, R.R2_origOff]);
 t(R.R3_prefsOff === false && R.R3_prefsHint === "나에게만" && R.R3_prefsGot >= 1, "R3 앱이 prefs-open 을 구독하면 켜지고, 누르면 앱 문서가 알림을 받는다", [R.R3_prefsOff, R.R3_prefsHint, R.R3_prefsGot, "rpc:" + R.R3_rpc, "ready:" + R.R3_appReady]);
+t(!!R.R3i_set && R.R3i_set.css === "70px" && R.R3i_set.api === 70, "R3i-1 ★ 곁칸의 독이 바닥을 70px 가리면 앱 문서의 --lively-inset-bottom 이 70px (lively.ui.insets.bottom 도)", R.R3i_set);
+t(!!R.R3i_change && R.R3i_change.css === "36px" && !!R.R3i_clear && R.R3i_clear.css === "0px" && R.R3i_clear.api === 0, "R3i-2 독 크기가 바뀌거나 독이 비키면(이음매로 옮김) 따라 바뀐다", [R.R3i_change, R.R3i_clear]);
+t(!!R.R3i_reload && R.R3i_reload.css === "52px", "R3i-3 앱 화면이 다시 불러와져도(새 문서) 지금 값을 다시 받는다", R.R3i_reload);
 t(R.R4_pill === "3판" && R.R4_verHint === "3판" && R.R4_origOff === false, "R4 목록이 다시 오면 「3판」 알약 · 힌트 · 「원본으로」 켜짐", [R.R4_pill, R.R4_verHint, R.R4_origOff]);
 t(JSON.stringify(R.R5_rows) === JSON.stringify(["3판 · 보낸 줄 접기", "2판 · 글 줄 칸을 아래로", "1판 · 라이블리 기본 앱"]) && R.R5_curOff === true, "R5 판 이력 메뉴 — 최신 먼저 · 지금 판은 흐림", [R.R5_rows, R.R5_curOff]);
 t(JSON.stringify(R.R5_revert) === JSON.stringify([{ version_no: 2 }]) && R.R5_reloadN === 1, "R5 「2판」 → POST /revert {version_no:2} → 그 자리에서 다시 띄움(1회)(리뷰 (2))", [R.R5_revert, R.R5_reloadN]);

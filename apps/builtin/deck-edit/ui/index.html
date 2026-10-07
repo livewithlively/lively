@@ -7,8 +7,17 @@
     대리 스크립트(AGENT)를 끼우고 postMessage 로 글 줄 뽑기·고치기·좌표를 주고받는다. 글 줄 뽑는 규칙은 세일즈 덱
     워딩 시트(project/4577/세일즈덱/rv3/sheet.js)에서 옮겼다 — 굵게·색 꼬리표는 지키고, 숨은 글·번호 동그라미는 뺀다.
   · 판 = versions 표의 머리 1행 + 장 N행 + 꼬리 1행. 머리의 `__ASSET:<sha>__` 자리표는 assets 표(sha · seq 조각)로 메운다.
-  · 배치 셋: 좁은 화면(곁 · 폭 640 미만) · 2열(장표 옆에 글 줄) · 2행(장표 폭 가득, 글 줄은 아래로 스크롤). 무대 칸은 늘
-    장표 크기 그대로다(배율 = 칸 폭 ÷ 원본 폭) — 칸이 장표보다 크면 흰 띠가 남는다(2026-10-07 원준 지적).
+  · 배치는 둘 — 2열(왼쪽에 장이 세로로 이어진 칸, 오른쪽에 지금 장의 글 줄) · 2행(위에 장표, 아래에 글 줄). **고른 배치는 폭이
+    좁아도 그대로 선다**(원준 2026-10-07 「옵션으로 하려면 하드하게 정해져야지」). 고른 적이 없을 때만 폭으로 정한다(640 미만 = 2행).
+    좁은 폭(compact)은 배치가 아니라 촘촘함이다(머리줄 단추 줄임 · 보내기는 바닥 막대).
+  · 무대(stage)는 **장들이 세로로 이어진 칸**이다 — 자식 문서가 모든 장을 위에서 아래로 놓고(대리 스크립트), 무대가 그 위를 민다.
+    2열은 칸 높이만큼, 2행은 한 장 높이만큼 보인다. 지금 장 = 가장 많이 보이는 장(밀면 따라온다) 또는 누른 장.
+    글 줄 칸(rowsScroll)은 무대와 따로 민다 — 장표의 아래쪽 글을 눌러도 장표는 제자리에 있고 글 줄만 그 줄로 간다.
+  · 문서는 세션으로 가르지 않는다 — 앱의 표는 워크스페이스에 하나이고, 장표는 세션보다 오래 산다(세션은 닫히고 복제되고 옮겨진다).
+    문서 고르기에는 전부가 뜨고(이 세션에서 올린 것이 먼저), 세션은 「어디로 보내나 · 누가 올렸나」 로만 남는다.
+    이 세션에 열 문서가 아직 없으면 **불러오기 화면**이 선다: 이 세션 프로젝트의 자료에 있는 HTML(lively.files · 최신순)과 앱에 있는 문서를
+    눌러서 연다. 파일은 앱이 그 자리에서 나눠 올린다(아래 deck-split 블록 — bin/deck-push.mjs 와 같은 글).
+  · 호스트가 화면 아래를 가리면(곁칸의 독) --lively-inset-bottom 으로 알려 준다 — 바닥 막대와 스크롤 끝을 그만큼 올린다.
   · 보내기는 **사람이 누른 동작 안에서** 끝나야 한다(호스트가 userActivation 을 본다): 누른 자리에서 묶음을 한 번의
     store.update 로 잠그고 곧바로 chat.send. 못 알렸으면 묶음은 잠긴 채 「다시 보내기」 띠를 남긴다.
   · 샌드박스 규칙: 폼 제출 금지(click·keydown) · 한글 조합 중 Enter 무시 · localStorage 없음(불투명 오리진) → 개인 설정은
@@ -45,7 +54,23 @@
 
   /* ── 머리줄 ── */
   #top { flex: none; display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--soft); position: relative; z-index: 16; }
-  #docSel { flex: 0 1 220px; min-width: 84px; height: 28px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--ink); font: 700 13px var(--font); padding: 0 6px; text-overflow: ellipsis; }
+  .docBtn { flex: 0 1 240px; min-width: 72px; height: 28px; display: inline-flex; align-items: center; gap: 4px; padding: 0 5px 0 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--ink); font: 700 13px var(--font); text-align: left; }
+  .docBtn:hover, .docBtn[aria-expanded=true] { border-color: var(--muted-2); }
+  .docBtn span { flex: 1; }
+  .docBtn .i { width: 14px; height: 14px; color: var(--muted); }
+  /* 문서 고르기 — 앱에 있는 문서 전부(이 세션 것 먼저) + 다른 HTML 불러오기 */
+  .docMenu { position: absolute; left: 10px; top: 40px; z-index: 26; width: min(360px, calc(100vw - 20px)); max-height: min(72vh, 480px); overflow-y: auto; background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 12px 34px rgba(21,35,59,.18); padding: 5px; }
+  .dm-l { padding: 7px 9px 3px; font-size: 12px; font-weight: 800; color: var(--muted); }
+  .dm-i { width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 0 6px; align-items: center; padding: 6px 9px; border: 0; border-radius: 7px; background: none; text-align: left; }
+  .dm-i:hover { background: var(--soft-2); }
+  .dm-i .i { width: 14px; height: 14px; color: var(--blue); visibility: hidden; }
+  .dm-i.on .i { visibility: visible; }
+  .dm-i b { font-size: 13px; font-weight: 700; color: var(--ink); }
+  .dm-i.on b { font-weight: 800; }
+  .dm-i small { grid-column: 2; font-size: 12px; color: var(--muted); }
+  .dm-add { width: 100%; display: flex; align-items: center; gap: 6px; height: 34px; margin-top: 4px; padding: 0 9px; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px; background: none; font-size: 13px; font-weight: 800; color: var(--blue-deep); text-align: left; }
+  .dm-add:hover { background: var(--blue-bg); }
+  .dm-add .i { width: 14px; height: 14px; }
   .pills { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 0 1 auto; min-width: 0; }
   .pills::-webkit-scrollbar { display: none; }
   .pill { flex: none; height: 28px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); color: var(--ink-sub); font-size: 12.5px; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -73,38 +98,47 @@
   .strip.warn { background: var(--amber-bg); color: var(--amber-text); border-bottom: 1px solid var(--line); }
   .strip.in { border-radius: 8px; }
 
-  /* ── 몸통: 2열(cols) · 2행(rows) · 좁은 화면(narrow) ── */
+  /* ── 몸통: 배치는 둘(2열 cols · 2행 rows) — 고른 대로 선다. 좁은 폭(compact · 640 미만)은 촘촘하게만 한다 ── */
   #main { flex: 1; min-height: 0; }
-  #left { min-width: 0; }
-  .leftIn { margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
-  #right { min-width: 0; background: var(--bg); }
-  /* 2열: 왼쪽은 장표 칸(제 스크롤), 오른쪽은 글 줄(머리 고정 + 목록 스크롤) */
+  #left { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .leftIn { width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  #right { min-width: 0; min-height: 0; background: var(--bg); display: flex; flex-direction: column; }
+  /* 글 줄은 제 칸에서만 민다 — 장표(무대)와 따로 */
+  .rowsScroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .rowsScroll::after { content: ""; display: block; height: var(--lively-inset-bottom, 0px); }   /* 호스트가 아래를 가리면(곁칸의 독) 마지막 줄이 그 위로 올라온다 */
+  body.cols .stage > .canvas { margin-bottom: var(--lively-inset-bottom, 0px); }
+  /* 2열: 왼쪽은 장이 세로로 이어진 칸(무대가 남는 높이를 다 쓴다), 오른쪽은 지금 장의 글 줄 */
   body.cols #main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(360px, 36%, 520px); }
   body.cols.big #main { grid-template-columns: minmax(0, 1fr) 320px; }
-  body.cols #left { min-height: 0; overflow: auto; padding: 12px 14px 16px; border-right: 1px solid var(--line); }
-  body.cols #right { min-height: 0; display: flex; flex-direction: column; }
-  body.cols .rowsWrap { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 96px; }
-  /* 2행: 한 칸이 통째로 스크롤된다 — 장표가 위(폭 가득), 글 줄은 그 아래 두 열 */
-  body.rows #main { overflow-y: auto; }
-  body.rows #left { padding: 12px 14px 4px; }
-  body.rows #right { border-top: 1px solid var(--line); margin-top: 8px; }
-  body.rows .rowsWrap { column-count: 2; column-gap: 20px; padding: 6px 14px 96px; }
+  body.cols.compact #main { grid-template-columns: minmax(92px, 36%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  body.cols.compact #sendBar { grid-column: 1 / -1; }   /* 바닥 막대는 두 칸을 다 쓴다 */
+  body.cols.compact .under .nav { display: none; }       /* 좁은 2열은 장 목록이 곧 앞뒤 넘기기다 */
+  body.cols #left { padding: 12px 14px 0; border-right: 1px solid var(--line); }
+  body.cols.compact #left { padding: 6px 6px 0; }
+  body.cols .leftIn { flex: 1; }
+  body.cols .stage { flex: 1 1 0; min-height: 0; border-radius: 8px 8px 0 0; }
+  body.cols:not(.compact) .rowsWrap { padding: 4px 0 96px; }
+  /* 2행: 장표는 위에 서 있고, 글 줄만 그 아래에서 내려간다 */
+  body.rows #main { display: flex; flex-direction: column; }
+  body.rows #left { flex: none; padding: 12px 14px 10px; }
+  body.rows.compact #left { padding: 6px 10px 8px; }
+  body.rows #right { flex: 1; border-top: 1px solid var(--line); }
+  body.rows:not(.compact) .rowsWrap { column-count: 2; column-gap: 20px; padding: 6px 14px 96px; }
   body.rows .rowsWrap > * { break-inside: avoid; }
-  /* 좁은 화면(곁): 머리줄 → 장 띠 → 작은 장표 → 한 줄 → 글 줄 → 보내기 */
-  body.narrow #main { display: flex; flex-direction: column; }
-  body.narrow #left { flex: none; padding: 6px 10px 6px; }
-  body.narrow .leftIn { gap: 6px; }
-  body.narrow #right { flex: 1; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
-  body.narrow .rowsWrap { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 0 20px; }
-  body.narrow .rh, body.narrow #sendBtn, body.narrow #docCmBtn, body.narrow #layoutSeg { display: none; }
-  body.narrow .pill .n { display: none; }
-  body.narrow #docSel { flex: 1 1 80px; }
-  body.narrow .pills { flex: none; }
+  /* 좁은 폭: 머리줄 단추를 줄이고 보내기는 바닥 막대로 */
+  body.compact .leftIn { gap: 6px; }
+  body.compact .rowsWrap { padding: 2px 0 20px; }
+  body.compact .rh, body.compact #sendBtn, body.compact #docCmBtn { display: none; }
+  body.compact .pill .n { display: none; }
+  body.compact .docBtn { flex: 1 1 72px; }
+  body.compact .pills { flex: none; }
+  body.compact #layoutSeg button { padding: 0 7px; }
+  body.compact #layoutSeg button span { display: none; }
 
-  /* 장 띠(번호 칩) */
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 6px; }
-  body.narrow .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -10px; padding: 7px 10px 2px; }
-  body.narrow .chips::-webkit-scrollbar { display: none; }
+  /* 장 띠(번호 칩) — 몇 줄이든 다 보인다(좁으면 접어 내린다 · 숨은 가로 스크롤은 뒷장을 못 누르게 했다) */
+  .chips { flex: none; display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 6px 0 0; }
+  body.compact .chips { max-height: 100px; overflow-y: auto; padding-top: 7px; }
+  body.cols.compact .chips { display: none; }   /* 좁은 2열은 왼쪽의 장 목록이 곧 장 띠다(장마다 번호가 붙는다) */
   .chip { position: relative; flex: none; min-width: 28px; height: 26px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--ink-sub); font: 700 12px var(--mono); display: inline-grid; place-items: center; }
   .chip:hover { border-color: var(--muted-2); color: var(--ink); }
   .chip.on { background: var(--blue); color: #fff; border-color: var(--blue); }
@@ -113,23 +147,35 @@
   .chip i { position: absolute; right: -6px; top: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font: 800 12px/16px var(--font); font-style: normal; color: #fff; background: var(--coral); display: grid; place-items: center; }
   .chip i.e { background: var(--yellow); color: #3A2D00; }
 
-  /* 장표 무대 — 칸 = 장표 크기 그대로(안쪽 여백 0 · 넘침 숨김). 테두리는 그림자로 그려 칸의 안쪽 크기를 건드리지 않는다. */
-  .stage { position: relative; flex: none; width: 100%; overflow: hidden; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px var(--line-2), 0 6px 22px rgba(21,35,59,.09); }
-  .stage.doc { overflow-y: auto; }
+  /* 장표 무대 — 장들이 세로로 이어진 칸(제 스크롤). 캔버스 폭 = 장 폭(배율 = 캔버스 폭 ÷ 원본 폭), 캔버스 높이 = 이어 놓은 장 전체. */
+  .stage { position: relative; flex: none; width: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; border-radius: 8px; background: var(--soft-2); box-shadow: 0 0 0 1px var(--line-2), 0 6px 22px rgba(21,35,59,.09); }
+  body.rows .stage { scroll-snap-type: y proximity; }
+  .stage.doc { background: #fff; }
   .canvas { position: relative; width: 100%; height: 180px; overflow: hidden; }
-  .canvas iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
+  .canvas iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: transparent; }
+  .stage.doc .canvas iframe { background: #fff; }
   .hit { position: absolute; inset: 0; cursor: pointer; }
-  body.narrow .hit { cursor: zoom-in; }
-  .hl { position: absolute; pointer-events: none; border: 2px solid var(--blue); background: rgba(45,107,240,.10); border-radius: 4px; box-shadow: 0 0 0 3px rgba(45,107,240,.16); transition: all .08s; z-index: 3; }
-  .wait { position: absolute; inset: 0; display: grid; place-items: center; color: #576889; font-size: 13px; background: #F6F8FC; z-index: 4; }
-  /* 좁은 화면에서 작은 장표를 누르면 크게 — 칸 가득 펴고 가로세로로 민다 */
-  body.zoom .stage { position: fixed; left: 0; right: 0; top: 44px; bottom: 0; z-index: 15; border-radius: 0; overflow: auto; box-shadow: none; background: var(--soft-2); }
+  body.compact .hit { cursor: zoom-in; }
+  /* 지금 장 테두리 — 장이 여럿 보이는 2열에서만 */
+  .curp { position: absolute; left: 0; pointer-events: none; border-radius: 2px; box-shadow: inset 0 0 0 2px var(--blue); z-index: 2; }
+  body.rows .curp, .stage.doc .curp { display: none; }
+  /* 장 번호 꼬리표 — 장 띠가 없는 좁은 2열에서만 */
+  .pno { position: absolute; left: 3px; display: none; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 5px; font: 800 12px/16px var(--mono); color: #fff; background: rgba(21,35,59,.72); pointer-events: none; z-index: 3; text-align: center; }
+  .pno.on { background: var(--blue); }
+  .pno.has { background: var(--coral); }
+  body.cols.compact .pno { display: block; }
+  .snap { position: absolute; left: 0; width: 1px; height: 1px; pointer-events: none; scroll-snap-align: start; }
+  .hl { position: absolute; pointer-events: none; border: 2px solid var(--blue); background: rgba(45,107,240,.10); border-radius: 4px; box-shadow: 0 0 0 3px rgba(45,107,240,.16); transition: all .08s; z-index: 4; }
+  .wait { position: absolute; inset: 0; display: grid; place-items: center; color: #576889; font-size: 13px; background: #F6F8FC; z-index: 5; min-height: 120px; }
+  /* 좁은 폭에서 작은 장표를 누르면 크게 — 칸 가득 펴고 가로세로로 민다 */
+  body.zoom .stage { position: fixed; left: 0; right: 0; top: 44px; bottom: 0; z-index: 15; border-radius: 0; overflow: auto; box-shadow: none; background: var(--soft-2); height: auto !important; max-height: none !important; scroll-snap-type: none; }
   body.zoom .hit { cursor: pointer; }
   #zoomClose { display: none; }
   body.zoom #zoomClose { display: inline-flex; position: fixed; right: 10px; top: 52px; z-index: 17; box-shadow: 0 4px 14px rgba(21,35,59,.2); }
 
   /* 장표 아래 한 줄: 「2 / 18 · 제목」 · 안 고르기 · ‹ › · 장 전체 의견 */
-  .under { display: flex; align-items: center; gap: 6px; min-height: 28px; font-size: 13px; }
+  .under { flex: none; display: flex; align-items: center; gap: 6px; min-height: 28px; font-size: 13px; }
+  body.cols.compact .under .tt, body.cols.compact #cmToggle span { display: none; }
   .under .t { flex: 1; font-weight: 800; color: var(--ink); }
   .under .t small { font: 700 12px var(--mono); color: var(--muted); margin-right: 6px; }
   .vars { display: inline-flex; gap: 4px; align-items: center; flex: none; font-size: 12px; color: var(--muted); }
@@ -138,8 +184,8 @@
   .ib.sm { height: 26px; min-width: 26px; padding: 0 8px; font-size: 12px; }
   .ib.sm.ic { padding: 0; width: 26px; }
   .ib.has { color: var(--amber-text); border-color: var(--amber); background: var(--amber-bg); }
-  body.cols #cmToggle { display: none; }
-  .ta { width: 100%; resize: none; overflow: hidden; font: 500 13.5px/1.5 var(--font); color: var(--ink); background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; outline: none; min-height: 36px; display: block; }
+  body.cols:not(.compact) #cmToggle { display: none; }
+  .ta { flex: none; width: 100%; resize: none; overflow: hidden; font: 500 13.5px/1.5 var(--font); color: var(--ink); background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; outline: none; min-height: 36px; display: block; }
   .ta:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
   .ta::placeholder { color: var(--muted-2); font-weight: 500; }
 
@@ -152,9 +198,9 @@
   .sep:empty { padding-top: 0; margin: 6px 14px 0; }
   .rowsWrap > .sep:first-child { border-top: 0; margin-top: 2px; padding-top: 4px; }
   .rowsWrap > .sep:first-child:empty { display: none; }
-  body.rows .sep { margin-left: 0; margin-right: 0; }
+  body.rows:not(.compact) .sep { margin-left: 0; margin-right: 0; }
   .row { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 4px; padding: 2px 10px 2px 6px; border-left: 3px solid transparent; }
-  body.rows .row { padding-left: 0; padding-right: 0; }
+  body.rows:not(.compact) .row { padding-left: 0; padding-right: 0; }
   .row:hover { background: var(--soft); }
   .row:focus-within { background: var(--soft-2); border-left-color: var(--blue); }
   .row.ed { border-left-color: var(--yellow); }
@@ -191,30 +237,45 @@
   .ai.declined { background: var(--soft-2); color: var(--muted); }
   .ai.options { background: var(--blue-bg); color: var(--blue-deep); }
   .fold { margin: 8px 14px 0; height: 30px; padding: 0 10px; border: 1px dashed var(--line-2); border-radius: 7px; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--soft); display: flex; align-items: center; gap: 6px; width: calc(100% - 28px); text-align: left; }
-  body.rows .fold { margin-left: 0; width: 100%; }
+  body.rows:not(.compact) .fold { margin-left: 0; width: 100%; }
   .fold .i { width: 14px; height: 14px; }
   .sentCm { padding: 10px 14px 0; }
-  body.rows .sentCm { padding-left: 0; padding-right: 0; }
+  body.rows:not(.compact) .sentCm { padding-left: 0; padding-right: 0; }
   .sentCm .lab { font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 4px; }
   .orphans { margin: 10px 14px 0; font-size: 12.5px; color: var(--ink-sub); background: var(--amber-bg); border: 1px solid var(--amber); border-radius: 8px; padding: 7px 10px; }
-  body.rows .orphans { margin-left: 0; margin-right: 0; }
+  body.rows:not(.compact) .orphans { margin-left: 0; margin-right: 0; }
   .orphans summary { font-weight: 800; color: var(--amber-text); cursor: pointer; }
   .orphans pre { margin: 6px 0 0; white-space: pre-wrap; font: 12px/1.55 var(--mono); color: var(--ink); }
 
   /* 좁은 화면 아래 보내기 */
-  #sendBar { display: none; flex: none; border-top: 1px solid var(--line); padding: 8px 10px 9px; background: var(--soft); }
-  body.narrow #sendBar { display: block; }
+  #sendBar { display: none; flex: none; border-top: 1px solid var(--line); padding: 8px 10px calc(9px + var(--lively-inset-bottom, 0px)); background: var(--soft); }
+  body.compact #sendBar { display: block; }
   #sendBar .ib.pri { width: 100%; height: 36px; font-size: 13px; }
   #sendBar .fine { text-align: center; margin-top: 4px; }
 
-  /* 빈 상태 */
-  .empty { flex: 1; min-height: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--ink-sub); }
-  .empty .box { max-width: 420px; display: grid; justify-items: center; gap: 8px; }
-  .empty .ph { width: 150px; height: 84px; margin-bottom: 6px; border: 1.5px dashed var(--line-2); border-radius: 8px; background: var(--soft); }
-  .empty b { font-size: 15px; color: var(--ink); }
-  .empty p { margin: 0; font-size: 13px; line-height: 1.55; }
-  .empty code { font: 600 12.5px var(--mono); color: var(--ink); background: var(--soft-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 7px 10px; white-space: pre-wrap; }
-  .empty .ib { margin-top: 6px; height: 32px; }
+  /* 불러오기 — 처음 화면과 「다른 HTML 불러오기」 가 같은 목록을 쓴다: 눌러서 여는 것이 먼저, 세션에 말하는 길은 그 다음 */
+  .empty { flex: 1; min-height: 0; overflow-y: auto; display: grid; justify-items: center; align-content: start; padding: 22px 14px calc(28px + var(--lively-inset-bottom, 0px)); color: var(--ink-sub); }
+  .empty .box { width: min(520px, 100%); display: grid; gap: 12px; }
+  .pk-t { font-size: 15px; font-weight: 800; color: var(--ink); }
+  .pk-d { margin: -6px 0 0; font-size: 13px; line-height: 1.55; }
+  .pk-h { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 800; color: var(--muted); }
+  .pk-h small { font-weight: 600; color: var(--muted-2); font-size: 12px; }
+  .pk-list { display: grid; gap: 5px; }
+  .pk-i { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; padding: 8px 10px 8px 8px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); text-align: left; }
+  .pk-i:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-bg); }
+  .pk-i:disabled { opacity: .55; cursor: default; }
+  .pk-i .ico { grid-row: 1 / span 2; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; background: var(--soft-2); color: var(--muted); }
+  .pk-i .ico.doc { background: var(--blue-bg); color: var(--blue-deep); }
+  .pk-i b { font-size: 13.5px; font-weight: 800; color: var(--ink); }
+  .pk-i small { grid-column: 2; font-size: 12px; color: var(--muted); }
+  .pk-i .go { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; font-weight: 800; color: var(--blue-deep); white-space: nowrap; }
+  .pk-more { justify-self: start; height: 28px; }
+  .pk-say { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; }
+  .pk-say code { justify-self: start; font: 600 12.5px var(--mono); color: var(--ink); background: var(--soft-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 10px; white-space: pre-wrap; }
+  .pk-none { padding: 12px; border: 1.5px dashed var(--line-2); border-radius: 9px; background: var(--soft); font-size: 13px; line-height: 1.55; }
+  .pk-prog { font-size: 12.5px; font-weight: 700; color: var(--blue-deep); }
+  #pickModal .card { width: min(560px, 100%); }
+  #pickModal .mb { max-height: 70vh; overflow-y: auto; }
 
   /* 모달(보내기 · 표시 설정 · 문서 의견) */
   .modal { position: fixed; inset: 0; z-index: 30; background: rgba(21,35,59,.42); display: grid; place-items: center; padding: 14px; }
@@ -248,15 +309,19 @@
   <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5"/></symbol>
+  <symbol id="i-deck" viewBox="0 0 24 24"><path d="M3 5h18v11H3z M8 20h8 M12 16v4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14 M5 12h14"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 15l-4.5 4.5 M14.5 4l5.5 5.5 M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4"/></symbol>
 </defs></svg>
 
 <header id="top">
-  <select id="docSel" aria-label="문서"></select>
+  <button type="button" class="docBtn" id="docBtn" aria-haspopup="true" aria-expanded="false" title="문서 고르기 · 다른 HTML 불러오기"><span class="clip" id="docBtnT"></span><svg class="i"><use href="#i-down"/></svg></button>
+  <div class="docMenu" id="docMenu" hidden></div>
   <div class="pills" id="verPills" aria-label="판"></div>
   <span class="sp"></span>
-  <div class="seg" id="layoutSeg"><button type="button" data-l="cols" title="장표 옆에 글 줄"><svg class="i"><use href="#i-cols"/></svg>2열</button><button type="button" data-l="rows" title="장표를 폭 가득, 글 줄은 아래"><svg class="i"><use href="#i-rows"/></svg>2행</button></div>
+  <div class="seg" id="layoutSeg"><button type="button" data-l="cols" title="2열: 왼쪽에 장 목록, 오른쪽에 글 줄"><svg class="i"><use href="#i-cols"/></svg><span>2열</span></button><button type="button" data-l="rows" title="2행: 위에 장표, 아래에 글 줄"><svg class="i"><use href="#i-rows"/></svg><span>2행</span></button></div>
   <button type="button" class="ib ic" id="prefsBtn" title="표시 설정(나에게만)" aria-label="표시 설정"><svg class="i"><use href="#i-gear"/></svg></button>
   <button type="button" class="ib" id="docCmBtn" title="문서 전체 의견">문서 의견</button>
   <button type="button" class="ib ic" id="moreBtn" title="더 보기" aria-label="더 보기" hidden><svg class="i dots"><use href="#i-more"/></svg></button>
@@ -269,28 +334,26 @@
     <div class="leftIn" id="leftIn">
       <div class="chips" id="chips" aria-label="장"></div>
       <div class="strip in" id="newVerBanner" hidden><span></span><button type="button" class="ib sm">보기</button></div>
+      <div class="under" id="under"></div>
+      <textarea class="ta" id="slideCm" rows="1" placeholder="장 전체 의견(구도 · 빼거나 더할 것 · 순서). 글 하나에 대한 의견은 그 글의 의견 칸에."></textarea>
       <div class="stage" id="stage">
-        <div class="canvas" id="canvas"><div class="hit" id="hit"></div><div class="hl" id="hl" hidden></div></div>
+        <div class="canvas" id="canvas"><div class="hit" id="hit"></div><div class="curp" id="curp" hidden></div><div class="hl" id="hl" hidden></div></div>
         <div class="wait" id="wait">여는 중…</div>
       </div>
       <button type="button" class="ib sm" id="zoomClose"><svg class="i"><use href="#i-x"/></svg>닫기</button>
-      <div class="under" id="under"></div>
-      <textarea class="ta" id="slideCm" rows="1" placeholder="장 전체 의견(구도 · 빼거나 더할 것 · 순서). 글 하나에 대한 의견은 그 글의 의견 칸에."></textarea>
     </div>
   </section>
   <section id="right">
     <div class="rh" id="rh"></div>
-    <div class="rowsWrap" id="rows"></div>
+    <div class="rowsScroll" id="rowsScroll"><div class="rowsWrap" id="rows"></div></div>
   </section>
   <div id="sendBar"><button type="button" class="ib pri" id="sendBtn2">AI에게 보내기</button><div class="fine" id="sendFine">누르면 세션에 바로 전달됩니다</div></div>
 </div>
-<div id="empty" class="empty" hidden>
-  <div class="box">
-    <div class="ph"></div>
-    <b id="emptyT">이 세션에 올라온 문서가 없어요</b>
-    <p id="emptyP">세션의 AI 가 HTML 을 만들면 여기에 올라옵니다. 이미 만든 파일이 있으면 세션에 이렇게 말하세요.</p>
-    <code>out/덱.html 을 장표 수정 앱에 올려 줘</code>
-    <button type="button" class="ib" id="allDocsBtn" hidden>다른 세션에서 올린 문서 보기</button>
+<div id="empty" class="empty" hidden><div class="box" id="startBox"></div></div>
+<div class="modal" id="pickModal" hidden>
+  <div class="card">
+    <div class="mh"><span>문서 불러오기</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="mb" id="pickBox"></div>
   </div>
 </div>
 <div class="modal" id="sendModal" hidden>
@@ -309,12 +372,12 @@
   <div class="card">
     <div class="mh"><span>표시 설정 · 나에게만</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="mb">
-      <div class="opt"><div class="lab">크게 보기 배치</div><div class="seg" data-pref="layout"><button type="button" data-v="cols"><svg class="i"><use href="#i-cols"/></svg>2열</button><button type="button" data-v="rows"><svg class="i"><use href="#i-rows"/></svg>2행</button></div></div>
+      <div class="opt"><div class="lab">배치</div><div class="seg" data-pref="layout"><button type="button" data-v="cols"><svg class="i"><use href="#i-cols"/></svg>2열</button><button type="button" data-v="rows"><svg class="i"><use href="#i-rows"/></svg>2행</button></div><div class="fine">고른 배치는 칸이 좁아도 그대로입니다. 2열은 왼쪽에 장 목록, 2행은 위에 장표가 섭니다.</div></div>
       <div class="opt"><div class="lab">장표 크기</div><div class="seg" data-pref="slide"><button type="button" data-v="fit">한 화면에</button><button type="button" data-v="big">폭 가득</button></div><div class="fine" id="slideFine"></div></div>
       <div class="opt"><div class="lab">글 줄 글자</div><div class="seg" data-pref="font"><button type="button" data-v="s">작게</button><button type="button" data-v="m">보통</button><button type="button" data-v="l">크게</button></div></div>
       <div class="chks">
         <label class="chk"><input type="checkbox" data-pref="collapseSent">보낸 줄 접기</label>
-        <label class="chk"><input type="checkbox" data-pref="sideThumb">좁은 화면에 작은 장표 보이기</label>
+        <label class="chk"><input type="checkbox" data-pref="sideThumb">좁은 2행에서 장표 보이기</label>
       </div>
       <div class="fine" id="prefsFine"></div>
     </div>
@@ -350,21 +413,24 @@
       set: function (p) { Object.keys(p || {}).forEach(function (k) { if (p[k] === null) delete memPrefs[k]; else memPrefs[k] = p[k]; }); return Promise.resolve(memPrefs); }
     },
     prefsPersist: !!(L.prefs && typeof L.prefs.get === 'function'),
+    files: L.files && typeof L.files.list === 'function' && typeof L.files.read === 'function' ? L.files : null,   // 붙은 세션의 프로젝트 폴더(없는 호스트 · 세션 없이 연 화면이면 목록 없이 간다)
     onPrefsOpen: function (cb) { if (L.ui && typeof L.ui.onPrefsOpen === 'function') return L.ui.onPrefsOpen(cb); return function () {}; }
   };
 
   /* ───────────── 상태 ───────────── */
   var st = {
-    docs: [], allDocs: false, doc: null, title: '', vers: [], ver: 0, heads: {}, verCache: {},
+    docs: [], doc: null, title: '', vers: [], ver: 0, heads: {}, verCache: {},
     comments: [], picks: [], pins: [], prefs: {}, sections: [], cur: null, units: {}, rects: {}, mode: 'slides',
     scale: 1, fw: 1280, fh: 720, prevText: {}, changed: {}, focused: null, layoutNarrow: false, zoom: false,
-    cmOpen: {}, unnotified: null
+    cmOpen: {}, unnotified: null, pages: [], total: 0, compact: false, laySig: '', spyHold: 0, files: null, filesErr: '', importing: ''
   };
-  var DEF = { layout: 'cols', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastSlide: {} };
+  var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {} };
   function pref(k) { return st.prefs[k] != null ? st.prefs[k] : DEF[k]; }
+  /** 지금 배치 — 고른 것이 있으면 **그대로**(폭이 좁아도 바꾸지 않는다). 고른 적이 없을 때만 폭으로: 640 미만은 2행(위 장표 · 아래 글 줄). */
+  function layoutOf() { var v = st.prefs.layout; if (v === 'cols' || v === 'rows') return v; return document.documentElement.clientWidth < 640 ? 'rows' : 'cols'; }
   /** 장표 크기 — 배치마다 따로 기억한다. 정한 적이 없으면 2행은 「폭 가득」(크게 보려고 고르는 배치), 2열은 「한 화면에」. */
   function slideSize() {
-    var lay = pref('layout'), v = st.prefs.slide;
+    var lay = layoutOf(), v = st.prefs.slide;
     if (v && typeof v === 'object') v = v[lay];
     return v === 'fit' || v === 'big' ? v : (lay === 'rows' ? 'big' : 'fit');
   }
@@ -374,30 +440,33 @@
   }
   /** 배치만 다시 잡는다(창 크기가 바뀔 때마다 불린다 — 글 줄은 다시 그리지 않는다. 고치던 칸의 초점이 날아가면 안 된다). */
   function applyLayout() {
-    var narrow = document.documentElement.clientWidth < 640;
-    var was = st.layoutNarrow; st.layoutNarrow = narrow;
-    if (!narrow) st.zoom = false;
+    var compact = document.documentElement.clientWidth < 640, lay = layoutOf();
+    var sig = (compact ? 'c' : 'w') + lay, changed = sig !== st.laySig; st.laySig = sig;
+    st.compact = compact; st.layoutNarrow = compact;
+    if (!compact) st.zoom = false;
     var cl = document.body.classList;
-    cl.toggle('narrow', narrow);
-    cl.toggle('cols', !narrow && pref('layout') === 'cols');
-    cl.toggle('rows', !narrow && pref('layout') === 'rows');
-    cl.toggle('big', !narrow && slideSize() === 'big');
+    cl.toggle('compact', compact);
+    cl.toggle('cols', lay === 'cols');
+    cl.toggle('rows', lay === 'rows');
+    cl.toggle('big', !compact && slideSize() === 'big');
     cl.toggle('zoom', st.zoom);
-    $('stage').hidden = narrow && !pref('sideThumb') && !st.zoom;
+    $('stage').hidden = compact && lay === 'rows' && !pref('sideThumb') && !st.zoom;
     fit();
-    return was !== narrow;
+    return changed;
   }
   /** 설정이 바뀌었다 — 배치 · 글자 · 설정 패널의 표시를 맞추고 글 줄을 다시 그린다. */
   function applyPrefs() {
     document.documentElement.style.setProperty('--row-fs', { s: '13px', m: '14.5px', l: '16px' }[pref('font')] || '14.5px');
     applyLayout();
-    [].forEach.call($('layoutSeg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-l') === pref('layout')); });
+    [].forEach.call($('layoutSeg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-l') === layoutOf()); });
     [].forEach.call(document.querySelectorAll('#prefsModal .seg[data-pref]'), function (seg) {
-      var k = seg.getAttribute('data-pref'); var cur = k === 'slide' ? slideSize() : pref(k);
+      var k = seg.getAttribute('data-pref'); var cur = k === 'slide' ? slideSize() : (k === 'layout' ? layoutOf() : pref(k));
       [].forEach.call(seg.children, function (b) { b.classList.toggle('on', b.getAttribute('data-v') === cur); });
     });
     [].forEach.call(document.querySelectorAll('#prefsModal input[data-pref]'), function (c) { c.checked = !!pref(c.getAttribute('data-pref')); });
-    $('slideFine').textContent = slideSize() === 'fit' ? '장표와 글 줄의 첫 줄이 한 화면에 들어오게 장표를 줄입니다.' : (pref('layout') === 'rows' ? '장표를 칸 폭 가득 보여 줍니다. 글 줄은 아래로 내려 봅니다.' : '장표 칸을 넓히고 글 줄 칸을 좁힙니다.');
+    $('slideFine').textContent = layoutOf() === 'rows'
+      ? (slideSize() === 'fit' ? '장표를 줄여 글 줄 칸을 넉넉하게 둡니다.' : '장표를 칸 폭 가득 키웁니다. 글 줄 칸은 그만큼 낮아집니다.')
+      : (slideSize() === 'fit' ? '한 장이 칸 높이에 다 들어오게 맞춥니다.' : '장표 칸을 넓히고 글 줄 칸을 좁힙니다.');
     $('prefsFine').textContent = sdk.prefsPersist ? '이 설정은 나에게만 적용되고 다른 기기에서 열어도 유지됩니다. 모두의 기본값을 바꾸려면 세션에 「장표 앱을 이렇게 고쳐 줘」라고 말하세요.'
       : '이 호스트는 아직 개인 설정 저장을 지원하지 않아 이번 열기 동안만 유지됩니다.';
     if (st.cur != null && st.sections[st.cur]) renderUnder(st.sections[st.cur]);
@@ -418,16 +487,30 @@
     if (mode === 'slides') {
       secs.forEach(function (s) { var p = s.parentElement; if (!p || !p.classList.contains('pw')) { var w = document.createElement('div'); w.className = 'de-pw'; p.insertBefore(w, s); w.appendChild(s); } });
     }
+    var GAP = 24;   // 장 사이 틈(원본 px) — 무대에서는 배율만큼 줄어 보인다
     var css = document.createElement('style');
     css.textContent = mode === 'slides'
-      // 지금 장 하나만 창의 왼쪽 위에 제 크기로 놓는다 — 문서가 제 스크립트로 축소(transform)·여백·그림자를 걸어도 무대 칸과 어긋나지 않게.
-      ? 'html,body{margin:0!important;padding:0!important;background:#fff!important;overflow:hidden!important}'
-        + ' .pw,.de-pw{display:none!important}'
-        + ' .pw.de-on,.de-pw.de-on{display:block!important;position:fixed!important;left:0!important;top:0!important;margin:0!important;padding:0!important;width:auto!important;height:auto!important;overflow:visible!important;transform:none!important;z-index:2147483000!important}'
-        + ' .de-on>section.page{transform:none!important;margin:0!important;box-shadow:none!important;border-radius:0!important;position:relative!important;left:0!important;top:0!important}'
+      // 모든 장을 위에서 아래로 이어 놓는다 — 장마다 창에 못 박아(fixed) 제 크기로 놓고, 장 밖의 것은 가린다(visibility).
+      //  문서가 제 스크립트로 축소(transform)·여백·그림자를 걸어도 무대의 좌표와 어긋나지 않게 장의 변형을 지운다. 놓는 자리(top)는 layout() 이 건다.
+      ? 'html,body{margin:0!important;padding:0!important;background:transparent!important;overflow:hidden!important}'
+        + ' body{visibility:hidden!important}'
+        + ' .pw,.de-pw{visibility:visible!important;display:block!important;position:fixed!important;left:0!important;margin:0!important;padding:0!important;width:auto!important;height:auto!important;overflow:visible!important;transform:none!important;background:#fff!important}'
+        + ' .pw>section.page,.de-pw>section.page{transform:none!important;margin:0!important;box-shadow:none!important;border-radius:0!important;position:relative!important;left:0!important;top:0!important}'
         + ' .note,.counter,.hint,.ncopy,.pnav{display:none!important} *{animation:none!important;transition:none!important}'
       : 'html,body{margin:0!important} *{animation:none!important;transition:none!important}';
     document.head.appendChild(css);
+    var pages = [], total = 0, maxW = 0;
+    function layout() {
+      if (mode !== 'slides') return;
+      var y = 0; pages = []; maxW = 0;
+      secs.forEach(function (sc) {
+        var w = sc.offsetWidth || 1280, h = sc.offsetHeight || 720;
+        sc.parentElement.style.setProperty('top', y + 'px', 'important');
+        pages.push({ t: y, h: h, w: w }); if (w > maxW) maxW = w; y += h + GAP;
+      });
+      total = Math.max(1, y - GAP);
+    }
+    layout();
     var frames = mode === 'slides' ? secs : [document.body];
     function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
     function isInl(n) {
@@ -617,6 +700,7 @@
           r.mode = mode;
           r.sections = frames.map(function (s, i) { return { i: i, id: mode === 'slides' ? (s.id || ('s' + (i + 1))) : 'doc', title: mode === 'slides' ? titleOf(s, i) : (document.title || '문서') }; });
           showFrame(0); r.frame = frameSize(0);
+          if (mode === 'slides') { layout(); r.pages = pages; r.total = total; r.frame = { w: maxW || r.frame.w, h: r.frame.h }; }
         } else if (m.op === 'show') {
           showFrame(m.fi);
           var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
@@ -624,6 +708,7 @@
             var list = unitsOf(m.fi);
             r.units = list.map(function (u) { return { k: u.k, no: u.no, edHTML: u.edHTML, origText: u.origText, block: u.block, bk: u.bk, svg: !!u.svg, rect: rel(m.fi, unitRect(u)) }; });
             r.frame = frameSize(m.fi);
+            if (mode === 'slides') { layout(); r.pages = pages; r.total = total; r.frame = { w: maxW || r.frame.w, h: r.frame.h }; }   // 글꼴이 든 뒤 높이가 달라졌을 수 있다
             post(r);
           });
           return;
@@ -655,6 +740,204 @@
     return PRE + html;
   }
 
+  /* ───────────── HTML 나누기 — 폴더의 파일을 앱에서 바로 올릴 때(세션 스크립트 bin/deck-push.mjs 와 같은 블록) ───────────── */
+  var byteLen = function (x) { return new TextEncoder().encode(x).length; };
+  /** SHA-256(16진수) — 문자열의 UTF-8 바이트를 센다(node 의 createHash 와 같은 값). 앱 화면은 불투명 오리진이라 동기 구현을 둔다. */
+  var SHA_K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+  function sha256(str) {
+    var bytes = new TextEncoder().encode(String(str)), l = bytes.length, padLen = ((l + 9 + 63) >> 6) << 6;
+    var buf = new Uint8Array(padLen); buf.set(bytes); buf[l] = 0x80;
+    var dv = new DataView(buf.buffer); dv.setUint32(padLen - 8, Math.floor(l / 536870912)); dv.setUint32(padLen - 4, (l << 3) >>> 0);
+    var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], w = new Int32Array(64);
+    for (var off = 0; off < padLen; off += 64) {
+      var i;
+      for (i = 0; i < 16; i++) w[i] = dv.getInt32(off + i * 4);
+      for (i = 16; i < 64; i++) { var x = w[i - 15], y = w[i - 2]; w[i] = (w[i - 16] + ((x >>> 7 | x << 25) ^ (x >>> 18 | x << 14) ^ (x >>> 3)) + w[i - 7] + ((y >>> 17 | y << 15) ^ (y >>> 19 | y << 13) ^ (y >>> 10))) | 0; }
+      var a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (i = 0; i < 64; i++) {
+        var t1 = (h + ((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) + ((e & f) ^ (~e & g)) + SHA_K[i] + w[i]) | 0;
+        var t2 = (((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0; H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    return H.map(function (v) { return ('00000000' + (v >>> 0).toString(16)).slice(-8); }).join('');
+  }
+  // ⟦deck-split⟧ — 이 표식 사이는 ui/index.html 의 같은 표식 사이와 **글자 하나 다르지 않아야** 한다(scripts/deck-push.test.mjs 가 본다).
+  //  바깥에서 주는 것: sha256(문자열 → 16진수) · byteLen(문자열 → UTF-8 바이트 수). 여기를 고치면 두 파일을 함께 고친다.
+  const CHUNK = 990_000;          // 조각 상한 — 요청 본문 1,048,576B 아래에 JSON 포장 여유를 둔 값
+  const ASSET_MIN = 20_000;       // 이보다 큰 data: URL 만 자원으로 뺀다(작은 아이콘은 그 자리에 둔다)
+  const GENERIC_FONTS = new Set(["sans-serif", "serif", "monospace", "system-ui", "-apple-system", "blinkmacsystemfont", "ui-monospace",
+    "ui-sans-serif", "ui-serif", "apple sd gothic neo", "segoe ui", "roboto", "helvetica", "helvetica neue", "arial", "noto sans kr",
+    "malgun gothic", "sfmono-regular", "menlo", "monaco", "consolas", "courier new", "cursive", "fantasy", "inherit", "initial", "unset"]);
+
+  /** 문자열을 n 글자 조각으로. 조각은 UTF-16 코드 단위 기준이라 바이트는 그보다 클 수 있다 — data: URL 은 ASCII 라 같다. */
+  function chunk(s, n = CHUNK) {
+    const out = [];
+    for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n));
+    return out.length ? out : [""];
+  }
+
+  /**
+   * HTML 을 머리 · 장 · 꼬리로 나눈다. 장 = `<section class="…page…">` 바깥 요소(중첩 section 은 안에 둔다).
+   *  장 i 의 body 는 **앞 장의 끝(또는 머리의 끝)부터 이 장의 끝까지** — 장 사이의 포장(`</div><div class="pw">` · 발표자 노트)이
+   *  그 장에 딸려 간다. 그래서 head + slides + tail 을 이으면 원본과 글자 하나 다르지 않다(앱이 한 장만 보일 때는 CSS 로 가린다).
+   *  section.page 가 없으면 body 안쪽 전체가 장 하나(slide_id 'doc').
+   */
+  function splitHtml(html) {
+    const starts = [];
+    const re = /<section\b[^>]*>/gi;
+    let m;
+    while ((m = re.exec(html))) {
+      const tag = m[0];
+      const cls = /\bclass\s*=\s*(["'])(.*?)\1/i.exec(tag);
+      if (!cls || !/(^|\s)page(\s|$)/.test(cls[2])) continue;
+      starts.push({ at: m.index, tag });
+    }
+    // 중첩된 page(바깥 page 안의 page)는 뺀다 — 바깥 것만 장이다.
+    const sections = [];
+    for (const s of starts) {
+      const end = sectionEnd(html, s.at);
+      if (end < 0) continue;
+      if (sections.length && s.at < sections[sections.length - 1].end) continue;
+      const idm = /\bid\s*=\s*(["'])(.*?)\1/i.exec(s.tag);
+      const tm = /\bdata-title\s*=\s*(["'])(.*?)\1/i.exec(s.tag);
+      sections.push({ start: s.at, end, id: idm ? idm[2] : "", title: tm ? tm[2] : "" });
+    }
+    if (!sections.length) {
+      const bo = /<body\b[^>]*>/i.exec(html);
+      const bc = html.lastIndexOf("</body>");
+      if (!bo || bc < 0) return { mode: "doc", head: "", slides: [{ slide_id: "doc", no: 1, body: html, summary: titleOf(html) }], tail: "" };
+      const hEnd = bo.index + bo[0].length;
+      return { mode: "doc", head: html.slice(0, hEnd), slides: [{ slide_id: "doc", no: 1, body: html.slice(hEnd, bc), summary: titleOf(html) }], tail: html.slice(bc) };
+    }
+    const head = html.slice(0, sections[0].start);
+    const slides = sections.map((s, i) => {
+      const from = i === 0 ? s.start : sections[i - 1].end;
+      const body = html.slice(from, s.end);
+      return { slide_id: s.id || `s${i + 1}`, no: i + 1, body, summary: s.title || headingOf(body) };
+    });
+    return { mode: "slides", head, slides, tail: html.slice(sections[sections.length - 1].end) };
+  }
+
+  function sectionEnd(html, start) {
+    const re = /<\/?section\b[^>]*>/gi;
+    re.lastIndex = start;
+    let depth = 0, m;
+    while ((m = re.exec(html))) {
+      if (m[0][1] === "/") { depth--; if (depth === 0) return m.index + m[0].length; }
+      else if (!/\/>$/.test(m[0])) depth++;
+    }
+    return -1;
+  }
+  const strip = (s) => s.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  function headingOf(body) { const h = /<h[12]\b[^>]*>([\s\S]*?)<\/h[12]>/i.exec(body); return h ? strip(h[1]).slice(0, 80) : ""; }
+  function titleOf(html) { const t = /<title>([\s\S]*?)<\/title>/i.exec(html); return t ? strip(t[1]).slice(0, 80) : ""; }
+
+  /**
+   * 머리(head) 안의 큰 data: URL 을 자원으로 뺀다. @font-face 블록 안의 것은 글꼴(family · weight 를 기억한다).
+   *  반환 head 에는 `__ASSET:<sha>__` 자리표가 들어가고, assets 는 sha 하나당 하나(같은 자원이 두 번 쓰이면 한 번만).
+   */
+  function assetize(head, min = ASSET_MIN) {
+    const assets = new Map();
+    const fonts = [];
+    const take = (dataUrl, meta) => {
+      const sha = sha256(dataUrl);
+      if (!assets.has(sha)) assets.set(sha, { sha, body: dataUrl, bytes: byteLen(dataUrl), mime: mimeOf(dataUrl), ...(meta || {}) });
+      return `__ASSET:${sha}__`;
+    };
+    let out = head.replace(/@font-face\s*\{[^}]*\}/gi, (block) => {
+      const fam = /font-family\s*:\s*(["']?)([^;"'}]+)\1/i.exec(block);
+      const wt = /font-weight\s*:\s*([^;}]+)/i.exec(block);
+      let sha = null;
+      const rep = block.replace(/url\((["']?)(data:[^)"']+)\1\)/gi, (all, q, du) => {
+        if (du.length < min) return all;
+        const ph = take(du, {});
+        sha = ph.slice(8, -2);
+        return `url(${ph})`;
+      });
+      if (sha) fonts.push({ sha, family: fam ? fam[2].trim() : "", weight: wt ? wt[1].trim() : "" });
+      return rep;
+    });
+    out = out.replace(/(url\((["']?)|src=(["']))(data:[^)"']{1,})(\2|\3)/gi, (all, pre, q1, q2, du, post) => (du.length < min ? all : `${pre}${take(du, {})}${post}`));
+    return { head: out, assets: [...assets.values()], fonts };
+  }
+  function mimeOf(dataUrl) { const m = /^data:([^;,]+)/.exec(dataUrl); return m ? m[1] : "application/octet-stream"; }
+
+  /** 문서가 쓰는 글꼴 이름(font-family 선언의 첫 이름 · --font 류 변수값)을 모은다. 일반 이름(sans-serif 등)은 뺀다. */
+  function usedFamilies(html) {
+    const names = new Set();
+    const add = (list) => {
+      for (const raw of list.split(",")) {
+        const n = raw.trim().replace(/^["']|["']$/g, "").trim();
+        if (!n || /^var\(|^!important|\)$/.test(n) || GENERIC_FONTS.has(n.toLowerCase())) continue;
+        names.add(n);
+        break;   // 첫 이름만(뒤는 대체 글꼴)
+      }
+    };
+    for (const m of html.matchAll(/font-family\s*:\s*([^;}"]+|"[^"]+"[^;}]*|'[^']+'[^;}]*)/gi)) add(m[1]);
+    for (const m of html.matchAll(/--[a-z0-9-]*font[a-z0-9-]*\s*:\s*([^;}]+)/gi)) add(m[1]);
+    for (const m of html.matchAll(/font\s*:\s*[^;}]*?\d[^;}]*?\s([^;}]+)/gi)) add(m[1]);
+    return [...names];
+  }
+
+  /**
+   * 별칭 스타일 — @font-face 로 선언되지 않은 채 쓰이는 글꼴 이름을 첫 글꼴 자원에 건다. 글꼴 자원이 없으면 빈 문자열.
+   *  (문서가 CDN 의 Pretendard 를 쓰고 파일 안엔 Pretendard Variable 만 있을 때, 앱 안에서 Pretendard 가 비는 것을 막는다.)
+   */
+  function fontAlias(html, fonts) {
+    if (!fonts.length) return "";
+    const declared = new Set(fonts.map((f) => f.family.toLowerCase()).filter(Boolean));
+    const first = fonts[0];
+    const missing = usedFamilies(html).filter((n) => !declared.has(n.toLowerCase()));
+    if (!missing.length) return "";
+    const weight = first.weight || "45 920";
+    const rules = missing.map((n) => `@font-face{font-family:${JSON.stringify(n)};font-weight:${weight};font-display:block;src:url(__ASSET:${first.sha}__) format("woff2")}`);
+    return `<style data-deck-edit="alias">${rules.join("")}</style>`;
+  }
+
+  /** 앱 안에서 막힐 외부 참조 — 경고용. 같은 주소는 한 번만(먼저 잡힌 종류로). */
+  function checkExternal(html) {
+    const out = [];
+    const seen = new Set();
+    const push = (kind, url) => { if (seen.has(url)) return; seen.add(url); out.push({ kind, url }); };
+    for (const m of html.matchAll(/<link\b[^>]*\bhref\s*=\s*(["'])(https?:[^"']+)\1/gi)) push("link", m[2]);
+    for (const m of html.matchAll(/@import\s+(?:url\()?\s*(["']?)(https?:[^"')\s]+)\1/gi)) push("@import", m[2]);
+    for (const m of html.matchAll(/<(script|img|iframe)\b[^>]*\bsrc\s*=\s*(["'])(https?:[^"']+)\2/gi)) push(m[1], m[3]);
+    for (const m of html.matchAll(/url\((["']?)(https?:[^)"']+)\1\)/gi)) push("url()", m[2]);
+    return out;
+  }
+
+  /**
+   * 올릴 행을 짠다. 반환 { mode, rows, assets, warnings, slides }.
+   *  rows: versions 표 행(kind head|slide|tail · seq · slide_id · variant · body · summary) — 자리표가 든 머리, 장들, 꼬리.
+   *  assets: assets 표 행(sha · seq · body · bytes · mime) — 조각으로 나눈 것.
+   */
+  function plan(html, opts = {}) {
+    const variant = String(opts.variant || "");
+    const only = opts.slides ? new Set(String(opts.slides).split(",").map((s) => s.trim()).filter(Boolean)) : null;
+    const sp = splitHtml(html);
+    const { head, assets, fonts } = assetize(sp.head, opts.assetMin);
+    const alias = fontAlias(html, fonts);
+    const head2 = alias ? (head.includes("</head>") ? head.replace("</head>", () => alias + "</head>") : head + alias) : head;
+    const rows = [];
+    if (!variant) rows.push({ kind: "head", seq: 0, slide_id: "", variant: "", body: head2, summary: "" });
+    sp.slides.forEach((s) => {
+      if (only && !only.has(s.slide_id)) return;
+      rows.push({ kind: "slide", seq: s.no, slide_id: s.slide_id, variant, body: s.body, summary: s.summary || "" });
+    });
+    if (!variant) rows.push({ kind: "tail", seq: sp.slides.length + 1, slide_id: "", variant: "", body: sp.tail, summary: "" });
+    const assetRows = [];
+    for (const a of assets) chunk(a.body).forEach((part, i) => assetRows.push({ sha: a.sha, seq: i, body: part, bytes: byteLen(part), mime: a.mime }));
+    const warnings = checkExternal(html).map((e) => `외부 참조 ${e.kind} ${e.url} — 앱 안에서는 막힙니다(네트워크 0). 파일 안에 넣어 두세요.`);
+    const big = rows.filter((r) => byteLen(r.body) > CHUNK).map((r) => `${r.kind} ${r.slide_id || r.seq} 가 ${byteLen(r.body)}B 로 한 행 상한(${CHUNK}B)을 넘습니다 — 장 안의 큰 data: 그림을 파일 밖으로 빼거나 장을 나누세요.`);
+    return { mode: sp.mode, rows, assets: assetRows, warnings: warnings.concat(big), slides: sp.slides.map((s) => ({ slide_id: s.slide_id, no: s.no, summary: s.summary })), fonts, alias: !!alias };
+  }
+  // ⟦/deck-split⟧
+
   /* ───────────── 자식과 주고받기 ───────────── */
   var frame = null, waits = {}, mseq = 1, helloRes = null;
   window.addEventListener('message', function (ev) {
@@ -681,8 +964,9 @@
     st.docs = rows;
     return rows;
   }
-  function myDocs() { return st.docs.filter(function (d) { return !L.session || d.session === L.session; }); }
-  function visibleDocs() { return st.allDocs ? st.docs : myDocs(); }
+  //  문서는 세션으로 가르지 않는다(머리 설명). «이 세션에서 올린 것» 은 목록에서 먼저 세우는 데만 쓴다.
+  function mineOf(d) { return !!L.session && d.session === L.session; }
+  function docOf(id) { return st.docs.filter(function (d) { return d.doc === id; })[0] || null; }
   async function loadVersionMeta(doc) {
     var heads = await q('versions', { doc: doc, kind: 'head' }, 500);
     st.heads = {}; st.vers = [];
@@ -797,11 +1081,136 @@
 
   /* ───────────── 화면: 머리줄 · 장 띠 · 무대 ───────────── */
   function svg(id, cls) { return '<svg class="i' + (cls ? ' ' + cls : '') + '"><use href="#i-' + id + '"/></svg>'; }
-  function renderDocSel() {
-    var sel = $('docSel'); sel.innerHTML = '';
-    var list = visibleDocs();
-    list.forEach(function (d) { var o = el('option'); o.value = d.doc; o.textContent = (d.title || d.doc) + (d.session && L.session && d.session !== L.session ? ' (다른 세션)' : ''); sel.appendChild(o); });
-    sel.value = st.doc || '';
+  function renderDocBtn() { $('docBtnT').textContent = st.title || '문서 고르기'; }
+  /** 「오늘 19:47」 · 「어제 09:10」 · 「10월 5일」 */
+  function when(v) {
+    if (v == null || v === '') return '';
+    var d = new Date(typeof v === 'number' && v < 1e12 ? v * 1000 : v); if (isNaN(d.getTime())) return '';
+    var n = new Date(), hm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    if (d.toDateString() === n.toDateString()) return '오늘 ' + hm;
+    if (d.toDateString() === new Date(n.getTime() - 86400000).toDateString()) return '어제 ' + hm;
+    return (d.getFullYear() !== n.getFullYear() ? d.getFullYear() + '년 ' : '') + (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
+  }
+  function sizeOf(n) { n = Number(n) || 0; return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'; }
+  function docMeta(d) { var a = ['판 ' + (Number(d.latest_ver) || 1)], w = when(d.changed_at || d.created_at); if (w) a.push(w); if (L.session && !mineOf(d)) a.push('다른 세션'); return a.join(' · '); }
+  function closeDocMenu() { $('docMenu').hidden = true; $('docBtn').setAttribute('aria-expanded', 'false'); }
+  /** 문서 고르기 — 앱에 있는 문서 전부(이 세션 것 먼저) + 「다른 HTML 불러오기」. 문서가 하나뿐이어도 막다른 길이 아니다. */
+  function renderDocMenu() {
+    var box = $('docMenu'); box.innerHTML = '';
+    var mine = st.docs.filter(mineOf), others = st.docs.filter(function (d) { return !mineOf(d); });
+    function add(list, label) {
+      if (!list.length) return;
+      if (label) box.appendChild(el('div', 'dm-l', label));
+      list.forEach(function (d) {
+        var b = el('button', 'dm-i' + (d.doc === st.doc ? ' on' : '')); b.type = 'button'; b.innerHTML = svg('check');
+        b.appendChild(el('b', 'clip', d.title || d.doc)); b.appendChild(el('small', 'clip', docMeta(d)));
+        b.onclick = function () { closeDocMenu(); if (d.doc !== st.doc) openDoc(d.doc).catch(fail); };
+        box.appendChild(b);
+      });
+    }
+    add(mine, others.length ? '이 세션에서 올린 문서' : '');
+    add(others, mine.length ? '다른 세션에서 올린 문서' : '');
+    var a = el('button', 'dm-add'); a.type = 'button'; a.innerHTML = svg('plus') + '<span>다른 HTML 불러오기</span>';
+    a.onclick = function () { closeDocMenu(); openPicker(); };
+    box.appendChild(a);
+  }
+
+  /* ───────────── 불러오기 — 처음 화면 · 「다른 HTML 불러오기」 ───────────── */
+  //  눌러서 여는 것이 먼저다(원준 2026-10-07 「그냥 불러올 파일 목록을 최신순으로 보여줘서 클릭하게」). 세션에 말하는 길은 그 아래 한 줄.
+  var PK_SHOW = 6, pkMore = { files: false, docs: false };
+  async function loadFiles() {
+    if (!sdk.files || !L.session) { st.files = []; return; }
+    try { var r = await sdk.files.list({ ext: ['html', 'htm'], limit: 200 }); st.files = (r && r.files) || []; st.filesErr = ''; }
+    catch (e) { st.files = []; st.filesErr = e && e.message ? e.message : String(e); }
+    st.files.sort(function (a, b) { return Number(new Date(b.mtime)) - Number(new Date(a.mtime)); });
+  }
+  /** 폴더의 파일 가운데 아직 앱에 없는 것(또는 올린 뒤에 파일이 더 새로워진 것). */
+  function freshFiles() {
+    return (st.files || []).map(function (f) {
+      var d = st.docs.filter(function (x) { return x.source_path && x.source_path === f.path; })[0];
+      if (!d) return { f: f, doc: null };
+      var newer = Number(new Date(f.mtime)) > Number(new Date(d.changed_at || d.created_at || 0)) + 2000;
+      return newer ? { f: f, doc: d } : null;
+    }).filter(Boolean);
+  }
+  function pkItem(icon, cls, title, meta, go, run, busy) {
+    var b = el('button', 'pk-i'); b.type = 'button'; b.disabled = !!st.importing;
+    var ic = el('span', 'ico' + (cls ? ' ' + cls : '')); ic.innerHTML = svg(icon); b.appendChild(ic);
+    b.appendChild(el('b', 'clip', title)); b.appendChild(el('small', 'clip', meta)); b.appendChild(el('span', busy ? 'go pk-prog' : 'go', busy || go));
+    b.onclick = run; return b;
+  }
+  function renderPicker(box, start) {
+    box.innerHTML = '';
+    if (start) {
+      box.appendChild(el('div', 'pk-t', '어떤 문서를 열까요?'));
+      box.appendChild(el('p', 'pk-d', '장표나 보고서 HTML 을 열면 장표와 글 줄이 나란히 놓입니다. 글을 바로 고치거나 의견을 달아 세션의 AI 에게 보낼 수 있어요.'));
+    }
+    var files = freshFiles(), docs = st.docs.filter(mineOf).concat(st.docs.filter(function (d) { return !mineOf(d); }));
+    function group(key, title, hint, items) {
+      if (!items.length) return;
+      var h = el('div', 'pk-h', title); if (hint) h.appendChild(el('small', '', hint)); box.appendChild(h);
+      var list = el('div', 'pk-list'); (pkMore[key] ? items : items.slice(0, PK_SHOW)).forEach(function (n) { list.appendChild(n); }); box.appendChild(list);
+      if (!pkMore[key] && items.length > PK_SHOW) { var m = el('button', 'ib pk-more', '더 보기 · ' + (items.length - PK_SHOW)); m.type = 'button'; m.onclick = function () { pkMore[key] = true; paintPickers(); }; box.appendChild(m); }
+    }
+    group('files', '자료에 있는 HTML', '최신순 · 누르면 바로 열립니다', files.map(function (x) {
+      var busy = st.importing === x.f.path ? (st.importNote || '불러오는 중…') : '';
+      return pkItem('file', '', x.f.name || x.f.path, [x.f.path !== x.f.name ? x.f.path : '', when(x.f.mtime), sizeOf(x.f.size), x.doc ? '올린 뒤에 파일이 바뀜' : ''].filter(Boolean).join(' · '), x.doc ? '새 판으로' : '불러오기', function () { importFile(x.f, x.doc); }, busy);
+    }));
+    group('docs', files.length ? '앱에 올라와 있는 문서' : '올라와 있는 문서', '', docs.map(function (d) {
+      return pkItem('deck', 'doc', d.title || d.doc, docMeta(d), d.doc === st.doc ? '보는 중' : '열기', function () { $('pickModal').hidden = true; if (d.doc !== st.doc || $('main').hidden) openDoc(d.doc).catch(fail); });
+    }));
+    if (!files.length && !docs.length) {
+      box.appendChild(el('div', 'pk-none', st.files == null ? '불러올 수 있는 것을 찾는 중…'
+        : (sdk.files && L.session ? '이 프로젝트의 자료에 HTML 파일이 아직 없어요. 세션의 AI 가 장표나 보고서를 HTML 로 만들면 여기에 나타납니다.'
+          : '아직 올라온 문서가 없어요. 세션의 AI 가 HTML 을 만들어 올리면 여기에 나타납니다.')));
+    }
+    if (st.filesErr) box.appendChild(el('div', 'fine', '자료의 파일 목록을 읽지 못했어요 · ' + st.filesErr));
+    var say = el('div', 'pk-say');
+    say.appendChild(el('span', '', (files.length || docs.length ? '목록에 없으면' : '또는') + ' 가운데 세션에 이렇게 말해도 됩니다.'));
+    say.appendChild(el('code', '', '방금 만든 HTML 을 장표 수정 앱에서 열어 줘'));
+    if (sdk.files && L.session) say.appendChild(el('span', 'fine', '내 컴퓨터에 있는 파일은 사이드바 「자료」에 올리면 이 목록에 나옵니다.'));
+    box.appendChild(say);
+  }
+  function paintPickers() { if (!$('empty').hidden) renderPicker($('startBox'), true); if (!$('pickModal').hidden) renderPicker($('pickBox'), false); }
+  function openPicker() { $('pickModal').hidden = false; renderPicker($('pickBox'), false); loadFiles().then(paintPickers); }
+  function showStart() { st.doc = null; st.title = ''; $('empty').hidden = false; $('main').hidden = true; $('top').hidden = true; renderPicker($('startBox'), true); loadFiles().then(paintPickers); }
+  /** 폴더의 HTML 을 그 자리에서 문서로 올린다 — 나누기는 deck-split 블록(세션 스크립트 deck-push 와 같은 글). 같은 파일에서 온 문서가 있으면 새 판. */
+  function freeDocId(name) {
+    var base = String(name || '문서').replace(/\.html?$/i, '').replace(/\s+/g, ' ').trim().slice(0, 60) || '문서', id = base, n = 2;
+    while (docOf(id)) id = base + ' ' + (n++);
+    return id;
+  }
+  async function importFile(f, ex) {
+    if (st.importing) return;
+    var note = function (t) { st.importNote = t; paintPickers(); };
+    st.importing = f.path; note('파일을 읽는 중…');
+    try {
+      var r = await sdk.files.read(f.path);
+      var html = r && typeof r.content === 'string' ? r.content : ''; if (!html.trim()) throw new Error('파일이 비어 있습니다');
+      var p = plan(html, {});
+      var hard = p.warnings.filter(function (w) { return w.indexOf('한 행 상한') >= 0; }); if (hard.length) throw new Error(hard[0]);
+      var doc = ex ? ex.doc : freeDocId(f.name || f.path), ver = ex ? (Number(ex.latest_ver) || 0) + 1 : 1;
+      var shas = []; p.assets.forEach(function (a) { if (shas.indexOf(a.sha) < 0) shas.push(a.sha); });
+      var done = 0, all = p.assets.length + p.rows.length, tick = function () { note('올리는 중 ' + (++done) + ' / ' + all); };
+      for (var i = 0; i < shas.length; i++) {
+        var parts = p.assets.filter(function (a) { return a.sha === shas[i]; });
+        var have = await q('assets', { sha: shas[i] }, 1);       // 같은 글꼴 · 그림은 한 번만 든다
+        for (var j = 0; j < parts.length; j++) { if (!have.length) await sdk.store.insert('assets', parts[j]); tick(); }
+      }
+      await sdk.store['delete']('versions', { doc: doc, ver: ver });   // 올리다 만 행이 남아 있으면 치운다(다시 누른 경우)
+      for (var k = 0; k < p.rows.length; k++) { await sdk.store.insert('versions', Object.assign({ doc: doc, ver: ver, session: L.session || '' }, p.rows[k])); tick(); }
+      var title = titleOf(html) || String(f.name || f.path).replace(/\.html?$/i, '');
+      if (ex) await sdk.store.update('docs', { id: ex.id }, { latest_ver: ver, source_path: f.path, changed_at: nowIso(), session: L.session || ex.session || '' });
+      else await sdk.store.insert('docs', { doc: doc, title: title, session: L.session || '', latest_ver: ver, source_path: f.path, changed_at: nowIso() });
+      await loadDocs();
+      st.importing = ''; st.importNote = ''; $('pickModal').hidden = true;
+      await openDoc(doc);
+      var ext = p.warnings.length;
+      toast(ext ? '불러왔습니다 · 바깥 주소에서 받는 글꼴이나 그림 ' + ext + '개는 앱 안에서 안 보일 수 있어요' : '불러왔습니다 · 판 ' + ver, ext ? 4600 : 2200);
+    } catch (e) {
+      st.importing = ''; st.importNote = ''; paintPickers();
+      toast('불러오지 못했어요: ' + (e && e.message ? e.message : e), 4600);
+    }
   }
   function renderVers() {
     var box = $('verPills'); box.innerHTML = '';
@@ -826,66 +1235,129 @@
       box.appendChild(b);
     });
     box.hidden = st.sections.length <= 1;
-    // 좁은 화면의 장 띠는 한 줄로 민다 — 지금 장이 보이게
-    if (on && st.layoutNarrow) { var l = on.offsetLeft - box.offsetLeft - (box.clientWidth - on.offsetWidth) / 2; box.scrollLeft = Math.max(0, l); }
+    // 좁은 폭의 장 띠는 석 줄까지만 서고 그 안에서 민다 — 지금 장이 보이게
+    if (on && box.scrollHeight > box.clientHeight + 1) { var tp = on.offsetTop - box.offsetTop; if (tp < box.scrollTop || tp + on.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = Math.max(0, tp - 8); }
+    renderPageMarks();
+  }
+  /** 무대 위 표시 — 지금 장 테두리 · (좁은 2열) 장 번호 꼬리표 · (2행) 장마다 멈춤 자리. 장이 놓인 자리(st.pages)와 배율로 그린다. */
+  function renderPageMarks() {
+    var canvas = $('canvas'); [].slice.call(canvas.querySelectorAll('.pno,.snap')).forEach(function (n) { n.remove(); });
+    var cur = $('curp'), pg = st.pages[st.cur], sc = st.scale;
+    if (st.mode !== 'slides' || !pg) { cur.hidden = true; return; }
+    cur.style.top = (pg.t * sc) + 'px'; cur.style.width = (pg.w * sc) + 'px'; cur.style.height = (pg.h * sc) + 'px'; cur.hidden = st.pages.length < 2;
+    st.pages.forEach(function (p, i) {
+      var sn = el('i', 'snap'); sn.style.top = (p.t * sc) + 'px'; canvas.appendChild(sn);
+      var sec = st.sections[i]; if (!sec) return;
+      var c = counts(sec.id);
+      var b = el('span', 'pno' + (i === st.cur ? ' on' : (c.e || c.n ? ' has' : '')), String(i + 1)); b.style.top = (p.t * sc + 3) + 'px'; canvas.appendChild(b);
+    });
   }
   /**
-   * 무대 칸을 장표 크기에 맞춘다 — 칸 = 장표 그대로(배율 = 칸 안쪽 폭 ÷ 원본 폭), 안쪽 여백 0.
-   *  「한 화면에」(fit)는 장표와 글 줄 첫 줄이 한 화면에 들도록 **칸의 폭**을 높이 기준으로 묶는다(장 띠 · 아래 한 줄도 같은 폭).
-   *  「폭 가득」(big)은 칸 폭 전체(원본 폭까지). 장 구분이 없는 문서는 길어서, 한 화면에·좁은 화면이면 무대 안에서 민다.
+   * 무대를 맞춘다 — 캔버스 폭 = 장 폭(배율 = 캔버스 폭 ÷ 원본 폭), 캔버스 높이 = 이어 놓은 장 전체.
+   *  2열: 무대는 왼쪽 칸의 남는 높이를 다 쓴다(장이 아래로 이어져 보인다). 「한 화면에」는 한 장이 그 높이에 다 들어오게 폭을 묶는다.
+   *  2행: 무대 높이 = 한 장. 글 줄 칸이 설 자리를 남기고 폭을 묶는다(「한 화면에」는 넉넉히, 「폭 가득」은 최소만).
+   *  장 구분이 없는 문서는 길어서 무대 안에서 민다.
    */
   function fit() {
     if (!frame) return;
-    var stage = $('stage'), canvas = $('canvas'), leftIn = $('leftIn');
-    var narrow = st.layoutNarrow, rows = pref('layout') === 'rows', size = slideSize(), doc = st.mode === 'doc';
-    var fw = st.fw || 1280, fh = st.fh || 720, vh = window.innerHeight;
-    // 장표가 쓸 수 있는 높이 = 화면 높이 − 장표 말고 한 화면에 함께 보여야 하는 것(머리줄 · 장 띠 · 아래 한 줄 · 2행이면 글 줄 머리와 첫 줄).
-    //  그 높이는 재서 쓴다(글 줄이 아직 없으면 어림값) — 어림값만으로는 첫 줄이 화면 밖으로 밀렸다.
-    var sh = stage.getBoundingClientRect().height, used = rows ? 300 : 214, first = $('rows').querySelector('.row');
-    if (!narrow && sh > 0) {
-      if (rows && first) used = first.getBoundingClientRect().bottom + $('main').scrollTop - sh + 10;
-      else if (!rows) used = leftIn.getBoundingClientRect().height - sh + 44 + 30;
+    var stage = $('stage'), canvas = $('canvas'), leftIn = $('leftIn'), left = $('left'), main = $('main');
+    var lay = layoutOf(), size = slideSize(), doc = st.mode === 'doc';
+    var fw = st.fw || 1280, fh = st.fh || 720;
+    var total = doc ? fh : (st.total || fh);
+    var cap = fw;                                             // 원본보다 키우지 않는다
+    stage.style.height = ''; stage.style.maxHeight = '';
+    if (!st.zoom && !stage.hidden) {
+      if (lay === 'rows') {
+        // 왼쪽(위) 칸에서 장표 말고 서는 것(장 띠 · 한 줄 · 의견 칸 · 여백)의 높이를 재서 뺀다
+        var chrome = left.getBoundingClientRect().height - stage.getBoundingClientRect().height;
+        var mainH = main.clientHeight || window.innerHeight;
+        // 글 줄 칸(제 스크롤)이 설 최소 높이 — 「한 화면에」는 절반, 「폭 가득」도 석 줄은 보이게. 글 줄 머리(rh)는 따로 뺀다.
+        var rowsMin = st.compact ? Math.max(150, mainH * 0.42) : (size === 'fit' ? Math.max(260, mainH * 0.5) : Math.max(200, mainH * 0.3));
+        var room = Math.max(96, mainH - chrome - ($('rh').offsetHeight || 0) - rowsMin);
+        if (!doc) cap = Math.min(cap, room * fw / fh);
+        else stage.style.maxHeight = Math.round(room) + 'px';
+      } else if (size === 'fit' && !doc && !st.compact) {
+        var viewH = stage.clientHeight; if (viewH > 80) cap = Math.min(cap, viewH * fw / fh);
+      }
     }
-    var room = Math.max(200, vh - used);
-    var cap = '';
-    if (!narrow) { var w0 = fw; if (size === 'fit' && !doc) w0 = Math.min(w0, room * fw / fh); cap = Math.round(Math.max(280, w0)) + 'px'; }
-    leftIn.style.maxWidth = cap;
+    leftIn.style.maxWidth = lay === 'rows' || !st.compact ? Math.round(Math.max(lay === 'rows' ? 160 : 280, cap)) + 'px' : '';
     var w = stage.clientWidth;
     if (st.zoom) { w = Math.max(w, Math.min(fw, 760)); canvas.style.width = w + 'px'; } else canvas.style.width = '';
-    st.scale = w / fw;
-    frame.style.width = fw + 'px'; frame.style.height = fh + 'px'; frame.style.transform = 'scale(' + st.scale + ')';
-    canvas.style.height = (fh * st.scale) + 'px';
+    var old = st.scale; st.scale = w / fw;
+    frame.style.width = fw + 'px'; frame.style.height = total + 'px'; frame.style.transform = 'scale(' + st.scale + ')';
+    canvas.style.height = (total * st.scale) + 'px';
     stage.classList.toggle('doc', doc);
-    stage.style.maxHeight = doc && !st.zoom ? (narrow ? '190px' : (size === 'fit' ? room + 'px' : '')) : '';
+    if (lay === 'rows' && !doc && !st.zoom) stage.style.height = Math.round(fh * st.scale) + 'px';
+    renderPageMarks();
     mark(st.focused);
+    // 배율이 바뀌면(칸을 넓혔다 · 배치를 바꿨다) 같은 스크롤 값이 다른 장을 가리킨다 — 지금 장을 다시 맨 위에 둔다
+    if (!doc && st.cur != null && old && Math.abs(old - st.scale) > 0.0005) scrollToPage(st.cur, 'top');
   }
+  /** 무대를 그 장으로 민다. how: 'top' = 그 장을 맨 위에 · 'near' = 안 보일 때만(조금이라도 보이면 그대로). 미는 동안은 «보이는 장 따라가기» 를 쉰다. */
+  function scrollToPage(fi, how) {
+    var stage = $('stage'), pg = st.pages[fi]; if (!pg || st.mode !== 'slides') return;
+    var top = pg.t * st.scale, h = pg.h * st.scale;
+    if (how === 'near') { var a = stage.scrollTop, b = a + stage.clientHeight; if (top < b - Math.min(40, h / 3) && top + h > a + Math.min(40, h / 3)) return; }
+    st.spyHold = Date.now() + 500;
+    stage.scrollTop = Math.max(0, Math.round(top));
+  }
+  /** 무대에서 가장 많이 보이는 장 — 밀다가 멈춘 자리의 장이 지금 장이 된다. */
+  function pageInView() {
+    var stage = $('stage'), a = stage.scrollTop, b = a + stage.clientHeight, best = -1, bestV = 0;
+    st.pages.forEach(function (p, i) { var t = p.t * st.scale, e = t + p.h * st.scale; var v = Math.min(b, e) - Math.max(a, t); if (v > bestV + 1) { bestV = v; best = i; } });
+    return best;
+  }
+  var spyT = 0;
+  $('stage').addEventListener('scroll', function () {
+    if (st.mode !== 'slides' || st.zoom || st.pages.length < 2 || Date.now() < st.spyHold) return;
+    clearTimeout(spyT);
+    spyT = setTimeout(function () {
+      if (Date.now() < st.spyHold) return;
+      var fi = pageInView(); if (fi < 0 || fi === st.cur) return;
+      showSlide(fi, { scroll: 'none' }).catch(fail);
+    }, 140);
+  });
   function mark(u) {
     var hl = $('hl');
     if (!u || !st.rects[u.k]) { hl.hidden = true; return; }
-    var r = st.rects[u.k], s = st.scale;
-    hl.style.left = (r.l * s - 3) + 'px'; hl.style.top = (r.t * s - 2) + 'px'; hl.style.width = (r.w * s + 6) + 'px'; hl.style.height = (r.h * s + 4) + 'px'; hl.hidden = false;
+    var r = st.rects[u.k], s = st.scale, pg = st.pages[+String(u.k).split('|')[0]], oy = pg ? pg.t : 0;   // 좌표는 그 장 안의 것 — 장이 놓인 자리를 더한다
+    hl.style.left = (r.l * s - 3) + 'px'; hl.style.top = ((oy + r.t) * s - 2) + 'px'; hl.style.width = (r.w * s + 6) + 'px'; hl.style.height = (r.h * s + 4) + 'px'; hl.hidden = false;
   }
   function unitAt(x, y) {   // 장표 좌표(축소 전) → 글 줄(겹치면 가장 작은 것)
     var best = null, bestA = Infinity;
     (st.units[st.cur] || []).forEach(function (u) { var r = st.rects[u.k]; if (!r) return; var pad = 5; if (x >= r.l - pad && x <= r.l + r.w + pad && y >= r.t - pad && y <= r.t + r.h + pad) { var a = r.w * r.h; if (a < bestA) { bestA = a; best = u; } } });
     return best;
   }
-  function at(e) { var b = $('canvas').getBoundingClientRect(); return unitAt((e.clientX - b.left) / st.scale, (e.clientY - b.top) / st.scale); }
-  function setZoom(on) { st.zoom = !!on; applyLayout(); if (!on) $('stage').scrollTop = 0; }
+  /** 누른 자리 → { fi: 장, x, y: 그 장 안의 좌표(축소 전) }. 장 사이 틈이면 null. */
+  function pointAt(e) {
+    var b = $('canvas').getBoundingClientRect(), x = (e.clientX - b.left) / st.scale, y = (e.clientY - b.top) / st.scale;
+    if (st.mode !== 'slides' || !st.pages.length) return { fi: st.cur, x: x, y: y };
+    for (var i = 0; i < st.pages.length; i++) { var p = st.pages[i]; if (y >= p.t && y <= p.t + p.h) return { fi: i, x: x, y: y - p.t }; }
+    return null;
+  }
+  function at(e) { var p = pointAt(e); return p && p.fi === st.cur ? unitAt(p.x, p.y) : null; }
+  function setZoom(on) { st.zoom = !!on; applyLayout(); if (st.mode === 'slides') scrollToPage(st.cur, 'top'); else if (!on) $('stage').scrollTop = 0; }
+  /** 글 줄 칸만 민다(scrollIntoView 는 바깥 칸까지 밀어 장표가 화면에서 밀려났다). */
   function focusRow(u) {
     if (!u || !u.row) return;
     var held = u.row.closest('[hidden]'); if (held) held.hidden = false;   // 접힌 「보낸 줄」 안이면 편다
-    u.row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    var sc = $('rowsScroll'), rb = u.row.getBoundingClientRect(), sb = sc.getBoundingClientRect();
+    var to = sc.scrollTop + (rb.top - sb.top) - Math.max(8, (sc.clientHeight - rb.height) / 2);
+    try { sc.scrollTo({ top: Math.max(0, to), behavior: 'smooth' }); } catch (e) { sc.scrollTop = Math.max(0, to); }
     if (u.ed && u.ed.isContentEditable) { u.ed.focus({ preventScroll: true }); var sel = window.getSelection(), rg = document.createRange(); rg.selectNodeContents(u.ed); rg.collapse(false); sel.removeAllRanges(); sel.addRange(rg); }
   }
-  $('hit').addEventListener('mousemove', function (e) { if (st.focused || (st.layoutNarrow && !st.zoom)) return; mark(at(e)); });
+  $('hit').addEventListener('mousemove', function (e) { if (st.focused || (st.compact && !st.zoom)) return; mark(at(e)); });
   $('hit').addEventListener('mouseleave', function () { mark(st.focused); });
   $('hit').addEventListener('click', function (e) {
-    // 좁은 화면의 작은 장표는 글을 읽을 크기가 아니다 — 누르면 먼저 크게 편다. 편 뒤에 글을 누르면 그 줄로 간다.
-    if (st.layoutNarrow && !st.zoom) { setZoom(true); return; }
-    var u = at(e);
-    if (st.zoom) setZoom(false);
-    focusRow(u);
+    var p = pointAt(e); if (!p || p.fi == null) return;
+    (async function () {
+      // 좁은 폭의 작은 장표는 글을 읽을 크기가 아니다 — 다른 장을 누르면 그 장으로, 지금 장을 누르면 크게 편다. 편 뒤에 글을 누르면 그 줄로 간다.
+      if (st.compact && !st.zoom) { if (p.fi !== st.cur) await showSlide(p.fi, { scroll: 'near' }); else setZoom(true); return; }
+      if (p.fi !== st.cur) await showSlide(p.fi, { scroll: 'near' });   // 다른 장의 글을 눌렀다 — 그 장으로 바꾸고 그 줄로
+      var u = unitAt(p.x, p.y);
+      if (st.zoom) setZoom(false);
+      focusRow(u);
+    })().catch(fail);
   });
   $('zoomClose').addEventListener('click', function () { setZoom(false); });
   async function refreshRects() {
@@ -1004,9 +1476,12 @@
   function waitMsg(t) { var w = $('wait'); if (t == null) { w.hidden = true; return; } w.textContent = t; w.hidden = false; }
   async function openDoc(doc) {
     st.doc = doc; st.cur = null; st.units = {}; st.rects = {}; st.sections = []; st.verCache = {}; st.changed = {}; st.prevText = {}; st.cmOpen = {};
-    var d = st.docs.filter(function (x) { return x.doc === doc; })[0]; st.title = d ? (d.title || d.doc) : doc;
-    renderDocSel();
-    setPref({ lastDoc: doc });
+    var d = docOf(doc); st.title = d ? (d.title || d.doc) : doc;
+    $('empty').hidden = true; $('main').hidden = false; $('top').hidden = false;
+    renderDocBtn(); applyPrefs();
+    var by = Object.assign({}, pref('lastBySession') || {});
+    if (L.session) { delete by[L.session]; by[L.session] = doc; var ks = Object.keys(by); while (ks.length > 40) delete by[ks.shift()]; }   // 세션마다 마지막에 보던 문서(오래된 것부터 버린다)
+    setPref({ lastDoc: doc, lastBySession: by });
     waitMsg('판을 읽는 중…');
     await loadVersionMeta(doc);
     await loadComments(doc);
@@ -1036,20 +1511,27 @@
         if (done) return; done = true; st.mode = m.mode;
         // 장 구분이 없는 문서는 폭 1000 으로 놓고 높이를 잰다(높이는 내용만큼 — 재기 전에 창을 낮춰야 내용 높이가 나온다).
         if (m.mode === 'doc') { st.fw = 1000; st.fh = 100; f.style.width = '1000px'; f.style.height = '100px'; }
-        ask('init').then(function (r) { st.sections = r.sections; st.mode = r.mode; if (r.frame) { st.fw = r.frame.w; st.fh = r.frame.h; } fit(); renderChips(); res(); }).catch(function () { res(); });
+        ask('init').then(function (r) { st.sections = r.sections; st.mode = r.mode; if (r.frame) { st.fw = r.frame.w; st.fh = r.frame.h; } st.pages = r.pages || []; st.total = r.total || 0; $('stage').scrollTop = 0; fit(); renderChips(); res(); }).catch(function () { res(); });
       };
       setTimeout(function () { if (!done) { done = true; waitMsg('장표를 그리지 못했습니다(스크립트 응답 없음)'); res(); } }, 20000);
       frame = f; f.srcdoc = withAgent(html);
       $('canvas').insertBefore(f, $('hit'));
     });
   }
-  async function showSlide(fi) {
+  /** 그 장을 지금 장으로 — 글 줄을 뽑아 오른쪽(아래)에 놓는다. opt.scroll: 'top'(기본 · 무대를 그 장으로) · 'near'(안 보일 때만) · 'none'(무대가 밀려서 온 것). */
+  var showSeq = 0;
+  async function showSlide(fi, opt) {
     var s = st.sections[fi]; if (!s) return;
+    var seq = ++showSeq;
     st.cur = fi; st.focused = null; mark(null);
     var ls = Object.assign({}, pref('lastSlide') || {}); ls[st.doc] = s.id; setPref({ lastSlide: ls });
     if (st.mode === 'doc' && frame) frame.style.height = '100px';
+    renderChips();
+    var how = (opt && opt.scroll) || 'top'; if (how !== 'none') scrollToPage(fi, how);
     var r = await ask('show', { fi: fi }, 20000);
+    if (seq !== showSeq) return;                       // 그 사이에 다른 장으로 넘어갔다(빠르게 밀었다) — 늦게 온 답은 버린다
     if (r.frame && r.frame.w > 100 && r.frame.h > 60) { st.fw = Math.round(r.frame.w); st.fh = Math.round(r.frame.h); }
+    if (r.pages) { st.pages = r.pages; st.total = r.total || st.total; }
     fit();
     var units = r.units.map(function (x) { return x; });
     st.units[fi] = units; st.rects = {}; units.forEach(function (u) { st.rects[u.k] = u.rect; });
@@ -1058,14 +1540,15 @@
     waitMsg(null);
     renderUnder(s);
     renderRows(); renderChips();
-    $('rows').scrollTop = 0;
+    $('rowsScroll').scrollTop = 0;
+    if (how !== 'none') scrollToPage(fi, how);          // 장 높이가 방금 정해졌을 수 있다(첫 장)
   }
   /** 장표 아래 한 줄: 「2 / 18 · 제목」(말줄임) · 안 고르기 · ‹ › · 장 전체 의견(좁은 화면 · 2행에서는 눌러야 펴진다). */
   function renderUnder(s) {
     var u = $('under'); u.innerHTML = '';
     var t = el('span', 't clip'); t.title = s.title;
     if (st.mode === 'slides') t.appendChild(el('small', '', (s.i + 1) + ' / ' + st.sections.length));
-    t.appendChild(document.createTextNode(s.title));
+    t.appendChild(el('span', 'tt', s.title));
     u.appendChild(t);
     var v = st.verCache[st.doc + '#' + st.ver]; var vars = v ? variantsOf(v, s.id) : [];
     if (vars.length > 1) {
@@ -1075,8 +1558,8 @@
       u.appendChild(w);
     }
     if (st.sections.length > 1) {
-      var p = el('button', 'ib sm ic'); p.type = 'button'; p.innerHTML = svg('left'); p.title = '앞 장'; p.setAttribute('aria-label', '앞 장'); p.disabled = s.i <= 0; p.onclick = function () { showSlide(s.i - 1).catch(fail); };
-      var n = el('button', 'ib sm ic'); n.type = 'button'; n.innerHTML = svg('right'); n.title = '다음 장'; n.setAttribute('aria-label', '다음 장'); n.disabled = s.i >= st.sections.length - 1; n.onclick = function () { showSlide(s.i + 1).catch(fail); };
+      var p = el('button', 'ib sm ic nav'); p.type = 'button'; p.innerHTML = svg('left'); p.title = '앞 장'; p.setAttribute('aria-label', '앞 장'); p.disabled = s.i <= 0; p.onclick = function () { showSlide(s.i - 1).catch(fail); };
+      var n = el('button', 'ib sm ic nav'); n.type = 'button'; n.innerHTML = svg('right'); n.title = '다음 장'; n.setAttribute('aria-label', '다음 장'); n.disabled = s.i >= st.sections.length - 1; n.onclick = function () { showSlide(s.i + 1).catch(fail); };
       u.appendChild(p); u.appendChild(n);
     }
     var sr = scopeRow('slide', s.id); var has = !!(sr && sr.note && String(sr.note).trim());
@@ -1087,13 +1570,13 @@
     var ta = $('slideCm'); ta.value = sr ? (sr.note || '') : '';
     syncSlideCm(s.id);
   }
-  /** 장 전체 의견 칸이 펴져 있나 — 2열은 늘 펴져 있고, 좁은 화면 · 2행은 적어 둔 것이 있거나 눌렀을 때만. */
+  /** 장 전체 의견 칸이 펴져 있나 — 넓은 2열은 늘 펴져 있고, 2행 · 좁은 폭은 적어 둔 것이 있거나 눌렀을 때만. */
   function cmShown(sid) {
-    if (document.body.classList.contains('cols')) return true;
+    if (layoutOf() === 'cols' && !st.compact) return true;
     if (st.cmOpen[sid] != null) return !!st.cmOpen[sid];
     var sr = scopeRow('slide', sid); return !!(sr && sr.note && String(sr.note).trim());
   }
-  function syncSlideCm(sid) { var ta = $('slideCm'); ta.hidden = !cmShown(sid); if (!ta.hidden) autoGrow(ta); }
+  function syncSlideCm(sid) { var ta = $('slideCm'); var was = ta.hidden; ta.hidden = !cmShown(sid); if (!ta.hidden) autoGrow(ta); if (was !== ta.hidden) fit(); }
   async function pick(sid, variant) {
     var ex = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === st.ver && x.slide_id === sid; })[0];
     if (ex) { await sdk.store.update('picks', { id: ex.id }, { variant: variant }); ex.variant = variant; }
@@ -1128,7 +1611,7 @@
   function lineFor(rows, bundle, ver) {
     var c = countsOf(rows);
     var picksN = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === Number(ver); }).length;
-    return '[장표 수정] ' + st.title + ' · 판 ' + ver + ' · 고친 글 ' + c.e + ' · 의견 ' + c.n + ' · 장 전체 의견 ' + c.s + (c.d ? ' · 문서 의견 ' + c.d : '') + (picksN ? ' · 고른 안 ' + picksN : '') + ' → 반영해 주세요 (묶음 #' + bundle + ')';
+    return '[장표 수정] ' + st.title + ' · 판 ' + ver + ' · 고친 글 ' + c.e + ' · 의견 ' + c.n + ' · 장 전체 의견 ' + c.s + (c.d ? ' · 문서 의견 ' + c.d : '') + (picksN ? ' · 고른 안 ' + picksN : '') + ' → 반영해 주세요 (묶음 #' + bundle + (st.doc && st.doc !== st.title ? ' · 문서 ' + st.doc : '') + ')';
   }
   function sendSummary() {
     var ds = drafts().filter(mine);
@@ -1160,7 +1643,9 @@
     if (sm.c.d) { list.appendChild(el('span', '', '문서 전체')); list.appendChild(el('span', '', '의견 ' + sm.c.d)); }
     $('smMsg').textContent = sm.msg;
     $('smGo').textContent = sdk.chat ? '세션에 보내기' : '복사하기';
-    $('smFine').textContent = sdk.chat ? '보내면 이 묶음은 잠기고, 그 뒤에 고치는 것은 묶음 #' + (sm.bundle + 1) + ' 이 됩니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요. 묶음은 지금처럼 잠깁니다.';
+    var dd = docOf(st.doc), away = !!(dd && L.session && dd.session && dd.session !== L.session);
+    $('smFine').textContent = (sdk.chat ? '보내면 이 묶음은 잠기고, 그 뒤에 고치는 것은 묶음 #' + (sm.bundle + 1) + ' 이 됩니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요. 묶음은 지금처럼 잠깁니다.')
+      + (away && sdk.chat ? ' 이 문서는 다른 세션에서 올렸습니다. 지금 세션의 AI 가 앱에서 최신 판을 받아 고칩니다.' : '');
     $('sendModal').hidden = false;
   }
   function exportText(sm) {   // 세션에 바로 보낼 수 없는 화면에서 붙여 넣을 전문
@@ -1221,7 +1706,7 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
       [].forEach.call(document.querySelectorAll('.modal'), function (m) { m.hidden = true; });
-      $('menu').hidden = true; if (st.zoom) setZoom(false);
+      $('menu').hidden = true; closeDocMenu(); if (st.zoom) setZoom(false);
       return;
     }
     var t = e.target; if (t && (t.isContentEditable || /^(TEXTAREA|INPUT|SELECT)$/.test(t.tagName))) return;
@@ -1237,7 +1722,7 @@
   sdk.onPrefsOpen(function () { $('prefsModal').hidden = false; });
   function choose(k, v) {
     var p = {};
-    if (k === 'slide') { var cur = st.prefs.slide && typeof st.prefs.slide === 'object' ? Object.assign({}, st.prefs.slide) : {}; cur[pref('layout')] = v; p.slide = cur; }
+    if (k === 'slide') { var cur = st.prefs.slide && typeof st.prefs.slide === 'object' ? Object.assign({}, st.prefs.slide) : {}; cur[layoutOf()] = v; p.slide = cur; }
     else p[k] = v;
     setPref(p); applyPrefs();
   }
@@ -1251,7 +1736,6 @@
     var pb = sdk.chat && !st.unnotified ? pendingBundle() : null;
     if (pb) items.push({ label: '묶음 #' + pb.bundle + ' 다시 알리기', hot: true, run: function () { notify(pb.bundle, pb.msg); } });
     if (st.layoutNarrow && st.doc) items.push({ label: '문서 전체 의견', run: openDocCm });
-    if (!st.allDocs && st.docs.length > myDocs().length) items.push({ label: '다른 세션에서 올린 문서 보기', run: function () { st.allDocs = true; renderDocSel(); renderMenu(); toast('문서 고르는 칸에 다른 세션의 문서가 함께 보입니다'); } });
     return items;
   }
   function renderMenu() {
@@ -1261,13 +1745,17 @@
     items.forEach(function (it) { var b = el('button', it.hot ? 'hot' : '', it.label); b.type = 'button'; b.onclick = function () { box.hidden = true; it.run(); }; box.appendChild(b); });
   }
   $('moreBtn').addEventListener('click', function (e) { e.stopPropagation(); renderMenu(); $('menu').hidden = !$('menu').hidden; });
-  document.addEventListener('click', function (e) { if (!$('menu').hidden && !$('menu').contains(e.target)) $('menu').hidden = true; });
-
-  $('docSel').addEventListener('change', function () { var v = $('docSel').value; if (v && v !== st.doc) openDoc(v).catch(fail); });
-  $('allDocsBtn').addEventListener('click', function () { st.allDocs = true; boot(true).catch(fail); });
+  document.addEventListener('click', function (e) {
+    if (!$('menu').hidden && !$('menu').contains(e.target)) $('menu').hidden = true;
+    if (!$('docMenu').hidden && !$('docMenu').contains(e.target) && !$('docBtn').contains(e.target)) closeDocMenu();
+  });
+  $('docBtn').addEventListener('click', function () {
+    if (!$('docMenu').hidden) { closeDocMenu(); return; }
+    renderDocMenu(); $('docMenu').hidden = false; $('docBtn').setAttribute('aria-expanded', 'true');
+  });
   $('newVerBanner').querySelector('button').addEventListener('click', function () { var latest = st.vers[st.vers.length - 1]; if (latest) openVersion(latest).catch(fail); });
-  window.addEventListener('resize', function () { if (applyLayout()) applyPrefs(); });
-  new ResizeObserver(function () { fit(); }).observe($('left'));
+  window.addEventListener('resize', function () { if (applyLayout()) { applyPrefs(); var sc = st.sections[st.cur]; if (sc) { renderUnder(sc); renderVers(); } } });
+  var fitT = 0; new ResizeObserver(function () { clearTimeout(fitT); fitT = setTimeout(fit, 30); }).observe($('main'));
   function fail(e) { toast('문제가 생겼어요: ' + (e && e.message ? e.message : e), 3500); console.error(e); }
 
   /* ───────────── 바깥에서 데이터가 바뀌면(세션의 AI 가 썼다) ───────────── */
@@ -1277,8 +1765,9 @@
     clearTimeout(reloadT);
     reloadT = setTimeout(async function () {
       try {
-        var before = st.vers.slice(); await loadDocs(); renderDocSel();
-        if (!st.doc) { boot(false); return; }
+        var before = st.vers.slice(); await loadDocs();
+        if (!st.doc) { boot(false); return; }                 // 불러오기 화면에 있었다 — 이 세션에 문서가 올라왔으면 곧바로 연다
+        var me = docOf(st.doc); if (me && (me.title || me.doc) !== st.title) { st.title = me.title || me.doc; } renderDocBtn(); paintPickers();
         await loadVersionMeta(st.doc); await loadComments(st.doc);
         var latest = st.vers[st.vers.length - 1];
         if (latest && before.indexOf(latest) < 0 && latest !== st.ver) { var b = $('newVerBanner'); b.querySelector('span').textContent = '새 판 ' + latest + ' 이 올라왔습니다'; b.hidden = false; }
@@ -1293,24 +1782,22 @@
   });
 
   /* ───────────── 시작 ───────────── */
+  /** 무엇을 열까 — 보던 문서(다시 그릴 때) > 이 세션에서 마지막에 보던 것 > 이 세션에서 올린 것 가운데 최신. 없으면 불러오기 화면. */
   async function boot(keepDoc) {
     if (!L.session) sdk.chat = null;   // 세션에 붙어 열린 화면이 아니면 보낼 곳이 없다 — 보내기는 「복사」가 된다
-    try { st.prefs = (await sdk.prefs.get()) || {}; } catch (e) { st.prefs = {}; }
+    if (!keepDoc) { try { st.prefs = (await sdk.prefs.get()) || {}; } catch (e) { st.prefs = {}; } }
     await loadDocs();
-    var vis = visibleDocs();
-    $('empty').hidden = !!vis.length; $('main').hidden = !vis.length; $('top').hidden = !vis.length;
-    if (!vis.length) {
-      var others = st.docs.length - myDocs().length;
-      $('allDocsBtn').hidden = !(others > 0 && !st.allDocs);
-      $('allDocsBtn').textContent = '다른 세션에서 올린 문서 보기 · ' + others;
-      if (st.allDocs) { $('emptyT').textContent = '올라온 문서가 없어요'; $('emptyP').textContent = '어느 세션에서도 아직 문서를 올리지 않았습니다. 세션의 AI 가 HTML 을 만들면 여기에 올라옵니다.'; }
-      return;
-    }
     applyPrefs();
-    renderDocSel();
-    var want = (keepDoc && st.doc) || pref('lastDoc');
-    var d = vis.filter(function (x) { return x.doc === want; })[0] || vis[0];
-    await openDoc(d.doc);
+    var want = keepDoc && st.doc && docOf(st.doc) ? st.doc : null;
+    if (!want) {
+      var last = L.session ? (pref('lastBySession') || {})[L.session] : pref('lastDoc');
+      var mine = st.docs.filter(mineOf);
+      if (last && docOf(last)) want = last;
+      else if (mine.length) want = mine[0].doc;
+      else if (!L.session && st.docs.length) want = st.docs[0].doc;   // 세션 없이 연 화면(앱 찾기에서 열었다)은 가장 최근 문서
+    }
+    if (!want) { showStart(); return; }
+    await openDoc(want);
   }
   L.ready.then(function () { return boot(false); }).catch(fail);
 })();

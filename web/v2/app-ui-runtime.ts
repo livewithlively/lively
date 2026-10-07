@@ -21,6 +21,12 @@
 //                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
 //    await lively.prefs.get() / .set(patch)  → 이 앱 × 보는 사람의 작은 설정(#4601 — 배치·글자·접기). set 은 얕은 병합, null 키 삭제, 16KB.
 //    lively.ui.onPrefsOpen(function () {…})  → 사람이 앱 탭 ⋯ 메뉴에서 「표시 설정」을 눌렀다 — 앱이 설정 패널을 연다. 돌려주는 함수로 끊는다.
+//    await lively.files.list({ ext:['html'], limit:200 }) → { project_id, files:[{ path, name, size, mtime }], truncated }
+//    await lively.files.read(path)           → { path, content, size, mtime }   (#4592 — 붙은 세션의 **프로젝트 자료**에서 읽기만.
+//                                                매니페스트 permissions.project_files 에 선언한 확장자만 · 8MB 까지 · 붙은 세션이 없으면 -32602)
+//    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
+//                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
+//                                                바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면 가려지지 않는다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
 //  ⚠ onChange 를 안 쓰는 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
 //   화면 상태(입력 중인 글·스크롤)를 지키고 싶은 앱은 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
@@ -55,6 +61,7 @@ export const APP_RUNTIME_JS = `
     if (m.id == null) {
       if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
       else if (m.method === 'ui/notifications/prefs-open') fire('prefs-open', m.params || {});
+      else if (m.method === 'ui/notifications/insets') applyInsets(m.params || {});
       return;
     }
     var p = pend[m.id];
@@ -79,6 +86,15 @@ export const APP_RUNTIME_JS = `
     e.stopPropagation();
     parent.postMessage({ jsonrpc: '2.0', method: 'ui/omniOpen', params: {} }, '*');
   }, true);
+  // #4592 — 호스트가 가리는 가장자리. 값은 api.ui.insets 와 CSS 변수 둘 다로(앱은 CSS 만으로 비킬 수 있다).
+  function applyInsets(p) {
+    var num = function (v) { v = Number(v); return isFinite(v) && v > 0 ? Math.round(v) : 0; };
+    var i = { top: num(p.top), right: num(p.right), bottom: num(p.bottom), left: num(p.left) };
+    api.ui.insets = i;
+    var de = typeof document !== 'undefined' ? document.documentElement : null, st = de && de.style;
+    if (st) { st.setProperty('--lively-inset-top', i.top + 'px'); st.setProperty('--lively-inset-right', i.right + 'px'); st.setProperty('--lively-inset-bottom', i.bottom + 'px'); st.setProperty('--lively-inset-left', i.left + 'px'); }
+    fire('insets', i);
+  }
   var api = {
     version: 1,
     app: null,
@@ -90,7 +106,13 @@ export const APP_RUNTIME_JS = `
     },
     ui: {
       openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
-      onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); }
+      onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+      onInsets: function (cb) { return subscribe('insets', cb); }
+    },
+    files: {
+      list: function (opts) { var o = opts || {}; return post('files/list', { ext: o.ext, limit: o.limit }); },
+      read: function (path) { return post('files/read', { path: String(path) }); }
     },
     chat: {
       send: function (text) { return post('chat/send', { text: String(text) }); }
