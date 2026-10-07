@@ -37,13 +37,22 @@ interface ManifestView {
   ui?: { pages?: Array<{ key?: string; title?: string }> };
   data?: { tables?: Array<{ name?: string; columns?: unknown[] }> };
   runtime?: unknown;
+  agent?: { instructions?: unknown; reinject_every?: unknown };
 }
 
-/** 붙은 앱 한 줄 — 화면(앱 칸)이 그리고, AI 가 무엇을 읽고 쓸 수 있는지 아는 재료. */
+/**
+ * 붙은 앱 한 줄 — 화면(앱 칸)이 그리고, AI 가 무엇을 읽고 쓸 수 있는지 아는 재료.
+ *  #4595 — `instructions`(매니페스트 agent.instructions · 없으면 null)와 `reinject_every` 를 함께 실어, 시드 훅
+ *   session-apps-inject 가 테이블 안내 뒤에 **그 앱의 행동 규칙**을 붙이게 한다(종전엔 테이블 이름만 알려 AI 가 앱의
+ *   목적을 짐작해야 했다). `version`·`source_kind`·`overrides_builtin` 은 앱 탭이 「N판 · 워크스페이스 판」을 그리는 재료(#4600).
+ */
 export function describeAttached(row: SessionAppRow, app: OrgApp | null): Record<string, unknown> {
   const m = (app?.manifest ?? {}) as ManifestView;
   const pages = (m.ui?.pages ?? []).map((p) => ({ key: String(p.key ?? ""), title: String(p.title ?? p.key ?? "") })).filter((p) => p.key);
   const tables = (m.data?.tables ?? []).map((t) => ({ name: String(t.name ?? ""), columns: Array.isArray(t.columns) ? t.columns : [] })).filter((t) => t.name);
+  const instructions = typeof m.agent?.instructions === "string" && m.agent.instructions.trim() ? m.agent.instructions : null;
+  const every = Number(m.agent?.reinject_every);
+  const source = (app?.source ?? {}) as { kind?: unknown; overrides_builtin?: unknown };
   return {
     app_id: row.app_id,
     title: app?.title || row.app_id,
@@ -53,6 +62,11 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null): Record
     has_ui: pages.length > 0,
     pages,
     tables,
+    instructions,
+    reinject_every: instructions && Number.isInteger(every) && every > 0 ? every : null,
+    version: app?.version ?? null,
+    source_kind: typeof source.kind === "string" ? source.kind : null,
+    overrides_builtin: source.overrides_builtin === true,
   };
 }
 

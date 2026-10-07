@@ -168,6 +168,17 @@ const sectionSchema = z.object({
   file: z.string().min(1).max(512),                  // 패키지 내 상대경로(예: persona.md)
 }).strict();
 
+// #4595 — 앱이 **세션에 붙었을 때 그 세션의 AI 에게 실리는 지침**. 사람이 읽는 설명이 아니라 AI 의 행동 규칙이다
+//  («HTML 을 만들면 이 앱에 올려라» · «이런 글이 오면 표를 읽어 답을 적어라»). 붙은 앱 목록(session_apps)에 그대로 실리고,
+//  시드 훅 session-apps-inject 가 테이블 안내 뒤에 붙인다. 없던 때는 AI 가 테이블 이름만 보고 앱의 목적을 짐작해야 했다.
+//  reinject_every — 대화가 길어져 하네스가 앞부분을 요약하면 한 번 실린 안내가 흐려진다. 이 턴 수마다 같은 목록이어도
+//   다시 알린다(붙은 앱이 여럿이면 가장 작은 값). 4000자 상한은 매 턴 맥락에 들어가는 글이라 짧게 두라는 뜻이다.
+//  구성원 앱(app_save)도 가질 수 있다 — 지침은 그 세션 안에서만 읽히는 글이라 다른 사람에게 새는 것이 없다(member-app.ts 위반 아님).
+const agentSchema = z.object({
+  instructions: z.string().min(1).max(4000),
+  reinject_every: z.number().int().min(5).max(500).default(40),
+}).strict().optional();
+
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
 
@@ -210,6 +221,7 @@ export const appManifestSchema = z.object({
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
+  agent: agentSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;

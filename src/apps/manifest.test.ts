@@ -37,6 +37,15 @@ const REJECTS: Array<{ what: string; patch: (m: Record<string, unknown>) => void
   { what: "permissions 알 수 없는 키(strict)", patch: (m) => { m.permissions = { bogus: 1 }; } },
   { what: "host 에 스킴 포함", patch: (m) => { m.permissions = { hosts: ["https://x.com"] }; } },
   { what: "ui.pages key 중복", patch: (m) => { m.ui = { pages: [{ key: "a", title: "A", entry: "a.html" }, { key: "a", title: "B", entry: "b.html" }] }; } },
+  // #4595 agent — AI 지침. 매 턴 맥락에 들어가는 글이라 상한이 있고, 중첩 미지 키는 다른 중첩과 같이 거부.
+  { what: "agent.instructions 4001자(경계-위)", patch: (m) => { m.agent = { instructions: "가".repeat(4001) }; } },
+  { what: "agent.instructions 빈 문자열(경계-아래)", patch: (m) => { m.agent = { instructions: "" }; } },
+  { what: "agent.reinject_every 4(경계-아래)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 4 }; } },
+  { what: "agent.reinject_every 501(경계-위)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 501 }; } },
+  { what: "agent.reinject_every 소수", patch: (m) => { m.agent = { instructions: "x", reinject_every: 10.5 }; } },
+  { what: "agent 알 수 없는 키(strict)", patch: (m) => { m.agent = { instructions: "x", foo: 1 }; } },
+  { what: "agent 가 문자열", patch: (m) => { m.agent = "HTML 을 만들면 올린다"; } },
+  { what: "agent 에 instructions 없음", patch: (m) => { m.agent = { reinject_every: 40 }; } },
   { what: "jobs key 중복", patch: (m) => { m.jobs = [{ key: "j", schedule: "* * * * *", run: { kind: "headless", prompt: "x" } }, { key: "j", schedule: "* * * * *", run: { kind: "headless", prompt: "y" } }]; } },
   { what: "job run 에 prompt 없음", patch: (m) => { m.jobs = [{ key: "j", schedule: "0 * * * *", run: { kind: "headless" } }]; } },
   { what: "잘못된 display 모드", patch: (m) => { m.ui = { pages: [{ key: "a", title: "A", entry: "a.html", display: ["giant"] }] }; } },
@@ -65,7 +74,18 @@ const ACCEPTS: Array<{ what: string; patch: (m: Record<string, unknown>) => void
   { what: "prerelease semver", patch: (m) => { m.version = "1.0.0-beta.1"; } },
   { what: "build semver", patch: (m) => { m.version = "1.0.0+2026"; } },
   { what: "ui page+widget", patch: (m) => { m.ui = { pages: [{ key: "main", title: "M", entry: "ui/i.html", display: ["inline", "fullscreen"] }], widgets: [{ key: "w", title: "W", entry: "ui/w.html", surfaces: ["home"] }] }; } },
+  { what: "agent.instructions 4000자(경계-최대)", patch: (m) => { m.agent = { instructions: "가".repeat(4000) }; } },
+  { what: "agent.reinject_every 5(경계-최소)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 5 }; } },
+  { what: "agent.reinject_every 500(경계-최대)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 500 }; } },
 ];
+
+// ── agent — 세션에 붙었을 때 AI 에게 실리는 지침(#4595) ─────────────────────────
+test("M1 agent 없음 → undefined(기존 매니페스트 무회귀) · M2 instructions 만 → reinject_every 기본 40", () => {
+  assert.equal(parseAppManifest(base()).agent, undefined);
+  const m = parseAppManifest({ ...base(), agent: { instructions: "HTML 을 만들면 이 앱에 올린다" } });
+  assert.equal(m.agent?.instructions, "HTML 을 만들면 이 앱에 올린다");
+  assert.equal(m.agent?.reinject_every, 40);
+});
 
 for (const { what, patch } of ACCEPTS) {
   test(`통과: ${what}`, () => {
