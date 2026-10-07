@@ -149,6 +149,24 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   eq(l2.ui.insets.bottom, 8, "S2-11b 문서가 없어도 값은 선다");
 }
 
+// ══ S2-14 chrome / openMenu — 호스트 머리줄 접기 · 호스트 메뉴 열기(#4592) ══
+{
+  const { lively, posted, deliver } = boot();
+  ok(typeof lively.ui.chrome === "function" && typeof lively.ui.openMenu === "function", "S2-14 lively.ui.chrome · openMenu 가 있다");
+  const pc = lively.ui.chrome({ head: false });
+  eq(posted.find((m) => m.method === "ui/chrome").params, { head: false }, "S2-14 chrome({head:false}) → ui/chrome {head:false}");
+  deliver({ jsonrpc: "2.0", id: posted.find((m) => m.method === "ui/chrome").id, result: { ok: true } });
+  eq(await pc, { ok: true }, "S2-14 호스트의 답 그대로");
+  lively.ui.chrome({ head: true }); lively.ui.chrome();
+  eq(posted.filter((m) => m.method === "ui/chrome").slice(1).map((m) => m.params.head), [true, true], "S2-14 head:true 또는 인자 없음 = 편다");
+  const pm = lively.ui.openMenu([{ id: "doccm", label: "문서 전체 의견" }], { x: 300, y: 20 });
+  const rm = posted.find((m) => m.method === "ui/menu");
+  eq(rm.params, { items: [{ id: "doccm", label: "문서 전체 의견" }], x: 300, y: 20 }, "S2-14 openMenu → ui/menu {items, x, y}");
+  deliver({ jsonrpc: "2.0", id: rm.id, error: { code: -32601, message: "이 화면에서는 호스트 메뉴를 열 수 없습니다" } });
+  let caught = null; try { await pm; } catch (e) { caught = e; }
+  ok(caught && caught.code === -32601, "S2-14 못 여는 자리면 -32601 로 reject(앱이 제 메뉴를 낸다)");
+}
+
 // ══ S2-5 이름이 양쪽에서 같다(소스) · d.ts · 403 동의 재시도가 그 분기 안에 있다 ══
 {
   const host = read("web/v2/app-ui.ts");
@@ -342,6 +360,36 @@ if (!existsSync(built)) {
     fire3({ jsonrpc: "2.0", id: 32, method: "ui/initialize", params: {} });
     await settle();
     eq(replies.filter((m) => m && m.method === "ui/notifications/insets").length, 0, "S2-13b 가리는 것이 없는 프레임에는 인사 때 알림을 보내지 않는다");
+  }
+
+  // S2-15 ui/chrome · ui/menu — 받을 쪽(onChrome · onMenu)이 있는 자리에서만 (#4592)
+  {
+    const seen = []; let menuReq = null; let answer = "doccm";
+    const { f, fire } = await mount({ sessionId: "box-mine", onChrome: (c) => seen.push(c), onMenu: async (req) => { menuReq = req; return answer; } });
+    f.root.getBoundingClientRect = () => ({ left: 1000, top: 100, width: 340, height: 600, right: 1340, bottom: 700 });
+    fire({ jsonrpc: "2.0", id: 41, method: "ui/initialize", params: {} });
+    await settle();
+    const init = replies.find((m) => m && m.id === 41);
+    eq([init.result.capabilities.menu, init.result.capabilities.chrome], [true, true], "S2-15 인사의 capabilities 가 menu · chrome 을 알린다(받을 쪽이 있을 때)");
+    eq(seen, [{ head: true, init: true }], "S2-15 새 문서가 인사하면 머리줄은 «아직 청하지 않음» 으로 돌아간다(init)");
+    fire({ jsonrpc: "2.0", id: 42, method: "ui/chrome", params: { head: false } });
+    await settle();
+    eq([seen[1], replies.find((m) => m && m.id === 42).result], [{ head: false }, { ok: true }], "S2-15 ui/chrome {head:false} → onChrome · {ok:true}");
+    fire({ jsonrpc: "2.0", id: 43, method: "ui/menu", params: { items: [{ id: "doccm", label: "  문서   전체 의견 " }, { id: "", label: "빈 id" }, { id: "x", label: "" }, "쓰레기", { id: "long", label: "가".repeat(200) }], x: 300, y: 20 } });
+    await settle();
+    eq(menuReq, { items: [{ id: "doccm", label: "문서 전체 의견" }, { id: "long", label: "가".repeat(60) }], x: 1300, y: 120 }, "S2-15 ★ ui/menu → 항목은 글자만 다듬어(빈 것 버림 · 60자) · 자리는 프레임 좌표에서 이 창의 좌표로");
+    eq(replies.find((m) => m && m.id === 43).result, { picked: "doccm" }, "S2-15 고른 앱 항목의 id 가 앱에 돌아간다");
+    answer = "host-only";
+    fire({ jsonrpc: "2.0", id: 44, method: "ui/menu", params: { items: [{ id: "doccm", label: "문서 전체 의견" }], x: 99999, y: -5 } });
+    await settle();
+    eq([replies.find((m) => m && m.id === 44).result, menuReq.x, menuReq.y], [{ picked: null }, 1340, 100], "S2-15 앱이 보낸 항목에 없는 id 는 null 로 · 자리는 프레임 안으로 가둔다");
+    const { fire: fire2 } = await mount({ sessionId: "box-mine" });
+    fire2({ jsonrpc: "2.0", id: 45, method: "ui/initialize", params: {} });
+    fire2({ jsonrpc: "2.0", id: 46, method: "ui/menu", params: { items: [{ id: "a", label: "가" }], x: 1, y: 1 } });
+    fire2({ jsonrpc: "2.0", id: 47, method: "ui/chrome", params: { head: false } });
+    await settle();
+    const c2 = replies.find((m) => m && m.id === 45).result.capabilities;
+    eq([c2.menu, c2.chrome, replies.find((m) => m && m.id === 46).error.code, replies.find((m) => m && m.id === 47).result], [false, false, -32601, { ok: false }], "S2-15b 받을 쪽이 없는 자리(앱 찾기 · 크게 보기)는 capabilities 가 false · ui/menu 는 -32601 · ui/chrome 은 {ok:false}");
   }
 
 }

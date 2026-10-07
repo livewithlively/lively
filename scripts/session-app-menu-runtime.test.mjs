@@ -42,6 +42,12 @@ const CSS = ["01-base.css", "40-v2.css", "42-v2-panes.css", "49-v2-ctx.css"].map
 const APP_HTML = `<!doctype html><meta charset="utf-8"><title>앱</title><body>앱 화면<script>
 addEventListener('message', function (e) { var m = e.data; if (m && m.method === 'ui/notifications/prefs-open') parent.postMessage({ __probe: 'prefs-open-got' }, '*');
   if (m && m.method === 'ui/notifications/insets') setTimeout(function () { parent.postMessage({ __probe: 'insets', css: getComputedStyle(document.documentElement).getPropertyValue('--lively-inset-bottom').trim(), api: window.lively.ui.insets.bottom }, '*'); }, 0); });
+//  시험이 시키는 일 — 호스트 머리줄 접기 · 호스트 메뉴 열기(#4592). 앱 문서는 불투명 오리진이라 바깥에서 함수를 부를 수 없어 메시지로 시킨다.
+addEventListener('message', function (e) { var m = e.data; if (!m || !m.__cmd) return;
+  if (m.__cmd === 'chrome') window.lively.ui.chrome({ head: m.head }).then(function (r) { parent.postMessage({ __probe: 'chrome', ok: r.ok, caps: window.__caps }, '*'); });
+  if (m.__cmd === 'menu') window.lively.ui.openMenu([{ id: 'doccm', label: '문서 전체 의견' }, { id: '', label: '빈 id 는 버린다' }], { x: 300, y: 20 }).then(function (r) { parent.postMessage({ __probe: 'menu', picked: r.picked }, '*'); }, function (er) { parent.postMessage({ __probe: 'menu', err: er.code }, '*'); });
+});
+window.lively.ready.then(function (r) { window.__caps = r.capabilities; });
 parent.postMessage({ __probe: 'app-ready' }, '*');
 </script></body>`;
 const APP_P1 = { app_id: "deck-edit", title: "장표 수정", attached_at: "2026-10-07T00:00:00Z", attached_by: "me", usable: true, has_ui: true,
@@ -130,6 +136,24 @@ window.addEventListener('error',(e)=>window.__errs.push(String(e.message)));
     await until(()=>got.length>n0 && got.slice(-1)[0].css==='52px', 1500); R.R3i_reload=got.length>n0?got.slice(-1)[0]:null;
     pane.style.removeProperty('--pn-dock-b'); await sleep(60);
   }
+  // R3h — 앱이 호스트 머리줄을 접고, 제 ⋯ 로 호스트의 앱 메뉴를 연다 (#4592 «2열을 1열로»)
+  {
+    const got=[]; window.addEventListener('message',(e)=>{ if(e.data&&(e.data.__probe==='chrome'||e.data.__probe==='menu')) got.push(e.data); });
+    const last=(k)=>got.filter((g)=>g.__probe===k).slice(-1)[0]||null;
+    R.R3h_before=!head.hidden;
+    iframe.contentWindow.postMessage({__cmd:'chrome',head:false},'*'); await until(()=>last('chrome'),2000);
+    R.R3h_hidden=head.hidden===true; R.R3h_ok=(last('chrome')||{}).ok; R.R3h_caps=(last('chrome')||{}).caps||null;
+    iframe.contentWindow.postMessage({__cmd:'menu'},'*'); await until(()=>document.querySelector('.pn-ctx'),2000);
+    R.R3h_rows=menuRows().map((b)=>b.querySelector('.pn-ctx-l').textContent);
+    const fr=iframe.getBoundingClientRect(), mr=document.querySelector('.pn-ctx').getBoundingClientRect(); R.R3h_at=[Math.round(mr.left-fr.left),Math.round(mr.top-fr.top)];
+    row('문서 전체 의견').click(); await until(()=>last('menu'),2000); R.R3h_picked=(last('menu')||{}).picked; await until(()=>!document.querySelector('.pn-ctx'));
+    got.length=0; iframe.contentWindow.postMessage({__cmd:'menu'},'*'); await until(()=>document.querySelector('.pn-ctx'),2000); ESC(); await until(()=>last('menu'),2000);
+    R.R3h_null=last('menu')?last('menu').picked:'(답 없음)';
+    // 새 문서가 다시 청하지 않으면 머리줄이 돌아온다(앱이 제 ⋯ 를 없앤 새 판에서 호스트 메뉴까지 사라지지 않게)
+    iframe.srcdoc=iframe.srcdoc+'<!-- no-chrome -->'; await sleep(250); R.R3h_reloadHold=head.hidden===true;
+    await until(()=>!head.hidden,2500); R.R3h_reloadBack=!head.hidden;
+    await until(()=>window.__capsSeen||true,10); await sleep(300);
+  }
   // R4 — 목록이 바뀌었다(판 3 · 원본 덮어씀) → 붙이기 사건으로 다시 읽게
   window.__apps=[${JSON.stringify(APP_P2)}];
   window.__push('event: app\\ndata: '+JSON.stringify({type:'app',kind:'attach',app_id:'deck-edit',session:'sid-1'})+'\\n\\n');
@@ -184,6 +208,10 @@ t(R.R3_prefsOff === false && R.R3_prefsHint === "나에게만" && R.R3_prefsGot 
 t(!!R.R3i_set && R.R3i_set.css === "70px" && R.R3i_set.api === 70, "R3i-1 ★ 곁칸의 독이 바닥을 70px 가리면 앱 문서의 --lively-inset-bottom 이 70px (lively.ui.insets.bottom 도)", R.R3i_set);
 t(!!R.R3i_change && R.R3i_change.css === "36px" && !!R.R3i_clear && R.R3i_clear.css === "0px" && R.R3i_clear.api === 0, "R3i-2 독 크기가 바뀌거나 독이 비키면(이음매로 옮김) 따라 바뀐다", [R.R3i_change, R.R3i_clear]);
 t(!!R.R3i_reload && R.R3i_reload.css === "52px", "R3i-3 앱 화면이 다시 불러와져도(새 문서) 지금 값을 다시 받는다", R.R3i_reload);
+t(R.R3h_before === true && R.R3h_hidden === true && R.R3h_ok === true && !!R.R3h_caps && R.R3h_caps.menu === true && R.R3h_caps.chrome === true, "R3h-1 ★ 앱이 청하면 호스트의 앱 머리줄(이름 · 판 · ⋯)이 접힌다 — 인사의 capabilities 가 menu · chrome 을 알린다", [R.R3h_before, R.R3h_hidden, R.R3h_ok, R.R3h_caps]);
+t(Array.isArray(R.R3h_rows) && R.R3h_rows[0] === "문서 전체 의견" && R.R3h_rows.includes("AI에게 고치기…") && R.R3h_rows.includes("판 이력…") && R.R3h_rows.includes("이 세션에서 떼기") && !R.R3h_rows.includes("빈 id 는 버린다") && Math.abs(R.R3h_at[0] - 300) < 260 && R.R3h_at[1] >= 0, "R3h-2 ★ 앱의 ⋯ 가 여는 메뉴 = 앱의 항목(맨 위) + 호스트의 앱 메뉴 · 앱이 알려 준 자리 근처에 선다", [R.R3h_rows, R.R3h_at]);
+t(R.R3h_picked === "doccm" && R.R3h_null === null, "R3h-3 앱의 항목을 고르면 그 id 가, 닫으면 null 이 앱에 돌아간다", [R.R3h_picked, R.R3h_null]);
+t(R.R3h_reloadHold === true && R.R3h_reloadBack === true, "R3h-4 새 문서(다시 불러옴)가 다시 청하지 않으면 머리줄이 돌아온다(잠깐 기다렸다가 — 깜빡이지 않게)", [R.R3h_reloadHold, R.R3h_reloadBack]);
 t(R.R4_pill === "3판" && R.R4_verHint === "3판" && R.R4_origOff === false, "R4 목록이 다시 오면 「3판」 알약 · 힌트 · 「원본으로」 켜짐", [R.R4_pill, R.R4_verHint, R.R4_origOff]);
 t(JSON.stringify(R.R5_rows) === JSON.stringify(["3판 · 보낸 줄 접기", "2판 · 글 줄 칸을 아래로", "1판 · 라이블리 기본 앱"]) && R.R5_curOff === true, "R5 판 이력 메뉴 — 최신 먼저 · 지금 판은 흐림", [R.R5_rows, R.R5_curOff]);
 t(JSON.stringify(R.R5_revert) === JSON.stringify([{ version_no: 2 }]) && R.R5_reloadN === 1, "R5 「2판」 → POST /revert {version_no:2} → 그 자리에서 다시 띄움(1회)(리뷰 (2))", [R.R5_revert, R.R5_reloadN]);
