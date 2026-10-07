@@ -528,6 +528,84 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     f3.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
   }catch(e){R.err_r17b=String(e&&e.message||e);}
   grid.classList.remove('sw-left'); dock.sync(); await frame();
+  // FV — 곁칸 전체보기(이음매 없음 · 넓은 곁칸): 바닥을 따라 좌우로 끌어 옮긴다(원준 10-07)
+  try{
+    const keep=prefsNow();
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',mag:'1'})); Dock.refreshDocks();
+    seamOn=false; grid.style.setProperty('--pn-side-w','900px'); dock.sync(); await frame();
+    const pw=()=>rc(pane); let a=rc(shelf);
+    R.fv1_info=[Math.round(cx(a)-cx(pw())), root.dataset.home];
+    R.fv1_center=root.dataset.home==='float' && Math.abs(cx(a)-cx(pw()))<=1.5;
+    // FV2 — 손잡이를 잡고 왼쪽으로 150 → 윤곽이 따라오고, 놓으면 그 자리에 선다 · 서는 곳(home)은 안 바뀐다
+    let g2=grabPt(); const c0=cx(a);
+    const h2=document.elementFromPoint(g2[0],g2[1]);
+    P('pointerdown',g2[0],g2[1],h2||shelf); P('pointermove',g2[0]-20,g2[1]-4); P('pointermove',g2[0]-150,g2[1]-10);
+    const pv2=grid.querySelector('.pn-dock-preview');
+    R.fv2_preview=!!pv2 && pv2.dataset.home==='float' && Math.abs(cx(rc(pv2))-(c0-150))<=3 && Math.abs(rc(pv2).bottom-(pw().bottom-8))<=2;
+    R.fv2_pv_info=pv2?[Math.round(cx(rc(pv2))),Math.round(c0-150)]:null;
+    P('pointerup',g2[0]-150,g2[1]-10); await frame(); await sleep(450);
+    let sv=JSON.parse(prefsNow()||'null'); a=rc(shelf);
+    R.fv2_info=[JSON.stringify(sv), Math.round(cx(a)), Math.round(c0-150)];
+    R.fv2_moved=!!sv && Number(sv.fx)<0.5 && Math.abs(cx(a)-(c0-150))<=6 && root.parentElement===pane && Math.abs(a.bottom-(pw().bottom-8))<=1.5;
+    R.fv2_home_kept=!!sv && sv.home==='seam';
+    // FV3 — 왼쪽 끝 너머로 끌면 끝에서 멈춘다 · 끝에서 확대해도 곁칸 안(바깥 여백 8px)
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]-30,g2[1]); P('pointermove',pw().left-300,g2[1]);
+    P('pointerup',pw().left-300,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null');
+    const f0=rc(shelf.querySelector('.pn-dock-it .pn-dock-ic'));
+    shelf.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(f0),clientY:cy(f0),pointerType:'mouse'})); await frame(); await sleep(120);
+    a=rc(shelf); const ics=[...shelf.querySelectorAll('.pn-dock-ic')].map(rc); const lft=Math.min(a.left,...ics.map((q)=>q.left));
+    R.fv3_info=[sv&&sv.fx, Math.round(lft-pw().left), Math.round(Math.max(...ics.map((q)=>q.width)))];
+    R.fv3_edge=!!sv && Number(sv.fx)===0 && lft>=pw().left+8-1 && lft<=pw().left+60 && Math.max(...ics.map((q)=>q.width))>sizeNow()*1.3;
+    shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200);
+    // FV4 — [더보기] · 이름표는 옮긴 독을 따라간다(곁칸 안)
+    const mbv=root.querySelector('.pn-dock-more-btn'); mbv.click(); await frame(); await sleep(60);
+    const pnl=pane.querySelector('.pn-dock-more'); const mr=pnl&&rc(pnl);
+    R.fv4_more=!!pnl && mr.left>=pw().left && mr.right<=pw().right && cx(rc(mbv))>=mr.left && cx(rc(mbv))<=mr.right && cx(mr)<cx(pw())-60 && mr.bottom<=rc(shelf).top;
+    mbv.click(); await frame(); await sleep(220);
+    // FV5 — 우클릭 › «사이드바 아래 가운데로»(옮겨 둔 독에만 있다) → 가운데
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    const rowC=row('사이드바 아래 가운데로'); R.fv5_row=!!rowC; if(rowC) rowC.click(); await frame(); await sleep(60); ESC(); await frame();
+    sv=JSON.parse(prefsNow()||'null'); a=rc(shelf);
+    R.fv5_center=!!sv && Number(sv.fx)===0.5 && Math.abs(cx(a)-cx(pw()))<=1.5;
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    R.fv5_row_gone=!!menuText() && !row('사이드바 아래 가운데로'); ESC(); await frame();
+    // FV6 — 오른쪽으로 옮겼다가 가운데 근처(10px)에 놓으면 가운데로 붙는다
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+30,g2[1]); P('pointermove',g2[0]+200,g2[1]); P('pointerup',g2[0]+200,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv6_right=!!sv && Number(sv.fx)>0.5 && cx(rc(shelf))>cx(pw())+150;
+    g2=grabPt(); const back=cx(pw())+10-cx(rc(shelf));
+    P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]-30,g2[1]); P('pointermove',g2[0]+back,g2[1]); P('pointerup',g2[0]+back,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv6_snap=!!sv && Number(sv.fx)===0.5 && Math.abs(cx(rc(shelf))-cx(pw()))<=1.5; R.fv6_info=[sv&&sv.fx, Math.round(cx(rc(shelf))-cx(pw()))];
+    // FV7 — 좁은 곁칸(340)에선 알약이 폭을 채운다: 왼쪽 끝을 골라 뒀어도 가운데 · 좌우로 끌어도 고른 자리(fx)는 그대로
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.00',mag:'1'})); Dock.refreshDocks();
+    grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
+    a=rc(shelf); R.fv7_center=root.dataset.home==='float' && Math.abs(cx(a)-cx(pw()))<=1.5;
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+10,g2[1]-6); P('pointermove',g2[0]+40,g2[1]-10); P('pointerup',g2[0]+40,g2[1]-10); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv7_kept=!!sv && Number(sv.fx)===0 && sv.home==='seam'; R.fv7_info=JSON.stringify(sv);
+    // FV9 — 서랍(좁은 폭)은 넓은 화면에서 고른 자리와 무관하게 가운데(거기선 끌 수도 되돌릴 수도 없다)
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.00',mag:'1'})); Dock.refreshDocks();
+    grid.style.setProperty('--pn-side-w','900px'); narrowNow=true; dock.sync(); await frame();
+    a=rc(shelf); R.fv9_info=Math.round(cx(a)-cx(pw())); R.fv9_narrow_center=root.classList.contains('narrow') && Math.abs(cx(a)-cx(pw()))<=1.5;
+    narrowNow=false; dock.sync(); await frame();
+    R.fv9_wide_left=cx(rc(shelf))<cx(pw())-150;
+    // FV10 — 이음매가 있는 넓은 곁칸의 «사이드바 아래» 독도 좌우로 옮긴다 — 서는 곳(home=float)과 좌우 자리를 함께 적는다
+    localStorage.setItem(PK,JSON.stringify({home:'float',at:'0.50',mag:'1'})); Dock.refreshDocks();
+    seamOn=true; dock.sync(); await frame();
+    g2=grabPt(); const c10=cx(rc(shelf));
+    P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+30,g2[1]); P('pointermove',g2[0]+160,g2[1]); P('pointerup',g2[0]+160,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv10_info=[JSON.stringify(sv), Math.round(cx(rc(shelf))-c10)];
+    R.fv10_seam_float=!!sv && sv.home==='float' && Number(sv.fx)>0.5 && root.dataset.home==='float' && Math.abs(cx(rc(shelf))-(c10+160))<=6;
+    // FV11 — 이음매에 선 독의 메뉴엔 «사이드바 아래 가운데로» 가 없다(눌러도 보이는 일이 없다)
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.90',mag:'1'})); Dock.refreshDocks(); await frame();
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    R.fv11_no_row=root.dataset.home==='seam' && !!menuText() && !row('사이드바 아래 가운데로'); ESC(); await frame();
+    grid.style.removeProperty('--pn-side-w'); seamOn=false; dock.sync(); await frame();
+    // FV8 — 이음매가 돌아오면 다시 이음매(전체보기에서 옮긴 것은 좌우 자리뿐)
+    seamOn=true; dock.sync(); await frame();
+    R.fv8_seam_back=root.dataset.home==='seam' && root.parentElement===grid;
+    if(keep===null) localStorage.removeItem(PK); else localStorage.setItem(PK,keep); Dock.refreshDocks();
+  }catch(e){R.err_fv=String(e&&e.stack||e);}
+  seamOn=true; grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
   // R17c — 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다
   grid.style.setProperty('--pn-side-w','0px'); pane.style.width='0px'; pane.style.borderLeftWidth='0px'; dock.sync(); await frame();
   R.r17c=root.hidden && getComputedStyle(pbody).paddingBottom==='0px' && getComputedStyle(tkPart,'::after').height==='0px';
@@ -644,6 +722,22 @@ check(R.b7_reset, "B7 «독 되돌리기» = 이음매 가운데 · 확대 켬 +
 check(R.a6_narrow_none, "A6 좁은 폭(서랍)은 곁칸 아래 · [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
 check(R.hd5_narrow_no_handle, "HD5 좁은 폭(서랍)엔 손잡이가 없다(끌기가 없다)");
 check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 아래");
+check(!R.err_fv, "FV0 전체보기 장면이 끝까지 돈다", R.err_fv);
+check(R.fv1_center, "FV1 곁칸 전체보기(이음매 없음 · 넓은 곁칸) — 적은 적 없으면 바닥 한가운데", JSON.stringify(R.fv1_info));
+check(R.fv2_preview, "FV2a 손잡이를 잡고 왼쪽으로 끌면 놓일 자리 윤곽이 바닥을 따라 따라온다(원준 10-07)", JSON.stringify(R.fv2_pv_info));
+check(R.fv2_moved, "FV2 놓으면 그 자리에 선다 — 계정 설정에 좌우 자리(fx), 곁칸 바닥에 그대로", JSON.stringify(R.fv2_info));
+check(R.fv2_home_kept, "FV2b 이음매 없는 화면에서 옮겨도 서는 곳(home)은 안 바뀐다 — 나란히 보기로 돌아가면 이음매 그대로", JSON.stringify(R.fv2_info));
+check(R.fv3_edge, "FV3 곁칸 밖으로 끌면 끝에서 멈춘다(fx 0) — 끝에서 확대해도 바깥 여백 8px 안", JSON.stringify(R.fv3_info));
+check(R.fv4_more, "FV4 [더보기]는 옮긴 독 위에, 곁칸 안에 부푼다");
+check(R.fv5_row && R.fv5_center, "FV5 우클릭 › «사이드바 아래 가운데로» → 가운데(키보드로도 닿는 길)");
+check(R.fv5_row_gone, "FV5b 가운데에 있으면 그 줄이 없다");
+check(R.fv6_right && R.fv6_snap, "FV6 오른쪽으로도 옮긴다 · 가운데 근처(10px)에 놓으면 가운데로 붙는다", JSON.stringify(R.fv6_info));
+check(R.fv7_center, "FV7 좁은 곁칸(340)에선 왼쪽 끝을 골라 뒀어도 가운데 — 알약이 폭을 채운다");
+check(R.fv7_kept, "FV7b 좁은 곁칸에서 좌우로 끌어도 넓을 때 고른 자리(fx)를 안 지운다", R.fv7_info);
+check(R.fv9_narrow_center && R.fv9_wide_left, "FV9 서랍(좁은 폭)은 왼쪽 끝을 골라 뒀어도 가운데 — 넓은 화면으로 돌아오면 고른 자리", String(R.fv9_info));
+check(R.fv10_seam_float, "FV10 이음매가 있는 넓은 곁칸의 «사이드바 아래» 독도 좌우로 옮긴다(home=float + fx)", JSON.stringify(R.fv10_info));
+check(R.fv11_no_row, "FV11 이음매에 선 독의 메뉴엔 «사이드바 아래 가운데로» 가 없다");
+check(R.fv8_seam_back, "FV8 이음매가 돌아오면 다시 이음매");
 check(R.r17_back, "R17a 이음매가 돌아오면 다시 이음매");
 check(R.r17b_swap, "R17b 자리바꿈(곁칸이 왼쪽)이면 오른쪽 분할선 위", JSON.stringify(R.r17b_info));
 check(R.r17b_tip, "R17c 자리바꿈이면 이름표는 세션 쪽(오른쪽)");
