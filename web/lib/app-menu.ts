@@ -30,14 +30,15 @@ export interface MenuHandlers {
 
 /**
  * ⋯ 메뉴의 줄. 순서가 곧 뜻이다 — 고치는 길(AI·설정·판) → 보는 길(크게) → 떼기(위험색, 맨 아래 관례).
- *  @param app.hasFrame 앱 화면이 떠 있나(없으면 표시 설정을 보낼 곳이 없다)
+ *  @param app.hasPrefs 앱 화면이 떠 있고 **표시 설정을 받겠다고 구독**했나(SDK lively.ui.onPrefsOpen → ui/subscribe {topic:'prefs-open'}).
+ *                      안 했으면 보내 봐야 받을 곳이 없다 — 흐리게 두고 까닭을 힌트로(격리 리뷰).
  *  @param app.overridesBuiltin 워크스페이스 판이 원본을 덮고 있나(아니면 「원본으로」는 할 일이 없다)
- *  @param app.versionNo 지금 판 번호(모르면 null — 힌트를 비운다)
+ *  @param app.versionNo 지금 판 번호(모르면 null — 힌트를 비운다 · 옛 게이트웨이는 안 준다)
  */
-export function sessAppMenuRows(app: { title: string; hasFrame: boolean; overridesBuiltin: boolean; versionNo: number | null }, h: MenuHandlers): MenuRow[] {
+export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overridesBuiltin: boolean; versionNo: number | null }, h: MenuHandlers): MenuRow[] {
   return [
     { label: 'AI에게 고치기…', icon: 'pencil', hint: '세션에 말하기', run: h.edit },
-    { label: '표시 설정', icon: 'sliders', off: !app.hasFrame, hint: app.hasFrame ? '나에게만' : '앱 화면이 없음', run: h.prefs },
+    { label: '표시 설정', icon: 'sliders', off: !app.hasPrefs, hint: app.hasPrefs ? '나에게만' : '이 앱은 표시 설정이 없어요', run: h.prefs },
     { label: '판 이력…', icon: 'clock', hint: app.versionNo ? `${app.versionNo}판` : undefined, run: h.versions },
     { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 판으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
