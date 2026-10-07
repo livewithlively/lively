@@ -149,7 +149,11 @@ window.addEventListener('error',(e)=>window.__errs.push(String(e.message)));
 })();
 </script>`;
 
-const dom = await dumpDom(chrome, { html: PAGE, prefix: "sessapp-menu-", virtualTimeBudget: 20000, args: ["--window-size=1200,800"] });
+//  ⚠ IsolateSandboxedIframes 를 끈다 — 크롬은 sandbox iframe 을 **다른 프로세스**에 두는데, 가상 시간(--virtual-time-budget)은
+//   프로세스를 건너는 postMessage 왕복을 기다려 주지 않는다. 부모의 «3초 기다리기» 가 실시간 몇 ms 에 끝나 R3(앱 문서가
+//   prefs-open 을 받았다고 되알림)이 세 번에 두 번 빨갛게 흔들렸다(2026-10-07 실측: 같은 코드 3회 중 1회 통과 → 끄고 8회 연속 통과).
+//   같은 프로세스에 두면 알림과 되알림이 같은 이벤트 루프에서 순서대로 돈다. 재는 것은 호스트의 배선이지 프로세스 격리가 아니다.
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "sessapp-menu-", virtualTimeBudget: 20000, args: ["--window-size=1200,800", "--disable-features=IsolateSandboxedIframes"] });
 const m = dom.match(/RESULT(\{[\s\S]*?\})ENDRESULT/);
 if (!m) { console.error("FAIL  결과를 못 읽었다\n" + dom.slice(0, 1200)); process.exit(1); }
 const R = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
