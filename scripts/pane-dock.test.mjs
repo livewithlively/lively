@@ -32,17 +32,30 @@ const near = (got, want, n, eps = 1e-9) => check(Math.abs(got - want) <= eps, n,
 
 // ── 1부: 순수 규칙 ────────────────────────────────────────────────────────────
 // 설정 읽기·쓰기 (P1–P7) — 이음매 판(10-01): 서는 곳(home) 둘 · 이음매 자리(at) · 확대
-eq(D.readDockPrefs(undefined), { home: "seam", at: 0.5, mag: true }, "P1 적은 적 없으면 기본 — 이음매(4안) 가운데, 확대 켬(원준 10-01: 디폴트는 4안)");
-eq(D.readDockPrefs({ home: "float", at: "0.30", mag: "0" }), { home: "float", at: 0.3, mag: false }, "P2 적어 둔 대로");
-eq(D.readDockPrefs({ home: "diagonal", at: "x", mag: 3 }), { home: "seam", at: 0.5, mag: true }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
+eq(D.readDockPrefs(undefined), { home: "seam", at: 0.5, fx: 0.5, mag: true }, "P1 적은 적 없으면 기본 — 이음매(4안) 가운데, 확대 켬(원준 10-01: 디폴트는 4안)");
+eq(D.readDockPrefs({ home: "float", at: "0.30", mag: "0" }), { home: "float", at: 0.3, fx: 0.5, mag: false }, "P2 적어 둔 대로");
+eq(D.readDockPrefs({ home: "diagonal", at: "x", mag: 3 }), { home: "seam", at: 0.5, fx: 0.5, mag: true }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
 eq(D.readDockPrefs({ home: "float", at: "x" }).home, "float", "P3b 한 칸만 깨지면 나머지 칸은 적힌 대로");
-eq(D.readDockPrefs({ edge: "right", at: "0.80", mode: "bar", hide: "1", mag: "1" }), { home: "seam", at: 0.8, mag: true }, "P3c 종전 판의 칸(edge · mode · hide)은 안 읽는다 — 무엇을 골랐든 이음매에서 다시 시작(막대·가리기는 걷었다)");
+eq(D.readDockPrefs({ edge: "right", at: "0.80", mode: "bar", hide: "1", mag: "1" }), { home: "seam", at: 0.8, fx: 0.5, mag: true }, "P3c 종전 판의 칸(edge · mode · hide)은 안 읽는다 — 무엇을 골랐든 이음매에서 다시 시작(막대·가리기는 걷었다)");
 eq([D.readDockPrefs({ at: "1.7" }).at, D.readDockPrefs({ at: "-2" }).at, D.readDockPrefs({ at: "" }).at], [1, 0, 0.5], "P4 자리는 0~1 로 자르고, 빈 값은 가운데");
-const p5 = { home: "float", at: 0.123, mag: false };
-eq(D.readDockPrefs(D.writeDockPrefs(p5)), { ...p5, at: 0.12 }, "P5 적은 것을 다시 읽으면 같다(자리는 소수 둘째 자리)");
+const p5 = { home: "float", at: 0.123, fx: 0.876, mag: false };
+eq(D.readDockPrefs(D.writeDockPrefs(p5)), { ...p5, at: 0.12, fx: 0.88 }, "P5 적은 것을 다시 읽으면 같다(자리는 소수 둘째 자리)");
 check(Object.values(D.writeDockPrefs(p5)).every((v) => typeof v === "string" && v.length <= 64), "P6 서버 map 저장소 규격 — 값은 문자열 64자 이내");
 eq([D.effectiveHome({ home: "seam" }, true), D.effectiveHome({ home: "seam" }, false), D.effectiveHome({ home: "float" }, true)], ["seam", "float", "float"],
   "P7 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 — 있으면 사람이 고른 곳");
+
+// 곁칸 아래 좌우 자리 (FX1–FX9) — 원준 10-07 «곁칸 전체보기로 보고있을 때 아래 Dock 끌어당겨서 밑에 위치 옮기거나». 구간 200~1000(가운데 600).
+eq([D.readDockPrefs({ fx: "0.20" }).fx, D.readDockPrefs({ fx: "7" }).fx, D.readDockPrefs({ fx: "-1" }).fx, D.readDockPrefs({ fx: "x" }).fx, D.readDockPrefs({ fx: "" }).fx], [0.2, 1, 0, 0.5, 0.5],
+  "FX1 좌우 자리는 적어 둔 대로 · 0~1 로 자르고 · 깨진 값 · 빈 값은 가운데");
+eq(D.writeDockPrefs({ home: "float", at: 0.5, fx: 0.2, mag: true }).fx, "0.20", "FX2 좌우 자리도 계정에 적는다(문자열)");
+eq([D.floatCenter(0, 200, 1000), D.floatCenter(0.5, 200, 1000), D.floatCenter(1, 200, 1000), D.floatCenter(0.25, 200, 1000)], [200, 600, 1000, 400], "FX3 자리 → 가운데 x — 구간의 비율(0 = 왼쪽 끝 · 1 = 오른쪽 끝)");
+eq([D.floatCenter(0, 180, 160), D.floatCenter(1, 180, 160), D.floatCenter(0.2, 170, 170)], [170, 170, 170], "FX4 구간이 없으면(좁은 곁칸 — 알약이 폭을 채운다) 무엇을 골랐든 가운데");
+eq([D.floatCenter(-3, 200, 1000), D.floatCenter(9, 200, 1000)], [200, 1000], "FX4b 범위 밖 값은 끝으로 자른다(알약이 곁칸 밖으로 안 나간다)");
+eq([D.floatAt(400, 200, 1000), D.floatAt(900, 200, 1000)], [0.25, 0.88], "FX5 놓은 자리 → 구간의 비율(소수 둘째 자리)");
+eq([D.floatAt(50, 200, 1000), D.floatAt(5000, 200, 1000)], [0, 1], "FX6 구간 밖에 놓으면 끝으로 자른다");
+eq([D.floatAt(614, 200, 1000), D.floatAt(586, 200, 1000), D.floatAt(615, 200, 1000)], [0.5, 0.5, 0.52], "FX7 경계 — 가운데 ±14px 은 가운데로 붙는다, 15px 은 놓은 자리 그대로");
+eq([D.floatAt(170, 160, 183), D.floatAt(170, 180, 160), D.floatAt(170, 160, 184) !== undefined], [undefined, undefined, true], "FX8 경계 — 움직일 구간이 24px 도 안 되면 자리를 안 돌려준다(넓을 때 고른 자리를 지우지 않게), 24px 이면 돌려준다");
+near(D.floatCenter(D.floatAt(431, 200, 1000), 200, 1000), 431, "FX9 놓은 자리에 다시 선다(적고 읽어도 2.5% 이내 — 800px 구간에 4px)", 4);
 
 // 고정 목록 (N1–N5)
 const known = (t) => ["tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
@@ -210,7 +223,12 @@ check([".pn-fbody", ".pn-knlist", ".pn-knr-scroll", ".pn-tl .tl-scroll", ".pn-pr
   "W13b 목록 상자(자료 · 지식 목록 · 지식 읽기 · 타임라인 · 미리보기 · 뷰어 · 앱 · 세션 파일)는 끝에만 독 두께만큼 빈 자리 · 입력칸 앱(프로젝트 · 리브)은 앱 끝에 · 고치기 칸은 아래 안 여백", JSON.stringify({ lists, lifts }));
 //  곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 서랍만 없다 · 크기와 놓일 자리 윤곽이 손잡이 몫을 안다.
 check(/if \(!host\.narrow\(\)\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
-  && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /extra: seps \+ HANDLE_FLOAT,/.test(DOCK) && /2 \* \(M\.pad \+ 2\) \+ seps \+ HANDLE_FLOAT\)/.test(DOCK),
+  && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /SEP \+ HANDLE_FLOAT;\n\s*const s = floatIconSize\(W, n, \{[^}]*extra, grow/.test(DOCK) && /const w = Math\.min\(W - 2 \* M\.margin, floatWidth\(n, s, extra\)\)/.test(DOCK),
   "W14 손잡이는 이음매 · 곁칸 아래 둘 다(서랍만 없다) — 곁칸 아래 크기와 끌 때의 윤곽이 손잡이 몫(HANDLE_FLOAT)을 셈한다");
+//  곁칸 아래 좌우 자리(원준 10-07) — 자리 · 끌어 놓기 · 윤곽이 모두 규칙(floatCenter · floatAt)을 타고, 자리를 못 정했으면 열쇠째 안 적는다.
+check(/st\.left = floatCenter\(host\.narrow\(\) \? DOCK_DEFAULTS\.fx : prefs\.fx, lo, hi\) \+ 'px';/.test(DOCK) && !/st\.left = pane\.clientWidth \/ 2 \+ 'px';/.test(DOCK), "W15 곁칸 아래 독은 바닥의 fx 자리에 선다(늘 한가운데가 아니다)");
+check(/const fx = floatAt\([^;]*f\.lo, f\.hi\);\n\s*if \(fx !== undefined\) target\.fx = fx;/.test(DOCK), "W15b 끌어 놓은 좌우 자리는 규칙(floatAt)이 정한다 — 못 정하면 열쇠째 뺀다(undefined 를 적으면 옛 자리가 지워진다)");
+check(/floatCenter\(t\.fx \?\? prefs\.fx, f\.lo, f\.hi\) - w \/ 2/.test(DOCK), "W15c 놓일 자리 윤곽도 같은 좌우 자리에 그린다");
+check(/const half = w \/ 2 \+ \(magOn\(\) \? \(MAG_GROW \* s\) \/ 2 : 0\) \+ M\.margin;/.test(DOCK), "W15d 좌우 구간은 확대로 불어날 몫(양쪽 반씩)과 바깥 여백을 남긴다 — 끝에 둔 독을 확대해도 곁칸 테두리에서 안 잘린다");
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
