@@ -68,6 +68,9 @@ export interface DockHost {
   seam?(): HTMLElement | null;
   /** 좁은 폭(서랍) — 끌기·확대를 끄고 곁칸 아래 가운데에 둔다. */
   narrow(): boolean;
+  /** 독을 세우지 않는다(#4443 폰 · 눕힌 폰의 서랍). 서랍 위 탭 줄과 그 [＋] 가 같은 일을 하고, 독이 가리는 80px 은
+   *  폰(보이는 높이 672)에서 화면의 12% 다. 없으면 늘 세운다(옛 배선). */
+  off?(): boolean;
 }
 export interface DockHandle { sync(): void; destroy(): void }
 
@@ -215,7 +218,9 @@ export function mountDock(host: DockHost): DockHandle {
     const act = host.act();
     items = dockItems(pins, host.tabs(), act);
     const W = pane.clientWidth, H = pane.clientHeight;
-    if (!W || !H) { root.hidden = true; tip.hidden = true; applyInset(null); sig = ''; return; }   // 접힌 칸 · 숨은 탭
+    const off = !!host.off?.();
+    if (off) more?.close();                                         // 폰으로 좁혔거나 눕혔다. 떠 있던 [더보기] 도 걷는다
+    if (!W || !H || off) { root.hidden = true; tip.hidden = true; applyInset(null); sig = ''; return; }   // 접힌 칸 · 숨은 탭 · 독을 안 세우는 화면
     root.hidden = false;
     const geom = seamGeom();
     home = effectiveHome(prefs, !!geom);

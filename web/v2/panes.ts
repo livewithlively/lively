@@ -30,7 +30,7 @@ import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870: 사이드바가 화면을 다 차지하면 세션이 카드가 된다
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
-import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
+import { HANDSET_MQ, MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속) · 폰 · 눕힌 폰(#4443 독을 안 세운다)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
@@ -261,6 +261,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  브라우저로 데스크톱 폭에 오면 원래 자리 그대로다. 부품은 한 벌만 — 문턱을 넘으면 반대쪽 칸의 것을 걷는다(onNarrow).
   const narrowMq = window.matchMedia(MOBILE_MQ);
   const narrow = (): boolean => narrowMq.matches;
+  const handsetMq = window.matchMedia(HANDSET_MQ);   // #4443 폰 · 눕힌 폰. 서랍에 독을 안 세운다
   let sideActNarrow: TabKey | null = null;     // 서랍에서 켠 탭(아래 칸의 것일 수 있다) — 저장하지 않는다
   /** 그 칸에 **그려질** 탭 — 좁은 폭에선 곁칸이 아래 칸의 탭까지 든다. */
   const zoneTabs = (zone: Zone): TabKey[] => (narrow() ? (zone === 'side' ? [...lay.side, ...lay.bottom] : zone === 'bottom' ? [] : lay[zone]) : lay[zone]);
@@ -1786,6 +1787,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //   분할선 display:none)엔 이음매가 없다 — 독은 곁칸 아래로 선다. 자리바꿈(sw-left)이면 분할선이 곁칸 오른쪽에 있다(독이 스스로 읽는다).
     seam: () => (narrow() || !lay.sideOn || body.classList.contains('cm') ? null : splitX),
     narrow: () => narrow(),
+    //  #4443 폰 · 눕힌 폰의 서랍엔 독을 안 세운다. 서랍 위 탭 줄과 그 [＋](앱 서랍)가 같은 일을 하고, 앱 화면이 그 높이를 쓴다.
+    off: () => handsetMq.matches,
   });
 
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)

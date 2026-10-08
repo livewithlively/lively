@@ -26,6 +26,9 @@ import { railSection, railSections, setRailSection, type RailSection } from './r
 
 export const MOBILE_MQ = '(max-width: 900px)';   // = 40-v2.css 모바일 블록의 문턱(종전 우패널 숨김 문턱과 같다 — 태블릿 세로 포함)
 export const PHONE_MQ = '(max-width: 640px)';    // = 50-mobile.css 폰 블록의 문턱 — 아래 탭 바가 서는 폭
+/** #4443 폰을 세웠거나 눕혔다 = 폭 ≤640, 또는 좁은 폭(≤900)인데 높이가 ≤500. 곁칸 서랍에 독을 안 세우고 «크게 보기» 를 화면 전체로 띄우는 문턱.
+ *  50-mobile.css 의 같은 이름 블록(«폰 · 눕힌 폰»)과 같은 값이다. 눕힌 폰은 폭이 태블릿 쪽(641~900)이라 PHONE_MQ 만으로는 안 잡힌다. */
+export const HANDSET_MQ = '(max-width: 640px), (max-width: 900px) and (max-height: 500px)';
 
 export interface MobileChrome {
   bar: HTMLElement;
