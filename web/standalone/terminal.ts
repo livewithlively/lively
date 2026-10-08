@@ -9,6 +9,7 @@
 
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
+import { installPinchGuard } from './pinch-guard.js';   // #3870 트랙패드 확대 막기(정본 web/lib/pinch-guard.ts 의 사본)
 import { isTerminalOmniChord, OMNI_MSG, OMNI_CLOSED_MSG } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
 import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
 import {                                  // #4406 Claude Code 입력칸 선택 — 범위는 웹, 지우기는 앱(순수 판정)
@@ -4102,6 +4103,7 @@ function setupEmbedBridge() {
 }
 
 export async function boot() {
+  installPinchGuard();   // #3870 터미널 위에서 두 손가락이 벌어져도 셸 화면이 확대되지 않게(제스처는 커서 밑 문서로 온다)
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
   padGain = Math.max(0.5, Math.min(6, Number(p.padGain) || 3));
