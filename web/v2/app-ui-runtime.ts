@@ -94,13 +94,13 @@ export const APP_RUNTIME_JS = `
   }, true);
   // #4443 글 상자에 초점이 들고 나는 것을 호스트에 알린다(ui/typing { on }). 폰에서 쓰는 동안 셸이 아래 탭 바를 걷고 서랍을 자판 위까지 편다.
   //  바뀔 때만 보낸다. 글 상자에서 글 상자로 옮길 때는 focusout 과 focusin 사이에 초점이 body 에 있는 틈이 있어 한 박자 뒤에 판정한다.
-  //  체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 · 꺼진 칸은 글 상자가 아니다(눌러도 자판이 안 뜬다).
+  //  체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 · 꺼진 칸 · 고르기 상자는 글 상자가 아니다(눌러도 자판이 안 뜬다. 고르기 상자는
+  //  고르기 판이 닫힌 뒤에도 초점이 남아 탭 바가 숨은 채로 남을 수 있다). 셸 CSS(50-mobile.css)의 목록과 같다.
   function isTypingField(t) {
     if (!t || t.nodeType !== 1) return false;
     if (t.isContentEditable) return true;
     var n = t.tagName;
     if (n === 'TEXTAREA') return !t.disabled && !t.readOnly;
-    if (n === 'SELECT') return !t.disabled;
     if (n !== 'INPUT') return false;
     var ty = String(t.type || 'text').toLowerCase();
     return !t.disabled && !t.readOnly && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);

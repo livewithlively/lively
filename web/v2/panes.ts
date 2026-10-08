@@ -520,9 +520,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); applySessionAct(); applyView(); paintAll(); },
     // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
     //  머리줄 [자료](#4088 후속) — 자료 칸(프로젝트 없는 세션은 세션 폴더 칸)을 보이게 한다. 배선만 넘긴다(무엇을 켤지는 셸이 안다).
-    //  #4443 머리줄 [붙은 앱]: 이 세션에 붙은 앱 목록(탭과 같은 한 벌)과 그 앱 탭을 여는 손(곁칸 [앱]을 다시 눌렀을 때와 같은 길).
+    //  #4443 머리줄 [붙은 앱]: 이 세션에 붙은 앱 목록(탭과 같은 한 벌)과 그 앱 탭을 여는 함수(곁칸 [앱]을 다시 눌렀을 때와 같은 openSessAppTab).
     mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid), openFiles: () => showPart(loose ? 'sessfiles' : 'files'), filesLabel: loose ? '세션 파일' : '자료',
-      appDoor: { watch: (fn) => watchSessionApps(sid, (apps) => fn(apps.length ? { title: sessAppTabTitle(apps), icon: sessAppDoorIcon(apps, 'sc-act-ic') } : null)), open: () => openSessAppTab() } }) : undefined,
+      appDoor: { watch: (fn) => watchSessionApps(sid, (apps) => fn(apps.length ? { title: sessAppTabTitle(apps), count: apps.length, icon: sessAppDoorIcon(apps, 'sc-act-ic') } : null)), open: () => openSessAppTab() } }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
     curSession: () => curSession(),
     onSession: (fn) => { sessSubs.add(fn); return () => { sessSubs.delete(fn); }; },
@@ -1807,7 +1807,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       } else paintTabs(z);
     });
   }
-  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다 — 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 길이다.
+  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다. 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 함수를 부른다.
   function openSessAppTab(): void {
     const z = zoneOf(SESSAPP_TAB);
     if (!z) return;

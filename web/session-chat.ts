@@ -128,9 +128,10 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
     : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&fmt=chat&${qs}`;   // fmt=chat: 공통 ChatLine(원본 바이트 아님)
 };
 
-/** #4443 머리줄 [붙은 앱] 배선: 무엇이 붙었는지(제목 · 아이콘)와 그 앱 탭을 여는 손. 셸이 세션마다 만든다. */
+/** #4443 머리줄 [붙은 앱] 배선: 무엇이 붙었는지(제목 · 붙은 수 · 아이콘)와 그 앱 탭을 여는 함수. 셸이 세션마다 만든다.
+ *  watch 는 붙은 목록이 바뀔 때마다 부른다(null = 붙은 앱 없음). 돌려주는 함수로 끊는다. */
 export interface SessAppDoor {
-  watch(fn: (d: { title: string; icon: SVGElement | null } | null) => void): () => void;
+  watch(fn: (d: { title: string; count: number; icon: SVGElement | null } | null) => void): () => void;
   open(): void;
 }
 
@@ -376,10 +377,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const appGoBtn = appDoor ? el('button', { class: 'btn-text sc-act sc-act-app', type: 'button', hidden: true, onclick: () => appDoor.open() }) as HTMLButtonElement : null;
   const offAppDoor = appDoor && appGoBtn ? appDoor.watch((d) => {
     appGoBtn.hidden = !d;
-    if (!d) { appGoBtn.replaceChildren(); return; }
-    appGoBtn.title = `이 세션에 붙은 앱 「${d.title}」을(를) 사이드바에서 엽니다`;
-    appGoBtn.setAttribute('aria-label', `붙은 앱 ${d.title} 열기`);
-    appGoBtn.replaceChildren(...(d.icon ? [d.icon] : []), el('span', { class: 'sc-act-app-t', text: d.title }));
+    if (!d) { replaceKids(appGoBtn); return; }
+    //  여럿이면 보이는 글자가 «앱 n개» 다. 이름표가 «붙은 앱 앱 n개» 로 겹치지 않게 수로 말한다(보이는 글자는 이름표 안에 그대로 든다).
+    const one = d.count <= 1;
+    appGoBtn.title = one ? `이 세션에 붙은 앱 「${d.title}」을(를) 사이드바에서 엽니다` : `이 세션에 붙은 앱 ${d.count}개를 사이드바에서 엽니다`;
+    appGoBtn.setAttribute('aria-label', one ? `붙은 앱 ${d.title} 열기` : `붙은 앱 ${d.count}개 열기`);
+    replaceKids(appGoBtn, d.icon, el('span', { class: 'sc-act-app-t', text: d.title }));
   }) : null;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).
