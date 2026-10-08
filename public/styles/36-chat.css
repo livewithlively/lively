@@ -171,6 +171,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* [자료](#4088 후속) — 폴더 아이콘 + 글자. 아이콘은 사이드바·탭과 같은 붓(라인, 채움 없음). */
 .sc-act-files { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-ic { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+/* [붙은 앱](#4443): 이 세션에 붙은 앱의 아이콘(그 앱 색)과 이름. 넓은 폭은 곁칸에 그 탭이 늘 보여 숨기고, 곁칸이 서랍에 접히는 좁은 폭(≤900)에서만 선다. */
+.sc-act-app { display: none; }
+@media (max-width: 900px) { .sc-act-app:not([hidden]) { display: inline-flex; align-items: center; gap: 4px; min-width: 0; } }
+.sc-act-app-t { max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 연결 상태 + [화면 복구] 한 덩어리 — 테두리를 **묶음이** 쥐고 안쪽 단추는 제 테두리를 안 그린다.
    손을 얹으면 둘이 함께 뜬다: «지금 어떤가»와 «그걸 고치는 단추»가 한 몸이라는 걸 모양이 말한다. */
 .sc-pair { display: inline-flex; align-items: center; gap: 0; flex: none;

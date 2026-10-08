@@ -84,6 +84,9 @@ export interface AppUiMountOpts {
   onChrome?: (c: { head: boolean; init?: boolean }) => void;
   /** 앱이 호스트 메뉴를 열어 달라고 했다(lively.ui.openMenu). 없으면 못 여는 자리(인사의 capabilities.menu = false · 부르면 -32601). */
   onMenu?: (req: AppMenuRequest) => Promise<string | null>;
+  /** #4443 앱 화면 안 글 상자에 초점이 들었다(true) · 났다(false). SDK 런타임이 바뀔 때만 알린다(ui/typing). 새 문서 · 다시 불러오기 ·
+   *  내려가기에선 호스트가 false 를 한 번 부른다(옛 문서는 «났다» 를 못 보낸다). 없으면 버린다. */
+  onTyping?: (on: boolean) => void;
 }
 export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
@@ -112,6 +115,11 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       if (topic) topics.add(topic);
       return;
     }
+    if (msg.method === 'ui/typing') {
+      // 알림(id 없음)이라 답하지 않는다. 앱 화면 안 글 상자에 초점이 들고 났다(#4443 폰: 쓰는 동안 셸이 아래 탭 바를 걷는다).
+      opts?.onTyping?.((msg.params as { on?: unknown } | undefined)?.on === true);
+      return;
+    }
     if (msg.method === 'ui/omniOpen') {
       // 알림(id 없음) — 앱 화면 안에서 통합검색 키를 눌렀다(#4530). 셸이 연다. 답하지 않는다.
       //  사람의 키가 보내는 신호라 1초에 한 번이면 충분하다 — 앱이 연달아 보내 입력칸 초점을 빼앗지 못하게(격리 리뷰).
@@ -122,6 +130,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     if (msg.method === 'ui/initialize') {
       reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
+      opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
       if (insets.top || insets.right || insets.bottom || insets.left) sendInsets();
     } else if (msg.method === 'tools/call') {
@@ -236,12 +245,12 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   window.addEventListener('message', onMsg);
   return {
     root: frame,
-    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); },
+    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); },
     notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, '*'); },
     subscribed: (topic) => topics.has(topic),
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
     //  WindowProxy 는 같은 프레임이면 그대로라 브리지(ev.source 비교)는 새 문서에도 그대로 맞는다.
-    reload: () => { topics.clear(); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+    reload: () => { topics.clear(); opts?.onTyping?.(false); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
     setInsets: (i) => {
       const n = (v: number): number => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
       const next = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };
@@ -268,7 +277,8 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeAppUi() })),
+          //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
         f.root));
     document.body.append(uiEl as HTMLElement);
     document.addEventListener('keydown', uiKey);

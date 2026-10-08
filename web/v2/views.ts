@@ -8,7 +8,7 @@ import { projMatches } from '../lib/proj-match.js';
 import { composerMention } from './compose-mention.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt, takeUnsentDraft } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
-import { mountSessionChat, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
+import { mountSessionChat, type SessAppDoor, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
@@ -490,6 +490,8 @@ export interface SessionViewOpts {
   onOpenSidebar?: () => void;
   /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
   filesLabel?: string;
+  /** #4443 머리줄 [붙은 앱]. 칸 셸이 세션마다 준다(session-chat.ts SessAppDoor). */
+  appDoor?: SessAppDoor;
   /** 팝아웃 창(?solo=1) — 왼쪽 사이드바 없이 이 화면만 띄운 창(#1744). */
   solo?: boolean;
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
@@ -534,6 +536,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     onOpenFiles: vopts.onOpenFiles,       // 머리줄 [자료] → 곁칸 자료 칸(#4088 후속)
     onOpenSidebar: vopts.onOpenSidebar,   // 폰 머리줄 ≡ → 셸의 사이드바 서랍(#4229 후속)
     filesLabel: vopts.filesLabel,
+    appDoor: vopts.appDoor,               // #4443 머리줄 [붙은 앱] → 곁칸의 그 앱 탭(폰: 서랍)
     solo: vopts.solo,
     // ★ #1820 — 멈춘 내 세션은 **열면 바로 되살린다**. 위 주석의 '읽기전용 기록 + 버튼 한 번'은 화면이 어긋나던
     //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:

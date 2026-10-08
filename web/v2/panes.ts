@@ -31,9 +31,10 @@ import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸
 import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870: 사이드바가 화면을 다 차지하면 세션이 카드가 된다
 import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 카드를 제자리로 돌릴 때도 이 폭으로 물러난다(한 값)
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
-import { MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속)
+import { HANDSET_MQ, MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속) · 폰 · 눕힌 폰(#4443 독을 안 세운다)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppDoorIcon, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import type { SessAppDoor } from '../session-chat.js';   // #4443 세션 머리줄 [붙은 앱] 배선의 모양
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
 import { listSessionApps } from './app-session.js';
@@ -72,7 +73,7 @@ export interface PanesOpts {
   /** 서랍에서 세션을 갈아 끼웠다 — 셸을 다시 그리지 않고 주소만 그 세션 것으로. */
   onSessionPicked?: (sid: string | null) => void;
   /** 세션 화면(대화창·터미널·상단바) 통째를 붙이는 배선 — main.ts 가 준다. */
-  mountSession?: (host: HTMLElement, sid: string, o?: { trail?: TimelineHandle | null; openFiles?: () => void; filesLabel?: string }) => { destroy(): void } | null;
+  mountSession?: (host: HTMLElement, sid: string, o?: { trail?: TimelineHandle | null; openFiles?: () => void; filesLabel?: string; appDoor?: SessAppDoor }) => { destroy(): void } | null;
   /** 새 세션 자리에서 세션을 방금 만들었다 — 셸이 그 전문을 세션 목록에 즉시 끼워 넣는다(v2/panes-parts spawn). */
   onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
@@ -274,6 +275,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  브라우저로 데스크톱 폭에 오면 원래 자리 그대로다. 부품은 한 벌만 — 문턱을 넘으면 반대쪽 칸의 것을 걷는다(onNarrow).
   const narrowMq = window.matchMedia(MOBILE_MQ);
   const narrow = (): boolean => narrowMq.matches;
+  const handsetMq = window.matchMedia(HANDSET_MQ);   // #4443 폰 · 눕힌 폰. 서랍에 독을 안 세운다
   let sideActNarrow: TabKey | null = null;     // 서랍에서 켠 탭(아래 칸의 것일 수 있다) — 저장하지 않는다
   /** 그 칸에 **그려질** 탭 — 좁은 폭에선 곁칸이 아래 칸의 탭까지 든다. */
   const zoneTabs = (zone: Zone): TabKey[] => (narrow() ? (zone === 'side' ? [...lay.side, ...lay.bottom] : zone === 'bottom' ? [] : lay[zone]) : lay[zone]);
@@ -518,7 +520,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); applySessionAct(); applyView(); paintAll(); },
     // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
     //  머리줄 [자료](#4088 후속) — 자료 칸(프로젝트 없는 세션은 세션 폴더 칸)을 보이게 한다. 배선만 넘긴다(무엇을 켤지는 셸이 안다).
-    mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid), openFiles: () => showPart(loose ? 'sessfiles' : 'files'), filesLabel: loose ? '세션 파일' : '자료' }) : undefined,
+    //  #4443 머리줄 [붙은 앱]: 이 세션에 붙은 앱 목록(탭과 같은 한 벌)과 그 앱 탭을 여는 손(곁칸 [앱]을 다시 눌렀을 때와 같은 길).
+    mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid), openFiles: () => showPart(loose ? 'sessfiles' : 'files'), filesLabel: loose ? '세션 파일' : '자료',
+      appDoor: { watch: (fn) => watchSessionApps(sid, (apps) => fn(apps.length ? { title: sessAppTabTitle(apps), icon: sessAppDoorIcon(apps, 'sc-act-ic') } : null)), open: () => openSessAppTab() } }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
     curSession: () => curSession(),
     onSession: (fn) => { sessSubs.add(fn); return () => { sessSubs.delete(fn); }; },
@@ -1803,12 +1807,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       } else paintTabs(z);
     });
   }
-  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다 — 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다).
-  const onShowSessApp = (): void => {
+  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다 — 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 길이다.
+  function openSessAppTab(): void {
     const z = zoneOf(SESSAPP_TAB);
     if (!z) return;
     bringUp(z, SESSAPP_TAB);
-  };
+  }
+  const onShowSessApp = (): void => openSessAppTab();
   wrap.addEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
 
   // ── 라이브 틱 — 보이는 부품만 제자리 갱신(서명이 같으면 DOM 을 안 건드린다) ──
@@ -1866,6 +1871,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //   분할선 display:none)엔 이음매가 없다 — 독은 곁칸 아래로 선다. 자리바꿈(sw-left)이면 분할선이 곁칸 오른쪽에 있다(독이 스스로 읽는다).
     seam: () => (narrow() || !lay.sideOn || body.classList.contains('cm') ? null : splitX),
     narrow: () => narrow(),
+    //  #4443 폰 · 눕힌 폰의 서랍엔 독을 안 세운다. 서랍 위 탭 줄과 그 [＋](앱 서랍)가 같은 일을 하고, 앱 화면이 그 높이를 쓴다.
+    off: () => handsetMq.matches,
   });
 
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
