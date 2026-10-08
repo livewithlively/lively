@@ -452,22 +452,26 @@
 /* ── 폰 곁칸 서랍(#4443, 원준 2026-10-08 «이런 곁칸도 모바일에서 좀 대응되게») ───────────────────────────────
    · 서랍 안 글 상자에 쓰는 동안 아래 탭 바를 걷고 서랍을 화면 아래 끝까지 편다. 터미널 글 상자(.sc-kb)와 같은 규칙이다.
      곁칸의 입력칸은 :focus 로, 붙은 앱 화면 안의 글 칸은 SDK 런타임이 알린 표시(.pn-sessapp.pn-kb, session-app-pane.ts)로 안다.
-     체크 상자 · 라디오 · 단추 · 범위 · 파일은 글 상자가 아니다(눌러도 자판이 안 뜬다. 체크할 때마다 탭 바가 깜빡이면 안 된다).
+     체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 칸 · 고르기 상자는 글 상자가 아니다(눌러도 자판이 안 뜬다. 체크할 때마다
+     탭 바가 깜빡이면 안 된다). SDK 의 판정(app-ui-runtime.ts isTypingField)과 같은 목록이다.
+   · 보이는 탭(.v2-tabpane:not([hidden]))의 곁칸만 본다. 숨은 셸 탭에 남은 표시가 지금 탭의 탭 바를 숨기면 안 된다.
+   · ⚠ 아래 두 규칙의 :is() 목록은 같아야 한다(phone-side-pane.test.mjs L1 이 지킨다). 하나만 고치면 탭 바는 숨었는데 서랍이 짧은 채로 남는다.
    · 곁칸 입력칸 16px: 아이폰은 16px 보다 작은 글 상자에 초점이 가면 화면을 확대한 채로 둔다(위 자료 찾기 · 독 찾기와 같은 하한).
    · 독은 이 폭에서 서지 않는다(panes.ts host.off = HANDSET_MQ). 서랍 위 탭 줄과 그 [＋] 가 같은 일을 한다. */
 @media (max-width: 640px) {
-  #v2-root.m-aside:has(.v2-main .pn-pane[data-zone="side"] :is(.pn-sessapp.pn-kb:not([hidden]), textarea:focus, select:focus, [contenteditable]:not([contenteditable="false"]):focus,
-      input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden]):focus)) > .v2-mtabs { display: none; }
-  #v2-root.m-aside .v2-main .pn-pane[data-zone="side"]:has(:is(.pn-sessapp.pn-kb:not([hidden]), textarea:focus, select:focus, [contenteditable]:not([contenteditable="false"]):focus,
-      input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden]):focus)) { bottom: 0; }
-  .pn-tk-add input.pn-tk-add-in, .pj-slot input.pj-slot-q, input.pn-web-in, .pn-frow2 input.pn-frename, input.pn-frename { font-size: 16px; }   /* 42-v2-panes · 49-v2-projpane 의 «칸 안의 입력» 규칙(특이도 0,2,0)을 이긴다 */
+  #v2-root.m-aside:has(.v2-main > .v2-tabpane:not([hidden]) .pn-pane[data-zone="side"] :is(.pn-sessapp.pn-kb:not([hidden]), textarea:not([readonly]):focus, [contenteditable]:not([contenteditable="false"]):focus,
+      input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden], [readonly]):focus)) > .v2-mtabs { display: none; }
+  #v2-root.m-aside .v2-main > .v2-tabpane:not([hidden]) .pn-pane[data-zone="side"]:has(:is(.pn-sessapp.pn-kb:not([hidden]), textarea:not([readonly]):focus, [contenteditable]:not([contenteditable="false"]):focus,
+      input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden], [readonly]):focus)) { bottom: 0; }
+  .pn-tk-add input.pn-tk-add-in, .pj-slot input.pj-slot-q, input.pn-web-in, .pn-frow2 input.pn-frename, input.pn-frename, textarea.pn-tk-ta, textarea.pn-ed-ta { font-size: 16px; }   /* 42-v2-panes · 49-v2-projpane 의 «칸 안의 입력» 규칙(특이도 0,2,0)을 이긴다 */
 }
 /* 폰 · 눕힌 폰(HANDSET_MQ)의 «크게 보기»(붙은 앱 ⋯ 메뉴, app-ui.ts openAppUi)는 화면 전체다. 종전 창(여백 24px · 최대 88vh)은 폰에서
-   서랍(402×569)보다 작았다(352×538 실측). 키보드가 없으니 닫기 단추의 «(Esc)» 와 «앱 UI» 배지는 걷는다. */
+   서랍(402×569)보다 작았다(352×538 실측). 키보드가 없으니 닫기 단추의 «(Esc)» 는 걷는다. «앱 UI» 배지는 남긴다: 화면 전체가
+   샌드박스 앱이 된 자리에서 이 머리줄만이 셸의 것이고, 배지가 그 경계를 말한다. */
 @media (max-width: 640px), (max-width: 900px) and (max-height: 500px) {
   .v2-appui-ov { display: block; padding: 0; }
   .v2-appui { width: 100%; height: 100%; max-width: none; border: 0; border-radius: 0; box-shadow: none;
     padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
   .v2-appui-h { padding-top: calc(8px + env(safe-area-inset-top, 0px)); padding-bottom: 8px; }
-  .v2-appui-badge, .v2-appui-esc { display: none; }
+  .v2-appui-esc { display: none; }
 }

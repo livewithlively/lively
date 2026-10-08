@@ -262,7 +262,8 @@ export function sessAppPart(ctx: PartCtx): Part {
     body.replaceChildren(el('p', { class: 'pn-fine pn-sessapp-wait', text: '앱을 여는 중…' }));
     try {
       const frame = await mountAppUiFrame(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key, onChrome,
-        onTyping: (on) => { if (!on || mine === mountSeq) setTyping(on); },   // 내려간 화면이 늦게 보낸 «쓰는 중» 은 받지 않는다
+        //  내려간 화면은 «쓰는 중» 을 보낼 수 없다: 프레임은 seq 확인을 지난 뒤에야 문서에 붙고, unmount 가 seq 를 올리는 같은 자리에서 다리를 뗀다.
+        onTyping: setTyping,
         onMenu: (req) => new Promise<string | null>((done) => { const now = current(); if (!now || now.app_id !== cur.app_id) { done(null); return; } openMenu(now, req.x, req.y, { extra: req.items, done }); }) });
       if (ctx.dead() || mine !== mountSeq) { frame.destroy(); return; }
       mounted = { sid: s, appId: cur.app_id, frame };
