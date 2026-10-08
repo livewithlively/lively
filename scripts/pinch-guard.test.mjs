@@ -9,8 +9,9 @@
 //  |-----|----------------------------------|------------|---------------------------------|
 //  | G1  | 1                                | 1          | 예(확대가 시작되지 않게)        |
 //  | G2  | 1.04(이번 신고)                  | 1          | 아니오(오므려 되돌릴 수 있게)   |
-//  | G3  | 1.005(반올림 오차)               | 1          | 예                              |
-//  | G4  | 1.01(경계)                       | 1          | 예                              |
+//  | G3  | 1.0005(반올림 오차)              | 1          | 예                              |
+//  | G4  | 1.001(경계)                      | 1          | 예                              |
+//  | G4b | 1.005(1440 창에서 7px 잘림)      | 1          | 아니오                          |
 //  | G5  | 닿을 수 없다(다른 출처 — 던진다) | 1          | 예                              |
 //  | G6  | 닿을 수 없다                     | 2          | 아니오(이 창 값으로)            |
 //  | G7  | visualViewport 없음              | 없음       | 예(모르면 1 로 본다)            |
@@ -23,8 +24,11 @@
 //   I3 두 번 불러도 한 벌만 건다
 //   I4 배율은 제스처가 올 때마다 다시 읽는다(걸 때 값으로 굳지 않는다)
 //   I5 window 가 없으면 던지지 않는다
+//   T1 손가락으로 만지는 기기(maxTouchPoints 5 — 아이폰 · 아이패드)에는 아무것도 걸지 않는다(손가락 확대는 그대로)
+//   T2 maxTouchPoints 0(맥 트랙패드)에는 건다 · T3 navigator 가 없어도 건다 · T4 maxTouchPoints 가 숫자가 아니어도 건다
 //  앱 화면 주입 문자열(web/v2/app-ui-runtime.ts) — vm 에서 실제로 돌린다:
 //   A1 gesturestart · gesturechange 를 캡처 · passive 아님으로 걸고 늘 끊는다(바깥 배율을 못 읽는다)
+//   A2 손가락으로 만지는 기기에서는 걸지 않는다(다른 리스너는 그대로 걸린다)
 //  배선 — 구문 트리의 import · 호출 관계로 본다:
 //   W1 본 화면(web/main.ts)이 lib/pinch-guard 의 installPinchGuard 를 맨 바깥에서 부른다(셸 · 액자 · 로그인 전 모두)
 //   W2 터미널(web/standalone/terminal.ts)의 boot 가 사본의 installPinchGuard 를 부른다
@@ -81,8 +85,9 @@ function fire(listeners, type) {
 const T = [
   ["G1 배율 1", { top: 1, own: 1 }, true],
   ["G2 맨 위 창 1.04(이번 신고)", { top: 1.04, own: 1 }, false],
-  ["G3 1.005(반올림 오차)", { top: 1.005, own: 1 }, true],
-  ["G4 1.01(경계)", { top: 1.01, own: 1 }, true],
+  ["G3 1.0005(반올림 오차)", { top: 1.0005, own: 1 }, true],
+  ["G4 1.001(경계)", { top: 1.001, own: 1 }, true],
+  ["G4b 1.005(작은 확대도 되돌릴 수 있게)", { top: 1.005, own: 1 }, false],
   ["G5 맨 위 창에 닿을 수 없다 · 이 창 1", { top: "throw", own: 1 }, true],
   ["G6 맨 위 창에 닿을 수 없다 · 이 창 2", { top: "throw", own: 2 }, false],
   ["G7 visualViewport 없음", { top: undefined, own: undefined }, true],
@@ -120,6 +125,17 @@ for (const [who, src] of SRCS) {
     f.state.top = 1;
     const back = fire(f.listeners, "gesturestart");
     ok(before === true && zoomed === false && back === true, `I4 ${who} — 배율은 제스처마다 다시 읽는다`, JSON.stringify({ before, zoomed, back }));
+    for (const [name, nav, want] of [
+      ["T1 maxTouchPoints 5(아이폰 · 아이패드)", { maxTouchPoints: 5 }, 0],
+      ["T2 maxTouchPoints 0(맥 트랙패드)", { maxTouchPoints: 0 }, 2],
+      ["T3 navigator 없음", undefined, 2],
+      ["T4 maxTouchPoints 가 숫자가 아님", { maxTouchPoints: undefined }, 2],
+    ]) {
+      const t = fakeWin({ top: 1, own: 1 });
+      if (nav) t.win.navigator = nav;
+      mod.installPinchGuard(t.win);
+      ok(t.listeners.length === want, `${name} — ${who}: ${want ? "건다" : "걸지 않는다"}`, String(t.listeners.length));
+    }
     let threw = "";
     try { mod.installPinchGuard(null); } catch (e) { threw = String(e); }
     ok(threw === "", `I5 ${who} — window 가 없으면 던지지 않는다`, threw);
@@ -138,6 +154,12 @@ for (const [who, src] of SRCS) {
     && fire(listeners, "gesturestart") === true && fire(listeners, "gesturechange") === true,
     "A1 앱 화면 — gesturestart · gesturechange 를 캡처 · passive 아님으로 걸고 늘 끊는다", JSON.stringify({ all: listeners.length, g: g.map((l) => [l.t, l.opt]) }));
   ok(listeners.length > 0 && !listeners.some((l) => l.t === "wheel"), "A1 앱 화면 — wheel 에는 걸지 않는다(다른 리스너는 실제로 걸렸다)");
+  {
+    const ls = [];
+    const w2 = { addEventListener: (t, fn, opt) => ls.push({ t, fn, opt }) };
+    vm.runInContext(rt.APP_RUNTIME_JS, vm.createContext({ window: w2, navigator: { maxTouchPoints: 5 }, parent: { postMessage() {} }, setTimeout, Promise, Error, Object, String }));
+    ok(ls.length > 0 && !ls.some((l) => l.t === "gesturestart" || l.t === "gesturechange"), "A2 앱 화면 — 손가락으로 만지는 기기에서는 걸지 않는다(다른 리스너는 걸렸다)", JSON.stringify(ls.map((l) => l.t)));
+  }
 }
 
 // ── 배선(W) ──

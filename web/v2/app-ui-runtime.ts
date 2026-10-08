@@ -93,10 +93,13 @@ export const APP_RUNTIME_JS = `
     parent.postMessage({ jsonrpc: '2.0', method: 'ui/omniOpen', params: {} }, '*');
   }, true);
   // #3870 — 앱 화면 위에서 트랙패드 두 손가락이 벌어져도 바깥 셸이 확대되지 않게 한다(사파리. 정본 web/lib/pinch-guard.ts).
-  //  셸은 창 크기에 딱 맞춘 격자라 조금만 확대돼도 오른쪽 · 아래가 창 밖으로 나간다. 이 프레임은 바깥 배율을 못 읽어 늘 막는다.
+  //  셸은 창 크기에 딱 맞춘 격자라 조금만 확대돼도 오른쪽 · 아래가 창 밖으로 나간다. 이 프레임은 바깥 배율을 못 읽어 늘 막는다 —
+  //  그래서 이미 확대된 화면을 앱 화면 위에서 오므려 되돌릴 수는 없다(다른 칸 위에서는 된다). 손가락으로 만지는 기기는 그대로 둔다.
   function stopPinch(e) { e.preventDefault(); }
-  window.addEventListener('gesturestart', stopPinch, { capture: true, passive: false });
-  window.addEventListener('gesturechange', stopPinch, { capture: true, passive: false });
+  if (!(typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)) {
+    window.addEventListener('gesturestart', stopPinch, { capture: true, passive: false });
+    window.addEventListener('gesturechange', stopPinch, { capture: true, passive: false });
+  }
   // #4443 글 상자에 초점이 들고 나는 것을 호스트에 알린다(ui/typing { on }). 폰에서 쓰는 동안 셸이 아래 탭 바를 걷고 서랍을 자판 위까지 편다.
   //  바뀔 때만 보낸다. 글 상자에서 글 상자로 옮길 때는 focusout 과 focusin 사이에 초점이 body 에 있는 틈이 있어 한 박자 뒤에 판정한다.
   //  체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 · 꺼진 칸 · 고르기 상자는 글 상자가 아니다(눌러도 자판이 안 뜬다. 고르기 상자는
