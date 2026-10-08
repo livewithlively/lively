@@ -34,6 +34,7 @@ import { setUnauthorizedHandler } from './lib/net.js';
 import { takeShellSwitch, uiMode } from './lib/state.js';
 import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { mountClassicCtx } from './classic-ctx.js';   // #3784 클래식 화면 우클릭 메뉴
+import { installPinchGuard } from './lib/pinch-guard.js';   // #3870 트랙패드 확대가 격자를 창 밖으로 밀던 것
 import { installOmniForwarder } from './v2/omni-frame.js';   // #4530 액자 안 ⌘K → 셸 통합검색
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
 import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
@@ -533,6 +534,7 @@ renderAuthProviders();
 showAuthErrorFromHash();
 
 watchStaleShell();   // #1841 낡은 화면 자가복구 — 다시 보이는 순간에 세대를 묻고 낡았으면 다시 싣는다.
+installPinchGuard();   // #3870 사파리 두 손가락 확대를 끊는다 — 셸 · 액자 안 화면 모두 이 문서로 뜬다.
 installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();
 
