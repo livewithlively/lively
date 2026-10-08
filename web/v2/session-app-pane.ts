@@ -58,6 +58,10 @@ export const sessAppFace = (a: { app_id: string; has_ui: boolean }): string => b
 export function sessAppTabFace(apps: ReadonlyArray<{ app_id: string; has_ui: boolean }>): string | null {
   return apps.length === 1 ? sessAppFace(apps[0]) : null;
 }
+/** 세션 머리줄 [붙은 앱](#4443)의 아이콘. 하나면 그 앱의 아이콘(그 앱 색), 여럿이면 «앱» 기본 그림(탭 얼굴 sessAppTabFace 와 같은 규칙). */
+export function sessAppDoorIcon(apps: ReadonlyArray<{ app_id: string; has_ui: boolean }>, cls: string): SVGElement {
+  return apps.length === 1 ? faceIcon(apps[0], cls) : pnIcon('apps', cls);
+}
 /** 앱 아이콘의 선 그림을 그 앱 색으로(머리줄 · 앱이 둘 이상일 때의 안쪽 탭). */
 function faceIcon(a: { app_id: string; has_ui: boolean }, cls: string): SVGElement {
   const face = sessAppFace(a);
@@ -218,7 +222,11 @@ export function sessAppPart(ctx: PartCtx): Part {
     if (c.init) { if (headless) headT = window.setTimeout(() => { headT = 0; headless = false; paintHead(current()); }, 700); return; }
     headless = !c.head; paintHead(current());
   };
+  //  #4443 폰: 앱 화면 안 글 상자에 쓰는 중(SDK 런타임 ui/typing). 셸 CSS(50-mobile.css)가 이 표시를 보고 아래 탭 바를 걷고
+  //   서랍을 자판 위까지 편다. 내려간 앱 화면이 남긴 표시는 unmount 가 지운다.
+  const setTyping = (on: boolean): void => { root.classList.toggle('pn-kb', on); };
   const unmount = (): void => {
+    setTyping(false);
     mountSeq++;
     if (reloadTimer) { window.clearTimeout(reloadTimer); reloadTimer = 0; }
     mounted?.frame?.destroy();
@@ -254,6 +262,7 @@ export function sessAppPart(ctx: PartCtx): Part {
     body.replaceChildren(el('p', { class: 'pn-fine pn-sessapp-wait', text: '앱을 여는 중…' }));
     try {
       const frame = await mountAppUiFrame(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key, onChrome,
+        onTyping: (on) => { if (!on || mine === mountSeq) setTyping(on); },   // 내려간 화면이 늦게 보낸 «쓰는 중» 은 받지 않는다
         onMenu: (req) => new Promise<string | null>((done) => { const now = current(); if (!now || now.app_id !== cur.app_id) { done(null); return; } openMenu(now, req.x, req.y, { extra: req.items, done }); }) });
       if (ctx.dead() || mine !== mountSeq) { frame.destroy(); return; }
       mounted = { sid: s, appId: cur.app_id, frame };

@@ -8,6 +8,11 @@
 <!-- 테마 pre-paint(#1683) — 저장된 선호(lv:theme)를 CSS 로드 전에 <html data-theme> 으로 찍는다.
      키 없음 = 시스템 따름(@media prefers-color-scheme). 런타임 전환·동기화는 web/theme.ts 가 맡는다. -->
 <script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
+<!-- 아이폰 글 상자 확대 막기(#4443). iOS 사파리는 16px 보다 작은 글 상자에 초점이 가면 화면을 확대한 채로 둔다. 셸의 입력칸은 16px 로
+     맞춰 왔지만(40-v2.css · 50-mobile.css) 곁칸에 붙은 앱 화면(사람이 만든 앱, 장표 수정의 글 줄 14.5px)은 셸이 글자 크기를 정하지 못한다.
+     maximum-scale=1 은 그 자동 확대만 막고, iOS 는 손가락 확대를 그대로 허용한다(iOS 10 부터 사용자 확대 제한을 무시한다).
+     안드로이드 크롬은 손가락 확대까지 막고 자동 확대도 하지 않으므로 iOS(아이폰 · 터치가 있는 Macintosh = 아이패드)에만 붙인다. -->
+<script>(function(){try{var u=navigator.userAgent||'',ios=/iP(hone|ad|od)/.test(u)||(/Macintosh/.test(u)&&navigator.maxTouchPoints>1),m=document.querySelector('meta[name="viewport"]');if(ios&&m&&!/maximum-scale/.test(m.content))m.setAttribute('content',m.content+', maximum-scale=1')}catch(e){}})();</script>
 <!-- 부팅 중 화면(#4088) — 모듈 수백 개와 /api/ui/me 가 도는 동안 **흰 화면 대신** 선다(원준 2026-09-20: "워크스페이스 열기를 누르면
      처음 화면이 좀 오래 하얀 화면"). 물러나는 것은 CSS 만으로: #gate·#app 둘 중 하나가 드러나면(hidden 이 풀리면) 뒤 형제인 이 판이 사라진다 —
      부팅 코드 어느 갈래(로그인 문·새 셸·클래식·액자)도 이 판을 알 필요가 없다. 색은 토큰(01-base.css) — 첫 그리기는 어차피 그 CSS 뒤다. -->

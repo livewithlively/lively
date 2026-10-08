@@ -1618,6 +1618,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 1px 7px; }
 .v2-appui-spacer { flex: 1; }
 .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+.v2-appui-esc { margin-left: .3em; }   /* 닫기 단추의 키 안내(폰은 50-mobile.css 가 걷는다) */
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로

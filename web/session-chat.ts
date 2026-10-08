@@ -128,6 +128,12 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
     : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&fmt=chat&${qs}`;   // fmt=chat: 공통 ChatLine(원본 바이트 아님)
 };
 
+/** #4443 머리줄 [붙은 앱] 배선: 무엇이 붙었는지(제목 · 아이콘)와 그 앱 탭을 여는 손. 셸이 세션마다 만든다. */
+export interface SessAppDoor {
+  watch(fn: (d: { title: string; icon: SVGElement | null } | null) => void): () => void;
+  open(): void;
+}
+
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
 //  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
@@ -165,6 +171,9 @@ export interface SessionChatOpts {
   onOpenFiles?: () => void;
   /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
   filesLabel?: string;
+  /** #4443 머리줄 [붙은 앱]. 이 세션에 붙은 앱이 있으면 서고, 누르면 곁칸의 그 앱 탭을 연다(폰: 서랍). 좁은 폭(≤900)에서만 보인다.
+   *  넓은 폭은 곁칸에 그 탭이 늘 보이고, 좁은 폭은 곁칸이 서랍에 접혀 있어 이 단추가 아니면 앱이 붙은 줄을 모른다. 셸(panes.ts)이 준다. 없으면 단추도 없다. */
+  appDoor?: SessAppDoor;
   /** 폰 머리줄의 ≡(#4229 후속) — 셸의 사이드바 서랍을 연다. 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 이게 그 입구다. 없으면 단추도 없다. */
   onOpenSidebar?: () => void;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
@@ -361,6 +370,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
       sv('path', { d: ICONS.folder })),   // #4233 — 우측 사이드바 「자료」 탭과 같은 둥근 폴더(원준 2026-10-04)
     el('span', { text: opts.filesLabel || '자료' })) as HTMLButtonElement;
+  //  #4443 [붙은 앱](원준 10-08 «이런 곁칸도 모바일에서 좀 대응되게»). 폰에서 붙은 앱으로 가는 길이 [자료] → 서랍의 탭 하나뿐이었다.
+  //   붙은 목록이 오면 그 앱의 아이콘 · 이름으로 선다(여럿이면 «앱 n개»). 넓은 폭에선 CSS 가 숨긴다(36-chat.css .sc-act-app).
+  const appDoor = opts.appDoor;
+  const appGoBtn = appDoor ? el('button', { class: 'btn-text sc-act sc-act-app', type: 'button', hidden: true, onclick: () => appDoor.open() }) as HTMLButtonElement : null;
+  const offAppDoor = appDoor && appGoBtn ? appDoor.watch((d) => {
+    appGoBtn.hidden = !d;
+    if (!d) { appGoBtn.replaceChildren(); return; }
+    appGoBtn.title = `이 세션에 붙은 앱 「${d.title}」을(를) 사이드바에서 엽니다`;
+    appGoBtn.setAttribute('aria-label', `붙은 앱 ${d.title} 열기`);
+    appGoBtn.replaceChildren(...(d.icon ? [d.icon] : []), el('span', { class: 'sc-act-app-t', text: d.title }));
+  }) : null;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).
   //  종전엔 이 넷이 각각 다른 옷을 입고(하네스·모델은 mono, 상태·노드는 sans) 가운뎃점으로만 이어져
@@ -416,6 +436,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const fixPair = el('span', { class: 'sc-pair' }, termStatusEl, el('span', { class: 'sc-pair-sep', 'aria-hidden': 'true' }), fixBtn);
   const headR = el('div', { class: 'sc-head-r' },
     opts.onOpenFiles ? filesGoBtn : null,
+    appGoBtn,
     opts.onToggleFiles ? filesBtn : null,
     fixPair,            // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
@@ -2384,7 +2405,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

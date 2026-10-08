@@ -29,6 +29,7 @@
 //    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
 //                                                [{ id, label }] 는 그 메뉴 맨 위에 선다 — 사람이 그걸 고르면 { picked: id }, 호스트 것을 고르거나
 //                                                닫으면 { picked: null }. 못 여는 자리(인사의 capabilities.menu 가 false)면 reject(-32601).
+//    (자동) 글 상자에 초점이 들고 나면 호스트에 ui/typing { on } 을 보낸다(#4443). 앱이 할 일은 없다. 폰 서랍에선 쓰는 동안 아래 탭 바가 걷힌다.
 //    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
 //                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
 //                                                바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면 가려지지 않는다.
@@ -91,6 +92,33 @@ export const APP_RUNTIME_JS = `
     e.stopPropagation();
     parent.postMessage({ jsonrpc: '2.0', method: 'ui/omniOpen', params: {} }, '*');
   }, true);
+  // #4443 글 상자에 초점이 들고 나는 것을 호스트에 알린다(ui/typing { on }). 폰에서 쓰는 동안 셸이 아래 탭 바를 걷고 서랍을 자판 위까지 편다.
+  //  바뀔 때만 보낸다. 글 상자에서 글 상자로 옮길 때는 focusout 과 focusin 사이에 초점이 body 에 있는 틈이 있어 한 박자 뒤에 판정한다.
+  //  체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 · 꺼진 칸은 글 상자가 아니다(눌러도 자판이 안 뜬다).
+  function isTypingField(t) {
+    if (!t || t.nodeType !== 1) return false;
+    if (t.isContentEditable) return true;
+    var n = t.tagName;
+    if (n === 'TEXTAREA') return !t.disabled && !t.readOnly;
+    if (n === 'SELECT') return !t.disabled;
+    if (n !== 'INPUT') return false;
+    var ty = String(t.type || 'text').toLowerCase();
+    return !t.disabled && !t.readOnly && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);
+  }
+  var typing = false, typingT = 0;
+  function judgeTyping() {
+    typingT = 0;
+    var on = isTypingField(document.activeElement) && document.hasFocus();
+    if (on === typing) return;
+    typing = on;
+    parent.postMessage({ jsonrpc: '2.0', method: 'ui/typing', params: { on: on } }, '*');
+  }
+  function laterTyping() { if (!typingT) typingT = setTimeout(judgeTyping, 0); }
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('focusin', laterTyping, true);
+    document.addEventListener('focusout', laterTyping, true);
+    window.addEventListener('blur', laterTyping);
+  }
   // #4592 — 호스트가 가리는 가장자리. 값은 api.ui.insets 와 CSS 변수 둘 다로(앱은 CSS 만으로 비킬 수 있다).
   function applyInsets(p) {
     var num = function (v) { v = Number(v); return isFinite(v) && v > 0 ? Math.round(v) : 0; };
