@@ -20,6 +20,7 @@ import { verifyLogin } from "../../auth/local-accounts.js";
 import { linkOidcToMember, provisionOidcMember } from "./oidc-login.js";
 import { createSession, sessionCookie } from "../../auth/sessions.js";
 import { logger } from "../../log.js";
+import { OIDC_AUTH_METHOD } from "./oidc-logout.js";
 
 export const OIDC_LINK_PATH = "/auth/link";
 
@@ -85,8 +86,10 @@ export function registerOidcLinkPage(app: express.Express): void {
 const LINK_TITLE = "계정 연결 — Lively";
 
 async function grantSession(req: express.Request, res: express.Response, memberId: string): Promise<void> {
+  // 갈림길을 거친 로그인도 IdP 로그인이다 — 로그아웃이 IdP 세션을 끝내도록 표시한다.
+  //  id_token 은 갈림길 대기 행에 보관하지 않으므로 없다(로그아웃은 id_token_hint 없이 IdP 로 간다).
   const { sessionId, expiresAt } = await createSession(memberId,
-    { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null });
+    { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null, authMethod: OIDC_AUTH_METHOD });
   res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
   res.redirect(303, "/ui/");
 }

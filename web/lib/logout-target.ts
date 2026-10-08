@@ -18,3 +18,15 @@ export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined
   door.searchParams.set('to', here);
   return door.toString();
 }
+
+// IdP(SSO) 로그아웃 문 — 서버의 로그아웃 응답 {ok:true, redirect?} 에서 갈 곳을 꺼낸다.
+//  IdP 로 로그인한 세션이면 서버가 IdP 의 end_session 주소를 주고, 브라우저가 그리로 가야 IdP 세션까지 끝난다
+//  (안 가면 «SSO 로 로그인» 한 번에 묻지도 않고 같은 계정으로 돌아온다). 없거나 http(s) 절대주소가 아니면 null — 종전 흐름.
+export function ssoLogoutTarget(body: unknown): string | null {
+  const raw = body && typeof body === 'object' ? (body as { redirect?: unknown }).redirect : null;
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch { return null; }
+}

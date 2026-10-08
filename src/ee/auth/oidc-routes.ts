@@ -18,6 +18,7 @@ import { oidcConfig, discover, buildAuthorizeUrl, exchangeCode, emailFromClaims 
 import { resolveOidcMember, linkOidcToMember } from "./oidc-login.js";
 import { createOidcAuthRequest, consumeOidcAuthRequest, createOidcLink } from "./oidc-auth-store.js";
 import { OIDC_LINK_PATH, registerOidcLinkPage } from "./oidc-link-page.js";
+import { OIDC_AUTH_METHOD, sealIdToken } from "./oidc-logout.js";
 
 export function registerOidcRoutes(app: express.Express): void {
   // redirect_uri 는 개시와 콜백에서 **글자 그대로 같아야** IdP 검증을 통과한다 → 한 함수에서만 만든다.
@@ -74,7 +75,7 @@ export function registerOidcRoutes(app: express.Express): void {
     if (!redirectUri) { fail("oidc_config"); return; }
     try {
       const disc = await discover(cfg);
-      const claims = await exchangeCode(cfg, disc, {
+      const { claims, idToken } = await exchangeCode(cfg, disc, {
         code, redirectUri, codeVerifier: pending.codeVerifier, nonceHash: pending.nonceHash,
       });
 
@@ -109,8 +110,10 @@ export function registerOidcRoutes(app: express.Express): void {
       }
       if (!resolved.ok) { fail(`oidc_${resolved.reason}`); return; }
 
-      const { sessionId, expiresAt } = await createSession(resolved.memberId,
-        { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null });
+      const { sessionId, expiresAt } = await createSession(resolved.memberId, {
+        ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null,
+        authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: sealIdToken(idToken),
+      });
       res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
       res.redirect(302, pending.returnTo ?? "/ui/");
     } catch (err) {

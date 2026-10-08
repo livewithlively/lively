@@ -90,6 +90,11 @@ export interface SsoHooks {
   ssoLinkStatus(memberId: string): Promise<{ linked: boolean; email: string | null }>;
   /** IdP 연결 해제. 로컬 비밀번호가 없으면 거절한다(해제 즉시 로그인 수단이 0 이 되어 자기 계정에서 잠긴다). */
   ssoUnlink(memberId: string): Promise<{ ok: true } | { ok: false; reason: "would_lock_out" | "no_member" }>;
+  /**
+   * 로그아웃 때 브라우저를 보낼 IdP 로그아웃 문 주소(RP-initiated logout). IdP 가 그 문을 안 알려주거나
+   *  SSO 가 꺼졌으면 null — 호출자는 웹 세션만 끝낸다. ssoIdTokenEnc 는 createSession 때 EE 가 넣은 암호문이다.
+   */
+  ssoLogoutUrl(session: { authMethod: string | null; ssoIdTokenEnc: string | null }, postLogoutRedirectUri: string): Promise<string | null>;
 }
 
 /**
