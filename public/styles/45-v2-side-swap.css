@@ -189,8 +189,9 @@
   .cm-grip:hover { background: color-mix(in srgb, var(--blue) 22%, transparent); }
   .cm-grip:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 14px 0 0 0; background: color-mix(in srgb, var(--blue) 22%, transparent); }
 
-  /* 카드가 뷰어 오른쪽 아래의 배율 단추를 가린다(2026-09-27 실측). 카드 상태에서는 배율 단추를 왼쪽 아래에 둔다. */
-  .pn-body.cm > .pn-pane[data-zone="side"] .pn-zoom { right: auto; left: 12px; }
+  /* 카드가 뷰어 아래 모서리의 배율 단추를 가린다(2026-09-27 실측). 배율 단추는 카드 **반대쪽** 아래에 둔다 —
+     카드가 오른쪽에 있으면 왼쪽, 왼쪽에 있으면(세션 쪽 기본 자리, 2026-10-09) 제자리(오른쪽). side-card.ts 가 cm-card-left 를 건다. */
+  .pn-body.cm:not(.cm-card-left) > .pn-pane[data-zone="side"] .pn-zoom { right: auto; left: 12px; }
 }
 /* 카드를 옮기거나 크기를 바꾸는 동안: 포인터가 액자(iframe)에 빠지지 않게, 글자가 선택되지 않게. */
 body.cm-dragging, body.cm-dragging * { user-select: none; }

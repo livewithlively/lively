@@ -816,7 +816,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  사이드바가 상한 폭일 때의 자리를 조용히 정한다. 절반을 넘으므로 자리바꿈이 켜져 있으면 세션이 설 자리는 오른쪽이다.
     //  미끄러짐도 안내도 없다(그 순간 사이드바가 세션 열을 덮고 있어 자리가 바뀌는 것이 보이지 않는다).
     settle: (px) => swap?.restore(px),
-    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; } });
+    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; },
+    //  세션 열이 지금 왼쪽에 서 있나 — 카드가 처음 뜨는 모서리(세션이 줄어든 쪽)를 고른다. 자리바꿈이면 세션은 오른쪽이다.
+    sessionLeft: () => !swap?.swapped() });
 
   /** 곁칸을 부르는 글을 지금 선 쪽에 맞춘다. 탭 메뉴는 열 때마다 isLeft() 로 새로 고른다. */
   function paintSideLabels(left: boolean = isLeft()): void {
