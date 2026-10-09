@@ -132,9 +132,10 @@ ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /if \(!a\) \{[\
 ok(/a = liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), s\.w, fh \?\? s\.h, obstacles\(\), vw\(\), vh\(\)\);/.test(cur) && cur.indexOf("liftAbove(") > cur.indexOf("if (!a)"),
   "K9 막대 피하기는 기본 자리일 때만(옮긴 자리는 그대로) · 접혀 있으면 알약 높이로", cur.slice(0, 400));
 const obs = card.slice(card.indexOf("function obstacles("), card.indexOf("function currentRect("));
-ok(/querySelectorAll\('\.pn-dock-shelf'\)/.test(obs) && /colMain\.contains\(n\)/.test(obs) && /q\.width > 0 && q\.height > 0/.test(obs), "K1c 피할 것: 보이는 곁칸 앱 막대(세션 카드 안의 것은 빼고)", obs.slice(0, 300));
+ok(/h\.sidePane\.querySelectorAll\('\.pn-dock-shelf'\)/.test(obs) && /q\.width > 0 && q\.height > 0/.test(obs), "K1c 피할 것: 사이드바 안의 보이는 앱 막대", obs.slice(0, 300));
 const pr = card.slice(card.indexOf("function paintRect("), card.indexOf("function paint():"));
-ok(/body\.classList\.toggle\('cm-card-left', shown\(\) && vw\(\) - c\.r - c\.w \/ 2 < vw\(\) \/ 2\)/.test(pr), "K10 카드가 창 왼쪽 절반이면 cm-card-left(카드일 때만 — 크게 본 뒤 남지 않는다)", pr.slice(0, 300));
+ok(/const sp = h\.sidePane\.getBoundingClientRect\(\);/.test(pr) && /body\.classList\.toggle\('cm-card-left', shown\(\) && vw\(\) - c\.r - c\.w \/ 2 < \(sp\.left \+ sp\.right\) \/ 2\)/.test(pr),
+  "K10 카드 가운데가 사이드바 왼쪽 절반이면 cm-card-left(창 기준 아님 · 카드일 때만)", pr.slice(0, 400));
 ok(/classList\.remove\([^)]*'cm-card-left'/.test(card), "K10b 카드에서 나오면 cm-card-left 를 지운다");
 ok(/let size: \{ w: number; h: number \} \| null = prefs\.sized/.test(card) && /let anchor: CardAnchor \| null = prefs\.placed/.test(card), "P3 · S4 기억한 크기 · 자리로 시작한다(따로)");
 const save = card.slice(card.indexOf("const save = (): void =>"), card.indexOf("const hint = el("));

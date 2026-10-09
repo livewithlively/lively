@@ -183,8 +183,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   /** 아래쪽에 떠 있는 막대 — 곁칸 앱 막대(.pn-dock-shelf, 사람이 끌어 옮길 수 있다). 기본 자리는 이것을 덮지 않는다. */
   function obstacles(): Box[] {
     const out: Box[] = [];
-    for (const n of Array.from(document.querySelectorAll('.pn-dock-shelf')) as HTMLElement[]) {
-      if (colMain.contains(n)) continue;
+    for (const n of Array.from(h.sidePane.querySelectorAll('.pn-dock-shelf')) as HTMLElement[]) {
       const q = n.getBoundingClientRect();
       if (q.width > 0 && q.height > 0) out.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom });
     }
@@ -205,9 +204,11 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   function paintRect(): void {
     if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
     const c = currentRect();
-    //  카드가 창의 왼쪽 절반에 있나 — 뷰어의 배율 단추를 카드 반대쪽 아래에 둔다(CSS cm-card-left).
+    //  카드가 사이드바의 왼쪽 절반에 있나 — 뷰어의 배율 단추를 카드 반대쪽 아래에 둔다(CSS cm-card-left).
+    //  창이 아니라 사이드바 기준: 창 폭 1116 에서 기본 카드(왼쪽 422)는 창 가운데를 넘지만 사이드바로는 왼쪽이다(프리뷰 실측).
     //  카드가 아닐 때(크게 본 뒤 남은 그리기)는 떼어 둔다.
-    body.classList.toggle('cm-card-left', shown() && vw() - c.r - c.w / 2 < vw() / 2);
+    const sp = h.sidePane.getBoundingClientRect();
+    body.classList.toggle('cm-card-left', shown() && vw() - c.r - c.w / 2 < (sp.left + sp.right) / 2);
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');
