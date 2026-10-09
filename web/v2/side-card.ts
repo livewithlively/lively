@@ -206,7 +206,8 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
     const c = currentRect();
     //  카드가 창의 왼쪽 절반에 있나 — 뷰어의 배율 단추를 카드 반대쪽 아래에 둔다(CSS cm-card-left).
-    body.classList.toggle('cm-card-left', vw() - c.r - c.w / 2 < vw() / 2);
+    //  카드가 아닐 때(크게 본 뒤 남은 그리기)는 떼어 둔다.
+    body.classList.toggle('cm-card-left', shown() && vw() - c.r - c.w / 2 < vw() / 2);
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');

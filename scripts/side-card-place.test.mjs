@@ -134,7 +134,7 @@ ok(/a = liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), s\.w, f
 const obs = card.slice(card.indexOf("function obstacles("), card.indexOf("function currentRect("));
 ok(/querySelectorAll\('\.pn-dock-shelf'\)/.test(obs) && /colMain\.contains\(n\)/.test(obs) && /q\.width > 0 && q\.height > 0/.test(obs), "K1c 피할 것: 보이는 곁칸 앱 막대(세션 카드 안의 것은 빼고)", obs.slice(0, 300));
 const pr = card.slice(card.indexOf("function paintRect("), card.indexOf("function paint():"));
-ok(/body\.classList\.toggle\('cm-card-left', vw\(\) - c\.r - c\.w \/ 2 < vw\(\) \/ 2\)/.test(pr), "K10 카드가 창 왼쪽 절반이면 cm-card-left", pr.slice(0, 300));
+ok(/body\.classList\.toggle\('cm-card-left', shown\(\) && vw\(\) - c\.r - c\.w \/ 2 < vw\(\) \/ 2\)/.test(pr), "K10 카드가 창 왼쪽 절반이면 cm-card-left(카드일 때만 — 크게 본 뒤 남지 않는다)", pr.slice(0, 300));
 ok(/classList\.remove\([^)]*'cm-card-left'/.test(card), "K10b 카드에서 나오면 cm-card-left 를 지운다");
 ok(/let size: \{ w: number; h: number \} \| null = prefs\.sized/.test(card) && /let anchor: CardAnchor \| null = prefs\.placed/.test(card), "P3 · S4 기억한 크기 · 자리로 시작한다(따로)");
 const save = card.slice(card.indexOf("const save = (): void =>"), card.indexOf("const hint = el("));
