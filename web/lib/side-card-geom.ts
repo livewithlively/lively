@@ -170,3 +170,25 @@ export function parsePrefs(raw: string | null | undefined): CardPrefs {
     placed,
   };
 }
+
+/** 창 좌표의 상자(왼쪽 · 위 · 오른쪽 · 아래). */
+export interface Box { left: number; top: number; right: number; bottom: number }
+/** 기본 자리가 아래쪽에 떠 있는 막대(곁칸 앱 막대 등)와 겹치면 그 위로 올린다 — 카드가 사이드바의 길을 막지 않게.
+ *  아래 모서리 자리에만 쓴다(위 모서리는 막대와 반대쪽). h = 보이는 높이(접혀 있으면 알약 높이). 올려도 또 겹치면 한 번 더 본다.
+ *  ⚠ 사람이 옮긴 자리에는 쓰지 않는다(그 자리는 사람이 고른 것이다) — 부르는 쪽이 기본 자리일 때만 부른다. */
+export function liftAbove(a: CardAnchor, w: number, h: number, boxes: Box[], viewW: number, viewH: number, gap = 12): CardAnchor {
+  if (a.corner[0] !== 'b' || !boxes.length) return a;
+  const left = a.corner[1] === 'l' ? a.dx : Math.round(viewW) - a.dx - w;
+  const right = left + w;
+  let dy = a.dy;
+  for (let i = 0; i < 4; i++) {
+    const top = Math.round(viewH) - dy - h, bottom = Math.round(viewH) - dy;
+    let next = dy;
+    for (const b of boxes) {
+      if (b.right > left && b.left < right && b.bottom > top && b.top < bottom) next = Math.max(next, Math.round(viewH - b.top + gap));
+    }
+    if (next === dy) break;
+    dy = next;
+  }
+  return dy === a.dy ? a : { ...a, dy };
+}

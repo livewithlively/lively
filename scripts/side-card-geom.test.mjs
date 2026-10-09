@@ -125,7 +125,8 @@ if (lib) {
 
   const cardUi = read("web/v2/side-card.ts") || "";
   //  2026-10-09: 그리기는 «모서리 + 거리» 에서 센다(rectFromAnchor) — 최소화한 높이를 그대로 넘긴다.
-  ok(/return rectFromAnchor\(s\.w, s\.h, a, vw\(\), vh\(\), foldH\(\)\);/.test(cardUi) && /moveCard\(base, dx, dy, vw\(\), vh\(\), fh\)/.test(cardUi) && /moveCard\(base, d\[e\.key\]\[0\], d\[e\.key\]\[1\], vw\(\), vh\(\), fh\)/.test(cardUi),
+  //  2026-10-09 (2): 최소화한 높이는 한 번 재어(fh = foldH()) 막대 피하기와 그리기에 같이 쓴다.
+  ok(/const fh = foldH\(\);/.test(cardUi) && /return rectFromAnchor\(s\.w, s\.h, a, vw\(\), vh\(\), fh\);/.test(cardUi) && /moveCard\(base, dx, dy, vw\(\), vh\(\), fh\)/.test(cardUi) && /moveCard\(base, d\[e\.key\]\[0\], d\[e\.key\]\[1\], vw\(\), vh\(\), fh\)/.test(cardUi),
     "F5 side-card: 그리기 · 머리줄 끌기 · Shift+화살표가 모두 최소화한 높이로 센다");
   //  2026-10-09: 펼 때는 따로 적지 않는다 — 접힘은 기억하지 않고, 그릴 때마다 모서리 + 거리에서 편 높이로 다시 세어 창 안에 넣는다.
   const sf = cardUi.slice(cardUi.indexOf("function setFold("), cardUi.indexOf("let pillTimer"));

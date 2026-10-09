@@ -19,6 +19,10 @@
 //   F8 알약은 좌우 가장자리 손잡이가 있다(위아래 · 모서리는 없다)
 //   D1 저장 값이 깨짐 · 없음 → 아무것도 기억하지 않음(기본 크기 · 세션 쪽 모서리) · D2 Home 글쇠 → 기억을 지운다
 //   W1 카드가 뜰 모서리를 고를 «세션 쪽» 은 자리바꿈 판정 전에 잰다(panes.ts → sessionLeft)
+//   K1 기본 자리(아래 모서리)가 곁칸 앱 막대(.pn-dock-shelf)와 겹치면 막대 위(12)로 올린다 · K2 가로로 안 겹치면 그대로
+//   K3 위 모서리 자리는 그대로 · K4 막대가 없으면 그대로 · K5 알약(접힌 높이)도 겹치면 올린다
+//   K6 경계: 막대 왼쪽 = 카드 오른쪽(맞닿음)은 겹침이 아니다 · K7 올린 자리가 또 다른 막대와 겹치면 한 번 더 · K8 오른쪽 모서리도 같다
+//   K9 사람이 옮긴 자리는 올리지 않는다(기본 자리일 때만) · K10 뷰어의 배율 단추는 카드 반대쪽 아래(카드가 왼쪽이면 제자리 오른쪽)
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +36,7 @@ const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/
 const load = async (src) => import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString("base64")}`);
 
 const lib = await load(read("web/lib/side-card-geom.ts"));
-const { defaultCardSize, defaultAnchor, rectFromAnchor, anchorFromRect, parsePrefs, SESS_MIN, CARD_GAP } = lib;
+const { defaultCardSize, defaultAnchor, rectFromAnchor, anchorFromRect, parsePrefs, liftAbove, SESS_MIN, CARD_GAP } = lib;
 ok(typeof defaultCardSize === "function" && typeof defaultAnchor === "function" && typeof rectFromAnchor === "function" && typeof anchorFromRect === "function" && typeof parsePrefs === "function",
   "L0 자리 · 크기의 셈이 잎 모듈에 있다");
 
@@ -91,6 +95,30 @@ if (typeof defaultAnchor === "function") {
   ok(p4.w === 260 && p4.h === 160 && p4.corner === "br" && p4.dx === 0, "D1b 이상한 값은 최소 크기 · 기본 모서리 · 0 으로 다듬는다", JSON.stringify(p4));
 }
 
+if (typeof liftAbove !== "function") ok(false, "K0 막대를 피하는 셈(liftAbove)이 잎 모듈에 있다");
+else {
+  const VW = 1440, VH = 900;
+  const dock = { left: 548, top: 826, right: 896, bottom: 892 };          // 1440×900 실측(곁칸 앱 막대)
+  const bl = { corner: "bl", dx: 422, dy: 24 };                            // 왼쪽 422..782 · 아래 24
+  const k1 = liftAbove(bl, 360, 306, [dock], VW, VH);
+  ok(k1.corner === "bl" && k1.dx === 422 && k1.dy === VH - 826 + 12, "K1 앱 막대와 겹치면 막대 위 12 로 올린다(아래 거리 86)", JSON.stringify(k1));
+  const k1r = rectFromAnchor(360, 306, k1, VW, VH);
+  ok(VH - k1r.b <= 826 - 12, "K1b 그린 카드의 아랫변이 막대 윗변보다 12 위", JSON.stringify(k1r));
+  ok(liftAbove(bl, 360, 306, [{ left: 900, top: 826, right: 1200, bottom: 892 }], VW, VH) === bl, "K2 가로로 안 겹치면 그대로(같은 값)");
+  const tl = { corner: "tl", dx: 422, dy: 24 };
+  ok(liftAbove(tl, 360, 306, [dock], VW, VH) === tl, "K3 위 모서리 자리는 그대로");
+  ok(liftAbove(bl, 360, 306, [], VW, VH) === bl, "K4 막대가 없으면 그대로");
+  ok(liftAbove(bl, 360, 44, [dock], VW, VH).dy === 86, "K5 알약(높이 44)도 겹치면 올린다");
+  ok(liftAbove(bl, 126, 306, [dock], VW, VH) === bl && liftAbove(bl, 127, 306, [dock], VW, VH).dy === 86, "K6 경계: 카드 오른쪽 = 막대 왼쪽(548)은 겹침 아님 · 1px 넘으면 겹침");
+  ok(liftAbove(bl, 360, 306, [{ left: 0, top: 892, right: 1440, bottom: 900 }], VW, VH).dy === 24, "K6b 경계: 막대 윗변 = 카드 아랫변(맞닿음)은 겹침 아님");
+  //  처음 자리(570..876)와는 안 겹치고 올린 자리(508..814)와만 겹치는 막대 — 한 번만 보면 놓친다.
+  const upper = { left: 400, top: 520, right: 500, bottom: 560 };
+  ok(liftAbove(bl, 360, 306, [upper], VW, VH) === bl, "K7a 처음 자리와는 안 겹친다(시험 장치 확인)");
+  ok(liftAbove(bl, 360, 306, [dock, upper], VW, VH).dy === VH - 520 + 12, "K7 올린 자리가 또 다른 막대와 겹치면 한 번 더", JSON.stringify(liftAbove(bl, 360, 306, [dock, upper], VW, VH)));
+  const br = { corner: "br", dx: 600, dy: 24 };                            // 왼쪽 = 1440 − 600 − 360 = 480 .. 840
+  ok(liftAbove(br, 360, 306, [dock], VW, VH).dy === 86 && liftAbove({ corner: "br", dx: 24, dy: 24 }, 360, 306, [dock], VW, VH).dy === 24, "K8 오른쪽 모서리도 가로 자리로 판정");
+}
+
 // ── 화면(side-card.ts) ──
 const card = code(read("web/v2/side-card.ts"));
 const enter = card.slice(card.indexOf("async function enter("), card.indexOf("async function leave("));
@@ -99,8 +127,15 @@ ok(/sessLeft = h\.sessionLeft \? h\.sessionLeft\(\) : true;/.test(enter) && ente
 ok(/fold = false;/.test(enter), "F1a 카드가 되면 언제나 펼친 카드");
 ok(/fold = false;/.test(leave), "F1b 크게 보면(제자리로) 접힘을 지운다 — 다음 카드는 펼친 카드");
 const cur = card.slice(card.indexOf("function currentRect("), card.indexOf("function paintRect("));
-ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /if \(!a\) \{ const g = body\.getBoundingClientRect\(\); a = defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\); \}/.test(cur),
+ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /if \(!a\) \{[\s\S]*?const g = body\.getBoundingClientRect\(\);[\s\S]*?defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\)[\s\S]*?\}/.test(cur),
   "P1c · S1b 정한 적이 없으면 그릴 때마다 창 · 격자로 기본값을 센다", cur.slice(0, 240));
+ok(/a = liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), s\.w, fh \?\? s\.h, obstacles\(\), vw\(\), vh\(\)\);/.test(cur) && cur.indexOf("liftAbove(") > cur.indexOf("if (!a)"),
+  "K9 막대 피하기는 기본 자리일 때만(옮긴 자리는 그대로) · 접혀 있으면 알약 높이로", cur.slice(0, 400));
+const obs = card.slice(card.indexOf("function obstacles("), card.indexOf("function currentRect("));
+ok(/querySelectorAll\('\.pn-dock-shelf'\)/.test(obs) && /colMain\.contains\(n\)/.test(obs) && /q\.width > 0 && q\.height > 0/.test(obs), "K1c 피할 것: 보이는 곁칸 앱 막대(세션 카드 안의 것은 빼고)", obs.slice(0, 300));
+const pr = card.slice(card.indexOf("function paintRect("), card.indexOf("function paint():"));
+ok(/body\.classList\.toggle\('cm-card-left', vw\(\) - c\.r - c\.w \/ 2 < vw\(\) \/ 2\)/.test(pr), "K10 카드가 창 왼쪽 절반이면 cm-card-left", pr.slice(0, 300));
+ok(/classList\.remove\([^)]*'cm-card-left'/.test(card), "K10b 카드에서 나오면 cm-card-left 를 지운다");
 ok(/let size: \{ w: number; h: number \} \| null = prefs\.sized/.test(card) && /let anchor: CardAnchor \| null = prefs\.placed/.test(card), "P3 · S4 기억한 크기 · 자리로 시작한다(따로)");
 const save = card.slice(card.indexOf("const save = (): void =>"), card.indexOf("const hint = el("));
 ok(/sized: !!size/.test(save) && /placed: !!anchor/.test(save) && !/fold/.test(save), "F2b 적는 것: 바꿈 · 옮김(접힘은 적지 않는다)", save.slice(0, 200));
@@ -123,6 +158,9 @@ ok(/sessionLeft: \(\) => !swap\?\.swapped\(\)/.test(panes), "W1b 셸은 «세션
 const css = read("public/styles/45-v2-side-swap.css");
 const g = (e) => (css.match(new RegExp("\\.cm-grip-" + e + " \\{([^}]*)\\}")) || [])[1] || "";
 ok(/cursor: ew-resize/.test(g("e")) && /cursor: ew-resize/.test(g("w")), "F8b 좌우 손잡이는 가로 크기 조절 손(ew-resize)");
+const cssCode = code(css);
+ok(/\.pn-body\.cm:not\(\.cm-card-left\) > \.pn-pane\[data-zone="side"\] \.pn-zoom \{ right: auto; left: 12px; \}/.test(cssCode)
+  && !/\.pn-body\.cm > \.pn-pane\[data-zone="side"\] \.pn-zoom/.test(cssCode), "K10c 배율 단추는 카드가 오른쪽일 때만 왼쪽으로(왼쪽 카드 밑에 숨지 않는다)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

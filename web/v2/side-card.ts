@@ -30,7 +30,7 @@ import { el } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';
 import { pnIcon } from './panes-kit.js';
 import {
-  SIDE_DEF, type CardAnchor, type CardEdge, type CardRect, anchorFromRect, defaultAnchor, defaultCardSize,
+  SIDE_DEF, type Box, type CardAnchor, type CardEdge, type CardRect, anchorFromRect, defaultAnchor, defaultCardSize, liftAbove,
   moveCard, overProgress, overZone, parsePrefs, rectFromAnchor, resizeCard, shouldCommit, sideCap,
 } from '../lib/side-card-geom.js';
 import { isLive, nextPicked } from '../lib/side-card-live.js';   // 또렷 · 비침의 판정(순수 함수)
@@ -180,17 +180,33 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     const head = colMain.querySelector('.sc-head') as HTMLElement | null;
     return (head?.offsetHeight || 42) + 2;
   };
-  /** 지금 그릴 자리(창 기준 r · b). 사람이 정한 크기 · 자리가 없으면 창 · 격자로 기본값을 센다. */
+  /** 아래쪽에 떠 있는 막대 — 곁칸 앱 막대(.pn-dock-shelf, 사람이 끌어 옮길 수 있다). 기본 자리는 이것을 덮지 않는다. */
+  function obstacles(): Box[] {
+    const out: Box[] = [];
+    for (const n of Array.from(document.querySelectorAll('.pn-dock-shelf')) as HTMLElement[]) {
+      if (colMain.contains(n)) continue;
+      const q = n.getBoundingClientRect();
+      if (q.width > 0 && q.height > 0) out.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom });
+    }
+    return out;
+  }
+  /** 지금 그릴 자리(창 기준 r · b). 사람이 정한 크기 · 자리가 없으면 창 · 격자로 기본값을 센다 — 아래 막대와 겹치면 그 위로. */
   function currentRect(): CardRect {
     const s = size ?? defaultCardSize(vh());
+    const fh = foldH();
     let a = anchor;
-    if (!a) { const g = body.getBoundingClientRect(); a = defaultAnchor(sessLeft, g.left, g.right, vw()); }
-    return rectFromAnchor(s.w, s.h, a, vw(), vh(), foldH());
+    if (!a) {
+      const g = body.getBoundingClientRect();
+      a = liftAbove(defaultAnchor(sessLeft, g.left, g.right, vw()), s.w, fh ?? s.h, obstacles(), vw(), vh());
+    }
+    return rectFromAnchor(s.w, s.h, a, vw(), vh(), fh);
   }
   /** 카드의 자리와 크기를 화면에 입힌다. */
   function paintRect(): void {
     if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
     const c = currentRect();
+    //  카드가 창의 왼쪽 절반에 있나 — 뷰어의 배율 단추를 카드 반대쪽 아래에 둔다(CSS cm-card-left).
+    body.classList.toggle('cm-card-left', vw() - c.r - c.w / 2 < vw() / 2);
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');
@@ -565,7 +581,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       window.clearInterval(watchFocus);
       watchFocus = 0;
       document.body.classList.remove('cm-dragging');
-      body.classList.remove('cm', 'cm-fold', 'cm-over', 'cm-live');
+      body.classList.remove('cm', 'cm-fold', 'cm-over', 'cm-live', 'cm-card-left');
       for (const k of ['--cm-w', '--cm-h', '--cm-r', '--cm-b', '--cm-over', '--cm-p']) body.style.removeProperty(k);
       ctl.remove(); hint.remove();
       for (const g of grips) g.remove();
