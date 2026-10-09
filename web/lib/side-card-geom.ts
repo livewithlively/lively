@@ -78,15 +78,18 @@ export function clampCard(c: CardRect, bodyW: number, bodyH: number, foldH?: num
 export type CardEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 /** 손잡이를 (dx, dy) 만큼 끌었을 때의 카드. 반대쪽 가장자리는 제자리에 둔다. */
-export function resizeCard(c: CardRect, edge: CardEdge, dx: number, dy: number, bodyW: number, bodyH: number): CardRect {
+export function resizeCard(c: CardRect, edge: CardEdge, dx: number, dy: number, bodyW: number, bodyH: number, foldH?: number): CardRect {
   const BW = Math.round(bodyW), BH = Math.round(bodyH);
+  //  최소화한 카드(알약)는 머리줄 한 줄이다 — 폭만 바꾸고(위아래는 그대로) 자리 범위도 보이는 높이로 센다.
+  //   편 높이로 세면 위에 올려 둔 알약의 폭을 바꾸는 순간 아래로 튀었다(리뷰 2026-10-09).
+  const folded = foldH !== undefined && foldH > 0 && foldH < c.h;
   // 왼쪽 · 위 · 오른쪽 · 아래 가장자리의 좌표(격자 기준)로 바꿔 움직이고 되돌린다.
   let left = BW - c.r - c.w, top = BH - c.b - c.h, right = BW - c.r, bottom = BH - c.b;
   if (edge.includes('w')) left = clamp(left + dx, CARD_PAD, right - CARD_MIN.w);
   if (edge.includes('e')) right = clamp(right + dx, left + CARD_MIN.w, BW - CARD_PAD);
-  if (edge.includes('n')) top = clamp(top + dy, CARD_PAD, bottom - CARD_MIN.h);
-  if (edge.includes('s')) bottom = clamp(bottom + dy, top + CARD_MIN.h, BH - CARD_PAD);
-  return clampCard({ w: right - left, h: bottom - top, r: BW - right, b: BH - bottom }, BW, BH);
+  if (!folded && edge.includes('n')) top = clamp(top + dy, CARD_PAD, bottom - CARD_MIN.h);
+  if (!folded && edge.includes('s')) bottom = clamp(bottom + dy, top + CARD_MIN.h, BH - CARD_PAD);
+  return clampCard({ w: right - left, h: bottom - top, r: BW - right, b: BH - bottom }, BW, BH, foldH);
 }
 
 /** 카드를 (dx, dy) 만큼 옮겼을 때. 크기는 그대로다. foldH = 최소화한 카드의 보이는 높이(clampCard). */
@@ -151,7 +154,8 @@ export function anchorFromRect(c: CardRect, viewW: number, viewH: number, foldH?
 }
 
 /** 기억해 두는 것 — 사람이 바꾼 크기(sized) · 옮긴 자리(placed). 따로 센다. 최소화는 기억하지 않는다(카드는 늘 펼쳐서 뜬다). */
-export interface CardPrefs { w: number; h: number; sized: boolean; corner: Corner; dx: number; dy: number; placed: boolean }
+/** left = 마지막으로 카드가 될 때 세션이 줄어든 쪽(왼쪽?) — 다시 불러온 카드(새로고침 · 세션 전환)의 기본 모서리를 고른다. */
+export interface CardPrefs { w: number; h: number; sized: boolean; corner: Corner; dx: number; dy: number; placed: boolean; left: boolean }
 const CORNERS: Corner[] = ['tl', 'tr', 'bl', 'br'];
 /** 적어 둔 값(JSON 글자)을 읽는다. 깨졌거나 없으면 아무것도 기억하지 않은 상태(기본 크기 · 세션 쪽 모서리). */
 export function parsePrefs(raw: string | null | undefined): CardPrefs {
@@ -168,6 +172,7 @@ export function parsePrefs(raw: string | null | undefined): CardPrefs {
     dx: placed ? Math.max(0, Math.round(Number(o.dx))) : CARD_GAP,
     dy: placed ? Math.max(0, Math.round(Number(o.dy))) : CARD_GAP,
     placed,
+    left: o.left !== false,
   };
 }
 

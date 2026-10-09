@@ -23,6 +23,9 @@
 //   K3 위 모서리 자리는 그대로 · K4 막대가 없으면 그대로 · K5 알약(접힌 높이)도 겹치면 올린다
 //   K6 경계: 막대 왼쪽 = 카드 오른쪽(맞닿음)은 겹침이 아니다 · K7 올린 자리가 또 다른 막대와 겹치면 한 번 더 · K8 오른쪽 모서리도 같다
 //   K9 사람이 옮긴 자리는 올리지 않는다(기본 자리일 때만) · K10 뷰어의 배율 단추는 카드 반대쪽 아래(카드가 왼쪽이면 제자리 오른쪽)
+//   R1 알약(최소화)의 폭을 바꿔도 위아래 자리는 그대로(위에 올려 둔 알약이 튀지 않는다) · R2 알약은 위아래 가장자리로 높이가 안 바뀐다
+//   R3 편 카드는 종전대로 위아래 가장자리로 높이가 바뀐다 · R4 폭만 바꾸면(자리가 기본 자리 그대로) «옮긴 자리» 로 적지 않는다
+//   D3 다시 불러온 카드는 마지막으로 카드가 될 때의 세션 쪽 모서리 — 적어 둔 값이 없으면 왼쪽
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +39,7 @@ const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/
 const load = async (src) => import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText).toString("base64")}`);
 
 const lib = await load(read("web/lib/side-card-geom.ts"));
-const { defaultCardSize, defaultAnchor, rectFromAnchor, anchorFromRect, parsePrefs, liftAbove, SESS_MIN, CARD_GAP } = lib;
+const { defaultCardSize, defaultAnchor, rectFromAnchor, anchorFromRect, parsePrefs, liftAbove, resizeCard, SESS_MIN, CARD_GAP } = lib;
 ok(typeof defaultCardSize === "function" && typeof defaultAnchor === "function" && typeof rectFromAnchor === "function" && typeof anchorFromRect === "function" && typeof parsePrefs === "function",
   "L0 자리 · 크기의 셈이 잎 모듈에 있다");
 
@@ -93,6 +96,21 @@ if (typeof defaultAnchor === "function") {
   ok(p3.sized && p3.w === 480 && p3.h === 320 && p3.placed && p3.corner === "tr" && p3.dx === 30 && p3.dy === 60, "S4 · P3 바꾼 크기 · 옮긴 자리를 읽는다", JSON.stringify(p3));
   const p4 = parsePrefs(JSON.stringify({ w: 10, h: 10, sized: true, corner: "xx", dx: -5, dy: 5, placed: true }));
   ok(p4.w === 260 && p4.h === 160 && p4.corner === "br" && p4.dx === 0, "D1b 이상한 값은 최소 크기 · 기본 모서리 · 0 으로 다듬는다", JSON.stringify(p4));
+  ok(p0.left === true && parsePrefs(JSON.stringify({ left: false })).left === false && parsePrefs(JSON.stringify({ left: true })).left === true && p1.left === true,
+    "D3 세션 쪽(left)을 읽는다 — 없거나 깨지면 왼쪽");
+
+  // ── 알약의 크기 조절 ──
+  const top = { w: 360, h: 306, r: 600, b: 900 - 8 - 44 };                // 맨 위(여백 8)로 올려 둔 알약(보이는 높이 44)
+  const rp = resizeCard(top, "e", 60, 0, 1440, 900, 44);
+  ok(rp.b === top.b && rp.w === 420 && rp.h === 306, "R1 위에 올려 둔 알약의 폭을 바꿔도 위아래 자리는 그대로(튀지 않는다)", JSON.stringify(rp));
+  const rpw = resizeCard(top, "w", -40, 0, 1440, 900, 44);
+  ok(rpw.b === top.b && rpw.w === 400 && rpw.r === top.r, "R1b 왼쪽 가장자리도 같다", JSON.stringify(rpw));
+  const rn = resizeCard({ w: 360, h: 306, r: 600, b: 24 }, "n", 0, -100, 1440, 900, 44);
+  ok(rn.h === 306 && rn.b === 24, "R2 알약은 위 가장자리로 높이가 안 바뀐다", JSON.stringify(rn));
+  const rnu = resizeCard({ w: 360, h: 306, r: 600, b: 24 }, "n", 0, -100, 1440, 900);
+  ok(rnu.h === 406 && rnu.b === 24, "R3 편 카드는 위 가장자리로 높이가 바뀐다(종전과 같다)", JSON.stringify(rnu));
+  ok(JSON.stringify(resizeCard({ w: 360, h: 306, r: 600, b: 24 }, "se", 30, 30, 1440, 900, 306)) === JSON.stringify(resizeCard({ w: 360, h: 306, r: 600, b: 24 }, "se", 30, 30, 1440, 900)),
+    "R3b 경계: 보이는 높이 = 편 높이면 편 카드와 같다");
 }
 
 if (typeof liftAbove !== "function") ok(false, "K0 막대를 피하는 셈(liftAbove)이 잎 모듈에 있다");
@@ -127,28 +145,38 @@ ok(/sessLeft = h\.sessionLeft \? h\.sessionLeft\(\) : true;/.test(enter) && ente
 ok(/fold = false;/.test(enter), "F1a 카드가 되면 언제나 펼친 카드");
 ok(/fold = false;/.test(leave), "F1b 크게 보면(제자리로) 접힘을 지운다 — 다음 카드는 펼친 카드");
 const cur = card.slice(card.indexOf("function currentRect("), card.indexOf("function paintRect("));
-ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /if \(!a\) \{[\s\S]*?const g = body\.getBoundingClientRect\(\);[\s\S]*?defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\)[\s\S]*?\}/.test(cur),
+const dp = card.slice(card.indexOf("function defaultPlace("), card.indexOf("function currentRect("));
+ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /const a = anchor \?\? defaultPlace\(s\.w, fh \?\? s\.h\);/.test(cur)
+  && /const g = body\.getBoundingClientRect\(\);/.test(dp) && /defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\)/.test(dp),
   "P1c · S1b 정한 적이 없으면 그릴 때마다 창 · 격자로 기본값을 센다", cur.slice(0, 240));
-ok(/a = liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), s\.w, fh \?\? s\.h, obstacles\(\), vw\(\), vh\(\)\);/.test(cur) && cur.indexOf("liftAbove(") > cur.indexOf("if (!a)"),
-  "K9 막대 피하기는 기본 자리일 때만(옮긴 자리는 그대로) · 접혀 있으면 알약 높이로", cur.slice(0, 400));
+ok(/return liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), w, seenH, obstacles\(\), vw\(\), vh\(\)\);/.test(dp),
+  "K9 막대 피하기는 기본 자리일 때만(옮긴 자리는 그대로) · 접혀 있으면 알약 높이로", dp.slice(0, 400));
 const obs = card.slice(card.indexOf("function obstacles("), card.indexOf("function currentRect("));
 ok(/h\.sidePane\.querySelectorAll\('\.pn-dock-shelf'\)/.test(obs) && /q\.width > 0 && q\.height > 0/.test(obs), "K1c 피할 것: 사이드바 안의 보이는 앱 막대", obs.slice(0, 300));
 const pr = card.slice(card.indexOf("function paintRect("), card.indexOf("function paint():"));
 ok(/const sp = h\.sidePane\.getBoundingClientRect\(\);/.test(pr) && /body\.classList\.toggle\('cm-card-left', shown\(\) && vw\(\) - c\.r - c\.w \/ 2 < \(sp\.left \+ sp\.right\) \/ 2\)/.test(pr),
   "K10 카드 가운데가 사이드바 왼쪽 절반이면 cm-card-left(창 기준 아님 · 카드일 때만)", pr.slice(0, 400));
-ok(/classList\.remove\([^)]*'cm-card-left'/.test(card), "K10b 카드에서 나오면 cm-card-left 를 지운다");
+ok(/if \(s\) \{ paintRect\(\); paintFold\(\); \} else body\.classList\.remove\('cm-card-left'\);/.test(card.slice(card.indexOf("function paint():"), card.indexOf("// ── 비침 · 또렷"))), "K10b 카드가 아니면 cm-card-left 를 지운다(런타임 Q8 이 지킨다)");
 ok(/let size: \{ w: number; h: number \} \| null = prefs\.sized/.test(card) && /let anchor: CardAnchor \| null = prefs\.placed/.test(card), "P3 · S4 기억한 크기 · 자리로 시작한다(따로)");
 const save = card.slice(card.indexOf("const save = (): void =>"), card.indexOf("const hint = el("));
 ok(/sized: !!size/.test(save) && /placed: !!anchor/.test(save) && !/fold/.test(save), "F2b 적는 것: 바꿈 · 옮김(접힘은 적지 않는다)", save.slice(0, 200));
 const sf = card.slice(card.indexOf("function setFold("), card.indexOf("let pillTimer"));
 ok(!/save\(\)/.test(sf), "F2c 최소화 · 펴기는 적지 않는다");
 const pt = card.slice(card.indexOf("const onTitleClick"), card.indexOf("colMain.addEventListener('click', onTitleClick, true)"));
-ok(/if \(!fold \|\| dragged\) return;/.test(pt) && /pillTimer = window\.setTimeout\(\(\) => \{ if \(!dead && shown\(\) && fold\) setFold\(false\); \}, PILL_CLICK_MS\);/.test(pt), "F5 알약 한 번 누름 → 편다(기다렸다가) · F7 끌고 놓은 것은 누름이 아니다", pt.slice(0, 300));
+ok(/const wasDrag = dragged;\s*dragged = false;/.test(pt) && /if \(!fold \|\| wasDrag\) return;/.test(pt) && /pillTimer = window\.setTimeout\(\(\) => \{ if \(!dead && shown\(\) && fold\) setFold\(false\); \}, PILL_CLICK_MS\);/.test(pt), "F5 알약 한 번 누름 → 편다(기다렸다가) · F7 끌고 놓은 것은 누름이 아니다", pt.slice(0, 300));
 const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.addEventListener('dblclick', onHeadDbl, true)"));
 ok(/window\.clearTimeout\(pillTimer\);/.test(dbl) && dbl.indexOf("clearTimeout(pillTimer)") < dbl.indexOf("leave()"), "F6 두 번 누름 → 펴기를 취소하고 곧장 크게");
 const ds = card.slice(card.indexOf("function dragStart("), card.indexOf("const headOf ="));
-ok(/if \(Math\.abs\(dx\) \+ Math\.abs\(dy\) > 3\) dragged = true;/.test(ds) && /if \(!dragged\) return;/.test(ds) && /if \(persist && dragged && !dead && bw\(\) > 0\) save\(\);/.test(ds), "F7b 손이 떨린 만큼(3px 이하)은 옮김으로 적지 않는다");
-ok(/anchor = anchorFromRect\(c, vw\(\), vh\(\), fh\);/.test(ds) && /if \(kind !== 'move'\) size = \{ w: c\.w, h: c\.h \};/.test(ds), "P6d 끌면 가까운 모서리로 다시 적는다 · 크기를 바꾸면 크기도");
+ok(/if \(Math\.hypot\(dx, dy\) > 3\) dragged = true;/.test(ds) && /if \(!dragged\) return;/.test(ds) && /if \(persist && dragged && !dead && bw\(\) > 0\) save\(\);/.test(ds), "F7b 손이 떨린 만큼(3px 이하)은 옮김으로 적지 않는다");
+ok(/else anchor = anchorFromRect\(c, vw\(\), vh\(\), fh\);/.test(ds) && /if \(kind !== 'move'\) \{ size = \{ w: c\.w, h: c\.h \}; anchor = placeAfterResize\(c, fh, wasPlaced\); \}/.test(ds)
+  && /resizeCard\(base, kind, dx, dy, vw\(\), vh\(\), fh\)/.test(ds), "P6d 끌면 가까운 모서리로 다시 적는다 · 크기를 바꾸면 크기도(알약은 보이는 높이로)");
+ok(/window\.clearTimeout\(pillTimer\);/.test(ds), "F7c 알약을 누르고 곧장 끌면 펴기 예약을 지운다");
+const par = card.slice(card.indexOf("function placeAfterResize("), card.indexOf("function paintRect("));
+ok(/if \(wasPlaced\) return a;/.test(par) && /a\.corner === d\.corner && a\.dx === d\.dx && a\.dy === d\.dy \? null : a/.test(par), "R4 폭만 바꿔 자리가 기본 자리 그대로면 «옮긴 자리» 로 적지 않는다", par.slice(0, 300));
+ok(/let sessLeft = prefs\.left;/.test(card) && /left: sessLeft/.test(save) && /fold = false;\s*save\(\);/.test(enter), "D3b 세션 쪽을 카드가 될 때 적고 다시 불러올 때 읽는다");
+const rs = card.slice(card.indexOf("function restore("), card.indexOf("function settleSoon("));
+ok(/fold = false;/.test(rs) && /clearTimeout\(pillTimer\)/.test(rs), "F1c 다시 불러온 카드(세션 전환)도 펼친 카드");
+ok(/settleSoon\(\);/.test(enter) && /if \(on\) settleSoon\(\);/.test(rs), "K11 카드가 된 직후 막대가 다시 놓인 뒤 기본 자리를 한 번 더 잰다");
 const pa = card.slice(card.indexOf("function paint():"), card.indexOf("// ── 비침 · 또렷"));
 ok(/g\.hidden = !s \|\| \(fold && g\.dataset\.edge !== 'e' && g\.dataset\.edge !== 'w'\)/.test(pa), "F8 알약은 좌우 가장자리 손잡이만 있다(폭 조절 — 버그 수정)", pa.slice(0, 400));
 const kd = card.slice(card.indexOf("keyGrip.addEventListener('keydown'"), card.indexOf("const onHeadDbl"));

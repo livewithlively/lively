@@ -135,7 +135,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   let size: { w: number; h: number } | null = prefs.sized ? { w: prefs.w, h: prefs.h } : null;
   let anchor: CardAnchor | null = prefs.placed ? { corner: prefs.corner, dx: prefs.dx, dy: prefs.dy } : null;
   let fold = false;                            // 최소화(알약). 적지 않는다
-  let sessLeft = true;                         // 카드가 될 때 세션이 줄어든 쪽(기본 자리를 고른다)
+  let sessLeft = prefs.left;                   // 카드가 될 때 세션이 줄어든 쪽(기본 자리를 고른다) · 다시 불러온 카드는 마지막 값
 
   const bw = (): number => body.clientWidth;
   //  카드가 움직일 수 있는 범위는 **창 전체**다(원준 2026-10-07 «곁칸 안쪽으로 너무 제한적»). 카드는 position: fixed 라
@@ -148,7 +148,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   const capNow = (): number | null => (bw() > 0 ? sideCap(bw()) : null);
   const shown = (): boolean => on && h.sideOn() && !narrow();
   const save = (): void => {
-    const v = { w: size?.w ?? 0, h: size?.h ?? 0, sized: !!size, corner: anchor?.corner ?? 'br', dx: anchor?.dx ?? 0, dy: anchor?.dy ?? 0, placed: !!anchor };
+    const v = { w: size?.w ?? 0, h: size?.h ?? 0, sized: !!size, corner: anchor?.corner ?? 'br', dx: anchor?.dx ?? 0, dy: anchor?.dy ?? 0, placed: !!anchor, left: sessLeft };
     try { localStorage.setItem(KEY_CARD, JSON.stringify(v)); } catch (_) { /* 적지 못해도 이번 화면은 된다 */ }
   };
 
@@ -189,16 +189,25 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     }
     return out;
   }
+  /** 기본 자리 — 세션 쪽 아래 모서리, 아래 막대와 겹치면 그 위로. w · seenH = 그릴 폭 · 보이는 높이. */
+  function defaultPlace(w: number, seenH: number): CardAnchor {
+    const g = body.getBoundingClientRect();
+    return liftAbove(defaultAnchor(sessLeft, g.left, g.right, vw()), w, seenH, obstacles(), vw(), vh());
+  }
   /** 지금 그릴 자리(창 기준 r · b). 사람이 정한 크기 · 자리가 없으면 창 · 격자로 기본값을 센다 — 아래 막대와 겹치면 그 위로. */
   function currentRect(): CardRect {
     const s = size ?? defaultCardSize(vh());
     const fh = foldH();
-    let a = anchor;
-    if (!a) {
-      const g = body.getBoundingClientRect();
-      a = liftAbove(defaultAnchor(sessLeft, g.left, g.right, vw()), s.w, fh ?? s.h, obstacles(), vw(), vh());
-    }
+    const a = anchor ?? defaultPlace(s.w, fh ?? s.h);
     return rectFromAnchor(s.w, s.h, a, vw(), vh(), fh);
+  }
+  /** 크기를 바꾼 뒤의 자리. 옮긴 적이 없고 자리(붙은 모서리와 거리)가 기본 자리 그대로면 «옮긴 자리» 로 굳히지 않는다 —
+   *  폭만 바꿨는데 자리가 사람이 고른 것으로 적히면 막대 피하기 · 세션 쪽 고르기가 거기서 멈춘다(리뷰 2026-10-09). */
+  function placeAfterResize(c: CardRect, fh: number | undefined, wasPlaced: boolean): CardAnchor | null {
+    const a = anchorFromRect(c, vw(), vh(), fh);
+    if (wasPlaced) return a;
+    const d = defaultPlace(c.w, fh ?? c.h);
+    return a.corner === d.corner && a.dx === d.dx && a.dy === d.dy ? null : a;
   }
   /** 카드의 자리와 크기를 화면에 입힌다. */
   function paintRect(): void {
@@ -227,7 +236,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     ctl.hidden = !s;
     //  알약(최소화)은 좌우 가장자리로 폭만 바꾼다 — 높이는 머리줄 한 줄이라 위아래 · 모서리 손잡이는 없다.
     for (const g of grips) g.hidden = !s || (fold && g.dataset.edge !== 'e' && g.dataset.edge !== 'w');
-    if (s) { paintRect(); paintFold(); }
+    if (s) { paintRect(); paintFold(); } else body.classList.remove('cm-card-left');
     paintLive();
     postGlass();
     syncWatch();
@@ -355,6 +364,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     //  카드가 뜰 모서리 = 세션이 줄어든 쪽. 자리바꿈 판정(settle)이 자리를 바꾸기 **전에** 잰다. 카드는 늘 펼쳐서 뜬다.
     sessLeft = h.sessionLeft ? h.sessionLeft() : true;
     fold = false;
+    save();                              // 세션 쪽을 적어 둔다(다시 불러온 카드도 같은 모서리)
     const zone = overZone(bw());
     const p0 = overProgress(from, bw());
     await tween(Math.max(120, 220 * (1 - p0)), OUT, (t) => paintOver(from + (zone - from) * t), alive);
@@ -370,6 +380,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     paint();
     h.onChange?.(true);
     if (cap !== null) h.settle?.(cap);
+    settleSoon();
     if (!reduceMotion() && typeof colMain.animate === 'function') {
       try {
         await colMain.animate(
@@ -434,10 +445,22 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   function restore(v: boolean): void {
     halt();
     on = !!v;
+    //  다시 불러온 카드(세션 전환 · 새로고침)도 펼친 카드다 — 앞 세션에서 최소화했던 것이 따라오지 않는다(리뷰 2026-10-09).
+    fold = false;
+    window.clearTimeout(pillTimer);
     picked = focusInCard();
     const cap = capNow();
     if (on && cap !== null && h.sideOn() && !narrow()) h.setSideW(cap, false);
     paint();
+    if (on) settleSoon();
+  }
+  //  카드가 된 직후엔 곁칸 앱 막대가 아직 옛 자리다(막대는 다음 그림 틀에서 다시 놓인다) — 두 틀 뒤 기본 자리를 다시 잰다.
+  let settleRaf = 0;
+  function settleSoon(): void {
+    cancelAnimationFrame(settleRaf);
+    settleRaf = requestAnimationFrame(() => {
+      settleRaf = requestAnimationFrame(() => { if (!dead && shown() && !busy && !anchor) paintRect(); });
+    });
   }
 
   // ── 카드 옮기기(머리줄을 끈다) · 크기 바꾸기(가장자리를 끈다) ──
@@ -448,19 +471,21 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     e.preventDefault();
     const fh = foldH();
     const base = currentRect();
+    const wasPlaced = anchor !== null;
     const x0 = e.clientX, y0 = e.clientY;
     dragged = false;
+    window.clearTimeout(pillTimer);              // 알약을 누르고 곧장 끌기 시작했다 — 끄는 도중에 펴지지 않게
     try { grab.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
     document.body.classList.add('cm-dragging');
     const move = (ev: PointerEvent): void => {
       if (dead || !shown() || !(bw() > 0)) return;
       const dx = ev.clientX - x0, dy = ev.clientY - y0;
-      if (Math.abs(dx) + Math.abs(dy) > 3) dragged = true;     // 알약을 끌고 놓은 것은 «누름» 이 아니다(펴지 않는다)
+      if (Math.hypot(dx, dy) > 3) dragged = true;               // 알약을 끌고 놓은 것은 «누름» 이 아니다(펴지 않는다)
       if (!dragged) return;                                     // 손이 떨린 만큼은 옮김이 아니다(누른 자리를 «옮긴 자리» 로 굳히지 않는다)
-      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh(), fh) : resizeCard(base, kind, dx, dy, vw(), vh());
-      //  옮기면 자리를, 크기를 바꾸면 크기와 자리를(움직인 가장자리 쪽이 바뀐다) 쥔다. 자리는 가장 가까운 모서리로 다시 적는다.
-      if (kind !== 'move') size = { w: c.w, h: c.h };
-      anchor = anchorFromRect(c, vw(), vh(), fh);
+      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh(), fh) : resizeCard(base, kind, dx, dy, vw(), vh(), fh);
+      //  옮기면 자리를, 크기를 바꾸면 크기와 (움직인 가장자리 쪽이 바뀌었으면) 자리를 쥔다. 자리는 가장 가까운 모서리로 다시 적는다.
+      if (kind !== 'move') { size = { w: c.w, h: c.h }; anchor = placeAfterResize(c, fh, wasPlaced); }
+      else anchor = anchorFromRect(c, vw(), vh(), fh);
       paintRect();
     };
     let done = false;
@@ -501,7 +526,9 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     const t = e.target as HTMLElement | null;
     if (!headOf(t)) return;
     if (t?.closest('.sc-head .sc-title-btn')) { e.stopPropagation(); e.preventDefault(); }
-    if (!fold || dragged) return;
+    const wasDrag = dragged;
+    dragged = false;                         // 이번 누름에서 한 번만 쓴다(남은 값이 다음 누름을 막지 않게)
+    if (!fold || wasDrag) return;
     window.clearTimeout(pillTimer);
     pillTimer = window.setTimeout(() => { if (!dead && shown() && fold) setFold(false); }, PILL_CLICK_MS);
   };
@@ -527,9 +554,9 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     }
     if (!d[e.key]) return;
     e.preventDefault();
-    const next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh(), fh) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh());
-    if (!e.shiftKey) size = { w: next.w, h: next.h };
-    anchor = anchorFromRect(next, vw(), vh(), fh);
+    const next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh(), fh) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh(), fh);
+    if (!e.shiftKey) { size = { w: next.w, h: next.h }; anchor = placeAfterResize(next, fh, anchor !== null); }
+    else anchor = anchorFromRect(next, vw(), vh(), fh);
     paintRect();
     save();
   });
@@ -580,6 +607,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       window.removeEventListener('message', onFrameMsg);
       window.removeEventListener('resize', onWinResize);
       window.clearTimeout(pillTimer);
+      cancelAnimationFrame(settleRaf);
       window.clearInterval(watchFocus);
       watchFocus = 0;
       document.body.classList.remove('cm-dragging');

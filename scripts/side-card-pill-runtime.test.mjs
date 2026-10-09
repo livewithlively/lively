@@ -11,6 +11,12 @@
 //  Q4 알약을 한 번 누르면(끌지 않고) 잠깐 뒤 펴진다
 //  Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게(카드가 풀린다)
 //  Q6 다시 카드가 되면 펼친 카드다(최소화한 채 크게 봤어도)
+//  Q7 최소화한 채 다른 세션으로 갔다 오면(restore false → true) 펼친 카드다 — 앞 세션의 최소화가 따라오지 않는다
+//  Q8 카드가 아니면 cm-card-left(배율 단추 쪽 표식)가 없다
+//  Q9 위에 올려 둔 알약의 폭을 바꿔도 윗변 그대로(튀지 않는다)
+//  Q10 기본 자리 카드의 오른쪽 가장자리로 폭만 바꾸면 «옮긴 자리» 로 적지 않는다(크기만 적는다)
+//  Q11 알약을 누르고 곧장 끌면 끄는 도중에 펴지지 않는다
+//  (Q7~Q11 은 리뷰 2026-10-09 — 바꾸기 전 커밋 58d763c7a 를 물리면 빨갛다)
 //
 // fail-first(실측 2026-10-09): 바꾸기 전 web/lib/side-card-geom.ts · web/v2/side-card.ts 를 SIDE_CARD_SRC 로 물리면 Q1 · Q2 · Q3 · Q4 가 빨갛다
 //  (Q5 · Q6 은 종전에도 맞았다 — 지키려고 둔다).
@@ -99,6 +105,29 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     // Q6 — 다시 카드가 되면 펼친 카드
     card.restore(true); await sleep(60);
     R.q6_info=[grid.classList.contains('cm'),grid.classList.contains('cm-fold')]; R.q6=grid.classList.contains('cm') && !grid.classList.contains('cm-fold');
+    const fold=()=>grid.classList.contains('cm-fold'); const minB=()=>col.querySelector('.cm-min-b, .cm-fold-b');
+    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card3')||'null');
+    const drag=async(t,dx,dy)=>{const b=rc(t); const x=b.left+(t===head?30:b.width/2), y=b.top+b.height/2; P('pointerdown',x,y,t); P('pointermove',x+dx/2,y+dy/2,t); P('pointermove',x+dx,y+dy,t); P('pointerup',x+dx,y+dy,t); await sleep(30);};
+    // Q8 — 카드가 아니면 cm-card-left 가 없다
+    card.restore(false); await sleep(40);
+    R.q8_info=grid.className; R.q8=!grid.classList.contains('cm') && !grid.classList.contains('cm-card-left');
+    // Q7 — 최소화한 채 세션 전환
+    card.restore(true); await sleep(40); minB().click(); await sleep(30); const f0=fold();
+    card.restore(false); card.restore(true); await sleep(40);
+    R.q7_info=[f0,grid.classList.contains('cm'),fold()]; R.q7=f0 && grid.classList.contains('cm') && !fold();
+    // Q10 — 기억을 지우고(Home) 오른쪽 가장자리로 폭만 넓힌다
+    col.querySelector('.cm-grip-nw').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true})); await sleep(30);
+    const wA=rc(col).width; await drag(col.querySelector('.cm-grip-e'),40,0); const sv=saved();
+    R.q10_info=[Math.round(wA),Math.round(rc(col).width),JSON.stringify(sv)]; R.q10=!!sv && sv.sized===true && sv.placed===false && Math.abs(rc(col).width-(wA+40))<=2;
+    // Q9 — 알약을 맨 위로 올리고 오른쪽 가장자리로 폭을 바꾼다
+    minB().click(); await sleep(30); await drag(head,0,-5000); const t0=rc(col).top, w9=rc(col).width;
+    await drag(col.querySelector('.cm-grip-e'),60,0);
+    R.q9_info=[Math.round(t0),Math.round(rc(col).top),Math.round(w9),Math.round(rc(col).width),fold()]; R.q9=fold() && Math.abs(rc(col).top-t0)<=1.5 && Math.abs(rc(col).width-(w9+60))<=2;
+    // Q11 — 알약을 누르고(펴기 예약) 곧장 끈다 → 다 끌고 기다려도 접힌 채
+    const hb3=rc(head); const x3=hb3.left+40, y3=hb3.top+hb3.height/2;
+    P('pointerdown',x3,y3,head); P('pointerup',x3,y3,head); head.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:x3,clientY:y3,detail:1}));
+    await drag(head,0,200); await sleep(320);
+    R.q11_info=[fold(),Math.round(rc(col).top)]; R.q11=fold() && rc(col).top>t0+100;
   }catch(e){R.err=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
@@ -118,5 +147,10 @@ check(R.q3, "Q3 알약은 좌우 손잡이만 · 오른쪽 손잡이로 폭이 �
 check(R.q4, "Q4 알약을 한 번 누르면 잠깐 뒤 펴진다", JSON.stringify(R.q4_info));
 check(R.q5, "Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게", JSON.stringify(R.q5_info));
 check(R.q6, "Q6 다시 카드가 되면 펼친 카드", JSON.stringify(R.q6_info));
+check(R.q7, "Q7 최소화한 채 다른 세션으로 갔다 오면 펼친 카드", JSON.stringify(R.q7_info));
+check(R.q8, "Q8 카드가 아니면 cm-card-left 가 없다", JSON.stringify(R.q8_info));
+check(R.q9, "Q9 위에 올려 둔 알약의 폭을 바꿔도 윗변 그대로", JSON.stringify(R.q9_info));
+check(R.q10, "Q10 폭만 바꾸면 크기만 적고 «옮긴 자리» 로는 적지 않는다", JSON.stringify(R.q10_info));
+check(R.q11, "Q11 알약을 누르고 곧장 끌면 끄는 도중에 펴지지 않는다", JSON.stringify(R.q11_info));
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
