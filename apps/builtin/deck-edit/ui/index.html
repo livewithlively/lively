@@ -34,8 +34,13 @@
     (docs.latest_ver — 올리기는 판 행을 먼저 쓰고 문서 행을 맨 끝에 고친다)이 생기면 머리줄 아래 띠에 「AI가 판 N 을 만들었습니다」 + 「바뀐 곳 훑어보기」 · 「판 N 열기」.
     안 보낸 고침은 새 판으로 따라온다(원문이 같은 줄에 그대로). 그 사이 원문이 바뀐 줄은 가장 비슷한 줄에 **의견으로** 얹는다(adoptOrphans).
     보낸 뒤 답을 기다리는 동안은 머리줄에 「AI 고치는 중 m:ss」 가 선다(마냥 기다리지 않게).
-  · **바뀐 곳 훑어보기**(review): 앞 판과 견줘 바뀐 글만 모아 전 · 후를 나란히, 하나씩 넘기며 본다. 마음에 안 들면 그 자리에서 의견을 적거나 전 글로 되돌린다.
-    앞 판의 글은 그리지 않고 그 장의 HTML 에서 글 덩이를 뽑아(chunksOf) 가장 비슷한 것을 «전» 으로 짝짓는다.
+  · **바뀐 곳 훑어보기**(review · 원준 2026-10-09 «전후 비교는 글이 아니라 그림으로»): 바뀐 **장**을 하나씩 — 왼쪽에 앞 판과 지금 판의 그 장을 실제로 그려
+    나란히 세우고(좁으면 위아래), 「겹쳐 보기」 는 같은 자리에서 누르는 동안 앞 판을 보여 준다(깜빡여 견주기). 바뀐 글의 자리는 두 그림에 테두리로.
+    두 판을 작은 틀(PEEK 스크립트 · 장 하나만 보이게) 둘에 따로 띄운다. 장이 «바뀌었나» 는 글이 아니라 그 장의 HTML 로 본다(그림 · 배치만 바뀐 장도 잡힌다).
+    오른쪽에는 그 장의 바뀐 글(전 → 후)과 의견 칸. 앞 판의 글은 그 장의 HTML 에서 글 덩이를 뽑아(chunksOf) 가장 비슷한 것을 «전» 으로 짝짓는다.
+  · **AI 의 질문은 앱 안에서 답한다**(원준 2026-10-09 «매번 세션을 열어 확인해야 한다 · 앱 안에서 결정하게»): 세션의 AI 가 사람의 결정이 필요하면 채팅에만 묻지 않고
+    comments 에 scope 'ask' · status 'ask' 행을 쓴다(note = 질문 · orig = 선택지 줄마다 · slide_id = 관련 장). 앱은 띠 「AI가 결정을 기다립니다」 와 답하는 창을 띄우고,
+    답하면 reply · status 'answered' 를 적고 그 누름 안에서 세션에 한 줄을 보낸다(AI 가 이어서 한다).
   · **의견이 가리키는 곳을 고른다**: 글 줄 칸 머리의 의견 칸은 「이 장」 · 「문서 전체」 를 눌러 바꾼다(한 칸 · 문서 전체는 보라).
   · **되돌리기**(⌘Z · 머리줄 ↶): 글 칸 안에서는 브라우저의 되돌리기 그대로(강조도 execCommand 로 넣어 거기 쌓인다). 칸 밖에서는 앱이 한 일을 되돌린다 —
     글 고침(칸을 떠날 때 한 걸음) · 원래대로 · 의견 · 자리 의견 지움 · 순서 바꿈.
@@ -359,6 +364,50 @@
   .rvDone { text-align: center; padding: 28px 10px; display: grid; gap: 10px; justify-items: center; }
   .rvDone b { font-size: 15px; }
   #newVerBanner { flex-wrap: wrap; }
+  /* 그림으로 견주기 — 왼쪽 칸을 덮는다 */
+  #left { position: relative; }
+  #cmp { position: absolute; inset: 0; z-index: 9; background: var(--soft-2); display: flex; flex-direction: column; min-width: 0; }
+  #cmp[hidden] { display: none; }
+  .cmpBar { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+  .cmpBar .sp { flex: 1; }
+  .cmpBar .seg2 { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .cmpBar .seg2 button { border: 0; background: none; height: 26px; padding: 0 9px; font: 700 12px var(--font); color: var(--muted); }
+  .cmpBar .seg2 button.on { background: var(--ink); color: var(--bg); }
+  #cmpHold { height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--blue); background: var(--bg); color: var(--blue-deep); font: 700 12px var(--font); touch-action: none; user-select: none; -webkit-user-select: none; }
+  #cmpHold:active, #cmpHold.down { background: var(--blue); color: #fff; }
+  .cmpGrid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 8px; padding: 0 8px calc(8px + var(--lively-inset-bottom, 0px)); align-content: start; grid-template-columns: minmax(0, 1fr); }
+  .cmpGrid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cmpPane { min-width: 0; display: grid; gap: 4px; align-content: start; }
+  .cmpPane > b { font: 800 12px var(--font); color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .cmpPane.now > b { color: var(--blue-deep); }
+  .cmpShot { position: relative; overflow: hidden; background: #fff; border-radius: 6px; box-shadow: 0 0 0 1px var(--line-2), 0 4px 14px rgba(21,35,59,.08); min-height: 40px; }
+  .cmpPane.now .cmpShot { box-shadow: 0 0 0 2px var(--blue), 0 4px 14px rgba(21,35,59,.08); }
+  .cmpShot iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
+  .cmpShot .none { padding: 26px 10px; text-align: center; color: var(--muted); font-size: 13px; }
+  .cmpMark { position: absolute; pointer-events: none; border-radius: 3px; box-shadow: 0 0 0 2px rgba(229,100,80,.9); background: rgba(229,100,80,.10); }
+  .cmpPane.now .cmpMark { box-shadow: 0 0 0 2px rgba(45,107,240,.95); background: rgba(45,107,240,.10); }
+  .cmpGrid.flip .cmpPane.was { display: none; }
+  .cmpGrid.flip.showWas .cmpPane.was { display: grid; }
+  .cmpGrid.flip.showWas .cmpPane.now { display: none; }
+  body.review.compact #main { grid-template-columns: minmax(0, 46%) minmax(0, 1fr) !important; }   /* 좁은 2열도 견주는 동안은 그림 칸을 넓힌다 */
+  .rvChg { border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 10px 9px; display: grid; gap: 6px; }
+  .rvChg .t { font-size: var(--row-fs, 14.5px); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .rvChg .t del { text-decoration: line-through; background: rgba(229,100,80,.16); border-radius: 3px; }
+  .rvChg .t ins { text-decoration: none; background: rgba(45,107,240,.16); border-radius: 3px; font-weight: 700; }
+  .rvChg .k { font: 800 12px var(--font); color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .rvChg .k .sp { flex: 1; }
+  .rvChg .ta { min-height: 30px; font-size: 13px; padding: 4px 8px; }
+  .rvNote { font-size: 13px; color: var(--ink-sub); }
+  /* AI 의 질문 */
+  .strip.ask { background: var(--violet-bg); color: var(--violet-text); }
+  .askQ { border: 1px solid var(--line-2); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+  .askQ + .askQ { margin-top: 10px; }
+  .askQ .q { font-size: 14.5px; font-weight: 700; white-space: pre-wrap; }
+  .askQ .where { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .askOpts { display: grid; gap: 6px; }
+  .askOpts button { text-align: left; border: 1.5px solid var(--line-2); border-radius: 10px; background: var(--bg); padding: 8px 10px; font: 600 13.5px var(--font); color: var(--ink); }
+  .askOpts button.on { border-color: var(--violet); background: var(--violet-bg); color: var(--violet-text); font-weight: 800; }
+  .askQ .go { display: flex; justify-content: flex-end; gap: 6px; }
   #undoBtn[hidden] { display: none; }
   body.compact #undoBtn { display: none; }
   .sep { margin: 8px 14px 2px; padding-top: 7px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: .2px; }
@@ -533,10 +582,13 @@
 </header>
 <div class="strip warn" id="saveBanner" hidden><span></span><button type="button" class="ib sm" id="saveRetry">지금 다시</button></div>
 <div class="strip warn" id="notifyBanner" hidden><span></span><button type="button" class="ib sm" id="notifyRetry">다시 보내기</button><button type="button" class="ib sm ic" id="notifyClose" aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
-<div class="strip" id="newVerBanner" hidden><span></span><button type="button" class="ib sm" id="nvReview">바뀐 곳 훑어보기</button><button type="button" class="ib sm pri" id="nvOpen">열기</button></div>
+<div class="strip" id="newVerBanner" hidden><span></span><button type="button" class="ib sm" id="nvReview">전후 견줘 보기</button><button type="button" class="ib sm pri" id="nvOpen">열기</button></div>
+<div class="strip ask" id="askBanner" hidden><span></span><button type="button" class="ib sm pri" id="askOpen">답하기</button></div>
 <div class="strip" id="orderBanner" hidden><span></span><button type="button" class="ib sm">원래대로</button></div>
 <div id="main">
   <section id="left">
+    <div id="cmp" hidden><div class="cmpBar"><span id="cmpWhere"></span><span class="sp"></span><button type="button" id="cmpHold" hidden>누르는 동안 앞 판</button><div class="seg2" id="cmpMode"><button type="button" data-m="two" class="on">나란히</button><button type="button" data-m="flip">겹쳐 보기</button></div></div>
+      <div class="cmpGrid two" id="cmpGrid"><div class="cmpPane was"><b id="cmpWasL">전</b><div class="cmpShot" id="cmpWas"></div></div><div class="cmpPane now"><b id="cmpNowL">후</b><div class="cmpShot" id="cmpNow"></div></div></div></div>
     <div class="leftIn" id="leftIn">
       <div class="stageWrap" id="stageWrap">
         <div class="chips" id="chips" aria-label="장"></div>
@@ -565,14 +617,15 @@
 </div>
 <div class="modal" id="sendModal" hidden>
   <div class="card">
-    <div class="mh"><span>AI에게 보내기</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="mh"><span>AI에게 보낼까요?</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="mb">
       <b id="smTitle"></b>
       <div class="kv" id="smList"></div>
-      <div><div class="fine" style="margin-bottom:4px">세션에 들어가는 글</div><div class="msg" id="smMsg"></div></div>
+      <div class="msg" id="smMsg" hidden></div>
       <div class="fine" id="smFine"></div>
+      <label class="chk" id="smSkipL"><input type="checkbox" id="smSkip">다음부터는 묻지 않고 바로 보내기</label>
     </div>
-    <div class="mf"><button type="button" class="ib" data-close>닫기</button><button type="button" class="ib pri" id="smGo">세션에 보내기</button></div>
+    <div class="mf"><button type="button" class="ib" data-close>취소</button><button type="button" class="ib pri" id="smGo">보내기</button></div>
   </div>
 </div>
 <div class="modal" id="prefsModal" hidden>
@@ -584,11 +637,18 @@
       <div class="opt"><div class="lab">글 줄 글자</div><div class="seg" data-pref="font"><button type="button" data-v="s">작게</button><button type="button" data-v="m">보통</button><button type="button" data-v="l">크게</button></div></div>
       <div class="chks">
         <label class="chk"><input type="checkbox" data-pref="collapseSent">보낸 줄 접기</label>
+        <label class="chk"><input type="checkbox" data-pref="askSend">보내기 전에 확인 창 띄우기</label>
         <label class="chk"><input type="checkbox" data-pref="sideThumb">좁은 2행에서 장표 보이기</label>
       </div>
       <div class="fine" id="prefsFine"></div>
     </div>
     <div class="mf"><button type="button" class="ib pri" data-close>닫기</button></div>
+  </div>
+</div>
+<div class="modal" id="askModal" hidden>
+  <div class="card">
+    <div class="mh"><span>AI가 결정을 기다립니다</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="mb" id="askList"></div>
   </div>
 </div>
 <div class="modal" id="docCmModal" hidden>
@@ -654,7 +714,7 @@
     scale: 1, fw: 1280, fh: 720, prevText: {}, changed: {}, focused: null, layoutNarrow: false, zoom: false,
     cmOpen: {}, cmScope: 'slide', unnotified: null, want: {}, wantScope: {}, order: null, tool: 'sel', spotOn: null, pages: [], total: 0, compact: false, laySig: '', spyHold: 0, files: null, filesErr: '', importing: ''
   };
-  var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {} };
+  var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {}, askSend: true };
   function pref(k) { return st.prefs[k] != null ? st.prefs[k] : DEF[k]; }
   /** 지금 배치 — 고른 것이 있으면 **그대로**(폭이 좁아도 바꾸지 않는다). 고른 적이 없을 때만 폭으로: 640 미만은 2행(위 장표 · 아래 글 줄). */
   function layoutOf() { var v = st.prefs.layout; if (v === 'cols' || v === 'rows') return v; return document.documentElement.clientWidth < 640 ? 'rows' : 'cols'; }
@@ -1121,6 +1181,43 @@
     }
   } + ')();';
   var PRE = '<script>' + AGENT + '<\/script>';
+  /* 견주기용 작은 대리 — 그 장 하나만 창 왼쪽 위에 세우고 크기와 «찾아 달라는 글» 의 자리를 돌려준다. 글을 고치지 않는다. */
+  var PEEK = '(' + function () {
+    function start() {
+      var secs = [].slice.call(document.querySelectorAll('section.page'));
+      var css = document.createElement('style');
+      css.textContent = 'html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important} body{visibility:hidden!important}'
+        + ' .pk{visibility:visible!important;display:none!important;position:fixed!important;left:0!important;top:0!important;margin:0!important;padding:0!important;width:auto!important;height:auto!important;overflow:visible!important;transform:none!important;background:#fff!important} .pk.on{display:block!important}'
+        + ' .pk>section.page{transform:none!important;margin:0!important;box-shadow:none!important;border-radius:0!important;position:relative!important;left:0!important;top:0!important}'
+        + ' .note,.counter,.hint,.ncopy,.pnav{display:none!important} *{animation:none!important;transition:none!important}';
+      document.head.appendChild(css);
+      secs.forEach(function (sc) { var p = sc.parentElement; if (!p || !p.classList.contains('pw')) { var w = document.createElement('div'); p.insertBefore(w, sc); w.appendChild(sc); p = w; } p.classList.add('pk'); });
+      function norm(t) { return String(t || '').replace(/\s+/g, ''); }
+      addEventListener('message', function (ev) {
+        var m = ev.data; if (!m || m.__pk !== 1) return;
+        var idx = -1; secs.forEach(function (sc, i) { var on = (sc.id || ('s' + (i + 1))) === m.sid; sc.parentElement.classList.toggle('on', on); if (on) idx = i; });
+        var done = function () {
+          var sc = secs[idx], r = { __pk: 1, id: m.id, w: 0, h: 0, rects: [] };
+          if (sc) {
+            var b = sc.getBoundingClientRect(), els = []; r.w = sc.offsetWidth; r.h = sc.offsetHeight;
+            (function w(n) { [].forEach.call(n.children, function (c) { var own = [].some.call(c.childNodes, function (t) { return t.nodeType === 3 && t.textContent.trim(); }); if (own) els.push(c); else w(c); }); })(sc);
+            r.rects = (m.find || []).map(function (t) {
+              var k = norm(t), hit = null, i;
+              for (i = 0; i < els.length && !hit; i++) { if (norm(els[i].textContent) === k) hit = els[i]; }
+              for (i = 0; i < els.length && !hit && k.length > 3; i++) { var e = norm(els[i].textContent); if (e.indexOf(k) >= 0 || k.indexOf(e) >= 0 && e.length > 3) hit = els[i]; }
+              if (!hit) return null; var q = hit.getBoundingClientRect(); return { l: q.left - b.left, t: q.top - b.top, w: q.width, h: q.height };
+            });
+          }
+          parent.postMessage(r, '*');
+        };
+        var f = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+        Promise.race([f, new Promise(function (z) { setTimeout(z, 1500); })]).then(function () { requestAnimationFrame(done); });
+      });
+      parent.postMessage({ __pk: 1, hello: 1 }, '*');
+    }
+    if (document.readyState === 'loading') addEventListener('DOMContentLoaded', start); else start();
+  } + ')();';
+  function withPeek(html) { var m = /<head[^>]*>/i.exec(html), sc = '<script>' + PEEK + '<\/script>'; return m ? html.slice(0, m.index + m[0].length) + sc + html.slice(m.index + m[0].length) : sc + html; }
   function withAgent(html) {
     var m = /<head[^>]*>/i.exec(html);
     if (m) return html.slice(0, m.index + m[0].length) + PRE + html.slice(m.index + m[0].length);
@@ -2494,7 +2591,7 @@
     waitMsg('판을 읽는 중…');
     await loadVersionMeta(doc);
     await loadComments(doc);
-    st.readyVer = Number((docOf(doc) || {}).latest_ver) || 0; st.waitBundle = (waitingInfo() || {}).bundle || null; paintAi();
+    st.readyVer = Number((docOf(doc) || {}).latest_ver) || 0; st.waitBundle = (waitingInfo() || {}).bundle || null; paintAi(); askSeen = {}; paintAsk();
     renderMenu();
     if (!st.vers.length) { waitMsg('이 문서에 아직 판이 없습니다'); renderVers(); return; }
     await openVersion(st.vers[st.vers.length - 1]);
@@ -2695,17 +2792,19 @@
     await flushSaves();   // 방금 친 글이 아직 저장 대기 중일 수 있다 — 묶음을 잠그기 전에 내려 쓴다(여기는 아직 «보내기» 누름이 아니다)
     if (unsaved()) { toast('아직 저장되지 않은 것이 있어 보내지 않았어요 · 연결을 확인하고 「저장 안 됨」 을 눌러 주세요', 4200); return; }   // 표에 없는 글은 AI 가 읽지 못한다
     var sm = sendSummary(); if (!sm.total) { toast(whyNoSend(), 4600); renderSend(); return; }
-    $('smTitle').textContent = '묶음 #' + sm.bundle + ' · 판 ' + st.ver + ' · ' + st.title;
+    $('smMsg').textContent = sm.msg;
+    if (sdk.chat && pref('askSend') === false) { await doSend(); return; }   // «묻지 않고 바로 보내기» 를 골라 두었다
+    $('smTitle').textContent = '고치고 적은 것 ' + sm.total + '건을 AI에게 보냅니다';
+    $('smSkip').checked = false; $('smSkipL').hidden = !sdk.chat;
     var list = $('smList'); list.innerHTML = '';
     ord().forEach(function (fi) { var s = st.sections[fi], b = sm.c.bySlide[s.id]; if (!b) return; var parts = []; if (b.e) parts.push('고친 글 ' + b.e); if (b.n) parts.push('의견 ' + b.n); if (b.p) parts.push('자리 의견 ' + b.p); if (b.s) parts.push('장 전체 의견 ' + b.s); list.appendChild(el('span', 'clip', (st.mode === 'slides' ? (posOf(s.i) + 1) + '쪽 · ' : '') + s.title)); list.appendChild(el('span', '', parts.join(' · '))); });
     if (sm.c.o) { list.appendChild(el('span', '', '장 순서')); list.appendChild(el('span', '', '바꿈')); }
     if (sm.c.d) { list.appendChild(el('span', '', '문서 전체')); list.appendChild(el('span', '', '의견 ' + sm.c.d)); }
-    $('smMsg').textContent = sm.msg;
-    $('smGo').textContent = sdk.chat ? '세션에 보내기' : '복사하기';
+    $('smGo').textContent = sdk.chat ? '보내기' : '복사하기';
     var dd = docOf(st.doc), away = !!(dd && L.session && dd.session && dd.session !== L.session);
-    $('smFine').textContent = (sdk.chat ? '보내면 이 묶음은 잠기고, 그 뒤에 고치는 것은 묶음 #' + (sm.bundle + 1) + ' 이 됩니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요. 묶음은 지금처럼 잠깁니다.')
-      + (sm.bundle > 1 ? ' 앞서 보낸 묶음(#' + (sm.bundle > 2 ? '1~#' + (sm.bundle - 1) : '1') + ')은 다시 보내지 않습니다.' : '')
-      + (away && sdk.chat ? ' 이 문서는 다른 세션에서 올렸습니다. 지금 세션의 AI 가 앱에서 최신 판을 받아 고칩니다.' : '');
+    $('smFine').textContent = (sdk.chat ? 'AI가 이 내용대로 고쳐서 새 판을 만듭니다. 다 되면 이 화면에 알려 드립니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요.')
+      + (sm.bundle > 1 ? ' 전에 보낸 것은 다시 보내지 않습니다.' : '')
+      + (away && sdk.chat ? ' 이 문서는 다른 세션에서 올린 것이라, 지금 세션의 AI 가 최신 판을 받아서 고칩니다.' : '');
     $('sendModal').hidden = false;
   }
   function exportText(sm) {   // 세션에 바로 보낼 수 없는 화면에서 붙여 넣을 전문
@@ -2728,7 +2827,7 @@
     var why = '';
     try {
       var r = await sdk.chat.send(msg);
-      if (r && r.sent) { st.unnotified = null; renderBanner(); toast('세션에 보냈습니다 · 묶음 #' + bundle); return true; }
+      if (r && r.sent) { st.unnotified = null; renderBanner(); toast('AI에게 보냈습니다 · 다 고치면 여기에 알려 드립니다', 3000); return true; }
       why = r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요' : '세션 화면을 열고 다시 보내 주세요';
     } catch (e) { why = e && e.message ? e.message : String(e); }
     st.unnotified = { bundle: bundle, msg: msg, why: why }; renderBanner();
@@ -2744,6 +2843,8 @@
   $('notifyClose').addEventListener('click', function () { st.unnotified = null; renderBanner(); });
   async function doSend() {
     var sm = sendSummary(); if (!sm.total) return;
+    var direct = $('sendModal').hidden;
+    if (!direct && $('smSkip').checked) { setPref({ askSend: false }); applyPrefs(); }
     var go = $('smGo'); go.disabled = true;
     try {
       var when = nowIso();
@@ -2827,7 +2928,7 @@
     var items = [];
     var pb = sdk.chat && !st.unnotified ? pendingBundle() : null;
     if (pb) items.push({ id: 'renotify', label: '묶음 #' + pb.bundle + ' 다시 알리기', hot: true, run: function () { notify(pb.bundle, pb.msg); } });
-    if (st.doc && Object.keys(st.changed).length) items.push({ id: 'review', label: '바뀐 곳 훑어보기', run: function () { openReview().catch(fail); } });
+    if (st.doc && st.mode === 'slides' && st.vers.indexOf(st.ver) > 0) items.push({ id: 'review', label: '앞 판과 그림으로 견주기', run: function () { openReview().catch(fail); } });
     if (undos.length) items.push({ id: 'undo', label: '되돌리기: ' + undos[undos.length - 1].label, run: function () { doUndo(); } });
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
     return items;
@@ -2922,84 +3023,189 @@
     for (; j < m; j++) B += /\S/.test(y[j]) ? '<ins>' + esc(y[j]) + '</ins>' : esc(y[j]);
     return [A, B];
   }
+  /** 견줄 것을 모은다 — 바뀐 **장**마다 한 걸음. 장이 바뀌었나는 그 장의 HTML 로 본다(글은 같고 그림만 바뀐 장도 잡는다). */
   async function buildReview() {
     var idx = st.vers.indexOf(st.ver); if (idx <= 0 || st.mode !== 'slides') return { prev: null, steps: [] };
-    var pv = st.vers[idx - 1], prev = await loadVersion(st.doc, pv), pmap = {}, steps = [], norm = function (t) { return String(t || '').replace(/\s+/g, ''); };
-    prev.slides.forEach(function (x) { if (!(x.variant || '')) pmap[x.slide_id] = x.body; });
+    var pv = st.vers[idx - 1], prev = await loadVersion(st.doc, pv), cur = await loadVersion(st.doc, st.ver), pmap = {}, cmap = {}, steps = [], norm = function (t) { return String(t || '').replace(/\s+/g, ''); };
+    prev.slides.forEach(function (x) { if (!(x.variant || '')) pmap[x.slide_id] = x; });
+    cur.slides.forEach(function (x) { if (!(x.variant || '') && cmap[x.slide_id] == null) cmap[x.slide_id] = x; });
     var order = ord();
     for (var oi = 0; oi < order.length; oi++) {
-      var sec = st.sections[order[oi]]; if (!st.changed[sec.id]) continue;
-      if (pmap[sec.id] == null) { steps.push({ fi: sec.i, kind: 'newslide' }); continue; }
-      var r = await ask('texts', { fi: sec.i }, 8000), units = r.units || [], chunks = chunksOf(pmap[sec.id]), ptext = norm(textOf(pmap[sec.id])), ctext = norm(units.map(function (u) { return u.origText; }).join(''));
+      var sec = st.sections[order[oi]], c = cmap[sec.id], p0 = pmap[sec.id];
+      if (!p0) { steps.push({ fi: sec.i, sid: sec.id, kind: 'newslide', changes: [] }); continue; }
+      if (!c || c.body === p0.body) continue;
+      var r = await ask('texts', { fi: sec.i }, 8000), units = r.units || [], chunks = chunksOf(p0.body), ptext = norm(textOf(p0.body)), ctext = norm(textOf(c.body));   // «빠졌나» 는 지금 장의 HTML 글 전체와 견준다(대본 · 쪽 번호처럼 글 줄이 아닌 것도 그대로 있으면 빠진 것이 아니다)
       var free = chunks.map(function (t) { return { t: t, used: false, gone: ctext.indexOf(norm(t)) < 0 }; }), mine = [];
       units.forEach(function (u) {
         if (!u.origText || ptext.indexOf(norm(u.origText)) >= 0) return;   // 앞 판에도 그대로 있던 글
-        var best = null, bs = 0; free.forEach(function (c) { if (c.used || !c.gone) return; var sc = dice(c.t, u.origText); if (sc > bs) { bs = sc; best = c; } });
-        if (best && bs >= 0.3) { best.used = true; mine.push({ fi: sec.i, kind: 'chg', u: { no: u.no, origText: u.origText }, before: best.t }); }
-        else mine.push({ fi: sec.i, kind: 'add', u: { no: u.no, origText: u.origText } });
+        var best = null, bs = 0; free.forEach(function (k) { if (k.used || !k.gone) return; var sc = dice(k.t, u.origText); if (sc > bs) { bs = sc; best = k; } });
+        if (best && bs >= 0.3) { best.used = true; mine.push({ kind: 'chg', u: { no: u.no, origText: u.origText }, before: best.t }); }
+        else mine.push({ kind: 'add', u: { no: u.no, origText: u.origText } });
       });
-      free.forEach(function (c) { if (!c.used && c.gone && norm(c.t).length >= 2) mine.push({ fi: sec.i, kind: 'del', before: c.t }); });
-      if (!mine.length) mine.push({ fi: sec.i, kind: 'look' });   // 글은 그대로인데 장이 바뀌었다(모양 · 그림)
-      steps = steps.concat(mine);
+      free.forEach(function (k) { if (!k.used && k.gone && norm(k.t).length >= 2) mine.push({ kind: 'del', before: k.t }); });
+      steps.push({ fi: sec.i, sid: sec.id, kind: 'slide', changes: mine });
     }
-    return { prev: pv, steps: steps };
+    prev.slides.forEach(function (x) { if (!(x.variant || '') && !cmap[x.slide_id]) steps.push({ fi: -1, sid: x.slide_id, kind: 'gone', title: x.summary || x.slide_id, changes: [] }); });
+    return { prev: pv, steps: steps, prevHtml: assemble(prev), curHtml: assemble(cur) };
   }
+  /* 견주기 틀 둘 — 앞 판 · 지금 판을 따로 띄워 두고 걸음마다 «그 장을 보여라» 만 시킨다. */
+  var pk = null, pkSeq = 1;
+  window.addEventListener('message', function (ev) {
+    var m = ev.data; if (!m || m.__pk !== 1 || !pk) return;
+    var side = pk.was.f.contentWindow === ev.source ? pk.was : (pk.now.f.contentWindow === ev.source ? pk.now : null); if (!side) return;
+    if (m.hello) { side.ok(); return; }
+    var w = side.waits[m.id]; if (w) { delete side.waits[m.id]; w(m); }
+  });
+  function pkOpen(html, host) {
+    var f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.title = '견주기'; f.style.width = '1280px'; f.style.height = '720px';
+    var o = { f: f, host: host, waits: {}, ok: null }; o.ready = new Promise(function (res) { o.ok = res; setTimeout(res, 12000); });
+    host.innerHTML = ''; host.appendChild(f); f.srcdoc = withPeek(html); return o;
+  }
+  function pkAsk(side, sid, find) {
+    return side.ready.then(function () { return new Promise(function (res) {
+      var id = pkSeq++; side.waits[id] = res; setTimeout(function () { if (side.waits[id]) { delete side.waits[id]; res({ w: 0, h: 0, rects: [] }); } }, 8000);
+      side.f.contentWindow.postMessage({ __pk: 1, id: id, sid: sid, find: find || [] }, '*');
+    }); });
+  }
+  function pkPaint(side, r, label) {
+    var host = side.host, W = host.clientWidth || 300;
+    [].slice.call(host.querySelectorAll('.cmpMark,.none')).forEach(function (n) { n.remove(); });
+    if (!r || !r.w) { side.f.style.display = 'none'; host.style.height = ''; host.appendChild(el('div', 'none', label)); return; }
+    var k = W / r.w; side.f.style.display = ''; side.f.style.width = r.w + 'px'; side.f.style.height = r.h + 'px'; side.f.style.transform = 'scale(' + k + ')'; host.style.height = Math.round(r.h * k) + 'px';
+    (r.rects || []).forEach(function (q) { if (!q) return; var d = el('div', 'cmpMark'); d.style.left = (q.l * k - 3) + 'px'; d.style.top = (q.t * k - 3) + 'px'; d.style.width = (q.w * k + 6) + 'px'; d.style.height = (q.h * k + 6) + 'px'; host.appendChild(d); });
+    side.last = r;
+  }
+  function cmpLayout() {
+    if (!rv) return; var g = $('cmpGrid'), flip = rv.mode === 'flip';
+    g.classList.toggle('flip', flip); g.classList.toggle('two', !flip && $('cmp').clientWidth >= 620); $('cmpHold').hidden = !flip;
+    [].forEach.call($('cmpMode').children, function (b) { b.classList.toggle('on', b.getAttribute('data-m') === rv.mode); });
+    if (pk) { if (pk.was.last) pkPaint(pk.was, pk.was.last); if (pk.now.last) pkPaint(pk.now, pk.now.last); }
+  }
+  [].forEach.call($('cmpMode').children, function (b) { b.addEventListener('click', function () { if (!rv) return; rv.mode = b.getAttribute('data-m'); $('cmpGrid').classList.remove('showWas'); cmpLayout(); }); });
+  (function () {
+    var h = $('cmpHold'), on = function (v) { $('cmpGrid').classList.toggle('showWas', v); h.classList.toggle('down', v); setText(h, v ? '앞 판 보는 중' : '누르는 동안 앞 판'); if (pk && pk.was.last && v) pkPaint(pk.was, pk.was.last); if (pk && pk.now.last && !v) pkPaint(pk.now, pk.now.last); };
+    h.addEventListener('pointerdown', function (e) { e.preventDefault(); try { h.setPointerCapture(e.pointerId); } catch (x) {} on(true); });
+    h.addEventListener('pointerup', function () { on(false); }); h.addEventListener('pointercancel', function () { on(false); });
+    document.addEventListener('keydown', function (e) { if (rv && rv.mode === 'flip' && e.key === ' ' && !e.repeat && !(e.target && (e.target.isContentEditable || /^(TEXTAREA|INPUT)$/.test(e.target.tagName)))) { e.preventDefault(); on(true); } });
+    document.addEventListener('keyup', function (e) { if (rv && e.key === ' ') on(false); });
+  })();
+  new ResizeObserver(function () { if (rv) cmpLayout(); }).observe($('left'));
   async function openReview() {
-    if (st.mode !== 'slides') { toast('장 구분이 있는 문서에서만 훑어볼 수 있습니다'); return; }
-    if (!Object.keys(st.changed).length) { toast('앞 판과 달라진 장이 없습니다'); return; }
+    if (st.mode !== 'slides') { toast('장 구분이 있는 문서에서만 견줄 수 있습니다'); return; }
+    if (st.vers.indexOf(st.ver) <= 0) { toast('견줄 앞 판이 없습니다'); return; }
     waitMsg('바뀐 곳을 모으는 중…');
     var b; try { b = await buildReview(); } finally { waitMsg(null); }
-    if (!b.steps.length) { toast('앞 판과 달라진 글이 없습니다'); return; }
-    rv = { prev: b.prev, steps: b.steps, i: 0 }; document.body.classList.add('review');
+    if (!b.steps.length) { toast('앞 판과 달라진 장이 없습니다'); return; }
+    rv = { prev: b.prev, steps: b.steps, i: 0, mode: 'two' }; document.body.classList.add('review');
     if (st.zoom) setZoom(false);
-    $('review').hidden = false; await rvShow();
+    $('review').hidden = false; $('cmp').hidden = false;
+    pk = { was: pkOpen(b.prevHtml, $('cmpWas')), now: pkOpen(b.curHtml, $('cmpNow')) };
+    setText($('cmpWasL'), '전 · 판 ' + b.prev); setText($('cmpNowL'), '후 · 판 ' + st.ver);
+    fit(); cmpLayout(); await rvShow();
   }
-  function closeReview() { if (!rv) return; rv = null; document.body.classList.remove('review'); $('review').hidden = true; kickSaves(); var s = st.sections[st.cur]; if (s) keepFocus(renderRows); }
-  function rvGo(d) { if (!rv) return; kickSaves(); var n = rv.i + d; if (n < 0) return; if (n > rv.steps.length) return; rv.i = n; rvShow().catch(fail); }
-  var RV_TAG = { chg: '고쳐짐', add: '새로 들어온 글', del: '빠진 글', newslide: '새로 생긴 장', look: '글은 그대로 · 모양이 바뀜' };
+  function closeReview() {
+    if (!rv) return; rv = null; document.body.classList.remove('review'); $('review').hidden = true; $('cmp').hidden = true;
+    if (pk) { pk.was.f.remove(); pk.now.f.remove(); pk = null; }
+    kickSaves(); fit(); var s = st.sections[st.cur]; if (s) keepFocus(renderRows);
+  }
+  function rvGo(d) { if (!rv) return; kickSaves(); var n = rv.i + d; if (n < 0 || n > rv.steps.length) return; rv.i = n; rvShow().catch(fail); }
+  var RV_TAG = { chg: '고쳐짐', add: '새로 들어온 글', del: '빠진 글' };
   async function rvShow() {
     var body = $('rvBody'); if (!rv) return;
     setText($('rvTitle'), '바뀐 곳 훑어보기 · 판 ' + rv.prev + ' → ' + st.ver);
     $('rvPrev').disabled = rv.i <= 0;
     if (rv.i >= rv.steps.length) {   // 끝
       setText($('rvCnt'), rv.steps.length + ' / ' + rv.steps.length); body.innerHTML = '';
-      var d = el('div', 'rvDone'), sm = sendSummary(); d.appendChild(el('b', '', '바뀐 곳 ' + rv.steps.length + '군데를 다 봤습니다'));
+      var d = el('div', 'rvDone'), sm = sendSummary(); d.appendChild(el('b', '', '바뀐 장 ' + rv.steps.length + '곳을 다 봤습니다'));
       d.appendChild(el('div', 'fine', sm.total ? '남긴 고침과 의견 ' + sm.total + '건을 보낼 수 있습니다' : '남긴 의견이 없습니다 · 이대로 좋다는 뜻입니다'));
       var acts = el('div', 'rvActs'); var c1 = el('button', 'ib', '닫기'); c1.type = 'button'; c1.onclick = closeReview; acts.appendChild(c1);
       if (sm.total) { var c2 = el('button', 'ib pri', 'AI에게 보내기 · ' + sm.total); c2.type = 'button'; c2.onclick = function () { closeReview(); openSend().catch(fail); }; acts.appendChild(c2); }
       d.appendChild(acts); body.appendChild(d); setText($('rvNext'), '닫기'); $('rvNext').onclick = closeReview; return;
     }
-    setText($('rvNext'), rv.i === rv.steps.length - 1 ? '다 봤습니다' : '다음'); $('rvNext').onclick = function () { rvGo(1); };
-    var stp = rv.steps[rv.i], sec = st.sections[stp.fi], at = rv.i;
+    setText($('rvNext'), rv.i === rv.steps.length - 1 ? '다 봤습니다' : '다음 장'); $('rvNext').onclick = function () { rvGo(1); };
+    var stp = rv.steps[rv.i], sec = stp.fi >= 0 ? st.sections[stp.fi] : null, at = rv.i;
     setText($('rvCnt'), (rv.i + 1) + ' / ' + rv.steps.length);
-    if (stp.fi !== st.cur) await showSlide(stp.fi, { scroll: 'top' });
+    if (sec && stp.fi !== st.cur) await showSlide(stp.fi, { scroll: 'top' });
     if (!rv || rv.i !== at) return;
-    var u = stp.u ? (st.units[st.cur] || []).filter(function (x) { return x.no === stp.u.no && x.origText === stp.u.origText; })[0] : null;
-    mark(u || null); if (u && st.rects[u.k]) { var pg = st.pages[st.cur], stage = $('stage'), y = (pg.t + st.rects[u.k].t) * st.scale; if (y < stage.scrollTop + 20 || y > stage.scrollTop + stage.clientHeight - 60) stage.scrollTop = Math.max(0, y - stage.clientHeight / 3); }
+    var title = sec ? sec.title : stp.title;
+    setText($('cmpWhere'), (sec ? (posOf(sec.i) + 1) + '쪽 · ' : '') + title);
+    //  그림 — 두 판의 그 장을 그리고, 바뀐 글의 자리에 테두리
+    var befores = stp.changes.filter(function (c) { return c.before; }).map(function (c) { return c.before; }), afters = stp.changes.filter(function (c) { return c.u; }).map(function (c) { return c.u.origText; });
+    Promise.all([stp.kind === 'newslide' ? null : pkAsk(pk.was, stp.sid, befores), stp.kind === 'gone' ? null : pkAsk(pk.now, stp.sid, afters)]).then(function (rr) {
+      if (!rv || rv.i !== at || !pk) return;
+      pkPaint(pk.was, rr[0], '앞 판에는 없던 장입니다'); pkPaint(pk.now, rr[1], '이 판에서 빠진 장입니다'); pk.was.last = rr[0]; pk.now.last = rr[1];
+    });
+    //  글 — 그 장에서 바뀐 글(전 → 후)과 의견
     body.innerHTML = '';
-    var loc = el('div', 'rvLoc'); loc.appendChild(el('span', '', (posOf(sec.i) + 1) + '쪽')); loc.appendChild(el('span', 'clip', sec.title)); loc.appendChild(el('span', 'rvTag', RV_TAG[stp.kind])); body.appendChild(loc);
-    var box = function (cls, lab, html) { var b = el('div', 'rvBox ' + cls); b.appendChild(el('small', '', lab)); var t = el('span'); t.innerHTML = html; b.appendChild(t); body.appendChild(b); };
-    if (stp.kind === 'chg') { var df = wordDiff(stp.before, stp.u.origText); box('was', '전 · 판 ' + rv.prev, df[0]); box('now', '후 · 판 ' + st.ver, df[1]); }
-    else if (stp.kind === 'add') { box('was none', '전 · 판 ' + rv.prev, '없던 글입니다'); box('now', '후 · 판 ' + st.ver, '<ins>' + esc(stp.u.origText) + '</ins>'); }
-    else if (stp.kind === 'del') { box('was', '전 · 판 ' + rv.prev, '<del>' + esc(stp.before) + '</del>'); box('now none', '후 · 판 ' + st.ver, '이 장에서 빠졌습니다'); }
-    else box('now none', '후 · 판 ' + st.ver, stp.kind === 'newslide' ? '앞 판에 없던 장입니다 · 왼쪽 장표를 보세요' : '글은 같고 그림 · 배치가 달라졌습니다 · 왼쪽 장표를 보세요');
-    //  의견 — 글 줄이 있으면 그 글의 의견으로, 없으면(빠진 글 · 장 단위) 그 장 전체 의견으로
-    var ta = el('textarea', 'ta'); ta.rows = 2; ta.placeholder = '이 바뀜이 마음에 안 들면 여기에(비워 두면 좋다는 뜻입니다)';
-    if (u) { ta.value = u.cm ? u.cm.value : ''; ta.addEventListener('input', function () { autoGrow(ta); if (u.cm) { u.cm.value = ta.value; u.cm.dispatchEvent(new Event('input', { bubbles: true })); } }); }
-    else {
-      var pre = stp.kind === 'del' ? '빠진 글 「' + (stp.before.length > 30 ? stp.before.slice(0, 30) + '…' : stp.before) + '」: ' : '', key = 'slide:' + st.doc + ':' + st.ver + ':' + sec.id, base = scopeNote('slide', sec.id);
-      ta.addEventListener('input', function () { autoGrow(ta); var t = ta.value.trim(), note = t ? [String(base).trim(), pre + t].filter(Boolean).join('\n') : base; st.wantScope[key] = { doc: st.doc, ver: st.ver, scope: 'slide', sid: sec.id, note: note }; schedule(key, scopeJob(key)); });
+    var loc = el('div', 'rvLoc'); if (sec) loc.appendChild(el('span', '', (posOf(sec.i) + 1) + '쪽')); loc.appendChild(el('span', 'clip', title));
+    loc.appendChild(el('span', 'rvTag', stp.kind === 'newslide' ? '새로 생긴 장' : (stp.kind === 'gone' ? '빠진 장' : (stp.changes.length ? '글 ' + stp.changes.length + '곳' : '그림 · 배치만')))); body.appendChild(loc);
+    if (stp.kind === 'slide' && !stp.changes.length) body.appendChild(el('div', 'rvNote', '글은 그대로이고 그림이나 배치가 달라졌습니다. 왼쪽 두 그림을 견줘 보세요(「겹쳐 보기」 가 찾기 쉽습니다).'));
+    var units = st.units[st.cur] || [];
+    stp.changes.forEach(function (c) {
+      var card = el('div', 'rvChg'), k = el('div', 'k'), t = el('div', 't'); k.appendChild(el('span', '', RV_TAG[c.kind])); k.appendChild(el('span', 'sp'));
+      if (c.kind === 'chg') { var df = wordDiff(c.before, c.u.origText); t.innerHTML = df[0] + '\n→ ' + df[1]; }
+      else if (c.kind === 'add') t.innerHTML = '<ins>' + esc(c.u.origText) + '</ins>'; else t.innerHTML = '<del>' + esc(c.before) + '</del>';
+      card.appendChild(k); card.appendChild(t);
+      var u = c.u ? units.filter(function (x) { return x.no === c.u.no && x.origText === c.u.origText; })[0] : null;
+      if (u && u.cm) {
+        if (c.kind === 'chg' && u.ed) { var back = el('button', 'ib sm', '전 글로'); back.type = 'button'; back.title = '이 글을 앞 판의 글로 되돌려 둔다(보내면 반영)'; back.onclick = function () { var was = u.svg ? edText(u.ed) : markText(u.ed, u.kinds); pushUndo('전 글로(' + u.no + '번 글)', function () { return setUnitText(sec.id, u, was); }); u.ed.innerHTML = esc(c.before); onEdit(sec.id, u); toast('전 글로 고쳐 두었습니다 · 보내면 반영됩니다', 2600); }; k.appendChild(back); }
+        var ta = el('textarea', 'ta'); ta.rows = 1; ta.placeholder = '이 바뀜에 대한 의견'; ta.value = u.cm.value;
+        ta.addEventListener('input', function () { autoGrow(ta); u.cm.value = ta.value; u.cm.dispatchEvent(new Event('input', { bubbles: true })); });
+        card.appendChild(ta); setTimeout(function () { autoGrow(ta); }, 0);
+      }
+      body.appendChild(card);
+    });
+    if (sec) {   // 이 장의 바뀜 전체에 대한 의견 — 그 장 전체 의견으로
+      var key = 'slide:' + st.doc + ':' + st.ver + ':' + sec.id, sa = el('textarea', 'ta'); sa.rows = 2; sa.id = 'rvSlideCm';
+      sa.placeholder = '이 장이 바뀐 모습이 마음에 안 들면 여기에(비워 두면 좋다는 뜻입니다)'; sa.value = scopeNote('slide', sec.id);
+      sa.addEventListener('input', function () { autoGrow(sa); st.wantScope[key] = { doc: st.doc, ver: st.ver, scope: 'slide', sid: sec.id, note: sa.value }; schedule(key, scopeJob(key)); });
+      sa.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); rvGo(1); } });
+      body.appendChild(sa); setTimeout(function () { autoGrow(sa); }, 0);
     }
-    ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); rvGo(1); } });
-    body.appendChild(ta); autoGrow(ta);
-    var acts = el('div', 'rvActs');
-    if (stp.kind === 'chg' && u && u.ed) { var back = el('button', 'ib sm', '전 글로 되돌리기'); back.type = 'button'; back.onclick = function () { var was = u.svg ? edText(u.ed) : markText(u.ed, u.kinds); pushUndo('전 글로(' + u.no + '번 글)', function () { return setUnitText(sec.id, u, was); }); u.ed.innerHTML = esc(stp.before); onEdit(sec.id, u); toast('전 글로 고쳐 두었습니다 · 보내면 반영됩니다', 2600); }; acts.appendChild(back); }
-    if (acts.children.length) body.appendChild(acts);
     body.scrollTop = 0;
   }
   $('rvClose').addEventListener('click', closeReview);
   $('rvPrev').addEventListener('click', function () { rvGo(-1); });
   $('undoBtn').addEventListener('click', function () { doUndo(); });
+  /* ───────────── AI 의 질문 — 앱 안에서 답한다 ───────────── */
+  function asks() { return st.comments.filter(function (c) { return c.doc === st.doc && c.scope === 'ask' && c.status === 'ask'; }).sort(function (a, b) { return Number(a.id) - Number(b.id); }); }
+  var askSeen = {};
+  function paintAsk() {
+    var b = $('askBanner'), a = asks(); b.hidden = !a.length;
+    if (!a.length) { if (!$('askModal').hidden) $('askModal').hidden = true; return; }
+    var q = String(a[0].note || '').replace(/\s+/g, ' ');
+    b.querySelector('span').textContent = 'AI가 결정을 기다립니다' + (a.length > 1 ? ' · ' + a.length + '건' : '') + ' · ' + (q.length > 60 ? q.slice(0, 60) + '…' : q);
+    var fresh = a.filter(function (c) { return !askSeen[c.id]; }); a.forEach(function (c) { askSeen[c.id] = 1; });
+    if (fresh.length && $('askModal').hidden && !userBusy()) openAsk();   // 새 질문이면 곧바로 편다(치는 중이면 띠만)
+    else if (!$('askModal').hidden) renderAsk();
+  }
+  function openAsk() { renderAsk(); $('askModal').hidden = false; }
+  function renderAsk() {
+    var box = $('askList'); box.innerHTML = '';
+    asks().forEach(function (c) {
+      var d = el('div', 'askQ'), pick = null; d.appendChild(el('div', 'q', String(c.note || '')));
+      var sec = c.slide_id ? st.sections.filter(function (x) { return x.id === c.slide_id; })[0] : null;
+      if (sec) { var w = el('div', 'where'); w.appendChild(el('span', '', (posOf(sec.i) + 1) + '쪽 · ' + sec.title)); var gb = el('button', 'ib sm', '그 장 보기'); gb.type = 'button'; gb.onclick = function () { $('askModal').hidden = true; showSlide(sec.i).catch(fail); }; w.appendChild(gb); d.appendChild(w); }
+      var opts = String(c.orig || '').split('\n').map(function (x) { return x.trim(); }).filter(Boolean), ob = el('div', 'askOpts');
+      opts.forEach(function (o) { var b = el('button', '', o); b.type = 'button'; b.onclick = function () { pick = pick === o ? null : o; [].forEach.call(ob.children, function (x) { x.classList.toggle('on', x === b && pick === o); }); }; ob.appendChild(b); });
+      if (opts.length) d.appendChild(ob);
+      var ta = el('textarea', 'ta'); ta.rows = 2; ta.placeholder = opts.length ? '덧붙일 말(비워 두어도 됩니다) · 고르지 않고 직접 적어도 됩니다' : '답을 적어 주세요'; d.appendChild(ta);
+      var go = el('div', 'go'), sb = el('button', 'ib pri', sdk.chat ? '답 보내기' : '답 저장'); sb.type = 'button';
+      sb.onclick = function () {
+        var t = ta.value.trim(), ans = [pick, t].filter(Boolean).join(' · '); if (!ans) { toast('고르거나 적어 주세요'); return; }
+        sb.disabled = true;
+        (async function () {
+          await sdk.store.update('comments', { id: c.id }, { reply: ans, status: 'answered', replied_at: nowIso() }); c.reply = ans; c.status = 'answered';
+          paintAsk(); if (!asks().length) $('askModal').hidden = true; else renderAsk();
+          var msg = '[장표 수정] ' + st.title + ' · 질문 #' + c.id + ' 에 답했습니다: 「' + ans.replace(/\n/g, ' / ') + '」 → 이어서 진행해 주세요 (문서 ' + st.doc + ')';
+          if (sdk.chat) { var r = null; try { r = await sdk.chat.send(msg); } catch (e) {} toast(r && r.sent ? '답을 세션에 보냈습니다' : '답은 저장했습니다 · 세션에는 알리지 못했어요(세션에서 「질문 답 확인해 줘」 라고 말해 주세요)', 3600); }
+          else toast('답을 저장했습니다');
+        })().catch(function (e) { sb.disabled = false; fail(e); });
+      };
+      go.appendChild(sb); d.appendChild(go); box.appendChild(d);
+    });
+  }
+  $('askOpen').addEventListener('click', openAsk);
   /** 보낸 뒤 답을 기다리는 묶음 — 가장 뒤 묶음에 아직 답이 없는 행이 있고, 보낸 지 40분이 안 됐다(그보다 오래면 ⋯ 의 «다시 알리기» 로 간다). */
   function waitingInfo() {
     var rows = st.comments.filter(function (c) { return mine(c) && c.bundle; }); if (!rows.length) return null;
@@ -3009,7 +3215,7 @@
     return { bundle: k, total: ks.length, done: ks.length - left, since: at };
   }
   function paintAi() {
-    var w = sdk.chat && !st.unnotified ? waitingInfo() : null, e = $('aiState'), was = !e.hidden;
+    var w = sdk.chat && !st.unnotified && !asks().length ? waitingInfo() : null, e = $('aiState'), was = !e.hidden;   // 질문에 답을 기다리는 동안은 «고치는 중» 이 아니다
     if (!w) { e.hidden = true; clearInterval(aiT); aiT = 0; if (was) whenUp(renderSend); return; }
     var sec = Math.max(0, Math.floor((Date.now() - w.since) / 1000));
     setText(e.querySelector('i'), Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2));
@@ -3046,7 +3252,7 @@
           var ap = ks.filter(function (c) { return c.status === 'applied'; }).length, de = ks.filter(function (c) { return c.status === 'declined'; }).length, op = ks.filter(function (c) { return c.status === 'options'; }).length;
           if ((ap + de + op) && st.pendingVer == null && !st.switching) toast('묶음 #' + st.waitBundle + ' 에 답이 왔습니다 · 반영 ' + ap + (de ? ' · 반영 안 함 ' + de : '') + (op ? ' · 안 올림 ' + op : ''), 4500);
         }
-        st.waitBundle = wi ? wi.bundle : null; paintAi();
+        st.waitBundle = wi ? wi.bundle : null; paintAi(); whenUp(paintAsk);
         // 지금 판에 안(variant)이 더 올라왔으면 장표를 다시 조립한다(고치던 줄은 데이터라 그대로)
         var key = st.doc + '#' + st.ver; var old = st.verCache[key]; delete st.verCache[key];
         var fresh = await loadVersion(st.doc, st.ver);

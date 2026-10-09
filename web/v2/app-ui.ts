@@ -261,16 +261,24 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
     openFrame = f;
-    uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
+    //  화면 가득(#4592 원준 2026-10-09 «사이드바도 그 무엇도 없이 그것에만») — 창 크기 ⇄ 화면 가득. 고른 것은 앱마다 이 브라우저에 남는다.
+    const fullKey = 'lively_v2_appui_full:' + appId;
+    let full = false; try { full = localStorage.getItem(fullKey) === '1'; } catch (_) { /* noop */ }
+    const fullBtn = el('button', { class: 'btn btn-ghost btn-sm v2-appui-full', type: 'button' }) as HTMLButtonElement;
+    const paintFull = (): void => { (uiEl as HTMLElement | null)?.classList.toggle('full', full); fullBtn.textContent = full ? '창 크기로' : '화면 가득'; fullBtn.title = full ? '창 크기로 줄인다' : '사이드바 없이 화면 전체로 넓힌다'; };
+    fullBtn.onclick = () => { full = !full; try { localStorage.setItem(fullKey, full ? '1' : '0'); } catch (_) { /* noop */ } paintFull(); };
+    uiEl = el('div', { class: 'v2-appui-ov' + (full ? ' full' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
         onclick: (e: Event) => { if (e.target === uiEl) closeAppUi(); } },
       el('div', { class: 'v2-appui' },
         el('div', { class: 'v2-appui-h' },
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
+          fullBtn,
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeAppUi() })),
         f.root));
     document.body.append(uiEl as HTMLElement);
+    paintFull();
     document.addEventListener('keydown', uiKey);
     return true;
   } catch (e: any) {
