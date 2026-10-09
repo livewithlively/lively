@@ -16,9 +16,8 @@ export const SIDE_MIN = 220;
 /** 전환 구간의 이 비율을 넘겨 손을 놓으면 카드가 된다. */
 export const COMMIT = 0.3;
 
-/** 카드의 기본 크기와 가장자리 여백. 사이드바를 끝까지 키운 사람은 사이드바를 크게 보려는 것이라 카드는 작게 뜬다
- *  (원준 2026-09-30, 종전 420×560 은 1440 창에서 격자의 27%, 1116 창에서 43% 를 가렸다). */
-export const CARD_DEF = { w: 320, h: 240, r: 24, b: 24 } as const;
+/** 카드 값을 못 읽었을 때의 대체값. 실제 처음 크기·자리는 아래 defaultCardSize · defaultAnchor 가 창과 세션 쪽으로 정한다. */
+export const CARD_DEF = { w: 360, h: 306, r: 24, b: 24 } as const;
 /** 카드의 가장 작은 크기. 머리줄과 터미널 몇 줄이 들어가는 크기다. 기본값보다 작아야 사람이 더 줄일 수 있다. */
 export const CARD_MIN = { w: 260, h: 160 } as const;
 /** 카드를 제자리로 되돌릴 때 사이드바 폭. 세션을 처음 열 때의 기본 폭(panes.ts)과 같다 — 작은 카드를 키우려는 사람은
@@ -105,5 +104,69 @@ export function parseCard(raw: string | null | undefined): CardState {
     r: Math.max(0, Math.round(num(o.r, CARD_DEF.r))),
     b: Math.max(0, Math.round(num(o.b, CARD_DEF.b))),
     fold: o.fold === true,
+  };
+}
+
+// ── 처음 자리 · 처음 크기 · 기억 (원준 2026-10-09 «위치 · 크기 · 상태가 되는 대로 짜였다») ─────────────────────────
+//  카드는 창 기준(position: fixed)이다. 자리는 r · b 가 아니라 **가장 가까운 모서리 + 거리**로 적는다 — 창 크기가 바뀌어도
+//  그 모서리에 붙어 있다(오른쪽 · 아래 거리로만 적으면 왼쪽에 둔 카드가 창을 넓힐 때 오른쪽으로 끌려간다).
+
+/** 카드가 붙는 창의 모서리. t/b = 위/아래, l/r = 왼쪽/오른쪽. */
+export type Corner = 'tl' | 'tr' | 'bl' | 'br';
+export interface CardAnchor { corner: Corner; dx: number; dy: number }
+/** 카드와 가장자리 사이의 기본 거리. */
+export const CARD_GAP = 24;
+
+/** 처음 크기. 폭 = 세션 열의 마지막 폭(SESS_MIN) — 카드가 되는 순간 터미널 줄 폭이 그대로라 화면이 다시 접히지 않는다.
+ *  높이 = 창 높이의 34%(260~400). */
+export function defaultCardSize(viewH: number): { w: number; h: number } {
+  return { w: SESS_MIN, h: clamp(Math.round(num(viewH, 900) * 0.34), 260, 400) };
+}
+
+/** 처음 자리. 세션이 줄어든 쪽의 아래 모서리, 사이드바(격자) 안 — 손이 끝난 자리이고 세션이 사라진 자리다.
+ *  gridLeft · gridRight = 격자의 창 좌표. 레일 · 왼쪽 목록 위에는 뜨지 않는다. */
+export function defaultAnchor(sessionLeft: boolean, gridLeft: number, gridRight: number, viewW: number): CardAnchor {
+  return sessionLeft
+    ? { corner: 'bl', dx: Math.max(0, Math.round(num(gridLeft, 0))) + CARD_GAP, dy: CARD_GAP }
+    : { corner: 'br', dx: Math.max(0, Math.round(num(viewW, 0) - num(gridRight, viewW))) + CARD_GAP, dy: CARD_GAP };
+}
+
+/** 모서리 + 거리 → 창 기준 r · b(창 안으로 넣은 값). 접혀 있으면 보이는 높이(알약)로 센다 — 위 모서리에 붙은 카드는
+ *  알약이 위에 남고, 아래 모서리면 아래에 남는다. */
+export function rectFromAnchor(w: number, h: number, a: CardAnchor, viewW: number, viewH: number, foldH?: number): CardRect {
+  const seen = foldH !== undefined && foldH > 0 ? Math.min(h, Math.round(foldH)) : h;
+  const r = a.corner[1] === 'r' ? a.dx : Math.round(viewW) - w - a.dx;
+  const b = a.corner[0] === 'b' ? a.dy : Math.round(viewH) - seen - a.dy;
+  return clampCard({ w, h, r, b }, viewW, viewH, foldH);
+}
+
+/** 창 기준 r · b → 가장 가까운 모서리 + 거리. 카드 가운데가 창의 어느 쪽 절반에 있나로 모서리를 고른다. */
+export function anchorFromRect(c: CardRect, viewW: number, viewH: number, foldH?: number): CardAnchor {
+  const seen = foldH !== undefined && foldH > 0 ? Math.min(c.h, Math.round(foldH)) : c.h;
+  const left = Math.round(viewW) - c.r - c.w;
+  const top = Math.round(viewH) - c.b - seen;
+  const isLeft = left + c.w / 2 < viewW / 2;
+  const isTop = top + seen / 2 < viewH / 2;
+  return { corner: ((isTop ? 't' : 'b') + (isLeft ? 'l' : 'r')) as Corner, dx: isLeft ? left : c.r, dy: isTop ? top : c.b };
+}
+
+/** 기억해 두는 것 — 사람이 바꾼 크기(sized) · 옮긴 자리(placed). 따로 센다. 최소화는 기억하지 않는다(카드는 늘 펼쳐서 뜬다). */
+export interface CardPrefs { w: number; h: number; sized: boolean; corner: Corner; dx: number; dy: number; placed: boolean }
+const CORNERS: Corner[] = ['tl', 'tr', 'bl', 'br'];
+/** 적어 둔 값(JSON 글자)을 읽는다. 깨졌거나 없으면 아무것도 기억하지 않은 상태(기본 크기 · 세션 쪽 모서리). */
+export function parsePrefs(raw: string | null | undefined): CardPrefs {
+  let o: Record<string, unknown> = {};
+  try { const v = raw ? JSON.parse(raw) : null; if (v && typeof v === 'object') o = v as Record<string, unknown>; } catch (_) { o = {}; }
+  const corner = CORNERS.includes(o.corner as Corner) ? (o.corner as Corner) : 'br';
+  const sized = o.sized === true && Number.isFinite(Number(o.w)) && Number.isFinite(Number(o.h));
+  const placed = o.placed === true && Number.isFinite(Number(o.dx)) && Number.isFinite(Number(o.dy));
+  return {
+    w: sized ? Math.max(CARD_MIN.w, Math.round(Number(o.w))) : 0,
+    h: sized ? Math.max(CARD_MIN.h, Math.round(Number(o.h))) : 0,
+    sized,
+    corner,
+    dx: placed ? Math.max(0, Math.round(Number(o.dx))) : CARD_GAP,
+    dy: placed ? Math.max(0, Math.round(Number(o.dy))) : CARD_GAP,
+    placed,
   };
 }

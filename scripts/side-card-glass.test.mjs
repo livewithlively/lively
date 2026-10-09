@@ -50,9 +50,10 @@ const lib = libSrc ? await load(libSrc) : null;
 ok(!!lib, "L0 셈 모듈을 읽었다");
 if (lib) {
   const { CARD_DEF, CARD_MIN, SIDE_DEF, sideCap, parseCard, clampCard, resizeCard } = lib;
-  ok(CARD_DEF.w === 320 && CARD_DEF.h === 240, "D1a 카드 기본 크기 320×240", JSON.stringify(CARD_DEF));
+  //  2026-10-09: 처음 크기는 창 높이로 센다(defaultCardSize · side-card-place.test.mjs). 여기서는 대체값이 최소 크기보다 큰지만 본다.
+  ok(CARD_DEF.w >= 320 && CARD_DEF.h >= 240, "D1a 카드 대체 크기가 최소 크기보다 크다", JSON.stringify(CARD_DEF));
   const d = parseCard(null);
-  ok(d.w === 320 && d.h === 240, "D1b 적어 둔 값이 없으면 새 기본값", JSON.stringify(d));
+  ok(d.w === CARD_DEF.w && d.h === CARD_DEF.h, "D1b 적어 둔 값이 없으면 대체값", JSON.stringify(d));
   ok(CARD_MIN && CARD_MIN.w === 260 && CARD_MIN.h === 160 && CARD_MIN.w < CARD_DEF.w && CARD_MIN.h < CARD_DEF.h, "D2a 최소 크기는 기본보다 작다(260×160)", JSON.stringify(CARD_MIN));
   const exact = clampCard({ w: 260, h: 160, r: 24, b: 24 }, 1042, 843);
   ok(exact.w === 260 && exact.h === 160, "D2b 정확히 최소 크기까지 줄일 수 있다", JSON.stringify(exact));
@@ -65,7 +66,7 @@ if (lib) {
 
 // ── 화면(side-card.ts) ──
 const card = code(read("web/v2/side-card.ts"));
-ok(/const KEY_CARD = 'lively_v2_side_card2';/.test(card) && !/'lively_v2_side_card'/.test(card), "D3 저장 키가 새 이름이다(종전 큰 크기를 물려받지 않는다)");
+ok(/const KEY_CARD = 'lively_v2_side_card3';/.test(card) && !/'lively_v2_side_card2?'/.test(card), "D3 저장 키가 새 이름이다(옛 r · b · 접힘 덩이를 물려받지 않는다)");
 const leave = card.slice(card.indexOf("async function leave("), card.indexOf("function halt("));
 ok(leave.length > 0 && /Math\.min\(SIDE_DEF, cap\)/.test(leave) && !/h\.setSideW\(cap, true\)/.test(leave), "R1d 제자리로: 상한이 아니라 기본 폭으로 물러난다", leave.slice(0, 160));
 ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\)\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 왼쪽 끝(0)까지 덮은 거리에서 0 으로(카드 상태와 딱 붙는다)");
@@ -106,11 +107,11 @@ ok(liveBlock.length > 0 && !/v2-dot|\bwait\b|termstat|sc-wait/.test(liveBlock) &
 // ── 머리줄 단추 · 두 번 누르기 ──
 const minDecl = card.slice(card.indexOf("const minBtn"), card.indexOf("const maxBtn"));
 const maxDecl = card.slice(card.indexOf("const maxBtn"), card.indexOf("const ctl"));
-ok(/onclick: \(\) => setFold\(!card\.fold\)/.test(minDecl) && /pnIcon\('minus'/.test(minDecl), "H1a 첫 단추 = 최소화(가로줄 그림 · 접기)", minDecl.slice(0, 160));
+ok(/onclick: \(\) => setFold\(!fold\)/.test(minDecl) && /pnIcon\('minus'/.test(minDecl), "H1a 첫 단추 = 최소화(가로줄 그림 · 접기)", minDecl.slice(0, 160));
 ok(/onclick: \(\) => leave\(\)/.test(maxDecl) && /pnIcon\('expand'/.test(maxDecl), "H1b 둘째 단추 = 크게 보기(대각선 화살표 · 세션을 가운데로)", maxDecl.slice(0, 160));
 ok(/el\('div', \{ class: 'cm-ctl', hidden: true \}, minBtn, maxBtn\)/.test(card), "H1c 순서: ⋯ 다음에 최소화, 그다음 크게 보기");
 const pf = card.slice(card.indexOf("function paintFold("), card.indexOf("\n  }\n", card.indexOf("function paintFold(")));
-ok(/minBtn\.replaceChildren\(pnIcon\(card\.fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
+ok(/minBtn\.replaceChildren\(pnIcon\(fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
 const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.addEventListener('dblclick', onHeadDbl)"));
 ok(/void leave\(\);/.test(dbl) && !/setFold/.test(dbl), "H2a 머리줄 두 번 누르기 = 크게 보기", dbl.slice(-120));
 ok(/e\.stopPropagation\(\);/.test(dbl) && /colMain\.addEventListener\('dblclick', onHeadDbl, true\)/.test(card) && /colMain\.removeEventListener\('dblclick', onHeadDbl, true\)/.test(card), "H2b 이름 글자 위도 크게 보기 — 이름 바꾸기보다 먼저 받는다(capture)");

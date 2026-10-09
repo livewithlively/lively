@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+// 세션 카드 — 처음 자리 · 크기 · 알약(최소화)의 폭 조절 · 누르기 흐름을 실제 크롬에서 잰다 (#3870, 원준 2026-10-09)
+//
+//  원준: «처음 뜨는 위치 · 크기 · 처음 상태 · 최소화 이후 큰 화면으로 보는 플로우가 되는 대로 짜였다» ·
+//   «최소화 상태에서 제목만 한 줄로 떠다닐 때 가로 폭 조절 안 됨».
+//
+// 사양(행마다 단언 하나 이상):
+//  Q1 처음 자리: 세션이 왼쪽이면 사이드바(격자) 왼쪽 아래 — 격자 왼쪽 + 24 · 아래 24
+//  Q2 처음 크기: 폭 360(세션 열의 마지막 폭) · 높이 = 창 높이 × 0.34
+//  Q3 알약(최소화)은 좌우 손잡이만 보인다 · 오른쪽 손잡이를 끌면 폭이 그만큼 넓어진다(버그 수정)
+//  Q4 알약을 한 번 누르면(끌지 않고) 잠깐 뒤 펴진다
+//  Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게(카드가 풀린다)
+//  Q6 다시 카드가 되면 펼친 카드다(최소화한 채 크게 봤어도)
+//
+// fail-first(실측 2026-10-09): 바꾸기 전 web/lib/side-card-geom.ts · web/v2/side-card.ts 를 SIDE_CARD_SRC 로 물리면 Q1 · Q2 · Q3 · Q4 가 빨갛다
+//  (Q5 · Q6 은 종전에도 맞았다 — 지키려고 둔다).
+// 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
+//
+//  원준: «최소화 상태에서는 또;; 터미널 세션 곁칸 위에 창으로 떴을 때 이동 범위에 제약있음» — 최소화한 카드는 머리줄만 남는데
+//   자리의 세로 범위는 편 높이로 세어서, 창 위쪽 (편 높이 − 머리줄)만큼은 머리줄이 갈 수 없었다.
+//
+// 사양(행마다 단언 하나 이상):
+//  M1 편 카드를 머리줄로 끌어 맨 위로 — 카드 윗변이 창 위 여백(8)에 선다(종전과 같다)
+//  M2 최소화하면 머리줄만 남는다(높이 < 80)
+//  M3 최소화한 카드를 맨 위로 끌면 **머리줄이** 창 위 여백(8)에 선다 — 종전엔 편 높이만큼 아래에서 멈췄다
+//  M4 최소화한 카드를 맨 아래 · 왼쪽 끝으로 끌어도 창 안(여백 8)
+//  M5 위에 올려 둔 채 펴면 카드 전체가 창 안으로 내려온다 · 적어 둔 자리는 위 모서리 기준(접힘은 적지 않는다, 2026-10-09)
+//  M6 Shift+화살표(글쇠)로도 최소화한 카드가 편 카드의 한계보다 위로 간다
+//
+// 왜 런타임인가: 머리줄 높이는 CSS 가 그린 뒤에야 알고, 카드는 position: fixed 라 창에서 잰 자리만 뜻이 있다.
+// fail-first: 바꾸기 전 web/lib/side-card-geom.ts · web/v2/side-card.ts 를 제자리에 물리면 M3 · M6 이 빨갛다.
+// 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { dumpDom, findChrome } from "./headless-chrome.mjs";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const chrome = findChrome();
+if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BIN 으로 지정) — 세션 카드 최소화 범위 런타임 검증 미실행"); process.exit(0); }
+const ESBUILD = path.join(ROOT, "node_modules/.bin/esbuild");
+if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules/.bin/esbuild)"); process.exit(1); }
+const SRC = process.env.SIDE_CARD_SRC || path.join(ROOT, "web/v2/side-card.ts");
+const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-name=Card", "--platform=browser", "--log-level=error", "--loader=ts", "--sourcefile=card-test-entry.ts"],
+  { input: `export * from ${JSON.stringify(SRC)};\n`, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+const STY = path.join(ROOT, "public/styles");
+const CSS = ["01-base.css", "36-chat.css", "40-v2.css", "42-v2-panes.css", "45-v2-side-swap.css"].map((f) => readFileSync(path.join(STY, f), "utf8")).join("\n");
+
+const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
+  html,body{margin:0;height:100%;font:14px sans-serif;background:var(--bg)}
+  *,*::before,*::after{transition:none!important;animation:none!important}
+  #wrap{position:absolute;left:120px;top:60px;right:0;bottom:0}
+</style>
+<div id="wrap" class="pn-wrap"><div id="grid" class="pn-body">
+  <div class="pn-col" id="col"><div class="sc-wrap"><div id="head" class="sc-head"><div class="sc-head-l"><b>세션</b></div></div><div class="sc-body" style="flex:1;min-height:0">터미널</div></div></div>
+  <div class="v2-split-x" id="split"></div>
+  <section id="pane" class="pn-pane" data-zone="side"><div class="pn-pane-body">사이드바</div></section>
+</div></div>
+<pre id="out">PENDING</pre>
+<script>try{localStorage.clear()}catch(e){}
+window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); window.cancelAnimationFrame=(id)=>clearTimeout(id);
+//  움직임 없이(카드로 바뀌는 전환을 기다리지 않는다).
+(function(){const mm=window.matchMedia.bind(window);window.matchMedia=(q)=>/prefers-reduced-motion/.test(q)?{matches:true,media:q,addEventListener(){},removeEventListener(){},addListener(){},removeListener(){}}:mm(q);})();</script>
+<script>${bundle}</script>
+<script>
+(async function(){
+  const R={}; const sleep=(ms)=>new Promise(r=>setTimeout(r,ms)); const rc=(n)=>n.getBoundingClientRect();
+  try{
+    const grid=document.getElementById('grid'), col=document.getElementById('col'), pane=document.getElementById('pane'), head=document.getElementById('head');
+    const VH=document.documentElement.clientHeight;
+    const card=Card.mountSideCard({body:grid,colMain:col,sidePane:pane,sideOn:()=>true,setSideW:()=>{},sessionLeft:()=>true});
+    card.restore(true); await sleep(60);
+    let r=rc(col); const g=rc(grid);
+    R.q1_info=[Math.round(r.left),Math.round(VH-r.bottom),Math.round(g.left)]; R.q1=Math.abs(r.left-(g.left+24))<=1.5 && Math.abs(VH-r.bottom-24)<=1.5;
+    R.q2_info=[Math.round(r.width),Math.round(r.height),VH]; R.q2=Math.abs(r.width-360)<=1 && Math.abs(r.height-Math.max(260,Math.min(400,Math.round(VH*0.34))))<=1;
+    const P=(type,x,y,t)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:7,pointerType:'mouse'}));
+    // Q3 — 최소화 → 좌우 손잡이만 · 오른쪽 손잡이로 폭 넓히기
+    col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30);
+    const vis=(e)=>{const n=col.querySelector('.cm-grip-'+e); return !!n && !n.hidden && getComputedStyle(n).display!=='none';};
+    const w0=rc(col).width;
+    const ge=col.querySelector('.cm-grip-e'); const eb=rc(ge);
+    if (vis('e')) { const x=eb.left+eb.width/2, y=eb.top+eb.height/2; P('pointerdown',x,y,ge); P('pointermove',x+60,y,ge); P('pointermove',x+120,y,ge); P('pointerup',x+120,y,ge); await sleep(30); }
+    r=rc(col);
+    R.q3_info=[vis('e'),vis('w'),vis('n'),vis('se'),Math.round(w0),Math.round(r.width),grid.classList.contains('cm-fold')];
+    R.q3=vis('e') && vis('w') && !vis('n') && !vis('se') && Math.abs(r.width-(w0+120))<=2 && grid.classList.contains('cm-fold');
+    // Q4 — 알약을 한 번 누름(끌지 않고) → 잠깐 뒤 펴진다
+    const hb=rc(head); const hx=hb.left+40, hy=hb.top+hb.height/2;
+    P('pointerdown',hx,hy,head); P('pointerup',hx,hy,head); head.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:hx,clientY:hy,detail:1}));
+    const mid=grid.classList.contains('cm-fold'); await sleep(320);
+    R.q4_info=[mid,grid.classList.contains('cm-fold')]; R.q4=mid===true && !grid.classList.contains('cm-fold');
+    // Q5 — 다시 최소화 → 두 번 누름 → 펴지지 않고 곧장 크게(카드가 풀린다)
+    col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30);
+    const hb2=rc(head); const x2=hb2.left+40, y2=hb2.top+hb2.height/2;
+    for (const d of [1,2]) { P('pointerdown',x2,y2,head); P('pointerup',x2,y2,head); head.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:x2,clientY:y2,detail:d})); }
+    head.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true,clientX:x2,clientY:y2,detail:2}));
+    let unfolded=false; for (let i=0;i<10;i++){ await sleep(40); if (grid.classList.contains('cm') && !grid.classList.contains('cm-fold')) unfolded=true; }
+    R.q5_info=[grid.classList.contains('cm'),unfolded]; R.q5=!grid.classList.contains('cm') && !unfolded;
+    // Q6 — 다시 카드가 되면 펼친 카드
+    card.restore(true); await sleep(60);
+    R.q6_info=[grid.classList.contains('cm'),grid.classList.contains('cm-fold')]; R.q6=grid.classList.contains('cm') && !grid.classList.contains('cm-fold');
+  }catch(e){R.err=String(e&&e.stack||e);}
+  document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
+})();
+</script>`;
+
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "side-card-pill-", virtualTimeBudget: 15000, args: ["--window-size=1400,900"] });
+const m = /RESULT (\{.*\}) ENDRESULT/s.exec(dom);
+if (!m) { console.error("FAIL  크롬이 결과를 안 냈다 — 받은 DOM " + dom.length + "자"); process.exit(1); }
+const raw = m[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+const R = JSON.parse(raw);
+let pass = 0, fail = 0;
+const check = (c, n, info = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n} — ${info}`); } };
+check(!R.err, "Q0 장면이 끝까지 돈다", R.err);
+check(R.q1, "Q1 처음 자리: 세션 쪽(왼쪽) 사이드바 아래 모서리 — 격자 왼쪽 + 24 · 아래 24", JSON.stringify(R.q1_info));
+check(R.q2, "Q2 처음 크기: 폭 360 · 높이 창 × 0.34", JSON.stringify(R.q2_info));
+check(R.q3, "Q3 알약은 좌우 손잡이만 · 오른쪽 손잡이로 폭이 넓어진다(원준 10-09 «최소화 상태에서 가로 폭 조절 안 됨»)", JSON.stringify(R.q3_info));
+check(R.q4, "Q4 알약을 한 번 누르면 잠깐 뒤 펴진다", JSON.stringify(R.q4_info));
+check(R.q5, "Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게", JSON.stringify(R.q5_info));
+check(R.q6, "Q6 다시 카드가 되면 펼친 카드", JSON.stringify(R.q6_info));
+console.log(`\n${pass} ok · ${fail} fail`);
+if (fail) process.exit(1);

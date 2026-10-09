@@ -9,7 +9,7 @@
 //  M2 최소화하면 머리줄만 남는다(높이 < 80)
 //  M3 최소화한 카드를 맨 위로 끌면 **머리줄이** 창 위 여백(8)에 선다 — 종전엔 편 높이만큼 아래에서 멈췄다
 //  M4 최소화한 카드를 맨 아래 · 왼쪽 끝으로 끌어도 창 안(여백 8)
-//  M5 위에 올려 둔 채 펴면 카드 전체가 창 안으로 내려온다 · 적어 둔 자리도 창 안
+//  M5 위에 올려 둔 채 펴면 카드 전체가 창 안으로 내려온다 · 적어 둔 자리는 위 모서리 기준(접힘은 적지 않는다, 2026-10-09)
 //  M6 Shift+화살표(글쇠)로도 최소화한 카드가 편 카드의 한계보다 위로 간다
 //
 // 왜 런타임인가: 머리줄 높이는 CSS 가 그린 뒤에야 알고, 카드는 position: fixed 라 창에서 잰 자리만 뜻이 있다.
@@ -59,8 +59,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     R.m0_card=grid.classList.contains('cm') && getComputedStyle(col).position==='fixed';
     const P=(type,x,y,t)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:5,pointerType:'mouse'}));
     const drag=async(dx,dy)=>{const r=rc(head); const x=r.left+30,y=r.top+r.height/2; P('pointerdown',x,y,head); P('pointermove',x+dx/2,y+dy/2,head); P('pointermove',x+dx,y+dy,head); P('pointerup',x+dx,y+dy,head); await sleep(30);};
-    //  저장 열쇠는 판마다 다르다(main = lively_v2_side_card2 · stage = lively_v2_side_card) — 있는 쪽을 읽는다.
-    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card2')||localStorage.getItem('lively_v2_side_card')||'null');
+    //  저장 열쇠: 2026-10-09 부터 lively_v2_side_card3 — 자리는 «가장 가까운 모서리 + 거리», 접힘은 적지 않는다(카드는 늘 펼쳐서 뜬다).
+    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card3')||'null');
     // M1 — 편 카드를 맨 위로
     await drag(0,-5000); let r=rc(col); const fullH=r.height;
     R.m1_info=[Math.round(r.top),Math.round(r.height)]; R.m1=Math.abs(r.top-8)<=1.5 && r.height>=200;
@@ -80,7 +80,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     // M5 — 위에 올려 둔 채 펴면 창 안으로
     await drag(0,-5000); col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30); r=rc(col); const sv=saved();
     R.m5_info=[Math.round(r.top),Math.round(r.bottom),VH,JSON.stringify(sv)];
-    R.m5=!grid.classList.contains('cm-fold') && r.top>=8-1.5 && r.bottom<=VH-8+1.5 && Math.abs(r.height-fullH)<=1 && !!sv && sv.fold===false && sv.b+sv.h<=VH-8+1;
+    //  적어 둔 자리: 위 모서리(t*)에 붙은 «옮긴 자리» · 접힘은 적지 않는다 — 편 카드는 그 모서리에서 아래로 펴져 창 안에 선다.
+    R.m5=!grid.classList.contains('cm-fold') && r.top>=8-1.5 && r.bottom<=VH-8+1.5 && Math.abs(r.height-fullH)<=1 && !!sv && sv.placed===true && String(sv.corner).startsWith('t') && !('fold' in sv);
   }catch(e){R.err=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
