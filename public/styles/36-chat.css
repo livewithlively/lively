@@ -499,3 +499,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   border: 2px solid var(--line-net); border-top-color: var(--ink); animation: sc-liv-boot-spin 1s linear infinite; }
 @keyframes sc-liv-boot-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sc-liv-boot-spin { animation: none; border-top-color: var(--line-net); } }
+
+/* 세션 이름 뒤의 번호(#nnnn — 이 세션이 맡은 태스크 번호, 원준 2026-10-10). 프로젝트 문패의 번호(.pn-eyebrow .mono)와 같은 무게다. */
+.sc-title-no { flex: none; margin-left: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }

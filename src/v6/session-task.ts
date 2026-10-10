@@ -95,6 +95,18 @@ export async function sessionTaskOf(sessionId: string, owner: string): Promise<S
   return row ? await toSessionTask(row) : null;
 }
 
+/** 목록 보강용 일괄 조회 — 세션 id → 그 세션이 맡은 태스크 번호(있는 것만). 세션 머리줄이 이름 뒤에 `#번호` 로 적는다. */
+export async function sessionTaskIdsFor(ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (onNode() || !ids.length) return out;
+  const r = await q(itemsPool,
+    `SELECT es.id, es.task_id
+       FROM execution_session es JOIN project t ON t.id = es.task_id
+      WHERE es.id = ANY($1::text[]) AND t.level IN ('task','subtask') AND t.trashed_at IS NULL`, [ids]);
+  for (const row of r) out.set(String(row.id), Number(row.task_id));
+  return out;
+}
+
 /** 태스크 상태를 바꾸고 AGENTS.md 태스크 인덱스를 갱신한다. 커스텀 상태 키(status_raw)가 남아 있으면 비운다 — 안 비우면 보드가 옛 상태로 그린다. */
 async function writeStatus(taskId: number, status: SessionTaskStatus, actor: string, hadRaw: boolean, projectId: number): Promise<void> {
   await updateTask(taskId, { status, ...(hadRaw ? { status_raw: null } : {}) }, { actor, source: "web" });
