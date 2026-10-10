@@ -1613,6 +1613,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
 .v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(var(--shadow-ink), .36); padding: 24px; }
 .v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(var(--shadow-ink), .14)); overflow: hidden; }
+/* 화면 가득 — 사이드바도 여백도 없이 앱만(#4592). 머리줄은 얇게 남는다(닫기 · 창 크기로) */
+.v2-appui-ov.full { padding: 0; }
+.v2-appui-ov.full .v2-appui { width: 100%; height: 100%; border: 0; border-radius: 0; }
+.v2-appui-ov.full .v2-appui-h { padding: 5px 10px; }
 .v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
 .v2-appui-t { font-size: 14px; font-weight: 800; color: var(--ink); }
 .v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 1px 7px; }
