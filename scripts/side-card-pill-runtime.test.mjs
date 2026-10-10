@@ -19,6 +19,8 @@
 //  (Q7~Q11 은 리뷰 2026-10-09 — 바꾸기 전 커밋 58d763c7a 를 물리면 빨갛다)
 //  Q12 최소화 · 펴기 · 곁칸 고르기를 셸에 알린다(onState) — 되살린 값은 도로 알리지 않는다
 //  Q13 되살린 고름: 곁칸을 골랐던 카드는 비친 채(cm-live 없음) · 카드를 골랐던 · 값이 없는 카드는 또렷(2026-10-10 «새로고침하면 상태가 계속 달라짐»)
+//  Q14 터미널 액자에 idle 이 실제로 간다 — 곁칸을 골랐던 카드면 idle:true(터미널이 연결 때 초점을 안 가져감) · 카드를 누르면 idle:false ·
+//      카드가 풀리면 on:false · idle:false (액자의 contentWindow 를 가짜로 바꿔 받은 메시지를 적는다)
 //
 // fail-first(실측 2026-10-09): 바꾸기 전 web/lib/side-card-geom.ts · web/v2/side-card.ts 를 SIDE_CARD_SRC 로 물리면 Q1 · Q2 · Q3 · Q4 가 빨갛다
 //  (Q5 · Q6 은 종전에도 맞았다 — 지키려고 둔다).
@@ -144,6 +146,15 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     P('pointerdown',x3,y3,head); P('pointerup',x3,y3,head); head.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:x3,clientY:y3,detail:1}));
     await drag(head,0,200); await sleep(320);
     R.q11_info=[fold(),Math.round(rc(col).top)]; R.q11=fold() && rc(col).top>t0+100;
+    // Q14 — 가짜 터미널 액자가 받은 glass 메시지
+    const fr=document.createElement('iframe'); fr.className='sc-term-frame'; col.querySelector('.sc-body').appendChild(fr);
+    const got=[]; Object.defineProperty(fr,'contentWindow',{configurable:true,get:()=>({postMessage:(m)=>{ if(m&&m.cmd==='glass') got.push(m); }})});
+    const lastMsg=()=>got[got.length-1]||null;
+    card.restore(true,{pick:false}); await sleep(30); const m0=lastMsg();
+    head.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerId:11,pointerType:'mouse'})); head.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,button:0,pointerId:11,pointerType:'mouse'})); await sleep(30); const m1=lastMsg();
+    card.restore(false); await sleep(30); const m2=lastMsg();
+    R.q14_info=[JSON.stringify(m0),JSON.stringify(m1),JSON.stringify(m2)];
+    R.q14=!!m0 && m0.on===true && m0.idle===true && !!m1 && m1.on===true && m1.idle===false && !!m2 && m2.on===false && m2.idle===false;
   }catch(e){R.err=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
@@ -166,6 +177,7 @@ check(R.q6, "Q6 다시 카드가 되면 펼친 카드", JSON.stringify(R.q6_info
 check(R.q7, "Q7 되살린 카드는 그 세션에 적어 둔 최소화를 따른다(값이 없으면 펼침)", JSON.stringify(R.q7_info));
 check(R.q12, "Q12 최소화 · 펴기 · 곁칸 고르기를 셸에 알린다 · 되살린 값은 도로 안 알린다", JSON.stringify(R.q12_info));
 check(R.q13, "Q13 곁칸을 골랐던 카드는 비친 채 · 카드를 골랐던 · 값 없는 카드는 또렷", JSON.stringify(R.q13_info));
+check(R.q14, "Q14 터미널 액자에 idle 이 실제로 간다(곁칸 고름 → true · 카드 누름 → false · 카드 풀림 → on·idle false)", JSON.stringify(R.q14_info));
 check(R.q8, "Q8 카드가 아니면 cm-card-left 가 없다", JSON.stringify(R.q8_info));
 check(R.q9, "Q9 위에 올려 둔 알약의 폭을 바꿔도 윗변 그대로", JSON.stringify(R.q9_info));
 check(R.q10, "Q10 폭만 바꾸면 크기만 적고 «옮긴 자리» 로는 적지 않는다", JSON.stringify(R.q10_info));

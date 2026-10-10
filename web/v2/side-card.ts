@@ -35,7 +35,8 @@ import {
 } from '../lib/side-card-geom.js';
 import { isLive, nextPicked } from '../lib/side-card-live.js';   // 또렷 · 비침의 판정(순수 함수)
 
-//  사람이 옮긴 자리 · 바꾼 크기(lib parsePrefs). 브라우저마다(사람마다) 하나다. 최소화는 적지 않는다 — 카드는 늘 펼쳐서 뜬다.
+//  사람이 옮긴 자리 · 바꾼 크기(lib parsePrefs). 브라우저마다(사람마다) 하나다. 최소화 · 고름은 여기 적지 않는다 — 셸이 세션마다
+//   적는다(onState → restore, 2026-10-10). 손잡이를 끌어 카드가 되면 늘 펼친 카드다.
 //  ⚠ 이름 끝의 3 = 자리를 «가장 가까운 모서리 + 거리» 로 적고, 옮김 · 바꿈을 따로 기억하는 판(2026-10-09). 옛 키(…card2)는
 //   r · b 와 접힘을 한 덩이로 적어서, 한 번 접기만 눌러도 기본 자리가 «옮긴 자리» 로 굳었다 — 읽지 않는다.
 const KEY_CARD = 'lively_v2_side_card3';
@@ -131,6 +132,10 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   let stopDrag: (() => void) | null = null;   // 카드를 끌고 있으면 그 끌기를 끝내는 함수
   //  사람이 카드를 골랐나(카드를 눌렀다 · 초점이 카드 안에 있다). 사이드바를 누르면 풀린다. 참이면 비치지 않는다.
   let picked = false;
+  //  액자에 마지막으로 알린 «보임:고름» 과 셸에 마지막으로 보고한 «최소화:고름». 바뀐 것만 보낸다(paintLive · report).
+  //   ⚠ 여기(마운트 맨 앞)에 둔다 — 아래 함수들이 마운트 끝의 첫 paint() 에서 읽는다.
+  let glassKey = '';
+  let lastState = '';
   let entering = false;                        // 막 떠오른 참이다(ENTER_LIVE_MS 동안 또렷)
   let enterTimer = 0;
   //  ── 카드의 크기 · 자리 · 접힘 ──
@@ -139,7 +144,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   const prefs = ((): ReturnType<typeof parsePrefs> => { try { return parsePrefs(localStorage.getItem(KEY_CARD)); } catch (_) { return parsePrefs(null); } })();
   let size: { w: number; h: number } | null = prefs.sized ? { w: prefs.w, h: prefs.h } : null;
   let anchor: CardAnchor | null = prefs.placed ? { corner: prefs.corner, dx: prefs.dx, dy: prefs.dy } : null;
-  let fold = false;                            // 최소화(알약). 적지 않는다
+  let fold = false;                            // 최소화(알약). 셸이 세션마다 적는다(report → onState)
   let sessLeft = prefs.left;                   // 카드가 될 때 세션이 줄어든 쪽(기본 자리를 고른다) · 다시 불러온 카드는 마지막 값
 
   const bw = (): number => body.clientWidth;
@@ -260,9 +265,10 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (k !== glassKey) { glassKey = k; postGlass(); }
     report();
   }
-  let glassKey = '';
-  /** 최소화 · 고름이 바뀌었으면 셸에 알린다(카드가 보일 때만 — 안 보이는 동안의 값은 사람이 고른 것이 아니다). */
-  let lastState = '';
+  /** 최소화 · 고름이 바뀌었으면 셸에 알린다(카드가 보일 때만 — 안 보이는 동안의 값은 사람이 고른 것이 아니다).
+   *  ⚠ 지킬 것: fold · picked 를 바꾸는 곳은 모두 곧바로 paintLive(→ report)를 거친다. 그래야 카드가 보이는 동안 늘
+   *   lastState = 지금 값이고, 세션을 바꾸는 순간(셸이 새 세션을 고른 뒤 restore 전) 누가 report 를 불러도 앞 세션의 값을
+   *   새 세션 기록에 적지 않는다(같은 값이라 아무것도 안 보낸다). restore 는 되살린 값으로 lastState 를 맞춘다. */
   function report(): void {
     if (dead || !shown()) return;
     const k = fold + ':' + picked;
@@ -328,7 +334,8 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     paintLive();
   }
 
-  /** 최소화 ↔ 펼침. 카드가 붙은 모서리 쪽으로 접히고 펴진다(아래 모서리면 위로 펴지고, 위 모서리면 아래로). 적지 않는다. */
+  /** 최소화 ↔ 펼침. 카드가 붙은 모서리 쪽으로 접히고 펴진다(아래 모서리면 위로 펴지고, 위 모서리면 아래로). 브라우저 기억(KEY_CARD)에는
+   *  적지 않고 셸이 세션마다 적는다(paint → paintLive → report). */
   function setFold(v: boolean): void {
     window.clearTimeout(pillTimer);
     fold = v;

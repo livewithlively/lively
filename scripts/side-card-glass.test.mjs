@@ -90,7 +90,7 @@ if (live) {
   ok(isLive({ shown: false, entering: true, picked: true }) === false, "G2g 카드가 안 보이면(사이드바 접힘 · 좁은 폭) 또렷 표시도 없다");
 }
 const plAt = card.indexOf("function paintLive(");
-const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("let glassKey", plAt)) : "";
+const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("function report(", plAt)) : "";
 ok(/import \{ isLive, nextPicked \} from '\.\.\/lib\/side-card-live\.js'/.test(card) && /body\.classList\.toggle\('cm-live', isLive\(\{ shown: shown\(\), entering, picked \}\)\)/.test(paintLive), "G2h 화면은 판정 함수로 cm-live 를 건다", paintLive);
 const pickSrc = card.slice(card.indexOf("function pickFrom("), card.indexOf("const onDownCap"));
 ok(/picked = nextPicked\(picked, colMain\.contains\(n\) \? 'card' : h\.sidePane\.contains\(n\) \? 'side' : 'other'\)/.test(pickSrc), "G2i 누른 곳을 카드 · 사이드바 · 그 밖으로 가른다", pickSrc.slice(0, 200));

@@ -41,7 +41,7 @@ ok(/wasShown = shown\(\);/.test(rs) && rs.indexOf("wasShown = shown()") < rs.ind
 ok(!/picked = focusInCard\(\);/.test(rs), "S3c 되살릴 때 지금 초점(새로고침 직후엔 늘 문서 바탕)으로 고름을 정하지 않는다");
 const enter = between(card, "async function enter(", "async function leave(");
 ok(/fold = false;/.test(enter), "S6 손잡이로 카드가 되면 펼친 카드(종전)");
-const pl = between(card, "function paintLive(", "let glassKey");
+const pl = between(card, "function paintLive(", "function report(");
 ok(/const k = shown\(\) \+ ':' \+ picked;/.test(pl) && /if \(k !== glassKey\) \{ glassKey = k; postGlass\(\); \}/.test(pl) && /report\(\);/.test(pl), "S11 고름이 바뀌면 액자에 다시 알리고 셸에 보고한다", pl);
 const rp = between(card, "function report(", "const glassMsg");
 ok(/if \(dead \|\| !shown\(\)\) return;/.test(rp) && /if \(k === lastState\) return;/.test(rp) && /h\.onState\?\.\(\{ fold, pick: picked \}\)/.test(rp) && /try \{/.test(rp),

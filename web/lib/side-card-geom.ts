@@ -153,7 +153,8 @@ export function anchorFromRect(c: CardRect, viewW: number, viewH: number, foldH?
   return { corner: ((isTop ? 't' : 'b') + (isLeft ? 'l' : 'r')) as Corner, dx: isLeft ? left : c.r, dy: isTop ? top : c.b };
 }
 
-/** 기억해 두는 것 — 사람이 바꾼 크기(sized) · 옮긴 자리(placed). 따로 센다. 최소화는 기억하지 않는다(카드는 늘 펼쳐서 뜬다). */
+/** 기억해 두는 것 — 사람이 바꾼 크기(sized) · 옮긴 자리(placed). 따로 센다. 최소화 · 고름은 여기 없다 — 셸이 세션마다 적는다
+ *  (v2/side-card.ts onState, 2026-10-10). 손잡이를 끌어 카드가 되면 늘 펼친 카드다. */
 /** left = 마지막으로 카드가 될 때 세션이 줄어든 쪽(왼쪽?) — 다시 불러온 카드(새로고침 · 세션 전환)의 기본 모서리를 고른다. */
 export interface CardPrefs { w: number; h: number; sized: boolean; corner: Corner; dx: number; dy: number; placed: boolean; left: boolean }
 const CORNERS: Corner[] = ['tl', 'tr', 'bl', 'br'];
