@@ -1610,6 +1610,71 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
 .v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
+/* ── 앱 만들기(#4592 · v2/app-studio.ts) — 창 전체. ① 시작(무엇을 · 어디에) ② 만드는 중(가운데 앱 · 옆에 대화) ── */
+.v2-pad-ico--new { width: 60px; height: 60px; border-radius: 16px; border: 2px dashed var(--blue); color: var(--blue); background: rgba(var(--tint-ink), .06); }
+.v2-pad-item--new:hover .v2-pad-ico--new { background: var(--blue); color: #fff; border-style: solid; }
+.v2-pad-item--new b { color: var(--blue); }
+.v2-studio { position: fixed; inset: 0; z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
+.v2-studio-top { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.v2-studio-top--build { background: var(--purple, #7B61E0); border-bottom-color: transparent; color: #fff; }
+.v2-studio-tag { font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 7px; background: rgba(123, 97, 224, .14); color: var(--purple, #7B61E0); }
+.v2-studio-top--build .v2-studio-tag { background: rgba(255, 255, 255, .22); color: #fff; }
+.v2-studio-name { font-size: 15px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-ver { font-size: 12.5px; font-weight: 700; opacity: .85; white-space: nowrap; }
+.v2-studio-sp { flex: 1; }
+.v2-studio-top--build .btn { color: #fff; border: 1px solid rgba(255, 255, 255, .45); background: none; }
+.v2-studio-done { height: 30px; padding: 0 14px; border-radius: 9px; border: 0; background: #fff; color: var(--purple-text, #5B3FD0); font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.v2-studio-band { flex: none; padding: 6px 14px; background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); font-size: 13px; font-weight: 700; }
+.v2-studio-band[hidden] { display: none; }
+.v2-studio-start { flex: 1; min-height: 0; overflow: auto; width: min(680px, 100%); margin: 0 auto; padding: 44px 20px 60px; display: flex; flex-direction: column; }
+.v2-studio-start h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+.v2-studio-lead { margin: 6px 0 18px; color: var(--ink-sub); font-size: 14px; }
+.v2-studio-start h3 { margin: 30px 0 10px; font-size: 15px; font-weight: 800; }
+.v2-studio-what { height: 52px; border: 1.5px solid var(--line); border-radius: 14px; padding: 0 16px; font: inherit; font-size: 17px; background: var(--bg); color: var(--ink); }
+.v2-studio-what:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 4px rgba(123, 97, 224, .14); }
+.v2-studio-ex { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.v2-studio-ex button { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.v2-studio-ex button:hover { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); }
+.v2-studio-places { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.v2-studio-place { display: grid; gap: 4px; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 14px; padding: 12px; cursor: pointer; align-content: start; }
+.v2-studio-place b { font-size: 14px; font-weight: 800; }
+.v2-studio-place small { font-size: 12.5px; color: var(--ink-sub); line-height: 1.4; }
+.v2-studio-place.on { border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .08); box-shadow: 0 0 0 3px rgba(123, 97, 224, .12); }
+/* 그림 — 실제 화면의 꼴을 줄여 그린다: 왼쪽 레일 · 가운데 · 곁칸. 보라가 «이 앱이 서는 자리» */
+.v2-studio-pic { height: 76px; border-radius: 9px; background: var(--gray-bg-2, #EEF2F7); margin-bottom: 6px; display: grid; gap: 4px; padding: 6px; grid-template-columns: 10px minmax(0, 1fr) 34%; }
+.v2-studio-pic i { border-radius: 5px; background: rgba(var(--tint-ink), .16); }
+.v2-studio-pic--side i:nth-child(3), .v2-studio-pic--both i:nth-child(3) { background: var(--purple, #7B61E0); }
+.v2-studio-pic--full { grid-template-columns: 10px minmax(0, 1fr); }
+.v2-studio-pic--full i:nth-child(3) { display: none; }
+.v2-studio-pic--full i:nth-child(2), .v2-studio-pic--both i:nth-child(2) { background: var(--purple, #7B61E0); }
+.v2-studio-pic--both i:nth-child(2) { opacity: .55; }
+.v2-studio-act { margin-top: 26px; display: flex; justify-content: flex-end; }
+.v2-studio-go { height: 46px; padding: 0 26px; border: 0; border-radius: 13px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+.v2-studio-go:disabled { opacity: .4; cursor: default; }
+.v2-studio-drafts { margin-top: 34px; border-top: 1px solid var(--line); }
+.v2-studio-draft { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 9px 12px; margin-top: 6px; cursor: pointer; }
+.v2-studio-draft b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.v2-studio-draft small { color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 12.5px; }
+.v2-studio-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 34%, 460px); }
+.v2-studio-stage { min-width: 0; min-height: 0; padding: 18px; display: flex; justify-content: center; }
+.v2-studio-stage > * { flex: 1; min-width: 0; background: var(--bg); border-radius: 16px; box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(var(--shadow-ink), .10); overflow: hidden; display: flex; flex-direction: column; }
+.v2-studio-stage--side > * { flex: none; width: 360px; }   /* 세션 옆에 붙는 앱은 곁칸 폭으로 미리 본다 */
+.v2-studio-stage .v2-appui-frame { flex: 1; width: 100%; border: 0; }
+.v2-studio-stage--side > .v2-appui-frame, .v2-studio-stage--side > .v2-studio-wait { flex: none; width: 360px; }
+.v2-studio-wait { align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
+.v2-studio-wait b { color: var(--ink); font-size: 16px; }
+.v2-studio-wait p { margin: 0; max-width: 300px; font-size: 13.5px; line-height: 1.6; }
+.v2-studio-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
+@keyframes v2-studio-spin { to { transform: rotate(360deg); } }
+.v2-studio-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }
+.v2-studio-chat > * { flex: 1; min-height: 0; }
+@media (max-width: 900px) {
+  .v2-studio-places { grid-template-columns: minmax(0, 1fr); }
+  .v2-studio-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
+  .v2-studio-chat { border-left: 0; border-top: 1px solid var(--line); }
+  .v2-studio-stage--side > * { width: 100%; }
+}
+
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
 .v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(var(--shadow-ink), .36); padding: 24px; }
 .v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(var(--shadow-ink), .14)); overflow: hidden; }

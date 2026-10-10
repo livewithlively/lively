@@ -14,6 +14,7 @@ import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 �
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
+import { openAppStudio, studioRecForApp } from './app-studio.js';   // #4592 — 「+ 새 앱」 · 「이어서 만들기」
 import { icon as lineIcon } from './icons.js';
 export type { PadGroup };
 
@@ -230,7 +231,10 @@ export function openLaunchpad(): void {
     //   다시 넣으면 돌아온다. 지우는 게 아니다 — 주소로는 그대로 열린다.
     const decorate = (node: HTMLElement, tid: string, title: string): HTMLElement => {
       const isHidden = hidden.has(tid);
+      //  이 브라우저에서 만들던 앱이면 「이어서 만들기」 가 맨 위에 선다(#4592 앱 만들기).
+      const draft = tid.startsWith('i:') ? studioRecForApp(tid.slice(2)) : null;
       const menu = (x: number, y: number) => ctxMenu(x, y, [
+        ...(draft ? [{ label: '이어서 만들기', icon: 'plus', hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); openAppStudio(draft); } }] : []),
         { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '격자로 돌아와요' : '앱은 그대로 · 눈앞에서만',
           run: () => { togglePadHidden(tid); draw(); } },
       ], { title });
@@ -286,12 +290,20 @@ export function openLaunchpad(): void {
     //   이름을 쳐서 찾았는데 안 보이면 «없어졌다» 로 읽히기 때문이다.
     const tiles = all.filter((t) => padPlacement(t.tid, hidden, !!q) !== 'hidden');
     const gone = all.filter((t) => padPlacement(t.tid, hidden, !!q) === 'hidden');
+    //  「+ 새 앱」(#4592, 원준 2026-10-10) — 워크스페이스 앱 묶음의 마지막 칸. 누르면 앱 찾기가 닫히고 앱 만들기 화면으로 간다.
+    //   워크스페이스 앱이 하나도 없어도 이 칸 때문에 묶음이 선다(«만들 수 있다» 가 보여야 한다). 검색 중에는 '새 앱 · 만들기' 로 찾을 때만.
+    const newTile = el('button', { class: 'v2-pad-item v2-pad-item--app v2-pad-item--new', role: 'listitem', type: 'button', title: '새 앱 만들기 — AI 와 말로 만들어요',
+      onclick: () => { closeLaunchpad(); openAppStudio(); } },
+      el('span', { class: 'v2-pad-ico v2-pad-ico--new', 'aria-hidden': 'true' }, lineIcon('plus', 'v2-ic')),
+      el('b', { text: '새 앱' }));
+    const showNew = !q || '새 앱 만들기 추가 new'.includes(q);
     body.replaceChildren(...PAD_GROUPS.map((g) => {
-      const mine = tiles.filter((t) => t.group === g.key);
+      const mine = tiles.filter((t) => t.group === g.key).map((t) => t.node);
+      if (g.key === 'workspace' && showNew) mine.push(newTile);
       if (!mine.length) return null;
       return el('section', { class: 'v2-pad-sec', 'data-group': g.key, 'aria-label': g.title },
         el('h3', { class: 'v2-pad-sec-h', text: g.title }),
-        el('div', { class: 'v2-pad-grid', role: 'list' }, ...mine.map((t) => t.node)));
+        el('div', { class: 'v2-pad-grid', role: 'list' }, ...mine));
     }).filter((n): n is HTMLElement => !!n));
     if (gone.length) {
       //  접힌 채로 선다 — 뺐다는 사실은 보이되 자리는 안 차지하게. 펴면 칸이 그대로(누르면 열리고, ⋯ · 우클릭으로 다시 넣는다).
