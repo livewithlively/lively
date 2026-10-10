@@ -349,7 +349,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
   //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
   const VIEW_KEY = 'pn_view_by_sess';
-  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean; card?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762) · card = 세션이 카드(#3870)
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean; card?: boolean; cardFold?: boolean; cardPick?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762) · card = 세션이 카드(#3870) · cardFold · cardPick = 카드의 최소화 · 고름(2026-10-10)
   function readViews(): Record<string, View> {
     try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
     catch (_) { return {}; }
@@ -788,7 +788,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  세션 카드도 이 세션의 것이다(#3870). 자리 · 크기는 브라우저 하나에 하나(사람마다), 카드인지 아닌지는 세션마다.
     //  되살린 카드는 «카드가 되기 전 자리» 를 모른다. 앞 세션의 값이 남아 자리바꿈 안내가 엉뚱하게 뜨지 않게 안내 없음으로 둔다.
     leftBeforeCard = true;
-    card?.restore(v.card === true);
+    //  최소화 · 고름도 이 세션의 것이다 — 새로고침해도 그대로(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»).
+    card?.restore(v.card === true, { fold: v.cardFold === true, pick: typeof v.cardPick === 'boolean' ? v.cardPick : undefined });
   }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -818,7 +819,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     settle: (px) => swap?.restore(px),
     onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; },
     //  세션 열이 지금 왼쪽에 서 있나 — 카드가 처음 뜨는 모서리(세션이 줄어든 쪽)를 고른다. 자리바꿈이면 세션은 오른쪽이다.
-    sessionLeft: () => !swap?.swapped() });
+    sessionLeft: () => !swap?.swapped(),
+    onState: (s) => saveView({ cardFold: s.fold, cardPick: s.pick }) });
 
   /** 곁칸을 부르는 글을 지금 선 쪽에 맞춘다. 탭 메뉴는 열 때마다 isLeft() 로 새로 고른다. */
   function paintSideLabels(left: boolean = isLeft()): void {

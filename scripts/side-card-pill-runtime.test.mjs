@@ -11,12 +11,16 @@
 //  Q4 알약을 한 번 누르면(끌지 않고) 잠깐 뒤 펴진다
 //  Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게(카드가 풀린다)
 //  Q6 다시 카드가 되면 펼친 카드다(최소화한 채 크게 봤어도)
-//  Q7 최소화한 채 다른 세션으로 갔다 오면(restore false → true) 펼친 카드다 — 앞 세션의 최소화가 따라오지 않는다
+//  Q7 되살린 카드는 그 세션에 적어 둔 최소화를 따른다 — 적어 둔 최소화면 알약, 값이 없는 세션이면 펼친 카드(앞 세션 값이 따라오지 않는다, 2026-10-10)
 //  Q8 카드가 아니면 cm-card-left(배율 단추 쪽 표식)가 없다
 //  Q9 위에 올려 둔 알약의 폭을 바꿔도 윗변 그대로(튀지 않는다)
 //  Q10 기본 자리 카드의 오른쪽 가장자리로 폭만 바꾸면 «옮긴 자리» 로 적지 않는다(크기만 적는다)
 //  Q11 알약을 누르고 곧장 끌면 끄는 도중에 펴지지 않는다
 //  (Q7~Q11 은 리뷰 2026-10-09 — 바꾸기 전 커밋 58d763c7a 를 물리면 빨갛다)
+//  Q12 최소화 · 펴기 · 곁칸 고르기를 셸에 알린다(onState) — 되살린 값은 도로 알리지 않는다
+//  Q13 되살린 고름: 곁칸을 골랐던 카드는 비친 채(cm-live 없음) · 카드를 골랐던 · 값이 없는 카드는 또렷(2026-10-10 «새로고침하면 상태가 계속 달라짐»)
+//  Q14 터미널 액자에 idle 이 실제로 간다 — 곁칸을 골랐던 카드면 idle:true(터미널이 연결 때 초점을 안 가져감) · 카드를 누르면 idle:false ·
+//      카드가 풀리면 on:false · idle:false (액자의 contentWindow 를 가짜로 바꿔 받은 메시지를 적는다)
 //
 // fail-first(실측 2026-10-09): 바꾸기 전 web/lib/side-card-geom.ts · web/v2/side-card.ts 를 SIDE_CARD_SRC 로 물리면 Q1 · Q2 · Q3 · Q4 가 빨갛다
 //  (Q5 · Q6 은 종전에도 맞았다 — 지키려고 둔다).
@@ -75,7 +79,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   try{
     const grid=document.getElementById('grid'), col=document.getElementById('col'), pane=document.getElementById('pane'), head=document.getElementById('head');
     const VH=document.documentElement.clientHeight;
-    const card=Card.mountSideCard({body:grid,colMain:col,sidePane:pane,sideOn:()=>true,setSideW:()=>{},sessionLeft:()=>true});
+    const states=[]; const card=Card.mountSideCard({body:grid,colMain:col,sidePane:pane,sideOn:()=>true,setSideW:()=>{},sessionLeft:()=>true,onState:(s)=>states.push(s)});
     card.restore(true); await sleep(60);
     let r=rc(col); const g=rc(grid);
     R.q1_info=[Math.round(r.left),Math.round(VH-r.bottom),Math.round(g.left)]; R.q1=Math.abs(r.left-(g.left+24))<=1.5 && Math.abs(VH-r.bottom-24)<=1.5;
@@ -111,10 +115,24 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     // Q8 — 카드가 아니면 cm-card-left 가 없다
     card.restore(false); await sleep(40);
     R.q8_info=grid.className; R.q8=!grid.classList.contains('cm') && !grid.classList.contains('cm-card-left');
-    // Q7 — 최소화한 채 세션 전환
-    card.restore(true); await sleep(40); minB().click(); await sleep(30); const f0=fold();
-    card.restore(false); card.restore(true); await sleep(40);
-    R.q7_info=[f0,grid.classList.contains('cm'),fold()]; R.q7=f0 && grid.classList.contains('cm') && !fold();
+    // Q7 — 적어 둔 최소화를 따른다 · 값이 없는 세션은 펼친 카드
+    card.restore(true,{fold:true}); await sleep(40); const f0=fold();
+    card.restore(false); card.restore(true); await sleep(40); const f1=fold();
+    card.restore(true,{fold:false}); await sleep(40); const f2=fold();
+    R.q7_info=[f0,f1,f2,grid.classList.contains('cm')]; R.q7=f0 && !f1 && !f2 && grid.classList.contains('cm');
+    // Q12 — 셸에 알린다: 최소화 · 펴기 · 곁칸 고르기. 되살린 값은 도로 알리지 않는다
+    states.length=0; card.restore(true,{fold:false,pick:true}); await sleep(30); const afterRestore=states.length;
+    minB().click(); await sleep(30); const sFold=states[states.length-1];
+    minB().click(); await sleep(30); const sOpen=states[states.length-1];
+    pane.firstElementChild.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerId:9,pointerType:'mouse'})); await sleep(30); const sSide=states[states.length-1];
+    R.q12_info=[afterRestore,JSON.stringify(sFold),JSON.stringify(sOpen),JSON.stringify(sSide)];
+    R.q12=afterRestore===0 && !!sFold && sFold.fold===true && !!sOpen && sOpen.fold===false && !!sSide && sSide.pick===false;
+    // Q13 — 되살린 고름
+    card.restore(true,{pick:false}); await sleep(40); const live0=grid.classList.contains('cm-live');
+    card.restore(true,{pick:true}); await sleep(40); const live1=grid.classList.contains('cm-live');
+    card.restore(true); await sleep(40); const live2=grid.classList.contains('cm-live');
+    R.q13_info=[live0,live1,live2]; R.q13=!live0 && live1 && live2;
+    card.restore(true); await sleep(30);
     // Q10 — 기억을 지우고(Home) 오른쪽 가장자리로 폭만 넓힌다
     col.querySelector('.cm-grip-nw').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true})); await sleep(30);
     const wA=rc(col).width; await drag(col.querySelector('.cm-grip-e'),40,0); const sv=saved();
@@ -128,6 +146,15 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     P('pointerdown',x3,y3,head); P('pointerup',x3,y3,head); head.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:x3,clientY:y3,detail:1}));
     await drag(head,0,200); await sleep(320);
     R.q11_info=[fold(),Math.round(rc(col).top)]; R.q11=fold() && rc(col).top>t0+100;
+    // Q14 — 가짜 터미널 액자가 받은 glass 메시지
+    const fr=document.createElement('iframe'); fr.className='sc-term-frame'; col.querySelector('.sc-body').appendChild(fr);
+    const got=[]; Object.defineProperty(fr,'contentWindow',{configurable:true,get:()=>({postMessage:(m)=>{ if(m&&m.cmd==='glass') got.push(m); }})});
+    const lastMsg=()=>got[got.length-1]||null;
+    card.restore(true,{pick:false}); await sleep(30); const m0=lastMsg();
+    head.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerId:11,pointerType:'mouse'})); head.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,button:0,pointerId:11,pointerType:'mouse'})); await sleep(30); const m1=lastMsg();
+    card.restore(false); await sleep(30); const m2=lastMsg();
+    R.q14_info=[JSON.stringify(m0),JSON.stringify(m1),JSON.stringify(m2)];
+    R.q14=!!m0 && m0.on===true && m0.idle===true && !!m1 && m1.on===true && m1.idle===false && !!m2 && m2.on===false && m2.idle===false;
   }catch(e){R.err=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
@@ -147,7 +174,10 @@ check(R.q3, "Q3 알약은 좌우 손잡이만 · 오른쪽 손잡이로 폭이 �
 check(R.q4, "Q4 알약을 한 번 누르면 잠깐 뒤 펴진다", JSON.stringify(R.q4_info));
 check(R.q5, "Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게", JSON.stringify(R.q5_info));
 check(R.q6, "Q6 다시 카드가 되면 펼친 카드", JSON.stringify(R.q6_info));
-check(R.q7, "Q7 최소화한 채 다른 세션으로 갔다 오면 펼친 카드", JSON.stringify(R.q7_info));
+check(R.q7, "Q7 되살린 카드는 그 세션에 적어 둔 최소화를 따른다(값이 없으면 펼침)", JSON.stringify(R.q7_info));
+check(R.q12, "Q12 최소화 · 펴기 · 곁칸 고르기를 셸에 알린다 · 되살린 값은 도로 안 알린다", JSON.stringify(R.q12_info));
+check(R.q13, "Q13 곁칸을 골랐던 카드는 비친 채 · 카드를 골랐던 · 값 없는 카드는 또렷", JSON.stringify(R.q13_info));
+check(R.q14, "Q14 터미널 액자에 idle 이 실제로 간다(곁칸 고름 → true · 카드 누름 → false · 카드 풀림 → on·idle false)", JSON.stringify(R.q14_info));
 check(R.q8, "Q8 카드가 아니면 cm-card-left 가 없다", JSON.stringify(R.q8_info));
 check(R.q9, "Q9 위에 올려 둔 알약의 폭을 바꿔도 윗변 그대로", JSON.stringify(R.q9_info));
 check(R.q10, "Q10 폭만 바꾸면 크기만 적고 «옮긴 자리» 로는 적지 않는다", JSON.stringify(R.q10_info));

@@ -70,7 +70,7 @@ ok(/const KEY_CARD = 'lively_v2_side_card3';/.test(card) && !/'lively_v2_side_ca
 const leave = card.slice(card.indexOf("async function leave("), card.indexOf("function halt("));
 ok(leave.length > 0 && /Math\.min\(SIDE_DEF, cap\)/.test(leave) && !/h\.setSideW\(cap, true\)/.test(leave), "R1d 제자리로: 상한이 아니라 기본 폭으로 물러난다", leave.slice(0, 160));
 ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\)\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 왼쪽 끝(0)까지 덮은 거리에서 0 으로(카드 상태와 딱 붙는다)");
-ok(/cmd: 'glass', on: v/.test(card) && /iframe\.sc-term-frame/.test(card), "G1a 카드인지 아닌지를 터미널 액자에 보낸다");
+ok(/cmd: 'glass', on: shown\(\)/.test(card) && /postMessage\(glassMsg\(\), location\.origin\)/.test(card) && /iframe\.sc-term-frame/.test(card), "G1a 카드인지 아닌지를 터미널 액자에 보낸다");
 ok(/m\.type !== 'lively-term-status'/.test(card) && /window\.addEventListener\('message', onFrameMsg\)/.test(card) && /window\.removeEventListener\('message', onFrameMsg\)/.test(card), "G1b 액자가 늦게 떠 상태를 알려 오면 다시 보낸다(걷을 때 듣기도 뗀다)");
 const paintSrc = card.slice(card.indexOf("function paint():"), card.indexOf("\n  }\n", card.indexOf("function paint():")));
 ok(/paintLive\(\);/.test(paintSrc) && /postGlass\(\);/.test(paintSrc), "G1c 카드 상태를 그릴 때마다 또렷/비침과 액자 비침을 함께 맞춘다", paintSrc.slice(-120));
@@ -90,7 +90,7 @@ if (live) {
   ok(isLive({ shown: false, entering: true, picked: true }) === false, "G2g 카드가 안 보이면(사이드바 접힘 · 좁은 폭) 또렷 표시도 없다");
 }
 const plAt = card.indexOf("function paintLive(");
-const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("\n", plAt)) : "";
+const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("function report(", plAt)) : "";
 ok(/import \{ isLive, nextPicked \} from '\.\.\/lib\/side-card-live\.js'/.test(card) && /body\.classList\.toggle\('cm-live', isLive\(\{ shown: shown\(\), entering, picked \}\)\)/.test(paintLive), "G2h 화면은 판정 함수로 cm-live 를 건다", paintLive);
 const pickSrc = card.slice(card.indexOf("function pickFrom("), card.indexOf("const onDownCap"));
 ok(/picked = nextPicked\(picked, colMain\.contains\(n\) \? 'card' : h\.sidePane\.contains\(n\) \? 'side' : 'other'\)/.test(pickSrc), "G2i 누른 곳을 카드 · 사이드바 · 그 밖으로 가른다", pickSrc.slice(0, 200));
@@ -154,7 +154,7 @@ ok(/width: var\(--cm-w, 320px\); height: var\(--cm-h, 240px\)/.test(cmRule), "D1
 // ── 터미널 ──
 const termSrc = read("web/standalone/terminal.ts");
 const term = code(termSrc);
-ok(/else if \(m\.cmd === 'glass'\) setGlass\(m\.on === true\);/.test(term), "T1a 액자가 glass 명령을 받는다");
+ok(/else if \(m\.cmd === 'glass'\) \{ setGlass\(m\.on === true\);/.test(term), "T1a 액자가 glass 명령을 받는다");
 const fnSrc = (name) => { const a = termSrc.indexOf("export function " + name + "("); if (a < 0) return ""; const b = termSrc.indexOf("\n}\n", a); return termSrc.slice(a, b + 2); };
 const clearSrc = fnSrc("clearOf");
 let clearOf = null;
