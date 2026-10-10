@@ -77,7 +77,7 @@ const chat = read("web/session-chat.ts");
 ok(/export function sessText\([^)]*\)[^{]*\{\s*return sessNameFace\(/.test(side),
   "S1 사이드바 sessText 는 lib/sess-name 의 sessNameFace 를 그대로 돌려준다(제 사본 없음)");
 ok(!/function echoesProject|const HARNESS_TITLES/.test(side), "S2 사이드바에 규칙 사본이 남지 않았다");
-ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitle\(\)[\s\S]{0,400}face\(\)/.test(chat),
+ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitleName\(\)[\s\S]{0,400}face\(\)/.test(chat),
   "S3 ★세션 머리줄(paintTitle)이 같은 함수로 이름을 정한다");
 ok(!/titleFromFirstAsk/.test(chat) && !/function cleanName/.test(chat),
   "S4 ★머리줄이 첫 지시를 이름으로 박아 두지 않고, 제 규칙 사본도 없다");

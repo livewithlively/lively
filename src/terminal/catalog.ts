@@ -175,6 +175,11 @@ export interface Harness {
   //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스도 화면 선택기는 보이되, 같은 프로세스에 거짓 명령을 넣지 않고
   //   같은 작업 자리의 새 프로세스로 맥락을 넘긴다(session-chat.ts handoff).
   runtimeCmd?: { model?: (v: string) => string; effort?: (v: string) => string };
+  // 터미널 입력칸에 **치던 글을 잠깐 치워 두는 키**(원준 2026-10-10: «메시지를 치다가 모델이나 effort 를 바꾸면 제대로 안 돼 …
+  //  치던 내용은 유지된 채로 바꾸고 싶다»). runtimeCmd 는 입력칸에 한 줄을 쳐서 제출하므로, 사람이 치던 글이 있으면 그 뒤에
+  //  `/model …` 이 붙어 한 덩어리로 나갔다. 이 키를 명령 **앞에** 붙여 보내면 하네스가 치던 글을 치워 두었다가 명령이
+  //  끝난 뒤 제자리에 돌려놓는다. 입력칸이 비어 있으면 아무 일도 없다. 대화 런타임(pane 이 셸)에는 붙이지 않는다.
+  runtimeDraftStash?: string;
 }
 // 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
 //  ⚠ `_` 를 허용한다: 종전 정규식(sessions.ts)엔 없어서 opencode 세션 id 가 형식 오류로 400 이 날 자리였다(#1711).
@@ -207,6 +212,9 @@ export const HARNESSES: Harness[] = [
     // 실측(claude 2.1.234 번들): `/model <별칭|풀네임>` · `/effort <low|medium|high|xhigh|max|auto>` 둘 다 인자를 받는
     //  local 커맨드(effort 는 supportsNonInteractive) — 입력창에 한 줄로 쳐서 그 자리에서 바뀐다.
     runtimeCmd: { model: (v) => `/model ${v}`, effort: (v) => `/effort ${v}` },
+    // 실측(claude 2.1.296, tmux): Ctrl+S = chat:stash. 치던 글 + `\x13/effort high` + Enter → «stashed» → 명령 실행 → 치던 글이
+    //  입력칸에 그대로 돌아온다(«Draft restored»). 빈 입력칸에서도 명령만 실행된다.
+    runtimeDraftStash: "\x13",
   },
   {
     key: "codex", label: "Codex", bin: "codex", provider: { id: "openai", label: "OpenAI" },
@@ -452,6 +460,8 @@ export interface SessionInfo {
   lastPrompt?: string;
   // 이름을 누가 지었나(org_session_state.label_source — human·agent·rule·id). 화면은 human 인 이름을 프로젝트명과 같아도 걷지 않는다.
   labelSource?: string;
+  // 이 세션이 맡은 태스크 번호(execution_session.task_id — 세션 = 태스크, #4084). 세션 머리줄이 이름 뒤에 `#번호` 로 적는다.
+  taskNo?: number;
   // 마지막 '작업(busy)' 시각(epoch초) — 클로드가 마지막으로 턴을 돌리고 있던(또는 끝낸) 때. 정렬·카드 시간 표시용.
   //  ⚠ '내가 열어본(브라우저 접속)' 시각은 섞지 않는다(#853) — 열어보기는 작업이 아니다.
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).

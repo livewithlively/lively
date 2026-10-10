@@ -81,7 +81,7 @@ import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js"
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
 import { forkCheckFromNodeStat, forkInheritsTask, forkRefusal, sessionForkInput, shouldAskNodeForTranscript } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
-import { sessionTaskOf } from "../v6/session-task.js";   // #4135 — 복제본이 물려받을 태스크
+import { sessionTaskOf, sessionTaskIdsFor } from "../v6/session-task.js";   // #4135 — 복제본이 물려받을 태스크
 import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
 import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
 
@@ -762,6 +762,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const lm = await labelSourcesFor(rows.map((s) => s.id));
       for (const s of rows) { const v = lm.get(s.id); if (v) s.labelSource = v; }
     } catch { /* 조회 실패 — 값 없이 나간다(화면은 종전 규칙) */ }
+    // 세션이 맡은 태스크 번호 — 세션 머리줄이 이름 뒤에 프로젝트처럼 `#번호` 를 적는다(원준 2026-10-10).
+    try {
+      const rows = [...local, ...remote, ...localRestorable];
+      const tm = await sessionTaskIdsFor(rows.map((s) => s.id));
+      for (const s of rows) { const n = tm.get(s.id); if (n) s.taskNo = n; }
+    } catch { /* 조회 실패 — 번호 없이 나간다 */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
@@ -1295,10 +1301,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       return;
     }
 
+    //  여기부터는 터미널 입력칸에 치는 길이다 — 사람이 치던 글을 치워 두는 키를 앞에 붙인다(catalog runtimeDraftStash).
+    const typed = cmds.map((c) => (h.runtimeDraftStash ?? "") + c);
     if (nodeId) {
       // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
       const { injectPrompt } = await import("../node/session-inject.js");
-      for (const c of cmds) {
+      for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
         catch (e) {
           const msg = (e as Error)?.message ?? String(e);
@@ -1313,7 +1321,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     }
     const { enqueuePrompt, waitOutboxSettled } = await import("../sessions/session-outbox.js");
     const ids: number[] = [];
-    for (const c of cmds) ids.push((await enqueuePrompt(req.params.id, c, { kind: "control" })).id);
+    for (const c of typed) ids.push((await enqueuePrompt(req.params.id, c, { kind: "control" })).id);
     // 큐에 넣고 끝내지 않고 **잠깐 결말을 본다** — 입력창이 떠 있는 보통의 경우 몇 초 안에 끝나고, 그때 화면이
     //  '바꿨다/못 바꿨다'를 그 자리에서 말할 수 있다. 아직 대기 중이면 그 사실 그대로(pending) 돌려준다 —
     //  로그인 화면에 멈춘 세션은 뜨는 즉시 배달자가 넣는다(아웃박스가 들고 있다).

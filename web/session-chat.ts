@@ -281,8 +281,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
     title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요', onclick: () => startRename(),
   }, penIc());
+  //  이름 뒤의 번호 — 이 세션이 맡은 태스크 번호다(세션 = 태스크, #4084). 프로젝트 문패의 `#번호` 와 같은 꼴로 적는다
+  //   (원준 2026-10-10: «세션 제목 뒤에도 프로젝트처럼 #nnnn 해서 세션 번호 같이 적어 달라»). 태스크가 없는 세션(프로젝트 밖)은 안 적는다.
   function paintTitle(): void {
-    if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
+    if (renaming) return;
+    paintTitleName();
+    const no = Number(target.raw?.taskNo || 0);
+    if (no > 0) titleHost.append(el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }));
+  }
+  function paintTitleName(): void {                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
     const tip = [idLabel(titleText) ? '' : titleText, target.id].filter(Boolean).join(' · ');   // 이름 없는 세션은 id 를 두 번 쓰지 않는다
     const f = face();
     const name = f.named ? f.main : '';
@@ -616,6 +623,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let hcats: RunHarness[] = [];
   let obsModel = ''; let obsModelTip = ''; let obsEffort = '';   // 대화 파일이 말한 **실제** 값 — 드롭다운의 '지금'은 이걸 따른다
   let switching = false;
+  //  방금 여기서 바꾼 값 — 대화 파일이 따라오기 전까지 «지금» 자리에 선다(원준 2026-10-10: «Model, Effort 가 바로 반영이 안 된다»).
+  //   관측(obsModel·obsEffort)은 다음 턴이 돌아야 바뀌어서, 그 사이 다시 그릴 때마다 선택기가 옛 값으로 돌아갔다.
+  //   was = 바꿀 때의 관측값. 관측이 그 뒤로 달라지면 그쪽이 사실이므로 이 값은 버린다.
+  const picked: Partial<Record<'model' | 'effort', { v: string; was: string }>> = {};
+  const nowVal = (a: 'model' | 'effort'): string => {
+    const obs = a === 'model' ? obsModel : obsEffort;
+    const pk = picked[a];
+    if (pk && pk.was !== obs) delete picked[a];
+    return picked[a]?.v || obs || startFlag(a);
+  };
   //  obj = 목적격 조사까지 붙인 형태('모델을'·'추론강도를') — 받침 유무로 갈리는데 축이 둘뿐이라 표에 그대로 적는다.
   const AXIS = {
     model: { flag: '--model', ko: '모델', obj: '모델을' },
@@ -638,7 +655,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  showLabel = 관측값('지금 · …') 문구 — 하네스가 뱉는 긴 id 라 읽기 좋게 다듬는다.
   function paintAxis(a: Axis, box: HTMLSelectElement, span: HTMLElement, observed: string,
                      optLabel: (v: string) => string, showLabel: (v: string) => string): void {
-    const known = observed || startFlag(a);          // 관측 > 열 때 지정 — 어느 쪽이든 '지금 이걸로 돈다'는 사실이다
+    void observed;
+    const known = nowVal(a);                         // 방금 바꾼 값 > 관측 > 열 때 지정 — 어느 쪽이든 '지금 이걸로 돈다'는 사실이다
     const shown = known ? showLabel(known) : '';
     if (!canSwitch(a)) { box.hidden = true; chip(span, shown, a === 'model' ? (obsModelTip || known) : undefined); return; }
     span.hidden = true;
@@ -697,8 +715,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
       { v: said(chipProv, selHarness) ? '' : String(target.raw?.harness || '') },
-      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
-      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
+      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(nowVal('model')) : '' },
+      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(nowVal('effort')) : '' },
       // ⚠ 노드는 **윗줄과 무관하게 늘 싣는다** — 어느 컴퓨터에서 도는지는 칩도 선택기도 말하지 않는다.
       { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
@@ -765,6 +783,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
         : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;
       view.setNote(msg);
+      if (!r?.pending) { picked[a] = { v, was: a === 'model' ? obsModel : obsEffort }; paintRun(); }
       // 내가 띄운 안내만 지운다 — 그 사이에 다른 안내가 올라왔으면 그걸 지우면 안 된다(먼저 건 타이머가 나중 걸 지웠다).
       window.setTimeout(() => { if (!destroyed && view.noteEl.textContent === msg) view.setNote(''); }, 3000);
     } catch (e: any) {
