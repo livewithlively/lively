@@ -258,6 +258,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
   const titleHost = el('span', { class: 'sc-titlebox' });
   let titleText = target.label;
+  //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
+  let titleHuman = target.raw?.labelSource === 'human';
   let renaming = false;
   const canRename = (): boolean => !!opts.onRename && target.owned && target.live && !target.raw?.restorable;
   const paneTitle = (): string => String(target.raw?.title || '').trim();
@@ -272,6 +274,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     label: titleText,
     work: paneTitle() || String((target as any).logTitle || ''),
     harness: String(target.raw?.harness || ''),
+    human: titleHuman,
   }, String(target.projectName || '').trim());
   const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
   const penBtn = (): HTMLElement => el('button', {
@@ -330,6 +333,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       try {
         await opts.onRename!(to);
         titleText = to;
+        titleHuman = true;
         toast('세션 이름을 바꿨어요.');
       } catch (e: any) {
         toast('이름을 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
@@ -2374,7 +2378,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
       paintShellBar();                            // #4135 — 열 때는 행이 얇아 «pane 이 셸인가» 를 몰랐을 수 있다(방금 만든 세션)
-      if (t.label && !idLabel(t.label)) titleText = t.label;
+      if (t.label && !idLabel(t.label)) { titleText = t.label; titleHuman = t.raw?.labelSource === 'human'; }
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
       paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다

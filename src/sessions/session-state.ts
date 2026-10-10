@@ -259,6 +259,17 @@ export async function lastPromptsFor(ids: string[]): Promise<Map<string, string>
   for (const row of r.rows) out.set(String(row.id), String(row.last_prompt));
   return out;
 }
+/** 목록 보강용 일괄 조회 — id → label_source(있는 것만). 화면이 «사람이 지은 이름» 을 가려 그 이름을 걷지 않는다(web/lib/sess-name.ts). */
+export async function labelSourcesFor(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    "SELECT id, label_source FROM org_session_state WHERE id = ANY($1::text[]) AND label_source IS NOT NULL",
+    [ids],
+  );
+  for (const row of r.rows) out.set(String(row.id), String(row.label_source));
+  return out;
+}
 
 // #1059 — 사용자 **정상 종료** 표시(claude SessionEnd 훅 보고). setClaudeSessionId 와 **동형**: owner-gated(호출자가 그
 //  box 소유자일 때만) + 레코드 존재 시에만 UPDATE(INSERT 안 함). 재부팅·강제kill·reaper 는 훅이 못 떠서 안 찍히고(중단됨),
