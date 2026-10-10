@@ -49,7 +49,8 @@ function restates(work: string, name: string): boolean {
 }
 
 /** 이름 규칙의 재료 — label = 세션 이름(서버 label, 없으면 id), work = 그 세션이 '하던 일'(pane 제목 → 없으면 대화 제목), harness = 하네스 이름. */
-export interface SessNameInput { label?: string | null; work?: string | null; harness?: string | null }
+/** human = 이 이름을 **사람이** 지었나(서버 label_source === 'human' — 웹에서 고쳤거나 만들 때 적어 준 이름). */
+export interface SessNameInput { label?: string | null; work?: string | null; harness?: string | null; human?: boolean }
 export interface SessFace { main: string; sub: string; named: boolean; untitled: boolean }
 
 /** 세션 행에 쓸 글 — ★프로젝트명 반복을 걷어낸다.
@@ -69,6 +70,11 @@ export function sessNameFace(s: SessNameInput, projName: string): SessFace {
   const tail = projName && label.startsWith(projName) ? /^\s*[·:\-–—_/|][\s·:\-–—_/|]*(.*)$/s.exec(label.slice(projName.length)) : null;
   if (tail) name = tail[1].trim();
   if (projName && name && echoesProject(name, projName)) name = '';
+  // ★사람이 지은 이름은 프로젝트명과 같아도 지우지 않는다(원준 2026-10-10: 프로젝트 «장표 수정 앱» 의 세션 이름을
+  //  «장표 수정 앱» 으로 수없이 고쳤는데 계속 «1006일 회의록 정리» 로 돌아갔다). 저장은 됐는데 위 되풀이 규칙이 그 이름을
+  //  걷고 pane 제목을 세워서, 사람 눈에는 고친 이름이 되돌아간 것이었다. 되풀이를 걷는 까닭은 **기계가 물려준** 이름
+  //  (프로젝트명 그대로)이 목록을 메우기 때문이고, 사람이 일부러 적은 이름은 거기 들지 않는다.
+  if (!name && s.human) name = label;
   if (isMachineLabel(name)) name = '';
   const job = work && !HARNESS_TITLES.has(norm(work)) && !restates(work, name) ? work : '';
   //  named = 이 이름이 **그 세션의 이름**에서 나왔나(라벨). false 면 pane 제목·대화 제목을 빌려 온 것이라

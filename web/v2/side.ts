@@ -194,7 +194,7 @@ const isPast = isPastSess;
 const stLabel = (k: string): string => (SESS_STATES[k] ? SESS_STATES[k].label : k === 'log' ? '기록' : k);
 /** 세션 행에 쓸 글 — 규칙은 lib/sess-name.ts 한 벌이다(세션 머리줄도 같은 것을 부른다, #3870). */
 export function sessText(s: Sess, projName: string): SessFace {
-  return sessNameFace({ label: s.label, work: sessWork(s), harness: s.raw && s.raw.harness }, projName);
+  return sessNameFace({ label: s.label, work: sessWork(s), harness: s.raw && s.raw.harness, human: !!s.raw && s.raw.labelSource === 'human' }, projName);
 }
 // ★내 세션인가 — 얼굴(남의 세션 표시)과 보관(×)이 **같은 판정**을 써야 한다(상민님 2026-08-19:
 //  "윤상민 아바타 같은 게 있는데 왜 있는지 모르겠고, 그것 때문인지 x 버튼이 보이질 않음").

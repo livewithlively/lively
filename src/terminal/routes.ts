@@ -57,7 +57,7 @@ import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode,
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
-import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, claimSessionLabel, updateSessionStateMeta, getSessionStates } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor, setLastPrompt, lastPromptsFor, labelSourcesFor, claimSessionLabel, updateSessionStateMeta, getSessionStates } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑 · #2197 마지막 말
 import { applyTaskMarks, missingOrigins, taskOriginsForRows, visibleOriginStates, type OriginRowLike } from "../node/task-origin.js";   // #4551 — 위탁 워커에 «누가 시켰나» 표식
 import { projectIdForSessionCoord } from "../project/folder-bind.js";   // #4551 — 프로젝트 폴더에서 여는 세션은 그 프로젝트의 세션이다
 import { isWorkSession } from "../sessions/session-kind.js";
@@ -513,6 +513,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const pm = await lastPromptsFor(rows.map((s) => s.id));
       for (const s of rows) { const p = pm.get(s.id); if (p) s.lastPrompt = p; }
     } catch { /* 조회 실패 — 값 없이 나간다(화면 폴백) */ }
+    // 이름의 출처(label_source) — 사람이 지은 이름은 프로젝트명과 같아도 화면이 걷지 않는다(web/lib/sess-name.ts human).
+    try {
+      const rows = [...local, ...remote, ...localRestorable];
+      const lm = await labelSourcesFor(rows.map((s) => s.id));
+      for (const s of rows) { const v = lm.get(s.id); if (v) s.labelSource = v; }
+    } catch { /* 조회 실패 — 값 없이 나간다(화면은 종전 규칙) */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
