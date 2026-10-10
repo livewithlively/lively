@@ -60,7 +60,12 @@ export interface SideCardHost {
   onLeft?: () => void;
   /** 세션 열이 지금 격자의 왼쪽에 서 있나(자리바꿈 전이면 참). 카드가 처음 뜨는 모서리를 고른다 — 세션이 줄어든 쪽. */
   sessionLeft?: () => boolean;
+  /** 카드의 최소화 · 고름(카드를 골랐나 = 불투명)이 바뀌었을 때. 셸이 이 세션의 것으로 적는다 — 새로고침 · 세션 전환 뒤
+   *  restore 로 되돌려 준다(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»). */
+  onState?: (s: CardState) => void;
 }
+/** 세션마다 적어 두는 카드 상태. fold = 최소화(알약) · pick = 사람이 카드를 골랐나(불투명 · 터미널 초점). */
+export interface CardState { fold: boolean; pick: boolean }
 
 export interface SideCardHandle {
   active: () => boolean;
@@ -70,8 +75,8 @@ export interface SideCardHandle {
    *  `back` 을 부른다 — 셸은 거기서 자리바꿈을 판정하고 폭을 적는다. 세션 열이 최소 폭에 닿고 손이 조금이라도 더 가면
    *  이 구간이라, 여기서 판정을 건너뛰면 자리바꿈이 사라진다(원준 2026-10-01 «세션이 30% 로 작아져도 좌우가 안 바뀐다»). */
   onRelease: (back?: () => void) => boolean;
-  /** 세션에 들어올 때. 움직임 없이 그 세션의 상태를 입힌다. */
-  restore: (card: boolean) => void;
+  /** 세션에 들어올 때. 움직임 없이 그 세션의 상태를 입힌다. st = 그 세션에 적어 둔 최소화 · 고름(없으면 펼침 · 고름). */
+  restore: (card: boolean, st?: Partial<CardState>) => void;
   /** 사이드바 여닫기 · 폭 문턱이 바뀐 뒤 다시 그린다. */
   sync: () => void;
   /** 세션을 열로 되돌린다. */
@@ -248,12 +253,29 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     const a = document.activeElement;
     return !!a && a !== document.body && colMain.contains(a);
   };
-  function paintLive(): void { body.classList.toggle('cm-live', isLive({ shown: shown(), entering, picked })); }
+  function paintLive(): void {
+    body.classList.toggle('cm-live', isLive({ shown: shown(), entering, picked }));
+    //  고름이 바뀌면 액자에도 알린다 — 비치는(고르지 않은) 카드의 터미널은 연결될 때 스스로 초점을 가져가지 않는다.
+    const k = shown() + ':' + picked;
+    if (k !== glassKey) { glassKey = k; postGlass(); }
+    report();
+  }
+  let glassKey = '';
+  /** 최소화 · 고름이 바뀌었으면 셸에 알린다(카드가 보일 때만 — 안 보이는 동안의 값은 사람이 고른 것이 아니다). */
+  let lastState = '';
+  function report(): void {
+    if (dead || !shown()) return;
+    const k = fold + ':' + picked;
+    if (k === lastState) return;
+    lastState = k;
+    try { h.onState?.({ fold, pick: picked }); } catch (_) { /* 셸이 못 적어도 화면은 된다 */ }
+  }
+  /** 액자에 보낼 비침 상태. idle = 비치고 있고 사람이 카드를 고르지 않았다(곁칸을 골랐다). */
+  const glassMsg = (): { type: string; cmd: string; on: boolean; idle: boolean } => ({ type: 'lively-term', cmd: 'glass', on: shown(), idle: shown() && !picked });
   /** 카드 안의 터미널 액자에 비침을 켜고 끈다. 액자가 아직 안 떴으면 받지 못하는데, 뜨면 상태를 알려 오므로(onFrameMsg) 그때 다시 보낸다. */
   function postGlass(): void {
-    const v = shown();
     for (const f of Array.from(colMain.querySelectorAll('iframe.sc-term-frame')) as HTMLIFrameElement[]) {
-      try { f.contentWindow?.postMessage({ type: 'lively-term', cmd: 'glass', on: v }, location.origin); } catch (_) { /* 액자가 닫혔다 */ }
+      try { f.contentWindow?.postMessage(glassMsg(), location.origin); } catch (_) { /* 액자가 닫혔다 */ }
     }
   }
   function onFrameMsg(ev: MessageEvent): void {
@@ -261,7 +283,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (ev.origin !== location.origin || !m || m.type !== 'lively-term-status') return;
     for (const f of Array.from(colMain.querySelectorAll('iframe.sc-term-frame')) as HTMLIFrameElement[]) {
       const w = f.contentWindow;
-      if (w && w === ev.source) { try { w.postMessage({ type: 'lively-term', cmd: 'glass', on: shown() }, location.origin); } catch (_) { /* noop */ } }
+      if (w && w === ev.source) { try { w.postMessage(glassMsg(), location.origin); } catch (_) { /* noop */ } }
     }
   }
   //  사람이 무엇을 골랐나 — 카드 안이면 고름, 사이드바 안이면 풂. 그 밖(카드에서 연 창 · 왼쪽 목록 · 레일)은 그대로 둔다
@@ -442,15 +464,18 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     clearOver();
   }
 
-  function restore(v: boolean): void {
+  function restore(v: boolean, st?: Partial<CardState>): void {
     halt();
     on = !!v;
-    //  다시 불러온 카드(세션 전환 · 새로고침)도 펼친 카드다 — 앞 세션에서 최소화했던 것이 따라오지 않는다(리뷰 2026-10-09).
-    fold = false;
+    //  그 세션에 적어 둔 최소화 · 고름을 되살린다(새로고침 · 세션 전환). 앞 세션의 값은 따라오지 않는다 — 세션마다 적는다.
+    //   적어 둔 값이 없으면(옛 기록) 펼친 카드 · 고른 것 = 종전에 새로고침 뒤 터미널이 초점을 가져가 끝나던 모습.
+    fold = st?.fold === true;
     window.clearTimeout(pillTimer);
-    picked = focusInCard();
+    picked = typeof st?.pick === 'boolean' ? st.pick : true;
+    lastState = fold + ':' + picked;     // 되살린 값을 도로 적지 않는다
     const cap = capNow();
     if (on && cap !== null && h.sideOn() && !narrow()) h.setSideW(cap, false);
+    wasShown = shown();                  // 되살린 고름을 «다시 보이기 시작함» 의 초점 판정이 덮지 않게(paint)
     paint();
     if (on) settleSoon();
   }
