@@ -172,8 +172,15 @@ export interface ContradictionCandidate {
 //   LIMIT 을 ef_search 와 같게 두면 후보 목록 꼬리(30~40위)의 리콜이 가장 나쁘다. 자기 행·비활성·폴더가 그 자리를
 //   먹은 뒤 남는 게 꼬리라 손실이 겹친다. 그래서 탐색 폭은 100 으로 넓히고 쓰는 이웃은 40 으로 둔다
 //   (pgvector 권장 ef_search > LIMIT). ef_search 는 트랜잭션 안 SET LOCAL 로만 건다 — 세션 SET 은 풀 커넥션에 샌다.
+//  플래너는 이 LATERAL 에서 HNSW 경로를 만들긴 하지만 비용 추정에서 «순차 스캔 + top-N 정렬» 에 진다(지식 수천 건이면
+//   HNSW 시작 비용 추정이 순차 스캔 전체 비용보다 크다). 그래서 대체 경로(seqscan·bitmapscan·sort)를 SET LOCAL 로 끈다.
+//   끄지 않으면 행마다 테이블 전체를 훑어 수천 건에서 수 분이 걸린다 — prod EXPLAIN ANALYZE(2026-10-11)에서 행당
+//   33ms(순차) 대 1.2ms(HNSW), 전체 6.3초. 끄는 설정은 «금지» 가 아니라 «비용 가산» 이라 다른 경로가 없으면 그대로 쓰인다
+//   (바깥 ORDER BY similarity 의 정렬처럼). 검증: 같은 SQL 을 이 SET LOCAL 아래 EXPLAIN 해 Index Scan using
+//   knowledge_embedding_hnsw 가 보이는지.
 export const CONTRADICTION_NEIGHBORS = 40;
 export const CONTRADICTION_EF_SEARCH = 100;
+export const CONTRADICTION_PLANNER_OFF = ["enable_seqscan", "enable_bitmapscan", "enable_sort"] as const;
 
 /** 후보 SQL 조립(순수) — 술어 보존을 테스트가 문자열로 못박는다. conds 는 scopeConds(…,"k") 결과. */
 export function contradictionCandidateSql(conds: string[], distP: string, limP: string): string {
@@ -214,6 +221,7 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL hnsw.ef_search = ${CONTRADICTION_EF_SEARCH}`);
+    for (const g of CONTRADICTION_PLANNER_OFF) await client.query(`SET LOCAL ${g} = off`);
     rows = (await client.query(contradictionCandidateSql(conds, distP, limP), params)).rows as Record<string, unknown>[];
     await client.query("COMMIT");
   } catch (e) {

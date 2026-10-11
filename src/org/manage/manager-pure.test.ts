@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsLlm, MANAGER_KIND_LABEL, type ManagerKind } from "../store/managers.js";
 import { applyAction, statusForManagerResults, type ManagerRunResult } from "./run-manager.js";
-import { contradictionCandidateSql, CONTRADICTION_NEIGHBORS } from "./detectors.js";
+import { contradictionCandidateSql, CONTRADICTION_NEIGHBORS, CONTRADICTION_PLANNER_OFF } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 
 let pass = 0;
@@ -219,6 +219,10 @@ console.log(`\n${pass} passed`);
   const DET = src("./detectors.ts");
   const RUN = src("./run-manager.ts");
   assert.match(DET, /SET LOCAL hnsw\.ef_search = \$\{CONTRADICTION_EF_SEARCH\}/, "탐색 폭을 안 넓혀 이웃 40개가 후보 목록 꼬리로 채워진다");
+  //  대체 경로를 안 끄면 플래너가 HNSW 대신 행마다 순차 스캔을 골라 prod 에서 statement timeout 이 난다(2026-10-11).
+  assert.match(DET, /for \(const g of CONTRADICTION_PLANNER_OFF\) await client\.query\(`SET LOCAL \$\{g\} = off`\)/, "플래너 대체 경로를 끄지 않는다");
+  assert.deepEqual([...CONTRADICTION_PLANNER_OFF].sort(), ["enable_bitmapscan", "enable_seqscan", "enable_sort"],
+    "seqscan·bitmapscan·sort 셋 다 꺼야 HNSW 를 고른다(seqscan 만 끄면 lifecycle 비트맵 스캔으로 간다)");
   assert.ok(!/client\.query\(`SET hnsw/.test(DET), "세션 SET 은 풀 커넥션에 새어 다른 쿼리의 실행계획을 바꾼다");
   assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\) \};/,
     "모순 관리기 접수 실패가 결과에 error 로 안 실려 크론 상태·감시가 ok 로 읽는다");
