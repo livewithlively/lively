@@ -123,9 +123,10 @@ const isTaskId = (v: unknown): v is number | string =>
  * 요약에서 이 회차의 위탁을 뽑는다(순수). 위탁을 내지 않는 잡이면 null.
  *  · 레인 목록(`DELEGATION_LISTS`)의 각 항목 — `task_id`, 여러 레포로 갈라 낸 관리기는 `task_ids`.
  *  · 목록에서 id 를 못 찾으면 최상위 `task_id`(단일 위탁 잡의 접수·skip 요약, 또는 되먹임이 덧댄 것).
- *  · `error` 가 있는 레인 항목은 id 유무와 무관하게 확정된 실패로 따로 센다 — id 없이 error 만이면 접수 전 실패,
- *    id 와 error 가 같이 있으면 일부만 접수된 것(코드 비교 관리기가 레포 몇 개만 접수에 실패한 경우)이다.
- *    id 가 있다고 error 를 버리면 남은 위탁이 done 일 때 회차가 정상으로 읽힌다.
+ *  · 확정된 실패로 따로 세는 것: id 없이 `error` 만 있는 항목(접수 전 실패), 그리고 `partial_error`
+ *    (코드 비교 관리기가 레포 몇 개만 접수에 실패 — 남은 위탁이 done 이어도 그 레포는 빠졌다).
+ *    id 와 `error` 가 같이 있는 항목은 접수 후 배정 오류(scheduler/actions/_headless.ts 의 배치 오류)라 태스크가 큐에
+ *    남아 나중에 돌 수 있다 — 실패로 확정하지 않고 그 id 의 결과로 판정한다.
  */
 export function delegatedWork(summary: unknown): DelegatedWork | null {
   if (!summary || typeof summary !== "object") return null;
@@ -138,7 +139,8 @@ export function delegatedWork(summary: unknown): DelegatedWork | null {
     const o = e as Record<string, unknown>;
     const own = [o.task_id, ...(Array.isArray(o.task_ids) ? o.task_ids : [])].filter(isTaskId).map(String);
     ids.push(...own);
-    if (typeof o.error === "string" && o.error.trim()) entryErrors.push(o.error);
+    if (!own.length && typeof o.error === "string" && o.error.trim()) entryErrors.push(o.error);
+    if (typeof o.partial_error === "string" && o.partial_error.trim()) entryErrors.push(o.partial_error);
   }
   if (!ids.length && isTaskId(s.task_id)) ids.push(String(s.task_id));
   if (!ids.length && !entryErrors.length) return null;

@@ -22,6 +22,8 @@ export interface ManagerRunResult {
   /** 레포별로 갈라 낸 위탁들(코드 비교). */
   task_ids?: number[];
   skipped?: string; error?: string;
+  /** 레포별 위탁 중 일부만 접수에 실패한 사유(코드 비교) — 나머지 레포는 돌았으므로 error 와 칸을 나눈다. */
+  partial_error?: string;
 }
 
 /** 접수 결과 요약에서 오류 문장을 꺼낸다(없으면 기본 문구). */
@@ -34,7 +36,7 @@ function errorOf(summary: unknown): string {
  * 관리기 결과 묶음 → 크론 잡 status(순수).
  *  · 전멸(모든 관리기가 error 이고 접수한 위탁도 0) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
  *  · 일부만 실패 → `warn` — 잡은 돌았고 산출물에 실패가 섞였다는 뜻(카나리 액션과 같은 관례). 관리기 하나 안에서
- *    레포 일부만 접수에 실패한 경우(error 와 task_ids 가 같이 있음)도 여기다 — error 로 올리면 레포 하나가
+ *    레포 일부만 접수에 실패한 경우(partial_error)도 여기다 — error 로 올리면 레포 하나가
  *    임계 주수만큼 계속 깨질 때 나머지 레포 비교까지 브레이커가 끈다. 브레이커는 이걸
  *    성공으로 보고 카운터를 0 으로 돌린다. 한 관리기만 계속 깨지는 것은 크론 감시(ops/cron-watch.ts)가
  *    요약의 레인 error 로 따로 잡는다(delegatedWork 의 entryErrors).
@@ -42,11 +44,11 @@ function errorOf(summary: unknown): string {
  *  주 1회 잡이면 브레이커는 임계(engine.ts DEFAULT_MAX_FAIL_STREAK 또는 잡의 max_fail_streak) 회수만큼의 **주** 동안
  *   연속 전멸해야 잡을 끈다 — 그 전에 사람에게 닿는 신호는 크론 감시 알림이다.
  */
-export function statusForManagerResults(results: readonly Pick<ManagerRunResult, "error" | "task_ids">[]): "ok" | "warn" | "error" {
-  const failed = results.filter((r) => typeof r.error === "string" && r.error.length > 0);
-  if (!failed.length) return "ok";
-  const wiped = failed.length === results.length && failed.every((r) => !r.task_ids?.length);
-  return wiped ? "error" : "warn";
+export function statusForManagerResults(results: readonly Pick<ManagerRunResult, "error" | "partial_error">[]): "ok" | "warn" | "error" {
+  const has = (v: unknown): boolean => typeof v === "string" && v.length > 0;
+  const failed = results.filter((r) => has(r.error)).length;
+  if (failed && failed === results.length) return "error";
+  return failed || results.some((r) => has(r.partial_error)) ? "warn" : "ok";
 }
 
 /**
@@ -155,15 +157,17 @@ export async function runManager(
       const taskId = taskIdOf(r.summary);
       if (taskId) taskIds.push(taskId);
     }
-    //  레포별 접수 실패도 결과의 error 로 싣는다 — 크론 상태(statusForManagerResults)와 감시(cron-watch delegatedWork 의
-    //   entryErrors)가 읽는 칸은 error 뿐이다. 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 실패로 드러낸다.
+    //  레포별 접수 실패를 결과에 싣는다 — 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 감시(cron-watch
+    //   delegatedWork)가 실패로 센다. 전부 실패면 error, 일부면 partial_error 다: 위탁 id 와 error 가 같이 실린 항목은
+    //   «접수 후 배정 오류»(scheduler/actions/_headless.ts 의 배치 오류)라 감시가 id 의 결과를 기다려야 하므로 칸을 나눈다.
     const failedRepos = out.filter((o) => (o as { status?: string }).status === "error");
     await recordManagerRun(m.id, failedRepos.length ? "error" : "ok", { repos: out });
     const failMsg = failedRepos.length
       ? `레포 ${failedRepos.length}/${out.length} 접수 실패: ` + failedRepos.map((o) => `${(o as { repo?: string }).repo}: ${errorOf(o)}`).join(" · ")
       : null;
     return { ...base, candidates: cands.length + docs.length,
-      ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}), ...(failMsg ? { error: failMsg } : {}) };
+      ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}),
+      ...(failMsg ? (taskIds.length ? { partial_error: failMsg } : { error: failMsg }) : {}) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });

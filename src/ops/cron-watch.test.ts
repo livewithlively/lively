@@ -80,10 +80,14 @@ const st = (o: Record<string, string>): Map<string, BatchTaskState> => new Map(O
   assert.equal(cronPhaseOf("ok", noRunner), "failing", "접수 전 실패는 조회 없이도 실패");
   assert.equal(cronPhaseOf("ok", { managers: [{ manager: "m1", kind: "contradiction", error: "DB 오류" }] }), "failing", "관리기 실행 오류");
   //  일부 레포만 접수 실패한 코드 비교 관리기 — 남은 위탁이 done 이어도 회차는 실패다(id 가 있다고 error 를 버리면 정상으로 읽힌다).
-  const partial = { managers: [{ manager: "m2", kind: "code_drift", task_ids: [8, 9], error: "레포 1/3 접수 실패: r3: 헤드리스 접수 실패" }] };
+  const partial = { managers: [{ manager: "m2", kind: "code_drift", task_ids: [8, 9], partial_error: "레포 1/3 접수 실패: r3: 헤드리스 접수 실패" }] };
   assert.deepEqual(delegatedWork(partial), { ids: ["8", "9"], entryErrors: ["레포 1/3 접수 실패: r3: 헤드리스 접수 실패"] });
   assert.equal(cronPhaseOf("warn", partial, st({ 8: "done", 9: "done" })), "failing", "일부 접수 실패는 남은 위탁이 성공해도 실패");
   assert.equal(cronPhaseOf("warn", partial), "failing", "조회 없이도 실패");
+  //  접수 후 배정 오류(_headless.ts 배치 오류) — 태스크는 큐에 남아 나중에 돌 수 있으니 id 의 결과로 판정한다.
+  const assignErr = { batches: [{ distiller: "A", error: "배치 오류: x", task_id: 3 }] };
+  assert.deepEqual(delegatedWork(assignErr), { ids: ["3"], entryErrors: [] });
+  assert.equal(cronPhaseOf("ok", assignErr, st({ 3: "done" })), "ok", "배정 오류 뒤 결국 돌았으면 정상");
   assert.equal(delegatedPhaseOf({ ids: ["1"], entryErrors: ["x"] }, st({ 1: "running" })), "failing",
     "확정된 실패가 있으면 다른 레인을 기다리지 않는다");
 }

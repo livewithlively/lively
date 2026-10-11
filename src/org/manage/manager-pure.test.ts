@@ -186,8 +186,8 @@ await t("모순 후보 SQL 이 기존 술어를 전부 보존한다", () => {
 //  timeout 으로 죽어도 크론 last_status 에 ok 가 찍힌다(2026-10-11 실제로 그랬다).
 await t("관리기 결과 → 크론 status 표", () => {
   const E = { error: "canceling statement due to statement timeout" };
-  const P = { error: "레포 1/3 접수 실패: r2: 헤드리스 접수 실패", task_ids: [8, 9] };
-  const rows: [Pick<ManagerRunResult, "error" | "task_ids">[], string, string][] = [
+  const P = { partial_error: "레포 1/3 접수 실패: r2: 헤드리스 접수 실패" };
+  const rows: [Pick<ManagerRunResult, "error" | "partial_error">[], string, string][] = [
     [[{}], "ok", "성공 하나"],
     [[{}, {}], "ok", "전부 성공"],
     [[E], "error", "하나뿐인 관리기가 실패"],
@@ -196,8 +196,8 @@ await t("관리기 결과 → 크론 status 표", () => {
     [[{}, E, {}], "warn", "가운데 하나 실패"],
     [[{ error: "" }], "ok", "빈 error 문자열은 실패가 아니다"],
     [[P], "warn", "하나뿐인 관리기가 레포 일부만 접수 실패 — 나머지 레포는 돌았다"],
-    [[P, E], "warn", "전부 error 여도 접수된 위탁이 있으면 전멸이 아니다"],
-    [[{ error: "x", task_ids: [] }], "error", "빈 task_ids 는 접수 0 이다"],
+    [[P, E], "warn", "한 관리기는 레포 일부라도 돌았으면 전멸이 아니다"],
+    [[P, {}], "warn", "partial_error 만 있어도 경고"],
   ];
   for (const [input, want, why] of rows) assert.equal(statusForManagerResults(input), want, why);
   // skipped(볼 것 없음)는 성공이다 — 실패로 세면 후보 0건인 주마다 브레이커가 돈다
@@ -222,7 +222,8 @@ console.log(`\n${pass} passed`);
   assert.ok(!/client\.query\(`SET hnsw/.test(DET), "세션 SET 은 풀 커넥션에 새어 다른 쿼리의 실행계획을 바꾼다");
   assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\) \};/,
     "모순 관리기 접수 실패가 결과에 error 로 안 실려 크론 상태·감시가 ok 로 읽는다");
-  assert.match(RUN, /\.\.\.\(failMsg \? \{ error: failMsg \} : \{\}\)/, "코드 비교 관리기의 레포 접수 실패(일부 포함)가 error 로 안 실려 상태·감시가 ok 로 읽는다");
+  assert.match(RUN, /\.\.\.\(failMsg \? \(taskIds\.length \? \{ partial_error: failMsg \} : \{ error: failMsg \}\) : \{\}\)/,
+    "코드 비교 관리기의 레포 접수 실패가 결과에 안 실리면 상태·감시가 ok 로 읽는다(전멸=error, 일부=partial_error)");
   assert.ok(!/failed_repos/.test(RUN), "아무도 읽지 않는 칸에 실패를 실어 다시 묻는다");
   console.log("ok  배선 — ef_search·접수 실패 노출");
 }
