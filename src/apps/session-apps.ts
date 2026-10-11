@@ -6,11 +6,14 @@
 //  («기능에 맥락이 속하는 게 아니라 맥락에 기능이 속한다»). 그래서 토큰을 바꾸지 않고 **세션–앱 연결 기록**을 둔다.
 //
 // ── 판정 (계획 지식 crm-dogfood-app-builder-plan-4200 §6-4 e) ───────────────────
-//  store_* 가 앱 principal 없이 오면 여기서 본다: ① 요청이 말한 세션(x-lively-session)의 **주인**이 토큰의 사람인가
+//  store_* 가 앱 principal 없이 오면 여기서 본다: ① 토큰의 사람이 요청이 말한 세션(x-lively-session)에 **들어갈 수 있는 사람**(연 사람 · 초대받은 사람)인가
 //   ② 그 세션에 그 앱이 **지금** 붙어 있나 ③ 그 사람이 그 앱에 동의(grant)했고 그 도구가 동의 범위 안인가.
 //  셋 다 **매 호출** 다시 읽는다(캐시 없음) — 떼는 순간부터 막혀야 하기 때문이다. 조회 셋은 전부 PK·부분 인덱스라 싸다.
 //  ⚠ x-lively-session 은 형식만 검증된 자기주장이다(CapabilityCtx.session 주석). 그래서 ①이 필요하다 —
-//   남의 세션 id 를 말해도 그 세션의 주인이 아니면 그 세션에 붙은 앱을 못 쓴다.
+//   남의 세션 id 를 말해도 그 세션에 들어갈 수 없는 사람이면 그 세션에 붙은 앱을 못 쓴다.
+//  ★ 처음엔 «주인만» 이었다(세션 하나에 사람 하나를 전제로 만들었다). 초대받아 같이 일하는 사람이 앱을 못 붙이고 못 쓰는 것은
+//   의도가 아니라 빠진 경우였다(원준 2026-10-11 «초대받은 세션에서 못 하게 할 이유가 뭐임») — 들어갈 수 있는 사람이면 된다.
+//   ③(그 사람 자신의 동의)이 사람마다 따로라, 초대받은 사람도 제가 동의한 앱 · 범위까지만 쓴다.
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import { itemsPool } from "../db/client.js";
@@ -84,22 +87,43 @@ export async function sessionOwnerOf(sessionId: string): Promise<string | null> 
 
 export interface AttachDeps {
   sessionOwner: (sessionId: string) => Promise<string | null>;
+  /** 그 세션에 들어갈 수 있는 사람인가(초대받은 사람 — 주인은 sessionOwner 로 먼저 통과한다). 없으면 주인만. */
+  canEnter?: (sessionId: string, member: string) => Promise<boolean>;
   listAttached: (sessionId: string) => Promise<SessionAppRow[]>;
   getApp: (appId: string) => Promise<OrgApp | null>;
   getGrant: (appId: string, memberId: string) => Promise<AppGrantRow | null>;
 }
 const liveDeps: AttachDeps = {
   sessionOwner: sessionOwnerOf,
+  canEnter: sessionCanEnter,
   listAttached: listAttachedApps,
   getApp: (id) => getApp(id),
   getGrant: getActiveGrant,
 };
 
-/** 세션 주인만 — 붙이기·떼기·붙은 앱 쓰기의 공통 첫 관문. */
-export async function requireSessionOwner(sessionId: string, member: string, deps: Pick<AttachDeps, "sessionOwner"> = liveDeps): Promise<void> {
+/** 그 세션에 들어갈 수 있는 사람(연 사람 · 초대받은 사람) — 붙이기·떼기·붙은 앱 쓰기의 공통 첫 관문. */
+export async function requireSessionParticipant(sessionId: string, member: string, deps: Pick<AttachDeps, "sessionOwner" | "canEnter"> = liveDeps): Promise<void> {
   const owner = await deps.sessionOwner(sessionId);
   if (!owner) throw new HttpError(404, `세션을 찾을 수 없습니다: ${sessionId}`);
-  if (owner !== member) throw new HttpError(403, "이 세션을 연 사람만 앱을 붙이고 떼고, 붙은 앱의 데이터를 쓸 수 있습니다");
+  if (owner === member) return;
+  if (deps.canEnter && (await deps.canEnter(sessionId, member).catch(() => false))) return;
+  throw new HttpError(403, "이 세션에 들어갈 수 있는 사람(연 사람 · 초대받은 사람)만 앱을 붙이고 떼고, 붙은 앱의 데이터를 쓸 수 있습니다");
+}
+
+/** 초대받아 그 세션에 들어갈 수 있는 사람인가 — 세션 화면에 들어가는 판정(canAttach)과 같은 것을 쓴다(숨긴 프로젝트 제약 포함). */
+export async function sessionCanEnter(sessionId: string, member: string): Promise<boolean> {
+  const { canAttach } = await import("../terminal/sessions.js");
+  return canAttach(sessionId, member);
+}
+
+/** 그 세션의 사람들(연 사람 + 초대받은 사람) — 앱 알림을 같이 받을 사람. 모르면 빈 배열. */
+export async function sessionPeopleOf(sessionId: string): Promise<string[]> {
+  const st = await getSessionState(sessionId).catch(() => undefined);
+  const out = new Set<string>();
+  if (st?.owner) out.add(st.owner);
+  for (const m of st?.invites ?? []) if (m) out.add(m);
+  if (!out.size) { const o = await sessionOwnerOf(sessionId); if (o) out.add(o); }
+  return [...out];
 }
 
 /** 앱이 쓸 수 있는 상태인가 — 없음 404 · 꺼짐/설치 중 409. */
@@ -118,7 +142,7 @@ export async function requireAttachedApp(
   q: { sessionId: string; member: string; appId?: string | null; tool: string },
   deps: AttachDeps = liveDeps,
 ): Promise<string> {
-  await requireSessionOwner(q.sessionId, q.member, deps);
+  await requireSessionParticipant(q.sessionId, q.member, deps);
   const attached = await deps.listAttached(q.sessionId);
   const want = String(q.appId ?? "").trim();
   let appId: string;
@@ -149,6 +173,12 @@ export async function requireAttachedApp(
 //  AI 가 세션에서 쓴 행이 사람이 보는 앱 화면에 반영되는 길이 이것이다(9/21 «AI 와 사람이 같은 화면»).
 //  ⚠ 비치명 — 알림이 실패해도 쓰기는 이미 성공했다. 구독자가 없으면 버스가 즉시 돌아온다(핫패스 부담 없음).
 let seq = 0;
+/** 한 일을 한 사람과, 그 세션에 같이 있는 사람들에게 — 초대받은 사람이 붙이거나 쓴 것이 연 사람의 화면에도(그 반대도) 곧바로 보이게. */
+export function publishAppEventToSession(actor: string, sessionId: string | null | undefined, ev: Omit<NotifyAppEvent, "type" | "key" | "ts" | "ws">): void {
+  publishAppEvent(actor, ev);
+  if (!sessionId) return;
+  void sessionPeopleOf(sessionId).then((people) => { for (const m of people) if (m !== actor) publishAppEvent(m, ev); }).catch(() => { /* 비치명 */ });
+}
 export function publishAppEvent(member: string, ev: Omit<NotifyAppEvent, "type" | "key" | "ts" | "ws">): void {
   try {
     const ts = Date.now();

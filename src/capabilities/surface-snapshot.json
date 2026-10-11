@@ -5003,7 +5003,7 @@
   "rest": [
    "GET /api/ui/apps/:id/files"
   ],
-  "input_hash": "fd5047ae1e36047f"
+  "input_hash": "2a700155265553fe"
  },
  {
   "name": "org_app_project_file",
@@ -5013,7 +5013,7 @@
   "rest": [
    "GET /api/ui/apps/:id/file"
   ],
-  "input_hash": "3f0f97da32fb2635"
+  "input_hash": "0f7eb0eddc7e4175"
  },
  {
   "name": "org_app_chat_send",

@@ -50,8 +50,8 @@ function buildCsp(csp?: AppCsp): string {
 }
 
 /** CSP meta + SDK 런타임을 문서 머리에 끼운다(doctype 뒤 · 없으면 맨 앞). srcdoc 은 HTTP 헤더가 없어 CSP 는 meta 로만. */
-function wrapAppHtml(html: string, csp?: AppCsp): string {
-  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>';
+function wrapAppHtml(html: string, csp?: AppCsp, extra?: string): string {
+  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>' + (extra ? '<script>' + extra + '</script>' : '');
   const m = /<!doctype[^>]*>/i.exec(html);
   if (m) { const i = m.index + m[0].length; return html.slice(0, i) + head + html.slice(i); }
   return head + html;
@@ -87,12 +87,14 @@ export interface AppUiMountOpts {
   /** #4443 앱 화면 안 글 상자에 초점이 들었다(true) · 났다(false). SDK 런타임이 바뀔 때만 알린다(ui/typing). 새 문서 · 다시 불러오기 ·
    *  내려가기에선 호스트가 false 를 한 번 부른다(옛 문서는 «났다» 를 못 보낸다). 없으면 버린다. */
   onTyping?: (on: boolean) => void;
+  /** #4592 앱 만들기 — 띄우는 쪽이 앱 문서에 함께 넣는 스크립트(찍어서 의견의 탐침). 셸 코드만 넘긴다(앱이 주는 것이 아니다). */
+  extraScript?: string;
 }
 export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
-  const doc = wrapAppHtml(data.html, data.csp);
+  const doc = wrapAppHtml(data.html, data.csp, opts?.extraScript);
   const frame = el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || data.title || appId,
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
@@ -128,7 +130,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -203,14 +205,23 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       //  ★ 세션은 이 프레임을 띄운 쪽(opts)이 안다 — chat/send 와 같은 까닭(앱이 말한 세션 id 를 믿으면 남의 세션 프로젝트를 읽는 통로가 된다).
       const sid = opts?.sessionId ?? '';
       if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다' } }); return; }
-      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown };
+      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown; scope?: unknown; q?: unknown; project?: unknown };
       const qs = new URLSearchParams({ session_id: sid });
       const list = msg.method === 'files/list';
       if (list) {
         const ext = (Array.isArray(p.ext) ? p.ext : (p.ext == null ? [] : [p.ext])).map((x) => String(x)).filter(Boolean);
         if (ext.length) qs.set('ext', ext.join(','));
         if (p.limit != null && Number.isFinite(Number(p.limit))) qs.set('limit', String(Math.round(Number(p.limit))));
-      } else qs.set('path', String(p.path ?? ''));
+        // #4629 — 전체 자료(볼 수 있는 모든 프로젝트). 넓은 능력이라 서버가 제 선언 · 제 동의(app_workspace_files)로 따로 본다.
+        if (p.scope === 'all') { qs.set('scope', 'all'); if (typeof p.q === 'string' && p.q.trim()) qs.set('q', p.q.trim().slice(0, 100)); }
+      } else {
+        qs.set('path', String(p.path ?? ''));
+        //  프로젝트를 지목했는데 값이 이상하면 붙은 프로젝트로 조용히 돌리지 않는다(같은 이름의 다른 파일이 읽힌다).
+        if (p.project != null) {
+          if (typeof p.project !== 'number' || !Number.isInteger(p.project) || p.project <= 0) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: 'project 는 전체 자료 목록이 준 project_id(양의 정수)여야 합니다' } }); return; }
+          qs.set('project_id', String(p.project));
+        }
+      }
       const read = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + (list ? '/files?' : '/file?') + qs.toString());
       void read()
         .catch(async (e: any) => {
@@ -270,17 +281,25 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
     openFrame = f;
-    uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
+    //  화면 가득(#4592 원준 2026-10-09 «사이드바도 그 무엇도 없이 그것에만») — 창 크기 ⇄ 화면 가득. 고른 것은 앱마다 이 브라우저에 남는다.
+    const fullKey = 'lively_v2_appui_full:' + appId;
+    let full = false; try { full = localStorage.getItem(fullKey) === '1'; } catch (_) { /* noop */ }
+    const fullBtn = el('button', { class: 'btn btn-ghost btn-sm v2-appui-full', type: 'button' }) as HTMLButtonElement;
+    const paintFull = (): void => { (uiEl as HTMLElement | null)?.classList.toggle('full', full); fullBtn.textContent = full ? '창 크기로' : '화면 가득'; fullBtn.title = full ? '창 크기로 줄인다' : '사이드바 없이 화면 전체로 넓힌다'; };
+    fullBtn.onclick = () => { full = !full; try { localStorage.setItem(fullKey, full ? '1' : '0'); } catch (_) { /* noop */ } paintFull(); };
+    uiEl = el('div', { class: 'v2-appui-ov' + (full ? ' full' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
         onclick: (e: Event) => { if (e.target === uiEl) closeAppUi(); } },
       el('div', { class: 'v2-appui' },
         el('div', { class: 'v2-appui-h' },
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
+          fullBtn,
           //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
         f.root));
     document.body.append(uiEl as HTMLElement);
+    paintFull();
     document.addEventListener('keydown', uiKey);
     return true;
   } catch (e: any) {

@@ -8,12 +8,13 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
-import { listAttachedApps, sessionOwnerOf } from "../apps/session-apps.js";
+import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/session-apps.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, listProjectFiles, readProjectFile, type ProjectFilesDeps, type ProjectRef } from "../apps/app-project-files.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
 
 const rate = new RateWindow(PROJECT_FILES_PER_MINUTE);
+const madeCache = new Map<string, { at: number; paths: string[] }>();
 
 async function storeOf(project: ProjectRef, memberId: string) {
   const { projectStorage } = await import("../project/project-storage.js");
@@ -24,6 +25,7 @@ const liveDeps: ProjectFilesDeps = {
   getApp: (id) => getApp(id),
   getGrant: getActiveGrant,
   sessionOwner: sessionOwnerOf,
+  canEnter: sessionCanEnter,
   listAttached: listAttachedApps,
   projectOfSession: async (sid) => {
     const { latestProjectForSession } = await import("../v6/project-session-store.js");
@@ -47,6 +49,28 @@ const liveDeps: ProjectFilesDeps = {
     if (content == null) return null;
     return { content, size: st.size, mtime: st.mtime };
   },
+  //  전체 자료(#4629) — 목록은 자료 색인에서(자료 공개범위는 그 조회가 건다), 프로젝트는 id 로 다시 찾는다(지워진 것은 없다).
+  workspaceIndex: async (memberId, exts, opts) => {
+    const { listProjectFileIndex } = await import("../v6/source-store.js");
+    return listProjectFileIndex({ exts, q: opts.q, limit: opts.limit }, memberId);
+  },
+  //  앱은 열려 있는 동안 목록을 주기적으로 다시 읽는다 — 표시용 조회라 30초 묵혀 쓴다(색인이 파일보다 늦는 폭보다 짧다).
+  sessionMade: async (project, sessionId, memberId, exts) => {
+    const key = [appSqlTenantId(), memberId, project.id, sessionId, exts.join(",")].join("\0");
+    const hit = madeCache.get(key), now = Date.now();
+    if (hit && now - hit.at < 30_000) return hit.paths;
+    const { listProjectFileIndex } = await import("../v6/source-store.js");
+    const paths = (await listProjectFileIndex({ exts, limit: 500, projectId: project.id, session: sessionId }, memberId)).map((r) => r.path);
+    if (madeCache.size > 500) madeCache.clear();
+    madeCache.set(key, { at: now, paths });
+    return paths;
+  },
+  projectById: async (projectId) => {
+    const { itemsPool } = await import("../db/client.js");
+    const r = await itemsPool.query(`SELECT id, COALESCE(folder,'') AS folder FROM project WHERE id=$1 AND level='project' AND trashed_at IS NULL`, [projectId]);
+    const row = r.rows[0] as { id: number; folder: string } | undefined;
+    return row ? { id: Number(row.id), folder: String(row.folder) } : null;
+  },
   tenant: appSqlTenantId,
 };
 
@@ -65,18 +89,21 @@ const appProjectFiles: Capability = {
   name: "org_app_project_files",
   title: "앱 화면이 붙은 세션의 프로젝트 자료 목록",
   description: "세션에 붙은 앱 화면이 그 세션 프로젝트의 공유 폴더(자료)에서 파일 목록을 본다(SDK lively.files.list). 앱이 permissions.project_files 로 선언한 확장자만, 최신순. "
-    + "그 앱에 동의한 세션 주인이, 그 앱이 지금 붙어 있고, 그 프로젝트를 볼 수 있을 때만. 세션에 프로젝트가 없으면 빈 목록. 읽기뿐. REST 전용.",
+    + "그 앱에 동의했고 그 세션에 들어갈 수 있는 사람이, 그 앱이 지금 붙어 있고, 그 프로젝트를 볼 수 있을 때만. 세션에 프로젝트가 없으면 빈 목록. 읽기뿐. REST 전용.",
   scope: null,
-  input: { app_id: z.string(), session_id: z.string(), ext: z.string().optional().describe("쉼표로 이은 확장자(선언한 것 가운데 고르기 · 생략하면 선언 전부)"), limit: z.number().optional() },
+  input: { app_id: z.string(), session_id: z.string(), ext: z.string().optional().describe("쉼표로 이은 확장자(선언한 것 가운데 고르기 · 생략하면 선언 전부)"), limit: z.number().optional(),
+    scope: z.string().optional().describe("'all' = 볼 수 있는 모든 프로젝트의 자료(permissions.workspace_files 선언 · 동의가 따로 필요 · 줄마다 project_id). 생략 = 붙은 세션의 프로젝트"),
+    q: z.string().optional().describe("scope 'all' 에서 파일 이름 · 경로로 찾는 말") },
   expose: {
     mcp: false,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/files"], parse: (req) => {
       const q = (req.query ?? {}) as Record<string, unknown>;
-      return { app_id: (req.params as Record<string, string>)?.id, session_id: q.session_id, ext: typeof q.ext === "string" ? q.ext : undefined, limit: q.limit != null ? Number(q.limit) : undefined };
+      return { app_id: (req.params as Record<string, string>)?.id, session_id: q.session_id, ext: typeof q.ext === "string" ? q.ext : undefined, limit: q.limit != null ? Number(q.limit) : undefined,
+        scope: typeof q.scope === "string" ? q.scope : undefined, q: typeof q.q === "string" ? q.q : undefined };
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) =>
-    listProjectFiles({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), ext: input.ext, limit: input.limit }, liveDeps, rate),
+    listProjectFiles({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), ext: input.ext, limit: input.limit, scope: input.scope, q: input.q }, liveDeps, rate),
 };
 
 const appProjectFile: Capability = {
@@ -85,16 +112,17 @@ const appProjectFile: Capability = {
   description: "세션에 붙은 앱 화면이 그 세션 프로젝트의 공유 폴더(자료)에서 한 파일의 글 내용을 읽는다(SDK lively.files.read). 선언한 확장자의 파일만 · 8MB 까지. "
     + "판정은 목록과 같다. 반환 { path, content, size, mtime }. 읽기뿐. REST 전용.",
   scope: null,
-  input: { app_id: z.string(), session_id: z.string(), path: z.string() },
+  input: { app_id: z.string(), session_id: z.string(), path: z.string(),
+    project_id: z.number().optional().describe("전체 자료 목록(scope 'all')의 줄이 준 project_id — 주면 그 프로젝트의 자료에서 읽는다(workspace_files 선언 · 동의 필요)") },
   expose: {
     mcp: false,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/file"], parse: (req) => {
       const q = (req.query ?? {}) as Record<string, unknown>;
-      return { app_id: (req.params as Record<string, string>)?.id, session_id: q.session_id, path: q.path };
+      return { app_id: (req.params as Record<string, string>)?.id, session_id: q.session_id, path: q.path, project_id: q.project_id != null && q.project_id !== "" ? Number(q.project_id) : undefined };
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) =>
-    readProjectFile({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), path: input.path }, liveDeps, rate),
+    readProjectFile({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), path: input.path, projectId: input.project_id }, liveDeps, rate),
 };
 
 export const appProjectFilesCapabilities: Capability[] = [appProjectFiles, appProjectFile];

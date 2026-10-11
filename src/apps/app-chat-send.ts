@@ -12,7 +12,7 @@
 //  판정은 순수하게 두고(deps 주입) 살아 있는 의존은 capabilities/app-chat-send.ts 가 꽂는다 — 시험이 가짜 세계로 표(S1)를 못박는다.
 import { HttpError } from "../http-error.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
-import { requireSessionOwner, requireUsableApp, type SessionAppRow } from "./session-apps.js";
+import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from "./session-apps.js";
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { CHAT_SEND_TOOL } from "./manifest.js";
@@ -25,6 +25,7 @@ export interface ChatSendDeps {
   getApp: (appId: string) => Promise<OrgApp | null>;
   getGrant: (appId: string, memberId: string) => Promise<AppGrantRow | null>;
   sessionOwner: (sessionId: string) => Promise<string | null>;
+  canEnter?: (sessionId: string, member: string) => Promise<boolean>;
   listAttached: (sessionId: string) => Promise<SessionAppRow[]>;
   /** 멈춘 세션인가 — **이 박스의** tmux 가 «그런 세션 없다» 고 확답할 때만 true(localSessionGone). 노드(멤버 PC) 세션은 늘 false. */
   isGone: (sessionId: string) => Promise<boolean>;
@@ -110,7 +111,7 @@ export async function sendFromApp(q: ChatSendInput, deps: ChatSendDeps, rate: Ra
   if (needsRegrant(grant.tools, declared, CHAT_SEND_TOOL) || !decideAppTool(q.appId, grant.tools, CHAT_SEND_TOOL)) {
     throw new HttpError(403, `앱 '${q.appId}' 의 사용 동의가 예전 범위라 '세션에 글 보내기' 를 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`);
   }
-  await requireSessionOwner(sessionId, q.member, { sessionOwner: deps.sessionOwner });
+  await requireSessionParticipant(sessionId, q.member, { sessionOwner: deps.sessionOwner, canEnter: deps.canEnter });
   const attached = await deps.listAttached(sessionId);
   if (!attached.some((a) => a.app_id === q.appId)) {
     throw new HttpError(403, `앱 '${q.appId}' 이 이 세션에 붙어 있지 않습니다 — 붙은 앱 화면에서만 세션에 보낼 수 있습니다`);

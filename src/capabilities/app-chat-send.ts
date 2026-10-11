@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
-import { listAttachedApps, sessionOwnerOf } from "../apps/session-apps.js";
+import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/session-apps.js";
 import { RateWindow, localSessionGone, sendFromApp, type ChatSendDeps } from "../apps/app-chat-send.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
 
@@ -16,6 +16,7 @@ const liveDeps: ChatSendDeps = {
   getApp: (id) => getApp(id),
   getGrant: getActiveGrant,
   sessionOwner: sessionOwnerOf,
+  canEnter: sessionCanEnter,
   listAttached: listAttachedApps,
   isGone: async (sid) => {
     const { sessionGone } = await import("../terminal/terminal-sessions.js");
@@ -29,7 +30,7 @@ const liveDeps: ChatSendDeps = {
 const appChatSend: Capability = {
   name: "org_app_chat_send",
   title: "앱 화면이 붙은 세션에 보내기",
-  description: "세션에 붙은 앱 화면이 그 세션에 글을 바로 보낸다(SDK lively.chat.send). 앱이 permissions.chat_send 를 선언했고, 그 앱에 동의한 세션 주인이, 그 앱이 지금 붙어 있을 때만. "
+  description: "세션에 붙은 앱 화면이 그 세션에 글을 바로 보낸다(SDK lively.chat.send). 앱이 permissions.chat_send 를 선언했고, 그 앱에 동의했고 그 세션에 들어갈 수 있는 사람(연 사람 · 초대받은 사람)이, 그 앱이 지금 붙어 있을 때만. "
     + "서버가 글 앞에 「(앱 「제목」에서 보냄)」 한 줄을 붙인다. 4,000자 · (사람, 앱) 분당 20회. 세션이 멈춰 있으면 409 {draft:true, draft_text}. REST 전용.",
   scope: null,
   input: { app_id: z.string(), session_id: z.string(), text: z.string() },
