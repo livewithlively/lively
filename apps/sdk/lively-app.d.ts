@@ -19,7 +19,7 @@ export interface LivelyApp {
   /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
   readonly session: string | null;
   /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean } }>;
+  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; files_all?: boolean } }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -96,12 +96,19 @@ export interface LivelyApp {
    *  · 세션에 붙어 열린 화면에서만 된다(lively.session 이 있을 때). 붙은 세션이 없으면 reject(code -32602).
    *  · 세션이 프로젝트에 속해 있지 않거나 그 사람이 그 프로젝트를 볼 수 없으면 빈 목록 — 오류가 아니다.
    *  · 숨김 파일(점으로 시작)과 git 레포 폴더 안은 목록에 없다.
+   *
+   * **전체 자료**(#4629) — `scope: "all"` 은 붙은 세션의 프로젝트 밖, 그 사람이 볼 수 있는 **모든 프로젝트의 자료**를 본다.
+   *  · 더 넓은 능력이라 따로 선언한다: `permissions.workspace_files: ["html"]`(동의 창에 「전체 자료 읽기」로 따로 보인다).
+   *  · 줄마다 `project_id` · `project_name` 이 실린다 — 읽을 때 `read(path, { project: project_id })`.
+   *  · 호스트가 할 수 있으면 인사(ready)의 `capabilities.files_all` 이 true 다(세션에 붙은 화면에서만).
+   *  · 답에 `scope: "all"` 이 없으면 옛 호스트다(붙은 프로젝트의 목록이 왔다) — 그 목록을 전체 자료로 쓰지 않는다.
+   *  · `q` 는 파일 이름 · 경로에서 찾는 말(낱말끼리 AND). 색인에 오른 파일만 나온다(방금 만든 파일은 조금 뒤에 보일 수 있다).
    */
   files: {
     /** 선언한 확장자의 파일들, **최신순**. ext 로 선언한 것 가운데 고르고(생략 = 전부), limit 기본 200 · 최대 500. */
-    list(opts?: { ext?: string[]; limit?: number }): Promise<{ project_id: number | null; files: Array<{ path: string; name: string; size: number; mtime: string }>; truncated: boolean }>;
+    list(opts?: { ext?: string[]; limit?: number; scope?: "project" | "all"; q?: string }): Promise<{ project_id: number | null; files: Array<{ path: string; name: string; size: number; mtime: string; project_id?: number; project_name?: string }>; truncated: boolean; scope?: "all" }>;
     /** 한 파일의 글 내용(UTF-8). path 는 list 가 준 상대경로. 선언하지 않은 확장자는 reject(-32001), 8MB 초과 · 없는 파일도 reject. */
-    read(path: string): Promise<{ path: string; content: string; size: number; mtime: string }>;
+    read(path: string, opts?: { project?: number }): Promise<{ path: string; content: string; size: number; mtime: string }>;
   };
 
   /** 이 화면이 붙은 세션과 말하기(#4594). 세션 오른쪽 앱 칸에서 열렸을 때만(lively.session 이 있을 때) 된다. */

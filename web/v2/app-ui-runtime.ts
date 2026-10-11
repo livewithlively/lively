@@ -24,6 +24,9 @@
 //    await lively.files.list({ ext:['html'], limit:200 }) → { project_id, files:[{ path, name, size, mtime }], truncated }
 //    await lively.files.read(path)           → { path, content, size, mtime }   (#4592 — 붙은 세션의 **프로젝트 자료**에서 읽기만.
 //                                                매니페스트 permissions.project_files 에 선언한 확장자만 · 8MB 까지 · 붙은 세션이 없으면 -32602)
+//    await lively.files.list({ scope:'all', q:'덱' }) → { scope:'all', files:[{ …, project_id, project_name }] } — 볼 수 있는 **모든 프로젝트의 자료**(#4629 ·
+//                                                permissions.workspace_files 선언 + 따로 동의). 읽을 때는 lively.files.read(path, { project: project_id }).
+//                                                답에 scope:'all' 이 없으면 옛 호스트다(붙은 프로젝트의 목록이 왔다) — 그 목록을 전체로 쓰지 않는다.
 //    await lively.ui.chrome({ head:false })  → 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접어 달라고 한다(#4592 — 제 머리줄이 있는 앱이
 //                                                두 줄이 되지 않게). 접으면 그 ⋯ 메뉴는 아래 openMenu 로 앱이 대신 연다. { ok } — 못 접는 자리면 false.
 //    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
@@ -146,8 +149,8 @@ export const APP_RUNTIME_JS = `
       onInsets: function (cb) { return subscribe('insets', cb); }
     },
     files: {
-      list: function (opts) { var o = opts || {}; return post('files/list', { ext: o.ext, limit: o.limit }); },
-      read: function (path) { return post('files/read', { path: String(path) }); }
+      list: function (opts) { var o = opts || {}; return post('files/list', { ext: o.ext, limit: o.limit, scope: o.scope, q: o.q }); },
+      read: function (path, opts) { var o = opts || {}; return post('files/read', { path: String(path), project: o.project }); }
     },
     chat: {
       send: function (text) { return post('chat/send', { text: String(text) }); }

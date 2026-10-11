@@ -115,8 +115,17 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   eq(posted.filter((m) => m.method === "files/list")[1].params, {}, "S2-10 인자 없이 불러도 된다");
   deliver({ jsonrpc: "2.0", id: posted.filter((m) => m.method === "files/list")[1].id, result: { project_id: null, files: [], truncated: false } });
   eq((await p0).files, [], "S2-10 프로젝트 없는 세션은 빈 목록");
+  // #4629 — 전체 자료: scope · q 를 그대로 보내고, 읽을 때는 프로젝트를 지목한다
+  const pa = lively.files.list({ scope: "all", q: "덱", ext: ["html"] });
+  eq(posted.filter((m) => m.method === "files/list")[2].params, { ext: ["html"], scope: "all", q: "덱" }, "S2-10b list 의 scope · q 가 간다");
+  deliver({ jsonrpc: "2.0", id: posted.filter((m) => m.method === "files/list")[2].id, result: { scope: "all", project_id: null, files: [], truncated: false } });
+  eq((await pa).scope, "all", "S2-10b 답의 scope 로 전체 자료의 답임을 안다(옛 호스트는 이 표시가 없다)");
+  const pw = lively.files.read("out/덱.html", { project: 3625 });
+  const rw = posted.filter((m) => m.method === "files/read")[0];
+  eq(rw.params, { path: "out/덱.html", project: 3625 }, "S2-10b read 는 프로젝트를 지목할 수 있다");
+  deliver({ jsonrpc: "2.0", id: rw.id, result: { path: "out/덱.html", content: "", size: 0, mtime: "" } }); await pw;
   const pr = lively.files.read("out/덱.html");
-  const rr = posted.find((m) => m.method === "files/read");
+  const rr = posted.filter((m) => m.method === "files/read")[1];
   eq(rr.params, { path: "out/덱.html" }, "S2-10 read 는 path 만");
   deliver({ jsonrpc: "2.0", id: rr.id, error: { code: -32001, message: "이 앱은 .json 파일을 읽을 수 없습니다" } });
   let caught = null; try { await pr; } catch (e) { caught = e; }
@@ -190,7 +199,11 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(fbranch.length > 0 && /\/files\?/.test(fbranch) && /\/file\?/.test(fbranch) && /session_id: sid/.test(fbranch) && !/params[^;]*session/.test(fbranch.replace(/session_id: sid/g, "")),
     "S2-5b files/* 는 /api/ui/apps/:id/files · /file 로, 세션은 opts 의 sid 로만 간다");
   ok(/ensureAppGrant\(appId/.test(fbranch) && /동의\|grant/.test(fbranch), "S2-5b 403 「동의」 면 그 자리에서 동의 창 → 1회 재시도(앱이 갱신돼 권한을 새로 얻었을 때)");
-  ok(/files:\s*\{[\s\S]*list\(opts\?:[\s\S]*read\(path: string\)/.test(dts) && /insets: \{ top: number/.test(dts) && /onInsets\(/.test(dts), "S2-5b d.ts 에 files.list/read · ui.insets · ui.onInsets");
+  ok(/files:\s*\{[\s\S]*list\(opts\?:[\s\S]*read\(path: string, opts\?: \{ project\?: number \}\)/.test(dts) && /insets: \{ top: number/.test(dts) && /onInsets\(/.test(dts), "S2-5b d.ts 에 files.list/read · ui.insets · ui.onInsets");
+  // #4629 — 전체 자료: 제 선언 · 제 동의 줄 · 인사의 files_all
+  ok(/workspace_files: z\.array\(/.test(manifest) && /WORKSPACE_FILES_TOOL = "app_workspace_files"/.test(manifest), "S2-5c 매니페스트 permissions.workspace_files → app_workspace_files(프로젝트 자료와 다른 도구)");
+  ok(/workspaceFiles: Array\.isArray\(perm\.workspace_files\)/.test(consent) && /전체 자료 읽기/.test(consent) && /모든 프로젝트의 자료/.test(consent) && /다른 구성원에게 보일 수/.test(consent), "S2-5c 동의 창에 「전체 자료 읽기」 가 제 줄로 선다(프로젝트 자료 줄과 따로)");
+  ok(/files_all: !!opts\?\.sessionId/.test(host) && /files_all\?: boolean/.test(dts), "S2-5c 인사의 capabilities.files_all 은 세션에 붙은 화면에서만 true");
   ok(/project_files: z\.array\(/.test(manifest) && /PROJECT_FILES_TOOL = "app_project_files"/.test(manifest), "S2-5b 매니페스트 permissions.project_files(기본 빈 배열) → app_project_files");
   ok(/projectFiles: Array\.isArray\(perm\.project_files\)/.test(consent) && /프로젝트 자료 읽기/.test(consent) && /쓰지는 못해요/.test(consent), "S2-5b 동의 창에 「프로젝트 자료 읽기」 줄이 선다(읽기뿐임을 말한다)");
 }
@@ -333,6 +346,27 @@ if (!existsSync(built)) {
     const q2 = new URL("http://x" + c2.url.slice(c2.url.indexOf("/api"))).searchParams;
     eq([q2.get("session_id"), q2.get("path")], ["box-mine", "out/덱 1.html"], "S2-12 read 는 path 를 쿼리로(빈칸 · 한글 그대로 되돌아온다)");
     eq(lastReply().result.content, "<html></html>", "S2-12 내용이 앱에 닿는다");
+    // #4629 — 전체 자료: scope · q 는 쿼리로, 읽기의 project 는 project_id 로(양의 정수일 때만)
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 25, method: "files/list", params: { scope: "all", q: "  덱 리뉴얼 ", ext: ["html"] } });
+    await settle();
+    const q3 = new URL("http://x" + fetches[0].url.slice(fetches[0].url.indexOf("/api"))).searchParams;
+    eq([q3.get("session_id"), q3.get("scope"), q3.get("q"), q3.get("ext")], ["box-mine", "all", "덱 리뉴얼", "html"], "S2-12c 전체 자료: scope=all · q 가 쿼리로 간다(세션은 여전히 opts 의 것)");
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 26, method: "files/list", params: { scope: "everything", q: "x" } });
+    await settle();
+    const q4 = new URL("http://x" + fetches[0].url.slice(fetches[0].url.indexOf("/api"))).searchParams;
+    eq([q4.get("scope"), q4.get("q")], [null, null], "S2-12c 모르는 scope 는 보내지 않는다(붙은 프로젝트의 목록)");
+    fetches.length = 0;
+    for (const bad of ["../1", "3625", 0, 1.5, [3625]]) {
+      fire({ jsonrpc: "2.0", id: 28, method: "files/read", params: { path: "a/덱.html", project: bad } });
+      await settle();
+      ok(fetches.length === 0 && lastReply().error && lastReply().error.code === -32602, "S2-12c ★ 이상한 project(" + JSON.stringify(bad) + ")는 서버를 부르지 않고 -32602(붙은 프로젝트로 조용히 돌리지 않는다)");
+    }
+    fire({ jsonrpc: "2.0", id: 27, method: "files/read", params: { path: "a/덱.html", project: 3625 } });
+    await settle();
+    const ids = fetches.filter((x) => x.url.includes("/file?")).map((x) => new URL("http://x" + x.url.slice(x.url.indexOf("/api"))).searchParams.get("project_id"));
+    eq(ids, ["3625"], "S2-12c read 의 project 는 양의 정수일 때 project_id 로 간다");
     plan = { "/file?": { status: 403, json: { error: "이 앱은 .json 파일을 읽을 수 없습니다" } } };
     fire({ jsonrpc: "2.0", id: 23, method: "files/read", params: { path: "a.json" } });
     await settle();
