@@ -1491,6 +1491,14 @@
     const big = rows.filter((r) => byteLen(r.body) > CHUNK).map((r) => `${r.kind} ${r.slide_id || r.seq} 가 ${byteLen(r.body)}B 로 한 행 상한(${CHUNK}B)을 넘습니다 — 장 안의 큰 data: 그림을 파일 밖으로 빼거나 장을 나누세요.`);
     return { mode: sp.mode, rows, assets: assetRows, warnings: warnings.concat(big), slides: sp.slides.map((s) => ({ slide_id: s.slide_id, no: s.no, summary: s.summary })), fonts, alias: !!alias };
   }
+  /** 판의 지문 — 안(variant)이 아닌 행(머리 · 장 · 꼬리)의 글을 순서대로 이어 센 SHA-256. 같은 HTML 은 어디서 나눠도(세션 스크립트 · 앱 화면 · 표에 든 행) 같은 값이다.
+   *  파일이 어느 문서의 어느 판과 같은지는 경로나 시각이 아니라 이 값으로 가린다(다시 조립만 해도 시각은 바뀌고, 사본은 경로가 다르다). */
+  function fpOf(rows) {
+    const rank = { head: 0, slide: 1, tail: 2 };
+    const main = rows.filter((r) => !String(r.variant || "")).map((r) => [String(r.kind), Number(r.seq) || 0, String(r.slide_id || ""), String(r.body == null ? "" : r.body)]);
+    main.sort((a, b) => ((rank[a[0]] ?? 3) - (rank[b[0]] ?? 3)) || (a[1] - b[1]) || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
+    return sha256(JSON.stringify(main));
+  }
   // ⟦/deck-split⟧
 
   /* ───────────── 자식과 주고받기 ───────────── */
@@ -1556,13 +1564,16 @@
   }
   function variantsOf(v, sid) { return v.slides.filter(function (s) { return s.slide_id === sid; }).map(function (s) { return s.variant || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }); }
   function pickOf(sid) { var p = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === st.ver && x.slide_id === sid; })[0]; return p ? (p.variant || '') : null; }
+  /** 어느 판의 한 장에서 «지금 보이는 안» — 그 판에서 고른 안이 있으면 그것, 없으면 기본(안 이름 ''). 전후 견주기 · 바뀐 장 표시가 이것을 쓴다(안으로만 올라온 새 그림도 견줄 수 있게 · 판 9 4안 사건). */
+  function effSlide(v, ver, sid) { var p = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === Number(ver) && x.slide_id === sid; })[0]; var want = p ? (p.variant || '') : ''; var c = v.slides.filter(function (r) { return r.slide_id === sid; }); return c.filter(function (r) { return (r.variant || '') === want; })[0] || c.filter(function (r) { return !(r.variant || ''); })[0] || c[0] || null; }
+  function effMap(v, ver) { var m = {}, seen = {}; v.slides.forEach(function (r) { if (seen[r.slide_id]) return; seen[r.slide_id] = 1; m[r.slide_id] = effSlide(v, ver, r.slide_id); }); return m; }
   /** 판 HTML 조립 — 장마다 고른 안(없으면 첫 안)으로. */
-  function assemble(v) {
+  function assemble(v, ver) {   // ver 를 주면 «그 판에서 고른 안»(없으면 기본)으로 조립한다 — 전후 견주기의 앞 판용
     var seen = {}; var order = [];
     v.slides.forEach(function (s) { if (!seen[s.slide_id]) { seen[s.slide_id] = []; order.push(s.slide_id); } seen[s.slide_id].push(s); });
     var html = v.head;
     order.forEach(function (sid) {
-      var cands = seen[sid]; var want = pickOf(sid);
+      var cands = seen[sid]; var want = ver != null ? ((effSlide(v, ver, sid) || {}).variant || '') : pickOf(sid);
       var pick = cands.filter(function (s) { return (s.variant || '') === (want == null ? (cands[0].variant || '') : want); })[0] || cands[0];
       html += pick.body;
     });
@@ -1581,9 +1592,10 @@
     var idx = st.vers.indexOf(ver); if (idx <= 0) return;
     var prev = await loadVersion(doc, st.vers[idx - 1]);
     var curv = st.verCache[doc + '#' + ver];
-    var pt = {}; prev.slides.forEach(function (s) { if (!(s.variant || '')) pt[s.slide_id] = textOf(s.body); });
+    var pm = effMap(prev, st.vers[idx - 1]), cm = effMap(curv, ver), pt = {};   // 판마다 «보이는 안»(고른 안 · 없으면 기본)끼리 견준다
+    Object.keys(pm).forEach(function (sid) { if (pm[sid]) pt[sid] = textOf(pm[sid].body); });
     st.prevText = pt;
-    curv.slides.forEach(function (s) { if (!(s.variant || '')) { var a = textOf(s.body); if (pt[s.slide_id] == null || pt[s.slide_id] !== a) st.changed[s.slide_id] = true; } });
+    Object.keys(cm).forEach(function (sid) { var c = cm[sid]; if (!c) return; var a = textOf(c.body); if (pt[sid] == null || pt[sid] !== a || (pm[sid] && pm[sid].body !== c.body)) st.changed[sid] = true; });
   }
 
   /* ───────────── 글 줄 ↔ comments 행 ───────────── */
@@ -1810,21 +1822,145 @@
   /** 워크스페이스 기준 경로(project/<id>/<경로>) — 세션 스크립트(deck-push)가 적는 절대경로의 꼬리와 같은 꼴이라 서로 맞춰진다. */
   function fullPath(f) { var pid = f.project_id != null ? Number(f.project_id) : pkS.pid; return pid != null ? 'project/' + pid + '/' + f.path : ''; }
   function endsWithPath(sp, p) { return !!p && (sp === p || sp.slice(-(p.length + 1)) === '/' + p); }
-  /** 그 파일에서 올라온 문서 — 원본 경로가 같거나 그 경로로 끝나는 것(세션의 AI 가 올린 문서도 여기서 만난다). 다른 프로젝트의 파일은 프로젝트까지 맞아야 한다. */
-  function docForFile(f) {
-    var here = f.project_id == null || Number(f.project_id) === pkS.pid, full = fullPath(f);
-    var by = function (test) { return st.docs.filter(function (x) { var sp = String(x.source_path || ''); return !!sp && test(sp); })[0] || null; };
-    //  꼬리만 맞는 것은 이 프로젝트의 문서일 때만 — 원본 경로가 다른 프로젝트(project/<id>/…)를 가리키면 같은 이름의 남의 파일이다.
-    var foreign = function (sp) { var m = /(?:^|\/)project\/(\d+)\//.exec(sp); return !!m && pkS.pid != null && Number(m[1]) !== pkS.pid; };
-    return by(function (sp) { return endsWithPath(sp, full); }) || (here ? by(function (sp) { return !foreign(sp) && endsWithPath(sp, f.path); }) : null);
+  /* ── 파일 ↔ 판 — 경로나 시각이 아니라 **내용 지문**으로 가린다(원준 2026-10-11 «판을 제대로 인식 못 한다») ──
+     전에는 «문서의 원본 경로 = 이 파일» 이고 «파일 시각 > 문서 시각» 이면 바뀐 것으로 봤다. 실제 세션은 조립 결과물(out/deck_V.html)을 올리고
+     사람이 보는 파일은 다른 이름의 사본이며, 다시 조립만 해도 시각이 바뀌고, 한 경로에서 문서 둘이 올라오기도 해서 셋 다 어긋났다.
+     이제는 파일을 읽어 판의 지문(fpOf — 세션 스크립트와 같은 값)을 세고, 앱이 아는 판의 지문과 견준다. 같으면 «그 판과 같음», 다르면 «바뀜».
+     견준 결과는 sources 표에 적어 둔다(경로 · 크기 · 시각이 그대로인 파일은 다시 읽지 않는다 · 다른 구성원의 화면도 그 기록을 쓴다).
+     이름 · 경로는 «바뀐 파일을 어느 문서의 다음 판으로 올릴지» 를 정할 때만 쓴다. */
+  var SRC = { rows: [], ok: true, got: false, ver: {}, skip: {}, chk: {}, queue: [], busy: false, ens: null };
+  function verKey(doc, ver) { return doc + '\u0000' + ver; }
+  function chkKey(f) { return fileKey(f) + '@' + f.size + '@' + f.mtime; }
+  function latestOf(d) { return Number(d && d.latest_ver) || 0; }
+  async function loadSources() {
+    //  한 번도 읽지 못했으면 표가 아직 없는 라이블리로 본다(기억 없이 그때그때 견준다). 읽던 것이 한 번 실패한 것은 지나가는 오류다 — 아는 것을 버리지 않는다.
+    try { SRC.rows = await q('sources', {}, 1000); SRC.ok = true; SRC.got = true; } catch (e) { if (!SRC.got) { SRC.rows = []; SRC.ok = false; } }
+    SRC.rows.forEach(function (r) { if (r.fp) SRC.ver[verKey(r.doc, Number(r.ver))] = String(r.fp); });
   }
-  /** 그 파일을 누르면 무슨 일이 일어나나 — 앱에 없으면 열기 · 올린 뒤에 파일이 바뀌었으면 그 문서의 다음 판 · 그대로면 그 문서를 연다(다시 올리지 않는다). */
-  function fileState(f) {
-    var d = docForFile(f); if (!d) return { doc: null, up: true, go: '열기', note: '' };
-    var v = Number(d.latest_ver) || 1, name = d.title || d.doc;
-    var newer = Number(new Date(f.mtime)) > Number(new Date(d.changed_at || d.created_at || 0)) + 2000;
-    if (newer) return { doc: d, up: true, go: '판 ' + (v + 1) + ' 로 올리기', note: '「' + name + '」 판 ' + v + ' 뒤에 파일이 바뀜' };
-    return { doc: d, up: false, go: d.doc === st.doc && !$('main').hidden ? '보는 중' : '판 ' + v + ' 열기', note: '앱에 있음 · 「' + name + '」' };
+  /** 그 지문을 가진 판들(지금 있는 문서의 · 다 올라온 판만). */
+  function fpHits(fp) {
+    var out = [];
+    if (fp) Object.keys(SRC.ver).forEach(function (k) {
+      if (SRC.ver[k] !== fp) return;
+      var i = k.indexOf('\u0000'), d = docOf(k.slice(0, i)), v = Number(k.slice(i + 1));
+      if (d && v >= 1 && v <= latestOf(d)) out.push({ doc: d, ver: v });
+    });
+    return out;
+  }
+  async function srcPut(row) {
+    SRC.ver[verKey(row.doc, row.ver)] = row.fp;
+    if (!SRC.ok) return;
+    try {
+      if (row.path) await sdk.store['delete']('sources', { doc: row.doc, ver: row.ver, path: row.path });   // 같은 파일 · 같은 판의 옛 기록은 갈아 끼운다(다시 조립할 때마다 쌓이지 않게)
+      await sdk.store.insert('sources', row);
+      SRC.rows = [row].concat(SRC.rows.filter(function (x) { return !(row.path && x.path === row.path && x.doc === row.doc && Number(x.ver) === row.ver); }));
+    } catch (e) {}
+  }
+  /** 문서마다 최신 판의 지문을 안다 — 적힌 것이 없으면(옛 스크립트가 올린 판) 표의 행에서 한 번 세어 적어 둔다. */
+  function ensureFps() {
+    var run = async function () {
+      for (var i = 0; i < st.docs.length; i++) {
+        var d = st.docs[i], v = latestOf(d);
+        var vk = verKey(d.doc, v);
+        if (!v || SRC.ver[vk] || SRC.skip[vk]) continue;
+        try {
+          var rows = await q('versions', { doc: d.doc, ver: v }, 1000);
+          //  머리 행이 없거나(판이 비었다) 행이 상한에 닿았으면(잘린 행으로 센 지문은 틀린 값이다) 세지 않고, 다시 묻지도 않는다.
+          if (rows.length >= 1000 || !rows.some(function (r) { return r.kind === 'head'; })) { SRC.skip[vk] = 1; continue; }
+          await srcPut({ doc: d.doc, ver: v, fp: fpOf(rows), path: '', bytes: 0, mtime: '', session: L.session || '' });
+        } catch (e) {}
+      }
+    };
+    SRC.ens = (SRC.ens || Promise.resolve()).then(run, run);
+    return SRC.ens;
+  }
+  function hereFile(f) { return f.project_id == null || Number(f.project_id) === pkS.pid; }
+  //  꼬리만 맞는 것은 이 프로젝트의 것일 때만 — 적힌 경로가 다른 프로젝트(project/<id>/…)를 가리키면 같은 이름의 남의 파일이다.
+  function foreignPath(sp) { var m = /(?:^|\/)project\/(\d+)\//.exec(sp); return !!m && pkS.pid != null && Number(m[1]) !== pkS.pid; }
+  function pathHit(sp, f) { sp = String(sp || ''); return !!sp && (endsWithPath(sp, fullPath(f)) || (hereFile(f) && !foreignPath(sp) && endsWithPath(sp, f.path))); }
+  /** 이 파일이 바뀌었다면 어느 문서의 다음 판인가 — 문서 이름이 파일 이름과 같은 것 → 이 파일을 견준 적 있는 문서(가장 최근) → 원본 경로가 이 파일인 문서(가장 최근). */
+  function linkOf(f) {
+    var base = String(f.name || f.path).split('/').pop().replace(/\.html?$/i, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    var d = hereFile(f) ? docOf(base) : null;
+    //  이름만 같은 남의 파일은 잇지 않는다 — 그 문서가 같은 이름의 파일을 다른 폴더에서 본 적이 있으면(원본 경로 · 견준 기록) 그쪽이 제 파일이다.
+    if (d) {
+      var nm = String(f.name || f.path).split('/').pop(), known = [String(d.source_path || '')].concat(SRC.rows.filter(function (x) { return x.doc === d.doc; }).map(function (x) { return String(x.path || ''); }));
+      var twin = known.filter(function (sp) { return sp.split('/').pop() === nm; });
+      if (!twin.length || twin.some(function (sp) { return pathHit(sp, f); })) return d;
+    }
+    var r = SRC.rows.filter(function (x) { return pathHit(x.path, f) && docOf(x.doc); })[0];
+    if (r) return docOf(r.doc);
+    return st.docs.filter(function (x) { return pathHit(x.source_path, f); })[0] || null;
+  }
+  /** 견준 적 있고 그 뒤로 그대로인 파일(경로 · 크기 · 시각이 같다) — 그 판들. */
+  function seenAs(f) {
+    var out = [];
+    SRC.rows.forEach(function (x) {
+      if (!x.path || Number(x.bytes) !== Number(f.size) || String(x.mtime || '') !== String(f.mtime || '') || !pathHit(x.path, f)) return;
+      var d = docOf(x.doc); if (d && Number(x.ver) <= latestOf(d)) out.push({ doc: d, ver: Number(x.ver) });
+    });
+    return out;
+  }
+  /** 같은 판이 여럿이면 — 이어진 문서의 것 → 그 문서의 최신 판인 것 → 가장 최근에 바뀐 문서. */
+  function pickHit(hits, link) {
+    var a = hits.slice().sort(function (x, y) {
+      var lx = link && x.doc.doc === link.doc ? 0 : 1, ly = link && y.doc.doc === link.doc ? 0 : 1; if (lx !== ly) return lx - ly;
+      var tx = x.ver === latestOf(x.doc) ? 0 : 1, ty = y.ver === latestOf(y.doc) ? 0 : 1; if (tx !== ty) return tx - ty;
+      return st.docs.indexOf(x.doc) - st.docs.indexOf(y.doc);
+    });
+    return a[0] || null;
+  }
+  function readFile(f) { return f.project_id != null ? sdk.files.read(f.path, { project: Number(f.project_id) }) : sdk.files.read(f.path); }
+  /** 파일을 읽어 지문을 세고 아는 판과 견준다. 같은 판이 있으면 적어 둔다. */
+  async function verifyFile(f) {
+    var key = chkKey(f);
+    try {
+      var r = await readFile(f), html = r && typeof r.content === 'string' ? r.content : '';
+      if (!html.trim()) { SRC.chk[key] = { err: '빈 파일', at: Date.now() }; return; }
+      await ensureFps();
+      var fp = fpOf(plan(html, {}).rows), hit = pickHit(fpHits(fp), linkOf(f));
+      SRC.chk[key] = { fp: fp };
+      if (hit) await srcPut({ doc: hit.doc.doc, ver: hit.ver, fp: fp, path: fullPath(f) || f.path, bytes: Number(f.size) || 0, mtime: String(f.mtime || ''), session: L.session || '' });
+    } catch (e) { SRC.chk[key] = { err: msgOf(e), at: Date.now() }; }   // 지나가는 오류일 수 있다 — 1분 뒤에는 다시 견준다(chkOf)
+  }
+  function chkOf(f) { var c = SRC.chk[chkKey(f)]; if (c && c.err && Date.now() - (c.at || 0) > 60000) { delete SRC.chk[chkKey(f)]; return null; } return c || null; }
+  function enqueue(f, keep) {
+    var key = chkKey(f), it = SRC.queue.filter(function (x) { return x.key === key; })[0];
+    if (it) it.keep = it.keep || !!keep; else SRC.queue.push({ key: key, f: f, keep: !!keep });
+    setTimeout(pump, 0);   // 이미 줄에 있어도 깨운다 — 불러오는 동안 멈췄던 줄이 그대로 남지 않게
+  }
+  //  하나씩 견준다(파일 하나가 몇 MB 다). 불러오기 창이 닫혀 있으면 머리줄 알림에 필요한 것만 남긴다.
+  async function pump() {
+    if (SRC.busy) return; SRC.busy = true;
+    try {
+      while (SRC.queue.length && !st.importing) {
+        var open = !$('empty').hidden || !$('pickModal').hidden;
+        if (!open) SRC.queue = SRC.queue.filter(function (x) { return x.keep; });
+        var it = SRC.queue.filter(function (x) { return x.keep; })[0] || SRC.queue[0]; if (!it) break;
+        if (!SRC.chk[it.key]) await verifyFile(it.f);
+        SRC.queue = SRC.queue.filter(function (x) { return x !== it; });
+        paintPickers(); nfEval();
+        await new Promise(function (res) { setTimeout(res, 250); });
+      }
+    } finally { SRC.busy = false; }
+  }
+  /** 그 파일을 누르면 무슨 일이 일어나나 — 앱의 어느 판과 내용이 같으면 그 문서를 연다(다시 올리지 않는다) · 이어진 문서가 있는데 내용이 다르면 그 문서의 다음 판 ·
+   *  아직 견주지 않았으면 «확인 중»(눌러도 된다 — 올리기 전에 한 번 더 견준다) · 어느 문서와도 이어지지 않으면 새 문서로 연다. */
+  function fileState(f, keep) {
+    var link = linkOf(f), c = chkOf(f), hits = seenAs(f);
+    if (!hits.length && c && c.fp) hits = fpHits(c.fp);
+    var hit = pickHit(hits, link);
+    if (hit) {
+      var d = hit.doc, lt = latestOf(d), name = d.title || d.doc;
+      return { kind: 'same', doc: d, ver: hit.ver, up: false, go: d.doc === st.doc && !$('main').hidden ? '보는 중' : '판 ' + lt + ' 열기',
+        note: hit.ver === lt ? '앱에 있음 · 「' + name + '」 판 ' + lt : '「' + name + '」 판 ' + hit.ver + ' 과 같은 내용 · 최신은 판 ' + lt };
+    }
+    var ln = link ? (link.title || link.doc) : '', lv = latestOf(link) || 1;
+    if (c && c.fp) return link ? { kind: 'changed', doc: link, up: true, go: '판 ' + (lv + 1) + ' 로 올리기', note: '「' + ln + '」 판 ' + lv + ' 과 내용이 다름' } : { kind: 'new', doc: null, up: true, go: '열기', note: '' };
+    if (c && c.err) return { kind: 'err', doc: link, up: true, go: '열기', note: link ? '「' + ln + '」 과 견주지 못함' : '' };
+    var cand = !!link || SRC.rows.some(function (x) { return Number(x.bytes) > 0 && Number(x.bytes) === Number(f.size); });
+    if (cand && Number(f.size) <= PK_MAX && sdk.files) { enqueue(f, keep); return { kind: 'pend', doc: link, up: true, go: '확인 중', note: link ? '「' + ln + '」 과 견주는 중' : '앱의 문서와 견주는 중' }; }
+    return { kind: 'new', doc: null, up: true, go: '열기', note: '' };
   }
   function pkItem(icon, cls, title, meta, go, run, busy) {
     var b = el('button', 'pk-i'); b.type = 'button'; b.disabled = !!st.importing;
@@ -1937,7 +2073,7 @@
     /** 작은 조각 파일(장 하나짜리 부품)은 접어 둔다 — 찾는 중이거나 이미 앱에 올라온 것은 그대로 보인다. */
     function fold(list) {
       if (pkS.small || pkS.q.trim()) return { show: list, hid: 0 };
-      var show = list.filter(function (f) { return Number(f.size) >= PK_SMALL || !!docForFile(f); });
+      var show = list.filter(function (f) { return Number(f.size) >= PK_SMALL || !!linkOf(f); });
       return { show: show, hid: list.length - show.length };
     }
     function foldLine(hid) {
@@ -1995,7 +2131,7 @@
     }
   }
   function paintPickers() { if (!$('empty').hidden) renderPicker($('startBox'), true); if (!$('pickModal').hidden) renderPicker($('pickBox'), false); }
-  function pkRefresh() { loadFiles().then(paintPickers); if (pkTab() === 'all') loadAll(); }
+  function pkRefresh() { Promise.all([loadFiles(), loadSources()]).then(paintPickers); if (pkTab() === 'all') loadAll(); }
   function openPicker() { $('pickModal').hidden = false; renderPicker($('pickBox'), false); pkRefresh(); var i = $('pickBox')._pk.inp; if (!document.body.classList.contains('compact')) { try { i.focus(); i.select(); } catch (e) {} } }
   function showStart() { st.doc = null; st.title = ''; $('empty').hidden = false; $('main').hidden = true; $('top').hidden = true; renderPicker($('startBox'), true); pkRefresh(); }
   /** 폴더의 HTML 을 그 자리에서 문서로 올린다 — 나누기는 deck-split 블록(세션 스크립트 deck-push 와 같은 글). 같은 파일에서 온 문서가 있으면 새 판. */
@@ -2007,8 +2143,8 @@
   /** 자료의 파일을 눌렀다. 다른 프로젝트의 파일은 프로젝트까지 적은 경로로 남긴다(세션의 AI 가 어느 폴더인지 안다). */
   function importFile(f, ex) {
     var other = f.project_id != null && Number(f.project_id) !== pkS.pid;
-    return importHtml({ key: fileKey(f), name: f.name || f.path, path: other ? fullPath(f) : f.path, size: Number(f.size) || 0, ex: ex || null, read: async function () {
-      var r = await (f.project_id != null ? sdk.files.read(f.path, { project: Number(f.project_id) }) : sdk.files.read(f.path));
+    return importHtml({ key: fileKey(f), name: f.name || f.path, path: other ? fullPath(f) : f.path, full: fullPath(f) || f.path, mtime: String(f.mtime || ''), ckey: chkKey(f), size: Number(f.size) || 0, ex: ex || linkOf(f), read: async function () {
+      var r = await readFile(f);
       return r && typeof r.content === 'string' ? r.content : '';
     } });
   }
@@ -2026,7 +2162,7 @@
   async function importHtml(src) {
     if (st.importing) return;
     var note = function (t, pct) { st.importNote = t; st.importPct = pct == null ? null : pct; paintPickers(); };
-    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; };
+    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; setTimeout(pump, 0); };
     st.importing = src.key; st.importName = src.name;
     if ($('pickModal').hidden && $('empty').hidden) { $('pickModal').hidden = false; }   // 머리줄의 「새 파일」 띠에서 눌렀다 — 진행이 보이게 창을 연다
     note('파일을 읽는 중' + (src.size ? ' · ' + sizeOf(src.size) : ''));
@@ -2037,13 +2173,26 @@
       var p = plan(html, {});
       var hard = p.warnings.filter(function (w) { return w.indexOf('한 행 상한') >= 0; }); if (hard.length) throw new Error(hard[0]);
       var title = titleOf(html) || String(src.name).replace(/\.html?$/i, '');
-      var ex = src.ex, keepPath = false;
+      //  올리기 전에 내용을 견준다 — 앱의 어느 판과 같으면 다시 올리지 않고 그 문서를 연다(같은 판이 두 번 쌓이지 않는다).
+      note('앱의 문서와 견주는 중');
+      await ensureFps();
+      var fp = fpOf(p.rows), hit = pickHit(fpHits(fp), src.ex);
+      if (src.ckey) SRC.chk[src.ckey] = { fp: fp };
+      if (hit) {
+        if (src.full) await srcPut({ doc: hit.doc.doc, ver: hit.ver, fp: fp, path: src.full, bytes: src.size || 0, mtime: src.mtime || '', session: L.session || '' });
+        var hl = latestOf(hit.doc);
+        end(); closePicker();
+        if (hit.doc.doc !== st.doc || $('main').hidden) await openDoc(hit.doc.doc);
+        toast('이미 올라와 있는 내용이에요 · 「' + (hit.doc.title || hit.doc.doc) + '」 판 ' + hit.ver + (hit.ver < hl ? ' (최신은 판 ' + hl + ')' : ''), 3600);
+        return;
+      }
+      var ex = src.ex;
       if (!ex) {
         var same = st.docs.filter(function (d) { return (d.title || d.doc) === title; })[0] || null;
         if (same) {
           var pick = await askSameTitle(same);
           if (pick === 'cancel') { end(); paintPickers(); return; }
-          if (pick === 'ver') { ex = same; keepPath = true; }   // 그 문서의 원본 경로(AI 가 고치는 소스)는 그대로 둔다
+          if (pick === 'ver') ex = same;
         }
       }
       var doc = ex ? ex.doc : freeDocId(src.name), ver = ex ? (Number(ex.latest_ver) || 0) + 1 : 1;
@@ -2057,9 +2206,11 @@
       }
       await sdk.store['delete']('versions', { doc: doc, ver: ver });   // 올리다 만 행이 남아 있으면 치운다(다시 누른 경우)
       for (var k = 0; k < p.rows.length; k++) { await sdk.store.insert('versions', Object.assign({ doc: doc, ver: ver, session: L.session || '' }, p.rows[k])); tick(); }
-      if (ex) await sdk.store.update('docs', { id: ex.id }, { latest_ver: ver, source_path: keepPath ? String(ex.source_path || '') : (src.path || String(ex.source_path || '')), changed_at: nowIso(), session: L.session || ex.session || '' });
+      //  문서의 원본 경로(AI 가 고치는 소스)는 처음 적힌 것을 지킨다 — 어느 파일이 어느 판인지는 sources 표가 안다.
+      if (ex) await sdk.store.update('docs', { id: ex.id }, { latest_ver: ver, source_path: String(ex.source_path || '') || src.path || '', changed_at: nowIso(), session: L.session || ex.session || '' });
       else await sdk.store.insert('docs', { doc: doc, title: title, session: L.session || '', latest_ver: ver, source_path: src.path || '', changed_at: nowIso() });
       await loadDocs();
+      await srcPut({ doc: doc, ver: ver, fp: fp, path: src.full || '', bytes: src.size || 0, mtime: src.mtime || '', session: L.session || '' });
       end(); closePicker();
       await openDoc(doc);
       var ext = p.warnings.length;
@@ -3340,8 +3491,7 @@
   async function buildReview() {
     var idx = st.vers.indexOf(st.ver); if (idx <= 0 || st.mode !== 'slides') return { prev: null, steps: [] };
     var pv = st.vers[idx - 1], prev = await loadVersion(st.doc, pv), cur = await loadVersion(st.doc, st.ver), pmap = {}, cmap = {}, steps = [], norm = function (t) { return String(t || '').replace(/\s+/g, ''); };
-    prev.slides.forEach(function (x) { if (!(x.variant || '')) pmap[x.slide_id] = x; });
-    cur.slides.forEach(function (x) { if (!(x.variant || '') && cmap[x.slide_id] == null) cmap[x.slide_id] = x; });
+    pmap = effMap(prev, pv); cmap = effMap(cur, st.ver);   // 판마다 «보이는 안»(고른 안 · 없으면 기본) — 안으로만 올라온 새 그림도 전후로 견준다
     var order = ord();
     for (var oi = 0; oi < order.length; oi++) {
       var sec = st.sections[order[oi]], c = cmap[sec.id], p0 = pmap[sec.id];
@@ -3358,8 +3508,8 @@
       free.forEach(function (k) { if (!k.used && k.gone && norm(k.t).length >= 2) mine.push({ kind: 'del', before: k.t }); });
       steps.push({ fi: sec.i, sid: sec.id, kind: 'slide', changes: mine });
     }
-    prev.slides.forEach(function (x) { if (!(x.variant || '') && !cmap[x.slide_id]) steps.push({ fi: -1, sid: x.slide_id, kind: 'gone', title: x.summary || x.slide_id, changes: [] }); });
-    return { prev: pv, steps: steps, prevHtml: assemble(prev), curHtml: assemble(cur) };
+    Object.keys(pmap).forEach(function (sid) { var x = pmap[sid]; if (x && !cmap[sid]) steps.push({ fi: -1, sid: sid, kind: 'gone', title: x.summary || sid, changes: [] }); });
+    return { prev: pv, steps: steps, prevHtml: assemble(prev, pv), curHtml: assemble(cur, st.ver) };
   }
   /* 견주기 틀 둘 — 앞 판 · 지금 판을 따로 띄워 두고 걸음마다 «그 장을 보여라» 만 시킨다. */
   var pk = null, pkSeq = 1;
@@ -3602,38 +3752,56 @@
     } catch (e) {} finally { pollBusy = false; }
   }
   setInterval(pollOnce, 10000);
-  /* 붙은 세션이 방금 만든 HTML — 머리줄 아래 한 줄로 알린다(원준 2026-10-11 «이 세션이 방금 만든 HTML 이 가장 열기 어렵다»).
-     화면이 보이는 동안 20초마다 이 프로젝트 자료의 목록을 다시 읽어, 앱을 연 뒤에 생기거나 바뀐 파일 가운데 앱의 문서보다 새로운 것을 고른다.
-     호스트가 «이 세션이 만든 것» 을 알려 주면 그것만 본다(다른 세션의 산출물로 띠가 뜨지 않게). 작은 조각 파일은 알리지 않는다. */
-  //  기준은 처음 읽은 목록의 가장 새 파일 시각이다(브라우저 시계가 아니라 — 시계가 어긋난 기계에서 옛 파일을 알리거나 새 파일을 놓치지 않게).
+  /* 붙은 세션이 만들거나 고친 HTML — 머리줄 아래 한 줄로 알린다(원준 2026-10-11 «이 세션이 방금 만든 HTML 이 가장 열기 어렵다» · «판을 제대로 인식 못 한다»).
+     화면이 보이는 동안 20초마다 이 프로젝트 자료의 목록을 다시 읽는다. 알릴지는 파일 시각이 아니라 **내용**으로 정한다(nfEval · fileState) —
+     다시 조립만 해서 시각만 바뀐 파일, 이미 올라온 판의 사본은 알리지 않고, 보고 있는 문서의 파일이 정말 달라졌으면 앱을 열기 전에 바뀐 것도 알린다. */
+  //  «앱을 연 뒤» 의 기준은 처음 읽은 목록의 가장 새 파일 시각이다(브라우저 시계가 아니라 — 시계가 어긋난 기계에서도 같게).
   var nf = { boot: null, seen: {}, cur: null, busy: false };
   function nfKey(f) { return fileKey(f) + '@' + f.mtime; }
   function nfPaint() {
     var b = $('newFileBanner'), f = nf.cur;
     if (!f || !$('empty').hidden || st.importing) { b.hidden = true; return; }
-    var s = fileState(f);
-    b.querySelector('span').textContent = '새 파일 · ' + (f.name || f.path) + (nf.more ? ' 외 ' + nf.more + '개' : '') + (s.doc ? ' · 「' + (s.doc.title || s.doc.doc) + '」 의 다음 판' : '');
-    $('nfOpen').textContent = s.doc ? '판 ' + ((Number(s.doc.latest_ver) || 1) + 1) + ' 로 올리기' : '열기';
+    var s = fileState(f, true);
+    if (!s.up || s.kind === 'pend') { b.hidden = true; return; }
+    var more = nf.more ? ' 외 ' + nf.more + '개' : '';
+    b.querySelector('span').textContent = s.doc && s.kind === 'changed'
+      ? '파일이 바뀜 · ' + (f.name || f.path) + more + ' · 「' + (s.doc.title || s.doc.doc) + '」 판 ' + (latestOf(s.doc) || 1) + ' 과 내용이 달라요'
+      : '새 파일 · ' + (f.name || f.path) + more;
+    $('nfOpen').textContent = s.doc && s.kind === 'changed' ? '판 ' + ((latestOf(s.doc) || 1) + 1) + ' 로 올리기' : '열기';
     b.hidden = false;
+  }
+  /** 알릴 파일을 고른다 — ① 보고 있는 문서에 이어진 파일이 그 문서의 판과 내용이 다르다(앱을 열기 전에 바뀐 것도) ② 앱을 연 뒤에 바뀐 파일이 다른 문서의 판과 다르다
+   *  ③ 앱을 연 뒤에 생긴, 어느 문서와도 이어지지 않는 파일(이 세션이 만든 것 먼저). 내용이 앱의 어느 판과 같은 파일은 알리지 않는다(다시 조립만 한 것 · 사본). */
+  function nfEval() {
+    if (nf.boot == null) return;
+    var files = st.files || [], any = files.some(function (f) { return f.from_session; }), out = [];
+    files.forEach(function (f) {
+      if (nf.seen[nfKey(f)] || Number(f.size) < PK_SMALL || Number(f.size) > PK_MAX) return;
+      var link = linkOf(f), mine = !!link && link.doc === st.doc && !$('main').hidden, fresh = Number(new Date(f.mtime)) > nf.boot;
+      if (!mine && !fresh) return;
+      var s = fileState(f, true);
+      if (s.kind === 'changed') out.push({ f: f, rank: mine ? 0 : 1 });
+      else if (s.kind === 'new' && fresh && (!any || f.from_session)) out.push({ f: f, rank: 2 });
+    });
+    out.sort(function (a, b) { return a.rank - b.rank || byNew(a.f, b.f); });
+    var c = out.map(function (x) { return x.f; });
+    nf.cur = c[0] || null; nf.more = Math.max(0, c.length - 1); nf.all = c;
+    nfPaint();
   }
   async function pollFiles() {
     if (nf.busy || document.hidden || !sdk.files || !L.session || st.importing) return;
     nf.busy = true;
     try {
-      await loadFiles();
+      await Promise.all([loadFiles(), loadSources()]);
       if (st.filesErr) return;
-      if (nf.boot == null) { nf.boot = (st.files || []).reduce(function (m, f) { return Math.max(m, Number(new Date(f.mtime)) || 0); }, 0); return; }
+      if (nf.boot == null) nf.boot = (st.files || []).reduce(function (m, f) { return Math.max(m, Number(new Date(f.mtime)) || 0); }, 0);
+      await ensureFps();   // 세션이 방금 올린 판의 지문도 안다(옛 스크립트가 올렸으면 여기서 센다) — 그 판과 같은 파일을 «바뀜» 으로 알리지 않게
       if (!$('empty').hidden || !$('pickModal').hidden) paintPickers();
-      var any = (st.files || []).some(function (f) { return f.from_session; });
-      var c = (st.files || []).filter(function (f) {
-        return Number(new Date(f.mtime)) > nf.boot && !nf.seen[nfKey(f)] && Number(f.size) >= PK_SMALL && Number(f.size) <= PK_MAX && (!any || f.from_session) && fileState(f).up;
-      });
-      nf.cur = c[0] || null; nf.more = Math.max(0, c.length - 1); nf.all = c;
-      nfPaint();
+      nfEval();
     } catch (e) {} finally { nf.busy = false; }
   }
   function nfDismiss() { (nf.all || []).forEach(function (f) { nf.seen[nfKey(f)] = 1; }); nf.cur = null; nfPaint(); }
-  $('nfOpen').addEventListener('click', function () { var f = nf.cur; if (!f) return; nfDismiss(); importFile(f, fileState(f).doc); });
+  $('nfOpen').addEventListener('click', function () { var f = nf.cur; if (!f) return; var d = fileState(f).doc; nfDismiss(); importFile(f, d); });
   $('nfList').addEventListener('click', function () { nfDismiss(); pkS.tab = 'proj'; pkS.q = ''; openPicker(); });
   $('nfClose').addEventListener('click', nfDismiss);
   setInterval(pollFiles, 20000); setTimeout(pollFiles, 1200);

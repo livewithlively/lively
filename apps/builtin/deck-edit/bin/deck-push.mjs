@@ -15,7 +15,7 @@
 //  순수 함수(splitHtml · assetize · fontAlias · checkExternal · chunk · plan)는 export 해 scripts/deck-push.test.mjs 가 시험한다.
 //  같은 함수들을 앱 화면(ui/index.html)도 쓴다 — 사람이 앱에서 폴더의 HTML 을 눌러 바로 올릴 때. 그래서 ⟦deck-split⟧ 블록으로 묶어 두 파일에 같은 글로 둔다.
 //  받는 쪽은 bin/deck-pull.mjs(앱의 최신 판을 HTML 파일로 — 원본이 이 세션에 없을 때).
-import { readFileSync } from "node:fs";
+import { statSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -194,9 +194,17 @@ function plan(html, opts = {}) {
   const big = rows.filter((r) => byteLen(r.body) > CHUNK).map((r) => `${r.kind} ${r.slide_id || r.seq} 가 ${byteLen(r.body)}B 로 한 행 상한(${CHUNK}B)을 넘습니다 — 장 안의 큰 data: 그림을 파일 밖으로 빼거나 장을 나누세요.`);
   return { mode: sp.mode, rows, assets: assetRows, warnings: warnings.concat(big), slides: sp.slides.map((s) => ({ slide_id: s.slide_id, no: s.no, summary: s.summary })), fonts, alias: !!alias };
 }
+/** 판의 지문 — 안(variant)이 아닌 행(머리 · 장 · 꼬리)의 글을 순서대로 이어 센 SHA-256. 같은 HTML 은 어디서 나눠도(세션 스크립트 · 앱 화면 · 표에 든 행) 같은 값이다.
+ *  파일이 어느 문서의 어느 판과 같은지는 경로나 시각이 아니라 이 값으로 가린다(다시 조립만 해도 시각은 바뀌고, 사본은 경로가 다르다). */
+function fpOf(rows) {
+  const rank = { head: 0, slide: 1, tail: 2 };
+  const main = rows.filter((r) => !String(r.variant || "")).map((r) => [String(r.kind), Number(r.seq) || 0, String(r.slide_id || ""), String(r.body == null ? "" : r.body)]);
+  main.sort((a, b) => ((rank[a[0]] ?? 3) - (rank[b[0]] ?? 3)) || (a[1] - b[1]) || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0));
+  return sha256(JSON.stringify(main));
+}
 // ⟦/deck-split⟧
 
-export { CHUNK, ASSET_MIN, chunk, splitHtml, assetize, usedFamilies, fontAlias, checkExternal, plan };
+export { CHUNK, ASSET_MIN, chunk, splitHtml, assetize, usedFamilies, fontAlias, checkExternal, plan, fpOf };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -260,6 +268,9 @@ async function main() {
   const src = resolve(file);
   if (existing.length) await upd("docs", { id: existing[0].id }, { latest_ver: ver, title, source_path: src, changed_at: now, session: sid });
   else await ins("docs", { doc: a.doc, title, session: sid, latest_ver: ver, source_path: src, changed_at: now });
+  //  이 판의 지문을 적어 둔다 — 앱이 자료의 파일을 이 값으로 견줘 «이 판과 같은 파일» · «이 판 뒤에 바뀐 파일» 을 가린다(경로 · 시각이 아니라 내용).
+  //  안(variant)만 올릴 때는 판이 그대로라 적지 않는다. 표가 아직 없는 옛 앱 판이면 조용히 넘어간다(앱이 행에서 다시 센다).
+  if (!a.variant) await ins("sources", { doc: a.doc, ver, fp: fpOf(p.rows), path: src, bytes: statSync(file).size, mtime: "", session: sid }).catch(() => {});
   console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}`);
 }
 
