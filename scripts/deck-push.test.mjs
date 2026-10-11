@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { assembleHtml } from "../apps/builtin/deck-edit/bin/deck-pull.mjs";
+import { annotateHtml, pickComments } from "../apps/builtin/deck-edit/bin/deck-export.mjs";
 import { splitHtml, assetize, fontAlias, checkExternal, chunk, plan, usedFamilies, fpOf, CHUNK } from "../apps/builtin/deck-edit/bin/deck-push.mjs";
 
 let pass = 0;
@@ -162,6 +163,24 @@ const deck = `<!doctype html><html><head><meta charset="utf-8"><title>덱</title
   for (const m of ui.matchAll(/^  (?:async )?function ([A-Za-z_$][\w$]*)\s*\(/gm)) { if (seen[m[1]]) dup.push(m[1]); seen[m[1]] = 1; }
   ok(Object.keys(seen).length > 200 && !dup.length, "D1 앱 화면의 최상위 함수 이름이 겹치지 않는다", dup.join(", "));
   ok(/^  function pump\(key\) \{/m.test(ui), "D2 저장 줄의 pump(key) 가 그대로 있다");
+}
+
+// ── X 의견 얹어 내보내기(deck-export, #4636) — 무엇을 싣는지 · 장표의 글을 건드리지 않는지 ──
+{
+  const C = (id, scope, ver, status, extra = {}) => ({ id: String(id), doc: "d", ver: String(ver), scope, status, slide_id: "s1", unit_key: "", orig: "", edited: null, note: "의견", bundle: null, ...extra });
+  const all = [C(5, "spot", 2, "draft", { unit_key: "pin:0.5,0.5" }), C(1, "unit", 2, "sent", { bundle: "1", edited: "고친 글", note: "" }), C(2, "slide", 1, "draft"), C(3, "slide", 1, "sent", { bundle: "1" }),
+    C(4, "ask", 2, "ask"), C(6, "spot", 2, "draft", { note: "  " }), C(7, "doc", 3, "draft")];
+  const ids = (o) => pickComments(all, o).map((c) => c.id).join(",");
+  ok(ids({ ver: 2 }) === "1,2,5", "X1 그 판의 의견 전부 + 지난 판에 남긴 채 안 보낸 것 · id 순(질문 · 빈 행 · 뒤 판의 것은 뺀다)", ids({ ver: 2 }));
+  ok(ids({ ver: 2, draftOnly: true }) === "2,5", "X2 --draft 는 안 보낸 것만");
+  ok(ids({ ver: 2, bundle: 1 }) === "1,3", "X3 --bundle 은 판과 상관없이 그 묶음만");
+  const src = "<html><head></head><body><section class=\"page\" id=\"s1\"><p>글 </script 흉내</p></section></body></html>";
+  const out = annotateHtml(src, [C(9, "slide", 1, "draft", { note: "</script><b>" })], { by: "누구" });
+  const at = out.indexOf("<style data-deck-export>");
+  ok(out.slice(0, at) === src.slice(0, src.lastIndexOf("</body>")) && out.endsWith("</body></html>"), "X4 장표의 글은 그대로 두고 </body> 앞에만 끼운다");
+  ok(!out.slice(at).replace(/<\/script><\/body><\/html>$/, "").includes("</script"), "X5 의견 안의 </script 가 스크립트를 끊지 못한다");
+  ok(/"by":"누구"/.test(out) && /"onlyCommented":false/.test(out), "X6 내보내는 이 · 의견 있는 장만 여부가 실린다");
+  ok(annotateHtml("<p>몸통 없는 글</p>", []).startsWith("<p>몸통 없는 글</p><style data-deck-export>"), "X7 </body> 가 없으면 끝에 붙인다");
 }
 
 // ── 빨간불 확인: 나누기가 어긋나면 S1d 가 잡는다(변이 1발) ──
