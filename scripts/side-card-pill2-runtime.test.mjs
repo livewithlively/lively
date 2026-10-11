@@ -40,7 +40,7 @@ const PAGE = `<!doctype html><meta charset="utf-8"><style>${CSS}
   #wrap{position:absolute;left:120px;top:60px;right:0;bottom:0}
 </style>
 <div id="wrap" class="pn-wrap"><div id="grid" class="pn-body">
-  <div class="pn-col" id="col"><div class="sc-wrap"><div id="head" class="sc-head"><div class="sc-head-l"><b>세션</b></div></div><div class="sc-body" style="flex:1;min-height:0">터미널</div></div></div>
+  <div class="pn-col" id="col"><div class="sc-wrap"><div id="head" class="sc-head"><div class="sc-head-l"><span class="v2-dot busy"></span><span class="sc-titlebox"><button class="sc-title sc-title-btn" type="button"><span class="sc-title-t">그 우리 우측 곁칸 제일 크게 댕기면 세션이 위에</span><svg width="13" height="13"><path d="M0 0h8v8z"/></svg></button><span class="sc-title-no mono">#4620</span></span></div><div class="sc-head-r"><span class="sc-pair"><span id="tstat" class="sc-termstat ok">연결됨</span></span><button class="btn-text sc-act" id="more" type="button">⋯</button></div></div><div class="sc-body" style="flex:1;min-height:0">터미널</div></div></div>
   <div class="v2-split-x" id="split"></div>
   <section id="pane" class="pn-pane" data-zone="side"><div class="pn-pane-body">사이드바</div></section>
 </div></div>
@@ -56,10 +56,11 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   try{
     const grid=document.getElementById('grid'), col=document.getElementById('col'), pane=document.getElementById('pane'), head=document.getElementById('head');
     const VW=document.documentElement.clientWidth, VH=document.documentElement.clientHeight;
-    const P=(type,x,y,t,id)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:type==='pointerup'?0:1,pointerId:id||7,pointerType:'mouse'}));
+    const P=(type,x,y,t,id)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:type==='pointerup'?0:1,pointerId:id||7,pointerType:'mouse',isPrimary:true}));   // 진짜 마우스는 늘 primary
     const fold=()=>grid.classList.contains('cm-fold'); const live=()=>grid.classList.contains('cm-live');
     const minB=()=>col.querySelector('.cm-min-b');
     const host={body:grid,colMain:col,sidePane:pane,sideOn:()=>true,setSideW:()=>{},sessionLeft:()=>true};
+    const disp=(sel)=>{const n=col.querySelector(sel); return n?getComputedStyle(n).display:'missing';};
     // N1c — 옛 기억: 크기는 버리고 자리는 잇는다
     let card=Card.mountSideCard(host); card.restore(true); await sleep(50); let r=rc(col);
     R.n1c_info=[Math.round(r.width),Math.round(r.height),Math.round(VW-r.right),Math.round(r.top)];
@@ -119,6 +120,27 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     minB().click(); await sleep(30); await dragBy(grip('e'),60,0); kg.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true})); await sleep(30); const ph=rc(col).width;
     minB().click(); await sleep(30); const chome=rc(col).width;
     R.n9_info=[Math.round(ph),Math.round(chome)]; R.n9=Math.abs(ph-260)<=1 && Math.abs(chome-320)<=1;
+    // N11r — 진짜 머리줄 이름으로: 카드에서 태스크 번호 · 연필 · 정상 «연결됨» 은 빠지고 ⋯ 는 남는다 · 끊기면 보인다 · 알약은 ⋯ 도 빠지고 이름이 넓다
+    card.restore(true,{fold:false}); await sleep(30);
+    const c1=[disp('.sc-title-no'),disp('.sc-title-btn > svg'),disp('.sc-pair'),disp('#more')];
+    const ts=document.getElementById('tstat'); ts.className='sc-termstat err'; ts.textContent='연결 끊김'; await sleep(20); const cErr=disp('.sc-pair');
+    ts.className='sc-termstat ok'; ts.textContent='연결됨'; minB().click(); await sleep(30);
+    const pMore=disp('#more'), tw=rc(col.querySelector('.sc-title-t')).width;
+    R.n11_info=[...c1,cErr,pMore,Math.round(tw)];
+    R.n11=c1[0]==='none' && c1[1]==='none' && c1[2]==='none' && c1[3]!=='none' && cErr!=='none' && pMore==='none' && tw>100;
+    // N12 — 세션 입력칸에 글이 들어왔다는 알림(화면 안에서 올라옴) → 알약이 펴지고 또렷
+    card.restore(true,{fold:true,pick:false}); await sleep(30); const f12=fold(), l12=live();
+    head.dispatchEvent(new CustomEvent('lively:session-input',{bubbles:true})); await sleep(30);
+    R.n12_info=[f12,l12,fold(),live()]; R.n12=f12 && !l12 && !fold() && live();
+    // N13 — 비친 카드 · 세션에 글을 넣는 단추(data-card-keep)를 눌러도 접지 않는다
+    card.restore(true,{pick:false}); await sleep(30);
+    const kb=document.createElement('button'); kb.setAttribute('data-card-keep',''); kb.textContent='본문 넣기'; sideEl.appendChild(kb);
+    const kr=rc(kb); P('pointerdown',kr.left+5,kr.top+5,kb,31); P('pointerup',kr.left+5,kr.top+5,kb,31); await sleep(30);
+    R.n13_info=[fold()]; R.n13=!fold();
+    // N14 — 두 번째 손가락(isPrimary 아님)의 누름은 세지 않는다
+    const sb=rc(sideEl); sideEl.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:sb.left+200,clientY:sb.top+200,button:0,pointerId:41,pointerType:'touch',isPrimary:false}));
+    sideEl.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,clientX:sb.left+200,clientY:sb.top+200,button:0,pointerId:41,pointerType:'touch',isPrimary:false})); await sleep(30);
+    R.n14_info=[fold()]; R.n14=!fold();
   }catch(e){R.err=String(e&&e.stack||e);}
   document.getElementById('out').textContent='RESULT '+JSON.stringify(R)+' ENDRESULT';
 })();
@@ -148,5 +170,9 @@ check(R.n7, "N7 곁칸 안 액자로 초점이 들어가는 것은 최소화가 
 check(R.n6c, "N6c 막 떠오르는 중 곁칸 누름 → 비침만", JSON.stringify(R.n6c_info));
 check(R.n8, "N8 알약 상태 글쇠 ← 는 알약 폭만(260 → 292) · 카드 크기 그대로", JSON.stringify(R.n8_info));
 check(R.n9, "N9 Home → 알약 260 · 카드 기본 폭 320", JSON.stringify(R.n9_info));
+check(R.n11, "N11 진짜 머리줄: 카드에서 번호 · 연필 · 정상 «연결됨» 빠짐 · ⋯ 남음 · 끊기면 보임 · 알약은 ⋯ 도 빠지고 이름 > 100px", JSON.stringify(R.n11_info));
+check(R.n12, "N12 세션 입력칸에 글이 들어오면 알약이 펴지고 또렷([본문 넣기] 한 글이 숨지 않는다)", JSON.stringify(R.n12_info));
+check(R.n13, "N13 세션에 글을 넣는 단추(data-card-keep)는 비친 카드를 접지 않는다", JSON.stringify(R.n13_info));
+check(R.n14, "N14 두 번째 손가락(isPrimary 아님)의 누름은 세지 않는다", JSON.stringify(R.n14_info));
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);

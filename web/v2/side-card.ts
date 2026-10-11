@@ -26,9 +26,11 @@
 //  카드인 동안 터미널 액자에 «glass» 를 보낸다(terminal.ts 가 xterm 바탕을 투명으로 바꾼다).
 //  또렷해지는 것은 둘뿐이다 — 마우스가 카드 위에 있다(CSS :hover) · 사람이 카드를 골랐다(누름·초점 = 격자의 cm-live).
 //  세션이 답을 기다려도 사람이 사이드바를 골랐으면 비친다. 무엇을 보고 있는지는 사람이 고른 칸이 정한다.
+//  비친 카드에서 사이드바를 한 번 더 누르면 알약으로 접는다(원준 2026-10-11). 최소화는 언제나 가장 작은 폭(PILL_W)이다.
 import { el } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';
 import { pnIcon } from './panes-kit.js';
+import { SESSION_INPUT_EVENT } from './sess-input.js';   // 세션 입력칸에 글이 들어왔다(잎 모듈)
 import {
   PILL_W, SIDE_DEF, type Box, type CardAnchor, type CardEdge, type CardRect, anchorFromRect, defaultAnchor, defaultCardSize, liftAbove,
   moveCard, overProgress, overZone, parsePrefs, rectFromAnchor, resizeCard, shouldCommit, sideCap,
@@ -37,7 +39,7 @@ import { isLive, nextPicked } from '../lib/side-card-live.js';   // 또렷 · �
 
 //  사람이 옮긴 자리 · 바꾼 크기(lib parsePrefs). 브라우저마다(사람마다) 하나다. 최소화 · 고름은 여기 적지 않는다 — 셸이 세션마다
 //   적는다(onState → restore, 2026-10-10). 손잡이를 끌어 카드가 되면 늘 펼친 카드다.
-//  ⚠ 이름 끝의 3 = 자리를 «가장 가까운 모서리 + 거리» 로 적고, 옮김 · 바꿈을 따로 기억하는 판(2026-10-09). 옛 키(…card2)는
+//  ⚠ 3 판(2026-10-09)부터 자리를 «가장 가까운 모서리 + 거리» 로 적고 옮김 · 바꿈을 따로 기억한다. 그 전 키(…card2)는
 //   r · b 와 접힘을 한 덩이로 적어서, 한 번 접기만 눌러도 기본 자리가 «옮긴 자리» 로 굳었다 — 읽지 않는다.
 const KEY_CARD = 'lively_v2_side_card4';
 //  ⚠ 4 = 기본 크기를 줄인 판(2026-10-11). 3 의 «바꾼 크기» 는 버린다 — 그 크기는 대개 10-09 판에서 알약 폭을 넓히다 카드 폭까지
@@ -320,9 +322,12 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   const seeThrough = (): boolean => shown() && !picked && !entering && !fold;
   let sideDown: { id: number; x: number; y: number; was: boolean } | null = null;
   const onDownCap = (e: PointerEvent): void => {
+    sideDown = null;                     // 앞 누름의 놓기를 못 들었어도(카드가 숨은 사이) 남기지 않는다
     if (!shown()) return;
     const t = e.target as Node | null;
-    sideDown = t && h.sidePane.contains(t) && e.button === 0 ? { id: e.pointerId, x: e.clientX, y: e.clientY, was: seeThrough() } : null;
+    //  세션에 글을 넣는 단추([본문 넣기] · [이 세션에 넣기], data-card-keep)는 접지 않는다 — 넣은 글이 접힌 카드 속에 숨는다(리뷰).
+    const keep = t instanceof Element && !!t.closest('[data-card-keep]');
+    sideDown = t && h.sidePane.contains(t) && e.button === 0 && e.isPrimary && !keep ? { id: e.pointerId, x: e.clientX, y: e.clientY, was: seeThrough() } : null;
     pickFrom(t);
     paintLive();
   };
@@ -333,7 +338,15 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > SIDE_PRESS_PX) return;   // 끌기 · 글자 고르기는 누름이 아니다
     if (d.was && shown() && !fold) setFold(true);
   };
-  const onCancelCap = (): void => { sideDown = null; };
+  const onCancelCap = (e: PointerEvent): void => { if (sideDown && sideDown.id === e.pointerId) sideDown = null; };
+  //  세션 입력칸에 글이 들어왔다(곁칸 «프로젝트» 앱의 [본문 넣기] 등 — session-chat.ts 가 입력칸에서 알린다). 사람이 읽고 고쳐 보내야
+  //   하므로 카드를 펴고 고른 것으로(또렷) 둔다 — 접힌 카드 · 비친 카드 속으로 글이 숨지 않게.
+  const onSessInput = (): void => {
+    if (dead || !shown()) return;
+    picked = true;
+    if (fold) setFold(false); else paintLive();
+  };
+  colMain.addEventListener(SESSION_INPUT_EVENT, onSessInput);
   const onFocusIn = (e: FocusEvent): void => { if (!shown()) return; pickFrom(e.target as Node | null); paintLive(); };
   const onWinBlur = (): void => { window.setTimeout(() => { if (dead || !shown()) return; pickFrom(document.activeElement); paintLive(); }, 0); };
   document.addEventListener('pointerdown', onDownCap, true);
@@ -675,6 +688,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       document.removeEventListener('pointerdown', onDownCap, true);
       document.removeEventListener('pointerup', onUpCap, true);
       document.removeEventListener('pointercancel', onCancelCap, true);
+      colMain.removeEventListener(SESSION_INPUT_EVENT, onSessInput);
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);
       window.removeEventListener('message', onFrameMsg);

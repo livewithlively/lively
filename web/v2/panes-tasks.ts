@@ -506,10 +506,11 @@ export function tasksPart(ctx: PartCtx): Part {
         onclick: (e: Event) => { e.stopPropagation(); if (s) goSession(s.id); } },
       pnIcon('goto', 'pn-i sm'), el('span', { text: '세션으로' }));
     }
-    if (kind === 'take') return el('button', { class: 'pn-tk-chip pj-act take', type: 'button',
+    //  data-card-keep — 세션이 카드로 떠 있어도 이 누름으로 카드를 접지 않는다(넣은 글이 접힌 카드 속에 숨는다, side-card.ts).
+    if (kind === 'take') return el('button', { class: 'pn-tk-chip pj-act take', type: 'button', 'data-card-keep': '',
       title: '이 세션의 다음 번호로 넣고, 태스크 이름과 본문을 입력칸에 넣습니다(보내지는 않습니다)',
       onclick: (e: Event) => { e.stopPropagation(); void takeIntoThis(t); } }, pnIcon('insert', 'pn-i sm'), el('span', { text: '이 세션에 넣기' }));
-    if (kind === 'put') return el('button', { class: 'pn-tk-chip pj-act put', type: 'button',
+    if (kind === 'put') return el('button', { class: 'pn-tk-chip pj-act put', type: 'button', 'data-card-keep': '',
       title: '태스크 이름과 본문을 지금 세션의 입력칸에 넣습니다(보내지는 않습니다)',
       onclick: (e: Event) => { e.stopPropagation(); putPrompt(t); } }, pnIcon('insert', 'pn-i sm'), el('span', { text: '본문 넣기' }));
     if (kind === 'picked') return el('button', { class: 'pn-tk-chip pj-act picked', type: 'button',

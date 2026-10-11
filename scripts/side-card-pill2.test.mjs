@@ -58,13 +58,27 @@ ok(/if \(d\.was && shown\(\) && !fold\) setFold\(true\);/.test(dn), "N6 · N6e �
 ok(/document\.addEventListener\('pointerup', onUpCap, true\);/.test(card) && /document\.removeEventListener\('pointerup', onUpCap, true\);/.test(card)
   && /document\.removeEventListener\('pointercancel', onCancelCap, true\);/.test(card), "N6g 놓기 · 취소를 듣고, 걷을 때 뗀다");
 const blur = between(card, "const onWinBlur", "document.addEventListener('pointerdown'");
-ok(!/setFold/.test(blur), "N7 곁칸 안 액자로 초점이 들어가는 것(창 blur)은 최소화하지 않는다", blur.slice(0, 200));
+ok(blur.length > 0 && /setTimeout/.test(blur) && !/setFold/.test(blur), "N7 곁칸 안 액자로 초점이 들어가는 것(창 blur)은 최소화하지 않는다", blur.slice(0, 200));
+//  ── 리뷰 반영(2026-10-11) ──
+ok(/sideDown = null;\s*\/\/[^\n]*\n\s*if \(!shown\(\)\) return;/.test(read("web/v2/side-card.ts")), "N14a 누를 때마다 앞 누름을 지운다(카드가 숨은 사이 놓기를 못 들어도 남지 않는다)");
+ok(/e\.isPrimary/.test(dn) && /if \(sideDown && sideDown\.id === e\.pointerId\) sideDown = null;/.test(dn), "N14b 두 번째 손가락 · 다른 손가락의 취소는 세지 않는다");
+ok(/const keep = t instanceof Element && !!t\.closest\('\[data-card-keep\]'\);/.test(dn) && /!keep \?/.test(dn), "N13 세션에 글을 넣는 단추(data-card-keep)는 접지 않는다");
+const tasks = code(read("web/v2/panes-tasks.ts"));
+ok(/pj-act take', type: 'button', 'data-card-keep': ''/.test(tasks) && /pj-act put', type: 'button', 'data-card-keep': ''/.test(tasks), "N13b [이 세션에 넣기] · [본문 넣기] 에 data-card-keep");
+const si = code(read("web/v2/sess-input.ts"));
+ok(/export const SESSION_INPUT_EVENT = 'lively:session-input';/.test(si) && !/^import /m.test(si), "N12a 세션 입력 알림 이름은 잎 모듈(import 0)에");
+const chat = code(read("web/session-chat.ts"));
+ok(/view\.input\.dispatchEvent\(new CustomEvent\(SESSION_INPUT_EVENT, \{ bubbles: true \}\)\)/.test(chat), "N12b 세션 화면이 입력칸에 글을 넣으면 그 화면 안에서 알린다(카드 열까지 올라간다)");
+const sin = between(card, "const onSessInput", "colMain.addEventListener(SESSION_INPUT_EVENT, onSessInput);");
+ok(/picked = true;/.test(sin) && /if \(fold\) setFold\(false\); else paintLive\(\);/.test(sin) && /colMain\.removeEventListener\(SESSION_INPUT_EVENT, onSessInput\);/.test(card),
+  "N12 세션 입력칸에 글이 들어오면 카드를 펴고 또렷하게(걷을 때 뗀다)", sin);
 
 //  N11 작은 카드 · 알약에서 세션 이름이 보이게 — 프리뷰 실측(10-11): 알약 260 에서 이름 칸 0px(태스크 번호 · 연결됨 · ⋯ 가 자리를 먹었다)
 const css = code(read("public/styles/45-v2-side-swap.css"));
 ok(/\.pn-body\.cm > \.pn-col \.sc-head \.sc-title-no,/.test(css) && /\.pn-body\.cm > \.pn-col \.sc-head \.sc-title-btn > svg,/.test(css)
-  && /\.pn-body\.cm > \.pn-col \.sc-head \.sc-pair:has\(> \.sc-termstat\.ok\),/.test(css)
-  && /\.pn-body\.cm\.cm-fold > \.pn-col \.sc-head \.sc-head-r > \.sc-act \{ display: none; \}/.test(css),
+  && /\.pn-body\.cm > \.pn-col \.sc-head \.sc-title-penbtn,/.test(css)
+  && /\.pn-body\.cm\.cm-fold > \.pn-col \.sc-head \.sc-head-r > \.sc-act \{ display: none; \}/.test(css)
+  && /\n\s*\.pn-body\.cm > \.pn-col \.sc-head \.sc-pair:has\(> \.sc-termstat\.ok\) \{ display: none; \}/.test(css),
   "N11 카드에서 태스크 번호 · 연필 · 정상일 때 «연결됨» 을 빼고, 알약은 ⋯ 도 뺀다(이름이 먼저)");
 ok(!/\.sc-pair\s*\{[^}]*display:\s*none/.test(css), "N11b 연결이 끊기면(.sc-termstat 이 ok 가 아니면) 그대로 보인다 — sc-pair 를 통째로 숨기지 않는다");
 
