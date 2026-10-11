@@ -35,7 +35,8 @@ test("빈 문자열·공백뿐인 좌표는 없는 것으로 보고 다음 조�
 
 // ── 배선 — 순수 판정이 맞아도 호출부가 컨테이너를 그대로 쓰면 아무 의미가 없다 ──────
 test("배선 — create 는 판정 결과(createList)로 나가고 컨테이너 직행 경로가 남아 있지 않다", () => {
-  assert.match(PUSH, /createSafe\(createList,/, "create 가 판정 결과를 안 쓴다");
+  //  create 는 createUnderParent 를 거친다 — 첫 시도 리스트가 판정 결과(createList)여야 한다.
+  assert.match(PUSH, /createUnderParent\(\{\s*listId: createList,/, "create 가 판정 결과를 안 쓴다");
   assert.ok(!/createSafe\(containerId/.test(PUSH), "컨테이너 직행 create 가 남아 있다 — ITEM_137 재발 경로");
 });
 
@@ -44,4 +45,23 @@ test("배선 — 조상 체인을 실제로 조회하고, status 기준 리스�
   assert.ok(PUSH.includes("NULLIF(btrim(external_base->>'list_ext'), '') AS list_ext, 0 AS d"),
     "조상 쿼리 anchor 가 리스트 좌표를 안 뽑는다(공백=없음 정규화 포함)");
   assert.match(PUSH, /listForStatus = .*createList/, "status 기준 리스트가 실제 생성 리스트와 갈린다");
+});
+
+// ── 배선 — 부모 좌표 자가 치유(ITEM_137). 순수 오케스트레이터가 맞아도 호출부가 이 계약을 안 지키면 의미가 없다 ──
+test("배선 — 치유 재시도는 고친 리스트 기준 body 로, 상태셋을 못 읽으면 만들지 않는다", () => {
+  assert.match(PUSH, /healed \? await bodyForList\(listId\) : body/, "치유 재시도가 옛 리스트 기준 status 를 그대로 보낸다");
+  assert.match(PUSH, /if \(stFailed && ob\.attempts < STATUS_LOAD_RETRY_LIMIT\) throw new Error/, "고친 리스트의 상태셋을 못 읽어도 status 없이 만들어 변경이 영구 유실된다");
+});
+
+test("배선 — 좌표는 원래 값이 있던 부모만 고치고, list_id 도 인바운드처럼 옮긴다", () => {
+  assert.match(PUSH, /WHERE id=\$1 AND NULLIF\(btrim\(external_base->>'list_ext'\), ''\) IS NOT NULL`, \[parentId, listId\]\)/,
+    "네이티브 부모에 좌표를 써 첫 인바운드의 list_id 수렴을 뒤집는다");
+  assert.match(PUSH, /WHEN \(SELECT pl\.external_id FROM project_list pl WHERE pl\.id = project\.list_id\) = \(external_base->>'list_ext'\)/,
+    "base 만 고쳐 다음 인바운드가 부모를 옛 리스트에 고정한다(로컬 이동 보존 조건 누락)");
+});
+
+test("배선 — 부모 카드가 지워졌으면 부모 연결을 끊고, createSafe 는 ITEM_137 에 재시도하지 않는다", () => {
+  assert.match(PUSH, /if \(made\.kind === "parent_gone"\) \{[\s\S]{0,600}external_base=NULL, updated_at=now\(\) WHERE id=\$1`, \[parentId\]\)/,
+    "지워진 부모 연결을 안 끊어 매 틱 같은 조회가 반복된다");
+  assert.match(PUSH, /catch \(e\) \{ if \(isParentNotInList\(e\)\) throw e;/, "ITEM_137 에 status 를 빼고 헛재시도한다");
 });

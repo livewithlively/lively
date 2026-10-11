@@ -21,3 +21,41 @@ export function createListFor(chainListExts: readonly (string | null | undefined
   }
   return containerId;
 }
+
+/** clickupFetch 가 던진 오류가 «부모가 이 리스트에 없다»(400 ITEM_137)인가. 상태코드 자리와 ECODE 를 함께 본다. */
+export function isParentNotInList(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 400 /.test(e.message) && /ITEM_137/.test(e.message);
+}
+
+export type ParentListLookup = { kind: "list"; listId: string } | { kind: "gone" };
+
+/**
+ * 자식 카드 생성 — 부모 리스트 좌표가 낡았으면 저쪽에서 다시 읽어 한 번 고쳐 만든다.
+ *
+ * 왜 필요한가: createListFor 가 쓰는 `list_ext` 는 인바운드가 마지막으로 본 값이다. 부모 카드가 ClickUp 에서
+ *  다른 리스트로 옮겨진 뒤 수집 범위를 벗어나면 그 값이 영영 갱신되지 않고, 그 아래 새 자식은 매 틱 ITEM_137 로
+ *  실패한다(2026-10-06: 08-11 값으로 남은 부모 아래 자식 1건이 5회 연속 실패해 push-clickup 이 자동 정지했다).
+ *  좌표의 정본은 저쪽 카드이므로, 거절당했을 때 부모 카드를 단건 조회해 실제 리스트를 얻는다.
+ *
+ * 재시도는 **한 번**이다. 다시 읽은 리스트가 처음 것과 같으면 좌표 문제가 아니므로 원래 오류를 그대로 던진다
+ *  (조용히 삼키지 않는다 — 원인이 다른 400 이면 사람이 봐야 한다).
+ */
+export async function createUnderParent<R>(o: {
+  listId: string;
+  parentExt: string | undefined;
+  create: (listId: string, healed: boolean) => Promise<R>;
+  lookupParentList: (parentExt: string) => Promise<ParentListLookup>;
+  onHealed: (parentExt: string, listId: string) => Promise<unknown>;
+}): Promise<{ kind: "created"; result: R; listId: string } | { kind: "parent_gone" }> {
+  try {
+    return { kind: "created", result: await o.create(o.listId, false), listId: o.listId };
+  } catch (e) {
+    if (!o.parentExt || !isParentNotInList(e)) throw e;
+    const found = await o.lookupParentList(o.parentExt);
+    if (found.kind === "gone") return { kind: "parent_gone" };
+    const actual = found.listId.trim();
+    if (!actual || actual === o.listId) throw e;
+    await o.onHealed(o.parentExt, actual);
+    return { kind: "created", result: await o.create(actual, true), listId: actual };
+  }
+}

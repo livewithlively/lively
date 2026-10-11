@@ -5,13 +5,13 @@
 //  status: **그 카드가 속한 리스트**의 상태셋에서 뽑는다(판정은 clickup/push-status.ts). 불일치 시 status 빼고 1회 재시도.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { clickupFetch, createTask, updateTask, getTeam, createTaskComment } from "./clickup.js";
+import { clickupFetch, createTask, updateTask, getTeam, createTaskComment, getTask } from "./clickup.js";
 import { CLOSED_CATEGORIES, closeCommentText, type CloseNote } from "./clickup/close-comment.js";
 import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
-import { createListFor } from "./clickup/push-target.js";
+import { createListFor, createUnderParent, isParentNotInList } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
@@ -58,7 +58,8 @@ function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown>
 //  아예 안 실었거나 빼고 재시도한 경우 ClickUp 태스크는 열린 채인데 «닫았다»는 코멘트만 붙으면 침묵보다 나쁘다.
 async function createSafe(listId: string, body: Record<string, unknown>) {
   try { return { task: await createTask(listId, body), statusApplied: body.status != null }; }
-  catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
+  //  ITEM_137(부모 리스트 불일치)은 status 와 무관하다 — status 를 빼고 다시 보내도 같은 400 이 나므로 바로 던진다(createUnderParent 가 처리).
+  catch (e) { if (isParentNotInList(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
 }
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
   try { await updateTask(taskId, body); return { statusApplied: body.status != null }; }
@@ -240,12 +241,13 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       //  (왜 부모 리스트여야 하는지는 createListFor 머리말 — ITEM_137.)
       const willUpdate = p.external_system === "clickup" && !!p.external_id;
       let parentExt: string | undefined;
+      let parentId: number | undefined;
       let chainListExts: (string | null)[] = [];
       if (!willUpdate && p.level !== "project") {
         if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip
         //  직계 부모(d=0)부터 위로 — 부모의 푸시 여부는 d=0 으로 판정하고, 리스트 좌표는 체인에서 첫 non-null 을
         //  쓴다(왜 한 칸이 아니라 체인인지는 createListFor 머리말). d<8 = 폭주 방지 상한.
-        const anc: Array<{ d: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
+        const anc: Array<{ d: number; id: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
           `WITH RECURSIVE anc AS (
              SELECT id, parent_id, external_id, external_system,
                     NULLIF(btrim(external_base->>'list_ext'), '') AS list_ext, 0 AS d
@@ -255,10 +257,11 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                     NULLIF(btrim(p.external_base->>'list_ext'), ''), anc.d+1
                FROM project p JOIN anc ON p.id = anc.parent_id
               WHERE anc.list_ext IS NULL AND anc.d < 8)
-           SELECT d, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
+           SELECT d, id, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
         const par = anc.find((a) => a.d === 0);
         if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
         parentExt = par.external_id;
+        parentId = par.id;
         chainListExts = anc.map((a) => a.list_ext);
       }
       const createList = createListFor(chainListExts, containerId);
@@ -315,7 +318,55 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         // 위 SELECT 가 컨테이너 부재 시 external_id 없는 행을 뽑지 않으므로, 여기 닿는 건 다른 시스템 미러
         //  (external_system≠clickup — 예: 노션 미러 프로젝트)뿐이다. create 할 자리가 없으니 닫는다.
         if (!containerId) { await markDone(ob.id); skipped++; continue; }
-        const { task: ct, statusApplied } = await createSafe(createList, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
+        //  부모 좌표가 낡았으면 저쪽 카드에서 다시 읽어 한 번 고쳐 만든다(createUnderParent 머리말 — ITEM_137 재발).
+        //   고친 리스트에선 상태셋이 다를 수 있으니 status 를 그 리스트 기준으로 다시 정한다.
+        const bodyForList = async (listId: string) => {
+          //  상태셋을 못 읽었으면 status 없이 만들지 않는다 — 위 STATUS_LOAD_RETRY_LIMIT 가드와 같은 이유(변경 영구 유실)이고
+          //   상한도 같다(넘으면 status 없이 진행 — 안 그러면 영구 실패가 연속 실패 자동 정지로 간다). 좌표가 기록된 부모
+          //   (list_ext 보유)면 다음 틱은 정상 경로가 그 가드를 타고, 네이티브 부모면 이 경로가 다시 돈다.
+          const { statuses: st, failed: stFailed } = await statusesOf(listId);
+          if (stFailed && ob.attempts < STATUS_LOAD_RETRY_LIMIT) throw new Error(`list ${listId} 상태셋 로드 실패 — 치유 좌표는 기록됨, 다음 틱 재시도`);
+          return mkBody(p, decidePushStatus({
+            ourCategory: p.status_category, theirStatusRaw: p.base_status_raw, statuses: st, baseCategory: p.base_status_category,
+          }));
+        };
+        const made = await createUnderParent({
+          listId: createList,
+          parentExt,
+          create: async (listId, healed) =>
+            createSafe(listId, { ...(healed ? await bodyForList(listId) : body), ...(parentExt ? { parent: parentExt } : {}) }),
+          lookupParentList: async (ext) => {
+            try { return { kind: "list", listId: (await getTask(ext)).list?.id ?? "" }; }
+            catch (err) { if (isClickupTaskGone(err)) return { kind: "gone" }; throw err; }
+          },
+          //  좌표는 **원래 값이 있던** 부모(인바운드가 채운 미러)에만 고쳐 쓴다. 비어 있던 부모는 push 로 만든 네이티브
+          //   카드라 base.list_ext 를 써 두면 첫 인바운드의 list_id 수렴이 뒤집힌다(push-target.ts createListFor 머리말).
+          //   그 경우는 이번 생성만 고친 리스트로 하고 좌표는 그대로 둔다.
+          //  base 를 고칠 때 list_id 도 인바운드가 했을 것처럼 옮긴다 — base 만 바꾸면 다음 인바운드의 3-way
+          //   (base=새 값, ours=옛 리스트, theirs=새 값)가 ours 를 채택해 로컬 배치가 옛 리스트에 고정된다
+          //   (mirror-project.ts 「외부 이동 수렴」). 로컬에서 따로 옮겨 둔 부모(ours≠base)는 그대로 둔다.
+          onHealed: (_ext, listId) => parentId == null ? Promise.resolve() : itemsPool.query(
+            `UPDATE project SET
+                    list_id = CASE
+                      WHEN (SELECT pl.external_id FROM project_list pl WHERE pl.id = project.list_id) = (external_base->>'list_ext')
+                      THEN (SELECT pl.id FROM project_list pl
+                             WHERE pl.external_system='clickup' AND pl.external_instance=project.external_instance AND pl.external_id=$2)
+                      ELSE list_id END,
+                    external_base = external_base || jsonb_build_object('list_ext', $2::text),
+                    updated_at=now()
+              WHERE id=$1 AND NULLIF(btrim(external_base->>'list_ext'), '') IS NOT NULL`, [parentId, listId]),
+        });
+        if (made.kind === "parent_gone") {
+          //  부모 카드가 저쪽에서 지워졌다 — 갱신 경로의 404 와 같은 규율로 부모 연결을 끊는다(pushLinkedUpsert 머리말).
+          //   부모가 네이티브가 되면 이 행은 «부모 미푸시» 로 미뤄지고, 부모가 다시 생기면 그 아래에 만들어진다.
+          await itemsPool.query(
+            `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
+                    external_base=NULL, updated_at=now() WHERE id=$1`, [parentId]);
+          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워져 부모 연결을 끊었다(자식은 부모가 다시 생긴 뒤)");
+          deferred++; continue;
+        }
+        if (made.listId !== createList) logger.warn({ project: p.id, parent: parentExt, from: createList, to: made.listId }, "부모 리스트 좌표가 낡아 저쪽 값으로 고쳐 만들었다(ITEM_137)");
+        const { task: ct, statusApplied } = made.result;
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
           `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
