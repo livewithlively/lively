@@ -14,6 +14,7 @@ import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, listProjectFiles, read
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
 
 const rate = new RateWindow(PROJECT_FILES_PER_MINUTE);
+const madeCache = new Map<string, { at: number; paths: string[] }>();
 
 async function storeOf(project: ProjectRef, memberId: string) {
   const { projectStorage } = await import("../project/project-storage.js");
@@ -53,13 +54,20 @@ const liveDeps: ProjectFilesDeps = {
     const { listProjectFileIndex } = await import("../v6/source-store.js");
     return listProjectFileIndex({ exts, q: opts.q, limit: opts.limit }, memberId);
   },
+  //  앱은 열려 있는 동안 목록을 주기적으로 다시 읽는다 — 표시용 조회라 30초 묵혀 쓴다(색인이 파일보다 늦는 폭보다 짧다).
   sessionMade: async (project, sessionId, memberId, exts) => {
+    const key = [appSqlTenantId(), memberId, project.id, sessionId, exts.join(",")].join("\0");
+    const hit = madeCache.get(key), now = Date.now();
+    if (hit && now - hit.at < 30_000) return hit.paths;
     const { listProjectFileIndex } = await import("../v6/source-store.js");
-    return (await listProjectFileIndex({ exts, limit: 500, projectId: project.id, session: sessionId }, memberId)).map((r) => r.path);
+    const paths = (await listProjectFileIndex({ exts, limit: 500, projectId: project.id, session: sessionId }, memberId)).map((r) => r.path);
+    if (madeCache.size > 500) madeCache.clear();
+    madeCache.set(key, { at: now, paths });
+    return paths;
   },
   projectById: async (projectId) => {
     const { itemsPool } = await import("../db/client.js");
-    const r = await itemsPool.query(`SELECT id, COALESCE(folder,'') AS folder FROM project WHERE id=$1 AND trashed_at IS NULL`, [projectId]);
+    const r = await itemsPool.query(`SELECT id, COALESCE(folder,'') AS folder FROM project WHERE id=$1 AND level='project' AND trashed_at IS NULL`, [projectId]);
     const row = r.rows[0] as { id: number; folder: string } | undefined;
     return row ? { id: Number(row.id), folder: String(row.folder) } : null;
   },

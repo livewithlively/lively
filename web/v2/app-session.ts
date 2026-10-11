@@ -182,7 +182,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
         // 전체 자료 읽기(#4629) — 위보다 넓다: 붙인 세션의 프로젝트 밖, 내가 볼 수 있는 모든 프로젝트의 자료. 그래서 제 줄로 따로 묻는다.
         app.workspaceFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '전체 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '내가 볼 수 있는 모든 프로젝트의 자료에서 ' + app.workspaceFiles.map((x) => x.toUpperCase()).join(' · ') + ' 파일을 읽을 수 있어요(쓰지는 못해요)' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '내가 볼 수 있는 모든 프로젝트의 자료에서 ' + app.workspaceFiles.map((x) => x.toUpperCase()).join(' · ') + ' 파일을 읽을 수 있어요(쓰지는 못해요). 읽은 내용은 이 앱의 데이터에 담겨 이 앱을 쓰는 다른 구성원에게 보일 수 있어요' }))) : null,
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
           el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,

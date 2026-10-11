@@ -160,7 +160,8 @@ function wantedExts(raw: unknown, exts: string[]): Set<string> {
 /**
  * 전체 자료 목록(#4629) — 그 사람이 볼 수 있는 모든 프로젝트의 자료에서, workspace_files 로 선언한 확장자만, 최신순.
  *  줄마다 어느 프로젝트의 파일인지(project_id · project_name)가 실린다 — 읽을 때 그 project_id 를 함께 준다.
- *  색인이 준 줄도 프로젝트 공개 범위로 한 번 더 거른다(자료의 공개 범위와 프로젝트의 공개 범위는 다른 축이다).
+ *  프로젝트 공개 범위는 색인 조회가 건다(가려진 프로젝트의 줄이 limit 자리를 차지하지 않게). 여기서도 줄마다 한 번 더 본다(겹 방어 —
+ *  자료의 공개 범위와 프로젝트의 공개 범위는 다른 축이다).
  */
 async function listWorkspaceFiles(q: ListInput, deps: ProjectFilesDeps, rate: RateWindow): Promise<ListResult> {
   const { exts } = await gate(q, deps, rate, true);
@@ -168,9 +169,10 @@ async function listWorkspaceFiles(q: ListInput, deps: ProjectFilesDeps, rate: Ra
   const attached = await deps.projectOfSession(sid);
   const want = wantedExts(q.ext, exts);
   const limit = Math.max(1, Math.min(PROJECT_FILES_LIST_MAX, Math.round(Number(q.limit)) || PROJECT_FILES_LIST_DEFAULT));
-  const base: ListResult = { scope: "all", project_id: attached?.id ?? null, files: [], truncated: false };
+  //  붙은 세션의 프로젝트 id 도 그 사람에게 보일 때만 알려 준다(좁은 목록과 같은 답).
+  const base: ListResult = { scope: "all", project_id: attached && attached.folder && (await deps.canSeeProject(attached.id, q.member)) ? attached.id : null, files: [], truncated: false };
   if (!want.size || !deps.workspaceIndex) return base;
-  const term = String(q.q ?? "").trim().slice(0, 100);
+  const term = String(q.q ?? "").replace(/\0/g, "").trim().slice(0, 100);
   const rows = await deps.workspaceIndex(q.member, [...want], { q: term, limit: limit + 1 });
   const seen = new Map<number, boolean>();
   const hits: WorkspaceFileEntry[] = [];
@@ -184,7 +186,8 @@ async function listWorkspaceFiles(q: ListInput, deps: ProjectFilesDeps, rate: Ra
   return {
     ...base,
     files: hits.slice(0, limit).map((f) => ({ path: f.path, name: f.path.split("/").pop() || f.path, size: f.size, mtime: new Date(f.mtime).toISOString(), project_id: f.project_id, project_name: f.project_name, ...(f.session && f.session === sid ? { from_session: true as const } : {}) })),
-    truncated: rows.length > limit,
+    //  넘침은 **보이는 줄**로만 센다 — 색인이 가려진 프로젝트를 이미 뺐지만(라이브), 걸러진 줄 수로 가려진 파일이 있다는 것이 새지 않게.
+    truncated: hits.length > limit,
   };
 }
 
@@ -197,7 +200,9 @@ export async function readProjectFile(q: ReadInput, deps: ProjectFilesDeps, rate
   //  project_id 를 주면 전체 자료의 그 프로젝트에서 읽는다(#4629) — 붙은 세션의 프로젝트와 같은 id 여도 전체 자료의 선언 · 동의로 본다
   //   (앱이 id 를 지어내 좁은 동의로 넓은 곳을 읽는 길을 두지 않는다).
   const wide = q.projectId != null && q.projectId !== "";
-  const pid = wide ? Number(q.projectId) : 0;
+  //  숫자이거나 숫자만으로 된 글일 때만(배열 · 불리언은 Number() 가 숫자로 읽어 버린다).
+  const okId = typeof q.projectId === "number" || (typeof q.projectId === "string" && /^[0-9]{1,9}$/.test(q.projectId));
+  const pid = wide && okId ? Number(q.projectId) : 0;
   if (wide && !(Number.isInteger(pid) && pid > 0)) throw new HttpError(400, "project_id 가 올바르지 않습니다");
   const g = await gate(q, deps, rate, wide);
   const exts = g.exts;

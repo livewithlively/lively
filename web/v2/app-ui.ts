@@ -214,7 +214,11 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
         if (p.scope === 'all') { qs.set('scope', 'all'); if (typeof p.q === 'string' && p.q.trim()) qs.set('q', p.q.trim().slice(0, 100)); }
       } else {
         qs.set('path', String(p.path ?? ''));
-        if (p.project != null && Number.isInteger(Number(p.project)) && Number(p.project) > 0) qs.set('project_id', String(Number(p.project)));
+        //  프로젝트를 지목했는데 값이 이상하면 붙은 프로젝트로 조용히 돌리지 않는다(같은 이름의 다른 파일이 읽힌다).
+        if (p.project != null) {
+          if (typeof p.project !== 'number' || !Number.isInteger(p.project) || p.project <= 0) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: 'project 는 전체 자료 목록이 준 project_id(양의 정수)여야 합니다' } }); return; }
+          qs.set('project_id', String(p.project));
+        }
       }
       const read = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + (list ? '/files?' : '/file?') + qs.toString());
       void read()

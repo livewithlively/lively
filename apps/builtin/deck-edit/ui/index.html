@@ -1814,7 +1814,9 @@
   function docForFile(f) {
     var here = f.project_id == null || Number(f.project_id) === pkS.pid, full = fullPath(f);
     var by = function (test) { return st.docs.filter(function (x) { var sp = String(x.source_path || ''); return !!sp && test(sp); })[0] || null; };
-    return by(function (sp) { return endsWithPath(sp, full); }) || (here ? by(function (sp) { return endsWithPath(sp, f.path); }) : null);
+    //  꼬리만 맞는 것은 이 프로젝트의 문서일 때만 — 원본 경로가 다른 프로젝트(project/<id>/…)를 가리키면 같은 이름의 남의 파일이다.
+    var foreign = function (sp) { var m = /(?:^|\/)project\/(\d+)\//.exec(sp); return !!m && pkS.pid != null && Number(m[1]) !== pkS.pid; };
+    return by(function (sp) { return endsWithPath(sp, full); }) || (here ? by(function (sp) { return !foreign(sp) && endsWithPath(sp, f.path); }) : null);
   }
   /** 그 파일을 누르면 무슨 일이 일어나나 — 앱에 없으면 열기 · 올린 뒤에 파일이 바뀌었으면 그 문서의 다음 판 · 그대로면 그 문서를 연다(다시 올리지 않는다). */
   function fileState(f) {
@@ -1831,6 +1833,8 @@
     b.onclick = run; return b;
   }
   function closePicker() { $('pickModal').hidden = true; }
+  //  창이 어느 길로 닫히든(닫기 단추 · 바깥 누름 · Esc) 묻던 것은 취소로 끝낸다 — 답 없는 물음이 남으면 불러오기가 잠긴 채로 남는다.
+  new MutationObserver(function () { if ($('pickModal').hidden && pkS.ask && $('empty').hidden) { var a = pkS.ask; pkS.ask = null; a.done('cancel'); } }).observe($('pickModal'), { attributes: true, attributeFilter: ['hidden'] });
   function fileRow(f) {
     var s = fileState(f), big = Number(f.size) > PK_MAX;
     var dir = f.path.indexOf('/') >= 0 ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
@@ -3601,7 +3605,8 @@
   /* 붙은 세션이 방금 만든 HTML — 머리줄 아래 한 줄로 알린다(원준 2026-10-11 «이 세션이 방금 만든 HTML 이 가장 열기 어렵다»).
      화면이 보이는 동안 20초마다 이 프로젝트 자료의 목록을 다시 읽어, 앱을 연 뒤에 생기거나 바뀐 파일 가운데 앱의 문서보다 새로운 것을 고른다.
      호스트가 «이 세션이 만든 것» 을 알려 주면 그것만 본다(다른 세션의 산출물로 띠가 뜨지 않게). 작은 조각 파일은 알리지 않는다. */
-  var nf = { boot: Date.now(), seen: {}, cur: null, busy: false };
+  //  기준은 처음 읽은 목록의 가장 새 파일 시각이다(브라우저 시계가 아니라 — 시계가 어긋난 기계에서 옛 파일을 알리거나 새 파일을 놓치지 않게).
+  var nf = { boot: null, seen: {}, cur: null, busy: false };
   function nfKey(f) { return fileKey(f) + '@' + f.mtime; }
   function nfPaint() {
     var b = $('newFileBanner'), f = nf.cur;
@@ -3616,6 +3621,8 @@
     nf.busy = true;
     try {
       await loadFiles();
+      if (st.filesErr) return;
+      if (nf.boot == null) { nf.boot = (st.files || []).reduce(function (m, f) { return Math.max(m, Number(new Date(f.mtime)) || 0); }, 0); return; }
       if (!$('empty').hidden || !$('pickModal').hidden) paintPickers();
       var any = (st.files || []).some(function (f) { return f.from_session; });
       var c = (st.files || []).filter(function (f) {
@@ -3629,7 +3636,7 @@
   $('nfOpen').addEventListener('click', function () { var f = nf.cur; if (!f) return; nfDismiss(); importFile(f, fileState(f).doc); });
   $('nfList').addEventListener('click', function () { nfDismiss(); pkS.tab = 'proj'; pkS.q = ''; openPicker(); });
   $('nfClose').addEventListener('click', nfDismiss);
-  setInterval(pollFiles, 20000);
+  setInterval(pollFiles, 20000); setTimeout(pollFiles, 1200);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) pollFiles(); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) pollOnce(); });
   window.addEventListener('focus', function () { pollOnce(); });

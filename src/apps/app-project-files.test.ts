@@ -298,3 +298,19 @@ test("W7 매니페스트 — workspace_files 를 선언하면 app_workspace_file
   assert.throws(() => parseAppManifest({ ...base, permissions: { workspace_files: ["*"] } }));
   assert.deepEqual(memberAppViolations(a), []);
 });
+
+test("W8 가려진 프로젝트의 줄이 limit 을 채워도 «넘쳤다» 고 하지 않는다 · 붙은 프로젝트가 가려져 있으면 그 id 도 알려 주지 않는다", async () => {
+  const hiddenRows = Array.from({ length: 3 }, (_, i) => ({ project_id: 9000, project_name: "잠긴 프로젝트", path: `비밀${i}.html`, mtime: T - i, size: 10 }));
+  const r = await listProjectFiles({ ...q({ limit: 2 }), scope: "all" }, wide({ index: hiddenRows }), fresh());
+  assert.deepEqual(r.files, []);
+  assert.equal(r.truncated, false, "걸러진 줄 수로 가려진 파일이 있다는 것이 새면 안 된다");
+  const h = await listProjectFiles({ ...q(), scope: "all" }, wide({ project: { id: 9000, folder: "project/9000" } }), fresh());
+  assert.equal(h.project_id, null);
+  assert.equal(h.files.length, 2, "보이는 프로젝트의 파일은 그대로 나온다");
+});
+
+test("W9 project_id 는 양의 정수뿐 — 배열 · 숫자 아닌 글은 400, 저장소에 닿지 않는다", async () => {
+  const d = wide();
+  for (const bad of [[3625], "3625abc", "1e2x", {}, true]) assert.equal(await status(readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: bad }, d, fresh())), 400, JSON.stringify(bad));
+  assert.equal(d.reads.length, 0);
+});
