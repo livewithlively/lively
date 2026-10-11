@@ -186,7 +186,8 @@ await t("모순 후보 SQL 이 기존 술어를 전부 보존한다", () => {
 //  timeout 으로 죽어도 크론 last_status 에 ok 가 찍힌다(2026-10-11 실제로 그랬다).
 await t("관리기 결과 → 크론 status 표", () => {
   const E = { error: "canceling statement due to statement timeout" };
-  const rows: [Pick<ManagerRunResult, "error">[], string, string][] = [
+  const P = { error: "레포 1/3 접수 실패: r2: 헤드리스 접수 실패", task_ids: [8, 9] };
+  const rows: [Pick<ManagerRunResult, "error" | "task_ids">[], string, string][] = [
     [[{}], "ok", "성공 하나"],
     [[{}, {}], "ok", "전부 성공"],
     [[E], "error", "하나뿐인 관리기가 실패"],
@@ -194,6 +195,9 @@ await t("관리기 결과 → 크론 status 표", () => {
     [[E, {}], "warn", "일부 실패"],
     [[{}, E, {}], "warn", "가운데 하나 실패"],
     [[{ error: "" }], "ok", "빈 error 문자열은 실패가 아니다"],
+    [[P], "warn", "하나뿐인 관리기가 레포 일부만 접수 실패 — 나머지 레포는 돌았다"],
+    [[P, E], "warn", "전부 error 여도 접수된 위탁이 있으면 전멸이 아니다"],
+    [[{ error: "x", task_ids: [] }], "error", "빈 task_ids 는 접수 0 이다"],
   ];
   for (const [input, want, why] of rows) assert.equal(statusForManagerResults(input), want, why);
   // skipped(볼 것 없음)는 성공이다 — 실패로 세면 후보 0건인 주마다 브레이커가 돈다
