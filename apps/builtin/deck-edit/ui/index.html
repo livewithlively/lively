@@ -3372,7 +3372,18 @@
     if (st.doc && st.mode === 'slides' && st.vers.indexOf(st.ver) > 0) items.push({ id: 'review', label: '앞 판과 그림으로 견주기', run: function () { openReview().catch(fail); } });
     if (undos.length) items.push({ id: 'undo', label: '되돌리기: ' + undos[undos.length - 1].label, run: function () { doUndo(); } });
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
+    if (st.doc && sdk.chat) items.push({ id: 'export', label: '의견 얹은 PDF 로 내보내기', run: function () { exportPdf().catch(fail); } });
     return items;
+  }
+  /** 이 판의 의견을 장 위에 얹은 PDF 를 세션에 청한다 — 앱 화면은 샌드박스라 인쇄 · 내려받기를 못 하므로 세션의 AI 가 bin/deck-export.mjs 로 뽑는다. 묶음은 잠그지 않는다(보내기와 따로다). */
+  async function exportPdf() {
+    await flushSaves();
+    if (unsaved()) { toast('아직 저장되지 않은 것이 있어 내보내지 않았어요 · 연결을 확인하고 「저장 안 됨」 을 눌러 주세요', 4200); return; }
+    var n = st.comments.filter(function (c) { return c.doc === st.doc && !c._tmp && ['unit', 'spot', 'slide', 'doc', 'order'].indexOf(c.scope) >= 0 && (String(c.note || '').trim() || c.edited != null) && (Number(c.ver) === st.ver || (Number(c.ver) < st.ver && c.status === 'draft')); }).length;
+    if (!n) { toast('이 판에 단 의견이 없어요 · 글을 고치거나 핀 · 영역으로 의견을 단 뒤 내보내 주세요', 4200); return; }
+    var msg = '[장표 수정] ' + st.title + ' · 판 ' + st.ver + ' · 의견 ' + n + '건 → 의견을 장 위에 얹은 PDF 로 내보내 주세요 (문서 ' + st.doc + ')';
+    var r = null; try { r = await sdk.chat.send(msg); } catch (e) {}
+    toast(r && r.sent ? 'PDF 를 세션에 청했습니다 · 다 되면 세션에 링크가 옵니다' : (r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : '세션에 알리지 못했어요 · 세션에서 「의견 얹은 PDF 로 내보내 줘」 라고 말해 주세요'), 4200);
   }
   function renderMenu() {
     var items = menuItems(), box = $('menu');
