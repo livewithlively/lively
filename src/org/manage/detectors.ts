@@ -161,7 +161,7 @@ export interface ContradictionCandidate {
 
 // 후보 = 스코프 지식 k 마다 HNSW 최근접 이웃 CONTRADICTION_NEIGHBORS 개 중 임계 이상인 쌍.
 //  ⚠ 전쌍 자기조인(JOIN ... ON 거리 <= 임계)으로 되돌리지 마라 — 거리 술어는 인덱스를 못 타 n² 스캔이 되고,
-//   임베딩 5,250건(2026-10-11)에서 statement timeout 으로 관리기가 통째로 실패했다.
+//   임베딩 수천 건 규모에서 statement timeout 으로 관리기가 통째로 실패했다.
 //  LATERAL 안의 ORDER BY 는 관례상 인덱스 열을 왼쪽에 둔다(`o.embedding_vector <=> k.embedding_vector`) —
 //   테스트가 이 모양을 못박는다.
 //  한계(근사): 임계 이상 유사 쌍이 k 의 이웃 N개 밖에 있으면 빠진다(닮은 문서가 N개 넘게 몰린 군집).
