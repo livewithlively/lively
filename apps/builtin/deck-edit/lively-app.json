@@ -2,7 +2,7 @@
   "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
   "id": "deck-edit",
   "title": "장표 수정",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "publisher": {
     "name": "Lively"
   },
