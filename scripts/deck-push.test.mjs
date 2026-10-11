@@ -154,6 +154,16 @@ const deck = `<!doctype html><html><head><meta charset="utf-8"><title>덱</title
   ok(fpOf(plan(deck.replace("A".repeat(50_000), "B".repeat(50_000))).rows) !== fp, "F5 자원(글꼴 · 그림)만 바뀌어도 다른 지문(머리의 자리표가 바뀐다)");
 }
 
+// ── D 앱 화면의 함수 이름이 겹치지 않는다 — 같은 자리에 같은 이름의 function 이 둘이면 뒤의 것이 앞의 것을 조용히 덮는다.
+//    16판 사고(2026-10-11): 파일 견주기 줄의 pump() 가 저장 줄의 pump(key) 를 덮어 고친 글 · 의견 저장이 통째로 멎었다.
+{
+  const ui = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../apps/builtin/deck-edit/ui/index.html"), "utf8");
+  const seen = {}, dup = [];
+  for (const m of ui.matchAll(/^  (?:async )?function ([A-Za-z_$][\w$]*)\s*\(/gm)) { if (seen[m[1]]) dup.push(m[1]); seen[m[1]] = 1; }
+  ok(Object.keys(seen).length > 200 && !dup.length, "D1 앱 화면의 최상위 함수 이름이 겹치지 않는다", dup.join(", "));
+  ok(/^  function pump\(key\) \{/m.test(ui), "D2 저장 줄의 pump(key) 가 그대로 있다");
+}
+
 // ── 빨간불 확인: 나누기가 어긋나면 S1d 가 잡는다(변이 1발) ──
 red(() => { const sp = splitHtml(deck); assert.equal(sp.head + sp.slides.map((s) => s.body.slice(1)).join("") + sp.tail, deck); }, "R1 장 body 를 한 글자 깎으면 S1d 식 비교가 빨간불");
 
