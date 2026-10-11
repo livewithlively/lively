@@ -86,7 +86,9 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
 
 - 멱등: 드레인이 현재 project 행을 다시 읽어 upsert — 두 번 돌려도 같은 ClickUp 상태로 수렴한다. 푸시한 값은
   `external_base`(3-way 머지의 공통조상)로 전진해, 다음 인바운드가 외부 편집만 골라낸다.
-- 실패 행은 `attempts`·`last_error` 가 남고 다음 틱에 재시도한다. exit 1 = 실패 행 존재.
+- 실패 행은 `attempts`·`last_error` 가 남고 다음 틱에 재시도한다. exit 1 = 시스템성 실패(5xx·네트워크·401·403·429) 존재.
+- 행 고유 거절(그 밖의 4xx)은 실행 실패로 세지 않고(`rejected`), 같은 행이 3회 거절되면 드레인에서 뺀다(파킹 — `parked`, 경보 1회). 그 항목을 다시 편집하면 풀린다. 한 실행에서 거절이 5건 이상인데 반출이 0건이면 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다).
+- 파킹 행 일괄 해제(원인을 고친 뒤): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
 - 공개범위가 잠긴 리스트의 **네이티브**(우리에서 태어난) 프로젝트는 반출하지 않는다(#1291). 미러 기원 행은 그대로 푸시한다.
 
 ## 4. 스케줄

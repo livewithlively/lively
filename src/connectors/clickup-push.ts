@@ -16,7 +16,7 @@ import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.j
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
 import { drainBudgetExceeded } from "./push-budget.js";
-import { classifyPushFailure, parksAfter, parkedSql, parkedParams, notifyParked, type ParkedRow } from "./push-failure.js";
+import { classifyPushFailure, parksAfter, parkedSql, parkedParams, notifyParked, isMassRejection, MASS_REJECT_MARK, type ParkedRow } from "./push-failure.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { PUBLIC_VIEWER } from "../v6/visibility.js";
@@ -198,7 +198,8 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== "", ...parkedParams()]);
 
   let pushed = 0, deferred = 0, failed = 0, rejected = 0, deleted = 0, skipped = 0, detached = 0;
-  const parkedRows: ParkedRow[] = [];
+  let parkedRows: ParkedRow[] = [];
+  const rejectedIds: number[] = [];
   let budgetStopped = false, visited = 0;
   const markDone = (obid: number) => itemsPool.query(`UPDATE external_outbox SET done_at=now(), updated_at=now() WHERE id=$1`, [obid]);
   const markErr = (obid: number, msg: string) => itemsPool.query(`UPDATE external_outbox SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [obid, msg.slice(0, 500)]);
@@ -344,7 +345,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       await markErr(ob.id, msg);
       const kind = classifyPushFailure(e);
       if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
-      rejected++;
+      rejected++; rejectedIds.push(ob.id);
       if (parksAfter(ob.attempts, kind)) {
         parkedRows.push({ outboxId: ob.id, entityId: ob.entity_id, error: msg });
         logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행이 같은 거절을 반복해 드레인 대상에서 뺐다(파킹 — 재편집 시 해제)");
@@ -352,6 +353,17 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행 거절(행 고유 — 실행 실패로 세지 않음, 다음 틱 재시도)");
       }
     }
+  }
+  //  일괄 거절 — 한 실행에서 거절만 여럿이고 반출이 0건이면 행 탓이 아니라 설정 탓(컨테이너 리스트 삭제·오설정 등)이다.
+  //   그대로 두면 전 행이 3틱 뒤 하나씩 파킹되고, 설정을 고쳐도 항목마다 다시 편집해야 풀린다(종전엔 브레이커가 멈추고
+  //   설정을 고치면 전부 복구됐다). 그래서 이 경우는 시스템성 실패로 올리고, last_error 앞에 표식을 붙여 파킹 술어
+  //   (`^ClickUp 4xx` 앵커)에서 빠지게 한다 — 다음 성공 실행이나 재enqueue 가 덮어써 표식은 저절로 사라진다.
+  if (isMassRejection({ rejected, pushed })) {
+    await itemsPool.query(
+      `UPDATE external_outbox SET last_error = $2 || COALESCE(last_error, '') WHERE id = ANY($1::bigint[])`,
+      [rejectedIds, MASS_REJECT_MARK]);
+    logger.warn({ rejected, pushed }, "반출이 0건인데 거절이 여럿이다 — 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다)");
+    failed += rejected; rejected = 0; parkedRows = [];
   }
   //  새로 파킹된 행은 다음 실행부터 선택되지 않으므로 이 자리가 그 행의 유일한 알림 기회다.
   await notifyParked(parkedRows, sendBoxAlert);

@@ -86,7 +86,9 @@ The old `pm_task_*` MCP tools (create·update_status·assign·comment·link·arc
 
 - Idempotent: the drain re-reads the current project row and upserts — running it twice converges to the same ClickUp state. Pushed values
   advance `external_base` (the common ancestor for the 3-way merge), so the next inbound picks out only external edits.
-- Failed rows keep `attempts`·`last_error` and are retried on the next tick. exit 1 = there are failed rows.
+- Failed rows keep `attempts`·`last_error` and are retried on the next tick. exit 1 = a systemic failure (5xx, network, 401, 403, 429) occurred.
+- Row-specific rejections (other 4xx) don't count as run failures (`rejected`); a row rejected 3 times is dropped from the drain (parked — `parked`, one alert). Editing that item again releases it. If one run has 5+ rejections and zero pushes, it is treated as a configuration problem and raised as a run failure (no parking).
+- Bulk-release parked rows (after fixing the cause): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
 - **Native** projects (born in Lively) in lists with restricted visibility are not exported (#1291). Rows that originated from the mirror are pushed as usual.
 
 ## 4. Schedule

@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import {
   classifyPushFailure, isRowRejectMessage, parksAfter, isParkedRow, parkedSql, parkedParams,
   parkedAlert, notifyParked, PARK_AFTER, ROW_REJECT_RE, SYSTEMIC_4XX_RE, type ParkedRow,
+  isMassRejection, MASS_REJECT_MIN, MASS_REJECT_MARK,
 } from "./push-failure.js";
 import { childDrainSummary } from "./sync-outcome.js";
 
@@ -142,4 +143,24 @@ test("시뮬레이션 — 같은 행이 매 틱 거절당해도 경보는 파킹
 test("요약 — childDrainSummary 가 parked 를 싣고, 없으면 종전 모양 그대로", () => {
   assert.deepEqual(childDrainSummary('{"remaining":5,"budgetStopped":false,"parked":2}'), { remaining: 5, budgetStopped: false, parked: 2 });
   assert.deepEqual(childDrainSummary('{"remaining":5,"budgetStopped":false}'), { remaining: 5, budgetStopped: false });
+});
+
+
+test("표 — 일괄 거절(거절 여럿·반출 0)은 설정 문제로 본다", () => {
+  assert.equal(isMassRejection({ rejected: MASS_REJECT_MIN, pushed: 0 }), true, "설정 오류로 전 행이 거절돼도 하나씩 파킹된다 — 설정을 고쳐도 항목마다 재편집해야 풀린다");
+  assert.equal(isMassRejection({ rejected: MASS_REJECT_MIN - 1, pushed: 0 }), false, "행 몇 건의 진짜 거절에도 크론이 선다");
+  assert.equal(isMassRejection({ rejected: 50, pushed: 1 }), false, "반출이 된 실행을 설정 문제로 본다");
+});
+
+test("일괄 거절 표식이 붙은 last_error 는 파킹 술어에서 빠진다 — 설정을 고치면 다음 틱에 다시 반출된다", () => {
+  const msg = MASS_REJECT_MARK + 'ClickUp 404 /list/9/task: {"err":"List not found"}';
+  assert.equal(isRowRejectMessage(msg), false, "표식이 붙어도 행 거절로 읽혀 파킹된다");
+  assert.equal(isParkedRow({ attempts: 9, last_error: msg }), false);
+});
+
+test("배선 — 일괄 거절이면 표식을 붙이고 실패로 올리며 파킹 경보를 내지 않는다", () => {
+  assert.match(DRAIN, /if \(isMassRejection\(\{ rejected, pushed \}\)\) \{[\s\S]{0,700}failed \+= rejected; rejected = 0; parkedRows = \[\];/,
+    "일괄 거절을 실패로 안 올려 브레이커가 안 돈다");
+  assert.match(DRAIN, /SET last_error = \$2 \|\| COALESCE\(last_error, ''\) WHERE id = ANY\(\$1::bigint\[\]\)/, "표식을 안 붙여 다음 틱에 파킹된다");
+  assert.ok(DRAIN.indexOf("isMassRejection({ rejected, pushed })") < DRAIN.indexOf("await notifyParked(parkedRows"), "파킹 경보가 일괄 판정보다 먼저 나간다");
 });
