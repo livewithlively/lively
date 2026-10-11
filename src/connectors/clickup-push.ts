@@ -100,6 +100,17 @@ export function isClickupTaskGone(e: unknown): boolean {
 }
 
 /**
+ * 단건 조회 오류가 «이 토큰의 워크스페이스에서 그 태스크를 볼 수 없다»(401 OAUTH_027 Team not authorized)인가.
+ *  카드가 이 토큰이 권한 없는 다른 워크스페이스로 옮겨지면 이렇게 온다(2026-10-11 실측). 우리 쪽에서는 지워진 것과 같다.
+ *  같은 워크스페이스의 비공개 공간 거부는 다른 코드로 오므로 여기 해당하지 않는다(종전대로 던져 재시도).
+ *  ⚠ 토큰 자체가 죽은 경우와 구분해야 한다 — 이 판정은 «같은 토큰으로 방금 create 가 인증을 통과해 ITEM_137 을 받은 뒤»
+ *   부모를 조회할 때만 쓴다(createUnderParent 의 lookupParentList). 일반 경로에서 쓰면 토큰 장애를 «카드 없음» 으로 덮는다.
+ */
+export function isClickupTaskInaccessible(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 401 /.test(e.message) && /OAUTH_027/.test(e.message);
+}
+
+/**
  * 연결된 태스크로 갱신을 보낸다. 태스크가 ClickUp 에서 지워졌으면 연결을 끊고 "detached".
  *  종전엔 404 도 markErr 로 남겨 매 틱 재시도했다 — 태스크는 돌아오지 않으므로 그 행이 실행마다 실패 1건을 만들고,
  *  연속 실패 서킷브레이커가 push-clickup 전체를 멈췄다. 연결을 끊은 프로젝트는 네이티브가 되어, 다음 변경 때
@@ -337,7 +348,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
             createSafe(listId, { ...(healed ? await bodyForList(listId) : body), ...(parentExt ? { parent: parentExt } : {}) }),
           lookupParentList: async (ext) => {
             try { return { kind: "list", listId: (await getTask(ext)).list?.id ?? "" }; }
-            catch (err) { if (isClickupTaskGone(err)) return { kind: "gone" }; throw err; }
+            catch (err) { if (isClickupTaskGone(err) || isClickupTaskInaccessible(err)) return { kind: "gone" }; throw err; }
           },
           //  좌표는 **원래 값이 있던** 부모(인바운드가 채운 미러)에만 고쳐 쓴다. 비어 있던 부모는 push 로 만든 네이티브
           //   카드라 base.list_ext 를 써 두면 첫 인바운드의 list_id 수렴이 뒤집힌다(push-target.ts createListFor 머리말).
@@ -362,7 +373,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
           await itemsPool.query(
             `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
                     external_base=NULL, updated_at=now() WHERE id=$1`, [parentId]);
-          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워져 부모 연결을 끊었다(자식은 부모가 다시 생긴 뒤)");
+          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워졌거나 이 워크스페이스에서 볼 수 없어 부모 연결을 끊었다(자식은 부모가 다시 생긴 뒤)");
           deferred++; continue;
         }
         if (made.listId !== createList) logger.warn({ project: p.id, parent: parentExt, from: createList, to: made.listId }, "부모 리스트 좌표가 낡아 저쪽 값으로 고쳐 만들었다(ITEM_137)");

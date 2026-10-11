@@ -65,3 +65,8 @@ test("배선 — 부모 카드가 지워졌으면 부모 연결을 끊고, creat
     "지워진 부모 연결을 안 끊어 매 틱 같은 조회가 반복된다");
   assert.match(PUSH, /catch \(e\) \{ if \(isParentNotInList\(e\)\) throw e;/, "ITEM_137 에 status 를 빼고 헛재시도한다");
 });
+
+test("배선 — 부모 조회가 404 이거나 다른 워크스페이스(401 OAUTH_027)면 parent_gone 으로 본다", () => {
+  assert.match(PUSH, /if \(isClickupTaskGone\(err\) \|\| isClickupTaskInaccessible\(err\)\) return \{ kind: "gone" \}/,
+    "다른 워크스페이스로 옮겨진 부모를 «조회 실패» 로 던져 매 틱 실패한다");
+});
