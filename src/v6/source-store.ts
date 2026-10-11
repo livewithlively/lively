@@ -191,6 +191,37 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
      ORDER BY ${titleHead}COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
+// ── 프로젝트 자료 파일의 색인(#4629) — 앱 화면의 «전체 자료» 목록(apps/app-project-files.ts scope 'all')이 읽는다. ──
+//  프로젝트 폴더에 올리거나 세션이 만든 파일은 ingest/local-file 이 파일마다 자료 한 줄로 적는다(fields.root='project' · path · ext · bytes ·
+//  container_ref 'project:<id>'). 그래서 프로젝트마다 폴더를 훑지 않고 이 한 번의 조회로 «볼 수 있는 모든 프로젝트의 그 종류 파일» 이 선다.
+//  지워진 프로젝트의 파일은 뺀다. 자료 공개범위(viewer)는 여기서, 프로젝트 공개범위는 호출부가 한 번 더 본다.
+//  session = 그 파일을 만든 세션(fields.entry_session — 세션의 AI 가 만든 파일에만 있다). 앱이 «이 세션이 만든 것» 을 가를 때 쓴다.
+export interface ProjectFileIndexRow { project_id: number; project_name: string; path: string; size: number; mtime: number; session: string }
+export async function listProjectFileIndex(f: { exts: string[]; q?: string; limit: number; projectId?: number; session?: string }, viewer?: Viewer): Promise<ProjectFileIndexRow[]> {
+  const exts = f.exts.map((x) => String(x).toLowerCase()).filter(Boolean);
+  if (!exts.length) return [];
+  const params: unknown[] = [exts];
+  const wh = [`s.lifecycle='active'`, `s.kind='local_file'`, `s.fields->>'root'='project'`, `lower(s.fields->>'ext') = ANY($1::text[])`,
+    `s.fields->>'container_ref' ~ '^project:[0-9]+$'`, `COALESCE(s.fields->>'path','') <> ''`];
+  if (f.projectId != null) { params.push(`project:${Number(f.projectId)}`); wh.push(`s.fields->>'container_ref' = $${params.length}`); }
+  if (f.session) { params.push(f.session); wh.push(`s.fields->>'entry_session' = $${params.length}`); }
+  //  찾는 말은 파일 이름 · 경로에서만(본문은 보지 않는다 — HTML 본문에는 어떤 말이든 스친다).
+  for (const term of String(f.q ?? "").split(/\s+/).filter(Boolean).slice(0, 6)) {
+    params.push("%" + term.replace(/[\\%_]/g, "\\$&") + "%");
+    wh.push(`(s.fields->>'path') ILIKE $${params.length} ESCAPE '\\'`);
+  }
+  const vis = await sourceVisWhere(viewer, params);
+  params.push(Math.min(Math.max(Math.round(Number(f.limit)) || 200, 1), 501));
+  const rows = await q(itemsPool,
+    `SELECT p.id AS project_id, COALESCE(p.name,'') AS project_name, s.fields->>'path' AS path, s.fields->>'bytes' AS size,
+            COALESCE(s.fields->>'entry_session','') AS session, COALESCE(s.occurred_at, s.updated_at) AS at
+       FROM source s
+       JOIN project p ON p.id = substring(s.fields->>'container_ref' from 9)::int AND p.trashed_at IS NULL
+      WHERE ${wh.join(" AND ")} AND ${vis}
+      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $${params.length}`, params) as Array<{ project_id: number; project_name: string; path: string; size: string | null; session: string; at: string | Date }>;
+  return rows.map((r) => ({ project_id: Number(r.project_id), project_name: String(r.project_name || ""), path: String(r.path), size: Number(r.size) || 0, mtime: Number(new Date(r.at)) || 0, session: String(r.session || "") }));
+}
+
 // ── 휴지통의 파일 자료(#3778) — 파일을 지워 `.lively/trash` 로 옮겨 둔 자료들(ingest/local-file.ts 의 도장 fields.trash). ──
 //  프로젝트를 가로질러 한 번에 읽는다(휴지통 「자료」 탭). 본문은 안 싣는다 — 목록 규약 그대로. 뷰어 술어를 태워
 //  안 보이는 자료는 휴지통에서도 안 보인다.

@@ -304,6 +304,22 @@
   .vars { display: inline-flex; gap: 4px; align-items: center; flex: none; font-size: 12px; color: var(--muted); }
   .vars .v { height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg); color: var(--ink-sub); font-size: 12px; font-weight: 700; }
   .vars .v.on { background: var(--mint-bg); color: var(--mint-deep); border-color: var(--mint-deep); }
+  .vars .v.cmp { background: var(--soft-2); }
+  .vars .v.cmp.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  /* 안 비교 — 무대 위를 덮고 기본 안과 다른 안을 나란히(좁으면 위아래로) 놓는다 */
+  #varCmp { position: absolute; top: 0; right: 0; bottom: 0; left: 40px; z-index: 20; background: var(--soft-2); overflow: auto; padding: 10px 12px 16px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); }
+  .stageWrap.norail #varCmp, body.cols.compact #varCmp { left: 0; }
+  #varCmp .vcHead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12.5px; color: var(--muted); }
+  #varCmp .vcHead b { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #varCmp .vcGrid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  #varCmp.wide .vcGrid { grid-template-columns: 1fr 1fr; }
+  #varCmp .vcPane { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  #varCmp .vcLab { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800; color: var(--ink); min-height: 28px; }
+  #varCmp .vcLab .pk { font-size: 11.5px; font-weight: 800; color: var(--mint-deep); background: var(--mint-bg); border-radius: 6px; padding: 2px 7px; }
+  #varCmp .vcLab .sp { flex: 1; }
+  #varCmp .vcShot { position: relative; overflow: hidden; background: #fff; border-radius: 6px; box-shadow: 0 0 0 1px var(--line-2), 0 4px 14px rgba(21,35,59,.08); cursor: pointer; }
+  #varCmp .vcPane.on .vcShot { box-shadow: 0 0 0 2px var(--mint-deep), 0 4px 14px rgba(21,35,59,.08); cursor: default; }
+  #varCmp .vcShot iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; }
   .ib.sm { height: 26px; min-width: 26px; padding: 0 8px; font-size: 12px; }
   .ib.sm.ic { padding: 0; width: 26px; }
   .ib.has { color: var(--amber-text); border-color: var(--amber); background: var(--amber-bg); }
@@ -513,7 +529,7 @@
   .pk-h { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 800; color: var(--muted); }
   .pk-h small { font-weight: 600; color: var(--muted-2); font-size: 12px; }
   .pk-list { display: grid; gap: 5px; }
-  .pk-i { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; padding: 8px 10px 8px 8px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); text-align: left; }
+  .pk-i { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; padding: 7px 10px 7px 8px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); text-align: left; }
   .pk-i:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-bg); }
   .pk-i:disabled { opacity: .55; cursor: default; }
   .pk-i .ico { grid-row: 1 / span 2; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; background: var(--soft-2); color: var(--muted); }
@@ -522,20 +538,46 @@
   .pk-i small { grid-column: 2; font-size: 12px; color: var(--muted); }
   .pk-i .go { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; font-weight: 800; color: var(--blue-deep); white-space: nowrap; }
   .pk-more { justify-self: start; height: 28px; }
+  /* 찾기 · 탭 — 열 것은 거의 늘 「이 프로젝트」 아니면 「전체 자료」 다 */
+  .pk-q { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); color: var(--muted); }
+  .pk-q:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-bg); }
+  .pk-q input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font: 600 13.5px var(--font); }
+  .pk-q input::placeholder { color: var(--muted-2); }
+  .pk-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--soft-2); }
+  .pk-tabs[hidden] { display: none; }
+  .pk-tabs button { flex: 1 1 0; min-width: 0; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-sub); font-size: 13px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .pk-tabs button.on { background: var(--bg); color: var(--ink); box-shadow: 0 1px 3px rgba(21,35,59,.16); }
+  .pk-tabs button i { flex: none; font: 700 12px var(--mono); font-style: normal; color: var(--muted); }
+  .pk-body { display: grid; gap: 10px; align-content: start; min-height: 0; }
+  .pk-foot { display: grid; gap: 12px; }
+  .pk-fold { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .pk-fold .ib { height: 24px; padding: 0 8px; font-size: 12px; }
+  .pk-none { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px; border: 1.5px dashed var(--line-2); border-radius: 9px; background: var(--soft); font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
+  .pk-none span { flex: 1 1 180px; min-width: 0; }
+  /* 진행 — 큰 파일은 읽고 나누고 올리는 데 몇 초가 걸린다. 멈춘 것처럼 보이지 않게 한 자리에서 말한다 */
+  .pk-run { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--blue); border-radius: 9px; background: var(--blue-bg); font-size: 12.5px; color: var(--blue-deep); }
+  .pk-run[hidden] { display: none; }
+  .pk-run b { font-size: 13px; font-weight: 800; color: var(--ink); }
+  .pk-run.ask { border-color: var(--amber); background: var(--amber-bg); color: var(--amber-text); line-height: 1.5; }
+  .pk-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .pk-bar { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; }
+  .pk-bar i { display: block; height: 100%; border-radius: 3px; background: var(--blue); transition: width .18s ease; }
+  .pk-bar.wait i { animation: pkWait 1.1s ease-in-out infinite alternate; }
+  @keyframes pkWait { from { opacity: .25; } to { opacity: .9; } }
   .pk-say { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 6px; font-size: 13px; line-height: 1.55; }
   .pk-say code { justify-self: start; font: 600 12.5px var(--mono); color: var(--ink); background: var(--soft-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 10px; white-space: pre-wrap; }
-  .pk-drop { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; padding: 9px 10px 9px 8px; border: 1.5px dashed var(--line-2); border-radius: 9px; background: var(--soft); }
+  .pk-drop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1.5px dashed var(--line-2); border-radius: 9px; background: var(--soft); }
   .pk-drop.over, body.dropping .pk-drop { border-color: var(--blue); background: var(--blue-bg); }
-  .pk-drop .ico { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; background: var(--bg); color: var(--muted); }
-  .pk-drop b { font-size: 13.5px; font-weight: 800; color: var(--ink); }
-  .pk-drop small { grid-column: 2; font-size: 12px; color: var(--muted); }
-  .pk-drop .ib { grid-row: 1 / span 2; grid-column: 3; height: 30px; }
+  .pk-drop small { flex: 1 1 160px; min-width: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .pk-drop .ib { height: 30px; }
   #dropVeil { position: fixed; inset: 0; z-index: 40; display: none; place-items: center; background: rgba(45,107,240,.14); border: 3px dashed var(--blue); font-size: 15px; font-weight: 800; color: var(--blue-deep); pointer-events: none; }
   body.dropping #dropVeil { display: grid; }
-  .pk-none { padding: 12px; border: 1.5px dashed var(--line-2); border-radius: 9px; background: var(--soft); font-size: 13px; line-height: 1.55; }
   .pk-prog { font-size: 12.5px; font-weight: 700; color: var(--blue-deep); }
-  #pickModal .card { width: min(560px, 100%); }
-  #pickModal .mb { max-height: 70vh; overflow-y: auto; }
+  #pickModal .card { width: min(600px, 100%); display: flex; flex-direction: column; height: min(680px, 94vh); overflow: hidden; }
+  #pickModal .mb { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  #pickModal .pk-body { flex: 1; overflow-y: auto; margin: 0 -14px; padding: 2px 14px; }
+  #pickModal .mb > * { flex: none; }
+  #pickModal .mb > .pk-body { flex: 1 1 0; }
 
   /* 모달(보내기 · 표시 설정 · 문서 의견) */
   .modal { position: fixed; inset: 0; z-index: 30; background: rgba(21,35,59,.42); display: grid; place-items: center; padding: 14px; }
@@ -573,6 +615,7 @@
   <symbol id="i-spot" viewBox="0 0 24 24"><path d="M12 21s-6-5.4-6-10a6 6 0 0 1 12 0c0 4.6-6 10-6 10z M12 13a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z"/></symbol>
   <symbol id="i-area" viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="13" rx="1.5" stroke-dasharray="3 2.7"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 16V5 M7.5 9.5 12 5l4.5 4.5 M5 19h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M20 20l-3.9-3.9"/></symbol>
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5"/></symbol>
   <symbol id="i-deck" viewBox="0 0 24 24"><path d="M3 5h18v11H3z M8 20h8 M12 16v4"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
@@ -598,6 +641,7 @@
 <div class="strip warn" id="saveBanner" hidden><span></span><button type="button" class="ib sm" id="saveRetry">지금 다시</button></div>
 <div class="strip warn" id="notifyBanner" hidden><span></span><button type="button" class="ib sm" id="notifyRetry">다시 보내기</button><button type="button" class="ib sm ic" id="notifyClose" aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
 <div class="strip" id="newVerBanner" hidden><span></span><button type="button" class="ib sm" id="nvReview">전후 견줘 보기</button><button type="button" class="ib sm pri" id="nvOpen">열기</button></div>
+<div class="strip" id="newFileBanner" hidden><span class="clip"></span><button type="button" class="ib sm pri" id="nfOpen">열기</button><button type="button" class="ib sm" id="nfList">목록</button><button type="button" class="ib sm ic" id="nfClose" aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
 <div class="strip ask" id="askBanner" hidden><span></span><button type="button" class="ib sm pri" id="askOpen">답하기</button></div>
 <div class="strip" id="orderBanner" hidden><span></span><button type="button" class="ib sm">원래대로</button></div>
 <div id="main">
@@ -609,6 +653,7 @@
           <div class="canvas" id="canvas"><div class="hit" id="hit"></div><div class="curp" id="curp" hidden></div><div class="hl" id="hl" hidden></div><div class="ohl" id="ohl" hidden></div></div>
           <div class="wait" id="wait">여는 중…</div>
         </div>
+        <div id="varCmp" hidden></div>
       </div>
       <button type="button" class="ib sm" id="zoomClose"><svg class="i"><use href="#i-x"/></svg>닫기</button>
     </div>
@@ -738,7 +783,7 @@
     docs: [], doc: null, title: '', vers: [], ver: 0, heads: {}, verCache: {},
     comments: [], picks: [], pins: [], prefs: {}, sections: [], cur: null, units: {}, rects: {}, mode: 'slides',
     scale: 1, fw: 1280, fh: 720, prevText: {}, changed: {}, focused: null, layoutNarrow: false, zoom: false,
-    cmOpen: {}, cmScope: 'slide', unnotified: null, want: {}, wantScope: {}, order: null, tool: 'sel', spotOn: null, pages: [], total: 0, compact: false, laySig: '', spyHold: 0, files: null, filesErr: '', importing: ''
+    cmOpen: {}, cmScope: 'slide', unnotified: null, want: {}, wantScope: {}, order: null, tool: 'sel', spotOn: null, pages: [], total: 0, compact: false, laySig: '', spyHold: 0, files: null, filesErr: '', importing: '', importNote: '', importName: '', importPct: null
   };
   var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {}, askSend: true };
   function pref(k) { return st.prefs[k] != null ? st.prefs[k] : DEF[k]; }
@@ -1732,27 +1777,52 @@
   }
 
   /* ───────────── 불러오기 — 처음 화면 · 「다른 HTML 불러오기」 ───────────── */
-  //  눌러서 여는 것이 먼저다(원준 2026-10-07 「그냥 불러올 파일 목록을 최신순으로 보여줘서 클릭하게」). 세션에 말하는 길은 그 아래 한 줄.
-  var PK_SHOW = 6, pkMore = { files: false, docs: false };
+  //  (원준 2026-10-11) 열 것은 거의 늘 둘 가운데 하나다: 이 프로젝트의 자료, 아니면 우리 자료 전체. 그래서 그 둘이 탭이고, 그 안에서는
+  //  **이 세션이 방금 만든 파일**이 맨 위에 선다(가장 가까운 파일이 가장 적은 단계로 열려야 한다). 한 자리에 함께 있는 것: 찾기 ·
+  //  이미 앱에 있는 문서와의 이음(같은 파일이면 새 문서가 아니라 「판 N+1」 · 그대로면 그 문서 열기) · 진행 막대 · 상한 안내.
+  //  전체 자료는 호스트가 할 수 있다고 인사했을 때만 선다(capabilities.files_all) · 줄마다 어느 프로젝트의 파일인지가 실려 온다.
+  var PK_SHOW = 6, PK_SMALL = 15 * 1024, PK_MAX = 8 * 1048576;
+  var pkS = { tab: '', q: '', small: false, more: {}, all: null, allErr: '', allBusy: false, allQ: null, allTrunc: false, canAll: false, pid: null, trunc: false, ask: null, qT: 0, seq: 0 };
+  function byNew(a, b) { return Number(new Date(b.mtime)) - Number(new Date(a.mtime)); }
+  function msgOf(e) { return e && e.message ? e.message : String(e); }
   async function loadFiles() {
     if (!sdk.files || !L.session) { st.files = []; return; }
-    try { var r = await sdk.files.list({ ext: ['html', 'htm'], limit: 200 }); st.files = (r && r.files) || []; st.filesErr = ''; }
-    catch (e) { st.files = []; st.filesErr = e && e.message ? e.message : String(e); }
-    st.files.sort(function (a, b) { return Number(new Date(b.mtime)) - Number(new Date(a.mtime)); });
+    try {
+      var r = await sdk.files.list({ ext: ['html', 'htm'], limit: 500 });
+      st.files = ((r && r.files) || []).sort(byNew); st.filesErr = '';
+      pkS.pid = r && r.project_id != null ? Number(r.project_id) : null; pkS.trunc = !!(r && r.truncated);
+    } catch (e) { if (st.files == null) st.files = []; st.filesErr = msgOf(e); }
   }
-  /** 그 자료 경로에서 올라온 문서 — 경로가 같거나, 문서의 원본 경로(세션 스크립트가 올리면 그 기계의 절대경로)가 이 경로로 끝나는 것. */
-  function docForPath(path) {
-    var tail = '/' + path;
-    return st.docs.filter(function (x) { var sp = String(x.source_path || ''); return sp && (sp === path || sp.slice(-tail.length) === tail); })[0] || null;
+  /** 전체 자료 — 볼 수 있는 모든 프로젝트의 HTML. 찾는 말은 서버가 전체에서 찾는다(최신 300개 밖의 것도 나온다). */
+  async function loadAll() {
+    if (!pkS.canAll || !sdk.files) return;
+    var want = pkS.q.trim(), seq = ++pkS.seq;
+    pkS.allBusy = true; paintPickers();
+    try {
+      var r = await sdk.files.list({ scope: 'all', ext: ['html', 'htm'], limit: 300, q: want || undefined });
+      if (seq !== pkS.seq) return;
+      if (!r || r.scope !== 'all') throw new Error('이 라이블리에서는 아직 전체 자료를 볼 수 없어요');
+      pkS.all = (r.files || []).sort(byNew); pkS.allErr = ''; pkS.allTrunc = !!r.truncated;
+    } catch (e) { if (seq !== pkS.seq) return; pkS.all = []; pkS.allErr = msgOf(e); pkS.allTrunc = false; }
+    pkS.allQ = want; pkS.allBusy = false; paintPickers();
   }
-  /** 폴더의 파일 가운데 아직 앱에 없는 것(또는 올린 뒤에 파일이 더 새로워진 것). */
-  function freshFiles() {
-    return (st.files || []).map(function (f) {
-      var d = docForPath(f.path);
-      if (!d) return { f: f, doc: null };
-      var newer = Number(new Date(f.mtime)) > Number(new Date(d.changed_at || d.created_at || 0)) + 2000;
-      return newer ? { f: f, doc: d } : null;
-    }).filter(Boolean);
+  function fileKey(f) { return (f.project_id != null ? 'p' + f.project_id + ':' : '') + f.path; }
+  /** 워크스페이스 기준 경로(project/<id>/<경로>) — 세션 스크립트(deck-push)가 적는 절대경로의 꼬리와 같은 꼴이라 서로 맞춰진다. */
+  function fullPath(f) { var pid = f.project_id != null ? Number(f.project_id) : pkS.pid; return pid != null ? 'project/' + pid + '/' + f.path : ''; }
+  function endsWithPath(sp, p) { return !!p && (sp === p || sp.slice(-(p.length + 1)) === '/' + p); }
+  /** 그 파일에서 올라온 문서 — 원본 경로가 같거나 그 경로로 끝나는 것(세션의 AI 가 올린 문서도 여기서 만난다). 다른 프로젝트의 파일은 프로젝트까지 맞아야 한다. */
+  function docForFile(f) {
+    var here = f.project_id == null || Number(f.project_id) === pkS.pid, full = fullPath(f);
+    var by = function (test) { return st.docs.filter(function (x) { var sp = String(x.source_path || ''); return !!sp && test(sp); })[0] || null; };
+    return by(function (sp) { return endsWithPath(sp, full); }) || (here ? by(function (sp) { return endsWithPath(sp, f.path); }) : null);
+  }
+  /** 그 파일을 누르면 무슨 일이 일어나나 — 앱에 없으면 열기 · 올린 뒤에 파일이 바뀌었으면 그 문서의 다음 판 · 그대로면 그 문서를 연다(다시 올리지 않는다). */
+  function fileState(f) {
+    var d = docForFile(f); if (!d) return { doc: null, up: true, go: '열기', note: '' };
+    var v = Number(d.latest_ver) || 1, name = d.title || d.doc;
+    var newer = Number(new Date(f.mtime)) > Number(new Date(d.changed_at || d.created_at || 0)) + 2000;
+    if (newer) return { doc: d, up: true, go: '판 ' + (v + 1) + ' 로 올리기', note: '「' + name + '」 판 ' + v + ' 뒤에 파일이 바뀜' };
+    return { doc: d, up: false, go: d.doc === st.doc && !$('main').hidden ? '보는 중' : '판 ' + v + ' 열기', note: '앱에 있음 · 「' + name + '」' };
   }
   function pkItem(icon, cls, title, meta, go, run, busy) {
     var b = el('button', 'pk-i'); b.type = 'button'; b.disabled = !!st.importing;
@@ -1760,53 +1830,183 @@
     b.appendChild(el('b', 'clip', title)); b.appendChild(el('small', 'clip', meta)); b.appendChild(el('span', busy ? 'go pk-prog' : 'go', busy || go));
     b.onclick = run; return b;
   }
-  function renderPicker(box, start) {
+  function closePicker() { $('pickModal').hidden = true; }
+  function fileRow(f) {
+    var s = fileState(f), big = Number(f.size) > PK_MAX;
+    var dir = f.path.indexOf('/') >= 0 ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
+    var meta = [when(f.mtime), sizeOf(f.size), big ? '8MB 를 넘어 열 수 없어요' : s.note, dir].filter(Boolean).join(' · ');
+    var b = pkItem('file', s.doc ? 'doc' : '', f.name || f.path, meta, s.go, function () {
+      if (s.doc && !s.up) { closePicker(); if (s.doc.doc !== st.doc || $('main').hidden) openDoc(s.doc.doc).catch(fail); return; }
+      importFile(f, s.doc);
+    }, st.importing === fileKey(f) ? '불러오는 중' : '');
+    if (big) b.disabled = true;
+    b.title = (f.project_name ? f.project_name + ' / ' : '') + f.path;
+    return b;
+  }
+  function pkWords() { return pkS.q.trim().toLowerCase().split(/\s+/).filter(Boolean); }
+  function pkHit(text) { var h = String(text || '').toLowerCase(); return pkWords().every(function (w) { return h.indexOf(w) >= 0; }); }
+  function pkTabs() {
+    var hasFiles = !!sdk.files && !!L.session, t = [];
+    if (hasFiles) t.push('proj');
+    if (hasFiles && pkS.canAll) t.push('all');
+    t.push('docs'); return t;
+  }
+  /** 지금 탭 — 사람이 고른 것. 아직 안 골랐으면 열 것이 있는 쪽(이 프로젝트 > 앱에 있는 문서)으로 선다. */
+  function pkTab() {
+    var tabs = pkTabs();
+    if (pkS.tab && tabs.indexOf(pkS.tab) >= 0) return pkS.tab;
+    if (tabs.indexOf('proj') >= 0 && (st.files == null || st.files.length)) return 'proj';
+    return st.docs.length ? 'docs' : tabs[0];
+  }
+  function pkSetTab(t) {
+    pkS.tab = t; pkS.more = {};
+    if (t === 'all' && !pkS.allBusy && (pkS.all == null || pkS.allQ !== pkS.q.trim())) loadAll();
+    paintPickers();
+  }
+  function pkBuild(box, start) {
     box.innerHTML = '';
     if (start) {
       box.appendChild(el('div', 'pk-t', '어떤 문서를 열까요?'));
       box.appendChild(el('p', 'pk-d', '장표나 보고서 HTML 을 열면 장표와 글 줄이 나란히 놓입니다. 글을 바로 고치거나 의견을 달아 세션의 AI 에게 보낼 수 있어요.'));
     }
-    var files = freshFiles(), docs = st.docs.filter(mineOf).concat(st.docs.filter(function (d) { return !mineOf(d); }));
-    function group(key, title, hint, items) {
-      if (!items.length) return;
-      var h = el('div', 'pk-h', title); if (hint) h.appendChild(el('small', '', hint)); box.appendChild(h);
-      var list = el('div', 'pk-list'); (pkMore[key] ? items : items.slice(0, PK_SHOW)).forEach(function (n) { list.appendChild(n); }); box.appendChild(list);
-      if (!pkMore[key] && items.length > PK_SHOW) { var m = el('button', 'ib pk-more', '더 보기 · ' + (items.length - PK_SHOW)); m.type = 'button'; m.onclick = function () { pkMore[key] = true; paintPickers(); }; box.appendChild(m); }
+    var qw = el('label', 'pk-q'); qw.innerHTML = svg('search');
+    var inp = document.createElement('input'); inp.type = 'search'; inp.placeholder = '파일 이름이나 폴더로 찾기'; inp.setAttribute('aria-label', '파일 찾기'); inp.autocomplete = 'off'; inp.spellcheck = false;
+    inp.addEventListener('input', function () {
+      pkS.q = inp.value; pkS.more = {}; clearTimeout(pkS.qT);
+      if (pkTab() === 'all') pkS.qT = setTimeout(loadAll, 350);
+      paintPickers();
+    });
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Escape' && inp.value) { e.stopPropagation(); inp.value = ''; inp.dispatchEvent(new Event('input')); } });
+    qw.appendChild(inp); box.appendChild(qw);
+    var tabs = el('div', 'pk-tabs'); tabs.setAttribute('role', 'tablist'); box.appendChild(tabs);
+    var prog = el('div', 'pk-run'); prog.hidden = true; box.appendChild(prog);
+    var body = el('div', 'pk-body'); box.appendChild(body);
+    var foot = el('div', 'pk-foot'); box.appendChild(foot);
+    box._pk = { inp: inp, tabs: tabs, prog: prog, body: body, foot: foot, start: start };
+  }
+  function renderPicker(box, start) {
+    if (!box._pk) pkBuild(box, start);
+    var ui = box._pk, tab = pkTab(), body = ui.body;
+    if (ui.inp.value !== pkS.q) ui.inp.value = pkS.q;
+    // 탭
+    var names = { proj: '이 프로젝트', all: '전체 자료', docs: '앱 문서' }, counts = { proj: st.files ? st.files.length : null, docs: st.docs.length };
+    ui.tabs.innerHTML = '';
+    pkTabs().forEach(function (t) {
+      var b = el('button', t === tab ? 'on' : ''); b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', t === tab ? 'true' : 'false'); b.dataset.tab = t;
+      b.appendChild(el('span', 'clip', names[t])); if (counts[t]) b.appendChild(el('i', '', String(counts[t])));
+      b.onclick = function () { pkSetTab(t); };
+      ui.tabs.appendChild(b);
+    });
+    ui.tabs.hidden = pkTabs().length < 2;
+    // 진행 · 같은 제목의 문서가 있을 때 묻기
+    var pr = ui.prog; pr.innerHTML = ''; pr.hidden = !(st.importing || pkS.ask);
+    if (pkS.ask) {
+      var a = pkS.ask, v = Number(a.doc.latest_ver) || 1;
+      pr.className = 'pk-run ask';
+      pr.appendChild(el('b', '', '같은 제목의 문서가 앱에 있어요'));
+      pr.appendChild(el('span', '', '「' + (a.doc.title || a.doc.doc) + '」 판 ' + v + ' · 이 파일을 그 문서의 다음 판으로 올리면 판 이력과 의견이 이어집니다.'));
+      var row = el('div', 'pk-acts');
+      [['ver', '판 ' + (v + 1) + ' 로 올리기', 'ib pri'], ['new', '새 문서로', 'ib'], ['cancel', '취소', 'ib']].forEach(function (x) {
+        var bt = el('button', x[2], x[1]); bt.type = 'button'; bt.onclick = function () { var done = a.done; pkS.ask = null; done(x[0]); }; row.appendChild(bt);
+      });
+      pr.appendChild(row);
+    } else if (st.importing) {
+      pr.className = 'pk-run';
+      pr.appendChild(el('b', 'clip', st.importName || '불러오는 중'));
+      pr.appendChild(el('span', '', st.importNote || '불러오는 중'));
+      var bar = el('div', 'pk-bar' + (st.importPct == null ? ' wait' : '')), fill = el('i'); fill.style.width = Math.round((st.importPct == null ? 1 : st.importPct) * 100) + '%'; bar.appendChild(fill); pr.appendChild(bar);
     }
-    group('files', '자료에 있는 HTML', '최신순 · 누르면 바로 열립니다', files.map(function (x) {
-      var busy = st.importing === x.f.path ? (st.importNote || '불러오는 중…') : '';
-      return pkItem('file', '', x.f.name || x.f.path, [x.f.path !== x.f.name ? x.f.path : '', when(x.f.mtime), sizeOf(x.f.size), x.doc ? '올린 뒤에 파일이 바뀜' : ''].filter(Boolean).join(' · '), x.doc ? '새 판으로' : '불러오기', function () { importFile(x.f, x.doc); }, busy);
-    }));
-    // 내 컴퓨터의 파일 — 고르거나 끌어다 놓는다(자료에 올리지 않아도 된다)
-    box.appendChild(el('div', 'pk-h', '내 컴퓨터에서'));
-    var dz = el('div', 'pk-drop'), dic = el('span', 'ico'); dic.innerHTML = svg('up'); dz.appendChild(dic);
-    var busyUp = st.importing && st.importing.indexOf('local:') === 0;
-    dz.appendChild(el('b', '', busyUp ? (st.importNote || '불러오는 중…') : 'HTML 파일 불러오기'));
-    dz.appendChild(el('small', '', '파일을 고르거나, 이 창 아무 데나 끌어다 놓으세요'));
-    var pb = el('button', 'ib', '파일 고르기'); pb.type = 'button'; pb.disabled = !!st.importing; pb.onclick = function () { var fp = $('filePick'); fp.value = ''; fp.click(); };
-    dz.appendChild(pb); box.appendChild(dz);
-    group('docs', '앱에 올라와 있는 문서', '', docs.map(function (d) {
-      return pkItem('deck', 'doc', d.title || d.doc, docMeta(d), d.doc === st.doc ? '보는 중' : '열기', function () { $('pickModal').hidden = true; if (d.doc !== st.doc || $('main').hidden) openDoc(d.doc).catch(fail); });
-    }));
-    if (!files.length && !docs.length && sdk.files && L.session && st.files != null && !st.filesErr) box.appendChild(el('div', 'fine', '이 프로젝트의 자료에는 HTML 파일이 아직 없어요. 세션의 AI 가 장표나 보고서를 HTML 로 만들면 위 목록에 나타납니다.'));
-    if (st.filesErr) box.appendChild(el('div', 'fine', '자료의 파일 목록을 읽지 못했어요 · ' + st.filesErr));
-    var say = el('div', 'pk-say');
-    say.appendChild(el('span', '', '세션의 AI 가 방금 만든 것이면 가운데 세션에 이렇게 말해도 됩니다.'));
-    say.appendChild(el('code', '', '방금 만든 HTML 을 장표 수정 앱에서 열어 줘'));
-    box.appendChild(say);
+    // 목록
+    body.innerHTML = '';
+    function group(key, title, hint, items, show) {
+      if (!items.length) return;
+      var h = el('div', 'pk-h', title); if (hint) h.appendChild(el('small', '', hint)); body.appendChild(h);
+      var n = show || PK_SHOW, open = pkS.more[key] || !!pkS.q.trim();
+      var list = el('div', 'pk-list'); (open ? items : items.slice(0, n)).forEach(function (x) { list.appendChild(x); }); body.appendChild(list);
+      if (!open && items.length > n) { var m = el('button', 'ib pk-more', '더 보기 · ' + (items.length - n)); m.type = 'button'; m.onclick = function () { pkS.more[key] = true; paintPickers(); }; body.appendChild(m); }
+    }
+    function note(text, act, run) {
+      var d = el('div', 'pk-none'); d.appendChild(el('span', '', text));
+      if (act) { var bt = el('button', 'ib', act); bt.type = 'button'; bt.onclick = run; d.appendChild(bt); }
+      body.appendChild(d);
+    }
+    /** 작은 조각 파일(장 하나짜리 부품)은 접어 둔다 — 찾는 중이거나 이미 앱에 올라온 것은 그대로 보인다. */
+    function fold(list) {
+      if (pkS.small || pkS.q.trim()) return { show: list, hid: 0 };
+      var show = list.filter(function (f) { return Number(f.size) >= PK_SMALL || !!docForFile(f); });
+      return { show: show, hid: list.length - show.length };
+    }
+    function foldLine(hid) {
+      if (!hid && !pkS.small) return;
+      var d = el('div', 'pk-fold'); d.appendChild(el('span', '', pkS.small ? '작은 조각 파일도 보이는 중' : '작은 조각 파일 ' + hid + '개는 접어 두었어요'));
+      var bt = el('button', 'ib', pkS.small ? '접기' : '보기'); bt.type = 'button'; bt.onclick = function () { pkS.small = !pkS.small; paintPickers(); }; d.appendChild(bt);
+      body.appendChild(d);
+    }
+    var qv = pkS.q.trim();
+    if (tab === 'proj') {
+      if (st.files == null) note('이 프로젝트의 자료를 읽는 중이에요');
+      else if (st.filesErr && !st.files.length) note('자료의 파일 목록을 읽지 못했어요 · ' + st.filesErr, '다시', function () { st.files = null; paintPickers(); loadFiles().then(paintPickers); });
+      else {
+        var hit = st.files.filter(function (f) { return pkHit(f.path); }), fd = fold(hit);
+        var mine = fd.show.filter(function (f) { return f.from_session; }), rest = fd.show.filter(function (f) { return !f.from_session; });
+        group('mine', '이 세션이 만든 파일', '방금 만든 것이 위', mine.map(fileRow), 5);
+        group('rest', mine.length ? '이 프로젝트의 다른 파일' : '이 프로젝트 자료의 HTML', '최신순', rest.map(fileRow));
+        if (!fd.show.length) {
+          if (qv) note('「' + qv + '」 에 맞는 파일이 이 프로젝트에는 없어요', pkS.canAll ? '전체 자료에서 찾기' : '', function () { pkSetTab('all'); });
+          else if (pkS.pid == null && !st.files.length) note('이 세션은 프로젝트에 속해 있지 않아요', pkS.canAll ? '전체 자료 보기' : '', function () { pkSetTab('all'); });
+          else if (!fd.hid) note('이 프로젝트의 자료에는 HTML 파일이 아직 없어요. 세션의 AI 가 장표나 보고서를 HTML 로 만들면 여기에 나타납니다.');
+        }
+        foldLine(fd.hid);
+        if (pkS.trunc) body.appendChild(el('div', 'fine', '파일이 많아 최신 500개 안에서만 보여 드려요.' + (pkS.canAll ? ' 더 오래된 것은 전체 자료에서 찾으세요.' : '')));
+      }
+    } else if (tab === 'all') {
+      if (pkS.all == null || (pkS.allBusy && !pkS.all.length)) note('전체 자료를 읽는 중이에요');
+      else if (pkS.allErr) note('전체 자료를 읽지 못했어요 · ' + pkS.allErr, '다시', loadAll);
+      else {
+        var fa = fold(pkS.all), order = [], by = {};
+        fa.show.forEach(function (f) { var k = 'p' + f.project_id; if (!by[k]) { by[k] = { name: f.project_name || ('프로젝트 #' + f.project_id), here: Number(f.project_id) === pkS.pid, items: [] }; order.push(k); } by[k].items.push(f); });
+        order.sort(function (x, y) { return (by[y].here ? 1 : 0) - (by[x].here ? 1 : 0); });   // 이 프로젝트가 맨 위 · 그 밖은 최신 파일이 있는 순
+        order.forEach(function (k) { group(k, by[k].name, (by[k].here ? '이 프로젝트 · ' : '') + by[k].items.length + '개', by[k].items.map(fileRow), order.length > 1 ? 4 : PK_SHOW); });
+        if (!fa.show.length && !fa.hid) note(qv ? '「' + qv + '」 에 맞는 HTML 파일이 없어요' : '볼 수 있는 프로젝트의 자료에 HTML 파일이 아직 없어요');
+        foldLine(fa.hid);
+        if (pkS.allTrunc) body.appendChild(el('div', 'fine', qv ? '맞는 파일이 많아 최신 300개만 보여 드려요. 찾는 말을 더 넣어 보세요.' : '최신 300개만 보여 드려요. 찾는 말을 넣으면 전체에서 찾습니다.'));
+      }
+    } else {
+      var docs = st.docs.filter(mineOf).concat(st.docs.filter(function (d) { return !mineOf(d); })).filter(function (d) { return pkHit((d.title || '') + ' ' + d.doc + ' ' + (d.source_path || '')); });
+      group('docs', '앱에 올라와 있는 문서', '누르면 바로 열립니다', docs.map(function (d) {
+        return pkItem('deck', 'doc', d.title || d.doc, docMeta(d), d.doc === st.doc && !$('main').hidden ? '보는 중' : '열기', function () { closePicker(); if (d.doc !== st.doc || $('main').hidden) openDoc(d.doc).catch(fail); });
+      }), 8);
+      if (!docs.length) note(qv ? '「' + qv + '」 에 맞는 문서가 없어요' : '앱에 올라와 있는 문서가 아직 없어요');
+    }
+    // 바닥 — 내 컴퓨터의 파일(고르거나 끌어다 놓는다 · 자료에 올리지 않아도 된다)
+    var foot = ui.foot; foot.innerHTML = '';
+    var dz = el('div', 'pk-drop'), pb = el('button', 'ib'); pb.type = 'button'; pb.innerHTML = svg('up') + '<span>내 컴퓨터에서 고르기</span>'; pb.disabled = !!st.importing;
+    pb.onclick = function () { var fp = $('filePick'); fp.value = ''; fp.click(); };
+    dz.appendChild(pb); dz.appendChild(el('small', '', '이 창에 끌어다 놓아도 됩니다 · 자료의 파일은 하나에 8MB 까지')); foot.appendChild(dz);
+    if (ui.start) {
+      var say = el('div', 'pk-say');
+      say.appendChild(el('span', '', '세션의 AI 가 방금 만든 것이면 가운데 세션에 이렇게 말해도 됩니다.'));
+      say.appendChild(el('code', '', '방금 만든 HTML 을 장표 수정 앱에서 열어 줘'));
+      foot.appendChild(say);
+    }
   }
   function paintPickers() { if (!$('empty').hidden) renderPicker($('startBox'), true); if (!$('pickModal').hidden) renderPicker($('pickBox'), false); }
-  function openPicker() { $('pickModal').hidden = false; renderPicker($('pickBox'), false); loadFiles().then(paintPickers); }
-  function showStart() { st.doc = null; st.title = ''; $('empty').hidden = false; $('main').hidden = true; $('top').hidden = true; renderPicker($('startBox'), true); loadFiles().then(paintPickers); }
+  function pkRefresh() { loadFiles().then(paintPickers); if (pkTab() === 'all') loadAll(); }
+  function openPicker() { $('pickModal').hidden = false; renderPicker($('pickBox'), false); pkRefresh(); var i = $('pickBox')._pk.inp; if (!document.body.classList.contains('compact')) { try { i.focus(); i.select(); } catch (e) {} } }
+  function showStart() { st.doc = null; st.title = ''; $('empty').hidden = false; $('main').hidden = true; $('top').hidden = true; renderPicker($('startBox'), true); pkRefresh(); }
   /** 폴더의 HTML 을 그 자리에서 문서로 올린다 — 나누기는 deck-split 블록(세션 스크립트 deck-push 와 같은 글). 같은 파일에서 온 문서가 있으면 새 판. */
   function freeDocId(name) {
     var base = String(name || '문서').replace(/\.html?$/i, '').replace(/\s+/g, ' ').trim().slice(0, 60) || '문서', id = base, n = 2;
     while (docOf(id)) id = base + ' ' + (n++);
     return id;
   }
-  /** 자료의 파일을 눌렀다. */
+  /** 자료의 파일을 눌렀다. 다른 프로젝트의 파일은 프로젝트까지 적은 경로로 남긴다(세션의 AI 가 어느 폴더인지 안다). */
   function importFile(f, ex) {
-    return importHtml({ key: f.path, name: f.name || f.path, path: f.path, ex: ex || null, read: async function () { var r = await sdk.files.read(f.path); return r && typeof r.content === 'string' ? r.content : ''; } });
+    var other = f.project_id != null && Number(f.project_id) !== pkS.pid;
+    return importHtml({ key: fileKey(f), name: f.name || f.path, path: other ? fullPath(f) : f.path, size: Number(f.size) || 0, ex: ex || null, read: async function () {
+      var r = await (f.project_id != null ? sdk.files.read(f.path, { project: Number(f.project_id) }) : sdk.files.read(f.path));
+      return r && typeof r.content === 'string' ? r.content : '';
+    } });
   }
   /** 내 컴퓨터의 파일을 골랐거나 끌어다 놓았다. 같은 이름의 문서가 있으면(전에 같은 파일을 올렸다) 그 문서의 새 판으로. */
   function importLocal(file) {
@@ -1814,20 +2014,38 @@
     if (!/\.html?$/i.test(file.name) && !/html/i.test(file.type || '')) { toast('HTML 파일만 불러올 수 있어요 · ' + file.name, 3600); return Promise.resolve(); }
     var base = String(file.name).replace(/\.html?$/i, '').replace(/\s+/g, ' ').trim().slice(0, 60);
     var ex = st.docs.filter(function (d) { return d.doc === base && !String(d.source_path || '').trim(); })[0] || null;
-    return importHtml({ key: 'local:' + file.name, name: file.name, path: '', ex: ex, read: function () { return file.text ? file.text() : new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = function () { rej(new Error('파일을 읽지 못했습니다')); }; fr.readAsText(file); }); } });
+    return importHtml({ key: 'local:' + file.name, name: file.name, path: '', size: Number(file.size) || 0, ex: ex, read: function () { return file.text ? file.text() : new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { res(String(fr.result || '')); }; fr.onerror = function () { rej(new Error('파일을 읽지 못했습니다')); }; fr.readAsText(file); }); } });
   }
+  /** 경로로는 못 찾았지만 제목이 같은 문서가 앱에 있다(세션의 AI 가 다른 이름의 사본을 올렸다) — 그 문서의 다음 판으로 이을지 사람이 정한다. */
+  function askSameTitle(doc) { return new Promise(function (res) { pkS.ask = { doc: doc, done: res }; paintPickers(); }); }
   /** HTML 한 벌을 그 자리에서 문서로 올린다 — 나누기는 deck-split 블록(세션 스크립트 deck-push 와 같은 글). ex 가 있으면 그 문서의 새 판. */
   async function importHtml(src) {
     if (st.importing) return;
-    var note = function (t) { st.importNote = t; paintPickers(); };
-    st.importing = src.key; note('파일을 읽는 중…');
+    var note = function (t, pct) { st.importNote = t; st.importPct = pct == null ? null : pct; paintPickers(); };
+    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; };
+    st.importing = src.key; st.importName = src.name;
+    if ($('pickModal').hidden && $('empty').hidden) { $('pickModal').hidden = false; }   // 머리줄의 「새 파일」 띠에서 눌렀다 — 진행이 보이게 창을 연다
+    note('파일을 읽는 중' + (src.size ? ' · ' + sizeOf(src.size) : ''));
     try {
       var html = await src.read(); if (!String(html || '').trim()) throw new Error('파일이 비어 있습니다');
+      note('장으로 나누는 중');
+      await new Promise(function (r) { setTimeout(r, 30); });   // 큰 파일은 나누는 동안 화면이 멈춘다 — 그 전에 한 번 그리게 둔다
       var p = plan(html, {});
       var hard = p.warnings.filter(function (w) { return w.indexOf('한 행 상한') >= 0; }); if (hard.length) throw new Error(hard[0]);
-      var ex = src.ex, doc = ex ? ex.doc : freeDocId(src.name), ver = ex ? (Number(ex.latest_ver) || 0) + 1 : 1;
+      var title = titleOf(html) || String(src.name).replace(/\.html?$/i, '');
+      var ex = src.ex, keepPath = false;
+      if (!ex) {
+        var same = st.docs.filter(function (d) { return (d.title || d.doc) === title; })[0] || null;
+        if (same) {
+          var pick = await askSameTitle(same);
+          if (pick === 'cancel') { end(); paintPickers(); return; }
+          if (pick === 'ver') { ex = same; keepPath = true; }   // 그 문서의 원본 경로(AI 가 고치는 소스)는 그대로 둔다
+        }
+      }
+      var doc = ex ? ex.doc : freeDocId(src.name), ver = ex ? (Number(ex.latest_ver) || 0) + 1 : 1;
       var shas = []; p.assets.forEach(function (a) { if (shas.indexOf(a.sha) < 0) shas.push(a.sha); });
-      var done = 0, all = p.assets.length + p.rows.length, tick = function () { note('올리는 중 ' + (++done) + ' / ' + all); };
+      var done = 0, all = p.assets.length + p.rows.length, tick = function () { done++; note('올리는 중 · ' + done + ' / ' + all, all ? done / all : 1); };
+      note('올리는 중 · 0 / ' + all, 0);
       for (var i = 0; i < shas.length; i++) {
         var parts = p.assets.filter(function (a) { return a.sha === shas[i]; });
         var have = await q('assets', { sha: shas[i] }, 1);       // 같은 글꼴 · 그림은 한 번만 든다
@@ -1835,17 +2053,16 @@
       }
       await sdk.store['delete']('versions', { doc: doc, ver: ver });   // 올리다 만 행이 남아 있으면 치운다(다시 누른 경우)
       for (var k = 0; k < p.rows.length; k++) { await sdk.store.insert('versions', Object.assign({ doc: doc, ver: ver, session: L.session || '' }, p.rows[k])); tick(); }
-      var title = titleOf(html) || String(src.name).replace(/\.html?$/i, '');
-      if (ex) await sdk.store.update('docs', { id: ex.id }, { latest_ver: ver, source_path: src.path || String(ex.source_path || ''), changed_at: nowIso(), session: L.session || ex.session || '' });
+      if (ex) await sdk.store.update('docs', { id: ex.id }, { latest_ver: ver, source_path: keepPath ? String(ex.source_path || '') : (src.path || String(ex.source_path || '')), changed_at: nowIso(), session: L.session || ex.session || '' });
       else await sdk.store.insert('docs', { doc: doc, title: title, session: L.session || '', latest_ver: ver, source_path: src.path || '', changed_at: nowIso() });
       await loadDocs();
-      st.importing = ''; st.importNote = ''; $('pickModal').hidden = true;
+      end(); closePicker();
       await openDoc(doc);
       var ext = p.warnings.length;
       toast(ext ? '불러왔습니다 · 바깥 주소에서 받는 글꼴이나 그림 ' + ext + '개는 앱 안에서 안 보일 수 있어요' : (ex ? '같은 문서의 새 판으로 불러왔습니다 · 판 ' + ver : '불러왔습니다 · 판 ' + ver), ext ? 4600 : 2400);
     } catch (e) {
-      st.importing = ''; st.importNote = ''; paintPickers();
-      toast('불러오지 못했어요: ' + (e && e.message ? e.message : e), 4600);
+      end(); paintPickers();
+      toast('불러오지 못했어요: ' + msgOf(e), 4600);
     }
   }
   $('filePick').addEventListener('change', function () { var f = $('filePick').files && $('filePick').files[0]; if (f) importLocal(f); });
@@ -2698,9 +2915,11 @@
     if (vars.length > 1) {
       var w = el('span', 'vars'); if (!st.layoutNarrow) w.appendChild(el('span', '', '안 고르기'));
       var picked = pickOf(s.id); if (picked == null) picked = vars[0];
-      vars.forEach(function (vn, i) { var b = el('button', 'v' + (vn === picked ? ' on' : '')); b.type = 'button'; b.textContent = vn || (i + 1) + '안'; b.onclick = function () { pick(s.id, vn).catch(fail); }; w.appendChild(b); });
+      vars.forEach(function (vn) { var b = el('button', 'v' + (vn === picked ? ' on' : '')); b.type = 'button'; b.textContent = vn || '기본'; b.onclick = function () { pick(s.id, vn).catch(fail); }; w.appendChild(b); });
+      var cb = el('button', 'v cmp' + (st.varCmp ? ' on' : '')); cb.type = 'button'; cb.textContent = st.varCmp ? '비교 닫기' : '비교'; cb.title = '기본 안과 다른 안을 나란히 놓고 봅니다'; cb.onclick = function () { toggleVarCmp(s); }; w.appendChild(cb);
       u.appendChild(w);
     }
+    syncVarCmp(s, vars);
     var list = st.units[st.cur] || [], c = counts(s.id);
     u.appendChild(el('span', 'cnt', '글 ' + list.length + '줄' + (c.e ? ' · 고침 ' + c.e : '') + (c.n ? ' · 의견 ' + c.n : '')));
     var hp = el('button', 'ib sm ic', '?'); hp.type = 'button'; hp.title = HELP; hp.setAttribute('aria-label', '쓰는 법'); hp.onclick = function () { toast(HELP, 7000); }; u.appendChild(hp);
@@ -2738,6 +2957,47 @@
     var v = st.verCache[st.doc + '#' + st.ver]; var fi = st.cur;
     await mount(assemble(v)); await showSlide(fi);
   }
+  /* 안 비교 — 기본 안과 다른 안(1안 · 2안 …)을 무대 위에 나란히(좁으면 위아래로) 띄우고, 눌러서 고른다.
+     틀마다 「그 장 하나만 든 문서」(판의 머리 + 그 안의 장 + 꼬리)를 스크립트 없이 띄우고 폭에 맞춰 줄인다. 고르면 picks 에 적히고 무대의 장도 그 안으로 바뀐다. */
+  var vc = null;
+  function varCmpDoc(v, body) {
+    return v.head + '<style>:root{--s:1!important}main{display:block!important;padding:0!important;gap:0!important}.pw{margin:0!important}.page{transform:none!important;box-shadow:none!important;border-radius:0!important}html,body{overflow:hidden;background:#fff;margin:0}.note{display:none!important}main>.pw:not(:has(section)){display:none!important}</style>' + body + v.tail;   /* 판의 머리가 열어 둔 빈 .pw(첫 장 자리)는 숨긴다 — 안 숨기면 장이 한 칸 아래로 밀린다 */
+  }
+  function toggleVarCmp(s) { if (st.varCmp) { closeVarCmp(); } else { st.varCmp = true; } renderHead(s); }
+  function closeVarCmp() { st.varCmp = false; vc = null; var box = $('varCmp'); box.innerHTML = ''; box.hidden = true; }
+  /* 안이 없는 장으로 가면 비교는 숨겨 두기만 한다(켠 상태는 남겨, 안이 있는 장으로 돌아오면 다시 편다) */
+  function syncVarCmp(s, vars) { if (!st.varCmp) return; if (!vars || vars.length < 2) { vc = null; var box = $('varCmp'); box.innerHTML = ''; box.hidden = true; return; } renderVarCmp(s, vars); }
+  function renderVarCmp(s, vars) {
+    var v = st.verCache[st.doc + '#' + st.ver]; if (!v) return;
+    var box = $('varCmp'); box.hidden = false;
+    var picked = pickOf(s.id); if (picked == null) picked = vars[0];
+    var same = vc && vc.sid === s.id && vc.ver === st.ver && vc.doc === st.doc && vc.vars.join('|') === vars.join('|');
+    if (!same) {
+      box.innerHTML = '';
+      var hd = el('div', 'vcHead'); hd.appendChild(el('b', '', (posOf(s.i) + 1) + '쪽 · ' + s.title)); hd.appendChild(el('span', '', '안을 누르거나 「이 안으로」'));
+      var x = el('button', 'ib sm'); x.type = 'button'; x.textContent = '닫기'; x.onclick = function () { closeVarCmp(); renderHead(s); }; hd.appendChild(x); box.appendChild(hd);
+      var g = el('div', 'vcGrid'); box.appendChild(g);
+      vc = { sid: s.id, ver: st.ver, doc: st.doc, vars: vars.slice(), panes: [], busy: false };
+      vars.forEach(function (vn) {
+        var cand = v.slides.filter(function (r) { return r.slide_id === s.id && (r.variant || '') === vn; })[0]; if (!cand) return;
+        var p = el('div', 'vcPane'); var lab = el('div', 'vcLab'); lab.appendChild(el('span', '', vn || '기본')); var pk = el('span', 'pk', '고른 안'); lab.appendChild(pk); lab.appendChild(el('span', 'sp'));
+        var bt = el('button', 'ib sm pri'); bt.type = 'button'; bt.textContent = '이 안으로'; lab.appendChild(bt); p.appendChild(lab);
+        var shot = el('div', 'vcShot'); var f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.title = (vn || '기본') + ' 안'; f.srcdoc = varCmpDoc(v, cand.body); shot.appendChild(f); p.appendChild(shot);
+        var choose = function () { if (!vc || vc.busy || p.classList.contains('on')) return; vc.busy = true; markVarCmp(vn); pick(s.id, vn).catch(fail).then(function () { if (vc) vc.busy = false; }); };
+        bt.onclick = choose; shot.onclick = choose;
+        g.appendChild(p); vc.panes.push({ vn: vn, el: p, pk: pk, bt: bt, shot: shot, f: f });
+      });
+    }
+    markVarCmp(picked);
+    layoutVarCmp();
+  }
+  function markVarCmp(picked) { if (!vc) return; vc.panes.forEach(function (p) { var on = p.vn === picked; p.el.classList.toggle('on', on); p.pk.hidden = !on; p.bt.hidden = on; }); }
+  function layoutVarCmp() {
+    if (!vc) return; var box = $('varCmp'); box.classList.toggle('wide', box.clientWidth >= 980);
+    var sw = st.fw || 1280, sh = st.fh || 720;
+    vc.panes.forEach(function (p) { var W = p.shot.clientWidth || 300, k = W / sw; p.f.style.width = sw + 'px'; p.f.style.height = sh + 'px'; p.f.style.transform = 'scale(' + k + ')'; p.shot.style.height = Math.round(sh * k) + 'px'; });
+  }
+  new ResizeObserver(function () { if (vc) layoutVarCmp(); }).observe($('stageWrap'));
   $('slideCm').addEventListener('input', function () {
     var ta = $('slideCm'); autoGrow(ta); var s = st.sections[st.cur]; if (!s) return;
     var doc = st.cmScope === 'doc', key = cmKey(s);
@@ -3338,6 +3598,39 @@
     } catch (e) {} finally { pollBusy = false; }
   }
   setInterval(pollOnce, 10000);
+  /* 붙은 세션이 방금 만든 HTML — 머리줄 아래 한 줄로 알린다(원준 2026-10-11 «이 세션이 방금 만든 HTML 이 가장 열기 어렵다»).
+     화면이 보이는 동안 20초마다 이 프로젝트 자료의 목록을 다시 읽어, 앱을 연 뒤에 생기거나 바뀐 파일 가운데 앱의 문서보다 새로운 것을 고른다.
+     호스트가 «이 세션이 만든 것» 을 알려 주면 그것만 본다(다른 세션의 산출물로 띠가 뜨지 않게). 작은 조각 파일은 알리지 않는다. */
+  var nf = { boot: Date.now(), seen: {}, cur: null, busy: false };
+  function nfKey(f) { return fileKey(f) + '@' + f.mtime; }
+  function nfPaint() {
+    var b = $('newFileBanner'), f = nf.cur;
+    if (!f || !$('empty').hidden || st.importing) { b.hidden = true; return; }
+    var s = fileState(f);
+    b.querySelector('span').textContent = '새 파일 · ' + (f.name || f.path) + (nf.more ? ' 외 ' + nf.more + '개' : '') + (s.doc ? ' · 「' + (s.doc.title || s.doc.doc) + '」 의 다음 판' : '');
+    $('nfOpen').textContent = s.doc ? '판 ' + ((Number(s.doc.latest_ver) || 1) + 1) + ' 로 올리기' : '열기';
+    b.hidden = false;
+  }
+  async function pollFiles() {
+    if (nf.busy || document.hidden || !sdk.files || !L.session || st.importing) return;
+    nf.busy = true;
+    try {
+      await loadFiles();
+      if (!$('empty').hidden || !$('pickModal').hidden) paintPickers();
+      var any = (st.files || []).some(function (f) { return f.from_session; });
+      var c = (st.files || []).filter(function (f) {
+        return Number(new Date(f.mtime)) > nf.boot && !nf.seen[nfKey(f)] && Number(f.size) >= PK_SMALL && Number(f.size) <= PK_MAX && (!any || f.from_session) && fileState(f).up;
+      });
+      nf.cur = c[0] || null; nf.more = Math.max(0, c.length - 1); nf.all = c;
+      nfPaint();
+    } catch (e) {} finally { nf.busy = false; }
+  }
+  function nfDismiss() { (nf.all || []).forEach(function (f) { nf.seen[nfKey(f)] = 1; }); nf.cur = null; nfPaint(); }
+  $('nfOpen').addEventListener('click', function () { var f = nf.cur; if (!f) return; nfDismiss(); importFile(f, fileState(f).doc); });
+  $('nfList').addEventListener('click', function () { nfDismiss(); pkS.tab = 'proj'; pkS.q = ''; openPicker(); });
+  $('nfClose').addEventListener('click', nfDismiss);
+  setInterval(pollFiles, 20000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) pollFiles(); });
   document.addEventListener('visibilitychange', function () { if (!document.hidden) pollOnce(); });
   window.addEventListener('focus', function () { pollOnce(); });
   async function refreshNow() {
@@ -3427,6 +3720,7 @@
   L.ready.then(function (r) {
     //  호스트가 메뉴를 열어 줄 수 있으면 호스트의 앱 머리줄을 접는다 — 머리줄이 한 줄이 된다(앱의 ⋯ 가 두 메뉴를 합친다).
     var caps = (r && r.capabilities) || {};
+    pkS.canAll = !!caps.files_all;   // 호스트가 「전체 자료」(볼 수 있는 모든 프로젝트)를 읽어 줄 수 있나 — 못 하는 호스트에서는 그 탭이 서지 않는다
     if (caps.menu && L.ui && typeof L.ui.openMenu === 'function' && typeof L.ui.chrome === 'function') { sdk.hostMenu = true; try { L.ui.chrome({ head: false }); } catch (e) {} }
     return boot(false);
   }).catch(fail);

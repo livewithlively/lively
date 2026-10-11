@@ -128,7 +128,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -203,14 +203,19 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       //  ★ 세션은 이 프레임을 띄운 쪽(opts)이 안다 — chat/send 와 같은 까닭(앱이 말한 세션 id 를 믿으면 남의 세션 프로젝트를 읽는 통로가 된다).
       const sid = opts?.sessionId ?? '';
       if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다' } }); return; }
-      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown };
+      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown; scope?: unknown; q?: unknown; project?: unknown };
       const qs = new URLSearchParams({ session_id: sid });
       const list = msg.method === 'files/list';
       if (list) {
         const ext = (Array.isArray(p.ext) ? p.ext : (p.ext == null ? [] : [p.ext])).map((x) => String(x)).filter(Boolean);
         if (ext.length) qs.set('ext', ext.join(','));
         if (p.limit != null && Number.isFinite(Number(p.limit))) qs.set('limit', String(Math.round(Number(p.limit))));
-      } else qs.set('path', String(p.path ?? ''));
+        // #4629 — 전체 자료(볼 수 있는 모든 프로젝트). 넓은 능력이라 서버가 제 선언 · 제 동의(app_workspace_files)로 따로 본다.
+        if (p.scope === 'all') { qs.set('scope', 'all'); if (typeof p.q === 'string' && p.q.trim()) qs.set('q', p.q.trim().slice(0, 100)); }
+      } else {
+        qs.set('path', String(p.path ?? ''));
+        if (p.project != null && Number.isInteger(Number(p.project)) && Number(p.project) > 0) qs.set('project_id', String(Number(p.project)));
+      }
       const read = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + (list ? '/files?' : '/file?') + qs.toString());
       void read()
         .catch(async (e: any) => {
