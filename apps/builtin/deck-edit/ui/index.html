@@ -1564,13 +1564,16 @@
   }
   function variantsOf(v, sid) { return v.slides.filter(function (s) { return s.slide_id === sid; }).map(function (s) { return s.variant || ''; }).filter(function (x, i, a) { return a.indexOf(x) === i; }); }
   function pickOf(sid) { var p = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === st.ver && x.slide_id === sid; })[0]; return p ? (p.variant || '') : null; }
+  /** 어느 판의 한 장에서 «지금 보이는 안» — 그 판에서 고른 안이 있으면 그것, 없으면 기본(안 이름 ''). 전후 견주기 · 바뀐 장 표시가 이것을 쓴다(안으로만 올라온 새 그림도 견줄 수 있게 · 판 9 4안 사건). */
+  function effSlide(v, ver, sid) { var p = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === Number(ver) && x.slide_id === sid; })[0]; var want = p ? (p.variant || '') : ''; var c = v.slides.filter(function (r) { return r.slide_id === sid; }); return c.filter(function (r) { return (r.variant || '') === want; })[0] || c.filter(function (r) { return !(r.variant || ''); })[0] || c[0] || null; }
+  function effMap(v, ver) { var m = {}, seen = {}; v.slides.forEach(function (r) { if (seen[r.slide_id]) return; seen[r.slide_id] = 1; m[r.slide_id] = effSlide(v, ver, r.slide_id); }); return m; }
   /** 판 HTML 조립 — 장마다 고른 안(없으면 첫 안)으로. */
-  function assemble(v) {
+  function assemble(v, ver) {   // ver 를 주면 «그 판에서 고른 안»(없으면 기본)으로 조립한다 — 전후 견주기의 앞 판용
     var seen = {}; var order = [];
     v.slides.forEach(function (s) { if (!seen[s.slide_id]) { seen[s.slide_id] = []; order.push(s.slide_id); } seen[s.slide_id].push(s); });
     var html = v.head;
     order.forEach(function (sid) {
-      var cands = seen[sid]; var want = pickOf(sid);
+      var cands = seen[sid]; var want = ver != null ? ((effSlide(v, ver, sid) || {}).variant || '') : pickOf(sid);
       var pick = cands.filter(function (s) { return (s.variant || '') === (want == null ? (cands[0].variant || '') : want); })[0] || cands[0];
       html += pick.body;
     });
@@ -1589,9 +1592,10 @@
     var idx = st.vers.indexOf(ver); if (idx <= 0) return;
     var prev = await loadVersion(doc, st.vers[idx - 1]);
     var curv = st.verCache[doc + '#' + ver];
-    var pt = {}; prev.slides.forEach(function (s) { if (!(s.variant || '')) pt[s.slide_id] = textOf(s.body); });
+    var pm = effMap(prev, st.vers[idx - 1]), cm = effMap(curv, ver), pt = {};   // 판마다 «보이는 안»(고른 안 · 없으면 기본)끼리 견준다
+    Object.keys(pm).forEach(function (sid) { if (pm[sid]) pt[sid] = textOf(pm[sid].body); });
     st.prevText = pt;
-    curv.slides.forEach(function (s) { if (!(s.variant || '')) { var a = textOf(s.body); if (pt[s.slide_id] == null || pt[s.slide_id] !== a) st.changed[s.slide_id] = true; } });
+    Object.keys(cm).forEach(function (sid) { var c = cm[sid]; if (!c) return; var a = textOf(c.body); if (pt[sid] == null || pt[sid] !== a || (pm[sid] && pm[sid].body !== c.body)) st.changed[sid] = true; });
   }
 
   /* ───────────── 글 줄 ↔ comments 행 ───────────── */
@@ -1824,12 +1828,13 @@
      이제는 파일을 읽어 판의 지문(fpOf — 세션 스크립트와 같은 값)을 세고, 앱이 아는 판의 지문과 견준다. 같으면 «그 판과 같음», 다르면 «바뀜».
      견준 결과는 sources 표에 적어 둔다(경로 · 크기 · 시각이 그대로인 파일은 다시 읽지 않는다 · 다른 구성원의 화면도 그 기록을 쓴다).
      이름 · 경로는 «바뀐 파일을 어느 문서의 다음 판으로 올릴지» 를 정할 때만 쓴다. */
-  var SRC = { rows: [], ok: true, ver: {}, chk: {}, queue: [], busy: false, ens: null };
+  var SRC = { rows: [], ok: true, got: false, ver: {}, skip: {}, chk: {}, queue: [], busy: false, ens: null };
   function verKey(doc, ver) { return doc + '\u0000' + ver; }
   function chkKey(f) { return fileKey(f) + '@' + f.size + '@' + f.mtime; }
   function latestOf(d) { return Number(d && d.latest_ver) || 0; }
   async function loadSources() {
-    try { SRC.rows = await q('sources', {}, 1000); SRC.ok = true; } catch (e) { SRC.rows = []; SRC.ok = false; }   // 표가 아직 없는 라이블리 — 기억 없이 그때그때 견준다
+    //  한 번도 읽지 못했으면 표가 아직 없는 라이블리로 본다(기억 없이 그때그때 견준다). 읽던 것이 한 번 실패한 것은 지나가는 오류다 — 아는 것을 버리지 않는다.
+    try { SRC.rows = await q('sources', {}, 1000); SRC.ok = true; SRC.got = true; } catch (e) { if (!SRC.got) { SRC.rows = []; SRC.ok = false; } }
     SRC.rows.forEach(function (r) { if (r.fp) SRC.ver[verKey(r.doc, Number(r.ver))] = String(r.fp); });
   }
   /** 그 지문을 가진 판들(지금 있는 문서의 · 다 올라온 판만). */
@@ -1856,10 +1861,12 @@
     var run = async function () {
       for (var i = 0; i < st.docs.length; i++) {
         var d = st.docs[i], v = latestOf(d);
-        if (!v || SRC.ver[verKey(d.doc, v)]) continue;
+        var vk = verKey(d.doc, v);
+        if (!v || SRC.ver[vk] || SRC.skip[vk]) continue;
         try {
           var rows = await q('versions', { doc: d.doc, ver: v }, 1000);
-          if (!rows.some(function (r) { return r.kind === 'head'; })) continue;
+          //  머리 행이 없거나(판이 비었다) 행이 상한에 닿았으면(잘린 행으로 센 지문은 틀린 값이다) 세지 않고, 다시 묻지도 않는다.
+          if (rows.length >= 1000 || !rows.some(function (r) { return r.kind === 'head'; })) { SRC.skip[vk] = 1; continue; }
           await srcPut({ doc: d.doc, ver: v, fp: fpOf(rows), path: '', bytes: 0, mtime: '', session: L.session || '' });
         } catch (e) {}
       }
@@ -1874,7 +1881,13 @@
   /** 이 파일이 바뀌었다면 어느 문서의 다음 판인가 — 문서 이름이 파일 이름과 같은 것 → 이 파일을 견준 적 있는 문서(가장 최근) → 원본 경로가 이 파일인 문서(가장 최근). */
   function linkOf(f) {
     var base = String(f.name || f.path).split('/').pop().replace(/\.html?$/i, '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    var d = hereFile(f) ? docOf(base) : null; if (d) return d;
+    var d = hereFile(f) ? docOf(base) : null;
+    //  이름만 같은 남의 파일은 잇지 않는다 — 그 문서가 같은 이름의 파일을 다른 폴더에서 본 적이 있으면(원본 경로 · 견준 기록) 그쪽이 제 파일이다.
+    if (d) {
+      var nm = String(f.name || f.path).split('/').pop(), known = [String(d.source_path || '')].concat(SRC.rows.filter(function (x) { return x.doc === d.doc; }).map(function (x) { return String(x.path || ''); }));
+      var twin = known.filter(function (sp) { return sp.split('/').pop() === nm; });
+      if (!twin.length || twin.some(function (sp) { return pathHit(sp, f); })) return d;
+    }
     var r = SRC.rows.filter(function (x) { return pathHit(x.path, f) && docOf(x.doc); })[0];
     if (r) return docOf(r.doc);
     return st.docs.filter(function (x) { return pathHit(x.source_path, f); })[0] || null;
@@ -1903,17 +1916,18 @@
     var key = chkKey(f);
     try {
       var r = await readFile(f), html = r && typeof r.content === 'string' ? r.content : '';
-      if (!html.trim()) { SRC.chk[key] = { err: '빈 파일' }; return; }
+      if (!html.trim()) { SRC.chk[key] = { err: '빈 파일', at: Date.now() }; return; }
       await ensureFps();
       var fp = fpOf(plan(html, {}).rows), hit = pickHit(fpHits(fp), linkOf(f));
       SRC.chk[key] = { fp: fp };
       if (hit) await srcPut({ doc: hit.doc.doc, ver: hit.ver, fp: fp, path: fullPath(f) || f.path, bytes: Number(f.size) || 0, mtime: String(f.mtime || ''), session: L.session || '' });
-    } catch (e) { SRC.chk[key] = { err: msgOf(e) }; }
+    } catch (e) { SRC.chk[key] = { err: msgOf(e), at: Date.now() }; }   // 지나가는 오류일 수 있다 — 1분 뒤에는 다시 견준다(chkOf)
   }
+  function chkOf(f) { var c = SRC.chk[chkKey(f)]; if (c && c.err && Date.now() - (c.at || 0) > 60000) { delete SRC.chk[chkKey(f)]; return null; } return c || null; }
   function enqueue(f, keep) {
     var key = chkKey(f), it = SRC.queue.filter(function (x) { return x.key === key; })[0];
-    if (it) { it.keep = it.keep || !!keep; return; }
-    SRC.queue.push({ key: key, f: f, keep: !!keep }); setTimeout(pump, 0);
+    if (it) it.keep = it.keep || !!keep; else SRC.queue.push({ key: key, f: f, keep: !!keep });
+    setTimeout(pump, 0);   // 이미 줄에 있어도 깨운다 — 불러오는 동안 멈췄던 줄이 그대로 남지 않게
   }
   //  하나씩 견준다(파일 하나가 몇 MB 다). 불러오기 창이 닫혀 있으면 머리줄 알림에 필요한 것만 남긴다.
   async function pump() {
@@ -1933,7 +1947,7 @@
   /** 그 파일을 누르면 무슨 일이 일어나나 — 앱의 어느 판과 내용이 같으면 그 문서를 연다(다시 올리지 않는다) · 이어진 문서가 있는데 내용이 다르면 그 문서의 다음 판 ·
    *  아직 견주지 않았으면 «확인 중»(눌러도 된다 — 올리기 전에 한 번 더 견준다) · 어느 문서와도 이어지지 않으면 새 문서로 연다. */
   function fileState(f, keep) {
-    var link = linkOf(f), c = SRC.chk[chkKey(f)], hits = seenAs(f);
+    var link = linkOf(f), c = chkOf(f), hits = seenAs(f);
     if (!hits.length && c && c.fp) hits = fpHits(c.fp);
     var hit = pickHit(hits, link);
     if (hit) {
@@ -2148,7 +2162,7 @@
   async function importHtml(src) {
     if (st.importing) return;
     var note = function (t, pct) { st.importNote = t; st.importPct = pct == null ? null : pct; paintPickers(); };
-    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; };
+    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; setTimeout(pump, 0); };
     st.importing = src.key; st.importName = src.name;
     if ($('pickModal').hidden && $('empty').hidden) { $('pickModal').hidden = false; }   // 머리줄의 「새 파일」 띠에서 눌렀다 — 진행이 보이게 창을 연다
     note('파일을 읽는 중' + (src.size ? ' · ' + sizeOf(src.size) : ''));
@@ -3477,8 +3491,7 @@
   async function buildReview() {
     var idx = st.vers.indexOf(st.ver); if (idx <= 0 || st.mode !== 'slides') return { prev: null, steps: [] };
     var pv = st.vers[idx - 1], prev = await loadVersion(st.doc, pv), cur = await loadVersion(st.doc, st.ver), pmap = {}, cmap = {}, steps = [], norm = function (t) { return String(t || '').replace(/\s+/g, ''); };
-    prev.slides.forEach(function (x) { if (!(x.variant || '')) pmap[x.slide_id] = x; });
-    cur.slides.forEach(function (x) { if (!(x.variant || '') && cmap[x.slide_id] == null) cmap[x.slide_id] = x; });
+    pmap = effMap(prev, pv); cmap = effMap(cur, st.ver);   // 판마다 «보이는 안»(고른 안 · 없으면 기본) — 안으로만 올라온 새 그림도 전후로 견준다
     var order = ord();
     for (var oi = 0; oi < order.length; oi++) {
       var sec = st.sections[order[oi]], c = cmap[sec.id], p0 = pmap[sec.id];
@@ -3495,8 +3508,8 @@
       free.forEach(function (k) { if (!k.used && k.gone && norm(k.t).length >= 2) mine.push({ kind: 'del', before: k.t }); });
       steps.push({ fi: sec.i, sid: sec.id, kind: 'slide', changes: mine });
     }
-    prev.slides.forEach(function (x) { if (!(x.variant || '') && !cmap[x.slide_id]) steps.push({ fi: -1, sid: x.slide_id, kind: 'gone', title: x.summary || x.slide_id, changes: [] }); });
-    return { prev: pv, steps: steps, prevHtml: assemble(prev), curHtml: assemble(cur) };
+    Object.keys(pmap).forEach(function (sid) { var x = pmap[sid]; if (x && !cmap[sid]) steps.push({ fi: -1, sid: sid, kind: 'gone', title: x.summary || sid, changes: [] }); });
+    return { prev: pv, steps: steps, prevHtml: assemble(prev, pv), curHtml: assemble(cur, st.ver) };
   }
   /* 견주기 틀 둘 — 앞 판 · 지금 판을 따로 띄워 두고 걸음마다 «그 장을 보여라» 만 시킨다. */
   var pk = null, pkSeq = 1;
