@@ -10,7 +10,7 @@ import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import { sendBoxAlert } from "../../ops/alerts.js";
 import { CANARY_PROBES, type CanaryProbe } from "./probes.js";
-import { judgeProbe, evaluateStreak, alertTransition, isUnconfigured, type CanaryState } from "./judge.js";
+import { judgeProbe, evaluateStreak, alertTransition, isUnconfigured, priorState, type CanaryState } from "./judge.js";
 
 /** 연속 실패 임계 — 이 횟수만큼 이어서 실패해야 경보한다. */
 export const FAIL_THRESHOLD = 3;
@@ -89,6 +89,13 @@ async function recentResults(key: string, limit = RECENT_WINDOW): Promise<boolea
   return r.rows.map((row) => row.ok === true);
 }
 
+/** 가장 최근 실행이 구성돼 있었나 — 기록이 없으면 null. */
+async function latestConfigured(key: string): Promise<boolean | null> {
+  const r = await itemsPool.query(
+    "SELECT configured FROM canary_result WHERE probe_key=$1 ORDER BY ran_at DESC LIMIT 1", [key]);
+  return r.rows.length ? r.rows[0].configured !== false : null;
+}
+
 export interface CanaryRunSummary {
   ran: number; failed: number;
   probes: Array<{ key: string; label: string; adapter: string; tier: string; ok: boolean; configured: boolean; reason: string | null; state: CanaryState; alerted: "raise" | "clear" | null }>;
@@ -102,7 +109,11 @@ export async function runCanary(opts: { callerId: string; keys?: string[]; probe
   const list = (opts.probes ?? CANARY_PROBES).filter((p) => !opts.keys?.length || opts.keys.includes(p.key));
   const out: CanaryRunSummary = { ran: 0, failed: 0, probes: [] };
   for (const probe of list) {
-    const before = evaluateStreak(await recentResults(probe.key).catch(() => []), FAIL_THRESHOLD).state;
+    const before = priorState(
+      await latestConfigured(probe.key).catch(() => null),
+      await recentResults(probe.key).catch(() => []),
+      FAIL_THRESHOLD,
+    ).state;
     const run = await runProbe(probe, opts.callerId);
     out.ran++;
     if (!run.ok) out.failed++;
@@ -144,11 +155,7 @@ export async function canaryStatus(): Promise<Array<{ key: string; label: string
   const out = [];
   for (const p of CANARY_PROBES) {
     const row = last.get(p.key);
-    // ⚠ **가장 최근 실행**이 구성 미비면 그 프로브는 unconfigured 다. 연속실패 집계는 configured 행만 보므로
-    //  여기서 덮지 않으면 '설정을 걷어낸 직후'에 과거 실패 기록으로 failing 이 계속 보인다(dev 실측).
-    const s = row && row.configured === false
-      ? { state: "unconfigured" as CanaryState, failStreak: 0 }
-      : evaluateStreak(await recentResults(p.key).catch(() => []), FAIL_THRESHOLD);
+    const s = priorState(row ? row.configured !== false : null, await recentResults(p.key).catch(() => []), FAIL_THRESHOLD);
     out.push({
       key: p.key, label: p.label, adapter: p.adapter, tier: p.tier,
       state: s.state, failStreak: s.failStreak,
