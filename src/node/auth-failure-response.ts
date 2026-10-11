@@ -208,7 +208,7 @@ async function stopLanes(table: LaneTable, lane: string, requester: string, reas
   const r = await itemsPool.query(
     //  last_summary 는 **병합**한다 — 마지막 실행의 진단을 지우지 않는다(stopCron 이 last_summary 를 안 건드리는 이유와 같다).
     //  auto_disabled 표식은 이 레인이 꺼져 있어도 자기 몫을 계속 맡게 하고(org/distill/lanes.isAutoDisabledLane),
-    //   관리탭이 «자격 실패로 꺼진 레인» 과 «사람이 끈 레인» 을 구분하게 한다.
+    //   «자격 실패로 꺼진 레인» 과 «사람이 끈 레인» 을 가를 재료를 남긴다 — 레인 화면은 아직 이 표식을 읽지 않는다(`grep -rn auto_disabled web/`).
     `UPDATE ${table} SET enabled=false, last_status='error',
             last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' THEN last_summary ELSE '{}'::jsonb END) || $3::jsonb,
             updated_at=now()
