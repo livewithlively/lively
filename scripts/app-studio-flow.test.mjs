@@ -47,7 +47,7 @@ const db = F.draftBrief(card, "full");
 check(/\[\[걸음 1\/4\]\]/.test(db) && /app-build-quickstart/.test(db) && /이름: 회의 안건/.test(db) && /넓게/.test(db), "B2 시안 글 — 걸음 · 지식 · 카드 · 자리", db);
 const fb = F.fixBrief(2, [{ x: 0.304, y: 0.12, where: "<h1 「제목」>", note: "날짜도" }, { x: 0.5, y: 0.5, where: "", note: "  " }], "글자 크게", "side", "meeting-agenda");
 check(/2번째/.test(fb) && /왼쪽에서 30% · 위에서 12% 자리 · <h1 「제목」> → 날짜도/.test(fb) && !/50%/.test(fb) && /\[앱 전체\] 글자 크게/.test(fb) && /app_pull meeting-agenda/.test(fb), "B3 고침 글 — 빈 핀은 빼고 · 비율 자리 · 전체 의견", fb);
-check(/\[\[점검\]\]/.test(F.checkBrief(card, "x")) && /app_pull x/.test(F.checkBrief(card, "x")), "B4 점검 글");
+check(/\[\[대조\]\]/.test(F.checkBrief(card, "x")) && /app_pull x/.test(F.checkBrief(card, "x")), "B4 점검 글");
 check(/슬랙 채널 #p/.test(F.notifyBrief("회의 안건", "글", " #p ")) && !/슬랙/.test(F.notifyBrief("회의 안건", "글", "")) && /앱 소개 · 회의 안건/.test(F.notifyBrief("회의 안건", "글", "")), "B5 알림 글 — 슬랙은 적었을 때만");
 check(/원본은 건드리지 말고/.test(F.copyBrief("a-me", "A · 나", "A", "상민", "both")) && /app_pull a-me/.test(F.copyBrief("a-me", "A · 나", "A", "상민", "both")), "B6 사본 글");
 check(/있던 것은 그대로/.test(F.editBrief("a", "A", "side")), "B7 원본 고치기 글");
