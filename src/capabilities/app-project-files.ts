@@ -8,7 +8,7 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
-import { listAttachedApps, sessionOwnerOf } from "../apps/session-apps.js";
+import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/session-apps.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, listProjectFiles, readProjectFile, type ProjectFilesDeps, type ProjectRef } from "../apps/app-project-files.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
@@ -24,6 +24,7 @@ const liveDeps: ProjectFilesDeps = {
   getApp: (id) => getApp(id),
   getGrant: getActiveGrant,
   sessionOwner: sessionOwnerOf,
+  canEnter: sessionCanEnter,
   listAttached: listAttachedApps,
   projectOfSession: async (sid) => {
     const { latestProjectForSession } = await import("../v6/project-session-store.js");
@@ -65,7 +66,7 @@ const appProjectFiles: Capability = {
   name: "org_app_project_files",
   title: "앱 화면이 붙은 세션의 프로젝트 자료 목록",
   description: "세션에 붙은 앱 화면이 그 세션 프로젝트의 공유 폴더(자료)에서 파일 목록을 본다(SDK lively.files.list). 앱이 permissions.project_files 로 선언한 확장자만, 최신순. "
-    + "그 앱에 동의한 세션 주인이, 그 앱이 지금 붙어 있고, 그 프로젝트를 볼 수 있을 때만. 세션에 프로젝트가 없으면 빈 목록. 읽기뿐. REST 전용.",
+    + "그 앱에 동의했고 그 세션에 들어갈 수 있는 사람이, 그 앱이 지금 붙어 있고, 그 프로젝트를 볼 수 있을 때만. 세션에 프로젝트가 없으면 빈 목록. 읽기뿐. REST 전용.",
   scope: null,
   input: { app_id: z.string(), session_id: z.string(), ext: z.string().optional().describe("쉼표로 이은 확장자(선언한 것 가운데 고르기 · 생략하면 선언 전부)"), limit: z.number().optional() },
   expose: {
