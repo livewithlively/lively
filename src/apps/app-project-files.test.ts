@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { RateWindow } from "./app-chat-send.js";
-import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, declaredExts, extOf, listProjectFiles, normalizeRelPath, readProjectFile, type ProjectFilesDeps, type ProjectFileEntry } from "./app-project-files.js";
-import { PROJECT_FILES_TOOL, parseAppManifest } from "./manifest.js";
+import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, declaredExts, declaredWorkspaceExts, extOf, listProjectFiles, normalizeRelPath, readProjectFile, type ProjectFilesDeps, type ProjectFileEntry, type WorkspaceFileEntry } from "./app-project-files.js";
+import { PROJECT_FILES_TOOL, WORKSPACE_FILES_TOOL, parseAppManifest } from "./manifest.js";
 import { memberAppViolations } from "./member-app.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import type { SessionAppRow } from "./session-apps.js";
@@ -193,4 +193,124 @@ test("extOf — 마지막 점 뒤 · 소문자 · 점으로 시작하는 이름�
   assert.equal(extOf("README"), "");
   assert.equal(extOf(".env"), "");
   assert.equal(extOf("a.b/README"), "");
+});
+
+// ── 전체 자료 (#4629) — scope 'all' 은 붙은 세션의 프로젝트 밖을 본다. 제 선언 · 제 동의로만 열린다 ─────────────────
+//  이게 틀리면: 프로젝트 자료에만 동의한 사람의 앱이 다른 프로젝트의 파일을 읽는다 · 가려진 프로젝트의 파일이 목록이나 내용으로 샌다 ·
+//  앱이 project_id 를 지어내 좁은 동의로 넓은 곳을 읽는다 · 옛 호스트의 답(붙은 프로젝트 목록)을 전체로 잘못 쓴다.
+const wideDecl = { permissions: { tools: ["store_query", PROJECT_FILES_TOOL, WORKSPACE_FILES_TOOL], project_files: ["html", "htm"], workspace_files: ["html"] } };
+const wideGrant = () => grant(["store_*", PROJECT_FILES_TOOL, WORKSPACE_FILES_TOOL]);
+const INDEX: WorkspaceFileEntry[] = [
+  { project_id: 3625, project_name: "지원사업", path: "덱/리뉴얼.html", mtime: T, size: 3_800_000, session: "box-a" },
+  { project_id: 4577, project_name: "세일즈", path: "out/새 제안서.html", mtime: T - 10, size: 4096, session: "box-z" },
+  { project_id: 9000, project_name: "잠긴 프로젝트", path: "비밀.html", mtime: T - 20, size: 10 },
+  { project_id: 3625, project_name: "지원사업", path: "덱/메모.htm", mtime: T - 30, size: 10 },
+];
+function wide(over: Partial<World> & { index?: WorkspaceFileEntry[]; hidden?: number[]; made?: string[] } = {}) {
+  const d = deps({ app: app({ manifest: wideDecl }), grant: wideGrant(), ...over });
+  const asked: Array<{ exts: string[]; q: string; limit: number }> = [];
+  const hidden = over.hidden ?? [9000];
+  return Object.assign(d, {
+    asked,
+    canSeeProject: async (id: number) => !hidden.includes(id),
+    workspaceIndex: async (_m: string, exts: string[], o: { q: string; limit: number }) => { asked.push({ exts, ...o }); return (over.index ?? INDEX).slice(0, o.limit); },
+    projectById: async (id: number) => (id === 3625 || id === 9000 ? { id, folder: "project/" + id } : null),
+    sessionMade: async () => over.made ?? [],
+    readText: async (p: { id: number }, _m: string, rel: string) => { d.reads.push(p.id + ":" + rel); return { content: "<html>" + p.id + "</html>", size: 10, mtime: T }; },
+  });
+}
+
+test("W1 전체 자료 목록 — 볼 수 있는 프로젝트의 선언한 확장자만 · 줄마다 프로젝트 · 이 세션이 만든 것 표시 · scope 를 되돌려 준다", async () => {
+  const d = wide();
+  const r = await listProjectFiles({ ...q(), scope: "all" }, d, fresh());
+  assert.equal(r.scope, "all");
+  assert.equal(r.project_id, 4577, "붙은 세션의 프로젝트는 그대로 알려 준다");
+  assert.deepEqual(r.files.map((f) => f.project_id + ":" + f.path), ["3625:덱/리뉴얼.html", "4577:out/새 제안서.html"], "가려진 프로젝트(9000) · 선언 밖 확장자(htm)는 없다");
+  assert.deepEqual(r.files[0], { path: "덱/리뉴얼.html", name: "리뉴얼.html", size: 3_800_000, mtime: "2026-10-07T09:00:00.000Z", project_id: 3625, project_name: "지원사업", from_session: true });
+  assert.equal(r.files[1].from_session, undefined, "다른 세션이 만든 것에는 표시가 없다");
+  assert.deepEqual(d.asked[0].exts, ["html"]);
+  assert.equal(d.manifests, 0, "프로젝트마다 폴더를 훑지 않는다");
+});
+
+test("W2 전체 자료는 제 선언 · 제 동의로만 — 프로젝트 자료에만 동의했으면 403 「다시 동의」, 선언이 없으면 403", async () => {
+  const narrowGrant = wide({ grant: grant() });
+  assert.equal(await status(listProjectFiles({ ...q(), scope: "all" }, narrowGrant, fresh())), 403);
+  assert.match(await message(listProjectFiles({ ...q(), scope: "all" }, narrowGrant, fresh())), /다시 동의|grant/);
+  assert.equal(narrowGrant.asked.length, 0);
+  assert.equal(await status(readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: 3625 }, narrowGrant, fresh())), 403);
+  assert.equal(narrowGrant.reads.length, 0);
+  const noDecl = wide({ app: app() });   // project_files 만 선언한 앱
+  assert.equal(await status(listProjectFiles({ ...q(), scope: "all" }, noDecl, fresh())), 403);
+  assert.equal(await status(readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: 3625 }, noDecl, fresh())), 403);
+  //  좁은 쪽은 종전대로 된다
+  assert.equal(await status(listProjectFiles(q(), narrowGrant, fresh())), "ok");
+});
+
+test("W3 전체 자료 읽기 — 지목한 프로젝트에서 읽는다 · 가려진 프로젝트 · 없는 프로젝트는 404(같은 답) · 선언 밖 확장자 403", async () => {
+  const d = wide();
+  const r = await readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: 3625 }, d, fresh());
+  assert.equal(r.content, "<html>3625</html>");
+  assert.deepEqual(d.reads, ["3625:덱/리뉴얼.html"]);
+  assert.equal(await status(readProjectFile({ ...rq("비밀.html"), projectId: 9000 }, d, fresh())), 404);
+  assert.equal(await status(readProjectFile({ ...rq("x.html"), projectId: 1234 }, d, fresh())), 404);
+  assert.equal(await status(readProjectFile({ ...rq("덱/메모.htm"), projectId: 3625 }, d, fresh())), 403, "workspace_files 에는 htm 이 없다");
+  assert.equal(await status(readProjectFile({ ...rq("../x.html"), projectId: 3625 }, d, fresh())), 400);
+  for (const bad of ["abc", -1, 1.5, 0]) assert.equal(await status(readProjectFile({ ...rq("a.html"), projectId: bad }, d, fresh())), 400, String(bad));
+  assert.deepEqual(d.reads, ["3625:덱/리뉴얼.html"], "막힌 것은 저장소에 닿지 않는다");
+});
+
+test("W4 전체 자료도 세션에 붙은 화면에서만 — 남의 세션 · 뗀 앱은 종전과 같은 답", async () => {
+  assert.equal(await status(listProjectFiles({ ...q(), scope: "all" }, wide({ owner: "bob" }), fresh())), 403);
+  assert.equal(await status(listProjectFiles({ ...q(), scope: "all" }, wide({ attached: [] }), fresh())), 403);
+  assert.equal(await status(readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: 3625 }, wide({ attached: [] }), fresh())), 403);
+  //  프로젝트 없는 세션에서도 전체 자료는 선다
+  const r = await listProjectFiles({ ...q(), scope: "all" }, wide({ project: null }), fresh());
+  assert.equal(r.project_id, null); assert.equal(r.files.length, 2);
+});
+
+test("W5 찾는 말 · limit · 넘침 — q 는 색인으로 간다(100자) · limit+1 을 물어 넘쳤는지 안다 · 모르는 scope 는 400", async () => {
+  const many = Array.from({ length: 300 }, (_, i) => ({ project_id: 3625, project_name: "P", path: `d/${i}.html`, mtime: T - i, size: 1 }));
+  const d = wide({ index: many });
+  const r = await listProjectFiles({ ...q({ limit: 50 }), scope: "all", q: "  덱 리뉴얼  " }, d, fresh());
+  assert.equal(r.files.length, 50); assert.equal(r.truncated, true);
+  assert.deepEqual(d.asked[0], { exts: ["html"], q: "덱 리뉴얼", limit: 51 });
+  assert.equal((await listProjectFiles({ ...q(), scope: "all" }, wide(), fresh())).truncated, false);
+  assert.equal(await status(listProjectFiles({ ...q(), scope: "everything" }, wide(), fresh())), 400);
+});
+
+test("W6 프로젝트 자료 목록에도 «이 세션이 만든 것» 표시 — 색인이 아는 경로에만 · 색인을 못 읽어도 목록은 선다", async () => {
+  const r = await listProjectFiles(q(), wide({ made: ["out/덱.HTM"] }), fresh());
+  assert.deepEqual(r.files.map((f) => [f.path, f.from_session === true]), [["out/새 제안서.html", false], ["out/덱.HTM", true], ["기획안/옛 시안.html", false]]);
+  assert.equal(r.scope, undefined, "좁은 목록에는 scope 가 없다(옛 답과 같은 꼴)");
+  const broken = Object.assign(wide(), { sessionMade: async () => { throw new Error("색인 없음"); } });
+  assert.equal((await listProjectFiles(q(), broken, fresh())).files.length, 3);
+});
+
+test("W7 매니페스트 — workspace_files 를 선언하면 app_workspace_files 가 따라붙는다 · 기본은 빈 배열 · 구성원 앱도 선언할 수 있다", () => {
+  const base = { id: "x-app", title: "X", version: "1.0.0" };
+  const a = parseAppManifest({ ...base, permissions: { workspace_files: ["html"] } });
+  assert.ok(a.permissions.tools.includes(WORKSPACE_FILES_TOOL));
+  assert.ok(!a.permissions.tools.includes(PROJECT_FILES_TOOL), "넓은 쪽을 선언했다고 좁은 쪽이 따라오지 않는다");
+  assert.deepEqual(declaredWorkspaceExts({ manifest: a } as unknown as OrgApp), ["html"]);
+  const b = parseAppManifest({ ...base, permissions: { project_files: ["html"] } });
+  assert.deepEqual(b.permissions.workspace_files, []);
+  assert.ok(!b.permissions.tools.includes(WORKSPACE_FILES_TOOL));
+  assert.throws(() => parseAppManifest({ ...base, permissions: { workspace_files: ["*"] } }));
+  assert.deepEqual(memberAppViolations(a), []);
+});
+
+test("W8 가려진 프로젝트의 줄이 limit 을 채워도 «넘쳤다» 고 하지 않는다 · 붙은 프로젝트가 가려져 있으면 그 id 도 알려 주지 않는다", async () => {
+  const hiddenRows = Array.from({ length: 3 }, (_, i) => ({ project_id: 9000, project_name: "잠긴 프로젝트", path: `비밀${i}.html`, mtime: T - i, size: 10 }));
+  const r = await listProjectFiles({ ...q({ limit: 2 }), scope: "all" }, wide({ index: hiddenRows }), fresh());
+  assert.deepEqual(r.files, []);
+  assert.equal(r.truncated, false, "걸러진 줄 수로 가려진 파일이 있다는 것이 새면 안 된다");
+  const h = await listProjectFiles({ ...q(), scope: "all" }, wide({ project: { id: 9000, folder: "project/9000" } }), fresh());
+  assert.equal(h.project_id, null);
+  assert.equal(h.files.length, 2, "보이는 프로젝트의 파일은 그대로 나온다");
+});
+
+test("W9 project_id 는 양의 정수뿐 — 배열 · 숫자 아닌 글은 400, 저장소에 닿지 않는다", async () => {
+  const d = wide();
+  for (const bad of [[3625], "3625abc", "1e2x", {}, true]) assert.equal(await status(readProjectFile({ ...rq("덱/리뉴얼.html"), projectId: bad }, d, fresh())), 400, JSON.stringify(bad));
+  assert.equal(d.reads.length, 0);
 });

@@ -47,6 +47,8 @@ export const NOTIFY_TOOL = "app_notify";
 export const CHAT_SEND_TOOL = "app_chat_send";
 /** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
 export const PROJECT_FILES_TOOL = "app_project_files";
+/** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
+export const WORKSPACE_FILES_TOOL = "app_workspace_files";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -85,6 +87,10 @@ const permissionsSchema = z.object({
   //  목록(최신순)과 내용 읽기뿐이고 쓰기는 없다(lively.files.list / .read). 그 사람이 볼 수 있는 프로젝트의 파일이 앱으로 들어오는 능력이라
   //  동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_project_files 가 있어야 한다(apps/app-project-files.ts).
   project_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4629 — 이 앱 화면이 **그 사람이 볼 수 있는 모든 프로젝트의 자료**에서 읽을 수 있는 파일 확장자(lively.files 의 scope 'all').
+  //  project_files 보다 넓은 능력이라 **따로** 선언하고 따로 동의받는다(app_workspace_files) — 붙은 세션의 프로젝트 밖 파일이 앱으로 들어온다.
+  //  읽기뿐이고, 여전히 세션에 붙은 앱 화면에서만 · 프로젝트 공개 범위 안에서만 닿는다(apps/app-project-files.ts).
+  workspace_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -278,6 +284,10 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   // #4592 — `project_files: ["html"]` 은 `app_project_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「프로젝트 자료에서 파일 읽기」).
   if (m.permissions.project_files.length && !m.permissions.tools.includes(PROJECT_FILES_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, PROJECT_FILES_TOOL];
+  }
+  // #4629 — `workspace_files: ["html"]` 은 `app_workspace_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「전체 자료에서 파일 읽기」).
+  if (m.permissions.workspace_files.length && !m.permissions.tools.includes(WORKSPACE_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

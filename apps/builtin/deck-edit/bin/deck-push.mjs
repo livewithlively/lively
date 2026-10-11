@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export const APP_ID = "deck-edit";
 export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -256,8 +256,10 @@ async function main() {
   for (const r of p.rows) await ins("versions", { doc: a.doc, ver, ...r, session: sid });   // created_at 은 시스템 칸(저절로 붙는다) — 적지 않는다
   // 문서 행.
   const title = a.title || (existing[0] && existing[0].title) || titleOf(html) || a.doc;
-  if (existing.length) await upd("docs", { id: existing[0].id }, { latest_ver: ver, title, source_path: file, changed_at: now, session: sid });
-  else await ins("docs", { doc: a.doc, title, session: sid, latest_ver: ver, source_path: file, changed_at: now });
+  //  원본 경로는 절대경로로 적는다 — 앱이 자료의 같은 파일과 꼬리(project/<id>/…)로 맞춘다. 상대경로면 안 맞아 같은 덱이 문서 둘로 갈린다.
+  const src = resolve(file);
+  if (existing.length) await upd("docs", { id: existing[0].id }, { latest_ver: ver, title, source_path: src, changed_at: now, session: sid });
+  else await ins("docs", { doc: a.doc, title, session: sid, latest_ver: ver, source_path: src, changed_at: now });
   console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}`);
 }
 

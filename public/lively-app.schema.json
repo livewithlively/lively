@@ -124,6 +124,15 @@
               },
               "maxItems": 8,
               "default": []
+            },
+            "workspace_files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]{1,8}$"
+              },
+              "maxItems": 8,
+              "default": []
             }
           },
           "additionalProperties": false,

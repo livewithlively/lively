@@ -32,6 +32,7 @@ export interface SessionApp {
   source: { kind?: string };
   notifications: boolean;   // #1891 — 이 앱이 알림을 보낼 수 있나(동의 창이 제 줄로 보여 준다)
   chatSend: boolean;        // #4594 — 이 앱 화면이 붙은 세션에 글을 바로 보낼 수 있나(동의 창이 제 줄로 보여 준다)
+  workspaceFiles: string[];   // #4629 — 볼 수 있는 모든 프로젝트의 자료에서 읽을 수 있는 확장자(프로젝트 자료와 다른 동의 줄)
   projectFiles: string[];   // #4592 — 이 앱 화면이 붙은 세션의 프로젝트 자료에서 읽을 수 있는 확장자(동의 창이 제 줄로 보여 준다)
 }
 
@@ -62,6 +63,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
           notifications: perm.notifications === true,     // #1891 — 동의 창이 제 줄로 보여 준다
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
+          workspaceFiles: Array.isArray(perm.workspace_files) ? perm.workspace_files.map(String) : [],   // #4629
           projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [] };   // #4592
       });
   } catch (e: any) {
@@ -91,7 +93,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [],
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [],
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
@@ -182,6 +184,10 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션의 프로젝트 자료에서 ' + app.projectFiles.map((x) => x.toUpperCase()).join(' · ') + ' 파일을 읽을 수 있어요(쓰지는 못해요)' }))) : null,
+        // 전체 자료 읽기(#4629) — 위보다 넓다: 붙인 세션의 프로젝트 밖, 내가 볼 수 있는 모든 프로젝트의 자료. 그래서 제 줄로 따로 묻는다.
+        app.workspaceFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '전체 자료 읽기' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '내가 볼 수 있는 모든 프로젝트의 자료에서 ' + app.workspaceFiles.map((x) => x.toUpperCase()).join(' · ') + ' 파일을 읽을 수 있어요(쓰지는 못해요). 읽은 내용은 이 앱의 데이터에 담겨 이 앱을 쓰는 다른 구성원에게 보일 수 있어요' }))) : null,
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
           el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,
