@@ -207,3 +207,17 @@ await t("크론 액션이 관리기 결과로 status 를 정한다", () => {
 });
 
 console.log(`\n${pass} passed`);
+
+// ── 배선 — HNSW 탐색 폭과 접수 실패 노출 (리뷰 반영) ──
+{
+  const { readFileSync } = await import("node:fs");
+  const src = (p: string) => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const DET = src("./detectors.ts");
+  const RUN = src("./run-manager.ts");
+  assert.match(DET, /SET LOCAL hnsw\.ef_search = \$\{CONTRADICTION_EF_SEARCH\}/, "탐색 폭을 안 넓혀 이웃 40개가 후보 목록 꼬리로 채워진다");
+  assert.ok(!/client\.query\(`SET hnsw/.test(DET), "세션 SET 은 풀 커넥션에 새어 다른 쿼리의 실행계획을 바꾼다");
+  assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\) \};/,
+    "모순 관리기 접수 실패가 결과에 error 로 안 실려 크론 상태·감시가 ok 로 읽는다");
+  assert.match(RUN, /failedRepos\.length === out\.length && out\.length/, "코드 비교 관리기의 전 레포 접수 실패가 ok 로 접힌다");
+  console.log("ok  배선 — ef_search·접수 실패 노출");
+}

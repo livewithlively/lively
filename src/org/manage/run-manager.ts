@@ -24,6 +24,12 @@ export interface ManagerRunResult {
   skipped?: string; error?: string;
 }
 
+/** 접수 결과 요약에서 오류 문장을 꺼낸다(없으면 기본 문구). */
+function errorOf(summary: unknown): string {
+  const e = (summary as { error?: unknown } | null | undefined)?.error;
+  return typeof e === "string" && e.trim() ? e : "헤드리스 접수 실패";
+}
+
 /**
  * 관리기 결과 묶음 → 크론 잡 status(순수).
  *  · 전부 실패(error 만 있고 성공 0) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
@@ -95,6 +101,9 @@ export async function runManager(
         extra: { manager: m.key, candidates: cands.length },
       });
       await recordManagerRun(m.id, r.status, r.summary);
+      //  접수 실패는 던지지 않고 status 로 돌아온다(_headless.enqueueHeadlessTask) — error 로 싣지 않으면
+      //   statusForManagerResults 와 크론 감시가 둘 다 ok 로 읽는다.
+      if (r.status === "error") return { ...base, candidates: cands.length, error: errorOf(r.summary) };
       const taskId = taskIdOf(r.summary);
       return { ...base, candidates: cands.length, enqueued: true, ...(taskId ? { task_id: taskId } : {}) };
     }
@@ -139,12 +148,18 @@ export async function runManager(
         harness: m.harness, model: m.model, effort: m.effort, requester: m.requester, repo,
         extra: { manager: m.key, repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length },
       });
-      out.push({ repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length, ...(r.summary as object) });
+      out.push({ repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length, status: r.status, ...(r.summary as object) });
       const taskId = taskIdOf(r.summary);
       if (taskId) taskIds.push(taskId);
     }
-    await recordManagerRun(m.id, "ok", { repos: out });
-    return { ...base, candidates: cands.length + docs.length, enqueued: true, ...(taskIds.length ? { task_ids: taskIds } : {}) };
+    //  레포별 접수 실패도 결과에 싣는다 — 전부 실패면 error, 일부면 그 레포만 failed_repos 로(같은 이유).
+    const failedRepos = out.filter((o) => (o as { status?: string }).status === "error");
+    await recordManagerRun(m.id, failedRepos.length === out.length && out.length ? "error" : "ok", { repos: out });
+    if (failedRepos.length === out.length && out.length) {
+      return { ...base, candidates: cands.length + docs.length, error: failedRepos.map((o) => errorOf(o)).join(" · ") };
+    }
+    return { ...base, candidates: cands.length + docs.length, enqueued: true, ...(taskIds.length ? { task_ids: taskIds } : {}),
+      ...(failedRepos.length ? { failed_repos: failedRepos.map((o) => (o as { repo?: string }).repo) } : {}) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });
