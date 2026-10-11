@@ -39,6 +39,30 @@ export function isActiveLane(l: { enabled: boolean; target?: string | null }): b
   return l.enabled === true && l.target !== "low_confidence";
 }
 
+/** 자동 정지 표식 키 — 자격 실패 대응(node/auth-failure-response.stopLanes)이 last_summary 에 남기고, 사람이 레인 스위치를 바꿔 저장하면 지운다. 레인 종류(증류·분류·관리) 공용. */
+export const AUTO_DISABLED_MARK = "auto_disabled";
+
+/**
+ * 실행 계정의 자격 실패로 **자동으로** 꺼진 레인인가.
+ *  이런 레인은 위탁을 내지 않지만 자기 몫은 계속 «맡는다» — 안 그러면 그 몫이 다른 레인·전역 폴백으로 넘어가
+ *  잡 계정과 기본 기준으로 처리되고, 사람이 다시 켜도 되돌릴 수 없다(종전 크론 정지에선 아무것도 안 돌았다).
+ *  표식은 정확히 JSON true 만 인정한다 — 사람이 끈 레인이 몫을 붙잡으면 그 몫이 영영 처리되지 않는다.
+ */
+export function isAutoDisabledLane(l: { enabled: boolean; last_summary?: unknown }): boolean {
+  if (l.enabled) return false;
+  const s = l.last_summary;
+  return !!s && typeof s === "object" && (s as Record<string, unknown>)[AUTO_DISABLED_MARK] === true;
+}
+
+/**
+ * 이 카테고리 붙이기 레인이 자기 몫을 **맡는가** — 일하는 레인(isActiveLane) 또는 자동 정지 레인.
+ *  배타 배정(앞선 레인)·사각지대·레거시 전역 폴백 판정이 이 기준을 쓴다. 위탁을 내는 건 isActiveLane 뿐이다.
+ *  폐지된 재분류 모드는 자동 정지여도 맡지 않는다 — 인박스가 원래 비어 있어 폴백만 막는다.
+ */
+export function isClaimingLane(l: { enabled: boolean; target?: string | null; last_summary?: unknown }): boolean {
+  return l.target !== "low_confidence" && (l.enabled === true || isAutoDisabledLane(l));
+}
+
 /**
  * 레인별 헤드리스 배치의 중첩 방지 표식 — 레인마다 따로(`cron:<잡>#<레인 key>`).
  *  하나로 두면(종전 `cron:<잡>`) 앞 레인의 배치가 도는 동안 뒤 레인은 전부 «이전 실행 아직 진행 중» 으로 건너뛰어

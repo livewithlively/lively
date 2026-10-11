@@ -230,8 +230,11 @@ export async function upsertManager(input: ManagerUpsertInput, actor?: string, s
               lookback_days=$10, threshold=$11, stale_days=$12, action_level=$13, criteria_md=$14,
               batch_size=$15, model=$16, effort=$17, requester=$18, note=$19,
               harness=$21,
+              --  스위치(enabled)를 **바꿔** 저장했을 때만 자동 정지 표식을 지운다 — 폼은 바꾸지 않은 스위치도 보낸다.
+              --   표식이 남아야 관리탭이 «자격 실패로 꺼진 관리기» 와 «사람이 끈 관리기» 를 구분한다(증류기 upsertDistiller 와 같은 규칙).
+              last_summary=(CASE WHEN $23::boolean AND jsonb_typeof(last_summary)='object' THEN last_summary - 'auto_disabled' ELSE last_summary END),
               version=version+1, updated_at=now(), updated_by=$20
-         WHERE id=$22`, [...vals, cur.id]);
+         WHERE id=$22`, [...vals, cur.id, input.enabled !== undefined && Boolean(input.enabled) !== Boolean(cur.enabled)]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
@@ -260,7 +263,13 @@ export async function removeManager(id: number, actor?: string, source?: string)
 
 export async function recordManagerRun(id: number, status: string, summary: unknown): Promise<void> {
   await itemsPool.query(
-    `UPDATE org_manager SET last_run_at=now(), last_status=$2, last_summary=$3::jsonb WHERE id=$1`,
+    //  자동 정지 표식은 보존한다 — 같은 틱에 형제 관리기의 401 로 이 관리기가 자동 정지된 뒤 이 기록이 덮으면
+    //   «사람이 끈 관리기» 와 구분이 안 된다(node/auth-failure-response.stopLanes).
+    `UPDATE org_manager SET last_run_at=now(), last_status=$2,
+            last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' AND last_summary ? 'auto_disabled'
+                               THEN $3::jsonb || jsonb_build_object('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason')
+                               ELSE $3::jsonb END)
+      WHERE id=$1`,
     [id, status, JSON.stringify(summary ?? {})]).catch(() => undefined);
 }
 

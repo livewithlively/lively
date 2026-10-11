@@ -2,7 +2,8 @@
 //  실행: npm run build && node dist/org/distill/lanes.test.js
 //  사양의 엣지 표 한 행 = 테스트 하나(행 번호를 이름 앞에 둔다). 사양: 프로젝트 #4194 검토 지식 · 이 파일 머리의 표.
 import assert from "node:assert/strict";
-import { assertLaneFields, isActiveLane, laneMarker, KNOWLEDGE_ONLY_FIELDS, SOURCE_ONLY_FIELDS } from "./lanes.js";
+import { assertLaneFields, isActiveLane, isClaimingLane, isAutoDisabledLane, AUTO_DISABLED_MARK, laneMarker, KNOWLEDGE_ONLY_FIELDS, SOURCE_ONLY_FIELDS } from "./lanes.js";
+import { isAutoDisabledLane as distillerIsAuto } from "./distiller.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -20,6 +21,28 @@ t("[A4] 꺼진 레인은 target 과 무관하게 안 일한다", () => {
 t("[A5] target 이 비어 있어도(옛 행) 켜져 있으면 일한다", () => {
   assert.equal(isActiveLane({ enabled: true, target: null }), true);
   assert.equal(isActiveLane({ enabled: true }), true);
+});
+
+// ══ 몫을 맡나(isClaimingLane) — 자격 실패로 자동 정지된 레인도 맡는다. 배타 배정·사각지대·폴백 판정이 쓴다 ══
+const AUTO = { auto_disabled: true, error: "x" };
+t("[C1] 일하는 레인은 맡는다", () => assert.equal(isClaimingLane({ enabled: true, target: "unmapped" }), true));
+t("[C2] 자동 정지 레인은 맡는다 — 빠지면 그 몫이 뒤 레인·전역 폴백으로 샌다", () => {
+  assert.equal(isClaimingLane({ enabled: false, target: "unmapped", last_summary: AUTO }), true);
+  assert.equal(isClaimingLane({ enabled: false, target: null, last_summary: AUTO }), true);
+});
+t("[C3] 사람이 끈 레인은 안 맡는다 — 몫을 붙잡으면 영영 처리되지 않는다", () => {
+  assert.equal(isClaimingLane({ enabled: false, target: "unmapped", last_summary: { error: "x" } }), false);
+  assert.equal(isClaimingLane({ enabled: false, target: "unmapped", last_summary: null }), false);
+  assert.equal(isClaimingLane({ enabled: false, target: "unmapped", last_summary: { auto_disabled: "true" } }), false, "문자열 표식까지 받아 준다");
+});
+t("[C4] 폐지 모드(low_confidence)는 자동 정지여도 안 맡는다 — 인박스가 빈 레인이 폴백만 막는다", () => {
+  assert.equal(isClaimingLane({ enabled: false, target: "low_confidence", last_summary: AUTO }), false);
+  assert.equal(isClaimingLane({ enabled: true, target: "low_confidence" }), false);
+});
+t("[C5] 자동 정지 판정은 증류기와 같은 함수·같은 표식 키다", () => {
+  assert.equal(AUTO_DISABLED_MARK, "auto_disabled");
+  assert.equal(isAutoDisabledLane({ enabled: true, last_summary: AUTO }), false, "켜진 레인을 자동 정지로 봤다");
+  assert.equal(distillerIsAuto, isAutoDisabledLane, "증류기와 분류가 서로 다른 표식 판정을 쓴다");
 });
 
 // ══ 레인별 실행 표식(laneMarker) ══

@@ -16,7 +16,7 @@ import { handleAuthFailure as handleForBurst, resetAuthAlertCooldown as resetFor
         auth: { label: "인증 실패", evidence: "expired", from: "summary" } },
       { stopCron: true },
       {
-        jobRunner: async () => ({ laneCapable: true, runner: "runner-a" }),
+        jobRunner: async () => ({ table: "org_distiller", runner: "runner-a" }),
         stopLanes: async () => { laneCalls++; return laneCalls === 1 ? ["l0", "l1", "l2", "l3"] : []; },
         cancelQueuedFor: async () => 0,
         stop: async () => { cronStops++; return true; },
@@ -42,14 +42,14 @@ type Alert = { severity: string; title: string; text: string; detail: Record<str
 
 /** 호출 기록 스텁 — '무엇이 실제로 불렸나'로 단언한다. */
 function spies(o: {
-  runner?: { laneCapable: boolean; runner: string } | null;
+  runner?: { table: string | null; runner: string } | null;
   runnerThrows?: boolean;
   lanesResult?: string[];
   stopLanesThrows?: boolean;
   throwAll?: boolean;
 } = {}) {
   const stopped: string[] = [], canceled: string[] = [], runnerLookups: string[] = [];
-  const laneStops: Array<{ lane: string; requester: string }> = [];
+  const laneStops: Array<{ table: string; lane: string; requester: string }> = [];
   const canceledFor: Array<{ jobId: string; requester: string }> = [];
   const alerts: Alert[] = [];
   const boom = () => { if (o.throwAll) throw new Error("dep 오류"); };
@@ -62,12 +62,12 @@ function spies(o: {
         boom();
         runnerLookups.push(jobId);
         if (o.runnerThrows) throw new Error("잡 조회 오류");
-        return o.runner === undefined ? { laneCapable: true, runner: "owner" } : o.runner;
+        return o.runner === undefined ? { table: "org_distiller", runner: "owner" } : o.runner;
       },
-      stopLanes: async (lane: string, requester: string) => {
+      stopLanes: async (table: string, lane: string, requester: string) => {
         boom();
         if (o.stopLanesThrows) throw new Error("레인 정지 오류");
-        laneStops.push({ lane, requester });
+        laneStops.push({ table, lane, requester });
         return o.lanesResult ?? [lane];
       },
       cancelQueuedFor: async (jobId: string, requester: string) => {
@@ -109,9 +109,9 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C1. 레인 격리 — 그 레인만 끄고, 그 계정 대기만 걷고, 크론은 계속 돈다 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" }, lanesResult: ["lane-a", "lane-b"] });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" }, lanesResult: ["lane-a", "lane-b"] });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
-  assert.deepEqual(s.laneStops, [{ lane: "lane-a", requester: "lively1" }], "실패 계정의 레인을 안 껐다 — 죽은 자격으로 계속 실패한다");
+  assert.deepEqual(s.laneStops, [{ table: "org_distiller", lane: "lane-a", requester: "lively1" }], "실패 계정의 레인을 안 껐다 — 죽은 자격으로 계속 실패한다");
   assert.deepEqual(s.stopped, [], "레인 격리 상황에서 크론 전체를 멈췄다 — 다른 계정 레인까지 선다");
   assert.deepEqual(s.canceled, [], "크론 전체 대기를 걷었다 — 멀쩡한 계정의 위탁까지 날아간다");
   assert.deepEqual(s.canceledFor, [{ jobId: "distill", requester: "lively1" }], "실패 계정의 대기 위탁을 안 걷었다 — 줄줄이 401 로 죽는다");
@@ -123,7 +123,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C1'. stopLanes 가 빈 배열(이미 꺼짐)이어도 크론은 멈추지 않는다 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" }, lanesResult: [] });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" }, lanesResult: [] });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   assert.deepEqual(s.stopped, [], "레인이 이미 꺼져 있다고 크론 전체로 올렸다 — 이미 처리된 실패로 멀쩡한 레인이 선다");
   assert.equal(out.cronStopped, false);
@@ -133,7 +133,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C2. 잡 실행 계정 == 실패 계정 → 종전대로 크론 정지 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "lively1" } });
+  const s = spies({ runner: { table: "org_distiller", runner: "lively1" } });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   assert.deepEqual(s.stopped, ["distill"], "잡 실행 계정 자체가 죽었는데 크론을 안 멈췄다 — 모든 레인이 계속 실패한다");
   assert.deepEqual(s.canceled, ["distill"], "크론 대기를 안 걷었다 — 줄줄이 401 로 죽는다");
@@ -144,7 +144,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C3. 레인 단위로 못 끄는 잡 → 크론 정지 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: false, runner: "owner" } });
+  const s = spies({ runner: { table: null, runner: "owner" } });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   assert.deepEqual(s.stopped, ["distill"], "레인을 못 끄는 잡인데 크론도 안 멈췄다 — 아무것도 안 멈춘다");
   assert.deepEqual(s.laneStops, [], "레인을 못 끄는 잡에 레인 정지를 시도했다");
@@ -184,7 +184,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C6. stopLanes 가 throw → 크론 정지로 올려 대응 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" }, stopLanesThrows: true });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" }, stopLanesThrows: true });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   assert.deepEqual(s.stopped, ["distill"], "레인 정지가 실패하자 아무것도 안 멈춘 채 끝났다 — 죽은 자격으로 계속 돈다");
   assert.equal(out.cronStopped, true);
@@ -193,7 +193,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C7. 정책으로 자동 정지를 끄면 레인 상황이어도 알림만 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" } });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" } });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: false }, s.deps);
   assert.deepEqual(s.stopped, [], "자동 정지를 껐는데 크론을 멈췄다 — 정책이 안 먹는다");
   assert.deepEqual(s.laneStops, [], "자동 정지를 껐는데 레인을 껐다 — 정책이 안 먹는다");
@@ -207,7 +207,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C8. 사람이 낸 위탁(cronJobId=null) — 레인이 있어도 아무것도 안 멈추고 알림은 간다 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" } });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" } });
   const out = await handleAuthFailure(
     { taskId: 503, requester: "yoon", cronJobId: null, lane: "lane-a", auth: AUTH }, { stopCron: true }, s.deps);
   assert.deepEqual(s.stopped, [], "크론 마커가 없는데 크론을 멈췄다");
@@ -222,7 +222,7 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
 // ── C9. 레인 격리 알림 — 첫 건은 반드시 가고, 꺼진 레인을 알려 준다 ──
 {
   resetAuthAlertCooldown();
-  const s = spies({ runner: { laneCapable: true, runner: "owner" }, lanesResult: ["lane-a"] });
+  const s = spies({ runner: { table: "org_distiller", runner: "owner" }, lanesResult: ["lane-a"] });
   const out = await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   assert.equal(out.alerted, true, "레인 격리 첫 건인데 알림이 안 갔다 — 아무도 모른다");
   assert.equal(s.alerts.length, 1);
@@ -241,6 +241,54 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
     await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
   } catch (e) { threw = e; }
   assert.equal(threw, null, "dep 하나의 오류가 대응 경로 밖으로 새어 스케줄러를 깼다");
+}
+
+// ════════ D. 분류·관리 레인 — 테이블 맵·관리 마커 정규화·대응 ════════
+import { laneTableFor, laneKeyFor, laneNoun } from "./auth-failure-response.js";
+
+// ── D1. 액션 → 레인 테이블은 화이트리스트에서만 ──
+assert.equal(laneTableFor("distill_sources_headless"), "org_distiller", "증류 잡의 레인 테이블이 바뀌었다");
+assert.equal(laneTableFor("classify_knowledge_headless"), "org_classifier", "분류 잡이 레인 격리를 못 한다 — 한 계정 만료로 분류 크론 전체가 선다");
+assert.equal(laneTableFor("run_managers"), "org_manager", "관리 잡이 레인 격리를 못 한다 — 한 계정 만료로 관리 크론 전체가 선다");
+for (const a of ["classify_knowledge", "distill_sources", "map_unmapped", "", null, undefined, "toString", "__proto__", "constructor"]) {
+  assert.equal(laneTableFor(a as never), null, `레인 스위치가 없는 액션(${String(a)})에 테이블을 줬다 — 엉뚱한 테이블을 SQL 식별자로 쓴다`);
+}
+
+// ── D2. 관리 마커의 @repo 는 관리 테이블에서만 뗀다 ──
+assert.equal(laneKeyFor("org_manager", "drift@hf-dev/lively"), "drift", "관리 마커의 @repo 를 안 뗐다 — 그런 관리기가 없어 크론 전체로 올라간다");
+assert.equal(laneKeyFor("org_manager", "drift"), "drift", "레포 없는 관리 마커를 바꿨다");
+assert.equal(laneKeyFor("org_distiller", "local@charles"), "local@charles", "증류기 key 의 @ 를 잘랐다 — 정규화하지 않은 증류기 key 를 엉뚱하게 찾는다");
+assert.equal(laneKeyFor("org_classifier", "c1"), "c1");
+
+// ── D3. 분류 잡 — 그 레인만 끈다 ──
+{
+  resetAuthAlertCooldown();
+  const s = spies({ runner: { table: "org_classifier", runner: "owner" }, lanesResult: ["c1"] });
+  const out = await handleAuthFailure({ taskId: 601, requester: "lively1", cronJobId: "classify-knowledge-headless", lane: "c1", auth: AUTH }, { stopCron: true }, s.deps);
+  assert.deepEqual(s.laneStops, [{ table: "org_classifier", lane: "c1", requester: "lively1" }], "분류 레인을 분류 테이블에서 끄지 않았다");
+  assert.deepEqual(s.stopped, [], "분류 레인 계정 만료로 분류 크론 전체를 멈췄다");
+  assert.deepEqual(out.lanesStopped, ["c1"]);
+  assert.ok(s.alerts[0].text.includes(laneNoun("org_classifier")), "알림이 분류 레인을 «카테고리 붙이기 레인» 으로 부르지 않는다 — 관리탭에서 못 찾는다");
+}
+
+// ── D4. 관리 잡 — 레포별 마커여도 관리기 key 로 끈다 ──
+{
+  resetAuthAlertCooldown();
+  const s = spies({ runner: { table: "org_manager", runner: "owner" }, lanesResult: ["drift"] });
+  await handleAuthFailure({ taskId: 602, requester: "lively1", cronJobId: "run-managers", lane: "drift@hf-dev/lively", auth: AUTH }, { stopCron: true }, s.deps);
+  assert.deepEqual(s.laneStops, [{ table: "org_manager", lane: "drift", requester: "lively1" }], "관리 마커를 관리기 key 로 바꾸지 않고 껐다");
+  assert.deepEqual(s.stopped, [], "관리기 계정 만료로 관리 크론 전체를 멈췄다");
+  assert.ok(s.alerts[0].text.includes("관리기"), "알림이 관리기를 다시 켜라고 말하지 않는다");
+}
+
+// ── D5. 분류·관리도 잡 실행 계정이 죽었으면 크론을 멈춘다 ──
+for (const table of ["org_classifier", "org_manager"]) {
+  resetAuthAlertCooldown();
+  const s = spies({ runner: { table, runner: "lively1" } });
+  const out = await handleAuthFailure({ taskId: 603, requester: "lively1", cronJobId: "j", lane: "x", auth: AUTH }, { stopCron: true }, s.deps);
+  assert.deepEqual(s.stopped, ["j"], `${table}: 잡 실행 계정이 죽었는데 크론을 안 멈췄다`);
+  assert.deepEqual(s.laneStops, []);
+  assert.equal(out.cronStopped, true);
 }
 
 console.log("auth-failure-lane-isolation: ok");
