@@ -60,5 +60,13 @@ ok(/document\.addEventListener\('pointerup', onUpCap, true\);/.test(card) && /do
 const blur = between(card, "const onWinBlur", "document.addEventListener('pointerdown'");
 ok(!/setFold/.test(blur), "N7 곁칸 안 액자로 초점이 들어가는 것(창 blur)은 최소화하지 않는다", blur.slice(0, 200));
 
+//  N11 작은 카드 · 알약에서 세션 이름이 보이게 — 프리뷰 실측(10-11): 알약 260 에서 이름 칸 0px(태스크 번호 · 연결됨 · ⋯ 가 자리를 먹었다)
+const css = code(read("public/styles/45-v2-side-swap.css"));
+ok(/\.pn-body\.cm > \.pn-col \.sc-head \.sc-title-no,/.test(css) && /\.pn-body\.cm > \.pn-col \.sc-head \.sc-title-btn > svg,/.test(css)
+  && /\.pn-body\.cm > \.pn-col \.sc-head \.sc-pair:has\(> \.sc-termstat\.ok\),/.test(css)
+  && /\.pn-body\.cm\.cm-fold > \.pn-col \.sc-head \.sc-head-r > \.sc-act \{ display: none; \}/.test(css),
+  "N11 카드에서 태스크 번호 · 연필 · 정상일 때 «연결됨» 을 빼고, 알약은 ⋯ 도 뺀다(이름이 먼저)");
+ok(!/\.sc-pair\s*\{[^}]*display:\s*none/.test(css), "N11b 연결이 끊기면(.sc-termstat 이 ok 가 아니면) 그대로 보인다 — sc-pair 를 통째로 숨기지 않는다");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

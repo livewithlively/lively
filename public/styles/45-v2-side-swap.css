@@ -162,6 +162,13 @@
   .pn-body.cm > .pn-col .sc-head .sc-act-files,
   .pn-body.cm > .pn-col .sc-head .sc-pair-sep,
   .pn-body.cm > .pn-col .sc-head .sc-pair > .sc-act { display: none; }
+  /*  작은 카드 · 알약은 세션 이름이 먼저다(2026-10-11 프리뷰 실측: 알약 260 에서 이름 칸이 0px, 카드 320 에서 «그 우리 ...»).
+      카드에서는 태스크 번호 · 이름 바꾸기 연필(카드에서 이름은 ⋯ 메뉴로 바꾼다) · 정상일 때의 «연결됨» 을 뺀다 — 끊기면 그대로 보인다.
+      알약은 ⋯ 도 뺀다(펴면 다시 있다). */
+  .pn-body.cm > .pn-col .sc-head .sc-title-no,
+  .pn-body.cm > .pn-col .sc-head .sc-title-btn > svg,
+  .pn-body.cm > .pn-col .sc-head .sc-pair:has(> .sc-termstat.ok),
+  .pn-body.cm.cm-fold > .pn-col .sc-head .sc-head-r > .sc-act { display: none; }
 
   .cm-ctl { position: absolute; top: 9px; right: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 2px; padding-left: 6px; border-left: 1px solid var(--line); background: var(--bg); }
   .cm-ctl[hidden] { display: none; }
