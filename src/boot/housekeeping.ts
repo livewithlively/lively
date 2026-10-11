@@ -459,6 +459,19 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
 }
 
+/**
+ * 스키마 전용 부팅(#4638) — `LIVELY_BOOT_SCHEMA_ONLY=1` 이면 DB 체인을 SCHEMA_ONLY_LAST_STEP 에서 끊는다.
+ *
+ * 왜: 공용 DB 마이그레이터(lvly-cloud/deploy/lvly-shared-migrate.sh)는 코어를 통째로 부팅하고 self-rls 의
+ *  로그 마커를 보자마자 컨테이너를 걷는다. 그런데 체인은 그 뒤에도 돈다(seed-default-content → seed-builtin-apps …).
+ *  2026-10-11 11:38 롤: 걷히는 순간 시더가 전역 앱 설치 락을 쥐고 있었고, 그 DB 세션이 RST 없이 버려져
+ *  RDS 가 6분 뒤에야 정리했다 — 그 사이 중앙 게이트웨이의 테넌트별 시딩이 그 락을 기다리며 풀 20개를 다 잡아
+ *  전 워크스페이스 API 가 멈췄다(지식 gw-pool-deadlock-orphan-migrator-advisory-lock-2026-10-11).
+ *  마이그레이터가 할 일은 스키마뿐이다 — 테넌트별 스텝은 게이트웨이의 요청 정비표가 맡는다.
+ */
+export const SCHEMA_ONLY_LAST_STEP = "self-rls";
+export const schemaOnlyBoot = (): boolean => (process.env.LIVELY_BOOT_SCHEMA_ONLY || "").trim() === "1";
+
 // listen 콜백에서 호출 — LISTEN_STEPS 를 동기 배선한 뒤 DB 부팅 직렬 체인을 비동기로 돌린다.
 // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
 //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
@@ -485,6 +498,11 @@ export function runBootHousekeeping(ctx: BootContext): void {
       if (schemaBootPhase() === "restarting") break;
       await step.run(ctx);
       if (step.name === SCHEMA_ESTABLISHED_AFTER_STEP) schemaEstablished = true;
+      // #4638 — 스키마 전용 부팅(공용 DB 마이그레이터)은 self-rls(완료 마커) 뒤 스텝을 돌리지 않는다.
+      if (schemaOnlyBoot() && step.name === SCHEMA_ONLY_LAST_STEP) {
+        logger.info("스키마 전용 부팅 — self-rls 뒤 스텝(시딩·복구)은 건너뛴다");
+        break;
+      }
     }
     // restarting 이면 no-op(pending 에서만 나간다) — 다음 부팅이 ready 를 낸다.
     markSchemaBoot("ready");
