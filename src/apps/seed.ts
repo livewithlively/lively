@@ -100,6 +100,9 @@ export async function seedBuiltinApps(root: string = builtinAppsRoot()): Promise
   // 은퇴한 빌트인 앱 회수(#4554) — 제거 verb 와 같은 코어(전개물 회수 → 데이터 떠 두기 → 앱 행). 실패는 비치명(다음 시딩이 재시도).
   for (const id of RETIRED_BUILTIN_APPS) {
     try {
+      //  락 없이 먼저 본다(#4638) — 대부분의 워크스페이스는 이미 회수가 끝나 지울 것이 없다. 종전엔 매 시딩·매 테넌트가
+      //   락부터 잡아, 회수할 것이 없는데도 모두가 한 락 앞에 줄을 섰다(2026-10-11 매니지드 전면 정지의 한 고리).
+      if (!shouldRetireBuiltin(id, present, await getApp(id))) continue;
       const done = await withAppInstallLock(id, async () => {
         const existing = await getApp(id);   // 락 안에서 다시 읽는다 — 그새 다른 경로가 지웠거나 다시 깔았을 수 있다
         if (!existing || !shouldRetireBuiltin(id, present, existing)) return false;
