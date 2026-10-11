@@ -34,10 +34,11 @@
     (docs.latest_ver — 올리기는 판 행을 먼저 쓰고 문서 행을 맨 끝에 고친다)이 생기면 머리줄 아래 띠에 「AI가 판 N 을 만들었습니다」 + 「바뀐 곳 훑어보기」 · 「판 N 열기」.
     안 보낸 고침은 새 판으로 따라온다(원문이 같은 줄에 그대로). 그 사이 원문이 바뀐 줄은 가장 비슷한 줄에 **의견으로** 얹는다(adoptOrphans).
     보낸 뒤 답을 기다리는 동안은 머리줄에 「AI 고치는 중 m:ss」 가 선다(마냥 기다리지 않게).
-  · **바뀐 곳 훑어보기**(review · 원준 2026-10-09 «전후 비교는 글이 아니라 그림으로»): 바뀐 **장**을 하나씩 — 왼쪽에 앞 판과 지금 판의 그 장을 실제로 그려
-    나란히 세우고(좁으면 위아래), 「겹쳐 보기」 는 같은 자리에서 누르는 동안 앞 판을 보여 준다(깜빡여 견주기). 바뀐 글의 자리는 두 그림에 테두리로.
+  · **바뀐 곳 훑어보기**(review · 원준 2026-10-09 «전후 비교는 글이 아니라 그림으로»): 바뀐 **장**을 하나씩 — 앞 판과 지금 판의 그 장을 실제로 그려
+    나란히 세우고(위아래가 더 크게 서면 위아래), 「겹쳐 보기」 는 같은 자리에서 누르는 동안 앞 판을 보여 준다(깜빡여 견주기). 바뀐 글의 자리는 두 그림에 테두리로.
     두 판을 작은 틀(PEEK 스크립트 · 장 하나만 보이게) 둘에 따로 띄운다. 장이 «바뀌었나» 는 글이 아니라 그 장의 HTML 로 본다(그림 · 배치만 바뀐 장도 잡힌다).
-    오른쪽에는 그 장의 바뀐 글(전 → 후)과 의견 칸. 앞 판의 글은 그 장의 HTML 에서 글 덩이를 뽑아(chunksOf) 가장 비슷한 것을 «전» 으로 짝짓는다.
+    배치는 화면 전체를 쓰는 2단(원준 2026-10-11 «3열이라 장표가 작다»): 위에 두 그림, 아래에 그 장의 바뀐 글(전 → 후) · 그 장 의견 · 장표 전체 의견. 경계는 끌어서(prefs.split.rv).
+    아래 칸에는 그 장의 바뀐 글(전 → 후)과 의견 칸. 앞 판의 글은 그 장의 HTML 에서 글 덩이를 뽑아(chunksOf) 가장 비슷한 것을 «전» 으로 짝짓는다.
   · **AI 의 질문은 앱 안에서 답한다**(원준 2026-10-09 «매번 세션을 열어 확인해야 한다 · 앱 안에서 결정하게»): 세션의 AI 가 사람의 결정이 필요하면 채팅에만 묻지 않고
     comments 에 scope 'ask' · status 'ask' 행을 쓴다(note = 질문 · orig = 선택지 줄마다 · slide_id = 관련 장). 앱은 띠 「AI가 결정을 기다립니다」 와 답하는 창을 띄우고,
     답하면 reply · status 'answered' 를 적고 그 누름 안에서 세션에 한 줄을 보낸다(AI 가 이어서 한다).
@@ -342,12 +343,30 @@
   body.r-tight .cmBox { flex-direction: column; align-items: stretch; }
   body.r-tight .cmSeg { align-self: flex-start; height: 26px; }
   /* 바뀐 곳 훑어보기 — 글 줄 칸을 덮는다 */
-  #review { position: absolute; inset: 0; z-index: 8; background: var(--bg); display: flex; flex-direction: column; min-width: 0; }
+  #rvWrap { position: absolute; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #rvWrap[hidden] { display: none; }
+  #review { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
   #review[hidden] { display: none; }
-  .rvHead { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
-  .rvHead b { flex: 1; min-width: 0; font-weight: 800; }
+  .rvHead { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 13px; min-width: 0; }
+  .rvHead b { flex: none; font-weight: 800; white-space: nowrap; }
+  .rvHead #cmpWhere { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-sub); font-weight: 700; }
+  .rvHead .ib { flex: none; }
+  #rvWrap.slim .rvHead b { display: none; }
+  #rvWrap.slim #rvPrev span, #rvWrap.slim #cmpMode span { display: none; }
+  #rvWrap.slim .rvHead { gap: 4px; padding: 6px; }
+  #rvWrap.slim .seg2 button { padding: 0 7px; }
   .rvHead .cnt { flex: none; font: 700 12px var(--mono); color: var(--muted); }
-  .rvBody { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px calc(16px + var(--lively-inset-bottom, 0px)); display: grid; gap: 10px; align-content: start; }
+  .rvBody { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px calc(14px + var(--lively-inset-bottom, 0px)); display: grid; gap: 10px 14px; align-content: start; grid-template-columns: minmax(0, 1fr); }
+  #rvWrap.wide .rvBody { grid-template-columns: minmax(0, 1fr) minmax(280px, 36%); }
+  .rvCol { min-width: 0; display: grid; gap: 8px; align-content: start; }
+  #rvWrap.wide .rvCol.say { position: sticky; top: 0; }
+  .rvLab { font: 800 12px var(--font); color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .rvLab.doc { color: var(--violet-text); }
+  .rvCol.say .ta { min-height: 44px; }
+  #rvSplit { flex: none; height: 11px; margin: -5px 0; position: relative; z-index: 2; cursor: row-resize; touch-action: none; }
+  #rvSplit::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 1px; background: var(--line); }
+  #rvSplit::after { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 3px; background: var(--blue); opacity: 0; transition: opacity .12s; border-radius: 2px; }
+  #rvSplit:hover::after, body.splitting #rvSplit::after { opacity: .85; }
   .rvLoc { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); min-width: 0; }
   .rvLoc .clip { flex: 1; min-width: 0; }
   .rvTag { flex: none; font-size: 12px; font-weight: 800; padding: 1px 7px; border-radius: 6px; background: var(--violet-bg); color: var(--violet-text); }
@@ -359,24 +378,20 @@
   .rvBox ins { text-decoration: none; background: rgba(45,107,240,.16); border-radius: 3px; font-weight: 700; }
   .rvBox.none { color: var(--muted); font-size: 13px; }
   .rvActs { display: flex; flex-wrap: wrap; gap: 6px; }
-  .rvFoot { flex: none; display: flex; gap: 6px; padding: 8px 10px calc(8px + var(--lively-inset-bottom, 0px)); border-top: 1px solid var(--line); }
-  .rvFoot .ib { flex: 1; justify-content: center; }
   .rvDone { text-align: center; padding: 28px 10px; display: grid; gap: 10px; justify-items: center; }
   .rvDone b { font-size: 15px; }
   #newVerBanner { flex-wrap: wrap; }
   /* 그림으로 견주기 — 왼쪽 칸을 덮는다 */
   #left { position: relative; }
-  #cmp { position: absolute; inset: 0; z-index: 9; background: var(--soft-2); display: flex; flex-direction: column; min-width: 0; }
+  #cmp { flex: none; position: relative; background: var(--soft-2); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; }
   #cmp[hidden] { display: none; }
-  .cmpBar { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
-  .cmpBar .sp { flex: 1; }
-  .cmpBar .seg2 { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--bg); }
-  .cmpBar .seg2 button { border: 0; background: none; height: 26px; padding: 0 9px; font: 700 12px var(--font); color: var(--muted); }
-  .cmpBar .seg2 button.on { background: var(--ink); color: var(--bg); }
-  #cmpHold { height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--blue); background: var(--bg); color: var(--blue-deep); font: 700 12px var(--font); touch-action: none; user-select: none; -webkit-user-select: none; }
+  .seg2 { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .seg2 button { border: 0; background: none; height: 26px; padding: 0 9px; font: 700 12px var(--font); color: var(--muted); }
+  .seg2 button.on { background: var(--ink); color: var(--bg); }
+  #cmpHold { position: absolute; right: 10px; top: 6px; z-index: 3; height: 28px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--blue); background: var(--bg); color: var(--blue-deep); font: 700 12px var(--font); touch-action: none; user-select: none; -webkit-user-select: none; }
   #cmpHold:active, #cmpHold.down { background: var(--blue); color: #fff; }
-  .cmpGrid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 8px; padding: 0 8px calc(8px + var(--lively-inset-bottom, 0px)); align-content: start; grid-template-columns: minmax(0, 1fr); }
-  .cmpGrid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cmpGrid { flex: none; display: grid; gap: 8px; padding: 6px 8px 8px; align-content: start; justify-content: center; grid-template-columns: var(--pw, 100%); }
+  .cmpGrid.two { grid-template-columns: var(--pw, 1fr) var(--pw, 1fr); }
   .cmpPane { min-width: 0; display: grid; gap: 4px; align-content: start; }
   .cmpPane > b { font: 800 12px var(--font); color: var(--muted); display: flex; gap: 6px; align-items: center; }
   .cmpPane.now > b { color: var(--blue-deep); }
@@ -389,7 +404,7 @@
   .cmpGrid.flip .cmpPane.was { display: none; }
   .cmpGrid.flip.showWas .cmpPane.was { display: grid; }
   .cmpGrid.flip.showWas .cmpPane.now { display: none; }
-  body.review.compact #main { grid-template-columns: minmax(0, 46%) minmax(0, 1fr) !important; }   /* 좁은 2열도 견주는 동안은 그림 칸을 넓힌다 */
+  #main { position: relative; }
   .rvChg { border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 10px 9px; display: grid; gap: 6px; }
   .rvChg .t { font-size: var(--row-fs, 14.5px); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
   .rvChg .t del { text-decoration: line-through; background: rgba(229,100,80,.16); border-radius: 3px; }
@@ -587,8 +602,6 @@
 <div class="strip" id="orderBanner" hidden><span></span><button type="button" class="ib sm">원래대로</button></div>
 <div id="main">
   <section id="left">
-    <div id="cmp" hidden><div class="cmpBar"><span id="cmpWhere"></span><span class="sp"></span><button type="button" id="cmpHold" hidden>누르는 동안 앞 판</button><div class="seg2" id="cmpMode"><button type="button" data-m="two" class="on">나란히</button><button type="button" data-m="flip">겹쳐 보기</button></div></div>
-      <div class="cmpGrid two" id="cmpGrid"><div class="cmpPane was"><b id="cmpWasL">전</b><div class="cmpShot" id="cmpWas"></div></div><div class="cmpPane now"><b id="cmpNowL">후</b><div class="cmpShot" id="cmpNow"></div></div></div></div>
     <div class="leftIn" id="leftIn">
       <div class="stageWrap" id="stageWrap">
         <div class="chips" id="chips" aria-label="장"></div>
@@ -603,9 +616,15 @@
   <section id="right">
     <div id="split" role="separator" tabindex="-1" title="끌어서 칸 크기를 정합니다 · 두 번 누르면 처음대로"></div>
     <div class="rh" id="rh"><div class="rhLine" id="rhLine"></div><div class="cmBox" id="cmBox"><div class="cmSeg" id="cmSeg" role="group" aria-label="의견이 가리키는 곳"><button type="button" data-s="slide" class="on" title="지금 보는 장 하나에 대한 의견">이 장</button><button type="button" data-s="doc" title="문서 전체에 대한 의견(모든 장에 해당)">문서 전체</button></div><textarea class="ta" id="slideCm" rows="1" placeholder="이 장 전체에 대한 의견(구도 · 빼거나 더할 것). 글 하나에 대한 의견은 그 글 아래에."></textarea></div></div>
-    <div id="review" hidden><div class="rvHead"><b id="rvTitle">바뀐 곳 훑어보기</b><span class="cnt" id="rvCnt"></span><button type="button" class="ib sm ic" id="rvClose" aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div><div class="rvBody" id="rvBody"></div><div class="rvFoot"><button type="button" class="ib" id="rvPrev">이전</button><button type="button" class="ib pri" id="rvNext">다음</button></div></div>
     <div class="rowsScroll" id="rowsScroll"><div class="rowsWrap" id="rows"></div></div>
   </section>
+  <div id="rvWrap" hidden>
+    <div class="rvHead" id="rvHead"><button type="button" class="ib sm ic" id="rvClose" aria-label="닫기" title="닫기(Esc)"><svg class="i"><use href="#i-x"/></svg></button><b id="rvTitle">앞 판과 견주기</b><span id="cmpWhere"></span><div class="seg2" id="cmpMode"><button type="button" data-m="two" class="on">나란히</button><button type="button" data-m="flip">겹쳐<span> 보기</span></button></div><button type="button" class="ib sm" id="rvPrev" title="이전 장(←)">‹<span> 이전</span></button><span class="cnt" id="rvCnt"></span><button type="button" class="ib sm pri" id="rvNext" title="다음 장(→)">다음</button></div>
+    <div id="cmp" hidden><button type="button" id="cmpHold" hidden>누르는 동안 앞 판</button>
+      <div class="cmpGrid two" id="cmpGrid"><div class="cmpPane was"><b id="cmpWasL">전</b><div class="cmpShot" id="cmpWas"></div></div><div class="cmpPane now"><b id="cmpNowL">후</b><div class="cmpShot" id="cmpNow"></div></div></div></div>
+    <div id="rvSplit" role="separator" tabindex="-1" title="끌어서 그림과 의견 칸의 크기를 정합니다 · 두 번 누르면 처음대로"></div>
+    <div id="review" hidden><div class="rvBody" id="rvBody"></div></div>
+  </div>
   <div id="sendBar"><button type="button" class="ib pri" id="sendBtn2">AI에게 보내기</button><div class="fine" id="sendFine">누르면 세션에 바로 전달됩니다</div></div>
 </div>
 <div id="empty" class="empty" hidden><div class="box" id="startBox"></div></div>
@@ -3105,12 +3124,40 @@
     (r.rects || []).forEach(function (q) { if (!q) return; var d = el('div', 'cmpMark'); d.style.left = (q.l * k - 3) + 'px'; d.style.top = (q.t * k - 3) + 'px'; d.style.width = (q.w * k + 6) + 'px'; d.style.height = (q.h * k + 6) + 'px'; host.appendChild(d); });
     side.last = r;
   }
+  /* 배치 — 화면 전체를 2단으로 쓴다(위 그림 · 아래 의견). 그림은 «나란히» 와 «위아래» 중 더 크게 서는 쪽으로 저절로 선다.
+     의견 칸의 높이는 끌어 정하면(prefs.split.rv) 그대로, 아니면 그림이 필요한 만큼만 쓰고 나머지를 의견 칸이 쓴다. */
+  function rvShare() { var sp = st.prefs.split, f = sp && typeof sp === 'object' ? Number(sp.rv) : NaN; return f >= 0.14 && f <= 0.75 ? f : null; }
   function cmpLayout() {
-    if (!rv) return; var g = $('cmpGrid'), flip = rv.mode === 'flip';
-    g.classList.toggle('flip', flip); g.classList.toggle('two', !flip && $('cmp').clientWidth >= 620); $('cmpHold').hidden = !flip;
+    if (!rv) return; var wrap = $('rvWrap'), g = $('cmpGrid'), cmp = $('cmp'), dockEl = $('review'), flip = rv.mode === 'flip';
+    var W = wrap.clientWidth, H = wrap.clientHeight; if (!W || !H) return;
+    wrap.classList.toggle('wide', W >= 760); wrap.classList.toggle('slim', W < 560);
+    var f = rvShare(), dock = f != null ? Math.round(H * f) : Math.max(180, Math.round(H * 0.3));
+    var availH = Math.max(110, H - $('rvHead').offsetHeight - dock), availW = Math.max(120, W - 16), LAB = 21, GAP = 8, PAD = 14;
+    var last = pk && ((pk.now.last && pk.now.last.w ? pk.now.last : null) || (pk.was.last && pk.was.last.w ? pk.was.last : null)), sw = last ? last.w : 1280, sh = last ? last.h : 720;
+    var kSide = Math.min((availW - GAP) / 2 / sw, (availH - LAB - PAD) / sh), kStack = Math.min(availW / sw, ((availH - PAD - GAP) / 2 - LAB) / sh), kOne = Math.min(availW / sw, (availH - LAB - PAD) / sh);
+    var stack = !flip && kStack > kSide, k = flip ? kOne : (stack ? kStack : kSide);
+    if (sh / sw > 1.1) { stack = false; k = flip ? availW / sw : (availW - GAP) / 2 / sw; }   // 세로로 긴 쪽(보고서)은 폭에 맞추고 스크롤
+    k = Math.max(0.05, k); var ph = LAB + sh * k, used = (stack ? ph * 2 + GAP : ph) + PAD;
+    g.classList.toggle('flip', flip); g.classList.toggle('two', !flip && !stack); g.style.setProperty('--pw', Math.floor(sw * k) + 'px'); $('cmpHold').hidden = !flip;
+    if (f != null) { cmp.style.flex = '1 1 0'; cmp.style.height = ''; dockEl.style.flex = 'none'; dockEl.style.height = dock + 'px'; }
+    else { cmp.style.flex = 'none'; cmp.style.height = Math.ceil(Math.min(availH, used)) + 'px'; dockEl.style.flex = '1 1 0'; dockEl.style.height = ''; }
     [].forEach.call($('cmpMode').children, function (b) { b.classList.toggle('on', b.getAttribute('data-m') === rv.mode); });
-    if (pk) { if (pk.was.last) pkPaint(pk.was, pk.was.last); if (pk.now.last) pkPaint(pk.now, pk.now.last); }
+    if (pk) { if (pk.was.last !== undefined) pkPaint(pk.was, pk.was.last, '앞 판에는 없던 장입니다'); if (pk.now.last !== undefined) pkPaint(pk.now, pk.now.last, '이 판에서 빠진 장입니다'); }
   }
+  (function () {   // 그림과 의견 칸의 경계 — 끌어서
+    var h = $('rvSplit'), drag = null, raf = 0;
+    function put(f) { var sp = st.prefs.split && typeof st.prefs.split === 'object' ? Object.assign({}, st.prefs.split) : {}; if (f == null) delete sp.rv; else sp.rv = Math.round(f * 1000) / 1000; return sp; }
+    function shareAt(e) { var r = $('rvWrap').getBoundingClientRect(); return Math.max(0.14, Math.min(0.75, (r.bottom - e.clientY) / Math.max(1, r.height))); }
+    h.addEventListener('pointerdown', function (e) { if (e.button) return; e.preventDefault(); drag = { id: e.pointerId, moved: false, y: e.clientY }; try { h.setPointerCapture(e.pointerId); } catch (x) {} });
+    h.addEventListener('pointermove', function (e) {
+      if (!drag || e.pointerId !== drag.id) return; if (!drag.moved && Math.abs(e.clientY - drag.y) < 3) return;
+      drag.moved = true; document.body.classList.add('splitting'); st.prefs.split = put(shareAt(e));
+      if (!raf) raf = requestAnimationFrame(function () { raf = 0; cmpLayout(); });
+    });
+    function end(e) { if (!drag || (e && e.pointerId !== drag.id)) return; var moved = drag.moved; drag = null; document.body.classList.remove('splitting'); try { h.releasePointerCapture(e.pointerId); } catch (x) {} if (moved) { cmpLayout(); setPref({ split: st.prefs.split }); } }
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+    h.addEventListener('dblclick', function () { st.prefs.split = put(null); setPref({ split: st.prefs.split }); cmpLayout(); toast('칸 크기를 처음대로 돌렸습니다', 1400); });
+  })();
   [].forEach.call($('cmpMode').children, function (b) { b.addEventListener('click', function () { if (!rv) return; rv.mode = b.getAttribute('data-m'); $('cmpGrid').classList.remove('showWas'); cmpLayout(); }); });
   (function () {
     var h = $('cmpHold'), on = function (v) { $('cmpGrid').classList.toggle('showWas', v); h.classList.toggle('down', v); setText(h, v ? '앞 판 보는 중' : '누르는 동안 앞 판'); if (pk && pk.was.last && v) pkPaint(pk.was, pk.was.last); if (pk && pk.now.last && !v) pkPaint(pk.now, pk.now.last); };
@@ -3119,7 +3166,7 @@
     document.addEventListener('keydown', function (e) { if (rv && rv.mode === 'flip' && e.key === ' ' && !e.repeat && !(e.target && (e.target.isContentEditable || /^(TEXTAREA|INPUT)$/.test(e.target.tagName)))) { e.preventDefault(); on(true); } });
     document.addEventListener('keyup', function (e) { if (rv && e.key === ' ') on(false); });
   })();
-  new ResizeObserver(function () { if (rv) cmpLayout(); }).observe($('left'));
+  new ResizeObserver(function () { if (rv) cmpLayout(); }).observe($('rvWrap'));
   async function openReview() {
     if (st.mode !== 'slides') { toast('장 구분이 있는 문서에서만 견줄 수 있습니다'); return; }
     if (st.vers.indexOf(st.ver) <= 0) { toast('견줄 앞 판이 없습니다'); return; }
@@ -3128,31 +3175,31 @@
     if (!b.steps.length) { toast('앞 판과 달라진 장이 없습니다'); return; }
     rv = { prev: b.prev, steps: b.steps, i: 0, mode: 'two' }; document.body.classList.add('review');
     if (st.zoom) setZoom(false);
-    $('review').hidden = false; $('cmp').hidden = false;
+    $('rvWrap').hidden = false; $('review').hidden = false; $('cmp').hidden = false;
     pk = { was: pkOpen(b.prevHtml, $('cmpWas')), now: pkOpen(b.curHtml, $('cmpNow')) };
     setText($('cmpWasL'), '전 · 판 ' + b.prev); setText($('cmpNowL'), '후 · 판 ' + st.ver);
     fit(); cmpLayout(); await rvShow();
   }
   function closeReview() {
-    if (!rv) return; rv = null; document.body.classList.remove('review'); $('review').hidden = true; $('cmp').hidden = true;
+    if (!rv) return; rv = null; document.body.classList.remove('review'); $('rvWrap').hidden = true; $('review').hidden = true; $('cmp').hidden = true;
     if (pk) { pk.was.f.remove(); pk.now.f.remove(); pk = null; }
-    kickSaves(); fit(); var s = st.sections[st.cur]; if (s) keepFocus(renderRows);
+    kickSaves(); fit(); var s = st.sections[st.cur]; if (s) { keepFocus(renderRows); syncSlideCmValue(s); }
   }
   function rvGo(d) { if (!rv) return; kickSaves(); var n = rv.i + d; if (n < 0 || n > rv.steps.length) return; rv.i = n; rvShow().catch(fail); }
   var RV_TAG = { chg: '고쳐짐', add: '새로 들어온 글', del: '빠진 글' };
   async function rvShow() {
     var body = $('rvBody'); if (!rv) return;
-    setText($('rvTitle'), '바뀐 곳 훑어보기 · 판 ' + rv.prev + ' → ' + st.ver);
+    setText($('rvTitle'), '판 ' + rv.prev + ' → ' + st.ver);
     $('rvPrev').disabled = rv.i <= 0;
     if (rv.i >= rv.steps.length) {   // 끝
-      setText($('rvCnt'), rv.steps.length + ' / ' + rv.steps.length); body.innerHTML = '';
+      setText($('rvCnt'), rv.steps.length + ' / ' + rv.steps.length); body.innerHTML = ''; setText($('cmpWhere'), '다 봤습니다');
       var d = el('div', 'rvDone'), sm = sendSummary(); d.appendChild(el('b', '', '바뀐 장 ' + rv.steps.length + '곳을 다 봤습니다'));
       d.appendChild(el('div', 'fine', sm.total ? '남긴 고침과 의견 ' + sm.total + '건을 보낼 수 있습니다' : '남긴 의견이 없습니다 · 이대로 좋다는 뜻입니다'));
       var acts = el('div', 'rvActs'); var c1 = el('button', 'ib', '닫기'); c1.type = 'button'; c1.onclick = closeReview; acts.appendChild(c1);
       if (sm.total) { var c2 = el('button', 'ib pri', 'AI에게 보내기 · ' + sm.total); c2.type = 'button'; c2.onclick = function () { closeReview(); openSend().catch(fail); }; acts.appendChild(c2); }
-      d.appendChild(acts); body.appendChild(d); setText($('rvNext'), '닫기'); $('rvNext').onclick = closeReview; return;
+      d.appendChild(acts); d.style.gridColumn = '1 / -1'; body.appendChild(d); var dc = el('div', 'rvCol say'); dc.style.gridColumn = '1 / -1'; dc.style.position = 'static'; rvDocCm(dc); body.appendChild(dc); setText($('rvNext'), '닫기'); $('rvNext').onclick = closeReview; return;
     }
-    setText($('rvNext'), rv.i === rv.steps.length - 1 ? '다 봤습니다' : '다음 장'); $('rvNext').onclick = function () { rvGo(1); };
+    setText($('rvNext'), rv.i === rv.steps.length - 1 ? ($('rvWrap').classList.contains('slim') ? '끝' : '다 봤습니다') : '다음 ›'); $('rvNext').onclick = function () { rvGo(1); };
     var stp = rv.steps[rv.i], sec = stp.fi >= 0 ? st.sections[stp.fi] : null, at = rv.i;
     setText($('rvCnt'), (rv.i + 1) + ' / ' + rv.steps.length);
     if (sec && stp.fi !== st.cur) await showSlide(stp.fi, { scroll: 'top' });
@@ -3163,13 +3210,15 @@
     var befores = stp.changes.filter(function (c) { return c.before; }).map(function (c) { return c.before; }), afters = stp.changes.filter(function (c) { return c.u; }).map(function (c) { return c.u.origText; });
     Promise.all([stp.kind === 'newslide' ? null : pkAsk(pk.was, stp.sid, befores), stp.kind === 'gone' ? null : pkAsk(pk.now, stp.sid, afters)]).then(function (rr) {
       if (!rv || rv.i !== at || !pk) return;
-      pkPaint(pk.was, rr[0], '앞 판에는 없던 장입니다'); pkPaint(pk.now, rr[1], '이 판에서 빠진 장입니다'); pk.was.last = rr[0]; pk.now.last = rr[1];
+      pk.was.last = rr[0] || null; pk.now.last = rr[1] || null; cmpLayout();
     });
     //  글 — 그 장에서 바뀐 글(전 → 후)과 의견
     body.innerHTML = '';
-    var loc = el('div', 'rvLoc'); if (sec) loc.appendChild(el('span', '', (posOf(sec.i) + 1) + '쪽')); loc.appendChild(el('span', 'clip', title));
-    loc.appendChild(el('span', 'rvTag', stp.kind === 'newslide' ? '새로 생긴 장' : (stp.kind === 'gone' ? '빠진 장' : (stp.changes.length ? '글 ' + stp.changes.length + '곳' : '그림 · 배치만')))); body.appendChild(loc);
-    if (stp.kind === 'slide' && !stp.changes.length) body.appendChild(el('div', 'rvNote', '글은 그대로이고 그림이나 배치가 달라졌습니다. 왼쪽 두 그림을 견줘 보세요(「겹쳐 보기」 가 찾기 쉽습니다).'));
+    var colL = el('div', 'rvCol'), colR = el('div', 'rvCol say'), lab = el('div', 'rvLab');
+    lab.appendChild(el('span', 'rvTag', stp.kind === 'newslide' ? '새로 생긴 장' : (stp.kind === 'gone' ? '빠진 장' : (stp.changes.length ? '바뀐 글 ' + stp.changes.length + '곳' : '그림 · 배치만')))); colL.appendChild(lab);
+    if (stp.kind === 'slide' && !stp.changes.length) colL.appendChild(el('div', 'rvNote', '글은 그대로이고 그림이나 배치가 달라졌습니다. 위의 두 그림을 견줘 보세요(「겹쳐 보기」 가 찾기 쉽습니다).'));
+    if (stp.kind === 'newslide') colL.appendChild(el('div', 'rvNote', '앞 판에는 없던 장입니다.'));
+    if (stp.kind === 'gone') colL.appendChild(el('div', 'rvNote', '이 판에서 빠진 장입니다. 다시 넣어야 하면 장표 전체 의견에 적어 주세요.'));
     var units = st.units[st.cur] || [];
     stp.changes.forEach(function (c) {
       var card = el('div', 'rvChg'), k = el('div', 'k'), t = el('div', 't'); k.appendChild(el('span', '', RV_TAG[c.kind])); k.appendChild(el('span', 'sp'));
@@ -3183,16 +3232,27 @@
         ta.addEventListener('input', function () { autoGrow(ta); u.cm.value = ta.value; u.cm.dispatchEvent(new Event('input', { bubbles: true })); });
         card.appendChild(ta); setTimeout(function () { autoGrow(ta); }, 0);
       }
-      body.appendChild(card);
+      colL.appendChild(card);
     });
     if (sec) {   // 이 장의 바뀜 전체에 대한 의견 — 그 장 전체 의견으로
       var key = 'slide:' + st.doc + ':' + st.ver + ':' + sec.id, sa = el('textarea', 'ta'); sa.rows = 2; sa.id = 'rvSlideCm';
+      colR.appendChild(el('div', 'rvLab', (posOf(sec.i) + 1) + '쪽에 대한 의견'));
       sa.placeholder = '이 장이 바뀐 모습이 마음에 안 들면 여기에(비워 두면 좋다는 뜻입니다)'; sa.value = scopeNote('slide', sec.id);
       sa.addEventListener('input', function () { autoGrow(sa); st.wantScope[key] = { doc: st.doc, ver: st.ver, scope: 'slide', sid: sec.id, note: sa.value }; schedule(key, scopeJob(key)); });
       sa.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); rvGo(1); } });
-      body.appendChild(sa); setTimeout(function () { autoGrow(sa); }, 0);
+      colR.appendChild(sa); setTimeout(function () { autoGrow(sa); }, 0);
     }
+    rvDocCm(colR); body.appendChild(colL); body.appendChild(colR);
     body.scrollTop = 0;
+  }
+  /* 장표 전체 의견 — 어느 장을 보고 있든 같은 칸(문서 전체 의견 · scope doc)이 따라다닌다. */
+  function rvDocCm(host) {
+    var key = 'doc:' + st.doc + ':' + st.ver, ta = el('textarea', 'ta'); ta.rows = 2; ta.id = 'rvDocCm';
+    host.appendChild(el('div', 'rvLab doc', '장표 전체에 대한 의견'));
+    ta.placeholder = '모든 장에 해당하는 의견(톤 · 흐름 · 빠진 내용 · 전체 인상)'; ta.value = scopeNote('doc', '');
+    ta.addEventListener('input', function () { autoGrow(ta); st.wantScope[key] = { doc: st.doc, ver: st.ver, scope: 'doc', sid: '', note: ta.value }; schedule(key, scopeJob(key)); });
+    ta.addEventListener('blur', kickSaves);
+    host.appendChild(ta); setTimeout(function () { autoGrow(ta); }, 0);
   }
   $('rvClose').addEventListener('click', closeReview);
   $('rvPrev').addEventListener('click', function () { rvGo(-1); });
