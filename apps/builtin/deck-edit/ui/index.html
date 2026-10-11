@@ -62,7 +62,7 @@
   · **세로 공간은 본문의 것이다**(원준 2026-10-07 «본문보다 버튼으로 된 탭이 세로줄을 너무 많이 차지한다 … 비효율»). 장표 위에 서는 줄은 머리줄 하나뿐이다.
     장 번호는 장표 **왼쪽의 세로 줄**(rail)로, 장 제목 · 장 전체 의견은 글 줄 칸의 머리로, 도구(글 고르기 · 핀 · 영역)는 머리줄로, 판은 단추 하나(누르면 목록)로 갔다.
     앞뒤 넘기기 단추는 없앴다(세로 줄 · 무대 밀기 · 화살표 키가 같은 일을 한다).
-  · 머리줄은 한 줄이다 — 문서 · 판 · 도구 · 저장 상태 · ⋯ · 보내기. 배치(2열/2행)와 문서 전체 의견은 ⋯ 안에 있다. 호스트가 메뉴를 열어 줄 수 있으면
+  · 머리줄은 한 줄이다 — 문서 · 판 · 도구 · 저장 상태 · 되돌리기 · 내 의견 복사 · ⋯ · 보내기. 배치(2열/2행)와 문서 전체 의견은 ⋯ 안에 있다. 호스트가 메뉴를 열어 줄 수 있으면
     (lively.ui.openMenu) 호스트의 앱 머리줄을 접고(lively.ui.chrome) 앱의 ⋯ 하나에 두 메뉴를 합친다.
   · 보내기는 **사람이 누른 동작 안에서** 끝나야 한다(호스트가 userActivation 을 본다): 누른 자리에서 묶음을 한 번의
     store.update 로 잠그고 곧바로 chat.send. 못 알렸으면 묶음은 잠긴 채 「다시 보내기」 띠를 남긴다.
@@ -441,6 +441,7 @@
   .askQ .go { display: flex; justify-content: flex-end; gap: 6px; }
   #undoBtn[hidden] { display: none; }
   body.compact #undoBtn { display: none; }
+  body.compact #copyBtn { display: none; }   /* 좁은 폭에서는 ⋯ 메뉴의 「내 의견 복사」 로 */
   .sep { margin: 8px 14px 2px; padding-top: 7px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: .2px; }
   .sep:empty { padding-top: 0; margin: 6px 14px 0; }
   .rowsWrap > .sep:first-child { border-top: 0; margin-top: 2px; padding-top: 4px; }
@@ -622,6 +623,7 @@
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14 M5 12h14"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 15l-4.5 4.5 M14.5 4l5.5 5.5 M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
 </defs></svg>
 
 <header id="top">
@@ -634,6 +636,7 @@
   <span class="aist" id="aiState" hidden><b></b><span class="lb">AI 고치는 중</span><i></i></span>
   <button type="button" class="svst" id="saveState" hidden></button>
   <button type="button" class="ib ic" id="undoBtn" hidden aria-label="되돌리기"><svg class="i"><use href="#i-undo"/></svg></button>
+  <button type="button" class="ib ic" id="copyBtn" hidden title="내 의견 복사 · 이 판에 고친 글과 의견을 글로 복사합니다(보낸 것도 함께)" aria-label="내 의견 복사"><svg class="i"><use href="#i-copy"/></svg></button>
   <button type="button" class="ib ic" id="moreBtn" title="더 보기 · 표시 설정(배치) · 문서 전체 의견" aria-label="더 보기"><svg class="i dots"><use href="#i-more"/></svg></button>
   <button type="button" class="ib pri" id="sendBtn">AI에게 보내기</button>
   <div class="menu" id="menu" hidden></div>
@@ -3224,6 +3227,7 @@
     var sm = sendSummary(); var label = (sdk.chat ? 'AI에게 보내기' : '고친 글과 의견 복사') + (sm.total ? ' · ' + sm.total : '');
     var why = sm.total ? '' : whyNoSend();
     ['sendBtn', 'sendBtn2'].forEach(function (id) { var b = $(id); setText(b, label); b.disabled = false; b.classList.toggle('off', !sm.total); b.title = why; });   // 꺼 두지 않는다 — 눌리면 까닭을 말한다
+    $('copyBtn').hidden = !st.doc;
     var wi = sdk.chat && !st.unnotified && !sm.total ? waitingInfo() : null;
     var fineT = wi ? 'AI 가 묶음 #' + wi.bundle + ' 을 고치는 중입니다 · 끝나면 새 판이 저절로 뜹니다'
       : (sdk.chat ? (sm.total ? '누르면 세션에 바로 전달됩니다 · 묶음 #' + sm.bundle : '고친 글이나 의견이 생기면 보낼 수 있습니다') : '세션에 붙여 연 화면이 아니라 복사해서 붙여 넣습니다');
@@ -3263,6 +3267,67 @@
     var ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.left = '-9999px'; document.body.appendChild(ta); ta.select();
     var ok = false; try { ok = document.execCommand('copy'); } catch (e2) {} ta.remove(); return ok;
   }
+  /* ───────────── 내 의견 복사(머리줄 단추) ─────────────
+     이 판에 내가 고친 글과 단 의견을 **사람이 읽을 글** 로 복사한다 — 보낸 것 · 아직 안 보낸 것을 다 넣고, 옛 판에서 안 보내고 데려온 초안도 넣는다.
+     보내기(exportText)와 다른 점: 보내기는 «아직 안 보낸 것» 만 묶음으로 잠그지만, 이건 아무것도 바꾸지 않고 지금 화면에 선 것을 그대로 글로 만든다
+     (동료에게 붙여 주거나 · 다른 세션에 넣거나 · 메모에 남길 때). 아직 저장 전인 글(st.want · st.wantScope)도 화면에 선 값으로 넣는다 —
+     저장을 기다리면 사람이 누른 동작이 끝나 복사가 막힌다(Safari). */
+  function spotWhere(c) {
+    var k = String(c.unit_key || ''), kind = /^obj:/.test(k) ? '개체' : (/^box:/.test(k) ? '영역' : '핀');
+    return kind + (c.orig ? ' · ' + String(c.orig).trim() : '');
+  }
+  function myCommentsText() {
+    if (!st.doc) return { text: '', n: 0 };
+    var rows = st.comments.filter(function (c) { return c.doc === st.doc && c.scope !== 'ask' && (Number(c.ver) === st.ver || (c.status === 'draft' && Number(c.ver) < st.ver)); })
+      .map(function (c) { return Object.assign({}, c); });
+    //  아직 저장 전인 값 — 글 줄(st.want) · 장/문서 전체(st.wantScope) — 을 화면에 선 그대로 덮는다
+    Object.keys(st.want).forEach(function (k) {
+      var w = st.want[k]; if (!w || w.doc !== st.doc || w.ver !== st.ver) return;
+      var r = rows.filter(function (c) { return c.scope === 'unit' && c.status === 'draft' && c.slide_id === w.sid && (c.unit_key === k || unmark(c.orig) === unmark(w.u.origText)); })[0];
+      if (!r) { r = { doc: st.doc, ver: st.ver, slide_id: w.sid, unit_key: k, orig: w.u.base != null ? w.u.base : (w.u.origMark != null ? w.u.origMark : w.u.origText), edited: null, note: '', scope: 'unit', status: 'draft', id: 'want' }; rows.push(r); }
+      if ('edited' in w) r.edited = w.edited; if ('note' in w) r.note = w.note;
+    });
+    Object.keys(st.wantScope).forEach(function (k) {
+      var w = st.wantScope[k]; if (!w || w.doc !== st.doc || w.ver !== st.ver) return;
+      var r = rows.filter(function (c) { return c.scope === w.scope && c.status === 'draft' && (w.scope === 'doc' || c.slide_id === w.sid); })[0];
+      if (!r) { r = { doc: st.doc, ver: st.ver, slide_id: w.scope === 'doc' ? '' : w.sid, unit_key: '', orig: '', edited: null, note: '', scope: w.scope, status: 'draft', id: 'want' }; rows.push(r); }
+      r.note = w.note;
+    });
+    rows = rows.filter(function (c) { return c.edited != null || (c.note && String(c.note).trim()); });
+    if (!rows.length) return { text: '', n: 0 };
+    var tag = function (c) { return c.status === 'draft' ? '' : (c.status === 'applied' ? ' (반영됨)' : (c.status === 'declined' ? ' (반영 안 함)' : ' (보냄' + (c.bundle ? ' #' + c.bundle : '') + ')')); };
+    var one = function (t) { return String(t == null ? '' : t).replace(/\r/g, '').replace(/\n+/g, ' / ').trim(); };
+    var d = new Date(), pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var out = ['[장표 의견] ' + st.title + ' · 판 ' + st.ver + ' · ' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())];
+    var marks = rows.some(function (c) { return /==|\*\*/.test(String(c.orig || '') + String(c.edited || '')); });
+    if (marks) out.push('(==말== 은 색 강조 · **말** 은 굵게)');
+    ord().forEach(function (fi) {
+      var s = st.sections[fi]; if (!s) return;
+      var lines = [];
+      rows.filter(function (c) { return c.slide_id === s.id && c.scope !== 'doc' && c.scope !== 'order'; })
+        .sort(function (a, b) { return (a.scope === 'slide' ? 0 : (a.scope === 'unit' ? 1 : 2)) - (b.scope === 'slide' ? 0 : (b.scope === 'unit' ? 1 : 2)); })
+        .forEach(function (c) {
+          var note = one(c.note);
+          if (c.scope === 'slide') { lines.push('· 이 장 전체: ' + note + tag(c)); return; }
+          if (c.scope === 'spot') { lines.push('· ' + spotWhere(c) + ': ' + note + tag(c)); return; }
+          var head = '- 「' + one(c.orig) + '」';
+          if (c.edited != null) head += ' → ' + (c.edited ? '「' + one(c.edited) + '」' : '(삭제)');
+          lines.push(head + (note && c.edited == null ? ': ' + note : '') + tag(c));
+          if (note && c.edited != null) lines.push('  의견: ' + note);
+        });
+      if (lines.length) { out.push('', '[' + (st.mode === 'slides' ? (posOf(s.i) + 1) + '쪽 · ' : '') + s.title + ']'); out = out.concat(lines); }
+    });
+    rows.forEach(function (c) { if (c.scope === 'doc') out.push('', '[문서 전체]', one(c.note) + tag(c)); });
+    rows.forEach(function (c) { if (c.scope === 'order') out.push('', '[장 순서]', one(c.note) + tag(c)); });
+    return { text: out.join('\n'), n: rows.length };
+  }
+  /** 머리줄 단추 · ⋯ 메뉴에서 — 사람이 누른 그 자리에서 곧바로 복사한다(await 없이). */
+  function copyMyComments() {
+    var m = myCommentsText();
+    if (!m.n) { toast('아직 복사할 의견이 없습니다 · 글을 고치거나 의견을 달면 복사할 수 있습니다', 3200); return; }
+    copyText(m.text).then(function (ok) { toast(ok ? '내 의견 ' + m.n + '건을 복사했습니다 · 어디든 붙여 넣으세요' : '복사하지 못했어요 · 브라우저가 막았습니다', 2600); });
+  }
+  $('copyBtn').addEventListener('click', copyMyComments);
   /** 세션에 한 줄을 알린다. 못 알리면 띠를 남긴다(묶음은 이미 잠겨 있다). 반드시 click 핸들러에서 곧바로 부른다. */
   async function notify(bundle, msg) {
     var why = '';
@@ -3372,6 +3437,7 @@
     if (st.doc && st.mode === 'slides' && st.vers.indexOf(st.ver) > 0) items.push({ id: 'review', label: '앞 판과 그림으로 견주기', run: function () { openReview().catch(fail); } });
     if (undos.length) items.push({ id: 'undo', label: '되돌리기: ' + undos[undos.length - 1].label, run: function () { doUndo(); } });
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
+    if (st.doc && st.compact) items.push({ id: 'copycm', label: '내 의견 복사', run: copyMyComments });   // 좁은 폭에서는 머리줄 단추가 숨는다
     return items;
   }
   function renderMenu() {
