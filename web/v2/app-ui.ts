@@ -50,8 +50,8 @@ function buildCsp(csp?: AppCsp): string {
 }
 
 /** CSP meta + SDK 런타임을 문서 머리에 끼운다(doctype 뒤 · 없으면 맨 앞). srcdoc 은 HTTP 헤더가 없어 CSP 는 meta 로만. */
-function wrapAppHtml(html: string, csp?: AppCsp): string {
-  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>';
+function wrapAppHtml(html: string, csp?: AppCsp, extra?: string): string {
+  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>' + (extra ? '<script>' + extra + '</script>' : '');
   const m = /<!doctype[^>]*>/i.exec(html);
   if (m) { const i = m.index + m[0].length; return html.slice(0, i) + head + html.slice(i); }
   return head + html;
@@ -87,12 +87,14 @@ export interface AppUiMountOpts {
   /** #4443 앱 화면 안 글 상자에 초점이 들었다(true) · 났다(false). SDK 런타임이 바뀔 때만 알린다(ui/typing). 새 문서 · 다시 불러오기 ·
    *  내려가기에선 호스트가 false 를 한 번 부른다(옛 문서는 «났다» 를 못 보낸다). 없으면 버린다. */
   onTyping?: (on: boolean) => void;
+  /** #4592 앱 만들기 — 띄우는 쪽이 앱 문서에 함께 넣는 스크립트(찍어서 의견의 탐침). 셸 코드만 넘긴다(앱이 주는 것이 아니다). */
+  extraScript?: string;
 }
 export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
-  const doc = wrapAppHtml(data.html, data.csp);
+  const doc = wrapAppHtml(data.html, data.csp, opts?.extraScript);
   const frame = el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || data.title || appId,
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
