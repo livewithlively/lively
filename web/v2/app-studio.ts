@@ -4,6 +4,8 @@
 //  ① 시작 — 두 가지만 묻는다: «어떤 앱인가»(한 줄 · 예시를 누르면 채워진다) · «어디에서 쓰나»(세션 옆 · 화면 전체 · 둘 다 — 그림 카드).
 //  ② 만드는 중 — 가운데(넓게)에 **만들고 있는 앱**이 실제로 뜨고, 옆 칸이 AI 와의 대화다. 업무 세션 화면(대화가 가운데)과 반대라
 //     «지금은 일하는 중이 아니라 앱을 만드는 중» 이 배치로 읽힌다. 머리줄은 앱 이름 · 몇 판 · [이전 판으로] · [다 만들었어요].
+//  ③ 다 만들었어요 — 그냥 닫지 않는다(원준 2026-10-11 «다 만들고 어떤 과정으로 만들어졌는지 · 이제 써 보라고 안내하는 과정이 빠졌다»).
+//     «이렇게 만들었어요»(요청 한 줄 → 자리 → 판마다 바뀐 점) · «이렇게 쓰세요»(고른 자리에 맞는 여는 법) · [지금 써 보기] 가 그 자리에 바로 연다.
 //
 //  새 배관은 없다 — 있는 부품을 엮는다:
 //   · 대화 = 일반 세션 하나(spawnSession · 첫 지시에 만드는 규칙을 싣는다)를 대화 보기(renderSession chatHome)로 끼운다.
@@ -15,13 +17,14 @@ import { api, el, toast } from '../core.js';
 import { spawnSession } from './quick-session.js';
 import { mergeSessions, renderSession } from './views.js';
 import { takeCreated } from './created-cache.js';
-import { mountAppUiFrame, type AppUiFrame } from './app-ui.js';
+import { mountAppUiFrame, openAppUi, type AppUiFrame } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
+import { attachAppToSession } from './session-app-pane.js';
 import type { SessionChatHandle } from '../session-chat.js';
 
 export type StudioPlace = 'side' | 'full' | 'both';
-interface StudioRec { sid: string; what: string; place: StudioPlace; appId: string; known: string[]; at: number }
+interface StudioRec { sid: string; what: string; place: StudioPlace; appId: string; known: string[]; at: number; done?: boolean }
 
 const STUDIO_KEY = 'lively_v2_app_studio';
 const PLACE: Record<StudioPlace, { title: string; sub: string; say: string }> = {
@@ -37,7 +40,7 @@ function readRecs(): StudioRec[] {
 function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
 function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r); writeRecs(rs); }
 /** 이 브라우저에서 만들던 앱들(앱 찾기가 «만드는 중» 을 보이는 데 쓴다). appId 가 아직 없는 것(첫 판을 기다리는 중)도 든다. */
-export function studioDrafts(): Array<{ sid: string; what: string; appId: string }> { return readRecs().map((r) => ({ sid: r.sid, what: r.what, appId: r.appId })); }
+export function studioDrafts(): Array<{ sid: string; what: string; appId: string; done: boolean }> { return readRecs().map((r) => ({ sid: r.sid, what: r.what, appId: r.appId, done: !!r.done })); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
 
 /** 첫 지시 — 사람이 읽는 말 한 줄 + 만드는 법이 적힌 지식을 가리키는 한 줄. 규칙을 여기 길게 싣지 않는다(대화에 그대로 보인다). */
@@ -106,7 +109,7 @@ function start(): void {
       drafts.length ? el('div', { class: 'v2-studio-drafts' },
         el('h3', { text: '만들던 앱' }),
         ...drafts.slice(0, 5).map((d) => el('button', { type: 'button', class: 'v2-studio-draft', onclick: () => { void build(d); } },
-          el('b', { text: d.what }), el('small', { text: d.appId ? '이어서 만들기' : '첫 판을 만드는 중' })))) : null));
+          el('b', { text: d.what }), el('small', { text: d.done ? '다 만든 앱 · 이어서 고치기' : (d.appId ? '이어서 만들기' : '첫 판을 만드는 중') })))) : null));
   sync(); input.focus();
 }
 
@@ -178,8 +181,9 @@ async function build(rec: StudioRec): Promise<void> {
     if (to != null) await showApp(to + '판으로 되돌렸습니다');
   };
   done.onclick = () => {
+    if (rec.appId) { void finish(rec, appTitle || rec.what); return; }
     closeAppStudio();
-    toast(rec.appId ? `「${appTitle || rec.what}」 앱은 앱 찾기의 「워크스페이스 앱」에 있어요. 다시 고치려면 그 칸의 ⋯ → 「이어서 만들기」.` : '만들던 것은 「+ 새 앱」 → 「만들던 앱」 에서 이어갈 수 있어요.');
+    toast('만들던 것은 「+ 새 앱」 → 「만들던 앱」 에서 이어갈 수 있어요.');
   };
   teardown = () => { dead = true; window.clearTimeout(pollT); off(); if (frame) frame.destroy(); if (chat) chat.destroy(); };
   root.replaceChildren(
@@ -205,4 +209,70 @@ async function build(rec: StudioRec): Promise<void> {
   } catch (e: any) {
     chatHost.replaceChildren(el('p', { class: 'v2-muted', text: '대화를 열지 못했어요 — ' + (e && e.message ? e.message : e) }));
   }
+}
+
+// ── ③ 다 만들었어요 — 어떻게 만들어졌고, 어디서 어떻게 쓰는지 ───────────────────────────────
+function whenText(iso: string): string {
+  const d = new Date(iso); if (isNaN(d.getTime())) return '';
+  const now = new Date(), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  return d.toDateString() === now.toDateString() ? '오늘 ' + hm : (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + hm;
+}
+/** 지금 보고 있는 세션(주소 #/s/<id>) — 세션 옆 앱을 「지금 써 보기」 할 때 붙일 곳. */
+function routeSession(): string {
+  const m = /^#\/s\/([^?/]+)/.exec(location.hash || ''); try { return m ? decodeURIComponent(m[1]) : ''; } catch (_) { return ''; }
+}
+/** 판마다 한 줄(AI 가 저장하며 적은 요지). 많으면 첫 판과 끝 여섯만 — 사이는 «… n판 더». */
+function verRows(vs: Array<{ version_no: number; note: string | null; saved_at: string }>): HTMLElement[] {
+  const row = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' },
+    el('b', { text: v.version_no + '판' + (v.version_no === 1 ? ' · 처음 만듦' : '') }),
+    el('p', { text: (v.note || '').trim() || (v.version_no === 1 ? '첫 판' : '고침') }),
+    el('small', { text: whenText(v.saved_at) }));
+  if (vs.length <= 8) return vs.map(row);
+  const skip = vs.length - 7;
+  return [row(vs[0]), el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('p', { text: '… ' + skip + '판 더 고쳤어요' })), ...vs.slice(-6).map(row)];
+}
+async function finish(rec: StudioRec, title: string): Promise<void> {
+  if (!root) return;
+  if (teardown) { teardown(); teardown = null; }
+  rec.done = true; saveRec(rec);
+  let vs: Array<{ version_no: number; note: string | null; saved_at: string }> = [];
+  try { vs = (await fetchAppVersions(rec.appId)).slice().sort((a, b) => a.version_no - b.version_no); } catch (_) { /* 판 이력 없이도 안내한다 */ }
+  if (!root || !rec.done) return;
+  const placeName = PLACE[rec.place].title;
+  //  이렇게 만들었어요 — 요청 → 자리 → 판마다 바뀐 점(AI 가 저장하며 적은 한 줄)
+  const steps: HTMLElement[] = [
+    el('div', { class: 'v2-studio-step' }, el('b', { text: '이렇게 부탁했어요' }), el('p', { text: '「' + rec.what + '」 · ' + placeName })),
+    el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI 가 세션에서 만들었어요' }), el('p', { text: '만드는 규칙(지식 app-build-quickstart)을 읽고 화면과 자료 표를 짜서 첫 판을 저장했어요. 그 뒤로는 대화로 고칠 때마다 판이 하나씩 올라갔어요.' })),
+    ...verRows(vs),
+    el('div', { class: 'v2-studio-step' }, el('b', { text: '워크스페이스 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」 에 있어요 — 이름은 「' + title + '」. 워크스페이스 사람 모두 쓸 수 있어요.' })),
+  ];
+  //  이렇게 쓰세요 — 고른 자리에 맞는 여는 법만
+  const how: HTMLElement[] = [];
+  if (rec.place !== 'full') how.push(el('div', {}, el('span', { class: 'k', text: '세션 옆에' }), el('span', { text: '세션을 열고 오른쪽 위 + 에서 이 앱을 고르면 그 세션 옆에 붙어요. 붙인 앱은 그 세션의 AI 도 같이 봐요 — 앱에 적은 것을 AI 에게 바로 시킬 수 있어요.' })));
+  if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '화면 전체로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 넓게 열려요. 「화면 가득」 을 누르면 사이드바 없이 그 앱만 보여요.' })));
+  how.push(el('div', {}, el('span', { class: 'k', text: '더 고치려면' }), el('span', { text: '앱 찾기에서 그 칸의 ⋯ → 「이어서 만들기」. 말로 고치면 새 판이 되고, 마음에 안 들면 이전 판으로 되돌릴 수 있어요.' })));
+  const tryBtn = el('button', { class: 'v2-studio-go', type: 'button', text: '지금 써 보기' }) as HTMLButtonElement;
+  tryBtn.onclick = async () => {
+    tryBtn.disabled = true;
+    const sid = rec.place !== 'full' ? routeSession() : '';
+    if (sid && sid !== rec.sid) {   // 보고 있던 세션이 있으면 그 옆에 붙인다(만들기 세션 자신은 아니다)
+      if (await attachAppToSession(sid, rec.appId, title)) { closeAppStudio(); toast('「' + title + '」 을 이 세션 옆에 붙였어요 · 오른쪽 탭에서 보세요'); return; }
+    }
+    closeAppStudio();
+    if (!(await openAppUi(rec.appId, { title }))) toast('앱 찾기(왼쪽 「앱」)에서 「' + title + '」 을 열어 보세요');
+  };
+  const more = el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; saveRec(rec); void build(rec); } });
+  root.replaceChildren(
+    el('div', { class: 'v2-studio-top v2-studio-top--build' },
+      el('span', { class: 'v2-studio-tag', text: '앱 완성' }), el('b', { class: 'v2-studio-name', text: title }),
+      el('span', { class: 'v2-studio-sp' }),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
+    el('div', { class: 'v2-studio-fin' },
+      el('h2', { text: '「' + title + '」 앱이 만들어졌어요' }),
+      el('p', { class: 'v2-studio-lead', text: '코드를 만지지 않고 말로만 만든 앱이에요. 어떻게 만들어졌는지와 어디서 쓰는지를 한 번 보고, 바로 써 보세요.' }),
+      el('h3', { text: '이렇게 만들었어요' }),
+      el('div', { class: 'v2-studio-steps' }, ...steps),
+      el('h3', { text: '이렇게 쓰세요' }),
+      el('div', { class: 'v2-studio-how' }, ...how),
+      el('div', { class: 'v2-studio-fin-act' }, tryBtn, more)));
 }
