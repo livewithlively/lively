@@ -111,3 +111,15 @@ export function cronJobIdFromMarker(marker: string | null | undefined): string |
   const id = s.slice("cron:".length).split("#")[0].trim();
   return id || null;
 }
+
+/**
+ * 레인 키 추출 — 같은 마커의 `#` 뒤. 레인 없이 낸 위탁(`cron:<jobId>`)이나 크론 유래가 아니면 null.
+ *  자격 실패를 **크론 전체가 아니라 그 레인**에서 끊을 수 있는지 판단하는 재료다(auth-failure-response).
+ */
+export function cronLaneFromMarker(marker: string | null | undefined): string | null {
+  const s = (marker ?? "").trim();
+  if (!s.startsWith("cron:")) return null;
+  const at = s.indexOf("#");
+  if (at < 0) return null;
+  return s.slice(at + 1).trim() || null;
+}

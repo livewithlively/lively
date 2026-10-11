@@ -10,8 +10,12 @@
 //     영구 차단 함정 때문이다: requester 단위 게이트를 두면, 노드 로컬 자격으로 도는 위탁처럼
 //     member_secret 이 안 바뀌는 경로가 영원히 막힌다. 크론 정지는 **관리탭에서 다시 켜면 풀린다** —
 //     해제 경로가 사람 눈에 보이고, 그 행위가 곧 "고쳤다"는 명시적 의사표시다.
+//     단 **레인마다 실행 계정이 다른 잡**(증류 — 레인이 자기 «실행 계정» 을 가진다)에서 잡의 실행 계정이 아닌
+//     레인 계정이 죽었으면, 크론 대신 **그 계정이 도는 레인만** 끈다. 크론을 멈추면 멀쩡한 계정의 레인까지
+//     같이 서기 때문이다(실측 2026-10-02: 한 계정의 OAuth 만료로 다른 계정의 레인 9개가 9일 멈췄다).
+//     해제 경로는 같다 — 관리탭에서 그 레인을 다시 켠다.
 //  ② **큐에 남은 같은 크론의 위탁을 정리한다** — 안 그러면 이미 쌓인 것들이 줄줄이 401 로 죽으며
-//     실패 세션을 또 만든다.
+//     실패 세션을 또 만든다. 레인만 끊었으면 **그 계정의 위탁만** 걷는다.
 //  ③ **알린다** — 쿨다운으로 폭탄을 막되(9레인이 동시에 죽는다), 첫 건은 반드시 나간다.
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
@@ -75,12 +79,16 @@ export interface AuthFailureContext {
   requester: string;
   /** 위탁 마커(`cron:<job>#<lane>`) — 여기서 멈출 크론이 나온다. 사람이 낸 위탁이면 null. */
   cronJobId: string | null;
+  /** 같은 마커의 `#` 뒤 레인 키. 레인 없이 낸 위탁이면 null(생략 = null). */
+  lane?: string | null;
   auth: AuthFailure;
 }
 
 export interface AuthFailureOutcome {
   /** 크론을 실제로 멈췄나(이미 꺼져 있었으면 false). */
   cronStopped: boolean;
+  /** 크론 대신 끈 레인 키(레인 격리를 했을 때만 채워진다 — 이미 꺼져 있던 레인은 빠진다). */
+  lanesStopped: string[];
   /** 큐에서 걷어낸 후속 위탁 수. */
   queuedCanceled: number;
   /** 알림을 보냈나(쿨다운에 걸렸으면 false). */
@@ -117,6 +125,78 @@ async function cancelQueuedForCron(jobId: string): Promise<number> {
 }
 
 /**
+ * 끊는 범위(순수) — 크론 전체인가, 그 계정의 레인만인가.
+ *
+ * 레인만 끊는 건 **세 조건이 다 맞을 때뿐**이다. 하나라도 모르면 종전대로 크론을 멈춘다 — 안 멈춰서 잃는 것
+ *  (같은 401 반복)이 더 멈춰서 잃는 것(멀쩡한 레인의 지연)보다 크다.
+ *  · 레인 마커가 있다 — 어느 레인이 죽었는지 안다.
+ *  · 그 잡이 레인을 끌 수 있다(`laneCapable`) — 레인 스위치가 없는 잡이면 끌 단위가 크론뿐이다.
+ *  · 죽은 계정이 **잡의 실행 계정이 아니다** — 잡 계정이 죽었으면 계정을 따로 안 정한 레인이 전부 같이 죽으므로
+ *    크론을 멈추는 게 맞고, 관리자가 다시 켤 스위치도 하나로 끝난다.
+ */
+export function authFailureScope(o: {
+  cronJobId: string | null; lane: string | null; requester: string;
+  laneCapable: boolean; jobRunner: string | null;
+}): "none" | "cron" | "lanes" {
+  if (!o.cronJobId) return "none";
+  if (o.lane && o.laneCapable && o.jobRunner && o.jobRunner !== o.requester) return "lanes";
+  return "cron";
+}
+
+/**
+ * 레인 격리가 가능한 잡의 액션 — 레인 = org_distiller 행이고 각 행이 «실행 계정» 칸을 가진다.
+ *  분류·관리 헤드리스 잡도 레인별 실행 계정을 갖지만 아직 넣지 않았다: 레인을 끄면 그 몫이 다른 경로로 새지 않는지
+ *  (증류의 isAutoDisabledLane 상당물)를 먼저 갖춰야 한다. 여기 없는 액션은 크론 정지로 대응한다(덜 멈추지 않는 쪽).
+ */
+const LANE_CAPABLE_ACTIONS = new Set(["distill_sources_headless"]);
+
+/** 잡의 액션과 실행 계정(레인이 계정을 정하지 않았을 때 쓰는 계정). 잡이 없으면 null. */
+async function loadJobRunner(jobId: string): Promise<{ laneCapable: boolean; runner: string | null } | null> {
+  const r = await itemsPool.query(`SELECT action, params, created_by FROM org_cron WHERE id=$1`, [jobId]);
+  const row = r.rows[0] as { action: string; params: Record<string, unknown> | null; created_by: string | null } | undefined;
+  if (!row) return null;
+  //  분배 경로(scheduler/actions/distill.runDistillHeadless)와 **같은 함수**로 잡 계정을 푼다 — 따로 풀면
+  //   잡 계정이 죽었는데도 «레인 계정» 으로 오판해 레인만 하나씩 끄는 일이 생긴다.
+  const { explicitRunner, resolveJobRunner } = await import("../scheduler/actions/_headless.js");
+  const runner = await resolveJobRunner(explicitRunner(undefined, row.params?.requester), row.created_by);
+  return { laneCapable: LANE_CAPABLE_ACTIONS.has(row.action), runner: runner || null };
+}
+
+/**
+ * 죽은 계정이 도는 레인을 끈다 — 실패한 그 레인과, 같은 계정을 «실행 계정» 으로 명시한 다른 레인.
+ *  같은 계정의 레인을 함께 끄는 이유: 다음 주기에 하나씩 죽으며 실패 세션과 알림을 또 만든다.
+ *  끈 이유는 `last_status`·`last_summary` 에 남긴다(레인 화면이 이미 보여 주는 칸 — 따로 컬럼을 만들지 않는다).
+ */
+async function stopLanes(lane: string, requester: string, reason: string): Promise<string[]> {
+  const r = await itemsPool.query(
+    //  last_summary 는 **병합**한다 — 마지막 실행의 진단을 지우지 않는다(stopCron 이 last_summary 를 안 건드리는 이유와 같다).
+    //  auto_disabled 표식은 이 레인이 꺼져 있어도 자기 몫을 계속 맡게 한다(org/distill/distiller.isAutoDisabledLane).
+    `UPDATE org_distiller SET enabled=false, last_status='error',
+            last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' THEN last_summary ELSE '{}'::jsonb END) || $3::jsonb,
+            updated_at=now()
+      WHERE enabled=true AND (key=$1 OR requester=$2) RETURNING key`,
+    [lane, requester, JSON.stringify({ error: reason, auto_disabled: true, auto_disabled_reason: reason })]);
+  const keys = (r.rows as Array<{ key: string }>).map((x) => x.key);
+  //  0건은 «이미 꺼짐» 이어야 한다. 마커의 레인 키가 증류기에 아예 없으면(이름 변경·삭제) 아무것도 못 끈 것이므로
+  //   던져서 호출부가 크론 정지로 올리게 한다 — 조용히 넘어가면 다음 주기에 같은 401 이 반복된다.
+  if (!keys.length) {
+    const e = await itemsPool.query(`SELECT 1 FROM org_distiller WHERE key=$1`, [lane]);
+    if (!e.rowCount) throw new Error(`레인 '${lane}' 이 증류기에 없음`);
+  }
+  return keys;
+}
+
+/** 같은 크론이 낸 대기 위탁 중 **그 계정의 것만** 걷는다(레인 격리판 ②). */
+async function cancelQueuedForRequester(jobId: string, requester: string): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_task SET status='canceled', finished_at=now(), updated_at=now(),
+            error=COALESCE(error,'') || $3
+      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1 AND requester = $2`,
+    [`cron:${jobId}`, requester, "자격(인증) 실패로 그 계정의 레인이 정지되어 취소됨"]);
+  return r.rowCount ?? 0;
+}
+
+/**
  * 자격 실패 1건에 대한 대응 일체. **throw 하지 않는다** — 이 경로가 스케줄러 tick 을 깨면 안 된다.
  *
  * `deps` 는 테스트 seam. 실사용은 인자 없이.
@@ -127,6 +207,9 @@ export async function handleAuthFailure(
   deps?: {
     stop?: (jobId: string, reason: string) => Promise<boolean>;
     cancelQueued?: (jobId: string) => Promise<number>;
+    jobRunner?: (jobId: string) => Promise<{ laneCapable: boolean; runner: string | null } | null>;
+    stopLanes?: (lane: string, requester: string, reason: string) => Promise<string[]>;
+    cancelQueuedFor?: (jobId: string, requester: string) => Promise<number>;
     alert?: typeof sendBoxAlert;
     now?: () => number;
   },
@@ -136,10 +219,28 @@ export async function handleAuthFailure(
   const cancelQueued = deps?.cancelQueued ?? cancelQueuedForCron;
   const alert = deps?.alert ?? sendBoxAlert;
 
-  const out: AuthFailureOutcome = { cronStopped: false, queuedCanceled: 0, alerted: false };
+  const out: AuthFailureOutcome = { cronStopped: false, lanesStopped: [], queuedCanceled: 0, alerted: false };
   const reason = `위탁 #${ctx.taskId} 자격 실패: ${ctx.auth.label}`;
+  const lane = ctx.lane ?? null;
 
-  if (ctx.cronJobId && policy.stopCron) {
+  // 범위 판정 — 잡을 못 읽으면 종전대로 크론을 멈춘다(판정 재료가 없을 때 덜 멈추는 쪽으로 기울지 않는다).
+  let scope: "none" | "cron" | "lanes" = ctx.cronJobId ? "cron" : "none";
+  if (ctx.cronJobId && lane && policy.stopCron) {
+    try {
+      const job = await (deps?.jobRunner ?? loadJobRunner)(ctx.cronJobId);
+      if (job) scope = authFailureScope({ cronJobId: ctx.cronJobId, lane, requester: ctx.requester, laneCapable: job.laneCapable, jobRunner: job.runner });
+    } catch (e) { logger.warn({ err: (e as Error)?.message, job: ctx.cronJobId }, "자격 실패 — 잡 조회 실패, 크론 정지로 대응"); }
+  }
+
+  if (scope === "lanes" && lane) {
+    //  레인 정지가 실패하면 크론으로 올린다 — 아무것도 안 멈춘 채로 끝나면 다음 주기에 같은 401 이 반복된다.
+    try { out.lanesStopped = await (deps?.stopLanes ?? stopLanes)(lane, ctx.requester, reason); }
+    catch (e) { logger.warn({ err: (e as Error)?.message, lane }, "자격 실패 — 레인 정지 실패, 크론 정지로 대응"); scope = "cron"; }
+  }
+  if (scope === "lanes" && ctx.cronJobId) {
+    try { out.queuedCanceled = await (deps?.cancelQueuedFor ?? cancelQueuedForRequester)(ctx.cronJobId, ctx.requester); }
+    catch (e) { logger.warn({ err: (e as Error)?.message, job: ctx.cronJobId }, "자격 실패 — 대기 위탁 정리 실패"); }
+  } else if (scope === "cron" && ctx.cronJobId && policy.stopCron) {
     try { out.cronStopped = await stop(ctx.cronJobId, reason); }
     catch (e) { logger.warn({ err: (e as Error)?.message, job: ctx.cronJobId }, "자격 실패 — 크론 정지 실패"); }
     try { out.queuedCanceled = await cancelQueued(ctx.cronJobId); }
@@ -148,7 +249,11 @@ export async function handleAuthFailure(
 
   // 알림은 크론 정지 **뒤에** — 사람이 알림을 읽는 시점에 이미 멈춰 있어야 한다.
   if (shouldAlertNow(lastAlertAt.get(ctx.requester), now)) {
-    const what = ctx.cronJobId
+    const what = scope === "lanes"
+      ? (out.lanesStopped.length
+        ? `크론 '${ctx.cronJobId}' 는 계속 돌고, 이 계정이 실행하는 레인 ${out.lanesStopped.map((k) => `'${k}'`).join(", ")} 만 껐습니다(대기 중이던 이 계정의 위탁 ${out.queuedCanceled}건도 취소).`
+        : `이 계정이 실행하는 레인 '${lane}' 는 이미 꺼져 있습니다 — 크론 '${ctx.cronJobId}' 의 다른 레인은 계속 돕니다.`)
+      : ctx.cronJobId
       ? (out.cronStopped
         ? `크론 '${ctx.cronJobId}' 를 자동으로 정지했습니다(대기 중이던 위탁 ${out.queuedCanceled}건도 취소).`
         : `크론 '${ctx.cronJobId}' 는 이미 정지 상태이거나 정지에 실패했습니다 — 관리탭에서 확인하세요.`)
@@ -160,13 +265,13 @@ export async function handleAuthFailure(
         text:
           `위탁 #${ctx.taskId} 이(가) **${ctx.auth.label}** 로 실패했습니다. ${what}\n`
           + `조치: ${ctx.requester} 님이 내 프로필 ▸ AI 계정 연결 ▸ «사람 없이 도는 작업» 에서 [다시 연결]을 누르게 한 뒤`
-          + `(화면에서 setup-token 을 새로 발급해 저장한다 — #4051), 관리탭에서 그 크론을 다시 켜세요.`
+          + `(화면에서 setup-token 을 새로 발급해 저장한다 — #4051), 관리탭에서 ${scope === "lanes" ? "꺼진 레인" : "그 크론"}을 다시 켜세요.`
           + ` 다시 연결하기 전까지는 재시도해도 같은 결과입니다.\n`
           + `판정 근거: ${ctx.auth.evidence}`,
         detail: {
-          task_id: ctx.taskId, requester: ctx.requester, cron_job: ctx.cronJobId,
+          task_id: ctx.taskId, requester: ctx.requester, cron_job: ctx.cronJobId, lane,
           label: ctx.auth.label, from: ctx.auth.from,
-          cron_stopped: out.cronStopped, queued_canceled: out.queuedCanceled,
+          cron_stopped: out.cronStopped, lanes_stopped: out.lanesStopped, queued_canceled: out.queuedCanceled,
         },
       });
       out.alerted = r.sent;
@@ -181,8 +286,8 @@ export async function handleAuthFailure(
   }
 
   logger.warn({
-    task: ctx.taskId, requester: ctx.requester, job: ctx.cronJobId, label: ctx.auth.label,
-    cronStopped: out.cronStopped, queuedCanceled: out.queuedCanceled, alerted: out.alerted,
+    task: ctx.taskId, requester: ctx.requester, job: ctx.cronJobId, lane, scope, label: ctx.auth.label,
+    cronStopped: out.cronStopped, lanesStopped: out.lanesStopped, queuedCanceled: out.queuedCanceled, alerted: out.alerted,
   }, "위탁 자격(인증) 실패 — 대응 완료");
   return out;
 }

@@ -104,12 +104,13 @@ test("W1 ★ 전체 잡 경로는 전용 잡이 켜진 증류기를 배치에서
   assert.ok(!/for \(const d of enabled\) \{/.test(pick), "켜진 증류기 전부로 배치를 만들던 옛 루프가 남지 않는다");
 });
 test("W2 ★ 폴백 판정은 켜진 증류기 전부로 — 켜진 레인이 모두 전용이어도 전역 폴백으로 떨어지지 않는다", () => {
-  const fallback = pick.indexOf("if (!enabled.length) {");
-  assert.ok(fallback > 0, "폴백 판정이 enabled(전부) 기준");
+  //  claiming = 켜진 레인 전부 + 자동 정지 레인(isAutoDisabledLane) — enabled 의 상위집합이라 이 계약을 그대로 지킨다.
+  const fallback = pick.indexOf("if (!claiming.length) {");
+  assert.ok(fallback > 0, "폴백 판정이 맡은 레인(켜진 전부 + 자동 정지) 기준");
   assert.ok(fallback < pick.indexOf("const serve ="), "폴백 판정이 제외보다 먼저");
 });
 test("W3 ★ 방치 계산은 켜진 증류기 전부로 — 전용 레인 자료를 «방치» 로 세지 않는다", () => {
-  assert.match(pick, /listStrandedSources\(enabled, 50, null\)/);
+  assert.match(pick, /listStrandedSources\(claiming, 50, null\)/);
 });
 test("W4 지정 경로(params.distiller — 전용 잡 자신)는 제외 판정 전에 끝난다", () => {
   assert.ok(pick.indexOf("if (ref) {") < pick.indexOf("dedicatedDistillersSafe()"));

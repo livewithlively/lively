@@ -30,7 +30,7 @@ import {
 import type { AssignFailCode } from "./assign-outcome.js";
 import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, detectHarnesses, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
 import { nodeHarnesses } from "./protocol.js";
-import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
+import { detectAuthFailure, cronJobIdFromMarker, cronLaneFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
 import {
@@ -249,7 +249,7 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
   if (auth) {
     const policy = await effectiveDelegatePolicy(loadDelegatePolicy).catch(() => null);
     await handleAuthFailure(
-      { taskId: t.id, requester: t.requester, cronJobId: cronJobIdFromMarker(t.requester_session), auth },
+      { taskId: t.id, requester: t.requester, cronJobId: cronJobIdFromMarker(t.requester_session), lane: cronLaneFromMarker(t.requester_session), auth },
       { stopCron: policy?.auth_fail_stop_cron ?? true },
     ).catch((err) => logger.warn({ err, task: t.id }, "자격 실패 대응 오류(비치명)"));
   }

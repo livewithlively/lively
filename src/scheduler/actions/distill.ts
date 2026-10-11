@@ -13,6 +13,7 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
   // #1289 증류기 해소. 세션은 한 번에 한 작업이라 **매 틱 하나만** 주입한다(N개 동시 주입은 세션에 쌓이기만 한다).
   const pick = await pickDistillerBatch(params, { one: true });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
+  if (pick.skipped) return { status: "ok", summary: { skipped: pick.skipped, session: sessionRef } };
   if (!pick.batches.length) return idleSummary(pick.considered, { session: sessionRef });
   const b = pick.batches[0];
 
@@ -43,6 +44,7 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
 export async function runDistillHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
   const pick = await pickDistillerBatch(params, { one: false });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
+  if (pick.skipped) return { status: "ok", summary: { skipped: pick.skipped } };
   if (!pick.batches.length) return idleSummary(pick.considered, {});
   const out: unknown[] = [];
   for (const b of pick.batches) {
@@ -102,8 +104,8 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
 //  · 미지정 → enabled 증류기 전부(배정 순서). one=true 면 그중 잔량 있는 첫 하나만.
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
-  Promise<{ batches: DistillBatch[]; considered: number; error?: string }> {
-  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting } = await import("../../org/distill/distiller.js");
+  Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string }> {
+  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting, isAutoDisabledLane } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
   let all: Awaited<ReturnType<typeof listDistillers>>;
@@ -114,6 +116,9 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   if (ref) {
     const d = await getDistiller(ref);
     if (!d) return { batches: [], considered: all.length, error: `증류기 '${ref}' 없음 — [AI 맥락 ▸ 자료 증류기]에서 확인하세요.` };
+    //  자격 실패로 자동 정지된 레인은 오류가 아니라 대기다 — error 로 돌려주면 크론 브레이커가 연속 실패로 세어
+    //   전용 잡까지 꺼 버리고, 사람이 레인만 다시 켜면 잡은 꺼진 채 남는다.
+    if (isAutoDisabledLane(d)) return { batches: [], considered: 1, skipped: `레인 '${ref}' 이 실행 계정의 자격 실패로 자동 정지됨 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요` };
     if (!d.enabled) return { batches: [], considered: all.length, error: `증류기 '${ref}' 가 꺼져 있습니다.` };
     const inbox = await listDistillerInbox(d, all);
     // 이 스레드에 이미 있는 지식(#1289) — 답글만 혼자 온 배치가 부모 지식을 못 찾아 파편을 만드는 걸 막는다.
@@ -129,7 +134,10 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   }
 
   const enabled = all.filter((d) => d.enabled);
-  if (!enabled.length) {
+  //  «맡은» 레인 = 켜진 레인 + 자격 실패로 자동 정지된 레인. 배치는 켜진 레인만 내고,
+  //   폴백 판정·방치 계산은 맡은 레인 기준으로 한다(isAutoDisabledLane 머리주석).
+  const claiming = all.filter((d) => d.enabled || isAutoDisabledLane(d));
+  if (!claiming.length) {
     // 폴백 — 증류기 미등록/전부 꺼짐: 구 전역 인박스 + 기본 프롬프트(종전 동작 그대로).
     const { listUndistilledSources } = await import("../../v6/source-store.js");
     let inbox: Record<string, unknown>[];
@@ -172,7 +180,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //  ⚠ «인박스가 비었다» 가 아니라 «어느 켜진 레인의 **스코프에도** 안 든다» 로 재야 한다.
   //   인박스는 이미 판정(seen)한 것을 빼므로, 처리 중인 자료까지 방치로 세면 **두 번 증류**하게 된다.
   if (!batches.length || !opt.one) {
-    const stranded = await listStrandedSources(enabled, 50, null).catch(() => [] as Record<string, unknown>[]);
+    const stranded = await listStrandedSources(claiming, 50, null).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
       //  대상을 못박는다 — 안 그러면 본문이 source_undistilled(전역)를 부르게 해서 **에이전트가 다루는 집합과
       //   서버가 '판정함'으로 기록하는 집합(아래 ids)이 어긋난다.** 그 어긋남은 아무도 안 본 자료를 인박스에서
