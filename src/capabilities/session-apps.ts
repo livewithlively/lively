@@ -4,7 +4,7 @@
 //  («장표 앱을 붙일까요?» → 사람이 좋다고 하면 session_app_attach). session_id 생략 = 이 요청을 보낸 세션 자신
 //  (session_set_project·session_rename 과 같은 규약 — 게이트웨이가 x-lively-session 으로 식별).
 //
-//  붙이기·떼기는 **세션 주인만**. 붙은 목록은 그 세션에 들어갈 수 있는 사람(주인·초대받은 사람)이 본다.
+//  붙이기·떼기·붙은 목록 보기 모두 그 세션에 **들어갈 수 있는 사람**(연 사람 · 초대받은 사람)이 한다(처음엔 붙이기·떼기가 주인만이었다 — apps/session-apps.ts 머리말).
 //  붙이려면 그 사람이 그 앱에 **동의(grant)** 해 두었어야 한다 — 붙이기가 동의를 대신하지 않는다(AI 가 붙여도
 //  사람이 동의한 범위를 넘지 못한다). 동의 창은 웹이 붙이기 전에 띄운다(web/v2/app-session.ts ensureAppGrant).
 //  판정·저장·알림의 실제는 apps/session-apps.ts — 여기는 입력과 표면만.
@@ -15,7 +15,7 @@ import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersion, type OrgApp } from "../org/store/apps.js";
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
-  attachAppRow, detachAppRow, listAttachedApps, publishAppEvent, requireSessionOwner, requireUsableApp,
+  attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
   type SessionAppRow,
 } from "../apps/session-apps.js";
 
@@ -128,13 +128,13 @@ const sessionAppAttach: Capability = {
     const member = me(user);
     const appId = String(input.app_id ?? "").trim();
     if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
-    await requireSessionOwner(sid, member);
+    await requireSessionParticipant(sid, member);
     const app = requireUsableApp(await getApp(appId), appId);
     if (!(await getActiveGrant(appId, member))) {
       throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — 사람이 앱을 한 번 열어 동의해야 붙일 수 있습니다`);
     }
     const fresh = await attachAppRow(sid, appId, member);
-    if (fresh) publishAppEvent(member, { kind: "attach", app_id: appId, session: sid, source: ctx?.source });
+    if (fresh) publishAppEventToSession(member, sid, { kind: "attach", app_id: appId, session: sid, source: ctx?.source });
     const row = (await listAttachedApps(sid)).find((r) => r.app_id === appId);
     return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app) : null, hint: HINT };
   },
@@ -158,9 +158,9 @@ const sessionAppDetach: Capability = {
     const member = me(user);
     const appId = String(input.app_id ?? "").trim();
     if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
-    await requireSessionOwner(sid, member);
+    await requireSessionParticipant(sid, member);
     const detached = await detachAppRow(sid, appId);
-    if (detached) publishAppEvent(member, { kind: "detach", app_id: appId, session: sid, source: ctx?.source });
+    if (detached) publishAppEventToSession(member, sid, { kind: "detach", app_id: appId, session: sid, source: ctx?.source });
     return { session_id: sid, detached };
   },
 };

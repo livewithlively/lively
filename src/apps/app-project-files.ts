@@ -11,7 +11,7 @@
 //  판정은 순수하게 두고(deps 주입) 살아 있는 의존은 capabilities/app-project-files.ts 가 꽂는다.
 import { HttpError } from "../http-error.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
-import { requireSessionOwner, requireUsableApp, type SessionAppRow } from "./session-apps.js";
+import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from "./session-apps.js";
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { PROJECT_FILES_TOOL } from "./manifest.js";
@@ -29,6 +29,7 @@ export interface ProjectFilesDeps {
   getApp: (appId: string) => Promise<OrgApp | null>;
   getGrant: (appId: string, memberId: string) => Promise<AppGrantRow | null>;
   sessionOwner: (sessionId: string) => Promise<string | null>;
+  canEnter?: (sessionId: string, member: string) => Promise<boolean>;
   listAttached: (sessionId: string) => Promise<SessionAppRow[]>;
   /** 그 세션이 지금 속한 프로젝트(없으면 null — 프로젝트 없는 세션). */
   projectOfSession: (sessionId: string) => Promise<ProjectRef | null>;
@@ -86,7 +87,7 @@ async function gate(q: ProjectFilesGateInput, deps: ProjectFilesDeps, rate: Rate
   if (needsRegrant(grant.tools, declared, PROJECT_FILES_TOOL) || !decideAppTool(q.appId, grant.tools, PROJECT_FILES_TOOL)) {
     throw new HttpError(403, `앱 '${q.appId}' 의 사용 동의가 예전 범위라 '프로젝트 자료에서 파일 읽기' 를 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`);
   }
-  await requireSessionOwner(sessionId, q.member, { sessionOwner: deps.sessionOwner });
+  await requireSessionParticipant(sessionId, q.member, { sessionOwner: deps.sessionOwner, canEnter: deps.canEnter });
   const attached = await deps.listAttached(sessionId);
   if (!attached.some((a) => a.app_id === q.appId)) {
     throw new HttpError(403, `앱 '${q.appId}' 이 이 세션에 붙어 있지 않습니다 — 붙은 앱 화면에서만 파일을 볼 수 있습니다`);
@@ -98,7 +99,7 @@ async function gate(q: ProjectFilesGateInput, deps: ProjectFilesDeps, rate: Rate
   }
   const project = await deps.projectOfSession(sessionId);
   if (!project || !project.folder) return { app, exts, project: null };
-  //  세션 주인이어도 그 프로젝트가 가려져 있으면(공개 범위) 없는 것으로 본다 — 프로젝트 라우트와 같은 답.
+  //  세션에 들어갈 수 있는 사람이어도 그 프로젝트가 가려져 있으면(공개 범위) 없는 것으로 본다 — 프로젝트 라우트와 같은 답.
   if (!(await deps.canSeeProject(project.id, q.member))) return { app, exts, project: null };
   return { app, exts, project };
 }
