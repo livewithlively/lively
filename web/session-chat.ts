@@ -23,7 +23,7 @@ import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
-import { registerSessionInput, putIntoSession } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+import { registerSessionInput, putIntoSession, SESSION_INPUT_EVENT } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
 
 //  #4594 — 같은 오리진 신호 `lively:compose-draft` {session, text}: 앱 화면(app-ui.ts — 멈춘 세션에 보내려다 409 draft)·앱 탭 ⋯ 메뉴
 //   («AI에게 고치기»)가 **그 세션의 입력칸에 글을 넣어 둔다**(보내지 않는다 — 사람이 읽고 보낸다). 넣는 법은 세션 화면이 뜰 때
@@ -1005,6 +1005,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  지금 보이는 쪽의 입력칸에 넣는다: 터미널이면 붙여넣기(여러 줄은 bracketed paste — 줄바꿈이 전송이 되지 않게),
   //  대화창이면 그 글칸 끝에. 터미널 프레임이 아직 안 떴으면 뜰 때까지 담아 둔다(termQueue).
   const offSessInput = registerSessionInput(() => [target.id, target.logId, target.raw?.claudeSessionId, ...((target as any).altIds || [])], (text) => {
+    //  넣었다고 이 화면 안에서 알린다 — 세션이 카드로 떠 있으면 카드가 펴지고 또렷해진다(side-card.ts).
+    try { view.input.dispatchEvent(new CustomEvent(SESSION_INPUT_EVENT, { bubbles: true })); } catch { /* noop */ }
     if (mode === 'term' && hasTerm()) {
       if (termReady) termSend('paste', text); else termQueue.push({ cmd: 'paste', text });
       return true;
