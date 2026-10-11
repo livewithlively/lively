@@ -175,7 +175,7 @@ const par = card.slice(card.indexOf("function placeAfterResize("), card.indexOf(
 ok(/if \(wasPlaced\) return a;/.test(par) && /a\.corner === d\.corner && a\.dx === d\.dx && a\.dy === d\.dy \? null : a/.test(par), "R4 폭만 바꿔 자리가 기본 자리 그대로면 «옮긴 자리» 로 적지 않는다", par.slice(0, 300));
 ok(/let sessLeft = prefs\.left;/.test(card) && /left: sessLeft/.test(save) && /fold = false;\s*save\(\);/.test(enter), "D3b 세션 쪽을 카드가 될 때 적고 다시 불러올 때 읽는다");
 const rs = card.slice(card.indexOf("function restore("), card.indexOf("function settleSoon("));
-ok(/fold = false;/.test(rs) && /clearTimeout\(pillTimer\)/.test(rs), "F1c 다시 불러온 카드(세션 전환)도 펼친 카드");
+ok(/fold = st\?\.fold === true;/.test(rs) && /clearTimeout\(pillTimer\)/.test(rs), "F1c 다시 불러온 카드는 그 세션에 적어 둔 최소화를 따른다(없으면 펼침 · 앞 세션 값은 안 따라온다)");
 ok(/settleSoon\(\);/.test(enter) && /if \(on\) settleSoon\(\);/.test(rs), "K11 카드가 된 직후 막대가 다시 놓인 뒤 기본 자리를 한 번 더 잰다");
 const pa = card.slice(card.indexOf("function paint():"), card.indexOf("// ── 비침 · 또렷"));
 ok(/g\.hidden = !s \|\| \(fold && g\.dataset\.edge !== 'e' && g\.dataset\.edge !== 'w'\)/.test(pa), "F8 알약은 좌우 가장자리 손잡이만 있다(폭 조절 — 버그 수정)", pa.slice(0, 400));

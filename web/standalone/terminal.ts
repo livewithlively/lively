@@ -667,6 +667,10 @@ export function resolveTheme(key) {
 //   이름 있는 테마의 흰 글씨를 밝은 앱 위 반투명 카드에 올리면 읽히지 않는다. 문서의 color-scheme 도 앱을 따른다.
 //   터미널 테마(data-theme)를 따르면 밝기가 앱과 다를 때 브라우저가 액자에 불투명한 바탕을 칠해 비침이 죽는다.
 let glassOn = false;
+//  비치는 카드에서 사람이 카드를 고르지 않았다(곁칸을 골랐다) — 셸이 glass 메시지의 idle 로 알린다. 이때는 연결(첫 연결 · 재연결)
+//   때 스스로 초점을 가져가지 않는다. 가져가면 셸이 «사람이 카드를 골랐다» 로 읽어 카드가 불투명해지고, 새로고침할 때마다
+//   비치던 카드가 불투명으로 바뀌었다(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»). idle 이 없는 옛 셸이면 종전대로.
+let glassIdle = false;
 /** 그 색의 알파만 0 으로. 읽지 못하는 꼴이면 투명한 흰색. */
 export function clearOf(c: string): string {
   const s = String(c || '').trim();
@@ -4082,7 +4086,7 @@ function setupEmbedBridge() {
     else if (m.cmd === 'prompts') openMyPrompts();
     else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
     //  세션이 사이드바 위 카드가 됐다/풀렸다(v2/side-card.ts) — 바탕을 비우거나 되돌린다.
-    else if (m.cmd === 'glass') setGlass(m.on === true);
+    else if (m.cmd === 'glass') { setGlass(m.on === true); glassIdle = m.on === true && m.idle === true; }
     //  #4135 곁칸 «프로젝트» 앱의 [본문 넣기] — 입력칸에 **붙여넣기만** 한다(Enter 없음). 여러 줄은 pasteText 가 bracketed paste 로 감싼다.
     else if (m.cmd === 'paste' && typeof m.text === 'string') { pasteText(m.text); try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
   });
@@ -4918,7 +4922,7 @@ async function connectNow() {
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
-    term.focus();
+    if (!glassIdle) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle
     if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {

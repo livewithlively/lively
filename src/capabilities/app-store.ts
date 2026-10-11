@@ -17,7 +17,7 @@ import { getApp } from "../org/store/apps.js";
 import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
 import { appSchemaFor, ensureAppTables, type AppTableSpec } from "../apps/store-schema.js";
 import { logger } from "../log.js";
-import { requireAttachedApp, publishAppEvent } from "../apps/session-apps.js";
+import { requireAttachedApp, publishAppEventToSession } from "../apps/session-apps.js";
 import { planAppSql, APP_SQL_MAX_LEN, APP_SQL_MAX_PARAMS } from "../apps/app-sql.js";
 import { runAppSql, takeAppCall, assertAppDataQuota, appSqlTenantId } from "../apps/app-sql-exec.js";
 import { ensureAppSqlRole } from "../apps/store-schema.js";
@@ -44,7 +44,7 @@ async function resolveStoreApp(user: LivelyUser | undefined, input: Record<strin
 function announce(user: LivelyUser | undefined, appId: string, table: string, op: "insert" | "update" | "delete", ctx: CapabilityCtx | undefined): void {
   const member = user?.userId;
   if (!member) return;
-  publishAppEvent(member, { kind: "data", app_id: appId, table, op, session: ctx?.session ?? null, source: ctx?.source });
+  publishAppEventToSession(member, ctx?.session, { kind: "data", app_id: appId, table, op, session: ctx?.session ?? null, source: ctx?.source });   // 그 세션에 같이 있는 사람의 화면에도
 }
 
 // app_id — 앱 세션/UI 는 생략(자기 앱), 앱이 붙은 세션은 그 앱(붙은 앱이 하나면 생략 가능). #4225

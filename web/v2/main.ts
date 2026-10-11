@@ -2723,7 +2723,7 @@ async function renameSession(sessionId: string, label: string, tab: ShellTab | n
   if (s && s.node) body.node = s.node;         // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
   await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId), { method: 'POST', body: JSON.stringify(body) });
   pinRename(sessionId, label);                 // 떠 있던 폴링 응답이 옛 이름으로 되덮지 않게(위 renamePins)
-  if (s) { s.label = label; if (s.raw) s.raw.label = label; }
+  if (s) { s.label = label; if (s.raw) { s.raw.label = label; s.raw.labelSource = 'human'; } }   // 웹에서 고친 이름은 사람 이름이다(서버 걸쇠와 같은 값)
   drawSide();
   const cur = findSess(sessionId);
   if (tab && tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });

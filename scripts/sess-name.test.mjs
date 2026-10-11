@@ -54,6 +54,13 @@ eq(main("장표 수정 앱 2", "", DECK), "장표 수정 앱 2", "N18 구분 기
 eq([main("장표 수정 앱 · 만들기", "", DECK), main("장표 수정 앱: 만들기", "", DECK), main("장표 수정 앱-만들기", "", DECK), main("장표 수정 앱 / 만들기", "", DECK)],
   ["만들기", "만들기", "만들기", "만들기"], "N19 구분 기호로 이은 꼬리는 종전대로 꼬리만");
 eq(main("장표 수정 앱 - ", "덱 고치는 중", DECK), "덱 고치는 중", "N20 구분 기호뿐이고 꼬리가 비면 되풀이 — 하던 일이 받는다");
+// 사람이 지은 이름은 프로젝트명과 같아도 남는다 (원준 2026-10-10 — «장표 수정 앱» 으로 고쳤는데 «1006일 회의록 정리» 로 돌아갔다)
+const human = (label, work, proj) => sessNameFace({ label, work, harness: "claude", human: true }, proj);
+eq(human(DECK, "1006일 회의록 정리", DECK), { main: DECK, sub: "1006일 회의록 정리", named: true, untitled: false },
+  "N30 ★신고 사례 — 사람이 프로젝트명과 같은 이름을 지으면 그 이름이 선다(pane 제목은 둘째 줄)");
+eq(main(DECK, "1006일 회의록 정리", DECK), "1006일 회의록 정리", "N31 사람이 지은 것이 아니면 종전대로 되풀이를 걷는다");
+eq(human("장표 수정 앱 - 만들기", "", DECK).main, "만들기", "N32 사람 이름이라도 꼬리가 있으면 종전대로 꼬리만");
+eq(human("장표 수정 앱 - ", "덱 고치는 중", DECK).main, "장표 수정 앱 -", "N33 꼬리가 비어도 사람 이름은 사라지지 않는다");
 // 이름이 프로젝트명의 앞부분일 때 — 잘린 것만 되풀이, 사람이 지은 짧은 이름은 이름이다 (#3870 후속, 2026-10-07)
 const LONGP = "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도우에서도 되게";
 eq(face("UI", "레일 수정", "UI 버그 해결"), { main: "UI", sub: "레일 수정", named: true, untitled: false },
@@ -70,7 +77,7 @@ const chat = read("web/session-chat.ts");
 ok(/export function sessText\([^)]*\)[^{]*\{\s*return sessNameFace\(/.test(side),
   "S1 사이드바 sessText 는 lib/sess-name 의 sessNameFace 를 그대로 돌려준다(제 사본 없음)");
 ok(!/function echoesProject|const HARNESS_TITLES/.test(side), "S2 사이드바에 규칙 사본이 남지 않았다");
-ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitle\(\)[\s\S]{0,400}face\(\)/.test(chat),
+ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitleName\(\)[\s\S]{0,400}face\(\)/.test(chat),
   "S3 ★세션 머리줄(paintTitle)이 같은 함수로 이름을 정한다");
 ok(!/titleFromFirstAsk/.test(chat) && !/function cleanName/.test(chat),
   "S4 ★머리줄이 첫 지시를 이름으로 박아 두지 않고, 제 규칙 사본도 없다");

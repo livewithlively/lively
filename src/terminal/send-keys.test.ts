@@ -4,6 +4,7 @@
 //  때문이다. 그 표면 규칙을 mac 에서도 표로 못박는다.
 import assert from "node:assert/strict";
 import { sendKeysPlan, injectFlushMs, splitUtf8, TMUX_LITERAL_CHUNK_BYTES } from "./send-keys.js";
+import { HARNESSES } from "./catalog.js";
 
 const TMUX = "/opt/homebrew/bin/tmux";
 const PSMUX = "C:\\Users\\y\\.lively\\bin\\psmux\\psmux.exe";
@@ -18,6 +19,18 @@ t("[1] tmux — 텍스트는 리터럴 1회(옵션 끝 `--` 뒤), 제출은 Ente
   const p = sendKeysPlan("box-yoon-1", "안녕", TMUX);
   assert.deepEqual(p.keys, [["send-keys", "-t", "box-yoon-1", "-l", "--", "안녕"]]);
   assert.deepEqual(p.enter, ["send-keys", "-t", "box-yoon-1", "Enter"]);
+});
+
+// ── 치던 글 치워 두기(원준 2026-10-10 — 글을 치다가 모델·추론강도를 바꾸면 치던 글 뒤에 `/model …` 이 붙어 나갔다) ──
+t("[1b] 모델·추론강도 명령 앞의 «치워 두기» 키(Ctrl+S)는 다듬기에서 살아남아 명령 앞에 그대로 실린다", () => {
+  const claude = HARNESSES.find((h) => h.key === "claude")!;
+  assert.equal(claude.runtimeDraftStash, "\x13", "claude 는 Ctrl+S 로 치던 글을 치워 둔다(2.1.296 실측)");
+  const cmd = claude.runtimeDraftStash + claude.runtimeCmd!.effort!("high");
+  const p = sendKeysPlan("box-yoon-1", cmd, TMUX);
+  assert.deepEqual(p.keys, [["send-keys", "-t", "box-yoon-1", "-l", "--", "\x13/effort high"]]);
+  const w = sendKeysPlan("box-yoon-1", cmd, PSMUX);
+  assert.equal(toks(w.keys[0])[0], "0x13", "psmux 도 첫 토큰이 Ctrl+S");
+  for (const h of HARNESSES) if (h.runtimeDraftStash) assert.ok(h.runtimeCmd, `${h.key}: 치워 두기 키는 런타임 명령이 있는 하네스에만`);
 });
 
 // ── 2~5. Windows mux 표면 ────────────────────────────────────────────────────
