@@ -1927,10 +1927,10 @@
   function enqueue(f, keep) {
     var key = chkKey(f), it = SRC.queue.filter(function (x) { return x.key === key; })[0];
     if (it) it.keep = it.keep || !!keep; else SRC.queue.push({ key: key, f: f, keep: !!keep });
-    setTimeout(pump, 0);   // 이미 줄에 있어도 깨운다 — 불러오는 동안 멈췄던 줄이 그대로 남지 않게
+    setTimeout(srcPump, 0);   // 이미 줄에 있어도 깨운다 — 불러오는 동안 멈췄던 줄이 그대로 남지 않게
   }
   //  하나씩 견준다(파일 하나가 몇 MB 다). 불러오기 창이 닫혀 있으면 머리줄 알림에 필요한 것만 남긴다.
-  async function pump() {
+  async function srcPump() {   // 이름 주의 — pump 는 저장 줄의 함수다(같은 이름으로 두면 저장이 통째로 멎는다 · 16판 사고)
     if (SRC.busy) return; SRC.busy = true;
     try {
       while (SRC.queue.length && !st.importing) {
@@ -2162,7 +2162,7 @@
   async function importHtml(src) {
     if (st.importing) return;
     var note = function (t, pct) { st.importNote = t; st.importPct = pct == null ? null : pct; paintPickers(); };
-    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; setTimeout(pump, 0); };
+    var end = function () { st.importing = ''; st.importNote = ''; st.importName = ''; st.importPct = null; pkS.ask = null; setTimeout(srcPump, 0); };
     st.importing = src.key; st.importName = src.name;
     if ($('pickModal').hidden && $('empty').hidden) { $('pickModal').hidden = false; }   // 머리줄의 「새 파일」 띠에서 눌렀다 — 진행이 보이게 창을 연다
     note('파일을 읽는 중' + (src.size ? ' · ' + sizeOf(src.size) : ''));
