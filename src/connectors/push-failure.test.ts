@@ -164,3 +164,13 @@ test("배선 — 일괄 거절이면 표식을 붙이고 실패로 올리며 파
   assert.match(DRAIN, /SET last_error = \$2 \|\| COALESCE\(last_error, ''\) WHERE id = ANY\(\$1::bigint\[\]\)/, "표식을 안 붙여 다음 틱에 파킹된다");
   assert.ok(DRAIN.indexOf("isMassRejection({ rejected, pushed })") < DRAIN.indexOf("await notifyParked(parkedRows"), "파킹 경보가 일괄 판정보다 먼저 나간다");
 });
+
+// 부모가 반출 대기도 아니고 ClickUp 에도 없으면 자식을 닫는다 — 기다리게 두면 영영 deferred 로 남는다.
+test("부모가 반출 대상이 아니면 자식은 기다리지 않고 닫힌다", () => {
+  const i = DRAIN.indexOf('par.external_system !== "clickup" || !par.external_id');
+  assert.ok(i > 0, "부모 미푸시 분기를 못 찾았다");
+  const block = DRAIN.slice(i, i + 2000);
+  assert.match(block, /FROM external_outbox WHERE system='clickup' AND entity_id=\$1 AND done_at IS NULL/, "부모가 큐에 있는지 안 본다");
+  assert.match(block, /if \(parentQueued\) \{ deferred\+\+; continue; \}/, "부모가 큐에 있을 때만 기다려야 한다");
+  assert.match(block, /await markDone\(ob\.id\); skipped\+\+; continue;/, "부모가 반출 대상이 아니면 자식을 닫아야 한다");
+});

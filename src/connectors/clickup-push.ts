@@ -260,7 +260,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip
         //  직계 부모(d=0)부터 위로 — 부모의 푸시 여부는 d=0 으로 판정하고, 리스트 좌표는 체인에서 첫 non-null 을
         //  쓴다(왜 한 칸이 아니라 체인인지는 createListFor 머리말). d<8 = 폭주 방지 상한.
-        const anc: Array<{ d: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
+        const anc: Array<{ d: number; id: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
           `WITH RECURSIVE anc AS (
              SELECT id, parent_id, external_id, external_system,
                     NULLIF(btrim(external_base->>'list_ext'), '') AS list_ext, 0 AS d
@@ -270,9 +270,21 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                     NULLIF(btrim(p.external_base->>'list_ext'), ''), anc.d+1
                FROM project p JOIN anc ON p.id = anc.parent_id
               WHERE anc.list_ext IS NULL AND anc.d < 8)
-           SELECT d, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
+           SELECT d, id, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
         const par = anc.find((a) => a.d === 0);
-        if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+        if (!par || par.external_system !== "clickup" || !par.external_id) {
+          //  부모가 곧 올라갈 때(부모 행이 큐에 있음)만 기다린다. 부모가 반출 대상이 아니면(리스트 매핑이 없어
+          //   skip 됐거나, 카드가 지워져 연결을 끊었거나) 부모를 다시 올릴 경로가 없어 자식이 영영 deferred 로 남는다.
+          //   그때는 자식도 닫는다. 부모가 나중에 반출되면 자식은 다음 편집 때 다시 큐에 들어와 그 아래에 만들어진다.
+          //  파킹된 부모(사람이 고쳐야 하는 거절)도 pending 이라 자식은 기다린다 — 부모가 풀리면 그대로 이어 올라간다.
+          //  같은 드레인 앞쪽에서 부모가 만들어졌으면 위 anc 재조회가 이미 external_id 를 본다(부모 CREATE 는
+          //   project.external_id 를 쓴 뒤에 markDone 한다).
+          const parentQueued = par ? await one(itemsPool,
+            `SELECT 1 FROM external_outbox WHERE system='clickup' AND entity_id=$1 AND done_at IS NULL LIMIT 1`, [par.id]) : undefined;
+          if (parentQueued) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+          logger.info({ project: p.id, parent: p.parent_id }, "부모가 ClickUp 에 없고 반출 대기도 아니라 자식 반출을 닫는다");
+          await markDone(ob.id); skipped++; continue;
+        }
         parentExt = par.external_id;
         chainListExts = anc.map((a) => a.list_ext);
       }
