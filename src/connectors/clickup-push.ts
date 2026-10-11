@@ -16,6 +16,8 @@ import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.j
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
 import { drainBudgetExceeded } from "./push-budget.js";
+import { classifyPushFailure, parksAfter, parkedSql, parkedParams, notifyParked, type ParkedRow } from "./push-failure.js";
+import { sendBoxAlert } from "../ops/alerts.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { PUBLIC_VIEWER } from "../v6/visibility.js";
 
@@ -124,10 +126,20 @@ async function countPending(): Promise<number> {
   } catch { return -1; }
 }
 
+// 그중 파킹된 행 수(push-failure.ts). 실행마다 요약에 실어, 새로 파킹될 때 한 번 나가는 경보를 놓쳐도 남아 있게 한다.
+async function countParked(): Promise<number> {
+  try {
+    const row: { n: string | number } | undefined = await one(itemsPool,
+      `SELECT count(*) AS n FROM external_outbox o WHERE o.system='clickup' AND o.done_at IS NULL AND ${parkedSql(1)}`, parkedParams());
+    return row ? Number(row.n) : -1;
+  } catch { return -1; }
+}
+
 // skipped ≠ deferred — deferred 는 '다음 틱에 다시 시도'(아웃박스 행 유지), skipped 는 '반출 대상이 아니라 닫았다'(행 소비).
 //  종전엔 둘을 deferred 로 합산해, 운영자가 큰 deferred 를 보고 일시적 지연으로 오독하면 이번 사고(영구 미반출)를
 //  못 알아본다. 두 숫자를 갈라야 '왜 큐가 안 빠지나'를 로그만으로 판정할 수 있다. detached = 저쪽 태스크가 지워져 연결을 끊었다(행 소비).
-export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean; remaining: number }> {
+//  failed 는 시스템성 실패만 센다(exit 1 → 브레이커). 행 고유 거절은 rejected 로 따로 세고, 반복되면 파킹한다(push-failure.ts).
+export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; rejected: number; parkedNow: number; parked: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean; remaining: number }> {
   //  원점은 호출자가 넘긴다 — 부모의 하드 타임아웃은 프로세스 스폰부터 재는데 여기서 찍으면
   //   node 부팅·모듈 로드·풀 연결만큼 여유가 조용히 깎인다(run-push 가 performance.timeOrigin 을 넘긴다).
   //   기본값은 지금 — 장수 프로세스가 이 함수를 직접 부를 때 원점이 과거로 밀려 즉시 소진되지 않게.
@@ -182,9 +194,11 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
        LEFT JOIN project p ON p.id = o.entity_id
       WHERE o.system='clickup' AND o.done_at IS NULL
         AND ($2::bool OR o.op <> 'upsert' OR p.external_id IS NOT NULL)
-      ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== ""]);
+        AND NOT ${parkedSql(3)}
+      ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== "", ...parkedParams()]);
 
-  let pushed = 0, deferred = 0, failed = 0, deleted = 0, skipped = 0, detached = 0;
+  let pushed = 0, deferred = 0, failed = 0, rejected = 0, deleted = 0, skipped = 0, detached = 0;
+  const parkedRows: ParkedRow[] = [];
   let budgetStopped = false, visited = 0;
   const markDone = (obid: number) => itemsPool.query(`UPDATE external_outbox SET done_at=now(), updated_at=now() WHERE id=$1`, [obid]);
   const markErr = (obid: number, msg: string) => itemsPool.query(`UPDATE external_outbox SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [obid, msg.slice(0, 500)]);
@@ -326,13 +340,28 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부)");
       }
     } catch (e) {
-      await markErr(ob.id, (e as Error)?.message ?? String(e)); failed++;
-      logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)");
+      const msg = (e as Error)?.message ?? String(e);
+      await markErr(ob.id, msg);
+      const kind = classifyPushFailure(e);
+      if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
+      rejected++;
+      if (parksAfter(ob.attempts, kind)) {
+        parkedRows.push({ outboxId: ob.id, entityId: ob.entity_id, error: msg });
+        logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행이 같은 거절을 반복해 드레인 대상에서 뺐다(파킹 — 재편집 시 해제)");
+      } else {
+        logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행 거절(행 고유 — 실행 실패로 세지 않음, 다음 틱 재시도)");
+      }
     }
   }
+  //  새로 파킹된 행은 다음 실행부터 선택되지 않으므로 이 자리가 그 행의 유일한 알림 기회다.
+  await notifyParked(parkedRows, sendBoxAlert);
   //  이번 배치가 아니라 **전체** 잔여다 — 정체 감시가 「예산을 다 쓰고도 줄지 않았나」를 보려면
   //   배치 상한(LIMIT)에 잘리지 않은 수가 필요하다. 못 세면 -1(모름) — 0 으로 뭉개면 감시가 눈을 감는다.
+  //  파킹된 행도 remaining 에 포함한다(pending 이 맞다). 정체 판정은 «예산을 쓰고도 안 줄었나» 라서 실행 사이에 변하지
+  //   않는 파킹 수는 전진 판정에 영향이 없고, 빼면 그 행들이 어떤 수치에도 안 잡혀 조용히 사라진다. 내역은 parked 로 따로 싣는다.
   const remaining = await countPending();
-  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining }, "clickup outbox 드레인 완료");
-  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining };
+  const parked = await countParked();
+  const parkedNow = parkedRows.length;
+  logger.info({ pushed, deferred, skipped, failed, rejected, parkedNow, parked, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining }, "clickup outbox 드레인 완료");
+  return { pushed, deferred, skipped, failed, rejected, parkedNow, parked, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining };
 }
