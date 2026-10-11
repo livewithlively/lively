@@ -9,14 +9,13 @@
 //  자리(세션 옆 · 화면 전체 · 둘 다)에 따라 미리 보는 폭과 테두리, AI 에게 하는 말, 써 보는 길이 다르다.
 //
 //  새 배관은 없다 — 있는 부품을 엮는다:
-//   · 대화 = 일반 세션 하나(spawnSession · 「앱 만들기」 프로젝트 아래)를 대화 보기(renderSession chatHome)로 끼운다.
+//   · 대화 = 일반 세션 하나(spawnSession · 「앱 만들기」 프로젝트 아래)를 대화 보기(renderSession chatHome · 순환을 피해 늦게 들여온다)로 끼운다.
 //   · 단계마다 보낼 글은 단추가 보낸다(POST …/prompt). AI 답은 세션 기록(…/transcript ndjson)을 읽어 표식([[기획카드]] · [[걸음 n/4]] · [[점검]])으로 가른다 — lib/studio-flow.ts.
 //   · 앱 = 그 세션의 AI 가 app_save 로 저장하면 생긴다. 시작할 때의 앱 목록과 견줘 새로 생긴 id 를 찾고(폴링) mountAppUiFrame 으로 띄운다. 'updated' 사건마다 다시.
 //   · 찍어서 의견 = 앱 문서에 탐침 스크립트를 함께 넣어(extraScript) 비율 좌표의 요소(태그 · 글)를 받는다.
 //   · 사본 = /apps/:id/pull → id · 이름 · studio.origin 을 바꿔 /apps/save. 판 = fetchAppVersions · revertApp.
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
 import { spawnSession } from './quick-session.js';
-import { mergeSessions, renderSession } from './views.js';
 import { takeCreated } from './created-cache.js';
 import { mountAppUiFrame, openAppUi, type AppUiFrame } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
@@ -583,6 +582,7 @@ async function build(rec: StudioRec): Promise<void> {
       api('/api/ui/v6/sessions?limit=40').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
     ]);
     if (S.dead) return;
+    const { mergeSessions, renderSession } = await import('./views.js');   // 정적으로 들여오면 views → apps → app-studio → views 순환(check-imports)
     const made = takeCreated(rec.sid);
     const rows = made ? [made, ...(live as any[])] : (live as any[]);
     S.chat = renderSession(chatHost, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() } as any, rec.sid, { chatHome: true, solo: true, isVisible: () => !!root && chatHost.isConnected });

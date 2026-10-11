@@ -25,10 +25,10 @@ check(/^\[\[기획카드\]\]\n이름: 회의 안건\n/.test(txt) && /할 수 있
 
 // 걸음 · 점검
 check(F.parseStep("[[걸음 1/4]] 기획 읽음 … [[걸음 3/4]] 자료 표") === 3 && F.parseStep("아직") === 0 && F.parseStep("[[걸음 4/4]] 저장 [[걸음 2/4]]") === 4 && F.parseStep("[[걸음 9/4]]") === 4, "S1 걸음은 가장 큰 n(1~4)");
-const ck = F.parseCheck("봤어요.\n[[점검]] 있음: 더하기 · 회의별 보기 | 빠짐: 끝난 것 접기");
-check(ck && ck.have.length === 2 && ck.missing.length === 1 && ck.missing[0] === "끝난 것 접기", "K1 점검 줄 — 있음 · 빠짐", ck);
-const ck2 = F.parseCheck("[[점검]] 있음: a · b · c | 빠짐: 없음");
-check(ck2 && ck2.have.length === 3 && ck2.missing.length === 0 && F.parseCheck("점검 없음") === null, "K2 「빠짐: 없음」 은 빈 목록", ck2);
+const ck = F.parseCheck("봤어요.\n[[대조]] 있음: 더하기 · 회의별 보기 | 빠짐: 끝난 것 접기");
+check(ck && ck.have.length === 2 && ck.missing.length === 1 && ck.missing[0] === "끝난 것 접기", "K1 대조 줄 — 있음 · 빠짐", ck);
+const ck2 = F.parseCheck("[[대조]] 있음: a · b · c | 빠짐: 없음");
+check(ck2 && ck2.have.length === 3 && ck2.missing.length === 0 && F.parseCheck("대조 없음") === null, "K2 「빠짐: 없음」 은 빈 목록", ck2);
 
 // 세션 기록(ndjson) — AI 답만, 글 블록만
 const nd = [JSON.stringify({ type: "user", message: { content: "[[기획카드]] 가짜" } }), "", "깨진 줄", JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "앞" }, { type: "tool_use", name: "x" }, { type: "text", text: "뒤" }] } }), JSON.stringify({ type: "assistant", message: { content: "문자열 답" } }), JSON.stringify({ type: "system", subtype: "turn_duration" })].join("\n");

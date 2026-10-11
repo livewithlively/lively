@@ -3,7 +3,7 @@
 //  AI 와의 약속(지식 app-build-quickstart 에도 같은 꼴이 적혀 있다):
 //   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「이름: …」
 //   · 걸음      [[걸음 n/4]]                   1 기획 읽음 · 2 화면 짬 · 3 자료 표 · 4 저장
-//   · 점검      [[점검]] 있음: a · b | 빠짐: 없음
+//   · 점검      [[대조]] 있음: a · b | 빠짐: 없음
 //  시험: scripts/app-studio-flow.test.mjs
 
 export type StudioPlace = 'side' | 'full' | 'both';
@@ -64,9 +64,9 @@ export function parseStep(text: string): number {
   return n;
 }
 
-/** [[점검]] 있음: a · b | 빠짐: 없음 */
+/** [[대조]] 있음: a · b | 빠짐: 없음 */
 export function parseCheck(text: string): { have: string[]; missing: string[] } | null {
-  const re = /\[\[점검\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line = '';
+  const re = /\[\[대조\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line = '';
   while ((m = re.exec(String(text || '')))) line = m[1];
   if (!line) return null;
   const part = (label: RegExp): string => { const mm = label.exec(line); return mm ? mm[1].trim() : ''; };
@@ -120,7 +120,7 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
   return `${round}번째 고침이야. 아래를 반영해 새 판으로 저장해 줘(app_pull ${appId} 로 지금 판을 받아 고치고 app_save · note 는 바뀐 점 한 줄). ${PLACE[place].say} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }
 export function checkBrief(card: StudioCard, appId: string): string {
-  return `기획 카드와 지금 판(app_pull ${appId})을 대조해서 이 한 줄로만 답해 줘:\n[[점검]] 있음: (들어간 「할 수 있는 것」을 · 로) | 빠짐: (안 들어간 것 · 없으면 없음)\n${cardText(card)}`;
+  return `기획 카드와 지금 판(app_pull ${appId})을 대조해서 이 한 줄로만 답해 줘:\n[[대조]] 있음: (들어간 「할 수 있는 것」을 · 로) | 빠짐: (안 들어간 것 · 없으면 없음)\n${cardText(card)}`;
 }
 export function notifyBrief(name: string, line: string, slack: string): string {
   return `이 앱을 팀에 알려 줘. 지식에 제목 「앱 소개 · ${name}」 으로 아래 글을 저장하고(knowledge_save · 분류는 「세션 작업환경」)`
