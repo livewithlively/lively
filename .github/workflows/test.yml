@@ -152,6 +152,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/conv-index.pg-test.mjs
+      # ④-d1c 프로젝트 자료 파일의 색인(#4629 — 앱 화면의 «전체 자료» 목록). 목으로는 못 보는 것: 약속이 전부 SQL 조건이다 —
+      #    «그 확장자만» · «지워진 프로젝트 · 내려간 자료는 없다» · «container_ref 가 이상한 줄 하나가 목록 전체를 죽이지 않는다» ·
+      #    «찾는 말의 % · _ 는 글자» · «그 세션이 만든 것». 실제 행을 넣고 돌려받은 줄로 판정한다.
+      - name: 프로젝트 자료 파일 색인 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/project-file-index.pg-test.mjs
       # ④-d1b 세션 이력 앱(#4553)의 두 저장 경로 — 맞은 말 단위 검색(searchConvMessages) · 작업 일지(sessionJournal).
       #    목으로는 못 보는 것: 약속이 전부 SQL 조건이다 — «볼 수 있는 세션의 말만(주인 + 초대 · 가려진 프로젝트 · 휴지통 ·
       #    워크스페이스)» · «앞뒤 말은 대화 순서(at_offset, idx)의 바로 옆 말» · «기간 경계» · «가려진 프로젝트·잠긴 지식의
