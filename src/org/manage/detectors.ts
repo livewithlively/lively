@@ -159,6 +159,43 @@ export interface ContradictionCandidate {
   a: string; a_title: string | null; b: string; b_title: string | null; similarity: number;
 }
 
+// 후보 = 스코프 지식 k 마다 HNSW 최근접 이웃 CONTRADICTION_NEIGHBORS 개 중 임계 이상인 쌍.
+//  ⚠ 전쌍 자기조인(JOIN ... ON 거리 <= 임계)으로 되돌리지 마라 — 거리 술어는 인덱스를 못 타 n² 스캔이 되고,
+//   임베딩 5,250건(2026-10-11)에서 statement timeout 으로 관리기가 통째로 실패했다.
+//  LATERAL 안의 ORDER BY 는 `o.embedding_vector <=> k.embedding_vector` 순서여야 한다 — 플래너는
+//   «인덱스 열 <=> 식» 꼴만 HNSW 정렬 스캔으로 인정하고 좌우를 바꿔 주지 않는다.
+//  한계(근사): 임계 이상 유사 쌍이 k 의 이웃 N개 밖에 있으면 빠진다(닮은 문서가 N개 넘게 몰린 군집).
+//   o.name > k.name 을 바깥에서 거르므로 쌍 (A,B) 는 A 의 이웃 목록에서만 살아남는다 — B 의 목록에 A 가 있어도
+//   B 가 스코프 밖이거나 이름이 커서 그 쪽 행은 버려진다. 또 HNSW 는 근사라 이웃 순위 자체가 정확하지 않을 수 있다.
+//   o 쪽 술어(lifecycle·폴더)는 인덱스가 뽑은 뒤 걸러지므로 비활성·폴더가 이웃 자리를 차지하면 N 보다 적게 남는다.
+//  N=40 근거: pgvector 의 hnsw.ef_search 기본값이 40 이고, 세션 설정 없이 인덱스 스캔은 그보다 많이 돌려주지 않는다
+//   (iterative scan 기본 꺼짐). 더 키우려면 ef_search 를 같이 올려야 의미가 있다.
+export const CONTRADICTION_NEIGHBORS = 40;
+
+/** 후보 SQL 조립(순수) — 술어 보존을 테스트가 문자열로 못박는다. conds 는 scopeConds(…,"k") 결과. */
+export function contradictionCandidateSql(conds: string[], distP: string, limP: string): string {
+  return `
+    SELECT k.name AS a, k.title AS a_title, o.name AS b, o.title AS b_title,
+           (1 - o.dist) AS similarity
+      FROM knowledge k
+     CROSS JOIN LATERAL (
+       SELECT o.name, o.title, (o.embedding_vector <=> k.embedding_vector) AS dist
+         FROM knowledge o
+        WHERE o.lifecycle='active' AND o.embedding_vector IS NOT NULL
+          AND COALESCE(o.is_folder,false) = false
+          AND o.name <> k.name
+        ORDER BY o.embedding_vector <=> k.embedding_vector
+        LIMIT ${CONTRADICTION_NEIGHBORS}
+     ) o
+     WHERE ${conds.join(" AND ")}
+       AND k.embedding_vector IS NOT NULL
+       AND COALESCE(k.is_folder,false) = false
+       AND o.name > k.name
+       AND o.dist <= ${distP}
+     ORDER BY similarity DESC
+     LIMIT ${limP}`;
+}
+
 export async function findContradictionCandidates(m: ManagerRow, limit: number): Promise<ContradictionCandidate[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params, "k");
@@ -168,19 +205,7 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
   params.push(limit);
   const limP = `$${params.length}`;
 
-  const rows = await q(itemsPool, `
-    SELECT k.name AS a, k.title AS a_title, o.name AS b, o.title AS b_title,
-           (1 - (k.embedding_vector <=> o.embedding_vector)) AS similarity
-      FROM knowledge k
-      JOIN knowledge o
-        ON o.lifecycle='active' AND o.embedding_vector IS NOT NULL
-       AND o.name > k.name
-       AND (k.embedding_vector <=> o.embedding_vector) <= ${distP}
-     WHERE ${conds.join(" AND ")}
-       AND k.embedding_vector IS NOT NULL
-       AND COALESCE(k.is_folder,false) = false AND COALESCE(o.is_folder,false) = false
-     ORDER BY similarity DESC
-     LIMIT ${limP}`, params);
+  const rows = await q(itemsPool, contradictionCandidateSql(conds, distP, limP), params);
 
   return rows.map((r) => ({
     a: String(r.a), a_title: (r.a_title ?? null) as string | null,

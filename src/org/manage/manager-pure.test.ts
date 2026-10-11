@@ -10,7 +10,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsLlm, MANAGER_KIND_LABEL, type ManagerKind } from "../store/managers.js";
-import { applyAction } from "./run-manager.js";
+import { applyAction, statusForManagerResults, type ManagerRunResult } from "./run-manager.js";
+import { contradictionCandidateSql, CONTRADICTION_NEIGHBORS } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 
 let pass = 0;
@@ -140,6 +141,69 @@ await t("배치 지시문이 지식 축과 «과거 서술 제외» 를 함께 �
   //  드리프트로 읽으면 발견이 전부 잡음이 된다(관리기 note 가 켜기 전 조건으로 적어 둔 바로 그 항목).
   assert.match(body, /과거를 서술하는 문장은 괴리가 아니다/,
     "«종전엔 이랬다» 관례를 안 알려 주면 오탐이 큐를 덮는다");
+});
+
+// ══ 모순 후보 SQL — HNSW 이웃 탐색 모양 + 술어 보존 ══
+//  전쌍 자기조인으로 되돌아가면 인덱스를 못 타 운영 데이터(임베딩 5천여 건)에서 statement timeout 이 난다.
+//  술어가 하나라도 빠지면 폴더·비활성·스코프 밖 지식이 LLM 배치에 섞여 조용히 비용과 오탐이 는다.
+const CSQL = contradictionCandidateSql(["k.lifecycle='active'", "SCOPE_SENTINEL"], "$7", "$8");
+const flat = (s: string): string => s.replace(/\s+/g, " ");
+const lateralOpen = CSQL.indexOf("CROSS JOIN LATERAL (");
+const lateralClose = CSQL.indexOf(") o\n");
+const INNER = flat(CSQL.slice(lateralOpen, lateralClose));
+const OUTER = flat(CSQL.slice(0, lateralOpen) + CSQL.slice(lateralClose));
+
+await t("모순 후보는 행마다 LATERAL 최근접 이웃(인덱스 열 <=> 바깥 벡터 ORDER BY … LIMIT)으로 뽑는다", () => {
+  assert.ok(lateralOpen > 0 && lateralClose > lateralOpen, "LATERAL 서브쿼리가 없다");
+  assert.match(INNER, /FROM knowledge o .*ORDER BY o\.embedding_vector <=> k\.embedding_vector LIMIT (\d+)/,
+    "HNSW 가 타는 «인덱스 열 <=> 식» 정렬 + LIMIT 이 아니다");
+  assert.equal(Number(/LIMIT (\d+)/.exec(INNER)?.[1]), CONTRADICTION_NEIGHBORS);
+  assert.doesNotMatch(flat(CSQL), /JOIN knowledge o ON/, "전쌍 자기조인이 돌아왔다");
+  assert.doesNotMatch(INNER, /<=\s*\$/, "거리 임계를 이웃 탐색 안에 넣으면 HNSW 가 아니라 필터 스캔이 된다");
+});
+
+await t("모순 후보 SQL 이 기존 술어를 전부 보존한다", () => {
+  // o 쪽 — 이웃 탐색 안에서 거른다
+  for (const p of ["o.lifecycle='active'", "o.embedding_vector IS NOT NULL", "COALESCE(o.is_folder,false) = false"]) {
+    assert.ok(INNER.includes(p), `이웃 탐색에 o 술어 누락: ${p}`);
+  }
+  // k 쪽 스코프 + 쌍 술어 — 바깥에서 거른다
+  for (const p of ["k.lifecycle='active' AND SCOPE_SENTINEL", "k.embedding_vector IS NOT NULL",
+    "COALESCE(k.is_folder,false) = false", "o.name > k.name", "o.dist <= $7"]) {
+    assert.ok(OUTER.includes(p), `바깥 술어 누락: ${p}`);
+  }
+  assert.match(OUTER, /ORDER BY similarity DESC LIMIT \$8\s*$/, "기존 정렬·LIMIT 이 아니다");
+  assert.match(OUTER, /\(1 - o\.dist\) AS similarity/, "유사도 = 1 - 코사인 거리");
+  const det = readSrc("src/org/manage/detectors.ts");
+  const fn = det.slice(det.indexOf("export async function findContradictionCandidates"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.match(body, /scopeConds\(m, params, "k"\)/, "관리기 스코프를 안 쓴다");
+  assert.match(body, /contradictionCandidateSql\(conds, distP, limP\)/, "조립 함수를 안 거친다 — 위 단언이 실제 SQL 을 안 본다");
+});
+
+// ══ 관리기 결과 → 크론 status ══
+//  runManager 는 실패를 throw 하지 않고 결과의 error 로 돌려준다. 액션이 그걸 ok 로 덮으면 모순 후보 SQL 이
+//  timeout 으로 죽어도 크론 last_status 에 ok 가 찍힌다(2026-10-11 실제로 그랬다).
+await t("관리기 결과 → 크론 status 표", () => {
+  const E = { error: "canceling statement due to statement timeout" };
+  const rows: [Pick<ManagerRunResult, "error">[], string, string][] = [
+    [[{}], "ok", "성공 하나"],
+    [[{}, {}], "ok", "전부 성공"],
+    [[E], "error", "하나뿐인 관리기가 실패"],
+    [[E, E], "error", "전부 실패"],
+    [[E, {}], "warn", "일부 실패"],
+    [[{}, E, {}], "warn", "가운데 하나 실패"],
+    [[{ error: "" }], "ok", "빈 error 문자열은 실패가 아니다"],
+  ];
+  for (const [input, want, why] of rows) assert.equal(statusForManagerResults(input), want, why);
+  // skipped(볼 것 없음)는 성공이다 — 실패로 세면 후보 0건인 주마다 브레이커가 돈다
+  assert.equal(statusForManagerResults([{ skipped: "닮은 지식 쌍 없음" } as Pick<ManagerRunResult, "error">, E]), "warn");
+});
+
+await t("크론 액션이 관리기 결과로 status 를 정한다", () => {
+  const act = readSrc("src/scheduler/actions/manage.ts");
+  assert.match(act, /status: statusForManagerResults\(out\), summary: \{ managers: out \}/,
+    "관리기 실패가 크론 상태에 안 드러난다");
 });
 
 console.log(`\n${pass} passed`);

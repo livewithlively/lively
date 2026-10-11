@@ -25,6 +25,22 @@ export interface ManagerRunResult {
 }
 
 /**
+ * 관리기 결과 묶음 → 크론 잡 status(순수).
+ *  · 전부 실패(error 만 있고 성공 0) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
+ *  · 일부만 실패 → `warn` — 잡은 돌았고 산출물에 실패가 섞였다는 뜻(카나리 액션과 같은 관례). 브레이커는 이걸
+ *    성공으로 보고 카운터를 0 으로 돌린다. 한 관리기만 계속 깨지는 것은 크론 감시(ops/cron-watch.ts)가
+ *    요약의 레인 error 로 따로 잡는다(delegatedWork 의 entryErrors).
+ *  · 그 외 → `ok`. skipped(볼 것 없음)는 실패가 아니다.
+ *  주 1회 잡이면 브레이커는 임계(engine.ts DEFAULT_MAX_FAIL_STREAK 또는 잡의 max_fail_streak) 회수만큼의 **주** 동안
+ *   연속 전멸해야 잡을 끈다 — 그 전에 사람에게 닿는 신호는 크론 감시 알림이다.
+ */
+export function statusForManagerResults(results: readonly Pick<ManagerRunResult, "error">[]): "ok" | "warn" | "error" {
+  const failed = results.filter((r) => typeof r.error === "string" && r.error.length > 0).length;
+  if (!failed) return "ok";
+  return failed === results.length ? "error" : "warn";
+}
+
+/**
  * 위탁 접수 결과에서 태스크 id(없으면 undefined) — 중첩 skip 이면 **도는 중인 이전 태스크**의 id 다.
  *  반환값에 싣는 이유: 크론 잡 요약(org_cron.last_summary)이 곧 이 반환값이고, 크론 감시(ops/cron-watch.ts)는 그 id 로
  *  위탁의 실제 결과를 읽어 잡 상태를 판정한다. 안 실으면 접수 시점의 ok 만 보여 실패·복구 알림이 회차마다 번갈아 나간다.
