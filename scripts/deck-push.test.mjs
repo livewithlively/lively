@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { assembleHtml } from "../apps/builtin/deck-edit/bin/deck-pull.mjs";
-import { splitHtml, assetize, fontAlias, checkExternal, chunk, plan, usedFamilies, CHUNK } from "../apps/builtin/deck-edit/bin/deck-push.mjs";
+import { splitHtml, assetize, fontAlias, checkExternal, chunk, plan, usedFamilies, fpOf, CHUNK } from "../apps/builtin/deck-edit/bin/deck-push.mjs";
 
 let pass = 0;
 const ok = (c, name, detail = "") => { assert.ok(c, detail ? `${name}\n${detail}` : name); pass++; console.log(`ok  ${name}`); };
@@ -139,6 +139,19 @@ const deck = `<!doctype html><html><head><meta charset="utf-8"><title>덱</title
   ok(assembleHtml([...p.rows, alt], assets, { [first.slide_id]: "없는 안" }) === deck, "L5 고른 안이 그 판에 없으면 기본 안");
   const some = new Map(); 
   ok(/__ASSET:[0-9a-f]{64}__/.test(assembleHtml(p.rows, some)), "L6 자원 조각이 없으면 자리표를 남긴다(조용히 빈 글꼴로 바꾸지 않는다 — 스크립트가 세어 경고한다)");
+}
+
+// ── F 판의 지문(fpOf) — 파일이 어느 판과 같은지는 경로 · 시각이 아니라 이 값으로 가린다(#4629 «판을 제대로 인식 못 한다») ──
+{
+  const p = plan(deck), fp = fpOf(p.rows);
+  ok(/^[0-9a-f]{64}$/.test(fp) && fp === fpOf(plan(deck).rows), "F1 같은 HTML 은 같은 지문");
+  //  표에서 읽은 행은 순서가 뒤집혀 오고(최신 id 순) seq 가 글자로 오며 시스템 칸이 붙는다 — 그래도 같은 값이어야 앱이 옛 판의 지문을 다시 셀 수 있다.
+  const stored = p.rows.slice().reverse().map((r, i) => ({ id: String(900 - i), tenant_id: "t", created_at: "x", doc: "d", ver: "3", session: "s", ...r, seq: String(r.seq) }));
+  ok(fpOf(stored) === fp, "F2 표에서 읽은 행(순서 뒤집힘 · seq 글자 · 시스템 칸)으로 세어도 같은 지문");
+  const alt = { ...p.rows.find((r) => r.kind === "slide"), variant: "2안", body: "<section>다른 안</section>" };
+  ok(fpOf([...p.rows, alt]) === fp, "F3 안(variant) 행은 지문에 들지 않는다(안을 얹어도 같은 판)");
+  ok(fpOf(plan(deck.replace("둘째 장", "둘째 쟝")).rows) !== fp, "F4 글자 하나가 바뀌면 다른 지문");
+  ok(fpOf(plan(deck.replace("A".repeat(50_000), "B".repeat(50_000))).rows) !== fp, "F5 자원(글꼴 · 그림)만 바뀌어도 다른 지문(머리의 자리표가 바뀐다)");
 }
 
 // ── 빨간불 확인: 나누기가 어긋나면 S1d 가 잡는다(변이 1발) ──
