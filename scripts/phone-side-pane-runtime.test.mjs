@@ -106,7 +106,7 @@ async function PAGE_MAIN() {
     const o = $(".v2-appui"); const r = o ? o.getBoundingClientRect() : null;
     const out = { open: okOpen, box: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
       esc: o && o.querySelector(".v2-appui-esc") ? getComputedStyle(o.querySelector(".v2-appui-esc")).display : "absent", badge: o ? getComputedStyle(o.querySelector(".v2-appui-badge")).display : null,
-      btn: o ? o.querySelector(".v2-appui-h button").innerText.replace(/\s+/g, " ").trim() : null };
+      btn: o ? o.querySelector(".v2-appui-h .v2-appui-esc").parentElement.innerText.replace(/\s+/g, " ").trim() : null };   // 닫기 단추((Esc) 를 품은 단추) — 그 앞에 «화면 가득» 단추가 선다(#4592)
     PN.closeAppUi();
     return out;
   };
