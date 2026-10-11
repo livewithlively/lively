@@ -1183,10 +1183,14 @@ const P_PARENT_SEL = "pp.name AS parent_name, (p.archived_at IS NOT NULL OR pr.a
 // 내부 보드 앵커(__board__)는 검색 대상 아님(listProjects 도 제외) — task/subtask 는 folder NULL 이라 통과.
 //  ★ 휴지통도 검색 대상이 아니다(#4530) — 목록(listProjects)은 trashed_at 을 빼는데 검색 경로들만 안 빼서, 버린 프로젝트가
 //   표시 없이 결과에 섞였다. 게다가 버리는 순간 updated_at 이 갱신돼 글자 검색(최신순)에서 오히려 1위로 올랐다(실측 #4304).
-//   태스크·서브태스크는 표식이 뿌리에만 있으므로 부모·조부모 중 버려진 것이 있으면 함께 뺀다(NOT EXISTS — 맞은 행에만 도는 PK 조회).
+//   태스크·서브태스크는 표식이 뿌리에만 있으므로 부모·조부모 중 버려진 것이 있으면 함께 뺀다.
+//  ⚠ 부모(tp)를 번호로 바로 찾고 조부모(tg)는 그 부모에서 잇는다 — 상관 조건은 `tp.id = p.parent_id` 하나뿐이다.
+//   처음 꼴(`tr.trashed_at IS NOT NULL AND (tr.id = p.parent_id OR tr.id = (SELECT … ))`)은 실행 계획에 따라 «맞은 줄 × 휴지통 줄 전부»
+//   를 대조하며 줄마다 부모를 다시 찾았다(PG17 실측: «세션» 1,511줄 × 134 = 202,297번). 매니지드에서 «세션» 7.3초 · «배포» 3.5초
+//   (배포 뒤 실측, 같은 WHERE 의 개수 세기는 0.8초 · 0.5초 — 계획이 달랐다). 이 꼴은 어떤 계획이든 줄마다 번호 조회 한두 번이다.
 const P_SEARCH_BASE = `p.folder IS DISTINCT FROM '__board_anchor__' AND p.trashed_at IS NULL
-  AND NOT EXISTS (SELECT 1 FROM project tr WHERE tr.trashed_at IS NOT NULL
-                   AND (tr.id = p.parent_id OR tr.id = (SELECT tp.parent_id FROM project tp WHERE tp.id = p.parent_id)))`;
+  AND NOT EXISTS (SELECT 1 FROM project tp LEFT JOIN project tg ON tg.id = tp.parent_id
+                   WHERE tp.id = p.parent_id AND (tp.trashed_at IS NOT NULL OR tg.trashed_at IS NOT NULL))`;
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
 function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
@@ -1194,8 +1198,16 @@ function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unkno
   //   본문에 우연히 그 숫자가 없으면 자기 번호로 자기를 못 찾았다. 정확일치만 OR 로 얹는다(부분일치는 idEquals 주석 참고).
   //   공개범위·앵커 제외 같은 **기본 필터는 그대로 AND** 다 — 번호를 안다고 안 보이는 것이 보이면 안 된다.
   const idPred = raw ? idEquals("p.id", raw, params) : null;
+  //  **번호의 식구도 함께**(#4530 검색 품질, 원준 2026-10-05 «프로젝트나 세션의 4자리 … 검색하면 어떤게 나올지는 너가 알아서 좀 잘») —
+  //   화면 검색(plain)에서 번호를 치면 그 번호 한 줄만 나왔다. 프로젝트 번호면 그 태스크·서브태스크가, 태스크 번호면 바로 위 프로젝트가
+  //   같이 나와야 «그 번호의 일» 이 한눈에 보인다. 번호의 주인은 exactFirst 가 맨 위에 세운다(searchProjects). 에이전트 grep 은 종전 그대로.
+  const idParam = idPred ? `$${params.length}` : "";
+  const family = idPred && opts.plain
+    ? ` OR p.parent_id = ${idParam} OR p.id = (SELECT x.parent_id FROM project x WHERE x.id = ${idParam})`
+      + ` OR p.parent_id IN (SELECT y.id FROM project y WHERE y.parent_id = ${idParam})`
+    : "";
   const match = grepWhere(["p.name", "p.description"], plan, params);
-  const wh: string[] = [idPred ? `((${match}) OR ${idPred})` : match, P_SEARCH_BASE];
+  const wh: string[] = [idPred ? `((${match}) OR ${idPred}${family})` : match, P_SEARCH_BASE];
   if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
   if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
   if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
@@ -1245,7 +1257,17 @@ export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {})
     const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     const tf = titleFirst("p.name", p, params);              // 이름에 모든 낱말이 든 것이 본문만 스친 최근 것에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool, `SELECT ${sel}, ${P_PARENT_SEL} FROM project p ${P_PARENT_JOIN} WHERE ${where} ORDER BY ${first}${tf}p.updated_at DESC LIMIT $${params.length}`, params);
+    //  ★ 두 번에 나눈다 — ① 맞은 것 중 n 개의 번호만 고르고 ② 그 n 줄에만 상위(부모 이름·뿌리 보관)를 붙인다(#4530 배포 뒤 실측).
+    //   한 문장일 때 매니지드에서 흔한 낱말이 느렸다 — «세션»(맞는 줄 1,502) 6.5~7.3초 · «배포»(679) 3.2~3.5초. 같은 WHERE 로
+    //   개수만 세면 0.8초 · 0.5초, 종류(level)·상태로 좁히면 0.1~0.6초 — JS 경로는 같고 SQL 만 달랐다. 로컬(PG17, 같은 데이터)에선
+    //   재현되지 않아 실행 계획을 특정하지 못했다 — 그래서 어느 계획이 골라지든 JOIN 이 n 줄에만 돌게 문장을 나눈다.
+    const ids = (await q(itemsPool,
+      `SELECT p.id FROM project p WHERE ${where} ORDER BY ${first}${tf}p.updated_at DESC, p.id DESC LIMIT $${params.length}`, params))
+      .map((r) => Number(r.id));
+    if (!ids.length) return [];
+    const byId = new Map((await q(itemsPool,
+      `SELECT ${sel}, ${P_PARENT_SEL} FROM project p ${P_PARENT_JOIN} WHERE p.id = ANY($1::int[])`, [ids])).map((r) => [Number(r.id), r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is Record<string, unknown> => !!r);
   }, { plain: opts.plain });
   return rows.map((r) => {
     const base = toProjectRow(r);

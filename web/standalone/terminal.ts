@@ -48,8 +48,234 @@ export function urlMatches(text: string): { start: number; end: number; url: str
   return out;
 }
 export function urlAtColumn(lineText: string, col: number): string | null {
-  const m = urlMatches(lineText).find((x) => col >= x.start && col < x.end);
+  const m = linkMatches(lineText).find((x) => col >= x.start && col < x.end);
   return m ? m.url : null;
+}
+
+// (순수 — 테스트 대상) 글 속 **파일 경로** — AI 가 파일을 만들고 «여기 저장했어요» 하고 찍어 준 자리(#4562 원준님
+//  «정리해서 경로 알려주잖아. 그거 클릭하면 링크 클릭하듯이 … 곁칸에서 자료랑 그거 보는 뷰어 바로»).
+//  두 형태만 링크로 본다 — 눌렀을 때 **열 수 있는 것만** 밑줄을 긋는다(열리지 않는 밑줄은 고장으로 읽힌다):
+//   ① 프로젝트 자료 — `project/<번호>/` 마디가 있는 경로. 절대(`/work/shared/project/12/a.md` · 노드 `/Users/…/project/12/a.md`)
+//      · `~/…` · 공유 루트 기준(`project/12/a.md`). 셸이 같은 프로젝트면 곁칸 뷰어로 연다.
+//   ② 세션 폴더 기준 상대 경로 — `docs/a.md` · `./a.md`. 셸이 세션 파일 API 로 연다(그 API 의 기준이 세션 폴더다).
+//  경로는 **확장자로 끝나야** 한다(`.md` · `.hwp` …, 글자가 하나는 섞인 것) — 한국어 조사가 붙어도(`a.md에`) 확장자에서 끊고,
+//   `1/2.5` 같은 숫자는 안 잡는다.
+//  ★ 이름에 **빈칸**이 든 경로(원준님 10-05 «파일 경로 클릭해도 안되는데?» — `데모데이 발표덱/원준수정/…_B.html` 이 빈칸 뒤
+//   `발표덱/…` 만 링크가 되어 «파일을 읽지 못했어요»). 이 조직의 폴더 이름엔 빈칸이 흔하다. 두 갈래로 잇는다:
+//   · 절대·프로젝트 경로(`/…` · `~/…` · `./…` · `project/<번호>/…`)는 시작이 분명하다 — 빈칸 **한 칸**을 건너 뒤 낱말을 붙여 가다가
+//     처음으로 확장자에서 끝나는 자리에서 멈춘다(최대 5낱말). 밑줄도 경로 전체에 그어진다.
+//   · 상대 경로는 시작을 글만으로 모른다(`파일은 docs/a.md` 와 `데모데이 발표덱/a.md` 가 같은 꼴) — 앞 낱말을 붙인 후보(alts,
+//     긴 것 먼저)를 함께 실어 보내고, **셸이 실제로 있는 것**을 고른다(셸 pathExists).
+//  절대 경로인데 `project/<번호>/` 가 없으면 잡지 않는다 — 게이트웨이가 그 자리를 열 길이 없다.
+//  url 은 **화면에 찍힌 경로 그대로**다(넓은 글자 자리표만 뺀다) — [링크 복사]가 그 경로를 복사하고, 여는 쪽이 판정한다.
+export function pathMatches(text: string): { start: number; end: number; url: string; alts?: string[] }[] {
+  //  덩어리는 **끊기지 않는 글자 줄 전체**다. 괄호는 경로 글자로 치지 않는다 — Claude Code 의 도구 머리 `Write(/…/a.md)` 에서
+  //   `Write(` 를 경로에 붙이지 않게(그래서 `a(1).md` 같은 이름은 괄호에서 끊긴다).
+  const re = /[^\s"'`<>|()[\]{}\u3000\u0001]+/g;
+  const toks: { s: string; at: number }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) toks.push({ s: m[0], at: m.index });
+  //  경로 속 빈칸은 **한 칸**이다 — 두 칸·탭·줄바꿈을 건너 잇지 않는다.
+  const oneSpace = (a: { s: string; at: number }, b: { at: number }): boolean => text[a.at + a.s.length] === ' ' && b.at === a.at + a.s.length + 1;
+  //  확장자 뒤에서 끊는다 — 가장 뒤의 «.확장자»(글자로 시작) 중 뒤에 영숫자가 안 붙는 것(`a.md)` · `a.md에` · `a.md**` → `a.md`).
+  //   그 자리까지가 열 수 있는 경로면 화면 글(넓은 글자 자리표 포함)을 돌려준다.
+  const fileAt = (chunk: string): string | null => {
+    const cut = /^(.*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_])/.exec(chunk);
+    return cut && pathLinkTarget(cut[1].replace(/\u0000/g, '')) ? cut[1] : null;
+  };
+  const clean = (raw: string): string => raw.replace(/\u0000/g, '');
+  const out: { start: number; end: number; url: string; alts?: string[] }[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    let chunk = toks[i].s, at = toks[i].at;
+    //  URL 이 든 덩어리는 URL 의 몫이다 — `url=https://…/a.html` · `→https://…` 처럼 앞에 글자가 붙어도(리뷰 지적: 종전엔 경로가
+    //   먼저 시작해 URL 을 밀어냈다).
+    if (chunk.includes('://')) continue;
+    //  `src/a.ts:12:5` 의 줄·칸 꼬리는 먼저 뗀다 — 코드를 짚는 가장 흔한 꼴이고, 안 떼면 아래 `:` 가르기가 `5` 만 남긴다(리뷰 지적).
+    chunk = chunk.replace(/(?::\d+){1,2}:?$/, '');
+    //  `path=/…` · `저장:/…` · `--out=docs/a.md` — 마지막 `=`·`:` 뒤가 경로다.
+    const eq = Math.max(chunk.lastIndexOf('='), chunk.lastIndexOf(':'));
+    if (eq >= 0) { at += eq + 1; chunk = chunk.slice(eq + 1); }
+    //  꾸밈 글자(`**/…**` · `→/…` · `- `)를 앞에서 뗀다. 셸 변수(`$HOME/…`)는 열 자리를 모르니 버린다.
+    const lead = /^[^A-Za-z0-9_~./\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF]*/.exec(chunk)![0];
+    if (lead.includes('$')) continue;
+    at += lead.length; chunk = chunk.slice(lead.length);
+    const trimmed = at !== toks[i].at;
+    const one = fileAt(chunk);
+    if (one) {
+      const p = clean(one);
+      //  상대 경로면 앞 낱말을 붙인 후보 — 앞에서 아무것도 안 뗀 덩어리일 때만(`path=docs/a.md` 의 앞은 이름표다).
+      const alts: string[] = [];
+      if (!trimmed && pathLinkTarget(p)?.kind === 'session') {
+        let lead2 = '';
+        for (let k = i - 1; k >= 0 && k >= i - 3; k--) {
+          const w = toks[k].s;
+          if (!oneSpace(toks[k], toks[k + 1]) || w.includes('/') || /[:=]$/.test(w) || !/[A-Za-z0-9\u3131-\u318E\uAC00-\uD7A3]/.test(w)) break;   // 목록 표지(`-`·`•`·`├──`)는 이름이 아니다
+          lead2 = clean(w) + ' ' + lead2;
+          const cand = lead2 + p;
+          if (pathLinkTarget(cand)) alts.unshift(cand);
+        }
+      }
+      out.push(alts.length ? { start: at, end: at + one.length, url: p, alts } : { start: at, end: at + one.length, url: p });
+      continue;
+    }
+    //  시작이 분명한 경로만 빈칸 너머로 잇는다.
+    if (!/^(?:\/|~\/|\.\/|project\/\d+\/)/.test(chunk) || /[.,!?;:]$/.test(chunk)) continue;   // 문장부호로 끝난 경로는 거기서 끝났다
+    //  산문을 경로로 삼키지 않게(리뷰 지적: `/…/out then open a.md` 가 한 링크가 됐다) — 이은 끝 낱말에 `/` 가 있거나(빈칸 든
+    //   폴더: `데모데이 발표덱/원준수정/x.html`), 딱 두 낱말일 때(빈칸 하나 든 파일 이름: `사업 계획서.hwp`)만 잇는다. 문장부호로
+    //   끝난 낱말·새 경로의 시작(`project/<번호>/` · `./` · `~/` · `/`)에서 멈춘다.
+    let joined = chunk;
+    for (let j = i + 1; j < toks.length && j <= i + 5; j++) {
+      const w = toks[j].s;
+      if (!oneSpace(toks[j - 1], toks[j]) || w.includes('://') || /^(?:\/|~\/|\.\/|project\/\d+\/)/.test(w)) break;
+      joined += ' ' + w;
+      const hit = fileAt(joined);
+      if (hit) {
+        if (j === i + 1 || w.includes('/')) { out.push({ start: at, end: at + hit.length, url: clean(hit) }); i = j; }
+        break;
+      }
+      if (/[.,!?;:]$/.test(w)) break;
+    }
+  }
+  //  여는 쪽(openPathFromTerminal)이 후보를 찾을 수 있게 적어 둔다 — 클릭·우클릭·호버는 모두 이 함수를 지난 직후에 연다.
+  for (const m of out) if (m.alts) rememberPathAlts(m.url, m.alts); else pathAltsMemo.delete(m.url);   // 낡은 후보를 남기지 않는다
+  return out;
+}
+const pathAltsMemo = new Map<string, string[]>();
+function rememberPathAlts(p: string, alts: string[]): void {
+  if (pathAltsMemo.size > 64) pathAltsMemo.clear();
+  pathAltsMemo.set(p, alts);
+}
+
+// (순수 — 테스트 대상) 경로 → 어디서 열까. 프로젝트 자료면 그 번호와 프로젝트 폴더 기준 경로, 세션 폴더 기준이면 그 경로. 못 열면 null.
+//  ⚠ 상대 경로의 `src/project/12/x.ts` 는 프로젝트 12 가 아니다(레포 안의 폴더 이름) — 상대 경로는 **맨 앞**이 `project/<번호>/` 일 때만.
+export function pathLinkTarget(p: string): { kind: 'project'; id: number; rel: string } | { kind: 'session'; rel: string } | null {
+  const s = String(p || '').replace(/\\/g, '/');
+  if (!s || /^[a-z][a-z0-9+.-]*:/i.test(s)) return null;   // 스킴이 붙은 것(URL·윈도우 드라이브)은 경로 링크가 아니다
+  if (!/\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(s)) return null;  // 파일만 — 확장자(글자로 시작)로 끝나야 한다
+  const abs = s.startsWith('/') || s.startsWith('~/');
+  const m = abs ? /^.*?\/project\/(\d+)\/(.+)$/.exec(s) : /^(?:\.\/)?project\/(\d+)\/(.+)$/.exec(s);
+  const safe = (r: string): boolean => !!r && !r.split('/').some((x) => x === '' || x === '..' || x === '.');
+  if (m) {
+    const id = Number(m[1]);
+    return id > 0 && safe(m[2]) ? { kind: 'project', id, rel: m[2] } : null;
+  }
+  if (abs) return null;
+  const rel = s.replace(/^\.\//, '');
+  //  `./` 없는 상대 경로는 `/` 가 하나는 있어야 한다 — 글 속 `package.json` 같은 낱말마다 밑줄이 그어지지 않게.
+  if (!s.startsWith('./') && !rel.includes('/')) return null;
+  //  상대 경로는 열어 보기 전엔 있는지 모르는 짐작이다 — 확장자를 더 좁힌다(소문자 2자 이상): `yes/no.Then` · `e.g./i.e.` ·
+  //   `TCP/IP.Next` 를 링크로 읽지 않게. 프로젝트 경로는 `project/<번호>/` 가 이미 증거라 대문자 확장자(.HWP)도 받는다.
+  if (!/\.[a-z][a-z0-9]{1,9}$/.test(rel)) return null;
+  return safe(rel) ? { kind: 'session', rel } : null;
+}
+
+// 경로 링크인가 — URL 은 늘 스킴이 붙어 온다(urlMatches 가 https:// 를 붙인다). 스킴 없는 것은 pathMatches 가 낸 경로다.
+export function isPathLink(link: string): boolean {
+  return !!link && !/^[a-z][a-z0-9+.-]*:/i.test(link);
+}
+
+// (순수 — 테스트 대상) 한 글 속 링크 전부 — URL 과 경로를 함께, 겹치면 **먼저 시작한 것**(같으면 URL)이 이긴다.
+//  `example.com/a.md` 는 URL 과 상대 경로 둘 다로 읽히는데 종전대로 URL 이다. 경로 속 `report.final/a.md` 가 URL 로 잡히는 것은
+//  경로가 더 먼저 시작하므로 경로가 이긴다.
+export function linkMatches(text: string): { start: number; end: number; url: string }[] {
+  //  지식 이름은 **있다고 확인된 것만**(knowledgeKnown) — 셋 중 가장 뒤에 서므로 URL·경로 속 낱말은 거기에 진다.
+  const all = [...urlMatches(text), ...pathMatches(text), ...knowledgeMatches(text, (n) => knowledgeKnown.get(n) === true)];
+  all.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const out: { start: number; end: number; url: string }[] = [];
+  for (const m of all) if (!out.length || m.start >= out[out.length - 1].end) out.push(m);
+  return out;
+}
+
+// ── 지식 이름 링크(#4562 원준 10-05 «산출 지식 저것도 클릭하면 뜨게하자») ─────────────────────────────
+//  AI 가 «산출지식 `terminal-path-link-to-pane-viewer-4562`» 처럼 찍어 준 지식 이름을 누르면 곁칸 웹 칸에 그 문서(`#/k/<이름>`)를 띄운다.
+//  ★ 지식 이름(`a-b-c` 꼴 슬러그)은 글 속 평범한 낱말과 생김새가 같다(`diff-reviewer` · 브랜치 이름 · CSS 클래스) — 생김새만으로
+//   밑줄을 그으면 가짜 링크가 넘친다. 그래서 **서버에 있다고 확인된 이름에만** 긋는다: 호버(링크 제공자)가 후보를 물어보고
+//   (`GET /api/ui/knowledge/<이름>?limit=1` — 없거나 못 보는 지식은 404), 답을 기억해 두고, 클릭·우클릭은 그 기억만 본다.
+//  후보 꼴: 하이픈으로 이은 마디 셋 이상(소문자·숫자·한글), 8자 이상. 경로·URL 속(`/`·`.` 에 붙은 것)은 아니다.
+//   한글 조사가 붙은 이름(`…-4562에`)은 조사를 뗀 꼴도 함께 묻는다.
+const KN_CH = 'a-z0-9\\u0000\\u3131-\\u318E\\uAC00-\\uD7A3';   // \0 = 넓은 글자(한글)의 뒤 칸 자리표(칸 정렬 글)
+export function knowledgeCandidates(text: string): { start: number; names: { name: string; end: number }[] }[] {
+  //  첫 글자는 자리표(\0)가 아니다 — 이모지(넓은 글자) 바로 뒤의 이름이 그 뒤 칸부터 밑줄을 긋지 않게(리뷰 지적).
+  const re = new RegExp(`(?<![A-Za-z0-9_/.\\-\\u3131-\\u318E\\uAC00-\\uD7A3])[a-z0-9\\u3131-\\u318E\\uAC00-\\uD7A3][${KN_CH}]*(?:-[${KN_CH}]+){2,}(?![A-Za-z0-9_/\\-]|\\.[A-Za-z0-9])`, 'g');
+  const out: { start: number; names: { name: string; end: number }[] }[] = [];
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const raw = m[0], full = raw.replace(/\u0000/g, '');
+    if (full.length < 8 || full.length > 64) continue;
+    //  묻기 전에 거른다(묻는 값이 서버 왕복이다) — UUID · 날짜·번호 줄(`2026-10-05-00`)처럼 글자 든 마디가 둘 못 되는 것은 이름이 아니다.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(full)) continue;
+    if (full.split('-').filter((x) => /[a-z\u3131-\u318E\uAC00-\uD7A3]/.test(x)).length < 2) continue;
+    const names = [{ name: full, end: m.index + raw.length }];
+    const tail = /[a-z0-9]((?:[\u3131-\u318E\uAC00-\uD7A3]\u0000?){1,3})$/.exec(raw);   // `…-4562에` → `…-4562`
+    if (tail) {
+      const rawBare = raw.slice(0, raw.length - tail[1].length), bare = rawBare.replace(/\u0000/g, '');
+      if (bare.length >= 8) names.push({ name: bare, end: m.index + rawBare.length });
+    }
+    out.push({ start: m.index, names });
+  }
+  return out;
+}
+// (순수 — 테스트 대상) 확인된 지식 이름만 링크로. 조사를 뗀 꼴이 있는 것이면 밑줄도 그 꼴까지만.
+export function knowledgeMatches(text: string, known: (name: string) => boolean): { start: number; end: number; url: string }[] {
+  const out: { start: number; end: number; url: string }[] = [];
+  for (const c of knowledgeCandidates(text)) {
+    const n = c.names.find((x) => known(x.name));
+    if (n) out.push({ start: c.start, end: n.end, url: n.name });
+  }
+  return out;
+}
+//  이름 → 있나(true/false) · 묻는 중(Promise). 못 물었으면(망·5xx·시간 초과) 기억하지 않는다 — 다음 호버에 다시 묻는다.
+//  «없다» 는 60초만 믿는다 — AI 가 이름을 먼저 말하고 문서를 나중에 쓰는 판이 있다(그동안 호버한 이름이 영영 안 그어지면 안 된다).
+const knowledgeKnown = new Map<string, boolean | Promise<boolean>>();
+const knowledgeNoAt = new Map<string, number>();
+const KN_NO_TTL = 60_000, KN_ASK_MS = 1500;
+export function isKnowledgeLink(s: string): boolean { return knowledgeKnown.get(s) === true; }
+/** 이 이름을 (다시) 물어야 하나 — 모르거나, 묻는 중이거나(기다려야 하므로), «없다» 가 낡았거나. */
+function knowledgeNeedsAsk(n: string): boolean {
+  const v = knowledgeKnown.get(n);
+  if (v === undefined || v instanceof Promise) return true;
+  return v === false && Date.now() - (knowledgeNoAt.get(n) || 0) > KN_NO_TTL;
+}
+/** 후보 이름들을 물어 기억한다(이미 아는 것은 건너뛴다). **반드시 끝난다** — 묻기마다 1.5초 상한이 있다(리뷰 차단 지적: 멎은
+ *  요청 하나가 그 행의 밑줄 답(cb)을 영영 막으면, 같은 행의 URL·경로 밑줄까지 같이 죽는다 — xterm 은 앞선 제공자의 답을 기다린다). */
+export async function learnKnowledge(names: string[]): Promise<void> {
+  const ask = (n: string): Promise<boolean> => {
+    const had = knowledgeKnown.get(n);
+    if (had instanceof Promise) return had;
+    if (had !== undefined && !knowledgeNeedsAsk(n)) return Promise.resolve(had);
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const req = fetchAuth('/api/ui/knowledge/' + encodeURIComponent(n) + '?limit=1', { cache: 'no-store', signal: ctrl?.signal })
+      .then((r): boolean | null => (r.ok ? true : r.status === 404 ? false : null))
+      .catch((): null => null);
+    const late = new Promise<null>((res) => window.setTimeout(() => { try { ctrl?.abort(); } catch (_) { /* noop */ } res(null); }, KN_ASK_MS));
+    const p = Promise.race([req, late]).then((v) => {
+      if (v === null) { knowledgeKnown.delete(n); return false; }   // 답을 못 받았다 — 기억하지 않는다
+      knowledgeKnown.set(n, v);
+      if (!v) knowledgeNoAt.set(n, Date.now()); else knowledgeNoAt.delete(n);
+      return v;
+    });
+    knowledgeKnown.set(n, p);
+    return p;
+  };
+  if (knowledgeKnown.size > 500) { knowledgeKnown.clear(); knowledgeNoAt.clear(); }
+  await Promise.all(names.slice(0, 12).map((n) => ask(n).catch(() => false)));
+}
+// 지식 문서를 곁칸 웹 칸에 — 미리보기·아티팩트와 같은 길(셸 onMsg 'lively:open-in-pane'). 우리 화면이라 칸이 `?embed=1` 을 붙여 싣는다.
+//  ⚠ 같은 게이트웨이의 /ui/ 화면 링크는 브라우저에선 새 탭이 규칙이다(linkOpenTarget, 원준님 09-19). 지식 이름은 **일부러** 그 규칙을
+//   타지 않는다 — 요청이 «곁칸에서 뜨게»(원준님 10-05)이고, 이름은 주소가 아니라 터미널이 지식으로 확인한 낱말이다.
+function openKnowledgeFromTerminal(name: string): void {
+  const ui = location.origin + location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+  postToPane(ui + '#/k/' + encodeURIComponent(name));
+}
+// 셸에 «곁칸 웹 칸에 실어라» — 셸이 400ms 안에 받았다고 답하지 않으면(구 셸·단독 페이지) 새 탭으로 떨어진다.
+function postToPane(url: string): void {
+  if (window.parent === window) { window.open(url, '_blank', 'noopener'); return; }
+  let taken = false;
+  const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
+  window.addEventListener('message', ack);
+  window.parent.postMessage({ type: 'lively:open-in-pane', url }, location.origin);
+  window.setTimeout(() => {
+    window.removeEventListener('message', ack);
+    if (!taken) window.open(url, '_blank', 'noopener');
+  }, 400);
 }
 
 // (순수 — 테스트 대상) 터미널 속 링크를 어디서 열지 — 'shell' 부모 셸 안 이동 · 'pane' 곁칸 웹 칸 · 'tab' 새 창(브라우저=새 탭).
@@ -95,18 +321,37 @@ function linkTargetHere(uri: string): 'shell' | 'pane' | 'tab' {
 //    ① 앞 행이 폭을 채웠다(끝 칸 −1 까지 — 오른쪽 여백 1칸 허용)  ② 앞 행 끝 덩어리와 뒤 행 첫 덩어리(들여쓰기 ≤ 8칸 뒤)가 둘 다
 //    URL 글자(ASCII)  ③ 그 둘을 이은 길이가 뒤 행의 글 폭(cols − 들여쓰기)보다 길다 — hard:true 는 **폭보다 긴 토큰만** 자른다.
 //    ③ 이 없으면 보통 줄바꿈이 우연히 폭을 꽉 채운 행(실측 흔하다)의 끝 URL 에 다음 행 첫 낱말이 붙는다.
+//  · space — (#4562) 이름에 **빈칸**이 든 경로(`…/데모데이 발표덱/…`)는 Claude Code 가 그 빈칸에서 낱말 단위로 끊는다. 다음 행이
+//    `발표덱/…` 으로 시작해 엉뚱한 경로가 링크가 됐다(원준님 10-05 «파일 경로 클릭해도 안되는데?»). 빈칸 한 칸으로 잇는 조건:
+//    ① 앞 행이 **시작이 분명한 경로의 앞부분**(`/…` · `~/…` · `project/<번호>/…`)으로 끝났다(확장자로 끝났어도 무해하다 —
+//       뒤에 붙은 낱말은 pathMatches 가 확장자에서 끊거나 따로 읽는다)
+//    ② 다음 행 첫 낱말(들여쓰기 ≤ 8칸 뒤)이 앞 행에 안 들어갔을 만큼 길다 — 낱말 줄바꿈이 일어난 자리다.
 export function joinRows(rows: string[], soft: boolean[], row: number, cols: number): { text: string; segs: { row: number; at: number; cut: number; len: number }[] } {
   const URLCH = /^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/;
   const trimEnd = (s: string): string => (s || '').replace(/ +$/, '');
-  const joinKind = (i: number): 'soft' | 'hard' | null => {   // i 행이 i-1 행에 이어지나
+  const joinKind = (i: number): 'soft' | 'hard' | 'space' | null => {   // i 행이 i-1 행에 이어지나
     if (i <= 0 || i >= rows.length) return null;
     if (soft[i]) return 'soft';
+    return urlJoin(i) || pathJoin(i);
+  };
+  const urlJoin = (i: number): 'hard' | null => {
     const a = trimEnd(rows[i - 1]);
     if (a.length < cols - 1) return null;                                   // ①
     const tail = /[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+$/.exec(a)?.[0] || '';
     const m = /^( {0,8})(\S+)/.exec(rows[i] || '');
     if (!tail || !m || !URLCH.test(m[2])) return null;                       // ②
     return tail.length + m[2].length > cols - m[1].length ? 'hard' : null;   // ③
+  };
+  //  (#4562) 경로 앞부분으로 끝난 행 — 한 낱말이 폭보다 길어 잘렸으면(한글이 든 긴 경로) 빈칸 없이, 아니면 빈칸에서 끊긴 것.
+  const pathJoin = (i: number): 'hard' | 'space' | null => {
+    const a = trimEnd(rows[i - 1]);
+    const head = /(?:^|[\s:=(*→])((?:\/|~\/|project\/\d+\/)\S*)$/.exec(a)?.[1] || '';
+    const nw = /^( {0,8})(\S+)/.exec(rows[i] || '');
+    const tok = /\S*$/.exec(a)![0];
+    //  URL 이 든 낱말(`https://…` 의 `:` 뒤도 `/` 로 시작한다)은 URL 이음(urlJoin)의 몫이다.
+    if (!head || tok.includes('://') || !nw) return null;   // ① (`/clear` 같은 명령 뒤에 이어 붙어도 pathMatches 가 경로로 안 읽는다)
+    if (a.length >= cols - 1 && tok.length + nw[2].length > cols - nw[1].length) return 'hard';         // 낱말 하나가 폭보다 길다
+    return a.length + 1 + nw[2].length > cols - 1 ? 'space' : null;                                     // ② 낱말 줄바꿈
   };
   let top = row;
   for (let g = 0; g < 12 && joinKind(top); g++) top--;
@@ -117,7 +362,8 @@ export function joinRows(rows: string[], soft: boolean[], row: number, cols: num
     if (!kind) break;
     let r = trimEnd(rows[i]);
     let cut = 0;
-    if (kind === 'hard') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
+    if (kind === 'hard' || kind === 'space') { cut = r.length - r.replace(/^ +/, '').length; r = r.slice(cut); }
+    if (kind === 'space') text += ' ';   // 끊긴 자리의 빈칸 — 어느 행의 칸도 아니다(segs 밖)
     // soft 로 이어지는 행은 폭까지 채운다(빈 칸도 그 줄의 글이다) — hard 조각은 사이에 빈칸 없이 붙는다.
     const piece = joinKind(i + 1) === 'soft' ? r.padEnd(cols - cut) : r;
     segs.push({ row: i, at: text.length, cut, len: piece.length });
@@ -132,7 +378,7 @@ export function urlAtCell(rows: string[], soft: boolean[], row: number, col: num
   const seg = segs.find((g) => g.row === row);
   if (!seg || col < seg.cut) return null;
   const at = seg.at + col - seg.cut;
-  const m = urlMatches(text.padEnd(at + 1)).find((x) => at >= x.start && at < x.end);
+  const m = linkMatches(text.padEnd(at + 1)).find((x) => at >= x.start && at < x.end);
   return m ? m.url : null;
 }
 
@@ -146,7 +392,7 @@ export function urlSpansAt(rows: string[], soft: boolean[], row: number, cols: n
     return g ? { row: g.row, col: idx - g.at + g.cut } : null;
   };
   const out: { url: string; startRow: number; startCol: number; endRow: number; endCol: number }[] = [];
-  for (const m of urlMatches(text)) {
+  for (const m of linkMatches(text)) {
     const s = back(m.start), e = back(m.end - 1);
     if (!s || !e) continue;
     if (row < s.row || row > e.row) continue;            // 이 행에 안 걸치면 이 행의 링크가 아니다
@@ -164,7 +410,17 @@ export function spanToRange(span: { startRow: number; startCol: number; endRow: 
   };
 }
 
-function openLinkFromTerminal(uri: string): void {
+export function openLinkFromTerminal(uri: string): void {
+  //  파일 경로(#4562) — 곁칸의 자료·뷰어로. OSC 8 의 file:// 도 같은 길(하네스가 경로를 하이퍼링크로 심어 오는 판).
+  //  지식 이름(#4562) — 있다고 확인된 것만 여기 온다(linkMatches).
+  if (isKnowledgeLink(uri)) { openKnowledgeFromTerminal(uri); return; }
+  //  스킴 없는 OSC 8 주소(`#anchor` · `/foo`)는 경로가 아니면 종전 길로 간다.
+  if (isPathLink(uri) && pathLinkTarget(uri)) { openPathFromTerminal(uri); return; }
+  if (/^file:\/\//i.test(uri)) {
+    let p = '';
+    try { p = decodeURIComponent(new URL(uri).pathname); } catch (_) { /* 깨진 주소 */ }
+    if (p && pathLinkTarget(p)) { openPathFromTerminal(p); return; }
+  }
   try {
     const u = new URL(uri, location.href);
     const where = linkTargetHere(uri);
@@ -175,19 +431,53 @@ function openLinkFromTerminal(uri: string): void {
     // 곁칸 — 셸이 이 알림을 받아 웹 칸을 켜고 주소를 싣는다.
     //  ⚠ 부모가 안 듣는 판(구 셸·단독 페이지)에서는 아무 일도 안 일어나면 안 되므로, 셸이 받았다고
     //   답하지 않으면 잠시 뒤 새 탭으로 떨어진다.
-    if (where === 'pane') {
-      let taken = false;
-      const ack = (e: MessageEvent): void => { if (e.data && e.data.type === 'lively:open-in-pane:ok') taken = true; };
-      window.addEventListener('message', ack);
-      window.parent.postMessage({ type: 'lively:open-in-pane', url: u.href }, location.origin);
-      window.setTimeout(() => {
-        window.removeEventListener('message', ack);
-        if (!taken) window.open(uri, '_blank', 'noopener');
-      }, 400);
-      return;
-    }
+    if (where === 'pane') { postToPane(u.href); return; }
   } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
   window.open(uri, '_blank', 'noopener');
+}
+// 경로 링크 열기(#4562) — 셸이 곁칸에 [자료] 탭을 세우고 그 파일을 뷰어 탭으로 편다(panes.ts onMsg 'lively:open-file-in-pane').
+//  ⚠ 열 수 있나는 **셸이 정한다**(그 곁칸이 어느 프로젝트의 것인지는 셸만 안다) — 셸이 못 연다고 답하거나(handled:false)
+//   답이 없으면(구 셸·단독 페이지) 여기서 떨어진다: 프로젝트 자료는 공유 폴더 뷰어(#/f)로, 세션 파일은 안내만.
+// (순수 — 테스트 대상) 트래킹 pane(Claude Code TUI)에서 이 클릭으로 열 링크. 세션 폴더 기준 상대 경로(#4562)는 짐작이라
+//  **맨클릭**은 TUI 에 돌려준다(Claude Code 의 선택지 줄에 `src/a.ts` 같은 이름이 흔하다) — ⌘/Ctrl+클릭이면 연다.
+//  URL 과 `project/<번호>/` 가 든 경로는 증거가 있으니 맨클릭으로도 연다.
+export function bareClickLink(link: string | null, modifier: boolean): string | null {
+  if (!link || modifier) return link;
+  return isPathLink(link) && pathLinkTarget(link)?.kind === 'session' ? null : link;
+}
+//  같은 경로를 연달아 누르면(더블클릭) 답을 기다리는 동안 두 번째는 버린다 — 둘 다 폴백하면 새 탭이 둘 뜬다(리뷰 지적).
+const pathOpening = new Set<string>();
+export function openPathFromTerminal(p: string): void {
+  const t = pathLinkTarget(p);
+  if (!t || pathOpening.has(p)) return;
+  const fallback = (): void => {
+    if (t.kind === 'project') {
+      const ui = location.origin + location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+      openLinkFromTerminal(ui + '#/f?root=shared&path=' + encodeURIComponent('project/' + t.id + '/' + t.rel));
+    } else toast('세션 화면에서 열 수 있어요 — 이 경로는 세션 폴더 기준이에요.');
+  };
+  if (window.parent === window) { fallback(); return; }
+  pathOpening.add(p);
+  //  답이 오면 그 답을 따르고, 400ms 안에 안 오면 폴백한다. 폴백한 뒤 늦게 온 답은 **버린다**(이미 열었다) — 그래서 듣기는
+  //   잠시 더 남겨 둔다(늦은 답이 다음 클릭의 답으로 읽히지 않게).
+  let settled = false;
+  const settle = (handled: boolean): void => {
+    if (settled) return;
+    settled = true;
+    pathOpening.delete(p);
+    if (!handled) fallback();
+  };
+  const ack = (e: MessageEvent): void => {
+    if (e.origin !== location.origin || e.source !== window.parent) return;   // 부모(셸)의 답만
+    if (!e.data || e.data.type !== 'lively:open-file-in-pane:ok' || e.data.path !== p) return;
+    settle(!!e.data.handled);
+  };
+  window.addEventListener('message', ack);
+  //  후보(빈칸 앞 낱말을 붙인 상대 경로 — pathMatches 머리말)는 긴 것 먼저, 화면에 그어진 경로는 맨 끝. 셸이 있는 것을 고른다.
+  const cands = [...(pathAltsMemo.get(p) || []), p].map((x) => ({ path: x, target: pathLinkTarget(x) })).filter((c) => c.target);
+  try { window.parent.postMessage({ type: 'lively:open-file-in-pane', path: p, target: t, sid: SESSION_ID, cands }, location.origin); } catch (_) { /* 부모 없음 — 아래 폴백 */ }
+  window.setTimeout(() => settle(false), 400);
+  window.setTimeout(() => window.removeEventListener('message', ack), 5000);
 }
 declare const CanvasAddon: any;
 // 빌드 스탬프 — 빌드 시 esbuild define 이 주입한다(scripts/build-standalone.mjs). 종전엔 손으로 고치는 상수였다.
@@ -377,6 +667,10 @@ export function resolveTheme(key) {
 //   이름 있는 테마의 흰 글씨를 밝은 앱 위 반투명 카드에 올리면 읽히지 않는다. 문서의 color-scheme 도 앱을 따른다.
 //   터미널 테마(data-theme)를 따르면 밝기가 앱과 다를 때 브라우저가 액자에 불투명한 바탕을 칠해 비침이 죽는다.
 let glassOn = false;
+//  비치는 카드에서 사람이 카드를 고르지 않았다(곁칸을 골랐다) — 셸이 glass 메시지의 idle 로 알린다. 이때는 연결(첫 연결 · 재연결)
+//   때 스스로 초점을 가져가지 않는다. 가져가면 셸이 «사람이 카드를 골랐다» 로 읽어 카드가 불투명해지고, 새로고침할 때마다
+//   비치던 카드가 불투명으로 바뀌었다(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»). idle 이 없는 옛 셸이면 종전대로.
+let glassIdle = false;
 /** 그 색의 알파만 0 으로. 읽지 못하는 꼴이면 투명한 흰색. */
 export function clearOf(c: string): string {
   const s = String(c || '').trim();
@@ -405,6 +699,8 @@ function setGlass(on: boolean): void {
   applyGlassScheme();
   if (!term) return;                                               // 아직 안 떴다 — 만들 때 glassOn 을 읽는다
   try { term.options.allowTransparency = on; term.options.theme = themeFor(prefs().theme); } catch (_) { /* 렌더러 준비 전 */ }
+  //  카드가 되거나 풀리면 크기가 크게 바뀐다. 카드에서 풀릴 때는 glassOn 이 이미 꺼져 applyFit 이 부르지 않으므로 여기서 건다.
+  settleRedrawSoon();
 }
 /** 앱 테마가 바뀌었다 — 비치는 중이면 이름 있는 테마를 고른 사람도 앱 색을 따라간다(syncAppTheme 은 auto 만 본다). */
 function syncGlassTheme(): void {
@@ -969,7 +1265,28 @@ export function applyFit() {
     lastCols = term.cols; lastRows = term.rows;
     dlog('fit', term.cols + 'x' + term.rows);
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
+    if (glassOn) settleRedrawSoon();
   }
+}
+// ── 카드에서 크기가 바뀐 뒤 화면을 다시 맞춘다(원준 2026-10-07 «창으로 띄워서 대화할 때 커서가 랙걸려서 새로고침·화면복구를 해야 한다») ──
+//  카드가 되면 터미널이 한 번에 크게 줄고(세션 열 ~45줄 → 카드 ~11줄), 카드 크기를 끌거나 접었다 펴도 크기가 바뀐다.
+//  크기가 바뀌는 순간 xterm 은 제 버퍼를 새 폭으로 다시 접고, 서버 쪽 tmux 는 제 방식으로 다시 접는다. 둘이 어긋나면
+//  그 뒤의 커서 이동이 엉뚱한 줄을 지워 입력줄 · 커서가 제자리에 안 선다. [화면 복구]가 그것을 푸는 것은 tmux 의 화면을
+//  다시 받아 오기 때문이다 — 사람이 누르기 전에 같은 일을 한다. 크기가 멈춘 뒤 한 번만(끄는 동안 여러 번 바뀌어도).
+//  카드에서만 한다(glassOn = 카드인 동안 부모가 켠다). 세션 열의 터미널은 크기가 드물게 바뀌어 종전대로 둔다.
+//  ⚠ 치는 중에는 미룬다(격리 리뷰): 재캡처는 화면을 지우고 다시 받는다 — 한글 조합 중이거나 방금(1초 안) 친 글자가 있으면
+//   그 사이에 끼어 커서를 오히려 흔든다. 손이 멈출 때까지 다시 건다.
+const SETTLE_REDRAW_MS = 800;
+const SETTLE_QUIET_MS = 1000;
+let settleRedrawTimer: ReturnType<typeof setTimeout> | null = null;
+let lastInputAt = 0;   // 사람이 마지막으로 친 때(emitInput) — 재맞춤을 미룰지 가른다
+function settleRedrawSoon(): void {
+  if (settleRedrawTimer) clearTimeout(settleRedrawTimer);
+  settleRedrawTimer = setTimeout(() => {
+    settleRedrawTimer = null;
+    if (imeComposing || Date.now() - lastInputAt < SETTLE_QUIET_MS) { settleRedrawSoon(); return; }
+    if (ws && ws.readyState === 1) forceRedraw();
+  }, SETTLE_REDRAW_MS);
 }
 // 창 드래그 중 리사이즈 폭주 방지 — 디바운스.
 function doResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyFit, 130); }
@@ -2020,6 +2337,7 @@ function drawAppSel(): void {
 }
 /** 모든 PTY 입력의 한 문 — op 가 도는 동안은 줄 세운다(⌫ 보다 먼저 친 글자가 나가면 엉뚱한 자리에 들어간다). */
 function emitInput(d: string): void {
+  lastInputAt = Date.now();
   if (opBusy) { opQueue.push(d); return; }
   rawInput(d);
 }
@@ -3717,6 +4035,43 @@ function postPaneCmd(cmd: string): void {
   if (paneCmdPost) paneCmdPost();
 }
 
+// ── 새 판 자가 적용 (#4562 원준 10-05 «이전에 열었던 세션에서도 적용되게») ─────────────────────────────
+//  셸에는 낡은 화면 자가복구(web/gen-watch.ts)가 있지만 **이 터미널 프레임엔 없었다** — 배포 전에 연 세션은 페이지를 통째로
+//  새로고침하기 전까지 옛 터미널 코드(링크 판정 등)로 돌았다. 그래서 이 프레임이 스스로 묻고 다시 싣는다.
+//  ★ 언제: ① **재연결 직후** — 매니지드 롤은 터미널 웹소켓을 한 번 끊는다(무중단 롤의 유일한 경계). 그 끊김이 곧 «새 판이
+//   나왔다» 는 자리라, 사람이 아무것도 안 해도 롤 몇 초 뒤 열린 세션이 전부 새 코드로 넘어간다. ② 창이 다시 보일 때.
+//  ★ 셸의 «알림만(notify)» 정책(#2126)을 따르지 않는 이유: 그 정책이 지키는 것은 **화면에 쓰던 글**인데, 터미널에서 친 글은
+//   서버(tmux 팬)에 있고 글칸 초안은 sessionStorage 에 남는다(MDRAFT_KEY) — 다시 실어도 잃는 글이 없다. 잃는 것은 로컬
+//   스크롤백 중 백필(BACKFILL_LINES) 너머뿐이다. 선택 중(복사하려는 중)이면 미룬다.
+//  ⚠ 같은 세대로 두 번 싣지 않는다(sessionStorage) — 스탬프가 어긋난 배포에서 재연결마다 다시 싣는 고리를 막는다.
+//  자기 세대 = 이 문서가 실은 terminal.js 의 `?v=`(HTML 스탬퍼가 `/ui/__gen` 과 같은 값을 붙인다 — 2026-10-05 실측 일치).
+function myAssetGen(): string {
+  try {
+    const sc = document.querySelector('script[src*="terminal.js?v="]') as HTMLScriptElement | null;
+    return sc ? (new URL(sc.src, location.href).searchParams.get('v') || '') : '';
+  } catch (_) { return ''; }
+}
+const GEN_RELOADED_KEY = 'lively:term-gen-reloaded';
+let genAskAt = 0;
+export async function reloadIfNewBuild(why: string): Promise<void> {
+  const mine = myAssetGen();
+  if (!mine || Date.now() - genAskAt < 5000) return;
+  genAskAt = Date.now();
+  try {
+    const r = await fetch(location.pathname.replace(/[^/]*$/, '') + '__gen', { cache: 'no-store', credentials: 'same-origin' });
+    const j = await r.json().catch(() => null);   // 오류 응답엔 세대가 없다 — 그대로 둔다
+    const v = j && typeof j.v === 'string' ? j.v : '';
+    if (!v || v === mine) return;
+    let tried = '';
+    try { tried = sessionStorage.getItem(GEN_RELOADED_KEY) || ''; } catch (_) { /* noop */ }
+    if (tried === v) return;                                   // 이미 이 세대로 한 번 실었다 — 고리 금지
+    if (term && term.hasSelection && term.hasSelection()) return;   // 복사하려고 고르는 중
+    try { sessionStorage.setItem(GEN_RELOADED_KEY, v); } catch (_) { /* noop */ }
+    dlog('gen', why + ' — 새 판 ' + mine + ' → ' + v + ' · 다시 싣는다');
+    location.reload();
+  } catch (_) { /* 못 물었다 — 다음 기회에 */ }
+}
+
 function setupEmbedBridge() {
   window.addEventListener('message', (ev: MessageEvent) => {
     if (ev.origin !== location.origin || ev.source !== window.parent) return;
@@ -3731,7 +4086,7 @@ function setupEmbedBridge() {
     else if (m.cmd === 'prompts') openMyPrompts();
     else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
     //  세션이 사이드바 위 카드가 됐다/풀렸다(v2/side-card.ts) — 바탕을 비우거나 되돌린다.
-    else if (m.cmd === 'glass') setGlass(m.on === true);
+    else if (m.cmd === 'glass') { setGlass(m.on === true); glassIdle = m.on === true && m.idle === true; }
     //  #4135 곁칸 «프로젝트» 앱의 [본문 넣기] — 입력칸에 **붙여넣기만** 한다(Enter 없음). 여러 줄은 pasteText 가 bracketed paste 로 감싼다.
     else if (m.cmd === 'paste' && typeof m.text === 'string') { pasteText(m.text); try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
   });
@@ -3817,7 +4172,7 @@ export async function boot() {
   } catch (_) { /* BroadcastChannel 미지원 — 포커스 복귀/새로고침 시 서버값으로 보정 */ }
   // 폴백 보정 — 이 탭이 다시 보일 때 서버의 현재 이름을 다시 읽는다(BroadcastChannel 미지원·타 브라우저·기기 케이스).
   //  한 창의 탭 전환은 window 'focus' 가 안 뜨고 'visibilitychange' 만 뜨므로 둘 다 건다.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionMeta(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadSessionMeta(); void reloadIfNewBuild('다시 보임'); } });
   window.addEventListener('focus', () => { loadSessionMeta(); });
 
   // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
@@ -3849,17 +4204,27 @@ export async function boot() {
   try {
     term.registerLinkProvider({
       provideLinks: (y: number, cb: (links: any[] | undefined) => void): void => {
-        let links: any[] | undefined;
-        try {
+        const draw = (): void => {
+          let links: any[] | undefined;
+          try {
+            const w = readRows(y - 1);
+            const spans = w ? urlSpansAt(w.rows, w.soft, w.at, term.cols) : [];
+            links = spans.map((sp) => ({
+              range: spanToRange(sp, w!.from), text: sp.url,
+              activate: (e: MouseEvent) => { e.preventDefault(); openLinkFromTerminal(sp.url); },
+            }));
+            if (!links.length) links = undefined;
+          } catch (_) { links = undefined; }   // 한 번의 실패가 호버를 영영 죽이지 않게
+          cb(links);
+        };
+        //  지식 이름 후보(#4562)는 서버에 물어본 뒤에 긋는다 — 처음 한 번만 기다리고, 그 뒤엔 기억으로 곧바로.
+        let ask: string[] = [];
+        try {   // 잇는 행(긴 이름이 두 행으로 잘린 것)까지 본다 — 밑줄 판정(urlSpansAt)과 같은 글
           const w = readRows(y - 1);
-          const spans = w ? urlSpansAt(w.rows, w.soft, w.at, term.cols) : [];
-          links = spans.map((sp) => ({
-            range: spanToRange(sp, w!.from), text: sp.url,
-            activate: (e: MouseEvent) => { e.preventDefault(); openLinkFromTerminal(sp.url); },
-          }));
-          if (!links.length) links = undefined;
-        } catch (_) { links = undefined; }   // 한 번의 실패가 호버를 영영 죽이지 않게
-        cb(links);
+          ask = w ? knowledgeCandidates(joinRows(w.rows, w.soft, w.at, term.cols).text).flatMap((c) => c.names.map((x) => x.name)) : [];
+        } catch (_) { ask = []; }
+        if (!ask.some(knowledgeNeedsAsk)) { draw(); return; }
+        learnKnowledge(ask).catch(() => { /* 묻기가 깨져도 밑줄은 긋는다 */ }).finally(draw);
       },
     });
   } catch (_) { /* 구 xterm(제공자 API 없음) — 아래 애드온이 종전대로 한 행씩 긋는다 */ }
@@ -3899,6 +4264,7 @@ export async function boot() {
     if (ev.button !== 0) { pendingLink = null; return; }
     const wantsLink = (ev.metaKey || ev.ctrlKey) || mouseTracked();
     pendingLink = wantsLink ? linkAtEvent(ev) : null;
+    pendingLink = bareClickLink(pendingLink, ev.metaKey || ev.ctrlKey);   // #4562 세션 상대 경로는 ⌘/Ctrl 로만
     // modifier 클릭은 URL 밖이어도 삼킨다(pty 로 새면 TUI 가 press 를 받는다) — 맨클릭은 URL 위일 때만.
     if (pendingLink || (ev.metaKey || ev.ctrlKey)) { ev.stopPropagation(); ev.preventDefault(); }
   }, true);
@@ -4128,6 +4494,8 @@ export function ctxCopyPlan(sel: string, appSel: boolean, link: string): { copy:
 // 메뉴 힌트용 짧은 주소 — 스킴을 떼고 앞부분만(메뉴 폭 320px 안에서 이름을 밀어내지 않게).
 export function shortLink(url: string): string {
   const s = String(url || '').replace(/^https?:\/\//i, '');
+  //  경로는 **끝**이 이름이다(#4562) — 앞을 자르면 `/work/shared/project/…` 만 남아 무슨 파일인지 모른다.
+  if (isPathLink(String(url || ''))) return s.length > 26 ? '…' + s.slice(-25) : s;   // 스킴을 떼기 **전** 값으로 본다
   return s.length > 26 ? s.slice(0, 25) + '…' : s;
 }
 
@@ -4166,7 +4534,8 @@ function wireTermCtxMenu(host: HTMLElement): void {
     const url = plan.openUrl;
     //  'pane' 은 셸의 [웹] 탭으로 간다. 그 탭은 곁칸(자리바꿈으로 왼쪽에 설 수 있다) · 가운데 · 아래 칸 어디에도 있을 수 있고
     //   이 번들(셸 밖 iframe)은 그 자리를 모른다. 그래서 자리를 말하지 않고 탭 이름으로 적는다(#4233).
-    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭' }[url ? linkTargetHere(url) : 'tab'];
+    //  파일 경로(#4562)는 셸의 [뷰어] 탭으로 간다 — 웹 칸과 같은 이유로 자리 대신 탭 이름.
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'pane' : isPathLink(url) ? 'file' : linkTargetHere(url)];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
@@ -4540,6 +4909,7 @@ async function connectNow() {
     //   된다(실측 2026-09-09: 「연결 확인 중… (14회째)」 — ws open → 16ms 뒤 close 4403 의 반복).
     //   «열렸다» 는 입장 허가의 반증이 못 된다. 실제 반증은 **서버가 보낸 바이트**다 → onmessage 에서 되돌린다.
     //  나머지(attempts·gaveUp·reconnectDelay)는 아래 stableTimer 가 «버텼다» 를 확인한 뒤에 되돌린다.
+    if (didBackfill) void reloadIfNewBuild('재연결');   // 재연결 = 롤의 흔적일 수 있다(위 «새 판 자가 적용»)
     connecting = false; wasConnected = true;
     connProven = false;
     clearTimeout(stableTimer);
@@ -4552,7 +4922,7 @@ async function connectNow() {
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
-    term.focus();
+    if (!glassIdle) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle
     if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {

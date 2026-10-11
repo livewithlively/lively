@@ -20,7 +20,7 @@
 //   S1 적어 둔 카드 읽기: 없음 · 깨진 글자 · 일부만 있는 값 → 기본값으로 채운다
 //   W1 side-swap.ts: 상한을 창 폭(innerWidth)으로 재지 않는다. sideCap 을 쓴다
 //   W2 split.ts: 끄는 중 상한을 넘긴 거리를 onOver 로 알린다(0 이상)
-//   W3 panes.ts: 손잡이가 onOver 를 카드에 넘기고, 놓을 때 카드가 먼저 받는다(받으면 자리바꿈 판정을 건너뛴다)
+//   W3 panes.ts: 손잡이가 onOver 를 카드에 넘기고, 놓을 때 카드가 먼저 받는다(카드가 되면 자리는 settle 이 정하고, 덜 넘겼으면 물러난 뒤 판정한다)
 //   W4 panes.ts: 카드인지 아닌지를 이 세션의 화면 상태(View.card)로 적고 되살린다
 //   W5 side-card.ts: 세션 열을 옮겨 붙이지 않는다(append · prepend · insertBefore 로 colMain 을 옮기지 않는다)
 //   W6 CSS: 카드 규칙은 넓은 폭(min-width: 901px) 안에 있다. 카드 상태의 세션 열은 grid-column 을 auto 로 되돌린다
@@ -113,6 +113,25 @@ if (lib) {
   ok(mv.w === 420 && mv.h === 560 && mv.r === 324 && mv.b === 224, "K6a 옮기면 크기는 그대로", JSON.stringify(mv));
   ok(inside(moveCard(base, -5000, -5000, ...B)) && inside(moveCard(base, 5000, 5000, ...B)), "K6b 격자 밖으로 못 나간다");
 
+  // 최소화한 카드(머리줄 44px 만 남는다) — 세로 범위를 보이는 높이로 센다(원준 2026-10-07 «최소화 상태에서는 또 … 이동 범위에 제약»)
+  const [BW, BH] = B;
+  const up = moveCard(base, 0, -5000, ...B), upF = moveCard(base, 0, -5000, ...B, 44);
+  ok(up.b === BH - 560 - CARD_PAD && upF.b === BH - 44 - CARD_PAD && upF.h === 560, "F1 최소화한 카드는 머리줄이 창 맨 위(여백 8)까지 간다 — 편 카드는 편 높이만큼만 · 크기는 그대로", JSON.stringify([up, upF]));
+  ok(moveCard(base, 0, 5000, ...B, 44).b === CARD_PAD && moveCard(base, -5000, 0, ...B, 44).r === BW - 420 - CARD_PAD && moveCard(base, 5000, 0, ...B, 44).r === CARD_PAD, "F2 최소화해도 아래 · 좌우 끝은 그대로(여백 8)");
+  const back = clampCard(upF, ...B);
+  ok(inside(back) && back.b === BH - 560 - CARD_PAD, "F3 위에 올려 둔 카드를 펴면 창 안으로 내려온다", JSON.stringify(back));
+  ok(JSON.stringify(clampCard(base, ...B, undefined)) === JSON.stringify(clampCard(base, ...B)) && clampCard({ ...base, b: 9000 }, ...B, 0).b === BH - 560 - CARD_PAD && clampCard({ ...base, b: 9000 }, ...B, 9999).b === BH - 560 - CARD_PAD,
+    "F4 경계 — 높이를 안 주거나 0 이면 편 카드와 같고, 편 높이보다 큰 값은 편 높이로 센다");
+
+  const cardUi = read("web/v2/side-card.ts") || "";
+  //  2026-10-09: 그리기는 «모서리 + 거리» 에서 센다(rectFromAnchor) — 최소화한 높이를 그대로 넘긴다.
+  //  2026-10-09 (2): 최소화한 높이는 한 번 재어(fh = foldH()) 막대 피하기와 그리기에 같이 쓴다.
+  ok(/const fh = foldH\(\);/.test(cardUi) && /return rectFromAnchor\(s\.w, s\.h, a, vw\(\), vh\(\), fh\);/.test(cardUi) && /moveCard\(base, dx, dy, vw\(\), vh\(\), fh\)/.test(cardUi) && /moveCard\(base, d\[e\.key\]\[0\], d\[e\.key\]\[1\], vw\(\), vh\(\), fh\)/.test(cardUi),
+    "F5 side-card: 그리기 · 머리줄 끌기 · Shift+화살표가 모두 최소화한 높이로 센다");
+  //  2026-10-09: 펼 때는 따로 적지 않는다 — 접힘은 기억하지 않고, 그릴 때마다 모서리 + 거리에서 편 높이로 다시 세어 창 안에 넣는다.
+  const sf = cardUi.slice(cardUi.indexOf("function setFold("), cardUi.indexOf("let pillTimer"));
+  ok(/fold = v;/.test(sf) && /paint\(\);/.test(sf) && !/save\(\)/.test(sf), "F6 side-card: 펴면 편 높이로 다시 세어 그린다(접힘은 적지 않는다)", sf.slice(0, 200));
+
   const d = parseCard(null);
   ok(d.w === CARD_DEF.w && d.h === CARD_DEF.h && d.r === CARD_DEF.r && d.b === CARD_DEF.b && d.fold === false, "S1a 없으면 기본값", JSON.stringify(d));
   ok(JSON.stringify(parseCard("{깨진")) === JSON.stringify(d) && JSON.stringify(parseCard("[1,2]")) !== "", "S1b 깨진 글자면 기본값");
@@ -154,8 +173,8 @@ const split = code(read("web/v2/split.ts"));
 ok(/onOver\?\.\(\s*Math\.max\(\s*0\s*,/.test(split), "W2 split: 상한을 넘긴 거리를 onOver 로 알린다");
 const panes = code(read("web/v2/panes.ts"));
 ok(/onOver:\s*\(over\)\s*=>\s*\{\s*card\?\.onOver\(over\)/.test(panes), "W3a panes: onOver 를 카드에 넘긴다");
-ok(/onEnd:\s*\(px\)\s*=>\s*\{\s*if\s*\(card\?\.onRelease\(\)\)\s*return;\s*swap\?\.onEnd\(px\)/.test(panes), "W3b panes: 놓을 때 카드가 먼저 받는다");
-ok(/card\?:\s*boolean/.test(panes) && /card\?\.restore\(v\.card === true\)/.test(panes) && /saveView\(\{\s*card:\s*v\s*\}\)/.test(panes), "W4 panes: 카드 여부를 이 세션의 화면 상태로 적고 되살린다");
+ok(/if\s*\(card\?\.onRelease\(settle\)\)\s*return;\s*settle\(\);/.test(panes), "W3b panes: 놓을 때 카드가 먼저 받는다(덜 넘겼으면 물러난 뒤 자리바꿈 판정 — side-card-swap-window.test.mjs)");
+ok(/card\?:\s*boolean/.test(panes) && /card\?\.restore\(v\.card === true[,)]/.test(panes) && /saveView\(\{\s*card:\s*v\s*\}\)/.test(panes), "W4 panes: 카드 여부를 이 세션의 화면 상태로 적고 되살린다");
 const cardSrc = read("web/v2/side-card.ts");
 const cardCode = code(cardSrc);
 ok(!!cardSrc && !/\.(append|prepend|insertBefore|replaceChildren|appendChild)\([^)]*\bcolMain\b/.test(cardCode), "W5 side-card: 세션 열을 옮겨 붙이지 않는다");
@@ -164,7 +183,7 @@ const at = css.indexOf("@media (min-width: 901px)");
 const cmRule = css.indexOf(".pn-body.cm > .pn-col {");
 ok(at > 0 && cmRule > at, "W6a CSS: 카드 규칙이 넓은 폭 안에 있다");
 const rule = css.slice(cmRule, css.indexOf("}", cmRule));
-ok(/grid-column:\s*auto/.test(rule) && /grid-row:\s*auto/.test(rule) && /position:\s*absolute/.test(rule), "W6b CSS: 카드 상태의 세션 열은 칸 지정을 auto 로 되돌린다", rule.slice(0, 160));
+ok(/grid-column:\s*auto/.test(rule) && /grid-row:\s*auto/.test(rule) && /position:\s*fixed/.test(rule), "W6b CSS: 카드 상태의 세션 열은 칸 지정을 auto 로 되돌린다(창 기준 fixed)", rule.slice(0, 160));
 const texts = [...strings(cardSrc, "side-card.ts")];
 ok(texts.length > 5 && texts.every((t) => !t.includes("곁칸")), "W7 화면 글에 «곁칸» 이 없다", texts.filter((t) => t.includes("곁칸")).join(" | "));
 
@@ -175,7 +194,7 @@ for (const fn of ["cancel", "enter", "leave"]) {
   ok(/const g = \+\+gen/.test(b) && awaits >= 1 && checks >= 1 && /tween\([^;]*alive\)/.test(b), `W9 side-card ${fn}: 판을 잡고, 기다린 뒤 살아 있는지 본다`, `await ${awaits} · 확인 ${checks}`);
 }
 const halt = cardCode.slice(cardCode.indexOf("function halt("), cardCode.indexOf("function restore("));
-ok(/gen\+\+/.test(halt) && /stopDrag\?\.\(\)/.test(halt) && /function restore\(v: boolean\): void \{\s*halt\(\);/.test(cardCode) && /destroy: \(\) => \{\s*halt\(\);/.test(cardCode), "W9 side-card: restore · destroy 가 움직임과 끌기를 끝낸다");
+ok(/gen\+\+/.test(halt) && /stopDrag\?\.\(\)/.test(halt) && /function restore\(v: boolean[^)]*\): void \{\s*halt\(\);/.test(cardCode) && /destroy: \(\) => \{\s*halt\(\);/.test(cardCode), "W9 side-card: restore · destroy 가 움직임과 끌기를 끝낸다");
 ok(/const capNow = \(\): number \| null => \(bw\(\) > 0 \? sideCap\(bw\(\)\) : null\)/.test(cardCode) && !/setSideW\(sideCap\(/.test(cardCode), "W10 side-card: 격자 폭을 못 재면 사이드바 폭을 적지 않는다");
 
 const tail = swap.slice(swap.indexOf("const onResize"), swap.indexOf("return {", swap.indexOf("const onResize")));

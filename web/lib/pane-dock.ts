@@ -19,10 +19,12 @@ export interface DockPrefs {
   home: DockHome;
   /** 이음매를 따라 선 자리(0 = 위 · 1 = 아래, 독 가운데 기준). 곁칸 아래로 옮겨도 남겨 둔다 — 이음매로 돌아오면 그 자리로. */
   at: number;
+  /** 곁칸 아래에서 좌우로 선 자리(0 = 왼쪽 끝 · 0.5 = 가운데 · 1 = 오른쪽 끝, 독이 움직일 수 있는 구간의 비율). 이음매로 옮겨도 남겨 둔다. */
+  fx: number;
   /** 확대 — 마우스 밑 아이콘과 이웃이 커진다(macOS 의 «확대»). */
   mag: boolean;
 }
-export const DOCK_DEFAULTS: Readonly<DockPrefs> = { home: 'seam', at: 0.5, mag: true };
+export const DOCK_DEFAULTS: Readonly<DockPrefs> = { home: 'seam', at: 0.5, fx: 0.5, mag: true };
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -35,12 +37,14 @@ export function readDockPrefs(raw: unknown): DockPrefs {
   const home: DockHome = m.home === 'float' ? 'float' : m.home === 'seam' ? 'seam' : DOCK_DEFAULTS.home;
   const n = Number(m.at);
   const at = m.at === undefined || m.at === '' || !Number.isFinite(n) ? DOCK_DEFAULTS.at : round2(clamp01(n));
+  const f = Number(m.fx);
+  const fx = m.fx === undefined || m.fx === '' || !Number.isFinite(f) ? DOCK_DEFAULTS.fx : round2(clamp01(f));
   const mag = m.mag === '1' ? true : m.mag === '0' ? false : DOCK_DEFAULTS.mag;
-  return { home, at, mag };
+  return { home, at, fx, mag };
 }
 /** 설정 → 계정에 적을 문자열 맵(서버 map 저장소는 문자열→문자열, 값 64자 상한). */
 export function writeDockPrefs(p: DockPrefs): Record<string, string> {
-  return { home: p.home, at: round2(clamp01(p.at)).toFixed(2), mag: p.mag ? '1' : '0' };
+  return { home: p.home, at: round2(clamp01(p.at)).toFixed(2), fx: round2(clamp01(p.fx)).toFixed(2), mag: p.mag ? '1' : '0' };
 }
 /** 지금 실제로 서는 곳 — 이음매가 없으면(좁은 폭의 서랍 · 곁칸이 화면 전체인 카드 모드 · 접힘) 곁칸 아래. */
 export function effectiveHome(p: Pick<DockPrefs, 'home'>, hasSeam: boolean): DockHome { return hasSeam ? p.home : 'float'; }
@@ -167,6 +171,23 @@ export function placeDock(x: number, y: number, g: DockGeom, o: { near?: number;
   //  +1e-9: 0.56 − 0.5 는 부동소수점으로 0.0600…05 라 «±0.06 은 가운데»의 경계가 빠진다.
   if (Math.abs(at - 0.5) <= snap + 1e-9) at = 0.5;
   return { home: 'seam', at };
+}
+
+// ── 곁칸 아래에서 좌우 자리 ───────────────────────────────────────────────────
+//  원준(10-07): «곁칸 전체보기로 보고있을 때 아래 Dock 끌어당겨서 밑에 위치 옮기거나 수정할 수 있도록». 곁칸이 화면 전체(카드 모드)면
+//   이음매가 없어 독은 곁칸 아래뿐인데, 종전엔 늘 바닥 한가운데였다 — 끌어도 제자리로 돌아왔다. 이제 바닥을 따라 좌우 자리(fx)를 고른다.
+//   lo ~ hi = 알약 가운데가 설 수 있는 구간(곁칸 폭에서 바깥 여백 · 알약 반 폭 · 확대로 불어날 몫을 뺀 것 — 그리는 쪽이 잰다).
+//   곁칸이 좁아 알약이 폭을 거의 채우면 구간이 없다(hi − lo < room) — 그땐 가운데에 서고, 끌어도 자리를 적지 않는다(넓을 때 고른 자리를 지킨다).
+/** 곁칸 아래 독의 가운데 x — 구간이 없으면 구간(곁칸)의 가운데. */
+export function floatCenter(fx: number, lo: number, hi: number): number {
+  return hi > lo ? lo + clamp01(fx) * (hi - lo) : (lo + hi) / 2;
+}
+/** 끌던 독의 가운데가 x 에 놓였다 → 좌우 자리(fx). 가운데 근처(snap px 이내)는 정확히 가운데로 붙인다(이음매의 가운데 자석과 같다).
+ *  움직일 구간이 room(기본 24px)도 안 되면 undefined — 적지 않는다. */
+export function floatAt(x: number, lo: number, hi: number, o: { snap?: number; room?: number } = {}): number | undefined {
+  if (!(hi - lo >= (o.room ?? 24))) return undefined;
+  if (Math.abs(x - (lo + hi) / 2) <= (o.snap ?? 14)) return 0.5;
+  return round2(clamp01((x - lo) / (hi - lo)));
 }
 
 // ── 확대 ─────────────────────────────────────────────────────────────────────

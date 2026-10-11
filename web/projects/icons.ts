@@ -67,12 +67,13 @@ function pjvSideSearchIcon() {
   n.append(sv('circle', { cx: 11, cy: 11, r: 6.5 }), sv('path', { d: 'M20 20l-3.6-3.6' }));
   return n;
 }
-// 폴더(사이드바 항목) 아이콘 — 색을 채운 폴더. kind='all'(전체·파랑) / 'none'(미분류·점선 외곽) / 그 외=해당 폴더 색 채움.
+// 폴더(사이드바 항목) 아이콘.
+//  #4233(원준 2026-10-04 「폴더: 모두 둥근 선 폴더」): 새 화면과 같은 선 폴더(ICONS.folder)로 그린다. 정해 둔 폴더 색은
+//   채움이 아니라 **선 색**으로 남긴다. kind='none'(기타 · 미분류)은 「프로젝트 없음」과 같은 점선 원(ICONS.projNone)이다.
 function pjvBundleIcon(color, kind?) {
-  const FOLDER = 'M3 6.7C3 5.8 3.72 5.1 4.6 5.1h3.55c.46 0 .9.22 1.18.58l.86 1.1h8.2c.88 0 1.6.72 1.6 1.6v8.42c0 .88-.72 1.6-1.6 1.6H4.6C3.72 18.9 3 18.2 3 17.3V6.7z';
   const n = sv('svg', { class: 'pjv-bundle-ic' + (kind ? ' ' + kind : ''), viewBox: '0 0 24 24', width: 17, height: 17, 'aria-hidden': 'true' });
-  if (kind === 'none') n.append(sv('path', { d: FOLDER, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.5, 'stroke-dasharray': '3 2.4', 'stroke-linejoin': 'round' }));
-  else n.append(sv('path', { d: FOLDER, fill: color || 'var(--muted-2)' }));
+  if (kind === 'none') n.append(sv('path', { d: ICONS.projNone, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  else n.append(sv('path', { d: ICONS.folder, fill: 'none', stroke: color || 'var(--muted-2)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   return n;
 }
 // '보기' 버튼 아이콘 — 슬라이더 2줄(설정 느낌).
@@ -96,18 +97,8 @@ function pjvCheckCircle() {
 //  세 가지를 통일해야 '우글거림'이 사라진다 — 손으로 좌표를 찍으면 미세 비대칭이 작은 크기에서 그대로 보인다.
 //   ① 광학 상자: 모든 아이콘 내용이 24 그리드의 3~21 안을 꽉 채운다(어떤 건 크고 어떤 건 작아 보이던 문제).
 //   ② 획: 1.6 단일 두께 · round cap/join(예전엔 1.7/1.8/1.9 가 섞여 굵기가 튀었다).
-//   ③ 대칭이 중요한 도형(톱니·별)은 **각도·반지름으로 계산**해서 만든다 — 손으로 쓴 베지어는 좌우가 미세하게 어긋난다.
+//   ③ 대칭이 중요한 도형(톱니)은 **각도·반지름으로 계산**해서 만든다(별은 #4233 부터 선 아이콘 표의 star) — 손으로 쓴 베지어는 좌우가 미세하게 어긋난다.
 
-// 중심에서 반지름 목록대로 점을 찍어 만드는 폐곡선. spec[i] = i 번째 점의 반지름(각도는 균등 분할).
-//  rot 로 첫 점의 각도를 잡는다(기본 위쪽). 좌표는 소수 2자리로 굳혀 렌더마다 동일.
-function pjvRadialPath(spec: number[], rot: number, cx = 12, cy = 12) {
-  const n = spec.length;
-  const pts = spec.map((r, i) => {
-    const a = rot + (i * 2 * Math.PI) / n;
-    return (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
-  });
-  return 'M' + pts.join('L') + 'Z';
-}
 // 톱니 8개 기어 — 톱니마다 [윗면 시작·끝 / 골 시작·끝] 4점. 각 구간의 **각도 폭을 따로** 줘야
 //  톱니가 각지게(사다리꼴) 나온다. 균등분할이면 옆면이 완만해져 8각 별처럼 뾰족하게 읽힌다.
 function pjvGearPath(teeth: number, rOut: number, rIn: number, topDeg: number, valleyDeg: number) {
@@ -123,8 +114,6 @@ function pjvGearPath(teeth: number, rOut: number, rIn: number, topDeg: number, v
   return 'M' + out.join('L') + 'Z';
 }
 const PJV_GEAR_PATH = pjvGearPath(8, 9.2, 6.6, 19, 19);
-// 5각 별 — 바깥/안쪽 반지름 교대. 꼭짓점이 12시.
-const PJV_STAR_PATH = pjvRadialPath(Array.from({ length: 10 }, (_, i) => (i % 2 === 0 ? 8.8 : 3.9)), -Math.PI / 2);
 
 function pjvTbIcon(kind, cls?) {
   const n = sv('svg', { class: 'pjv-tb-ic' + (cls ? ' ' + cls : ''), viewBox: '0 0 24 24',
@@ -153,7 +142,8 @@ function pjvTbIcon(kind, cls?) {
   if (kind === 'search') { n.append(sv('circle', { cx: 10.6, cy: 10.6, r: 7 }), sv('path', { d: 'M21 21l-5.4-5.4' })); return n; }
   if (kind === 'gear') { n.append(sv('path', { d: PJV_GEAR_PATH }), sv('circle', { cx: 12, cy: 12, r: 3.2 })); return n; }
   if (kind === 'star' || kind === 'star-on') {
-    const p = sv('path', { d: PJV_STAR_PATH });
+    //  #4233(원준 2026-10-04 「즐겨찾기: 모두 선 별, 켠 상태는 안을 채움」): 새 화면과 같은 별(ICONS.star). 켜면 채운다.
+    const p = sv('path', { d: ICONS.star });
     if (kind === 'star-on') p.setAttribute('fill', 'currentColor');
     n.append(p);
     return n;

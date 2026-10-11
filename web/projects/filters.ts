@@ -13,7 +13,7 @@ import { api, el, toast } from '../core.js';
 import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvTabIcon, pjvTbIcon } from './icons.js';
 import { pjvCustomColsSection, pjvDefaultColsSection } from './columns.js';
-import { pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvKeepScopeOnCollapse, pjvPersistSideOpen, pjvProjClosedView, pjvSavedView, pjvScopeIsFolder, pjvSidebarSel } from './state.js';
+import { pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvKeepScopeOnCollapse, pjvOwnSideAllowed, pjvPersistSideOpen, pjvProjClosedView, pjvSavedView, pjvScopeIsFolder, pjvSidebarSel } from './state.js';
 import { pjvTlClearTasks } from './timeline.js';   // #1313 R33 — 타임라인 캐시는 timeline.ts 소유(적출 완료). 배럴 우회 = 역방향 엣지 아님
 import { pjvMeMode } from './filters-state.js';
 
@@ -152,7 +152,8 @@ function pjvBoardSettingsPopover(anchor, ctx) {
   // 열 정렬 — 값·헤더 가로 정렬(순수 CSS, 재렌더 없음).
   pop.append(el('div', { class: 'pjv-set-sec', text: '표' }));
   pop.append(pjvSwitchRow('값을 왼쪽 정렬', () => ctx.isAlignLeft(), (v) => ctx.setAlignLeft(v), () => { /* 즉시 CSS 반영 */ }));
-  pop.append(pjvSwitchRow('사이드바 표시', () => pjvBoardView.byArea, (v) => {
+  // 셸 액자 안에는 보드 자신의 사이드바가 없다(#3870 pjvOwnSideAllowed) — 켤 것이 없으니 스위치도 없다.
+  if (pjvOwnSideAllowed()) pop.append(pjvSwitchRow('사이드바 표시', () => pjvBoardView.byArea, (v) => {
     pjvBoardView.byArea = v;
     if (v) pjvBoardView.byFolder = false; else pjvKeepScopeOnCollapse();
     pjvPersistSideOpen();

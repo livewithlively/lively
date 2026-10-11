@@ -286,6 +286,30 @@ function looksText(bytes: Uint8Array): string | null {
   try { const s = new TextDecoder('euc-kr').decode(bytes); return s.includes('�') ? null : s; } catch { return null; }
 }
 
+/**
+ * md 안 상대경로를 파일 자리 기준으로 푼다(#4582) — `joinRel('docs/a.md', '../img/b.png') === 'img/b.png'`.
+ *  루트 위로 올라가면 null(서버 감옥이 어차피 거절하지만, 엉뚱한 자리를 묻지 않는다).
+ */
+function joinRel(filePath: string, rel: string): string | null {
+  const lead = String(filePath || '').startsWith('/') ? '/' : '';   // 절대경로로 연 파일(세션 파일 등)은 절대경로로 묻는다
+  const parts = String(filePath || '').split('/').filter(Boolean);
+  parts.pop();   // 파일 이름을 떼고 폴더만
+  for (const seg of String(rel).split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { if (!parts.length) return null; parts.pop(); } else parts.push(seg);
+  }
+  return parts.length ? lead + parts.join('/') : null;
+}
+
+/** renderMarkdown 의 imgFetch — 파일 좌표(path)와 받는 법(fetchRel)이 둘 다 있을 때만 만든다. */
+function mdImgFetch(path: string | undefined, fetchRel: ((p: string) => Promise<Response>) | undefined): ((rel: string) => Promise<Response>) | null {
+  if (path == null || !fetchRel) return null;
+  return (rel: string) => {
+    const p = joinRel(path, rel);
+    return p ? fetchRel(p) : Promise.reject(new Error('out of root'));
+  };
+}
+
 export interface PreviewHost {
   /** 파일 이름(확장자 판정·표시용). */
   name: string;
@@ -295,6 +319,11 @@ export interface PreviewHost {
   fetchView: () => Promise<Response>;
   /** 원본 응답(상한 우회 — 미디어 전용). */
   fetchDownload: () => Promise<Response>;
+  /** #4582 — md 가 거는 상대경로 그림(`![](img/a.png)`)을 받는다. 인자는 **이 파일 폴더 기준으로 이미 푼** 경로(joinRel).
+   *  없으면 상대경로 그림은 종전처럼 브라우저가 앱 주소 기준으로 풀어 깨진다 — 파일 좌표를 아는 화면은 반드시 준다. */
+  fetchRel?: (path: string) => Promise<Response>;
+  /** fetchRel 이 받을 경로의 기준 — 이 파일의 (루트 기준) 경로. */
+  path?: string;
   /** 화면별 추가 클래스(기존 크기 규칙 보존). 키: img·pdf·html·md·code·table·audio·video·msg */
   cls?: Record<string, string>;
   /** PDF 뷰어 파라미터(예 '#navpanes=0&toolbar=1&view=FitH'). 기본 '#toolbar=1&view=FitH'. */
@@ -496,7 +525,7 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   //   그 세 가지를 셸이 대신하는 다리를 건다(문서마다 저장 이름 공간이 다르다). 안 주면 종전과 같다.
   const bridged = (f: any): any => { if (host.bridgeNs) attachFrameBridge(f, host.bridgeNs); return f; };
   const rendered = (): any => (isMd
-    ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text))
+    ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text, { imgFetch: mdImgFetch(host.path, host.fetchRel) }))
     : isHtml
       ? bridged(htmlFrame(text, name, cls.html))
       : codeBlock(text, ext, cls.code));
@@ -535,5 +564,5 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
 
 export {
   ARCHIVE_EXTS, AUDIO_MIME, IMG_MIME, MEDIA_MAX, OFFICE_EXTS, PREVIEW_CODE, PREVIEW_IMG, PREVIEW_TABLE, PREVIEW_TEXT, RISKY_IMG, VIDEO_MIME,
-  buildFilePreview, codeBlock, fileExtOf, htmlFrame, parseDelimited, tablePreview,
+  buildFilePreview, codeBlock, fileExtOf, htmlFrame, joinRel, mdImgFetch, parseDelimited, tablePreview,
 };

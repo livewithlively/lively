@@ -13,9 +13,10 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
+import { assertIdent, columnDefs, physicalTableName } from "./store-ddl.js";
 
 const RELEASE_YML = ".github/workflows/release.yml";
-/** 시더가 읽는 경로(`src/apps/seed.ts` 의 `builtinAppsRoot`)와 **같은 문자열**이어야 한다. */
+/** 시더가 읽는 경로(`src/apps/builtin-root.ts` 의 `builtinAppsRoot` — seed.ts 가 가져다 쓴다)와 **같은 문자열**이어야 한다. */
 const BUILTIN_DIR = "apps/builtin";
 
 /** release.yml 의 `tar -czf lively.tgz …` 에 나열된 토큰들. */
@@ -32,10 +33,17 @@ test("[L1] 빌트인 앱 디렉터리가 배포 번들에 실린다", () => {
 });
 
 test("[L2] 시더가 읽는 경로와 번들에 싣는 경로가 같은 문자열이다", () => {
+  //  경로 조립은 builtin-root.ts 한 곳에 있다(#4600 — app_pull · 원본으로 되돌리기도 같은 자리를 봐야 해서 seed.ts 에서 옮겼다).
+  //   `path.resolve(<dist/apps>, "..", "..", "apps", "builtin")` 의 마지막 두 조각.
+  const root = readFileSync("src/apps/builtin-root.ts", "utf8");
+  assert.match(root, /"apps",\s*"builtin"/,
+    "builtin-root.ts 의 경로 조립이 바뀌었다 — 번들에 싣는 경로도 함께 바뀌어야 한다");
+  //  그리고 시더가 **그 함수를** 쓴다 — 시더가 제 경로를 따로 조립하기 시작하면 위 단언이 엉뚱한 파일을 지키게 된다.
   const seed = readFileSync("src/apps/seed.ts", "utf8");
-  //  `path.resolve(<dist/apps>, "..", "..", "apps", "builtin")` 의 마지막 두 조각.
-  assert.match(seed, /"apps",\s*"builtin"/,
-    "seed.ts 의 경로 조립이 바뀌었다 — 번들에 싣는 경로도 함께 바뀌어야 한다");
+  assert.match(seed, /import \{ builtinAppsRoot \} from "\.\/builtin-root\.js"/,
+    "seed.ts 가 builtin-root.ts 의 builtinAppsRoot 를 쓰지 않는다 — 경로 가드가 시더를 지키지 못한다");
+  assert.match(seed, /root: string = builtinAppsRoot\(\)/,
+    "seedBuiltinApps 의 기본 폴더가 builtinAppsRoot() 가 아니다");
 });
 
 test("[L3] 실을 빌트인 앱이 실제로 있다 — 0개면 위 두 시험이 공허하다", () => {
@@ -53,4 +61,26 @@ test("[L4] 시더의 «디렉터리 없음 → 조용히 빈손» 이 그대로 
   const seed = readFileSync("src/apps/seed.ts", "utf8");
   assert.match(seed, /apps\/builtin 부재/,
     "부재를 조용히 넘기는 분기가 사라졌다면 이 시험군의 전제를 다시 봐야 한다");
+});
+
+test("[L5] 실은 빌트인 앱의 데이터 테이블 선언이 실제로 만들어질 수 있다 — 예약 칸·타입·이름 길이", () => {
+  //  왜(2026-10-07 매니지드 실측, #4592): 「장표 수정」 앱이 `created_at`·`updated_at` 칸을 선언한 채 배포됐다. 그 둘은 시스템이
+  //   모든 앱 테이블에 저절로 붙이거나 잡아 둔 예약 칸이라 **표 생성이 통째로 실패**했고(「예약된 컬럼명입니다: created_at」),
+  //   앱은 설치·동의·붙이기까지 다 되고 첫 조회에서야 죽었다. 매니페스트 파서는 칸 이름의 글자 모양만 보고, 표는 처음 쓸 때
+  //   만들어지므로 어떤 시험도 이 선언으로 DDL 을 지어 보지 않았다. 여기서 실은 앱 전부를 같은 검증기에 태운다.
+  const dirs = readdirSync(BUILTIN_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
+  let tables = 0;
+  for (const d of dirs) {
+    const m = JSON.parse(readFileSync(`${BUILTIN_DIR}/${d.name}/lively-app.json`, "utf8")) as {
+      id: string; data?: { tables?: Array<{ name: string; columns: Array<{ name: string; type: string }> }> };
+    };
+    for (const t of m.data?.tables ?? []) {
+      tables++;
+      const where = `${d.name} · ${t.name}`;
+      assert.doesNotThrow(() => assertIdent("table", t.name), `${where}: 테이블 이름`);
+      assert.doesNotThrow(() => physicalTableName(m.id, t.name), `${where}: 물리 테이블 이름(63자 상한)`);
+      assert.doesNotThrow(() => columnDefs(t.columns), `${where}: 칸 선언(예약 칸 tenant_id·id·app_id·created_at·updated_at · 허용 타입 · 중복)`);
+    }
+  }
+  assert.ok(tables > 0, "데이터 테이블을 선언한 빌트인 앱이 하나도 없다 — 이 시험이 아무것도 안 본다");
 });

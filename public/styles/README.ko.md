@@ -95,4 +95,5 @@ CSS 캐스케이드는 "뒤가 앞을 override" 다. 이 디렉터리의 파일�
 | 49 | `49-v2-projpane.css` | 곁칸 «프로젝트» 앱(#4135, `web/v2/panes-tasks.ts`) — `42-v2-panes.css` 의 `.pn-tk-*` 위에 얹는다 |
 | 50 | `50-mobile.css` | 폰(≤640px) 전면 정비(#4088) — 아래 탭 바 · 목록은 화면 한 장 · 곁칸 서랍 · 표는 제목 열만 · 흐름 지도 세로 선로 · 프로젝트 보드는 클릭업 모바일식(#4231). 화면 파일마다 흩어진 좁은 폭 규칙을 캐스케이드 뒤쪽(52-guide·90-dark 앞)에서 되잡는다 |
 | 52 | `52-guide.css` | 「사용 가이드」 앱(#4179, `web/guide/*.ts`) — 문서 목록 · 본문 · 이 문서에서 세 칸 · 폭 판정은 container query |
+| 53 | `53-session-history.css` | 「세션 이력」 앱(#4553, `web/sessions-*.ts`) — 가로탭 셋(대화 찾기 · 작업 일지 · 세션 목록) · 칸 안에 실린 대화록의 덧칠 · 폭 판정은 container query |
 | 90 | `90-dark.css` | 다크 테마(#1683) — `01-base.css` 라이트 토큰의 전량 다크 재정의(`data-theme="dark"` · `prefers-color-scheme: dark` 두 경로) + 하단 §보정. 캐스케이드 맨 끝 |

@@ -40,17 +40,45 @@ function safeHref(raw) {
   return url;
 }
 
+// 그림 주소 — 링크 규칙(safeHref)에 두 가지를 더한다(#4582).
+//  ① `![](<a b.png>)` 꺾쇠 감싸기와 `![](a.png "제목")` 제목 꼬리 — 둘 다 CommonMark 문법이라 벗겨서 주소만 남긴다.
+//  ② `data:image/…` — md 안에 그림을 통째로 박아 둔 것. <img> 로만 쓰이므로(스크립트가 돌지 않는다) 그림 MIME 만 받는다.
+function safeImgSrc(raw) {
+  let url = String(raw).trim();
+  if (url.startsWith('<') && url.indexOf('>') > 0) url = url.slice(1, url.indexOf('>'));
+  else url = url.replace(/\s+("[^"]*"|'[^']*')\s*$/, '');
+  if (/^data:image\/[a-z0-9.+-]+[;,]/i.test(url)) return url;
+  return safeHref(url);
+}
+
 // 이미지 로더(#551) — 인증 라우트(/api/ui/…)의 이미지는 <img> 가 Authorization 헤더를 못 실어 토큰 세션에서
 // 401 이 난다 → fetch(토큰 헤더, 쿠키 동봉) 후 blob URL 로 표시. 그 외(외부/정적) 이미지는 그대로 src.
+//  #4582 — 파일 뷰어의 md 는 그림을 **제 폴더 기준 상대경로**로 건다(`![](./shot.png)`·`![](img/a.png)`).
+//   종전엔 그 주소를 <img src> 에 그대로 넣어 브라우저가 **앱 페이지 주소** 기준으로 풀었다 → 엉뚱한 곳을 받아 깨진 그림.
+//   파일을 아는 화면이 renderMarkdown(md, { imgFetch }) 로 «이 상대경로를 받아 오는 법» 을 주면 그걸로 받는다(인증 포함).
+//   지식·위키처럼 파일이 아닌 본문은 imgFetch 가 없어 종전 그대로다.
+let MD_IMG_FETCH: ((rel: string) => Promise<Response>) | null = null;
+/** 스킴도 루트(/)도 앵커(#)도 없는 주소 — 문서 자리 기준으로 풀어야 하는 상대경로인가. */
+function isRelSrc(src: string): boolean {
+  return !!src && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src) && !src.startsWith('/') && !src.startsWith('#');
+}
 function mdImage(src, alt) {
   const img: any = el('img', { class: 'md-img', alt: alt || '', loading: 'lazy' });
   img.dataset.mdSrc = String(src);   // #657 블록 에디터 직렬화용 원본 src 보존(blob URL 로 바뀌어도 md 는 원본 유지)
-  if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
-  const token = localStorage.getItem(TOKEN_KEY);
-  fetch(apiUrl(src), { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+  const load = (p: Promise<Response>) => p
     .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
     .then((b) => { img.src = URL.createObjectURL(b); })
     .catch(() => { img.classList.add('md-img-missing'); img.alt = (alt || '이미지') + ' (불러오기 실패)'; });
+  if (MD_IMG_FETCH && isRelSrc(String(src))) {
+    //  주소의 ?쿼리·#조각은 파일 이름이 아니다. %20 같은 퍼센트 인코딩은 풀어서 실제 파일 이름으로 묻는다.
+    let rel = String(src).replace(/[?#].*$/, '');
+    try { rel = decodeURIComponent(rel); } catch (_) { /* 잘못된 % 표기 — 적힌 그대로 */ }
+    load(MD_IMG_FETCH(rel));
+    return img;
+  }
+  if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
+  const token = localStorage.getItem(TOKEN_KEY);
+  load(fetch(apiUrl(src), { headers: token ? { Authorization: 'Bearer ' + token } : {} }));
   return img;
 }
 
@@ -108,7 +136,7 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         const paren = s.indexOf(')', close + 2);
         if (paren > close) {
           const alt = s.slice(i + 2, close);
-          const src = safeHref(s.slice(close + 2, paren));
+          const src = safeImgSrc(s.slice(close + 2, paren));
           flush();
           if (src) out.push(mdImage(src, alt));
           else if (alt) out.push(document.createTextNode(alt));
@@ -886,6 +914,8 @@ function mdPageCard(label: string, href: string) {
 function renderMarkdown(md, opts?: any) {
   const _prevChips = MD_UI_CHIPS;                       // #1013 docs UI 칩 모드 — 재진입(중첩 컨테이너) 안전하게 저장/복원
   if (opts && typeof opts === 'object' && 'uiChips' in opts) MD_UI_CHIPS = !!opts.uiChips;
+  const _prevImg = MD_IMG_FETCH;                        // #4582 상대경로 그림 받는 법 — 칩과 같은 저장/복원(중첩 렌더는 상속)
+  if (opts && typeof opts === 'object' && 'imgFetch' in opts) MD_IMG_FETCH = typeof opts.imgFetch === 'function' ? opts.imgFetch : null;
   const root = el('div', { class: 'md' });
   const lines = String(md == null ? '' : md).replace(/\r\n?/g, '\n').split('\n');
   let i = 0;
@@ -1117,6 +1147,7 @@ function renderMarkdown(md, opts?: any) {
     flushP();
   }
   MD_UI_CHIPS = _prevChips;                             // #1013 복원 — 중첩 렌더는 상속(true 유지), 최상위 docs 호출만 false 로 되돌림
+  MD_IMG_FETCH = _prevImg;
   return root;
 }
 

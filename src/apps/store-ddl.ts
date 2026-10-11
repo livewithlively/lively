@@ -41,6 +41,28 @@ export function assertIdent(kind: "table" | "column", name: string): string {
   return n;
 }
 
+/**
+ * **행을 고르는 조건(match)** 의 칸 이름 검증 — 선언 칸에 더해 시스템 칸 `id` · `created_at` 을 받는다.
+ *  왜: 모든 앱 테이블엔 id·created_at 이 저절로 있고 store_insert 는 그 id 를 돌려준다. 그런데 match 가 선언 칸과 같은 검증기
+ *  (assertIdent — 예약 칸 거부)를 타서 **돌려받은 id 로 그 행을 집을 수 없었다**(2026-10-07 #4592 실측: 의견 한 줄을 고치려던
+ *  store_update {match:{id}} 가 「예약된 컬럼명입니다: id」). 앱은 «내용이 같은 행 전부» 로만 고치고 지울 수 있었다.
+ *  쓰는 쪽(insert 의 row · update 의 set)은 그대로 막는다 — 시스템이 정하는 값이다. tenant_id·app_id·updated_at 은 match 에서도 막는다
+ *  (앞 둘은 격리 경계라 서버만 다루고, updated_at 은 잡아 두기만 한 이름이라 실제 칸이 없다).
+ */
+const MATCHABLE_SYSTEM_COLUMNS = new Set(["id", "created_at"]);
+export function assertMatchIdent(name: string): string {
+  const n = String(name).trim();
+  if (MATCHABLE_SYSTEM_COLUMNS.has(n)) return n;
+  return assertIdent("column", n);
+}
+
+/** match 의 id 값 — 0 이상의 정수(숫자 또는 숫자 문자열)만. 아니면 DB 가 22P02 로 던져 500 이 된다 — 그 전에 400 으로 말한다. */
+export function assertMatchId(value: unknown): string {
+  const v = typeof value === "number" ? (Number.isSafeInteger(value) ? String(value) : "") : typeof value === "string" ? value.trim() : "";
+  if (!/^\d{1,18}$/.test(v)) throw new HttpError(400, "match 의 id 는 0 이상의 정수여야 합니다");
+  return v;
+}
+
 // Postgres 식별자 상한(NAMEDATALEN-1). 넘는 이름은 **조용히 잘려** 서로 다른 선언이 같은 물리 테이블이 된다 — 그래서 거부한다.
 export const PG_IDENT_MAX = 63;
 

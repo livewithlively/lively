@@ -3,7 +3,7 @@
 //  그 표에 있는 이름만 쓴다. 표에 없는 이름은 다른 그림으로 떨어진다: 사이드바의 리스트 줄이 「앱」 그림(사각 넷)으로 나오던 것이 그 예다.
 //
 //  사양 · 엣지 표(spec-failfirst):
-//   V1 고른 그림: 표의 path 가 고른 path 와 글자까지 같다(홈 · 위키 · 자료 · 분류체계 · 맥락 관리 · 세션 이력 · 홈(클래식) ·
+//   V1 고른 그림: 표의 path 가 고른 path 와 글자까지 같다(홈 · 위키 · 자료 · 분류체계 · 맥락 관리 · 세션 이력 · 대시보드 ·
 //      사용 가이드 · 앱 · 사이드바 접기 · 알림 · 지난 세션 · 휴지통 · 외부 앱 연결 · 세션 앱 · 리스트)
 //   V2 「지금」을 고른 그림은 종전 path 그대로다(말풍선 · 프로젝트 · 리브 · 톱니 · 묶음 · 압정 · 반짝임 · 연필)
 //   V3 우측 사이드바 부품 12개가 고른 그림의 이름을 쓴다(세션 = chat · 지식 = wiki · 리브 = liv · 지난 세션 = archive · 앱 = apps …)
@@ -23,7 +23,7 @@
 //   H5 증류기 카드의 「모든 자료」 그림 · 클래식 AI 세션의 「세션 기록」 단추 · 가이드의 집과 책이 표의 그림이다
 //   H6 손으로 그린 옛 그림(집 · 깔때기 · 상자 · 휴지통 · 가로 고리 · 종 · 책 · 태그 묶음)이 web/ 에 남아 있지 않다
 //   P1 앱 아이콘: 타일 하나 + 그 앱의 선 그림 + 그 앱의 색 토큰
-//   P2 앱 아이콘: 앱 이름 → 선 그림 이름(홈(클래식) = dashboard, 설정 = gear, 나머지는 같은 이름)
+//   P2 앱 아이콘: 앱 이름 → 선 그림 이름(대시보드 = dashboard, 설정 = gear, 나머지는 같은 이름)
 //   P3 앱 아이콘: 모르는 이름 · 빈 이름은 apps 로 떨어진다(던지지 않는다)
 //   P4 타일: 모서리 반지름이 한 변의 26%(±1%)이고, 유리 겹침 그림의 흔적(GLASS_ART · 기울기 · 흐림)이 없다
 //   P5 색 토큰: 이름 14개가 라이트(01-base) · 다크(90-dark 두 블록)에 전부 있다
@@ -32,6 +32,11 @@
 //   B1 설치한 앱 가운데 우리가 만든 것: 확인할 것(inbox) = 종(bell) · 웹 브라우저(browser) = 지구본(web)
 //   B2 그 밖의 앱(남이 만든 앱 · 그림을 정하지 않은 빌트인)은 기본 그림: 화면이 있으면 liv, 없으면 term
 //   B3 새 값 비었음: 앱 id 가 비었거나 표의 열쇠가 아닌 이름(constructor)이어도 기본 그림이다(던지지 않는다)
+//   A1 사이드바의 설치한 앱 줄(인스턴스 아이콘 'app'): 프로젝트 그림(proj)을 그리지 않고 「앱」 그림(apps)을 그린다.
+//      #4233 프로젝트 그림이 과녁으로 바뀌자 프로젝트가 아닌 앱 줄이 과녁으로 서던 것(종전엔 'app' → proj 폴더로 접었다).
+//   A2 설치한 앱의 주소(#/i/<id>)로 선 줄은 런치패드와 같은 그림을 쓴다. 그림 이름은 instanceSideIcon 을 값으로 불러 본다
+//      (웹 브라우저 = web · 확인할 것 = inbox · 그 밖은 liv/term · 늘 표에 있는 이름이고 proj 가 아니다)
+//   A3 옛 사이드바의 [앱] 단추도 프로젝트 그림을 쓰지 않는다
 //   F1 사이드바 glyph() · 외부 앱 연결 icon() · icon(): 표에 없는 이름이면 「앱」 그림을 그린다(d 가 빈 path 를 그리지 않는다)
 //   F2 표에 있는 이름은 그 그림을 그린다(예비 그림이 제 그림을 덮지 않는다)
 //   L1 표지 카드의 빈 글: 칸이 세 칸 격자(30px)여도 빈 글은 한 줄 폭을 다 쓴다(모든 폭). 글에 긴 줄표가 없다
@@ -95,11 +100,12 @@ const PICKED = {
   task: "M3.5 7 5 8.5 8 5.5 M11 7h9 M3.5 16 5 17.5 8 14.5 M11 16h9",
   timeline: "M7 3v1.5 M7 7.5v3 M7 13.5v3 M7 19.5V21 " + [6, 12, 18].map((y) => dot(7, y, 1.5)).join(" ") + " M11.5 6h8.5 M11.5 12h6 M11.5 18h8.5",
   preview: "M3 4h18v16H3z M10 9l5 3-5 3z",
+  //  프로젝트(원준 2026-10-04 「프로젝트 아이콘 시안」 5차 3안): 과녁에 꽂힌 화살, 깃 두 겹. 폴더에 막대 셋이던 그림을 갈았다.
+  proj: "M11 4.5a8.5 8.5 0 1 0 8.5 8.5 M11 9.3a3.7 3.7 0 1 0 3.7 3.7 M11 12.3a.7.7 0 1 0 0 1.4a.7.7 0 1 0 0-1.4z M12.3 11.7 21 3 M16.5 5v2.5H19 M19 2.5V5h2.5",
 };
 for (const [k, d] of Object.entries(PICKED)) ok(ICONS[k] === d, `V1 고른 그림 ${k}`, String(ICONS[k]).slice(0, 40));
 const KEPT = {
   chat: "M7.9 20A9 9 0 1 0 4 16.1L2 22z",
-  proj: "M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z M8 10v4 M12 10v2 M16 10v6",
   liv: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
   layers: "M12 2 2.6 6.6a.7.7 0 0 0 0 1.26L12 12.4l9.4-4.54a.7.7 0 0 0 0-1.26z M2.5 16.5 12 21l9.5-4.5 M2.5 12 12 16.5 21.5 12",
   spark: "M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z M18.5 16v4 M16.5 18h4",
@@ -109,7 +115,11 @@ const KEPT = {
   eye: "M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z M12 9.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2z",
 };
 for (const [k, d] of Object.entries(KEPT)) ok(ICONS[k] === d, `V2 「지금」을 고른 그림 ${k} 는 그대로`, String(ICONS[k]).slice(0, 40));
-ok(/^M12 17v5 M9 10\.76/.test(ICONS.pin || "") && /^M12\.22 2h-\.44/.test(ICONS.gear || ""), "V2 압정 · 톱니는 종전 그림");
+//  #3870(원준 2026-10-05 «핀 지금 아이콘 너무 별로야») — 압정은 비스듬히 꽂힌 그림으로 바꿨다. 사이드바 압정 단추(side.ts PIN_*)와 같은 그림이어야 한다.
+const SIDE_SRC = readFileSync(join(root, "web/v2/side.ts"), "utf8");
+const pinPart = (k) => (new RegExp("const " + k + " = '([^']+)';").exec(SIDE_SRC) || [])[1] || "";
+ok(/^M9 15l-4\.5 4\.5 /.test(ICONS.pin || "") && ICONS.pin === pinPart("PIN_NEEDLE") + " " + pinPart("PIN_BODY") && /^M12\.22 2h-\.44/.test(ICONS.gear || ""),
+  "V2 압정은 비스듬한 그림 — 메뉴와 사이드바 단추가 같은 그림 · 톱니는 종전 그림");
 ok(!!ICONS.sys && ICONS.sys === ICONS.gear, "V5 설정(sys)과 톱니(gear)는 같은 그림");
 
 // ── 부르는 이름 ──
@@ -158,7 +168,7 @@ ok(miss2.length === 0, "G2 pnIcon('이름') 으로 부르는 이름이 전부 �
 
 const partIcons = [...PARTS.matchAll(/\{ type: '([a-z]+)', name: '([^']+)', icon: '([a-z-]+)'/g)].map((m) => ({ type: m[1], name: m[2], icon: m[3] }));
 ok(partIcons.length >= 12 && partIcons.every((p) => pnHas(p.icon)), "G3 우측 사이드바 부품의 icon 이 전부 표에 닿는다", partIcons.filter((p) => !pnHas(p.icon)).map((p) => p.name + "=" + p.icon).join(" | "));
-const WANT = { sessions: "chat", files: "folder", sessfiles: "sessfiles", knowledge: "wiki", tasks: "projtask", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
+const WANT = { sessions: "chat", files: "folder", sessfiles: "sessfiles", knowledge: "wiki", tasks: "proj", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
 for (const [type, want] of Object.entries(WANT)) {
   const p = partIcons.find((x) => x.type === type);
   ok(!!p && pnName(p.icon) === want && !oldPn, `V3 우측 사이드바 ${type} 의 그림 = ${want}`, p ? p.icon : "없음");
@@ -176,9 +186,9 @@ ok(appIcons.every((n) => glassNames.includes(n)), "G4 앱 표의 icon 이 전부
 const appIconRefs = [...appIconMap.matchAll(/ICONS\.([A-Za-z]+)/g)].map((m) => m[1]);
 ok(appIconRefs.length >= 10 && appIconRefs.every((n) => n in ICONS), "G4 appIcon 의 표가 가리키는 이름이 전부 그림 표에 있다", appIconRefs.filter((n) => !(n in ICONS)).join(","));
 {
-  // 레일 · 구역 메뉴는 앱의 icon 을 그대로 부르지 않는다. 그대로 부르면 「홈(클래식)」이 「홈」과 같은 집 그림이 된다.
+  // 레일 · 구역 메뉴는 앱의 icon 을 그대로 부르지 않는다. 그대로 부르면 「대시보드」이 「홈」과 같은 집 그림이 된다.
   const RAIL = srcOf["web/v2/rail.ts"] || "";
-  ok(!/\b(item|row)\(a\.key, a\.title, a\.icon\b/.test(RAIL) && (RAIL.match(/appGlyphName\(a\.icon\)/g) || []).length >= 2, "G4 레일 · 구역 메뉴의 앱 줄이 앱 화면과 같은 그림 이름을 쓴다(홈(클래식) = dashboard)");
+  ok(!/\b(item|row)\(a\.key, a\.title, a\.icon\b/.test(RAIL) && (RAIL.match(/appGlyphName\(a\.icon\)/g) || []).length >= 2, "G4 레일 · 구역 메뉴의 앱 줄이 앱 화면과 같은 그림 이름을 쓴다(대시보드 = dashboard)");
   const m = PATHS_SRC.match(/const APP_GLYPH[^=]*=\s*(\{[^}]*\})/); let g = {}; try { g = m ? new Function("return " + m[1])() : {}; } catch { /* 빨간불 */ }
   ok(g.home === "dashboard" && g.sys === "gear" && ICONS.home !== ICONS.dashboard, "P2 앱 이름 → 그림 이름: home = dashboard · sys = gear, 나머지는 같은 이름");
 }
@@ -214,8 +224,9 @@ ok(!/const ICON_PATH\b/.test(CONNECT) && /from '\.\.\/lib\/icon-paths\.js'/.test
   ok(/guideIcon\('learn', 'gd-crumb-ic'\)/.test(GUIDE_APP) && /d: iconPath\(name\)/.test(GUIDE_ICON) && /guideIcon\('learn', 'pjv-crumb-ic lg-crumb-ic'\)/.test(LEARN),
     "H1 「사용 가이드」 화면 머리(앱 · 클래식 문서 셸): 표의 learn");
   const OMNI = srcOf["web/v2/omni.ts"] || "", kp = OMNI.slice(OMNI.indexOf("const KIND_PATH"), OMNI.indexOf("};", OMNI.indexOf("const KIND_PATH")));
-  //  #4517 — 「세션 이력」(hist) 종류가 「대화」(conv)로 바뀌었다. 그림은 그대로 표의 sess(말풍선 둘)다.
-  const want = { proj: "folder", know: "wiki", src: "src", sess: "chat", conv: "sess" };
+  //  #4517 — 「세션 이력」(hist) 종류가 「대화」(conv)로 바뀌었다가, #4530 에서 대화는 세션의 일부로 합쳐졌다(종류 sess 하나).
+  //  #4233(원준 2026-10-04) — 프로젝트는 과녁(proj). 칩 크기에 따른 작은 과녁은 scripts/project-icons.test.mjs Q2 가 값으로 본다.
+  const want = { proj: "proj", know: "wiki", src: "src", sess: "chat" };
   for (const [k, n] of Object.entries(want)) ok(new RegExp("\\b" + k + ": \\[ICONS\\." + n + "\\]").test(kp), `H2 통합검색 ${k} = 표의 ${n}`);
   ok(/key: 'notify', label: '알림', icon: \[ICONS\.bell\]/.test(srcOf["web/v2/me-modal.ts"] || ""), "H3 [나] 창 「알림」 = 표의 bell");
   ok(/PJV_TM_ICONS\.bell = \{ p: \[\['path', \{ d: ICONS\.bell \}\]\] \}/.test(srcOf["web/taskmodal/composer.ts"] || ""), "H3 태스크 창 활동 구독 = 표의 bell");
@@ -311,6 +322,40 @@ const GLYPH_OF = { home: "dashboard", sys: "gear" };
     for (const bad of ["nope", "", "constructor"]) { let d = "!throw"; try { d = dOf(fn(bad, "c")); } catch { /* 빨간불 */ } ok(!!ICONS.apps && d === ICONS.apps, `F1 ${label}: 표에 없는 이름 ${JSON.stringify(bad)} 는 「앱」 그림`, String(d).slice(0, 30)); }
     ok(dOf(fn(known, "c")) === want, `F2 ${label}: 표에 있는 이름(${known})은 그 그림`);
   }
+}
+// ── A. 설치한 앱 줄 ──
+{
+  const fakeSv = (tag, attrs, ...kids) => ({ tag, attrs: attrs || {}, kids });
+  const dOf = (n) => (n && n.kids && n.kids[0] && n.kids[0].attrs ? n.kids[0].attrs.d : undefined);
+  const SIDE = srcOf["web/v2/side.ts"] || "", MAIN = srcOf["web/v2/main.ts"] || "";
+  const APP_GLYPH = { home: "dashboard", sys: "gear" };
+  const stubAppIcon = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[APP_GLYPH[k] || k] }));
+  const stubIcon = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[k] || ICONS.apps }));
+  const stubGlyph = (k) => fakeSv("svg", {}, fakeSv("path", { d: ICONS[k] || ICONS.apps }));
+  let instanceIcon = null;
+  { const i = SIDE.indexOf("function instanceIcon("), j = i < 0 ? -1 : SIDE.indexOf("\n}\n", i);
+    try { if (i >= 0 && j > i) instanceIcon = new Function("glyph", "appIcon", "icon", transpile(SIDE.slice(i, j + 3)) + "\nreturn instanceIcon;")(stubGlyph, stubAppIcon, stubIcon); } catch { /* 빨간불 */ } }
+  ok(typeof instanceIcon === "function", "A1 사이드바 instanceIcon 을 값으로 부를 수 있다");
+  if (typeof instanceIcon === "function") {
+    const d = dOf(instanceIcon({ icon: "app" }));
+    ok(d !== ICONS.proj && d === ICONS.apps, "A1 설치한 앱 줄('app')은 프로젝트 그림이 아니라 「앱」 그림", String(d).slice(0, 30));
+    ok(dOf(instanceIcon({ icon: "wiki" })) === ICONS.wiki && dOf(instanceIcon({ icon: "chat" })) === ICONS.chat, "A1 다른 줄(위키 · 세션)은 제 그림 그대로");
+  }
+  // A2: 설치한 앱 주소(#/i/<id>)의 줄 그림을 값으로 부른다(glass-icon instanceSideIcon). 런치패드(builtinAppIcon)와 같고 종만 inbox.
+  const side = glass && glass.instanceSideIcon;
+  const sideCall = (id, ui) => { try { return side ? side(id, ui) : "!none"; } catch { return "!throw"; } };
+  ok(typeof side === "function", "A2 설치한 앱 줄의 그림(instanceSideIcon)을 값으로 부를 수 있다");
+  ok(sideCall("browser", false) === "web" && sideCall("browser", true) === "web", "A2 웹 브라우저 줄 = web(런치패드와 같은 지구본)", sideCall("browser", false));
+  ok(sideCall("inbox", false) === "inbox", "A2 확인할 것 줄 = inbox(종 bell 은 사이드바 이름 inbox 로)", sideCall("inbox", false));
+  ok(sideCall("hello", true) === "liv" && sideCall("some-third-party", false) === "term", "A2 그 밖의 앱 줄은 런치패드 기본 그림(화면이 있으면 liv, 없으면 term)", sideCall("hello", true) + "," + sideCall("some-third-party", false));
+  for (const id of ["browser", "inbox", "hello", "constructor"]) for (const ui of [true, false]) {
+    const n = sideCall(id, ui);
+    ok(n !== "proj" && Object.prototype.hasOwnProperty.call(ICONS, n), `A2 ${id}(${ui ? "화면 있음" : "화면 없음"}) 줄 그림 ${n} 은 표에 있는 그림이고 프로젝트 그림이 아니다`, n);
+  }
+  const face = (() => { const i = MAIN.indexOf("function sideRowFace("); return i < 0 ? "" : MAIN.slice(i, MAIN.indexOf("\n}\n", i)); })();
+  ok(/page === 'i'/.test(face) && /instanceSideIcon\(inst\.app\.id/.test(face) && !/=== 'bell'/.test(face), "A2 sideRowFace 의 #/i/<id> 줄이 instanceSideIcon 을 부른다(종 바꾸기를 따로 하지 않는다)");
+  const legacy = (() => { const i = SIDE.indexOf("function renderLegacy("); return i < 0 ? "" : SIDE.slice(i, SIDE.indexOf("\n}\n", i)); })();
+  ok(!!legacy && !/appIcon\('proj'/.test(legacy) && /v2-apps-btn/.test(legacy), "A3 옛 사이드바의 [앱] 단추가 프로젝트 그림을 쓰지 않는다");
 }
 // ── L. 넘침 · 줄 바꿈(글과 CSS 규칙으로 본다. 실제 줄 수 · 넘침 폭은 브라우저로 따로 쟀다) ──
 {

@@ -62,6 +62,10 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
       let out = "", errOut = "", settled = false;
       const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ } fn(v); };
       const timer = setTimeout(() => done(reject, new Error("크롬이 30초 안에 결과를 안 냈다\n" + errOut.slice(0, 800))), 30_000);
+      //  ⚠ 글자로 받는다(setEncoding) — 조각(Buffer)마다 따로 바꾸면 조각 경계에 걸친 한글이 깨진다
+      //   (CI 실측 2026-10-09: «기타» → «���타», session-history-side-runtime H9 가 무작위로 빨갰다 · headless-chrome-decode.test.mjs).
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
       child.stdout.on("data", (b) => { out += b; if (out.includes(marker)) done(resolve, out); });
       child.stderr.on("data", (b) => { errOut += b; });
       child.on("error", (e) => done(reject, e));

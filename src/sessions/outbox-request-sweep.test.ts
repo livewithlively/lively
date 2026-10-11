@@ -207,8 +207,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   안에서만 돌 수 있고, 판이 버려졌을 때(사람이 떠남·응답 끊김) 멈추게 하는 길이 요청에 얹는 것뿐이다.
   //  #4517 — 대화 검색 색인(conv-index)이 테넌트 정비로 하나 늘었다. 세션 기록·색인이 그 워크스페이스 것이라(RLS) 그 컨텍스트
   //   안에서만 돌 수 있고, 매니지드에선 배포 직후 밀린 옛 기록을 줍는 길이 요청에 얹는 것뿐이다.
-  assert.equal(perTenant.length, 13, "테넌트 정비 열셋(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인)");
-  assert.equal(SWEEP_JOBS.length, 14, "전역 하나(task-dispatch)가 더 있다");
+  //  #4530 — 세션 요약 카드(session-card)가 테넌트 정비로 하나 늘었다. 카드도 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
+  //   돌 수 있고, 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다(세션을 뜻으로 찾는 재료가 여기서만 만들어진다).
+  assert.equal(perTenant.length, 14, "테넌트 정비 열넷(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드)");
+  assert.equal(SWEEP_JOBS.length, 15, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -230,6 +232,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "category-group-backfill": TEN_MIN_MS,           // #1631 — 새 정비. 워크스페이스마다 결론이 나면 다시 안 보므로 주기는 «늦지 않을 정도» 면 된다
     "login-job-reap": META_HEAL_SWEEP_MS,            // #4067 — 새 정비. 판 무응답 상한(2분)보다 짧아야 버려진 판이 제때 멈춘다
     "conv-index": CONV_INDEX_SWEEP_MS,               // #4517 — 새 정비. 밀린 대화 색인을 1분마다 한 판(판마다 상한)
+    "session-card": CONV_INDEX_SWEEP_MS,             // #4530 — 새 정비. 대화 색인과 같은 박자로 그 뒤를 따라간다(판마다 30개 · 6초)
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
