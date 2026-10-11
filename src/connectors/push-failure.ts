@@ -68,6 +68,8 @@ export function parkedParams(): [number, string, string] {
 
 // 한 실행에서 거절이 이만큼 이상이고 반출이 0건이면 행 탓이 아니라 설정 탓으로 본다(clickup-push.ts 일괄 거절 분기).
 //  너무 작으면 서로 다른 행의 진짜 거절 몇 건이 겹친 실행에 크론이 선다 — 그래도 사람이 보면 되는 쪽이라 낮게 둔다.
+//  반출이 한 건이라도 있으면 이 분기는 들지 않는다 — 컨테이너 리스트가 지워져도 같은 실행에 미러 편집(PUT)이 섞여
+//  성공하면 네이티브 생성 거절은 파킹으로 간다. 그때 복구는 런북의 일괄 해제 SQL 이다.
 export const MASS_REJECT_MIN = 5;
 /** 일괄 거절로 올린 행의 last_error 머리표 — 파킹 술어의 `^ClickUp` 앵커에서 빠지게 한다. */
 export const MASS_REJECT_MARK = "[일괄 거절] ";
@@ -88,7 +90,7 @@ export function parkedAlert(rows: readonly ParkedRow[]): { severity: "warn"; tit
     title: `ClickUp 반출 — ${rows.length}건을 반출 대상에서 뺐습니다`,
     text: `ClickUp 이 같은 항목을 ${PARK_AFTER}회 연속 거절해(4xx, 권한·레이트리밋 제외) 더는 재시도하지 않습니다.`
       + ` 다른 항목의 반출과 크론은 계속 돕니다.\n${sample}\n`
-      + `→ 원인을 고친 뒤 그 항목을 다시 편집하면 큐에 다시 들어갑니다. 여러 건을 한꺼번에 풀려면 런북(clickup-sync) §4 의 일괄 해제 SQL 을 쓰세요.`
+      + `→ 원인을 고친 뒤 그 항목을 다시 편집하면 큐에 다시 들어갑니다. 여러 건을 한꺼번에 풀려면 런북 clickup-sync 의 «파킹 행 일괄 해제» SQL 을 쓰세요.`
       + ` 남은 파킹 수는 관리 ▸ 스케줄 의 push 요약 parked 에 있습니다.`,
     detail: { parked: rows.length, rows: rows.slice(0, 20) },
   };
