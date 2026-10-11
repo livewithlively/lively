@@ -210,16 +210,18 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
 
   const client = await itemsPool.connect();
   let rows: Record<string, unknown>[];
+  let broken: Error | undefined;
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL hnsw.ef_search = ${CONTRADICTION_EF_SEARCH}`);
     rows = (await client.query(contradictionCandidateSql(conds, distP, limP), params)).rows as Record<string, unknown>[];
     await client.query("COMMIT");
   } catch (e) {
-    await client.query("ROLLBACK").catch(() => { /* 원래 오류를 낸다 */ });
+    //  ROLLBACK 마저 실패하면 커넥션이 죽은 것이다 — 풀에 돌려보내지 않고 폐기한다(release(err)).
+    await client.query("ROLLBACK").catch((re: Error) => { broken = re; });
     throw e;
   } finally {
-    client.release();
+    client.release(broken);
   }
 
   return rows.map((r) => ({

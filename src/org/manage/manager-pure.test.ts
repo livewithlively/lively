@@ -218,6 +218,7 @@ console.log(`\n${pass} passed`);
   assert.ok(!/client\.query\(`SET hnsw/.test(DET), "세션 SET 은 풀 커넥션에 새어 다른 쿼리의 실행계획을 바꾼다");
   assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\) \};/,
     "모순 관리기 접수 실패가 결과에 error 로 안 실려 크론 상태·감시가 ok 로 읽는다");
-  assert.match(RUN, /failedRepos\.length === out\.length && out\.length/, "코드 비교 관리기의 전 레포 접수 실패가 ok 로 접힌다");
+  assert.match(RUN, /\.\.\.\(failMsg \? \{ error: failMsg \} : \{\}\)/, "코드 비교 관리기의 레포 접수 실패(일부 포함)가 error 로 안 실려 상태·감시가 ok 로 읽는다");
+  assert.ok(!/failed_repos/.test(RUN), "아무도 읽지 않는 칸에 실패를 실어 다시 묻는다");
   console.log("ok  배선 — ef_search·접수 실패 노출");
 }

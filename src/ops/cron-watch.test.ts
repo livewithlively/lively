@@ -93,7 +93,7 @@ const st = (o: Record<string, string>): Map<string, BatchTaskState> => new Map(O
   //  관리기는 접수한 위탁 id 를 반환값(= 잡 요약의 managers[i])에 실어야 한다 — 안 실으면 접수 ok 만 보인다.
   const rm = src("../org/manage/run-manager.ts");
   assert.match(rm, /enqueued: true, \.\.\.\(taskId \? \{ task_id: taskId \} : \{\}\)/, "모순 탐지 관리기가 task_id 를 싣는다");
-  assert.match(rm, /enqueued: true, \.\.\.\(taskIds\.length \? \{ task_ids: taskIds \} : \{\}\)/, "코드 비교 관리기가 task_ids 를 싣는다");
+  assert.match(rm, /\.\.\.\(taskIds\.length \? \{ enqueued: true, task_ids: taskIds \} : \{\}\)/, "코드 비교 관리기가 task_ids 를 싣는다");
 }
 
 // ── warn 은 정상이다 — 잡은 돌았고, 경고는 그 잡이 스스로 알린다(카나리) ──

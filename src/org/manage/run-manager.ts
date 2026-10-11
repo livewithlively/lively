@@ -152,14 +152,15 @@ export async function runManager(
       const taskId = taskIdOf(r.summary);
       if (taskId) taskIds.push(taskId);
     }
-    //  레포별 접수 실패도 결과에 싣는다 — 전부 실패면 error, 일부면 그 레포만 failed_repos 로(같은 이유).
+    //  레포별 접수 실패도 결과의 error 로 싣는다 — 크론 상태(statusForManagerResults)와 감시(cron-watch 의 항목 error)가
+    //   읽는 칸은 error 뿐이다. 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 실패로 드러낸다.
     const failedRepos = out.filter((o) => (o as { status?: string }).status === "error");
-    await recordManagerRun(m.id, failedRepos.length === out.length && out.length ? "error" : "ok", { repos: out });
-    if (failedRepos.length === out.length && out.length) {
-      return { ...base, candidates: cands.length + docs.length, error: failedRepos.map((o) => errorOf(o)).join(" · ") };
-    }
-    return { ...base, candidates: cands.length + docs.length, enqueued: true, ...(taskIds.length ? { task_ids: taskIds } : {}),
-      ...(failedRepos.length ? { failed_repos: failedRepos.map((o) => (o as { repo?: string }).repo) } : {}) };
+    await recordManagerRun(m.id, failedRepos.length ? "error" : "ok", { repos: out });
+    const failMsg = failedRepos.length
+      ? `레포 ${failedRepos.length}/${out.length} 접수 실패: ` + failedRepos.map((o) => `${(o as { repo?: string }).repo}: ${errorOf(o)}`).join(" · ")
+      : null;
+    return { ...base, candidates: cands.length + docs.length,
+      ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}), ...(failMsg ? { error: failMsg } : {}) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });
