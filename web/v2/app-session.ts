@@ -22,6 +22,9 @@ export interface SessionApp {
   editMode: 'all' | 'members';   // #4225 누가 고칠 수 있나(app_save) — 기본 전원
   editMembers: string[];
   canEdit: boolean;              // 이 사람이 고칠 수 있나(서버 판정)
+  installedBy: string;           // #4592 누가 만들었나(처음 저장한 사람) · 앱 찾기의 「새로 · 누구」 표시와 사본의 「원본」 표시에
+  installedAt: number;           // 〃 처음 저장된 때(ms · 모르면 0)
+  studio: { origin?: { id: string; title: string; by: string }; made_by?: string; place?: string } | null;   // 매니페스트의 앱 만들기 표시(passthrough 칸)
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
   instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
@@ -55,6 +58,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           scopes: (perm.scopes || []).map(String), tools, pages, tables, sites, net, instances, system, source,
           editMode: a.edit_mode === 'members' ? 'members' as const : 'all' as const,
           editMembers: Array.isArray(a.edit_members) ? a.edit_members.map(String) : [], canEdit: a.can_edit === true,
+          installedBy: String(a.installed_by || ''), installedAt: (() => { const t = Date.parse(String(a.installed_at || '')); return Number.isFinite(t) ? t : 0; })(),
+          studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
           notifications: perm.notifications === true,     // #1891 — 동의 창이 제 줄로 보여 준다
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
           projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [] };   // #4592
@@ -87,7 +92,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [],
-        editMode: 'all' as const, editMembers: [], canEdit: false,
+        editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null,
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });

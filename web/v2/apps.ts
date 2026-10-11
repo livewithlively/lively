@@ -14,7 +14,9 @@ import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 �
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
-import { openAppStudio, studioRecForApp } from './app-studio.js';   // #4592 — 「+ 새 앱」 · 「이어서 만들기」
+import { openAppStudio, openAppStudioFor, studioRecForApp } from './app-studio.js';   // #4592 — 「+ 새 앱」 · 「이어서 만들기」 · 「내 사본 떠서 고치기」
+//  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
+const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
 export type { PadGroup };
 
@@ -229,12 +231,19 @@ export function openLaunchpad(): void {
     type Tile = { node: HTMLElement; rank: number; group: PadGroup; tid: string };
     //  #4600 칸마다 「목록에서 빼기 / 다시 넣기」 — 우클릭, 또는 호버에 뜨는 ⋯. 뺀 칸은 격자 아래 접힌 묶음으로 가고(검색 중엔 제 자리에 표시로),
     //   다시 넣으면 돌아온다. 지우는 게 아니다 — 주소로는 그대로 열린다.
-    const decorate = (node: HTMLElement, tid: string, title: string): HTMLElement => {
+    const decorate = (node: HTMLElement, tid: string, title: string, ws?: SessionApp): HTMLElement => {
       const isHidden = hidden.has(tid);
       //  이 브라우저에서 만들던 앱이면 「이어서 만들기」 가 맨 위에 선다(#4592 앱 만들기).
       const draft = tid.startsWith('i:') ? studioRecForApp(tid.slice(2)) : null;
+      //  워크스페이스 앱(남이 만든 것 포함)은 「내 사본 떠서 고치기」 · 「원본을 고치기」 — ⑧ 남이 만든 앱을 내게 맞게(#4592 원준 2026-10-11).
+      const forApp = ws ? { id: ws.id, title: ws.title, by: ws.installedBy, place: (ws.studio && (ws.studio.place === 'side' || ws.studio.place === 'full' || ws.studio.place === 'both') ? ws.studio.place : undefined) as any } : null;
       const menu = (x: number, y: number) => ctxMenu(x, y, [
-        ...(draft ? [{ label: '이어서 만들기', icon: 'plus', hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); openAppStudio(draft); } }] : []),
+        ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); openAppStudio(draft); } }] : []),
+        ...(forApp ? [
+          { label: '내 사본 떠서 고치기', icon: MENU_ICON.copy, hint: '원본은 그대로 · 내 식으로', run: () => { closeLaunchpad(); void openAppStudioFor(forApp, 'copy'); } },
+          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '모두에게 적용돼요' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); void openAppStudioFor(forApp, 'edit'); } },
+          { sep: true, label: '' },
+        ] : []),
         { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '격자로 돌아와요' : '앱은 그대로 · 눈앞에서만',
           run: () => { togglePadHidden(tid); draw(); } },
       ], { title });
@@ -279,11 +288,15 @@ export function openLaunchpad(): void {
         el('b', { text: a.title }),
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.
-        isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }));
+        isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }),
+        //  #4592 ⑦ 팀에 알리기의 흔적 — 일주일 안에 생긴 워크스페이스 앱은 「새로 · 누구」, 사본은 「원본: …」.
+        a.source.kind !== 'builtin' && a.installedAt && Date.now() - a.installedAt < 7 * 86400000 ? el('span', { class: 'v2-pad-badge v2-pad-badge--new', text: '새로' + (a.installedBy ? ' · ' + a.installedBy : '') }) : null,
+        a.studio && a.studio.origin && a.studio.origin.title ? el('small', { class: 'v2-pad-origin', text: '원본: ' + a.studio.origin.title }) : null);
       //  묶음(#4554 · #4592): 제품에 실려 왔고 셸이 직접 그리는 앱(system)만 기본 앱. 그 밖(세션이 만든 것 · 설치한 것 · 실려 왔지만
       //   워크스페이스가 고쳐 쓰는 「장표 수정」 같은 앱)은 워크스페이스 앱 — lib/app-match padGroupOfInstalled.
       const tid = padTileId('installed', a.id);
-      return { node: decorate(node, tid, a.title), rank: rank(a.title), group: padGroupOfInstalled(a.source.kind, !!a.system), tid };
+      const group = padGroupOfInstalled(a.source.kind, !!a.system);
+      return { node: decorate(node, tid, a.title, group === 'workspace' && hasUi ? a : undefined), rank: rank(a.title), group, tid };
     });
     const all = [...screen, ...session];   // 묶음 안의 차례: 화면 앱 먼저, 설치된 앱이 뒤(종전 격자와 같다)
     //  #4600 뺀 칸은 검색 중이 아니면 격자에서 빠져 아래 묶음으로(lib/pad-hidden.ts padPlacement). 검색 중엔 제 묶음에 「뺀 앱」 표시로 선다 —
