@@ -3341,7 +3341,7 @@
     var mineK = rows.filter(function (c) { return Number(c.bundle) === k; });
     if (mineK.some(function (c) { return c.status !== 'sent' || (c.reply && String(c.reply).trim()); })) return null;
     var ver = Math.max.apply(null, mineK.map(function (c) { return Number(c.ver) || 0; }));
-    return { bundle: k, msg: lineFor(mineK, k, ver || st.ver) };
+    var line = lineFor(mineK, k, ver || st.ver); return { bundle: k, msg: sendText({ msg: line, bundle: k, ds: mineK }) };
   }
   /** 보낼 것이 없는 까닭 — 보내기는 «새로 고친 것» 만 보낸다. 한 번 보냈다고 막히는 것이 아니라, 더 고치면 다시 켜진다. */
   function whyNoSend() {
@@ -3374,13 +3374,13 @@
     if (sm.c.d) { list.appendChild(el('span', '', '문서 전체')); list.appendChild(el('span', '', '의견 ' + sm.c.d)); }
     $('smGo').textContent = sdk.chat ? '보내기' : '복사하기';
     var dd = docOf(st.doc), away = !!(dd && L.session && dd.session && dd.session !== L.session);
-    $('smFine').textContent = (sdk.chat ? 'AI가 이 내용대로 고쳐서 새 판을 만듭니다. 다 되면 이 화면에 알려 드립니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요.')
+    $('smFine').textContent = (sdk.chat ? '고친 글과 의견이 세션 대화에 그대로 적혀 갑니다. AI가 이 내용대로 고쳐서 새 판을 만들고, 다 되면 이 화면에 알려 드립니다.' : '복사한 글을 세션 입력칸에 붙여 넣으세요.')
       + (sm.bundle > 1 ? ' 전에 보낸 것은 다시 보내지 않습니다.' : '')
       + (away && sdk.chat ? ' 이 문서는 다른 세션에서 올린 것이라, 지금 세션의 AI 가 최신 판을 받아서 고칩니다.' : '');
     $('sendModal').hidden = false;
   }
   function exportText(sm) {   // 세션에 바로 보낼 수 없는 화면에서 붙여 넣을 전문
-    var out = [sm.msg, '', '(앱 표 comments 의 묶음 #' + sm.bundle + ' 과 같은 내용 · 줄 나눔은 / 로 · ==말== 은 색 강조, **말** 은 굵게)'];
+    var out = [sm.msg, '', '(아래가 이번에 고치고 적은 것 전문입니다 · 앱 표 comments 의 묶음 #' + sm.bundle + ' 과 같은 내용 · 줄 나눔은 / 로 · ==말== 은 색 강조, **말** 은 굵게)'];
     st.sections.forEach(function (s) {
       var lines = [];
       sm.ds.forEach(function (c) { if (c.slide_id !== s.id) return; if (c.scope === 'del') { lines.unshift('· 이 장을 통째로 지웁니다'); return; } if (c.scope === 'pick') { lines.push('· ' + c.note + ' (' + c.unit_key + ')'); return; } if (c.scope === 'slide') { lines.push('· 장 전체 의견: ' + c.note); return; } if (c.scope === 'spot') { lines.push('· 자리 의견(' + c.unit_key + (c.orig ? ' · ' + c.orig : '') + '): ' + String(c.note).trim()); return; } lines.push('- 원문: 「' + String(c.orig || '').replace(/\n/g, ' / ') + '」'); if (c.edited != null) lines.push('  고친 글: ' + (c.edited ? '「' + c.edited.replace(/\n/g, ' / ') + '」' : '(삭제)')); if (c.note && String(c.note).trim()) lines.push('  의견: ' + String(c.note).trim()); });
@@ -3388,6 +3388,15 @@
     });
     sm.ds.forEach(function (c) { if (c.scope === 'doc') out.push('', '[문서 전체 의견]', c.note); if (c.scope === 'order') out.push('', '[장 순서 바꾸기]', c.note + ' (장 id: ' + String(c.unit_key).replace(/^order:/, '') + ')'); });
     return out.join('\n');
+  }
+  /** 세션에 보내는 글 — 요약 한 줄이 아니라 **고친 글 · 의견 전문**이다(원준 2026-10-12 «맥락이 안 쌓인다 · 코멘트를 그대로 붙여 보내라»).
+   *  한 줄만 보내면 대화에는 «묶음 #K» 만 남아, 다음 턴의 AI 가 앞에서 무엇을 시켰는지 모른다. 서버 상한(4,000자)을 넘으면 줄 단위로 자르고 그 사실을 적는다. */
+  var SEND_MAX = 3800;
+  function sendText(sm) {
+    var t = exportText(sm); if (t.length <= SEND_MAX) return t;
+    var tail = '\n… (길어서 여기까지만 붙였습니다 · 나머지는 앱 표 comments 의 묶음 #' + sm.bundle + ' 에서 읽어 주세요)';
+    var cut = t.slice(0, SEND_MAX - tail.length), nl = cut.lastIndexOf('\n');
+    return (nl > 200 ? cut.slice(0, nl) : cut) + tail;
   }
   async function copyText(t) {
     try { await navigator.clipboard.writeText(t); return true; } catch (e) {}
@@ -3486,7 +3495,7 @@
       await sdk.store.update('comments', { doc: st.doc, status: 'draft' }, { status: 'sent', bundle: sm.bundle, sent_at: when });   // 묶음을 한 번에 잠근다
       sm.ds.forEach(function (c) { c.bundle = sm.bundle; c.status = 'sent'; c.sent_at = when; });
       $('sendModal').hidden = true;
-      if (sdk.chat) await notify(sm.bundle, sm.msg);
+      if (sdk.chat) await notify(sm.bundle, sendText(sm));
       else toast((await copyText(exportText(sm))) ? '복사했습니다 · 세션 입력칸에 붙여 넣으세요' : '복사하지 못했어요 · 묶음 #' + sm.bundle + ' 는 저장됐습니다', 3000);
       renderRows();
       st.waitBundle = (waitingInfo() || {}).bundle || null; paintAi();
