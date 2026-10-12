@@ -13,7 +13,7 @@
 //   구독했으면 알림만 넘기고(앱이 스스로 다시 읽는다 — 입력 중인 글이 안 날아간다), 구독하지 않은 앱이면 **바깥(세션·스크립트)에서
 //   쓴 것일 때만** 화면을 다시 불러온다. 스트림이 없는 게이트웨이를 위해 붙은 목록은 15초마다 한 번 다시 읽는다.
 import { api, el, toast } from '../core.js';
-import { mountAppUiFrame, openAppUi, type AppUiFrame } from './app-ui.js';
+import { mountAppUiFrame, type AppUiFrame, openAppBig } from './app-ui.js';
 import { ensureAppGrant } from './app-session.js';
 import { onAppEvent, type LiveAppEvent } from './live-sync.js';
 import { ctxMenu, pnIcon } from './panes-kit.js';
@@ -264,7 +264,7 @@ export function sessAppPart(ctx: PartCtx): Part {
       const frame = await mountAppUiFrame(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key, onChrome,
         //  내려간 화면은 «쓰는 중» 을 보낼 수 없다: 프레임은 seq 확인을 지난 뒤에야 문서에 붙고, unmount 가 seq 를 올리는 같은 자리에서 다리를 뗀다.
         onTyping: setTyping,
-        onExpand: () => { void openAppUi(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key, full: true }); },
+        onExpand: () => { openAppBig(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },
         onMenu: (req) => new Promise<string | null>((done) => { const now = current(); if (!now || now.app_id !== cur.app_id) { done(null); return; } openMenu(now, req.x, req.y, { extra: req.items, done }); }) });
       if (ctx.dead() || mine !== mountSeq) { frame.destroy(); return; }
       mounted = { sid: s, appId: cur.app_id, frame };
@@ -297,7 +297,7 @@ export function sessAppPart(ctx: PartCtx): Part {
       prefs: () => { frame?.notify('ui/notifications/prefs-open', {}); },
       versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }, afterRevert); },
       original: () => { void revertToOrigin(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); },
-      big: () => { void openAppUi(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },
+      big: () => { openAppBig(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },   // 새 탭에서 화면 가득(폰은 그 자리에서)
       detach: () => { void detachAppFromSession(s, cur.app_id).then((ok) => { if (ok) toast(`「${cur.title}」을(를) 이 세션에서 뗐어요 — 앱의 데이터는 그대로 남아요.`); }); },
     });
     //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.

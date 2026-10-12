@@ -480,7 +480,7 @@
   .row.pinned { border-left-color: var(--amber); }
   .no { padding-top: 6px; text-align: right; font: 700 12px var(--mono); color: var(--muted-2); user-select: none; }
   .row.ed .no { color: var(--amber-text); }
-  .col { min-width: 0; display: grid; gap: 4px; }
+  .col { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }   /* 열을 못 박는다 — 암묵 auto 열은 자리 의견 꼬리표(한 줄 · nowrap)의 폭만큼 자라 글이 칸 밖으로 나갔다(원준 2026-10-12 «여전히 안 고쳐졌어 사이드바») */
   .ed { font-size: var(--row-fs); line-height: 1.5; font-weight: 500; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px 8px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; min-height: 30px; }
   .row:hover .ed { border-color: var(--line-2); background: var(--bg); }
   .ed:focus { border-color: var(--blue); background: var(--bg); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }

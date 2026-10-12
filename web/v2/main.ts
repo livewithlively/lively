@@ -64,7 +64,7 @@ import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 �
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
-import { mountAppUiFrame } from './app-ui.js';
+import { mountAppUiFrame, openAppUi } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
@@ -1097,6 +1097,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
   if (p === 'trash') return { title: '휴지통', noAside: true };   // #3778 안 D — 네 탭이 「안에 든 것」을 탭 안에서 말한다(곁칸 없음)
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
+  if (p === 'full') return { title: parseRoute(route).params.get('t') || '앱', noAside: true };   // 새 탭으로 연 앱(크게 보기)
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
@@ -1547,6 +1548,14 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       }
       tab.aside.replaceChildren();
       markActive('app-instance:' + instance.app_id);
+    } else if (page === 'full' && segs[1]) {
+      //  #/full/<앱>?s=<세션>&page=<화면>&t=<제목> — 「크게 보기」 가 **새 탭**으로 연 앱(원준 2026-10-12 «크게보기를 누르면 바로 거기로 · 모달 띄우지 말고»).
+      //   사이드바도 여백도 없이 그 앱만(openAppUi 의 가득 덮개가 셸 전체를 덮는다). 닫으면 그 탭을 닫고, 스스로 연 탭이 아니면 그 세션으로 간다.
+      const appId = decodeURIComponent(segs[1]);
+      const sid = params.get('s') || undefined;
+      tab.center.replaceChildren(); tab.aside.replaceChildren();
+      void openAppUi(appId, { title: params.get('t') || appId, sessionId: sid, page: params.get('page') || undefined,
+        onClose: () => { try { window.close(); } catch (_) { /* noop */ } window.setTimeout(() => { if (!window.closed) location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/')); }, 150); } });
     } else if (isWikiListRoute(tab.route)) {
       //  #4233 [위키] 본문 목록을 셸이 직접 그린다(원준 2026-09-26 «A를 뼈대로 · 새로 들어온 지식 카드 줄»). 종전엔 클래식 위키를 액자에 실었다.
       //   사이드바의 전체 문서 · 인덱스 · 분류 행은 주소만 바꾸고(#/knowledge?…) 여기로 온다. 레일 착지 #/app/knowledge 도 같은 화면.
