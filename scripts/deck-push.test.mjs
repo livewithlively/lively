@@ -162,6 +162,9 @@ const deck = `<!doctype html><html><head><meta charset="utf-8"><title>덱</title
   for (const m of ui.matchAll(/^  (?:async )?function ([A-Za-z_$][\w$]*)\s*\(/gm)) { if (seen[m[1]]) dup.push(m[1]); seen[m[1]] = 1; }
   ok(Object.keys(seen).length > 200 && !dup.length, "D1 앱 화면의 최상위 함수 이름이 겹치지 않는다", dup.join(", "));
   ok(/^  function pump\(key\) \{/m.test(ui), "D2 저장 줄의 pump(key) 가 그대로 있다");
+  // 글 칸(pre-wrap)의 Enter 는 글자 \n 으로 들어온다 — 장표로 옮기는 fromEditor 가 <br> 로 바꾸지 않으면 글 칸에서만 줄이 나뉘고 장표에는 한 줄로 붙는다
+  ok(/function fromEditor[\s\S]{0,400}\.split\('\\n'\)\.forEach\(function \(part, i\) \{ if \(i\) into\.appendChild\(document\.createElement\('br'\)\)/.test(ui), "D3 글 칸의 줄 나눔이 장표에 <br> 로 옮겨진다");
+  ok(/c\.scope === 'del'\) \{ o\.x\+\+/.test(ui) && /c\.slide_id !== sid \|\| c\.scope === 'del'/.test(ui), "D4 장 지우기 한 줄은 보내기에 따로 세고 의견 수에는 넣지 않는다");
 }
 
 // ── 빨간불 확인: 나누기가 어긋나면 S1d 가 잡는다(변이 1발) ──
