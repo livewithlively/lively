@@ -426,6 +426,21 @@ if (!existsSync(built)) {
     eq([c2.menu, c2.chrome, replies.find((m) => m && m.id === 46).error.code, replies.find((m) => m && m.id === 47).result], [false, false, -32601, { ok: false }], "S2-15b 받을 쪽이 없는 자리(앱 찾기 · 크게 보기)는 capabilities 가 false · ui/menu 는 -32601 · ui/chrome 은 {ok:false}");
   }
 
+  // S2-16 ui/expand — 앱의 단추 하나로 화면 가득(#4629). 띄울 수 있는 자리(onExpand)에서만.
+  {
+    let n = 0;
+    const { fire } = await mount({ sessionId: "box-mine", onExpand: () => { n++; } });
+    fire({ jsonrpc: "2.0", id: 51, method: "ui/initialize", params: {} });
+    fire({ jsonrpc: "2.0", id: 52, method: "ui/expand", params: {} });
+    await settle();
+    eq([replies.find((m) => m && m.id === 51).result.capabilities.expand, n, replies.find((m) => m && m.id === 52).result], [true, 1, { ok: true }], "S2-16 ui/expand → onExpand 한 번 · {ok:true} · 인사가 expand 를 알린다");
+    const { fire: fire2 } = await mount({ sessionId: "box-mine" });
+    fire2({ jsonrpc: "2.0", id: 53, method: "ui/initialize", params: {} });
+    fire2({ jsonrpc: "2.0", id: 54, method: "ui/expand", params: {} });
+    await settle();
+    eq([replies.find((m) => m && m.id === 53).result.capabilities.expand, replies.find((m) => m && m.id === 54).error.code], [false, -32601], "S2-16b 띄울 쪽이 없는 자리(이미 크게 뜬 화면)는 expand 가 false · 부르면 -32601");
+  }
+
 }
 
 console.log(`app-sdk-bridge: ${pass} 단언 통과`);

@@ -84,6 +84,8 @@ export interface AppUiMountOpts {
   onChrome?: (c: { head: boolean; init?: boolean }) => void;
   /** 앱이 호스트 메뉴를 열어 달라고 했다(lively.ui.openMenu). 없으면 못 여는 자리(인사의 capabilities.menu = false · 부르면 -32601). */
   onMenu?: (req: AppMenuRequest) => Promise<string | null>;
+  /** 앱이 저를 화면 가득 띄워 달라고 했다(lively.ui.expand — #4629 «단추 하나로 그것만»). 없으면 못 하는 자리(capabilities.expand = false · 부르면 -32601). */
+  onExpand?: () => void;
   /** #4443 앱 화면 안 글 상자에 초점이 들었다(true) · 났다(false). SDK 런타임이 바뀔 때만 알린다(ui/typing). 새 문서 · 다시 불러오기 ·
    *  내려가기에선 호스트가 false 를 한 번 부른다(옛 문서는 «났다» 를 못 보낸다). 없으면 버린다. */
   onTyping?: (on: boolean) => void;
@@ -130,7 +132,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, files_all: !!opts?.sessionId } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -187,6 +189,11 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       const headOn = (msg.params as { head?: unknown } | undefined)?.head !== false;
       if (opts?.onChrome) opts.onChrome({ head: headOn });
       reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { ok: !!opts?.onChrome } });
+    } else if (msg.method === 'ui/expand') {
+      // #4629 — 앱의 단추 하나가 그 앱을 화면 가득(사이드바 없이) 띄운다. 띄울 수 있는 쪽(세션의 앱 칸)만 받는다.
+      if (!opts?.onExpand) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: '이 화면에서는 화면 가득 띄울 수 없습니다' } }); return; }
+      opts.onExpand();
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { ok: true } });
     } else if (msg.method === 'ui/menu') {
       // #4592 — 앱의 ⋯ 가 호스트의 앱 메뉴를 연다(앱의 항목이 맨 위). 자리는 프레임 안의 좌표로 오고, 여기서 이 창의 좌표로 옮긴다.
       //  항목은 글자뿐이다(라벨 60자 · 12개까지) — 앱이 호스트 메뉴에 그림 · 마크업을 넣을 길이 없다. 고른 것은 id 만 돌려준다.
@@ -276,7 +283,8 @@ let uiEl: HTMLElement | null = null;
 let openFrame: AppUiFrame | null = null;
 
 //  #4600 sessionId — 붙은 앱 탭의 「크게 보기」가 같은 세션에 붙은 채로 크게 띄운다(앱 안의 lively.session 이 그대로 선다).
-export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string }): Promise<boolean> {
+//  full — 앱이 스스로 청한 「화면 가득」(lively.ui.expand): 이 브라우저에 남긴 창 크기 선택과 상관없이 가득 띄운다(그 선택은 건드리지 않는다).
+export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string; full?: boolean }): Promise<boolean> {
   try {
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
@@ -284,6 +292,7 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
     //  화면 가득(#4592 원준 2026-10-09 «사이드바도 그 무엇도 없이 그것에만») — 창 크기 ⇄ 화면 가득. 고른 것은 앱마다 이 브라우저에 남는다.
     const fullKey = 'lively_v2_appui_full:' + appId;
     let full = false; try { full = localStorage.getItem(fullKey) === '1'; } catch (_) { /* noop */ }
+    if (opts?.full) full = true;
     const fullBtn = el('button', { class: 'btn btn-ghost btn-sm v2-appui-full', type: 'button' }) as HTMLButtonElement;
     const paintFull = (): void => { (uiEl as HTMLElement | null)?.classList.toggle('full', full); fullBtn.textContent = full ? '창 크기로' : '화면 가득'; fullBtn.title = full ? '창 크기로 줄인다' : '사이드바 없이 화면 전체로 넓힌다'; };
     fullBtn.onclick = () => { full = !full; try { localStorage.setItem(fullKey, full ? '1' : '0'); } catch (_) { /* noop */ } paintFull(); };
