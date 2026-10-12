@@ -94,7 +94,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/^\s*prefs: \(\) => \{ frame\?\.notify\('ui\/notifications\/prefs-open', \{\}\); \},/m.test(PANE) && /^\s*const hasPrefs = !!frame && frame\.subscribed\('prefs-open'\);/m.test(PANE), "S6-1 「표시 설정」은 앱이 prefs-open 을 구독했을 때만 켜지고, 누르면 그 알림을 보낸다(SPEC §1-1 · 리뷰 (1))");
   ok(/^\s*versions: \(\) => \{ void openVersionsMenu\(x, y, \{ id: cur\.app_id, title: cur\.title \}, afterRevert\); \},/m.test(PANE) && /if \(ev\.version_no == null \|\| ev\.version_no !== reloadedFor\) m\.frame\.reload\(\);/.test(PANE), "S6-3 되돌린 뒤 그 자리에서 다시 띄우고(afterRevert), 같은 번호의 'updated' 사건은 건너뛴다(리뷰 (2))");
   ok(/^\s*big: \(\) => \{ void openAppUi\(cur\.app_id, \{ title: cur\.title, sessionId: s, page: cur\.pages\[0\]\?\.key \}\); \},/m.test(PANE), "S6-1 「크게 보기」는 같은 세션에 붙은 채로 크게 띄운다");
-  ok(/opts\?: \{ page\?: string; title\?: string; sessionId\?: string \}\): Promise<boolean>/.test(UI), "S6-1 openAppUi 가 sessionId 를 받는다(mountAppUiFrame 으로 그대로)");
+  ok(/opts\?: \{ page\?: string; title\?: string; sessionId\?: string; full\?: boolean \}\): Promise<boolean>/.test(UI), "S6-1 openAppUi 가 sessionId 를 받는다(mountAppUiFrame 으로 그대로)");
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];
   ok((upd.match(/m\.frame\.reload\(\);/g) || []).length === 1 && /showBand\(cur, ev\);/.test(upd) && /^\s*return;$/m.test(upd), "S6-3 updated → 그 앱 화면 다시 띄우기 1회 + 띠, 데이터 분기로 안 내려간다");
