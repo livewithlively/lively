@@ -19,7 +19,7 @@ export interface LivelyApp {
   /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
   readonly session: string | null;
   /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; files_all?: boolean } }>;
+  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; expand?: boolean; files_all?: boolean } }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -80,6 +80,8 @@ export interface LivelyApp {
      *  인사의 `capabilities.menu` 가 false 인 자리(앱 찾기에서 연 화면 · 크게 보기)에서는 reject(code -32601) — 앱이 제 메뉴를 낸다.
      */
     openMenu(items: Array<{ id: string; label: string }>, at: { x: number; y: number }): Promise<{ picked: string | null }>;
+    /** 이 앱을 화면 가득(사이드바 없이) 띄운다. 인사의 `capabilities.expand` 가 true 인 자리(세션의 앱 칸)에서만 — 못 하는 자리면 reject(-32601). */
+    expand(): Promise<{ ok: boolean }>;
     /**
      * 호스트가 이 화면의 가장자리를 가리는 폭(px) — 지금은 세션 사이드바 아래의 독이 바닥을 가릴 때 bottom 이 선다(#4592).
      *  같은 값이 CSS 변수 `--lively-inset-top` · `-right` · `-bottom` · `-left` 로도 심긴다. 바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면
