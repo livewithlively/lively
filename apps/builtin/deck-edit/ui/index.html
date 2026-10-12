@@ -228,6 +228,13 @@
   .chip i.e { background: var(--yellow); color: #3A2D00; }
   /* 장 번호를 끌어 순서 바꾸기 — 잡은 칩은 흐리게, 놓일 자리는 파란 막대 */
   .chip { touch-action: none; }
+  .chip.gone { text-decoration: line-through; color: var(--coral-text); border-color: var(--coral); background: var(--coral-bg, rgba(226,92,75,.10)); }
+  .pgone { position: absolute; left: 0; z-index: 3; pointer-events: none; display: grid; place-items: center; background: repeating-linear-gradient(135deg, rgba(226,92,75,.16) 0 14px, rgba(226,92,75,.07) 14px 28px); box-shadow: inset 0 0 0 2px var(--coral); }
+  .pgone b { padding: 6px 12px; border-radius: 8px; background: var(--coral); color: #fff; font: 800 13px var(--font); white-space: nowrap; }
+  body.reorder .pgone { display: none !important; }
+  .goneBar { margin: 10px 14px 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--coral); border-radius: 8px; background: var(--coral-bg, rgba(226,92,75,.10)); color: var(--coral-text); font-size: 12.5px; font-weight: 700; }
+  .goneBar span { flex: 1; min-width: 0; }
+  .ib.gone { color: var(--coral-text); border-color: var(--coral); background: var(--coral-bg, rgba(226,92,75,.10)); }
   .chip.mv { border-style: dashed; border-color: var(--violet); color: var(--violet-text); }
   .chip.on.mv { color: #fff; border-style: solid; }
   /* 순서 끌기 — 든 번호는 손을 따라오고(float), 번호 줄에는 들어갈 자리의 구분선(chipph)이 선다 */
@@ -620,6 +627,7 @@
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5"/></symbol>
   <symbol id="i-deck" viewBox="0 0 24 24"><path d="M3 5h18v11H3z M8 20h8 M12 16v4"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v6 M14 11v6"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14 M5 12h14"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 15l-4.5 4.5 M14.5 4l5.5 5.5 M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4"/></symbol>
@@ -1018,7 +1026,7 @@
     function fromEditor(u, root) {
       var frag = document.createDocumentFragment();
       function conv(n, into) {
-        if (n.nodeType === 3) { if (n.textContent) into.appendChild(document.createTextNode(n.textContent.replace(/ /g, ' '))); return; }
+        if (n.nodeType === 3) { n.textContent.replace(/ /g, ' ').split('\n').forEach(function (part, i) { if (i) into.appendChild(document.createElement('br')); if (part) into.appendChild(document.createTextNode(part)); }); return; }   // 글 칸(pre-wrap)의 Enter 는 <br> 이 아니라 글자 \n 으로 들어온다 — 장표에서는 <br> 이어야 줄이 나뉜다
         if (n.nodeType !== 1) return;
         var t = n.tagName.toLowerCase();
         if (t === 'br') { into.appendChild(document.createElement('br')); return; }
@@ -1751,8 +1759,32 @@
   function drafts() { return st.comments.filter(function (c) { return c.doc === st.doc && c.status === 'draft' && ((c.edited != null) || (c.note && String(c.note).trim())); }); }
   function counts(sid) {
     var e = 0, n = 0;
-    drafts().forEach(function (c) { if (c.slide_id !== sid) return; if (c.edited != null) e++; if (c.note && String(c.note).trim()) n++; });
+    drafts().forEach(function (c) { if (c.slide_id !== sid || c.scope === 'del') return; if (c.edited != null) e++; if (c.note && String(c.note).trim()) n++; });
     return { e: e, n: n };
+  }
+  /* 장 지우기 — 장 순서와 같은 꼴이다: 앱은 문서를 고치지 않고 의견 한 줄(scope 'del' · slide_id = 그 장)을 남기고, 보내면 세션의 AI 가 원본에서 그 장을 지운다.
+     보내기 전에는 같은 단추로 되살린다(줄을 지운다). 옛 판에서 안 보낸 지우기는 그 장이 이 판에도 있으면 그대로 따라온다. */
+  var DEL_NOTE = '이 장을 통째로 지웁니다';
+  function delRow(sid) { return st.comments.filter(function (c) { return c.scope === 'del' && c.doc === st.doc && c.slide_id === sid && c.status === 'draft' && Number(c.ver) <= st.ver; })[0] || null; }
+  function delSent(sid) { return st.comments.filter(function (c) { return c.scope === 'del' && c.doc === st.doc && c.slide_id === sid && c.status === 'sent' && Number(c.ver) === st.ver; })[0] || null; }
+  var delBusy = {};
+  async function setSlideDel(sid, on, quiet) {
+    var sec = st.sections.filter(function (x) { return x.id === sid; })[0]; if (!sec || delBusy[sid]) return;
+    delBusy[sid] = true;
+    try {
+      var has = st.comments.filter(function (c) { return c.scope === 'del' && c.doc === st.doc && c.slide_id === sid && c.status === 'draft'; });
+      if (on && !has.length) {
+        if (st.sections.length - st.sections.filter(function (x) { return delRow(x.id); }).length <= 1) { toast('마지막 남은 장은 지울 수 없습니다'); return; }
+        var row = { doc: st.doc, ver: st.ver, slide_id: sid, unit_key: 'del:' + sid, orig: sec.title || '', edited: null, note: DEL_NOTE, scope: 'del', bundle: null, status: 'draft', reply: '', session: L.session || '' };
+        var ins = await sdk.store.insert('comments', row); row.id = ins && ins.id != null ? ins.id : ('tmp' + Date.now()); st.comments.push(row);
+        if (!quiet) { pushUndo('장 지우기(' + (posOf(sec.i) + 1) + '쪽)', function () { return setSlideDel(sid, false, true); }); toast((posOf(sec.i) + 1) + '쪽을 지우기로 표시했습니다 · 보내면 AI 가 원본에서 지웁니다'); }
+      } else if (!on && has.length) {
+        for (var i = 0; i < has.length; i++) await sdk.store['delete']('comments', { id: has[i].id });
+        st.comments = st.comments.filter(function (c) { return has.indexOf(c) < 0; });
+        if (!quiet) pushUndo('장 되살리기(' + (posOf(sec.i) + 1) + '쪽)', function () { return setSlideDel(sid, true, true); });
+      }
+    } finally { delete delBusy[sid]; }
+    var cur = st.sections[st.cur]; if (cur) renderRows(); else { renderChips(); renderSend(); renderMenu(); }
   }
 
   /* ───────────── 화면: 머리줄 · 장 띠 · 무대 ───────────── */
@@ -2466,8 +2498,8 @@
     var box = $('chips'); box.innerHTML = ''; var on = null, moved = !!st.order;
     ord().forEach(function (fi, pos) {
       var s = st.sections[fi];
-      var b = el('button', 'chip' + (st.cur === s.i ? ' on' : '') + (st.changed[s.id] ? ' chg' : '') + (moved && fi !== pos ? ' mv' : '')); b.type = 'button'; b.textContent = String(pos + 1);
-      b.title = s.title + (moved && fi !== pos ? ' (원래 ' + (fi + 1) + '쪽)' : '') + (st.sections.length > 1 ? ' · 들어서 옮기면 순서가 바뀝니다' : ''); b.setAttribute('data-fi', String(fi));
+      var b = el('button', 'chip' + (st.cur === s.i ? ' on' : '') + (st.changed[s.id] ? ' chg' : '') + (moved && fi !== pos ? ' mv' : '') + (delRow(s.id) ? ' gone' : '')); b.type = 'button'; b.textContent = String(pos + 1);
+      b.title = s.title + (moved && fi !== pos ? ' (원래 ' + (fi + 1) + '쪽)' : '') + (delRow(s.id) ? ' · 지우기로 표시함' : '') + (st.sections.length > 1 ? ' · 들어서 옮기면 순서가 바뀝니다' : ''); b.setAttribute('data-fi', String(fi));
       var c = counts(s.id);
       if (c.n) b.appendChild(el('i', '', String(c.n)));
       else if (c.e) b.appendChild(el('i', 'e', String(c.e)));
@@ -2486,13 +2518,14 @@
   }
   /** 무대 위 표시 — 지금 장 테두리 · (좁은 2열) 장 번호 꼬리표 · (2행) 장마다 멈춤 자리. 장이 놓인 자리(st.pages)와 배율로 그린다. */
   function renderPageMarks() {
-    var canvas = $('canvas'); [].slice.call(canvas.querySelectorAll('.pno,.snap,.spot')).forEach(function (n) { n.remove(); });
+    var canvas = $('canvas'); [].slice.call(canvas.querySelectorAll('.pno,.snap,.spot,.pgone')).forEach(function (n) { n.remove(); });
     var cur = $('curp'), pg = st.pages[st.cur], sc = st.scale;
     if (st.mode !== 'slides' || !pg) { cur.hidden = true; return; }
     cur.style.top = (pg.t * sc) + 'px'; cur.style.width = (pg.w * sc) + 'px'; cur.style.height = (pg.h * sc) + 'px'; cur.hidden = st.pages.length < 2;
     st.pages.forEach(function (p, i) {
       var sn = el('i', 'snap'); sn.style.top = (p.t * sc) + 'px'; canvas.appendChild(sn);
       var sec = st.sections[i]; if (!sec) return;
+      if (delRow(sec.id)) { var gv = el('div', 'pgone'); gv.style.top = (p.t * sc) + 'px'; gv.style.width = (p.w * sc) + 'px'; gv.style.height = (p.h * sc) + 'px'; gv.appendChild(el('b', '', '지울 장 · 보내면 지워집니다')); canvas.appendChild(gv); }
       var c = counts(sec.id);
       var b = el('span', 'pno' + (i === st.cur ? ' on' : (c.e || c.n ? ' has' : '')), String(posOf(i) + 1)); b.style.top = (p.t * sc + 3) + 'px'; canvas.appendChild(b);
       // 자리에 단 의견 — 보이는 장 전부에(지금 장이 아닌 것은 흐리게)
@@ -2856,6 +2889,7 @@
     var lastBlock = null; var sentGroup = [];
     var pt = st.prevText[sid];
     var spots = spotsOf(sid);
+    if (delRow(sid)) { var gb = el('div', 'goneBar'); gb.appendChild(el('span', '', '이 장은 지우기로 표시했습니다 · 보내면 AI 가 원본에서 통째로 지웁니다')); var gr = el('button', 'ib sm', '되살리기'); gr.type = 'button'; gr.onclick = function () { setSlideDel(sid, false).catch(fail); }; gb.appendChild(gr); box.appendChild(gb); }
     if (spots.length) { box.appendChild(el('div', 'sep', '그림 · 자리에 단 의견')); spots.forEach(function (c2, n) { box.appendChild(buildSpotRow(c2, n + 1)); }); }
     list.forEach(function (u) {
       var dr = draftRow(sid, u); var sents = sentRows(sid, u);
@@ -2873,7 +2907,7 @@
       box.appendChild(fold); box.appendChild(holder);
     }
     // 장 전체 의견(초안 · 보낸 것)
-    var sentScope = st.comments.filter(function (x) { return x.scope === 'slide' && x.slide_id === sid && x.status !== 'draft'; }).sort(function (a, b) { return Number(b.id) - Number(a.id); });
+    var sentScope = st.comments.filter(function (x) { return (x.scope === 'slide' || x.scope === 'del') && x.slide_id === sid && x.status !== 'draft'; }).sort(function (a, b) { return Number(b.id) - Number(a.id); });
     if (sentScope.length) {
       var w = el('div', 'sentCm'); w.appendChild(el('div', 'lab', '보낸 장 전체 의견'));
       sentScope.slice(0, 3).forEach(function (x) { var d = el('div', 'row sent'); d.style.gridTemplateColumns = 'minmax(0,1fr)'; var col = el('div', 'col'); var t = el('div', 'ed'); t.contentEditable = 'false'; t.textContent = x.note; col.appendChild(t); col.appendChild(aiChip(x)); d.appendChild(col); w.appendChild(d); });
@@ -3063,7 +3097,7 @@
     if (how !== 'none') scrollToPage(fi, how);          // 장 높이가 방금 정해졌을 수 있다(첫 장)
   }
   /** 장표 아래 한 줄: 「2 / 18 · 제목」(말줄임) · 안 고르기 · ‹ › · 장 전체 의견(좁은 화면 · 2행에서는 눌러야 펴진다). */
-  var HELP = '글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. 글을 끌어 고르면 색 강조 · 굵게를 넣거나 풉니다. Tab 은 그 글의 의견 칸. 상자 · 도식 · 그림은 장표에서 눌러 고르면 그 개체에 의견을 답니다. 머리줄의 핀 · 영역 도구로 한 자리나 넓은 곳에도 답니다. 장 번호는 끌어서 순서를 바꿉니다.';
+  var HELP = '글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. 글을 끌어 고르면 색 강조 · 굵게를 넣거나 풉니다. Enter 는 그 자리에서 줄을 나눕니다. Tab 은 그 글의 의견 칸. 상자 · 도식 · 그림은 장표에서 눌러 고르면 그 개체에 의견을 답니다. 머리줄의 핀 · 영역 도구로 한 자리나 넓은 곳에도 답니다. 장 번호는 끌어서 순서를 바꿉니다. 휴지통은 그 장을 통째로 지웁니다(보내기 전에는 되살릴 수 있습니다).';
   /** 글 줄 칸의 머리 한 줄 — 「2 / 17 · 제목」 · 안 고르기 · 글 수 · 도움말 · (좁은 폭) 장 전체 의견 켜기. 장표 위가 아니라 여기 선다. */
   function renderHead(s) {
     var u = $('rhLine'); u.innerHTML = '';
@@ -3081,6 +3115,11 @@
     var list = st.units[st.cur] || [], c = counts(s.id);
     u.appendChild(el('span', 'cnt', '글 ' + list.length + '줄' + (c.e ? ' · 고침 ' + c.e : '') + (c.n ? ' · 의견 ' + c.n : '')));
     var hp = el('button', 'ib sm ic', '?'); hp.type = 'button'; hp.title = HELP; hp.setAttribute('aria-label', '쓰는 법'); hp.onclick = function () { toast(HELP, 7000); }; u.appendChild(hp);
+    if (st.mode === 'slides' && st.sections.length > 1) {
+      var gone = !!delRow(s.id), db = el('button', 'ib sm ic' + (gone ? ' gone' : '')); db.type = 'button'; db.id = 'delToggle'; db.innerHTML = svg(gone ? 'undo' : 'trash');
+      db.title = gone ? '이 장 되살리기(지우기 취소)' : '이 장을 통째로 지우기 · 보내면 AI 가 원본에서 지웁니다'; db.setAttribute('aria-label', gone ? '이 장 되살리기' : '이 장 지우기');
+      db.onclick = function () { setSlideDel(s.id, !gone).catch(fail); }; u.appendChild(db);
+    }
     var sr = scopeRow('slide', s.id), wsc = st.wantScope['slide:' + st.doc + ':' + st.ver + ':' + s.id];
     var has = !!String(wsc ? wsc.note : (sr ? sr.note || '' : '')).trim();
     var tg = el('button', 'ib sm' + (has ? ' has' : '')); tg.type = 'button'; tg.id = 'cmToggle'; tg.title = '이 장 전체에 대한 의견';
@@ -3183,11 +3222,12 @@
   //   못 알렸으면(세션이 멈췄다 · 거부됐다) 묶음은 잠긴 채 두고 「다시 보내기」 띠를 남긴다 — 다시 누르는 것이 새 사람 동작이다.
   function mine(c) { return c.doc === st.doc; }   // 이 문서의 초안은 화면에 보이는 그대로 한 묶음이다(다른 세션에서 남긴 초안이 보이면 그것도 같이 간다)
   function countsOf(rows) {
-    var o = { e: 0, n: 0, s: 0, d: 0, p: 0, o: 0, bySlide: {} };
+    var o = { e: 0, n: 0, s: 0, d: 0, p: 0, o: 0, x: 0, bySlide: {} };
     rows.forEach(function (c) {
       if (c.scope === 'doc') { o.d++; return; }
       if (c.scope === 'order') { o.o++; return; }
-      var k = c.slide_id || '?'; var b = o.bySlide[k] = o.bySlide[k] || { e: 0, n: 0, s: 0, p: 0 };
+      var k = c.slide_id || '?'; var b = o.bySlide[k] = o.bySlide[k] || { e: 0, n: 0, s: 0, p: 0, x: 0 };
+      if (c.scope === 'del') { o.x++; b.x++; return; }
       if (c.scope === 'slide') { o.s++; b.s++; return; }
       if (c.scope === 'spot') { o.p++; b.p++; return; }
       if (c.edited != null) { o.e++; b.e++; }
@@ -3198,7 +3238,7 @@
   function lineFor(rows, bundle, ver) {
     var c = countsOf(rows);
     var picksN = st.picks.filter(function (x) { return x.doc === st.doc && Number(x.ver) === Number(ver); }).length;
-    return '[장표 수정] ' + st.title + ' · 판 ' + ver + ' · 고친 글 ' + c.e + ' · 의견 ' + c.n + ' · 장 전체 의견 ' + c.s + (c.p ? ' · 자리 의견 ' + c.p : '') + (c.o ? ' · 장 순서 바꿈' : '') + (c.d ? ' · 문서 의견 ' + c.d : '') + (picksN ? ' · 고른 안 ' + picksN : '') + ' → 반영해 주세요 (묶음 #' + bundle + (st.doc && st.doc !== st.title ? ' · 문서 ' + st.doc : '') + ')';
+    return '[장표 수정] ' + st.title + ' · 판 ' + ver + ' · 고친 글 ' + c.e + ' · 의견 ' + c.n + ' · 장 전체 의견 ' + c.s + (c.p ? ' · 자리 의견 ' + c.p : '') + (c.x ? ' · 지울 장 ' + c.x : '') + (c.o ? ' · 장 순서 바꿈' : '') + (c.d ? ' · 문서 의견 ' + c.d : '') + (picksN ? ' · 고른 안 ' + picksN : '') + ' → 반영해 주세요 (묶음 #' + bundle + (st.doc && st.doc !== st.title ? ' · 문서 ' + st.doc : '') + ')';
   }
   function sendSummary() {
     var ds = drafts().filter(mine);
@@ -3242,7 +3282,7 @@
     $('smTitle').textContent = '고치고 적은 것 ' + sm.total + '건을 AI에게 보냅니다';
     $('smSkip').checked = false; $('smSkipL').hidden = !sdk.chat;
     var list = $('smList'); list.innerHTML = '';
-    ord().forEach(function (fi) { var s = st.sections[fi], b = sm.c.bySlide[s.id]; if (!b) return; var parts = []; if (b.e) parts.push('고친 글 ' + b.e); if (b.n) parts.push('의견 ' + b.n); if (b.p) parts.push('자리 의견 ' + b.p); if (b.s) parts.push('장 전체 의견 ' + b.s); list.appendChild(el('span', 'clip', (st.mode === 'slides' ? (posOf(s.i) + 1) + '쪽 · ' : '') + s.title)); list.appendChild(el('span', '', parts.join(' · '))); });
+    ord().forEach(function (fi) { var s = st.sections[fi], b = sm.c.bySlide[s.id]; if (!b) return; var parts = []; if (b.x) parts.push('장 지우기'); if (b.e) parts.push('고친 글 ' + b.e); if (b.n) parts.push('의견 ' + b.n); if (b.p) parts.push('자리 의견 ' + b.p); if (b.s) parts.push('장 전체 의견 ' + b.s); list.appendChild(el('span', 'clip', (st.mode === 'slides' ? (posOf(s.i) + 1) + '쪽 · ' : '') + s.title)); list.appendChild(el('span', '', parts.join(' · '))); });
     if (sm.c.o) { list.appendChild(el('span', '', '장 순서')); list.appendChild(el('span', '', '바꿈')); }
     if (sm.c.d) { list.appendChild(el('span', '', '문서 전체')); list.appendChild(el('span', '', '의견 ' + sm.c.d)); }
     $('smGo').textContent = sdk.chat ? '보내기' : '복사하기';
@@ -3256,7 +3296,7 @@
     var out = [sm.msg, '', '(앱 표 comments 의 묶음 #' + sm.bundle + ' 과 같은 내용 · 줄 나눔은 / 로 · ==말== 은 색 강조, **말** 은 굵게)'];
     st.sections.forEach(function (s) {
       var lines = [];
-      sm.ds.forEach(function (c) { if (c.slide_id !== s.id) return; if (c.scope === 'slide') { lines.push('· 장 전체 의견: ' + c.note); return; } if (c.scope === 'spot') { lines.push('· 자리 의견(' + c.unit_key + (c.orig ? ' · ' + c.orig : '') + '): ' + String(c.note).trim()); return; } lines.push('- 원문: 「' + String(c.orig || '').replace(/\n/g, ' / ') + '」'); if (c.edited != null) lines.push('  고친 글: ' + (c.edited ? '「' + c.edited.replace(/\n/g, ' / ') + '」' : '(삭제)')); if (c.note && String(c.note).trim()) lines.push('  의견: ' + String(c.note).trim()); });
+      sm.ds.forEach(function (c) { if (c.slide_id !== s.id) return; if (c.scope === 'del') { lines.unshift('· 이 장을 통째로 지웁니다'); return; } if (c.scope === 'slide') { lines.push('· 장 전체 의견: ' + c.note); return; } if (c.scope === 'spot') { lines.push('· 자리 의견(' + c.unit_key + (c.orig ? ' · ' + c.orig : '') + '): ' + String(c.note).trim()); return; } lines.push('- 원문: 「' + String(c.orig || '').replace(/\n/g, ' / ') + '」'); if (c.edited != null) lines.push('  고친 글: ' + (c.edited ? '「' + c.edited.replace(/\n/g, ' / ') + '」' : '(삭제)')); if (c.note && String(c.note).trim()) lines.push('  의견: ' + String(c.note).trim()); });
       if (lines.length) { out.push('', '[' + (s.i + 1) + '쪽 · ' + s.title + ' · id ' + s.id + ']'); out = out.concat(lines); }
     });
     sm.ds.forEach(function (c) { if (c.scope === 'doc') out.push('', '[문서 전체 의견]', c.note); if (c.scope === 'order') out.push('', '[장 순서 바꾸기]', c.note + ' (장 id: ' + String(c.unit_key).replace(/^order:/, '') + ')'); });
@@ -3308,6 +3348,7 @@
         .sort(function (a, b) { return (a.scope === 'slide' ? 0 : (a.scope === 'unit' ? 1 : 2)) - (b.scope === 'slide' ? 0 : (b.scope === 'unit' ? 1 : 2)); })
         .forEach(function (c) {
           var note = one(c.note);
+          if (c.scope === 'del') { lines.unshift('· 이 장을 통째로 지웁니다' + tag(c)); return; }
           if (c.scope === 'slide') { lines.push('· 이 장 전체: ' + note + tag(c)); return; }
           if (c.scope === 'spot') { lines.push('· ' + spotWhere(c) + ': ' + note + tag(c)); return; }
           var head = '- 「' + one(c.orig) + '」';
@@ -3436,6 +3477,8 @@
     if (pb) items.push({ id: 'renotify', label: '묶음 #' + pb.bundle + ' 다시 알리기', hot: true, run: function () { notify(pb.bundle, pb.msg); } });
     if (st.doc && st.mode === 'slides' && st.vers.indexOf(st.ver) > 0) items.push({ id: 'review', label: '앞 판과 그림으로 견주기', run: function () { openReview().catch(fail); } });
     if (undos.length) items.push({ id: 'undo', label: '되돌리기: ' + undos[undos.length - 1].label, run: function () { doUndo(); } });
+    var cs = st.doc && st.mode === 'slides' && st.sections.length > 1 ? st.sections[st.cur] : null;
+    if (cs) { var cg = !!delRow(cs.id); items.push({ id: 'delslide', label: (posOf(cs.i) + 1) + '쪽 ' + (cg ? '되살리기(지우기 취소)' : '통째로 지우기'), run: function () { setSlideDel(cs.id, !cg).catch(fail); } }); }
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
     if (st.doc && st.compact) items.push({ id: 'copycm', label: '내 의견 복사', run: copyMyComments });   // 좁은 폭에서는 머리줄 단추가 숨는다
     return items;
