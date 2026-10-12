@@ -173,7 +173,7 @@
   .stageWrap { position: relative; flex: none; display: flex; min-height: 0; padding-left: 40px; }
   .stageWrap.norail, body.cols.compact .stageWrap { padding-left: 0; }
   body.cols .stageWrap { flex: 1 1 0; }
-  #right { position: relative; min-width: 0; min-height: 0; background: var(--bg); display: flex; flex-direction: column; }
+  #right { position: relative; min-width: 0; min-height: 0; overflow-x: hidden; overflow-x: clip; background: var(--bg); display: flex; flex-direction: column; }
   /* 경계 손잡이 — 장표 칸과 글 줄 칸 사이. 끌어서 폭(2열) · 높이(2행)를 정한다. 두 번 누르면 처음대로 */
   #split { position: absolute; z-index: 6; touch-action: none; }
   #split::after { content: ""; position: absolute; background: var(--blue); opacity: 0; transition: opacity .12s; border-radius: 2px; }
@@ -308,7 +308,7 @@
   .tools button { width: 28px; padding: 0; justify-content: center; }
   body.compact:not(.zoom) #tools { display: none; }
   body.zoom #tools { display: inline-flex; position: fixed; left: 10px; top: 48px; z-index: 17; box-shadow: 0 4px 14px rgba(21,35,59,.2); }
-  .vars { display: inline-flex; gap: 4px; align-items: center; flex: none; font-size: 12px; color: var(--muted); }
+  .vars { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--muted); }
   .vars .v { height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg); color: var(--ink-sub); font-size: 12px; font-weight: 700; }
   .vars .v.on { background: var(--mint-bg); color: var(--mint-deep); border-color: var(--mint-deep); }
   .vars .v.cmp { background: var(--soft-2); }
@@ -345,9 +345,9 @@
   /* 글 줄 칸의 머리 — 지금 장(「2 / 17 · 제목」 · 글 수) 한 줄 + 장 전체 의견 칸. 장표 위가 아니라 여기 선다 */
   .rh { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; background: var(--bg); border-bottom: 1px solid var(--line); padding: 7px 12px 8px; }
   body.compact .rh { padding: 6px 10px 6px; }
-  .rhLine { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 13px; min-width: 0; }
+  .rhLine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 26px; font-size: 13px; min-width: 0; }   /* 단추(안 고르기 · 고정 · 휴지통)가 칸 폭을 넘으면 다음 줄로 — 넘쳐서 오른쪽이 잘리지 않게 */
   .rhLine small { flex: none; font: 700 12px var(--mono); color: var(--muted); }
-  .rhLine b { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+  .rhLine b { flex: 1 1 90px; min-width: 90px; font-size: 13.5px; font-weight: 800; color: var(--ink); }
   .rhLine .cnt { flex: none; font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
   body.compact .rhLine .cnt { display: none; }
   /* 글 줄 칸이 좁으면 머리의 단추는 그림만 남고(r-tight), 더 좁으면 도움말도 뺀다(r-tiny) — 오른쪽이 잘리지 않게 */

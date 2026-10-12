@@ -101,6 +101,7 @@ async function PAGE_MAIN() {
   const tell = (id) => frameEl()?.contentWindow?.postMessage({ __test: id }, "*");
   const visiblePart = () => $$('#app .pn-pane[data-zone="side"] .pn-pane-body > .pn-part').find((n) => !n.hidden) || null;
   const bigView = async () => {
+    localStorage.setItem("lively_v2_appui_full:deck", "0");   // 「창 크기로」 를 고른 사람의 화면 — 기본은 화면 가득이다(#4629)
     const okOpen = await PN.openAppUi("deck", { title: "장표 수정" });
     await waitFor(() => $(".v2-appui"));
     const o = $(".v2-appui"); const r = o ? o.getBoundingClientRect() : null;
@@ -300,12 +301,12 @@ const [fw, fh] = F.vp || [0, 0];
 check(fw > 640 && fh <= 500 && !!f.big && Js(f.big.box) === Js([0, 0, fw, fh]), "C2 눕힌 폰 «크게 보기» = 화면 전체", { ...f.big, vp: F.vp });
 const t = T.q || {};
 check(!!t.dock && t.mAside && t.dock.shown && t.dock.inset !== "0px", "A3 태블릿 서랍엔 독이 선다", t.dock);
-check(!!t.big && !!t.big.box && t.big.box[0] === 24 && t.big.esc !== "none", "C 태블릿 «크게 보기» 는 종전 창(여백 24px · «(Esc)»)", t.big);
+check(!!t.big && !!t.big.box && t.big.box[0] === 24 && t.big.esc !== "none", "C 태블릿 «크게 보기» 는 「창 크기로」 를 골랐으면 종전 창(여백 24px · «(Esc)»)", t.big);
 const d = D.q || {};
 check(!!d.dock && d.dock.shown, "A7 데스크톱 독 그대로", d.dock);
 check(!!d.head && d.head.wide === "none", "H7 데스크톱 머리줄 [붙은 앱] 숨음(곁칸에 그 탭이 보인다)", d.head && d.head.wide);
 const dh = (D.vp || [0, 0])[1];
-check(!!d.big && Js(d.big.box && d.big.box.slice(2)) === Js([960, Math.round(Math.min(680, dh * 0.88))]) && d.big.esc !== "none" && d.big.btn === "닫기 (Esc)", "C3 데스크톱 «크게 보기» 종전 창(최대 960×680 · 88vh) · «닫기 (Esc)»", { ...d.big, vp: D.vp });
+check(!!d.big && Js(d.big.box && d.big.box.slice(2)) === Js([960, Math.round(Math.min(680, dh * 0.88))]) && d.big.esc !== "none" && d.big.btn === "닫기 (Esc)", "C3 데스크톱 «크게 보기» 는 「창 크기로」 를 골랐으면 종전 창(최대 960×680 · 88vh) · «닫기 (Esc)»", { ...d.big, vp: D.vp });
 const errs = [P, F, T, D].flatMap((r) => r.pageErrors || []);
 check(errs.length === 0, "E 페이지 오류 없음", errs);
 console.log(`\nphone-side-pane-runtime: ${pass} 통과 · ${fail} 실패`);

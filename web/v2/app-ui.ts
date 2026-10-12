@@ -291,7 +291,8 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
     openFrame = f;
     //  화면 가득(#4592 원준 2026-10-09 «사이드바도 그 무엇도 없이 그것에만») — 창 크기 ⇄ 화면 가득. 고른 것은 앱마다 이 브라우저에 남는다.
     const fullKey = 'lively_v2_appui_full:' + appId;
-    let full = false; try { full = localStorage.getItem(fullKey) === '1'; } catch (_) { /* noop */ }
+    //  기본이 화면 가득이다(#4629 원준 2026-10-12 «크게 보기는 완전 전체 화면으로 — 모달이 작다»). 「창 크기로」 를 고른 사람만 창으로 뜬다.
+    let full = true; try { full = localStorage.getItem(fullKey) !== '0'; } catch (_) { /* noop */ }
     if (opts?.full) full = true;
     const fullBtn = el('button', { class: 'btn btn-ghost btn-sm v2-appui-full', type: 'button' }) as HTMLButtonElement;
     const paintFull = (): void => { (uiEl as HTMLElement | null)?.classList.toggle('full', full); fullBtn.textContent = full ? '창 크기로' : '화면 가득'; fullBtn.title = full ? '창 크기로 줄인다' : '사이드바 없이 화면 전체로 넓힌다'; };
