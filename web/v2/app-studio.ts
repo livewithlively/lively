@@ -505,7 +505,7 @@ async function build(rec: StudioRec): Promise<void> {
     }).catch(() => { /* 판 이력 없이도 안내한다 */ });
     const how: HTMLElement[] = [];
     if (rec.place !== 'full') how.push(el('div', {}, el('span', { class: 'k', text: '세션 옆에' }), el('span', { text: '세션을 열고 오른쪽 위 + 에서 이 앱을 고르면 그 세션 옆에 붙어요. 붙인 앱은 그 세션의 AI 도 같이 봐요 — 앱에 적은 것을 AI 에게 바로 시킬 수 있어요.' })));
-    if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '화면 전체로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 넓게 열려요. 「화면 가득」 을 누르면 사이드바 없이 그 앱만 보여요.' })));
+    if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '화면 전체로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 사이드바 없이 화면 가득 열려요.' })));
     how.push(el('div', {}, el('span', { class: 'k', text: '더 고치려면' }), el('span', { text: '앱 찾기에서 그 칸의 ⋯ → 「이어서 만들기」. 말로 고치면 새 판이 되고, 마음에 안 들면 이전 판으로 되돌릴 수 있어요.' })));
     how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기 ⋯ 에서 「내 사본 떠서 고치기」 로 자기 식으로 바꿔 쓰거나, 「원본을 고치기」 로 모두에게 적용되는 고침을 할 수 있어요.' })));
     // ⑦ 팀에 알리기 — 글은 기획 카드에서 미리 적는다. 지식 「앱 소개」 + 슬랙(적으면).

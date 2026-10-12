@@ -283,33 +283,23 @@ let uiEl: HTMLElement | null = null;
 let openFrame: AppUiFrame | null = null;
 
 //  #4600 sessionId — 붙은 앱 탭의 「크게 보기」가 같은 세션에 붙은 채로 크게 띄운다(앱 안의 lively.session 이 그대로 선다).
-//  full — 앱이 스스로 청한 「화면 가득」(lively.ui.expand): 이 브라우저에 남긴 창 크기 선택과 상관없이 가득 띄운다(그 선택은 건드리지 않는다).
+//  크게 보기는 **늘 화면 가득**이다(원준 2026-10-12 «모달로 띄우는데 개짝아 · 완전 전체화면으로») — 사이드바도 여백도 없이 그 앱만, 머리줄 한 줄(이름 · 닫기).
+//   창 크기 ⇄ 화면 가득 토글(#4592 2026-10-09)은 걷었다: 모드가 둘이면 «크게» 를 눌렀는데 작게 뜨는 일이 생긴다. full 옵션은 호환으로만 남는다(늘 가득).
 export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string; full?: boolean }): Promise<boolean> {
   try {
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
     openFrame = f;
-    //  화면 가득(#4592 원준 2026-10-09 «사이드바도 그 무엇도 없이 그것에만») — 창 크기 ⇄ 화면 가득. 고른 것은 앱마다 이 브라우저에 남는다.
-    const fullKey = 'lively_v2_appui_full:' + appId;
-    //  기본이 화면 가득이다(#4629 원준 2026-10-12 «크게 보기는 완전 전체 화면으로 — 모달이 작다»). 「창 크기로」 를 고른 사람만 창으로 뜬다.
-    let full = true; try { full = localStorage.getItem(fullKey) !== '0'; } catch (_) { /* noop */ }
-    if (opts?.full) full = true;
-    const fullBtn = el('button', { class: 'btn btn-ghost btn-sm v2-appui-full', type: 'button' }) as HTMLButtonElement;
-    const paintFull = (): void => { (uiEl as HTMLElement | null)?.classList.toggle('full', full); fullBtn.textContent = full ? '창 크기로' : '화면 가득'; fullBtn.title = full ? '창 크기로 줄인다' : '사이드바 없이 화면 전체로 넓힌다'; };
-    fullBtn.onclick = () => { full = !full; try { localStorage.setItem(fullKey, full ? '1' : '0'); } catch (_) { /* noop */ } paintFull(); };
-    uiEl = el('div', { class: 'v2-appui-ov' + (full ? ' full' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
-        onclick: (e: Event) => { if (e.target === uiEl) closeAppUi(); } },
+    uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱' },
       el('div', { class: 'v2-appui' },
         el('div', { class: 'v2-appui-h' },
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
-          fullBtn,
           //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
         f.root));
     document.body.append(uiEl as HTMLElement);
-    paintFull();
     document.addEventListener('keydown', uiKey);
     return true;
   } catch (e: any) {
