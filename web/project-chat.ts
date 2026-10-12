@@ -5,6 +5,7 @@
 //  ── 지키는 것(홈 리브에서 물려받은 원칙, 그대로) ──
 //  · 답을 기다리는 동안 입력을 막는다(턴이 겹치면 --resume 이 꼬인다). · 도구 이름은 사람 말로, 모르는 이름은 그대로.
 //  · 진행이 멈추면(STALL) 조용히 풀지 않고 "끝나지 못했다"고 말한다. · 실패를 삼키지 않는다 — 그 자리에 말한다.
+import { splitJsonlChunk, flushJsonlCarry } from './jsonl-lines.js';
 import { api } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 
@@ -86,8 +87,18 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
     bar: opts.bar,
   });
 
-  async function drain(turnId: string, t: ChatTurn, from0 = 0): Promise<void> {
-    let from = from0, sawText = false, fails = 0, grewAt = Date.now();
+  async function drain(turnId: string, t: ChatTurn, from0 = 0, carry0 = ''): Promise<void> {
+    let from = from0, carry = carry0, sawText = false, fails = 0, grewAt = Date.now();
+    const apply = (line: string): void => {
+      let ev: any;
+      try { ev = JSON.parse(line); } catch { return; }   // 완결된 줄인데도 깨졌으면 원본 결함 — 건너뛴다
+      if (ev.type === 'stream_event') { view.stream(t, ev); sawText = true; return; }
+      if (ev.type === 'result') {
+        if (!sawText && String(ev.result ?? '').trim()) view.event(t, { type: 'assistant', message: { content: [{ type: 'text', text: String(ev.result) }] } });
+        return;
+      }
+      if (view.event(t, ev).text) sawText = true;
+    };
     for (;;) {
       if (dead) return;
       let tail: TailResult;
@@ -101,27 +112,24 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
         return;
       }
       if (tail.chunk) {
-        for (const line of tail.chunk.split('\n')) {
-          if (!line.trim()) continue;
-          let ev: any;
-          try { ev = JSON.parse(line); } catch { continue; }   // 잘린 줄 — 다음 청크에서 온전히 온다
-          if (ev.type === 'stream_event') { view.stream(t, ev); sawText = true; continue; }
-          if (ev.type === 'result') {
-            if (!sawText && String(ev.result ?? '').trim()) view.event(t, { type: 'assistant', message: { content: [{ type: 'text', text: String(ev.result) }] } });
-            continue;
-          }
-          if (view.event(t, ev).text) sawText = true;
-        }
+        // 조각 끝의 미완 줄은 carry 로 들고 다음 조각에 잇는다 — from 은 이미 그 뒤로 전진하므로 버리면 다시 안 온다.
+        const cut = splitJsonlChunk(carry, tail.chunk);
+        carry = cut.carry;
+        for (const line of cut.lines) apply(line);
         from = tail.next ?? from;
         grewAt = Date.now();
         view.scroll();
       }
-      if (tail.done) { view.settle(t, { exit: tail.exit }); view.scroll(); return; }
+      if (tail.done && !tail.chunk) {
+        for (const line of flushJsonlCarry(carry)) apply(line);
+        view.settle(t, { exit: tail.exit }); view.scroll(); return;
+      }
       if (Date.now() - grewAt > STALL_MS) {
         view.settle(t);
         view.error(t, '이 요청은 끝나지 못했습니다(진행이 멈췄어요). 다시 말씀해 주시면 이어서 해 보겠습니다.');
         return;
       }
+      if (tail.done) continue;   // 끝났으면 남은 조각만 바로 받아 닫는다 — 기다릴 이유가 없다
       await new Promise((s) => setTimeout(s, POLL_MS));
     }
   }
@@ -139,15 +147,32 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
     for (const tt of turns) {
       if (dead) return;
       const t = view.turn(tt.text, { ts: tt.at });
-      let tail: TailResult | null = null;
-      try { tail = await api(`${base}/turn/${encodeURIComponent(tt.id)}?from=0`) as TailResult; }
-      catch { t.work.remove(); continue; }
-      for (const line of String(tail.chunk ?? '').split('\n')) {
-        if (!line.trim()) continue;
-        let ev: any; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'stream_event' || ev.type === 'result') continue;
+      // 한 번 읽으면 256KB 까지라 긴 턴의 뒷부분과 경계에 걸린 줄이 사라진다 — 빈 조각이 올 때까지 이어 읽는다.
+      let tail: TailResult | null = null, from = 0, carry = '';
+      const show = (line: string): void => {
+        let ev: any; try { ev = JSON.parse(line); } catch { return; }
+        if (ev.type === 'stream_event' || ev.type === 'result') return;
         view.event(t, ev);
+      };
+      try {
+        for (;;) {
+          tail = await api(`${base}/turn/${encodeURIComponent(tt.id)}?from=${from}`) as TailResult;
+          if (!tail.chunk) break;
+          const cut = splitJsonlChunk(carry, tail.chunk);
+          carry = cut.carry;
+          for (const line of cut.lines) show(line);
+          if ((tail.next ?? from) <= from) break;
+          from = tail.next ?? from;
+        }
+      } catch {
+        // 이어 읽다 실패하면 이미 그린 이벤트는 두고 그 자리에 말한다 — 지우면 진행 중 턴의 흔적까지 사라진다.
+        if (from === 0) { t.work.remove(); continue; }
+        view.settle(t);
+        view.error(t, '이 요청의 진행을 끝까지 불러오지 못했습니다. 화면을 새로고침하면 다시 불러옵니다.');
+        continue;
       }
+      if (!tail) { t.work.remove(); continue; }   // 타입 좁히기용 — 루프는 첫 요청 전에 빠져나가지 않는다
+      if (tail.done) for (const line of flushJsonlCarry(carry)) show(line);
       const ageMs = tt.at ? Date.now() - Date.parse(tt.at) : 0;
       if (!tail.done && ageMs > 30 * 60_000) {
         view.settle(t);
@@ -155,7 +180,7 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
       } else if (!tail.done) {
         running = tt.id; stopping = false;
         view.running(t); view.busy(true);
-        void drain(tt.id, t, tail.next ?? 0).finally(() => { running = null; view.settle(t); view.busy(false); opts.onTurnDone?.(); });
+        void drain(tt.id, t, from, carry).finally(() => { running = null; view.settle(t); view.busy(false); opts.onTurnDone?.(); });
       } else {
         view.settle(t);
       }
