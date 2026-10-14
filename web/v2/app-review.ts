@@ -83,7 +83,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
     ver.textContent = host.version ? host.version + '판' : '';
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 새 판이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.sessionId ? '앱이 아직 안 보여요 — 세션 오른쪽 곁칸에서 「' + host.title + '」 탭을 여세요' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.ico + ' ' + t.t + ' — ' + t.help;
+    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 새 판이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.sessionId ? '앱이 아직 안 보여요 — 세션 우측 사이드바에서 「' + host.title + '」 탭을 여세요' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.ico + ' ' + t.t + ' — ' + t.help;
     layer.hidden = !S.frame || host.waiting;
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
   };
