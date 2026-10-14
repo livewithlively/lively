@@ -18,6 +18,7 @@
 //  R13 도구(mermaid.min.js)가 없는 자리 → 코드 그대로 + «불러오지 못해» 한 줄
 //  R14 그리는 프레임이 다른 문서로 옮겨 가면 → 옮겨 간 문서는 다음 그림의 코드를 못 받는다 · 새 프레임이 그린다
 //  R15 에디터 미리보기에 빈 코드 → «코드를 적으면…» · 그림 없음 · onState(false)
+//  R16 자료·파일 md 뷰어(공용 파일 미리보기 buildFilePreview — 상대경로 그림 받는 법을 건 렌더)에서도 그림이 선다
 //  B1~B6 본문 칸 폭 정책(경계): 칸이 넓으면 원래 폭 · 0.7배~원래 폭 사이면 칸에 맞춤 · 칸=ceil(0.7배)이면 그 값 ·
 //        더 좁으면 0.7배(가로로 민다) — 단 0.7배가 칸의 두 배를 넘으면(조각만 보인다) 칸에 맞춰 통째로 줄인다(경계: 정확히 두 배는 민다)
 //  E1  블록 에디터 — 그림이 서서 코드 칸이 접힌 채로도 저장 마크다운 = 원문(코드 칸을 숨기는 방식이 innerText 를 바꾸면 여기서 깨진다)
@@ -57,6 +58,7 @@ const hasMermaid = existsSync(path.join(SRC_ROOT, "web/lib/mermaid.ts"));
 const bundle = buildSync({
   stdin: {
     contents: "export { renderMarkdown } from './web/lib/markdown.ts'; export { createBlockEditor } from './web/block-editor.ts';"
+      + " export { buildFilePreview } from './web/lib/file-preview.ts';"
       + (hasMermaid ? " export { mermaidPreview } from './web/lib/mermaid.ts';" : ""),
     resolveDir: SRC_ROOT, loader: "ts",
   },
@@ -165,7 +167,7 @@ async function PAGE_MAIN() {
       //  칸 폭이 바뀌면 ResizeObserver 가 다음 그리기 전에 다시 잰다 — 두 프레임 기다린 뒤 읽는다.
       const frame2 = () => new Promise((z) => requestAnimationFrame(() => requestAnimationFrame(z)));
       const at = async (cw) => { host.style.width = (cw + extra) + "px"; await frame2(); await sleep(30);
-        return { cw: Math.round(inner()), w: Math.round(im0.getBoundingClientRect().width) }; };
+        return { cw: Math.round(inner()), w: Math.round(im0.getBoundingClientRect().width), note: figs()[0].querySelector(".md-mermaid-note").textContent }; };
       R.widths = { W, b1: await at(W + 100), b2: await at(Math.round(W * 0.85)), b3: await at(Math.ceil(W * 0.7)), b4: await at(Math.round(W * 0.5)),
         b5: await at(Math.ceil(W * 0.35)), b6: await at(Math.floor(W * 0.35) - 2) };
       host.style.width = "760px";
@@ -210,6 +212,20 @@ async function PAGE_MAIN() {
       R.pv0 = { states: st0, note: pv0.el.querySelector(".md-mermaid-note").textContent, img: !!pv0.el.querySelector("img") };
     } else R.pv = "mermaidPreview 없음";
   } catch (e) { R.errB = String(e && e.stack || e); }
+
+  try {
+    //  R16 — 자료·파일 md 뷰어 경로(공용 파일 미리보기). 상대경로 그림 받는 법(fetchRel)을 건 렌더다(#4582).
+    const out = await M.buildFilePreview({
+      name: "다이어그램.md", path: "docs/다이어그램.md",
+      fetchView: async () => new Response("# 제목\n\n```mermaid\ngraph LR\n  F1[파일] --> F2[뷰어]\n```\n"),
+      fetchDownload: async () => new Response(""), fetchRel: async () => new Response("", { status: 404 }),
+      mkBtn: (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; return b; },
+    });
+    host.append(out.body);
+    const ff = out.body.querySelector("figure.md-mermaid");
+    if (ff) { ff.scrollIntoView(); await waitFor(() => settled(ff)); }
+    R.fileview = { fig: !!ff, cls: ff ? ff.className : "", svgHas: ff ? svgOf(ff.querySelector("img.md-mermaid-img")).includes("뷰어") : false };
+  } catch (e) { R.errE = String(e && e.stack || e); }
 
   try {
     //  R14 — 그리는 프레임을 다른 문서로 옮긴다(공격자가 프레임 안에서 할 법한 일을 밖에서 흉내). 옮겨 간 문서는 받는 말을
@@ -337,7 +353,7 @@ if (process.env.DEBUG) console.log(JSON.stringify({ R, B, served }, null, 1));
 let pass = 0, fail = 0;
 const J = (v) => JSON.stringify(v);
 const check = (cond, n, why) => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n} — ${why}`); } };
-for (const k of ["fatal", "errA", "errB", "errC", "errD"]) if (R[k]) check(false, `장면 오류 ${k}`, R[k].slice(0, 400));
+for (const k of ["fatal", "errA", "errB", "errC", "errD", "errE"]) if (R[k]) check(false, `장면 오류 ${k}`, R[k].slice(0, 400));
 if (B.fatal || B.err) check(false, "장면 오류(도구 없음)", String(B.fatal || B.err).slice(0, 400));
 
 const F = R.figs || [];
@@ -365,7 +381,8 @@ check(Wd.W > 0 && b("b2").cw < Wd.W && near(b("b2").w, b("b2").cw), "B2 0.7배~�
 check(Wd.W > 0 && near(b("b3").cw, Math.ceil(Wd.W * 0.7)) && near(b("b3").w, b("b3").cw), "B3 칸 = ceil(0.7×폭) 경계 → 칸에 꼭 맞는다(가로 스크롤 없음)", J(Wd));
 check(Wd.W > 0 && near(b("b4").w, Math.ceil(Wd.W * 0.7)) && b("b4").w > b("b4").cw + 1, "B4 칸이 더 좁으면 0.7배에서 멈추고 가로로 민다", J(Wd));
 check(Wd.W > 0 && b("b5").w <= 2 * b("b5").cw + 1 && near(b("b5").w, Math.ceil(Wd.W * 0.7)), "B5 경계 — 0.7배가 칸의 정확히 두 배면 아직 0.7배로 민다", J(Wd));
-check(Wd.W > 0 && Math.ceil(Wd.W * 0.7) > 2 * b("b6").cw && near(b("b6").w, b("b6").cw), "B6 0.7배가 칸의 두 배를 넘으면 칸에 맞춰 통째로 줄인다(조각 대신 모양 전체)", J(Wd));
+check(Wd.W > 0 && Math.ceil(Wd.W * 0.7) > 2 * b("b6").cw && near(b("b6").w, b("b6").cw) && /^그림을 누르면 크게/.test(b("b6").note || "") && b("b4").note === "",
+  "B6 0.7배가 칸의 두 배를 넘으면 칸에 맞춰 통째로 줄이고 «누르면 크게» 를 적는다(밀 때는 안 적는다)", J(Wd));
 check(J(R.cachedNow) === J(["ok", "ok", "ok", "err", "ok"]), "R10 같은 본문 다시 렌더 — 렌더 직후 바로 그림(캐시)", J(R.cachedNow));
 check(!!R.repaint && R.repaint.changed && R.repaint.hasInk, "R11 테마가 바뀌면 새 토큰 색으로 다시 그린다", J(R.repaint));
 const P = R.pv || {};
@@ -378,6 +395,8 @@ check(typeof H === "object" && H.spy && H.spy.includes("up") && !H.leaked && /\b
   "R14 옮겨 간 프레임 문서는 다음 코드를 못 받는다 · 새 프레임이 그린다(옮겨 간 문서가 실제로 돌았음 = spy 'up')", J(H));
 const P0 = R.pv0 || {};
 check(J(P0.states) === J([false]) && /^코드를 적으면/.test(P0.note || "") && P0.img === false, "R15 에디터 미리보기 빈 코드 → 안내 · 그림 없음 · onState(false)", J(P0));
+const FV = R.fileview || {};
+check(FV.fig && /\bis-ok\b/.test(FV.cls || "") && FV.svgHas, "R16 자료·파일 md 뷰어(buildFilePreview)에서도 그림이 선다", J(FV));
 const E1 = R.e1 || {};
 check(E1.collapsed && E1.wrapH === 0 && E1.fig && (E1.md || "").trim() === EDIT_MD.trim(),
   "E1 코드 칸이 접힌 채로도 저장 마크다운 = 원문", J({ ...E1, want: EDIT_MD }));
