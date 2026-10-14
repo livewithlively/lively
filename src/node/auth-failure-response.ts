@@ -109,7 +109,28 @@ async function stopCron(jobId: string, reason: string): Promise<boolean> {
 }
 
 /**
- * 같은 크론이 낸 **대기 중** 위탁을 걷어낸다(②).
+ * 배치를 낼 때 task_id 와 함께 «판정함» 을 찍는 표 — 증류 레인 · 방치 배치 · 카테고리 붙이기 레인.
+ *  실패 종결(task-store.markFinished)이 되돌리는 표와 **같은 집합**이어야 한다(pipeline-honest ⑳-b 가 스키마·markFinished 와 묶는다).
+ */
+export const TASK_SEEN_TABLES = ["org_distiller_seen", "org_stranded_seen", "org_classifier_seen"] as const;
+
+/**
+ * 취소한 위탁의 판정 기록을 되돌린다 — markFinished(실패)와 같은 축.
+ *  안 하면 그 배치가 «봤음» 으로 찍어 둔 자료·지식은 크론이나 레인을 다시 켜도 인박스에 돌아오지 않는다 — 인박스는
+ *  `seen_at >= updated_at` 으로 거르므로 원본이 바뀔 때까지다(무증상 유실). 레인 격리는 «꺼진 레인의 몫은 다시 켤 때까지
+ *  기다린다» 를 약속하므로, 취소분이 빠지면 그 약속이 조용히 깨진다.
+ *  표마다 따로 시도한다 — 구 스키마에 없는 표가 있어도 나머지는 되돌린다(실패는 삼키되 한 줄 남긴다).
+ */
+async function releaseSeen(taskIds: number[]): Promise<void> {
+  if (!taskIds.length) return;
+  for (const table of TASK_SEEN_TABLES) {
+    try { await itemsPool.query(`DELETE FROM ${table} WHERE task_id = ANY($1::bigint[])`, [taskIds]); }
+    catch (e) { logger.warn({ err: (e as Error)?.message, table }, "자격 실패 — 취소한 위탁의 판정 기록 해제 실패"); }
+  }
+}
+
+/**
+ * 같은 크론이 낸 **대기 중** 위탁을 걷어낸다(②). 걷은 위탁의 판정 기록도 되돌린다(releaseSeen).
  * 실행 중(running)은 건드리지 않는다 — 이미 워커가 붙어 있고, 곧 자기 경로로 종결된다.
  */
 async function cancelQueuedForCron(jobId: string): Promise<number> {
@@ -119,8 +140,9 @@ async function cancelQueuedForCron(jobId: string): Promise<number> {
   const r = await itemsPool.query(
     `UPDATE org_task SET status='canceled', finished_at=now(), updated_at=now(),
             error=COALESCE(error,'') || $2
-      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1`,
+      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1 RETURNING id`,
     [`cron:${jobId}`, "자격(인증) 실패로 해당 크론이 정지되어 취소됨(#1675)"]);
+  await releaseSeen((r.rows as Array<{ id: number | string }>).map((x) => Number(x.id)));
   return r.rowCount ?? 0;
 }
 
@@ -186,13 +208,14 @@ async function stopLanes(lane: string, requester: string, reason: string): Promi
   return keys;
 }
 
-/** 같은 크론이 낸 대기 위탁 중 **그 계정의 것만** 걷는다(레인 격리판 ②). */
+/** 같은 크론이 낸 대기 위탁 중 **그 계정의 것만** 걷는다(레인 격리판 ②). 걷은 위탁의 판정 기록도 되돌린다(releaseSeen). */
 async function cancelQueuedForRequester(jobId: string, requester: string): Promise<number> {
   const r = await itemsPool.query(
     `UPDATE org_task SET status='canceled', finished_at=now(), updated_at=now(),
             error=COALESCE(error,'') || $3
-      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1 AND requester = $2`,
+      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1 AND requester = $2 RETURNING id`,
     [`cron:${jobId}`, requester, "자격(인증) 실패로 그 계정의 레인이 정지되어 취소됨"]);
+  await releaseSeen((r.rows as Array<{ id: number | string }>).map((x) => Number(x.id)));
   return r.rowCount ?? 0;
 }
 
