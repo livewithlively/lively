@@ -257,6 +257,9 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 /* 크게 보기 — 화면 가득. 띠: 모달(1400~1550)·메뉴(1600) 위, 토스트(2000) 아래 */
 .md-mmv { position: fixed; inset: 0; z-index: 1700; display: flex; flex-direction: column; background: var(--bg); }
 .md-mmv-bar { display: flex; align-items: center; gap: 2px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+/* 액자(v2 셸이 클래식 화면을 품은 것 — body.embed) 안에서는 셸의 ↗ 단추(.v2-frame-pop · 위 6 · 오른쪽 10 · 24×24)가 액자 오른쪽 위
+   구석을 덮는다. 그 단추는 부모 문서에 있어 z-index 로는 못 이긴다 — 그 자리를 비워 [닫기]가 가리지 않게 한다(2026-10-14 매니지드 실측). */
+body.embed .md-mmv-bar { padding-right: 44px; }
 .md-mmv-name { flex: 1; min-width: 0; margin-right: 8px; font-size: 13.5px; font-weight: 700; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-mmv-pct { min-width: 46px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
