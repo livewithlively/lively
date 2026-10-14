@@ -187,9 +187,10 @@ export function laneTableFor(action: string | null | undefined): LaneTable | nul
 /**
  * 마커의 레인 조각 → 레인 테이블의 key(순수).
  *  관리 잡은 레포별로 마커를 한 번 더 가른다(`cron:<잡>#<관리기 key>@<repo>` — scheduler/actions/manage.ts). 그 `@` 뒤를
- *  떼지 않으면 그런 key 가 없어 stopLanes 가 던지고 크론 전체로 올라간다. 자르는 건 관리 테이블에서만 한다 —
- *  증류기 key 는 정규화하지 않아 `@` 가 들어갈 수 있으므로(store/ingest.upsertDistiller), 마커 파서(task-failure.cronLaneFromMarker)를
- *  일괄로 바꾸면 그런 레인을 엉뚱한 key 로 찾는다.
+ *  떼지 않으면 그런 key 가 없어 stopLanes 가 던지고 크론 전체로 올라간다. 자르는 건 관리 테이블에서만 한다 — 레포 조각을
+ *  붙이는 마커는 관리 잡뿐이고, 증류·카테고리 붙이기 마커는 `#<key>` 로 끝난다(scheduler/actions/distill.ts · org/distill/lanes.laneMarker).
+ *  key 자체에는 세 표 모두 `@` 가 없다(증류는 store/ingest.DKEY_RE 로 막고, 분류·관리는 저장 때 `[a-z0-9._-]` 만 남긴다).
+ *  그래서 마커 파서(task-failure.cronLaneFromMarker)는 그대로 두고, 레포 조각이 있는 줄 아는 이 자리에서만 뗀다.
  */
 export function laneKeyFor(table: LaneTable, lane: string): string {
   if (table !== "org_manager") return lane;

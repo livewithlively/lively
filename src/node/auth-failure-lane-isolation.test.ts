@@ -257,7 +257,7 @@ for (const a of ["classify_knowledge", "distill_sources", "map_unmapped", "", nu
 // ── D2. 관리 마커의 @repo 는 관리 테이블에서만 뗀다 ──
 assert.equal(laneKeyFor("org_manager", "drift@acme/lively"), "drift", "관리 마커의 @repo 를 안 뗐다 — 그런 관리기가 없어 크론 전체로 올라간다");
 assert.equal(laneKeyFor("org_manager", "drift"), "drift", "레포 없는 관리 마커를 바꿨다");
-assert.equal(laneKeyFor("org_distiller", "local@alice"), "local@alice", "증류기 key 의 @ 를 잘랐다 — 정규화하지 않은 증류기 key 를 엉뚱하게 찾는다");
+assert.equal(laneKeyFor("org_distiller", "local@alice"), "local@alice", "관리 테이블 밖에서 @ 를 잘랐다 — 레포 조각은 관리 마커에만 붙는다(자르는 규칙이 다른 레인으로 번졌다)");
 assert.equal(laneKeyFor("org_classifier", "c1"), "c1");
 
 // ── D3. 분류 잡 — 그 레인만 끈다 ──
