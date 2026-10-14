@@ -96,6 +96,16 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/^\s*big: \(\) => \{ openAppBig\(cur\.app_id, \{ title: cur\.title, sessionId: s, page: cur\.pages\[0\]\?\.key \}\); \},/m.test(PANE), "S6-1 「크게 보기」는 같은 세션에 붙은 채로 크게 띄운다(openAppBig — 새 탭 #/full, 폰·팝업 막힘은 그 자리에서 가득)");
   ok(/^export function openAppBig\(/m.test(UI) && /window\.open\(appFullHref\(appId, opts\), '_blank'\)/.test(UI) && !/fullKey|localStorage\.getItem\(['"]lively_v2_appui_full/.test(UI), "S6-1 「크게 보기」는 새 탭으로 가고 창⇄가득 토글이 없다(원준 2026-10-12 «모달이라는 건 아예 없던 거야»)");
   ok(/opts\?: \{ page\?: string; title\?: string; sessionId\?: string; full\?: boolean; onClose\?: \(\) => void \}\): Promise<boolean>/.test(UI), "S6-1 openAppUi 가 sessionId 를 받는다(mountAppUiFrame 으로 그대로) · onClose 는 새 탭이 닫히는 길");
+  {
+    //  #4480 (2026-10-14 상민님 실측) — 데스크톱 앱 본 창에서 #/full 을 열면 ① 알림을 눌러 다른 화면으로 가도 덮개가 남고
+    //   ② 닫기가 window.close() → 본 창 «트레이로 숨기기» 로 창이 통째로 사라졌다.
+    const MAIN = read("web/v2/main.ts");
+    ok(/^export function dismissAppUi\(\): void \{ onCloseFn = null; closeAppUi\(\); \}/m.test(UI), "S6-1b 덮개를 조용히 걷는 길(dismissAppUi)이 있다 — 닫기 뒷일(onClose) 없이");
+    ok(/\n    dismissAppUi\(\);\n    openFrame = f;/.test(UI), "S6-1b 새 덮개를 열 때 앞 덮개는 조용히 걷는다(앞 덮개의 onClose — 창 닫기 — 를 돌리지 않는다)");
+    ok(/const page = segs\[0\] \|\| '';\n[\s\S]{0,400}?if \(page !== 'full'\) dismissAppUi\(\);/.test(MAIN), "S6-1b 화면을 옮기면(full 밖) 덮개를 걷는다 — 알림 클릭이 화면을 바꾼다");
+    const full = (MAIN.match(/page === 'full' && segs\[1\]\) \{[\s\S]*?\n    \} else if/) || [""])[0];
+    ok(/if \(!window\.opener\) \{ back\(\); return; \}/.test(full) && full.indexOf("if (!window.opener)") >= 0 && full.indexOf("if (!window.opener)") < full.indexOf("try { window.close(); }"), "S6-1c #/full 닫기는 스크립트가 연 창(window.opener)일 때만 window.close() — 아니면 그 자리에서 되돌아간다(데스크톱 앱 본 창이 숨지 않게)");
+  }
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];
   ok((upd.match(/m\.frame\.reload\(\);/g) || []).length === 1 && /showBand\(cur, ev\);/.test(upd) && /^\s*return;$/m.test(upd), "S6-3 updated → 그 앱 화면 다시 띄우기 1회 + 띠, 데이터 분기로 안 내려간다");

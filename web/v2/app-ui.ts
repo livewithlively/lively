@@ -450,7 +450,8 @@ export function openAppBig(appId: string, opts?: { page?: string; title?: string
 export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string; full?: boolean; onClose?: () => void }): Promise<boolean> {
   try {
     const f = await mountAppUiFrame(appId, opts);
-    closeAppUi();
+    //  앞의 덮개는 조용히 걷는다 — 그 덮개의 닫기 뒷일(onClose: 창 닫기·되돌아가기)을 새 덮개를 여는 자리에서 돌리지 않는다(#4480).
+    dismissAppUi();
     openFrame = f;
     onCloseFn = opts?.onClose || null;
     uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱' },
@@ -472,6 +473,12 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
 }
 
 function uiKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeAppUi(); }
+/**
+ * 덮개를 조용히 걷는다 — 닫기의 뒷일(onClose)은 하지 않는다(#4480). 화면을 옮길 때(알림 클릭 · 다른 화면으로 이동) 셸이 부른다.
+ *  왜: 덮개는 셸 위에 따로 붙은 층이라 주소(해시)가 바뀌어도 남는다. 데스크톱 앱 본 창에서 크게 보기 주소(#/full/…)를 열면
+ *  알림을 눌러 다른 화면으로 가도 덮개가 그대로 덮고 있었다(2026-10-14 상민님 실측).
+ */
+export function dismissAppUi(): void { onCloseFn = null; closeAppUi(); }
 export function closeAppUi(): void {
   const was = !!uiEl, fn = onCloseFn; onCloseFn = null;
   if (openFrame) { openFrame.destroy(); openFrame = null; }
