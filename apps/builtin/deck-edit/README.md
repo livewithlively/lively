@@ -116,7 +116,7 @@ node bin/deck-pull.mjs --doc <문서이름> [--ver <판>] [--base] <받을 경�
 
 ## 이 앱을 고치기
 
-세션에 「장표 앱 글 줄 칸을 아래로 내려 줘」처럼 말하면 AI 가 `app_pull deck-edit` 로 소스를 받아 `ui/index.html` 을 고치고 `app_save` 로 저장합니다(워크스페이스 판 · 모두에게 적용). 되돌리기는 앱 탭 ⋯ 메뉴. 고칠 때 지킬 것: 폼 제출 금지(click · keydown) · 한글 조합 중 Enter 무시(`isComposing`) · 외부 스크립트 · 네트워크 없음 · `lively.store.onChange` 로 바깥 변경 반영 · 글 12px 미만 금지.
+세션에 「장표 앱 글 줄 칸을 아래로 내려 줘」처럼 말하면 AI 가 `app_pull deck-edit` 로 소스를 받아 `ui/index.html` 을 고치고 `app_save` 로 저장합니다 — 저장한 판은 고친 사람만 보는 초안이고, 사람이 「모두에게 공개」 하라고 하면 `app_visibility_set {visibility:"all"}` 로 공개합니다(#4667). 되돌리기는 앱 탭 ⋯ 메뉴. 고칠 때 지킬 것: 폼 제출 금지(click · keydown) · 한글 조합 중 Enter 무시(`isComposing`) · 외부 스크립트 · 네트워크 없음 · `lively.store.onChange` 로 바깥 변경 반영 · 글 12px 미만 금지.
 
 ## 시험
 

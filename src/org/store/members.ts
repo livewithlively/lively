@@ -137,6 +137,12 @@ export async function workspacePersonIds(opts: { managed: boolean }): Promise<Se
   return new Set(r.rows.map((x) => String((x as { id: unknown }).id)));
 }
 
+/** 관리자인 사람(활성 · 사람 행 · scopes 에 admin) — #4667 앱 책임자가 «관리자» 로 넘어올 때 알릴 사람들. */
+export async function listActiveAdminIds(): Promise<string[]> {
+  const r = await itemsPool.query(`SELECT id FROM org_member WHERE state='active' AND kind='human' AND scopes ? 'admin' ORDER BY sort, id`);
+  return r.rows.map((x) => String((x as { id: unknown }).id));
+}
+
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.

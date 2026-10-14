@@ -60,8 +60,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_members JSONB NOT NULL DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_edit_mode_check;`);
   await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_edit_mode_check CHECK (edit_mode IN ('all','members'));`);
-  //  #4632 — 공개 범위(apps/visibility.ts). 'all' = 구성원 모두(설치 · 기본 앱의 기본) · 'me' = 만든 사람만(app_save 로 새로 생긴 앱의 기본 —
-  //   원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 있던 행은 'all' 그대로.
+  //  #4632 — 공개 범위(apps/visibility.ts). 'all' = 구성원 모두(설치 · 기본 앱의 기본) · 'me' = 나만 보는 앱(app_save 로 새로 생긴 앱의 기본 —
+  //   원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 있던 행은 'all' 그대로. 'me' 앱을 보는 사람은 책임자(owner_member, #4667 아래)와 관리자.
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'all';`);
   await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_visibility_check;`);
   await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_visibility_check CHECK (visibility IN ('all','me'));`);
@@ -155,6 +155,37 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS builtin_version TEXT;`);
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS current_version_no INT;`);
+
+  //  #4667(앱 v2-15) — 공개 판 · 초안 · 만든 사람 · 만들기 세션 · 책임자(공개 범위 visibility 칸은 위 #4632). 판정은 apps/visibility.ts 머리말.
+  //   published_version_no = 모두가 보는 판(org_app_version) · draft_by = 설치된 상태가 공개 판과 다를 때 그 초안을 만든 사람(그 사람만 초안을 본다).
+  //   made_by = 처음 만든 사람(서버가 만들 때 한 번 찍는다 · 매니페스트 studio.made_by 는 앱 코드라 믿지 않는다) · owner_member = 지금 책임자
+  //    (NULL = 관리자 — 만든 사람이 떠나면 여기로 넘어온다 · 'me' 앱을 보는 사람) · build_session = 이 앱을 만드는 세션(세션 → 앱 역조회 ·
+  //    다른 기기에서 이어 만들기) · origin_app_id = 사본이면 원본 앱.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_version_no INT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS draft_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS made_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS owner_member TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS build_session TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS origin_app_id TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_build_session_idx ON org_app(build_session) WHERE build_session IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_owner_idx ON org_app(owner_member) WHERE owner_member IS NOT NULL;`);
+  //  옛 앱 채우기(멱등) — 워크스페이스가 만든 앱의 «만든 사람» 은 처음 설치한 사람이다(installed_by 는 upsertApp 이 처음 한 번만 쓴다).
+  //   made_by 가 빈 줄만 채우므로 한 번 채운 뒤엔 다시 돌지 않는다 — 떠난 사람의 책임자를 관리자로 넘긴 줄(owner NULL · made_by 있음)을 되돌리지 않는다.
+  //   책임자는 그 사람이 지금 활성 구성원일 때만 — 이미 떠난 사람이면 비워 둔다(= 관리자 · 떠날 때의 이관 훅은 앞으로의 전이에서만 돈다 · 격리 리뷰 NB-11).
+  //   관리자가 고치기를 «지정한 사람만» 으로 좁히며 만든 사람을 뺀 앱도 비워 둔다 — 책임자는 고치기 설정과 무관하게 고치므로(member-app editDenial)
+  //   채우기 하나로 관리자가 막아 둔 고치기가 풀리면 안 된다(격리 리뷰 2-8b).
+  //   빌트인(릴리스가 만든 앱)·시더/익명 행위자는 비워 둔다(책임자 = 관리자). 두 표에 tenant_id 가 있으면(첫 부팅 뒤) 같은 워크스페이스의 구성원만 본다.
+  const tenantCols = await pool.query(`SELECT table_name FROM information_schema.columns
+                                        WHERE table_schema = current_schema() AND column_name = 'tenant_id' AND table_name IN ('org_app','org_member')`);
+  const sameTenant = tenantCols.rows.length === 2 ? "AND m.tenant_id = a.tenant_id" : "";
+  await pool.query(`UPDATE org_app a SET made_by = a.installed_by,
+                            owner_member = CASE WHEN EXISTS (SELECT 1 FROM org_member m WHERE m.id = a.installed_by AND m.state = 'active' ${sameTenant})
+                                                     AND (a.edit_mode <> 'members' OR a.edit_members ? a.installed_by)
+                                                THEN a.installed_by ELSE NULL END
+                     WHERE a.made_by IS NULL AND a.installed_by IS NOT NULL AND a.installed_by NOT IN ('system','unknown','')
+                       AND COALESCE(a.source->>'kind','') <> 'builtin';`);
 
   // ── org_app_runtime_asset — 설치 stage가 사라진 뒤에도 정확한 package hash의 worker를 실행한다 ──
   //  코드는 단일 ESM 번들(8MiB 이하). FK 대신 remove/reclaim에서 명시 회수(v2.1 신규표 규약).

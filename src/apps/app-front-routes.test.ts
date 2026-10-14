@@ -101,18 +101,18 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   assert.equal((await appFrontMe(actH({ mid: "robo" }), d)).status, 403, "에이전트");
   assert.equal((await appFrontMe(actH({ mid: "ghost" }), d)).status, 403, "없는 구성원");
   assert.equal((await appFrontMe(actH({ app: "nope" }), d)).status, 404, "없는 앱");
-  assert.equal((await appFrontMe(actH({ app: "mine" }), d)).status, 403, "남의 「나만」 앱");
+  assert.equal((await appFrontMe(actH({ app: "mine" }), d)).status, 404, "남의 「나만」 앱 — 없는 앱과 같다(#4667)");
   const r = await appFrontMe(actH({ var: "draft" }), d);
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "draft" }, session: null });
-  ok("E4 me — 403·404·403 · 성공 모양(판 그대로 · 세션 null)");
+  ok("E4 me — 403·404·404 · 성공 모양(판 그대로 · 세션 null)");
 }
 
 // ── E5 page — 꺼진 앱 · 경로 · 화면 키 · 탐침 · CSP · 준비물 없음 ──
 {
   const { d, calls } = deps();
   assert.equal((await appFrontPage(actH({ app: "off" }), "/", d)).status, 409, "꺼진 앱");
-  assert.equal((await appFrontPage(actH({ app: "mine" }), "/", d)).status, 403, "남의 「나만」 앱");
+  assert.equal((await appFrontPage(actH({ app: "mine" }), "/", d)).status, 404, "남의 「나만」 앱 — 없는 앱과 같다(#4667)");
   assert.equal((await appFrontPage(actH(), "/x", d)).status, 404, "맨 앞이 아닌 경로");
   assert.equal((await appFrontPage(actH(), "//evil", d)).status, 404, "틀린 경로");
   assert.equal((await appFrontPage(actH(), "/?page=nope", d)).status, 404, "없는 화면 키");
@@ -129,7 +129,28 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   const e = await appFrontPage(actH(), "/", noScripts.d);
   assert.equal(e.status, 503);
   assert.ok(e.html && e.html.includes("<b>"), "503 도 문서로");
-  ok("E5 page — 409·403·404·404·404 · 첫 화면 · 화면 키 · 탐침 · CSP · 503");
+  ok("E5 page — 409·404·404·404·404 · 첫 화면 · 화면 키 · 탐침 · CSP · 503");
+}
+
+// ── E6 page — #4667 남의 초안이 걸린 공개 앱: 공개 판을 보는 사람은 판 행의 화면 · CSP, 초안을 만든 사람은 설치된 화면 ──
+{
+  const drafted = app("deck-edit", { visibility: "all", draft_by: "carol", published_version_no: 3, manifest: { csp: { connect_domains: ["draft.example.com"] } } } as never);
+  const pubManifest = { id: "deck-edit", title: "장표", version: "1", ui: { pages: [{ key: "main", title: "장표", entry: "ui/index.html" }] }, csp: { connect_domains: ["pub.example.com"] } };
+  const asked: Array<[string, number]> = [];
+  const { d } = deps({
+    getApp: async (id) => (id === "deck-edit" ? drafted : null),
+    getMember: async (id) => member(id),
+    getAppVersion: async (id, no) => { asked.push([id, no]); return { manifest: pubManifest, files: [{ path: "lively-app.json", content: JSON.stringify(pubManifest) }, { path: "ui/index.html", content: "<p>공개 판</p>" }] }; },
+  });
+  const pub = await appFrontPage(actH({ mid: "alice" }), "/", d);
+  assert.equal(pub.status, 200);
+  assert.ok(pub.html!.includes("<p>공개 판</p>") && !pub.html!.includes("<p>main</p>"), "공개 판의 화면");
+  assert.ok(/pub\.example\.com/.test(pub.headers!["Content-Security-Policy"]) && !/draft\.example\.com/.test(pub.headers!["Content-Security-Policy"]), "공개 판의 CSP");
+  assert.deepEqual(asked, [["deck-edit", 3]], "공개 판 번호의 판 행을 읽는다");
+  assert.equal((await appFrontPage(actH({ mid: "alice" }), "/?page=nope", d)).status, 404, "공개 판에 없는 화면 키");
+  const own = await appFrontPage(actH({ mid: "carol" }), "/", d);
+  assert.ok(own.status === 200 && own.html!.includes("<p>main</p>"), "초안을 만든 사람은 설치된 화면");
+  ok("E6 page — 남의 초안이 걸린 공개 앱은 공개 판의 화면 · CSP(#4667) · 초안 주인은 설치된 화면");
 }
 
 console.log(`\n${pass} passed`);

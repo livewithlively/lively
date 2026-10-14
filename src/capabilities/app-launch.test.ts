@@ -70,7 +70,7 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
 {
   const { d, mints } = deps();
   assert.equal((await status(launchAppFor({ app_id: "nope" }, user(), d))).status, 404);
-  assert.equal((await status(launchAppFor({ app_id: "mine" }, user(), d))).status, 403);
+  assert.equal((await status(launchAppFor({ app_id: "mine" }, user(), d))).status, 404);   // #4667 남의 「나만」 앱 — 없는 앱과 같다
   assert.equal((await status(launchAppFor({ app_id: "off" }, user(), d))).status, 409);
   assert.equal((await status(launchAppFor({ app_id: "failed" }, user(), d))).status, 409);
   assert.equal((await status(launchAppFor({ app_id: "empty" }, user(), d))).status, 404);

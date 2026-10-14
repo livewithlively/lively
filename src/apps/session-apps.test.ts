@@ -9,9 +9,9 @@ import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 //  ③이 빠지면 AI 가 사람이 동의하지 않은 도구로 들어간다. 사양 표 S1 의 행마다 하나씩 못박는다.
 
 const app = (id: string, over: Partial<OrgApp> = {}): OrgApp => ({
-  id, title: id, version: "1.0.0", manifest: {}, source: { kind: "installed" }, content_hash: null, visibility: "all",
+  id, title: id, version: "1.0.0", manifest: {}, source: { kind: "installed" }, content_hash: null,
   status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [],
-  builtin_version: null, current_version_no: null, ...over,
+  builtin_version: null, current_version_no: null, visibility: "all", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...over,
 });
 const grant = (tools: string[]): AppGrantRow => ({ app_id: "x", member_id: "alice", scopes: [], tools, granted_at: "", granted_by: null, revoked_at: null });
 const row = (appId: string): SessionAppRow => ({ session_id: "box-a", app_id: appId, member_id: "alice", attached_at: "" });

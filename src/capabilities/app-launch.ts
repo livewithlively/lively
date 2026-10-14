@@ -14,7 +14,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import * as store from "../org/store/apps.js";
 import { getMember } from "../org/store.js";
-import { appVisibilityDenial } from "../apps/visibility.js";
+import { canSeeApp } from "../apps/visibility.js";
 import { appDomainFor, appHost, appOrigin, parseAppPath, safeAppNext, type AppVariant } from "../apps/app-address.js";
 import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunchMode, type MintLaunchInput } from "../apps/app-launch-store.js";
 import type { OrgMember } from "../org/store/members.js";
@@ -77,8 +77,8 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
   const app = await d.getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
-  const why = appVisibilityDenial(app, { userId: memberId, scopes: user?.scopes });
-  if (why) throw new HttpError(403, why);
+  //  #4667 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404 — 있는지조차 알리지 않는다).
+  if (!canSeeApp(app, { userId: memberId, scopes: user?.scopes })) throw new HttpError(404, `앱 없음: ${appId}`);
   if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
   const pages = await d.listUiAssets(appId);
   if (pages.length === 0) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);

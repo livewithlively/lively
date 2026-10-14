@@ -16,7 +16,7 @@
 import { HttpError } from "../http-error.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from "./session-apps.js";
-import { appVisibilityDenial } from "./visibility.js";
+import { canSeeApp } from "./visibility.js";
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { PROJECT_FILES_TOOL, WORKSPACE_FILES_TOOL } from "./manifest.js";
@@ -34,6 +34,8 @@ export interface ProjectFileEntry { path: string; mtime: number; size: number }
 export interface WorkspaceFileEntry extends ProjectFileEntry { project_id: number; project_name: string; session?: string }
 export interface ProjectFilesDeps {
   getApp: (appId: string) => Promise<OrgApp | null>;
+  /** #4667 이 사람이 보는 판으로(공개 앱에 남의 초안이 있으면 공개 판의 선언) — 없으면 설치된 상태 그대로. */
+  viewFor?: (app: OrgApp, member: string) => Promise<OrgApp>;
   getGrant: (appId: string, memberId: string) => Promise<AppGrantRow | null>;
   sessionOwner: (sessionId: string) => Promise<string | null>;
   canEnter?: (sessionId: string, member: string) => Promise<boolean>;
@@ -92,8 +94,10 @@ export function normalizeRelPath(raw: unknown): string {
 async function gate(q: ProjectFilesGateInput, deps: ProjectFilesDeps, rate: RateWindow, wide = false): Promise<{ app: OrgApp; exts: string[]; project: ProjectRef | null }> {
   const sessionId = String(q.sessionId ?? "").trim();
   if (!sessionId) throw new HttpError(400, "session_id 가 필요합니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다");
-  const app = requireUsableApp(await deps.getApp(q.appId), q.appId);
-  { const why = appVisibilityDenial(app, { userId: q.member, scopes: q.scopes }); if (why) throw new HttpError(403, why); }   // #4632
+  const installed = requireUsableApp(await deps.getApp(q.appId), q.appId);
+  //  #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다. 선언(확장자·도구)은 이 사람이 보는 판의 것.
+  if (!canSeeApp(installed, { userId: q.member, scopes: q.scopes })) throw new HttpError(404, `앱 없음: ${q.appId}`);
+  const app = deps.viewFor ? await deps.viewFor(installed, q.member) : installed;
   const declared = declaredTools(app);
   //  전체 자료(wide)는 제 선언 · 제 도구로 본다 — 프로젝트 자료의 선언 · 동의로는 열리지 않는다.
   const tool = wide ? WORKSPACE_FILES_TOOL : PROJECT_FILES_TOOL;

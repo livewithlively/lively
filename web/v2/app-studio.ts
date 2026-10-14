@@ -13,9 +13,11 @@
 //  새 배관은 없다 — 있는 부품을 엮는다:
 //   · 대화 = 일반 세션 하나(spawnSession · 「앱 만들기」 프로젝트 아래)를 대화 보기(renderSession chatHome · 순환을 피해 늦게 들여온다)로 끼운다.
 //   · 단계마다 보낼 글은 단추가 보낸다(POST …/prompt). AI 답은 세션 기록(…/transcript ndjson)을 읽어 표식([[기획카드]] · [[걸음 n/4]] · [[점검]])으로 가른다 — lib/studio-flow.ts.
-//   · 앱 = 그 세션의 AI 가 app_save 로 저장하면 생긴다. 시작할 때의 앱 목록과 견줘 새로 생긴 id 를 찾고(폴링) mountAppUiFrame 으로 띄운다. 'updated' 사건마다 다시.
+//   · 앱 = 「만들기 시작」 때 서버가 나만 보는 빈 앱을 예약하고(#4667 app_build_start — 만든 사람 · 만들기 세션을 서버가 찍는다), 그 세션의 AI 가
+//     그 id 로 app_save 하면 첫 판이 선다(폴링 · 'updated' 사건). 예약 없이 시작한 옛 기록만 시작 때의 앱 목록과 견줘 새로 생긴 내 앱을 찾는다.
+//   · 공개 상태(#4667) — 새 앱은 나만 보는 초안, ④ 「누가 쓰나」 → 「이대로 넣기」 가 공개한다. 공개한 앱을 고친 판은 고친 사람의 초안(머리줄 「공개하기」).
 //   · 찍어서 의견 = 실제 화면의 앱 프레임(app-ui 가 검토 중인 앱의 문서에 탐침을 넣는다)에게 비율 좌표의 요소(태그 · 글)를 묻는다 — app-review.ts.
-//   · 사본 = /apps/:id/pull → id · 이름 · studio.origin 을 바꿔 /apps/save. 판 = fetchAppVersions · revertApp.
+//   · 사본 = /apps/:id/pull → id · 이름을 바꿔 /apps/save {origin_app_id} — 원본 · 만든 사람은 서버 기록(#4667). 판 = fetchAppVersions · revertApp.
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
 import { spawnSession } from './quick-session.js';
 import { takeCreated } from './created-cache.js';
@@ -41,12 +43,15 @@ export interface StudioRec {
   attached?: boolean;
   /** ③ 「앱 화면으로 보기」 가 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로. */
   instId?: string;
-  /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). ⑤ 넣기가 서버에 적는다(/apps/:id/visibility). */
+  /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「이대로 넣기」 가 공개한다(app_save publish).
+   *  'me' 면 공개하지 않는다 — 새 앱은 나만 보는 앱으로, 이미 공개한 앱을 고친 것이면 내 초안으로 남는다(공개를 거두지 않는다 · #4667). */
   vis?: 'all' | 'me';
   /** ④ 에서 적던 의견 — 뒤로 갔다 와도 날아가지 않게 기록에 둔다(원준 2026-10-14 «뒤로가기 눌러도 입력했던 내용은 절대 안 날아가게»). */
   pins?: StudioPin[]; general?: string;
   /** 세션 이름을 기획 카드의 이름으로 한 번 지었나(①에서 이름을 비워 둔 경우). */
   named?: boolean;
+  /** #4667 「만들기 시작」 때 서버가 예약한 앱 id — AI 가 이 id 로 저장하면 그게 이 만들기의 앱이다(appId 는 첫 판이 생긴 뒤에 선다). */
+  draftId?: string;
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -110,12 +115,29 @@ async function relabel(sid: string, name: string | undefined, mode: 'new' | 'cop
   try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid), { method: 'POST', body: JSON.stringify({ label: builderSessionLabel(name, mode) }) }); } catch (_) { /* 이름은 못 바꿔도 된다 */ }
 }
 async function listApps(): Promise<any[]> { try { const out: any = await api('/api/ui/apps'); return Array.isArray(out?.apps) ? out.apps : []; } catch (_) { return []; } }
-export async function patchManifest(appId: string, patch: (man: any) => void, note: string): Promise<void> {
+/** 매니페스트 한 군데를 고쳐 새 판으로 저장한다. opts.publish — 저장하면서 바로 모두에게 공개(#4667 · 배포 설정처럼 «모두의 앱» 을 바꾸는 일). */
+export async function patchManifest(appId: string, patch: (man: any) => void, note: string, opts?: { publish?: boolean }): Promise<void> {
   const pulled: any = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/pull');
   const files: any[] = Array.isArray(pulled?.files) ? pulled.files : [];
   const mf = files.find((f) => f && f.path === 'lively-app.json'); if (!mf) throw new Error('앱의 설명 파일(lively-app.json)이 없어요');
   const man = JSON.parse(String(mf.content)); patch(man); mf.content = JSON.stringify(man, null, 2);
-  await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note }) });
+  await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note, ...(opts && opts.publish ? { publish: true } : {}) }) });
+}
+/** 매니페스트 studio 칸에서 서버가 기록하는 것(만든 사람 · 만들기 세션 · 원본)을 걷는다 — #4667 그건 앱 코드가 아니라 서버 칸이 정본이다. 자리 · 기획 카드는 남긴다. */
+export function studioUiOnly(studio: any): Record<string, unknown> {
+  const { made_by: _m, build_session: _b, origin: _o, ...keep } = (studio && typeof studio === 'object' ? studio : {}) as Record<string, unknown>;
+  return keep;
+}
+/** #4667 그 앱의 지금 공개 상태(서버) — 머리줄 「n판 · 나만 보는 초안」 · 「공개하기」 · ④⑤ 의 재료. 못 읽으면 null. */
+export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown }
+async function readVis(appId: string): Promise<StudioVis | null> {
+  try {
+    const out: any = await api('/api/ui/apps/' + encodeURIComponent(appId)); const a = out?.app || out; if (!a) return null;
+    const me0 = await me();
+    return { visibility: a.visibility === 'me' ? 'me' : 'all', publishedNo: Number(a.published_version_no) || 0,
+      draftMine: !!(a.draft && a.draft.by && a.draft.by === me0.id), canPublish: !!a.can_publish, canUnpublish: !!a.can_unpublish, empty: !!a.empty,
+      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null };
+  } catch (_) { return null; }
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
 async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace): Promise<{ id: string; title: string }> {
@@ -124,9 +146,12 @@ async function makeCopy(origin: { id: string; title: string; by: string }, place
   const files: any[] = (Array.isArray(pulled?.files) ? pulled.files : []).filter((f: any) => f && typeof f.path === 'string' && !/^bin\//.test(f.path));
   const mf = files.find((f) => f.path === 'lively-app.json'); if (!mf) throw new Error('원본의 설명 파일이 없어요');
   const man = JSON.parse(String(mf.content)); man.id = id; man.title = title;
-  man.studio = { ...(man.studio && typeof man.studio === 'object' ? man.studio : {}), origin: { id: origin.id, title: origin.title, by: origin.by }, made_by: m.id, place };
+  //  #4667 원본 · 만든 사람은 서버가 기록한다(origin_app_id · 저장한 사람) — 매니페스트엔 자리만 남긴다. 마무리 표시(put)도 걷는다 —
+  //   사본은 이제부터 만드는 앱이다(원본의 「다 만듦」 이 따라오면 다른 기기의 「만들던 앱」 에서 빠진다 · 격리 리뷰 2-9).
+  const { put: _put, ...ui } = studioUiOnly(man.studio);
+  man.studio = { ...ui, place };
   mf.content = JSON.stringify(man, null, 2);
-  await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note: '사본 · 원본 「' + origin.title + '」 그대로' }) });
+  await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note: '사본 · 원본 「' + origin.title + '」 그대로', origin_app_id: origin.id }) });
   return { id, title };
 }
 
@@ -159,12 +184,26 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
   mountRoot(opts);
   const rec = resume ? readRecs().find((r) => r.sid === resume.sid) || null : null;
   if (rec) { void build(rec); return; }
-  if (resume && (resume.what || resume.appId)) {
-    //  기록 없이 되살리기 — 단계는 앱이 있으면 ③(판이 있다 · fix), 없으면 ②. known 은 지금 있는 앱 전부(이 뒤에 생기는 것이 «이 세션이 만든 앱»).
+  if (resume && resume.sid) {
+    //  기록 없이 되살리기(다른 브라우저 · 다른 컴퓨터) — #4667 서버가 아는 «이 세션이 만드는 앱» 으로 잇는다(세션 → 앱 역조회).
+    //   앱이 있으면 ③(판이 있다 · fix), 아직 첫 판 전이면 ② — 기획 카드는 앱에 적어 둔 것, 없으면 그 세션의 대화 기록에서 마지막 카드를 다시 읽는다.
     void (async () => {
-      const known = (await listApps()).map((a) => String(a.id));
+      const rows: any[] = await api('/api/ui/apps?session=' + encodeURIComponent(resume.sid)).then((d: any) => (Array.isArray(d?.apps) ? d.apps : [])).catch(() => []);
+      const a = rows[0] || null;
       if (!root) return;
-      const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || resume.title || '', place: 'both', appId: resume.appId || '', known, at: Date.now(), stage: resume.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...(resume.title ? { title: resume.title } : {}) };
+      if (!a && !resume.what && !resume.appId) { start(); return; }
+      const appId = a ? (a.empty ? '' : String(a.id)) : (resume.appId || '');
+      const pl = a && a.manifest && a.manifest.studio ? a.manifest.studio.place : '';
+      const place: StudioPlace = pl === 'side' || pl === 'full' || pl === 'both' ? pl : 'both';
+      let card: StudioCard | null = a && a.manifest && a.manifest.studio && a.manifest.studio.card ? a.manifest.studio.card : null;
+      let from = 0;
+      const log = await rawLog(resume.sid, 'from=0');
+      if (log) { from = log.to; if (!card) assistantTexts(log.text).forEach((t) => { const c = parseCard(t); if (c) card = c; }); }
+      if (!root) return;
+      const known = a ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
+      const title = resume.title || (a && !a.empty ? String(a.title || '') : '');
+      const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || title || (a ? String(a.title || '') : ''), place, appId, known, at: Date.now(),
+        stage: appId ? 'fix' : 'plan', card, round: 0, from, mode: 'new', ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}) };
       saveRec(r2); void build(r2);
     })();
     return;
@@ -186,6 +225,8 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     const s = await spawnSession(brief, pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME });
     if (!s) { toast('세션을 열지 못했어요', true); closeAppStudio(); return; }
     void relabel(s.id, target.title, how);
+    //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
+    void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
     saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(s.id); void build(rec);
   } catch (e: any) { toast((how === 'copy' ? '사본을 뜨지 못했어요 — ' : '열지 못했어요 — ') + (e && e.message ? e.message : e), true); closeAppStudio(); }
@@ -355,6 +396,10 @@ function start(prefill?: StudioRec | null): void {
     const rec: StudioRec = { sid: s.id, pid, what, place, appId: '', known, at: Date.now(), stage: 'plan', card: null, round: 0, from: 0, mode: 'new', ...(nm ? { title: nm, named: true } : {}) };
     saveRec(rec); writeDraft(null);
     void relabel(s.id, nm, 'new');   // «"이름" 앱 제작» · 이름을 비웠으면 «새 앱 제작» → 기획 카드가 오면 그 이름으로
+    //  #4667 초안 앱을 지금 만든다(나만 보는 빈 앱 · 만든 사람 = 나 · 만들기 세션 = 이 세션). AI 는 이 id 로 저장한다(시안 글에 실린다).
+    //   못 만들면 종전처럼 «새로 생긴 앱» 을 찾는다(예약 없는 길).
+    try { const r: any = await api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, title: nm || firstLine(what) }) }); if (r && r.app_id) { rec.draftId = String(r.app_id); saveRec(rec); } }
+    catch (_) { /* 예약 없이 간다 */ }
     if (mountOpts.onSession) mountOpts.onSession(s.id);
     void build(rec);
   };
@@ -409,11 +454,13 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, lastNote: '', attaching: false };
+    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, lastNote: '', attaching: false, vis: null as StudioVis | null };
   const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
   const name = el('b', { class: 'v2-studio-name', text: S.title });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 판으로', hidden: true }) as HTMLButtonElement;
+  //  #4667 「공개하기」 — 공개한 앱을 고쳐 생긴 내 초안을 모두에게 내보낼 때, 또는 ⑤ 에서 「나만」 으로 둔 앱을 나중에 공개할 때. 새 앱의 첫 공개는 ④ 「누가 쓰나」 → 「이대로 넣기」 가 한다.
+  const pubBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '공개하기', hidden: true }) as HTMLButtonElement;
   const help = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '?', title: '안내 다시 보기', 'aria-label': '안내' });
   const bar = el('div', { class: 'v2-studio-bar' });
   const now = el('div', { class: 'v2-studio-now' });
@@ -493,7 +540,7 @@ async function build(rec: StudioRec): Promise<void> {
       else if (hasCm) { text = '적은 의견 ' + cmCount() + '건 — 「수정하기」 를 누르면 AI 가 한 번에 고쳐 새 판을 내요'; kids.push(nowBtn('마음에 들어요 · 확인으로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가운데 단추로 실제 화면에서 눌러 보고, 고칠 곳에 코멘트를 남기세요 · 고칠 곳이 없으면 「마음에 들어요」'; kids.push(nowBtn('마음에 들어요 · 확인으로', rec.round >= 1, () => { void setStage('check'); })); }
     } else if (rec.stage === 'check') { text = '네 줄만 보고 「이대로 넣기」 · 하나라도 아니면 「더 고치기」'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('이대로 넣기', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
-    else if (rec.stage === 'put') { text = ((rec.vis || 'me') === 'me' ? '이제 내 앱이에요(나만 보여요) · ' : '이제 워크스페이스 앱이에요 · ') + '「지금 써 보기」 로 바로 열어 보세요'; }
+    else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '이제 내 앱이에요(나만 보여요)' : S.vis && S.vis.draftMine ? '내 초안으로 두었어요(다른 사람은 공개 판을 써요)' : '이제 워크스페이스 앱이에요') + ' · 「지금 써 보기」 로 바로 열어 보세요'; }
     const prev = prevOf();
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '한 단계 앞으로 — 적은 것은 그대로예요', onclick: () => { void goTo(prev); } })] : []),
       el('span', { class: 'v2-studio-now-t', text: '지금 할 일: ' + text }), el('span', { class: 'v2-studio-sp' }), ...kids.filter(Boolean) as HTMLElement[]);
@@ -508,7 +555,30 @@ async function build(rec: StudioRec): Promise<void> {
       S.prevVer = vs.map((v) => v.version_no).filter((n) => n < S.curVer).sort((a, b) => b - a)[0] || 0;
       ver.textContent = S.curVer ? S.curVer + '판' : '';
       undo.hidden = !S.prevVer || rec.stage === 'put'; undo.textContent = S.prevVer ? S.prevVer + '판으로 되돌리기' : '이전 판으로';
+      S.vis = await readVis(rec.appId); if (S.dead) return;
+      paintVis();
     } catch (_) { /* 판 이력을 못 읽어도 만들기는 간다 */ }
+  };
+  //  #4667 머리줄의 판 글 — 「n판 · 나만 보는 초안」(공개 전) · 「n판 · 초안 · 공개 판은 m판」(공개한 앱을 내가 고침) · 「n판 · 공개됨」.
+  const paintVis = (): void => {
+    const v = S.vis;
+    const state = !v ? '' : v.visibility === 'me' ? '나만 보는 초안' : v.draftMine ? '초안 · 공개 판은 ' + v.publishedNo + '판' : '공개됨';
+    ver.textContent = (S.curVer ? S.curVer + '판' : '') + (state ? (S.curVer ? ' · ' : '') + state : '');
+    ver.title = !v ? '' : v.visibility === 'me' ? '공개하지 않은 앱이라 나에게만 보여요' : v.draftMine ? '이 판은 나에게만 보이는 초안이에요 · 다른 사람은 ' + v.publishedNo + '판을 써요' : '워크스페이스 모두가 이 판을 써요';
+    pubBtn.hidden = !v || !v.canPublish || !(v.draftMine || (v.visibility === 'me' && !!rec.done));
+  };
+  pubBtn.onclick = async () => {
+    if (!rec.appId || pubBtn.disabled) return;
+    pubBtn.disabled = true;
+    try {
+      const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) });
+      const n = Number(out && out.version_no) || S.curVer;
+      toast(n + '판을 공개했어요 · 워크스페이스 모두에게 보여요. 이어서 고치면 ' + (n + 1) + '판은 다시 나만 보는 초안이에요');
+      S.vis = await readVis(rec.appId); paintVis();
+      if (rec.stage === 'put') paintPut();
+      paintNow();
+    } catch (e: any) { toast('공개하지 못했어요 — ' + (e && e.message ? e.message : e), true); }
+    pubBtn.disabled = false;
   };
   // AI 세션 자리 — 접힘(기본) · 떠 있는 창 · 오른쪽 칸
   const applyPlace = (): void => {
@@ -609,10 +679,21 @@ async function build(rec: StudioRec): Promise<void> {
   // 새로 생긴 앱 찾기 — 시작할 때 없던 id. 여럿이면 가장 나중 것. 생기면 ③ 허브로(붙이기는 setStage 가).
   const findApp = async (): Promise<void> => {
     if (S.dead || rec.appId) return;
-    const apps = await listApps(); const fresh = freshApps(rec.known, apps);
-    if (fresh.length) {
-      const id = fresh[fresh.length - 1], a = apps.find((x) => String(x.id) === id);
-      rec.appId = id; S.title = String((a && a.title) || id); rec.title = S.title; saveRec(rec); name.textContent = S.title;
+    let found = '', foundTitle = '';
+    if (rec.draftId) {
+      //  #4667 「만들기 시작」 이 예약한 앱 — 첫 판이 저장되면(빈 앱이 아니게 되면) 그게 이 만들기의 앱이다.
+      const v = await readVis(rec.draftId);
+      if (v && !v.empty) { found = rec.draftId; foundTitle = v.title || rec.draftId; S.vis = v; }
+    } else {
+      //  예약 없이 시작한 만들기(옛 기록) — 시작 때 없던 앱 가운데 **내가 만든 것**만(같은 때 팀원이 만든 앱을 잡지 않게 · 만든 사람은 서버 기록).
+      const m0 = await me();
+      const apps = (await listApps()).filter((x) => !m0.id || String(x.made_by || x.installed_by || '') === m0.id);
+      const fresh = freshApps(rec.known, apps);
+      if (fresh.length) { found = fresh[fresh.length - 1]; const a = apps.find((x) => String(x.id) === found); foundTitle = String((a && a.title) || found); }
+    }
+    if (S.dead) return;
+    if (found) {
+      rec.appId = found; S.title = foundTitle; rec.title = S.title; saveRec(rec); name.textContent = S.title;
       await setStage('fix');
       await showApp('첫 판이 나왔어요');
       requestAnimationFrame(() => coach('draft', appBox.querySelector('.v2-studio-hub-go') as HTMLElement, '진짜 앱이 생겼어요. 가운데 단추로 실제 라이블리 화면에서 눌러 써 보고, 고칠 곳에 코멘트를 남기세요.', '제목을 고르기로 누르고 「글자 더 크게」'));
@@ -668,6 +749,18 @@ async function build(rec: StudioRec): Promise<void> {
   const paintSteps = (): void => { stepsEl.replaceChildren(...DRAFT_STEPS.map((s, i) => el('span', { class: i < S.step ? 'done' : i === S.step ? 'on' : '', text: s }))); };
   const paintDraft = (): void => { paintSteps(); waiting('AI 가 첫 판을 만들고 있어요', '몇 분 걸려요. 다 되면 여기에 가운데 단추가 서고 실제 화면에서 바로 써 볼 수 있어요. 이 화면을 닫아도 AI 는 계속 만들고, 앱빌더의 「만들던 앱」 에서 다시 열 수 있어요.', stepsEl); void findApp(); };
   const nameIn = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '40', 'aria-label': '앱 이름' }) as HTMLInputElement;
+  //  ④ 누가 쓰나(#4632 기본 「나만」 · #4667) — 「워크스페이스 모두」 면 「이대로 넣기」 가 공개한다. 「나만」 이면 공개하지 않는다: 새 앱은 나만 보는 앱으로,
+  //   이미 공개한 앱을 고친 것이면 내 초안으로 남고 다른 사람은 공개 판을 계속 쓴다(공개를 거두는 일은 앱빌더 배포 설정에서).
+  const whoRow = (): HTMLElement => {
+    const vis = rec.vis || 'me';
+    const live = !!S.vis && S.vis.visibility === 'all';
+    const opts: Array<['all' | 'me', string]> = [['me', live ? '내 초안으로 두기 (기본)' : '나만 (기본)'], ['all', live ? '모두에게 공개' : '워크스페이스 모두']];
+    return el('span', {},
+      el('div', { class: 'v2-studio-chk-places' }, ...opts.map(([k, t]) => el('button', { type: 'button', class: k === vis ? 'on' : '', text: t, onclick: () => { rec.vis = k; saveRec(rec); paintCheck(); } }))),
+      el('small', { text: vis === 'all' ? '「이대로 넣기」 를 누르면 공개돼요 — 그때부터 워크스페이스 사람 모두 앱 찾기에서 보고 써요'
+        : live ? '공개하지 않아요 — 다른 사람은 지금 공개 판을 계속 쓰고, 이 판은 나에게만 보여요'
+          : '나만 보고 써요 · 다른 사람에겐 없는 것과 같아요 · 나중에 앱빌더 배포 설정에서 공개할 수 있어요' }));
+  };
   const paintCheck = (): void => {
     const h = appHost(); const c = rec.card;
     const row = (ok: boolean | null, title: string, sub: HTMLElement | string): HTMLElement => el('div', { class: 'v2-studio-chk' + (ok === true ? ' ok' : ok === false ? ' no' : '') }, el('i', { text: ok === true ? '✓' : ok === false ? '!' : '…' }), el('div', {}, el('b', { text: title }), typeof sub === 'string' ? el('span', { text: sub }) : sub));
@@ -679,14 +772,12 @@ async function build(rec: StudioRec): Promise<void> {
     h.replaceChildren(el('div', { class: 'v2-studio-chks' }, r1,
       row(true, '이름', el('span', {}, nameIn, el('small', { text: ' 바꾸려면 여기서 고치세요' }))),
       row(true, '쓰는 자리', places),
-      row(true, '누가 쓰나', el('span', {}, el('div', { class: 'v2-studio-chk-places' }, ...([['me', '나만 (기본)'], ['all', '워크스페이스 모두']] as Array<['me' | 'all', string]>).map(([k, t]) => el('button', { type: 'button', class: k === (rec.vis || 'me') ? 'on' : '', text: t, onclick: () => { rec.vis = k; saveRec(rec); paintCheck(); } }))),
-        el('small', { text: (rec.vis || 'me') === 'me' ? '나만 보고 써요 · 다른 사람에겐 없는 것과 같아요 · 나중에 앱빌더 배포 설정에서 공개할 수 있어요' : '워크스페이스 사람 모두 앱 찾기에서 보고 써요' }))),
+      row(true, '누가 쓰나', whoRow()),
       el('p', { class: 'v2-studio-fine', text: '하나라도 아니면 「더 고치기」 로 ③에 돌아가요' })));
     requestAnimationFrame(() => coach('check', h.querySelector('.v2-studio-chks') as HTMLElement, '다 됐는지 네 줄만 봐요. 하나라도 아니면 「더 고치기」.', '이름이 「' + S.title + '」 이 맞나요?'));
   };
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
-    const mine = (rec.vis || 'me') === 'me';   // 공개 범위 「나만」(기본)
     const steps: HTMLElement[] = [
       el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : '이렇게 부탁했어요' }), el('p', { text: rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + rec.origin.by + ' 님이 만듦)' : '') + ' 의 사본으로 · ' + placeName : '「' + firstLine(rec.what) + '」 · ' + placeName })),
       c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 적는 것: ' + c.items + ' · 할 수 있는 것: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI 가 세션에서 만들었어요' }), el('p', { text: '대화로 고칠 때마다 판이 하나씩 올라갔어요.' })),
@@ -697,13 +788,20 @@ async function build(rec: StudioRec): Promise<void> {
       const vrow = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('b', { text: v.version_no + '판' + (v.version_no === 1 ? ' · 처음' : '') }), el('p', { text: (v.note || '').trim() || (v.version_no === 1 ? '첫 판' : '고침') }), el('small', { text: whenText(v.saved_at) }));
       const vr = rows.length <= 8 ? rows.map(vrow) : [vrow(rows[0]), el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('p', { text: '… ' + (rows.length - 7) + '판 더 고쳤어요' })), ...rows.slice(-6).map(vrow)];
       vr.forEach((n) => list.append(n));
-      list.append(el('div', { class: 'v2-studio-step' }, el('b', { text: mine ? '내 앱이 됐어요' : '워크스페이스 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」 에 있어요 — 이름은 「' + title + '」. ' + (mine ? '지금은 나만 보고 써요 · 아래에서 팀에 공개할 수 있어요.' : '워크스페이스 사람 모두 쓸 수 있어요.') })));
+      //  #4667 공개 상태대로 말한다 — 공개(모두) · 나만 보는 앱 · 공개한 앱에 둔 내 초안.
+      const v = S.vis;
+      list.append(!v || (v.visibility === 'all' && !v.draftMine)
+        ? el('div', { class: 'v2-studio-step' }, el('b', { text: '워크스페이스 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」 에 있어요 — 이름은 「' + title + '」. 워크스페이스 사람 모두 쓸 수 있어요.' }))
+        : v.visibility === 'me'
+          ? el('div', { class: 'v2-studio-step' }, el('b', { text: '내 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)에 나에게만 보여요 — 이름은 「' + title + '」. 지금은 나만 보고 써요 · 아래에서 팀에 공개할 수 있어요.' }))
+          : el('div', { class: 'v2-studio-step' }, el('b', { text: '내 초안으로 두었어요' }), el('p', { text: '이 판은 나에게만 보이고, 다른 사람은 공개 판(' + v.publishedNo + '판)을 계속 써요. 모두에게 내보내려면 아래 「공개하기」.' })));
     }).catch(() => { /* 판 이력 없이도 안내한다 */ });
     const how: HTMLElement[] = [];
     if (rec.place !== 'full') how.push(el('div', {}, el('span', { class: 'k', text: '세션 위젯으로' }), el('span', { text: '세션을 열고 오른쪽 위 + 에서 이 앱을 고르면 세션 위젯으로 붙어요. 그 세션의 AI 도 같이 봐요 — 세션에 말로 시키면 AI 가 위젯 내용을 읽고 바꿔요.' })));
     if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '앱 화면으로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 사이드바 없이 화면 가득 열려요.' })));
     how.push(el('div', {}, el('span', { class: 'k', text: '더 고치려면' }), el('span', { text: '앱빌더의 「내가 만든 앱」 에서 「고치기」. 말로 고치면 새 판이 되고, 마음에 안 들면 이전 판으로 되돌릴 수 있어요.' })));
-    if (!mine) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기 ⋯ 에서 「내 사본 떠서 고치기」 로 자기 식으로 바꿔 쓰거나, 「원본을 고치기」 로 모두에게 적용되는 고침을 할 수 있어요.' })));
+    const shared = !S.vis || (S.vis.visibility === 'all' && !S.vis.draftMine);
+    if (shared) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기 ⋯ 에서 「내 사본 떠서 고치기」 로 자기 식으로 바꿔 쓰거나, 「원본을 고치기」 로 고쳐 초안을 만든 뒤 공개할 수 있어요.' })));
     // ⑦ 팀에 알리기 — 글은 기획 카드에서 미리 적는다. 지식 「앱 소개」 + 슬랙(적으면).
     const line = el('textarea', { class: 'ta', rows: '2' }) as HTMLTextAreaElement;
     line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요 · ' + (c ? c.can.join(' · ') : rec.what) + ' · ' + placeName + ' · 앱 찾기(왼쪽 「앱」)의 워크스페이스 앱에 있어요';
@@ -723,13 +821,17 @@ async function build(rec: StudioRec): Promise<void> {
       el('p', { class: 'v2-studio-lead', text: '코드를 만지지 않고 말로만 만든 앱이에요. 어떻게 만들어졌는지와 어디서 쓰는지를 한 번 보고, 바로 써 보세요.' }),
       el('h3', { text: '이렇게 만들었어요' }), list,
       el('h3', { text: '이렇게 쓰세요' }), el('div', { class: 'v2-studio-how' }, ...how),
-      el('h3', { text: mine ? '팀에 공개하기' : '팀에 알리기' }),
-      mine
-        ? el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: '지금은 나만 쓰는 앱이에요(기본). 공개하면 워크스페이스 사람 모두 앱 찾기에서 보고 쓸 수 있고, 그 다음에 팀에 알릴 수 있어요. 앱빌더의 배포 설정에서 언제든 바꿀 수 있어요.' }),
-          el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: '워크스페이스 모두에게 공개하기', onclick: async (e: Event) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; if (await setVisibility('all')) { toast('워크스페이스 모두에게 공개했어요'); paintPut(); } else b.disabled = false; } })))
-        : el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: '팀 지식에 「앱 소개」 로 남고(대시보드 알림에 뜸), 슬랙 채널을 적으면 거기에도 가요. 안 알려도 돼요.' }), line, el('div', { class: 'v2-studio-tell-act' }, slack, tellBtn)),
+      //  팀에 알리기는 모두가 쓰는 앱일 때만 — 나만 보는 앱 · 내 초안을 알리면 팀원은 열 수 없는 앱을 보게 된다(#4667). 그 전엔 「팀에 공개하기」(#4632).
+      el('h3', { text: shared ? '팀에 알리기' : '팀에 공개하기' }),
+      shared
+        ? el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: '팀 지식에 「앱 소개」 로 남고(대시보드 알림에 뜸), 슬랙 채널을 적으면 거기에도 가요. 안 알려도 돼요.' }), line, el('div', { class: 'v2-studio-tell-act' }, slack, tellBtn))
+        : el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: S.vis && S.vis.draftMine
+            ? '이 판은 아직 나만 보는 초안이에요. 공개하면 워크스페이스 사람 모두 이 판을 쓰고, 그 다음에 팀에 알릴 수 있어요.'
+            : '지금은 나만 쓰는 앱이에요(기본). 공개하면 워크스페이스 사람 모두 앱 찾기에서 보고 쓸 수 있고, 그 다음에 팀에 알릴 수 있어요. 앱빌더의 배포 설정에서 언제든 바꿀 수 있어요.' }),
+          el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: S.vis && S.vis.draftMine ? '이 판을 모두에게 공개하기' : '워크스페이스 모두에게 공개하기', disabled: !!S.vis && !S.vis.canPublish,
+            onclick: async (e: Event) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; if (await setVisibility('all')) { toast('워크스페이스 모두에게 공개했어요'); paintNow(); paintPut(); } else b.disabled = false; } }))),
       el('div', { class: 'v2-studio-fin-act' }, tryBtn, el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; void setStage('fix'); } }))));
-    requestAnimationFrame(() => coach('put', tryBtn, (mine ? '이제 내 앱이에요(나만 보여요). ' : '이제 워크스페이스 앱이에요. ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요'));
+    requestAnimationFrame(() => coach('put', tryBtn, (shared ? '이제 워크스페이스 앱이에요. ' : S.vis && S.vis.draftMine ? '내 초안으로 두었어요(다른 사람은 공개 판을 써요). ' : '이제 내 앱이에요(나만 보여요). ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요'));
   };
 
   // ── 단계 넘기기 — 속 단계 draft(첫 판 기다림)는 앱이 생기면 fix 다(사람에게는 같은 ③) ──
@@ -748,7 +850,7 @@ async function build(rec: StudioRec): Promise<void> {
     else if (s === 'check') { S.check = null; paintCheck(); if (rec.card && rec.appId) { S.checkWait = true; void sendPrompt(rec, checkBrief(rec.card, rec.appId)); } }
     applyPlace(); paintBar(); paintNow(); paintTray();
   };
-  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await sendPrompt(rec, draftBrief(rec.card, rec.place))) { S.step = 0; await setStage('draft'); } };
+  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await sendPrompt(rec, draftBrief(rec.card, rec.place, rec.draftId || ''))) { S.step = 0; await setStage('draft'); } };
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
     const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
@@ -756,18 +858,24 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const putApp = async (): Promise<void> => {
     const newName = nameIn.value.trim() || S.title;
+    const share = rec.vis || 'me';
     try {
-      const m = await me();
-      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; man.studio = { ...(man.studio && typeof man.studio === 'object' ? man.studio : {}), made_by: man.studio?.made_by || m.id, build_session: rec.sid, place: rec.place, ...(rec.card ? { card: rec.card } : {}), ...(rec.origin ? { origin: rec.origin } : {}) }; }, '마무리 · ' + newName);
+      //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
+      //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
+      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName, { publish: share === 'all' });
       S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
     } catch (e: any) { toast('마무리 표시를 저장하지 못했어요 — ' + (e && e.message ? e.message : e) + ' · 앱은 그대로 쓸 수 있어요', true); }
-    await setVisibility(rec.vis || 'me');
+    S.vis = await readVis(rec.appId);
+    rec.vis = undefined; saveRec(rec);   // 이번 넣기에 쓴 ④ 의 고름 — 다음 고침은 기본(「나만」 · 공개한 앱이면 「내 초안으로 두기」)에서 다시 고른다
     await setStage('put');
+    paintVis();
   };
-  //  공개 범위(#4632) — 새 앱은 서버가 「나만」 으로 만든다. ④에서 고른 대로(또는 ⑤의 「공개하기」) 서버에 적는다. 못 적어도 앱은 그대로.
+  //  공개 범위(#4632 app_visibility_set) — 'all' 이면 「공개하기」(나만 보는 앱을 처음 공개 · 공개한 앱의 내 초안을 공개 판으로, #4667). 못 해도 앱은 그대로.
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
-    try { await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) }); rec.vis = v; saveRec(rec); return true; }
-    catch (e: any) { toast('공개 범위를 적지 못했어요 — ' + (e && e.message ? e.message : e), true); return false; }
+    try {
+      await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
+      S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
+    } catch (e: any) { toast('공개 범위를 바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); return false; }
   };
   undo.onclick = async () => {
     if (!rec.appId || !S.prevVer) return;
@@ -779,10 +887,14 @@ async function build(rec: StudioRec): Promise<void> {
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
-      el('span', { class: 'v2-studio-sp' }), undo, chatBtn, help,
+      el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
     bar, now, band, body, chatWin, dockHint);
-  if (rec.appId) { try { const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId)); const a = out?.app || out; if (a && a.title) { S.title = String(a.title); rec.title = S.title; name.textContent = S.title; } if (!rec.card && a?.manifest?.studio?.card) rec.card = a.manifest.studio.card; } catch (_) { /* 이름은 기록의 것으로 */ } }
+  if (rec.appId) {
+    //  #4667 제목 · 기획 카드 · 공개 상태를 서버에서(이름은 못 읽으면 기록의 것으로).
+    const v = await readVis(rec.appId);
+    if (v) { S.vis = v; if (v.title) { S.title = v.title; rec.title = S.title; name.textContent = S.title; } if (!rec.card && v.card) rec.card = v.card as StudioCard; paintVis(); }
+  }
   if (!rec.from) rec.from = await logEnd(rec.sid);
   await setStage(rec.stage);
   void pump();

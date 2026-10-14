@@ -13,7 +13,9 @@ import { HttpError } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { itemsPool } from "../db/client.js";
-import { getApp } from "../org/store/apps.js";
+import { getApp, type OrgApp } from "../org/store/apps.js";
+import { liveManifests, viewAppFor } from "../apps/app-view.js";
+import type { Viewer } from "../apps/visibility.js";
 import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
 import { appSchemaFor, ensureAppTables, type AppTableSpec } from "../apps/store-schema.js";
 import { logger } from "../log.js";
@@ -37,7 +39,7 @@ async function resolveStoreApp(user: LivelyUser | undefined, input: Record<strin
   if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
   const sessionId = String(ctx?.session ?? "").trim();
   if (!sessionId) throw new HttpError(400, "store_* 는 앱 화면·앱 세션, 또는 앱이 붙은 세션에서만 쓸 수 있습니다 — 세션 오른쪽에 앱을 붙이세요");
-  return requireAttachedApp({ sessionId, member: user.userId, appId: want || null, tool });
+  return requireAttachedApp({ sessionId, member: user.userId, appId: want || null, tool, scopes: user.scopes });
 }
 
 /** 쓰기 뒤 — 그 사람의 스트림에 «이 앱의 이 테이블이 바뀌었다». 비치명(publishAppEvent 가 삼킨다). */
@@ -59,14 +61,26 @@ function declaredSpecs(manifest: unknown): AppTableSpec[] {
   return ((manifest as { data?: { tables?: Array<{ name?: string; columns?: StoreColumn[]; indexes?: StoreIndex[] }> } })?.data?.tables ?? [])
     .map((t) => ({ table: String(t.name), columns: (t.columns ?? []) as StoreColumn[], indexes: (t.indexes ?? []) as StoreIndex[] }));
 }
-async function resolveDeclaredTable(appId: string, table: string): Promise<AppTableTarget> {
+/** 여러 매니페스트의 표 명세 합 — 같은 이름이면 앞의 것(설치된 판 — 새 칸이 더해진 쪽). */
+function unionSpecs(manifests: unknown[]): AppTableSpec[] {
+  const out: AppTableSpec[] = [];
+  for (const m of manifests) for (const t of declaredSpecs(m)) if (!out.some((d) => d.table === t.table)) out.push(t);
+  return out;
+}
+const viewerOf = (user: LivelyUser | undefined): Viewer => ({ userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [] });
+/** #4667 이 사람이 쓰는 판의 표 명세 — 공개 판을 보는 사람은 공개 판이 선언한 표, 초안을 만든 사람은 초안의 표(격리 리뷰 B3). */
+async function viewSpecs(app: OrgApp, who: Viewer): Promise<AppTableSpec[]> {
+  return declaredSpecs((await viewAppFor(app, who)).app.manifest);
+}
+async function resolveDeclaredTable(appId: string, table: string, who: Viewer): Promise<AppTableTarget> {
   const app = await getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
-  const declared = declaredSpecs(app.manifest);
-  if (!declared.some((t) => t.table === table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
+  //  받는 표 = 이 사람이 보는 판이 선언한 표. 지연 복구 명세는 물리 표 전부(두 판의 합) — 초안이 뺀 표도 공개 판이 쓰는 동안은 살아 있다
+  //   (install-run keepTables). 같은 이름이면 설치된 판(새 칸이 더해진 쪽)의 명세가 쓰인다.
+  if (!(await viewSpecs(app, who)).some((t) => t.table === table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
   const builtin = isBuiltinSource(app.source);
   const schema = appSchemaFor(builtin);
-  return { rel: qualifiedAppTable(schema, appId, table), schema, builtin, tables: declared };
+  return { rel: qualifiedAppTable(schema, appId, table), schema, builtin, tables: unionSpecs(await liveManifests(app)) };
 }
 
 // 지연 복구(#4223) — 선언은 있는데 물리 테이블·스키마가 없으면(42P01 undefined_table · 3F000 invalid_schema_name)
@@ -93,7 +107,7 @@ const storeInsert: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_insert");
     const table = String(input.table ?? "");
-    const target = await resolveDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table, viewerOf(user));
     if (!target.builtin) takeAppCall(appId);
     await assertAppDataQuota(target.schema, target.builtin);
     const row = (input.row ?? {}) as Record<string, unknown>;
@@ -119,7 +133,7 @@ const storeQuery: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_query");
     const table = String(input.table ?? "");
-    const target = await resolveDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table, viewerOf(user));
     if (!target.builtin) takeAppCall(appId);
     const match = (input.match ?? {}) as Record<string, unknown>;
     const keys = Object.keys(match).map((k) => assertMatchIdent(k));
@@ -141,7 +155,7 @@ const storeUpdate: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_update");
     const table = String(input.table ?? "");
-    const target = await resolveDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table, viewerOf(user));
     if (!target.builtin) takeAppCall(appId);
     await assertAppDataQuota(target.schema, target.builtin);
     const set = (input.set ?? {}) as Record<string, unknown>;
@@ -169,7 +183,7 @@ const storeDelete: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_delete");
     const table = String(input.table ?? "");
-    const target = await resolveDeclaredTable(appId, table);
+    const target = await resolveDeclaredTable(appId, table, viewerOf(user));
     if (!target.builtin) takeAppCall(appId);
     const match = (input.match ?? {}) as Record<string, unknown>;
     const keys = Object.keys(match).map((k) => assertMatchIdent(k));
@@ -187,8 +201,9 @@ const storeDelete: Capability = {
 //  나눠 쓰는 앱)은 열지 않는다 — 거기선 행 격리가 설정값 하나에 기대기 때문이다(계획 §7-1).
 //  앱 역할은 처음 쓸 때 보장하고 (워크스페이스, 앱, 앱 판) 마다 기억한다 — 앱을 다시 설치하면 판이 바뀌어 다시 맞춘다.
 const sqlRoleCache = new Map<string, string>();
-async function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown }, specs: AppTableSpec[], schema: string): Promise<string> {
-  const key = `${appSqlTenantId()}\0${appId}\0${app.content_hash ?? ""}\0${String(app.updated_at ?? "")}\0${schema}`;
+async function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown; draft_by?: string | null; published_version_no?: number | null }, specs: AppTableSpec[], schema: string): Promise<string> {
+  //  #4667 역할이 받는 표는 물리 표 전부(설치된 판 ∪ 공개 판) — 초안 표식 · 공개 판 포인터가 바뀌면 그 합도 바뀌므로 열쇠에 넣는다.
+  const key = `${appSqlTenantId()}\0${appId}\0${app.content_hash ?? ""}\0${String(app.updated_at ?? "")}\0${app.draft_by ?? ""}\0${app.published_version_no ?? ""}\0${schema}`;
   const hit = sqlRoleCache.get(key);
   if (hit) return hit;
   await ensureAppTables(appId, specs, { schema, strict: true });          // 테이블이 없던 앱(설치 때 실패)도 여기서 낫는다
@@ -219,7 +234,8 @@ const storeSql: Capability = {
     if (isBuiltinSource(app.source)) {
       throw new HttpError(400, `「${app.title || appId}」 은(는) 라이블리가 함께 싣는 기본 앱이라 자유 SQL 을 열지 않습니다 — store_query·store_insert·store_update·store_delete 를 쓰세요`);
     }
-    const specs = declaredSpecs(app.manifest);
+    //  #4667 문장이 쓸 수 있는 표 = 이 사람이 보는 판이 선언한 표(공개 판을 보는 사람은 공개 판의 표 · 격리 리뷰 B3).
+    const specs = await viewSpecs(app, viewerOf(user));
     if (!specs.length) throw new HttpError(400, `앱 '${appId}' 은(는) 데이터 테이블을 선언하지 않았습니다 — 매니페스트 data.tables 에 먼저 선언하세요`);
     const schema = appSchemaFor(false);
     const plan = planAppSql(String(input.sql ?? ""), { appId, schema, tables: specs.map((t) => t.table) });
@@ -229,7 +245,7 @@ const storeSql: Capability = {
     }
     takeAppCall(appId);
     if (plan.kind === "insert" || plan.kind === "update") await assertAppDataQuota(schema, false);
-    const role = await sqlRoleFor(appId, app, specs, schema);
+    const role = await sqlRoleFor(appId, app, unionSpecs(await liveManifests(app)), schema);
     const out = await runAppSql({ plan, params, role, appId, schema, physicalPrefix: `${physicalAppPrefix(appId)}__` });
     if (plan.writes && (out.changed ?? 0) > 0) {
       for (const t of plan.targets) announce(user, appId, t, plan.kind as "insert" | "update" | "delete", ctx);
@@ -248,7 +264,9 @@ const storeTables: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_tables");
     const app = await getApp(appId);
-    const tables = ((app?.manifest as { data?: { tables?: unknown[] } })?.data?.tables ?? []);
+    //  #4667 이 사람이 보는 판의 구조 — 공개 판을 보는 사람에게 남의 초안 구조를 주지 않는다(격리 리뷰 B3).
+    const shown = app ? (await viewAppFor(app, viewerOf(user))).app : null;
+    const tables = ((shown?.manifest as { data?: { tables?: unknown[] } })?.data?.tables ?? []);
     return { tables, sql: !!app && !isBuiltinSource(app.source) };
   },
 };

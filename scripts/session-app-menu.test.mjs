@@ -104,7 +104,8 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/onclick: \(\) => \{ void revertToPrevious\(cur\.app_id, cur\.title\)\.then\(\(v\) => \{ if \(v != null\) afterRevert\(v\); \}\); \}/.test(PANE), "S6-3 띠의 「되돌리기」 = 바로 앞 판, 되돌린 뒤 그 자리에서 다시 띄운다");
   ok(/^\s*root\.append\(tabs, head, band, body\);/m.test(PANE) && /^\s*paintHead\(cur\);/m.test(PANE), "S6-1 머리줄은 탭 줄 아래 · 앱이 하나여도 그린다(paint 마다)");
   ok(/^\s*const redrawn = !!e\.apps && attachedSignature\(e\.apps\) !== attachedSignature\(rows\);/m.test(PANE) && /^\s*if \(!d\.changed && !redrawn\) return;/m.test(PANE), "S6-1 붙은 목록은 id 가 같아도 판·이름이 바뀌면 다시 그린다(앱을 고친 뒤 머리줄이 옛 판을 보이지 않게)");
-  ok(/appPath\(appId, '\/versions'\)/.test(VER) && /appPath\(appId, '\/revert'\), \{ method: 'POST', body: JSON\.stringify\(\{ version_no: versionNo \}\) \}/.test(VER), "S6-4 판 이력 · 되돌리기는 SPEC §1-3 경로(GET /versions · POST /revert {version_no})");
+  //  #4667 되돌리기 본문은 version_no 가 앞에 서고, 배포 설정의 「이 판으로」 만 publish 를 덧붙인다(그 밖 호출은 종전 본문 그대로).
+  ok(/appPath\(appId, '\/versions'\)/.test(VER) && /appPath\(appId, '\/revert'\), \{ method: 'POST', body: JSON\.stringify\(\{ version_no: versionNo(?: \}|, \.\.\.\(opts && opts\.publish \? \{ publish: true \} : \{\}\) \})\) \}/.test(VER), "S6-4 판 이력 · 되돌리기는 SPEC §1-3 경로(GET /versions · POST /revert {version_no} · 배포 설정만 publish)");
   ok(/^export const PAD_HIDDEN_STORE = shellPrefStore\('lively_v2_pad_hidden', 'list'\);/m.test(APPS) && /^\s*shellPrefsPush\(\);\s*$/m.test((APPS.match(/export function togglePadHidden[\s\S]*?\n\}/) || [""])[0]), "S6-5 뺀 목록은 계정의 것(shell-prefs — 최근 앱과 같은 길)");
   ok(/padPlacement\(t\.tid, hidden, !!q\) !== 'hidden'/.test(APPS) && /padPlacement\(t\.tid, hidden, !!q\) === 'hidden'/.test(APPS), "S6-5 격자는 순수 판정(padPlacement)으로 가른다");
   ok(/class: 'v2-pad-sec v2-pad-hid'/.test(APPS) && /text: `뺀 앱 \$\{gone\.length\}`/.test(APPS), "S6-5 뺀 칸은 격자 아래 접힌 「뺀 앱 N」 묶음");

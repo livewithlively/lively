@@ -1920,6 +1920,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-help button { text-align: left; border: 0; background: none; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: var(--ink); }
 .v2-studio-help button:hover { background: var(--gray-bg-2, #F6F8FB); }
 .v2-pad-badge--new { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }
+/* #4667 내 초안이 걸린 공개 앱 — 나에게만 서는 표시라 흐린 테두리로(«새로» 와 겹쳐도 구분되게). 「나만」 은 아래 --mine(#4632) */
+.v2-pad-badge--draft { background: transparent; color: var(--purple-text, #5B3FD0); border-color: rgba(123, 97, 224, .45); border-style: dashed; }
 .v2-pad-origin { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 /* ③ 다 만들었어요 — 이렇게 만들었어요(판마다 한 줄) · 이렇게 쓰세요 · [지금 써 보기] */
 .v2-studio-fin { flex: 1; min-height: 0; overflow: auto; width: min(720px, 100%); margin: 0 auto; padding: 24px 20px 60px; display: flex; flex-direction: column; }

@@ -104,7 +104,9 @@ export function copyId(originId: string, memberId: string): string {
 }
 
 // ── 단계마다 보내는 글(사람이 치는 글이 아니라 단추가 보낸다 · 대화에 그대로 보이니 짧고 쉬운 말로) ──
-const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_get 으로 그것만 읽고 다른 건 찾아보지 마).';
+//  #4667 저장은 나만 보는 판(새 앱 · 공개한 앱의 초안)이고 공개는 사람이 정한다 — 모든 글에 같은 문장(격리 리뷰 2-7).
+const NO_PUBLISH = '저장하면 나만 보는 판이 되고, 공개는 내가 정하니 app_visibility_set 은 부르지 마.';
+const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_get 으로 그것만 읽고 다른 건 찾아보지 마). ' + NO_PUBLISH;
 /** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
 export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
@@ -113,8 +115,11 @@ export function planBrief(what: string, place: StudioPlace, name = ''): string {
     + '아직 만들지 말고, 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · 할 수 있는 것은 셋을 · 로):\n'
     + '[[기획카드]]\n이름: \n누가 쓰나: \n무엇을 적나: \n할 수 있는 것: \n안 하는 것: \n첫 화면: \n[[/기획카드]]';
 }
-export function draftBrief(card: StudioCard, place: StudioPlace): string {
+/** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
+export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
+  const id = String(appId || '').trim();
   return `이 기획 카드대로 첫 판을 만들어 저장해 줘. ${PLACE[place].say}\n${cardText(card)}\n${RULE}\n`
+    + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「첫 판 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
@@ -131,7 +136,7 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
     else lines.push(`[찍은 곳 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
   });
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
-  return `${round}번째 고침이야. 아래를 반영해 새 판으로 저장해 줘(app_pull ${appId} 로 지금 판을 받아 고치고 app_save · note 는 바뀐 점 한 줄). ${PLACE[place].say} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
+  return `${round}번째 고침이야. 아래를 반영해 새 판으로 저장해 줘(app_pull ${appId} 로 지금 판을 받아 고치고 app_save · note 는 바뀐 점 한 줄). ${PLACE[place].say} ${NO_PUBLISH} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }
 export function checkBrief(card: StudioCard, appId: string): string {
   return `기획 카드와 지금 판(app_pull ${appId})을 대조해서 이 한 줄로만 답해 줘:\n[[대조]] 있음: (들어간 「할 수 있는 것」을 · 로) | 빠짐: (안 들어간 것 · 없으면 없음)\n${cardText(card)}`;

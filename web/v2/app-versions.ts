@@ -20,10 +20,12 @@ export async function fetchAppVersions(appId: string): Promise<AppVersion[]> {
  *  부르는 쪽(붙은 앱 탭)이 이 번호로 프레임을 **바로** 다시 띄운다 — 서버의 'updated' 사건(SSE)에만 기대지 않는다(스트림이 없는 게이트웨이도 있다).
  *  사건이 뒤따라 오면 같은 번호라 두 번 띄우지 않는다(session-app-pane).
  */
-export async function revertApp(appId: string, versionNo: number, title?: string): Promise<number | null> {
+export async function revertApp(appId: string, versionNo: number, title?: string, opts?: { publish?: boolean }): Promise<number | null> {
   try {
-    await api(appPath(appId, '/revert'), { method: 'POST', body: JSON.stringify({ version_no: versionNo }) });
-    toast(`「${title || appId}」을(를) ${versionNo}판으로 되돌렸어요 — 문서·의견 데이터는 그대로예요.`);
+    //  #4667 publish — 되돌린 판을 바로 모두의 판으로(앱빌더 배포 설정 「이 판으로」). 없으면 공개 앱에선 되돌린 사람의 초안이 된다.
+    const out: any = await api(appPath(appId, '/revert'), { method: 'POST', body: JSON.stringify({ version_no: versionNo, ...(opts && opts.publish ? { publish: true } : {}) }) });
+    const draft = out && out.state === 'draft';
+    toast(`「${title || appId}」을(를) ${versionNo}판으로 되돌렸어요 — 문서·의견 데이터는 그대로예요.` + (draft ? ' 이 판은 나에게만 보이는 초안이에요 · 모두에게 쓰게 하려면 「공개하기」.' : ''));
     return versionNo;
   } catch (e: any) { toast('되돌리지 못했어요 — ' + (e && e.message ? e.message : e), true); return null; }
 }
