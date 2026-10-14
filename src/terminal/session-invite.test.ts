@@ -86,7 +86,7 @@ test("R1 수정 라우트 — 저장 전에 읽고 저장 뒤에 알린다", () 
 });
 
 test("R2 나가기 라우트 — 거절이 먼저 · 주인 이름 · DB 행", () => {
-  const b = routeBody('app.post("/api/ui/terminal/sessions/:id/leave"');
+  const b = routeBody('app.post("/api/ui/terminal/sessions/:id/leave-invite"');
   const refuseAt = b.indexOf("leaveRefusal(");
   const firstWrite = Math.min(...["relayNodeOp(", "editSession(", "updateSessionStateMeta("].map((k) => b.indexOf(k)).filter((i) => i > 0));
   assert.ok(refuseAt > 0 && refuseAt < firstWrite, "거절 판정이 쓰기보다 먼저여야 한다");

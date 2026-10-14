@@ -19,7 +19,7 @@
 //  S5 ⌘↵ — 칸에 글자가 있어도 바뀐 게 있으면 저장 · 바뀐 게 없으면 요청 0
 //  S6 빼기만 — 단추 «저장» · 빈 칸 ↵ 로 저장(명단에서 빠짐)
 //  S7 서버가 알림 0건이라 답하면 «알림을 보냈어요» 를 말하지 않는다 · 바뀐 것 없으면 저장 단추가 꺼져 있다
-//  L1 초대받은 사람 — 공유 창에 [이 세션에서 나가기] · 취소면 요청 0 · 나가기면 POST …/leave 1건 + session-left 신호(그 세션 id)
+//  L1 초대받은 사람 — 공유 창에 [이 세션에서 나가기] · 취소면 요청 0 · 나가기면 POST …/leave-invite 1건(⚠ …/leave 는 «화면을 떠남» 주소다) + session-left 신호(그 세션 id)
 //  L2 만든 사람(편집기) — 나가기 단추 없음  L3 명단 밖의 남(관리자로 보는 것) — 없음
 //  G1 켬 — 「고정」 → 「초대받은 세션」 → 「지금 볼 것」 순 · 초대 줄은 그 층 카드에만 · 고정한 초대 줄은 「고정」 에
 //  G2 프로젝트로 묶기 축에서도 같은 층 · 초대 줄이 프로젝트 카드에 섞이지 않는다
@@ -86,7 +86,7 @@ else {
 
 // ───────────────────────── W. 배선(주석을 걷고 본다)
 const strip = (f) => (existsSync(f) ? readFileSync(f, "utf8").replace(/^[ \t]*\/\/.*$/gm, "") : "");
-const MAIN = strip(path.join(WEB, "v2/main.ts")), CTX = strip(path.join(WEB, "v2/ctx-shell.ts")), CHAT = strip(path.join(WEB, "session-chat.ts"));
+const MAIN = strip(path.join(WEB, "v2/main.ts")), CTX = strip(path.join(WEB, "v2/ctx-shell.ts")), CHAT = strip(path.join(WEB, "session-chat.ts")), VIEWS = strip(path.join(WEB, "v2/views.ts"));
 {
   const at = MAIN.indexOf("function sideInstances(");
   const body = at > 0 ? MAIN.slice(at, MAIN.indexOf("\nfunction ", at + 10)) : "";
@@ -100,7 +100,7 @@ const MAIN = strip(path.join(WEB, "v2/main.ts")), CTX = strip(path.join(WEB, "v2
     "W1b 셸 — 초대 줄의 묶음은 「초대받은 세션」 · 정렬은 고정 → 초대 → 지금 볼 것");
 }
 check(/if \(isInvitedSess\(s\)\) rows\.push\([^\n]*label: '이 세션에서 나가기'[^\n]*leaveInvitedSession\(/.test(CTX)
-  && /isInvitedSess\(target\)\s*\?\s*row\('이 세션에서 나가기'/.test(CHAT)
+  && /opts\.canLeave\?\.\(target\)\s*\?\s*row\('이 세션에서 나가기'/.test(CHAT) && /canLeave: \(t\) => isInvitedSess\(t\)/.test(VIEWS)
   && /window\.addEventListener\(SESSION_LEFT_EVENT,[\s\S]{0,700}closeRowTabs\([\s\S]{0,200}v2Refresh\(\);/.test(MAIN),
   "W2 나가기 입구 — 우클릭 · 설정 창은 초대받은 사람만 · 셸은 신호에 창을 닫고 다시 받는다");
 
@@ -243,8 +243,8 @@ const SHARE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8
   const l1 = R.l1;
   check(l1.has && !l1.editor && l1.dlg && l1.popClosed, "L1a 초대받은 사람 — 읽기 전용 창에 [이 세션에서 나가기] · 누르면 확인 창", j(l1));
   check(l1.afterCancel.posts === 0 && l1.afterCancel.left.length === 0, "L1b 취소 — 요청 0 · 신호 0", j(l1.afterCancel));
-  check(l1.afterOk.posts.length === 1 && l1.afterOk.posts[0].url === "/api/ui/terminal/sessions/box-9/leave" && j(l1.afterOk.left) === '["box-9"]',
-    "L1c 나가기 — POST …/leave 1건 + session-left(그 세션)", j(l1.afterOk));
+  check(l1.afterOk.posts.length === 1 && l1.afterOk.posts[0].url === "/api/ui/terminal/sessions/box-9/leave-invite" && j(l1.afterOk.left) === '["box-9"]',
+    "L1c 나가기 — POST …/leave-invite 1건 + session-left(그 세션)", j(l1.afterOk));
   check(R.l2 === false, "L2 만든 사람 — 나가기 단추 없음");
   check(R.l3.leave === false && R.l3.ro === true, "L3 명단 밖의 남 — 나가기 단추 없음", j(R.l3));
 }

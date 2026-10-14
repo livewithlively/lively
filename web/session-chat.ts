@@ -57,7 +57,6 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 import { onViewers, viewersOf } from './v2/presence.js';
 import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
-import { isInvitedSess } from './v2/views.js';   // #3870 — 초대받은 사람만 [이 세션에서 나가기]
 
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
@@ -166,6 +165,8 @@ export interface SessionChatOpts {
   onPickProject?: (anchor: HTMLElement) => void;
   /** 이 세션의 소속을 바꿀 수 있나(#3870 — 주인·초대받은 사람). 없으면 종전대로 주인만(target.owned). 판정은 셸의 한 술어(v2/views canMoveSess). */
   canPickProject?: (t: SessionChatTarget) => boolean;
+  /** 이 세션에서 나갈 수 있나(#3870 — 초대받은 사람만). 없으면 아무에게도 안 세운다(fail-closed). 판정은 셸의 한 술어(v2/views isInvitedSess). */
+  canLeave?: (t: SessionChatTarget) => boolean;
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
@@ -1260,7 +1261,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       row('함께 보는 사람', sh.owned ? '이 세션을 볼 사람을 고릅니다 — 기본은 나만 봐요' : '이 세션을 누가 볼 수 있는지 봅니다',
         sh.owned ? '고르기' : '보기', () => { const s2 = shareSessOf(target); if (s2) openSharePopover(facesEl, s2); }),
       //  #3870 — 초대받은 사람만 나간다(만든 사람에겐 이 줄이 없다 · 서버도 거절한다).
-      isInvitedSess(target)
+      opts.canLeave?.(target)
         ? row('이 세션에서 나가기', '내 목록에서 빠지고 더는 열 수 없어요 — 다시 보려면 만든 사람이 다시 초대해야 해요', '나가기',
             () => { close(); void leaveInvitedSession({ id: target.id, label: target.label }); }, true)
         : null,

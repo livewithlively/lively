@@ -667,7 +667,7 @@ export async function leaveInvitedSession(s: { id: string; label?: string | null
   });
   if (!ok) return false;
   try {
-    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/leave', { method: 'POST', body: '{}' });
+    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/leave-invite', { method: 'POST', body: '{}' });
   } catch (e: any) { toast(e?.message || '세션에서 나가지 못했어요.', true); return false; }
   toast('세션에서 나왔어요.');
   window.dispatchEvent(new CustomEvent(SESSION_LEFT_EVENT, { detail: { id: s.id } }));

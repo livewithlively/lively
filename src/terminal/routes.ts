@@ -1575,11 +1575,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const notified = await announce(edited.invites, idOf(userOf(req)));
     res.json({ ok: true, notified });
   }));
-  // 세션에서 나가기(#3870, 원준 2026-10-14) — **초대받은 사람만**: 명단에서 나 하나를 뺀다. 만든 사람에겐 길이 없다(leaveRefusal).
+  // 세션에서 나가기(#3870, 원준 2026-10-14) — ⚠ 주소는 `/leave` 가 아니다: 그건 «보던 화면을 떠남»(얼굴 걷기, chat-routes.ts)이다.
+  // — **초대받은 사람만**: 명단에서 나 하나를 뺀다. 만든 사람에겐 길이 없다(leaveRefusal).
   //  남의 명단을 고치는 일이라 실행은 **주인 이름으로** 한다(복제 · 옮기기와 같은 규율) — 노드의 assertManage 가 주인을 강제한다.
   //  ① 도는 세션이면 그 자리(중앙 tmux · 노드)의 명단부터: 노드 목록 · 입장 판정이 거기를 본다. ② DB 행은 늘: 입장 판정(ownerMeta)과
   //  복원이 이 행을 먼저 본다 — 멈춘 세션도 행만 고치면 다시 열었을 때 내가 빠져 있다.
-  app.post("/api/ui/terminal/sessions/:id/leave", auth, wrap(async (req, res) => {
+  app.post("/api/ui/terminal/sessions/:id/leave-invite", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const id = String(req.params.id || "");
     const me = idOf(userOf(req));

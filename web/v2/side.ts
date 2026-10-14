@@ -878,16 +878,17 @@ function toggleGrp(key: string, wasOpen: boolean, allPast = false): void {
 
 /** 프로젝트 축의 목록 — 시간축과 **같은 묶음 머리글**(고정 · 지금 볼 것 · 오늘 …) 아래에 프로젝트 카드를 쌓는다.
  *  「지금 볼 것」 아래엔 볼 일 있는 줄만 든 조각 카드가 서고, 같은 프로젝트의 나머지는 제 날짜 아래 카드에 남는다(#4551 — projGroups 머리말). */
-function projListKids(all: SideInstance[], o: RowOpts = {}): HTMLElement[] {
+function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  #3870 — 초대받은 세션은 프로젝트 카드에 섞지 않고 「고정」 다음 자기 층에 선다(lib/invited-up). 고정한 줄은 「고정」 이 이긴다.
-  const inv = splitInvited(all, invitedUp);
-  const shown = inv.rest;
+  //   ⚠ `shown` 은 여전히 **목록 전체**다(아래 «이미 섰나» 가 그걸 훑는다) — 카드 재료만 `listed` 로 좁힌다.
+  const inv = splitInvited(shown, invitedUp);
+  const listed = inv.rest;
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   //  #4233 — 고정한 단위가 그대로 움직인다(lib/home-pins). 고정한 세션은 「고정」 세션 카드로, 고정한 프로젝트 안에서
   //   또 고정한 세션은 그 프로젝트 카드 안 맨 위로(한 세션은 한 자리에만 선다).
-  const pins = splitHomePins(shown, projPinnedId);
+  const pins = splitHomePins(listed, projPinnedId);
   const pinnedRows = pins.pinnedRows;
   //  ★ 프로젝트 **자신의 화면**은 카드 안 줄로 세우지 않는다(#3870, 원준 2026-09-13 "프로젝트 폴더 안에는 세션만 있어야지").
   //   카드 머리줄의 [→] 가 이미 그 화면으로 가는 문이다 — 잣대와 사유는 lib/sess-fold projCardRows 머리말.
@@ -904,7 +905,7 @@ function projListKids(all: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   //      그래서 접힘에 한 번 더 설 수 있었다.
   //   세션 행 키는 출처(① 내 세션 · ③ 열린 창)와 무관하게 늘 `sess:<id>` 다(main.ts sideRowKey).
   const standingSess = new Set<string>();
-  for (const r of all) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));   // 초대 층의 줄도 «이미 섰다»
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));   // 초대 층의 줄도 «이미 섰다»
   const groups = projGroups(rest, false);
   //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
   //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
@@ -1037,14 +1038,13 @@ function dayCard(group: string, rows: SideInstance[], o: RowOpts, seq = 0): HTML
  *  ⚠ 고정한 프로젝트 카드에는 그 프로젝트 **자신의 화면** 줄을 넣지 않는다(#3870 — 카드의 [→] 가 그 문이다).
  *   그 줄은 날짜 카드에 그대로 남는다 — 세션별 축에서 그 줄을 걷으면 돌아갈 길이 없어진다(#3870 E9).
  */
-function sessAxisKids(all: SideInstance[], o: RowOpts): HTMLElement[] {
+function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
   const kids: HTMLElement[] = [];
-  const inv = splitInvited(all, invitedUp);   // #3870 — 「고정」 다음 「초대받은 세션」 층(projListKids 와 같은 자리)
-  const shown = inv.rest;
+  const inv = splitInvited(shown, invitedUp);   // #3870 — 「고정」 다음 「초대받은 세션」 층(projListKids 와 같은 자리)
   //  나누기는 잎 모듈 한 자리(lib/home-pins planSessAxis) — 자기 화면 줄 판정은 sess-fold 의 잣대(projCardRows 의 여집합).
-  const plan = planSessAxis(shown, projPinnedId, (r) => projCardRows([r]).length === 0);
+  const plan = planSessAxis(inv.rest, projPinnedId, (r) => projCardRows([r]).length === 0);
   const standingSess = new Set<string>();
-  for (const r of all) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));   // 초대 층의 줄도 «이미 섰다»
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));   // 초대 층의 줄도 «이미 섰다»
   const pinGrps = projGroups(plan.cardRows, false, false);
   if (plan.pinRows.length || pinGrps.length) {
     kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: PINNED_BUCKET }) as HTMLElement);
