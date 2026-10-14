@@ -34,6 +34,7 @@ export interface SessionApp {
   chatSend: boolean;        // #4594 — 이 앱 화면이 붙은 세션에 글을 바로 보낼 수 있나(동의 창이 제 줄로 보여 준다)
   workspaceFiles: string[];   // #4629 — 볼 수 있는 모든 프로젝트의 자료에서 읽을 수 있는 확장자(프로젝트 자료와 다른 동의 줄)
   projectFiles: string[];   // #4592 — 이 앱 화면이 붙은 세션의 프로젝트 자료에서 읽을 수 있는 확장자(동의 창이 제 줄로 보여 준다)
+  visibility: 'all' | 'me';   // #4632 공개 범위 — 「나만」 은 만든 사람 · 관리자에게만 온다(서버가 거른다 · 여기 온 앱은 이 사람에게 보이는 앱)
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -64,7 +65,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           notifications: perm.notifications === true,     // #1891 — 동의 창이 제 줄로 보여 준다
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
           workspaceFiles: Array.isArray(perm.workspace_files) ? perm.workspace_files.map(String) : [],   // #4629
-          projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [] };   // #4592
+          projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [],   // #4592
+          visibility: a.visibility === 'me' ? 'me' as const : 'all' as const };   // #4632
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -95,7 +97,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [],
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null,
-        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
+        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {}, visibility: 'all' as const };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;
@@ -179,7 +181,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
         // 세션에 글 보내기(#4594) — 이것도 성격이 다르다: '앱이 내 AI 세션을 움직이나'. 붙은 세션에만, 내가 누른 동작에서만 들어간다.
         app.chatSend ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '세션에 글 보내기' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션에 글을 바로 보낼 수 있어요(내가 누를 때만)' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱에서 내가 단추를 누르면 그 내용이 이 앱을 붙인 AI 세션에 메시지로 들어가요 — 앱이 혼자 보내진 않아요(분당 20건까지)' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },

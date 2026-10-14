@@ -46,7 +46,7 @@ const appChatSend: Capability = {
     if (!member) throw new HttpError(401, "인증이 필요합니다");
     const appId = String(input.app_id ?? "").trim();
     if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
-    return sendFromApp({ appId, member, sessionId: String(input.session_id ?? ""), text: String(input.text ?? "") }, liveDeps, rate);
+    return sendFromApp({ appId, member, scopes: user?.scopes, sessionId: String(input.session_id ?? ""), text: String(input.text ?? "") }, liveDeps, rate);
   },
 };
 

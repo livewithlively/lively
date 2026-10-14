@@ -45,7 +45,7 @@ test("S7-2~12 화면·데이터 밖의 선언은 하나씩 전부 위반으로 �
 });
 
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
-  id: "memo", title: "메모", version: "1.0.0", manifest: base, source: { kind: "inline" }, content_hash: null,
+  id: "memo", title: "메모", version: "1.0.0", manifest: base, source: { kind: "inline" }, content_hash: null, visibility: "all",
   status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null,
   edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, ...over,
 });

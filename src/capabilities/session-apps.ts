@@ -13,6 +13,7 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersion, type OrgApp } from "../org/store/apps.js";
+import { appVisibilityDenial } from "../apps/visibility.js";   // #4632 「나만」 앱은 남이 붙일 수 없다
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
@@ -130,6 +131,7 @@ const sessionAppAttach: Capability = {
     if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
     await requireSessionParticipant(sid, member);
     const app = requireUsableApp(await getApp(appId), appId);
+    { const why = appVisibilityDenial(app, { userId: member, scopes: user.scopes }); if (why) throw new HttpError(403, why); }
     if (!(await getActiveGrant(appId, member))) {
       throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — 사람이 앱을 한 번 열어 동의해야 붙일 수 있습니다`);
     }

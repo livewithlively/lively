@@ -12,7 +12,7 @@ import type { OrgApp } from "../org/store/apps.js";
 
 const row = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "hello", title: "안녕", version: "1.0.0", manifest: {}, source: { kind: "builtin" }, content_hash: "h",
-  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
+  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null, visibility: "all",
   edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
 });
 

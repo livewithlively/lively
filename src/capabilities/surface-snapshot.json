@@ -4845,6 +4845,16 @@
   "input_hash": "9018d760e68657cc"
  },
  {
+  "name": "app_visibility_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/visibility"
+  ],
+  "input_hash": "22621bbc1be7c170"
+ },
+ {
   "name": "org_app_remove",
   "scope": "admin",
   "mcp": true,

@@ -3064,3 +3064,4 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bld-card--sel { cursor: pointer; }
 .v2-bld-card--sel:hover { border-color: rgba(123, 97, 224, .5); }
 .v2-bld-card--sel:focus-visible { outline: 2px solid var(--purple, #7B61E0); outline-offset: 2px; }
+.v2-pad-badge--mine { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }   /* #4632 공개 범위 「나만」 */

@@ -11,7 +11,7 @@ import type { OrgApp } from "../org/store/apps.js";
 
 const row = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "x1", title: "x", version: "1.0.0", manifest: {}, source: { kind: "builtin" }, content_hash: "old-hash",
-  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
+  status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null, visibility: "all",
   edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
 });
 

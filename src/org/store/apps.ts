@@ -28,12 +28,15 @@ export interface OrgApp {
   /** #4225 누가 이 앱을 고칠 수 있나 — 'all'(구성원 전원, 기본) · 'members'(edit_members 에 든 사람 + 관리자). */
   edit_mode: AppEditMode;
   edit_members: string[];
+  /** #4632 공개 범위 — 'all'(구성원 모두, 기본) · 'me'(만든 사람만 — app_save 로 새로 생긴 앱의 기본). 판정은 apps/visibility.ts. */
+  visibility: AppVisibility;
   /** #4600 패키지 폴더에 실린 릴리스 판 번호(시더가 적음). 빌트인 아닌 앱은 null. */
   builtin_version: string | null;
   /** #4600 지금 서빙 중인 상태 = org_app_version 의 이 판. 판 이력 도입 전 설치는 null. */
   current_version_no: number | null;
 }
 export type AppEditMode = "all" | "members";
+export type AppVisibility = "all" | "me";
 
 export interface AppComponentRow { app_id: string; kind: string; ref: string; orig_name: string | null }
 export interface AppGrantRow {
@@ -52,6 +55,7 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     updated_by: r.updated_by == null ? null : String(r.updated_by),
     edit_mode: r.edit_mode === "members" ? "members" : "all",
     edit_members: Array.isArray(r.edit_members) ? (r.edit_members as unknown[]).map(String) : [],
+    visibility: r.visibility === "me" ? "me" : "all",
     builtin_version: r.builtin_version == null ? null : String(r.builtin_version),
     current_version_no: r.current_version_no == null ? null : Number(r.current_version_no),
   };
@@ -156,6 +160,16 @@ export async function setAppEditPolicy(id: string, mode: AppEditMode, members: s
   const list = mode === "members" ? [...new Set(members.map((m) => String(m).trim()).filter(Boolean))] : [];
   await itemsPool.query(`UPDATE org_app SET edit_mode=$2, edit_members=$3::jsonb, updated_at=now(), updated_by=$4 WHERE id=$1`,
     [id, mode, JSON.stringify(list), ctx.actor ?? null]);
+  const after = await getApp(id);
+  await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
+  return after;
+}
+
+/** #4632 공개 범위를 정한다(만든 사람 · 관리자 — 판정은 호출부 canSetAppVisibility). */
+export async function setAppVisibility(id: string, visibility: AppVisibility, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(id);
+  if (!before) return null;
+  await itemsPool.query(`UPDATE org_app SET visibility=$2, updated_at=now(), updated_by=$3 WHERE id=$1`, [id, visibility === "me" ? "me" : "all", ctx.actor ?? null]);
   const after = await getApp(id);
   await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
   return after;
