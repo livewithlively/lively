@@ -13,7 +13,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { itemsPool } from "../db/client.js";
-import { getApp } from "../org/store/apps.js";
+import { getApp, getAppVersionHead } from "../org/store/apps.js";
 import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
 import { appSchemaFor, ensureAppTables, type AppTableSpec } from "../apps/store-schema.js";
 import { logger } from "../log.js";
@@ -62,7 +62,13 @@ function declaredSpecs(manifest: unknown): AppTableSpec[] {
 async function resolveDeclaredTable(appId: string, table: string): Promise<AppTableTarget> {
   const app = await getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
+  //  #4667 공개 앱에 초안이 있으면 표는 두 판 어느 쪽이 선언한 것이든 받는다 — 표는 앱에 한 벌이고, 초안이 뺀 표도 공개 판이 아직 쓰므로
+  //   지우지 않고 둔다(install-run keepTables). 같은 이름이면 설치된 판(새 칸이 더해진 쪽)의 명세가 지연 복구에 쓰인다.
   const declared = declaredSpecs(app.manifest);
+  if (app.visibility === "all" && app.draft_by && app.published_version_no != null && !declared.some((t) => t.table === table)) {
+    const head = await getAppVersionHead(appId, app.published_version_no).catch(() => null);
+    for (const t of head ? declaredSpecs(head.manifest) : []) if (!declared.some((d) => d.table === t.table)) declared.push(t);
+  }
   if (!declared.some((t) => t.table === table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
   const builtin = isBuiltinSource(app.source);
   const schema = appSchemaFor(builtin);

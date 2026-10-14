@@ -16,6 +16,8 @@ import { requireAppTool } from "../apps/principal.js";
 import { needsRegrant } from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
 import { getApp } from "../org/store/apps.js";
+import { canSeeApp } from "../apps/visibility.js";
+import { viewAppFor } from "../apps/app-view.js";
 import { logToolCall } from "../org/policies/tool-log.js";
 
 // 방어심화: grant 에 있어도 UI 브리지가 절대 호출하지 않는 도구(신원·자격·grant·앱관리 mutator). 관리자 도구는
@@ -43,10 +45,12 @@ const appToolCall: Capability = {
     if (!appId || !name) throw new HttpError(400, "app_id 와 name 이 필요합니다");
     if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
 
-    // 앱 존재·활성 확인.
-    const app = await getApp(appId);
-    if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
-    if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
+    // 앱 존재·활성 확인. #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404).
+    const installed = await getApp(appId);
+    if (!installed || !canSeeApp(installed, { userId: member.userId, scopes: member.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${appId}`);
+    if (installed.status !== "active" || !installed.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
+    //  선언은 **이 사람이 보는 판**의 것 — 공개 판을 보는 사람의 화면이 남의 초안이 새로 선언한 도구를 쓰지 않게.
+    const app = (await viewAppFor(installed, { userId: member.userId, scopes: member.scopes ?? [] })).app;
 
     // 호출자(멤버)가 이 앱에 동의(grant)했나 — 없으면 이 UI 는 도구를 못 쓴다.
     const grant = await getActiveGrant(appId, member.userId);

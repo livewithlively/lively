@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
+import { viewAppFor } from "../apps/app-view.js";
 import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/session-apps.js";
 import { RateWindow, localSessionGone, sendFromApp, type ChatSendDeps } from "../apps/app-chat-send.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
@@ -14,6 +15,7 @@ import { appSqlTenantId } from "../apps/app-sql-exec.js";
 const rate = new RateWindow();
 const liveDeps: ChatSendDeps = {
   getApp: (id) => getApp(id),
+  viewFor: async (app, member) => (await viewAppFor(app, { userId: member })).app,   // #4667 보는 사람의 판
   getGrant: getActiveGrant,
   sessionOwner: sessionOwnerOf,
   canEnter: sessionCanEnter,

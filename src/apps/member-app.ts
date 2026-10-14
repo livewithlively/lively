@@ -19,6 +19,7 @@
 import type { LivelyAppManifest } from "./manifest.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { isBuiltinSource } from "./store-ddl.js";
+import { isAppOwner } from "./visibility.js";
 
 /** 구성원 저장 앱에서 허용하지 않는 선언들 — 사람이 읽을 이름으로. 비었으면 통과. 순수. */
 export function memberAppViolations(m: LivelyAppManifest): string[] {
@@ -37,7 +38,7 @@ export function memberAppViolations(m: LivelyAppManifest): string[] {
   return out;
 }
 
-export interface Editor { userId: string; scopes?: string[] }
+export interface Editor { userId: string; scopes?: readonly string[] }
 
 /**
  * 이 사람이 **이미 있는** 이 앱을 app_save 로 고칠 수 있나. 순수.
@@ -52,8 +53,16 @@ export function editDenial(app: OrgApp, who: Editor, currentManifest: LivelyAppM
     if (builtin) return `「${app.title || app.id}」 은(는) 라이블리가 함께 싣는 기본 앱 가운데 화면·데이터만으로 된 앱이 아니라 여기서 고칠 수 없습니다(릴리스로만 바뀝니다)`;
     return `「${app.title || app.id}」 은(는) 관리자가 확장 기능과 함께 설치한 앱이라 app_save 로 고칠 수 없습니다 — 관리자에게 부탁하세요`;
   }
+  const admin = (who.scopes ?? []).includes("admin");
+  //  #4667 나만 보는 앱(공개 전) — 책임자와 관리자만 고친다. 남이 만들고 있는 앱을 같은 id 로 덮어쓰지 않게 하는 관문도 이것이다.
+  if (app.visibility === "me") {
+    if (admin || isAppOwner(app, who)) return null;
+    //  남의 나만 보는 앱은 없는 앱과 같다(#4632) — 제목을 밝히지 않는다. id 는 이미 쓰이고 있으니 다른 id 로.
+    return `앱 id '${app.id}' 는 이미 다른 사람이 쓰고 있습니다 — 새 앱이면 다른 id 로 저장하세요`;
+  }
   if (app.edit_mode === "all") return null;
-  if ((who.scopes ?? []).includes("admin")) return null;
+  if (admin) return null;
+  if (isAppOwner(app, who)) return null;   // #4667 책임자는 고치기 설정과 무관하게 자기 앱을 고친다
   if (app.edit_members.includes(who.userId)) return null;
   return `「${app.title || app.id}」 은(는) 지정한 사람만 고칠 수 있습니다 — 워크스페이스 관리자에게 부탁하세요`;
 }

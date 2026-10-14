@@ -21,6 +21,7 @@ import { getApp, getActiveGrant, type OrgApp, type AppGrantRow } from "../org/st
 import { getSessionState } from "../sessions/session-state.js";
 import { getOpt } from "../terminal/tmux-exec.js";
 import { decideAppTool } from "./principal.js";
+import { canSeeApp } from "./visibility.js";
 import { publishNotify, type NotifyAppEvent } from "../v6/notify-bus.js";
 import { hereSlug } from "../v6/notify-scope.js";
 
@@ -159,7 +160,9 @@ export async function requireAttachedApp(
   } else {
     throw new HttpError(400, `이 세션에 앱이 여럿 붙어 있습니다(${attached.map((a) => a.app_id).join(", ")}) — app_id 를 지정하세요`);
   }
-  requireUsableApp(await deps.getApp(appId), appId);
+  const app = requireUsableApp(await deps.getApp(appId), appId);
+  //  #4667 — 공개를 거둔 남의 앱(나만 보는 앱)은 붙어 있어도 못 쓴다. 판정은 매 호출(머리말) — 거두는 순간부터 막힌다.
+  if (!canSeeApp(app, { userId: q.member })) throw new HttpError(404, `앱 없음: ${appId}`);
   const grant = await deps.getGrant(appId, q.member);
   if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — 사람이 앱을 열어 동의해야 합니다`);
   if (!decideAppTool(appId, grant.tools, q.tool)) {

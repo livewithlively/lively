@@ -236,10 +236,10 @@ export function openLaunchpad(): void {
     //   다시 넣으면 돌아온다. 지우는 게 아니다 — 주소로는 그대로 열린다.
     const decorate = (node: HTMLElement, tid: string, title: string, ws?: SessionApp): HTMLElement => {
       const isHidden = hidden.has(tid);
-      //  이 브라우저에서 만들던 앱이면 「이어서 만들기」 가 맨 위에 선다(#4592 앱 만들기).
-      const draft = tid.startsWith('i:') ? studioRecForApp(tid.slice(2)) : null;
+      //  만들던 앱이면 「이어서 만들기」 가 맨 위에 선다(#4592 앱 만들기) — 이 브라우저의 기록, 없으면 서버가 아는 만들기 세션(#4667 · 다른 기기에서 만든 것도).
+      const draft = tid.startsWith('i:') ? (studioRecForApp(tid.slice(2)) || (ws && ws.buildSession ? { sid: ws.buildSession } : null)) : null;
       //  워크스페이스 앱(남이 만든 것 포함)은 「내 사본 떠서 고치기」 · 「원본을 고치기」 — ⑧ 남이 만든 앱을 내게 맞게(#4592 원준 2026-10-11).
-      const forApp = ws ? { id: ws.id, title: ws.title, by: ws.installedBy, place: (ws.studio && (ws.studio.place === 'side' || ws.studio.place === 'full' || ws.studio.place === 'both') ? ws.studio.place : undefined) as any } : null;
+      const forApp = ws ? { id: ws.id, title: ws.title, by: ws.madeBy, place: (ws.studio && (ws.studio.place === 'side' || ws.studio.place === 'full' || ws.studio.place === 'both') ? ws.studio.place : undefined) as any } : null;
       const menu = (x: number, y: number) => ctxMenu(x, y, [
         ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); location.hash = builderRoute('resume', draft.sid); } }] : []),
         ...(forApp ? [
@@ -292,10 +292,12 @@ export function openLaunchpad(): void {
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.
         isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }),
-        (a as { visibility?: string }).visibility === 'me' ? el('span', { class: 'v2-pad-badge v2-pad-badge--mine', text: '나만', title: '만든 사람만 쓰는 앱 — 앱빌더 배포 설정에서 공개할 수 있어요' }) : null,   // #4632
-        //  #4592 ⑦ 팀에 알리기의 흔적 — 일주일 안에 생긴 워크스페이스 앱은 「새로 · 누구」, 사본은 「원본: …」.
-        a.source.kind !== 'builtin' && a.installedAt && Date.now() - a.installedAt < 7 * 86400000 ? el('span', { class: 'v2-pad-badge v2-pad-badge--new', text: '새로' + (a.installedBy ? ' · ' + a.installedBy : '') }) : null,
-        a.studio && a.studio.origin && a.studio.origin.title ? el('small', { class: 'v2-pad-origin', text: '원본: ' + a.studio.origin.title }) : null);
+        //  #4667 나만 보는 앱(공개 전 — 나에게만 이 칸이 선다) · 내 초안이 걸린 공개 앱(나는 초안을, 남은 공개 판을 본다).
+        a.visibility === 'me' ? el('span', { class: 'v2-pad-badge v2-pad-badge--mine', text: '나만', title: '공개하지 않은 앱이라 나에게만 보여요 · 앱빌더 배포 설정에서 공개할 수 있어요' })
+          : a.draft && a.view === 'installed' ? el('span', { class: 'v2-pad-badge v2-pad-badge--draft', text: '초안', title: a.draft.versionNo + '판은 나에게만 보이는 초안이에요 · 다른 사람은 공개 판을 써요' }) : null,
+        //  #4592 ⑦ 팀에 알리기의 흔적 — 일주일 안에 생긴 워크스페이스 앱은 「새로 · 누구」, 사본은 「원본: …」(만든 사람 · 원본은 서버 기록 #4667).
+        a.visibility !== 'me' && a.source.kind !== 'builtin' && a.installedAt && Date.now() - a.installedAt < 7 * 86400000 ? el('span', { class: 'v2-pad-badge v2-pad-badge--new', text: '새로' + (a.madeBy ? ' · ' + a.madeBy : '') }) : null,
+        a.origin && a.origin.title ? el('small', { class: 'v2-pad-origin', text: '원본: ' + a.origin.title }) : null);
       //  묶음(#4554 · #4592): 제품에 실려 왔고 셸이 직접 그리는 앱(system)만 기본 앱. 그 밖(세션이 만든 것 · 설치한 것 · 실려 왔지만
       //   워크스페이스가 고쳐 쓰는 「장표 수정」 같은 앱)은 워크스페이스 앱 — lib/app-match padGroupOfInstalled.
       const tid = padTileId('installed', a.id);
