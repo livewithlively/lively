@@ -63,7 +63,7 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   } catch { /* org_classifier 부재(구 배포) → 레거시 경로 */ }
 
   if (!targets.length && claiming) {
-    return { status: "ok", summary: { skipped: "카테고리 붙이기 레인이 전부 실행 계정의 자격 실패로 자동 정지됨 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요" } };
+    return { status: "ok", summary: { skipped: "일하는 카테고리 붙이기 레인이 없고, 실행 계정의 자격 실패로 자동 정지된 레인이 그 몫을 맡고 있어 기본 기준 폴백을 돌리지 않음 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요" } };
   }
 
   if (targets.length) {
