@@ -5,7 +5,7 @@
 //   · 만들기: 「+ 새 앱」 · 「이어서」 · 「고치기」 는 **이 창 안에** 앱 만들기 여섯 단계(app-studio.ts)를 세운다 — 머리줄에 「앱빌더 ›」.
 //     닫으면 목록으로 돌아온다. 주소가 정본: #/builder/new · #/builder/s/<세션> · #/builder/app/<앱>?how=edit|copy (lib/builder-flow.ts)
 //   · 배포 설정: 카드를 누르면 오른쪽에(원준 2026-10-14 «카드만 눌러도 배포 설정이 뜨게») — 쓰는 자리(매니페스트 studio.place) · 켜 둠(/apps/:id/enabled) ·
-//     앱 찾기에 보이기(pad-hidden) · 판 되돌리기 · 지우기. 「나만」(공개 범위)은 서버에 칸이 없어 아직 못 고른다 — 자리만 잡아 두고 그렇다고 말한다.
+//     앱 찾기에 보이기(pad-hidden) · 판 되돌리기 · 지우기 · **누가 쓰나**(공개 범위 /apps/:id/visibility — 새로 만든 앱은 「나만」 이 기본, 원준 «디폴트가 내가 만든 앱은 나만»).
 //  「만들던 앱」 은 이 브라우저의 기록(app-studio STUDIO_KEY)과 **내** 앱빌딩 세션(이름 꼴 · 앱빌더 프로젝트) · 매니페스트의 build_session 으로 모은다 —
 //   내가 다른 컴퓨터에서 만들던 것도 세션으로는 보이고, 누르면 세션 이름 · 앱으로 되살려 이어 간다. 남이 만들던 것은 안 보인다(원준: «다른 사람이 만들고 있는 앱을
 //   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · 목록에서 빼기 · **지우기**(앱 + 세션 + 기록 전부).
@@ -26,6 +26,7 @@ export interface BuilderEnv {
 /** 앱 한 줄 — /api/ui/apps 의 행을 앱빌더가 보는 만큼만. 꺼진 앱도 든다(런치패드용 listSessionApps 는 켜진 것만 준다). */
 interface BApp {
   id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean;
+  visibility: 'all' | 'me';   // #4632 누가 쓰나 — 서버가 「나만」 앱은 만든 사람 · 관리자에게만 준다
   studio: { origin?: { id: string; title: string; by: string }; made_by?: string; place?: string; build_session?: string; card?: unknown } | null;
 }
 async function listAllApps(): Promise<BApp[]> {
@@ -38,6 +39,7 @@ async function listAllApps(): Promise<BApp[]> {
       hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0), canEdit: a.can_edit === true,
       builtin: !!(a.source && a.source.kind === 'builtin'), versionNo: Number(a.current_version_no) || 0,
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
+      visibility: a.visibility === 'me' ? 'me' : 'all',
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
     }));
   } catch (_) { return []; }
@@ -177,7 +179,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
 
   const appCard = (a: BApp, own: boolean): HTMLElement => {
     const pl = placeOf(a.studio);
-    const chips: Array<[string, string]> = [[a.enabled ? 'ok' : 'off', a.enabled ? '켜짐' : '꺼짐']];
+    const chips: Array<[string, string]> = [[a.enabled ? 'ok' : 'off', a.enabled ? '켜짐' : '꺼짐'], ['', a.visibility === 'me' ? '나만 씀' : '모두 씀']];
     if (pl) chips.push(['', PLACE[pl].title]);
     if (hidden.has(padTileId('installed', a.id))) chips.push(['', '앱 찾기에 안 보임']);
     if (a.studio && a.studio.origin) chips.push(['', '원본: ' + a.studio.origin.title]);
@@ -286,7 +288,8 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   const sid = a.studio && a.studio.build_session ? String(a.studio.build_session) : '';
   v.panel.replaceChildren(
     el('h3', { text: '배포 설정 — 「' + a.title + '」' }),
-    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['all', '워크스페이스 모두'], ['me', '나만']], 'all', () => { /* 서버에 공개 범위 칸이 생기면 */ }, true), el('small', { text: '지금은 저장하면 워크스페이스 모두에게 보여요 · 「나만」(기본) 은 곧 들어와요' })),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['me', '나만'], ['all', '워크스페이스 모두']], a.visibility, (k) => { void post('/visibility', { visibility: k }, k === 'me' ? '이제 나만 쓰는 앱이에요' : '워크스페이스 모두에게 공개했어요'); }, a.builtin),
+      el('small', { text: a.visibility === 'me' ? '다른 사람에겐 이 앱이 없는 것과 같아요(앱 찾기 · 세션 위젯 목록에 안 보임) · 새로 만든 앱은 「나만」 이 기본' : '워크스페이스 사람 모두 앱 찾기에서 보고 쓸 수 있어요 · 만든 사람과 관리자만 바꿀 수 있어요' })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '쓰는 자리' }), seg([['side', '세션 위젯'], ['full', '앱 화면'], ['both', '둘 다']], pl, async (k) => {
       try { await patchManifest(a.id, (man) => { man.studio = { ...(man.studio && typeof man.studio === 'object' ? man.studio : {}), place: k }; }, '쓰는 자리 · ' + PLACE[k as StudioPlace].title); toast('쓰는 자리를 바꿨어요 — 새 판으로 저장됐어요'); refresh(); }
       catch (e: any) { toast('바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); }

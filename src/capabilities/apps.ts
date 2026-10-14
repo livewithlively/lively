@@ -15,6 +15,7 @@ import { removeInstalledApp } from "../apps/remove-run.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
+import { APP_VISIBILITIES, appVisibilityDenial, appVisibleTo, canSetAppVisibility, type AppViewer } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두)
 import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import { builtinAppDir } from "../apps/builtin-root.js";
 import {
@@ -27,6 +28,13 @@ import type { LivelyUser } from "../context.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
+//  #4632 — 공개 범위 「나만」 인 앱은 만든 사람 · 관리자 말고는 **없는 것과 같다**(목록 · 상세 · 화면 · 동의 · 판 · 지우기). 판정은 apps/visibility.ts.
+const viewerOf = (u: LivelyUser | undefined): AppViewer => ({ userId: actorOf(u), scopes: u?.scopes });
+function requireVisible(app: store.OrgApp, u: LivelyUser | undefined): store.OrgApp {
+  const why = appVisibilityDenial(app, viewerOf(u));
+  if (why) throw new HttpError(403, why);
+  return app;
+}
 
 function appId(v: unknown): string {
   const s = String(v ?? "").trim();
@@ -47,7 +55,7 @@ const appsIndex: Capability = {
   },
   //  #4225 — can_edit: **이 요청자가** app_save 로 이 앱을 고칠 수 있나(화면이 [고치기]·설정 메뉴를 그릴지 정한다). 판정은 member-app.ts.
   handler: async (_input: Record<string, unknown>, user: LivelyUser) => {
-    const apps = await store.listApps();
+    const apps = (await store.listApps()).filter((a) => appVisibleTo(a, viewerOf(user)));   // #4632 「나만」 앱은 만든 사람 · 관리자에게만
     return { apps: apps.map((a) => ({ ...a, can_edit: editDenial(a, { userId: actorOf(user), scopes: user?.scopes }, safeManifest(a)) === null })) };
   },
 };
@@ -121,10 +129,11 @@ const appGet: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
   },
-  handler: async (input: Record<string, unknown>) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     return { app, components: await store.listComponents(id) };
   },
 };
@@ -171,6 +180,7 @@ const appGrant: Capability = {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     const m = parseAppManifest(app.manifest);
     const requested = (input.scopes !== undefined || input.tools !== undefined)
       ? { scopes: input.scopes as string[] | undefined, tools: input.tools as string[] | undefined }
@@ -291,6 +301,7 @@ const appSave: Capability = {
       const { outcome, versionNo } = await store.withAppInstallLock(id, async () => {
         const existing = await store.getApp(id);
         if (existing) {
+          requireVisible(existing, user);   // #4632 남의 「나만」 앱은 id 를 알아도 고칠 수 없다
           const why = editDenial(existing, who, safeManifest(existing));
           if (why) throw new HttpError(403, why);
         }
@@ -318,6 +329,8 @@ const appSave: Capability = {
         await pruneVersions(id).catch((err) => logger.warn({ err, id }, "판 보관 정리 실패(비치명 — 다음 저장이 다시 정리)"));
         return { outcome, versionNo };
       });
+      //  #4632 — 새로 생긴 앱은 만든 사람만 쓴다(원준 «디폴트가 내가 만든 앱은 나만»). 공개는 앱빌더 배포 설정에서(app_visibility_set).
+      if (outcome.created) await store.setAppVisibility(outcome.id, "me", wctx(user, ctx));
       //  세션 옆 앱 칸이 이 사건을 받아 그 앱 화면을 다시 띄운다(«N판 · 방금 고침 · 되돌리기»).
       publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
       const app = await store.getApp(outcome.id);
@@ -344,10 +357,11 @@ const appPull: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/pull"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
   },
-  handler: async (input: Record<string, unknown>) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     const { files, from } = await currentPackageFiles(app);
     const src = (app.source ?? {}) as { kind?: unknown };
     return {
@@ -369,10 +383,11 @@ const appVersions: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/versions"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
   },
-  handler: async (input: Record<string, unknown>) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     const versions = (await store.listAppVersions(id)).map((v) => ({ ...v, is_current: isCurrentVersion(app, v) }));
     return { app_id: id, current_version_no: app.current_version_no, builtin_version: app.builtin_version, overrides_builtin: isOverrideSource(app.source), versions };
   },
@@ -404,6 +419,7 @@ const appRevert: Capability = {
     const result = await store.withAppInstallLock(id, async () => {
       const app = await store.getApp(id);
       if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+      requireVisible(app, user);
       const why = editDenial(app, who, safeManifest(app));
       if (why) throw new HttpError(403, why);
       const ver = await store.getAppVersion(id, target);
@@ -474,6 +490,7 @@ const appEditPolicySet: Capability = {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     //  #4600 — 화면·데이터만으로 된 빌트인은 이제 고칠 수 있으므로 고치기 설정도 뜻이 있다. 셸 렌더러 같은 그 밖 빌트인만 설정 대상이 아니다.
     if (isBuiltinSource(app.source)) {
       const m = safeManifest(app);
@@ -504,6 +521,7 @@ const appRemove: Capability = {
     return store.withAppInstallLock(id, async () => {
       const app = await store.getApp(id);
       if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+      requireVisible(app, user);
       const src = (app.source ?? {}) as { kind?: string };
       if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
       //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
@@ -549,10 +567,11 @@ const appUi: Capability = {
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/ui", "/api/ui/apps/:id/ui/:page"],
       parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, page: (req.params as Record<string, string>)?.page }) }],
   },
-  handler: async (input: Record<string, unknown>) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
     const id = appId(input.app_id);
     const app = await store.getApp(id);
     if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
     if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${id}' 이 활성 상태가 아닙니다`);
     const pages = await store.listUiAssets(id);
     if (pages.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
@@ -610,4 +629,30 @@ const appDataRestore: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert, appEditPolicySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
+
+// ── 앱 공개 범위(#4632) — 만든 사람 · 관리자가 「나만」 ↔ 「워크스페이스 모두」 ──
+const appVisibilitySet: Capability = {
+  name: "app_visibility_set",
+  title: "앱 공개 범위",
+  description: "앱의 공개 범위를 정한다 — 'me'(만든 사람만 · app_save 로 새로 만든 앱의 기본) · 'all'(워크스페이스 구성원 모두). 만든 사람(installed_by · studio.made_by)과 관리자만. " +
+    "「나만」 인 앱은 다른 사람에게 목록 · 상세 · 화면 · 동의 · 붙이기 어디서도 없는 것과 같다.",
+  scope: null,
+  input: { app_id: z.string(), visibility: z.enum(["all", "me"]) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/visibility"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, visibility: (req.body as Record<string, unknown>)?.visibility }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const id = appId(input.app_id);
+    const v = String(input.visibility ?? "");
+    if (!APP_VISIBILITIES.includes(v as "all" | "me")) throw new HttpError(400, "visibility 는 'all' 또는 'me'");
+    const app = await store.getApp(id);
+    if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    requireVisible(app, user);
+    if (!canSetAppVisibility(app, viewerOf(user))) throw new HttpError(403, `「${app.title || id}」 의 공개 범위는 만든 사람과 관리자만 바꿀 수 있습니다`);
+    const after = await store.setAppVisibility(id, v as "all" | "me", wctx(user, ctx));
+    return { app: after, visibility: after?.visibility ?? v };
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert, appEditPolicySet, appVisibilitySet, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];

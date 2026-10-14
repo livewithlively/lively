@@ -16,7 +16,7 @@ const declared = { permissions: { tools: ["store_query", PROJECT_FILES_TOOL], pr
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "deck-edit", title: "장표 수정", version: "1.1.0", manifest: declared, source: { kind: "builtin" }, content_hash: null,
   status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [],
-  builtin_version: null, current_version_no: null, ...over,
+  visibility: "all", builtin_version: null, current_version_no: null, ...over,
 });
 const grant = (tools: string[] = ["store_*", PROJECT_FILES_TOOL]): AppGrantRow => ({ app_id: "deck-edit", member_id: "alice", scopes: [], tools, granted_at: "", granted_by: null, revoked_at: null });
 const row = (appId: string): SessionAppRow => ({ session_id: "box-a", app_id: appId, member_id: "alice", attached_at: "" });

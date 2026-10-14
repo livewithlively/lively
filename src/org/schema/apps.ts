@@ -60,6 +60,11 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_members JSONB NOT NULL DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_edit_mode_check;`);
   await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_edit_mode_check CHECK (edit_mode IN ('all','members'));`);
+  //  #4632 — 공개 범위(apps/visibility.ts). 'all' = 구성원 모두(설치 · 기본 앱의 기본) · 'me' = 만든 사람만(app_save 로 새로 생긴 앱의 기본 —
+  //   원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 있던 행은 'all' 그대로.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'all';`);
+  await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_visibility_check;`);
+  await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_visibility_check CHECK (visibility IN ('all','me'));`);
 
   // ── org_app_component — 앱이 전개한 구성요소 행 조인(무엇을 심었나 = 무엇을 회수하나) ──
   //  PK(app_id, kind, ref). ref 는 대상 행의 자연키(문자열). orig_name = 자산 번들 내 원명(물질화 시 복원, design R1-F4).

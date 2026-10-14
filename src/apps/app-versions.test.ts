@@ -98,7 +98,7 @@ test("[V7] 은퇴 회수는 덮어쓴 빌트인을 지우지 않는다 — 사�
 const base = { id: "deck-edit", title: "장표 수정", version: "1.0.0", ui: { pages: [{ key: "main", title: "장표 수정", entry: "ui/index.html" }] },
   data: { tables: [{ name: "docs", columns: [{ name: "doc", type: "text" }] }] } };
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
-  id: "deck-edit", title: "장표 수정", version: "1.0.0", manifest: base, source: { kind: "builtin" }, content_hash: null,
+  id: "deck-edit", title: "장표 수정", version: "1.0.0", manifest: base, source: { kind: "builtin" }, content_hash: null, visibility: "all",
   status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
   edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
 });

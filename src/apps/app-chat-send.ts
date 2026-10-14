@@ -16,6 +16,7 @@ import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from 
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { CHAT_SEND_TOOL } from "./manifest.js";
+import { appVisibilityDenial } from "./visibility.js";
 import type { DeliverResult } from "../terminal/deliver-prompt.js";
 
 export const CHAT_SEND_MAX_CHARS = 4000;
@@ -36,7 +37,7 @@ export interface ChatSendDeps {
   tenant?: () => string;
 }
 
-export interface ChatSendInput { appId: string; sessionId: string; member: string; text: string }
+export interface ChatSendInput { appId: string; sessionId: string; member: string; text: string; scopes?: readonly string[] }
 export type ChatSendResult = { sent: true; session: string; transport: string | null };
 
 /** 서버가 붙이는 표식 한 줄 + 사람(앱)이 보낸 글. 표식 뒤의 `)` 까지가 훅이 찾는 꼴(`에서 보냄)`). */
@@ -100,6 +101,7 @@ export async function sendFromApp(q: ChatSendInput, deps: ChatSendDeps, rate: Ra
   const sessionId = String(q.sessionId ?? "").trim();
   if (!sessionId) throw new HttpError(400, "session_id 가 필요합니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다");
   const app = requireUsableApp(await deps.getApp(q.appId), q.appId);
+  { const why = appVisibilityDenial(app, { userId: q.member, scopes: q.scopes }); if (why) throw new HttpError(403, why); }   // #4632
   const declared = declaredTools(app);
   if (!decideAppTool(q.appId, declared, CHAT_SEND_TOOL)) {
     throw new HttpError(403, `앱 '${q.appId}' 은(는) 세션에 글 보내기(permissions.chat_send)를 선언하지 않았습니다 — 매니페스트에 선언하고 다시 저장하세요`);

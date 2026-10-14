@@ -11,6 +11,7 @@ import { getSessionState, getSessionStates } from "../sessions/session-state.js"
 import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
+import { appVisibilityDenial } from "../apps/visibility.js";   // #4632 「나만」 앱은 남이 못 연다
 import * as instances from "../org/store/app-instances.js";
 import { resolveWorkerPlacement, startWorkerForInstance, stopWorkerForInstance, workerRunForInstance, workerRunsForInstances } from "../apps/worker-service.js";
 import { nodeOnline, nodeSessionsFor, nodeSupports } from "../node/registry.js";
@@ -235,6 +236,7 @@ const appInstanceOpen: Capability = {
   expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof createInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
     const { app, manifest } = await activeApp(input.app_id);
+    { const why = appVisibilityDenial(app, { userId: actorOf(user), scopes: user.scopes }); if (why) throw new HttpError(403, why); }
     let projectId = normalizeInstanceProject(manifest, input.project_id);
     const requested = requestedExecution(input.execution);
     let placement: ReturnType<typeof resolveWorkerPlacement>;

@@ -292,6 +292,7 @@ export function openLaunchpad(): void {
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.
         isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }),
+        (a as { visibility?: string }).visibility === 'me' ? el('span', { class: 'v2-pad-badge', text: '나만', title: '만든 사람만 쓰는 앱 — 앱빌더 배포 설정에서 공개할 수 있어요' }) : null,   // #4632
         //  #4592 ⑦ 팀에 알리기의 흔적 — 일주일 안에 생긴 워크스페이스 앱은 「새로 · 누구」, 사본은 「원본: …」.
         a.source.kind !== 'builtin' && a.installedAt && Date.now() - a.installedAt < 7 * 86400000 ? el('span', { class: 'v2-pad-badge v2-pad-badge--new', text: '새로' + (a.installedBy ? ' · ' + a.installedBy : '') }) : null,
         a.studio && a.studio.origin && a.studio.origin.title ? el('small', { class: 'v2-pad-origin', text: '원본: ' + a.studio.origin.title }) : null);

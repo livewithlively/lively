@@ -16,6 +16,7 @@
 import { HttpError } from "../http-error.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from "./session-apps.js";
+import { appVisibilityDenial } from "./visibility.js";
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { PROJECT_FILES_TOOL, WORKSPACE_FILES_TOOL } from "./manifest.js";
@@ -55,7 +56,7 @@ export interface ProjectFilesDeps {
   tenant?: () => string;
 }
 
-export interface ProjectFilesGateInput { appId: string; sessionId: string; member: string }
+export interface ProjectFilesGateInput { appId: string; sessionId: string; member: string; scopes?: readonly string[] }
 
 function extsOf(app: OrgApp, key: "project_files" | "workspace_files"): string[] {
   const p = (app.manifest as { permissions?: Record<string, unknown> } | null)?.permissions?.[key];
@@ -92,6 +93,7 @@ async function gate(q: ProjectFilesGateInput, deps: ProjectFilesDeps, rate: Rate
   const sessionId = String(q.sessionId ?? "").trim();
   if (!sessionId) throw new HttpError(400, "session_id 가 필요합니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다");
   const app = requireUsableApp(await deps.getApp(q.appId), q.appId);
+  { const why = appVisibilityDenial(app, { userId: q.member, scopes: q.scopes }); if (why) throw new HttpError(403, why); }   // #4632
   const declared = declaredTools(app);
   //  전체 자료(wide)는 제 선언 · 제 도구로 본다 — 프로젝트 자료의 선언 · 동의로는 열리지 않는다.
   const tool = wide ? WORKSPACE_FILES_TOOL : PROJECT_FILES_TOOL;
