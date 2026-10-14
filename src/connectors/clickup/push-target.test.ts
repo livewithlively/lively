@@ -54,8 +54,13 @@ test("배선 — 치유 재시도는 고친 리스트 기준 body 로, 상태셋
 });
 
 test("배선 — 좌표는 원래 값이 있던 부모만 고치고, list_id 도 인바운드처럼 옮긴다", () => {
-  assert.match(PUSH, /WHERE id=\$1 AND NULLIF\(btrim\(external_base->>'list_ext'\), ''\) IS NOT NULL`, \[parentId, listId\]\)/,
+  assert.match(PUSH, /onHealed: \(_ext, listId\) => parentId == null \? Promise\.resolve\(\) : recordHealedParentList\(parentId, listId\)/,
+    "치유 좌표 기록이 실 PG 로 잠근 함수(recordHealedParentList)를 안 거친다");
+  assert.match(PUSH, /WHERE id=\$1 AND NULLIF\(btrim\(external_base->>'list_ext'\), ''\) IS NOT NULL`, \[parentId, listExt\]\)/,
     "네이티브 부모에 좌표를 써 첫 인바운드의 list_id 수렴을 뒤집는다");
+  //  행동(미러 안 된 리스트면 list_id 유지 — 미분류 = 전원 공개 방지)은 clickup-push-heal.pg-test.mjs 가 실 PG 로 잠근다.
+  assert.match(PUSH, /THEN COALESCE\(\(SELECT pl\.id FROM project_list pl[\s\S]{0,200}?pl\.external_id=\$2\), list_id\)/,
+    "미러 안 된 리스트로 옮기면 list_id 가 NULL(미분류 = 전원 공개)이 된다");
   assert.match(PUSH, /WHEN \(SELECT pl\.external_id FROM project_list pl WHERE pl\.id = project\.list_id\) = \(external_base->>'list_ext'\)/,
     "base 만 고쳐 다음 인바운드가 부모를 옛 리스트에 고정한다(로컬 이동 보존 조건 누락)");
 });

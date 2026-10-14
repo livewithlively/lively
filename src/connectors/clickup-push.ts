@@ -113,6 +113,34 @@ export function isClickupTaskInaccessible(e: unknown): boolean {
 }
 
 /**
+ * 치유한 부모 좌표를 기록한다(createUnderParent 의 onHealed). 행동은 clickup-push-heal.pg-test.mjs 가 실 PG 로 잠근다.
+ *
+ *  · 좌표는 **원래 값이 있던** 부모(인바운드가 채운 미러)에만 고쳐 쓴다. 비어 있던 부모는 push 로 만든 네이티브 카드라
+ *    base.list_ext 를 써 두면 첫 인바운드의 list_id 수렴이 뒤집힌다(push-target.ts createListFor 머리말). 그 경우는
+ *    이번 생성만 고친 리스트로 하고 좌표는 그대로 둔다.
+ *  · base 를 고칠 때 list_id 도 인바운드가 했을 것처럼 옮긴다 — base 만 바꾸면 다음 인바운드의 3-way(base=새 값,
+ *    ours=옛 리스트, theirs=새 값)가 ours 를 채택해 로컬 배치가 옛 리스트에 고정된다(mirror-project.ts 「외부 이동
+ *    수렴」). 로컬에서 따로 옮겨 둔 부모(ours≠base)는 그대로 둔다.
+ *  · 🔴 새 리스트가 미러돼 있지 않으면(수집 범위 밖으로 옮겨짐 — 이 치유가 필요한 바로 그 상황) list_id 를 **그대로
+ *    둔다.** NULL 로 비우면 그 프로젝트는 «미분류 = 전원 공개»(v6/visibility.ts canSeeProjectRow)가 되어, 잠긴 리스트에
+ *    있던 프로젝트와 그 태스크가 조직 전체에 열리고 리스트 화면에서도 사라진다. 인바운드는 범위 밖 카드를 다시 보지
+ *    않으니 인바운드가 했을 일도 아니다 — 공개범위는 fail-closed 다. 대가: 그 리스트가 나중에 미러되면 3-way
+ *    (t==b → ours)로 옛 리스트에 남는다(사람이 옮기면 된다 — 열리는 쪽보다 낫다).
+ */
+export async function recordHealedParentList(parentId: number, listExt: string): Promise<void> {
+  await itemsPool.query(
+    `UPDATE project SET
+            list_id = CASE
+              WHEN (SELECT pl.external_id FROM project_list pl WHERE pl.id = project.list_id) = (external_base->>'list_ext')
+              THEN COALESCE((SELECT pl.id FROM project_list pl
+                     WHERE pl.external_system='clickup' AND pl.external_instance=project.external_instance AND pl.external_id=$2), list_id)
+              ELSE list_id END,
+            external_base = external_base || jsonb_build_object('list_ext', $2::text),
+            updated_at=now()
+      WHERE id=$1 AND NULLIF(btrim(external_base->>'list_ext'), '') IS NOT NULL`, [parentId, listExt]);
+}
+
+/**
  * 연결된 태스크로 갱신을 보낸다. 태스크가 ClickUp 에서 지워졌으면 연결을 끊고 "detached".
  *  종전엔 404 도 markErr 로 남겨 매 틱 재시도했다 — 태스크는 돌아오지 않으므로 그 행이 실행마다 실패 1건을 만들고,
  *  연속 실패 서킷브레이커가 push-clickup 전체를 멈췄다. 연결을 끊은 프로젝트는 네이티브가 되어, 다음 변경 때
@@ -381,22 +409,8 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
             try { return { kind: "list", listId: (await getTask(ext)).list?.id ?? "" }; }
             catch (err) { if (isClickupTaskGone(err) || isClickupTaskInaccessible(err)) return { kind: "gone" }; throw err; }
           },
-          //  좌표는 **원래 값이 있던** 부모(인바운드가 채운 미러)에만 고쳐 쓴다. 비어 있던 부모는 push 로 만든 네이티브
-          //   카드라 base.list_ext 를 써 두면 첫 인바운드의 list_id 수렴이 뒤집힌다(push-target.ts createListFor 머리말).
-          //   그 경우는 이번 생성만 고친 리스트로 하고 좌표는 그대로 둔다.
-          //  base 를 고칠 때 list_id 도 인바운드가 했을 것처럼 옮긴다 — base 만 바꾸면 다음 인바운드의 3-way
-          //   (base=새 값, ours=옛 리스트, theirs=새 값)가 ours 를 채택해 로컬 배치가 옛 리스트에 고정된다
-          //   (mirror-project.ts 「외부 이동 수렴」). 로컬에서 따로 옮겨 둔 부모(ours≠base)는 그대로 둔다.
-          onHealed: (_ext, listId) => parentId == null ? Promise.resolve() : itemsPool.query(
-            `UPDATE project SET
-                    list_id = CASE
-                      WHEN (SELECT pl.external_id FROM project_list pl WHERE pl.id = project.list_id) = (external_base->>'list_ext')
-                      THEN (SELECT pl.id FROM project_list pl
-                             WHERE pl.external_system='clickup' AND pl.external_instance=project.external_instance AND pl.external_id=$2)
-                      ELSE list_id END,
-                    external_base = external_base || jsonb_build_object('list_ext', $2::text),
-                    updated_at=now()
-              WHERE id=$1 AND NULLIF(btrim(external_base->>'list_ext'), '') IS NOT NULL`, [parentId, listId]),
+          //  무엇을 어떻게 고쳐 쓰는지(좌표가 있던 부모만 · list_id 는 미러된 리스트로만)는 recordHealedParentList 머리말.
+          onHealed: (_ext, listId) => parentId == null ? Promise.resolve() : recordHealedParentList(parentId, listId),
         });
         if (made.kind === "parent_gone") {
           //  부모 카드가 저쪽에서 지워졌다 — 갱신 경로의 404 와 같은 규율로 부모 연결을 끊는다(pushLinkedUpsert 머리말).
