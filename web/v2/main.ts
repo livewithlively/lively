@@ -67,7 +67,7 @@ import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 �
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
-import { mountAppUiFrame, openAppUi } from './app-ui.js';
+import { dismissAppUi, mountAppUiFrame, openAppUi } from './app-ui.js';
 import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
@@ -1314,6 +1314,9 @@ async function renderRoute(tab: ShellTab): Promise<void> {
   if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
   const { segs, raw, params } = parseRoute(tab.route);
   const page = segs[0] || '';
+  //  #4480 — 크게 보기 덮개(openAppUi)는 셸 위의 따로 붙은 층이라 화면을 옮겨도 남는다. 다른 화면으로 가면 걷는다(닫기 뒷일 없이) —
+  //   데스크톱 앱 본 창에서 #/full 을 연 뒤 알림을 눌러도 화면이 안 바뀌던 것(2026-10-14 상민님 실측).
+  if (page !== 'full') dismissAppUi();
 
   // 한 탭에는 한 AppInstance 화면만 산다. 같은 탭이 다른 route로 이동하면 이전 iframe/브리지를 먼저 정리한다.
   if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
@@ -1576,8 +1579,16 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       const appId = decodeURIComponent(segs[1]);
       const sid = params.get('s') || undefined;
       tab.center.replaceChildren(); tab.aside.replaceChildren();
+      //  #4480 — 닫기: 스크립트가 연 창(크게 보기 새 탭 · 데스크톱 앱의 새 창 — window.opener 가 있다)만 닫는다. 그 밖(데스크톱 앱 **본 창**,
+      //   주소를 직접 연 탭)에서 window.close() 를 부르면 데스크톱 앱 본 창은 «트레이로 숨기기» 가 되어 창이 통째로 사라졌다
+      //   (2026-10-14 상민님 실측 — 채팅의 #/full 링크를 본 창에서 눌렀다). 그런 자리에서는 닫지 않고 그 세션(없으면 첫 화면)으로 돌아간다.
+      const back = (): void => { location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/')); };
       void openAppUi(appId, { title: params.get('t') || appId, sessionId: sid, page: params.get('page') || undefined,
-        onClose: () => { try { window.close(); } catch (_) { /* noop */ } window.setTimeout(() => { if (!window.closed) location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/')); }, 150); } });
+        onClose: () => {
+          if (!window.opener) { back(); return; }
+          try { window.close(); } catch (_) { /* noop */ }
+          window.setTimeout(() => { if (!window.closed) back(); }, 150);
+        } });
     } else if (page === 'app-open' && segs[1]) {
       //  #/app-open/<앱>?v=<판>&next=<앱 안 경로>&state=<앞단 상태> — #4480 앱 주소에 **직접** 들어온 사람(링크 · 새 탭 · 홈 화면 바로가기)을
       //   앱 주소 앞단이 이리로 보낸다. 여기까지 왔다면 라이블리 로그인은 끝났다(아니면 게이트가 먼저 로그인시키고 같은 주소로 돌려보낸다).
