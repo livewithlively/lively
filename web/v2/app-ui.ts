@@ -8,9 +8,15 @@
 //  ★ SDK 주입(#1780 SDK): srcdoc 머리에 app-ui-runtime 을 끼워 넣어 앱이 `window.lively` 를 **설치·번들 없이** 쓴다.
 //   (외부 스크립트가 CSP 로 막혀 있어 npm 배포가 성립하지 않는다 — 그래서 호스트 주입이 이 플랫폼의 SDK 전달 방식이다.)
 //  ★ CSP 는 **앱이 선언한 만큼만**(manifest.csp — MCP Apps 채택): 기본은 네트워크·프레임 0, 선언하면 그만큼 열린다.
-import { api, el, toast } from '../core.js';
+//  ★ #4480 v2-1 앱 주소 — 워크스페이스가 앱 주소를 켜 두었으면(me.app_domain) 앱을 **자기 주소**(<앱>-<워크스페이스>.lvly.app)로 띄운다:
+//   화면이 일회용 코드를 받아(POST /api/ui/apps/:id/launch, mode=embed) iframe src 에 붙이면 그 주소의 앞단이 코드를 앱 주소 쿠키로 바꾼다.
+//   다른 사이트라 allow-same-origin 을 줘도 라이블리에 못 닿는다(그 출처는 앱 주소 자신). 다리는 그대로 — 이 프레임 + 그 출처에서 온 것만 받고,
+//   답도 그 출처로만 보낸다. 브라우저가 앱 주소 쿠키를 막으면(사파리 26.2 전 등) 그 자리에서 종전 srcdoc 으로 바꿔 띄우고 이 브라우저는 다음부터
+//   바로 srcdoc 으로 연다 — 앱은 어느 길로 떠도 같은 SDK 로 돈다. 못 쓰는 경우(꺼짐·주소를 못 만드는 이름·권한)도 전부 종전 길로 간다.
+import { api, el, state, toast } from '../core.js';
 import { PROBE_JS } from '../lib/studio-flow.js';   // #4632 검토 중인 앱의 문서에 넣는 탐침(찍은 자리의 요소 · 테두리)
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
+import { addrBlockValid, appAuthSignal, embedNext } from '../lib/app-address.js';   // #4480 앱 주소 — 순수 조각(시험: scripts/app-address-web.test.mjs)
 import { ensureAppGrant } from './app-session.js';
 import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 보내려던 글을 그 세션 화면의 입력칸에 넣어 둔다(잎 모듈)
 //  #4530 앱 화면 안의 ⌘K → 셸 통합검색. omni.ts 를 직접 들이지 않는다 — 셸 화면 모듈 묶음(사이드바·자료 …)이 통째로 딸려 와
@@ -56,6 +62,18 @@ function wrapAppHtml(html: string, csp?: AppCsp, extra?: string): string {
   const m = /<!doctype[^>]*>/i.exec(html);
   if (m) { const i = m.index + m[0].length; return html.slice(0, i) + head + html.slice(i); }
   return head + html;
+}
+
+// ── 앱 주소(#4480 v2-1) ──────────────────────────────────────────────────────────────────────────────────
+//  이 브라우저가 앱 주소 쿠키를 막았던 기록 — 같은 브라우저(UA)면 7일 동안 앱 주소를 시도하지 않고 바로 srcdoc 으로 연다(매번 한 바퀴 돌지 않게).
+const ADDR_BLOCK_KEY = 'lively.appAddr.blocked';
+function addrBlockedHere(): boolean { try { return addrBlockValid(localStorage.getItem(ADDR_BLOCK_KEY), navigator.userAgent, Date.now()); } catch (_) { return false; } }
+function markAddrBlocked(): void { try { localStorage.setItem(ADDR_BLOCK_KEY, JSON.stringify({ ua: navigator.userAgent, at: Date.now() })); } catch (_) { /* 저장소가 막혀도 이번 화면은 srcdoc 으로 바뀐다 */ } }
+/** 이 워크스페이스·이 브라우저에서 앱을 앱 주소로 띄우나. */
+export function appAddressOn(): boolean { return !!(state.me && state.me.app_domain) && !addrBlockedHere(); }
+interface AppLaunch { url: string; origin: string; page_key?: string; title?: string }
+function launchEmbed(appId: string, next: string): Promise<AppLaunch> {
+  return api('/api/ui/apps/' + encodeURIComponent(appId) + '/launch', { method: 'POST', body: JSON.stringify({ mode: 'embed', next }) }) as Promise<AppLaunch>;
 }
 
 interface AppUiData { html: string; title?: string; page_key?: string; app_id?: string; pages?: Array<{ key: string; title: string }>; csp?: AppCsp }
@@ -106,27 +124,87 @@ export function reloadAppFrames(appId: string): number {
   return n;
 }
 export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
-  const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
-  const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
-  if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
-  const probe = reviewProbe.has(appId) ? PROBE_JS : '';
-  const doc = wrapAppHtml(data.html, data.csp, [opts?.extraScript || '', probe].filter(Boolean).join('\n') || undefined);
-  const frame = el('iframe', {
-    class: 'v2-appui-frame', title: opts?.title || data.title || appId, 'data-app-id': appId, ...(probe ? { 'data-probe': '1' } : {}),
+  //  탐침(PROBE_JS)은 앱 주소로도 넣을 수 있다(앱 주소 쿼리 → 서버가 같은 원본을 넣는다). 그 밖의 덧붙임 스크립트는 srcdoc 으로만 넣을 수 있다.
+  const wantProbe = (): boolean => reviewProbe.has(appId) || opts?.extraScript === PROBE_JS;
+  const extraOther = !!opts?.extraScript && opts.extraScript !== PROBE_JS;
+  let launch: AppLaunch | null = null;
+  if (appAddressOn() && !extraOther) {
+    //  실패(꺼짐 · 주소를 못 만드는 이름 · 권한 · 앱 없음)는 전부 종전 길로 — 그 길이 같은 판정을 다시 하고 알맞은 오류를 낸다.
+    try { launch = await launchEmbed(appId, embedNext(opts?.page, wantProbe())); } catch (_) { launch = null; }
+  }
+  let data: AppUiData | null = null;
+  const loadData = async (): Promise<AppUiData> => {
+    if (data) return data;
+    const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
+    const d = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
+    if (!d || typeof d.html !== 'string') throw new Error('UI 를 받지 못했습니다');
+    data = d;
+    return d;
+  };
+  const first = launch ? null : await loadData();
+  const meta = { title: launch?.title || first?.title, page_key: launch?.page_key ?? first?.page_key ?? null };
+  const docFor = (d: AppUiData): string => wrapAppHtml(d.html, d.csp, [opts?.extraScript || '', reviewProbe.has(appId) ? PROBE_JS : ''].filter(Boolean).join('\n') || undefined);
+  let doc = first ? docFor(first) : '';
+  const srcdocFrame = (d: string): HTMLIFrameElement => el('iframe', {
+    class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(reviewProbe.has(appId) ? { 'data-probe': '1' } : {}),
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
-    srcdoc: doc,
+    srcdoc: d,
   }) as HTMLIFrameElement;
+  //  앱 주소 프레임 — 다른 사이트(lvly.app)라 allow-same-origin 을 줘도 라이블리에 못 닿는다(그 출처는 앱 주소 자신). 폼·팝업 등 나머지 완화는 v2-3.
+  const addrFrame = (url: string): HTMLIFrameElement => el('iframe', {
+    class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(wantProbe() ? { 'data-probe': '1' } : {}),
+    sandbox: 'allow-scripts allow-same-origin',
+    src: url,
+  }) as HTMLIFrameElement;
+  //  appOrigin — 앱 주소로 떠 있을 때 그 출처(다리가 받고 보내는 상대). null = srcdoc(불투명 오리진 — '*' 로만 보낼 수 있다).
+  let appOrigin: string | null = launch ? launch.origin : null;
+  let frame = launch ? addrFrame(launch.url) : srcdocFrame(doc);
+  const target = (): string => appOrigin || '*';
   const topics = new Set<string>();   // 앱이 구독한 주제(ui/subscribe) — 다시 불러오면 비운다(새 문서가 다시 구독한다)
   let insets: AppInsets = { top: 0, right: 0, bottom: 0, left: 0 };
-  const sendInsets = (): void => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/insets', params: insets }, '*'); };
+  const sendInsets = (): void => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/insets', params: insets }, target()); };
   let loads = 0;
 
-  // 브리지 — 이 프레임(불투명 오리진)에서 온 메시지만. 응답 target 은 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
+  //  앱 주소 → 종전 srcdoc 으로 그 자리에서 바꾼다(쿠키가 막힌 브라우저 · 다시 받아도 로그인이 안 됨). **새 프레임**을 만들어 갈아 끼운다 —
+  //   같은 프레임의 sandbox 만 바꿔 srcdoc 을 실으면 브라우저에 따라 allow-same-origin 이 남은 채 라이블리 출처로 뜰 수 있다(토큰이 앱에 열린다).
+  let switching: Promise<void> | null = null;
+  const toSrcdoc = (): Promise<void> => {
+    if (switching) return switching;
+    switching = (async () => {
+      try {
+        doc = docFor(await loadData());
+        const next = srcdocFrame(doc);
+        const old = frame;
+        appOrigin = null; frame = next; topics.clear(); opts?.onTyping?.(false);
+        old.replaceWith(next);
+      } catch (e: any) {
+        toast('앱 화면을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
+      } finally { switching = null; }
+    })();
+    return switching;
+  };
+  let relaunches = 0;   // 로그인이 안 됐다는 신호에 새 코드로 다시 띄운 횟수 — 앱이 제대로 인사하면(ui/initialize) 0 으로
+  const relaunch = (): void => {
+    void launchEmbed(appId, embedNext(opts?.page, wantProbe()))
+      .then((l) => { if (!appOrigin) return; appOrigin = l.origin; frame.src = l.url; })
+      .catch(() => { void toSrcdoc(); });
+  };
+
+  // 브리지 — 이 프레임에서 온 메시지만(앱 주소면 그 출처까지). 응답 target 은 앱 주소의 출처, srcdoc 이면 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
   const onMsg = (ev: MessageEvent): void => {
     if (ev.source !== frame.contentWindow) return;
+    if (appOrigin && ev.origin !== appOrigin) return;
+    //  #4480 앞단의 로그인 신호 — 쿠키가 막혔으면 이 브라우저는 srcdoc 으로, 코드가 죽었으면 새 코드로 한 번만 다시.
+    const auth = appOrigin ? appAuthSignal(ev.data) : null;
+    if (auth) {
+      if (auth === 'cookie-blocked') { markAddrBlocked(); void toSrcdoc(); }
+      else if (relaunches < 1) { relaunches++; relaunch(); }
+      else void toSrcdoc();
+      return;
+    }
     const msg = ev.data as { method?: string; id?: unknown; params?: { name?: string; arguments?: unknown } } | null;
     if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') return;
-    const reply = (payload: unknown): void => frame.contentWindow?.postMessage(payload, '*');
+    const reply = (payload: unknown): void => frame.contentWindow?.postMessage(payload, target());
     if (msg.method === 'ui/subscribe') {
       // 알림(id 없음) — 답하지 않는다. 앱이 «바깥에서 바뀐 것을 스스로 다시 읽겠다»고 알린 것(#4225).
       const topic = String((msg.params as { topic?: unknown } | undefined)?.topic ?? '');
@@ -146,7 +224,8 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
+      relaunches = 0;   // 앱 문서가 제대로 떴다 — 다음에 쿠키가 만료돼 로그인 신호가 오면 다시 한 번 새 코드로 띄울 수 있다
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -161,7 +240,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       void send()
         .catch(async (e: any) => {
           if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;
-          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          if (!(await ensureAppGrant(appId, opts?.title || meta.title))) throw e;
           return send();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out?.result ?? out }))
@@ -183,7 +262,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       void send()
         .catch(async (e: any) => {
           if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // tools/call 과 같은 «그 자리에서 동의» 규칙(예전 범위 동의 포함)
-          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          if (!(await ensureAppGrant(appId, opts?.title || meta.title))) throw e;
           return send();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: true, session: sid, transport: out?.transport ?? null } }))
@@ -247,7 +326,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       void read()
         .catch(async (e: any) => {
           if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // «그 자리에서 동의» — 앱이 갱신돼 이 권한을 새로 얻었을 때도
-          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          if (!(await ensureAppGrant(appId, opts?.title || meta.title))) throw e;
           return read();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out }))
@@ -276,13 +355,21 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   };
   window.addEventListener('message', onMsg);
   const handle: AppUiFrame = {
-    root: frame,
+    //  root 는 **지금의** 프레임이다 — 앱 주소에서 srcdoc 으로 갈아 끼우면 바뀐다(같은 자리에 들어가므로 붙인 쪽은 따로 할 일이 없다).
+    get root(): HTMLElement { return frame; },
     destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); liveFrames.get(appId)?.delete(handle); },
-    notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, '*'); },
+    notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, target()); },
     subscribed: (topic) => topics.has(topic),
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
     //  WindowProxy 는 같은 프레임이면 그대로라 브리지(ev.source 비교)는 새 문서에도 그대로 맞는다.
-    reload: () => { topics.clear(); opts?.onTyping?.(false); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+    //  탐침은 다시 띄울 때의 검토 상태로 다시 정한다(markReviewProbe 뒤 reloadAppFrames 가 부른다). 앱 주소면 새 코드로 다시 연다.
+    reload: () => {
+      topics.clear(); opts?.onTyping?.(false);
+      if (appOrigin) { relaunch(); return; }
+      const d = data as AppUiData | null;   // srcdoc 으로 떠 있으면 이미 읽어 두었다(loadData)
+      if (d) doc = docFor(d);
+      frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->';
+    },
     setInsets: (i) => {
       const n = (v: number): number => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
       const next = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };

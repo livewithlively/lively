@@ -1102,6 +1102,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'trash') return { title: '휴지통', noAside: true };   // #3778 안 D — 네 탭이 「안에 든 것」을 탭 안에서 말한다(곁칸 없음)
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'full') return { title: parseRoute(route).params.get('t') || '앱', noAside: true };   // 새 탭으로 연 앱(크게 보기)
+  if (p === 'app-open') return { title: '앱 여는 중', noAside: true };   // #4480 앱 주소로 직접 들어온 사람을 앱 주소로 돌려보내는 자리
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
@@ -1577,6 +1578,24 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       tab.center.replaceChildren(); tab.aside.replaceChildren();
       void openAppUi(appId, { title: params.get('t') || appId, sessionId: sid, page: params.get('page') || undefined,
         onClose: () => { try { window.close(); } catch (_) { /* noop */ } window.setTimeout(() => { if (!window.closed) location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/')); }, 150); } });
+    } else if (page === 'app-open' && segs[1]) {
+      //  #/app-open/<앱>?v=<판>&next=<앱 안 경로>&state=<앞단 상태> — #4480 앱 주소에 **직접** 들어온 사람(링크 · 새 탭 · 홈 화면 바로가기)을
+      //   앱 주소 앞단이 이리로 보낸다. 여기까지 왔다면 라이블리 로그인은 끝났다(아니면 게이트가 먼저 로그인시키고 같은 주소로 돌려보낸다).
+      //   그 로그인으로 일회용 코드(top · 앞단 state 에 묶임)를 받아 앱 주소로 돌아간다 — 앞단이 그것을 앱 주소 쿠키로 바꾼다.
+      const appId = decodeURIComponent(segs[1]);
+      tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱을 여는 중이에요…' })));
+      tab.aside.replaceChildren();
+      try {
+        const r = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/launch', { method: 'POST', body: JSON.stringify({
+          mode: 'top', variant: params.get('v') === 'draft' ? 'draft' : 'pub', next: params.get('next') || '/', state: params.get('state') || '' }) }) as { url?: string };
+        if (seq !== tab.seq) return;
+        if (!r || typeof r.url !== 'string' || !/^https:\/\//.test(r.url)) throw new Error('앱 주소를 받지 못했습니다');
+        location.replace(r.url);
+      } catch (e: any) {
+        if (seq !== tab.seq) return;
+        tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('b', { text: '앱을 열지 못했어요.' }),
+          el('p', { class: 'pn-fine', text: String(e && e.message ? e.message : e) })));
+      }
     } else if (isWikiListRoute(tab.route)) {
       //  #4233 [위키] 본문 목록을 셸이 직접 그린다(원준 2026-09-26 «A를 뼈대로 · 새로 들어온 지식 카드 줄»). 종전엔 클래식 위키를 액자에 실었다.
       //   사이드바의 전체 문서 · 인덱스 · 분류 행은 주소만 바꾸고(#/knowledge?…) 여기로 온다. 레일 착지 #/app/knowledge 도 같은 화면.

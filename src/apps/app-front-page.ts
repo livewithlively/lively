@@ -1,0 +1,76 @@
+// 앱 주소에서 v1 앱 화면을 «문서로» 내는 조각(#4480 v2-1). 순수 + 준비물 읽기 — app-front-page.test.ts.
+//
+//  v1 앱은 화면 한 장(HTML)을 DB(org_app_ui_asset)에 두고, 라이블리 화면이 받아 srcdoc 으로 띄웠다(web/v2/app-ui.ts).
+//   앱 주소(<앱>-<워크스페이스>.lvly.app)로 옮기면 그 HTML 을 **그 주소의 문서**로 내야 한다 — 같은 앱이 두 길(옛 srcdoc · 앱 주소)
+//   어느 쪽으로 떠도 똑같이 돌게, 넣는 것은 srcdoc 때와 같다:
+//   · SDK 런타임(window.lively) — 원본은 web/v2/app-ui-runtime.ts **한 벌**. 서버는 웹 빌드 산출물(public/app/…)을 읽는다.
+//   · 앱 만들기 탐침(PROBE_JS, 「찍어서 의견」) — 원본은 web/lib/studio-flow.ts 한 벌. 앱 주소 쿼리 `__lively_probe=1` 일 때만.
+//   · CSP — srcdoc 은 meta 로만 실을 수 있었다. 여기서는 HTTP 헤더로 싣는다. 규칙은 app-ui.ts buildCsp 와 같고
+//     connect-src 에 'self' 하나만 더한다(같은 주소의 /_lively/me 를 부를 수 있게 — 바깥 연결은 여전히 매니페스트 선언만).
+//  frame-ancestors(그 워크스페이스 라이블리 주소 안에서만 iframe)는 앞단(CP 라우터)이 모든 응답에 붙인다.
+
+export interface AppCsp { connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[] }
+
+const CSP_HOST_RE = /^(\*|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*)$/;
+
+/** 선언 도메인 → CSP 소스(app-ui.ts srcList 와 같은 뜻). 꼴이 이상한 값은 버린다(헤더에 ; 가 끼면 지시문이 늘어난다). */
+function srcList(domains: unknown, extra?: string): string {
+  const list = (Array.isArray(domains) ? domains : []).map((d) => String(d).trim().toLowerCase()).filter((d) => d && CSP_HOST_RE.test(d));
+  const base = extra ? [extra] : [];
+  if (!list.length) return base.length ? base.join(" ") : "'none'";
+  if (list.includes("*")) return [...base, "https:"].join(" ");
+  return [...base, ...list.map((d) => "https://" + d)].join(" ");
+}
+
+/** 앱 문서의 CSP(헤더 값). 외부 스크립트는 어떤 선언으로도 열지 않는다 — 앱 안에서 도는 코드는 그 앱의 것과 우리가 넣는 것뿐. */
+export function appPageCsp(csp?: AppCsp | null): string {
+  const c = csp ?? {};
+  return [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    "img-src " + srcList(c.resource_domains, "data:"),
+    "font-src " + srcList(c.resource_domains, "data:"),
+    "media-src " + srcList(c.resource_domains),
+    "connect-src " + srcList(c.connect_domains, "'self'"),
+    "frame-src " + srcList(c.frame_domains),
+    "form-action 'none'",
+    "base-uri 'none'",
+  ].join("; ");
+}
+
+/** HTML 안에 넣는 스크립트가 문서를 깨지 않게 — `</script` 를 끊는다(원본 둘 다 우리 코드지만 한 번 더 막는다). */
+const inlineSafe = (js: string): string => js.replace(/<\/script/gi, "<\\/script");
+
+/** SDK 런타임(+ 탐침)을 문서 머리에 끼운다(doctype 뒤 · 없으면 맨 앞). app-ui.ts wrapAppHtml 과 같은 자리. */
+export function buildAppPageHtml(html: string, scripts: { runtime: string; probe?: string | null }): string {
+  const head = "<script>" + inlineSafe(scripts.runtime) + "</script>" + (scripts.probe ? "<script>" + inlineSafe(scripts.probe) + "</script>" : "");
+  const m = /<!doctype[^>]*>/i.exec(html);
+  if (m) { const i = m.index + m[0].length; return html.slice(0, i) + head + html.slice(i); }
+  return head + html;
+}
+
+/** 오류 화면 — 앱 주소 iframe 안에 JSON 이 그대로 보이지 않게 짧은 문서로 답한다. */
+export function appErrorHtml(title: string, detail: string): string {
+  const esc = (s: string): string => s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] as string));
+  return "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    + "<title>" + esc(title) + "</title>"
+    + "<body style=\"font:14px/1.6 system-ui,sans-serif;color:#333;margin:0;padding:24px\"><b>" + esc(title) + "</b><p>" + esc(detail) + "</p></body>";
+}
+
+// ── 준비물 읽기 — 웹 빌드 산출물(public/app)의 원본 두 벌. 한 번 읽어 둔다(실패하면 다음 요청에 다시). ──
+export interface AppScripts { runtime: string; probe: string }
+let cached: Promise<AppScripts> | null = null;
+export function loadAppScripts(base: URL = new URL("../../public/app/", import.meta.url)): Promise<AppScripts> {
+  if (!cached) {
+    cached = (async () => {
+      const rt = await import(new URL("v2/app-ui-runtime.js", base).href) as { APP_RUNTIME_JS?: unknown };
+      const sf = await import(new URL("lib/studio-flow.js", base).href) as { PROBE_JS?: unknown };
+      if (typeof rt.APP_RUNTIME_JS !== "string" || !rt.APP_RUNTIME_JS.includes("window.lively")) throw new Error("SDK 런타임을 읽지 못했습니다");
+      if (typeof sf.PROBE_JS !== "string" || !sf.PROBE_JS) throw new Error("앱 만들기 탐침을 읽지 못했습니다");
+      return { runtime: rt.APP_RUNTIME_JS, probe: sf.PROBE_JS };
+    })();
+    cached.catch(() => { cached = null; });
+  }
+  return cached;
+}

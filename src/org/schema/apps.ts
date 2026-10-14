@@ -349,6 +349,27 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
 
+  // ── app_launch_code — 앱 주소 로그인의 일회용 코드(#4480 v2-1) ──
+  //  라이블리 화면(로그인한 구성원)이 받아 앱 주소(<앱>-<워크스페이스>.lvly.app)에 붙이고, 앱 주소 앞단(CP 라우터)이 앱 주소 전용
+  //   쿠키로 바꾼다. 평문 코드는 저장하지 않고 sha256 만(code_hash) · TTL 60초 · used_at 으로 1회. host = 그 코드가 열 수 있는
+  //   앱 주소 하나 · mode = embed(라이블리 안 iframe) | top(직접 접속) · state_hash = top 의 앞단 상태 쿠키 지문. 저장 계층은
+  //   apps/app-launch-store.ts. **테넌트 범위의 일반 표**다(발급·교환 모두 그 워크스페이스 헤더를 달고 온다 — 매니지드 RLS 가 가른다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_launch_code(
+      code_hash TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      variant TEXT NOT NULL DEFAULT 'pub' CHECK (variant IN ('pub','draft')),
+      host TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('embed','top')),
+      state_hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS app_launch_code_exp_idx ON app_launch_code(expires_at);`);
+
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);
