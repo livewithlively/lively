@@ -63,6 +63,7 @@ import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — 
 import { openSectionMenu, railIsHidden, sectionDef, setRailSection, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { iconPath, projGlyph } from '../lib/icon-paths.js';
+import { isBuilderProjectName, isBuilderSession } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
@@ -321,7 +322,7 @@ export interface SideInstance {
   id: string;
   title: string;
   active: boolean;
-  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'tags' | 'app';
+  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'tags' | 'app' | 'builder' | 'buildsess';
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
@@ -506,6 +507,8 @@ function instanceIcon(inst: SideInstance): SVGElement {
   //  'app' = 무엇인지 모르는 앱 화면(라이블리 앱). 종전엔 프로젝트 그림(폴더)으로 접었는데, 프로젝트 그림이 과녁이 된 뒤로
   //   (#4233 원준 2026-10-04) 프로젝트가 아닌 줄이 프로젝트처럼 보였다. 「앱」 그림(사각 넷)으로 그린다.
   if (inst.icon === 'app') return icon('apps', cls);
+  //  앱빌더 · 앱빌딩 세션(#4632) — 그림 표의 이름 그대로(망치 든 격자 · 망치 든 말풍선).
+  if (inst.icon === 'builder' || inst.icon === 'buildsess') return icon(inst.icon, cls);
   return appIcon(inst.icon as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 
@@ -804,7 +807,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
-      glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),
+      g.id && isBuilderProjectName(g.name) ? icon('builder', 'v2-pg-ic') : glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),   // #4632 앱빌더 묶음은 앱빌더 그림
       el('span', { class: 'n', text: g.name }),
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
@@ -1595,17 +1598,19 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const ak = last!.activeKey();
   //  위탁 워커 줄(#4551) — 홈 행(main.ts sideRowFace)과 같은 얼굴. 잣대는 lib/liv-work.
   const mark = s.task || null;
+  //  앱빌딩 세션(#4632) — 망치 든 말풍선 · 누르면 앱빌더 안 그 앱의 만들기 화면.
+  const bld = !mark && isBuilderSession(s.label, p ? p.name : '');
   //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
   //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
   const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
   const ownerId = String((s.raw && s.raw.owner) || '');
   return {
     id: 'sess:' + s.id,
-    route: '#/s/' + encodeURIComponent(s.id),
+    route: bld ? '#/builder/s/' + encodeURIComponent(s.id) : '#/s/' + encodeURIComponent(s.id),
     title: mark ? livWorkName(s.label, mark) : t.main,
     active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
-    icon: mark ? 'liv' : 'chat',
-    meta: t.sub || when(s.lastSeen),
+    icon: mark ? 'liv' : bld ? 'buildsess' : 'chat',
+    meta: bld ? '앱빌딩 세션' + (t.sub ? ' · ' + t.sub : '') : (t.sub || when(s.lastSeen)),
     ask: mark ? livWorkNote(mark) : lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
     project: p ? { id: p.id, name: p.name } : null,
     liv: isLooseLivWork(s),
@@ -3200,7 +3205,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   const pk = r.key;
   // 프로젝트 없는 세션도 **작업대(캔버스)** 로 간다(#/p/0) — 옛 AI 세션 앱이 아니라(원준 2026-08-19).
   //  자투리 세션들이 그 판에 카드로 모여 거기서 바로 대화·열기가 된다.
-  const href = p ? '#/p/' + p.id : '#/p/0';
+  const href = p ? (isBuilderProjectName(p.name) ? '#/builder' : '#/p/' + p.id) : '#/p/0';   // #4632 앱빌더 프로젝트 줄은 앱빌더를 연다
   const isOn = activeKey === pk;
   // 펼침 기본값(#1719 재구성): **선택된 프로젝트만 펼침**, 나머지는 접힘 — 사용자가 편 것만 그대로.
   //  선택을 일부러 접은 건 이 페이지 수명만 기억한다(다음 방문엔 다시 펼쳐 보인다 — 선택은 늘 보이는 게 기본).
@@ -3231,7 +3236,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') },
-    caret, glyph(p ? 'proj' : 'projNone', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),   // #4233 — 펼침은 꺾쇠가 말한다
+    caret, p && isBuilderProjectName(p.name) ? icon('builder', 'v2-pj-ic') : glyph(p ? 'proj' : 'projNone', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),   // #4233 — 펼침은 꺾쇠가 말한다
     r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '보관한 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,

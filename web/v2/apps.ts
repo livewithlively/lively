@@ -14,7 +14,8 @@ import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 �
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
-import { openAppStudio, openAppStudioFor, studioRecForApp } from './app-studio.js';   // #4592 — 「+ 새 앱」 · 「이어서 만들기」 · 「내 사본 떠서 고치기」
+import { studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱). 여는 길은 전부 앱빌더(#/builder, #4632)
+import { builderRoute } from '../lib/builder-flow.js';
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -26,7 +27,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags' | 'builder';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -79,6 +80,8 @@ export const APPS: AppDef[] = [
   { key: 'system', title: '설정', desc: '조직 · 구성원 · AI 능력 · 데이터 연결 · 운영', route: 'system', tab: 'system', icon: 'sys', hidden: true },
   //  사용 가이드(#4179). 셸이 직접 그리는 native 앱이다(web/guide/app.ts). 클래식 화면(#/start · #/onboarding)은 아래 CLASSIC_PAGES 가 종전대로 액자에 싣는다.
   { key: 'learn', title: '사용 가이드', desc: '처음 시작하는 방법 · 화면별 사용법 · 용어', route: 'learn', tab: null, icon: 'learn', kind: 'native', aka: ['도움말', '설명서', '매뉴얼'] },
+  //  앱빌더(#4632, 원준 2026-10-14). 셸이 직접 그리는 native 앱(web/v2/builder.ts). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계가 이 안에 선다.
+  { key: 'builder', title: '앱빌더', desc: '내가 만든 앱 고치기 · 만들던 앱 이어서 · 새 앱 만들기', route: 'builder', tab: null, icon: 'builder', kind: 'native', aka: ['앱 빌더', '앱 만들기', '새 앱', '앱 제작'] },
   //  대시보드(#4554, 원준 2026-10-04). 이름을 「홈(클래식)」에서 바꿨고 기본 앱에서 뺐다 — 앱 찾기의 「워크스페이스 앱」 묶음에 선다.
   //   표의 맨 끝에 둔다: 최근 연 앱이 모자랄 때 채우는 순서가 표 순서라(recentApps · 레일), 맨 앞에 두면 처음 온 사람의
   //   최근 줄 첫 칸이 기본 앱이 아닌 이 앱이 된다. 옛 이름은 검색어(aka)로만 남는다. 키 · 주소(#/app/dashboard)는 그대로다.
@@ -183,7 +186,7 @@ export function soloSessionUrl(id: string): string {
 const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 대시보드(icon 이름은 home)는 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
-  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src, tags: ICONS.tags,
+  sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src, tags: ICONS.tags, builder: ICONS.builder,
 };
 /** 옛 주소 → 새 셸의 정본 주소(#4233). 분류체계는 맥락 관리의 탭(`#/categories` · 그 전의 `#/domainmap`)이었다가 앱이 됐다.
  *  클래식 액자로 싣지 않고 셸이 바로 넘긴다(액자를 싣고 그 안에서 다시 넘기면 한 박자 빈 화면이 선다). */
@@ -238,10 +241,10 @@ export function openLaunchpad(): void {
       //  워크스페이스 앱(남이 만든 것 포함)은 「내 사본 떠서 고치기」 · 「원본을 고치기」 — ⑧ 남이 만든 앱을 내게 맞게(#4592 원준 2026-10-11).
       const forApp = ws ? { id: ws.id, title: ws.title, by: ws.installedBy, place: (ws.studio && (ws.studio.place === 'side' || ws.studio.place === 'full' || ws.studio.place === 'both') ? ws.studio.place : undefined) as any } : null;
       const menu = (x: number, y: number) => ctxMenu(x, y, [
-        ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); openAppStudio(draft); } }] : []),
+        ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); location.hash = builderRoute('resume', draft.sid); } }] : []),
         ...(forApp ? [
-          { label: '내 사본 떠서 고치기', icon: MENU_ICON.copy, hint: '원본은 그대로 · 내 식으로', run: () => { closeLaunchpad(); void openAppStudioFor(forApp, 'copy'); } },
-          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '모두에게 적용돼요' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); void openAppStudioFor(forApp, 'edit'); } },
+          { label: '내 사본 떠서 고치기', icon: MENU_ICON.copy, hint: '원본은 그대로 · 내 식으로', run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'copy'); } },
+          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '모두에게 적용돼요' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
           { sep: true, label: '' },
         ] : []),
         { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '격자로 돌아와요' : '앱은 그대로 · 눈앞에서만',
@@ -306,7 +309,7 @@ export function openLaunchpad(): void {
     //  「+ 새 앱」(#4592, 원준 2026-10-10) — 워크스페이스 앱 묶음의 마지막 칸. 누르면 앱 찾기가 닫히고 앱 만들기 화면으로 간다.
     //   워크스페이스 앱이 하나도 없어도 이 칸 때문에 묶음이 선다(«만들 수 있다» 가 보여야 한다). 검색 중에는 '새 앱 · 만들기' 로 찾을 때만.
     const newTile = el('button', { class: 'v2-pad-item v2-pad-item--app v2-pad-item--new', role: 'listitem', type: 'button', title: '새 앱 만들기 — AI 와 말로 만들어요',
-      onclick: () => { closeLaunchpad(); openAppStudio(); } },
+      onclick: () => { closeLaunchpad(); location.hash = builderRoute('new'); } },   // #4632 — 앱빌더 안에서 만든다
       el('span', { class: 'v2-pad-ico v2-pad-ico--new', 'aria-hidden': 'true' }, lineIcon('plus', 'v2-ic')),
       el('b', { text: '새 앱' }));
     const showNew = !q || '새 앱 만들기 추가 new'.includes(q);

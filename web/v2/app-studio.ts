@@ -23,12 +23,13 @@ import { fetchAppVersions, revertApp } from './app-versions.js';
 import { attachAppToSession } from './session-app-pane.js';
 import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
 import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults } from './run-prefs.js';
+import { BUILDER_PROJECT_NAME } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { CARD_ROWS, DRAFT_STEPS, PLACE, PROBE_JS, STAGES, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, notifyBrief, parseCard, parseCheck, parseStep, planBrief, splitList, stageIndex, whereText, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 type FixTool = 'try' | 'pick' | 'pin' | 'box';
-interface StudioRec {
+export interface StudioRec {
   sid: string; pid: number; what: string; place: StudioPlace; appId: string; known: string[]; at: number;
   stage: StudioStage; card: StudioCard | null; round: number; from: number;
   mode: 'new' | 'copy' | 'edit'; origin?: { id: string; title: string; by: string }; title?: string; done?: boolean; notified?: boolean;
@@ -36,7 +37,7 @@ interface StudioRec {
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
-const PROJECT_NAME = '앱 만들기';
+export const PROJECT_NAME = BUILDER_PROJECT_NAME;   // #4632 — 앱빌더가 여는 세션은 전부 이 프로젝트. 사람에게는 프로젝트가 아니라 앱빌더가 그 문이다(lib/builder-flow)
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
 
 // ① 설명칸 — 예시는 칸 안 안내글 하나로만(원준 2026-10-14 «예시로 채우기 · 적어 두면 좋은 것 다 빼»).
@@ -54,7 +55,10 @@ function readRecs(): StudioRec[] {
 }
 function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
 function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r); writeRecs(rs); }
-export function studioDrafts(): Array<{ sid: string; what: string; appId: string; done: boolean }> { return readRecs().map((r) => ({ sid: r.sid, what: r.what, appId: r.appId, done: !!r.done })); }
+/** 이 브라우저의 만들던 기록 전부 — 앱빌더 목록이 읽는다. */
+export function studioRecs(): StudioRec[] { return readRecs(); }
+/** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
+export function dropStudioRec(sid: string): void { writeRecs(readRecs().filter((x) => x.sid !== sid)); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
@@ -62,13 +66,13 @@ function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(
 
 // ── 세션 · 기록 · 나 ──────────────────────────────────────────────────────────────────────
 let meCache: { id: string; name: string } | null = null;
-async function me(): Promise<{ id: string; name: string }> {
+export async function me(): Promise<{ id: string; name: string }> {
   if (meCache) return meCache;
   try { const d: any = await api('/api/ui/me/whoami'); meCache = { id: String(d?.member_id || ''), name: String(d?.display_name || d?.nickname || d?.member_id || '') }; }
   catch (_) { meCache = { id: '', name: '' }; }
   return meCache;
 }
-async function studioProject(): Promise<number> {
+export async function studioProject(): Promise<number> {
   try { const d: any = await api('/api/ui/v6/projects?mine=1'); const ps = Array.isArray(d?.projects) ? d.projects : []; const p = ps.find((x: any) => String(x?.name || '').trim() === PROJECT_NAME && !/done|closed|archived/i.test(String(x?.status_category || ''))); return p ? Number(p.id) || 0 : 0; }
   catch (_) { return 0; }
 }
@@ -89,7 +93,7 @@ async function sendPrompt(rec: StudioRec, text: string): Promise<boolean> {
   } catch (e: any) { toast('AI 에게 보내지 못했어요 — ' + (e && e.message ? e.message : e) + ' · 오른쪽 대화 칸에서 다시 보내 보세요', true); return false; }
 }
 async function listApps(): Promise<any[]> { try { const out: any = await api('/api/ui/apps'); return Array.isArray(out?.apps) ? out.apps : []; } catch (_) { return []; } }
-async function patchManifest(appId: string, patch: (man: any) => void, note: string): Promise<void> {
+export async function patchManifest(appId: string, patch: (man: any) => void, note: string): Promise<void> {
   const pulled: any = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/pull');
   const files: any[] = Array.isArray(pulled?.files) ? pulled.files : [];
   const mf = files.find((f) => f && f.path === 'lively-app.json'); if (!mf) throw new Error('앱의 설명 파일(lively-app.json)이 없어요');
@@ -110,21 +114,50 @@ async function makeCopy(origin: { id: string; title: string; by: string }, place
 }
 
 // ── 화면 뿌리 ──────────────────────────────────────────────────────────────────────────
+//  창 전체를 덮는 창(기본)이거나, 앱빌더(#4632) 안의 자리(host)에 선다 — 그때 머리줄에 「앱빌더 ›」 가 붙고 닫으면 onClose 가 불린다(목록으로).
+export interface StudioMountOpts { host?: HTMLElement | null; onClose?: () => void }
 let root: HTMLElement | null = null;
 let teardown: (() => void) | null = null;
-export function closeAppStudio(): void { if (teardown) { teardown(); teardown = null; } if (root) { root.remove(); root = null; } }
-function mountRoot(): HTMLElement { closeAppStudio(); const r = el('div', { class: 'v2-studio', role: 'dialog', 'aria-modal': 'true', 'aria-label': '앱 만들기' }); root = r; document.body.append(r); return r; }
+let mountOpts: StudioMountOpts = {};
+export function closeAppStudio(): void {
+  if (teardown) { teardown(); teardown = null; }
+  if (root) { root.remove(); root = null; }
+  const done = mountOpts.onClose; mountOpts = {};
+  if (done) done();
+}
+function mountRoot(opts?: StudioMountOpts): HTMLElement {
+  mountOpts = {};   // 앞서 열린 것을 닫되 그쪽의 onClose 는 부르지 않는다 — 새로 여는 중이지 나가는 게 아니다
+  closeAppStudio();
+  mountOpts = opts || {};
+  const r = el('div', { class: 'v2-studio' + (mountOpts.host ? ' v2-studio--in' : ''), role: 'dialog', 'aria-modal': mountOpts.host ? 'false' : 'true', 'aria-label': '앱 만들기' });
+  root = r; (mountOpts.host || document.body).append(r); return r;
+}
+const crumb = (): HTMLElement | null => (mountOpts.host ? el('span', { class: 'v2-studio-crumb', text: '앱빌더 ›' }) : null);
+export { me as studioMe };
 
+/** 이어서 열 세션 — 이 브라우저에 기록이 없으면 세션 이름(what)과 그 세션이 만든 앱(appId)으로 되살린다(앱빌더 #4632). */
+export interface StudioResume { sid: string; what?: string; title?: string; appId?: string }
 /** 앱 만들기를 연다. resume 을 주면 만들던 것을 이어서(그 세션 · 그 단계), 없으면 시작 화면부터. */
-export function openAppStudio(resume?: { sid: string } | null): void {
-  mountRoot();
-  const rec = resume ? readRecs().find((r) => r.sid === resume.sid) : null;
-  if (rec) void build(rec); else start();
+export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOpts): void {
+  mountRoot(opts);
+  const rec = resume ? readRecs().find((r) => r.sid === resume.sid) || null : null;
+  if (rec) { void build(rec); return; }
+  if (resume && (resume.what || resume.appId)) {
+    //  기록 없이 되살리기 — 단계는 앱이 있으면 ④, 없으면 ②. known 은 지금 있는 앱 전부(이 뒤에 생기는 것이 «이 세션이 만든 앱»).
+    void (async () => {
+      const known = (await listApps()).map((a) => String(a.id));
+      if (!root) return;
+      const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || resume.title || '', place: 'both', appId: resume.appId || '', known, at: Date.now(), stage: resume.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...(resume.title ? { title: resume.title } : {}) };
+      saveRec(r2); void build(r2);
+    })();
+    return;
+  }
+  start();
 }
 /** ⑧ 남이 만든(또는 내가 만든) 앱을 내게 맞게 — 사본을 떠서, 또는 원본을 그대로 고치기. ④ 고치기에서 연다. */
-export async function openAppStudioFor(app: { id: string; title: string; by: string; place?: StudioPlace }, how: 'copy' | 'edit'): Promise<void> {
-  const r = mountRoot();
-  r.replaceChildren(el('div', { class: 'v2-studio-top' }, el('span', { class: 'v2-studio-tag', text: '앱 만들기' }), el('span', { class: 'v2-studio-sp' })),
+export async function openAppStudioFor(app: { id: string; title: string; by: string; place?: StudioPlace }, how: 'copy' | 'edit', opts?: StudioMountOpts): Promise<void> {
+  const r = mountRoot(opts);
+  r.replaceChildren(el('div', { class: 'v2-studio-top' }, crumb(), el('span', { class: 'v2-studio-tag', text: '앱 만들기' }), el('span', { class: 'v2-studio-sp' })),
     el('div', { class: 'v2-studio-wait v2-studio-wait--page' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: how === 'copy' ? '내 사본을 뜨는 중' : '고칠 준비를 하는 중' })));
   const place: StudioPlace = app.place || 'both';
   try {
@@ -302,7 +335,7 @@ function start(): void {
   help.onclick = () => helpMenu(help, () => showIntro(() => input.focus(), () => showTour(() => input.focus())), () => showTour(() => input.focus()));
   root.replaceChildren(
     el('div', { class: 'v2-studio-top' },
-      el('span', { class: 'v2-studio-tag', text: '앱 만들기' }),
+      crumb(), el('span', { class: 'v2-studio-tag', text: '앱 만들기' }),
       el('span', { class: 'v2-studio-sp' }), help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
     el('div', { class: 'v2-studio-bar' }, ...STAGES.map((x) => el('span', { class: x.n === 1 ? 'on' : '', text: '① ② ③ ④ ⑤ ⑥'.split(' ')[x.n - 1] + ' ' + x.label }))),
@@ -768,7 +801,7 @@ async function build(rec: StudioRec): Promise<void> {
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); window.removeEventListener('message', onMsg); if (S.frame) S.frame.destroy(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
-    el('div', { class: 'v2-studio-top v2-studio-top--build' }, tag, name, ver,
+    el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
       el('span', { class: 'v2-studio-sp' }), undo, chatBtn, help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),

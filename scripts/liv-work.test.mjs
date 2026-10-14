@@ -129,7 +129,7 @@ ok(destructive.every((b) => b.length > 0 && !/sideProjectId|standId/.test(b)) &&
 ok(/if \(s && s\.task\) \{ icon = 'liv'; ask = livWorkNote\(s\.task\); livTitle = livWorkName\(s\.label, s\.task\); liv = isLooseLivWork\(s\);/.test(MAIN)
   && /title: \(!page \|\| page === 'dashboard'\) \? '새 작업' : \(livTitle \|\| info\.title\)/.test(MAIN) && /owner, ask, liv \};/.test(MAIN),
   "W2 홈 줄 얼굴 — 워커는 리브 그림 · 이름 · 둘째 줄 · 묶음 표식을 싣는다");
-ok(/const sid = sideProjectId\(s\);\s*const p = sid \? last!\.data\.projects\.find\(\(x\) => x\.id === sid\) : null;/.test(SIDE) && /title: mark \? livWorkName\(s\.label, mark\) : t\.main,/.test(SIDE) && /icon: mark \? 'liv' : 'chat',/.test(SIDE) && /liv: isLooseLivWork\(s\),/.test(SIDE),
+ok(/const sid = sideProjectId\(s\);\s*const p = sid \? last!\.data\.projects\.find\(\(x\) => x\.id === sid\) : null;/.test(SIDE) && /title: mark \? livWorkName\(s\.label, mark\) : t\.main,/.test(SIDE) && /icon: mark \? 'liv' : (bld \? 'buildsess' : )?'chat',/.test(SIDE) && /liv: isLooseLivWork\(s\),/.test(SIDE),
   "W3 카드 접힘 안의 줄(sessAsInst)도 같은 얼굴이다 — 홈 줄과 접힌 줄이 다른 말을 하지 않는다");
 ok(/c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME/.test(SIDE) && /g\.id \? undefined : \(s\) => isLooseLivWork\(s\) === g\.liv\)/.test(SIDE) && /glyph\(g\.id \? 'proj' : g\.liv \? 'liv' : 'projNone', 'v2-pg-ic'\)/.test(SIDE),
   "W4 ★ 카드 — 리브 묶음 이름 · 리브 그림 · 접힘 재료를 둘로 가른다(프로젝트 카드는 거르지 않는다)");

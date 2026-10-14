@@ -1615,6 +1615,9 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item--new:hover .v2-pad-ico--new { background: var(--blue); color: #fff; border-style: solid; }
 .v2-pad-item--new b { color: var(--blue); }
 .v2-studio { position: fixed; inset: 0; z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
+.v2-studio--in { position: absolute; z-index: 5; }   /* 앱빌더 안의 자리(#4632) — 창을 덮지 않고 가운데 칸을 채운다 */
+.v2-studio-crumb { font-size: 12.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); white-space: nowrap; }
+.v2-studio-top--build .v2-studio-crumb { color: rgba(255, 255, 255, .85); }
 .v2-studio-top { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .v2-studio-top--build { background: var(--purple, #7B61E0); border-bottom-color: transparent; color: #fff; }
 .v2-studio-tag { font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 7px; background: rgba(123, 97, 224, .14); color: var(--purple, #7B61E0); }
@@ -1941,6 +1944,64 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-studio-body--try-widget { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 46%); }
   .v2-studio-body--try-widget .v2-studio-side { border-right: 0; border-bottom: 1px solid var(--line); }
   .v2-studio-ai-row .k { width: auto; }
+}
+
+/* ── 앱빌더(#4632 · v2/builder.ts) — 내가 만든 앱 · 만들던 앱 · 배포 설정 · [+ 새 앱]. 만들기 화면(.v2-studio--in)은 .v2-bld-stage 에 선다 ── */
+.v2-bld { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--gray-bg-2, #F6F8FB); overflow: hidden; }
+.v2-bld-top { flex: none; display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 20px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-bld-top[hidden] { display: none; }
+.v2-bld-top h1 { margin: 0; font-size: 17px; font-weight: 800; display: flex; align-items: center; gap: 10px; }
+.v2-bld-top h1 .v2-gi { width: 28px; height: 28px; }
+.v2-bld-crumb { color: var(--muted); font-size: 13px; font-weight: 600; }
+.v2-bld-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+.v2-bld-body[hidden], .v2-bld-stage[hidden] { display: none; }
+.v2-bld-list { min-width: 0; min-height: 0; overflow: auto; padding: 18px 20px; display: grid; gap: 18px; align-content: start; }
+.v2-bld-sec h3 { margin: 0 0 8px; font-size: 15px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.v2-bld-sec h3 small { font-weight: 600; color: var(--muted); font-size: 12px; }
+.v2-bld-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.v2-bld-card { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: grid; gap: 8px; text-align: left; min-width: 0; }
+.v2-bld-card.on { border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .12); }
+.v2-bld-card .hd { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.v2-bld-card .hd .v2-gi { width: 40px; height: 40px; flex: none; }
+.v2-bld-card .hd b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-bld-card .hd small { display: block; font-size: 11.5px; color: var(--muted); }
+.v2-bld-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.v2-bld-chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: var(--gray-bg-2, #F1F5FC); color: var(--ink-sub); }
+.v2-bld-chip.ok { background: rgba(76, 187, 108, .16); color: #1D6B3A; }
+.v2-bld-chip.off { color: var(--muted); }
+.v2-bld-chip.me { background: rgba(242, 184, 75, .18); color: #8A5A00; }
+.v2-bld-chip.st { background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); }
+.v2-bld-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.v2-bld-acts .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.v2-bld-pri { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.v2-bld-pri .v2-ic { stroke: #fff; }
+.v2-bld-pri.sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.v2-bld-pri:disabled { opacity: .45; cursor: default; }
+.v2-bld-panel { min-height: 0; overflow: auto; background: var(--bg); border-left: 1px solid var(--line); padding: 16px 18px; display: grid; gap: 12px; align-content: start; }
+.v2-bld-panel h3 { margin: 0; font-size: 15px; font-weight: 800; }
+.v2-bld-row { display: grid; gap: 5px; font-size: 13px; }
+.v2-bld-row .k { font-weight: 800; font-size: 12.5px; }
+.v2-bld-row small, .v2-bld-mini { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.v2-bld-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--bg); width: max-content; }
+.v2-bld-seg button { border: 0; background: none; padding: 5px 11px; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.v2-bld-seg button.on { background: var(--purple, #7B61E0); color: #fff; }
+.v2-bld-seg button:disabled { cursor: default; opacity: .6; }
+.v2-bld-tog { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: none; width: 100%; color: var(--ink); cursor: pointer; text-align: left; }
+.v2-bld-tog i { flex: none; width: 34px; height: 20px; border-radius: 999px; background: #C9D2E3; position: relative; transition: background .15s; }
+.v2-bld-tog i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+.v2-bld-tog.on i { background: var(--purple, #7B61E0); }
+.v2-bld-tog.on i::after { left: 16px; }
+.v2-bld-tog:disabled { opacity: .6; cursor: default; }
+.v2-bld-vers { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-sub); }
+.v2-bld-vers > div { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.v2-bld-vers b { color: var(--ink); flex: none; }
+.v2-bld-vers > div > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.v2-bld-empty { color: var(--muted); font-size: 13px; padding: 16px; text-align: center; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; margin: 0; }
+.v2-bld-stage { position: relative; flex: 1; min-height: 0; }
+.v2-bld-danger { color: #B0323F !important; }
+@media (max-width: 900px) {
+  .v2-bld-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .v2-bld-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 46%; }
 }
 
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */

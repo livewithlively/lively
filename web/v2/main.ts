@@ -32,6 +32,8 @@ import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRow
 import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체 · #4158 [AI 세션] 전체 목록
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
+import { builderTabTitleFor, renderBuilderApp } from './builder.js';   // #4632 앱빌더(셸이 직접 그린다 · 앱 만들기 여섯 단계가 이 안에 선다)
+import { isBuilderProjectName, isBuilderSession } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
 import { guideTabTitle, parseGuideRoute, renderGuideApp } from '../guide/app.js';   // #4179 사용 가이드 앱(셸이 직접 그린다)
 import { renderWikiMain } from './wiki-main.js';   // #4233 [위키] 본문 목록(사이드 피크 · 우측 사이드바에 고정)
 import { wikiScopeOf } from '../lib/wiki-list.js';
@@ -1093,6 +1095,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
   if (p === 'taxonomy') return { title: '분류체계', noAside: true };
+  if (p === 'builder') return { title: builderTabTitleFor(segs, parseRoute(route).params), noAside: true };   // #4632 앱빌더
   //  #4179 사용 가이드. 문서를 보고 있으면 그 문서의 제목이 이름이다(홈 목록에서 무엇을 읽던 창인지 보인다).
   if (p === 'learn') return { title: guideTabTitle(parseGuideRoute(segs, parseRoute(route).params)), noAside: true };
   if (p === 'archive') return { title: '지난 세션', noAside: false };   // #1851 → #1850 안 A: 곁칸이 '안에 든 것'을 보여 준다
@@ -1364,6 +1367,15 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       void ensureSingletonAppInstance('taxonomy', '분류체계')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 무회귀 */ });
+    } else if (page === 'builder') {
+      // #4632 앱빌더. 셸이 직접 그린다. 주소가 정본: `#/builder` = 목록 · `#/builder/new` = 새 앱 · `#/builder/s/<세션>` = 이어서 · `#/builder/app/<앱>` = 고치기.
+      markActive('builder');
+      noteAppUse('builder');
+      tab.aside.replaceChildren();
+      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions });
+      void ensureSingletonAppInstance('builder', '앱빌더')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
     } else if (page === 'learn') {
       // #4179 사용 가이드 앱. 셸이 직접 그린다(종전엔 클래식 화면을 액자에 실었다). 주소가 정본이다:
       //  `#/learn` = 첫 화면 · `#/learn/docs/<문서>` = 문서 한 장 · `?h=<절>` = 그 문서의 절.
@@ -1438,6 +1450,14 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         onDone: () => { void loadData().then(() => drawSide()); },
       });
     } else if (page === 'p' && segs[1]) {
+      //  #4632 앱빌더 프로젝트는 프로젝트 화면이 없다 — 어느 길로 오든 앱빌더가 열린다(새 세션 자리 = 새 앱).
+      { const bp = data.projects.find((x) => Number(x.id) === Number(segs[1]));
+        if (bp && isBuilderProjectName(bp.name)) {
+          const to = params.get('new') === '1' ? '#/builder/new' : '#/builder';
+          tab.route = to;
+          if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+          tabsApi?.routed(tab); void renderRoute(tab); return;
+        } }
       // ★ 프로젝트 전용 화면은 없앴다(원준 2026-08-20) — 프로젝트는 세션이 놓인 방이고, 주소는 늘 세션이다.
       //  그 프로젝트의 **맨 위 세션**(사이드바와 같은 정렬)으로 보낸다. 세션이 하나도 없으면 그때만 이 주소가
       //  '새 세션 자리'로 열린다(갈 세션이 없으니 폴백이 필요하다).
@@ -1669,7 +1689,7 @@ function activeKey(): string {
  *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
 function activeKeyOf(route: string): string {
   const cur = parseRoute(route);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'builder' ? 'builder' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 /** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
 const CTX_FULL_WIDTH = new Set(['app:context', 'learn']);   // 'learn' = 사용 가이드(#4179). 제 문서 목록을 스스로 그리므로 셸 사이드바를 읽지 않는다
@@ -1776,13 +1796,18 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
     if (page === 's') {
       const s = findSess(decodeURIComponent(segs[1] || ''));
       if (s && s.task) { icon = 'liv'; ask = livWorkNote(s.task); livTitle = livWorkName(s.label, s.task); liv = isLooseLivWork(s); if (liv) meta = ''; }
-      else if (s) ask = lastAsk(s);
+      else if (s) {
+        ask = lastAsk(s);
+        //  앱빌딩 세션(#4632) — 말풍선 대신 망치 든 말풍선. 누르면 세션 화면이 아니라 앱빌더로 간다(openSideRow).
+        if (isBuilderSession(s.label, project ? project.name : '')) { icon = 'buildsess'; meta = '앱빌딩 세션'; }
+      }
     }
   }
   else if (page === 'inbox') { icon = 'inbox'; meta = '댓글·언급 · 리브의 답 · 앱 알림'; }
   else if (page === 'sources') { icon = 'src'; meta = '모아 둔 원본 자료'; }
   else if (page === 'taxonomy') { icon = 'tags'; meta = '분류와 묶음'; }
   else if (page === 'learn') { icon = 'learn'; meta = '화면별 사용법'; }
+  else if (page === 'builder') { icon = 'builder'; meta = '내가 만든 앱 · 만들던 앱 · 새 앱'; }
   else if (page === 'connect') { icon = 'link'; meta = '외부 앱 연결'; }
   //  치워 둔 곳(#1851)은 클래식 지식 앱으로 접히므로(CLASSIC_PAGES) 여기서 먼저 가른다 — 아니면 '지식 트리…'가 붙는다.
   else if (page === 'archive') { icon = 'archive'; meta = '멈춘 세션 · 치운 세션'; }
@@ -1981,7 +2006,7 @@ function pinnedAt(key: string, group: string, at: number): number {
  *  묶음: 사람이 볼 일 있는 것(작업 중·확인 필요·완료 미확인)이 맨 위, 나머지는 마지막 작업 날짜별로.
  */
 /** 정본 주소를 갖는 단일 인스턴스 빌트인 — 좌측 목록에서 인스턴스 행과 창 행이 한 줄로 접힌다(#2423). */
-const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources', taxonomy: '#/taxonomy', learn: '#/learn' };
+const CANON_ROUTE_APP: Record<string, string> = { inbox: '#/inbox', sources: '#/sources', taxonomy: '#/taxonomy', learn: '#/learn', builder: '#/builder' };
 
 /**
  * ③(열린 창)이 세우려는 화면을 **서버가 아직 아는가** (#2460).
@@ -2289,16 +2314,31 @@ function refreshSideNow(): void {
 function openSideRow(key: string, fallback?: string): void {
   //  홈 목록의 행은 제 표(sideRowRoute)에 주소가 있다. [AI 세션]·[확인할 것]처럼 **홈에 없는 행**은
   //   자기 주소를 들고 오므로 그걸 쓴다(#2033) — 없으면 눌러도 아무 데도 안 가는 행이 된다.
-  const route = sideRowRoute.get(key) || fallback;
-  if (!route || !tabsApi) return;
+  const route0 = sideRowRoute.get(key) || fallback;
+  if (!route0 || !tabsApi) return;
+  const route = builderRouteFor(route0);   // #4632 앱빌딩 세션은 앱빌더 안에서 연다
   const hit = tabsApi.find(route);
   if (hit) tabsApi.activate(hit); else tabsApi.add(route);
   refreshSideNow();
 }
 
+/** 세션 주소가 앱빌딩 세션(#4632)의 것이면 앱빌더 안 그 앱의 만들기 화면 주소로 — 위탁 워커(task)는 세션 그대로. */
+function builderRouteFor(route: string): string {
+  const m = /^#\/s\/([^?/]+)/.exec(route); if (!m) return route;
+  const id = decodeURIComponent(m[1]); const s = findSess(id); if (!s || s.task) return route;
+  const pj = s.projectId ? data.projects.find((x) => x.id === s.projectId) : null;
+  return isBuilderSession(s.label, pj ? pj.name : '') ? '#/builder/s/' + encodeURIComponent(id) : route;
+}
+function openBuilder(route = '#/builder'): void {
+  if (!tabsApi) { location.hash = route; return; }
+  const hit = tabsApi.find('#/builder') || tabsApi.tabs.find((t) => /^#\/builder(\/|\?|$)/.test(t.route));
+  if (hit) { hit.route = route; tabsApi.activate(hit); if (location.hash !== route) { suppressHash++; location.hash = route; applyTabChrome(hit); } tabsApi.routed(hit); void renderRoute(hit); }
+  else tabsApi.add(route);
+}
 /** 프로젝트 경로를 누르면 현재 세션을 덮지 않고 '프로젝트' 앱 인스턴스를 열거나 재사용한다. */
 function openProjectPage(projectId: number): void {
   if (!tabsApi || !(projectId > 0)) return;
+  { const bp = data.projects.find((x) => x.id === projectId); if (bp && isBuilderProjectName(bp.name)) { openBuilder(); return; } }   // #4632 앱빌더 프로젝트 = 앱빌더
   const href = projectPageHref(projectId);
   const hit = tabsApi.find(href);
   if (!hit) { tabsApi.add(href); return; }
@@ -2493,6 +2533,7 @@ function tabProject(t: ShellTab): number {
  *  없으면 ?new=1 주소로 새 탭을 연다(그 쿼리가 '맨 위 세션으로 보내기'를 건너뛰게 한다). */
 function newSessionFor(projectId: number): void {
   if (!(projectId > 0)) return;
+  { const bp = data.projects.find((x) => x.id === projectId); if (bp && isBuilderProjectName(bp.name)) { openBuilder('#/builder/new'); return; } }   // #4632 앱빌더의 새 세션 = 새 앱
   const href = '#/p/' + projectId + '?new=1';
   const hit = tabsApi?.tabs.find((t) => tabProject(t) === projectId);
   if (!tabsApi || !hit) { location.hash = href; return; }      // 그 프로젝트를 보는 탭이 없다 — 새 탭에서 연다
