@@ -12,6 +12,7 @@ import { googleToolAuthHint } from "../credentials/google-oauth.js";
 import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, HARNESS_INSTALLERS, SCRIPT_ROT_MARKERS, type CanaryProbe } from "./probes.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -188,6 +189,25 @@ t("S7 설정을 되살린 뒤 다시 3회 연속 실패하면 경보가 다시 �
   const okRun = { ok: true, configured: true };
   const unconf = { ok: false, configured: false };
   assert.deepEqual(replay([fail, fail, fail, unconf, unconf, okRun, fail, fail, fail]), ["raise", "clear", "raise"]);
+});
+
+// S5~S7 의 replay 는 runCanary 의 before/after 를 이 파일 안에서 다시 짠 것이라, run.ts 가 옛 식(configured 행만 보는
+//  evaluateStreak)으로 돌아가도 초록이다(실측). 실행 경로는 DB 에 묶여 단위로 돌리기 어려우므로 run.ts 소스를 읽어 배선을 못박는다
+//  (sandbox-wiring.test 와 같은 방식 — 주석은 떼고 센다).
+t("S8 ★ runCanary 의 직전 상태는 priorState(가장 최근 실행의 구성 여부)를 거친다 — 현황 조회와 같은 규칙", () => {
+  const raw = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "src", "org", "canary", "run.ts"), "utf8");
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, " ").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const fn = (name: string): string => {
+    const i = src.search(new RegExp(`(async function|function) ${name}\\b`));
+    assert.ok(i >= 0, `run.ts 에 ${name} 이 없다`);
+    const j = src.indexOf("\n}\n", i);
+    return src.slice(i, j < 0 ? undefined : j);
+  };
+  assert.match(fn("runCanary"), /const before = priorState\(\s*await latestConfigured\(probe\.key\)/,
+    "직전 상태가 가장 최근 실행의 구성 여부를 안 보면, 설정을 걷어낸 뒤 매 회전 failing→unconfigured clear 가 다시 울린다(S5)");
+  assert.match(fn("canaryStatus"), /priorState\(/, "현황 조회도 같은 규칙(priorState)을 쓴다 — 상태를 두 곳에서 따로 계산하면 갈린다");
+  assert.doesNotMatch(fn("latestConfigured"), /\bAND\s+configured\b/i,
+    "latestConfigured 는 구성 미비 행까지 포함한 **가장 최근 실행**을 봐야 한다 — configured 행만 보면 늘 true 라 S5 가 되살아난다");
 });
 
 // ── R. 프로브 구성이 실제로 볼 수 있는가 ──
