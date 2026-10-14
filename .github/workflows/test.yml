@@ -144,6 +144,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/session-task.pg-test.mjs
+      # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
+      #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
+      - name: 위탁 running 기록 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/node/task-mark-running.pg-test.mjs
       # ④-d1b ⌘K 대화 검색 색인(#4517) — 목으로는 못 보는 것: **이어 읽기와 권한이 SQL 조건이다**. «사람 말·AI 말만 행이 된다» ·
       #    «쓰는 중인 반 줄은 다음에 · 같은 창을 두 번 담지 않는다(커서 CAS)» · «주인 + 초대받은 사람만 찾는다» · «완전 삭제·보존
       #    정리 뒤엔 색인도 없다». session_msg 행 · 커서 · 검색 결과 id 를 되읽어 판정한다.
