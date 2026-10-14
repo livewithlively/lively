@@ -78,6 +78,17 @@ test("배선 — 부모 카드가 지워졌으면 부모 연결을 끊고, creat
   assert.match(PUSH, /catch \(e\) \{ if \(isParentNotInList\(e\)\) throw e;/, "ITEM_137 에 status 를 빼고 헛재시도한다");
 });
 
+// 부모 연결을 끊은 뒤 이 자식은 다음에 볼 때 «부모가 반출 대상이 아님» 으로 닫힌다(#1302 부모 미반출 분기) — 로그가
+//  «자식은 부모가 다시 생긴 뒤» 라고 하면 운영자는 자식이 저절로 따라 올라갈 줄 알고 기다린다.
+test("문구 — parent_gone 분기는 자식 반출이 닫힌다고 말한다(저절로 따라 올라간다고 하지 않는다)", () => {
+  const i = PUSH.indexOf('if (made.kind === "parent_gone") {');
+  assert.ok(i > 0, "parent_gone 분기를 못 찾았다");
+  const block = PUSH.slice(i, PUSH.indexOf("deferred++; continue;", i));
+  assert.ok(!/자식은 부모가 다시 생긴 뒤|부모가 다시 생기면 그 아래에 만들어진다/.test(block),
+    "parent_gone 이 자식이 저절로 따라 올라간다고 한다 — 실제로는 다음에 볼 때 닫힌다");
+  assert.match(block, /다음에 볼 때 닫힌다/, "parent_gone 이 자식 반출이 닫힌다는 사실을 말하지 않는다");
+});
+
 test("배선 — 부모 조회가 404 이거나 다른 워크스페이스(401 OAUTH_027)면 parent_gone 으로 본다", () => {
   assert.match(PUSH, /if \(isClickupTaskGone\(err\) \|\| isClickupTaskInaccessible\(err\)\) return \{ kind: "gone" \}/,
     "다른 워크스페이스로 옮겨진 부모를 «조회 실패» 로 던져 매 틱 실패한다");

@@ -418,12 +418,14 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
           onHealed: (_ext, listId) => parentId == null ? Promise.resolve() : recordHealedParentList(parentId, listId),
         });
         if (made.kind === "parent_gone") {
-          //  부모 카드가 저쪽에서 지워졌다 — 갱신 경로의 404 와 같은 규율로 부모 연결을 끊는다(pushLinkedUpsert 머리말).
-          //   부모가 네이티브가 되면 이 행은 «부모 미푸시» 로 미뤄지고, 부모가 다시 생기면 그 아래에 만들어진다.
+          //  부모 카드가 저쪽에서 지워졌거나(404) 이 토큰이 못 보는 워크스페이스로 옮겨졌다(401 OAUTH_027) — 갱신 경로의 404 와
+          //   같은 규율로 부모 연결을 끊는다(pushLinkedUpsert 머리말). 이 행은 이번엔 미루고, 다음에 볼 때 부모가 반출 대상도
+          //   반출 대기도 아니므로 위 부모 미반출 분기가 닫는다. 부모가 다시 올라간 뒤 이 자식을 다시 편집하면 그 아래에
+          //   만들어진다(저절로 따라 올라가지 않는다).
           await itemsPool.query(
             `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
                     external_base=NULL, updated_at=now() WHERE id=$1`, [parentId]);
-          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워졌거나 이 워크스페이스에서 볼 수 없어 부모 연결을 끊었다(자식은 부모가 다시 생긴 뒤)");
+          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워졌거나 이 워크스페이스에서 볼 수 없어 부모 연결을 끊었다(이 자식의 반출은 다음에 볼 때 닫힌다 — 부모가 다시 올라간 뒤 다시 편집하면 그 아래에 만들어진다)");
           deferred++; continue;
         }
         if (made.listId !== createList) logger.warn({ project: p.id, parent: parentExt, from: createList, to: made.listId }, "부모 리스트 좌표가 낡아 저쪽 값으로 고쳐 만들었다(ITEM_137)");
