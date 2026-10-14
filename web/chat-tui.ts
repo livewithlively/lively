@@ -245,11 +245,15 @@ export function editSegs(adds: number, dels: number): TuiSeg[] {
 export const langOf = (p: string): string => { const m = /\.([A-Za-z0-9]+)$/.exec(str(p)); return m ? m[1].toLowerCase() : ''; };
 
 // ── 수·시간 ──────────────────────────────────────────────────────────────────────────────
-/** 1234 → `1.2k` (Claude Code 스피너의 토큰 수 꼴). */
+/**
+ * 1234 → `1.2k` · 1,234,567 → `1.2m` — Claude Code 의 토큰 수 글자(실행 파일의 그 함수): en-US 줄임 표기(1000 이상은 소수
+ *  한 자리를 늘 찍고), 소문자로, 처음 나오는 `.0` 을 뗀다(`100.0k` → `100k`, `1.0m` → `1m`).
+ */
+const TOK_BIG = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const TOK_SMALL = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1, minimumFractionDigits: 0 });
 export function fmtTokens(n: number): string {
   const v = Math.max(0, Math.round(Number(n) || 0));
-  if (v < 1000) return String(v);
-  return (v / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return (v >= 1000 ? TOK_BIG : TOK_SMALL).format(v).toLowerCase().replace('.0', '');
 }
 /**
  * 경과 시간 — Claude Code 2.1.299 의 셈을 그대로 옮겼다(실행 파일의 그 함수). 1분 미만은 초를 **내림**(`43s`), 1분부터는 남은 초를
@@ -458,19 +462,35 @@ export function idleHintSegs(tokens: number): TuiSeg[] {
 }
 /** 지금 안내가 서야 하나 — 마지막 턴이 끝난 시각(ms)·문맥 토큰을 안다는 전제. 도는 중이면 호출하는 쪽이 부르지 않는다. */
 export const idleHintDue = (endAt: number, tokens: number, now: number): boolean => tokens >= IDLE_HINT_TOKENS && now - endAt >= IDLE_HINT_MS;
+/** 브라우저 시계가 받는 가장 긴 기다림(2^31-1 ms) — 넘기면 곧바로 울린다. */
+export const TIMER_MAX_MS = 2_147_483_647;
+/**
+ * 화면이 할 일 — 지금 세울까(show), 아니면 몇 ms 뒤에 다시 볼까(wait, null = 볼 일 없음). 모르는 값(끝난 시각·토큰)이 있거나
+ *  도는 중이면 아무것도 하지 않는다. 10만 토큰이 안 되면 시계도 걸지 않는다(Claude Code 도 그때 시계를 걸지 않는다).
+ */
+export function idleHintPlan(endAt: number | null, tokens: number | null, busy: boolean, now: number): { show: boolean; wait: number | null } {
+  if (busy || endAt == null || tokens == null || !Number.isFinite(endAt) || !Number.isFinite(tokens) || tokens < IDLE_HINT_TOKENS) return { show: false, wait: null };
+  if (idleHintDue(endAt, tokens, now)) return { show: true, wait: null };
+  return { show: false, wait: Math.min(TIMER_MAX_MS, Math.max(0, endAt + IDLE_HINT_MS - now)) };
+}
 
 /**
  * 문맥 토큰 셈 — Claude Code 의 그 셈(실행 파일)을 옮겼다. 마지막 «실제» 응답의 사용량(입력 + 캐시 쓰기 + 캐시 읽기 + 출력)을
  *  닻으로 삼고, 닻이 된 응답의 **첫 줄 뒤**에 온 줄들은 글자 수 ÷ 4 로 어림해 더한다. 한 응답은 블록마다 여러 줄로 적히므로 그
- *  응답의 둘째 블록부터 어림에 든다 — 그 셈 그대로라야 터미널과 같은 수가 선다(실측: 550,661 + 98 = `550.8k`, 빼면 `550.7k`).
+ *  응답의 둘째 블록부터 어림에 든다 — 그 셈 그대로라야 터미널과 같은 수가 선다(실측: 550,661 + 99 = `550.8k`, 빼면 `550.7k`).
  *  맥락 압축 경계(compact_boundary)를 지나면 0 에서 다시 센다. 대화 줄을 **앞에서부터 차례로** 먹인다(ctxFeed) — 이전 기록을
  *  위로 붙이는 줄은 먹이지 않는다(닻은 늘 가장 새 쪽에 있다).
  */
-export interface CtxCount { base: number | null; id: string | null; lastId: string | null; est: number }
+export interface CtxCount {
+  base: number | null;     // 닻 응답의 사용량 합(마지막 줄의 값) — 모르면 null, 압축 경계 뒤엔 0
+  id: string | null;       // 닻 응답의 message.id
+  lastId: string | null;   // 가장 최근에 본 응답 줄의 id — 같은 응답이 «이어지는가» 를 가른다(사이에 다른 응답이 끼면 끊긴다)
+  est: number;             // 닻 응답의 첫 줄 뒤 줄들의 어림 합
+}
 export const ctxNew = (): CtxCount => ({ base: null, id: null, lastId: null, est: 0 });
 /** 닻을 모르면(실제 응답이 아직 없다) null — 어림만으로 지어내지 않는다. */
 export const ctxTokens = (s: CtxCount): number | null => (s.base == null ? null : s.base + s.est);
-//  닻이 될 수 없는 응답 — 끊김·거절 안내 글이나 «No response requested.» 로 시작하는 줄(하네스가 적은 것).
+//  닻이 될 수 없는 응답 — 첫 블록이 통째로 끊김·거절 안내 글이거나 «No response requested.» 인 줄(하네스가 적은 것).
 const CTX_SKIP_TEXT = new Set([
   '[Request interrupted by user]',
   '[Request interrupted by user for tool use]',

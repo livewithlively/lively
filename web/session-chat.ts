@@ -1570,11 +1570,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
   }
-  /** #4707 tui — 턴이 끝났다(끊김 포함): 그 시각과 지금까지의 문맥 토큰을 화면에 알린다 — 75분 쉬면 `new task? /clear …` 가 선다. */
-  function idleFrom(o: any): void {
+  /**
+   * #4707 tui — 턴이 끝났다(끊김 포함): 그 시각과 지금까지의 문맥 토큰을 화면에 알린다 — 75분 쉬면 `new task? /clear …` 가 선다.
+   *  끝난 세션엔 세우지 않는다 — 그 안내는 살아 있는 Claude Code 가 그리는 것이고, 끝난 세션엔 /clear 를 칠 자리가 없다.
+   */
+  function idleFrom(o: { timestamp?: unknown }): void {
     if (look !== 'tui') return;
     const at = Date.parse(String(o?.timestamp ?? ''));
-    view.idle(Number.isFinite(at) ? { at, tokens: ctxTokens(ctx) } : null);
+    view.idle(Number.isFinite(at) && !dead() ? { at, tokens: ctxTokens(ctx) } : null);
   }
   // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
   const trail = opts.trail || null;
@@ -2113,6 +2116,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
         curUuid = c.uuid; loadedTo = 0; carry = '';
+        ctx = ctxNew(); view.idle(null);   // #4707 — 새 기록(압축·/clear)은 문맥을 새로 센다. 지난 파일의 «쉬는 동안의 안내» 는 걷는다.
         c = await rawGet(srcPath(src, { from: 0 }));
         if (destroyed) return;
       } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
@@ -2625,7 +2629,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const ls = logSrc();
       if (!destroyed && ls) {
         if (!src && !!t.node && canType()) { void open(); }
-        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
+        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
     destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },

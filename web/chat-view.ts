@@ -26,7 +26,7 @@ import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클�
 import { copyText } from './v2/ctx-menu.js';
 import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 // #4707 tui 문법 — 글자 규칙(chat-tui.ts)과 웹 터미널 설정(lib/term-prefs.ts)은 DOM 없는 모듈이 쥔다. 여기는 칠하기만 한다.
-import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens, groupSegs, groupVisible, IDLE_HINT_MS, IDLE_HINT_TOKENS, idleHintDue, idleHintSegs, isAsyncAgent, mdPlain, newGroup, pickVerb, seedOf, TUI_DIFF_ROWS, TUI_SPIN_FRAMES, tuiCollapse, tuiHighlight, tuiMode, tuiTableLayout, tuiToolHead, tuiToolResult, turnEndSegs, wrapWords, type TuiAlign, type TuiDiffRow, type TuiCollapse, type TuiGroup, type TuiResult, type TuiSeg } from './chat-tui.js';
+import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens, groupSegs, groupVisible, idleHintPlan, idleHintSegs, isAsyncAgent, mdPlain, newGroup, pickVerb, seedOf, TUI_DIFF_ROWS, TUI_SPIN_FRAMES, tuiCollapse, tuiHighlight, tuiMode, tuiTableLayout, tuiToolHead, tuiToolResult, turnEndSegs, wrapWords, type TuiAlign, type TuiDiffRow, type TuiCollapse, type TuiGroup, type TuiResult, type TuiSeg } from './chat-tui.js';
 import { caretShape, isWheelNotch, parseTermPrefs, TERM_PREFS_KEY, termFace, wheelPx, type TermPrefs } from './lib/term-prefs.js';
 import { isDark } from './theme.js';
 
@@ -785,7 +785,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     sticky.addEventListener('click', () => { stickyAsk?.scrollIntoView({ block: 'start' }); });
   }
   //  tui — 쉬는 동안의 안내 한 줄(입력칸 바로 위 · 오른쪽): `new task? /clear to save 550.8k tokens`. 목록 아래 빈 줄 자리에 선다.
-  const idleEl = tui ? el('div', { class: 'tui-idle', hidden: true, title: '오래 쉰 대화예요 — 새 일이면 터미널에서 /clear 로 비우고 시작하면 맥락을 아낍니다.' }) as HTMLElement : null;
+  const idleEl = tui ? el('div', { class: 'tui-idle', hidden: true }) as HTMLElement : null;
   const root = el('div', { class: 'livc-wrap' + (desktop ? ' livc-desktop' : '') + (tui ? ' livc-tui' : '') }, el('div', { class: 'livc-scroller' }, list, sticky ?? undefined, idleEl ?? undefined, jump), opts.askHost ?? undefined, note, footSlot);
   applyFont(root, readFontStep());          // 이 브라우저가 고른 배율로 열린다(다음에 와도 그대로)
   host.replaceChildren(root);
@@ -927,12 +927,15 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   function paintIdle(): void {
     if (!idleEl) return;
     if (idleTimer != null) { clearTimeout(idleTimer); idleTimer = null; }
-    const known = !isBusy && idleAt != null && idleTok != null;
-    const show = known && idleHintDue(idleAt!, idleTok!, Date.now());
-    if (show) idleEl.replaceChildren(...segEls(idleHintSegs(idleTok!)));
-    idleEl.hidden = !show;
-    if (known && !show && idleTok! >= IDLE_HINT_TOKENS) idleTimer = window.setTimeout(paintIdle, Math.min(2_147_483_647, Math.max(0, idleAt! + IDLE_HINT_MS - Date.now())));
+    const tok = idleTok;
+    const plan = idleHintPlan(idleAt, tok, isBusy, Date.now());
+    if (plan.show && tok != null) idleEl.replaceChildren(...segEls(idleHintSegs(tok)));
+    idleEl.hidden = !plan.show;
+    if (plan.wait != null) idleTimer = window.setTimeout(paintIdle, plan.wait);
   }
+  //  긴 시계 하나에만 기대지 않는다 — 노트북을 덮었다 연 탭은 잠든 동안의 시간이 시계에 안 잡혀 안내가 늦게 선다. 다시 보일 때 다시 잰다.
+  const onIdleVis = (): void => { if (!document.hidden) paintIdle(); };
+  if (tui) document.addEventListener('visibilitychange', onIdleVis);
 
   const busy = (on: boolean): void => {
     isBusy = on;
@@ -1510,6 +1513,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       try { (document as Document & { fonts?: FontFaceSet }).fonts?.removeEventListener('loadingdone', onFontsDone); } catch { /* 구형 */ }
       if (tui) {
         if (idleTimer != null) clearTimeout(idleTimer);
+        document.removeEventListener('visibilitychange', onIdleVis);
         wideObs?.disconnect();
         tableRo?.disconnect();
         document.removeEventListener('keydown', onTuiKey);
