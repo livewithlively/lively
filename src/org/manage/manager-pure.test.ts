@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsLlm, MANAGER_KIND_LABEL, type ManagerKind } from "../store/managers.js";
-import { applyAction, statusForManagerResults, type ManagerRunResult } from "./run-manager.js";
+import { applyAction, repoEnqueueFailure, statusForManagerResults, type ManagerRunResult, type RepoEnqueue } from "./run-manager.js";
 import { contradictionCandidateSql, CONTRADICTION_NEIGHBORS, CONTRADICTION_PLANNER_OFF } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 
@@ -204,6 +204,34 @@ await t("관리기 결과 → 크론 status 표", () => {
   assert.equal(statusForManagerResults([{ skipped: "닮은 지식 쌍 없음" } as Pick<ManagerRunResult, "error">, E]), "warn");
 });
 
+// ══ 코드 비교 관리기 — 레포별 접수 결과 → error / partial_error ══
+//  확정 실패 = error 인데 위탁 id 가 없는 레포(태스크조차 못 만들었다). id 가 있는 error 는 배정 단계 실패(적합 노드 없음 등)라
+//  태스크가 큐에 남아 노드가 오면 돈다 — 그걸 partial_error 에 넣으면 위탁이 결국 done 이어도 감시가 회차를 실패로 확정한다.
+await t("레포별 접수 결과 → error / partial_error 표", () => {
+  const ran = (repo: string, id: number): RepoEnqueue => ({ repo, status: "ok", task_id: id });
+  //  _headless.enqueueHeadlessTask 의 미배정 반환 모양 — 사유는 error 가 아니라 reason 에 실린다.
+  const queued = (repo: string, id: number): RepoEnqueue => ({ repo, status: "error", task_id: id, queued: false, assign_code: "no_nodes", reason: "적합 노드 없음" });
+  const lost = (repo: string): RepoEnqueue => ({ repo, status: "error", error: "위탁 태스크 생성 실패: x" });
+  const rows: [RepoEnqueue[], { error?: RegExp; partial_error?: RegExp }, string][] = [
+    [[ran("r1", 1), ran("r2", 2)], {}, "전부 접수"],
+    [[ran("r1", 1), queued("r2", 2)], {}, "일부가 배정 단계 실패 — 큐에 남았으니 감시가 id 로 판정한다"],
+    [[ran("r1", 1), lost("r2")], { partial_error: /^레포 1\/2 접수 실패: r2: 위탁 태스크 생성 실패: x$/ }, "일부 확정 실패"],
+    [[queued("r1", 1)], { error: /^레포 1\/1 접수 실패: r1: 적합 노드 없음$/ }, "하나뿐인 레포가 배정 단계 실패 — 전멸은 error, 사유는 reason 에서"],
+    [[lost("r1"), lost("r2")], { error: /^레포 2\/2 접수 실패: r1: .* · r2: / }, "전부 확정 실패 — error 하나로 충분하다(id 가 없어 감시가 확정한다)"],
+    [[queued("r1", 1), lost("r2")], { error: /^레포 2\/2 /, partial_error: /^레포 1\/2 접수 실패: r2: / },
+      "전멸인데 섞임 — 감시가 r1 의 id 를 기다리는 동안 r2 의 실패가 묻히지 않게 따로 확정한다"],
+  ];
+  for (const [input, want, why] of rows) {
+    const got = repoEnqueueFailure(input);
+    assert.deepEqual(Object.keys(got).sort(), Object.keys(want).sort(), why);
+    for (const k of ["error", "partial_error"] as const) if (want[k]) assert.match(String(got[k]), want[k], why);
+  }
+  //  전멸이면 크론 status 는 error — 모순 관리기의 접수 실패(task_id 가 있어도 error)와 같은 낱말이다.
+  assert.equal(statusForManagerResults([repoEnqueueFailure([queued("r1", 1)])]), "error");
+  assert.equal(statusForManagerResults([repoEnqueueFailure([ran("r1", 1), lost("r2")])]), "warn");
+  assert.equal(statusForManagerResults([repoEnqueueFailure([ran("r1", 1), queued("r2", 2)])]), "ok");
+});
+
 await t("크론 액션이 관리기 결과로 status 를 정한다", () => {
   const act = readSrc("src/scheduler/actions/manage.ts");
   assert.match(act, /status: statusForManagerResults\(out\), summary: \{ managers: out \}/,
@@ -245,10 +273,12 @@ console.log(`\n${pass} passed`);
   assert.deepEqual([...CONTRADICTION_PLANNER_OFF].sort(), ["enable_bitmapscan", "enable_seqscan", "enable_sort"],
     "seqscan·bitmapscan·sort 셋 다 꺼야 HNSW 를 고른다(seqscan 만 끄면 lifecycle 비트맵 스캔으로 간다)");
   assert.ok(!/client\.query\(`SET hnsw/.test(DET), "세션 SET 은 풀 커넥션에 새어 다른 쿼리의 실행계획을 바꾼다");
-  assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\) \};/,
-    "모순 관리기 접수 실패가 결과에 error 로 안 실려 크론 상태·감시가 ok 로 읽는다");
-  assert.match(RUN, /\.\.\.\(failMsg \? \(taskIds\.length \? \{ partial_error: failMsg \} : \{ error: failMsg \}\) : \{\}\)/,
-    "코드 비교 관리기의 레포 접수 실패가 결과에 안 실리면 상태·감시가 ok 로 읽는다(전멸=error, 일부=partial_error)");
+  //  접수 실패는 error 로 싣되, 태스크가 이미 만들어졌으면(배정 단계 실패) id 도 싣는다 — 버리면 감시가 큐에 남은 위탁이
+  //   나중에 done 이 돼도 회차를 실패로 확정한다(cron-watch delegatedWork 의 task_id+error 규칙).
+  assert.match(RUN, /if \(r\.status === "error"\) return \{ \.\.\.base, candidates: cands\.length, error: errorOf\(r\.summary\), \.\.\.\(taskId \? \{ task_id: taskId \} : \{\}\) \};/,
+    "모순 관리기 접수 실패가 결과에 error·task_id 로 안 실린다(안 실리면 상태·감시가 ok 로 읽고, id 를 버리면 감시가 위탁 결과를 못 본다)");
+  assert.match(RUN, /\.\.\.repoEnqueueFailure\(out\) \};/,
+    "코드 비교 관리기의 레포 접수 실패가 결과에 안 실리면 상태·감시가 ok 로 읽는다(표는 repoEnqueueFailure 시험)");
   assert.ok(!/failed_repos/.test(RUN), "아무도 읽지 않는 칸에 실패를 실어 다시 묻는다");
   console.log("ok  배선 — ef_search·접수 실패 노출");
 }

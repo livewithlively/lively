@@ -124,7 +124,7 @@ const isTaskId = (v: unknown): v is number | string =>
  *  · 레인 목록(`DELEGATION_LISTS`)의 각 항목 — `task_id`, 여러 레포로 갈라 낸 관리기는 `task_ids`.
  *  · 목록에서 id 를 못 찾으면 최상위 `task_id`(단일 위탁 잡의 접수·skip 요약, 또는 되먹임이 덧댄 것).
  *  · 확정된 실패로 따로 세는 것: id 없이 `error` 만 있는 항목(접수 전 실패), 그리고 `partial_error`
- *    (코드 비교 관리기가 레포 몇 개만 접수에 실패 — 남은 위탁이 done 이어도 그 레포는 빠졌다).
+ *    (코드 비교 관리기의 레포 몇 개가 태스크조차 못 만들었다 — 남은 위탁이 done 이어도 그 레포는 빠졌다. org/manage/run-manager.ts repoEnqueueFailure).
  *    id 와 `error` 가 같이 있는 항목은 접수 후 배정 오류(scheduler/actions/_headless.ts 의 배치 오류)라 태스크가 큐에
  *    남아 나중에 돌 수 있다 — 실패로 확정하지 않고 그 id 의 결과로 판정한다.
  */

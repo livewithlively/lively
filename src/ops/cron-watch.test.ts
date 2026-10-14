@@ -88,6 +88,16 @@ const st = (o: Record<string, string>): Map<string, BatchTaskState> => new Map(O
   const assignErr = { batches: [{ distiller: "A", error: "배치 오류: x", task_id: 3 }] };
   assert.deepEqual(delegatedWork(assignErr), { ids: ["3"], entryErrors: [] });
   assert.equal(cronPhaseOf("ok", assignErr, st({ 3: "done" })), "ok", "배정 오류 뒤 결국 돌았으면 정상");
+  //  관리기도 같은 규칙이다 — 배정 단계에서 실패한 모순·코드 비교 관리기는 error 와 id 를 함께 싣는다(run-manager.ts).
+  //   잡 status 는 error(전멸)라 브레이커는 세지만, 감시는 큐에 남은 그 위탁의 결과로 판정한다.
+  const mgrQueued = { managers: [
+    { manager: "m1", kind: "contradiction", candidates: 3, error: "적합 노드 없음", task_id: 77 },
+    { manager: "m2", kind: "code_drift", candidates: 2, task_ids: [78], error: "레포 1/1 접수 실패: r1: 적합 노드 없음" },
+  ] };
+  assert.deepEqual(delegatedWork(mgrQueued), { ids: ["77", "78"], entryErrors: [] });
+  assert.equal(cronPhaseOf("error", mgrQueued, st({ 77: "done", 78: "done" })), "ok", "큐에 남았던 관리기 위탁이 결국 돌았으면 정상");
+  assert.equal(cronPhaseOf("error", mgrQueued, st({ 77: "queued", 78: "done" })), null, "아직 큐에 있으면 판정 보류");
+  assert.equal(cronPhaseOf("error", mgrQueued, st({ 77: "failed", 78: "done" })), "failing", "끝내 못 돌았으면 실패");
   assert.equal(delegatedPhaseOf({ ids: ["1"], entryErrors: ["x"] }, st({ 1: "running" })), "failing",
     "확정된 실패가 있으면 다른 레인을 기다리지 않는다");
 }

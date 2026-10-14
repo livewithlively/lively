@@ -22,19 +22,21 @@ export interface ManagerRunResult {
   /** 레포별로 갈라 낸 위탁들(코드 비교). */
   task_ids?: number[];
   skipped?: string; error?: string;
-  /** 레포별 위탁 중 일부만 접수에 실패한 사유(코드 비교) — 나머지 레포는 돌았으므로 error 와 칸을 나눈다. */
+  /** 레포별 위탁 중 일부 레포가 태스크조차 못 만든 사유(코드 비교) — 나머지 레포는 돌았으므로 error 와 칸을 나눈다(repoEnqueueFailure). */
   partial_error?: string;
 }
 
-/** 접수 결과 요약에서 오류 문장을 꺼낸다(없으면 기본 문구). */
+/** 접수 결과 요약에서 실패 사유 한 줄 — 미배정 요약은 error 가 아니라 reason 에 싣는다(_headless.ts). 둘 다 없으면 기본 문구. */
 function errorOf(summary: unknown): string {
-  const e = (summary as { error?: unknown } | null | undefined)?.error;
-  return typeof e === "string" && e.trim() ? e : "헤드리스 접수 실패";
+  const s = (summary ?? {}) as { error?: unknown; reason?: unknown };
+  for (const v of [s.error, s.reason]) if (typeof v === "string" && v.trim()) return v;
+  return "헤드리스 접수 실패";
 }
 
 /**
  * 관리기 결과 묶음 → 크론 잡 status(순수).
- *  · 전멸(모든 관리기가 error 이고 접수한 위탁도 0) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
+ *  · 전멸(모든 관리기가 error — 배정 단계에서 실패해 태스크가 큐에 남은 경우도 포함) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
+ *    헤드리스 접수 잡이 접수 status 를 그대로 내는 것(_headless.ts)과 같은 의미다. 감시는 id 가 있으면 그 결과로 따로 판정한다.
  *  · 일부만 실패 → `warn` — 잡은 돌았고 산출물에 실패가 섞였다는 뜻(카나리 액션과 같은 관례). 관리기 하나 안에서
  *    레포 일부만 접수에 실패한 경우(partial_error)도 여기다 — error 로 올리면 레포 하나가
  *    임계 주수만큼 계속 깨질 때 나머지 레포 비교까지 브레이커가 끈다. 브레이커는 이걸
@@ -59,6 +61,31 @@ export function statusForManagerResults(results: readonly Pick<ManagerRunResult,
 function taskIdOf(summary: unknown): number | undefined {
   const n = Number((summary as Record<string, unknown> | null)?.task_id);
   return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
+/** 코드 비교 관리기의 레포 하나 접수 결과 — 후보 수와 접수 요약(task_id·error·reason …)을 펼쳐 싣는다. */
+export interface RepoEnqueue { repo?: string; status?: string; task_id?: unknown; error?: unknown; reason?: unknown; [k: string]: unknown }
+
+/**
+ * 레포별 접수 결과 → 관리기 결과에 실을 실패 칸(순수).
+ *  ★ 확정 실패 = status error 인데 위탁 id 가 없는 레포 — 태스크조차 못 만들어(실행 하네스 해소·태스크 생성 실패) 감시가
+ *   기다릴 id 도 없다. id 가 있는 error 는 **배정 단계** 실패(적합 노드 없음 등)라 태스크가 큐에 남아 노드가 오면 돈다 —
+ *   확정하지 않고 크론 감시가 그 id 의 결과로 판정한다(ops/cron-watch.ts delegatedWork 의 task_id+error 규칙).
+ *  · 전 레포 error → `error`(전멸 — 모순 관리기의 접수 실패와 같은 칸). id 가 있으면 task_ids 로 함께 실린다.
+ *  · 확정 실패가 일부 → `partial_error`(감시가 실패로 센다). 전멸인데 확정 실패가 섞였으면 둘 다 싣는다 —
+ *    id 있는 error 를 감시가 기다리는 동안 id 없는 레포의 실패가 묻히지 않게.
+ */
+export function repoEnqueueFailure(repos: readonly RepoEnqueue[]): Pick<ManagerRunResult, "error" | "partial_error"> {
+  const failed = repos.filter((r) => r.status === "error");
+  if (!failed.length) return {};
+  const lost = failed.filter((r) => !taskIdOf(r));
+  const msg = (xs: readonly RepoEnqueue[]): string =>
+    `레포 ${xs.length}/${repos.length} 접수 실패: ` + xs.map((r) => `${r.repo}: ${errorOf(r)}`).join(" · ");
+  const all = failed.length === repos.length;
+  return {
+    ...(all ? { error: msg(failed) } : {}),
+    ...(lost.length && !(all && lost.length === failed.length) ? { partial_error: msg(lost) } : {}),
+  };
 }
 
 /**
@@ -106,10 +133,11 @@ export async function runManager(
         extra: { manager: m.key, candidates: cands.length },
       });
       await recordManagerRun(m.id, r.status, r.summary);
-      //  접수 실패는 던지지 않고 status 로 돌아온다(_headless.enqueueHeadlessTask) — error 로 싣지 않으면
-      //   statusForManagerResults 와 크론 감시가 둘 다 ok 로 읽는다.
-      if (r.status === "error") return { ...base, candidates: cands.length, error: errorOf(r.summary) };
       const taskId = taskIdOf(r.summary);
+      //  접수 실패는 던지지 않고 status 로 돌아온다(_headless.enqueueHeadlessTask) — error 로 싣지 않으면
+      //   statusForManagerResults 와 크론 감시가 둘 다 ok 로 읽는다. 태스크가 이미 만들어졌으면(배정 단계 실패 — 큐에
+      //   남아 노드가 오면 돈다) id 도 함께 싣는다: 감시는 id 있는 error 를 확정하지 않고 그 위탁의 결과로 판정한다.
+      if (r.status === "error") return { ...base, candidates: cands.length, error: errorOf(r.summary), ...(taskId ? { task_id: taskId } : {}) };
       return { ...base, candidates: cands.length, enqueued: true, ...(taskId ? { task_id: taskId } : {}) };
     }
 
@@ -145,7 +173,7 @@ export async function runManager(
     for (const c of cands) slot(c.repos[0]).cats.push(c);
     for (const d of docs) slot(d.repos[0]).docs.push(d);
 
-    const out: unknown[] = [];
+    const out: RepoEnqueue[] = [];
     const taskIds: number[] = [];
     for (const [repo, group] of byRepo) {
       const n = group.cats.length + group.docs.length;
@@ -158,16 +186,12 @@ export async function runManager(
       if (taskId) taskIds.push(taskId);
     }
     //  레포별 접수 실패를 결과에 싣는다 — 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 감시(cron-watch
-    //   delegatedWork)가 실패로 센다. 전부 실패면 error, 일부면 partial_error 다: 위탁 id 와 error 가 같이 실린 항목은
-    //   «접수 후 배정 오류»(scheduler/actions/_headless.ts 의 배치 오류)라 감시가 id 의 결과를 기다려야 하므로 칸을 나눈다.
-    const failedRepos = out.filter((o) => (o as { status?: string }).status === "error");
-    await recordManagerRun(m.id, failedRepos.length ? "error" : "ok", { repos: out });
-    const failMsg = failedRepos.length
-      ? `레포 ${failedRepos.length}/${out.length} 접수 실패: ` + failedRepos.map((o) => `${(o as { repo?: string }).repo}: ${errorOf(o)}`).join(" · ")
-      : null;
+    //   delegatedWork)가 실패로 센다. 무엇을 어느 칸에 싣는지(전멸=error · 태스크도 못 만든 레포=partial_error ·
+    //   큐에 남은 배정 실패는 id 로 판정)는 repoEnqueueFailure 머리말.
+    await recordManagerRun(m.id, out.some((o) => o.status === "error") ? "error" : "ok", { repos: out });
     return { ...base, candidates: cands.length + docs.length,
       ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}),
-      ...(failMsg ? (taskIds.length ? { partial_error: failMsg } : { error: failMsg }) : {}) };
+      ...repoEnqueueFailure(out) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });
