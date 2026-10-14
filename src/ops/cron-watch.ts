@@ -82,9 +82,9 @@ let ticking = false;
  *  말하지 않은 것»을 정상으로 넘기면 감시가 무의미해진다. (자동 정지 판정과 방향이 반대인 것은 의도다 —
  *  저쪽은 잡을 끄므로 보수적이어야 하고, 이쪽은 알릴 뿐이다.)
  *
- * `warn` 은 정상으로 본다 — «잡은 돌았고 산출물(관측)에 경고가 있다» 는 뜻이다. 지금 이 낱말을 쓰는 잡은
- *  카나리(scheduler/actions/canary.ts)뿐이고, 그 경고는 카나리가 연속 실패 임계를 두고 **스스로** 알린다
- *  (org/canary/run.ts). 여기서 실패로 읽으면 그 임계를 건너뛰어, 상류가 한 번 흔들릴 때마다 실패·복구 알림이
+ * `warn` 은 정상으로 본다 — «잡은 돌았고 산출물(관측)에 경고가 있다» 는 뜻이다. 이 낱말을 쓰는 액션은
+ *  `grep -rn '"warn"' src/scheduler/actions src/org/manage` 로 찾는다. 카나리의 경고는 카나리가 연속 실패 임계를 두고
+ *  **스스로** 알리고(org/canary/run.ts), 관리기 일부 실패는 아래 delegatedWork 가 항목 error 로 따로 잡는다. 여기서 실패로 읽으면 그 임계를 건너뛰어, 상류가 한 번 흔들릴 때마다 실패·복구 알림이
  *  한 쌍씩 나가고 카나리 경보와도 겹친다.
  *
  * `skipped` 도 관측 없음이다(그 회차는 실행되지 않았다). 실제로 이 값이 저장되는 곳은
@@ -111,7 +111,8 @@ export const DELEGATION_LISTS = ["batches", "classifiers", "managers"] as const;
 export interface DelegatedWork {
   /** 그 회차의 위탁 id — 중첩 skip 으로 이전 회차의 위탁을 가리키는 레인도 그 id 가 실린다(그게 끝나야 회차가 끝난다). */
   ids: string[];
-  /** 위탁을 만들기도 전에 실패한 레인의 사유(실행 멤버 없음·하네스 해소 실패·태스크 생성 실패 등). */
+  /** 레인 항목에 실린 실패 사유 — 위탁을 만들기도 전에 실패했거나(실행 멤버 없음·하네스 해소 실패·태스크 생성 실패 등)
+   *   일부만 접수했다(레포별 위탁 중 일부 실패). */
   entryErrors: string[];
 }
 
@@ -122,7 +123,10 @@ const isTaskId = (v: unknown): v is number | string =>
  * 요약에서 이 회차의 위탁을 뽑는다(순수). 위탁을 내지 않는 잡이면 null.
  *  · 레인 목록(`DELEGATION_LISTS`)의 각 항목 — `task_id`, 여러 레포로 갈라 낸 관리기는 `task_ids`.
  *  · 목록에서 id 를 못 찾으면 최상위 `task_id`(단일 위탁 잡의 접수·skip 요약, 또는 되먹임이 덧댄 것).
- *  · id 없이 `error` 만 있는 레인 항목은 «접수 전 실패» 로 따로 센다.
+ *  · 확정된 실패로 따로 세는 것: id 없이 `error` 만 있는 항목(접수 전 실패), 그리고 `partial_error`
+ *    (코드 비교 관리기의 레포 몇 개가 태스크조차 못 만들었다 — 남은 위탁이 done 이어도 그 레포는 빠졌다. org/manage/run-manager.ts repoEnqueueFailure).
+ *    id 와 `error` 가 같이 있는 항목은 접수 후 배정 오류(scheduler/actions/_headless.ts 의 배치 오류)라 태스크가 큐에
+ *    남아 나중에 돌 수 있다 — 실패로 확정하지 않고 그 id 의 결과로 판정한다.
  */
 export function delegatedWork(summary: unknown): DelegatedWork | null {
   if (!summary || typeof summary !== "object") return null;
@@ -136,6 +140,7 @@ export function delegatedWork(summary: unknown): DelegatedWork | null {
     const own = [o.task_id, ...(Array.isArray(o.task_ids) ? o.task_ids : [])].filter(isTaskId).map(String);
     ids.push(...own);
     if (!own.length && typeof o.error === "string" && o.error.trim()) entryErrors.push(o.error);
+    if (typeof o.partial_error === "string" && o.partial_error.trim()) entryErrors.push(o.partial_error);
   }
   if (!ids.length && isTaskId(s.task_id)) ids.push(String(s.task_id));
   if (!ids.length && !entryErrors.length) return null;

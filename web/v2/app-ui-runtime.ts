@@ -32,6 +32,8 @@
 //    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
 //                                                [{ id, label }] 는 그 메뉴 맨 위에 선다 — 사람이 그걸 고르면 { picked: id }, 호스트 것을 고르거나
 //                                                닫으면 { picked: null }. 못 여는 자리(인사의 capabilities.menu 가 false)면 reject(-32601).
+//    await lively.ui.expand()                → 이 앱을 화면 가득(사이드바 없이) 띄운다(#4629). 인사의 capabilities.expand 가 true 인 자리(세션의 앱 칸)에서만 —
+//                                                이미 크게 뜬 화면에서는 false 다(닫기 · Esc 로 돌아간다). 못 하는 자리면 reject(-32601).
 //    (자동) 글 상자에 초점이 들고 나면 호스트에 ui/typing { on } 을 보낸다(#4443). 앱이 할 일은 없다. 폰 서랍에선 쓰는 동안 아래 탭 바가 걷힌다.
 //    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
 //                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
@@ -145,6 +147,7 @@ export const APP_RUNTIME_JS = `
       onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
       chrome: function (opts) { return post('ui/chrome', { head: !(opts && opts.head === false) }); },
       openMenu: function (items, at) { return post('ui/menu', { items: items || [], x: at && at.x, y: at && at.y }); },
+      expand: function () { return post('ui/expand', {}); },
       insets: { top: 0, right: 0, bottom: 0, left: 0 },
       onInsets: function (cb) { return subscribe('insets', cb); }
     },

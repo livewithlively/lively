@@ -290,7 +290,8 @@
                 "inbox",
                 "sources",
                 "taxonomy",
-                "learn"
+                "learn",
+                "builder"
               ]
             },
             "route": {

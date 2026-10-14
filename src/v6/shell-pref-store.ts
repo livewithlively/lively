@@ -40,6 +40,7 @@ export const SHELL_PREF_STORES: Readonly<Record<string, ShellPrefKind>> = {
   lively_v2_side_pin: "list",         // 프로젝트 고정
   lively_v2_side_dismissed: "map",    // × 로 치운 행 → 치울 때의 상태(그 상태가 바뀌면 다시 올라온다)
   lively_v2_side_group: "str",        // 묶는 축('proj' = 프로젝트로 묶기)
+  lively_v2_side_invited: "str",      // #3870 홈 「초대받은 세션」 층('off' = 끔 · 없으면 켬)
   lively_v2_side_grpclosed: "list",   // 접어 둔 프로젝트 그룹
   lively_v2_side_grpopened: "list",   // 펴 둔 프로젝트 그룹
   lively_v2_opened: "list",           // 펼쳐 둔 프로젝트

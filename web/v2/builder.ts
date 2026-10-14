@@ -1,0 +1,253 @@
+// v2/builder.ts — **앱빌더**(#4632, 원준 2026-10-14 «앱빌더라는 앱을 하나 새로 만들자 … 앱을 만드는 과정 자체도 앱빌더 안에서»).
+//
+//  셸이 직접 그리는 빌트인 앱(apps/builtin/builder · system.renderer 'builder' · `#/builder`). 앱 찾기 「기본 앱」 묶음의 타일이 문이다.
+//   · 목록: 만들던 앱(이어서) · 내가 만든 앱(고치기 · 배포 설정) · 팀원이 만든 앱(사본 · 원본 고치기) · [+ 새 앱]
+//   · 만들기: 「+ 새 앱」 · 「이어서」 · 「고치기」 는 **이 창 안에** 앱 만들기 여섯 단계(app-studio.ts)를 세운다 — 머리줄에 「앱빌더 ›」.
+//     닫으면 목록으로 돌아온다. 주소가 정본: #/builder/new · #/builder/s/<세션> · #/builder/app/<앱>?how=edit|copy (lib/builder-flow.ts)
+//   · 배포 설정: 쓰는 자리(매니페스트 studio.place) · 켜 둠(/apps/:id/enabled) · 앱 찾기 격자 노출(pad-hidden) · 판 되돌리기 · 지우기.
+//     「나만」(공개 범위)은 서버에 칸이 없어 아직 못 고른다 — 자리만 잡아 두고 그렇다고 말한다.
+//  「만들던 앱」 은 이 브라우저의 기록(app-studio STUDIO_KEY)과 앱빌딩 세션(이름 꼴 · 앱빌더 프로젝트) · 매니페스트의 build_session 으로 모은다 —
+//   다른 컴퓨터에서 만들던 것도 세션으로는 보이고, 누르면 세션 이름 · 앱으로 되살려 이어 간다.
+import { api, el, toast } from '../core.js';
+import { icon } from './icons.js';
+import { appGlassIcon } from './glass-icon.js';
+import { fetchAppVersions, revertApp } from './app-versions.js';
+import { closeAppStudio, dropStudioRec, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecs } from './app-studio.js';
+import { readPadHidden, togglePadHidden } from './apps.js';
+import { padTileId } from '../lib/pad-hidden.js';
+import { PLACE, type StudioPlace } from '../lib/studio-flow.js';
+import { builderRoute, builderSessionWhat, draftStageText, isBuilderSession, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+
+export interface BuilderEnv {
+  projects: () => ReadonlyArray<{ id: number; name: string }>;
+  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number }>;
+}
+/** 앱 한 줄 — /api/ui/apps 의 행을 앱빌더가 보는 만큼만. 꺼진 앱도 든다(런치패드용 listSessionApps 는 켜진 것만 준다). */
+interface BApp {
+  id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean;
+  studio: { origin?: { id: string; title: string; by: string }; made_by?: string; place?: string; build_session?: string; card?: unknown } | null;
+}
+async function listAllApps(): Promise<BApp[]> {
+  try {
+    const out: any = await api('/api/ui/apps');
+    const rows: any[] = Array.isArray(out?.apps) ? out.apps : [];
+    return rows.filter((a) => a && a.status === 'active').map((a) => ({
+      id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'), enabled: a.enabled !== false,
+      installedBy: String(a.installed_by || ''), installedAt: (() => { const t = Date.parse(String(a.installed_at || '')); return Number.isFinite(t) ? t : 0; })(),
+      hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0), canEdit: a.can_edit === true,
+      builtin: !!(a.source && a.source.kind === 'builtin'), versionNo: Number(a.current_version_no) || 0,
+      hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
+      studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
+    }));
+  } catch (_) { return []; }
+}
+const placeOf = (s: BApp['studio']): StudioPlace | '' => (s && (s.place === 'side' || s.place === 'full' || s.place === 'both') ? s.place : '');
+const when = (ms: number): string => {
+  if (!ms) return ''; const d = new Date(ms); const now = new Date();
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  return d.toDateString() === now.toDateString() ? '오늘 ' + hm : (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
+};
+
+interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
+const views = new WeakMap<HTMLElement, View>();
+//  같은 창 안의 이동(#/builder ↔ #/builder/new …)은 셸이 다시 그리지 않는다(routeKey 가 같다 — tabs.ts) — 가이드 · 자료 · 분류체계처럼 여기서 hashchange 를 듣는다.
+let mounted: { host: HTMLElement; env: BuilderEnv } | null = null;
+let lastDrawn = '';
+/** 주소가 바뀌었을 때 앱빌더가 할 일. 그렸으면 true. */
+export function builderOnHash(hash: string): boolean {
+  if (!mounted) return false;
+  if (!mounted.host.isConnected) { mounted = null; return false; }
+  if (hash === lastDrawn) return false;
+  const h = String(hash || '').replace(/^#\/?/, '');
+  const q = h.indexOf('?'); const segs = (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
+  if (segs[0] !== 'builder') return false;   // 앱빌더를 떠나는 이동은 셸이 그린다
+  const v = views.get(mounted.host); if (!v || !mounted.host.contains(v.root)) { mounted = null; return false; }
+  renderBuilderApp(mounted.host, segs, new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''), mounted.env);
+  return true;
+}
+if (typeof window !== 'undefined') window.addEventListener('hashchange', () => { builderOnHash(location.hash); });
+
+export function builderTabTitleFor(segs: readonly string[], params: { get(k: string): string | null }): string {
+  const w = parseBuilderRoute(segs, params);
+  return w.view === 'new' ? '앱빌더 · 새 앱' : w.view === 'resume' ? '앱빌더 · 이어서' : w.view === 'app' ? (w.how === 'copy' ? '앱빌더 · 사본' : '앱빌더 · 고치기') : '앱빌더';
+}
+
+/** 앱빌더를 그린다 — 주소가 정본. 목록이면 목록을 다시 읽고, 만들기 주소면 그 자리에 앱 만들기 화면을 세운다. */
+export function renderBuilderApp(host: HTMLElement, segs: readonly string[], params: { get(k: string): string | null }, env: BuilderEnv): void {
+  const where = parseBuilderRoute(segs, params);
+  mounted = { host, env }; lastDrawn = typeof location !== 'undefined' ? location.hash : '';
+  let v = views.get(host) || null;
+  if (!v || !host.contains(v.root)) {
+    v = build(env); views.set(host, v); host.replaceChildren(v.root);
+    //  창이 닫혀 뿌리가 떨어지면 앱 만들기(폴링 · 대화)를 거둔다 — 안 거두면 떨어진 화면이 계속 서버를 두드린다.
+    const vv = v;
+    vv.watch = window.setInterval(() => { if (!vv.root.isConnected) { window.clearInterval(vv.watch); if (vv.studioKey) { vv.studioKey = ''; closeAppStudio(); } } }, 2000);
+  }
+  if (where.view === 'list') {
+    if (v.studioKey) { v.studioKey = ''; closeAppStudio(); }
+    v.stage.hidden = true; v.top.hidden = false; v.body.hidden = false;
+    void paintList(v, env);
+  } else {
+    v.top.hidden = true; v.body.hidden = true; v.stage.hidden = false;
+    openStudio(v, where, env);
+  }
+}
+
+function build(env: BuilderEnv): View {
+  const top = el('div', { class: 'v2-bld-top' });
+  const list = el('div', { class: 'v2-bld-list' });
+  const panel = el('div', { class: 'v2-bld-panel' });
+  const body = el('div', { class: 'v2-bld-body' }, list, panel);
+  const stage = el('div', { class: 'v2-bld-stage', hidden: true });
+  const root = el('div', { class: 'v2-bld' }, top, body, stage);
+  const v: View = { root, top, body, list, panel, stage, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0 };
+  void env;
+  return v;
+}
+
+// ── 만들기 — 이 창 안에 앱 만들기 화면을 세운다 ──
+function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
+  const key = where.view + ':' + where.id + ':' + where.how;
+  if (v.studioKey === key && v.stage.querySelector('.v2-studio')) return;   // 같은 자리를 다시 그리는 것(해시 재적용) — 만들던 화면을 그대로 둔다
+  v.studioKey = key;
+  const opts = { host: v.stage, onClose: () => {
+    v.studioKey = '';
+    //  닫기 = 목록으로. 이미 다른 데로 갔으면(창 닫힘 · 다른 주소) 건드리지 않는다.
+    if (/^#\/builder\/(new|s|app)(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('list');
+  } };
+  if (where.view === 'new') { openAppStudio(null, opts); return; }
+  if (where.view === 'resume') {
+    const rec = studioRecs().find((r) => r.sid === where.id);
+    if (rec) { openAppStudio({ sid: where.id }, opts); return; }
+    //  이 브라우저에 기록이 없는 앱빌딩 세션 — 세션 이름과(있으면) 그 세션이 만든 앱으로 되살린다.
+    const s = env.sessions().find((x) => x.id === where.id);
+    void listAllApps().then((apps) => {
+      if (v.studioKey !== key) return;
+      const a = apps.find((x) => x.studio && x.studio.build_session === where.id) || null;
+      const what = s ? builderSessionWhat(s.label) : '';
+      if (!what && !a) { toast('그 세션의 기록을 찾을 수 없어요 — 새로 만들어요'); location.hash = builderRoute('new'); return; }
+      openAppStudio({ sid: where.id, what, appId: a ? a.id : '', title: a ? a.title : '' }, opts);
+    });
+    return;
+  }
+  void listAllApps().then((apps) => {
+    if (v.studioKey !== key) return;
+    const a = apps.find((x) => x.id === where.id);
+    if (!a) { toast('그 앱을 찾을 수 없어요'); location.hash = builderRoute('list'); return; }
+    let how = where.how;
+    if (how === 'edit' && !a.canEdit) { how = 'copy'; toast('이 앱은 지정한 사람만 고칠 수 있어요 — 내 사본을 떠서 고쳐요'); }
+    void openAppStudioFor({ id: a.id, title: a.title, by: a.installedBy, place: placeOf(a.studio) || undefined }, how, opts);
+  });
+}
+
+// ── 목록 ──
+interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; at: number; local: boolean }
+async function paintList(v: View, env: BuilderEnv): Promise<void> {
+  const seq = ++v.seq;
+  v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
+  const [apps, m] = await Promise.all([listAllApps(), studioMe()]);
+  if (seq !== v.seq || !v.root.isConnected) return;
+  const projName = (pid: number | null): string => { const p = pid ? env.projects().find((x) => x.id === pid) : null; return p ? p.name : ''; };
+  // 만들던 앱 — 이 브라우저의 기록 + 앱빌딩 세션(기록이 없어도) · 다 만든 것은 뺀다
+  const recs = studioRecs();
+  const drafts: Draft[] = recs.filter((r) => !r.done).map((r) => ({ sid: r.sid, title: r.title || r.what.split('\n')[0] || '이름 없는 앱', stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true }));
+  const seen = new Set(drafts.map((d) => d.sid));
+  const doneSids = new Set(apps.filter((a) => a.studio && a.studio.build_session).map((a) => String(a.studio!.build_session)));
+  env.sessions().filter((s) => !s.task && !seen.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
+    if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 워크스페이스 앱이다 — 「내가 만든 앱」 에 선다
+    const a = apps.find((x) => x.studio && x.studio.build_session === s.id);
+    drafts.push({ sid: s.id, title: builderSessionWhat(s.label) || s.label, stage: a ? 'fix' : 'plan', appId: a ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false });
+  });
+  drafts.sort((a, b) => b.at - a.at);
+  const draftAppIds = new Set(drafts.map((d) => d.appId).filter(Boolean));
+  const ws = apps.filter((a) => !a.builtin);
+  const mine = ws.filter((a) => !draftAppIds.has(a.id) && ((a.studio && a.studio.made_by === m.id) || a.installedBy === m.id));
+  const team = ws.filter((a) => !mine.includes(a) && !draftAppIds.has(a.id));
+  const hidden = new Set(readPadHidden());
+  const refresh = (): void => { void paintList(v, env); };
+
+  const appCard = (a: BApp, own: boolean): HTMLElement => {
+    const pl = placeOf(a.studio);
+    const chips: Array<[string, string]> = [[a.enabled ? 'ok' : 'off', a.enabled ? '켜짐' : '꺼짐']];
+    if (pl) chips.push(['', PLACE[pl].title]);
+    if (hidden.has(padTileId('installed', a.id))) chips.push(['', '격자에서 뺌']);
+    if (a.studio && a.studio.origin) chips.push(['', '원본: ' + a.studio.origin.title]);
+    if (!own && a.installedBy) chips.push(['me', a.installedBy + ' 만듦']);
+    const card = el('div', { class: 'v2-bld-card' + (v.sel === a.id ? ' on' : ''), role: 'listitem' },
+      el('div', { class: 'hd' }, appGlassIcon(a.hasUi ? 'liv' : 'term'), el('div', { style: 'min-width:0' }, el('b', { text: a.title }), el('small', { text: [pl ? PLACE[pl].title : '', a.versionNo ? a.versionNo + '판' : '', when(a.installedAt)].filter(Boolean).join(' · ') }))),
+      el('div', { class: 'v2-bld-chips' }, ...chips.map(([k, t]) => el('span', { class: 'v2-bld-chip' + (k ? ' ' + k : ''), text: t }))),
+      el('div', { class: 'v2-bld-acts' },
+        own || a.canEdit
+          ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '고치기', title: '이 앱을 말과 의견으로 고쳐요 — 새 판이 돼요', onclick: () => { location.hash = builderRoute('app', a.id, 'edit'); } })
+          : el('button', { class: 'v2-bld-pri sm', type: 'button', text: '내 사본 떠서 고치기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '배포 설정', onclick: () => { v.sel = a.id; refresh(); } }),
+        own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 · 내 식으로', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } })));
+    return card;
+  };
+  const draftCard = (d: Draft): HTMLElement => el('div', { class: 'v2-bld-card', role: 'listitem' },
+    el('div', { class: 'hd' }, appGlassIcon('liv'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at)].filter(Boolean).join(' · ') }))),
+    el('div', { class: 'v2-bld-chips' }, el('span', { class: 'v2-bld-chip st', text: draftStageText(d.stage, !!d.appId, d.done) }), el('span', { class: 'v2-bld-chip me', text: d.local ? '아직 나만' : '다른 컴퓨터에서' })),
+    el('div', { class: 'v2-bld-acts' },
+      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
+      el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요 · 세션과 앱은 그대로', onclick: () => { dropStudioRec(d.sid); refresh(); } })));
+
+  const sec = (title: string, sub: string, kids: HTMLElement[], empty: string): HTMLElement => el('section', { class: 'v2-bld-sec' },
+    el('h3', { text: title }, el('small', { text: sub })),
+    kids.length ? el('div', { class: 'v2-bld-grid', role: 'list' }, ...kids) : el('p', { class: 'v2-bld-empty', text: empty }));
+  const kids = (xs: Array<HTMLElement | null>): HTMLElement[] => xs.filter((x): x is HTMLElement => !!x);
+  v.top.replaceChildren(...kids([
+    el('h1', {}, appGlassIcon('builder'), el('span', { text: '앱빌더' })),
+    el('span', { class: 'v2-bld-crumb', text: '내가 만든 앱 ' + mine.length + ' · 만들던 앱 ' + drafts.length }),
+    el('span', { class: 'v2-studio-sp' }),
+    team.length ? el('button', { class: 'btn btn-ghost', type: 'button', text: (v.teamOpen ? '팀원이 만든 앱 접기' : '팀원이 만든 앱 ' + team.length), onclick: () => { v.teamOpen = !v.teamOpen; refresh(); } }) : null,
+    el('button', { class: 'v2-bld-pri', type: 'button', onclick: () => { location.hash = builderRoute('new'); } }, icon('plus', 'v2-ic'), el('span', { text: '새 앱' }))]));
+  v.list.replaceChildren(...kids([
+    sec('만들던 앱', '이어서 만들 수 있어요 · 다른 컴퓨터에서 열어도 보여요', drafts.map(draftCard), '만들던 앱이 없어요 — 「+ 새 앱」 으로 시작해요'),
+    sec('내가 만든 앱', '고치기 · 배포 설정 · 판 되돌리기', mine.map((a) => appCard(a, true)), '아직 만든 앱이 없어요'),
+    v.teamOpen ? sec('팀원이 만든 앱', '내 사본을 떠서 고치거나, 고칠 수 있는 앱이면 원본을 고쳐요', team.map((a) => appCard(a, false)), '팀원이 만든 앱이 없어요') : null,
+    el('p', { class: 'v2-bld-mini', text: '「+ 새 앱」 · 「고치기」 · 「이어서 만들기」 는 이 창 안에서 앱 만들기 여섯 단계로 이어져요. 앱빌딩 세션은 홈 사이드바에서 망치 그림으로 보이고, 누르면 여기로 와요.' })]));
+  const selApp = apps.find((a) => a.id === v.sel) || null;
+  paintPanel(v, selApp, m, hidden, refresh);
+}
+
+// ── 배포 설정 — 고른 앱 하나 ──
+function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hidden: Set<string>, refresh: () => void): void {
+  if (!a) { v.panel.replaceChildren(el('h3', { text: '배포 설정' }), el('p', { class: 'v2-bld-mini', text: '왼쪽에서 앱의 「배포 설정」 을 누르면 누가 쓰나 · 쓰는 자리 · 켜기/끄기 · 판 되돌리기를 여기서 해요.' })); return; }
+  const pl = placeOf(a.studio);
+  const seg = (opts: Array<[string, string]>, cur: string, on: (k: string) => void, off = false): HTMLElement => el('span', { class: 'v2-bld-seg', role: 'radiogroup' }, ...opts.map(([k, t]) => { const b = el('button', { type: 'button', role: 'radio', class: k === cur ? 'on' : '', 'aria-checked': k === cur ? 'true' : 'false', text: t, onclick: () => { if (k !== cur) on(k); } }) as HTMLButtonElement; b.disabled = off; return b; }));
+  const tog = (on: boolean, text: string, run: () => void, off = false): HTMLElement => { const b = el('button', { class: 'v2-bld-tog' + (on ? ' on' : ''), type: 'button', role: 'switch', 'aria-checked': on ? 'true' : 'false', onclick: run }, el('span', { text }), el('i', { 'aria-hidden': 'true' })) as HTMLButtonElement; b.disabled = off; return b; };
+  const post = async (path: string, body: unknown, okMsg: string): Promise<void> => {
+    try { await api('/api/ui/apps/' + encodeURIComponent(a.id) + path, { method: 'POST', body: JSON.stringify(body) }); toast(okMsg); refresh(); }
+    catch (e: any) { toast('바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); }
+  };
+  const vers = el('div', { class: 'v2-bld-vers' }, el('span', { class: 'v2-bld-mini', text: '판 이력을 읽는 중…' }));
+  void fetchAppVersions(a.id).then((vs) => {
+    if (!vers.isConnected) return;
+    const rows = vs.slice().sort((x, y) => y.version_no - x.version_no);
+    vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x) => el('div', {}, el('b', { text: x.version_no + '판' }), el('span', { text: (x.note || '').trim() || (x.version_no === 1 ? '첫 판' : '고침') }),
+      x.is_current ? el('small', { text: '지금 쓰는 판' }) : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이 판으로', onclick: async () => { const to = await revertApp(a.id, x.version_no, a.title); if (to != null) refresh(); } }))) : [el('span', { class: 'v2-bld-mini', text: '판 이력이 없어요' })]));
+  }).catch(() => { vers.replaceChildren(el('span', { class: 'v2-bld-mini', text: '판 이력을 읽지 못했어요' })); });
+  const del = el('button', { class: 'btn btn-ghost btn-sm v2-bld-danger', type: 'button', text: '앱 지우기' }) as HTMLButtonElement;
+  del.onclick = () => {
+    if (del.dataset.arm) { void post('/remove', {}, '「' + a.title + '」 을 지웠어요'); v.sel = ''; return; }
+    del.dataset.arm = '1'; del.textContent = '정말 지우기 — 한 번 더'; window.setTimeout(() => { delete del.dataset.arm; del.textContent = '앱 지우기'; }, 4000);
+  };
+  const by = (a.studio && a.studio.made_by) || a.installedBy || '';
+  const sid = a.studio && a.studio.build_session ? String(a.studio.build_session) : '';
+  v.panel.replaceChildren(
+    el('h3', { text: '배포 설정 — 「' + a.title + '」' }),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['all', '워크스페이스 모두'], ['me', '나만']], 'all', () => { /* 서버에 공개 범위 칸이 생기면 */ }, true), el('small', { text: '지금은 저장하면 워크스페이스 모두에게 보여요 · 「나만」 은 아직 없어요' })),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '쓰는 자리' }), seg([['side', '세션 위젯'], ['full', '앱 화면'], ['both', '둘 다']], pl, async (k) => {
+      try { await patchManifest(a.id, (man) => { man.studio = { ...(man.studio && typeof man.studio === 'object' ? man.studio : {}), place: k }; }, '쓰는 자리 · ' + PLACE[k as StudioPlace].title); toast('쓰는 자리를 바꿨어요 — 새 판으로 저장됐어요'); refresh(); }
+      catch (e: any) { toast('바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); }
+    }, !a.canEdit), el('small', { text: pl ? PLACE[pl].sub : '아직 정하지 않았어요 — 고르면 AI 가 다음 고침부터 그 자리에 맞춰요' })),
+    tog(a.enabled, a.enabled ? '켜 둠 — 앱 찾기와 세션 위젯 목록에 보여요' : '꺼 둠 — 아무도 열 수 없어요', () => { void post('/enabled', { enabled: !a.enabled }, a.enabled ? '껐어요' : '켰어요'); }),
+    tog(!hidden.has(padTileId('installed', a.id)), '앱 찾기 격자에 보이기', () => { togglePadHidden(padTileId('installed', a.id)); refresh(); }),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: 'AI 지침' }), el('small', { text: a.hasInstructions ? '세션에 붙으면 이 앱의 지침이 AI 에게 실려요' : '세션에 붙어도 AI 에게 따로 싣는 지침은 없어요(고치기에서 「AI 지침」 을 부탁하면 생겨요)' })),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '판' }), vers),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '만든 사람 · 세션' }), el('small', {}, el('span', { text: (by === m.id ? '나' : by || '모름') + (sid ? ' · 앱빌딩 세션 ' : '') }),
+      sid ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '세션 보기', onclick: () => { location.hash = builderRoute('resume', sid); } }) : null)),
+    el('div', { class: 'v2-bld-acts' },
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '사본 뜨기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
+      el('span', { class: 'v2-studio-sp' }), a.builtin ? null : del));
+}

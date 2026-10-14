@@ -40,7 +40,7 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 
 // OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
 //  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
-export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn"] as const;
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn", "builder"] as const;   // builder = 앱빌더(#4632)
 /** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
 export const NOTIFY_TOOL = "app_notify";
 /** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */

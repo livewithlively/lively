@@ -346,6 +346,11 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
          batch_size=$21, mode=$22, session_ref=$23, model=$24, effort=$25, requester=$26, note=$27,
          prefilter_level=$29, prefilter_rules=$30::jsonb, batch_max_msgs=$31, prompt_sections=$32::jsonb,
          harness=$33,
+         --  레인 스위치(enabled)를 **바꿔** 저장했을 때만 자동 정지 표식을 지운다(다시 켰다).
+         --   «명시» 로 판정하면 안 된다 — 관리탭 폼은 바꾸지 않은 스위치 값도 늘 함께 보낸다. 스위치를 그대로 둔 저장
+         --   (프리셋 재실행·배치 크기 한 줄 수정·폼 저장)이 지우면 자동 정지 레인이 조용히
+         --   «사람이 끈 레인» 이 되어 그 몫이 다른 레인·방치 폴백으로 샌다(org/distill/distiller.isAutoDisabledLane).
+         last_summary=(CASE WHEN $34::boolean AND jsonb_typeof(last_summary)='object' THEN last_summary - 'auto_disabled' ELSE last_summary END),
          version=version+1, updated_at=now(), updated_by=$28
        WHERE id=$1 RETURNING ${D_SEL}`,
       [targetId, vals.key, vals.label, vals.enabled, vals.priority,
@@ -354,7 +359,8 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.criteria_md, vals.format_md, vals.target_category, vals.default_type, vals.name_prefix, vals.thread_aware,
        vals.batch_size, vals.mode, vals.session_ref, vals.model, vals.effort, vals.requester, vals.note, actor ?? null,
        vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
-       vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness]);
+       vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness,
+       input.enabled !== undefined && Boolean(input.enabled) !== Boolean(before.enabled)]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
     await ensureJobForEnabled(r.rows[0], actor);
     return r.rows[0];
@@ -395,7 +401,13 @@ export async function removeDistiller(idOrKey: number | string, actor?: string, 
 // 실행 결과 기록 — 잡이 매 배치 끝에 호출(관리탭이 '마지막 실행'을 여기서 읽는다).
 export async function recordDistillerRun(id: number, status: string, summary: unknown): Promise<void> {
   await itemsPool.query(
-    `UPDATE org_distiller SET last_run_at=now(), last_status=$2, last_summary=$3 WHERE id=$1`,
+    //  자동 정지 표식은 보존한다 — 틱이 배치를 낸 직후 같은 계정의 형제 레인이 401 로 이 레인을 자동 정지시키면,
+    //   뒤이은 이 기록이 표식을 덮어 «사람이 끈 레인» 으로 바뀌고 그 몫이 샌다(auth-failure-response.stopLanes).
+    `UPDATE org_distiller SET last_run_at=now(), last_status=$2,
+            last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' AND last_summary ? 'auto_disabled'
+                               THEN $3::jsonb || jsonb_build_object('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason')
+                               ELSE $3::jsonb END)
+      WHERE id=$1`,
     [id, String(status).slice(0, 40), JSON.stringify(summary ?? {})]);
 }
 

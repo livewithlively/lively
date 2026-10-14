@@ -6,6 +6,7 @@ import { state, toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
 import { isInstancePinned, listFavCtxRow, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
+import { leaveInvitedSession } from '../session-actions.js';   // #3870 — 초대받은 사람의 나가기
 import { canMoveSess, findSessIn, isInvitedSess, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
@@ -96,6 +97,8 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
+  //  #3870 — 초대받은 사람만 나간다(만든 사람 · 관리자로 보는 남의 세션엔 없다). 되돌리기가 내 손에 없어 맨 아래 따로.
+  if (isInvitedSess(s)) rows.push({ sep: true, label: '' }, { label: '이 세션에서 나가기', icon: 'leave', danger: true, run: () => { void leaveInvitedSession({ id: s.id, label: s.label }); } });
   return { rows, title: text.main || s.label || s.id, sub: [st ? st.label : s.stateLabel, s.projectId ? pn : NO_PROJECT_NAME, isLiveSess(s) ? '' : '지난 세션'].filter(Boolean).join(' · ') };
 }
 

@@ -6,7 +6,7 @@
 //     org_manager_finding_report 로 되돌려 적는다.
 import { resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listManagers, getManager, needsLlm } from "../../org/store/managers.js";
-import { runManager, type ManagerRunResult } from "../../org/manage/run-manager.js";
+import { runManager, statusForManagerResults, type ManagerRunResult } from "../../org/manage/run-manager.js";
 
 export async function runManagers(
   params: Record<string, unknown>, jobId: string, createdBy: string | null,
@@ -56,5 +56,7 @@ export async function runManagers(
       : undefined;
     out.push(await runManager(m, enqueue));
   }
-  return { status: "ok", summary: { managers: out } };
+  // runManager 는 실패를 throw 하지 않고 결과의 error 로 돌려준다 — 여기서 ok 로 덮으면 last_status 에 실패가 안 남는다
+  //  (모순 후보 SQL statement timeout 이 ok 로 기록된 사고, 2026-10-11).
+  return { status: statusForManagerResults(out), summary: { managers: out } };
 }
