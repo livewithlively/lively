@@ -9,11 +9,13 @@
 export type StudioPlace = 'side' | 'full' | 'both';
 export type StudioStage = 'plan' | 'draft' | 'fix' | 'check' | 'put';
 
+//  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정 — 시안 확인하고 코멘트해서 고치기»). 속 단계 'draft'(첫 판을 기다리는 중)와
+//   'fix'(판이 있다 · 코멘트 · 고치기)는 사람에게 같은 ③ 이다 — 단계 바 · 만들던 앱 목록 · 둘러보기가 전부 이 표로 잰다.
 export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string }> = [
-  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'draft', n: 3, label: '생성된 시안' },
-  { key: 'fix', n: 4, label: '고치기' }, { key: 'check', n: 5, label: '확인' }, { key: 'put', n: 6, label: '넣기' },
+  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'fix', n: 3, label: '시안 확인 · 고치기' },
+  { key: 'check', n: 4, label: '확인' }, { key: 'put', n: 5, label: '넣기' },
 ];
-export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === s); }
+export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === (s === 'draft' ? 'fix' : s)); }
 
 // 사람에게 보이는 이름은 둘로 통일한다(원준 2026-10-14) — 세션 오른쪽에 붙는 것 = 「세션 위젯」, 화면 전체로 여는 것 = 「앱 화면」.
 export const PLACE: Record<StudioPlace, { title: string; sub: string; say: string; width: string }> = {

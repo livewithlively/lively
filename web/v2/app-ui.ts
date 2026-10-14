@@ -9,6 +9,7 @@
 //   (외부 스크립트가 CSP 로 막혀 있어 npm 배포가 성립하지 않는다 — 그래서 호스트 주입이 이 플랫폼의 SDK 전달 방식이다.)
 //  ★ CSP 는 **앱이 선언한 만큼만**(manifest.csp — MCP Apps 채택): 기본은 네트워크·프레임 0, 선언하면 그만큼 열린다.
 import { api, el, toast } from '../core.js';
+import { PROBE_JS } from '../lib/studio-flow.js';   // #4632 검토 중인 앱의 문서에 넣는 탐침(찍은 자리의 요소 · 테두리)
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
 import { ensureAppGrant } from './app-session.js';
 import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 보내려던 글을 그 세션 화면의 입력칸에 넣어 둔다(잎 모듈)
@@ -92,13 +93,26 @@ export interface AppUiMountOpts {
   /** #4592 앱 만들기 — 띄우는 쪽이 앱 문서에 함께 넣는 스크립트(찍어서 의견의 탐침). 셸 코드만 넘긴다(앱이 주는 것이 아니다). */
   extraScript?: string;
 }
+// ── #4632 앱빌더 「③ 시안 확인 · 고치기」 가 **진짜 화면**(세션 곁칸 · 앱 화면) 위에 코멘트 층을 띄운다(app-review.ts) — 그 층이 이 프레임을 찾고(data-app-id),
+//   찍은 자리의 요소를 묻고(탐침 PROBE_JS — 검토 중인 앱의 문서에만 넣는다), 새 판이 오면 다시 띄운다(reloadAppFrames). 셸 코드만 넘긴다(앱이 주는 것이 아니다).
+const reviewProbe = new Set<string>();
+const liveFrames = new Map<string, Set<AppUiFrame>>();
+/** 이 앱의 화면을 띄울 때 탐침을 함께 넣는다(검토 중). 이미 떠 있는 프레임엔 들어가지 않는다 — 다시 띄우면(reload) 들어간다. */
+export function markReviewProbe(appId: string, on: boolean): void { if (on) reviewProbe.add(appId); else reviewProbe.delete(appId); }
+/** 지금 떠 있는 이 앱의 프레임을 전부 다시 띄운다(새 판). 세션 곁칸은 제 사건으로 스스로 다시 띄우니 뺀다(두 번 깜빡이지 않게). */
+export function reloadAppFrames(appId: string): number {
+  let n = 0;
+  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && !f.root.closest('.pn-sessapp')) { f.reload(); n++; } });
+  return n;
+}
 export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
-  const doc = wrapAppHtml(data.html, data.csp, opts?.extraScript);
+  const probe = reviewProbe.has(appId) ? PROBE_JS : '';
+  const doc = wrapAppHtml(data.html, data.csp, [opts?.extraScript || '', probe].filter(Boolean).join('\n') || undefined);
   const frame = el('iframe', {
-    class: 'v2-appui-frame', title: opts?.title || data.title || appId,
+    class: 'v2-appui-frame', title: opts?.title || data.title || appId, 'data-app-id': appId, ...(probe ? { 'data-probe': '1' } : {}),
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
     srcdoc: doc,
   }) as HTMLIFrameElement;
@@ -261,9 +275,9 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     // 그 밖(ui/message 등)은 v1 에선 무시.
   };
   window.addEventListener('message', onMsg);
-  return {
+  const handle: AppUiFrame = {
     root: frame,
-    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); },
+    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); liveFrames.get(appId)?.delete(handle); },
     notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, '*'); },
     subscribed: (topic) => topics.has(topic),
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
@@ -276,6 +290,9 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       insets = next; sendInsets();
     },
   };
+  if (!liveFrames.has(appId)) liveFrames.set(appId, new Set());
+  liveFrames.get(appId)!.add(handle);
+  return handle;
 }
 
 // ── 모달로 열기(전역 런치패드용) — 세션 화면 밖에서 앱 UI 를 띄울 때. panes 탭은 mountAppUiFrame 을 직접 쓴다. ──
