@@ -10,7 +10,7 @@ import { itemsPool, withTx } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
 import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
 import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
-  APP_CHECK_PREFIX, APP_FK_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, PG_IDENT_MAX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
+  APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, PG_IDENT_MAX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
 import { ensureAppSqlParser, checkExpressionSync } from "./app-sql.js";
 import { createHash } from "node:crypto";
 import { currentTenant } from "../org/tenant-context.js";
@@ -90,7 +90,7 @@ export interface AppTableReport {
   converted_columns: Array<{ table: string; column: string; from: string; to: string }>;    // 값을 잃지 않아 타입을 바꾼 칸
   dropped_columns: Array<{ table: string; column: string; rows: number; archived_as: string | null }>; // drop_columns — 값이 있으면 보관
   undeclared_columns: Array<{ table: string; column: string }>;                             // 선언에 없지만 남겨 둔 칸(제약만 풀었다)
-  constraints: Array<{ table: string; column?: string; kind: "not_null" | "default" | "check" | "foreign_key"; action: "added" | "removed" | "changed" }>;
+  constraints: Array<{ table: string; column?: string; kind: "not_null" | "default" | "check" | "foreign_key" | "primary_key" | "unique"; action: "added" | "removed" | "changed" }>;
 }
 export const emptyTableReport = (): AppTableReport => ({
   created: [], added_columns: [], type_mismatches: [], added_indexes: [], dropped_indexes: [],
@@ -122,10 +122,13 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
          id bigint GENERATED ALWAYS AS IDENTITY,
          ${cols.join(",\n         ")},
          created_at timestamptz NOT NULL DEFAULT now(),
-         PRIMARY KEY (tenant_id, id)
+         PRIMARY KEY (${opts.tenantScopedIndexes ? "tenant_id, id" : "id"})
        )`);
     if (!existed) local.created.push(spec.table);
-    else await syncColumns(c, schema, physical, rel, spec, local);
+    else {
+      if (!opts.tenantScopedIndexes) await narrowPrimaryKey(c, schema, physical, rel, spec, local);
+      await syncColumns(c, schema, physical, rel, spec, local);
+    }
     await syncColumnRules(c, physical, rel, spec, checks, local);
     await c.query(`ALTER TABLE ${rel} ENABLE ROW LEVEL SECURITY`);
     await c.query(`ALTER TABLE ${rel} FORCE ROW LEVEL SECURITY`);
@@ -141,6 +144,55 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
   });
   mergeReport(rep, local);
   return physical;
+}
+
+/**
+ * 기본 키를 (id) 로(#4483). 예전 판이 만든 설치 앱 표는 (tenant_id, id) 였다 — PG 는 묶은 칸이 **기본 키**일 때만 같은 표의
+ *  다른 칸을 고르게 해 줘서(유일 인덱스로는 안 된다), 보통 웹 코드의 `GROUP BY contacts.id` 뒤 contacts.name 이 거절됐다.
+ *  설치 앱 표는 워크스페이스마다 따로라(한 표 = 한 테넌트) id 하나로 유일하다. 공유 표(기본 앱)는 부르지 않는다.
+ *  이 표를 가리키던 외래키는 옛 기본 키 인덱스에 기대므로 떼어 둔다 — 같은 보장의 외래키 단계가 (tenant_id, id) 유일 제약 위로 다시 건다.
+ *  id 가 겹치는 행이 있거나(한 표에 여러 테넌트 — 생기지 않아야 하는 상태) 다른 까닭으로 못 바꾸면 떼었던 외래키까지 되돌리고
+ *  그대로 둔다(SAVEPOINT) — 표 보장은 계속한다.
+ */
+async function narrowPrimaryKey(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport): Promise<void> {
+  const pk = (await c.query(
+    `SELECT con.conname, array_to_string(array_agg(a.attname::text ORDER BY k.ord), ',') AS cols
+       FROM pg_constraint con
+       CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+       JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+      WHERE con.conrelid = to_regclass($1) AND con.contype = 'p'
+      GROUP BY con.conname`, [`${qi(schema)}.${qi(physical)}`])).rows[0] as { conname: string; cols: string } | undefined;
+  if (!pk || pk.cols !== "tenant_id,id") return;
+  await c.query("SAVEPOINT lv_pk");
+  try {
+    const fks = (await c.query(
+      `SELECT n.nspname, cl.relname, con.conname FROM pg_constraint con
+         JOIN pg_class cl ON cl.oid = con.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
+        WHERE con.confrelid = to_regclass($1) AND con.contype = 'f'`, [`${qi(schema)}.${qi(physical)}`])).rows;
+    for (const fk of fks) {
+      if (!String(fk.conname).startsWith(APP_FK_PREFIX)) throw new Error(`라이블리가 만들지 않은 외래키(${fk.conname})가 이 표를 가리킵니다`);
+      await c.query(`ALTER TABLE ${qi(String(fk.nspname))}.${qi(String(fk.relname))} DROP CONSTRAINT ${qi(String(fk.conname))}`);
+    }
+    await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(pk.conname)}, ADD CONSTRAINT ${qi(pk.conname)} PRIMARY KEY (id)`);
+    await c.query("RELEASE SAVEPOINT lv_pk");
+    report.constraints.push({ table: spec.table, kind: "primary_key", action: "changed" });
+  } catch (err) {
+    await c.query("ROLLBACK TO SAVEPOINT lv_pk");
+    logger.warn({ err, schema, physical }, "기본 키를 (id) 로 바꾸지 못했습니다 — 표는 그대로 씁니다");
+  }
+}
+
+/** 외래키가 가리킬 (tenant_id, id) 유일 키를 보장한다(#4483) — 기본 키가 이미 그 모양(공유 표)이면 그것을 쓴다. 만들었으면 true. */
+async function ensureTenantIdKey(c: Q, schema: string, physical: string): Promise<boolean> {
+  const has = (await c.query(
+    `SELECT 1 FROM pg_constraint con
+      WHERE con.conrelid = to_regclass($1) AND con.contype IN ('p', 'u')
+        AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+              WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) = ARRAY['id', 'tenant_id']`,
+    [`${qi(schema)}.${qi(physical)}`])).rowCount;
+  if (has) return false;
+  await c.query(`ALTER TABLE ${qi(schema)}.${qi(physical)} ADD CONSTRAINT ${qi(appConstraintName(APP_KEY_PREFIX, schema, physical))} UNIQUE (tenant_id, id)`);
+  return true;
 }
 
 /** 표 하나의 보고를 큰 보고에 붙인다. */
@@ -440,6 +492,9 @@ async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTab
   for (const [name, w] of want) {
     if (have.has(name)) continue;
     const trel = `${qi(schema)}.${qi(w.target)}`;
+    if (await ensureTenantIdKey(c, schema, w.target)) {
+      report.constraints.push({ table: spec.columns.find((x) => x.name === w.col)?.references?.table ?? w.target, kind: "unique", action: "added" });
+    }
     const orphans = Number((await c.query(
       `SELECT count(*)::bigint AS n FROM ${rel} r WHERE r.${qi(w.col)} IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM ${trel} t WHERE t.tenant_id = r.tenant_id AND t.id = r.${qi(w.col)})`)).rows[0]?.n ?? 0);
@@ -548,7 +603,8 @@ export interface EnsureAppTablesOpts {
   strict?: boolean;
   /** 넘기면 만든 테이블·더한 칸·타입 불일치를 채운다(#4224 — 설치 응답용). */
   report?: AppTableReport;
-  /** #4226 공유 테이블(기본 앱)이면 참 — 선언 인덱스 앞에 tenant_id 를 둔다. */
+  /** #4226 공유 테이블(기본 앱)이면 참 — 선언 인덱스 앞에 tenant_id 를 두고 기본 키도 (tenant_id, id).
+   *  거짓(설치 앱 — 워크스페이스마다 따로인 표)이면 기본 키 (id)(#4483 — `GROUP BY id` 뒤 다른 칸 고르기가 되게). */
   tenantScopedIndexes?: boolean;
   /** #4226 자유 SQL 역할도 보장한다(워크스페이스가 설치한 앱). 실패해도 던지지 않고 report.sql_role 에 적는다 —
    *  역할을 못 만드는 DB(CREATEROLE 없음)에서도 설치와 store_* 는 그대로 돈다. store_sql 만 503 으로 막힌다. */

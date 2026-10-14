@@ -110,6 +110,8 @@ export const ON_DELETE: ReadonlySet<string> = new Set(["cascade", "set null", "r
 /** 제약 이름 — 라이블리가 만든 것만 이 접두로 알아보고, 선언에서 빠지면 지운다(사람이 만든 제약은 건드리지 않는다). */
 export const APP_CHECK_PREFIX = "lvck_";
 export const APP_FK_PREFIX = "lvfk_";
+/** 외래키가 가리키는 표의 (tenant_id, id) 유일 제약(#4483) — 설치 앱 표의 기본 키가 (id) 라 외래키 대상 키를 따로 둔다. */
+export const APP_KEY_PREFIX = "lvuq_";
 export function appConstraintName(prefix: string, ...parts: string[]): string {
   return `${prefix}${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16)}`;
 }

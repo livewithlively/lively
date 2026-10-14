@@ -9,6 +9,8 @@
 //  T5 있던 데이터가 새 제약에 어긋나면 409(몇 행인지) · 그 표의 다른 변경도 함께 되돌린다(한 트랜잭션)
 //  T6 검사 식 — 위험 함수 · 다른 표 · 없는 칸 · 파라미터는 400(표를 건드리기 전)
 //  T7 같은 선언으로 다시 — 아무것도 안 바뀐다(멱등)
+//  T8 기본 키 (id) — `GROUP BY id` 뒤 다른 칸 고르기 · 외래키 대상 (tenant_id, id) 유일 키 · 공유 표는 (tenant_id, id) 그대로
+//     · 예전 판 표(기본 키 (tenant_id, id) + 그것에 기댄 외래키)는 다음 보장 때 옮긴다 · id 가 겹치면 그대로 둔다
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -56,6 +58,7 @@ const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } el
 const errOf = async (p) => { try { await p; return null; } catch (e) { return e; } };
 
 let tablesNow = [];
+let g1 = null, dupOut = null;
 const ensure = async (tables, o = {}) => {
   const report = emptyTableReport();
   await ensureAppTables("crm", tables, { schema: SA, strict: true, sqlRole: true, report, ...o });
@@ -236,6 +239,70 @@ try {
     const empty = (r) => r.created.length + r.added_columns.length + r.converted_columns.length + r.renamed_columns.length + r.dropped_columns.length
       + r.constraints.length + r.added_indexes.length + r.type_mismatches.length === 0;
     chk("T7 같은 선언 두 번 — 두 번째는 아무것도 안 바뀐다(기본값 식까지 같게 알아본다)", empty(twice), JSON.stringify({ once: once.constraints, twice }));
+  }
+
+  // ── T8 기본 키 ──
+  {
+    const rel = (t) => `"${SA}"."${t}"`;
+    const defs = async (t, type) => (await su.query(
+      `SELECT conname AS n, pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = $2 ORDER BY conname`, [rel(t), type])).rows;
+    const pkOf = async (t) => (await defs(t, "p"))[0]?.d;
+    const spec = [{ table: "guests", columns: [{ name: "name", type: "text" }] },
+      { table: "stays", columns: [{ name: "guest_id", type: "bigint", references: { table: "guests" } }, { name: "note", type: "text" }] }];
+    const groupBy = "SELECT p.name, count(v.id)::int AS n FROM guests p LEFT JOIN stays v ON v.guest_id = p.id GROUP BY p.id ORDER BY p.id";
+    const rep = await ensure(spec);
+    await run("INSERT INTO guests(name) VALUES ('가'), ('나')");
+    await run("INSERT INTO stays(guest_id, note) SELECT id, '첫' FROM guests");
+    await run("INSERT INTO stays(guest_id, note) SELECT id, '둘' FROM guests WHERE name = '가'");
+    const g = await errOf(run(groupBy).then((r) => { g1 = r; }));
+    chk("T8 PK1 새 설치 앱 표 기본 키 = (id) · GROUP BY p.id 뒤 p.name 을 고를 수 있다",
+      (await pkOf("crm__guests")) === "PRIMARY KEY (id)" && (await pkOf("crm__stays")) === "PRIMARY KEY (id)" && g === null
+        && JSON.stringify(g1?.rows) === JSON.stringify([{ name: "가", n: 2 }, { name: "나", n: 1 }]),
+      JSON.stringify({ pk: await pkOf("crm__guests"), g: g?.message, rows: g1?.rows }));
+    const uq = await defs("crm__guests", "u");
+    chk("T8 PK5 외래키가 가리키는 표엔 (tenant_id, id) 유일 키 · 보고서에 unique added · 가리키지 않는 표엔 없다",
+      uq.length === 1 && uq[0].d === "UNIQUE (tenant_id, id)" && uq[0].n.startsWith("lvuq_") && (await defs("crm__stays", "u")).length === 0
+        && rep.constraints.some((c) => c.table === "guests" && c.kind === "unique" && c.action === "added"),
+      JSON.stringify({ uq, c: rep.constraints }));
+
+    await ensureAppTables("pgtb", [{ table: "marks", columns: [{ name: "u", type: "text" }] }], { schema: SA, strict: true, tenantScopedIndexes: true });
+    chk("T8 PK2 공유 표(tenantScoped)는 기본 키 (tenant_id, id) 그대로", (await pkOf("pgtb__marks")) === "PRIMARY KEY (tenant_id, id)", await pkOf("pgtb__marks"));
+
+    // 예전 판 모양으로 되돌린다 — 기본 키 (tenant_id, id) · 외래키는 그 기본 키 인덱스에 기댄다 · lvuq_ 없음
+    const fk = (await defs("crm__stays", "f"))[0];
+    await su.query(`ALTER TABLE ${rel("crm__stays")} DROP CONSTRAINT "${fk.n}"`);
+    await su.query(`ALTER TABLE ${rel("crm__guests")} DROP CONSTRAINT "${uq[0].n}"`);
+    for (const t of ["crm__guests", "crm__stays"]) {
+      await su.query(`ALTER TABLE ${rel(t)} DROP CONSTRAINT "${t}_pkey", ADD CONSTRAINT "${t}_pkey" PRIMARY KEY (tenant_id, id)`);
+    }
+    await su.query(`ALTER TABLE ${rel("crm__stays")} ADD CONSTRAINT "${fk.n}" FOREIGN KEY (tenant_id, guest_id) REFERENCES ${rel("crm__guests")} (tenant_id, id)`);
+    const legacy = await errOf(run(groupBy));
+    chk("T8 PK3a (재현) 예전 판 모양에선 GROUP BY p.id 뒤 p.name 이 거절된다(42803)", legacy?.status === 400 && legacy?.body?.pg_code === "42803",
+      JSON.stringify([legacy?.status, legacy?.body]));
+    const before = JSON.stringify((await su.query(`SELECT tenant_id, id, guest_id, note FROM ${rel("crm__stays")} ORDER BY id`)).rows);
+    const moved = await ensure(spec);
+    const after = JSON.stringify((await su.query(`SELECT tenant_id, id, guest_id, note FROM ${rel("crm__stays")} ORDER BY id`)).rows);
+    const fkAfter = await defs("crm__stays", "f");
+    const g2 = await errOf(run(groupBy));
+    chk("T8 PK3 예전 판 표를 다시 보장 — 기본 키 (id) 로 · 행 그대로 · 보고서 primary_key changed(표 둘) · GROUP BY 가 된다",
+      (await pkOf("crm__guests")) === "PRIMARY KEY (id)" && (await pkOf("crm__stays")) === "PRIMARY KEY (id)" && before === after && g2 === null
+        && ["guests", "stays"].every((t) => moved.constraints.some((c) => c.table === t && c.kind === "primary_key" && c.action === "changed")),
+      JSON.stringify({ moved: moved.constraints, g2: g2?.message, pk: await pkOf("crm__guests") }));
+    chk("T8 PK6 옛 기본 키에 기댔던 외래키가 옮긴 뒤에도 같은 이름·(tenant_id, 칸)→(tenant_id, id) 로 있다 · 지켜진다",
+      fkAfter.length === 1 && fkAfter[0].n === fk.n && /^FOREIGN KEY \(tenant_id, guest_id\) REFERENCES .*\(tenant_id, id\)$/.test(fkAfter[0].d)
+        && (await errOf(run("INSERT INTO stays(guest_id, note) VALUES (987654, 'x')")))?.body?.pg_code === "23503",
+      JSON.stringify(fkAfter));
+    const again = await ensure(spec);
+    chk("T8 PK4 이미 (id) 인 표를 다시 보장 — 아무것도 안 바뀐다", again.constraints.length === 0 && again.created.length === 0, JSON.stringify(again.constraints));
+
+    // id 가 겹치는 표 — 한 표에 두 테넌트가 같은 id 로(공유 표를 잘못 넘겨받은 경우)
+    await ensure([{ table: "dups", columns: [{ name: "v", type: "text" }] }]);
+    await su.query(`ALTER TABLE ${rel("crm__dups")} DROP CONSTRAINT "crm__dups_pkey", ADD CONSTRAINT "crm__dups_pkey" PRIMARY KEY (tenant_id, id)`);
+    await su.query(`INSERT INTO ${rel("crm__dups")} (tenant_id, id, v) OVERRIDING SYSTEM VALUE VALUES ($1, 7, 'a'), ($2, 7, 'b')`, [TA, TB]);
+    const dupRep = await errOf(ensure([{ table: "dups", columns: [{ name: "v", type: "text" }] }]).then((r) => { dupOut = r; }));
+    chk("T8 PK7 id 가 겹치는 표 — 보장은 성공 · 기본 키는 (tenant_id, id) 그대로 · 보고서에 primary_key 없음",
+      dupRep === null && (await pkOf("crm__dups")) === "PRIMARY KEY (tenant_id, id)" && !dupOut?.constraints.some((c) => c.kind === "primary_key"),
+      JSON.stringify({ err: dupRep?.message, pk: await pkOf("crm__dups"), c: dupOut?.constraints }));
   }
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
