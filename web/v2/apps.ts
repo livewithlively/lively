@@ -14,8 +14,8 @@ import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 �
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
-import { studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱). 여는 길은 전부 앱빌더(#/builder, #4632)
-import { builderRoute } from '../lib/builder-flow.js';
+import { studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
+import { builderRoute } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -247,7 +247,7 @@ export function openLaunchpad(): void {
           { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '모두에게 적용돼요' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
           { sep: true, label: '' },
         ] : []),
-        { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '격자로 돌아와요' : '앱은 그대로 · 눈앞에서만',
+        { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '앱 찾기에 다시 보여요' : '앱은 그대로 · 나한테만 안 보여요',
           run: () => { togglePadHidden(tid); draw(); } },
       ], { title });
       node.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); menu(e.clientX, e.clientY); });
@@ -309,7 +309,7 @@ export function openLaunchpad(): void {
     //  「+ 새 앱」(#4592, 원준 2026-10-10) — 워크스페이스 앱 묶음의 마지막 칸. 누르면 앱 찾기가 닫히고 앱 만들기 화면으로 간다.
     //   워크스페이스 앱이 하나도 없어도 이 칸 때문에 묶음이 선다(«만들 수 있다» 가 보여야 한다). 검색 중에는 '새 앱 · 만들기' 로 찾을 때만.
     const newTile = el('button', { class: 'v2-pad-item v2-pad-item--app v2-pad-item--new', role: 'listitem', type: 'button', title: '새 앱 만들기 — AI 와 말로 만들어요',
-      onclick: () => { closeLaunchpad(); location.hash = builderRoute('new'); } },   // #4632 — 앱빌더 안에서 만든다
+      onclick: () => { closeLaunchpad(); location.hash = builderRoute('new'); } },   // #/builder/new — ① 이 바로 선다(앱빌더 틀 안) · 새로고침해도 그 자리
       el('span', { class: 'v2-pad-ico v2-pad-ico--new', 'aria-hidden': 'true' }, lineIcon('plus', 'v2-ic')),
       el('b', { text: '새 앱' }));
     const showNew = !q || '새 앱 만들기 추가 new'.includes(q);
