@@ -25,6 +25,9 @@ import { PUBLIC_VIEWER } from "../v6/visibility.js";
 //  ⚠ 기준은 **그 행의 누적 attempts** 다(상태셋 전용 카운터가 아니다 — 일반 push 실패와 같은 칸을 쓴다).
 //   그래서 이미 여러 번 실패한 행은 상태셋 재시도 기회가 줄거나 없다. 재enqueue 시 attempts 는 0 으로 리셋된다.
 const STATUS_LOAD_RETRY_LIMIT = 5;
+// 치유 재시도(createUnderParent)에서 고친 리스트의 상태셋을 일시적으로 못 읽었다 — 정상 경로의 statusLoadFailed 처럼
+//  «이번엔 미룬다» 이지 실행 실패가 아니다. 행 루프의 catch 가 분류보다 먼저 deferred 로 처리한다.
+class StatusLoadDeferred extends Error {}
 const PRIORITY_MAP: Record<string, number> = { urgent: 1, high: 2, normal: 3, low: 4 };
 const toMs = (d?: string | null): number | undefined => {
   if (!d) return undefined;
@@ -392,10 +395,12 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         //   고친 리스트에선 상태셋이 다를 수 있으니 status 를 그 리스트 기준으로 다시 정한다.
         const bodyForList = async (listId: string) => {
           //  상태셋을 못 읽었으면 status 없이 만들지 않는다 — 위 STATUS_LOAD_RETRY_LIMIT 가드와 같은 이유(변경 영구 유실)이고
-          //   상한도 같다(넘으면 status 없이 진행 — 안 그러면 영구 실패가 연속 실패 자동 정지로 간다). 좌표가 기록된 부모
-          //   (list_ext 보유)면 다음 틱은 정상 경로가 그 가드를 타고, 네이티브 부모면 이 경로가 다시 돈다.
+          //   상한도 같다(넘으면 status 없이 진행). 정상 경로처럼 **미룸**으로 처리한다(StatusLoadDeferred → catch 에서
+          //   deferred) — 실패로 세면, 좌표를 기록하지 않는 네이티브 부모 아래에서는 이 경로가 매 틱 다시 돌아 상한에 닿기
+          //   전에 연속 실패 브레이커가 먼저 선다(기본 max_fail_streak 5 = 이 상한 5). 좌표가 기록된 부모(list_ext 보유)면
+          //   다음 틱은 정상 경로가 그 가드를 탄다.
           const { statuses: st, failed: stFailed } = await statusesOf(listId);
-          if (stFailed && ob.attempts < STATUS_LOAD_RETRY_LIMIT) throw new Error(`list ${listId} 상태셋 로드 실패 — 치유 좌표는 기록됨, 다음 틱 재시도`);
+          if (stFailed && ob.attempts < STATUS_LOAD_RETRY_LIMIT) throw new StatusLoadDeferred(`list ${listId} 상태셋 로드 실패(치유 재시도) — 다음 틱 재시도`);
           return mkBody(p, decidePushStatus({
             ourCategory: p.status_category, theirStatusRaw: p.base_status_raw, statuses: st, baseCategory: p.base_status_category,
           }));
@@ -435,6 +440,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       await markErr(ob.id, msg);
+      //  치유 재시도의 상태셋 로드 일시 실패는 정상 경로(statusLoadFailed: markErr + deferred)와 같이 미룬다 — 실행 실패가
+      //   아니다(bodyForList 주석). 분류보다 먼저 빠져야 시스템성 failed 로 세지 않는다.
+      if (e instanceof StatusLoadDeferred) { deferred++; continue; }
       const kind = classifyPushFailure(e);
       if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
       rejected++; rejectedIds.push(ob.id);

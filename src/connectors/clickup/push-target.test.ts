@@ -50,7 +50,14 @@ test("배선 — 조상 체인을 실제로 조회하고, status 기준 리스�
 // ── 배선 — 부모 좌표 자가 치유(ITEM_137). 순수 오케스트레이터가 맞아도 호출부가 이 계약을 안 지키면 의미가 없다 ──
 test("배선 — 치유 재시도는 고친 리스트 기준 body 로, 상태셋을 못 읽으면 만들지 않는다", () => {
   assert.match(PUSH, /healed \? await bodyForList\(listId\) : body/, "치유 재시도가 옛 리스트 기준 status 를 그대로 보낸다");
-  assert.match(PUSH, /if \(stFailed && ob\.attempts < STATUS_LOAD_RETRY_LIMIT\) throw new Error/, "고친 리스트의 상태셋을 못 읽어도 status 없이 만들어 변경이 영구 유실된다");
+  assert.match(PUSH, /if \(stFailed && ob\.attempts < STATUS_LOAD_RETRY_LIMIT\) throw new StatusLoadDeferred\(/, "고친 리스트의 상태셋을 못 읽어도 status 없이 만들어 변경이 영구 유실된다");
+  //  그건 미룸이지 실행 실패가 아니다 — 행 루프 catch 가 분류(classifyPushFailure)보다 먼저 deferred 로 처리해야 한다.
+  //   실패로 세면 좌표를 기록하지 않는 네이티브 부모 아래에서 매 틱 반복돼 상한(5)에 닿기 전에 브레이커(기본 5)가 선다.
+  const at = PUSH.indexOf("const kind = classifyPushFailure(e);");
+  const catchAt = PUSH.lastIndexOf("} catch (e) {", at);
+  assert.ok(at > 0 && catchAt > 0, "행 루프 catch 를 못 찾았다");
+  assert.match(PUSH.slice(catchAt, at), /await markErr\(ob\.id, msg\);[\s\S]*if \(e instanceof StatusLoadDeferred\) \{ deferred\+\+; continue; \}/,
+    "치유 재시도의 상태셋 로드 실패를 실행 실패로 센다 — 네이티브 부모 아래에서 매 틱 반복돼 브레이커가 먼저 선다");
 });
 
 test("배선 — 좌표는 원래 값이 있던 부모만 고치고, list_id 도 인바운드처럼 옮긴다", () => {
