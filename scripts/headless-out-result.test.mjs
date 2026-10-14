@@ -11,6 +11,7 @@
 //  O3 `<pre id="out">` 자체가 없으면 둘 다 null
 //  O4 marker 를 바꿔 부를 수 있다(정규식 특수문자도 글자 그대로)
 //  O5 결과 본문의 `&amp;lt;` 는 `&lt;` 로 한 번만 되돌린다(이중 복원 금지)
+//  O6 여는 태그에 속성이 붙어도 읽는다(`<pre id="out" style=…>` — phone-side-pane) · 다른 id(`out2`)는 집지 않는다
 import assert from "node:assert/strict";
 import { readOut } from "./headless-chrome.mjs";
 
@@ -42,6 +43,13 @@ const page = (out) => `<html><head></head><body><div id="toasts"></div><pre id="
 }
 {
   ok(readOut(`<pre id="out">"&amp;lt;"ENDRESULT</pre>`).text === `"&lt;"`, "O5 &amp;lt; 는 &lt; 로 한 번만 되돌린다");
+}
+{
+  const styled = (out) => page(out).replace('<pre id="out">', '<pre id="out" style="position:fixed;left:-9999px">');
+  ok(readOut(styled(`{"n":1}ENDRESULT`)).text === `{"n":1}`, "O6 속성이 붙은 결과 칸도 읽는다");
+  const r = readOut(styled("PENDING"));
+  ok(r.text === null && r.out === "PENDING", "O6 속성이 붙어도 PENDING 은 결과로 집지 않는다", JSON.stringify(r));
+  ok(readOut(`<pre id="out2">{"n":1}ENDRESULT</pre>`).text === null, "O6 id 가 out 으로 시작할 뿐인 다른 칸은 집지 않는다");
 }
 
 console.log(`headless-out-result.test: ${pass} passed`);

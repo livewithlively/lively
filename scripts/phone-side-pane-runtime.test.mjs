@@ -35,7 +35,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildSync } from "esbuild";
-import { dumpDom, findChrome } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = process.env.SRC_ROOT || path.resolve(import.meta.dirname, "..");
 const chrome = findChrome();
@@ -259,9 +259,9 @@ async function run(mode, w, h) {
   //   기대값은 페이지 안의 innerWidth · innerHeight 로 잰다(폭은 크롬 최소 500).
   const dom = await dumpDom(chrome, { html: page(mode), copy: CSS, prefix: "phone-side-", virtualTimeBudget: 60000,
     args: [`--window-size=${w},${h}`, "--disable-site-isolation-trials", "--disable-features=IsolateOrigins,site-per-process"] });
-  const m = /<pre id="out"[^>]*>([\s\S]*?)ENDRESULT/.exec(dom);
-  if (!m) return { fatal: "페이지가 결과를 안 냈다: " + dom.slice(0, 600) };
-  return JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+  const res = readOut(dom);
+  if (res.text === null) return { fatal: `페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)}): ` + dom.slice(0, 600) };
+  return JSON.parse(res.text);
 }
 const [P, F, T, D] = await Promise.all([run("phone", 402, 700), run("flat", 844, 480), run("tablet", 768, 1100), run("desktop", 1440, 1000)]);
 if (process.env.DEBUG) console.log(JSON.stringify({ P, F, T, D }, null, 1));
