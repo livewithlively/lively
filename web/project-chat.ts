@@ -147,6 +147,7 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
     for (const tt of turns) {
       if (dead) return;
       const t = view.turn(tt.text, { ts: tt.at });
+      const ageMs = tt.at ? Date.now() - Date.parse(tt.at) : 0;
       // 한 번 읽으면 256KB 까지라 긴 턴의 뒷부분과 경계에 걸린 줄이 사라진다 — 빈 조각이 올 때까지 이어 읽는다.
       let tail: TailResult | null = null, from = 0, carry = '';
       const show = (line: string): void => {
@@ -157,12 +158,17 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
       try {
         for (;;) {
           tail = await api(`${base}/turn/${encodeURIComponent(tt.id)}?from=${from}`) as TailResult;
+          if (dead) return;   // 화면을 떠났다 — 남은 조각을 더 읽지 않는다
           if (!tail.chunk) break;
           const cut = splitJsonlChunk(carry, tail.chunk);
           carry = cut.carry;
           for (const line of cut.lines) show(line);
           if ((tail.next ?? from) <= from) break;
           from = tail.next ?? from;
+          // 아직 도는 턴은 여기서 쫓지 않는다 — 쓰는 속도가 왕복보다 빠르면 빈 조각이 안 와서 쉬지 않고 요청하고, 그동안
+          //  입력이 안 잠기고(턴이 겹친다) 글이 실시간으로 안 그려지며, 그 사이 끝나면 onTurnDone 도 안 불린다.
+          //  drain 이 POLL_MS 간격·실시간 표시·입력 잠금·끝 알림으로 위치와 carry 를 이어 받는다. 멈춘 지 오래된 턴은 끝까지 읽는다.
+          if (!tail.done && ageMs <= 30 * 60_000) break;
         }
       } catch {
         // 이어 읽다 실패하면 이미 그린 이벤트는 두고 그 자리에 말한다 — 지우면 진행 중 턴의 흔적까지 사라진다.
@@ -173,7 +179,6 @@ export function mountProjectChat(host: HTMLElement, opts: ProjectChatOpts): Proj
       }
       if (!tail) { t.work.remove(); continue; }   // 타입 좁히기용 — 루프는 첫 요청 전에 빠져나가지 않는다
       if (tail.done) for (const line of flushJsonlCarry(carry)) show(line);
-      const ageMs = tt.at ? Date.now() - Date.parse(tt.at) : 0;
       if (!tail.done && ageMs > 30 * 60_000) {
         view.settle(t);
         view.error(t, '이 요청은 끝나지 못했습니다(그때 진행이 멈췄어요). 다시 말씀해 주시면 이어서 해 보겠습니다.');
