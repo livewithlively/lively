@@ -225,6 +225,9 @@ export function nextAfterSetup(state) {
  * · 싣는 중에 누르면 갈 곳을 **하나만** 기억한다(마지막 클릭). 누를 때마다 리스너를 쌓으면 한참 뒤 다른 로드에서 옛 클릭이 튀어나온다.
  * · 지금 가는 클릭은 기다리던 옛 클릭을 지운다 — 다음 로드가 그 옛 화면으로 되돌리지 않게.
  * · 본문 로드가 실패하거나 창이 닫히면 기억을 버린다(`failed`) — 나중에 성공한 로드가 옛 클릭으로 사람을 끌고 가면 안 된다.
+ * · ★ `loaded` 는 did-finish-load **와** did-stop-loading 두 자리에서 부른다(#4054). did-finish-load 시점엔
+ *   isLoadingMainFrame() 이 아직 참이라(실측 43.3.0 — 실제 웹 화면에선 50ms 넘게) 그 틈의 클릭은 대기로 가고,
+ *   그 대기를 풀 did-finish-load 는 다시 오지 않는다. 멈춘 순간(did-stop-loading)이 그것을 푼다(verify-notify-click R6).
  * @returns {{ open(wc: object, hash: string): "now"|"pending"|"skip", loaded(wc: object): boolean, failed(): void }}
  */
 export function createHashNav() {

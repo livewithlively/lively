@@ -43,7 +43,7 @@ async function resolveSyncTargets(params: Record<string, unknown>): Promise<Arra
 export async function runConnectorSync(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // #586 run-tracker 경유 — 실행이 connector_run 엔티티로 기록되고(상태·로그·통계) 웹에서 관찰 가능.
   //  크론은 완주를 기다려 잡 상태에 결과를 남긴다(타임아웃·중복 가드는 tracker 내부).
-  const { startConnectorRun } = await import("../../connectors/run-tracker.js");
+  const { startConnectorRun, RunCapacityError } = await import("../../connectors/run-tracker.js");
   const targets = await resolveSyncTargets(params);
   const out: unknown[] = [];
   for (const t of targets) {
@@ -53,7 +53,11 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
       if (run.alreadyRunning) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "already_running", run_id: run.runId }); continue; }
       const r = await run.done;
       out.push({ system: t.system, collector: t.label, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
-    } catch (e) { out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) }); }
+    } catch (e) {
+      //  #3994 T3 — 판 자리 없음은 실패가 아니라 배압이다(행을 안 만들었고, 도는 수집이 끝나면 다음 주기에 선다).
+      if (e instanceof RunCapacityError) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "capacity", reason: e.message }); continue; }
+      out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) });
+    }
   }
   // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드·중복 자체 거부) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을
   //  10분 주기 스윕을 기다리지 않고 곧바로 흡수. 실패는 삼킨다(다음 주기/다음 sync 가 또 돈다).
@@ -63,7 +67,11 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
   //   «수집은 됐는데 지식이 안 는다» 로 보이고, 그 사이를 설명할 방법이 없다(실측: 자료 12건이 그대로).
   //   비용은 안 든다 — 미증류가 0이면 증류 잡은 배치를 아예 안 만들고 DB 질의 한 번으로 끝난다.
   void nudgeDistillNow();
-  return { status: "ok", summary: { systems: out } };
+  //  ★ 결과를 사실대로 적는다(#3994 T2-a) — 종전엔 타깃 실패를 summary 에 담고도 무조건 "ok" 였다.
+  //   그 값이 org_cron.last_status 가 되고 연속실패 서킷브레이커는 status 로만 판정하므로 영원히
+  //   트립하지 않았다. 15분마다 강제 종료되는 수집기가 무기한 초록불이던 자리(파이프라인 화면 포함).
+  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 /**
@@ -97,7 +105,10 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
       out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
     } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
   }
-  return { status: "ok", summary: { systems: out } };
+  //  수집과 같은 규율(#3994 T2-a) — 아웃바운드 실패도 잡 상태에 올린다. 종전엔 여기도 무조건 "ok" 라
+  //   push 가 매번 죽어도 크론은 정상으로 보였다(같은 병이 이 파일에 두 군데 있었다).
+  const { syncBatchStatus } = await import("../../connectors/sync-outcome.js");
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 export async function runWikiPush(): Promise<{ status: string; summary: unknown }> {

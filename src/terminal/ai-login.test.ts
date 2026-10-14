@@ -142,7 +142,10 @@ t("★T3 하네스 바이너리는 **파일 op 자리에서 안 돈다** — 그
     "프로브 자리가 «세션 자리 우선, 없으면 종전» 이 아니다");
   //  자리는 로그인 러너와 **같아야** 한다 — 갈리면 로그인은 세션 컨테이너에서 됐는데 판정은 다른 자리를 봐서 영영 «미로그인».
   assert.match(RUN, /export async function ensureHarnessSeat/, "러너의 자리가 공유 가능하게 열려 있지 않다");
-  assert.match(RUN, /const sid = await ensureHarnessSeat\(user, h\);/, "러너가 그 공유 자리를 안 쓴다");
+  assert.match(RUN, /const sid = await ensureHarnessSeat\(user, seatKey\);/, "러너가 그 공유 자리를 안 쓴다");
+  //  #4051 — 자리 키가 문자열이 됐다(헤드리스 발급은 `hl-<하네스>` 로 따로 앉는다). **대화형 로그인은 여전히 하네스 이름**을
+  //   키로 넘겨야 프로브(aiLoginCheck — ensureHarnessSeat(user, h.key))와 같은 자리를 본다.
+  assert.match(RUN, /spawnAt\(user \?\? null, osUser, h, loginStartSh\(/, "대화형 로그인의 자리 키가 하네스 이름이 아니다 — 프로브와 자리가 갈린다");
   //  ⚠ 배선은 **게이트웨이 능력**을 지난다(#2165) — profiles 가 ai-login-run 을 직접 물면 노드 에이전트 번들에
   //   로그인 러너·세션 생성이 통째로 실린다(esbuild 는 outfile 하나면 `await import()` 도 인라인한다).
   assert.match(PROFILES, /gatewayCapability\("harnessSeat"\)/, "판정이 러너 자리를 능력 이음매로 안 받는다");

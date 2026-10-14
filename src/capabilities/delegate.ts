@@ -168,9 +168,15 @@ const logs: Capability = {
     }
     let tail: TailResult;
     if (t.node_id === CENTRAL_NODE_ID) {
-      //  중앙 작업 폴더는 **요청자의 격리 경계**로 읽는다(저장소 분리 배포의 게이트웨이는 그 폴더를 직접 못 본다).
-      const { ensureMemberOsUser } = await import("../terminal/profiles.js");
-      tail = await tailTask(t.task_dir, from, await ensureMemberOsUser({ userId: t.requester } as never).catch(() => null));
+      const { isSandboxTaskDir } = await import("../node/sandbox-task.js");
+      if (isSandboxTaskDir(t.task_dir)) {
+        //  샌드박스 판(#4012)의 폴더는 게이트웨이가 **직접** 읽는다 — 멤버 경계 감옥에는 그 자리가 없다.
+        tail = await tailTask(t.task_dir, from, null);
+      } else {
+        //  중앙 작업 폴더는 **요청자의 격리 경계**로 읽는다(저장소 분리 배포의 게이트웨이는 그 폴더를 직접 못 본다).
+        const { ensureMemberOsUser } = await import("../terminal/profiles.js");
+        tail = await tailTask(t.task_dir, from, await ensureMemberOsUser({ userId: t.requester } as never).catch(() => null));
+      }
     }
     else if (nodeOnline(t.node_id)) tail = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: t.task_dir, from });
     else tail = { chunk: "", next: from, done: false, exit: null }; // 노드 오프라인 — 스케줄러 grace 가 처리, CLI 는 계속 폴링
@@ -196,7 +202,12 @@ const cancel: Capability = {
     if (t.requester !== uid(user) && !isAdmin(user)) throw new HttpError(403, "본인 위탁만 취소할 수 있습니다");
     if (t.status === "done" || t.status === "failed" || t.status === "canceled") throw new HttpError(409, `이미 종결됨(${t.status})`);
     if (t.status === "running" && t.session_id && t.node_id) {
-      if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* noop */ });
+      if (t.node_id === CENTRAL_NODE_ID) {
+        //  샌드박스 판(#4012)은 op 에 멈춤을 맡긴다 — 토큰 회수·폴더 정리는 실패 세션 회수기가 한다(취소 행도 그 대상이다).
+        const { isSandboxTaskDir, stopSandboxTask } = await import("../node/sandbox-task.js");
+        if (isSandboxTaskDir(t.task_dir)) await stopSandboxTask(String(t.task_dir)).catch(() => { /* noop */ });
+        else await killTaskSession(t.session_id).catch(() => { /* noop */ });
+      }
       else if (nodeOnline(t.node_id)) await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* noop */ });
     }
     await markCanceled(t.id);

@@ -2,14 +2,15 @@
 //  담당: 페이지/카드 머리(pageHead·cardHead) · 상태 점(lifecycleDot·confidenceDot) · 폼 조각(secretInput 3종·
 //   usernameAnchor·memberCombo·selectFilter) · 수치 타일(stat) · 에러 안내(errorNote) · repo 목록(loadRepos)
 //   + 백엔드 enum 과 1:1 인 화면 라벨 상수들.
-//  ⚠ uid(datalist 고유 id 카운터)·CSS_MASK_OK 는 모듈 전역이라 소유자와 동거한다.
-//  의존 방향: widgets → dom·net·state·overlay(단방향). 역방향 없음 — uiText 는 lib/uitext 로 따로 떼어
+//  ⚠ CSS_MASK_OK 는 모듈 전역이라 소유자와 동거한다.
+//  의존 방향: widgets → dom·net·state·overlay·person-select(단방향). 역방향 없음 — uiText 는 lib/uitext 로 따로 떼어
 //   overlay↔widgets 순환을 애초에 만들지 않는다.
 //  소비 파일은 종전대로 './core.js' 에서 받는다(core 의 배럴 재수출).
 import { denyAutofill, el } from './dom.js';
 import { api } from './net.js';
 import { infoPop } from './overlay.js';
 import { state } from './state.js';
+import { personSelect } from './person-select.js';
 
 // 출처(provenance) 라벨 — ai=AI 에이전트 생성, human=사람 저작/승인, rule=시스템 결정론 파생, observed=외부 시스템 미러(커넥터 원천).
 //  V4-C: 'confidence' 컬럼/enum 은 물리적으로 불변 — UI 라벨만 '출처(provenance)'로 의미를 명확히 한다(출처는 채널이
@@ -29,24 +30,14 @@ const REVIEW_LABEL = { na: '해당 없음', checked_no_change: '점검함(변화
 // V5 탈-repo: 도메인 귀속은 repo-비의존(business=조직평면). 저장/필터 드롭다운은 통합 목록(loadAllDomains)을
 //  쓰고, 어휘CRUD 화면만 repo별 product 도메인(loadDomains)을 유지한다(코드앵커·debt 가 repo 스코프).
 const VOCAB_CRUD_DEFAULT_REPO = 'productivity'; // 어휘관리 화면 repo 셀렉터 폴백 기본(product 도메인 CRUD 전용)
-let uid = 0;            // datalist 등 고유 id 카운터
 
-// ── 공통 구성원(프로필) 단일 선택 콤보 — 드롭다운 + 타이핑 검색(native datalist), 자유입력도 허용. ──
-//  데이터원 = /api/ui/terminal/profiles(구성원 + 로그인상태). 여러 폼 재사용(상시세션 account 등).
-//  ⚠ 다중선택·초대는 별도(terminal.ts buildInvitePicker). 반환 { el, value() }.
+// ── 공통 구성원(프로필) 단일 선택 콤보 — 관리 화면용. 데이터원 = /api/ui/terminal/profiles(구성원 + AI 로그인 상태). ──
+//  여러 폼 재사용(상시세션 account 등). ⚠ 다중선택·초대는 별도(terminal.ts buildInvitePicker). 반환 { el, value() }.
+//  #4052 — 종전엔 native datalist 라 **고르면 칸에 구성원 id 가 박혔다**(이름은 목록에만 잠깐 보였다). 이제 이름으로
+//   보이고 이름으로 찾는 lib/person-select 를 쓴다. 값(id)·반환 모양은 그대로라 호출부는 바꿀 필요가 없다.
 export function memberCombo(opts?: { value?: string; placeholder?: string }): { el: HTMLElement; value: () => string } {
-  const listId = 'mc-dl-' + (++uid);
-  const input = el('input', { type: 'text', style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box',
-    value: (opts && opts.value) || '', placeholder: (opts && opts.placeholder) || '구성원 선택/검색', list: listId, autocomplete: 'off' }) as HTMLInputElement;
-  const dl = el('datalist', { id: listId });
-  api('/api/ui/terminal/profiles').then((r: any) => {
-    for (const p of (r && r.profiles) || []) {
-      const s = p.status || {};
-      const tag = s.loggedIn ? '✓ 로그인' : (s.provisioned ? 'provisioned·미로그인' : '미provision');
-      dl.append(el('option', { value: p.id, label: (p.name || p.id) + ' — ' + tag }));
-    }
-  }).catch(() => { /* 목록 실패해도 자유입력 유지 */ });
-  return { el: el('div', {}, input, dl), value: () => input.value.trim() };
+  const p = personSelect({ value: opts && opts.value, placeholder: opts && opts.placeholder, source: 'profiles' });
+  return { el: p.el, value: p.value };
 }
 
 // ── 시크릿 입력칸(#1250) ──

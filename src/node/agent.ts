@@ -327,6 +327,9 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     }
     case "runTask": {
       const input = args as unknown as RunTaskInput;
+      //  #4012 T5 — 구 게이트웨이는 주소를 안 싣는다. 그때는 **이 노드가 붙어 있는 게이트웨이**가 곧 이 위탁을 낸
+      //   곳이므로 그 주소를 쓴다(로컬 `~/.lively/gateway-url` 로 흘러 남의 워크스페이스에 붙지 않게).
+      if (!input.gatewayUrl && GW_URL) input.gatewayUrl = GW_URL;
       const r = await spawnTaskSession(input);
       // 노드가 받는 runTask 는 **위탁뿐**이고 그 id 는 org_task 의 숫자다(리브 대화 턴은 이 op 를 안 탄다 —
       //  게이트웨이 로컬에서 spawnTaskSession 을 직접 부른다). 추적 맵은 그 숫자 계약 위에 있으므로 여기서 좁힌다.

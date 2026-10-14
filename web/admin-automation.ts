@@ -326,7 +326,7 @@ function openManagedSessionForm(m, reload) {
   const isNew = !m;
   const idInp = el('input', { type: 'text', style: psInputStyle, value: m ? m.id : '', placeholder: 'box-map-agent', ...(isNew ? {} : { disabled: true }) });
   const labelInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
-  const account = memberCombo({ value: (m && m.account) || '', placeholder: '구성원 id 선택/검색 (예: daon)' });
+  const account = memberCombo({ value: (m && m.account) || '', placeholder: '이름으로 찾아 고르기' });
   const wsInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.workspace_subpath) || '', placeholder: '비우면 managed/<id>' });
   // 하네스·플래그는 **서버 카탈로그**(/api/ui/terminal/config)에서 온다(#1711). 종전엔 ['claude','codex','shell'] 과
   //  claude 의 모델·effort 목록이 이 폼에 박혀 있어, 상시 세션을 opencode·antigravity 로 띄울 수 없었고(선택지 부재)

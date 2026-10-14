@@ -16,7 +16,7 @@ import { readEarlyoomKills } from "../../ops/earlyoom-log.js"; // #1240 — earl
 import { ptyUsage, selfPtmxFdCount } from "../../terminal/host-pty.js"; // #687 후속 — PTY 슬롯 status
 import { liveAttachCount, scanAttachProcs } from "../../terminal/terminal-pty.js"; // #687 후속 — 장부 vs 실제(누수 판별)·고아·관측창
 import {
-  getRuntimeConfig, getStoragePolicySource, getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource
+  getRuntimeConfig, getStoragePolicySource, getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource
 } from "../../org/store.js";
 import { restOnly, restWork, str } from "./shared.js";
 
@@ -176,6 +176,10 @@ export const boxStatusCapabilities: Capability[] = [
         // 위탁 무출력 stall 상한(#1101) — ms, 0=가드 끔. 스케줄러가 30s 캐시로 읽는다(저장 즉시 무효화).
         delegate_policy: cfg.delegate_policy,
         delegate_policy_source: await getDelegatePolicySource(),
+        //  #4012 T1 — 맥락관리 잡을 누구 자격으로 돌리나(+출처). 관리 화면이 «미설정» 을 말할 수 있어야
+        //   사람이 그 칸을 채운다 — 안 보이면 종전처럼 created_by 로 조용히 흐른다.
+        context_job_policy: cfg.context_job_policy,
+        context_job_policy_source: await getContextJobPolicySource(),
         disks,
         logs: {
           dir: logRoot(),

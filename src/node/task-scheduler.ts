@@ -10,6 +10,8 @@
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
+import { gatewayUrl } from "../gateway-url.js";   // #4012 T5 — 판이 붙을 게이트웨이 주소(보내는 쪽이 안다)
+import { tenantSlug } from "../terminal/catalog.js";   // #4012 T5 — 판의 워크스페이스 소속
 import { withTenant } from "../org/tenant-context.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
 import { sharedRoot } from "../terminal/terminal-sessions.js";
@@ -22,14 +24,20 @@ import { nodeOnline, nodeRpc, nodeSessionGone, schedulableRemotes, onTaskDone } 
 import { getNode, listNodes } from "./store.js";
 import { remoteDelegateAllowed } from "./node-access.js";
 import {
-  queuedTasks, runningTasks, runningCountByNode, markRunning, markFinished, requeue, setNodeLost, getTask,
-  matchNode, type DelegateTask, type SchedulableNode,
+  queuedTasks, runningTasks, runningCountByNode, runningCountFor, markRunning, markFinished, requeue, setNodeLost, getTask,
+  noteAssignFailure, matchNode, type DelegateTask, type SchedulableNode,
 } from "./task-store.js";
+import type { AssignFailCode } from "./assign-outcome.js";
 import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, detectHarnesses, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
 import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
+import {
+  sandboxAvailable, isContextJob, isSandboxTaskDir, schedulingRoute, spawnSandboxTask, checkSandboxTask,
+  stopSandboxTask, reapSandboxTask, SandboxBusyError, SANDBOX_HARNESSES, sandboxDataRoot,
+} from "./sandbox-task.js";
+import { SANDBOX_CREDS, sandboxLeaseFor, harvestSandboxReturn } from "./sandbox-credentials.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -38,6 +46,12 @@ const OFFLINE_GRACE_MS = Math.max(3_000, Number(process.env.LIVELY_TASK_OFFLINE_
 const CAP_CENTRAL = Math.max(0, Number(process.env.LIVELY_CENTRAL_TASK_CAP ?? 1));  // §9-8 저용량 워커
 const CAP_MEMBER = Math.max(0, Number(process.env.LIVELY_MEMBER_TASK_CAP ?? 1));    // ⑶ '적당히' 기본값
 const CAP_WORKER = Math.max(0, Number(process.env.LIVELY_WORKER_TASK_CAP ?? 2));
+//  #4012 T3 — 샌드박스(매니지드 중앙 맥락 잡) 동시 수. op 의 context 프로필 몫(4)과 맞춘다 — 넘기면 op 가 busy 로 돌려보낸다.
+const CAP_SANDBOX = Math.max(0, Number(process.env.LIVELY_CENTRAL_SANDBOX_CAP ?? 4));
+//  샌드박스가 돌릴 수 있는 하네스 — **이 박스에 실제로 깔린 것만**(기준선을 합치지 않는다: 없는 걸 있다고 하면
+//   접수는 되고 판이 op 에서 bad_harness 로 죽는다). 배포(install-cp)가 깔면 곧 보이게 짧게 캐시한다.
+const SANDBOX_HARNESS_TTL_MS = 10 * 60_000;
+let sandboxHarnesses: { at: number; list: string[] } | null = null;
 // §8-3 — me_credential_set 또는 '내 로그인' UI 로 멤버가 1회 저장.
 //  ⚠ 이름은 반드시 member-secret-store 의 KIND_RE(/^[a-z0-9_]{1,40}$/) 를 지킬 것 — 하이픈(claude-setup-token)은
 //  setMemberSecret 이 거부해 애초에 저장이 불가능한데(#1299 등록 UI 가 이 오류로 막혔었다), 조회(getMemberSecret)는
@@ -93,7 +107,11 @@ async function requesterOsUser(requester: string | null | undefined): Promise<st
 async function progressBytes(t: DelegateTask): Promise<number> {
   const dir = t.task_dir ?? "";
   if (!dir) return 1;
-  if (t.node_id === CENTRAL_NODE_ID) return (await tailTask(dir, 0, await requesterOsUser(t.requester))).next;
+  if (t.node_id === CENTRAL_NODE_ID) {
+    //  샌드박스 판(#4012)은 게이트웨이가 **직접** 읽는다 — 멤버 경계 감옥에는 그 폴더가 없다.
+    const osUser = isSandboxTaskDir(dir) ? null : await requesterOsUser(t.requester);
+    return (await tailTask(dir, 0, osUser)).next;
+  }
   if (!t.node_id || !nodeOnline(t.node_id)) return 1;   // 오프라인은 노드 유실 경로가 따로 처리한다
   const r = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: dir, from: 0 });
   return r?.next ?? 1;
@@ -102,7 +120,7 @@ async function progressBytes(t: DelegateTask): Promise<number> {
 // 워커 세션 강제 종료(중앙=로컬 tmux, 원격=노드 RPC). 이미 없거나 노드가 이탈했으면 조용히 넘어간다.
 //  ⚠ 세션 좌표(node_id·session_id·requester)만 쓴다 — 실패 세션 회수기도 같은 함수를 쓰기 위해
 //   DelegateTask 전체가 아니라 그 세 칸만 요구한다(회수기는 DB 에서 그 칸만 읽어온다).
-type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
+type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester"> & { task_dir?: string | null };
 /**
  * 반환값 `gone` = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
  *
@@ -121,6 +139,8 @@ type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
 async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reached: boolean; why?: string }> {
   if (!t.session_id) return { gone: true, reached: true };   // 걷을 세션이 애초에 없다 = 완료
   if (t.node_id === CENTRAL_NODE_ID) {
+    //  샌드박스 판(#4012)은 tmux 세션이 아니라 일시 유닛이다 — op 에 멈춤을 맡긴다(못 닿으면 «아직»).
+    if (isSandboxTaskDir(t.task_dir)) return stopSandboxTask(String(t.task_dir));
     await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
     return { gone: true, reached: true };
   }
@@ -149,6 +169,18 @@ async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reac
  *  `true` 일 때만 회수 성공으로 접는다. `null` 을 성공으로 접으면 그게 바로 #1675 리뷰의 거짓 성공이다.
  */
 async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
+  //  샌드박스 판(#4012) — 회수는 «멈춤» 이 아니라 **치우기**다(끝난 유닛 reset-failed + 폴더 삭제). 살아 있으면 op 가
+  //   거절하고(active) 다음 회차에 다시 본다. 판에 실어 준 MCP 토큰도 여기서 한 번 더 회수한다(취소 경로는 finish 를 안 탄다).
+  if (t.node_id === CENTRAL_NODE_ID && isSandboxTaskDir(t.task_dir)) {
+    if (t.session_id) {
+      const { revokeSessionHookToken } = await import("../terminal/profiles.js");
+      await revokeSessionHookToken(t.session_id).catch(() => { /* 다음 회차 */ });
+    }
+    //  codex 판이 토큰을 갱신했으면 **치우기 전에** 거둔다(치우면 반환 파일도 사라진다 — #4012 T2).
+    await harvestSandboxReturn({ id: t.id, requester: t.requester, harness: String(t.harness ?? ""), task_dir: t.task_dir ?? null });
+    const r = await reapSandboxTask(String(t.task_dir), false);
+    return decideReap(r.done, null, r.why, r.reached);
+  }
   const r = await killTaskAnywhere(t);
   // 확답을 구하는 건 **kill 이 실패했을 때뿐**이다 — 성공했으면 RPC 를 한 번 더 쏠 이유가 없다.
   const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
@@ -171,6 +203,19 @@ async function reapFailedSessions(): Promise<void> {
   }
 }
 
+/**
+ * #4051 — 맥락 잡이 자격 때문에 멈췄다는 사실을 실행 멤버에게 알린다(앱 알림 · 반나절에 한 번).
+ *  동적 import — 이 파일은 노드 에이전트 번들 경계 가까이에 있다(무거운 간선을 늘리지 않는다). **던지지 않는다.**
+ */
+async function notifyHeadless(o: { memberId: string; harness: string; reason: "no_credential" | "auth_failure"; label?: string | null }): Promise<void> {
+  try {
+    const { notifyHeadlessCredentialProblem } = await import("../org/credentials/headless-connect.js");
+    await notifyHeadlessCredentialProblem(o);
+  } catch (err) {
+    logger.warn({ err: (err as Error)?.message, requester: o.memberId }, "헤드리스 자격 알림 실패(비치명)");
+  }
+}
+
 // 상태 전이만 DB 에 기록한다 — 의뢰 세션 통지는 하지 않는다(§11: 흐름은 CLI 프로세스가 pull/스트림).
 async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary?: string, error?: string): Promise<void> {
   liveSeen.delete(t.id);
@@ -183,13 +228,23 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
   }, error ?? null);
   // 성공 = 세션 즉시 정리 · 실패 = 세션 보존(사후 검시 — 웹터미널로 열람)하되 **상한 안에서만**(#1675 ①).
   //  종전엔 실패 세션이 무기한 남았고, 그게 어니스트 2026-08-12 에 2,300개까지 쌓여 박스를 무너뜨렸다.
-  if (ok && t.session_id && t.node_id) {
+  if (t.node_id === CENTRAL_NODE_ID && isSandboxTaskDir(t.task_dir)) {
+    //  샌드박스 판(#4012) — 실어 준 MCP 토큰을 회수하고 끝난 유닛을 치운다. 실패 판은 폴더를 **남긴다**(사후 검시 —
+    //   실패 세션 회수기가 보존 상한대로 나중에 지운다). 유닛은 둘 다 비운다(같은 키로 다시 띄울 수 있게).
+    const { revokeSessionHookToken } = await import("../terminal/profiles.js");
+    if (t.session_id) await revokeSessionHookToken(t.session_id).catch(() => { /* 회수기가 다시 본다 */ });
+    //  codex 판이 토큰을 갱신했으면 **치우기 전에** 거둔다(#4012 T2). 성공·실패 모두 — 실패 판도 갱신은 했을 수 있다.
+    await harvestSandboxReturn(t);
+    await reapSandboxTask(String(t.task_dir), !ok).catch(() => { /* 회수기가 다시 본다 */ });
+  } else if (ok && t.session_id && t.node_id) {
     if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
     else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
   }
   logger.info({ task: t.id, ok, node: t.node_id, auth: auth?.label ?? null }, "위탁 태스크 종결");
 
   // 자격 실패 대응 — 크론 정지 + 대기분 취소 + 알림. 실패해도 종결 자체는 이미 끝났다.
+  //  #4051 — 맥락 잡이면 실행 멤버의 화면에도 올린다(조직 웹훅은 관리자만 본다 — 고칠 사람은 그 멤버다).
+  if (auth && isContextJob(t)) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "auth_failure", label: auth.label });
   if (auth) {
     const policy = await effectiveDelegatePolicy(loadDelegatePolicy).catch(() => null);
     await handleAuthFailure(
@@ -218,18 +273,20 @@ function armTaskDoneHook(): void {
 const QUEUE_MAX_MS = Math.max(0, Number(process.env.LIVELY_TASK_QUEUE_MAX_MS ?? 600_000));
 
 // 배치 불가 사유(하네스에게 '왜 안 되는지'를 즉답 — 로컬 폴백 판단 재료). 각 후보 노드의 탈락 이유를 모은다.
-function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "harness">, nodes: SchedulableNode[]): string {
-  if (!nodes.length) return "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)";
+//  ★ 문장 옆에 **코드**를 함께 낸다(#3994 T5 · #968) — 호출부가 «기다리면 풀리는 것(capacity)»과
+//   «영영 못 도는 것»을 가르려면 판정 축이 필요한데, 문장을 파싱해 가르면 문구를 다듬는 순간 조용히 깨진다.
+function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker" | "harness">, nodes: SchedulableNode[]): { code: AssignFailCode; text: string } {
+  if (!nodes.length) return { code: "no_nodes", text: "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)" };
   // #1884 — 하네스를 못 띄우는 건 용량 문제가 아니다. 후보 전부가 그 사유면 그렇게 말한다(셋업토큰 안내로 헛다리 짚지 않게).
   if (!nodes.some((n) => n.harnesses.includes(t.harness))) {
     // ⚠ #2128 — "지원하는 노드 없음"이라고 **단정하지 않는다.** 이 목록은 노드가 hello 로 스스로 보고한 것이고,
     //  낡은 인스턴스가 좁은 PATH 로 굳으면 **그 CLI 가 잘 도는 PC 도 없다고 보고한다**(실측 2026-08-26 hammurabi:
     //  claude 세션 8/8 이 정상 실행되는데 검출은 [shell] 하나였다). 그 상태에서 "없다"고 못 박으면 사람은 설치·
     //  셋업토큰을 의심하며 헛다리를 짚는다. 사실(보고된 목록)만 대고, 보고가 틀릴 수 있다는 것과 조치를 함께 말한다.
-    return `하네스 ${t.harness} 를 보고한 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
+    return { code: "no_harness", text: `하네스 ${t.harness} 를 보고한 노드 없음 — ` + nodes.map((n) => `${n.id}: [${n.harnesses.join(",")}]`).join(" · ")
       + `. 이 목록은 각 노드가 스스로 보고한 것입니다 — 그 CLI 가 깔려 있는데도 안 보이면 그 PC 에서`
       + ` \`lively node --daemon\` 을 다시 실행해 주세요(낡은 인스턴스가 좁은 PATH 로 굳으면 못 찾습니다).`
-      + ` 정말 없다면 그 CLI 가 깔린 노드를 등록하거나 잡/위탁의 하네스를 바꾸세요.`;
+      + ` 정말 없다면 그 CLI 가 깔린 노드를 등록하거나 잡/위탁의 하네스를 바꾸세요.` };
   }
   const bits = nodes.map((n) => {
     if (!n.harnesses.includes(t.harness)) return `${n.id}: 하네스 ${t.harness} 미지원`;
@@ -241,7 +298,8 @@ function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need
     if (t.need_cpu != null && Math.max(0, n.res.cpus - n.res.load1) < t.need_cpu) return `${n.id}: 유휴코어 ${Math.max(0, n.res.cpus - n.res.load1).toFixed(1)} < 요구 ${t.need_cpu}`;
     return `${n.id}: 부적합`;
   });
-  return "가용 노드 없음 — " + bits.join(" · ");
+  //  후보도 있고 하네스도 있는데 못 갔다 = 지금 **자리**가 없다. 자리는 나면 풀리므로 정상 배압이다.
+  return { code: "capacity", text: "가용 노드 없음 — " + bits.join(" · ") };
 }
 
 // 자격 리스(④) — 의뢰자가 등록한 셋업토큰을 env 로 싣는다.
@@ -274,10 +332,23 @@ export async function leaseEnvFor(
 //   **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가 재연결하기 전까지 계속 열려 보인다 —
 //   정책 변경이 즉시 듣지 않는 건 접근통제에서 결함이다. 쿼리 1회(노드 수는 수십 규모)로 그걸 없앤다.
 async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<{ nodes: SchedulableNode[]; env?: Record<string, string> }> {
-  const env = await leaseEnvFor(t);
+  //  #4012 T3 — 샌드박스 op 가 있는 박스(매니지드)에서 중앙은 **맥락 잡 전용 샌드박스**다(schedulingRoute 머리말).
+  const route = schedulingRoute(sandboxAvailable(), isContextJob(t));
+  //  자격 — 샌드박스 판은 **샌드박스 자격 표**(codex 포함, #4012 T2)로, 그 밖은 원격 노드 리스 표로 빌린다.
+  //   ⚠ 두 표를 합치지 않는다: codex 를 원격 리스 표에 넣으면 공유 노드가 노드 주인 로그인으로 codex 판을 돈다.
+  const env = route.central === "sandbox" ? await sandboxLeaseFor(t) : await leaseEnvFor(t);
   const running = (id: string): number => (counts.get(id) ?? 0) + (extra.get(id) ?? 0);
   const nodes: SchedulableNode[] = [];
-  if (CAP_CENTRAL > 0) {
+  if (route.central === "sandbox") {
+    if (!sandboxHarnesses || Date.now() - sandboxHarnesses.at > SANDBOX_HARNESS_TTL_MS) {
+      sandboxHarnesses = { at: Date.now(), list: (await detectHarnesses()).filter((h) => SANDBOX_HARNESSES.includes(h)) };
+    }
+    nodes.push({
+      id: CENTRAL_NODE_ID, kind: "central", central: true, hasDocker: false, harnesses: sandboxHarnesses.list,
+      res: await sampleResources(sharedRoot().base).catch(() => null), capacity: CAP_SANDBOX, running: running(CENTRAL_NODE_ID),
+    });
+  }
+  if (route.central === "tmux" && CAP_CENTRAL > 0) {
     if (centralDocker === null) centralDocker = await detectDocker();
     // #1884 — 중앙 박스에 실제로 깔린 CLI ∪ 기준선(claude·codex·shell). 기준선을 합치는 이유: 게이트웨이 프로세스의 PATH 는
     //  launchd/systemd 것이라 사람 셸의 ~/.local/bin 이 빠져 `--version` 프로브가 못 찾을 수 있는데(스폰은 로그인 셸을 타서 된다),
@@ -289,6 +360,7 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
       res: await sampleResources(sharedRoot().base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
     });
   }
+  if (!route.remotes) return { nodes, env };
   const rows = new Map((await listNodes().catch(() => [])).map((n) => [n.id, n]));
   for (const r of schedulableRemotes()) {
     const row = rows.get(r.id);
@@ -304,21 +376,54 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
 
 // 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
-export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string }
+export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string; code?: AssignFailCode }
 async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<AssignResult> {
   const { nodes, env } = await candidatesFor(t, counts, extra);
-  const pick = matchNode(t, nodes);
-  if (!pick) return { assigned: false, reason: capacityReason(t, nodes) };
+  //  #4012 T3 — 맥락 잡은 멤버·워커 고정(node_pref)을 따르지 않는다: 기본 제공 잡은 중앙에서 돈다(상민님 결정).
+  const sandboxJob = sandboxAvailable() && isContextJob(t);
+  const pick = matchNode(sandboxJob ? { ...t, node_pref: null } : t, nodes);
+  if (!pick) { const why = capacityReason(t, nodes); return { assigned: false, code: why.code, reason: why.text }; }
   const runArgs: Record<string, unknown> = {
     user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
     prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
+    //  #4012 T5 — 판이 붙을 곳을 **보내는 쪽이** 정한다. 이 호출은 withTenant 안이라 둘 다 이 워크스페이스 값이다.
+    //   실패해도 배정을 막지 않는다 — 없으면 안 싣고(노드는 자기 게이트웨이로 폴백) 종전대로 간다.
+    gatewayUrl: await gatewayUrl().catch(() => null),
+    tenantSlug: tenantSlug(),
   };
   let r: RunTaskResult;
-  if (pick.id === CENTRAL_NODE_ID) {
+  if (pick.id === CENTRAL_NODE_ID && sandboxJob) {
+    //  자격이 없으면 **지금** 끝낸다 — 기다려도 안 풀리고, 종전엔 이 경우가 10분 뒤 «적합 노드 없음» 으로만 드러났다.
+    //   실패로 닫으면 증류 «판정함» 기록도 되돌아가(markFinished) 자료가 인박스로 돌아온다.
+    if (!env) {
+      const cred = Object.hasOwn(SANDBOX_CREDS, t.harness) ? SANDBOX_CREDS[t.harness] : undefined;
+      const reason = cred
+        ? `실행 멤버(${t.requester})의 ${t.harness} 자격(${cred.kind})이 없거나 멤버가 비활성이다 — 그 멤버가 내 자격(me_credential_set)에서 등록하세요`
+        : `${t.harness} 는 중앙 샌드박스 자격이 없는 하네스다 — 맥락 잡 실행 하네스를 claude·codex 로 두세요`;
+      await markFinished(t.id, false, { reason: "no_credential", last_assign: { code: "no_credential", reason } }, reason);
+      logger.warn({ task: t.id, requester: t.requester, harness: t.harness }, "맥락 잡 자격 없음 — 접수 즉시 실패");
+      //  #4051 — 그 멤버 **화면으로** 올린다. 잡 겉상태는 초록이라(증류·분류·관리 액션은 ok 를 돌려준다) 알리지 않으면
+      //   아무도 모른다. 하네스가 판 자격 표에 없는 경우는 관리자 설정 문제라 멤버에게 보내지 않는다. 던지지 않는다.
+      if (cred) await notifyHeadless({ memberId: t.requester, harness: t.harness, reason: "no_credential" });
+      return { assigned: false, code: "no_credential", reason };
+    }
+    //  같은 멤버의 codex 판은 **한 번에 하나** — 둘이 동시에 토큰을 갱신하면 한쪽이 다른 쪽의 refresh token 을
+    //   무효화할 수 있다(#4012 T2). 기다리면 풀리는 것이라 배압(capacity)이다.
+    if (t.harness === "codex"
+      && await runningCountFor({ requester: t.requester, harness: "codex", taskDirPrefix: sandboxDataRoot(), except: t.id }) > 0) {
+      return { assigned: false, code: "capacity", reason: `실행 멤버(${t.requester})의 codex 판이 이미 돌고 있다 — 토큰 갱신 충돌을 피해 한 번에 하나씩` };
+    }
+    try {
+      r = await spawnSandboxTask({ ...(runArgs as object), attempt: t.attempt + 1, timeoutSec: t.timeout_sec } as never);
+    } catch (e) {
+      if (e instanceof SandboxBusyError) return { assigned: false, code: "capacity", reason: e.message };
+      throw e;
+    }
+  } else if (pick.id === CENTRAL_NODE_ID) {
     r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
   } else {
     const n = await getNode(pick.id);
-    if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
+    if (!n || !n.enabled) return { assigned: false, code: "node_disabled", reason: `선정 노드 ${pick.id} 비활성` };
     // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
     //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
     //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
@@ -336,7 +441,7 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
 export async function tryAssignNow(t: DelegateTask): Promise<AssignResult> {
   const counts = await runningCountByNode();
   try { return await assignOne(t, counts, new Map()); }
-  catch (err) { return { assigned: false, reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
+  catch (err) { return { assigned: false, code: "spawn_error", reason: `배치 오류: ${(err as Error)?.message ?? err}` }; }
 }
 
 /**
@@ -391,19 +496,27 @@ async function assignQueuedWith(counts: Map<string, number>, extra: Map<string, 
       // 큐 대기 상한(⑤) — 적합 노드를 QUEUE_MAX 안에 못 얻으면 무한 대기 대신 no_capacity 실패.
       //  ★ 백오프보다 **먼저** 본다 — 백오프 중인 태스크도 제 시각에 끝나야 한다(상한이 미뤄지면 안 된다).
       if (QUEUE_MAX_MS > 0 && now - new Date(t.created_at).getTime() > QUEUE_MAX_MS) {
-        await markFinished(t.id, false, { reason: "no_capacity_timeout" }, `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — 적합 노드 없음`);
+        // 마지막으로 **왜** 못 갔는지를 실패 문장에 싣는다(#3994 T5 · #968) — 종전 문구는 늘 «적합 노드 없음»
+        //  이라, 그 10분 동안 하네스를 보고한 노드가 없었는지·스폰이 죽었는지가 어디에도 안 남았다.
+        //  기록은 noteAssignFailure 가 매 시도마다 해 둔다(없으면 종전 문구 그대로).
+        const last = (t.result as { last_assign?: { code?: string; reason?: string } } | null)?.last_assign ?? null;
+        await markFinished(t.id, false, { reason: "no_capacity_timeout", ...(last ? { last_assign: last } : {}) },
+          `대기 시간 초과(${Math.round(QUEUE_MAX_MS / 60000)}분) — ${last?.reason || "적합 노드 없음"}`);
         logger.info({ task: t.id }, "큐 대기 초과 — no_capacity 실패");
         assignBackoff.delete(t.id);
         continue;
       }
       const bo = assignBackoff.get(t.id);
       if (bo && now < bo.nextAt) continue;              // 아직 백오프 중 — 이 tick 은 건너뛴다
-      await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      const r = await assignOne(t, counts, extra); // 실패해도 큐 유지(다음 tick 재시도, 상한까지)
+      //  못 간 이유를 그 태스크에 적어 둔다(#3994 T5) — 상한으로 죽을 때 이 값이 곧 실패 문장이 된다.
+      if (!r.assigned) await noteAssignFailure(t.id, r.code ?? null, r.reason ?? null);
       assignBackoff.delete(t.id);        // 던지지 않았으면 연속이 끊긴다(용량 부족 포함 — 백오프 대상 아님)
     } catch (err) {
       const n = (assignBackoff.get(t.id)?.n ?? 0) + 1;
       const wait = assignBackoffDelayMs(n);
       assignBackoff.set(t.id, { n, nextAt: now + wait });
+      await noteAssignFailure(t.id, "spawn_error", (err as Error)?.message ?? String(err));
       logger.warn({ err: (err as Error)?.message, task: t.id, attempt: n, retryInMs: wait },
         "위탁 배정 실패 — 백오프 뒤 재시도");
     }
@@ -483,7 +596,10 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_id === CENTRAL_NODE_ID) {
         // 중앙(내장 노드)은 스케줄러가 직접 감시 — 원격은 에이전트가 taskdone 을 push.
-        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined, osUser: await requesterOsUser(t.requester) });   // #1710 — 하네스별 결과 스키마
+        //  샌드박스 판(#4012)은 종료 줄(nonce)·op 상태로 판정하고, 폴더는 게이트웨이가 직접 읽는다.
+        const out = isSandboxTaskDir(t.task_dir)
+          ? await checkSandboxTask({ taskId: t.id, taskDir: t.task_dir ?? "", harness: t.harness ?? null })
+          : await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined, osUser: await requesterOsUser(t.requester) });   // #1710 — 하네스별 결과 스키마
         if (out) await finish(t, out.ok, out.exit, out.summary, out.error);
         continue;
       }

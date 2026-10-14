@@ -12,10 +12,16 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
+import { headlessStateOf, isHeadlessLoginHarness, type HeadlessLoginHarness } from "./headless-login-flow.js";   // #4051 사람 없이 도는 작업의 자격을 화면에서
+import {
+  cancelHeadlessLogin, headlessSeatKey, markHeadlessStored, pasteHeadlessLogin, readHeadlessLogin, startHeadlessLogin,
+} from "./headless-login-run.js";
 import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
-import { publishNotify, sessionEventKey } from "../v6/notify-bus.js";
+import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
+import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -410,6 +416,107 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json({ ok: true });
   }));
 
+  // ── 사람 없이 도는 작업의 자격을 **화면에서** (#4012 T12 · #4051) ────────────────────────────────
+  //  중앙 샌드박스 판은 등록된 헤드리스 자격만 쓴다. 그 자격을 받는 길이 «터미널에서 setup-token → 숨은 화면에 붙여넣기»
+  //  뿐이라 웹만 쓰는 첫 사용자는 막혔다. 여기서는 대화형 로그인과 **같은 자리**에서 발급 명령을 대신 돌리고
+  //  (headless-login-run 머리말), 잡힌 자격을 이 조회가 곧바로 멤버 비밀로 저장한다 — 사람은 토큰을 보지 않는다.
+  //  ⚠ 응답에 자격 값을 싣지 않는다. 러너 로그에도 없다(표식으로 바뀌어 있다).
+  const headlessHarnessOf = (req: express.Request): HeadlessLoginHarness => {
+    const h = String(((req.body ?? {}) as Record<string, unknown>).harness ?? (req.query.harness ?? "")).trim();
+    if (!isHeadlessLoginHarness(h)) throw new HttpError(400, "이 AI 는 사람 없이 도는 작업의 자격을 화면에서 연결할 수 없습니다(claude·codex 만).");
+    return h;
+  };
+  const headlessMemberOf = (req: express.Request): string => {
+    //  자격의 주인은 me_credential_set 과 **같은 id**(userId)여야 한다 — 판이 `member:<실행 멤버 id>` 로 찾는다.
+    const id = userOf(req).userId;
+    if (!id) throw new HttpError(401, "인증이 필요합니다");
+    return id;
+  };
+  app.post("/api/ui/me/headless-login/start", auth, wrap(async (req, res) => {
+    const h = headlessHarnessOf(req);
+    headlessMemberOf(req);
+    //  저장할 수 없는 배포면 **시작하지 않는다** — 사람이 브라우저에서 승인까지 한 뒤에 «저장 못 함» 을 보면 헛수고다.
+    const { secretsEnabled } = await import("../org/credentials/secret-box.js");
+    if (!secretsEnabled()) throw new HttpError(400, "이 서버에는 자격을 암호화해 둘 키가 없어 연결할 수 없습니다 — 관리자에게 CONNECTOR_SECRET_KEY 설정을 요청해 주세요.");
+    const seat = await loginSeat(req);
+    //  다시 시작은 **새로** 띄운다 — 대화형 로그인과 같은 이유(지난 시도의 주소·코드는 이미 죽었다, #2232).
+    if (((req.body ?? {}) as Record<string, unknown>).restart === true) {
+      await cancelHeadlessLogin(seat, h);
+      await dropLoginSession(userOf(req), headlessSeatKey(h));
+    }
+    await startHeadlessLogin(seat, h, userOf(req));
+    await touchHarnessSeat(userOf(req), headlessSeatKey(h));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  }));
+  //  화면이 폴링하는 자리 — 주소·코드·다음 단계. 러너가 자격을 잡았으면 **여기서** 저장한다(요청 문맥 = 이 워크스페이스).
+  app.get("/api/ui/me/headless-login/state", auth, wrap(async (req, res) => {
+    const h = headlessHarnessOf(req);
+    const user = userOf(req);
+    const seat = await loginSeat(req);
+    const got = await readHeadlessLogin(seat, h);
+    await touchHarnessSeat(user, headlessSeatKey(h));
+    let stored = got.stored;
+    let storeError: string | null = null;
+    let runner: string | null = null;
+    if (!stored && got.captured) {
+      const { storeHeadlessCredential, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
+      const me = headlessMemberOf(req);
+      //  관리자 판정은 헤드리스 경로의 한 벌이다 — 데스크톱 앱의 기기 로그인 토큰엔 admin 이 없어도 구성원 역할이
+      //   관리자면 관리자다(memberIsAdminNow 머리말). 정적·앱 토큰은 안 된다(headlessAdminFor 머리말).
+      const r = await storeHeadlessCredential({
+        memberId: me, harness: h, secret: got.captured, actor: me, isAdmin: await headlessAdminFor(user, me),
+      });
+      //  실행 멤버 판정 결과는 응답 밖에서는 안 보인다 — 조용히 빠지면 원인을 못 찾는다(실측 2026-09-17). 비밀은 없다.
+      logger.info({ member: me, harness: h, stored: r.ok, runner: r.ok ? r.runner : null }, "headless: 화면 연결 저장");
+      if (r.ok) {
+        await markHeadlessStored(seat, h).catch(() => { /* 다음 조회가 다시 저장한다(같은 값 — 무해) */ });
+        //  자리(세션 컨테이너)도 치운다 — 발급은 끝났다. 안 치우면 연결마다 컨테이너가 남는다.
+        await dropLoginSession(user, headlessSeatKey(h));
+        stored = true;
+        runner = r.runner;
+      } else {
+        storeError = r.error;
+      }
+    }
+    //  비밀 값은 넘기지 않는다 — «거둘 자격이 있었나» 만(headlessStateOf 머리말: 그러면 끝남으로 안 본다).
+    const st = headlessStateOf(h, { log: got.log, ended: got.ended, hasCaptured: !!got.captured }, { stored, storeError });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ...st, ...(runner ? { runner } : {}) });
+  }));
+  app.post("/api/ui/me/headless-login/paste", auth, wrap(async (req, res) => {
+    const h = headlessHarnessOf(req);
+    const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
+    await pasteHeadlessLogin(await loginSeat(req), h, code);
+    await touchHarnessSeat(userOf(req), headlessSeatKey(h));
+    res.json({ ok: true });
+  }));
+  app.post("/api/ui/me/headless-login/cancel", auth, wrap(async (req, res) => {
+    const h = headlessHarnessOf(req);
+    await cancelHeadlessLogin(await loginSeat(req), h);
+    await dropLoginSession(userOf(req), headlessSeatKey(h));
+    res.json({ ok: true });
+  }));
+  //  [내 AI 계정] «사람 없이 도는 작업» 행 — 연결 여부 · 연결 뒤에 난 실패 · 워크스페이스 실행 멤버.
+  app.get("/api/ui/me/headless", auth, wrap(async (req, res) => {
+    const me = headlessMemberOf(req);
+    const { headlessStatusFor, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
+    res.setHeader("Cache-Control", "no-store");
+    //  «정할 수 있나» 도 저장과 같은 판정이다 — 데스크톱의 관리자에게도 버튼·안내가 맞게 나온다.
+    res.json(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) }));
+  }));
+  //  [이 워크스페이스의 실행 멤버로 정하기] — 연결은 됐는데 실행 멤버가 비어 있을 때 사람이 스스로 마무리한다.
+  //   대상은 언제나 요청한 본인이다(몸통의 멤버 id 를 읽지 않는다 — claimRunnerFromScreen 머리말).
+  app.post("/api/ui/me/headless/runner", auth, wrap(async (req, res) => {
+    const me = headlessMemberOf(req);
+    const { claimRunnerFromScreen, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
+    const out = await claimRunnerFromScreen({ memberId: me, actor: me, isAdmin: await headlessAdminFor(userOf(req), me) });
+    logger.info({ member: me, ok: out.ok, runner: out.ok ? out.runner : null }, "headless: 실행 멤버 화면 지정");
+    if (!out.ok) throw new HttpError(out.status, out.error);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, runner: out.runner });   // 화면은 이 뒤에 칸을 다시 그린다(상태를 여기서 또 만들지 않는다)
+  }));
+
   // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
   app.post("/api/ui/me/ai-accounts/logout", auth, wrap(async (req, res) => {
     const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
@@ -519,7 +626,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const remote = nodeSessionsFor(idOf(userOf(req)));
     // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
     //  #1791 — 노드 세션 행(node_id)도 여기 온다: 노드 스냅샷에 살아 있는 id 는 라이브가 SoT 라 뺀다(local ∪ remote).
-    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)));
+    //  #4065 — 갓 만든 세션은 관측(호스트 스냅샷)에 늦게 잡힌다. 그 창에서 «중단됨» 으로 내면 화면이 대화창으로 열린다.
+    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)),
+      { startingGraceMs: SESSION_STARTING_GRACE_MS });
     const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
     const local = all.filter(keep);
@@ -1608,10 +1717,13 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //   되고(무회귀), 구 훅 + 새 게이트웨이는 state 없이 종전대로 동작한다. 새 경로였다면 앞 조합이 404 로 죽는다.
   // 전이 하나를 그 세션 주인에게 민다(#1842). **무엇이 알림인지는 여기서 정하지 않는다** — 앱이 해석한다.
   //  이름은 지금 하는 일(pane 제목)이 있으면 그걸, 없으면 세션 라벨을 준다(앱이 다시 폴백한다).
+  //  #4054 — 발행은 «어느 워크스페이스의 누구» 로 한다. 매니지드에서 다른 워크스페이스를 받는 앱이 있으면
+  //   세션 주인의 계정 id 를 함께 싣는다(그 앱들은 구성원 아이디가 아니라 계정으로 맞춘다 — notify-scope.ts).
   const notifyPhaseChange = async (id: string, owner: string, change: { prev: string | null; phase: string; at: number }, nameHint?: string): Promise<void> => {
     try {
+      const account = accountRoutesActive() ? await notifyAccountOf(owner) : null;
       // 노드 세션의 tmux 는 그 PC 에 있어 getSessionLabel(로컬 tmux)이 못 읽는다 → 호출자가 아는 이름을 준다.
-      publishNotify(owner, {
+      publishNotify({ ws: hereSlug(), member: owner, account }, {
         type: "session", id, name: nameHint || (await getSessionLabel(id).catch(() => "")) || "",
         prev: change.prev, phase: change.phase,
         key: sessionEventKey(id, change.phase, change.at), ts: change.at,

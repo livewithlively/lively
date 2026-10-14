@@ -215,5 +215,10 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     --   worker 1개의 CPU 사용률·수명 상한. 각 값 0 = 무제한(감시 끔). 빈 객체면 코드 기본값
     --   (수·메모리는 폭주만 잡을 넉넉한 상한, CPU·수명은 0=끔 — 켜지 않은 조직에서 멀쩡한 worker 를 죽이지 않는다).
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS worker_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- context_job_policy(#4012 T1 · #3994 D1): 맥락관리 잡(증류·분류·관리 등 LLM 잡)을 **누구 자격으로** 돌리나.
+    --   { runner_member: "<멤버 id>" } 한 칸. 빈 객체 = 미설정 → 종전 동작(잡 params.requester > created_by).
+    --   왜 워크스페이스 축인가: 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나»
+    --   (created_by)로 정해지면 안 된다(상민님 2026-09-16). 레인·잡의 명시 지정은 더 구체적이므로 여전히 이긴다.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS context_job_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 }

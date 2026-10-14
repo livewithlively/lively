@@ -897,6 +897,10 @@ a.cxc-name:hover { color: var(--blue); }
   border-top: 1px solid var(--line-row); font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); }
 .cxr-note + .cxr-note { margin-top: 6px; padding-top: 0; border-top: 0; }
 .cxr-note.is-warn { color: var(--warn-ink); }
+/* 실행 계정 줄(#4052) — 누구 계정으로 도는지 한 문장 + 그 자리에서 바꾸는 칸(lib/person-select). */
+.cxr-runner { flex-direction: column; align-items: stretch; gap: 8px; }
+.cxr-runner-t { line-height: 1.5; word-break: keep-all; }
+.cxr-runner-pick { max-width: 340px; }
 
 /* ③ AI가 쓴 지식 확인(구 '지식 검토 정책') — 증류기 탭 아래. 스위치 카드 + 뜻이 붙은 고르기 카드 + 접힌 고급 설정. */
 .rvp { padding-top: 24px; border-top: 1px solid var(--line); }

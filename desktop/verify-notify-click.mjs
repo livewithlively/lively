@@ -94,6 +94,25 @@ const settle = async () => { for (let i = 0; i < 4; i++) { await sleep(50); glob
     await reloaded; await sleep(400);
     nav.reloadHash = await hashOf(wc2);
 
+    // ── ⑤ 본문이 다 실린 바로 그 순간에 누른다(#4054) — did-finish-load 시점엔 isLoadingMainFrame 이 아직 참이다 ──
+    //  그 틈의 클릭은 대기로 가는데, 대기를 풀 did-finish-load 는 다시 오지 않는다. 바로 뒤의 did-stop-loading 이 푼다.
+    const finishClick = async (wireStop) => {
+      const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
+      const wc = w.webContents;
+      const n = createHashNav();
+      wc.on("did-finish-load", () => n.loaded(wc));                 // main.mjs 가 거는 자리와 같다
+      if (wireStop) wc.on("did-stop-loading", () => n.loaded(wc));  // #4054 에서 더한 자리
+      let res = null, mainAtFinish = null;
+      const clicked = new Promise((r) => wc.once("did-finish-load", () => { mainAtFinish = wc.isLoadingMainFrame(); res = n.open(wc, "#/s/e"); r(); }));
+      void w.loadURL("probe://t/page#/s/a").catch(() => {});
+      await clicked; await sleep(400);
+      const hash = await hashOf(wc);
+      w.destroy();
+      return { res, mainAtFinish, hash };
+    };
+    nav.finishOld = await finishClick(false);
+    nav.finishNew = await finishClick(true);
+
     out({ ok: true, electron: process.versions.electron, gc, nav });
     setTimeout(() => app.exit(0), 100);
   } catch (e) { out({ ok: false, error: String(e && e.stack || e) }); setTimeout(() => app.exit(1), 100); }
@@ -126,6 +145,9 @@ child.on("close", (code) => {
     ["R3 createHashNav 는 지금 이동한다", nav.subframeResult === "now" && nav.subframeHash === "#/s/b"],
     ["R4 새 창을 싣는 도중 누르면 다 실린 뒤 그 화면", nav.coldResult === "pending" && nav.coldHash === "#/s/c"],
     ["R5 다시 싣는 도중 누르면 다 실린 뒤 그 화면", nav.reloadResult === "pending" && nav.reloadHash === "#/s/d"],
+    ["R6 전제: did-finish-load 시점에 isLoadingMainFrame 이 아직 참이다", nav.finishOld.mainAtFinish === true && nav.finishNew.mainAtFinish === true],
+    ["R6 대조군: did-finish-load 만 들으면 그 순간의 클릭이 사라진다", nav.finishOld.res === "pending" && nav.finishOld.hash === "#/s/a"],
+    ["R6 did-stop-loading 도 들으면 그 화면으로 간다(#4054)", nav.finishNew.res === "pending" && nav.finishNew.hash === "#/s/e"],
   ];
   console.log(`Electron ${r.electron}`);
   for (const [name, ok] of rows) console.log(`${ok ? "ok  " : "FAIL"} ${name}`);

@@ -26,7 +26,7 @@ import { loadEnterprise } from "../enterprise/load.js";
 import { connectors } from "./index.js";
 import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
-import { bindCollector, collectorInstanceKey } from "./config.js";
+import { bindCollector, collectorClaimKey, collectorInstanceKey } from "./config.js";
 import { logger } from "../log.js";
 
 const name = process.argv[2];
@@ -34,6 +34,12 @@ const fullFlag = process.argv.includes("--full");
 // --collector <id> (#1419 T1) — 이 실행이 대리하는 수집기 인스턴스. 없으면 레거시 단일 인스턴스 모드.
 const collectorArgIdx = process.argv.indexOf("--collector");
 const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx + 1]) : 0;
+// --run <id> (#3994 T2-a) — 이 실행을 기록하는 connector_run 행. 생존 증거(heartbeat)를 **자식이 직접** 찍는다.
+//  종전엔 부모(게이트웨이)가 자식 stdout 을 읽어 1.5초마다 찍었다. 그래서 부모가 재시작하면 하트비트가
+//  멈추고, 수집 자식은 부모와 함께 죽지 않으므로 «살아서 긁는 실행» 이 유령으로 판정돼 error 로 닫혔다.
+//  번호를 못 받으면(옛 부모·수동 실행) 자기기록을 건너뛴다 — 종전 동작 그대로.
+const runArgIdx = process.argv.indexOf("--run");
+const runRowId = runArgIdx >= 0 ? Number(process.argv[runArgIdx + 1]) : 0;
 
 // 이름 검증은 **수집기 바인딩 뒤로** 미룬다(#1419 T2) — 커스텀 프리셋(http/rss/webhook)은 코드 레지스트리에
 //  없는 이름이라 여기서 거르면 범용 수집기가 영영 못 뜬다. 프리셋 카탈로그를 봐야 판정할 수 있고,
@@ -58,14 +64,26 @@ await loadEnterprise();
 
 await initAllSchemas({ quiet: true });
 
+// 자기기록 — 유령 판정 임계보다 충분히 짧은 주기로 자기 생존을 적는다(#3994 T2-a).
+//  unref: 이 타이머가 프로세스 종료를 막지 않는다. 실패는 삼킨다 — 기록이 안 된다고 수집을 멈추지 않는다.
+if (Number.isFinite(runRowId) && runRowId > 0) {
+  const { HEARTBEAT_STALE_MS } = await import("./run-tracker.js");
+  const { childHeartbeatMs } = await import("./sync-outcome.js");
+  const beat = setInterval(() => {
+    void itemsPool.query(`UPDATE connector_run SET heartbeat_at=now() WHERE id=$1 AND status='running'`, [runRowId])
+      .catch(() => { /* 비치명 — 다음 주기에 다시 */ });
+  }, childHeartbeatMs(HEARTBEAT_STALE_MS));
+  beat.unref();
+}
+
 // ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의
 //  config/secrets 를 본다(커넥터 모듈은 그 사실을 모른 채 종전 코드 그대로 돈다). 바인딩 실패는 치명이다 —
 //  엉뚱한(레거시) 설정으로 남의 워크스페이스를 긁어 커서를 오염시키느니 실행을 접는 편이 안전하다.
 if (collectorId) {
   const cr = await itemsPool.query<{
     preset_key: string; instance_key: string; enabled: boolean;
-    output_mode: string; output_config: Record<string, unknown> | null;
-  }>(`SELECT preset_key, instance_key, enabled, output_mode, output_config FROM org_collector WHERE id=$1`, [collectorId]);
+    output_mode: string; output_config: Record<string, unknown> | null; version: number;
+  }>(`SELECT preset_key, instance_key, enabled, output_mode, output_config, version FROM org_collector WHERE id=$1`, [collectorId]);
   const row = cr.rows[0];
   if (!row) { logger.error({ collectorId }, "수집기를 찾을 수 없습니다 — 삭제됐거나 잘못된 id"); process.exit(1); }
   if (row.preset_key !== name) {
@@ -76,6 +94,7 @@ if (collectorId) {
     id: collectorId, presetKey: row.preset_key, instanceKey: row.instance_key,
     outputMode: (row.output_mode ?? "preset") as never,
     outputConfig: row.output_config ?? {},
+    version: Number(row.version),
   });
   logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key, output: row.output_mode },
     "수집기 인스턴스 바인딩");
@@ -119,6 +138,8 @@ process.exit(failed ? 1 : 0);
 //  커서 max_updated_iso = 이번 run 이 관측한 아이템 updated_at(없으면 occurred_at)의 최대. 성공 후에만 전진.
 async function runGenericSync(system: string, conn: import("./types.js").Connector): Promise<boolean> {
   const instance = collectorInstanceKey();
+  // 수집기 표식(#4059) — 적재가 미러 행에 남기고, 후처리 스윕이 «내 몫» 을 가르는 값. 둘이 같은 값을 써야 한다.
+  const claimKey = collectorClaimKey(system);
   const cursor = await getConnectorState(system, instance);
   const prevIso = (cursor as { max_updated_iso?: unknown } | null)?.max_updated_iso;
   const prevMs = typeof prevIso === "string" && prevIso ? Date.parse(prevIso) : 0;
@@ -140,10 +161,13 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   let batch: RawItem[] = [];
   let ingested = 0;
   let mirrorFailures = 0; // 항목 단위 미러 실패 — 커서 동결(clickup 경로와 동일 불변식 #541)
-  const flush = async () => { if (batch.length) { ingested += await ingestItems(batch, { onError: () => { mirrorFailures++; } }); batch = []; } };
+  const flush = async () => { if (batch.length) { ingested += await ingestItems(batch, { onError: () => { mirrorFailures++; }, claimKey }); batch = []; } };
   // #551 full 스윕 기준(이 시각 이전 last_synced_at = 이번 run 미관측). last_synced_at 은 DB now() 로 찍히므로
   //  기준 시각도 DB 시계로(노드↔DB 시계 스큐로 인한 오탐 아카이브 방지).
-  const runStartIso = String((await itemsPool.query(`SELECT now() AS t`)).rows[0]?.t?.toISOString?.() ?? new Date().toISOString());
+  //  #4059 — **마이크로초까지** 문자열로 받는다. JS Date 를 거치면 밀리초로 잘리는데, 비교 상대(DB 가 now() 로 찍은
+  //   표식·비게 된 시각)는 마이크로초다. 같은 밀리초 안의 앞뒤가 뒤집혀 보관 판정이 흔들린다(리뷰가 실 DB 로 재현).
+  const runStartIso = String((await itemsPool.query(
+    `SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS t`)).rows[0]?.t ?? new Date().toISOString());
 
   try {
     for await (const item of conn.backfill(sinceOpt)) {
@@ -162,7 +186,7 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
 
   // 후처리 훅 — 커넥터 고유 마무리(notion 링크 물질화·스윕, domain-wiki 삭제 전파). 반환값이 커서 전진을 지배한다.
   const post = conn.postSync
-    ? await conn.postSync({ pool: itemsPool, runStartIso, incremental, ingested, mirrorFailures })
+    ? await conn.postSync({ pool: itemsPool, runStartIso, incremental, ingested, mirrorFailures, claimKey })
     : null;
 
   // 커서 전진 판정(sync-cursor.ts) — 훅 동결 · 미러 실패 · 무진전 · 재시도 목록 변경을 한 곳에서 해소.

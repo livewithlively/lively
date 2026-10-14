@@ -254,6 +254,9 @@ function createNotionConnector(): Connector {
     runStats,
     postSync: (ctx) => notionPostSync(ctx, runStats()),
     listUsers,
+    //  첨부를 게이트웨이 디스크(stateDir("notion-assets"))에 받고, 후처리가 «파일이 디스크에 있나» 로 재수집을 가른다.
+    //   판에서 돌면 받은 파일이 판과 함께 사라지고 매번 전 페이지를 다시 긁는다(#3994 T3).
+    needsGatewayDisk: true,
   };
 }
 

@@ -12,6 +12,8 @@
 //  · 표에 없는 kind 는 'unsupported' — 저장은 정상이고 확인만 건너뛴다(모르는 것을 실패로 보이게 하지 않는다).
 //  · 진단 문구는 **다음 행동**까지 말한다("다시 만들 때 그 항목을 켜 주세요"). 증상만 말하면 사용자는 멈춘다.
 
+import { CODEX_AUTH_KIND, describeCodexAuth, parseCodexAuth } from "./codex-auth.js";
+
 export interface VerifyResult {
   /** true=상류가 이 토큰을 받아들였다. false=거부. null=확인 경로가 없는 kind(=건너뜀). */
   ok: boolean | null;
@@ -94,8 +96,17 @@ VERIFIERS.clickup_token = {
   diagnose: diagnoseClickup,
 };
 
+/**
+ * 네트워크 없이 확인하는 종류(#4012 T2). codex 로그인 파일은 «어느 계정인지» 가 파일 안(토큰 페이로드)에 있고,
+ *  상류에 물어볼 공개 확인 경로가 없다 — 파일을 해석해 계정·만료를 말해 준다.
+ */
+const LOCAL_VERIFIERS: Record<string, (token: string) => VerifyResult> = {
+  [CODEX_AUTH_KIND]: (token) => describeCodexAuth(parseCodexAuth(token)),
+};
+
 export function verifierExists(kind: string): boolean {
-  return Object.prototype.hasOwnProperty.call(VERIFIERS, String(kind ?? "").toLowerCase());
+  const k = String(kind ?? "").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(VERIFIERS, k) || Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, k);
 }
 
 /**
@@ -103,6 +114,9 @@ export function verifierExists(kind: string): boolean {
  *  "우리가 못 물어본 것"을 "토큰이 틀린 것"으로 말하면 사용자가 멀쩡한 토큰을 지운다.
  */
 export async function verifyCredential(kind: string, token: string): Promise<VerifyResult> {
+  const local = Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, String(kind ?? "").toLowerCase())
+    ? LOCAL_VERIFIERS[String(kind).toLowerCase()] : undefined;
+  if (local) return token ? local(token) : { ok: false, message: "저장된 토큰이 없어요." };
   const v = VERIFIERS[String(kind ?? "").toLowerCase()];
   if (!v) return { ok: null, message: "이 종류는 자동 확인을 지원하지 않아요 — 저장은 정상입니다." };
   if (!token) return { ok: false, message: "저장된 토큰이 없어요." };

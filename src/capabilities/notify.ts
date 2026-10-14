@@ -8,6 +8,7 @@ import { viewerOf } from "./principal.js";
 import { getMember } from "../org/store.js";
 import { listMyNotifications, notifyText } from "../v6/notify-store.js";
 import { getNotifyPrefs, setNotifyPrefs, NOTIFY_KINDS } from "../v6/notify-pref-store.js";
+import { hereWorkspaceLabel } from "../v6/notify-scope.js";
 
 const notifyFeedInput = {
   since: z.string().optional().describe("이 시각 이후만(ISO 8601). 없으면 최근 24시간 — 앱이 처음 켜졌을 때 과거가 쏟아지지 않게 한다."),
@@ -40,7 +41,9 @@ const notifyFeed: Capability = {
     //  설정도 함께 싣는다(#1842): 앱은 이 폴링에서 받은 값을 캐시로 쓰므로 왕복이 하나 더 늘지 않는다.
     //  첫 폴은 콜드스타트라 어차피 배너를 만들지 않아, 그때 기본값을 쓰는 것이 무해하다.
     const prefs = await getNotifyPrefs(me).catch(() => null);
-    return { items: items.map((it) => ({ ...it, text: notifyText(it) })), prefs, now: new Date().toISOString() };
+    //  #4054 — 이 피드가 어느 워크스페이스의 것인지. 앱이 폴링·사람 알림 배너 윗줄에 이름을 적는다(실시간 스트림은 사건마다 싣는다).
+    const workspace = await hereWorkspaceLabel().catch(() => null);
+    return { items: items.map((it) => ({ ...it, text: notifyText(it) })), prefs, workspace, now: new Date().toISOString() };
   },
 };
 

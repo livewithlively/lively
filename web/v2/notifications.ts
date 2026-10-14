@@ -4,6 +4,7 @@
 //  "무슨 알림이 왔었지"를 물을 데가 없었다. 이제 서버가 남기고(org_app_notification) 여기가 읽는다.
 import { api, el, relTime } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 배너를 이 창에서 이미 띄웠나(기기의 사실)
+import { browserBannerText } from './banner-text.js';   // #4054 — 윗줄은 워크스페이스 이름
 
 export interface AppNotification {
   id: string;
@@ -63,7 +64,7 @@ export async function askNotificationPermission(): Promise<boolean> {
  * 아직 배너로 안 띄운 알림만 띄운다. 권한이 없으면 조용히 아무것도 안 한다(이력은 화면에 남아 있다).
  * @returns 실제로 띄운 건수
  */
-export function raiseBanners(list: readonly AppNotification[]): number {
+export function raiseBanners(list: readonly AppNotification[], wsName?: string | null): number {
   // ⚠ 데스크톱 앱 안에서는 **배너를 만들지 않는다** — 그 앱(#1842)이 트레이에서 SSE 로 같은 사건을
   //  이미 배너로 띄운다. 여기서도 띄우면 한 사건에 배너가 두 장 뜬다. 능력 감지는 다리의 유무로만
   //  한다(플랫폼·UA 추측 금지 — 구 앱·새 웹 조합에서 어긋난다).
@@ -77,7 +78,8 @@ export function raiseBanners(list: readonly AppNotification[]): number {
   const show = fresh.slice(0, 3);
   for (const n of show) {
     try {
-      const banner = new Notification(n.title, { body: n.body || undefined, tag: n.id });
+      const text = browserBannerText(n.title, n.body, wsName);
+      const banner = new Notification(text.title, { body: text.body, tag: n.id });
       if (n.href) banner.onclick = () => { try { window.focus(); location.hash = n.href!.replace(/^#/, ''); } catch { /* 창이 닫혔다 */ } };
     } catch { /* 배너 실패는 기능 실패가 아니다 */ }
   }
@@ -90,13 +92,16 @@ export function raiseBanners(list: readonly AppNotification[]): number {
 //   (2026-08-25 상민님 신고: "왜 알림 안 오냐"). 그래서 셸이 켜져 있는 동안 어느 화면에서든 돈다.
 let bannerTimer = 0;
 
-/** 셸 부팅 때 한 번. 데스크톱 앱 안이면 아무것도 하지 않는다(그 앱이 이미 띄운다). */
-export function startNotificationBanners(intervalMs = 30_000): void {
+/**
+ * 셸 부팅 때 한 번. 데스크톱 앱 안이면 아무것도 하지 않는다(그 앱이 이미 띄운다).
+ * @param wsName 이 탭의 워크스페이스 이름(배너 윗줄, #4054) — 부를 때마다 읽는다(이름이 바뀌어도 따라간다)
+ */
+export function startNotificationBanners(intervalMs = 30_000, wsName?: () => string | null | undefined): void {
   if (bannerTimer) return;
   if ((window as any).livelyDesktop) return;
   const tick = (): void => {
     if (notificationPermission() !== 'granted') return;   // 권한이 없으면 서버를 부를 이유도 없다
-    void loadNotifications({ limit: 20 }).then((feed) => raiseBanners(feed.notifications)).catch(() => { /* 다음 tick */ });
+    void loadNotifications({ limit: 20 }).then((feed) => raiseBanners(feed.notifications, wsName ? wsName() : null)).catch(() => { /* 다음 tick */ });
   };
   tick();
   bannerTimer = window.setInterval(tick, intervalMs);

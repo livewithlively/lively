@@ -124,10 +124,12 @@ async function sh(osUser: string | null, script: string): Promise<string> {
  *  즉 «세션 컨테이너가 쓰고, tmux 컨테이너가 읽는다» 가 성립한다.
  *
  *  ⚠ 세션 경계 중계가 없는 배포(셀프호스트)는 종전 그대로다 — 거기선 한 자리에 다 있다.
+ *  #4051 — 자리 키는 문자열이다: 헤드리스 발급(headless-login-run.ts)은 `hl-<하네스>` 로 **따로 된 자리**를 쓴다.
+ *   대화형 로그인과 같은 자리를 쓰면 한쪽의 [취소]·완료 정리(dropLoginSession)가 다른 쪽 러너까지 죽인다.
  */
-async function spawnAt(user: LivelyUser | null, osUser: string | null, h: AiLoginHarness, script: string): Promise<string> {
+async function spawnAt(user: LivelyUser | null, osUser: string | null, seatKey: string, script: string): Promise<string> {
   if (!user || !sessionExecConfigured()) return sh(osUser, script);
-  const sid = await ensureHarnessSeat(user, h);
+  const sid = await ensureHarnessSeat(user, seatKey);
   const argv = sessionSpawnArgv(sid, ["sh", "-c", script]);
   if (!argv.length) return sh(osUser, script);   // 중계가 갑자기 빠졌다 — 종전 자리로 접는다
   return new Promise((resolve, reject) => {
@@ -311,3 +313,9 @@ export async function cancelAiLogin(osUser: string | null, h: AiLoginHarness): P
     `echo ok`,
   ].join("\n")).catch(() => "");
 }
+
+/**
+ * #4051 — 헤드리스 발급 러너(headless-login-run.ts)가 **같은 자리 · 같은 경계**를 쓰도록 내보낸다.
+ *  두 벌로 두면 이 파일이 실측으로 얻은 처방(HOME export · 세션 컨테이너에서 띄우기 · 자기참조 금지)이 갈린다.
+ */
+export { sh as runAtLoginSeatSh, homeOf as loginHomeOf, q as loginShQuote, spawnAt as spawnAtLoginSeat };

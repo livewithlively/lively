@@ -14,7 +14,7 @@
 //  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
 import { api, el, state } from './core.js';
-import { mountLivChat, livChatAsk, livChatFill, type AutoKind } from './liv-chat.js';
+import { mountLivChat, livChatAsk, livChatBusy, livChatFill, type LivSessionMounter } from './liv-chat.js';
 import { bindCtx, bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
 import { copyText } from './v2/ctx-menu.js';
 
@@ -50,13 +50,10 @@ export async function livStatus(): Promise<LivStatus> {
 }
 
 // ── 대화 ─────────────────────────────────────────────────────────────────────
-// v0 는 웹터미널 세션을 재사용했다(두뇌를 먼저 검증하려는 선택이었고, 그건 성공했다).
-// v1 부터는 **세션을 만들지 않는다** — 턴마다 서버가 헤드리스를 띄우고 진행을 JSONL 로 남기며,
-// 화면은 그걸 말풍선·액션카드로 그린다(web/liv-chat.ts). 그래서 여기 있던 것들이 통째로 사라졌다:
-//   · 세션 찾기·만들기·죽은 세션 청소   → 세션이 없으니 청소할 것도 없다
-//   · 여는 말 주입과 도달 확인 폴링      → 사람이 먼저 말을 건다(열자마자 리브가 떠들지 않는다)
-//   · 프롬프트 주입(send-keys 규약)      → 대화창이 곧 입력이다
-// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 이 교체가 무손실이다.
+// v0 는 웹터미널 세션을 재사용했고, v1(2026-08-14)은 턴마다 서버가 헤드리스를 띄웠다 — 그땐 보통 세션을 말풍선으로
+// 그릴 길이 없었다. 세션 대화창(web/session-chat.ts)이 생긴 뒤로 그 이유가 사라졌고, 헤드리스 턴은 매니지드에서 뜨지도
+// 않았다(#4032). 그래서 리브는 다시 **진짜 세션**이다 — 대화 칸(web/liv-chat.ts)이 그 사람의 리브 세션 대화창을 붙인다.
+// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 세션이 바뀌어도 리브는 같은 리브다.
 
 // ── 화면 ─────────────────────────────────────────────────────────────────────
 
@@ -64,7 +61,13 @@ export async function livStatus(): Promise<LivStatus> {
  *  · rail — 카드("지금 손볼 것")를 그릴 바깥 호스트. 주면 본문은 대화 한 열만 남고, 카드는 그 호스트에 산다.
  *    v2 셸에선 우측 패널이 그 자리다 — 다른 페이지(본문 가운데·패널 오른쪽)와 같은 문법이 된다.
  *  · embedded — 나가는 길([← 라이블리])을 그리지 않는다(사이드바가 이미 있다). */
-export interface RenderLivOpts { rail?: HTMLElement | null; embedded?: boolean }
+export interface RenderLivOpts {
+  rail?: HTMLElement | null; embedded?: boolean;
+  /** 리브 세션 대화창을 붙이는 셸의 문(web/liv-chat.ts LivSessionMounter). 없으면 대화 칸이 스스로 목록을 읽는다. */
+  mountSession?: LivSessionMounter | null;
+  /** 첫 말로 리브 세션을 새로 열었다 — 셸이 사이드바에 곧바로 싣는다. */
+  onSessionCreated?: ((row: unknown) => void) | null;
+}
 
 export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = {}): Promise<void> {
   if (!view) return; // 라우터가 넘기는 $view() 는 셸이 아직 없으면 null 이다(대시보드와 같은 계약)
@@ -113,7 +116,10 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
   refreshLiv = () => { void fillLivCards(letter, askHost); };
   refreshLiv();
-  mountLivChat(chatWrap.querySelector('.liv-chat-body') as HTMLElement, askHost);
+  mountLivChat(chatWrap.querySelector('.liv-chat-body') as HTMLElement, askHost, {
+    mountSession: opts.mountSession ?? null,
+    onSessionCreated: opts.onSessionCreated ?? null,
+  });
 
   // 리브가 대화 중에 자격을 요청하면(me_liv_ask_secret) 화면이 그걸 알아야 입력칸이 뜬다.
   //  터미널은 iframe 이라 출력에서 신호를 읽을 수 없다 — 서버 상태를 가볍게 되묻는 쪽이 견고하다.
@@ -122,12 +128,12 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
     if (document.body.dataset.route !== 'liv') { clearInterval(poll); return; }  // 라우트를 떠나면 끝
     refreshLiv();
   }, 6000);
-  //  리브가 스스로 띄운 턴이 시작·끝날 때(liv-chat.ts autoFace) 편지를 곧바로 다시 그린다 — 6초 폴링만 믿으면 그 사이 «드릴 말씀이 없습니다» 가 뜬다.
-  const onAuto = (): void => {
-    if (document.body.dataset.route !== 'liv') { document.removeEventListener('liv:auto', onAuto); return; }
+  //  리브가 일을 시작·마칠 때(liv-chat.ts — 세션 대화창의 «도는 중») 편지를 곧바로 다시 그린다 — 6초 폴링만 믿으면 그 사이 «드릴 말씀이 없습니다» 가 뜬다.
+  const onBusy = (): void => {
+    if (document.body.dataset.route !== 'liv' || !wrapEl.isConnected) { document.removeEventListener('liv:busy', onBusy); return; }
     refreshLiv();
   };
-  document.addEventListener('liv:auto', onAuto);
+  document.addEventListener('liv:busy', onBusy);
 }
 
 /** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
@@ -181,15 +187,14 @@ export async function fillLivCards(host: HTMLElement, askHost: HTMLElement): Pro
     : null;
   askHost.replaceChildren(...(ask ? [ask] : []));
 
-  //  리브가 서버에서 띄운 턴(처음 설정 킥오프·증류)을 돌리는 동안엔 «드릴 말씀이 없습니다» 가 거짓이다 — 대화 칸(liv-chat.ts)이 알려 준다.
-  const auto = document.body.dataset.livAuto as AutoKind | undefined;
-  host.replaceChildren(st.findings.length ? livLetter(st, host) : auto ? livWorking(auto) : livQuiet());
+  //  리브가 일하는 동안(처음 설정 킥오프·증류 지시·사람이 맡긴 일)엔 «드릴 말씀이 없습니다» 가 거짓이다 — 대화 칸(liv-chat.ts)이 알려 준다.
+  host.replaceChildren(st.findings.length ? livLetter(st, host) : livChatBusy() ? livWorking() : livQuiet());
 }
 
-/** 리브가 스스로 띄운 턴이 도는 동안의 편지(#1631) — 무엇을 하고 있는지 한 줄, 끝나면 대화에서 이어진다는 것 한 줄. */
-function livWorking(kind: AutoKind): HTMLElement {
+/** 리브가 일하는 동안의 편지(#1631) — 지금 일하고 있다는 것 한 줄, 끝나면 대화에서 이어진다는 것 한 줄. */
+function livWorking(): HTMLElement {
   return el('div', { class: 'liv-letter-quiet liv-letter-working' },
-    el('p', { class: 'liv-quiet-say', text: kind === 'distill' ? '지금 자료를 읽고 정리하고 있어요.' : '지금 워크스페이스를 살펴보고 있어요.' }),
+    el('p', { class: 'liv-quiet-say', text: '지금 리브가 일하고 있어요.' }),
     el('p', { class: 'liv-quiet-sub', text: '끝나면 아래 대화에서 이어서 말씀드릴게요.' }));
 }
 

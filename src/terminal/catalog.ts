@@ -431,6 +431,10 @@ export interface SessionInfo {
   // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
   //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
   restorable?: boolean;
+  // #4065 — 관측엔 아직 없지만 **갓 만든** 세션(DB 행이 먼저 생기고, 매니지드에선 세션 호스트가 늦게 설 수 있다).
+  //  restorable 이 아니다 — 목록은 이 행을 살아 있는 행(agentState idle)으로 내고, 화면은 터미널을 붙인다.
+  //  만든 지 `sessions.SESSION_STARTING_GRACE_MS` 가 지나도 관측에 안 잡히면 종전대로 restorable 로 나간다.
+  starting?: boolean;
   // #2022 — 이 행을 게이트웨이가 **노드 스냅샷에서 발견해** 적었나(그 컴퓨터에서 직접 띄운 세션).
   //  좌표를 모르므로 되살릴 수 없다 — 위 restorable 이 false 로 나가고, 화면은 '왜 못 되살리나'를 이 값으로 말할 수 있다.
   discovered?: boolean;

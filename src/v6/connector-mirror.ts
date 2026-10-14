@@ -53,8 +53,11 @@ import { mirrorSourceV6 } from "./mirror/mirror-source.js";
 export { nativeStatusOf, merge3, mergeSet, msToKstDate, mapClickUpFieldType, mapClickUpFieldConfig, mapClickUpFieldValue } from "./mirror/clickup-fields.js";
 export { sweepDomainWikiArchived } from "./mirror/mirror-knowledge.js";
 export { flushProjectEmbeds } from "./mirror/mirror-project.js";
-export { materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived, loadNotionLedger } from "./mirror/notion-post.js";
-export type { NotionLedgerEntry, NotionLedger } from "./mirror/notion-post.js";
+export {
+  materializeNotionLinks, applyNotionChildrenOrder, sweepNotionArchived, loadNotionLedger,
+  observeNotionRows, countNotionClaimedSince,
+} from "./mirror/notion-post.js";
+export type { NotionLedgerEntry, NotionLedger, NotionSweepPlan, NotionSweepResult } from "./mirror/notion-post.js";
 
 // ════════════════════════════════════════════════════════════════════════════
 // ── 미러 멤버 재해소(#697) — 뒤늦게 건 매핑을 이미 미러된 데이터에 소급 적용 ──
@@ -245,7 +248,10 @@ export async function healPmMirror(
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 client 공유 — item 단위 BEGIN/COMMIT(다중 테이블 원자성). ──
 //  라우팅: routeIngestV6(type, system) → project|knowledge|source|pm_* | null(미정의=skip).
 //  external_id 부재(이론상 불가)면 멱등키가 없어 skip. 적재 시 true, skip 시 false.
-export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Promise<boolean> {
+//  opts.claimKey(#4059) — 적재한 수집기 표식. external 좌표 지식 미러에만 남긴다(ingestItems 주석 참조).
+export async function mirrorExternalToV6(
+  client: pg.PoolClient, it: RawItem, opts?: { claimKey?: string },
+): Promise<boolean> {
   const system = it.provenance.system;
   const externalId = it.provenance.external_id;
   if (!externalId) return false;
@@ -261,7 +267,7 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
     if (target === "project") ok = await mirrorProjectV6(client, it, system, externalId);
     // domain-wiki(#696): 파일 슬러그=name 자연식별 → name-키 upsert(기존 NULL-external 행 채택). 그 외 K류는 external-좌표.
     else if (target === "knowledge" && system === "domain-wiki") ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
-    else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId);
+    else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
     else if (target === "source") {
       ok = await mirrorSourceV6(client, it, system, externalId);
       // 'both' — 원문을 자료로 남기면서 지식도 만든다(출처 추적 + 즉시 검색). 같은 트랜잭션 안이라
@@ -269,7 +275,7 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
       if (alsoMirrorKnowledge(it.type, system, outputMode)) {
         const kOk = system === "domain-wiki"
           ? await mirrorKnowledgeByNameV6(client, it, system, externalId)
-          : await mirrorKnowledgeV6(client, it, system, externalId);
+          : await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
         ok = ok || kOk;
       }
     }

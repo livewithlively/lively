@@ -297,22 +297,12 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .livc-send-stop { background: var(--bg); color: var(--ink-sub); border-color: var(--line-net); }
 .livc-send-stop:hover { color: var(--ink); border-color: var(--coral-text); }
 
-/* ── 리브가 스스로 띄운 턴(처음 설정 킥오프·증류, #1631) — 사람 말풍선 대신 «맞추는 중» 표식 ──
-   지시문은 사람이 쓴 것이 아니라 그리지 않는다(web/liv-chat.ts autoFace). 도는 동안은 카드, 끝나면 한 줄. */
-.livc-auto { margin: 2px 0 10px; }
-.livc-auto-hero { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
-  border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg-tint); }
-.livc-auto-hero b { display: block; font-size: 14.5px; letter-spacing: -.01em; color: var(--ink); }
-.livc-auto-sub { margin: 4px 0 0; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
-.livc-auto-spin { flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%;
-  border: 2px solid var(--line-net); border-top-color: var(--ink); animation: liv-auto-spin 1s linear infinite; }
-@keyframes liv-auto-spin { to { transform: rotate(360deg); } }
-.livc-auto-done { display: inline-block; font-size: 12px; color: var(--muted); padding: 2px 0 6px; }
-/* 편지 칸 — 도는 동안 «드릴 말씀이 없습니다» 대신 «살펴보는 중»(web/liv.ts livWorking). 점 하나가 숨 쉰다. */
+/* 리브 세션 대화창(#4032) — 리브 칸 안에서 폭을 넘치지 않게(세션 대화창은 자기 칸을 flex 로 채운다). */
+.liv-chat-body > .sc-wrap { min-width: 0; }
+/* 편지 칸 — 리브가 일하는 동안 «드릴 말씀이 없습니다» 대신 «일하는 중»(web/liv.ts livWorking). 점 하나가 숨 쉰다. */
 .liv-letter-working .liv-quiet-say::before { content: ''; display: inline-block; width: 10px; height: 10px; margin: 0 8px 1px 0;
   border-radius: 50%; background: var(--ink); animation: liv-auto-pulse 1.4s ease-in-out infinite; vertical-align: middle; }
 @keyframes liv-auto-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .livc-auto-spin { animation: none; border-top-color: var(--line-net); }
   .liv-letter-working .liv-quiet-say::before { animation: none; opacity: .6; }
 }

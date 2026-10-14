@@ -18,6 +18,7 @@ import {
   STALL_MS_MIN, STALL_MS_MAX, KEEP_FAILED_MIN, KEEP_FAILED_MAX, FAILED_TTL_MIN_MIN, FAILED_TTL_MIN_MAX,
   type DelegatePolicyPatch,
 } from "../../org/policies/delegate-policy.js"; // #1101 위탁 무출력 stall 상한 · #1675 실패 뒤처리
+import type { ContextJobPolicyPatch } from "../../org/policies/context-job-policy.js"; // #4012 T1 맥락관리 잡 실행 신원
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES, KNOWN_HARNESSES, RETENTION_MAX_DAYS
 } from "../../sessions/session-share.js";
@@ -58,6 +59,17 @@ function publicOidc(s: OidcSettings): OidcSettingsPublic {
     //  관리자는 issuer·시크릿을 계속 고치며 헤맨다 — 그래서 '설정이 있을 때만' 참으로 둔다.
     enterprise_required: source !== "none" && !ee().sso,
   };
+}
+
+/**
+ * 기본 실행 멤버로 앉혀도 되는 구성원인가(#4052) — 안 되면 사람에게 보일 이유, 되면 null.
+ *  운영 계정(system)·AI 구성원·나간 사람은 사람의 AI 자격이 없다 — 그 이름으로 돌면 아무도 모르게 실패한다.
+ */
+export function runnerFillRefusal(id: string, m: { state?: string | null; kind?: string | null } | null): string | null {
+  if (!m) return `구성원 '${id}' 가 없습니다`;
+  if (m.state !== "active") return `'${id}' 는 활성 구성원이 아닙니다`;
+  if (m.kind !== "human") return `'${id}' 는 사람 구성원이 아닙니다(${m.kind ?? "종류 모름"})`;
+  return null;
 }
 
 export const runtimeConfigCapabilities: Capability[] = [
@@ -115,6 +127,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_memory_policy?: SessionMemoryPolicyPatch;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
+        context_job_policy?: ContextJobPolicyPatch;
         worker_policy?: WorkerPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
@@ -311,6 +324,23 @@ export const runtimeConfigCapabilities: Capability[] = [
         }
         if (s.auth_fail_stop_cron !== undefined) patchIn.auth_fail_stop_cron = Boolean(s.auth_fail_stop_cron);
         patch.delegate_policy = patchIn;
+      }
+      // 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 **누구 자격으로** 돌리나.
+      //  ⚠ null 을 받는다: «지웠다»(실행 멤버 해제)는 유효한 상태이고, 그걸 «안 건드렸다» 와 가르지 않으면
+      //   env 시드가 되살아나 사람이 끈 것이 안 꺼진다(store 의 normalize 가 그 구분을 지킨다).
+      //  존재 확인은 여기서 하지 않는다 — 멤버가 나중에 합류·개명할 수 있고, 자격 부재는 접수 단계가 말한다(T2).
+      if (input.context_job_policy !== undefined) {
+        const raw = input.context_job_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "context_job_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const patchIn: ContextJobPolicyPatch = {};
+        if (s.runner_member !== undefined) {
+          if (s.runner_member !== null && typeof s.runner_member !== "string") {
+            throw new HttpError(400, "context_job_policy.runner_member 는 멤버 id 문자열이거나 null(해제)이어야 합니다");
+          }
+          patchIn.runner_member = s.runner_member as string | null;
+        }
+        patch.context_job_policy = patchIn;
       }
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -683,6 +713,9 @@ export const runtimeConfigCapabilities: Capability[] = [
         failed_session_ttl_min: z.number().int().min(FAILED_TTL_MIN_MIN).max(FAILED_TTL_MIN_MAX).optional().describe("남겨둔 실패 세션도 이 분을 넘기면 회수(#1675 ①). 0=무제한(개수 상한만). 검시는 사고 직후에 하지 이틀 뒤에 하지 않는다"),
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
+      context_job_policy: z.object({
+        runner_member: z.string().nullable().optional().describe("맥락관리 잡(증류·분류·관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
+      }).optional().describe("맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 워크스페이스가 정한 멤버 한 명의 자격으로 증류·분류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
       worker_policy: z.object({
@@ -714,4 +747,36 @@ export const runtimeConfigCapabilities: Capability[] = [
         trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
       }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
+  // #4052 — 워크스페이스 실행 멤버(D1)를 **정해진 적 없을 때만** 채운다. 매니지드 CP 가 새 워크스페이스의 오너를
+  //  기본 실행 계정으로 앉히는 자리다(증류·분류 자동 실행을 켠 채로 시작하는데, 계정이 비면 운영 계정 이름으로 돌아
+  //  아무도 모르게 실패한다). org_runtime_update 로는 못 한다 — 그건 무조건 덮어쓰고, «읽고 → 쓰면» 그 사이
+  //  관리자가 정한 값을 덮는다. 판정·쓰기를 한 문장으로 하는 store.fillContextJobRunnerIfUnset(#4051)을 그대로 쓴다.
+  //  에이전트 표면(MCP)에는 안 연다 — 사람이 정할 값은 org_runtime_update 가 이미 받는다.
+  {
+    name: "org_context_job_runner_fill",
+    title: "기본 실행 멤버 채우기(비어 있을 때만)",
+    description: "맥락관리 잡(증류·분류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
+      "이 구성원으로 채운다. 관리자가 비워 둔 것(명시적 null)·이미 정해진 것·env 시드는 건드리지 않는다. 활성 사람 구성원만 받는다.",
+    scope: "admin",
+    input: {
+      member: z.string().describe("기본 실행 멤버로 앉힐 구성원 id(활성 사람 구성원)"),
+    },
+    expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/context-job-runner/fill"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = str(input.member, "member", 128).trim();
+      if (!id) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+      const { getMember } = await import("../../org/store/members.js");
+      const m = await getMember(id);
+      const refusal = runnerFillRefusal(id, m);
+      if (refusal || !m) throw new HttpError(400, `${refusal} — 기본 실행 멤버로 정할 수 없습니다`);
+      const { fillContextJobRunnerIfUnset, getContextJobPolicySource } = await import("../../org/store/runtime-config.js");
+      const filled = await fillContextJobRunnerIfUnset(m.id, actorOf(user), "context-job-runner-fill");
+      const c = await getRuntimeConfig();
+      return {
+        filled,
+        runner_member: c.context_job_policy?.runner_member ?? null,
+        source: await getContextJobPolicySource(),
+      };
+    },
+  },
 ];

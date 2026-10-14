@@ -12,7 +12,7 @@
 //   ④ POST /api/ui/me/welcome          — 사람이 승인한 것을 **진짜로 반영**(갈래 생성·프로필·완료)
 //
 //  ⚠ LLM 은 이 제품에서 **사람의 AI 구독으로 헤드리스 세션을 띄우는 것**이 유일한 길이다
-//   (박스에 API 키가 없다 — 그게 설계다). 그래서 ②는 리브 턴과 같은 spawnTaskSession 을 쓰고,
+//   (박스에 API 키가 없다 — 그게 설계다). 그래서 ②는 위탁·프로젝트 대화와 같은 spawnTaskSession 을 쓰고,
 //   AI 가 아직 안 붙었으면 **실패를 감추지 않고** 그대로 알린다. 화면은 그때 ①의 결정적 집계로
 //   내려앉는다 — 그 숫자도 가짜가 아니라 **그 사람이 방금 올린 파일을 실제로 센 것**이다.
 
@@ -758,6 +758,11 @@ export async function welcomeSnapshot(userId: string) {
   //   헤드리스 실행은 그 프로필로 폴백한다(tasks.ts: "리스가 없으면 노드 로컬 프로필/자격 폴백").
   //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
   //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
+  //  ⚠ 정정(#4051, 2026-09-17) — 위 폴백은 **이 분석(처음 설정 «AI 분석»)과 종전 tmux 위탁 경로**의 이야기다.
+  //   매니지드의 맥락 잡(증류·분류·관리)은 중앙 샌드박스 판에서 돌고, 그 판은 프로필을 빌리지 않는다 —
+  //   따로 연결한 자격(claude_setup_token · codex_auth_json)만 쓴다(node/sandbox-credentials). 그래서 처음 설정의
+  //   «AI 잇기» 가 로그인 확인 뒤에 그 자격을 한 걸음 더 받는다(web/v2/onboarding.ts paintHeadlessOffer).
+  //   이 판정(ai_ready)은 그 자격을 보지 않는다 — 분석을 막는 조건이 아니기 때문이다.
   //  ⚠ 여기는 **폴링 자리**다(화면이 온보딩 내내 되묻는다) — 로그인 프로브(실측 4.3초·상한 25초)를 붙이면
   //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스를 구하는
   //   일은 **결정 지점**에서 한 번만 한다 — 아래 kickoffLivAfterWelcome 참조(#1631). ai-login.test ⑥ 이 지킨다.
@@ -835,9 +840,10 @@ export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
 
 /**
  * (#1631) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
- *  · (원준 2026-09-14) **진짜 세션**(createSession, kind=task)을 열고 그 세션으로 보낸다(href «#/s/<id>»). 헤드리스 대화 턴은 매니지드
- *    게이트웨이에서 로컬 워커를 못 띄워 500 이 나므로 폐기했다 — createSession 은 세션 호스트로 떠 매니지드에서도 된다(실측 2026-09-15).
+ *  · (원준 2026-09-14) **진짜 세션**(createSession, kind=task)을 연다. 헤드리스 대화 턴은 매니지드 게이트웨이에서 로컬 워커를
+ *    못 띄워 500 이 나므로 폐기했다 — createSession 은 세션 호스트로 떠 매니지드에서도 된다(실측 2026-09-15).
  *    화면은 그 세션을 대화 보기로 열고(session-chat livKickoff), 지시문(첫 프롬프트)은 숨긴다.
+ *  · (#4032) 그 세션이 **리브 탭의 세션**이다 — 화면은 리브 탭(href «#/liv»)으로 가고 리브 탭이 그 세션 대화창을 붙인다.
  *  · 이미 띄운 세션(priorSession)이 있으면 **다시 띄우지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
  *  · 1턴 프롬프트는 welcomeSnapshot(화면과 같은 실측) + 이 반영이 남긴 결정 + 이 워크스페이스의 수집기 목록으로 조립한다.
  *  · 어떤 실패도 던지지 않는다 — { error } 로 돌려주고 온보딩은 성공으로 끝난다(사람이 답한 것은 이미 반영됐다).
@@ -856,7 +862,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   try {
     const { listCollectors, appendLivProfile } = await import("../../org/store.js");
     const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
-    const { livKickoff } = await import("../../org/liv/kickoff.js");
+    const { livKickoff, LIV_HREF } = await import("../../org/liv/kickoff.js");
     const { planLivKickoff } = await import("../../org/liv/kickoff-plan.js");
     const [snap, collectors] = await Promise.all([
       welcomeSnapshot(userId),
@@ -886,7 +892,8 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
     };
     //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
     const plan = planLivKickoff(o.priorSession, usable);
-    if (plan.action === "reuse") return { session_id: plan.sessionId, href: `#/s/${encodeURIComponent(plan.sessionId)}`, reused: true };
+    //  (#4032) 화면은 리브 탭으로 간다 — 리브 탭이 이 워크스페이스의 리브 세션(좌표·복원 이정표)을 찾아 붙인다.
+    if (plan.action === "reuse") return { session_id: plan.sessionId, href: LIV_HREF, reused: true };
     if (plan.action === "skip") {
       // AI 가 안 이어져 있으면 **세션을 열지 않는다.** 열어 봐야 답을 못 해 '조용히 멈춘 창'이 된다.
       //  처음 설정은 끝난 것으로 두고(사람이 답한 건 이미 반영됐다) 사유만 돌려준다 — 화면이 «AI 연결» 로 안내한다.
@@ -894,6 +901,7 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
     }
     //  (#1631, 원준 2026-09-15) 진짜 세션(createSession, kind=task)을 연다 — 지시문은 화면(session-chat livKickoff)이 숨긴다.
+    //   (#4032) 그 세션이 곧 리브 탭의 세션이다 — livKickoff 가 리브 좌표(liv_session)도 적고 화면을 리브 탭(#/liv)으로 보낸다.
     //   surface:"chat" 문안: 이 지시문은 화면에 안 보이니 리브가 «보내 주신 지시대로» 라고 말하지 않게 한다(하네스는 claude 든 아니든 같은 문안).
     const made = await livKickoff(user, { prompt: buildFirstTurnPrompt({ ...turnInput, harness: plan.harness, surface: "chat" }), harness: plan.harness });
     //  세션 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 세션을 찾는다.

@@ -87,19 +87,27 @@ export async function underExcluded(t: Traversal, id: string, seedParentExt?: st
   return verdict;
 }
 
+/** 원장 항목이 «이 수집기 범위 안» 의 증거가 되나 — 활성 + 이 수집기의 몫(#4059). */
+function ledgerInMyScope(led: NotionLedgerEntry | undefined): boolean {
+  return led?.lifecycle === "active" && led.mine;
+}
+
 /** 루트 모드 스코프 판정 — 조상 체인을 원장/루트에 닿을 때까지 워크(결과는 memo). search 모드는 전 범위. */
 async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> {
   if (!t.cfg.rootIds.length) return true;
   if (t.cfg.rootIds.includes(id)) return true;
   // 원장 숏컷은 **부모 불변 + 활성**일 때만 — 원장 존재만으로 판정하면 서브트리 밖으로 이동한 페이지가
   //  full 스윕(archived)과 델타(재활성) 사이에서 플래핑한다(리뷰). 부모가 그대로면 기존 스코프를 신뢰.
+  //  #4059 — 그리고 **이 수집기의 몫**일 때만. 원장은 워크스페이스 전체라, 같은 워크스페이스를 나눠 맡은
+  //  다른 수집기의 페이지도 활성으로 들어 있다. 그걸 증거로 쓰면 남의 범위에서 바뀐 페이지를 이 수집기가
+  //  제 설정(대상 분류·산출 방식)으로 적재한다 — 신규 페이지면 분류까지 남의 것으로 박힌다(신규 삽입에만 걸리므로).
   const selfLed = t.ledger?.byId.get(id);
   const ptype0 = String(parent.type ?? "");
   const curExt = ptype0 === "page_id" ? normalizeNotionId(String(parent.page_id ?? ""))
     : ptype0 === "database_id" ? normalizeNotionId(String(parent.database_id ?? ""))
     : ptype0 === "data_source_id" ? (dsOwnerDb(t, normalizeNotionId(String(parent.data_source_id ?? ""))) ?? null)
     : null;
-  if (selfLed?.lifecycle === "active" && curExt != null && curExt === selfLed.parentExt) return true;
+  if (ledgerInMyScope(selfLed) && curExt != null && curExt === selfLed!.parentExt) return true;
   const cached = t.membership.get(id);
   if (cached !== undefined) return cached;
   const walked: string[] = [id];
@@ -114,7 +122,7 @@ async function inScope(t: Traversal, id: string, parent: Rec): Promise<boolean> 
     else if (ptype === "block_id") nextId = await resolveBlockOwnerPage(t, String(curParent.block_id ?? ""));
     else break; // workspace 등 — 루트 체인에 닿지 못함 → 범위 밖
     if (!nextId || nextId.length !== 36) break;
-    if (t.cfg.rootIds.includes(nextId) || t.ledger?.byId.get(nextId)?.lifecycle === "active") { verdict = true; break; }
+    if (t.cfg.rootIds.includes(nextId) || ledgerInMyScope(t.ledger?.byId.get(nextId))) { verdict = true; break; }
     const memoed = t.membership.get(nextId);
     if (memoed !== undefined) { verdict = memoed; break; }
     walked.push(nextId);

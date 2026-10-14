@@ -91,9 +91,14 @@
 - OS 템프는 재부팅 시 소멸 — 별도 GC 불요. `/clear` 는 새 session_id → 플래그 자연 리셋.
 
 ## 3. 토큰/주소 컨벤션 (시크릿 — 값 출력/커밋 절대 금지)
-- 토큰: env `LIVELY_TOKEN` → 없으면 `~/.lively/token`(0600) 폴백 → 없으면 preload 는 조용히 무동작.
+- 토큰·주소의 우선순위는 **그 창을 누가 띄웠나**로 갈린다(#959 — 정본 주석은 `kit/hooks/session-preload.mjs`):
+  - 사람이 연 셸(`LIVELY_SESSION_ID` 없음): `~/.lively/token`(0600) → env `LIVELY_TOKEN`. env 는 설치기가 rc 에 심은
+    파일의 스냅샷이라 재로그인 뒤엔 옛 값이다(#916·#2617).
+  - 라이블리가 띄운 창(`LIVELY_SESSION_ID` 있음): env `LIVELY_TOKEN` → `~/.lively/token`. 거기 env 는 띄운 쪽이 그 세션
+    몫으로 실은 값이다(공유 홈 박스의 세션 훅 토큰 #1719 · 위탁 판의 게이트웨이 주소 #4012 T5).
+  - `self-update` 는 예외로 어디서든 파일 먼저(이 머신의 키트 설치를 다룬다). 둘 다 없으면 preload 는 조용히 무동작.
   **work-flag/stop-gate 는 무토큰 동작**(게이트웨이 비접촉) — 멤버 머신에서 토큰이 없어도 게이트는 정상.
-- 게이트웨이 주소: env `LIVELY_GATEWAY_URL` → `~/.lively/gateway-url` → `http://localhost:8080`.
+- 게이트웨이 주소: 위와 같은 규칙으로 `~/.lively/gateway-url` ↔ env `LIVELY_GATEWAY_URL` → 둘 다 없으면 `http://localhost:8080`.
 - 레포 스코프: env `LIVELY_HOOKS_REPO` (기본 `productivity`).
 - 토큰 발급: 게이트웨이 `.env` 의 `AUTH_TOKENS_JSON` 에서 본인 항목 — **값을 stdout 에 출력하지 말 것**
   (`install -m 600` / python os.open 패턴으로 파일에 직접 기록).

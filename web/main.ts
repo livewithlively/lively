@@ -22,6 +22,7 @@ import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
+import { livChatCleanup } from './liv-chat.js'; // #4032 — 리브 칸 걷기(라우트 이동마다)
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -102,6 +103,7 @@ async function route() {
   endTour();          // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
   dismissWikiPeek();
   wkRouteCleanup();   // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
+  livChatCleanup();   // 리브 칸의 세션 대화창(폴링·리스너)을 걷는다 — 안 걷으면 리브 탭을 드나들 때마다 쌓인다(#4032)
   // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
   //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).
   //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)된다.

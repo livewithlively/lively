@@ -65,9 +65,15 @@ test("②-b 방치 배치도 판정을 기록하고 그 기록을 빼야 인박�
     "실패한 방치 배치의 기록을 되돌리지 않는다 — 자료가 유실된다");
   //  되돌릴 수 없는 기록은 남기지 않는다 — 재독(비용)보다 유실(무증상)이 나쁘다.
   //   중첩 스킵은 task_id 가 이전 태스크의 것이고, 생성 실패는 task_id 가 없다. 둘 다 되돌리기가 안 걸린다.
-  assert.match(ACTION, /const accepted = r\.status === "ok" && !sum\?\.skipped && tid != null/,
+  //  판정은 한 자리에서(headless-accept) — 분류기도 같은 규칙을 쓴다. 인라인으로 각자 쓰면 둘이 갈라진다(#3994 T5-A).
+  assert.match(ACTION, /const \{ acceptedTaskId \} = await import\("\.\/headless-accept\.js"\)/,
+    "접수 판정을 공용 자리에서 안 가져온다 — 규칙이 호출부마다 갈라진다");
+  assert.match(ACTION, /const acceptedId = acceptedTaskId\(r\)/,
     "접수 여부를 가리지 않는다 — 중첩 스킵·생성 실패까지 기록하면 되돌릴 열쇠가 없어 자료가 영구히 숨는다");
-  assert.match(ACTION, /else if \(accepted\) await markStrandedSeenSafe\(/, "그 게이트를 방치 기록에 걸지 않는다");
+  assert.match(ACTION, /else if \(acceptedId != null\) await markStrandedSeenSafe\(/, "그 게이트를 방치 기록에 걸지 않는다");
+  //  레인도 같은 게이트 — 종전엔 판정을 계산해 두고 레인 기록엔 안 걸어, 접수 실패한 배치의 자료가 인박스에서 사라졌다.
+  assert.match(ACTION, /if \(b\.distillerId\) \{ if \(acceptedId != null\) await markSeenSafe\(/,
+    "레인 배치가 접수 여부를 안 가린다 — 접수 실패한 배치의 자료가 숨는다");
 });
 
 test("②-c 방치 배치는 대상을 못박는다 — 기록하는 집합과 다루는 집합이 같아야 한다", () => {

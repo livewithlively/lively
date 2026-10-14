@@ -86,7 +86,7 @@ export async function detectHarnesses(): Promise<string[]> {
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)
-  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 대화 턴(#1631)은 문자열 턴 id 다
+  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 계열 헤드리스 턴(프로젝트 대화·처음 설정 분석)은 문자열 턴 id 다
   //  (턴은 org_task 행을 만들지 않는다 — 배치 의미(재시도·용량·타임아웃)가 채팅 한 턴에 안 맞는다).
   taskId: number | string;
   rootKey: string;             // v1: 'shared' 만 허용(검증은 호출부)
@@ -96,7 +96,7 @@ export interface RunTaskInput {
   repo?: string | null;        // 지정 시 게이트웨이가 공유 base clone→worktree 자동 provision, cwd=worktree(#458 재사용)
   gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
-  // 리브 대화 턴(#1631) 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
+  // 리브 계열 헤드리스 턴 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
   //  (--disallowedTools 거부 목록 · --session-id/--resume). 위탁은 안 쓴다(undefined).
   //  ⚠ 여기 사람 텍스트를 넣지 마라 — 이 배열은 셸 명령줄에 그대로 펼쳐진다. 사람 텍스트는 프롬프트 파일뿐이다.
   extraFlags?: string[];
@@ -114,6 +114,35 @@ export interface RunTaskInput {
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
   //  중앙(게이트웨이 내장 노드) 실행 시엔 미설정 — 거기선 DB 를 직접 읽는 게 정상이다.
   repoAuth?: RepoProvisionAuth;
+  // ★ 이 위탁을 낸 **게이트웨이의 주소·워크스페이스** (#4012 T5). 판 안의 하네스·MCP·훅이 **어디에 붙을지**다.
+  //  왜 필요(2026-09-16 실사고): 한 박스에 게이트웨이가 둘 있거나(맥미니 olddev + 매니지드 노드) 앱 로그인이 다른
+  //   곳을 가리키면, 판이 `~/.lively/gateway-url` 을 읽어 **남의 워크스페이스에 붙었다** — olddev 의 83개 테넌트
+  //   증류 배치가 운영 워크스페이스 자료를 읽고 지식을 썼다. 대화형 세션은 이미 LVLY_TENANT_SLUG 를 싣는데
+  //   위탁 판만 둘 다 빠져 있었다.
+  //  ⚠ 노드엔 DB 가 없으므로 여기서 조회하지 않는다 — **보낸 쪽(게이트웨이)이 안다.** 없으면 안 싣는다(구 게이트웨이 무회귀).
+  gatewayUrl?: string | null;
+  tenantSlug?: string | null;
+}
+
+//  주소 모양 — `src/gateway-url.ts` 의 SAFE_GATEWAY_URL 과 같은 자. 그 모듈은 DB 를 끌어와 노드 번들에 못 들인다.
+const TASK_GW_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
+//  슬러그 모양 — `terminal/catalog.ts` 의 SAFE_SLUG 와 같은 자.
+const TASK_TENANT_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 위탁 판에 싣는 «어디에 붙나» env (#4012 T5) — 순수 함수.
+ *
+ * 이 값은 tmux 명령줄(`-e K=V`)에 그대로 펼쳐지므로 **모양이 아니면 싣지 않는다**(조용히 뺀다 — 그러면 판은
+ *  종전처럼 로컬 설정으로 간다. 이상한 값을 실어 명령줄을 여는 것보다 낫다).
+ * 끝의 `/` 는 다듬는다 — 훅들이 base 에 경로를 이어 붙인다.
+ */
+export function taskGatewayEnvArgs(gatewayUrl: string | null | undefined, tenantSlug: string | null | undefined): string[] {
+  const out: string[] = [];
+  const u = typeof gatewayUrl === "string" ? gatewayUrl.trim().replace(/\/+$/, "") : "";
+  if (u && TASK_GW_URL.test(u)) out.push("-e", `LIVELY_GATEWAY_URL=${u}`);
+  const s = typeof tenantSlug === "string" ? tenantSlug.trim() : "";
+  if (s && TASK_TENANT_SLUG.test(s)) out.push("-e", `LVLY_TENANT_SLUG=${s}`);
+  return out;
 }
 export interface RunTaskResult { sessionId: string; taskDir: string; workspace: string }
 
@@ -393,9 +422,9 @@ export async function prepareTaskDir(
 
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
   // 루트 축 — 위탁(delegate)은 **공유 루트**다: 결과물이 남고 팀이 본다.
-  //  리브 대화 턴(#1631)만 **개인 루트**다. 두 가지 이유이고 둘 다 축소하면 안 된다:
-  //   ① 세션 시작 훅의 리브 게이트가 `basename(cwd) === "liv"` 라, 그 폴더에서 돌아야 리브가 리브가 된다.
-  //   ② 웹터미널 리브 세션과 **같은 자리**를 써야 두 표면이 한 대화로 보인다.
+  //  처음 설정 분석(me_welcome_analyze)만 **개인 루트**(<개인 루트>/liv)다 — 그 사람이 올린 자료를 그 사람 몫으로 읽는 한 번짜리 턴이다.
+  //  (홈 리브의 대화 턴도 여기였다 — #4032 에서 진짜 세션(org/liv/session.ts)으로 옮겼다. 이 함수의 tmux 는 게이트웨이가 도는
+  //   기계의 것이라, 세션을 노드의 세션 컨테이너에 띄우는 매니지드에서는 판이 뜨지 않는다.)
   //  그 외 값은 계속 막는다 — 임의 루트를 여는 순간 이 함수가 범용 실행기가 된다.
   if (input.rootKey !== "shared" && input.rootKey !== "personal") {
     throw new Error(`위탁 워크스페이스 루트는 shared·personal 만 지원합니다: ${input.rootKey}`);
@@ -426,7 +455,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
   if (input.repo) {
-    // 레포 준비는 **위탁 전용 경로**다(리브 대화 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
+    // 레포 준비는 **위탁 전용 경로**다(리브 계열 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
     //  여기서 그 계약을 명시적으로 지킨다 — 문자열 id 가 흘러들면 조용히 NaN 폴더가 생기는 대신 여기서 멈춘다.
     const numericTaskId = Number(input.taskId);
     if (!Number.isInteger(numericTaskId)) {
@@ -471,6 +500,8 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  이 경로의 AI 는 **항상 전체 공개로** 기록했다(잠긴 프로젝트를 위탁해도 마찬가지였다).
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // #4012 T5 — 이 판이 붙을 게이트웨이·워크스페이스. 안 실으면 판이 `~/.lively/gateway-url` 을 읽어 남의 워크스페이스에 붙는다.
+  args.push(...taskGatewayEnvArgs(input.gatewayUrl, input.tenantSlug));
   // 자격 리스(§8-3) — setup-token env. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
   //  ⚠ 중앙 박스 격리(osUser)에서는 이 판이 곧 `sudo → box-spawn` 이라, sudoers 가 보존하지 않는 이름은
   //   **오류 없이** 사라진다. 이름이 런타임에 정해지는 유일한 주입 자리라 시험이 정적으로 못 덮는다 —
@@ -539,12 +570,12 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
 export interface TaskWatch { taskId: number; sessionId: string; taskDir: string; harness?: string; osUser?: string | null }
 export interface TaskOutcome { taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 
-const SUMMARY_CAP = 8 * 1024;
+export const SUMMARY_CAP = 8 * 1024;
 
 // 진행 스트림에서 최종 텍스트를 뽑는다 — **하네스별 스키마**(HEADLESS.extract)로(#1710).
 //  종전엔 claude 의 `type=result` 하나만 알아서, 다른 하네스로 돌린 위탁은 요약이 통째로 빈 값이 됐다.
 //  못 찾으면 마지막 비어있지 않은 줄(진행 중 크래시 등) — 요약 목적이라 근사로 충분.
-function extractResult(streamJsonl: string, harnessKey?: string): string {
+export function extractResult(streamJsonl: string, harnessKey?: string): string {
   const spec = HEADLESS[harnessKey || "claude"] ?? HEADLESS.claude;
   const got = spec.extract(streamJsonl);
   if (got) return got;

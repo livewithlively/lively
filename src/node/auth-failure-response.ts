@@ -159,8 +159,9 @@ export async function handleAuthFailure(
         title: `헤드리스 자격 실패 — ${ctx.requester}`,
         text:
           `위탁 #${ctx.taskId} 이(가) **${ctx.auth.label}** 로 실패했습니다. ${what}\n`
-          + `조치: ${ctx.requester} 계정에서 \`claude setup-token\` 을 다시 발급해 관리 ▸ 내 로그인 ▸ Claude(헤드리스 실행)에 등록한 뒤,`
-          + ` 관리탭에서 그 크론을 다시 켜세요. 재발급 전까지는 재시도해도 같은 결과입니다.\n`
+          + `조치: ${ctx.requester} 님이 내 프로필 ▸ AI 계정 연결 ▸ «사람 없이 도는 작업» 에서 [다시 연결]을 누르게 한 뒤`
+          + `(화면에서 setup-token 을 새로 발급해 저장한다 — #4051), 관리탭에서 그 크론을 다시 켜세요.`
+          + ` 다시 연결하기 전까지는 재시도해도 같은 결과입니다.\n`
           + `판정 근거: ${ctx.auth.evidence}`,
         detail: {
           task_id: ctx.taskId, requester: ctx.requester, cron_job: ctx.cronJobId,

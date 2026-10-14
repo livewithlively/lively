@@ -135,17 +135,65 @@ const ANSI_LIGHT = {
   brightBlack: '#64728A', brightRed: '#B84E44', brightGreen: '#0A805F', brightYellow: '#6B4E00',
   brightBlue: '#2D6BF0', brightMagenta: '#5B4FA8', brightCyan: '#12797B', brightWhite: '#15233B',
 };
-const APP_DARK = Object.assign({ background: '#111726', foreground: '#EAF0FA', cursor: '#43E5B0', selectionBackground: '#2B3B5C' }, ANSI_DARK);
-const APP_LIGHT = Object.assign({ background: '#FFFFFF', foreground: '#15233B', cursor: '#2D6BF0', selectionBackground: '#CFE0F7' }, ANSI_LIGHT);
+export const APP_DARK = Object.assign({ background: '#111726', foreground: '#EAF0FA', cursor: '#43E5B0', selectionBackground: '#2B3B5C' }, ANSI_DARK);
+export const APP_LIGHT = Object.assign({ background: '#FFFFFF', foreground: '#15233B', cursor: '#2D6BF0', selectionBackground: '#CFE0F7' }, ANSI_LIGHT);
 
-const THEMES = {
-  auto:      { name: '앱 테마 따름', auto: true },
-  dark:      { name: '다크', dark: true,  theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#585b70' } },
-  light:     { name: '라이트', dark: false, theme: { background: '#fdfdfd', foreground: '#2a2a2a', cursor: '#5566ff', selectionBackground: '#cfe3ff' } },
-  dracula:   { name: 'Dracula', dark: true, theme: { background: '#282a36', foreground: '#f8f8f2', cursor: '#ff79c6', selectionBackground: '#44475a' } },
-  solarized: { name: 'Solarized Dark', dark: true, theme: { background: '#002b36', foreground: '#93a1a1', cursor: '#cb4b16', selectionBackground: '#073642' } },
-  nord:      { name: 'Nord', dark: true, theme: { background: '#2e3440', foreground: '#d8dee9', cursor: '#88c0d0', selectionBackground: '#434c5e' } },
-  github:    { name: 'GitHub Light', dark: false, theme: { background: '#ffffff', foreground: '#24292f', cursor: '#0969da', selectionBackground: '#b6e3ff' } },
+// 이름 있는 테마도 **ANSI 16색을 전부 준다.** 종전엔 background·foreground·cursor·selection 넷만 줬는데,
+//  xterm 은 빠진 슬롯을 자기 기본 팔레트(우분투 계열)로 채운다 — 그 색들은 이 테마들의 배경을 전제로 고른 게
+//  아니라서 대비가 무너진다. 실측(Solarized 배경 #002b36 위): brightBlack 2.05:1 · blue 2.53:1 · magenta 2.28:1.
+//  하네스가 회색·파랑 계열로 찍는 보조 출력이 배경에 묻혀 읽히지 않는다(2026-09 사용자 보고).
+//  이름 붙은 네 테마(dracula·solarized·nord·github)는 그 테마의 **공식 값**을 쓴다 — 저대비 슬롯이 있어도
+//  그건 그 테마의 정체성이라 임의로 바꾸지 않는다. 대비가 필요한 사람은 값을 손대는 대신 고대비 변형을 고른다.
+//  일반명 테마(dark·light)는 공식 스펙이 없으니 앱 팔레트(ANSI_DARK/ANSI_LIGHT)를 그대로 쓴다.
+const ANSI_SOLARIZED = {
+  black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+  blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+  // ⚠ brightBlack 만 공식값(base03 #002b36)이 아니다. 공식대로면 이 슬롯이 **배경색과 같은 색**이라
+  //  그 색으로 찍힌 글자가 통째로 사라진다 — xterm 기본 팔레트로 떨어지던 종전(2.05:1)보다도 나쁘다.
+  //  «안 보이는 글자» 를 의도하는 사용자는 없으므로 같은 팔레트 안에서 한 단계만 올린다(base01, 2.79:1).
+  //  그 결과 brightGreen(공식이 base01 을 배정한 슬롯)과 같은 색이 된다. Solarized 는 bright 넷에 회색
+  //  계단(base01·base00·base0·base1)을 몰아넣은 설계라 겹치지 않는 자리가 팔레트 안에 없다 — 두 슬롯이
+  //  같아 보이는 쪽이, 한 슬롯이 아예 안 보이는 쪽보다 낫다고 보고 겹침을 받아들인다.
+  brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83',
+  brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
+};
+// Solarized 고대비 — 배경·전경 계열은 그대로 두고 ANSI 슬롯만 #002b36 위에서 4.5:1 이상으로 올렸다(black 은 예외:
+//  그 슬롯의 뜻이 '가장 어두운 색'이다). 공식 팔레트는 bright 셋을 base01/base00 회색으로 쓰는데(brightBlack 은
+//  아예 배경색과 같다) 하네스의 dim 출력이 거기 얹히면 안 보인다 — 그 세 슬롯은 여기서 슬롯 뜻대로 되돌렸다.
+const ANSI_SOLARIZED_HC = {
+  black: '#073642', red: '#e8736f', green: '#8fa60b', yellow: '#b58900',
+  blue: '#3f9fe0', magenta: '#e06ba3', cyan: '#2aa198', white: '#eee8d5',
+  brightBlack: '#8c9fa3', brightRed: '#f08a72', brightGreen: '#a8c23a', brightYellow: '#d4b429',
+  brightBlue: '#79b8e8', brightMagenta: '#b79ae0', brightCyan: '#7fd4cd', brightWhite: '#fdf6e3',
+};
+const ANSI_DRACULA = {
+  black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+  blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+  brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5',
+  brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+};
+const ANSI_NORD = {
+  black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+  blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
+  brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b',
+  brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+};
+const ANSI_GITHUB = {
+  black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00',
+  blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+  brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01',
+  brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f',
+};
+
+export const THEMES = {
+  auto:         { name: '앱 테마 따름', auto: true },
+  dark:         { name: '다크', dark: true,  theme: Object.assign({ background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#585b70' }, ANSI_DARK) },
+  light:        { name: '라이트', dark: false, theme: Object.assign({ background: '#fdfdfd', foreground: '#2a2a2a', cursor: '#5566ff', selectionBackground: '#cfe3ff' }, ANSI_LIGHT) },
+  dracula:      { name: 'Dracula', dark: true, theme: Object.assign({ background: '#282a36', foreground: '#f8f8f2', cursor: '#ff79c6', selectionBackground: '#44475a' }, ANSI_DRACULA) },
+  solarized:    { name: 'Solarized Dark', dark: true, theme: Object.assign({ background: '#002b36', foreground: '#93a1a1', cursor: '#cb4b16', selectionBackground: '#073642' }, ANSI_SOLARIZED) },
+  'solarized-hc': { name: 'Solarized Dark (고대비)', dark: true, theme: Object.assign({ background: '#002b36', foreground: '#c5d1d1', cursor: '#e8965a', selectionBackground: '#0d4453' }, ANSI_SOLARIZED_HC) },
+  nord:         { name: 'Nord', dark: true, theme: Object.assign({ background: '#2e3440', foreground: '#d8dee9', cursor: '#88c0d0', selectionBackground: '#434c5e' }, ANSI_NORD) },
+  github:       { name: 'GitHub Light', dark: false, theme: Object.assign({ background: '#ffffff', foreground: '#24292f', cursor: '#0969da', selectionBackground: '#b6e3ff' }, ANSI_GITHUB) },
 };
 
 /** 앱이 지금 보고 있는 테마 — web/theme.ts 와 같은 키·같은 규칙(없음 = 시스템 따름). */
@@ -158,7 +206,7 @@ function appIsDark() {
   return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
 }
 /** 테마 키 → xterm 에 실을 실제 색 묶음. auto 는 호출 시점의 앱 테마로 해석된다. */
-function resolveTheme(key) {
+export function resolveTheme(key) {
   const t = THEMES[key] || THEMES.auto;
   if (t.auto) return appIsDark() ? APP_DARK : APP_LIGHT;
   return t.theme;

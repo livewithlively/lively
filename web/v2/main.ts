@@ -14,6 +14,7 @@ import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shell
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
+import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, appByKey, appFrame, nativeAppByRoute, noteAppUse } from './apps.js';
 import { browserSurface } from './browser-surface.js';
 import { projMatches } from '../lib/proj-match.js';
@@ -34,7 +35,7 @@ import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 �
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
-import { WS_SWITCH_KEY } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다
+import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
 import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
@@ -287,7 +288,8 @@ export async function bootV2(): Promise<void> {
   }
   // #1891 — 받은 알림 배너. 화면과 무관하게 돈다(「확인할 것」 안에서만 띄우면 보고 있어야 알림이 뜬다).
   //  데스크톱 앱 안에서는 스스로 물러난다 — 그 앱이 트레이에서 같은 사건을 이미 띄운다(#1842).
-  startNotificationBanners();
+  //  #4054 — 배너 윗줄은 이 탭의 워크스페이스 이름(문패와 같은 값 — switcher.ws()).
+  startNotificationBanners(undefined, () => workspaceInfo().name);
   // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
   //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
   //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
@@ -384,6 +386,7 @@ export async function bootV2(): Promise<void> {
     },
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+      if (routeKey(tab.route) === 'liv') livChatCleanup();   // #4032 — 리브 탭을 닫으면 그 칸도 걷는다
       if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
       dropProjView(tab); shellProject.delete(tab); drawSide();
@@ -482,6 +485,9 @@ export async function bootV2(): Promise<void> {
   //  그 뒤로는 자기가 자기를 되살리는 고리가 된다(원준님 신고 2026-08-27 "시도때도없이 떠서 돌아버리겠어").
   //  ⚠ 사람이 **스스로** 처음 설정을 다시 열 길은 남긴다 — 홈의 «이어서 하기» 가 붙이는 `?resume=1` 은 통과.
   if (boot && routeKey(boot) === 'raw:welcome' && !boot.includes('resume=1')) boot = null;
+  // #4051 — «내 AI 계정» 창 주소로 켰으면 탭은 평소대로 되살리고 창만 연다(ME_AI_ROUTE 머리말).
+  const openAiAcct = !!boot && ME_AI_ROUTE.test(boot);
+  if (openAiAcct) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
@@ -520,6 +526,12 @@ export async function bootV2(): Promise<void> {
     tabsApi.activate(t);
   }
   drawSide();
+  if (openAiAcct) {
+    //  주소는 지금 탭의 자리로 — 창을 닫고 새로고침해도 다시 안 열린다. replaceState 는 hashchange 를 안 낸다.
+    const back = tabsApi.active().route || '#/';
+    history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    openMeModal({ tab: 'aiacct' });
+  }
 
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
@@ -608,8 +620,11 @@ async function syncShell(): Promise<void> {
   else if (atPage === 'trash') renderTrash(at.center, data, binHooks, at.aside);
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
-    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
+    //  #4032 — 리브 탭도 세션 대화창을 쥔다. 라우트에 세션 id 가 없으니 **붙어 있는 세션**(chat.id)으로 찾는다.
+    const livTab = routeKey(t.route) === 'liv';
+    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : livTab ? t.chat.id : '';
     const s = sid ? findSess(sid) : null;
+    if (livTab) { if (s && t.chat.id === s.id) t.chat.update({ ...s, projectName: projName(data, s.projectId) }); continue; }
     // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
     //  세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
     //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
@@ -988,10 +1003,25 @@ function applyTabChrome(tab: ShellTab): void {
 }
 
 /** 주소가 바뀌었다(링크 클릭·뒤로가기) — 활성 탭이 그 화면으로 이동한다. 이미 다른 탭에 있으면 그 탭으로 간다. */
+/**
+ * #4051 — «내 AI 계정» 창 주소(알림이 가리킨다). **탭이 아니라 창**이다 — onHash 와 부팅 둘 다 이 주소를 탭으로 만들지
+ *  않고 창만 연다. 한 곳에서 판정해야 두 자리가 어긋나지 않는다(어긋나면 부팅에서만 «모르는 화면» 탭이 선다).
+ */
+const ME_AI_ROUTE = /^#\/me\/ai(?:[/?]|$)/;
+
 async function onHash(): Promise<void> {
   if (!tabsApi) return;
   if (suppressHash > 0) { suppressHash--; return; }
   let hash = location.hash || '#/';
+  // #4051 — «내 AI 계정» 창으로 가는 주소(알림 «사람 없이 도는 작업이 멈췄어요» 가 가리킨다). 화면(탭)이 아니라 **창**이라
+  //  탭을 만들지 않는다 — 창을 열고 주소만 지금 탭의 자리로 되돌린다(안 되돌리면 창을 닫은 뒤 새로고침에서 다시 열린다).
+  if (ME_AI_ROUTE.test(hash)) {
+    openMeModal({ tab: 'aiacct' });
+    const back = tabsApi.active().route || '#/';
+    suppressHash++;
+    location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    return;
+  }
   // ★ 프로젝트 주소는 '거쳐 가는 문'이다(원준 2026-08-20 "그거 눌렀을 때 열리는 탭도 그냥 세션이 열리는걸로").
   //  사이드바에서 프로젝트 제목을 누르면 #/p/<id> 로 오는데, 그대로 탭을 만들면 **프로젝트 탭**이 하나 생겼다가
   //  그 안에서 다시 세션으로 바뀐다(제목이 두 번 바뀌고, 이미 프로젝트 탭이 있으면 그 낡은 탭이 켜졌다).
@@ -1037,6 +1067,7 @@ async function onHash(): Promise<void> {
   if (!hop && fromHome && (cur.draft || '').trim()) { tabsApi.add(hash); return; }
   if (!hop && !fromHome && (targetInstance || currentInstance)) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
+  if (routeKey(cur.route) === 'liv') livChatCleanup();     // 리브 탭을 떠나면 그 칸(빈 대화·진행 중인 붙이기)도 걷는다(#4032)
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
   tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)
@@ -1149,11 +1180,33 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       else await renderConnect(tab.center);
       if (seq !== tab.seq) return;
     } else if (page === 'liv') {
+      if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
       tab.center.replaceChildren();
       const host = el('div', { class: 'v2-livpage' });
       tab.center.append(host);
       tab.aside.replaceChildren();
-      await renderLiv(host, { rail: null, embedded: true });   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
+      await renderLiv(host, {
+        rail: null, embedded: true,   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
+        //  #4032 — 리브는 진짜 세션이다. 그 세션 대화창은 **이 셸의 목록**으로 붙인다: 20초 갱신이 tab.chat 으로 상태를 흘리고,
+        //   탭을 떠나면 셸이 부순다(세션 화면과 같은 수명). 목록에 아직 없으면(방금 열었거나 첫 판) 한 번 새로 읽는다.
+        mountSession: async (h, sid, o) => {
+          if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+          if (!findSess(sid)) await loadData();
+          if (seq !== tab.seq || !h.isConnected) return null;
+          const handle = renderSession(h, data, sid, {
+            chatHome: true,
+            isVisible: () => tabsApi?.current() === tab && o.isVisible(),
+            onResumed: o.onResumed,
+          });
+          tab.chat = handle;
+          return handle;
+        },
+        onSessionCreated: (row: any) => {
+          if (!row || !row.id) return;
+          data.sessions = mergeSessions([row], []).concat(data.sessions.filter((x) => x.id !== String(row.id)));
+          drawSide(); tabsApi?.paint();
+        },
+      });
     } else if (page === 'welcome') {
       // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
       tab.center.replaceChildren();

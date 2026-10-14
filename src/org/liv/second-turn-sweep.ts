@@ -29,6 +29,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   const { deliverPrompt } = await import("../../terminal/deliver-prompt.js");
 
   const { sessionGone } = await import("../../terminal/tmux-exec.js");
+  const { currentLivSessionId } = await import("./session.js");
 
   const out = { fired: 0, waited: 0, gaveUp: 0, failed: 0 };
   const candidates = await listLivSecondTurnCandidates();
@@ -54,11 +55,14 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   };
 
   for (const c of candidates) {
-    //  (#1631 2026-09-14) 킥오프가 리브 탭 대화 턴이었던 사람 — 세션이 아니라 **그 턴의 끝남**이 «1턴이 끝났나» 이고,
-    //   2턴도 세션 배달이 아니라 같은 대화에 잇는 숨김 턴이다. 워크스페이스는 후보 행의 칸 키(workspace_id)가 말한다
-    const sid = String(c.welcome.session_id);
-    const ws = await workspaceForSession(sid).catch(() => null);
+    //  워크스페이스는 킥오프 세션의 워크스페이스 맵이 말한다(복원된 세션도 같은 워크스페이스에 선다).
+    const kickSid = String(c.welcome.session_id);
+    const ws = await workspaceForSession(kickSid).catch(() => null);
     const tenant = ws ? { id: ws.id, slug: ws.slug } : { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG };
+    //  (#4032) 2턴은 **지금의 리브 세션**에 넣는다 — 리브 탭이 킥오프 세션을 되살렸으면 새 id 다(복원 이정표).
+    //   옛 id 만 보면 «사라졌다» 로 읽고 새 세션을 또 열어, 사람이 이어 가던 대화를 두고 2턴이 딴 세션에 간다.
+    //   좌표를 못 읽으면 킥오프 id 그대로 — 종전 판정(사라졌으면 reopen)으로 떨어진다.
+    const sid = (await withTenant(tenant, () => currentLivSessionId(c.id)).catch(() => null)) ?? kickSid;
     const s = await sessionIn(tenant, sid);
     // 수집기와 그 잡의 마지막 실행 — 그 워크스페이스 안에서 읽는다.
     const collectors = await withTenant(tenant, async () => {

@@ -93,13 +93,31 @@ export interface SourceFilter {
 //  「ㅇㅋㅇㅋ」가 목록에 1급 행으로 서던 원인은 내용이 아니라 단위였다(실측: 슬랙·디스코드 20자 미만 47건 중
 //  27건이 스레드 답글, 그중 37건엔 지식도 붙어 있었다 — 맥락 안에선 승인의 증거다). 그래서 지우지 않고 **접는다**:
 //  ⚠ 부모가 실제로 수집돼 있는 답글만 접는다 — 부모 없는 답글을 접으면 그 자료는 영영 안 보인다(fail-open).
-const FOLD_REPLY = `NOT (s.parent_external_id IS NOT NULL AND EXISTS (
+//
+//  ⚠⚠ 아래 두 술어는 **모양이 곧 성능이다**(2026-09-14 전면 장애 · #936). 나무 집계·목록 총계처럼 LIMIT 이 없는
+//   자리에서도 쓰이므로, 행마다 source 를 다시 훑는 모양이면 자료 전건에 곱해져 수백 초가 걸리고 그동안 공유
+//   itemsPool(max 20)이 고갈돼 게이트웨이 전 API 가 굶는다. 6만 건 합성 실측(종전 모양): 나무 19.3초 · 목록 총계
+//   14.8초 · «지식이 된 것» 총계 120초+ 타임아웃. 지금 모양: 수십 ms. 되돌리지 마라.
+//
+//  접기 — NULL 검사를 서브쿼리 **안**에 둔 NOT EXISTS 라야 PG 가 Hash Anti Join 으로 푼다. 종전의
+//   `NOT (x IS NOT NULL AND EXISTS …)` 는 sublink 를 끌어올리지 못해 행마다 도는 SubPlan 이었다.
+//   parent_external_id 가 NULL 이면 `p.external_id = NULL` 이 참일 수 없어 그대로 통과하므로 의미는 종전과 같다.
+//   ⚠ WHERE 의 최상위 AND 항으로만 쓴다 — OR·NOT 안에 넣으면 다시 행마다 돈다.
+const FOLD_REPLY = `NOT EXISTS (
   SELECT 1 FROM source p WHERE p.external_id = s.parent_external_id
-    AND p.external_system IS NOT DISTINCT FROM s.external_system AND p.lifecycle='active'))`;
+    AND p.external_system IS NOT DISTINCT FROM s.external_system AND p.lifecycle='active')`;
 //  접힌 뒤의 «지식이 붙었나»는 스레드 단위다 — 답글에 붙은 지식이 머리 행의 민트 점으로 올라와야 접기가 정보를 안 잃는다.
-const THREAD_KN = `EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id
-  OR ks.source_id IN (SELECT r.id FROM source r WHERE r.parent_external_id = s.external_id
-    AND r.external_system IS NOT DISTINCT FROM s.external_system AND r.lifecycle='active'))`;
+//   판정 = «지식이 붙은 자료를 제 대화 머리로 올린 집합» 에 이 행이 있나. 부모가 수집된 답글이면 부모가, 아니면 자신이
+//   머리다 — 종전 «자신 OR 직계 답글» 두 갈래와 같은 판정이고, 한 단계뿐인 것(답글의 답글은 안 올린다)·뷰어 술어를
+//   안 거는 것도 같다. 비상관 IN 이라 집합을 한 번만 만들어 해시로 대조한다. COALESCE 라 NULL 이 없어 NOT IN 도 안전하다.
+//   ⚠ 접힌 행(FOLD_REPLY 를 통과한 머리 행)에만 쓴다 — 접히는 답글 행에 대고 물으면 제 지식이 부모 쪽으로 올라가 있어
+//    거짓이 된다. 지금 쓰는 자리(fold 목록·총계·나무)는 전부 FOLD_REPLY 와 함께 쓴다.
+const THREAD_KN = `s.id IN (
+  SELECT COALESCE(par.id, ks_s.id)
+    FROM knowledge_source ks
+    JOIN source ks_s ON ks_s.id = ks.source_id AND ks_s.lifecycle='active'
+    LEFT JOIN source par ON par.external_id = ks_s.parent_external_id
+         AND par.external_system IS NOT DISTINCT FROM ks_s.external_system AND par.lifecycle='active')`;
 
 // listSources / countSources 공유 필터 — WHERE·params 를 한 곳에서(목록·총계가 항상 같은 조건).
 function sourceListFilter(f: SourceFilter): { where: string; params: unknown[] } {
@@ -175,6 +193,9 @@ export async function listSourceTree(viewer?: Viewer): Promise<SourceTreeNode[]>
   const rows = await q(itemsPool,
     //  나무도 **대화 단위**로 센다(#2423 v3.1) — 목록이 fold 로 접는데 나무만 낱메시지로 세면 «슬랙 68»을 눌렀는데
     //   35건이 나온다(같은 화면의 두 숫자가 서로 거짓말). linked 도 스레드 단위로 올린다.
+    //  ⚠ 목록·총계와 **같은 술어**(FOLD_REPLY·THREAD_KN)를 쓴다 — 나무의 숫자와 그 가지를 눌렀을 때의 목록 총계가
+    //   한 정의에서 나와야 서로 맞는다. LIMIT 없는 집계라 술어 모양이 곧 성능이다(2026-09-14 전면 장애: 종전 모양은
+    //   행마다 source 를 다시 훑어 수백 초 → itemsPool 고갈 → 게이트웨이 전 API 가 굶었다). 두 상수 머리말의 ⚠ 를 지킨다.
     `SELECT COALESCE(s.external_system, 'authored') AS system,
             COALESCE(s.fields->>'container_name', CASE WHEN s.external_system IS NULL THEN s.kind ELSE NULL END) AS container,
             count(*)::int AS n,

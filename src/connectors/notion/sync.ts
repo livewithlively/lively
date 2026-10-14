@@ -6,9 +6,13 @@ import type { BackfillOpts, PostSyncCtx, PostSyncResult } from "../types.js";
 import type { NotionRunStats } from "./state.js";
 import { itemsPool } from "../../db/client.js";
 import { resolveNotionInstance } from "./client.js";
+import { boundCollector, collectorClaimKey } from "../config.js";
 import {
-  applyNotionChildrenOrder, loadNotionLedger, materializeNotionLinks, sweepNotionArchived,
+  applyNotionChildrenOrder, countNotionClaimedSince, loadNotionLedger, materializeNotionLinks,
+  observeNotionRows, sweepNotionArchived,
 } from "../../v6/connector-mirror.js";
+import type { NotionSweepPlan, NotionSweepResult } from "../../v6/connector-mirror.js";
+import { loadNotionSweepPeers, planNotionSweep, recordNotionSweepReady } from "./sweep-peers.js";
 import { logger } from "../../log.js";
 
 /** 커서에 저장된 이전 run 의 귀속 실패 목록(retry_ids) — 문자열만 추린다. */
@@ -26,8 +30,10 @@ export async function prepareNotionSync(cursor: Record<string, unknown> | null):
   const prevRetry = readRetryIds(cursor);
   try {
     // #1881 — 원장은 **이 수집기의 워크스페이스**만. 남의 인스턴스가 섞이면 델타가 '이미 안다'로 오판한다.
+    // #4059 — 항목마다 «이 수집기의 몫인가» 를 싣는다(델타 범위 판정이 남의 몫을 내 범위의 증거로 쓰지 않게).
+    //  표식 값은 적재(run-sync)가 쓰는 것과 같은 식이다 — 같은 프로세스·같은 바인딩이라 같은 값이 나온다.
     const instance = await resolveNotionInstance();
-    const ledger = await loadNotionLedger(itemsPool, instance);
+    const ledger = await loadNotionLedger(itemsPool, instance, collectorClaimKey("notion"));
     logger.info({ instance, entries: ledger.byId.size, dataSources: ledger.dsToDb.size, retryCarried: prevRetry.length }, "notion 원장 로드(델타/가속 full 기준)");
     return { ...(ledger.byId.size ? { ledger } : {}), ...(prevRetry.length ? { retryIds: prevRetry } : {}) };
   } catch (err) {
@@ -39,38 +45,49 @@ export async function prepareNotionSync(cursor: Record<string, unknown> | null):
 // ── postSync — #551 링크 물질화(연결구조) + 자식 순서 수렴(페이지 트리) + full 스윕(삭제 전파). ──
 //  두 겹의 실패 감지(조용한 손실 금지):
 //   ① 커넥터 내부 부분 실패(페이지/자산) — 예외로 안 오고 stats 로 온다.
-//   ② 미러 부분 실패 — ingestItems 가 best-effort 로 삼키므로(store.ts), DB 실측으로 대사:
-//      이번 run 에 적재된 행 수(last_synced_at ≥ runStart) < 방출 수 면 미러가 일부 실패한 것.
+//   ② 미러 부분 실패 — ingestItems 가 best-effort 로 삼키므로(store.ts), 항목 단위 실패 수(ctx.mirrorFailures)와
+//      DB 실측으로 대사: 이번 run 에 **이 수집기가** 적재한 행 수 < 방출 수 면 미러가 일부 실패한 것.
+//      (#4059 — 종전엔 last_synced_at 으로 셌다. 같은 워크스페이스의 다른 수집기가 동시에 쓴 행까지 세어져 부족분이 가려졌다.)
 //  어느 쪽이든 커서 동결(다음 run 재수집) + full 스윕 생략(살아있는 페이지 오탐 아카이브 방지).
 export async function notionPostSync(ctx: PostSyncCtx, stats: NotionRunStats | null): Promise<PostSyncResult> {
-  const { pool, runStartIso, incremental } = ctx;
+  const { pool, runStartIso, incremental, claimKey } = ctx;
   let mirrorShortfall = 0;
   try {
     if (stats) {
-      const m = await pool.query(
-        `SELECT count(*)::int AS n FROM knowledge
-          WHERE external_system='notion' AND external_instance=$2 AND last_synced_at >= $1::timestamptz`,
-        [runStartIso, stats.instance]);
-      mirrorShortfall = Math.max(0, stats.emitted - Number((m.rows[0] as { n: number } | undefined)?.n ?? 0));
+      const written = await countNotionClaimedSince(pool, { instance: stats.instance, claimKey, sinceIso: runStartIso });
+      mirrorShortfall = Math.max(0, stats.emitted - written);
     }
-    // 가속 full 관측 갱신 — 원장 일치로 스킵(미방출)한 항목의 last_synced_at 을 올린다(스윕 오탐 방지).
+    // 가속 full 관측 갱신 — 원장 일치로 스킵(미방출)한 항목의 last_synced_at·내 표식을 올린다(스윕 오탐 방지).
     //  mirrorShortfall 계산 **후**(방출 대사를 부풀리지 않게), 스윕 **전**.
     if (stats?.observedIds?.length) {
-      for (let i = 0; i < stats.observedIds.length; i += 5000) {
-        await pool.query(
-          `UPDATE knowledge SET last_synced_at = now()
-            WHERE external_system='notion' AND external_instance=$2 AND external_id = ANY($1::text[])`,
-          [stats.observedIds.slice(i, i + 5000), stats.instance]);
-      }
-      logger.info({ observed: stats.observedIds.length }, "가속 full — 미변경 관측 갱신(last_synced_at)");
+      await observeNotionRows(pool, { instance: stats.instance, ids: stats.observedIds, claimKey });
+      logger.info({ observed: stats.observedIds.length }, "가속 full — 미변경 관측 갱신(last_synced_at·수집기 표식)");
     }
     const links = await materializeNotionLinks(pool);
     const reordered = await applyNotionChildrenOrder(pool);
-    let archived = 0;
-    if (!incremental && stats && stats.failures === 0 && mirrorShortfall === 0) {
-      archived = await sweepNotionArchived(pool, runStartIso, stats.instance); // full + 완전 무실패 + **이 워크스페이스만**(오탐 아카이브 방지)
+    let sweep: (NotionSweepResult & { plan: NotionSweepPlan }) | null = null;
+    if (!incremental && stats && stats.failures === 0 && mirrorShortfall === 0 && ctx.mirrorFailures === 0) {
+      // full + 완전 무실패 + **이 워크스페이스·이 수집기의 몫만**(#1881 · #4059) — 오탐 아카이브 방지.
+      const bound = boundCollector();
+      const peerState = await loadNotionSweepPeers(pool, {
+        instance: stats.instance, claimKey,
+        boundId: bound?.id ?? null, boundVersion: bound?.version ?? null,
+      });
+      const plan = planNotionSweep({ runStartIso, selfChanged: peerState.selfChanged, peers: peerState.peers });
+      const result = await sweepNotionArchived(pool, { runStartIso, instance: stats.instance, claimKey, plan });
+      sweep = { ...result, plan };
+      // 깨끗한 전체 점검을 마쳤다 — 같은 워크스페이스의 다른 수집기 스윕이 이 기록으로 «이 수집기는 안 맡는다» 를 증명한다.
+      await recordNotionSweepReady(pool, { claimKey, runStartIso, boundVersion: bound?.version ?? null });
+      if (!plan.archive) {
+        logger.warn({ instance: stats.instance, claimKey, reason: plan.reason, notReady: plan.notReady ?? [],
+          released: result.released, orphaned: result.orphaned },
+          "notion 스윕 — 보관 보류(같은 워크스페이스를 맡은 수집기가 아직 전체 점검을 마치지 않았거나 설정이 바뀜). 떼어 낸 표식은 다음 스윕이 정리한다");
+      }
     }
-    logger.info({ system: "notion", instance: stats?.instance ?? null, links, reordered, archived, mirrorShortfall,
+    logger.info({ system: "notion", instance: stats?.instance ?? null, claimKey, links, reordered,
+      archived: sweep?.archived ?? 0, released: sweep?.released ?? 0, orphaned: sweep?.orphaned ?? 0,
+      sweepHeld: sweep?.held ?? null, sole: sweep?.plan.archive ? sweep.plan.sole : null,
+      mirrorShortfall, mirrorFailures: ctx.mirrorFailures,
       stats: { ...stats, observedIds: stats?.observedIds?.length, retryIds: stats?.retryIds?.length } }, "notion 후처리 완료(링크·순서·스윕)");
   } catch (err) {
     logger.error({ err: (err as Error)?.message ?? String(err) }, "notion 후처리 실패 — 커서 동결(다음 run 재수집)");

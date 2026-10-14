@@ -172,6 +172,9 @@ try {
       const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
       if ((reason === "prompt_input_exit" || reason === "logout") && boxId && /^box-/.test(boxId)) {
         const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+        // 자격·주소는 **env 가 이긴다** — 이 분기는 라이블리가 띄운 box pane(LIVELY_SESSION_ID=box-*)에서만 돈다. 거기 env 는
+        //  띄운 쪽이 그 세션 주인 몫으로 실은 훅 토큰이고, 공유 홈의 파일은 키트를 깐 사람 것이다(#1719 · #959 리뷰).
+        //  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
         const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
         const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
         if (token) {
@@ -238,6 +241,8 @@ try {
     const mappedFlag = join(FLAG_DIR, `${boxId}.${sid}.mapped`);
     const isBox = boxId && /^box-/.test(boxId);
     const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+    // 자격·주소는 **env 가 이긴다** — 보고는 box pane(라이블리가 띄운 세션)에서만 나가고, 거기 env 는 그 세션 주인 몫이다
+    //  (#1719 · #959 리뷰 — 위 SessionEnd 분기와 같은 이유).
     const token = isBox ? ((process.env.LIVELY_TOKEN || "").trim() || readCfg("token")) : "";
     const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
     // 최근 N ms 안에 시도했나 — 실패를 영구화하지 않으면서 핫패스 스톨도 막는 쿨다운(플래그 mtime).

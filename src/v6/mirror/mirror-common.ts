@@ -64,6 +64,25 @@ export async function auditLifecycleSweep(
   );
 }
 
+/**
+ * 수집기 표식(#4059) — `sync_state.seen_by.<수집기>` 에 «이 수집기가 이 행을 방금 봤다» 를 남기는 SQL 식.
+ *
+ *  왜 필요한가: 한 외부 워크스페이스를 수집기 여럿이 나눠 맡으면(루트 페이지·제외 페이지·토큰이 다르다) 미러 행은
+ *   external_instance 축을 함께 쓴다. 전체 점검 스윕의 추론(«이번 run 이 못 본 것 = 원본에서 사라진 것»)은
+ *   **그 수집기가 맡은 행**에서만 참인데, 행에는 누가 맡았는지가 없었다 — 그래서 8페이지만 보는 수집기가
+ *   워크스페이스 전체 5,385건을 아카이브했다(soltimal, 2026-09-17). 표식이 그 «누가» 다.
+ *
+ *  모양: `{ "seen_by": { "<수집기>": "<마지막으로 본 시각>" }, "unclaimed_since": "<마지막 표식이 빠진 시각>" }`
+ *   · 표식을 박으면 unclaimed_since 는 지운다 — 다시 누군가 맡은 행이다.
+ *   · 표식을 떼는 쪽(스윕)은 notion-post.ts 의 releaseClaims 다.
+ *  base 는 기존 sync_state 식(INSERT 면 NULL), keyParam 은 표식 문자열 파라미터 자리(`$17` 등).
+ *  jsonb_set 은 중간 경로가 없으면 **조용히 원본을 돌려준다** — 그래서 seen_by 객체를 통째로 만들어 넣는다.
+ */
+export function claimSyncStateSql(base: string, keyParam: string): string {
+  return `jsonb_set(COALESCE(${base}, '{}'::jsonb) - 'unclaimed_since', '{seen_by}',
+            COALESCE(${base}->'seen_by', '{}'::jsonb) || jsonb_build_object(${keyParam}::text, now()))`;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // ── PM 계층·부속 미러(#541 무손실) — 공용 해소 헬퍼 ──
 // ════════════════════════════════════════════════════════════════════════════

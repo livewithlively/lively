@@ -37,7 +37,7 @@ const notionLikeConnector = (r: PostSyncResult): Connector => ({
 });
 
 const ctx = (over: Partial<PostSyncCtx> = {}): PostSyncCtx => ({
-  pool: null as never, runStartIso: PREV_ISO, incremental: false, ingested: 3, mirrorFailures: 0, ...over,
+  pool: null as never, runStartIso: PREV_ISO, incremental: false, ingested: 3, mirrorFailures: 0, claimKey: "test:_", ...over,
 });
 /** 커넥터의 postSync 를 실제로 태워(훅 없으면 null) 커서 계획을 얻는다 — run-sync 의 배선과 동일 순서. */
 async function planFor(conn: Connector, over: { maxMs?: number; mirrorFailures?: number; ingested?: number; prevRetry?: string[] } = {}) {

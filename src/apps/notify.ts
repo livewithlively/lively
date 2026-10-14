@@ -24,6 +24,12 @@ export async function notifyMember(input: {
   memberId: string;
   title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
   now?: number;
+  /**
+   * 같은 dedupe_key 를 다시 울리지 않는 간격(ms). 없으면 정책 기본값(60초 — 하네스 상태 떨림 방어).
+   *  #4051 — 주기 잡이 보내는 알림(«사람 없이 도는 작업이 멈췄어요»)은 10분마다 같은 사실을 되풀이하므로 길게 준다.
+   *  ⚠ **서버 코드만** 넘긴다 — 앱 토큰 경로(app_notify)는 이 값을 받지 않는다(앱이 억제를 풀 수 없게).
+   */
+  cooldownMs?: number;
 }): Promise<NotifyResult> {
   if (!input.appId) return { ok: false, denial: "notify-app-required" };
 
@@ -50,7 +56,7 @@ export async function notifyMember(input: {
   const now = input.now ?? Date.now();
   if (norm.value.dedupeKey) {
     const last = await store.lastSentAtMs(input.appId, input.memberId, norm.value.dedupeKey);
-    if (shouldSuppressDuplicate(norm.value.dedupeKey, last, now)) return { ok: true, suppressed: true };
+    if (shouldSuppressDuplicate(norm.value.dedupeKey, last, now, input.cooldownMs)) return { ok: true, suppressed: true };
   }
 
   return {

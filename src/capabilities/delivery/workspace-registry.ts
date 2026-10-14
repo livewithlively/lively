@@ -32,7 +32,8 @@ import { currentTenant, withTenant } from "../../org/tenant-context.js";
 import { itemsPool } from "../../db/client.js";
 import { getMember, listMembers } from "../../org/store.js";
 import { updateOrgProfile } from "../../org/store/profile.js";
-import { updateRuntimeConfig } from "../../org/store/runtime-config.js";
+import { fillContextJobRunnerIfUnset, updateRuntimeConfig } from "../../org/store/runtime-config.js";
+import { seedDefaultContextJobs } from "../../org/pipeline/default-jobs.js";   // #4052 — 증류·분류 자동 실행을 켠 채로 시작
 import { seedDefaultContent } from "../../org/delivery/seed-content.js";
 import { seedBuiltinApps } from "../../apps/seed.js";   // #2479 — 신규 워크스페이스도 빌트인 앱을 받아야 알림이 산다
 import { logger } from "../../log.js";
@@ -284,6 +285,12 @@ export const workspaceRegistryCapabilities: Capability[] = [
         //  매니지드에서 같은 증상을 #2246 이 이미 겪었다. 여기가 **신규**를, 주기 정비(`builtin-app-seed`)가
         //  **이미 만들어진 것**을 덮는다. 멱등이라 둘이 겹쳐도 안전하다.
         await seedBuiltinApps().catch((err) => logger.warn({ err, slug }, "새 워크스페이스 빌트인 앱 시딩 실패(비치명 — 주기 정비가 보충한다)"));
+        // #4052 — 증류·분류 자동 실행을 **켠 채로** 시작하고, 만든 사람을 기본 실행 멤버로 앉힌다(정해진 적 없을 때만).
+        //  종전엔 이 경로가 두 잡을 아예 안 심어 맥락 관리 화면이 «자동 실행이 없습니다» 로 시작했다(상민님 2026-09-17).
+        //  실행 멤버가 비면 잡은 «만든 사람(created_by)» 으로 흐른다 — 여기선 같은 사람이지만, 누구 계정으로 도는지는
+        //  잡이 아니라 워크스페이스 설정(D1)이 정하게 둔다. 둘 다 비치명: 실패해도 화면에서 켜고 고를 수 있다.
+        await seedDefaultContextJobs(actorOf(user)).catch((err) => logger.warn({ err, slug }, "새 워크스페이스 자동 실행 기본값 실패(비치명 — 맥락 관리 화면에서 켤 수 있다)"));
+        await fillContextJobRunnerIfUnset(id, actorOf(user), "workspace_create").catch((err) => logger.warn({ err, slug }, "새 워크스페이스 기본 실행 멤버 지정 실패(비치명)"));
       });
       return { workspace: wsView({ ...ws, role: "owner" }), header: { "x-lively-workspace": slug } };
     }, {

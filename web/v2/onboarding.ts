@@ -9,10 +9,11 @@ import { authUploadProgress, upDropZone, upFromInput } from '../projects/files-u
 import { sessionTermUrl } from '../lib/session-open.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다([내 설정 ▸ 내 AI 계정]과 공유). 여기선 그리기만 한다.
 import {
-  AI_LOGIN_INLINE, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
+  AI_LOGIN_INLINE, HEADLESS_INLINE, startInlineAiLogin, ensureLoginTerminal, loginTerminalSrc, loginTerminalPopoutUrl,
   type InlineLoginHandle, type LoginTerminal,
 } from '../lib/ai-login-inline.js';   // #2232 — AI 로그인 창(터미널 한 장) 주소는 한 곳에서만 만든다   // #1881 L4 — 자료 넘기기 실배선(새 업로드 코드 금지)
 import { api, apiUrl, state } from '../core.js';
+import { createHeadlessOffer } from './onboarding-headless.js';   // #4051 — 로그인 뒤 «사람 없이 도는 작업» 허용 칸(상태 한 벌)
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 import { managedWorkspaces } from './switcher.js';   // #2476 — 워크스페이스마다 AI 로그인이 따로인 것은 **매니지드만**이다
 import { aiLoginScopeNote } from './ai-login-scope.js';   // #2476 — 그 안내의 정본(만들기 패널과 같은 자리)
@@ -1606,9 +1607,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     return f.find((k) => SEQ_ALL.indexOf(k) > at) || f[f.length - 1];
   }
   /** AI 두 장면(ai·claude)을 떠날 때. 합류자는 팀 수집을 **읽은 뒤에** 다음 칸을 정한다 — 안 읽고 정하면 켜진 팀 수집이 있어도 sources 를 건너뛴다. */
+  let leavingAi = false;   // #4051 — 떠나는 중(합류자는 최대 2.5초 기다린다)에는 헤드리스 칸이 장면을 다시 그리지 않는다
   async function leaveAi() {
-    if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
-    goNext('claude');
+    leavingAi = true;
+    try {
+      if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
+      goNext('claude');
+    } finally { leavingAi = false; }
   }
 
   const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
@@ -2289,10 +2294,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     },
     /* AI 잇기 — **실물**이다(#1813). 종전엔 900ms 기다렸다 무조건 «연결됐어요» 라고만 했다.
      *  이 제품의 LLM 은 그 사람 본인 AI 구독으로 돈다(박스에 API 키가 없는 게 설계다).
-     *  ⚠ 잇는 방법은 **터미널에서 그 CLI 로 한 번 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
-     *   (~/.claude/.credentials.json 등)에 남고, 헤드리스 분석도 그 프로필로 돈다.
-     *   setup-token 을 붙여넣게 하지 않는다 — 그건 자기 프로필이 없는 자리(남의 노드 위탁)용 보조 수단이라
-     *   여기서 요구하면 사람에게 더 어려운 길을 시키는 것이 된다. 관문은 '로그인' 하나다(#1437 §6).
+     *  ⚠ 잇는 방법은 **그 CLI 로 한 번 로그인**하는 것이다. 그러면 자격이 그 사람 프로필
+     *   (~/.claude/.credentials.json 등)에 남고, 내 세션과 처음 설정 «AI 분석» 은 그 프로필로 돈다.
+     *   ★ 정정(#4051, 2026-09-17) — **사람 없이 도는 작업(증류·분류·관리)은 그 프로필을 빌리지 않는다.** 매니지드의
+     *   중앙 샌드박스 판은 따로 연결한 자격(claude_setup_token · codex_auth_json)만 쓴다. 그래서 로그인이 확인된
+     *   자리에서 **한 걸음 더** 허용을 받는다(#hlBox — onboarding-headless). 토큰을 붙여넣게 하지는 않는다: 서버가 발급
+     *   명령을 대신 돌리고 사람은 로그인과 똑같이 «주소 열기 → 코드 넣기» 만 한다(토큰은 사람이 보지도 복사하지도 않는다).
+     *   그 걸음은 곁다리가 아니다 — 남았으면 이 장면의 제목·주 버튼이 그것을 말하고, 절차는 누르지 않아도 뜬다(실측 2026-09-17).
      *
      *  #1879 — **넷을 다 잇는다.** 종전 판정(ai_ready)은 «아무 하네스나 하나라도» 였고 고른 AI 와 무관했다.
      *   그래서 두 가지가 동시에 틀렸다: ① 그록을 고른 사람에게 claude 로그인을 근거로 «이어졌어요» 라고 했고
@@ -2345,14 +2353,24 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //    뒤에 나머지를 보여 준다 — 연결된 것은 체크돼 있고, 안 된 것은 눌러서 이어서 연결한다.
         if (aiOn(c.harness)) {
           const onNow = new Set(aiOnKeys(c));
-          return qHead('claude', lead, '연결됐어요.', '')
-            + `<div class="ob-tok"><p class="ob-ok">${esc(AI_LABEL[c.harness] || picked)} 로그인이 확인됐어요.</p></div>
-               <p class="ob-q-help" style="margin-top:4px">다른 AI 도 쓰고 계시면 함께 연결해 둘 수 있어요. 연결된 것은 체크돼 있습니다.</p>
+          //  #4051 — 로그인만으로는 «사람 없이 도는 작업»(증류·분류)이 안 돈다(중앙 판은 따로 허용한 자격만 쓴다).
+          //   그 허용이 남았으면 이 장면의 **주된 다음 일**은 그것이다 — 제목·버튼이 그 사실을 말하고, 칸은 누르지 않아도
+          //   절차를 띄운다(onboarding-headless). 실측(상민님 2026-09-17): 종전엔 «연결됐어요.» 아래 곁다리 [연결하기]라,
+          //   새 워크스페이스에서 [계속]만 누르고 지나갔다. ⚠ 가두지 않는다 — 건너뛰기 문은 늘 있다.
+          //   다른 AI 카드는 허용이 끝난 뒤에 보인다(지금 할 일 하나만 보이게).
+          const hlWait = HL.pending(c.harness);
+          const cards = `<p class="ob-q-help" style="margin-top:4px">다른 AI 도 쓰고 계시면 함께 연결해 둘 수 있어요. 연결된 것은 체크돼 있습니다.</p>
                <div class="ob-opt-cards">${['Claude', 'ChatGPT', 'Gemini', 'Grok'].map((a) => { const k = AI_HARNESS[a];
                  return onNow.has(k)
                    ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${AI_LOGO[a] || ''}</span><span><span class="ob-oc-t">${esc(a)}</span><span class="ob-oc-d">연결됨</span></span><span class="ob-oc-chk">✓</span></button>`
-                   : `<button class="ob-opt-card" data-more="${esc(a)}"><span class="ob-oc-ic">${AI_LOGO[a] || ''}</span><span><span class="ob-oc-t">${esc(a)}</span><span class="ob-oc-d">눌러서 연결하기</span></span><span class="ob-oc-chk">✓</span></button>`; }).join('')}</div>`
-            + `<button class="ob-btn ob-btn-pri" id="cGo">이만하면 됐어요, 계속</button>`;
+                   : `<button class="ob-opt-card" data-more="${esc(a)}"><span class="ob-oc-ic">${AI_LOGO[a] || ''}</span><span><span class="ob-oc-t">${esc(a)}</span><span class="ob-oc-d">눌러서 연결하기</span></span><span class="ob-oc-chk">✓</span></button>`; }).join('')}</div>`;
+          return qHead('claude', lead, hlWait ? '한 번만 더 허용해 주세요.' : '연결됐어요.', '')
+            + `<div class="ob-tok"><p class="ob-ok">${esc(AI_LABEL[c.harness] || picked)} 로그인이 확인됐어요.</p></div>
+               ${HEADLESS_INLINE[c.harness] ? `<div class="ob-tok" id="hlBox" data-wait="${hlWait ? '1' : '0'}"${hlWait ? '' : ' hidden'}>${hlWait ? '<p class="ob-note">허용 주소를 받는 중이에요…</p>' : ''}</div>` : ''}
+               ${hlWait ? '' : cards}`
+            + (hlWait
+              ? `<button class="ob-q-skip" id="cGo">지금은 건너뛸게요</button>`
+              : `<button class="ob-btn ob-btn-pri" id="cGo">이만하면 됐어요, 계속</button>`);
         }
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
@@ -2577,6 +2595,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
         if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
+        //  #4051 — 로그인이 확인된 자리에서만 «사람 없이 도는 작업» 허용을 받는다(칸은 html 이 연결됨 갈래에만 둔다).
+        //   허용이 남았으면 칸이 누르지 않아도 절차를 띄운다(onboarding-headless 머리말).
+        { const hb = $('#hlBox', el); if (hb) void HL.paint(hb, AIC.harness, AI_LABEL[AIC.harness] || S.ai || AIC.harness); }
         /** 연결된 것으로 기록 — 이 온보딩에서 확인한 하네스(S.aiDone)는 «다른 AI 도?» 화면의 체크 근거다. */
         const mark = (name, key) => {
           S.aiConnected = true; S.aiName = name || null;
@@ -2585,7 +2606,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
           if (!S.decisions.includes('AI 연결')) S.decisions.push('AI 연결');
           save(); renderSB();
         };
-        const pass = (name, key) => { mark(name, key); toast('연결됐어요.'); renderScene('claude', false); };
+        //  #4051 — 허용이 남았으면 «연결됐어요» 라고 하지 않는다(그 말을 믿고 지나간 것이 실측된 결함이다).
+        const pass = (name, key) => { mark(name, key); toast(HL.pending(key) ? '로그인됐어요. 한 번만 더 허용해 주세요.' : '연결됐어요.'); renderScene('claude', false); };
         if (go) go.onclick = async () => {
           if (AIC && aiOn(AIC.harness)) return void leaveAi();
           go.disabled = true; go.textContent = '확인 중…'; if (err) err.textContent = '';
@@ -3080,12 +3102,20 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   /** 고른 AI 하나에 대한 마지막 판정(POST /api/ui/me/ai-accounts/check).
    *  null = 아직 안 물어봤다 — 화면은 «확인 중» 으로 살고, 없는 답을 지어내지 않는다. */
   let AIC = null;
+  /** #4051 — 고른 AI 의 «사람 없이 도는 작업» 자격(상태는 이 한 벌 — 장면의 제목·버튼과 칸이 같은 값을 본다). */
+  //   다시 그리기는 아직 이 장면에 있을 때만이다 — 떠나는 중에 허용이 끝나도 장면이 되돌아가지 않는다(리뷰 #4051).
+  const HL = createHeadlessOffer({ rerender: () => { if (!leavingAi && S.scene === 'claude') renderScene('claude', false); }, toast });
   async function checkAi() {
+    const h = aiHarness();
+    //  #4051 — 헤드리스 자격도 **같이** 묻는다. 로그인이 확인된 장면이 제목(«한 번만 더 허용»)을 처음부터 맞게 그린다.
+    const hl = HL.load(h);
     try {
-      AIC = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: aiHarness() }) });
+      AIC = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: h }) });
     } catch (e) {
       AIC = { error: (e && e.message) ? String(e.message) : '알 수 없는 오류' };
     }
+    await hl;
+    if (AIC && AIC.harness && AIC.harness !== h) await HL.load(AIC.harness);
     return AIC;
   }
 
@@ -3200,6 +3230,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
      판정·파싱의 정본은 서버 ai-login-flow.ts 다 — 여기서 형식을 다시 짐작하지 않는다. */
   //  ⚠ 목록은 **공용 한 벌**을 그대로 쓴다(lib/ai-login-inline). 여기 사본을 두면 [내 AI 계정]과 갈린다.
   const LOGIN_INLINE = AI_LOGIN_INLINE;
+  /** 로그인이 끝났다는 ✓ 를 보여 주는 시간 — 그 뒤 확인(cGo)으로 저절로 넘어간다(#4051). */
+  const LOGIN_DONE_ADVANCE_MS = 900;
 
   /* 터미널 없이 로그인 — 서버가 명령을 멤버 자리에서 돌리고, 여기서는 주소·코드만 보여 준다(#2055 후속).
      ⚠ «막다른 카드» 를 만들지 않는다: 시작조차 못 하면 종전 «로그인 창» 경로로 정직하게 내려간다.
@@ -3266,6 +3298,10 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         if (wait) wait.hidden = true;
         if (ok) { ok.hidden = false; const g2 = $('#lgOkGo', el); const go2 = $('#cGo', el); if (g2 && go2) g2.onclick = () => go2.click(); }
         note('');
+        //  #4051 — 확인은 사람을 기다리지 않는다. ✓ 를 잠깐 보인 뒤 누른 것과 **같은 길**(cGo)로 넘어간다 — 다음 장면이
+        //   «한 번만 더 허용» 이면 그 절차가 곧바로 뜬다(로그인과 허용이 한 흐름이 된다). [계속]은 그대로 남는다.
+        //   ⚠ 누르는 중(disabled)이면 건드리지 않는다 — 사람이 먼저 눌렀다. 장면이 바뀌었으면(노드가 없다) 아무것도 안 한다.
+        setTimeout(() => { const go2 = $('#cGo', el); if (go2 && go2.isConnected && !go2.disabled) go2.click(); }, LOGIN_DONE_ADVANCE_MS);
       },
       //  실패도 화면을 안 지운다 — 잔글씨 한 줄 + 상시 탈출로만.
       failed: (m) => note(String(m) + ' — 창으로 여시거나, 잠시 뒤 다시 해 보세요.'),

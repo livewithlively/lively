@@ -102,13 +102,30 @@ const STATIC = readLocal("context.md");
 
 // 플러그인 설치 경로(#1473) — Claude Code 플러그인의 userConfig 값은 훅 프로세스에 CLAUDE_PLUGIN_OPTION_<KEY> 로 export 된다.
 //  키트 설치(curl|sh)는 ~/.lively/{token,gateway-url} 파일을 깔지만 플러그인 설치는 그 파일이 없다 — 그래서 env 폴백을 둔다.
-//  우선순위: LIVELY_* (명시 오버라이드) > CLAUDE_PLUGIN_OPTION_* (플러그인) > ~/.lively 파일(키트). 셋 다 없으면 종전 기본값.
 const pluginOpt = (key) => (process.env[`CLAUDE_PLUGIN_OPTION_${key}`] || "").trim();
 
-// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || pluginOpt("TOKEN") || readLocal("token"));
+// ★ 훅의 자격·주소 우선순위 — **이 pane 을 라이블리가 띄웠나**(LIVELY_SESSION_ID)로 갈린다. 다른 훅은 이 주석을 정본으로 가리킨다.
+//  · 사람이 연 셸(LIVELY_SESSION_ID 없음): 플러그인 > ~/.lively 파일 > LIVELY_* env.
+//    env 는 오버라이드가 아니라 '파일의 캐시'다(#916·#2617 의 훅 판) — 설치기가 rc 에 `export LIVELY_TOKEN="$(cat ~/.lively/token)"`
+//    를 심으므로 재로그인·주소 변경 뒤 그 셸의 env 는 옛 값이고, env 가 이기면 훅만 옛 신원으로 조용히 붙는다(둘 다 유효한
+//    토큰이면 401 도 안 난다). CLI(lively.mjs token()/gateway())·MCP 프록시와 같은 판정이다.
+//  · 라이블리가 띄운 pane(LIVELY_SESSION_ID 있음): LIVELY_* env > 플러그인 > 파일 — 종전 순서 그대로다.
+//    여기서 env 는 캐시가 아니라 **띄운 쪽이 그 세션 몫으로 실은 값**이다: 공유 홈 박스의 세션 훅 토큰(#1719,
+//    terminal/sessions.ts mintSessionHookToken — 파일은 키트를 깐 사람 것) · 위탁 판의 게이트웨이 주소(#4012 T5,
+//    node/tasks.ts taskGatewayEnvArgs — 파일은 그 머신의 로컬 로그인이라 다른 워크스페이스일 수 있다).
+//    이 자리에서 파일이 이기면 세션 보고·맥락 주입이 남의 신원·남의 워크스페이스로 나간다(#959 리뷰에서 막은 회귀).
+//  · 플러그인 값은 늙지 않는다(하네스가 매 훅마다 현재 설정을 export) — 그래서 어느 쪽이든 파일보다 앞이다(#1473).
+//  · 어느 쪽이든 없는 칸은 다음 칸으로 폴백한다(플러그인·프로비저닝·CI). 셋 다 없으면 종전 기본값.
+const SPAWNED = !!(process.env.LIVELY_SESSION_ID || "").trim();
+const pickCred = (envName, pluginKey, fileVal) => {
+  const env = (process.env[envName] || "").trim();
+  return (SPAWNED ? (env || pluginOpt(pluginKey) || fileVal) : (pluginOpt(pluginKey) || fileVal || env)) || "";
+};
 
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || pluginOpt("GATEWAY_URL") || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
+const TOKEN = OFF ? "" : pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token"));
+
+const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
 // 플러그인 모드 자격 미러(#1473) — 플러그인 설정값을 `~/.lively` 파일로도 굳힌다. **조직 스킬 본문과 lively CLI 가
 //  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").

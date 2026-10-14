@@ -783,7 +783,17 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "fe79f0ba6b08a2af"
+  "input_hash": "e4899b729f8f8961"
+ },
+ {
+  "name": "org_context_job_runner_fill",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/context-job-runner/fill"
+  ],
+  "input_hash": "c8a393e3ff4dc512"
  },
  {
   "name": "org_alert_status",
@@ -1468,44 +1478,24 @@
   "input_hash": "8e55d1d5c440991e"
  },
  {
-  "name": "me_liv_turn",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv/turn"
-  ],
-  "input_hash": "1ca658a634f76765"
- },
- {
-  "name": "me_liv_turn_log",
+  "name": "me_liv_session",
   "scope": null,
   "mcp": false,
   "mutates": false,
   "rest": [
-   "GET /api/ui/me/liv/turn/:id"
-  ],
-  "input_hash": "71d627e9a9d1759c"
- },
- {
-  "name": "me_liv_turn_stop",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv/turn/:id/stop"
-  ],
-  "input_hash": "972fb036fe1be6a0"
- },
- {
-  "name": "me_liv_chat",
-  "scope": null,
-  "mcp": false,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/me/liv/chat"
+   "GET /api/ui/me/liv/session"
   ],
   "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_liv_session_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv/session"
+  ],
+  "input_hash": "42bfce9995a59366"
  },
  {
   "name": "me_liv_ask_dismiss",
@@ -1514,16 +1504,6 @@
   "mutates": true,
   "rest": [
    "POST /api/ui/me/liv/ask-dismiss"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
- },
- {
-  "name": "me_liv_chat_reset",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv/chat-reset"
   ],
   "input_hash": "6c9f16e97bc4049d"
  },
@@ -4064,7 +4044,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "fa5bf8dd3c9d34f1"
+  "input_hash": "727188efb867982b"
  },
  {
   "name": "me_credential_verify",
@@ -4074,7 +4054,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "8210f8cb9a2d130f"
+  "input_hash": "3a380d23c2aeb541"
  },
  {
   "name": "me_credential_delete",
@@ -4084,7 +4064,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "beaaea6ecc43e453"
+  "input_hash": "8daa808bfbdb2617"
  },
  {
   "name": "org_credentials",
@@ -4104,7 +4084,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "dbfc46d1e610ee4f"
+  "input_hash": "02bdf26b17416dfa"
  },
  {
   "name": "org_credential_delete",
@@ -4114,7 +4094,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "91c5cf81eb08e0a7"
+  "input_hash": "bfa7865147308910"
  },
  {
   "name": "me_aws_credentials",

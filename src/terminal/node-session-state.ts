@@ -143,7 +143,9 @@ export async function decorateNodeRows(rows: SessionInfo[]): Promise<void> {
   //  오므로, 아래 마이그레이션이 돌기 전(또는 다른 게이트웨이가 쓴 행)에는 셀프 노드 id 가 그대로 실려 온다.
   //  좌표가 붙은 채로 나가면 화면이 `&node=` 로 붙어 릴레이 경로를 다시 연다 — 목록만 고치고 여기를 빼면 새는 자리다.
   for (const r of rows) if (r.node && isSelfNode(r.node.id)) delete r.node;
-  const need = rows.filter((r) => r.node && r.restorable);
+  //  #4065 — «시작 중» 행(restorable 은 아니지만 역시 DB 에서 온 자리표시자)도 채운다. 안 채우면 막 만든 노드 세션이
+  //   프로젝트 화면·세션 목록에서 «끊김»(online:false) 으로 보인다.
+  const need = rows.filter((r) => r.node && (r.restorable || r.starting));
   if (!need.length) return;
   const live = new Map(liveNodes().map((n) => [n.id, n]));
   let db: Map<string, { name: string }> | null = null;

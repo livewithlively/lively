@@ -23,10 +23,58 @@ export async function injectToSession(sessionId: string, text: string): Promise<
 }
 
 // 헤드리스 실행 신원(의뢰자) 해소 — params.requester 우선, 없으면 잡 created_by 폴백. D1(의뢰자 시트) — 그 멤버의 클로드 로그인/프로필로 과금·귀속.
+//  ⚠ **워크스페이스 설정을 못 본다.** 새 코드는 `resolveJobRunner` 를 써라 — 이 함수는 순수 판정이 필요한
+//   자리(시험·순수 해소)만 남긴다. 둘의 차이는 가운데 칸(워크스페이스 실행 멤버) 하나다.
 export function headlessRequester(params: Record<string, unknown>, createdBy: string | null): string {
   return (typeof params.requester === "string" && params.requester.trim()) ? params.requester.trim() : (createdBy || "");
 }
-export const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "의뢰자 미설정 — params.requester(멤버 id/이메일)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
+
+/**
+ * 명시한 실행 계정 — **레인(증류기·분류기·관리기)이 잡보다 앞선다**(#4052). 둘 다 비었으면 undefined.
+ *
+ *  D1 ① 「레인·잡이 명시한 requester — 더 구체적이므로 이긴다」 에서 더 구체적인 쪽은 레인이다: 잡 하나가 레인 여럿을 돌린다.
+ *  분류·관리는 이미 레인 우선이었는데 **증류만 거꾸로**(잡 > 레인)였다 — 잡에 계정을 한 번 박으면 모든 증류기의
+ *  «실행 계정» 칸이 통째로 무시됐다(모델·추론강도가 #4008 에서 같은 이유로 먼저 뒤집혔다).
+ *  빈 문자열·공백·문자열이 아닌 값은 «정하지 않음» 이다(`||` 로 고르면 공백 한 칸이 신원 자리에 앉는다).
+ */
+export function explicitRunner(lane: unknown, job?: unknown): string | undefined {
+  for (const v of [lane, job]) if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
+}
+
+/**
+ * 맥락관리 잡(증류·분류·관리)을 **누구 자격으로 돌릴지** 정한다 (#4012 T1 · #3994 D1 확정).
+ *
+ * 우선순위:
+ *   ① `explicit` — 레인·잡이 **명시한** requester. 더 구체적인 지정이므로 이긴다.
+ *   ② 워크스페이스 설정 `context_job_policy.runner_member` — 2026-09-16 상민님 결정의 자리.
+ *   ③ 잡 `created_by` — 호환 폴백. ②가 서기 전의 동작을 깨지 않으려고 남긴다.
+ *      ⚠ «누가 마지막으로 그 잡을 저장했나» 는 자격 주체의 근거가 못 된다 — ②가 보급되면 걷는 것이 목표다.
+ *
+ * ⚠ 설정 조회가 실패해도 **던지지 않는다**. 이 함수가 막히면 잡이 통째로 안 도는데, 그건 설정 하나 못 읽은
+ *  대가로는 너무 크다 — 종전 폴백(③)으로 내려가 적어도 돌던 것은 계속 돈다.
+ */
+export async function resolveJobRunner(
+  explicit: unknown,
+  createdBy: string | null,
+  //  주입 seam — 시험이 DB 없이 우선순위를 잰다(`node/task-scheduler.leaseEnvFor` 와 같은 관례).
+  workspaceRunner: () => Promise<string | null> = defaultWorkspaceRunner,
+): Promise<string> {
+  const e = typeof explicit === "string" ? explicit.trim() : "";
+  if (e) return e;
+  try {
+    const m = await workspaceRunner();
+    if (typeof m === "string" && m.trim()) return m.trim();
+  } catch { /* 설정을 못 읽음 — 종전 폴백으로 내려간다(잡을 세우지 않는다) */ }
+  return createdBy || "";
+}
+
+/** 기본 출처 — 워크스페이스 런타임 설정의 실행 멤버. */
+async function defaultWorkspaceRunner(): Promise<string | null> {
+  const { getRuntimeConfig } = await import("../../org/store.js");
+  return (await getRuntimeConfig()).context_job_policy?.runner_member ?? null;
+}
+export const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "실행 멤버 미설정 — 워크스페이스 실행 멤버(context_job_policy.runner_member)를 정하거나, params.requester(멤버 id)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
 
 // #1101/#4008 헤드리스 실행 모델·추론강도 — 설정(증류기·분류기·관리기 행) 우선, 없으면 잡 params.
 //  ⚠ **여기서 플래그로 굳히지 않는다.** 하네스마다 모델 이름이 완전히 다르므로(opus ↔ gpt-5.6-sol ↔
@@ -71,7 +119,10 @@ export function headlessHarness(params: Record<string, unknown>, cfg?: { harness
 //   비었거나 그 하네스가 모르는 값이면 그 하네스의 자동화 기본값으로 간다(catalog.AUTOMATION_DEFAULTS).
 //   종전(flags 를 통째로 받던 시절)엔 여기에 이미 굳은 `--model` 이 들어와, 하네스가 모르면 조용히 버려지고
 //   CLI 계정 기본(=가장 비싼 모델)으로 돌았다. 그 자리를 닫는 것이 이 함수의 새 책임이다.
-export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null }): Promise<{ status: string; summary: unknown }> {
+export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null;
+  // #4012 T3 — 실행 프로필. 'context' = 기본 제공 맥락 잡(증류·분류·관리) — 샌드박스 op 가 있는 박스에서는 중앙 샌드박스로만 간다.
+  execProfile?: string | null;
+}): Promise<{ status: string; summary: unknown }> {
   // 중첩 방지 마커 — 기본은 잡 단위(cron:<job>). #1289 증류기처럼 한 잡이 여러 배치를 병렬 접수하면 배치별로 갈라
   //  넘긴다(cron:<job>#<key>) — 안 그러면 첫 배치가 나머지를 전부 '진행 중'으로 막는다.
   const marker = o.marker || "cron:" + o.jobId;
@@ -100,7 +151,7 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   let task: Awaited<ReturnType<typeof createTask>>;
   // nodePref(#1881) — 잡이 실행 위치를 고정할 수 있다(예: node="central" = 게이트웨이 박스에서).
   //  기본은 미지정(스케줄러 자유 배정 — 오프로드 취지). matchNode 가 node_pref 있으면 그 노드만 후보로 삼는다.
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: run.flags, nodePref: o.nodePref ?? null }); }
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, harness, repo: o.repo ?? null, flags: run.flags, nodePref: o.nodePref ?? null, execProfile: o.execProfile ?? null }); }
   catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester, harness } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).
@@ -112,6 +163,13 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   //   가장 비싼 모델로 돌고 있는 것을 청구서를 보고서야 알았다. 관측이 없으면 같은 사고가 또 조용히 난다.
   const ran = { harness, model: run.flags["--model"] ?? null, effort: run.flags["--effort"] ?? null,
     ...(run.dropped.length ? { ignored_settings: run.dropped } : {}) };
-  if (!assign.assigned) return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester: o.requester, ...ran, ...extra } };
+  // 미배정을 무엇으로 적을까(#3994 T5 · #968) — **자리 부족만 정상**이고 나머지는 실패다.
+  //  종전엔 전부 ok 였다: 후보가 하나도 없어 10분 뒤 죽을 배치도 «정상 접수» 로 기록돼, 크론 화면도
+  //  서킷 브레이커도 10시간 동안 아무 말을 하지 않았다(실측 199/200 실패). 판정은 assign-outcome(순수).
+  const { headlessEnqueueStatus } = await import("../../node/assign-outcome.js");
+  if (!assign.assigned) {
+    const status = headlessEnqueueStatus({ assigned: false, code: assign.code });
+    return { status, summary: { task_id: task.id, queued: status === "ok", assign_code: assign.code ?? null, reason: assign.reason, requester: o.requester, ...ran, ...extra } };
+  }
   return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester: o.requester, ...ran, ...extra } };
 }
