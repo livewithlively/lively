@@ -130,6 +130,16 @@ export interface SessionReclaimPolicy {
    *  (임계 90·여유 5 → 90% 에서 발동해 85% 밑으로 내려갈 때까지 걷는다.)
    */
   pressure_release_margin_pct: number;
+  /**
+   * #4694 **복원은 같은 세션 id 로**(세션 컨테이너 배포 = 매니지드에서만 본다). false = 종전(새 id + 옛 행 이정표 superseded_by).
+   *
+   *  같은 id 로 되살리면 주소·장부 행·이름·핀·소속·아웃박스가 그대로 이어진다(종전 새 id 가 낳은 결함 계열 #2231·#2402·
+   *  #3555·#3891 이 구조적으로 사라진다). 다만 매니지드에서는 **컨테이너 이름이 세션 id** 인 동안 같은 id 의 옛 컨테이너가
+   *  브로커 철거와 겹친다 — 그래서 #4693(T3) 의 «자리 이름» 이 켜진 워크스페이스에서만 켠다(상민님 결정 2026-10-14).
+   *  셀프호스트(세션 컨테이너 없음)는 이 값과 무관하게 늘 같은 id 다 — 겹칠 컨테이너가 없다.
+   *  ⚠ «강제로 되살리기»(상태 모름)는 이 값이 켜져도 새 id 다 — 옛 판이 살아 있을 수 있어, 옛 id 를 은퇴시켜 브로커가 걷게 한다.
+   */
+  restore_same_id: boolean;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -148,6 +158,7 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_priority: 100,
   pressure_max_reap: 0,
   pressure_release_margin_pct: 0,
+  restore_same_id: false,    // #4694 — 매니지드는 T3 자리 이름 뒤에 켠다(셀프호스트는 이 값과 무관하게 늘 같은 id)
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -231,6 +242,8 @@ const policy = definePolicy<SessionReclaimPolicy>({
     pressure_priority: { env: "LIVELY_SESSION_PRESSURE_PRIORITY", min: RECLAIM_PRIORITY_MIN, max: RECLAIM_PRIORITY_MAX },
     pressure_max_reap: { env: "LIVELY_SESSION_PRESSURE_MAX_REAP", min: RECLAIM_MAX_REAP_MIN, max: RECLAIM_MAX_REAP_MAX },
     pressure_release_margin_pct: { env: "LIVELY_SESSION_PRESSURE_RELEASE_MARGIN_PCT", min: RECLAIM_RELEASE_MARGIN_MIN, max: RECLAIM_RELEASE_MARGIN_MAX },
+    // #4694 — env 시드는 매니지드 게이트웨이 전체를 한 번에 켜는 자리(T3 2단계 뒤), 관리탭·org_runtime_update 는 워크스페이스별.
+    restore_same_id: { kind: "bool", env: "LIVELY_SESSION_RESTORE_SAME_ID" },
   },
 });
 

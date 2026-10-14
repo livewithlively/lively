@@ -144,6 +144,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/session-task.pg-test.mjs
+      # ④-d2b 같은 id 복원(#4694) — 목으로는 못 보는 것: **같은 id 로 다시 쓴 행이 무엇을 남기고 무엇을 잃나**. upsert 의
+      #    ON CONFLICT 가 지난 판의 종료 표식은 남기고(그래서 정리가 필요하다) 대화 매핑·이름 출처는 지키는지, 정리가 주인·이음
+      #    조건을 지키는지, 되살린 세션이 사람이 치운 인스턴스를 목록에 되올리지 않는지 — 전부 SQL 조건이라 행을 되읽어 판정한다.
+      - name: 같은 id 복원 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-revive.pg-test.mjs
       # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
       #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
       - name: 위탁 running 기록 PG 통합 테스트

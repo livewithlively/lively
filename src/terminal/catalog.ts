@@ -553,6 +553,13 @@ export interface CreateInput {
   //  토큰을 구워 함께 보낸다(node-session-preissue.ts) — 노드는 접두어·형식이 맞으면 값을 믿고 그대로 싣는다(hostProfile 과 같은
   //  규약: 정책은 게이트웨이, 노드는 기계적 실행). 중앙 경로엔 없다(createSession 이 스스로 굽는다). null 토큰 = 안 싣는다.
   preissued?: { id: string; hookToken: string | null; mcpToken: string | null };
+  // #4694 — **같은 id 로 다시 띄운다**(복원 전용). 끊긴 세션을 새 id 가 아니라 그 id 그대로 되살려 주소·장부 행·이름·핀·소속·
+  //  아웃박스가 그대로 이어지게 한다(종전엔 새 id + 옛 행 이정표 superseded_by — #2231·#2402·#3555·#3891 이 그 대가였다).
+  //  preissued 와 다른 점: 접두어·형식이 안 맞으면 조용히 새 id 를 만들지 않고 **던진다**(부르는 쪽이 그 id 를 기대한다) ·
+  //  실패 되돌림이 이 행을 지우지 않는다(이 호출 전부터 있던 복원 좌표다) · 지난 판의 «끝났다» 표식을 지운다(reviveSessionState) ·
+  //  컨테이너는 늘 새 자리로 청한다(SessionEnsureRequest.fresh). 훅·MCP 토큰은 종전대로 이 id 로 다시 굽는다(옛 것은 mint 가 먼저 거둔다).
+  //  ⚠ 부르는 쪽(routes.ts 복원)이 «그 id 의 tmux 가 없다» 를 확답받은 뒤에만 넘긴다.
+  reuseId?: string;
   // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
   //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
   //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다

@@ -285,6 +285,20 @@ export async function carrySessionDismissals(oldSessionId: string, newSessionId:
   return owners.length;
 }
 
+/**
+ * #4694 — 이 사람의 이 세션 인스턴스가 지금 어떤 상태인가(같은 id 복원이 «다시 세울지» 를 가르는 재료).
+ *  none = 행 없음 · active = 목록에 있음 · dismissed = 사람이 치움(closed·user) · closed = 시스템이 닫음(restore·purge…).
+ */
+export async function sessionInstanceStatus(appId: string, owner: string, sessionId: string): Promise<"none" | "active" | "dismissed" | "closed"> {
+  const r = await itemsPool.query(
+    `SELECT status, closed_reason FROM org_app_instance
+      WHERE app_id=$1 AND owner_member=$2 AND subject_kind='session' AND subject_ref=$3`, [appId, owner, sessionId]);
+  const x = r.rows[0] as { status?: string; closed_reason?: string | null } | undefined;
+  if (!x) return "none";
+  if (x.status !== "closed") return "active";
+  return x.closed_reason === "user" ? "dismissed" : "closed";
+}
+
 /** 치운 세션을 **목록으로 되돌린다** — 사람이 치운 것(user)만. 시스템이 닫은 행(restore·purge…)은 되살리지 않는다. */
 export async function reopenSessionInstances(owner: string, sessionIds: string[]): Promise<number> {
   const refs = uniqRefs(sessionIds);

@@ -60,12 +60,13 @@ import { getNode, listNodes } from "../node/store.js";
 import { bindNodeSessionProjectOrKill } from "../node/provision-remote.js";   // #4135 — 복원된 노드 세션도 소속을 DB 에 확정한다(생성 ⑦ 과 같다)
 import { nodeOfflineNote } from "../node/offline-note.js";   // #1849 — 오프라인 원인 추정 한 문장
 import { restoreProjectRef } from "./restore-project.js";
+import { sameIdRestoreOn } from "./restore-same-id.js";   // #4694 — 복원을 같은 세션 id 로 하나(판정 한 자리)
 import { getProjectRow } from "../v6/project-store.js";   // #2549 — 삭제된 프로젝트의 세션도 되살린다(행 유무만 묻는 가벼운 조회)
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
-import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -1747,8 +1748,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  저장된 desired-state(rootKey·subpath·harness·flags·invites·mode)로 createSession 하고, claude 하네스는 resume=<옛 id>
   //  로 대화를 잇는다 — 로컬 트랜스크립트(~/.claude/…/<id>.jsonl)는 재부팅에도 디스크에 살아남아 claude --resume 이 찾는다
   //  (전부 자동 spawn 이 아니라 '열 때만' 재생성 = 재부팅 직후 OOM 재현 방지, #1059 E). 소유자 또는 admin 만.
-  //  원 소유자 신원으로 재생성해야 격리(box_owner)·CLAUDE_CONFIG_DIR·git 자격이 원 세션과 같다. 새 tmux id 를 얻으므로
-  //  옛 desired-state 레코드는 지운다(새 세션이 자기 레코드를 가짐 → restorable 카드가 라이브 세션으로 교체된다).
+  //  원 소유자 신원으로 재생성해야 격리(box_owner)·CLAUDE_CONFIG_DIR·git 자격이 원 세션과 같다.
+  //  ★ #4694 — 박스 갈래는 **같은 id 로** 다시 띄운다(옛 판이 없다는 확답이 있을 때 · 매니지드는 워크스페이스 스위치 — restore-same-id.ts).
+  //   그 밖(강제 복원·스위치 꺼짐·노드 갈래)은 종전대로 새 id 를 만들고 옛 행에 이정표(superseded_by, #2231)를 적는다.
   //  ★ #3891 — 같은 세션의 복원은 **한 줄로** 돈다(restoreSerial — createKeyedSerializer 머리말). 뒤 요청은 앞 요청이
   //   끝난 뒤 아래 판정을 처음부터(행을 다시 읽어) 한다 — 그래서 동시에 두 번 불려도 세션이 둘로 서지 않는다.
   app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
@@ -1960,7 +1962,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const boxCheck: ResumeCheck = mappedId ? await resumeTranscriptCheck(id, st, mappedId, null) : "unknown";
     const boxPlan = resumePlan({ mappedId, harness: st.harness || "claude", check: boxCheck, branch: "box" });
     if (boxCheck === "absent") logger.warn({ id, convId: mappedId }, "restore: 이어받을 대화가 이 기계에 없다 — 빈 피커 대신 새 대화로 연다(#3870)");
+    //  #4694 — **같은 id 로 되살리나**(판정·근거는 restore-same-id.ts 머리말). 옛 판이 없다는 확답(goneVerdict === true)이
+    //   있을 때만 — 강제(모름)는 종전대로 새 id 로 가서 옛 id 를 은퇴시킨다(살아 있었을 수 있는 옛 판을 브로커가 걷게).
+    const sameId = await sameIdRestoreOn(goneVerdict);
     const session = await createSession(owner, {
+      ...(sameId ? { reuseId: id } : {}),
       kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
@@ -1982,6 +1988,25 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //   끊겨도 다시 부른 복원이 위 판정으로 이리로 잇는다. 값은 아래 carryConvMapping 과 같다(picker 복원도 승계한다).
       ...(mappedId ? { carryConv: { convId: mappedId, transcriptPath: st.transcript_path ?? null } } : {}),
     });
+    if (sameId) {
+      //  #4694 같은 id — **옮길 것이 없다.** 장부 행·대화 매핑·미전달 지시·치움·소속·태스크가 이미 이 id 에 있다. 그래서 아래
+      //   새 id 갈래의 승계(carryConvMapping·carryOutbox·carrySessionDismissals)와 옛 id 정리(closeSessionAppInstances·
+      //   markSessionSuperseded)를 **하지 않는다** — 특히 «옛 id 인스턴스 닫기» 는 같은 id 에선 방금 되살린 이 세션의 인스턴스를 닫는다.
+      //  ⚠ 소속 기록이 실패해도 행은 남긴다(preserveState) — 이 행은 이 호출 전부터 있던 복원 좌표다(지우면 대화 매핑의 유일한 사본까지 사라진다).
+      await recordSessionTenant(id, () => killSession(owner, id, { preserveState: true }));
+      //  미전달 지시는 이미 이 id 의 큐에 있다 — 죽은 동안 쌓인 재시도 대기(최대 5분)를 기다리지 않게 지금 깨운다.
+      //   배달자는 하네스 입력창이 보일 때만 넣는다(waitReady) — 복원 중(--resume)인 화면에 붙여 넣지 않는다.
+      try {
+        const { recoverStaleSending, kickOutbox } = await import("../sessions/session-outbox.js");
+        await recoverStaleSending(id);
+        kickOutbox(id);
+      } catch (e) { logger.warn({ err: e, id }, "restore(같은 id): 미전달 지시 깨우기 실패(비치명 — 다음 재시도가 집는다)"); }
+      //  인스턴스는 지금 상태로 가른다(치움 보존 · active 의 화면 상태 보존 — reviveSessionInstance 머리말).
+      await reviveSessionInstance(id, st.owner, { appId: st.app_id, projectId: projRef.projectId ?? null, title: st.label || session.label });
+      logger.info({ id, resumed: resumedKind(boxPlan) }, "restore: 같은 id 로 되살렸다(#4694)");
+      res.json({ ok: true, resumed: resumedKind(boxPlan), session });
+      return;
+    }
     // ★ 소속(워크스페이스) 기록 — **세션을 만드는 자리마다** 붙는다(#2179 → 되살림 #3579).
     //  종전엔 생성 6곳 중 이 한 곳(복원 — 박스/로컬)만 빠져 있었다. 그러면 복원으로 되살린 세션이
     //  gw_session_map 행 없이 태어나고, 목록 필터가 «부재» 로 읽어 **그 세션만 목록에서 사라진다**

@@ -307,6 +307,15 @@ export const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached
 const lastBusyAt = new Map<string, number>();
 export function getLastBusy(id: string): number { return lastBusyAt.get(id) || 0; }
 export function setLastBusy(id: string, sec: number): void { lastBusyAt.set(id, sec); }
+/**
+ * #4694 (순수) 목록·회수가 쓰는 마지막 작업 시각. 프로세스 기억(remembered — 위 Map)은 세션 id 로만 열쇠를 잡아, **같은 id 로
+ *  다시 띄운** 세션(복원)이면 옛 tmux 세션의 값일 수 있다 — 지금 tmux 세션이 태어난 시각(bornSec)보다 앞이면 버린다. 안 버리면
+ *  탭이 안 붙은 복원(대시보드 일괄 복원)이 옛 시각으로 다음 회수 틱에 곧바로 걷힌다. 영속값(persisted = `@box_last_busy`)은
+ *  tmux 세션과 함께 새로 나므로 그대로 쓴다. bornSec 을 모르면(0) 종전대로 둘의 최댓값이다.
+ */
+export function lastBusyFor(remembered: number, persisted: number, bornSec: number): number {
+  return Math.max(bornSec > 0 && remembered < bornSec ? 0 : remembered, persisted);
+}
 
 // pane 화면 판정('확인 필요' · #4502 실행 상태) 2.5초 캐시(폴링 버스트 공유) — 판정 로직은 phase.scrapePane, 캐시 저장만 여기.
 type PaneScrape = { at: number; waiting: boolean; run: ScreenRun | null };
