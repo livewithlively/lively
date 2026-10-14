@@ -1630,9 +1630,18 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-start h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-lead { margin: 6px 0 18px; color: var(--ink-sub); font-size: 14px; }
 .v2-studio-start h3 { margin: 30px 0 10px; font-size: 15px; font-weight: 800; }
-.v2-studio-what { height: 52px; border: 1.5px solid var(--line); border-radius: 14px; padding: 0 16px; font: inherit; font-size: 17px; background: var(--bg); color: var(--ink); }
+.v2-studio-what { min-height: 150px; resize: vertical; border: 1.5px solid var(--line); border-radius: 14px; padding: 12px 14px; font: inherit; font-size: 15px; line-height: 1.6; background: var(--bg); color: var(--ink); }
+.v2-studio-what::placeholder, .v2-studio-name-field::placeholder { color: var(--muted); opacity: .75; }
+.v2-studio-name-field { height: 44px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 14px; font: inherit; font-size: 15px; background: var(--bg); color: var(--ink); margin-bottom: 14px; }
+.v2-studio-name-field:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 4px rgba(123, 97, 224, .14); }
+.v2-studio-lab { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 14px; font-weight: 800; }
+.v2-studio-lab small { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.v2-studio-tips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; }
+.v2-studio-tips .k, .v2-studio-ex .k { color: var(--muted); font-size: 12.5px; margin-right: 2px; }
+.v2-studio-tips button { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--purple-text, #5B3FD0); background: none; border: 1px dashed rgba(123, 97, 224, .6); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.v2-studio-tips button:hover { background: rgba(123, 97, 224, .08); }
 .v2-studio-what:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 4px rgba(123, 97, 224, .14); }
-.v2-studio-ex { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.v2-studio-ex { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .v2-studio-ex button { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
 .v2-studio-ex button:hover { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); }
 .v2-studio-places { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -1641,13 +1650,37 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-place small { font-size: 12.5px; color: var(--ink-sub); line-height: 1.4; }
 .v2-studio-place.on { border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .08); box-shadow: 0 0 0 3px rgba(123, 97, 224, .12); }
 /* 그림 — 실제 화면의 꼴을 줄여 그린다: 왼쪽 레일 · 가운데 · 곁칸. 보라가 «이 앱이 서는 자리» */
-.v2-studio-pic { height: 76px; border-radius: 9px; background: var(--gray-bg-2, #EEF2F7); margin-bottom: 6px; display: grid; gap: 4px; padding: 6px; grid-template-columns: 10px minmax(0, 1fr) 34%; }
-.v2-studio-pic i { border-radius: 5px; background: rgba(var(--tint-ink), .16); }
-.v2-studio-pic--side i:nth-child(3), .v2-studio-pic--both i:nth-child(3) { background: var(--purple, #7B61E0); }
-.v2-studio-pic--full { grid-template-columns: 10px minmax(0, 1fr); }
-.v2-studio-pic--full i:nth-child(3) { display: none; }
-.v2-studio-pic--full i:nth-child(2), .v2-studio-pic--both i:nth-child(2) { background: var(--purple, #7B61E0); }
-.v2-studio-pic--both i:nth-child(2) { opacity: .55; }
+.v2-studio-pk { position: relative; height: 70px; border-radius: 9px; background: var(--gray-bg-2, #EEF2F7); margin-bottom: 6px; padding: 6px; display: flex; gap: 4px; }
+.v2-studio-pk .rail { flex: none; width: 9px; border-radius: 4px; background: rgba(var(--tint-ink), .16); }
+.v2-studio-pk .ses { flex: 1; min-width: 0; border-radius: 5px; background: var(--bg); padding: 5px; display: grid; gap: 4px; align-content: start; }
+.v2-studio-pk .ses i { display: block; height: 7px; border-radius: 4px; background: rgba(var(--tint-ink), .14); }
+.v2-studio-pk .ses i.u { width: 55%; justify-self: end; background: rgba(34, 99, 239, .22); }
+.v2-studio-pk .ses i.a { width: 75%; }
+.v2-studio-pk .ses i.a2 { width: 45%; }
+.v2-studio-pk .ap { border-radius: 5px; background: var(--purple, #7B61E0); padding: 5px; display: grid; gap: 4px; align-content: start; }
+.v2-studio-pk .ap i { display: block; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .7); }
+.v2-studio-pk .ap i:nth-child(2) { width: 70%; }
+.v2-studio-pk .ap.side { flex: none; width: 34%; }
+.v2-studio-pk .ap.full { flex: 1; min-width: 0; }
+.v2-studio-pk .tg { position: absolute; bottom: 4px; left: 20px; font-size: 10.5px; font-weight: 800; color: var(--muted); background: var(--bg); border-radius: 4px; padding: 0 4px; line-height: 15px; }
+.v2-studio-pk .tg.on { left: auto; right: 9px; color: #fff; background: rgba(60, 40, 150, .55); }
+.v2-studio-pk.dual { gap: 6px; padding: 5px; }
+.v2-studio-pk .mini { flex: 1 1 0; min-width: 0; display: flex; gap: 3px; border-radius: 6px; background: rgba(var(--tint-ink), .06); padding: 3px; }
+.v2-studio-pk .mini .rail { width: 5px; }
+.v2-studio-pk .mini .ses, .v2-studio-pk .mini .ap { padding: 3px; gap: 3px; }
+.v2-studio-pk .mini .ses i { height: 5px; }
+.v2-studio-pk .mini .ap i { height: 4px; }
+.v2-studio-pk .plus { flex: none; align-self: center; font-weight: 800; color: var(--muted); font-size: 14px; }
+/* 누가 어디서 만드나 — 실행 컴퓨터는 고르고 모델 · 생각 깊이는 정해 둔 값 */
+.v2-studio-ai { margin-top: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 12px 14px; display: grid; gap: 8px; }
+.v2-studio-ai-h { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; }
+.v2-studio-ai-h .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .2); }
+.v2-studio-ai p { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.55; }
+.v2-studio-ai-row { display: flex; align-items: center; gap: 10px; font-size: 13px; flex-wrap: wrap; }
+.v2-studio-ai-row .k { flex: none; width: 110px; color: var(--muted); font-weight: 700; }
+.v2-studio-node { height: 32px; border: 1px solid var(--line); border-radius: 9px; padding: 0 8px; font: inherit; font-size: 13px; font-weight: 700; background: var(--bg); color: var(--ink); max-width: 260px; }
+.v2-studio-ai-fix { display: inline-flex; align-items: center; height: 28px; border-radius: 8px; padding: 0 10px; background: var(--gray-bg-2, #F6F8FB); font-weight: 700; color: var(--ink); }
+.v2-studio-ai-note { color: var(--muted); font-size: 12px; }
 .v2-studio-act { margin-top: 26px; display: flex; justify-content: flex-end; }
 .v2-studio-go { height: 46px; padding: 0 26px; border: 0; border-radius: 13px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
 .v2-studio-go:disabled { opacity: .4; cursor: default; }
@@ -1693,7 +1726,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-cm .ta, .v2-studio-tell .ta { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; resize: vertical; min-height: 30px; background: var(--bg); color: var(--ink); }
 .v2-studio-stage { flex-direction: column; align-items: center; gap: 8px; overflow: auto; }
 .v2-studio-stage > * { flex: none; }
-.v2-studio-stagetools { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 28px; background: none; box-shadow: none; }
+.v2-studio-stagetools { width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 28px; background: none; box-shadow: none; }
 .v2-studio-stagetools[hidden] { display: none; }
 .v2-studio-stagetools .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
 .v2-studio-stagetools .seg button { border: 0; background: none; height: 26px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }
@@ -1764,7 +1797,52 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-intro-box h2 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-intro-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .v2-studio-intro-cards > div { border: 1.5px solid var(--line); border-radius: 12px; padding: 12px; }
-.v2-studio-intro-cards .pic { height: 64px; border-radius: 8px; background: rgba(123, 97, 224, .12); display: grid; place-items: center; color: var(--purple-text, #5B3FD0); font-weight: 800; margin-bottom: 8px; }
+.v2-studio-intro-cards .pic { height: 92px; border-radius: 8px; background: rgba(123, 97, 224, .12); display: grid; place-items: center; margin-bottom: 8px; }
+/* 처음 안내 그림 셋 — 대화 → 앱 · 단계 바를 따라 누름 · 나 → 앱 → 팀원 */
+.v2-studio-ill { position: relative; width: 190px; height: 72px; }
+.v2-studio-ill i { position: absolute; display: block; }
+.v2-studio-ill .bub { height: 16px; border-radius: 9px; }
+.v2-studio-ill .bub.a { left: 0; top: 6px; width: 74px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .35); }
+.v2-studio-ill .bub.b { left: 22px; top: 28px; width: 66px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .bub.c { left: 0; top: 50px; width: 56px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .35); }
+.v2-studio-ill .arr { left: 98px; top: 30px; width: 22px; height: 2px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .arr::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left: 7px solid var(--purple, #7B61E0); border-right: 0; }
+.v2-studio-ill .tile { left: 128px; top: 8px; width: 56px; height: 56px; border-radius: 14px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .45), 0 4px 10px rgba(var(--shadow-ink), .10); }
+.v2-studio-ill .tile::before, .v2-studio-ill .tile::after { content: ""; position: absolute; left: 10px; right: 10px; height: 6px; border-radius: 3px; background: rgba(123, 97, 224, .45); }
+.v2-studio-ill .tile::before { top: 14px; }
+.v2-studio-ill .tile::after { top: 26px; right: 20px; }
+.v2-studio-ill .sg { top: 4px; height: 10px; width: 26px; border-radius: 4px; background: rgba(123, 97, 224, .22); }
+.v2-studio-ill .sg.done { background: rgba(123, 97, 224, .5); }
+.v2-studio-ill .sg.on { background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .25); }
+.v2-studio-ill .line { left: 0; top: 30px; width: 190px; height: 16px; border-radius: 5px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .3); }
+.v2-studio-ill .pbtn { right: 4px; top: 33px; width: 40px; height: 10px; border-radius: 4px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .cur { left: 150px; top: 44px; width: 0; height: 0; border-left: 7px solid var(--ink); border-top: 4px solid transparent; border-bottom: 9px solid transparent; transform: rotate(-20deg); }
+.v2-studio-ill .av { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--bg); background: rgba(123, 97, 224, .45); }
+.v2-studio-ill .av::after { content: ""; position: absolute; left: 5px; top: 3px; width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
+.v2-studio-ill .av.me { left: 4px; top: 24px; width: 28px; height: 28px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .av.me::after { left: 7px; top: 4px; width: 10px; height: 10px; }
+.v2-studio-ill .lk { top: 37px; height: 2px; background: rgba(123, 97, 224, .6); }
+.v2-studio-ill .tile.s { left: 66px; top: 14px; width: 44px; height: 44px; border-radius: 12px; }
+.v2-studio-ill .tile.s::before { top: 11px; left: 8px; right: 8px; }
+.v2-studio-ill .tile.s::after { top: 21px; left: 8px; right: 16px; }
+/* ③④ 맨 위 — 세션 위젯 · 앱 화면 오가기 */
+.v2-studio-view { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-studio-view[hidden] { display: none; }
+.v2-studio-view-tabs { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: var(--gray-bg-2, #F1F5FC); }
+.v2-studio-view-tabs button { border: 0; background: none; height: 32px; padding: 0 16px; border-radius: 8px; font: inherit; font-size: 13.5px; font-weight: 800; color: var(--muted); cursor: pointer; }
+.v2-studio-view-tabs button.on { background: var(--purple, #7B61E0); color: #fff; box-shadow: 0 2px 6px rgba(123, 97, 224, .3); }
+.v2-studio-view-tabs button:disabled { cursor: default; }
+.v2-studio-view-sub { font-size: 12.5px; color: var(--ink-sub); }
+/* 판 짜기 — ②③(만드는 중) 은 대화를 접는다 · ③ 앱 화면은 화면 가득 · ③ 세션 위젯은 왼쪽 대화 + 오른쪽 위젯 */
+.v2-studio-body--nochat, .v2-studio-body--try-app { grid-template-columns: minmax(0, 1fr); }
+.v2-studio-body--nochat .v2-studio-side, .v2-studio-body--try-app .v2-studio-side { display: none; }
+.v2-studio-body--try-app .v2-studio-stage { padding: 12px; }
+.v2-studio-body--try-app .v2-studio-app--full { min-height: 0; height: 100%; }
+.v2-studio-body--try-widget { grid-template-columns: minmax(0, 1fr) 400px; }
+.v2-studio-body--try-widget .v2-studio-side { order: -1; border-left: 0; border-right: 1px solid var(--line); }
+/* ② 카드를 통째로 다시 쓰게 하는 한마디 */
+.v2-studio-ask { display: flex; gap: 6px; padding: 0 16px 14px; }
+.v2-studio-ask-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
 .v2-studio-intro-cards b { display: block; font-size: 14px; margin-bottom: 3px; }
 .v2-studio-intro-cards small { color: var(--ink-sub); line-height: 1.5; display: block; }
 .v2-studio-intro-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -1812,6 +1890,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-studio-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
   .v2-studio-chat { border-left: 0; border-top: 1px solid var(--line); }
   .v2-studio-stage--side > * { width: 100%; }
+  .v2-studio-body--nochat, .v2-studio-body--try-app { grid-template-rows: minmax(0, 1fr); }
+  .v2-studio-body--try-widget { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 46%); }
+  .v2-studio-body--try-widget .v2-studio-side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .v2-studio-ai-row .k { width: auto; }
 }
 
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
