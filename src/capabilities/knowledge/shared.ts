@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_KNOWLEDGE } from "../../org/delivery/default-content.js";
 import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
 import { anyRestrictedKnowledge } from "../../v6/knowledge-store.js";
+import { slugify } from "../../v6/knowledge-common.js";
 
 // 공개범위(#1291) — name 을 가진 행 배열에서 안 보이는 것을 걸러낸다. 목록 표면 공용.
 //  대부분의 조직에서 members 지식은 0건이라 첫 조회에서 바로 통과한다(문서마다 판정하지만 값싼 경로).
@@ -38,9 +39,20 @@ export async function assertKnowledgeVisible(name: unknown, viewer: Viewer): Pro
   if (viewer === null || !name) return;
   if (!(await canSeeKnowledge(String(name), viewer))) throw new HttpError(404, `지식 '${String(name)}' 없음`);
 }
-// 쓰기 게이트 = 읽기 게이트와 **같은 판정**이다(볼 수 없으면 고칠 수도 없다). 이름을 나눠 둔 건 호출부에서
-//  '왜 막는가'가 드러나게 하려는 것뿐 — 판정이 갈라지지 않도록 구현은 위 하나에 위임한다.
-export const assertKnowledgeWritable = assertKnowledgeVisible;
+// 쓰기 게이트 = 읽기 게이트와 **같은 판정**이다(볼 수 없으면 고칠 수도 없다) — 판정은 위 하나에 위임한다.
+//  다른 점은 **보는 이름이 하나 더** 있다는 것뿐이다: 저장 경로 일부(upsertKnowledge · resolveKnowledgeGate)는
+//  받은 이름을 slugify(소문자 · 구분자 통일 · 64자 절단)한 이름의 행을 고친다. 게이트가 받은 이름만 보면
+//  «그 이름의 문서는 없다 → 통과» 인데 실제로는 정규화된 이름의 문서가 고쳐진다 — 대소문자만 바꾸거나 64자를
+//  넘긴 이름으로 안 보이는 문서를 고칠 수 있게 된다. 그래서 두 이름 중 하나라도 안 보이면 막는다.
+//  문구는 받은 이름으로 낸다(없는 문서와 같은 문구 — 존재 은닉). 정규화해도 같은 이름이면(대부분) 조회는 한 번이다.
+export async function assertKnowledgeWritable(name: unknown, viewer: Viewer): Promise<void> {
+  await assertKnowledgeVisible(name, viewer);
+  if (viewer === null || !name) return;
+  const normalized = slugify(String(name));
+  if (normalized !== String(name) && !(await canSeeKnowledge(normalized, viewer))) {
+    throw new HttpError(404, `지식 '${String(name)}' 없음`);
+  }
+}
 
 export async function filterVisibleByName<T extends { name?: unknown }>(rows: T[], viewer: Viewer): Promise<T[]> {
   if (viewer === null || !rows.length) return rows;

@@ -428,6 +428,9 @@ export const knowledgeSetTitle: Capability = {
   handler: async (input: KnowledgeSetTitleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     assertNoContentSecrets(input);   // #4501
     const capped = applySoftCaps("knowledge_set_title", input, KSET_CAPS);
+    // name 정규화는 공개범위 검사 **앞에서** — 아래 resolveKnowledgeGate 가 slugify 한 이름의 행을 고치므로 검사도
+    //  같은 이름을 봐야 한다(knowledge_save 의 #1442 정규화와 같은 이유). slugify 는 멱등이다.
+    input.name = slugify(input.name);
     await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
     // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
     const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
