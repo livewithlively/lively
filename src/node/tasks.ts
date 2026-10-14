@@ -685,9 +685,11 @@ export async function tailTask(taskDir: string, from: number, osUser?: string | 
   let got: Record<string, TaskRead | null>;
   //  스트림 조각과 종료 파일을 **한 번에** — 화면·CLI 가 초 단위로 부르는 자리다.
   try {
+    //  ⚠ exit 를 **먼저** 읽는다(readMany 는 차례로 읽는다) — exit 는 하네스가 끝난 뒤에 생기므로 먼저 봤으면 뒤에 읽는 스트림은 최종본이다.
+    //   거꾸로면 스트림을 읽은 직후 끝난 판에서 낡은 size 로 atFinalEof 가 서서 잘린 문자를 그대로 내준다.
     got = await taskFsFor(osUser).readMany([
-      { key: "stream", path: path.join(taskDir, "stream.jsonl"), from, max: 256 * 1024 },   // 청크 상한 256KB
       { key: "exit", path: path.join(taskDir, "exit"), max: 64 },
+      { key: "stream", path: path.join(taskDir, "stream.jsonl"), from, max: 256 * 1024 },   // 청크 상한 256KB
     ]);
   } catch { return { chunk, next, done, exit }; }   // 조회 실패 = 모름(실행 중으로 둔다)
   const s = got.stream;

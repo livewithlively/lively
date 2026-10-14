@@ -2,13 +2,14 @@
 //
 // 왜: tailTask 는 stream.jsonl 을 바이트 오프셋으로 최대 256KiB 씩 끊어 주는데, 그 경계가 한글(3바이트)·이모지(4바이트)
 //  중간에 떨어지면 양쪽 조각에 U+FFFD 가 들어가 이어 붙여도 원문이 복원되지 않았다. 이 시험은 ① 여러 쪽 이어 받기 복원
-//  ② 경계가 문자 중간에 정확히 떨어지는 파일 ③ 쓰기 진행 중 / 종료 후 파일 끝의 깨진 문자 ④ utf8CompleteLength 엣지를 잠근다.
+//  ② 경계가 문자 중간에 정확히 떨어지는 파일 ③ 쓰기 진행 중 / 종료 후 파일 끝의 깨진 문자 ④ utf8CompleteLength 엣지
+//  ⑤ 스트림을 읽은 직후 판이 끝나는 경합(exit 를 먼저 읽어야 한다)을 잠근다.
 import { strict as assert } from "node:assert";
 import test, { after } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { tailTask, utf8CompleteLength } from "./tasks.js";
+import { tailTask, utf8CompleteLength, localTaskFs, type TaskRead } from "./tasks.js";
 
 const PAGE = 262144;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "co-tailutf8-"));
@@ -156,6 +157,32 @@ test("종료 후 이어 받기가 파일 끝에 닿으면 마지막 next 는 파
     from = r.next;
   }
   assert.equal(from, buf.length);
+});
+
+// 경합 — 스트림을 읽은 직후·exit 를 보기 전에 판이 남은 바이트를 쓰고 끝나는 경우. «종료 + 파일 끝» 판정(atFinalEof)은
+//  exit 를 먼저 봤을 때만 최종본에 대한 판정이다. 거꾸로 읽으면 낡은 size 로 잘린 문자를 내줘 양쪽 조각이 U+FFFD 가 된다.
+test("스트림을 읽은 직후 판이 끝나도(그 사이 exit 생김) 잘린 문자를 내주지 않는다", async () => {
+  const han = Buffer.from("한", "utf8");
+  const dir = mkTask(Buffer.concat([Buffer.from("ab"), han.subarray(0, 2)]));
+  const orig = localTaskFs.readMany;
+  let armed = true;
+  localTaskFs.readMany = async (reqs) => {
+    const out: Record<string, TaskRead | null> = {};
+    for (const r of reqs) {   // 실제 구현처럼 차례로 읽되, 스트림을 읽은 바로 뒤에 판이 끝나게 끼워 넣는다
+      Object.assign(out, await orig.call(localTaskFs, [r]));
+      if (armed && r.key === "stream") {
+        armed = false;
+        fs.appendFileSync(path.join(dir, "stream.jsonl"), han.subarray(2));
+        fs.writeFileSync(path.join(dir, "exit"), "0\n");
+      }
+    }
+    return out;
+  };
+  try {
+    const { chunks, from } = await drain(dir);
+    assert.equal(chunks.join(""), "ab한");
+    assert.equal(from, 5);
+  } finally { localTaskFs.readMany = orig; }
 });
 
 for (const [name, s] of [["ASCII", "hello\n"], ["2바이트 문자", "ab é"], ["3바이트 문자", "ab 한"], ["4바이트 문자", "ab 😀"]] as const) {
