@@ -447,13 +447,116 @@ export function turnEndSegs(o: { pendingBg: number; durationMs: number; uuid?: s
   return [{ t: `${pastVerbOf(o.uuid)} for ${fmtElapsed(o.durationMs)}${at ? ` · done ${at}` : ''}` }];
 }
 
+// ── 쉬는 동안의 안내 — 입력칸 위 한 줄 오른쪽의 `new task? /clear to save 550.8k tokens` ───────────────
+//  Claude Code 2.1.299(실행 파일): 턴이 끝나고 **75분** 동안 새 턴이 없고 문맥이 **10만 토큰** 이상이면 그 안내를 띄우고,
+//   새 턴이 시작되면 걷는다. 두 값은 그 기본값(CLAUDE_CODE_IDLE_THRESHOLD_MINUTES · CLAUDE_CODE_IDLE_TOKEN_THRESHOLD).
+export const IDLE_HINT_MS = 75 * 60_000;
+export const IDLE_HINT_TOKENS = 100_000;
+/** 안내 글 — `new task? ` · ` to save ` 는 흐리게, `/clear` · `550.8k tokens` 는 제안 색(= 권한 색, 256색 105/153 — 실측). */
+export function idleHintSegs(tokens: number): TuiSeg[] {
+  return [{ t: 'new task? ', d: true }, { t: '/clear', c: 'sug' }, { t: ' to save ', d: true }, { t: `${fmtTokens(tokens)} tokens`, c: 'sug' }];
+}
+/** 지금 안내가 서야 하나 — 마지막 턴이 끝난 시각(ms)·문맥 토큰을 안다는 전제. 도는 중이면 호출하는 쪽이 부르지 않는다. */
+export const idleHintDue = (endAt: number, tokens: number, now: number): boolean => tokens >= IDLE_HINT_TOKENS && now - endAt >= IDLE_HINT_MS;
+
+/**
+ * 문맥 토큰 셈 — Claude Code 의 그 셈(실행 파일)을 옮겼다. 마지막 «실제» 응답의 사용량(입력 + 캐시 쓰기 + 캐시 읽기 + 출력)을
+ *  닻으로 삼고, 닻이 된 응답의 **첫 줄 뒤**에 온 줄들은 글자 수 ÷ 4 로 어림해 더한다. 한 응답은 블록마다 여러 줄로 적히므로 그
+ *  응답의 둘째 블록부터 어림에 든다 — 그 셈 그대로라야 터미널과 같은 수가 선다(실측: 550,661 + 98 = `550.8k`, 빼면 `550.7k`).
+ *  맥락 압축 경계(compact_boundary)를 지나면 0 에서 다시 센다. 대화 줄을 **앞에서부터 차례로** 먹인다(ctxFeed) — 이전 기록을
+ *  위로 붙이는 줄은 먹이지 않는다(닻은 늘 가장 새 쪽에 있다).
+ */
+export interface CtxCount { base: number | null; id: string | null; lastId: string | null; est: number }
+export const ctxNew = (): CtxCount => ({ base: null, id: null, lastId: null, est: 0 });
+/** 닻을 모르면(실제 응답이 아직 없다) null — 어림만으로 지어내지 않는다. */
+export const ctxTokens = (s: CtxCount): number | null => (s.base == null ? null : s.base + s.est);
+//  닻이 될 수 없는 응답 — 끊김·거절 안내 글이나 «No response requested.» 로 시작하는 줄(하네스가 적은 것).
+const CTX_SKIP_TEXT = new Set([
+  '[Request interrupted by user]',
+  '[Request interrupted by user for tool use]',
+  "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.",
+  "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+  'No response requested.',
+]);
+const SYNTHETIC = '<synthetic>';
+const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** 응답 하나의 사용량 합 — 서버 쪽 반복(iterations)이 있으면 마지막 반복의 값(조언자·압축 반복은 건너뛴다). 입력 쪽이 0 이면 null(닻 아님). */
+function usageTotal(u: unknown): number | null {
+  const o = obj(u);
+  let n = { i: Number(o.input_tokens) || 0, o: Number(o.output_tokens) || 0, cw: Number(o.cache_creation_input_tokens) || 0, cr: Number(o.cache_read_input_tokens) || 0 };
+  if (n.i + n.cw + n.cr !== 0 && Array.isArray(o.iterations)) {
+    const last = [...o.iterations].reverse().find((r) => !(r && typeof r === 'object' && ((r as { type?: unknown }).type === 'advisor_message' || (r as { type?: unknown }).type === 'compaction')));
+    const s = obj(last);
+    if ((s.type === 'message' || s.type === 'fallback_message') && fin(s.input_tokens) && fin(s.output_tokens) && fin(s.cache_creation_input_tokens) && fin(s.cache_read_input_tokens)
+      && s.input_tokens + s.cache_creation_input_tokens + s.cache_read_input_tokens > 0) n = { i: s.input_tokens, o: s.output_tokens, cw: s.cache_creation_input_tokens, cr: s.cache_read_input_tokens };
+  }
+  return n.i + n.cw + n.cr === 0 ? null : n.i + n.cw + n.cr + n.o;
+}
+const est4 = (s: unknown, per = 4): number => (typeof s === 'string' ? Math.round(s.length / per) : 0);
+function estContent(c: unknown): number {
+  if (!c) return 0;
+  if (typeof c === 'string') return est4(c);
+  if (!Array.isArray(c)) return 0;
+  let n = 0;
+  for (const b of c) n += estBlock(b);
+  return n;
+}
+function estBlock(b: unknown): number {
+  if (typeof b === 'string') return est4(b);
+  if (!b || typeof b !== 'object') return 0;
+  const o = b as Record<string, unknown>;
+  if (o.type === 'text') return est4(o.text);
+  if (o.type === 'document' && o.source && typeof o.source === 'object') {
+    const s = o.source as Record<string, unknown>;
+    if (s.type === 'text') return est4(s.data, ['json', 'jsonl', 'jsonc'].includes(str(o.title).split('.').pop()?.toLowerCase() ?? '') ? 2 : 4);
+    if (s.type === 'content' && typeof s.content === 'string') return est4(s.content);
+    if (s.type === 'content' && Array.isArray(s.content)) return estContent(s.content.filter((x) => x && typeof x === 'object'));
+  }
+  if (o.type === 'image' || o.type === 'document') return 2000;
+  if (o.type === 'tool_result') return estContent(o.content);
+  if (o.type === 'tool_use') return est4(str(o.name) + JSON.stringify(o.input ?? {}));
+  if (o.type === 'thinking') return est4(o.thinking);
+  if (o.type === 'redacted_thinking') return est4(o.data);
+  return est4(JSON.stringify(o));
+}
+/** 대화 줄 하나의 어림 토큰. 끼워 넣기 줄(attachment)은 그 글(prompt·content)만 어림한다 — 하네스가 감싸는 꼴까지는 옮기지 않았다. */
+export function estLineTokens(line: unknown): number {
+  const o = obj(line);
+  const m = obj(o.message);
+  if ((o.type === 'assistant' || o.type === 'user' || o.type === 'api_system') && m.content) return estContent(m.content);
+  if (o.type === 'attachment') { const a = obj(o.attachment); return est4(typeof a.prompt === 'string' ? a.prompt : a.content); }
+  return 0;
+}
+/** 대화 줄 하나를 셈에 먹인다(차례대로). */
+export function ctxFeed(s: CtxCount, line: unknown): void {
+  const o = obj(line);
+  if (o.type === 'system' && o.subtype === 'compact_boundary') { s.base = 0; s.id = null; s.lastId = null; s.est = 0; return; }
+  if (o.type === 'assistant') {
+    const m = obj(o.message);
+    const aid = m.model !== SYNTHETIC && m.id != null ? str(m.id) : null;
+    //  같은 응답의 이어진 줄인가 — 사이에 다른 응답(id)이 끼면 끊긴다(사람 말·도구 결과 줄은 끊지 않는다).
+    const same = aid != null && aid === s.id && s.lastId === aid;
+    if (aid != null) s.lastId = aid;
+    const c0 = Array.isArray(m.content) ? obj(m.content[0]) : {};
+    const real = 'usage' in m && m.model !== SYNTHETIC && o.isUnmetered !== true && !(c0.type === 'text' && CTX_SKIP_TEXT.has(str(c0.text)));
+    const total = real ? usageTotal(m.usage) : null;
+    if (total != null) {
+      if (same) s.est += estLineTokens(o);
+      else { s.id = aid; s.est = 0; }
+      s.base = total;
+      return;
+    }
+  }
+  s.est += estLineTokens(o);
+}
+
 // ── 도구 묶음(접힌 한 줄) ──────────────────────────────────────────────────────────────────
 //  Claude Code 2.1.299 전체 화면은 읽기·검색·셸·MCP 같은 «들여다보는» 도구를 하나씩 세우지 않고, 이어진 것끼리 **흐린 한 줄**로 접는다:
 //   `  Ran 2 shell commands` · `  Read 1 file` · `  Called lively, ran 1 shell command` · `  Made 2 scratchpad edits +2 -2, ran 1 shell command`.
 //  어느 도구가 접히고 무엇으로 세는지는 그 실행 파일의 판정을 그대로 옮겼다(아래 tuiCollapse). 일반 파일 Edit/Write·에이전트·
 //  웹 가져오기처럼 **무언가를 바꾸거나 밖으로 나가는** 도구는 접히지 않고 `⏺ Update(…)` 처럼 따로 선다. 글(답)이 끼면 묶음이 끊긴다.
-/** 꾸민 글 조각 — b = 굵게, d = 흐리게, c = 변경분 색(+N 초록 · -N 빨강). 화면은 조각을 그대로 칠한다. */
-export interface TuiSeg { t: string; b?: boolean; d?: boolean; c?: 'add' | 'del' }
+/** 꾸민 글 조각 — b = 굵게, d = 흐리게, c = 색(+N 초록 · -N 빨강 · sug = 제안 색). 화면은 조각을 그대로 칠한다. */
+export interface TuiSeg { t: string; b?: boolean; d?: boolean; c?: 'add' | 'del' | 'sug' }
 
 /** 그 도구 호출 하나가 묶음에서 무엇으로 세이나. null = 접히지 않는다(따로 선다). */
 export type TuiCollapse =
