@@ -116,10 +116,18 @@ export function draftBrief(card: StudioCard, place: StudioPlace): string {
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「첫 판 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
-export interface StudioPin { x: number; y: number; where: string; note: string }
+/** ④ 짚은 곳 — 고른 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
+export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number }
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
-  pins.forEach((p, i) => { if (p.note.trim()) lines.push(`[찍은 곳 ${i + 1}] 화면의 왼쪽에서 ${Math.round(p.x * 100)}% · 위에서 ${Math.round(p.y * 100)}% 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`); });
+  const pc = (v?: number): number => Math.round((v || 0) * 100);
+  pins.forEach((p, i) => {
+    if (!p.note.trim()) return;
+    const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
+    if (p.kind === 'pick') lines.push(`[고른 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
+    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 에서 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
+    else lines.push(`[찍은 곳 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
+  });
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
   return `${round}번째 고침이야. 아래를 반영해 새 판으로 저장해 줘(app_pull ${appId} 로 지금 판을 받아 고치고 app_save · note 는 바뀐 점 한 줄). ${PLACE[place].say} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }
