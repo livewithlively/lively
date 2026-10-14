@@ -13,6 +13,7 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 const ENV = { LIVELY_TENANT_HEADER_SECRET: "x", LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv;
 const T = { id: "t-1", slug: "lively-46e3" };
 const STATE = "s".repeat(43);
+const NOW_MS = 1_791_000_000_000;   // 가짜 서버 시계(경유 주소 exp 판정)
 const app = (id: string, over: Record<string, unknown> = {}): OrgApp => ({ id, title: "장표 수정", manifest: {}, status: "active", enabled: true, installed_by: "alice", ...over } as unknown as OrgApp);
 
 function deps(over: Partial<LaunchDeps> = {}) {
@@ -24,6 +25,7 @@ function deps(over: Partial<LaunchDeps> = {}) {
     getApp: async (id) => ({ "deck-edit": app("deck-edit"), off: app("off", { enabled: false }), failed: app("failed", { status: "failed" }), mine: app("mine", { visibility: "me", installed_by: "carol" }), empty: app("empty"), [`a${"b".repeat(31)}`]: app(`a${"b".repeat(31)}`) } as Record<string, OrgApp>)[id] ?? null,
     listUiAssets: async (id) => (id === "empty" ? [] : [{ page_key: "main" }, { page_key: "settings" }]),
     mint: async (i) => { mints.push(i); return { code: "lva_" + "c".repeat(32) }; },
+    now: () => NOW_MS,
     ...over,
   };
   return { d, mints };
@@ -98,6 +100,23 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   const adm = await launchAppFor({ app_id: "mine" }, user({ userId: "admin", scopes: ["admin"] }), d) as Record<string, unknown>;
   assert.equal(adm.origin, "https://mine-lively-46e3.lvly.app", "관리자는 「나만」 앱도 연다");
   ok("F5 성공 — url · origin · page_key · 발급 인자 · top state · 관리자");
+}
+
+// ── F6 지난 경유 주소 — top 의 exp(초)가 서버 시계로 지났으면 410 · 없으면 종전대로 · embed 는 안 본다 ──
+//  이게 틀리면: 되살린 탭 · 방문 기록으로 같은 #/app-open 주소에 다시 들어온 사람이 이미 쓴 state 로 앱 주소에 끌려가
+//   «로그인을 마치지 못했습니다» 를 보거나(2026-10-14 사파리 실측), 거꾸로 막 받은 경유 주소가 막혀 직접 접속이 안 된다.
+{
+  const { d, mints } = deps();
+  const nowSec = NOW_MS / 1000;
+  for (const exp of [nowSec, nowSec - 1, 0, Number.NaN]) {
+    assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit", mode: "top", state: STATE, exp }, user(), d)), { status: 410, code: "app_open_expired" }, String(exp));
+  }
+  assert.equal(mints.length, 0, "지난 경유 주소에는 코드를 만들지 않는다");
+  await launchAppFor({ app_id: "deck-edit", mode: "top", state: STATE, exp: nowSec + 600 }, user(), d);
+  await launchAppFor({ app_id: "deck-edit", mode: "top", state: STATE }, user(), d);   // exp 없음 — 종전 호출(화면이 거른다)
+  await launchAppFor({ app_id: "deck-edit", exp: nowSec - 1 }, user(), d);   // embed 는 경유 주소가 없다 — exp 를 안 본다
+  assert.equal(mints.length, 3);
+  ok("F6 지난 경유 주소 — 410 app_open_expired(같은 초 · 지남 · 0 · 숫자 아님) · 남음/없음/embed 는 발급");
 }
 
 console.log(`\n${pass} passed`);

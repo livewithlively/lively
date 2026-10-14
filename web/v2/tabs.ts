@@ -102,9 +102,15 @@ export function routeKey(route: string): string {
  *  아니다. 그런데 종전엔 그냥 탭으로 저장돼서, 자동 진입이 한 번 일어나면 그 탭이 저장본에 박히고
  *  **다음 부팅마다 서버 판정을 보지도 않고 복원**됐다(부팅 라우팅은 저장된 탭을 그대로 되살린다).
  *  즉 게이트가 아무리 정확해져도 그 뒤로는 무의미했다 — '시도때도없이 뜬다'의 실제 정체가 이것이다.
+ *
+ * #4480 — 앱 주소 경유(#/app-open/<앱>?…&state=…)와 크게 보기(#/full/<앱>)도 지나가는 자리다.
+ *  · 경유 탭은 한 번 쓰고 끝이다. 되살아나면 이미 쓴 state 로 다시 열어, 워크스페이스를 열었는데 앱 주소의
+ *    «로그인을 마치지 못했습니다» 로 넘어갔다(2026-10-14 상민님 실측, 사파리).
+ *  · 크게 보기는 앱을 셸 위에 덮는 따로 연 창이다. 되살아나면 다음에 라이블리를 열 때 앱이 셸을 덮고 선다.
  */
 export function routeSticky(route: string): boolean {
-  return routeKey(route) !== 'raw:welcome';
+  const k = routeKey(route);
+  return k !== 'raw:welcome' && !/^raw:(app-open|full)(\/|\?|$)/.test(k);
 }
 
 export interface TabsApi {
@@ -159,7 +165,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         //  draft(아직 안 보낸 지시)·seen(본 시각, #3890)은 있을 때만 싣는다 — 빈 값까지 적으면 저장본이 쓸데없이 커진다.
-        //  ⚠ 지나가는 화면(#/welcome)은 저장하지 않는다 — 되살아나면 서버 판정을 우회한다(routeSticky).
+        //  ⚠ 지나가는 화면(#/welcome · #/app-open · #/full)은 저장하지 않는다 — 되살아나면 서버 판정을 우회하거나 쓴 값으로 다시 연다(routeSticky).
         tabs: tabs.filter((t) => routeSticky(t.route)).map((t) => {
           const o = t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title };
           return t.seenAt > 0 ? { ...o, seen: t.seenAt } : o;
