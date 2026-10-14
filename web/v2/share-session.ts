@@ -13,6 +13,8 @@
 //  403 을 받게 두지 않는다.
 import { anchoredPopover, api, el, personFace, state, toast } from '../core.js';
 import { viewersOf, type Viewer } from './presence.js';
+import { inviteAdded, inviteDirty, shareEnterAction } from '../lib/share-enter.js';   // #3870 — 빈 칸 ↵ = 초대
+import { leaveInvitedSession } from '../session-actions.js';   // #3870 — 초대받은 사람만 나간다
 
 interface ShareSess {
   id: string;
@@ -85,6 +87,13 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
               el('span', { text: nm + (id === s.owner ? ' · 소유자' : '') }));
           }))),
       fine(`초대는 소유자만 바꿀 수 있어요 — ${ownerNm}님께 이 세션에 초대해 달라고 요청하세요.`),
+      //  #3870 — 초대받은 사람만 나간다(만든 사람은 이 창이 편집기라 여기 안 온다 · 서버도 거절한다).
+      //   명단에 내가 없으면(관리자가 보는 남의 세션 등) 나갈 자리가 없으니 단추도 없다.
+      meId && meId !== s.owner && s.invites.includes(meId)
+        ? el('div', { class: 'pn-share-act' },
+            el('button', { class: 'btn btn-ghost btn-sm pn-share-leave', type: 'button', text: '이 세션에서 나가기',
+              onclick: () => { close(); void leaveInvitedSession({ id: s.id, label: s.label }); } }))
+        : null,
     ].filter(Boolean) as HTMLElement[]);
   }
 
@@ -93,7 +102,22 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
     const q = el('input', { class: 'pn-share-in', type: 'text', placeholder: '이름으로 찾기', 'aria-label': '초대할 사람 찾기' }) as HTMLInputElement;
     const chips = el('div', { class: 'pn-share-chips' }) as HTMLElement;
     const list = el('div', { class: 'pn-share-list' }) as HTMLElement;
-    const save = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
+    const save = el('button', { class: 'btn btn-primary btn-sm pn-share-save', type: 'button' }) as HTMLButtonElement;
+    //  #3870 — 지금 Enter 가 무엇을 하나를 한 줄로(↵ 표식이 어디에 붙었나와 같은 말). 할 일이 없으면 비운다.
+    const hint = el('p', { class: 'pn-share-fine pn-share-hint', 'aria-live': 'polite' }) as HTMLElement;
+    const dirty = (): boolean => inviteDirty(s.invites, chosen);
+    const enterNow = (mod = false) => shareEnterAction({ query: q.value, hasTop: !!top, dirty: dirty(), mod });
+    //  저장 단추 — 새로 담은 사람이 있으면 «초대», 빼기만 했으면 «저장». ↵ 가 저장을 가리키면 단추에도 ↵ 를 단다.
+    const paintAct = (): void => {
+      const toSave = enterNow() === 'save';
+      save.replaceChildren(el('span', { text: inviteAdded(s.invites, chosen).length ? '초대' : '저장' }),
+        toSave ? el('span', { class: 'pn-share-kbd pn-share-kbd--btn', 'aria-hidden': 'true', text: '↵' }) : null);
+      save.disabled = !dirty();
+      hint.textContent = toSave
+        ? (inviteAdded(s.invites, chosen).length ? '↵ 한 번 더 누르면 초대해요 · 더 부르려면 이름을 이어서 치세요.' : '↵ 를 누르면 저장해요.')
+        : '';
+      hint.hidden = !toSave;
+    };
 
     const drawChips = (): void => {
       chips.replaceChildren(...(chosen.size
@@ -102,7 +126,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
             return el('span', { class: 'pn-share-chip' },
               personFace(id, 'pn-share-face', nm), el('span', { text: nm }),
               el('button', { class: 'pn-share-x', type: 'button', title: nm + ' 빼기', 'aria-label': nm + ' 빼기',
-                onclick: () => { chosen.delete(id); drawChips(); drawList(); } }, el('span', { text: '×' })));
+                onclick: () => { chosen.delete(id); drawChips(); drawList(); q.focus(); } }, el('span', { text: '×' })));
           })
         : [el('span', { class: 'pn-share-fine', text: '아직 아무도 없어요 — 나만 보는 비공개 세션이에요.' })]));
     };
@@ -116,40 +140,53 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
         && (!kw || nameOf(m).toLowerCase().includes(kw) || m.id.toLowerCase().includes(kw)));
       const shown = cand.slice(0, 8);
       top = shown[0] || null;
+      //  ↵ 표식은 Enter 가 **지금 할 일** 하나에만 — 맨 위 사람을 담을 때만 그 줄에 단다(저장할 때는 저장 단추에, paintAct).
+      const pickMark = enterNow() === 'pick';
       list.replaceChildren(...(shown.length
         // 맨 위 한 줄만 표식을 단다 — Enter 가 무엇을 고를지 **눌러 보기 전에** 보이게(안 그러면 도박이 된다).
-        ? shown.map((m, i) => el('button', { class: 'pn-share-row' + (i === 0 ? ' on' : ''), type: 'button',
+        ? shown.map((m, i) => el('button', { class: 'pn-share-row' + (i === 0 && pickMark ? ' on' : ''), type: 'button',
             onclick: () => pick(m) },
             personFace(m.id, 'pn-share-face', nameOf(m)), el('span', { text: nameOf(m) }),
-            i === 0 ? el('span', { class: 'pn-share-kbd', text: '↵' }) : null))
+            i === 0 && pickMark ? el('span', { class: 'pn-share-kbd', text: '↵' }) : null))
         : [el('p', { class: 'pn-share-fine', text: kw ? '그런 사람이 없어요.' : '부를 사람이 더 없어요.' })]));
+      paintAct();
     };
     q.addEventListener('input', drawList);
-    // Enter = 맨 위 사람 담기(원준 2026-09-10). 한글 조합 중의 Enter 는 **확정**이지 선택이 아니다 — isComposing 으로 가른다.
+    // Enter — 칸에 글자가 있으면 맨 위 사람 담기, 빈 칸이면 저장(#3870 · lib/share-enter 머리말). ⌘/Ctrl+Enter 는 곧바로 저장.
+    //  한글 조합 중의 Enter 는 **확정**이지 선택이 아니다 — isComposing 으로 가른다(원준 2026-09-10).
     //  (그 가드가 없으면 «장원」 까지 친 상태의 Enter 가 조합을 끝내면서 동시에 엉뚱한 사람을 담는다.)
     q.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key !== 'Enter' || e.isComposing) return;
       e.preventDefault();
-      if (top) pick(top);
+      const act = enterNow(e.metaKey || e.ctrlKey);
+      if (act === 'pick' && top) pick(top);
+      else if (act === 'save' && !save.disabled) save.click();
     });
 
     save.onclick = async (): Promise<void> => {
+      if (save.disabled) return;
       save.disabled = true;
       const invites = [...chosen];
+      const added = inviteAdded(s.invites, invites);
       try {
         const b: Record<string, unknown> = { invites };
         if (s.node) b.node = s.node;   // 노드 세션은 게이트웨이가 그 노드로 중계한다(routes.ts 가 body.node 를 본다)
-        await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify(b) });
+        const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify(b) });
         s.invites = invites;
         onSaved?.(invites);
-        toast(invites.length ? `${invites.length}명이 이 세션을 볼 수 있어요.` : '비공개로 바꿨어요 — 이제 나만 봅니다.');
+        //  «알림을 보냈어요» 는 서버가 실제로 보낸 수(notified)가 있을 때만 말한다(구 게이트웨이는 그 값을 안 준다).
+        const names = added.map((id) => nameOf(members.find((m) => m.id === id) || { id }));
+        const sent = Number(r && r.notified) > 0;
+        toast(added.length
+          ? `${names.length > 2 ? names.slice(0, 2).join(', ') + ` 외 ${names.length - 2}명` : names.join(', ')}님을 초대했어요` + (sent ? ' — 알림을 보냈어요.' : '.')
+          : invites.length ? `${invites.length}명이 이 세션을 볼 수 있어요.` : '비공개로 바꿨어요 — 이제 나만 봅니다.');
         close();
       } catch (e: any) { save.disabled = false; toast('공유 실패 — ' + (e?.message || '알 수 없는 오류'), true); }
     };
 
     body.replaceChildren(...[
       viewersBlock(s.id, meId),
-      el('div', { class: 'pn-share-block' }, sec('함께 볼 사람'), chips, q, list),
+      el('div', { class: 'pn-share-block' }, sec('함께 볼 사람'), chips, q, list, hint),
       fine('고른 사람만 이 세션을 보고 열 수 있어요.'),
       el('div', { class: 'pn-share-act' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => close() }), save),

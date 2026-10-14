@@ -969,6 +969,13 @@ webview.pn-webframe { display: flex; }
 .pn-share-kbd { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--blue);
   background: var(--bg); border: 1px solid var(--line-net); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 .pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }
+/* #3870 — 빈 찾기칸에서 ↵ = 저장. 그때 ↵ 표식은 목록 줄이 아니라 저장 단추에 붙는다(한 번에 한 자리). */
+.pn-share-save { display: inline-flex; align-items: center; gap: 6px; }
+.pn-share-kbd--btn { margin-left: 0; color: inherit; background: transparent; border-color: currentColor; opacity: .85; }
+.pn-share-hint { color: var(--muted); }
+/* 초대받은 사람의 나가기 — 되돌리기가 내 손에 없는 동작이라 붉은 글자(채운 단추까지는 아니다 · 확인 창이 한 번 더 묻는다). */
+.pn-share-leave { color: var(--danger); }
+.pn-share-leave:hover { color: var(--danger-deep); background: var(--danger-bg); }
 
 /* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────
    머리 바의 [최신순][자세히] 과 같은 급이라 높이·반경을 맞춘다(28 · 8). 좁은 칸에서는 이 칸이 먼저 줄고

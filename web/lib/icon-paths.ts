@@ -129,6 +129,8 @@ export const ICONS: Record<string, string> = {
   drop: 'M12 3v12 M7 10l5 5 5-5 M5 19h14',
   up: 'M12 21V9 M7 14l5-5 5 5 M5 5h14',
   undo: 'M4 9h11a5 5 0 0 1 0 10h-6 M8 5L4 9l4 4',
+  //  #3870 — 초대받은 세션에서 나가기. 문틀(왼쪽)과 그 밖으로 나가는 화살표.
+  leave: 'M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4 M15 8l4 4-4 4 M19 12H9',
   pencil: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z M14 6l4 4',
   folderup: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M12 18v-6 M9.4 14.4L12 11.8l2.6 2.6',
   save: 'M5 4h11l3 3v13H5z M9 4v5h6V4 M8 20v-6h8v6',

@@ -39,7 +39,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { __lvComposeDraft?:
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
-import { confirmSessionTrash, eulReul, sessionNames, sessionTrashOp } from './session-actions.js';
+import { confirmSessionTrash, eulReul, leaveInvitedSession, sessionNames, sessionTrashOp } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
@@ -57,6 +57,7 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 import { onViewers, viewersOf } from './v2/presence.js';
 import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
+import { isInvitedSess } from './v2/views.js';   // #3870 — 초대받은 사람만 [이 세션에서 나가기]
 
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
@@ -1258,6 +1259,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (sh) secs.push({ key: 'ppl', label: '사람', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'], kids: [
       row('함께 보는 사람', sh.owned ? '이 세션을 볼 사람을 고릅니다 — 기본은 나만 봐요' : '이 세션을 누가 볼 수 있는지 봅니다',
         sh.owned ? '고르기' : '보기', () => { const s2 = shareSessOf(target); if (s2) openSharePopover(facesEl, s2); }),
+      //  #3870 — 초대받은 사람만 나간다(만든 사람에겐 이 줄이 없다 · 서버도 거절한다).
+      isInvitedSess(target)
+        ? row('이 세션에서 나가기', '내 목록에서 빠지고 더는 열 수 없어요 — 다시 보려면 만든 사람이 다시 초대해야 해요', '나가기',
+            () => { close(); void leaveInvitedSession({ id: target.id, label: target.label }); }, true)
+        : null,
     ] });
 
     // ── 정리 — 되돌릴 수 없는 것은 **맨 아래 따로**. 종전엔 [링크 복사] 바로 위 평범한 줄이었다. ──

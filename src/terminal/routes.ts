@@ -9,7 +9,8 @@ import crypto from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
-import { hiddenProjects } from "../v6/visibility.js";   // #3870 — 초대받은 사람의 복제: 그 세션 프로젝트를 지금 볼 수 있나
+import { hiddenProjects } from "../v6/visibility.js";
+import { invitesWithout, leaveRefusal, newInvitees, notifySessionInvitees } from "./session-invite.js";   // #3870 — 초대 알림 · 초대받은 사람의 나가기   // #3870 — 초대받은 사람의 복제: 그 세션 프로젝트를 지금 볼 수 있나
 import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
 import { revokeSessionHookToken } from "./profiles.js";               // #4135 — 노드 세션을 죽일 때 그 토큰(훅·MCP 둘 다)을 거둔다
 import { wrap, HttpError } from "../http/rest-util.js";
@@ -1519,6 +1520,17 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const b = (req.body ?? {}) as Record<string, unknown>;
     //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
     const nodeId = relayNodeId(String(b.node ?? req.query.node ?? ""), isSelfNode);
+    //  #3870 — 초대 알림은 «이번 저장으로 새로 들어온 사람» 에게만(session-invite.ts). 이전 명단은 저장 **전에** 읽는다.
+    //   명단 정본은 DB 행이다(ownerMeta 가 DB 를 먼저 본다). 못 읽으면 null — newInvitees 가 «모름» 으로 다룬다.
+    const before = b.invites !== undefined ? await getSessionState(req.params.id).catch(() => undefined) : undefined;
+    //  보낸 수를 답에 싣는다(notified) — 화면이 «알림을 보냈어요» 를 사실일 때만 말하게. 알림 실패는 던지지 않는다(초대는 이미 저장됐다).
+    const announce = async (invites: string[] | undefined, actor: string): Promise<number> => {
+      if (!invites) return 0;
+      const fresh = newInvitees(before ? before.invites : null, invites, actor, actor);
+      if (!fresh.length) return 0;
+      const label = (b.label !== undefined ? String(b.label) : "") || before?.label || "";
+      return notifySessionInvitees({ sessionId: req.params.id!, label, actor, invitees: fresh });
+    };
     if (nodeId) {
       const me = idOf(userOf(req));
       const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
@@ -1552,14 +1564,44 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         await updateSessionStateMeta(req.params.id, { invites })
           .catch((e) => console.warn(`[terminal] 노드 세션 초대 DB 반영 실패(${req.params.id}):`, (e as Error)?.message ?? e));
       }
-      res.json({ ok: true });
+      const notified = await announce(invites, me);   // 노드의 assertManage 를 지난 뒤 — 거부된 요청은 알림을 못 만든다
+      res.json({ ok: true, notified });
       return;
     }
-    await editSession(userOf(req), req.params.id, {
+    const edited = await editSession(userOf(req), req.params.id, {
       label: b.label !== undefined ? String(b.label) : undefined,
       invites: b.invites,
     });
-    res.json({ ok: true });
+    const notified = await announce(edited.invites, idOf(userOf(req)));
+    res.json({ ok: true, notified });
+  }));
+  // 세션에서 나가기(#3870, 원준 2026-10-14) — **초대받은 사람만**: 명단에서 나 하나를 뺀다. 만든 사람에겐 길이 없다(leaveRefusal).
+  //  남의 명단을 고치는 일이라 실행은 **주인 이름으로** 한다(복제 · 옮기기와 같은 규율) — 노드의 assertManage 가 주인을 강제한다.
+  //  ① 도는 세션이면 그 자리(중앙 tmux · 노드)의 명단부터: 노드 목록 · 입장 판정이 거기를 본다. ② DB 행은 늘: 입장 판정(ownerMeta)과
+  //  복원이 이 행을 먼저 본다 — 멈춘 세션도 행만 고치면 다시 열었을 때 내가 빠져 있다.
+  app.post("/api/ui/terminal/sessions/:id/leave", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = String(req.params.id || "");
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id).catch(() => undefined);
+    const no = leaveRefusal(st ?? null, me);
+    if (no) {
+      logger.info({ id, requester: me, status: no.status, why: no.message }, "세션 나가기 거절");
+      throw new HttpError(no.status, no.message);
+    }
+    const owner = st!.owner;
+    const next = invitesWithout(st!.invites, me);
+    const nodeId = relayNodeId(st!.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "";
+    if (nodeId) {
+      if (nodeOnline(nodeId) && nodeOfSession(id) === nodeId) {
+        await relayNodeOp(nodeId, "edit", { user: { userId: owner }, id, patch: {}, invites: next });
+      }
+    } else if (!(await sessionGone(id))) {
+      await editSession({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser, id, { invites: next });
+    }
+    await updateSessionStateMeta(id, { invites: next });
+    logger.info({ id, requester: me, owner, node: nodeId || null }, "세션 나가기");
+    res.json({ ok: true, invites_left: next.length });
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     // 회수(보관) 여부는 **노드 분기보다 먼저** 읽는다 — 종전엔 아래(박스 분기)에서만 읽어, 노드 세션은
