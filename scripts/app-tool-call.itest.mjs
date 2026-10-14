@@ -29,7 +29,7 @@ try {
   const { _clearAppToolCache } = await import("../dist/apps/principal.js");
 
   await initAllSchemas();
-  await seedBuiltinApps();
+  await seedBuiltinApps(new URL("./fixtures/apps", import.meta.url).pathname);   // #4554 — hello 는 시험 픽스처다
   const MEMBER = "m1";
   await itemsPool.query(`INSERT INTO org_member(id,email,state,scopes) VALUES($1,$2,'active','["context","memory","admin"]'::jsonb)`, [MEMBER, "m1@x.com"]);
   ok("스키마 + hello 시드 + 멤버(admin 포함)");

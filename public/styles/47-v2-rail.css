@@ -746,6 +746,22 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-sshelf .v2-kcat .v2-dot { margin-left: 6px; }
 .v2-pfav .v2-ptl-ic { stroke: var(--muted-2); }
 .v2-pfav.on .v2-ptl-ic { stroke: var(--blue); }
+/* #3870 리스트 줄의 ★ — 올리면(또는 줄에 초점이 오면) 수 자리에 선다. 위키 분류 줄의 ✎(.v2-kcat-edit)와 같은 문법이고, 누르면 그 자리에서
+   즐겨찾기에 넣고 뺀다(side.ts favBtn). 넣은 것은 채운 별 — 색은 보드 브레드크럼의 ★(.pjv-crumb-fav.on)와 같다. 위아래 음수 여백은 22px 단추가
+   줄 높이를 밀지 않게 한다(올릴 때 줄이 움찔하지 않는다). */
+.v2-pstar { display: none; width: 22px; height: 22px; margin: -3px -4px -3px auto; place-items: center; border-radius: 6px; color: var(--muted); flex: none; cursor: pointer; }
+.v2-pstar-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-pstar:hover { color: var(--ink); background: var(--bg-tint-2); }
+.v2-pstar.on { color: #f0b429; }
+.v2-pstar.on .v2-pstar-ic { fill: currentColor; }
+.v2-pstar:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-ptl:hover .v2-pstar, .v2-ptl:focus-within .v2-pstar { display: inline-grid; }
+.v2-ptl:hover .v2-cnt:has(+ .v2-pstar), .v2-ptl:focus-within .v2-cnt:has(+ .v2-pstar) { display: none; }
+/* 터치(올릴 수 없다) — ★ 가 늘 수 옆에 선다. 줄을 누르면 곧 그 리스트로 가 버려 올려서 드러내는 길이 없다(카드 머리의 [폴더 보기]와 같은 처리). */
+@media (hover: none) {
+  .v2-pstar { display: inline-grid; margin-left: 2px; }
+  .v2-ptl:hover .v2-cnt:has(+ .v2-pstar), .v2-ptl:focus-within .v2-cnt:has(+ .v2-pstar) { display: revert; }
+}
 /* ── #3830 맥락 관리 — 이 앱에 있는 동안만 사이드바 열을 접는다 ──────────────────
    원준 2026-09-09: *"맥락관리 앱으로 들어간 다음에도 사이드바가 보이는데 굳이 필요가 없을 것 같아 …
     대신 뒤로가기 앞으로가기 검색 창은 전체 가로 다 차지하게 맨 상단에(슬랙처럼)."*
@@ -780,10 +796,25 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
 .v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title { font-size: 13px; font-weight: 600; }
 .v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 22px 16px; row-gap: 0; padding: 3px 8px 3px 8px; }
 .v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 13px; }
-.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin { top: 3px; }
+.v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin, .v2-home-cards .v2-pg--rows .v2-app-inst-trash { top: 3px; }
 .v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 16px; }
 /* 「고정」 세션 카드의 둘째 줄 = 소속 프로젝트(카드 머리가 없으니 줄이 소속을 말한다). 마지막 말 줄과 같은 기둥에 선다. */
 .v2-app-inst-pj { grid-column: 1 / 3; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; display: flex; align-items: center; gap: 5px; }
 /* 세션별 축 둘째 줄 끝의 소속 — 마지막 말이 먼저 자리를 갖고, 좁으면 이쪽이 먼저 잘린다. */
 .v2-app-inst-askp { flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted-2); }
 .v2-app-inst-askp::before { content: '·'; margin-right: 5px; }
+
+/* ── #4533 사이드바 닫힘 — 폭 손잡이를 하한 밑으로 더 끌면 닫힌다(상민님 2026-10-01) ─────────────────
+   원준 2026-08-25 «사이드바는 걷을 수 없다» 의 이유는 "사라지면 되찾는 길을 또 만들어야 한다" 였다. 이제 되찾는 길은
+   창 맨 윗줄 ☰ 하나로 정한다 — 독(레일)·사이드바가 둘 다 닫혀 있으면 ☰ 가 둘을 함께 연다(main.ts toggleDock).
+   닫는 길도 하나뿐이다: 손잡이를 하한 밑으로 끄는 몸짓. 실수로 눌러 사라질 단추는 두지 않는다.
+   배치는 맥락 관리(app-ctx)와 같다 — 열 폭 0, 맨 윗줄은 전폭(43-v2-topbar-search.css ①-d).
+   ⚠ 손잡이(.v2-side + .v2-split-x)는 **visibility 로 감추지 않는다** — 끄는 도중에 닫히므로 그 손잡이가 포인터를 잡고
+    있다. 열 폭이 0 이라 어차피 안 보이고, 다시 오른쪽으로 끌면 같은 몸짓 안에서 도로 열린다.
+   ⚠ 좁은 폭(≤900)은 서랍이라 `min-width: 901px` 로 잠근다(app-ctx 와 같은 이유). */
+@media (min-width: 901px) {
+  #v2-root.rail-mode.side-closed { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+  #v2-root.rail-mode.side-closed.no-aside { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 0 0; }
+  #v2-root.side-closed > .v2-side { overflow: hidden; visibility: hidden; border-right: 0; }
+  #v2-root.side-closed > .v2-side + .v2-split-x { overflow: hidden; }
+}

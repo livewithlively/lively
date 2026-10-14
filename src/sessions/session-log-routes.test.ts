@@ -75,6 +75,57 @@ async function main(): Promise<void> {
     } finally { close(); }
   }
 
+  // ── ⑥ 검색 기록 요약(#4530)은 관리자만 — 검색어는 그 사람이 찾던 것이다. 가드가 DB 앞에 있어 이 경로는 DB 무접촉. ──
+  //   이 줄(isAdmin)이 사라지면 모든 구성원의 검색어가 누구에게나 보인다 — 저장소 시험(search-log.pg-test)은 이걸 못 잡는다(격리 리뷰).
+  {
+    const app = express();
+    app.use(express.json({ limit: "1mb" }));
+    registerSessionLogRoutes(app, fakeVerifier);        // u1 — 권한(scopes) 없음 = 관리자 아님
+    const { port, close } = await listen(app);
+    try {
+      const r = await new Promise<Resp>((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port, method: "GET", path: "/api/ui/v6/search-log/summary?days=7", headers: { authorization: "Bearer x" } }, (res) => {
+          let data = ""; res.setEncoding("utf8");
+          res.on("data", (c) => (data += c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+        });
+        const to = setTimeout(() => req.destroy(new Error("client-timeout")), 2000);
+        req.on("close", () => clearTimeout(to));
+        req.on("error", reject);
+        req.end();
+      });
+      assert.equal(r.status, 403, "🔴 관리자가 아니면 403 — 남의 검색어를 보여 주면 안 된다");
+      assert.doesNotMatch(r.body, /"abandoned"|"total"/, "요약 본문이 실려 나가지 않는다");
+      ok("⑥ 검색 기록 요약 — 관리자가 아니면 403");
+    } finally { close(); }
+  }
+
+  // ── ⑦ 맞은 말 검색의 POST(#4553 — 세션 이력 사이드바에서 고른 범위) — 본문의 sessions 를 **읽는다**. ──
+  //   틀린 목록은 400(조용히 버리고 남은 것으로 찾으면 «그 범위 안에서 찾았다» 는 답이 거짓이 된다), 빈 목록은 저장 쪽에 묻지 않고 빈 답.
+  //   검증과 빈 목록 답이 getRuntimeConfig(DB) 앞에 있어 이 경로는 DB 무접촉. 저장 쪽(그 세션의 말만)은 session-history.pg-test M19~M23.
+  {
+    const app = express();
+    app.use(express.json({ limit: "1mb" }));
+    registerSessionLogRoutes(app, fakeVerifier);
+    const { port, close } = await listen(app);
+    const search = (body: unknown): Promise<Resp> => post(port, "/api/ui/v6/session-search/messages", { body: Buffer.from(JSON.stringify(body)), contentType: "application/json" });
+    try {
+      for (const [name, sessions] of [["배열이 아님", "c1"], ["id 꼴이 아닌 값", ["c1", "a b"]], ["글자가 아닌 값", ["c1", 5]], ["상한 초과", Array.from({ length: 5001 }, (_, i) => "s" + i)]] as Array<[string, unknown]>) {
+        const r = await search({ q: "검색", sessions });
+        assert.equal(r.status, 400, `🔴 sessions ${name} → 400`);
+        assert.match(r.body, /sessions/, "무엇이 틀렸는지 말한다");
+      }
+      ok("⑦ 맞은 말 검색 POST — 틀린 sessions 는 400(배열 아님 · id 꼴 아님 · 글자 아님 · 상한 초과)");
+      const empty = await search({ q: "검색", sessions: [] });
+      assert.equal(empty.status, 200, "빈 목록은 오류가 아니다");
+      assert.deepEqual(JSON.parse(empty.body), { hits: [], total: 0, sessions: 0, capped: false, words: [], pending: 0 }, "🔑 빈 목록 = 찾을 세션이 없다 → 빈 답(전체에서 찾지 않는다)");
+      ok("⑦ 맞은 말 검색 POST — 빈 sessions 는 저장 쪽에 묻지 않고 빈 답");
+      const noq = await search({ sessions: "틀린 값" });
+      assert.equal(noq.status, 200, "검색어가 없으면 종전처럼 빈 답이 먼저다");
+      ok("⑦ 맞은 말 검색 POST — 검색어가 없으면 빈 답(종전 GET 과 같은 순서)");
+    } finally { close(); }
+  }
+
   // ── readRawBody 격리 검증(전역 express.json 뒤에 둔 라우트에서) — 세 가지 ──
   const LIMIT = 16;
   const rawApp = express();

@@ -26,18 +26,29 @@
 //  카드인 동안 터미널 액자에 «glass» 를 보낸다(terminal.ts 가 xterm 바탕을 투명으로 바꾼다).
 //  또렷해지는 것은 둘뿐이다 — 마우스가 카드 위에 있다(CSS :hover) · 사람이 카드를 골랐다(누름·초점 = 격자의 cm-live).
 //  세션이 답을 기다려도 사람이 사이드바를 골랐으면 비친다. 무엇을 보고 있는지는 사람이 고른 칸이 정한다.
+//  비친 카드에서 사이드바를 한 번 더 누르면 알약으로 접는다(원준 2026-10-11). 최소화는 언제나 가장 작은 폭(PILL_W)이다.
 import { el } from '../core.js';
 import { MOBILE_MQ } from './mobile.js';
 import { pnIcon } from './panes-kit.js';
+import { SESSION_INPUT_EVENT } from './sess-input.js';   // 세션 입력칸에 글이 들어왔다(잎 모듈)
 import {
-  CARD_DEF, SIDE_DEF, type CardEdge, type CardState, clampCard, moveCard, overProgress, overZone, parseCard, resizeCard, shouldCommit, sideCap,
+  PILL_W, SIDE_DEF, type Box, type CardAnchor, type CardEdge, type CardRect, anchorFromRect, defaultAnchor, defaultCardSize, liftAbove,
+  moveCard, overProgress, overZone, parsePrefs, rectFromAnchor, resizeCard, shouldCommit, sideCap,
 } from '../lib/side-card-geom.js';
 import { isLive, nextPicked } from '../lib/side-card-live.js';   // 또렷 · 비침의 판정(순수 함수)
 
-//  카드의 자리 · 크기 · 접힘. 브라우저마다(사람마다) 하나다.
-//  ⚠ 이름 끝의 2 = 기본 크기를 420×560 → 320×240 으로 줄인 판(2026-09-30). 종전 키에 적힌 큰 크기를 물려받으면
-//   이미 한 번 끌어 본 사람에게는 새 기본값이 영영 안 보인다 — 한 번은 모두 새 기본값에서 시작한다.
-const KEY_CARD = 'lively_v2_side_card2';
+//  사람이 옮긴 자리 · 바꾼 크기(lib parsePrefs). 브라우저마다(사람마다) 하나다. 최소화 · 고름은 여기 적지 않는다 — 셸이 세션마다
+//   적는다(onState → restore, 2026-10-10). 손잡이를 끌어 카드가 되면 늘 펼친 카드다.
+//  ⚠ 3 판(2026-10-09)부터 자리를 «가장 가까운 모서리 + 거리» 로 적고 옮김 · 바꿈을 따로 기억한다. 그 전 키(…card2)는
+//   r · b 와 접힘을 한 덩이로 적어서, 한 번 접기만 눌러도 기본 자리가 «옮긴 자리» 로 굳었다 — 읽지 않는다.
+const KEY_CARD = 'lively_v2_side_card4';
+//  ⚠ 4 = 기본 크기를 줄인 판(2026-10-11). 3 의 «바꾼 크기» 는 버린다 — 그 크기는 대개 10-09 판에서 알약 폭을 넓히다 카드 폭까지
+//   커진 것이라(그때는 알약 폭 = 카드 폭) 새 기본 크기가 안 보였다. «옮긴 자리» · 세션 쪽은 이어 받는다.
+const KEY_CARD_OLD = 'lively_v2_side_card3';
+/** 알약(최소화한 카드)을 한 번 누르면 편다 — 두 번 누르기(크게)와 섞이지 않게 이만큼 기다린다. */
+const PILL_CLICK_MS = 220;
+/** 곁칸 «누름» 의 허용 흔들림 — 이보다 멀리 끌고 놓으면 끌기 · 글자 고르기다(최소화하지 않는다). */
+const SIDE_PRESS_PX = 6;
 /** 카드가 다 뜬 뒤 또렷하게 보여 주는 시간. 그 뒤 사람이 카드를 고르지 않았으면 비친다. */
 const ENTER_LIVE_MS = 1200;
 const EDGES: CardEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
@@ -55,16 +66,25 @@ export interface SideCardHost {
   settle?: (sideW: number) => void;
   /** 세션이 열로 돌아온 직후. */
   onLeft?: () => void;
+  /** 세션 열이 지금 격자의 왼쪽에 서 있나(자리바꿈 전이면 참). 카드가 처음 뜨는 모서리를 고른다 — 세션이 줄어든 쪽. */
+  sessionLeft?: () => boolean;
+  /** 카드의 최소화 · 고름(카드를 골랐나 = 불투명)이 바뀌었을 때. 셸이 이 세션의 것으로 적는다 — 새로고침 · 세션 전환 뒤
+   *  restore 로 되돌려 준다(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»). */
+  onState?: (s: CardState) => void;
 }
+/** 세션마다 적어 두는 카드 상태. fold = 최소화(알약) · pick = 사람이 카드를 골랐나(불투명 · 터미널 초점). */
+export interface CardState { fold: boolean; pick: boolean }
 
 export interface SideCardHandle {
   active: () => boolean;
   /** 끄는 중. 상한을 넘긴 거리(px, 0 이상). */
   onOver: (overPx: number) => void;
-  /** 손을 놓았다. 카드 전환 구간에서 놓았으면 true(자리바꿈 판정을 건너뛴다). */
-  onRelease: () => boolean;
-  /** 세션에 들어올 때. 움직임 없이 그 세션의 상태를 입힌다. */
-  restore: (card: boolean) => void;
+  /** 손을 놓았다. 카드 전환 구간에서 놓았으면 true. 덜 넘겨 놓았으면(카드가 안 된다) 사이드바가 상한으로 물러난 **뒤**
+   *  `back` 을 부른다 — 셸은 거기서 자리바꿈을 판정하고 폭을 적는다. 세션 열이 최소 폭에 닿고 손이 조금이라도 더 가면
+   *  이 구간이라, 여기서 판정을 건너뛰면 자리바꿈이 사라진다(원준 2026-10-01 «세션이 30% 로 작아져도 좌우가 안 바뀐다»). */
+  onRelease: (back?: () => void) => boolean;
+  /** 세션에 들어올 때. 움직임 없이 그 세션의 상태를 입힌다. st = 그 세션에 적어 둔 최소화 · 고름(없으면 펼침 · 고름). */
+  restore: (card: boolean, st?: Partial<CardState>) => void;
   /** 사이드바 여닫기 · 폭 문턱이 바뀐 뒤 다시 그린다. */
   sync: () => void;
   /** 세션을 열로 되돌린다. */
@@ -119,24 +139,49 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   let stopDrag: (() => void) | null = null;   // 카드를 끌고 있으면 그 끌기를 끝내는 함수
   //  사람이 카드를 골랐나(카드를 눌렀다 · 초점이 카드 안에 있다). 사이드바를 누르면 풀린다. 참이면 비치지 않는다.
   let picked = false;
+  //  액자에 마지막으로 알린 «보임:고름» 과 셸에 마지막으로 보고한 «최소화:고름». 바뀐 것만 보낸다(paintLive · report).
+  //   ⚠ 여기(마운트 맨 앞)에 둔다 — 아래 함수들이 마운트 끝의 첫 paint() 에서 읽는다.
+  let glassKey = '';
+  let lastState = '';
   let entering = false;                        // 막 떠오른 참이다(ENTER_LIVE_MS 동안 또렷)
   let enterTimer = 0;
-  let card: CardState = ((): CardState => { try { return parseCard(localStorage.getItem(KEY_CARD)); } catch (_) { return parseCard(null); } })();
+  //  ── 카드의 크기 · 자리 · 접힘 ──
+  //  size · anchor 가 null 이면 «사람이 정한 적 없음» 이다 — 그리는 순간의 창 · 격자로 기본값을 다시 센다(창 크기가 바뀌어도
+  //  기본 자리는 늘 세션 쪽 사이드바 아래 모서리). 사람이 크기를 바꾸거나 옮기면 그 값을 쥐고 브라우저에 적는다.
+  const prefs = ((): ReturnType<typeof parsePrefs> => {
+    try {
+      const cur = localStorage.getItem(KEY_CARD);
+      if (cur !== null) return parsePrefs(cur);
+      return { ...parsePrefs(localStorage.getItem(KEY_CARD_OLD)), sized: false, w: 0, h: 0 };
+    } catch (_) { return parsePrefs(null); }
+  })();
+  let size: { w: number; h: number } | null = prefs.sized ? { w: prefs.w, h: prefs.h } : null;
+  let anchor: CardAnchor | null = prefs.placed ? { corner: prefs.corner, dx: prefs.dx, dy: prefs.dy } : null;
+  let fold = false;                            // 최소화(알약). 셸이 세션마다 적는다(report → onState)
+  let pillW: number = PILL_W;                  // 알약 폭 — 최소화할 때마다 가장 작은 폭으로 돌아간다. 적지 않는다
+  let sessLeft = prefs.left;                   // 카드가 될 때 세션이 줄어든 쪽(기본 자리를 고른다) · 다시 불러온 카드는 마지막 값
 
   const bw = (): number => body.clientWidth;
-  const bh = (): number => body.clientHeight;
+  //  카드가 움직일 수 있는 범위는 **창 전체**다(원준 2026-10-07 «곁칸 안쪽으로 너무 제한적»). 카드는 position: fixed 라
+  //   자리(r · b)도 창의 오른쪽 · 아래 가장자리에서 센다. 사이드바 폭 셈(상한 · 전환 구간)은 그대로 격자(bw)로 한다.
+  //   격자가 화면에 없으면(다른 탭) 카드도 없다 — 창 크기는 늘 재지므로 판정은 bw() > 0 으로 한다.
+  const vw = (): number => document.documentElement.clientWidth || window.innerWidth;
+  const vh = (): number => document.documentElement.clientHeight || window.innerHeight;
   //  이 칸 셸이 화면에 없을 수 있다(다른 탭을 보고 있다). 그때 격자 폭은 0 이고, 0 으로 센 상한은 뜻이 없다.
   //  폭을 못 재면 사이드바 폭을 적지 않는다(잴 수 있을 때 다시 맞춘다).
   const capNow = (): number | null => (bw() > 0 ? sideCap(bw()) : null);
   const shown = (): boolean => on && h.sideOn() && !narrow();
-  const save = (): void => { try { localStorage.setItem(KEY_CARD, JSON.stringify(card)); } catch (_) { /* 적지 못해도 이번 화면은 된다 */ } };
+  const save = (): void => {
+    const v = { w: size?.w ?? 0, h: size?.h ?? 0, sized: !!size, corner: anchor?.corner ?? 'br', dx: anchor?.dx ?? 0, dy: anchor?.dy ?? 0, placed: !!anchor, left: sessLeft };
+    try { localStorage.setItem(KEY_CARD, JSON.stringify(v)); } catch (_) { /* 적지 못해도 이번 화면은 된다 */ }
+  };
 
   // ── 끄는 중 예고 ──
   const hint = el('div', { class: 'sw-hint cm-hint', hidden: true }) as HTMLElement;
   // ── 카드 머리줄 오른쪽의 단추 둘: 최소화(접기) · 크게 보기(세션을 가운데로) ──
   //  창 단추의 관례대로 가로줄 = 최소화, 대각선 화살표 = 크게. 접혀 있으면 최소화 단추가 «다시 펴기»(창 그림)가 된다(원준 2026-10-01).
   //  머리줄 두 번 누르기는 «크게» 다 — 작은 카드를 두 번 누르는 사람은 크게 보려는 것이다(종전엔 접기였다).
-  const minBtn = el('button', { class: 'cm-ic cm-min-b', type: 'button', onclick: () => setFold(!card.fold) },
+  const minBtn = el('button', { class: 'cm-ic cm-min-b', type: 'button', onclick: () => setFold(!fold) },
     pnIcon('minus', 'pn-i sm')) as HTMLButtonElement;
   const maxBtn = el('button', { class: 'cm-ic cm-max-b', type: 'button', title: '크게 봅니다 — 세션을 가운데로 되돌립니다 (머리줄 두 번 누르기)', 'aria-label': '세션 크게 보기', onclick: () => leave() },
     pnIcon('expand', 'pn-i sm')) as HTMLButtonElement;
@@ -147,16 +192,58 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   body.append(hint);
 
   function paintFold(): void {
-    minBtn.title = card.fold ? '다시 폅니다' : '최소화합니다 — 머리줄만 남습니다';
-    minBtn.setAttribute('aria-label', card.fold ? '카드 다시 펴기' : '카드 최소화');
-    minBtn.setAttribute('aria-expanded', String(!card.fold));
-    minBtn.replaceChildren(pnIcon(card.fold ? 'window' : 'minus', 'pn-i sm'));
+    minBtn.title = fold ? '다시 폅니다 (알약을 눌러도 펴집니다)' : '최소화합니다 — 머리줄만 남습니다';
+    minBtn.setAttribute('aria-label', fold ? '카드 다시 펴기' : '카드 최소화');
+    minBtn.setAttribute('aria-expanded', String(!fold));
+    minBtn.replaceChildren(pnIcon(fold ? 'window' : 'minus', 'pn-i sm'));
   }
 
+  /** 최소화한 카드의 보이는 높이(머리줄 + 테두리) — 자리의 세로 범위를 이 높이로 센다(lib clampCard). 펴 있으면 undefined. */
+  const foldH = (): number | undefined => {
+    if (!fold) return undefined;
+    const head = colMain.querySelector('.sc-head') as HTMLElement | null;
+    return (head?.offsetHeight || 42) + 2;
+  };
+  /** 아래쪽에 떠 있는 막대 — 곁칸 앱 막대(.pn-dock-shelf, 사람이 끌어 옮길 수 있다). 기본 자리는 이것을 덮지 않는다. */
+  function obstacles(): Box[] {
+    const out: Box[] = [];
+    for (const n of Array.from(h.sidePane.querySelectorAll('.pn-dock-shelf')) as HTMLElement[]) {
+      const q = n.getBoundingClientRect();
+      if (q.width > 0 && q.height > 0) out.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom });
+    }
+    return out;
+  }
+  /** 기본 자리 — 세션 쪽 아래 모서리, 아래 막대와 겹치면 그 위로. w · seenH = 그릴 폭 · 보이는 높이. */
+  function defaultPlace(w: number, seenH: number): CardAnchor {
+    const g = body.getBoundingClientRect();
+    return liftAbove(defaultAnchor(sessLeft, g.left, g.right, vw()), w, seenH, obstacles(), vw(), vh());
+  }
+  /** 지금 그릴 자리(창 기준 r · b). 사람이 정한 크기 · 자리가 없으면 창 · 격자로 기본값을 센다 — 아래 막대와 겹치면 그 위로. */
+  function currentRect(): CardRect {
+    const s = size ?? defaultCardSize(vh());
+    const fh = foldH();
+    //  알약은 알약 폭으로 그린다 — 붙은 모서리 쪽으로 줄어든다(왼쪽 모서리면 왼쪽 가장자리, 오른쪽이면 오른쪽 가장자리가 그대로).
+    const w = fold ? pillW : s.w;
+    const a = anchor ?? defaultPlace(w, fh ?? s.h);
+    return rectFromAnchor(w, s.h, a, vw(), vh(), fh);
+  }
+  /** 크기를 바꾼 뒤의 자리. 옮긴 적이 없고 자리(붙은 모서리와 거리)가 기본 자리 그대로면 «옮긴 자리» 로 굳히지 않는다 —
+   *  폭만 바꿨는데 자리가 사람이 고른 것으로 적히면 막대 피하기 · 세션 쪽 고르기가 거기서 멈춘다(리뷰 2026-10-09). */
+  function placeAfterResize(c: CardRect, fh: number | undefined, wasPlaced: boolean): CardAnchor | null {
+    const a = anchorFromRect(c, vw(), vh(), fh);
+    if (wasPlaced) return a;
+    const d = defaultPlace(c.w, fh ?? c.h);
+    return a.corner === d.corner && a.dx === d.dx && a.dy === d.dy ? null : a;
+  }
   /** 카드의 자리와 크기를 화면에 입힌다. */
   function paintRect(): void {
-    if (!(bw() > 0 && bh() > 0)) return;
-    const c = clampCard(card, bw(), bh());
+    if (!(bw() > 0 && vw() > 0 && vh() > 0)) return;
+    const c = currentRect();
+    //  카드가 사이드바의 왼쪽 절반에 있나 — 뷰어의 배율 단추를 카드 반대쪽 아래에 둔다(CSS cm-card-left).
+    //  창이 아니라 사이드바 기준: 창 폭 1116 에서 기본 카드(왼쪽 422)는 창 가운데를 넘지만 사이드바로는 왼쪽이다(프리뷰 실측).
+    //  카드가 아닐 때(크게 본 뒤 남은 그리기)는 떼어 둔다.
+    const sp = h.sidePane.getBoundingClientRect();
+    body.classList.toggle('cm-card-left', shown() && vw() - c.r - c.w / 2 < (sp.left + sp.right) / 2);
     body.style.setProperty('--cm-w', c.w + 'px');
     body.style.setProperty('--cm-h', c.h + 'px');
     body.style.setProperty('--cm-r', c.r + 'px');
@@ -171,10 +258,11 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (s && !wasShown) picked = focusInCard();
     wasShown = s;
     body.classList.toggle('cm', s);
-    body.classList.toggle('cm-fold', s && card.fold);
+    body.classList.toggle('cm-fold', s && fold);
     ctl.hidden = !s;
-    for (const g of grips) g.hidden = !s || card.fold;
-    if (s) { paintRect(); paintFold(); }
+    //  알약(최소화)은 좌우 가장자리로 폭만 바꾼다 — 높이는 머리줄 한 줄이라 위아래 · 모서리 손잡이는 없다.
+    for (const g of grips) g.hidden = !s || (fold && g.dataset.edge !== 'e' && g.dataset.edge !== 'w');
+    if (s) { paintRect(); paintFold(); } else body.classList.remove('cm-card-left');
     paintLive();
     postGlass();
     syncWatch();
@@ -186,12 +274,30 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     const a = document.activeElement;
     return !!a && a !== document.body && colMain.contains(a);
   };
-  function paintLive(): void { body.classList.toggle('cm-live', isLive({ shown: shown(), entering, picked })); }
+  function paintLive(): void {
+    body.classList.toggle('cm-live', isLive({ shown: shown(), entering, picked }));
+    //  고름이 바뀌면 액자에도 알린다 — 비치는(고르지 않은) 카드의 터미널은 연결될 때 스스로 초점을 가져가지 않는다.
+    const k = shown() + ':' + picked;
+    if (k !== glassKey) { glassKey = k; postGlass(); }
+    report();
+  }
+  /** 최소화 · 고름이 바뀌었으면 셸에 알린다(카드가 보일 때만 — 안 보이는 동안의 값은 사람이 고른 것이 아니다).
+   *  ⚠ 지킬 것: fold · picked 를 바꾸는 곳은 모두 곧바로 paintLive(→ report)를 거친다. 그래야 카드가 보이는 동안 늘
+   *   lastState = 지금 값이고, 세션을 바꾸는 순간(셸이 새 세션을 고른 뒤 restore 전) 누가 report 를 불러도 앞 세션의 값을
+   *   새 세션 기록에 적지 않는다(같은 값이라 아무것도 안 보낸다). restore 는 되살린 값으로 lastState 를 맞춘다. */
+  function report(): void {
+    if (dead || !shown()) return;
+    const k = fold + ':' + picked;
+    if (k === lastState) return;
+    lastState = k;
+    try { h.onState?.({ fold, pick: picked }); } catch (_) { /* 셸이 못 적어도 화면은 된다 */ }
+  }
+  /** 액자에 보낼 비침 상태. idle = 비치고 있고 사람이 카드를 고르지 않았다(곁칸을 골랐다). */
+  const glassMsg = (): { type: string; cmd: string; on: boolean; idle: boolean } => ({ type: 'lively-term', cmd: 'glass', on: shown(), idle: shown() && !picked });
   /** 카드 안의 터미널 액자에 비침을 켜고 끈다. 액자가 아직 안 떴으면 받지 못하는데, 뜨면 상태를 알려 오므로(onFrameMsg) 그때 다시 보낸다. */
   function postGlass(): void {
-    const v = shown();
     for (const f of Array.from(colMain.querySelectorAll('iframe.sc-term-frame')) as HTMLIFrameElement[]) {
-      try { f.contentWindow?.postMessage({ type: 'lively-term', cmd: 'glass', on: v }, location.origin); } catch (_) { /* 액자가 닫혔다 */ }
+      try { f.contentWindow?.postMessage(glassMsg(), location.origin); } catch (_) { /* 액자가 닫혔다 */ }
     }
   }
   function onFrameMsg(ev: MessageEvent): void {
@@ -199,7 +305,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (ev.origin !== location.origin || !m || m.type !== 'lively-term-status') return;
     for (const f of Array.from(colMain.querySelectorAll('iframe.sc-term-frame')) as HTMLIFrameElement[]) {
       const w = f.contentWindow;
-      if (w && w === ev.source) { try { w.postMessage({ type: 'lively-term', cmd: 'glass', on: shown() }, location.origin); } catch (_) { /* noop */ } }
+      if (w && w === ev.source) { try { w.postMessage(glassMsg(), location.origin); } catch (_) { /* noop */ } }
     }
   }
   //  사람이 무엇을 골랐나 — 카드 안이면 고름, 사이드바 안이면 풂. 그 밖(카드에서 연 창 · 왼쪽 목록 · 레일)은 그대로 둔다
@@ -209,10 +315,43 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (!n) return;
     picked = nextPicked(picked, colMain.contains(n) ? 'card' : h.sidePane.contains(n) ? 'side' : 'other');
   }
-  const onDownCap = (e: PointerEvent): void => { if (!shown()) return; pickFrom(e.target as Node | null); paintLive(); };
+  //  ── 곁칸을 한 번 더 누르면 최소화(원준 2026-10-11 «한 번 밖에 누르면 투명해지잖아. 투명해진 다음에 한 번 더 누르면 최소화») ──
+  //   카드가 비친 상태(고르지 않음 · 막 떠오르는 중 아님 · 펼침)일 때 곁칸을 누르면(6px 안에서 놓음) 알약으로 접는다.
+  //   또렷할 때 누르면 종전대로 비치기만 한다. 비친 상태인지는 **누르는 순간**(고름을 바꾸기 전)에 잰다.
+  //   곁칸 안 액자(웹 칸 · 앱 화면) 안의 누름은 이 문서에 오지 않는다 — 초점 이동만 오는데, 그건 앱이 스스로 옮길 때도 생겨 세지 않는다.
+  const seeThrough = (): boolean => shown() && !picked && !entering && !fold;
+  let sideDown: { id: number; x: number; y: number; was: boolean } | null = null;
+  const onDownCap = (e: PointerEvent): void => {
+    sideDown = null;                     // 앞 누름의 놓기를 못 들었어도(카드가 숨은 사이) 남기지 않는다
+    if (!shown()) return;
+    const t = e.target as Node | null;
+    //  세션에 글을 넣는 단추([본문 넣기] · [이 세션에 넣기], data-card-keep)는 접지 않는다 — 넣은 글이 접힌 카드 속에 숨는다(리뷰).
+    const keep = t instanceof Element && !!t.closest('[data-card-keep]');
+    sideDown = t && h.sidePane.contains(t) && e.button === 0 && e.isPrimary && !keep ? { id: e.pointerId, x: e.clientX, y: e.clientY, was: seeThrough() } : null;
+    pickFrom(t);
+    paintLive();
+  };
+  const onUpCap = (e: PointerEvent): void => {
+    const d = sideDown;
+    sideDown = null;
+    if (!d || d.id !== e.pointerId || dead) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > SIDE_PRESS_PX) return;   // 끌기 · 글자 고르기는 누름이 아니다
+    if (d.was && shown() && !fold) setFold(true);
+  };
+  const onCancelCap = (e: PointerEvent): void => { if (sideDown && sideDown.id === e.pointerId) sideDown = null; };
+  //  세션 입력칸에 글이 들어왔다(곁칸 «프로젝트» 앱의 [본문 넣기] 등 — session-chat.ts 가 입력칸에서 알린다). 사람이 읽고 고쳐 보내야
+  //   하므로 카드를 펴고 고른 것으로(또렷) 둔다 — 접힌 카드 · 비친 카드 속으로 글이 숨지 않게.
+  const onSessInput = (): void => {
+    if (dead || !shown()) return;
+    picked = true;
+    if (fold) setFold(false); else paintLive();
+  };
+  colMain.addEventListener(SESSION_INPUT_EVENT, onSessInput);
   const onFocusIn = (e: FocusEvent): void => { if (!shown()) return; pickFrom(e.target as Node | null); paintLive(); };
   const onWinBlur = (): void => { window.setTimeout(() => { if (dead || !shown()) return; pickFrom(document.activeElement); paintLive(); }, 0); };
   document.addEventListener('pointerdown', onDownCap, true);
+  document.addEventListener('pointerup', onUpCap, true);
+  document.addEventListener('pointercancel', onCancelCap, true);
   document.addEventListener('focusin', onFocusIn);
   window.addEventListener('blur', onWinBlur);
   window.addEventListener('message', onFrameMsg);
@@ -244,11 +383,15 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     paintLive();
   }
 
+  /** 최소화 ↔ 펼침. 카드가 붙은 모서리 쪽으로 접히고 펴진다(아래 모서리면 위로 펴지고, 위 모서리면 아래로). 브라우저 기억(KEY_CARD)에는
+   *  적지 않고 셸이 세션마다 적는다(paint → paintLive → report). */
   function setFold(v: boolean): void {
-    card = { ...card, fold: v };
-    save();
+    window.clearTimeout(pillTimer);
+    if (v) pillW = PILL_W;               // 최소화는 언제나 가장 작은 폭에서 시작한다
+    fold = v;
     paint();
   }
+  let pillTimer = 0;
 
   // ── 끄는 중: 사이드바가 세션 위를 덮는다 ──
   function paintOver(px: number): void {
@@ -272,30 +415,35 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     hint.hidden = false;
   }
 
-  function onRelease(): boolean {
+  function onRelease(back?: () => void): boolean {
     hint.hidden = true;
     if (dead || busy || on || over <= 0) { over = 0; return false; }
     const from = over;
     over = 0;
     if (shouldCommit(overProgress(from, bw()))) void enter(from);
-    else void cancel(from);
+    else void cancel(from, back);
     return true;
   }
 
-  /** 덜 넘기고 놓았다. 사이드바가 상한으로 물러난다. */
-  async function cancel(from: number): Promise<void> {
+  /** 덜 넘기고 놓았다. 사이드바가 상한으로 물러난 뒤 back(자리바꿈 판정)을 부른다 — 물러나는 동안 자리가 미끄러지면 두 움직임이 겹친다. */
+  async function cancel(from: number, back?: () => void): Promise<void> {
     const g = ++gen, alive = (): boolean => !dead && g === gen;
     busy = true;
     await tween(200, EASE, (t) => paintOver(from * (1 - t)), alive);
     if (!alive()) return;
     clearOver();
     busy = false;
+    back?.();
   }
 
   /** 카드로 바꾼다. from = 놓은 순간 넘겨 있던 거리. */
   async function enter(from: number): Promise<void> {
     const g = ++gen, alive = (): boolean => !dead && g === gen;
     busy = true;
+    //  카드가 뜰 모서리 = 세션이 줄어든 쪽. 자리바꿈 판정(settle)이 자리를 바꾸기 **전에** 잰다. 카드는 늘 펼쳐서 뜬다.
+    sessLeft = h.sessionLeft ? h.sessionLeft() : true;
+    fold = false;
+    save();                              // 세션 쪽을 적어 둔다(다시 불러온 카드도 같은 모서리)
     const zone = overZone(bw());
     const p0 = overProgress(from, bw());
     await tween(Math.max(120, 220 * (1 - p0)), OUT, (t) => paintOver(from + (zone - from) * t), alive);
@@ -311,6 +459,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     paint();
     h.onChange?.(true);
     if (cap !== null) h.settle?.(cap);
+    settleSoon();
     if (!reduceMotion() && typeof colMain.animate === 'function') {
       try {
         await colMain.animate(
@@ -339,6 +488,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     }
     if (!alive()) return;
     on = false;
+    fold = false;                        // 다음에 카드가 되면 다시 펼친 카드다(최소화한 채 크게 봤어도)
     const cap = capNow();
     //  물러날 폭 = 기본 폭(SIDE_DEF). 창이 좁아 상한이 그보다 작으면 상한.
     const to = cap === null ? null : Math.min(SIDE_DEF, cap);
@@ -371,29 +521,55 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     clearOver();
   }
 
-  function restore(v: boolean): void {
+  function restore(v: boolean, st?: Partial<CardState>): void {
     halt();
     on = !!v;
-    picked = focusInCard();
+    //  그 세션에 적어 둔 최소화 · 고름을 되살린다(새로고침 · 세션 전환). 앞 세션의 값은 따라오지 않는다 — 세션마다 적는다.
+    //   적어 둔 값이 없으면(옛 기록) 펼친 카드 · 고른 것 = 종전에 새로고침 뒤 터미널이 초점을 가져가 끝나던 모습.
+    fold = st?.fold === true;
+    pillW = PILL_W;                      // 되살린 알약도 가장 작은 폭
+    window.clearTimeout(pillTimer);
+    picked = typeof st?.pick === 'boolean' ? st.pick : true;
+    lastState = fold + ':' + picked;     // 되살린 값을 도로 적지 않는다
     const cap = capNow();
     if (on && cap !== null && h.sideOn() && !narrow()) h.setSideW(cap, false);
+    wasShown = shown();                  // 되살린 고름을 «다시 보이기 시작함» 의 초점 판정이 덮지 않게(paint)
     paint();
+    if (on) settleSoon();
+  }
+  //  카드가 된 직후엔 곁칸 앱 막대가 아직 옛 자리다(막대는 다음 그림 틀에서 다시 놓인다) — 두 틀 뒤 기본 자리를 다시 잰다.
+  let settleRaf = 0;
+  function settleSoon(): void {
+    cancelAnimationFrame(settleRaf);
+    settleRaf = requestAnimationFrame(() => {
+      settleRaf = requestAnimationFrame(() => { if (!dead && shown() && !busy && !anchor) paintRect(); });
+    });
   }
 
   // ── 카드 옮기기(머리줄을 끈다) · 크기 바꾸기(가장자리를 끈다) ──
+  let dragged = false;                         // 이번 누름이 끌기였나(알약 누름과 가른다)
   const INTERACTIVE = 'button, a, input, select, textarea, [contenteditable], [role="button"], .cm-grip';
   function dragStart(e: PointerEvent, kind: 'move' | CardEdge, grab: HTMLElement): void {
     if (e.button !== 0 || !shown() || busy || stopDrag || !(bw() > 0)) return;     // 끌기는 한 번에 하나(손가락 둘이 서로 다른 손잡이를 잡지 않게)
     e.preventDefault();
-    const base = clampCard(card, bw(), bh());
+    const fh = foldH();
+    const base = currentRect();
+    const wasPlaced = anchor !== null;
     const x0 = e.clientX, y0 = e.clientY;
+    dragged = false;
+    window.clearTimeout(pillTimer);              // 알약을 누르고 곧장 끌기 시작했다 — 끄는 도중에 펴지지 않게
     try { grab.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
     document.body.classList.add('cm-dragging');
     const move = (ev: PointerEvent): void => {
       if (dead || !shown() || !(bw() > 0)) return;
       const dx = ev.clientX - x0, dy = ev.clientY - y0;
-      const c = kind === 'move' ? moveCard(base, dx, dy, bw(), bh()) : resizeCard(base, kind, dx, dy, bw(), bh());
-      card = { ...c, fold: card.fold };
+      if (Math.hypot(dx, dy) > 3) dragged = true;               // 알약을 끌고 놓은 것은 «누름» 이 아니다(펴지 않는다)
+      if (!dragged) return;                                     // 손이 떨린 만큼은 옮김이 아니다(누른 자리를 «옮긴 자리» 로 굳히지 않는다)
+      const c = kind === 'move' ? moveCard(base, dx, dy, vw(), vh(), fh) : resizeCard(base, kind, dx, dy, vw(), vh(), fh);
+      //  옮기면 자리를, 크기를 바꾸면 크기와 (움직인 가장자리 쪽이 바뀌었으면) 자리를 쥔다. 자리는 가장 가까운 모서리로 다시 적는다.
+      //  알약을 넓히면 알약 폭만 — 카드 크기는 그대로다(펴면 제 크기로 돌아온다).
+      if (kind !== 'move') { if (fold) pillW = c.w; else size = { w: c.w, h: c.h }; anchor = placeAfterResize(c, fh, wasPlaced); }
+      else anchor = anchorFromRect(c, vw(), vh(), fh);
       paintRect();
     };
     let done = false;
@@ -404,7 +580,7 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       document.body.classList.remove('cm-dragging');
       grab.removeEventListener('pointermove', move); grab.removeEventListener('pointerup', up); grab.removeEventListener('pointercancel', up);
       try { grab.releasePointerCapture(e.pointerId); } catch (_) { /* 이미 놓였다 */ }
-      if (persist && !dead && bw() > 0) save();
+      if (persist && dragged && !dead && bw() > 0) save();
     };
     const up = (): void => end(true);
     stopDrag = () => end(false);
@@ -426,11 +602,19 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (head) dragStart(e, 'move', head);
   };
   colMain.addEventListener('pointerdown', onHeadDown);
-  //  카드에서 세션 이름 단추를 눌러도 이름 바꾸기를 열지 않는다(위 headOf). 먼저 받아(capture) 거기까지 내려가지 않게 한다.
+  //  카드 머리줄을 누름 — 먼저 받는다(capture).
+  //   · 세션 이름 단추를 눌러도 이름 바꾸기를 열지 않는다(위 headOf — 카드에서 이름은 ⋯ 메뉴로 바꾼다).
+  //   · 알약(최소화)이면 편다. 두 번 누르기(크게)와 섞이지 않게 PILL_CLICK_MS 기다린다. 끌고 놓은 것은 누름이 아니다.
   const onTitleClick = (e: MouseEvent): void => {
-    if (!shown() || !(e.target as HTMLElement | null)?.closest('.sc-head .sc-title-btn')) return;
-    e.stopPropagation();
-    e.preventDefault();
+    if (!shown()) return;
+    const t = e.target as HTMLElement | null;
+    if (!headOf(t)) return;
+    if (t?.closest('.sc-head .sc-title-btn')) { e.stopPropagation(); e.preventDefault(); }
+    const wasDrag = dragged;
+    dragged = false;                         // 이번 누름에서 한 번만 쓴다(남은 값이 다음 누름을 막지 않게)
+    if (!fold || wasDrag) return;
+    window.clearTimeout(pillTimer);
+    pillTimer = window.setTimeout(() => { if (!dead && shown() && fold) setFold(false); }, PILL_CLICK_MS);
   };
   colMain.addEventListener('click', onTitleClick, true);
   for (const g of grips) g.addEventListener('pointerdown', (e) => dragStart(e as PointerEvent, g.dataset.edge as CardEdge, g));
@@ -444,13 +628,19 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
   keyGrip.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!shown() || busy) return;
     const d: Record<string, [number, number]> = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] };
-    const base = clampCard(card, bw(), bh());
-    let next = null as ReturnType<typeof clampCard> | null;
-    if (e.key === 'Home') next = clampCard(CARD_DEF, bw(), bh());
-    else if (d[e.key]) next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], bw(), bh()) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], bw(), bh());
-    if (!next) return;
+    const fh = foldH();
+    const base = currentRect();
+    if (e.key === 'Home') {                    // 기억을 지우고 기본값(세션 쪽 모서리 · 처음 크기)
+      e.preventDefault();
+      size = null; anchor = null; pillW = PILL_W;
+      paintRect(); save();
+      return;
+    }
+    if (!d[e.key]) return;
     e.preventDefault();
-    card = { ...next, fold: card.fold };
+    const next = e.shiftKey ? moveCard(base, d[e.key][0], d[e.key][1], vw(), vh(), fh) : resizeCard(base, 'nw', d[e.key][0], d[e.key][1], vw(), vh(), fh);
+    if (!e.shiftKey) { if (fold) pillW = next.w; else size = { w: next.w, h: next.h }; anchor = placeAfterResize(next, fh, anchor !== null); }
+    else anchor = anchorFromRect(next, vw(), vh(), fh);
     paintRect();
     save();
   });
@@ -461,11 +651,12 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     if (!shown() || !headOf(e.target as HTMLElement | null)) return;
     e.stopPropagation();
     e.preventDefault();
+    window.clearTimeout(pillTimer);            // 알약을 두 번 눌렀다 — 펴지 말고 곧장 크게
     void leave();
   };
   colMain.addEventListener('dblclick', onHeadDbl, true);
 
-  // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 격자 안으로 다시 넣는다.
+  // 격자 크기가 바뀌면(창 · 왼쪽 사이드바 폭) 카드를 창 안으로 다시 넣는다.
   let ro: ResizeObserver | null = null;
   if (typeof ResizeObserver === 'function') {
     ro = new ResizeObserver(() => {
@@ -475,6 +666,9 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
     });
     ro.observe(body);
   }
+  //  카드는 창 기준이라 창 크기가 바뀌면 창 안으로 다시 넣는다(격자 폭이 그대로여도 창 높이는 바뀔 수 있다).
+  const onWinResize = (): void => { if (!dead && shown() && !busy) paintRect(); };
+  window.addEventListener('resize', onWinResize);
 
   paint();
 
@@ -492,13 +686,19 @@ export function mountSideCard(h: SideCardHost): SideCardHandle {
       colMain.removeEventListener('dblclick', onHeadDbl, true);
       colMain.removeEventListener('click', onTitleClick, true);
       document.removeEventListener('pointerdown', onDownCap, true);
+      document.removeEventListener('pointerup', onUpCap, true);
+      document.removeEventListener('pointercancel', onCancelCap, true);
+      colMain.removeEventListener(SESSION_INPUT_EVENT, onSessInput);
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onWinBlur);
       window.removeEventListener('message', onFrameMsg);
+      window.removeEventListener('resize', onWinResize);
+      window.clearTimeout(pillTimer);
+      cancelAnimationFrame(settleRaf);
       window.clearInterval(watchFocus);
       watchFocus = 0;
       document.body.classList.remove('cm-dragging');
-      body.classList.remove('cm', 'cm-fold', 'cm-over', 'cm-live');
+      body.classList.remove('cm', 'cm-fold', 'cm-over', 'cm-live', 'cm-card-left');
       for (const k of ['--cm-w', '--cm-h', '--cm-r', '--cm-b', '--cm-over', '--cm-p']) body.style.removeProperty(k);
       ctl.remove(); hint.remove();
       for (const g of grips) g.remove();

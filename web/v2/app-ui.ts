@@ -11,6 +11,7 @@
 import { api, el, toast } from '../core.js';
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
 import { ensureAppGrant } from './app-session.js';
+import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 보내려던 글을 그 세션 화면의 입력칸에 넣어 둔다(잎 모듈)
 //  #4530 앱 화면 안의 ⌘K → 셸 통합검색. omni.ts 를 직접 들이지 않는다 — 셸 화면 모듈 묶음(사이드바·자료 …)이 통째로 딸려 와
 //   앱 화면 묶음이 커지고, 창이 없는 곳에서 이 모듈을 실으면 그 묶음이 터진다(scripts/session-app-pane.test.mjs 가 잡았다).
 //   대신 셸이 듣는 같은 오리진 신호(OMNI_MSG, 가벼운 lib/omni-chord.ts 에 한 벌)를 이 창에 보낸다 — 셸의 bindOmniKey 가 받아 연다.
@@ -49,8 +50,8 @@ function buildCsp(csp?: AppCsp): string {
 }
 
 /** CSP meta + SDK 런타임을 문서 머리에 끼운다(doctype 뒤 · 없으면 맨 앞). srcdoc 은 HTTP 헤더가 없어 CSP 는 meta 로만. */
-function wrapAppHtml(html: string, csp?: AppCsp): string {
-  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>';
+function wrapAppHtml(html: string, csp?: AppCsp, extra?: string): string {
+  const head = buildCsp(csp) + '<script>' + APP_RUNTIME_JS + '</script>' + (extra ? '<script>' + extra + '</script>' : '');
   const m = /<!doctype[^>]*>/i.exec(html);
   if (m) { const i = m.index + m[0].length; return html.slice(0, i) + head + html.slice(i); }
   return head + html;
@@ -66,23 +67,44 @@ export interface AppUiFrame {
   subscribed(topic: string): boolean;
   /** 같은 HTML 로 앱 화면을 처음부터 다시 띄운다 — 구독하지 않은 앱에 «최신을 보여 주는» 가장 단순한 길. */
   reload(): void;
+  /** 이 프레임의 가장자리를 호스트가 가리는 폭(px)을 앱에 알린다(#4592 — 곁칸의 독). 다시 불러온 새 문서에도 처음에 한 번 다시 알린다. */
+  setInsets(i: AppInsets): void;
 }
+export interface AppInsets { top: number; right: number; bottom: number; left: number }
 
 /**
  * 앱 UI 를 샌드박스 iframe 으로 만들어 **프레임 + 정리 함수**를 돌려준다(호출부가 원하는 자리에 붙인다).
  *  브리지(postMessage)는 이 프레임에만 반응하는 핸들러로 걸리고 destroy() 가 떼어 낸다 — 여러 앱 UI 공존 안전.
  */
-export async function mountAppUiFrame(appId: string, opts?: { page?: string; title?: string; instanceId?: string; sessionId?: string }): Promise<AppUiFrame> {
+/** 앱이 호스트에 메뉴를 열어 달라고 했다 — items 는 앱의 항목(맨 위에 선다), x · y 는 **이 창** 기준 자리. 고른 앱 항목의 id 또는 null. */
+export interface AppMenuRequest { items: Array<{ id: string; label: string }>; x: number; y: number }
+export interface AppUiMountOpts {
+  page?: string; title?: string; instanceId?: string; sessionId?: string;
+  /** 앱이 호스트의 머리줄을 접거나 펴 달라고 했다(lively.ui.chrome). init = 새 문서가 막 인사했다(아직 아무것도 청하지 않았다). 없으면 그 능력이 없는 자리다. */
+  onChrome?: (c: { head: boolean; init?: boolean }) => void;
+  /** 앱이 호스트 메뉴를 열어 달라고 했다(lively.ui.openMenu). 없으면 못 여는 자리(인사의 capabilities.menu = false · 부르면 -32601). */
+  onMenu?: (req: AppMenuRequest) => Promise<string | null>;
+  /** 앱이 저를 화면 가득 띄워 달라고 했다(lively.ui.expand — #4629 «단추 하나로 그것만»). 없으면 못 하는 자리(capabilities.expand = false · 부르면 -32601). */
+  onExpand?: () => void;
+  /** #4443 앱 화면 안 글 상자에 초점이 들었다(true) · 났다(false). SDK 런타임이 바뀔 때만 알린다(ui/typing). 새 문서 · 다시 불러오기 ·
+   *  내려가기에선 호스트가 false 를 한 번 부른다(옛 문서는 «났다» 를 못 보낸다). 없으면 버린다. */
+  onTyping?: (on: boolean) => void;
+  /** #4592 앱 만들기 — 띄우는 쪽이 앱 문서에 함께 넣는 스크립트(찍어서 의견의 탐침). 셸 코드만 넘긴다(앱이 주는 것이 아니다). */
+  extraScript?: string;
+}
+export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Promise<AppUiFrame> {
   const q = opts?.page ? '/' + encodeURIComponent(opts.page) : '';
   const data = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/ui' + q) as AppUiData;
   if (!data || typeof data.html !== 'string') throw new Error('UI 를 받지 못했습니다');
-  const doc = wrapAppHtml(data.html, data.csp);
+  const doc = wrapAppHtml(data.html, data.csp, opts?.extraScript);
   const frame = el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || data.title || appId,
     sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
     srcdoc: doc,
   }) as HTMLIFrameElement;
   const topics = new Set<string>();   // 앱이 구독한 주제(ui/subscribe) — 다시 불러오면 비운다(새 문서가 다시 구독한다)
+  let insets: AppInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+  const sendInsets = (): void => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/insets', params: insets }, '*'); };
   let loads = 0;
 
   // 브리지 — 이 프레임(불투명 오리진)에서 온 메시지만. 응답 target 은 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
@@ -97,6 +119,11 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
       if (topic) topics.add(topic);
       return;
     }
+    if (msg.method === 'ui/typing') {
+      // 알림(id 없음)이라 답하지 않는다. 앱 화면 안 글 상자에 초점이 들고 났다(#4443 폰: 쓰는 동안 셸이 아래 탭 바를 걷는다).
+      opts?.onTyping?.((msg.params as { on?: unknown } | undefined)?.on === true);
+      return;
+    }
     if (msg.method === 'ui/omniOpen') {
       // 알림(id 없음) — 앱 화면 안에서 통합검색 키를 눌렀다(#4530). 셸이 연다. 답하지 않는다.
       //  사람의 키가 보내는 신호라 1초에 한 번이면 충분하다 — 앱이 연달아 보내 입력칸 초점을 빼앗지 못하게(격리 리뷰).
@@ -105,7 +132,11 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
       return;
     }
     if (msg.method === 'ui/initialize') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: data.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
+      opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
+      opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
+      //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
+      if (insets.top || insets.right || insets.bottom || insets.left) sendInsets();
     } else if (msg.method === 'tools/call') {
       const name = String(msg.params?.name ?? '');
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
@@ -121,6 +152,102 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out?.result ?? out }))
         .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+    } else if (msg.method === 'chat/send') {
+      // #4594 — 앱 화면이 **붙은 세션**에 글을 바로 보낸다(원준: 채우기가 아니라 보내기). 세션에 붙어 열린 화면에만 세션이 있다.
+      //  서버가 세 겹(동의·주인·붙음)을 다시 보고 표식 한 줄을 붙여 /prompt 와 같은 통로로 넣는다. 멈춘 세션(409 draft)은 실패로
+      //  끝내지 않고 그 세션 화면의 입력칸에 글을 넣어 둔다 — 사람이 보내면 그 말이 세션을 깨운다(#2439 되살리기 규칙).
+      //  ★ 세션은 **이 프레임을 띄운 쪽(opts)** 이 안다 — 앱이 params 로 세션 id 를 말해도 믿지 않는다(남의 세션에 보내는 통로가 된다).
+      //  ★ 사람이 누른 동작에서만 보낸다(격리 리뷰 차단 2b): iframe 안의 클릭은 부모 창의 transient activation 으로 전파되므로
+      //   `navigator.userActivation.isActive` 가 거짓이면 앱 코드가 저 혼자(타이머·데이터 변경 콜백) 보내는 것이다 → 거부.
+      //   그 API 가 없는 옛 브라우저는 막지 않는다(막으면 기능이 통째로 죽는다 — 서버의 빈도 상한이 남는다).
+      const sid = opts?.sessionId ?? '';
+      const text = String((msg.params as { text?: unknown } | undefined)?.text ?? '');
+      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다' } }); return; }
+      const ua = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation;
+      if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 보낼 수 있습니다' } }); return; }
+      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/chat-send', { method: 'POST', body: JSON.stringify({ session_id: sid, text }) });
+      void send()
+        .catch(async (e: any) => {
+          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // tools/call 과 같은 «그 자리에서 동의» 규칙(예전 범위 동의 포함)
+          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          return send();
+        })
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: true, session: sid, transport: out?.transport ?? null } }))
+        .catch((e: any) => {
+          if (e?.status === 409 && e?.body?.draft) {
+            //  멈춘 세션 — 서버가 표식을 붙인 글(draft_text)을 그 세션 화면의 입력칸에 넣어 둔다(sess-input 잎 모듈 — 화면이 떠 있어야 넣힌다).
+            const draft = String(e.body.draft_text || text);
+            const put = putIntoSession([sid], draft);
+            toast(put ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 — 보내면 세션이 깨어납니다.' : '세션이 멈춰 있어요 — 세션 화면을 열고 다시 보내 주세요.');
+            reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: false, session: sid, draft: put } });
+            return;
+          }
+          reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
+        });
+    } else if (msg.method === 'ui/chrome') {
+      // #4592 — 제 머리줄이 있는 앱이 호스트의 앱 머리줄(이름 · 판 · ⋯)을 접어 달라고 한다. 그 줄을 그리는 쪽(세션의 앱 칸)만 받는다.
+      const headOn = (msg.params as { head?: unknown } | undefined)?.head !== false;
+      if (opts?.onChrome) opts.onChrome({ head: headOn });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { ok: !!opts?.onChrome } });
+    } else if (msg.method === 'ui/expand') {
+      // #4629 — 앱의 단추 하나가 그 앱을 화면 가득(사이드바 없이) 띄운다. 띄울 수 있는 쪽(세션의 앱 칸)만 받는다.
+      if (!opts?.onExpand) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: '이 화면에서는 화면 가득 띄울 수 없습니다' } }); return; }
+      opts.onExpand();
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { ok: true } });
+    } else if (msg.method === 'ui/menu') {
+      // #4592 — 앱의 ⋯ 가 호스트의 앱 메뉴를 연다(앱의 항목이 맨 위). 자리는 프레임 안의 좌표로 오고, 여기서 이 창의 좌표로 옮긴다.
+      //  항목은 글자뿐이다(라벨 60자 · 12개까지) — 앱이 호스트 메뉴에 그림 · 마크업을 넣을 길이 없다. 고른 것은 id 만 돌려준다.
+      if (!opts?.onMenu) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: '이 화면에서는 호스트 메뉴를 열 수 없습니다' } }); return; }
+      const mp = (msg.params ?? {}) as { items?: unknown; x?: unknown; y?: unknown };
+      const items = (Array.isArray(mp.items) ? mp.items : []).slice(0, 12)
+        .map((it) => ({ id: String((it as { id?: unknown })?.id ?? '').slice(0, 40), label: String((it as { label?: unknown })?.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) }))
+        .filter((it) => it.id && it.label);
+      const r = frame.getBoundingClientRect();
+      const num = (v: unknown, max: number): number => { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : 0; };
+      void opts.onMenu({ items, x: r.left + num(mp.x, r.width), y: r.top + num(mp.y, r.height) })
+        .then((picked) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { picked: picked && items.some((it) => it.id === picked) ? picked : null } }))
+        .catch(() => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { picked: null } }));
+    } else if (msg.method === 'files/list' || msg.method === 'files/read') {
+      // #4592 — 앱 화면이 **붙은 세션의 프로젝트 자료**에서 파일 목록 · 내용을 읽는다(읽기만). 서버가 선언 · 동의 · 주인 · 붙음 · 프로젝트 가시성을 다시 본다.
+      //  ★ 세션은 이 프레임을 띄운 쪽(opts)이 안다 — chat/send 와 같은 까닭(앱이 말한 세션 id 를 믿으면 남의 세션 프로젝트를 읽는 통로가 된다).
+      const sid = opts?.sessionId ?? '';
+      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 파일을 볼 수 있습니다' } }); return; }
+      const p = (msg.params ?? {}) as { ext?: unknown; limit?: unknown; path?: unknown; scope?: unknown; q?: unknown; project?: unknown };
+      const qs = new URLSearchParams({ session_id: sid });
+      const list = msg.method === 'files/list';
+      if (list) {
+        const ext = (Array.isArray(p.ext) ? p.ext : (p.ext == null ? [] : [p.ext])).map((x) => String(x)).filter(Boolean);
+        if (ext.length) qs.set('ext', ext.join(','));
+        if (p.limit != null && Number.isFinite(Number(p.limit))) qs.set('limit', String(Math.round(Number(p.limit))));
+        // #4629 — 전체 자료(볼 수 있는 모든 프로젝트). 넓은 능력이라 서버가 제 선언 · 제 동의(app_workspace_files)로 따로 본다.
+        if (p.scope === 'all') { qs.set('scope', 'all'); if (typeof p.q === 'string' && p.q.trim()) qs.set('q', p.q.trim().slice(0, 100)); }
+      } else {
+        qs.set('path', String(p.path ?? ''));
+        //  프로젝트를 지목했는데 값이 이상하면 붙은 프로젝트로 조용히 돌리지 않는다(같은 이름의 다른 파일이 읽힌다).
+        if (p.project != null) {
+          if (typeof p.project !== 'number' || !Number.isInteger(p.project) || p.project <= 0) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: 'project 는 전체 자료 목록이 준 project_id(양의 정수)여야 합니다' } }); return; }
+          qs.set('project_id', String(p.project));
+        }
+      }
+      const read = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + (list ? '/files?' : '/file?') + qs.toString());
+      void read()
+        .catch(async (e: any) => {
+          if (e?.status !== 403 || !/동의|grant/i.test(String(e?.message || ''))) throw e;   // «그 자리에서 동의» — 앱이 갱신돼 이 권한을 새로 얻었을 때도
+          if (!(await ensureAppGrant(appId, opts?.title || data.title))) throw e;
+          return read();
+        })
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+    } else if (msg.method === 'prefs/get' || msg.method === 'prefs/set') {
+      // #4601 — 앱 × 보는 사람의 개인 설정. 샌드박스 화면은 localStorage 가 없고(불투명 오리진) SDK 에 신원이 없어 서버가 든다.
+      //  동의와 무관하다(설정은 라이블리 데이터가 아니라 그 사람이 앱을 보는 방식) — 그래서 tools/call 이 아니라 별도 경로.
+      const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/prefs';
+      const req = msg.method === 'prefs/get'
+        ? api(path)
+        : api(path, { method: 'POST', body: JSON.stringify({ patch: (msg.params as { patch?: unknown } | undefined)?.patch ?? {} }) });
+      void req
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { prefs: (out && out.prefs) || {} } }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 413 ? -32602 : -32000, message: (e && e.message ? e.message : String(e)) } }));
     } else if (msg.method === 'ui/openExternal') {
       // 샌드박스(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다. http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');
@@ -136,32 +263,65 @@ export async function mountAppUiFrame(appId: string, opts?: { page?: string; tit
   window.addEventListener('message', onMsg);
   return {
     root: frame,
-    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); },
+    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); },
     notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, '*'); },
     subscribed: (topic) => topics.has(topic),
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).
     //  WindowProxy 는 같은 프레임이면 그대로라 브리지(ev.source 비교)는 새 문서에도 그대로 맞는다.
-    reload: () => { topics.clear(); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+    reload: () => { topics.clear(); opts?.onTyping?.(false); frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->'; },
+    setInsets: (i) => {
+      const n = (v: number): number => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+      const next = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };
+      if (next.top === insets.top && next.right === insets.right && next.bottom === insets.bottom && next.left === insets.left) return;
+      insets = next; sendInsets();
+    },
   };
 }
 
 // ── 모달로 열기(전역 런치패드용) — 세션 화면 밖에서 앱 UI 를 띄울 때. panes 탭은 mountAppUiFrame 을 직접 쓴다. ──
 let uiEl: HTMLElement | null = null;
 let openFrame: AppUiFrame | null = null;
+let onCloseFn: (() => void) | null = null;   // 새 탭(#/full/…)으로 연 것이면 닫을 때 그 탭을 닫는다
 
-export async function openAppUi(appId: string, opts?: { page?: string; title?: string }): Promise<boolean> {
+//  #4600 sessionId — 붙은 앱 탭의 「크게 보기」가 같은 세션에 붙은 채로 크게 띄운다(앱 안의 lively.session 이 그대로 선다).
+//  크게 보기는 **늘 화면 가득**이다(원준 2026-10-12 «모달로 띄우는데 개짝아 · 완전 전체화면으로») — 사이드바도 여백도 없이 그 앱만, 머리줄 한 줄(이름 · 닫기).
+//   창 크기 ⇄ 화면 가득 토글(#4592 2026-10-09)은 걷었다: 모드가 둘이면 «크게» 를 눌렀는데 작게 뜨는 일이 생긴다. full 옵션은 호환으로만 남는다(늘 가득).
+/** 「크게 보기」 가 새 탭으로 여는 주소 — #/full/<앱>?s=<세션>&page=<화면>&t=<제목>. 그 탭은 사이드바 없이 그 앱만 띄운다(main.ts 의 full 갈래). */
+export function appFullHref(appId: string, opts?: { page?: string; title?: string; sessionId?: string }): string {
+  const q = new URLSearchParams();
+  if (opts?.sessionId) q.set('s', opts.sessionId);
+  if (opts?.page) q.set('page', opts.page);
+  if (opts?.title) q.set('t', opts.title);
+  const qs = q.toString();
+  return location.pathname + location.search + '#/full/' + encodeURIComponent(appId) + (qs ? '?' + qs : '');
+}
+/** 폰(세웠거나 눕힌) — mobile.ts 의 isPhone 과 같은 문턱(폭 ≤640 · 또는 ≤900 에 높이 ≤500). 폰은 새 탭으로 보내지 않는다(되돌아오기 어렵다). */
+function phoneNow(): boolean { try { return window.matchMedia('(max-width: 640px), ((max-width: 900px) and (max-height: 500px))').matches; } catch (_) { return false; } }
+/** 「크게 보기」 — **새 탭**에서 그 앱만 화면 가득(원준 2026-10-12 «크게보기를 누르면 바로 거기로 보내 · 모달 띄우지 말고»).
+ *  사람이 누른 자리에서 곧바로 부른다(window.open 은 그 동작 안에서만 열린다). 팝업이 막혔거나 폰이면 이 탭 위에 가득 띄운다(#4443). */
+export function openAppBig(appId: string, opts?: { page?: string; title?: string; sessionId?: string }): void {
+  if (!phoneNow()) {
+    let w: Window | null = null;
+    try { w = window.open(appFullHref(appId, opts), '_blank'); } catch (_) { w = null; }
+    if (w) return;
+  }
+  void openAppUi(appId, opts);
+}
+
+export async function openAppUi(appId: string, opts?: { page?: string; title?: string; sessionId?: string; full?: boolean; onClose?: () => void }): Promise<boolean> {
   try {
     const f = await mountAppUiFrame(appId, opts);
     closeAppUi();
     openFrame = f;
-    uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱',
-        onclick: (e: Event) => { if (e.target === uiEl) closeAppUi(); } },
+    onCloseFn = opts?.onClose || null;
+    uiEl = el('div', { class: 'v2-appui-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': (opts?.title || appId) + ' 앱' },
       el('div', { class: 'v2-appui' },
         el('div', { class: 'v2-appui-h' },
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeAppUi() })),
+          //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
         f.root));
     document.body.append(uiEl as HTMLElement);
     document.addEventListener('keydown', uiKey);
@@ -174,7 +334,9 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
 
 function uiKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeAppUi(); }
 export function closeAppUi(): void {
+  const was = !!uiEl, fn = onCloseFn; onCloseFn = null;
   if (openFrame) { openFrame.destroy(); openFrame = null; }
   if (uiEl) { uiEl.remove(); uiEl = null; }
   document.removeEventListener('keydown', uiKey);
+  if (was && fn) fn();
 }

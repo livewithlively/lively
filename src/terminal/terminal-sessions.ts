@@ -27,7 +27,7 @@ export {
   sessionOsUser, userOsUser, harnessHasCredential, harnessLoginProbe, aiLoginCheck, type AiAccountStatus, type AiLoginCheck,
 } from "./profiles.js";
 export {
-  detectAwaiting, isReportedPhase, PHASE_TTL_SEC, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
+  detectAwaiting, isReportedPhase, isBgCount, PHASE_TTL_SEC, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
   isActivityProgress, markSessionActive, markSessionSeen, type ReportedPhase,
 } from "./phase.js";
 export {

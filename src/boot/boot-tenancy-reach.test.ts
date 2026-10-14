@@ -119,6 +119,9 @@ const MUST_FANOUT = [
   "app-data-snapshot",
   //  #4517 — 대화 검색 색인은 그 워크스페이스의 세션 기록을 풀어 그 워크스페이스 표에 담는다.
   "conv-index",
+  //  #4530 — 세션 요약 카드(뜻으로 찾기의 재료)도 그 워크스페이스의 대화에서 만들어 그 워크스페이스 표에 담는다.
+  //   primary 만 돌면 나머지 워크스페이스는 카드가 영영 안 생겨 뜻 검색이 조용히 죽는다.
+  "session-card",
 ];
 
 /** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
@@ -217,6 +220,7 @@ test("[R4] 순회 목록과 제외 목록이 겹치지 않는다 — 두 표가 
 const NEEDS_BOOT_ONESHOT = [
   "embedding-backfill", "session-title-backfill", "session-state-backfill", "builtin-app-seed", "outbox",
   "conv-index",   // #4517 — 배포 직후가 옛 기록이 가장 많이 밀린 때다
+  "session-card", // #4530 — 배포 직후엔 카드가 하나도 없다(색인 정비 조금 뒤에 한 번 돈다)
 ];
 
 test("[R6] 부팅 직후가 중요한 정비는 **부팅 1회**를 갖는다 — 주기가 재기동보다 길면 영영 안 돈다", () => {

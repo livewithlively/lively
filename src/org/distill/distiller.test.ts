@@ -11,7 +11,7 @@
 //  · **빈 설정이 지시 공백이 되면 안 된다** — 조직 공통 기본으로 메운다. 배타인 두 지시를 동시에 보내지 않는다.
 import assert from "node:assert/strict";
 import {
-  Params, distillerScopeSql, distillerExclusiveSql, higherThan,
+  Params, distillerScopeSql, distillerExclusiveSql, higherThan, isAutoDisabledLane,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
   buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen, strandedWhereSql,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
@@ -163,6 +163,20 @@ t("H2 꺼진 증류기는 배정 순서에서 빠진다(끄면 그 몫이 아래
   const off = mk({ id: 1, priority: 99, enabled: false });
   const on = mk({ id: 2, priority: 0 });
   assert.deepEqual(higherThan(on, [off, on]).map((x) => x.id), []);
+});
+
+t("H2b 자격 실패로 자동 정지된 레인은 배정 순서에 남는다(그 몫이 아래 catch-all 로 새어 다른 기준으로 증류되면 안 된다)", () => {
+  const auto = mk({ id: 1, priority: 99, enabled: false, last_summary: { error: "x", auto_disabled: true } });
+  const on = mk({ id: 2, priority: 0 });
+  assert.deepEqual(higherThan(on, [auto, on]).map((x) => x.id), [1], "자동 정지 레인의 몫이 아래 레인으로 흘렀다");
+});
+
+t("H2c 자동 정지 판정 — 꺼져 있고 표식이 있을 때만", () => {
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { auto_disabled: true } }), true);
+  assert.equal(isAutoDisabledLane({ enabled: true, last_summary: { auto_disabled: true } }), false, "켜진 레인을 자동 정지로 봤다");
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { error: "x" } }), false, "사람이 끈 레인이 몫을 계속 붙잡는다 — H2 가 깨진다");
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: null }), false);
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { auto_disabled: "true" } }), false, "문자열 표식까지 받아 준다 — 표식은 정확히 true 만");
 });
 
 t("H3 자기 자신은 상위에 안 들어간다(자기 조건을 자기가 부정하면 항상 0건)", () => {

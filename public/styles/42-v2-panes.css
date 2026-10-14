@@ -35,9 +35,16 @@
    곁칸 밖에 떠야 하는 것(우클릭 메뉴 · 탭/독 끌기 조각 · 팝오버)은 body 에 붙어 여기에 안 걸린다. */
 /* hidden 먼저 — clip 을 모르는 옛 사파리(15 이하)는 hidden 으로 자른다(가린 독의 넘침만은 막는다). */
 .pn-pane[data-zone="side"] { position: relative; overflow: hidden; overflow: clip; border-left: 1px solid var(--line); }
-/* #4443 곁칸 독 — 독이 보이면 부품이 독만큼 물러선다(macOS: 창은 독 위까지만 커진다). 폭은 v2/pane-dock 이 lib/pane-dock dockInset 으로 잰다.
-   프로젝트 칸 맨 아래의 «태스크 추가» 입력칸이 독 뒤에 깔리지 않는 이유가 이것이다. 가려 두면(자동으로 가리기) 네 값 모두 0. */
-.pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) var(--pn-dock-b, 0px) var(--pn-dock-l, 0px); }
+/* #4443 곁칸 아래 독(3안)은 **내용 위에 떠 있다**(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게»). 두께는 v2/pane-dock 이
+   lib/pane-dock dockInset 으로 재서 --pn-dock-b 로 알린다(이음매 독 · 독 없음 = 0 — 아래 규칙이 모두 아무 일도 안 한다).
+   종전엔 본문 전체를 그만큼 올려(padding-bottom) 독 뒤에 하얀 띠가 생기고 내용이 그 위에서 잘렸다. 이제 본문은 독 밑까지 흐르고 —
+   · 목록(스크롤 상자)은 **끝에만** 그만큼 빈 자리를 둔다: 내용은 독 유리 뒤로 비치고, 마지막 줄도 독 위로 올려 볼 수 있다.
+   · 맨 아래에 붙은 입력칸이 있는 앱(프로젝트 «태스크 추가» · 리브 입력창)은 앱 끝에 같은 빈 자리 — 그 칸은 늘 독 위에 선다.
+   · 웹 · 붙은 앱 · 그린 HTML 처럼 우리가 못 미는 액자는 독이 그 위에 뜬다(독을 경계선으로 옮기면 비킨다). */
+.pn-pane[data-zone="side"] > .pn-pane-body { padding: var(--pn-dock-t, 0px) var(--pn-dock-r, 0px) 0 var(--pn-dock-l, 0px); }
+.pn-pane[data-zone="side"] :is(.pn-fbody, .pn-knlist, .pn-knr-scroll, .pn-tl .tl-scroll, .pn-prev, .pn-md, .pn-ed-pre, .pn-ed-pick2 .pn-flist, .pn-apps-grid, .fx-scroll)::after,
+.pn-pane[data-zone="side"] :is(.pn-tk, .pn-liv)::after { content: ""; display: block; flex: none; grid-column: 1 / -1; height: var(--pn-dock-b, 0px); }
+.pn-pane[data-zone="side"] .pn-ed-ta { padding-bottom: calc(12px + var(--pn-dock-b, 0px)); }
 .pn-pane[hidden] { display: none; }
 .pn-pane:focus { outline: none; }   /* 좁은 폭의 서랍으로 열릴 때 초점이 들어온다(tabindex -1) — 테두리는 안 그린다 */
 
@@ -822,6 +829,25 @@ webview.pn-webframe { display: flex; }
 .pn-sessapp-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .pn-sessapp-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 
+/* ── 붙은 앱 탭 머리줄 · ⋯ 메뉴 · 방금 고침 띠(#4600 — 각자 AI 에게 시켜 고쳐 쓰는 앱) ──
+   머리줄은 앱이 하나여도 선다: «이 앱은 고칠 수 있다» 를 알려 주는 자리가 이것뿐이다. 띠는 app_save·app_revert 뒤 60초. */
+.pn-sessapp-head { flex: none; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); font-size: 12.5px; color: var(--ink); }
+.pn-sessapp-head[hidden] { display: none; }
+.pn-sessapp-head .pn-i { color: var(--blue); }
+.pn-sessapp-head .pn-sp { flex: 1; min-width: 0; }
+.pn-sessapp-title { font-weight: 700; min-width: 0; }
+.pn-sessapp-ver { flex: none; font-size: 10.5px; font-weight: 800; color: var(--muted-head); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.pn-sessapp-more { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-more:hover { background: var(--bg-tint); color: var(--ink); }
+.pn-sessapp-more .pn-i { color: inherit; }
+.pn-sessapp-band { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border-bottom: 1px solid var(--line-note); background: var(--bg-note); color: var(--blue-deep); font-size: 11.5px; font-weight: 700; }
+.pn-sessapp-band[hidden] { display: none; }
+.pn-sessapp-band-t { flex: 1; min-width: 0; }
+.pn-sessapp-band-b { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue-deep); background: var(--bg); border: 1px solid var(--line-note); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.pn-sessapp-band-b:hover { background: var(--bg-sel); }
+.pn-sessapp-band-x { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-band-x:hover { background: var(--bg-tint); }
+
 /* ── 앱 고치기 설정 창(#4225) — 누가 이 앱을 고칠 수 있나(기본 전원 · 지정한 사람만) ── */
 .pn-editpol { width: min(460px, 94vw); }
 .pn-editpol .pn-modal-b { display: flex; flex-direction: column; gap: 10px; }
@@ -835,15 +861,44 @@ webview.pn-webframe { display: flex; }
 .pn-editpol-person:hover { background: var(--bg-tint); }
 .pn-editpol-person .pn-fine { margin-left: auto; font-size: 11px; }
 
-/* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
-.pn-knm { width: min(680px, 96vw); }
-.pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }
-.pn-knm-full { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted-head); }
-.pn-knm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
-.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
-.pn-knm-sum { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); }
-.pn-knm-body .pn-md { padding: 0; }
-.pn-knm .pn-modal-f .pn-fine { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+/* ══ 지식 읽기 — 그 칸 안에서 (#4443 원준 10-05 «오른쪽에서 칸 튀어나오듯이 … 하지말고 그냥 곁칸에서 마크다운 이쁘게») ══
+   목록과 읽기는 한 칸의 두 화면이다(.pn-kn.reading). 본문은 위키와 같은 렌더러 · 같은 모양(md-rendered)을 사이드바 폭으로 줄인다. */
+.pn-kn.reading > .pn-fnote, .pn-kn.reading > .pn-knlist { display: none; }
+.pn-kn:not(.reading) > .pn-knr { display: none; }
+.pn-knr { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pn-knr-bar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 6px; border-bottom: 1px solid var(--line); }
+.pn-knr-back { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 10px 0 4px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--muted-head); cursor: pointer; }
+.pn-knr-back:hover { background: var(--bg-punch); color: var(--ink); }
+.pn-knr-open { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px; border-radius: 8px; font-size: 12px; font-weight: 600; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.pn-knr-open:hover { background: var(--bg-punch); color: var(--ink); }
+.pn-knr-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 18px; }
+.pn-knr-head { margin-bottom: 14px; }
+.pn-knr-t { margin: 0; font-size: 18px; font-weight: 800; line-height: 1.35; color: var(--ink); text-wrap: balance; overflow-wrap: anywhere; }
+.pn-knr-full { margin: 6px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted-head); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; cursor: pointer; border-radius: 4px; }
+.pn-knr-full.open { display: block; -webkit-line-clamp: unset; }
+.pn-knr-full:focus-visible, .pn-knr-back:focus-visible, .pn-knr-open:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pn-knr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.pn-knr-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
+.pn-knr-sum { margin: 0 0 16px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); overflow-wrap: anywhere; }
+.pn-knr-md.md-rendered { font-size: 13.5px; line-height: 1.72; }
+.pn-knr-md .md-h { margin: 22px 0 8px; }
+.pn-knr-md .md-h1 { font-size: 17px; }
+.pn-knr-md .md-h2 { font-size: 15.5px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.pn-knr-md .md-h3 { font-size: 14px; }
+.pn-knr-md :is(.md-h4, .md-h5, .md-h6) { font-size: 13.5px; }
+.pn-knr-md .md-p { margin: 0 0 11px; }
+.pn-knr-md .md-list { margin-bottom: 11px; padding-left: 20px; }
+.pn-knr-md .md-pre { padding: 10px 12px; border-radius: 8px; }
+.pn-knr-md .md-pre code { font-size: 12px; }
+.pn-knr-md .md-table { max-width: 100%; font-size: 12.5px; }
+.pn-knr-md .md-table :is(th, td) { padding: 5px 8px; }
+.pn-knr-md img { max-width: 100%; height: auto; border-radius: 6px; }
+.pn-knr-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pn-knr-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted-2); }
+.pn-knr-foot .btn-text { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.pn-knr-wait { margin: 6px 0; }
+.pn-knr-err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: 13px; color: var(--muted-head); }
+.pn-knr-err p { margin: 0; }
 
 /* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
 /*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
@@ -914,6 +969,13 @@ webview.pn-webframe { display: flex; }
 .pn-share-kbd { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--blue);
   background: var(--bg); border: 1px solid var(--line-net); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 .pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }
+/* #3870 — 빈 찾기칸에서 ↵ = 저장. 그때 ↵ 표식은 목록 줄이 아니라 저장 단추에 붙는다(한 번에 한 자리). */
+.pn-share-save { display: inline-flex; align-items: center; gap: 6px; }
+.pn-share-kbd--btn { margin-left: 0; color: inherit; background: transparent; border-color: currentColor; opacity: .85; }
+.pn-share-hint { color: var(--muted); }
+/* 초대받은 사람의 나가기 — 되돌리기가 내 손에 없는 동작이라 붉은 글자(채운 단추까지는 아니다 · 확인 창이 한 번 더 묻는다). */
+.pn-share-leave { color: var(--danger); }
+.pn-share-leave:hover { color: var(--danger-deep); background: var(--danger-bg); }
 
 /* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────
    머리 바의 [최신순][자세히] 과 같은 급이라 높이·반경을 맞춘다(28 · 8). 좁은 칸에서는 이 칸이 먼저 줄고

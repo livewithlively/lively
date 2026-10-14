@@ -21,8 +21,9 @@ import { normWebUrl } from './web-url.js';
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, knTitle, pnIcon, pnNote, seedSessName, sessNameCache } from './panes-kit.js';
-import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
+import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
+import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
@@ -37,7 +38,7 @@ import { listSessionApps, openAppSession } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
-import { bindCtx, requestOpenRoute } from './ctx-registry.js';
+import { bindCtx } from './ctx-registry.js';
 import { hasScope } from '../lib/state.js';   // #3784 곁칸 부품 우클릭 메뉴
 import { copyText } from './ctx-menu.js';
 
@@ -98,6 +99,9 @@ export interface PartCtx {
   /** 탭에 걸릴 이름을 부품이 정한다(null = 부품 기본 이름). 뷰어는 파일 이름, 웹 칸은 사이트 이름을 건다 —
    *  같은 종류가 둘 이상 뜨는 순간 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 알 수 없다. */
   setTabTitle?: (t: string | null) => void;
+  /** 이 탭의 얼굴 — 앱 아이콘 이름(glass-icon APP_ICON_NAMES: 그림과 색이 한 이름). null 이면 종류의 기본 그림으로 돌아간다.
+   *  붙은 앱 탭이 쓴다(#4592): 종전엔 어느 앱이 붙든 탭 · 독이 «앱» 의 네모 넷이라 무슨 앱인지 그림으로는 알 수 없었다. */
+  setTabFace?: (icon: string | null) => void;
 }
 
 export interface Part {
@@ -135,8 +139,9 @@ export const PART_DEFS: PartDef[] = [
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
   // #4084 — 종전 «할 일». 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
-  //  #4135(원준 2026-09-27) — «태스크» → «프로젝트»: 본문을 늘 펼쳐 읽고, 이 세션의 태스크를 순서대로 둔다. 그림은 폴더 안의 태스크.
-  { type: 'tasks', name: '프로젝트', icon: 'projtask', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
+  //  #4135(원준 2026-09-27) — «태스크» → «프로젝트»: 본문을 늘 펼쳐 읽고, 이 세션의 태스크를 순서대로 둔다.
+  //   그림은 프로젝트 과녁(#4233, 원준 2026-10-05). 그리는 자리의 크기에 맞춰 glyphAt() 이 13px 이하에선 작은 과녁으로 바꾼다.
+  { type: 'tasks', name: '프로젝트', icon: 'proj', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
   { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
@@ -145,7 +150,8 @@ export const PART_DEFS: PartDef[] = [
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
   // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
   { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
-  { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
+  //  #4443(원준 10-05) — 탭으로는 더 못 연다(pickable:false). 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 한다.
+  { type: 'apps', name: '앱', icon: 'apps', pickable: false, hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
   // #4225 — 이 세션에 붙은 앱. [+] 로 넣지 않는다 — 앱을 붙이면 셸이 세우고 떼면 걷는다(배치에 저장하지 않는 탭, panes.ts DERIVED_TABS).
   { type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false, hint: '이 세션에 붙은 앱이에요 — AI 도 같은 화면을 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
 ];
@@ -401,105 +407,7 @@ function sessionsPart(ctx: PartCtx): Part {
   };
 }
 
-// ══ 지식 — 이 프로젝트에 연결된 문서 ══════════════════════════════════════════
-function knowledgePart(ctx: PartCtx): Part {
-  const root = el('div', { class: 'pn-part pn-kn' });
-  const note = pnNote('lively_pn_kn_note',
-    '지식은 세션들이 일하면서 계속 쓰고 고치는 글이고, 이 워크스페이스의 모든 세션이 함께 봅니다. 쌓일수록 맥락이 촘촘해져요.');
-  const list = el('div', { class: 'pn-knlist' });
-  root.append(note, list);
-  let sig = '';
-
-  type KnRow = { name: string; title: string; rel: string; type?: string | null; lifecycle?: string | null };
-
-  function paint(): void {
-    const kn = (ctx.detail()?.project || {}).knowledge || {};
-    const pick = (arr: any[], rel: string): KnRow[] => (arr || []).map((k: any) => ({
-      name: String(k.name), title: String(k.title || ''), rel,
-      type: k.type ?? null, lifecycle: k.lifecycle ?? null,
-    }));
-    const all: KnRow[] = [...pick(kn.required, '필요'), ...pick(kn.produced, '산출')];
-    const s2 = all.map((k) => k.rel + k.name + k.title).join('|');
-    if (s2 === sig) return;
-    sig = s2;
-    if (!all.length) {
-      list.replaceChildren(el('div', { class: 'pn-empty' },
-        pnIcon('doc', 'pn-i big'),
-        el('b', { text: '연결된 지식이 아직 없어요.' }),
-        el('p', { class: 'pn-fine', text: '세션이 만든 결론을 지식으로 남기면 여기 모입니다.' })));
-      return;
-    }
-    list.replaceChildren(...all.map((k) => {
-      // 제목은 **한 줄**만 — 전문은 title 속성과 상세 창이 갖는다(knTitle 머리말 참조).
-      const row = el('button', {
-        class: 'pn-knrow', type: 'button', title: (k.title || k.name) + '\n눌러서 요약을 봅니다',
-        onclick: () => void openKnModal(k),
-      }, pnIcon('doc', 'pn-i sm'),
-        el('span', { class: 'n ell1', text: knTitle(k.title, k.name) }),
-        el('span', { class: 'pn-knrel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel }));
-      // #3784 우클릭 — 요약(그 자리) · 위키에서 열기 · 새 탭 · 제목/이름/링크 복사
-      const href = '#/k/' + encodeURIComponent(k.name);
-      bindCtx(row, () => ({
-        title: knTitle(k.title, k.name), sub: `${k.rel} 지식` + (k.type ? ' · ' + k.type : ''),
-        rows: [
-          { label: '요약 보기', icon: 'eye', hint: '이 자리에서', run: () => void openKnModal(k) },
-          { label: '위키에서 열기', icon: 'wiki', run: () => requestOpenRoute(href) },
-          { label: '새 탭에서 열기', icon: 'columns', run: () => requestOpenRoute(href, true) },
-          { sep: true, label: '' },
-          { label: '제목 복사', icon: 'copy', run: () => void copyText(k.title || k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
-          { label: '지식 이름 복사', icon: 'copy', hint: k.name.length > 18 ? k.name.slice(0, 18) + '…' : k.name, run: () => void copyText(k.name).then((ok) => { if (ok) toast('복사했어요'); }) },
-          { label: '링크 복사', icon: 'link', run: () => void copyText(new URL(href, location.href).toString()).then((ok) => { if (ok) toast('링크를 복사했어요'); }) },
-        ],
-      }));
-      return row;
-    }));
-  }
-
-  // ── 상세 창 — 누르면 위키로 튀지 않고 **여기서 먼저 본다**(원준 2026-08-20) ──────────
-  //  곁칸에서 지식을 누르는 이유는 대개 "이게 뭐였더라"이지 "정독하겠다"가 아니다. 위키로 보내면 보던 화면
-  //  (세션·자료)이 통째로 사라지고 돌아올 길이 뒤로가기뿐이었다. 요약을 그 자리에서 보이고, 정독은 [전체 보기]로.
-  async function openKnModal(k: KnRow): Promise<void> {
-    const bodyEl = el('div', { class: 'pn-knm-body' }, el('p', { class: 'pn-fine', text: '불러오는 중…' }));
-    const back = el('div', { class: 'pn-modal-back' });
-    const close = (): void => { back.remove(); box.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close(); };
-    const box = el('div', { class: 'pn-modal pn-knm', role: 'dialog', 'aria-label': '지식 요약' },
-      el('div', { class: 'pn-modal-h' },
-        el('h2', { text: knTitle(k.title, k.name) }),
-        el('button', { class: 'pn-modal-x', type: 'button', 'aria-label': '닫기', onclick: () => close() }, pnIcon('x', 'pn-i sm'))),
-      el('div', { class: 'pn-modal-b' }, bodyEl),
-      el('div', { class: 'pn-modal-f' },
-        el('span', { class: 'pn-fine ell', text: k.name }),
-        el('a', { class: 'btn btn-primary btn-sm', href: '#/k/' + encodeURIComponent(k.name), onclick: () => close() }, el('span', { text: '전체 보기' }))));
-    back.onclick = () => close();
-    document.addEventListener('keydown', onKey);
-    document.body.append(back, box);
-
-    const d: any = await api('/api/ui/knowledge/' + encodeURIComponent(k.name)).catch(() => null);
-    if (!box.isConnected) return;
-    const kd = (d && (d.knowledge || d)) || null;
-    if (!kd) { bodyEl.replaceChildren(el('p', { class: 'pn-fine', text: '내용을 불러오지 못했어요 — [전체 보기]로 열어 주세요.' })); return; }
-    const meta = el('div', { class: 'pn-knm-meta' },
-      el('span', { class: 'pn-knrel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel }),
-      ...(kd.type ? [el('span', { class: 'pn-knm-tag', text: String(kd.type) })] : []),
-      ...((kd.categories || []).slice(0, 2).map((c: any) => el('span', { class: 'pn-knm-tag', text: String(c.name || c.key) }))),
-      ...(kd.updated_at ? [el('span', { class: 'pn-fine', text: relTime(String(kd.updated_at)) + ' 갱신' })] : []));
-    // 전문 제목은 한 줄로 줄인 제목 아래에 그대로 — 줄인 것 때문에 원문을 못 보게 되면 안 된다.
-    const full = String(kd.title || '');
-    const short = knTitle(k.title, k.name);
-    // 본문 첫 줄의 H1 은 대개 제목을 되풀이한다 — 창 머리에 이미 있으므로 턴다.
-    const md = String(kd.body_md || '').replace(/^\s*#\s+.*\n+/, '');
-    bodyEl.replaceChildren(
-      ...(full && full !== short ? [el('p', { class: 'pn-knm-full', text: full })] : []),
-      meta,
-      ...(kd.summary ? [el('p', { class: 'pn-knm-sum', text: String(kd.summary) })] : []),
-      el('div', { class: 'pn-md' }, renderMarkdown(md.slice(0, 6000))),
-      ...(md.length > 6000 ? [el('p', { class: 'pn-fine', text: '…여기까지만 보여요. 전문은 [전체 보기]에서.' })] : []));
-  }
-
-  paint();
-  return { root, tick: paint, destroy: () => { document.querySelector('.pn-knm')?.remove(); document.querySelectorAll('.pn-modal-back').forEach((n) => n.remove()); } };
-}
+// ══ 지식 — 이 프로젝트에 연결된 문서 · 그 칸 안의 읽기 화면(#4443) 은 제 파일에 산다: panes-knowledge.ts ══════════
 
 // ══ 태스크 — 보는 세션의 프로젝트 태스크(#4084) 는 제 파일에 산다: panes-tasks.ts ══════════════════════
 
@@ -1415,7 +1323,10 @@ function viewerPart(ctx: PartCtx): Part {
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
-        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))), 'scale', () => 0);
+        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000), {
+          //  #4582 — md 의 상대경로 그림(`![](img/a.png)`)은 이 파일 폴더 기준으로 같은 파일 API 로 받는다.
+          imgFetch: mdImgFetch(p2, (p) => fetch(fileUrl(p), fetchOpts)),
+        })), 'scale', () => 0);
       } else {
         show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
       }
@@ -1458,6 +1369,7 @@ function viewerPart(ctx: PartCtx): Part {
       size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      path: p2, fetchRel: (p) => fetch(fileUrl(p), fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
       mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),
     }).catch(() => null);
@@ -1588,7 +1500,7 @@ function appsPart(ctx: PartCtx): Part {
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
         onclick: () => { if (attachable && ctx.curSession()) void attach(a); else openTab(); } },
-        el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
+        el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'apps' : 'chat', 'pn-i')),   // #4233 앱 = 레일의 앱과 같은 각진 사각 넷
         el('b', { text: a.title }),
         el('span', { class: 'pn-fine', text: attachable ? '세션에 붙이기' : hasUi ? '앱 탭' : '앱 세션 탭' }));
       // #3784 우클릭 — 붙이기 · 열기(앱 화면 / 앱 세션) · 이름 복사

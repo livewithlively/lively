@@ -90,6 +90,8 @@ export function routeKey(route: string): string {
   if (p === 'taxonomy') return 'taxonomy';
   //  사용 가이드(#4179)도 한 창 안에서 문서를 오가는 앱이다. 문서마다 창이 새로 서지 않게 접는다.
   if (p === 'learn') return 'learn';
+  //  앱빌더(#4632)도 한 창 안에서 목록 · 새 앱 · 이어서 · 고치기를 오간다 — 만들 때마다 창이 새로 서지 않게 접는다.
+  if (p === 'builder') return 'builder';
   return 'raw:' + h;
 }
 
@@ -231,9 +233,10 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   function icon(route: string, state?: string, kind?: string): SVGElement {
     const k = routeKey(route);
     //  #4233: 홈 · 프로젝트 · 세션 · 지난 세션 · 휴지통은 lib/icon-paths.ts 한 벌의 그림을 쓴다(사이드바와 같은 그림).
-    const d = kind === 'new' ? [ICONS.chat, 'M12 9v5M9.5 11.5h5']
+    //  #4233(원준 2026-10-04): 프로젝트 = 과녁(15px 자리라 큰 과녁) · 새 세션 = 말풍선과 더하기(다른 화면과 같은 그림).
+    const d = kind === 'new' ? [ICONS.sessNew]
       : k === 'home' ? [ICONS.home]
-      : k.startsWith('p:') ? [ICONS.folder]
+      : k.startsWith('p:') ? [ICONS.proj]
       : k.startsWith('s:') ? [ICONS.chat]
       : k === 'raw:archive' ? [ICONS.archive]
       : k === 'raw:trash' ? [ICONS.trash]

@@ -1,4 +1,4 @@
-// 앱 세션 물질화 실-DB 스모크(#1780 PR3) — 빈 pg 에 스키마 체인을 올리고 builtin 'hello' 앱을 설치한 뒤,
+// 앱 세션 물질화 실-DB 스모크(#1780 PR3) — 빈 pg 에 스키마 체인을 올리고 예시 앱 'hello'(픽스처, #4554)를 builtin 으로 설치한 뒤,
 //  materializeAppAssets(tempDir, 'hello') 가 그 앱의 greet 스킬을 세션 폴더 .claude/skills/greet/SKILL.md 로
 //  **원명(orig_name)** 으로 물질화하는지, writeAppHome 이 .lively/{token,gateway-url} 을 남기는지 본다.
 //  ⚠ 수동 실행(docker). 실행:  node scripts/session-assets.itest.mjs
@@ -34,7 +34,7 @@ try {
   await initAllSchemas();
   ok("전체 스키마 체인 완주(initAllSchemas)");
 
-  const r1 = await seedBuiltinApps();
+  const r1 = await seedBuiltinApps(new URL("./fixtures/apps", import.meta.url).pathname);   // #4554 — hello 는 시험 픽스처다
   assert.ok(r1.seeded.includes("hello"), `hello 가 설치돼야 한다 (실제: ${JSON.stringify(r1)})`);
   ok(`seedBuiltinApps — hello seeded (${JSON.stringify(r1)})`);
 

@@ -26,6 +26,10 @@ export interface SplitOpts {
   /** 끄는 중 상한을 넘긴 거리(px, 0 이상). 칸 크기는 상한에서 멈추지만 손은 더 갈 수 있다(#3870 세션 카드 전환 구간).
    *  마우스로 끌 때만 부른다. 키보드 조정과 더블클릭은 상한을 넘지 않는다. onDrag 보다 먼저 부른다. */
   onOver?: (overPx: number) => void;
+  /** 하한 밑으로 더 끌면 칸을 **아예 닫는다**(#4533 상민님: "최소치보다 더 줄이려 하면 아예 닫히게").
+   *  끈 자리가 `below` 보다 작아지면 onChange(true), 그 밑에서 다시 넘어오면 onChange(false) — 끄는 중에 바로 보인다(VS Code 의 그 문법).
+   *  닫힌 채 놓으면 폭은 **저장하지 않는다** — 다시 열 때 끌기 전 폭으로 돌아온다. 닫힌 상태의 정본은 호출자가 갖는다. */
+  collapse?: { below: number; onChange: (closed: boolean) => void };
 }
 
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -75,11 +79,17 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     const start = o.axis === 'x' ? e.clientX : e.clientY;
     //  보이는 폭에서 끌기 시작한다. 적어 둔 폭에서 시작하면 그 차이만큼 끌 때까지 손잡이가 손을 따라오지 않는다.
     const base = shown();
+    let closed = false;
     h.classList.add('on'); document.body.classList.add('v2-splitting-' + o.axis);
     h.setPointerCapture(e.pointerId);
     const move = (ev: PointerEvent): void => {
       const d = (o.axis === 'x' ? ev.clientX : ev.clientY) - start;
       const want = base + d * growOf();
+      if (o.collapse) {
+        const shut = want < o.collapse.below;
+        if (shut !== closed) { closed = shut; o.collapse.onChange(shut); }
+        if (shut) return;
+      }
       apply(want, false);
       o.onOver?.(Math.max(0, want - Math.max(o.min, maxOf())));
       o.onDrag?.(current());
@@ -87,6 +97,7 @@ export function makeSplitter(o: SplitOpts): HTMLElement {
     const up = (): void => {
       h.classList.remove('on'); document.body.classList.remove('v2-splitting-' + o.axis);
       h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+      if (closed) { apply(base, false); return; }   // 닫힌 채 놓았다 — 폭 기억은 끌기 전 그대로(다시 열면 그 폭)
       apply(current(), true);
       o.onEnd?.(current());
     };

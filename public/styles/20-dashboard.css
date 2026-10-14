@@ -604,7 +604,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-search { width: 100%; box-sizing: border-box; margin: 2px 0 3px; padding: 6px 9px; font-family: inherit; font-size: 13px; color: var(--ink); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; outline: none; }
 .dash-pop-search:focus { border-color: var(--blue); }
 .dash-pop-listrows { max-height: 240px; overflow-y: auto; scrollbar-width: thin; }
-.dash-pop-fav { color: var(--warn-2); }
+.dash-pop-fav { color: var(--warn-2); display: inline-flex; vertical-align: -2px; margin-right: 4px; }   /* #4233 — ⭐ 이모지 대신 선 별(채움) */
 .dash-pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .dash-pop-row:hover { background: var(--bg-tint); }
 .dash-pop-row input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; flex: none; }
@@ -672,6 +672,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-caret { flex: none; width: 11px; font-size: 9px; color: var(--muted-2); text-align: center; }
 .dash-pop-foldico { flex: none; display: inline-flex; align-items: center; }
 .dash-pop-foldico .ft-folder { width: 17px; height: auto; }
+.dash-pop-foldico .dash-pop-foldline { color: var(--muted-2); }   /* #4233 — 프로젝트 폴더 = 둥근 선 폴더 */
 .dash-pop-spaceav { flex: none; width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 800; color: var(--on-fill); }
 .dash-pop-fcount { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .dash-pop-lrow .dash-pop-name { font-weight: 600; }

@@ -23,7 +23,7 @@ function harness(o: {
   const deps: ActivityReportDeps = {
     hostFor: (id) => { calls.push(["hostFor", id]); return o.host === undefined ? HOST : o.host; },
     rpc: async (host, args) => { calls.push(["rpc", host, args]); return o.rpc ? o.rpc(host, args) : { ok: true, change: null }; },
-    local: async (id, phase) => { calls.push(["local", id, phase]); return (o.localChange ?? null) as never; },
+    local: async (id, phase, bg) => { calls.push(bg === undefined || bg === null ? ["local", id, phase] : ["local", id, phase, bg]); return (o.localChange ?? null) as never; },
     touch: async (id, sec) => { calls.push(["touch", id, sec]); if (o.touchThrows) throw new Error("db down"); },
     nowSec: () => NOW,
     warn: (_o, msg) => { calls.push(["warn", msg]); },
@@ -94,4 +94,35 @@ test("B8 DB 미러가 실패해도 보고는 성공이고 전이는 그대로다
   const h = harness({ rpc: async () => ({ ok: true, change }), touchThrows: true });
   assert.deepEqual(await reportSessionActivity("box-a", "busy", h.deps), change);
   assert.equal(h.count("touch"), 1);
+});
+
+//  #4588 — 턴 끝(idle)의 «열린 백그라운드 작업 수» 가 어느 길로 가든 tmux(@box_state)까지 닿는다. 빠지면 그 세션의 점이 화면의
+//   «still running» 만 믿고 몇 시간씩 «작업 중» 으로 깜빡인다(phase.backgroundHolds). 없을 땐 키를 안 싣는다(구 노드 무회귀).
+test("B9 ★ bg 는 호스트에도 · 폴백 직접 새기기에도 · 호스트 없는 경로에도 실린다 — 없으면 키가 없다", async () => {
+  const h1 = harness({ rpc: async () => ({ ok: true, change: null }) });
+  await reportSessionActivity("box-a", "idle", h1.deps, 0);
+  assert.deepEqual(h1.calls.filter((c) => c[0] === "rpc"), [["rpc", HOST, { id: "box-a", state: "idle", bg: 0 }]], "호스트에 bg=0 이 안 갔다");
+  const h2 = harness({ rpc: async () => { throw new Error("host down"); } });
+  await reportSessionActivity("box-a", "idle", h2.deps, 2);
+  assert.deepEqual(h2.calls.filter((c) => c[0] === "local"), [["local", "box-a", "idle", 2]], "폴백이 bg 를 잃었다");
+  const h3 = harness({ host: null });
+  await reportSessionActivity("box-a", "idle", h3.deps, 0);
+  assert.deepEqual(h3.calls.filter((c) => c[0] === "local"), [["local", "box-a", "idle", 0]], "호스트 없는 경로가 bg 를 잃었다");
+  const h4 = harness({ rpc: async () => ({ ok: true, change: null }) });
+  await reportSessionActivity("box-a", "idle", h4.deps);
+  assert.deepEqual(h4.calls.filter((c) => c[0] === "rpc"), [["rpc", HOST, { id: "box-a", state: "idle" }]], "모르는 bg 를 실었다");
+});
+
+//  배선 — 라우트·호스트 op 는 tmux·DB 를 직접 부르는 자리라 소스 자리를 못박는다(screen-run.test W1 과 같은 방식).
+test("B10 /active 는 idle 의 bg 만 받아 넘기고, 호스트 op 는 그걸 @box_state 에 새긴다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const routes = readFileSync(`${here}routes.ts`, "utf8");
+  assert.match(routes, /const bg = phase === "idle" && isBgCount\(rawBg\) \? rawBg : null;/);
+  assert.match(routes, /reportSessionActivity\(id, phase, \{\}, bg\)/, "박스 세션 경로");
+  assert.match(routes, /nodeRpc\(ns\.node\.id, "markActive", bg === null \? \{ id, state: phase \} : \{ id, state: phase, bg \}\)/, "노드 세션 경로");
+  const ops = readFileSync(`${here}session-ops.ts`, "utf8");
+  assert.match(ops, /markSessionActive\(String\(args\.id\), isReportedPhase\(st\) \? st : undefined, undefined, isBgCount\(args\.bg\) \? args\.bg : null\)/);
+  const phase = readFileSync(`${here}phase.ts`, "utf8");
+  assert.match(phase, /"@box_state", formatReportedPhase\(phase, nowSec, bg\)\]/, "bg 없는 idle 은 bg 없이 새긴다(직전 값을 잇지 않는다)");
 });

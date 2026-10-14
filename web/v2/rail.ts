@@ -929,7 +929,7 @@ export function drawRail(): void {
     //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
     //  ⚠ 맥 독의 '실행 중' 점은 걷었다(#3870) — 새 셸은 탭 줄을 안 그려서(main.ts TABS_OFF) 그 점은 사람에게 보이지도
     //   닫히지도 않는 숨은 탭을 가리켰다. 한 번 연 앱마다 점이 붙어 «왜 있냐» 는 물음만 남겼다.
-    const it = item(a.key, a.title, appGlyphName(a.icon), lit === a.key,   // #4233: 앱 화면과 같은 그림(홈(클래식) = 판 넷)
+    const it = item(a.key, a.title, appGlyphName(a.icon), lit === a.key,   // #4233: 앱 화면과 같은 그림(대시보드 = 판 넷)
       null, () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
     it.dataset.app = a.key; it.dataset.kind = kind;

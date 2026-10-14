@@ -17,7 +17,7 @@ import { itemsPool } from "../db/client.js";
 import { q } from "../db/client.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 
-export type NotifyKind = "mention" | "comment";
+export type NotifyKind = "mention" | "comment" | "invite";
 
 export interface NotifyItem {
   /** 안정 키 — 같은 사건은 언제 조회해도 같은 값이다(앱이 이미 띄운 것을 다시 안 띄우는 근거). */
@@ -32,6 +32,8 @@ export interface NotifyItem {
   body: string;
   /** 이 알림이 가리키는 화면(웹 UI 해시). 만들 수 없으면 null — **가짜 링크를 만들지 않는다**(#1571 §9). */
   link: string | null;
+  /** 서버가 이미 지어 둔 제목(#3870 초대) — 저장된 알림을 그대로 옮길 때만. 없으면 notifyText 가 짓는다. */
+  title?: string;
 }
 
 /** 루트 프로젝트를 타고 올라가는 조인 — 태스크·서브태스크의 list_id 는 항상 NULL 이라 그대로 판정하면 새어 나간다(project-store 와 같은 규칙). */
@@ -109,6 +111,23 @@ export async function listMyNotifications(
       link: pid ? "#/projects2/p/" + pid : null,
     });
   }
+  // ② 세션 초대(#3870) — 누가 나를 세션에 불렀다. 초대할 때 저장해 둔 알림(org_app_notification kind='invite')을 그대로 옮긴다
+  //  (그 순간의 일이라 다른 표에서 다시 합성할 재료가 없다). 받는 사람이 나인 행만 — 남의 알림이 새는 길이 없다.
+  const invites = await q(itemsPool, `
+    SELECT n.id, n.title, n.body, n.href, n.created_at, n.actor, m.display_name
+      FROM org_app_notification n
+      LEFT JOIN org_member m ON m.id = n.actor
+     WHERE n.member_id = $1 AND n.kind = 'invite' AND n.created_at > $2::timestamptz
+       AND n.actor IS DISTINCT FROM $1
+     ORDER BY n.created_at DESC
+     LIMIT $3`, [me, since, limit]);
+  for (const n of invites) {
+    items.push({
+      key: "invite:" + n.id, kind: "invite", ts: new Date(n.created_at).toISOString(),
+      actor: n.actor ?? null, actor_name: n.display_name ?? null, project_id: null, project_name: null,
+      body: snippet(n.body), link: typeof n.href === "string" && n.href.startsWith("#/") ? n.href : null, title: String(n.title || ""),
+    });
+  }
   items.sort((x, y) => Date.parse(y.ts) - Date.parse(x.ts));
   return items.slice(0, limit);
 }
@@ -128,6 +147,7 @@ export function withSubjectParticle(who: string): string {
 export function notifyText(it: NotifyItem): { title: string; body: string } {
   const subj = withSubjectParticle((it.actor_name || it.actor || "누군가").trim());
   const where = it.project_name ? ` · ${it.project_name}` : "";
+  if (it.kind === "invite") return { title: it.title || `${subj} 세션에 나를 초대했어요`, body: it.body || "눌러서 이 세션을 열어요." };
   if (it.kind === "mention") return { title: `${subj} 나를 언급했어요${where}`, body: it.body || "(내용 없음)" };
   return { title: `${subj} 댓글을 남겼어요${where}`, body: it.body || "(내용 없음)" };
 }

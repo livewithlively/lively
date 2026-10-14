@@ -320,7 +320,7 @@ async function renderProjectV2Detail(view, idStr) {
         try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
       }
       location.hash = href;
-    } }, hubIcon('plus', 14), el('span', { text: '세션' }));
+    } }, hubIcon('sessNew', 14), el('span', { text: '세션' }));   // #4233(원준 2026-10-04): 새 세션 = 말풍선과 더하기
   backRow.append(el('div', { class: 'proj-detail-actions' }, newSessBtn, hubActions, settingsBtn));
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
