@@ -1,5 +1,6 @@
 // ClickUp HTTP·조회·쓰기 계층(#1313 R22 분할 — 구 clickup.ts 219·596-1054).
 import { resolveConnectorConfig } from "../config.js";
+import { CLICKUP_REQUEST_TIMEOUT_MS } from "../push-budget.js";
 import type {
   ClickUpComment, ClickUpCustomField, ClickUpFolder, ClickUpList, ClickUpSpace,
   ClickUpTag, ClickUpTask, ClickUpTeam, ClickUpTimeEntry, ClickUpView,
@@ -49,7 +50,7 @@ export async function clickupFetch<T>(path: string, init?: RequestInit): Promise
         },
         // 요청당 하드 타임아웃 — 응답 없는 fetch 가 무한 대기하면 워커가 침묵 정지(행)해 정체 감지 킬로 귀결된다
         //  (notion/client.ts 와 같은 방어). 60s 에 끊고 재시도 → 소진 시 throw(커서 동결로 다음 run 재수집).
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(CLICKUP_REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       // 멱등(GET) 요청만 재시도 — POST/PUT(createTask·createTaskComment·updateTask 등)은 타임아웃 시점에

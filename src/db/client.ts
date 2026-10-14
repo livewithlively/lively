@@ -7,7 +7,12 @@ import pg from "pg";
 
 // 통합 DB(P1): domainmap 엔진(itemsPool)도 이 풀을 공유한다 — withTx 장기점유 + 커넥터 ingest +
 // activity_log 원자기록의 동시 부하를 감안해 max 명시(기본 10 → 20, 풀 고갈 방지).
-const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20 });
+//  ★ 클라이언트 대기 상한(#4638) — pg-pool 은 이 값이 없으면 풀이 찬 동안 **무기한** 줄을 세운다(이 값은 새 연결 맺기와
+//   대기열 대기를 함께 끊는다). 2026-10-11 매니지드: 클라이언트를 쥔 채 서로를 기다리는 교착에 풀 20개가 다 잡혀 전
+//   워크스페이스 API 가 재기동 전까지 멈췄다 — 상한이 있으면 기다리던 쪽이 실패로 풀려나며 쥔 것을 내려놓는다.
+//   60초 = 정상 부하의 대기(밀리초)와 멀리 떨어진 값. 이만큼 못 얻으면 이미 고장이다.
+export const POOL_CLIENT_WAIT_MS = 60_000;
+const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20, connectionTimeoutMillis: POOL_CLIENT_WAIT_MS });
 
 // 유휴 연결 오류(DB 재시작·관리자 종료·DROP DATABASE … FORCE)는 풀이 'error' 이벤트로 알린다. 리스너가 없으면
 //  Node 가 그 이벤트를 throw 로 바꿔 **프로세스가 통째로 죽는다** — 게이트웨이면 uncaughtException → 재기동(열린

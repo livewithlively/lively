@@ -50,6 +50,7 @@ import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { INVITED_GROUP, splitInvited } from '../lib/invited-up.js';   // #3870 — 「초대받은 세션」 층
 import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
@@ -62,6 +63,7 @@ import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — 
 import { openSectionMenu, railIsHidden, sectionDef, setRailSection, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { iconPath, projGlyph } from '../lib/icon-paths.js';
+import { isBuilderProjectName, isBuilderSession } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
@@ -99,6 +101,11 @@ const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보�
 //  움직임의 원칙 한 줄: **위로 올라가고 펴지는 쪽은 즉시, 아래로 내려가고 접히는 쪽은 안 볼 때.**
 //   올라오는 움직임은 정보고(나를 기다리는 게 생겼다), 내려가는 움직임은 소음이다(처리한 것의 뒷정리).
 const GROUP_STORE = shellPrefStore('lively_v2_side_group', 'str');        // 'proj' = 프로젝트로 묶기 · 없으면 종전 시간·상태 축
+//  #3870 — 홈 「초대받은 세션」 층(lib/invited-up). 'off' = 끔 · 없으면 켬(초대는 사람이 나를 지목한 일 — 안 보이는 게 기본이면 놓친다).
+const INVITED_STORE = shellPrefStore('lively_v2_side_invited', 'str');
+let invitedUp = true;
+/** 홈 목록이 초대받은 세션을 자기 층에 세우나 — 재료(main.ts sideInstances ①″)와 그림(이 파일)이 같은 값을 본다. */
+export function sideInvitedUp(): boolean { return invitedUp; }
 const GRPCLOSED_STORE = shellPrefStore('lively_v2_side_grpclosed', 'list');   // 사람이 **접어 둔** 프로젝트 그룹
 const GRPOPENED_STORE = shellPrefStore('lively_v2_side_grpopened', 'list');   // 사람이 **펴 둔** 프로젝트 그룹
 let groupProj = false;
@@ -182,6 +189,7 @@ function readStores(): void {
   grpClosed = loadSet(GRPCLOSED_STORE);
   grpOpened = loadSet(GRPOPENED_STORE);
   try { groupProj = localStorage.getItem(GROUP_STORE) === 'proj'; } catch (_) { /* 못 읽어도 종전 축으로 돈다 */ }
+  try { invitedUp = localStorage.getItem(INVITED_STORE) !== 'off'; } catch (_) { /* 못 읽으면 기본(켬) */ }
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   try { localStorage.removeItem(LENS_STORE_LEGACY); } catch (_) { /* noop */ }
   foldClosed = loadSet(FOLD_CLOSED_STORE);
@@ -269,6 +277,10 @@ export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; m
 // ── 그리기 ──
 /** 셸이 주는 배선 — 트리 안에서 셸의 일(탭·화면)을 해야 할 때만 쓴다(지금은 [＋ 새 세션] 하나). */
 export interface SideHooks {
+  /** #3870 — 내가 초대받은 세션 수(휴지통 제외). 0 이면 「초대받은 세션」 토글을 안 세운다. */
+  invitedCount?: () => number;
+  /** #3870 — 그 토글을 눌렀다. 목록 재료(sideInstances)부터 다시 세워야 한다 — 셸이 그린다. */
+  onInvitedToggle?: () => void;
   onNewSession?: (projectId: number) => void;
   /** 세션 이름 바꾸기(더블클릭 인라인 편집) — 서버 반영 + 탭·대화창·우패널까지 셸이 갱신한다. */
   onRenameSession?: (sessionId: string, label: string) => Promise<void>;
@@ -310,7 +322,7 @@ export interface SideInstance {
   id: string;
   title: string;
   active: boolean;
-  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'tags' | 'app';
+  icon: 'home' | 'chat' | 'inbox' | 'link' | 'archive' | 'trash' | 'liv' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'web' | 'sess' | 'term' | 'src' | 'tags' | 'app' | 'builder' | 'buildsess';
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
@@ -331,6 +343,8 @@ export interface SideInstance {
   owner?: { id: string; name: string } | null;
   /** 「리브가 한 일」 묶음에 설 줄인가 — 시킨 프로젝트를 모르는 위탁 워커(#4551, lib/liv-work isLooseLivWork). */
   liv?: boolean;
+  /** 「초대받은 세션」 층에 설 줄인가(#3870, lib/invited-up) — main.ts ①″ 이 토글이 켜져 있을 때만 단다. */
+  invited?: boolean;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
   /** 묶음 안 순위 — main.ts 가 자물쇠까지 반영한 값(#3856). 점이 꺼진 채 붙들린 행도 순위를 들고 있어, 카드 자리가 이걸로 잰다. */
@@ -493,6 +507,8 @@ function instanceIcon(inst: SideInstance): SVGElement {
   //  'app' = 무엇인지 모르는 앱 화면(라이블리 앱). 종전엔 프로젝트 그림(폴더)으로 접었는데, 프로젝트 그림이 과녁이 된 뒤로
   //   (#4233 원준 2026-10-04) 프로젝트가 아닌 줄이 프로젝트처럼 보였다. 「앱」 그림(사각 넷)으로 그린다.
   if (inst.icon === 'app') return icon('apps', cls);
+  //  앱빌더 · 앱빌딩 세션(#4632) — 그림 표의 이름 그대로(망치 든 격자 · 망치 든 말풍선).
+  if (inst.icon === 'builder' || inst.icon === 'buildsess') return icon(inst.icon, cls);
   return appIcon(inst.icon as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 
@@ -791,7 +807,7 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
       //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
-      glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),
+      g.id && isBuilderProjectName(g.name) ? icon('builder', 'v2-pg-ic') : glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),   // #4632 앱빌더 묶음은 앱빌더 그림
       el('span', { class: 'n', text: g.name }),
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
@@ -867,6 +883,14 @@ function toggleGrp(key: string, wasOpen: boolean, allPast = false): void {
  *  「지금 볼 것」 아래엔 볼 일 있는 줄만 든 조각 카드가 서고, 같은 프로젝트의 나머지는 제 날짜 아래 카드에 남는다(#4551 — projGroups 머리말). */
 function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   const kids: HTMLElement[] = [];
+  //  ★ «이미 줄로 섰나» 는 **목록 전체**(shown)로 묻는다 — 사유는 아래 standingSess 머리말. 초대 층(#3870)의 줄도 섰다.
+  //   그래서 이 집합을 **초대 층을 덜어 내기 전에** 모은다.
+  const standingSess = new Set<string>();
+  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
+  //  #3870 — 초대받은 세션은 프로젝트 카드에 섞지 않고 「고정」 다음 자기 층에 선다(lib/invited-up). 고정한 줄은 「고정」 이 이긴다.
+  //   여기서부터 shown 은 «카드 재료» 다(초대 층을 덜어 낸 나머지).
+  const inv = splitInvited(shown, invitedUp);
+  shown = inv.rest;
   //  「고정」은 두 축 공통으로 맨 위다(#1954) — 압정한 행이 프로젝트 묶음 안에 갇히면 그 약속이 깨진다.
   //   여기 선 행은 소속을 말해 줄 머리글이 없으므로 **두 줄 그대로**(프로젝트 칩을 남긴다).
   //  #4233 — 고정한 단위가 그대로 움직인다(lib/home-pins). 고정한 세션은 「고정」 세션 카드로, 고정한 프로젝트 안에서
@@ -887,8 +911,6 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
   //    ⓑ **압정으로 맨 위에 선 세션** — 압정 행은 카드 전에 따로 그리므로 `g.rows` 밖이고,
   //      그래서 접힘에 한 번 더 설 수 있었다.
   //   세션 행 키는 출처(① 내 세션 · ③ 열린 창)와 무관하게 늘 `sess:<id>` 다(main.ts sideRowKey).
-  const standingSess = new Set<string>();
-  for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
   const groups = projGroups(rest, false);
   //  ★ 프로젝트 축에서는 **카드째** 고정한다(#3778, 원준 2026-09-09). 이 축의 단위는 세션이 아니라 프로젝트라,
   //   압정도 그 단위여야 한다 — 카드가 올라오면 그 안의 세션은 **자동으로 따라 올라온다**(집합을 안 건드리고 자리만 옮긴다).
@@ -905,6 +927,7 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
     if (pinnedRows.length) kids.push(pinCard(pinnedRows, o));
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
+  if (inv.invited.length) { kids.push(...invitedLayer(inv.invited, o)); lastBucket = INVITED_GROUP; }
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
     if (g.bucket && g.bucket !== lastBucket) {
@@ -997,6 +1020,15 @@ function pinCard(rows: SideInstance[], o: RowOpts): HTMLElement {
     el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement;
 }
 
+/** #3870 — 「초대받은 세션」 층: 이름표 + 카드 한 장. 줄은 두 줄(둘째 줄이 소속 프로젝트) · 주인 얼굴은 줄이 이미 단다(owner). */
+function invitedLayer(rows: SideInstance[], o: RowOpts): HTMLElement[] {
+  return [
+    el('div', { class: 'v2-app-group', role: 'presentation', text: INVITED_GROUP }) as HTMLElement,
+    el('div', { class: 'v2-pg open v2-pg--rows v2-pg--invited', role: 'presentation', 'data-anch': 'invited:' },
+      el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement,
+  ];
+}
+
 /** #4233 — 세션별 축의 날짜 카드. 머리 없이 줄만 든다(바로 위 날짜 이름표가 말한다). 줄은 두 줄 — 마지막 말 + 소속. */
 //  앵커는 구간 순번을 붙인다 — 같은 묶음 이름이 떨어져 두 번 나올 수 있어(planSessAxis) 이름만으로는 겹친다.
 //  카드 틀은 role=presentation — 줄(listitem)이 목록(role=list)의 항목으로 남게 한다.
@@ -1014,15 +1046,19 @@ function dayCard(group: string, rows: SideInstance[], o: RowOpts, seq = 0): HTML
 function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
   const kids: HTMLElement[] = [];
   //  나누기는 잎 모듈 한 자리(lib/home-pins planSessAxis) — 자기 화면 줄 판정은 sess-fold 의 잣대(projCardRows 의 여집합).
-  const plan = planSessAxis(shown, projPinnedId, (r) => projCardRows([r]).length === 0);
+  //  «이미 섰나» 는 목록 전체로(초대 층 포함) — 그 뒤 #3870 「초대받은 세션」 층을 덜어 낸다(projListKids 와 같은 순서 · 같은 자리).
   const standingSess = new Set<string>();
   for (const r of shown) if (r.id.startsWith('sess:')) standingSess.add(r.id.slice(5));
+  const inv = splitInvited(shown, invitedUp);
+  shown = inv.rest;
+  const plan = planSessAxis(shown, projPinnedId, (r) => projCardRows([r]).length === 0);
   const pinGrps = projGroups(plan.cardRows, false, false);
   if (plan.pinRows.length || pinGrps.length) {
     kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: PINNED_BUCKET }) as HTMLElement);
     if (plan.pinRows.length) kids.push(pinCard(plan.pinRows, o));
     for (const g of pinGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
+  if (inv.invited.length) kids.push(...invitedLayer(inv.invited, o));
   plan.dated.forEach((d, i) => {
     if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
     kids.push(dayCard(d.group, d.rows, o, i));
@@ -1534,6 +1570,7 @@ function renderHomeApps(): void {
         el('button', { class: 'v2-app-new', type: 'button', 'aria-label': '새 작업 열기', title: '새 작업 — 무엇이든 시키거나 앱을 고릅니다',
           onclick: () => hooks.onNewTask?.() },
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))),
+        invitedBtn(),
         axisBtn()),
       listEl),
     secFoot());
@@ -1561,17 +1598,19 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const ak = last!.activeKey();
   //  위탁 워커 줄(#4551) — 홈 행(main.ts sideRowFace)과 같은 얼굴. 잣대는 lib/liv-work.
   const mark = s.task || null;
+  //  앱빌딩 세션(#4632) — 망치 든 말풍선 · 누르면 앱빌더 안 그 앱의 만들기 화면.
+  const bld = !mark && isBuilderSession(s.label, p ? p.name : '');
   //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
   //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
   const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
   const ownerId = String((s.raw && s.raw.owner) || '');
   return {
     id: 'sess:' + s.id,
-    route: '#/s/' + encodeURIComponent(s.id),
+    route: bld ? '#/builder/s/' + encodeURIComponent(s.id) : '#/s/' + encodeURIComponent(s.id),
     title: mark ? livWorkName(s.label, mark) : t.main,
     active: ak === 's:' + s.id || (!!s.logId && ak === 's:' + s.logId),
-    icon: mark ? 'liv' : 'chat',
-    meta: t.sub || when(s.lastSeen),
+    icon: mark ? 'liv' : bld ? 'buildsess' : 'chat',
+    meta: bld ? '앱빌딩 세션' + (t.sub ? ' · ' + t.sub : '') : (t.sub || when(s.lastSeen)),
     ask: mark ? livWorkNote(mark) : lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
     project: p ? { id: p.id, name: p.name } : null,
     liv: isLooseLivWork(s),
@@ -2964,6 +3003,26 @@ function axisBtn(): HTMLElement {
     icon('projGroup', 'v2-axisbtn-ic')) as HTMLElement;
 }
 
+/**
+ * 「초대받은 세션」 층 토글(#3870, 원준 2026-10-14 «프로젝트 묶기 버튼처럼 온오프»). 「프로젝트로 묶기」 옆, 같은 붓·같은 문법 —
+ *  켜짐은 채움이 말한다. 초대받은 세션이 하나도 없으면 세우지 않는다(눌러도 아무것도 안 바뀌는 단추가 된다 — #4135 와 같은 규율).
+ */
+function invitedBtn(): HTMLElement | null {
+  if (!(hooks.invitedCount?.() ?? 0)) return null;
+  return el('button', {
+    class: 'v2-axisbtn v2-invbtn' + (invitedUp ? ' on' : ''), type: 'button', 'aria-pressed': String(invitedUp),
+    'aria-label': invitedUp ? '초대받은 세션 층 끄기' : '초대받은 세션 위로 모아 보기',
+    title: invitedUp ? '지금은 초대받은 세션을 맨 위(고정 다음)에 모아 보는 중 — 눌러서 끄기' : '초대받은 세션을 맨 위(고정 다음)에 모아 봅니다',
+    onclick: () => {
+      invitedUp = !invitedUp;
+      try { if (invitedUp) localStorage.removeItem(INVITED_STORE); else localStorage.setItem(INVITED_STORE, 'off'); shellPrefsPush(); }
+      catch (_) { /* 못 남겨도 이번 화면은 된다 */ }
+      //  재료(main.ts ①″)가 이 값을 보므로 목록을 다시 세운다 — redraw 는 그림만 다시 그린다.
+      if (hooks.onInvitedToggle) hooks.onInvitedToggle(); else redraw();
+    } },
+    icon('adduser', 'v2-axisbtn-ic')) as HTMLElement;
+}
+
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
 /**
  * 필터 — 보기 조건. **구역마다 새 방식을 만들지 않는다**(#2033 상민님: "ui 가 너무 많으면 혼란해").
@@ -3146,7 +3205,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
   const pk = r.key;
   // 프로젝트 없는 세션도 **작업대(캔버스)** 로 간다(#/p/0) — 옛 AI 세션 앱이 아니라(원준 2026-08-19).
   //  자투리 세션들이 그 판에 카드로 모여 거기서 바로 대화·열기가 된다.
-  const href = p ? '#/p/' + p.id : '#/p/0';
+  const href = p ? (isBuilderProjectName(p.name) ? '#/builder' : '#/p/' + p.id) : '#/p/0';   // #4632 앱빌더 프로젝트 줄은 앱빌더를 연다
   const isOn = activeKey === pk;
   // 펼침 기본값(#1719 재구성): **선택된 프로젝트만 펼침**, 나머지는 접힘 — 사용자가 편 것만 그대로.
   //  선택을 일부러 접은 건 이 페이지 수명만 기억한다(다음 방문엔 다시 펼쳐 보인다 — 선택은 늘 보이는 게 기본).
@@ -3177,7 +3236,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' + (p ? '\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요' : '') },
-    caret, glyph(p ? 'proj' : 'projNone', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),   // #4233 — 펼침은 꺾쇠가 말한다
+    caret, p && isBuilderProjectName(p.name) ? icon('builder', 'v2-pj-ic') : glyph(p ? 'proj' : 'projNone', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),   // #4233 — 펼침은 꺾쇠가 말한다
     r.trashed ? el('span', { class: 'v2-tag', text: '휴지통', title: '휴지통에 있는 프로젝트 — 도는 세션이 있어 보입니다' }) : r.archived ? el('span', { class: 'v2-tag', text: '보관됨', title: '보관한 프로젝트 — 도는 세션이 있어 보입니다' }) : r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
     p ? newSessBtn(p.id) : null,

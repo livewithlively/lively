@@ -59,8 +59,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     R.m0_card=grid.classList.contains('cm') && getComputedStyle(col).position==='fixed';
     const P=(type,x,y,t)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:5,pointerType:'mouse'}));
     const drag=async(dx,dy)=>{const r=rc(head); const x=r.left+30,y=r.top+r.height/2; P('pointerdown',x,y,head); P('pointermove',x+dx/2,y+dy/2,head); P('pointermove',x+dx,y+dy,head); P('pointerup',x+dx,y+dy,head); await sleep(30);};
-    //  저장 열쇠: 2026-10-09 부터 lively_v2_side_card3 — 자리는 «가장 가까운 모서리 + 거리», 접힘은 적지 않는다(카드는 늘 펼쳐서 뜬다).
-    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card3')||'null');
+    //  저장 열쇠: 2026-10-11 부터 lively_v2_side_card4 — 자리는 «가장 가까운 모서리 + 거리», 접힘은 여기 적지 않는다(셸이 세션마다 적는다).
+    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card4')||'null');
     // M1 — 편 카드를 맨 위로
     await drag(0,-5000); let r=rc(col); const fullH=r.height;
     R.m1_info=[Math.round(r.top),Math.round(r.height)]; R.m1=Math.abs(r.top-8)<=1.5 && r.height>=200;

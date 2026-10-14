@@ -7,11 +7,12 @@
 //   등록해 두면 전 고객이 깨져도 초록불이다. 어댑터마다 plain 등급 프로브를 강제한다.
 //  회귀 대상 ③: **단언 없는 프로브는 프로브가 아니다**(R2) — 호출 성공만 보면 정확히 이번처럼 눈이 먼다.
 import assert from "node:assert/strict";
-import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured } from "./judge.js";
+import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured, priorState } from "./judge.js";
 import { googleToolAuthHint } from "../credentials/google-oauth.js";
 import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, HARNESS_INSTALLERS, SCRIPT_ROT_MARKERS, type CanaryProbe } from "./probes.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -148,6 +149,65 @@ t("S3 구성 미비 상태는 경보를 울리지 않는다", () => {
 t("S4 고장 → 구성 미비로 재분류되면 잘못 울린 경보를 푼다", () => {
   assert.equal(alertTransition("failing", "unconfigured"), "clear",
     "안 풀면 사람은 아직 고장 중인 줄 알고, 그 오해가 다음 진짜 경보의 신뢰를 깎는다");
+});
+
+// runCanary 의 회전마다 before/after 를 정하는 방식 그대로 — 행 기록(최신 뒤)을 쌓으며 울린 경보를 센다.
+function replay(runs: Array<{ ok: boolean; configured: boolean }>, threshold = 3): Array<"raise" | "clear"> {
+  const rows: Array<{ ok: boolean; configured: boolean }> = [];
+  const view = () => {
+    const latest = rows.length ? rows[rows.length - 1].configured : null;
+    const recent = rows.filter((r) => r.configured).map((r) => r.ok).reverse();
+    return { latest, recent };
+  };
+  const alerts: Array<"raise" | "clear"> = [];
+  for (const run of runs) {
+    const b = view();
+    const before = priorState(b.latest, b.recent, threshold).state;
+    rows.push(run);
+    const after = run.configured ? evaluateStreak(view().recent, threshold).state : "unconfigured";
+    const tr = alertTransition(before, after);
+    if (tr) alerts.push(tr);
+  }
+  return alerts;
+}
+
+t("S5 ★ 고장 뒤 설정을 걷어내면 'clear' 는 한 번만 — 매 회전 복구 알람이 반복되던 사고", () => {
+  const fail = { ok: false, configured: true };
+  const unconf = { ok: false, configured: false };
+  assert.deepEqual(replay([fail, fail, fail, unconf, unconf, unconf, unconf]), ["raise", "clear"],
+    "직전 상태를 configured 행만으로 정하면 unconfigured 회전마다 failing→unconfigured 로 다시 판정된다");
+});
+
+t("S6 직전 실행이 구성 미비면 unconfigured, 아니면 연속실패 집계 그대로", () => {
+  assert.deepEqual(priorState(false, [false, false, false], 3), { state: "unconfigured", failStreak: 0 });
+  assert.deepEqual(priorState(true, [false, false, false], 3), { state: "failing", failStreak: 3 });
+  assert.deepEqual(priorState(null, [], 3), { state: "unknown", failStreak: 0 });
+});
+
+t("S7 설정을 되살린 뒤 다시 3회 연속 실패하면 경보가 다시 울린다 — 해제가 경보를 영영 막지 않는다", () => {
+  const fail = { ok: false, configured: true };
+  const okRun = { ok: true, configured: true };
+  const unconf = { ok: false, configured: false };
+  assert.deepEqual(replay([fail, fail, fail, unconf, unconf, okRun, fail, fail, fail]), ["raise", "clear", "raise"]);
+});
+
+// S5~S7 의 replay 는 runCanary 의 before/after 를 이 파일 안에서 다시 짠 것이라, run.ts 가 옛 식(configured 행만 보는
+//  evaluateStreak)으로 돌아가도 초록이다(실측). 실행 경로는 DB 에 묶여 단위로 돌리기 어려우므로 run.ts 소스를 읽어 배선을 못박는다
+//  (sandbox-wiring.test 와 같은 방식 — 주석은 떼고 센다).
+t("S8 ★ runCanary 의 직전 상태는 priorState(가장 최근 실행의 구성 여부)를 거친다 — 현황 조회와 같은 규칙", () => {
+  const raw = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "src", "org", "canary", "run.ts"), "utf8");
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, " ").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const fn = (name: string): string => {
+    const i = src.search(new RegExp(`(async function|function) ${name}\\b`));
+    assert.ok(i >= 0, `run.ts 에 ${name} 이 없다`);
+    const j = src.indexOf("\n}\n", i);
+    return src.slice(i, j < 0 ? undefined : j);
+  };
+  assert.match(fn("runCanary"), /const before = priorState\(\s*await latestConfigured\(probe\.key\)/,
+    "직전 상태가 가장 최근 실행의 구성 여부를 안 보면, 설정을 걷어낸 뒤 매 회전 failing→unconfigured clear 가 다시 울린다(S5)");
+  assert.match(fn("canaryStatus"), /priorState\(/, "현황 조회도 같은 규칙(priorState)을 쓴다 — 상태를 두 곳에서 따로 계산하면 갈린다");
+  assert.doesNotMatch(fn("latestConfigured"), /\bAND\s+configured\b/i,
+    "latestConfigured 는 구성 미비 행까지 포함한 **가장 최근 실행**을 봐야 한다 — configured 행만 보면 늘 true 라 S5 가 되살아난다");
 });
 
 // ── R. 프로브 구성이 실제로 볼 수 있는가 ──

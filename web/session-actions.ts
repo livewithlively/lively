@@ -648,3 +648,28 @@ export function purgedToast(r: PurgeResult): string {
   if (r.localPending) parts.push(`⚠ ${r.localPending} 컴퓨터의 파일은 그대로입니다`);
   return parts.join(' · ');
 }
+
+// ── 초대받은 세션에서 나가기(#3870, 원준 2026-10-14) ───────────────────────────────────────────────
+//  «초대받은 뒤에 나갈 수가 있나? … 만든 사람은 나가는 경로 없어야 되고, 초대받은 사람에 한해서 나갈 수 있도록.»
+//  ⇒ 이 함수는 **초대받은 사람의 자리**에서만 부른다(부르는 쪽이 views.isInvitedSess 로 가른다) — 서버도 만든 사람의 요청은 거절한다.
+//  되돌리기는 내 손에 없다(다시 들어오려면 만든 사람이 다시 초대해야 한다) — 그래서 늘 묻는다.
+
+/** 신호 — 셸(v2/main.ts)이 받아 그 세션 창을 닫고 목록을 다시 받는다. */
+export const SESSION_LEFT_EVENT = 'lively:session-left';
+
+/** 묻고 나간다. 나갔으면 true. 실패는 토스트로 말하고 false. */
+export async function leaveInvitedSession(s: { id: string; label?: string | null }): Promise<boolean> {
+  const name = String(s.label || s.id);
+  const ok = await confirmDialog({
+    title: `「${name}」 세션에서 나갈까요?`, danger: true, confirmText: '나가기', cancelText: '취소',
+    message: '내 목록에서 빠지고, 이 세션을 더는 열 수 없어요.',
+    lines: ['다시 보려면 만든 사람에게 다시 초대해 달라고 하세요. 세션과 대화는 그대로 남아요.'],
+  });
+  if (!ok) return false;
+  try {
+    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/leave-invite', { method: 'POST', body: '{}' });
+  } catch (e: any) { toast(e?.message || '세션에서 나가지 못했어요.', true); return false; }
+  toast('세션에서 나왔어요.');
+  window.dispatchEvent(new CustomEvent(SESSION_LEFT_EVENT, { detail: { id: s.id } }));
+  return true;
+}

@@ -6,7 +6,7 @@
 //
 // 사양(행마다 단언 하나 이상):
 //  Q1 처음 자리: 세션이 왼쪽이면 사이드바(격자) 왼쪽 아래 — 격자 왼쪽 + 24 · 아래 24
-//  Q2 처음 크기: 폭 360(세션 열의 마지막 폭) · 높이 = 창 높이 × 0.34
+//  Q2 처음 크기: 폭 320 · 높이 = 창 높이 × 0.27(220~300) — 2026-10-11 줄였다(원준 «너무 크게 뜬다»)
 //  Q3 알약(최소화)은 좌우 손잡이만 보인다 · 오른쪽 손잡이를 끌면 폭이 그만큼 넓어진다(버그 수정)
 //  Q4 알약을 한 번 누르면(끌지 않고) 잠깐 뒤 펴진다
 //  Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게(카드가 풀린다)
@@ -83,7 +83,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     card.restore(true); await sleep(60);
     let r=rc(col); const g=rc(grid);
     R.q1_info=[Math.round(r.left),Math.round(VH-r.bottom),Math.round(g.left)]; R.q1=Math.abs(r.left-(g.left+24))<=1.5 && Math.abs(VH-r.bottom-24)<=1.5;
-    R.q2_info=[Math.round(r.width),Math.round(r.height),VH]; R.q2=Math.abs(r.width-360)<=1 && Math.abs(r.height-Math.max(260,Math.min(400,Math.round(VH*0.34))))<=1;
+    R.q2_info=[Math.round(r.width),Math.round(r.height),VH]; R.q2=Math.abs(r.width-320)<=1 && Math.abs(r.height-Math.max(220,Math.min(300,Math.round(VH*0.27))))<=1;
     const P=(type,x,y,t)=>t.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:0,buttons:1,pointerId:7,pointerType:'mouse'}));
     // Q3 — 최소화 → 좌우 손잡이만 · 오른쪽 손잡이로 폭 넓히기
     col.querySelector('.cm-min-b, .cm-fold-b').click(); await sleep(30);
@@ -110,7 +110,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     card.restore(true); await sleep(60);
     R.q6_info=[grid.classList.contains('cm'),grid.classList.contains('cm-fold')]; R.q6=grid.classList.contains('cm') && !grid.classList.contains('cm-fold');
     const fold=()=>grid.classList.contains('cm-fold'); const minB=()=>col.querySelector('.cm-min-b, .cm-fold-b');
-    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card3')||'null');
+    const saved=()=>JSON.parse(localStorage.getItem('lively_v2_side_card4')||'null');
     const drag=async(t,dx,dy)=>{const b=rc(t); const x=b.left+(t===head?30:b.width/2), y=b.top+b.height/2; P('pointerdown',x,y,t); P('pointermove',x+dx/2,y+dy/2,t); P('pointermove',x+dx,y+dy,t); P('pointerup',x+dx,y+dy,t); await sleep(30);};
     // Q8 — 카드가 아니면 cm-card-left 가 없다
     card.restore(false); await sleep(40);
@@ -169,7 +169,7 @@ let pass = 0, fail = 0;
 const check = (c, n, info = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n} — ${info}`); } };
 check(!R.err, "Q0 장면이 끝까지 돈다", R.err);
 check(R.q1, "Q1 처음 자리: 세션 쪽(왼쪽) 사이드바 아래 모서리 — 격자 왼쪽 + 24 · 아래 24", JSON.stringify(R.q1_info));
-check(R.q2, "Q2 처음 크기: 폭 360 · 높이 창 × 0.34", JSON.stringify(R.q2_info));
+check(R.q2, "Q2 처음 크기: 폭 320 · 높이 창 × 0.27(220~300)", JSON.stringify(R.q2_info));
 check(R.q3, "Q3 알약은 좌우 손잡이만 · 오른쪽 손잡이로 폭이 넓어진다(원준 10-09 «최소화 상태에서 가로 폭 조절 안 됨»)", JSON.stringify(R.q3_info));
 check(R.q4, "Q4 알약을 한 번 누르면 잠깐 뒤 펴진다", JSON.stringify(R.q4_info));
 check(R.q5, "Q5 알약을 두 번 누르면 펴지지 않고 곧장 크게", JSON.stringify(R.q5_info));

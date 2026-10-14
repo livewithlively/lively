@@ -10,15 +10,16 @@ export type StudioPlace = 'side' | 'full' | 'both';
 export type StudioStage = 'plan' | 'draft' | 'fix' | 'check' | 'put';
 
 export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string }> = [
-  { key: 'what', n: 1, label: '무엇을' }, { key: 'plan', n: 2, label: '내용' }, { key: 'draft', n: 3, label: '시안' },
+  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'draft', n: 3, label: '생성된 시안' },
   { key: 'fix', n: 4, label: '고치기' }, { key: 'check', n: 5, label: '확인' }, { key: 'put', n: 6, label: '넣기' },
 ];
 export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === s); }
 
+// 사람에게 보이는 이름은 둘로 통일한다(원준 2026-10-14) — 세션 오른쪽에 붙는 것 = 「세션 위젯」, 화면 전체로 여는 것 = 「앱 화면」.
 export const PLACE: Record<StudioPlace, { title: string; sub: string; say: string; width: string }> = {
-  side: { title: '세션 옆에 붙여 쓰는 앱', sub: 'AI 와 일하는 세션 옆에 두고 같이 씁니다', say: '세션 옆(오른쪽 사이드바, 폭 340px 안팎)에 붙여 쓰는 앱이야. 좁은 폭에서 잘 보이게 만들어 줘.', width: '세션 옆 폭(360px)' },
-  full: { title: '화면 전체로 여는 앱', sub: '프로젝트 앱처럼 따로 열어 넓게 씁니다', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. 넓은 화면에 맞게 만들어 줘.', width: '넓은 폭' },
-  both: { title: '둘 다', sub: '크게도 열고 세션에도 붙입니다', say: '세션 옆 좁은 사이드바에도 붙이고 화면 전체로도 여는 앱이야. 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 옆 폭과 넓은 폭 둘 다' },
+  side: { title: '세션 위젯', sub: 'AI 세션 오른쪽에 붙여 같이 써요. 세션에 말로 시키면 AI 가 위젯 내용도 읽고 바꿔요', say: '세션 위젯(세션 오른쪽 사이드바, 폭 340px 안팎)으로 붙여 쓰는 앱이야. 좁은 폭에서 잘 보이게 만들어 줘.', width: '세션 위젯 폭(360px)' },
+  full: { title: '앱 화면', sub: '앱 찾기에서 열어 화면 전체로 넓게 써요', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. 넓은 화면에 맞게 만들어 줘.', width: '앱 화면 폭' },
+  both: { title: '둘 다', sub: '세션 위젯으로도, 앱 화면으로도 써요', say: '세션 위젯(세션 오른쪽 좁은 사이드바)으로도 붙이고 화면 전체로도 여는 앱이야. 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 위젯 폭과 앱 화면 폭 둘 다' },
 };
 
 export interface StudioCard { name: string; who: string; items: string; can: string[]; not: string; first: string }
@@ -102,8 +103,11 @@ export function copyId(originId: string, memberId: string): string {
 
 // ── 단계마다 보내는 글(사람이 치는 글이 아니라 단추가 보낸다 · 대화에 그대로 보이니 짧고 쉬운 말로) ──
 const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_get 으로 그것만 읽고 다른 건 찾아보지 마).';
-export function planBrief(what: string, place: StudioPlace): string {
-  return `「${what}」 앱을 만들고 싶어. ${PLACE[place].say}\n`
+/** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
+export function planBrief(what: string, place: StudioPlace, name = ''): string {
+  const desc = String(what || '').trim(), nm = String(name || '').trim();
+  const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
+  return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 이름 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + '아직 만들지 말고, 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · 할 수 있는 것은 셋을 · 로):\n'
     + '[[기획카드]]\n이름: \n누가 쓰나: \n무엇을 적나: \n할 수 있는 것: \n안 하는 것: \n첫 화면: \n[[/기획카드]]';
 }
@@ -112,10 +116,18 @@ export function draftBrief(card: StudioCard, place: StudioPlace): string {
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「첫 판 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
-export interface StudioPin { x: number; y: number; where: string; note: string }
+/** ④ 짚은 곳 — 고른 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
+export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number }
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
-  pins.forEach((p, i) => { if (p.note.trim()) lines.push(`[찍은 곳 ${i + 1}] 화면의 왼쪽에서 ${Math.round(p.x * 100)}% · 위에서 ${Math.round(p.y * 100)}% 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`); });
+  const pc = (v?: number): number => Math.round((v || 0) * 100);
+  pins.forEach((p, i) => {
+    if (!p.note.trim()) return;
+    const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
+    if (p.kind === 'pick') lines.push(`[고른 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
+    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 에서 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
+    else lines.push(`[찍은 곳 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
+  });
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
   return `${round}번째 고침이야. 아래를 반영해 새 판으로 저장해 줘(app_pull ${appId} 로 지금 판을 받아 고치고 app_save · note 는 바뀐 점 한 줄). ${PLACE[place].say} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }

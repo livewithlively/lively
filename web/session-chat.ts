@@ -18,12 +18,13 @@
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
-import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
+import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replaceKids, state, sv, toast, TOKEN_KEY } from './core.js';
+import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
-import { registerSessionInput, putIntoSession } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+import { registerSessionInput, putIntoSession, SESSION_INPUT_EVENT } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
 
 //  #4594 — 같은 오리진 신호 `lively:compose-draft` {session, text}: 앱 화면(app-ui.ts — 멈춘 세션에 보내려다 409 draft)·앱 탭 ⋯ 메뉴
 //   («AI에게 고치기»)가 **그 세션의 입력칸에 글을 넣어 둔다**(보내지 않는다 — 사람이 읽고 보낸다). 넣는 법은 세션 화면이 뜰 때
@@ -39,7 +40,7 @@ if (typeof window !== 'undefined' && !(window as unknown as { __lvComposeDraft?:
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
-import { confirmSessionTrash, eulReul, sessionNames, sessionTrashOp } from './session-actions.js';
+import { confirmSessionTrash, eulReul, leaveInvitedSession, sessionNames, sessionTrashOp } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
@@ -165,6 +166,8 @@ export interface SessionChatOpts {
   onPickProject?: (anchor: HTMLElement) => void;
   /** 이 세션의 소속을 바꿀 수 있나(#3870 — 주인·초대받은 사람). 없으면 종전대로 주인만(target.owned). 판정은 셸의 한 술어(v2/views canMoveSess). */
   canPickProject?: (t: SessionChatTarget) => boolean;
+  /** 이 세션에서 나갈 수 있나(#3870 — 초대받은 사람만). 없으면 아무에게도 안 세운다(fail-closed). 판정은 셸의 한 술어(v2/views isInvitedSess). */
+  canLeave?: (t: SessionChatTarget) => boolean;
   onRename?: (label: string) => Promise<void>;
   /** 상단바 [파일] — 우패널을 '타임라인 ↔ 파일 탐색기'로 갈아 끼운다(#1744). 켜진 뒤 상태를 돌려준다. */
   onToggleFiles?: () => boolean;
@@ -424,23 +427,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const sh = shareSessOf(target);
     // 공유할 대상이 없으면(기록만 남은 행 등) 자리를 비운다 — 눌러서 "무엇을?"이 되지 않게.
     if (!sh) { facesEl.hidden = true; return; }
+    //  초대 명단(소유자 + 초대받은 사람)이 줄이다 — 지금 보고 있는 사람은 진하게, 아직 안 보는 사람은 흐리게(lib/face-roster).
     const vs = viewersOf(target.id);
-    const shown = vs.slice(0, FACE_MAX);
-    const rest = vs.length - shown.length;
+    const all = faceRoster(sh.owner, sh.invites, vs, String((state.me as any)?.userId || ''), personDisplayName);
+    const shown = all.slice(0, FACE_MAX);
+    const rest = all.length - shown.length;
+    const roster = all.map((f) => f.name + (f.here ? '' : ' (안 보는 중)')).join(', ');
     facesEl.title = sh.owned
-      ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
-      : '이 세션을 누가 볼 수 있는지 봅니다';
+      ? '초대한 사람 — ' + roster + '\n눌러서 함께 볼 사람을 고릅니다'
+      : '이 세션을 볼 수 있는 사람 — ' + roster;
     facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
     //  ⚠ 여기서 DOM 의 replaceChildren 을 직접 부르지 않는다 — el() 과 달리 null 을 안 걸러 문자열 "null" 이
     //   텍스트 노드로 박힌다(실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 «null» 이 찍혔다).
     //   replaceKids 가 el() 과 **같은 자식 규칙**으로 그 자리를 받는다(lib/dom.ts).
     replaceKids(facesEl,
-      ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
+      ...shown.map((v) => personFace(v.id, v.here ? 'sc-face' : 'sc-face sc-face-off', v.name)),
       rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
       el('span', { class: 'sc-face sc-face-add', text: '＋' }));
     facesEl.hidden = false;
   }
-  facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };
+  //  저장하면 명단을 바로 줄에 반영한다 — 사이드바 목록을 다시 받을 때까지 옛 명단이 남지 않게.
+  facesEl.onclick = () => {
+    const sh = shareSessOf(target);
+    if (sh) openSharePopover(facesEl, sh, (invites) => { try { (target.raw ||= {}).invites = invites; } catch (_) { /* 읽기 전용이면 다음 목록 갱신이 맞춘다 */ } paintFaces(); });
+  };
   paintFaces();
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
   const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
@@ -1005,6 +1015,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  지금 보이는 쪽의 입력칸에 넣는다: 터미널이면 붙여넣기(여러 줄은 bracketed paste — 줄바꿈이 전송이 되지 않게),
   //  대화창이면 그 글칸 끝에. 터미널 프레임이 아직 안 떴으면 뜰 때까지 담아 둔다(termQueue).
   const offSessInput = registerSessionInput(() => [target.id, target.logId, target.raw?.claudeSessionId, ...((target as any).altIds || [])], (text) => {
+    //  넣었다고 이 화면 안에서 알린다 — 세션이 카드로 떠 있으면 카드가 펴지고 또렷해진다(side-card.ts).
+    try { view.input.dispatchEvent(new CustomEvent(SESSION_INPUT_EVENT, { bubbles: true })); } catch { /* noop */ }
     if (mode === 'term' && hasTerm()) {
       if (termReady) termSend('paste', text); else termQueue.push({ cmd: 'paste', text });
       return true;
@@ -1256,6 +1268,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (sh) secs.push({ key: 'ppl', label: '사람', icon: ['M12 12.2a4.1 4.1 0 1 0 0-8.2 4.1 4.1 0 0 0 0 8.2', 'M4.6 20.2a7.4 7.4 0 0 1 14.8 0'], kids: [
       row('함께 보는 사람', sh.owned ? '이 세션을 볼 사람을 고릅니다 — 기본은 나만 봐요' : '이 세션을 누가 볼 수 있는지 봅니다',
         sh.owned ? '고르기' : '보기', () => { const s2 = shareSessOf(target); if (s2) openSharePopover(facesEl, s2); }),
+      //  #3870 — 초대받은 사람만 나간다(만든 사람에겐 이 줄이 없다 · 서버도 거절한다).
+      opts.canLeave?.(target)
+        ? row('이 세션에서 나가기', '내 목록에서 빠지고 더는 열 수 없어요 — 다시 보려면 만든 사람이 다시 초대해야 해요', '나가기',
+            () => { close(); void leaveInvitedSession({ id: target.id, label: target.label }); }, true)
+        : null,
     ] });
 
     // ── 정리 — 되돌릴 수 없는 것은 **맨 아래 따로**. 종전엔 [링크 복사] 바로 위 평범한 줄이었다. ──

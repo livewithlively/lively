@@ -375,7 +375,7 @@ const GLYPH_OF = { home: "dashboard", sys: "gear" };
   const defs = [...T.matchAll(/^function (walk\w*)\(/gm)].map((m) => m[1]);
   ok(defs.length === 1, "T1 ctx-rename 시험의 파일 훑기 도구가 하나다", defs.join(","));
 }
-const NAMES = ["home", "term", "chat", "proj", "wiki", "src", "tags", "ctx", "sess", "sys", "web", "learn", "liv", "apps", "bell"];
+const NAMES = ["home", "term", "chat", "proj", "wiki", "src", "tags", "ctx", "sess", "sys", "web", "learn", "liv", "apps", "bell", "builder"];
 for (const n of NAMES) {
   const mk = markup(n), d = ICONS[GLYPH_OF[n] || n];
   ok(!!d && mk.includes(`d="${d}"`) && mk.includes(`var(--gi-c-${n})`) && (mk.match(/class="v2-gi-tile"/g) || []).length === 1, `P1 · P2 앱 아이콘 ${n}: 타일 하나 + 그 선 그림 + 그 색 토큰`);

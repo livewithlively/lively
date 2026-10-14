@@ -44,7 +44,7 @@ const CSS = ["01-base.css", "03-components.css", "20-dashboard.css", "36-chat.cs
   .map((f) => path.join(ROOT, "public/styles", f)).filter(existsSync);
 //  같은 모듈 한 벌을 셸 · 세션 머리줄 · 앱 창이 나눠 쓴다(묶음 하나).
 const bundle = buildSync({
-  stdin: { contents: "export { mountPanes } from './web/v2/panes.ts'; export { openAppUi, closeAppUi } from './web/v2/app-ui.ts'; export { refreshSessionApps } from './web/v2/session-app-pane.ts'; export { mountSessionChat } from './web/session-chat.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: "export { mountPanes } from './web/v2/panes.ts'; export { openAppUi, closeAppUi, openAppBig } from './web/v2/app-ui.ts'; export { refreshSessionApps } from './web/v2/session-app-pane.ts'; export { mountSessionChat } from './web/session-chat.ts';", resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "PN", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 
@@ -106,9 +106,16 @@ async function PAGE_MAIN() {
     const o = $(".v2-appui"); const r = o ? o.getBoundingClientRect() : null;
     const out = { open: okOpen, box: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
       esc: o && o.querySelector(".v2-appui-esc") ? getComputedStyle(o.querySelector(".v2-appui-esc")).display : "absent", badge: o ? getComputedStyle(o.querySelector(".v2-appui-badge")).display : null,
-      btn: o ? o.querySelector(".v2-appui-h .v2-appui-esc").parentElement.innerText.replace(/\s+/g, " ").trim() : null };   // 닫기 단추((Esc) 를 품은 단추) — 그 앞에 «화면 가득» 단추가 선다(#4592)
+      btn: o ? o.querySelector(".v2-appui-h .v2-appui-esc").parentElement.innerText.replace(/\s+/g, " ").trim() : null };   // 닫기 단추((Esc) 를 품은 단추) — 크게 보기는 늘 화면 가득이라 토글 단추가 없다(2026-10-12)
     PN.closeAppUi();
     return out;
+  };
+  //  「크게 보기」 단추가 부르는 것 — 새 탭(window.open 을 가로채 주소만 본다) 또는 그 자리에서 가득(폰 · 팝업 막힘)
+  const bigTab = async (blocked) => {
+    let url = null; const orig = window.open; window.open = (u) => { url = u; return blocked ? null : { closed: false }; };
+    try { PN.openAppBig("deck", { title: "장표 수정", sessionId: "s1", page: "main" }); await sleep(120); } finally { window.open = orig; }
+    const inPlace = !!$(".v2-appui"); PN.closeAppUi(); await sleep(30);
+    return { url, inPlace };
   };
   //  실제 세션 머리줄(session-chat.ts mountSessionChat) + 시험용 appDoor. 셸 고리는 위 D 행이, main.ts · views.ts 고리는 phone-side-pane W 행이 본다.
   const headReal = async () => {
@@ -218,6 +225,7 @@ async function PAGE_MAIN() {
       const add = mk("<div class=\"pn-tk-add\"><input class=\"pn-tk-add-in\" type=\"text\"></div>");
       p.f1 = getComputedStyle(add.querySelector("input")).fontSize;
       p.big = await bigView();
+      p.bigTab = await bigTab(false);
       p.head = await headReal();
     } else {
       const q = {}; R.q = q;
@@ -227,6 +235,8 @@ async function PAGE_MAIN() {
       q.dock = dockState();
       q.mAside = root.classList.contains("m-aside");
       q.big = await bigView();
+      q.bigTab = await bigTab(false);
+      q.bigTabBlocked = await bigTab(true);
       q.head = await headReal();
     }
   } catch (e) { R.err = String(e && e.stack || e); }
@@ -300,12 +310,17 @@ const [fw, fh] = F.vp || [0, 0];
 check(fw > 640 && fh <= 500 && !!f.big && Js(f.big.box) === Js([0, 0, fw, fh]), "C2 눕힌 폰 «크게 보기» = 화면 전체", { ...f.big, vp: F.vp });
 const t = T.q || {};
 check(!!t.dock && t.mAside && t.dock.shown && t.dock.inset !== "0px", "A3 태블릿 서랍엔 독이 선다", t.dock);
-check(!!t.big && !!t.big.box && t.big.box[0] === 24 && t.big.esc !== "none", "C 태블릿 «크게 보기» 는 종전 창(여백 24px · «(Esc)»)", t.big);
+check(!!t.big && !!t.big.box && t.big.box[0] === 0 && t.big.box[1] === 0 && t.big.box[2] === 768 && t.big.esc !== "none", "C 태블릿 «크게 보기» 도 화면 가득(여백 없이 · «(Esc)» 는 남는다 — 2026-10-12 «완전 전체화면으로»)", t.big);
 const d = D.q || {};
 check(!!d.dock && d.dock.shown, "A7 데스크톱 독 그대로", d.dock);
 check(!!d.head && d.head.wide === "none", "H7 데스크톱 머리줄 [붙은 앱] 숨음(곁칸에 그 탭이 보인다)", d.head && d.head.wide);
 const dh = (D.vp || [0, 0])[1];
-check(!!d.big && Js(d.big.box && d.big.box.slice(2)) === Js([960, Math.round(Math.min(680, dh * 0.88))]) && d.big.esc !== "none" && d.big.btn === "닫기 (Esc)", "C3 데스크톱 «크게 보기» 종전 창(최대 960×680 · 88vh) · «닫기 (Esc)»", { ...d.big, vp: D.vp });
+check(!!d.big && Js(d.big.box) === Js([0, 0, D.vp[0], D.vp[1]]) && d.big.esc !== "none" && d.big.btn === "닫기 (Esc)", "C3 ★ 데스크톱 «크게 보기» 는 화면 가득(창이 아니라 뷰포트 전체 · 토글 없음) · «닫기 (Esc)»", { ...d.big, vp: D.vp });
+const tabUrl = (v) => !!v && typeof v.url === "string" && /#\/full\/deck\?s=s1&page=main&t=/.test(v.url) && !v.inPlace;
+check(!!p.bigTab && p.bigTab.url === null && p.bigTab.inPlace, "C4 폰 «크게 보기» 는 새 탭이 아니라 그 자리에서 화면 전체(되돌아오기 쉽게)", p.bigTab);
+check(tabUrl(t.bigTab), "C5 태블릿 «크게 보기» 는 새 탭(#/full/<앱>?s=<세션>&page=…) — 모달을 띄우지 않는다", t.bigTab);
+check(tabUrl(d.bigTab), "C6 ★ 데스크톱 «크게 보기» 는 새 탭(#/full/<앱>?s=<세션>&page=…) — 모달을 띄우지 않는다(2026-10-12 «바로 거기로»)", d.bigTab);
+check(!!d.bigTabBlocked && d.bigTabBlocked.inPlace, "C7 팝업이 막히면 이 탭 위에 화면 가득", d.bigTabBlocked);
 const errs = [P, F, T, D].flatMap((r) => r.pageErrors || []);
 check(errs.length === 0, "E 페이지 오류 없음", errs);
 console.log(`\nphone-side-pane-runtime: ${pass} 통과 · ${fail} 실패`);
