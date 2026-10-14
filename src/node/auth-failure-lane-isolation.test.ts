@@ -243,4 +243,39 @@ const LANE_CTX = { taskId: 501, requester: "lively1", cronJobId: "distill", lane
   assert.equal(threw, null, "dep 하나의 오류가 대응 경로 밖으로 새어 스케줄러를 깼다");
 }
 
+// ════════ E. 잡 실행 계정 해소(jobRunnerOf) — 실행 멤버 설정을 못 읽으면 던져 크론 정지로 ════════
+import { jobRunnerOf } from "./auth-failure-response.js";
+{
+  const row = (params: Record<string, unknown> | null, created_by: string | null = "maker") =>
+    ({ action: "distill_sources_headless", params, created_by });
+  const unreadable = async (): Promise<string | null> => { throw new Error("설정 조회 실패"); };
+
+  // ── E1. 설정을 못 읽으면 던진다 — created_by 로 내려가면 분배 때와 다른 계정을 잡 계정으로 보고 레인 격리로 기운다 ──
+  let threw = false;
+  try { await jobRunnerOf(row({}), unreadable); } catch { threw = true; }
+  assert.equal(threw, true, "실행 멤버 설정을 못 읽었는데 created_by 로 내려갔다 — 잡 계정이 죽었는데 레인만 끈다");
+
+  // ── E2. 잡이 계정을 명시했으면 설정은 안 본다(분배와 같은 우선순위) — 못 읽어도 답이 정해져 있다 ──
+  assert.deepEqual(await jobRunnerOf(row({ requester: "  pinned " }), unreadable), { laneCapable: true, runner: "pinned" },
+    "잡이 명시한 계정이 있는데 설정 조회 실패로 판정을 포기했다(또는 공백을 안 다듬었다)");
+
+  // ── E3·E4·E5. 우선순위 — 설정의 실행 멤버 > created_by, 아무것도 없으면 null(→ 크론 정지) ──
+  assert.equal((await jobRunnerOf(row({}), async () => "ws-runner")).runner, "ws-runner", "설정의 실행 멤버보다 created_by 를 앞세웠다");
+  assert.equal((await jobRunnerOf(row({}), async () => null)).runner, "maker", "설정이 비었는데 created_by 로 내려가지 않았다");
+  assert.equal((await jobRunnerOf(row(null, null), async () => null)).runner, null, "잡 계정이 없는데 무언가를 지어냈다");
+
+  // ── E6. 레인 스위치가 없는 액션 ──
+  assert.equal((await jobRunnerOf({ action: "map_unmapped_headless", params: {}, created_by: "m" }, async () => null)).laneCapable, false,
+    "레인을 못 끄는 잡에 레인 격리를 허락했다");
+
+  // ── E7. 대응 전체 — 설정 조회 실패면 레인이 아니라 크론을 멈춘다 ──
+  resetAuthAlertCooldown();
+  const s = spies();
+  const out = await handleAuthFailure(LANE_CTX, { stopCron: true },
+    { ...(s.deps as Record<string, unknown>), jobRunner: () => jobRunnerOf(row({}), unreadable) } as never);
+  assert.deepEqual(s.stopped, ["distill"], "실행 멤버 설정을 못 읽었는데 크론을 안 멈췄다");
+  assert.deepEqual(s.laneStops, [], "실행 멤버 설정을 못 읽었는데 레인만 껐다");
+  assert.equal(out.cronStopped, true);
+}
+
 console.log("auth-failure-lane-isolation: ok");

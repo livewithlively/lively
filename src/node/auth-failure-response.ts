@@ -172,16 +172,39 @@ export function authFailureScope(o: {
  */
 const LANE_CAPABLE_ACTIONS = new Set(["distill_sources_headless"]);
 
-/** 잡의 액션과 실행 계정(레인이 계정을 정하지 않았을 때 쓰는 계정). 잡이 없으면 null. */
+/** 워크스페이스 실행 멤버(context_job_policy.runner_member) — 못 읽으면 **던진다**(jobRunnerOf 머리주석). */
+async function readWorkspaceRunner(): Promise<string | null> {
+  const { getRuntimeConfig } = await import("../org/store.js");
+  return (await getRuntimeConfig()).context_job_policy?.runner_member ?? null;
+}
+
+export interface CronJobRow { action: string; params: Record<string, unknown> | null; created_by: string | null }
+
+/**
+ * 잡 행 → 레인 격리 가능 여부와 잡 실행 계정(레인이 계정을 정하지 않았을 때 쓰는 계정).
+ *  분배 경로(scheduler/actions/distill.runDistillHeadless)와 **같은 함수**(resolveJobRunner)로 푼다 — 따로 풀면
+ *  잡 계정이 죽었는데도 «레인 계정» 으로 오판해 레인만 하나씩 끄는 일이 생긴다.
+ *  ⚠ 단 워크스페이스 실행 멤버는 **여기서 먼저 읽고, 못 읽으면 던진다**(호출부가 크론 정지로 대응한다).
+ *   resolveJobRunner 는 설정 조회 실패를 삼키고 created_by 로 내려간다 — 분배 쪽에선 잡을 세우지 않으려는 선택이지만,
+ *   판정 쪽에서 그러면 분배 때와 다른 계정을 «잡 계정» 으로 보고 덜 멈추는 쪽(레인 격리)으로 기운다.
+ *   잡이 계정을 명시했으면 설정은 안 본다 — 분배와 같은 우선순위라 설정이 답을 바꾸지 않으므로, 못 읽어도 모르는 게 아니다.
+ */
+export async function jobRunnerOf(
+  row: CronJobRow,
+  workspaceRunner: () => Promise<string | null> = readWorkspaceRunner,
+): Promise<{ laneCapable: boolean; runner: string | null }> {
+  const { explicitRunner, resolveJobRunner } = await import("../scheduler/actions/_headless.js");
+  const explicit = explicitRunner(undefined, row.params?.requester);
+  const ws = explicit ? null : await workspaceRunner();
+  const runner = await resolveJobRunner(explicit, row.created_by, async () => ws);
+  return { laneCapable: LANE_CAPABLE_ACTIONS.has(row.action), runner: runner || null };
+}
+
+/** 잡의 액션과 실행 계정. 잡이 없으면 null. 실행 멤버 설정을 못 읽으면 던진다(jobRunnerOf). */
 async function loadJobRunner(jobId: string): Promise<{ laneCapable: boolean; runner: string | null } | null> {
   const r = await itemsPool.query(`SELECT action, params, created_by FROM org_cron WHERE id=$1`, [jobId]);
-  const row = r.rows[0] as { action: string; params: Record<string, unknown> | null; created_by: string | null } | undefined;
-  if (!row) return null;
-  //  분배 경로(scheduler/actions/distill.runDistillHeadless)와 **같은 함수**로 잡 계정을 푼다 — 따로 풀면
-  //   잡 계정이 죽었는데도 «레인 계정» 으로 오판해 레인만 하나씩 끄는 일이 생긴다.
-  const { explicitRunner, resolveJobRunner } = await import("../scheduler/actions/_headless.js");
-  const runner = await resolveJobRunner(explicitRunner(undefined, row.params?.requester), row.created_by);
-  return { laneCapable: LANE_CAPABLE_ACTIONS.has(row.action), runner: runner || null };
+  const row = r.rows[0] as CronJobRow | undefined;
+  return row ? jobRunnerOf(row) : null;
 }
 
 /**
