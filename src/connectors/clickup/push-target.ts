@@ -21,3 +21,31 @@ export function createListFor(chainListExts: readonly (string | null | undefined
   }
   return containerId;
 }
+
+// 좌표 정규화 — createListFor 와 같은 규칙(빈 문자열·공백 = 좌표 없음).
+const coordOf = (v: string | null | undefined): string | null => (v ?? "").trim() || null;
+
+/**
+ * 이 행을 위해 조상 체인을 읽어야 하나.
+ *  · create(연결 없음) — 언제나. 부모가 올라갔는지 판정하고 태어날 리스트(createListFor)를 정한다.
+ *    부모가 없는 비정상 행도 true 다 — 호출부가 그 행을 닫는다.
+ *  · 갱신(연결된 카드) — **자기 좌표가 없을 때만.** push 로 만든 자식은 부모 리스트에 태어나지만(createListFor)
+ *    `list_ext` 는 인바운드만 채우므로 첫 인바운드 전까지 비어 있다. 그 구간의 갱신이 컨테이너 상태셋으로 status
+ *    이름을 뽑으면 리스트 어휘가 다를 때 ClickUp 이 거부하고(updateSafe 가 status 를 빼고 재시도), base 는 우리
+ *    카테고리로 전진해 **다음 인바운드가 저쪽 옛 상태를 채택한다 — 로컬 상태 변경이 조용히 원복된다.**
+ *    태어난 리스트는 create 때와 같은 체인 규칙으로 다시 풀린다.
+ *  · project — 체인이 없다(최상위). 연결 없는 project 는 컨테이너에 태어난다.
+ */
+export function needsAncestorChain(o: { level: string; linked: boolean; ownListExt: string | null | undefined; hasParent: boolean }): boolean {
+  if (o.level === "project") return false;
+  if (!o.linked) return true;
+  return o.hasParent && coordOf(o.ownListExt) == null;
+}
+
+/**
+ * status 판정 기준 리스트 — 그 카드가 실제로 사는 리스트. 연결된 카드는 자기 좌표가 정본이고, 없으면(또는 아직
+ *  카드가 없으면) 태어나는/태어난 리스트(createListFor 결과)다. 둘 다 없으면 null(상태셋 없음 → status 를 안 싣는다).
+ */
+export function statusListFor(o: { linked: boolean; ownListExt: string | null | undefined; createList: string }): string | null {
+  return (o.linked ? coordOf(o.ownListExt) : null) ?? (o.createList || null);
+}

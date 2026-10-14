@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { nextStallState, outboxPhaseOf, outboxAlertFor, tickOnce, stopOutboxWatch, STALL_TICKS } from "./outbox-watch.js";
+import { nextStallState, outboxPhaseOf, outboxAlertFor, tickOnce, stopOutboxWatch, STALL_TICKS, watchIntervalMs } from "./outbox-watch.js";
 import type { Observation } from "./outbox-watch.js";
 import type { BoxAlert } from "./box-watch.js";
 import { childDrainSummary } from "../connectors/sync-outcome.js";
@@ -19,6 +19,7 @@ const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathna
 const CRON = r("../scheduler/actions/connector.ts");
 const BOOT = r("../boot/housekeeping.ts");
 const DRAIN = r("../connectors/clickup-push.ts");
+const WATCH = r("./outbox-watch.ts");
 
 test("표 — 예산을 다 쓰고도 안 줄면 센다", () => {
   //  첫 관측: 예산을 다 썼다는 것만으로는 정체가 아니다(비교할 이전이 없다) — 세기 시작만 한다.
@@ -188,4 +189,38 @@ test("상태기계 — 못 보낸 문제의 복구는 보내지 않는다", asyn
   assert.equal(sent.length, 1, "시도는 한다");
   await tickOnce(deps({ remaining: 0, budgetStopped: false, lastRunAt: "c9" }, false));
   assert.equal(sent.length, 1, "문제를 못 알렸으면 복구도 보내지 않는다");
+});
+
+test("상태기계 — tick 이 겹치면 뒤 tick 은 건너뛴다(같은 전이를 두 번 알리지 않는다)", async () => {
+  stopOutboxWatch();
+  const sent: BoxAlert[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  const deps = (o: Observation, slow: boolean): Parameters<typeof tickOnce>[0] => ({
+    observe: async () => o,
+    send: async (a) => { sent.push(a); if (slow) await gate; return true; },
+  });
+  for (let i = 0; i < STALL_TICKS - 1; i++) await tickOnce(deps(stall(500, `g${i}`), false));
+  assert.equal(sent.length, 0);
+  //  상한에 닿는 관측을 두 tick 이 동시에 본다 — 앞 tick 의 전송(웹훅)이 느려 상태를 기록하기 전에 뒤 tick 이 끼어드는 모양.
+  const first = tickOnce(deps(stall(500, "g-last"), true));
+  const second = tickOnce(deps(stall(500, "g-last"), true));
+  await new Promise((res) => setImmediate(res));
+  release();
+  await Promise.all([first, second]);
+  assert.equal(sent.length, 1, "겹친 tick 이 같은 정체 경보를 두 번 보냈다");
+});
+
+test("주기 — env 가 비었거나 숫자가 아니면 기본 5분, 하한 60초", () => {
+  assert.equal(watchIntervalMs(undefined), 300_000);
+  assert.equal(watchIntervalMs(""), 300_000, "빈 값이 0 이 되어 setInterval 이 1ms 로 돈다 — 워크스페이스마다 DB 폭주");
+  assert.equal(watchIntervalMs("abc"), 300_000, "오타(NaN)가 1ms 주기가 된다");
+  assert.equal(watchIntervalMs("0"), 300_000);
+  assert.equal(watchIntervalMs("1000"), 60_000, "하한 없이 1초마다 워크스페이스를 훑는다");
+  assert.equal(watchIntervalMs("600000"), 600_000);
+});
+
+test("배선 — 주기는 watchIntervalMs 로만 읽는다", () => {
+  assert.match(WATCH, /const CHECK_MS = watchIntervalMs\(process\.env\.OUTBOX_WATCH_INTERVAL_MS\);/,
+    "env 를 날것으로 Number() 한다 — 빈 값·오타가 1ms 주기가 된다");
 });

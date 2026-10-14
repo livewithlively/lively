@@ -36,7 +36,15 @@ import { logger } from "../log.js";
 //  감시 주기(아래 CHECK_MS)와 곱한 값이 «이만큼 막혀 있으면 사람을 부른다» 는 뜻이 된다.
 export const STALL_TICKS = 3;
 
-const CHECK_MS = Number(process.env.OUTBOX_WATCH_INTERVAL_MS ?? 5 * 60_000);
+/**
+ * 감시 주기(ms) — env 원문에서. 하한 60초, 숫자가 아니거나 0 이면 기본 5분(cron-watch 의 CHECK_MS 와 같은 규칙).
+ *  빈 값(`OUTBOX_WATCH_INTERVAL_MS=`)은 Number("")=0, 오타는 NaN 이 되어 setInterval 이 1ms 로 돈다. 이 tick 은
+ *  워크스페이스마다 DB 를 읽으므로 그건 곧 DB 폭주다.
+ */
+export function watchIntervalMs(raw: string | undefined): number {
+  return Math.max(60_000, Number(raw) || 5 * 60_000);
+}
+const CHECK_MS = watchIntervalMs(process.env.OUTBOX_WATCH_INTERVAL_MS);
 
 export type OutboxPhase = "ok" | "stalled";
 
@@ -59,6 +67,9 @@ const seen = new Map<string, { phase: OutboxPhase; problemSent: boolean; state: 
 const KEY_SEP = "\u0000";
 const WATCH_KEY = "outbox";
 let timer: NodeJS.Timeout | null = null;
+//  tick 중첩 방지(cron-watch 와 같은 이유) — 워크스페이스가 많고 웹훅이 느리면 한 tick 이 주기를 넘길 수 있다. 두 tick 이
+//   같은 `seen` 을 동시에 읽고 쓰면(앞 tick 이 전송을 기다리는 사이 뒤 tick 이 같은 이전 상태를 읽는다) 같은 전이를 두 번 알린다.
+let ticking = false;
 
 /**
  * 틱 간 상태 전이(순수) — streak 과 전진 baseline 을 같은 규칙으로 옮긴다.
@@ -180,8 +191,12 @@ async function scanOne(deps: OutboxWatchDeps): Promise<void> {
 }
 
 async function tick(deps: OutboxWatchDeps): Promise<void> {
-  await forEachTenant("outbox-watch", () => scanOne(deps))
-    .catch((err) => logger.warn({ err }, "아웃박스 감시 tick 실패(비치명 — 다음 tick 재시도)"));
+  if (ticking) return;
+  ticking = true;
+  try {
+    await forEachTenant("outbox-watch", () => scanOne(deps))
+      .catch((err) => logger.warn({ err }, "아웃박스 감시 tick 실패(비치명 — 다음 tick 재시도)"));
+  } finally { ticking = false; }
 }
 
 export function startOutboxWatch(deps: OutboxWatchDeps): void {
