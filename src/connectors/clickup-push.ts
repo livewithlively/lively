@@ -11,7 +11,7 @@ import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
-import { createListFor } from "./clickup/push-target.js";
+import { createListFor, needsAncestorChain, statusListFor } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
@@ -237,12 +237,13 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         await markDone(ob.id); skipped++; continue;
       }
       // CREATE 의 부모·타깃 리스트를 status 판정보다 **먼저** 푼다 — 자식이 실릴 리스트가 곧 status 기준 리스트다.
-      //  (왜 부모 리스트여야 하는지는 createListFor 머리말 — ITEM_137.)
+      //  (왜 부모 리스트여야 하는지는 createListFor 머리말 — ITEM_137.) 연결된 카드라도 자기 좌표가 없으면(push 로
+      //  만든 자식 — 첫 인바운드 전) 같은 체인으로 태어난 리스트를 푼다(왜인지는 needsAncestorChain 머리말 — 상태 원복).
       const willUpdate = p.external_system === "clickup" && !!p.external_id;
       let parentExt: string | undefined;
       let chainListExts: (string | null)[] = [];
-      if (!willUpdate && p.level !== "project") {
-        if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip
+      if (needsAncestorChain({ level: p.level, linked: willUpdate, ownListExt: p.list_ext, hasParent: p.parent_id != null })) {
+        if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip(create 만 여기 온다)
         //  직계 부모(d=0)부터 위로 — 부모의 푸시 여부는 d=0 으로 판정하고, 리스트 좌표는 체인에서 첫 non-null 을
         //  쓴다(왜 한 칸이 아니라 체인인지는 createListFor 머리말). d<8 = 폭주 방지 상한.
         const anc: Array<{ d: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
@@ -256,20 +257,21 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                FROM project p JOIN anc ON p.id = anc.parent_id
               WHERE anc.list_ext IS NULL AND anc.d < 8)
            SELECT d, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
-        const par = anc.find((a) => a.d === 0);
-        if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
-        parentExt = par.external_id;
         chainListExts = anc.map((a) => a.list_ext);
+        //  부모가 올라갔는지는 create 만 본다 — 갱신 행은 status 기준 리스트(statusListFor)를 위해 체인만 읽는다.
+        if (!willUpdate) {
+          const par = anc.find((a) => a.d === 0);
+          if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+          parentExt = par.external_id;
+        }
       }
       const createList = createListFor(chainListExts, containerId);
 
-      // status 는 그 카드가 실제로 속한 리스트 기준으로 정한다. 네이티브(아직 카드가 없는 것)는 이번에 만들 리스트가
-      //  곧 그 자리이므로 그 리스트의 상태셋을 쓴다.
-      // 리스트 좌표가 없으면 컨테이너로 폴백한다. `list_ext` 는 인바운드가 채우는 값이라 **푸시로 방금 만든
-      //  카드**엔 첫 인바운드 싱크 전까지 없다(create 가 병합하는 base 에 그 키가 없다). 빈 상태셋으로 두면
-      //  그 구간의 status 가 조용히 빠져 이 수정이 고치려는 결함을 다시 만든다. 컨테이너 밖 카드에 폴백이
-      //  잘못 걸려도 ClickUp 이 거부하고 updateSafe 가 status 를 빼고 재시도해 종전과 같아진다.
-      const listForStatus = (p.external_id ? p.list_ext : null) ?? (createList || null);
+      // status 는 그 카드가 실제로 속한 리스트 기준으로 정한다(statusListFor) — 연결된 카드는 자기 좌표, 없으면 태어난
+      //  리스트(위 체인)다. 네이티브(아직 카드가 없는 것)는 이번에 만들 리스트가 곧 그 자리다.
+      //  체인이 끝까지 비면 컨테이너로 폴백한다 — 네이티브 top-level 계보는 컨테이너에 태어나고, 빈 상태셋으로 두면 그
+      //  구간의 status 가 조용히 빠진다. 그래도 어긋나면 ClickUp 이 거부하고 updateSafe 가 status 를 빼고 재시도한다.
+      const listForStatus = statusListFor({ linked: !!p.external_id, ownListExt: p.list_ext, createList });
       const { statuses, failed: statusLoadFailed } = await statusesOf(listForStatus);
       // 일시 실패(429·순단)면 이 행을 닫지 않는다 — status 없이 밀어 done 을 찍으면 그 변경이 영구 유실된다.
       //  단 무한정 미루면 그 행이 큐 머리를 점거하므로 attempts 로 상한을 둔다(넘으면 status 없이 진행).
