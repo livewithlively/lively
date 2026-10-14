@@ -609,6 +609,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const rootKeyUsed = input.rootKey || "personal";
   const subpathUsed = input.subpath || "";
   let { abs: target } = await resolveRootPath(user, rootKeyUsed, subpathUsed, osUser);
+  // #4687 — 세션 셸은 작업 폴더 **아래 전부**를 파일로 보므로, 링크·MCP·REST 와 같은 공개범위 기준을 작업 폴더에도 건다.
+  //  고른 폴더가 안 보이거나 그 아래에 이 사람이 못 보는 곳(잠긴 프로젝트·공유 폴더)이 있으면 열지 않는다.
+  //  폴더를 만들기 **전**에 본다(거절한 자리에 빈 폴더를 남기지 않는다). DB 를 타는 게이트웨이 능력이라 노드에는 등록이 없어
+  //  건너뛴다 — 노드 세션의 subpath 는 그 컴퓨터의 경로라 서버의 공유 폴더와 뜻이 다르다.
+  const assertCwdVisible = gatewayCapability("assertSessionCwdVisible");
+  if (assertCwdVisible) await assertCwdVisible(user, rootKeyUsed, subpathUsed);
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
