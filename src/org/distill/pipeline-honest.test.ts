@@ -133,7 +133,9 @@ test("⑳ 자동 정지 표식 — 사람이 스위치를 바꿀 때만 지우�
   assert.match(INGEST, /THEN \$3::jsonb \|\| jsonb_build_object\('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason'\)/,
     "실행 기록이 자동 정지 표식을 덮어쓴다");
   //  레인 정지는 켜진 레인만, 실패한 그 레인 또는 같은 계정을 명시한 레인만 건드린다.
-  assert.match(AUTH, /WHERE enabled=true AND \(key=\$1 OR requester=\$2\) RETURNING key/, "레인 정지 범위가 바뀌었다");
+  //   계정은 앞뒤 공백을 걷고 비교한다 — 분류·관리 레인은 저장 때 계정을 다듬지 않아, 그대로 비교하면 형제 레인이 안 꺼진다.
+  assert.match(AUTH, /WHERE enabled=true AND \(key=\$1 OR btrim\(requester\)=\$2\) RETURNING key/,
+    "레인 정지 범위가 바뀌었다(또는 계정을 다듬지 않고 비교한다 — 공백 섞인 형제 레인이 다음 주기에 하나씩 죽는다)");
   assert.match(AUTH, /\|\| \$3::jsonb,/, "레인 정지가 last_summary 를 병합하지 않고 덮는다");
 });
 

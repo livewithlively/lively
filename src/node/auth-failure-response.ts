@@ -264,10 +264,13 @@ async function stopLanes(table: LaneTable, lane: string, requester: string, reas
     //  last_summary 는 **병합**한다 — 마지막 실행의 진단을 지우지 않는다(stopCron 이 last_summary 를 안 건드리는 이유와 같다).
     //  auto_disabled 표식은 이 레인이 꺼져 있어도 자기 몫을 계속 맡게 하고(org/distill/lanes.isAutoDisabledLane),
     //   «자격 실패로 꺼진 레인» 과 «사람이 끈 레인» 을 가를 재료를 남긴다 — 레인 화면은 아직 이 표식을 읽지 않는다(`grep -rn auto_disabled web/`).
+    //  실행 계정은 **앞뒤 공백을 걷고** 비교한다 — 분배는 레인의 계정을 다듬어(explicitRunner) 위탁 requester 로 쓰는데,
+    //   카테고리 붙이기·관리 레인은 저장 때 다듬지 않는다(증류 레인은 normText 로 다듬어 저장하므로 btrim 이 아무것도 안 바꾼다).
+    //   그대로 비교하면 같은 계정의 형제 레인이 이번에 안 꺼지고 다음 주기에 하나씩 401 로 죽는다. 세 표 모두 requester 인덱스가 없다.
     `UPDATE ${table} SET enabled=false, last_status='error',
             last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' THEN last_summary ELSE '{}'::jsonb END) || $3::jsonb,
             updated_at=now()
-      WHERE enabled=true AND (key=$1 OR requester=$2) RETURNING key`,
+      WHERE enabled=true AND (key=$1 OR btrim(requester)=$2) RETURNING key`,
     [lane, requester, JSON.stringify({ error: reason, auto_disabled: true, auto_disabled_reason: reason })]);
   const keys = (r.rows as Array<{ key: string }>).map((x) => x.key);
   //  0건은 «이미 꺼짐» 이어야 한다. 마커의 레인 키가 레인 테이블에 아예 없으면(이름 변경·삭제) 아무것도 못 끈 것이므로
