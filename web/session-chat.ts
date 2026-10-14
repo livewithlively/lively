@@ -18,7 +18,8 @@
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
-import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
+import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replaceKids, state, sv, toast, TOKEN_KEY } from './core.js';
+import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
@@ -426,23 +427,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const sh = shareSessOf(target);
     // 공유할 대상이 없으면(기록만 남은 행 등) 자리를 비운다 — 눌러서 "무엇을?"이 되지 않게.
     if (!sh) { facesEl.hidden = true; return; }
+    //  초대 명단(소유자 + 초대받은 사람)이 줄이다 — 지금 보고 있는 사람은 진하게, 아직 안 보는 사람은 흐리게(lib/face-roster).
     const vs = viewersOf(target.id);
-    const shown = vs.slice(0, FACE_MAX);
-    const rest = vs.length - shown.length;
+    const all = faceRoster(sh.owner, sh.invites, vs, String((state.me as any)?.userId || ''), personDisplayName);
+    const shown = all.slice(0, FACE_MAX);
+    const rest = all.length - shown.length;
+    const roster = all.map((f) => f.name + (f.here ? '' : ' (안 보는 중)')).join(', ');
     facesEl.title = sh.owned
-      ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
-      : '이 세션을 누가 볼 수 있는지 봅니다';
+      ? '초대한 사람 — ' + roster + '\n눌러서 함께 볼 사람을 고릅니다'
+      : '이 세션을 볼 수 있는 사람 — ' + roster;
     facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
     //  ⚠ 여기서 DOM 의 replaceChildren 을 직접 부르지 않는다 — el() 과 달리 null 을 안 걸러 문자열 "null" 이
     //   텍스트 노드로 박힌다(실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 «null» 이 찍혔다).
     //   replaceKids 가 el() 과 **같은 자식 규칙**으로 그 자리를 받는다(lib/dom.ts).
     replaceKids(facesEl,
-      ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
+      ...shown.map((v) => personFace(v.id, v.here ? 'sc-face' : 'sc-face sc-face-off', v.name)),
       rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
       el('span', { class: 'sc-face sc-face-add', text: '＋' }));
     facesEl.hidden = false;
   }
-  facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };
+  //  저장하면 명단을 바로 줄에 반영한다 — 사이드바 목록을 다시 받을 때까지 옛 명단이 남지 않게.
+  facesEl.onclick = () => {
+    const sh = shareSessOf(target);
+    if (sh) openSharePopover(facesEl, sh, (invites) => { try { (target.raw ||= {}).invites = invites; } catch (_) { /* 읽기 전용이면 다음 목록 갱신이 맞춘다 */ } paintFaces(); });
+  };
   paintFaces();
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
   const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
