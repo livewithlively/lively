@@ -249,7 +249,13 @@ if (!existsSync(built)) {
       setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k] ?? null; }, hasAttribute(k) { return k in this.attrs; }, removeAttribute(k) { delete this.attrs[k]; },
       append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); return c; }, prepend() {}, remove() {}, replaceChildren() {},
       addEventListener() {}, removeEventListener() {}, querySelector: () => null, querySelectorAll: () => [], focus() {}, closest: () => null };
-    if (tag === "iframe") n.contentWindow = { postMessage: (m, target) => { replies.push(m); targets.push(target); } };
+    if (tag === "iframe") {
+      n.contentWindow = { postMessage: (m, target) => { replies.push(m); targets.push(target); } };
+      //  #4480 인사 감시 — iframe 의 load 를 시험이 직접 울린다(n.fireLoad()).
+      n._ls = {};
+      n.addEventListener = (t, fn) => { (n._ls[t] || (n._ls[t] = [])).push(fn); };
+      n.fireLoad = () => { for (const fn of n._ls.load || []) fn(); };
+    }
     n.replaceWith = function (next) { this.replacedBy = next; };
     return n;
   };
@@ -281,6 +287,18 @@ if (!existsSync(built)) {
     const r = typeof r0 === "function" ? r0() : r0;   // 부를 때마다 다른 답(#4480 — 새 코드)
     return { status: r.status, ok: r.status >= 200 && r.status < 300, headers: { get: () => null }, json: async () => r.json };
   };
+  //  #4480 인사 감시용 가짜 시계 — 5초 이상 타이머(감시의 8초·20초)는 붙잡아 두고 시험이 손으로 울린다(fireLong).
+  //   진짜로 기다리면 시험이 20초씩 늘고, 안 붙잡으면 끝난 프레임의 타이머가 프로세스를 붙잡는다. 짧은 타이머(tick 등)는 그대로.
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const longTimers = new Map();
+  let nextLong = 1e6;
+  globalThis.setTimeout = (fn, ms, ...a) => {
+    if (typeof ms === "number" && ms >= 5000) { const id = nextLong++; longTimers.set(id, { fn, ms }); return id; }
+    return realSetTimeout(fn, ms, ...a);
+  };
+  globalThis.clearTimeout = (id) => { if (longTimers.has(id)) { longTimers.delete(id); return; } realClearTimeout(id); };
+  const fireLong = (ms) => { for (const [id, t] of [...longTimers]) if (t.ms === ms) { longTimers.delete(id); t.fn(); } };
   const { mountAppUiFrame } = await import(built);
   const { state } = await import(join(root, "public/app/lib/state.js"));
   const { registerSessionInput } = await import(join(root, "public/app/v2/sess-input.js"));
@@ -535,6 +553,66 @@ if (!existsSync(built)) {
     ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === "allow-scripts", "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
     state.me = null;
   }
+
+  // S2-19 (#4480) 인사 감시 — 앱 주소 문서가 인사(ui/initialize)하지 않으면 그 자리에서 srcdoc 으로(앞단 오류 화면 · DNS·인증서 문제는
+  //  postMessage 신호를 못 낸다). 이 브라우저를 «막힘» 으로 적지는 않는다(그 순간의 장애일 수 있다 — 다음엔 다시 앱 주소로 시도).
+  {
+    const ORIGIN = "https://deck-edit-lively-46e3.lvly.app";
+    const URL0 = ORIGIN + "/_lively/auth?code=lva_" + "c".repeat(32) + "&next=%2F";
+    state.me = { userId: "alice", app_domain: "lvly.app" };
+    localStorage.removeItem("lively.appAddr.blocked");
+    longTimers.clear();   // 앞 시험의 프레임들이 남긴 감시 타이머는 이 시험과 무관하다
+    const mountAddr = async () => {
+      fetches.length = 0;
+      plan = { "/launch": { status: 200, json: { url: URL0, origin: ORIGIN, page_key: "main", title: "장표" } }, "/ui": { status: 200, json: { html: "<!doctype html><p>앱</p>" } } };
+      const g = await mountAppUiFrame("deck-edit", {});
+      replies = []; targets = [];
+      const fire = (data, origin = ORIGIN) => { for (const fn of winListeners.slice()) fn({ source: g.root.contentWindow, origin, data }); };
+      return { g, fire };
+    };
+    // ① load 뒤 8초 안에 인사가 없으면 srcdoc
+    const a = await mountAddr();
+    eq(a.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 앱 주소로 뜬다");
+    a.g.root.fireLoad();
+    fireLong(8000);
+    await settle();
+    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
+    eq(localStorage.getItem("lively.appAddr.blocked"), null, "S2-19 막힘으로 적지 않는다(다음엔 다시 앱 주소로)");
+    // ② 인사한 문서는 감시가 멈춘다 — 이후 load·시간이 지나도 그대로
+    longTimers.clear();
+    const b = await mountAddr();
+    b.fire({ jsonrpc: "2.0", id: 71, method: "ui/initialize", params: {} });
+    await settle();
+    b.g.root.fireLoad();
+    fireLong(8000); fireLong(20000);
+    await settle();
+    eq(b.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 인사한 문서는 그대로 둔다");
+    eq(longTimers.size, 0, "S2-19 인사하면 감시 타이머를 거둔다");
+    // ③ 다른 출처가 보낸 인사로는 감시가 안 멈춘다 · load 가 아예 안 와도 20초 받침
+    longTimers.clear();
+    const c = await mountAddr();
+    c.fire({ jsonrpc: "2.0", id: 72, method: "ui/initialize", params: {} }, "https://evil.lvly.app");
+    await settle();
+    fireLong(20000);
+    await settle();
+    eq(c.g.root.attrs.sandbox, "allow-scripts", "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
+    // ④ 새 코드로 다시 띄우면(로그인 신호) 감시를 다시 건다 — 새 문서도 인사해야 한다
+    longTimers.clear();
+    const d = await mountAddr();
+    d.fire({ jsonrpc: "2.0", id: 73, method: "ui/initialize", params: {} });
+    await settle();
+    d.fire({ type: "lively:app-auth", status: "login-required" });
+    await settle();
+    ok([...longTimers.values()].some((t) => t.ms === 20000), "S2-19 다시 띄우면 감시를 다시 건다");
+    d.g.root.fireLoad();
+    fireLong(8000);
+    await settle();
+    eq(d.g.root.attrs.sandbox, "allow-scripts", "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
+    longTimers.clear();
+    state.me = null;
+  }
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
 }
 
 console.log(`app-sdk-bridge: ${pass} 단언 통과`);

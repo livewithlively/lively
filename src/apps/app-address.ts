@@ -31,6 +31,25 @@ export function appDomain(env: NodeJS.ProcessEnv = process.env): string | null {
   return raw;
 }
 
+/**
+ * 워크스페이스 단위 스위치(#4480 켜는 순서) — env `LIVELY_APP_DOMAIN_TENANTS`(쉼표로 가른 슬러그)에 든 워크스페이스만 켠다.
+ *  비어 있거나 `*` 면 전부. 매니지드는 게이트웨이 하나가 모든 워크스페이스를 받아서, 도메인 스위치만으로는 «우리 워크스페이스에서
+ *  먼저 실측 → 전체» 로 나눠 켤 수 없다 — 그 사이를 이 목록이 맡는다(CP cp.env `LVLY_APP_DOMAIN_TENANTS` → lvly-gw.sh 가 넘긴다).
+ */
+export function appDomainEnabledFor(slug: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = String(env.LIVELY_APP_DOMAIN_TENANTS ?? "").trim().toLowerCase();
+  if (!raw || raw === "*") return true;
+  const s = String(slug ?? "").trim().toLowerCase();
+  if (!s) return false;
+  return raw.split(",").map((x) => x.trim()).filter(Boolean).includes(s);
+}
+
+/** 그 워크스페이스에서 쓰는 앱 도메인 — 꺼졌거나(env 없음) 스위치 목록 밖이면 null. */
+export function appDomainFor(slug: string | null | undefined, env: NodeJS.ProcessEnv = process.env): string | null {
+  const d = appDomain(env);
+  return d && appDomainEnabledFor(slug, env) ? d : null;
+}
+
 /** 앱 주소의 첫 칸(라벨). 못 만들면 null. */
 export function appHostLabel(slug: string, appId: string, variant: AppVariant = "pub"): string | null {
   const s = String(slug ?? "").trim().toLowerCase();

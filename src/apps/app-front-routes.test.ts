@@ -53,7 +53,8 @@ function deps(over: Partial<AppFrontDeps> = {}) {
 
 // ── E1 꺼짐 → 404(세 길 모두) · 서명 틀림 → 401 ──
 {
-  for (const env of [{ LIVELY_APP_DOMAIN: "lvly.app" }, { LIVELY_TENANT_HEADER_SECRET: SECRET }] as NodeJS.ProcessEnv[]) {
+  //  셋째 — 워크스페이스 단위 스위치(LIVELY_APP_DOMAIN_TENANTS) 밖: 서명이 맞아도 경로가 없는 것과 같다.
+  for (const env of [{ LIVELY_APP_DOMAIN: "lvly.app" }, { LIVELY_TENANT_HEADER_SECRET: SECRET }, { ...ENV, LIVELY_APP_DOMAIN_TENANTS: "maruru-9f0a" }] as NodeJS.ProcessEnv[]) {
     const { d } = deps({ env });
     assert.equal((await appFrontMe(actH(), d)).status, 404);
     assert.equal((await appFrontPage(actH(), "/", d)).status, 404);
