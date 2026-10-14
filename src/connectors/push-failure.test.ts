@@ -173,4 +173,9 @@ test("부모가 반출 대상이 아니면 자식은 기다리지 않고 닫힌�
   assert.match(block, /FROM external_outbox WHERE system='clickup' AND entity_id=\$1 AND done_at IS NULL/, "부모가 큐에 있는지 안 본다");
   assert.match(block, /if \(parentQueued\) \{ deferred\+\+; continue; \}/, "부모가 큐에 있을 때만 기다려야 한다");
   assert.match(block, /await markDone\(ob\.id\); skipped\+\+; continue;/, "부모가 반출 대상이 아니면 자식을 닫아야 한다");
+  //  묻는 행이 **부모**여야 한다 — 자식 자신(p.id)을 물으면 자기 행은 언제나 pending 이라 영원히 기다린다
+  //   (이 분기가 없던 때로 조용히 돌아간다). 문자열 SQL 만 보면 인자를 바꿔도 초록이라 인자까지 잠근다.
+  assert.match(block, /AND done_at IS NULL LIMIT 1`, \[par\.id\]\)/, "부모가 아닌 행의 큐를 묻는다 — 자식 자신을 물으면 영원히 defer 다");
+  //  par.id 는 조상 조회가 id 를 실어야 값이 있다 — 빠지면 undefined 로 물어 «큐에 없음» 이 되고 자식이 늘 닫힌다.
+  assert.match(DRAIN, /SELECT d, id, external_id, external_system, list_ext FROM anc ORDER BY d/, "조상 조회가 id 를 안 싣는다 — 부모 큐를 못 찾아 자식이 늘 닫힌다");
 });
