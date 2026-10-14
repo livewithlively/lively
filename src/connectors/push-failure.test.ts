@@ -189,3 +189,21 @@ test("부모가 반출 대상이 아니면 자식은 기다리지 않고 닫힌�
   //  par.id 는 조상 조회가 id 를 실어야 값이 있다 — 빠지면 undefined 로 물어 «큐에 없음» 이 되고 자식이 늘 닫힌다.
   assert.match(DRAIN, /SELECT d, id, external_id, external_system, list_ext FROM anc ORDER BY d/, "조상 조회가 id 를 안 싣는다 — 부모 큐를 못 찾아 자식이 늘 닫힌다");
 });
+
+// 런북의 파킹 조회·해제 SQL 이 parkedParams() 와 같은 조건인가 — 갈리면 사람이 런북대로 풀었는데 파킹이 안 풀리거나
+//  (임계·정규식이 다르면) 파킹 안 된 행까지 건드린다. 런북엔 «같아야 한다» 는 문장뿐이라 두 언어 런북을 읽어 대조한다.
+test("런북 — 두 언어 런북의 파킹 SQL 조건이 parkedParams() 와 같다", () => {
+  const [after, rowRe, sysRe] = parkedParams();
+  for (const name of ["clickup-sync.md", "clickup-sync.ko.md"]) {
+    const md = readFileSync(new URL(`../../runbooks/${name}`, import.meta.url), "utf8");
+    //  파킹 술어(last_error ~)를 쓰는 인라인 SQL 만 — 런북의 다른 external_outbox 조회(pending 전체 보기)는 대상이 아니다.
+    const sqls = [...md.matchAll(/`((?:UPDATE|SELECT)\b[^`]*external_outbox[^`]*last_error ~[^`]*)`/g)].map((m) => m[1]);
+    assert.ok(sqls.length >= 2, `${name}: 파킹 해제·조회 SQL 을 못 찾았다(${sqls.length}건) — 런북 문구가 바뀌었으면 이 시험도 맞춘다`);
+    for (const sql of sqls) {
+      assert.match(sql, /system='clickup' AND done_at IS NULL/, `${name}: 다른 시스템·이미 끝난 행까지 건드린다 — ${sql}`);
+      assert.equal(sql.match(/attempts>=(\d+)/)?.[1], String(after), `${name}: 임계가 PARK_AFTER 와 다르다 — ${sql}`);
+      assert.equal(sql.match(/last_error ~ '([^']+)'/)?.[1], rowRe, `${name}: 행 거절 정규식이 ROW_REJECT_RE 와 다르다 — ${sql}`);
+      assert.equal(sql.match(/last_error !~ '([^']+)'/)?.[1], sysRe, `${name}: 시스템성 4xx 정규식이 SYSTEMIC_4XX_RE 와 다르다 — ${sql}`);
+    }
+  }
+});

@@ -90,6 +90,8 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
 - 행 고유 거절(그 밖의 4xx)은 실행 실패로 세지 않고(`rejected`), 같은 행이 3회 거절되면 드레인에서 뺀다(파킹 — `parked`, 경보 1회). 그 항목을 다시 편집하면 풀린다. 한 실행에서 거절이 5건 이상인데 반출이 0건이면 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다).
 - 파킹 행 일괄 해제(원인을 고친 뒤): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
   조건 값은 `src/connectors/push-failure.ts` 의 `parkedParams()` 와 같아야 한다 — 그쪽을 바꾸면 이 SQL 도 고친다.
+- 배포 직후 확인: 이 동작이 들어가기 전부터 같은 4xx 로 3회 이상 실패해 온 행은 첫 실행부터 드레인에서 빠지고 **경보가 나가지 않는다**(경보는 그 실행에서 새로 파킹된 행에만 나간다). 배포 뒤 첫 실행 요약(관리 ▸ 스케줄 ▸ push 요약)의 `parked` 를 확인하고, 0 이 아니면 아래로 그 행을 보고 원인을 고친 뒤 위 SQL 로 푼다:
+  `SELECT entity_id, attempts, last_error FROM external_outbox WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
 - 공개범위가 잠긴 리스트의 **네이티브**(우리에서 태어난) 프로젝트는 반출하지 않는다(#1291). 미러 기원 행은 그대로 푸시한다.
 
 ## 4. 스케줄
