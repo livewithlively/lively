@@ -13,7 +13,10 @@
 //  B13 공개 거두기 — 남은 다시 404 · 붙여 둔 세션에서도 막힘  B14 오래된 빈 예약은 새 시작 때 거둔다
 //  B15 떠난 사람 — 책임자만 관리자로(만든 사람 그대로) · 관리자에게 알림  B16 관리자가 책임자를 바꿈 → 새 책임자가 보고 지운다
 //  B17 관리자 설치 앱(공개) — 만든 사람 = 설치한 관리자 · 구성원이 고치면 공개 판(저장 전 상태)이 못 박힌다
-//  B18 #4632 시절 'me' 앱 — 채우기가 처음 설치한 사람을 책임자로(매니페스트 studio.made_by 는 판정에 쓰지 않는다)
+//  B18 #4632 시절 'me' 앱 — 채우기가 처음 설치한 사람을 책임자로(매니페스트 studio.made_by 는 판정에 쓰지 않는다 · 이미 떠난 사람이면 책임자 비움)
+//  B19 초안이 걸린 공개 앱에 관리자 설치 — 표식 · 포인터 걷고 옛 공개 판 전용 표 보관 · 밀려난 초안 주인 알림(격리 리뷰 B2)
+//  B20 남의 공개 전 판은 판 이력 · 되돌리기에서 없는 판 · 못 박은 판의 저장한 사람(격리 리뷰 NB-6 · NB-8)
+//  B21 관리자 설치가 남의 나만 보는 앱을 못 덮음 · 초안이 걸린 공개 앱은 「나만」 불가(격리 리뷰 2-1 · 2-3)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -58,6 +61,7 @@ const row = async (id) => (await q(`SELECT * FROM org_app WHERE id=$1`, [id]))[0
 for (const [id, scopes] of [["pgt-alice", ["memory"]], ["pgt-bob", ["memory"]], ["pgt-carol", ["memory"]], ["pgt-boss", ["memory", "admin"]]]) {
   await q(`INSERT INTO org_member(id, kind, display_name, state, scopes) VALUES($1,'human',$1,'active',$2::jsonb)`, [id, JSON.stringify(scopes)]);
 }
+await q(`INSERT INTO org_member(id, kind, display_name, state, scopes) VALUES('pgt-gone','human','pgt-gone','inactive','["memory"]'::jsonb)`);   // B18 — 이미 떠난 사람
 for (const [sid, owner] of [["box-alice-1", "pgt-alice"], ["box-alice-2", "pgt-alice"], ["box-bob-1", "pgt-bob"], ["box-carol-1", "pgt-carol"]]) {
   await q(`INSERT INTO org_session_state(id, owner, label) VALUES($1,$2,$1)`, [sid, owner]);
 }
@@ -156,6 +160,12 @@ try {
   // B9 — 초안이 notes 를 뺀다 → 공개 판(1판)이 아직 쓰므로 남는다 → 공개하면 데이터가 있어 보관된다
   const s9 = await call("app_save", { files: files(ID, "<p>v3 초안</p>", { title: "회의 안건 3", tables: ["extra"] }), note: "notes 뺌" }, alice, inSession("box-alice-1"));
   const qBob = await call("store_query", { table: "notes" }, appBob, { source: "app-ui" });
+  //  격리 리뷰 B3 — 공개 판을 보는 사람의 자유 SQL · 표 목록도 공개 판 기준(초안이 뺀 notes 를 쓰고, 초안에만 있는 extra 는 그 사람 판에 없다)
+  const sqlBob = await call("store_sql", { sql: "SELECT count(*)::int AS n FROM notes" }, appBob, { source: "app-ui" });
+  const sqlBobExtra = await status(call("store_sql", { sql: "SELECT count(*)::int AS n FROM extra" }, appBob, { source: "app-ui" }));
+  const tablesBob = (await call("store_tables", {}, appBob, { source: "app-ui" })).tables.map((t) => t.name);
+  await call("me_app_grant", { app_id: ID }, alice);
+  const tablesAlice = (await call("store_tables", {}, { ...alice, appId: ID, scopes: [] }, { source: "app-ui" })).tables.map((t) => t.name);
   const notesBefore = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name LIKE '%__notes' AND table_schema NOT LIKE '%archive%'`))[0].n;
   const p9 = await call("app_visibility_set", { app_id: ID, visibility: "all" }, alice);
   const notesAfter = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name LIKE '%__notes' AND table_schema NOT LIKE '%archive%'`))[0].n;
@@ -165,8 +175,9 @@ try {
   r = await row(ID);
   chk("B9 초안이 뺀 표 — 공개 판이 쓰는 동안 남아 읽히고, 공개하면 데이터가 있어 보관 + 공개한 사람에게 알림",
     s9.state === "draft" && qBob.rows?.length === 1 && notesBefore === 1 && p9.changed === true && notesAfter === 0 && archived === 1 && notified >= 1
+      && sqlBob.rows?.[0]?.n === 1 && sqlBobExtra !== 200 && tablesBob.join() === "notes" && tablesAlice.join() === "extra"
       && r.published_version_no === 3 && r.draft_by === null && (await ui(ID, bob)).includes("v3"),
-    JSON.stringify({ s9: s9.state, qBob: qBob.rows?.length, notesBefore, notesAfter, archived, notified, pub: r.published_version_no }));
+    JSON.stringify({ s9: s9.state, qBob: qBob.rows?.length, notesBefore, notesAfter, archived, notified, pub: r.published_version_no, sqlBob: sqlBob.rows, sqlBobExtra, tablesBob, tablesAlice }));
 
   // B10 — 남(고치기 전원)이 고친 초안: 그 사람만 보고, 책임자는 공개 판을 보다가 공개한다
   const s10 = await call("app_save", { files: files(ID, "<p>v4 bob 초안</p>", { title: "회의 안건 3", tables: ["extra"] }), note: "bob 고침" }, bob, inSession("box-bob-1"));
@@ -253,16 +264,74 @@ try {
   //  만든 사람 · 책임자로 잡는다. 매니페스트 studio.made_by(위조 가능)는 판정에 쓰지 않는다 — 그 칸에 적힌 사람도 남이면 404.
   await q(`INSERT INTO org_app(id,title,version,manifest,source,content_hash,status,enabled,installed_by,installed_at,visibility)
              VALUES('old-me','옛 나만','0.1.0','{"id":"old-me","title":"옛 나만","version":"0.1.0","studio":{"made_by":"pgt-carol"}}','{"kind":"inline"}','h-old','active',true,'pgt-alice',now(),'me')`);
+  await q(`INSERT INTO org_app(id,title,version,manifest,source,content_hash,status,enabled,installed_by,installed_at,visibility)
+             VALUES('old-gone','떠난 사람 앱','0.1.0','{"id":"old-gone","title":"떠난 사람 앱","version":"0.1.0"}','{"kind":"inline"}','h-gone','active',true,'pgt-gone',now(),'me')`);
+  //  관리자가 «지정한 사람만» 으로 좁히며 만든 사람을 뺀 옛 앱 — 채우기가 책임자로 세우면 책임자 규칙으로 고치기가 다시 열린다(격리 리뷰 2-8b)
+  await q(`INSERT INTO org_app(id,title,version,manifest,source,content_hash,status,enabled,installed_by,installed_at,visibility,edit_mode,edit_members)
+             VALUES('old-locked','잠근 앱','0.1.0','{"id":"old-locked","title":"잠근 앱","version":"0.1.0"}','{"kind":"inline"}','h-locked','active',true,'pgt-alice',now(),'all','members','["pgt-bob"]')`);
   const { initAppRegistry } = await import(`${D}/org/schema/apps.js`);
   await initAppRegistry(itemsPool);
   const o18 = await row("old-me");
+  const g18 = await row("old-gone");
+  const l18 = await row("old-locked");
+  const aliceLocked = await status(call("app_save", { files: files("old-locked", "<p>alice 고침</p>", { title: "잠근 앱" }) }, alice));
   const seen18 = { alice: await status(call("org_app_get", { app_id: "old-me" }, alice)), carol: await status(call("org_app_get", { app_id: "old-me" }, carol)), bob: await status(call("org_app_get", { app_id: "old-me" }, bob)) };
   const carolCanPub = await status(call("app_visibility_set", { app_id: "old-me", visibility: "all" }, carol));
   const pub18 = await call("app_visibility_set", { app_id: "old-me", visibility: "all" }, alice);
   chk("B18 #4632 시절 'me' 앱 — 채우기가 처음 설치한 사람을 책임자로 · 매니페스트 made_by 의 사람은 남(404) · 책임자가 공개하면 모두에게",
     o18.made_by === "pgt-alice" && o18.owner_member === "pgt-alice" && seen18.alice === 200 && seen18.carol === 404 && seen18.bob === 404
-      && carolCanPub === 404 && pub18.changed === true && (await row("old-me")).visibility === "all" && (await status(call("org_app_get", { app_id: "old-me" }, bob))) === 200,
-    JSON.stringify({ made: o18.made_by, owner: o18.owner_member, seen18, carolCanPub, pub18 }));
+      && carolCanPub === 404 && pub18.changed === true && (await row("old-me")).visibility === "all" && (await status(call("org_app_get", { app_id: "old-me" }, bob))) === 200
+      //  이미 떠난 사람이 설치한 앱 — 만든 사람은 남기고 책임자는 비운다(= 관리자) · 관리자 목록에 선다
+      && g18.made_by === "pgt-gone" && g18.owner_member === null && (await listed(boss)).some((a) => a.id === "old-gone") && (await status(call("org_app_get", { app_id: "old-gone" }, bob))) === 404
+      && l18.made_by === "pgt-alice" && l18.owner_member === null && aliceLocked === 403,
+    JSON.stringify({ made: o18.made_by, owner: o18.owner_member, seen18, carolCanPub, pub18, gone: { made: g18.made_by, owner: g18.owner_member }, locked: { made: l18.made_by, owner: l18.owner_member, aliceLocked } }));
+
+  // B19 — 격리 리뷰 B2: 초안이 걸린 공개 앱에 관리자가 새로 설치하면 — 초안 표식 · 공개 판 포인터를 걷고, 옛 공개 판에만 있던 표(데이터 있음)를
+  //  보관하고, 밀려난 초안의 주인에게 알린다
+  await call("org_app_install", { source: { kind: "inline", files: files("b19-app", "<p>관리자 1</p>", { title: "B19", tables: ["notes", "extra"] }) } }, boss);
+  await call("me_app_grant", { app_id: "b19-app" }, carol);
+  await call("store_insert", { table: "extra", row: { text: "carol 의 데이터" } }, { ...carol, appId: "b19-app", scopes: [] }, { source: "app-ui" });
+  const s19 = await call("app_save", { files: files("b19-app", "<p>bob 초안</p>", { title: "B19", tables: ["notes"] }), note: "extra 뺌" }, bob);
+  const extraKept = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name = 'b19_app__extra' AND table_schema NOT LIKE '%archive%'`))[0].n;
+  const bobNotesBefore = (await q(`SELECT count(*)::int AS n FROM org_app_notification WHERE app_id='b19-app' AND member_id='pgt-bob'`))[0].n;
+  await call("org_app_install", { source: { kind: "inline", files: files("b19-app", "<p>관리자 2</p>", { title: "B19", tables: ["notes"] }) } }, boss);
+  const r19 = await row("b19-app");
+  const extraLive = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name = 'b19_app__extra' AND table_schema NOT LIKE '%archive%'`))[0].n;
+  const extraArchived = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name LIKE 'b19_app__extra%' AND table_schema LIKE '%archive%'`))[0].n;
+  const bobNotesAfter = (await q(`SELECT count(*)::int AS n FROM org_app_notification WHERE app_id='b19-app' AND member_id='pgt-bob'`))[0].n;
+  chk("B19 초안이 걸린 공개 앱에 관리자 설치 — 표식 · 포인터 걷힘 · 옛 공개 판에만 있던 표(데이터 있음)는 보관 · 밀려난 초안 주인에게 알림 · 모두 새 판",
+    s19.state === "draft" && extraKept === 1 && r19.draft_by === null && r19.published_version_no === null && extraLive === 0 && extraArchived === 1
+      && bobNotesAfter > bobNotesBefore && (await ui("b19-app", carol)).includes("관리자 2") && (await ui("b19-app", bob)).includes("관리자 2"),
+    JSON.stringify({ s19: s19.state, extraKept, draft: r19.draft_by, pub: r19.published_version_no, extraLive, extraArchived, bobNotesBefore, bobNotesAfter }));
+
+  // B20 — 격리 리뷰 NB-6 · NB-8: 남의 공개 전 판은 판 이력에 안 서고 되돌리기 대상도 아니다(책임자 · 관리자 · 그 사람은 본다) ·
+  //  못 박는 «저장 전 상태» 판의 저장한 사람은 고치러 온 사람이 아니라 그 내용을 깐 사람
+  const s20 = await call("app_save", { files: files("b19-app", "<p>carol 초안</p>", { title: "B19", tables: ["notes"] }), note: "carol 고침" }, carol);
+  const r20 = await row("b19-app");
+  const pin20 = (await call("app_versions", { app_id: "b19-app" }, boss)).versions.find((v) => v.version_no === r20.published_version_no);
+  const seen20 = async (u) => (await call("app_versions", { app_id: "b19-app" }, u)).versions.map((v) => v.version_no);
+  const [vb, vc, vboss] = [await seen20(bob), await seen20(carol), await seen20(boss)];
+  const bobRevert = await status(call("app_revert", { app_id: "b19-app", version_no: s20.version_no, publish: true }, bob));
+  const r20b = await row("b19-app");
+  chk("B20 남의 공개 전 판 — 판 이력에서 남에겐 안 보이고(그 사람 · 관리자는 봄) 되돌려 공개할 수 없다(404) · 못 박은 판의 저장한 사람은 관리자",
+    s20.state === "draft" && r20.draft_by === "pgt-carol" && pin20?.saved_by === "pgt-boss" && !vb.includes(s20.version_no) && vc.includes(s20.version_no) && vboss.includes(s20.version_no)
+      && bobRevert === 404 && r20b.draft_by === "pgt-carol" && (await ui("b19-app", bob)).includes("관리자 2"),
+    JSON.stringify({ s20: s20.state, draft: r20.draft_by, pinBy: pin20?.saved_by, vb, vc, vboss, bobRevert, after: r20b.draft_by }));
+
+  // B21 — 격리 리뷰 2-1 · 2-3: 관리자 설치가 같은 id 의 남의 나만 보는 앱을 덮지 않는다(409) · 초안이 걸린 공개 앱은 「나만」 으로 못 내린다(409 — 남의 초안이
+  //  책임자의 유일한 판이 되지 않게) · 공개 판으로 되돌린 뒤엔 내린다
+  await call("app_save", { files: files("bob-own", "<p>bob 의 앱</p>", { title: "bob 앱" }) }, bob);
+  const overInstall = await status(call("org_app_install", { source: { kind: "inline", files: files("bob-own", "<p>관리자 덮기</p>", { title: "덮기" }) } }, boss));
+  const bobOwn = await row("bob-own");
+  const meWhileDraft = await status(call("app_visibility_set", { app_id: "b19-app", visibility: "me" }, boss));
+  const pubNo21 = (await row("b19-app")).published_version_no;
+  await call("app_revert", { app_id: "b19-app", version_no: pubNo21 }, boss);
+  const r21 = await row("b19-app");
+  const meAfter = await call("app_visibility_set", { app_id: "b19-app", visibility: "me" }, boss);
+  chk("B21 관리자 설치는 남의 나만 보는 앱을 못 덮는다(409 · 내용 그대로) · 초안이 걸린 공개 앱은 「나만」 불가(409) → 공개 판으로 되돌리면 초안이 걷히고 내려진다",
+    overInstall === 409 && bobOwn.visibility === "me" && (await ui("bob-own", bob)).includes("bob 의 앱") && meWhileDraft === 409
+      && r21.draft_by === null && meAfter.changed === true && (await row("b19-app")).visibility === "me",
+    JSON.stringify({ overInstall, bobOwnVis: bobOwn.visibility, meWhileDraft, pubNo21, draftAfterRevert: r21.draft_by, meAfter }));
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);
 } finally {

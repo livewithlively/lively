@@ -1,12 +1,12 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAppOwner, isEmptyDraftApp, listsAppFor,
+  appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
   publishDenial, tablesGoneAtPublish, tablesUsableNow, unpublishDenial, type AppVisState,
 } from "./visibility.js";
 import { APP_ID_RE } from "./manifest.js";
 
-// ── 앱 공개 범위 · 만든 사람 · 책임자 (#4632 「나만」 · #4667 앱 v2-15) — 사양 엣지 표 E1~E14 · E18~E21 · E28~E31 ──────────
+// ── 앱 공개 범위 · 만든 사람 · 책임자 (#4632 「나만」 · #4667 앱 v2-15) — 사양 엣지 표 E1~E14 · E18~E21 · E28~E32 ──────────
 //  이게 틀리면: 남이 만들고 있는 앱이 앱 찾기·세션에 뜨거나(나만 보는 앱이 샌다) · 공개 앱을 고치는 순간 모두의 앱이 바뀌거나(초안이 샌다) ·
 //   반대로 초안을 만든 사람이 제 초안을 못 보거나 · 떠난 사람의 앱을 아무도 책임지지 않거나 · 칸이 깨진 앱이 통째로 잠긴다(#4632 V6).
 
@@ -143,10 +143,12 @@ test("E28 예약 앱 id — 어떤 이름 · 어떤 랜덤 글자여도 매니�
   assert.equal(draftAppIdFrom("CRM 메모", "abcdef"), "crm-abcdef");
 });
 
-test("E29 빈 예약 앱 — 내용 해시가 없으면 첫 판 전", () => {
+test("E29 빈 예약 앱 — 내용 해시와 판 번호가 둘 다 없으면 첫 판 전(예약 행 정리와 같은 자)", () => {
   assert.equal(isEmptyDraftApp({ content_hash: null }), true);
   assert.equal(isEmptyDraftApp({}), true);
+  assert.equal(isEmptyDraftApp({ content_hash: null, current_version_no: null }), true);
   assert.equal(isEmptyDraftApp({ content_hash: "h" }), false);
+  assert.equal(isEmptyDraftApp({ content_hash: null, current_version_no: 2 }), false, "해시 없는 옛 행이라도 판이 있으면 빈 예약이 아니다");
 });
 
 test("E30 매니페스트 studio.made_by 는 판정에 쓰지 않는다 — 그 칸을 제 이름으로 바꿔 저장해도 남의 나만 보는 앱을 못 본다", () => {
@@ -164,4 +166,27 @@ test("E31 저장된 값 → 공개 범위 — 'me' 만 나만 보는 앱, 빈 �
   assert.equal(appVisibilityOf({ visibility: "private" }), "all");
   assert.equal(canSeeApp(app({ visibility: "zzz" as never }), other), true);
   assert.equal(listsAppFor(app({ visibility: "zzz" as never }), other), true);
+});
+
+test("E32 남의 공개 전 판 — 공개 판 뒤에 다른 사람이 저장한 판만 가린다(그 사람 · 책임자 · 관리자에겐 보임) · 경계는 공개 판 번호 · 공개 시각", () => {
+  const pub = app({ published_version_no: 3 });
+  const v4 = { version_no: 4, saved_by: "other", saved_at: "2026-10-14T08:00:01.000Z" };
+  const third = { userId: "third", scopes: ["memory"] };
+  assert.equal(isOthersPendingVersion(pub, v4, third, null), true, "남 — 공개 판(3) 뒤 판, 공개한 적 없음(번호만)");
+  assert.equal(isOthersPendingVersion(pub, v4, maker, null), false, "책임자");
+  assert.equal(isOthersPendingVersion(pub, v4, admin, null), false, "관리자");
+  assert.equal(isOthersPendingVersion(pub, v4, other, null), false, "그 판을 저장한 사람");
+  assert.equal(isOthersPendingVersion(pub, { ...v4, version_no: 3 }, third, null), false, "경계 — 공개 판 그 자체");
+  assert.equal(isOthersPendingVersion(pub, { ...v4, version_no: 2 }, third, null), false, "공개 판 앞의 이력");
+  assert.equal(isOthersPendingVersion(app({ published_version_no: null }), v4, third, null), false, "공개 판 포인터가 없으면 가리지 않는다");
+  assert.equal(isOthersPendingVersion(app({ visibility: "me", published_version_no: 3 }), v4, third, null), false, "나만 보는 앱엔 초안 개념이 없다");
+  assert.equal(isOthersPendingVersion(pub, { ...v4, origin: "builtin" }, third, null), false, "릴리스 원본 판은 가리지 않는다");
+  //  옛 판으로 되돌려 공개(공개 판 번호 2) — 그 뒤 번호의 옛 이력은 공개 시각 앞이라 가리지 않고, 공개 뒤 저장한 판만 가린다
+  const back = app({ published_version_no: 2 });
+  const at = Date.parse("2026-10-14T08:00:00.000Z");
+  assert.equal(isOthersPendingVersion(back, { version_no: 5, saved_by: "other", saved_at: "2026-10-14T07:00:00.000Z" }, third, at), false, "공개 전에 저장한 옛 이력");
+  assert.equal(isOthersPendingVersion(back, { version_no: 6, saved_by: "other", saved_at: "2026-10-14T08:00:00.000Z" }, third, at), false, "경계 — 공개 시각과 같으면 가리지 않는다");
+  assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: "other", saved_at: "2026-10-14T08:00:00.001Z" }, third, at), true, "공개 뒤 1ms 에 저장한 남의 판");
+  assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: null, saved_at: "2026-10-14T09:00:00.000Z" }, third, at), true, "저장한 사람 기록이 없는 공개 뒤 판도 남의 것");
+  assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: "other", saved_at: "날짜 아님" }, third, at), false, "시각을 못 읽으면 가리지 않는다");
 });

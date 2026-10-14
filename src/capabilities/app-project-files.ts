@@ -105,7 +105,7 @@ const appProjectFiles: Capability = {
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) =>
-    listProjectFiles({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), ext: input.ext, limit: input.limit, scope: input.scope, q: input.q }, liveDeps, rate),
+    listProjectFiles({ appId: appIdOf(input), member: who(user), scopes: user?.scopes, sessionId: String(input.session_id ?? ""), ext: input.ext, limit: input.limit, scope: input.scope, q: input.q }, liveDeps, rate),
 };
 
 const appProjectFile: Capability = {
@@ -124,7 +124,7 @@ const appProjectFile: Capability = {
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) =>
-    readProjectFile({ appId: appIdOf(input), member: who(user), sessionId: String(input.session_id ?? ""), path: input.path, projectId: input.project_id }, liveDeps, rate),
+    readProjectFile({ appId: appIdOf(input), member: who(user), scopes: user?.scopes, sessionId: String(input.session_id ?? ""), path: input.path, projectId: input.project_id }, liveDeps, rate),
 };
 
 export const appProjectFilesCapabilities: Capability[] = [appProjectFiles, appProjectFile];

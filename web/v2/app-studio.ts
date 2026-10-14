@@ -146,8 +146,10 @@ async function makeCopy(origin: { id: string; title: string; by: string }, place
   const files: any[] = (Array.isArray(pulled?.files) ? pulled.files : []).filter((f: any) => f && typeof f.path === 'string' && !/^bin\//.test(f.path));
   const mf = files.find((f) => f.path === 'lively-app.json'); if (!mf) throw new Error('원본의 설명 파일이 없어요');
   const man = JSON.parse(String(mf.content)); man.id = id; man.title = title;
-  //  #4667 원본 · 만든 사람은 서버가 기록한다(origin_app_id · 저장한 사람) — 매니페스트엔 자리만 남긴다.
-  man.studio = { ...studioUiOnly(man.studio), place };
+  //  #4667 원본 · 만든 사람은 서버가 기록한다(origin_app_id · 저장한 사람) — 매니페스트엔 자리만 남긴다. 마무리 표시(put)도 걷는다 —
+  //   사본은 이제부터 만드는 앱이다(원본의 「다 만듦」 이 따라오면 다른 기기의 「만들던 앱」 에서 빠진다 · 격리 리뷰 2-9).
+  const { put: _put, ...ui } = studioUiOnly(man.studio);
+  man.studio = { ...ui, place };
   mf.content = JSON.stringify(man, null, 2);
   await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note: '사본 · 원본 「' + origin.title + '」 그대로', origin_app_id: origin.id }) });
   return { id, title };
@@ -864,6 +866,7 @@ async function build(rec: StudioRec): Promise<void> {
       S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
     } catch (e: any) { toast('마무리 표시를 저장하지 못했어요 — ' + (e && e.message ? e.message : e) + ' · 앱은 그대로 쓸 수 있어요', true); }
     S.vis = await readVis(rec.appId);
+    rec.vis = undefined; saveRec(rec);   // 이번 넣기에 쓴 ④ 의 고름 — 다음 고침은 기본(「나만」 · 공개한 앱이면 「내 초안으로 두기」)에서 다시 고른다
     await setStage('put');
     paintVis();
   };
@@ -871,7 +874,7 @@ async function build(rec: StudioRec): Promise<void> {
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
     try {
       await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
-      rec.vis = v; saveRec(rec); S.vis = await readVis(rec.appId); paintVis(); return true;
+      S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
     } catch (e: any) { toast('공개 범위를 바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); return false; }
   };
   undo.onclick = async () => {

@@ -287,7 +287,8 @@ function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
   return {
     app_id: String(x.app_id), version_no: Number(x.version_no), origin: x.origin === "builtin" ? "builtin" : "member",
     version: String(x.version ?? "0.0.0"), content_hash: x.content_hash == null ? null : String(x.content_hash),
-    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by), saved_at: String(x.saved_at),
+    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by),
+    saved_at: x.saved_at instanceof Date ? x.saved_at.toISOString() : String(x.saved_at),   // ms 까지(공개 시각과 견준다 · #4667)
   };
 }
 

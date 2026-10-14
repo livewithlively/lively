@@ -173,10 +173,19 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_owner_idx ON org_app(owner_member) WHERE owner_member IS NOT NULL;`);
   //  옛 앱 채우기(멱등) — 워크스페이스가 만든 앱의 «만든 사람» 은 처음 설치한 사람이다(installed_by 는 upsertApp 이 처음 한 번만 쓴다).
   //   made_by 가 빈 줄만 채우므로 한 번 채운 뒤엔 다시 돌지 않는다 — 떠난 사람의 책임자를 관리자로 넘긴 줄(owner NULL · made_by 있음)을 되돌리지 않는다.
-  //   빌트인(릴리스가 만든 앱)·시더/익명 행위자는 비워 둔다(책임자 = 관리자).
-  await pool.query(`UPDATE org_app SET made_by = installed_by, owner_member = installed_by
-                     WHERE made_by IS NULL AND installed_by IS NOT NULL AND installed_by NOT IN ('system','unknown','')
-                       AND COALESCE(source->>'kind','') <> 'builtin';`);
+  //   책임자는 그 사람이 지금 활성 구성원일 때만 — 이미 떠난 사람이면 비워 둔다(= 관리자 · 떠날 때의 이관 훅은 앞으로의 전이에서만 돈다 · 격리 리뷰 NB-11).
+  //   관리자가 고치기를 «지정한 사람만» 으로 좁히며 만든 사람을 뺀 앱도 비워 둔다 — 책임자는 고치기 설정과 무관하게 고치므로(member-app editDenial)
+  //   채우기 하나로 관리자가 막아 둔 고치기가 풀리면 안 된다(격리 리뷰 2-8b).
+  //   빌트인(릴리스가 만든 앱)·시더/익명 행위자는 비워 둔다(책임자 = 관리자). 두 표에 tenant_id 가 있으면(첫 부팅 뒤) 같은 워크스페이스의 구성원만 본다.
+  const tenantCols = await pool.query(`SELECT table_name FROM information_schema.columns
+                                        WHERE table_schema = current_schema() AND column_name = 'tenant_id' AND table_name IN ('org_app','org_member')`);
+  const sameTenant = tenantCols.rows.length === 2 ? "AND m.tenant_id = a.tenant_id" : "";
+  await pool.query(`UPDATE org_app a SET made_by = a.installed_by,
+                            owner_member = CASE WHEN EXISTS (SELECT 1 FROM org_member m WHERE m.id = a.installed_by AND m.state = 'active' ${sameTenant})
+                                                     AND (a.edit_mode <> 'members' OR a.edit_members ? a.installed_by)
+                                                THEN a.installed_by ELSE NULL END
+                     WHERE a.made_by IS NULL AND a.installed_by IS NOT NULL AND a.installed_by NOT IN ('system','unknown','')
+                       AND COALESCE(a.source->>'kind','') <> 'builtin';`);
 
   // ── org_app_runtime_asset — 설치 stage가 사라진 뒤에도 정확한 package hash의 worker를 실행한다 ──
   //  코드는 단일 ESM 번들(8MiB 이하). FK 대신 remove/reclaim에서 명시 회수(v2.1 신규표 규약).

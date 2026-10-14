@@ -13,6 +13,7 @@ import { getActiveGrant } from "../org/store/apps.js";
 import { getApp } from "../org/store/apps.js";
 import { toolAllowed } from "./grant.js";
 import { canSeeApp } from "./visibility.js";
+import { getMember } from "../org/store/members.js";
 
 // 앱 세션 토큰 기본 수명 — reaper 밖에서 죽는 세션(박스 재부팅·노드 종료)의 고아 토큰을 막는다(design R2-6).
 //  세션이 살아 있으면 heartbeat 로 재발급/연장한다(PR3 스폰 배선). 12시간.
@@ -26,7 +27,8 @@ export const APP_TOKEN_TTL_SEC = 12 * 60 * 60;
 export async function mintAppToken(memberId: string, appId: string, actor?: string): Promise<{ token: string; expiresAt: Date | null }> {
   const app = await getApp(appId);
   //  #4667 — 남이 만들고 있는(나만 보는) 앱으로는 세션을 못 연다(없는 앱과 같다).
-  if (!app || !canSeeApp(app, { userId: memberId })) throw new HttpError(404, `앱 없음: ${appId}`);
+  //   관리자는 책임자가 떠난 앱도 연다 — 그 사람의 지금 권한으로 본다(드문 경우에만 한 번 더 읽는다 · 격리 리뷰 NB-5).
+  if (!app || (!canSeeApp(app, { userId: memberId }) && !canSeeApp(app, { userId: memberId, scopes: (await getMember(memberId))?.scopes ?? [] }))) throw new HttpError(404, `앱 없음: ${appId}`);
   if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다(${app.status})`);
   const grant = await getActiveGrant(appId, memberId);
   if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — me_app_grant 필요`);

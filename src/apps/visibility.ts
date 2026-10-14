@@ -69,9 +69,12 @@ export function listsAppFor(app: Pick<AppVisState, "visibility" | "owner_member"
   return appVisibilityOf(app) === "all" || isAppOwner(app, who);
 }
 
-/** 아직 첫 판이 없는 예약 앱인가(「만들기 시작」 이 만든 빈 앱 — AI 의 첫 app_save 가 채운다). 목록·붙이기에 서지 않는다. */
-export function isEmptyDraftApp(app: { content_hash?: string | null }): boolean {
-  return app.content_hash == null;
+/**
+ * 아직 첫 판이 없는 예약 앱인가(「만들기 시작」 이 만든 빈 앱 — AI 의 첫 app_save 가 채운다). 목록·붙이기에 서지 않는다.
+ *  내용 해시와 판 번호가 **둘 다** 비어야 빈 예약이다 — 예약 행 정리(store dropEmptyDraftApp · dropStaleEmptyDrafts)와 같은 자(격리 리뷰 2-9).
+ */
+export function isEmptyDraftApp(app: { content_hash?: string | null; current_version_no?: number | null }): boolean {
+  return app.content_hash == null && app.current_version_no == null;
 }
 
 /**
@@ -112,6 +115,23 @@ export function publishDenial(app: AppVisState & { title?: string; id?: string }
   if (editDenial && !isAdminViewer(who)) return editDenial;
   if (app.draft_by === who.userId || isAppOwner(app, who) || isAdminViewer(who)) return null;
   return `${name} 의 지금 초안은 ${app.draft_by} 님이 고친 것이라 그 사람이나 책임자 · 관리자만 공개할 수 있습니다`;
+}
+
+/**
+ * 남의 공개 전 판인가(격리 리뷰 NB-6) — 공개 판 뒤에(번호가 크고, 「공개하기」 를 한 적이 있으면 그 뒤에) 다른 사람이 저장한 판은 그 사람의 초안이다.
+ *  책임자 · 관리자가 아니면 판 이력에서 보이지 않고 되돌리기 대상도 아니다(남의 초안 판으로 되돌린 뒤 공개해 그 초안을 대신 내보내는 길을 막는다).
+ *  번호를 먼저 보는 까닭: 공개 판을 못 박는 판과 그 직후의 초안 판은 같은 순간에 생긴다(시각으로는 못 가른다). 시각(publishedAt, ms)은
+ *  옛 판으로 되돌려 공개한 경우 — 공개 판 번호보다 큰 옛 이력 판을 초안으로 잘못 가리지 않게 — 에만 더 본다. 공개 판이 없으면 아무것도 가리지 않는다.
+ */
+export function isOthersPendingVersion(
+  app: Pick<AppVisState, "visibility" | "owner_member" | "published_version_no">, v: { version_no: number; saved_by: string | null; saved_at: string; origin?: string },
+  who: Viewer, publishedAt: number | null,
+): boolean {
+  if (appVisibilityOf(app) !== "all" || app.published_version_no == null || v.version_no <= app.published_version_no) return false;
+  if (v.origin === "builtin") return false;   // 릴리스 원본 판은 누구의 초안도 아니다
+  if (publishedAt != null) { const t = Date.parse(v.saved_at); if (!Number.isFinite(t) || t <= publishedAt) return false; }
+  if (isAppOwner(app, who) || isAdminViewer(who)) return false;
+  return v.saved_by !== who.userId;
 }
 
 /** 「나만 보기로 되돌리기」(공개 취소)를 할 수 있나 — 책임자 · 관리자만. 공개 앱을 쓰던 다른 사람은 그 순간부터 못 연다. */

@@ -13,16 +13,11 @@ import { diffComponents, type AppComponentRef } from "./install-plan.js";
 import { runInstall, type InstallAppMeta } from "./install.js";
 import { makeDeployDeps } from "./deploy.js";
 import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
+import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
 export interface InstallOutcome { id: string; created: boolean; components: number; tables?: InstallTablesOutcome }
-
-/** 매니페스트(저장된 것 포함)의 data.tables 이름들. 모양이 어긋나도 던지지 않는다 — 옛 설치의 매니페스트를 읽는 자리다. */
-function declaredTableNames(manifest: unknown): string[] {
-  const t = (manifest as { data?: { tables?: Array<{ name?: unknown }> } } | null)?.data?.tables;
-  return Array.isArray(t) ? t.map((x) => String(x?.name ?? "")).filter(Boolean) : [];
-}
 
 /** 알림을 받을 사람 — 설치를 요청한 구성원. 사람이 아닌 행위자(시더·익명)면 보내지 않는다. */
 function installerOf(ctx: WriteCtx): string | null {

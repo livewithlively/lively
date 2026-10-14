@@ -12,6 +12,7 @@ import { pruneSessionApps } from "./session-apps.js";
 import { stopWorkersForApp } from "./worker-service.js";
 import { snapshotAppData } from "./app-snapshot.js";
 import { logger } from "../log.js";
+import { liveTableNames } from "./app-view.js";
 
 export interface RemoveAppOutcome {
   components: number;
@@ -46,7 +47,8 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
     return null;
   });
   // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
-  const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
+  //  #4667 물리 표 전부 — 공개 앱에 초안이 걸려 있으면 초안이 뺀(공개 판이 아직 쓰는) 표도 지운다(고아로 남지 않게 · 격리 리뷰 NB-7).
+  const dataTables = await liveTableNames(app);
   //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
   try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.

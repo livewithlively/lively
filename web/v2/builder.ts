@@ -228,18 +228,18 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   //  지우기 — 앱(있으면 · 판 이력째) → 앱빌딩 세션(멈추고 휴지통으로) → 이 브라우저의 기록. 진짜로 없어진다(원준: «기능적으로도 싹 삭제»).
   const deleteDraft = async (d: Draft): Promise<void> => {
     const why = (e: any): string => (e && e.message ? e.message : String(e));
-    //  #4667 만들던 앱 = 나만 보는 앱(예약만 된 빈 앱 포함) — 책임자가 지운다(/discard). 이미 공개한 앱이면 관리자 길(/remove).
+    //  #4667 만들던 앱 = 나만 보는 앱(예약만 된 빈 앱 포함) — 책임자가 지운다(/discard). 공개한 앱(「원본을 고치기」 로 연 만들던 앱 포함)은
+    //   여기서 지우지 않는다 — 모두가 쓰는 앱이다(격리 리뷰 NB-12). 앱빌딩 세션과 이 브라우저의 기록만 걷고, 내 초안은 판 이력에 남는다.
     const appId = d.serverApp || d.appId;
-    if (appId) {
-      const a = apps.find((x) => x.id === appId);
-      const path = !a || a.visibility === 'me' ? '/discard' : '/remove';
-      try { await api('/api/ui/apps/' + encodeURIComponent(appId) + path, { method: 'POST', body: JSON.stringify({}) }); }
+    const shared = !!appId && apps.some((x) => x.id === appId && x.visibility === 'all');
+    if (appId && !shared) {
+      try { await api('/api/ui/apps/' + encodeURIComponent(appId) + '/discard', { method: 'POST', body: JSON.stringify({}) }); }
       catch (e: any) { if (e?.status !== 404) { toast('앱을 지우지 못했어요 — ' + why(e), true); return; } }
     }
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(d.sid) + '?reclaim=1' + (d.node ? '&node=' + encodeURIComponent(d.node) : ''), { method: 'DELETE' }); }
     catch (e: any) { if (e?.status !== 404) toast('세션을 멈추지 못했어요 — ' + why(e) + ' · 앱과 기록은 지웠어요', true); }
     deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) v.sel = '';
-    toast('「' + d.title + '」 을 지웠어요' + (d.appId ? ' — 앱 · 앱빌딩 세션 · 기록 전부' : ' — 앱빌딩 세션 · 기록'));
+    toast('「' + d.title + '」 을 지웠어요' + (shared ? ' — 앱빌딩 세션 · 기록만(공개한 앱은 그대로 · 내 초안은 판 이력에 남아요)' : d.appId ? ' — 앱 · 앱빌딩 세션 · 기록 전부' : ' — 앱빌딩 세션 · 기록'));
     refresh();
   };
 
@@ -298,7 +298,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     const rows = vs.slice().sort((x, y) => y.version_no - x.version_no);
     //  #4667 is_current = 내가 지금 보는 판 · is_published = 모두가 쓰는 판. 「이 판으로」 는 배포 설정이라 공개 앱이면 그 판을 바로 모두의 판으로(고칠 수 있는 사람).
     const pubIt = a.visibility === 'all' && a.canEdit;
-    vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x: any) => el('div', {}, el('b', { text: x.version_no + '판' }), el('span', { text: (x.note || '').trim() || (x.version_no === 1 ? '첫 판' : '고침') }),
+    vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x) => el('div', {}, el('b', { text: x.version_no + '판' }), el('span', { text: (x.note || '').trim() || (x.version_no === 1 ? '첫 판' : '고침') }),
       x.is_published && !x.is_current ? el('small', { text: '공개 판' }) : null,
       x.is_current ? el('small', { text: a.visibility === 'all' && x.is_published ? '지금 쓰는 판 · 공개' : '지금 보는 판' })
         : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이 판으로', onclick: async () => { const to = await revertApp(a.id, x.version_no, a.title, { publish: pubIt }); if (to != null) refresh(); } }))) : [el('span', { class: 'v2-bld-mini', text: '판 이력이 없어요' })]));

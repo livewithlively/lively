@@ -14,6 +14,8 @@ export interface AppVersion {
   saved_by: string | null;
   saved_at: string;
   is_current: boolean;
+  /** #4667 모두가 쓰는 판(공개 앱만 — 나만 보는 앱은 늘 false). */
+  is_published?: boolean;
 }
 
 /** 메뉴 한 줄 — ctx-menu.ts 의 CtxRow 와 같은 모양(잎이라 import 하지 않는다). */

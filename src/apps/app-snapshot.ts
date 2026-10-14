@@ -16,10 +16,11 @@
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import { itemsPool, withTx } from "../db/client.js";
-import { getApp, listApps, type OrgApp } from "../org/store/apps.js";
+import { getApp, listApps } from "../org/store/apps.js";
 import { isBuiltinSource, qualifiedAppTable } from "./store-ddl.js";
 import { appSchemaFor, withOwnerConn, inTx } from "./store-schema.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
+import { liveTableNames } from "./app-view.js";
 
 export type SnapshotReason = "daily" | "before-remove" | "before-restore";
 const CHUNK = 1000;
@@ -32,10 +33,6 @@ export const snapshotMaxBytes = (env: NodeJS.ProcessEnv = process.env): number =
 /** 하루 한 번 — 틱이 5분마다 와도 20시간 안에 뜬 게 있으면 건너뛴다. */
 const DAILY_GAP_MS = 20 * 60 * 60 * 1000;
 
-function declaredTables(app: OrgApp): string[] {
-  const t = (app.manifest as { data?: { tables?: Array<{ name?: unknown }> } } | null)?.data?.tables;
-  return Array.isArray(t) ? t.map((x) => String(x?.name ?? "")).filter(Boolean) : [];
-}
 
 export interface SnapshotOutcome {
   app_id: string;
@@ -51,7 +48,8 @@ export async function snapshotAppData(appId: string, reason: SnapshotReason, now
   const out: SnapshotOutcome = { app_id: appId, taken_at: null, reason, tables: [] };
   if (!app) return { ...out, skipped: "앱 없음" };
   if (isBuiltinSource(app.source)) return { ...out, skipped: "기본 앱" };
-  const tables = declaredTables(app);
+  //  #4667 물리 표 전부 — 공개 앱에 초안이 걸려 있으면 초안이 뺀(공개 판이 아직 쓰는) 표도 떠 둔다(격리 리뷰 NB-7).
+  const tables = await liveTableNames(app);
   if (!tables.length) return { ...out, skipped: "데이터 테이블 없음" };
   const schema = appSchemaFor(false);
   const rels = tables.map((t) => ({ table: t, rel: qualifiedAppTable(schema, appId, t) }));
@@ -115,8 +113,9 @@ export async function pruneAppSnapshots(keepDays: number = snapshotKeepDays()): 
 export async function runDailyAppSnapshots(now: Date = new Date()): Promise<{ taken: string[]; skipped: number; too_big: string[]; failed: string[]; pruned: number }> {
   const taken: string[] = [], failed: string[] = [], tooBig: string[] = [];
   let skipped = 0;
-  const apps = (await listApps()).filter((a) => a.status === "active" && !isBuiltinSource(a.source) && declaredTables(a).length);
+  const apps = (await listApps()).filter((a) => a.status === "active" && !isBuiltinSource(a.source));
   for (const app of apps) {
+    if (!(await liveTableNames(app)).length) continue;
     try {
       const last = (await itemsPool.query(
         `SELECT max(taken_at) AS t FROM org_app_snapshot WHERE app_id=$1 AND reason='daily'`, [app.id])).rows[0]?.t as Date | null;
@@ -181,7 +180,7 @@ export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTab
   if (!listed.length) throw new HttpError(404, `그 시각(${takenAt})에 떠 둔 '${appId}' 데이터가 없습니다 — app_data_snapshots 로 목록을 보세요`);
   const targets = onlyTable ? [onlyTable] : listed;
   for (const t of targets) if (!listed.includes(t)) throw new HttpError(404, `그 묶음에 '${t}' 테이블이 없습니다`);
-  const declared = new Set(declaredTables(app));
+  const declared = new Set(await liveTableNames(app));
   const missing = targets.filter((t) => !declared.has(t));
   if (missing.length) throw new HttpError(409, `지금 앱에 선언되지 않은 테이블이라 되돌릴 자리가 없습니다: ${missing.join(", ")} — 매니페스트에 다시 선언한 뒤 되돌리세요`);
 

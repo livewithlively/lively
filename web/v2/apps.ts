@@ -244,7 +244,7 @@ export function openLaunchpad(): void {
         ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); location.hash = builderRoute('resume', draft.sid); } }] : []),
         ...(forApp ? [
           { label: '내 사본 떠서 고치기', icon: MENU_ICON.copy, hint: '원본은 그대로 · 내 식으로', run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'copy'); } },
-          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '모두에게 적용돼요' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
+          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '고친 판은 내 초안 · 공개하면 모두에게' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
           { sep: true, label: '' },
         ] : []),
         { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '앱 찾기에 다시 보여요' : '앱은 그대로 · 나한테만 안 보여요',

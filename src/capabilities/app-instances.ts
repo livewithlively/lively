@@ -9,7 +9,8 @@ import { canSeeProjectRow } from "../v6/visibility.js";
 import { listSessions } from "../terminal/terminal-sessions.js";
 import { getSessionState, getSessionStates } from "../sessions/session-state.js";
 import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
-import { canSeeApp } from "../apps/visibility.js";
+import { appViewFor, canSeeApp } from "../apps/visibility.js";
+import { asPublished, viewAppFor } from "../apps/app-view.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
 import * as instances from "../org/store/app-instances.js";
@@ -90,8 +91,10 @@ function publicAppMeta(app: apps.OrgApp, manifest: LivelyAppManifest): Record<st
 }
 
 async function decorate(instance: instances.AppInstanceRow): Promise<Record<string, unknown>> {
-  const { app, manifest } = await activeApp(instance.app_id);
-  return { ...instance, app: publicAppMeta(app, manifest), worker: await workerRunForInstance(instance.id) };
+  const { app } = await activeApp(instance.app_id);
+  //  #4667 인스턴스 주인이 보는 판의 제목 · 화면 목록 — 공개 앱에 남의 초안이 걸려 있으면 공개 판의 것(초안이 새지 않게 · 격리 리뷰 NB-6).
+  const shown = (await viewAppFor(app, { userId: instance.owner_member })).app;
+  return { ...instance, app: publicAppMeta(shown, parseAppManifest(shown.manifest)), worker: await workerRunForInstance(instance.id) };
 }
 
 // ── 목록 장식 — 왕복을 **행 수에 비례시키지 않는다**(#2234) ──────────────────────
@@ -109,14 +112,21 @@ async function decorateAll(rows: instances.AppInstanceRow[]): Promise<Map<string
     workerRunsForInstances(rows.map((r) => r.id)),
   ]);
   const byId = new Map(installed.map((a) => [a.id, a]));
-  const meta = new Map<string, Record<string, unknown> | null>();   // app_id → 공개 메타(못 쓰는 앱이면 null)
+  //  #4667 공개 판을 볼 주인의 앱만 판 머리를 한 번에 읽는다 — 초안이 없는 앱(거의 전부)은 추가 조회가 없다.
+  const pubFor = (r: instances.AppInstanceRow): boolean => { const a = byId.get(r.app_id); return !!a && appViewFor(a, { userId: r.owner_member }) === "published"; };
+  const heads = await apps.listPublishedHeads([...new Set(rows.filter(pubFor).map((r) => r.app_id))]);
+  const meta = new Map<string, Record<string, unknown> | null>();   // (app_id, 주인, 공개 판?) → 공개 메타(못 쓰는 앱이면 null)
   for (const r of rows) {
-    if (!meta.has(r.app_id)) {
+    const head = pubFor(r) ? heads.get(r.app_id) : undefined;
+    const key = `${r.app_id}\0${r.owner_member}\0${head ? 1 : 0}`;   // 보이는지 · 어느 판인지가 주인마다 다르다
+    if (!meta.has(key)) {
       const app = byId.get(r.app_id);
-      //  activeApp() 과 같은 문턱 — 없거나 비활성인 앱의 인스턴스는 목록에서 뺀다(위 머리말).
-      meta.set(r.app_id, app && app.status === "active" && app.enabled ? publicAppMeta(app, parseAppManifest(app.manifest)) : null);
+      //  activeApp() 과 같은 문턱 — 없거나 비활성인 앱의 인스턴스는 목록에서 뺀다(위 머리말). #4667 주인이 못 보는 앱(남의 나만 보는 앱)도 뺀다.
+      const usable = app && app.status === "active" && app.enabled && canSeeApp(app, { userId: r.owner_member });
+      const shown = usable && head ? asPublished(app, head) : app;
+      meta.set(key, usable && shown ? publicAppMeta(shown, parseAppManifest(shown.manifest)) : null);
     }
-    const app = meta.get(r.app_id);
+    const app = meta.get(key);
     if (!app) continue;
     out.set(r.id, { ...r, app, worker: workers.get(r.id) ?? null });
   }
