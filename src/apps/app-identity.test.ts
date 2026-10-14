@@ -32,6 +32,27 @@ test("V 시험 벡터 — 시드 → 공개 키 · 같은 칸이면 같은 토�
   assert.deepEqual(verifyAppIdentity(V.token, want, { keys, now: NOW }), V.claims);
 });
 
+// ★ 앞단(lvly-cloud control/src/appfront.test.ts, PR #485 [af-ident-1])의 시험 벡터 — 서명 구현이 따로 있는 쪽이 낸 토큰을
+//  이 검증 모듈이 그대로 받아야 한다(두 구현이 같은 바이트를 주고받는다). 그쪽 값을 바꾸면 여기도 바꾼다.
+const CP = {
+  seed: Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)),
+  publicKeyB64: "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+  claims: { ws: "11111111-2222-4333-8444-555555555555", app: "deck-edit", var: "pub", sub: "sangmin-yoon", name: "윤상민", iat: 1760400000, exp: 1760400600 } as AppIdentityClaims,
+  token: "v1.k1.eyJ3cyI6IjExMTExMTExLTIyMjItNDMzMy04NDQ0LTU1NTU1NTU1NTU1NSIsImFwcCI6ImRlY2stZWRpdCIsInZhciI6InB1YiIsInN1YiI6InNhbmdtaW4teW9vbiIsIm5hbWUiOiLsnKTsg4Hrr7wiLCJpYXQiOjE3NjA0MDAwMDAsImV4cCI6MTc2MDQwMDYwMH0"
+    + ".jL1JSNcoZXc-5a2xjccy7KC08VtGVS2prYcCTIQBE32oKuv-yQcA7oTRV8uwghKD5kSw_iGrSTRmJ0IC9W_hCA",
+};
+
+test("V2 앞단(CP) 시험 벡터 — 그쪽이 낸 토큰을 받는다 · 같은 시드로 이쪽이 서명해도 같은 토큰 · 사람을 바꾸면 거절", () => {
+  const cpKeys = new Map([["k1", ed25519PublicKey(CP.publicKeyB64)]]);
+  const cpWant = { ws: CP.claims.ws, app: CP.claims.app };
+  assert.equal(ed25519FromSeed(CP.seed).publicKeyB64, CP.publicKeyB64);
+  assert.deepEqual(verifyAppIdentity(CP.token, cpWant, { keys: cpKeys, now: CP.claims.iat + 1 }), CP.claims);
+  assert.equal(signAppIdentity(CP.claims, ed25519FromSeed(CP.seed).privateKey, "k1"), CP.token);
+  const [v, kid, , sig] = CP.token.split(".");
+  const forged = [v, kid, Buffer.from(JSON.stringify({ ...CP.claims, sub: "admin" })).toString("base64url"), sig].join(".");
+  rejects(forged, /서명/, { want: cpWant, keys: cpKeys, now: CP.claims.iat + 1 });
+});
+
 test("I1·I11·I12 받는 것 — draft 판 · 이름 없음(칸에 name 이 없다) · ws 대문자 표기", () => {
   assert.equal(verifyAppIdentity(sign({ var: "draft" }), want, { keys, now: NOW }).var, "draft");
   const { name: _n, ...noName } = V.claims;
