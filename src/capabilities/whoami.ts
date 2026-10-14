@@ -12,7 +12,8 @@ import { getMember, getOrgProfile, getUiSurface } from "../org/store.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { memberTeams } from "../v6/team-store.js";
 import { visAxes } from "../v6/visibility-axes.js";
-import { registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along
+import { managedMode, registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along · #4480 매니지드 판정
+import { appDomain } from "../apps/app-address.js"; // #4480 v2-1 — 앱 주소 도메인(LIVELY_APP_DOMAIN)
 import { getWorkspaceBySlug, PRIMARY_SLUG } from "../org/tenancy/registry.js"; // 스위처 버튼 이름·종류(registry 가 이름의 SoT)
 import { currentTenant } from "../org/tenant-context.js";
 import { memberWelcomeState } from "../org/delivery/first-run.js"; // #2039·#2171 — 처음 설정(#/welcome) 노출 판정은 서버가 한다
@@ -94,6 +95,9 @@ const me: Capability = {
         return { active, managed, current: slug, name: row?.name ?? null, kind: row?.kind ?? null };
       })(),
       incognito: ctx?.incognito ?? false,
+      // #4480 v2-1 — 앱 주소(<앱>-<워크스페이스>.<이 값>)가 켜진 워크스페이스인가. 화면(web/v2/app-ui.ts)이 앱을 앱 주소 iframe 으로
+      //  띄울지 이것으로 정한다(null = 종전 srcdoc). 매니지드에서 그 워크스페이스 컨텍스트가 있을 때만 — 주소에 슬러그가 들어간다.
+      app_domain: managedMode() && currentTenant() ? appDomain() : null,
     };
   },
 };

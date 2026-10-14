@@ -39,6 +39,7 @@ import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
+import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -197,6 +198,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
     res.redirect(302, exchangeLandingPath(req.query?.to));
   }));
+
+  // ── 앱 주소 앞단의 기계 엔드포인트(#4480 v2-1) — /api/app-front/{redeem,me,page}. **사람 로그인을 타지 않는다**:
+  //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
+  //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
+  registerAppFrontRoutes(app);
 
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);

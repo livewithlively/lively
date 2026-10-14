@@ -41,7 +41,8 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   const win = { addEventListener: (t, fn) => { if (t === "message") listeners.push(fn); } };
   const ctx = vm.createContext({ window: win, parent: { postMessage: (m) => posted.push(m) }, setTimeout, Promise, Error, Object, String });
   vm.runInContext(APP_RUNTIME_JS, ctx);
-  const deliver = (data) => { for (const fn of listeners) fn({ data }); };
+  //  부모(라이블리 화면)가 보낸 답은 브라우저에서 ev.source === parent 다(#4480 — 런타임이 그것만 받는다).
+  const deliver = (data) => { for (const fn of listeners) fn({ data, source: ctx.parent }); };
   const L = win.lively;
   ok(L && typeof L.store.onChange === "function", "S5 SDK 가 lively.store.onChange 를 낸다");
 
