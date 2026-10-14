@@ -5093,6 +5093,6 @@
   "rest": [
    "POST /api/ui/apps/:id/launch"
   ],
-  "input_hash": "0c46a1fc382f78b6"
+  "input_hash": "610459ffd9582355"
  }
 ]
