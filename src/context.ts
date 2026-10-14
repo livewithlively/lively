@@ -19,6 +19,9 @@ export interface LivelyUser {
   // 앱 세션 토큰이면 그 앱 id(#1780). 일반 토큰은 undefined. 이 값이 있으면 그 세션의 능력 호출은
   //  **그 앱 grant 의 도구 allowlist 로 축소**된다(requireAppTool — 헤더 자기주장이 아니라 토큰에 구운 경계).
   appId?: string;
+  // 앱 서버가 사람 신원(X-Lively-Identity)을 싣고 부른 요청이면 true(#4483) — 그때 userId 는 그 **구성원**이고 권한은
+  //  그 사람 ∩ 그 사람의 앱 동의다(apps/app-server-auth). 빈도 한도를 사람마다 따로 센다.
+  appServer?: boolean;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

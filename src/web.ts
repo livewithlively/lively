@@ -86,7 +86,11 @@ export function assetReloadPolicy(raw: string | undefined): "auto" | "notify" {
 
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
+  //  앱 서버 토큰(#4483)은 기본으로 403 이다(fail-closed — 여기 라우트를 더해도 닫힌 채로 생긴다). 사람 신원과 함께 받는 자리는
+  //  아래 능력 REST 마운트(mwCap) 하나뿐이고, 거기선 requireAppTool 이 그 앱 동의로 도구를 좁힌다. 비밀번호 바꾸기·로그인 수단 같은
+  //  mw(null) 라우트는 앱 동의 게이트를 안 타므로 앱 서버 코드가 방문자 이름으로 부르면 안 된다(격리 리뷰 지적).
   const authResolve = sessionOrBearer(verifier);
+  const authCap = sessionOrBearer(verifier, { appServer: true });
 
   // scope 게이트(세션·bearer 공통). null=인증만. fail-closed(미인증 401 / 권한부족 403).
   const requireScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
@@ -99,6 +103,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   };
 
   const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
+  /** 능력 REST 마운트 전용 — 앱 서버 토큰을 «그 구성원 ∩ 앱 동의» 주체로 바꿔 받는 유일한 자리. */
+  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireScope(scope)];
 
   // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
   // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —
@@ -349,8 +355,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       }));
     });
     for (const path of mount.paths) {
-      if (mount.method === "GET") app.get(path, ...mw(cap.scope), handler);
-      else app.post(path, ...mw(cap.scope), handler);
+      if (mount.method === "GET") app.get(path, ...mwCap(cap.scope), handler);
+      else app.post(path, ...mwCap(cap.scope), handler);
     }
   }
 

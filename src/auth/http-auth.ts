@@ -6,8 +6,33 @@
 import type express from "express";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { BearerVerifier } from "./bearer.js";
+import type { LivelyUser } from "../context.js";
 import { parseSessionCookie, userFromSession } from "./sessions.js";
 import { resourceIds } from "./resource-id.js";
+import { isAppServerToken, resolveAppServerPrincipal } from "../apps/app-server-auth.js";
+import { APP_IDENTITY_HEADER } from "../apps/app-identity.js";
+
+// ── 앱 서버 토큰(#4483) ─────────────────────────────────────────────────────────────────
+//  멤버 없는 앱 토큰은 **능력 REST 마운트(web.ts mwCap)에서만** 받는다 — 거기서 사람 신원(X-Lively-Identity)을 검증해 «그 구성원 ∩
+//  앱 동의» 주체로 바꾸고, 그 뒤는 앱 도구 게이트(requireAppTool)가 지킨다. 그 밖(web.ts 의 mw 라우트 · 터미널·파일·프로젝트·프리뷰·
+//  노드 경로 · /mcp·/install)은 앱 도구 게이트를 안 타므로 이 토큰을 거부한다(기본값 appServer:false — fail-closed).
+type AuthedReq = express.Request & { auth?: unknown };
+function appServerGate(allow: boolean): (req: express.Request, res: express.Response, next: express.NextFunction) => void {
+  return (req, res, next) => {
+    const r = req as AuthedReq;
+    const user = (r.auth as { extra?: unknown } | undefined)?.extra as LivelyUser | undefined;
+    if (!isAppServerToken(user)) { next(); return; }
+    if (!allow) { res.status(403).json({ error: "앱 서버 토큰은 앱 데이터·도구 API(/api/ui/…)에서 사람 신원과 함께만 씁니다" }); return; }
+    resolveAppServerPrincipal(user!, req.headers[APP_IDENTITY_HEADER]).then((p) => {
+      (r.auth as { extra?: unknown }).extra = p;          // bearer 가 막 채운 자리 — 주체만 사람으로 바꾼다
+      next();
+    }, (e: { status?: number; message?: string }) => {
+      //  401·403 은 판정 그대로, 그 밖(DB 오류 등)은 503 — 401 로 뭉개면 클라이언트가 토큰을 버리고 다시 받으려 한다.
+      const st = e?.status === 403 ? 403 : e?.status === 401 ? 401 : 503;
+      res.status(st).json({ error: st === 503 ? "앱 서버 인증을 지금 확인하지 못했습니다 — 잠시 뒤 다시 하세요" : String(e?.message ?? "앱 서버 인증 실패") });
+    });
+  };
+}
 
 /**
  * /mcp 전용 bearer — 401 에 **RFC 9728 resource_metadata 를 실어** 클라이언트가 인가서버를 발견하게 한다(#1473 T2).
@@ -21,19 +46,24 @@ import { resourceIds } from "./resource-id.js";
 export function bearerWithResourceMetadata(verifier: BearerVerifier): express.RequestHandler {
   const cache = new Map<string, express.RequestHandler>();
   const plain = requireBearerAuth({ verifier }); // 공개 주소 미설정 시(= OAuth 비활성) 종전 동작 그대로
+  const gate = appServerGate(false);
   return (req, res, next) => {
+    const then = (): void => gate(req, res, next);
     resourceIds().then((ids) => {
-      if (!ids) { plain(req, res, next); return; }
+      if (!ids) { plain(req, res, then); return; }
       const url = `${ids.base}/.well-known/oauth-protected-resource/mcp`;
       let handler = cache.get(url);
       if (!handler) { handler = requireBearerAuth({ verifier, resourceMetadataUrl: url }); cache.set(url, handler); }
-      handler(req, res, next);
-    }).catch(() => plain(req, res, next));
+      handler(req, res, then);
+    }).catch(() => plain(req, res, then));
   };
 }
 
-export function sessionOrBearer(verifier: BearerVerifier): express.RequestHandler {
-  const bearer = requireBearerAuth({ verifier });
+/** opts.appServer — 앱 서버 토큰을 사람 신원으로 바꿔 받는가(능력 REST 만 true, 머리말 «앱 서버 토큰»). */
+export function sessionOrBearer(verifier: BearerVerifier, opts: { appServer?: boolean } = {}): express.RequestHandler {
+  const plainBearer = requireBearerAuth({ verifier });
+  const gate = appServerGate(opts.appServer === true);
+  const bearer: express.RequestHandler = (req, res, next) => plainBearer(req, res, () => gate(req, res, next));
   return (req, res, next) => {
     const sid = parseSessionCookie(req.headers.cookie);
     if (!sid) { bearer(req, res, next); return; }

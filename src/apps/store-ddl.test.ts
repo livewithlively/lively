@@ -12,7 +12,8 @@ test("resolveColumnType — 화이트리스트 매핑 + 대소문자 무시", ()
 });
 
 test("resolveColumnType — 화이트리스트 밖 거부(임의 SQL 타입 주입 차단)", () => {
-  for (const bad of ["serial", "text; drop table x", "varchar(9999)", "", "money"]) {
+  //  #4483 부터 varchar(n)·numeric(p,s) 는 받는다 — 범위 밖 길이·모르는 형만 거부한다.
+  for (const bad of ["serial", "text; drop table x", "varchar(0)", "char(10)", "", "money"]) {
     assert.throws(() => resolveColumnType(bad), /허용되지 않은 컬럼 타입/);
   }
 });
@@ -176,4 +177,54 @@ test("assertMatchId — 0 이상의 정수(숫자·숫자 문자열)만 · 그 �
   for (const bad of [-1, 1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2, "1234567890123456789"]) {
     assert.throws(() => assertMatchId(bad), (e: unknown) => (e as { status?: number }).status === 400, `받으면 안 되는 값: ${String(bad)}`);
   }
+});
+
+// ── #4483 칸 타입 v2 · 기본값 리터럴 ───────────────────────────────────────────────────────
+import { parseColumnType, defaultLiteralText, appConstraintName, APP_CHECK_PREFIX } from "./store-ddl.js";
+
+test("parseColumnType — 종전 이름은 그대로(int→bigint · timestamp→timestamptz), 새 타입 · canonical(format_type 이름)", () => {
+  const p = (t: string) => { const r = parseColumnType(t); return [r.sql, r.canonical, r.array, r.enum, r.integer]; };
+  assert.deepEqual(p("int"), ["bigint", "bigint", false, false, true]);
+  assert.deepEqual(p("timestamp"), ["timestamptz", "timestamp with time zone", false, false, false]);
+  assert.deepEqual(p("Numeric( 12 , 2 )"), ["numeric(12,2)", "numeric(12,2)", false, false, false]);
+  assert.deepEqual(p("decimal(5)"), ["numeric(5,0)", "numeric(5,0)", false, false, false]);
+  assert.deepEqual(p("numeric"), ["numeric", "numeric", false, false, false]);
+  assert.deepEqual(p("varchar(80)"), ["varchar(80)", "character varying(80)", false, false, false]);
+  assert.deepEqual(p("time"), ["time", "time without time zone", false, false, false]);
+  assert.deepEqual(p("timetz"), ["time with time zone", "time with time zone", false, false, false]);
+  assert.deepEqual(p("int4"), ["integer", "integer", false, false, true]);
+  assert.deepEqual(p("smallint"), ["smallint", "smallint", false, false, true]);
+  assert.deepEqual(p("numeric(10,2)[]"), ["numeric(10,2)[]", "numeric(10,2)[]", true, false, false]);
+  assert.deepEqual(p("timestamp[]"), ["timestamptz[]", "timestamp with time zone[]", true, false, false]);
+  assert.deepEqual(p("enum"), ["text", "text", false, true, false]);
+  assert.deepEqual(p("bigint[]").slice(2), [true, false, false], "배열은 정수형이 아니다(외래키 불가)");
+});
+
+test("parseColumnType — 경계 · 거부(numeric 1~1000 · 소수 0~자릿수 · varchar 1~10485760 · 배열 한 겹 · enum 배열 · 모르는 타입)", () => {
+  assert.equal(parseColumnType("numeric(1000,0)").sql, "numeric(1000,0)");
+  assert.equal(parseColumnType("numeric(5,5)").sql, "numeric(5,5)");
+  assert.equal(parseColumnType("varchar(10485760)").sql, "varchar(10485760)");
+  for (const bad of ["numeric(0)", "numeric(1001)", "numeric(5,6)", "varchar(0)", "varchar(10485761)", "text[][]", "enum[]", "money", "serial", "int; drop table x", ""]) {
+    assert.throws(() => parseColumnType(bad), /허용되지 않은 컬럼 타입/, bad);
+  }
+});
+
+test("defaultLiteralText — 배열 리터럴(따옴표·백슬래시 이스케이프 · NULL) · jsonb · 수 · 참거짓 · null=기본값 없음 · 형 어긋남 400", () => {
+  assert.equal(defaultLiteralText(["a", 'b"c', "d\\e", null], parseColumnType("text[]")), '{"a","b\\"c","d\\\\e",NULL}');
+  assert.equal(defaultLiteralText({ a: [1] }, parseColumnType("jsonb")), '{"a":[1]}');
+  assert.equal(defaultLiteralText(1.5, parseColumnType("numeric(5,2)")), "1.5");
+  assert.equal(defaultLiteralText(false, parseColumnType("bool")), "false");
+  assert.equal(defaultLiteralText(null, parseColumnType("text")), null);
+  assert.throws(() => defaultLiteralText("x", parseColumnType("text[]")), /배열이어야/);
+  assert.throws(() => defaultLiteralText({ a: 1 }, parseColumnType("text")), /글자·수·참거짓/);
+  assert.throws(() => defaultLiteralText(Number.POSITIVE_INFINITY, parseColumnType("double")), /유한/);
+  assert.throws(() => defaultLiteralText([{}], parseColumnType("text[]")), /원소/);
+  assert.throws(() => defaultLiteralText("a\u0000b", parseColumnType("text")), /NUL/);
+});
+
+test("appConstraintName — 결정적 · 부분마다 다르다 · lvck_ 16hex", () => {
+  const a = appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount >= 0");
+  assert.equal(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount >= 0"));
+  assert.notEqual(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount > 0"));
+  assert.match(a, /^lvck_[0-9a-f]{16}$/);
 });

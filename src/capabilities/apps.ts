@@ -11,6 +11,7 @@ import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
+import { publishedBreakingChanges, publishedBreakingMessage } from "../apps/table-compat.js";
 import { removeInstalledApp } from "../apps/remove-run.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
@@ -568,6 +569,12 @@ const appSave: Capability = {
         const firstFill = isEmptyDraftApp(app0);
         //  공개 앱 — 초안을 깔기 **전에** 지금 모두가 보는 판을 판 행에 못 박는다(나머지는 그 판을 계속 본다).
         const published = app0.visibility === "all" ? await pinPublished(app0, who.userId) : null;
+        //  #4483 — 공개 판을 쓰는 사람들의 옛 코드가 같은 물리 표를 쓰는 동안, 그 코드를 깨는 표 변경(칸 지우기·이름·형 바꾸기·제약 조이기 …)은
+        //   초안으로만 깔지 않는다(재검토 3-(a)). 바로 공개하며 저장하면 된다 — 그때는 공개 판도 같은 순간 바뀐다. 초안 표식을 걸기 전에 본다.
+        if (published && input.publish !== true) {
+          const breaking = publishedBreakingChanges(published.manifest, loaded.manifest);
+          if (breaking.length) throw new HttpError(409, publishedBreakingMessage(breaking));
+        }
         const claim = published ? await claimDraft(app0, who.userId) : null;
         //  #4600 — 이력이 비어 있는 나만 보는 앱을 처음 고치면 지금 상태를 먼저 판으로 떠 둔다(예약만 된 빈 앱은 떠 둘 것이 없다).
         if (!published && !firstFill && (await store.listAppVersions(id)).length === 0) {
@@ -743,6 +750,11 @@ const appRevert: Capability = {
       // 지금 상태가 어느 판 그대로가 아니면 먼저 떠 둔다.
       const cur = app.current_version_no == null ? null : await store.getAppVersion(id, app.current_version_no);
       if (!cur || !isCurrentVersion(app, cur)) await snapshotCurrentVersion(app, who.userId, "되돌리기 직전");
+      //  #4483 — 되돌린 판이 공개 판을 깨는 표 변경을 담으면 초안으로만 깔지 않는다(app_save 와 같은 규칙).
+      if (published && input.publish !== true && target !== published.no) {
+        const breaking = publishedBreakingChanges(published.manifest, ver.manifest);
+        if (breaking.length) throw new HttpError(409, publishedBreakingMessage(breaking, "app_revert {publish:true}"));
+      }
       const keepTables = published ? declaredTableNames(published.manifest) : [];
       const claim = published ? await claimDraft(app, who.userId) : null;
       try {

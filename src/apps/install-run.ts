@@ -52,7 +52,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
   const builtin = isBuiltinSource(source);
   const schema = appSchemaFor(builtin);
-  const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns, indexes: t.indexes }));
+  const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns, indexes: t.indexes, checks: t.checks, drop_columns: t.drop_columns }));
   let tables: InstallTablesOutcome | undefined;
   if (!builtin) {
     // 이름 사전검증(#4224) — 하이픈 id·63자 초과는 여기서 400. ensureAppTables 안에서 나면 «만들지 못했다(503)» 로 뭉개진다.
