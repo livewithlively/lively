@@ -2,7 +2,7 @@
 //  이게 틀리면: 앱 주소가 DNS 한 칸(63자)을 넘거나 IDNA 자리에 걸려 브라우저가 못 여는 주소를 화면이 iframe 에 싣고(빈 화면),
 //   앱 안 경로 검사가 «//남의주소» 를 통과시켜 로그인 뒤 다른 사이트로 보내는 열린 리다이렉트가 된다.
 import assert from "node:assert/strict";
-import { appDomain, appHost, appHostLabel, appOrigin, parseAppPath, safeAppNext } from "./app-address.js";
+import { appDomain, appDomainEnabledFor, appDomainFor, appHost, appHostLabel, appOrigin, parseAppPath, safeAppNext } from "./app-address.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -16,6 +16,22 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
     assert.equal(appDomain({ LIVELY_APP_DOMAIN: bad }), null, `꼴이 틀리면 꺼짐: ${bad}`);
   }
   ok("A1 도메인 — 비면 꺼짐 · 정리 · 이상한 꼴은 꺼짐");
+}
+
+// ── 워크스페이스 단위 스위치(LIVELY_APP_DOMAIN_TENANTS) — 우리 워크스페이스에서 먼저 실측 → 전체로 ──
+{
+  const on = { LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv;
+  assert.equal(appDomainFor("lively-46e3", on), "lvly.app", "목록이 없으면 전부");
+  assert.equal(appDomainFor("lively-46e3", { ...on, LIVELY_APP_DOMAIN_TENANTS: "*" }), "lvly.app", "* 면 전부");
+  const only = { ...on, LIVELY_APP_DOMAIN_TENANTS: " Lively-46e3 , dabetai-ca21 " } as NodeJS.ProcessEnv;
+  assert.equal(appDomainFor("lively-46e3", only), "lvly.app", "목록 안(공백·대소문자 정리)");
+  assert.equal(appDomainFor("dabetai-ca21", only), "lvly.app", "목록 안 둘째");
+  assert.equal(appDomainFor("maruru-9f0a", only), null, "목록 밖은 꺼짐");
+  assert.equal(appDomainFor("46e3", only), null, "꼬리만 같은 슬러그는 목록 밖(통째로 같아야 한다)");
+  assert.equal(appDomainFor(null, only), null, "워크스페이스 모르면 꺼짐");
+  assert.equal(appDomainFor("lively-46e3", { LIVELY_APP_DOMAIN_TENANTS: "lively-46e3" } as NodeJS.ProcessEnv), null, "도메인이 없으면 목록이 있어도 꺼짐");
+  assert.equal(appDomainEnabledFor("x", { LIVELY_APP_DOMAIN_TENANTS: "" } as NodeJS.ProcessEnv), true, "빈 목록 = 전부");
+  ok("A1b 워크스페이스 단위 스위치 — 목록 없음·* = 전부 · 목록 안만 · 통째 일치 · 도메인 없으면 꺼짐");
 }
 
 // ── 라벨 ──

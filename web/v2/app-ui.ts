@@ -158,7 +158,35 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   }) as HTMLIFrameElement;
   //  appOrigin — 앱 주소로 떠 있을 때 그 출처(다리가 받고 보내는 상대). null = srcdoc(불투명 오리진 — '*' 로만 보낼 수 있다).
   let appOrigin: string | null = launch ? launch.origin : null;
+
+  //  인사 감시(#4480) — 앱 주소로 띄운 문서가 정해진 시간 안에 `ui/initialize` 로 인사하지 않으면 그 자리에서 종전 srcdoc 으로 바꾼다.
+  //   앱 주소의 앞단·코어가 서빙하는 앱 문서는 SDK 런타임을 머리에 달고 있고 런타임은 실리자마자 인사한다(app-ui-runtime.ts api.ready).
+  //   그러니 «떴는데 말이 없다» 는 그 길이 막혔다는 뜻이다 — 앞단의 오류 화면(404·503), DNS·인증서 문제, 게이트웨이 장애 같은 것.
+  //   그런 실패는 postMessage 신호를 내지 못해(오류 화면·브라우저 오류 화면) 감시가 없으면 깨진 칸이 그대로 남는다.
+  //   이 브라우저를 «막힘» 으로 적지는 않는다 — 쿠키 문제가 아니라 그 순간의 장애일 수 있다(다음에 열면 다시 앱 주소로 시도한다).
+  const HELLO_AFTER_LOAD_MS = 8_000;   // iframe 의 load 뒤 인사까지 — 교환 화면 → 앱 문서로 넘어가는 load 마다 다시 잰다
+  const HELLO_OVERALL_MS = 20_000;     // 띄운 뒤 인사까지 — load 이벤트조차 안 오는 경우의 받침
+  let greeted = false;
+  let helloAfterLoad: number | null = null;
+  let helloOverall: number | null = null;
+  const clearHello = (): void => {
+    if (helloAfterLoad !== null) window.clearTimeout(helloAfterLoad);
+    if (helloOverall !== null) window.clearTimeout(helloOverall);
+    helloAfterLoad = helloOverall = null;
+  };
+  let onSilent: () => void = () => { /* toSrcdoc 이 정해진 뒤 채운다 */ };
+  const armHello = (): void => {
+    clearHello(); greeted = false;
+    helloOverall = window.setTimeout(() => onSilent(), HELLO_OVERALL_MS);
+  };
+  const onAddrLoad = (): void => {
+    if (!appOrigin || greeted) return;
+    if (helloAfterLoad !== null) window.clearTimeout(helloAfterLoad);
+    helloAfterLoad = window.setTimeout(() => onSilent(), HELLO_AFTER_LOAD_MS);
+  };
+
   let frame = launch ? addrFrame(launch.url) : srcdocFrame(doc);
+  if (launch) { frame.addEventListener('load', onAddrLoad); armHello(); }
   const target = (): string => appOrigin || '*';
   const topics = new Set<string>();   // 앱이 구독한 주제(ui/subscribe) — 다시 불러오면 비운다(새 문서가 다시 구독한다)
   let insets: AppInsets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -169,6 +197,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   //   같은 프레임의 sandbox 만 바꿔 srcdoc 을 실으면 브라우저에 따라 allow-same-origin 이 남은 채 라이블리 출처로 뜰 수 있다(토큰이 앱에 열린다).
   let switching: Promise<void> | null = null;
   const toSrcdoc = (): Promise<void> => {
+    clearHello();
     if (switching) return switching;
     switching = (async () => {
       try {
@@ -186,8 +215,13 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   let relaunches = 0;   // 로그인이 안 됐다는 신호에 새 코드로 다시 띄운 횟수 — 앱이 제대로 인사하면(ui/initialize) 0 으로
   const relaunch = (): void => {
     void launchEmbed(appId, embedNext(opts?.page, wantProbe()))
-      .then((l) => { if (!appOrigin) return; appOrigin = l.origin; frame.src = l.url; })
+      .then((l) => { if (!appOrigin) return; appOrigin = l.origin; armHello(); frame.src = l.url; })
       .catch(() => { void toSrcdoc(); });
+  };
+  onSilent = (): void => {
+    if (!appOrigin || greeted) return;
+    console.warn('[app-ui] 앱 주소 문서가 인사하지 않아 종전 화면(srcdoc)으로 바꿉니다 —', appId);
+    void toSrcdoc();
   };
 
   // 브리지 — 이 프레임에서 온 메시지만(앱 주소면 그 출처까지). 응답 target 은 앱 주소의 출처, srcdoc 이면 '*'(불투명 오리진이라 특정 못 함 — 이 프레임만 받는다).
@@ -225,6 +259,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     }
     if (msg.method === 'ui/initialize') {
       relaunches = 0;   // 앱 문서가 제대로 떴다 — 다음에 쿠키가 만료돼 로그인 신호가 오면 다시 한 번 새 코드로 띄울 수 있다
+      greeted = true; clearHello();   // 인사 감시 끝 — 이 문서는 살아 있다
       reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
@@ -357,7 +392,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   const handle: AppUiFrame = {
     //  root 는 **지금의** 프레임이다 — 앱 주소에서 srcdoc 으로 갈아 끼우면 바뀐다(같은 자리에 들어가므로 붙인 쪽은 따로 할 일이 없다).
     get root(): HTMLElement { return frame; },
-    destroy: () => { window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); liveFrames.get(appId)?.delete(handle); },
+    destroy: () => { clearHello(); window.removeEventListener('message', onMsg); frame.remove(); opts?.onTyping?.(false); liveFrames.get(appId)?.delete(handle); },
     notify: (method, params) => { frame.contentWindow?.postMessage({ jsonrpc: '2.0', method, params: params ?? {} }, target()); },
     subscribed: (topic) => topics.has(topic),
     // 같은 값을 다시 넣으면 브라우저가 다시 띄우지 않을 수 있어 매번 끝에 주석 한 줄을 바꿔 단다(문서 밖 — 앱은 모른다).

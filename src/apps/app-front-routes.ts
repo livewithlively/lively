@@ -21,7 +21,7 @@ import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import { appVisibilityDenial } from "./visibility.js";
-import { appDomain, parseAppPath } from "./app-address.js";
+import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
 import { appErrorHtml, appPageCsp, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
@@ -60,8 +60,9 @@ export interface FrontReply { status: number; json?: unknown; html?: string; hea
 export function appFrontGate(headers: Record<string, string | string[] | undefined>, op: AppFrontOp, d: AppFrontDeps):
   { ok: true; tenant: TenantContext; act: AppFrontAct | null } | { ok: false; reply: FrontReply } {
   const secret = String(d.env.LIVELY_TENANT_HEADER_SECRET ?? "").trim();
-  if (!secret || !managedMode(d.env) || !appDomain(d.env)) return { ok: false, reply: { status: 404, json: { error: "not found" } } };
   const tenant = d.tenant();
+  //  워크스페이스 단위 스위치(LIVELY_APP_DOMAIN_TENANTS) 밖이면 경로가 없는 것과 같다(404).
+  if (!secret || !managedMode(d.env) || !appDomainFor(tenant?.slug, d.env)) return { ok: false, reply: { status: 404, json: { error: "not found" } } };
   const v = verifyAppFront(headers[APP_FRONT_HEADER], { secret, tenant, op });
   if (!v.ok || !tenant) {
     logger.warn({ op, why: v.ok ? "테넌트 없음" : v.why, ws: tenant?.slug }, "[app-front] 기계 헤더 거부");

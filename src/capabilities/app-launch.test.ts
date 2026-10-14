@@ -46,12 +46,13 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
 
 // ── F2 꺼짐 — 매니지드 아님 · 도메인 없음 · 테넌트 없음 ──
 {
-  for (const over of [{ env: { LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv }, { env: { LIVELY_TENANT_HEADER_SECRET: "x" } as NodeJS.ProcessEnv }, { tenant: () => null }]) {
+  for (const over of [{ env: { LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv }, { env: { LIVELY_TENANT_HEADER_SECRET: "x" } as NodeJS.ProcessEnv }, { tenant: () => null },
+    { env: { ...ENV, LIVELY_APP_DOMAIN_TENANTS: "maruru-9f0a" } as NodeJS.ProcessEnv }]) {   // 넷째 — 워크스페이스 단위 스위치 밖
     const { d, mints } = deps(over);
     assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit" }, user(), d)), { status: 409, code: "app_domain_off" });
     assert.equal(mints.length, 0);
   }
-  ok("F2 꺼짐 — 409 app_domain_off(셋 다)");
+  ok("F2 꺼짐 — 409 app_domain_off(넷 다 · 워크스페이스 단위 스위치 밖 포함)");
 }
 
 // ── F3 판 · 경로 · state ──

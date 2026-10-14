@@ -15,7 +15,7 @@ import { HttpError } from "../http/rest-util.js";
 import * as store from "../org/store/apps.js";
 import { getMember } from "../org/store.js";
 import { appVisibilityDenial } from "../apps/visibility.js";
-import { appDomain, appHost, appOrigin, parseAppPath, safeAppNext, type AppVariant } from "../apps/app-address.js";
+import { appDomainFor, appHost, appOrigin, parseAppPath, safeAppNext, type AppVariant } from "../apps/app-address.js";
 import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunchMode, type MintLaunchInput } from "../apps/app-launch-store.js";
 import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
@@ -59,8 +59,9 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
     throw deny(403, "not_human", "앱 주소는 사람 구성원만 열 수 있습니다");
   }
 
-  const domain = appDomain(d.env);
   const tenant = d.tenant();
+  //  워크스페이스 단위 스위치(LIVELY_APP_DOMAIN_TENANTS)까지 본다 — 목록 밖 워크스페이스는 꺼진 것과 같다.
+  const domain = tenant ? appDomainFor(tenant.slug, d.env) : null;
   if (!managedMode(d.env) || !domain || !tenant) throw deny(409, "app_domain_off", "이 워크스페이스에서는 앱 주소가 꺼져 있습니다");
 
   const mode: AppLaunchMode = input.mode === "top" ? "top" : "embed";
