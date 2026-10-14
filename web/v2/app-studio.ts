@@ -696,7 +696,7 @@ async function build(rec: StudioRec): Promise<void> {
     };
     askGo.onclick = () => { void doAsk(); };
     ask.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); void doAsk(); } });
-    h.replaceChildren(cardView(rec.card, (c) => { rec.card = c; saveRec(rec); }), el('p', { class: 'v2-studio-fine', text: '줄을 누르면 그 자리에서 고칠 수 있어요 · 통째로 다시 쓰게 하려면 아래 칸에 한마디' }), el('div', { class: 'v2-studio-ask' }, ask, askGo));
+    h.replaceChildren(cardView(rec.card, (c) => { rec.card = c; saveRec(rec); }), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
     requestAnimationFrame(() => coach('plan', h.querySelector('.v2-studio-card') as HTMLElement, 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「이대로 시안 만들기」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요'));
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
