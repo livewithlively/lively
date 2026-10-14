@@ -37,19 +37,9 @@ const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
 const PROJECT_NAME = '앱 만들기';
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
-const EXAMPLES: Array<{ what: string; label?: string; card?: StudioCard }> = [
-  EXAMPLE,
-  { what: '할 일을 적고 끝낸 것 체크', card: { name: '할 일', who: '나와 같이 일하는 사람', items: '할 일 · 기한 · 끝남', can: ['할 일 더하기', '끝난 것 체크', '기한 지난 것 먼저 보기'], not: '남에게 맡기기 · 알림', first: '안 끝난 할 일 목록' } },
-  { what: '고객 문의를 기록하고 상태 관리', card: { name: '고객 문의', who: '문의를 받는 사람', items: '고객 · 문의 내용 · 상태(접수 · 처리 중 · 끝) · 담당자', can: ['문의 적기', '상태 바꾸기', '상태별로 보기'], not: '고객에게 메일 보내기', first: '처리 중인 문의 목록' } },
-  { what: '읽을 거리 링크를 모아 두기', label: '읽을 거리' }, { what: '주간 보고를 항목별로 적기', label: '주간 보고' }, { what: '간단한 설문을 받고 결과 보기', label: '설문' },
-];
-// ① 설명칸 — 한 줄이어도 되지만 자세히 적을수록 좋다는 것을 칸 모양과 예시로 말한다(원준 2026-10-14 «한 줄로 적으라는 것 자체가…»).
-const DESC_TIPS = ['누가 쓰나요', '무엇을 적나요', '꼭 있어야 할 것', '없어도 되는 것', '첫 화면에 보일 것'];
-const DESC_PH = '예: 매주 회의 안건을 모으는 앱이면 좋겠어요.\n· 누가 쓰나요 — 회의를 준비하는 사람과 참석자 모두\n· 무엇을 적나요 — 안건 제목, 회의 날짜, 끝났는지\n· 꼭 있어야 할 것 — 회의별로 모아 보기, 끝난 안건 접기\n· 없어도 되는 것 — 회의록 쓰기, 알림';
-function exampleDesc(ex: { what: string; card?: StudioCard }): string {
-  const c = ex.card; if (!c) return ex.what;
-  return ex.what + '\n· 누가 쓰나요 — ' + c.who + '\n· 무엇을 적나요 — ' + c.items + '\n· 꼭 있어야 할 것 — ' + c.can.join(', ') + '\n· 없어도 되는 것 — ' + c.not + '\n· 첫 화면에 보일 것 — ' + c.first;
-}
+
+// ① 설명칸 — 예시는 칸 안 안내글 하나로만(원준 2026-10-14 «예시로 채우기 · 적어 두면 좋은 것 다 빼»).
+const DESC_PH = '예: 회의록을 음성 파일로 주면 이를 음성 파일을 전사하고 내용을 요약해서 정리해주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화 할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
 const firstLine = (s: string): string => String(s || '').split('\n')[0].trim();
 // 앱 만들기 세션의 모델 · 생각 깊이 — 사람이 고르지 않고 여기서 정한다(원준 2026-10-14). 카탈로그에 없는 값이면 그 축은 안 넘긴다(AI 설정 그대로).
 const STUDIO_FLAGS: Record<string, string> = { '--model': 'opus', '--effort': 'high' };
@@ -250,7 +240,7 @@ function cardView(c: StudioCard, onEdit: ((c: StudioCard) => void) | null): HTML
 function start(): void {
   if (!root) return;
   let place: StudioPlace = 'side';
-  const nameIn = el('input', { class: 'v2-studio-name-field', type: 'text', maxlength: '40', placeholder: '예: 회의 안건', 'aria-label': '앱 이름' }) as HTMLInputElement;
+  const nameIn = el('input', { class: 'v2-studio-name-field', type: 'text', maxlength: '40', placeholder: '예: 회의록', 'aria-label': '앱 이름' }) as HTMLInputElement;
   const input = el('textarea', { class: 'v2-studio-what', rows: '6', maxlength: '4000', placeholder: DESC_PH, 'aria-label': '어떤 앱인가요' }) as HTMLTextAreaElement;
   const go = el('button', { class: 'v2-studio-go', type: 'button', text: '만들기 시작' }) as HTMLButtonElement;
   const sync = (): void => { go.disabled = !input.value.trim(); };
@@ -260,12 +250,6 @@ function start(): void {
     b.onclick = () => { place = k; cards.forEach((c) => c.classList.toggle('on', c === b)); };
     return b;
   });
-  // 적어 두면 좋은 것 — 누르면 설명칸 끝에 그 줄의 머리를 붙인다(이미 있으면 그 줄로 간다).
-  const tips = el('div', { class: 'v2-studio-tips' }, el('span', { class: 'k', text: '적어 두면 좋은 것' }), ...DESC_TIPS.map((t) => el('button', { type: 'button', text: t, onclick: () => {
-    const head = '· ' + t + ' — ';
-    if (!input.value.includes(head)) input.value = input.value.replace(/\s+$/, '') + (input.value.trim() ? '\n' : '') + head;
-    input.focus(); const at = input.value.indexOf(head) + head.length; const nl = input.value.indexOf('\n', at); input.setSelectionRange(nl < 0 ? input.value.length : nl, nl < 0 ? input.value.length : nl); sync();
-  } })));
   // 누가 어디서 만드나 — 실행 컴퓨터는 사람이 고르고, 모델 · 생각 깊이는 여기서 정해 둔다.
   const nodeSel = el('select', { class: 'v2-studio-node', 'aria-label': '어디서 실행할까요' }) as HTMLSelectElement;
   const nodeNote = el('small', { class: 'v2-studio-ai-note', text: '' });
@@ -322,36 +306,33 @@ function start(): void {
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
     el('div', { class: 'v2-studio-bar' }, ...STAGES.map((x) => el('span', { class: x.n === 1 ? 'on' : '', text: '① ② ③ ④ ⑤ ⑥'.split(' ')[x.n - 1] + ' ' + x.label }))),
     el('div', { class: 'v2-studio-start' },
-      el('h2', { text: '어떤 앱을 만들까요?' }),
-      el('p', { class: 'v2-studio-lead', text: '앱 이름과 하고 싶은 일을 적어 주세요. 한 줄이어도 괜찮지만, 떠올린 앱을 자세히 적을수록 AI 가 처음부터 원하는 모습에 가깝게 만들어요.' }),
+      el('h2', { text: '앱의 이름과 기능을 정해주세요.' }),
       el('label', { class: 'v2-studio-lab' }, el('span', { text: '앱 이름' }), el('small', { text: '비워 두면 AI 가 지어요 · 나중에 바꿀 수 있어요' })),
       nameIn,
       el('label', { class: 'v2-studio-lab' }, el('span', { text: '어떤 앱인가요?' }), el('small', { text: '자세할수록 좋아요' })),
-      input, tips,
-      el('div', { class: 'v2-studio-ex' }, el('span', { class: 'k', text: '예시로 채우기' }),
-        ...EXAMPLES.map((ex) => el('button', { type: 'button', text: ex.label || (ex.card ? ex.card.name : ex.what), title: ex.what, onclick: () => { nameIn.value = ex.card ? ex.card.name : ''; input.value = exampleDesc(ex); sync(); input.focus(); } })),
-        el('button', { type: 'button', class: 'tour', text: '예시로 둘러보기(1분)', onclick: () => showTour(() => input.focus()) })),
+      input,
       el('h3', { text: '어디에서 쓰는 앱인가요?' }),
       el('p', { class: 'v2-studio-fine', text: '자리에 따라 AI 가 만드는 폭과 미리 보는 틀, 다 만든 뒤 여는 길이 달라요.' }),
       el('div', { class: 'v2-studio-places' }, ...cards),
       el('div', { class: 'v2-studio-ai' },
         el('div', { class: 'v2-studio-ai-h' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', { text: '이 앱은 AI 가 만들어요' })),
-        el('p', { text: '「만들기 시작」 을 누르면 AI 세션이 하나 열려 앱을 만들어요. 그 대화는 언제든 위의 「대화 보기」 로 볼 수 있고, 내 프로젝트 「앱 만들기」 에 남아요.' }),
+        el('p', { text: '「만들기 시작」 을 누르면 AI 세션이 하나 열려서 이를 바탕으로 더 궁금한 점을 물어볼거예요.' }),
         el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '어디서 실행할까요' }), nodeSel, nodeNote),
         el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '모델 · 생각 깊이' }), modelChip, el('small', { class: 'v2-studio-ai-note', text: '앱 만들기에 맞게 정해 두었어요' }), el('span', { class: 'v2-studio-sp' }), go))));
   sync();
-  const coachWhat = (): void => { nameIn.focus(); requestAnimationFrame(() => coach('what', input, '누가 · 무엇을 적는 앱인지 적어 주세요. 자세할수록 AI 가 더 가깝게 만들어요.', '「' + EXAMPLE.what + '」')); };
-  if (!readSeen().intro) showIntro(coachWhat, () => showTour(coachWhat));
-  else coachWhat();
+  // ① 엔 말풍선을 띄우지 않는다 — 칸 이름과 안내글로 충분하다(원준 2026-10-14).
+  const focusName = (): void => { nameIn.focus(); };
+  if (!readSeen().intro) showIntro(focusName, () => showTour(focusName));
+  else focusName();
 }
 /** 자리 그림 — 보라는 늘 «앱이 서는 자리» 다. 세션 위젯은 AI 세션(대화) 옆, 앱 화면은 화면 전체, 둘 다는 두 꼴을 나란히. */
 function placePic(k: StudioPlace): HTMLElement {
   const ses = (): HTMLElement => el('span', { class: 'ses' }, el('i', { class: 'u' }), el('i', { class: 'a' }), el('i', { class: 'a2' }));
-  const ap = (cls: string, n: number): HTMLElement => el('span', { class: 'ap ' + cls }, ...Array.from({ length: n }, () => el('i')));
+  const ap = (cls: string): HTMLElement => el('span', { class: 'ap ' + cls });   // 앱 자리는 빈 보라 — 대화하는 곳이 아니니 글줄을 그리지 않는다
   const rail = (): HTMLElement => el('span', { class: 'rail' });
-  if (k === 'side') return el('span', { class: 'v2-studio-pk', 'aria-hidden': 'true' }, rail(), ses(), ap('side', 2), el('span', { class: 'tg', text: 'AI 세션' }), el('span', { class: 'tg on', text: '세션 위젯' }));
-  if (k === 'full') return el('span', { class: 'v2-studio-pk', 'aria-hidden': 'true' }, rail(), ap('full', 3), el('span', { class: 'tg on', text: '앱 화면' }));
-  return el('span', { class: 'v2-studio-pk dual', 'aria-hidden': 'true' }, el('span', { class: 'mini' }, rail(), ses(), ap('side', 2)), el('span', { class: 'plus', text: '+' }), el('span', { class: 'mini' }, rail(), ap('full', 2)));
+  if (k === 'side') return el('span', { class: 'v2-studio-pk', 'aria-hidden': 'true' }, rail(), ses(), ap('side'), el('span', { class: 'tg', text: 'AI 세션' }), el('span', { class: 'tg on', text: '세션 위젯' }));
+  if (k === 'full') return el('span', { class: 'v2-studio-pk', 'aria-hidden': 'true' }, rail(), ap('full'), el('span', { class: 'tg on', text: '앱 화면' }));
+  return el('span', { class: 'v2-studio-pk dual', 'aria-hidden': 'true' }, el('span', { class: 'mini' }, rail(), ses(), ap('side')), el('span', { class: 'plus', text: '+' }), el('span', { class: 'mini' }, rail(), ap('full')));
 }
 
 // ── ②~⑥ 만드는 화면 — 머리줄 · 단계 바 · 지금 할 일 · 가운데(자리에 맞는 틀) · 옆(의견 · 대화) ──
