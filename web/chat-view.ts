@@ -26,7 +26,7 @@ import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클�
 import { copyText } from './v2/ctx-menu.js';
 import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 // #4707 tui 문법 — 글자 규칙(chat-tui.ts)과 웹 터미널 설정(lib/term-prefs.ts)은 DOM 없는 모듈이 쥔다. 여기는 칠하기만 한다.
-import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens, groupSegs, groupVisible, isAsyncAgent, mdPlain, newGroup, pickVerb, seedOf, TUI_DIFF_ROWS, TUI_SPIN_FRAMES, tuiCollapse, tuiHighlight, tuiMode, tuiTableLayout, tuiToolHead, tuiToolResult, turnEndSegs, wrapWords, type TuiAlign, type TuiDiffRow, type TuiCollapse, type TuiGroup, type TuiResult, type TuiSeg } from './chat-tui.js';
+import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens, groupSegs, groupVisible, idleHintPlan, idleHintSegs, isAsyncAgent, mdPlain, newGroup, pickVerb, seedOf, TUI_DIFF_ROWS, TUI_SPIN_FRAMES, tuiCollapse, tuiHighlight, tuiMode, tuiTableLayout, tuiToolHead, tuiToolResult, turnEndSegs, wrapWords, type TuiAlign, type TuiDiffRow, type TuiCollapse, type TuiGroup, type TuiResult, type TuiSeg } from './chat-tui.js';
 import { caretShape, isWheelNotch, parseTermPrefs, TERM_PREFS_KEY, termFace, wheelPx, type TermPrefs } from './lib/term-prefs.js';
 import { isDark } from './theme.js';
 
@@ -121,6 +121,11 @@ export interface ChatView {
   notice(t: ChatTurn | null, text: string | TuiSeg[], tone?: 'ok' | 'err' | 'dim'): void;
   /** tui — 백그라운드 에이전트 하나가 끝났다(완료 알림의 task-id). 턴 끝 줄 `Waiting for N background agents` 의 수가 준다. */
   bgDone(id: string): void;
+  /**
+   * tui — 마지막 턴이 끝난 시각(ms)과 그때의 문맥 토큰. 쉬는 동안 75분이 지나고 10만 토큰 이상이면 입력칸 위 한 줄 오른쪽에
+   *  `new task? /clear to save 550.8k tokens` 가 선다(Claude Code 와 같다). null = 모른다·새 턴이 시작됐다(안내를 걷는다).
+   */
+  idle(o: { at: number; tokens: number | null } | null): void;
   /** 지금 그림 문법(호출자가 문법별로 말을 고를 때 — 예: 구분선 글). */
   readonly style: 'journal' | 'desktop' | 'tui';
   removeOpening(): void;
@@ -779,7 +784,9 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     list.addEventListener('scroll', () => { if (!stickyRaf) stickyRaf = requestAnimationFrame(() => { stickyRaf = 0; paintSticky(); }); }, { passive: true });
     sticky.addEventListener('click', () => { stickyAsk?.scrollIntoView({ block: 'start' }); });
   }
-  const root = el('div', { class: 'livc-wrap' + (desktop ? ' livc-desktop' : '') + (tui ? ' livc-tui' : '') }, el('div', { class: 'livc-scroller' }, list, sticky ?? undefined, jump), opts.askHost ?? undefined, note, footSlot);
+  //  tui — 쉬는 동안의 안내 한 줄(입력칸 바로 위 · 오른쪽): `new task? /clear to save 550.8k tokens`. 목록 아래 빈 줄 자리에 선다.
+  const idleEl = tui ? el('div', { class: 'tui-idle', hidden: true }) as HTMLElement : null;
+  const root = el('div', { class: 'livc-wrap' + (desktop ? ' livc-desktop' : '') + (tui ? ' livc-tui' : '') }, el('div', { class: 'livc-scroller' }, list, sticky ?? undefined, idleEl ?? undefined, jump), opts.askHost ?? undefined, note, footSlot);
   applyFont(root, readFontStep());          // 이 브라우저가 고른 배율로 열린다(다음에 와도 그대로)
   host.replaceChildren(root);
   if (opts.opening) list.append(opts.opening);
@@ -913,8 +920,26 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   const groups = new WeakMap<HTMLElement, { g: TuiGroup; cards: HTMLElement[] }>();
   const cardCol = new WeakMap<HTMLElement, TuiCollapse>();   // 묶음 안 카드 → 그 셈(셸 명령을 빼낼 때 묶음 수를 다시 센다)
 
+  //  tui 쉬는 동안의 안내 — 마지막 턴이 끝난 시각·그때의 문맥 토큰. 75분이 차는 순간에 서도록 그때까지 시계를 건다.
+  let idleAt: number | null = null;
+  let idleTok: number | null = null;
+  let idleTimer: number | null = null;
+  function paintIdle(): void {
+    if (!idleEl) return;
+    if (idleTimer != null) { clearTimeout(idleTimer); idleTimer = null; }
+    const tok = idleTok;
+    const plan = idleHintPlan(idleAt, tok, isBusy, Date.now());
+    if (plan.show && tok != null) idleEl.replaceChildren(...segEls(idleHintSegs(tok)));
+    idleEl.hidden = !plan.show;
+    if (plan.wait != null) idleTimer = window.setTimeout(paintIdle, plan.wait);
+  }
+  //  긴 시계 하나에만 기대지 않는다 — 노트북을 덮었다 연 탭은 잠든 동안의 시간이 시계에 안 잡혀 안내가 늦게 선다. 다시 보일 때 다시 잰다.
+  const onIdleVis = (): void => { if (!document.hidden) paintIdle(); };
+  if (tui) document.addEventListener('visibilitychange', onIdleVis);
+
   const busy = (on: boolean): void => {
     isBusy = on;
+    paintIdle();
     const lock = on && !opts.sendWhileBusy;
     input.disabled = lock;
     input.placeholder = placeholderOf(lock ? (opts.busyPlaceholder || opts.placeholder) : opts.placeholder);
@@ -1032,7 +1057,11 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     const t0 = o?.ts ? Date.parse(o.ts) : NaN;
     const t: ChatTurn = { root: root0, work, ask, text: userText ?? '', ts: o?.ts, r: { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() }, live: null, startedAt: Number.isFinite(t0) ? t0 : Date.now() };
     if (o?.at === 'start') { list.prepend(root0); turnsArr.unshift(t); }
-    else { list.append(root0); turnsArr.push(t); }
+    else {
+      list.append(root0); turnsArr.push(t);
+      //  새 턴이 섰다 — 쉬는 동안의 안내는 걷는다(Claude Code 도 턴이 시작되면 걷고, 끝나면 시계를 다시 건다).
+      if (tui && idleAt != null) { idleAt = null; paintIdle(); }
+    }
     return t;
   }
 
@@ -1461,6 +1490,12 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       const last = lastDone();
       for (const w of [...waitingDone]) paintDone(w, w === last);
     },
+    idle: (o) => {
+      if (!tui) return;
+      idleAt = o && Number.isFinite(o.at) ? o.at : null;
+      idleTok = o && o.tokens != null && Number.isFinite(o.tokens) ? o.tokens : null;
+      paintIdle();
+    },
     removeOpening: () => { list.querySelector('.livc-open')?.remove(); },
     setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; },
     turns: () => turnsArr.slice(),
@@ -1477,6 +1512,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       if (spinTimer) clearInterval(spinTimer);
       try { (document as Document & { fonts?: FontFaceSet }).fonts?.removeEventListener('loadingdone', onFontsDone); } catch { /* 구형 */ }
       if (tui) {
+        if (idleTimer != null) clearTimeout(idleTimer);
+        document.removeEventListener('visibilitychange', onIdleVis);
         wideObs?.disconnect();
         tableRo?.disconnect();
         document.removeEventListener('keydown', onTuiKey);

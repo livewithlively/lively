@@ -7,7 +7,7 @@
 //  그리고 그 실행 파일에서 옮긴 셈(시간·해시·표 폭). 이 함수들은 순수 포매터라 반환 글자 자체가 관찰 가능한 효과다.
 //
 // 러너는 web/ 을 수집하지 않으므로 컴파일 산출물(public/app/chat-tui.js)을 import 한다 — DOM·전역 없는 모듈이라 그대로 불린다.
-// 엣지 표(22행 — 경계값 · 새 헬퍼의 빈 입력 · 단·복수 · 모르는 꼴)는 각 test 이름 앞의 #n 이 그 행이다.
+// 엣지 표(31행 — 경계값 · 새 헬퍼의 빈 입력 · 단·복수 · 모르는 꼴)는 각 test 이름 앞의 #n 이 그 행이다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import path from "node:path";
@@ -30,7 +30,7 @@ const MCP = { kind: "mcp", label: "lively", hint: "" };
 
 test("배선 · 모듈이 함수를 내보낸다(관측 장치가 살아 있나)", () => {
   for (const k of ["fmtElapsed", "pastVerbOf", "turnEndSegs", "doneAtLabel", "tuiCollapse", "shellKind", "splitShell", "groupSegs", "editSegs",
-    "tuiToolResult", "bashPopsOut", "tuiToolHead", "tuiHighlight", "tuiTableLayout", "dispWidth", "wrapWords", "taskNoticeSegs", "lineNotice", "turnEndOf"]) {
+    "tuiToolResult", "bashPopsOut", "tuiToolHead", "tuiHighlight", "tuiTableLayout", "dispWidth", "wrapWords", "taskNoticeSegs", "lineNotice", "turnEndOf", "ctxNew", "ctxFeed", "ctxTokens", "estLineTokens", "idleHintSegs", "idleHintDue", "idleHintPlan"]) {
     assert.equal(typeof T[k], "function", k);
   }
 });
@@ -330,4 +330,150 @@ test("#20 · 칸 폭 — 한글·한자는 두 칸, 라틴은 한 칸", () => {
   assert.equal(T.dispWidth("PR #1331"), 8);
   assert.deepEqual(T.wrapWords("가나 다라 마바", 5, false), ["가나", "다라", "마바"]);
   assert.deepEqual(T.wrapWords("가나 다라 마바", 9, false), ["가나 다라", "마바"]);   // 경계: 정확히 9칸
+});
+
+// ── 쉬는 동안의 안내 `new task? /clear to save 550.8k tokens`(행위 13·14) ─────────────────────────
+//  기대값의 출처: 2026-10-14 같은 세션(75분 넘게 쉰 세션)의 tmux 화면 `new task? /clear to save 550.8k tokens`(흐림 241 · 제안 105)와
+//   그 세션 대화 파일 꼬리의 숫자(같은 응답 두 줄: 사용량 2 + 3068 + 547166 + 425 = 550,661, 둘째 줄 글 394자). 글 자체는 옮기지 않고 길이만 맞췄다.
+const USAGE = { input_tokens: 2, cache_creation_input_tokens: 3068, cache_read_input_tokens: 547166, output_tokens: 425,
+  iterations: [{ type: "message", input_tokens: 2, output_tokens: 425, cache_read_input_tokens: 547166, cache_creation_input_tokens: 3068 }] };
+const asst = (id, content, usage = USAGE, extra = {}) => ({ type: "assistant", message: { id, model: "claude-opus-5-5", content, usage }, ...extra });
+const feedAll = (lines) => { const s = T.ctxNew(); for (const l of lines) T.ctxFeed(s, l); return s; };
+const TAIL = [
+  { type: "user", message: { content: "보고해 줘" } },
+  asst("msg_A", [{ type: "thinking", thinking: "" }]),
+  asst("msg_A", [{ type: "text", text: "x".repeat(394) }]),
+  { type: "system", subtype: "stop_hook_summary" },
+  { type: "system", subtype: "turn_duration", durationMs: 230602 },
+];
+
+test("#23 · 실측 꼬리 — 닻(550,661) + 같은 응답 둘째 줄의 어림(394자 → 99) = 550.8k", () => {
+  const s = feedAll(TAIL);
+  assert.equal(T.ctxTokens(s), 550661 + 99);
+  assert.equal(T.fmtTokens(T.ctxTokens(s)), "550.8k");               // 어림을 빼면 550.7k — 터미널과 다른 수가 선다
+  assert.equal(txt(T.idleHintSegs(T.ctxTokens(s))), "new task? /clear to save 550.8k tokens");
+});
+
+test("안내 글의 칠 — `new task? ` · ` to save ` 흐림, `/clear` · 토큰 수는 제안 색(실측 241 · 105)", () => {
+  const segs = T.idleHintSegs(123456);
+  assert.deepEqual(segs.map((x) => [x.t, !!x.d, x.c ?? null]), [["new task? ", true, null], ["/clear", false, "sug"], [" to save ", true, null], ["123.5k tokens", false, "sug"]]);
+});
+
+test("#24 · 닻이 없으면 모른다(null) — 어림만으로 수를 지어내지 않는다", () => {
+  assert.equal(T.ctxTokens(T.ctxNew()), null);
+  assert.equal(T.ctxTokens(feedAll([{ type: "user", message: { content: "x".repeat(4000) } }])), null);
+});
+
+test("#25 · 압축 경계 뒤엔 0 에서 다시 센다(경계 뒤 줄은 어림)", () => {
+  const s = feedAll([...TAIL, { type: "system", subtype: "compact_boundary" }, { type: "user", message: { content: "y".repeat(400) } }]);
+  assert.equal(T.ctxTokens(s), 100);
+});
+
+test("#26 · 합성 응답 · 끊김 안내 · 과금 안 된 응답은 닻이 아니다(뒤 줄 어림에만 든다)", () => {
+  const synth = { type: "assistant", message: { id: "msg_S", model: "<synthetic>", content: [{ type: "text", text: "z".repeat(40) }], usage: { input_tokens: 9, output_tokens: 9, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } };
+  assert.equal(T.ctxTokens(feedAll([...TAIL, synth])), 550760 + 10);
+  const intr = asst("msg_I", [{ type: "text", text: "[Request interrupted by user]" }], { input_tokens: 5, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  assert.equal(T.ctxTokens(feedAll([...TAIL, intr])), 550760 + 7);   // 29자 → 7
+  const unm = asst("msg_U", [{ type: "text", text: "w".repeat(8) }], { input_tokens: 5, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, { isUnmetered: true });
+  assert.equal(T.ctxTokens(feedAll([...TAIL, unm])), 550760 + 2);
+});
+
+test("#27 · 입력 쪽 합이 0 인 사용량은 닻이 아니다", () => {
+  const zero = asst("msg_Z", [{ type: "text", text: "q".repeat(12) }], { input_tokens: 0, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  assert.equal(T.ctxTokens(feedAll([...TAIL, zero])), 550760 + 3);
+});
+
+test("#28 · 경계값 — 문맥이 정확히 10만 토큰이면 선다, 1 모자라면 안 선다", () => {
+  const end = 1_000_000;
+  const now = end + T.IDLE_HINT_MS;
+  assert.equal(T.idleHintDue(end, 100_000, now), true);
+  assert.equal(T.idleHintDue(end, 99_999, now), false);
+});
+
+test("#29 · 경계값 — 턴이 끝나고 정확히 75분이면 선다, 1ms 모자라면 안 선다", () => {
+  assert.equal(T.IDLE_HINT_MS, 75 * 60_000);
+  const end = 1_000_000;
+  assert.equal(T.idleHintDue(end, 550_760, end + 75 * 60_000), true);
+  assert.equal(T.idleHintDue(end, 550_760, end + 75 * 60_000 - 1), false);
+});
+
+test("#30 · 서버 반복(iterations) — 조언자·압축 반복은 건너뛰고 **마지막** 유효 반복 값을 쓴다", () => {
+  const it = (type, i, cr, o) => ({ type, input_tokens: i, output_tokens: o, cache_creation_input_tokens: 0, cache_read_input_tokens: cr });
+  const top = { input_tokens: 10, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  const tokOf = (iterations) => T.ctxTokens(feedAll([asst("msg_X", [{ type: "text", text: "" }], { ...top, iterations })]));
+  //  유효 반복 둘 — 첫째(1120)가 아니라 마지막(2230)
+  assert.equal(tokOf([it("message", 100, 1000, 20), it("message", 200, 2000, 30), it("advisor_message", 999999, 0, 1)]), 2230);
+  assert.equal(tokOf([it("message", 100, 1000, 20), it("compaction", 888888, 0, 1)]), 1120);
+  assert.equal(tokOf([it("fallback_message", 5, 50, 5)]), 60);
+  //  마지막 반복이 유효하지 않으면(입력 쪽 0 · 모르는 꼴) 위쪽 합을 쓴다
+  assert.equal(tokOf([it("message", 0, 0, 7)]), 20);
+  assert.equal(tokOf([{ type: "message", input_tokens: "5" }]), 20);
+});
+
+test("닻이 아닌 안내 글 — 다섯 가지 전부(첫 블록이 통째로 그 글일 때만)", () => {
+  const skip = [
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
+    "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.",
+    "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+    "No response requested.",
+  ];
+  const u = { input_tokens: 5, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  for (const text of skip) {
+    assert.equal(T.ctxTokens(feedAll([...TAIL, asst("msg_K", [{ type: "text", text }], u)])), 550760 + Math.round(text.length / 4), text.slice(0, 30));
+  }
+  //  안내 글로 «시작»할 뿐 다른 글이면 닻이다
+  assert.equal(T.ctxTokens(feedAll([...TAIL, asst("msg_K", [{ type: "text", text: "No response requested. 그래도 답한다" }], u)])), 5);
+});
+
+test("#31 · 같은 응답 사이에 다른 응답이 끼면 닻은 뒤에서 다시(어림 0 부터)", () => {
+  const u2 = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 998 };
+  const s = feedAll([
+    asst("msg_A", [{ type: "text", text: "a".repeat(40) }], u2),
+    asst("msg_B", [{ type: "text", text: "b".repeat(40) }], u2),
+    asst("msg_A", [{ type: "text", text: "c".repeat(40) }], u2),
+    { type: "user", message: { content: [{ type: "tool_result", content: "r".repeat(80) }] } },
+    asst("msg_A", [{ type: "tool_use", name: "Bash", input: { command: "ls" } }], u2),
+  ]);
+  //  닻 = 셋째 줄(msg_B 뒤의 msg_A 첫 줄) · 어림 = 도구 결과 80자(20) + 도구 호출 `Bash{"command":"ls"}`(20자 → 5)
+  assert.equal(T.ctxTokens(s), 1000 + 20 + 5);
+  //  사이에 낀 응답이 닻이 못 되는 줄(입력 쪽 0)이어도 이어짐은 끊긴다 — 실행 파일은 거꾸로 걸으며 id 가 다른 응답에서 멈춘다.
+  const zeroIn = { input_tokens: 0, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  const s2 = feedAll([
+    asst("msg_A", [{ type: "text", text: "a".repeat(40) }], u2),
+    asst("msg_B", [{ type: "text", text: "b".repeat(40) }], zeroIn),
+    asst("msg_A", [{ type: "text", text: "c".repeat(40) }], u2),
+  ]);
+  assert.equal(T.ctxTokens(s2), 1000);
+});
+
+test("어림 — 생각·끼워 넣기 줄 · 압축 경계 앞 줄은 버린다", () => {
+  assert.equal(T.estLineTokens({ type: "assistant", message: { content: [{ type: "thinking", thinking: "t".repeat(40) }, { type: "redacted_thinking", data: "d".repeat(20) }] } }), 15);
+  assert.equal(T.estLineTokens({ type: "attachment", attachment: { type: "queued_command", prompt: "p".repeat(400) } }), 100);
+  assert.equal(T.estLineTokens({ type: "attachment", attachment: { type: "x", content: "c".repeat(40) } }), 10);
+  assert.equal(T.estLineTokens({ type: "api_system", message: { content: "s".repeat(8) } }), 2);
+});
+
+test("어림 — 그림·문서는 2000, json 문서는 글자 수/2, 도구 결과 안의 글은 그대로 어림", () => {
+  assert.equal(T.estLineTokens({ type: "user", message: { content: [{ type: "image", source: {} }] } }), 2000);
+  assert.equal(T.estLineTokens({ type: "user", message: { content: [{ type: "document", title: "a.json", source: { type: "text", data: "j".repeat(10) } }] } }), 5);
+  assert.equal(T.estLineTokens({ type: "user", message: { content: [{ type: "tool_result", content: [{ type: "text", text: "t".repeat(8) }] }] } }), 2);
+  assert.equal(T.estLineTokens({ type: "system", subtype: "turn_duration" }), 0);
+});
+
+test("시계 — 도는 중·모르는 값·10만 미만이면 아무것도 안 한다, 때가 되면 세우고, 아니면 남은 만큼 기다린다", () => {
+  const end = 5_000_000;
+  assert.deepEqual(T.idleHintPlan(end, 550_760, true, end + T.IDLE_HINT_MS), { show: false, wait: null });     // 도는 중
+  assert.deepEqual(T.idleHintPlan(null, 550_760, false, end), { show: false, wait: null });                   // 끝난 시각 모름
+  assert.deepEqual(T.idleHintPlan(end, null, false, end), { show: false, wait: null });                       // 토큰 모름(닻 없음)
+  assert.deepEqual(T.idleHintPlan(end, 99_999, false, end), { show: false, wait: null });                     // 10만 미만 — 시계도 없다
+  assert.deepEqual(T.idleHintPlan(end, 100_000, false, end + T.IDLE_HINT_MS), { show: true, wait: null });    // 때가 됐다
+  assert.deepEqual(T.idleHintPlan(end, 100_000, false, end + 1000), { show: false, wait: T.IDLE_HINT_MS - 1000 });
+  //  아주 먼 앞날(시계가 틀린 기록) — 브라우저 시계 한도로 자른다(넘기면 곧바로 울린다)
+  assert.deepEqual(T.idleHintPlan(end + 40 * 86_400_000, 100_000, false, end), { show: false, wait: T.TIMER_MAX_MS });
+});
+
+test("토큰 수 글자 — Claude Code 의 그 꼴(1000 이상은 소수 한 자리, .0 은 뗀다, 100만부터 m)", () => {
+  const cases = [[0, "0"], [999, "999"], [1000, "1k"], [1234, "1.2k"], [100_000, "100k"], [550_760, "550.8k"], [999_949, "999.9k"], [999_950, "1m"], [1_234_567, "1.2m"]];
+  for (const [n, want] of cases) assert.equal(T.fmtTokens(n), want, String(n));
 });

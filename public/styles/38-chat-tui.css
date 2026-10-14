@@ -237,6 +237,7 @@
 .livc-tui .tui-d { color: var(--tui-dim); }
 .livc-tui .tui-add { color: var(--tui-add-word); }
 .livc-tui .tui-del { color: var(--tui-del-word); }
+.livc-tui .tui-sug { color: var(--tui-perm); }   /* 제안 색(suggestion) — Claude Code 테마에서 권한 색과 같은 값(256색 105 · 다크 153) */
 .livc-tui .tui-res.tui-subtle, .livc-tui .tui-res.tui-subtle .tui-rl { color: var(--tui-subtle); }
 
 /* ── 도구 묶음 — `  Ran 2 shell commands`(끝나면 2칸 들여쓴 흐린 줄) · 도는 동안 `⏺ Running 1 shell command…` + `⎿  $ 명령` ── */
@@ -338,6 +339,12 @@
 .livc-tui .livc-jump { font: inherit; letter-spacing: inherit; line-height: var(--tui-lh); padding: 0 var(--tui-cw); border: 0; border-radius: 0;
   background: var(--tui-user-bg); color: var(--tui-text); box-shadow: none; bottom: var(--tui-lh); }   /* 목록 아래 빈 줄 위 — 터미널은 입력 가로줄 두 줄 위 */
 .livc-tui .livc-jump:hover { border: 0; text-decoration: underline; }
+/* 쉬는 동안의 안내 — 입력칸 바로 위 한 줄 오른쪽 `new task? /clear to save 550.8k tokens`(Claude Code 2.1.299: 75분 쉼 · 문맥 10만 토큰 이상).
+   그 줄은 목록 아래 빈 줄 자리다 — 안내가 서 있는 동안엔 터미널처럼 그 줄로 글이 지나가지 않게 바탕으로 덮는다.
+   오른쪽 끝은 두 칸 안쪽에서 끝난다(실측: 92칸 중 90칸째). */
+.livc-tui .tui-idle { position: absolute; left: 4px; right: 16px; bottom: 0; height: var(--tui-lh); line-height: var(--tui-lh); padding-right: calc(var(--tui-cw) * 2);
+  text-align: right; white-space: nowrap; overflow: hidden; background: var(--tui-bg); color: var(--tui-dim); z-index: 1; pointer-events: none; }
+.livc-tui .tui-idle[hidden] { display: none; }
 /* 위에 붙는 사람 말 머리 — 지금 읽는 턴의 사람 말이 위로 지나가면 맨 위 한 줄에 `❯ …`(옅은 글자 · 사람 말 띠 바탕) */
 .livc-tui .tui-sticky { position: absolute; top: 0; left: 4px; right: 16px; height: var(--tui-lh); line-height: var(--tui-lh); background: var(--tui-user-bg);
   color: var(--tui-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; cursor: pointer; }
@@ -428,6 +435,7 @@
 @media (max-width: 760px) {
   .livc-tui .livc-list { padding: 4px 6px var(--tui-lh); }
   .livc-tui .livc-foot { padding: 0 6px env(safe-area-inset-bottom, 0px); }
+  .livc-tui .tui-idle { left: 6px; right: 6px; }
   .livc-tui .cxl-dock { padding: 0 6px; }
 }
 

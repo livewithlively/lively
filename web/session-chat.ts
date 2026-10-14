@@ -23,7 +23,7 @@ import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = �
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
-import { ccModelName, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
+import { ccModelName, ctxFeed, ctxNew, ctxTokens, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
 import { parseTermPrefs, serializeTermPrefs, TERM_CURSORS, TERM_FONTS, TERM_PREFS_KEY, TERM_THEMES, type TermPrefs } from './lib/term-prefs.js';   // #4707 웹 터미널 설정 = 대화창 설정
 import { composerAttach } from './v2/compose-attach.js';
 import { registerSessionInput, putIntoSession, SESSION_INPUT_EVENT } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
@@ -1413,6 +1413,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   interface Rec { t: ChatTurn; evs: any[] }
   const recs: Rec[] = [];                     // 화면 순서(위→아래)
   let cur: Rec | null = null;
+  //  #4707 tui — 문맥 토큰 셈(쉬는 동안의 안내 `new task? /clear to save 550.8k tokens` 의 수). 앞에서부터 차례로 먹인다.
+  let ctx = ctxNew();
   let src: Source | null = null;
   let loadedFrom = 0; let loadedTo = 0;
   // 노드(멤버 PC) 세션의 중앙 기록 좌표(#1744) — 행이 아는 대화 uuid(logId·claudeSessionId) 또는 서버 409 `node` 응답이 준 uuid(nodeHint).
@@ -1474,6 +1476,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function applyLine(o: any): void {
     if (!o || typeof o !== 'object' || o.isSidechain) return;
     if (o.timestamp) { const ms = new Date(o.timestamp).getTime(); if (Number.isFinite(ms)) lastLineAt = ms; }
+    if (look === 'tui') ctxFeed(ctx, o);
     //  #4707 — Claude Code 2.1.299 는 권한 모드를 사람 말 줄이 아니라 따로 `{"type":"permission-mode","permissionMode":"auto"}` 줄에 적는다
     //   (긴 턴 중간부터 읽은 창엔 사람 말 줄이 없어 모드를 영영 몰랐다 — 상태 줄의 `⏵⏵ auto mode on` 이 비었다, 실측).
     if (o.type === 'permission-mode') {
@@ -1500,7 +1503,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   permissionDecision — 자동 모드 판정기가 허락한 호출이면 tui 가 `⎿  Allowed by auto mode classifier` 를 단다(Claude Code 와 같다).
       if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); trailResults(results); }
       if (o.isMeta || !text.trim()) return;
-      if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
+      if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); return; }
       if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text, 'end', 'compact'); cur = newRec(null); running = true; return; }
       //  #4707 tui — 보조 에이전트·백그라운드 작업의 «끝났다» 알림. 사람 말은 아니지만 터미널은 한 줄로 보인다:
       //   `● Agent "기록: …" finished · 1m 1s`(2.1.299 실측). 그 알림이 새 턴을 연다 — 뒤따르는 답이 그 아래에 선다(터미널과 같은 순서).
@@ -1557,15 +1560,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     if (o.type === 'system') {
       // 턴의 끝 — turn_duration(소요 시간)·stop_hook_summary(Stop 훅 요약) 둘 다 턴이 끝난 뒤에만 찍힌다(둘 중 하나만 있어도 마감).
-      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, turnEndOf(o)); running = false; }
+      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, turnEndOf(o)); running = false; idleFrom(o); }
       // 공통 ChatLine(#1746) — 중단(사용자가 끊음)·맥락 압축(어댑터가 system 줄로 올린다. claude 는 위의 사용자 줄 표식으로도 온다).
-      else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; }
+      else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); }
       else if (o.subtype === 'compact') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined, 'end', 'compact'); cur = newRec(null); running = true; }
       // ★ 하네스가 올린 오류 — **반드시 보이게** 하고 턴을 마감한다. 삼키면 화면이 «작업 중» 에 갇힌다
       //  (실측 2026-08-27: codex 401 이 그렇게 «10초 생각중 → 죽은 세션» 으로 보였다).
       else if (o.subtype === 'error') { view.divider('오류', typeof o.text === 'string' ? o.text : undefined, 'end', 'error'); if (cur) view.settle(cur.t, {}); running = false; }
       return;
     }
+  }
+  /**
+   * #4707 tui — 턴이 끝났다(끊김 포함): 그 시각과 지금까지의 문맥 토큰을 화면에 알린다 — 75분 쉬면 `new task? /clear …` 가 선다.
+   *  끝난 세션엔 세우지 않는다 — 그 안내는 살아 있는 Claude Code 가 그리는 것이고, 끝난 세션엔 /clear 를 칠 자리가 없다.
+   */
+  function idleFrom(o: { timestamp?: unknown }): void {
+    if (look !== 'tui') return;
+    const at = Date.parse(String(o?.timestamp ?? ''));
+    view.idle(Number.isFinite(at) && !dead() ? { at, tokens: ctxTokens(ctx) } : null);
   }
   // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
   const trail = opts.trail || null;
@@ -2104,6 +2116,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
         curUuid = c.uuid; loadedTo = 0; carry = '';
+        ctx = ctxNew(); view.idle(null);   // #4707 — 새 기록(압축·/clear)은 문맥을 새로 센다. 지난 파일의 «쉬는 동안의 안내» 는 걷는다.
         c = await rawGet(srcPath(src, { from: 0 }));
         if (destroyed) return;
       } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
@@ -2147,7 +2160,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     schedule();
   }
   function clearAll(): void {
-    recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false;
+    recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false; ctx = ctxNew(); view.idle(null);
     view.list.replaceChildren(); olderEl = null; olderAuto.watch(null); olderGen++; olderStalls = 0;
     trail?.clear();
   }
@@ -2616,7 +2629,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const ls = logSrc();
       if (!destroyed && ls) {
         if (!src && !!t.node && canType()) { void open(); }
-        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
+        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
     destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
