@@ -1,6 +1,7 @@
 // editor/render.ts — 블록 DOM 생성 + 카드/컬렉션/raw 미리보기(#1313 R58 — block-editor.ts '블록 DOM 생성' 절 verbatim 적출).
 //  보안 불변식 유지: innerHTML 금지 — 모든 DOM 은 el/renderInline/renderMarkdown(전부 textContent 기반)로만.
 import { api, busy, el, renderCollection, renderInline, renderMarkdown } from '../core.js';
+import { mermaidPreview } from '../lib/mermaid.js';
 import { overlayBox } from '../learn.js';
 import { openEmojiPicker } from '../page-decor.js';
 import { CALLOUT_COLORS } from './model.js';
@@ -86,10 +87,32 @@ export function createRender(ctx: EditorCtx) {
         block.dataset.lang = d.lang || '';
         const langIn = el('input', { class: 'be-code-lang', type: 'text', placeholder: 'lang', value: d.lang || '',
           spellcheck: 'false' }) as HTMLInputElement;
-        langIn.addEventListener('input', () => { block.dataset.lang = langIn.value.trim(); markDirtyType(); });
         const codeBox = el('div', { class: 'be-text be-code', contenteditable: 'true', spellcheck: 'false' });
         codeBox.textContent = d.text || '';
-        main.append(el('div', { class: 'be-codewrap' }, codeBox, langIn));
+        const wrap = el('div', { class: 'be-codewrap' }, codeBox, langIn);
+        // ```mermaid 는 그림 미리보기를 위에 얹는다(#4685) — 그림이 서면 코드 칸은 접히고(CSS .be-mmd-ok) 코드 칸에 들어오면 펼친다.
+        //  코드는 그대로 이 칸(.be-code)이 쥔다 — 저장(blockData)·키 처리는 손대지 않는다. 읽는 법도 blockData 와 같게.
+        let pv: { el: HTMLElement; set: (code: string) => void } | null = null;
+        const codeText = () => codeBox.innerText.replace(/​/g, '').replace(/\n$/, '');
+        const syncMmd = () => {
+          const on = /^mermaid$/i.test(block.dataset.lang || '');
+          if (on && !pv) {
+            pv = mermaidPreview({
+              onEdit: () => focusBlock(block, false),
+              onState: (ok) => block.classList.toggle('be-mmd-ok', ok),
+            });
+            main.insertBefore(pv.el, wrap);
+          } else if (!on && pv) {
+            pv.el.remove();
+            pv = null;
+            block.classList.remove('be-mmd-ok');
+          }
+          if (pv) pv.set(codeText());
+        };
+        langIn.addEventListener('input', () => { block.dataset.lang = langIn.value.trim(); markDirtyType(); syncMmd(); });
+        codeBox.addEventListener('input', () => { if (pv) pv.set(codeText()); });
+        main.append(wrap);
+        syncMmd();
         break;
       }
       case 'pagecard': {
