@@ -705,6 +705,22 @@ export async function checkTask(w: TaskWatch): Promise<TaskOutcome | null> {
   return { taskId: w.taskId, ok: false, exit: code, summary, error: err || `exit=${exitRaw}` };
 }
 
+/** buf 끝에서 잘린 UTF-8 문자(멀티바이트 선두만 있고 뒤가 안 온 것)를 뺀 길이. 온전하면 buf.length.
+ *  tailTask 는 바이트 상한(256KB)·쓰기 도중 시점으로 자르므로 한글(3바이트)이 경계에 걸리면, 조각마다 디코드할 때
+ *  양쪽 조각에 U+FFFD 가 박혀 이어 붙여도 원문이 복원되지 않는다. 잘린 문자는 이번 조각에서 빼고 next 를 그 앞에 두면 다음 조각이 문자를 통째로 가져간다. */
+export function utf8CompleteLength(buf: Uint8Array): number {
+  const len = buf.length;
+  for (let k = 1; k <= Math.min(3, len); k++) {
+    const b = buf[len - k];
+    if ((b & 0xc0) === 0x80) continue;                 // 이어지는 바이트 — 선두를 더 찾는다
+    if (b < 0x80) return len;                          // ASCII 로 끝남 — 온전
+    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    return k >= need ? len : len - k;                  // 선두 뒤 바이트가 모자라면 선두부터 뺀다
+  }
+  return len;                                          // 이어지는 바이트만 3개 — 4바이트 문자가 온전하거나 깨진 입력(그대로 둔다)
+  // 깨진 입력을 잘라 내지 마라 — 끝 ≤3바이트만 보류해야 바이트가 하나라도 더 오면 풀린다. 더 넓게 자르면 next 가 from 에 묶여 tail 이 멈춘다.
+}
+
 // 진행 로그 tail(§11) — stream.jsonl 을 from 바이트부터 읽어 청크 반환. done=exit 파일 존재.
 //  중앙(로컬)·원격(노드 RPC 릴레이) 공용. 파일 미존재(claude 시작 전)면 빈 청크.
 export interface TailResult { chunk: string; next: number; done: boolean; exit: number | null }
@@ -713,14 +729,21 @@ export async function tailTask(taskDir: string, from: number, osUser?: string | 
   let got: Record<string, TaskRead | null>;
   //  스트림 조각과 종료 파일을 **한 번에** — 화면·CLI 가 초 단위로 부르는 자리다.
   try {
+    //  ⚠ exit 를 **먼저** 읽는다(readMany 는 차례로 읽는다) — exit 는 하네스가 끝난 뒤에 생기므로 먼저 봤으면 뒤에 읽는 스트림은 최종본이다.
+    //   거꾸로면 스트림을 읽은 직후 끝난 판에서 낡은 size 로 atFinalEof 가 서서 잘린 문자를 그대로 내준다.
     got = await taskFsFor(osUser).readMany([
-      { key: "stream", path: path.join(taskDir, "stream.jsonl"), from, max: 256 * 1024 },   // 청크 상한 256KB
       { key: "exit", path: path.join(taskDir, "exit"), max: 64 },
+      { key: "stream", path: path.join(taskDir, "stream.jsonl"), from, max: 256 * 1024 },   // 청크 상한 256KB
     ]);
   } catch { return { chunk, next, done, exit }; }   // 조회 실패 = 모름(실행 중으로 둔다)
   const s = got.stream;
   if (s) {
-    if (s.size > from) { chunk = s.buf.toString("utf8"); next = from + s.buf.length; }
+    if (s.size > from) {
+      // 파일 끝까지 다 읽었고 종료 파일이 있으면 더 올 바이트가 없다 — 깨진 꼬리라도 그대로 내줘야 소비자가 멈추지 않는다.
+      const atFinalEof = !!got.exit && from + s.buf.length >= s.size;
+      const n = atFinalEof ? s.buf.length : utf8CompleteLength(s.buf);
+      chunk = s.buf.subarray(0, n).toString("utf8"); next = from + n;
+    }
     else next = s.size < from ? s.size : from;        // 재시도로 파일이 짧아졌으면 리셋
   }
   if (got.exit) { const e = got.exit.buf.toString("utf8").trim(); done = true; exit = Number.isFinite(Number(e)) ? Number(e) : null; }
