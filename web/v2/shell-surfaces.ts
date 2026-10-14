@@ -36,6 +36,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   welcome: { kind: "os", why: "처음 설정(#1813) — 앱을 열 자격 자체를 만드는 화면이라 앱보다 앞선다. 인증·온보딩은 OS 몫." },
   i: { kind: "os", why: "AppInstance 를 싣는 OS 라우트다. 이 라우트가 앱을 열지, 이것이 앱인 것은 아니다." },
   p: { kind: "os", why: "프로젝트 주소는 그 방의 맨 위 세션으로 보내는 문일 뿐 자체 화면이 없다(원준 2026-08-20 — '주소는 늘 세션')." },
+  full: { kind: "os", why: "「크게 보기」 가 새 탭에 띄우는 그 앱의 화면 가득 액자(#/full/<앱>?s=<세션>) — i 와 같이 앱을 싣는 OS 라우트일 뿐 자체 화면이 없다(원준 2026-10-12 «크게보기를 누르면 바로 거기로 · 모달 띄우지 말고»)." },
 
   // ── 이미 앱인 것 ──
   s: { kind: "app", appId: "ai-session", note: "세션 딥링크. v2.2 §7 대로 #/s/<id> 를 정본으로 유지하고, AppInstance 는 subject 로 멱등 확보한다." },

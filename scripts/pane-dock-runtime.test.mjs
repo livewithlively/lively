@@ -24,7 +24,7 @@
 //  R10c 곁칸 아래 독은 확대해도 알약 높이는 그대로(아이콘이 위로 솟는다, macOS)
 //  R11 곁칸 아래에서 경계선 가까이(세로 30% 높이)로 끌어 놓으면 → 이음매, 그 높이(at 0.3)
 //  R12 아이콘을 끌어 순서를 바꾼다(이음매는 세로) · R13 독 밖으로(옆으로) 끌어내면 고정이 풀린다
-//  R14 [더보기] — 이음매 독이면 알약 옆 곁칸 쪽으로 부풀어 곁칸 안에 · 검색 · Enter · R15 Esc
+//  R14 [더보기] — 이음매 독이면 알약 옆 곁칸 쪽으로 부풀어 곁칸 안에 · 사이드바 앱만(«새 탭으로 여는 앱» 없음, 원준 10-05) · 검색 · Enter · R15 Esc
 //  H2  곁칸 아래 독의 [더보기]는 곁칸 안, 독 위에
 //  R16 곁칸 탭 줄 높이 = 세션 머리줄 높이 · C1 어느 자리에서도 틀(탭 칸)에 스크롤이 안 생긴다
 //  R17 이음매가 없으면(서랍 · 카드 · 접힘) 곁칸 아래 · R17b 자리바꿈(곁칸이 왼쪽 · sw-left)이면 오른쪽 분할선 위 · 이름표는 세션 쪽(오른쪽)
@@ -37,6 +37,7 @@
 //  HD5 좁은 폭(서랍)엔 손잡이가 없다
 //  HF1 곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다
 //  HF2 그 손잡이를 잡고 경계선으로 끌면 이음매로(R11 이 손잡이에서 시작) · HF3 그 손잡이 위에선 확대하지 않는다
+//  GL1 「프로젝트」 타일 = 과녁(proj) · GL2 [모든 앱] 타일 = 각진 사각 넷(apps)(#4233 원준 2026-10-05 «독에는 아이콘은 왜 안 바꿨나»)
 //
 // 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
 // fail-first(2026-10-01 이음매 판): 바꾸기 전 판(떠 있는 알약 기본 · 막대 · 손잡이 — lib · 독 · CSS 셋 다 git show HEAD 를 제자리에)에 물리면
@@ -60,7 +61,7 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules
 const SRC = process.env.DOCK_UI_SRC || path.join(ROOT, "web/v2/pane-dock.ts");
 const CTX = process.env.CTX_SRC || path.join(ROOT, "web/v2/ctx-registry.ts");
 //  독과 셸의 메뉴 엔진을 **한 묶음**으로 — 둘이 같은 제공자 표(bindCtx)와 같은 «열린 메뉴» 를 봐야 한다(따로 묶으면 표가 둘이 된다).
-const entry = `export * from ${JSON.stringify(SRC)};\nexport { mountCtxMenus, bindCtxSurface, registerCtxCommon } from ${JSON.stringify(CTX)};\n`;
+const entry = `export * from ${JSON.stringify(SRC)};\nexport { mountCtxMenus, bindCtxSurface, registerCtxCommon } from ${JSON.stringify(CTX)};\nexport { iconPath } from ${JSON.stringify(path.join(ROOT, "web/lib/icon-paths.ts"))};\n`;
 //  입구는 절대 경로만 쓴다(stdin 이라 기준 폴더가 없다).
 const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-name=Dock", "--platform=browser", "--log-level=error", "--loader=ts", "--sourcefile=dock-test-entry.ts"],
   { input: entry, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -121,7 +122,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   let narrowNow=false; let seamOn=true;
   const calls=[];
   const APPS=[
-    {type:'tasks',name:'프로젝트',glyph:'projtask',hint:'태스크',multi:false,pickable:true},
+    {type:'tasks',name:'프로젝트',glyph:'proj',hint:'태스크',multi:false,pickable:true},
     {type:'files',name:'자료',glyph:'folder',hint:'자료',multi:true,pickable:true},
     {type:'knowledge',name:'지식',glyph:'wiki',hint:'지식',multi:false,pickable:true},
     {type:'web',name:'웹',glyph:'web',hint:'웹 페이지',multi:true,pickable:true},
@@ -158,6 +159,9 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   R.r1_info=[Math.round(cx(sr)-seamX()), Math.round(cy(sr)-(sp0.top+sp0.bottom)/2), root.dataset.home, root.parentElement&&root.parentElement.id, Math.round(sr.width), Math.round(sr.height)];
   R.r1=root.dataset.home==='seam' && root.parentElement===grid && Math.abs(cx(sr)-seamX())<=1 && Math.abs(cy(sr)-(sp0.top+sp0.bottom)/2)<=2 && sr.height>sr.width*3;
   R.r1b_nogrip=!document.querySelector('.pn-dock-grip') && !document.querySelector('.pn-dock-reveal');
+  //  GL 독 타일의 그림(#4233): 프로젝트 = 과녁 · [모든 앱] = 각진 사각 넷. 실제로 그린 path 를 읽는다.
+  const gd=(n)=>{const p=n&&n.querySelector('.pn-dock-ic .v2-gi-glyph'); return p?p.getAttribute('d'):null;};
+  R.gl_tasks=gd(it('tasks')); R.gl_more=gd(root.querySelector('.pn-dock-more-btn'));
   // R2 — 이음매 독은 아무도 안 비킨다
   R.r2=['paddingBottom','paddingTop','paddingLeft','paddingRight'].every((k)=>getComputedStyle(pbody)[k]==='0px') && Math.abs(rc(tkAdd).bottom+mb(tkAdd)-rc(pane).bottom)<=1;
   // HD1 — 이음매 독 맨 위의 손잡이: 첫 아이콘 위 · 짧은 가로 막대 · 앱 단추가 아니다
@@ -370,7 +374,7 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   root.querySelector('.pn-dock-more-btn').click(); await frame(); await sleep(260);
   const more=grid.querySelector('.pn-dock-more');
   const mtext=more?more.textContent:'';
-  R.r14_open=!!more && more.classList.contains('open') && mtext.includes('사이드바 앱') && mtext.includes('타임라인') && mtext.includes('새 탭으로 여는 앱');
+  R.r14_open=!!more && more.classList.contains('open') && mtext.includes('사이드바 앱') && mtext.includes('타임라인') && !mtext.includes('새 탭으로 여는 앱') && !more.querySelector('a.pn-dock-tile');
   if(more){ const mr=rc(more), sr2=rc(shelf), p2=rc(pane), s2=span();
     R.r14_beside=mr.left>=sr2.right-0.5 && mr.left>=p2.left && mr.right<=p2.right+0.5 && mr.top>=s2.top-0.5 && mr.bottom<=s2.bottom+0.5;
     R.r14_info=[Math.round(mr.left),Math.round(mr.right),Math.round(sr2.right),Math.round(p2.left),Math.round(p2.right)]; }
@@ -524,6 +528,84 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     f3.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
   }catch(e){R.err_r17b=String(e&&e.message||e);}
   grid.classList.remove('sw-left'); dock.sync(); await frame();
+  // FV — 곁칸 전체보기(이음매 없음 · 넓은 곁칸): 바닥을 따라 좌우로 끌어 옮긴다(원준 10-07)
+  try{
+    const keep=prefsNow();
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',mag:'1'})); Dock.refreshDocks();
+    seamOn=false; grid.style.setProperty('--pn-side-w','900px'); dock.sync(); await frame();
+    const pw=()=>rc(pane); let a=rc(shelf);
+    R.fv1_info=[Math.round(cx(a)-cx(pw())), root.dataset.home];
+    R.fv1_center=root.dataset.home==='float' && Math.abs(cx(a)-cx(pw()))<=1.5;
+    // FV2 — 손잡이를 잡고 왼쪽으로 150 → 윤곽이 따라오고, 놓으면 그 자리에 선다 · 서는 곳(home)은 안 바뀐다
+    let g2=grabPt(); const c0=cx(a);
+    const h2=document.elementFromPoint(g2[0],g2[1]);
+    P('pointerdown',g2[0],g2[1],h2||shelf); P('pointermove',g2[0]-20,g2[1]-4); P('pointermove',g2[0]-150,g2[1]-10);
+    const pv2=grid.querySelector('.pn-dock-preview');
+    R.fv2_preview=!!pv2 && pv2.dataset.home==='float' && Math.abs(cx(rc(pv2))-(c0-150))<=3 && Math.abs(rc(pv2).bottom-(pw().bottom-8))<=2;
+    R.fv2_pv_info=pv2?[Math.round(cx(rc(pv2))),Math.round(c0-150)]:null;
+    P('pointerup',g2[0]-150,g2[1]-10); await frame(); await sleep(450);
+    let sv=JSON.parse(prefsNow()||'null'); a=rc(shelf);
+    R.fv2_info=[JSON.stringify(sv), Math.round(cx(a)), Math.round(c0-150)];
+    R.fv2_moved=!!sv && Number(sv.fx)<0.5 && Math.abs(cx(a)-(c0-150))<=6 && root.parentElement===pane && Math.abs(a.bottom-(pw().bottom-8))<=1.5;
+    R.fv2_home_kept=!!sv && sv.home==='seam';
+    // FV3 — 왼쪽 끝 너머로 끌면 끝에서 멈춘다 · 끝에서 확대해도 곁칸 안(바깥 여백 8px)
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]-30,g2[1]); P('pointermove',pw().left-300,g2[1]);
+    P('pointerup',pw().left-300,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null');
+    const f0=rc(shelf.querySelector('.pn-dock-it .pn-dock-ic'));
+    shelf.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,clientX:cx(f0),clientY:cy(f0),pointerType:'mouse'})); await frame(); await sleep(120);
+    a=rc(shelf); const ics=[...shelf.querySelectorAll('.pn-dock-ic')].map(rc); const lft=Math.min(a.left,...ics.map((q)=>q.left));
+    R.fv3_info=[sv&&sv.fx, Math.round(lft-pw().left), Math.round(Math.max(...ics.map((q)=>q.width)))];
+    R.fv3_edge=!!sv && Number(sv.fx)===0 && lft>=pw().left+8-1 && lft<=pw().left+60 && Math.max(...ics.map((q)=>q.width))>sizeNow()*1.3;
+    shelf.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'})); await frame(); await sleep(200);
+    // FV4 — [더보기] · 이름표는 옮긴 독을 따라간다(곁칸 안)
+    const mbv=root.querySelector('.pn-dock-more-btn'); mbv.click(); await frame(); await sleep(60);
+    const pnl=pane.querySelector('.pn-dock-more'); const mr=pnl&&rc(pnl);
+    R.fv4_more=!!pnl && mr.left>=pw().left && mr.right<=pw().right && cx(rc(mbv))>=mr.left && cx(rc(mbv))<=mr.right && cx(mr)<cx(pw())-60 && mr.bottom<=rc(shelf).top;
+    mbv.click(); await frame(); await sleep(220);
+    // FV5 — 우클릭 › «사이드바 아래 가운데로»(옮겨 둔 독에만 있다) → 가운데
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    const rowC=row('사이드바 아래 가운데로'); R.fv5_row=!!rowC; if(rowC) rowC.click(); await frame(); await sleep(60); ESC(); await frame();
+    sv=JSON.parse(prefsNow()||'null'); a=rc(shelf);
+    R.fv5_center=!!sv && Number(sv.fx)===0.5 && Math.abs(cx(a)-cx(pw()))<=1.5;
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    R.fv5_row_gone=!!menuText() && !row('사이드바 아래 가운데로'); ESC(); await frame();
+    // FV6 — 오른쪽으로 옮겼다가 가운데 근처(10px)에 놓으면 가운데로 붙는다
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+30,g2[1]); P('pointermove',g2[0]+200,g2[1]); P('pointerup',g2[0]+200,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv6_right=!!sv && Number(sv.fx)>0.5 && cx(rc(shelf))>cx(pw())+150;
+    g2=grabPt(); const back=cx(pw())+10-cx(rc(shelf));
+    P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]-30,g2[1]); P('pointermove',g2[0]+back,g2[1]); P('pointerup',g2[0]+back,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv6_snap=!!sv && Number(sv.fx)===0.5 && Math.abs(cx(rc(shelf))-cx(pw()))<=1.5; R.fv6_info=[sv&&sv.fx, Math.round(cx(rc(shelf))-cx(pw()))];
+    // FV7 — 좁은 곁칸(340)에선 알약이 폭을 채운다: 왼쪽 끝을 골라 뒀어도 가운데 · 좌우로 끌어도 고른 자리(fx)는 그대로
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.00',mag:'1'})); Dock.refreshDocks();
+    grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
+    a=rc(shelf); R.fv7_center=root.dataset.home==='float' && Math.abs(cx(a)-cx(pw()))<=1.5;
+    g2=grabPt(); P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+10,g2[1]-6); P('pointermove',g2[0]+40,g2[1]-10); P('pointerup',g2[0]+40,g2[1]-10); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv7_kept=!!sv && Number(sv.fx)===0 && sv.home==='seam'; R.fv7_info=JSON.stringify(sv);
+    // FV9 — 서랍(좁은 폭)은 넓은 화면에서 고른 자리와 무관하게 가운데(거기선 끌 수도 되돌릴 수도 없다)
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.00',mag:'1'})); Dock.refreshDocks();
+    grid.style.setProperty('--pn-side-w','900px'); narrowNow=true; dock.sync(); await frame();
+    a=rc(shelf); R.fv9_info=Math.round(cx(a)-cx(pw())); R.fv9_narrow_center=root.classList.contains('narrow') && Math.abs(cx(a)-cx(pw()))<=1.5;
+    narrowNow=false; dock.sync(); await frame();
+    R.fv9_wide_left=cx(rc(shelf))<cx(pw())-150;
+    // FV10 — 이음매가 있는 넓은 곁칸의 «사이드바 아래» 독도 좌우로 옮긴다 — 서는 곳(home=float)과 좌우 자리를 함께 적는다
+    localStorage.setItem(PK,JSON.stringify({home:'float',at:'0.50',mag:'1'})); Dock.refreshDocks();
+    seamOn=true; dock.sync(); await frame();
+    g2=grabPt(); const c10=cx(rc(shelf));
+    P('pointerdown',g2[0],g2[1],document.elementFromPoint(g2[0],g2[1])||shelf); P('pointermove',g2[0]+30,g2[1]); P('pointermove',g2[0]+160,g2[1]); P('pointerup',g2[0]+160,g2[1]); await frame(); await sleep(450);
+    sv=JSON.parse(prefsNow()||'null'); R.fv10_info=[JSON.stringify(sv), Math.round(cx(rc(shelf))-c10)];
+    R.fv10_seam_float=!!sv && sv.home==='float' && Number(sv.fx)>0.5 && root.dataset.home==='float' && Math.abs(cx(rc(shelf))-(c10+160))<=6;
+    // FV11 — 이음매에 선 독의 메뉴엔 «사이드바 아래 가운데로» 가 없다(눌러도 보이는 일이 없다)
+    localStorage.setItem(PK,JSON.stringify({home:'seam',at:'0.50',fx:'0.90',mag:'1'})); Dock.refreshDocks(); await frame();
+    g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+    R.fv11_no_row=root.dataset.home==='seam' && !!menuText() && !row('사이드바 아래 가운데로'); ESC(); await frame();
+    grid.style.removeProperty('--pn-side-w'); seamOn=false; dock.sync(); await frame();
+    // FV8 — 이음매가 돌아오면 다시 이음매(전체보기에서 옮긴 것은 좌우 자리뿐)
+    seamOn=true; dock.sync(); await frame();
+    R.fv8_seam_back=root.dataset.home==='seam' && root.parentElement===grid;
+    if(keep===null) localStorage.removeItem(PK); else localStorage.setItem(PK,keep); Dock.refreshDocks();
+  }catch(e){R.err_fv=String(e&&e.stack||e);}
+  seamOn=true; grid.style.removeProperty('--pn-side-w'); dock.sync(); await frame();
   // R17c — 곁칸이 접히면(폭 0) 독도 여백도 없다 · R18 걷으면 흔적이 없다
   grid.style.setProperty('--pn-side-w','0px'); pane.style.width='0px'; pane.style.borderLeftWidth='0px'; dock.sync(); await frame();
   R.r17c=root.hidden && getComputedStyle(pbody).paddingBottom==='0px' && getComputedStyle(tkPart,'::after').height==='0px';
@@ -537,6 +619,27 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   const m2=document.querySelector('.pn-dock-more');
   R.r19=!!m2 && m2.textContent.includes('사이드바 앱') && !m2.textContent.includes('이 세션에 붙이기');
   dock2.destroy();
+  // R20 — 붙은 앱 칸은 그 앱의 얼굴로 선다(#4592): 얼굴이 있으면 그 그림 · 그 색, 없으면(옛 셸 · 앱이 여럿) 종류의 기본(네모 넷)
+  try{
+    const APPS20=[...APPS,{type:'sessapp',name:'붙은 앱',glyph:'apps',hint:'',multi:false,pickable:false}];
+    const st20={tabs:[{key:'files',type:'files'},{key:'sessapp',type:'sessapp'}]};
+    let face20='deck';
+    const host20={...host, apps:()=>APPS20, tabs:()=>st20.tabs, act:()=>'files', title:(k)=>k==='sessapp'?'장표 수정':'T:'+k, face:(k)=>k==='sessapp'?face20:null};
+    const dock20=Dock.mountDock(host20); await frame(); await sleep(40);
+    const it=()=>document.querySelector('.pn-dock-it[data-type="sessapp"]');
+    const dOf=(b)=>b&&b.querySelector('.v2-gi-glyph').getAttribute('d'); const sOf=(b)=>b&&b.querySelector('.v2-gi-glyph').getAttribute('stroke');
+    const appsD='M4 4h6v6H4z';
+    R.r20_face=!!it() && !dOf(it()).startsWith(appsD) && dOf(it())===Dock.iconPath('deck') && sOf(it())==='var(--gi-c-deck)' && it().getAttribute('style').includes('--gi-c-deck') && it().getAttribute('aria-label').startsWith('장표 수정');
+    R.r20_info={d:String(dOf(it())).slice(0,24),s:sOf(it()),st:it()&&it().getAttribute('style')};
+    face20=null; dock20.sync(); await frame(); await sleep(40);
+    R.r20_back=!!it() && dOf(it()).startsWith(appsD) && sOf(it())==='var(--gi-c-liv)';
+    face20='deck'; dock20.sync(); await frame(); await sleep(40);
+    R.r20_again=!!it() && dOf(it())===Dock.iconPath('deck');
+    const host21={...host20}; delete host21.face; dock20.destroy();
+    const dock21=Dock.mountDock(host21); await frame(); await sleep(40);
+    R.r20_nohost=!!it() && dOf(it()).startsWith(appsD);
+    dock21.destroy();
+  }catch(e){R.err_r20=String(e&&e.message||e);}
   // D5 — 끄는 중에 독이 걷혔다(탭을 닫았다) → 놓아도 아무것도 안 적는다 · 조각이 안 남는다
   try{
     await setPins(['files','knowledge','tasks','web']);
@@ -562,6 +665,13 @@ let pass = 0, fail = 0;
 const check = (cond, n, info = "") => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n}${info ? " — " + info : ""}`); } };
 if (R.error) { console.error("FAIL  페이지 스크립트가 넘어졌다 — " + R.error); process.exit(1); }
 check(R.r1, "R1 기본 = 이음매 — 세션과 곁칸 사이 분할선 한가운데 · 세로 구간 가운데 · 곁칸의 부모(.pn-body)에 붙은 세로 알약", JSON.stringify(R.r1_info));
+{
+  //  GL 은 표(web/lib/icon-paths.ts)의 글자 그대로와 견준다.
+  const ICON_SRC = readFileSync(path.join(ROOT, "web/lib/icon-paths.ts"), "utf8");
+  const want = (k) => (new RegExp("^  " + k + ": '([^']+)'", "m").exec(ICON_SRC) || [])[1] || "(표에 없음)";
+  check(R.gl_tasks === want("proj"), "GL1 독의 「프로젝트」 타일 = 프로젝트 과녁(proj, #4233)", String(R.gl_tasks).slice(0, 40));
+  check(R.gl_more === want("apps") && R.gl_more !== want("grid"), "GL2 독의 [모든 앱] 타일 = 각진 사각 넷(apps), 둥근 사각(grid)이 아니다(#4233)", String(R.gl_more).slice(0, 40));
+}
 check(R.r1b_nogrip, "R1b 손잡이(⋮⋮) · 자동 가리기 띠가 없다(원준 10-01 «바닥 왼쪽 탭 … 없애줘»)");
 check(R.r2, "R2 이음매 독은 아무도 안 비킨다 — 곁칸 본문 여백 0 · «태스크 추가» 가 곁칸 바닥에");
 check(R.hd1, "HD1 이음매 독 맨 위에 손잡이 — 첫 아이콘 위 · 경계선 한가운데의 짧은 가로 막대 · 잡는 손 모양 · 앱 단추가 아니다(탭 순서 밖)", JSON.stringify(R.hd1_info));
@@ -608,7 +718,7 @@ check(R.d3_blur && R.d3_nothing_saved, "D3 끄는 중에 창을 떠나면(blur) 
 check(R.d4_other_pointer, "D4 다른 포인터의 이동은 모른 척");
 check(R.d5_nothing, "D5 끄는 중에 독이 걷히면 놓아도 아무것도 안 적는다 · 조각이 안 남는다");
 check(R.d6_one_drag && R.d6_clean, "D6 끌기는 한 번에 하나 — 아이콘을 누른 채 알약 끝을 또 눌러도 독 끌기가 안 선다");
-check(R.r14_open, "R14 [더보기] — 사이드바 앱 · 새 탭 앱 구획");
+check(R.r14_open, "R14 [더보기] — 사이드바 앱 구획 · «새 탭으로 여는 앱» 은 없다(여기서 여는 것은 모두 사이드바에 선다, 원준 10-05)");
 check(R.r14_beside, "R14a 이음매 독의 [더보기]는 알약 옆 곁칸 쪽으로 — 곁칸 안 · 곁칸 세로 구간 안", JSON.stringify(R.r14_info));
 check(R.r14_filter, "R14b 검색이 거른다", R.r14_tiles);
 check(R.r14_enter, "R14c Enter = 첫 앱을 연다 · 창이 닫힌다", R.r14_info2);
@@ -633,12 +743,32 @@ check(R.b7_reset, "B7 «독 되돌리기» = 이음매 가운데 · 확대 켬 +
 check(R.a6_narrow_none, "A6 좁은 폭(서랍)은 곁칸 아래 · [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
 check(R.hd5_narrow_no_handle, "HD5 좁은 폭(서랍)엔 손잡이가 없다(끌기가 없다)");
 check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 아래");
+check(!R.err_fv, "FV0 전체보기 장면이 끝까지 돈다", R.err_fv);
+check(R.fv1_center, "FV1 곁칸 전체보기(이음매 없음 · 넓은 곁칸) — 적은 적 없으면 바닥 한가운데", JSON.stringify(R.fv1_info));
+check(R.fv2_preview, "FV2a 손잡이를 잡고 왼쪽으로 끌면 놓일 자리 윤곽이 바닥을 따라 따라온다(원준 10-07)", JSON.stringify(R.fv2_pv_info));
+check(R.fv2_moved, "FV2 놓으면 그 자리에 선다 — 계정 설정에 좌우 자리(fx), 곁칸 바닥에 그대로", JSON.stringify(R.fv2_info));
+check(R.fv2_home_kept, "FV2b 이음매 없는 화면에서 옮겨도 서는 곳(home)은 안 바뀐다 — 나란히 보기로 돌아가면 이음매 그대로", JSON.stringify(R.fv2_info));
+check(R.fv3_edge, "FV3 곁칸 밖으로 끌면 끝에서 멈춘다(fx 0) — 끝에서 확대해도 바깥 여백 8px 안", JSON.stringify(R.fv3_info));
+check(R.fv4_more, "FV4 [더보기]는 옮긴 독 위에, 곁칸 안에 부푼다");
+check(R.fv5_row && R.fv5_center, "FV5 우클릭 › «사이드바 아래 가운데로» → 가운데(키보드로도 닿는 길)");
+check(R.fv5_row_gone, "FV5b 가운데에 있으면 그 줄이 없다");
+check(R.fv6_right && R.fv6_snap, "FV6 오른쪽으로도 옮긴다 · 가운데 근처(10px)에 놓으면 가운데로 붙는다", JSON.stringify(R.fv6_info));
+check(R.fv7_center, "FV7 좁은 곁칸(340)에선 왼쪽 끝을 골라 뒀어도 가운데 — 알약이 폭을 채운다");
+check(R.fv7_kept, "FV7b 좁은 곁칸에서 좌우로 끌어도 넓을 때 고른 자리(fx)를 안 지운다", R.fv7_info);
+check(R.fv9_narrow_center && R.fv9_wide_left, "FV9 서랍(좁은 폭)은 왼쪽 끝을 골라 뒀어도 가운데 — 넓은 화면으로 돌아오면 고른 자리", String(R.fv9_info));
+check(R.fv10_seam_float, "FV10 이음매가 있는 넓은 곁칸의 «사이드바 아래» 독도 좌우로 옮긴다(home=float + fx)", JSON.stringify(R.fv10_info));
+check(R.fv11_no_row, "FV11 이음매에 선 독의 메뉴엔 «사이드바 아래 가운데로» 가 없다");
+check(R.fv8_seam_back, "FV8 이음매가 돌아오면 다시 이음매");
 check(R.r17_back, "R17a 이음매가 돌아오면 다시 이음매");
 check(R.r17b_swap, "R17b 자리바꿈(곁칸이 왼쪽)이면 오른쪽 분할선 위", JSON.stringify(R.r17b_info));
 check(R.r17b_tip, "R17c 자리바꿈이면 이름표는 세션 쪽(오른쪽)");
 check(R.r17c, "R17d 곁칸이 접히면 독도 여백도 빈 자리도 없다");
 check(R.destroyed, "R18 걷으면 흔적이 없다(이름표까지)");
 check(R.r19, "R19 붙이기 수단이 없으면(옛 판 게이트웨이) [더보기]에 그 구획이 없다 — 독은 그대로 쓴다");
+check(R.r20_face, "R20a ★ 붙은 앱 칸은 그 앱의 그림 · 그 앱의 색으로 선다(장표 수정 = deck) — 네모 넷이 아니다", JSON.stringify(R.r20_info));
+check(R.r20_back, "R20b 얼굴이 없어지면(앱이 여럿) 종류의 기본 그림 · 색으로 돌아간다");
+check(R.r20_again, "R20c 얼굴이 다시 서면 독도 다시 그린다(서명에 얼굴이 들어 있다)");
+check(R.r20_nohost, "R20d 얼굴을 안 주는 셸에서도 독은 선다(기본 그림)");
 const errs = Object.keys(R).filter((k) => k.startsWith("err_")).map((k) => `${k}: ${R[k]}`);
 check(!errs.length, "(배선) 시나리오 묶음이 넘어지지 않았다 — 위 판정이 실제로 끝까지 돌았다", errs.join(" | "));
 console.log(`\n${pass} ok · ${fail} fail`);

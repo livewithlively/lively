@@ -11,7 +11,6 @@ body.embed #view { padding-top: 12px; }
 /* #1841 임베드(액자 안)에서 클래식 상단바(64px)를 전제한 값들을 되돌린다 — 상단바가 없으니 sticky top:64 는 64px 빈칸이 되고,
    main padding-top(32) 상쇄용 margin-top:-32 는 위 12px 패딩보다 커서 빵부스러기 윗줄이 액자 밖으로 잘렸다(실측 crumb top -10 / 사이드바 머리 84). */
 body.embed .pjv-listboard.pjv-has-side { margin-top: -12px; }
-body.embed .pjv-has-side .pjv-side-nav-inner { top: 0; max-height: 100vh; padding-top: 10px; }
 body.embed .pjv-has-side .pjv-side-main { min-height: 100vh; }
 body.embed .kn-shell { min-height: 100vh; }
 body.embed .kn-side { top: 0; max-height: 100vh; padding-top: 14px; }
@@ -413,7 +412,7 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-pinb.on { opacity: 1; color: var(--blue); }
 .v2-pinb-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke);
   stroke-linejoin: round; stroke-linecap: round; }
-/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘(M12 17v5)은 선이라 fill 로는 안 그려져서,
+/* 고정됨 = 속이 찬 핀. ⚠ stroke 를 끄지 않는다 — 바늘 · 머리 선(side.ts PIN_NEEDLE)은 선이라 fill 로는 안 그려져서,
    stroke:none 이면 바늘이 통째로 사라진 '머리만 남은 핀'이 된다. */
 .v2-pinb.on .v2-pinb-ic { fill: currentColor; }
 /* 고정 묶음과 나머지 사이 — 실선 하나면 충분하다(머리글을 두지 않는다). */
@@ -567,12 +566,40 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-pin:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-pin.on:hover { color: var(--blue); }
 .v2-app-inst-pin svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.v2-app-inst-pin.on svg { fill: currentColor; fill-opacity: .18; }
+/*  고정됨 = **속이 찬** 압정(#3870). 종전엔 채움이 18% 라 13px 에서 빈 압정과 구별이 안 됐다 — 고정했는지는 색 하나에 기댔다. */
+.v2-app-inst-pin.on svg { fill: currentColor; }
 .v2-app-inst-close:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-app-inst-close svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
 /*  휴지통 글리프(#3568 — [AI 세션] 구역의 지난 세션 행)는 × 보다 획이 많다. 11px·2.2 로 그리면 뭉쳐서
     무슨 그림인지 안 읽힌다 — 트리 행의 휴지통(.v2-ss-trash)과 같은 값으로 조금 키우고 가늘게 한다. */
 .v2-app-inst-close--trash svg { width: 12.5px; height: 12.5px; stroke-width: var(--ic-stroke); stroke-linejoin: round; }
+/*  내 세션 줄의 두 단추(#3870, 원준 2026-10-05) — ✓ 완료 · 휴지통.
+    ✓ 는 종전 × 의 부품(.v2-app-inst-close) 그대로라 보이는 때(호버 · 켜진 줄 · 터치)를 물려받는다. 자리는 아래에서 다시 정한다.
+    휴지통은 호버 때만 서고, 압정은 둘의 왼쪽(53px)으로 물러난다. 제목은 그 셋만큼 먼저 줄인다
+    (위 «덮지 말고 줄인다» — 46px 는 단추 둘의 몫이었다).
+    ⚠ 켜진 줄(손을 안 얹은)은 ✓ 만 서 있다 — 휴지통까지 늘 세우면 보고 있는 세션 옆에 «버리기» 가 늘 떠 있게 된다. */
+.v2-app-inst-trash { position: absolute; top: 7px; right: 5px; width: 22px; height: 22px; display: none; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.v2-app-inst:hover .v2-app-inst-trash, .v2-app-inst-trash:focus-visible { display: inline-grid; }
+.v2-app-inst-trash:hover { background: color-mix(in srgb, var(--danger, #d14343) 12%, transparent); color: var(--danger, #d14343); }
+.v2-app-inst-trash:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-app-inst-trash svg { width: 12.5px; height: 12.5px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.v2-app-inst-close--done svg { width: 12.5px; height: 12.5px; stroke-width: 2.1; stroke-linejoin: round; }
+.v2-app-inst-close--done:hover { background: color-mix(in srgb, var(--mint-deep) 14%, transparent); color: var(--mint-deep); }
+/*  순서는 [압정] [✓] [휴지통] 이다(원준 2026-10-05 «순서 [압정] [✓] [휴지통]으로 바꿔줘» — 첫 판은 ✓ 가 맨 오른쪽이었다).
+    휴지통이 맨 오른쪽(5px), ✓ 가 그 왼쪽(29px). ✓ 는 손을 얹든 말든 **같은 자리**에 선다 — 켜진 줄(손을 안 얹은)은 ✓ 만
+    서 있고 오른쪽 한 칸이 비는데, 손을 얹으면 그 칸에 휴지통이 뜬다(✓ 가 커서 밑에서 움직이지 않는다). */
+.v2-app-inst--acts .v2-app-inst-close--done { right: 29px; }
+.v2-app-inst--acts.on:not(:hover) .v2-app-inst-open { padding-right: 48px; }
+.v2-app-inst--acts .v2-app-inst-pin:not(.on) { right: 53px; }
+.v2-app-inst--acts:hover .v2-app-inst-open { padding-right: 70px; }
+/*  고정된 줄 — 압정이 그리드 칸에 늘 서 있다(위 .v2-app-inst-pin.on, 오른쪽에서 29px = 휴지통이 설 자리). 손을 얹는 동안만
+    고정 안 된 압정과 **같은 절대 자리**(53px)로 옮긴다 — 그리드 칸 안에서 여백으로 밀면 줄이 놓인 목록마다(홈 카드 · 맨 목록)
+    칸 끝이 달라 어긋난다(실측 11px 겹침). 칸이 비는 만큼 제목이 늘어나므로 여백은 고정 안 된 줄과 같은 70px 를 준다.
+    ⚠ top 은 안 적는다 — 한 줄 모드 · 홈 카드가 정한 높이(.v2-app-inst--1 … · 47-v2-rail)를 그대로 물려받는다. */
+.v2-app-inst--acts:hover .v2-app-inst-pin.on { position: absolute; right: 53px; margin-right: 0; }
+.v2-app-inst--acts:hover:has(.v2-app-inst-pin.on) .v2-app-inst-open { padding-right: 70px; }
+.v2-app-inst--1 .v2-app-inst-trash { top: 4px; }
 .v2-app-inst-project, .v2-app-inst-meta { grid-column: 1 / -1; grid-row: 2; min-width: 0; margin-left: 26px; align-self: center; }
 
 /*  남의 세션 표식(#2026) — 이 목록에 남의 세션이 서는 길은 '내가 열어 둔 창' 하나뿐인데(sideInstances ③),
@@ -635,6 +662,12 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-ask-ic { width: 11px; height: 11px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; opacity: .75; }
 .v2-app-empty { margin: 10px 4px; padding: 14px; border: 1px dashed var(--line-net); border-radius: 9px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .v2-app-empty p { margin: 0 0 4px; }
+/* #3870 — 목록의 정본(세션 · 프로젝트)을 받기 전 자리. 줄 · 숫자 · «없어요» 안내는 받은 뒤에만 그린다(web/lib/side-boot.ts).
+   막대는 이름처럼 보이지 않게 글자 없이, 목록 카드와 같은 그릇(흰 바탕 · 테두리)에 담는다. */
+.v2-side-boot { display: flex; flex-direction: column; gap: 22px; margin: 2px 2px 0; padding: 16px 12px; background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; }
+.v2-side-boot > i { display: block; height: 10px; border-radius: 5px; background: var(--line-net); animation: v2pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .v2-side-boot > i { animation: none; } }
+.v2-side-boot-note { margin: 8px 6px 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 
 .v2-side-foot--apps { gap: 7px; padding: 8px 10px 10px; background: var(--gray-bg-2); }
 .v2-app-dock { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
@@ -856,6 +889,8 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
   padding: 7px 8px; border-radius: 8px; cursor: pointer; font: inherit; color: var(--ink); }
 .v2-pjpick-row:hover { background: var(--bg-tint); }
 .v2-pjpick-row .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.v2-pjpick-row .n { margin-right: auto; }
+.v2-pjpick-ic { width: 15px; height: 15px; flex: none; margin-right: -2px; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }   /* #4233 */
 .v2-pjpick-row .m { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 .v2-pjpick-row.cur { cursor: default; background: var(--gray-bg); }
 .v2-pjpick-cur { color: var(--mint-deep); font-weight: 700; }
@@ -1507,10 +1542,16 @@ input.v2-pad-search::placeholder { color: var(--muted); font-weight: 400; }
 input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .v2-pad-esc { flex: none; font: inherit; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
   background: rgba(var(--tint-ink), .07); border: 1px solid var(--v2-pad-field-line); border-radius: 6px; padding: 3px 7px; }
+/* 묶음 둘(#4554) — 「기본 앱」 · 「워크스페이스 앱」. 묶음 = 제목 한 줄 + 격자. 제목은 격자의 왼쪽 끝에 맞춰 서고,
+   목록의 리듬만 만든다(.v2-app-group 과 같은 무게) — 흐린 바탕 위라 글자색은 잉크 쪽(--ink-sub)이다. */
+.v2-pad-body { width: min(920px, 100%); display: flex; flex-direction: column; align-items: center; gap: 26px; }
+.v2-pad-sec { width: 100%; }
+.v2-pad-sec-h { margin: 0 0 2px; padding: 0 14px; font-size: 13px; font-weight: 700; letter-spacing: 0; color: var(--ink-sub); }   /* 칸의 위 여백(14px)이 이미 숨을 준다 */
 .v2-pad-grid { width: min(920px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
 .v2-pad-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px 12px; background: none; border: 0; border-radius: 18px; text-decoration: none; color: var(--ink); text-align: center; }
 .v2-pad-item:hover { background: rgba(var(--tint-ink), .12); }
-.v2-pad-grid--q .v2-pad-item:first-child { background: rgba(var(--tint-ink), .12); }
+/* 검색 중 Enter 로 열릴 칸 — 묶음이 둘이라 «격자의 첫 칸» 이 아니라 가장 잘 맞은 칸 하나에 표시한다(apps.ts draw). */
+.v2-pad-item.is-first { background: rgba(var(--tint-ink), .12); }
 .v2-pad-item b { font-size: 12.5px; font-weight: 700; line-height: 1.35; }
 .v2-pad-ico { width: 60px; height: 60px; display: grid; place-items: center; color: var(--ink-sub); }
 .v2-pad-ico .v2-ic { width: 30px; height: 30px; }
@@ -1540,6 +1581,22 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item--app:hover { background: rgba(var(--tint-ink), .12); }
 .v2-pad-item--app .v2-pad-ico { color: var(--mint-deep); }
 .v2-pad-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep); background: var(--bg-success); border: 1px solid var(--ok-line-2); border-radius: 999px; padding: 1px 7px; }
+/* #4600 앱 찾기에서 빼기·다시 넣기 — 칸 호버에 뜨는 ⋯(우클릭과 같은 메뉴) · 검색 중 뺀 칸의 표시 · 격자 아래 접힌 「뺀 앱」 묶음 */
+.v2-pad-item { position: relative; }
+.v2-pad-more { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; color: var(--ink-sub); background: rgba(var(--tint-ink), .10); opacity: 0; transition: opacity .12s; cursor: pointer; }
+.v2-pad-more .v2-ic { width: 14px; height: 14px; }
+.v2-pad-item:hover .v2-pad-more, .v2-pad-item:focus-within .v2-pad-more, .v2-pad-more:focus-visible { opacity: 1; }
+.v2-pad-more:hover { background: rgba(var(--tint-ink), .18); color: var(--ink); }
+@media (hover: none) { .v2-pad-more { opacity: 1; } }   /* 누를 수 없는 호버 대신 늘 보인다(폰·태블릿) */
+.v2-pad-badge--hidden { color: var(--muted-head); background: rgba(var(--tint-ink), .08); border-color: var(--line); }
+.v2-pad-hid { width: min(920px, 100%); }
+.v2-pad-hid-sum { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; color: var(--muted-head); }
+.v2-pad-hid-sum::-webkit-details-marker { display: none; }
+.v2-pad-hid-sum::before { content: ""; width: 6px; height: 6px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(-45deg); transition: transform .12s; margin: 0 4px 0 2px; }
+.v2-pad-hid[open] .v2-pad-hid-sum::before { transform: rotate(45deg); }
+.v2-pad-hid-note { margin: 6px 14px 10px; font-size: 12px; color: var(--muted-head); }
+.v2-pad-hid .v2-pad-item { opacity: .78; }
+.v2-pad-hid .v2-pad-item:hover { opacity: 1; }
 
 /* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
 .v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(var(--shadow-ink), .32); padding: 20px; }
@@ -1553,14 +1610,349 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
 .v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
+/* ── 앱 만들기(#4592 · v2/app-studio.ts) — 창 전체. ① 시작(무엇을 · 어디에) ② 만드는 중(가운데 앱 · 옆에 대화) ── */
+.v2-pad-ico--new { width: 60px; height: 60px; border-radius: 16px; border: 2px dashed var(--blue); color: var(--blue); background: rgba(var(--tint-ink), .06); }
+.v2-pad-item--new:hover .v2-pad-ico--new { background: var(--blue); color: #fff; border-style: solid; }
+.v2-pad-item--new b { color: var(--blue); }
+.v2-studio { position: fixed; inset: 0; z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
+.v2-studio-top { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.v2-studio-top--build { background: var(--purple, #7B61E0); border-bottom-color: transparent; color: #fff; }
+.v2-studio-tag { font-size: 12px; font-weight: 800; padding: 2px 9px; border-radius: 7px; background: rgba(123, 97, 224, .14); color: var(--purple, #7B61E0); }
+.v2-studio-top--build .v2-studio-tag { background: rgba(255, 255, 255, .22); color: #fff; }
+.v2-studio-name { font-size: 15px; font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-ver { font-size: 12.5px; font-weight: 700; opacity: .85; white-space: nowrap; }
+.v2-studio-sp { flex: 1; }
+.v2-studio-top--build .btn { color: #fff; border: 1px solid rgba(255, 255, 255, .45); background: none; }
+.v2-studio-done { height: 30px; padding: 0 14px; border-radius: 9px; border: 0; background: #fff; color: var(--purple-text, #5B3FD0); font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.v2-studio-band { flex: none; padding: 6px 14px; background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); font-size: 13px; font-weight: 700; }
+.v2-studio-band[hidden] { display: none; }
+.v2-studio-start { flex: 1; min-height: 0; overflow: auto; width: min(680px, 100%); margin: 0 auto; padding: 44px 20px 60px; display: flex; flex-direction: column; }
+.v2-studio-start h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+.v2-studio-lead { margin: 6px 0 18px; color: var(--ink-sub); font-size: 14px; }
+.v2-studio-start h3 { margin: 30px 0 10px; font-size: 15px; font-weight: 800; }
+.v2-studio-what { min-height: 150px; resize: vertical; border: 1.5px solid var(--line); border-radius: 14px; padding: 12px 14px; font: inherit; font-size: 15px; line-height: 1.6; background: var(--bg); color: var(--ink); }
+.v2-studio-what::placeholder, .v2-studio-name-field::placeholder { color: var(--muted); opacity: .75; }
+.v2-studio-name-field { height: 44px; border: 1.5px solid var(--line); border-radius: 12px; padding: 0 14px; font: inherit; font-size: 15px; background: var(--bg); color: var(--ink); margin-bottom: 14px; }
+.v2-studio-name-field:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 4px rgba(123, 97, 224, .14); }
+.v2-studio-lab { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 14px; font-weight: 800; }
+.v2-studio-start h2 + .v2-studio-lab { margin-top: 20px; }
+.v2-studio-lab small { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.v2-studio-what:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 4px rgba(123, 97, 224, .14); }
+.v2-studio-ex { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.v2-studio-ex button { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.v2-studio-ex button:hover { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); }
+.v2-studio-places { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.v2-studio-place { display: grid; gap: 4px; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1.5px solid var(--line); border-radius: 14px; padding: 12px; cursor: pointer; align-content: start; }
+.v2-studio-place b { font-size: 14px; font-weight: 800; }
+.v2-studio-place small { font-size: 12.5px; color: var(--ink-sub); line-height: 1.4; }
+.v2-studio-place.on { border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .08); box-shadow: 0 0 0 3px rgba(123, 97, 224, .12); }
+/* 그림 — 실제 화면의 꼴을 줄여 그린다: 왼쪽 레일 · 가운데 · 곁칸. 보라가 «이 앱이 서는 자리» */
+.v2-studio-pk { position: relative; height: 70px; border-radius: 9px; background: var(--gray-bg-2, #EEF2F7); margin-bottom: 6px; padding: 6px; display: flex; gap: 4px; }
+.v2-studio-pk .rail { flex: none; width: 9px; border-radius: 4px; background: rgba(var(--tint-ink), .16); }
+.v2-studio-pk .ses { flex: 1; min-width: 0; border-radius: 5px; background: var(--bg); padding: 5px; display: grid; gap: 4px; align-content: start; }
+.v2-studio-pk .ses i { display: block; height: 7px; border-radius: 4px; background: rgba(var(--tint-ink), .14); }
+.v2-studio-pk .ses i.u { width: 55%; justify-self: end; background: rgba(34, 99, 239, .22); }
+.v2-studio-pk .ses i.a { width: 75%; }
+.v2-studio-pk .ses i.a2 { width: 45%; }
+.v2-studio-pk .ap { border-radius: 5px; background: var(--purple, #7B61E0); padding: 5px; display: grid; gap: 4px; align-content: start; }
+.v2-studio-pk .ap.side { flex: none; width: 34%; }
+.v2-studio-pk .ap.full { flex: 1; min-width: 0; }
+.v2-studio-pk .tg { position: absolute; bottom: 4px; left: 20px; font-size: 10.5px; font-weight: 800; color: var(--muted); background: var(--bg); border-radius: 4px; padding: 0 4px; line-height: 15px; }
+.v2-studio-pk .tg.on { left: auto; right: 9px; color: #fff; background: rgba(60, 40, 150, .55); }
+.v2-studio-pk.dual { gap: 6px; padding: 5px; }
+.v2-studio-pk .mini { flex: 1 1 0; min-width: 0; display: flex; gap: 3px; border-radius: 6px; background: rgba(var(--tint-ink), .06); padding: 3px; }
+.v2-studio-pk .mini .rail { width: 5px; }
+.v2-studio-pk .mini .ses, .v2-studio-pk .mini .ap { padding: 3px; gap: 3px; }
+.v2-studio-pk .mini .ses i { height: 5px; }
+.v2-studio-pk .plus { flex: none; align-self: center; font-weight: 800; color: var(--muted); font-size: 14px; }
+/* 누가 어디서 만드나 — 실행 컴퓨터는 고르고 모델 · 생각 깊이는 정해 둔 값 */
+.v2-studio-ai { margin-top: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 12px 14px; display: grid; gap: 8px; }
+.v2-studio-ai-h { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; }
+.v2-studio-ai-h .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .2); }
+.v2-studio-ai p { margin: 0; font-size: 13px; color: var(--ink-sub); line-height: 1.55; }
+.v2-studio-ai-row { display: flex; align-items: center; gap: 10px; font-size: 13px; flex-wrap: wrap; }
+.v2-studio-ai-row .k { flex: none; width: 110px; color: var(--muted); font-weight: 700; }
+.v2-studio-node { height: 32px; border: 1px solid var(--line); border-radius: 9px; padding: 0 8px; font: inherit; font-size: 13px; font-weight: 700; background: var(--bg); color: var(--ink); max-width: 260px; }
+.v2-studio-ai-fix { display: inline-flex; align-items: center; height: 28px; border-radius: 8px; padding: 0 10px; background: var(--gray-bg-2, #F6F8FB); font-weight: 700; color: var(--ink); }
+.v2-studio-ai-note { color: var(--muted); font-size: 12px; }
+.v2-studio-act { margin-top: 26px; display: flex; justify-content: flex-end; }
+.v2-studio-go { height: 46px; padding: 0 26px; border: 0; border-radius: 13px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+.v2-studio-go:disabled { opacity: .4; cursor: default; }
+.v2-studio-drafts { margin-top: 34px; border-top: 1px solid var(--line); }
+.v2-studio-draft { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 9px 12px; margin-top: 6px; cursor: pointer; }
+.v2-studio-draft b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.v2-studio-draft small { color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 12.5px; }
+.v2-studio-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 34%, 460px); }
+.v2-studio-stage { min-width: 0; min-height: 0; padding: 18px; display: flex; justify-content: center; }
+.v2-studio-stage > * { flex: 1; min-width: 0; background: var(--bg); border-radius: 16px; box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(var(--shadow-ink), .10); overflow: hidden; display: flex; flex-direction: column; }
+.v2-studio-stage--side > * { flex: none; width: 360px; }   /* 세션 옆에 붙는 앱은 곁칸 폭으로 미리 본다 */
+.v2-studio-stage .v2-appui-frame { flex: 1; width: 100%; border: 0; }
+.v2-studio-stage--side > .v2-appui-frame, .v2-studio-stage--side > .v2-studio-wait { flex: none; width: 360px; }
+.v2-studio-wait { align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
+.v2-studio-wait b { color: var(--ink); font-size: 16px; }
+.v2-studio-wait p { margin: 0; max-width: 300px; font-size: 13.5px; line-height: 1.6; }
+.v2-studio-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
+@keyframes v2-studio-spin { to { transform: rotate(360deg); } }
+.v2-studio-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }
+.v2-studio-chat > * { flex: 1; min-height: 0; }
+/* ── 여섯 단계(#4592 원준 2026-10-11) — 단계 바 · 지금 할 일 · 자리에 맞는 틀 · 의견 칸 · 말풍선 · 처음 안내 ── */
+.v2-studio-bar { flex: none; display: flex; gap: 4px; padding: 7px 12px; background: var(--bg); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.v2-studio-bar span { flex: 1; min-width: 0; text-align: center; padding: 4px 6px; border-radius: 7px; font-size: 12.5px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-studio-bar span.on { background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); }
+.v2-studio-bar span.done { color: var(--ink-sub); }
+.v2-studio-now { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(123, 97, 224, .08); color: var(--purple-text, #5B3FD0); font-size: 13.5px; font-weight: 800; flex-wrap: wrap; }
+.v2-studio-now-t { min-width: 0; }
+.v2-studio-now-pri { height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.v2-studio-now-pri:disabled { opacity: .4; cursor: default; }
+.v2-studio-origin { font-size: 12px; opacity: .85; white-space: nowrap; }
+.v2-studio-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }
+.v2-studio-side .v2-studio-chat { border-left: 0; flex: 1; min-height: 0; }
+.v2-studio-panel { flex: none; max-height: 46%; overflow: auto; padding: 10px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.v2-studio-panel[hidden] { display: none; }
+.v2-studio-panel-h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.v2-studio-panel-h small { color: var(--muted); font-size: 12px; }
+.v2-studio-cm { border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; display: grid; gap: 5px; }
+.v2-studio-cm.all { border-style: dashed; }
+.v2-studio-cm .k { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); font-weight: 700; min-width: 0; }
+.v2-studio-cm .k .w { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-cm .n { flex: none; width: 18px; height: 18px; border-radius: 50%; background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+.v2-studio-cm .x { border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+.v2-studio-cm .ta, .v2-studio-tell .ta { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; resize: vertical; min-height: 30px; background: var(--bg); color: var(--ink); }
+.v2-studio-stage { flex-direction: column; align-items: center; gap: 8px; overflow: auto; }
+.v2-studio-stage > * { flex: none; }
+.v2-studio-stagetools { width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 28px; background: none; box-shadow: none; }
+.v2-studio-stagetools[hidden] { display: none; }
+.v2-studio-stagetools .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.v2-studio-stagetools .seg button { border: 0; background: none; height: 26px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.v2-studio-stagetools .seg button.on { background: var(--purple, #7B61E0); color: #fff; }
+.v2-studio-pinbtn { height: 28px; padding: 0 11px; border-radius: 8px; border: 1.5px solid var(--purple, #7B61E0); background: var(--bg); color: var(--purple-text, #5B3FD0); font: inherit; font-size: 12.5px; font-weight: 800; cursor: pointer; }
+.v2-studio-pinbtn.on { background: var(--purple, #7B61E0); color: #fff; }
+/* 자리에 맞는 틀 — 곁칸(탭 줄 · 360px) 또는 창(머리 · 넓게) */
+.v2-studio-app { display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(var(--shadow-ink), .10); overflow: hidden; width: 100%; min-height: 320px; flex: 1 1 auto !important; }
+.v2-studio-app--side { width: 360px; flex: none !important; min-height: min(640px, 100%); }
+.v2-studio-app-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2, #F6F8FB); font-size: 12px; color: var(--muted); }
+.v2-studio-app-head .tab { padding: 2px 8px; border-radius: 6px; }
+.v2-studio-app-head .tab.on { background: var(--bg); color: var(--ink); font-weight: 800; box-shadow: 0 0 0 1px var(--line); }
+.v2-studio-app-head .dot { width: 10px; height: 10px; border-radius: 50%; background: #E56450; box-shadow: 14px 0 0 #F2B84B, 28px 0 0 #4CBB6C; margin-right: 26px; }
+.v2-studio-app-head b { color: var(--ink); font-size: 12.5px; }
+.v2-studio-app-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-studio-app-body .v2-appui-frame { flex: 1; width: 100%; min-height: 300px; border: 0; }
+.v2-studio-app-body .v2-studio-wait { flex: 1; }
+.v2-studio-overlay { position: absolute; inset: 0; z-index: 3; cursor: crosshair; background: rgba(123, 97, 224, .06); }
+.v2-studio-overlay[hidden] { display: none; }
+.v2-studio-pinm { position: absolute; z-index: 4; width: 20px; height: 20px; margin: -20px 0 0 -10px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); pointer-events: none; }
+.v2-studio-pinm::after { content: ""; }
+.v2-studio-steps { display: grid; gap: 4px; margin: 4px 0; }
+.v2-studio-steps span { font-size: 13px; color: var(--muted); padding: 3px 10px; border-radius: 7px; }
+.v2-studio-steps span.on { background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); font-weight: 800; }
+.v2-studio-steps span.done { color: var(--ink-sub); text-decoration: line-through; }
+.v2-studio-fine { margin: 6px 0; color: var(--muted); font-size: 12.5px; }
+.v2-studio-wait--page { flex: 1; align-items: center; justify-content: center; display: flex; flex-direction: column; gap: 10px; }
+/* ② 기획 카드 */
+.v2-studio-body--plan .v2-studio-app--side { width: min(560px, 100%); }
+.v2-studio-card { padding: 14px 16px; display: grid; gap: 6px; }
+.v2-studio-card-h { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+.v2-studio-card .row { display: flex; gap: 10px; align-items: baseline; font-size: 13.5px; }
+.v2-studio-card .k { flex: none; width: 96px; color: var(--muted); font-weight: 700; }
+.v2-studio-card .v { flex: 1; min-width: 0; border-bottom: 1px dashed #C9D2E3; padding: 2px 0 3px; line-height: 1.5; }
+.v2-studio-card.edit .v { cursor: text; border-radius: 4px; }
+.v2-studio-card.edit .v:focus { outline: none; background: rgba(123, 97, 224, .08); border-bottom-color: var(--purple, #7B61E0); }
+.v2-studio-card.edit .v:empty::before { content: attr(data-placeholder); color: var(--muted); }
+.v2-studio-preview { margin-top: 10px; }
+.v2-studio-preview[hidden] { display: none; }
+.v2-studio-preview-h { font-size: 12.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); margin: 0 0 4px; }
+.v2-studio-preview .v2-studio-card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+.v2-studio-ex button.tour { border-style: dashed; color: var(--purple-text, #5B3FD0); }
+/* ⑤ 점검표 */
+.v2-studio-chks { padding: 16px; display: grid; gap: 12px; }
+.v2-studio-chk { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; }
+.v2-studio-chk i { font-style: normal; flex: none; width: 20px; height: 20px; border: 1.5px solid var(--purple, #7B61E0); border-radius: 6px; display: grid; place-items: center; font-size: 12px; color: var(--purple, #7B61E0); }
+.v2-studio-chk.ok i { background: var(--purple, #7B61E0); color: #fff; }
+.v2-studio-chk.no i { border-color: #E56450; color: #E56450; }
+.v2-studio-chk b { display: block; font-size: 14px; }
+.v2-studio-chk span, .v2-studio-chk small { color: var(--ink-sub); }
+.v2-studio-chk-places { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.v2-studio-chk-places button { font: inherit; font-size: 12.5px; font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--bg); color: var(--ink-sub); cursor: pointer; }
+.v2-studio-chk-places button.on { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); background: rgba(123, 97, 224, .08); }
+.v2-studio-name-in { height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13.5px; background: var(--bg); color: var(--ink); min-width: 180px; }
+/* ⑥ 넣기 · ⑦ 알리기 — 가운데 한 칸으로 */
+.v2-studio-body--put { grid-template-columns: minmax(0, 1fr) clamp(300px, 28%, 380px); }
+.v2-studio-body--put .v2-studio-app { box-shadow: none; background: none; }
+.v2-studio-tell { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; display: grid; gap: 8px; }
+.v2-studio-tell-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.v2-studio-go.sm { height: 36px; padding: 0 16px; font-size: 13.5px; border-radius: 10px; }
+.v2-studio-steps-list { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
+/* 말풍선 · 처음 안내 · 둘러보기 · ? 메뉴 */
+.v2-studio-coach { position: fixed; z-index: 5; background: var(--ink); color: #fff; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px rgba(21, 35, 59, .25); pointer-events: none; }   /* 누름은 아래로 통과 — 첫 누름이 말풍선에 먹히지 않는다 */
+.v2-studio-coach b { color: #C8B9FF; }
+.v2-studio-coach small { display: block; margin-top: 4px; color: #C8B9FF; font-size: 12px; }
+.v2-studio-intro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(21, 35, 59, .35); padding: 20px; overflow: auto; }
+.v2-studio-intro-box { width: min(760px, 100%); background: var(--bg); border-radius: 16px; padding: 22px 24px; display: grid; gap: 14px; box-shadow: 0 20px 60px rgba(21, 35, 59, .3); }
+.v2-studio-intro-box h2 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+.v2-studio-intro-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.v2-studio-intro-cards > div { border: 1.5px solid var(--line); border-radius: 12px; padding: 12px; }
+.v2-studio-intro-cards .pic { height: 92px; border-radius: 8px; background: rgba(123, 97, 224, .12); display: grid; place-items: center; margin-bottom: 8px; }
+/* 처음 안내 그림 셋 — 대화 → 앱 · 단계 바를 따라 누름 · 나 → 앱 → 팀원 */
+.v2-studio-ill { position: relative; width: 190px; height: 72px; }
+.v2-studio-ill i { position: absolute; display: block; }
+.v2-studio-ill .bub { height: 16px; border-radius: 9px; }
+.v2-studio-ill .bub.a { left: 0; top: 6px; width: 74px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .35); }
+.v2-studio-ill .bub.b { left: 22px; top: 28px; width: 66px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .bub.c { left: 0; top: 50px; width: 56px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .35); }
+.v2-studio-ill .arr { left: 98px; top: 30px; width: 22px; height: 2px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .arr::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left: 7px solid var(--purple, #7B61E0); border-right: 0; }
+.v2-studio-ill .tile { left: 128px; top: 8px; width: 56px; height: 56px; border-radius: 14px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .45), 0 4px 10px rgba(var(--shadow-ink), .10); }
+.v2-studio-ill .tile::before, .v2-studio-ill .tile::after { content: ""; position: absolute; left: 10px; right: 10px; height: 6px; border-radius: 3px; background: rgba(123, 97, 224, .45); }
+.v2-studio-ill .tile::before { top: 14px; }
+.v2-studio-ill .tile::after { top: 26px; right: 20px; }
+.v2-studio-ill .sg { top: 4px; height: 10px; width: 26px; border-radius: 4px; background: rgba(123, 97, 224, .22); }
+.v2-studio-ill .sg.done { background: rgba(123, 97, 224, .5); }
+.v2-studio-ill .sg.on { background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .25); }
+.v2-studio-ill .line { left: 0; top: 30px; width: 190px; height: 16px; border-radius: 5px; background: var(--bg); box-shadow: 0 0 0 1px rgba(123, 97, 224, .3); }
+.v2-studio-ill .pbtn { right: 4px; top: 33px; width: 40px; height: 10px; border-radius: 4px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .cur { left: 150px; top: 44px; width: 0; height: 0; border-left: 7px solid var(--ink); border-top: 4px solid transparent; border-bottom: 9px solid transparent; transform: rotate(-20deg); }
+.v2-studio-ill .av { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--bg); background: rgba(123, 97, 224, .45); }
+.v2-studio-ill .av::after { content: ""; position: absolute; left: 5px; top: 3px; width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, .85); }
+.v2-studio-ill .av.me { left: 4px; top: 24px; width: 28px; height: 28px; background: var(--purple, #7B61E0); }
+.v2-studio-ill .av.me::after { left: 7px; top: 4px; width: 10px; height: 10px; }
+.v2-studio-ill .lk { top: 37px; height: 2px; background: rgba(123, 97, 224, .6); }
+.v2-studio-ill .tile.s { left: 66px; top: 14px; width: 44px; height: 44px; border-radius: 12px; }
+.v2-studio-ill .tile.s::before { top: 11px; left: 8px; right: 8px; }
+.v2-studio-ill .tile.s::after { top: 21px; left: 8px; right: 16px; }
+/* ③④ 맨 위 — 세션 위젯 · 앱 화면 오가기 */
+.v2-studio-view { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-studio-view[hidden] { display: none; }
+.v2-studio-view-tabs { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: var(--gray-bg-2, #F1F5FC); }
+.v2-studio-view-tabs button { border: 0; background: none; height: 32px; padding: 0 16px; border-radius: 8px; font: inherit; font-size: 13.5px; font-weight: 800; color: var(--muted); cursor: pointer; }
+.v2-studio-view-tabs button.on { background: var(--purple, #7B61E0); color: #fff; box-shadow: 0 2px 6px rgba(123, 97, 224, .3); }
+.v2-studio-view-tabs button:disabled { cursor: default; }
+.v2-studio-view-sub { font-size: 12.5px; color: var(--ink-sub); }
+/* 판 짜기 — ②③(만드는 중) 은 대화를 접는다 · ③ 앱 화면은 화면 가득 · ③ 세션 위젯은 왼쪽 대화 + 오른쪽 위젯 */
+.v2-studio-body--solo { grid-template-columns: minmax(0, 1fr) !important; }
+.v2-studio-body--solo .v2-studio-side { display: none; }
+.v2-studio-body--try-app .v2-studio-stage { padding: 12px; }
+.v2-studio-body--try-app .v2-studio-app--full { min-height: 0; height: 100%; }
+.v2-studio-body--try-widget { grid-template-columns: minmax(0, 1fr) 400px; }
+.v2-studio-body--try-widget .v2-studio-side { order: -1; border-left: 0; border-right: 1px solid var(--line); }
+/* AI 세션 — 기본은 접힘 · 떠 있는 창(끌어 옮김) · 오른쪽 칸에 붙임 */
+.v2-studio-side-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.v2-studio-side-head[hidden] { display: none; }
+.v2-studio-side-head small, .v2-studio-chatwin-head small { color: var(--muted); font-size: 12px; }
+.v2-studio-chatwin { position: absolute; z-index: 5; right: 16px; bottom: 16px; width: min(440px, calc(100% - 32px)); height: min(70%, 640px); display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; box-shadow: 0 0 0 1px var(--line), 0 18px 50px rgba(var(--shadow-ink), .25); overflow: hidden; }
+.v2-studio-chatwin[hidden] { display: none; }
+.v2-studio-chatwin-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; background: var(--gray-bg-2, #F6F8FB); border-bottom: 1px solid var(--line); cursor: grab; user-select: none; touch-action: none; font-size: 13px; }
+.v2-studio--drag .v2-studio-chatwin-head { cursor: grabbing; }
+.v2-studio--drag iframe { pointer-events: none; }
+.v2-studio-chatwin-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-studio-chatwin-body > .v2-studio-chat { flex: 1; min-height: 0; border-left: 0; }
+.v2-studio-dockhint { position: absolute; z-index: 4; top: 48px; right: 0; bottom: 0; width: 96px; display: grid; place-items: center; background: rgba(123, 97, 224, .14); border-left: 2px dashed var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); font-size: 12px; font-weight: 800; text-align: center; padding: 8px; pointer-events: none; }
+.v2-studio-dockhint[hidden] { display: none; }
+/* ④ 고치기 — 도구 막대 · 도구 설명 · 앱 위 표시 · 그 자리 의견 칸 · 보낼 의견 */
+.v2-studio-stagetools { flex-direction: column; align-items: stretch; gap: 6px; }
+.v2-studio-toolrow { display: flex; align-items: center; gap: 8px; }
+.v2-studio-tools { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+.v2-studio-tools button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; height: 32px; padding: 0 13px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 800; color: var(--ink-sub); cursor: pointer; }
+.v2-studio-tools button .ico { font-size: 13px; }
+.v2-studio-tools button.on { background: var(--purple, #7B61E0); color: #fff; }
+.v2-studio-toolcount { color: var(--muted); font-size: 12.5px; }
+.v2-studio-toolhelp { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border-radius: 10px; background: rgba(123, 97, 224, .08); border: 1px solid rgba(123, 97, 224, .22); font-size: 13px; line-height: 1.5; color: var(--ink-sub); }
+.v2-studio-toolhelp b { flex: none; color: var(--purple-text, #5B3FD0); }
+.v2-studio-overlay[data-tool="pick"] { cursor: pointer; background: transparent; }
+.v2-studio-overlay[data-tool="pin"] { cursor: crosshair; }
+.v2-studio-overlay[data-tool="box"] { cursor: crosshair; }
+.v2-studio-mk { position: absolute; z-index: 4; }
+.v2-studio-mk-box { pointer-events: none; border: 2px solid #E56450; border-radius: 4px; background: rgba(229, 100, 80, .08); }
+.v2-studio-mk-box.pick { border-style: solid; }
+.v2-studio-mk-box.draft { border-style: dashed; border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .10); }
+.v2-studio-mk-box.hot { box-shadow: 0 0 0 3px rgba(229, 100, 80, .25); }
+.v2-studio-mk-n { width: 22px; height: 22px; margin: -11px 0 0 -11px; padding: 0; border-radius: 50%; border: 2px solid #fff; background: #E56450; color: #fff; font: inherit; font-size: 11px; font-weight: 800; display: grid; place-items: center; cursor: pointer; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); z-index: 6; }
+.v2-studio-mk-n.pin { margin: -22px 0 0 -11px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); }
+.v2-studio-mk-n.pin span { transform: rotate(45deg); }
+.v2-studio-mk-n.hot { background: var(--purple, #7B61E0); }
+.v2-studio-pop { position: absolute; z-index: 7; width: 280px; max-width: calc(100% - 24px); background: var(--bg); border-radius: 12px; box-shadow: 0 0 0 1px var(--line), 0 12px 30px rgba(var(--shadow-ink), .22); padding: 10px; display: grid; gap: 8px; }
+.v2-studio-pop .k { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
+.v2-studio-pop .k .n { flex: none; width: 18px; height: 18px; border-radius: 50%; background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+.v2-studio-pop .k .w { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-pop .ta { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; resize: vertical; background: var(--bg); color: var(--ink); }
+.v2-studio-pop .act { display: flex; align-items: center; gap: 6px; }
+.v2-studio-tray { width: 100%; flex: none !important; background: var(--bg); border-radius: 12px; box-shadow: 0 0 0 1px var(--line); padding: 8px 12px; display: grid; gap: 6px; }
+.v2-studio-tray[hidden] { display: none; }
+.v2-studio-tray-h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.v2-studio-tray-h small { color: var(--muted); font-size: 12px; }
+.v2-studio-tray-list { display: grid; gap: 5px; max-height: 150px; overflow: auto; }
+.v2-studio-tray-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.v2-studio-tray-row .n { flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: #E56450; color: #fff; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
+.v2-studio-tray-row .w { flex: none; width: 200px; color: var(--ink-sub); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-tray-row.all .w { width: 228px; font-weight: 700; }
+.v2-studio-tray-row .x { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; }
+.v2-studio-tray-in { flex: 1; min-width: 0; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+/* ② 카드를 통째로 다시 쓰게 하는 한마디 */
+.v2-studio-ask { display: flex; gap: 6px; padding: 0 16px 14px; }
+.v2-studio-ask-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-studio-intro-cards b { display: block; font-size: 14px; margin-bottom: 3px; }
+.v2-studio-intro-cards small { color: var(--ink-sub); line-height: 1.5; display: block; }
+.v2-studio-intro-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.v2-studio-intro-act .btn { height: 40px; }
+.v2-studio-tour .v2-studio-bar { border: 1px solid var(--line); border-radius: 10px; }
+.v2-studio-tour .v2-studio-now { border-radius: 10px; }
+.v2-studio-tour-wire { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; font-size: 13px; background: var(--gray-bg-2, #F6F8FB); }
+.v2-studio-tour-wire .in { background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+.v2-studio-tour-wire .row { display: flex; gap: 6px; }
+.v2-studio-tour-wire .row span { flex: 1; text-align: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px; background: var(--bg); }
+.v2-studio-tour-wire .row span.on { border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .1); font-weight: 800; }
+.v2-studio-tour-wire .steps { display: flex; gap: 6px; flex-wrap: wrap; }
+.v2-studio-tour-wire .steps span { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.v2-studio-tour-wire .steps span.done { color: var(--purple-text, #5B3FD0); border-color: var(--purple, #7B61E0); }
+.v2-studio-tour-wire .app { width: min(300px, 100%); background: var(--bg); border-radius: 10px; box-shadow: 0 0 0 1px var(--line); padding: 10px; display: grid; gap: 5px; }
+.v2-studio-tour-wire .app b { font-size: 13.5px; }
+.v2-studio-tour-wire .cm, .v2-studio-tour-wire .chk { display: grid; gap: 4px; }
+.v2-studio-tour-wire .cm div, .v2-studio-tour-wire .chk div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
+.v2-studio-tour-wire .mute { color: var(--muted); }
+.v2-studio-help { position: fixed; z-index: 7; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: grid; box-shadow: 0 8px 24px rgba(21, 35, 59, .18); min-width: 200px; }
+.v2-studio-help button { text-align: left; border: 0; background: none; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: var(--ink); }
+.v2-studio-help button:hover { background: var(--gray-bg-2, #F6F8FB); }
+.v2-pad-badge--new { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }
+.v2-pad-origin { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+/* ③ 다 만들었어요 — 이렇게 만들었어요(판마다 한 줄) · 이렇게 쓰세요 · [지금 써 보기] */
+.v2-studio-fin { flex: 1; min-height: 0; overflow: auto; width: min(720px, 100%); margin: 0 auto; padding: 24px 20px 60px; display: flex; flex-direction: column; }
+.v2-studio-fin h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
+.v2-studio-fin h3 { margin: 28px 0 12px; font-size: 15px; font-weight: 800; }
+.v2-studio-steps { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
+.v2-studio-step { position: relative; padding: 0 0 16px; }
+.v2-studio-step:last-child { padding-bottom: 2px; }
+.v2-studio-step::before { content: ""; position: absolute; left: -27px; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px var(--gray-bg-2, #F6F8FB); }
+.v2-studio-step--ver::before { background: var(--bg); border: 2.5px solid var(--purple, #7B61E0); box-sizing: border-box; }
+.v2-studio-step b { display: block; font-size: 14px; font-weight: 800; }
+.v2-studio-step p { margin: 2px 0 0; font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; }
+.v2-studio-step small { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.v2-studio-how { display: grid; gap: 8px; }
+.v2-studio-how > div { display: flex; gap: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; font-size: 13.5px; line-height: 1.55; }
+.v2-studio-how .k { flex: none; min-width: 84px; font-weight: 800; color: var(--purple-text, #5B3FD0); }
+.v2-studio-fin-act { margin-top: 28px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.v2-studio-fin-act .btn { height: 46px; padding: 0 18px; font-size: 14px; }
+@media (max-width: 900px) {
+  .v2-studio-places { grid-template-columns: minmax(0, 1fr); }
+  .v2-studio-how > div { flex-direction: column; gap: 3px; }
+  .v2-studio-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
+  .v2-studio-chat { border-left: 0; border-top: 1px solid var(--line); }
+  .v2-studio-stage--side > * { width: 100%; }
+  .v2-studio-body--solo { grid-template-rows: minmax(0, 1fr); }
+  .v2-studio-chatwin { left: 8px !important; right: 8px !important; width: auto; }
+  .v2-studio-body--try-widget { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 46%); }
+  .v2-studio-body--try-widget .v2-studio-side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .v2-studio-ai-row .k { width: auto; }
+}
+
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
-.v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(var(--shadow-ink), .36); padding: 24px; }
-.v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(var(--shadow-ink), .14)); overflow: hidden; }
-.v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-appui-ov { position: fixed; inset: 0; z-index: 88; background: var(--bg); }
+/* 크게 보기 = 화면 가득 — 사이드바도 여백도 없이 앱만(#4592 · 원준 2026-10-12 «완전 전체화면으로»). 머리줄은 한 줄 얇게(이름 · 닫기) */
+.v2-appui { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg); }
+.v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line); flex: none; }
 .v2-appui-t { font-size: 14px; font-weight: 800; color: var(--ink); }
 .v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 1px 7px; }
 .v2-appui-spacer { flex: 1; }
 .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+.v2-appui-esc { margin-left: .3em; }   /* 닫기 단추의 키 안내(폰은 50-mobile.css 가 걷는다) */
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
@@ -1743,6 +2135,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   /* 런치패드 — 화면 가득, 격자는 촘촘히. */
   .v2-pad { padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
   .v2-pad-top { margin-bottom: 16px; }
+  .v2-pad-body { gap: 18px; }
+  .v2-pad-sec-h { padding: 0 6px; }
   .v2-pad-field { height: 50px; border-radius: 14px; }
   .v2-pad-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
   .v2-pad-item { padding: 14px 10px 12px; }
@@ -2129,6 +2523,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pg-row.past:hover .v2-pg-t .n, .v2-pg-row.past.act .v2-pg-t .n { color: var(--ink); }
 .v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
 .v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }
+/*  #3870(원준 2026-10-05 «프로젝트 이름 우측에는 깜빡이지 않아도 될 것 같고, 세션 오른쪽만 깜빡이면 될 것 같아») —
+    카드 머리의 «작업 중» 점은 서 있기만 한다. 깜빡임은 세션 줄(.v2-app-inst-st)의 몫이다: 카드를 펴면 같은 일을 두 점이
+    함께 깜빡였고, 조각 카드(「지금 볼 것」)는 늘 펴져 있어 늘 그랬다. 점 자체는 남긴다 — 접힌 카드에선 그게 유일한 표식이다. */
+.v2-pg-row .v2-dot.busy { animation: none; }
 .v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }
 /*  ⚠ ＋ 는 **머리글 흐름 밖(절대위치)** 에 띄우고 안 보일 땐 display:none 이라 자리도 안 먹는다.
     opacity:0 로 숨기면 안 보이는데도 폭(18+2px)을 그대로 차지해 **상태 점·개수가 오른쪽 끝에 못 붙는다** —
@@ -2206,6 +2604,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bin-tbl td.c-name .mono { font: 600 11.5px/1 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--muted-head); margin-left: 7px; }
 .v2-bin-tbl td.c-kind, .v2-bin-tbl td.c-in { font-size: 13px; }
 .v2-bin-tbl td.c-in .v2-dot { margin-right: 5px; }
+.v2-bin-tbl td.c-in .v2-bin-fold { vertical-align: -3px; margin: 0 6px 0 0; }   /* #4233 — 「프로젝트」 열의 과녁 */
 .v2-bin-tbl td.c-when .m { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .v2-bin-tbl td.c-acts { text-align: right; }
 .v2-bin-tbl .acts { display: inline-flex; gap: 2px; visibility: hidden; }

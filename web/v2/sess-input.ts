@@ -5,6 +5,9 @@
 //   곁칸은 세션 id 로 찾아 부른다. **넣기만 하고 보내지 않는다** — 사람이 읽고 고쳐서 보낸다.
 //  잎 모듈이다(import 0) — 세션 화면과 곁칸 어느 쪽이 먼저 떠도 순환이 없다.
 type Put = (text: string) => boolean;
+/** 세션 화면이 입력칸에 글을 넣은 뒤 그 화면 안에서 쏘는 알림(bubbles). 세션 카드(side-card.ts)가 듣고 카드를 펴서 또렷하게 둔다 —
+ *  곁칸에서 넣은 글이 접히거나 비친 카드 속에 숨지 않게(2026-10-11). */
+export const SESSION_INPUT_EVENT = 'lively:session-input';
 interface Entry { ids: () => Array<string | null | undefined>; put: Put }
 const entries: Entry[] = [];
 

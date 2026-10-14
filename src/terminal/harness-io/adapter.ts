@@ -51,12 +51,15 @@ export type ScreenState = "ready" | "busy" | "dialog" | "auth";
  *  · turn       = 턴이 도는 중(Esc 로 끊을 수 있다). 훅 보고가 끊겨도(도구 하나가 10분 넘게 돈다 · 훅이 안 걸린 도구만 쓴다) 보인다.
  *  · background = 턴은 끝났지만 **하네스가 띄운 백그라운드 작업이 남았다** — 그게 끝나면 AI 가 스스로 이어 간다
  *                 (claude «… · 1 shell still running»). 사람 눈엔 «아직 안 끝난 세션» 이다.
+ *  · stopped    = **사람이 턴을 끊었다**(#3870 — claude «⎿ Interrupted · What should Claude do instead?» 가 입력창 바로 위에 있다).
+ *                 끊긴 턴에는 Stop 훅이 안 뜬다 — 마지막 보고가 busy 인 채 만료(10분)까지 남아, 아무것도 안 도는 세션이
+ *                 «작업 중» 으로 깜빡이고 「지금 볼 것」 에 머문다. 이 답이 그 낡은 보고를 누른다(phase.resolveAgentPhase).
  *  · null       = 이 화면으론 모른다(대기·대화상자·미실측) — 호출자는 다른 신호로 판정한다.
  *  run: null = 이 하네스는 실행 상태를 화면으로 못 읽는다(있는 척 금지).
  *  ⚠ 왜 화면인가: pane 제목의 브라유 스피너는 Claude Code 가 더 이상 안 그린다(제목은 일하든 말든 «✳ …» — 실측 2026-08-20·09-30).
  *   남은 신호는 훅 보고뿐인데 그건 이벤트가 나야 갱신되고 10분이면 만료된다(phase.ts PHASE_TTL_SEC).
  */
-export type ScreenRun = "turn" | "background";
+export type ScreenRun = "turn" | "background" | "stopped";
 
 //  ⚠ 화면 사실(TermUi)의 정의는 잎 모듈 term-ui.ts 에 있다 — 어댑터들이 그 값을 쓰는데 여기서 정의하면 순환이 된다.
 //   쓰는 쪽은 종전대로 adapter.js 한 곳만 보면 되도록 다시 내보낸다.

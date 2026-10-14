@@ -631,7 +631,7 @@ function renderDetail(host: HTMLElement, d: TaxonomyData, id: number, hooks: Tax
       : myLists.map((l) => {
         const ps = listProjs(Number(l.id));
         return el('div', { class: 'v2-tx-lcard' },
-          el('a', { class: 'h', href: '#/projects2/l/' + encodeURIComponent(String(l.id)) }, icon('folder', 'v2-tx-ic'),
+          el('a', { class: 'h', href: '#/projects2/l/' + encodeURIComponent(String(l.id)) }, icon('list', 'v2-tx-ic'),   // #4233 — 목록(리스트) = 점과 줄 셋
             el('b', { text: String(l.name || '목록') }), el('span', { class: 'n', text: fmt(Number(l.project_count) || 0) })),
           el('div', { class: 's', text: `진행 ${stCount(ps, 'started')} · 할 일 ${stCount(ps, 'unstarted')} · 완료 ${stCount(ps, 'done')}` }),
           ...ps.slice(0, 5).map((p) => el('a', { class: 'v2-tx-prow', href: '#/p/' + p.id },

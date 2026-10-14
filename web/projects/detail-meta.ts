@@ -8,6 +8,7 @@
 //   직결(그건 projects↔taskmodal 순환에 가지를 늘린다)이고, taskmodal/tags.ts 는 projects 를 되짚지 않는
 //   리프라 간선을 하나 깔아도 순환이 생기지 않는다. R56 이 반대 방향(tags→projects/popover)에 쓴 것과 같은 수다.
 import { api, busy, el, toast } from '../core.js';
+import { ICONS } from '../lib/icon-paths.js';   // #4233 — 「리스트」 칩 = 점과 줄 셋(한 벌)
 import { PJV_TAG_NONE } from '../taskmodal/tags.js';
 import { _pjvPmOpen, pjvOpenProjectModal } from './detail.js';
 import { pjvFieldControl } from './fields.js';
@@ -408,7 +409,7 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
 //   ⚠ 띠에 pjv-tm-fields·pjv-proj-meta 를 얹지 않는다 — 그 둘은 옛 2열 표(pjvProjMetaPanel)의 규칙(min-height·padding-left·margin-top)이라
 //    칩 높이를 28~36 으로 제각각 튀게 했다. 칩 안 컨트롤의 크롬은 .pjh-fact 아래에서 따로 걷는다.
 const FACT_GLYPH: Record<string, string> = {
-  list: '<path d="M3 6.7C3 5.8 3.72 5.1 4.6 5.1h3.55c.46 0 .9.22 1.18.58l.86 1.1h8.2c.88 0 1.6.72 1.6 1.6v8.42c0 .88-.72 1.6-1.6 1.6H4.6C3.72 18.9 3 18.2 3 17.3V6.7z"/>',
+  list: `<path d="${ICONS.list}"/>`,   // #4233(원준 2026-10-04): 리스트는 어디서나 점과 줄 셋. 종전엔 폴더 윤곽이었다.
   user: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>',
   cal: '<rect x="3.3" y="5" width="17.4" height="15.2" rx="2.4"/><path d="M3.3 9.3h17.4"/><path d="M8 2.8v3.6M16 2.8v3.6"/>',
   flag: '<path d="M6 20.5V4"/><path d="M6 4.7h10.3l-2.4 3.3 2.4 3.3H6z"/>',

@@ -118,7 +118,7 @@ function pjvBulkIcon(kind) {
   if (kind === 'tag') return svg(sv('path', { d: 'M4 4h7l9 9-7 7-9-9z' }), sv('circle', { cx: '8.2', cy: '8.2', r: '1.3' }));
   if (kind === 'dup') return svg(sv('rect', { x: '8', y: '8', width: '12', height: '12', rx: '2' }), sv('path', { d: 'M4 16V5a1 1 0 0 1 1-1h11' }));
   if (kind === 'trash') return svg(sv('path', { d: ICONS.trash }));   // #4233: 사이드바 휴지통과 같은 그림
-  if (kind === 'list') return svg(sv('path', { d: 'M8 6h12M8 12h12M8 18h12' }), sv('circle', { cx: '4', cy: '6', r: '1.2' }), sv('circle', { cx: '4', cy: '12', r: '1.2' }), sv('circle', { cx: '4', cy: '18', r: '1.2' }));
+  if (kind === 'list') return svg(sv('path', { d: ICONS.list }));   // #4233 — 리스트 = 점과 줄 셋(한 벌)
   if (kind === 'run') return svg(sv('path', { d: 'M8 5.4v13.2l11-6.6z', fill: 'currentColor', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linejoin': 'round' }));
   if (kind === 'settings') return svg(sv('path', { d: 'M4 8h9M17 8h3M4 16h3M11 16h9' }), sv('circle', { cx: '15', cy: '8', r: '2.2' }), sv('circle', { cx: '9', cy: '16', r: '2.2' }));
   return svg();
@@ -824,10 +824,8 @@ function pjvActIcon(kind) {
     sv('rect', { x: '1.5', y: '4.5', width: '16', height: '14', rx: '2.4' }),
     sv('path', { d: 'M5.2 9.4l3 2.6-3 2.6' }), sv('path', { d: 'M10.6 15.4h3.8' }),
     sv('path', { d: 'M19.5 8.5l3 3-3 3' }));
-  if (kind === 'session') return svg(
-    sv('rect', { x: '1.5', y: '4.5', width: '16', height: '14', rx: '2.4' }),
-    sv('path', { d: 'M5.2 9.4l3 2.6-3 2.6' }), sv('path', { d: 'M10.6 15.4h3.8' }),
-    sv('path', { d: 'M20.6 2.6v5' }), sv('path', { d: 'M18.1 5.1h5' }));
+  //  #4233(원준 2026-10-04 「새 세션 열기: 모두 말풍선과 더하기」): 새 화면과 같은 그림(ICONS.sessNew).
+  if (kind === 'session') return svg(sv('path', { d: ICONS.sessNew }));
   return svg();
 }
 function pjvRowActions(specs) {

@@ -16,6 +16,28 @@
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
+//    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
+//                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·
+//                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
+//    await lively.prefs.get() / .set(patch)  → 이 앱 × 보는 사람의 작은 설정(#4601 — 배치·글자·접기). set 은 얕은 병합, null 키 삭제, 16KB.
+//    lively.ui.onPrefsOpen(function () {…})  → 사람이 앱 탭 ⋯ 메뉴에서 「표시 설정」을 눌렀다 — 앱이 설정 패널을 연다. 돌려주는 함수로 끊는다.
+//    await lively.files.list({ ext:['html'], limit:200 }) → { project_id, files:[{ path, name, size, mtime }], truncated }
+//    await lively.files.read(path)           → { path, content, size, mtime }   (#4592 — 붙은 세션의 **프로젝트 자료**에서 읽기만.
+//                                                매니페스트 permissions.project_files 에 선언한 확장자만 · 8MB 까지 · 붙은 세션이 없으면 -32602)
+//    await lively.files.list({ scope:'all', q:'덱' }) → { scope:'all', files:[{ …, project_id, project_name }] } — 볼 수 있는 **모든 프로젝트의 자료**(#4629 ·
+//                                                permissions.workspace_files 선언 + 따로 동의). 읽을 때는 lively.files.read(path, { project: project_id }).
+//                                                답에 scope:'all' 이 없으면 옛 호스트다(붙은 프로젝트의 목록이 왔다) — 그 목록을 전체로 쓰지 않는다.
+//    await lively.ui.chrome({ head:false })  → 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접어 달라고 한다(#4592 — 제 머리줄이 있는 앱이
+//                                                두 줄이 되지 않게). 접으면 그 ⋯ 메뉴는 아래 openMenu 로 앱이 대신 연다. { ok } — 못 접는 자리면 false.
+//    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
+//                                                [{ id, label }] 는 그 메뉴 맨 위에 선다 — 사람이 그걸 고르면 { picked: id }, 호스트 것을 고르거나
+//                                                닫으면 { picked: null }. 못 여는 자리(인사의 capabilities.menu 가 false)면 reject(-32601).
+//    await lively.ui.expand()                → 이 앱을 화면 가득(사이드바 없이) 띄운다(#4629). 인사의 capabilities.expand 가 true 인 자리(세션의 앱 칸)에서만 —
+//                                                이미 크게 뜬 화면에서는 false 다(닫기 · Esc 로 돌아간다). 못 하는 자리면 reject(-32601).
+//    (자동) 글 상자에 초점이 들고 나면 호스트에 ui/typing { on } 을 보낸다(#4443). 앱이 할 일은 없다. 폰 서랍에선 쓰는 동안 아래 탭 바가 걷힌다.
+//    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
+//                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
+//                                                바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면 가려지지 않는다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
 //  ⚠ onChange 를 안 쓰는 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
 //   화면 상태(입력 중인 글·스크롤)를 지키고 싶은 앱은 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
@@ -49,6 +71,8 @@ export const APP_RUNTIME_JS = `
     if (!m || typeof m !== 'object') return;
     if (m.id == null) {
       if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
+      else if (m.method === 'ui/notifications/prefs-open') fire('prefs-open', m.params || {});
+      else if (m.method === 'ui/notifications/insets') applyInsets(m.params || {});
       return;
     }
     var p = pend[m.id];
@@ -73,6 +97,42 @@ export const APP_RUNTIME_JS = `
     e.stopPropagation();
     parent.postMessage({ jsonrpc: '2.0', method: 'ui/omniOpen', params: {} }, '*');
   }, true);
+  // #4443 글 상자에 초점이 들고 나는 것을 호스트에 알린다(ui/typing { on }). 폰에서 쓰는 동안 셸이 아래 탭 바를 걷고 서랍을 자판 위까지 편다.
+  //  바뀔 때만 보낸다. 글 상자에서 글 상자로 옮길 때는 focusout 과 focusin 사이에 초점이 body 에 있는 틈이 있어 한 박자 뒤에 판정한다.
+  //  체크 상자 · 라디오 · 단추 · 범위 · 파일 · 읽기 전용 · 꺼진 칸 · 고르기 상자는 글 상자가 아니다(눌러도 자판이 안 뜬다. 고르기 상자는
+  //  고르기 판이 닫힌 뒤에도 초점이 남아 탭 바가 숨은 채로 남을 수 있다). 셸 CSS(50-mobile.css)의 목록과 같다.
+  function isTypingField(t) {
+    if (!t || t.nodeType !== 1) return false;
+    if (t.isContentEditable) return true;
+    var n = t.tagName;
+    if (n === 'TEXTAREA') return !t.disabled && !t.readOnly;
+    if (n !== 'INPUT') return false;
+    var ty = String(t.type || 'text').toLowerCase();
+    return !t.disabled && !t.readOnly && !/^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/.test(ty);
+  }
+  var typing = false, typingT = 0;
+  function judgeTyping() {
+    typingT = 0;
+    var on = isTypingField(document.activeElement) && document.hasFocus();
+    if (on === typing) return;
+    typing = on;
+    parent.postMessage({ jsonrpc: '2.0', method: 'ui/typing', params: { on: on } }, '*');
+  }
+  function laterTyping() { if (!typingT) typingT = setTimeout(judgeTyping, 0); }
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('focusin', laterTyping, true);
+    document.addEventListener('focusout', laterTyping, true);
+    window.addEventListener('blur', laterTyping);
+  }
+  // #4592 — 호스트가 가리는 가장자리. 값은 api.ui.insets 와 CSS 변수 둘 다로(앱은 CSS 만으로 비킬 수 있다).
+  function applyInsets(p) {
+    var num = function (v) { v = Number(v); return isFinite(v) && v > 0 ? Math.round(v) : 0; };
+    var i = { top: num(p.top), right: num(p.right), bottom: num(p.bottom), left: num(p.left) };
+    api.ui.insets = i;
+    var de = typeof document !== 'undefined' ? document.documentElement : null, st = de && de.style;
+    if (st) { st.setProperty('--lively-inset-top', i.top + 'px'); st.setProperty('--lively-inset-right', i.right + 'px'); st.setProperty('--lively-inset-bottom', i.bottom + 'px'); st.setProperty('--lively-inset-left', i.left + 'px'); }
+    fire('insets', i);
+  }
   var api = {
     version: 1,
     app: null,
@@ -83,7 +143,24 @@ export const APP_RUNTIME_JS = `
       call: function (name, args) { return post('tools/call', { name: String(name), arguments: args || {} }); }
     },
     ui: {
-      openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); }
+      openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
+      onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
+      chrome: function (opts) { return post('ui/chrome', { head: !(opts && opts.head === false) }); },
+      openMenu: function (items, at) { return post('ui/menu', { items: items || [], x: at && at.x, y: at && at.y }); },
+      expand: function () { return post('ui/expand', {}); },
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+      onInsets: function (cb) { return subscribe('insets', cb); }
+    },
+    files: {
+      list: function (opts) { var o = opts || {}; return post('files/list', { ext: o.ext, limit: o.limit, scope: o.scope, q: o.q }); },
+      read: function (path, opts) { var o = opts || {}; return post('files/read', { path: String(path), project: o.project }); }
+    },
+    chat: {
+      send: function (text) { return post('chat/send', { text: String(text) }); }
+    },
+    prefs: {
+      get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },
+      set: function (patch) { return post('prefs/set', { patch: patch || {} }).then(function (r) { return (r && r.prefs) || {}; }); }
     }
   };
   api.store = {

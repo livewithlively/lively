@@ -111,6 +111,28 @@
             "notifications": {
               "type": "boolean",
               "default": false
+            },
+            "chat_send": {
+              "type": "boolean",
+              "default": false
+            },
+            "project_files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]{1,8}$"
+              },
+              "maxItems": 8,
+              "default": []
+            },
+            "workspace_files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]{1,8}$"
+              },
+              "maxItems": 8,
+              "default": []
             }
           },
           "additionalProperties": false,
@@ -510,6 +532,26 @@
             "additionalProperties": false
           },
           "default": []
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "instructions": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "reinject_every": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 500,
+              "default": 40
+            }
+          },
+          "required": [
+            "instructions"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

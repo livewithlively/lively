@@ -125,6 +125,9 @@ export function foldCardRows<T extends CardRow>(
 export interface PastRowLike {
   id: string;
   projectId?: number | null;
+  /** 위탁 워커가 사이드바에서 **설** 프로젝트(#4551, lib/liv-work). 있으면 소속보다 앞선다 — 카드는 «어디에 서나» 로 묶는다. */
+  standId?: number | null;
+  task?: unknown;
   /** views.ts 의 두 칸 — 도는 세션은 둘 다 참이다. */
   live?: boolean;
   alive?: boolean;
@@ -164,6 +167,8 @@ export function projectPastRows<T extends PastRowLike>(
   projectId: number,
   shown: ReadonlySet<string>,
   cap: number,
+  /** 그 묶음 안에서 더 가른다(#4551) — 프로젝트에 안 붙은 세션을 「기타 (미분류)」와 「리브가 한 일」 둘로 나눌 때 쓴다. 없으면 전부. */
+  pick?: (s: T) => boolean,
 ): { rows: T[]; total: number } {
   //  ★ `projectId` 0 은 **「프로젝트 없음」 묶음**이다 — 빈 값이 아니다(#3778 5판).
   //   4판은 여기서 0 을 «묻지 마라» 로 읽고 빈 결과를 돌려줬는데, 그 바람에 프로젝트에 안 붙은 세션은
@@ -171,8 +176,10 @@ export function projectPastRows<T extends PastRowLike>(
   //   라 0 도 정확히 걸린다 — 프로젝트 없는 세션끼리만 모인다.
   const hit: T[] = [];
   for (const s of all || []) {
-    if (!s || Number(s.projectId || 0) !== projectId) continue;
+    //  묶는 잣대는 «설 자리» 다 — 위탁 워커는 시킨 세션의 프로젝트 카드 접힘에 든다(#4551). 사람 세션은 소속 그대로.
+    if (!s || Number((s.task ? (s.standId ?? s.projectId) : s.projectId) || 0) !== projectId) continue;
     if (s.trashedAt) continue;                             // 휴지통은 도는 중이어도 뺀다(#1851)
+    if (pick && !pick(s)) continue;
     const names = [s.id, s.logId || '', ...(s.altIds || [])].filter(Boolean);
     if (names.some((n) => shown.has(String(n)))) continue;  // ★ 이미 줄로 섰다 — 유일한 제외 사유다
     hit.push(s);

@@ -8,15 +8,25 @@
 //  가짜는 셋뿐: fetch(자료 목록 · 프로젝트) · ResizeObserver · IntersectionObserver. 부품 · 셸 · CSS 는 제품 그대로.
 //
 // 사양(엣지 표 — 행마다 단언 하나 이상):
-//  A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다(경계선 · no-bottom 까지) · 옛 기본 걷기 표식이 찍힌다
-//  A2 [＋] › «아래 칸 열기» — 비었으면 빈 칸을 펴지 않고 «아래 칸에 넣을 것»부터 고른다
-//  A3 고른 것이 아래 칸에 서야 그제서야 아래 칸이 열린다
-//  A4 ✕ 로 닫은 뒤 «아래 칸 열기» — 내용이 있으니 고르기 없이 바로 연다
-//  A5 아래 칸의 마지막 탭을 닫으면 빈 칸이 남지 않는다 · 그 뒤 «아래 칸 열기» 는 다시 고르기부터
-//  A6 아래 칸이 보이는 동안 [＋] 발치에 «아래 칸 열기» 가 없다
-//  A7 «기본 배치로 되돌리기» — 아래 칸이 비고 숨는다
-//  A8 다른 세션이 «열림» 을 기억해도 내용이 비었으면 빈 칸이 올라오지 않는다 · 우클릭 «아래 칸으로 보내기» 를 하면 그 순간 선다
-//  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다
+//  ★ 아래 칸에는 새로 열지 않는다(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — [＋] · 탭 우클릭 · 빈 자리 메뉴 어디에도 길이 없다.
+//  A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다(경계선 · no-bottom 까지) · 기본 곁칸 = 자료 · 프로젝트 · 지식(«앱» 없음) · 한 번 걷기 표식 셋
+//  A2 [＋] 발치엔 «기본 배치로» 만 — «아래 칸 열기» 가 없다
+//  A3 탭 우클릭에 «아래 칸으로 보내기» 가 없다
+//  A4 옛 배치(아래 칸에 사람이 둔 탭)는 그대로 보이되 그 탭 줄엔 [＋] 가 없다
+//  A5 아래 칸의 옛 탭은 우클릭으로 곁칸에 보낼 수 있다 · A6 마지막 탭을 닫으면 빈 칸이 남지 않는다
+//  A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 자료 · 프로젝트 · 지식
+//  A8 다른 세션이 «열림» 을 기억해도 내용이 비었으면 빈 칸이 올라오지 않는다
+//  ★ 아래 칸은 줄기만 한다(같은 말 · lib landZone) — 옛 배치에 남은 아래 칸이 보일 때 닿던 남은 길도 새 탭을 곁칸에 세운다.
+//  B0 (배선) 옛 배치 — 아래 칸에 타임라인 · 웹 · 뷰어가 보인다(아래 행들이 헛돌지 않는다)
+//  B1 아래 칸 «웹» 탭 우클릭 › «웹 하나 더» — 새 웹 탭은 곁칸에 서고 켜진다 · 아래 칸 그대로
+//  B2 곁칸 탭(지식)을 끌어 아래 칸 탭 줄에 놓아도 아무 일 없다(놓기 표시도 안 뜬다) · B2w (배선) 아래 칸 «웹» 을 끌어 곁칸에 놓으면 옮겨진다
+//  B3 열린 아래 칸에 뷰어(readme.md)가 있을 때 다른 파일을 열면 새 뷰어는 곁칸 · B3b 같은 파일을 다시 열면 아래 칸의 그 뷰어를 켠다(새 탭 없음)
+//  B4 아래 칸에서 닫은 탭을 «닫은 탭 다시 열기» 하면 곁칸 맨 끝으로 돌아온다 · B4b 마지막 탭(경계)이면 아래 칸은 다시 서지 않는다
+//  B3c 닫힌 아래 칸에 그 파일의 뷰어가 있으면 펼치지 않고 곁칸으로 데려와 켠다
+//  B5 다시 열 탭과 같은 파일의 뷰어가 닫힌 아래 칸에 있으면 — 아래 칸을 펼치지 않고 그 뷰어를 곁칸으로 데려와 켠다(격리 리뷰)
+//  B6 배치를 저장한 적 없는 프로젝트가 옛 아래 칸이 있는 배치를 물려받으면 — 아래 칸은 서지 않고 그 탭은 곁칸 뒤에 선다(격리 리뷰)
+//  N1 좁은 폭(서랍) — 아래 칸에 뷰어만 있을 때 다른 파일을 열어도 저장된 아래 칸은 그대로, 새 뷰어는 곁칸 배치에 적힌다
+//  M1 옛 기본(닫힌 아래 칸에 타임라인 하나)을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다(원준 10-05 «기본배치 아니게»)
 //  M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다
 //  M3 한 번 걷으면 다시 열어도 저장소를 다시 쓰지 않는다(표식) · 표식 뒤 사람이 둔 타임라인은 그대로
 //  R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로»(마우스 옆 단추) 로 하위 폴더에 돌아간다
@@ -27,11 +37,35 @@
 //  H1 머리줄 [자료](showPart) — 보이고 켜져 있으면 맨 위 폴더
 //  H2 곁칸이 접혀 있으면 펴기만(폴더 그대로) · 다른 탭이 켜져 있으면 자료를 켜기만(폴더 그대로)
 //  I1 자료가 둘이면 누른 탭의 자료만 맨 위로 — 다른 자료는 보던 폴더 그대로
+//  AD1 [＋] = 앱 서랍(원준 10-05 «① 앱 서랍 + ② 의 키보드»): [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점
+//  AD2 묶음 둘(원준 10-05 «세션에 붙인다는 개념으로 두개 나눈건 … 살려줘») — «사이드바 앱» 아홉(독과 같은 앱 색 타일 · 이미 열린 자료엔 ＋
+//      · 첫 타일이 Enter 의 과녁 · 설명 한 줄) + «이 세션에 붙이기»(화면 · 데이터가 있는 설치 앱 — 시스템 · ai-session · 도구만 · 꺼짐 제외,
+//      세션이 없으면 흐리고 고를 수 없다)
+//  AD3 «새 탭으로 여는 앱» 도, «앱» 칸도 없다 — 여기서 여는 것은 모두 사이드바에 선다
+//  AD4 치면 거르고 Enter 로 연다(그 칸에 탭 · 서랍 닫힘) · AD5 한글 조합 중의 Enter 는 열지 않는다 · AD6 없는 이름 — 타일 0 · 안내 한 줄
+//  AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸 · AD8 올리면 설명 · 이미 열린 자료를 누르면 «자료 2» · AD9 Esc 로 닫힌다
+//  T1 세션이 있으면 «이 세션에 붙이기» 타일을 고를 수 있고, 누르면 그 세션에 붙이기 요청(POST …/apps/attach {app_id})이 나가고 서랍이 닫힌다
+//  ★ 지식은 그 칸 안에서 읽는다(원준 10-05 «오른쪽에서 칸 튀어나오듯이 나오는데 이렇게 하지말고 그냥 곁칸에서 마크다운 이쁘게»)
+//  K1 줄을 누르면 그 칸 안에 읽기 화면 — 앱 위 시트(.pn-modal) · 덮개 없음 · 목록은 숨는다
+//  K2 짧은 제목 · 원 제목 · 메타 · 요약 · 본문(md-rendered — 제목 · 목록 · 코드 · 표) · 이름 · 위키에서 열기 · K3 첫 줄 H1(제목 되풀이)은 턴다
+//  K4 6000자 넘는 본문도 끝까지 · K6 [[이름]] · [[이름|라벨]] 은 링크, 코드 안의 [[…]] 는 글자 그대로
+//  K5 본문 링크는 주소를 안 바꾸고 그 자리에서 이어 읽는다 · 뒤로는 한 칸씩 · K7 목록에 돌아오면 보던 자리
+//  K8 켜진 지식 탭 다시 누르기 — 읽던 중 → 목록 · 목록 → 맨 위 · K9 마우스 뒤로 단추 · K10 실패 안내 + 위키에서 열기
+//  K11 늦게 온 응답은 지금 화면을 덮지 않는다 · K12 우클릭 «여기서 읽기» · K15 떠 있는 독 높이만큼 스크롤 끝 빈자리
+//  K16 제목의 마크다운 강조 표식(** · `)은 글자로 안 선다(목록 줄 · 읽기 머리) · 원 제목은 세 줄까지, 누르면 펼친다
+//  K0 연결된 지식이 없으면 첫 그림부터 안내 · K3b 제목과 다른 맨 앞 H1 은 남는다 · K5s 뒤로 오면 앞 문서의 스크롤 자리
+//  K18 바깥 주소(새 탭) · 메일 · 위키 단추 · 보조키는 가로채지 않는다 · 같은 문서 링크는 맨 위로만
+//  K19 열어 둔 문서가 서버에서 고쳐지면 다음 확인(30초 · 셸 8초 틱)에 새 판으로
+//  (K13 위키에서 열기 주소는 K2 가, K14 위키 링크 변환 도우미는 kn-links.test.mjs 가 본다)
+//  K17 초점 — 줄에서 열면 [‹] 에, 돌아오면 그 문서 줄에(숨는 칸에 초점이 남으면 키보드가 길을 잃는다)
 //  E1 페이지 오류 없음(그리는 중에 던진 것). 마운트 자체가 던지면(TDZ 등) 그 장면이 «장면이 던졌다» 로 실패한다
 //
 //  fail-first(2026-10-01): 변경 전 판(SRC_ROOT 로 cc81bfd7~1 을 세움)에서 A1–A3 · A5 · A7 · A8 · M1 · M2 · R1 · R2 · H1 · H2 · I1 빨강,
 //   paintPane 의 `pane.act = act;` 를 지운 돌연변이에서 R1 · R2 · H1 · H2 · I1 빨강(소스 정규식 X 행은 그대로 초록이던 고리),
 //   bottomVisible 을 첫 paintAll 아래로 옮긴 돌연변이에서 마운트가 던져 모든 장면 빨강(S11 도 함께).
+//  fail-first(2026-10-05 앱 서랍): 바꾸기 전 판(옛 고르기)에서 AD1–AD9 빨강. 돌연변이 — 한글 조합 중 Enter 막기를 빼면 AD4 · AD5,
+//   격자 화살표를 빼면 AD7, ＋(하나 더) 배지를 빼면 AD2 가 빨갛다.
+//  fail-first(2026-10-05 두 묶음 · 아래 칸 · «앱» 탭): 바꾸기 전 판에서 A1–A4 · A7 · M1 · AD2 · AD2b · AD3 · T1 빨강(A5 · A6 · A8 은 원래 그랬다).
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildSync } from "esbuild";
@@ -43,7 +77,8 @@ if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BI
 const CSS = ["01-base.css", "03-components.css", "20-dashboard.css", "40-v2.css", "42-v2-dock.css", "42-v2-panes.css", "45-v2-side-swap.css", "49-v2-ctx.css", "50-mobile.css"]
   .map((f) => path.join(ROOT, "public/styles", f)).filter(existsSync);
 const bundle = buildSync({
-  stdin: { contents: "export { mountPanes } from './web/v2/panes.ts';", resolveDir: ROOT, loader: "ts" },
+  //  mountCtxMenus — 우클릭 메뉴 배선은 셸이 아니라 main.ts 가 문서에 건다(장면 K 의 «여기서 읽기» 가 쓴다).
+  stdin: { contents: "export { mountPanes } from './web/v2/panes.ts'; export { mountCtxMenus } from './web/v2/ctx-registry.ts';", resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "PN", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 
@@ -63,11 +98,34 @@ async function PAGE_MAIN() {
   const seedFs = () => { FS.clear(); const put = (p, type, d) => FS.set(p, { type, size: d || 0, mtime: 1000 }); put("docs", "dir"); put("docs/inner.txt", "file", 5); put("docs/sub", "dir"); put("docs/sub/deep.txt", "file", 5); put("readme.md", "file", 8); put("notes.txt", "file", 5); };
   const kids = (dir) => [...FS.keys()].filter((p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") === dir);
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
-  window.fetch = async (url) => {
+  //  설치 앱 — 붙일 수 있는 것은 화면(ui.pages)이나 데이터(data.tables)가 있는 것. 나머지는 묶음에 서면 안 된다.
+  const APPS = [
+    { id: "memo", title: "메모", status: "active", manifest: { ui: { pages: [{ key: "main", title: "메모" }] } } },
+    { id: "check", title: "보고서 점검표", status: "active", manifest: { data: { tables: [{ name: "checks" }] } } },
+    { id: "ai-session", title: "AI 세션", status: "active", manifest: { ui: { pages: [{ key: "m" }] } } },
+    { id: "sys", title: "시스템 앱", status: "active", source: { kind: "builtin" }, manifest: { system: "inbox", ui: { pages: [{ key: "m" }] } } },
+    { id: "tool", title: "도구만", status: "active", manifest: { permissions: { tools: ["t"] } } },
+    { id: "off", title: "꺼진 앱", status: "disabled", manifest: { ui: { pages: [{ key: "m" }] } } },
+  ];
+  window.__attach = [];
+  //  지식 — 프로젝트에 연결된 목록(__kn)과 문서(__knDocs). __knDelay[이름] ms 뒤에 답하고, 문서가 없으면 500.
+  window.__kn = null; window.__knDocs = {}; window.__knDelay = {};
+  window.fetch = async (url, init) => {
     const u = new URL(url, "http://x/");
+    if (u.pathname === "/api/ui/apps") return J({ apps: APPS });
+    const sa = /^\/api\/ui\/terminal\/sessions\/([^/]+)\/apps(\/attach)?$/.exec(u.pathname);
+    if (sa && sa[2] && (init?.method || "GET") === "POST") { window.__attach.push({ sid: decodeURIComponent(sa[1]), body: JSON.parse(init.body || "{}") }); return J({ ok: true }); }
+    if (sa && !sa[2]) return J({ apps: [] });
     const mm = /\/projects\/(\d+)(\/.*)?$/.exec(u.pathname);
     if (mm && mm[2] === "/files") { const q = u.searchParams.get("path") || ""; return J({ items: kids(q).map((p) => { const e = FS.get(p); return { name: p.split("/").pop(), type: e.type, size: e.size, mtime: e.mtime }; }) }); }
-    if (mm && !mm[2]) return J({ project: { id: Number(mm[1]), name: "P", status_category: "started" } });
+    if (mm && !mm[2]) return J({ project: { id: Number(mm[1]), name: "P", status_category: "started", ...(window.__kn ? { knowledge: window.__kn } : {}) } });
+    if (u.pathname === "/api/ui/knowledge") { window.__knColl = (window.__knColl || 0) + 1; return J({ entries: [] }); }   // 본문 :::collection 의 목록 조회 — 그려졌는지 센다
+    const kd = /^\/api\/ui\/knowledge\/([^/]+)$/.exec(u.pathname);
+    if (kd) {
+      const nm = decodeURIComponent(kd[1]);
+      if (window.__knDelay[nm]) await new Promise((z) => setTimeout(z, window.__knDelay[nm]));
+      return window.__knDocs[nm] ? J({ knowledge: window.__knDocs[nm] }) : J({ error: "boom" }, 500);
+    }
     return J({ error: "no" }, 404);
   };
   localStorage.setItem("lively_ui_token", "t");
@@ -75,14 +133,15 @@ async function PAGE_MAIN() {
   window.IntersectionObserver = class { constructor(cb) { this.cb = cb; } observe(e) { setTimeout(() => this.cb([{ target: e, isIntersecting: true }]), 0); } unobserve() {} disconnect() {} };
 
   let handle = null;
-  const mount = async (id = 7) => {
+  const mount = async (id = 7, sid = null) => {
     if (handle) { try { handle.destroy(); } catch (_) { /* 이미 */ } handle = null; }
     document.getElementById("app")?.remove();
     const host = document.createElement("div");
     host.id = "app"; host.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;display:flex;flex-direction:column;background:var(--bg)";
     document.body.append(host);
     const PN = (new Function(SRC + "\n;return PN;"))();
-    handle = PN.mountPanes(host, { id, detail: { project: { id, name: "P" } }, data: () => ({ projects: [{ id, name: "P" }], sessions: [], loadedAt: Date.now() }), sessionId: null, onOpenDrawer: () => {}, onCloseDrawer: () => {} });
+    window.__PN = PN;                              // 이 마운트와 같은 모듈 한 벌(우클릭 표 bindCtx 를 같이 본다)
+    handle = PN.mountPanes(host, { id, detail: { project: { id, name: "P", ...(window.__kn ? { knowledge: window.__kn } : {}) } }, data: () => ({ projects: [{ id, name: "P" }], sessions: [], loadedAt: Date.now() }), sessionId: sid, onOpenDrawer: () => {}, onCloseDrawer: () => {} });
     await sleep(350);
     return handle;
   };
@@ -97,10 +156,14 @@ async function PAGE_MAIN() {
   const tabBtn = (z, nm) => $$(`#app .pn-pane[data-zone="${z}"] .pn-tab`).find((b) => b.getAttribute("aria-label") === nm);
   const popClose = () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); $$(".dash-pop").forEach((n) => n.remove()); };
   const openAdd = async (z = "side") => { popClose(); $(`#app .pn-pane[data-zone="${z}"] .pn-tab-add`).click(); await sleep(60); };
-  const popHead = () => $(".dash-pop .pn-pop-h")?.textContent || null;
-  const popFoot = () => $$(".dash-pop .pn-pop-foot .btn-text").map((b) => b.textContent.trim());
-  const clickFoot = async (txt) => { const b = $$(".dash-pop .pn-pop-foot .btn-text").find((x) => x.textContent.trim() === txt); if (!b) return false; b.click(); await sleep(80); return true; };
-  const clickRow = async (nm) => { const b = $$(".dash-pop .pn-pop-row").find((x) => x.querySelector("b")?.textContent.trim() === nm); if (!b) return false; b.click(); await sleep(120); return true; };
+  //  [＋] = 앱 서랍(v2/pane-drawer) — 제목 · 발치 단추 · 타일
+  const DR = ".dash-pop.pn-adraw";
+  const popHead = () => $(DR + " .pn-dock-more-sh b")?.textContent || null;
+  const popFoot = () => $$(DR + " .pn-adraw-f .btn-text").map((b) => b.textContent.trim());
+  const clickFoot = async (txt) => { const b = $$(DR + " .pn-adraw-f .btn-text").find((x) => x.textContent.trim() === txt); if (!b) return false; b.click(); await sleep(80); return true; };
+  const tileOf = (nm) => $$(DR + " .pn-dock-tile").find((x) => x.querySelector(".pn-dock-tile-n")?.textContent.trim() === nm) || null;
+  const clickRow = async (nm) => { const b = tileOf(nm); if (!b) return false; b.click(); await sleep(120); return true; };
+  const descNow = () => $(DR + " .pn-adraw-desc")?.textContent || null;
   const crumb = (root) => (root ? $$(".pn-fcrumb", root).map((b) => b.textContent).join("/") : null);
   const fpOrder = (root) => (root ? $$("[data-fp]", root).map((n) => n.dataset.fp) : []);
   const filesRoot = () => $$('#app .pn-pane[data-zone="side"] .pn-files').find((n) => !n.hidden) || null;
@@ -113,33 +176,103 @@ async function PAGE_MAIN() {
   };
   const goBack = (root) => root.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 3 }));   // 마우스 옆 단추(뒤로)
   const clk = async (el) => { el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); await sleep(150); };
-  const fresh = () => { localStorage.removeItem(LAYOUT); localStorage.removeItem(VIEW); seedFs(); };
+  const fresh = () => { for (const k of [LAYOUT, VIEW, "pn_act_by_sess", "pn_ed_path"]) localStorage.removeItem(k); seedFs(); };   // 장면끼리 기억을 물려주지 않는다
 
-  // ── A — 처음 쓰는 브라우저 · 아래 칸은 넣은 것이 있을 때만 ──
+  // ── A — 처음 쓰는 브라우저 · 아래 칸에는 새로 열지 않는다 ──
   try {
     fresh(); await mount();
     const a = {}; R.a = a;
     const s0 = store(); a.store0 = { bottom: s0?.last?.bottom ?? null, act: s0?.last?.act?.bottom ?? null, seeded: s0?.seeded || null };
-    a.b0 = bottomUp();
-    await openAdd(); a.foot0 = popFoot();
-    a.clickOpen = await clickFoot("아래 칸 열기"); a.pickHead = popHead(); a.b1 = bottomUp();
-    a.picked = await clickRow("타임라인"); a.b2 = bottomUp(); a.bottomTabs2 = tabNames("bottom");
-    await openAdd(); a.footVisible = popFoot(); popClose();
-    $('#app .pn-pane[data-zone="bottom"] .pn-pane-hide').click(); await sleep(80); a.b3 = bottomUp();
-    await openAdd(); await clickFoot("아래 칸 열기"); a.reopenHead = popHead(); a.b4 = bottomUp(); popClose();
+    a.b0 = bottomUp(); a.side0 = tabNames("side");
+    await openAdd(); a.foot0 = popFoot(); popClose();
+    const menuOf = async (z, nm) => { tabBtn(z, nm).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 })); await sleep(80); return $$(".pn-ctx .pn-ctx-i, .pn-ctx button").filter((b) => b.textContent.trim()); };
+    a.menu = (await menuOf("side", "지식")).map((b) => b.textContent.trim());
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(60);
+    //  옛 배치 — 아래 칸에 사람이 둔 탭(이 판 전에 둔 것)
+    const legacy = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: true, pin: [] };
+    localStorage.setItem(LAYOUT, JSON.stringify({ last: legacy, p: { 7: legacy }, seeded: { tasks: 1, bottom: 1, apps: 1 } })); localStorage.removeItem(VIEW);
+    await mount();
+    a.legacy = { b: bottomUp(), add: !!$('#app .pn-pane[data-zone="bottom"] .pn-tab-add'), tabs: tabNames("bottom") };
+    const send = (await menuOf("bottom", "웹")).find((b) => /로 보내기/.test(b.textContent));
+    a.sendLabel = send ? send.textContent.trim() : null;
+    if (send) { send.click(); await sleep(150); }
+    a.afterSend = { side: tabNames("side"), bottom: tabNames("bottom"), b: bottomUp() };
     tabBtn("bottom", "타임라인").parentElement.querySelector(".pn-tab-x").click(); await sleep(120);
-    a.b5 = bottomUp();
-    await openAdd(); await clickFoot("아래 칸 열기"); a.emptyHead = popHead(); popClose();
-    await openAdd(); await clickRow("타임라인"); await sleep(60);                        // 되돌리기가 곁칸도 기본으로 돌리는지 보려고 하나 더 둔다
-    await openAdd(); await clickFoot("기본 배치로 되돌리기"); await sleep(150);
+    a.lastClosed = bottomUp();
+    await openAdd(); await clickFoot("기본 배치로"); await sleep(150);
     const sr = store(); a.reset = { b: bottomUp(), bottom: sr.last.bottom, side: tabNames("side") };
     localStorage.setItem(VIEW, JSON.stringify({ p7: { bottomOn: true } }));          // 다른 세션의 «열림» 기억 + 빈 내용
     await mount(); a.remembered = bottomUp();
-    tabBtn("side", "지식").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 50 })); await sleep(80);
-    const row = $$(".pn-ctx .pn-ctx-i, .pn-ctx button").find((b) => /아래 칸으로 보내기/.test(b.textContent));
-    a.sendRow = !!row; if (row) { row.click(); await sleep(150); }
-    a.afterSend = { b: bottomUp(), bottom: tabNames("bottom") };
   } catch (e) { R.errA = String(e && e.stack || e); }
+
+  // ── B — 아래 칸은 줄기만 한다(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») ──
+  try {
+    fresh();
+    const legacy = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web", "editor"], act: { main: "sessions", side: "files", bottom: "web" }, sideOn: true, bottomOn: true, pin: [] };
+    localStorage.setItem(LAYOUT, JSON.stringify({ last: legacy, p: { 7: legacy }, seeded: { tasks: 1, bottom: 1, apps: 1 } })); localStorage.removeItem(VIEW);
+    localStorage.setItem("pn_ed_path", JSON.stringify({ p7: "readme.md" }));       // 아래 칸의 뷰어가 펴 둔 파일(세션 없음 → 기억 열쇠 p7)
+    await mount();
+    const b = {}; R.b = b;
+    const keys = (z) => $$(`#app .pn-pane[data-zone="${z}"] .pn-tabwrap`).map((w) => w.dataset.tab);
+    const actKey = (z) => $$(`#app .pn-pane[data-zone="${z}"] .pn-tabwrap`).find((w) => w.querySelector('.pn-tab[aria-selected="true"]'))?.dataset.tab || null;
+    const wrapOf = (z, k) => $(`#app .pn-pane[data-zone="${z}"] .pn-tabwrap[data-tab="${k}"]`);
+    const menuKey = async (z, k) => { popClose(); wrapOf(z, k).querySelector(".pn-tab").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 })); await sleep(80); return $$(".pn-ctx .pn-ctx-i, .pn-ctx button").filter((x) => x.textContent.trim()); };
+    const pick = async (z, k, re) => { const it = (await menuKey(z, k)).find((x) => re.test(x.textContent.trim())); if (it) { it.click(); await sleep(150); } else popClose(); return !!it; };
+    const snap = () => ({ side: keys("side"), bottom: keys("bottom"), actSide: actKey("side"), actBottom: actKey("bottom"), up: bottomUp() });
+    b.start = snap();
+    //  B1 «하나 더» — 아래 칸의 옛 웹 탭에서
+    b.moreItem = await pick("bottom", "web", /^웹 하나 더$/);
+    b.B1 = snap();
+    //  B3 뷰어 — 아래 칸에 readme.md 뷰어가 있다
+    const viewer = (p) => { $("#app .pn-wrap").dispatchEvent(new CustomEvent("pn-viewer-open", { detail: { path: p } })); return sleep(200); };
+    await viewer("notes.txt"); b.B3 = snap();
+    await viewer("readme.md"); b.B3b = snap();
+    //  B2 끌기 — 포인터로(R4 와 같은 손). 곁칸 → 아래 칸 줄(막힘), 아래 칸 → 곁칸 줄(된다)
+    const dragTo = async (z, k, toZone) => {
+      const w = wrapOf(z, k); const r0 = w.getBoundingClientRect(); const bar = $(`#app .pn-pane[data-zone="${toZone}"] .pn-tabs`).getBoundingClientRect();
+      const P = (type, x, y) => (type === "pointerdown" ? w.querySelector(".pn-tab") : window).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 7, pointerType: "mouse" }));
+      const x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2, x1 = bar.left + Math.min(40, bar.width / 2), y1 = bar.top + bar.height / 2;
+      P("pointerdown", x0, y0); P("pointermove", x0 + 8, y0 + 30); P("pointermove", (x0 + x1) / 2, (y0 + y1) / 2); P("pointermove", x1, y1); await sleep(30);
+      const lit = !!$(`#app .pn-pane[data-zone="${toZone}"] .pn-tabbar.drop`);
+      P("pointerup", x1, y1); await sleep(150);
+      return lit;
+    };
+    b.litToBottom = await dragTo("side", "knowledge", "bottom"); b.B2 = snap();
+    b.litToSide = await dragTo("bottom", "web", "side"); b.B2w = snap();
+    //  B4 닫은 탭 다시 열기 — 아래 칸의 타임라인을 닫고 되살린다
+    wrapOf("bottom", "timeline").querySelector(".pn-tab-x").click(); await sleep(150); b.B4closed = snap();
+    b.reopen1 = await pick("side", "files", /^닫은 탭 다시 열기/); b.B4 = snap();
+    //  B4b 마지막 탭 — 아래 칸에 남은 뷰어 하나를 닫으면 칸이 사라지고, 되살려도 곁칸이다
+    const lastKey = keys("bottom")[0]; b.lastKey = lastKey;
+    if (lastKey) { wrapOf("bottom", lastKey).querySelector(".pn-tab-x").click(); await sleep(150); }
+    b.B4bClosed = snap();
+    b.reopen2 = await pick("side", "files", /^닫은 탭 다시 열기/); b.B4b = snap();
+    const plant = async (lay, ed, id = 7) => {
+      fresh(); localStorage.setItem(LAYOUT, JSON.stringify({ last: lay, p: { [id]: lay }, seeded: { tasks: 1, bottom: 1, apps: 1 } }));
+      localStorage.setItem("pn_ed_path", JSON.stringify(ed)); await mount(id);
+    };
+    //  B3c 닫힌 아래 칸에 readme.md 뷰어 — 같은 파일을 연다
+    await plant({ main: ["sessions"], side: ["files"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, pin: [] }, { p7: "readme.md" });
+    b.B3c0 = snap(); await viewer("readme.md"); b.B3c = snap();
+    //  B5 같은 파일(notes.txt)의 뷰어가 곁칸(editor#2)과 닫힌 아래 칸(editor)에 하나씩 — 곁칸 것을 닫고 되살린다
+    await plant({ main: ["sessions"], side: ["files", "editor#2"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: false, pin: [] }, { p7: "notes.txt", "p7#2": "notes.txt" });
+    b.B50 = snap();
+    wrapOf("side", "editor#2").querySelector(".pn-tab-x").click(); await sleep(150);
+    b.reopen5 = await pick("side", "files", /^닫은 탭 다시 열기/); b.B5 = snap();
+    //  B6 새 프로젝트(9) — last 에 옛 아래 칸이 있다
+    fresh();
+    const old7 = { main: ["sessions"], side: ["files", "knowledge"], bottom: ["timeline", "web"], act: { main: "sessions", side: "files", bottom: "web" }, sideOn: true, bottomOn: true, pin: [] };
+    localStorage.setItem(LAYOUT, JSON.stringify({ last: old7, p: { 7: old7 }, seeded: { tasks: 1, bottom: 1, apps: 1 } }));
+    await mount(9); b.B6 = snap(); await clk(tabBtn("side", "지식")); const s6 = store(); b.B6store = { p9: s6.p && s6.p[9] ? s6.p[9].bottom : null, p7: s6.p[7].bottom };
+    //  N1 좁은 폭 — 모바일 질의만 맞다고 답한다(셸은 matchMedia(MOBILE_MQ) 로 좁은 폭을 안다)
+    const realMM = window.matchMedia.bind(window);
+    window.matchMedia = (q) => (/max-width/.test(q) ? { matches: true, media: q, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } } : realMM(q));
+    try {
+      await plant({ main: ["sessions"], side: ["files"], bottom: ["timeline", "editor"], act: { main: "sessions", side: "files", bottom: "timeline" }, sideOn: true, bottomOn: true, pin: [] }, { p7: "readme.md" });
+      b.N1narrow = handle && $$("#app .pn-pane[data-zone=\"side\"] .pn-tabwrap").some((w) => w.dataset.tab === "timeline");   // 서랍이 아래 칸 탭까지 든다 = 좁은 폭으로 섰다
+      await viewer("notes.txt"); const sn = store(); b.N1 = { bottom: sn.p[7].bottom, side: sn.p[7].side };
+    } finally { window.matchMedia = realMM; }
+  } catch (e) { R.errB = String(e && e.stack || e); }
 
   // ── M — 옛 기본값이 저장된 브라우저(한 번 걷기) ──
   try {
@@ -196,13 +329,196 @@ async function PAGE_MAIN() {
   try {
     fresh(); await mount();
     const i = {}; R.i = i;
-    await openAdd(); await clickRow("자료 하나 더"); await sleep(200);
+    await openAdd(); await clickRow("자료"); await sleep(200);   // 이미 열린 자료 = 하나 더
     const roots = $$('#app .pn-pane[data-zone="side"] .pn-files');
     const second = roots.find((n) => !n.hidden); await waitFor(() => fpOrder(second).length > 0); await enterDocs(second);
     const first = roots.find((n) => n !== second);
     await clk(tabBtn("side", "자료")); await waitFor(() => fpOrder(first).length > 0); await enterDocs(first);
     await clk(tabBtn("side", "자료")); i.first = crumb(first); i.second = crumb(second); i.count = roots.length;
   } catch (e) { R.errI = String(e && e.stack || e); }
+
+  // ── D — 앱 서랍(원준 10-05 «① 앱 서랍 + ② 의 키보드») ──
+  try {
+    fresh(); await mount();
+    const d = {}; R.d = d;
+    for (const nm of ["프로젝트", "지식", "앱"]) { const b = tabBtn("side", nm); if (b) { b.parentElement.querySelector(".pn-tab-x")?.click(); await sleep(80); } }
+    d.sideTabs = tabNames("side");                                              // 원준 화면과 같게 — 곁칸에 자료만
+    await openAdd();
+    const dr = $(DR); const inp = dr && dr.querySelector("input");
+    const add = $('#app .pn-pane[data-zone="side"] .pn-tab-add').getBoundingClientRect(), pr = zone("side").getBoundingClientRect(), rr = dr ? dr.getBoundingClientRect() : null;
+    d.open = { has: !!dr, focus: !!inp && document.activeElement === inp, top: rr ? Math.round(rr.top - add.bottom) : null, inPane: !!rr && rr.left >= pr.left - 0.5 && rr.right <= pr.right + 0.5 };
+    await waitFor(() => !$(DR + " .pn-adraw-wait"));                              // «이 세션에 붙이기» 목록이 온다
+    const info = (t) => ({ n: t.querySelector(".pn-dock-tile-n").textContent, plus: !!t.querySelector(".pn-adraw-plus"), sel: t.getAttribute("aria-selected") === "true", off: t.disabled,
+      gi: !!t.querySelector('svg.v2-gi .v2-gi-glyph[stroke^="var(--gi-c-"]') });
+    const tiles = () => $$(DR + " .pn-dock-tile:not([disabled])").map(info);
+    d.secs = $$(DR + " .pn-dock-more-sec").map((sec) => ({ t: sec.querySelector(".pn-dock-more-sh b").textContent, note: sec.querySelector(".pn-dock-more-sh .pn-fine").textContent, tiles: [...sec.querySelectorAll(".pn-dock-tile")].map(info) }));
+    d.desc0 = descNow();
+    d.noNewTab = !!dr && !dr.querySelector("a") && !/새 탭으로/.test(dr.textContent) && !tileOf("앱");
+    inp.value = "타임"; inp.dispatchEvent(new Event("input", { bubbles: true })); await sleep(30);
+    d.typed = { tiles: tiles().map((t) => t.n + (t.sel ? "*" : "")), desc: descNow() };
+    inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })); await sleep(60);
+    d.imeKept = !!$(DR) && !tabNames("side").includes("타임라인");
+    inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); await sleep(150);
+    d.entered = { closed: !$(DR), tabs: tabNames("side"), act: actTab("side") };
+    await openAdd(); const inp2 = $(DR + " input");
+    inp2.value = "zzz"; inp2.dispatchEvent(new Event("input", { bubbles: true })); await sleep(30);
+    d.none = { tiles: $$(DR + " .pn-dock-tile").length, desc: descNow() };
+    inp2.value = ""; inp2.dispatchEvent(new Event("input", { bubbles: true })); await sleep(30);
+    inp2.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })); await sleep(20);
+    const first = document.activeElement?.querySelector?.(".pn-dock-tile-n")?.textContent || null;
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); await sleep(20);
+    d.arrows = { first, now: document.activeElement?.querySelector?.(".pn-dock-tile-n")?.textContent || null, desc: descNow() };
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); await sleep(20);
+    d.backToInput = document.activeElement === inp2;
+    tileOf("웹").dispatchEvent(new MouseEvent("mouseenter")); await sleep(20);
+    d.hover = descNow();
+    await clickRow("자료");
+    d.more = { closed: !$(DR), tabs: tabNames("side") };
+    await openAdd(); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(40);
+    d.esc = !$(DR);
+  } catch (e) { R.errD = String(e && e.stack || e); }
+
+  // ── T — 세션이 있으면 «이 세션에 붙이기» 를 고른다 ──
+  try {
+    fresh(); await mount(7, "s1");
+    const t = {}; R.t = t;
+    await openAdd(); await waitFor(() => !$(DR + " .pn-adraw-wait"));
+    const memo = tileOf("메모");
+    t.enabled = !!memo && !memo.disabled;
+    t.note = ($$(DR + " .pn-dock-more-sec")[1]?.querySelector(".pn-dock-more-sh .pn-fine") || {}).textContent || null;
+    memo?.dispatchEvent(new MouseEvent("mouseenter")); await sleep(20); t.desc = descNow();
+    memo?.click(); await sleep(250);
+    t.closed = !$(DR); t.calls = window.__attach.slice();
+  } catch (e) { R.errT = String(e && e.stack || e); }
+
+  // ── K — 지식은 그 칸 안에서 읽는다(원준 10-05 «오른쪽에서 칸 튀어나오듯이 … 하지말고 그냥 곁칸에서 마크다운 이쁘게») ──
+  try {
+    const kn = {}; R.k = kn;
+    const part = () => $('#app .pn-pane[data-zone="side"] .pn-kn');
+    //  K0 연결된 지식이 없으면 안내 — 첫 그림부터(빈 서명이 첫 그림을 막던 옛 결함)
+    fresh(); window.__kn = { required: [], produced: [] }; await mount();
+    await clk(tabBtn("side", "지식")); await sleep(60);
+    kn.K0 = !!part() && !!$(".pn-empty", part()) && /연결된 지식이 아직 없어요/.test(part().textContent);
+    fresh();
+    const longTail = "가".repeat(6200) + " 끝 문장 표식";
+    window.__kn = {
+      required: [{ name: "kn-a", title: "as-built(#4443): 문서 A — 긴 설명이 붙은 원 제목", type: "decision" }],
+      produced: [{ name: "kn-b", title: "문서 B" }, { name: "kn-err", title: "못 읽는 문서" }, { name: "kn-slow", title: "느린 문서" },
+        { name: "kn-md", title: "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**" },
+        { name: "kn-h1", title: "제목 하나" }, { name: "kn-links", title: "링크 모음" }, { name: "kn-live", title: "고쳐지는 문서" },
+        ...Array.from({ length: 30 }, (_, i) => ({ name: "kn-f" + i, title: "채움 문서 " + i }))],
+    };
+    window.__knDocs = {
+      "kn-a": { name: "kn-a", title: "as-built(#4443): 문서 A — 긴 설명이 붙은 원 제목", type: "decision", summary: "문서 A 의 요약입니다.",
+        categories: [{ name: "분류1" }, { name: "분류2" }, { name: "분류3" }], updated_at: new Date(Date.now() - 3 * 3600e3).toISOString(),
+        body_md: "# 문서 A\n\n## 절 하나\n\n- 항목 하나\n- 항목 둘\n\n```\n[[kn-y]]\n```\n\n| 열 | 값 |\n|---|---|\n| a | 1 |\n\n이어 읽기 [[kn-b]] · [[kn-c|라벨 C]] · 코드 `[[kn-x]]` · 주소 [B 로](#/k/kn-b)\n\n" + longTail },
+      "kn-b": { name: "kn-b", title: "문서 B", body_md: "B 본문입니다." },
+      "kn-slow": { name: "kn-slow", title: "느린 문서", body_md: "느림\n\n:::collection type=decision\n:::" },
+      "kn-h1": { name: "kn-h1", title: "제목 하나", body_md: "# 개요 설명\n\n본문" },
+      "kn-links": { name: "kn-links", title: "링크 모음", body_md: "[밖](https://example.com/x) · [메일](mailto:a@b.c) · [여기](#/k/kn-links) · [B](#/k/kn-b)\n\n" + "줄\n\n".repeat(80) },
+      "kn-live": { name: "kn-live", title: "고쳐지는 문서", body_md: "첫 판", updated_at: "2026-10-05T00:00:00Z" },
+      "kn-md": { name: "kn-md", title: "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**", body_md: "본문" },
+    };
+    window.__knDelay = { "kn-slow": 500 };
+    window.__knColl = 0;
+    await mount();
+    const rowOf = (nm) => $$('#app .pn-pane[data-zone="side"] .pn-knrow').find((r) => r.querySelector(".n")?.textContent.trim() === nm) || null;
+    const rd = () => { const p = part(); return { reading: !!p && p.classList.contains("reading"), listShown: !!p && shown($(".pn-knlist", p)), readerShown: !!p && shown($(".pn-knr", p)),
+      title: (p && $(".pn-knr-t", p)?.textContent) || null, back: (p && $(".pn-knr-back", p)?.textContent.trim()) || null }; };
+    const backBtn = async () => { $(".pn-knr-back", part())?.click(); await sleep(40); };
+    await clk(tabBtn("side", "지식")); await waitFor(() => rowOf("문서 A"));
+    const list = $(".pn-knlist", part()); list.scrollTop = 200; kn.listTop0 = list.scrollTop;
+    rowOf("문서 A").click(); await waitFor(() => $(".pn-knr-md", part()));
+    const p = part();
+    kn.K1 = { ...rd(), modal: !!document.querySelector(".pn-modal, .pn-modal-back") };
+    const md = $(".pn-knr-md", p);
+    kn.K2 = { full: $(".pn-knr-full", p)?.textContent || null, meta: $$(".pn-knr-meta > *", p).map((n) => n.textContent), sum: $(".pn-knr-sum", p)?.textContent || null,
+      h2: !!md && $$(".md-h2", md).map((n) => n.textContent).includes("절 하나"), list: !!md && !!$(".md-list", md), pre: !!md && !!$(".md-pre", md), table: !!md && !!$(".md-table", md),
+      name: $(".pn-knr-name", p)?.textContent || null, open: $(".pn-knr-open", p)?.getAttribute("href") || null, mdCls: md ? md.className : null };
+    kn.K3 = !!md && !$$(".md-h1", md).some((n) => n.textContent.includes("문서 A"));
+    //  K5s 앞 문서의 스크롤 자리 — A 를 900 까지 굴리고 링크로 B → 뒤로 오면 900
+    kn.K4 = { tail: !!md && md.textContent.includes("끝 문장 표식"), cut: /여기까지만/.test(p.textContent) };
+    kn.K6 = { links: md ? $$("a", md).map((a) => [a.getAttribute("href"), a.textContent]) : [],
+      codeKept: !!md && $$("code", md).some((c) => c.textContent.includes("[[kn-x]]")), preKept: !!md && $$(".md-pre", md).some((c) => c.textContent.includes("[[kn-y]]")) };
+    //  K5 본문의 [[kn-b]] 링크 — 주소는 그대로, 그 자리에서 B · 뒤로는 한 칸씩
+    const hash0 = location.hash;
+    $(".pn-knr-scroll", part()).scrollTop = 900; kn.K5s0 = $(".pn-knr-scroll", part()).scrollTop;
+    md && $$("a", md).find((a) => a.getAttribute("href") === "#/k/kn-b")?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    await waitFor(() => rd().title === "문서 B");
+    kn.K5b = { ...rd(), hashSame: location.hash === hash0 };
+    await backBtn(); await waitFor(() => rd().title === "문서 A"); kn.K5a = rd(); kn.K5s = $(".pn-knr-scroll", part()).scrollTop;
+    //  K7 목록 자리 — 크롬은 display:none 을 지나도 자리를 지키므로, 자리를 잃은 상황을 손으로 만든 뒤 돌아온다
+    { const L = $(".pn-knlist", part()); L.style.display = "block"; L.scrollTop = 0; L.style.removeProperty("display"); }
+    await backBtn(); kn.K5list = rd();
+    kn.K7 = $(".pn-knlist", part()).scrollTop;
+    //  K8 켜진 지식 탭 다시 누르기 — 읽던 중 → 목록 · 목록 → 맨 위
+    rowOf("문서 A").click(); await waitFor(() => rd().reading && rd().title === "문서 A");
+    await clk(tabBtn("side", "지식")); kn.K8a = rd();
+    await clk(tabBtn("side", "지식")); kn.K8b = $(".pn-knlist", part()).scrollTop;
+    //  K9 마우스 뒤로 단추
+    rowOf("문서 B").click(); await waitFor(() => rd().title === "문서 B"); kn.K9pre = rd().reading;
+    part().dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 3 })); await sleep(60);
+    kn.K9 = rd();
+    //  K10 불러오기 실패(서버 500)
+    rowOf("못 읽는 문서").click(); await waitFor(() => $(".pn-knr-err", part()));
+    kn.K10 = { err: $(".pn-knr-err", part())?.textContent || null, href: $(".pn-knr-err a", part())?.getAttribute("href") || null };
+    await backBtn();
+    //  K11 느린 문서 → 곧바로 목록 → B: B 가 남는다 · 느린 문서 → 목록에 머물면 늦은 응답이 아무것도 안 연다
+    rowOf("느린 문서").click(); await sleep(30); await backBtn();
+    rowOf("문서 B").click(); await sleep(700); kn.K11 = rd();
+    await backBtn();
+    rowOf("느린 문서").click(); await sleep(30); await backBtn(); await sleep(700);
+    kn.K11b = { ...rd(), readerKids: $(".pn-knr", part()).children.length, coll: window.__knColl };
+    //  K12 우클릭 «여기서 읽기» — 배선(mountCtxMenus)은 main.ts 몫이라 여기서 이 마운트의 모듈로 건다
+    const unCtx = window.__PN.mountCtxMenus(document.body, {});
+    rowOf("문서 B").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 60, clientY: 60 })); await sleep(80);
+    const item = $$(".pn-ctx .pn-ctx-i, .pn-ctx button").find((x) => x.textContent.trim().startsWith("여기서 읽기"));
+    kn.K12item = !!item; item?.click(); await waitFor(() => rd().title === "문서 B"); kn.K12 = rd(); unCtx();
+    //  K16 제목의 마크다운 강조 표식 · 표식을 뗀 자리의 «이름 : 설명» — 목록 줄과 읽기 머리 모두 글자로
+    await backBtn();
+    const mdRow = rowOf("원인·수정: 이름 굵게 · 코드");
+    kn.K16row = !!mdRow;
+    mdRow?.click(); await waitFor(() => $(".pn-knr-full", part()));
+    const fullEl = $(".pn-knr-full", part());
+    kn.K16 = { title: rd().title, full: fullEl?.textContent || null, tip: fullEl?.getAttribute("title") || null };
+    fullEl?.click(); kn.K16open = !!fullEl && fullEl.classList.contains("open");
+    //  K17 초점 — 줄에서 열면 [‹] 로(누른 줄은 숨는다) · [‹] 로 돌아오면 그 문서 줄로
+    await backBtn();
+    const fRow = rowOf("문서 B"); fRow.focus(); fRow.click(); await waitFor(() => rd().title === "문서 B" && $(".pn-knr-md", part()));
+    kn.K17open = document.activeElement?.classList.contains("pn-knr-back") || false;
+    $(".pn-knr-back", part()).click(); await sleep(40);
+    kn.K17back = document.activeElement?.getAttribute?.("data-kn") || null;
+    //  K3b 제목과 다른 맨 앞 H1 은 남는다(긴 설명이 본문 첫 헤딩일 수 있다)
+    await backBtn(); rowOf("제목 하나").click(); await waitFor(() => $(".pn-knr-md", part()));
+    kn.K3b = $$(".pn-knr-md .md-h1", part()).map((n) => n.textContent);
+    //  K18 가로채지 않는 것 — 바깥 주소 · 메일 · 위키 단추 · 보조키는 그대로 둔다(문서 바닥에서 기록하고 실제 이동만 막는다) · 같은 문서 링크는 맨 위로만
+    await backBtn(); rowOf("링크 모음").click(); await waitFor(() => $(".pn-knr-md", part()));
+    const rec = []; const onDoc = (e) => { const a = e.target.closest?.("a[href]"); if (a) { rec.push([a.getAttribute("href") + (e.ctrlKey ? " +ctrl" : ""), e.defaultPrevented]); e.preventDefault(); } };
+    document.addEventListener("click", onDoc);
+    const A = (h) => $$(".pn-knr-md a", part()).find((a) => a.getAttribute("href") === h);
+    const hit = (a, ctrl = false) => a?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ctrlKey: ctrl }));
+    kn.K18ext = { target: A("https://example.com/x")?.getAttribute("target") || null, rel: A("https://example.com/x")?.getAttribute("rel") || null };
+    hit(A("https://example.com/x")); hit(A("mailto:a@b.c")); hit($(".pn-knr-open", part())); hit(A("#/k/kn-b"), true); await sleep(30);
+    kn.K18keep = rd().title;
+    $(".pn-knr-scroll", part()).scrollTop = 300; hit(A("#/k/kn-links")); await sleep(30);
+    kn.K18self = { title: rd().title, back: rd().back, top: $(".pn-knr-scroll", part()).scrollTop };
+    hit(A("#/k/kn-b")); await waitFor(() => rd().title === "문서 B");
+    kn.K18 = rec.slice(); kn.K18follow = rd().title;
+    document.removeEventListener("click", onDoc);
+    //  K19 열어 둔 문서가 서버에서 고쳐지면 — 다음 확인(30초 간격 · 셸 8초 틱)에 보던 자리를 지키며 새 판으로
+    await backBtn(); await backBtn(); rowOf("고쳐지는 문서").click(); await waitFor(() => $(".pn-knr-md", part()));
+    kn.K19a = $(".pn-knr-md", part()).textContent;
+    window.__knDocs["kn-live"] = { ...window.__knDocs["kn-live"], body_md: "둘째 판", updated_at: "2026-10-05T01:00:00Z" };
+    const realNow = Date.now; Date.now = () => realNow() + 31000;
+    try { await waitFor(() => /둘째 판/.test($(".pn-knr-md", part())?.textContent || ""), 9500); } finally { Date.now = realNow; }
+    kn.K19b = $(".pn-knr-md", part())?.textContent || null; kn.K19reading = rd().reading;
+    //  K15 떠 있는 독 — 독 높이(--pn-dock-b)만큼 읽기 스크롤 끝에 빈자리가 선다
+    if (!$(".pn-knr-scroll", part())) { await backBtn(); rowOf("문서 B")?.click(); await waitFor(() => $(".pn-knr-scroll", part())); }   // 앞 행이 깨져도 이 행은 제 힘으로 잰다
+    zone("side").style.setProperty("--pn-dock-b", "37px"); await sleep(20);
+    kn.K15 = getComputedStyle($(".pn-knr-scroll", part()), "::after").height;
+    zone("side").style.removeProperty("--pn-dock-b");
+    window.__kn = null;
+  } catch (e) { R.errK = String(e && e.stack || e); }
 
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -224,18 +540,38 @@ const J = (v) => JSON.stringify(v);
 const check = (cond, n, got) => { if (cond) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL  ${n} — 실제 ${J(got)}`); } };
 const down = (b) => !!b && !b.pane && b.split === false && !b.col;       // 칸 · 경계선 · 가운데 열 모두 «없음»
 const up = (b) => !!b && b.pane && b.split === true && b.col;
-for (const k of ["errA", "errM", "errR", "errH", "errI", "fatal"]) if (R[k]) { fail++; console.error(`FAIL  장면이 던졌다(${k}) — ${R[k].split("\n")[0]}`); }
-const a = R.a || {}, m = R.m || {}, r = R.r || {}, h = R.h || {}, i = R.i || {};
+for (const k of ["errA", "errB", "errM", "errR", "errH", "errI", "errD", "errT", "errK", "fatal"]) if (R[k]) { fail++; console.error(`FAIL  장면이 던졌다(${k}) — ${R[k].split("\n")[0]}`); }
+const kn = R.k || {};
+const a = R.a || {}, b = R.b || {}, m = R.m || {}, r = R.r || {}, h = R.h || {}, i = R.i || {}, d = R.d || {}, t = R.t || {};
 
-check(J(a.store0) === J({ bottom: [], act: null, seeded: { tasks: 1, bottom: 1 } }) && down(a.b0), "A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다 · 옛 기본 걷기 표식", { store: a.store0, b: a.b0 });
-check(a.clickOpen && a.pickHead === "아래 칸에 넣을 것을 고르세요." && down(a.b1), "A2 «아래 칸 열기» — 비었으면 빈 칸을 펴지 않고 넣을 것부터 고른다", { head: a.pickHead, b: a.b1 });
-check(a.picked && up(a.b2) && J(a.bottomTabs2) === J(["타임라인"]), "A3 고른 것이 아래 칸에 서야 아래 칸이 열린다", { b: a.b2, tabs: a.bottomTabs2 });
-check(down(a.b3) && a.reopenHead === null && up(a.b4), "A4 ✕ 로 닫은 뒤 «아래 칸 열기» — 내용이 있으니 고르기 없이 연다", { closed: a.b3, head: a.reopenHead, b: a.b4 });
-check(down(a.b5) && a.emptyHead === "아래 칸에 넣을 것을 고르세요.", "A5 마지막 탭을 닫으면 빈 칸이 남지 않고, 다시 열기는 고르기부터", { b: a.b5, head: a.emptyHead });
-check(Array.isArray(a.footVisible) && !a.footVisible.includes("아래 칸 열기") && a.footVisible.includes("기본 배치로 되돌리기"), "A6 아래 칸이 보이는 동안 «아래 칸 열기» 가 없다", a.footVisible);
-check(!!a.reset && down(a.reset.b) && J(a.reset.bottom) === "[]" && J(a.reset.side) === J(["자료", "프로젝트", "지식", "앱"]), "A7 «기본 배치로 되돌리기» — 아래 칸이 비고 숨는다", a.reset);
-check(down(a.remembered) && a.sendRow && !!a.afterSend && up(a.afterSend.b) && J(a.afterSend.bottom) === J(["지식"]), "A8 다른 세션의 «열림» 기억 + 빈 내용 → 안 올라온다 · «아래 칸으로 보내기» 하면 그 순간 선다", { remembered: a.remembered, send: a.afterSend });
-check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge", "apps"]), "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · 곁칸은 손대지 않는다", m.store);
+check(J(a.store0) === J({ bottom: [], act: null, seeded: { tasks: 1, bottom: 1, apps: 1 } }) && down(a.b0) && J(a.side0) === J(["자료", "프로젝트", "지식"]), "A1 처음 쓰는 브라우저: 아래 칸은 비고 숨었다 · 기본 곁칸에 «앱» 이 없다 · 한 번 걷기 표식", { store: a.store0, b: a.b0, side: a.side0 });
+check(J(a.foot0) === J(["기본 배치로"]), "A2 [＋] 발치엔 «기본 배치로» 만 — «아래 칸 열기» 가 없다", a.foot0);
+check(Array.isArray(a.menu) && a.menu.some((x) => /닫기/.test(x)) && !a.menu.some((x) => /아래 칸으로/.test(x)), "A3 탭 우클릭에 «아래 칸으로 보내기» 가 없다", a.menu);
+check(!!a.legacy && up(a.legacy.b) && a.legacy.add === false && J(a.legacy.tabs) === J(["타임라인", "웹"]), "A4 옛 배치의 아래 칸 탭은 그대로 보이되 그 탭 줄엔 [＋] 가 없다", a.legacy);
+check(/사이드바로 보내기$/.test(a.sendLabel || "") && !!a.afterSend && a.afterSend.side.includes("웹") && J(a.afterSend.bottom) === J(["타임라인"]) && up(a.afterSend.b), "A5 아래 칸의 옛 탭은 우클릭으로 곁칸에 보낼 수 있다", { label: a.sendLabel, after: a.afterSend });
+check(down(a.lastClosed), "A6 아래 칸의 마지막 탭을 닫으면 빈 칸이 남지 않는다", a.lastClosed);
+check(!!a.reset && down(a.reset.b) && J(a.reset.bottom) === "[]" && J(a.reset.side) === J(["자료", "프로젝트", "지식"]), "A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 자료 · 프로젝트 · 지식", a.reset);
+check(down(a.remembered), "A8 다른 세션의 «열림» 기억 + 빈 내용 → 아무것도 안 올라온다", a.remembered);
+const B0 = ["timeline", "web", "editor"];
+check(!!b.start && J(b.start.bottom) === J(B0) && up(b.start.up) && J(b.start.side) === J(["files", "knowledge"]), "B0 (배선) 옛 배치 — 아래 칸에 타임라인 · 웹 · 뷰어가 보인다", b.start);
+check(b.moreItem === true && !!b.B1 && J(b.B1.bottom) === J(B0) && J(b.B1.side) === J(["files", "knowledge", "web#2"]) && b.B1.actSide === "web#2", "B1 아래 칸 «웹 하나 더» — 새 웹 탭은 곁칸에 서고 켜진다 · 아래 칸 그대로", { item: b.moreItem, B1: b.B1 });
+check(!!b.B3 && J(b.B3.bottom) === J(B0) && b.B3.side.length === 4 && /^editor#\d+$/.test(b.B3.side[3]) && b.B3.actSide === b.B3.side[3], "B3 열린 아래 칸에 뷰어가 있어도 다른 파일의 새 뷰어는 곁칸에 선다", b.B3);
+check(!!b.B3b && J(b.B3b.bottom) === J(B0) && J(b.B3b.side) === J(b.B3 && b.B3.side) && b.B3b.actBottom === "editor", "B3b 같은 파일을 다시 열면 아래 칸의 그 뷰어를 켠다 — 새 탭 없음 · 옮기지 않음", b.B3b);
+check(b.litToBottom === false && !!b.B2 && J(b.B2.bottom) === J(B0) && b.B2.side.includes("knowledge"), "B2 곁칸 탭을 끌어 아래 칸 줄에 놓아도 아무 일 없다 — 놓기 표시도 안 뜬다", { lit: b.litToBottom, B2: b.B2 });
+check(b.litToSide === true && !!b.B2w && J(b.B2w.bottom) === J(["timeline", "editor"]) && b.B2w.side.includes("web"), "B2w (배선) 아래 칸의 옛 탭은 끌어서 곁칸으로 옮길 수 있다 — 끌기 장치가 실제로 돈다", { lit: b.litToSide, B2w: b.B2w });
+check(!!b.B4closed && J(b.B4closed.bottom) === J(["editor"]) && b.reopen1 === true && !!b.B4 && J(b.B4.bottom) === J(["editor"]) && b.B4.side.at(-1) === "timeline" && b.B4.actSide === "timeline",
+  "B4 아래 칸에서 닫은 탭을 다시 열면 곁칸 맨 끝으로 돌아온다 · 아래 칸 다른 탭 그대로", { closed: b.B4closed, B4: b.B4 });
+check(b.lastKey === "editor" && !!b.B4bClosed && down(b.B4bClosed.up) && b.reopen2 === true && !!b.B4b && J(b.B4b.bottom) === "[]" && down(b.B4b.up) && b.B4b.side.at(-1) === "editor" && b.B4b.actSide === "editor",
+  "B4b 마지막 탭(경계)을 닫고 다시 열어도 아래 칸은 다시 서지 않는다 — 곁칸 맨 끝으로", { closed: b.B4bClosed, B4b: b.B4b });
+check(!!b.B3c0 && J(b.B3c0.side) === J(["files"]) && down(b.B3c0.up) && !!b.B3c && J(b.B3c.bottom) === J(["timeline"]) && down(b.B3c.up) && J(b.B3c.side) === J(["files", "editor"]) && b.B3c.actSide === "editor",
+  "B3c 닫힌 아래 칸에 그 파일의 뷰어가 있으면 펼치지 않고 그 뷰어만 곁칸으로 데려와 켠다(남은 타임라인은 닫힌 칸에 그대로)", { before: b.B3c0, after: b.B3c });
+check(!!b.B50 && J(b.B50.side) === J(["files", "editor#2"]) && b.reopen5 === true && !!b.B5 && down(b.B5.up) && J(b.B5.bottom) === J(["timeline"]) && b.B5.side.includes("editor") && b.B5.actSide === "editor" && !b.B5.side.includes("editor#2"),
+  "B5 다시 열 탭과 같은 파일의 뷰어가 닫힌 아래 칸에 있으면 — 펼치지 않고 그 뷰어를 곁칸으로 데려와 켠다", { before: b.B50, after: b.B5 });
+check(!!b.B6 && down(b.B6.up) && J(b.B6.bottom) === "[]" && J(b.B6.side) === J(["files", "knowledge", "timeline", "web"]) && !!b.B6store && J(b.B6store.p9) === "[]" && J(b.B6store.p7) === J(["timeline", "web"]),
+  "B6 저장한 적 없는 프로젝트가 옛 아래 칸을 물려받으면 — 아래 칸은 서지 않고 그 탭은 곁칸 뒤에 · 원래 프로젝트(p7)는 그대로", { ui: b.B6, store: b.B6store });
+check(b.N1narrow === true && !!b.N1 && J(b.N1.bottom) === J(["timeline", "editor"]) && b.N1.side.length === 2 && /^editor#\d+$/.test(b.N1.side[1]),
+  "N1 좁은 폭 — 저장된 아래 칸은 그대로, 새 뷰어는 곁칸 배치에 적힌다", { narrow: b.N1narrow, N1: b.N1 });
+check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["files", "knowledge"]) && m.store.seeded?.apps === 1, "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다", m.store);
 check(down(m.b), "M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다", m.b);
 check(m.same === true && J(m.afterMarker) === J(["timeline"]) && !!m.p8 && up(m.p8.b) && J(m.p8.tabs) === J(["타임라인"]), "M3 한 번 걷으면 저장소를 다시 쓰지 않는다 · 표식 뒤 둔 타임라인 · 열린 p8 은 그대로", { same: m.same, afterMarker: m.afterMarker, p8: m.p8 });
 check(r.in === "자료/docs" && r.R1 === "자료" && r.R1back === "자료/docs", "R1 켜진 자료 탭을 다시 누르면 맨 위 폴더 · «뒤로» 로 하위 폴더에 돌아간다", { in: r.in, R1: r.R1, back: r.R1back });
@@ -246,6 +582,53 @@ check(r.R7 === "프로젝트", "R7 «처음으로» 가 없는 탭은 다시 눌
 check(h.H1 === "자료", "H1 머리줄 [자료] — 보이고 켜져 있으면 맨 위 폴더", h.H1);
 check(h.collapsed === true && !!h.H2a && h.H2a.side && h.H2a.crumb === "자료/docs" && !!h.H2b && h.H2b.act === "자료" && h.H2b.crumb === "자료/docs", "H2 곁칸이 접혀 있거나 다른 탭이 켜져 있으면 보이게만(폴더 그대로)", { a: h.H2a, b: h.H2b });
 check(i.count === 2 && i.first === "자료" && i.second === "자료/docs", "I1 자료가 둘이면 누른 탭의 자료만 맨 위로", i);
+const WANT = ["자료", "세션 파일", "지식", "프로젝트", "타임라인", "리브", "지난 세션", "웹", "미리보기"];
+check(J(d.sideTabs) === J(["자료"]) && !!d.open && d.open.has && d.open.focus && d.open.top >= 0 && d.open.top <= 12 && d.open.inPane, "AD1 [＋] = 앱 서랍 — [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점", d.open);
+const s1 = (d.secs || [])[0] || { tiles: [] }, s2 = (d.secs || [])[1] || { tiles: [] };
+check(J((d.secs || []).map((x) => x.t)) === J(["사이드바 앱", "이 세션에 붙이기"]) && J(s1.tiles.map((x) => x.n)) === J(WANT) && s1.tiles.every((x) => x.gi && !x.off)
+  && s1.tiles.filter((x) => x.plus).map((x) => x.n).join() === "자료" && s1.tiles[0].sel && s1.tiles.filter((x) => x.sel).length === 1 && /^자료 하나 더/.test(d.desc0 || ""),
+  "AD2 묶음 둘 — «사이드바 앱» 아홉(독과 같은 타일 · 이미 열린 자료엔 ＋ · 첫 타일이 Enter 의 과녁 · 설명 한 줄)", { secs: d.secs && d.secs.map((x) => [x.t, x.tiles.map((y) => y.n + (y.plus ? "+" : "") + (y.sel ? "*" : "") + (y.off ? "~" : ""))]), desc: d.desc0 });
+check(J(s2.tiles.map((x) => x.n)) === J(["메모", "보고서 점검표"]) && s2.tiles.every((x) => x.off && !x.sel) && s2.note === "세션을 열면 붙일 수 있어요",
+  "AD2b «이 세션에 붙이기» — 화면 · 데이터가 있는 설치 앱만(시스템 · ai-session · 도구만 · 꺼짐 제외) · 세션이 없으면 흐리고 고를 수 없다", s2);
+check(d.noNewTab === true, "AD3 «새 탭으로 여는 앱» 도, «앱» 칸도 없다 — 여기서 여는 것은 모두 사이드바에 선다");
+check(!!d.typed && J(d.typed.tiles) === J(["타임라인*"]) && /^타임라인/.test(d.typed.desc || "") && !!d.entered && d.entered.closed && d.entered.tabs.includes("타임라인") && d.entered.act === "타임라인",
+  "AD4 치면 거르고 Enter 로 연다 — 그 칸에 탭 · 서랍 닫힘", { typed: d.typed, entered: d.entered });
+check(d.imeKept === true, "AD5 한글 조합 중의 Enter 는 열지 않는다(글자 확정)");
+check(!!d.none && d.none.tiles === 0 && d.none.desc === "「zzz」에 맞는 앱이 없어요.", "AD6 없는 이름 — 타일 없이 안내 한 줄", d.none);
+check(!!d.arrows && d.arrows.first === "자료" && d.arrows.now === "세션 파일" && /^세션 파일/.test(d.arrows.desc || "") && d.backToInput === true, "AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸", { arrows: d.arrows, back: d.backToInput });
+check(/^웹/.test(d.hover || "") && !!d.more && d.more.closed && d.more.tabs.includes("자료 2"), "AD8 올리면 그 앱의 설명 · 이미 열린 자료를 누르면 «자료 2» 가 선다", { hover: d.hover, more: d.more });
+check(d.esc === true, "AD9 Esc 로 닫힌다");
+check(t.enabled === true && t.note === "AI 도 같이 써요 · 누르면 사이드바에 붙어요" && /^메모/.test(t.desc || "") && t.closed === true && J(t.calls) === J([{ sid: "s1", body: { app_id: "memo" } }]),
+  "T1 세션이 있으면 «이 세션에 붙이기» 를 고른다 — 누르면 그 세션에 붙이기 요청이 나가고 서랍이 닫힌다", t);
+check(kn.K0 === true, "K0 연결된 지식이 없으면 첫 그림부터 안내가 선다", kn.K0);
+check(!!kn.K1 && kn.K1.reading && !kn.K1.listShown && kn.K1.readerShown && !kn.K1.modal && kn.K1.title === "문서 A", "K1 지식 줄을 누르면 그 칸 안에서 읽는다 — 앱 위에 시트 · 덮개가 없다 · 목록은 숨는다", kn.K1);
+check(!!kn.K2 && kn.K2.full === "as-built(#4443): 문서 A — 긴 설명이 붙은 원 제목" && J(kn.K2.meta.slice(0, 4)) === J(["필요", "decision", "분류1", "분류2"]) && kn.K2.meta.length === 5 && /갱신$/.test(kn.K2.meta[4] || "")
+  && kn.K2.sum === "문서 A 의 요약입니다." && kn.K2.h2 && kn.K2.list && kn.K2.pre && kn.K2.table && kn.K2.name === "kn-a" && kn.K2.open === "#/k/kn-a" && /\bmd-rendered\b/.test(kn.K2.mdCls || ""),
+  "K2 짧은 제목 · 원 제목 · 메타(필요 · 유형 · 분류 2개 · 갱신) · 요약 · 본문(위키와 같은 렌더러 · 모양) · 이름 · 위키에서 열기", kn.K2);
+check(kn.K3 === true, "K3 본문 첫 줄의 H1(제목 되풀이)은 안 보인다");
+check(J(kn.K3b) === J(["개요 설명"]), "K3b 제목과 다른 맨 앞 H1 은 남는다(긴 설명이 본문 첫 헤딩일 수 있다)", kn.K3b);
+check(!!kn.K4 && kn.K4.tail && !kn.K4.cut, "K4 6000자 넘는 본문도 끝까지 — 잘림 안내 없음", kn.K4);
+check(!!kn.K6 && J(kn.K6.links) === J([["#/k/kn-b", "kn-b"], ["#/k/kn-c", "라벨 C"], ["#/k/kn-b", "B 로"]]) && kn.K6.codeKept && kn.K6.preKept, "K6 [[이름]] · [[이름|라벨]] 은 링크 · 코드 안의 [[…]] 는 글자 그대로", kn.K6);
+check(!!kn.K5b && kn.K5b.title === "문서 B" && kn.K5b.hashSame && kn.K5b.back === "뒤로" && !!kn.K5a && kn.K5a.title === "문서 A" && kn.K5a.back === "지식" && !!kn.K5list && !kn.K5list.reading && kn.K5list.listShown,
+  "K5 본문 링크는 주소를 안 바꾸고 그 자리에서 이어 읽는다 · 뒤로는 한 칸씩 · 마지막이면 목록", { b: kn.K5b, a: kn.K5a, list: kn.K5list });
+check(kn.K5s0 >= 890 && Math.abs((kn.K5s || 0) - kn.K5s0) <= 2, "K5s 뒤로 오면 앞 문서의 스크롤 자리 그대로", { before: kn.K5s0, after: kn.K5s });
+check(kn.listTop0 > 0 && kn.K7 === kn.listTop0, "K7 목록에 돌아오면 보던 스크롤 자리 그대로(브라우저가 자리를 잃어도)", { before: kn.listTop0, after: kn.K7 });
+check(!!kn.K8a && !kn.K8a.reading && kn.K8a.listShown && kn.K8b === 0, "K8 켜진 지식 탭 다시 누르기 — 읽던 중이면 목록 · 목록이면 맨 위", { a: kn.K8a, top: kn.K8b });
+check(kn.K9pre === true && !!kn.K9 && !kn.K9.reading && kn.K9.listShown, "K9 마우스 뒤로 단추 — 읽던 문서에서 한 칸 뒤로", { pre: kn.K9pre, k9: kn.K9 });
+check(!!kn.K10 && /불러오지 못했어요/.test(kn.K10.err || "") && kn.K10.href === "#/k/kn-err", "K10 불러오기 실패 — 안내와 위키에서 열기", kn.K10);
+check(!!kn.K11 && kn.K11.reading && kn.K11.title === "문서 B" && !!kn.K11b && !kn.K11b.reading && kn.K11b.readerKids === 0 && kn.K11b.coll === 0,
+  "K11 늦게 온 응답은 지금 화면을 덮지 않고, 버려진 문서는 그리지도 않는다(본문의 모음 조회 0건)", { k11: kn.K11, k11b: kn.K11b });
+check(kn.K12item === true && !!kn.K12 && kn.K12.reading && kn.K12.title === "문서 B", "K12 우클릭 «여기서 읽기» — 그 칸 안에서 읽는다", kn.K12);
+check(kn.K16row === true && !!kn.K16 && kn.K16.title === "원인·수정: 이름 굵게 · 코드" && kn.K16.full === "원인·수정(#9, 2026-09-12): 이름 굵게 · 코드 — 긴 설명 강조"
+  && kn.K16.tip === "원인·수정(#9, 2026-09-12): 이름 **굵게** · `코드` — 긴 설명 **강조**" && kn.K16open === true,
+  "K16 제목의 마크다운 강조 표식(** · `)은 글자로 안 선다 · «이름 : 설명» 띄어쓰기 · 원 제목은 눌러 펼친다(전문은 title)", { row: kn.K16row, k16: kn.K16, open: kn.K16open });
+check(!!kn.K18ext && kn.K18ext.target === "_blank" && /noopener/.test(kn.K18ext.rel || "") && kn.K18keep === "링크 모음"
+  && J(kn.K18) === J([["https://example.com/x", false], ["mailto:a@b.c", false], ["#/k/kn-links", false], ["#/k/kn-b +ctrl", false], ["#/k/kn-links", true], ["#/k/kn-b", true]])
+  && !!kn.K18self && kn.K18self.title === "링크 모음" && kn.K18self.back === "지식" && kn.K18self.top === 0 && kn.K18follow === "문서 B",
+  "K18 바깥 주소(새 탭) · 메일 · 위키 단추 · 보조키는 가로채지 않는다 · 같은 문서 링크는 맨 위로만 · 본문의 지식 링크만 이 칸에서 연다", { ext: kn.K18ext, rec: kn.K18, self: kn.K18self, keep: kn.K18keep, follow: kn.K18follow });
+check(/첫 판/.test(kn.K19a || "") && /둘째 판/.test(kn.K19b || "") && kn.K19reading === true, "K19 열어 둔 문서가 고쳐지면 다음 확인에 새 판으로 — 읽기 화면에 머문 채", { a: kn.K19a, b: kn.K19b, reading: kn.K19reading });
+check(kn.K17open === true && kn.K17back === "kn-b", "K17 초점 — 줄에서 열면 [‹] 에 · 돌아오면 그 문서 줄에(숨는 칸에 초점이 남지 않는다)", { open: kn.K17open, back: kn.K17back });
+check(kn.K15 === "37px", "K15 떠 있는 독이 마지막 줄을 가리지 않는다 — 읽기 스크롤 끝에 독 높이만큼 빈자리", kn.K15);
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "E1 페이지 오류 없음(마운트 · 그리기)", R.pageErrors);
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);

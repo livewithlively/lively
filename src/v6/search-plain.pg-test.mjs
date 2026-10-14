@@ -122,6 +122,26 @@ try {
     chk("S9 프로젝트 grep: 이름에 든 옛 것이 본문만 스친 새 것보다 먼저(LIMIT 1)", tf[0]?.id === pName, JSON.stringify(tf.map((r) => r.id)) + ` desc=${pDesc}`);
   }
 
+  // ── S11 번호로 찾기(#4530 검색 품질) — 화면 검색(plain)은 그 번호의 식구(태스크·서브태스크 · 바로 위)도 함께 준다 ──
+  //  원준 2026-10-05: «프로젝트나 세션의 4자리 … 검색하면 어떤게 나올지는 너가 알아서 좀 잘». 종전엔 그 번호 한 줄만 나왔다.
+  //  ⚠ 이름에 숫자를 넣지 않는다 — 시험 DB 의 번호는 한두 자리라, 이름에 숫자가 있으면 «글자로 우연히 맞은 것» 과 가를 수 없다.
+  {
+    const fam = await mkP("project", "zqf 번호로 부를 프로젝트");
+    const famT = await mkP("task", "zqf 그 태스크", { parent: fam });
+    const famS = await mkP("subtask", "zqf 그 서브태스크", { parent: famT });
+    const other = await mkP("project", "zqf 남의 프로젝트", { description: `본문에 ${fam} 번호가 적혀 있다`, updatedAt: NEW });
+    const byProj = (await ps.searchProjects(String(fam), { plain: true, limit: 100 })).map((r) => r.id);
+    chk("S11 프로젝트 번호 → 그 프로젝트가 맨 위 · 그 태스크와 서브태스크도 · 본문에 번호가 적힌 다른 프로젝트도", byProj[0] === fam && byProj.includes(famT) && byProj.includes(famS) && byProj.includes(other), JSON.stringify(byProj));
+    const byTask = (await ps.searchProjects("#" + famT, { plain: true, limit: 100 })).map((r) => r.id);
+    chk("S11 태스크 번호(#붙여도) → 그 태스크가 맨 위 · 바로 위 프로젝트와 그 서브태스크도", byTask[0] === famT && byTask.includes(fam) && byTask.includes(famS), JSON.stringify(byTask));
+    chk("S11 count 도 같은 술어", (await ps.countProjectGrep(String(fam), { plain: true })) === byProj.length, JSON.stringify(byProj));
+    const agent = (await ps.searchProjects(String(fam), { limit: 100 })).map((r) => r.id);
+    chk("S11 에이전트 grep(plain 아님)은 종전 그대로 — 번호의 주인은 찾고 식구는 끌어오지 않는다", agent.includes(fam) && !agent.includes(famT) && !agent.includes(famS), JSON.stringify(agent));
+    await itemsPool.query(`UPDATE project SET trashed_at=now() WHERE id=$1`, [fam]);
+    const gone = (await ps.searchProjects(String(famT), { plain: true, limit: 100 })).map((r) => r.id);
+    chk("S11 버린 프로젝트의 태스크는 번호로도 안 나온다", !gone.includes(famT) && !gone.includes(fam) && !gone.includes(famS), JSON.stringify(gone));
+  }
+
   // ── S10 유사(저장된 벡터 · 임베딩 off) ──
   {
     const dimRow = (await itemsPool.query(

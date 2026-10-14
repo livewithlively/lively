@@ -203,6 +203,8 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  활동 시 (box-id, claude session_id)를 보고해 last-write-wins 로 갱신(한 box 안에서 branch·resume·/clear 로 UUID 가
   //  바뀔 수 있으므로 최신만 유지). 복원 시 이 값으로 `claude --resume <uuid>` 정밀 이어받기. null=미상(셸·코덱스·미보고)→picker 폴백.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS claude_session_id TEXT;`);
+  // 대화 uuid 로 그 박스를 찾는 길(#4553 — 기록의 프로젝트 · 지어진 이름을 대화마다 읽는다). 값이 있는 행만 담는다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_state_conv_idx ON org_session_state(claude_session_id) WHERE claude_session_id IS NOT NULL;`);
   // #1746 — 하네스 대화 파일의 절대경로(훅 보고). 대화창이 하네스 무관하게 그 파일을 읽는 근거(harness-io/locate.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS transcript_path TEXT;`);
   // #1059 — **사용자 정상 종료** 표시(exited_at). claude SessionEnd 훅이 reason=prompt_input_exit(/exit·Ctrl-D)·logout
@@ -492,6 +494,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
   //  ⚠ 반드시 org_task DDL **뒤**에 둔다(같은 초기화 안에서 순차 실행이라, 앞에 두면 테이블이 없어 실패한다).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_task_requester_finished_idx ON org_task(requester, finished_at DESC)`);
+  // #4551 — 세션 목록이 판마다 «이 세션이 위탁 워커인가» 를 session_id 로 찾는다(src/node/task-origin.ts taskOriginsBySession).
+  //  위와 같은 사유로 인덱스 없이는 그 조회가 곧 부하다. 배정 전 행(session_id NULL)은 찾을 일이 없어 뺀다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_task_session_idx ON org_task(session_id) WHERE session_id IS NOT NULL`);
 
   // ── org_login_job — 하네스 로그인 **판**(#4012 T13 · #4067). CP 일시 유닛이 CLI 를 돌리고 이 행으로 게이트웨이와 주고받는다.
   //  청/녹 교대·다른 슬롯이 받아도 같은 작업을 보게 DB 에 둔다(게이트웨이 메모리에 두면 교대 한 번에 작업이 사라진다).

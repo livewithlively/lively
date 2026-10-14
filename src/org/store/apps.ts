@@ -5,6 +5,7 @@
 //   저널이 원자성을 대체한다(component 선기록 → 전개 → 실패 시 보상). mintToken 과 같은 client-옵션 패턴.
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
+import { currentTenant } from "../tenant-context.js";
 import { audit, type WriteCtx } from "./audit.js";
 
 type Q = pg.Pool | pg.PoolClient;
@@ -27,6 +28,10 @@ export interface OrgApp {
   /** #4225 누가 이 앱을 고칠 수 있나 — 'all'(구성원 전원, 기본) · 'members'(edit_members 에 든 사람 + 관리자). */
   edit_mode: AppEditMode;
   edit_members: string[];
+  /** #4600 패키지 폴더에 실린 릴리스 판 번호(시더가 적음). 빌트인 아닌 앱은 null. */
+  builtin_version: string | null;
+  /** #4600 지금 서빙 중인 상태 = org_app_version 의 이 판. 판 이력 도입 전 설치는 null. */
+  current_version_no: number | null;
 }
 export type AppEditMode = "all" | "members";
 
@@ -47,21 +52,52 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     updated_by: r.updated_by == null ? null : String(r.updated_by),
     edit_mode: r.edit_mode === "members" ? "members" : "all",
     edit_members: Array.isArray(r.edit_members) ? (r.edit_members as unknown[]).map(String) : [],
+    builtin_version: r.builtin_version == null ? null : String(r.builtin_version),
+    current_version_no: r.current_version_no == null ? null : Number(r.current_version_no),
   };
 }
 
 // ── 설치 직렬화(advisory lock, design R2-5) ────────────────────────────────────
 //  같은 앱의 동시 설치/제거를 직렬화한다(반쯤 전개된 조인을 다른 설치가 덮어쓰지 않게). DB-전역 advisory lock 이라
 //  blue/green 다중 프로세스 사이도 막는다. 락은 **연결 단위**라 전용 client 를 잡아 그 위에서만 lock/unlock 하고,
-//  본 작업(fn)은 풀의 다른 커넥션을 자유로이 쓴다. tenant 는 키에 넣지 않는다(앱 id 만으로 상위집합 직렬화 — 안전).
-export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>): Promise<T> {
-  const client = await itemsPool.connect();
+//  본 작업(fn)은 풀의 다른 커넥션을 자유로이 쓴다.
+//  ★ #4638(2026-10-11 매니지드 전면 정지) — 종전 키는 앱 id 뿐이었고 `pg_advisory_lock` 은 무기한 기다렸다. 공용 DB 에선
+//   모든 테넌트(+롤 마이그레이터)가 같은 키를 다퉈, 유령 세션 하나가 락을 쥔 6분 동안 테넌트별 시딩이 **풀 클라이언트를
+//   쥔 채** 줄을 서 풀 20개를 다 잡았고, 락을 얻은 쪽은 fn 안에서 두 번째 클라이언트를 못 얻어 영구 교착이 됐다.
+//   그래서 ① 키에 테넌트를 넣고(남의 워크스페이스 설치를 기다릴 이유가 없다) ② 기다리는 동안엔 클라이언트를 반납하며
+//   (try-lock 재시도) ③ 상한을 넘기면 던진다(호출부는 이미 비치명 — 다음 시딩·사람의 재시도가 받는다).
+export const APP_INSTALL_LOCK_WAIT_MS = 60_000;
+const APP_INSTALL_LOCK_POLL_MS = 250;
+
+/** 락 키 — 테넌트 컨텍스트가 있으면 그 테넌트로 좁힌다. 컨텍스트 밖(단일 테넌트·부팅)은 종전처럼 앱 id 만. */
+export function appInstallLockKey(appId: string, tenantId: string | null | undefined = currentTenant()?.id): string {
+  return tenantId ? `app-install:${tenantId}:${appId}` : `app-install:${appId}`;
+}
+
+export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>,
+  opts: { waitMs?: number; pollMs?: number } = {}): Promise<T> {
+  const key = appInstallLockKey(appId);
+  const deadline = Date.now() + (opts.waitMs ?? APP_INSTALL_LOCK_WAIT_MS);
+  let client: pg.PoolClient;
+  for (;;) {
+    const c = await itemsPool.connect();
+    let got = false;
+    try {
+      const r = await c.query("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [key]);
+      got = r.rows[0]?.ok === true;
+    } catch (err) { c.release(); throw err; }
+    if (got) { client = c; break; }
+    c.release();   // 기다리는 동안 풀 슬롯을 쥐지 않는다 — 락 보유자가 fn 안에서 쓸 자리를 남긴다
+    if (Date.now() >= deadline) throw new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`);
+    await new Promise((res) => setTimeout(res, opts.pollMs ?? APP_INSTALL_LOCK_POLL_MS));
+  }
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", ["app-install:" + appId]);
     return await fn();
   } finally {
-    try { await client.query("SELECT pg_advisory_unlock(hashtext($1))", ["app-install:" + appId]); } catch { /* 세션 종료 시 자동 해제 */ }
-    client.release();
+    //  풀기에 실패한 연결은 풀에 돌려주지 않고 버린다 — 락을 쥔 채 풀에 남으면 그 세션이 살아 있는 한 락이 안 풀린다.
+    let unlocked = false;
+    try { await client.query("SELECT pg_advisory_unlock(hashtext($1))", [key]); unlocked = true; } catch { /* 아래에서 연결째 버린다 */ }
+    client.release(!unlocked);
   }
 }
 
@@ -209,6 +245,120 @@ export async function pruneUiAssets(appId: string, keep: string[], client?: pg.P
   await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1 AND page_key <> ALL($2::text[])`, [appId, keep]);
 }
 
+/** 이 앱의 UI 자산 전부(html 포함) — 판으로 떠 두거나 패키지 파일을 재구성할 때(#4600). */
+export async function listUiAssetsFull(appId: string): Promise<AppUiAssetRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_ui_asset WHERE app_id=$1 ORDER BY kind, page_key`, [appId]);
+  return r.rows.map((x) => ({ app_id: String(x.app_id), page_key: String(x.page_key), kind: x.kind as "page" | "widget",
+    title: x.title == null ? null : String(x.title), html: String(x.html),
+    content_hash: x.content_hash == null ? null : String(x.content_hash), updated_at: String(x.updated_at) }));
+}
+
+// ── org_app_version — 앱 코드의 판 이력(#4600) ──────────────────────────────────
+//  판 하나 = 파일 묶음 전체(files) + 그때의 매니페스트. 설치가 보존하는 것은 매니페스트·화면뿐이라 되돌리기는 이 묶음으로 한다.
+export type AppVersionOrigin = "builtin" | "member";
+export interface AppVersionMeta {
+  app_id: string; version_no: number; origin: AppVersionOrigin; version: string; content_hash: string | null;
+  note: string | null; saved_by: string | null; saved_at: string;
+}
+export interface AppVersionRow extends AppVersionMeta { manifest: unknown; files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }> }
+
+function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
+  return {
+    app_id: String(x.app_id), version_no: Number(x.version_no), origin: x.origin === "builtin" ? "builtin" : "member",
+    version: String(x.version ?? "0.0.0"), content_hash: x.content_hash == null ? null : String(x.content_hash),
+    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by), saved_at: String(x.saved_at),
+  };
+}
+
+/**
+ * 판을 하나 더 적는다 — 번호는 그 앱의 다음 번호(앱당 1부터). 호출부가 withAppInstallLock 안에서 부른다(번호 경쟁 없음).
+ *  반환 = 새 판 번호.
+ */
+export async function insertAppVersion(
+  appId: string,
+  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null },
+): Promise<number> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at)
+       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now()
+         FROM org_app_version WHERE app_id = $1
+     RETURNING version_no`,
+    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by],
+  );
+  return Number(r.rows[0].version_no);
+}
+
+/**
+ * 「원본 · 릴리스」 판을 **지금 실린 릴리스**로 갱신한다(번호는 그대로) — «원본으로» 되돌릴 때 부른다.
+ *  떠 둔 원본은 처음 고친 날의 릴리스인데, 되돌리기는 폴더의 **지금** 릴리스를 깐다. 둘이 다르면(그 사이 릴리스가 올랐다)
+ *  서빙 중인 내용이 어느 판과도 맞지 않아 판 이력에 «지금» 이 사라지고, 다음 되돌리기가 원본을 한 벌 더 떠 둔다.
+ *  원본 판(origin='builtin')만 고친다 — 구성원 판은 사람이 저장한 그대로여야 한다.
+ */
+export async function refreshOriginVersion(
+  appId: string, versionNo: number,
+  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null },
+): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now()
+      WHERE app_id=$1 AND version_no=$2 AND origin='builtin'`,
+    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 판 목록(파일 제외) — 최신 먼저. */
+export async function listAppVersions(appId: string): Promise<AppVersionMeta[]> {
+  const r = await itemsPool.query(
+    `SELECT app_id, version_no, origin, version, content_hash, note, saved_by, saved_at FROM org_app_version WHERE app_id=$1 ORDER BY version_no DESC`, [appId]);
+  return r.rows.map(rowToVersionMeta);
+}
+
+/** 판 1건(파일 포함) — 되돌리기용. 없으면 null. */
+export async function getAppVersion(appId: string, versionNo: number): Promise<AppVersionRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  if (!x) return null;
+  return { ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [] };
+}
+
+/** 판 여럿 삭제(보관 수 넘긴 구성원 판). 비면 아무것도 안 한다. */
+export async function deleteAppVersions(appId: string, versionNos: number[]): Promise<void> {
+  if (!versionNos.length) return;
+  await itemsPool.query(`DELETE FROM org_app_version WHERE app_id=$1 AND version_no = ANY($2::int[])`, [appId, versionNos]);
+}
+
+/** 워크스페이스 전체 판 묶음(files)의 바이트 합 — 총량 상한 판정(#4600 7d). RLS 가 이 테넌트 행만 센다. */
+export async function appVersionBytesTotal(): Promise<number> {
+  const r = await itemsPool.query(`SELECT COALESCE(SUM(octet_length(files::text)), 0)::bigint AS n FROM org_app_version`);
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** 구성원 판을 오래된 순으로(앱 불문) — 총량 상한을 넘겼을 때 지울 후보. 지금 서빙 중인 판(org_app.current_version_no)은 표시만 하고 호출부가 건너뛴다. */
+export async function listMemberVersionsOldestFirst(): Promise<Array<{ app_id: string; version_no: number; bytes: number; is_current: boolean }>> {
+  const r = await itemsPool.query(
+    `SELECT v.app_id, v.version_no, octet_length(v.files::text)::bigint AS bytes, (a.current_version_no = v.version_no) AS is_current
+       FROM org_app_version v LEFT JOIN org_app a ON a.id = v.app_id
+      WHERE v.origin = 'member'
+      ORDER BY v.saved_at ASC, v.app_id ASC, v.version_no ASC`);
+  return r.rows.map((x) => ({ app_id: String(x.app_id), version_no: Number(x.version_no), bytes: Number(x.bytes ?? 0), is_current: x.is_current === true }));
+}
+
+/** 이 앱의 판 이력 전부 삭제 — 앱 제거 때(빌트인은 제거가 막혀 있어 거의 안 불린다). */
+export async function pruneAllAppVersions(appId: string, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(`DELETE FROM org_app_version WHERE app_id=$1`, [appId]);
+}
+
+/** 패키지 폴더에 실린 릴리스 판 번호를 적는다(시더). 같은 값이면 쓰지 않는다 — 부팅마다 updated_at 을 흔들지 않게. */
+export async function setAppBuiltinVersion(appId: string, version: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET builtin_version=$2 WHERE id=$1 AND builtin_version IS DISTINCT FROM $2`, [appId, version]);
+}
+
+/** 지금 서빙 중인 상태가 어느 판인가. null = 모름(판 밖의 상태). */
+export async function setAppCurrentVersion(appId: string, versionNo: number | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET current_version_no=$2 WHERE id=$1`, [appId, versionNo]);
+}
+
 // ── org_app_runtime_asset — 실행할 worker 번들(Stage B) ──────────────────────
 export interface AppRuntimeAssetRow {
   app_id: string; package_hash: string; entry: string; code: Buffer; code_hash: string; size_bytes: number; created_at: string;
@@ -318,4 +468,50 @@ function rowToGrant(r: Record<string, unknown>): AppGrantRow {
     granted_at: String(r.granted_at), granted_by: r.granted_by == null ? null : String(r.granted_by),
     revoked_at: r.revoked_at == null ? null : String(r.revoked_at),
   };
+}
+
+// ── org_app_member_pref — 앱 × 보는 사람의 개인 설정(#4601) ────────────────────
+//  읽기 하나, 쓰기 하나. 병합·크기 규칙은 apps/app-prefs.ts 가 쥐고(순수), 여기는 **한 트랜잭션** 안에서 지금 값을 잠그고(FOR UPDATE)
+//  → 병합 → 검사 → upsert 한다. 두 탭이 동시에 다른 키를 고쳐도 마지막 쓰기가 앞의 것을 지우지 않는다(격리 리뷰 비차단 2).
+export async function getMemberPref(appId: string, memberId: string, client?: pg.PoolClient): Promise<Record<string, unknown>> {
+  const exec: Q = client ?? itemsPool;
+  const r = await exec.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2`, [appId, memberId]);
+  const v = r.rows[0]?.prefs;
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/**
+ * 지금 값을 잠근 채 merge 로 새 값을 만들어 저장한다. merge 가 던지면(400·413) 롤백 — 아무것도 안 바뀐다.
+ *  ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, app_id, member_id)로 재작성한다(attachAppRow 와 같은 규약).
+ *  돌려주는 값 = 저장된 전체.
+ */
+export async function updateMemberPref(
+  appId: string, memberId: string,
+  merge: (cur: Record<string, unknown>) => { prefs: Record<string, unknown>; json: string },
+): Promise<Record<string, unknown>> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(`SELECT prefs FROM org_app_member_pref WHERE app_id=$1 AND member_id=$2 FOR UPDATE`, [appId, memberId]);
+    const v = r.rows[0]?.prefs;
+    const cur = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+    const next = merge(cur);
+    await client.query(
+      `INSERT INTO org_app_member_pref(app_id, member_id, prefs, updated_at) VALUES($1,$2,$3::jsonb,now())
+       ON CONFLICT (tenant_id, app_id, member_id) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`,
+      [appId, memberId, next.json]);
+    await client.query("COMMIT");
+    return next.prefs;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** 앱 제거 때 — 그 앱의 개인 설정을 전부 지운다(FK 가 없어 CASCADE 대신 명시 회수, schema/apps.ts 주석). */
+export async function pruneMemberPrefs(appId: string, client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(`DELETE FROM org_app_member_pref WHERE app_id=$1`, [appId]);
 }

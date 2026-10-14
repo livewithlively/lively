@@ -29,8 +29,12 @@ import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson, toThinNdjson, THIN_MAX_BYTES } from "../terminal/harness-io/chat-line.js";
 import { sessionInvitesMember, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { executionSessionProject } from "../v6/execution-session-store.js";
-import { searchConversations, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색
-import { parseConvSort } from "../v6/conv-search.js";
+import { searchConversations, searchConvMessages, sessionHits, convIndexPending, sweepConvIndex, scheduleConvIndex } from "../v6/conv-index-store.js";   // #4517 — ⌘K 대화 검색 · #4553 맞은 말 단위
+import { sessionJournal } from "../v6/session-journal-store.js";   // #4553 — 세션 이력 앱 «작업 일지»
+import { parseJournalRange } from "../v6/session-journal.js";
+import { parseConvSort, parseSessionIds, SESSION_ID_RE } from "../v6/conv-search.js";
+import { logSearch, searchLogSummary } from "../v6/search-log-store.js";   // #4530 검색 품질 — 무엇을 쳤고 무엇을 열었나
+import { isAdmin } from "../capabilities/principal.js";
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
 export function sessionLogProjectClaim(
@@ -116,7 +120,7 @@ export function checkPurgeGate(g: { requester: string; owner: string | null }): 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 // 세션 uuid 형식(claude/codex) — 경로 인젝션·잡값 차단. 관대하게: 영숫자·-·_ (40자 이하).
-const SID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const SID_RE = SESSION_ID_RE;   // 세션 id 의 꼴 — 맞은 말 검색의 `sessions`(conv-search.ts parseSessionIds)와 한 벌
 const NODE_RE = /^[A-Za-z0-9._-]{0,64}$/;   // 빈 문자열('' = 게이트웨이 로컬) 허용
 
 // raw 바디를 Buffer 로 수집(상한 초과 시 413). 이 라우트는 octet-stream 전용(핸들러가 content-type 게이트)이라 전역
@@ -186,7 +190,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     const q = String(req.query.q ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
-    if (!q) { res.json({ results: [], pending: 0, capped: false }); return; }
+    if (!q) { res.json({ results: [], total: 0, weak: 0, pending: 0, capped: false, loosened: [] }); return; }
     if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
     const since = req.query.since ? String(req.query.since) : null;
     if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
@@ -206,7 +210,142 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const pending = await convIndexPending(base).catch(() => null);
     //  밀린 색인이 있으면 이 요청에 얹어 정비를 한 번 깨운다(기다리지 않는다) — 배포 직후의 첫 검색이 곧 색인을 앞당긴다.
     if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
-    res.json({ results: found.results, pending, capped: found.capped, cap: found.cap });
+    res.json({ results: found.results, total: found.total, weak: found.weak, pending, capped: found.capped, cap: found.cap, loosened: found.loosened });
+  }));
+
+  // 통합검색 기록(#4530 검색 품질, 원준 2026-10-05) — 한 번의 찾기에 한 줄(결과를 열었나 · 안 열고 닫았나). 화면이 닫히는 길에 보낸다.
+  //  남기기는 누구나(제 것만 — member 는 요청자다), 요약은 관리자만(검색어는 그 사람이 찾던 것이다). 실패해도 화면에는 알리지 않는다
+  //  (기록은 덤이다 — 검색을 막지 않는다).
+  app.post("/api/ui/v6/search-log", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const b = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+    const counts = (b.counts && typeof b.counts === "object" ? b.counts : {}) as Record<string, unknown>;
+    const opened = (b.opened && typeof b.opened === "object" ? b.opened : null) as Record<string, unknown> | null;
+    const ok = await logSearch({
+      member: requester, q: String(b.q ?? ""), tab: String(b.tab ?? "all"),
+      sort: typeof b.sort === "string" ? b.sort : null, period: typeof b.period === "string" ? b.period : null,
+      counts: { sess: counts.sess as number, weak: counts.weak as number, proj: counts.proj as number, know: counts.know as number, src: counts.src as number },
+      action: b.action === "open" ? "open" : "close",
+      opened: opened ? { kind: opened.kind as string, key: opened.key as string, rank: opened.rank as number, tier: opened.tier as string } : null,
+      settleMs: b.settle_ms as number, loosened: Array.isArray(b.loosened) ? (b.loosened as string[]) : null,
+    });
+    res.json({ ok });
+  }));
+  app.get("/api/ui/v6/search-log/summary", auth, wrap(async (req, res) => {
+    if (!isAdmin(userOf(req))) throw new HttpError(403, "관리자만 볼 수 있습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await searchLogSummary(Number(req.query.days) || 14));
+  }));
+
+  // 세션 하나의 «맞은 말» — 통합검색 미리보기 칸(#4530 안 A). 목록 한 줄로는 «그 세션이 맞나» 를 못 가려 열어 봐야 했다.
+  //  고른 세션의 맞은 말과 앞뒤 말 · 고친 파일 · 첫 지시를 준다. 볼 수 있는가는 검색과 같은 축(sessionHits 안) — 못 보면 404
+  //  (있다·없다를 가르지 않는다). 검색어가 없으면 처음·마지막 말과 고친 파일만(이름으로만 맞은 세션의 미리보기).
+  app.get("/api/ui/v6/session-search/hits", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const sessionId = String(req.query.session_id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node_id ?? "");
+    if (nodeId && !NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const q = String(req.query.q ?? "").trim();
+    if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
+    const since = req.query.since ? String(req.query.since) : null;
+    if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
+    res.setHeader("Cache-Control", "no-store");
+    const cfg = (await getRuntimeConfig()).session_share;
+    let out: Awaited<ReturnType<typeof sessionHits>>;
+    try {
+      out = await sessionHits({
+        requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID,
+        nodeId, sessionId, q, since, limit: Number(req.query.limit) || undefined,
+      });
+    } catch (e) {
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "미리보기를 시간 안에 만들지 못했습니다 — 잠시 뒤 다시 골라 주세요");
+      throw e;
+    }
+    if (!out) throw new HttpError(404, "세션을 찾을 수 없습니다");
+    res.json(out);
+  }));
+
+  // 맞은 말 단위 검색 — 세션 이력 앱 «대화 찾기»(#4553, 원준 2026-10-04). ⌘K 는 세션마다 한 줄이라 «그 말이 어디 있었나» 를
+  //  못 짚는다. 이 채널은 맞은 말 하나가 한 줄이고 앞뒤 말을 함께 준다. 볼 수 있는 세션은 위 검색과 같은 축(저장 쪽 SQL·판정).
+  //  거르개: since(기간) · role(말한 쪽) · project(지금 붙어 있는 프로젝트 id, 0 = 프로젝트 없음).
+  //  POST 도 같은 일을 한다 — 인자를 본문(JSON)으로 받고, `sessions`(세션 id 목록)가 더 있다: 그 세션들 안에서만 찾는다
+  //   (세션 이력 앱의 사이드바에서 고른 범위, #4553). 목록이 수백 개라 주소에 못 싣는다. 빈 목록은 결과 없음이다.
+  const searchMessages = wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const post = req.method === "POST";
+    const src: Record<string, unknown> = post ? (req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {}) : req.query;
+    const q = String(src.q ?? "").trim();
+    res.setHeader("Cache-Control", "no-store");
+    if (!q) { res.json({ hits: [], total: 0, sessions: 0, capped: false, words: [], pending: 0 }); return; }
+    if (q.length > 200) throw new HttpError(400, "검색어가 너무 깁니다(200자 이하)");
+    const since = src.since ? String(src.since) : null;
+    if (since && !Number.isFinite(Date.parse(since))) throw new HttpError(400, "since 는 ISO 시각이어야 합니다");
+    const roleRaw = String(src.role ?? "");
+    if (roleRaw && roleRaw !== "user" && roleRaw !== "assistant") throw new HttpError(400, "role 은 user 또는 assistant 여야 합니다");
+    let projectId: number | null = null;
+    if (src.project !== undefined && String(src.project) !== "") {
+      projectId = Number(src.project);
+      if (!Number.isInteger(projectId) || projectId < 0) throw new HttpError(400, "project 는 0 이상 정수여야 합니다");
+    }
+    //  세션 거르개는 본문으로만 받는다(GET 의 주소에 실린 것은 읽지 않는다 — 종전 그대로).
+    const only = post ? parseSessionIds(src.sessions) : { ok: true as const, ids: null };
+    if (!only.ok) throw new HttpError(400, only.error);
+    const sessionIds = only.ids;
+    //  빈 목록 = 찾을 세션이 없다 — 저장 쪽에 묻지 않고 빈 답을 준다(저장 쪽도 같은 답을 한다).
+    if (sessionIds && !sessionIds.length) { res.json({ hits: [], total: 0, sessions: 0, capped: false, words: [], pending: 0 }); return; }
+    const cfg = (await getRuntimeConfig()).session_share;
+    const base = { requester, attach: cfg.view_policy === "attach", workspaceId: currentTenant()?.id ?? PRIMARY_TENANT_ID };
+    let found: Awaited<ReturnType<typeof searchConvMessages>>;
+    try {
+      found = await searchConvMessages({
+        ...base, q, since, role: (roleRaw || null) as "user" | "assistant" | null, projectId, sessionIds,
+        limit: Number(src.limit) || 30,
+      });
+    } catch (e) {
+      if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "대화 검색이 시간 안에 끝나지 않았습니다 — 기간을 좁히거나 잠시 뒤 다시 찾아 주세요");
+      throw e;
+    }
+    const pending = await convIndexPending(base).catch(() => null);
+    if (pending) void sweepConvIndex().catch(() => { /* 다음 정비가 다시 집는다 */ });
+    res.json({ ...found, pending });
+  });
+  app.get("/api/ui/v6/session-search/messages", auth, searchMessages);
+  app.post("/api/ui/v6/session-search/messages", auth, searchMessages);
+
+  // 작업 일지 — 세션 이력 앱(#4553). 내 세션마다 «한 일»(그 세션이 적은 작업 기록)과 «남긴 것»(산출 지식 · 맡은 태스크 ·
+  //  질문 수 · 고친 파일 수)을 한 번에 준다. **세션 주인만**(일지는 «내가 한 일» 이다) — 남의 세션은 session_id 로 물어도 404.
+  //  기간은 마지막 활동 기준(since ≤ last_seen < until). session_id 를 주면 그 세션 한 줄만(기간 무시).
+  //  ⚠ 경로를 `/v6/sessions/…` 아래에 두지 않는다 — 위 session-search 와 같은 까닭(테넌트 미들웨어가 세션 id 로 읽는다).
+  //  시간 상한(statement_timeout → 57014)에 걸렸다 — «한 일이 없다» 가 아니라 «끝까지 못 읽었다» 다.
+  const journalTimeout = (e: unknown): never => {
+    if ((e as { code?: string })?.code === "57014") throw new HttpError(503, "작업 일지를 시간 안에 만들지 못했습니다 — 기간을 좁히거나 잠시 뒤 다시 열어 주세요");
+    throw e;
+  };
+  app.get("/api/ui/v6/session-journal", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    const workspaceId = currentTenant()?.id ?? PRIMARY_TENANT_ID;
+    const sessionId = String(req.query.session_id ?? "");
+    if (sessionId) {
+      if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+      const nodeId = String(req.query.node_id ?? "");
+      if (nodeId && !NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+      const one = await sessionJournal({ owner: requester, workspaceId, only: { nodeId, sessionId } }).catch(journalTimeout);
+      if (!one.rows.length) throw new HttpError(404, "세션을 찾을 수 없습니다");
+      res.json({ row: one.rows[0] });
+      return;
+    }
+    for (const k of ["since", "until"] as const) {
+      if (req.query[k] && !Number.isFinite(Date.parse(String(req.query[k])))) throw new HttpError(400, `${k} 는 ISO 시각이어야 합니다`);
+    }
+    const range = parseJournalRange(req.query.since, req.query.until);
+    const out = await sessionJournal({ owner: requester, workspaceId, since: range.since, until: range.until, limit: Number(req.query.limit) || undefined }).catch(journalTimeout);
+    res.json({ rows: out.rows, truncated: out.truncated });
   }));
 
   // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함).
@@ -264,7 +403,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
           lookup: (uuid) => sessionStateByClaudeUuid(uuid),
           // #1979 — 출처는 **rule**(첫 지시 앞부분을 자른 규칙 이름)이다. 기본값 human 을 쓰면 이 자동 이름이
           //  '사람이 지은 이름'으로 굳어져 그 세션이 스스로 짓는 이름(agent)을 영영 막는다.
-          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }, { source: "rule" }),
+          renameLocal: async (owner, id, label) => { await editSession({ userId: owner } as LivelyUser, id, { label }, { source: "rule" }); },
           renameNode: (nodeId2, owner, id, label) => nodeRpc(nodeId2, "edit", { user: { userId: owner }, id, patch: { label } }).then(() => undefined),
           saveLabel: (id, label) => updateSessionStateMeta(id, { label, label_source: "rule" }),
           warn: (msg, err) => console.warn(`[session-log] ${msg}:`, (err as Error)?.message ?? err),

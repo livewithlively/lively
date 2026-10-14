@@ -74,15 +74,19 @@ export async function listAppInstances(): Promise<AppInstanceRecord[]> {
   const out: any = await api('/api/ui/app-instances?dismissed=1');
   const rows: AppInstanceRecord[] = Array.isArray(out?.instances) ? out.instances : [];
   for (const r of rows) if (r && r.id) remember(r);
-  //  ⚠ 성공한 판에서만 갈아 끼운다 — 실패(throw)면 직전 값이 그대로 남는다. 빈 집합으로 덮으면 치운 세션이
-  //   한 틱에 전부 되살아난다(#869 의 «못 본 판» 과 같은 모양).
-  if (Array.isArray(out?.dismissed_sessions)) dismissedRefs = out.dismissed_sessions.map((x: unknown) => String(x));
+  //  치운 세션 id 는 **그 판의 배열에 묶어** 돌려준다(dismissedRefsOf, #3870). 읽기는 겹쳐 뜬다 — 모듈 변수 하나에 두면
+  //   «마지막에 도착한 판» 의 값이 되어, 셸이 제 판을 적을 때 다른 판의 치움과 섞인다(위 «한 왕복» 이 깨진다).
+  if (Array.isArray(out?.dismissed_sessions)) dismissedOf.set(rows, out.dismissed_sessions.map((x: unknown) => String(x)));
   return rows;
 }
 
-let dismissedRefs: string[] = [];
-/** 마지막으로 **성공한** 목록 판이 알려 준, 내가 치운 세션 id(#3857). */
-export function dismissedSessionRefs(): string[] { return dismissedRefs; }
+const dismissedOf = new WeakMap<AppInstanceRecord[], string[]>();
+/**
+ * listAppInstances 가 돌려준 **바로 그 배열**과 한 왕복에 온, 내가 치운 세션 id(#3857).
+ *  ⚠ 서버가 안 실어 보낸 판이면 null — 부르는 쪽은 직전 값을 그대로 쓴다. 빈 집합으로 덮으면 치운 세션이 한 틱에
+ *   전부 되살아난다(#869 의 «못 본 판» 과 같은 모양).
+ */
+export function dismissedRefsOf(rows: AppInstanceRecord[]): string[] | null { return dismissedOf.get(rows) || null; }
 
 /** 세션을 내 목록에서 치운다(#3857) — 세션은 그대로 돈다. 서버 정본(org_app_instance 사유 user)에 적는다. */
 export async function dismissSessions(sessionIds: string[]): Promise<number> {

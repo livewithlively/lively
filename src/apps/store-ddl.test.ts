@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { resolveColumnType, assertIdent, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX } from "./store-ddl.js";
+import { resolveColumnType, assertIdent, assertMatchIdent, assertMatchId, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX } from "./store-ddl.js";
 
 // 「입력 × 기대」 엣지 표 — 선언형 DDL 의 방어(임의 타입·식별자·예약컬럼·앱 네임스페이스).
 
@@ -143,5 +143,37 @@ test("isBuiltinSource — {kind:'builtin'} 만 참", () => {
   assert.equal(isBuiltinSource({ kind: "builtin" }), true);
   for (const s of [{ kind: "git", url: "https://x" }, { kind: "path", path: "/x" }, null, undefined, "builtin", {}]) {
     assert.equal(isBuiltinSource(s), false);
+  }
+});
+
+// ── match(행 고르기)의 칸 — #4592 ────────────────────────────────────────────────
+//  이 규칙이 틀렸을 때 나는 일: ① id 를 못 받으면 앱이 방금 넣은 한 행을 다시 집을 길이 없다(«내용이 같은 행 전부» 로만 고치고 지운다).
+//  ② tenant_id·app_id 를 받으면 격리 경계를 화면이 조건으로 건드린다. ③ id 에 숫자 아닌 값이 가면 DB 가 22P02 로 던져 500 이 된다.
+test("assertMatchIdent — 시스템 칸 id·created_at 은 match 에 쓸 수 있다", () => {
+  assert.equal(assertMatchIdent("id"), "id");
+  assert.equal(assertMatchIdent("created_at"), "created_at");
+  assert.equal(assertMatchIdent(" id "), "id");
+});
+
+test("assertMatchIdent — 격리 칸(tenant_id·app_id)과 잡아만 둔 updated_at 은 match 에서도 거부", () => {
+  for (const r of ["tenant_id", "app_id", "updated_at"]) assert.throws(() => assertMatchIdent(r), /예약된 컬럼명/);
+});
+
+test("assertMatchIdent — 선언 칸은 종전 규칙 그대로(글자 모양 위반 거부)", () => {
+  assert.equal(assertMatchIdent("status"), "status");
+  for (const bad of ["Id", "1x", "a-b", "a b", "a\"; drop table x; --", ""]) assert.throws(() => assertMatchIdent(bad), /규칙에 맞지 않/);
+});
+
+test("assertIdent — 쓰는 쪽(row·set)은 여전히 id·created_at 을 거부한다(match 완화가 번지지 않았다)", () => {
+  for (const r of ["id", "created_at"]) assert.throws(() => assertIdent("column", r), /예약된 컬럼명/);
+});
+
+test("assertMatchId — 0 이상의 정수(숫자·숫자 문자열)만 · 그 밖은 400", () => {
+  assert.equal(assertMatchId(12), "12");
+  assert.equal(assertMatchId("12"), "12");
+  assert.equal(assertMatchId(" 7 "), "7");
+  assert.equal(assertMatchId(0), "0");
+  for (const bad of [-1, 1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2, "1234567890123456789"]) {
+    assert.throws(() => assertMatchId(bad), (e: unknown) => (e as { status?: number }).status === 400, `받으면 안 되는 값: ${String(bad)}`);
   }
 });

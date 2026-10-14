@@ -199,6 +199,40 @@ export async function initV6ProjectOrg(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     ALTER TABLE session_msg_cursor ADD COLUMN IF NOT EXISTS ver INT NOT NULL DEFAULT 0;
+
+    -- ⑦ search_log — 통합검색(⌘K)에서 무엇을 쳤고 무엇을 열었나(#4530 검색 품질, 원준 2026-10-05). 종전엔 «어떤 검색이 0건이었나 ·
+    --  몇 째 줄을 열었나» 를 잴 길이 없어 품질을 감으로만 말했다. 한 번의 찾기(검색 창을 열어 닫을 때까지)에 한 줄 —
+    --  결과를 열었으면 action='open'(그 결과의 종류·자리·층), 아무것도 안 열고 닫았으면 'close'. 친 글자마다 남기지 않는다.
+    --  쓰는 곳은 v6/search-log-store.ts. 180일 지난 줄은 쓰는 길에 지운다. 워크스페이스 격리는 tenant_id(자동)가 맡는다.
+    CREATE TABLE IF NOT EXISTS search_log(
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+      member TEXT NOT NULL,
+      q TEXT NOT NULL,                  -- 친 검색어(200자까지)
+      tab TEXT NOT NULL DEFAULT 'all',  -- 그때 보던 탭
+      sort TEXT, period TEXT,
+      n_sess INT, n_weak INT, n_proj INT, n_know INT, n_src INT,   -- 그때 서버가 말한 수(세션은 맞는 결과 · 덜 맞는 결과)
+      action TEXT NOT NULL,             -- 'open' · 'close'
+      opened_kind TEXT, opened_key TEXT, opened_rank INT, opened_tier TEXT,
+      settle_ms INT,                    -- 마지막 글자부터 결과가 자리 잡기까지
+      loosened TEXT[]);                 -- 서버가 느슨하게(붙여 쓰기·한 글자 틀림) 찾은 낱말
+    CREATE INDEX IF NOT EXISTS search_log_ts_idx ON search_log(ts);
+
+    -- ⑧ session_card — 세션 요약 카드(#4530 검색 품질 «뜻으로 찾기»). 세션마다 «무엇이었나» 를 모은 글(이름 · 프로젝트 · 사람이 한 말 ·
+    --  고친 파일 · 마지막 답)이다. 그 글의 벡터(embedding_vector 등)는 ui-vis 의 임베딩 스키마 보장이 붙인다 — 검색어의 뜻과 견줘
+    --  글자가 달라도 그 세션을 찾는다. 글은 v6/session-card-store.ts 가 대화 색인에서 만들고, 벡터는 임베딩 백필이 채운다.
+    --  ⚠ 대화의 사본이다 — 완전 삭제(purgeSessionLog)·보존 정리(reap)가 함께 지운다. 글은 화면으로 나가지 않는다.
+    --  card_id = 노드 + 세션 id 를 이은 한 칸(임베딩 백필의 키). src_bytes = 이 글을 만들 때의 색인 위치(그 뒤로 대화가 늘면 다시 만든다).
+    CREATE TABLE IF NOT EXISTS session_card(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      card TEXT NOT NULL DEFAULT '',
+      src_bytes BIGINT NOT NULL DEFAULT 0,
+      ver INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (node_id, session_id));
+    CREATE INDEX IF NOT EXISTS session_card_id_idx ON session_card(card_id);
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──

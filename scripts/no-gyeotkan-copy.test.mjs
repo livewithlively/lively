@@ -7,6 +7,8 @@
 //   N3 템플릿 문자열(치환 없음 · 머리 · 가운데 · 꼬리)에 «곁칸» → 잡는다
 //   N4 정규식 · 식별자에 비슷한 글자가 있어도 문자열이 아니면 안 잡는다
 //   R1 web/ 의 .ts 전부에서 문자열에 «곁칸» 0건(있으면 파일:줄을 적어 실패)
+//      예외 하나 — 검색의 낱말 표(web/lib/omni-rank.ts)에 든 **낱말 그 자체**(«곁칸» 넉 자가 문자열의 전부). 화면에 쓰는 글이 아니라
+//      «사이드바» 로 찾을 때 «곁칸» 이라고 적힌 옛 세션도 찾게 하는 표다(#4530). 그 파일의 문장 속 «곁칸» 은 그대로 잡는다(N5).
 //   R2 앱 만들기 안내(scripts/create-lively-app.mjs)가 쓰는 README 글에도 0건
 //   R3 탭 메뉴 «…로 보내기» 는 받침에 맞는 조사를 쓴다(…사이드바로 · 아래 칸으로)
 //  ⚠ 문자열은 TypeScript 파서로 뽑는다. 줄 단위 정규식은 주석 안 따옴표·URL 의 // 에서 틀린다.
@@ -34,10 +36,17 @@ function stringsOf(src, name = "x.ts") {
   visit(sf);
   return out;
 }
-const hits = (src, name) => stringsOf(src, name).filter(([, s]) => s.includes(WORD));
+/** 검색 낱말 표의 낱말인가 — 그 파일에서, 문자열이 그 낱말 하나뿐일 때만. 사람이 보는 글이 아니다(찾을 때 견주는 값이다). */
+const VOCAB_FILE = "web/lib/omni-rank.ts";
+const isVocab = (name, s) => String(name).replace(/\\/g, "/").endsWith(VOCAB_FILE) && s === WORD;
+const hits = (src, name) => stringsOf(src, name).filter(([, s]) => s.includes(WORD) && !isVocab(name, s));
 
 // ── N. 잣대 자체 ──────────────────────────────────────────────────────────────
 ok(hits(`const a = '곁칸 접기';`).length === 1, "N1 따옴표 문자열을 잡는다");
+ok(hits(`const G = [['사이드바', 'sidebar', '곁칸']];`, "/x/" + VOCAB_FILE).length === 0
+  && hits(`const G = [['사이드바', 'sidebar', '곁칸']];`, "/x/web/v2/omni.ts").length === 1
+  && hits(`const a = '곁칸에 고정';`, "/x/" + VOCAB_FILE).length === 1,
+  "N5 검색 낱말 표의 낱말 하나만 예외 — 다른 파일 · 그 파일의 문장은 그대로 잡는다");
 ok(hits(`// 곁칸을 접는다\n/* 곁칸\n * 곁칸 */\nconst a = 'ok';`).length === 0, "N2 주석은 안 잡는다");
 ok(hits("const a = `곁칸`; const b = `${x}곁칸${y}곁칸${z}곁칸`;").length === 4, "N3 템플릿의 네 가지 조각을 모두 잡는다");
 ok(hits(`const 곁칸폭 = 1; const re = /곁칸/; const u = 'https://x//y';`).length === 0, "N4 식별자 · 정규식은 문자열이 아니다");

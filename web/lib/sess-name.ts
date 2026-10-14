@@ -21,11 +21,19 @@ export const isMachineLabel = (s: string) => /^이어보기\s*[·:]/.test(s) || 
  *   ② 만들 때 잘린 것      "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도…"(프로젝트명의 앞부분)
  *   ③ 조각만 이어붙인 변형  "app.lvly.io 와이어프레임" ⊂ "APP. lvly. io 셀프서브 방식 와이어프레임"
  *  ③은 글자·숫자만 남긴 뒤 공통 앞머리 + 공통 꼬리가 이름 전체를 덮으면 되풀이로 본다(우연 일치를 막으려 6자 미만은 제외). */
+const CUT_MIN = 24;
 function echoesProject(label: string, proj: string): boolean {
   const a = norm(label); const b = norm(proj);
   if (!a || !b) return false;
-  if (a === b || b.startsWith(a) || a.startsWith(b)) return true;
+  //  ⚠ 이름이 프로젝트명으로 **시작만** 하는 것(a.startsWith(b))은 되풀이가 아니다 — 뒤에 붙은 말이 그 세션의 이름이다
+  //   (프로젝트 «장표 수정 앱» 의 세션 «장표 수정 앱 만들기, 앱의 생태계», 원준 2026-10-07).
+  if (a === b) return true;
   const ca = a.replace(/[^\p{L}\p{N}]/gu, ''); const cb = b.replace(/[^\p{L}\p{N}]/gu, '');
+  if (ca && ca === cb) return true;
+  //  이름이 프로젝트명의 **앞부분**일 때 — 만들 때 잘린 것(②)만 되풀이다. 자른 자리는 말줄임(…)이 붙거나 28자 · 80자
+  //   (app-session.ts · session-autoname.ts · sessions.ts cleanLabel)라, 그보다 짧고 말줄임도 없으면 사람이 지은 이름이다
+  //   (프로젝트 «UI 버그 해결» 의 세션 «UI» — 종전엔 하던 일이 있으면 이름이 사라졌다).
+  if (ca && cb.startsWith(ca)) return /…\s*$/.test(a) || a.length >= CUT_MIN;
   if (ca.length < 6 || !cb) return false;
   let head = 0; while (head < ca.length && head < cb.length && ca[head] === cb[head]) head++;
   let tail = 0; while (tail < ca.length - head && tail < cb.length - head && ca[ca.length - 1 - tail] === cb[cb.length - 1 - tail]) tail++;
@@ -41,7 +49,8 @@ function restates(work: string, name: string): boolean {
 }
 
 /** 이름 규칙의 재료 — label = 세션 이름(서버 label, 없으면 id), work = 그 세션이 '하던 일'(pane 제목 → 없으면 대화 제목), harness = 하네스 이름. */
-export interface SessNameInput { label?: string | null; work?: string | null; harness?: string | null }
+/** human = 이 이름을 **사람이** 지었나(서버 label_source === 'human' — 웹에서 고쳤거나 만들 때 적어 준 이름). */
+export interface SessNameInput { label?: string | null; work?: string | null; harness?: string | null; human?: boolean }
 export interface SessFace { main: string; sub: string; named: boolean; untitled: boolean }
 
 /** 세션 행에 쓸 글 — ★프로젝트명 반복을 걷어낸다.
@@ -55,9 +64,17 @@ export function sessNameFace(s: SessNameInput, projName: string): SessFace {
   //  (= 그 세션에 처음 시킨 말)이 받는다. 없으면 종전대로 이름만 남는다.
   const work = String(s.work || '').trim();
   let name = label;
-  // '프로젝트명 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
-  if (projName && label.startsWith(projName)) name = label.slice(projName.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
+  // '프로젝트명 + 구분 기호 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
+  //  ★구분 기호가 있어야 꼬리다. 빈칸만 두고 말이 이어지면 프로젝트명으로 시작하는 **한 문장**이라 자르지 않는다 —
+  //   «장표 수정 앱 만들기, 앱의 생태계» 가 «만들기, 앱의 생태계» 로 서던 것(사이드바 · 세션 머리줄 둘 다).
+  const tail = projName && label.startsWith(projName) ? /^\s*[·:\-–—_/|][\s·:\-–—_/|]*(.*)$/s.exec(label.slice(projName.length)) : null;
+  if (tail) name = tail[1].trim();
   if (projName && name && echoesProject(name, projName)) name = '';
+  // ★사람이 지은 이름은 프로젝트명과 같아도 지우지 않는다(원준 2026-10-10: 프로젝트 «장표 수정 앱» 의 세션 이름을
+  //  «장표 수정 앱» 으로 수없이 고쳤는데 계속 «1006일 회의록 정리» 로 돌아갔다). 저장은 됐는데 위 되풀이 규칙이 그 이름을
+  //  걷고 pane 제목을 세워서, 사람 눈에는 고친 이름이 되돌아간 것이었다. 되풀이를 걷는 까닭은 **기계가 물려준** 이름
+  //  (프로젝트명 그대로)이 목록을 메우기 때문이고, 사람이 일부러 적은 이름은 거기 들지 않는다.
+  if (!name && s.human) name = label;
   if (isMachineLabel(name)) name = '';
   const job = work && !HARNESS_TITLES.has(norm(work)) && !restates(work, name) ? work : '';
   //  named = 이 이름이 **그 세션의 이름**에서 나왔나(라벨). false 면 pane 제목·대화 제목을 빌려 온 것이라

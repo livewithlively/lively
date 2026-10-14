@@ -132,6 +132,7 @@
   --gi-c-src:   #B36E18;  --gi-c-tags:  #D6457A;  --gi-c-ctx:   #0D88A7;  --gi-c-sess:  #717F95;
   --gi-c-learn: #D5541F;  --gi-c-web:   #2280D9;  --gi-c-liv:   #118E6E;  --gi-c-term:  #41516E;
   --gi-c-sys:   #576889;  --gi-c-apps:  #576889;  --gi-c-bell:  #A245C9;
+  --gi-c-deck:  #B0323F;   /* 장표 수정(#4596) — 와인색. 다른 앱 색과 안 겹치는 붉은 계열 */
   /* 런치패드 스포트라이트 칸 — 흐린 배경 위 유리 한 겹. 다크에서 뒤집힌다. */
   --v2-pad-field:      rgba(255, 255, 255, .70);
   --v2-pad-field-line: rgba(255, 255, 255, .82);

@@ -566,7 +566,7 @@ const token = () => (readLively("token") || process.env.LIVELY_TOKEN || "").trim
 //  "당신 셸의 env 는 이제 스테일이고 우리는 그걸 못 고친다"를 login·logout·doctor 가 알릴 때만 쓴다.
 const ENV_TOKEN_AT_START = (process.env.LIVELY_TOKEN || "").trim();
 
-async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
+async function api(path, { timeoutMs = 15000, method = "GET", body, fromSession = false } = {}) {
   const gw = gateway(), tok = token();
   if (!gw) throw new Error("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!tok) throw new Error("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.");
@@ -575,6 +575,12 @@ async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
   try {
     const headers = { authorization: `Bearer ${tok}` };
     if (body !== undefined) headers["content-type"] = "application/json";
+    //  #4551 — 부른 쪽이 청하면(fromSession) 이 명령을 부른 세션을 함께 싣는다(MCP 가 싣는 그 헤더). 세션 안의 AI 가
+    //   `lively delegate` 로 넘긴 위탁이 «어느 세션이 시켰나» 를 남겨, 사이드바가 그 워커를 시킨 세션의 프로젝트 아래에 세운다.
+    //  ⚠ 모든 요청에 싣지 않는다 — 이 헤더가 있으면 서버가 쓰기 요청마다 «그 세션의 주인인가» 를 묻는다(#4135).
+    //   위탁 생성 말고는 그 검사를 새로 켤 이유가 없다.
+    const sess = fromSession ? (process.env.LIVELY_SESSION_ID || "").trim() : "";
+    if (sess) headers["x-lively-session"] = sess;
     // ⚠ undici 는 진짜 원인을 `e.cause` 에 숨긴다 — 그대로 두면 사용자에게 보이는 건 'fetch failed' 뿐이고
     //  DNS·프록시·TLS·방화벽을 구별할 수 없다. #1505 윈도우 실측이 정확히 그 벽이었다: `Claude MCP 연결 ✓`(붙는다)
     //  인데 `게이트웨이 도달 ✗ fetch failed`(CLI 만 못 붙는다) — 원인 코드가 없어 진단이 거기서 멈췄다.

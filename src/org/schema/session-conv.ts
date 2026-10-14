@@ -27,4 +27,7 @@ export async function initSessionConvLog(pool: Pool): Promise<void> {
   `);
   // 목록 조회는 늘 '이 박스의 것, 오래된 순' 이다.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_conv_box_idx ON org_session_conv(box_id, first_seen);`);
+  // 거꾸로도 묻는다(#4553) — «이 대화를 돌린 박스». 기록 목록 · 대화 검색 · 작업 일지가 대화마다 이 길로 박스의 프로젝트를 읽는다
+  //  (v6/session-log-store.ts convProjectIdSql). 인덱스가 없으면 대화 하나에 이 표를 통째로 훑는다.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_conv_conv_idx ON org_session_conv(conv_uuid);`);
 }

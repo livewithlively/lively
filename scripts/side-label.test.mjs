@@ -83,7 +83,7 @@ ok(/swapCopy\(on, swapped\)/.test(paintBtn) && /btn\.title = c\.btnTitle/.test(p
 ok(/swapCopy\(on, swapped\)/.test(openPop) && /c\.popHead/.test(openPop) && /c\.popFixedDesc/.test(openPop), "W2 ⇄ 창도 swapped 로 고른다");
 ok(/sw-left', swapped\)/.test(paint) && /paintBtn\(\)/.test(paint), "W2 자리를 바꾸는 paint() 가 단추 붓을 부른다(양쪽 모두)");
 const setEnabled = cut(swapSrc, "function setEnabled(", "function showIntroOnce(");
-const iEnd = setEnabled.indexOf("onEnd(curSideW())"), iToast = setEnabled.indexOf("swapCopy(on, swapped).toast");
+const iEnd = setEnabled.indexOf("judge(curSideW(), false)"), iToast = setEnabled.indexOf("swapCopy(on, swapped).toast");
 ok(iEnd > 0 && iToast > iEnd, "W3 토스트는 자리 판정(onEnd) 뒤의 swapped 로 고른다");
 
 const mount = cut(panesSrc, "swap = mountSideSwap(", "// ── 탭 ──");

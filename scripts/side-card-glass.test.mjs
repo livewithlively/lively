@@ -50,9 +50,10 @@ const lib = libSrc ? await load(libSrc) : null;
 ok(!!lib, "L0 셈 모듈을 읽었다");
 if (lib) {
   const { CARD_DEF, CARD_MIN, SIDE_DEF, sideCap, parseCard, clampCard, resizeCard } = lib;
-  ok(CARD_DEF.w === 320 && CARD_DEF.h === 240, "D1a 카드 기본 크기 320×240", JSON.stringify(CARD_DEF));
+  //  2026-10-09: 처음 크기는 창 높이로 센다(defaultCardSize · side-card-place.test.mjs). 여기서는 대체값이 최소 크기보다 큰지만 본다.
+  ok(CARD_DEF.w >= 320 && CARD_DEF.h >= 240, "D1a 카드 대체 크기가 최소 크기보다 크다", JSON.stringify(CARD_DEF));
   const d = parseCard(null);
-  ok(d.w === 320 && d.h === 240, "D1b 적어 둔 값이 없으면 새 기본값", JSON.stringify(d));
+  ok(d.w === CARD_DEF.w && d.h === CARD_DEF.h, "D1b 적어 둔 값이 없으면 대체값", JSON.stringify(d));
   ok(CARD_MIN && CARD_MIN.w === 260 && CARD_MIN.h === 160 && CARD_MIN.w < CARD_DEF.w && CARD_MIN.h < CARD_DEF.h, "D2a 최소 크기는 기본보다 작다(260×160)", JSON.stringify(CARD_MIN));
   const exact = clampCard({ w: 260, h: 160, r: 24, b: 24 }, 1042, 843);
   ok(exact.w === 260 && exact.h === 160, "D2b 정확히 최소 크기까지 줄일 수 있다", JSON.stringify(exact));
@@ -65,11 +66,11 @@ if (lib) {
 
 // ── 화면(side-card.ts) ──
 const card = code(read("web/v2/side-card.ts"));
-ok(/const KEY_CARD = 'lively_v2_side_card2';/.test(card) && !/'lively_v2_side_card'/.test(card), "D3 저장 키가 새 이름이다(종전 큰 크기를 물려받지 않는다)");
+ok(/const KEY_CARD = 'lively_v2_side_card4';/.test(card) && !/'lively_v2_side_card2?'/.test(card), "D3 저장 키가 새 이름이다(옛 r · b · 접힘 덩이를 물려받지 않는다)");
 const leave = card.slice(card.indexOf("async function leave("), card.indexOf("function halt("));
 ok(leave.length > 0 && /Math\.min\(SIDE_DEF, cap\)/.test(leave) && !/h\.setSideW\(cap, true\)/.test(leave), "R1d 제자리로: 상한이 아니라 기본 폭으로 물러난다", leave.slice(0, 160));
 ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\)\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 왼쪽 끝(0)까지 덮은 거리에서 0 으로(카드 상태와 딱 붙는다)");
-ok(/cmd: 'glass', on: v/.test(card) && /iframe\.sc-term-frame/.test(card), "G1a 카드인지 아닌지를 터미널 액자에 보낸다");
+ok(/cmd: 'glass', on: shown\(\)/.test(card) && /postMessage\(glassMsg\(\), location\.origin\)/.test(card) && /iframe\.sc-term-frame/.test(card), "G1a 카드인지 아닌지를 터미널 액자에 보낸다");
 ok(/m\.type !== 'lively-term-status'/.test(card) && /window\.addEventListener\('message', onFrameMsg\)/.test(card) && /window\.removeEventListener\('message', onFrameMsg\)/.test(card), "G1b 액자가 늦게 떠 상태를 알려 오면 다시 보낸다(걷을 때 듣기도 뗀다)");
 const paintSrc = card.slice(card.indexOf("function paint():"), card.indexOf("\n  }\n", card.indexOf("function paint():")));
 ok(/paintLive\(\);/.test(paintSrc) && /postGlass\(\);/.test(paintSrc), "G1c 카드 상태를 그릴 때마다 또렷/비침과 액자 비침을 함께 맞춘다", paintSrc.slice(-120));
@@ -89,7 +90,7 @@ if (live) {
   ok(isLive({ shown: false, entering: true, picked: true }) === false, "G2g 카드가 안 보이면(사이드바 접힘 · 좁은 폭) 또렷 표시도 없다");
 }
 const plAt = card.indexOf("function paintLive(");
-const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("\n", plAt)) : "";
+const paintLive = plAt >= 0 ? card.slice(plAt, card.indexOf("function report(", plAt)) : "";
 ok(/import \{ isLive, nextPicked \} from '\.\.\/lib\/side-card-live\.js'/.test(card) && /body\.classList\.toggle\('cm-live', isLive\(\{ shown: shown\(\), entering, picked \}\)\)/.test(paintLive), "G2h 화면은 판정 함수로 cm-live 를 건다", paintLive);
 const pickSrc = card.slice(card.indexOf("function pickFrom("), card.indexOf("const onDownCap"));
 ok(/picked = nextPicked\(picked, colMain\.contains\(n\) \? 'card' : h\.sidePane\.contains\(n\) \? 'side' : 'other'\)/.test(pickSrc), "G2i 누른 곳을 카드 · 사이드바 · 그 밖으로 가른다", pickSrc.slice(0, 200));
@@ -106,11 +107,11 @@ ok(liveBlock.length > 0 && !/v2-dot|\bwait\b|termstat|sc-wait/.test(liveBlock) &
 // ── 머리줄 단추 · 두 번 누르기 ──
 const minDecl = card.slice(card.indexOf("const minBtn"), card.indexOf("const maxBtn"));
 const maxDecl = card.slice(card.indexOf("const maxBtn"), card.indexOf("const ctl"));
-ok(/onclick: \(\) => setFold\(!card\.fold\)/.test(minDecl) && /pnIcon\('minus'/.test(minDecl), "H1a 첫 단추 = 최소화(가로줄 그림 · 접기)", minDecl.slice(0, 160));
+ok(/onclick: \(\) => setFold\(!fold\)/.test(minDecl) && /pnIcon\('minus'/.test(minDecl), "H1a 첫 단추 = 최소화(가로줄 그림 · 접기)", minDecl.slice(0, 160));
 ok(/onclick: \(\) => leave\(\)/.test(maxDecl) && /pnIcon\('expand'/.test(maxDecl), "H1b 둘째 단추 = 크게 보기(대각선 화살표 · 세션을 가운데로)", maxDecl.slice(0, 160));
 ok(/el\('div', \{ class: 'cm-ctl', hidden: true \}, minBtn, maxBtn\)/.test(card), "H1c 순서: ⋯ 다음에 최소화, 그다음 크게 보기");
 const pf = card.slice(card.indexOf("function paintFold("), card.indexOf("\n  }\n", card.indexOf("function paintFold(")));
-ok(/minBtn\.replaceChildren\(pnIcon\(card\.fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
+ok(/minBtn\.replaceChildren\(pnIcon\(fold \? 'window' : 'minus'/.test(pf), "H1d 접히면 최소화 단추가 «다시 펴기»(창 그림)가 된다", pf.slice(0, 200));
 const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.addEventListener('dblclick', onHeadDbl)"));
 ok(/void leave\(\);/.test(dbl) && !/setFold/.test(dbl), "H2a 머리줄 두 번 누르기 = 크게 보기", dbl.slice(-120));
 ok(/e\.stopPropagation\(\);/.test(dbl) && /colMain\.addEventListener\('dblclick', onHeadDbl, true\)/.test(card) && /colMain\.removeEventListener\('dblclick', onHeadDbl, true\)/.test(card), "H2b 이름 글자 위도 크게 보기 — 이름 바꾸기보다 먼저 받는다(capture)");
@@ -124,7 +125,7 @@ ok(["minus", "window", "expand"].every((n) => new RegExp("\\n\\s+" + n + ": '").
 // ── panes.ts: 기본 폭은 한 값 ──
 const panes = code(read("web/v2/panes.ts"));
 const swapSrc = code(read("web/v2/side-swap.ts"));
-ok(/const DEF_SIDE_W = SIDE_DEF;/.test(swapSrc) && /import \{ SIDE_DEF, sideCap \} from '\.\.\/lib\/side-card-geom\.js'/.test(swapSrc), "R2b side-swap 의 기본 폭도 SIDE_DEF");
+ok(/const DEF_SIDE_W = SIDE_DEF;/.test(swapSrc) && /import \{ SIDE_DEF,[^}]*\bsideCap \} from '\.\.\/lib\/side-card-geom\.js'/.test(swapSrc), "R2b side-swap 의 기본 폭도 SIDE_DEF");
 ok(/import \{ SIDE_DEF \} from '\.\.\/lib\/side-card-geom\.js'/.test(panes) && /def: SIDE_DEF, min: 220/.test(panes) && /Number\(v\.sideW\) \|\| SIDE_DEF/.test(panes) && !/\|\| 340\b/.test(panes) && !/def: 340\b/.test(panes), "R2 panes 의 곁칸 기본 폭도 SIDE_DEF");
 
 // ── CSS ──
@@ -153,7 +154,7 @@ ok(/width: var\(--cm-w, 320px\); height: var\(--cm-h, 240px\)/.test(cmRule), "D1
 // ── 터미널 ──
 const termSrc = read("web/standalone/terminal.ts");
 const term = code(termSrc);
-ok(/else if \(m\.cmd === 'glass'\) setGlass\(m\.on === true\);/.test(term), "T1a 액자가 glass 명령을 받는다");
+ok(/else if \(m\.cmd === 'glass'\) \{ setGlass\(m\.on === true\);/.test(term), "T1a 액자가 glass 명령을 받는다");
 const fnSrc = (name) => { const a = termSrc.indexOf("export function " + name + "("); if (a < 0) return ""; const b = termSrc.indexOf("\n}\n", a); return termSrc.slice(a, b + 2); };
 const clearSrc = fnSrc("clearOf");
 let clearOf = null;

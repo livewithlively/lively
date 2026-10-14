@@ -47,15 +47,20 @@ test("S7-2~12 화면·데이터 밖의 선언은 하나씩 전부 위반으로 �
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "memo", title: "메모", version: "1.0.0", manifest: base, source: { kind: "inline" }, content_hash: null,
   status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null,
-  edit_mode: "all", edit_members: [], ...over,
+  edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, ...over,
 });
 const ok = m();
 const bob = { userId: "bob", scopes: ["memory"] };
 const admin = { userId: "root", scopes: ["memory", "admin"] };
 
-test("S8-1 빌트인 앱은 누구도 못 고친다(관리자도)", () => {
-  assert.ok(editDenial(app({ source: { kind: "builtin" } }), admin, ok));
-  assert.ok(editDenial(app({ source: { kind: "builtin" } }), bob, ok));
+test("S8-1 빌트인 앱 — 화면·데이터만으로 된 것은 고칠 수 있고(#4600 워크스페이스 판이 원본을 덮는다), 셸 렌더러 같은 그 밖 선언이 있으면 누구도 못 고친다(관리자도)", () => {
+  //  2026-10-07 규칙이 바뀌었다(원준 «커스텀 되는 앱») — 종전 «빌트인은 누구도 못 고친다» 는 이 행에서 빨간불이 됐고, 새 규칙으로 다시 못박는다.
+  assert.equal(editDenial(app({ source: { kind: "builtin" } }), bob, ok), null);
+  assert.equal(editDenial(app({ source: { kind: "builtin" } }), admin, ok), null);
+  const sys = m({ system: { renderer: "browser" } });
+  assert.ok(editDenial(app({ source: { kind: "builtin" } }), admin, sys));
+  assert.ok(editDenial(app({ source: { kind: "builtin" } }), bob, sys));
+  assert.ok(String(editDenial(app({ source: { kind: "builtin" } }), bob, sys)).includes("기본 앱"), "까닭이 «기본 앱» 을 말한다");
 });
 
 test("S8-2 저장된 매니페스트가 확장 앱이면 app_save 로 못 고친다 — 저장하면 그 전개물이 걷힌다", () => {
