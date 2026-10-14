@@ -101,10 +101,12 @@ const src = read("src/terminal/sessions.ts");
   ok(tryAt > metaAt, "WR6-b 표식 묶음은 try 안에서 보낸다 — 실패를 그냥 던지지 않는다(E32)");
   const catchBody = tryAt > 0 ? blk.slice(tryAt, blk.indexOf("\n  }\n", tryAt)) : "";
   const killAt = catchBody.indexOf('"kill-session", "-t", id');
-  const delAt = catchBody.indexOf("deleteSessionState(id)");
+  const delAt = catchBody.indexOf("dropOwnRow()");
   ok(killAt > 0, "WR6-c 실패하면 방금 만든 판을 kill 한다(E32)");
-  ok(delAt > killAt && /if \(gone && inside && mirrored\) await deleteSessionState\(id\)/.test(catchBody),
-    "WR6-d ★ DB 행은 판이 사라진 게 확인됐고(gone) 이번 호출이 먼저 쓴 행(inside·mirrored)일 때만 지운다(E32)");
+  //  #4694 — «이번 호출이 먼저 쓴 행» 판정은 dropOwnRow 한 자리에 모였다(mirrored && !reuseId — 같은 id 복원의 행은 남긴다).
+  ok(delAt > killAt && /if \(gone && inside\) await dropOwnRow\(\)/.test(catchBody)
+    && /const dropOwnRow = \(\): Promise<void> => \(mirrored && !reuseId \? deleteSessionState\(id\)/.test(blk),
+    "WR6-d ★ DB 행은 판이 사라진 게 확인됐고(gone) 이번 호출이 먼저 쓴 행(inside·mirrored, 같은 id 복원 아님)일 때만 지운다(E32·#4694)");
   ok(/isSessionGoneError\(/.test(catchBody), "WR6-e «사라졌다» 는 kill 성공 또는 «그런 세션 없음» 확답이다(E32)");
   ok(/throw new HttpError\(503,/.test(catchBody) && catchBody.indexOf("throw new HttpError(503,") > delAt, "WR6-f 되돌린 뒤 503 으로 알린다(E32)");
   ok(/await tmuxBatchQuiet\(sessionWindowCmds\(id,/.test(blk), "WR7 창·기록 범위 옵션도 한 벌 빌더(sessionWindowCmds)에서 온다(E33)");

@@ -67,6 +67,13 @@ export interface SessionEnsureRequest {
   /** 스케줄링 예약치(MB). 0 = 브로커 기본값. */
   memRequestMb: number;
   tmux: "inside";
+  /**
+   * #4694 — **있는 컨테이너를 다시 쓰지 말고 늘 새 자리를 만든다**(같은 id 복원 전용). 컨테이너 이름이 세션 id 인 동안엔
+   *  같은 id 의 옛 컨테이너가 브로커 철거와 겹친다 — 그 자리를 «자리 이름»(#4693 T3)으로 가르는 것이 브로커 쪽 계약이다.
+   *  모르는 브로커(T3 전)는 이 필드를 무시한다(본문의 모르는 키) — 그래서 매니지드의 같은 id 복원은 T3 의 자리 이름이 켜진
+   *  워크스페이스에서만 켠다(session_reclaim_policy.restore_same_id).
+   */
+  fresh?: boolean;
 }
 
 /**

@@ -166,6 +166,21 @@ function prevSessionIdOf(tab: ShellTab): string {
  *   · 이름 기억 — 목록이 오기 전 첫 그림에서 쓰는 값(#2028). 새 박스도 같은 세션이니 같은 이름이다.
  *  ⚠ 치움(dismissed)은 **안 옮긴다** — 그건 '지금 이 상태를 봤다'는 표시라, 복원은 새 상태다(다시 보여야 맞다).
  */
+/**
+ * 생성·복원 응답(created-cache)으로 그 세션의 목록 행을 채운다 — 노드 세션은 목록 반영이 한 박자 늦다(#1541).
+ *  #4694 — **같은 id 로 되살린** 세션은 목록에 이미 그 id 의 «중단됨»(restorable) 행이 있다. 그 행은 복원 전 사실이고
+ *   복원 응답이 더 새 사실이라 바꿔 끼운다 — 안 바꾸면 다음 목록 갱신(최대 8초)까지 죽은 세션으로 그린다(대화 모드·터미널 없음).
+ *   살아 있는 행이면 손대지 않는다(목록 폴링이 진실이다 — 일회용 항목은 다음에 비워진다). 바꿨으면 true.
+ */
+function seedCreated(id: string): boolean {
+  const cur = findSess(id);
+  if (cur && !cur.raw?.restorable) return false;
+  const seeded = takeCreated(id);
+  if (!seeded) return false;
+  data.sessions = mergeSessions([seeded as any], []).concat(data.sessions.filter((x) => x.id !== id));
+  return true;
+}
+
 function adoptSessionLocalState(oldId: string, newId: string): void {
   if (!oldId || !newId || oldId === newId) return;
   movePinnedSession(oldId, newId);
@@ -182,7 +197,7 @@ function adoptSessionLocalState(oldId: string, newId: string): void {
  */
 function resumedInTab(tab: ShellTab, sid: string): void {
   //  ★ 이 탭이 새 세션으로 옮겨 가기 **전에** 옛 id 를 집어, 그 세션에 걸린 로컬 상태를 함께 옮긴다(#2402).
-  //   복원은 **새 박스 id** 를 만든다 — 핀·이름 기억처럼 박스 id 를 키로 쓰는 것들은 여기서 안 옮기면
+  //   복원이 **새 박스 id** 를 만들면(강제 복원 등 — #4694 이후 대개는 같은 id 라 옮길 것이 없다) 핀·이름 기억처럼 박스 id 를 키로 쓰는 것들은 여기서 안 옮기면
   //   가리킬 행이 사라져 사람 눈엔 "핀이 풀렸다 · 이름이 되돌아갔다"가 된다(원준 신고 2026-08-28).
   adoptSessionLocalState(prevSessionIdOf(tab), sid);
   const href = '#/s/' + encodeURIComponent(sid);
@@ -957,6 +972,7 @@ const findSess = (id: string): Sess | undefined => findSessIn(data.sessions, id)
 //   ① 켠 직후 — loadData 전이라 목록이 비어 있다(첫 그림에서 탭 줄·좌측 목록이 전부 이름을 잃는다).
 //   ② 되살리기(POST …/restore) — 되살린 세션은 **새 박스 id** 를 받고 옛 desired-state 는 지워진다
 //      (src/terminal/routes.ts). 그 옛 주소를 든 탭은 그 순간부터 영영 못 찾는다.
+//      (#4694 이후 박스 갈래는 대개 **같은 id** 로 되살린다 — 이 갈래는 강제 복원·노드 세션에만 남는다.)
 //   ③ 완전 삭제·회수 — 목록에서 빠진다.
 //  못 찾으면 titleFor 는 id 꼬리(`세션 1d14b3`)로 물러나는데, tabs.ts paint() 가 그 값을 **탭 저장본에
 //  덮어써** 저장했다(save). 그래서 한 번 못 찾은 세션은 알던 이름까지 잃고 영영 id 로 남았다 — 실측 재현:
@@ -1428,6 +1444,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         //   탭을 떠나면 셸이 부순다(세션 화면과 같은 수명). 목록에 아직 없으면(방금 열었거나 첫 판) 한 번 새로 읽는다.
         mountSession: async (h, sid, o) => {
           if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+          seedCreated(sid);   // #4694 — 같은 id 로 되살린 리브 세션도 «중단됨» 행이 아니라 복원 응답으로 붙인다
           if (!findSess(sid)) await loadData();
           if (seq !== tab.seq || !h.isConnected) return null;
           const handle = renderSession(h, data, sid, {
@@ -1475,12 +1492,9 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       await mountProjectShell(tab, id, null, seq);
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
+      // 방금 만든(되살린) 세션이면 생성 응답 전문으로 먼저 그린다(created-cache — seedCreated 머리말).
+      seedCreated(id);
       let s = findSess(id);
-      // 방금 만든 세션이면 생성 응답 전문으로 먼저 그린다(created-cache — 노드 세션은 목록 반영이 한 박자 늦다).
-      if (!s) {
-        const seeded = takeCreated(id);
-        if (seeded) { data.sessions = mergeSessions([seeded as any], []).concat(data.sessions); s = findSess(id); }
-      }
       if (!s) { await loadData(); drawSide(); s = findSess(id); }
       // 그래도 없으면(다른 탭에서 만든 노드 세션 등) 에러로 끝내지 않는다 — "새로고침해 주세요"는 사람에게 폴링을 시키는 것.
       if (!s) {
@@ -1522,6 +1536,10 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           onRename: (label) => renameSession(s ? s.id : id, label, tab),
           onToggleFiles: () => toggleAsideFiles(tab, id),
           solo: true,
+          //  #4694 — 되살린 세션으로 **이 창을 다시 그린다.** 같은 id 로 되살리면 주소가 그대로라 hashchange 가 안 나고,
+          //   종전(주소 바꾸기)으로는 아무 일도 안 일어난다 — 버튼은 «여는 중…» 에, 대화창은 죽은 세션 화면에 남는다.
+          //   이 갈래는 다시 그리기 전에 옛 대화창을 안 부수므로(아래 mountProjectShell 과 다르다) 여기서 부순다.
+          onResumed: (nid) => { tab.chat?.destroy(); tab.chat = null; resumedInTab(tab, nid); },
         });
         return;
       }

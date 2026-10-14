@@ -300,6 +300,28 @@ export async function markSessionOomKilled(id: string): Promise<boolean> {
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * #4694 — **같은 id 로 다시 띄운 세션**의 «끝났다» 표식을 지운다(createSession reuseId 가 행을 다시 쓴 직후 부른다).
+ *
+ *  upsertSessionState 는 이 칸들을 일부러 안 건드린다(생성 시점엔 미상 — 훅이 사후에 채운다). 새 id 로 복원하던 때는
+ *  새 행이라 늘 비어 있었지만, 같은 id 면 지난 판의 표식이 그대로 남는다:
+ *   · `exited_at` — 브로커 장부가 이 세션을 «원한다» 가 아니라 «사람이 끝냈다(exited)» 로 읽는다(lvly-cloud sessionledger
+ *     parseLedger) — 새로 뜬 컨테이너의 안이 아직 비어 있는 창(tmux 전)에 걷힐 수 있다. 목록도 «시작 중» 대신 «종료됨».
+ *   · `exit_reason` — 'oom' 이면 화면이 «메모리 부족으로 죽은 세션» 으로 그린다.
+ *   · `discovered` — 노드 스냅샷에서 발견한 행 표식(#2022). 게이트웨이가 좌표를 정해 다시 띄웠으니 더는 «좌표 미상» 이 아니다.
+ *  `superseded_by` 는 건드리지 않는다 — 이어진 행은 복원 라우트가 먼저 그 이음으로 안내하고 여기까지 오지 않는다.
+ *  반환 = 고친 행이 있었나(없으면 행이 없는 것 — 호출자는 그대로 진행한다).
+ */
+export async function reviveSessionState(id: string, owner: string): Promise<boolean> {
+  if (onNode()) return false;   // 노드엔 DB 가 없다(같은 id 복원은 게이트웨이 박스 갈래뿐이다)
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET exited_at=NULL, exit_reason=NULL, discovered=false, updated_at=now()
+      WHERE id=$1 AND owner=$2 AND superseded_by IS NULL`,
+    [id, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 // #1719 세션 대화창 — 라이브 세션 행에 '이 박스가 도는 대화 UUID' 를 실어 주기 위한 일괄 조회.
 //  목록 라우트가 세션마다 getSessionState 를 부르면 세션 수만큼 왕복이라(실측 dev 200+행), 한 번에 가져온다.
 //  없는 id·미보고(NULL)는 결과에 없다 — 호출자가 '모름'으로 다룬다(추측하지 않는다, 위 claude_session_id 주석).

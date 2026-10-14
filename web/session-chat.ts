@@ -1554,7 +1554,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     setMode('term');
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
-  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 새 id 로 새 노드에 앉히고 대기 중인 지시(큐)를 승계한다(routes.ts). */
+  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 지금 서빙 노드에 다시 앉힌다(routes.ts) — #4694 이후 대개 **같은 id** 라
+   *  대기 중인 지시(큐)가 그 id 에 그대로 있다. 새 id 로 열리는 경우(강제 복원 등)는 서버가 큐를 그 세션으로 승계한다. */
   async function restoreUnreachable(pd: Pending): Promise<void> {
     const btn = pd.restoreBtn;
     if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
@@ -1576,6 +1577,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
           ? '이어받을 대화 기록이 그 컴퓨터에 없어 새 대화로 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.'
           : '이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
         if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
+        return;
+      }
+      //  #4694 — **같은 id 로 다시 띄웠다**(새 세션이 아니라 이 세션 그대로). 종전 판정(`next !== target.id`)은 이걸 실패로 읽어
+      //   «지금은 복원할 수 있는 상태가 아니에요» 를 띄웠다 — 실제로는 세션이 떠 있는데. 대기 중이던 지시는 이 id 의 큐에 그대로 있다.
+      if (r?.session && next === target.id) {
+        toast(r?.resumed === 'fresh'
+          ? '이어받을 대화 기록이 없어 새 대화로 다시 띄웠어요 — 대기 중이던 지시가 곧 들어갑니다.'
+          : '세션을 다시 띄웠어요 — 대기 중이던 지시가 곧 들어갑니다.');
+        if (opts.onResumed) opts.onResumed(next);   // 셸이 이 탭을 살아 있는 세션으로 다시 그린다(주소는 그대로라 hashchange 가 없다)
         return;
       }
       //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
@@ -2129,6 +2139,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     try {
       let nextId = '';
       let moved = '';                            // #2231 — 이 세션은 이미 이어졌다(서버가 알려준 새 id)
+      let revivedInPlace = false;                // #4694 — 서버가 새 세션이 아니라 **이 id 그대로** 다시 띄웠다
       // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
       //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
       //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
@@ -2147,6 +2158,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         //  막다른 길이었다. 이제는 그 새 id 로 **옮겨 간다**(아래 공통 라우팅). 새로고침을 시킬 이유가 없다.
         moved = String(r?.movedTo || '');
         nextId = String(r?.session?.id || moved || (r?.already ? target.id : ''));
+        revivedInPlace = !!r?.session && nextId === target.id;
       } else {
         const sid = !isBox() ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
         const node = !isBox() ? String(target.node ?? '') : String(target.logNode ?? '');
@@ -2158,7 +2170,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
-      toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.' : '이어받기 세션을 열었어요.');
+      toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.'
+        : revivedInPlace ? '세션을 다시 띄웠어요 — 대화가 이어집니다.' : '이어받기 세션을 열었어요.');
       //  ⚠ 라우팅 **전에** 훅을 부른다(#2439) — 되살린 세션에 말을 넣는 일이 여기서 일어나야 한다. 옮겨 간 뒤에
       //   넣으면 이 컴포넌트는 이미 destroy 된 뒤라 실패해도 아무도 모른다.
       if (beforeRoute) await beforeRoute(nextId);
