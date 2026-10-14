@@ -18,7 +18,8 @@
 //  R13 도구(mermaid.min.js)가 없는 자리 → 코드 그대로 + «불러오지 못해» 한 줄
 //  R14 그리는 프레임이 다른 문서로 옮겨 가면 → 옮겨 간 문서는 다음 그림의 코드를 못 받는다 · 새 프레임이 그린다
 //  R15 에디터 미리보기에 빈 코드 → «코드를 적으면…» · 그림 없음 · onState(false)
-//  B1~B4 본문 칸 폭 정책(경계): 칸이 넓으면 원래 폭 · 0.7배~원래 폭 사이면 칸에 맞춤 · 칸=ceil(0.7배)이면 그 값 · 더 좁으면 0.7배(가로로 민다)
+//  B1~B6 본문 칸 폭 정책(경계): 칸이 넓으면 원래 폭 · 0.7배~원래 폭 사이면 칸에 맞춤 · 칸=ceil(0.7배)이면 그 값 ·
+//        더 좁으면 0.7배(가로로 민다) — 단 0.7배가 칸의 두 배를 넘으면(조각만 보인다) 칸에 맞춰 통째로 줄인다(경계: 정확히 두 배는 민다)
 //  E1  블록 에디터 — 그림이 서서 코드 칸이 접힌 채로도 저장 마크다운 = 원문(코드 칸을 숨기는 방식이 innerText 를 바꾸면 여기서 깨진다)
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -161,8 +162,12 @@ async function PAGE_MAIN() {
       const vs = getComputedStyle(view0);
       const inner = () => view0.clientWidth - parseFloat(vs.paddingLeft) - parseFloat(vs.paddingRight);
       const extra = host.clientWidth - inner();
-      const at = (cw) => { host.style.width = (cw + extra) + "px"; return { cw: Math.round(inner()), w: Math.round(im0.getBoundingClientRect().width) }; };
-      R.widths = { W, b1: at(W + 100), b2: at(Math.round(W * 0.85)), b3: at(Math.ceil(W * 0.7)), b4: at(Math.round(W * 0.5)) };
+      //  칸 폭이 바뀌면 ResizeObserver 가 다음 그리기 전에 다시 잰다 — 두 프레임 기다린 뒤 읽는다.
+      const frame2 = () => new Promise((z) => requestAnimationFrame(() => requestAnimationFrame(z)));
+      const at = async (cw) => { host.style.width = (cw + extra) + "px"; await frame2(); await sleep(30);
+        return { cw: Math.round(inner()), w: Math.round(im0.getBoundingClientRect().width) }; };
+      R.widths = { W, b1: await at(W + 100), b2: await at(Math.round(W * 0.85)), b3: await at(Math.ceil(W * 0.7)), b4: await at(Math.round(W * 0.5)),
+        b5: await at(Math.ceil(W * 0.35)), b6: await at(Math.floor(W * 0.35) - 2) };
       host.style.width = "760px";
     }
 
@@ -359,6 +364,8 @@ check(Wd.W > 0 && b("b1").cw > Wd.W && near(b("b1").w, Wd.W), "B1 칸이 그림�
 check(Wd.W > 0 && b("b2").cw < Wd.W && near(b("b2").w, b("b2").cw), "B2 0.7배~원래 폭 사이면 칸 폭에 맞춘다", J(Wd));
 check(Wd.W > 0 && near(b("b3").cw, Math.ceil(Wd.W * 0.7)) && near(b("b3").w, b("b3").cw), "B3 칸 = ceil(0.7×폭) 경계 → 칸에 꼭 맞는다(가로 스크롤 없음)", J(Wd));
 check(Wd.W > 0 && near(b("b4").w, Math.ceil(Wd.W * 0.7)) && b("b4").w > b("b4").cw + 1, "B4 칸이 더 좁으면 0.7배에서 멈추고 가로로 민다", J(Wd));
+check(Wd.W > 0 && b("b5").w <= 2 * b("b5").cw + 1 && near(b("b5").w, Math.ceil(Wd.W * 0.7)), "B5 경계 — 0.7배가 칸의 정확히 두 배면 아직 0.7배로 민다", J(Wd));
+check(Wd.W > 0 && Math.ceil(Wd.W * 0.7) > 2 * b("b6").cw && near(b("b6").w, b("b6").cw), "B6 0.7배가 칸의 두 배를 넘으면 칸에 맞춰 통째로 줄인다(조각 대신 모양 전체)", J(Wd));
 check(J(R.cachedNow) === J(["ok", "ok", "ok", "err", "ok"]), "R10 같은 본문 다시 렌더 — 렌더 직후 바로 그림(캐시)", J(R.cachedNow));
 check(!!R.repaint && R.repaint.changed && R.repaint.hasInk, "R11 테마가 바뀌면 새 토큰 색으로 다시 그린다", J(R.repaint));
 const P = R.pv || {};

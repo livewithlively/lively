@@ -232,7 +232,8 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .md-pre-copy:hover > .btn, .md-pre-copy > .btn:focus-visible { opacity: 1; }
 /* mermaid 다이어그램(#4685) — 본문 속 ```mermaid 를 그림으로(web/lib/mermaid.ts). 그림은 격리 프레임이 그린 svg 를 <img> 로만 띄운다.
    칸 = 그림 · (펼친) 코드 · 아래 줄(알림 + [코드 보기][크게 보기]). 단추는 늘 보인다 — 호버에만 뜨는 조작을 두지 않는다. */
-.md-mermaid { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.md-mermaid { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden;
+  break-inside: avoid; }   /* 두 단 본문(허브 .pjh-read.cols2 — column-count)에서 그림이 단 사이로 쪼개지지 않게 */
 .md-mermaid-view { overflow-x: auto; padding: 16px 14px 4px; }
 .md-mermaid.is-wait .md-mermaid-view { min-height: 56px; }
 .md-mermaid-img { display: block; margin: 0 auto; max-width: none; height: auto; cursor: zoom-in; }

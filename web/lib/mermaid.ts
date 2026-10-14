@@ -30,8 +30,11 @@ import { type Picture, openViewer, svgUrl } from './mermaid-viewer.js';
 /** 그림 글꼴 — 프레임(잴 때)과 <img>(그릴 때)가 같은 글꼴을 쓰게 시스템 글꼴만 적는다. */
 const FONT = '"Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Segoe UI", sans-serif';
 const FONT_SIZE = '14px';
-/** 본문 안 그림의 최소 배율 — 칸에 맞추느라 이보다 작아지면 글자를 못 읽는다. 그땐 칸에 맞추지 않고 가로로 민다. */
+/** 본문 안 그림의 최소 배율 — 칸에 맞추느라 이보다 작아지면 글자를 못 읽는다. 그땐 칸에 맞추지 않고 가로로 민다(FIT_SPAN 안에서). */
 const MIN_SCALE = 0.7;   // 14px 글자가 약 10px — 2026-10-14 #4478 의존 그래프(폭 2,000px대)로 0.6(8px대)·0.7 을 눈으로 대 보고 정했다
+/** 단, 0.7배로도 칸의 이 배수보다 넓으면 그 자리에선 조각(대개 빈 여백)만 보인다 — 그땐 칸에 맞춰 통째로 줄인다(글은 [크게 보기]).
+ *  2026-10-14 프리뷰 실측: 허브 본문 위젯(칸 370px)에 폭 2,032px 그래프를 0.7배로 두니 왼쪽 위 빈칸과 선 하나만 보였다. */
+const FIT_SPAN = 2;
 const LOAD_MS = 20_000;      // 프레임이 mermaid 를 싣고 «준비» 를 말할 때까지
 const RETRY_MS = 30_000;     // 싣기에 실패하면 이 동안은 다시 싣지 않는다(그림마다 3.5MB 를 다시 부르지 않게)
 //  그림 하나 — 넘기면 프레임을 버리고 새로 띄운다. mermaid 엔 무한 루프 결함이 실제로 있었다
@@ -338,8 +341,7 @@ function show(figEl: HTMLElement, st: Fig, d: Drawn): void {
     const img = el('img', { class: 'md-mermaid-img', alt: d.title || '다이어그램', decoding: 'async', draggable: 'false' }) as HTMLImageElement;
     img.width = d.w;
     img.height = d.h;
-    //  칸보다 크면 칸에 맞추되 MIN_SCALE 밑으로는 줄이지 않는다(그땐 가로로 민다) — 작은 그림은 키우지 않는다.
-    img.style.width = `min(${d.w}px, max(100%, ${Math.ceil(d.w * MIN_SCALE)}px))`;
+    sizeImg(img, d.w, innerWidth(st.view));   // 칸 폭이 바뀌면 fitRo 가 다시 잰다
     img.src = svgUrl(d.svg);
     img.addEventListener('click', () => openViewer(d, img));
     replaceKids(st.view, img);
@@ -349,6 +351,34 @@ function show(figEl: HTMLElement, st: Fig, d: Drawn): void {
   //  에디터 칸이 틀린 코드를 받으면 직전 그림을 흐리게 남긴다 — 고치는 동안 그림이 깜빡이며 사라지지 않게(CSS .is-err .md-mermaid-img).
   st.zoomBtn.disabled = !isPic(st.last) || (!ok && !st.edit);
   if (st.onState) st.onState(ok);
+}
+
+// 칸 폭 정책 — 작은 그림은 키우지 않는다. 칸보다 넓으면 칸에 맞추되 MIN_SCALE 밑으로는 줄이지 않고 가로로 민다.
+//  그래도 칸의 FIT_SPAN 배보다 넓으면(조각만 보인다) 칸에 맞춰 통째로 줄인다. 칸 폭(cw)을 모르면(아직 문서 밖) 앞의 규칙만.
+//  CSS min()/max() 로는 못 쓴다 — 「0.7배 → 칸 폭」으로 뛰는 자리가 있어서다(연속 함수의 조합은 뛰지 못한다). 그래서 칸을 잰다.
+/** 칸 안쪽 폭(여백 뺀 것) — 문서 밖이면 0(모른다). ResizeObserver 의 contentRect.width 와 같은 값이다. */
+function innerWidth(view: HTMLElement): number {
+  if (!view.isConnected) return 0;
+  const cs = getComputedStyle(view);
+  return Math.max(0, view.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
+}
+function sizeImg(img: HTMLImageElement, w: number, cw: number): void {
+  img.style.width = cw > 0 && w * MIN_SCALE > cw * FIT_SPAN ? '100%' : `min(${w}px, max(100%, ${Math.ceil(w * MIN_SCALE)}px))`;
+}
+let fitRo: ResizeObserver | null = null;
+function watchWidth(view: HTMLElement): void {
+  if (typeof ResizeObserver === 'undefined') return;
+  if (!fitRo) {
+    fitRo = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const fig = (e.target as HTMLElement).closest('figure.md-mermaid') as HTMLElement | null;
+        const st = fig ? FIGS.get(fig) : undefined;
+        const img = (e.target as HTMLElement).querySelector('img.md-mermaid-img') as HTMLImageElement | null;
+        if (st && img && isPic(st.last)) sizeImg(img, st.last.w, e.contentRect.width);
+      }
+    });
+  }
+  fitRo.observe(view);
 }
 
 async function paint(figEl: HTMLElement): Promise<void> {
@@ -427,6 +457,7 @@ function makeFig(code: string, edit: boolean): { figEl: HTMLElement; st: Fig; ac
   const st: Fig = { code, edit, pal: '', ticket: 0, seen: false, last: null, view, note, zoomBtn };
   zoomBtn.addEventListener('click', () => { if (isPic(st.last)) openViewer(st.last, zoomBtn); });
   FIGS.set(figEl, st);
+  watchWidth(view);
   return { figEl, st, acts };
 }
 
