@@ -351,6 +351,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/vis-personal-unlock.pg-test.mjs
+      # ⑤-n2 ClickUp 반출의 부모 좌표 치유 — 위 가시성 축과 같은 경계다. 치유가 부모 프로젝트의 list_id 를 옮기는데,
+      #    미러 안 된 리스트로 옮겨졌을 때 list_id 를 비우면 «미분류 = 전원 공개» 가 된다. 판정이 UPDATE 한 문장의
+      #    CASE·서브쿼리·NULL 비교라 목으로는 조건 하나를 지워도 초록이다 — 행을 깔고 기록 뒤 되읽어 바깥 사람 가시성까지 본다.
+      - name: ClickUp 부모 좌표 치유(list_id·공개범위) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/connectors/clickup-push-heal.pg-test.mjs
       # ④-d2 앱 판(#4600 · 장표 수정 앱 #4592) — 목으로는 못 보는 것: 덮어쓴 빌트인의 source 가 kind builtin 을 **유지**한 채 overrides_builtin 이 붙어
       #    데이터 표 스키마가 안 바뀌는지 · 시더가 그 행을 건너뛰는지 · 되돌리기가 폴더에서 빌트인으로 재설치하는지 · 보관 20 과 판 행이 설치 전에 쓰이는지.
       - name: 앱 판(덮어쓰기·이력·되돌리기) PG 통합 테스트

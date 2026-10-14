@@ -5,13 +5,13 @@
 //  status: **그 카드가 속한 리스트**의 상태셋에서 뽑는다(판정은 clickup/push-status.ts). 불일치 시 status 빼고 1회 재시도.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { clickupFetch, createTask, updateTask, getTeam, createTaskComment } from "./clickup.js";
+import { clickupFetch, createTask, updateTask, getTeam, createTaskComment, getTask } from "./clickup.js";
 import { CLOSED_CATEGORIES, closeCommentText, type CloseNote } from "./clickup/close-comment.js";
 import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
-import { createListFor, needsAncestorChain, statusListFor } from "./clickup/push-target.js";
+import { createListFor, needsAncestorChain, statusListFor, createUnderParent, isParentNotInList } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
@@ -25,6 +25,9 @@ import { PUBLIC_VIEWER } from "../v6/visibility.js";
 //  ⚠ 기준은 **그 행의 누적 attempts** 다(상태셋 전용 카운터가 아니다 — 일반 push 실패와 같은 칸을 쓴다).
 //   그래서 이미 여러 번 실패한 행은 상태셋 재시도 기회가 줄거나 없다. 재enqueue 시 attempts 는 0 으로 리셋된다.
 const STATUS_LOAD_RETRY_LIMIT = 5;
+// 치유 재시도(createUnderParent)에서 고친 리스트의 상태셋을 일시적으로 못 읽었다 — 정상 경로의 statusLoadFailed 처럼
+//  «이번엔 미룬다» 이지 실행 실패가 아니다. 행 루프의 catch 가 분류보다 먼저 deferred 로 처리한다.
+class StatusLoadDeferred extends Error {}
 const PRIORITY_MAP: Record<string, number> = { urgent: 1, high: 2, normal: 3, low: 4 };
 const toMs = (d?: string | null): number | undefined => {
   if (!d) return undefined;
@@ -60,7 +63,8 @@ function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown>
 //  아예 안 실었거나 빼고 재시도한 경우 ClickUp 태스크는 열린 채인데 «닫았다»는 코멘트만 붙으면 침묵보다 나쁘다.
 async function createSafe(listId: string, body: Record<string, unknown>) {
   try { return { task: await createTask(listId, body), statusApplied: body.status != null }; }
-  catch (e) { if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
+  //  ITEM_137(부모 리스트 불일치)은 status 와 무관하다 — status 를 빼고 다시 보내도 같은 400 이 나므로 바로 던진다(createUnderParent 가 처리).
+  catch (e) { if (isParentNotInList(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
 }
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
   try { await updateTask(taskId, body); return { statusApplied: body.status != null }; }
@@ -98,6 +102,45 @@ async function postCloseComment(p: ProjRow, taskExtId: string, note: CloseNote):
 /** clickupFetch 가 던진 오류가 «그 태스크가 저쪽에 없다»(상태코드 404)인가. */
 export function isClickupTaskGone(e: unknown): boolean {
   return e instanceof Error && /^ClickUp 404 /.test(e.message);
+}
+
+/**
+ * 단건 조회 오류가 «이 토큰의 워크스페이스에서 그 태스크를 볼 수 없다»(401 OAUTH_027 Team not authorized)인가.
+ *  카드가 이 토큰이 권한 없는 다른 워크스페이스로 옮겨지면 이렇게 온다(2026-10-11 실측). 우리 쪽에서는 지워진 것과 같다.
+ *  같은 워크스페이스의 비공개 공간 거부는 다른 코드로 오므로 여기 해당하지 않는다(종전대로 던져 재시도).
+ *  ⚠ 토큰 자체가 죽은 경우와 구분해야 한다 — 이 판정은 «같은 토큰으로 방금 create 가 인증을 통과해 ITEM_137 을 받은 뒤»
+ *   부모를 조회할 때만 쓴다(createUnderParent 의 lookupParentList). 일반 경로에서 쓰면 토큰 장애를 «카드 없음» 으로 덮는다.
+ */
+export function isClickupTaskInaccessible(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 401 /.test(e.message) && /OAUTH_027/.test(e.message);
+}
+
+/**
+ * 치유한 부모 좌표를 기록한다(createUnderParent 의 onHealed). 행동은 clickup-push-heal.pg-test.mjs 가 실 PG 로 잠근다.
+ *
+ *  · 좌표는 **원래 값이 있던** 부모(인바운드가 채운 미러)에만 고쳐 쓴다. 비어 있던 부모는 push 로 만든 네이티브 카드라
+ *    base.list_ext 를 써 두면 첫 인바운드의 list_id 수렴이 뒤집힌다(push-target.ts createListFor 머리말). 그 경우는
+ *    이번 생성만 고친 리스트로 하고 좌표는 그대로 둔다.
+ *  · base 를 고칠 때 list_id 도 인바운드가 했을 것처럼 옮긴다 — base 만 바꾸면 다음 인바운드의 3-way(base=새 값,
+ *    ours=옛 리스트, theirs=새 값)가 ours 를 채택해 로컬 배치가 옛 리스트에 고정된다(mirror-project.ts 「외부 이동
+ *    수렴」). 로컬에서 따로 옮겨 둔 부모(ours≠base)는 그대로 둔다.
+ *  · 🔴 새 리스트가 미러돼 있지 않으면(수집 범위 밖으로 옮겨짐 — 이 치유가 필요한 바로 그 상황) list_id 를 **그대로
+ *    둔다.** NULL 로 비우면 그 프로젝트는 «미분류 = 전원 공개»(v6/visibility.ts canSeeProjectRow)가 되어, 잠긴 리스트에
+ *    있던 프로젝트와 그 태스크가 조직 전체에 열리고 리스트 화면에서도 사라진다. 인바운드는 범위 밖 카드를 다시 보지
+ *    않으니 인바운드가 했을 일도 아니다 — 공개범위는 fail-closed 다. 대가: 그 리스트가 나중에 미러되면 3-way
+ *    (t==b → ours)로 옛 리스트에 남는다(사람이 옮기면 된다 — 열리는 쪽보다 낫다).
+ */
+export async function recordHealedParentList(parentId: number, listExt: string): Promise<void> {
+  await itemsPool.query(
+    `UPDATE project SET
+            list_id = CASE
+              WHEN (SELECT pl.external_id FROM project_list pl WHERE pl.id = project.list_id) = (external_base->>'list_ext')
+              THEN COALESCE((SELECT pl.id FROM project_list pl
+                     WHERE pl.external_system='clickup' AND pl.external_instance=project.external_instance AND pl.external_id=$2), list_id)
+              ELSE list_id END,
+            external_base = external_base || jsonb_build_object('list_ext', $2::text),
+            updated_at=now()
+      WHERE id=$1 AND NULLIF(btrim(external_base->>'list_ext'), '') IS NOT NULL`, [parentId, listExt]);
 }
 
 /**
@@ -256,6 +299,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       //  만든 자식 — 첫 인바운드 전) 같은 체인으로 태어난 리스트를 푼다(왜인지는 needsAncestorChain 머리말 — 상태 원복).
       const willUpdate = p.external_system === "clickup" && !!p.external_id;
       let parentExt: string | undefined;
+      let parentId: number | undefined;
       let chainListExts: (string | null)[] = [];
       if (needsAncestorChain({ level: p.level, linked: willUpdate, ownListExt: p.list_ext, hasParent: p.parent_id != null })) {
         if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip(create 만 여기 온다)
@@ -290,6 +334,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
             await markDone(ob.id); skipped++; continue;
           }
           parentExt = par.external_id;
+          parentId = par.id;
         }
       }
       const createList = createListFor(chainListExts, containerId);
@@ -346,7 +391,45 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         // 위 SELECT 가 컨테이너 부재 시 external_id 없는 행을 뽑지 않으므로, 여기 닿는 건 다른 시스템 미러
         //  (external_system≠clickup — 예: 노션 미러 프로젝트)뿐이다. create 할 자리가 없으니 닫는다.
         if (!containerId) { await markDone(ob.id); skipped++; continue; }
-        const { task: ct, statusApplied } = await createSafe(createList, { ...body, ...(parentExt ? { parent: parentExt } : {}) });
+        //  부모 좌표가 낡았으면 저쪽 카드에서 다시 읽어 한 번 고쳐 만든다(createUnderParent 머리말 — ITEM_137 재발).
+        //   고친 리스트에선 상태셋이 다를 수 있으니 status 를 그 리스트 기준으로 다시 정한다.
+        const bodyForList = async (listId: string) => {
+          //  상태셋을 못 읽었으면 status 없이 만들지 않는다 — 위 STATUS_LOAD_RETRY_LIMIT 가드와 같은 이유(변경 영구 유실)이고
+          //   상한도 같다(넘으면 status 없이 진행). 정상 경로처럼 **미룸**으로 처리한다(StatusLoadDeferred → catch 에서
+          //   deferred) — 실패로 세면, 좌표를 기록하지 않는 네이티브 부모 아래에서는 이 경로가 매 틱 다시 돌아 상한에 닿기
+          //   전에 연속 실패 브레이커가 먼저 선다(기본 max_fail_streak 5 = 이 상한 5). 좌표가 기록된 부모(list_ext 보유)면
+          //   다음 틱은 정상 경로가 그 가드를 탄다.
+          const { statuses: st, failed: stFailed } = await statusesOf(listId);
+          if (stFailed && ob.attempts < STATUS_LOAD_RETRY_LIMIT) throw new StatusLoadDeferred(`list ${listId} 상태셋 로드 실패(치유 재시도) — 다음 틱 재시도`);
+          return mkBody(p, decidePushStatus({
+            ourCategory: p.status_category, theirStatusRaw: p.base_status_raw, statuses: st, baseCategory: p.base_status_category,
+          }));
+        };
+        const made = await createUnderParent({
+          listId: createList,
+          parentExt,
+          create: async (listId, healed) =>
+            createSafe(listId, { ...(healed ? await bodyForList(listId) : body), ...(parentExt ? { parent: parentExt } : {}) }),
+          lookupParentList: async (ext) => {
+            try { return { kind: "list", listId: (await getTask(ext)).list?.id ?? "" }; }
+            catch (err) { if (isClickupTaskGone(err) || isClickupTaskInaccessible(err)) return { kind: "gone" }; throw err; }
+          },
+          //  무엇을 어떻게 고쳐 쓰는지(좌표가 있던 부모만 · list_id 는 미러된 리스트로만)는 recordHealedParentList 머리말.
+          onHealed: (_ext, listId) => parentId == null ? Promise.resolve() : recordHealedParentList(parentId, listId),
+        });
+        if (made.kind === "parent_gone") {
+          //  부모 카드가 저쪽에서 지워졌거나(404) 이 토큰이 못 보는 워크스페이스로 옮겨졌다(401 OAUTH_027) — 갱신 경로의 404 와
+          //   같은 규율로 부모 연결을 끊는다(pushLinkedUpsert 머리말). 이 행은 이번엔 미루고, 다음에 볼 때 부모가 반출 대상도
+          //   반출 대기도 아니므로 위 부모 미반출 분기가 닫는다. 부모가 다시 올라간 뒤 이 자식을 다시 편집하면 그 아래에
+          //   만들어진다(저절로 따라 올라가지 않는다).
+          await itemsPool.query(
+            `UPDATE project SET external_system=NULL, external_instance=NULL, external_id=NULL, external_url=NULL,
+                    external_base=NULL, updated_at=now() WHERE id=$1`, [parentId]);
+          logger.warn({ project: p.id, parent: parentExt }, "부모 ClickUp 카드가 지워졌거나 이 워크스페이스에서 볼 수 없어 부모 연결을 끊었다(이 자식의 반출은 다음에 볼 때 닫힌다 — 부모가 다시 올라간 뒤 다시 편집하면 그 아래에 만들어진다)");
+          deferred++; continue;
+        }
+        if (made.listId !== createList) logger.warn({ project: p.id, parent: parentExt, from: createList, to: made.listId }, "부모 리스트 좌표가 낡아 저쪽 값으로 고쳐 만들었다(ITEM_137)");
+        const { task: ct, statusApplied } = made.result;
         const url = ct.url || `https://app.clickup.com/t/${ct.id}`;
         await itemsPool.query(
           `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
@@ -359,6 +442,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
       await markErr(ob.id, msg);
+      //  치유 재시도의 상태셋 로드 일시 실패는 정상 경로(statusLoadFailed: markErr + deferred)와 같이 미룬다 — 실행 실패가
+      //   아니다(bodyForList 주석). 분류보다 먼저 빠져야 시스템성 failed 로 세지 않는다.
+      if (e instanceof StatusLoadDeferred) { deferred++; continue; }
       const kind = classifyPushFailure(e);
       if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
       rejected++; rejectedIds.push(ob.id);
