@@ -80,13 +80,18 @@ The old `pm_task_*` MCP tools (create·update_status·assign·comment·link·arc
 
 | op | Semantics |
 |---|---|
-| Create | project = top-level Task in the container List, task = Subtask (parent = the project Task), subtask = nested Subtask. `CLICKUP_CONTAINER_LIST_ID` (admin tab 'container list') is required — without it the row stays in error. If the parent is not pushed yet, the child is deferred to the next tick. Links back external_id/url after creation |
+| Create | project = top-level Task in the container List, task = Subtask (parent = the project Task), subtask = nested Subtask. `CLICKUP_CONTAINER_LIST_ID` (admin tab 'container list') is required — without it the row stays in error. If the parent is not pushed yet, the child is deferred to the next tick (only while the parent's row is queued — if the parent is not exportable (restricted visibility, link dropped because its card was deleted, …) the child's export is closed; editing the child again after the parent is pushed creates it under the parent). Links back external_id/url after creation |
 | Update | PUTs name·`markdown_description`·status·priority·start/due. status maps the canonical category → the space's status set; on a mismatch it retries once without status |
 | Delete | **Hard-deletes** the ClickUp task (`DELETE /task/<id>` — already gone (404) counts as success) |
 
 - Idempotent: the drain re-reads the current project row and upserts — running it twice converges to the same ClickUp state. Pushed values
   advance `external_base` (the common ancestor for the 3-way merge), so the next inbound picks out only external edits.
-- Failed rows keep `attempts`·`last_error` and are retried on the next tick. exit 1 = there are failed rows.
+- Failed rows keep `attempts`·`last_error` and are retried on the next tick. exit 1 = a systemic failure (5xx, network, 401, 403, 429) occurred.
+- Row-specific rejections (other 4xx) don't count as run failures (`rejected`); a row rejected 3 times is dropped from the drain (parked — `parked`, one alert). Editing that item again releases it. If one run has 5+ rejections and zero pushes, it is treated as a configuration problem and raised as a run failure (no parking).
+- Bulk-release parked rows (after fixing the cause): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
+  The values must match `parkedParams()` in `src/connectors/push-failure.ts` — change both together.
+- Check right after deploying: rows that had already failed 3+ times with the same 4xx before this behaviour shipped are dropped from the drain from the first run **without an alert** (the alert covers only rows newly parked in that run). After deploying, check `parked` in the first run's summary (Admin ▸ Schedule ▸ push summary); if it is not 0, inspect those rows with the query below, fix the cause, then release them with the SQL above:
+  `SELECT entity_id, attempts, last_error FROM external_outbox WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
 - **Native** projects (born in Lively) in lists with restricted visibility are not exported (#1291). Rows that originated from the mirror are pushed as usual.
 
 ## 4. Schedule

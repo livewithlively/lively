@@ -16,6 +16,8 @@ import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.j
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
 import { drainBudgetExceeded } from "./push-budget.js";
+import { classifyPushFailure, parksAfter, parkedSql, parkedParams, notifyParked, isMassRejection, MASS_REJECT_MARK, type ParkedRow } from "./push-failure.js";
+import { sendBoxAlert } from "../ops/alerts.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { PUBLIC_VIEWER } from "../v6/visibility.js";
 
@@ -124,10 +126,20 @@ async function countPending(): Promise<number> {
   } catch { return -1; }
 }
 
+// 그중 파킹된 행 수(push-failure.ts). 실행마다 요약에 실어, 새로 파킹될 때 한 번 나가는 경보를 놓쳐도 남아 있게 한다.
+async function countParked(): Promise<number> {
+  try {
+    const row: { n: string | number } | undefined = await one(itemsPool,
+      `SELECT count(*) AS n FROM external_outbox o WHERE o.system='clickup' AND o.done_at IS NULL AND ${parkedSql(1)}`, parkedParams());
+    return row ? Number(row.n) : -1;
+  } catch { return -1; }
+}
+
 // skipped ≠ deferred — deferred 는 '다음 틱에 다시 시도'(아웃박스 행 유지), skipped 는 '반출 대상이 아니라 닫았다'(행 소비).
 //  종전엔 둘을 deferred 로 합산해, 운영자가 큰 deferred 를 보고 일시적 지연으로 오독하면 이번 사고(영구 미반출)를
 //  못 알아본다. 두 숫자를 갈라야 '왜 큐가 안 빠지나'를 로그만으로 판정할 수 있다. detached = 저쪽 태스크가 지워져 연결을 끊었다(행 소비).
-export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean; remaining: number }> {
+//  failed 는 시스템성 실패만 센다(exit 1 → 브레이커). 행 고유 거절은 rejected 로 따로 세고, 반복되면 파킹한다(push-failure.ts).
+export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }): Promise<{ pushed: number; deferred: number; skipped: number; failed: number; rejected: number; parkedNow: number; parked: number; deleted: number; detached: number; scanned: number; visited: number; budgetStopped: boolean; remaining: number }> {
   //  원점은 호출자가 넘긴다 — 부모의 하드 타임아웃은 프로세스 스폰부터 재는데 여기서 찍으면
   //   node 부팅·모듈 로드·풀 연결만큼 여유가 조용히 깎인다(run-push 가 performance.timeOrigin 을 넘긴다).
   //   기본값은 지금 — 장수 프로세스가 이 함수를 직접 부를 때 원점이 과거로 밀려 즉시 소진되지 않게.
@@ -182,9 +194,12 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
        LEFT JOIN project p ON p.id = o.entity_id
       WHERE o.system='clickup' AND o.done_at IS NULL
         AND ($2::bool OR o.op <> 'upsert' OR p.external_id IS NOT NULL)
-      ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== ""]);
+        AND NOT ${parkedSql(3)}
+      ORDER BY o.created_at LIMIT $1`, [opts?.limit ?? 200, containerId !== "", ...parkedParams()]);
 
-  let pushed = 0, deferred = 0, failed = 0, deleted = 0, skipped = 0, detached = 0;
+  let pushed = 0, deferred = 0, failed = 0, rejected = 0, deleted = 0, skipped = 0, detached = 0;
+  let parkedRows: ParkedRow[] = [];
+  const rejectedIds: number[] = [];
   let budgetStopped = false, visited = 0;
   const markDone = (obid: number) => itemsPool.query(`UPDATE external_outbox SET done_at=now(), updated_at=now() WHERE id=$1`, [obid]);
   const markErr = (obid: number, msg: string) => itemsPool.query(`UPDATE external_outbox SET attempts=attempts+1, last_error=$2, updated_at=now() WHERE id=$1`, [obid, msg.slice(0, 500)]);
@@ -246,7 +261,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         if (p.parent_id == null) { await markDone(ob.id); continue; } // 비정상 — skip(create 만 여기 온다)
         //  직계 부모(d=0)부터 위로 — 부모의 푸시 여부는 d=0 으로 판정하고, 리스트 좌표는 체인에서 첫 non-null 을
         //  쓴다(왜 한 칸이 아니라 체인인지는 createListFor 머리말). d<8 = 폭주 방지 상한.
-        const anc: Array<{ d: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
+        const anc: Array<{ d: number; id: number; external_id: string | null; external_system: string | null; list_ext: string | null }> = await q(itemsPool,
           `WITH RECURSIVE anc AS (
              SELECT id, parent_id, external_id, external_system,
                     NULLIF(btrim(external_base->>'list_ext'), '') AS list_ext, 0 AS d
@@ -256,12 +271,24 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                     NULLIF(btrim(p.external_base->>'list_ext'), ''), anc.d+1
                FROM project p JOIN anc ON p.id = anc.parent_id
               WHERE anc.list_ext IS NULL AND anc.d < 8)
-           SELECT d, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
+           SELECT d, id, external_id, external_system, list_ext FROM anc ORDER BY d`, [p.parent_id]);
         chainListExts = anc.map((a) => a.list_ext);
         //  부모가 올라갔는지는 create 만 본다 — 갱신 행은 status 기준 리스트(statusListFor)를 위해 체인만 읽는다.
         if (!willUpdate) {
           const par = anc.find((a) => a.d === 0);
-          if (!par || par.external_system !== "clickup" || !par.external_id) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+          if (!par || par.external_system !== "clickup" || !par.external_id) {
+            //  부모가 곧 올라갈 때(부모 행이 큐에 있음)만 기다린다. 부모가 반출 대상이 아니면(리스트 매핑이 없어
+            //   skip 됐거나, 카드가 지워져 연결을 끊었거나) 부모를 다시 올릴 경로가 없어 자식이 영영 deferred 로 남는다.
+            //   그때는 자식도 닫는다. 부모가 나중에 반출되면 자식은 다음 편집 때 다시 큐에 들어와 그 아래에 만들어진다.
+            //  파킹된 부모(사람이 고쳐야 하는 거절)도 pending 이라 자식은 기다린다 — 부모가 풀리면 그대로 이어 올라간다.
+            //  같은 드레인 앞쪽에서 부모가 만들어졌으면 위 anc 재조회가 이미 external_id 를 본다(부모 CREATE 는
+            //   project.external_id 를 쓴 뒤에 markDone 한다).
+            const parentQueued = par ? await one(itemsPool,
+              `SELECT 1 FROM external_outbox WHERE system='clickup' AND entity_id=$1 AND done_at IS NULL LIMIT 1`, [par.id]) : undefined;
+            if (parentQueued) { deferred++; continue; } // 부모 미푸시 → 다음 틱
+            logger.info({ project: p.id, parent: p.parent_id }, "부모가 ClickUp 에 없고 반출 대기도 아니라 자식 반출을 닫는다");
+            await markDone(ob.id); skipped++; continue;
+          }
           parentExt = par.external_id;
         }
       }
@@ -303,7 +330,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                     external_base=NULL, updated_at=now() WHERE id=$1`, [p.id]),
         });
         if (r === "detached") {
-          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 컨테이너 리스트에 새 카드 — 자식은 부모가 다시 생긴 뒤)");
+          //  아직 안 올라간 자식은 기다리지 않는다 — 이 행이 큐에 없으니 자식을 다음에 볼 때 «부모가 반출 대상이 아님» 으로
+          //   닫힌다(위 부모 미반출 분기). 부모가 다시 올라간 뒤 그 자식을 다시 편집하면 그 아래에 만들어진다.
+          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 새 카드 — 아직 안 올라간 자식의 반출은 닫힌다, 부모가 다시 올라간 뒤 다시 편집하면 그 아래에 만들어진다)");
           await markDone(ob.id); detached++; continue;
         }
         await itemsPool.query(
@@ -328,13 +357,39 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부)");
       }
     } catch (e) {
-      await markErr(ob.id, (e as Error)?.message ?? String(e)); failed++;
-      logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)");
+      const msg = (e as Error)?.message ?? String(e);
+      await markErr(ob.id, msg);
+      const kind = classifyPushFailure(e);
+      if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
+      rejected++; rejectedIds.push(ob.id);
+      if (parksAfter(ob.attempts, kind)) {
+        parkedRows.push({ outboxId: ob.id, entityId: ob.entity_id, error: msg });
+        logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행이 같은 거절을 반복해 드레인 대상에서 뺐다(파킹 — 재편집 시 해제)");
+      } else {
+        logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 행 거절(행 고유 — 실행 실패로 세지 않음, 다음 틱 재시도)");
+      }
     }
   }
+  //  일괄 거절 — 한 실행에서 거절만 여럿이고 반출이 0건이면 행 탓이 아니라 설정 탓(컨테이너 리스트 삭제·오설정 등)이다.
+  //   그대로 두면 전 행이 3틱 뒤 하나씩 파킹되고, 설정을 고쳐도 항목마다 다시 편집해야 풀린다(종전엔 브레이커가 멈추고
+  //   설정을 고치면 전부 복구됐다). 그래서 이 경우는 시스템성 실패로 올리고, last_error 앞에 표식을 붙여 파킹 술어
+  //   (`^ClickUp 4xx` 앵커)에서 빠지게 한다 — 다음 성공 실행이나 재enqueue 가 덮어써 표식은 저절로 사라진다.
+  if (isMassRejection({ rejected, pushed })) {
+    await itemsPool.query(
+      `UPDATE external_outbox SET last_error = $2 || COALESCE(last_error, '') WHERE id = ANY($1::bigint[])`,
+      [rejectedIds, MASS_REJECT_MARK]);
+    logger.warn({ rejected, pushed }, "반출이 0건인데 거절이 여럿이다 — 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다)");
+    failed += rejected; rejected = 0; parkedRows = [];
+  }
+  //  새로 파킹된 행은 다음 실행부터 선택되지 않으므로 이 자리가 그 행의 유일한 알림 기회다.
+  await notifyParked(parkedRows, sendBoxAlert);
   //  이번 배치가 아니라 **전체** 잔여다 — 정체 감시가 「예산을 다 쓰고도 줄지 않았나」를 보려면
   //   배치 상한(LIMIT)에 잘리지 않은 수가 필요하다. 못 세면 -1(모름) — 0 으로 뭉개면 감시가 눈을 감는다.
+  //  파킹된 행도 remaining 에 포함한다(pending 이 맞다). 정체 판정은 «예산을 쓰고도 안 줄었나» 라서 실행 사이에 변하지
+  //   않는 파킹 수는 전진 판정에 영향이 없고, 빼면 그 행들이 어떤 수치에도 안 잡혀 조용히 사라진다. 내역은 parked 로 따로 싣는다.
   const remaining = await countPending();
-  logger.info({ pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining }, "clickup outbox 드레인 완료");
-  return { pushed, deferred, skipped, failed, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining };
+  const parked = await countParked();
+  const parkedNow = parkedRows.length;
+  logger.info({ pushed, deferred, skipped, failed, rejected, parkedNow, parked, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining }, "clickup outbox 드레인 완료");
+  return { pushed, deferred, skipped, failed, rejected, parkedNow, parked, deleted, detached, scanned: rows.length, visited, budgetStopped, remaining };
 }
