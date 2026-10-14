@@ -326,4 +326,23 @@ import { jobRunnerOf } from "./auth-failure-response.js";
   assert.equal(out.cronStopped, true);
 }
 
+// ════════ F. 같은 계정의 레인이 테이블마다 따로 꺼져도 «새로 끈» 레인은 매번 알린다 ════════
+//  계정 하나가 죽으면 증류·카테고리 붙이기·관리 레인이 각자 다른 시점에 401 로 죽는다. 쿨다운은 이미 꺼진 레인의
+//  연쇄 실패만 접어야 한다 — 새로 끈 레인까지 접으면 그 레인들은 아무 말 없이 꺼진 채 몫을 붙잡고 남는다.
+{
+  resetAuthAlertCooldown();
+  const sent: string[] = [];
+  const run = (table: string, stopped: string[], taskId: number) => handleAuthFailure(
+    { taskId, requester: "lively1", cronJobId: "j", lane: "k", auth: AUTH }, { stopCron: true },
+    { jobRunner: async () => ({ table, runner: "owner" }), stopLanes: async () => stopped, cancelQueuedFor: async () => 0,
+      alert: async (a: Alert) => { sent.push(a.text); return { sent: true }; }, now: () => T0 } as never);
+  await run("org_distiller", ["d1", "d2"], 701);   // 첫 실패 — 증류 레인을 끈다
+  await run("org_distiller", [], 702);             // 같은 주기의 연쇄 — 이미 꺼짐(접는다)
+  await run("org_classifier", ["c1"], 703);        // 몇 분 뒤 분류 레인 — 새로 끈다(알린다)
+  await run("org_manager", ["m1"], 704);           // 관리기 — 새로 끈다(알린다)
+  await run("org_manager", [], 705);               // 이미 꺼짐(접는다)
+  assert.equal(sent.length, 3, `알림 ${sent.length}건 — 새로 끈 레인은 쿨다운과 무관하게 알려야 한다(분류·관리 레인이 말없이 꺼진 채 남는다)`);
+  assert.ok(sent[1]?.includes("'c1'") && sent[2]?.includes("'m1'"), "새로 끈 레인 이름이 알림에 없다 — 무엇을 다시 켤지 모른다");
+}
+
 console.log("auth-failure-lane-isolation: ok");

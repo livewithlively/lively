@@ -336,7 +336,11 @@ export async function handleAuthFailure(
   }
 
   // 알림은 크론 정지 **뒤에** — 사람이 알림을 읽는 시점에 이미 멈춰 있어야 한다.
-  if (shouldAlertNow(lastAlertAt.get(ctx.requester), now)) {
+  //  레인을 **새로** 껐으면 쿨다운과 무관하게 알린다. 쿨다운은 «이미 꺼진» 레인의 연쇄 실패(같은 주기에 같은 계정 레인
+  //   여럿이 죽는다)를 접는 장치다. 그런데 계정 하나가 죽으면 증류·카테고리 붙이기·관리 레인이 테이블마다 따로 꺼지고,
+  //   둘째부터 접으면 그 레인들은 아무 말 없이 꺼진 채 몫을 붙잡고 남는다 — 사람은 첫 알림에 적힌 레인만 다시 켠다.
+  const freshLanes = out.lanesStopped.length > 0;
+  if (freshLanes || shouldAlertNow(lastAlertAt.get(ctx.requester), now)) {
     const noun = laneNoun(table);
     const what = scope === "lanes"
       ? (out.lanesStopped.length
