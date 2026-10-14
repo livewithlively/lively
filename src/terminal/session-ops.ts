@@ -20,7 +20,7 @@
 //  최소 규율이다. attach 만 공유하는 층은 `session-host.ts` 다 — 그래서 층이 둘이다.
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase,
+  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount,
   type CreateInput,
 } from "./terminal-sessions.js";
 import { sendKeysToSession } from "./send-keys.js";
@@ -64,7 +64,8 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       // #1842 — 전이(prev→phase)를 게이트웨이에 **돌려준다**. 이 호스트의 tmux 는 게이트웨이가 직접 볼 수
       //  없으므로, 이 응답이 없으면 다른 곳에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
       //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
-      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
+      //  #4588 — 턴 끝의 열린 백그라운드 작업 수(bg)도 함께 새긴다. 구 게이트웨이는 안 보내므로 undefined(=모른다).
+      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined, undefined, isBgCount(args.bg) ? args.bg : null);
       return { ok: true, change: change ?? null };
     }
 

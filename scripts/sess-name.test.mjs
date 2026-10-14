@@ -44,6 +44,31 @@ eq(face("결제 백오프", "결제 백오프 재시도 고치는 중"), { main:
   "N11 하던 일이 이름을 되풀이만 하면 둘째 줄에 안 쓴다");
 eq(main("  세션 이름  ", ""), "세션 이름", "N12 이름 앞뒤 공백은 걷는다");
 eq(main("UI 버그 해결", "레일 수정", ""), "UI 버그 해결", "N13 프로젝트명이 비면 되풀이 판정을 안 한다");
+// 프로젝트명으로 시작하는 이름 (#3870, 원준 2026-10-07 — «장표 수정 앱 만들기, 앱의 생태계» 가 «만들기, 앱의 생태계» 로 섰다)
+const DECK = "장표 수정 앱";
+eq(face("장표 수정 앱 만들기, 앱의 생태계", "", DECK), { main: "장표 수정 앱 만들기, 앱의 생태계", sub: "", named: true, untitled: false },
+  "N15 ★신고 사례 — 프로젝트명 뒤에 빈칸만 두고 말이 이어지면 한 문장이다. 자르지 않는다");
+eq(main("장표 수정 앱 만들기, 앱의 생태계", "덱 뷰어 고치는 중", DECK), "장표 수정 앱 만들기, 앱의 생태계", "N16 ★하던 일이 있어도 이름이 이긴다(되풀이로 지워지지 않는다)");
+eq(main("앱의 생태계", "", "앱"), "앱의 생태계", "N17 짧은 프로젝트명이 낱말 앞머리와 겹쳐도 자르지 않는다");
+eq(main("장표 수정 앱 2", "", DECK), "장표 수정 앱 2", "N18 구분 기호 없는 번호도 그대로");
+eq([main("장표 수정 앱 · 만들기", "", DECK), main("장표 수정 앱: 만들기", "", DECK), main("장표 수정 앱-만들기", "", DECK), main("장표 수정 앱 / 만들기", "", DECK)],
+  ["만들기", "만들기", "만들기", "만들기"], "N19 구분 기호로 이은 꼬리는 종전대로 꼬리만");
+eq(main("장표 수정 앱 - ", "덱 고치는 중", DECK), "덱 고치는 중", "N20 구분 기호뿐이고 꼬리가 비면 되풀이 — 하던 일이 받는다");
+// 사람이 지은 이름은 프로젝트명과 같아도 남는다 (원준 2026-10-10 — «장표 수정 앱» 으로 고쳤는데 «1006일 회의록 정리» 로 돌아갔다)
+const human = (label, work, proj) => sessNameFace({ label, work, harness: "claude", human: true }, proj);
+eq(human(DECK, "1006일 회의록 정리", DECK), { main: DECK, sub: "1006일 회의록 정리", named: true, untitled: false },
+  "N30 ★신고 사례 — 사람이 프로젝트명과 같은 이름을 지으면 그 이름이 선다(pane 제목은 둘째 줄)");
+eq(main(DECK, "1006일 회의록 정리", DECK), "1006일 회의록 정리", "N31 사람이 지은 것이 아니면 종전대로 되풀이를 걷는다");
+eq(human("장표 수정 앱 - 만들기", "", DECK).main, "만들기", "N32 사람 이름이라도 꼬리가 있으면 종전대로 꼬리만");
+eq(human("장표 수정 앱 - ", "덱 고치는 중", DECK).main, "장표 수정 앱 -", "N33 꼬리가 비어도 사람 이름은 사라지지 않는다");
+// 이름이 프로젝트명의 앞부분일 때 — 잘린 것만 되풀이, 사람이 지은 짧은 이름은 이름이다 (#3870 후속, 2026-10-07)
+const LONGP = "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도우에서도 되게";
+eq(face("UI", "레일 수정", "UI 버그 해결"), { main: "UI", sub: "레일 수정", named: true, untitled: false },
+  "N21 ★프로젝트명의 앞부분과 같은 짧은 이름은 사람이 지은 이름 — 하던 일이 있어도 사라지지 않는다");
+eq(main("장표 수정", "덱 고치는 중", DECK), "장표 수정", "N22 ★낱말 단위 앞부분도 같다");
+eq(main(LONGP.slice(0, 28), "윈도우 등록 고치는 중", LONGP), "윈도우 등록 고치는 중", "N23 만들 때 28자로 잘린 이름은 종전대로 되풀이");
+eq(main("라이블리 키트, cli…", "윈도우 등록 고치는 중", LONGP), "윈도우 등록 고치는 중", "N24 말줄임이 붙은 앞부분은 짧아도 잘린 것");
+eq(main("app.lvly.io", "화면 짜는 중", "APP. lvly. io"), "화면 짜는 중", "N25 띄어쓰기 · 대소문자만 다른 것은 그대로 되풀이");
 ok(isIdLabel(ID) && isIdLabel("29c0b1c4-d5d7-4b05-9131-8982a7277b2e") && !isIdLabel("곁칸 세션 카드"), "N14 id 꼴 판정");
 
 // ── 두 자리가 같은 함수를 부른다 (S1~S4) ────────────────────────────────────
@@ -52,7 +77,7 @@ const chat = read("web/session-chat.ts");
 ok(/export function sessText\([^)]*\)[^{]*\{\s*return sessNameFace\(/.test(side),
   "S1 사이드바 sessText 는 lib/sess-name 의 sessNameFace 를 그대로 돌려준다(제 사본 없음)");
 ok(!/function echoesProject|const HARNESS_TITLES/.test(side), "S2 사이드바에 규칙 사본이 남지 않았다");
-ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitle\(\)[\s\S]{0,400}face\(\)/.test(chat),
+ok(/from '\.\/lib\/sess-name\.js'/.test(chat) && /function paintTitleName\(\)[\s\S]{0,400}face\(\)/.test(chat),
   "S3 ★세션 머리줄(paintTitle)이 같은 함수로 이름을 정한다");
 ok(!/titleFromFirstAsk/.test(chat) && !/function cleanName/.test(chat),
   "S4 ★머리줄이 첫 지시를 이름으로 박아 두지 않고, 제 규칙 사본도 없다");

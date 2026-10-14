@@ -50,6 +50,17 @@ test("표 — 예산 소진은 실패가 아니다(exit 0)", () => {
     "예산 소진을 실패로 세고 있다 — 이번 사고(연속실패 자동정지)가 그대로 재현된다");
 });
 
+test("표 — 행 고유 거절(rejected)·파킹은 exit 판정에 들어가지 않는다", () => {
+  type R = { failed: number; rejected?: number; parkedNow?: number };
+  const rows: Array<[R, number, string]> = [
+    [{ failed: 0, rejected: 1 }, 0, "거절 1건이 실행 실패가 됐다 — 같은 행이 매 틱 거절되면 브레이커가 크론 전체를 세운다"],
+    [{ failed: 0, rejected: 7, parkedNow: 3 }, 0, "거절·파킹을 실패로 셌다"],
+    [{ failed: 1, rejected: 5 }, 1, "시스템성 실패를 거절에 묻었다 — 토큰 사망 같은 전역 장애에 브레이커가 안 걸린다"],
+    [{ failed: 2, rejected: 0 }, 1, "시스템성 실패를 성공으로 접었다"],
+  ];
+  for (const [res, want, why] of rows) assert.equal(exitCodeForPush(res), want, why);
+});
+
 test("배선 — 드레인 루프가 예산을 실제로 본다", () => {
   assert.match(DRAIN, /drainBudgetExceeded\(/, "clickup-push 가 예산을 보지 않는다 — 상수만 있고 배선이 없으면 kill 은 그대로다");
   //  markErr 로 닫지 않고 break 해야 남은 행이 attempts 를 축내지 않고 다음 틱에 그대로 이어진다.

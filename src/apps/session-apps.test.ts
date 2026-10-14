@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { requireAttachedApp, requireSessionOwner, requireUsableApp, type AttachDeps, type SessionAppRow } from "./session-apps.js";
+import { requireAttachedApp, requireSessionParticipant, requireUsableApp, type AttachDeps, type SessionAppRow } from "./session-apps.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
 // ── 세션에 붙은 앱으로 store_* 에 들어갈 수 있나 (#4225) ──────────────────────────
@@ -10,7 +10,8 @@ import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
 const app = (id: string, over: Partial<OrgApp> = {}): OrgApp => ({
   id, title: id, version: "1.0.0", manifest: {}, source: { kind: "installed" }, content_hash: null,
-  status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [], ...over,
+  status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null, edit_mode: "all", edit_members: [],
+  builtin_version: null, current_version_no: null, ...over,
 });
 const grant = (tools: string[]): AppGrantRow => ({ app_id: "x", member_id: "alice", scopes: [], tools, granted_at: "", granted_by: null, revoked_at: null });
 const row = (appId: string): SessionAppRow => ({ session_id: "box-a", app_id: appId, member_id: "alice", attached_at: "" });
@@ -94,10 +95,16 @@ test("S1-11 주인이 아니면 붙은 목록·앱·동의를 읽지도 않는�
   assert.deepEqual(d.reads, ["owner"]);
 });
 
-test("requireSessionOwner · requireUsableApp 단독", async () => {
-  assert.equal(await status(requireSessionOwner("box-a", "alice", { sessionOwner: async () => "alice" })), "ok");
-  assert.equal(await status(requireSessionOwner("box-a", "bob", { sessionOwner: async () => "alice" })), 403);
-  assert.equal(await status(requireSessionOwner("box-a", "bob", { sessionOwner: async () => null })), 404);
+test("requireSessionParticipant · requireUsableApp 단독", async () => {
+  assert.equal(await status(requireSessionParticipant("box-a", "alice", { sessionOwner: async () => "alice" })), "ok");
+  assert.equal(await status(requireSessionParticipant("box-a", "bob", { sessionOwner: async () => "alice" })), 403);
+  assert.equal(await status(requireSessionParticipant("box-a", "bob", { sessionOwner: async () => null })), 404);
+  // 초대받은 사람은 된다 · 초대받지 않은 사람은 안 된다 · 판정이 터지면 거부(느슨해지지 않는다) · 없는 세션은 초대 판정까지 가지 않는다
+  const invited = async (_s: string, m: string): Promise<boolean> => m === "bob";
+  assert.equal(await status(requireSessionParticipant("box-a", "bob", { sessionOwner: async () => "alice", canEnter: invited })), "ok");
+  assert.equal(await status(requireSessionParticipant("box-a", "carol", { sessionOwner: async () => "alice", canEnter: invited })), 403);
+  assert.equal(await status(requireSessionParticipant("box-a", "bob", { sessionOwner: async () => "alice", canEnter: async () => { throw new Error("db"); } })), 403);
+  assert.equal(await status(requireSessionParticipant("box-a", "bob", { sessionOwner: async () => null, canEnter: invited })), 404);
   assert.throws(() => requireUsableApp(null, "x"), (e: { status?: number }) => e.status === 404);
   assert.equal(requireUsableApp(app("x"), "x").id, "x");
 });

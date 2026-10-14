@@ -12,7 +12,7 @@ import { el } from '../core.js';
 import { PJV_PRIORITY, PJV_PRIORITY_ORDER, avatarColor, openListForm, pjvFolderIsArchive, pjvFolderIsSpace } from '../projects.js';
 import { dashListFilter, dashListFilterOn, dashListFilterPreds, dashSaveListFilter, dashProjFilterStatusKey, dashOvHidden, dashOvPinned, dashSaveOvHidden, dashSaveOvPinned, dashProjFilterDefault, dashSaveProjFilterDefault, dashTaskCountMode, dashSaveTaskCountMode } from './prefs.js';
 import { dashListStatusDefs } from './status.js';
-import { dashFolderThumb } from './icons.js';
+import { dashProjFolderIcon, dashStarIcon } from './icons.js';
 import { dashPopover } from './chrome.js';
 import type { ProjCtx } from './widget-projects.js';
 
@@ -145,7 +145,7 @@ function projListAddCard(ctx: ProjCtx) {
           const on = isOn(l.id);
           const row = el('div', { class: 'dash-pop-row dash-addpop-row', role: 'button', tabindex: '-1' },
             el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name' },
-              ctx.favLists.has(Number(l.id)) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, l.name || '(이름 없음)')),
+              ctx.favLists.has(Number(l.id)) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기' }, dashStarIcon(true)) : null, l.name || '(이름 없음)')),
             on ? el('span', { class: 'dash-addpop-badge', text: '표시 중' }) : el('span', { class: 'dash-addpop-badge is-add', text: '＋ 불러오기' }));
           const run = () => (on ? (() => { ctx.selectedListId = Number(l.id); done(); ctx.draw(); })() : pick(l));
           row.addEventListener('mousedown', (e: any) => e.preventDefault()); // blur 로 입력이 접히기 전에 클릭이 먹게
@@ -256,7 +256,7 @@ function projOpenOvPrefs(ctx: ProjCtx, anchor) {
       const cb: any = el('input', { type: 'checkbox' }); cb.checked = isOn(id);
       cb.onchange = () => { ctx.setListShown(id, cb.checked); ctx.draw(); renderTree(); };
       const nm = el('span', { class: 'dash-pop-name' },
-        ctx.favLists.has(id) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, l.name || '(이름 없음)');
+        ctx.favLists.has(id) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기' }, dashStarIcon(true)) : null, l.name || '(이름 없음)');
       return el('label', { class: 'dash-pop-row dash-pop-lrow', style: 'padding-left:' + (8 + depth * 15) + 'px' },
         cb, el('span', { class: 'dash-pop-txt' }, nm));
     };
@@ -276,7 +276,7 @@ function projOpenOvPrefs(ctx: ProjCtx, anchor) {
       const car = el('span', { class: 'dash-pop-caret', text: opened ? '▾' : '▸', 'aria-hidden': 'true' });
       const icon = isSpace
         ? el('span', { class: 'pjv-side-space-avatar dash-pop-spaceav', text: (String(f.name || 'S').trim()[0] || 'S').toUpperCase(), style: 'background:' + (f.color || avatarColor('space' + f.id)) })
-        : el('span', { class: 'dash-pop-foldico' }, dashFolderThumb());
+        : el('span', { class: 'dash-pop-foldico' }, dashProjFolderIcon());   // #4233 — 둥근 선 폴더
       const head = el('div', { class: 'dash-pop-row dash-pop-frow' + (isSpace ? ' is-space' : ''), role: 'button', tabindex: '0',
         style: 'padding-left:' + (8 + depth * 15) + 'px' },
         car, icon, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: f.name || '(이름 없음)' })),

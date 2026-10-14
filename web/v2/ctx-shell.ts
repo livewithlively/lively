@@ -5,7 +5,7 @@
 import { state, toast } from '../core.js';
 import { copyText, type CtxRow } from './ctx-menu.js';
 import { registerCtx, registerCtxCommon, registerCtxSurface, type CtxEvent, type CtxHit } from './ctx-registry.js';
-import { isInstancePinned, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
+import { isInstancePinned, listFavCtxRow, projectCtxRows, sessText, sessionCtxRows, sideInstanceById, toggleInstancePin } from './side.js';
 import { canMoveSess, findSessIn, isInvitedSess, isLiveSess, isMineSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { forkableHarness } from './session-fork.js';
 import { SESS_STATES } from '../session-status.js';
@@ -16,6 +16,7 @@ import { omniKeyHint } from '../lib/omni-chord.js';
 import { appByKey, appHref, openLaunchpad, soloSessionUrl } from './apps.js';
 import { openSharePopover, shareSessOf } from './share-session.js';
 import { markNotificationsRead } from './notifications.js';
+import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // ── 통합검색 열기 (#4530) ──
 //  셸 문서면 바로 연다. 액자(클래식 ?embed=1) 문서는 같은 메뉴를 쓰지만 통합검색 훅이 없다 — 종전엔 «「…」 검색» 을 눌러도
@@ -91,18 +92,18 @@ function sessionMenu(s: Sess | undefined, sid: string, hit: CtxHit): { rows: Ctx
     ...sessionCtxRows(s, { nameEl: hit.el.classList.contains('v2-ss-row') ? hit.el.querySelector<HTMLElement>('.t') : null, projectName: pn }),
   ];
   if (canForkSess(s)) rows.push({ label: '세션 복제', icon: 'copy', hint: '대화를 아는 새 세션', run: () => hooks?.forkSession(hit.el, s.id) });
-  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'moveto', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
+  if (canMoveSess(s)) rows.push({ label: s.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'sessMove', hint: s.projectId ? pn : undefined, run: () => hooks?.pickProject(hit.el, s.id) });
   const share = shareSessOf(s);
   if (share) rows.push({ label: '공유…', icon: 'share', run: () => openSharePopover(hit.el, share) });
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
-  return { rows, title: text.main || s.label || s.id, sub: [st ? st.label : s.stateLabel, s.projectId ? pn : '프로젝트 없음', isLiveSess(s) ? '' : '지난 세션'].filter(Boolean).join(' · ') };
+  return { rows, title: text.main || s.label || s.id, sub: [st ? st.label : s.stateLabel, s.projectId ? pn : NO_PROJECT_NAME, isLiveSess(s) ? '' : '지난 세션'].filter(Boolean).join(' · ') };
 }
 
 // ── 프로젝트 ────────────────────────────────────────────────────────────────
 function projectMenu(p: Proj | undefined, pid: number): { rows: CtxRow[]; title?: string; sub?: string } {
   const href = '#/p/' + pid;
   const board = '#/projects2/p/' + pid;
-  const rows: CtxRow[] = [...openRows(href), { label: '보드로 열기', icon: 'proj', hint: '할 일·상세', run: () => hooks?.openRoute(board) }];
+  const rows: CtxRow[] = [...openRows(href), { label: '보드로 열기', icon: 'board', hint: '할 일·상세', run: () => hooks?.openRoute(board) }];
   if (p) rows.push({ sep: true, label: '' }, ...projectCtxRows(p));
   rows.push({ sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요'));
   return { rows, title: p ? p.name : '프로젝트 #' + pid, sub: p ? (p.status_category === 'done' ? '끝남' : p.status_category === 'unstarted' ? '시작 전' : '진행 중') : undefined };
@@ -179,7 +180,8 @@ export function mountCtxShell(h: CtxShellHooks): void {
   });
   registerCtx('plist', (hit) => {
     const href = '#/projects2/l/' + String(hit.data.lid || '');
-    return { rows: [...openRows(href), { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '리스트'), sub: '리스트' };
+    const fav = listFavCtxRow(Number(hit.data.lid));   // #3870 — 그 줄에서 바로 즐겨찾기에 넣고 뺀다(모르면 행 없음)
+    return { rows: [...openRows(href), ...(fav ? [fav] : []), { sep: true, label: '' }, copyRow('링크 복사', absUrl(href), '링크를 복사했어요')], title: String(hit.data.name || '리스트'), sub: '리스트' };
   });
   registerCtx('pfolder', (hit) => {
     const href = '#/projects2/f/' + String(hit.data.fid || '');

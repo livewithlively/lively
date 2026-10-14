@@ -23,7 +23,19 @@ import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { composerAttach } from './v2/compose-attach.js';
-import { registerSessionInput } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+import { registerSessionInput, putIntoSession } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
+
+//  #4594 — 같은 오리진 신호 `lively:compose-draft` {session, text}: 앱 화면(app-ui.ts — 멈춘 세션에 보내려다 409 draft)·앱 탭 ⋯ 메뉴
+//   («AI에게 고치기»)가 **그 세션의 입력칸에 글을 넣어 둔다**(보내지 않는다 — 사람이 읽고 보낸다). 넣는 법은 세션 화면이 뜰 때
+//   registerSessionInput 에 올려 둔 것(대화창이면 글칸 끝에, 터미널이면 붙여넣기)을 그대로 쓴다. 창에 한 번만 건다(화면은 여럿 뜬다).
+if (typeof window !== 'undefined' && !(window as unknown as { __lvComposeDraft?: boolean }).__lvComposeDraft) {
+  (window as unknown as { __lvComposeDraft?: boolean }).__lvComposeDraft = true;
+  window.addEventListener('lively:compose-draft', (e: Event) => {
+    const d = ((e as CustomEvent<{ session?: unknown; text?: unknown }>).detail ?? {}) as { session?: unknown; text?: unknown };
+    const sid = String(d.session ?? ''), text = String(d.text ?? '');
+    if (sid && text) putIntoSession([sid], text);
+  });
+}
 import { CHAT_FONT_KEY, CHAT_FONT_LABELS, nextFontStep, parseFontStep } from './chat-font.js';
 import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
@@ -116,6 +128,13 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
     : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&fmt=chat&${qs}`;   // fmt=chat: 공통 ChatLine(원본 바이트 아님)
 };
 
+/** #4443 머리줄 [붙은 앱] 배선: 무엇이 붙었는지(제목 · 붙은 수 · 아이콘)와 그 앱 탭을 여는 함수. 셸이 세션마다 만든다.
+ *  watch 는 붙은 목록이 바뀔 때마다 부른다(null = 붙은 앱 없음). 돌려주는 함수로 끊는다. */
+export interface SessAppDoor {
+  watch(fn: (d: { title: string; count: number; icon: SVGElement | null } | null) => void): () => void;
+  open(): void;
+}
+
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
 //  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
@@ -153,6 +172,9 @@ export interface SessionChatOpts {
   onOpenFiles?: () => void;
   /** [자료] 단추의 글자 — 프로젝트 없는 세션은 '세션 파일'. */
   filesLabel?: string;
+  /** #4443 머리줄 [붙은 앱]. 이 세션에 붙은 앱이 있으면 서고, 누르면 곁칸의 그 앱 탭을 연다(폰: 서랍). 좁은 폭(≤900)에서만 보인다.
+   *  넓은 폭은 곁칸에 그 탭이 늘 보이고, 좁은 폭은 곁칸이 서랍에 접혀 있어 이 단추가 아니면 앱이 붙은 줄을 모른다. 셸(panes.ts)이 준다. 없으면 단추도 없다. */
+  appDoor?: SessAppDoor;
   /** 폰 머리줄의 ≡(#4229 후속) — 셸의 사이드바 서랍을 연다. 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 이게 그 입구다. 없으면 단추도 없다. */
   onOpenSidebar?: () => void;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
@@ -236,6 +258,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
   const titleHost = el('span', { class: 'sc-titlebox' });
   let titleText = target.label;
+  //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
+  let titleHuman = target.raw?.labelSource === 'human';
   let renaming = false;
   const canRename = (): boolean => !!opts.onRename && target.owned && target.live && !target.raw?.restorable;
   const paneTitle = (): string => String(target.raw?.title || '').trim();
@@ -250,14 +274,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     label: titleText,
     work: paneTitle() || String((target as any).logTitle || ''),
     harness: String(target.raw?.harness || ''),
+    human: titleHuman,
   }, String(target.projectName || '').trim());
   const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
   const penBtn = (): HTMLElement => el('button', {
     class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
     title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요', onclick: () => startRename(),
   }, penIc());
+  //  이름 뒤의 번호 — 이 세션이 맡은 태스크 번호다(세션 = 태스크, #4084). 프로젝트 문패의 `#번호` 와 같은 꼴로 적는다
+  //   (원준 2026-10-10: «세션 제목 뒤에도 프로젝트처럼 #nnnn 해서 세션 번호 같이 적어 달라»). 태스크가 없는 세션(프로젝트 밖)은 안 적는다.
   function paintTitle(): void {
-    if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
+    if (renaming) return;
+    paintTitleName();
+    const no = Number(target.raw?.taskNo || 0);
+    if (no > 0) titleHost.append(el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }));
+  }
+  function paintTitleName(): void {                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
     const tip = [idLabel(titleText) ? '' : titleText, target.id].filter(Boolean).join(' · ');   // 이름 없는 세션은 id 를 두 번 쓰지 않는다
     const f = face();
     const name = f.named ? f.main : '';
@@ -308,6 +340,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       try {
         await opts.onRename!(to);
         titleText = to;
+        titleHuman = true;
         toast('세션 이름을 바꿨어요.');
       } catch (e: any) {
         toast('이름을 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
@@ -347,8 +380,21 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const filesGoBtn = el('button', { class: 'btn-text sc-act sc-act-files', type: 'button', title: '이 세션의 자료를 우측 사이드바에서 봅니다. 세션이 만든 파일을 보고 내려받아요.',
     onclick: () => { if (opts.onOpenFiles) opts.onOpenFiles(); } },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' },
-      sv('path', { d: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z' })),
+      sv('path', { d: ICONS.folder })),   // #4233 — 우측 사이드바 「자료」 탭과 같은 둥근 폴더(원준 2026-10-04)
     el('span', { text: opts.filesLabel || '자료' })) as HTMLButtonElement;
+  //  #4443 [붙은 앱](원준 10-08 «이런 곁칸도 모바일에서 좀 대응되게»). 폰에서 붙은 앱으로 가는 길이 [자료] → 서랍의 탭 하나뿐이었다.
+  //   붙은 목록이 오면 그 앱의 아이콘 · 이름으로 선다(여럿이면 «앱 n개»). 넓은 폭에선 CSS 가 숨긴다(36-chat.css .sc-act-app).
+  const appDoor = opts.appDoor;
+  const appGoBtn = appDoor ? el('button', { class: 'btn-text sc-act sc-act-app', type: 'button', hidden: true, onclick: () => appDoor.open() }) as HTMLButtonElement : null;
+  const offAppDoor = appDoor && appGoBtn ? appDoor.watch((d) => {
+    appGoBtn.hidden = !d;
+    if (!d) { replaceKids(appGoBtn); return; }
+    //  여럿이면 보이는 글자가 «앱 n개» 다. 이름표가 «붙은 앱 앱 n개» 로 겹치지 않게 수로 말한다(보이는 글자는 이름표 안에 그대로 든다).
+    const one = d.count <= 1;
+    appGoBtn.title = one ? `이 세션에 붙은 앱 「${d.title}」을(를) 사이드바에서 엽니다` : `이 세션에 붙은 앱 ${d.count}개를 사이드바에서 엽니다`;
+    appGoBtn.setAttribute('aria-label', one ? `붙은 앱 ${d.title} 열기` : `붙은 앱 ${d.count}개 열기`);
+    replaceKids(appGoBtn, d.icon, el('span', { class: 'sc-act-app-t', text: d.title }));
+  }) : null;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
   // 런타임 신원 — 하네스 · 모델 · 추론강도 · 노드를 **한 덩어리**로 묶은 알약(#1719, 원준님 2026-08-21).
   //  종전엔 이 넷이 각각 다른 옷을 입고(하네스·모델은 mono, 상태·노드는 sans) 가운뎃점으로만 이어져
@@ -404,6 +450,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const fixPair = el('span', { class: 'sc-pair' }, termStatusEl, el('span', { class: 'sc-pair-sep', 'aria-hidden': 'true' }), fixBtn);
   const headR = el('div', { class: 'sc-head-r' },
     opts.onOpenFiles ? filesGoBtn : null,
+    appGoBtn,
     opts.onToggleFiles ? filesBtn : null,
     fixPair,            // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
     moreBtn);
@@ -576,6 +623,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let hcats: RunHarness[] = [];
   let obsModel = ''; let obsModelTip = ''; let obsEffort = '';   // 대화 파일이 말한 **실제** 값 — 드롭다운의 '지금'은 이걸 따른다
   let switching = false;
+  //  방금 여기서 바꾼 값 — 대화 파일이 따라오기 전까지 «지금» 자리에 선다(원준 2026-10-10: «Model, Effort 가 바로 반영이 안 된다»).
+  //   관측(obsModel·obsEffort)은 다음 턴이 돌아야 바뀌어서, 그 사이 다시 그릴 때마다 선택기가 옛 값으로 돌아갔다.
+  //   was = 바꿀 때의 관측값. 관측이 그 뒤로 달라지면 그쪽이 사실이므로 이 값은 버린다.
+  const picked: Partial<Record<'model' | 'effort', { v: string; was: string }>> = {};
+  const nowVal = (a: 'model' | 'effort'): string => {
+    const obs = a === 'model' ? obsModel : obsEffort;
+    const pk = picked[a];
+    if (pk && pk.was !== obs) delete picked[a];
+    return picked[a]?.v || obs || startFlag(a);
+  };
   //  obj = 목적격 조사까지 붙인 형태('모델을'·'추론강도를') — 받침 유무로 갈리는데 축이 둘뿐이라 표에 그대로 적는다.
   const AXIS = {
     model: { flag: '--model', ko: '모델', obj: '모델을' },
@@ -598,7 +655,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  showLabel = 관측값('지금 · …') 문구 — 하네스가 뱉는 긴 id 라 읽기 좋게 다듬는다.
   function paintAxis(a: Axis, box: HTMLSelectElement, span: HTMLElement, observed: string,
                      optLabel: (v: string) => string, showLabel: (v: string) => string): void {
-    const known = observed || startFlag(a);          // 관측 > 열 때 지정 — 어느 쪽이든 '지금 이걸로 돈다'는 사실이다
+    void observed;
+    const known = nowVal(a);                         // 방금 바꾼 값 > 관측 > 열 때 지정 — 어느 쪽이든 '지금 이걸로 돈다'는 사실이다
     const shown = known ? showLabel(known) : '';
     if (!canSwitch(a)) { box.hidden = true; chip(span, shown, a === 'model' ? (obsModelTip || known) : undefined); return; }
     span.hidden = true;
@@ -657,8 +715,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
       { v: said(chipProv, selHarness) ? '' : String(target.raw?.harness || '') },
-      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(obsModel || startFlag('model')) : '' },
-      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(obsEffort || startFlag('effort')) : '' },
+      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(nowVal('model')) : '' },
+      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(nowVal('effort')) : '' },
       // ⚠ 노드는 **윗줄과 무관하게 늘 싣는다** — 어느 컴퓨터에서 도는지는 칩도 선택기도 말하지 않는다.
       { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
@@ -725,6 +783,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
         : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;
       view.setNote(msg);
+      if (!r?.pending) { picked[a] = { v, was: a === 'model' ? obsModel : obsEffort }; paintRun(); }
       // 내가 띄운 안내만 지운다 — 그 사이에 다른 안내가 올라왔으면 그걸 지우면 안 된다(먼저 건 타이머가 나중 걸 지웠다).
       window.setTimeout(() => { if (!destroyed && view.noteEl.textContent === msg) view.setNote(''); }, 3000);
     } catch (e: any) {
@@ -2338,7 +2397,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
       paintShellBar();                            // #4135 — 열 때는 행이 얇아 «pane 이 셸인가» 를 몰랐을 수 있다(방금 만든 세션)
-      if (t.label && !idLabel(t.label)) titleText = t.label;
+      if (t.label && !idLabel(t.label)) { titleText = t.label; titleHuman = t.raw?.labelSource === 'human'; }
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
       paintState();
       paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
@@ -2372,7 +2431,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

@@ -69,6 +69,12 @@ export function instBrowserHost(inst: InstFacts | null | undefined): string {
   try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; }
 }
 
+/** 홈 사이드바에서 **어떤 경우에도** 빼는 주소 — 고정(압정)·열어 둔 창도 이기지 못한다. 지금은 앱 인스턴스(`#/i/…`) 하나.
+ *  rowStands 는 «두고 온 게 있나» 를 재는 자라 고정이 이기지만, 이건 «이 목록의 대상이 아니다» 라는 자라 먼저 본다. */
+export function homeRowExcluded(route: string): boolean {
+  return routeSegs(route)[0] === 'i';
+}
+
 /** 이 주소가 좌측 목록에 설 자격이 있나. **기본값은 «안 섬»** — 아래 열거에 걸릴 때만 선다. */
 export function rowStands(route: string, deps: StandsDeps): boolean {
   const segs = routeSegs(route);
@@ -78,8 +84,10 @@ export function rowStands(route: string, deps: StandsDeps): boolean {
   if (p === 's') return true;
   //  홈(새 작업)·프로젝트 주소(= 세션 되기 전 빈 슬롯) — 쓰다 만 지시가 있을 때만.
   if (!p || p === 'dashboard' || p === 'p') return deps.hasDraft;
-  //  앱 인스턴스 — 그 인스턴스가 실제로 뭘 들고 있을 때만.
-  if (p === 'i') return instHasState(deps.inst(decodeSeg(segs[1])));
+  //  앱 인스턴스(웹 브라우저 · 메모 같은 «라이블리 앱» 한 벌)는 **서지 않는다**(원준 2026-10-04 «홈 사이드바에서 아예 빼자»).
+  //   종전엔 무언가 들고 있으면(instHasState) 섰는데, 행 아이콘이 «프로젝트» 그림으로 떨어져 프로젝트처럼 보였고
+  //   목록의 정체(세션)를 흐렸다. 앱의 문은 레일 · 런치패드다. 고정 · 열어 둔 창도 예외가 아니다(homeRowExcluded).
+  if (p === 'i') return false;
   //  앱의 **깊은 자리**(문서·항목 하나를 열어 둠) = «어디까지 봤나». 뿌리(첫 화면)는 레일·런치패드가 문이다.
   if (p === 'app') return segs.length > 2;
   if (p === 'inbox' || p === 'sources' || deps.isClassicPage(p)) return segs.length > 1;
@@ -87,6 +95,3 @@ export function rowStands(route: string, deps: StandsDeps): boolean {
   return false;
 }
 
-function decodeSeg(s: string | undefined): string {
-  try { return decodeURIComponent(s || ''); } catch { return s || ''; }
-}

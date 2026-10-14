@@ -91,6 +91,10 @@ export async function initV6UiVis(pool: Pool): Promise<void> {
     //  검색 대상이 아니라 **재는 고정점**이라 임베딩한다 — centroid 로 재면 분류 전체가 정의를 벗어나 표류할 때 못 잡는다.
     const okC = await ensureEmbeddingSchema(pool, ec.dimensions, "category");
     console.log(`[v6 schema] 카테고리 임베딩 스키마 ${okC ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.dimensions})`);
+    // 세션 요약 카드(#4530 검색 품질 «뜻으로 찾기») — 세션마다 «무엇이었나» 를 모은 글의 벡터. 표(session_card)는 project-org 가 만든다.
+    //  같은 까닭으로 provider 와 무관하게 늘 보장한다(뜻 검색 SQL 이 컬럼 존재를 가정한다 — 없으면 글자 검색만으로 답한다).
+    const okS = await ensureEmbeddingSchema(pool, ec.dimensions, "session_card");
+    console.log(`[v6 schema] 세션 카드 임베딩 스키마 ${okS ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.dimensions})`);
   } catch (e) {
     console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
   }

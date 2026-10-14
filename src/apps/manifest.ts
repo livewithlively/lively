@@ -43,6 +43,12 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn"] as const;
 /** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
 export const NOTIFY_TOOL = "app_notify";
+/** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
+export const CHAT_SEND_TOOL = "app_chat_send";
+/** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
+export const PROJECT_FILES_TOOL = "app_project_files";
+/** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
+export const WORKSPACE_FILES_TOOL = "app_workspace_files";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -74,6 +80,17 @@ const permissionsSchema = z.object({
   // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
   //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
   notifications: z.boolean().default(false),
+  // #4594 — 이 앱 화면이 **붙은 세션에 글을 바로 보낼** 수 있나(lively.chat.send). 기본 false(fail-closed). 그 사람의 AI 세션에 말이
+  //  들어가는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_chat_send 가 있어야 한다(apps/app-chat-send.ts).
+  chat_send: z.boolean().default(false),
+  // #4592 — 이 앱 화면이 **붙은 세션의 프로젝트 자료(공유 폴더)** 에서 읽을 수 있는 파일 확장자(점 없이 · 소문자). 빈 배열 = 못 읽는다(fail-closed).
+  //  목록(최신순)과 내용 읽기뿐이고 쓰기는 없다(lively.files.list / .read). 그 사람이 볼 수 있는 프로젝트의 파일이 앱으로 들어오는 능력이라
+  //  동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_project_files 가 있어야 한다(apps/app-project-files.ts).
+  project_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4629 — 이 앱 화면이 **그 사람이 볼 수 있는 모든 프로젝트의 자료**에서 읽을 수 있는 파일 확장자(lively.files 의 scope 'all').
+  //  project_files 보다 넓은 능력이라 **따로** 선언하고 따로 동의받는다(app_workspace_files) — 붙은 세션의 프로젝트 밖 파일이 앱으로 들어온다.
+  //  읽기뿐이고, 여전히 세션에 붙은 앱 화면에서만 · 프로젝트 공개 범위 안에서만 닿는다(apps/app-project-files.ts).
+  workspace_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -168,6 +185,17 @@ const sectionSchema = z.object({
   file: z.string().min(1).max(512),                  // 패키지 내 상대경로(예: persona.md)
 }).strict();
 
+// #4595 — 앱이 **세션에 붙었을 때 그 세션의 AI 에게 실리는 지침**. 사람이 읽는 설명이 아니라 AI 의 행동 규칙이다
+//  («HTML 을 만들면 이 앱에 올려라» · «이런 글이 오면 표를 읽어 답을 적어라»). 붙은 앱 목록(session_apps)에 그대로 실리고,
+//  시드 훅 session-apps-inject 가 테이블 안내 뒤에 붙인다. 없던 때는 AI 가 테이블 이름만 보고 앱의 목적을 짐작해야 했다.
+//  reinject_every — 대화가 길어져 하네스가 앞부분을 요약하면 한 번 실린 안내가 흐려진다. 이 턴 수마다 같은 목록이어도
+//   다시 알린다(붙은 앱이 여럿이면 가장 작은 값). 4000자 상한은 매 턴 맥락에 들어가는 글이라 짧게 두라는 뜻이다.
+//  구성원 앱(app_save)도 가질 수 있다 — 지침은 그 세션 안에서만 읽히는 글이라 다른 사람에게 새는 것이 없다(member-app.ts 위반 아님).
+const agentSchema = z.object({
+  instructions: z.string().min(1).max(4000),
+  reinject_every: z.number().int().min(5).max(500).default(40),
+}).strict().optional();
+
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
 
@@ -210,6 +238,7 @@ export const appManifestSchema = z.object({
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
+  agent: agentSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
@@ -247,6 +276,18 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   //  여기서 파생한다 — 사람에게 보이는 권한은 '알림'이고, 도구 이름은 배관이다.
   if (m.permissions.notifications && !m.permissions.tools.includes(NOTIFY_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, NOTIFY_TOOL];
+  }
+  // #4594 — `chat_send: true` 는 `app_chat_send` 도구를 함의한다(알림과 같은 규약 — 사람에게 보이는 권한은 「세션에 글 보내기」, 도구 이름은 배관).
+  if (m.permissions.chat_send && !m.permissions.tools.includes(CHAT_SEND_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, CHAT_SEND_TOOL];
+  }
+  // #4592 — `project_files: ["html"]` 은 `app_project_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「프로젝트 자료에서 파일 읽기」).
+  if (m.permissions.project_files.length && !m.permissions.tools.includes(PROJECT_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, PROJECT_FILES_TOOL];
+  }
+  // #4629 — `workspace_files: ["html"]` 은 `app_workspace_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「전체 자료에서 파일 읽기」).
+  if (m.permissions.workspace_files.length && !m.permissions.tools.includes(WORKSPACE_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

@@ -115,6 +115,27 @@ export async function deliverPromptToNode(
   return { ok: true };
 }
 
+export const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";
+
+/**
+ * **사람 요청**으로 세션에 글을 넣는 한 통로 — POST …/sessions/:id/prompt 라우트와 앱 화면의 chat-send(#4594)가 같이 쓴다.
+ *  접근 판정이 여기 있다(deliverPrompt 는 서버 내부 호출도 타므로 판정이 없다): «정말 저쪽 기계인가»(remoteNodeOfSession — #2600 T2 d6)로
+ *  갈라 노드면 nodeCanAttach, 아니면 canAttach. 두 호출부가 판정을 따로 베끼면 하나만 고쳐지는 날이 온다 — 그래서 한 함수다.
+ */
+export async function deliverPromptForMember(sessionId: string, memberId: string, text: string): Promise<DeliverResult> {
+  if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
+  const { remoteNodeOfSession, nodeCanAttach } = await import("../node/registry.js");
+  const { canAttach } = await import("./terminal-sessions.js");
+  const nodeId = (await remoteNodeOfSession(sessionId, sessionGone)) ?? "";
+  if (nodeId) {
+    const v = await nodeCanAttach(nodeId, sessionId, memberId);
+    if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+  } else if (!(await canAttach(sessionId, memberId))) {
+    throw new HttpError(404, SESSION_NOT_FOUND);
+  }
+  return deliverPrompt(sessionId, text, { owner: memberId, nodeId });
+}
+
 export async function deliverPrompt(sessionId: string, text: string, opts?: {
   owner?: string | null; nodeId?: string | null; firstPromptTrustOk?: boolean;
 }): Promise<DeliverResult> {

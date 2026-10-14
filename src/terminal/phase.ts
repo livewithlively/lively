@@ -139,11 +139,34 @@ export async function scrapePane(sessionId: string, io?: ScreenIo | null): Promi
  *                 대화창(마지막 턴을 «도는 중» 으로 그린다 · session-chat.ts) · 회수 · CP 유휴 판정. 백그라운드에 남은 게 dev 서버 같은
  *                 상주 프로세스면 그 넷이 영원히 «돈다» 로 굳는다. 마지막 작업 시각도 안 민다(AI 가 일한 마지막은 턴이 끝난 때다).
  *                 살아 있는 백그라운드 작업 자체는 회수 ⑥(#2652 — 프로세스 표)이 따로 지킨다.
+ *  · stopped    → **낡은 busy 보고를 누른다**(#3870). 사람이 끊은 턴엔 Stop 훅이 안 떠 마지막 보고가 busy 로 남는다 — 그 보고가
+ *                 working · harnessWorking · 실행 단계(busy)를 만료까지 붙들던 것을 푼다. 그 밖엔 아무것도 안 준다(대기와 같다).
  *  · app-server 세션은 화면이 아니라 런타임이 정본이다(pane 은 셸) — 아무것도 주지 않는다.
  */
-export function screenRunEffects(run: ScreenRun | null, appServer: boolean): { turn: boolean; background: boolean } {
-  if (appServer || !run) return { turn: false, background: false };
-  return { turn: run === "turn", background: run === "background" };
+export function screenRunEffects(run: ScreenRun | null, appServer: boolean): { turn: boolean; background: boolean; stopped: boolean } {
+  if (appServer || !run) return { turn: false, background: false, stopped: false };
+  return { turn: run === "turn", background: run === "background", stopped: run === "stopped" };
+}
+
+/**
+ * #3870 — 이 행의 화면을 **무엇을 알려고** 읽나(순수 — 표는 screen-run.test Q 행).
+ *  · full    — 보고가 없거나 idle · 만료: 대기 판정과 실행 상태를 다 읽는다(종전 그대로).
+ *  · stopped — 신선한 busy 보고가 있다: **«사람이 턴을 끊었나» 하나만** 읽는다. 종전엔 이 행들을 아예 안 읽었다(#1221 — 보고가
+ *              있으면 화면을 볼 까닭이 없었다). 그런데 끊긴 턴엔 Stop 훅이 안 떠서, 낡은 busy 보고를 누를 수 있는 건 화면뿐이다.
+ *              ⚠ 대기 판정은 안 받는다 — 도는 턴의 전사에 남은 «❯ » 를 승인 메뉴로 읽던 오탐(#853)을 busy 보고가 막고 있다.
+ *              ⚠ 보고가 **방금 것이면**(STOPPED_SETTLE_SEC 안) 안 읽는다. 끊은 직후 새 턴이 시작되면 «Interrupted» 줄이 아직 입력창
+ *                바로 위에 있을 수 있고, 입력창에 글자가 있으면 스피너 · 푸터 안내도 없어(claude.ts) 그 화면만으론 도는 턴과 못 가른다.
+ *                도는 턴은 그 시간 안에 줄을 그려 «Interrupted» 를 밀어 올리고, 훅이 걸린 도구를 쓰면 보고도 새로 온다.
+ *                틀리는 방향을 고른 것이다: 끊은 세션의 점이 몇 초 더 깜빡이는 쪽 ↔ 도는 세션이 «대기» 로 보이는 쪽.
+ *  · none    — 꺼진 세션 · 스피너가 도는 세션 · waiting 보고(대화상자다 — 보고가 화면보다 단단하다).
+ */
+export const STOPPED_SETTLE_SEC = 20;
+export function screenReadPlan(i: { offline: boolean; spinning: boolean; reported: { phase: ReportedPhase; at: number } | null; nowSec: number }): "full" | "stopped" | "none" {
+  if (i.offline || i.spinning) return "none";
+  const fresh = isPhaseFresh(i.reported, i.nowSec) ? i.reported : null;
+  if (fresh?.phase === "waiting") return "none";
+  if (fresh?.phase === "busy") return i.nowSec - fresh.at >= STOPPED_SETTLE_SEC ? "stopped" : "none";
+  return "full";
 }
 
 // ── 하네스 보고 상태(#1221) — 화면 스크래핑을 대체하는 주신호 ─────────────────────────────────
@@ -162,13 +185,38 @@ export function isReportedPhase(v: unknown): v is ReportedPhase { return typeof 
 //  만료돼도 손실은 없다 — 아래 폴백(스피너·capture-pane)이 종전과 똑같이 답한다.
 export const PHASE_TTL_SEC = 10 * 60;
 
-// "<phase> <epoch초>" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
+// "<phase> <epoch초>[ bg=<n>]" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
 //  phase 와 시각을 **한 옵션에 묶은** 이유: 따로 쓰면 두 write 사이에 목록 조회가 끼어 '옛 상태 + 새 시각'이라는
 //  있을 수 없는 조합이 나온다(그 조합은 만료 판정을 속인다). 한 문자열이면 원자적이다.
-export function parseReportedPhase(raw: string): { phase: ReportedPhase; at: number } | null {
-  const [p, t] = String(raw || "").trim().split(/\s+/);
+//  #4588 — 세 번째 토큰 `bg=<n>` 은 턴 끝(idle)에 하네스가 센 «대화가 띄우고 아직 안 끝난 백그라운드 작업 수»다(formatReportedPhase).
+//   옛 파서는 앞의 둘만 읽어 이 토큰을 모른 채 지나간다(무회귀). 없으면 bg 키가 없다(= 모른다).
+export function parseReportedPhase(raw: string): { phase: ReportedPhase; at: number; bg?: number } | null {
+  const [p, t, x] = String(raw || "").trim().split(/\s+/);
   const at = Number(t);
-  return isReportedPhase(p) && Number.isFinite(at) && at > 0 ? { phase: p, at } : null;
+  if (!isReportedPhase(p) || !Number.isFinite(at) || at <= 0) return null;
+  const bg = p === "idle" ? /^bg=(\d{1,4})$/.exec(x || "")?.[1] : undefined;
+  return bg === undefined ? { phase: p, at } : { phase: p, at, bg: Number(bg) };
+}
+/** parseReportedPhase 의 짝. bg 는 idle 에만 싣는다 — 도는 턴·대기의 작업 수는 턴이 끝나야 정해진다. */
+export function formatReportedPhase(phase: ReportedPhase, nowSec: number, bg?: number | null): string {
+  return phase === "idle" && isBgCount(bg) ? `${phase} ${nowSec} bg=${bg}` : `${phase} ${nowSec}`;
+}
+/** 보고에 실린 작업 수가 쓸 만한가(0 이상 정수 · 상한 9999 — 형식은 `bg=\d{1,4}`). */
+export function isBgCount(v: unknown): v is number { return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 9999; }
+
+/**
+ * #4588 — 화면의 «백그라운드 작업이 남았다»(screen run = background)를 사이드바 점에 실을지.
+ *  화면 숫자(Claude Code 의 «… · 1 shell still running»)는 AI 가 기다리는 작업과 어긋날 수 있다. 실측(2026-10-06, 맥미니 2.1.289
+ *  세션 둘): 대화가 띄운 작업이 전부 완료 알림을 받았는데 화면은 몇 시간째 «1 shell still running» 이었고, AI 는 사람의 답을
+ *  기다린다고 말했다 — 점은 그동안 «작업 중» 으로 깜빡였다. AI 가 스스로 이어 가는 근거는 알림이고 알림은 대화가 띄운 작업에만
+ *  오므로, 턴 끝에 하네스가 대화 기록으로 센 수(bg)가 정본이다.
+ *  · 마지막 보고가 idle 이고 bg=0 → 기다릴 작업이 없다 → 끈다. **만료(TTL)를 보지 않는다** — idle 보고는 다음 이벤트까지 사실이다.
+ *    (작업이 끝나면 알림이 새 턴을 열어 busy→idle 로 다시 센다. 사람이 작업 관리 창에서 직접 끄면 화면이 먼저 «still running» 을 지운다.)
+ *  · bg 가 없거나(구 훅 · 못 셈) 1 이상 → 종전대로 화면을 믿는다. 틀리는 방향을 «한 번 더 깜빡인다» 쪽에 둔다.
+ */
+export function backgroundHolds(screenBackground: boolean, reported: { phase: ReportedPhase; bg?: number } | null): boolean {
+  if (!screenBackground) return false;
+  return !(reported?.phase === "idle" && reported.bg === 0);
 }
 // ⚠ 미래 시각도 만료로 본다 — 노드(#869)의 훅은 **멤버 PC 시계**로 찍히므로 스큐가 있으면 now-at 이 음수가 되어
 //  "영원히 신선한" 보고가 굳는다. 60초 여유는 정상 스큐 흡수용.
@@ -210,13 +258,15 @@ export function harnessReportsBusy(i: {
 //     스피너(3)의 후계다 — Claude Code 는 제목에 스피너를 더 이상 안 그린다. 대기(4) 밑인 건 사람이 답할 일을 먼저 보이려는 것.
 //     ⚠ 턴이 끝나고 백그라운드 작업을 기다리는 화면(background)은 여기 안 든다 — 실행 단계가 아니다(screenRunEffects 머리말).
 //  6) idle.
+//  ⚠ #3870 화면이 «사람이 턴을 끊었다» 고 말하면(하네스 run = stopped) **2번의 busy 보고를 버린다** — 끊긴 턴엔 Stop 훅이 안 떠서
+//     그 보고는 끝난 턴의 것이다. waiting 보고(1)와 스피너(3)는 그대로다(끊은 뒤에 실제로 벌어진 일일 수 있다).
 export function resolveAgentPhase(i: {
   reported: { phase: ReportedPhase; at: number } | null; nowSec: number; spinning: boolean; scrapedWaiting: boolean;
-  scrapedTurn?: boolean;
+  scrapedTurn?: boolean; scrapedStopped?: boolean;
 }): ReportedPhase {
   const fresh = isPhaseFresh(i.reported, i.nowSec) ? i.reported : null;
   if (fresh?.phase === "waiting") return "waiting";
-  if (fresh?.phase === "busy") return "busy";
+  if (fresh?.phase === "busy" && !i.scrapedStopped) return "busy";
   if (i.spinning) return "busy";
   if (i.scrapedWaiting) return "waiting";
   if (i.scrapedTurn) return "busy";
@@ -247,11 +297,13 @@ export function isActivityProgress(phase: ReportedPhase | undefined, prev: Repor
 //  #1842 — **전이(prev→phase)를 반환한다.** 이 함수가 곧 "지금 단계가 바뀌었다"를 아는 유일한 자리라서,
 //   실시간 알림은 이 값 없이는 30초 폴링으로 같은 사실을 다시 발견해야 한다. 알림 관심사를 이 파일에
 //   들이지 않으려고(여긴 tmux 계층이다) **판단은 하지 않고 사실만 돌려준다** — 무엇이 알림인지는 호출자가 정한다.
-export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000)): Promise<SessionPhaseChange | null> {
+export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000), bg?: number | null): Promise<SessionPhaseChange | null> {
   let prev: ReportedPhase | null = null;
   if (phase) {
     prev = parseReportedPhase(await getOpt(id, "@box_state"))?.phase ?? null;   // 전이 여부 판정용(아래)
-    await tmuxQuiet(["set-option", "-t", id, "@box_state", `${phase} ${nowSec}`]);
+    //  #4588 idle 엔 bg=<n>. ⚠ bg 없는 idle 에 직전 bg 를 잇지 않는다 — 훅이 «못 셌다»(띄움 문구를 못 알아봄 등)고 말한 idle 에
+    //   옛 bg=0 을 이으면 기다리는 세션의 점이 꺼진다(격리 리뷰). 새 훅은 모든 idle 보고에서 센다(work-flag).
+    await tmuxQuiet(["set-option", "-t", id, "@box_state", formatReportedPhase(phase, nowSec, bg)]);
   }
   const changed = !!phase && phase !== prev;
   if (!isActivityProgress(phase, prev)) return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)

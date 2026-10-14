@@ -155,8 +155,13 @@ function pjvExitAreaMode() {
   pjvApplyView(pjvDefaultView('__all__')); // byStatus=true, kanban/overview=false, savedView clear
   pjvSyncUrl('__all__', true);
 }
+// #3870 — 보드가 자기 «폴더 · 리스트» 패널을 가질 수 있는 자리인가. 새 셸 액자(?embed=1) 안에서는 못 가진다: 폴더·리스트로 오가는 일은
+//  셸의 [프로젝트] 사이드바가 맡는다(#2043). 패널만 안 세우고 여는 단추(브레드크럼 맨 앞)와 톱니의 «사이드바 표시» 를 남겨 뒀더니
+//  누르면 사이드바 옆에 같은 목록의 사이드바가 또 섰다. 여는 길 · 세우는 자리 · 선호 저장이 모두 이 한 잣대를 본다.
+function pjvOwnSideAllowed() { return !document.body.classList.contains('embed'); }
 // 사이드바 열림 선호 저장(#541 리뷰) — 기본 ON 이지만 사용자가 닫으면 새로고침 후에도 닫힌 채 유지(URL 은 못 담음).
-function pjvPersistSideOpen() { try { localStorage.setItem('pjv:sideOpen', pjvBoardView.byArea ? '1' : '0'); } catch (_) { /* noop */ } }
+//  액자 안에서는 적지 않는다 — 이 선호는 단독 화면의 패널 것이라, 패널이 없는 액자가 «닫힘» 으로 덮어쓰면 안 된다.
+function pjvPersistSideOpen() { if (!pjvOwnSideAllowed()) return; try { localStorage.setItem('pjv:sideOpen', pjvBoardView.byArea ? '1' : '0'); } catch (_) { /* noop */ } }
 
 // ══ 사이드바 — 그룹/폴더 펼침(계정별 영속)과 지금 선택된 스코프, 그리고 하위태스크 표시 모드. ══
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.
@@ -289,6 +294,7 @@ export {
   pjvListOpen,
   pjvLoadScopeView,
   pjvLocalSortOverride,
+  pjvOwnSideAllowed,
   pjvPersistSideOpen,
   pjvProjClosedView,
   pjvProjTaskMode,
