@@ -48,10 +48,11 @@
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(변경 전 = `git archive HEAD web public/styles`).
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { existsSync } from "node:fs";
+import { crc32, deflateSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
-import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
+import { BREATHE_URL, dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
@@ -80,7 +81,14 @@ async function PAGE_MAIN() {
   const pageErrors = [];
   window.addEventListener("error", (e) => pageErrors.push(String(e.message || e)));
   window.addEventListener("unhandledrejection", (e) => pageErrors.push("rej: " + String(e.reason && e.reason.message || e.reason)));
-  const sleep = (ms) => new Promise((z) => setTimeout(z, ms));
+  //  진짜 fetch 는 가짜 서버로 바꾸기(window.fetch = serve) **전에** 쥔다 — 숨 고르기가 그 길로 나간다.
+  const realFetch = window.fetch.bind(window);
+  const breathe = () => realFetch("__LV_BREATHE_URL__").then((r) => r.text()).catch(() => {});
+  const tick = (ms) => new Promise((z) => setTimeout(z, ms));
+  //  대기는 20ms(가상)마다 숨을 고른다(headless-chrome BREATHE_URL) — 가상 시계가 미리보기·복제의 진짜 비동기(blob 읽기 ·
+  //   createImageBitmap)를 앞질러, 4초(가상) 대기가 실시간 몇 ms 만에 끝나던 것을 막는다(CI 실측 R23 미리보기 3/4 · R28 복제 1/2).
+  //   sleep(0) 은 차례만 넘긴다(«곧바로» 를 재는 자리 — R24).
+  const sleep = async (ms) => { if (!(ms > 0)) return tick(0); for (let left = ms; left > 0; left -= 20) { await breathe(); await tick(Math.min(20, left)); } };
   //  서버 왕복을 기다리는 자리는 **조건**으로 기다린다 — 고정 시간은 느린 러너(CI 리눅스)에서 앞 장면의 되돌리기를 집었다(R21 실측).
   const waitFor = async (fn, ms = 4000) => { const t0 = performance.now(); while (performance.now() - t0 < ms) { if (fn()) return true; await sleep(20); } return false; };
   const SRC = document.getElementById("pfsrc").textContent;
@@ -90,7 +98,9 @@ async function PAGE_MAIN() {
   localStorage.setItem("lively_pn_files_iconsz", "110");
   localStorage.setItem("lively_pn_files_note", "0");
   // ── 가짜 서버 ──
-  const png = await new Promise((res) => { const c = document.createElement("canvas"); c.width = 40; c.height = 30; const x = c.getContext("2d"); x.fillStyle = "#39c"; x.fillRect(0, 0, 40, 30); c.toBlob((b) => b.arrayBuffer().then((a) => res(new Uint8Array(a))), "image/png"); });
+  //  그림 바이트는 노드가 만들어 싣는다(PNG_B64) — 여기서 canvas.toBlob 으로 만들면 타이머 없이 진짜 비동기만 기다리는 동안
+  //   가상 시계가 예산 끝으로 뛰어, 장면을 하나도 안 돌린 채 DOM 을 떴다(CI 실측 out="PENDING").
+  const png = Uint8Array.from(atob(window.__PNG_B64), (c) => c.charCodeAt(0));
   const enc = (s) => new TextEncoder().encode(s);
   let FS;
   const seed = () => {
@@ -414,13 +424,31 @@ async function PAGE_MAIN() {
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
 
+//  40×30 단색(#39c) PNG — 미리보기 그림 자리(사진.png). zlib 로 바로 만든다(그림 도구 불요).
+function solidPng(w, h, [r, g, b]) {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) raw.set([r, g, b], y * (w * 3 + 1) + 1 + x * 3);
+  const chunk = (type, data) => {
+    const td = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;   // 8비트 RGB
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+const PNG_B64 = solidPng(40, 30, [0x33, 0x99, 0xcc]).toString("base64");
+
 const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8">
 ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <style>html,body{margin:0}</style><div id="toasts"></div><pre id="out">PENDING</pre>
 <script type="text/plain" id="pfsrc">${bundle.replace(/<\/script/gi, "<\\/script")}</script>
+<script>window.__PNG_B64 = "${PNG_B64}";</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 
 if (process.env.DUMP_PAGE) { const fs = await import("node:fs"); fs.writeFileSync(process.env.DUMP_PAGE, PAGE); for (const f of CSS) fs.copyFileSync(f, path.join(path.dirname(process.env.DUMP_PAGE), path.basename(f))); }
+//  숨 고르기 자리(BREATHE_URL)가 페이지에 실렸나 — 글자가 어긋나면 dumpDom 이 서버를 안 띄워 숨 고르기가 조용히 빠진다.
+if (!PAGE.includes(BREATHE_URL)) { console.error("FAIL  페이지에 숨 고르기 자리(BREATHE_URL)가 없다"); process.exit(1); }
 const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "side-files-", virtualTimeBudget: 60000 });
 const res = readOut(dom);
 if (res.text === null) { console.error(`FAIL  페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 1500)); process.exit(1); }
