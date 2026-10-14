@@ -13,9 +13,9 @@ import { isAppServerToken, resolveAppServerPrincipal } from "../apps/app-server-
 import { APP_IDENTITY_HEADER } from "../apps/app-identity.js";
 
 // ── 앱 서버 토큰(#4483) ─────────────────────────────────────────────────────────────────
-//  멤버 없는 앱 토큰은 **능력 REST(web.ts)에서만** 받는다 — 거기서 사람 신원(X-Lively-Identity)을 검증해 «그 구성원 ∩ 앱 동의»
-//  주체로 바꾸고, 그 뒤는 앱 도구 게이트(requireAppTool)가 지킨다. 터미널·파일·프로젝트·프리뷰·노드 경로와 /mcp·/install 은
-//  앱 도구 게이트를 안 타므로 이 토큰을 거부한다(fail-closed — 앱 코드가 쥔 토큰으로 사람 터미널을 열 수 없게).
+//  멤버 없는 앱 토큰은 **능력 REST 마운트(web.ts mwCap)에서만** 받는다 — 거기서 사람 신원(X-Lively-Identity)을 검증해 «그 구성원 ∩
+//  앱 동의» 주체로 바꾸고, 그 뒤는 앱 도구 게이트(requireAppTool)가 지킨다. 그 밖(web.ts 의 mw 라우트 · 터미널·파일·프로젝트·프리뷰·
+//  노드 경로 · /mcp·/install)은 앱 도구 게이트를 안 타므로 이 토큰을 거부한다(기본값 appServer:false — fail-closed).
 type AuthedReq = express.Request & { auth?: unknown };
 function appServerGate(allow: boolean): (req: express.Request, res: express.Response, next: express.NextFunction) => void {
   return (req, res, next) => {
@@ -27,7 +27,9 @@ function appServerGate(allow: boolean): (req: express.Request, res: express.Resp
       (r.auth as { extra?: unknown }).extra = p;          // bearer 가 막 채운 자리 — 주체만 사람으로 바꾼다
       next();
     }, (e: { status?: number; message?: string }) => {
-      res.status(e?.status === 403 ? 403 : 401).json({ error: String(e?.message ?? "앱 서버 인증 실패") });
+      //  401·403 은 판정 그대로, 그 밖(DB 오류 등)은 503 — 401 로 뭉개면 클라이언트가 토큰을 버리고 다시 받으려 한다.
+      const st = e?.status === 403 ? 403 : e?.status === 401 ? 401 : 503;
+      res.status(st).json({ error: st === 503 ? "앱 서버 인증을 지금 확인하지 못했습니다 — 잠시 뒤 다시 하세요" : String(e?.message ?? "앱 서버 인증 실패") });
     });
   };
 }

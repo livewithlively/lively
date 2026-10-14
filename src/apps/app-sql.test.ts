@@ -187,6 +187,52 @@ test("P7 스키마 붙인 함수·형, reg* 형과 그 입출력 함수는 거�
   assert.equal((await plan("SELECT extract(epoch FROM created_at), created_at AT TIME ZONE 'Asia/Seoul', trim(both from name), cast(id AS integer), 1.5::numeric(10,2) FROM contacts")).kind, "select");
 });
 
+test("P7b OID 로 이름을 내주는 길은 거부 — reg* 배열형(_regclass …) · format_type · acl* · aclitem 형 · oidvectortypes · 형 OID 를 받는 입력 함수(격리 리뷰)", async () => {
+  for (const [sql, re] of [
+    ["SELECT ARRAY[g]::_regclass::text FROM generate_series(16380, 16440) g WHERE ARRAY[g]::_regclass::text LIKE '%victim%'", /_regclass/],
+    ["SELECT ARRAY[g]::_regnamespace::text FROM generate_series(1, 99999) g", /_regnamespace/],
+    ["SELECT ARRAY[g]::_regrole::text FROM generate_series(1, 99999) g", /_regrole/],
+    ["SELECT CAST('{1259}' AS _regclass)", /_regclass/],
+    ["SELECT _regclass('{1259}')", /_regclass/],
+    ["SELECT '{1259}'::pg_catalog._regclass", /_regclass/],
+    ["SELECT format_type(g::oid, NULL) FROM generate_series(16380, 16440) g", /format_type/],
+    ["SELECT acldefault('r', g::oid)::text FROM generate_series(10, 20) g", /acldefault/],
+    ["SELECT makeaclitem(10::oid, 10::oid, 'SELECT', false)::text", /makeaclitem/],
+    ["SELECT aclexplode(acldefault('r', 10::oid))", /aclexplode|acldefault/],
+    ["SELECT 'x=r/postgres'::aclitem", /aclitem/],
+    ["SELECT '{}'::aclitem[]", /aclitem/],
+    ["SELECT '{}'::_aclitem", /aclitem/],
+    ["SELECT oidvectortypes('23 25'::oidvector)", /oidvectortypes/],
+    ["SELECT enum_in('x', g::oid) FROM generate_series(16380, 16440) g", /enum_in/],
+    ["SELECT array_in('{x}', 16384::oid, -1)", /array_in/],
+    ["SELECT record_in('(1)', 16384::oid, -1)", /record_in/],
+    ["SELECT domain_in('x', 16384::oid, -1)", /domain_in/],
+    ["SELECT satisfies_hash_partition(16384::oid, 1, 0, 1)", /satisfies_hash_partition/],
+    ["SELECT fmgr_sql_validator(16384::oid)", /fmgr_sql_validator/],
+    ["SELECT binary_upgrade_set_next_pg_type_oid(1::oid)", /binary_upgrade/],
+    ["SELECT ts_debug('simple', 'x')", /ts_debug/],
+  ] as Array<[string, RegExp]>) await rejects(sql, re);
+  // 숫자로서의 oid · 전문 검색(전역 설정 이름) · 일반 집계는 그대로 된다
+  assert.equal((await plan("SELECT 5::oid, max(id), to_tsvector('simple', name), plainto_tsquery('simple', 'x') FROM contacts")).kind, "select");
+});
+
+test("P7c 파서가 바꿔 쓴 LIKE … ESCAPE · SIMILAR TO 는 받는다 · 바꿔 쓰면 문법이 깨지는 테이블 자리(TABLE 표 · 표 *)는 안내와 함께 400", async () => {
+  for (const sql of ["SELECT name FROM contacts WHERE name SIMILAR TO 'a%'", "SELECT name FROM contacts WHERE name NOT SIMILAR TO 'a#%' ESCAPE '#'",
+    "SELECT name FROM contacts WHERE name LIKE 'a!%' ESCAPE '!'", "SELECT name FROM contacts WHERE name ILIKE 'a!%' ESCAPE '!'",
+    "SELECT substring(name similar 'a' escape '#') FROM contacts"]) {
+    assert.equal((await plan(sql)).kind, "select", sql);
+  }
+  await rejects("SELECT pg_catalog.format_type(1, NULL)", /스키마를 붙인 함수|format_type/);
+  await rejects("TABLE contacts", /SELECT \* FROM 표/);
+  await rejects("SELECT * FROM contacts *", /SELECT \* FROM 표/);
+  assert.equal((await plan("SELECT * FROM ONLY contacts")).sql, `SELECT * FROM ONLY ${A("contacts")}`);
+});
+
+test("P7d 아주 깊은 UPDATE·DELETE 조건(NOT 수천 겹)도 500 이 아니라 400", async () => {
+  await rejects("UPDATE contacts SET name = 'x' WHERE " + "NOT ".repeat(3000) + "id = 1", /복잡|깊/);
+  await rejects("DELETE FROM contacts WHERE " + "NOT ".repeat(3000) + "id = 1", /복잡|깊/);
+});
+
 test("P6b 한 번에 큰 메모리를 잡는 함수는 거부(repeat·lpad·rpad·array_fill·format) — 대신 쓸 길을 말한다", async () => {
   for (const f of ["repeat('x', 900000000)", "lpad('x', 900000000)", "rpad('x', 900000000)", "array_fill(1, ARRAY[900000000])", "format('%1000000000s', 'x')"]) {
     await rejects(`SELECT ${f}`, /큰 메모리.*concat/);

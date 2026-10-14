@@ -194,6 +194,14 @@ try {
   const memberMcp = await fetch(GW + "/probe/mcp", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
   chk("E3c 앱 서버 토큰은 앱 도구 게이트를 안 타는 경로(터미널·파일 등의 sessionOrBearer · /mcp)에서 403 · 구성원 토큰은 종전 그대로 200",
     plain === 403 && mcp === 403 && memberPlain === 200 && memberMcp === 200, JSON.stringify({ plain, mcp, memberPlain, memberMcp }));
+  //  web.ts 의 능력 아닌 라우트(mw) — 비밀번호 바꾸기·로그인 수단·회사 계정 연결 해제·노션 첨부는 앱 동의 게이트를 안 탄다(격리 리뷰 차단 2)
+  const logins = await fetch(GW + "/api/ui/me/logins", { headers: withApp }).then((r) => r.status);
+  const pw = await fetch(GW + "/api/ui/password", { method: "POST", headers: { "content-type": "application/json", ...withApp },
+    body: JSON.stringify({ current: "x", next: "yyyyyyyyyyyy" }) }).then((r) => r.status);
+  const unlink = await fetch(GW + "/api/ui/me/oidc/unlink", { method: "POST", headers: { "content-type": "application/json", ...withApp }, body: "{}" }).then((r) => r.status);
+  const memberLogins = await fetch(GW + "/api/ui/me/logins", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
+  chk("E3d 앱 서버 토큰 + 유효 신원도 능력 아닌 라우트(로그인 수단 · 비밀번호 · 회사 계정 연결 해제)는 403 · 구성원 토큰은 그대로 200",
+    logins === 403 && pw === 403 && unlink === 403 && memberLogins === 200, JSON.stringify({ logins, pw, unlink, memberLogins }));
 
   // ── E4 앱 서버 빈도 — 사람마다 ──
   X.resetAppSqlLimits({ ...process.env, LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "100" });

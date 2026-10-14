@@ -115,6 +115,11 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
   // 이 표에서 일어난 일은 끝까지 성공했을 때만 보고서에 싣는다(실패해 되돌린 일을 «했다» 로 적지 않게).
   const local = emptyTableReport();
   await inTx(db, async (c) => {
+    //  #4483 — 런타임(앱 SQL 실행기)과 같은 해석 조건으로 DDL 을 돈다: 검사기가 본 검사 식이 DB 에서도 같은 함수·연산자로 묶이고
+    //  (소유자 연결의 기본 search_path 에 다른 스키마가 있어도), enum 값처럼 ' 만 두 번 써 넣은 글자가 그대로 읽힌다(격리 리뷰).
+    //  이 트랜잭션의 문장은 전부 스키마를 붙인 이름과 pg_catalog 형·함수만 쓴다.
+    await c.query("SET LOCAL standard_conforming_strings = on");
+    await c.query("SET LOCAL search_path = pg_catalog, pg_temp");
     const existed = await tableExists(c, schema, physical);
     await c.query(
       `CREATE TABLE IF NOT EXISTS ${rel} (
@@ -268,8 +273,9 @@ async function quoteLiteral(c: Q, text: string): Promise<string> {
 /** 칸의 기본값 식(DDL 조각) — default_expr 은 목록의 식, default 는 형에 맞게 캐스트한 리터럴. 없으면 null. */
 async function defaultSql(c: Q, col: StoreColumn): Promise<string | null> {
   if (col.default_expr !== undefined) {
-    const e = DEFAULT_EXPRS[col.default_expr.toLowerCase()];
-    if (!e) throw new HttpError(400, `default_expr '${col.default_expr}' 는 받지 않습니다(${Object.keys(DEFAULT_EXPRS).join(" · ")})`);
+    const k = col.default_expr.toLowerCase();
+    const e = Object.hasOwn(DEFAULT_EXPRS, k) ? DEFAULT_EXPRS[k] : undefined;
+    if (typeof e !== "string") throw new HttpError(400, `default_expr '${col.default_expr}' 는 받지 않습니다(${Object.keys(DEFAULT_EXPRS).join(" · ")})`);
     return e;
   }
   const ty = parseColumnType(col.type);
@@ -352,8 +358,14 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
       });
       continue;
     }
-    //  기본값은 잠시 뗐다가 규칙 동기화가 새 형으로 다시 건다(옛 기본값이 새 형으로 안 바뀌어 실패하지 않게).
+    //  기본값과 그 칸을 쓰는 라이블리 검사(lvck_)는 잠시 뗐다가 규칙 동기화가 새 형으로 다시 건다 — 옛 형을 전제로 한 것(기본값
+    //  리터럴 · length(code) > 0 같은 식)이 새 형에서 안 돌아 변환이 실패하지 않게(격리 리뷰 재현: text → bigint 에서 42883).
     if (cur.default !== null) await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} DROP DEFAULT`);
+    const deps = (await c.query(
+      `SELECT DISTINCT con.conname FROM pg_constraint con JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+        WHERE con.conrelid = to_regclass($1) AND con.contype = 'c' AND starts_with(con.conname, $2) AND a.attname = $3`,
+      [rel, APP_CHECK_PREFIX, col.name])).rows;
+    for (const d of deps) await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(String(d.conname))}`);
     await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} TYPE ${ty.sql} USING ${qi(col.name)}::${ty.sql}`);
     report.converted_columns.push({ table: spec.table, column: col.name, from: cur.type, to: ty.canonical });
   }
@@ -452,14 +464,22 @@ async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTab
   have = await columnsOf(c, rel);
   for (const [name, ck] of checks) {
     if (haveChecks.has(name)) continue;
-    const bad = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE NOT (${ck.expr}\n)`)).rows[0]?.n ?? 0);
+    let bad: number;
+    try { bad = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE NOT (${ck.expr}\n)`)).rows[0]?.n ?? 0); }
+    catch (e) {
+      //  식이 이 표의 칸 형과 맞지 않는다(형을 바꾸며 검사는 그대로 둔 경우 — length(code) 인데 code 가 bigint). 고칠 사람이 할 일이라 400.
+      const code = String((e as { code?: string })?.code ?? "");
+      if (code.startsWith("42") || code.startsWith("22")) {
+        throw new HttpError(400, `'${t}' 의 검사 «${ck.expr}» 를 이 표에서 실행할 수 없습니다(${(e as Error).message}) — 칸의 형에 맞게 검사 식을 고치세요`, { cause: e });
+      }
+      throw e;
+    }
     if (bad > 0) {
       throw new HttpError(409, `'${t}' 에 검사 «${ck.expr}» 에 맞지 않는 행이 ${bad}개 있습니다 — 그 행을 고치거나 검사를 바꾼 뒤 다시 설치하세요`);
     }
     await c.query(`ALTER TABLE ${rel} ADD CONSTRAINT ${qi(name)} CHECK (${ck.expr}\n)`);
     report.constraints.push({ table: t, ...(ck.column ? { column: ck.column } : {}), kind: "check", action: "added" });
   }
-  void physical;
 }
 
 /**

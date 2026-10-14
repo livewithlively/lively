@@ -205,17 +205,22 @@ const storeDelete: Capability = {
 //  문장 검사·이름 바꿔 쓰기는 apps/app-sql, 앱 역할·격벽 풀·상한은 apps/app-sql-exec. 기본 앱(여러 워크스페이스가 테이블을
 //  나눠 쓰는 앱)은 열지 않는다 — 거기선 행 격리가 설정값 하나에 기대기 때문이다(계획 §7-1).
 //  앱 역할은 처음 쓸 때 보장하고 (워크스페이스, 앱, 앱 판) 마다 기억한다 — 앱을 다시 설치하면 판이 바뀌어 다시 맞춘다.
-const sqlRoleCache = new Map<string, string>();
-async function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown; draft_by?: string | null; published_version_no?: number | null }, specs: AppTableSpec[], schema: string): Promise<string> {
+//  #4483 — 결과가 아니라 진행 중인 약속을 기억한다(single-flight): 콜드스타트에 같은 앱으로 동시 호출이 몰려도 표 보장
+//  (표마다 ACCESS EXCLUSIVE 트랜잭션 · 칸·제약·외래키 동기화)은 한 번만 돈다. 실패하면 지워 다음 호출이 다시 한다.
+const sqlRoleCache = new Map<string, Promise<string>>();
+function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown; draft_by?: string | null; published_version_no?: number | null }, specs: AppTableSpec[], schema: string): Promise<string> {
   //  #4667 역할이 받는 표는 물리 표 전부(설치된 판 ∪ 공개 판) — 초안 표식 · 공개 판 포인터가 바뀌면 그 합도 바뀌므로 열쇠에 넣는다.
   const key = `${appSqlTenantId()}\0${appId}\0${app.content_hash ?? ""}\0${String(app.updated_at ?? "")}\0${app.draft_by ?? ""}\0${app.published_version_no ?? ""}\0${schema}`;
   const hit = sqlRoleCache.get(key);
   if (hit) return hit;
-  await ensureAppTables(appId, specs, { schema, strict: true });          // 테이블이 없던 앱(설치 때 실패)도 여기서 낫는다
-  const role = await ensureAppSqlRole(appId, specs.map((t) => t.table), schema);
+  const p = (async () => {
+    await ensureAppTables(appId, specs, { schema, strict: true });          // 테이블이 없던 앱(설치 때 실패)도 여기서 낫는다
+    return ensureAppSqlRole(appId, specs.map((t) => t.table), schema);
+  })();
   if (sqlRoleCache.size > 5000) sqlRoleCache.clear();
-  sqlRoleCache.set(key, role);
-  return role;
+  sqlRoleCache.set(key, p);
+  p.catch(() => { if (sqlRoleCache.get(key) === p) sqlRoleCache.delete(key); });
+  return p;
 }
 
 // 결과 모양 · 엄격 — SDK(Drizzle 드라이버)는 wire + strict 로 부른다(#4483). 사람·AI 는 기본(objects, 잘리면 truncated 로 알림).
@@ -264,9 +269,9 @@ async function planStatement(t: SqlTarget, sql: unknown, rawParams: unknown, whe
 }
 
 type SqlOut = { kind: string } & (AppSqlResult | AppSqlWireResult);
-/** 게이트(빈도 · 용량 · 역할) → 실행 → 쓰기 알림. */
+/** 게이트(용량 · 역할) → 실행 → 쓰기 알림. 빈도는 호출부가 해석 **전에** 건다(callGate) — 거부·문법 오류 문장도 몫을 쓰게
+ *  (격리 리뷰: 60KB 문장 해석 약 70ms — 빈도가 해석 뒤면 거절되는 문장을 무한히 보내 공유 게이트웨이의 이벤트 루프를 채울 수 있었다). */
 async function runPlanned(t: SqlTarget, items: Array<{ plan: AppSqlPlan; params: unknown[] }>, input: Record<string, unknown>, user: LivelyUser | undefined, ctx: CapabilityCtx | undefined, batch: boolean): Promise<{ results: SqlOut[]; ms: number }> {
-  callGate(user, t.appId, items.length);
   if (items.some((it) => it.plan.kind === "insert" || it.plan.kind === "update")) await assertAppDataQuota(t.schema, false);
   const role = await sqlRoleFor(t.appId, t.app, t.roleSpecs, t.schema);
   const base = { role, appId: t.appId, schema: t.schema, physicalPrefix: `${physicalAppPrefix(t.appId)}__`, format: input.format === "wire" ? "wire" as const : "objects" as const, strict: input.strict === true };
@@ -302,6 +307,7 @@ const storeSql: Capability = {
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/sql"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { sql: b.sql, params: b.params, app_id: appIdOf(b), format: b.format, strict: b.strict }; } }] },
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const t = await sqlTarget(user, input, ctx, "store_sql");
+    callGate(user, t.appId, 1);
     const item = await planStatement(t, input.sql, input.params, "");
     const { results } = await runPlanned(t, [item], input, user, ctx, false);
     return results[0];
@@ -335,6 +341,7 @@ const storeSqlBatch: Capability = {
     const max = currentAppSqlLimits().batchMax;
     if (list.length > max) throw new HttpError(400, `묶음은 한 번에 ${max}문장까지입니다(${list.length}문장) — 나눠 보내거나, 여러 행은 INSERT … VALUES (…),(…) 한 문장으로 쓰세요`);
     const t = await sqlTarget(user, input, ctx, "store_sql_batch");
+    callGate(user, t.appId, list.length);
     const items = [];
     for (let i = 0; i < list.length; i++) {
       try { items.push(await planStatement(t, list[i]?.sql, list[i]?.params, `${i + 1}번째 문장`)); }

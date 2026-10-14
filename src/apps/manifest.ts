@@ -337,7 +337,7 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
       if (ty.enum !== (c.values !== undefined)) throw new HttpError(400, `${where(c.name)}: enum 타입에는 values 를, values 는 enum 에만 씁니다`);
       if (c.values && new Set(c.values).size !== c.values.length) throw new HttpError(400, `${where(c.name)}: values 에 같은 값이 두 번 있습니다`);
       if (c.default !== undefined && c.default_expr !== undefined) throw new HttpError(400, `${where(c.name)}: default 와 default_expr 은 함께 쓸 수 없습니다`);
-      if (c.default_expr !== undefined && !(c.default_expr.toLowerCase() in DEFAULT_EXPRS)) {
+      if (c.default_expr !== undefined && !Object.hasOwn(DEFAULT_EXPRS, c.default_expr.toLowerCase())) {
         throw new HttpError(400, `${where(c.name)}: default_expr 은 ${Object.keys(DEFAULT_EXPRS).join(" · ")} 중 하나입니다(값은 default 에 JSON 으로)`);
       }
       if (c.default !== undefined) defaultLiteralText(c.default, ty);      // 400 — 형과 맞지 않는 기본값 모양

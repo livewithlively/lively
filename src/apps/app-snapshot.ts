@@ -17,7 +17,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import { itemsPool, withTx } from "../db/client.js";
 import { getApp, listApps } from "../org/store/apps.js";
-import { isBuiltinSource, qualifiedAppTable } from "./store-ddl.js";
+import { isBuiltinSource, qualifiedAppTable, physicalTableName } from "./store-ddl.js";
 import { appSchemaFor, withOwnerConn, inTx } from "./store-schema.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import { liveTableNames } from "./app-view.js";
@@ -159,6 +159,32 @@ export async function listAppSnapshots(appId?: string | null): Promise<SnapshotL
   return [...by.values()];
 }
 
+/** 이 앱의 표끼리 걸린 외래키(#4483) — 카탈로그에서 읽는다(선언이 아니라 지금 걸려 있는 것). 이름은 선언 표 이름. */
+async function appForeignKeys(schema: string, appId: string, tables: string[]): Promise<Array<{ child: string; parent: string }>> {
+  const byPhysical = new Map(tables.map((t) => [physicalTableName(appId, t), t]));
+  if (!byPhysical.size) return [];
+  const r = await itemsPool.query(
+    `SELECT ch.relname AS child, pa.relname AS parent FROM pg_constraint con
+       JOIN pg_class ch ON ch.oid = con.conrelid JOIN pg_class pa ON pa.oid = con.confrelid
+       JOIN pg_namespace n ON n.oid = ch.relnamespace JOIN pg_namespace pn ON pn.oid = pa.relnamespace
+      WHERE con.contype = 'f' AND n.nspname = $1 AND pn.nspname = $1 AND ch.relname = ANY($2::text[]) AND pa.relname = ANY($2::text[])`,
+    [schema, [...byPhysical.keys()]]);
+  return r.rows.map((x) => ({ child: byPhysical.get(String(x.child))!, parent: byPhysical.get(String(x.parent))! }));
+}
+
+/** 가리키는 표(부모)가 먼저 오게 줄 세운다. 서로 가리키면(순환) null. 자기 자신을 가리키는 것은 순서와 상관없다. */
+export function parentsFirst(tables: string[], fks: Array<{ child: string; parent: string }>): string[] | null {
+  const edges = fks.filter((f) => f.child !== f.parent && tables.includes(f.child) && tables.includes(f.parent));
+  const waiting = new Map(tables.map((t) => [t, new Set(edges.filter((f) => f.child === t).map((f) => f.parent))]));
+  const out: string[] = [];
+  while (waiting.size) {
+    const ready = [...waiting.keys()].filter((t) => waiting.get(t)!.size === 0);
+    if (!ready.length) return null;
+    for (const t of ready) { out.push(t); waiting.delete(t); for (const deps of waiting.values()) deps.delete(t); }
+  }
+  return out;
+}
+
 /**
  * 떠 둔 묶음으로 그 앱의 테이블을 되돌린다 — 테이블의 이 워크스페이스 행을 **통째로 그 시점으로** 바꾼다.
  *  순서(격리 리뷰 2026-09-30 반영):
@@ -168,6 +194,9 @@ export async function listAppSnapshots(appId?: string | null): Promise<SnapshotL
  *   ④ 이 워크스페이스 행 삭제 → 묶음 행 삽입(원래 id) → 넣은 수가 떠 둔 수와 다르면 전부 취소 → id 시퀀스 맞추기 → 커밋.
  *  테이블 여럿이면 한 트랜잭션이다(전부 되거나 전부 안 된다). 떠 둔 뒤 매니페스트가 칸을 늘렸으면 새 칸은 NULL,
  *  없앤 칸의 값은 버린다(jsonb_populate_record 규칙).
+ *  #4483 외래키 — 되돌리지 않는 표가 되돌릴 표를 가리키면 시작 전에 409(그 표의 행이 cascade 로 함께 지워지거나 삭제가 막힌다 —
+ *  격리 리뷰 재현). 되돌릴 표끼리는 지우기는 가리키는 쪽(자식)부터, 넣기는 가리켜지는 쪽(부모)부터. 넣은 행이 가리킬 행이
+ *  지금 없으면(23503) 전부 취소하고 409.
  */
 export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTable?: string | null, opts: { force?: boolean } = {}): Promise<{ restored: Array<{ table: string; rows: number }>; safety: SnapshotOutcome }> {
   const app = await getApp(appId);
@@ -195,6 +224,15 @@ export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTab
 
   const schema = appSchemaFor(false);
   const tenant = appSqlTenantId();
+  const fks = await appForeignKeys(schema, appId, [...declared]);
+  const outside = fks.filter((f) => targets.includes(f.parent) && !targets.includes(f.child));
+  if (outside.length) {
+    const kids = [...new Set(outside.map((f) => f.child))].join(", "), parents = [...new Set(outside.map((f) => f.parent))].join(", ");
+    throw new HttpError(409, `되돌리지 않는 표(${kids})가 되돌릴 표(${parents})를 외래키로 가리킵니다 — 이대로 되돌리면 그 표의 행이 함께 지워지거나 `
+      + "되돌리기가 막힙니다. 표를 고르지 말고 묶음 전체를 되돌리세요(묶음에 없는 표가 가리키면 그 표도 함께 떠 둔 시점을 고르세요). 아무것도 바꾸지 않았습니다");
+  }
+  const order = parentsFirst(targets, fks);
+  if (!order) throw new HttpError(409, `되돌릴 표들(${targets.join(", ")})이 서로를 외래키로 가리켜(순환) 지우고 넣는 순서를 정할 수 없습니다 — 아무것도 바꾸지 않았습니다`);
   return withOwnerConn((db) => inTx(db, async (c) => {
     // ② 쓰기 막기(읽기는 된다 — ③ 이 읽는다)
     for (const table of targets) await c.query(`LOCK TABLE ${qualifiedAppTable(schema, appId, table)} IN SHARE MODE`);
@@ -203,18 +241,25 @@ export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTab
     if (!safety.taken_at && !opts.force) {
       throw new HttpError(409, `되돌리기 직전 상태를 떠 두지 못해(${safety.skipped ?? "까닭 모름"}) 멈췄습니다 — 이대로 되돌리면 되돌린 것을 다시 되돌릴 수 없습니다. 그래도 하려면 force 를 주세요`);
     }
-    // ④ 바꾸기
+    // ④ 바꾸기 — 지우기는 자식부터, 넣기는 부모부터(외래키)
+    for (const table of [...order].reverse()) await c.query(`DELETE FROM ${qualifiedAppTable(schema, appId, table)} WHERE tenant_id = $1::uuid`, [tenant]);
     const restored: Array<{ table: string; rows: number }> = [];
-    for (const table of targets) {
+    for (const table of order) {
       const rel = qualifiedAppTable(schema, appId, table);
       const { chunks, expected } = data.get(table)!;
-      await c.query(`DELETE FROM ${rel} WHERE tenant_id = $1::uuid`, [tenant]);
       let count = 0;
       for (const rows of chunks) {
-        const r = await c.query(
-          `INSERT INTO ${rel} OVERRIDING SYSTEM VALUE
-           SELECT (jsonb_populate_record(NULL::${rel}, e || jsonb_build_object('tenant_id', $2::text))).*
-             FROM jsonb_array_elements($1::jsonb) e`, [rows, tenant]);
+        let r;
+        try {
+          r = await c.query(
+            `INSERT INTO ${rel} OVERRIDING SYSTEM VALUE
+             SELECT (jsonb_populate_record(NULL::${rel}, e || jsonb_build_object('tenant_id', $2::text))).*
+               FROM jsonb_array_elements($1::jsonb) e`, [rows, tenant]);
+        } catch (e) {
+          if ((e as { code?: string })?.code !== "23503") throw e;
+          throw new HttpError(409, `'${table}' 의 떠 둔 행이 가리키는 행이 지금 없습니다 — 가리키는 표까지 함께 되돌리세요(표를 고르지 말고 묶음 전체). `
+            + "아무것도 바꾸지 않았습니다", { cause: e });
+        }
         count += r.rowCount ?? 0;
       }
       if (count !== expected) {

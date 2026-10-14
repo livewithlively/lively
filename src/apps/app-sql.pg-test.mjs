@@ -26,6 +26,9 @@
 //  D17 strict — 쓰기 RETURNING 이 잘리면 413 이고 쓰기도 취소된다
 //  D18 행 잠금(FOR UPDATE SKIP LOCKED)은 읽기·쓰기 트랜잭션으로 돈다 — 작업 꺼내 가기 한 문장
 //  D19 공평 분배 — 자리가 비면 지금 가장 적게 쓰는 고객부터(먼저 줄 선 다른 고객의 두 번째 문장보다 먼저)
+//  D20 카탈로그 전수 — OID 계열 형(oid · reg* · aclitem · oidvector)을 받거나 내는 pg_catalog 함수(pg_ 아님 · internal 인자 없음)는
+//      검사기가 거부하거나 «검토한 무해 목록» 에 있다 · reg*·aclitem 계열 형은 전부 거부. PG 판이 올라 새 것이 생기면 실패한다.
+//      (격리 리뷰: _regclass 배열형 · format_type · acldefault 로 다른 워크스페이스의 스키마·표·역할 이름이 읽혔다)
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -72,7 +75,7 @@ delete process.env.LIVELY_OWNER_DATABASE_URL;
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { ensureAppTables, dropAppTables, cleanupDroppedTables, emptyTableReport, ensureAppSqlRole } = await import(`${DIST}/apps/store-schema.js`);
 const { appSchemaName, appSqlRoleName } = await import(`${DIST}/apps/store-ddl.js`);
-const { planAppSql } = await import(`${DIST}/apps/app-sql.js`);
+const { planAppSql, forbiddenFunction } = await import(`${DIST}/apps/app-sql.js`);
 const X = await import(`${DIST}/apps/app-sql-exec.js`);
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 
@@ -356,6 +359,36 @@ try {
     const st = X.appSqlStats();
     chk("D19 지표 — 대기 표본·문장 표본·CPU 가 쌓인다", st.wait_ms.n > 0 && st.statement_ms.n > 0 && st.process.cpu_user_ms >= 0 && st.scheduler.used === 0, JSON.stringify(st));
     limits();
+  }
+
+  // ── D20 카탈로그 전수 ──
+  {
+    //  검토한 무해 목록 — 고르는 기준: 카탈로그를 이름으로 찾아 글자로 돌려주지 않는다(오류 문구에도 이름을 싣지 않는다).
+    const REVIEWED = new Set([
+      // OID 를 숫자로만 다룬다
+      "btoidcmp", "btoidvectorcmp", "hashoid", "hashoidextended", "hashoidvector", "hashoidvectorextended", "int8", "oid",
+      "oideq", "oidge", "oidgt", "oidin", "oidlarger", "oidle", "oidlt", "oidne", "oidout", "oidsend", "oidsmaller",
+      "oidvectoreq", "oidvectorge", "oidvectorgt", "oidvectorin", "oidvectorle", "oidvectorlt", "oidvectorne", "oidvectorout", "oidvectorsend",
+      "max", "min", "nameconcatoid",
+      // 전문 검색 — regconfig 인자는 문자 검색 설정(전역 객체 · 워크스페이스가 만들 수 없다)을 찾는다
+      "json_to_tsvector", "jsonb_to_tsvector", "phraseto_tsquery", "plainto_tsquery", "to_tsquery", "to_tsvector", "ts_headline", "websearch_to_tsquery",
+    ]);
+    const OIDISH = "'^_?(oid|reg[a-z]+|aclitem|oidvector)$'";
+    const fns = (await su.query(`
+      SELECT DISTINCT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'pg_catalog' AND p.proname !~ '^pg_'
+         AND NOT ('internal'::regtype::oid = ANY (p.proargtypes::oid[]))
+         AND (p.prorettype IN (SELECT oid FROM pg_type WHERE typname ~ ${OIDISH})
+              OR EXISTS (SELECT 1 FROM unnest(p.proargtypes::oid[]) a WHERE a IN (SELECT oid FROM pg_type WHERE typname ~ ${OIDISH})))
+       ORDER BY 1`)).rows.map((r) => r.proname);
+    const unreviewed = fns.filter((f) => !forbiddenFunction(f) && !REVIEWED.has(f));
+    chk(`D20 OID 계열 함수 ${fns.length}개 — 전부 거부되거나 검토한 무해 목록에 있다`, fns.length > 100 && unreviewed.length === 0,
+      `검토 안 된 함수: ${unreviewed.join(", ")} — 이름이 새는지 보고 app-sql.ts 거부 목록에 넣거나, 무해하면 이 시험의 REVIEWED 에 올린다`);
+    const types = (await su.query(`SELECT t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+       WHERE n.nspname = 'pg_catalog' AND t.typname ~ '^_?(reg[a-z]+|aclitem)$' ORDER BY 1`)).rows.map((r) => r.typname);
+    const opened = [];
+    for (const t of types) if ((await status(planAppSql(`SELECT NULL::${t}`, { appId: "crm", schema: SA, tables: ["contacts"] }))) !== 400) opened.push(t);
+    chk(`D20 reg*·aclitem 계열 형 ${types.length}개 — 전부 거부`, types.length >= 24 && opened.length === 0, `거부되지 않은 형: ${opened.join(", ")}`);
   }
 
   // ── D9 ──

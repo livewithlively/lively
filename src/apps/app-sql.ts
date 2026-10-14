@@ -73,6 +73,22 @@ export async function ensureAppSqlParser(): Promise<void> {
 //  문자열을 SQL 로 실행(query_to_xml 류 · ts_stat · ts_rewrite) · 카탈로그 더듬기(pg_* · has_*_privilege · to_reg* ·
 //  *_description · row_security_active · reg*in/out · brin_* · gin_clean_pending_list — 문자열이 regclass 로 자동 변환돼
 //  «그 이름의 테이블이 있나» 를 떠볼 수 있다) · 시퀀스 조작 · 외부 접속(dblink) · 대형 객체(lo_*) · 서버 주소(inet_server_*).
+//  OID → 이름(격리 리뷰 실측: 다른 워크스페이스의 스키마·표·역할 이름이 나왔다). format_type(oid) 은 복합형 = 표 이름,
+//  makeaclitem(aclitem 글자는 역할 이름) · oidvectortypes · satisfies_hash_partition(오류에 표 이름) · amvalidate · 문자 검색 설정 더듬기.
+//  PG 판이 올라 OID 계열 형을 받는 함수가 새로 생기면 app-sql.pg-test D20 이 카탈로그를 훑어 실패한다(거부하거나 무해 목록에 올린다).
+const CATALOG_FN = [
+  "format_type", "makeaclitem", "oidvectortypes", "satisfies_hash_partition", "amvalidate", "btequalimage", "btvarstrequalimage",
+  "get_current_ts_config", "ts_debug", "ts_lexize", "ts_parse", "ts_token_type",
+];
+//  형 OID 를 받는 입력 함수 — 오류 문구에 그 형의 이름이 실린다(enum_in('x', <oid>) → «invalid input value for enum 스키마.형»;
+//  표마다 같은 이름의 복합형이 있어 array_in·record_in·domain_in 으로 표 이름을 떠볼 수 있다). 값 바꾸기는 ::형 으로 된다.
+const TYPE_INPUT_FN = [
+  "array_in", "array_recv", "record_in", "record_recv", "domain_in", "domain_recv", "enum_in", "enum_recv",
+  "range_in", "range_recv", "multirange_in", "multirange_recv", "anyrange_in", "anymultirange_in",
+  "anycompatiblerange_in", "anycompatiblemultirange_in", "numeric_in", "numeric_recv", "bit_in", "bit_recv",
+  "varbit_in", "varbit_recv", "bpcharin", "bpcharrecv", "varcharin", "varcharrecv", "time_in", "time_recv",
+  "timetz_in", "timetz_recv", "timestamp_in", "timestamp_recv", "timestamptz_in", "timestamptz_recv", "interval_in", "interval_recv",
+];
 const FORBIDDEN_FN = new Set([
   "set_config", "current_setting", "ts_stat", "ts_rewrite",
   //  한 번 부르면 1GB 가까이 할당하는 함수 — work_mem·문장 시간으로 안 막힌다(격리 리뷰 실측: repeat 9억 → 1.8GB 요청).
@@ -82,15 +98,22 @@ const FORBIDDEN_FN = new Set([
   "obj_description", "col_description", "shobj_description",
   "row_security_active", "gin_clean_pending_list",
   "inet_server_addr", "inet_server_port", "inet_client_addr", "inet_client_port",
+  ...CATALOG_FN, ...TYPE_INPUT_FN,
 ]);
-const FORBIDDEN_FN_PREFIX = ["pg_", "lo_", "dblink", "has_", "to_reg", "query_to_", "brin_"];
+const FORBIDDEN_FN_PREFIX = ["pg_", "lo_", "dblink", "has_", "to_reg", "query_to_", "brin_", "acl", "binary_upgrade_"];
 //  reg* 형 이름과 그 입출력 함수(regclassout('스키마.표') — 문자열이 regclass 로 바뀌며 카탈로그를 찾는다). regexp_* 는 아니다.
-const REG_TYPES = /^reg(class|collation|config|dictionary|namespace|oper|operator|proc|procedure|role|type)$/;
-const REG_FUNCS = /^reg(class|collation|config|dictionary|namespace|oper|operator|proc|procedure|role|type)(in|out|send|recv)?$/;
+//  배열형의 내부 이름(_regclass …)도 같다 — ARRAY[g]::_regclass::text 로 OID 를 훑어 표 이름을 읽을 수 있었다(격리 리뷰).
+const REG_TYPES = /^_?reg(class|collation|config|dictionary|namespace|oper|operator|proc|procedure|role|type)$/;
+const REG_FUNCS = /^_?reg(class|collation|config|dictionary|namespace|oper|operator|proc|procedure|role|type)(in|out|send|recv)?$/;
+//  파서가 구문을 바꿔 쓰며 pg_catalog. 를 붙여 «명시 호출» 로 만드는 함수(LIKE … ESCAPE · SIMILAR TO).
+const PARSER_EXPLICIT_FN = new Set(["like_escape", "similar_to_escape", "similar_escape"]);
+//  aclitem 은 글자로 바꾸면 역할 이름이 나오고, 글자에서 만들 때 역할이 있는지 떠볼 수 있다.
+const FORBIDDEN_TYPES = /^_?aclitem$/;
 
 export function forbiddenFunction(name: string): boolean {
   const f = name.toLowerCase();
-  return FORBIDDEN_FN.has(f) || FORBIDDEN_FN_PREFIX.some((p) => f.startsWith(p)) || f.includes("_to_xml") || REG_FUNCS.test(f);
+  return FORBIDDEN_FN.has(f) || FORBIDDEN_FN_PREFIX.some((p) => f.startsWith(p)) || f.includes("_to_xml") || f.includes("aclitem")
+    || f.endsWith("_validator") || REG_FUNCS.test(f);
 }
 
 /** 거부 문구 — 무엇 대신 무엇을 쓰라는 데까지 말한다(#4483: 빌더가 규칙을 외우지 않고 오류를 읽고 고친다). */
@@ -100,7 +123,10 @@ function forbiddenFunctionReason(f: string): string {
   if (["repeat", "lpad", "rpad", "array_fill", "format"].includes(f)) {
     return `'${f}' 는 한 번에 큰 메모리를 잡을 수 있어 막혀 있습니다 — 문자열은 || 나 concat() 으로 이으세요`;
   }
-  if (f.startsWith("pg_") || f.startsWith("has_") || f.startsWith("to_reg") || REG_FUNCS.test(f) || f.endsWith("_description") || f === "row_security_active") {
+  if (TYPE_INPUT_FN.includes(f)) return `형 입력 함수 '${f}' 는 쓸 수 없습니다 — 글자를 값으로 바꿀 땐 '1.5'::numeric 처럼 형 변환을 쓰세요`;
+  if (f.startsWith("pg_") || f.startsWith("has_") || f.startsWith("to_reg") || f.startsWith("acl") || f.startsWith("binary_upgrade_")
+    || f.includes("aclitem") || f.endsWith("_validator") || REG_FUNCS.test(f) || f.endsWith("_description") || f === "row_security_active"
+    || CATALOG_FN.includes(f)) {
     return `카탈로그·시스템 함수 '${f}' 는 쓸 수 없습니다 — 이 앱 테이블의 칸만 쓰세요(구조는 store_tables 로 봅니다)`;
   }
   return `함수 '${f}' 는 쓸 수 없습니다`;
@@ -160,6 +186,7 @@ function checkTypeName(t: J): void {
   if (n.length > 2 || (n.length === 2 && n[0] !== "pg_catalog")) bad(`스키마를 붙인 형(${n.join(".")})은 쓸 수 없습니다 — 형 이름만 쓰세요(::numeric, ::jsonb)`);
   const last = n[n.length - 1].toLowerCase();
   if (REG_TYPES.test(last)) bad(`reg* 형(${last})은 쓸 수 없습니다 — 카탈로그를 찾는 형입니다`);
+  if (FORBIDDEN_TYPES.test(last)) bad(`${last} 형은 쓸 수 없습니다 — 역할 이름을 담는 형입니다`);
   if (t.pct_type) bad("%TYPE 은 쓸 수 없습니다");
 }
 
@@ -206,11 +233,15 @@ function node(type: string | null, o: J, scope: ReadonlySet<string>, w: Walk, de
     if (!n || !n.length) bad("함수 이름을 읽지 못했습니다");
     const fn = n![n!.length - 1];
     // 파서가 SQL 표준 구문(extract · substring · trim · AT TIME ZONE …)을 pg_catalog.<함수> 로 바꿔 쓴 것만 받는다.
-    if (n!.length > 1 && !(n!.length === 2 && n![0] === "pg_catalog" && o.funcformat === "COERCE_SQL_SYNTAX")) {
+    //  LIKE·ILIKE … ESCAPE 와 SIMILAR TO 는 파서가 pg_catalog.like_escape / similar_to_escape 를 «명시 호출» 모양으로 만든다
+    //  (격리 리뷰 재현 — 종전엔 이 둘이 «스키마 붙인 함수» 로 걸렸다). 둘 다 글자만 다루는 함수다.
+    const sqlSyntax = n!.length === 2 && n![0] === "pg_catalog"
+      && (o.funcformat === "COERCE_SQL_SYNTAX" || PARSER_EXPLICIT_FN.has(String(fn).toLowerCase()));
+    if (n!.length > 1 && !sqlSyntax) {
       bad(`스키마를 붙인 함수 호출(${n!.join(".")})은 쓸 수 없습니다 — 함수 이름만 쓰세요`);
     }
     if (forbiddenFunction(fn)) bad(forbiddenFunctionReason(fn.toLowerCase()));
-    if (REG_TYPES.test(fn.toLowerCase())) bad(`reg* 형(${fn})은 쓸 수 없습니다`);
+    if (REG_TYPES.test(fn.toLowerCase()) || FORBIDDEN_TYPES.test(fn.toLowerCase())) bad(`${fn} 형은 쓸 수 없습니다`);
   } else if (type === "A_Expr") {
     checkQualifiedList(o.name, "연산자");
   } else if (type === "SubLink") {
@@ -429,16 +460,17 @@ export function planAppSqlSync(input: string, opts: PlanAppSqlOpts): AppSqlPlan 
   const kind = STATEMENTS[type];
   if (!kind) unsupportedStatement(type);
 
-  // 2) 조건 없는 UPDATE·DELETE(실수 방지).
-  if (kind === "update" || kind === "delete") {
-    const verb = kind.toUpperCase();
-    if (!body.whereClause) bad(`조건(WHERE) 없는 ${verb} 는 받지 않습니다 — 모든 행이 바뀝니다. 대상 행을 고르는 조건을 적으세요`);
-    if (!hasColumnRef(body.whereClause)) bad(`${verb} 의 조건에 칸이 없습니다(늘 참인 조건) — 대상 행을 고르는 조건을 적으세요`);
-  }
-
-  // 3) 트리 전체 — 허용 목록 · 함수 · 형 · 연산자 · 테이블 자리 · WITH 범위.
+  // 2) 조건 없는 UPDATE·DELETE(실수 방지) · 3) 트리 전체 — 허용 목록 · 함수 · 형 · 연산자 · 테이블 자리 · WITH 범위.
+  //    둘 다 재귀라 아주 깊은 식(NOT NOT … 수천 겹)은 JS 스택이 먼저 찬다 — 그때도 400(격리 리뷰: 2) 가 try 밖이라 500 이 났다).
   const w: Walk = { declared: new Set(opts.tables.map((t) => t.toLowerCase())), tables: new Set(), refs: [], maxParam: 0, locks: false };
-  try { node(type, body, new Set(), w, 0); }
+  try {
+    if (kind === "update" || kind === "delete") {
+      const verb = kind.toUpperCase();
+      if (!body.whereClause) bad(`조건(WHERE) 없는 ${verb} 는 받지 않습니다 — 모든 행이 바뀝니다. 대상 행을 고르는 조건을 적으세요`);
+      if (!hasColumnRef(body.whereClause)) bad(`${verb} 의 조건에 칸이 없습니다(늘 참인 조건) — 대상 행을 고르는 조건을 적으세요`);
+    }
+    node(type, body, new Set(), w, 0);
+  }
   catch (e) {
     if (e instanceof RangeError) bad("문장이 너무 복잡합니다 — 서브쿼리·괄호를 줄여 주세요");
     throw e;
@@ -457,6 +489,14 @@ export function planAppSqlSync(input: string, opts: PlanAppSqlOpts): AppSqlPlan 
     pos = id!.end;
   }
   parts.push(buf.subarray(pos));
+  const sql = Buffer.concat(parts).toString("utf8");
+  //  바꿔 쓴 문장이 여전히 한 문장으로 읽히는지 — `TABLE contacts` · `FROM contacts *` 는 ` AS "contacts"` 를 붙이면 문법이 깨진다
+  //  (드문 모양이라 바꾸는 대신 거부한다). DB 까지 가서 문법 오류로 나는 대신 여기서 대신 쓸 모양을 말한다.
+  if (refs.length) {
+    let reparsed: { stmts?: unknown[] } | null = null;
+    try { reparsed = parseSync(sql) as { stmts?: unknown[] }; } catch { reparsed = null; }
+    if (!reparsed || (reparsed.stmts ?? []).length !== 1) bad("이 모양의 테이블 자리는 받지 않습니다 — `TABLE 표` · `FROM 표 *` 대신 `SELECT * FROM 표` 로 쓰세요");
+  }
 
   const relOf = (x: unknown): string | null => (isObj(x) && typeof x.relname === "string" ? x.relname : null);
   const target = kind === "select" ? null : relOf(body.relation);
@@ -468,7 +508,7 @@ export function planAppSqlSync(input: string, opts: PlanAppSqlOpts): AppSqlPlan 
     returning,
     tables: [...w.tables].sort(),
     targets: target && w.tables.has(target) ? [target] : [],
-    sql: Buffer.concat(parts).toString("utf8"),
+    sql,
     paramCount: w.maxParam,
   };
 }

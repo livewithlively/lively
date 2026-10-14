@@ -11,6 +11,8 @@
 //  E4 되돌리기 — 지운 행이 원래 id 로 돌아온다 · 직전 상태를 먼저 떠 둔다 · id 시퀀스가 맞춰져 다음 삽입이 겹치지 않는다
 //     · 떠 둔 뒤 늘어난 칸은 NULL
 //  E5 제거 전 떠 두기 → 같은 id 로 다시 설치 → 되돌리기로 데이터가 돌아온다 · 제거 때 앱 역할도 지운다
+//  E6 외래키가 있는 앱(#4483) — 묶음 전체 되돌리기는 지우기 자식부터·넣기 부모부터로 된다 · 다른 표가 가리키는 표만 되돌리기는
+//     시작 전 409(그 표의 행이 cascade 로 함께 지워지지 않는다) · 가리킬 행이 없는 표만 되돌리기는 409 · 둘 다 데이터 그대로
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -156,6 +158,42 @@ try {
   const after5 = await status(sql("INSERT INTO contacts(name) VALUES ('되돌린 뒤') RETURNING id"));
   const top = (await sql("SELECT max(id)::int AS m FROM contacts")).rows[0].m;
   chk("E5b 새 테이블에 되돌린 뒤에도 다음 삽입이 겹치지 않는다(id 시퀀스 맞춤)", after5 === "ok" && top > 2503, JSON.stringify({ after5, top }));
+
+  // ── E6 외래키가 있는 앱의 되돌리기 ──
+  const fkFiles = [{ path: "lively-app.json", content: JSON.stringify({ id: "crm-fk", title: "외래키", version: "0.1.0",
+    permissions: { tools: ["store_sql", "store_tables"] },
+    data: { tables: [
+      { name: "people", columns: [{ name: "name", type: "text" }] },
+      { name: "deals", columns: [{ name: "person_id", type: "bigint", references: { table: "people", on_delete: "cascade" } }, { name: "amount", type: "numeric(12,2)" }] },
+      { name: "notes", columns: [{ name: "person_id", type: "bigint", references: { table: "people" } }, { name: "body", type: "text" }] },
+    ] }, ui: { pages: [{ key: "main", title: "외래키", entry: "ui/index.html" }] } }) }, { path: "ui/index.html", content: "<p>x</p>" }];
+  await cap("org_app_install").handler({ source: { kind: "inline", files: fkFiles } }, admin, ctx);
+  const fsql = (text, params) => cap("store_sql").handler({ sql: text, params }, { userId: "pgt-admin", appId: "crm-fk" }, ctx);
+  await fsql("INSERT INTO people(name) VALUES ('가'), ('나')");
+  await fsql("INSERT INTO deals(person_id, amount) SELECT id, 10.50 FROM people");
+  await fsql("INSERT INTO deals(person_id, amount) SELECT id, 3.25 FROM people WHERE name = '가'");
+  await fsql("INSERT INTO notes(person_id, body) SELECT id, '메모' FROM people");
+  const fkState = async () => JSON.stringify((await fsql(`SELECT (SELECT json_agg(p ORDER BY p.id) FROM (SELECT id, name FROM people) p) AS people,
+    (SELECT json_agg(d ORDER BY d.id) FROM (SELECT id, person_id, amount FROM deals) d) AS deals,
+    (SELECT json_agg(n ORDER BY n.id) FROM (SELECT id, person_id, body FROM notes) n) AS notes`)).rows[0]);
+  const fkSnap = await S.snapshotAppData("crm-fk", "daily", new Date(Date.now() + 60_000));
+  const atSnap = await fkState();
+  await fsql("UPDATE people SET name = '바뀜' WHERE name = '가'");
+  await fsql("DELETE FROM deals WHERE amount = 3.25");
+  await fsql("INSERT INTO notes(person_id, body) SELECT id, '나중' FROM people WHERE name = '나'");
+  const whole = await status(cap("app_data_restore").handler({ app_id: "crm-fk", taken_at: fkSnap.taken_at }, admin, ctx));
+  const afterWhole = await fkState();
+  chk("E6 외래키 앱 묶음 전체 되돌리기 — 세 표가 떠 둔 그대로(지우기 자식부터 · 넣기 부모부터)", whole === "ok" && afterWhole === atSnap, JSON.stringify({ whole, atSnap, afterWhole }));
+  const onlyParent = await status(cap("app_data_restore").handler({ app_id: "crm-fk", taken_at: fkSnap.taken_at, table: "people" }, admin, ctx));
+  const afterOnlyParent = await fkState();
+  chk("E6b 다른 표(deals·notes)가 가리키는 표만 되돌리기는 시작 전 409 · 자식 행이 cascade 로 지워지지 않는다", onlyParent === 409 && afterOnlyParent === atSnap,
+    JSON.stringify({ onlyParent, afterOnlyParent }));
+  await fsql("DELETE FROM notes WHERE person_id IN (SELECT id FROM people WHERE name = '가')");
+  await fsql("DELETE FROM people WHERE name = '가'");                                                // deals 는 cascade 로 함께
+  const beforeOrphan = await fkState();
+  const onlyChild = await status(cap("app_data_restore").handler({ app_id: "crm-fk", taken_at: fkSnap.taken_at, table: "deals" }, admin, ctx));
+  chk("E6c 가리킬 행이 지금 없는 표만 되돌리기는 409(500 아님) · 전부 취소돼 그대로", onlyChild === 409 && (await fkState()) === beforeOrphan,
+    JSON.stringify({ onlyChild }));
 } catch (e) { fail++; console.error("FAIL 예외 —", e); }
 finally {
   X.resetAppSqlLimits(env0);

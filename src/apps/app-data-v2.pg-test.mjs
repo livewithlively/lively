@@ -11,6 +11,8 @@
 //  T7 같은 선언으로 다시 — 아무것도 안 바뀐다(멱등)
 //  T8 기본 키 (id) — `GROUP BY id` 뒤 다른 칸 고르기 · 외래키 대상 (tenant_id, id) 유일 키 · 공유 표는 (tenant_id, id) 그대로
 //     · 예전 판 표(기본 키 (tenant_id, id) + 그것에 기댄 외래키)는 다음 보장 때 옮긴다 · id 가 겹치면 그대로 둔다
+//  T9 형 바꾸기 + 검사 — 옛 형을 전제로 한 검사(length(code) > 0)가 걸린 칸도 바꾼다(검사를 먼저 떼고 새 검사를 건다) ·
+//     바뀐 형에 맞지 않는 검사를 그대로 두면 503 이 아니라 400 · 그 표는 그대로
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -58,7 +60,7 @@ const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } el
 const errOf = async (p) => { try { await p; return null; } catch (e) { return e; } };
 
 let tablesNow = [];
-let g1 = null, dupOut = null;
+let g1 = null, dupOut = null, t9 = null;
 const ensure = async (tables, o = {}) => {
   const report = emptyTableReport();
   await ensureAppTables("crm", tables, { schema: SA, strict: true, sqlRole: true, report, ...o });
@@ -303,6 +305,24 @@ try {
     chk("T8 PK7 id 가 겹치는 표 — 보장은 성공 · 기본 키는 (tenant_id, id) 그대로 · 보고서에 primary_key 없음",
       dupRep === null && (await pkOf("crm__dups")) === "PRIMARY KEY (tenant_id, id)" && !dupOut?.constraints.some((c) => c.kind === "primary_key"),
       JSON.stringify({ err: dupRep?.message, pk: await pkOf("crm__dups"), c: dupOut?.constraints }));
+  }
+  // ── T9 형 바꾸기 + 검사 ──
+  {
+    await ensure([{ table: "codes", columns: [{ name: "code", type: "text", check: "length(code) > 0" }] }]);
+    await run("INSERT INTO codes(code) VALUES ('12'), ('345')", [], { tables: ["codes"] });
+    const conv = await errOf(ensure([{ table: "codes", columns: [{ name: "code", type: "bigint", check: "code > 0" }] }]).then((r) => { t9 = r; }));
+    const after = await cols("codes");
+    const ck = (await su.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = 'c' AND conname LIKE 'lvck\\_%'`,
+      [`"${SA}"."crm__codes"`])).rows.map((r) => r.d);
+    const neg = await errOf(run("INSERT INTO codes(code) VALUES (-1)", [], { tables: ["codes"] }));
+    chk("T9 옛 형 검사(length(code) > 0)가 걸린 text 칸을 bigint 로 — 바뀌고 새 검사(code > 0)만 남아 지켜진다",
+      conv === null && after.code?.t === "bigint" && t9?.converted_columns?.some((x) => x.column === "code") && ck.length === 1 && /code > 0/.test(ck[0])
+        && neg?.status === 409, JSON.stringify({ conv: conv?.message, after: after.code, ck, neg: neg?.status }));
+    await ensure([{ table: "codes", columns: [{ name: "code", type: "text", check: "length(code) > 0" }] }]);
+    const kept = await errOf(ensure([{ table: "codes", columns: [{ name: "code", type: "bigint", check: "length(code) > 0" }] }]));
+    const still = await cols("codes");
+    chk("T9b 바뀐 형에 맞지 않는 검사를 그대로 두면 400(503 아님) · 그 표는 그대로(text)", kept?.status === 400 && /검사/.test(kept?.message ?? "") && still.code?.t === "text",
+      JSON.stringify({ kept: [kept?.status, kept?.message], still: still.code }));
   }
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
