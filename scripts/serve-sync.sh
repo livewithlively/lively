@@ -106,8 +106,19 @@ if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/de
 fi
 
 # src/** 가 바뀌었으면 게이트웨이가 새 코드를 들어야 한다. 빌드 실패면 restart-gateway.sh 가 스스로 멈춘다.
-if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ 2>/dev/null; then
-  say "src 변경 있음 — restart-gateway.sh"
+#
+# ⚠ `kit/**` 도 함께 본다(#2621). 대부분의 kit 변경은 재시작이 **불요**하다 — 게이트웨이는 설치 번들을
+#  조립할 때마다 `kitAbs()` 로 **그 순간 디스크의 kit 파일**을 읽으므로(`kitVersion()` 60초 캐시,
+#  `/install` 은 캐시조차 없음) 여기서 당기기만 하면 최대 60초 뒤 반영된다.
+#  하지만 **조립기 자신은 다르다**: `src/org/delivery/publish.ts` 가 `kit/generator/build-context.mjs` 를
+#  `await import()` 로 로드하는데 **ESM 모듈 캐시는 프로세스 생애 동안 유지된다.** 그 파일이 바뀌어도
+#  재시작 전까지 옛 조립 로직이 돌고, 키트 번들이 조용히 낡는다(kit_version 이 안 움직이니 멤버 자동
+#  업데이트도 안 걸린다 — 아무도 눈치채지 못한다).
+#  그 캐시는 build-context.mjs 가 **정적 import 하는 것들에도** 걸린다(지금은 `kit/setup/kit-manifest.mjs`).
+#  그래서 경로를 하나씩 세지 않는다 — import 가 하나 늘 때마다 여기가 조용히 낡기 때문이다.
+#  대신 kit/ 전체를 보고 **테스트 파일만 뺀다**: 과잉 재시작은 몇 초로 무해하지만, 누락은 조용한 버그다.
+if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ kit/ ':(exclude)kit/**/*.test.mjs' 2>/dev/null; then
+  say "src·kit 변경 있음 — restart-gateway.sh"
   ( cd "$CLONE" && scripts/restart-gateway.sh >/dev/null 2>&1 ) \
     || { say "⚠ 게이트웨이 재시작 실패 — 기존 프로세스는 그대로 살아 있다"; exit 1; }
 fi

@@ -57,6 +57,11 @@ desktop/build/
 /public/terminal.js
 /public/md.js
 /public/page-scrollbar.js
+# 자산 세대 스탬프 — scripts/stamp-assets.mjs 가 빌드 끝에 쓴다(#2643).
+#  ⚠ 커밋하지 않는다: 빌드마다 값이 바뀌므로 커밋하면 매 PR 이 이 한 줄로 충돌한다.
+#   이 파일이 뜻을 갖는 자리는 **이미지 안**이고(굽기가 npm run build 를 돌려 담는다),
+#   롤 검증이 거기서 되읽는다(lvly-cloud imageaxes.ts `web.assets` 축).
+/public/.asset-version
 
 # 가드 mutation 게이트의 임시 dist 사본(#2518) — 게이트가 스스로 지운다
 .guard-mutation/

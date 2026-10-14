@@ -14,8 +14,9 @@ import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
 import { reapIdleSessions, reapPressureSessions } from "./sessions/session-reaper.js";
 import path from "node:path";
-import { readFileSync, statSync, readdirSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+// 자산 세대 계산의 정본 — 서빙(여기)과 굽기(scripts/stamp-assets.mjs)가 같은 것을 쓴다(#2643).
+import { listLocalAssets, assetFingerprint, computeAssetVersion } from "./web-assets.js";
 import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
@@ -406,30 +407,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //   ② HTML 의 로컬 자산 참조 + JS 모듈의 import 그래프 전체에 ?v=<버전> 을 서빙 시점에 주입한다.
   //   ③ ?v= 가 붙은 요청은 immutable 로 서빙 → 내용이 바뀐 자산은 새 URL 이라 무조건 새로 받고(F5 로 충분,
   //   강제 새로고침 불요), 안 바뀐 자산은 재검증 왕복 0(오히려 더 빠름). index.html 은 no-store 라 항상 최신 버전을 참조.
-  // 로컬 자산 = public 최상위 *.{js,mjs,css} + public/app/**(하위 포함) *.{js,mjs} + public/styles/**/*.css.
-  //  (fonts/img 는 자체로 거의 불변이라 제외 — 필요 시 확장.)
-  //  #1313 R50 — 옛 단일 styles.css 를 화면별 public/styles/*.css 로 분할했다. 이 목록이 곧
-  //  ① 빌드버전(콘텐츠 해시) 입력 ② ?v= immutable 스탬프 대상이라, styles/ 하위를 빼면 CSS 만
-  //  버전 없는 고정 URL 이 돼 #1017 이 고친 '강제 새로고침해야 반영'이 CSS 에서 되살아난다.
-  //  ⚠ #1313 R28/R29 — app/ 은 **재귀**로 훑는다. web/lib/ 분해로 public/app/lib/*.js 가 생겼는데
-  //   비재귀면 그 파일들이 빌드버전 입력에서 빠져, 'lib 만 고친 배포'에서 버전이 안 올라 브라우저가
-  //   immutable(1년) 로 캐시된 옛 모듈을 계속 쓴다. 하필 분해의 목적이 '이 파일만 바뀐다' 라서
-  //   정확히 그 시나리오가 흔해진다. 하위 디렉터리가 늘어도 자동으로 잡히도록 재귀가 정답.
-  const listLocalAssets = (): string[] => {
-    const out: string[] = [];
-    const norm = (p: string): string => p.split(path.sep).join("/");
-    try { for (const f of readdirSync(publicDir)) if (/\.(?:js|mjs|css)$/.test(f)) out.push(f); } catch { /* noop */ }
-    try {
-      for (const f of readdirSync(path.join(publicDir, "app"), { recursive: true }) as string[])
-        if (/\.(?:js|mjs)$/.test(String(f))) out.push(`app/${norm(String(f))}`);
-    } catch { /* noop */ }
-    try {
-      for (const f of readdirSync(path.join(publicDir, "styles"), { recursive: true }) as string[])
-        if (/\.css$/.test(String(f))) out.push(`styles/${norm(String(f))}`);
-    } catch { /* noop */ }
-    return out.sort();
-  };
-  // 빌드버전: 자산 콘텐츠의 통합 sha256(앞 12자). 재계산 트리거만 지문(size+mtime, 1s TTL)으로 판단한다 —
+  // 자산 목록 규칙과 해시 계산은 **web-assets.ts 가 정본**이다(#2643). 굽기(scripts/stamp-assets.mjs)가
+  //  같은 것을 불러 이미지에 이 값을 남기고, 매니지드 롤이 「사람이 받는 자산에 이번 판이 닿았나」를
+  //  그걸로 잰다 — 계산이 두 벌이면 규칙이 갈리는 날 롤이 거짓 드리프트를 낸다(그 자리 머리말 참조).
+  // 여기 남은 것은 **서빙 최적화**뿐이다: 재계산 트리거만 지문(size+mtime, 1s TTL)으로 판단한다 —
   //  dev 박스는 build:web 후 재시작 없이 즉시 반영되고(지문 변화 감지), 고객 박스는 배포=재시작이라 재계산이 보장된다.
   //  ⚠ 지문이 틀려도(mtime 보존 배포) 값 자체는 콘텐츠 해시라 재시작 한 번이면 정확해진다 — mtime 은 최적화일 뿐 정답성 근거 아님.
   const VER_TTL_MS = 1000;
@@ -438,13 +419,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     const now = Date.now();
     if (verVal && now - verAt < VER_TTL_MS) return verVal;
     verAt = now;
-    const files = listLocalAssets();
-    let fp = "";
-    for (const rel of files) { try { const s = statSync(path.join(publicDir, rel)); fp += `${rel}:${s.size}:${Math.floor(s.mtimeMs)};`; } catch { /* 사라진 파일 무시 */ } }
+    const files = listLocalAssets(publicDir);
+    const fp = assetFingerprint(publicDir, files);
     if (verVal && fp === verFp) return verVal;
-    const h = createHash("sha256");
-    for (const rel of files) { try { h.update(rel).update("\0").update(readFileSync(path.join(publicDir, rel))); } catch { /* noop */ } }
-    verFp = fp; verVal = h.digest("hex").slice(0, 12);
+    verFp = fp; verVal = computeAssetVersion(publicDir, files);
     return verVal;
   };
   // 상대 자산 참조에 버전 주입.
