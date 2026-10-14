@@ -95,9 +95,9 @@ export const APP_TOOL_EXEMPT: ReadonlySet<string> = new Set([
  *  - appId 있는데 grant.tools 가 null(grant 사라짐) → 전부 차단(fail-closed)
  *  - 그 외 → toolAllowed(글롭 매칭)
  */
-export function decideAppTool(appId: string | undefined, tools: string[] | null, toolName: string): boolean {
+export function decideAppTool(appId: string | undefined, tools: string[] | null, toolName: string, exempt = true): boolean {
   if (!appId) return true;
-  if (APP_TOOL_EXEMPT.has(toolName)) return true; // 읽기/보고/인프라 배관 — grant 무관(콘텐츠 쓰기는 여기 없음)
+  if (exempt && APP_TOOL_EXEMPT.has(toolName)) return true; // 읽기/보고/인프라 배관 — grant 무관(콘텐츠 쓰기는 여기 없음)
   if (tools === null) return false;
   return toolAllowed(tools, toolName);
 }
@@ -106,7 +106,9 @@ export function decideAppTool(appId: string | undefined, tools: string[] | null,
 export async function appToolAllowed(user: LivelyUser, toolName: string): Promise<boolean> {
   if (!user.appId) return true; // DB 조회 없이 빠르게 통과(일반 세션 핫패스)
   const tools = await grantTools(user.appId, user.userId);
-  return decideAppTool(user.appId, tools, toolName);
+  //  #4483 앱 서버 주체(제3자 서버 코드가 방문자 이름으로 부른다)는 세션 배관 면제를 안 탄다 — 훅 소스·자산 본문·회사 컨텍스트를
+  //   동의와 무관하게 읽게 되므로(재검토 4-1). 배관은 라이블리 하네스의 앱 세션 토큰 몫이다.
+  return decideAppTool(user.appId, tools, toolName, !user.appServer);
 }
 
 /** requireScope 옆에서 부르는 게이트. 앱 세션이 허용 밖 도구를 부르면 403. */

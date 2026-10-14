@@ -364,6 +364,8 @@ try {
   // ── D20 카탈로그 전수 ──
   {
     //  검토한 무해 목록 — 고르는 기준: 카탈로그를 이름으로 찾아 글자로 돌려주지 않는다(오류 문구에도 이름을 싣지 않는다).
+    //   받아들인 잔여 위험(재검토): 전문 검색 8개는 regconfig 인자로 «스키마.이름» 글자를 받아, 그 스키마가 있는지를 오류 문구 차이
+    //   («permission denied for schema …» ↔ «… does not exist»)로 가린다. 이름을 내주지는 않고, 테넌트 스키마는 UUID 라 알아야 확인만 된다.
     const REVIEWED = new Set([
       // OID 를 숫자로만 다룬다
       "btoidcmp", "btoidvectorcmp", "hashoid", "hashoidextended", "hashoidvector", "hashoidvectorextended", "int8", "oid",

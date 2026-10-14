@@ -202,6 +202,12 @@ try {
   const memberLogins = await fetch(GW + "/api/ui/me/logins", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
   chk("E3d 앱 서버 토큰 + 유효 신원도 능력 아닌 라우트(로그인 수단 · 비밀번호 · 회사 계정 연결 해제)는 403 · 구성원 토큰은 그대로 200",
     logins === 403 && pw === 403 && unlink === 403 && memberLogins === 200, JSON.stringify({ logins, pw, unlink, memberLogins }));
+  //  세션 배관 면제(APP_TOOL_EXEMPT) — 라이블리 하네스의 앱 세션 토큰 몫이지 제3자 앱 서버 코드 몫이 아니다(재검토 4-1)
+  const hooks = await fetch(GW + "/api/ui/org/runner/hooks", { headers: withApp }).then((r) => r.status);
+  const preview = await fetch(GW + "/api/ui/org/preview", { headers: withApp }).then((r) => r.status);
+  const memberHooks = await fetch(GW + "/api/ui/org/runner/hooks", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
+  chk("E3e 앱 서버 주체는 세션 배관 면제 도구(훅 소스 · 회사 컨텍스트)도 동의 없이는 403 · 구성원 토큰은 그대로 200",
+    hooks === 403 && preview === 403 && memberHooks === 200, JSON.stringify({ hooks, preview, memberHooks }));
 
   // ── E4 앱 서버 빈도 — 사람마다 ──
   X.resetAppSqlLimits({ ...process.env, LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "100" });
@@ -211,6 +217,13 @@ try {
   await cap("me_app_grant").handler({ app_id: "crm-v2" }, { userId: "pgt-user2", scopes: ["items"] }, { source: "mcp" });
   const other = (await as("pgt-user2")("GET", "/report")).status;
   chk("E4 앱 서버 빈도는 사람마다 — 한 사람의 4번째는 429, 다른 사람은 된다", JSON.stringify(burst) === "[200,200,200,429]" && other === 200, JSON.stringify({ burst, other }));
+  // ── E5 나만 보는 앱으로 바꾸면 동의가 남은 사람도 앱 서버로 못 쓴다(#4667 공개 범위 · 재검토 3-(b)) ──
+  X.resetAppSqlLimits({ ...process.env });
+  const beforePrivate = (await as("pgt-user2")("GET", "/report")).status;
+  await cap("app_visibility_set").handler({ app_id: "crm-v2", visibility: "me" }, admin, { source: "mcp" });
+  const afterPrivate = await as("pgt-user2")("GET", "/report");
+  chk("E5 나만 보는 앱으로 바꾸면 — 동의가 남은 다른 구성원의 앱 서버 호출이 403", beforePrivate === 200 && afterPrivate.status === 403,
+    JSON.stringify({ beforePrivate, afterPrivate }));
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {

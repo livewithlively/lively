@@ -247,20 +247,19 @@ export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTab
     for (const table of order) {
       const rel = qualifiedAppTable(schema, appId, table);
       const { chunks, expected } = data.get(table)!;
+      //  표 하나를 **한 문장**으로 넣는다 — 외래키 확인은 문장 끝에 하므로, 자기 자신을 가리키는 표에서 앞 조각 행이 뒤 조각 행을
+      //   가리켜도 걸리지 않는다(종전엔 1,000행 조각마다 넣어 첫 조각에서 23503 — 재검토 4-2).
       let count = 0;
-      for (const rows of chunks) {
-        let r;
-        try {
-          r = await c.query(
-            `INSERT INTO ${rel} OVERRIDING SYSTEM VALUE
-             SELECT (jsonb_populate_record(NULL::${rel}, e || jsonb_build_object('tenant_id', $2::text))).*
-               FROM jsonb_array_elements($1::jsonb) e`, [rows, tenant]);
-        } catch (e) {
-          if ((e as { code?: string })?.code !== "23503") throw e;
-          throw new HttpError(409, `'${table}' 의 떠 둔 행이 가리키는 행이 지금 없습니다 — 가리키는 표까지 함께 되돌리세요(표를 고르지 말고 묶음 전체). `
-            + "아무것도 바꾸지 않았습니다", { cause: e });
-        }
-        count += r.rowCount ?? 0;
+      try {
+        const r = await c.query(
+          `INSERT INTO ${rel} OVERRIDING SYSTEM VALUE
+           SELECT (jsonb_populate_record(NULL::${rel}, e || jsonb_build_object('tenant_id', $2::text))).*
+             FROM unnest($1::jsonb[]) AS chunk(rows), jsonb_array_elements(chunk.rows) e`, [chunks, tenant]);
+        count = r.rowCount ?? 0;
+      } catch (e) {
+        if ((e as { code?: string })?.code !== "23503") throw e;
+        throw new HttpError(409, `'${table}' 의 떠 둔 행이 가리키는 행이 지금 없습니다 — 가리키는 표까지 함께 되돌리세요(표를 고르지 말고 묶음 전체). `
+          + "아무것도 바꾸지 않았습니다", { cause: e });
       }
       if (count !== expected) {
         throw new HttpError(500, `'${table}' 되돌리기에서 넣은 행(${count})이 떠 둔 행(${expected})과 달라 전부 취소했습니다 — 아무것도 바뀌지 않았습니다`);

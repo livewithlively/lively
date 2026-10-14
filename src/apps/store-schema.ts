@@ -40,13 +40,22 @@ export interface AppTableSpec {
  *  ② LIVELY_OWNER_DATABASE_URL — registry 모드 부팅 자식 등 소유자 DSN.
  *  ③ 둘 다 없으면(단일 모드 = 풀이 소유자) itemsPool.
  */
+/** DDL 이 잠금을 기다리는 상한(ms) — 기본 10초. 시험은 짧게 준다. */
+const ddlLockMs = (): number => { const n = Number(process.env.LIVELY_APP_DDL_LOCK_MS); return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 10_000; };
+
 export async function withOwnerConn<T>(fn: (db: Q) => Promise<T>): Promise<T> {
   const ddlDsn = (process.env.LIVELY_APP_DDL_DATABASE_URL || "").trim() || (process.env.LIVELY_OWNER_DATABASE_URL || "").trim();
   const same = !ddlDsn || ddlDsn === (process.env.ITEMS_DATABASE_URL || "").trim();
   if (same) return fn(itemsPool);
   const client = new pg.Client({ connectionString: ddlDsn });
   await client.connect();
-  try { return await fn(client); } finally { await client.end().catch(() => { /* noop */ }); }
+  try {
+    //  #4483 — DDL 이 다른 트랜잭션의 잠금을 끝없이 기다리면 그 뒤로 앱 읽기까지 줄을 선다(ACCESS EXCLUSIVE 요청이 앞을 막는다).
+    //   store_sql 의 표 보장은 앱마다 한 번만 돌고(single-flight) 다른 호출이 그 약속을 기다리므로, 멎지 않게 상한을 둔다(재검토 4-3).
+    await client.query(`SET lock_timeout = '${ddlLockMs()}ms'`);
+    await client.query("SET statement_timeout = '5min'");
+    return await fn(client);
+  } finally { await client.end().catch(() => { /* noop */ }); }
 }
 
 // 런타임에 앱 role 이 실재할 때만 그 role 대상 정책/GRANT 를 건다. 단일 모드(앱 role 없음)면 owner_all 만(격리 불요).
@@ -120,6 +129,8 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
     //  이 트랜잭션의 문장은 전부 스키마를 붙인 이름과 pg_catalog 형·함수만 쓴다.
     await c.query("SET LOCAL standard_conforming_strings = on");
     await c.query("SET LOCAL search_path = pg_catalog, pg_temp");
+    await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);   // 공용 풀(단일 모드)에서도 — 위 withOwnerConn 주석
+    await c.query("SET LOCAL statement_timeout = '5min'");
     const existed = await tableExists(c, schema, physical);
     await c.query(
       `CREATE TABLE IF NOT EXISTS ${rel} (
@@ -662,7 +673,11 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
       if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${[...new Set(missing)].join(", ")})를 만들지 못했습니다`)); continue; }
       const local = emptyTableReport();
       try {
-        await inTx(db, (c) => syncForeignKeys(c, appId, schema, t, local));
+        await inTx(db, async (c) => {
+          await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);
+          await c.query("SET LOCAL statement_timeout = '5min'");
+          await syncForeignKeys(c, appId, schema, t, local);
+        });
         if (opts.report) opts.report.constraints.push(...local.constraints);
       } catch (err) { fail(t.table, err); }
     }

@@ -11,6 +11,7 @@
 //  T7 같은 선언으로 다시 — 아무것도 안 바뀐다(멱등)
 //  T8 기본 키 (id) — `GROUP BY id` 뒤 다른 칸 고르기 · 외래키 대상 (tenant_id, id) 유일 키 · 공유 표는 (tenant_id, id) 그대로
 //     · 예전 판 표(기본 키 (tenant_id, id) + 그것에 기댄 외래키)는 다음 보장 때 옮긴다 · id 가 겹치면 그대로 둔다
+//  T10 다른 트랜잭션이 표를 잡고 있으면 표 보장은 잠금 상한(LIVELY_APP_DDL_LOCK_MS) 안에 실패한다 — 멎지 않는다 · 풀리면 된다
 //  T9 형 바꾸기 + 검사 — 옛 형을 전제로 한 검사(length(code) > 0)가 걸린 칸도 바꾼다(검사를 먼저 떼고 새 검사를 건다) ·
 //     바뀐 형에 맞지 않는 검사를 그대로 두면 503 이 아니라 400 · 그 표는 그대로
 import pg from "pg";
@@ -323,6 +324,30 @@ try {
     const still = await cols("codes");
     chk("T9b 바뀐 형에 맞지 않는 검사를 그대로 두면 400(503 아님) · 그 표는 그대로(text)", kept?.status === 400 && /검사/.test(kept?.message ?? "") && still.code?.t === "text",
       JSON.stringify({ kept: [kept?.status, kept?.message], still: still.code }));
+  }
+  // ── T10 잠금 상한 ──
+  {
+    process.env.LIVELY_APP_DDL_LOCK_MS = "500";
+    const holder = new pg.Client({ connectionString: SUPER }); await holder.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`LOCK TABLE "${SA}"."crm__codes" IN ACCESS SHARE MODE`);     // 읽기 하나가 오래 걸리는 것과 같다
+      const t0 = Date.now();
+      const hung = Symbol("hung");
+      const r = await Promise.race([
+        errOf(ensure([{ table: "codes", columns: [{ name: "code", type: "text", check: "length(code) > 0" }, { name: "memo", type: "text" }] }])),
+        new Promise((res) => setTimeout(() => res(hung), 8000)),
+      ]);
+      const ms = Date.now() - t0;
+      await holder.query("ROLLBACK");
+      const again = await errOf(ensure([{ table: "codes", columns: [{ name: "code", type: "text", check: "length(code) > 0" }, { name: "memo", type: "text" }] }]));
+      chk("T10 표를 잡은 트랜잭션이 있으면 표 보장이 잠금 상한 안에 실패(멎지 않음) · 풀리면 된다",
+        r !== hung && r?.status === 503 && /lock timeout|잠금/i.test(r?.message ?? "") && ms < 5000 && again === null && "memo" in (await cols("codes")),
+        JSON.stringify({ hung: r === hung, status: r?.status, msg: r?.message, ms, again: again?.message }));
+    } finally {
+      await holder.end().catch(() => {});
+      delete process.env.LIVELY_APP_DDL_LOCK_MS;
+    }
   }
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);

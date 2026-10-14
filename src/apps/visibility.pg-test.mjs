@@ -17,6 +17,8 @@
 //  B19 초안이 걸린 공개 앱에 관리자 설치 — 표식 · 포인터 걷고 옛 공개 판 전용 표 보관 · 밀려난 초안 주인 알림(격리 리뷰 B2)
 //  B20 남의 공개 전 판은 판 이력 · 되돌리기에서 없는 판 · 못 박은 판의 저장한 사람(격리 리뷰 NB-6 · NB-8)
 //  B21 관리자 설치가 남의 나만 보는 앱을 못 덮음 · 초안이 걸린 공개 앱은 「나만」 불가(격리 리뷰 2-1 · 2-3)
+//  B22 #4483 공개 판을 깨는 표 변경(칸 지우기 · 형 바꾸기)은 초안으로만 저장하면 409 · 아무것도 안 바뀐다 · publish:true 면 된다 ·
+//      나만 보는 앱(공개 판 없음)엔 가드가 없다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -332,6 +334,35 @@ try {
     overInstall === 409 && bobOwn.visibility === "me" && (await ui("bob-own", bob)).includes("bob 의 앱") && meWhileDraft === 409
       && r21.draft_by === null && meAfter.changed === true && (await row("b19-app")).visibility === "me",
     JSON.stringify({ overInstall, bobOwnVis: bobOwn.visibility, meWhileDraft, pubNo21, draftAfterRevert: r21.draft_by, meAfter }));
+  // ── B22 공개 판을 깨는 초안 저장 ──
+  {
+    const GID = "guard-app";
+    const gfiles = (cols, extra = {}) => [{ path: "lively-app.json", content: JSON.stringify({ id: GID, title: "가드", version: "0.1.0",
+      permissions: { scopes: [], tools: ["store_insert", "store_query"] },
+      data: { tables: [{ name: "items", columns: cols, ...extra }] }, ui: { pages: [{ key: "main", title: "가드", entry: "ui/index.html" }] } }) },
+      { path: "ui/index.html", content: "<p>g</p>" }];
+    const base = [{ name: "title", type: "text" }, { name: "code", type: "text" }];
+    const colsNow = async () => (await q(`SELECT attname FROM pg_attribute WHERE attrelid = to_regclass('app.guard_app__items') AND attnum > 0 AND NOT attisdropped ORDER BY attnum`)).map((r) => r.attname).join(",");
+    await call("app_save", { files: gfiles(base) }, alice);
+    const g3 = await status(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }) }, alice));
+    const afterG3 = await colsNow();
+    chk("B22 G3 나만 보는 앱(공개 판 없음) — 칸 지우기 저장이 된다(가드 없음)", g3 === 200 && afterG3 === "tenant_id,id,title,created_at", JSON.stringify({ g3, afterG3 }));
+    await call("app_save", { files: gfiles(base) }, alice);
+    await call("app_visibility_set", { app_id: GID, visibility: "all" }, alice);
+    const before = await row(GID), colsBefore = await colsNow();
+    const g1 = await errOf(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }) }, alice));
+    const g1b = await errOf(call("app_save", { files: gfiles([base[0], { name: "code", type: "bigint" }]) }, alice));
+    const after = await row(GID), colsAfter = await colsNow();
+    chk("B22 G1 공개 앱에 칸 지우기 · 형 바꾸기를 초안으로만 저장 — 409(무엇이 깨지는지 · publish:true 안내) · 초안 표식·판·표 그대로",
+      g1?.status === 409 && /칸 지우기 items\.code/.test(g1?.message ?? "") && /publish:true/.test(g1?.message ?? "")
+        && g1b?.status === 409 && /형 바꾸기 items\.code \(text → bigint\)/.test(g1b?.message ?? "")
+        && after.draft_by === before.draft_by && after.current_version_no === before.current_version_no && colsAfter === colsBefore && colsAfter.includes("code"),
+      JSON.stringify({ g1: [g1?.status, g1?.message], g1b: [g1b?.status, g1b?.message], before: [before.draft_by, before.current_version_no], after: [after.draft_by, after.current_version_no], colsAfter }));
+    const g2 = await status(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }), publish: true }, alice));
+    const pub = await row(GID), colsPub = await colsNow();
+    chk("B22 G2 같은 변경을 publish:true 로 — 된다 · 칸이 지워지고 초안 없이 공개 판이 된다", g2 === 200 && !colsPub.includes("code") && pub.draft_by === null && pub.visibility === "all",
+      JSON.stringify({ g2, colsPub, draft_by: pub.draft_by, visibility: pub.visibility }));
+  }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);
 } finally {
