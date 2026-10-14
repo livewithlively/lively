@@ -832,7 +832,9 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
   for (const d of all) {
     distillers.push({
       id: d.id, key: d.key, label: d.label, enabled: d.enabled, priority: d.priority,
-      backlog: d.enabled ? await countDistillerBacklog(d, all) : 0,
+      //  자동 정지 레인의 잔량도 센다 — 그 몫은 사각지대에도 다른 레인 잔량에도 안 잡히므로(맡은 레인), 0 으로 두면
+      //   붙잡힌 자료가 화면에서 통째로 사라진다(«0건 켜면 읽음»). 사람이 끈 레인은 몫을 넘기므로 종전대로 0.
+      backlog: (d.enabled || isAutoDisabledLane(d)) ? await countDistillerBacklog(d, all) : 0,
       // 잔량이 준 이유를 가른다 — 증류돼서(지식 생김) vs 보고 버려서(seen). 둘을 못 가르면 '왜 줄었지?'를 못 답한다.
       reviewed: await countDistillerSeen(d.id),
     });

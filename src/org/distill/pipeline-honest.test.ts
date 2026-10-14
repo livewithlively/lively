@@ -165,3 +165,13 @@ test("⑳-b 자격 실패 대응이 취소한 대기 위탁의 판정 기록을 
   assert.ok(seenWithTask.length >= 3, `스키마에서 판정 표를 못 읽었다(${seenWithTask.join(", ")}) — 시험이 헛돈다`);
   assert.deepEqual([...TASK_SEEN_TABLES].sort(), seenWithTask, "task_id 를 가진 판정 표가 새로 생겼는데 취소 경로가 되돌리지 않는다");
 });
+
+test("⑳-c 커버리지는 자동 정지 레인의 잔량을 센다 — 0 이면 붙잡힌 자료가 화면에서 사라진다", () => {
+  //  자동 정지 레인의 몫은 사각지대(방치)에도 다른 레인 잔량에도 안 잡힌다(맡은 레인). 그 레인의 잔량까지 0 이면
+  //   관리탭은 «0건 켜면 읽음» 을 보이고, 계정이 죽은 채 쌓이는 자료가 어느 숫자에도 안 나온다.
+  const cov = DISTILLER.slice(DISTILLER.indexOf("export async function distillerCoverage("));
+  assert.match(cov, /backlog: \(d\.enabled \|\| isAutoDisabledLane\(d\)\) \? await countDistillerBacklog\(d, all\) : 0,/,
+    "자동 정지 레인의 잔량을 0 으로 센다 — 붙잡힌 몫이 커버리지 어디에도 안 보인다");
+  //  사각지대 계산도 같은 «맡은 레인» 집합이어야 한다(폴백과 단일 출처).
+  assert.match(cov, /const enabled = all\.filter\(\(d\) => d\.enabled \|\| isAutoDisabledLane\(d\)\);/, "사각지대가 맡은 레인 기준이 아니다");
+});
