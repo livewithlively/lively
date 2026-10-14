@@ -48,6 +48,7 @@ const NOTE_LOAD = '다이어그램 도구를 불러오지 못해 코드로 보�
 const NOTE_SYNTAX = '다이어그램 문법을 읽지 못했습니다. 코드를 확인해 주세요.';
 const NOTE_SLOW = '다이어그램을 그리는 데 너무 오래 걸려 멈췄습니다. 코드로 보여 드립니다.';
 const NOTE_EMPTY = '코드를 적으면 여기에 그림이 그려집니다.';
+const NOTE_SHRUNK = '그림을 누르면 크게 볼 수 있습니다.';   // 칸에 맞추느라 MIN_SCALE 밑으로 줄였을 때만 — 글자가 작다
 
 // ── 색 — mermaid 테마 변수 ← 앱 토큰 ───────────────────────────────────────────────────────────────
 //  토큰이 비면(스타일을 안 실은 문서) 그 변수는 빼고 mermaid 기본값에 맡긴다.
@@ -341,7 +342,7 @@ function show(figEl: HTMLElement, st: Fig, d: Drawn): void {
     const img = el('img', { class: 'md-mermaid-img', alt: d.title || '다이어그램', decoding: 'async', draggable: 'false' }) as HTMLImageElement;
     img.width = d.w;
     img.height = d.h;
-    sizeImg(img, d.w, innerWidth(st.view));   // 칸 폭이 바뀌면 fitRo 가 다시 잰다
+    sizeImg(st, img, d.w, innerWidth(st.view));   // 칸 폭이 바뀌면 fitRo 가 다시 잰다
     img.src = svgUrl(d.svg);
     img.addEventListener('click', () => openViewer(d, img));
     replaceKids(st.view, img);
@@ -362,8 +363,11 @@ function innerWidth(view: HTMLElement): number {
   const cs = getComputedStyle(view);
   return Math.max(0, view.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
 }
-function sizeImg(img: HTMLImageElement, w: number, cw: number): void {
-  img.style.width = cw > 0 && w * MIN_SCALE > cw * FIT_SPAN ? '100%' : `min(${w}px, max(100%, ${Math.ceil(w * MIN_SCALE)}px))`;
+function sizeImg(st: Fig, img: HTMLImageElement, w: number, cw: number): void {
+  const fit = cw > 0 && w * MIN_SCALE > cw * FIT_SPAN;
+  img.style.width = fit ? '100%' : `min(${w}px, max(100%, ${Math.ceil(w * MIN_SCALE)}px))`;
+  //  통째로 줄였으면 글자가 작다 — 누르면 크게 본다는 것을 아래 줄에 적는다(그림이 선 칸만. 오류 문구는 덮지 않는다).
+  if (isPic(st.last) && !/\bis-err\b/.test(st.view.parentElement?.className || '')) st.note.textContent = fit ? NOTE_SHRUNK : '';
 }
 let fitRo: ResizeObserver | null = null;
 function watchWidth(view: HTMLElement): void {
@@ -374,7 +378,7 @@ function watchWidth(view: HTMLElement): void {
         const fig = (e.target as HTMLElement).closest('figure.md-mermaid') as HTMLElement | null;
         const st = fig ? FIGS.get(fig) : undefined;
         const img = (e.target as HTMLElement).querySelector('img.md-mermaid-img') as HTMLImageElement | null;
-        if (st && img && isPic(st.last)) sizeImg(img, st.last.w, e.contentRect.width);
+        if (st && img && isPic(st.last)) sizeImg(st, img, st.last.w, e.contentRect.width);
       }
     });
   }
