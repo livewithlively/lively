@@ -42,7 +42,9 @@ function taskDirOf(root: string): { dir: string; ws: string } {
   return { dir, ws };
 }
 
-const env = (ws: string): NodeJS.ProcessEnv => ({ ...process.env, LIVELY_TASK_WS: ws, SHELL: "/bin/true", [NAME]: "" });
+//  사후 검시 셸(`exec "${SHELL:-sh}"`)은 PATH 의 true 로 바로 끝낸다 — 경로로 박으면 안 된다: macOS 에는 /bin/true 가 없어
+//   (/usr/bin/true 뿐) exec 가 126 으로 끝나고, 행위 4 가 그 종료 코드를 «판 실패» 로 읽는다.
+const env = (ws: string): NodeJS.ProcessEnv => ({ ...process.env, LIVELY_TASK_WS: ws, SHELL: "true", [NAME]: "" });
 const runSync = (script: string, ws: string): void => {
   spawnSync("/bin/sh", ["-c", script], { stdio: "ignore", env: env(ws) });
 };
