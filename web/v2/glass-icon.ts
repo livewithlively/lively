@@ -10,7 +10,7 @@
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 
 /** 색 토큰이 있는 이름. 모르는 이름은 apps 로 그린다. */
-export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell', 'deck'] as const;
+export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell', 'deck', 'builder'] as const;
 
 /** 앱 아이콘의 선 그림(path d). 시험과 그리는 쪽이 함께 쓴다. */
 export function appGlyphPath(icon: string): string {
