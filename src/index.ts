@@ -104,10 +104,14 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { ensureHarnessSeat, dropProbeSeat } = await import("./terminal/ai-login-run.js");   // #3668 T3
   //  #3773 — 아웃박스는 노드 번들에 부채로 실려 registry 를 끌어오지 못한다. 호스트 재료(고르기·RPC·소유 판정)는 registry 한 곳의 것을 여기서 꽂는다.
   const { sessionHostTargetFor, nodeRpc, gatewayDefersHere } = await import("./node/registry.js");
+  //  #4687 — 세션 작업 폴더의 공개범위 판정. 열람 신원은 링크·MCP 와 같은 규칙(viewerOf)으로 잰다 — 사람과 그 사람의 AI 가 같은 답.
+  const { assertSessionCwdVisibleTo } = await import("./v6/shared-folder-store.js");
+  const { viewerOf } = await import("./capabilities/principal.js");
   registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
     outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
+    assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 

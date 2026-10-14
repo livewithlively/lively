@@ -5,6 +5,7 @@
 //  - 완료 감지 = exit 파일 등장(폴링) — 화면 파싱보다 견고(F5).
 //  - v1 제약: 워크스페이스는 공유 루트(rootKey=shared)만 — 격리(700) 개인 홈엔 게이트웨이/에이전트가 파일을 못 쓴다.
 import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #4687 — 작업 폴더 공개범위 판정(게이트웨이에서만 등록)
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -545,6 +546,10 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   const osUser = await ensureMemberOsUser(user).catch(() => null);
   const sub = (input.subpath || "").trim() || `delegated/task-${input.taskId}`;
   const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, input.rootKey, sub, osUser ?? null);
+  // #4687 — 위탁 워커도 작업 폴더 아래를 보는 셸이다. createSession 을 안 타는 «두 번째 문»이라 같은 작업 폴더 판정을 여기서 건다.
+  //  레포 준비·작업 폴더 만들기 **전**에 본다. 게이트웨이 능력이라 노드에는 등록이 없어 건너뛴다(노드 위탁의 subpath 는 그 컴퓨터 경로).
+  const assertCwdVisible = gatewayCapability("assertSessionCwdVisible");
+  if (assertCwdVisible) await assertCwdVisible(user, input.rootKey, sub);
   // 레포 지정(#458 재사용) — 공유 base clone→worktree 자동 provision, 워커 cwd=worktree. .lively-task 는 worktree 밖(baseWs)에
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;

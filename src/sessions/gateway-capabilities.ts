@@ -69,10 +69,17 @@ export interface GatewayCapabilities {
     rpc: (host: string, op: NodeOp, args: Record<string, unknown>) => Promise<unknown>;
     defersHere: () => boolean;
   };
+  /**
+   * 세션 작업 폴더의 공개범위 판정(#4687) — 공유 루트에서 고른 폴더가 안 보이거나 그 **아래**에 그 사람이 못 보는 곳
+   *  (잠긴 프로젝트 폴더·잠긴 공유 폴더)이 있으면 던진다(404·403). DB 를 탄다 → 게이트웨이 전용.
+   *  노드 에이전트에는 등록이 없어 undefined 이고 호출부(createSession)는 판정 없이 지나간다 — 노드 세션의 subpath 는
+   *  그 컴퓨터의 경로라 서버의 공유 폴더와 뜻이 다르다(routes.ts 홈 입구의 #4551 노드 제외와 같은 판단).
+   */
+  assertSessionCwdVisible?: (user: LivelyUser, rootKey: string, subpath: string) => Promise<void>;
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost", "assertSessionCwdVisible"] as const;
 
 const caps: GatewayCapabilities = {};
 
