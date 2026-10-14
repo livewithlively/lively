@@ -20,7 +20,8 @@ import { managedMode } from "../org/tenancy/state.js";
 import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
-import { appVisibilityDenial } from "./visibility.js";
+import { appViewFor, canSeeApp } from "./visibility.js";
+import { uiPagesFromFiles, type AppFile } from "./app-versions.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
@@ -40,6 +41,8 @@ export interface AppFrontDeps {
   getApp: (id: string) => Promise<appStore.OrgApp | null>;
   listUiAssets: (appId: string) => Promise<Array<{ page_key: string }>>;
   getUiAsset: (appId: string, key: string) => Promise<{ page_key: string; html: string } | null>;
+  /** #4667 공개 판 행(매니페스트 · 파일) — 남의 초안이 걸린 공개 앱을 공개 판으로 보여 줄 때. 없으면(시험 등) 설치된 화면을 준다. */
+  getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   redeem: (i: RedeemLaunchInput) => Promise<RedeemedLaunch | null>;
   scripts: () => Promise<AppScripts>;
 }
@@ -50,6 +53,7 @@ const liveDeps = (): AppFrontDeps => ({
   getApp: (id) => appStore.getApp(id),
   listUiAssets: (id) => appStore.listUiAssets(id),
   getUiAsset: (id, key) => appStore.getUiAsset(id, key),
+  getAppVersion: (id, no) => appStore.getAppVersion(id, no),
   redeem: (i) => redeemAppLaunchCode(i),
   scripts: () => loadAppScripts(),
 });
@@ -83,8 +87,8 @@ async function whoAndApp(act: AppFrontAct, d: AppFrontDeps, asHtml: boolean):
   }
   const app = await d.getApp(act.app).catch(() => null);
   if (!app) return fail(404, "앱을 찾지 못했습니다", `앱 '${act.app}' 이(가) 이 워크스페이스에 없습니다.`);
-  const why = appVisibilityDenial(app, { userId: member.id, scopes: member.scopes });
-  if (why) return fail(403, "이 앱을 열 수 없습니다", why);
+  //  #4667 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다 — 없는 앱과 같은 답(있는지조차 알리지 않는다).
+  if (!canSeeApp(app, { userId: member.id, scopes: member.scopes })) return fail(404, "앱을 찾지 못했습니다", `앱 '${act.app}' 이(가) 이 워크스페이스에 없습니다.`);
   return { member, app };
 }
 
@@ -129,17 +133,31 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
   const path = parseAppPath(rawPath);
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
-  const pages = await d.listUiAssets(w.app.id);
-  if (!pages.length) return notFound(`앱 '${w.app.id}' 에 화면이 없습니다.`);
-  const key = path.page ?? pages[0].page_key;
-  const asset = await d.getUiAsset(w.app.id, key);
-  if (!asset) return notFound(`화면 '${key}' 이(가) 없습니다.`);
+  //  #4667 공개 앱에 남의 초안이 걸려 있으면 이 사람은 공개 판을 본다 — 설치된 화면(초안)이 아니라 공개 판 행의 파일에서 꺼낸다(org_app_ui 와 같은 규칙).
+  let asset: { page_key: string; html: string } | null = null;
+  let manifest: unknown = w.app.manifest;
+  const pub = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published" && d.getAppVersion
+    ? await d.getAppVersion(w.app.id, w.app.published_version_no as number).catch(() => null) : null;
+  if (pub) {
+    const ui = uiPagesFromFiles(pub.manifest, pub.files as AppFile[]);
+    if (!ui.length) return notFound(`앱 '${w.app.id}' 에 화면이 없습니다.`);
+    const key = path.page ?? ui[0].page_key;
+    asset = ui.find((u) => u.page_key === key) ?? null;
+    if (!asset) return notFound(`화면 '${key}' 이(가) 없습니다.`);
+    manifest = pub.manifest;
+  } else {
+    const pages = await d.listUiAssets(w.app.id);
+    if (!pages.length) return notFound(`앱 '${w.app.id}' 에 화면이 없습니다.`);
+    const key = path.page ?? pages[0].page_key;
+    asset = await d.getUiAsset(w.app.id, key);
+    if (!asset) return notFound(`화면 '${key}' 이(가) 없습니다.`);
+  }
   let scripts: AppScripts;
   try { scripts = await d.scripts(); } catch (e) {
     logger.error({ err: e instanceof Error ? e.message : String(e) }, "[app-front] SDK 런타임 준비물 없음");
     return { status: 503, html: appErrorHtml("앱 화면을 준비하지 못했습니다", "게이트웨이에 웹 빌드 산출물이 없습니다. 잠시 뒤 다시 열어 주세요.") };
   }
-  const csp = ((w.app.manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp;
+  const csp = ((manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp;
   return {
     status: 200,
     html: buildAppPageHtml(asset.html, { runtime: scripts.runtime, probe: path.probe ? scripts.probe : null }),
