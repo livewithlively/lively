@@ -58,6 +58,16 @@ export function isParentNotInList(e: unknown): boolean {
 export type ParentListLookup = { kind: "list"; listId: string } | { kind: "gone" };
 
 /**
+ * 부모 재조회 실패가 «이 행만» 막힌 것인가 — 상태코드 자리가 4xx 이고 429(레이트리밋)가 아니다.
+ *  401·403 도 여기서는 행 고유다: 같은 토큰으로 방금 create 가 인증을 통과해 ITEM_137 을 받았으니, 그 부모 하나를
+ *  못 읽는 것이다(비공개 공간 거부 등 — 지워짐·다른 워크스페이스는 조회 쪽이 이미 «gone» 으로 접는다).
+ *  메시지에 실린 경로·본문의 숫자를 보지 않게 상태코드 자리만 본다(clickupFetch: `ClickUp ${status} ${path}: …`).
+ */
+export function isRowScopedLookupFailure(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 4\d\d /.test(e.message) && !/^ClickUp 429 /.test(e.message);
+}
+
+/**
  * 자식 카드 생성 — 부모 리스트 좌표가 낡았으면 저쪽에서 다시 읽어 한 번 고쳐 만든다.
  *
  * 왜 필요한가: createListFor 가 쓰는 `list_ext` 는 인바운드가 마지막으로 본 값이다. 부모 카드가 ClickUp 에서
@@ -67,6 +77,11 @@ export type ParentListLookup = { kind: "list"; listId: string } | { kind: "gone"
  *
  * 재시도는 **한 번**이다. 다시 읽은 리스트가 처음 것과 같으면 좌표 문제가 아니므로 원래 오류를 그대로 던진다
  *  (조용히 삼키지 않는다 — 원인이 다른 400 이면 사람이 봐야 한다).
+ *
+ * 부모 재조회가 행 고유 4xx(isRowScopedLookupFailure)로 막히면 **처음 거절(ITEM_137)을 던진다.** 조회 오류를 그대로
+ *  던지면 401·403 이 시스템성으로 분류돼(push-failure.ts) 이 행 하나가 매 틱 실행 실패가 되고, 연속 실패 브레이커가
+ *  반출 전체를 세운다 — 치유가 없을 때라면 ITEM_137(400)은 행 거절로 파킹됐을 행이다. 429·5xx·네트워크는 일시
+ *  장애라 조회 오류를 그대로 던진다(재시도와 브레이커가 맞다).
  */
 export async function createUnderParent<R>(o: {
   listId: string;
@@ -79,7 +94,9 @@ export async function createUnderParent<R>(o: {
     return { kind: "created", result: await o.create(o.listId, false), listId: o.listId };
   } catch (e) {
     if (!o.parentExt || !isParentNotInList(e)) throw e;
-    const found = await o.lookupParentList(o.parentExt);
+    let found: ParentListLookup;
+    try { found = await o.lookupParentList(o.parentExt); }
+    catch (le) { throw isRowScopedLookupFailure(le) ? e : le; }
     if (found.kind === "gone") return { kind: "parent_gone" };
     const actual = found.listId.trim();
     if (!actual || actual === o.listId) throw e;
