@@ -4993,7 +4993,17 @@
   "rest": [
    "POST /api/ui/store/sql"
   ],
-  "input_hash": "e5ee7bc163a0f9d5"
+  "input_hash": "e7aee028486226d7"
+ },
+ {
+  "name": "store_sql_batch",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/sql/batch"
+  ],
+  "input_hash": "2a1faf718f68c758"
  },
  {
   "name": "store_tables",
@@ -5004,6 +5014,26 @@
    "GET /api/ui/store/tables"
   ],
   "input_hash": "5e3516baa81e01e2"
+ },
+ {
+  "name": "app_sql_stats",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-sql/stats"
+  ],
+  "input_hash": "1d866f77bb8d8e0b"
+ },
+ {
+  "name": "app_server_token_mint",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server-token"
+  ],
+  "input_hash": "82545e035aa6b6f6"
  },
  {
   "name": "session_apps",
