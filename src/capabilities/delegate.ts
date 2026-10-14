@@ -110,7 +110,11 @@ const run: Capability = {
       const cur = await getTask(task.id);
       if (cur && ["done", "failed", "canceled"].includes(cur.status)) return { task: cur, done: true };
     }
-    return { task: await getTask(task.id), still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
+    const last = await getTask(task.id);
+    //  in_flight 로 들어왔는데 선점한 쪽(tick)이 못 띄웠으면 행은 아직 queued 다 — «실행 중» 이라 하면 거짓이다.
+    //   대기 상한까지 tick 이 다시 시도하므로 위의 대기 등록 응답과 같은 결로 답한다(queue:false 계약 자체는 여기서 바꾸지 않는다).
+    if (last?.status === "queued") return { task: last, queued: true, hint: `아직 배정 전(대기 중) — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
+    return { task: last, still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
   },
 };
 

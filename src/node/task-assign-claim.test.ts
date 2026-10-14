@@ -185,6 +185,14 @@ async function holdClaim(id: number | string, table: Set<string>) {
   const { readFileSync } = await import("node:fs");
   const del = readFileSync(new URL("../../src/capabilities/delegate.ts", import.meta.url), "utf8");
   assert.ok(/delegateRunNext\(r,/.test(del), "delegate_run 이 판정 함수를 안 쓴다 — in_flight 가 다시 취소로 떨어진다");
+  //  in_flight 로 들어가 기다렸는데 상한까지 queued 면(선점한 쪽이 못 띄웠다) «실행 중» 이 아니라 대기로 답해야 한다.
+  //   핸들러는 DB 에 묶여 여기서 행위로 못 잰다 — 대기 루프 뒤에서 queued 분기가 still_running 응답보다 먼저 오는지 본다.
+  const loop = del.indexOf("while (Date.now() < deadline)");
+  assert.ok(loop >= 0, "delegate_run 의 대기 루프를 못 찾았다 — 모양이 바뀌면 이 단언부터 고쳐라");
+  const tail = del.slice(loop);
+  const queuedAt = tail.search(/status === "queued"\) return \{[^}]*queued: true/), runningAt = tail.indexOf("still_running: true");
+  assert.ok(queuedAt >= 0 && runningAt > queuedAt,
+    "대기 상한까지 배정 전(queued)인 위탁을 «아직 실행 중» 으로 답한다 — 상태와 다른 안내");
 }
 
 // in_flight 는 미배정 사유로 기록하지 않는다 — 기록하는 순간 이미 running 인 행의 result 에 «못 갔다» 가 끼어든다.
