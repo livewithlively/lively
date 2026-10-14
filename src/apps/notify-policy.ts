@@ -71,7 +71,8 @@ export function safeHref(href: unknown): string | null {
 //  쌓여 무의미하다. 알림은 내용이 있어야 한다(누가 댓글을 달았다·나를 태그했다). 리브가 답하면 알림. 앱들도 보낼 것이다.»
 //  그래서 알림은 **종류**를 갖고, 「확인할 것」(inbox)은 종류로 거른다. 배너(브라우저·데스크톱)는 전부(all) 본다 —
 //  세션 대기 배너는 8/24 결정(«지금 내가 뭔가 해야 하는 순간»)대로 남는다. 두 표면이 같은 저장소를 다른 렌즈로 본다.
-export const NOTIFY_KINDS = ["app", "session", "liv", "comment", "mention"] as const;
+//  #3870 — invite: 누가 나를 세션에 초대했다(사람이 나를 지목한 일이라 「확인할 것」 에 선다 · terminal/session-invite.ts).
+export const NOTIFY_KINDS = ["app", "session", "liv", "comment", "mention", "invite"] as const;
 export type NotifyKind = typeof NOTIFY_KINDS[number];
 /** 모르는 값은 'app' — 앱 토큰 경로는 종류를 못 정한다(서버 코드만 정한다). */
 export function normalizeKind(v: unknown): NotifyKind {

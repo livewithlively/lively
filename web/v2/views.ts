@@ -530,6 +530,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
     canPickProject: (t) => canMoveSess(t),   // #3870 — 주인·초대받은 사람(문패 [세션 옮기기]·우클릭과 같은 술어)
+    canLeave: (t) => isInvitedSess(t),       // #3870 — 초대받은 사람만 [이 세션에서 나가기](우클릭 · 공유 창과 같은 술어)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
     onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)

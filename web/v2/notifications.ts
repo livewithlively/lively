@@ -13,7 +13,7 @@ import { icon } from './icons.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 배너를 이 창에서 이미 띄웠나(기기의 사실)
 import { browserBannerText } from './banner-text.js';   // #4054 — 윗줄은 워크스페이스 이름
 
-export type NotifyKind = 'app' | 'session' | 'liv' | 'comment' | 'mention';
+export type NotifyKind = 'app' | 'session' | 'liv' | 'comment' | 'mention' | 'invite';   // invite — 세션 초대(#3870)
 /** 렌즈 — inbox(확인할 것 · 세션 대기·완료 제외) / all(배너 · 전부). 서버 notify-policy 와 같은 두 값. */
 export type NotifyScope = 'inbox' | 'all';
 
@@ -182,7 +182,7 @@ export function startNotificationBanners(intervalMs = 30_000, wsName?: () => str
 /** 행의 앞자리 — «누가·무엇이»: 사람(얼굴) · 리브(L) · 앱(종) · 세션(상태점, all 렌즈에서만 보인다). */
 function leadOf(n: AppNotification): HTMLElement {
   const kind = String(n.kind || 'app');
-  if ((kind === 'comment' || kind === 'mention') && n.actor) {
+  if ((kind === 'comment' || kind === 'mention' || kind === 'invite') && n.actor) {
     return el('span', { class: 'v2-noti-lead' }, personFace(n.actor, 'pava v2-noti-ava', n.actor_name || n.actor));
   }
   if (kind === 'liv') return el('span', { class: 'v2-noti-lead' }, el('span', { class: 'v2-noti-mark liv', 'aria-label': '리브', text: 'L' }));

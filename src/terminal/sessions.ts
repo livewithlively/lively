@@ -1267,7 +1267,7 @@ export async function killSession(user: LivelyUser, id: string, opts?: { admin?:
  *  ⚠ 자동 이름(session-autoname, source=rule)이 기본값 human 을 쓰면 그 순간 **사람이 지은 이름으로 굳어져**
  *   에이전트가 영영 못 다듬는다 — 자동 경로는 반드시 자기 출처를 실어 보내야 한다.
  */
-export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }, opts?: { source?: LabelSource }): Promise<void> {
+export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }, opts?: { source?: LabelSource }): Promise<{ invites?: string[] }> {
   await assertManage(user, id);
   const source: LabelSource = opts?.source ?? "human";
   const mirror: { label?: string; label_source?: LabelSource; invites?: string[] } = {};
@@ -1277,7 +1277,7 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
     if (source !== "human") {
       const cur = await getSessionState(id).catch(() => undefined);
       // 미러 행이 없으면(구 세션·managed) 걸쇠를 걸 근거가 없다 — 종전대로 붙인다(무회귀).
-      if (cur && !canRelabel(cur.label_source, source)) return;
+      if (cur && !canRelabel(cur.label_source, source)) return {};
     }
     await tmux(["set-option", "-t", id, "@box_label", clean]);
     mirror.label = clean;
@@ -1290,6 +1290,8 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
   }
   // desired-state 미러도 갱신(#1059 E) — 재부팅 후 복원본이 새 라벨·초대를 반영하도록. best-effort.
   await updateSessionStateMeta(id, mirror).catch((e) => console.warn(`[terminal] desired-state 메타 갱신 실패(${id}):`, (e as Error)?.message ?? e));
+  //  #3870 — 걸러 적은 명단을 돌려준다(초대 알림이 «새로 들어온 사람» 을 이 값으로 잰다 — routes.ts).
+  return mirror.invites ? { invites: mirror.invites } : {};
 }
 
 // (#869 노드 에이전트 전용) 게이트웨이가 이미 구성원 디렉터리로 검증한 초대 목록을 그대로 기록한다.
