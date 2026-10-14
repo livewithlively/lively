@@ -7,7 +7,7 @@
 //  그리고 그 실행 파일에서 옮긴 셈(시간·해시·표 폭). 이 함수들은 순수 포매터라 반환 글자 자체가 관찰 가능한 효과다.
 //
 // 러너는 web/ 을 수집하지 않으므로 컴파일 산출물(public/app/chat-tui.js)을 import 한다 — DOM·전역 없는 모듈이라 그대로 불린다.
-// 엣지 표 22행은 <스크래치패드>/spec.md — 각 test 이름 앞의 #n 이 그 행이다.
+// 엣지 표(22행 — 경계값 · 새 헬퍼의 빈 입력 · 단·복수 · 모르는 꼴)는 각 test 이름 앞의 #n 이 그 행이다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import path from "node:path";
@@ -30,7 +30,7 @@ const MCP = { kind: "mcp", label: "lively", hint: "" };
 
 test("배선 · 모듈이 함수를 내보낸다(관측 장치가 살아 있나)", () => {
   for (const k of ["fmtElapsed", "pastVerbOf", "turnEndSegs", "doneAtLabel", "tuiCollapse", "shellKind", "splitShell", "groupSegs", "editSegs",
-    "tuiToolResult", "bashPopsOut", "tuiToolHead", "tuiHighlight", "tuiTableLayout", "dispWidth", "wrapWords", "taskNoticeSegs"]) {
+    "tuiToolResult", "bashPopsOut", "tuiToolHead", "tuiHighlight", "tuiTableLayout", "dispWidth", "wrapWords", "taskNoticeSegs", "lineNotice", "turnEndOf"]) {
     assert.equal(typeof T[k], "function", k);
   }
 });
@@ -220,6 +220,62 @@ test("머리 · Update · 에이전트 종류 · MCP 원래 서버 이름", () =
   assert.equal(T.mcpLabel("plugin_playwright_playwright"), "plugin:playwright:playwright");   // 실측 `Calling plugin:playwright:playwright`
   assert.equal(T.mcpLabel("claude_ai_Claude_Docs"), "Claude Docs");
   assert.equal(T.mcpServer("claude_ai_Claude_Docs"), "claude.ai Claude Docs");
+});
+
+// ── 완료 알림 판정 — 대화 파일 한 줄 → 알림인가(리뷰 지적 반영: 끼워 넣기 꼴 · 인용한 사람 말 · isMeta) ─────────────────
+const NOTE = (id = "a1b2", extra = "") => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "기록" finished</summary>\n${extra}</task-notification>`;
+test("알림 판정 · 사람 말 꼴과 끼워 넣기(queued_command) 꼴 둘 다 읽는다", () => {
+  const u = T.lineNotice({ type: "user", message: { role: "user", content: NOTE("t1", "<usage><duration_ms>188000</duration_ms></usage>") } });
+  assert.equal(u.taskId, "t1");
+  assert.equal(txt(u.segs), 'Agent "기록" finished · 3m 8s');
+  assert.equal(u.inline, false);
+  const a = T.lineNotice({ type: "attachment", attachment: { type: "queued_command", prompt: NOTE("t2"), commandMode: "task-notification" } });
+  assert.equal(a.taskId, "t2");
+  assert.equal(a.inline, true);                        // 도는 중에 끼워 넣은 알림 — 턴을 열지 않는다
+  const arr = T.lineNotice({ type: "attachment", attachment: { type: "queued_command", prompt: [{ type: "text", text: NOTE("t3") }] } });
+  assert.equal(arr.taskId, "t3");
+  assert.equal(T.lineNotice({ type: "user", message: { content: [{ type: "text", text: NOTE("t4") }] } }).taskId, "t4");
+  assert.equal(T.lineNotice({ type: "user", message: { content: NOTE("f1").replace("completed", "failed") } }).tone, "err");
+});
+test("알림 판정 · 알림이 아닌 것 — 꼬리표를 인용한 사람 말 · isMeta · task-id 없음 · 다른 끼워 넣기 · 도구 결과", () => {
+  assert.equal(T.lineNotice({ type: "user", message: { content: "이 꼬리표를 보세요: " + NOTE("x") } }), null);
+  assert.equal(T.lineNotice({ type: "user", isMeta: true, message: { content: NOTE("x") } }), null);
+  assert.equal(T.lineNotice({ type: "user", message: { content: "<task-notification><status>completed</status></task-notification>" } }), null);
+  assert.equal(T.lineNotice({ type: "attachment", attachment: { type: "queued_command", prompt: '<agent-message from="a">hi</agent-message>' } }), null);
+  assert.equal(T.lineNotice({ type: "attachment", attachment: { type: "nested_memory", content: NOTE("x") } }), null);
+  assert.equal(T.lineNotice({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "u", content: NOTE("x") }] } }), null);
+  assert.equal(T.lineNotice({ type: "assistant", message: { content: [{ type: "text", text: NOTE("x") }] } }), null);
+  assert.equal(T.lineNotice(null), null);
+});
+
+test("턴 끝 재료 · turn_duration 만 줄을 싣고, Stop 훅 요약은 마감만", () => {
+  assert.deepEqual(T.turnEndOf({ type: "system", subtype: "turn_duration", durationMs: 48819, uuid: "u1", timestamp: "2026-10-14T09:40:20.496Z", pendingBackgroundAgentCount: 1 }),
+    { durationMs: 48819, turnEnd: { uuid: "u1", ts: "2026-10-14T09:40:20.496Z", pendingBg: 1 } });
+  assert.deepEqual(T.turnEndOf({ type: "system", subtype: "stop_hook_summary" }), {});
+  assert.deepEqual(T.turnEndOf({ type: "system", subtype: "turn_duration" }), { durationMs: 0, turnEnd: { uuid: undefined, ts: undefined, pendingBg: 0 } });
+});
+
+test("상태 줄 모드 · 실측 글자와 색 갈래", () => {
+  assert.deepEqual(T.tuiMode("auto"), { glyph: "⏵⏵", text: "auto mode on", tone: "warn" });
+  assert.equal(T.tuiMode("plan").text, "plan mode on");
+  assert.equal(T.tuiMode("acceptEdits").text, "accept edits on");
+  assert.equal(T.tuiMode("default"), null);
+  assert.equal(T.tuiMode(null), null);
+});
+
+test("모델 이름 · Claude Code 가 적는 꼴", () => {
+  assert.equal(T.ccModelName("claude-opus-5-5"), "Opus 5.5");
+  assert.equal(T.ccModelName("claude-haiku-4-5-20251001"), "Haiku 4.5");
+  assert.equal(T.ccModelName("claude-opus-5-5[1m]"), "Opus 5.5 (1M context)");
+  assert.equal(T.ccModelName("gpt-x"), "gpt-x");
+});
+
+test("비동기 에이전트 판정 · 하네스 값이 먼저, 없으면 본문 머리", () => {
+  assert.equal(T.isAsyncAgent({ status: "async_launched" }, ""), true);
+  assert.equal(T.isAsyncAgent({}, "Async agent launched successfully. agentId: a9"), true);
+  assert.equal(T.isAsyncAgent({ status: "completed" }, "done"), false);
+  assert.equal(T.asyncAgentId({}, "Async agent launched successfully. agentId: a9 (x)"), "a9");
+  assert.equal(T.asyncAgentId({ agentId: "b1" }, "agentId: zz"), "b1");
 });
 
 test("알림 · 완료 알림의 걸린 시간은 흐린 조각(실측 inactive 색)", () => {

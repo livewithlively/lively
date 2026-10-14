@@ -22,8 +22,8 @@ import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replac
 import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
-import { createChatView, TERM_PREFS_EVENT, type ChatTurn, type ChatView } from './chat-view.js';
-import { ccModelName, parseTaskNotification, taskNoticeSegs, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
+import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
+import { ccModelName, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
 import { parseTermPrefs, serializeTermPrefs, TERM_CURSORS, TERM_FONTS, TERM_PREFS_KEY, TERM_THEMES, type TermPrefs } from './lib/term-prefs.js';   // #4707 웹 터미널 설정 = 대화창 설정
 import { composerAttach } from './v2/compose-attach.js';
 import { registerSessionInput, putIntoSession, SESSION_INPUT_EVENT } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
@@ -156,19 +156,6 @@ const LIV_CHAT_LABEL = '리브 — 대화';
 export function sessionChatLook(label: string, chatHome: boolean): 'tui' | 'desktop' {
   const l = String(label || '');
   return chatHome || l === LIV_KICKOFF_LABEL || l === LIV_CHAT_LABEL ? 'desktop' : 'tui';
-}
-
-/**
- * 턴을 마감하는 system 줄 → settle 재료. turn_duration 만 턴 끝 줄(`✻ Churned for 3m 51s · done 6:43 PM`)의 재료를 싣는다 —
- *  동사는 그 기록의 uuid 해시, 시각은 그 기록의 timestamp 라서 터미널과 같은 글이 선다. stop_hook_summary 는 마감만 한다
- *  (Claude Code 도 그 줄로는 아무것도 그리지 않는다).
- */
-function turnEndOf(o: any): { durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } } {
-  if (o?.subtype !== 'turn_duration') return {};
-  return {
-    durationMs: Number(o.durationMs) || 0,
-    turnEnd: { uuid: o.uuid ? String(o.uuid) : undefined, ts: o.timestamp ? String(o.timestamp) : undefined, pendingBg: Number(o.pendingBackgroundAgentCount) || 0 },
-  };
 }
 
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
@@ -588,7 +575,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 대화창 ————
   //  문법은 마운트 때 한 번 정한다(sessionChatLook 머리말) — 세션 화면은 Claude Code 터미널 문법, 리브 대화는 종전 문법.
   const look = sessionChatLook(first.label, !!opts.chatHome);
-  if (look === 'tui') wrap.classList.add('sc-tui');
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
     // ⚠ '그 컴퓨터로 전달'은 **정말 다른 컴퓨터일 때만** 맞는 말이다. 게이트웨이 박스가 노드로도 등록돼
@@ -1200,7 +1186,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  이 세션의 터미널 액자는 storage 신호로 따라온다(web/standalone/terminal.ts). 저장하지 않는 칸(폰 입력 줄·줄 선택)은 건드리지 않는다.
    */
   function termLookRows(): HTMLElement[] {
-    const mobile = phoneNow() || (() => { try { return window.matchMedia('(pointer: coarse)').matches; } catch { return false; } })();
+    //  기본 글자 크기(폰 12 · 그 밖 14)는 터미널·대화창과 **같은 판정**으로 고른다(좁은 데스크톱 창을 폰으로 보면 [화면] 이 12 를 보이고
+    //   «+» 가 13 을 저장해 글자가 줄었다 — 리뷰 실측).
+    const mobile = termMobile();
     const read = (): TermPrefs => { let s: string | null = null; try { s = localStorage.getItem(TERM_PREFS_KEY); } catch { s = null; } return parseTermPrefs(s, mobile); };
     const save = (mut: (p: TermPrefs) => void): void => {
       const p = read(); mut(p);
@@ -1490,6 +1478,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   (긴 턴 중간부터 읽은 창엔 사람 말 줄이 없어 모드를 영영 몰랐다 — 상태 줄의 `⏵⏵ auto mode on` 이 비었다, 실측).
     if (o.type === 'permission-mode') {
       if (o.permissionMode) { chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode)); view.setPermissionMode(String(o.permissionMode)); }
+      return;
+    }
+    //  #4707 tui — 도는 동안 도착한 «끝났다» 알림은 사람 말 줄이 아니라 끼워 넣기 줄(attachment · queued_command)로 적힌다.
+    //   터미널은 그 자리(지금 턴 안)에 같은 한 줄을 그린다 — 셈(bgDone)도 여기서 지운다(안 지우면 `Waiting for …` 가 영영 남는다).
+    if (o.type === 'attachment') {
+      const n = look === 'tui' ? lineNotice(o) : null;
+      if (n) {
+        view.bgDone(n.taskId);
+        if (!cur) cur = newRec(null, o.timestamp);
+        view.notice(cur.t, n.segs, n.tone);
+      }
       return;
     }
     if (o.type === 'user') {
@@ -1972,7 +1971,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (from === 0) noteBannerFrom(text);              // 대화의 맨 처음에 닿았다 — 환영 상자의 재료(#4707). 그리는 것은 olderBar 가 한다
 
     // 줄 → 턴 묶음(사람 말 기준). 첫 묶음은 사람 말 없는 이어짐일 수 있다.
-    type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string; notice?: { text: TuiSeg[]; tone: 'ok' | 'err' } };
+    type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string; notice?: { text: TuiSeg[]; tone: 'ok' | 'err'; taskId: string } };
     const bundles: Bundle[] = [];
     let b: Bundle | null = null;
     for (const line of text.split('\n')) {
@@ -1981,13 +1980,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!o || o.isSidechain) continue;
       if (o.type === 'user') {
         const { text: ut, results } = userText(o);
-        //  #4707 tui — 완료 알림은 새 턴을 연다(applyLine 과 같은 규칙).
-        const tn = look === 'tui' && !results.length ? parseTaskNotification(ut) : null;
-        if (tn) { b = { text: null, ts: o.timestamp, lines: [], kind: 'cont', notice: { text: taskNoticeSegs(tn), tone: /^(failed|killed|error)/i.test(tn.status) ? 'err' : 'ok' } }; bundles.push(b); continue; }
+        //  #4707 tui — 완료 알림은 새 턴을 연다(applyLine 과 같은 규칙 — isMeta·빈 줄은 알림이 아니다).
+        const tn = look === 'tui' && !results.length && !o.isMeta ? parseTaskNotification(ut) : null;
+        if (tn) { b = { text: null, ts: o.timestamp, lines: [], kind: 'cont', notice: { text: taskNoticeSegs(tn), tone: /^(failed|killed|error)/i.test(tn.status) ? 'err' : 'ok', taskId: tn.taskId } }; bundles.push(b); continue; }
         if (results.length) { if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); } b.lines.push(o); }
         if (o.isMeta || !ut.trim() || INTERRUPT_RE.test(ut) || INJECTED_RE.test(ut)) { if (INTERRUPT_RE.test(ut) && b) b.lines.push(o); continue; }
         if (CONTINUED_RE.test(ut)) { bundles.push({ text: null, lines: [], kind: 'divider', raw: ut }); b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); continue; }
         b = { text: ut, ts: o.timestamp, lines: [], kind: 'turn' }; bundles.push(b);
+      } else if (o.type === 'attachment') {
+        //  도는 동안 끼워 넣은 완료 알림 — 그 턴 안에 둔다(그릴 때 셈도 지운다).
+        if (look === 'tui' && lineNotice(o)) { if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); } b.lines.push(o); }
       } else if (o.type === 'system' && o.subtype === 'compact') {
         bundles.push({ text: null, lines: [], kind: 'divider', raw: typeof o.text === 'string' ? o.text : undefined }); b = { text: null, lines: [], kind: 'cont' }; bundles.push(b);
       } else if (o.type === 'assistant' || (o.type === 'system' && (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary' || o.subtype === 'interrupted'))) {
@@ -2023,10 +2025,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (bd.kind === 'divider') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', bd.raw, 'start', 'compact'); continue; }
         const rec = newRec(bd.text, bd.ts, 'start');
         cur = rec;
-        if (bd.notice) { rec.t.root.dataset.notice = '1'; view.notice(rec.t, bd.notice.text, bd.notice.tone); }
+        //  알림 묶음 — 셈도 지운다. 묶음은 새 것부터 그리므로 알림이 그 에이전트를 띄운 줄보다 먼저 온다(chat-view 의 bgFinished 가 받아 준다).
+        if (bd.notice) { rec.t.root.dataset.notice = '1'; view.bgDone(bd.notice.taskId); view.notice(rec.t, bd.notice.text, bd.notice.tone); }
         for (const o of bd.lines) {
           if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
           else if (o.type === 'assistant') view.event(rec.t, o);
+          else if (o.type === 'attachment') { const n = lineNotice(o); if (n) { view.bgDone(n.taskId); view.notice(rec.t, n.segs, n.tone); } }
           else if (o.type === 'system') view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : turnEndOf(o));
         }
         if (i === bundles.length - 1 && orphan) {

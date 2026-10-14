@@ -522,7 +522,7 @@ function ensureTermFonts(family: string): Promise<void> {
   });
 }
 /** 터미널이 «폰»으로 보는 기기인가 — 기본 글자 크기(폰 12 · 그 밖 14)를 터미널과 같게 고른다(terminal.ts IS_MOBILE 과 같은 판정). */
-function termMobile(): boolean {
+export function termMobile(): boolean {
   try { if (window.matchMedia('(pointer: coarse)').matches) return true; } catch { /* 구형 */ }
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
 }
@@ -565,6 +565,16 @@ const BOX_RE = /^[\u2500-\u259f]/;
  *  (38-chat-tui.css `--tui-wgap`). 입력칸(textarea)·이미 감싼 곳·코드 편집기 안은 건드리지 않는다.
  */
 function wrapWide(node: Node): void {
+  //  글 조각 하나가 붙었으면 그 조각만 본다(TreeWalker 는 뿌리 자신을 거르지 않는다 — nextNode 가 뿌리를 건너뛴다).
+  if (node.nodeType === 3) {
+    const t = node as Text;
+    const p = t.parentElement;
+    if (!p || p.closest('.tui-w, .tui-bx, textarea, input, select, .tui-nowide')) return;
+    WIDE_RE.lastIndex = 0;
+    if (!WIDE_RE.test(t.nodeValue || '')) return;
+    splitWide(t);
+    return;
+  }
   const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
     acceptNode: (t) => {
       const p = t.parentElement;
@@ -575,21 +585,23 @@ function wrapWide(node: Node): void {
   });
   const hits: Text[] = [];
   for (let n = walker.nextNode(); n; n = walker.nextNode()) hits.push(n as Text);
-  for (const t of hits) {
-    const s = t.nodeValue || '';
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    WIDE_RE.lastIndex = 0;
-    for (let m = WIDE_RE.exec(s); m; m = WIDE_RE.exec(s)) {
-      if (m.index > last) frag.append(s.slice(last, m.index));
-      //  가로선(─) 덩이는 글자 대신 한 줄 선으로 칠한다(tui-bxh) — 대체 글꼴의 ─ 는 칸보다 좁아 칸을 맞추면 사이가 벌어져 점선처럼 보인다.
-      const sp = document.createElement('span'); sp.className = !BOX_RE.test(m[0]) ? 'tui-w' : m[0].charCodeAt(0) === 0x2500 ? 'tui-bx tui-bxh' : 'tui-bx'; sp.textContent = m[0];
-      frag.append(sp);
-      last = m.index + m[0].length;
-    }
-    if (last < s.length) frag.append(s.slice(last));
-    t.replaceWith(frag);
+  for (const t of hits) splitWide(t);
+}
+/** 글 조각 하나를 두 칸 글자 덩이(tui-w)·상자 글자 덩이(tui-bx)와 나머지로 쪼개 제자리에 둔다. */
+function splitWide(t: Text): void {
+  const s = t.nodeValue || '';
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  WIDE_RE.lastIndex = 0;
+  for (let m = WIDE_RE.exec(s); m; m = WIDE_RE.exec(s)) {
+    if (m.index > last) frag.append(s.slice(last, m.index));
+    //  가로선(─) 덩이는 글자 대신 한 줄 선으로 칠한다(tui-bxh) — 대체 글꼴의 ─ 는 칸보다 좁아 칸을 맞추면 사이가 벌어져 점선처럼 보인다.
+    const sp = document.createElement('span'); sp.className = !BOX_RE.test(m[0]) ? 'tui-w' : m[0].charCodeAt(0) === 0x2500 ? 'tui-bx tui-bxh' : 'tui-bx'; sp.textContent = m[0];
+    frag.append(sp);
+    last = m.index + m[0].length;
   }
+  if (last < s.length) frag.append(s.slice(last));
+  t.replaceWith(frag);
 }
 
 // ── 글자 크기 (#2055) ──────────────────────────────────────────────────────────────────
@@ -821,8 +833,12 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   //  한글을 두 칸 폭으로(wrapWide) — 대화창에 새로 붙는 글마다 한 번씩. 입력칸은 건드리지 않는다.
   let wideObs: MutationObserver | null = null;
   if (tui) {
+    //  ⚠ 붙은 노드 **그 자체**만 감싼다(글 조각이면 그 조각만 — 부모를 통째로 다시 훑으면 한 문단이 제곱으로 느려진다), 그리고 감싸며 생긴
+    //   우리 자신의 변경 기록은 버린다(takeRecords — 안 버리면 그 기록이 또 이 콜백을 불러 같은 문단을 다시 훑는다. 리뷰 실측: 2,500줄 창에서
+    //   2.5초 멈춤 → 0.17초).
     wideObs = new MutationObserver((recs) => {
-      for (const r of recs) r.addedNodes.forEach((n) => { if (n.nodeType === 1 || n.nodeType === 3) { const host0 = n.nodeType === 3 ? n.parentNode : n; if (host0) wrapWide(host0); } });
+      for (const r of recs) r.addedNodes.forEach((n) => { if ((n.nodeType === 1 || n.nodeType === 3) && n.isConnected) wrapWide(n); });
+      wideObs?.takeRecords();
     });
     wideObs.observe(root, { childList: true, subtree: true });
     wrapWide(root);   // 이미 붙어 있던 것(빈 화면 안내 등)
@@ -850,6 +866,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   let tableRo: ResizeObserver | null = null;
   if (tui && typeof ResizeObserver !== 'undefined') {
     tableRo = new ResizeObserver(() => {
+      if (!list.clientWidth) return;   // 숨은 동안(터미널 보기)엔 폭을 못 잰다 — 80칸으로 다시 그렸다가 드러날 때 또 그리지 않게
       //  폭이 바뀌면(숨었던 대화창이 드러날 때 포함) 표를 다시 그린다 — 높이가 바뀌므로, 바닥에 붙어 있었으면 다시 바닥으로
       //   (안 그러면 브라우저의 스크롤 고정이 자리를 옮기고 그 스크롤 신호를 «사람이 올렸다» 로 읽어 바닥 따라가기가 풀린다 — 실측).
       const wasStick = stick;
@@ -912,7 +929,6 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
 
   /** tui 스피너의 괄호 안 — `(12s · ↓ 1.2k tokens)`. 모르는 값(시작 시각·토큰)은 지어내지 않고 뺀다 — 둘 다 모르면 괄호째 뺀다. */
   const tickTui = (t: ChatTurn): void => {
-    tickGroups(t);
     const live = t.live; if (!live) return;
     const meta = live.querySelector('.tui-spin-m');
     if (!meta) return;
@@ -1121,8 +1137,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     if (last && last.classList.contains('tui-group')) return last;
     const line = el('div', { class: 'tui-group-line', role: 'button', tabindex: '0', 'aria-expanded': 'false', title: '눌러서 하나씩 보기 · Ctrl+O 로 전부 펼치기' },
       el('span', { class: 'tui-dot', 'aria-hidden': 'true', text: '⏺' + VS15 }),
-      el('span', { class: 'tui-group-t' }),
-      el('span', { class: 'tui-group-el' }));
+      el('span', { class: 'tui-group-t' }));
     const gEl = el('div', { class: 'tui-group', 'data-st': 'run' }, line, el('div', { class: 'tui-res tui-group-hint' }), el('div', { class: 'tui-group-body' })) as HTMLElement;
     groups.set(gEl, { g: newGroup(), cards: [] });
     appendWork(t, gEl);
@@ -1137,11 +1152,9 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     gEl.querySelector('.tui-group-t')?.replaceChildren(...segEls(groupSegs(st.g, running)), ...(running ? [document.createTextNode('…')] : []));
     const hint = gEl.querySelector(':scope > .tui-group-hint');
     if (hint) hint.textContent = running && st.g.hint ? st.g.hint : '';
-    if (!running) { const e0 = gEl.querySelector('.tui-group-el'); if (e0) e0.textContent = ''; }
     gEl.querySelector(':scope > .tui-group-line')?.setAttribute('aria-expanded', String(gEl.classList.contains('tui-open') || root.classList.contains('tui-verbose')));
   }
-  /** 도는 묶음의 경과 시간 자리 — 전체 화면 Claude Code 는 이 줄에 시간을 붙이지 않는다(2.1.299 실측). 자리만 비워 둔다. */
-  function tickGroups(_t: ChatTurn): void { /* 의도적으로 비움 */ }
+
   /** 한 카드를 펼치거나 접는다. 펼칠 것이 없는 카드(요약뿐·결과 전)는 그대로 둔다(죽은 반응 금지 — 머리에 표시도 없다). */
   function toggleTool(card: HTMLElement): void {
     const r = tuiRes.get(card);
@@ -1214,15 +1227,13 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
             if (b.id) r.cards.set(String(b.id), card);
             const col = tuiCollapse(nm, b.input, lastCwd);
             if (col) {
-              //  접히는 도구 — 이어진 묶음에 더한다(카드는 묶음 안에 접혀 들어간다). 경과 시간의 기준은 가장 최근 호출의 시각.
+              //  접히는 도구 — 이어진 묶음에 더한다(카드는 묶음 안에 접혀 들어간다).
               const gEl = groupFor(t);
               const st = groups.get(gEl)!;
               addToGroup(st.g, col);
               st.cards.push(card);
               cardCol.set(card, col);
               (gEl.querySelector(':scope > .tui-group-body') as HTMLElement).append(card);
-              const at = Date.parse(String(ev?.timestamp ?? ''));
-              gEl.dataset.start = String(Number.isFinite(at) ? at : Date.now());
               paintGroup(gEl);
             } else appendWork(t, card);
             continue;
@@ -1275,11 +1286,17 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   }
 
   /** 턴 끝 줄을 (다시) 칠한다 — 그 턴이 남긴 백그라운드 에이전트가 아직 돌면 `Waiting for…`, 다 끝났으면 걸린 시간. */
-  function paintDone(node: HTMLElement): void {
+  /** 지금 `Waiting for …` 로 서 있는 턴 끝 줄들 — 셈이 비거나 더 새 줄이 생기면 걸린 시간으로 돌린다. */
+  const waitingDone = new Set<HTMLElement>();
+  const lastDone = (): HTMLElement | null => { const all = list.querySelectorAll('.tui-done'); return all.length ? all[all.length - 1] as HTMLElement : null; };
+  function paintDone(node: HTMLElement, isLast: boolean): void {
     const pend = Number(node.dataset.pend) || 0;
     //  Claude Code 도 이 줄을 그릴 때의 상태로 고른다 — 기록엔 «그때 N개가 돌았다» 가 적혀 있어도 지금 다 끝났으면 걸린 시간을 보인다
     //   (터미널 실측: pendingBackgroundAgentCount=1 인 턴이 알림 뒤엔 `Crunched for 48s · done 6:40 PM`).
-    const waiting = pend > 0 && bgAgents.size > 0 ? pend : 0;
+    //   ⚠ `Waiting for …` 는 **마지막 턴 끝 줄**에만 선다 — 알림 하나를 못 읽으면(모르는 꼴) 셈이 영영 남아 지난 줄들까지
+    //    전부 «기다리는 중» 으로 굳는다(리뷰 지적). 지난 턴들은 걸린 시간으로 둔다.
+    const waiting = isLast && pend > 0 && bgAgents.size > 0 ? pend : 0;
+    if (waiting) waitingDone.add(node); else waitingDone.delete(node);
     node.replaceChildren(el('span', { class: 'tui-done-g', 'aria-hidden': 'true', text: '✻' + VS15 }),
       ...segEls(turnEndSegs({ pendingBg: waiting, durationMs: Number(node.dataset.ms) || 0, uuid: node.dataset.uuid, ts: node.dataset.ts })));
   }
@@ -1308,8 +1325,11 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
         node.dataset.pend = String(Number(o.turnEnd.pendingBg) || 0);
         if (o.turnEnd.uuid) node.dataset.uuid = o.turnEnd.uuid;
         if (o.turnEnd.ts) node.dataset.ts = o.turnEnd.ts;
-        paintDone(node);
         appendWork(t, node);
+        //  새 줄이 마지막이면 앞서 `Waiting for …` 로 서 있던 줄은 걸린 시간으로 돌린다(이전 기록을 위로 붙일 땐 새 줄이 마지막이 아니다).
+        const last = lastDone();
+        paintDone(node, node === last);
+        for (const w of [...waitingDone]) if (w !== last) paintDone(w, false);
       }
       return;
     }
@@ -1437,8 +1457,9 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       if (!id) return;
       bgFinished.add(id);
       if (!bgAgents.delete(id) || bgAgents.size > 0) return;
-      //  마지막 하나가 끝났다 — `Waiting for…` 로 서 있던 턴 끝 줄들을 걸린 시간으로 바꾼다(터미널이 그 줄을 다시 그리면 보이는 꼴).
-      (list.querySelectorAll('.tui-done[data-pend]') as NodeListOf<HTMLElement>).forEach((n) => { if (Number(n.dataset.pend) > 0) paintDone(n); });
+      //  마지막 하나가 끝났다 — `Waiting for…` 로 서 있던 턴 끝 줄을 걸린 시간으로 바꾼다(터미널이 그 줄을 다시 그리면 보이는 꼴).
+      const last = lastDone();
+      for (const w of [...waitingDone]) paintDone(w, w === last);
     },
     removeOpening: () => { list.querySelector('.livc-open')?.remove(); },
     setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; },

@@ -363,10 +363,56 @@ export interface TaskNotice { taskId: string; status: string; summary: string; d
  */
 export function parseTaskNotification(text: string): TaskNotice | null {
   const s = str(text);
-  if (!/<task-notification>/.test(s)) return null;
+  //  알림은 그 꼬리표로 **시작**하고 task-id 를 단다(실측 510/510). 글 중간에 꼬리표를 인용한 사람 말·스킬 펼침은 알림이 아니다
+  //   (리뷰 실측: 14KB 사람 말이 «Background task finished» 한 줄로 삼켜지고, 보낸 말 확인이 영영 «전달 대기» 로 남았다).
+  if (!/^\s*<task-notification>/.test(s)) return null;
   const tag = (k: string): string => { const m = new RegExp(`<${k}>([\\s\\S]*?)</${k}>`).exec(s); return m ? m[1].trim() : ''; };
+  const taskId = tag('task-id');
+  if (!taskId) return null;
   const ms = Number(tag('duration_ms'));
-  return { taskId: tag('task-id'), status: tag('status') || 'completed', summary: tag('summary') || 'Background task finished', durationMs: Number.isFinite(ms) && tag('duration_ms') ? ms : null };
+  return { taskId, status: tag('status') || 'completed', summary: tag('summary') || 'Background task finished', durationMs: Number.isFinite(ms) && tag('duration_ms') ? ms : null };
+}
+/** 완료 알림 한 줄의 재료 — taskId(백그라운드 셈에서 지울 것) · 칠할 조각 · 점 색 · inline(턴을 열지 않고 지금 턴 안에 선다). */
+export interface LineNotice { taskId: string; segs: TuiSeg[]; tone: 'ok' | 'err'; inline: boolean }
+/**
+ * 대화 파일 한 줄이 «보조 에이전트·백그라운드 작업이 끝났다» 알림인가. Claude Code 2.1.299 는 두 꼴로 적는다:
+ *  ① 사람 말 줄(type:user, isMeta 아님) — 쉬는 동안 도착하면 그 알림이 새 턴을 연다.
+ *  ② 끼워 넣기 줄(type:attachment, attachment.type:queued_command) — 도는 동안 도착하면 지금 턴 안에 끼워 넣는다
+ *     (리뷰 실측: 비동기 실행 94건 중 43건이 이 꼴로만 끝났다 — 못 읽으면 `Waiting for …` 가 영영 남는다).
+ *  터미널은 둘 다 같은 한 줄(`⏺ Agent "…" finished · 1m 1s`)로 그린다. 아니면 null.
+ */
+export function lineNotice(line: unknown): LineNotice | null {
+  const r = obj(line);
+  const textOf = (c: unknown): string => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (obj(b).type === 'text' ? str(obj(b).text) : '')).join('\n') : '');
+  let text = '';
+  let inline = false;
+  if (r.type === 'user') {
+    if (r.isMeta) return null;
+    const c = obj(r.message).content;
+    if (Array.isArray(c) && c.some((b) => obj(b).type === 'tool_result')) return null;
+    text = textOf(c);
+  } else if (r.type === 'attachment') {
+    const a = obj(r.attachment);
+    if (a.type !== 'queued_command') return null;
+    text = textOf(a.prompt);
+    inline = true;
+  } else return null;
+  const tn = parseTaskNotification(text);
+  if (!tn) return null;
+  return { taskId: tn.taskId, segs: taskNoticeSegs(tn), tone: /^(failed|killed|error)/i.test(tn.status) ? 'err' : 'ok', inline };
+}
+/**
+ * 턴을 마감하는 system 줄 → settle 재료. turn_duration 만 턴 끝 줄(`✻ Churned for 3m 51s · done 6:43 PM`)의 재료를 싣는다 —
+ *  동사는 그 기록의 uuid 해시, 시각은 그 기록의 timestamp 라서 터미널과 같은 글이 선다. stop_hook_summary 는 마감만 한다
+ *  (Claude Code 도 그 줄로는 아무것도 그리지 않는다).
+ */
+export function turnEndOf(line: unknown): { durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } } {
+  const o = obj(line);
+  if (o.subtype !== 'turn_duration') return {};
+  return {
+    durationMs: Number(o.durationMs) || 0,
+    turnEnd: { uuid: o.uuid ? str(o.uuid) : undefined, ts: o.timestamp ? str(o.timestamp) : undefined, pendingBg: Number(o.pendingBackgroundAgentCount) || 0 },
+  };
 }
 /** 완료 알림 한 줄의 글 — `Agent "…" finished` + 흐린 ` · 1m 1s`(걸린 시간은 inactive 색 — 2.1.299 실측). */
 export function taskNoticeSegs(n: TaskNotice): TuiSeg[] {

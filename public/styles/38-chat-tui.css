@@ -116,7 +116,8 @@
 .livc-tui .livc-work.tui-ai { margin: 0; padding: 0; border: 0; display: block; gap: 0; }
 
 /* ── 내 말 — `> …` 한 띠 ── */
-.livc-tui .tui-user { position: relative; display: block; padding: 0 var(--tui-cw) 0 calc(var(--tui-cw) * 2); background: var(--tui-user-bg); }
+.livc-tui .tui-user { position: relative; display: block; padding: 0 var(--tui-cw) 0 calc(var(--tui-cw) * 2); background: var(--tui-user-bg);
+  scroll-margin-top: var(--tui-lh); }   /* 위에 붙는 머리를 눌러 올라왔을 때 그 머리가 이 말의 첫 줄을 가리지 않게 */
 .livc-tui .tui-user::before { content: '\276F'; position: absolute; left: 0; top: 0; color: var(--tui-dim); }
 .livc-tui .tui-user .livc-ask-text { font: inherit; font-weight: 400; color: var(--tui-text); white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
 .livc-tui .dt-qstate { font: inherit; text-align: left; margin: 0; color: var(--tui-dim); }
@@ -244,7 +245,6 @@
 .livc-tui .tui-group-line .tui-dot { display: none; }
 .livc-tui .tui-group[data-st="run"] > .tui-group-line { color: var(--tui-fg); }
 .livc-tui .tui-group[data-st="run"] > .tui-group-line .tui-dot { display: inline; color: var(--tui-dim); animation: tui-blink 1s steps(1, end) infinite; }
-.livc-tui .tui-group-el { color: var(--tui-dim); }
 .livc-tui .tui-group-hint { color: var(--tui-dim); }
 .livc-tui .tui-group-body { display: none; }
 .livc-tui .tui-group.tui-open > .tui-group-body, .livc-tui.tui-verbose .tui-group-body { display: block; }
