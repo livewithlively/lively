@@ -328,7 +328,8 @@ export const pastVerbOf = (uuid: string | null | undefined): string => TUI_PAST_
 export interface TuiMode { glyph: string; text: string; tone: 'accept' | 'plan' | 'danger' | 'warn' }
 /**
  * 대화 파일의 permissionMode → 상태 줄. 기본 모드(또는 모름)는 null — 그 자리엔 `? for shortcuts` 가 선다.
- * ⚠ Claude Code 는 뒤에 `(shift+tab to cycle)` 를 붙이지만 이 화면은 모드를 바꿀 수단이 없어 그 말은 뺀다(죽은 안내 금지).
+ * 뒤에 붙는 흐린 `(shift+tab to cycle)` 는 그리는 쪽(chat-view)이 단다 — 이 화면에선 모드를 못 바꾸지만 두 창이 같아 보이게
+ *  글자를 그대로 두고, 무엇을 하는 말인지는 title 로 설명한다.
  */
 export function tuiMode(mode: string | null | undefined): TuiMode | null {
   switch (str(mode)) {
