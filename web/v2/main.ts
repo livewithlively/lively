@@ -47,7 +47,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 창의 타임라인도 세션 전체(대화 사슬)를 본다
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
-import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
+import { createTabs, routeKey, routeSticky, type ShellTab, type TabsApi } from './tabs.js';
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
 import { confirmSessionArchive, watchSessionTrash, SESSION_LEFT_EVENT } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
@@ -585,7 +585,10 @@ export async function bootV2(): Promise<void> {
     tabsApi.activate(home);
   }
   else {
-    const saved = tabsApi.initial();
+    //  #4480 — 지나가는 자리(#/app-open · #/full · #/welcome — tabs.ts routeSticky)로 들어온 부팅은 되살린 활성 탭을 데려가지 않고
+    //   새 탭에 선다. 데려가면 그 탭(보던 세션 등)이 지나가는 주소로 바뀐 채 저장본에서 빠져 다음에 열 때 사라지고,
+    //   경유 탭을 닫았을 때 돌아갈 자리도 없다.
+    const saved = boot && !routeSticky(boot) ? null : tabsApi.initial();
     const t = saved || tabsApi.add(boot || '#/', { activate: false });
     if (boot) t.route = boot;
     tabsApi.activate(t);
@@ -1593,17 +1596,33 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //  #/app-open/<앱>?v=<판>&next=<앱 안 경로>&state=<앞단 상태> — #4480 앱 주소에 **직접** 들어온 사람(링크 · 새 탭 · 홈 화면 바로가기)을
       //   앱 주소 앞단이 이리로 보낸다. 여기까지 왔다면 라이블리 로그인은 끝났다(아니면 게이트가 먼저 로그인시키고 같은 주소로 돌려보낸다).
       //   그 로그인으로 일회용 코드(top · 앞단 state 에 묶임)를 받아 앱 주소로 돌아간다 — 앞단이 그것을 앱 주소 쿠키로 바꾼다.
+      //  ★ 경유 주소는 한 번 쓰고 끝이다(2026-10-14 상민님 실측, 사파리 — 라이블리를 열었는데 앱 주소의 «로그인을 마치지 못했습니다» 로
+      //   넘어갔다. 되살린 탭이 이미 쓴 state 로 다시 열었다). 저장본에서는 빠지고(tabs.ts routeSticky), 방문 기록 · 자동 완성으로 다시 와도
+      //   앞단이 붙인 exp 로 거른다 — 없으면(옛 주소) 곧바로, 지났으면 서버가 410 app_open_expired 로 알려 준다(서버 시계로 본다).
+      //   그때는 앱으로 보내지 않고 이 탭을 닫아 되살린 화면에 선다 — 이 사람은 라이블리를 열려던 것이다.
       const appId = decodeURIComponent(segs[1]);
+      const exp = Number(params.get('exp') || NaN);
+      const leave = (): void => {
+        //  다음 틱에 — 활성화 도중(부팅 activate → renderRoute)에 그 탭을 닫지 않는다.
+        window.setTimeout(() => {
+          if (seq !== tab.seq || !tabsApi || !tabsApi.tabs.includes(tab)) return;
+          //  뒤로 가기로 경유 주소에 다시 오지 않게 주소에서 지운다(replaceState 는 hashchange 를 안 낸다).
+          if (tabsApi.current() === tab) history.replaceState(null, '', location.pathname + location.search + '#/');
+          tabsApi.close(tab);
+        }, 0);
+      };
+      if (!(exp > 0)) { leave(); return; }
       tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱을 여는 중이에요…' })));
       tab.aside.replaceChildren();
       try {
         const r = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/launch', { method: 'POST', body: JSON.stringify({
-          mode: 'top', variant: params.get('v') === 'draft' ? 'draft' : 'pub', next: params.get('next') || '/', state: params.get('state') || '' }) }) as { url?: string };
+          mode: 'top', variant: params.get('v') === 'draft' ? 'draft' : 'pub', next: params.get('next') || '/', state: params.get('state') || '', exp }) }) as { url?: string };
         if (seq !== tab.seq) return;
         if (!r || typeof r.url !== 'string' || !/^https:\/\//.test(r.url)) throw new Error('앱 주소를 받지 못했습니다');
         location.replace(r.url);
       } catch (e: any) {
         if (seq !== tab.seq) return;
+        if (e && e.body && e.body.code === 'app_open_expired') { leave(); return; }
         tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('b', { text: '앱을 열지 못했어요.' }),
           el('p', { class: 'pn-fine', text: String(e && e.message ? e.message : e) })));
       }

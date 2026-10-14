@@ -8,6 +8,8 @@
 //   (apps/app-front-routes.ts redeem). 초안 판(draft)은 «만든 사람만 연다» 가 맞는데, 서버가 기록한 «만든 사람» 이
 //   v2-15(#4667)에서 생긴다 — 그 전에는 409 draft_unavailable 로 닫아 둔다(매니페스트 studio.made_by 는 앱 코드라 위조 가능).
 //  꺼짐: 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 409 app_domain_off — 화면은 종전 srcdoc 으로 띄운다(무회귀).
+//  지난 경유 주소: top 의 exp(앞단이 #/app-open 주소에 붙인 만료 · 초)가 지났으면 410 app_open_expired — 화면은 앱으로 가지 않고
+//   첫 화면으로 간다(되살린 탭 · 방문 기록으로 같은 주소에 다시 들어온 사람 — 2026-10-14 사파리 실측). 서버 시계로 본다.
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
@@ -27,6 +29,7 @@ const launchInput = {
   variant: z.enum(["pub", "draft"]).optional(),
   next: z.string().optional(),
   state: z.string().optional(),
+  exp: z.number().optional(),
 };
 
 const deny = (status: number, code: string, msg: string): HttpError => new HttpError(status, msg, { body: { code } });
@@ -39,6 +42,7 @@ export interface LaunchDeps {
   getApp: (id: string) => Promise<store.OrgApp | null>;
   listUiAssets: (id: string) => Promise<Array<{ page_key: string }>>;
   mint: (i: MintLaunchInput) => Promise<{ code: string }>;
+  now: () => number;
 }
 const liveDeps: LaunchDeps = {
   env: process.env,
@@ -47,6 +51,7 @@ const liveDeps: LaunchDeps = {
   getApp: (id) => store.getApp(id),
   listUiAssets: (id) => store.listUiAssets(id),
   mint: (i) => mintAppLaunchCode(i),
+  now: () => Date.now(),
 };
 
 export async function launchAppFor(input: Record<string, unknown>, user: LivelyUser | undefined, d: LaunchDeps = liveDeps): Promise<Record<string, unknown>> {
@@ -72,6 +77,12 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   if (next === null) throw deny(400, "bad_next", "next 는 앱 주소 안의 상대 경로(/ 로 시작)여야 합니다");
   const state = typeof input.state === "string" ? input.state : "";
   if (mode === "top" && !isLaunchStateShape(state)) throw deny(400, "bad_state", "직접 접속에는 앞단이 준 state 가 필요합니다");
+  //  경유 주소는 한 번 쓰고 끝이다 — exp 는 앞단 상태 쿠키 수명과 같다(그 뒤엔 교환이 어차피 실패한다). 브라우저 시계가 아니라
+  //   서버 시계로 본다(시계가 틀린 기기에서도 직접 접속이 된다). 값을 바꿔도 얻는 것은 없다 — 코드는 여전히 state 에 묶인다.
+  if (mode === "top" && input.exp !== undefined && input.exp !== null) {
+    const exp = Number(input.exp);
+    if (!Number.isFinite(exp) || exp * 1000 <= d.now()) throw deny(410, "app_open_expired", "지난 앱 주소 경유 주소입니다 — 앱 주소로 다시 들어가 주세요");
+  }
 
   const appId = String(input.app_id ?? "").trim();
   if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
@@ -102,14 +113,14 @@ const appLaunch: Capability = {
   title: "앱 주소 열기",
   description: "앱을 자기 주소(<앱>-<워크스페이스>.<앱 도메인>)로 열 일회용 코드를 준다(60초 · 1회 · 그 주소 전용). "
     + "mode=embed 는 라이블리 안 iframe, top 은 직접 접속(앞단 state 필수). 사람 구성원 본인만(앱 토큰 · 정적 토큰 거부). "
-    + "앱 주소가 꺼진 배포면 409 app_domain_off. REST 전용.",
+    + "앱 주소가 꺼진 배포면 409 app_domain_off. top 의 exp(앞단 만료 · 초)가 지났으면 410 app_open_expired. REST 전용.",
   scope: null,
   input: launchInput,
   expose: {
     mcp: false,
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/launch"], parse: (req) => {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      return { app_id: (req.params as Record<string, string>)?.id, mode: b.mode, variant: b.variant, next: b.next, state: b.state };
+      return { app_id: (req.params as Record<string, string>)?.id, mode: b.mode, variant: b.variant, next: b.next, state: b.state, exp: b.exp };
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) => launchAppFor(input, user),
