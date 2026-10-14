@@ -19,17 +19,21 @@ const roots: string[] = [];
 const mk = (): string => { const r = mkdtempSync(path.join(tmpdir(), "lease-tag-")); roots.push(r); return r; };
 const past = (f: string, ms: number): void => { const t = new Date(Date.now() - ms); utimesSync(f, t, t); };
 
-// 하네스가 받은 env 값을 out 파일로 남기고(set 일 때만), 지정 시간 머문다. 머무는 동안 상대 시작 표지를 본다.
-function fakeBin(root: string, id: string, stayMs: number): { bin: string; out: string; peer: string } {
+// 하네스가 받은 env 값을 out 파일로 남기고(set 일 때만), 상대 판의 시작 표지가 보일 때까지 최대 waitPeerMs 기다린다(0 = 안 기다림).
+//  고정 시간만 머물면 부하로 두 판의 시작이 그보다 벌어질 때 겹침을 못 보고 공허 판정으로 깨진다(8개 동시 실행에서 24번 중 1번 실측).
+//  상대를 본 뒤에야 끝나므로 «내가 살아 있는 동안 상대가 떴다» 가 곧 겹침이다 — 상대가 끝내 안 뜨면 표지가 안 남아 공허 판정이 그대로 잡힌다.
+function fakeBin(root: string, id: string, waitPeerMs: number): { bin: string; out: string; peer: string } {
   const bin = path.join(root, `harness-${id}`);
   const out = path.join(root, `env-${id}.txt`);
   const started = path.join(root, `started-${id}`);
   const peer = path.join(root, `overlap-${id}.txt`);
   const other = path.join(root, `started-${id === "a" ? "b" : "a"}`);
-  const sleep = stayMs > 0 ? `sleep ${stayMs / 1000}\n` : "";
+  const wait = waitPeerMs > 0
+    ? `i=0; while [ ! -e "${other}" ] && [ "$i" -lt ${Math.ceil(waitPeerMs / 50)} ]; do sleep 0.05; i=$((i+1)); done\n`
+    : "";
   writeFileSync(bin, `#!/bin/sh\ncat > /dev/null\n: > "${started}"\n`
     + `if [ -n "\${${NAME}+x}" ]; then printf '%s' "$${NAME}" > "${out}"; fi\n`
-    + sleep
+    + wait
     + `if [ -e "${other}" ]; then echo yes > "${peer}"; fi\nexit 0\n`);
   chmodSync(bin, 0o755);
   return { bin, out, peer };
@@ -83,7 +87,7 @@ const readOut = (f: string): string | null => (existsSync(f) ? readFileSync(f, "
 {
   const root = mk(); const { dir, ws } = taskDirOf(root);
   const tagA = "aaaaaaaaaaaaaaaa", tagB = "bbbbbbbbbbbbbbbb";
-  const ha = fakeBin(root, "a", 300), hb = fakeBin(root, "b", 300);
+  const ha = fakeBin(root, "a", 5000), hb = fakeBin(root, "b", 5000);
   const fa = taskLeaseFile(dir, NAME, tagA), fb = taskLeaseFile(dir, NAME, tagB);
   writeFileSync(fa, "값-A", { mode: 0o600 });
   writeFileSync(fb, "값-B", { mode: 0o600 });
