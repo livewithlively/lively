@@ -10,10 +10,15 @@
 export const PUSH_CHILD_TIMEOUT_MS = 300_000;
 
 // 외부 API 요청 하나의 하드 상한(clickup/api.ts 의 fetch signal 이 이 값을 쓴다).
-//  예산의 여유분을 이 값에서 도출하는 것이 핵심이다 — 예산 검사는 **행 사이**에서만 일어나므로,
-//  검사를 통과한 마지막 한 행이 끝날 때까지 kill 이 오면 안 된다. 한 행은 상태셋 GET + 갱신 PUT
-//  (+status 뺀 재시도 PUT) + 닫힘 코멘트 POST 로 요청 여러 번이라, 그중 둘이 상한까지 hang 해도
-//  버티도록 요청 2회분을 남긴다. 여유를 손으로 적으면 이 값이 바뀔 때 조용히 부족해진다.
+//  예산의 여유분을 이 값에서 도출한다 — 예산 검사는 **행 사이**에서만 일어나므로, 검사를 통과한 마지막 한 행이
+//  끝날 때까지 kill 이 오면 안 된다. 한 행은 상태셋 GET + 갱신 PUT(+status 뺀 재시도 PUT) + 닫힘 코멘트 POST 로
+//  요청 여러 번이라, 그중 둘이 상한까지 hang 해도 버티도록 요청 2회분을 남긴다. 여유를 손으로 적으면 이 값이
+//  바뀔 때 조용히 부족해진다.
+//  ⚠ 이 여유는 **통상 소요 기준**이지 최악의 보장이 아니다. clickupFetch 는 GET 타임아웃을 5회까지 재시도하고
+//   (GET 하나가 최악 6×상한+대기 ≈ 380초 — 그 자체로 PUSH_CHILD_TIMEOUT_MS 를 넘는다), 429 는 retry-after 만큼
+//   최대 5회, 성공 응답 뒤 레이트리밋 선제 대기는 최대 65초를 기다린다. 그런 장애에서는 kill 이 여전히 나고,
+//   그때 exit!=0 → 연속실패 브레이커가 사람을 부르는 것이 맞다(장애는 실패다). 이 예산이 없애는 것은
+//   «큐가 크다» 는 이유만으로 정상 실행이 kill 되는 경우뿐이다.
 export const CLICKUP_REQUEST_TIMEOUT_MS = 60_000;
 export const PUSH_DRAIN_BUDGET_MS = PUSH_CHILD_TIMEOUT_MS - 2 * CLICKUP_REQUEST_TIMEOUT_MS;
 
