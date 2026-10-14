@@ -205,6 +205,16 @@ export function laneNoun(table: LaneTable | null): string {
     : "레인";
 }
 
+/**
+ * 받침에 맞는 조사(은/는 · 을/를) — 레인 이름이 종류마다 달라 조사를 고정하면 «관리기을» · «관리기은» 이 나간다.
+ *  끝 글자가 한글이 아니면 받침 없는 쪽을 쓴다(레인 이름은 전부 한글이라 실제로는 안 탄다). 판정 규칙은
+ *  v6/notify-store.withSubjectParticle(이/가)과 같다 — 그 모듈은 무거워 이 대응 경로로 끌어오지 않는다.
+ */
+export function particle(word: string, withFinal: string, withoutFinal: string): string {
+  const c = word.charCodeAt(word.length - 1);
+  return c >= 0xac00 && c <= 0xd7a3 && (c - 0xac00) % 28 !== 0 ? withFinal : withoutFinal;
+}
+
 export interface JobRunnerInfo { table: LaneTable | null; runner: string | null }
 
 /** 워크스페이스 실행 멤버(context_job_policy.runner_member) — 못 읽으면 **던진다**(jobRunnerOf 머리주석). */
@@ -342,10 +352,11 @@ export async function handleAuthFailure(
   const freshLanes = out.lanesStopped.length > 0;
   if (freshLanes || shouldAlertNow(lastAlertAt.get(ctx.requester), now)) {
     const noun = laneNoun(table);
+    const reenable = scope === "lanes" ? `꺼진 ${noun}` : "그 크론";
     const what = scope === "lanes"
       ? (out.lanesStopped.length
         ? `크론 '${ctx.cronJobId}' 는 계속 돌고, 이 계정이 실행하는 ${noun} ${out.lanesStopped.map((k) => `'${k}'`).join(", ")} 만 껐습니다(대기 중이던 이 계정의 위탁 ${out.queuedCanceled}건도 취소).`
-        : `이 계정이 실행하는 ${noun} '${table && lane ? laneKeyFor(table, lane) : lane}' 는 이미 꺼져 있습니다 — 크론 '${ctx.cronJobId}' 의 다른 ${noun}은 계속 돕니다.`)
+        : `이 계정이 실행하는 ${noun} '${table && lane ? laneKeyFor(table, lane) : lane}' 는 이미 꺼져 있습니다 — 크론 '${ctx.cronJobId}' 의 다른 ${noun}${particle(noun, "은", "는")} 계속 돕니다.`)
       : ctx.cronJobId
       ? (out.cronStopped
         ? `크론 '${ctx.cronJobId}' 를 자동으로 정지했습니다(대기 중이던 위탁 ${out.queuedCanceled}건도 취소).`
@@ -358,7 +369,7 @@ export async function handleAuthFailure(
         text:
           `위탁 #${ctx.taskId} 이(가) **${ctx.auth.label}** 로 실패했습니다. ${what}\n`
           + `조치: ${ctx.requester} 님이 내 프로필 ▸ AI 계정 연결 ▸ «사람 없이 도는 작업» 에서 [다시 연결]을 누르게 한 뒤`
-          + `(화면에서 setup-token 을 새로 발급해 저장한다 — #4051), 관리탭에서 ${scope === "lanes" ? `꺼진 ${noun}` : "그 크론"}을 다시 켜세요.`
+          + `(화면에서 setup-token 을 새로 발급해 저장한다 — #4051), 관리탭에서 ${reenable}${particle(reenable, "을", "를")} 다시 켜세요.`
           + ` 다시 연결하기 전까지는 재시도해도 같은 결과입니다.\n`
           + `판정 근거: ${ctx.auth.evidence}`,
         detail: {

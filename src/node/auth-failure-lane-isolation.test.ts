@@ -345,4 +345,33 @@ import { jobRunnerOf } from "./auth-failure-response.js";
   assert.ok(sent[1]?.includes("'c1'") && sent[2]?.includes("'m1'"), "새로 끈 레인 이름이 알림에 없다 — 무엇을 다시 켤지 모른다");
 }
 
+// ════════ G. 알림 조사 — 레인 이름의 받침에 맞춘다(«관리기를» · «관리기는») ════════
+import { particle } from "./auth-failure-response.js";
+assert.equal(particle("관리기", "을", "를"), "를", "받침 없는 이름에 «을» 을 골랐다");
+assert.equal(particle("자료 증류 레인", "을", "를"), "을", "받침 있는 이름에 «를» 을 골랐다");
+assert.equal(particle("관리기", "은", "는"), "는");
+assert.equal(particle("크론", "은", "는"), "은");
+{
+  const cases: Array<[string, string[], string[]]> = [
+    ["org_manager", ["m1"], ["꺼진 관리기를 다시 켜세요"]],
+    ["org_manager", [], ["다른 관리기는 계속 돕니다", "꺼진 관리기를 다시 켜세요"]],
+    ["org_distiller", [], ["다른 자료 증류 레인은 계속 돕니다", "꺼진 자료 증류 레인을 다시 켜세요"]],
+    ["org_classifier", ["c1"], ["꺼진 카테고리 붙이기 레인을 다시 켜세요"]],
+  ];
+  for (const [table, stopped, want] of cases) {
+    resetAuthAlertCooldown();
+    let text = "";
+    await handleAuthFailure({ taskId: 801, requester: "lively1", cronJobId: "j", lane: "k", auth: AUTH }, { stopCron: true },
+      { jobRunner: async () => ({ table, runner: "owner" }), stopLanes: async () => stopped, cancelQueuedFor: async () => 0,
+        alert: async (a: Alert) => { text = a.text; return { sent: true }; }, now: () => T0 } as never);
+    for (const w of want) assert.ok(text.includes(w), `${table}: 알림에 «${w}» 가 없다 — ${text}`);
+    assert.ok(!/관리기[을은]/.test(text), `${table}: 받침 없는 «관리기» 에 을·은 을 붙였다 — ${text}`);
+  }
+  //  크론 정지 쪽 조치 문구도 같은 판정을 지난다.
+  resetAuthAlertCooldown();
+  const s = spies({ runner: { table: null, runner: "owner" } });
+  await handleAuthFailure(LANE_CTX, { stopCron: true }, s.deps);
+  assert.ok(s.alerts[0].text.includes("관리탭에서 그 크론을 다시 켜세요"), "크론 정지 조치 문구가 깨졌다");
+}
+
 console.log("auth-failure-lane-isolation: ok");
