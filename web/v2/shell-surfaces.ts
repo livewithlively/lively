@@ -36,6 +36,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   welcome: { kind: "os", why: "처음 설정(#1813) — 앱을 열 자격 자체를 만드는 화면이라 앱보다 앞선다. 인증·온보딩은 OS 몫." },
   i: { kind: "os", why: "AppInstance 를 싣는 OS 라우트다. 이 라우트가 앱을 열지, 이것이 앱인 것은 아니다." },
   p: { kind: "os", why: "프로젝트 주소는 그 방의 맨 위 세션으로 보내는 문일 뿐 자체 화면이 없다(원준 2026-08-20 — '주소는 늘 세션')." },
+  full: { kind: "os", why: "「크게 보기」 가 새 탭에 띄우는 그 앱의 화면 가득 액자(#/full/<앱>?s=<세션>) — i 와 같이 앱을 싣는 OS 라우트일 뿐 자체 화면이 없다(원준 2026-10-12 «크게보기를 누르면 바로 거기로 · 모달 띄우지 말고»)." },
 
   // ── 이미 앱인 것 ──
   s: { kind: "app", appId: "ai-session", note: "세션 딥링크. v2.2 §7 대로 #/s/<id> 를 정본으로 유지하고, AppInstance 는 subject 로 멱등 확보한다." },
@@ -45,6 +46,7 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   taxonomy: { kind: "app", appId: "taxonomy", note: "분류체계(#4233). 옛 카테고리 탭을 앱으로 뺐다. 전체 지도(묶음 칸 · 분류마다 지식 수와 프로젝트 수) · 손볼 것 · 분류 상세(연결 그림 + 지식 · 프로젝트 목록). project=global·single 빌트인. 딥링크 #/taxonomy 와 분류 하나 #/taxonomy/<id> 가 정본이다." },
   sources: { kind: "app", appId: "sources", note: "자료(#2423) — 라이블리가 가진 원본을 출처별로 훑고 하나를 열어 원문을 본다. project=global·single 빌트인. 딥링크 #/sources 와 자료 하나 #/sources/<id> 가 정본이다." },
   learn: { kind: "app", appId: "learn", note: "사용 가이드(#4179). 클래식 액자에서 셸이 직접 그리는 화면으로 옮겼다. 첫 화면 #/learn · 문서 #/learn/docs/<문서> · 절 ?h=<절>. project=global·single 빌트인. 원고는 web/docs-content.ts, 화면은 web/guide/." },
+  builder: { kind: "app", appId: "builder", note: "앱빌더(#4632). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계(app-studio)가 이 안에 선다. project=global·single 빌트인. 딥링크 #/builder · #/builder/new · #/builder/s/<세션> · #/builder/app/<앱> 이 정본. 앱빌더 프로젝트(#/p/<id>)로 가는 길도 여기로 온다." },
   inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력(#1891 → #4180: 세션 대기·완료는 빠지고 댓글·언급·리브의 답·앱 알림만). 입구는 홈 머리줄의 종(notify-bell.ts). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
   archive: { kind: "todo", plan: "아카이브 — 콘텐츠 목록. trash 와 한 앱(보관함)으로 묶을지 둘로 둘지 이식 때 정한다." },
@@ -70,5 +72,5 @@ export function activeNavKey(page: string, id?: string): string {
   const s = SHELL_SURFACES[page];
   if (!s) return "";
   // OS 표면·앱화 대상 중 사이드바 도크에 자리가 있는 것만 활성 표시를 갖는다.
-  return ["inbox", "sources", "taxonomy", "learn", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
+  return ["inbox", "sources", "taxonomy", "learn", "builder", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
 }

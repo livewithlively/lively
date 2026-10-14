@@ -75,10 +75,11 @@ if (typeof defaultAnchor === "function") {
 
   // ── 처음 크기 ──
   const s1 = defaultCardSize(900);
-  ok(s1.w === SESS_MIN && s1.w === 360 && s1.h === 306, "S1 창 높이 900 → 360 × 306 (폭 = 세션 열의 마지막 폭)", JSON.stringify(s1));
-  ok(defaultCardSize(600).h === 260 && defaultCardSize(764).h === 260 && defaultCardSize(766).h === 260 && defaultCardSize(1400).h === 400 && defaultCardSize(1176).h === 400,
-    "S2·S3 경계: 하한 260 · 상한 400", JSON.stringify([600, 764, 766, 1176, 1400].map((v) => defaultCardSize(v).h)));
-  ok(defaultCardSize(NaN).h === 306, "S2b 창 높이를 못 재면 900 으로 센다");
+  //  2026-10-11 줄였다(원준 «팝업으로 뜰 때 사이즈가 너무 크게») — 폭 320 × 창 높이 0.27(220~300). 사양은 side-card-pill2.test.mjs N1.
+  ok(s1.w === 320 && s1.h === 243, "S1 창 높이 900 → 320 × 243", JSON.stringify(s1));
+  ok(defaultCardSize(600).h === 220 && defaultCardSize(815).h === 220 && defaultCardSize(1111).h === 300 && defaultCardSize(1400).h === 300,
+    "S2·S3 경계: 하한 220 · 상한 300", JSON.stringify([600, 815, 1111, 1400].map((v) => defaultCardSize(v).h)));
+  ok(defaultCardSize(NaN).h === 243, "S2b 창 높이를 못 재면 900 으로 센다");
 
   // ── 접힘 · 모서리 ──
   const tl = { corner: "tl", dx: 500, dy: 100 };
@@ -146,7 +147,7 @@ ok(/fold = false;/.test(enter), "F1a 카드가 되면 언제나 펼친 카드");
 ok(/fold = false;/.test(leave), "F1b 크게 보면(제자리로) 접힘을 지운다 — 다음 카드는 펼친 카드");
 const cur = card.slice(card.indexOf("function currentRect("), card.indexOf("function paintRect("));
 const dp = card.slice(card.indexOf("function defaultPlace("), card.indexOf("function currentRect("));
-ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /const a = anchor \?\? defaultPlace\(s\.w, fh \?\? s\.h\);/.test(cur)
+ok(/const s = size \?\? defaultCardSize\(vh\(\)\);/.test(cur) && /const w = fold \? pillW : s\.w;/.test(cur) && /const a = anchor \?\? defaultPlace\(w, fh \?\? s\.h\);/.test(cur)
   && /const g = body\.getBoundingClientRect\(\);/.test(dp) && /defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\)/.test(dp),
   "P1c · S1b 정한 적이 없으면 그릴 때마다 창 · 격자로 기본값을 센다", cur.slice(0, 240));
 ok(/return liftAbove\(defaultAnchor\(sessLeft, g\.left, g\.right, vw\(\)\), w, seenH, obstacles\(\), vw\(\), vh\(\)\);/.test(dp),
@@ -168,7 +169,7 @@ const dbl = card.slice(card.indexOf("const onHeadDbl"), card.indexOf("colMain.ad
 ok(/window\.clearTimeout\(pillTimer\);/.test(dbl) && dbl.indexOf("clearTimeout(pillTimer)") < dbl.indexOf("leave()"), "F6 두 번 누름 → 펴기를 취소하고 곧장 크게");
 const ds = card.slice(card.indexOf("function dragStart("), card.indexOf("const headOf ="));
 ok(/if \(Math\.hypot\(dx, dy\) > 3\) dragged = true;/.test(ds) && /if \(!dragged\) return;/.test(ds) && /if \(persist && dragged && !dead && bw\(\) > 0\) save\(\);/.test(ds), "F7b 손이 떨린 만큼(3px 이하)은 옮김으로 적지 않는다");
-ok(/else anchor = anchorFromRect\(c, vw\(\), vh\(\), fh\);/.test(ds) && /if \(kind !== 'move'\) \{ size = \{ w: c\.w, h: c\.h \}; anchor = placeAfterResize\(c, fh, wasPlaced\); \}/.test(ds)
+ok(/else anchor = anchorFromRect\(c, vw\(\), vh\(\), fh\);/.test(ds) && /if \(kind !== 'move'\) \{ if \(fold\) pillW = c\.w; else size = \{ w: c\.w, h: c\.h \}; anchor = placeAfterResize\(c, fh, wasPlaced\); \}/.test(ds)
   && /resizeCard\(base, kind, dx, dy, vw\(\), vh\(\), fh\)/.test(ds), "P6d 끌면 가까운 모서리로 다시 적는다 · 크기를 바꾸면 크기도(알약은 보이는 높이로)");
 ok(/window\.clearTimeout\(pillTimer\);/.test(ds), "F7c 알약을 누르고 곧장 끌면 펴기 예약을 지운다");
 const par = card.slice(card.indexOf("function placeAfterResize("), card.indexOf("function paintRect("));
@@ -181,7 +182,7 @@ const pa = card.slice(card.indexOf("function paint():"), card.indexOf("// ──
 ok(/g\.hidden = !s \|\| \(fold && g\.dataset\.edge !== 'e' && g\.dataset\.edge !== 'w'\)/.test(pa), "F8 알약은 좌우 가장자리 손잡이만 있다(폭 조절 — 버그 수정)", pa.slice(0, 400));
 const kd = card.slice(card.indexOf("keyGrip.addEventListener('keydown'"), card.indexOf("const onHeadDbl"));
 ok(/if \(e\.key === 'Home'\) \{[\s\S]*?size = null; anchor = null;/.test(kd), "D2 Home → 기억을 지우고 기본값");
-ok(/const KEY_CARD = 'lively_v2_side_card3';/.test(card), "D1c 옛 키(r · b · 접힘 덩이)를 읽지 않는다");
+ok(/const KEY_CARD = 'lively_v2_side_card4';/.test(card) && !/'lively_v2_side_card2?'/.test(card), "D1c 옛 키(r · b · 접힘 덩이 · card2)를 읽지 않는다");
 const panes = code(read("web/v2/panes.ts"));
 ok(/sessionLeft: \(\) => !swap\?\.swapped\(\)/.test(panes), "W1b 셸은 «세션이 왼쪽인가» 를 자리바꿈 상태로 알려 준다");
 const css = read("public/styles/45-v2-side-swap.css");

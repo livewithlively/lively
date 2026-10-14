@@ -42,7 +42,7 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
     { label: '판 이력…', icon: 'clock', hint: app.versionNo ? `${app.versionNo}판` : undefined, run: h.versions },
     { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 판으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
-    { label: '크게 보기', icon: 'expand', run: h.big },
+    { label: '크게 보기', icon: 'expand', hint: '새 탭 · 화면 가득', run: h.big },
     { label: '이 세션에서 떼기', icon: 'x', danger: true, hint: '데이터는 남음', run: h.detach },
   ];
 }

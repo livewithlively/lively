@@ -5,6 +5,7 @@
 //   저널이 원자성을 대체한다(component 선기록 → 전개 → 실패 시 보상). mintToken 과 같은 client-옵션 패턴.
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
+import { currentTenant } from "../tenant-context.js";
 import { audit, type WriteCtx } from "./audit.js";
 
 type Q = pg.Pool | pg.PoolClient;
@@ -59,15 +60,44 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
 // ── 설치 직렬화(advisory lock, design R2-5) ────────────────────────────────────
 //  같은 앱의 동시 설치/제거를 직렬화한다(반쯤 전개된 조인을 다른 설치가 덮어쓰지 않게). DB-전역 advisory lock 이라
 //  blue/green 다중 프로세스 사이도 막는다. 락은 **연결 단위**라 전용 client 를 잡아 그 위에서만 lock/unlock 하고,
-//  본 작업(fn)은 풀의 다른 커넥션을 자유로이 쓴다. tenant 는 키에 넣지 않는다(앱 id 만으로 상위집합 직렬화 — 안전).
-export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>): Promise<T> {
-  const client = await itemsPool.connect();
+//  본 작업(fn)은 풀의 다른 커넥션을 자유로이 쓴다.
+//  ★ #4638(2026-10-11 매니지드 전면 정지) — 종전 키는 앱 id 뿐이었고 `pg_advisory_lock` 은 무기한 기다렸다. 공용 DB 에선
+//   모든 테넌트(+롤 마이그레이터)가 같은 키를 다퉈, 유령 세션 하나가 락을 쥔 6분 동안 테넌트별 시딩이 **풀 클라이언트를
+//   쥔 채** 줄을 서 풀 20개를 다 잡았고, 락을 얻은 쪽은 fn 안에서 두 번째 클라이언트를 못 얻어 영구 교착이 됐다.
+//   그래서 ① 키에 테넌트를 넣고(남의 워크스페이스 설치를 기다릴 이유가 없다) ② 기다리는 동안엔 클라이언트를 반납하며
+//   (try-lock 재시도) ③ 상한을 넘기면 던진다(호출부는 이미 비치명 — 다음 시딩·사람의 재시도가 받는다).
+export const APP_INSTALL_LOCK_WAIT_MS = 60_000;
+const APP_INSTALL_LOCK_POLL_MS = 250;
+
+/** 락 키 — 테넌트 컨텍스트가 있으면 그 테넌트로 좁힌다. 컨텍스트 밖(단일 테넌트·부팅)은 종전처럼 앱 id 만. */
+export function appInstallLockKey(appId: string, tenantId: string | null | undefined = currentTenant()?.id): string {
+  return tenantId ? `app-install:${tenantId}:${appId}` : `app-install:${appId}`;
+}
+
+export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>,
+  opts: { waitMs?: number; pollMs?: number } = {}): Promise<T> {
+  const key = appInstallLockKey(appId);
+  const deadline = Date.now() + (opts.waitMs ?? APP_INSTALL_LOCK_WAIT_MS);
+  let client: pg.PoolClient;
+  for (;;) {
+    const c = await itemsPool.connect();
+    let got = false;
+    try {
+      const r = await c.query("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [key]);
+      got = r.rows[0]?.ok === true;
+    } catch (err) { c.release(); throw err; }
+    if (got) { client = c; break; }
+    c.release();   // 기다리는 동안 풀 슬롯을 쥐지 않는다 — 락 보유자가 fn 안에서 쓸 자리를 남긴다
+    if (Date.now() >= deadline) throw new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`);
+    await new Promise((res) => setTimeout(res, opts.pollMs ?? APP_INSTALL_LOCK_POLL_MS));
+  }
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", ["app-install:" + appId]);
     return await fn();
   } finally {
-    try { await client.query("SELECT pg_advisory_unlock(hashtext($1))", ["app-install:" + appId]); } catch { /* 세션 종료 시 자동 해제 */ }
-    client.release();
+    //  풀기에 실패한 연결은 풀에 돌려주지 않고 버린다 — 락을 쥔 채 풀에 남으면 그 세션이 살아 있는 한 락이 안 풀린다.
+    let unlocked = false;
+    try { await client.query("SELECT pg_advisory_unlock(hashtext($1))", [key]); unlocked = true; } catch { /* 아래에서 연결째 버린다 */ }
+    client.release(!unlocked);
   }
 }
 

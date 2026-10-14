@@ -12,6 +12,7 @@ import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
+import { delegateRunNext } from "../node/assign-outcome.js";
 import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
 import { originSessionOf } from "../node/task-origin.js";   // #4551 — 시킨 세션을 적어 둔다(목록이 그 세션의 프로젝트 아래에 워커를 세운다)
 
@@ -94,8 +95,9 @@ const run: Capability = {
     });
     // 요청→즉답 계약: 지금 배치 가능한지 그 자리에서 판정한다(스케줄러 tick 안 기다림).
     const r = await tryAssignNow(task);
-    if (!r.assigned) {
-      if (!input.queue) {
+    const next = delegateRunNext(r, !!input.queue);
+    if (next !== "proceed") {
+      if (next === "cancel") {
         // 큐잉 안 함(기본) — 가용 노드 없음을 즉시 알린다. 하네스는 로컬에서 직접 실행하면 된다.
         await markCanceled(task.id);
         return { no_capacity: true, reason: r.reason, hint: "지금 위탁 가능한 노드가 없습니다 — 로컬에서 직접 실행하거나, queue:true 로 대기 등록하세요." };
@@ -103,14 +105,18 @@ const run: Capability = {
       return { task: await getTask(task.id), queued: true, reason: r.reason, hint: `대기 등록됨 — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
     }
     // 배치됨. wait=false 면 즉시 반환, 기본은 완료까지 대기(상한 내).
-    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId}). 진행: delegate_status ${task.id}` };
+    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId ?? "배정 중"}). 진행: delegate_status ${task.id}` };
     const deadline = Date.now() + (input.wait_sec ?? DEFAULT_WAIT_SEC) * 1000;
     while (Date.now() < deadline) {
       await sleep(2000);
       const cur = await getTask(task.id);
       if (cur && ["done", "failed", "canceled"].includes(cur.status)) return { task: cur, done: true };
     }
-    return { task: await getTask(task.id), still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
+    const last = await getTask(task.id);
+    //  in_flight 로 들어왔는데 선점한 쪽(tick)이 못 띄웠으면 행은 아직 queued 다 — «실행 중» 이라 하면 거짓이다.
+    //   대기 상한까지 tick 이 다시 시도하므로 위의 대기 등록 응답과 같은 결로 답한다(queue:false 계약 자체는 여기서 바꾸지 않는다).
+    if (last?.status === "queued") return { task: last, queued: true, hint: `아직 배정 전(대기 중) — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
+    return { task: last, still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
   },
 };
 

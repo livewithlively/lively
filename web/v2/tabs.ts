@@ -90,6 +90,8 @@ export function routeKey(route: string): string {
   if (p === 'taxonomy') return 'taxonomy';
   //  사용 가이드(#4179)도 한 창 안에서 문서를 오가는 앱이다. 문서마다 창이 새로 서지 않게 접는다.
   if (p === 'learn') return 'learn';
+  //  앱빌더(#4632)도 한 창 안에서 목록 · 새 앱 · 이어서 · 고치기를 오간다 — 만들 때마다 창이 새로 서지 않게 접는다.
+  if (p === 'builder') return 'builder';
   return 'raw:' + h;
 }
 

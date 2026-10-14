@@ -204,6 +204,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-face { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
   font-size: 11.5px; font-weight: 700; line-height: 1; letter-spacing: -0.06em; color: var(--on-fill); border: 1.5px solid var(--bg); margin-left: -2px; flex: none; }
 .sc-face:first-child { margin-left: 0; }
+.sc-face-off { opacity: .4; } /* 초대는 했지만 지금 안 보는 사람(#3870) */
 .sc-face-more { background: var(--gray-bg); color: var(--ink-sub); font-size: 10.5px; }
 /* [＋] — «부를 수 있다»를 말하는 칩. 점선이라 사람 얼굴과 섞이지 않는다. */
 .sc-face-add { background: var(--bg-tint-2); color: var(--muted-head); border: 1px dashed var(--line-net);

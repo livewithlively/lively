@@ -66,7 +66,7 @@ if (lib) {
 
 // ── 화면(side-card.ts) ──
 const card = code(read("web/v2/side-card.ts"));
-ok(/const KEY_CARD = 'lively_v2_side_card3';/.test(card) && !/'lively_v2_side_card2?'/.test(card), "D3 저장 키가 새 이름이다(옛 r · b · 접힘 덩이를 물려받지 않는다)");
+ok(/const KEY_CARD = 'lively_v2_side_card4';/.test(card) && !/'lively_v2_side_card2?'/.test(card), "D3 저장 키가 새 이름이다(옛 r · b · 접힘 덩이를 물려받지 않는다)");
 const leave = card.slice(card.indexOf("async function leave("), card.indexOf("function halt("));
 ok(leave.length > 0 && /Math\.min\(SIDE_DEF, cap\)/.test(leave) && !/h\.setSideW\(cap, true\)/.test(leave), "R1d 제자리로: 상한이 아니라 기본 폭으로 물러난다", leave.slice(0, 160));
 ok(/const from = back \? Math\.max\(0, Math\.round\(bw\(\)\) - \(to as number\)\) : 0;/.test(leave) && /paintOver\(from\)/.test(leave) && /paintOver\(from \* \(1 - t\)\)/.test(leave), "R3 물러나는 움직임: 격자 왼쪽 끝(0)까지 덮은 거리에서 0 으로(카드 상태와 딱 붙는다)");

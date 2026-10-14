@@ -75,6 +75,8 @@
 
 세션에 붙어 열린 화면이 아니면(붙은 세션이 없다) 보내기는 「복사」가 된다.
 
+머리줄의 「내 의견 복사」(복사 아이콘 · 좁은 폭은 ⋯ 메뉴)는 보내기와 별개다 — 이 판에 내가 고친 글과 단 의견을(보낸 것 · 아직 안 보낸 것 · 아직 저장 전인 것까지) 사람이 읽을 글로 복사한다. 아무것도 바꾸지 않는다(묶음을 잠그지 않는다). 동료에게 붙여 주거나 다른 세션에 넣을 때.
+
 ## 표
 
 | 표 | 뜻 |
@@ -83,7 +85,7 @@
 | `sources` | 어느 파일이 어느 판인가(doc · ver · fp · path · bytes · mtime · session). fp = 판의 지문(안이 아닌 행의 글을 이어 센 SHA-256 · `deck-push` 의 `fpOf`). 앱은 자료의 파일을 읽어 이 값과 견줘 「앱에 있음 · 판 N」 「판 N+1 로 올리기」 를 가린다(경로 · 파일 시각으로 가리지 않는다 — 다시 조립하면 시각만 바뀌고, 사본은 경로가 다르다). path 가 빈 행은 판의 지문만, path 가 있는 행은 «그 파일(크기 · 시각)이 그 판과 같았다» 는 기록이다 |
 | `versions` | 판 = 머리 1행(kind head · seq 0) + 장 N행(kind slide · seq 1… · slide_id · variant) + 꼬리 1행(kind tail). 머리의 큰 data: 자원은 `__ASSET:<sha256>__` 자리표 |
 | `assets` | 글꼴 · 그림. sha256 키, 990,000자 이하 조각(seq) |
-| `comments` | 고친 글(edited)과 의견(note)을 한 행에. scope = unit(글 줄) · slide(장 전체) · doc(문서 전체) · spot(자리 — unit_key 가 `obj:x,y,w,h`(고른 개체) · `pin:x,y` · `box:x,y,w,h`, orig 가 그 자리의 설명) · order(장 순서 — unit_key 가 `order:` + 장 id 의 새 순서). unit 의 orig 는 그 고침의 **바탕 글**(앞서 보낸 고친 글 위에 덧고쳤으면 그 글). orig · edited 안의 `==말==` 은 색 강조, `**말**` 은 굵게. bundle = 보낸 묶음 번호. status = draft · sent · applied · declined · options. reply = AI 의 답 |
+| `comments` | 고친 글(edited)과 의견(note)을 한 행에. scope = unit(글 줄) · slide(장 전체) · doc(문서 전체) · spot(자리 — unit_key 가 `obj:x,y,w,h`(고른 개체) · `pin:x,y` · `box:x,y,w,h`, orig 가 그 자리의 설명) · order(장 순서 — unit_key 가 `order:` + 장 id 의 새 순서) · del(장 지우기 — slide_id 의 장을 통째로) · pick(앞 판의 안 고르기 — unit_key 가 `pick:<판>:<안 이름>`). unit 의 orig 는 그 고침의 **바탕 글**(앞서 보낸 고친 글 위에 덧고쳤으면 그 글). orig · edited 안의 `==말==` 은 색 강조, `**말**` 은 굵게. bundle = 보낸 묶음 번호. status = draft · sent · applied · declined · options. reply = AI 의 답 |
 | `picks` | 장마다 고른 안(variant) |
 | `pins` | AI 가 특정 글(match 가 든 글)에 붙인 메모 |
 

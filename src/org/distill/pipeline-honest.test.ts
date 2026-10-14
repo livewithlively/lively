@@ -8,7 +8,7 @@
 //   그리고 폴백(전역 인박스)은 **켜진 증류기가 하나도 없을 때만** 돌아서, 반만 켠 상태가 아예 안 켠 상태보다 나빴다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const ACTION = r("../../scheduler/actions/distill.ts");
@@ -35,7 +35,11 @@ test("① «미증류 자료 없음» 을 세지 않고 말하지 않는다", ()
 test("② 아무 켜진 레인도 안 집는 자료를 폴백이 받는다 — 반만 켠 상태가 최악이면 안 된다", () => {
   assert.match(DISTILLER, /export function buildStrandedQuery\(/, "방치 자료를 재는 질의가 없다");
   assert.match(DISTILLER, /export async function listStrandedSources\(/, "방치 자료를 가져오는 자리가 없다");
-  assert.match(ACTION, /const stranded = await listStrandedSources\(enabled/, "폴백이 방치 자료를 안 받는다");
+  assert.match(ACTION, /const stranded = await listStrandedSources\(claiming/, "폴백이 방치 자료를 안 받는다");
+  //  자격 실패로 자동 정지된 레인은 «맡은» 레인으로 남는다 — 빠지면 그 몫이 방치로 세어져 잡 계정·기본 기준으로 증류된다.
+  assert.match(ACTION, /const claiming = all\.filter\(\(d\) => d\.enabled \|\| isAutoDisabledLane\(d\)\)/,
+    "자동 정지 레인이 방치 판정에서 빠진다");
+  assert.match(ACTION, /if \(!claiming\.length\) \{/, "레인이 전부 자동 정지되면 전역 폴백이 조직 전체를 증류한다");
   //  ⚠ «인박스가 비었다» 가 아니라 «스코프에 안 든다» 로 재야 이중 증류가 안 난다.
   assert.match(DISTILLER, /NOT \(\$\{claimed\.join\(" OR "\)\}\)/,
     "켜진 레인의 스코프로 재지 않는다 — 처리 중인 자료까지 방치로 세면 두 번 증류한다");
@@ -114,4 +118,60 @@ test("⑤ 권한 부족은 사유와 갈 길을 함께 말한다", () => {
   assert.match(SLACK, /\[외부 앱 연결 ▸ Slack\]에서 다시 연결/, "갈 길을 안 준다");
   //  ⚠ 모르는 메서드에 스코프를 지어내면 엉뚱한 권한을 켜게 한다.
   assert.match(SLACK, /const need = SCOPE_BY_METHOD\[method\];/, "표에 없는 메서드도 단정한다");
+});
+
+test("⑳ 자동 정지 표식 — 사람이 스위치를 바꿀 때만 지우고, 실행 기록은 지우지 않는다", () => {
+  const INGEST = r("../store/ingest.ts");
+  const AUTH = r("../../node/auth-failure-response.ts");
+  //  부분 갱신(스위치 미지정)이 표식을 지우면 자동 정지 레인이 «사람이 끈 레인» 이 되어 그 몫이 샌다.
+  assert.match(INGEST, /CASE WHEN \$34::boolean AND jsonb_typeof\(last_summary\)='object' THEN last_summary - 'auto_disabled'/,
+    "스위치를 명시하지 않은 저장도 자동 정지 표식을 지운다");
+  //  관리탭 폼은 바꾸지 않은 스위치 값도 늘 보낸다 — «명시» 가 아니라 «변경» 이어야 폼 저장 한 번에 표식이 안 지워진다.
+  assert.match(INGEST, /input\.enabled !== undefined && Boolean\(input\.enabled\) !== Boolean\(before\.enabled\)\]\);/,
+    "표식 삭제 조건($34)이 «스위치 변경» 이 아니다");
+  //  실행 기록이 last_summary 를 통째로 덮으면 같은 경쟁 구간에서 표식이 사라진다.
+  assert.match(INGEST, /THEN \$3::jsonb \|\| jsonb_build_object\('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason'\)/,
+    "실행 기록이 자동 정지 표식을 덮어쓴다");
+  //  레인 정지는 켜진 레인만, 실패한 그 레인 또는 같은 계정을 명시한 레인만 건드린다.
+  assert.match(AUTH, /WHERE enabled=true AND \(key=\$1 OR requester=\$2\) RETURNING key/, "레인 정지 범위가 바뀌었다");
+  assert.match(AUTH, /\|\| \$3::jsonb,/, "레인 정지가 last_summary 를 병합하지 않고 덮는다");
+});
+
+test("⑳-b 자격 실패 대응이 취소한 대기 위탁의 판정 기록을 되돌린다 — markFinished(실패)·스키마와 같은 표", async () => {
+  const AUTH = r("../../node/auth-failure-response.ts");
+  const { TASK_SEEN_TABLES } = await import("../../node/auth-failure-response.js");
+  const body = (fn: string): string => {
+    const at = AUTH.indexOf(`async function ${fn}(`);
+    assert.ok(at >= 0, `${fn} 를 못 찾았다 — 시험이 헛돈다`);
+    return AUTH.slice(at, AUTH.indexOf("\n}\n", at));
+  };
+  //  두 취소 경로(크론 정지판·레인 격리판) 모두 걷은 id 를 받아 판정 기록을 되돌린다. 빠지면 그 배치가 «봤음» 으로 찍은
+  //   자료는 크론·레인을 다시 켜도 인박스에 안 돌아온다(인박스가 seen_at >= updated_at 으로 거른다 — 무증상 유실).
+  for (const fn of ["cancelQueuedForCron", "cancelQueuedForRequester"]) {
+    assert.match(body(fn), /RETURNING id`/, `${fn} 가 걷은 위탁 id 를 받지 않는다`);
+    assert.match(body(fn), /await releaseSeen\(/, `${fn} 가 판정 기록을 되돌리지 않는다 — 취소분 자료가 다시 켜도 인박스에 안 돌아온다`);
+  }
+  //  레인 격리판은 **그 크론 · 그 계정** 의 대기만 걷는다 — 계정 조건이 빠지면 같은 크론의 멀쩡한 계정 위탁까지 날아간다.
+  assert.match(body("cancelQueuedForRequester"), /WHERE status='queued' AND split_part\(requester_session, '#', 1\) = \$1 AND requester = \$2 RETURNING id`/,
+    "레인 격리판 취소 범위가 «그 크론 · 그 계정» 이 아니다");
+  //  되돌리는 표 = 실패 종결(markFinished)이 되돌리는 표 = 스키마에서 task_id 를 가진 판정 표 전부.
+  const fin = TASK_STORE.slice(TASK_STORE.indexOf("export async function markFinished("));
+  const finTables = [...fin.slice(0, fin.indexOf("\n}\n")).matchAll(/DELETE FROM (\w+_seen) WHERE task_id=/g)].map((m) => m[1]).sort();
+  assert.deepEqual([...TASK_SEEN_TABLES].sort(), finTables, "취소 경로와 실패 종결(markFinished)이 되돌리는 판정 표가 다르다");
+  const schemaDir = new URL("../schema/", import.meta.url).pathname.replace("/dist/", "/src/");
+  const ddl = readdirSync(schemaDir).filter((f) => f.endsWith(".ts")).map((f) => readFileSync(schemaDir + f, "utf8")).join("\n");
+  const seenWithTask = [...ddl.matchAll(/CREATE TABLE IF NOT EXISTS (\w+_seen)\(([\s\S]*?)\);/g)]
+    .filter((m) => /\btask_id\b/.test(m[2])).map((m) => m[1]).sort();
+  assert.ok(seenWithTask.length >= 3, `스키마에서 판정 표를 못 읽었다(${seenWithTask.join(", ")}) — 시험이 헛돈다`);
+  assert.deepEqual([...TASK_SEEN_TABLES].sort(), seenWithTask, "task_id 를 가진 판정 표가 새로 생겼는데 취소 경로가 되돌리지 않는다");
+});
+
+test("⑳-c 커버리지는 자동 정지 레인의 잔량을 센다 — 0 이면 붙잡힌 자료가 화면에서 사라진다", () => {
+  //  자동 정지 레인의 몫은 사각지대(방치)에도 다른 레인 잔량에도 안 잡힌다(맡은 레인). 그 레인의 잔량까지 0 이면
+  //   관리탭은 «0건 켜면 읽음» 을 보이고, 계정이 죽은 채 쌓이는 자료가 어느 숫자에도 안 나온다.
+  const cov = DISTILLER.slice(DISTILLER.indexOf("export async function distillerCoverage("));
+  assert.match(cov, /backlog: \(d\.enabled \|\| isAutoDisabledLane\(d\)\) \? await countDistillerBacklog\(d, all\) : 0,/,
+    "자동 정지 레인의 잔량을 0 으로 센다 — 붙잡힌 몫이 커버리지 어디에도 안 보인다");
+  //  사각지대 계산도 같은 «맡은 레인» 집합이어야 한다(폴백과 단일 출처).
+  assert.match(cov, /const enabled = all\.filter\(\(d\) => d\.enabled \|\| isAutoDisabledLane\(d\)\);/, "사각지대가 맡은 레인 기준이 아니다");
 });
