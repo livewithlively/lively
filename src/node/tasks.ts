@@ -417,7 +417,11 @@ export const localTaskFs: TaskFs = {
       try {
         const st = await fsp.lstat(p);
         if (st.isFile() && st.mtimeMs < cutoff) { await fsp.rm(p, { force: true }); n++; }
-      } catch { /* 그 사이 사라졌다 */ }
+      } catch (e) {
+        //  그 사이 사라진 것(ENOENT)만 조용히 넘긴다 — 권한 등으로 못 지운 자격 파일은 그대로 남아 있으니 흔적을 남긴다
+        //   (이 파일엔 logger 가 없다 — 노드 번들 공용이라 console 로). 지우기 판정·반환 수는 종전과 같다.
+        if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn(`[tasks] 오래된 자격 파일을 치우지 못했다(${p}): ${(e as Error)?.message ?? e}`);
+      }
     }
     return n;
   },
@@ -431,7 +435,8 @@ export const TASK_READ_JS =
   "const b=Buffer.alloc(len);let off=0;while(off<len){const n=fs.readSync(fd,b,off,len-off,from+off);if(!n)break;off+=n;}" +
   "o[r.key]={size:size,b64:b.subarray(0,off).toString('base64')};}finally{fs.closeSync(fd);}}catch(e){o[r.key]=null;}}" +
   "process.stdout.write(JSON.stringify(o));});";
-//  sweepStaleLeases 의 멤버 경계판 — localTaskFs 와 **같은 규칙**(task-fs.test 가 두 구현을 같은 폴더에 대조한다).
+//  sweepStaleLeases 의 멤버 경계판 — localTaskFs 와 **같은 규칙**(task-lease-tag.test 행위 7·8 이 두 구현을 같은 폴더에 대조한다).
+//   못 지운 파일의 경고는 여기선 내지 않는다 — 성공 종료면 memberNodeJson 이 stderr 를 버린다.
 export const TASK_SWEEP_LEASES_JS =
   "const fs=require('fs'),path=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
   "const q=JSON.parse(d);const cut=Date.now()-q.olderThanMs;let n=0;let names=[];try{names=fs.readdirSync(q.dir);}catch(e){}" +

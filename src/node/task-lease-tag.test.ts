@@ -1,4 +1,4 @@
-// 위탁 자격 파일의 표지(tag)와 오래된 잔재 정리 — 사양 행위 1~9.
+// 위탁 자격 파일의 표지(tag)와 오래된 잔재 정리 — 행위 1~9.
 // 가짜 하네스 bin 으로 스크립트를 실제로 `sh -c` 실행해 관측한다(POSIX 전용).
 import { strict as assert } from "node:assert";
 import { spawn, spawnSync } from "node:child_process";

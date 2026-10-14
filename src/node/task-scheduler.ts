@@ -394,7 +394,8 @@ const assigning = new Set<string>();
  *  ⚠ 프로세스를 넘는 선점은 아니다 — 두 게이트웨이가 같은 DB 로 스케줄러를 함께 돌리는 구간(blue-green 배포의 old/new
  *   겹침이 매 배포마다 그렇다)에는 이 표가 서로 안 보인다. 그 구간은 markRunning 의 queued 조건이 나중에 막는다 — 늦게 기록하는
  *   쪽이 판을 거두므로 두 판이 끝까지 함께 돌지는 않는다. 다만 판정이 spawn 뒤라, 두 판이 같은 작업 폴더를 잠깐 함께 쓰며
- *   생기는 일(자격 파일 경합, 진 쪽 prepareTaskDir 가 이긴 쪽 exit·로그를 지우는 것)은 남는다.
+ *   생기는 일(진 쪽 prepareTaskDir 가 이긴 쪽 exit·로그를 지우는 것)은 남는다. 자격 파일 경합은 spawn 마다 다른 파일 이름
+ *   (spawnNonce — tasks.ts taskLeaseFile)으로 닫았다.
  */
 export async function withAssignClaim<T>(
   id: number | string, stillQueued: () => Promise<boolean>, run: () => Promise<T>, claims: Set<string> = assigning,
