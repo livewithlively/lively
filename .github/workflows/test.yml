@@ -366,6 +366,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-versions.pg-test.mjs
+      # ④-d3 앱 공개 상태(#4667 · 앱 v2-15) — 목으로는 못 보는 것: 예약한 빈 앱이 설치로 채워져도 만든 사람·만들기 세션이 **남는지** ·
+      #    공개 앱에 초안을 깔 때 공개 판이 판 행에 못 박혀 남에겐 그 판의 화면·제목이 가는지 · 초안이 뺀 표가 공개 전까지 살아 있다가 공개 때 보관되는지 ·
+      #    공개를 거두면 붙여 둔 세션의 데이터까지 막히는지 · 떠난 사람의 책임자 이관과 관리자 알림.
+      - name: 앱 공개 상태(나만 보는 앱·초안·공개·책임자) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-visibility.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

@@ -4742,7 +4742,7 @@
   "rest": [
    "GET /api/ui/apps"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "8fe1989243ccf95d"
  },
  {
   "name": "org_app_get",
@@ -4802,7 +4802,7 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "cba677a050e2819f"
+  "input_hash": "e02889194a81a4aa"
  },
  {
   "name": "app_pull",
@@ -4832,7 +4832,57 @@
   "rest": [
    "POST /api/ui/apps/:id/revert"
   ],
-  "input_hash": "354df45edf0f2d77"
+  "input_hash": "9a14c0ea5085897b"
+ },
+ {
+  "name": "app_publish",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/publish"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_unpublish",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/unpublish"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_build_start",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/build-start"
+  ],
+  "input_hash": "0617670246be50c4"
+ },
+ {
+  "name": "app_owner_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/owner"
+  ],
+  "input_hash": "35878f8a814a7481"
+ },
+ {
+  "name": "app_draft_remove",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/discard"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
  },
  {
   "name": "app_edit_policy_set",

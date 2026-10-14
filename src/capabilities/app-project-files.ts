@@ -8,6 +8,7 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
+import { viewAppFor } from "../apps/app-view.js";
 import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/session-apps.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, listProjectFiles, readProjectFile, type ProjectFilesDeps, type ProjectRef } from "../apps/app-project-files.js";
@@ -23,6 +24,7 @@ async function storeOf(project: ProjectRef, memberId: string) {
 
 const liveDeps: ProjectFilesDeps = {
   getApp: (id) => getApp(id),
+  viewFor: async (app, member) => (await viewAppFor(app, { userId: member })).app,   // #4667 보는 사람의 판
   getGrant: getActiveGrant,
   sessionOwner: sessionOwnerOf,
   canEnter: sessionCanEnter,

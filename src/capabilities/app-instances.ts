@@ -9,6 +9,7 @@ import { canSeeProjectRow } from "../v6/visibility.js";
 import { listSessions } from "../terminal/terminal-sessions.js";
 import { getSessionState, getSessionStates } from "../sessions/session-state.js";
 import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
+import { canSeeApp } from "../apps/app-visibility.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
 import * as apps from "../org/store/apps.js";
 import * as instances from "../org/store/app-instances.js";
@@ -235,6 +236,8 @@ const appInstanceOpen: Capability = {
   expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/app-instances"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof createInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
     const { app, manifest } = await activeApp(input.app_id);
+    //  #4667 남이 만들고 있는(나만 보는) 앱으로는 인스턴스를 열지 못한다 — 없는 앱과 같다.
+    if (!canSeeApp(app, { userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${app.id}`);
     let projectId = normalizeInstanceProject(manifest, input.project_id);
     const requested = requestedExecution(input.execution);
     let placement: ReturnType<typeof resolveWorkerPlacement>;

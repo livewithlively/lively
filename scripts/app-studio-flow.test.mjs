@@ -44,7 +44,10 @@ check(F.copyId("a-very-long-app-identifier-here-xx", "sangmin-yoon").length <= 3
 // 단계 글 — 표식 약속이 들어 있다 · 핀은 비율 좌표와 자리 글로
 check(/\[\[기획카드\]\]/.test(F.planBrief("할 일", "side")) && /아직 만들지 말고/.test(F.planBrief("할 일", "side")) && /사이드바/.test(F.planBrief("할 일", "side")) && !/곁칸/.test(F.planBrief("할 일", "side")), "B1 기획 글 — 만들지 말고 카드만 · 자리 말(「곁칸」 은 안 쓴다)");
 const db = F.draftBrief(card, "full");
-check(/\[\[걸음 1\/4\]\]/.test(db) && /app-build-quickstart/.test(db) && /이름: 회의 안건/.test(db) && /넓게/.test(db), "B2 시안 글 — 걸음 · 지식 · 카드 · 자리", db);
+check(/\[\[걸음 1\/4\]\]/.test(db) && /app-build-quickstart/.test(db) && /이름: 회의 안건/.test(db) && /넓게/.test(db) && !/미리 잡아/.test(db), "B2 시안 글 — 걸음 · 지식 · 카드 · 자리(예약 id 가 없으면 id 말은 없다)", db);
+//  #4667 「만들기 시작」 이 예약한 앱 id — 그 id 로 저장하라 · 공개는 사람이 정한다(AI 가 app_publish 하지 않는다)
+const dbr = F.draftBrief(card, "side", "app-k3x9qa");
+check(/id 를 꼭 app-k3x9qa/.test(dbr) && /app_publish 는 하지 마/.test(dbr) && /\[\[걸음 4\/4\]\]/.test(dbr), "B2r 시안 글 — 예약한 앱 id 로 저장 · 공개는 하지 않는다", dbr);
 const fb = F.fixBrief(2, [{ x: 0.304, y: 0.12, where: "<h1 「제목」>", note: "날짜도" }, { x: 0.5, y: 0.5, where: "", note: "  " }], "글자 크게", "side", "meeting-agenda");
 check(/2번째/.test(fb) && /왼쪽에서 30% · 위에서 12% 자리 · <h1 「제목」> → 날짜도/.test(fb) && !/50%/.test(fb) && /\[앱 전체\] 글자 크게/.test(fb) && /app_pull meeting-agenda/.test(fb), "B3 고침 글 — 빈 핀은 빼고 · 비율 자리 · 전체 의견", fb);
 check(/\[\[대조\]\]/.test(F.checkBrief(card, "x")) && /app_pull x/.test(F.checkBrief(card, "x")), "B4 점검 글");

@@ -13,7 +13,7 @@ function app(manifest: Record<string, unknown>, extra: Partial<OrgApp> = {}): Or
   return {
     id: "deck-edit", title: "장표 수정", version: "1.0.0", manifest, source: { kind: "builtin" }, content_hash: null,
     status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
-    edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, ...extra,
+    edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, visibility: "public", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...extra,
   };
 }
 

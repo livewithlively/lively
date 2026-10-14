@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getMemberPref, updateMemberPref } from "../org/store/apps.js";
+import { canSeeApp } from "../apps/app-visibility.js";
 import { PREFS_WRITES_PER_MINUTE, assertPatch, mergePrefs, serializePrefs } from "../apps/app-prefs.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
@@ -37,7 +38,8 @@ const appPrefsGet: Capability = {
   handler: async (input: Record<string, unknown>, user: LivelyUser | undefined) => {
     const member = who(user);
     const id = appIdOf(input);
-    if (!(await getApp(id))) throw new HttpError(404, `앱 없음: ${id}`);
+    const app = await getApp(id);
+    if (!app || !canSeeApp(app, { userId: member, scopes: user?.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${id}`);   // #4667 남이 만들고 있는 앱은 없는 앱과 같다
     return { app_id: id, prefs: await getMemberPref(id, member) };
   },
 };
@@ -59,7 +61,8 @@ const appPrefsSet: Capability = {
     const member = who(user);
     const id = appIdOf(input);
     assertPatch(input.patch);                       // 잠그기 전에 거를 수 있는 것(모양·NUL)은 먼저 — 트랜잭션을 헛되이 열지 않는다
-    if (!(await getApp(id))) throw new HttpError(404, `앱 없음: ${id}`);
+    const app = await getApp(id);
+    if (!app || !canSeeApp(app, { userId: member, scopes: user?.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${id}`);   // #4667 남이 만들고 있는 앱은 없는 앱과 같다
     if (!writeRate.take(`${appSqlTenantId()}\0${member}\0${id}`, Date.now())) {
       throw new HttpError(429, `개인 설정 저장이 너무 잦습니다(분당 ${PREFS_WRITES_PER_MINUTE}회) — 입력마다 저장하지 말고 바뀐 뒤 한 번 저장하세요`);
     }

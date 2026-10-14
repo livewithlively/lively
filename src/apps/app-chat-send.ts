@@ -13,6 +13,7 @@
 import { HttpError } from "../http-error.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import { requireSessionParticipant, requireUsableApp, type SessionAppRow } from "./session-apps.js";
+import { canSeeApp } from "./app-visibility.js";
 import { decideAppTool } from "./principal.js";
 import { needsRegrant } from "./grant.js";
 import { CHAT_SEND_TOOL } from "./manifest.js";
@@ -23,6 +24,8 @@ export const CHAT_SEND_PER_MINUTE = 20;
 
 export interface ChatSendDeps {
   getApp: (appId: string) => Promise<OrgApp | null>;
+  /** #4667 이 사람이 보는 판으로(공개 앱에 남의 초안이 있으면 공개 판의 선언) — 없으면 설치된 상태 그대로. */
+  viewFor?: (app: OrgApp, member: string) => Promise<OrgApp>;
   getGrant: (appId: string, memberId: string) => Promise<AppGrantRow | null>;
   sessionOwner: (sessionId: string) => Promise<string | null>;
   canEnter?: (sessionId: string, member: string) => Promise<boolean>;
@@ -99,7 +102,10 @@ export async function sendFromApp(q: ChatSendInput, deps: ChatSendDeps, rate: Ra
   const text = normalizeChatText(q.text);
   const sessionId = String(q.sessionId ?? "").trim();
   if (!sessionId) throw new HttpError(400, "session_id 가 필요합니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다");
-  const app = requireUsableApp(await deps.getApp(q.appId), q.appId);
+  const installed = requireUsableApp(await deps.getApp(q.appId), q.appId);
+  //  #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다. 선언은 이 사람이 보는 판의 것.
+  if (!canSeeApp(installed, { userId: q.member })) throw new HttpError(404, `앱 없음: ${q.appId}`);
+  const app = deps.viewFor ? await deps.viewFor(installed, q.member) : installed;
   const declared = declaredTools(app);
   if (!decideAppTool(q.appId, declared, CHAT_SEND_TOOL)) {
     throw new HttpError(403, `앱 '${q.appId}' 은(는) 세션에 글 보내기(permissions.chat_send)를 선언하지 않았습니다 — 매니페스트에 선언하고 다시 저장하세요`);

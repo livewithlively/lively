@@ -13,6 +13,8 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersion, type OrgApp } from "../org/store/apps.js";
+import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/app-visibility.js";
+import { viewAppFor } from "../apps/app-view.js";
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
@@ -74,16 +76,22 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
   };
 }
 
-/** 한 줄 + 그 판을 저장한 사람(org_app_version.saved_by). 판 이력이 없는 앱(릴리스 그대로)은 null. 조회 실패도 null — 목록을 막지 않는다. */
-async function describeOne(row: SessionAppRow, app: OrgApp | null): Promise<Record<string, unknown>> {
-  const no = app?.current_version_no;
-  const ver = app && no != null ? await getAppVersion(app.id, no).catch(() => null) : null;
-  return describeAttached(row, app, ver?.saved_by ?? null);
+/** 한 줄 + 그 판을 저장한 사람(org_app_version.saved_by). 판 이력이 없는 앱(릴리스 그대로)은 null. 조회 실패도 null — 목록을 막지 않는다.
+ *  #4667 — **보는 사람의 판**으로 그린다: 공개 앱에 남의 초안이 있으면 공개 판의 제목·화면·표·지침(훅이 이 세션 AI 에 싣는 글)이다.
+ *   못 보게 된 앱(공개를 거둔 남의 앱)은 쓸 수 없는 줄(usable false)로 — 떼기는 그대로 된다. */
+async function describeOne(row: SessionAppRow, app: OrgApp | null, who: Viewer): Promise<Record<string, unknown>> {
+  if (app && !canSeeApp(app, who)) return { ...describeAttached(row, null), usable: false, hidden: true };
+  const shown = app ? (await viewAppFor(app, who)).app : null;
+  const no = shown?.current_version_no;
+  const ver = shown && no != null ? await getAppVersion(shown.id, no).catch(() => null) : null;
+  return describeAttached(row, shown, ver?.saved_by ?? null);
 }
 
-async function describeAll(rows: SessionAppRow[]): Promise<Array<Record<string, unknown>>> {
-  return Promise.all(rows.map(async (r) => describeOne(r, await getApp(r.app_id).catch(() => null))));
+async function describeAll(rows: SessionAppRow[], who: Viewer): Promise<Array<Record<string, unknown>>> {
+  return Promise.all(rows.map(async (r) => describeOne(r, await getApp(r.app_id).catch(() => null), who)));
 }
+
+const viewerOf = (u: LivelyUser): Viewer => ({ userId: me(u), scopes: u?.scopes ?? [] });
 
 const HINT = "붙어 있는 동안 이 세션에서 store_query·store_insert·store_update·store_delete·store_tables 로 그 앱의 테이블을 읽고 쓸 수 있다"
   + "(붙은 앱이 하나면 app_id 생략 가능). 집계·조인·여러 행 쓰기는 store_sql 로 SQL 한 문장(워크스페이스가 만든 앱에서만). "
@@ -104,7 +112,7 @@ const sessionApps: Capability = {
   handler: async (input: { session_id?: string }, user: LivelyUser, ctx?: CapabilityCtx) => {
     const sid = sidOf(input, ctx);
     if (!(await canAttach(sid, me(user)))) throw new HttpError(403, "이 세션에 들어갈 수 있는 사람만 붙은 앱을 볼 수 있습니다");
-    const apps = await describeAll(await listAttachedApps(sid));
+    const apps = await describeAll(await listAttachedApps(sid), viewerOf(user));
     return { session_id: sid, apps, ...(apps.length ? { hint: HINT } : {}) };
   },
 };
@@ -129,14 +137,18 @@ const sessionAppAttach: Capability = {
     const appId = String(input.app_id ?? "").trim();
     if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
     await requireSessionParticipant(sid, member);
-    const app = requireUsableApp(await getApp(appId), appId);
+    const who = viewerOf(user);
+    //  #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다 · 아직 첫 판이 없는 예약 앱은 붙일 것이 없다.
+    const found = await getApp(appId);
+    if (found && (!canSeeApp(found, who) || isEmptyDraftApp(found))) throw new HttpError(404, `앱 없음: ${appId}`);
+    const app = requireUsableApp(found, appId);
     if (!(await getActiveGrant(appId, member))) {
       throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — 사람이 앱을 한 번 열어 동의해야 붙일 수 있습니다`);
     }
     const fresh = await attachAppRow(sid, appId, member);
     if (fresh) publishAppEventToSession(member, sid, { kind: "attach", app_id: appId, session: sid, source: ctx?.source });
     const row = (await listAttachedApps(sid)).find((r) => r.app_id === appId);
-    return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app) : null, hint: HINT };
+    return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app, who) : null, hint: HINT };
   },
 };
 

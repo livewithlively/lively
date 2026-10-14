@@ -12,7 +12,7 @@ import type { OrgApp } from "../org/store/apps.js";
 const row = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "x1", title: "x", version: "1.0.0", manifest: {}, source: { kind: "builtin" }, content_hash: "old-hash",
   status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
-  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
+  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, visibility: "public", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...over,
 });
 
 /** 가짜 세계 — 무엇이 불렸나를 부작용으로 적는다. */

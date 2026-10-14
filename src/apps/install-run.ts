@@ -37,7 +37,15 @@ function installerOf(ctx: WriteCtx): string | null {
  * runInstall 이 저널·보상을 책임진다(실패 시 InstallError throw + status=failed). content_hash 스킵 판단은
  *  **호출부**의 몫(builtin 시더만 content-owned 스킵을 한다 — verb 는 관리자 명시 요청이라 항상 재전개).
  */
-export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: WriteCtx): Promise<InstallOutcome> {
+export interface InstallOptions {
+  /**
+   * #4667 매니페스트에서 빠져도 지우지 않을 표 — 공개 앱에 초안을 깔 때 **공개 판이 선언한 표**. 표는 판마다가 아니라 앱에 한 벌이라,
+   *  초안이 뺀 표를 지우면 공개 판을 쓰는 사람들의 데이터가 사라진다. 「공개하기」(capabilities/apps.ts publishCurrent)가 그때 정리한다.
+   */
+  keepTables?: readonly string[];
+}
+
+export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: WriteCtx, opts: InstallOptions = {}): Promise<InstallOutcome> {
   const id = loaded.manifest.id;
   const existing = await getApp(id);
   const meta: InstallAppMeta = {
@@ -113,7 +121,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 매니페스트에서 빠진 테이블(#4224) — 설치가 active 로 저널된 **뒤에** 정리한다(설치가 실패해 보상되면 옛 선언이 살아
   //  있어야 하므로 앞에서 지우지 않는다). 비었으면 DROP, 데이터가 있으면 보관 스키마로 옮기고 설치한 사람에게 알린다.
   if (tables && existing) {
-    const next = new Set(tableSpecs.map((t) => t.table));
+    const next = new Set([...tableSpecs.map((t) => t.table), ...(opts.keepTables ?? [])]);
     const gone = declaredTableNames(existing.manifest).filter((t) => !next.has(t));
     if (gone.length) {
       const cleaned = await cleanupDroppedTables(id, gone, schema);

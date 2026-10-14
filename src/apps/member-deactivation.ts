@@ -8,14 +8,21 @@
 //  terminal/node 모듈은 **지연 import** — terminal/sessions.ts 가 apps/principal.ts 를 import 하므로 정적 import 면 순환.
 //  회수 자체는 순수 오케스트레이션(reclaimMemberAppFootprint) 으로 두고 deps 를 주입해 단위 테스트한다(failed-session-reaper 선례).
 import { logger } from "../log.js";
-import { revokeAllGrantsForMember } from "../org/store/apps.js";
-import { onMemberDeactivated } from "../org/store/members.js";
+import { revokeAllGrantsForMember, transferOwnedAppsToAdmins } from "../org/store/apps.js";
+import { notifyAppInstaller } from "./notify.js";
+import { listActiveAdminIds, onMemberDeactivated } from "../org/store/members.js";
 import { listSessionStatesForOwner, deleteSessionState } from "../sessions/session-state.js";
 
 export interface ReclaimSessionRow { id: string; app_id?: string | null; node_id?: string | null }
 
 export interface ReclaimDeps {
   revokeGrants(memberId: string): Promise<number>;
+  /**
+   * #4667 떠난 사람이 책임지던 앱 — 책임자를 «관리자»(NULL)로 넘긴다(만든 사람 기록은 그대로). 앱 · 데이터 · 자동화는 멈추지 않는다
+   *  (퇴사 한 번에 팀 업무가 멈추지 않게 — 설계 §12 ⑤-4). 돌려준 앱들을 notifyAdmins 가 관리자 모두에게 알린다. 없으면 이 단계를 건너뛴다.
+   */
+  transferApps?(memberId: string): Promise<Array<{ id: string; title: string; visibility: "private" | "public" }>>;
+  notifyAdmins?(memberId: string, apps: Array<{ id: string; title: string; visibility: "private" | "public" }>): Promise<number>;
   listSessions(owner: string): Promise<ReclaimSessionRow[]>;
   killCentral(id: string): Promise<void>;
   killNode(nodeId: string, id: string, owner: string): Promise<void>;
@@ -23,12 +30,23 @@ export interface ReclaimDeps {
   stopWorkers(memberId: string): Promise<number>;
 }
 
-export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[] }
+export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[]; apps_transferred?: string[] }
 
 /** 순수 오케스트레이션 — 한 세션의 회수 실패가 나머지를 막지 않는다(failed 에 모아 돌려준다). */
 export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimDeps): Promise<ReclaimResult> {
   const grants = await deps.revokeGrants(memberId);
   const workers = await deps.stopWorkers(memberId);
+  //  #4667 — 책임자 이관은 회수와 따로 실패한다(로그만) — 세션 회수가 이관 실패에 막히지 않게.
+  let appsTransferred: string[] | undefined;
+  if (deps.transferApps) {
+    try {
+      const moved = await deps.transferApps(memberId);
+      appsTransferred = moved.map((a) => a.id);
+      if (moved.length && deps.notifyAdmins) await deps.notifyAdmins(memberId, moved);
+    } catch (err) {
+      logger.warn({ err, member: memberId }, "member deactivation: app owner transfer failed");
+    }
+  }
   const rows = await deps.listSessions(memberId);
   const sessions: string[] = [];
   const failed: string[] = [];
@@ -44,7 +62,7 @@ export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimD
       logger.warn({ err, member: memberId, session: s.id, node: s.node_id ?? null }, "member deactivation: app session reclaim failed");
     }
   }
-  return { grants, workers, sessions, failed };
+  return { grants, workers, sessions, failed, ...(appsTransferred ? { apps_transferred: appsTransferred } : {}) };
 }
 
 export function defaultReclaimDeps(): ReclaimDeps {
@@ -64,7 +82,29 @@ export function defaultReclaimDeps(): ReclaimDeps {
       const { stopWorkersForMember } = await import("./worker-service.js");
       return stopWorkersForMember(memberId, "member_deactivated");
     },
+    transferApps: transferOwnedAppsToAdmins,
+    notifyAdmins: notifyAdminsOfTransfer,
   };
+}
+
+/** 넘어온 앱을 관리자 모두에게 알린다(앱마다 한 건 · 「확인할 것」 의 앱 알림). 보낸 수. */
+export async function notifyAdminsOfTransfer(memberId: string, apps: Array<{ id: string; title: string; visibility: "private" | "public" }>): Promise<number> {
+  const admins = (await listActiveAdminIds()).filter((a) => a !== memberId);
+  let sent = 0;
+  for (const a of apps) {
+    for (const admin of admins) {
+      const r = await notifyAppInstaller({
+        appId: a.id, memberId: admin,
+        title: `「${a.title}」 앱의 책임자가 관리자로 넘어왔습니다`,
+        body: `만든 사람(${memberId})이 워크스페이스를 떠나 이 앱의 책임자를 관리자로 바꿨습니다. 앱과 데이터는 그대로 돌고, 이 앱의 알림(자동화 실패 등)은 이제 관리자에게 옵니다.`
+          + (a.visibility === "private" ? " 공개하지 않은(나만 보는) 앱이라 지금은 관리자만 열 수 있습니다." : "")
+          + " 다른 구성원에게 맡기려면 app_owner_set.",
+        dedupe_key: `app-owner-transfer:${a.id}`,
+      }).catch(() => null);
+      if (r && r.ok && "notification" in r) sent++;
+    }
+  }
+  return sent;
 }
 
 /** 부팅 스텝이 부른다 — 이후 멤버 비활성/삭제 전이마다 회수가 돈다. */
