@@ -247,6 +247,22 @@ const contradictionBody = (): string => {
   return fn.slice(0, fn.indexOf("\n}"));
 };
 
+//  SET LOCAL 은 트랜잭션 안에서만 듣는다 — BEGIN 이 빠지면 Postgres 는 경고(«SET LOCAL can only be used in transaction
+//   blocks»)만 남기고 설정을 버린다. 그러면 플래너가 다시 행마다 순차 스캔을 골라 이 PR 이전처럼 느려지는데, 결과는 같아
+//   아무 시험도 안 깨진다(실 PG 측정: 1.9초 → 22.8초). 그래서 순서를 소스에서 못박는다.
+await t("모순 후보 쿼리의 SET LOCAL 은 BEGIN 뒤·후보 쿼리 앞에서 같은 클라이언트로 돈다", () => {
+  const body = contradictionBody();
+  const at = (s: string): number => body.indexOf(s);
+  const begin = at('await client.query("BEGIN")');
+  const ef = at("await client.query(`SET LOCAL hnsw.ef_search");
+  const off = at("await client.query(`SET LOCAL ${g} = off`)");
+  const sel = at("await client.query(contradictionCandidateSql(");
+  const commit = at('await client.query("COMMIT")');
+  assert.ok(begin > 0, "BEGIN 이 없다 — SET LOCAL 이 트랜잭션 밖이면 경고만 남고 효과가 없다");
+  assert.ok(begin < ef && ef < off && off < sel && sel < commit, "BEGIN → SET LOCAL → 후보 쿼리 → COMMIT 순서가 아니다");
+  assert.doesNotMatch(body, /itemsPool\.query|q\(itemsPool/, "풀로 던지면 다른 커넥션일 수 있어 SET LOCAL 이 그 쿼리에 안 걸린다");
+});
+
 await t("모순 후보 쿼리는 체크아웃 동안 커넥션 오류를 받아 두고 그 커넥션을 폐기한다", () => {
   const body = contradictionBody();
   const on = body.indexOf('client.on("error", onError)');
