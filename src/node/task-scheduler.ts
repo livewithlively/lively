@@ -379,8 +379,8 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
 export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string; code?: AssignFailCode }
 
-/** 지금 배정(spawn 부터 markRunning 까지) 중인 태스크 id — 이 프로세스 안의 선점 표. */
-const assigning = new Set<number>();
+/** 지금 배정(spawn 부터 markRunning 까지) 중인 태스크 id — 이 프로세스 안의 선점 표. 키는 문자열이다(withAssignClaim 안 주석). */
+const assigning = new Set<string>();
 
 /**
  * 한 태스크의 배정을 **한 경로만** 하게 한다. 선점에 실패하면 run 을 부르지 않고 null 을 준다.
@@ -397,14 +397,17 @@ const assigning = new Set<number>();
  *   생기는 일(자격 파일 경합, 진 쪽 prepareTaskDir 가 이긴 쪽 exit·로그를 지우는 것)은 남는다.
  */
 export async function withAssignClaim<T>(
-  id: number, stillQueued: () => Promise<boolean>, run: () => Promise<T>, claims: Set<number> = assigning,
+  id: number | string, stillQueued: () => Promise<boolean>, run: () => Promise<T>, claims: Set<string> = assigning,
 ): Promise<T | null> {
-  if (claims.has(id)) return null;
-  claims.add(id);
+  //  키를 문자열로 맞춘다 — org_task.id 는 BIGSERIAL 이고 pg 는 int8 을 **문자열**로 돌려준다(DelegateTask.id 가 number 로 적혀 있어도
+  //   행에서 온 값은 "15"). 숫자 15 로 부르는 경로가 하나라도 섞이면 Set 이 둘을 다른 키로 보아 선점이 조용히 샌다.
+  const key = String(id);
+  if (claims.has(key)) return null;
+  claims.add(key);
   try {
     if (!(await stillQueued())) return null;
     return await run();
-  } finally { claims.delete(id); }
+  } finally { claims.delete(key); }
 }
 
 /**

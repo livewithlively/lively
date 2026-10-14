@@ -1,4 +1,4 @@
-// 위탁 배정 선점(withAssignClaim)과 in_flight 판정 — 사양 행위 1~10 (스크래치패드 spec.md).
+// 위탁 배정 선점(withAssignClaim)과 in_flight 판정 — 행위 1~11.
 //  틀렸을 때: 선점이 새면 즉시 배정 경로와 스케줄러가 같은 태스크에 판을 둘 띄워 작업 폴더를 놓고 다툰다.
 //  반대로 선점이 안 풀리면 그 태스크는 영영 배정되지 않는다.
 // 동시성은 타이머 없이 수동 gate(resolve 를 밖에서 쥔 Promise)로 결정적으로 재현한다.
@@ -14,7 +14,7 @@ function gate() {
 const yes = async () => true;
 
 // 선점한 채 run 을 gate 에 묶어 두고, run 진입을 확인한 뒤 돌려준다.
-async function holdClaim(id: number, table: Set<number>) {
+async function holdClaim(id: number | string, table: Set<string>) {
   const release = gate();
   const entered = gate();
   const p = withAssignClaim(id, yes, async () => { entered.open(); await release.promise; return "held"; }, table);
@@ -24,7 +24,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 1: run 이 안 끝난 사이 같은 id 호출은 run 없이 null ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   const held = await holdClaim(1, table);
   let called = 0;
   const second = await withAssignClaim(1, yes, async () => { called++; return "second"; }, table);
@@ -36,7 +36,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 2: 거의 동시에 들어온 두 호출 중 run 은 정확히 한 번 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   const release = gate();
   let runs = 0;
   const call = (tag: string) => withAssignClaim(2, yes, async () => { runs++; await release.promise; return tag; }, table);
@@ -55,7 +55,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 3: 선점 후 stillQueued 가 false 면 run 없이 null ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   let called = 0;
   const r = await withAssignClaim(3, async () => false, async () => { called++; return "x"; }, table);
   assert.equal(r, null, "이미 queued 가 아닌데 배정을 진행했다");
@@ -64,7 +64,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 4: run 이 성공·예외로 끝나면 선점이 풀리고, 예외는 그대로 전파 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   assert.equal(await withAssignClaim(4, yes, async () => "ok1", table), "ok1");
   assert.equal(await withAssignClaim(4, yes, async () => "ok2", table), "ok2", "성공 뒤에 선점이 남았다");
 
@@ -77,7 +77,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 5: stillQueued 가 던져도 선점이 풀리고 예외는 전파 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   const boom = new Error("조회 실패");
   let called = 0;
   await assert.rejects(
@@ -90,7 +90,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 6: 물러난 경우에도 선점이 남지 않는다 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   assert.equal(await withAssignClaim(6, async () => false, async () => "x", table), null);
   assert.equal(await withAssignClaim(6, yes, async () => "later", table), "later",
     "물러난 뒤에도 선점이 남아 다음 호출이 막혔다");
@@ -98,7 +98,7 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 7: 서로 다른 id 는 서로를 막지 않는다 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   const held = await holdClaim(7, table);
   assert.equal(await withAssignClaim(8, yes, async () => "other", table), "other",
     "다른 id 의 진행이 이 id 를 막았다");
@@ -108,15 +108,15 @@ async function holdClaim(id: number, table: Set<number>) {
 
 // ── 행위 8: run 의 반환값을 그대로 돌려준다 ──
 {
-  const table = new Set<number>();
+  const table = new Set<string>();
   const value = { assigned: true, nodeId: 42 };
   assert.equal(await withAssignClaim(9, yes, async () => value, table), value, "반환값이 변형됐다");
 }
 
 // ── 행위 9: 주입한 table 만 쓴다 — 다른 Set 끼리는 서로를 막지 않는다 ──
 {
-  const tableA = new Set<number>();
-  const tableB = new Set<number>();
+  const tableA = new Set<string>();
+  const tableB = new Set<string>();
   const held = await holdClaim(10, tableA);
   assert.equal(await withAssignClaim(10, yes, async () => "on-b", tableB), "on-b",
     "다른 table 의 선점이 이 table 의 같은 id 를 막았다 — 주입한 Set 을 안 쓴다");
@@ -136,6 +136,29 @@ async function holdClaim(id: number, table: Set<number>) {
   assert.equal(assignFailKind(undefined), "fault");
   assert.equal(assignFailKind(null), "fault");
   assert.equal(assignFailKind("made-up" as never), "fault", "모르는 코드를 배압으로 접었다");
+}
+
+// ── 행위 11: 같은 태스크를 숫자 id 와 문자열 id 로 불러도 같은 선점이다 ──
+//  org_task.id(BIGSERIAL)는 행에서 문자열("11")로 온다 — 숫자로 부르는 경로가 섞여도 서로를 막아야 한다.
+{
+  const table = new Set<string>();
+  let called = 0;
+  const held = await holdClaim(11, table);
+  assert.equal(await withAssignClaim("11", yes, async () => { called++; return "as-string"; }, table), null,
+    "숫자 11 로 선점한 태스크를 문자열 \"11\" 로 다시 띄웠다 — 행에서 온 id 와 숫자 id 가 다른 선점이 된다");
+  assert.equal(called, 0, "선점당한 문자열 id 호출이 run 을 불렀다");
+  held.release();
+  assert.equal(await held.p, "held");
+
+  const heldStr = await holdClaim("12", table);
+  assert.equal(await withAssignClaim(12, yes, async () => { called++; return "as-number"; }, table), null,
+    "문자열 \"12\" 선점을 숫자 12 가 뚫었다");
+  assert.equal(called, 0, "선점당한 숫자 id 호출이 run 을 불렀다");
+  heldStr.release();
+  assert.equal(await heldStr.p, "held");
+  assert.equal(await withAssignClaim(12, yes, async () => { called++; return "free"; }, table), "free",
+    "문자열 선점이 풀린 뒤에도 숫자 id 가 막혔다");
+  assert.equal(called, 1);
 }
 
 // 배선 — 선점을 맞게 구현하고 배정 경로에서 안 쓰는 상태를 막는다. 즉시 배정과 tick 이 모두 assignOne 을 지나므로 거기를 본다.
