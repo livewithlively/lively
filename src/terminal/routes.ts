@@ -24,7 +24,7 @@ import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, isReportedPhase, isBgCount, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
@@ -1593,13 +1593,21 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const owner = st!.owner;
     const next = invitesWithout(st!.invites, me);
     const nodeId = relayNodeId(st!.node_id, isSelfNode) || (await remoteNodeOfSession(id, sessionGone)) || "";
+    const asOwner = { userId: owner, email: "", scopes: [], projects: [] } as LivelyUser;
     if (nodeId) {
-      if (nodeOnline(nodeId) && nodeOfSession(id) === nodeId) {
+      //  그 노드의 스냅샷에 이 세션이 있으면(도는 중 · 꺼진 노드면 마지막으로 본 것) 명단 정본이 그 노드의 tmux 다 — 목록 · 입장이 거기를 본다.
+      //   ⚠ 노드가 꺼져 있으면 **거절한다**(격리 리뷰): DB 만 고치고 ok 를 주면 «나왔어요» 뒤에도 그 세션이 내 목록에 다시 선다
+      //   (꺼진 노드의 세션은 마지막 스냅샷으로 계속 보이고, 다시 붙어도 그 노드의 명단은 그대로다 — 휴지통의 «멈추고 보내기» 와 같은 규율).
+      if (nodeOfSession(id) === nodeId) {
+        if (!nodeOnline(nodeId)) throw new HttpError(409, "이 세션이 도는 컴퓨터가 꺼져 있어 지금은 나갈 수 없어요 — 그 컴퓨터가 켜진 뒤 다시 해 주세요.");
         await relayNodeOp(nodeId, "edit", { user: { userId: owner }, id, patch: {}, invites: next });
       }
     } else if (!(await sessionGone(id))) {
-      await editSession({ userId: owner, email: "", scopes: [], projects: [] } as LivelyUser, id, { invites: next });
+      //  검증 없이 적는다(applyValidatedInvites) — next 는 이미 검증된 명단에서 나 하나를 뺀 것이다. editSession 의 검증은 구성원 명부를
+      //   다시 읽는데, 그 조회가 실패하면 명단 전체를 비운다(격리 리뷰) — 초대받은 사람 한 명의 나가기가 모두를 내보내면 안 된다.
+      await applyValidatedInvites(asOwner, id, next);
     }
+    //  ⚠ 읽고-고치고-적기다 — 그 사이에 주인이 명단을 고치면 그 고침이 덮인다. 두 사람이 같은 초(秒)에 같은 명단을 만지는 경우라 받아들인다.
     await updateSessionStateMeta(id, { invites: next });
     logger.info({ id, requester: me, owner, node: nodeId || null }, "세션 나가기");
     res.json({ ok: true, invites_left: next.length });

@@ -4,7 +4,7 @@
 //  N2 이전 명단을 모르면(null) 다음 명단 전부가 새로 — 모른다고 알림을 삼키지 않는다(되풀이는 dedupe 가 막는다)
 //  N3 빼기만 했으면 아무도 없다 · 중복 · 빈 값은 걸러진다
 //  T1 문구 — «누가(조사) «세션 이름» 세션에 나를 초대했어요» · 이름이 없으면 이름 없이 · 링크는 세션 화면
-//  L1 만든 사람 — 403 (나가는 길이 없다) · L2 명단에 없는 사람 — 409 · L3 행 없음 — 404 · L4 초대받은 사람 — 통과
+//  L1 만든 사람 — 403 (나가는 길이 없다) · L2 명단에 없는 사람 · L3 행 없음 — 둘 다 404 같은 답(id 떠보기 막기) · L4 초대받은 사람 — 통과
 //  W1 나 하나만 뺀다 — 다른 사람의 자리 · 순서는 그대로
 //  K1 알림 종류 invite 가 있고 「확인할 것」 에 선다
 //  R1 수정 라우트 — 이전 명단을 저장 **전에** 읽고, 저장(노드 릴레이 · editSession) **뒤에** 알린다 · 보낸 수를 답에 싣는다
@@ -46,9 +46,10 @@ test("T1 문구 · 링크", () => {
 test("L1~L4 나가기 판정", () => {
   assert.equal(leaveRefusal({ owner: "jang", invites: ["lee"] }, "jang")?.status, 403, "만든 사람은 못 나간다");
   assert.equal(leaveRefusal({ owner: "jang", invites: ["jang", "lee"] }, "jang")?.status, 403, "명단에 자기가 끼어 있어도 만든 사람은 못 나간다");
-  assert.equal(leaveRefusal({ owner: "jang", invites: ["lee"] }, "park")?.status, 409, "명단에 없으면 나갈 자리가 없다");
-  assert.equal(leaveRefusal({ owner: "jang", invites: null }, "park")?.status, 409);
-  assert.equal(leaveRefusal(null, "lee")?.status, 404);
+  const outsider = leaveRefusal({ owner: "jang", invites: ["lee"] }, "park"), none = leaveRefusal(null, "lee");
+  assert.equal(outsider?.status, 404, "명단에 없으면 나갈 자리가 없다");
+  assert.equal(leaveRefusal({ owner: "jang", invites: null }, "park")?.status, 404);
+  assert.deepEqual(none, outsider, "행 없음과 명단 밖은 같은 답 — 세션 id 를 떠볼 수 없다");
   assert.equal(leaveRefusal({ owner: "jang", invites: ["lee", "park"] }, "lee"), null);
 });
 
@@ -88,9 +89,11 @@ test("R1 수정 라우트 — 저장 전에 읽고 저장 뒤에 알린다", () 
 test("R2 나가기 라우트 — 거절이 먼저 · 주인 이름 · DB 행", () => {
   const b = routeBody('app.post("/api/ui/terminal/sessions/:id/leave-invite"');
   const refuseAt = b.indexOf("leaveRefusal(");
-  const firstWrite = Math.min(...["relayNodeOp(", "editSession(", "updateSessionStateMeta("].map((k) => b.indexOf(k)).filter((i) => i > 0));
+  const firstWrite = Math.min(...["relayNodeOp(", "applyValidatedInvites(", "updateSessionStateMeta("].map((k) => b.indexOf(k)).filter((i) => i > 0));
   assert.ok(refuseAt > 0 && refuseAt < firstWrite, "거절 판정이 쓰기보다 먼저여야 한다");
   assert.match(b, /user: \{ userId: owner \}/, "노드 릴레이는 주인 이름으로");
-  assert.match(b, /editSession\(\{ userId: owner/, "중앙 세션도 주인 이름으로");
+  assert.match(b, /const asOwner = \{ userId: owner[^\n]*\n[\s\S]*applyValidatedInvites\(asOwner, id, next\)/, "중앙 세션도 주인 이름으로 · 명부 재조회 없이(조회 실패가 명단을 비우지 않게)");
+  assert.doesNotMatch(b, /editSession\(/, "나가기는 editSession(명부 재검증)을 타지 않는다");
+  assert.match(b, /if \(!nodeOnline\(nodeId\)\) throw new HttpError\(409/, "꺼진 노드의 세션은 거절 — DB 만 고치고 ok 를 주면 거짓 초록");
   assert.match(b, /await updateSessionStateMeta\(id, \{ invites: next \}\)/, "DB 행은 늘 고친다(입장 판정 · 복원의 정본)");
 });

@@ -105,6 +105,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
     const save = el('button', { class: 'btn btn-primary btn-sm pn-share-save', type: 'button' }) as HTMLButtonElement;
     //  #3870 — 지금 Enter 가 무엇을 하나를 한 줄로(↵ 표식이 어디에 붙었나와 같은 말). 할 일이 없으면 비운다.
     const hint = el('p', { class: 'pn-share-fine pn-share-hint', 'aria-live': 'polite' }) as HTMLElement;
+    let saving = false;
     const dirty = (): boolean => inviteDirty(s.invites, chosen);
     const enterNow = (mod = false) => shareEnterAction({ query: q.value, hasTop: !!top, dirty: dirty(), mod });
     //  저장 단추 — 새로 담은 사람이 있으면 «초대», 빼기만 했으면 «저장». ↵ 가 저장을 가리키면 단추에도 ↵ 를 단다.
@@ -112,7 +113,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
       const toSave = enterNow() === 'save';
       save.replaceChildren(el('span', { text: inviteAdded(s.invites, chosen).length ? '초대' : '저장' }),
         toSave ? el('span', { class: 'pn-share-kbd pn-share-kbd--btn', 'aria-hidden': 'true', text: '↵' }) : null);
-      save.disabled = !dirty();
+      save.disabled = saving || !dirty();   // 저장 중엔 꺼 둔다 — 그 사이 타이핑이 단추를 다시 켜 두 번째 요청이 나가지 않게(격리 리뷰)
       hint.textContent = toSave
         ? (inviteAdded(s.invites, chosen).length ? '↵ 한 번 더 누르면 초대해요 · 더 부르려면 이름을 이어서 치세요.' : '↵ 를 누르면 저장해요.')
         : '';
@@ -164,8 +165,8 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
     });
 
     save.onclick = async (): Promise<void> => {
-      if (save.disabled) return;
-      save.disabled = true;
+      if (save.disabled || saving) return;
+      saving = true; save.disabled = true;
       const invites = [...chosen];
       const added = inviteAdded(s.invites, invites);
       try {
@@ -181,7 +182,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
           ? `${names.length > 2 ? names.slice(0, 2).join(', ') + ` 외 ${names.length - 2}명` : names.join(', ')}님을 초대했어요` + (sent ? ' — 알림을 보냈어요.' : '.')
           : invites.length ? `${invites.length}명이 이 세션을 볼 수 있어요.` : '비공개로 바꿨어요 — 이제 나만 봅니다.');
         close();
-      } catch (e: any) { save.disabled = false; toast('공유 실패 — ' + (e?.message || '알 수 없는 오류'), true); }
+      } catch (e: any) { saving = false; paintAct(); toast('공유 실패 — ' + (e?.message || '알 수 없는 오류'), true); }
     };
 
     body.replaceChildren(...[

@@ -67,11 +67,13 @@ export async function notifySessionInvitees(o: { sessionId: string; label: strin
   return n;
 }
 
-/** (순수) 나가기를 거절할 사유 — 없으면 null. 만든 사람 · 명단에 없는 사람 · 행 없음. */
+/** (순수) 나가기를 거절할 사유 — 없으면 null. 만든 사람(403) · 명단에 없는 사람 · 행 없음(둘 다 404 — 같은 답). */
 export function leaveRefusal(st: { owner: string; invites?: readonly string[] | null } | null | undefined, me: string): { status: number; message: string } | null {
-  if (!st) return { status: 404, message: "세션을 찾을 수 없어요." };
+  //  행 없음과 명단 밖은 같은 답이다 — 다르게 답하면 아무 구성원이나 세션 id 가 있는지 떠볼 수 있다(격리 리뷰).
+  const notInvited = { status: 404, message: "초대받은 세션이 아니에요." };
+  if (!st) return notInvited;
   if (st.owner === me) return { status: 403, message: "만든 사람은 세션에서 나갈 수 없어요 — 그만 쓰려면 보관하거나 휴지통으로 보내세요." };
-  if (!clean(st.invites).includes(me)) return { status: 409, message: "이 세션에 초대받은 상태가 아니에요." };
+  if (!clean(st.invites).includes(me)) return notInvited;
   return null;
 }
 
