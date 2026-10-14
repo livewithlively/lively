@@ -230,6 +230,39 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .md-pre-copy { position: relative; }
 .md-pre-copy > .btn { position: absolute; top: 6px; right: 6px; z-index: 1; opacity: .5; background: var(--bg); }
 .md-pre-copy:hover > .btn, .md-pre-copy > .btn:focus-visible { opacity: 1; }
+/* mermaid 다이어그램(#4685) — 본문 속 ```mermaid 를 그림으로(web/lib/mermaid.ts). 그림은 격리 프레임이 그린 svg 를 <img> 로만 띄운다.
+   칸 = 그림 · (펼친) 코드 · 아래 줄(알림 + [코드 보기][크게 보기]). 단추는 늘 보인다 — 호버에만 뜨는 조작을 두지 않는다. */
+.md-mermaid { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden;
+  break-inside: avoid; }   /* 두 단 본문(허브 .pjh-read.cols2 — column-count)에서 그림이 단 사이로 쪼개지지 않게 */
+.md-mermaid-view { overflow-x: auto; padding: 16px 14px 4px; }
+.md-mermaid.is-wait .md-mermaid-view { min-height: 56px; }
+.md-mermaid-img { display: block; margin: 0 auto; max-width: none; height: auto; cursor: zoom-in; }
+.md-mermaid-code { display: none; border-top: 1px solid var(--line); }
+.md-mermaid-code .md-pre { margin: 0; border: 0; border-radius: 0; }
+.md-mermaid.show-code .md-mermaid-code { display: block; }
+/* 못 그린 본문 칸 — 그림 자리에 코드를 그대로 보인다(내용이 사라지지 않게). 까닭은 아래 줄이 말한다. */
+.md-mermaid.is-err:not(.is-edit) .md-mermaid-view { display: none; }
+.md-mermaid.is-err:not(.is-edit) .md-mermaid-code { display: block; border-top: 0; }
+.md-mermaid.is-err .md-mermaid-codebtn,
+.md-mermaid:not(.is-ok):not(.is-edit) .md-mermaid-zoombtn { display: none; }
+.md-mermaid-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px 14px; }
+.md-mermaid-note { margin: 0; flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.md-mermaid.is-err .md-mermaid-note { color: var(--coral-text); }
+.md-mermaid-acts { display: flex; gap: 2px; margin-left: auto; flex: none; }
+.md-mermaid-btn { background: none; border: 0; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.md-mermaid-btn:hover { color: var(--blue); background: var(--bg-tint); }
+.md-mermaid-btn:disabled { opacity: .45; cursor: default; color: var(--muted); background: none; }
+/* 에디터 미리보기 — 틀린 코드를 고치는 동안 직전 그림을 흐리게 남긴다(사라졌다 나타나는 깜빡임 대신) */
+.md-mermaid.is-edit.is-err .md-mermaid-img { opacity: .4; }
+/* 크게 보기 — 화면 가득. 띠: 모달(1400~1550)·메뉴(1600) 위, 토스트(2000) 아래 */
+.md-mmv { position: fixed; inset: 0; z-index: 1700; display: flex; flex-direction: column; background: var(--bg); }
+.md-mmv-bar { display: flex; align-items: center; gap: 2px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.md-mmv-name { flex: 1; min-width: 0; margin-right: 8px; font-size: 13.5px; font-weight: 700; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-mmv-pct { min-width: 46px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.md-mmv-stage { position: relative; flex: 1; overflow: hidden; cursor: grab; touch-action: none; }
+.md-mmv-stage.is-drag { cursor: grabbing; }
+.md-mmv-img { position: absolute; left: 0; top: 0; max-width: none; user-select: none; -webkit-user-drag: none; pointer-events: none; }
 .md-list { margin: 0 0 12px; padding-left: 22px; }
 .md-list li { margin: 2px 0; }
 .md-list .md-list { margin-bottom: 0; }

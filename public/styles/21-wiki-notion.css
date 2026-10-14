@@ -129,6 +129,11 @@
   border-radius: 10px; padding: 12px 14px; padding-right: 84px; white-space: pre-wrap; color: var(--ink); }
 .be-code-lang { position: absolute; top: 9px; right: 10px; width: 68px; border: none; background: transparent;
   color: var(--muted-2); font: 11.5px ui-monospace, Menlo, monospace; text-align: right; outline: none; }
+/* ```mermaid 코드 블록(#4685) — 그림이 서 있으면 코드 칸을 접고, 코드 칸에 들어오면(포커스) 펼친다. 미리보기 단추를 눌러도 펼치지 않게
+   «코드 칸 안의 포커스» 로만 가른다. ⚠ display:none·visibility:hidden 으로 접지 않는다 — 저장이 코드 칸의 innerText 를 읽는데
+   (editor/blocks.ts blockData) 그 둘은 innerText 를 바꾼다(그려지지 않는 칸은 줄바꿈 규칙이 달라지고, 숨긴 글은 빠진다). 높이만 0 이면 글은 그대로다. */
+.be-block.be-mmd-ok .be-codewrap:not(:focus-within) { height: 0; margin: 0; overflow: hidden; }
+.be-main > .md-mermaid.is-edit { margin: 6px 0; }
 .be-div { padding: 9px 0; cursor: default; border-radius: 6px; }
 .be-div hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
 .be-div:focus { outline: none; background: var(--bg-sel); }
