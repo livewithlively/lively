@@ -52,6 +52,42 @@ skip() { # $1=거친 사유 코드, 나머지=사람 말
   say "건너뜀 — $*"; exit 0
 }   # 정상 종료: 이 스크립트가 손대면 안 되는 상태라는 뜻이다
 
+# ── 의존성 — package-lock 이 바뀌면 설치한다 (#4685) ──────────────────────────────────────
+#  종전엔 이 단계가 없어 **새 의존성이 dev 에 영영 안 깔렸다**. 2026-10-14 실측: mermaid(devDependencies — build:web 이
+#  node_modules 에서 public/app/vendor 로 복사한다)를 stage 에 올리자 :8080 이 lib/mermaid.js 는 새 판을 내면서
+#  vendor/mermaid/mermaid.min.js 는 404 를 냈다 — 본문의 mermaid 가 그림 대신 «도구를 불러오지 못해» 로 떨어졌다.
+#  · 커밋 diff 가 아니라 «마지막으로 설치한 lock 의 지문»(logs/deps.lock-sha)과 지금 lock 을 견준다 — 이 단계가 생기기
+#    전에 이미 당겨 온 변경도 다음 틱에 잡히고, 설치가 실패하면 다음 틱에 다시 시도한다(지문은 성공했을 때만 적는다).
+#  · `npm ci` 가 아니라 `npm install --no-save` — ci 는 node_modules 를 통째로 지우고 다시 깐다. 그 사이 돌고 있는
+#    게이트웨이가 늦게 부르는 모듈(동적 import)을 못 찾는다. install 은 모자란 것·다른 것만 고친다. --no-save 라
+#    package.json·lock 을 고치지 않는다(고치면 이 클론이 dirty 가 돼 다음 동기화가 «남의 WIP» 로 읽고 멈춘다).
+#  · 설치했으면 웹을 다시 빌드하고(벤더 복사) 게이트웨이도 다시 띄운다 — 런타임 의존성이 바뀐 것이면 재시작 전까지
+#    옛 판이 돈다. 과잉 재시작은 몇 초로 무해하고 누락은 조용한 버그다(아래 src·kit 판정과 같은 원칙).
+LOCK_STAMP="$CLONE/logs/deps.lock-sha"
+DEPS_CHANGED=0
+lock_sha() { { shasum -a 256 "$CLONE/package-lock.json" 2>/dev/null || sha256sum "$CLONE/package-lock.json" 2>/dev/null; } | cut -d' ' -f1; }
+sync_deps() {
+  local want have
+  want=$(lock_sha)
+  [ -n "$want" ] || return 0
+  have=$(cat "$LOCK_STAMP" 2>/dev/null || true)
+  [ "$want" = "$have" ] && return 0
+  say "의존성(package-lock) 변경 — npm install"
+  ( cd "$CLONE" && npm install --no-save --no-audit --no-fund >/dev/null 2>&1 ) \
+    || { say "⚠ npm install 실패 — 새 의존성 없이 돈다(다음 틱에 다시 시도한다 · 사람이 봐야 한다)"; exit 1; }
+  mkdir -p "$(dirname "$LOCK_STAMP")" 2>/dev/null
+  printf '%s\n' "$want" > "$LOCK_STAMP"
+  DEPS_CHANGED=1
+}
+build_web() {
+  ( cd "$CLONE" && rm -f .tsbuildinfo-web && npm run build:web >/dev/null 2>&1 ) \
+    || { say "⚠ build:web 실패 — 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
+}
+restart_gateway() {
+  ( cd "$CLONE" && scripts/restart-gateway.sh >/dev/null 2>&1 ) \
+    || { say "⚠ 게이트웨이 재시작 실패 — 기존 프로세스는 그대로 살아 있다"; exit 1; }
+}
+
 [ -d "$CLONE/.git" ] || { say "오류: 서빙 클론이 아니다 — $CLONE"; exit 1; }
 git -C "$CLONE" rev-parse --git-dir >/dev/null 2>&1 || { say "오류: git 레포가 아니다 — $CLONE"; exit 1; }
 
@@ -83,8 +119,19 @@ remote_sha=$(git -C "$CLONE" rev-parse "origin/$BRANCH")
 # ⚠ 이미 최신인 평상시 경로에서도 **살아 있다는 도장을 찍는다** — 안 찍으면 잡이 멀쩡히 도는데도
 #  상태 파일이 늙어 /readyz 가 'stale(잡 사망)' 로 오판한다. 대부분의 틱이 이 경로로 끝난다.
 if [ "$local_sha" = "$remote_sha" ]; then
-  [ $CHECK_ONLY -eq 1 ] && say "최신 — ${local_sha:0:8}"
-  [ $CHECK_ONLY -eq 1 ] || write_status synced ""
+  if [ $CHECK_ONLY -eq 1 ]; then
+    say "최신 — ${local_sha:0:8}"
+    [ "$(lock_sha)" = "$(cat "$LOCK_STAMP" 2>/dev/null)" ] || say "의존성 설치 필요(package-lock 지문이 마지막 설치와 다르다)"
+    exit 0
+  fi
+  #  커밋은 그대로여도 의존성은 따로 본다 — 이 단계가 생기기 전에 당겨 온 lock 변경을 여기서 잡는다(위 «의존성» 절).
+  sync_deps
+  if [ $DEPS_CHANGED -eq 1 ]; then
+    say "의존성을 깔았다 — build:web · restart-gateway.sh"
+    build_web
+    restart_gateway
+  fi
+  write_status synced ""
   exit 0
 fi
 
@@ -98,11 +145,12 @@ if [ $CHECK_ONLY -eq 1 ]; then say "동기화 필요 — ${behind}커밋 뒤짐(
 say "동기화 — ${behind}커밋 (${local_sha:0:8} → ${remote_sha:0:8})"
 git -C "$CLONE" merge --ff-only "origin/$BRANCH" >/dev/null || { say "오류: ff 실패(히스토리가 갈렸다) — 사람이 봐야 한다"; exit 1; }
 
+# 의존성 먼저 — 웹 빌드가 node_modules 에서 벤더를 복사하므로 빌드보다 앞서야 한다(위 «의존성» 절).
+sync_deps
 # 웹 산출물은 git 밖이므로(#2054) 받은 소스로 **여기서** 다시 만든다. 안 만들면 :8080 이 옛 화면을 서빙한다.
-if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/dev/null; then
-  say "web 변경 있음 — build:web"
-  ( cd "$CLONE" && rm -f .tsbuildinfo-web && npm run build:web >/dev/null 2>&1 ) \
-    || { say "⚠ build:web 실패 — 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
+if [ $DEPS_CHANGED -eq 1 ] || ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/dev/null; then
+  say "web·의존성 변경 있음 — build:web"
+  build_web
 fi
 # 단독 페이지 번들(public/terminal.js·md.js·page-scrollbar.js)은 build:web 이 안 만든다 — 별 파이프라인(#1313 R51,
 #  scripts/build-standalone.mjs)이다. 종전엔 여기서 안 돌려 **web/standalone/ 변경이 dev 에 영영 안 나갔다**
@@ -125,10 +173,9 @@ fi
 #  그 캐시는 build-context.mjs 가 **정적 import 하는 것들에도** 걸린다(지금은 `kit/setup/kit-manifest.mjs`).
 #  그래서 경로를 하나씩 세지 않는다 — import 가 하나 늘 때마다 여기가 조용히 낡기 때문이다.
 #  대신 kit/ 전체를 보고 **테스트 파일만 뺀다**: 과잉 재시작은 몇 초로 무해하지만, 누락은 조용한 버그다.
-if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ kit/ ':(exclude)kit/**/*.test.mjs' 2>/dev/null; then
-  say "src·kit 변경 있음 — restart-gateway.sh"
-  ( cd "$CLONE" && scripts/restart-gateway.sh >/dev/null 2>&1 ) \
-    || { say "⚠ 게이트웨이 재시작 실패 — 기존 프로세스는 그대로 살아 있다"; exit 1; }
+if [ $DEPS_CHANGED -eq 1 ] || ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ kit/ ':(exclude)kit/**/*.test.mjs' 2>/dev/null; then
+  say "src·kit·의존성 변경 있음 — restart-gateway.sh"
+  restart_gateway
 fi
 
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8080/healthz || echo "000")
