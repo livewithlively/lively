@@ -210,6 +210,27 @@ await t("크론 액션이 관리기 결과로 status 를 정한다", () => {
     "관리기 실패가 크론 상태에 안 드러난다");
 });
 
+// ══ 모순 후보 쿼리의 체크아웃 — 커넥션이 끊겨도 게이트웨이를 죽이지 않는다 ══
+//  connect() 로 받은 클라이언트엔 pool.query 와 달리 'error' 리스너가 없다. 수 초짜리 후보 쿼리 도중 DB 커넥션이 끊기면
+//  그 'error' 가 uncaughtException 이 되어 게이트웨이가 재기동했다(실 PG 에서 백엔드를 끊어 재현, 2026-10-14).
+const contradictionBody = (): string => {
+  const det = readSrc("src/org/manage/detectors.ts");
+  const fn = det.slice(det.indexOf("export async function findContradictionCandidates"));
+  return fn.slice(0, fn.indexOf("\n}"));
+};
+
+await t("모순 후보 쿼리는 체크아웃 동안 커넥션 오류를 받아 두고 그 커넥션을 폐기한다", () => {
+  const body = contradictionBody();
+  const on = body.indexOf('client.on("error", onError)');
+  assert.ok(on > 0 && on < body.indexOf('client.query("BEGIN")'),
+    "BEGIN 전에 'error' 리스너를 달지 않는다 — 쿼리 도중 끊김이 uncaughtException 이 된다");
+  assert.match(body, /const onError = \(e: Error\): void => \{ broken \?\?= e; \};/, "받은 오류를 release(err) 로 넘기지 않는다");
+  const fin = body.slice(body.indexOf("} finally {"));
+  const off = fin.indexOf('client.removeListener("error", onError)');
+  assert.ok(off > 0 && off < fin.indexOf("client.release(broken)"),
+    "반납 전에 리스너를 떼지 않는다 — 풀 커넥션이 재사용될 때마다 리스너가 쌓인다");
+});
+
 console.log(`\n${pass} passed`);
 
 // ── 배선 — HNSW 탐색 폭과 접수 실패 노출 (리뷰 반영) ──

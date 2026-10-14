@@ -218,6 +218,13 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
   const client = await itemsPool.connect();
   let rows: Record<string, unknown>[];
   let broken: Error | undefined;
+  //  ⚠ 체크아웃해 쥔 동안 커넥션이 끊기면(DB 재시작·장애조치·pg_terminate_backend) pg 클라이언트가 'error' 를 낸다.
+  //   리스너가 없으면 Node 가 그걸 uncaughtException 으로 바꿔 게이트웨이가 통째로 재기동한다(열린 터미널이 전부
+  //   끊긴다). pool.query 는 이 리스너를 스스로 달지만 connect() 로 받은 클라이언트엔 없다 — 후보 쿼리는 수 초가
+  //   걸려 그 창이 넓다. 받은 오류는 broken 에 남겨 아래 release(err) 로 그 커넥션을 폐기한다.
+  //   (실측 2026-10-14: 쿼리 도중 백엔드를 끊으면 리스너 없이는 프로세스가 죽고, 있으면 거부로 끝난다.)
+  const onError = (e: Error): void => { broken ??= e; };
+  client.on("error", onError);
   try {
     await client.query("BEGIN");
     await client.query(`SET LOCAL hnsw.ef_search = ${CONTRADICTION_EF_SEARCH}`);
@@ -226,9 +233,10 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
     await client.query("COMMIT");
   } catch (e) {
     //  ROLLBACK 마저 실패하면 커넥션이 죽은 것이다 — 풀에 돌려보내지 않고 폐기한다(release(err)).
-    await client.query("ROLLBACK").catch((re: Error) => { broken = re; });
+    await client.query("ROLLBACK").catch((re: Error) => { broken ??= re; });
     throw e;
   } finally {
+    client.removeListener("error", onError);
     client.release(broken);
   }
 
