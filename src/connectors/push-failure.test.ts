@@ -165,6 +165,16 @@ test("배선 — 일괄 거절이면 표식을 붙이고 실패로 올리며 파
   assert.ok(DRAIN.indexOf("isMassRejection({ rejected, pushed })") < DRAIN.indexOf("await notifyParked(parkedRows"), "파킹 경보가 일괄 판정보다 먼저 나간다");
 });
 
+// 부모 detach 뒤 아직 안 올라간 자식은 기다리지 않고 닫힌다(아래 시험) — 로그가 «자식은 부모가 다시 생긴 뒤» 라고 하면
+//  운영자는 자식이 저절로 올라갈 줄 알고 기다린다. 갱신 경로 detach 문구가 실제 동작을 말하는지 잠근다.
+test("문구 — 갱신 경로 detach 로그가 자식 반출이 닫힌다고 말한다", () => {
+  const i = DRAIN.indexOf('if (r === "detached") {');
+  assert.ok(i > 0, "갱신 경로 detach 분기를 못 찾았다");
+  const block = DRAIN.slice(i, DRAIN.indexOf("detached++; continue;", i));
+  assert.ok(!/자식은 부모가 다시 생긴 뒤/.test(block), "detach 로그가 자식이 저절로 올라간다고 한다 — 실제로는 자식 반출이 닫힌다");
+  assert.match(block, /자식의 반출은 닫힌다/, "detach 로그가 자식 반출이 닫힌다는 사실을 말하지 않는다");
+});
+
 // 부모가 반출 대기도 아니고 ClickUp 에도 없으면 자식을 닫는다 — 기다리게 두면 영영 deferred 로 남는다.
 test("부모가 반출 대상이 아니면 자식은 기다리지 않고 닫힌다", () => {
   const i = DRAIN.indexOf('par.external_system !== "clickup" || !par.external_id');

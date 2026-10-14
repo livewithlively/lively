@@ -80,7 +80,7 @@ The old `pm_task_*` MCP tools (create·update_status·assign·comment·link·arc
 
 | op | Semantics |
 |---|---|
-| Create | project = top-level Task in the container List, task = Subtask (parent = the project Task), subtask = nested Subtask. `CLICKUP_CONTAINER_LIST_ID` (admin tab 'container list') is required — without it the row stays in error. If the parent is not pushed yet, the child is deferred to the next tick. Links back external_id/url after creation |
+| Create | project = top-level Task in the container List, task = Subtask (parent = the project Task), subtask = nested Subtask. `CLICKUP_CONTAINER_LIST_ID` (admin tab 'container list') is required — without it the row stays in error. If the parent is not pushed yet, the child is deferred to the next tick (only while the parent's row is queued — if the parent is not exportable (restricted visibility, link dropped because its card was deleted, …) the child's export is closed; editing the child again after the parent is pushed creates it under the parent). Links back external_id/url after creation |
 | Update | PUTs name·`markdown_description`·status·priority·start/due. status maps the canonical category → the space's status set; on a mismatch it retries once without status |
 | Delete | **Hard-deletes** the ClickUp task (`DELETE /task/<id>` — already gone (404) counts as success) |
 

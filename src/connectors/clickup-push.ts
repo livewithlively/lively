@@ -330,7 +330,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                     external_base=NULL, updated_at=now() WHERE id=$1`, [p.id]),
         });
         if (r === "detached") {
-          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 컨테이너 리스트에 새 카드 — 자식은 부모가 다시 생긴 뒤)");
+          //  아직 안 올라간 자식은 기다리지 않는다 — 이 행이 큐에 없으니 자식을 다음에 볼 때 «부모가 반출 대상이 아님» 으로
+          //   닫힌다(위 부모 미반출 분기). 부모가 다시 올라간 뒤 그 자식을 다시 편집하면 그 아래에 만들어진다.
+          logger.warn({ project: p.id, task: extId }, "ClickUp 태스크가 지워져 연결을 끊었다(다음 변경 때 새 카드 — 아직 안 올라간 자식의 반출은 닫힌다, 부모가 다시 올라간 뒤 다시 편집하면 그 아래에 만들어진다)");
           await markDone(ob.id); detached++; continue;
         }
         await itemsPool.query(

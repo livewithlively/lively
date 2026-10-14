@@ -80,7 +80,7 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
 
 | op | 의미론 |
 |---|---|
-| 생성 | project=컨테이너 List 안 최상위 Task, task=Subtask(parent=project-Task), subtask=중첩 Subtask. `CLICKUP_CONTAINER_LIST_ID`(관리탭 '컨테이너 리스트') 필수 — 없으면 그 행은 에러로 남는다. 부모가 아직 미푸시면 자식은 다음 틱으로 defer. 생성 후 external_id/url 링크백 |
+| 생성 | project=컨테이너 List 안 최상위 Task, task=Subtask(parent=project-Task), subtask=중첩 Subtask. `CLICKUP_CONTAINER_LIST_ID`(관리탭 '컨테이너 리스트') 필수 — 없으면 그 행은 에러로 남는다. 부모가 아직 미푸시면 자식은 다음 틱으로 defer(부모 행이 반출 대기 중일 때만 — 부모가 반출 대상이 아니면(공개범위 잠금·카드 삭제로 연결 해제 등) 자식 반출을 닫는다. 부모가 다시 올라간 뒤 자식을 다시 편집하면 그 아래에 만들어진다). 생성 후 external_id/url 링크백 |
 | 수정 | name·`markdown_description`·status·priority·start/due 를 PUT. status 는 정규 카테고리 → 스페이스 상태셋으로 매핑하고, 불일치면 status 를 빼고 1회 재시도 |
 | 삭제 | ClickUp 태스크 **하드 삭제**(`DELETE /task/<id>` — 이미 없으면(404) 성공 취급) |
 
