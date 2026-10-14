@@ -315,6 +315,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-sql-e2e.pg-test.mjs
+      # ⑤-i2 앱 데이터 v2(#4483) — 칸 타입(numeric(p,s)·varchar(n)·배열·enum…)이 format_type 과 맞는가 · 제약(not_null·default·
+      #    unique·check·외래키 (tenant_id, 칸) → (tenant_id, id))이 앱 역할의 쓰기에서 걸리는가 · 구조 변경(이름 바꾸기·무손실
+      #    변환·drop_columns 보관)과, 있던 데이터가 새 제약에 어긋나면 그 표 전체가 되돌아가는가. 검사 식이 CHECK 괄호 밖으로
+      #    새지 않는가(T6). 목으로는 format_type·제약 검증·트랜잭션 되돌림이 안 보인다.
+      - name: 앱 데이터 v2(타입·제약·구조 변경) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-data-v2.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.

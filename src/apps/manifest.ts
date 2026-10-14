@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { SCOPES_ALLOWED } from "../auth/scopes.js";
 import { STRICT_SLUG, assertAssetId } from "../org/asset-id.js";
+import { parseColumnType, defaultLiteralText, DEFAULT_EXPRS } from "./store-ddl.js";
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
@@ -162,9 +163,22 @@ const jobSchema = z.object({
   }).strict(),
 }).strict();
 
+const IDENT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+// #4483 칸 제약·구조 변경 — 전부 선택. 값 정합성은 DB 가 지킨다(앱 코드·AI 가 틀린 값을 넣어도 거부된다).
 const dataColumnSchema = z.object({
-  name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "컬럼명은 소문자 영숫자/_(소문자·_로 시작)"),
-  type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(별도)
+  name: z.string().regex(IDENT_RE, "컬럼명은 소문자 영숫자/_(소문자·_로 시작)"),
+  type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(store-ddl.parseColumnType)
+  not_null: z.boolean().optional(),
+  default: z.unknown().optional(),                   // 값 기본값(JSON) — 형에 맞는 리터럴로(store-ddl.defaultLiteralText)
+  default_expr: z.string().max(40).optional(),       // 식 기본값 — store-ddl.DEFAULT_EXPRS 만
+  unique: z.boolean().optional(),
+  check: z.string().min(1).max(1000).optional(),     // 검사 식 — 설치 때 검사기가 해석한다(그 표의 칸만 · 위험 함수 거부)
+  references: z.object({
+    table: z.string().regex(IDENT_RE, "references.table 은 같은 앱의 테이블 이름"),
+    on_delete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  }).strict().optional(),
+  values: z.array(z.string().min(1).max(200)).min(1).max(200).optional(),   // type: enum 의 값
+  renamed_from: z.string().regex(IDENT_RE, "renamed_from 은 옛 칸 이름").optional(),
 }).strict();
 
 // #4226 인덱스 선언 — 테이블이 커지면 인덱스 없는 조회가 전체 훑기가 되어 자유 SQL 의 문장 시간 상한(5초)에 걸린다.
@@ -178,6 +192,9 @@ const dataTableSchema = z.object({
   name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "테이블명은 소문자 영숫자/_(소문자·_로 시작)"),
   columns: z.array(dataColumnSchema).min(1),
   indexes: z.array(dataIndexSchema).max(20).default([]),
+  // #4483 여러 칸에 걸친 검사(예 `starts_at < ends_at`) · 지울 칸(데이터가 있으면 보관 스키마로 옮긴 뒤 지운다).
+  checks: z.array(z.string().min(1).max(1000)).max(20).default([]),
+  drop_columns: z.array(z.string().regex(IDENT_RE, "drop_columns 는 칸 이름")).max(100).default([]),
 }).strict();
 
 const sectionSchema = z.object({
@@ -308,6 +325,41 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   assertUniqueKeys("jobs", m.jobs.map((j) => j.key));
   assertUniqueKeys("data.tables", m.data.tables.map((t) => t.name));
   // #4226 인덱스 칸은 그 테이블의 칸이어야 한다 — 없는 칸이면 설치 때 DDL 이 실패해 원인이 흐려진다.
+  // #4483 칸 타입·제약·구조 변경 — 모양만 여기서(DB 없이). 검사 식의 뜻(칸·함수)은 설치 때 검사기가 본다.
+  const tableNames = new Set(m.data.tables.map((t) => t.name));
+  for (const t of m.data.tables) {
+    const where = (c: string) => `매니페스트 오류 [data.tables.${t.name}.columns.${c}]`;
+    const names = new Set<string>();
+    for (const c of t.columns) {
+      if (names.has(c.name)) throw new HttpError(400, `${where(c.name)}: 같은 칸 이름이 두 번 있습니다`);
+      names.add(c.name);
+      const ty = parseColumnType(c.type);                                   // 400 — 허용 밖 타입·범위
+      if (ty.enum !== (c.values !== undefined)) throw new HttpError(400, `${where(c.name)}: enum 타입에는 values 를, values 는 enum 에만 씁니다`);
+      if (c.values && new Set(c.values).size !== c.values.length) throw new HttpError(400, `${where(c.name)}: values 에 같은 값이 두 번 있습니다`);
+      if (c.default !== undefined && c.default_expr !== undefined) throw new HttpError(400, `${where(c.name)}: default 와 default_expr 은 함께 쓸 수 없습니다`);
+      if (c.default_expr !== undefined && !(c.default_expr.toLowerCase() in DEFAULT_EXPRS)) {
+        throw new HttpError(400, `${where(c.name)}: default_expr 은 ${Object.keys(DEFAULT_EXPRS).join(" · ")} 중 하나입니다(값은 default 에 JSON 으로)`);
+      }
+      if (c.default !== undefined) defaultLiteralText(c.default, ty);      // 400 — 형과 맞지 않는 기본값 모양
+      if (c.values && c.default !== undefined && c.default !== null && !c.values.includes(String(c.default))) {
+        throw new HttpError(400, `${where(c.name)}: default '${String(c.default)}' 가 values 에 없습니다`);
+      }
+      if (c.references) {
+        if (!tableNames.has(c.references.table)) throw new HttpError(400, `${where(c.name)}: references.table '${c.references.table}' 는 이 앱이 선언한 테이블이 아닙니다`);
+        if (!ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
+        if (c.references.on_delete === "set null" && c.not_null) throw new HttpError(400, `${where(c.name)}: on_delete 'set null' 과 not_null 은 함께 쓸 수 없습니다`);
+      }
+      if (c.renamed_from !== undefined && (c.renamed_from === c.name || t.columns.some((o) => o.name === c.renamed_from))) {
+        throw new HttpError(400, `${where(c.name)}: renamed_from '${c.renamed_from}' 는 지금 선언한 다른 칸과 겹칩니다`);
+      }
+      if (c.check !== undefined && /;/.test(c.check)) throw new HttpError(400, `${where(c.name)}: check 는 식 하나입니다(세미콜론 없이)`);
+    }
+    for (const d of t.drop_columns) {
+      if (names.has(d)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.drop_columns]: '${d}' 는 지금 선언한 칸입니다 — 지울 칸만 적으세요`);
+      if (["id", "created_at", "tenant_id"].includes(d)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.drop_columns]: 시스템 칸 '${d}' 는 지울 수 없습니다`);
+    }
+    for (const ck of t.checks) if (/;/.test(ck)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.checks]: 식 하나씩(세미콜론 없이)`);
+  }
   for (const t of m.data.tables) {
     const cols = new Set(["id", "created_at", ...t.columns.map((c) => c.name)]);
     const seen = new Set<string>();

@@ -473,6 +473,57 @@ export function planAppSqlSync(input: string, opts: PlanAppSqlOpts): AppSqlPlan 
   };
 }
 
+// ── 매니페스트 검사 식(#4483) ─────────────────────────────────────────────────────────────
+//  data.tables[].columns[].check · data.tables[].checks — 설치 때 소유자 연결이 `ALTER TABLE … CHECK (식)` 로 걸고, 그 식은
+//  나중에 앱 역할의 INSERT·UPDATE 마다 실행된다. 그래서 앱 SQL 과 같은 경계(허용 목록 · 함수 · 형 · 연산자)를 지나야 하고,
+//  더해서 표 자리(FROM)·파라미터·서브쿼리가 없어야 하며 칸은 그 표의 칸 이름 하나씩만 쓴다.
+const CHECK_STMT_KEYS = new Set(["targetList", "op", "limitOption"]);
+
+function columnRefs(x: unknown, out: unknown[][]): void {
+  if (Array.isArray(x)) { for (const e of x) columnRefs(e, out); return; }
+  if (!isObj(x)) return;
+  if (isObj(x.ColumnRef)) { out.push(Array.isArray(x.ColumnRef.fields) ? x.ColumnRef.fields : []); return; }
+  for (const v of Object.values(x)) if (v !== null && typeof v === "object") columnRefs(v, out);
+}
+
+/** 검사 식 하나를 검증하고 DDL 에 넣을 글자를 돌려준다. 받을 수 없으면 400(무엇 대신 무엇을 쓰라는 데까지). */
+export function checkExpressionSync(expr: string, columns: readonly string[]): string {
+  if (!ready) throw new HttpError(503, "SQL 해석기가 아직 준비되지 않았습니다");
+  const text = String(expr ?? "").trim();
+  const no = (why: string): never => { throw new HttpError(400, `검사 식(check)을 받을 수 없습니다 — ${why}: ${text.slice(0, 120)}`); };
+  if (!text) no("비어 있습니다");
+  if (text.length > 1000) no("너무 깁니다(1,000자)");
+  if (text.includes("\0")) no("NUL 문자가 있습니다");
+  //  ⚠ 감싸지 **않은** `SELECT 식` 으로 해석한다 — `SELECT ( 식 )` 으로 감싸 보면 `a > 0) OR (true` 처럼 식이 괄호를 먼저 닫아도
+  //   감싼 괄호와 짝이 맞아 통과하는데, DDL 의 `CHECK ( 식 )` 에서는 그 괄호가 CHECK 를 닫고 나머지가 ALTER TABLE 의 다음 조각이
+  //   된다(PG 시험 T6 실측). 식 혼자 문장으로 해석되면 그 안의 괄호는 식 안에서 짝이 맞는다 — 감싸도 밖으로 못 샌다.
+  //   끝에 줄바꿈을 붙인다 — 식 끝의 `-- 주석` 이 DDL 의 닫는 괄호를 먹지 않게(DDL 도 같은 모양: `CHECK (식\n)`).
+  const probe = `SELECT ${text}\n`;
+  const buf = Buffer.from(probe, "utf8");
+  const { type, body } = parseOne(probe, buf);
+  const extra = Object.keys(body).filter((k) => !CHECK_STMT_KEYS.has(k));
+  const target = Array.isArray(body.targetList) && body.targetList.length === 1 && isObj(body.targetList[0]) && isObj(body.targetList[0].ResTarget)
+    ? body.targetList[0].ResTarget : null;
+  if (type !== "SelectStmt" || extra.length || !target || body.op !== "SETOP_NONE" || target.name !== undefined) no("식 하나만 씁니다(예 amount >= 0)");
+  const w: Walk = { declared: new Set(), tables: new Set(), refs: [], maxParam: 0, locks: false };
+  try { walk(target!.val, new Set(), w, 0); }
+  catch (e) {
+    if (e instanceof HttpError && e.status === 403) no("검사 식에는 다른 표를 쓸 수 없습니다");
+    if (e instanceof HttpError) no(e.message.replace(/^SQL 을 받을 수 없습니다 — /, ""));
+    throw e;
+  }
+  if (w.maxParam > 0) no("$1 같은 파라미터는 쓸 수 없습니다 — 값을 식에 바로 쓰세요");
+  const allowed = new Set(columns);
+  const refs: unknown[][] = [];
+  columnRefs(target!.val, refs);
+  for (const f of refs) {
+    const n = names(f);
+    if (!n || n.length !== 1) no("칸은 이름 하나로만 씁니다(표 이름을 붙이지 않는다)");
+    if (!allowed.has(n![0])) no(`'${n![0]}' 는 이 표의 칸이 아닙니다(이 표의 칸: ${[...allowed].sort().join(", ")})`);
+  }
+  return text;
+}
+
 // ── 결과 상한 — DB 쪽에서 자른다 ─────────────────────────────────────────────────────────
 //  종전 db_query 실행기는 결과를 **전부 받은 뒤** 잘랐다(query-exec allRows.slice). 큰 결과 하나가 게이트웨이(전원이
 //  나눠 쓰는 메모리)를 터뜨릴 수 있어서, 앱 SQL 은 행 수와 바이트를 DB 안에서 센다:

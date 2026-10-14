@@ -62,8 +62,9 @@ const appIdOf = (b: Record<string, unknown>): string | undefined => (b.app_id ==
 interface AppTableTarget { rel: string; schema: string; builtin: boolean; tables: AppTableSpec[] }
 /** 매니페스트 data.tables → 테이블 명세(모양이 어긋나도 던지지 않는다 — 저장된 매니페스트를 읽는 자리). */
 function declaredSpecs(manifest: unknown): AppTableSpec[] {
-  return ((manifest as { data?: { tables?: Array<{ name?: string; columns?: StoreColumn[]; indexes?: StoreIndex[] }> } })?.data?.tables ?? [])
-    .map((t) => ({ table: String(t.name), columns: (t.columns ?? []) as StoreColumn[], indexes: (t.indexes ?? []) as StoreIndex[] }));
+  return ((manifest as { data?: { tables?: Array<{ name?: string; columns?: StoreColumn[]; indexes?: StoreIndex[]; checks?: string[]; drop_columns?: string[] }> } })?.data?.tables ?? [])
+    .map((t) => ({ table: String(t.name), columns: (t.columns ?? []) as StoreColumn[], indexes: (t.indexes ?? []) as StoreIndex[],
+      checks: Array.isArray(t.checks) ? t.checks : [], drop_columns: Array.isArray(t.drop_columns) ? t.drop_columns : [] }));
 }
 /** 여러 매니페스트의 표 명세 합 — 같은 이름이면 앞의 것(설치된 판 — 새 칸이 더해진 쪽). */
 function unionSpecs(manifests: unknown[]): AppTableSpec[] {

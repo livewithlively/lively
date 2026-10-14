@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { planAppSql, planAppSqlSync, wrapForCaps, forbiddenFunction, APP_SQL_MAX_LEN, _walkTreeForTest, type AppSqlPlan } from "./app-sql.js";
+import { planAppSql, planAppSqlSync, checkExpressionSync, wrapForCaps, forbiddenFunction, APP_SQL_MAX_LEN, _walkTreeForTest, type AppSqlPlan } from "./app-sql.js";
 import { TokenBuckets, FairScheduler, shapeResult, shapeWire, appSqlLimits, nextStatementTimeout, takeAppCall, resetAppSqlLimits } from "./app-sql-exec.js";
 import { appSqlRoleName, appIndexName } from "./store-ddl.js";
 
@@ -26,6 +26,7 @@ const rejects = async (sql: string, re: RegExp, status = 400): Promise<void> => 
 // ── G0 해석기 준비 — 이 파일의 **첫** 시험이어야 한다(한 파일 = 한 프로세스, 아직 아무도 싣지 않았다) ─────────────────
 test("G0 해석기를 싣기 전에 planAppSqlSync 를 부르면 503(조용히 통과하지 않는다)", () => {
   assert.throws(() => planAppSqlSync("SELECT 1", opts), (e: { status?: number }) => e.status === 503);
+  assert.throws(() => checkExpressionSync("a > 0", ["a"]), (e: { status?: number }) => e.status === 503);
 });
 
 // ── P1~P4 받는 것 ────────────────────────────────────────────────────────────────────────
@@ -333,6 +334,37 @@ test("G3 허용 목록 — 모르는 노드는 그 이름을 대며 거부(Postg
 test("G4 표 이름을 렉서 규칙 밖 모양으로 쓰면(U&\"…\") 바꿔 쓰지 않고 거부", async () => {
   await rejects('SELECT * FROM U&"contacts"', /확실히 읽지 못했습니다/);
   assert.equal((await plan('SELECT * FROM "contacts" c')).sql, `SELECT * FROM ${T("contacts")} c`);
+});
+
+// ── K 매니페스트 검사 식(#4483) — ALTER TABLE … CHECK (식\n) 에 그대로 들어가 앱 역할의 쓰기마다 실행된다 ──────────────────────
+test("K1 검사 식 받는 것 — 비교·논리·IN·BETWEEN·정규식·함수·IS NULL·꼬리 주석, 돌려주는 글자는 원문 그대로", async () => {
+  await planAppSql("SELECT 1", opts);                                     // 해석기 싣기
+  const cols = ["amount", "stage", "starts_at", "ends_at", "email", "id", "created_at"];
+  for (const e of ["amount >= 0", "stage IN ('lead', 'won')", "amount BETWEEN 0 AND 100", "email ~ '^[^@]+@'", "length(email) > 3 AND lower(email) = email",
+    "starts_at < ends_at OR ends_at IS NULL", "(amount > 0) OR (stage = 'free')", "amount >= 0 -- 음수 금지", "id > 0 AND created_at <= now()"]) {
+    assert.equal(checkExpressionSync(e, cols), e, e);
+  }
+});
+
+test("K2 검사 식 거부 — 괄호를 먼저 닫아 CHECK 밖으로 새기 · 별칭 · 두 식 · FROM · 다른 표 · 없는 칸 · 표 이름 붙인 칸 · 파라미터 · 위험 함수 · 빈 식", async () => {
+  await planAppSql("SELECT 1", opts);
+  const cols = ["a", "b"];
+  for (const [e, re] of [
+    ["a > 0) OR (true", /식 하나|문법 오류/],
+    ["a > 0) NOT VALID, ADD CONSTRAINT x CHECK (true", /식 하나|문법 오류/],
+    ["a > 0 AS x", /식 하나/],
+    ["a > 0, b > 0", /식 하나/],
+    ["a FROM contacts", /식 하나/],
+    ["a > (SELECT count(*) FROM pg_class)", /다른 표/],
+    ["c > 0", /이 표의 칸이 아닙니다/],
+    ["t.a > 0", /이름 하나로만/],
+    ["a > $1", /파라미터/],
+    ["set_config('role','none',true) = 'x'", /set_config/],
+    ["a > 0 AND pg_sleep(1) IS NULL", /pg_sleep/],
+    ["", /비어/],
+  ] as Array<[string, RegExp]>) {
+    assert.throws(() => checkExpressionSync(e, cols), (err: { status?: number; message?: string }) => err.status === 400 && re.test(String(err.message)), e);
+  }
 });
 
 test("forbiddenFunction — 막는 것과 흔한 함수는 통과", () => {

@@ -25,11 +25,117 @@ export const STORE_COLUMN_TYPES: Readonly<Record<string, string>> = {
 
 const IDENT = /^[a-z_][a-z0-9_]{0,62}$/; // 소문자·_ 시작, 소문자 영숫자/_ (매니페스트 검증과 동일 charset)
 
-/** 매니페스트 논리 타입 → postgres 타입. 화이트리스트 밖이면 400. */
+// ── 칸 타입 v2(#4483) — 값 정합성을 위해 되도록 전부 ────────────────────────────────────────
+//  위 14 종(종전 이름 — int/integer 는 bigint, timestamp 는 timestamptz 로 남긴다: 이미 깔린 앱의 표와 같아야 한다)에 더해
+//  smallint · int4 · real · double · numeric(p,s) · varchar(n) · time · timetz · interval · bytea · inet · cidr · 배열(<타입>[]) · enum.
+//  enum 은 text 칸 + 값 목록 검사(CHECK)다 — Postgres 열거형은 값 빼기·순서 바꾸기가 안 되고 형 이름이 표 이름과 같은 자리를 다툰다.
+//  vector 는 아직 없다 — 매니지드의 pgvector 는 public 스키마에 있어 앱 SQL 의 검색 경로(pg_catalog)에서 연산자가 안 보인다(별도 검토).
+const MORE_TYPES: Readonly<Record<string, string>> = {
+  smallint: "smallint", int2: "smallint", int4: "integer", int8: "bigint",
+  real: "real", float4: "real", double: "double precision", float8: "double precision", "double precision": "double precision",
+  time: "time", timetz: "time with time zone", interval: "interval",
+  bytea: "bytea", bytes: "bytea", inet: "inet", cidr: "cidr",
+  numeric: "numeric", decimal: "numeric", varchar: "varchar",
+  enum: "text",
+};
+
+export interface ColumnType {
+  /** CREATE TABLE 에 쓰는 형. */
+  sql: string;
+  /** Postgres format_type 이 같은 형을 부르는 이름(선언과 실제를 비교할 때). */
+  canonical: string;
+  array: boolean;
+  enum: boolean;
+  /** 정수 형(외래키 칸이 될 수 있다). */
+  integer: boolean;
+}
+
+/** format_type 이 내는 이름(PG 17·18 실측 — store-schema.pg-test 가 대조). */
+const CANONICAL: Readonly<Record<string, string>> = {
+  timestamptz: "timestamp with time zone", time: "time without time zone", varchar: "character varying",
+};
+
+const allTypeNames = (): string => [...new Set([...Object.keys(STORE_COLUMN_TYPES), ...Object.keys(MORE_TYPES)])].join(", ") + ", numeric(p,s), varchar(n), <타입>[]";
+
+/** 매니페스트 논리 타입 → 칸 형. 화이트리스트 밖·숫자 범위 밖이면 400. 대소문자·공백은 무시한다(`Numeric(12, 2)`). */
+export function parseColumnType(logical: string): ColumnType {
+  let s = String(logical ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const fail = (why = ""): never => { throw new HttpError(400, `허용되지 않은 컬럼 타입: ${logical}${why ? ` — ${why}` : ""} (허용: ${allTypeNames()})`); };
+  let array = false;
+  if (s.endsWith("[]")) { array = true; s = s.slice(0, -2).trim(); if (s.endsWith("[]")) fail("배열은 한 겹만"); }
+  let sql: string | undefined;
+  let canonical: string | undefined;
+  const num = /^(numeric|decimal) ?(?:\( ?(\d+) ?(?:, ?(\d+) ?)?\))?$/.exec(s);
+  const vc = /^varchar ?\( ?(\d+) ?\)$/.exec(s);
+  if (num && num[2] !== undefined) {
+    const p = Number(num[2]), sc = num[3] === undefined ? 0 : Number(num[3]);
+    if (!(p >= 1 && p <= 1000)) fail("numeric 자릿수는 1~1000");
+    if (!(sc >= 0 && sc <= p)) fail("numeric 소수 자릿수는 0~자릿수");
+    sql = `numeric(${p},${sc})`;
+    canonical = sql;
+  } else if (vc) {
+    const n = Number(vc[1]);
+    if (!(n >= 1 && n <= 10_485_760)) fail("varchar 길이는 1~10485760");
+    sql = `varchar(${n})`;
+    canonical = `character varying(${n})`;
+  } else {
+    sql = STORE_COLUMN_TYPES[s] ?? MORE_TYPES[s];
+    if (!sql) return fail();
+    canonical = CANONICAL[sql] ?? sql;
+  }
+  const isEnum = s === "enum";
+  if (isEnum && array) fail("enum 배열은 받지 않습니다 — text[] 를 쓰세요");
+  return {
+    sql: array ? `${sql}[]` : sql,
+    canonical: array ? `${canonical}[]` : canonical,
+    array,
+    enum: isEnum,
+    integer: !array && (sql === "bigint" || sql === "integer" || sql === "smallint"),
+  };
+}
+
+/** 매니페스트 논리 타입 → postgres 타입(종전 이름 — parseColumnType 의 sql). 화이트리스트 밖이면 400. */
 export function resolveColumnType(logical: string): string {
-  const t = STORE_COLUMN_TYPES[String(logical).trim().toLowerCase()];
-  if (!t) throw new HttpError(400, `허용되지 않은 컬럼 타입: ${logical} (허용: ${Object.keys(STORE_COLUMN_TYPES).join(", ")})`);
-  return t;
+  return parseColumnType(logical).sql;
+}
+
+// ── 칸 제약(#4483) — 매니페스트로만 ─────────────────────────────────────────────────────────
+/** 기본값 식 — 이 목록만(임의 식은 앱 역할로 실행되는 코드라 검사기 밖으로 새는 길이 된다). 값 기본값은 default 에 JSON 으로. */
+export const DEFAULT_EXPRS: Readonly<Record<string, string>> = {
+  "now()": "now()", "current_timestamp": "CURRENT_TIMESTAMP", "current_date": "CURRENT_DATE", "gen_random_uuid()": "gen_random_uuid()",
+};
+export type OnDelete = "cascade" | "set null" | "restrict" | "no action";
+export const ON_DELETE: ReadonlySet<string> = new Set(["cascade", "set null", "restrict", "no action"]);
+
+/** 제약 이름 — 라이블리가 만든 것만 이 접두로 알아보고, 선언에서 빠지면 지운다(사람이 만든 제약은 건드리지 않는다). */
+export const APP_CHECK_PREFIX = "lvck_";
+export const APP_FK_PREFIX = "lvfk_";
+export function appConstraintName(prefix: string, ...parts: string[]): string {
+  return `${prefix}${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16)}`;
+}
+
+/**
+ * 기본값 JSON → Postgres 리터럴 글자(따옴표 전 — 따옴표는 DB 의 quote_literal 이 붙인다). 형에 맞지 않으면 400.
+ *  배열 칸이면 배열 리터럴(`{"a","b"}`), json/jsonb 면 JSON 글자, 나머지는 글자 그대로. null 은 «기본값 없음».
+ */
+export function defaultLiteralText(value: unknown, type: ColumnType): string | null {
+  if (value === null || value === undefined) return null;
+  const isJson = type.sql === "jsonb" || type.sql === "json";
+  if (isJson) return JSON.stringify(value);
+  if (type.array) {
+    if (!Array.isArray(value)) throw new HttpError(400, `배열 칸(${type.sql})의 default 는 배열이어야 합니다`);
+    const el = (v: unknown): string => {
+      if (v === null) return "NULL";
+      if (typeof v === "object") throw new HttpError(400, "배열 default 의 원소는 글자·수·참거짓만");
+      return `"${String(v).replace(/[\\"]/g, (m) => `\\${m}`)}"`;
+    };
+    return `{${value.map(el).join(",")}}`;
+  }
+  if (typeof value === "object") throw new HttpError(400, `칸(${type.sql})의 default 는 글자·수·참거짓이어야 합니다`);
+  if (typeof value === "number" && !Number.isFinite(value)) throw new HttpError(400, "default 수는 유한해야 합니다");
+  const text = String(value);
+  if (text.includes("\0")) throw new HttpError(400, "default 에 NUL 문자가 있습니다");
+  return text;
 }
 
 /** 식별자(테이블·컬럼명) 검증 — charset 밖이면 400. 예약 컬럼(tenant_id·id 등 시스템 컬럼) 충돌도 거부. */
@@ -171,9 +277,28 @@ export function isBuiltinSource(source: unknown): boolean {
   return !!source && typeof source === "object" && (source as { kind?: unknown }).kind === "builtin";
 }
 
-export interface StoreColumn { name: string; type: string }
+/** 매니페스트 칸(#4483 확장). 제약은 전부 선택이다 — 없으면 종전처럼 NULL 허용·기본값 없음. */
+export interface StoreColumn {
+  name: string;
+  type: string;
+  not_null?: boolean;
+  /** 값 기본값(JSON) — 형에 맞게 리터럴로. default_expr 과 함께 못 쓴다. */
+  default?: unknown;
+  /** 식 기본값 — DEFAULT_EXPRS 의 열쇠만(now() · current_date · gen_random_uuid() …). */
+  default_expr?: string;
+  unique?: boolean;
+  /** 이 칸에 거는 검사 식(그 표의 칸만 쓴다) — 예 `amount >= 0`. */
+  check?: string;
+  /** 같은 앱의 다른 표(또는 자기 표)의 id 를 가리킨다. 칸은 정수형이어야 한다. */
+  references?: { table: string; on_delete?: OnDelete };
+  /** type 이 enum 일 때 허용 값. */
+  values?: string[];
+  /** 이 칸의 옛 이름 — 그 이름의 칸이 있고 새 이름이 없으면 이름만 바꾼다(데이터 그대로). */
+  renamed_from?: string;
+}
 
-/** 선언 컬럼 목록 → 컬럼 DDL 조각 배열(순수). 시스템 컬럼(tenant_id·id·created_at)은 호출부가 앞에 붙인다. */
+/** 선언 컬럼 목록 → 컬럼 DDL 조각 배열(순수). 시스템 컬럼(tenant_id·id·created_at)은 호출부가 앞에 붙인다.
+ *  제약(NOT NULL·DEFAULT·CHECK·외래키)은 여기서 안 붙인다 — 새 표든 있던 표든 같은 동기화(store-schema)가 건다. */
 export function columnDefs(columns: StoreColumn[]): string[] {
   if (!columns.length) throw new HttpError(400, "컬럼이 최소 1개 필요합니다");
   const seen = new Set<string>();
