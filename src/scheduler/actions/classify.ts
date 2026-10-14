@@ -6,7 +6,7 @@
 //   · 분류기가 하나도 없으면 **종전 전역 동작 그대로**(무중단 — listUnmappedKnowledge(50) + 기존 프롬프트)
 import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listClassifiers, getClassifier, classifierInbox, markClassifierSeen, recordClassifierRun, type ClassifierRow } from "../../org/store/classifiers.js";
-import { isActiveLane, laneMarker } from "../../org/distill/lanes.js";
+import { isActiveLane, isAutoDisabledLane, isClaimingLane, laneMarker } from "../../org/distill/lanes.js";
 
 // #982 미분류 지식 분류 주입 — map_unmapped 의 지식판. 카테고리 0건 지식이 있을 때만 상시세션에 분류 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 분류는 세션이 수 분에 걸쳐 knowledge_propose_category 로 수행).
@@ -41,9 +41,14 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   // ── #1419 T4 — 분류기가 있으면 분류기별로 접수(배타 배정·기준·후보축이 분류기 설정에서 온다). ──
   //  분류기가 하나도 없으면 아래 레거시 전역 경로로 떨어진다(무중단).
   let targets: ClassifierRow[] = [];
+  //  «맡은» 레인 수 — 자격 실패로 자동 정지된 레인도 센다. 일하는 레인이 0이어도 이게 있으면 레거시 전역 폴백으로
+  //   떨어지지 않는다(그 몫을 잡 계정·기본 기준이 분류해 버리면 사람이 레인을 다시 켜도 되돌릴 수 없다).
+  let claiming = 0;
   try {
     if (params.classifier) {
       const one = await getClassifier(String(params.classifier));
+      //  자동 정지 레인은 오류가 아니라 대기다(증류 전용 잡과 같은 규칙 — scheduler/actions/distill.ts).
+      if (one && isAutoDisabledLane(one)) return { status: "ok", summary: { skipped: `카테고리 붙이기 레인 '${String(params.classifier)}' 이 실행 계정의 자격 실패로 자동 정지됨 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요` } };
       // 지정한 분류기가 꺼졌거나 사라졌으면 조용히 no-op — 잡이 헛돌지 않게(수집기 잡과 같은 규칙).
       //  #4194 — 폐지된 재분류 모드 레인도 같다(인박스가 빈다 — lanes.ts isActiveLane).
       if (one && isActiveLane(one)) targets = [one];
@@ -51,9 +56,15 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
     } else {
       //  #4194 — «켜진» 이 아니라 «일하는» 레인만(isActiveLane). 폐지된 재분류 레인을 세면 그 레인만 켜진 조직에서
       //   아래 기본 기준 폴백이 영영 안 돌고, 계정이 없으면 할 일도 없는 잡이 REQUESTER_MISSING 으로 차단기를 올린다.
-      targets = (await listClassifiers()).filter(isActiveLane);
+      const all = await listClassifiers();
+      targets = all.filter(isActiveLane);
+      claiming = all.filter(isClaimingLane).length;
     }
   } catch { /* org_classifier 부재(구 배포) → 레거시 경로 */ }
+
+  if (!targets.length && claiming) {
+    return { status: "ok", summary: { skipped: "일하는 카테고리 붙이기 레인이 없고, 실행 계정의 자격 실패로 자동 정지된 레인이 그 몫을 맡고 있어 기본 기준 폴백을 돌리지 않음 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요" } };
+  }
 
   if (targets.length) {
     // 어느 분류기도 돌릴 계정이 없으면 종전과 같은 실패 — 연속 실패 차단기(#1675 ④)가 세는 자리다.

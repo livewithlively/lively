@@ -133,7 +133,9 @@ test("⑳ 자동 정지 표식 — 사람이 스위치를 바꿀 때만 지우�
   assert.match(INGEST, /THEN \$3::jsonb \|\| jsonb_build_object\('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason'\)/,
     "실행 기록이 자동 정지 표식을 덮어쓴다");
   //  레인 정지는 켜진 레인만, 실패한 그 레인 또는 같은 계정을 명시한 레인만 건드린다.
-  assert.match(AUTH, /WHERE enabled=true AND \(key=\$1 OR requester=\$2\) RETURNING key/, "레인 정지 범위가 바뀌었다");
+  //   계정은 앞뒤 공백을 걷고 비교한다 — 분류·관리 레인은 저장 때 계정을 다듬지 않아, 그대로 비교하면 형제 레인이 안 꺼진다.
+  assert.match(AUTH, /WHERE enabled=true AND \(key=\$1 OR btrim\(requester\)=\$2\) RETURNING key/,
+    "레인 정지 범위가 바뀌었다(또는 계정을 다듬지 않고 비교한다 — 공백 섞인 형제 레인이 다음 주기에 하나씩 죽는다)");
   assert.match(AUTH, /\|\| \$3::jsonb,/, "레인 정지가 last_summary 를 병합하지 않고 덮는다");
 });
 
@@ -174,4 +176,44 @@ test("⑳-c 커버리지는 자동 정지 레인의 잔량을 센다 — 0 이�
     "자동 정지 레인의 잔량을 0 으로 센다 — 붙잡힌 몫이 커버리지 어디에도 안 보인다");
   //  사각지대 계산도 같은 «맡은 레인» 집합이어야 한다(폴백과 단일 출처).
   assert.match(cov, /const enabled = all\.filter\(\(d\) => d\.enabled \|\| isAutoDisabledLane\(d\)\);/, "사각지대가 맡은 레인 기준이 아니다");
+});
+
+test("㉑ 분류·관리 레인도 자동 정지 표식을 같은 규칙으로 다룬다", () => {
+  const CLS = r("../store/classifiers.ts");
+  const MGR = r("../store/managers.ts");
+  const AUTH = r("../../node/auth-failure-response.ts");
+  const KEEP = /THEN \$3::jsonb \|\| jsonb_build_object\('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason'\)/;
+  //  실행 기록이 last_summary 를 덮으면 같은 틱에 형제 레인의 401 로 붙은 표식이 사라진다.
+  assert.match(CLS, KEEP, "분류 실행 기록이 자동 정지 표식을 덮어쓴다 — 그 레인 몫이 다른 레인·전역 폴백으로 샌다");
+  assert.match(MGR, KEEP, "관리 실행 기록이 자동 정지 표식을 덮어쓴다 — 사람이 끈 관리기와 구분이 안 된다");
+  //  표식 해제는 스위치를 «바꾼» 저장에서만.
+  assert.match(CLS, /CASE WHEN \$26::boolean AND jsonb_typeof\(last_summary\)='object' THEN last_summary - 'auto_disabled'/, "분류 저장이 표식을 조건 없이 지우거나 안 지운다");
+  assert.match(CLS, /\[\.\.\.vals, cur\.id, input\.enabled !== undefined && Boolean\(input\.enabled\) !== Boolean\(cur\.enabled\)\]\);/,
+    "분류 표식 해제 조건($26)이 «스위치 변경» 이 아니다 — 폼 저장 한 번에 자동 정지 레인이 «사람이 끈 레인» 이 된다");
+  assert.match(MGR, /CASE WHEN \$23::boolean AND jsonb_typeof\(last_summary\)='object' THEN last_summary - 'auto_disabled'/, "관리 저장이 표식을 조건 없이 지우거나 안 지운다");
+  assert.match(MGR, /\[\.\.\.vals, cur\.id, input\.enabled !== undefined && Boolean\(input\.enabled\) !== Boolean\(cur\.enabled\)\]\);/,
+    "관리 표식 해제 조건($23)이 «스위치 변경» 이 아니다");
+  //  레인 정지는 맵에서 온 테이블만 식별자로 쓴다.
+  assert.match(AUTH, /if \(!\(Object\.values\(LANE_TABLES\) as string\[\]\)\.includes\(table\)\) throw/, "맵 밖 테이블 이름이 SQL 식별자로 들어갈 수 있다");
+  assert.match(AUTH, /`UPDATE \$\{table\} SET enabled=false, last_status='error',/, "레인 정지가 액션의 레인 테이블을 쓰지 않는다");
+});
+
+test("㉒ 자동 정지된 카테고리 붙이기 레인은 몫을 계속 맡는다 — 배타 배정·사각지대·폴백 판정", () => {
+  const CLS = r("../store/classifiers.ts");
+  const ACT = r("../../scheduler/actions/classify.ts");
+  //  앞선 레인 = 맡은 레인(켜짐 ∪ 자동 정지). SQL 은 enabled 로 거르지 않고(상위집합) JS 판정 하나로 좁힌다.
+  const inbox = CLS.slice(CLS.indexOf("async function inboxWhere("), CLS.indexOf("export async function classifierInbox("));
+  assert.ok(!/enabled=true/.test(inbox), "앞선 레인을 enabled=true 로만 고른다 — 자동 정지 레인 몫이 뒤 레인으로 샌다");
+  assert.match(inbox, /WHERE target <> 'low_confidence' AND \(priority > \$1 OR \(priority = \$1 AND id < \$2\)\)/, "앞선 레인의 순서·폐지 모드 조건이 바뀌었다");
+  assert.match(inbox, /as ClassifierRow\[\]\)\.filter\(isClaimingLane\);/, "앞선 레인을 맡은 레인 판정으로 좁히지 않는다");
+  //  사각지대·레인 목록도 같은 집합.
+  assert.match(CLS, /const on = all\.filter\(isClaimingLane\);/, "커버리지가 자동 정지 레인 몫을 사각지대로 센다");
+  assert.match(CLS, /const uq = uncoveredQuery\(on\);/);
+  //  크론 — 위탁은 일하는 레인만, 폴백 판정은 맡은 레인으로.
+  assert.match(ACT, /targets = all\.filter\(isActiveLane\);/, "자동 정지 레인이 위탁을 낸다 — 죽은 자격으로 다시 401");
+  assert.match(ACT, /claiming = all\.filter\(isClaimingLane\)\.length;/, "폴백 판정이 맡은 레인을 세지 않는다");
+  assert.match(ACT, /if \(!targets\.length && claiming\) \{\s*return \{ status: "ok"/, "레인이 전부 자동 정지되면 레거시 전역 폴백이 조직 전체를 잡 계정으로 분류한다");
+  assert.ok(ACT.indexOf("if (!targets.length && claiming)") < ACT.indexOf("// ── 레거시 전역 경로"), "폴백 차단이 레거시 경로보다 뒤에 있다");
+  //  전용 잡이 자동 정지 레인을 가리키면 오류가 아니라 대기 — 오류로 세면 크론 차단기가 전용 잡까지 끈다.
+  assert.match(ACT, /if \(one && isAutoDisabledLane\(one\)\) return \{ status: "ok", summary: \{ skipped:/, "자동 정지 레인 전용 잡이 대기로 끝나지 않는다");
 });
