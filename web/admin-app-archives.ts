@@ -82,10 +82,10 @@ function appArchivesEditor(detail, _data) {
       try {
         const out = await api('/api/ui/app-archives/clear', { method: 'POST', body: JSON.stringify({ names }) });
         const kept = (out.kept || []) as any[];
-        toast(`${(out.cleared || []).length}개 비웠어요${kept.length ? ` · ${kept.length}개는 남겼어요 — ${kept[0].why}` : ''}`, kept.length > 0);
         for (const c of out.cleared || []) picked.delete(c.name);
+        toast(`${(out.cleared || []).length}개 비웠어요${kept.length ? ` · ${kept.length}개는 남겼어요 — ${kept[0].why}` : ''}`, kept.length > 0);
       } catch (e: any) { toast(e.message, true); }
-      load();
+      finally { load(); }   // 무엇이 실패해도 목록은 지금 상태로 다시 그린다(지운 것이 화면에 남아 있지 않게)
     });
     sync();
     body.replaceChildren(
