@@ -64,7 +64,7 @@ const MAIN = code(read("web/v2/main.ts"));
 //  #4632 같은 거름에 앱빌더 시험 세션(isTrySession)도 붙는다 — 뒤에 덧붙은 조건은 허용한다(아래 W1b 가 따로 본다).
 ok(/const merged = mergeSessions\(lastLive, lastLogs\);\s*const sessions = merged\.filter\(\(s\) => !isSpentLoginSess\(s\.raw, s\.live && s\.alive\)(?: && [^;]*)?\);/.test(MAIN) && /data = \{ projects, sessions, lists,/.test(MAIN),
   "W1 ★ 셸이 세션 목록을 짤 때 끝난 로그인 세션을 걷는다(사이드바 · 세션 목록 · 카드 접힘이 전부 이 목록을 쓴다)");
-ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isTrySession\(s\.label\)\);/.test(MAIN), "W1b #4632 같은 목록에서 앱빌더 시험 세션(«\"이름\" 앱 시험»)도 걷는다");
+ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isTrySessionRow\(s\)\);/.test(MAIN), "W1b #4632 같은 목록에서 앱빌더 시험 세션(«\"이름\" 앱 시험»)도 걷는다");
 ok(/if \(!id\) return NO_PROJECT_NAME;/.test(code(read("web/v2/views.ts"))), "W2 이름 풀이(projName)가 그 이름을 쓴다");
 ok(/name: c\.id \? \(first\.project as \{ name: string \}\)\.name : c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME,/.test(code(read("web/v2/side.ts")))
   && /text: NO_PROJECT_NAME \}\), cnt\(plan\.noneN\)/.test(code(read("web/v2/side.ts"))),

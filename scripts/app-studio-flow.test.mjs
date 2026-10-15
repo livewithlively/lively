@@ -77,6 +77,11 @@ const wb2 = F.wireframeBrief("meeting-notes");
 check(/app_pull meeting-notes/.test(wb2) && wb2.includes(F.WIREFRAME_PATH) && /앱 화면은 그대로/.test(wb2), "H6 wireframeBrief — 받아서 그림 파일만 더해 저장", wb2);
 const tb2 = F.tryBrief("회의록", "meeting-notes");
 check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_save 금지/.test(tb2), "H7 tryBrief — 써 보는 세션 · 앱 코드는 고치지 않는다", tb2);
+{
+  //  시험 세션은 첫 지시의 머리로도 알아본다(기록만 남은 줄 — lib/builder-flow isTrySessionTitle). 첫 지시 글을 바꾸면 그 판정이 깨진다 — 짝을 맞춰 둔다.
+  const B = await import(join(root, "public/app/lib/builder-flow.js"));
+  check(B.isTrySessionTitle(tb2) && B.isTrySessionTitle(F.tryBrief("메모 · 원준", "memo-wonjoon-jang").slice(0, 120)), "H8 tryBrief 의 머리 = 시험 세션 대화 제목 판정(120자로 잘린 제목도)", tb2.slice(0, 80));
+}
 
 // ══ K 「판」 이 화면 글에 남지 않는다(#4632 원준 2026-10-15 «판 이라는 워딩 전면 금지 · 앱빌더 어디서도») — 주석을 걷은 소스에서 본다 ══
 //  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.

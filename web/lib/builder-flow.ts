@@ -29,6 +29,19 @@ export function isTrySession(label: string | null | undefined): boolean {
   return TRY_SESSION_RE.test(String(label || '').trim());
 }
 
+/** 시험 세션의 **대화 제목**(첫 사람 말 = 앱빌더가 보낸 첫 지시 lib/studio-flow tryBrief 의 머리)인가 — 박스가 사라져 기록만 남은 줄은 이름(name)이
+ *  사람이 지은 이름이 아니라 첫 말에서 지은 이름이라(v6/session-log-store mapSessionRow) 이 머리로 알아본다(격리 리뷰). tryBrief 를 바꾸면 여기도. */
+export const TRY_TITLE_RE = /^이 세션은 「.+」 앱\(app_id [^)\s]+\)을 시험해 보는 세션이야/;
+export function isTrySessionTitle(title: string | null | undefined): boolean {
+  return TRY_TITLE_RE.test(String(title || '').trim());
+}
+/** 목록의 한 줄이 시험 세션인가 — 박스 줄(label = 사람이 지은 이름) · 기록 줄(name · title) · 접힌 줄(logTitle) · 날 줄(raw.title) 어느 꼴이든.
+ *  셸 · 세션 이력 · 대시보드 · 클래식 탭이 모두 이 한 판정으로 거른다(«다른 사이드바나 이런 곳에 노출하지는 말고»). */
+export function isTrySessionRow(r: { label?: unknown; name?: unknown; title?: unknown; logTitle?: unknown; raw?: { title?: unknown } | null } | null | undefined): boolean {
+  if (!r) return false;
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  return isTrySession(str(r.label)) || isTrySession(str(r.name)) || isTrySessionTitle(str(r.title)) || isTrySessionTitle(str(r.logTitle)) || isTrySessionTitle(str(r.raw && r.raw.title));
+}
 /** 목록 줄 가운데 이 앱의 시험 세션 — 이름(«"이름" 앱 시험»)과 앱빌더 프로젝트가 맞는 첫 줄의 박스 id. 기록을 잃었어도(다른 컴퓨터 · 붙이기 실패 ·
  *  띄우는 도중 떠남) 같은 세션을 다시 쓰게 — 숨긴 세션이라 사람은 못 찾는다(격리 리뷰 #1). 프로젝트를 모르는 줄은 이름만으로 맞춘다. 없으면 빈 글. */
 export function findTrySession(rows: ReadonlyArray<{ id?: unknown; label?: unknown; projectId?: unknown; project_id?: unknown } | null | undefined>, label: string, projectId: number): string {
@@ -36,6 +49,8 @@ export function findTrySession(rows: ReadonlyArray<{ id?: unknown; label?: unkno
   if (!want || !isTrySession(want)) return '';
   for (const r of rows) {
     if (!r || typeof r.id !== 'string' || !r.id) continue;
+    const x = r as { owned?: unknown; trashedAt?: unknown; trashed_at?: unknown };
+    if (x.owned === false || x.trashedAt || x.trashed_at) continue;   // 남의 세션(붙이기가 막힌다) · 치운 세션(되살리지 않는다)은 건너뛴다
     if (String(r.label || '').trim() !== want) continue;
     const pid = Number(r.projectId ?? r.project_id ?? 0) || 0;
     if (pid && projectId && pid !== projectId) continue;

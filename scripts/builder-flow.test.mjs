@@ -100,5 +100,15 @@ check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySess
   check(F.findTrySession([{ id: "box-e", label: L }], L, 4680) === "box-e" && F.findTrySession(rows, '"메모" 앱 시험', 4680) === "" && F.findTrySession(rows, '"회의록" 앱 제작', 4680) === "" && F.findTrySession([], L, 4680) === "", "G7 프로젝트를 모르는 줄은 이름만으로 · 없으면 빈 글 · 시험 세션 이름이 아니면 찾지 않는다");
 }
 
+// G8 기록만 남은 줄도 시험 세션으로 알아본다(격리 리뷰 재검토 — 기록 줄의 name 은 첫 말에서 지은 이름이지 사람이 지은 이름이 아니다)
+{
+  const brief = "이 세션은 「회의록」 앱(app_id meeting-notes)을 시험해 보는 세션이야. 이 세션 오른쪽에 그 앱이 붙어 있고, 사람이 앱을 써 보면서 너에게 말을 걸 거야 — 앱이 세션에 붙었을 때처럼 앱의 지침과…";
+  const logRow = { session_id: "c2f1-uuid", name: "이 세션은 「회의록」 앱(app_id meetin…", title: brief, bytes: 900, project_id: 4680 };
+  check(F.isTrySessionTitle(brief) && !F.isTrySessionTitle("이 세션은 회의록을 정리해") && !F.isTrySessionTitle("") && !F.isTrySessionTitle(null), "G8 isTrySessionTitle — 첫 지시 머리만");
+  check(F.isTrySessionRow(logRow) && F.isTrySessionRow({ label: '"회의록" 앱 시험' }) && F.isTrySessionRow({ name: '"회의록" 앱 시험' }) && F.isTrySessionRow({ label: "x", logTitle: brief }) && F.isTrySessionRow({ label: "x", raw: { title: brief } }), "G9 isTrySessionRow — 박스 줄(label) · 기록 줄(name · title) · 접힌 줄(logTitle) · 날 줄(raw.title)");
+  check(!F.isTrySessionRow({ label: '"회의록" 앱 제작', title: "회의록 앱을 만들고 싶어" }) && !F.isTrySessionRow(null) && !F.isTrySessionRow({}) && !F.isTrySessionRow({ label: 3, raw: null }), "G10 시험 세션이 아닌 줄 · 빈 값 · 이상한 값은 거르지 않는다");
+  check(F.findTrySession([{ id: "box-x", label: '"회의록" 앱 시험', projectId: 4680, owned: false }, { id: "box-y", label: '"회의록" 앱 시험', projectId: 4680, trashedAt: "2026-10-15" }, { id: "box-z", label: '"회의록" 앱 시험', projectId: 4680 }], '"회의록" 앱 시험', 4680) === "box-z", "G11 남의 세션 · 치운 세션은 다시 쓰지 않는다");
+}
+
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);
 if (fail) process.exit(1);

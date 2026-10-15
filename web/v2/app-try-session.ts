@@ -30,13 +30,10 @@ const logRows = (): Promise<any[]> => api('/api/ui/v6/sessions?limit=60').then((
  *  세션 id 는 **정해지는 즉시** onSpawned 로 알린다(붙이기가 실패하거나 사람이 떠나도 다음에 같은 세션을 쓴다). 앱을 붙이면 id, 못 붙이면 null. */
 export async function ensureTrySession(o: { appId: string; title: string; projectId: number; prevSid?: string; onSpawned: (sid: string) => void }): Promise<string | null> {
   const label = trySessionLabel(o.title);
-  let live: any[] | null = null, logs: any[] | null = null;
-  try { [live, logs] = await Promise.all([liveRows(), logRows()]); } catch (_) { /* 목록을 못 읽으면 기록을 믿는다 */ }
+  //  기록의 세션이 아직 있나 — 박스 목록(멈춘 박스도 서 있다)의 id 로 본다(기록 줄 v6 은 대화 uuid 라 박스 id 와 맞지 않는다). 목록을 못 읽으면 기록을 믿는다.
+  const live = await liveRows().catch(() => null);
   let sid = '';
-  if (o.prevSid) {
-    const known = !live || !logs || [...live, ...logs].some((x: any) => x && (x.id === o.prevSid || x.session_id === o.prevSid));
-    if (known) sid = o.prevSid;
-  }
+  if (o.prevSid && (!live || live.some((x: any) => x && x.id === o.prevSid))) sid = o.prevSid;
   if (!sid && live) sid = findTrySession(live, label, o.projectId);
   if (!sid) {
     const s = await spawnSession(tryBrief(o.title, o.appId), { projectId: o.projectId, label });
@@ -63,10 +60,14 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
   //  이 화면의 목록은 **시험 세션 한 장**과 그 프로젝트뿐 — 서랍 · 문패가 다른 세션을 끌어오지 않는다. 살아 있는 줄이 이긴다(created-cache 는 얇다).
   const data: any = { projects: [], sessions: [], loadedAt: Date.now(), lists: [], folders: [] };
   const fill = async (): Promise<void> => {
-    const [live, logs] = await Promise.all([liveRows().catch(() => [] as any[]), logRows().catch(() => [] as any[])]);
+    const [live, logs] = await Promise.all([liveRows().catch(() => null), logRows().catch(() => [] as any[])]);
+    if (!live) return;   // 못 읽은 틱은 직전 것을 그대로 둔다(셸과 같다 — 빈 목록이면 «세션을 찾을 수 없어요» 가 선다)
     const { mergeSessions } = await import('./views.js');
-    const made = takeCreated(sid);
-    data.sessions = mergeSessions(made ? [made, ...live] : live, logs).filter((s: any) => s.id === sid || (Array.isArray(s.altIds) && s.altIds.includes(sid)));
+    //  생성 · 복원 응답(created-cache)은 목록이 아직 모르거나 «중단됨»(restorable) 으로 들고 있을 때만 이긴다 — 같은 id 로 되살린 세션(main.ts seedCreated 와 같은 규칙).
+    const made: any = takeCreated(sid);
+    const row = live.find((x: any) => x && x.id === sid);
+    const rows = made && (!row || row.restorable) ? [made, ...live.filter((x: any) => !(x && x.id === sid))] : live;
+    data.sessions = mergeSessions(rows, logs).filter((s: any) => s.id === sid || (Array.isArray(s.altIds) && s.altIds.includes(sid)));
     data.loadedAt = Date.now();
   };
   const projectName = (): string => (data.projects[0] && data.projects[0].name) || '';
@@ -84,12 +85,13 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
         chat = renderSession(h, data, s, { trail: (oo && oo.trail) || null, onOpenFiles: oo && oo.openFiles ? oo.openFiles : undefined,
           filesLabel: oo && oo.filesLabel ? oo.filesLabel : undefined, appDoor: oo && oo.appDoor ? oo.appDoor : undefined,
           isVisible: () => !dead && root.isConnected,
-          //  되살리기가 새 id 를 주면 — 셸 주소(#/s/…)로 가지 않고 이 자리에서 그 id 로 다시 세운다(셸 목록엔 이 세션이 없어 그 주소는 길을 잃는다).
-          onResumed: (nid: string) => { if (dead || !nid || nid === sid) return; sid = nid; o.onResumed(nid); void mountShell(); } });
+          //  되살렸다 — 셸 주소(#/s/…)로 가지 않고 이 자리에서 다시 세운다(셸 목록엔 이 세션이 없어 그 주소는 길을 잃는다). 같은 id 로 되살린 것(#4694 뒤
+          //   대개 그렇다)도 셸처럼 다시 그린다 — 복원 응답이 «중단됨» 줄을 이겨 살아 있는 화면으로 선다. 새 id 면 기록도 옮긴다.
+          onResumed: (nid: string) => { if (dead || !nid) return; if (nid !== sid) { sid = nid; o.onResumed(nid); } remount(); } });
         return chat;
       },
     });
-    const door = shell.querySelector('.pn-door'); if (door && doorObs) doorObs.observe(door);
+    const door = shell.querySelector('.pn-door'); if (door && doorObs) { doorObs.disconnect(); doorObs.observe(door); }
     //  앱 탭이 아직 안 섰으면(붙이기가 막 끝나 목록이 늦다) 몇 번 다시 부른다 — 이 화면 안의 사이드바에만.
     let tries = 0;
     const nudge = (): void => {
@@ -101,6 +103,8 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
     };
     window.clearTimeout(pollT); pollT = window.setTimeout(nudge, 900);
   };
+  const failNote = (e: any): void => { if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시험 세션을 열지 못했어요 — ' + (e && e.message ? e.message : e) }))); };
+  const remount = (): void => { void mountShell().catch(failNote); };
   //  20초마다 세션 줄을 다시 읽어 세션 화면에 흘린다(도는 중 · 멈춤 · 이름) — 셸이 제 탭에 하는 일과 같다(main.ts tab.chat.update).
   const tick = async (): Promise<void> => {
     if (dead) return;
@@ -117,9 +121,7 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
       if (dead) return;
       await mountShell();
       tickT = window.setTimeout(() => { void tick(); }, 20_000);
-    } catch (e: any) {
-      if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시험 세션을 열지 못했어요 — ' + (e && e.message ? e.message : e) })));
-    }
+    } catch (e: any) { failNote(e); }
   })();
 
   return {
