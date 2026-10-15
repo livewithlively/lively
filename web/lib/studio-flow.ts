@@ -134,13 +134,13 @@ export function copyId(originId: string, memberId: string): string {
 
 // ── 단계마다 보내는 글(사람이 치는 글이 아니라 단추가 보낸다 · 대화에 그대로 보이니 짧고 쉬운 말로) ──
 //  #4667 저장은 나만 보는 판(새 앱 · 공개한 앱의 초안)이고 공개는 사람이 정한다 — 모든 글에 같은 문장(격리 리뷰 2-7).
-const NO_PUBLISH = '저장하면 나만 보는 버전이 되고, 공개는 내가 정하니 app_visibility_set 은 부르지 마.';
+const NO_PUBLISH = '저장하면 비공개 버전이 되고, 공개는 내가 정하니 app_visibility_set 은 부르지 마.';
 const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_get 으로 그것만 읽고 다른 건 찾아보지 마). ' + NO_PUBLISH;
 //  벤치마크(원준 2026-10-15) — 기획 카드를 쓰기 전에 비슷한 앱 · 서비스의 구조 · 기능을 견준다. 라이블리 지식을 뒤지라는 말이 아니다(RULE 과 어긋나지 않게).
 const BENCH = '먼저 비슷한 앱 · 서비스(널리 쓰는 것 두셋)를 떠올려 화면 구조 · 기능을 견줘 보고 좋은 점을 기획에 담아 줘(웹 검색을 쓸 수 있으면 찾아봐도 돼 · 라이블리 지식은 더 찾지 말고).';
 /** 화면 흐름 와이어프레임(원준 2026-10-15 «초안 만든 뒤 와이어프레임 볼 수 있게 · 클로드 아티팩트처럼 버튼 누르면») — 앱 패키지의 이 파일을 앱빌더 ③ 「와이어프레임 보기」 가 띄운다. */
 export const WIREFRAME_PATH = 'studio/wireframe.html';
-const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 이 앱의 화면마다 회색 상자로 그린 그림과, 무엇을 누르면 어느 화면(또는 어느 칸)으로 가는지 화살표 · 짧은 설명을 그린 한 장짜리 HTML(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림).`;
+const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 피그마 보드처럼 이 앱의 화면을 한 장씩 프레임으로 가로로 나란히 놓고(화면이 하나여도 한 장), 프레임마다 위에 화면 이름표 · 안은 얇은 선(1px 회색)으로 그린 칸 · 글 · 단추, 그리고 **단추 하나하나마다** 그 단추에서 나가는 화살표로 어느 화면(또는 어느 칸)으로 이어지는지 이어 그린 HTML 한 장(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림 · 화면 수만큼 넓어도 된다).`;
 /** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
 export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
@@ -159,19 +159,22 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
 /** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
-export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number }
+/** on: 'wire' — 앱 화면이 아니라 「와이어프레임(화면 흐름) 보기」 보드에서 짚은 곳(좌표는 그 그림 전체의 비율). 없으면 앱 화면. */
+export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire' }
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
   const pc = (v?: number): number => Math.round((v || 0) * 100);
   pins.forEach((p, i) => {
     if (!p.note.trim()) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
-    if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
-    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
-    else lines.push(`[핀 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
+    //  와이어프레임 보드에서 짚은 곳은 그 그림(${WIREFRAME_PATH}) 안의 자리다 — 앱 화면의 자리와 섞이지 않게 말머리를 가른다.
+    const on = p.on === 'wire' ? `와이어프레임(${WIREFRAME_PATH})의` : '화면의';
+    if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — ${on} ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
+    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] ${on} ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
+    else lines.push(`[핀 ${i + 1}] ${on} ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
   });
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
-  return `${round}번째 고침이야. 아래를 반영해 새 버전으로 저장해 줘(app_pull ${appId} 로 지금 버전을 받아 고치고 app_save · note 는 바뀐 점 한 줄 · 화면 흐름이 바뀌면 ${WIREFRAME_PATH} 도 맞춰 고쳐). ${PLACE[place].say} ${NO_PUBLISH} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
+  return `${round}번째 고침이야. 아래를 반영해 새 버전으로 저장해 줘(app_pull ${appId} 로 지금 버전을 받아 고치고 app_save · note 는 바뀐 점 한 줄 · 화면 흐름이 바뀌면 ${WIREFRAME_PATH} 도 맞춰 고쳐 · 그 파일이 아직 없으면 이번에 함께 그려). ${PLACE[place].say} ${NO_PUBLISH} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }
 /** ③ 「세션 위젯으로 보기」 시험 세션의 첫 지시 — 앱을 **써 보는** 세션이지 고치는 세션이 아니다(원준 2026-10-15 «수정을 위한 AI 세션이 아니어야»). */
 export function tryBrief(title: string, appId: string): string {

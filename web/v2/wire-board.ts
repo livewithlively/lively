@@ -1,0 +1,314 @@
+// v2/wire-board.ts — 앱빌더 ③ 「와이어프레임(화면 흐름) 보기」 보드(#4632, 원준 2026-10-16 묶음 #8
+//  «와이어프레임 이거 전체화면으로 보여줘 · 클로드 아티팩트 화면 따와서 비슷하게 · 여기서도 수정 가능하게 — 선택 · 핀 · 구역 다 있게 ·
+//   피그마 보드처럼 화면 한눈에 보거나 cmd+스크롤로 확대축소 · 얇고 버튼 하나하나마다 어디로 가는지» · «한 장만 나와도 와이어프레임은 그냥 있는 거지»).
+//
+//  화면 전체를 덮는 창 하나: 머리줄(이름 · 버전 · 도구 · 확대 · 코멘트 · 닫기) + 점 박힌 보드. 보드 위에 AI 가 앱과 함께 저장한 그림
+//   (lib/studio-flow WIREFRAME_PATH)을 원래 크기로 놓고 옮기고 · 키운다(⌘/Ctrl + 스크롤 · 핀치 = 확대축소, 스크롤 · 끌기 = 이동).
+//  그 그림이 아직 없는 앱(그림을 그리라는 말이 생기기 전에 만든 앱)은 **앱 화면 그대로**를 한 장으로 놓는다 — 빈 칸 · 「그려 달라기」 는 없다.
+//   다음 「수정하기」 가 그 그림을 함께 그리라고 한다(fixBrief).
+//  짚기(선택 · 핀 · 영역)는 앱 화면 위 코멘트 층(app-review.ts)과 같은 꼴의 코멘트를 만든다 — on:'wire' 로 표시해 같은 목록(허브 「코멘트」 칸)에 모이고
+//   「수정하기」 가 「와이어프레임의 … 자리」 로 AI 에게 보낸다. 앱 화면 위엔 그리지 않는다.
+import { el, toast } from '../core.js';
+import { PROBE_JS, WIREFRAME_PATH, whereText, type StudioPin, type StudioPlace } from '../lib/studio-flow.js';
+import { mountAppUiFrame, type AppUiFrame } from './app-ui.js';
+
+type Tool = 'move' | 'pick' | 'pin' | 'box';
+export interface WireBoardOpts {
+  appId: string;
+  title: string;
+  /** 머리줄 버전 글(초안 · V2 …) */
+  version: string;
+  place: StudioPlace;
+  /** 그림 HTML — 빈 글이면 앱 화면 그대로를 한 장으로 놓는다. */
+  html: string;
+  /** 지금 코멘트 목록 전부(앱 화면 것 포함 — 번호를 같이 센다). 보드는 on:'wire' 만 그린다. */
+  pins: () => StudioPin[];
+  /** 보드에서 더하거나 고치거나 지웠다 — 목록 전부를 돌려준다. */
+  onPins: (pins: StudioPin[]) => void;
+  onClose?: () => void;
+}
+export interface WireBoard { close(): void; refresh(): void }
+
+const TOOLS: Array<{ k: Tool; t: string; help: string; svg: string }> = [
+  { k: 'move', t: '이동', help: '끌어서 보드를 옮겨요(스페이스를 누른 채 끌어도 돼요)', svg: '<path d="M10 2.5v15M2.5 10h15"/><path d="M7.6 4.9 10 2.5l2.4 2.4M7.6 15.1 10 17.5l2.4-2.4M4.9 7.6 2.5 10l2.4 2.4M15.1 7.6 17.5 10l-2.4 2.4"/>' },
+  { k: 'pick', t: '선택', help: '그림 안의 단추 · 칸 · 글을 선택해요', svg: '<path d="M7.5 6.5 16.5 11l-4.2 1.1-2 4.2z"/><path d="M3.6 8.2a4.6 4.6 0 0 1 3.1-4.3"/><path d="M3.2 4.6 4.6 5.8"/>' },
+  { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.', svg: '<path d="M10 17.5s-5-5-5-8.8a5 5 0 0 1 10 0c0 3.8-5 8.8-5 8.8z"/><circle cx="10" cy="8.6" r="1.8"/>' },
+  { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.', svg: '<rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2" stroke-dasharray="3 2.2"/>' },
+];
+const svgIcon = (inner: string): HTMLElement => {
+  const s = el('span', { class: 'ico', 'aria-hidden': 'true' });
+  s.innerHTML = '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';   // 셸 코드의 고정 그림
+  return s;
+};
+//  그림은 AI 가 쓴 HTML — 출처 없는 샌드박스에 바깥으로 나가는 길을 막는 CSP 를 앞에 붙여 싣는다(앱 화면 app-ui 의 CSP 와 같은 뜻).
+const WF_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:";
+//  그림의 원래 크기를 알려 주는 한 줄 — 샌드박스(출처 없음)라 밖에서 못 잰다. scrollWidth 는 창보다 작아지지 않아 그림 속 것들의 끝(오른쪽 · 아래)을 잰다.
+//   짚기는 PROBE_JS(앱 화면 코멘트 층과 같은 탐침)가 맡는다.
+const SIZE_JS = "(function(){function s(){var b=document.body;if(!b)return;var W=0,H=0,es=b.getElementsByTagName('*');for(var i=0;i<es.length&&i<6000;i++){var r=es[i].getBoundingClientRect();if(r.width||r.height){if(r.right>W)W=r.right;if(r.bottom>H)H=r.bottom;}}var cs=getComputedStyle(b);parent.postMessage({__wire:'size',w:Math.ceil(W+(parseFloat(cs.marginRight)||0)+scrollX),h:Math.ceil(H+(parseFloat(cs.marginBottom)||0)+scrollY)},'*');}addEventListener('load',function(){s();setTimeout(s,300);});})();";
+
+let cur: WireBoard | null = null;
+export function closeWireBoard(): void { if (cur) { const c = cur; cur = null; c.close(); } }
+
+export function openWireBoard(o: WireBoardOpts): WireBoard {
+  closeWireBoard();
+  const S = { tool: 'pick' as Tool, k: 1, tx: 0, ty: 0, cw: 1600, ch: 1000, user: false, space: false, drag: null as null | { kind: 'pan' | 'box'; sx: number; sy: number; tx: number; ty: number; cx: number; cy: number },
+    hitSeq: 1, hitWaits: {} as Record<number, (h: any) => void>, hoverAt: 0, active: -1, dead: false };
+  const fallback = !o.html.trim();
+  const frames: AppUiFrame[] = [];
+
+  // ── 머리줄 — 클로드 아티팩트 창처럼: 이름 · 버전 · (가운데) 도구 · 확대 · 코멘트 · 닫기 ──
+  const tools = el('span', { class: 'v2-wb-tools', role: 'tablist', 'aria-label': '코멘트 다는 도구' });
+  const pct = el('button', { class: 'v2-wb-pct', type: 'button', title: '100% 로' }) as HTMLButtonElement;
+  const count = el('button', { class: 'btn btn-ghost btn-sm v2-wb-count', type: 'button', title: '이 그림에 단 코멘트' }) as HTMLButtonElement;
+  const head = el('div', { class: 'v2-wb-head' },
+    el('div', { class: 'v2-wb-name' }, el('b', { text: '「' + o.title + '」 와이어프레임' }), el('span', { class: 'v2-wb-ver', text: o.version }),
+      el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
+    el('span', { class: 'v2-studio-sp' }), tools, el('span', { class: 'v2-studio-sp' }),
+    el('span', { class: 'v2-wb-zoom' },
+      el('button', { type: 'button', text: '−', title: '작게(⌘ −)', 'aria-label': '작게', onclick: () => zoomBy(1 / 1.25) }), pct,
+      el('button', { type: 'button', text: '+', title: '크게(⌘ +)', 'aria-label': '크게', onclick: () => zoomBy(1.25) }),
+      el('button', { type: 'button', class: 'fit', text: '한눈에', title: '그림 전체를 한눈에(⇧ 1)', onclick: () => fit() })),
+    count,
+    el('button', { class: 'v2-wb-x', type: 'button', text: '×', title: '닫기(Esc)', 'aria-label': '닫기', onclick: () => api.close() }));
+
+  // ── 보드 — 점 박힌 바탕 위에 그림(세계)을 옮기고 키운다. 누름은 전부 위 덮개(catch)가 받는다(그림은 설명이라 누를 것이 없다) ──
+  const world = el('div', { class: 'v2-wb-world' });
+  const marks = el('div', { class: 'v2-wb-marks' });
+  const ghost = el('div', { class: 'v2-wb-ghost', hidden: true });
+  const catcher = el('div', { class: 'v2-wb-catch' });
+  const stage = el('div', { class: 'v2-wb-stage' }, world, catcher);
+  const hint = el('div', { class: 'v2-wb-hint', text: '⌘/Ctrl + 스크롤 · 핀치로 확대축소 · 스크롤로 이동 · 스페이스를 누른 채 끌어도 이동' });
+  const note = fallback ? el('div', { class: 'v2-wb-note', text: '이 앱엔 아직 AI 가 그린 화면 흐름 그림이 없어 앱 화면을 그대로 한 장으로 놓았어요 — 다음 「수정하기」 때 화면 흐름 그림을 함께 그려요.' }) : null;
+  const list = el('div', { class: 'v2-wb-list', hidden: true });
+  const root = el('div', { class: 'v2-wb', role: 'dialog', 'aria-modal': 'true', 'aria-label': '「' + o.title + '」 와이어프레임' }, head, el('div', { class: 'v2-wb-body' }, stage, list), hint, note);
+  document.body.append(root);
+
+  let iframe: HTMLIFrameElement | null = null;
+  if (!fallback) {
+    iframe = el('iframe', { class: 'v2-wb-frame', title: '「' + o.title + '」 와이어프레임', sandbox: 'allow-scripts',
+      srcdoc: '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + WF_CSP + '"><script>' + SIZE_JS + PROBE_JS + '</scr' + 'ipt>' + o.html }) as HTMLIFrameElement;
+    iframe.style.width = S.cw + 'px'; iframe.style.height = S.ch + 'px';
+    world.append(iframe, marks, ghost);
+  } else {
+    //  앱 화면 그대로 — 쓰는 자리마다 한 장(세션 위젯은 좁게 · 앱 화면은 넓게). 둘 다면 나란히.
+    const wants: Array<[string, number, number]> = [];
+    if (o.place !== 'full') wants.push(['세션 위젯', 360, 720]);
+    if (o.place !== 'side') wants.push(['앱 화면', 1200, 760]);
+    let x = 0; const GAP = 80, TOP = 34;
+    for (const [label, w, h] of wants) {
+      const slot = el('div', { class: 'v2-wb-slot' });
+      const card = el('div', { class: 'v2-wb-card', style: `left:${x}px;top:${TOP}px;width:${w}px;height:${h}px` }, el('span', { class: 'v2-wb-card-l', text: label + ' · 지금 화면' }), slot);
+      world.append(card);
+      void mountAppUiFrame(o.appId, { title: o.title }).then((f) => { if (S.dead) { f.destroy(); return; } frames.push(f); slot.append(f.root); }).catch((e: any) => { slot.append(el('p', { class: 'v2-wb-err', text: '앱 화면을 열지 못했어요 — ' + (e && e.message ? e.message : e) })); });
+      x += w + GAP;
+    }
+    S.cw = Math.max(400, x - GAP); S.ch = TOP + Math.max(...wants.map((w) => w[2]));
+    world.append(marks, ghost);
+  }
+  world.style.width = S.cw + 'px'; world.style.height = S.ch + 'px';
+
+  // ── 옮기기 · 키우기 ──
+  const apply = (): void => {
+    world.style.transform = `translate(${S.tx}px, ${S.ty}px) scale(${S.k})`;
+    pct.textContent = Math.round(S.k * 100) + '%';
+    stage.style.backgroundSize = `${20 * S.k}px ${20 * S.k}px`;
+    stage.style.backgroundPosition = `${S.tx}px ${S.ty}px`;
+    paintMarks();
+  };
+  const clampK = (k: number): number => Math.min(4, Math.max(0.1, k));
+  const zoomAt = (k: number, px: number, py: number): void => {
+    const nk = clampK(k); const wx = (px - S.tx) / S.k, wy = (py - S.ty) / S.k;
+    S.k = nk; S.tx = px - wx * nk; S.ty = py - wy * nk; apply();
+  };
+  const zoomBy = (f: number): void => { S.user = true; const r = stage.getBoundingClientRect(); zoomAt(S.k * f, r.width / 2, r.height / 2); };
+  const fit = (): void => {
+    const r = stage.getBoundingClientRect(); const pad = 48;
+    const k = clampK(Math.min((r.width - pad * 2) / S.cw, (r.height - pad * 2) / S.ch, 1));
+    S.k = k; S.tx = (r.width - S.cw * k) / 2; S.ty = Math.max(pad, (r.height - S.ch * k) / 2); apply();
+  };
+  pct.onclick = () => { S.user = true; const r = stage.getBoundingClientRect(); zoomAt(1, r.width / 2, r.height / 2); };
+  catcher.addEventListener('wheel', (e: WheelEvent) => {
+    e.preventDefault(); S.user = true;
+    const r = stage.getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) zoomAt(S.k * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0025)), e.clientX - r.left, e.clientY - r.top);   // 핀치 · ⌘ + 스크롤
+    else { S.tx -= e.deltaX; S.ty -= e.deltaY; apply(); }
+  }, { passive: false });
+
+  // ── 그림 안의 자리 ↔ 보드 자리 ──
+  const toWorld = (cx: number, cy: number): { x: number; y: number } => { const r = stage.getBoundingClientRect(); return { x: (cx - r.left - S.tx) / S.k, y: (cy - r.top - S.ty) / S.k }; };
+  const inWorld = (p: { x: number; y: number }): boolean => p.x >= 0 && p.y >= 0 && p.x <= S.cw && p.y <= S.ch;
+  //  그림 안 무엇이 거기 있나 — 탐침(PROBE_JS)에 물어본다. 앱 화면 그대로(대신 놓은 것)는 묻지 않는다(그 자리의 글만 없다).
+  const hit = (fx: number, fy: number): Promise<any> => new Promise((res) => {
+    const w = iframe && iframe.contentWindow; if (!w) { res(null); return; }
+    const id = S.hitSeq++; S.hitWaits[id] = res; w.postMessage({ __studio: 'hit', x: fx, y: fy, id }, '*');
+    window.setTimeout(() => { if (S.hitWaits[id]) { delete S.hitWaits[id]; res(null); } }, 700);
+  });
+  const onMsg = (ev: MessageEvent): void => {
+    if (!iframe || ev.source !== iframe.contentWindow) return;
+    const m: any = ev.data; if (!m || typeof m !== 'object') return;
+    if (m.__wire === 'size') {
+      //  레이아웃 전의 이른 소식(0 · 아주 작음)은 버린다. 폭은 1200 아래로 좁히지 않는다 — 좁히면 그림이 그 폭으로 다시 흘러 갇힌다.
+      const rw = Math.round(Number(m.w) || 0), rh = Math.round(Number(m.h) || 0);
+      if (rw < 50 || rh < 50) return;
+      const w = Math.min(12000, Math.max(1200, rw)), h = Math.min(12000, Math.max(400, rh));
+      if (w !== S.cw || h !== S.ch) { S.cw = w; S.ch = h; iframe.style.width = w + 'px'; iframe.style.height = h + 'px'; world.style.width = w + 'px'; world.style.height = h + 'px'; }
+      if (!S.user) fit(); else apply();   // 사람이 아직 안 옮기고 안 키웠으면 늘 한눈에
+      return;
+    }
+    if (m.__studio === 'hitres' && S.hitWaits[m.id]) { const f = S.hitWaits[m.id]; delete S.hitWaits[m.id]; f(m); }
+  };
+  window.addEventListener('message', onMsg);
+  const clearProbe = (): void => { const w = iframe && iframe.contentWindow; if (w) w.postMessage({ __studio: 'clear' }, '*'); };
+
+  // ── 코멘트(on:'wire') — 보드 위 번호 · 자리 코멘트 칸 ──
+  const all = (): StudioPin[] => o.pins();
+  const changed = (): void => { o.onPins(all()); paintCount(); paintMarks(); if (!list.hidden) paintList(); };
+  const paintCount = (): void => {
+    const mine = all().filter((p) => p.on === 'wire'); const n = mine.filter((p) => p.note.trim()).length;
+    count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 짚음 ' + mine.length : '');
+  };
+  const paintMarks = (): void => {
+    marks.replaceChildren();
+    all().forEach((p, i) => {
+      if (p.on !== 'wire') return;
+      const hot = i === S.active;
+      if (p.kind === 'pick' || p.kind === 'box') {
+        const b = el('div', { class: 'v2-wb-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') });
+        Object.assign(b.style, { left: p.x * S.cw + 'px', top: p.y * S.ch + 'px', width: (p.w || 0) * S.cw + 'px', height: (p.h || 0) * S.ch + 'px' });
+        marks.append(b);
+      }
+      //  번호는 화면 크기 그대로(확대해도 같은 크기) — 보드 배율의 역수로 되돌린다.
+      const n = el('button', { type: 'button', class: 'v2-wb-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 코멘트 열기',
+        onclick: (e: MouseEvent) => { e.stopPropagation(); openPop(i); } }, el('span', { text: String(i + 1) }));
+      Object.assign(n.style, { left: p.x * S.cw + 'px', top: p.y * S.ch + 'px', transform: `translate(-50%, -50%) scale(${1 / S.k})` });
+      marks.append(n);
+    });
+  };
+  let pop: HTMLElement | null = null;
+  const closePop = (): void => { if (pop) { pop.remove(); pop = null; } if (S.active >= 0) { S.active = -1; paintMarks(); } };
+  const removePin = (i: number): void => { const ps = all(); ps.splice(i, 1); closePop(); changed(); };
+  const openPop = (i: number): void => {
+    const p = all()[i]; if (!p) return;
+    if (pop) pop.remove();
+    S.active = i; paintMarks();
+    const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLTextAreaElement; ta.value = p.note;
+    ta.addEventListener('input', () => { p.note = ta.value; o.onPins(all()); paintCount(); });
+    ta.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); closePop(); changed(); } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(); changed(); } });
+    const pp = el('div', { class: 'v2-studio-pop v2-wb-pop', role: 'dialog', 'aria-label': (i + 1) + '번 코멘트' },
+      el('div', { class: 'h' }, el('b', { text: (i + 1) + ' · ' + (p.kind === 'pick' ? '선택한 요소' : p.kind === 'box' ? '영역' : '핀') }), el('small', { text: p.where || '' })), ta,
+      el('div', { class: 'act' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(i) }),
+        el('button', { type: 'button', class: 'v2-studio-now-pri', text: '완료', onclick: () => { closePop(); changed(); } })));
+    //  짚은 곳 옆 — 보드 화면의 남는 쪽으로(오른쪽이 모자라면 왼쪽)
+    const r = stage.getBoundingClientRect();
+    const ax = S.tx + (p.x + (p.w || 0)) * S.cw * S.k, ay = S.ty + p.y * S.ch * S.k, W = 300;
+    const left = ax + 14 + W < r.width ? ax + 14 : Math.max(8, S.tx + p.x * S.cw * S.k - W - 14);
+    Object.assign(pp.style, { left: Math.round(left) + 'px', top: Math.round(Math.min(Math.max(8, ay), r.height - 170)) + 'px', width: W + 'px' });
+    pop = pp; stage.append(pp);
+    requestAnimationFrame(() => ta.focus());
+  };
+  const addPin = (p: StudioPin): void => { const ps = all(); ps.push({ ...p, on: 'wire' }); o.onPins(ps); paintCount(); openPop(ps.length - 1); };
+  const paintList = (): void => {
+    const rows = all().map((p, i) => [p, i] as const).filter(([p]) => p.on === 'wire');
+    list.replaceChildren(el('div', { class: 'v2-wb-list-h' }, el('b', { text: '이 그림에 단 코멘트' }), el('small', { text: '허브의 「코멘트」 칸에도 같이 모여요' })),
+      ...(rows.length ? rows.map(([p, i]) => el('button', { type: 'button', class: 'v2-wb-list-row', onclick: () => { focusPin(i); } },
+        el('span', { class: 'n', text: String(i + 1) }), el('span', { class: 'w', text: p.note.trim() || '(아직 안 적음) ' + (p.where || '') })))
+        : [el('p', { class: 'v2-wb-list-empty', text: '선택 · 핀 · 영역으로 그림 위에 코멘트를 남기면 여기 모여요.' })]));
+  };
+  const focusPin = (i: number): void => {
+    const p = all()[i]; if (!p) return;
+    const r = stage.getBoundingClientRect();
+    S.user = true; S.tx = r.width / 2 - (p.x + (p.w || 0) / 2) * S.cw * S.k; S.ty = r.height / 2 - (p.y + (p.h || 0) / 2) * S.ch * S.k; apply(); openPop(i);
+  };
+  count.onclick = () => { list.hidden = !list.hidden; if (!list.hidden) paintList(); };
+
+  // ── 도구 · 누르기 ──
+  const setTool = (k: Tool): void => { S.tool = k; closePop(); clearProbe(); paintTools(); };
+  const paintTools = (): void => {
+    tools.replaceChildren(...TOOLS.map((x) => el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.help, onclick: () => setTool(x.k) }, svgIcon(x.svg), el('span', { text: x.t }))));
+    root.dataset.tool = S.space ? 'move' : S.tool;
+  };
+  const panning = (): boolean => S.tool === 'move' || S.space;
+  catcher.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    if (pop) { closePop(); changed(); return; }   // 열린 칸 밖을 누르면 먼저 닫기만 한다
+    const wp = toWorld(e.clientX, e.clientY);
+    if (panning() || e.button === 1) { S.user = true; S.drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, tx: S.tx, ty: S.ty, cx: wp.x, cy: wp.y }; catcher.setPointerCapture(e.pointerId); return; }
+    if (S.tool === 'box' && inWorld(wp)) { S.drag = { kind: 'box', sx: e.clientX, sy: e.clientY, tx: S.tx, ty: S.ty, cx: wp.x, cy: wp.y }; catcher.setPointerCapture(e.pointerId); }
+  });
+  catcher.addEventListener('pointermove', (e: PointerEvent) => {
+    const d = S.drag;
+    if (d && d.kind === 'pan') { S.tx = d.tx + (e.clientX - d.sx); S.ty = d.ty + (e.clientY - d.sy); apply(); return; }
+    if (d && d.kind === 'box') {
+      const wp = toWorld(e.clientX, e.clientY);
+      const x = Math.max(0, Math.min(d.cx, wp.x)), y = Math.max(0, Math.min(d.cy, wp.y)), w = Math.min(S.cw, Math.max(d.cx, wp.x)) - x, h = Math.min(S.ch, Math.max(d.cy, wp.y)) - y;
+      ghost.hidden = false; Object.assign(ghost.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+      return;
+    }
+    //  선택 — 올리면 무엇이 골라질지 그림 안에 테두리(탐침이 그린다)
+    if (S.tool === 'pick' && !S.space && iframe && Date.now() - S.hoverAt > 70) {
+      S.hoverAt = Date.now(); const wp = toWorld(e.clientX, e.clientY);
+      if (inWorld(wp)) void hit(wp.x / S.cw, wp.y / S.ch); else clearProbe();
+    }
+  });
+  catcher.addEventListener('pointerup', async (e: PointerEvent) => {
+    const d = S.drag; S.drag = null;
+    if (d && d.kind === 'pan') return;
+    const wp = toWorld(e.clientX, e.clientY);
+    if (d && d.kind === 'box') {
+      ghost.hidden = true;
+      const x = Math.max(0, Math.min(d.cx, wp.x)), y = Math.max(0, Math.min(d.cy, wp.y)), w = Math.min(S.cw, Math.max(d.cx, wp.x)) - x, h = Math.min(S.ch, Math.max(d.cy, wp.y)) - y;
+      if (w < 8 || h < 8) return;
+      const r = await hit((x + w / 2) / S.cw, (y + h / 2) / S.ch); if (S.dead) return; clearProbe();
+      addPin({ kind: 'box', x: x / S.cw, y: y / S.ch, w: w / S.cw, h: h / S.ch, where: r ? whereText({ tag: r.tag, text: r.text }) : '', note: '' });
+      return;
+    }
+    if (!inWorld(wp) || panning()) return;
+    const fx = wp.x / S.cw, fy = wp.y / S.ch;
+    if (S.tool === 'pin') {
+      const r = await hit(fx, fy); if (S.dead) return; clearProbe();
+      addPin({ kind: 'pin', x: fx, y: fy, where: r ? whereText({ tag: r.tag, text: r.text }) : '', note: '' });
+    } else if (S.tool === 'pick') {
+      const r = await hit(fx, fy); if (S.dead) return;
+      if (r && r.rect) addPin({ kind: 'pick', x: r.rect.l, y: r.rect.t, w: r.rect.w, h: r.rect.h, where: whereText({ tag: r.tag, text: r.text }), note: '' });
+      else addPin({ kind: 'pin', x: fx, y: fy, where: '', note: '' });   // 그림 대신 앱 화면을 놓았을 때 — 그 자리에 핀
+      clearProbe();
+    }
+  });
+
+  // ── 자판 — Esc 닫기 · ⌘± 확대 · ⇧1 한눈에 · 스페이스 끌기 ──
+  const onKey = (e: KeyboardEvent): void => {
+    if (!root.isConnected) { document.removeEventListener('keydown', onKey, true); return; }
+    const typing = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+    if (e.key === 'Escape') { e.stopPropagation(); if (pop) { closePop(); changed(); } else api.close(); return; }
+    if (typing) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomBy(1.25); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomBy(1 / 1.25); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); pct.click(); }
+    else if (e.shiftKey && e.key === '!') { e.preventDefault(); fit(); }
+    else if (e.key === ' ' && !S.space) { e.preventDefault(); S.space = true; paintTools(); }
+  };
+  const onKeyUp = (e: KeyboardEvent): void => { if (e.key === ' ' && S.space) { S.space = false; paintTools(); } };
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('keyup', onKeyUp, true);
+  const onResize = (): void => { if (!S.dead) apply(); };
+  window.addEventListener('resize', onResize);
+
+  paintTools(); paintCount();
+  requestAnimationFrame(() => { if (!S.dead) fit(); });
+  (head.querySelector('.v2-wb-x') as HTMLButtonElement | null)?.focus();
+
+  const api: WireBoard = {
+    close() {
+      if (S.dead) return; S.dead = true;
+      document.removeEventListener('keydown', onKey, true); document.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('message', onMsg); window.removeEventListener('resize', onResize);
+      frames.forEach((f) => { try { f.destroy(); } catch (_) { /* 이미 떨어졌다 */ } });
+      root.remove(); if (cur === api) cur = null;
+      if (o.onClose) o.onClose();
+    },
+    refresh() { if (!S.dead) { paintCount(); paintMarks(); if (!list.hidden) paintList(); } },
+  };
+  cur = api;
+  if (!fallback && !o.html.includes('<')) toast('와이어프레임 그림을 읽지 못했어요 — ' + WIREFRAME_PATH);
+  return api;
+}
