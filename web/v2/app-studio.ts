@@ -78,8 +78,8 @@ export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
 export function dropStudioRec(sid: string): void { writeRecs(readRecs().filter((x) => x.sid !== sid)); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
-/** 이 브라우저에서 아직 만드는 중인가(⑤ 「이대로 넣기」 전) — 앱 찾기가 만드는 중인 앱을 앱으로 세우지 않는다(builder-flow isAppInProgress · 원준 2026-10-15). */
-export function studioRecOpenFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done); }
+/** 이 브라우저에서 이 앱을 **새로** 만드는 중인가(⑤ 「이대로 넣기」 전 · 고치기 · 사본은 아니다) — 앱 찾기 · 앱빌더가 만드는 중인 앱을 가른다(builder-flow isAppInProgress · 원준 2026-10-15). */
+export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && x.mode === 'new'); }
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
@@ -617,15 +617,20 @@ async function build(rec: StudioRec): Promise<void> {
     if (root) root.hidden = false;
     if (mountOpts.host && !/^#\/builder(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('resume', rec.sid);
   };
+  let opening = false;   // 붙이기 · 동의를 기다리는 동안 두 번 눌러도 한 번만 간다
   const openReal = async (view: 'widget' | 'app'): Promise<void> => {
-    if (!rec.appId || S.waiting) return;
+    if (!rec.appId || S.waiting || opening) return;
+    opening = true;
+    try { await openRealNow(view); } finally { opening = false; }
+  };
+  const openRealNow = async (view: 'widget' | 'app'): Promise<void> => {
     rec.view = view; saveRec(rec);
     let route = '#/s/' + encodeURIComponent(rec.sid);
     if (view === 'widget') {
       //  세션 위젯 = 그 세션 우측 사이드바의 앱 탭. 붙이기가 **끝난 뒤** 넘어가고, 그 세션의 사이드바가 앱 탭으로 열리게 먼저 적어 둔다 —
       //   종전엔 붙이기를 기다리지 않고 넘어가 첫 화면에 앱 탭이 없었고, 사이드바는 늘 서던 「자료」 로 열렸다(원준 2026-10-15 «회의록 위젯 찾아야 하는 거»).
-      if (!(await ensureAttached())) { toast('이 앱을 앱빌딩 세션에 붙이지 못해 세션 위젯으로 볼 수 없어요 — 다시 눌러 주세요', true); return; }
-      if (S.dead) return;
+      //   못 붙였으면 넘어가지 않는다(까닭은 붙이기가 이미 말했다 · 동의를 거절했으면 조용히).
+      if (!(await ensureAttached()) || S.dead) return;
       preferSessAppTab(rec.sid);
     } else void ensureAttached();
     if (view === 'app') {

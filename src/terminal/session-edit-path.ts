@@ -10,7 +10,33 @@
 //   · central — 그 밖(종전). 중앙 tmux 가 살아 있는지 모르면(null) 살아 있다고 본다(#3752 — 모름을 죽음으로 읽지 않는다).
 export type SessionEditPath = "node" | "stored" | "central";
 
-export function sessionEditPath(i: { nodeId: string; nodeOnline: boolean; labelOnly: boolean; centralGone: boolean | null }): SessionEditPath {
-  if (i.nodeId) return i.nodeOnline || !i.labelOnly ? "node" : "stored";
+/**
+ * nodeId = 되찾은 좌표(화면이 준 것 → 기록 → 스냅샷) · rowNode = **기록(desired-state)의** 좌표(같은 접기를 거친 것).
+ *  꺼진 노드로 «기록만» 가는 건 그 좌표가 기록의 좌표와 같을 때뿐이다 — 화면이 실어 보낸 낡은(엉뚱한) 좌표 하나로 살아 있는 세션의
+ *  이름이 기록에만 적히고 화면(tmux)은 옛 이름으로 남는 일을 막는다(격리 리뷰). 다르면 종전대로 노드로 보낸다(그 노드가 답한다).
+ */
+export function sessionEditPath(i: { nodeId: string; rowNode: string; nodeOnline: boolean; labelOnly: boolean; centralGone: boolean | null }): SessionEditPath {
+  if (i.nodeId) return !i.nodeOnline && i.labelOnly && i.nodeId === i.rowNode ? "stored" : "node";
   return i.labelOnly && i.centralGone === true ? "stored" : "central";
+}
+
+/** 기록에 적을 이름 — 중앙 editSession(cleanLabel) · 노드 미러와 같은 다듬기(탭 · 줄바꿈은 공백 · 앞뒤 공백 · 80자). */
+export function cleanEditLabel(raw: unknown): string {
+  return String(raw ?? "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
+}
+
+/**
+ * «기록만» 이름 바꾸기를 막을 까닭 — 없으면 null. 순서가 곧 답이다:
+ *  기록을 못 읽었다(503 — 없는 게 아니다) · 기록이 없다(404) · 주인이 아니다(403 — 초대받은 사람도 이름은 못 바꾼다, 중앙 assertManage 와 같다) ·
+ *  다른 세션으로 이어진 옛 행이다(409 — 이름은 이어진 새 세션에) · 다듬으니 빈 이름(400).
+ */
+export function storedLabelRefusal(
+  row: { owner: string; superseded_by?: string | null } | null | undefined, me: string, label: string, readFailed: boolean,
+): { status: number; message: string } | null {
+  if (readFailed) return { status: 503, message: "세션 기록을 읽지 못했습니다 — 잠시 뒤 다시 해 주세요" };
+  if (!row) return { status: 404, message: "세션을 찾을 수 없습니다" };
+  if (!me || row.owner !== me) return { status: 403, message: "내 세션만 이름을 바꿀 수 있습니다" };
+  if (row.superseded_by) return { status: 409, message: "이 세션은 새 세션으로 이어졌어요 — 이어진 세션에서 이름을 바꿔 주세요" };
+  if (!label) return { status: 400, message: "이름이 필요합니다" };
+  return null;
 }

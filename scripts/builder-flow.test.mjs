@@ -58,16 +58,22 @@ check(F.draftStageText("zzz", true, false) === "③ 시안 확인 · 고치기",
 check(!/④ 고치기|⑥/.test([F.draftStageText("fix", true, false), F.draftStageText("put", true, false), F.draftStageText("zzz", true, false)].join(" ")), "D5 옛 여섯 단계 글(④ 고치기 · ⑥)은 어디에도 없다");
 
 // ── 만드는 중인 앱(원준 2026-10-15 «끝까지 안 만들었는데 왜 먼저 앱으로 나와») — 앱 찾기와 앱빌더가 같은 자로 잰다 ──
-const ap = (o = {}) => ({ visibility: "me", empty: false, studio: { put: false }, buildSession: "box-1", ...o });
-check(F.isAppInProgress(ap()) === true, "I1 나만 · 첫 판 있음 · 넣기 전 · 만들기 세션 있음 = 만드는 중(회의록 꼴)");
-check(F.isAppInProgress(ap({ buildSession: "" })) === false, "I2 만들기 세션 기록이 없는 옛 나만 앱은 다 만든 앱");
-check(F.isAppInProgress(ap({ buildSession: "" }), true) === true, "I3 이 브라우저에 열린 만들기 기록이 있으면 만드는 중");
+//  building = 앱빌더가 새로 만드는 중(만들기 세션이 isBuildingSession 이거나 이 브라우저의 새 앱 기록) — 부르는 쪽이 잰다.
+const ap = (o = {}) => ({ visibility: "me", empty: false, studio: { put: false }, ...o });
+check(F.isAppInProgress(ap(), true) === true, "I1 나만 · 첫 판 있음 · 넣기 전 · 앱빌더가 새로 만드는 중 = 만드는 중(회의록 꼴)");
+check(F.isAppInProgress(ap(), false) === false, "I2 앱빌더가 만드는 중이 아니면(보통 AI 세션이 저장한 나만 앱 · 고치는 중인 쓰던 앱) 다 만든 앱");
 check(F.isAppInProgress(ap({ studio: { put: true } }), true) === false, "I4 ⑤ 넣기를 지났으면 만드는 중이 아니다");
 check(F.isAppInProgress(ap({ visibility: "all" }), true) === false, "I5 공개한 앱은 고치는 중이어도 앱으로 선다");
-check(F.isAppInProgress(ap({ empty: true })) === false, "I6 첫 판 없는 빈 예약은 여기서 다루지 않는다");
+check(F.isAppInProgress(ap({ empty: true }), true) === false, "I6 첫 판 없는 빈 예약은 여기서 다루지 않는다");
 check(F.isAppInProgress(ap({ visibility: undefined }), true) === false && F.isAppInProgress(ap({ visibility: "zzz" }), true) === false, "I7 모르는 공개 범위는 'all' 로 읽는다");
-check(F.isAppInProgress(ap({ buildSession: "   " })) === false && F.isAppInProgress(ap({ buildSession: null })) === false, "I8 만들기 세션 칸이 공백 · null 이면 없는 것");
-check(F.isAppInProgress(ap({ studio: null })) === true, "I9 매니페스트 studio 칸이 없어도(첫 판) 만드는 중");
+check(F.isAppInProgress(ap({ studio: null }), true) === true && F.isAppInProgress(ap({ studio: { put: "yes" } }), true) === true, "I9 studio 칸이 없거나 put 이 참(true)이 아니면 넣기 전");
+
+// ── 앱빌더가 새 앱을 만드는 세션인가 ──
+check(F.isBuildingSession('"회의록" 앱 제작', "") && F.isBuildingSession("새 앱 제작", null) && F.isBuildingSession("앱 만들기 · 회의록 녹음본을", "앱 만들기"), "B1 «\"이름\" 앱 제작» · 「새 앱 제작」 · 옛 「앱 만들기 · 」 는 새 앱 세션");
+check(!F.isBuildingSession('"메모" 앱 고치기', "앱빌더") && !F.isBuildingSession("앱 고치기 · 메모 · 원준", "앱빌더"), "B2 「… 앱 고치기」 는 앱빌더 프로젝트여도 아니다(쓰던 앱을 고치는 중)");
+check(F.isBuildingSession("회의록 기획카드", "앱빌더") && F.isBuildingSession("회의록 기획카드", " 앱빌더 "), "B3 AI 가 이름을 덮은 옛 세션도 앱빌더 프로젝트면 새 앱 세션");
+check(!F.isBuildingSession("회의록 기획카드", "회의록 정리") && !F.isBuildingSession("메모 앱 만들어 줘", null), "B4 앱빌더 밖 보통 AI 세션은 아니다(그 세션이 저장한 앱은 다 만든 앱)");
+check(!F.isBuildingSession("", "") && !F.isBuildingSession(null, null) && !F.isBuildingSession('"" 앱 제작', ""), "B5 빈 이름 · 빈 따옴표는 아니다");
 
 // ── 만들던 앱 카드 이름 — 사람이 정한 앱 이름이 먼저(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») ──
 check(F.draftTitle({ title: "회의록", cardName: "다른", label: '"x" 앱 제작', appTitle: "y", what: "z" }) === "회의록", "T1 ①에서 적은 이름이 먼저");

@@ -17,7 +17,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse } from './apps.js';
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, setLaunchpadContext } from './apps.js';
 import { instanceSideIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
@@ -100,6 +100,8 @@ let mobile: MobileChrome | null = null;   // ≤900px 모바일 크롬(#1777) �
 let titlebar: Titlebar | null = null;     // 데스크톱 앱 창 버튼·드래그를 위한 OS 크롬. 브라우저에선 null.
 let webTopbar: HTMLElement | null = null; // 브라우저의 맨 윗줄(#2016 8차) — 데스크톱 창 줄과 같은 골격, 창 버튼만 없다.
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
+//  #4632 앱 찾기가 «앱빌더가 새로 만드는 중인 앱» 을 가를 때 셸이 아는 세션 · 프로젝트를 본다(apps.ts buildingNow).
+setLaunchpadContext(() => ({ sessions: data.sessions, projects: data.projects }));
 let projLoadedAt = 0;
 const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
 let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 라우터가 다시 그리지 않게

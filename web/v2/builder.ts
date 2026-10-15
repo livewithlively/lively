@@ -13,12 +13,12 @@ import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
 import { appGlassIcon } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
-import { closeAppStudio, dropStudioRec, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecs, studioUiOnly } from './app-studio.js';
+import { closeAppStudio, dropStudioRec, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
 import { appStateOf } from './app-session.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, draftTitle, isAppInProgress, isBuilderSession, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, draftTitle, isAppInProgress, isBuilderSession, isBuildingSession, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
@@ -176,8 +176,14 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
-  //   앱 찾기와 같은 자(lib/builder-flow isAppInProgress) — 여기 서는 앱은 앱 찾기에 앱으로 서지 않는다. 빈 예약(첫 판 전)도 여기.
-  apps.filter((a) => a.isOwner && a.buildSession && (a.empty ? a.visibility === 'me' : isAppInProgress(a)) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
+  //   앱 찾기와 같은 자(lib/builder-flow isAppInProgress) — 앱빌더가 새로 만드는 중인 앱만 여기 서고, 그 앱은 앱 찾기에 앱으로 서지 않는다. 빈 예약(첫 판 전)도 여기.
+  //   보통 AI 세션이 저장한 나만 보는 앱(그 세션도 build_session 으로 적힌다)은 다 만든 앱이라 「내가 만든 앱」 에 선다.
+  const buildingApp = (a: BApp): boolean => {
+    if (studioRecBuildingFor(a.id)) return true;
+    const s = sessOf(a.buildSession);
+    return !!s && isBuildingSession(s.label, projName(s.projectId));
+  };
+  apps.filter((a) => a.isOwner && a.buildSession && (a.empty ? a.visibility === 'me' : isAppInProgress(a, buildingApp(a))) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
     seen.add(a.buildSession);
     drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
   });
