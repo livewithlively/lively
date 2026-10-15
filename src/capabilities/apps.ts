@@ -24,7 +24,7 @@ import {
 //  #4481 앱 v2-2 — 판 파일은 파일 목록(bundle) + 저장소(S3 · 자가호스팅 DB). 읽기·쓰기는 app-version-files 한 자리를 지난다.
 import { appBundlePolicy, insertVersion, publishedScreens, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
 import { bundleFromDir, bundleFromFiles } from "../apps/app-bundle.js";
-import { bundleFilesToWrite, hasRefFiles, stageFromDir, stageFromRefs, writeFilesToDir, type SaveFileInput } from "../apps/app-bundle-source.js";
+import { bundleFilesToWrite, hasRefFiles, stageFromDir, stageFromRefs, takeSkipped, writeFilesToDir, type SaveFileInput } from "../apps/app-bundle-source.js";
 import { webRootOf } from "../apps/manifest.js";
 import { sessionDirAccess } from "./app-bundle-dir.js";
 import type { StagedSource } from "../apps/install-source.js";
@@ -647,8 +647,7 @@ const appSave: Capability = {
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     const staged = await stageSaveInput(input, user, ctx);
     //  폴더째 저장이 뺀 비밀 열쇠 꼴 파일 이름 — 이 응답에만 싣는다(앱 행의 source 에 남기면 앱을 보는 모두에게 그 이름이 보인다 · 격리 리뷰 재검토 7).
-    const skipped = (staged.meta as { skipped?: string[] }).skipped ?? [];
-    delete (staged.meta as { skipped?: string[] }).skipped;
+    const skipped = takeSkipped(staged.meta);
     try {
       const loaded = await loadAppPackage(staged.dir);
       const bad = memberAppViolations(loaded.manifest);

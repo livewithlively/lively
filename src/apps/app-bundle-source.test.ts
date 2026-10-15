@@ -1,6 +1,6 @@
 // 세션 폴더 ⇄ 설치 스테이지(#4481) — 게이트웨이 로컬 길(멤버 경계와 **같은 한 줄** WALK_JS · READ_JS · WRITE_JS 를 게이트웨이 node 로 돌린다).
 // 실행: npm run build && node dist/apps/app-bundle-source.test.js
-//  S1~S10. 이게 틀리면: app_save {dir} 가 node_modules · .git · .env(비밀)를 판에 싣거나, 심링크로 폴더 밖 파일을 읽거나, 매니페스트 없는 폴더를
+//  S1~S11. 이게 틀리면: app_save {dir} 가 node_modules · .git · .env(비밀)를 판에 싣거나, 심링크로 폴더 밖 파일을 읽거나, 매니페스트 없는 폴더를
 //   앱으로 저장하거나, 상한을 넘는 폴더를 다 읽은 뒤에야 막거나, app_pull {dir} 이 남의 파일을 덮거나, 비밀 열쇠 파일을 판에 싣거나,
 //   심링크 하위 폴더 너머(폴더 밖)를 읽고 쓴다(격리 리뷰 B4).
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
-import { READ_JS, runDirJs, stageFromDir, writeFilesToDir } from "./app-bundle-source.js";
+import { READ_JS, runDirJs, stageFromDir, takeSkipped, writeFilesToDir } from "./app-bundle-source.js";
 import { APP_BUNDLE_POLICY_DEFAULT } from "./app-bundle-policy.js";
 
 let pass = 0;
@@ -146,6 +146,15 @@ try {
       assert.deepEqual(got.filter((x) => x !== "lively-app.json"), [...names].sort(), "이름이 한 글자도 안 깨졌다");
     } finally { await st.cleanup(); }
     ok("S10 한글 이름 2,500개 — 걷기 · 읽기 결과가 조각 경계에서 깨지지 않는다");
+  }
+  {
+    //  뺀 열쇠 꼴 이름은 저장 응답에만 — 스테이지 meta(앱 행 source 로 남는다)에서 걷어 낸다.
+    const meta = { kind: "inline", files: 2, from: "dir", skipped: ["certs/server.pem", "id_ed25519"] };
+    assert.deepEqual(takeSkipped(meta), ["certs/server.pem", "id_ed25519"]);
+    assert.equal("skipped" in meta, false, "meta 에 남지 않는다");
+    assert.deepEqual(meta, { kind: "inline", files: 2, from: "dir" }, "다른 칸은 그대로");
+    assert.deepEqual(takeSkipped({ kind: "inline" }), [], "없으면 빈 목록");
+    ok("S11 뺀 열쇠 꼴 이름은 meta 에서 걷어 응답으로만");
   }
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log(`\n${pass} passed`);

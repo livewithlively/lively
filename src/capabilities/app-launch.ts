@@ -25,6 +25,7 @@ import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunc
 import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
+import { logger } from "../log.js";
 
 const launchInput = {
   app_id: z.string(),
@@ -44,7 +45,8 @@ export interface LaunchDeps {
   getMember: (id: string) => Promise<Pick<OrgMember, "id" | "kind" | "state"> | null>;
   getApp: (id: string) => Promise<store.OrgApp | null>;
   listUiAssets: (id: string) => Promise<Array<{ page_key: string }>>;
-  /** #4667 공개 판 행 — 공개 주소로 여는데 남의 초안이 걸려 있으면 화면 키를 공개 판에서 본다. 없으면(시험 등) 설치된 화면으로 본다. */
+  /** #4667 공개 판 행 — 공개 주소로 여는데 남의 초안이 걸려 있으면 화면 키를 공개 판에서 본다. 없으면(시험 등) 설치된 화면으로 본다.
+   *  null = 판 행 없음(설치된 화면으로) · 던짐 = 저장소 실패(503 — 설치된 화면, 곧 남의 초안으로 떨어지지 않는다). */
   getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   mint: (i: MintLaunchInput) => Promise<{ code: string }>;
   now: () => number;
@@ -107,7 +109,9 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   let pub: { manifest: unknown; files: unknown[] } | null = null;
   if (view === "published" && d.getAppVersion) {
     try { pub = await d.getAppVersion(appId, app.published_version_no as number); } catch (e) {
-      throw new HttpError(503, `앱 '${appId}' 의 공개 판 화면을 읽지 못했습니다 — 잠시 뒤 다시 열어 주세요(${e instanceof Error ? e.message : String(e)})`);
+      //  까닭은 로그로만 — DB · 저장소 오류 글(주소 · 역할 이름)을 구성원에게 내보이지 않는다.
+      logger.error({ err: e instanceof Error ? e.message : String(e), app: appId }, "[app-launch] 공개 판 화면을 읽지 못했다");
+      throw new HttpError(503, `앱 '${appId}' 의 공개 판 화면을 읽지 못했습니다 — 잠시 뒤 다시 열어 주세요`);
     }
   }
   const pages = pub ? uiPagesFromFiles(pub.manifest, pub.files as AppFile[]) : await d.listUiAssets(appId);

@@ -146,4 +146,18 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   ok("F6 판 — 초안 주소 = 초안 주인만(남 · 관리자 404) · 안 정하면 보는 판의 주소 · 공개 주소 화면 키는 공개 판");
 }
 
+// ── F7 공개 판 화면을 못 읽으면(저장소 실패) 503 — 설치된 화면(남의 초안)의 화면 키로 판정하지 않는다 · 코드를 만들지 않는다 · 까닭은 글에 안 싣는다 ──
+{
+  const { d, mints } = deps({
+    getMember: async (id) => ({ id, kind: "human", state: "active" }),
+    getAppVersion: async () => { throw new Error("connect ECONNREFUSED 10.0.0.5:5432 role lively_app_x"); },
+  });
+  let err: any = null;
+  try { await launchAppFor({ app_id: "drafted", next: "/?page=settings" }, user(), d); } catch (e) { err = e; }
+  assert.equal(err?.status, 503);
+  assert.equal(mints.length, 0, "코드를 만들지 않는다");
+  assert.ok(!String(err?.message).includes("ECONNREFUSED") && !String(err?.message).includes("lively_app_x"), "DB 오류 글(주소 · 역할)을 내보이지 않는다");
+  ok("F7 공개 판 화면을 못 읽으면 503 · 발급 0 · 까닭은 로그로만");
+}
+
 console.log(`\n${pass} passed`);

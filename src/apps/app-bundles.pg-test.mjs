@@ -15,7 +15,8 @@
 //  D10 화면 한 장(v1) 공개 판의 호환 사본(files)을 30일 뒤 비워도 앱 주소 · org_app_ui 가 공개 판 화면을 낸다(격리 리뷰 B2 — 살아 있는 의존으로)
 //  D11 정리 후보가 «오래됐지만 살아 있는» 파일로 막히지 않는다 — 한 바퀴 볼 수(1)보다 그런 파일이 많아도 고아를 지운다(격리 리뷰 B3)
 //  D12 관리자 설치도 판 파일을 설치 **전에** 둔다 — 상한에 걸리면 413 이고 앱이 안 생긴다 · 되는 설치는 판 1개 · 앱 주소가 그 판을 낸다
-//  D13 정리가 S3 실패를 연달아 만나면 그 바퀴를 접는다(후보마다 한 번만 · 잠금을 오래 안 붙든다) · S3 가 돌아오면 다음 바퀴가 지운다
+//  D13 정리가 S3 실패를 연달아 만나면 그 바퀴를 접는다(후보마다 한 번만 · 잠금을 오래 안 붙든다) · 실패한 줄은 이 프로세스에선 건너뛰고
+//      (늘 실패하는 줄이 앞줄을 막지 않게) 나머지를 지운다 · 재기동 뒤엔 그 줄도 지운다
 import pg from "pg";
 import crypto from "node:crypto";
 
@@ -234,8 +235,8 @@ try {
   const aliceOne = await appFrontPage(hdr("pgt-alice", "onepage", "draft"), "/", live);
   const bobUi = await call("org_app_ui", { app_id: "onepage" }, bob);
   //  앱 주소 열기(launch)도 같은 자리에서 — 살아 있는 의존 그대로(호환 사본 files 를 읽으면 화면이 없어 404 였다 · 격리 리뷰 재검토 2).
-  const launchErr = await errOf(launchAppFor({ app_id: "onepage", mode: "embed" }, bob, { ...launchLiveDepsForTest(), env: ENV, tenant: () => T, mint: async () => ({ code: "pgt-code" }) }));
-  const launched = launchErr ? null : await launchAppFor({ app_id: "onepage", mode: "embed" }, bob, { ...launchLiveDepsForTest(), env: ENV, tenant: () => T, mint: async () => ({ code: "pgt-code" }) });
+  let launched = null, launchErr = null;
+  try { launched = await launchAppFor({ app_id: "onepage", mode: "embed" }, bob, { ...launchLiveDepsForTest(), env: ENV, tenant: () => T, mint: async () => ({ code: "pgt-code" }) }); } catch (e) { launchErr = e; }
   const emptied = await q(`SELECT count(*)::int AS n FROM org_app_version WHERE app_id='onepage' AND jsonb_array_length(files)=0 AND bundle IS NOT NULL`);
   chk("D10 화면 한 장 공개 판 — 호환 사본을 비워도 앱 주소 · org_app_ui 가 공개 판(파일 목록에서) · 초안을 만든 사람은 초안 주소에서 초안",
     emptied[0].n === 2 && bobOne.status === 200 && text(bobOne).includes("공개 판 한 장") && aliceOne.status === 200 && text(aliceOne).includes("초안 한 장")
@@ -297,21 +298,28 @@ try {
     creds: async () => ({ accessKeyId: "AK", secretAccessKey: "SK" }), retryDelayMs: 0,
     fetch: async (_url, init) => { s3calls.n++; return init?.method === "DELETE" && s3calls.mode === "ok" ? new Response(null, { status: 204 }) : new Response("<Error><Code>InternalError</Code></Error>", { status: 500 }); },
   });
-  let gcFail, gcOk, leftFail, leftOk, callsFail;
+  let gcFail, gcOk, gcAfterRestart, leftFail, leftOk, leftEnd, callsFail;
+  blob.resetGcFailedForTest();
   try {
     gcFail = await blob.gcBlobs({ limit: 10 });
     callsFail = s3calls.n;
     leftFail = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[]) AND store='s3' AND stored`, [s3Hs]))[0].n;
     s3calls.mode = "ok"; s3calls.n = 0;
-    gcOk = await blob.gcBlobs({ limit: 10 });
+    gcOk = await blob.gcBlobs({ limit: 10 });                 // 실패한 셋은 건너뛰고 나머지 둘
     leftOk = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[])`, [s3Hs]))[0].n;
+    blob.resetGcFailedForTest();                               // 재기동
+    gcAfterRestart = await blob.gcBlobs({ limit: 10 });
+    leftEnd = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[])`, [s3Hs]))[0].n;
   } finally {
     blob.setBlobS3DepsForTest(undefined);
+    blob.resetGcFailedForTest();
     delete process.env.LIVELY_APP_BUNDLE_BUCKET;
   }
-  chk("D13 정리 — S3 지우기가 3번 연달아 실패하면 그 바퀴를 접는다(후보마다 한 번 · 장부 그대로) · S3 가 돌아오면 다 지운다",
-    gcFail.checked === 3 && gcFail.failed === 3 && gcFail.removed === 0 && callsFail === 3 && leftFail === 5 && gcOk.removed === 5 && leftOk === 0,
-    JSON.stringify({ gcFail, callsFail, leftFail, gcOk, leftOk }));
+  const STREAK = blob.GC_S3_FAIL_STREAK_MAX;
+  chk("D13 정리 — S3 지우기가 연달아 실패하면 그 바퀴를 접는다(후보마다 한 번 · 장부 그대로) · 실패한 줄은 건너뛰고 나머지를 지운다 · 재기동 뒤 그 줄도",
+    STREAK === 3 && gcFail.checked === STREAK && gcFail.failed === STREAK && gcFail.removed === 0 && callsFail === STREAK && leftFail === 5
+      && gcOk.checked === 5 - STREAK && gcOk.removed === 5 - STREAK && leftOk === STREAK && gcAfterRestart.removed === STREAK && leftEnd === 0,
+    JSON.stringify({ gcFail, callsFail, leftFail, gcOk, leftOk, gcAfterRestart, leftEnd }));
 } finally {
   console.log(`\n${pass} passed, ${fail} failed`);
   await itemsPool.end().catch(() => {});

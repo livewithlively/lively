@@ -54,7 +54,8 @@ export interface AppFrontDeps {
   getApp: (id: string) => Promise<appStore.OrgApp | null>;
   listUiAssets: (appId: string) => Promise<Array<{ page_key: string }>>;
   getUiAsset: (appId: string, key: string) => Promise<{ page_key: string; html: string } | null>;
-  /** #4667 공개 판 행(매니페스트 · 파일) — 남의 초안이 걸린 공개 앱을 공개 판으로 보여 줄 때. 없으면(시험 등) 설치된 화면을 준다. */
+  /** #4667 공개 판 행(매니페스트 · 파일) — 남의 초안이 걸린 공개 앱을 공개 판으로 보여 줄 때. 없으면(시험 등) 설치된 화면을 준다.
+   *  null = 판 행 없음(설치된 화면으로) · 던짐 = 저장소 실패(503 — 설치된 화면, 곧 남의 초안으로 떨어지지 않는다). */
   getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   redeem: (i: RedeemLaunchInput) => Promise<RedeemedLaunch | null>;
   scripts: () => Promise<AppScripts>;

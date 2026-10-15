@@ -142,6 +142,17 @@ export async function stageFromDir(acc: DirAccess, dirShown: string, policy: App
   return { dir: tmp, meta: { kind: "inline", files: files.length, bytes: total, from: "dir", ...(skipped.length ? { skipped } : {}) }, cleanup };
 }
 
+/**
+ * 스테이지 meta 에서 뺀 비밀 열쇠 꼴 파일 이름을 걷어 낸다(순수 · meta 를 고친다) — 그 이름은 저장 응답에만 싣는다.
+ *  meta 는 설치가 앱 행의 source 로 남기므로(앱을 보는 모두에게 보인다) 거기엔 두지 않는다.
+ */
+export function takeSkipped(meta: object): string[] {
+  const m = meta as { skipped?: unknown };
+  const out = Array.isArray(m.skipped) ? m.skipped.map(String) : [];
+  delete m.skipped;
+  return out;
+}
+
 /** 쓸 파일 하나 — 경로 · 크기 · 내용을 읽는 길(판 묶음은 저장소에서, 옛 판은 손에 쥔 내용에서). */
 export interface FileToWrite { p: string; s: number; read: () => Promise<Buffer> }
 
