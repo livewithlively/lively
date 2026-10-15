@@ -1536,10 +1536,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     }, fold);
     const labelOnly = b.label !== undefined && b.invites === undefined;
     const centralGone = !relayId && labelOnly ? await sessionGoneVerdict(req.params.id).catch(() => null) : null;
-    const editPath = sessionEditPath({
-      nodeId: relayId, rowNode: sessionRelayNodeId({ desired: desired?.node_id }, fold),
-      nodeOnline: !!relayId && nodeOnline(relayId), labelOnly, centralGone,
-    });
+    const rowNode = sessionRelayNodeId({ desired: desired?.node_id }, fold);
+    const onNodeUp = !!relayId && nodeOnline(relayId);
+    //  켜진 노드의 끝난 세션 — 이름만 바꿀 때는 그 노드에 «아직 있나» 를 묻는다(지우기 라우트의 gone op · 못 물으면 null = 살아 있다고 본다).
+    const nodeGone = onNodeUp && labelOnly && relayId === rowNode ? await nodeRpc<boolean>(relayId, "gone", { id: req.params.id }).catch(() => null) : null;
+    const editPath = sessionEditPath({ nodeId: relayId, rowNode, nodeOnline: onNodeUp, nodeGone, labelOnly, centralGone });
     if (editPath === "stored") {
       //  지금 어디서도 돌지 않는 세션의 이름 — 기록에 사람 이름으로 적는다(복원이 이 이름으로 띄운다 · AI 가 못 덮는다). 주인만.
       const me = idOf(userOf(req));
