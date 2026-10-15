@@ -18,7 +18,7 @@ import { appStateOf } from './app-session.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSessionWhat, draftStageText, isBuilderSession, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, draftTitle, isAppInProgress, isBuilderSession, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
@@ -141,7 +141,9 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
       const a = apps.find((x) => x.buildSession === where.id) || null;
       const what = s ? builderSessionWhat(s.label) : '';
       if (!what && !a) { toast('그 세션의 기록을 찾을 수 없어요 — 새로 만들어요'); location.hash = builderRoute('new'); return; }
-      openAppStudio({ sid: where.id, what: what || (a ? a.title : ''), appId: a && !a.empty ? a.id : '', title: a && !a.empty ? a.title : '' }, opts);
+      //  이름은 사람이 정한 것 — 세션 이름 «"이름" 앱 제작» 에 박혀 있다(다른 브라우저에서 이어도 같은 이름 · 원준 2026-10-15). 없으면 첫 판의 앱 이름.
+      const named = s ? builderSessionName(s.label) : '';
+      openAppStudio({ sid: where.id, what: what || (a ? a.title : ''), appId: a && !a.empty ? a.id : '', title: named || (a && !a.empty ? a.title : '') }, opts);
     });
     return;
   }
@@ -168,19 +170,22 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   const sessOf = (sid: string) => env.sessions().find((x) => x.id === sid) || null;
   //  #4667 «다 만든 앱» = 마무리(⑤ 「이대로 넣기」)를 지났거나 공개한 앱. 만들기 세션 · 만든 사람은 서버 기록(build_session · made_by)이다.
   const isDone = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid)).map((r) => ({ sid: r.sid, title: r.title || r.what.split('\n')[0] || '이름 없는 앱', stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  //  카드 이름 = 사람이 정한 앱 이름(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») — 기록의 이름 · 기획 카드 · 세션 이름 «"이름" 앱 제작» · 앱 이름 차례(lib/builder-flow draftTitle).
+  const appTitleOf = (id: string): string => { const a = id ? apps.find((x) => x.id === id) : null; return a && !a.empty ? a.title : ''; };
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
-  apps.filter((a) => a.isOwner && a.buildSession && a.visibility === 'me' && !isDone(a) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
+  //   앱 찾기와 같은 자(lib/builder-flow isAppInProgress) — 여기 서는 앱은 앱 찾기에 앱으로 서지 않는다. 빈 예약(첫 판 전)도 여기.
+  apps.filter((a) => a.isOwner && a.buildSession && (a.empty ? a.visibility === 'me' : isAppInProgress(a)) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
     seen.add(a.buildSession);
-    drafts.push({ sid: a.buildSession, title: a.title || '이름 없는 앱', stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
+    drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
   });
   //  내 세션만(owned 는 서버 판정 — 없으면 옛 목록, 그때는 보인다). 남이 만들던 앱은 남의 것이다.
   env.sessions().filter((s) => !s.task && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
     if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
     const a = apps.find((x) => x.buildSession === s.id);
-    drafts.push({ sid: s.id, title: builderSessionWhat(s.label) || s.label, stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
+    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
   });
   drafts.sort((a, b) => b.at - a.at);
   const draftAppIds = new Set(drafts.flatMap((d) => [d.appId, d.serverApp || '']).filter(Boolean));

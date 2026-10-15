@@ -54,6 +54,7 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, node
 import type { NodeSessionInfo } from "../node/registry.js";
 import { reportSessionActivity } from "./session-activity-relay.js";   // #2600 T2 d6 — 하네스 활동 보고를 그 세션의 호스트에
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
+import { sessionEditPath } from "./session-edit-path.js";   // #4632 — 세션 고치기가 노드 · 기록 · 중앙 중 어디로 가나(순수)
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme, harnessResumeCommand } from "./catalog.js"; // #1683 테마 값 정규화 · #4135 셸에서 대화를 이어 여는 한 줄(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -1519,11 +1520,33 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
-    const nodeId = relayNodeId(String(b.node ?? req.query.node ?? ""), isSelfNode);
     //  #3870 — 초대 알림은 «이번 저장으로 새로 들어온 사람» 에게만(session-invite.ts). 이전 명단은 저장 **전에** 읽는다.
     //   명단 정본은 DB 행이다(ownerMeta 가 DB 를 먼저 본다). 못 읽으면 null — newInvitees 가 «모름» 으로 다룬다.
-    const before = b.invites !== undefined ? await getSessionState(req.params.id).catch(() => undefined) : undefined;
+    const desired = await getSessionState(req.params.id).catch(() => undefined);
+    const before = b.invites !== undefined ? desired : undefined;
+    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
+    //  #4632 — 화면이 좌표를 안 줘도 그 세션이 사는 노드를 되찾는다(기록 → 스냅샷 · 지우기 라우트와 같은 자). 종전엔 좌표 없이 온 고침이
+    //   중앙으로 가 노드 세션 · 쉬는 세션에서 500 이 났다 — 앱빌더의 세션 이름이 그렇게 조용히 안 박혔다(session-edit-path.ts 머리말).
+    const relayId = sessionRelayNodeId({
+      query: String(b.node ?? req.query.node ?? ""),
+      desired: desired?.node_id,
+      snapshot: nodeOfSession(req.params.id),
+    }, sameTmuxCoordinate({ boxRow: isBoxSessionRow(desired), isSelf: isSelfNode, isSessionHost: isSessionHostNode }));
+    const labelOnly = b.label !== undefined && b.invites === undefined;
+    const centralGone = !relayId && labelOnly ? await sessionGoneVerdict(req.params.id).catch(() => null) : null;
+    const editPath = sessionEditPath({ nodeId: relayId, nodeOnline: !!relayId && nodeOnline(relayId), labelOnly, centralGone });
+    if (editPath === "stored") {
+      //  지금 어디서도 돌지 않는 세션의 이름 — 기록에 사람 이름으로 적는다(복원이 이 이름으로 띄운다 · AI 가 못 덮는다). 주인만.
+      const me = idOf(userOf(req));
+      if (!desired) throw new HttpError(404, "세션을 찾을 수 없습니다");
+      if (desired.owner !== me) throw new HttpError(403, "내 세션만 이름을 바꿀 수 있습니다");
+      const clean = String(b.label).replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
+      if (!clean) throw new HttpError(400, "이름이 필요합니다");
+      await claimSessionLabel(req.params.id, clean, "human", me);
+      res.json({ ok: true, notified: 0, stored: true });
+      return;
+    }
+    const nodeId = editPath === "node" ? relayId : "";
     //  보낸 수를 답에 싣는다(notified) — 화면이 «알림을 보냈어요» 를 사실일 때만 말하게. 알림 실패는 던지지 않는다(초대는 이미 저장됐다).
     const announce = async (invites: string[] | undefined, actor: string): Promise<number> => {
       if (!invites) return 0;

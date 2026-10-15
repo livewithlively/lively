@@ -14,8 +14,8 @@ import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 �
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
-import { studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
-import { builderRoute } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
+import { studioRecForApp, studioRecOpenFor } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
+import { builderRoute, isAppInProgress } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -271,7 +271,10 @@ export function openLaunchpad(): void {
       });
     //  ⚠ 화면 앱 표(APPS)에 이미 있는 빌트인은 여기서 뺀다 — 안 그러면 같은 앱이 격자에 두 번 선다(자료, #2423).
     //   표 쪽이 이긴다: 아이콘·설명·최근·독 고정이 전부 그 줄에 달려 있다.
+    //  #4632 다 만들지 않은 앱은 앱으로 서지 않는다(원준 2026-10-15 «끝까지 안 만들었는데 왜 먼저 앱으로 나와») — 나만 보는 앱 · ⑤ 넣기 전 · 만들기 세션이 있다.
+    //   그 앱은 앱빌더 「만들던 앱」 에 선다(같은 자 — lib/builder-flow isAppInProgress). 넣거나 공개하면 여기 선다.
     const session: Tile[] = sApps.filter((a) => a.id !== 'ai-session' && !APPS.some((x) => x.kind === 'native' && x.key === a.id))
+      .filter((a) => !isAppInProgress(a, studioRecOpenFor(a.id)))
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
       const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.

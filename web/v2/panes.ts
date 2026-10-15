@@ -33,7 +33,7 @@ import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { HANDSET_MQ, MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속) · 폰 · 눕힌 폰(#4443 독을 안 세운다)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
-import { SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppDoorIcon, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import { PANE_ACT_KEY, SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppDoorIcon, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
 import type { SessAppDoor } from '../session-chat.js';   // #4443 세션 머리줄 [붙은 앱] 배선의 모양
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
@@ -303,7 +303,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  새 세션도 그 세트를 그대로 물려받는다. 하지만 **그중 무엇을 켜 두고 일하는가**는 세션마다 다르다:
   //  이 세션은 웹을 띄워 두고, 저 세션은 타임라인을 본다. 그걸 매번 다시 고르게 하지 않는다.
   //  기록은 이 브라우저에(칸 배치와 같은 급의 보기 취향), 세션 id 로 — 없으면 공용 기본값(lay.act)으로 떨어진다.
-  const ACT_KEY = 'pn_act_by_sess';
+  const ACT_KEY = PANE_ACT_KEY;   // 열쇠는 session-app-pane.ts 한 곳(앱빌더가 «앱 탭으로 열기» 를 미리 적는다 · #4632)
   //  ⚠ **`opts.sessionId` 를 쓰면 안 된다**(원준 2026-09-03 신고의 한 갈래) — 서랍에서 세션을 갈아 끼울 때
   //   이 셸은 다시 그리지 않으므로 그 값은 **처음 연 세션에 굳는다**. 그러면 '세션마다 기억한다'가 실은
   //   '이 창을 처음 연 세션에 전부 덮어쓴다'가 된다. 지금 보는 세션은 curSession() 만이 안다.

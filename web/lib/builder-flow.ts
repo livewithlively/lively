@@ -71,3 +71,25 @@ export function draftStageText(stage: string, hasApp: boolean, done: boolean): s
   const n: Record<string, string> = { draft: '③ 시안 확인 · 고치기', fix: '③ 시안 확인 · 고치기', check: '④ 확인', put: '⑤ 넣기' };
   return n[stage] || '③ 시안 확인 · 고치기';
 }
+
+/** 아직 다 만들지 않은 앱인가 — 앱 찾기에 앱으로 서지 않고 앱빌더 「만들던 앱」 에만 선다(원준 2026-10-15 «끝까지 안 만들었는데 왜 먼저 앱으로 나와»).
+ *  = 나만 보는 앱 · 첫 판이 있다(빈 예약은 따로) · ⑤ 「이대로 넣기」 전 · 만들기 세션이 있다(서버 build_session, 또는 이 브라우저의 열린 만들기 기록 openRec).
+ *  공개한 앱은 고치는 중이어도(초안) 모두가 쓰는 앱이라 그대로 선다. 모르는 공개 범위는 'all' 로 읽는다(서버 apps/visibility.ts 와 같은 쪽). */
+export function isAppInProgress(a: { visibility?: unknown; empty?: boolean | null; studio?: { put?: unknown } | null; buildSession?: string | null }, openRec = false): boolean {
+  if (a.visibility !== 'me' || a.empty) return false;
+  if (a.studio && a.studio.put === true) return false;
+  return !!String(a.buildSession || '').trim() || openRec;
+}
+/** 앱빌더가 지은 세션 이름 «"이름" 앱 제작 · 고치기» 에 박힌 앱 이름 — 그 꼴이 아니면(옛 머리말 · AI 가 지은 이름 · 「새 앱 제작」) 빈 글. */
+export function builderSessionName(label: string | null | undefined): string {
+  const m = BUILDER_SESSION_RE.exec(String(label || '').trim());
+  return m ? m[1].trim() : '';
+}
+/** 「만들던 앱」 카드의 이름 — 사람이 정한 앱 이름이 먼저다(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로»).
+ *  ① 기록의 이름(①에서 적은 것 · ②에서 고친 것) ② 기획 카드의 이름 ③ 앱빌더가 지은 세션 이름 «"이름" 앱 제작» 의 이름 ④ 첫 판이 있는 앱의 이름
+ *  ⑤ 옛 세션 이름에서 머리말을 뗀 것(AI 가 지은 이름이면 그대로) ⑥ 적은 설명의 첫 줄 ⑦ 「이름 없는 앱」. 공백뿐인 값은 없는 것으로 본다. */
+export function draftTitle(src: { title?: string | null; cardName?: string | null; label?: string | null; appTitle?: string | null; what?: string | null }): string {
+  const t = (s: string | null | undefined): string => String(s || '').trim();
+  return t(src.title) || t(src.cardName) || builderSessionName(src.label) || t(src.appTitle)
+    || builderSessionWhat(src.label) || t(String(src.what || '').split('\n')[0]) || '이름 없는 앱';
+}
