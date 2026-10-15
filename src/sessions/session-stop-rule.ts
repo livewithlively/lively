@@ -289,6 +289,10 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const held = due.filter((x) => jobHold.has(holdKey(x.s.id)));
     for (let i = 0; i < held.length; i++) count("jobs");
     const toJudge = due.filter((x) => !jobHold.has(holdKey(x.s.id)));
+    //  상한은 프로브 **앞**에서도 건다 — 롤 직후처럼 후보가 많을 때 전부를 동시에 컨테이너 프로브하지 않게(격리 리뷰). 오래 논 것부터 본다.
+    let capped = false;
+    toJudge.sort((a, b) => a.since - b.since);
+    for (const _ of toJudge.splice(MAX_STOPS_PER_SWEEP * 2)) { count("capped"); capped = true; }
     let verdicts: JobVerdicts = { jobs: new Set(), unknown: new Set() };
     if (toJudge.length) {
       try { verdicts = await d.jobVerdicts(new Set(toJudge.map((x) => x.s.id))); }
@@ -299,7 +303,6 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       }
     }
     const stopped: StopRuleResult["stopped"] = [];
-    let capped = false;
     for (const { s, state, since } of toJudge) {
       if (verdicts.jobs.has(s.id)) { count("jobs"); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
       if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); continue; }
@@ -342,6 +345,9 @@ async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promi
   const draft = clampDraft(draftFromScreen(harness, cap));
   if (draft) note.draft = draft;
   if (state === "asking") {
+    //  질문 탭을 넘기기(→ 키) 전에도 본다 — 그새 사람이 돌아왔으면 그 사람이 보는 대화상자를 움직이지 않는다.
+    const v0 = d.view(s.id);
+    if (v0.viewing || v0.unknown) return { skip: "viewing-now", note };
     const q = await readQuestion(d, s.id, harness, cap);
     if (q) note.question = q;
   }

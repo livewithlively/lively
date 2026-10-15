@@ -391,3 +391,44 @@ test("S15 질문 탭을 못 넘겼으면(같은 질문이 다시 보인다) 같�
   const q = (notes[0] as { question: { items: unknown[] } }).question;
   assert.equal(q.items.length, 1);
 });
+test("S13b 후보가 많으면 프로브 앞에서 자른다(상한의 두 배까지만 프로브) — 오래 논 것부터", async () => {
+  const ids = Array.from({ length: MAX_STOPS_PER_SWEEP * 2 + 5 }, (_, i) => `box-b-${100 + i}`);
+  const rows = ids.map((id, i) => liveDone(id, { lastActive: NOW - 600 - i }));   // 뒤로 갈수록 더 오래 놀았다
+  const asked: string[][] = [];
+  const reaped: string[] = [];
+  const r = await sweepSessionStopRule({
+    enabled: () => true, loadPolicy: async () => ({}), listLive: async () => rows, listStates: async () => ids.map(stOf),
+    listManaged: async () => [], view: () => NOT_VIEWING,
+    jobVerdicts: async (s) => { asked.push([...s]); return verdictsOf()(s); },
+    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
+    sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
+  });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].length, MAX_STOPS_PER_SWEEP * 2, "프로브는 상한의 두 배까지만");
+  assert.ok(asked[0].includes(ids[ids.length - 1]) && !asked[0].includes(ids[0]), "가장 오래 논 것부터 본다");
+  assert.equal(reaped.length, MAX_STOPS_PER_SWEEP);
+  assert.equal(r.kept.capped, ids.length - MAX_STOPS_PER_SWEEP);
+});
+test("S16 질문 탭을 넘기기 전에 사람이 돌아왔으면 → 키를 보내지 않고 끄지도 않는다", async () => {
+  const tabs0 = [
+    "────────────────────────────────────────",
+    "←  ☐ 색  ☐ 과일  ✔ Submit  →",
+    "가장 좋아하는 색은?",
+    "❯ 1. 빨강",
+    "  2. 파랑",
+    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+  ].join("\n");
+  let calls = 0;
+  const keys: string[] = [];
+  const reaped: string[] = [];
+  const r = await sweepSessionStopRule({
+    enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-8", { awaiting: true, agentState: "waiting", lastActive: NOW - 4000 })],
+    listStates: async () => [stOf("box-a-8")], listManaged: async () => [],
+    view: () => (calls++ === 0 ? NOT_VIEWING : { viewing: true, unknown: false, endedAtMs: 0 }),
+    jobVerdicts: verdictsOf(), capture: async () => tabs0, keys: async (_id, k) => { keys.push(k); }, saveNote: async () => {},
+    reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
+  });
+  assert.deepEqual(keys, [], "돌아온 사람의 대화상자 탭을 움직이지 않는다");
+  assert.deepEqual(reaped, []);
+  assert.equal(r.kept["viewing-now"], 1);
+});
