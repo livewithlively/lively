@@ -10,8 +10,8 @@
 //     «강제로 되살리기» 는 옛 판이 살아 있을 수 있다 — 그때는 종전대로 새 id 를 만들고 옛 id 를 은퇴시켜 브로커가 걷게 한다
 //     (장부 retired → 안을 묻지 않고 회수). 같은 id 로 강제하면 살아 있던 하네스와 한 대화에 둘이 붙는다.
 //  ② 셀프호스트(세션 컨테이너 없음)는 늘. 매니지드(세션 컨테이너 안 tmux)는 워크스페이스 스위치
-//     `session_reclaim_policy.restore_same_id` 가 켜졌을 때만 — 컨테이너 이름이 세션 id 인 동안엔 같은 id 의 옛 컨테이너가
-//     브로커 철거와 겹치므로, #4693(T3) 의 «자리 이름» 이 켜진 워크스페이스에서만 켠다(상민님 결정 2026-10-14).
+//     `session_reclaim_policy.restore_same_id` 가 켜졌을 때 — 같은 id 의 옛 컨테이너가 브로커 철거와 겹치던 것을 #4693(T3) 의
+//     «자리 이름»(확보마다 새 컨테이너 이름)이 풀어, T3 전 테넌트 롤아웃·실측 뒤 기본 켬이다(상민님 2026-10-15). 스위치는 끄는 수단으로 남는다.
 //
 // 분석 전문: 라이블리 지식 `same-id-restore-vs-3675-conflicts-4694`.
 import { tmuxInSessionContainer } from "./session-tmux.js";
@@ -25,7 +25,8 @@ export function sameIdRestoreVerdict(o: { gone: boolean | null; containerTopolog
   return !o.containerTopology || o.policyOn;
 }
 
-/** 이 요청(테넌트 컨텍스트)에서 같은 id 로 되살리나. 정책을 못 읽으면 끈 것으로 본다(종전 경로가 안전한 쪽이다). */
+/** 이 요청(테넌트 컨텍스트)에서 같은 id 로 되살리나. 정책 조회가 던지면 끈 것으로 본다(종전 경로). DB 를 못 읽는 것만으로는
+ *  던지지 않는다 — effectiveSessionReclaimPolicy 가 마지막 값→기본값(켬)으로 답한다. */
 export async function sameIdRestoreOn(gone: boolean | null): Promise<boolean> {
   if (gone !== true) return false;
   const containerTopology = tmuxInSessionContainer(tenantSlug());

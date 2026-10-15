@@ -135,7 +135,9 @@ export interface SessionReclaimPolicy {
    *
    *  같은 id 로 되살리면 주소·장부 행·이름·핀·소속·아웃박스가 그대로 이어진다(종전 새 id 가 낳은 결함 계열 #2231·#2402·
    *  #3555·#3891 이 구조적으로 사라진다). 다만 매니지드에서는 **컨테이너 이름이 세션 id** 인 동안 같은 id 의 옛 컨테이너가
-   *  브로커 철거와 겹친다 — 그래서 #4693(T3) 의 «자리 이름» 이 켜진 워크스페이스에서만 켠다(상민님 결정 2026-10-14).
+   *  브로커 철거와 겹친다 — 그 충돌은 #4693(T3) 의 «자리 이름»(확보마다 새 컨테이너 이름)이 푼다. T3 가 전 테넌트에 켜지고
+   *  lively-46e3 실측을 통과해 **기본 켬**이다(상민님 2026-10-15). 끄는 수단: 워크스페이스 저장값 false(그 워크스페이스만) ·
+   *  env LIVELY_SESSION_RESTORE_SAME_ID=0(게이트웨이 전체 — 브로커를 자리 이름 이전으로 되돌릴 때).
    *  셀프호스트(세션 컨테이너 없음)는 이 값과 무관하게 늘 같은 id 다 — 겹칠 컨테이너가 없다.
    *  ⚠ «강제로 되살리기»(상태 모름)는 이 값이 켜져도 새 id 다 — 옛 판이 살아 있을 수 있어, 옛 id 를 은퇴시켜 브로커가 걷게 한다.
    */
@@ -158,7 +160,7 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_priority: 100,
   pressure_max_reap: 0,
   pressure_release_margin_pct: 0,
-  restore_same_id: false,    // #4694 — 매니지드는 T3 자리 이름 뒤에 켠다(셀프호스트는 이 값과 무관하게 늘 같은 id)
+  restore_same_id: true,     // #4694 — 기본 켬(T3 자리 이름 전 테넌트 롤아웃 뒤 · 2026-10-15). 셀프호스트는 이 값과 무관하게 늘 같은 id
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -242,7 +244,7 @@ const policy = definePolicy<SessionReclaimPolicy>({
     pressure_priority: { env: "LIVELY_SESSION_PRESSURE_PRIORITY", min: RECLAIM_PRIORITY_MIN, max: RECLAIM_PRIORITY_MAX },
     pressure_max_reap: { env: "LIVELY_SESSION_PRESSURE_MAX_REAP", min: RECLAIM_MAX_REAP_MIN, max: RECLAIM_MAX_REAP_MAX },
     pressure_release_margin_pct: { env: "LIVELY_SESSION_PRESSURE_RELEASE_MARGIN_PCT", min: RECLAIM_RELEASE_MARGIN_MIN, max: RECLAIM_RELEASE_MARGIN_MAX },
-    // #4694 — env 시드는 매니지드 게이트웨이 전체를 한 번에 켜는 자리(T3 2단계 뒤), 관리탭·org_runtime_update 는 워크스페이스별.
+    // #4694 — env 시드는 매니지드 게이트웨이 전체를 한 번에 **끄는** 자리(기본 켬 — 0|false|off|no 면 끔), 관리탭·org_runtime_update 는 워크스페이스별.
     restore_same_id: { kind: "bool", env: "LIVELY_SESSION_RESTORE_SAME_ID" },
   },
 });
