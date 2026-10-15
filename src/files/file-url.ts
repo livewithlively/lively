@@ -13,7 +13,7 @@ export interface MintFileUrlInput {
   /** 수명(초) — 범위 밖이면 여기서 경계로 맞춘다(clampTtl) */
   ttlSec: number;
   principal: FilePrincipal;
-  /** 읽기전용 세션(#1007)이면 올리기 주소를 주지 않는다. 빠뜨리면 «쓰기 가능» 이 되므로 필수 칸이다(부르는 쪽이 늘 명시한다). */
+  /** 읽기전용 세션(#1007)이면 올리기 주소를 주지 않는다. 필수 칸 — false 라고 명시한 때만 올리기 주소를 준다(빠지거나 비면 막는다). */
   readOnly: boolean;
 }
 

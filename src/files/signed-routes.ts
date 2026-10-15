@@ -100,7 +100,7 @@ async function principalUser(claims: FileUrlClaims, d: SignedRouteDeps): Promise
 
 /** 주소 → 절대경로 + 파일 op 를 내릴 uid. 앱 폴더 주소는 그 앱 폴더 안에서만 연다(app-jail) · 그 밖은 자리 안에서만(path-jail). */
 async function locate(user: LivelyUser, a: FileAddress, op: FileOp): Promise<{ abs: string; base: string; osUser: string | null }> {
-  const rel = op === "write" ? nfcPath(a.rel) : a.rel;   // 새로 만드는 이름은 NFC 정본(#1278b) · 읽기는 그대로(옛 NFD 파일). 쓰기는 부르는 쪽이 이미 NFC 로 판정했다
+  const rel = op === "write" ? nfcPath(a.rel) : a.rel;   // 새로 만드는 이름은 NFC 정본(#1278b) · 읽기는 그대로(옛 NFD 파일)
   const osUser = await userOsUser(user);
   const { base, abs } = await resolveRootPath(user, a.root, rel, osUser);
   const probe = osUser ? (b: string, t: string) => memberPathProbe(osUser, b, t) : probeLocal;
@@ -112,9 +112,6 @@ async function locate(user: LivelyUser, a: FileAddress, op: FileOp): Promise<{ a
 
 // 이 라우트의 경로는 곧 자격(토큰)이다 — 실패 로그에는 고정 이름만 남긴다.
 const LOG_PATH = { logPath: "/api/files/s/:token" };
-
-/** 쓰기 주소는 NFC 로 맞춘 꼴로 판정 · 저장한다(#1278b — 새로 만드는 이름의 정본). 판정과 저장이 같은 글자를 보게. */
-const canonicalWrite = (a: FileAddress): FileAddress => ({ root: a.root, rel: a.rel.normalize("NFC") });
 
 async function statOf(abs: string, osUser: string | null): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
   if (osUser) return memberStat(osUser, abs);
@@ -155,10 +152,9 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
 
   router.put("/:token", wrap(async (req, res) => {
     setCommonHeaders(res);
-    const c = claimsOf(String(req.params.token ?? ""), "PUT", d);
-    const claims = c.claims;
-    const address = canonicalWrite(c.address);
+    const { claims, address } = claimsOf(String(req.params.token ?? ""), "PUT", d);
     const user = await principalUser(claims, d);
+    //  판정은 이름의 유니코드 꼴 전부에 걸린다(file-access) — 아래 locate 가 NFC 로 쓰는 이름도 그 안에 있다.
     await authorizeFileAccess({ member: user.userId, scopes: user.scopes ?? [], app: claims.a ?? null }, address, "write", d.access);
     assertWritableTarget(address);
     const { abs, base, osUser } = await locate(user, address, "write");

@@ -75,10 +75,19 @@ test("A7 해소 실패(권한 등) → 거부", async () => {
   assert.equal(await isInAppFolder("/x", "crm", "/x/crm/a.txt", failing), false);
 });
 
-test("A8 해소는 앱 폴더 자신을 apps 자리 기준으로 먼저 본다(그다음 대상을 앱 폴더 기준으로)", async () => {
+test("A8 해소는 한 번 — apps 자리 기준으로 대상을 해소한다(매니지드에선 probe 한 번이 헬퍼 왕복 한 번)", async () => {
   const { apps } = place("a8");
   const calls: Array<[string, string]> = [];
   const recording = async (b: string, t: string): Promise<PathProbe> => { calls.push([b, t]); return probeLocal(b, t); };
-  await isInAppFolder(apps, "crm", path.join(apps, "crm", "out", "a.txt"), recording);
-  assert.deepEqual(calls, [[apps, path.join(apps, "crm")], [path.join(apps, "crm"), path.join(apps, "crm", "out", "a.txt")]]);
+  const target = path.join(apps, "crm", "out", "a.txt");
+  assert.equal(await isInAppFolder(apps, "crm", target, recording), true);
+  assert.deepEqual(calls, [[apps, target]]);
+});
+
+test("A9 앱 id 가 앞부분만 같은 이웃 앱 폴더(crm → crm2)로 가는 링크도 거부", async () => {
+  const { apps } = place("a9");
+  fs.mkdirSync(path.join(apps, "crm2"), { recursive: true });
+  fs.writeFileSync(path.join(apps, "crm2", "z.txt"), "z");
+  fs.symlinkSync(path.join(apps, "crm2", "z.txt"), path.join(apps, "crm", "to-crm2.txt"));
+  assert.equal(await inApp(apps, "crm", "to-crm2.txt"), false);
 });

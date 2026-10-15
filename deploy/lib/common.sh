@@ -75,7 +75,7 @@ ensure_service_user() {
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_SHARED "$shared_dir"; log "세션 shared 루트 → $shared_dir ($user 접근가능)"; }
     cur="$(sudo grep -E '^TERMINAL_ROOT_PERSONAL=' "$APP_DIR/.env" | cut -d= -f2-)"
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_PERSONAL "$LIVELY_SERVICE_HOME/box"; log "세션 personal 루트 → $LIVELY_SERVICE_HOME/box"; }
-    cur="$(sudo grep -E '^TERMINAL_ROOT_APPS=' "$APP_DIR/.env" | cut -d= -f2-)"
+    cur="$(sudo grep -E '^TERMINAL_ROOT_APPS=' "$APP_DIR/.env" | cut -d= -f2- || true)"   # 이 값이 생기기 전의 .env 엔 없다(pipefail — 매치 0 이 실패가 되지 않게)
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_APPS "$apps_dir"; log "앱 폴더 자리 → $apps_dir ($user 접근가능)"; }
   fi
   # ⭐ .env 소유권 불변식 최종 적용 — 위 모든 .env 편집(set_env 세션루트 repoint 등) '뒤' 마지막에 강제.

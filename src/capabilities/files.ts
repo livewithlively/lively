@@ -128,8 +128,10 @@ const fileUrl: Capability = {
     if (!rate.take(`${fileUrlTenantId()}\0${p.member}\0${p.app ?? "-"}`, Date.now())) {
       throw new HttpError(429, `서명 주소를 너무 자주 받고 있습니다(분당 ${FILE_URL_PER_MINUTE}개)`);
     }
+    //  readOnly 는 «읽기전용 세션이라고 적혀 온 때만» 참 — 앱 화면 다리(app-tool-call)는 이 칸을 싣지 않는다(앱 화면의 올리기가 막히지 않게).
+    //   읽기전용 머리글이 실린 REST · MCP 는 어댑터가 ctx.readOnly 를 채운다.
     const minted = await mintFileUrl({ address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true }, liveMintDeps);
-    return { ...minted, link: await humanLink(address) };
+    return { ...minted, link: await humanLink(parseAddress(minted.address)) };   // 서명한 주소(올리기는 NFC 이름)로 — 저장되는 그 파일의 링크
   },
 };
 

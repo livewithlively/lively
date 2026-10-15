@@ -8,7 +8,7 @@ import express from "express";
 import type { AddressInfo } from "node:net";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
-// 서명 주소 끝단(#4673) — 사양 표 J1~J14 · K1~K5. 진짜 라우트(express) · 진짜 파일(임시 폴더)에 DB 쪽만 가짜를 꽂는다.
+// 서명 주소 끝단(#4673) — 사양 표 J1~J18 · K1~K6. 진짜 라우트(express) · 진짜 파일(임시 폴더)에 DB 쪽만 가짜를 꽂는다.
 //  발급(mintFileUrl) → 받는 곳(fileUrlRouter) 을 실제 HTTP 로 잇는다 — 앱 서버(Lambda)가 할 일 그대로.
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "lively-file-url-"));
 process.env.LIVELY_MEMBER_ISOLATION = "off";   // 파일 op 는 이 프로세스의 fs 로(격리 멤버 uid 없음)
@@ -218,7 +218,7 @@ test("J14 HTML 은 문서로 열리지 않게 octet-stream 으로 준다", async
   assert.match(r.headers.get("content-disposition") ?? "", /^attachment/);
 });
 
-test("J15 공유 쓰기 판정은 저장되는 이름과 같은 글자로 — 잠금이 NFC 로 적혀 있으면 NFD 로 적은 주소도 막힌다(발급 · 받는 곳 둘 다)", async () => {
+test("J15 공유 쓰기 — 잠금이 NFC 로 적혀 있으면 NFD 로 적은 주소도 막힌다(발급으로도 · 발급을 거치지 않은 토큰으로도)", async () => {
   reset();
   const NFC = "영업/비공개", NFD = NFC.normalize("NFD");
   assert.notEqual(NFC, NFD);
@@ -263,7 +263,7 @@ test("J16 앱 폴더 자신이 이웃 앱 폴더로 가는 링크면 받기 · �
   assert.equal(fs.existsSync(onDisk("apps/other2/planted.txt")), false);
 });
 
-test("J17 실패 로그에 주소(토큰)를 남기지 않는다 — 5xx 두 갈래(HttpError · 그 밖의 오류)", async () => {
+test("J17 실패 로그에 주소(토큰)를 남기지 않는다 — 올리기 5xx 두 갈래(HttpError · 그 밖의 오류) · 받기 5xx", async () => {
   reset();
   const logged: string[] = [];
   const orig = logger.error;
@@ -274,12 +274,14 @@ test("J17 실패 로그에 주소(토큰)를 남기지 않는다 — 5xx 두 갈
     assert.equal((await fetch(u.url, { method: "PUT", body: "x" })).status, 500);
     W.finishThrows = false;
     const v = await mint("apps/crm/j17.txt", "PUT", AS_APP);
+    const g = await mint("apps/crm/j17.txt", "GET", AS_APP);
     W.keyOn = false;
     assert.equal((await fetch(v.url, { method: "PUT", body: "x" })).status, 503);
+    assert.equal((await fetch(g.url)).status, 503);
     W.keyOn = true;
-    assert.ok(logged.length >= 2, `실패가 로그에 남지 않았다: ${logged.length}`);
+    assert.ok(logged.length >= 3, `실패가 로그에 남지 않았다: ${logged.length}`);
     const all = logged.join("\n");
-    for (const url of [u.url, v.url]) assert.ok(!all.includes(new URL(url).pathname.split("/").pop()!), "로그에 토큰이 남았다");
+    for (const url of [u.url, v.url, g.url]) assert.ok(!all.includes(new URL(url).pathname.split("/").pop()!), "로그에 토큰이 남았다");
     assert.ok(logged.every((l) => l.includes("/api/files/s/:token")), "로그에 어느 라우트인지 남는다");
   } finally {
     (logger as { error: unknown }).error = orig;
@@ -347,6 +349,12 @@ test("K2c file_url 도구 — 읽기전용 세션(ctx.readOnly)이면 올리기 
   const user = { userId: "m1", email: "m1@x", scopes: ["memory"], projects: [] } as unknown as import("../context.js").LivelyUser;
   await assert.rejects(() => cap.handler({ address: "apps/crm/k2c.txt", method: "PUT" }, user, { source: "mcp", actor: "m1", readOnly: true }),
     (e: { status?: number; message?: string }) => e.status === 403 && /읽기전용/.test(String(e.message)));
+});
+
+test("K6 수명은 발급이 경계로 맞춘다 — 넘치면 3600 · 모자라면 30", async () => {
+  reset();
+  assert.equal((await mint("apps/crm/k6.txt", "GET", AS_APP, { ttlSec: 999_999 })).expires_in, 3600);
+  assert.equal((await mint("apps/crm/k6.txt", "GET", AS_APP, { ttlSec: 1 })).expires_in, 30);
 });
 
 test("K3 서명 키가 없으면 503", async () => {

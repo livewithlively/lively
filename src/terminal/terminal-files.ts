@@ -228,7 +228,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     if (root !== APPS_ROOT_KEY) return null;
     const viewer = viewerFor(req);
     const readable = viewer ? await readableAppFoldersFor({ member: viewer, scopes: userOf(req).scopes ?? [] }) : new Set<string>();
-    //  앱 주체(앱 세션 토큰 · 앱 서버 토큰 + 신원)는 제 앱 폴더만 — 권한표(#4671 ③)의 «앱은 제 앱 폴더만» 을 탐색기에도 건다.
+    //  앱 주체(앱 세션 토큰)는 이 자리에서 제 앱 폴더만 — 권한표(#4671 ③)의 «앱은 제 앱 폴더만». 앱 서버 토큰은 이 라우트에 오지 못한다(sessionOrBearer 가 403).
     const appId = userOf(req).appId;
     if (appId) for (const id of [...readable]) if (id !== appId) readable.delete(id);
     const ok = (rel: string): boolean => { const first = String(rel ?? "").split(/[\\/]/)[0] ?? ""; return first === "" || readable.has(first); };

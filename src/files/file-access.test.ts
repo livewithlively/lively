@@ -4,7 +4,7 @@ import { authorizeFileAccess, assertWritableTarget, readableAppFolders, type Fil
 import { parseAddress } from "./address.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
-// 파일 주소 권한 판정(#4673) — 권한표 #4671 ③ = 사양 표 F1~F19 · W1~W5 · R1~R5.
+// 파일 주소 권한 판정(#4673) — 권한표 #4671 ③ = 사양 표 F1~F20 · W1~W5 · R1~R5.
 //  perms = 저장된 매니페스트의 permissions(저장 때 app_folder:true 는 file_url 도구를 함의한다 — apps/manifest.ts).
 const app = (id: string, over: Partial<OrgApp> = {}, perms: Record<string, unknown> = { app_folder: true, tools: ["file_url"] }): OrgApp => ({
   id, title: id, version: "1.0.0", manifest: { permissions: perms }, source: {}, content_hash: null,

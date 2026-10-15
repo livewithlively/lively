@@ -10,10 +10,14 @@
 //  P4 동의를 거두면 이미 받은 주소도 쓰는 순간 막힌다
 //  P5 홈 탐색기 root=apps — 동의한 사람에게만 그 앱 폴더가 보인다 · 웹 쓰기 403
 //  P6 공유 폴더 올리기 — 다른 업로드처럼 자료가 생긴다(앱 폴더 올리기는 자료가 안 생긴다)
+//  P7 읽기전용 세션 — 올리기 주소 403 · 받기 주소 200      P8 method 허용값 밖 → 400
+//  P9 app_folder 를 선언하지 않은 앱(도구 이름만) → 403    P10 세션 안 경로 ↔ 주소는 그 세션의 참가자만
+//  P11 앱 세션 토큰은 탐색기에서도 제 앱 폴더만            P12 탐색기의 앱 폴더 봉쇄(앱 폴더 자신이 링크 · 안의 파일 링크)
+//  P13 올리기 주소의 링크는 저장되는 이름(NFC)으로
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -146,6 +150,19 @@ try {
     && (listAppSess.dirs ?? []).includes("files-app") && !(listAppSess.dirs ?? []).includes("other-app") && intoOtherAsApp.status === 404,
     JSON.stringify({ human: listHuman.dirs, app: listAppSess.dirs ?? listAppSess, into: intoOtherAsApp.status }));
 
+  // ── P12 ── 탐색기의 앱 폴더 봉쇄 — 앱 폴더 자신이 이웃 앱 폴더로 가는 링크 · 앱 폴더 안의 파일 링크(동의는 다 있어도 막는다)
+  await install("link-app", true);
+  await cap("me_app_grant").handler({ app_id: "link-app" }, { userId: "pgt-user", scopes: ["items"] }, { source: "mcp" });
+  writeFileSync(path.join(ROOT, "apps", "other-app", "secret.txt"), "other-app secret");
+  symlinkSync(path.join(ROOT, "apps", "other-app"), path.join(ROOT, "apps", "link-app"));
+  symlinkSync(path.join(ROOT, "apps", "other-app", "secret.txt"), path.join(ROOT, "apps", "files-app", "peek.txt"));
+  const intoLinked = await browse(userTok, "link-app");
+  const fileLinked = await fetch(`${GW}/api/ui/terminal/browse/file?root=apps&path=${encodeURIComponent("files-app/peek.txt")}`, { headers: { authorization: `Bearer ${userTok}` } });
+  const fileLinkedBody = await fileLinked.text();
+  chk("P12 탐색기 — 앱 폴더 자신이 링크면 400 · 앱 폴더 안 파일 링크가 이웃 앱 폴더를 가리키면 400",
+    intoLinked.status === 400 && fileLinked.status === 400 && !fileLinkedBody.includes("other-app secret"),
+    JSON.stringify({ intoLinked: intoLinked.status, fileLinked: fileLinked.status }));
+
   // ── P4 ──
   const pending = await (await mintAsApp("pgt-user", { address: "apps/files-app/late.txt", method: "PUT" })).json();
   await cap("me_app_revoke").handler({ app_id: "files-app" }, { userId: "pgt-user", scopes: ["items"] }, { source: "mcp" });
@@ -178,7 +195,14 @@ try {
   const { token: toolsOnlyTok } = await mintAppServerToken("tools-only-app", "pgt-admin");
   const p9 = await fetch(GW + "/api/ui/files/url", { method: "POST", headers: { authorization: `Bearer ${toolsOnlyTok}`,
     "x-lively-identity": identity("pgt-user", "tools-only-app"), "content-type": "application/json" }, body: JSON.stringify({ address: "apps/tools-only-app/x.txt", method: "PUT" }) });
-  chk("P9 app_folder 를 선언하지 않은 앱(도구 이름만) → 403", p9.status === 403, `${p9.status} ${await p9.clone().text()}`);
+  const p9body = await p9.text();
+  chk("P9 app_folder 를 선언하지 않은 앱(도구 이름만) → 403(선언 판정에서)", p9.status === 403 && /app_folder/.test(p9body), `${p9.status} ${p9body}`);
+
+  // ── P13 ── 올리기 주소의 링크는 저장되는 이름(NFC)으로 — NFD 로 적어 받아도
+  const NFC13 = "회의록", NFD13 = NFC13.normalize("NFD");
+  const p13 = await (await mintAs(userTok, { address: `shared/docs/${NFD13}.md`, method: "PUT" })).json();
+  chk("P13 올리기 주소의 address · link 는 NFC 이름", p13.address === `shared/docs/${NFC13}.md` && String(p13.link).includes(encodeURIComponent(`docs/${NFC13}.md`)) && !String(p13.link).includes(encodeURIComponent(NFD13)),
+    JSON.stringify({ address: p13.address, link: p13.link }));
 
   // ── P10 ── 세션 안 경로 ↔ 주소는 그 세션의 참가자(연 사람 · 초대받은 사람)만 — 셀프호스트(같은 파일 시스템) 세션
   const SID = "box-pgt-files-4673abcd";
