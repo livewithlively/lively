@@ -79,8 +79,13 @@ export function functionNameFor(prefix: string, appId: string, slug: string): st
 }
 export const logGroupFor = (fn: string): string => `/aws/lambda/${fn}`;
 
-/** zip 자리 — 판 묶음 버킷의 워크스페이스 앞자리 아래(판 파일 b/ 옆 z/). 지문 이름이라 같은 코드면 같은 키다. */
-export const zipKeyFor = (prefix: string, tenant: string, buildKey: string): string => `${prefix}t/${tenant}/z/${buildKey}.zip`;
+/**
+ * zip 자리 — 판 묶음 버킷의 워크스페이스 앞자리 아래(판 파일 b/ 옆 z/) · **앱마다 따로**(z/<앱>/<빌드 지문>.zip).
+ *  빌드 지문은 «입력» 지문이라 같은 파일을 가진 두 앱(사본 · 같은 시작 틀)이 같은 값을 낸다. 키를 그것만으로 지으면 두 앱이 객체 하나를 나눠 써서
+ *  한 앱을 지우면(그 앱의 zip 을 지운다) 다른 앱의 zip 이 사라지고, 빌드가 매번 같은 바이트를 내지 않는 앱(Next.js 의 빌드 번호 등)은 남의 zip 을
+ *  덮어쓴다(격리 리뷰 재현 — 되돌리기가 NoSuchKey · 지문 불일치로 영구 실패). 판 파일 b/<sha256> 은 내용 지문이라 나눠 써도 된다 — z/ 는 아니다.
+ */
+export const zipKeyFor = (prefix: string, tenant: string, appId: string, buildKey: string): string => `${prefix}t/${tenant}/z/${appId}/${buildKey}.zip`;
 
 /**
  * 빌드 지문 — 같은 값이면 같은 zip 을 쓴다. 매니페스트(lively-app.json)는 뺀다(zip 에도 담지 않는다 — app-server-builder ZIP_EXCLUDE):

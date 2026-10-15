@@ -19,61 +19,11 @@ import type { ChildProcess } from "node:child_process";
 
 declare const require: (id: string) => unknown;   // builderMain 이 `node -e` 로 돌 때의 CommonJS require — 이 모듈(ESM) 자체는 부르지 않는다
 
-/** 빌더 판 — 빌드 지문에 들어간다(빌더가 바뀌면 같은 코드라도 다시 빌드한다). */
-export const BUILDER_VERSION = 2;   // 2 = 올릴 폴더(dir) · /tmp 링크(시작할 때 그 자리를 만든다)
-/** 결과 줄 표식 — builderMain 안의 MARK 와 같아야 한다(app-server-builder.test 가 본다). */
-export const BUILD_RESULT_MARK = "@@lively-build-result@@ ";
-/** zip 에 우리가 더하는 시작 스크립트 — Lambda 핸들러 이름이 RUN_SCRIPT 다(AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap 이 그 파일을 실행한다). */
-export const RUN_SCRIPT = "lively-run.sh";
-export const START_SCRIPT = "lively-start.sh";
-/** zip 에 담지 않는 파일 — 매니페스트는 빌드 지문에서도 뺀다(이름·설명만 바꾼 판이 같은 zip 을 쓰게). */
-export const ZIP_EXCLUDE = ["lively-app.json"];
+export {
+  BUILDER_VERSION, BUILD_RESULT_MARK, RUN_SCRIPT, START_SCRIPT, ZIP_EXCLUDE, parseBuildResult, encodeBuildHeader,
+  type BuildHeader, type BuildStep, type BuildResult,
+} from "./app-server-build-proto.js";
 
-export interface BuildHeader {
-  v: 1;
-  /** 이 시각(epoch ms)이 지나면 빌드를 멈춘다. */
-  deadline_ms: number;
-  /** [경로, 크기] — 이 순서로 바이트가 header 줄 뒤에 이어진다. */
-  files: Array<[string, number]>;
-  /** 빌드 명령(sh -c) — null 이면 package.json scripts.build 가 있을 때만 `npm run build`. */
-  build: string | null;
-  /** 시작 명령(sh) — null 이면 package.json scripts.start. 둘 다 없으면 실패. */
-  start: string | null;
-  /** 올릴 폴더(앱 폴더 안 상대 경로) — 빌드 뒤 이 폴더만 zip 의 맨 위로 올리고 시작 명령도 여기서 돈다. null · 빈 글 · '.' 이면 앱 폴더 전체. */
-  dir?: string | null;
-  /** 풀린 크기 상한(바이트) — Lambda 상한 250MB 에서 레이어 몫을 뺀 값. */
-  unzipped_max: number;
-  /** 세션 안 남은 메모리 바닥(MB) — 이 밑이면 빌드를 멈춘다. */
-  mem_floor_mb: number;
-  /** 빌드 자식 node 힙 상한(MB) — NODE_OPTIONS --max-old-space-size. 0 이면 걸지 않는다. */
-  heap_mb: number;
-  /** zip 을 올릴 S3 서명 주소(PUT). */
-  upload_url: string;
-  /** 시험용 — /proc/meminfo 대신 읽을 파일(세션에선 쓰지 않는다). */
-  meminfo_path?: string;
-}
-
-export interface BuildStep { name: string; ms: number; code: number | null; signal: string | null }
-export interface BuildResult {
-  ok: boolean;
-  /** 실패한 단계 — input · detect · dir · install · build · prune · start · size · zip · upload · memory · time */
-  stage?: string;
-  error?: string;
-  steps: BuildStep[];
-  warnings: string[];
-  ms?: number;
-  /** 쓴 명령(사람이 무엇이 돌았는지 보게) */
-  install?: "ci" | "install" | "none";
-  build_cmd?: string | null;
-  start_cmd?: string | null;
-  /** 올린 폴더(web.server.dir) — 앱 폴더 전체면 없음. */
-  dir?: string;
-  zip?: { bytes: number; sha256_hex: string; sha256_b64: string; entries: number; unzipped: number };
-  /** 세션 안 남은 메모리(MB) — 시작 · 가장 낮았던 때. 빌드가 쓴 양 ≈ 시작 − 최저. */
-  mem?: { start_mb: number | null; min_mb: number | null; floor_mb: number };
-}
-
-/* eslint-disable */
 function builderMain(): void {
   const fs = require("node:fs") as typeof import("node:fs");
   const path = require("node:path") as typeof import("node:path");
@@ -308,7 +258,13 @@ function builderMain(): void {
       rs.on("end", () => {
         const st = rs.statusCode ?? 0;
         if (st >= 200 && st < 300) resolve();
-        else { const e = new Error(`zip 올리기 실패(${st}): ${body.replace(/\s+/g, " ").slice(0, 300)}`) as Error & { status?: number }; e.status = st; reject(e); }
+        else {
+          //  S3 오류 본문(XML)에서 <Code> · <Message> 만 — 서명 · 자격 오류의 본문은 열쇠 이름 · 토큰 조각을 되풀이할 수 있다.
+          const code = /<Code>([^<]{1,100})<\/Code>/.exec(body)?.[1] ?? "";
+          const msg = /<Message>([^<]{1,300})<\/Message>/.exec(body)?.[1] ?? "";
+          const e = new Error(`zip 올리기 실패(${st}${code ? " " + code : ""})${msg ? ": " + msg : ""}`) as Error & { status?: number };
+          e.status = st; reject(e);
+        }
       });
     });
     rq.on("timeout", () => rq.destroy(new Error("zip 올리기 시간 초과")));
@@ -492,26 +448,6 @@ function builderMain(): void {
   timers.push(setInterval(() => { if (reading && Date.now() - lastData > 120_000) fail("input", "입력이 2분 동안 멈췄습니다"); }, 5000));
   process.on("SIGTERM", () => fail(stopWhy ? "time" : "input", "빌더가 종료 신호를 받았습니다"));
 }
-/* eslint-enable */
 
 /** 세션 컨테이너에서 `node -e` 로 돌릴 글. */
 export const SERVER_BUILDER_JS = `"use strict";(${builderMain.toString()})()`;
-
-/** stdout 전체 → 결과(마지막 표식 줄). 없으면 null(빌더가 결과를 못 남기고 죽었다). */
-export function parseBuildResult(stdout: string): BuildResult | null {
-  const lines = stdout.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const l = lines[i]!;
-    if (!l.startsWith(BUILD_RESULT_MARK)) continue;
-    try {
-      const r = JSON.parse(l.slice(BUILD_RESULT_MARK.length)) as BuildResult;
-      if (r && typeof r === "object" && typeof r.ok === "boolean") return { ...r, steps: Array.isArray(r.steps) ? r.steps : [], warnings: Array.isArray(r.warnings) ? r.warnings : [] };
-    } catch { /* 깨진 줄 — 앞을 더 본다 */ }
-  }
-  return null;
-}
-
-/** 입력 머리 한 줄(바이트) — 그 뒤에 header.files 순서대로 파일 바이트를 붙인다. */
-export function encodeBuildHeader(h: BuildHeader): Buffer {
-  return Buffer.from(JSON.stringify(h) + "\n", "utf8");
-}

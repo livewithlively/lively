@@ -5,14 +5,17 @@
 //     ⚠ 원가: GetMetricData 는 «지표 1,000개당 $0.01» 이다. 함수마다 5분마다 두 지표를 보면 앱 1,500개 규모에서 월 수백 달러가 된다.
 //      그래서 지난번에 호출이 0 이던 함수는 30분에 한 번만 보고(조용한 앱이 갑자기 폭주해도 30분 안에 잡는다), 실행 시간은 호출이 있던 함수만 본다.
 //      v2-6 이 앱 주소 앞단에서 요청을 세면(무료) 이 조회는 더 줄일 수 있다.
+//     실행 시간은 «호출 수 × 요청 시간 천장(60초)» 이 기준을 넘을 수 있는 함수만 본다(그 밑이면 넘을 수가 없다 — 격리 리뷰).
 //  ② 죽은 빌드 걷기 — 게이트웨이가 빌드 도중 다시 시작되면 'building' 줄이 남는다(lease 지남 → failed).
 //  ③ 옛 빌드 정리 — 앱이 사라졌거나, 별칭이 안 가리키고 30일 지난 빌드의 zip 을 지운다(판 묶음이 남아 있어 다시 빌드할 수 있다).
+//  ④ 고아 함수 — 앱을 지울 때 함수를 못 지워 남긴 줄(org_app_server)을 다시 지운다.
 import { logger } from "../log.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import { appServerEnv } from "./app-server-config.js";
-import { autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
+import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import type { LambdaApi } from "./app-server-deploy.js";
+import { removeServer, stopServer } from "./app-server-lifecycle.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
 import { notifyAppInstaller } from "./notify.js";
@@ -61,7 +64,9 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
   const range = { start: new Date(now - 10 * 60_000), end: new Date(now), periodSec: 300 };
   const metrics = deps.metrics ?? ((q, r) => getMetricData({ region: env.region }, q, r));
   const inv = await metrics(due.map((r, i) => ({ id: `i${i}`, fn: r.function_name, metric: "Invocations", stat: "Sum" })), range);
-  const busy = due.map((r, i) => ({ r, i, n: maxOf(inv.find((x) => x.id === `i${i}`)) })).filter((x) => (x.n ?? 0) > 0);
+  //  실행 시간 합은 «호출 수 × 요청 하나의 최대 시간» 을 넘을 수 없다 — 그게 기준 밑이면 물을 필요가 없다(지표 비용).
+  const busy = due.map((r, i) => ({ r, i, n: maxOf(inv.find((x) => x.id === `i${i}`)) }))
+    .filter((x) => (x.n ?? 0) > 0 && (x.n ?? 0) * APP_SERVER_POLICY_MAX.timeout_s > policy.stop_duration_s_5m);
   const dur = busy.length ? await metrics(busy.map((x) => ({ id: `d${x.i}`, fn: x.r.function_name, metric: "Duration", stat: "Sum" })), range) : [];
   const stopped: string[] = [];
   for (const [i, r] of due.entries()) {
@@ -71,8 +76,9 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
     const why = autoStopReason(policy, { invocations5m: n, durationSec5m: ms == null ? null : ms / 1000 });
     if (!why) continue;
     try {
-      await (deps.api ?? realLambdaApi(env.region)).putConcurrency(r.function_name, 0);
-      await st.setServerStopped(r.app_id, { by: "auto", reason: `auto: ${why}` });
+      //  멈춤은 손으로 멈추기와 같은 길 — 남의 워크스페이스 함수(태그)면 409 로 건너뛰고, 이미 멈춘 함수의 기록은 덮지 않는다.
+      const res = await stopServer(r.app_id, "auto", "auto", why, deps.api ? { api: deps.api } : {});
+      if (!res.changed) continue;
       stopped.push(r.app_id);
       logger.warn({ app: r.app_id, fn: r.function_name, why }, "앱 서버 자동 멈춤(#4484)");
       const title = `앱 「${r.app_id}」 의 서버를 자동으로 멈췄습니다`;
@@ -100,6 +106,17 @@ export async function pruneServerBuilds(limit = 50): Promise<number> {
   return n;
 }
 
+/** ④ 고아 함수 — 앱이 사라진 함수 줄을 다시 지운다(removeServer 가 잠금 · 주인 확인 · 실패면 줄을 남김을 그대로 한다). 지운 수. */
+export async function sweepOrphanServers(deps: WatchDeps = {}): Promise<number> {
+  let n = 0;
+  for (const appId of await st.orphanServerRows()) {
+    const r = await removeServer(appId, deps.api ? { api: deps.api } : {});
+    if (r.removed) n++;
+    else if (r.errors.length) logger.warn({ appId, errors: r.errors }, "고아 앱 서버 함수 지우기 — 다음 틱에 다시(#4484)");
+  }
+  return n;
+}
+
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
   if (!appServerEnv()) return { skipped: "disabled" };
@@ -108,5 +125,6 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   const policy = await st.appServerPolicy();
   out.watch = await watchAppServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.pruned = await pruneServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;
 }

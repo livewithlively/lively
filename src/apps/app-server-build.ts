@@ -14,7 +14,7 @@ import { appBundleS3Config, blobTenant, getBlob, type BlobStoreKind } from "./ap
 import { SERVER_BUILDER_JS, ZIP_EXCLUDE, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 import { buildKeyOf, tailText, zipKeyFor, type AppServerDecl, type AppServerEnv } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
-import { claimServerBuild, finishServerBuild, getServerBuild, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
+import { claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
 import { s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
 import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 
@@ -131,8 +131,8 @@ function tailRing(): { push: (d: Buffer) => void; text: () => string; lastLine: 
  */
 export async function ensureServerBuild(input: BuildInput, deps: BuildDeps = {}): Promise<{ build: ServerBuildRow; reused: boolean; key: string }> {
   const key = buildKeyFor(input);
-  const have = await getServerBuild(input.appId, key);
-  if (have?.status === "ok" && have.zip_key) return { build: have, reused: true, key };
+  const have = await usableBuild(await getServerBuild(input.appId, key), deps);
+  if (have) return { build: have, reused: true, key };
   const claim = await claimServerBuild(input.appId, key, {
     version_no: input.versionNo, built_by: input.seat.memberId, session_id: input.seat.sessionId, leaseSec: LEASE_SEC,
   });
@@ -141,6 +141,27 @@ export async function ensureServerBuild(input: BuildInput, deps: BuildDeps = {})
     return { build: await waitForBuild(input.appId, key, input.policy.build_timeout_s + 180), reused: false, key };
   }
   return { build: await runBuild(input, key, deps), reused: false, key };
+}
+
+/**
+ * 성공한 빌드를 쓸 수 있나 — zip 이 저장소에 그 크기로 있나 직접 본다(기록만 믿고 함수에 올리면 NoSuchKey 로 실패하고, 다시 해도 같은 줄을
+ *  «재사용» 해서 스스로 못 고친다 — 격리 리뷰). 없거나 크기가 다르면 그 줄을 실패로 돌리고(다음 배포가 다시 빌드) null.
+ *  저장소를 못 봤으면(일시 오류) 쓸 수 있다고 본다 — 올리기에서 다시 드러난다.
+ */
+export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = {}): Promise<ServerBuildRow | null> {
+  if (!row || row.status !== "ok" || !row.zip_key || !row.zip_sha256) return null;
+  let head: { size: number } | null;
+  try {
+    const s3 = appBundleS3Config();
+    if (!deps.headZip && !s3) return row;
+    head = deps.headZip ? await deps.headZip(row.zip_key) : await s3Head(s3!, row.zip_key);
+  } catch (e) {
+    logger.warn({ err: e, appId: row.app_id, key: row.build_key }, "빌드 zip 을 확인하지 못했다 — 있다고 보고 진행(#4484)");
+    return row;
+  }
+  if (head && (row.zip_bytes == null || head.size === Number(row.zip_bytes))) return row;
+  await invalidateServerBuild(row.app_id, row.build_key, head ? `빌드 결과(zip) 크기가 기록과 다릅니다(${head.size} ≠ ${row.zip_bytes}) — 다시 빌드합니다` : "빌드 결과(zip)가 저장소에 없습니다 — 다시 빌드합니다");
+  return null;
 }
 
 /** 남이 잡은 빌드를 기다린다(같은 지문을 두 곳에서 동시에 넣은 경우). */
@@ -165,7 +186,7 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
   try {
     const s3 = appBundleS3Config();
     if (!s3 && !deps.presignPut) return await fail("setup", "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 빌드 결과를 둘 곳이 없습니다");
-    const zipKey = zipKeyFor(s3?.prefix ?? "", blobTenant(), key);
+    const zipKey = zipKeyFor(s3?.prefix ?? "", blobTenant(), input.appId, key);
     const deadlineMs = now() + input.policy.build_timeout_s * 1000;
     const uploadUrl = deps.presignPut ? await deps.presignPut(zipKey, input.policy.build_timeout_s + 600) : await defaultPresignPut(s3!, zipKey, input.policy.build_timeout_s + 600);
     const files = input.bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p));
@@ -178,9 +199,11 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     let child: ChildProcess;
     try { child = await (deps.spawnInSession ?? defaultSpawnInSession)(input.seat, ["node", "-e", SERVER_BUILDER_JS]); }
     catch (e) { return await fail("session", `빌드할 세션에서 프로그램을 띄우지 못했습니다: ${(e as Error)?.message ?? e}`); }
-    let stdout = "";
+    //  stdout 은 조각을 모았다가 한 번에 푼다 — 조각마다 글자로 바꾸면 경계에 걸린 한글이 깨진다(#4135 stream-text 와 같은 까닭).
+    const outParts: Buffer[] = [];
+    let outBytes = 0;
     const ring = tailRing();
-    child.stdout?.on("data", (d: Buffer) => { if (stdout.length < STDOUT_MAX) stdout += d.toString("utf8"); });
+    child.stdout?.on("data", (d: Buffer) => { if (outBytes < STDOUT_MAX) { outParts.push(d); outBytes += d.length; } });
     child.stderr?.on("data", (d: Buffer) => { ring.push(d); const l = ring.lastLine(); if (l) live.set(lk, { startedAt: live.get(lk)?.startedAt ?? now(), last: l }); });
     const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
       child.on("close", (code, signal) => resolve({ code, signal: signal ?? null }));
@@ -202,7 +225,7 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     clearTimeout(hard);
     const log = ring.text();
     if (pumpErr) return await fail("input", `판 파일을 빌더에 넘기지 못했습니다: ${(pumpErr as Error)?.message ?? pumpErr}`, log);
-    const res: BuildResult | null = parseBuildResult(stdout);
+    const res: BuildResult | null = parseBuildResult(Buffer.concat(outParts).toString("utf8"));
     if (!res) {
       if (ex.code === RELAY_NO_CONTAINER) return await fail("session", "빌드할 세션이 꺼져 있습니다 — 그 세션을 다시 열고(또는 그 세션의 AI 가) 다시 빌드하세요", log);
       return await fail("crash", `빌더가 결과를 남기지 못하고 끝났습니다(종료 ${ex.code ?? ex.signal ?? "?"}) — 세션 메모리가 모자랐거나 연결이 끊겼을 수 있습니다`, log);

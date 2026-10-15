@@ -679,6 +679,8 @@ const appInstall: Capability = {
       const workerRestart = !outcome.created && previousHash !== loaded.contentHash
         ? await restartWorkersForApp(outcome.id) : null;
       //  #4667 — 관리자 설치는 곧 공개다(칸 기본값 'all'). 새로 생긴 앱은 설치한 사람이 만든 사람·책임자.
+      //  #4484 — 관리자 설치는 «공개는 빌드된 판만»(publishCurrent) 을 거치지 않는다: 관리자가 직접 고른 묶음이라 믿는 길이고, 서버(web.server)는
+      //   설치한 관리자(= 저장한 사람)가 이어서 app_server_deploy 로 올린다(그 전에는 화면만 돌고 서버 호출은 «아직 없음»).
       if (outcome.created && actor !== "unknown") await store.stampAppCreatorIfMissing(outcome.id, actor).catch((err) => logger.warn({ err, id: outcome.id }, "만든 사람 기록 실패(비치명)"));
       const app = await store.getApp(outcome.id);
       return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart };
@@ -833,7 +835,7 @@ const appSave: Capability = {
       const server = r.pub?.changed ? await serverAfterPublish(id) : null;
       const bs = !server && serverDeclOf(loaded.manifest) && appServerEnv() ? await installedBuildState((await store.getApp(id))!).catch(() => null) : null;
       const serverNote = !bs ? null : {
-        declared: true, built: bs.built, deployed: bs.deployed,
+        state: bs.deployed ? "deployed" : bs.built ? "built" : "not_built", declared: true, built: bs.built, deployed: bs.deployed,
         hint: bs.deployed ? "이 판의 서버는 이미 올라가 있습니다(같은 코드 — 매니페스트만 바뀌었다)"
           : bs.built ? `같은 코드의 빌드가 있어 app_server_deploy {app_id:'${id}'} 하면 빌드 없이 바로 올라갑니다`
             : `서버(web.server)는 저장만으로 빌드되지 않습니다 — 이 판을 시험하려면 app_server_deploy {app_id:'${id}'}(이 세션에서 빌드 · 몇 분), 사람은 앱 만들기 「이대로 넣기」`,
@@ -1066,12 +1068,12 @@ const appRevert: Capability = {
     if (result.changed) publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     //  #4484 서버 앱 — 공개까지 했으면 공개 판의 서버를 옮기고(기다린다), 되돌리기만이면 그 판의 빌드가 있을 때 cur 를 뒤에서 따라가게 한다
     //   (빌드 없음 · 함수 판을 새로 올리면 수십 초 — 되돌리기 응답을 붙잡지 않는다). 빌드가 없던 판이면 서버는 그대로다(app_server_status 에 보인다).
-    let server: Awaited<ReturnType<typeof afterPublishServer>> | { following: true } | null = null;
+    let server: Awaited<ReturnType<typeof afterPublishServer>> | { state: "following"; following: true; message: string } | null = null;
     if (result.published && !("pubError" in result && result.pubError)) server = await serverAfterPublish(id);
     else if (result.changed && result.app && serverDeclOf(result.app.manifest) && appServerEnv()) {
       const app1 = result.app;
       void appServerPolicy().then((p) => afterRevertServer(app1, p)).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
-      server = { following: true };
+      server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
     }
     if (result.published) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     const after = result.app;

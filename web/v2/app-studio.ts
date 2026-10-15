@@ -134,15 +134,23 @@ export async function patchManifest(appId: string, patch: (man: any) => void, no
  *  돌려주는 값: true = 넣기 · 공개를 이어서 해도 된다(서버 앱이 아니거나 · 이 워크스페이스에 앱 서버가 없거나 · 올라갔다) · false = 멈춘다(실패 · 시간 초과).
  *  실패하면 그 기록은 서버가 이 앱의 만들기 세션에도 넣는다 — 그 세션의 AI 가 보고 고친다.
  */
+/** GET /api/ui/apps/:id/server 응답에서 이 화면이 읽는 칸(src/apps/app-server-deploy.ts serverStatus). */
+interface ServerStatusView {
+  server_declared?: boolean;
+  available?: string | null;
+  deploying?: boolean;
+  installed?: { deployed_to_cur?: boolean; build?: { status?: string; stage?: string | null; error?: string | null; now?: string } | null } | null;
+  function?: { last_error?: string | null } | null;
+}
 export async function ensureAppServer(appId: string, onProgress?: (text: string) => void): Promise<boolean> {
   const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/server';
-  let st: any;
+  let st: ServerStatusView | null;
   try { st = await api(path); } catch (_) { return true; }   // 상태를 못 읽으면(옛 서버) 종전대로 넣는다
   if (!st || !st.server_declared) return true;
   if (st.available) { toast('이 워크스페이스는 앱 서버가 아직 켜져 있지 않아 화면만 넣어요 — ' + st.available, true); return true; }
   if (st.installed && st.installed.deployed_to_cur) return true;
   try { await api(path + '/deploy', { method: 'POST', body: JSON.stringify({ wait_s: 3 }) }); }
-  catch (e: any) { toast('서버를 빌드하지 못했어요 — ' + (e && e.message ? e.message : e), true); return false; }
+  catch (e: unknown) { toast('서버를 빌드하지 못했어요 — ' + (e instanceof Error ? e.message : String(e)), true); return false; }
   toast('서버를 빌드하고 있어요 — 몇 분 걸릴 수 있어요');
   const t0 = Date.now();
   let told = t0;

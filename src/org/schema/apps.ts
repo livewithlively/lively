@@ -180,7 +180,7 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
 
   // ── org_app_server_build · org_app_server — 앱 서버(#4484 앱 v2-5) ──
   //  앱이 매니페스트 web.server 로 서버를 알리면, 「이대로 넣기」·「공개하기」·app_server_deploy 가 그 판을 **그 판을 저장한 사람의 세션 컨테이너**
-  //   에서 빌드해 zip 을 판 묶음 버킷(t/<워크스페이스>/z/<빌드 지문>.zip)에 두고, 앱 × 워크스페이스마다 Lambda 함수 하나에 올린다(apps/app-server-*.ts).
+  //   에서 빌드해 zip 을 판 묶음 버킷(t/<워크스페이스>/z/<앱>/<빌드 지문>.zip — 앱마다 따로)에 두고, 앱 × 워크스페이스마다 Lambda 함수 하나에 올린다(apps/app-server-*.ts).
   //  org_app_server_build — 빌드 지문(매니페스트를 뺀 파일 목록 + 서버 선언 + 빌더 판)마다 한 줄. 같은 지문은 다시 빌드하지 않는다.
   //   status building(lease_until 이 지나면 죽은 빌드) · ok(zip_*) · failed(stage · error · log_tail). FK 는 org_app_version 과 같은 까닭으로 걸지 않는다.
   //   PK 는 ensureTenantColumn 이 (tenant_id, app_id, build_key) 로 다시 쓴다.
@@ -210,6 +210,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_server_build_app_idx ON org_app_server_build(app_id, started_at DESC);`);
   //  org_app_server — 앱마다 한 줄: 함수 이름 · 별칭 둘(cur = 고친 사람이 보는 판 · pub = 공개 판)이 어느 판·빌드·함수 판을 가리키나 · 멈춤 ·
   //   배포 잠금(lock_until — 한 앱의 배포를 한 줄로). v2-6 라우팅이 «이 주소의 판 = 별칭이 가리키는 판인가» 를 이 줄로 본다.
+  //   stop_kind — 'auto'(감시가 멈춤 · 관리자만 다시 켠다) · 'manual'(사람이 멈춤). 사람이 쓰는 stop_reason 글이 아니라 이 칸으로 가른다(격리 리뷰).
+  //   FK 를 걸지 않는다 — 앱을 지울 때 함수를 못 지우면 이 줄을 남겨 하우스키핑이 다시 지운다(app-server-watch).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_app_server(
       app_id TEXT NOT NULL PRIMARY KEY,
@@ -224,6 +226,7 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       pub_at TIMESTAMPTZ,
       stopped_at TIMESTAMPTZ,
       stopped_by TEXT,
+      stop_kind TEXT CHECK (stop_kind IN ('auto','manual')),
       stop_reason TEXT,
       lock_until TIMESTAMPTZ,
       last_error TEXT,

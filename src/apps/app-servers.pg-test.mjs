@@ -7,6 +7,9 @@
 //  D1 첫 배포 · D2 이름만 바꾼 판(빌드·코드 올리기 0) · D3 빌드 안 된 판 공개 409 → 빌드 뒤 공개(pub = cur 함수 판) · D4 남이 저장한 판은 내 세션에서 빌드하지 않는다
 //  D5 시험 호출 실패 → 별칭 그대로 · D6 빌드 실패 → Lambda 0 · D7 다른 워크스페이스 태그 → 409 · D8 멈춤/다시 켜기 권한 · D9 감시(넘음 · 같음 · 조용한 함수 30분)
 //  D10 빌드 있는 판으로 되돌리기 → cur 가 따라간다 · D11 앱 지우기 → 함수 · 로그 · 기록 · zip · D12 죽은 빌드 · D13 서버 선언 없음 400 · D14 앱 서버 꺼짐
+//  격리 리뷰 뒤(R): R1 같은 파일의 두 앱 — zip 은 앱마다 · 하나를 지워도 다른 앱 되돌리기가 된다 · zip 이 없어지면 다시 빌드한다
+//   R2 자동 멈춤 · 관리자 멈춤을 책임자가 «멈추기 → 다시 켜기» 로 못 푼다 · R3 남의 워크스페이스 함수는 멈추지도 지우지도 않는다
+//   R4 함수를 못 지우면 줄을 남기고 하우스키핑이 다시 지운다 · R5 상한을 바꾸면 같은 코드도 새 설정의 판으로 · R6 화면 단추 길(세션 없음 → 만들기 세션)
 import pg from "pg";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -34,7 +37,7 @@ const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
 const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping } = await import(`${D}/apps/app-server-watch.js`);
-const { appServerPolicy } = await import(`${D}/apps/app-server-store.js`);
+const { appServerPolicy, setServerStopped } = await import(`${D}/apps/app-server-store.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
 
@@ -75,29 +78,39 @@ const fns = new Map();
 const log = [];
 let invokeMode = "ok";
 const cfgOf = (f) => JSON.parse(JSON.stringify(f.cfg));
+//  Lambda 는 만들기 · 코드 고치기 때 S3 에서 zip 을 읽는다 — 없으면 실제와 같은 오류(InvalidParameterValueException · NoSuchKey).
+const zipOr = (k) => { const z = zips.get(k); if (!z) throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: NoSuchKey. S3 Error Message: The specified key does not exist."); return z; };
+const failDelete = new Set();   // R4 — 이 함수 지우기는 실패한다(AWS 오류 흉내)
 const api = {
   getFunction: async (n) => { const f = fns.get(n); return f ? { Configuration: cfgOf(f), Tags: { ...f.tags } } : null; },
-  getFunctionConfiguration: async (n) => { const f = fns.get(n); return f ? cfgOf(f) : null; },
+  //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
+  getFunctionConfiguration: async (n, qual) => {
+    const f = fns.get(n); if (!f) return null;
+    if (qual && qual !== "$LATEST") { const v = f.versions.find((x) => x.Version === qual); return v ? JSON.parse(JSON.stringify(v.cfg)) : null; }
+    return cfgOf(f);
+  },
   createFunction: async (i) => {
     log.push(["createFunction", i]);
     if (fns.has(i.FunctionName)) throw new AwsError(409, "ResourceConflictException", "exists");
-    const z = zips.get(i.Code.S3Key);
+    const z = zipOr(i.Code.S3Key);
     fns.set(i.FunctionName, { cfg: { FunctionName: i.FunctionName, Role: i.Role, Handler: i.Handler, Runtime: i.Runtime, MemorySize: i.MemorySize, Timeout: i.Timeout,
-      Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: z ? shaB64(z) : "?", State: "Active", LastUpdateStatus: "Successful" },
-      tags: { ...i.Tags }, versions: [], aliases: new Map(), conc: null });
+      Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: shaB64(z), State: "Active", LastUpdateStatus: "Successful" },
+      tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
     return cfgOf(fns.get(i.FunctionName));
   },
-  updateFunctionCode: async (n, code) => { log.push(["updateFunctionCode", n, code.S3Key]); const f = fns.get(n); f.cfg.CodeSha256 = shaB64(zips.get(code.S3Key)); return cfgOf(f); },
+  updateFunctionCode: async (n, code) => { log.push(["updateFunctionCode", n, code.S3Key]); const f = fns.get(n); f.cfg.CodeSha256 = shaB64(zipOr(code.S3Key)); return cfgOf(f); },
   updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
   publishVersion: async (n, i) => {
     log.push(["publishVersion", n, i.CodeSha256]);
     const f = fns.get(n);
     if (i.CodeSha256 !== f.cfg.CodeSha256) throw new AwsError(412, "PreconditionFailedException", "sha");
+    //  실제와 같게: 코드 · 설정이 마지막 판과 같으면 새 판을 만들지 않고 그 판을 돌려준다(설정이 바뀌면 새 판).
+    const snap = cfgOf(f);
     const last = f.versions[f.versions.length - 1];
-    if (last && last.CodeSha256 === f.cfg.CodeSha256) return { ...cfgOf(f), Version: last.Version };
-    const v = { Version: String(f.versions.length + 1), CodeSha256: f.cfg.CodeSha256 };
+    if (last && JSON.stringify(last.cfg) === JSON.stringify(snap)) return { ...snap, Version: last.Version };
+    const v = { Version: String(++f.seq), CodeSha256: f.cfg.CodeSha256, cfg: snap };
     f.versions.push(v);
-    return { ...cfgOf(f), Version: v.Version };
+    return { ...snap, Version: v.Version };
   },
   listVersions: async (n) => [{ Version: "$LATEST" }, ...(fns.get(n)?.versions ?? [])],
   putAlias: async (n, a, v) => { log.push(["putAlias", n, a, v]); fns.get(n).aliases.set(a, v); return { Name: a, FunctionVersion: v, AliasArn: `${n}:${a}` }; },
@@ -106,7 +119,11 @@ const api = {
     if (invokeMode === "ok") return { status: 200, functionError: null, log: "START\nEND", payload: JSON.stringify({ statusCode: 200, body: "hi" }), executedVersion: qual };
     return { status: 200, functionError: "Unhandled", log: "INFO app is not ready after 2000ms url=http://127.0.0.1:8080/\nError: web application did not become ready", payload: JSON.stringify({ errorType: "Extension.Crash" }), executedVersion: qual };
   },
-  deleteFunction: async (n, qual) => { log.push(["deleteFunction", n, qual ?? null]); const f = fns.get(n); if (!f) return; if (qual) f.versions = f.versions.filter((v) => v.Version !== qual); else fns.delete(n); },
+  deleteFunction: async (n, qual) => {
+    log.push(["deleteFunction", n, qual ?? null]);
+    if (!qual && failDelete.has(n)) throw new AwsError(500, "ServiceException", "흉내 — 지우기 실패");
+    const f = fns.get(n); if (!f) return; if (qual) f.versions = f.versions.filter((v) => v.Version !== qual); else fns.delete(n);
+  },
   putConcurrency: async (n, k) => { log.push(["putConcurrency", n, k]); fns.get(n).conc = k; },
   deleteConcurrency: async (n) => { log.push(["deleteConcurrency", n]); const f = fns.get(n); if (f) f.conc = null; },
   ensureLogGroup: async (g, d) => { log.push(["ensureLogGroup", g, d]); },
@@ -140,7 +157,7 @@ await call("app_save", { files: [{ path: "lively-app.json", content: JSON.string
 
 // D1 첫 배포
 const s1 = await call("app_save", { files: filesOf() }, alice, aliceCtx);
-chk("D1a 저장 응답이 «서버는 아직 빌드 안 됨» 을 알린다(저장은 빌드하지 않는다)", s1.server?.declared === true && seats.length === 0, JSON.stringify(s1.server));
+chk("D1a 저장 응답이 «서버는 아직 빌드 안 됨» 을 알린다(저장은 빌드하지 않는다)", s1.server?.declared === true && s1.server?.state === "not_built" && seats.length === 0, JSON.stringify(s1.server));
 const d1 = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
 const r1 = await serverRow();
 const cf = calls("createFunction")[0]?.[1];
@@ -148,7 +165,7 @@ chk("D1b 배포 성공 · 빌드 1번(앨리스의 세션)", d1.status === "depl
 chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB · 30초 · 어댑터 레이어 · 환경 · 워크스페이스 태그 · S3 zip",
   cf && cf.FunctionName === FN && cf.Role === ROLE && cf.Handler === "lively-run.sh" && cf.Runtime === "nodejs22.x" && cf.Architectures[0] === "arm64" && cf.MemorySize === 512 && cf.Timeout === 30
   && cf.Layers.length === 1 && /LambdaAdapterLayerArm64:30$/.test(cf.Layers[0]) && cf.Environment.Variables.AWS_LAMBDA_EXEC_WRAPPER === "/opt/bootstrap" && cf.Environment.Variables.AWS_LWA_READINESS_CHECK_PROTOCOL === "tcp"
-  && cf.Tags["lvly:tenant"] === SINGLE_TENANT_ID && cf.Code.S3Bucket === "fake-bucket" && zips.has(cf.Code.S3Key), JSON.stringify(cf));
+  && cf.Tags["lvly:tenant"] === SINGLE_TENANT_ID && cf.Code.S3Bucket === "fake-bucket" && zips.has(cf.Code.S3Key) && cf.Code.S3Key.includes("/z/srv/"), JSON.stringify(cf));
 chk("D1d 로그 그룹(보관 14일) → 판 고정(코드 지문 조건) → 그 판으로 시험 호출 → 별칭 cur(나만 보는 앱이라 pub 없음)",
   calls("ensureLogGroup")[0]?.[1] === `/aws/lambda/${FN}` && calls("ensureLogGroup")[0]?.[2] === 14 && calls("publishVersion").length === 1
   && calls("publishVersion")[0][2] === shaB64(zips.get(cf.Code.S3Key)) && calls("invoke")[0]?.[2] === "1" && calls("putAlias").length === 1 && calls("putAlias")[0][2] === "cur",
@@ -230,8 +247,21 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
   chk("D8a 책임자 · 관리자가 아니면 멈출 수 없다", e1?.status === 403, String(e1?.message));
   await call("app_server_stop", { app_id: "srv", reason: "시험" }, alice, aliceCtx);
   chk("D8b 멈춤 → 동시 실행 0 · 기록", fns.get(FN).conc === 0 && (await serverRow()).stopped_by === "pgt-alice");
+  const pc8 = calls("putConcurrency").length;
+  const again = await call("app_server_stop", { app_id: "srv", reason: "다시" }, boss);
+  const r8 = await serverRow();
+  chk("D8d 이미 멈춘 함수를 또 멈추면 그대로 — AWS 를 다시 부르지 않고 · 멈춘 사람 · 까닭 · 종류를 덮지 않는다", again.changed === false && calls("putConcurrency").length === pc8
+    && r8.stopped_by === "pgt-alice" && r8.stop_reason === "시험" && r8.stop_kind === "manual", JSON.stringify(r8));
+  const wrote = await setServerStopped("srv", { by: "pgt-boss", kind: "manual", reason: "저장 계층에 바로" });
+  const r8b = await serverRow();
+  chk("D8f 저장 계층도 멈춘 줄을 덮지 않는다(두 번째 벽)", wrote === false && r8b.stopped_by === "pgt-alice" && r8b.stop_reason === "시험", JSON.stringify(r8b));
   const re = await call("app_server_resume", { app_id: "srv" }, alice, aliceCtx);
   chk("D8c 손으로 멈춘 책임자는 다시 켤 수 있다 → 동시 실행 설정 지움", re.changed === true && fns.get(FN).conc === null && (await serverRow()).stopped_at == null);
+  //  자동 멈춤인지는 감시만 쓰는 칸으로 — 사람이 까닭에 무엇을 쓰든 손 멈춤은 손 멈춤이다.
+  await call("app_server_stop", { app_id: "srv", reason: "auto: 흉내" }, alice, aliceCtx);
+  let re2 = null; const e8 = await errOf((async () => { re2 = await call("app_server_resume", { app_id: "srv" }, alice, aliceCtx); })());
+  chk("D8e 까닭 글에 «auto:» 를 써도 손 멈춤 — 멈춘 책임자가 다시 켠다(종류 칸으로 가른다)", !e8 && re2?.changed === true && fns.get(FN).conc === null, String(e8?.message));
+  if (e8) await call("app_server_resume", { app_id: "srv" }, boss);
 }
 
 // D9 감시
@@ -244,9 +274,20 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
   chk("D9a 호출 = 상한이면 멈추지 않는다", w0.checked === 1 && w0.stopped.length === 0 && fns.get(FN).conc === null);
   const w1 = await watchAppServers(policy, { api, metrics: mk(30_001, 1000), notify: async (a, title) => { notes.push(title); }, now: () => 1_000_000 + 60_000 });
   const r9 = await serverRow();
-  chk("D9b 호출 > 상한 → 자동 멈춤 · 동시 실행 0 · 알림", w1.stopped[0] === "srv" && fns.get(FN).conc === 0 && String(r9.stop_reason).startsWith("auto:") && notes.length === 1, JSON.stringify({ w1, r9 }));
+  chk("D9b 호출 > 상한 → 자동 멈춤 · 동시 실행 0 · 알림", w1.stopped[0] === "srv" && fns.get(FN).conc === 0 && r9.stop_kind === "auto" && r9.stopped_by === "auto" && notes.length === 1, JSON.stringify({ w1, r9 }));
   const e = await errOf(call("app_server_resume", { app_id: "srv" }, alice, aliceCtx));
-  chk("D9c 자동 멈춤은 책임자가 못 켠다 · 관리자는 켠다", e?.status === 403 && (await call("app_server_resume", { app_id: "srv" }, boss)).changed === true);
+  //  R2 — 책임자가 «멈추기» 로 기록을 자기 손 멈춤으로 바꾼 뒤 다시 켜는 길(격리 리뷰 재현)이 막혔나
+  const over = await call("app_server_stop", { app_id: "srv", reason: "x" }, alice, aliceCtx);
+  const e2 = await errOf(call("app_server_resume", { app_id: "srv" }, alice, aliceCtx));
+  const r9b = await serverRow();
+  chk("R2a 자동 멈춤 → 책임자 멈추기(그대로) → 책임자 다시 켜기 403 · 기록 그대로", e?.status === 403 && over.changed === false && e2?.status === 403 && r9b.stop_kind === "auto" && fns.get(FN).conc === 0,
+    JSON.stringify({ e: e?.status, over, e2: e2?.status, r9b }));
+  chk("D9c 자동 멈춤은 책임자가 못 켠다 · 관리자는 켠다", (await call("app_server_resume", { app_id: "srv" }, boss)).changed === true && fns.get(FN).conc === null);
+  await call("app_server_stop", { app_id: "srv", reason: "관리자 확인 중" }, boss);
+  await call("app_server_stop", { app_id: "srv", reason: "y" }, alice, aliceCtx);
+  const e3 = await errOf(call("app_server_resume", { app_id: "srv" }, alice, aliceCtx));
+  chk("R2b 관리자가 손으로 멈춘 것도 책임자가 «멈추기 → 다시 켜기» 로 못 푼다", e3?.status === 403 && (await serverRow()).stopped_by === "pgt-boss", String(e3?.message));
+  await call("app_server_resume", { app_id: "srv" }, boss);
   resetWatchStateForTest();
   let asked = 0;
   const quiet = async (queries) => { asked++; return queries.map((x) => ({ id: x.id, values: [0], timestamps: [0] })); };
@@ -254,6 +295,16 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
   const w2 = await watchAppServers(policy, { api, metrics: quiet, now: () => 5_000_000 + 10 * 60_000 });
   const w3 = await watchAppServers(policy, { api, metrics: quiet, now: () => 5_000_000 + 31 * 60_000 });
   chk("D9d 조용한 함수는 30분 뒤에 다시 본다(지표 비용)", asked === 2 && w2.checked === 0 && w3.checked === 1, JSON.stringify({ asked, w2, w3 }));
+  //  실행 시간 합은 «호출 × 요청 시간 천장(60초)» 을 넘을 수 없다 — 호출 50번(× 60 = 3,000 = 기준)이면 묻지 않고, 51번이면 묻는다.
+  resetWatchStateForTest();
+  const metricsAsked = [];
+  const rec = (n) => async (queries) => { metricsAsked.push(...queries.map((x) => x.metric)); return queries.map((x) => ({ id: x.id, values: [x.metric === "Invocations" ? n : 1000], timestamps: [0] })); };
+  await watchAppServers(policy, { api, metrics: rec(50), now: () => 9_000_000 });
+  const durAt50 = metricsAsked.filter((m) => m === "Duration").length;
+  resetWatchStateForTest();
+  await watchAppServers(policy, { api, metrics: rec(51), now: () => 9_500_000 });
+  const durAt51 = metricsAsked.filter((m) => m === "Duration").length - durAt50;
+  chk("D9e 호출 50번(경계)이면 실행 시간을 묻지 않고 · 51번이면 묻는다(지표 비용)", durAt50 === 0 && durAt51 === 1, JSON.stringify({ durAt50, durAt51 }));
 }
 
 // D10 빌드 있는 판으로 되돌리기 → cur 가 따라간다
@@ -273,6 +324,125 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
   const hk = await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} });
   const b = (await q(`SELECT status, stage FROM org_app_server_build WHERE build_key=$1`, ["f".repeat(64)]))[0];
   chk("D12 죽은 빌드(lease 지남) → failed · interrupted", b.status === "failed" && b.stage === "interrupted" && hk.stale_builds >= 1, JSON.stringify({ b, hk }));
+}
+
+// ── 격리 리뷰 뒤(R) ──
+const twin = (id, server = "require('http').createServer((q,s)=>s.end('twin')).listen(Number(process.env.PORT));") =>
+  filesOf({ server }).map((f) => (f.path === "lively-app.json" ? { ...f, content: f.content.replace('"id":"srv"', `"id":"${id}"`) } : f));
+const rowOf = async (id) => (await q(`SELECT * FROM org_app_server WHERE app_id=$1`, [id]))[0];
+const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for (;;) { const v = await pred(); if (v || Date.now() > until) return v; await new Promise((r) => setTimeout(r, 50)); } };
+
+// R1 같은 파일의 두 앱 — zip 은 앱마다 · 하나를 지워도 다른 앱 되돌리기가 된다 · zip 이 없어지면 다시 빌드한다
+{
+  await call("app_save", { files: twin("twin-a") }, alice, aliceCtx);
+  const ta1 = await call("app_server_deploy", { app_id: "twin-a", wait_s: 120 }, alice, aliceCtx);
+  const v1a = (await q(`SELECT current_version_no FROM org_app WHERE id='twin-a'`))[0].current_version_no;
+  await call("app_save", { files: twin("twin-b") }, alice, aliceCtx);
+  const tb1 = await call("app_server_deploy", { app_id: "twin-b", wait_s: 120 }, alice, aliceCtx);
+  const kA = (await q(`SELECT zip_key, build_key FROM org_app_server_build WHERE app_id='twin-a' AND status='ok'`))[0];
+  const kB = (await q(`SELECT zip_key, build_key FROM org_app_server_build WHERE app_id='twin-b' AND status='ok'`))[0];
+  chk("R1a 같은 파일의 두 앱 — 빌드 지문은 같아도 zip 은 앱마다 따로", ta1.status === "deployed" && tb1.status === "deployed" && kA.build_key === kB.build_key
+    && kA.zip_key !== kB.zip_key && zips.has(kA.zip_key) && zips.has(kB.zip_key), JSON.stringify({ kA, kB }));
+  await call("app_save", { files: twin("twin-a", "require('http').createServer((q,s)=>s.end('a2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "twin-a", wait_s: 120 }, alice, aliceCtx);
+  const v2a = (await q(`SELECT current_version_no FROM org_app WHERE id='twin-a'`))[0].current_version_no;
+  const kA2 = (await rowOf("twin-a")).cur_build_key;
+  await call("org_app_remove", { app_id: "twin-b" }, boss);
+  chk("R1b 하나를 지우면 그 앱의 zip 만 — 다른 앱의 zip 은 그대로", !zips.has(kB.zip_key) && zips.has(kA.zip_key));
+  const n0 = calls("updateFunctionCode").length;
+  const rv = await call("app_revert", { app_id: "twin-a", version_no: v1a }, alice, aliceCtx);
+  const ra = await waitFor(async () => { const r = await rowOf("twin-a"); return r.cur_build_key === kA.build_key ? r : null; });
+  chk("R1c 남은 앱의 되돌리기 — 그 앱의 옛 zip 으로 cur 가 따라간다(NoSuchKey 없음)", rv.server?.state === "following" && !!ra && calls("updateFunctionCode").length === n0 + 1 && !ra.last_error,
+    JSON.stringify(ra ?? await rowOf("twin-a")));
+  //  zip 이 저장소에서 사라지면(사고 흉내) — 되돌리기는 서버를 그대로 두고 그 빌드를 못 쓰게 적는다 → 다음 배포가 다시 빌드한다(스스로 낫는다)
+  await call("app_revert", { app_id: "twin-a", version_no: v2a }, alice, aliceCtx);
+  await waitFor(async () => (await rowOf("twin-a")).cur_build_key === kA2);
+  zips.delete(kA.zip_key);
+  const uc1 = calls("updateFunctionCode").length;
+  await call("app_revert", { app_id: "twin-a", version_no: v1a }, alice, aliceCtx);
+  const bad = await waitFor(async () => { const b = (await q(`SELECT status, stage, error FROM org_app_server_build WHERE app_id='twin-a' AND build_key=$1`, [kA.build_key]))[0]; return b?.status === "failed" ? b : null; });
+  const ucMiss = calls("updateFunctionCode").length - uc1;
+  const seats0 = seats.length;
+  const heal = await call("app_server_deploy", { app_id: "twin-a", wait_s: 120 }, alice, aliceCtx);
+  const rh0 = await rowOf("twin-a");
+  chk("R1d zip 이 없어지면 함수를 고치기 전에(zip 확인) 그 빌드를 실패로 적고 · 다음 배포가 다시 빌드해 올린다", bad?.stage === "zip" && /저장소에 없습니다/.test(String(bad?.error)) && ucMiss === 0
+    && heal.status === "deployed" && heal.build.reused === false && seats.length === seats0 + 1 && zips.has(kA.zip_key) && rh0.cur_build_key === kA.build_key,
+    JSON.stringify({ bad, ucMiss, heal: { status: heal.status, build: heal.build }, cur: rh0.cur_build_key }));
+  //  R1e 두 번째 벽 — zip 확인을 지나도(저장소가 잠깐 잘못 답함) Lambda 가 NoSuchKey 면 그 빌드를 실패로 적는다
+  await call("app_revert", { app_id: "twin-a", version_no: v2a }, alice, aliceCtx);
+  await waitFor(async () => (await rowOf("twin-a")).cur_build_key === kA2);
+  const realHead = async (key) => (zips.has(key) ? { size: zips.get(key).length } : null);
+  const baseDeps = { api, bucket: "fake-bucket", pollMs: 1, sleep: async () => {}, spawnInSession,
+    presignPut: async (key) => `http://127.0.0.1:${zport}/${encodeURIComponent(key)}`, deleteZip: async (key) => { deletedZips.push(key); zips.delete(key); } };
+  const sizeA = zips.get(kA.zip_key).length;
+  setServerDepsForTest({ ...baseDeps, headZip: async (key) => (key === kA.zip_key ? { size: sizeA } : realHead(key)) });
+  zips.delete(kA.zip_key);
+  await call("app_revert", { app_id: "twin-a", version_no: v1a }, alice, aliceCtx);
+  const bad2 = await waitFor(async () => { const b = (await q(`SELECT status, error FROM org_app_server_build WHERE app_id='twin-a' AND build_key=$1`, [kA.build_key]))[0]; return b?.status === "failed" ? b : null; });
+  chk("R1e zip 확인을 지나도 Lambda 가 NoSuchKey 면 그 빌드를 실패로 적는다(두 번째 벽)", /올리지 못했습니다/.test(String(bad2?.error)) && (await rowOf("twin-a")).cur_build_key === kA2, JSON.stringify(bad2));
+  setServerDepsForTest({ ...baseDeps, headZip: realHead });
+  const heal2 = await call("app_server_deploy", { app_id: "twin-a", wait_s: 120 }, alice, aliceCtx);
+  const rh = await rowOf("twin-a");
+  chk("R1f 그 뒤 배포가 다시 빌드해 올린다", heal2.status === "deployed" && heal2.build.reused === false && rh.cur_build_key === kA.build_key, JSON.stringify({ status: heal2.status, build: heal2.build }));
+
+  // R3 남의 워크스페이스 함수(태그)는 멈추지도 지우지도 않는다
+  const fnA = rh.function_name;
+  fns.get(fnA).tags["lvly:tenant"] = "11111111-2222-3333-4444-555555555555";
+  const pc0 = calls("putConcurrency").length;
+  const es = await errOf(call("app_server_stop", { app_id: "twin-a" }, alice, aliceCtx));
+  chk("R3a 남의 워크스페이스 함수는 멈추지 않는다 → 409", es?.status === 409 && calls("putConcurrency").length === pc0 && fns.get(fnA).conc === null && !(await rowOf("twin-a")).stopped_at, String(es?.message));
+  const del0 = calls("deleteFunction").filter((x) => x[1] === fnA && x[2] == null).length;
+  await call("org_app_remove", { app_id: "twin-a" }, boss);
+  chk("R3b 앱을 지워도 남의 함수는 지우지 않고 · 우리 줄만 지운다", fns.has(fnA) && calls("deleteFunction").filter((x) => x[1] === fnA && x[2] == null).length === del0
+    && !(await rowOf("twin-a")), JSON.stringify(calls("deleteFunction").slice(-3)));
+  fns.delete(fnA);
+}
+
+// R4 함수를 못 지우면 줄을 남기고 하우스키핑이 다시 지운다
+{
+  await call("app_save", { files: twin("orph") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "orph", wait_s: 120 }, alice, aliceCtx);
+  const fnO = (await rowOf("orph")).function_name;
+  failDelete.add(fnO);
+  await call("org_app_remove", { app_id: "orph" }, boss);
+  const kept = await rowOf("orph");
+  chk("R4a 함수를 못 지우면 함수 줄을 남긴다(빌드 기록은 지움)", fns.has(fnO) && !!kept && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`)).length === 0, JSON.stringify(kept));
+  failDelete.delete(fnO);
+  const hk = await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} });
+  chk("R4b 하우스키핑이 앱 없는 함수 줄을 다시 지운다(함수 · 로그 그룹 · 줄)", !fns.has(fnO) && !(await rowOf("orph")) && hk.orphans === 1
+    && calls("deleteLogGroup").some((x) => x[1] === `/aws/lambda/${fnO}`), JSON.stringify(hk));
+}
+
+// R5 상한을 바꾸면 같은 코드도 새 설정의 함수 판으로(«다음 배포부터»)
+{
+  const r0 = await serverRow();
+  await call("app_server_limits_set", { memory_mb: 1024 }, boss);
+  const seats0 = seats.length;
+  const uc0 = calls("updateFunctionConfiguration").length;
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const r1 = await serverRow();
+  const uc = calls("updateFunctionConfiguration").slice(uc0);
+  chk("R5 상한을 바꾸면 빌드 없이 설정을 고쳐 새 함수 판 · 시험 호출 · cur", d.status === "deployed" && d.build.reused === true && seats.length === seats0
+    && uc.some((x) => x[2].MemorySize === 1024) && r1.cur_lambda_version !== r0.cur_lambda_version && fns.get(FN).versions.find((v) => v.Version === r1.cur_lambda_version)?.cfg.MemorySize === 1024,
+    JSON.stringify({ status: d.status, uc: uc.map((x) => x[2]), before: r0.cur_lambda_version, after: r1.cur_lambda_version }));
+  await call("app_server_limits_set", { reset: true }, boss);
+}
+
+// R6 화면 단추 길 — 세션 없이 부르면 그 앱의 만들기 세션(그 판을 저장한 사람의 것일 때만)
+{
+  await call("app_save", { files: twin("scr") }, alice, aliceCtx);
+  await q(`UPDATE org_app SET build_session='box-pgt-bob-1' WHERE id='scr'`);
+  const seats0 = seats.length;
+  const e1 = await errOf(call("app_server_deploy", { app_id: "scr", wait_s: 60 }, alice, { source: "web" }));
+  chk("R6a 만들기 세션이 남(밥)의 것이면 거기서 빌드하지 않는다 → 409", e1?.status === 409 && seats.length === seats0, String(e1?.message));
+  //  밥이 이 앱을 볼 수 있어야 «남이 저장한 판» 길을 탄다(나만 보는 앱이면 404) — 공개는 빌드가 있어야 해서 표시만 바꾼다.
+  await q(`UPDATE org_app SET build_session='box-pgt-alice-1', visibility='all' WHERE id='scr'`);
+  const e2 = await errOf(call("app_server_deploy", { app_id: "scr", wait_s: 60 }, bob, { source: "web" }));
+  chk("R6b 앨리스가 저장한 판을 밥이 눌러도 앨리스의 세션에서 돌리지 않는다 → 409", e2?.status === 409 && seats.length === seats0, String(e2?.message));
+  const ok = await call("app_server_deploy", { app_id: "scr", wait_s: 120 }, alice, { source: "web" });
+  chk("R6c 저장한 사람이 화면에서 누르면 그 사람의 만들기 세션에서 빌드", ok.status === "deployed" && seats.length === seats0 + 1 && seats[seats.length - 1].sessionId === "box-pgt-alice-1",
+    JSON.stringify({ status: ok.status, seat: seats[seats.length - 1] }));
+  await call("org_app_remove", { app_id: "scr" }, boss);
 }
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip

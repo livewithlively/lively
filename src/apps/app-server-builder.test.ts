@@ -11,7 +11,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { BUILD_RESULT_MARK, SERVER_BUILDER_JS, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
+import { BUILDER_VERSION, BUILD_RESULT_MARK, SERVER_BUILDER_JS, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -126,6 +126,12 @@ const memFile = (mb: number): string => {
   fs.writeFileSync(f, `MemTotal: 2621440 kB\nMemFree: ${mb * 1024} kB\nMemAvailable: ${mb * 1024} kB\n`);
   return f;
 };
+
+await t("A0b 빌더 글이 바뀌면 빌더 판(BUILDER_VERSION)도 올린다 — 빌드 지문에 들어가는 판이라 안 올리면 같은 코드가 옛 빌더의 zip 을 재사용한다", () => {
+  //  빌더를 고쳤으면: BUILDER_VERSION 을 올리고 아래 표에 새 판의 지문을 적는다(지문 = 아래 실패 글의 actual). TypeScript 판이 바뀌어 글이 바뀌어도 같다.
+  const PIN: Record<number, string> = { 2: "e730ccb23bc8a9c1987631a1a9a0b59bf5a6529f9e8579b3f48bfd509ebc4538" };
+  assert.equal(crypto.createHash("sha256").update(SERVER_BUILDER_JS).digest("hex"), PIN[BUILDER_VERSION], `빌더 글이 바뀌었다 — BUILDER_VERSION(${BUILDER_VERSION})을 올리고 지문을 적으세요`);
+});
 
 await t("A0 결과 표식이 빌더 안의 상수와 같다(바깥 이름을 못 쓰는 함수라 두 벌이다)", () => {
   assert.ok(SERVER_BUILDER_JS.includes(JSON.stringify(BUILD_RESULT_MARK).slice(1, -1)), "빌더 글에 같은 표식");

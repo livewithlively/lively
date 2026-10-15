@@ -134,12 +134,6 @@ export async function deleteConcurrency(c: LambdaCfg, name: string, deps?: AwsDe
   try { await awsCall({ service: "lambda", region: c.region, host: host(c), method: "DELETE", path: ["2017-10-31", "functions", name, "concurrency"] }, deps); }
   catch (e) { if (!isNotFound(e)) throw e; }
 }
-export async function getConcurrency(c: LambdaCfg, name: string, deps?: AwsDeps): Promise<number | null> {
-  try {
-    const r = jsonOf<{ ReservedConcurrentExecutions?: number }>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "GET", path: ["2019-09-30", "functions", name, "concurrency"] }, deps));
-    return typeof r.ReservedConcurrentExecutions === "number" ? r.ReservedConcurrentExecutions : null;
-  } catch (e) { if (isNotFound(e)) return null; throw e; }
-}
 
 /** 부르기(동기) — 기록 끝 4KB(LogType Tail)도 받는다. 함수 오류는 던지지 않고 functionError 로 돌려준다(부르는 쪽이 기록과 함께 사람에게 보인다). */
 export async function invoke(c: LambdaCfg, name: string, qualifier: string | null, payload: unknown, opts: { timeoutMs?: number } = {}, deps?: AwsDeps): Promise<InvokeOut> {
@@ -157,10 +151,6 @@ export async function invoke(c: LambdaCfg, name: string, qualifier: string | nul
     payload: r.text,
     executedVersion: r.headers.get("x-amz-executed-version"),
   };
-}
-
-export async function getAccountSettings(c: LambdaCfg, deps?: AwsDeps): Promise<{ AccountLimit?: Record<string, number>; AccountUsage?: Record<string, number> }> {
-  return jsonOf(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "GET", path: ["2016-08-19", "account-settings", ""] }, deps));
 }
 
 // ── CloudWatch Logs(JSON 1.1) — 함수마다 로그 그룹을 보관 기간과 함께 만든다 ──

@@ -20,9 +20,8 @@ import {
   APP_SERVER_POLICY_KEYS, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, envAppServerPolicy, normalizeAppServerPolicy, type AppServerPolicy,
 } from "../apps/app-server-policy.js";
 import { appServerPolicy, appServerPolicyRow, getServerRow, setAppServerPolicy } from "../apps/app-server-store.js";
-import {
-  appServerUnavailable, deployInstalled, installedTarget, resumeServer, serverStatus, stopServer, type DeployOutcome, type InstalledTarget,
-} from "../apps/app-server-deploy.js";
+import { appServerUnavailable, deployInstalled, installedTarget, type DeployOutcome, type InstalledTarget } from "../apps/app-server-deploy.js";
+import { resumeServer, serverStatus, stopServer } from "../apps/app-server-lifecycle.js";
 import type { BuildSeat } from "../apps/app-server-build.js";
 import { logger } from "../log.js";
 
@@ -69,13 +68,16 @@ const appServerDeploy: Capability = {
   description: "서버가 있는 앱(매니페스트 web.server)의 **지금 판**을 빌드해 그 앱의 서버 함수(AWS Lambda)에 올린다 — 「이대로 넣기」·「공개하기」 단추가 부르는 것과 같다. " +
     "빌드 = 이 세션 컨테이너의 임시 폴더에 판을 풀어 npm ci(잠금 파일 없으면 npm install) → web.server.build 또는 package.json scripts.build → npm prune --omit=dev → zip. " +
     "시작 명령 = web.server.start 또는 scripts.start(서버는 process.env.PORT 에서 받는다). 같은 코드(매니페스트만 바꾼 판 포함)는 다시 빌드하지 않는다. " +
+    "풀린 크기 상한 245MB — 빌드가 자기 완결 출력 폴더를 만들면 web.server.dir 로 그 폴더만 올린다(Next.js: next.config output:'standalone' · " +
+    "dir '.next/standalone' · build 'npm run build && cp -r .next/static .next/standalone/.next/static && ln -s /tmp/cache .next/standalone/.next/cache'(public 이 있으면 그것도 standalone 안으로) · " +
+    "start 'HOSTNAME=0.0.0.0 node server.js'). 앱 폴더(/var/task)는 읽기 전용이고 /tmp 만 쓸 수 있다 — /tmp 아래를 가리키는 링크는 시작 전에 그 자리를 만든다. " +
     "올린 뒤 GET / 로 한 번 불러 서버가 뜨는지 본다(안 뜨면 기록과 함께 실패 · 앱 주소는 그대로). 그 판을 **저장한 사람**의 세션에서만 빌드한다 — 남이 저장한 판은 이미 빌드됐을 때만 올라간다. " +
-    "빌드는 몇 분 걸릴 수 있어 wait_s(기본 90초) 안에 안 끝나면 status 'running' 으로 돌아오고 뒤에서 이어 간다 — app_server_status 로 본다(실패하면 이 세션에 기록이 들어온다). " +
+    "빌드는 몇 분 걸릴 수 있어 wait_s(기본 50초) 안에 안 끝나면 status 'running' 으로 돌아오고 뒤에서 이어 간다 — app_server_status 로 본다(실패하면 이 세션에 기록이 들어온다). " +
     "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소 → 서버 연결은 v2-6 에서 열린다(지금은 함수만 생긴다).",
   scope: null,
   input: {
     app_id: z.string(),
-    wait_s: z.number().int().min(0).max(600).optional().describe("끝나기를 기다릴 최대 초(기본 90 · 0 이면 시작만 하고 바로 돌아온다)"),
+    wait_s: z.number().int().min(0).max(600).optional().describe("끝나기를 기다릴 최대 초(기본 50 — 도구 호출 시한이 60초인 클라이언트가 있다 · 0 이면 시작만 하고 바로 돌아온다)"),
   },
   expose: {
     mcp: true,
@@ -109,7 +111,7 @@ const appServerDeploy: Capability = {
       job = deployInstalled(t, seat, policy).finally(() => { jobs.delete(jk); });
       jobs.set(jk, job);
     }
-    const waitMs = Math.max(0, Number(input.wait_s ?? 90)) * 1000;
+    const waitMs = Math.max(0, Number(input.wait_s ?? 50)) * 1000;
     const done = await Promise.race([job.then((o) => ({ o })), new Promise<null>((r) => setTimeout(() => r(null), waitMs))]);
     const direct = !!seat && String((ctx as { session?: string } | undefined)?.session ?? "") === seat.sessionId;
     if (!done) {
@@ -142,7 +144,8 @@ const appServerStatus: Capability = {
 const appServerStop: Capability = {
   name: "app_server_stop",
   title: "앱 서버 멈추기",
-  description: "앱 서버 함수를 멈춘다(동시 실행 0 — 부르면 곧바로 거절된다). 앱 화면 · 데이터는 그대로다. 책임자 · 관리자. 다시 켜기는 app_server_resume.",
+  description: "앱 서버 함수를 멈춘다(동시 실행 0 — 부르면 곧바로 거절된다). 앱 화면 · 데이터는 그대로다. 책임자 · 관리자. 이미 멈춘 함수는 그대로 둔다(changed:false — " +
+    "멈춘 사람 · 까닭 기록을 바꾸지 않는다). 다시 켜기는 app_server_resume.",
   scope: null,
   input: { app_id: z.string(), reason: z.string().max(500).optional() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/apps/:id/server/stop"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, reason: (req.body as Record<string, unknown>)?.reason }) }] },
@@ -150,8 +153,8 @@ const appServerStop: Capability = {
     const who = viewerOf(user);
     const app = await requireVisibleApp(appIdOf(input.app_id), who);
     if (!isAppOwner(app, who) && !isAdminViewer(who)) throw new HttpError(403, "앱 서버를 멈출 수 있는 사람은 책임자와 관리자입니다");
-    const row = await stopServer(app.id, who.userId, String(input.reason ?? "").trim() || "손으로 멈춤");
-    return { ok: true, app_id: app.id, stopped: { at: row.stopped_at, by: row.stopped_by, reason: row.stop_reason } };
+    const { row, changed } = await stopServer(app.id, who.userId, "manual", String(input.reason ?? "").trim() || "손으로 멈춤");
+    return { ok: true, app_id: app.id, changed, stopped: { at: row.stopped_at, by: row.stopped_by, kind: row.stop_kind, reason: row.stop_reason } };
   },
 };
 
@@ -168,7 +171,8 @@ const appServerResume: Capability = {
     const row = await getServerRow(app.id);
     if (!row) throw new HttpError(404, "이 앱은 서버 함수가 없습니다");
     if (!row.stopped_at) return { ok: true, app_id: app.id, changed: false };
-    const auto = String(row.stop_reason ?? "").startsWith("auto:");
+    //  자동 멈춤인지는 감시만 쓰는 칸(stop_kind)으로 가른다 — 사람이 쓰는 까닭 글(stop_reason)로 가르면 그 글을 바꿔 우회한다(격리 리뷰).
+    const auto = row.stop_kind === "auto";
     const ownManual = !auto && isAppOwner(app, who) && row.stopped_by === who.userId;
     if (!isAdminViewer(who) && !ownManual) throw new HttpError(403, auto ? "자동으로 멈춘 앱 서버는 관리자가 다시 켭니다" : "멈춘 사람(책임자)이나 관리자가 다시 켭니다");
     await resumeServer(app.id);

@@ -5143,7 +5143,7 @@
   "rest": [
    "POST /api/ui/apps/:id/server/deploy"
   ],
-  "input_hash": "ed0dc115ec6bca08"
+  "input_hash": "3fbd4b7d92321383"
  },
  {
   "name": "app_server_status",

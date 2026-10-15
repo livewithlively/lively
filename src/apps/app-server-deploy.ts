@@ -8,7 +8,7 @@
 //   · 공개(publishCurrent) — 공개할 판의 빌드가 **이미 있어야** 한다(없으면 409 «먼저 넣기·app_server_deploy») · 공개된 뒤 pub(과 cur)을 그 빌드로.
 //   · 되돌리기 — 그 판의 빌드가 있으면 cur 를 그것으로(빌드 없음 · 설계 «판 되돌리기는 그 판의 zip 을 다시 쓴다»).
 //  ★ 빌드는 그 판을 **저장한 사람**의 세션에서만(상민 2026-10-15) — 남이 저장한 판은 이미 빌드돼 있을 때만 올린다.
-//  멈춤: 동시 실행 0(PutFunctionConcurrency) — 그 함수의 모든 판 · 별칭이 멈춘다(2026-10-15 실측 TooManyRequestsException).
+//  멈춤 · 다시 켜기 · 지우기 · 상태는 app-server-lifecycle.ts.
 import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
 import { tenantSlug } from "../terminal/catalog.js";
@@ -18,12 +18,11 @@ import {
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
-import { buildKeyFor, ensureServerBuild, liveBuildProgress, type BuildDeps, type BuildSeat } from "./app-server-build.js";
+import { buildKeyFor, ensureServerBuild, usableBuild, type BuildDeps, type BuildSeat } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
 import * as lam from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { s3Delete } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { getAppVersionBundle } from "../org/store/apps.js";
 
@@ -80,7 +79,7 @@ export interface ServerDeps extends BuildDeps {
 /** 시험이 끼우는 기본 의존(가짜 Lambda · zip 저장소 · 세션 실행) — 운영에서는 비어 있다. */
 let testDeps: ServerDeps = {};
 export function setServerDepsForTest(d: ServerDeps): void { testDeps = d; }
-const withDeps = (d: ServerDeps = {}): ServerDeps => ({ ...testDeps, ...d });
+export const withDeps = (d: ServerDeps = {}): ServerDeps => ({ ...testDeps, ...d });
 
 /** 이 배포가 앱 서버를 돌리나 — 아니면 까닭(사람에게 그대로). */
 export function appServerUnavailable(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -89,8 +88,38 @@ export function appServerUnavailable(env: NodeJS.ProcessEnv = process.env): stri
   return null;
 }
 
-const sleepDefault = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+export const sleepDefault = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const lockedMsg = "이 앱의 서버를 다른 요청이 지금 올리고 있습니다 — 잠시 뒤 다시 하세요";
+
+/**
+ * 구성원에게 보일 오류 글 — AWS 오류 원문에는 플랫폼 계정 번호 · 박스 역할 · 인스턴스 이름이 들어갈 수 있다(AccessDenied 의 «User: arn:aws:sts::…»).
+ *  권한 · 자격 오류는 코드와 요청 번호만, 그 밖은 ARN · 12자리 계정 번호를 지운 글로. 원문은 부르는 쪽이 로그에 남긴다(격리 리뷰).
+ */
+export function publicError(e: unknown): string {
+  if (e instanceof AwsError) {
+    const rid = e.requestId ? ` · 요청 ${e.requestId}` : "";
+    if (/AccessDenied|NotAuthorized|UnrecognizedClient|InvalidClientTokenId|ExpiredToken|NoCredentials|SignatureDoesNotMatch|InvalidSignature/i.test(e.code)) {
+      return `플랫폼 쪽 AWS 권한 · 자격 문제로 실패했습니다(${e.code}${rid}) — 계속되면 운영자에게 알려 주세요`;
+    }
+    return e.message.replace(/arn:aws[^\s"',)]*/g, "(AWS 자원)").replace(/\b\d{12}\b/g, "(계정)") + (rid ? ` (${rid.slice(3)})` : "");
+  }
+  return (e as Error)?.message ?? String(e);
+}
+
+/** 이 함수가 이 워크스페이스의 것인가(태그 lvly:tenant) — 지우기 · 멈추기 · 감시 같은 파괴적인 길이 남의 함수에 닿지 않게(이름이 겹쳐도). */
+export async function functionOwnership(api: LambdaApi, fn: string): Promise<"own" | "missing" | "foreign"> {
+  const got = await api.getFunction(fn);
+  if (!got) return "missing";
+  return got.Tags?.["lvly:tenant"] === blobTenant() ? "own" : "foreign";
+}
+export const foreignMsg = (fn: string): string => `함수 이름 ${fn} 을 다른 워크스페이스가 쓰고 있습니다 — 운영자에게 알려 주세요`;
+
+/** 이 앱의 함수 이름 — 이미 정한 이름(줄) 또는 새로 지을 이름. 64자를 넘어 못 지으면 null. */
+async function functionNameOf(appId: string, env: AppServerEnv): Promise<string | null> {
+  const row = await st.getServerRow(appId);
+  return row?.function_name ?? functionNameFor(env.prefix, appId, tenantSlug() ?? "local");
+}
+const nameTooLong = (appId: string): HttpError => new HttpError(400, `앱 id 와 워크스페이스 이름이 길어 함수 이름(64자)을 만들 수 없습니다 — 더 짧은 앱 id 로 만드세요: ${appId}`);
 
 /** 함수가 준비될 때까지(만들기 · 코드/설정 고치기 뒤 Pending · InProgress) — 큰 zip(파일 수만 개)은 몇 분 걸린다(2026-10-15 실측). */
 async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, maxMs = 6 * 60_000): Promise<lam.FnConfiguration> {
@@ -153,10 +182,8 @@ export async function deployBuildToAliases(i: {
   const bucket = deps.bucket ?? appBundleS3Config()?.bucket;
   if (!bucket) throw new HttpError(503, "판 묶음 버킷이 없습니다");
   const slug = tenantSlug() ?? "local";
-  const fnNew = functionNameFor(env.prefix, i.app.id, slug);
-  const row0 = await st.getServerRow(i.app.id);
-  const fn = row0?.function_name ?? fnNew;
-  if (!fn) throw new HttpError(400, `앱 id 와 워크스페이스 이름이 길어 함수 이름(64자)을 만들 수 없습니다: ${i.app.id}`);
+  const fn = await functionNameOf(i.app.id, env);
+  if (!fn) throw nameTooLong(i.app.id);
   await st.ensureServerRow(i.app.id, fn);
   const sleep = deps.sleep ?? sleepDefault;
   let locked = false;
@@ -164,16 +191,22 @@ export async function deployBuildToAliases(i: {
   if (!locked) throw new HttpError(409, lockedMsg);
   try {
     const row = await st.getServerRow(i.app.id);
-    const reuse = row && row.cur_build_key === i.buildKey && row.cur_lambda_version ? row.cur_lambda_version : null;
+    const want = {
+      role: env.execRoleArn, handler: LAMBDA_HANDLER, runtime: env.runtime, memory: i.policy.memory_mb, timeout: i.policy.timeout_s,
+      layer: env.layerArn, vars: lambdaEnvFor(i.app.id),
+    };
+    //  cur 가 이미 같은 빌드의 함수 판을 가리키면 그 판을 그대로 쓴다(공개하기 · 되돌리기 직후) — 단 그 판의 설정(메모리 · 시간 · 레이어 · 역할 · 환경)이
+    //   지금 바라는 값과 같을 때만. 다르면(관리자가 상한을 바꿈 · 어댑터 판을 올림) 아래에서 설정을 고쳐 새 판을 고정한다(«다음 배포부터» — 격리 리뷰).
+    let reuse = row && row.cur_build_key === i.buildKey && row.cur_lambda_version ? row.cur_lambda_version : null;
+    if (reuse) {
+      const vc = await api.getFunctionConfiguration(fn, reuse);
+      if (!vc || Object.keys(configDrift(vc, want)).length) reuse = null;
+    }
     let version: string;
     let smoke: DeployResult["smoke"] = null;
     if (reuse) {
       version = reuse;
     } else {
-      const want = {
-        role: env.execRoleArn, handler: LAMBDA_HANDLER, runtime: env.runtime, memory: i.policy.memory_mb, timeout: i.policy.timeout_s,
-        layer: env.layerArn, vars: lambdaEnvFor(i.app.id),
-      };
       await api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days);
       let got = await api.getFunction(fn);
       if (!got) {
@@ -199,13 +232,21 @@ export async function deployBuildToAliases(i: {
         if (!got) throw new HttpError(500, `함수를 만든 뒤 찾지 못했습니다: ${fn}`);
       }
       const owner = got.Tags?.["lvly:tenant"];
-      if (owner !== blobTenant()) throw new HttpError(409, `함수 이름 ${fn} 을 다른 워크스페이스가 쓰고 있습니다 — 운영자에게 알려 주세요`);
+      if (owner !== blobTenant()) {
+        //  막 만든(아무 판도 안 올린) 줄이면 지운다 — 남으면 멈추기 · 지우기가 남의 함수 이름을 붙잡는다.
+        await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+        throw new HttpError(409, foreignMsg(fn));
+      }
       if (got.Configuration.CodeSha256 !== i.zipSha256) {
         await waitReady(api, fn, deps);
         await api.updateFunctionCode(fn, { S3Bucket: bucket, S3Key: i.zipKey });
       }
       const cfg = await waitReady(api, fn, deps);
-      if (cfg.CodeSha256 !== i.zipSha256) throw new HttpError(409, "함수 코드가 빌드한 zip 과 다릅니다(그 사이 다른 배포가 코드를 바꿨습니다) — 다시 하세요");
+      if (cfg.CodeSha256 !== i.zipSha256) {
+        //  zip 의 바이트가 빌드 기록과 다르다 — 그 빌드를 못 쓰게 적어 두면 다음 배포가 다시 빌드한다(같은 줄을 «재사용» 하며 영영 실패하지 않게).
+        await st.invalidateServerBuild(i.app.id, i.buildKey, "함수에 올라간 코드가 빌드 기록의 지문과 다릅니다").catch(() => { /* 다음에 */ });
+        throw new HttpError(409, "함수에 올라간 코드가 빌드 기록과 다릅니다 — 다시 하면 새로 빌드합니다");
+      }
       const drift = configDrift(cfg, want);
       if (Object.keys(drift).length) { await api.updateFunctionConfiguration(fn, drift); await waitReady(api, fn, deps); }
       const pub = await api.publishVersion(fn, { CodeSha256: i.zipSha256, Description: `v${i.versionNo ?? "?"} build ${i.buildKey.slice(0, 12)}`.slice(0, 256) });
@@ -230,7 +271,14 @@ export async function deployBuildToAliases(i: {
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
     return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke };
   } catch (e) {
-    await st.setServerError(i.app.id, (e as Error)?.message ?? String(e)).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
+    //  zip 이 저장소에 없다(Lambda 가 GetObject NoSuchKey) — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
+    if (e instanceof AwsError && /NoSuchKey|GetObject/i.test(e.message)) {
+      await st.invalidateServerBuild(i.app.id, i.buildKey, "빌드 결과(zip)를 함수에 올리지 못했습니다(저장소에 없음)").catch(() => { /* 다음에 */ });
+    }
+    if (e instanceof AwsError) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 AWS 오류(#4484)");
+    const msg = publicError(e);
+    await st.setServerError(i.app.id, msg).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
+    if (e instanceof AwsError) throw new HttpError(502, msg);
     throw e;
   } finally {
     await st.unlockServer(i.app.id).catch(() => { /* 잠금은 15분 뒤 저절로 풀린다 */ });
@@ -286,13 +334,15 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   const env = deps.env ?? appServerEnv();
   if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
   if (!t.bundle) throw new HttpError(409, "판 파일 목록이 없습니다");
+  //  함수 이름(64자)을 못 지으면 몇 분 빌드한 뒤가 아니라 지금 알린다.
+  if (!(await functionNameOf(t.app.id, env))) throw nameTooLong(t.app.id);
   const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
-  const have = await st.getServerBuild(t.app.id, key);
-  if (!(have?.status === "ok") && !seat) {
+  const have = await usableBuild(await st.getServerBuild(t.app.id, key), deps);
+  if (!have && !seat) {
     throw new HttpError(409, `${t.versionNo}판의 서버가 아직 빌드되지 않았습니다 — 이 판은 ${t.savedBy ?? "다른 사람"} 님이 저장해서 그 사람의 세션에서 빌드해야 합니다` +
       "(그 사람이 「이대로 넣기」 또는 app_server_deploy). 남이 저장한 코드를 내 세션에서 돌리지 않습니다");
   }
-  const built = have?.status === "ok" && have.zip_key
+  const built = have
     ? { build: have, reused: true, key }
     : await ensureServerBuild({ appId: t.app.id, versionNo: t.versionNo, bundle: t.bundle.bundle, store: t.bundle.kind, decl: t.decl, env, policy, seat: seat! }, deps);
   const b = built.build;
@@ -308,7 +358,7 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   } catch (e) {
     const stage = e instanceof DeployError ? e.stage : "deploy";
     const log = e instanceof DeployError ? e.log : null;
-    return { ok: false, app_id: t.app.id, version_no: t.versionNo, build: buildView, error: (e as Error)?.message ?? String(e), stage, log };
+    return { ok: false, app_id: t.app.id, version_no: t.versionNo, build: buildView, error: publicError(e), stage, log };
   }
 }
 
@@ -332,14 +382,17 @@ export async function publishServerDenial(app: OrgApp, deps0: ServerDeps = {}): 
   const t = await installedTarget(app);
   if (!t || !t.bundle) return null;
   const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
+  if (await usableBuild(await st.getServerBuild(app.id, key), deps)) return null;
   const b = await st.getServerBuild(app.id, key);
-  if (b?.status === "ok") return null;
   return `「${app.title || app.id}」 의 ${t.versionNo}판은 서버가 아직 빌드되지 않아 공개할 수 없습니다 — 먼저 「이대로 넣기」 또는 app_server_deploy 로 서버를 빌드하세요` +
     (b?.status === "failed" ? `(지난 빌드 실패: ${b.error ?? b.stage ?? "?"})` : b?.status === "building" ? "(지금 빌드 중입니다)" : "");
 }
 
+/** 공개 · 되돌리기 뒤 서버 옮기기의 결과 — 응답 server 칸(state: deployed · failed). */
+export interface ServerMove { ok: boolean; state: "deployed" | "failed"; message?: string; deploy?: DeployResult }
+
 /** 공개된 뒤 — 공개 판의 빌드를 pub(과 cur)에 올린다. 실패해도 공개는 이미 됐다(돌려준 글을 응답에 싣는다 · 다시 하기 = app_server_deploy). */
-export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<{ ok: boolean; message?: string; deploy?: DeployResult } | null> {
+export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<ServerMove | null> {
   const deps = withDeps(deps0);
   const env = deps.env ?? appServerEnv();
   if (!env || !serverDeclOf(app.manifest)) return null;
@@ -347,18 +400,18 @@ export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, d
     const t = await installedTarget(app);
     if (!t || !t.bundle) return null;
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
-    const b = await st.getServerBuild(app.id, key);
-    if (b?.status !== "ok" || !b.zip_key || !b.zip_sha256) return { ok: false, message: "공개한 판의 서버 빌드가 없어 서버를 옮기지 못했습니다 — app_server_deploy" };
+    const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
+    if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: "공개한 판의 서버 빌드가 없어 서버를 옮기지 못했습니다 — app_server_deploy" };
     const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, aliases: ["cur", "pub"], policy }, deps);
-    return { ok: true, deploy };
+    return { ok: true, state: "deployed", deploy };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "공개 뒤 앱 서버 옮기기 실패(#4484)");
-    return { ok: false, message: `공개는 됐지만 서버를 공개 판으로 옮기지 못했습니다: ${(e as Error)?.message ?? e} — app_server_deploy 로 다시 하세요` };
+    return { ok: false, state: "failed", message: `공개는 됐지만 서버를 공개 판으로 옮기지 못했습니다: ${publicError(e)} — app_server_deploy 로 다시 하세요` };
   }
 }
 
 /** 되돌린 뒤 — 그 판의 빌드가 있으면 cur(+ 공개 판이면 pub)를 그 빌드로(빌드 없음). 빌드가 없으면 아무것도 안 한다(상태에 «빌드 안 됨» 으로 보인다). */
-export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<{ ok: boolean; message?: string; deploy?: DeployResult } | null> {
+export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<ServerMove | null> {
   const deps = withDeps(deps0);
   const env = deps.env ?? appServerEnv();
   if (!env || !serverDeclOf(app.manifest)) return null;
@@ -366,98 +419,12 @@ export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, de
     const t = await installedTarget(app);
     if (!t || !t.bundle) return null;
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
-    const b = await st.getServerBuild(app.id, key);
-    if (b?.status !== "ok" || !b.zip_key || !b.zip_sha256) return { ok: false, message: `${t.versionNo}판은 서버가 빌드된 적이 없어 서버는 그대로입니다 — 「이대로 넣기」 또는 app_server_deploy` };
+    const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
+    if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: `${t.versionNo}판은 서버가 빌드된 적이 없어(또는 빌드 결과가 없어져) 서버는 그대로입니다 — 「이대로 넣기」 또는 app_server_deploy` };
     const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
-    return { ok: true, deploy };
+    return { ok: true, state: "deployed", deploy };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "되돌린 뒤 앱 서버 옮기기 실패(#4484)");
-    return { ok: false, message: `서버를 되돌린 판으로 옮기지 못했습니다: ${(e as Error)?.message ?? e}` };
+    return { ok: false, state: "failed", message: `서버를 되돌린 판으로 옮기지 못했습니다: ${publicError(e)}` };
   }
-}
-
-// ── 멈춤 · 다시 켜기 · 지우기 ──
-
-export async function stopServer(appId: string, by: string, reason: string, deps0: ServerDeps = {}): Promise<st.ServerRow> {
-  const deps = withDeps(deps0);
-  const env = deps.env ?? appServerEnv();
-  if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
-  const row = await st.getServerRow(appId);
-  if (!row) throw new HttpError(404, `이 앱은 서버 함수가 없습니다: ${appId}`);
-  await (deps.api ?? realLambdaApi(env.region)).putConcurrency(row.function_name, 0);
-  await st.setServerStopped(appId, { by, reason });
-  return (await st.getServerRow(appId))!;
-}
-export async function resumeServer(appId: string, deps0: ServerDeps = {}): Promise<st.ServerRow> {
-  const deps = withDeps(deps0);
-  const env = deps.env ?? appServerEnv();
-  if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
-  const row = await st.getServerRow(appId);
-  if (!row) throw new HttpError(404, `이 앱은 서버 함수가 없습니다: ${appId}`);
-  await (deps.api ?? realLambdaApi(env.region)).deleteConcurrency(row.function_name);
-  await st.setServerStopped(appId, null);
-  return (await st.getServerRow(appId))!;
-}
-
-/** 앱을 지울 때 — 함수 · 로그 그룹 · zip · 기록을 걷는다(되돌릴 수 없다 · 판 묶음이 남으니 다시 빌드할 수는 있다). best-effort: 실패는 돌려준다. */
-export async function removeServer(appId: string, deps0: ServerDeps = {}): Promise<{ removed: boolean; errors: string[] }> {
-  const deps = withDeps(deps0);
-  const env = deps.env ?? appServerEnv();
-  const row = await st.getServerRow(appId).catch(() => null);
-  const errors: string[] = [];
-  if (env && row) {
-    const api = deps.api ?? realLambdaApi(env.region);
-    await api.deleteFunction(row.function_name).catch((e) => errors.push(`함수: ${(e as Error)?.message ?? e}`));
-    await api.deleteLogGroup(logGroupFor(row.function_name)).catch((e) => errors.push(`로그: ${(e as Error)?.message ?? e}`));
-  }
-  const s3 = appBundleS3Config();
-  const { zipKeys } = await st.deleteServerRows(appId).catch((e) => { errors.push(`기록: ${(e as Error)?.message ?? e}`); return { zipKeys: [] as string[] }; });
-  for (const k of zipKeys) {
-    if (deps.deleteZip) await deps.deleteZip(k).catch((e) => errors.push(`zip: ${(e as Error)?.message ?? e}`));
-    else if (s3) await s3Delete(s3, k, { attempts: 1, timeoutMs: 10_000 }).catch((e) => errors.push(`zip: ${(e as Error)?.message ?? e}`));
-  }
-  return { removed: !!row, errors };
-}
-
-// ── 상태 ──
-
-export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise<Record<string, unknown>> {
-  const deps = withDeps(deps0);
-  const env = deps.env ?? appServerEnv();
-  const decl = serverDeclOf(app.manifest);
-  const row = await st.getServerRow(app.id);
-  const builds = await st.listServerBuilds(app.id, 5);
-  let installed: Record<string, unknown> | null = null;
-  if (env && decl) {
-    try {
-      const t = await installedTarget(app);
-      if (t?.bundle) {
-        const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
-        const b = builds.find((x) => x.build_key === key) ?? await st.getServerBuild(app.id, key);
-        const progress = b?.status === "building" ? liveBuildProgress(app.id, key) : null;
-        installed = {
-          version_no: t.versionNo, build_key: key, saved_by: t.savedBy,
-          build: b ? { status: b.status, stage: b.stage, error: b.error, started_at: b.started_at, finished_at: b.finished_at, ...(progress ? { now: progress.last, running_s: Math.round((Date.now() - progress.startedAt) / 1000) } : {}) } : null,
-          deployed_to_cur: row?.cur_build_key === key, deployed_to_pub: row?.pub_build_key === key,
-        };
-      }
-    } catch (e) { installed = { error: (e as Error)?.message ?? String(e) }; }
-  }
-  return {
-    app_id: app.id, server_declared: !!decl, ...(decl ? { decl } : {}),
-    available: env ? null : appServerUnavailable(),
-    installed,
-    function: row ? {
-      name: row.function_name,
-      cur: row.cur_lambda_version ? { version_no: row.cur_version_no, lambda_version: row.cur_lambda_version, build_key: row.cur_build_key, at: row.cur_at } : null,
-      pub: row.pub_lambda_version ? { version_no: row.pub_version_no, lambda_version: row.pub_lambda_version, build_key: row.pub_build_key, at: row.pub_at } : null,
-      stopped: row.stopped_at ? { at: row.stopped_at, by: row.stopped_by, reason: row.stop_reason } : null,
-      last_error: row.last_error,
-    } : null,
-    builds: builds.map((b) => ({
-      build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,
-      started_at: b.started_at, finished_at: b.finished_at, zip_mb: b.zip_bytes ? Math.round((b.zip_bytes / 1048576) * 10) / 10 : null,
-      unzipped_mb: b.unzipped_bytes ? Math.round((b.unzipped_bytes / 1048576) * 10) / 10 : null, detail: b.detail,
-    })),
-  };
 }

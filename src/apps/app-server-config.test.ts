@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
 import { APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, envAppServerPolicy, normalizeAppServerPolicy, retentionDaysFor } from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
+import { publicError } from "./app-server-deploy.js";
+import { AwsError } from "../net/aws/aws-json.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -70,7 +72,8 @@ t("B5 빌드 지문 — 다른 파일 하나 · 경로만 다름 · start · bui
   assert.notEqual(buildKeyOf(base, { ...decl, dir: ".next/standalone" }, rt), k, "B12 올릴 폴더만 달라도 다른 zip");
   assert.notEqual(buildKeyOf(base, decl, { runtime: "nodejs24.x", arch: "arm64" }), k);
   assert.notEqual(buildKeyOf(base, decl, { runtime: "nodejs22.x", arch: "x86_64" }), k);
-  assert.equal(zipKeyFor("p/", "ws-1", k), `p/t/ws-1/z/${k}.zip`);
+  assert.equal(zipKeyFor("p/", "ws-1", "app-a", k), `p/t/ws-1/z/app-a/${k}.zip`, "앱마다 따로 — 같은 코드의 두 앱이 zip 하나를 나눠 쓰지 않는다");
+  assert.notEqual(zipKeyFor("p/", "ws-1", "app-a", k), zipKeyFor("p/", "ws-1", "app-b", k));
 });
 
 const ROLE = "arn:aws:iam::425515538094:role/lvly-app-exec";
@@ -130,6 +133,18 @@ t("B10 자동 멈춤 — 넘으면 이유 · 같으면 없음 · 지표 없으�
   assert.equal(autoStopReason(p, { invocations5m: null, durationSec5m: null }), null);
   assert.match(autoStopReason(p, { invocations5m: 10, durationSec5m: 3_000.5 })!, /실행 시간/);
   assert.match(autoStopReason(p, { invocations5m: 99_999, durationSec5m: 99_999 })!, /호출/);
+});
+
+t("B13 구성원에게 보일 오류 — 권한 · 자격 오류는 코드와 요청 번호만 · 그 밖은 ARN · 계정 번호를 지운다 · 우리 오류는 그대로", () => {
+  const denied = new AwsError(403, "AccessDeniedException", "lambda POST /x 실패: 403 AccessDeniedException — User: arn:aws:sts::425515538094:assumed-role/lvly-cloud-box/i-0abc is not authorized", "req-1");
+  const a = publicError(denied);
+  assert.ok(a.includes("AccessDeniedException") && a.includes("req-1"), a);
+  assert.ok(!a.includes("425515538094") && !a.includes("lvly-cloud-box") && !a.includes("arn:aws"), a);
+  const other = new AwsError(400, "InvalidParameterValueException", "Unzipped size must be smaller than 262144000 bytes (role arn:aws:iam::425515538094:role/lvly-app-exec)", "req-2");
+  const b = publicError(other);
+  assert.ok(b.includes("Unzipped size must be smaller") && b.includes("req-2"), b);
+  assert.ok(!b.includes("425515538094") && !b.includes("arn:aws"), b);
+  assert.equal(publicError(new Error("우리 오류")), "우리 오류");
 });
 
 console.log(`\n${pass} passed`);

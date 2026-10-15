@@ -99,6 +99,18 @@ export async function finishServerBuild(appId: string, key: string, f: BuildFini
   return (r.rows[0] as ServerBuildRow | undefined) ?? null;
 }
 
+/**
+ * 성공한 빌드를 못 쓰게 됐다고 적는다(zip 이 저장소에 없음 · 크기 · 지문이 기록과 다름) — 실패로 돌려 두면 다음 배포가 다시 빌드한다
+ *  (claimServerBuild 가 실패한 줄을 다시 잡는다). 'ok' 인 줄만 고친다(그 사이 다시 빌드된 줄을 덮지 않게). 고쳤으면 true.
+ */
+export async function invalidateServerBuild(appId: string, key: string, why: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_server_build SET status='failed', stage='zip', error=$3, finished_at=now() WHERE app_id=$1 AND build_key=$2 AND status='ok'`,
+    [appId, key, why.slice(0, 1000)]);
+  if ((r.rowCount ?? 0) > 0) logger.warn({ appId, key, why }, "앱 서버 빌드를 못 쓰게 됨 — 다음 배포가 다시 빌드한다(#4484)");
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** 죽은 빌드(lease 가 지난 building)를 실패로 — 게이트웨이가 빌드 도중 재기동된 경우. 고친 수. */
 export async function failStaleServerBuilds(): Promise<number> {
   const r = await itemsPool.query(
@@ -131,7 +143,7 @@ export interface ServerRow {
   function_name: string;
   cur_version_no: number | null; cur_build_key: string | null; cur_lambda_version: string | null; cur_at: string | null;
   pub_version_no: number | null; pub_build_key: string | null; pub_lambda_version: string | null; pub_at: string | null;
-  stopped_at: string | null; stopped_by: string | null; stop_reason: string | null;
+  stopped_at: string | null; stopped_by: string | null; stop_kind: "auto" | "manual" | null; stop_reason: string | null;
   lock_until: string | null; last_error: string | null;
   created_at: string; updated_at: string;
 }
@@ -172,13 +184,35 @@ export async function setServerAlias(appId: string, alias: AliasName, v: { versi
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);
 }
-export async function setServerStopped(appId: string, stopped: { by: string; reason: string } | null): Promise<void> {
-  if (stopped) await itemsPool.query(`UPDATE org_app_server SET stopped_at=now(), stopped_by=$2, stop_reason=$3, updated_at=now() WHERE app_id=$1`, [appId, stopped.by, stopped.reason.slice(0, 1000)]);
-  else await itemsPool.query(`UPDATE org_app_server SET stopped_at=NULL, stopped_by=NULL, stop_reason=NULL, updated_at=now() WHERE app_id=$1`, [appId]);
+/**
+ * 멈춤 기록 — 이미 멈춘 줄은 덮지 않는다(자동 멈춤 · 관리자의 멈춤을 책임자가 «손으로 멈춤» 으로 바꿔 스스로 다시 켜는 길을 막는다 — 격리 리뷰).
+ *  멈춤을 적었으면 true. 풀기(null)는 늘 적는다.
+ */
+export async function setServerStopped(appId: string, stopped: { by: string; kind: "auto" | "manual"; reason: string } | null): Promise<boolean> {
+  if (!stopped) {
+    await itemsPool.query(`UPDATE org_app_server SET stopped_at=NULL, stopped_by=NULL, stop_kind=NULL, stop_reason=NULL, updated_at=now() WHERE app_id=$1`, [appId]);
+    return true;
+  }
+  const r = await itemsPool.query(
+    `UPDATE org_app_server SET stopped_at=now(), stopped_by=$2, stop_kind=$3, stop_reason=$4, updated_at=now() WHERE app_id=$1 AND stopped_at IS NULL`,
+    [appId, stopped.by, stopped.kind, stopped.reason.slice(0, 1000)]);
+  return (r.rowCount ?? 0) > 0;
 }
-export async function deleteServerRows(appId: string): Promise<{ zipKeys: string[] }> {
-  const z = await itemsPool.query(`SELECT zip_key FROM org_app_server_build WHERE app_id=$1 AND zip_key IS NOT NULL`, [appId]);
-  await itemsPool.query(`DELETE FROM org_app_server_build WHERE app_id=$1`, [appId]);
+/** 앱의 빌드 기록을 지우고 그 zip 키들을 돌려준다(zip 은 앱마다 따로라 지워도 남의 앱에 닿지 않는다). */
+export async function deleteServerBuildRows(appId: string): Promise<{ zipKeys: string[] }> {
+  const z = await itemsPool.query(`DELETE FROM org_app_server_build WHERE app_id=$1 RETURNING zip_key`, [appId]);
+  return { zipKeys: z.rows.map((x) => (x as { zip_key: string | null }).zip_key).filter((k): k is string => !!k) };
+}
+export async function deleteServerRow(appId: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_app_server WHERE app_id=$1`, [appId]);
-  return { zipKeys: z.rows.map((x) => String((x as { zip_key: string }).zip_key)) };
+}
+/** 별칭이 하나도 없는 줄(막 만들어 아직 아무 판도 안 올린 줄)만 지운다 — 함수 이름이 남의 것으로 드러났을 때. */
+export async function deleteServerRowIfUnused(appId: string): Promise<void> {
+  await itemsPool.query(`DELETE FROM org_app_server WHERE app_id=$1 AND cur_lambda_version IS NULL AND pub_lambda_version IS NULL`, [appId]);
+}
+/** 앱이 사라졌는데 남은 함수 줄 — 앱을 지울 때 함수를 못 지운 것(하우스키핑이 다시 지운다). */
+export async function orphanServerRows(limit = 20): Promise<string[]> {
+  const r = await itemsPool.query(
+    `SELECT s.app_id FROM org_app_server s LEFT JOIN org_app a ON a.id = s.app_id WHERE a.id IS NULL ORDER BY s.updated_at LIMIT $1`, [limit]);
+  return r.rows.map((x) => String((x as { app_id: string }).app_id));
 }
