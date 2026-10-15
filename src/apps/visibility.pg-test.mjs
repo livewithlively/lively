@@ -21,6 +21,9 @@
 //      새 칸은 바로 · 공개 때 데이터가 어긋나면 409 · 어느 표도 안 바뀜(한 트랜잭션) · 되돌리기도 같은 규칙 · 나만 보는 앱은 바로 ·
 //      publish:true 의 이름 바꾸기 + unique(G8) · 공개 단계 409 면 «초안으로 저장했다» 안내(G9) · 풀었다가 같은 파일로 되돌린 저장은 초안으로 남고
 //      공개 판 사용자의 자유 SQL 은 막히지 않는다(G10)
+//  B23 #4732 공개 미리 보기 — 할 일 0(나만 보는 앱 · 초안 없음 · 기본 앱) · 남의 초안을 책임자 · 관리자가 본다(칸 지우기 · 행 수 · 꼭 채우기 · 옛 표 정리) ·
+//      그 밖의 구성원 403 · 못 보는 앱 404 · 빈 앱 409 · 빈 행이면 막힘 · 다른 연결이 표를 쥐면 짧게 기다리고 «다 못 봄» · 미리 보기 == 실제 공개 ·
+//      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -493,6 +496,208 @@ try {
       relaxed && g10.state === "draft" && (g10.tables?.deferred ?? []).some((d) => d.change === "not_null 더하기 items.title") && r10.draft_by === "pgt-alice"
         && sql10 === 200 && pub10?.status === 409 && /1개/.test(pub10?.message ?? "") && pub10b.changed === true && (await titleNN()) && (await row(G2)).draft_by === null,
       JSON.stringify({ relaxed, g10: [g10.state, g10.tables?.deferred], draft: r10.draft_by, sql10, pub10: [pub10?.status, pub10?.message], pub10b: pub10b.changed }));
+  }
+  // ── B23 #4732 공개 미리 보기 — 「공개하기」 · 「이 판으로」 전에 표에 할 일 · 아무것도 바꾸지 않는다 · 실제 공개와 같다 · 잠금은 짧게 ──
+  {
+    const PV = "pv-app";
+    const pman = (id, tables) => JSON.stringify({ id, title: "미리 보기", version: "0.1.0", permissions: { scopes: [], tools: ["store_insert", "store_query"] },
+      data: { tables }, ui: { pages: [{ key: "main", title: "미리 보기", entry: "ui/index.html" }] } });
+    const pfiles = (tables, html, id = PV) => [{ path: "lively-app.json", content: pman(id, tables) }, { path: "ui/index.html", content: html }];
+    const preview = (who, input = {}, id = PV) => call("app_publish_preview", { app_id: id, ...input }, who);
+    const rel = (t) => `app.pv_app__${t}`;
+    const has = (lines, want) => want.every((w) => (lines ?? []).includes(w));
+    //  카탈로그(칸 · 형 · not_null · 기본값 · 제약 · 인덱스 · 앱/보관 스키마의 모든 관계) · 데이터 · 앱 행 · 판 행 수 — 미리 보기 전후가 같아야 한다(E6)
+    const fingerprint = async () => JSON.stringify({
+      cols: await q(`SELECT c.relname AS t, a.attname AS col, format_type(a.atttypid, a.atttypmod) AS ty, a.attnotnull AS nn, pg_get_expr(d.adbin, d.adrelid) AS def
+                       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                       LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+                      WHERE n.nspname IN ('app', 'app_archive') AND c.relkind = 'r' ORDER BY 1, 2`),
+      cons: await q(`SELECT conrelid::regclass::text AS t, conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+                      WHERE connamespace IN (SELECT oid FROM pg_namespace WHERE nspname IN ('app', 'app_archive')) ORDER BY 1, 2`),
+      idx: await q(`SELECT schemaname, tablename, indexname, indexdef FROM pg_indexes WHERE schemaname IN ('app', 'app_archive') ORDER BY 1, 2, 3`),
+      rels: await q(`SELECT n.nspname, c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('app', 'app_archive') ORDER BY 1, 2`),
+      items: await q(`SELECT * FROM ${rel("items")} ORDER BY id`).catch(() => "없음"),
+      logs: await q(`SELECT * FROM ${rel("logs")} ORDER BY id`).catch(() => "없음"),
+      arc: await q(`SELECT * FROM ${rel("arc")} ORDER BY id`).catch(() => "없음"),
+      app: await q(`SELECT current_version_no, draft_by, published_version_no, visibility, content_hash FROM org_app WHERE id = $1`, [PV]),
+      versions: await q(`SELECT count(*)::int AS n FROM org_app_version WHERE app_id = $1`, [PV]),
+    });
+    const P = [
+      { name: "items", columns: [{ name: "title", type: "text" }, { name: "code", type: "text" }, { name: "memo", type: "text" }] },
+      { name: "logs", columns: [{ name: "msg", type: "text" }, { name: "lvl", type: "text" }] },
+      { name: "arc", columns: [{ name: "y", type: "text" }] },
+      { name: "tmp", columns: [{ name: "x", type: "text" }] },
+    ];
+    //  초안 D — items: title 꼭 채우기 · code(값 2행) · memo(값 0행 — 경계) 지우기 · 새 칸 note / logs: lvl(값 1행) 지우기 / arc(1행) · tmp(빈 표) 빼기
+    const D = [
+      { name: "items", columns: [{ name: "title", type: "text", not_null: true }, { name: "note", type: "text" }], drop_columns: ["code", "memo"] },
+      { name: "logs", columns: [{ name: "msg", type: "text" }], drop_columns: ["lvl"] },
+    ];
+
+    // E11 첫 판이 없는 빈 앱 — 공개와 같은 409
+    const e11 = await call("app_build_start", { session_id: "box-carol-1", title: "빈 앱" }, carol);
+    const e11p = await errOf(call("app_publish_preview", { app_id: e11.app_id }, carol));
+    chk("B23 E11 첫 판이 없는 빈 앱 — 미리 보기도 공개처럼 409", e11p?.status === 409, String(e11p?.message));
+
+    // E1 나만 보는 앱(첫 공개 전) — 할 일 0
+    await call("app_save", { files: pfiles(P, "<p>pv-P</p>"), note: "P" }, alice);
+    const e1 = await preview(alice);
+    chk("B23 E1 나만 보는 앱(첫 공개 전) — 할 일 0 · 막힘 0", e1.kind === "publish" && e1.changes.length === 0 && e1.blocked.length === 0 && e1.incomplete === null && e1.tables === null,
+      JSON.stringify(e1));
+    // E8c 못 보는 앱 — 404
+    chk("B23 E8c 못 보는 앱(남의 나만 보는 앱) — 404", (await status(preview(carol))) === 404);
+
+    // 공개 — bob 이 공개 판으로 쓴다
+    await call("app_visibility_set", { app_id: PV, visibility: "all" }, alice);
+    await call("me_app_grant", { app_id: PV }, bob);
+    const pvBob = { ...bob, appId: PV, scopes: [] };
+    const ins = (t, r) => call("store_insert", { table: t, row: r }, pvBob, { source: "app-ui" });
+    await ins("items", { title: "a", code: "C1" }); await ins("items", { title: "b", code: "C2" }); await ins("items", { title: "c" });
+    await ins("logs", { msg: "m1", lvl: "info" }); await ins("logs", { msg: "m2" });
+    await ins("arc", { y: "남길 값" });
+    const pNo = (await row(PV)).published_version_no;
+    // E2 공개 앱 · 초안 없음 — 할 일 0
+    const e2 = await preview(alice);
+    chk("B23 E2 공개 앱 · 초안 없음 — 할 일 0", e2.changes.length === 0 && e2.blocked.length === 0 && e2.published_version_no === pNo, JSON.stringify(e2));
+
+    // bob 이 깨는 변경을 초안으로 저장 — 미뤄진다(#4724)
+    const sD = await call("app_save", { files: pfiles(D, "<p>pv-D</p>"), note: "D" }, bob);
+    // E8 · E8b 누가 보나 — 초안 쓴 사람 · 책임자 · 관리자는 보고, 그 밖의 구성원은 공개처럼 403
+    const e8 = await errOf(preview(carol));
+    const f0 = await fingerprint();
+    const byOwner = await preview(alice), byAdmin = await preview(boss), byDrafter = await preview(bob);
+    const f1 = await fingerprint();
+    const want3 = [
+      "items 표: code 칸 지우기 — 값이 있는 2행은 따로 보관(앱에서는 더 안 보임)",
+      "items 표: memo 칸 지우기(값 없음)",
+      "items 표: title 칸을 꼭 채워야 하게 바꿈",
+      "logs 표: lvl 칸 지우기 — 값이 있는 1행은 따로 보관(앱에서는 더 안 보임)",
+      "arc 표 따로 보관 — 새 판에 없음 · 1행(앱에서는 더 안 보임)",
+      "tmp 표 지우기 — 새 판에 없고 비어 있음",
+    ];
+    chk("B23 E8 초안 쓴 사람도 책임자도 관리자도 아닌 구성원 — 403(공개와 같은 판정)", sD.state === "draft" && e8?.status === 403, JSON.stringify({ sD: sD.state, e8: [e8?.status, e8?.message] }));
+    chk("B23 E3 · E8b · E13 남(bob)의 초안을 책임자 · 관리자 · 쓴 사람이 본다 — 칸 지우기(값 2행 · 값 없음) · 꼭 채우기 · 옛 판의 표 보관/지움 · 막힘 0 · 새 칸 note 는 이미 됐으니 없음",
+      [byOwner, byAdmin, byDrafter].every((p) => p.kind === "publish" && has(p.changes, want3) && p.changes.length === want3.length && p.blocked.length === 0 && p.incomplete === null)
+        && byOwner.published_version_no === pNo && byOwner.version_no === (await row(PV)).current_version_no
+        && byOwner.gone_tables.map((g) => `${g.table}:${g.action}:${g.rows}`).sort().join() === "arc:archive:1,tmp:drop:0"
+        && (byOwner.tables?.dropped_columns ?? []).length === 3 && byOwner.tables.dropped_columns.every((d) => d.archived_as === null),   // 보관 자리 이름은 공개할 때 정해진다
+      JSON.stringify({ byOwner, byAdmin: byAdmin.changes, byDrafter: byDrafter.changes }));
+    chk("B23 E6 미리 보기 전후 — 카탈로그(칸 · 형 · not_null · 기본값 · 제약 · 인덱스 · 앱/보관 스키마의 관계) · 데이터 · 앱 행 · 판 행 수가 같다", f0 === f1,
+      f0 === f1 ? "" : `${f0.length} / ${f1.length}`);
+
+    // E4 빈 제목 1행 — 막힘(표 · 칸 · 1개) · 그 표의 할 일은 싣지 않고 다른 표의 할 일은 싣는다 · 아무것도 안 바뀜
+    await q(`INSERT INTO ${rel("items")}(title, code) VALUES (NULL, 'C3')`);
+    const f4 = await fingerprint();
+    const e4 = await preview(alice);
+    const f4b = await fingerprint();
+    chk("B23 E4 빈 제목 1행 — 막힘(items.title · 1개) · logs 의 할 일은 그대로 · items 의 할 일은 싣지 않는다 · 표 그대로",
+      e4.blocked.length === 1 && /items\.title/.test(e4.blocked[0]) && /1개/.test(e4.blocked[0]) && e4.incomplete === null
+        && e4.changes.includes("logs 표: lvl 칸 지우기 — 값이 있는 1행은 따로 보관(앱에서는 더 안 보임)") && !e4.changes.some((l) => l.startsWith("items 표:")) && f4 === f4b,
+      JSON.stringify({ e4, same: f4 === f4b }));
+
+    // E9 다른 연결이 items 를 읽는 트랜잭션을 쥐고 있다 — 미리 보기는 짧게(0.4초)만 기다리고 «다 못 봄» · 그사이 시작한 다른 읽기도 오래 막히지 않는다
+    process.env.LIVELY_APP_PREVIEW_LOCK_MS = "400";
+    const holder = new pg.Client({ connectionString: dsnFor(DB) }); await holder.connect();
+    const reader = new pg.Client({ connectionString: dsnFor(DB) }); await reader.connect();
+    let e9 = null, readMs = null, f9 = null, f9b = null;
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT count(*) FROM ${rel("items")}`);
+      f9 = await fingerprint();
+      const t0 = Date.now();
+      const pv9 = preview(alice).then((r) => ({ r, ms: Date.now() - t0 }), (err) => ({ err: String(err?.message ?? err), ms: Date.now() - t0 }));
+      await new Promise((res) => setTimeout(res, 150));
+      const t1 = Date.now();
+      const rd9 = reader.query(`SELECT count(*)::int AS n FROM ${rel("items")}`).then(() => Date.now() - t1);
+      [e9, readMs] = await Promise.all([pv9, rd9]);
+      f9b = await fingerprint();
+    } finally {
+      await holder.query("COMMIT").catch(() => {}); await holder.end().catch(() => {}); await reader.end().catch(() => {});
+      delete process.env.LIVELY_APP_PREVIEW_LOCK_MS;
+    }
+    chk("B23 E9 다른 연결이 표를 읽는 중 — 미리 보기는 0.4초 상한 + 여유(3초) 안에 «다 못 봄» · 막힘 아님 · 그사이 시작한 읽기도 3초 안 · 표 그대로",
+      //  빈 제목 행(E4)은 아직 있지만 items 는 칸 지우기에서 잠금을 못 얻어 멈춘다 — 그래서 막힘이 아니라 «다 못 봄» 이다.
+      !!e9?.r && e9.ms < 3000 && /다 보지 못했습니다/.test(e9.r.incomplete ?? "") && e9.r.blocked.length === 0 && readMs < 3000 && f9 === f9b,
+      JSON.stringify({ e9, readMs, same: f9 === f9b }));
+
+    // E9b 다른 설치(다른 앱의 공개 등)가 같은 스키마의 기본 권한(pg_default_acl)을 쥔 채 아직 안 끝났다 — 표마다의 저장점 밖(스키마 준비)도
+    //  짧게만 기다리고 «다 못 봄» · 바깥 트랜잭션이 깨져 뒤 표가 «current transaction is aborted» 로 줄줄이 실패하지 않는다.
+    //  (앱 역할이 있어야 스키마 준비가 기본 권한을 건다 — 이 시험 동안만 역할을 준다.)
+    await su.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgt_pv_role') THEN CREATE ROLE pgt_pv_role; END IF; END $$`);
+    process.env.LIVELY_APP_DB_ROLE = "pgt_pv_role";
+    process.env.LIVELY_APP_PREVIEW_LOCK_MS = "400";
+    const aclHolder = new pg.Client({ connectionString: dsnFor(DB) }); await aclHolder.connect();
+    let e9b = null, f9c = null, f9d = null;
+    try {
+      const owner = (await q("SELECT current_user AS u"))[0].u;
+      await aclHolder.query("BEGIN");
+      await aclHolder.query(`ALTER DEFAULT PRIVILEGES FOR ROLE "${owner}" IN SCHEMA app GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO pgt_pv_role`);
+      const release = setTimeout(() => { aclHolder.query("ROLLBACK").catch(() => {}); }, 4000);   // 상한이 안 먹으면 미리 보기는 4초를 기다린다
+      f9c = await fingerprint();
+      const t0 = Date.now();
+      e9b = await preview(alice).then((r) => ({ r, ms: Date.now() - t0 }), (err) => ({ err: String(err?.message ?? err), ms: Date.now() - t0 }));
+      clearTimeout(release);
+      f9d = await fingerprint();
+    } finally {
+      await aclHolder.query("ROLLBACK").catch(() => {}); await aclHolder.end().catch(() => {});
+      delete process.env.LIVELY_APP_DB_ROLE; delete process.env.LIVELY_APP_PREVIEW_LOCK_MS;
+    }
+    chk("B23 E9b 다른 설치가 기본 권한을 쥔 채 — 스키마 준비도 0.4초 상한(3초 안) · «다 못 봄» 만(바깥 트랜잭션이 깨진 오류 없음) · 막힘 아님 · 표 그대로",
+      !!e9b?.r && e9b.ms < 3000 && /다 보지 못했습니다/.test(e9b.r.incomplete ?? "") && !/문제가 생겼습니다|aborted/.test(e9b.r.incomplete ?? "") && e9b.r.blocked.length === 0 && f9c === f9d,
+      JSON.stringify({ e9b, same: f9c === f9d }));
+
+    // E14 막힘 → 고침 → 다시 보면 막힘 0
+    await q(`UPDATE ${rel("items")} SET title = '채움' WHERE title IS NULL`);
+    const e14 = await preview(alice);
+    chk("B23 E14 빈 제목을 채우고 다시 보면 막힘 0 · items 의 할 일이 돌아온다(code 값 3행)",
+      e14.blocked.length === 0 && e14.incomplete === null && e14.changes.includes("items 표: code 칸 지우기 — 값이 있는 3행은 따로 보관(앱에서는 더 안 보임)"),
+      JSON.stringify(e14));
+
+    // E5 미리 보기 == 실제 공개(책임자가 bob 의 초안을 공개) — 표 보고서가 같고, 정리될 표도 미리 본 대로
+    const norm = (t) => JSON.stringify({
+      created: [...(t?.created ?? [])].sort(),
+      added: (t?.added_columns ?? []).map((c) => `${c.table}.${c.column}:${c.type}`).sort(),
+      renamed: (t?.renamed_columns ?? []).map((c) => `${c.table}.${c.from}>${c.to}`).sort(),
+      converted: (t?.converted_columns ?? []).map((c) => `${c.table}.${c.column}:${c.from}>${c.to}`).sort(),
+      mism: (t?.type_mismatches ?? []).map((c) => `${c.table}.${c.column}`).sort(),
+      dropped: (t?.dropped_columns ?? []).map((d) => `${d.table}.${d.column}:${d.rows}`).sort(),
+      undeclared: (t?.undeclared_columns ?? []).map((c) => `${c.table}.${c.column}`).sort(),
+      cons: (t?.constraints ?? []).map((c) => `${c.table}.${c.column ?? ""}:${c.kind}:${c.action}`).sort(),
+      addIx: (t?.added_indexes ?? []).map((i) => `${i.table}:${i.columns.join("+")}:${i.unique}`).sort(),
+      dropIx: (t?.dropped_indexes ?? []).map((i) => `${i.table}:${i.index}`).sort(),
+    });
+    const pre = await preview(alice);
+    const pub = await call("app_visibility_set", { app_id: PV, visibility: "all" }, alice);
+    const arcArchived = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'app_archive' AND table_name LIKE 'pv_app__arc%'`))[0].n;
+    const tmpGone = !(await q(`SELECT to_regclass('app.pv_app__tmp') AS r`))[0].r;
+    chk("B23 E5 미리 보기 == 실제 공개 — 표 보고서(지운 칸 · 행 수 · 규칙 · …)가 같다 · 정리될 표도 미리 본 대로(arc 보관 · tmp 지움)",
+      pub.changed === true && norm(pre.tables) === norm(pub.tables) && (pre.tables?.dropped_columns ?? []).length === 3
+        && pre.gone_tables.map((g) => `${g.table}:${g.action}`).sort().join() === "arc:archive,tmp:drop" && arcArchived === 1 && tmpGone,
+      JSON.stringify({ pre: norm(pre.tables), pub: norm(pub.tables), gone: pre.gone_tables, arcArchived, tmpGone }));
+
+    // E10 판 번호 — 그 판으로 되돌려 공개하면: note 를 지우는 판(D2)
+    const D2 = [{ name: "items", columns: [{ name: "title", type: "text", not_null: true }], drop_columns: ["note"] }, D[1]];
+    const sD2 = await call("app_save", { files: pfiles(D2, "<p>pv-D2</p>"), note: "D2" }, alice);
+    await call("app_save", { files: pfiles(D, "<p>pv-D</p>"), note: "D 다시" }, alice);
+    await q(`UPDATE ${rel("items")} SET note = 'N' WHERE title = 'a'`);
+    const f10 = await fingerprint();
+    const e10 = await preview(alice, { version_no: sD2.version_no });
+    const f10b = await fingerprint();
+    chk("B23 E10 판 번호 — 그 판(D2)으로 되돌려 공개하면 note 칸 지우기(값 1행) · 되돌리기 종류 · 판 번호 · 아무것도 안 바뀜",
+      e10.kind === "revert" && e10.version_no === sD2.version_no && e10.changes.includes("items 표: note 칸 지우기 — 값이 있는 1행은 따로 보관(앱에서는 더 안 보임)")
+        && e10.blocked.length === 0 && f10 === f10b,
+      JSON.stringify({ e10, same: f10 === f10b }));
+    // E10b 없는 판 · 남의 공개 전 판 — 되돌리기처럼 404
+    const sD3 = await call("app_save", { files: pfiles(D2, "<p>pv-D3 bob</p>"), note: "D3" }, bob);
+    chk("B23 E10b 없는 판 · 남(bob)의 공개 전 판(carol 이 봄) — 404",
+      (await status(preview(alice, { version_no: 99999 }))) === 404 && (await status(preview(carol, { version_no: sD3.version_no }))) === 404,
+      JSON.stringify({ sD3: sD3.version_no }));
+
+    // E12 기본 앱(공유 표) — 공개 때 표를 바꾸지 않는다 → 할 일 0(초안 표식이 있어도)
+    await q(`UPDATE org_app SET source = '{"kind":"builtin"}'::jsonb WHERE id = $1`, [PV]);
+    const e12 = await preview(alice);
+    chk("B23 E12 기본 앱 — 할 일 0 · 막힘 0", e12.changes.length === 0 && e12.blocked.length === 0 && e12.tables === null && (await row(PV)).draft_by === "pgt-bob",
+      JSON.stringify(e12));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

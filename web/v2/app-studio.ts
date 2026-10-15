@@ -24,6 +24,7 @@ import { takeCreated } from './created-cache.js';
 import { openAppUi, reloadAppFrames } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
+import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { attachAppToSession, listAttached, preferSessAppTab } from './session-app-pane.js';
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
 import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
@@ -572,6 +573,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (!rec.appId || pubBtn.disabled) return;
     pubBtn.disabled = true;
     try {
+      if (!(await confirmPublish(rec.appId, { title: S.title }))) { pubBtn.disabled = false; return; }
       const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) });
       const n = Number(out && out.version_no) || S.curVer;
       toast(n + '판을 공개했어요 · 워크스페이스 모두에게 보여요. 이어서 고치면 ' + (n + 1) + '판은 다시 나만 보는 초안이에요');
@@ -886,6 +888,8 @@ async function build(rec: StudioRec): Promise<void> {
   const putApp = async (): Promise<void> => {
     const newName = nameIn.value.trim() || S.title;
     const share = rec.vis || 'me';
+    //  #4732 「워크스페이스 모두」 면 이 저장이 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다(새 앱은 할 일이 없어 묻지 않는다).
+    if (share === 'all' && !(await confirmPublish(rec.appId, { title: newName }))) return;
     try {
       //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
       //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
@@ -900,6 +904,7 @@ async function build(rec: StudioRec): Promise<void> {
   //  공개 범위(#4632 app_visibility_set) — 'all' 이면 「공개하기」(나만 보는 앱을 처음 공개 · 공개한 앱의 내 초안을 공개 판으로, #4667). 못 해도 앱은 그대로.
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
     try {
+      if (v === 'all' && !(await confirmPublish(rec.appId, { title: S.title }))) return false;   // #4732
       await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
       S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
     } catch (e: any) { toast('공개 범위를 바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); return false; }

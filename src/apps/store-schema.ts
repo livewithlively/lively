@@ -42,6 +42,10 @@ export interface AppTableSpec {
  */
 /** DDL 이 잠금을 기다리는 상한(ms) — 기본 10초. 시험은 짧게 준다. */
 const ddlLockMs = (): number => { const n = Number(process.env.LIVELY_APP_DDL_LOCK_MS); return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 10_000; };
+/** DDL 문장 하나의 상한(ms) — 5분(큰 표의 형 바꾸기는 표를 다시 쓴다). */
+const DDL_STATEMENT_MS = 5 * 60_000;
+/** 호출부가 준 상한(ms)을 SET 문에 넣을 정수로 — 없거나 이상하면 기본값. */
+const msOr = (n: number | undefined, dflt: number): number => (typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : dflt);
 
 export async function withOwnerConn<T>(fn: (db: Q) => Promise<T>): Promise<T> {
   const ddlDsn = (process.env.LIVELY_APP_DDL_DATABASE_URL || "").trim() || (process.env.LIVELY_OWNER_DATABASE_URL || "").trim();
@@ -145,12 +149,14 @@ const UNIQUE_SAFE_DEFAULTS: ReadonlySet<string> = new Set(["gen_random_uuid()"])
  *  외래키는 다른 표가 다 생긴 뒤 ensureAppTables 가 따로 맞춘다(syncForeignKeys).
  *  schema 기본값 `app` = 종전 동작(기본 앱·단일 테넌트). 워크스페이스가 설치한 앱은 호출부가 appSchemaFor 로 고른다. */
 export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport,
-  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string> } = {}): Promise<string> {
+  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string>; lockMs?: number; statementMs?: number } = {}): Promise<string> {
   const physical = physicalTableName(appId, spec.table);
   const cols = columnDefs(spec.columns);
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
   const appRole = await resolveAppRole(db);
-  await ensureAppSchema(db, schema, appRole, owner);
+  //  #4732 따로 한 트랜잭션(바깥 한 트랜잭션 안이면 저장점) — 여기서 잠금 대기 초과 같은 오류가 나도 바깥 트랜잭션이 깨져
+  //   뒤 표들이 «current transaction is aborted» 로 줄줄이 실패하지 않게(공개 · 공개 미리 보기). 따로 할 때는 종전처럼 바로 끝난다.
+  await inTx(db, (c) => ensureAppSchema(c, schema, appRole, owner));
   const rel = `${qi(schema)}.${qi(physical)}`;
   const rep = report ?? emptyTableReport();
   //  검사 식(check · enum)은 검사기로 먼저 본다 — 어긋나면 표를 건드리기 전에 400.
@@ -164,8 +170,8 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
     //  이 트랜잭션의 문장은 전부 스키마를 붙인 이름과 pg_catalog 형·함수만 쓴다.
     await c.query("SET LOCAL standard_conforming_strings = on");
     await c.query("SET LOCAL search_path = pg_catalog, pg_temp");
-    await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);   // 공용 풀(단일 모드)에서도 — 위 withOwnerConn 주석
-    await c.query("SET LOCAL statement_timeout = '5min'");
+    await c.query(`SET LOCAL lock_timeout = '${msOr(opts.lockMs, ddlLockMs())}ms'`);   // 공용 풀(단일 모드)에서도 — 위 withOwnerConn 주석
+    await c.query(`SET LOCAL statement_timeout = '${msOr(opts.statementMs, DDL_STATEMENT_MS)}ms'`);
     const existed = await tableExists(c, schema, physical);
     await c.query(
       `CREATE TABLE IF NOT EXISTS ${rel} (
@@ -831,6 +837,22 @@ export interface EnsureAppTablesOpts {
   atomic?: boolean;
   /** #4724 걸어 보기만 하고 늘 되돌린다(atomic 과 같은 한 트랜잭션) — report 에 «했을 일» 이 남는다. 기본 앱 저장의 공유 표 판정이 쓴다. */
   dryRun?: boolean;
+  /** #4732 잠금을 기다리는 상한(ms) — 기본 ddlLockMs(). 공개 미리 보기가 짧게 준다: DDL 이 잠금을 기다리는 동안 그 표를 쓰려는 사람이 뒤에 줄을 선다. */
+  lockMs?: number;
+  /** #4732 문장 하나의 상한(ms) — 기본 5분. 공개 미리 보기가 짧게 준다: 큰 표를 다시 쓰는 동안 그 표가 잠긴다. */
+  statementMs?: number;
+  /** #4732 넘기면 표마다 실패를 모은다 — 공개 미리 보기가 «데이터가 새 규칙에 어긋남»(막힘)과 «잠금 · 시간 초과»(다 못 봄)를 가른다. */
+  failures?: AppTableFailure[];
+}
+
+/** #4732 표 하나의 실패 — status 는 HttpError 의 상태(데이터가 어긋나면 4xx), code 는 Postgres 오류 코드(잠금 대기 초과 55P03 · 시간 초과 57014). */
+export interface AppTableFailure {
+  table: string;
+  status: number | null;
+  code: string | null;
+  error: string;
+  /** 외래키가 가리키는 표가 먼저 실패해서 이 표도 못 한 경우 — 그 표들. */
+  after?: string[];
 }
 
 /**
@@ -844,11 +866,16 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   const failures: string[] = [];
   //  #4483 — 실패한 까닭이 «있던 데이터가 새 선언에 어긋난다»(4xx — 고칠 사람이 할 일)뿐이면 그 상태로 돌려준다. 그 밖은 503.
   let clientStatus: number | null = null;
-  const fail = (table: string, err: unknown): void => {
-    logger.warn({ err, appId, schema, table }, opts.strict ? "앱 데이터 테이블 생성 실패" : "앱 데이터 테이블 생성 실패(비치명)");
+  const fail = (table: string, err: unknown, after?: string[]): void => {
+    //  걸어 보기(dryRun)의 실패는 판정 결과다 — 경고로 남기지 않는다(공개 미리 보기가 «막힘» 을 찾을 때마다 경고가 쌓이지 않게).
+    if (opts.dryRun) logger.debug({ err, appId, schema, table }, "앱 데이터 테이블 걸어 보기 실패");
+    else logger.warn({ err, appId, schema, table }, opts.strict ? "앱 데이터 테이블 생성 실패" : "앱 데이터 테이블 생성 실패(비치명)");
     failures.push(`${table}: ${(err as Error)?.message ?? err}`);
     const st = (err as { status?: number })?.status;
     clientStatus = typeof st === "number" && st >= 400 && st < 500 && (clientStatus === null || clientStatus === st) ? st : -1;
+    const code = (err as { code?: unknown })?.code;
+    opts.failures?.push({ table, status: typeof st === "number" ? st : null, code: typeof code === "string" ? code : null,
+      error: (err as Error)?.message ?? String(err), ...(after?.length ? { after } : {}) });
   };
   //  공유 표는 늘 "existing" — 초안이 걸린 기본 앱의 지연 복구가 공개 판의 칸(Map)을 줘도 다른 워크스페이스의 칸까지 지킨다(격리 리뷰).
   const protect: ProtectColumns | undefined = opts.tenantScopedIndexes ? "existing" : opts.protect;
@@ -858,6 +885,11 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   const report = oneTx && opts.report ? emptyTableReport() : opts.report;
   const out = await withOwnerConn(async (db0) => {
     const body = async (db: Q): Promise<string[]> => {
+      //  #4732 한 트랜잭션이면 표마다의 저장점 밖 문장(스키마 준비 · 기본 권한)도 같은 상한으로 — 첫 표의 SET LOCAL 전에 오래 줄을 서지 않게.
+      if (oneTx && (opts.lockMs != null || opts.statementMs != null)) {
+        await db.query(`SET LOCAL lock_timeout = '${msOr(opts.lockMs, ddlLockMs())}ms'`);
+        await db.query(`SET LOCAL statement_timeout = '${msOr(opts.statementMs, DDL_STATEMENT_MS)}ms'`);
+      }
       const done: string[] = [];
       const ok = new Set<string>();
       //  표마다 지킬 칸 — "existing" 이면 손대기 **전에** 있던 칸(이번에 늘린 칸은 아무 코드도 아직 안 쓴다 · 그 칸의 외래키는 건다).
@@ -870,20 +902,21 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
       const pendingOf = new Map<string, Set<string>>(tables.map((t) => [t.table, new Set<string>()]));
       for (const t of tables) {
         try {
-          done.push(await createAppTable(db, appId, t, schema, report, { tenantScopedIndexes: opts.tenantScopedIndexes, protect: guarded.get(t.table), shared, pending: pendingOf.get(t.table) }));
+          done.push(await createAppTable(db, appId, t, schema, report, { tenantScopedIndexes: opts.tenantScopedIndexes, protect: guarded.get(t.table), shared, pending: pendingOf.get(t.table),
+            lockMs: opts.lockMs, statementMs: opts.statementMs }));
           ok.add(t.table);
         } catch (err) { fail(t.table, err); }
       }
       // 외래키 — 가리키는 표까지 다 생긴 뒤에. 가리키는 표가 실패했으면 그 표의 외래키도 건너뛴다(실패로 남는다).
       for (const t of tables) {
         if (!ok.has(t.table) || !t.columns.some((c) => c.references)) continue;
-        const missing = t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table);
-        if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${[...new Set(missing)].join(", ")})를 만들지 못했습니다`)); continue; }
+        const missing = [...new Set(t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table))];
+        if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${missing.join(", ")})를 만들지 못했습니다`), missing); continue; }
         const local = emptyTableReport();
         try {
           await inTx(db, async (c) => {
-            await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);
-            await c.query("SET LOCAL statement_timeout = '5min'");
+            await c.query(`SET LOCAL lock_timeout = '${msOr(opts.lockMs, ddlLockMs())}ms'`);
+            await c.query(`SET LOCAL statement_timeout = '${msOr(opts.statementMs, DDL_STATEMENT_MS)}ms'`);
             await syncForeignKeys(c, appId, schema, t, local, guardFor(t.table, guarded.get(t.table), local, { shared, pending: pendingOf.get(t.table) }));
           });
           if (report) { report.constraints.push(...local.constraints); report.deferred.push(...local.deferred); }
@@ -1024,6 +1057,30 @@ async function inOneTx<T>(db: Q, fn: (c: Q) => Promise<T>, commit: () => boolean
  *  · 행이 있거나 다 볼 수 있는지 모르면 → `<스키마>_archive` 로 옮긴다(이름에 시각을 붙여 겹치지 않게). 런타임 role 권한은 걷는다 —
  *    보관된 테이블은 앱이 더는 못 읽고 쓰지만 관리자(DB)는 되살릴 수 있다.
  */
+/** 빠진 표 하나를 어떻게 하나 — 모든 행을 볼 수 있고 0행이면 지우고(drop), 아니면 보관한다. 정리(잠근 뒤)와 공개 미리 보기(잠그지 않고)가 같이 쓴다. */
+async function droppedTableFate(c: Q, schema: string, physical: string): Promise<{ rows: number; drop: boolean }> {
+  const rows = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${qi(schema)}.${qi(physical)}`)).rows[0]?.n ?? 0);
+  return { rows, drop: rows === 0 && (await seesAllRows(c, schema, physical)) };
+}
+
+/**
+ * #4732 정리하면 어떻게 될지만 본다(cleanupDroppedTables 와 같은 판단 · 표를 잠그지 않고 아무것도 바꾸지 않는다) — 공개 미리 보기가 쓴다.
+ *  물리 표가 없으면 할 일이 없어 싣지 않는다. 센 뒤 정리 전에 행이 늘 수 있다(그때는 정리가 보관 쪽으로 간다 — 데이터를 지키는 쪽).
+ */
+export async function planDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA): Promise<Array<{ table: string; rows: number; action: "drop" | "archive" }>> {
+  if (!tables.length) return [];
+  return withOwnerConn(async (db) => {
+    const out: Array<{ table: string; rows: number; action: "drop" | "archive" }> = [];
+    for (const table of tables) {
+      const physical = physicalTableName(appId, table);
+      if (!(await tableExists(db, schema, physical))) continue;
+      const { rows, drop } = await droppedTableFate(db, schema, physical);
+      out.push({ table, rows, action: drop ? "drop" : "archive" });
+    }
+    return out;
+  });
+}
+
 export async function cleanupDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA, now: Date = new Date()): Promise<DroppedTablesReport> {
   const out: DroppedTablesReport = { dropped: [], archived: [], failed: [] };
   if (!tables.length) return out;
@@ -1043,8 +1100,8 @@ export async function cleanupDroppedTables(appId: string, tables: string[], sche
           // 세기 전에 잠근다 — 센 뒤 DROP 전에 누가 한 행을 커밋하면 그 행이 «빈 테이블» 과 함께 사라진다.
           //  잠금 뒤의 쓰기는 이 트랜잭션이 끝날 때까지 기다리고, 그때 테이블이 없으면 오류로 드러난다(조용히 잃지 않는다).
           await c.query(`LOCK TABLE ${rel} IN ACCESS EXCLUSIVE MODE`);
-          const rows = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel}`)).rows[0]?.n ?? 0);
-          if (rows === 0 && (await seesAllRows(c, schema, physical))) {
+          const { rows, drop } = await droppedTableFate(c, schema, physical);
+          if (drop) {
             await c.query(`DROP TABLE ${rel}`);
             return { kind: "dropped" as const };
           }
