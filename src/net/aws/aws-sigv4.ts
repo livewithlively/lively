@@ -20,6 +20,15 @@ function signingKey(secret: string, dateStamp: string, region: string, service: 
   return hmac(hmac(hmac(hmac("AWS4" + secret, dateStamp), region), service), "aws4_request");
 }
 
+/**
+ * (#4484) 서명할 글(stringToSign)에 서명한다 — 머리 방식(signRequestV4)이 아닌 길(쿼리 문자열로 서명한 주소 · S3 presign)이 쓴다.
+ *  canonical request 를 만드는 규칙은 서비스마다 달라 부르는 쪽이 만들고, 서명키 유도와 HMAC 만 여기 한 자리에 둔다.
+ */
+export function signStringV4(stringToSign: string, secret: string, dateStamp: string, region: string, service: string): string {
+  return hmac(signingKey(secret, dateStamp, region, service), stringToSign).toString("hex");
+}
+export const sha256HexOf = (s: string | Buffer): string => sha256hex(s);
+
 export interface SignInput {
   method: string;
   host: string;                 // 예 sts.ap-northeast-2.amazonaws.com

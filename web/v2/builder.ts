@@ -14,7 +14,7 @@ import { icon } from './icons.js';
 import { appGlassIcon } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
-import { closeAppStudio, dropStudioRec, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
+import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
 import { appStateOf } from './app-session.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
@@ -339,11 +339,14 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   v.panel.replaceChildren(
     el('h3', { text: '「' + a.title + '」 배포 설정' }),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['me', '나만'], ['all', '워크스페이스 모두']], cur, async (k) => {
+      if (k === 'all' && !(await ensureAppServer(a.id))) return;   // #4484 서버가 있는 앱이면 공개할 판의 서버부터
       if (k === 'all' && !(await confirmPublish(a.id, { title: a.title }))) return;   // #4732
       void post('/visibility', { visibility: k }, k === 'all' ? '워크스페이스 모두에게 공개했어요' : '이제 나만 쓰는 앱이에요. 다른 사람은 더 이상 열 수 없어요.');
     }, !canFlip), el('small', { text: visNote })),
     ...(a.draft && a.canPublish ? [el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '비공개 버전' }), el('small', { text: verName(a.draft.versionNo) + ' (아직 공개 전)' }),
       el('button', { class: 'v2-bld-pri sm', type: 'button', text: '공개하기', onclick: async () => {
+        //  #4484 서버가 있는 앱이면 공개할 판의 서버가 빌드돼 있어야 한다(남이 저장한 판이면 그 사람이 먼저 빌드해야 한다 — 서버가 까닭을 말한다).
+        if (!(await ensureAppServer(a.id))) return;
         //  #4732 남의 것이어도(책임자 · 관리자) 공개하면 표에 무엇을 하는지 먼저 보여 주고 묻는다.
         if (!(await confirmPublish(a.id, { title: a.title }))) return;
         void post('/visibility', { visibility: 'all' }, verJ(a.draft!.versionNo, '을') + ' 공개했어요. 이제 워크스페이스 모두가 써요.');

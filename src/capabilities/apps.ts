@@ -40,6 +40,9 @@ import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan,
 import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
 import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
+import { afterPublishServer, afterRevertServer, installedBuildState, publishServerDenial } from "../apps/app-server-deploy.js";
+import { appServerPolicy } from "../apps/app-server-store.js";
+import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
 import { getMember } from "../org/store/members.js";
 import { itemsPool } from "../db/client.js";
@@ -317,6 +320,10 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   const why = publishDenial(app, who, editDenial(app, who, safeManifest(app)));
   if (why) throw new HttpError(403, why);
   if (app.visibility === "all" && !app.draft_by) return { version_no: app.published_version_no ?? app.current_version_no, changed: false };
+  //  #4484 서버 앱 — 공개할 판의 서버 빌드가 이미 있어야 한다(결정 상민 2026-10-15 «공개는 빌드가 끝난 판만»). 표를 만지기 전에 본다.
+  //   빌드는 「이대로 넣기」·app_server_deploy 가 그 판을 저장한 사람의 세션에서 한다 — 공개는 그 zip 을 함수의 공개 판(pub)으로 옮길 뿐이다.
+  const serverWhy = await publishServerDenial(app);
+  if (serverWhy) throw new HttpError(409, serverWhy);
   //  표와 무관한 준비(옛 공개 판 · 공개할 판 번호)는 표를 바꾸기 **전에** — 표를 바꾼 뒤엔 공개 표시 한 줄만 남긴다(격리 리뷰: 그 사이에 던지면
   //   표는 새 판인데 공개 판은 옛 판인 채 남는다).
   const old = app.visibility === "all" && app.published_version_no != null ? await store.getAppVersionHead(app.id, app.published_version_no) : null;
@@ -408,6 +415,13 @@ async function previewPublish(appId: string, who: Viewer, versionNo: number | nu
     ...base, tables: report, gone_tables: goneTables, blocked, changes, notes,
     incomplete: [incomplete, goneError].filter(Boolean).join(" · ") || null,
   };
+}
+
+/** #4484 공개가 끝난 뒤(설치 락 밖) — 공개 판의 서버 빌드를 함수의 pub · cur 로 옮긴다. 서버 앱이 아니면 null. 실패해도 공개는 됐다(응답 server 에 실는다). */
+async function serverAfterPublish(id: string): Promise<Awaited<ReturnType<typeof afterPublishServer>>> {
+  const app = await store.getApp(id);
+  if (!app || !serverDeclOf(app.manifest) || !appServerEnv()) return null;
+  return afterPublishServer(app, await appServerPolicy());
 }
 
 /** publish:true 의 공개 단계 — 실패해도 저장(설치 · 판 행 · 초안 표식)은 이미 끝났다. 잡아서 돌려주면 부르는 쪽이 저장 사건을 낸 뒤
@@ -815,6 +829,15 @@ const appSave: Capability = {
         return { outcome, versionNo, created: reservedHere || firstFill, pub, pubError };
       });
       const versionNo = r.versionNo;
+      //  #4484 서버 앱 — 이 저장이 공개까지 했으면 공개 판의 서버를 옮긴다 · 아니면 «서버는 아직 이 판으로 빌드 안 됨» 을 알린다(저장은 빌드하지 않는다).
+      const server = r.pub?.changed ? await serverAfterPublish(id) : null;
+      const bs = !server && serverDeclOf(loaded.manifest) && appServerEnv() ? await installedBuildState((await store.getApp(id))!).catch(() => null) : null;
+      const serverNote = !bs ? null : {
+        declared: true, built: bs.built, deployed: bs.deployed,
+        hint: bs.deployed ? "이 판의 서버는 이미 올라가 있습니다(같은 코드 — 매니페스트만 바뀌었다)"
+          : bs.built ? `같은 코드의 빌드가 있어 app_server_deploy {app_id:'${id}'} 하면 빌드 없이 바로 올라갑니다`
+            : `서버(web.server)는 저장만으로 빌드되지 않습니다 — 이 판을 시험하려면 app_server_deploy {app_id:'${id}'}(이 세션에서 빌드 · 몇 분), 사람은 앱 만들기 「이대로 넣기」`,
+      };
       //  세션 옆 앱 칸이 이 사건을 받아 그 앱 화면을 다시 띄운다(«N판 · 방금 고침 · 되돌리기»). 공개 판이 바뀌었으면 그 앱을 붙여 둔 사람들에게도.
       publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
       if (r.pub?.changed) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
@@ -828,6 +851,7 @@ const appSave: Capability = {
       return {
         app, created: r.created, tables, version_no: versionNo,
         visibility: app?.visibility ?? null, state, ...(skipped.length ? { skipped } : {}),
+        ...(server ? { server } : serverNote ? { server: serverNote } : {}),
         hint: state === "me" ? `나만 보는 앱으로 저장했습니다(책임자에게만 보임) — 워크스페이스 모두가 쓰게 하려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
           : state === "draft" ? `초안으로 저장했습니다 — ${versionNo}판은 저장한 사람에게만 보이고 다른 구성원은 공개 판을 계속 씁니다. 모두에게 내보내려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
             + (deferredNow.length ? ` · 공개 판이 쓰는 칸이라 공개할 때 반영할 표 변경 ${deferredNow.length}개: ${deferredNow.map((d) => d.change).join(" · ")}`
@@ -1040,6 +1064,15 @@ const appRevert: Capability = {
       return { app: await store.getApp(id), version_no: target, changed: true, published: !!pub?.changed, deferred: pub?.changed ? [] : deferred, pubError };
     });
     if (result.changed) publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
+    //  #4484 서버 앱 — 공개까지 했으면 공개 판의 서버를 옮기고(기다린다), 되돌리기만이면 그 판의 빌드가 있을 때 cur 를 뒤에서 따라가게 한다
+    //   (빌드 없음 · 함수 판을 새로 올리면 수십 초 — 되돌리기 응답을 붙잡지 않는다). 빌드가 없던 판이면 서버는 그대로다(app_server_status 에 보인다).
+    let server: Awaited<ReturnType<typeof afterPublishServer>> | { following: true } | null = null;
+    if (result.published && !("pubError" in result && result.pubError)) server = await serverAfterPublish(id);
+    else if (result.changed && result.app && serverDeclOf(result.app.manifest) && appServerEnv()) {
+      const app1 = result.app;
+      void appServerPolicy().then((p) => afterRevertServer(app1, p)).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
+      server = { following: true };
+    }
     if (result.published) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     const after = result.app;
     if ("pubError" in result && result.pubError) {
@@ -1050,7 +1083,7 @@ const appRevert: Capability = {
     return {
       ok: true, app_id: id, version_no: result.version_no, changed: result.changed, app: after,
       visibility: after?.visibility ?? null, state: after?.visibility === "me" ? "me" : after?.draft_by ? "draft" : "published",
-      deferred,
+      deferred, ...(server ? { server } : {}),
     };
   },
 };
@@ -1087,8 +1120,10 @@ const appVisibilitySet: Capability = {
         for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
       }
       const app = await store.getApp(id);
+      //  #4484 서버 앱 — 공개 판의 서버 빌드를 함수의 pub · cur 로(설치 락 밖에서 · 실패해도 공개는 됐다).
+      const server = out.changed ? await serverAfterPublish(id) : null;
       //  tables — 공개하며 적용한 표 변경(초안이 미뤄 둔 칸 지우기 · 이름 · 형 바꾸기 · 조이기 — 지운 칸의 값은 dropped_columns.archived_as 에 보관).
-      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null };
+      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null, ...(server ? { server } : {}) };
     }
     const changed = await store.withAppInstallLock(id, async () => {
       const app = await requireVisibleApp(id, who);

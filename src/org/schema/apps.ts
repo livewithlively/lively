@@ -177,6 +177,60 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_blob_last_used_idx ON org_app_blob(last_used_at);`);
+
+  // ── org_app_server_build · org_app_server — 앱 서버(#4484 앱 v2-5) ──
+  //  앱이 매니페스트 web.server 로 서버를 알리면, 「이대로 넣기」·「공개하기」·app_server_deploy 가 그 판을 **그 판을 저장한 사람의 세션 컨테이너**
+  //   에서 빌드해 zip 을 판 묶음 버킷(t/<워크스페이스>/z/<빌드 지문>.zip)에 두고, 앱 × 워크스페이스마다 Lambda 함수 하나에 올린다(apps/app-server-*.ts).
+  //  org_app_server_build — 빌드 지문(매니페스트를 뺀 파일 목록 + 서버 선언 + 빌더 판)마다 한 줄. 같은 지문은 다시 빌드하지 않는다.
+  //   status building(lease_until 이 지나면 죽은 빌드) · ok(zip_*) · failed(stage · error · log_tail). FK 는 org_app_version 과 같은 까닭으로 걸지 않는다.
+  //   PK 는 ensureTenantColumn 이 (tenant_id, app_id, build_key) 로 다시 쓴다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_server_build(
+      app_id TEXT NOT NULL,
+      build_key TEXT NOT NULL CHECK (build_key ~ '^[0-9a-f]{64}$'),
+      version_no INT,
+      status TEXT NOT NULL CHECK (status IN ('building','ok','failed')),
+      zip_key TEXT,
+      zip_bytes BIGINT,
+      zip_sha256 TEXT,
+      unzipped_bytes BIGINT,
+      entries INT,
+      stage TEXT,
+      error TEXT,
+      log_tail TEXT,
+      detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+      built_by TEXT,
+      session_id TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      lease_until TIMESTAMPTZ,
+      PRIMARY KEY (app_id, build_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_server_build_app_idx ON org_app_server_build(app_id, started_at DESC);`);
+  //  org_app_server — 앱마다 한 줄: 함수 이름 · 별칭 둘(cur = 고친 사람이 보는 판 · pub = 공개 판)이 어느 판·빌드·함수 판을 가리키나 · 멈춤 ·
+  //   배포 잠금(lock_until — 한 앱의 배포를 한 줄로). v2-6 라우팅이 «이 주소의 판 = 별칭이 가리키는 판인가» 를 이 줄로 본다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_server(
+      app_id TEXT NOT NULL PRIMARY KEY,
+      function_name TEXT NOT NULL,
+      cur_version_no INT,
+      cur_build_key TEXT,
+      cur_lambda_version TEXT,
+      cur_at TIMESTAMPTZ,
+      pub_version_no INT,
+      pub_build_key TEXT,
+      pub_lambda_version TEXT,
+      pub_at TIMESTAMPTZ,
+      stopped_at TIMESTAMPTZ,
+      stopped_by TEXT,
+      stop_reason TEXT,
+      lock_until TIMESTAMPTZ,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).

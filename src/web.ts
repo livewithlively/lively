@@ -152,6 +152,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { runAppBundleHousekeeping } = await import("./apps/app-bundle-migrate.js");
       return await runAppBundleHousekeeping();
     });
+    // #4484 — 앱 서버: 자동 멈춤 감시(5분 호출 · 실행 시간 → 동시 실행 0) · 죽은 빌드 걷기 · 옛 빌드 zip 정리. 앱 서버가 꺼진 배포면 «disabled».
+    await step("app-servers", async () => {
+      const { runAppServerHousekeeping } = await import("./apps/app-server-watch.js");
+      return await runAppServerHousekeeping();
+    });
     await step("session-reaper", () => reapIdleSessions());
     // #4695 T5 — 하네스 종료 규칙(완료+안 봄 N분 · 질의+안 봄 M분). 주로는 요청에 얹은 정비(30초)와 마감 깨움이 돌리고, 이 틱(5분)은
     //  아무도 안 쓰는 테넌트의 받침이다. 셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다.

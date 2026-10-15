@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { signRequestV4 } from "./aws-sigv4.js";
-import { EMPTY_SHA256, S3Error, parseListXml, s3CanonicalQuery, s3Delete, s3EncodeKey, s3Get, s3GetStream, s3Head, s3List, s3Put } from "./s3-lite.js";
+import { EMPTY_SHA256, S3Error, parseListXml, presignAt, s3CanonicalQuery, s3Delete, s3EncodeKey, s3Get, s3GetStream, s3Head, s3List, s3PresignUrl, s3Put } from "./s3-lite.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -219,6 +219,28 @@ await t("E19 흘려 받기는 머리까지만 잰다 — 본문이 timeoutMs 보
   const parts: Buffer[] = [];
   for await (const c of got!.stream) parts.push(Buffer.from(c as Uint8Array));
   assert.equal(Buffer.concat(parts).toString(), "c1;c2;c3;c4;c5;", "본문 200ms(> 시한 60ms)를 끝까지 받았다");
+});
+
+// ── #4484 서명한 주소(presigned URL) — 세션 컨테이너의 빌더가 zip 하나를 직접 올린다 ──
+//  벡터: https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html («An Example»)
+//   GET https://examplebucket.s3.amazonaws.com/test.txt · 2013-05-24T00:00:00Z · X-Amz-Expires=86400 · us-east-1
+await t("P1 서명한 주소 — AWS 문서 예시 서명과 같다", () => {
+  const url = presignAt({ url: `https://${host}/test.txt`, host, path: "/test.txt" }, "us-east-1", { method: "GET", expiresSec: 86400, creds, now });
+  assert.equal(new URL(url).searchParams.get("X-Amz-Signature"), "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404");
+  assert.ok(url.startsWith("https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature="), url);
+});
+
+await t("P2 서명한 주소 — 임시 자격의 토큰도 서명에 들고, PUT 은 다른 서명 · 수명은 7일로 묶인다", () => {
+  const tmp = { ...creds, sessionToken: "TOKEN/with+chars=" };
+  const cfg = { bucket: "lvly-cloud-appbundles-1", region: "ap-northeast-2" };
+  const put = new URL(s3PresignUrl(cfg, "t/ws/z/abc.zip", { method: "PUT", expiresSec: 900, creds: tmp, now }));
+  const get = new URL(s3PresignUrl(cfg, "t/ws/z/abc.zip", { method: "GET", expiresSec: 900, creds: tmp, now }));
+  assert.equal(put.host, "lvly-cloud-appbundles-1.s3.ap-northeast-2.amazonaws.com");
+  assert.equal(put.pathname, "/t/ws/z/abc.zip");
+  assert.equal(put.searchParams.get("X-Amz-Security-Token"), "TOKEN/with+chars=");
+  assert.notEqual(put.searchParams.get("X-Amz-Signature"), get.searchParams.get("X-Amz-Signature"));
+  const long = new URL(s3PresignUrl(cfg, "k", { method: "PUT", expiresSec: 10 ** 9, creds, now }));
+  assert.equal(long.searchParams.get("X-Amz-Expires"), "604800");
 });
 
 console.log(`\n${pass} passed`);

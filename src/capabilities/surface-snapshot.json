@@ -5136,6 +5136,66 @@
   "input_hash": "b60091dda62bcc13"
  },
  {
+  "name": "app_server_deploy",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server/deploy"
+  ],
+  "input_hash": "ed0dc115ec6bca08"
+ },
+ {
+  "name": "app_server_status",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/server"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_server_stop",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server/stop"
+  ],
+  "input_hash": "794752941565380f"
+ },
+ {
+  "name": "app_server_resume",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server/resume"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_server_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-server-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_server_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-server-limits"
+  ],
+  "input_hash": "6f6a754a2173b081"
+ },
+ {
   "name": "org_app_chat_send",
   "scope": null,
   "mcp": false,

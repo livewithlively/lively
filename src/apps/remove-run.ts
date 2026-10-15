@@ -33,6 +33,10 @@ export interface RemoveAppOutcome {
 export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typeof store.getApp>>>, ctx: WriteCtx): Promise<RemoveAppOutcome> {
   const id = app.id;
   await stopWorkersForApp(id, "app_removed");
+  //  #4484 앱 서버 — 함수 · 로그 그룹 · zip · 기록을 걷는다(best-effort · 앱이 없으면 함수만 남아 돈을 쓰고 이름을 막는다).
+  await import("./app-server-deploy.js").then((m) => m.removeServer(id))
+    .then((r) => { if (r.errors.length) logger.warn({ id, errors: r.errors }, "앱 제거 — 서버 정리 일부 실패(비치명)"); })
+    .catch((err) => logger.warn({ err, id }, "앱 제거 — 서버 정리 실패(비치명)"));
   const deps = makeDeployDeps(id, ctx);
   const comps = await store.listComponents(id);
   for (const c of comps) {
