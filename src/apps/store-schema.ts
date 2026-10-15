@@ -12,7 +12,7 @@ import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
 import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
   APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, PG_IDENT_MAX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
 import { ensureAppSqlParser, checkExpressionSync } from "./app-sql.js";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
@@ -100,18 +100,52 @@ export interface AppTableReport {
   dropped_columns: Array<{ table: string; column: string; rows: number; archived_as: string | null }>; // drop_columns — 값이 있으면 보관
   undeclared_columns: Array<{ table: string; column: string }>;                             // 선언에 없지만 남겨 둔 칸(제약만 풀었다)
   constraints: Array<{ table: string; column?: string; kind: "not_null" | "default" | "check" | "foreign_key" | "primary_key" | "unique"; action: "added" | "removed" | "changed" }>;
+  // ── #4724 ──
+  deferred: Array<{ table: string; change: string }>;                                       // 지켜야 할 칸이라 미룬 변경(공개할 때 · 공유 표는 하지 않음)
 }
 export const emptyTableReport = (): AppTableReport => ({
   created: [], added_columns: [], type_mismatches: [], added_indexes: [], dropped_indexes: [],
-  renamed_columns: [], converted_columns: [], dropped_columns: [], undeclared_columns: [], constraints: [],
+  renamed_columns: [], converted_columns: [], dropped_columns: [], undeclared_columns: [], constraints: [], deferred: [],
 });
+
+/**
+ * #4724 지켜야 할 칸 — 다른 판(또는 다른 워크스페이스)의 코드가 지금 쓰고 있어, 깨는 변경을 하면 안 되는 칸.
+ *  · Map(표 → 칸 이름들): 초안이 걸린 공개 앱 — 공개 판이 선언한 칸. 초안에서만 새로 생긴 칸은 지키지 않는다(공개 판이 안 쓴다).
+ *  · "existing": 지금 있는 칸 전부 — 여러 워크스페이스가 나눠 쓰는 공유 표(기본 앱). 다른 워크스페이스의 코드가 무엇을 쓰는지 모른다.
+ *  지키는 칸엔 «풀기»(not_null·검사·외래키 빼기)와 늘리기만 하고, 지우기·이름·형 바꾸기·조이기(not_null·unique·외래키 더하기)·unique 빼기·
+ *  기본값 더하기·빼기·바꾸기(다른 판의 INSERT 가 이 칸을 빼고 넣으면 받는 값이다)는 미뤄 보고서 deferred 에 적는다 — 공개할 때
+ *  (publishCurrent 가 지키지 않고 다시 맞춘다) 반영. 지키는 칸이 있는 표(= 다른 판의 코드가 쓰는 표)에서는 더해서:
+ *   · 새 검사는 모두 미룬다 — 그 코드가 넣는 값(새 칸이면 빈 값 · 기본값)을 검사가 막을 수 있다
+ *   · 새 칸의 «값이 꼭 있어야 하는데 기본값이 없는» 상태(기본값 없는 not_null · not_null 칸의 기본값 빼기)는 미룬다 — 그 코드의 INSERT 는 새 칸을 빼고 넣는다
+ *   · 같은 값이 들어가는 기본값이 있는 새 칸의 unique · 외래키는 미룬다 — 그 코드의 INSERT 마다 같은 값이 들어간다
+ *   · 미룬 이름 바꾸기의 새 이름(아직 없는 칸) · 미룬 형 바꾸기의 칸에 걸린 규칙(인덱스 · 검사 · 외래키 · 기본값)도 미룬다
+ *  "existing"(공유 표)은 미룬 일이 영영 오지 않으므로 옛 검사 · 외래키를 걷지도 않는다 — 매니페스트로는 더하기만 된다(깨는 변경은 SQL 마이그레이션).
+ */
+export type ProtectColumns = ReadonlyMap<string, ReadonlySet<string>> | "existing";
+/** #4724 표 하나의 판정기 — 지킬 칸이 없으면 NO_GUARD(종전 그대로 다 맞춘다). ProtectColumns 주석의 규칙을 함수들이 이것으로 묻는다. */
+interface Guard {
+  /** 지키는 칸(다른 판 · 다른 워크스페이스의 코드가 쓴다). */
+  has(col: string): boolean;
+  /** 이 표에 지키는 칸이 하나라도 있다 = 다른 판의 코드가 이 표를 쓴다(그 INSERT 는 모르는 칸을 빼고 넣는다). */
+  any: boolean;
+  /** 공유 표("existing") — 미룬 일이 영영 오지 않는다. */
+  shared: boolean;
+  /** 지금은 선언대로 둘 수 없는 칸 — 이름 바꾸기를 미룬 새 이름(아직 없다) · 형 바꾸기를 미룬 칸(옛 형). */
+  pending(col: string): boolean;
+  pend(col: string): void;
+  defer(change: string): void;
+}
+const NO_GUARD: Guard = { has: () => false, any: false, shared: false, pending: () => false, pend: () => { /* 지킬 칸 없음 */ }, defer: () => { /* 지킬 칸 없음 */ } };
+/** 같은 값을 거듭 넣지 않는 기본값 — unique 칸에 걸려도 다른 판의 INSERT 끼리 겹치지 않는다(pg_get_expr 이 돌려주는 꼴). */
+const UNIQUE_SAFE_DEFAULTS: ReadonlySet<string> = new Set(["gen_random_uuid()"]);
 
 /** 물리 테이블 하나 생성 + RLS(멱등 — 존재하면 정책/GRANT 보강 + 칸·제약 동기화, #4224·#4483). 반환 = 물리 테이블명.
  *  #4483 — 표 하나의 일은 **한 트랜잭션**이다: 이름 바꾸기 → 지울 칸(값은 보관) → 늘어난 칸 → 값을 잃지 않는 타입 변환 →
  *   선언에 없는 칸의 제약 풀기 → NOT NULL · 기본값 · 검사 → RLS·권한 → 인덱스. 하나라도 실패하면 그 표는 설치 전 그대로다.
  *  외래키는 다른 표가 다 생긴 뒤 ensureAppTables 가 따로 맞춘다(syncForeignKeys).
  *  schema 기본값 `app` = 종전 동작(기본 앱·단일 테넌트). 워크스페이스가 설치한 앱은 호출부가 appSchemaFor 로 고른다. */
-export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport, opts: { tenantScopedIndexes?: boolean } = {}): Promise<string> {
+export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport,
+  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string> } = {}): Promise<string> {
   const physical = physicalTableName(appId, spec.table);
   const cols = columnDefs(spec.columns);
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
@@ -123,6 +157,7 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
   const checks = await desiredChecks(schema, physical, spec);
   // 이 표에서 일어난 일은 끝까지 성공했을 때만 보고서에 싣는다(실패해 되돌린 일을 «했다» 로 적지 않게).
   const local = emptyTableReport();
+  const guard = guardFor(spec.table, opts.protect, local, { shared: opts.shared, pending: opts.pending });
   await inTx(db, async (c) => {
     //  #4483 — 런타임(앱 SQL 실행기)과 같은 해석 조건으로 DDL 을 돈다: 검사기가 본 검사 식이 DB 에서도 같은 함수·연산자로 묶이고
     //  (소유자 연결의 기본 search_path 에 다른 스키마가 있어도), enum 값처럼 ' 만 두 번 써 넣은 글자가 그대로 읽힌다(격리 리뷰).
@@ -143,11 +178,14 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
     if (!existed) local.created.push(spec.table);
     else {
       if (!opts.tenantScopedIndexes) await narrowPrimaryKey(c, schema, physical, rel, spec, local);
-      await syncColumns(c, schema, physical, rel, spec, local);
+      await syncColumns(c, schema, physical, rel, spec, local, guard);
     }
-    await syncColumnRules(c, physical, rel, spec, checks, local);
-    await c.query(`ALTER TABLE ${rel} ENABLE ROW LEVEL SECURITY`);
-    await c.query(`ALTER TABLE ${rel} FORCE ROW LEVEL SECURITY`);
+    await syncColumnRules(c, schema, physical, rel, spec, checks, local, guard);
+    //  #4724 이미 켜져 있으면 다시 걸지 않는다 — ALTER TABLE 은 표를 통째로 잠근다(공개 때 표 전부를 한 트랜잭션으로 맞추면
+    //   바뀌는 것 없는 표까지 끝까지 잠겨 그 표를 읽는 사람이 기다린다 — 격리 리뷰 실측).
+    const sec = (await c.query("SELECT relrowsecurity AS rls, relforcerowsecurity AS forced FROM pg_class WHERE oid = to_regclass($1)", [rel])).rows[0] as { rls?: boolean; forced?: boolean } | undefined;
+    if (!sec?.rls) await c.query(`ALTER TABLE ${rel} ENABLE ROW LEVEL SECURITY`);
+    if (!sec?.forced) await c.query(`ALTER TABLE ${rel} FORCE ROW LEVEL SECURITY`);
     // CREATE POLICY 는 IF NOT EXISTS 미지원 → 기존 정책 조회 후 없는 것만.
     const have = new Set((await c.query(
       `SELECT policyname FROM pg_policies WHERE schemaname=$1 AND tablename=$2`, [schema, physical])).rows.map((r) => String(r.policyname)));
@@ -156,10 +194,22 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
     if (!have.has("owner_all"))
       await c.query(`CREATE POLICY ${qi("owner_all")} ON ${rel} FOR ALL TO ${qi(owner)} USING (true) WITH CHECK (true)`);
     if (appRole) await c.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${rel} TO ${qi(appRole)}`);
-    await syncDeclaredIndexes(c, schema, physical, rel, spec, !!opts.tenantScopedIndexes, local);
+    await syncDeclaredIndexes(c, schema, physical, rel, spec, !!opts.tenantScopedIndexes, local, guard);
   });
   mergeReport(rep, local);
   return physical;
+}
+
+/** 표 하나의 지킬 칸 → 판정기. 지킬 칸이 없으면(새 표 · 지키지 않는 설치) 종전 그대로 다 맞춘다.
+ *  pending 은 표 보장과 그 뒤 외래키 단계가 같은 것을 나눠 쓴다(이름 바꾸기를 미룬 새 이름 칸은 외래키 단계에도 아직 없다). */
+function guardFor(table: string, protect: ReadonlySet<string> | undefined, report: AppTableReport, opts: { shared?: boolean; pending?: Set<string> } = {}): Guard {
+  if (!protect || !protect.size) return NO_GUARD;
+  const pending = opts.pending ?? new Set<string>();
+  return {
+    has: (col) => protect.has(col), any: true, shared: !!opts.shared,
+    pending: (col) => pending.has(col), pend: (col) => { pending.add(col); },
+    defer: (change) => { report.deferred.push({ table, change }); },
+  };
 }
 
 /**
@@ -212,9 +262,9 @@ async function ensureTenantIdKey(c: Q, schema: string, physical: string): Promis
 }
 
 /** 표 하나의 보고를 큰 보고에 붙인다. */
-function mergeReport(into: AppTableReport, from: AppTableReport): void {
+export function mergeReport(into: AppTableReport, from: AppTableReport): void {
   for (const k of ["created", "added_columns", "type_mismatches", "added_indexes", "dropped_indexes", "renamed_columns", "converted_columns",
-    "dropped_columns", "undeclared_columns", "constraints"] as const) {
+    "dropped_columns", "undeclared_columns", "constraints", "deferred"] as const) {
     (into[k] as unknown[]).push(...(from[k] as unknown[]));
   }
 }
@@ -227,7 +277,7 @@ function mergeReport(into: AppTableReport, from: AppTableReport): void {
  *  #4483 — 칸의 unique: true 는 그 칸 하나짜리 unique 인덱스, references 칸은 그 칸 인덱스(외래키 조회·지우기 때 전체 훑기 방지)를
  *   선언한 것으로 친다. unique 인덱스는 이미 겹친 값이 있으면 만들어지지 않는다 — 몇 개가 겹치는지 세어 409 로 알린다.
  */
-async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, tenantScoped: boolean, report?: AppTableReport): Promise<void> {
+async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, tenantScoped: boolean, report?: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
   const want = new Map<string, StoreIndex>();
   const add = (ix: StoreIndex): void => {
     const cols = ix.columns.map((c) => (c === "id" || c === "created_at" ? c : assertIdent("column", c)));
@@ -239,17 +289,31 @@ async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel:
     if (c.unique) add({ columns: [c.name], unique: true });
     if (c.references && !(spec.indexes ?? []).some((ix) => ix.columns[0] === c.name)) add({ columns: [c.name], unique: false });
   }
-  const have = new Set((await db.query(
-    `SELECT i.relname AS name FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+  const haveRows = (await db.query(
+    `SELECT i.relname AS name, x.indisunique AS uniq,
+            array(SELECT a.attname::text FROM unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+                    JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum ORDER BY k.ord) AS cols
+       FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
       WHERE x.indrelid = to_regclass($1) AND starts_with(i.relname, $2)`,
-    [`${qi(schema)}.${qi(physical)}`, APP_INDEX_PREFIX])).rows.map((r) => String(r.name)));
-  for (const name of have) {
-    if (want.has(name)) continue;
-    await db.query(`DROP INDEX IF EXISTS ${qi(schema)}.${qi(name)}`);
-    report?.dropped_indexes.push({ table: spec.table, index: name });
+    [`${qi(schema)}.${qi(physical)}`, APP_INDEX_PREFIX])).rows as Array<{ name: string; uniq: boolean; cols: string[] }>;
+  const have = new Set(haveRows.map((r) => String(r.name)));
+  for (const h of haveRows) {
+    if (want.has(h.name)) continue;
+    //  #4724 지키는 칸의 unique 를 빼면 다른 판의 `ON CONFLICT (칸)` 이 깨진다 — 미룬다(일반 인덱스는 빼도 아무것도 안 깨진다).
+    const own = (h.cols ?? []).filter((c) => c !== "tenant_id");
+    if (h.uniq && own.some((c) => guard.has(c))) { guard.defer(`unique 인덱스 빼기 ${spec.table}(${own.join(",")})`); continue; }
+    await db.query(`DROP INDEX IF EXISTS ${qi(schema)}.${qi(h.name)}`);
+    report?.dropped_indexes.push({ table: spec.table, index: h.name });
   }
+  //  #4724 다른 판의 코드가 빼고 넣는 새 칸에 같은 값이 들어가는 기본값이 있으면 그 INSERT 마다 같은 값이 들어간다 — 그 칸의 unique 는 공개할 때.
+  const now = guard.any ? await columnsOf(db, rel) : null;
+  const sameValueDefault = (col: string): boolean => { const d = now?.get(col)?.default; return d != null && !UNIQUE_SAFE_DEFAULTS.has(d); };
   for (const [name, ix] of want) {
     if (have.has(name)) continue;
+    const label = `${ix.unique ? "unique " : ""}인덱스 더하기 ${spec.table}(${ix.columns.join(",")})`;
+    //  미룬 이름 바꾸기의 새 이름은 아직 없다 · 미룬 형 바꾸기의 칸은 옛 형이다 — 그 칸의 인덱스는 칸과 함께 공개할 때.
+    if (ix.columns.some((c) => guard.pending(c))) { guard.defer(label); continue; }
+    if (ix.unique && ix.columns.some((c) => guard.has(c) || (guard.any && sameValueDefault(c)))) { guard.defer(label); continue; }
     const cols = [...(tenantScoped ? ["tenant_id"] : []), ...ix.columns].map(qi).join(", ");
     if (ix.unique) {
       const dup = Number((await db.query(
@@ -320,12 +384,14 @@ function columnArchiveName(physical: string, column: string, at: Date): string {
  *   · 표에만 있고 선언에도 지울 목록에도 없는 칸 → 그대로 둔다(데이터 보존) — 대신 NOT NULL·기본값을 푼다(선언을 따라 쓰는
  *     INSERT 가 그 칸 때문에 깨지지 않게). 보고서 undeclared_columns 로 알린다 — 지우려면 drop_columns 에 적는다.
  */
-async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, now: Date = new Date()): Promise<void> {
+async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, now: Date = new Date()): Promise<void> {
   let have = await columnsOf(c, rel);
   // 이름 바꾸기
   for (const col of spec.columns) {
     const from = col.renamed_from;
     if (!from || have.has(col.name) || !have.has(from)) continue;
+    //  #4724 미룬 이름 바꾸기의 새 이름은 «대기 칸» — 지금 새로 만들면 공개 때 이름 바꾸기가 «새 이름이 이미 있다» 로 건너뛰어 값이 옛 칸에 남는다.
+    if (guard.has(from)) { guard.defer(`이름 바꾸기 ${spec.table}.${from} → ${col.name}`); guard.pend(col.name); continue; }
     await c.query(`ALTER TABLE ${rel} RENAME COLUMN ${qi(from)} TO ${qi(col.name)}`);
     report.renamed_columns.push({ table: spec.table, from, to: col.name });
   }
@@ -334,6 +400,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
   const declared = new Set(spec.columns.map((x) => x.name));
   for (const d of spec.drop_columns ?? []) {
     if (!have.has(d) || SYSTEM_COLUMNS.has(d) || declared.has(d)) continue;
+    if (guard.has(d)) { guard.defer(`칸 지우기 ${spec.table}.${d}`); continue; }
     const rows = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE ${qi(d)} IS NOT NULL`)).rows[0]?.n ?? 0);
     let archivedAs: string | null = null;
     if (rows > 0) {
@@ -349,7 +416,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
   have = await columnsOf(c, rel);
   // 늘어난 칸 — 기본값·NOT NULL 을 함께 걸어 있던 행이 그 값을 받는다(NOT NULL 은 기본값이 있을 때만 여기서)
   for (const col of spec.columns) {
-    if (have.has(col.name)) continue;
+    if (have.has(col.name) || guard.pending(col.name)) continue;
     const ty = parseColumnType(col.type);
     const def = await defaultSql(c, col);
     await c.query(`ALTER TABLE ${rel} ADD COLUMN IF NOT EXISTS ${qi(col.name)} ${ty.sql}${def ? ` DEFAULT ${def}` : ""}${def && col.not_null ? " NOT NULL" : ""}`);
@@ -361,6 +428,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
     const ty = parseColumnType(col.type);
     const cur = have.get(col.name);
     if (!cur || cur.type === ty.canonical) continue;
+    if (guard.has(col.name)) { guard.defer(`형 바꾸기 ${spec.table}.${col.name} (${cur.type} → ${ty.canonical})`); guard.pend(col.name); continue; }
     const lossy = await lossyRows(c, rel, col.name, cur.type, ty.sql);
     if (lossy !== 0) {
       report.type_mismatches.push({
@@ -385,7 +453,8 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
   for (const [name, st] of have) {
     if (SYSTEM_COLUMNS.has(name) || declared.has(name)) continue;
     if (st.notNull) await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(name)} DROP NOT NULL`);
-    if (st.default !== null) await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(name)} DROP DEFAULT`);
+    //  #4724 지키는 칸의 기본값은 남긴다 — 다른 판의 INSERT 가 그 칸을 빼고 쓰며 기본값에 기댄다.
+    if (st.default !== null && !guard.has(name)) await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(name)} DROP DEFAULT`);
     report.undeclared_columns.push({ table: spec.table, column: name });
   }
 }
@@ -433,7 +502,7 @@ async function desiredChecks(schema: string, physical: string, spec: AppTableSpe
 }
 
 /** NOT NULL · 기본값 · 검사(라이블리가 만든 lvck_ 만)를 선언에 맞춘다. 있던 행이 새 규칙에 어긋나면 몇 행인지 세어 409. */
-async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTableSpec, checks: Map<string, { expr: string; column?: string }>, report: AppTableReport): Promise<void> {
+async function syncColumnRules(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, checks: Map<string, { expr: string; column?: string }>, report: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
   const t = spec.table;
   // 검사 — 빠진 것부터 지운다(뒤의 기본값·NOT NULL 이 옛 검사에 걸리지 않게)
   const haveChecks = new Set((await c.query(
@@ -441,6 +510,8 @@ async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTab
     [rel, APP_CHECK_PREFIX])).rows.map((r) => String(r.conname)));
   for (const name of haveChecks) {
     if (checks.has(name)) continue;
+    //  #4724 공유 표는 옛 검사를 걷지 않는다 — 새 검사는 아래에서 미뤄지고 영영 오지 않으므로, 걷으면 검사 없는 표가 된다.
+    if (guard.shared) continue;
     await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(name)}`);
     report.constraints.push({ table: t, kind: "check", action: "removed" });
   }
@@ -448,18 +519,27 @@ async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTab
   for (const col of spec.columns) {
     const cur = have.get(col.name);
     if (!cur) continue;
-    // 기본값
+    if (guard.has(col.name)) { await guardedColumnRules(c, schema, rel, t, col, cur, report, guard); continue; }
+    //  #4724 공개 판이 쓰는 표(guard.any)의 새 칸 — 공개 판의 코드는 이 칸을 몰라 빼고 넣는다. 그 INSERT 가 깨지지 않게
+    //   «값이 꼭 있어야 하는데 기본값이 없는» 상태로 만드는 일(기본값 없는 not_null 더하기 · not_null 칸의 기본값 빼기)은 공개할 때로 미룬다.
+    const omitted = guard.any;
+    // 기본값 — 같으면 걸지 않는다(sameDefault — 진짜 표는 잠그지 않고 견준다)
     const def = await defaultSql(c, col);
     if (def !== null) {
-      await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} SET DEFAULT ${def}`);
-      const after = (await columnsOf(c, rel)).get(col.name)?.default ?? null;
-      if (after !== cur.default) report.constraints.push({ table: t, column: col.name, kind: "default", action: cur.default === null ? "added" : "changed" });
+      if (!(await sameDefault(c, schema, cur.type, def, cur.default))) {
+        await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} SET DEFAULT ${def}`);
+        report.constraints.push({ table: t, column: col.name, kind: "default", action: cur.default === null ? "added" : "changed" });
+      }
+    } else if (cur.default !== null && omitted && (cur.notNull || col.not_null)) {
+      guard.defer(`기본값 빼기 ${t}.${col.name}`);
     } else if (cur.default !== null) {
       await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} DROP DEFAULT`);
       report.constraints.push({ table: t, column: col.name, kind: "default", action: "removed" });
     }
     // NOT NULL
-    if (col.not_null && !cur.notNull) {
+    if (col.not_null && !cur.notNull && omitted && def === null && cur.default === null) {
+      guard.defer(`not_null 더하기 ${t}.${col.name}`);
+    } else if (col.not_null && !cur.notNull) {
       const nulls = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE ${qi(col.name)} IS NULL`)).rows[0]?.n ?? 0);
       if (nulls > 0) {
         throw new HttpError(409, `'${t}.${col.name}' 에 값이 없는(NULL) 행이 ${nulls}개 있어 not_null 을 걸 수 없습니다 — 그 행을 채우거나(UPDATE ${t} SET ${col.name} = … WHERE ${col.name} IS NULL) default 를 함께 선언하세요`);
@@ -475,6 +555,9 @@ async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTab
   have = await columnsOf(c, rel);
   for (const [name, ck] of checks) {
     if (haveChecks.has(name)) continue;
+    //  #4724 다른 판의 코드가 쓰는 표엔 새 검사를 걸지 않는다(공개할 때) — 그 코드가 넣는 값(새 칸이면 빈 값 · 기본값)을 검사가 막을 수 있고,
+    //   미룬 칸(이름 바꾸기의 새 이름 · 형 바꾸기를 미룬 칸)을 쓰는 식은 지금 표에서 돌지도 않는다.
+    if (guard.any) { guard.defer(`검사 더하기 ${t}${ck.column ? `.${ck.column}` : ""}: ${ck.expr}`); continue; }
     let bad: number;
     try { bad = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE NOT (${ck.expr}\n)`)).rows[0]?.n ?? 0); }
     catch (e) {
@@ -494,12 +577,54 @@ async function syncColumnRules(c: Q, physical: string, rel: string, spec: AppTab
 }
 
 /**
+ * #4724 지키는 칸의 기본값·NOT NULL — 풀기(not_null 빼기)만 한다. 기본값은 더하기·바꾸기·빼기 모두 미룬다(다른 판의 INSERT 가 이 칸을
+ *  빼고 넣으면 받는 값이라 그 코드가 남기는 데이터가 바뀐다). 기본값이 «바뀌는지» 는 DB 가 정규화한 식으로 견줘야 해서 걸어 보고 되돌린다.
+ *  형 바꾸기를 미룬 칸은 새 형의 기본값을 옛 형 칸에 걸 수도 견줄 수도 없다 — 형과 함께 공개할 때 맞춘다.
+ */
+async function guardedColumnRules(c: Q, schema: string, rel: string, t: string, col: StoreColumn, cur: ColumnState, report: AppTableReport, guard: Guard): Promise<void> {
+  const def = await defaultSql(c, col);                       // 미룬 칸이라도 선언한 기본값이 그 형에 맞는지는 지금 본다(400)
+  if (guard.pending(col.name)) {
+    if (def !== null || cur.default !== null) guard.defer(`기본값 맞추기 ${t}.${col.name}(형 바꾸기와 함께)`);
+  } else if (def !== null && cur.default === null) {
+    guard.defer(`기본값 더하기 ${t}.${col.name}`);
+  } else if (def === null && cur.default !== null) {
+    guard.defer(`기본값 빼기 ${t}.${col.name}`);
+  } else if (def !== null && cur.default !== null && !(await sameDefault(c, schema, cur.type, def, cur.default))) {
+    guard.defer(`기본값 바꾸기 ${t}.${col.name}`);
+  }
+  if (col.not_null && !cur.notNull) guard.defer(`not_null 더하기 ${t}.${col.name}`);
+  else if (!col.not_null && cur.notNull) {
+    await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} DROP NOT NULL`);
+    report.constraints.push({ table: t, column: col.name, kind: "not_null", action: "removed" });
+  }
+}
+
+/**
+ * 이 기본값 식(def)을 지금 칸(형 type · 기본값 cur)에 걸면 지금과 같은가 — DB 가 정규화한 꼴로 견준다('5'::integer 는 5 로 저장된다).
+ *  #4724 진짜 표에 걸어 보면(되돌려도) 거는 순간 표를 통째로 잠그려고 그 표를 읽는 사람 뒤에 줄을 선다 — 같은 스키마에 칸 하나짜리
+ *  시험 표를 만들어 읽고 되돌린다(진짜 표는 건드리지 않는다). 글자가 같으면 시험 표도 만들지 않는다.
+ */
+async function sameDefault(c: Q, schema: string, type: string, def: string, cur: string | null): Promise<boolean> {
+  if (cur === null) return false;
+  if (def === cur) return true;
+  const probe = `lv_defprobe_${randomBytes(6).toString("hex")}`;
+  await c.query("SAVEPOINT lv_defprobe");
+  try {
+    await c.query(`CREATE TABLE ${qi(schema)}.${qi(probe)} (v ${type} DEFAULT ${def})`);
+    const r = await c.query("SELECT pg_get_expr(d.adbin, d.adrelid) AS e FROM pg_attrdef d WHERE d.adrelid = to_regclass($1)", [`${qi(schema)}.${qi(probe)}`]);
+    return (r.rows[0]?.e ?? null) === cur;
+  } finally {
+    await c.query("ROLLBACK TO SAVEPOINT lv_defprobe");
+  }
+}
+
+/**
  * 외래키(#4483) — 같은 앱 표의 id 를 가리킨다. 표가 워크스페이스·테넌트를 가로지르지 않게 **(tenant_id, 칸) → (tenant_id, id)**
  *  복합 키로 건다(외래키 확인은 행 격리 정책을 건너뛰므로 tenant_id 를 키에 넣어야 다른 테넌트 행을 가리킬 수 없다).
  *  on_delete 'set null' 은 그 칸만 NULL 로(PG 15+ `SET NULL (칸)` — tenant_id 는 NOT NULL 이라 통째로 NULL 이 될 수 없다).
  *  라이블리가 만든 것(lvfk_)만 맞추고 지운다. 이미 가리킬 곳이 없는 행이 있으면 몇 행인지 세어 409.
  */
-async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTableSpec, report: AppTableReport): Promise<void> {
+async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
   const physical = physicalTableName(appId, spec.table);
   const rel = `${qi(schema)}.${qi(physical)}`;
   const want = new Map<string, { col: string; target: string; onDelete: string }>();
@@ -514,14 +639,21 @@ async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTab
     [rel, APP_FK_PREFIX])).rows.map((r) => String(r.conname)));
   for (const name of have) {
     if (want.has(name)) continue;
+    //  #4724 공유 표는 옛 외래키를 걷지 않는다 — 새 외래키는 미뤄지고 영영 오지 않으므로.
+    if (guard.shared) continue;
     await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(name)}`);
     report.constraints.push({ table: spec.table, kind: "foreign_key", action: "removed" });
   }
   if ([...want.values()].some((w) => w.onDelete === "set null") && (await serverVersionNum(c)) < 150000) {
     throw new HttpError(400, "이 DB(Postgres 15 미만)는 on_delete 'set null' 을 지원하지 않습니다 — cascade · restrict · no action 을 쓰세요");
   }
+  //  #4724 다른 판의 코드가 빼고 넣는 새 칸에 기본값이 있으면 그 값이 가리킬 행이 없을 수 있다 — 그 칸의 외래키는 공개할 때.
+  const cols = guard.any ? await columnsOf(c, rel) : null;
   for (const [name, w] of want) {
     if (have.has(name)) continue;
+    //  #4724 지키는 칸에 외래키를 새로 걸면 다른 판의 쓰기(가리킬 행이 없는 값)가 깨질 수 있다 — 미룬다(떼기는 위에서 그대로 한다).
+    //   미룬 칸(이름 바꾸기의 새 이름 — 아직 없다 · 형 바꾸기를 미룬 칸)의 외래키도 칸과 함께 공개할 때.
+    if (guard.has(w.col) || guard.pending(w.col) || (cols?.get(w.col)?.default ?? null) !== null) { guard.defer(`외래키 더하기 ${spec.table}.${w.col}`); continue; }
     const trel = `${qi(schema)}.${qi(w.target)}`;
     if (await ensureTenantIdKey(c, schema, w.target)) {
       report.constraints.push({ table: spec.columns.find((x) => x.name === w.col)?.references?.table ?? w.target, kind: "unique", action: "added" });
@@ -627,6 +759,24 @@ async function tableExists(db: Q, schema: string, physical: string): Promise<boo
   return r.rows[0]?.r != null;
 }
 
+/** 매니페스트(저장된 것 포함)의 data.tables → 표 명세. 모양이 어긋나도 던지지 않는다(#4724 — 공개하기 · 가게 · 설치가 같이 쓴다). */
+export function tableSpecsOf(manifest: unknown): AppTableSpec[] {
+  const t = (manifest as { data?: { tables?: unknown } } | null)?.data?.tables;
+  if (!Array.isArray(t)) return [];
+  return t.filter((x): x is Record<string, unknown> => !!x && typeof x === "object").map((x) => ({
+    table: String(x.name ?? ""),
+    columns: (Array.isArray(x.columns) ? x.columns : []) as StoreColumn[],
+    indexes: (Array.isArray(x.indexes) ? x.indexes : []) as StoreIndex[],
+    checks: Array.isArray(x.checks) ? (x.checks as unknown[]).map(String) : [],
+    drop_columns: Array.isArray(x.drop_columns) ? (x.drop_columns as unknown[]).map(String) : [],
+  })).filter((x) => x.table);
+}
+
+/** 공개 판(또는 다른 판)이 선언한 칸 — 표 → 칸 이름들(#4724 지켜야 할 칸). 시스템 칸(id · created_at · tenant_id)도 넣는다. */
+export function declaredColumnsOf(manifest: unknown): Map<string, Set<string>> {
+  return new Map(tableSpecsOf(manifest).map((t) => [t.table, new Set(["tenant_id", "id", "created_at", ...t.columns.map((c) => String(c.name))])]));
+}
+
 export interface EnsureAppTablesOpts {
   /** 테이블이 사는 스키마(기본 `app`). 호출부가 appSchemaFor(builtin) 로 고른다. */
   schema?: string;
@@ -640,6 +790,13 @@ export interface EnsureAppTablesOpts {
   /** #4226 자유 SQL 역할도 보장한다(워크스페이스가 설치한 앱). 실패해도 던지지 않고 report.sql_role 에 적는다 —
    *  역할을 못 만드는 DB(CREATEROLE 없음)에서도 설치와 store_* 는 그대로 돈다. store_sql 만 503 으로 막힌다. */
   sqlRole?: boolean;
+  /** #4724 지켜야 할 칸(ProtectColumns 주석). 공유 표(tenantScopedIndexes)는 무엇을 주든 "existing" — 지금 있는 칸 전부를 지킨다. */
+  protect?: ProtectColumns;
+  /** #4724 표 전부를 한 트랜잭션으로 — 하나라도 실패하면 어느 표도 바뀌지 않는다. 공개할 때 미뤄 둔 변경을 적용하는 쪽이 쓴다
+   *  (표마다 따로 커밋하면 앞 표만 바뀐 채 공개가 멈춰, 아직 공개 판인 옛 코드가 그 표에서 깨진다). 표를 새로 만드는 설치는 쓰지 않는다. */
+  atomic?: boolean;
+  /** #4724 걸어 보기만 하고 늘 되돌린다(atomic 과 같은 한 트랜잭션) — report 에 «했을 일» 이 남는다. 기본 앱 저장의 공유 표 판정이 쓴다. */
+  dryRun?: boolean;
 }
 
 /**
@@ -659,31 +816,52 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
     const st = (err as { status?: number })?.status;
     clientStatus = typeof st === "number" && st >= 400 && st < 500 && (clientStatus === null || clientStatus === st) ? st : -1;
   };
-  const out = await withOwnerConn(async (db) => {
-    const done: string[] = [];
-    const ok = new Set<string>();
-    for (const t of tables) {
-      try { done.push(await createAppTable(db, appId, t, schema, opts.report, { tenantScopedIndexes: opts.tenantScopedIndexes })); ok.add(t.table); }
-      catch (err) { fail(t.table, err); }
-    }
-    // 외래키 — 가리키는 표까지 다 생긴 뒤에. 가리키는 표가 실패했으면 그 표의 외래키도 건너뛴다(실패로 남는다).
-    for (const t of tables) {
-      if (!ok.has(t.table) || !t.columns.some((c) => c.references)) continue;
-      const missing = t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table);
-      if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${[...new Set(missing)].join(", ")})를 만들지 못했습니다`)); continue; }
-      const local = emptyTableReport();
+  //  공유 표는 늘 "existing" — 초안이 걸린 기본 앱의 지연 복구가 공개 판의 칸(Map)을 줘도 다른 워크스페이스의 칸까지 지킨다(격리 리뷰).
+  const protect: ProtectColumns | undefined = opts.tenantScopedIndexes ? "existing" : opts.protect;
+  const shared = protect === "existing";
+  const oneTx = !!(opts.atomic || opts.dryRun);
+  //  한 트랜잭션이면 끝까지 성공했을 때만 보고서에 싣는다(되돌린 일을 «했다» 로 적지 않게) — 걸어 보기(dryRun)는 «했을 일» 을 싣는다.
+  const report = oneTx && opts.report ? emptyTableReport() : opts.report;
+  const out = await withOwnerConn(async (db0) => {
+    const body = async (db: Q): Promise<string[]> => {
+      const done: string[] = [];
+      const ok = new Set<string>();
+      //  표마다 지킬 칸 — "existing" 이면 손대기 **전에** 있던 칸(이번에 늘린 칸은 아무 코드도 아직 안 쓴다 · 그 칸의 외래키는 건다).
+      const guarded = new Map<string, ReadonlySet<string>>();
+      for (const t of tables) {
+        const set = shared ? new Set((await columnsOf(db, `${qi(schema)}.${qi(physicalTableName(appId, t.table))}`)).keys()) : protect?.get(t.table);
+        if (set?.size) guarded.set(t.table, set);
+      }
+      //  표마다 «대기 칸»(미룬 이름 바꾸기의 새 이름 · 미룬 형 바꾸기의 칸) — 표 보장과 그 뒤 외래키 단계가 나눠 쓴다.
+      const pendingOf = new Map<string, Set<string>>(tables.map((t) => [t.table, new Set<string>()]));
+      for (const t of tables) {
+        try {
+          done.push(await createAppTable(db, appId, t, schema, report, { tenantScopedIndexes: opts.tenantScopedIndexes, protect: guarded.get(t.table), shared, pending: pendingOf.get(t.table) }));
+          ok.add(t.table);
+        } catch (err) { fail(t.table, err); }
+      }
+      // 외래키 — 가리키는 표까지 다 생긴 뒤에. 가리키는 표가 실패했으면 그 표의 외래키도 건너뛴다(실패로 남는다).
+      for (const t of tables) {
+        if (!ok.has(t.table) || !t.columns.some((c) => c.references)) continue;
+        const missing = t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table);
+        if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${[...new Set(missing)].join(", ")})를 만들지 못했습니다`)); continue; }
+        const local = emptyTableReport();
+        try {
+          await inTx(db, async (c) => {
+            await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);
+            await c.query("SET LOCAL statement_timeout = '5min'");
+            await syncForeignKeys(c, appId, schema, t, local, guardFor(t.table, guarded.get(t.table), local, { shared, pending: pendingOf.get(t.table) }));
+          });
+          if (report) { report.constraints.push(...local.constraints); report.deferred.push(...local.deferred); }
+        } catch (err) { fail(t.table, err); }
+      }
+      return done;
+    };
+    const done = oneTx ? await inOneTx(db0, body, () => !opts.dryRun && !failures.length) : await body(db0);
+    if (oneTx && opts.report && report && (opts.dryRun || !failures.length)) mergeReport(opts.report, report);
+    if (opts.sqlRole && !opts.dryRun && !failures.length) {
       try {
-        await inTx(db, async (c) => {
-          await c.query(`SET LOCAL lock_timeout = '${ddlLockMs()}ms'`);
-          await c.query("SET LOCAL statement_timeout = '5min'");
-          await syncForeignKeys(c, appId, schema, t, local);
-        });
-        if (opts.report) opts.report.constraints.push(...local.constraints);
-      } catch (err) { fail(t.table, err); }
-    }
-    if (opts.sqlRole && !failures.length) {
-      try {
-        await ensureAppSqlRoleOn(db, schema, appId, tables.map((t) => t.table));
+        await ensureAppSqlRoleOn(db0, schema, appId, tables.map((t) => t.table));
         if (opts.report) opts.report.sql_role = { ok: true };
       } catch (err) {
         logger.warn({ err, appId, schema }, "앱 SQL 역할 준비 실패(비치명 — store_sql 만 막힌다)");
@@ -694,7 +872,8 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   });
   if (opts.strict && failures.length) {
     const st = clientStatus !== null && clientStatus > 0 ? clientStatus : 503;
-    throw new HttpError(st, `앱 '${appId}' 의 데이터 테이블을 ${st === 503 ? "만들지 못했습니다" : "새 선언으로 바꾸지 못했습니다(그 표는 바뀌지 않았습니다)"} — ${failures.join(" / ")}`);
+    const kept = oneTx ? "어느 표도 바뀌지 않았습니다" : "그 표는 바뀌지 않았습니다";
+    throw new HttpError(st, `앱 '${appId}' 의 데이터 테이블을 ${st === 503 ? "만들지 못했습니다" : `새 선언으로 바꾸지 못했습니다(${kept})`} — ${failures.join(" / ")}`);
   }
   return out;
 }
@@ -762,12 +941,46 @@ async function renameCompanions(c: Q, schema: string, table: string, physical: s
   }
 }
 
+/** #4724 지금 바깥 한 트랜잭션을 돌고 있는 연결 — 그 위의 inTx 는 BEGIN 대신 저장점을 쓴다. */
+const outerTx = new WeakSet<object>();
+
 /** 소유자 연결 위에서 트랜잭션 하나(단일 모드의 itemsPool 이면 체크아웃해서). */
 export async function inTx<T>(db: Q, fn: (c: Q) => Promise<T>): Promise<T> {
+  //  #4724 바깥 한 트랜잭션(inOneTx) 안이면 저장점으로 — 이 표의 일만 되돌리고, 커밋은 바깥이 한다.
+  if (outerTx.has(db)) {
+    await db.query("SAVEPOINT lv_tx");
+    try { const out = await fn(db); await db.query("RELEASE SAVEPOINT lv_tx"); return out; }
+    catch (e) { await db.query("ROLLBACK TO SAVEPOINT lv_tx").catch(() => { /* noop */ }); throw e; }
+  }
   if (db === itemsPool) return withTx((c) => fn(c));
   await db.query("BEGIN");
   try { const out = await fn(db); await db.query("COMMIT"); return out; }
   catch (e) { await db.query("ROLLBACK").catch(() => { /* noop */ }); throw e; }
+}
+
+/**
+ * #4724 fn 의 일을 한 트랜잭션으로 — fn 안의 inTx 는 저장점이 된다. 끝에 commit() 이 참이면 커밋, 아니면 전부 되돌린다
+ *  (fn 이 표마다 실패를 모아 계속 가도, 하나라도 실패했으면 어느 표도 바뀌지 않게). 공용 풀이면 연결 하나를 빌려 쓴다.
+ */
+async function inOneTx<T>(db: Q, fn: (c: Q) => Promise<T>, commit: () => boolean): Promise<T> {
+  //  풀이면(공용 풀이든 아니든) 연결 하나를 빌린다 — 풀에 바로 BEGIN 을 보내면 BEGIN 과 뒤 문장이 다른 연결로 갈 수 있다.
+  const client: pg.PoolClient | pg.Client = db instanceof pg.Pool ? await db.connect() : db;
+  try {
+    await client.query("BEGIN");
+    outerTx.add(client);
+    try {
+      const out = await fn(client);
+      await client.query(commit() ? "COMMIT" : "ROLLBACK");
+      return out;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => { /* noop */ });
+      throw e;
+    } finally {
+      outerTx.delete(client);
+    }
+  } finally {
+    if (client !== db) (client as pg.PoolClient).release();
+  }
 }
 
 /**

@@ -17,8 +17,9 @@
 //  B19 초안이 걸린 공개 앱에 관리자 설치 — 표식 · 포인터 걷고 옛 공개 판 전용 표 보관 · 밀려난 초안 주인 알림(격리 리뷰 B2)
 //  B20 남의 공개 전 판은 판 이력 · 되돌리기에서 없는 판 · 못 박은 판의 저장한 사람(격리 리뷰 NB-6 · NB-8)
 //  B21 관리자 설치가 남의 나만 보는 앱을 못 덮음 · 초안이 걸린 공개 앱은 「나만」 불가(격리 리뷰 2-1 · 2-3)
-//  B22 #4483 공개 판을 깨는 표 변경(칸 지우기 · 형 바꾸기)은 초안으로만 저장하면 409 · 아무것도 안 바뀐다 · publish:true 면 된다 ·
-//      나만 보는 앱(공개 판 없음)엔 가드가 없다
+//  B22 #4724 초안 = 개인 대상 프로덕션 — 공개 판이 쓰는 칸을 깨는 표 변경(칸 지우기 · 조이기 …)은 초안 저장 때 미루고 공개할 때 적용 ·
+//      새 칸은 바로 · 공개 때 데이터가 어긋나면 409 · 어느 표도 안 바뀜(한 트랜잭션) · 되돌리기도 같은 규칙 · 나만 보는 앱은 바로 ·
+//      publish:true 의 이름 바꾸기 + unique(G8) · 공개 단계 409 면 «초안으로 저장했다» 안내(G9)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -334,34 +335,136 @@ try {
     overInstall === 409 && bobOwn.visibility === "me" && (await ui("bob-own", bob)).includes("bob 의 앱") && meWhileDraft === 409
       && r21.draft_by === null && meAfter.changed === true && (await row("b19-app")).visibility === "me",
     JSON.stringify({ overInstall, bobOwnVis: bobOwn.visibility, meWhileDraft, pubNo21, draftAfterRevert: r21.draft_by, meAfter }));
-  // ── B22 공개 판을 깨는 초안 저장 ──
+  // ── B22 #4724 초안 = 개인 대상 프로덕션 — 공개 판이 쓰는 칸을 깨는 표 변경은 공개할 때 ──
   {
     const GID = "guard-app";
-    const gfiles = (cols, extra = {}) => [{ path: "lively-app.json", content: JSON.stringify({ id: GID, title: "가드", version: "0.1.0",
+    const man = (tables) => JSON.stringify({ id: GID, title: "가드", version: "0.1.0",
       permissions: { scopes: [], tools: ["store_insert", "store_query"] },
-      data: { tables: [{ name: "items", columns: cols, ...extra }] }, ui: { pages: [{ key: "main", title: "가드", entry: "ui/index.html" }] } }) },
-      { path: "ui/index.html", content: "<p>g</p>" }];
-    const base = [{ name: "title", type: "text" }, { name: "code", type: "text" }];
-    const colsNow = async () => (await q(`SELECT attname FROM pg_attribute WHERE attrelid = to_regclass('app.guard_app__items') AND attnum > 0 AND NOT attisdropped ORDER BY attnum`)).map((r) => r.attname).join(",");
-    await call("app_save", { files: gfiles(base) }, alice);
-    const g3 = await status(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }) }, alice));
-    const afterG3 = await colsNow();
-    chk("B22 G3 나만 보는 앱(공개 판 없음) — 칸 지우기 저장이 된다(가드 없음)", g3 === 200 && afterG3 === "tenant_id,id,title,created_at", JSON.stringify({ g3, afterG3 }));
-    await call("app_save", { files: gfiles(base) }, alice);
+      data: { tables }, ui: { pages: [{ key: "main", title: "가드", entry: "ui/index.html" }] } });
+    const gfiles = (tables, html) => [{ path: "lively-app.json", content: man(tables) }, { path: "ui/index.html", content: html }];
+    const colsOf = async (t) => (await q(`SELECT attname FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum`, [`app.guard_app__${t}`])).map((r) => r.attname).join(",");
+    const notNull = async (t, c) => (await q(`SELECT attnotnull AS nn FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname = $2`, [`app.guard_app__${t}`, c]))[0]?.nn === true;
+    const archivedOf = async (t) => (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema LIKE '%archive%' AND table_name LIKE $1`, [`guard_app__${t}%`]))[0].n;
+    const changesOf = (list) => (list ?? []).map((d) => d.change).sort().join(" | ");
+    const P = [{ name: "logs", columns: [{ name: "msg", type: "text" }, { name: "lvl", type: "text" }] },
+      { name: "items", columns: [{ name: "title", type: "text" }, { name: "code", type: "text" }] }];
+    //  초안 D1 — logs.lvl 지우기 · items.code 지우기 · items.title 조이기(not_null) · items.note 새 칸. logs 를 먼저 선언한다(공개 때 앞 표가 먼저 돈다).
+    const D1 = [{ name: "logs", columns: [{ name: "msg", type: "text" }], drop_columns: ["lvl"] },
+      { name: "items", columns: [{ name: "title", type: "text", not_null: true }, { name: "note", type: "text" }], drop_columns: ["code"] }];
+
+    // G0 나만 보는 앱(공개 판 없음) — 깨는 변경도 저장 때 바로(지킬 판이 없다)
+    await call("app_save", { files: gfiles(P, "<p>g0</p>") }, alice);
+    const g0 = await call("app_save", { files: gfiles([P[0], { name: "items", columns: [P[1].columns[0]], drop_columns: ["code"] }], "<p>g0b</p>") }, alice);
+    const g0cols = await colsOf("items");
+    chk("B22 G0 나만 보는 앱 — 칸 지우기가 저장 때 바로 된다 · 미룬 것 없음", g0.state === "me" && g0cols === "tenant_id,id,title,created_at" && !(g0.tables?.deferred ?? []).length,
+      JSON.stringify({ state: g0.state, g0cols, deferred: g0.tables?.deferred }));
+
+    // 공개 판 P(1) — bob 이 공개 판으로 쓴다
+    await call("app_save", { files: gfiles(P, "<p>pub-P</p>") }, alice);
     await call("app_visibility_set", { app_id: GID, visibility: "all" }, alice);
-    const before = await row(GID), colsBefore = await colsNow();
-    const g1 = await errOf(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }) }, alice));
-    const g1b = await errOf(call("app_save", { files: gfiles([base[0], { name: "code", type: "bigint" }]) }, alice));
-    const after = await row(GID), colsAfter = await colsNow();
-    chk("B22 G1 공개 앱에 칸 지우기 · 형 바꾸기를 초안으로만 저장 — 409(무엇이 깨지는지 · publish:true 안내) · 초안 표식·판·표 그대로",
-      g1?.status === 409 && /칸 지우기 items\.code/.test(g1?.message ?? "") && /publish:true/.test(g1?.message ?? "")
-        && g1b?.status === 409 && /형 바꾸기 items\.code \(text → bigint\)/.test(g1b?.message ?? "")
-        && after.draft_by === before.draft_by && after.current_version_no === before.current_version_no && colsAfter === colsBefore && colsAfter.includes("code"),
-      JSON.stringify({ g1: [g1?.status, g1?.message], g1b: [g1b?.status, g1b?.message], before: [before.draft_by, before.current_version_no], after: [after.draft_by, after.current_version_no], colsAfter }));
-    const g2 = await status(call("app_save", { files: gfiles([base[0]], { drop_columns: ["code"] }), publish: true }, alice));
-    const pub = await row(GID), colsPub = await colsNow();
-    chk("B22 G2 같은 변경을 publish:true 로 — 된다 · 칸이 지워지고 초안 없이 공개 판이 된다", g2 === 200 && !colsPub.includes("code") && pub.draft_by === null && pub.visibility === "all",
-      JSON.stringify({ g2, colsPub, draft_by: pub.draft_by, visibility: pub.visibility }));
+    await call("me_app_grant", { app_id: GID }, bob);
+    await call("me_app_grant", { app_id: GID }, alice);
+    const appBob = { ...bob, appId: GID, scopes: [] }, appAlice = { ...alice, appId: GID, scopes: [] };
+    const asApp = (n, input, who) => call(n, input, who, { source: "app-ui" });
+    await asApp("store_insert", { table: "items", row: { title: "bob 1", code: "C1" } }, appBob);
+    await asApp("store_insert", { table: "logs", row: { msg: "m1", lvl: "info" } }, appBob);
+    const pubNo = (await row(GID)).published_version_no;
+
+    // G1 공개 앱에 깨는 변경을 초안으로 저장 — 저장된다(409 아님) · 깨는 변경은 미룬다 · 새 칸은 바로 · 공개 판 사용자는 옛 칸으로 그대로
+    const g1 = await call("app_save", { files: gfiles(D1, "<p>draft-D1</p>") }, alice);
+    const r1 = await row(GID);
+    const g1cols = { items: await colsOf("items"), logs: await colsOf("logs"), titleNN: await notNull("items", "title") };
+    const bobIns = await status(asApp("store_insert", { table: "items", row: { code: "C2" } }, appBob));   // 제목 없이(공개 판은 title 이 비어도 된다)
+    const bobRead = (await asApp("store_query", { table: "items" }, appBob)).rows ?? [];
+    const bobLog = await status(asApp("store_insert", { table: "logs", row: { msg: "m2", lvl: "warn" } }, appBob));
+    const aliceIns = await status(asApp("store_insert", { table: "items", row: { title: "alice 1", note: "N1" } }, appAlice));
+    const aliceRead = (await asApp("store_query", { table: "items" }, appAlice)).rows ?? [];
+    const wantDeferred = ["not_null 더하기 items.title", "칸 지우기 items.code", "칸 지우기 logs.lvl"].sort().join(" | ");
+    chk("B22 G1 공개 앱에 깨는 변경을 초안으로 저장 — 200 · 초안 · 미룬 변경 3개(응답 · 안내) · 새 칸 note 는 바로 · 옛 칸 · 조이기 그대로",
+      g1.state === "draft" && r1.draft_by === "pgt-alice" && r1.published_version_no === pubNo
+        && changesOf(g1.tables?.deferred) === wantDeferred && /공개할 때 반영할 표 변경 3개/.test(g1.hint ?? "") && /drop_columns/.test(g1.hint ?? "")
+        && g1cols.items === "tenant_id,id,title,created_at,code,note"   /* code 는 G0 에서 지웠다가 다시 더해 뒤에 선다 */ && g1cols.logs === "tenant_id,id,msg,lvl,created_at" && g1cols.titleNN === false,
+      JSON.stringify({ state: g1.state, deferred: g1.tables?.deferred, hint: g1.hint, g1cols }));
+    chk("B22 G1b 공개 판 사용자(bob)는 옛 코드 그대로 읽고 쓴다(code · lvl · 빈 title) · 초안 작성자(alice)는 새 칸 note 를 바로 쓴다 · 화면도 각자 판",
+      bobIns === 200 && bobLog === 200 && bobRead.some((x) => x.code === "C1") && bobRead.some((x) => x.code === "C2" && x.title == null)
+        && aliceIns === 200 && aliceRead.some((x) => x.note === "N1") && (await ui(GID, bob)).includes("pub-P") && (await ui(GID, alice)).includes("draft-D1"),
+      JSON.stringify({ bobIns, bobLog, bobRead, aliceIns, aliceRead }));
+
+    // G1c 공개 판 행을 못 읽는 순간(없는 판을 가리킴)에 표 보장이 돌아도(자유 SQL 의 역할 준비) 지금 있는 칸 전부를 지킨다 — 미룬 변경이 새지 않는다
+    await q(`UPDATE org_app SET published_version_no = 99999 WHERE id = $1`, [GID]);
+    const g1c = await status(asApp("store_sql", { sql: "SELECT count(*)::int AS n FROM items" }, appAlice));
+    const g1cCols = { items: await colsOf("items"), logs: await colsOf("logs"), titleNN: await notNull("items", "title") };
+    await q(`UPDATE org_app SET published_version_no = $2 WHERE id = $1`, [GID, pubNo]);
+    chk("B22 G1c 공개 판 행을 못 읽어도 표 보장은 있는 칸을 지킨다 — code · lvl 그대로 · title 안 조임",
+      g1c === 200 && g1cCols.items.includes("code") && g1cCols.logs.includes("lvl") && g1cCols.titleNN === false,
+      JSON.stringify({ g1c, g1cCols }));
+
+    // G3 공개할 때 데이터가 새 규칙에 어긋남(제목 빈 행) — 409(몇 행인지) · 공개 안 함 · 어느 표도 안 바뀜(앞 표 logs 의 칸 지우기까지 되돌림) · 초안 그대로
+    const g3 = await errOf(call("app_visibility_set", { app_id: GID, visibility: "all" }, alice));
+    const r3 = await row(GID);
+    const g3cols = { items: await colsOf("items"), logs: await colsOf("logs"), titleNN: await notNull("items", "title"), logsArchived: await archivedOf("logs") };
+    const bobAfter3 = await status(asApp("store_insert", { table: "logs", row: { msg: "m3", lvl: "debug" } }, appBob));
+    chk("B22 G3 공개 때 데이터가 어긋나면 409(행 수) · 공개 판 · 초안 표식 그대로 · logs.lvl 도 안 지워짐(한 트랜잭션) · 보관 표도 안 생김 · 공개 판 쓰기 계속",
+      g3?.status === 409 && /items\.title/.test(g3?.message ?? "") && /1개/.test(g3?.message ?? "") && /어느 표도 바뀌지 않았습니다/.test(g3?.message ?? "")
+        && r3.published_version_no === pubNo && r3.draft_by === "pgt-alice"
+        && g3cols.items.includes("code") && g3cols.logs.includes("lvl") && g3cols.titleNN === false && g3cols.logsArchived === 0
+        && bobAfter3 === 200 && (await ui(GID, bob)).includes("pub-P"),
+      JSON.stringify({ g3: [g3?.status, g3?.message], pub: [r3.published_version_no, pubNo], draft: r3.draft_by, g3cols, bobAfter3 }));
+
+    // G2 빈 제목을 채우고 다시 공개 — 미룬 변경이 적용된다 · 데이터는 남는다(지운 칸의 값은 보관) · 모두가 새 판
+    await q(`UPDATE app.guard_app__items SET title = '고침' WHERE title IS NULL`);
+    const g2 = await call("app_visibility_set", { app_id: GID, visibility: "all" }, alice);
+    const r2 = await row(GID);
+    const g2cols = { items: await colsOf("items"), logs: await colsOf("logs"), titleNN: await notNull("items", "title") };
+    const kept = (await q(`SELECT title, note FROM app.guard_app__items ORDER BY id`)).map((x) => x.title).join(",");
+    const archCode = (await q(`SELECT table_schema || '.' || table_name AS t FROM information_schema.tables WHERE table_schema LIKE '%archive%' AND table_name LIKE 'guard_app__items%'`))[0]?.t;
+    const archVals = archCode ? (await q(`SELECT value FROM ${archCode.split(".").map((x) => `"${x}"`).join(".")} ORDER BY id`)).map((x) => x.value).join(",") : null;
+    const bobNow = await status(asApp("store_insert", { table: "items", row: { title: "bob 3", note: "N2" } }, appBob));
+    const applied = g2.tables ?? {};
+    chk("B22 G2 공개하면 미룬 변경 적용 — code · lvl 지워짐 · title not_null · 행 그대로 · 지운 칸 값 보관(C1,C2) · 응답에 한 일 · 모두가 새 판 · bob 이 note 를 쓴다",
+      g2.changed === true && r2.draft_by === null && r2.published_version_no !== pubNo
+        && g2cols.items === "tenant_id,id,title,created_at,note" && g2cols.logs === "tenant_id,id,msg,created_at" && g2cols.titleNN === true
+        && kept === "bob 1,고침,alice 1" && archVals === "C1,C2"
+        && (applied.dropped_columns ?? []).map((d) => `${d.table}.${d.column}`).sort().join(",") === "items.code,logs.lvl"
+        && bobNow === 200 && (await ui(GID, bob)).includes("draft-D1"),
+      JSON.stringify({ changed: g2.changed, r2: [r2.draft_by, r2.published_version_no], g2cols, kept, archCode, archVals, applied: applied.dropped_columns, bobNow }));
+
+    // G6 되돌리기도 같은 규칙 — 공개 판(D1)이 쓰는 note 를 지우는 판 D2 로 되돌리면(공개 없이) 미룬다
+    const D2 = [D1[0], { name: "items", columns: [D1[1].columns[0]], drop_columns: ["code", "note"] }];
+    const s2 = await call("app_save", { files: gfiles(D2, "<p>draft-D2</p>") }, alice);
+    await call("app_save", { files: gfiles(D1, "<p>draft-D1b</p>") }, alice);
+    const rv = await call("app_revert", { app_id: GID, version_no: s2.version_no }, alice);
+    const g6cols = await colsOf("items");
+    chk("B22 G6 되돌리기(공개 없이)도 공개 판의 칸을 지킨다 — note 지우기는 미룸(응답 deferred) · 칸 그대로",
+      changesOf(s2.tables?.deferred) === "칸 지우기 items.note" && rv.state === "draft" && changesOf(rv.deferred) === "칸 지우기 items.note" && g6cols.includes("note"),
+      JSON.stringify({ s2: s2.tables?.deferred, rv: { state: rv.state, deferred: rv.deferred }, g6cols }));
+
+    // G7 publish:true 로 저장 — 미룰 것 없이 바로 공개 · 적용(응답의 미룬 목록은 비고, 한 일은 보고서에)
+    const g7 = await call("app_save", { files: gfiles(D2, "<p>pub-D2</p>"), publish: true }, alice);
+    const g7cols = await colsOf("items");
+    chk("B22 G7 publish:true 저장 — 깨는 변경도 그 자리에서 적용 · 미룬 목록 비움 · 모두가 새 판",
+      g7.state === "published" && !g7cols.includes("note") && !(g7.tables?.deferred ?? []).length
+        && (g7.tables?.dropped_columns ?? []).some((d) => d.table === "items" && d.column === "note") && (await ui(GID, bob)).includes("pub-D2"),
+      JSON.stringify({ state: g7.state, g7cols, deferred: g7.tables?.deferred, dropped: g7.tables?.dropped_columns }));
+
+    // G8 publish:true 로 이름 바꾸기 + unique(칸 선언을 통째로 옮겨 이름만 바꾼 꼴 — 격리 리뷰 차단 재현) — 오류 없이 바로 공개 · 이름 바뀜 · unique
+    const H = [D1[0], { name: "items", columns: [{ name: "headline", type: "text", not_null: true, unique: true, renamed_from: "title" }] }];
+    const g8 = await errOf(call("app_save", { files: gfiles(H, "<p>pub-H</p>"), publish: true }, alice));
+    const g8cols = await colsOf("items");
+    const g8dup = await status(asApp("store_insert", { table: "items", row: { headline: "bob 1" } }, appBob));
+    chk("B22 G8 publish:true 이름 바꾸기 + unique — 오류 없이 공개 · title → headline · 겹치는 값은 막힌다",
+      g8 === null && g8cols.includes("headline") && !g8cols.includes("title") && g8dup !== 200 && (await row(GID)).draft_by === null && (await ui(GID, bob)).includes("pub-H"),
+      JSON.stringify({ g8: [g8?.status, g8?.message], g8cols, g8dup }));
+
+    // G9 publish:true 인데 공개 단계가 데이터 때문에 409 — «초안으로는 저장됐다» 를 말한다 · 초안이 깔려 있다 · 공개 판 그대로
+    const pubBefore9 = (await row(GID)).published_version_no;
+    const C = [D1[0], { name: "items", columns: [{ name: "headline", type: "text", not_null: true, unique: true, check: "length(headline) > 5" }] }];
+    const g9 = await errOf(call("app_save", { files: gfiles(C, "<p>draft-C</p>"), publish: true }, alice));
+    const r9 = await row(GID);
+    chk("B22 G9 publish:true 의 공개가 데이터로 409 — 문구가 «초안으로 저장했습니다 — 공개는 하지 못했습니다» · 초안 표식 · 공개 판 그대로 · 화면도 각자 판",
+      g9?.status === 409 && /판을 초안으로 저장했습니다/.test(g9?.message ?? "") && /공개는 하지 못했습니다/.test(g9?.message ?? "") && /length\(headline\) > 5/.test(g9?.message ?? "")
+        && r9.draft_by === "pgt-alice" && r9.published_version_no === pubBefore9 && (await ui(GID, alice)).includes("draft-C") && (await ui(GID, bob)).includes("pub-H"),
+      JSON.stringify({ g9: [g9?.status, g9?.message], draft: r9.draft_by, pub: [r9.published_version_no, pubBefore9] }));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);
