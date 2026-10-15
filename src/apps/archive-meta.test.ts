@@ -112,7 +112,7 @@ test("G8 실제 이름 규칙으로 만든 이름 — 짐작은 모름(null)이�
   let wrong = 0, guessed = 0, total = 0;
   const samples: string[] = [];
   for (let k = 0; k < 60000; k++) {
-    const app = appIdOf(1 + Math.floor(rnd() * 52));
+    const app = appIdOf(2 + Math.floor(rnd() * 31));                 // APP_ID_RE — 2~32자
     const table = pick("abcdefghijklmnopqrstuvwxyz_") + word(Math.floor(rnd() * 30), "abcdefghijklmnopqrstuvwxyz0123456789__");
     let physical: string;
     try { physical = physicalTableName(app, table); } catch { continue; }   // 63자 넘거나 쓸 수 없는 id 는 표가 못 생긴다

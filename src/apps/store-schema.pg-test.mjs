@@ -279,6 +279,7 @@ try {
       out.cleared.length === 2 && out.kept.length === 0 && out.taken_at === at.toISOString() && gone === 0
         && snaps.map((x) => `${x.table_name}:${x.row_count}:${x.line}`).join() === "archive:crm__logs__20260928010203:1:남길 기록,archive:crm__logs__20260928010204:1:두 번째",
       JSON.stringify({ out, gone, snaps }));
+    if (SNAP_PREEXISTED) await su.query(`DELETE FROM public.org_app_snapshot WHERE app_id = 'crm' AND taken_at = $1`, [at]);   // 먼저 있던 표면 남긴 행만 걷는다
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);

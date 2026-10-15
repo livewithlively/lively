@@ -18,6 +18,8 @@
 //  E3 1,000행 넘는 보관 표 — 조각 셋으로 백업  E4 force — 백업 없이 지운다  E5 크기 아닌 까닭으로 백업 실패 — 하나도 안 지운다
 //  E6 지금 쓰는 표가 보관 표를 가리키면 지우지 못하고 까닭과 남긴다  E7 주인 모름의 백업은 app_id '~unknown'  E8 names 가 배열이 아니면 400
 //  E9 비우기는 감사에 남는다
+//  ── 재검토 반영 ──
+//  E10 id 가 겹치거나 빈 표(손으로 옮긴 것) — 조각으로 나누지 않고 한 묶음으로 다 담는다  E11 서로 가리키는 보관 표 둘(순환) — 함께 지운다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -300,6 +302,24 @@ try {
   // ── E8 names 가 배열이 아니면 400(REST 는 zod 를 거치지 않는다 — app_id 와 함께 와도 그 앱 것을 다 지우지 않는다) ──
   const e8 = await errOf(call("app_archive_clear", { names: "crm_x__deals__20250101000000", app_id: "crm-x" }, boss));
   chk("E8 names 가 문자열이면 400 · 아무것도 안 지움", e8?.status === 400 && (await exists("app_archive", "crm_x__deals__20250101000000")), JSON.stringify([e8?.status, e8?.message]));
+
+  // ── E10 id 가 겹치거나 빈 표 — 1,510행을 다 담는다(조각으로 나누면 1,000행만 담고 지웠다 — 재검토 실측) ──
+  await q(`CREATE TABLE app_archive."dup_app__t__20250101000000" (tenant_id uuid, id bigint, title text, created_at timestamptz DEFAULT now())`);
+  await q(`INSERT INTO app_archive."dup_app__t__20250101000000"(tenant_id, id, title) SELECT '00000000-0000-0000-0000-000000000000', 1, 'v' || g FROM generate_series(1, 1500) g`);
+  await q(`INSERT INTO app_archive."dup_app__t__20250101000000"(tenant_id, id, title) SELECT '00000000-0000-0000-0000-000000000000', NULL, 'n' || g FROM generate_series(1, 10) g`);
+  const e10 = await call("app_archive_clear", { names: ["dup_app__t__20250101000000"] }, boss);
+  const e10snap = await q(`SELECT sum(row_count)::int AS n, sum(jsonb_array_length(rows))::int AS len FROM org_app_snapshot WHERE table_name = 'archive:dup_app__t__20250101000000'`);
+  chk("E10 id 가 겹치거나 빈 표 — 1,510행을 한 묶음으로 다 담고 지운다(응답 행 수도 1,510)",
+    e10.cleared[0]?.rows === 1510 && e10snap[0]?.n === 1510 && e10snap[0]?.len === 1510 && !(await exists("app_archive", "dup_app__t__20250101000000")),
+    JSON.stringify({ e10, e10snap }));
+
+  // ── E11 서로 가리키는 보관 표 둘(순환) — 한 문장으로 함께 지운다 ──
+  await q(`CREATE TABLE app_archive."cyc_app__a__20250101000000" (id bigint PRIMARY KEY, b_id bigint)`);
+  await q(`CREATE TABLE app_archive."cyc_app__b__20250101000000" (id bigint PRIMARY KEY, a_id bigint REFERENCES app_archive."cyc_app__a__20250101000000"(id))`);
+  await q(`ALTER TABLE app_archive."cyc_app__a__20250101000000" ADD FOREIGN KEY (b_id) REFERENCES app_archive."cyc_app__b__20250101000000"(id)`);
+  const e11 = await call("app_archive_clear", { app_id: "cyc-app" }, boss);
+  chk("E11 서로 가리키는 보관 표 둘 — 둘 다 지운다(남긴 것 없음)",
+    e11.cleared.length === 2 && e11.kept.length === 0 && (await archiveNames("cyc_app__")).length === 0, JSON.stringify(e11));
 
   // ── F1 표 개수 한도 안내 ──
   const counted = await q(`SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p'))::int AS cur`);

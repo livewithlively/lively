@@ -135,25 +135,32 @@ export async function clearAppArchives(names: string[], opts: { reason: Extract<
       out.kept = targets.map((a) => ({ name: a.name, why: `${backupFailed} — 지우지 않았습니다(force 로 백업 없이 지울 수 있습니다)` }));
       return;
     }
-    //  보관 표끼리 외래키로 묶였으면(부모 · 자식을 함께 보관) 부모가 먼저 오면 «다른 것이 가리킨다» 로 실패한다 — 못 지운 것을
-    //   진전이 없을 때까지 다시 시도한다(자식이 지워지면 부모도 지워진다). 끝까지 못 지운 것만 까닭과 함께 남긴다.
-    let left = targets;
+    //  보관 표끼리 외래키로 묶였으면(부모 · 자식을 함께 보관) 부모가 먼저 오면 «다른 것이 가리킨다»(2BP01)로 실패한다 — 그 까닭으로
+    //   못 지운 것만 진전이 없을 때까지 다시 시도한다(자식이 지워지면 부모도 지워진다). 다른 까닭(잠금 시간 초과 등)은 다시 기다리지 않는다
+    //   (매니지드 DDL 잠금 상한 10초가 바퀴마다 쌓인다 — 재검토). 서로 가리키는 쌍(순환)은 남은 것을 한 문장으로 함께 지워 본다 —
+    //   밖에서(지금 쓰는 표가) 가리키면 그 문장도 거절된다(CASCADE 는 여전히 안 쓴다). 끝까지 못 지운 것만 까닭과 함께 남긴다.
+    const dropped = (a: ArchiveRow): void => { out.cleared.push({ name: a.name, app_id: a.app_id, rows: backedUp.get(a.name) ?? a.rows }); };
     const lastError = new Map<string, string>();
+    let left = targets;
+    let blocked: ArchiveRow[] = [];
     for (;;) {
-      const failed: ArchiveRow[] = [];
+      const again: ArchiveRow[] = [];
       for (const a of left) {
-        try {
-          await db.query(`DROP TABLE ${qc(schema)}.${qc(a.name)}`);
-          out.cleared.push({ name: a.name, app_id: a.app_id, rows: backedUp.get(a.name) ?? a.rows });
-        } catch (err) {
+        try { await db.query(`DROP TABLE ${qc(schema)}.${qc(a.name)}`); dropped(a); }
+        catch (err) {
           lastError.set(a.name, (err as Error)?.message ?? String(err));
-          failed.push(a);
+          if ((err as { code?: string })?.code === "2BP01") again.push(a); else blocked.push(a);
         }
       }
-      if (!failed.length || failed.length === left.length) { left = failed; break; }
-      left = failed;
+      if (!again.length || again.length === left.length) { left = again; break; }
+      left = again;
     }
-    for (const a of left) {
+    if (left.length > 1) {
+      try { await db.query(`DROP TABLE ${left.map((a) => `${qc(schema)}.${qc(a.name)}`).join(", ")}`); left.forEach(dropped); left = []; }
+      catch (err) { for (const a of left) lastError.set(a.name, (err as Error)?.message ?? String(err)); }
+    }
+    blocked = [...blocked, ...left];
+    for (const a of blocked) {
       logger.warn({ schema, name: a.name, err: lastError.get(a.name) }, "보관 표를 지우지 못했다 — 그 자리에 둔다");
       out.kept.push({ name: a.name, why: `지우지 못했습니다 — ${lastError.get(a.name)}` });
     }
@@ -167,8 +174,12 @@ async function backupArchive(db: Q, client: pg.PoolClient, schema: string, a: Ar
   const put = (chunk: number, n: number, rows: string): Promise<unknown> => client.query(
     `INSERT INTO org_app_snapshot(app_id, taken_at, table_name, chunk, reason, row_count, rows) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
     [a.app_id ?? ARCHIVE_UNKNOWN_APP, now, archiveSnapshotTable(a.name), chunk, reason, n, rows]);
-  //  정수 id 가 없는 표(사람이 손으로 만든 것 등)는 한 묶음으로 — 크기는 위에서 상한을 봤다.
-  if (!a.idType || !INTEGER_TYPES.has(a.idType)) {
+  //  정수 id 가 없거나, 있어도 겹치거나 빈 표(사람이 손으로 만든 것 등)는 한 묶음으로 — id 로 조각을 나누면 겹친 · 빈 id 의 행이
+  //   빠진 채 «다 담았다» 가 된다(재검토 실측: 1,510행 중 1,000행만 담고 지웠다). 크기는 위에서 상한을 봤다.
+  const intId = !!a.idType && INTEGER_TYPES.has(a.idType);
+  const c = (await db.query(`SELECT count(*)::bigint AS n${intId ? ", count(DISTINCT id)::bigint AS d" : ""} FROM ${rel}`)).rows[0];
+  const all = Number(c?.n ?? 0);
+  if (!intId || Number(c?.d ?? -1) !== all) {
     const r = (await db.query(`SELECT count(*)::int AS n, COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb)::text AS rows FROM ${rel} t`)).rows[0];
     await put(0, Number(r?.n ?? 0), String(r?.rows ?? "[]"));
     return Number(r?.n ?? 0);
@@ -186,6 +197,8 @@ async function backupArchive(db: Q, client: pg.PoolClient, schema: string, a: Ar
     last = String(r?.last);
     chunk++;
   }
+  //  이 백업이 그 표의 유일한 사본이 된다 — 담은 행이 표의 행과 다르면 던진다(트랜잭션 전체가 되돌려지고 아무것도 안 지운다).
+  if (total !== all) throw new Error(`'${a.name}' 백업한 행(${total})이 표의 행(${all})과 다릅니다`);
   return total;
 }
 

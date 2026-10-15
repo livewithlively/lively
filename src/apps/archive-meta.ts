@@ -10,6 +10,8 @@
 //   다니고(옮기기 · 지우기) 표 소유자만 바꿀 수 있어 따로 등록 표를 두지 않는다. 기록이 없는 옛 보관 표는 이름으로 짐작하되,
 //   앱 부분이 온전하다고 확실할 때만 낸다(다른 앱 것으로 짐작해 지우지 않게).
 
+import { COLUMN_ARCHIVE_HEAD, COLUMN_ARCHIVE_HASH } from "./store-ddl.js";
+
 /** 보관한 까닭 — 설치(저장 · 되돌리기 · 관리자 설치) 때인가, 공개하며 미룬 변경을 적용할 때인가. */
 export type ArchiveReason = "install" | "publish";
 
@@ -60,14 +62,15 @@ export function parseArchiveComment(text: unknown): ArchiveRecord | null {
  *    22번째 이하면 그 `__` 는 앞 24자 안에 온전히 있는 구분자다(접두엔 `__` 가 없다).
  *  rest = 앱 접두 뒤(통째 보관이면 원래 표 이름 — 잘렸을 수 있다).
  */
+const HASHED_HEAD = new RegExp(`^[a-z0-9_]{${COLUMN_ARCHIVE_HEAD}}__[0-9a-f]{${COLUMN_ARCHIVE_HASH}}$`);
 export function guessArchiveOwner(name: string): { app_id: string; rest: string; hashed: boolean } | null {
   const m = /^(.+)__(\d{14})$/.exec(String(name));
   if (!m) return null;
   const x = m[1];
   const i = x.indexOf("__");
   if (i <= 0) return null;
-  const hashed = x.length === 34 && /^[a-z0-9_]{24}__[0-9a-f]{8}$/.test(x);
-  if (hashed && i >= 23) return null;
+  const hashed = x.length === COLUMN_ARCHIVE_HEAD + 2 + COLUMN_ARCHIVE_HASH && HASHED_HEAD.test(x);
+  if (hashed && i >= COLUMN_ARCHIVE_HEAD - 1) return null;
   const prefix = x.slice(0, i);
   if (!/^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$/.test(prefix)) return null;
   return { app_id: prefix.replace(/_/g, "-"), rest: x.slice(i + 2), hashed };

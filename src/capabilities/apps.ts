@@ -1486,7 +1486,7 @@ const appArchiveClear: Capability = {
     if (!names.length && !id) throw new HttpError(400, "names(보관 표 이름들) 또는 app_id 가 필요합니다 — app_archives 로 목록을 보세요");
     if (names.length && id) throw new HttpError(400, "names 와 app_id 중 하나만 주세요");
     const run = async (): Promise<Record<string, unknown>> => {
-      const list = names.length ? names : (await listAppArchives(id)).archives.map((a) => a.name);
+      const list = names.length ? names : (await listAppArchives(id, { countRows: false })).archives.map((a) => a.name);
       const out = await clearAppArchives(list, { reason: "before-clear", force: input.force === true });
       //  표를 지우는 관리자 동작 — 누가 무엇을 지웠고 무엇이 남았나를 감사에 남긴다(백업은 7일이면 사라진다).
       if (out.cleared.length || out.kept.length) {

@@ -225,14 +225,18 @@ export function archivedTableName(physical: string, at: Date, suffix: string = "
   return `${physical.slice(0, PG_IDENT_MAX - tail.length)}${tail}`;
 }
 
+/** 칸 보관 표 이름이 길 때 남기는 물리명 앞 글자 수 · 해시 글자 수 — 주인 짐작(archive-meta.ts)이 같은 값으로 해시꼴을 알아본다(#4733). */
+export const COLUMN_ARCHIVE_HEAD = 24;
+export const COLUMN_ARCHIVE_HASH = 8;
+
 /** 지운 칸(drop_columns)의 값을 보관하는 표 이름(순수, #4483) — `<물리명>__<칸>__<시각>`, 63자를 넘으면 앞을 줄이고 해시를 붙인다
  *  (`<물리명 앞 24자>__<해시8>__<시각>`). 이름 규칙이 한 자리에 있어야 주인 짐작(archive-meta.ts)과 그 시험이 같은 규칙을 본다(#4733). */
 export function columnArchiveName(physical: string, column: string, at: Date): string {
   const base = `${physical}__${column}`;
   const full = archivedTableName(base, at);
   if (full.length <= PG_IDENT_MAX && base.length + 16 <= PG_IDENT_MAX) return full;
-  const h = createHash("sha256").update(base).digest("hex").slice(0, 8);
-  return archivedTableName(`${physical.slice(0, 24)}__${h}`, at);
+  const h = createHash("sha256").update(base).digest("hex").slice(0, COLUMN_ARCHIVE_HASH);
+  return archivedTableName(`${physical.slice(0, COLUMN_ARCHIVE_HEAD)}__${h}`, at);
 }
 
 /**
