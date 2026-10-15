@@ -19,7 +19,7 @@ import { one } from "../db/client.js";
 import { actorKindOf } from "./content-audit.js";
 import { resolveIngestPolicy, type CreateAction, type UpdateAction } from "../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../org/ingest/ingest-policy-load.js";
-import { slugify } from "./knowledge-store.js";
+import { resolveKnowledgeName } from "./knowledge-store.js";
 
 export interface GateSaveInput {
   name?: string;
@@ -59,7 +59,7 @@ export interface KnowledgeGate {
 export async function resolveKnowledgeGate(input: GateSaveInput, ctx?: { source?: string; agent?: string }): Promise<KnowledgeGate> {
   const actor_kind = actorKindOf(ctx?.source ?? null);
   const agent = ctx?.agent ?? null;
-  const name = input.name ? slugify(input.name) : null;
+  const name = input.name ? await resolveKnowledgeName(input.name) : null;
 
   const before = name
     ? (await one(itemsPool,

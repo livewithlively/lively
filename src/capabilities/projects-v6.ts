@@ -1,6 +1,7 @@
 // v6 project capability — 프로젝트(1급 엔티티) + 작업(task/subtask) CRUD·상태·팀원·카테고리/지식 연결.
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
+import { checkWriting, isHumanWriter, rejectWriting } from "./writing-style.js";
 import { z } from "zod";
 import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from "../v6/visibility.js";
 import { HttpError, parseId } from "./rest-util.js";
@@ -33,7 +34,7 @@ const regenAgentsForList = async (listId: number | null) => {
 };
 // #2031 — 세션이 자기 프로젝트의 이름을 짓는다: 걸쇠(claimProjectName)와 이름 규칙(project-name)은 아래 capability 가 쓴다.
 import { projectNameFromAgent } from "../v6/project-name.js";
-import { AUTO_CREATED_MARK } from "../project/first-prompt-project.js";
+import { AUTO_CREATED_MARK, FIRST_PROMPT_HEADING } from "../project/first-prompt-project.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
 import { sessionsOfTasks } from "../v6/session-task.js";
 import { purgeDeleted } from "../v6/trash-store.js";   // #3778 — 프로젝트 완전 삭제 = 감사 스냅샷 본문까지
@@ -55,6 +56,26 @@ import {
 } from "../v6/project-store.js";
 import { assertNoContentSecrets } from "./content-secrets.js";
 import { redactTokenShapes } from "../org/ingest/redact.js";
+
+async function checkProjectText(
+  patch: { description?: string | null; append_description?: string },
+  id: number,
+  user: LivelyUser,
+): Promise<Awaited<ReturnType<typeof checkWriting>>> {
+  const human = isHumanWriter(user);
+  if (patch.append_description !== undefined) {
+    const frag = String(patch.append_description);
+    if (frag.includes(AUTO_CREATED_MARK) || frag.includes(FIRST_PROMPT_HEADING)) return { info: {}, rejects: [], guide: "" };
+    return checkWriting("project", { title: null, body: frag }, { human });
+  }
+  if (patch.description === undefined || patch.description === null) return { info: {}, rejects: [], guide: "" };
+  // 기존 본문을 못 읽으면 판정을 건너뛴다 — before 없이 판정하면 원래 있던 위반까지 거부해 형식 검사가 엄격한 쪽으로 기운다
+  //  (형식 조회 실패 때의 fail-open 과 방향을 맞춘다). 행이 정말 없으면 뒤의 updateProject 가 어차피 404 를 낸다.
+  const cur = await getNodeRow(id).catch(() => null);
+  if (cur === null) return { info: {}, rejects: [], guide: "" };
+  return checkWriting("project", { title: null, body: patch.description },
+    { human, before: cur ? { title: null, body: cur.description ?? "" } : null });
+}
 
 const STATUSES = ["active", "done"] as const;
 // 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
@@ -454,6 +475,11 @@ const projectCreateV6: Capability = {
     //  이 필드를 안 보내도 같은 판정이 나와야 하기 때문이다 — 그 표식은 이미 세 곳이 공유하는 계약이다.
     //  그 밖(사람이 웹·MCP 로 짓는 이름)은 전부 human — 자동 이름짓기가 덮지 못한다.
     const name_source = String(input.description ?? "").includes(AUTO_CREATED_MARK) ? "rule" as const : "human" as const;
+    // 서술 형식 — 세션 첫 지시로 만든 껍데기(name_source=rule)는 사람의 지시문 원문을 그대로 담으므로 보지 않는다.
+    const { info: style, rejects, guide } = name_source === "rule"
+      ? { info: {}, rejects: [], guide: "" }
+      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user) });
+    if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
     const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
@@ -464,7 +490,7 @@ const projectCreateV6: Capability = {
     // prior-art 앞단 표면화(#639) — 만들자마자 이 프로젝트와 겹칠 수 있는 기존 지식을 응답에 실어, 중복 재구현을
     //  '종점(knowledge_save 유사경고)'이 아니라 '시작'에서 차단. 추천 실패해도 생성은 성공(비차단·catch).
     const prior_art = await recommendKnowledgeForProject(project.id, { limit: 5, minScore: 0.55, viewer: ctx?.viewer ?? null }).catch(() => []);
-    return prior_art.length ? { project, prior_art, prior_art_note: PRIOR_ART_NOTE } : { project };
+    return prior_art.length ? { project, prior_art, prior_art_note: PRIOR_ART_NOTE, ...style } : { project, ...style };
   },
 };
 
@@ -788,6 +814,11 @@ const projectUpdateV6: Capability = {
       throw new HttpError(400, "description_base 는 description(전체 교체)과 함께 보내야 합니다");
     const before = reschedule_dependents ? await getNodeRow(id) : null;
     let project;
+    // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
+    //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
+    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     try { project = await updateProject(id, patch, writeCtx); }
     catch (e) {
       // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
@@ -797,7 +828,7 @@ const projectUpdateV6: Capability = {
     }
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
     await regenAgents(id);
-    return { project, rescheduled };
+    return { project, rescheduled, ...style };
   },
 };
 
@@ -1226,12 +1257,16 @@ const taskCreateV6: Capability = {
     //  ⚠ parentTaskId 를 먼저 본다 — createTask 는 그게 있으면 **그것만으로** 부모를 해소하고 projectId 는 무시한다.
     //   projectId 만 검사하면 "보이는 프로젝트 id + 안 보이는 부모 태스크" 조합으로 남의 프로젝트에 글을 심을 수 있다.
     await assertProjectVisible(input.parentTaskId ?? input.projectId, ctx);
+    // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
+    const { info: style, rejects, guide } = await checkWriting("project", { title: null, body: input.description ?? null },
+      { human: isHumanWriter(user) });
+    if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     const task = await createTask(input, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task); // 하위태스크면 부모 task→프로젝트로 거슬러 해석.
     if (rootId) await regenAgents(rootId);              // 태스크/하위태스크 추가 → AGENTS.md 태스크 인덱스 갱신.
     // prior-art 앞단 표면화(#639) — task 이름+설명(의미) + 부모 프로젝트 카테고리(상속)로 기존 지식을 응답에.
     const prior_art = await recommendKnowledgeForProject(task.id, { limit: 5, minScore: 0.55 }).catch(() => []);
-    return prior_art.length ? { task, prior_art, prior_art_note: PRIOR_ART_NOTE } : { task };
+    return prior_art.length ? { task, prior_art, prior_art_note: PRIOR_ART_NOTE, ...style } : { task, ...style };
   },
 };
 
@@ -1326,11 +1361,16 @@ const taskUpdateV6: Capability = {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: reason ?? null };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateTask 는 이전 행을 돌려주지 않는다(#1308).
     const before = reschedule_dependents ? await getNodeRow(id) : null;
+    // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
+    //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
+    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     const task = await updateTask(id, patch, writeCtx);
     const rescheduled = before ? await propagateReschedule(id, before, task, writeCtx) : [];
     const rootId = await rootProjectIdOfTaskNode(task);
     if (rootId) await regenAgents(rootId);  // 이름/상태 등 변경 → AGENTS.md 태스크 인덱스 갱신.
-    return { task, rescheduled };
+    return { task, rescheduled, ...style };
   },
 };
 

@@ -13,6 +13,7 @@ import { toClientBundleServers } from "./mcp-client-bundle.js";
 // (#335) getSection 직접호출 폐기 — 섹션은 listSections 로 동적 조립(buildSectionBlocks).
 import { DEFAULT_WRITEBACK_NOTICE } from "./hook-defaults.js";
 import { redactString } from "../ingest/redact.js";
+import { buildWritingGuideBlock } from "../policies/writing-format.js";
 import { installBundleTarArgs } from "./bundle-tar.js";
 // (#1313 R18) 구 동적 import("../store.js") 5건을 정적으로 환원 — store 는 publish/materialize 를 import 하지
 //  않아 순환이 없다(scripts/check-imports.mjs 게이트로 확인). 동적 유지 대상은 진짜 지연이 필요한 것들만
@@ -247,7 +248,13 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
   //  (릴리스 = 갱신 — #537/#1242 행 동결 드리프트 차단). org 는 주입 여부(inject_ontology_guide)만 정한다.
   //  조회 실패는 켜짐(fail-open — 가이드는 시스템 사용법의 골격이라 빠지는 쪽이 더 큰 사고).
   let guideOn = true;
-  try { guideOn = (await getRuntimeConfig()).inject_ontology_guide; } catch { /* fail-open */ }
+  let writingBlock = "";
+  try {
+    const rc = await getRuntimeConfig();
+    guideOn = rc.inject_ontology_guide;
+    // 서술 형식 — 켠 조직만. 저장 때 422 로 알게 하는 것보다 쓰기 전에 알게 하는 쪽이 싸다(저장 한 번이 버려지지 않는다).
+    writingBlock = buildWritingGuideBlock(rc.writing_format);
+  } catch { /* fail-open */ }
   const consumedTeam = { v: false };
   const out: string[] = [];
   for (const s of sections) {
@@ -267,6 +274,7 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
       if (filled.trim()) out.push(filled);
     }
   }
+  if (writingBlock) out.push(redactString(writingBlock));
   if (opts.team.trim() && !consumedTeam.v) out.push(opts.team.trim()); // ${team} 미사용 시 폴백(마이그레이션으로 org-defaults 에 ${team} 시드 시 in-position)
   return out.join("\n\n");
 }

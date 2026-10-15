@@ -57,6 +57,7 @@ export {
   getRuntimeConfig, updateRuntimeConfig, getUiSurface,
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
   getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource,
+  getWritingFormat,
 } from "./store/runtime-config.js";
 export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 

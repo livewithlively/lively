@@ -29,6 +29,8 @@ import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
+// 첫 지시 원문을 싣는 헤딩 — 서술 형식 검사가 이 헤딩이 든 이어쓰기(프로젝트 이관)를 사람의 지시문으로 보고 건너뛴다.
+export const FIRST_PROMPT_HEADING = "## 첫 지시(원문)";
 const MAX_BODY = 3500;
 
 /** 세션 생성 요청 중 이 판정에 필요한 것만(라우트의 CreateInput 을 그대로 받지 않는다 — 순수 유지). */
@@ -108,7 +110,7 @@ export function humanShellProject(
     "> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.",
     ...(prompt ? [
       "",
-      "## 첫 지시(원문)",
+      FIRST_PROMPT_HEADING,
       "",
       prompt.length > MAX_BODY ? prompt.slice(0, MAX_BODY) + "\n\n…(이하 생략)" : prompt,
     ] : []),
@@ -154,7 +156,7 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): Sh
   const description = [
     "> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.",
     "",
-    "## 첫 지시(원문)",
+    FIRST_PROMPT_HEADING,
     "",
     prompt.length > MAX_BODY ? prompt.slice(0, MAX_BODY) + "\n\n…(이하 생략)" : prompt,
     "",
