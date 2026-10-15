@@ -33,6 +33,7 @@ import { appProjectFilesCapabilities } from "./app-project-files.js";
 import { appBundleCapabilities } from "./app-bundles.js";
 import { appPrefsCapabilities } from "./app-prefs.js";
 import { appLaunchCapabilities } from "./app-launch.js";
+import { fileCapabilities } from "./files.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { shellPrefsCapabilities } from "./shell-prefs.js";
@@ -158,6 +159,7 @@ const all: Capability[] = [
   ...appChatSendCapabilities, // #4594 붙은 앱 화면이 그 세션에 글을 바로 보낸다(org_app_chat_send, REST 전용) — 서버가 「(앱 「제목」에서 보냄)」 표식을 붙인다.
   ...appPrefsCapabilities, // #4601 앱 × 보는 사람 개인 설정(app_prefs_get/set, REST 전용) — 샌드박스 앱 화면은 localStorage 가 없고 SDK 에 신원이 없어 서버가 든다.
   ...appLaunchCapabilities, // #4480 v2-1 앱 주소(<앱>-<워크스페이스>.lvly.app)로 들어갈 일회용 코드(org_app_launch, REST 전용) — 사람 구성원 본인만.
+  ...fileCapabilities, // #4673 파일 주소 — file_url(짧은 수명 서명 주소 GET·PUT, 받는 곳 /api/files/s/<토큰>) · file_address(세션 안 경로 → 주소) · file_path(주소 → 이 세션 안 경로). MCP+REST(/api/ui/files/*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)

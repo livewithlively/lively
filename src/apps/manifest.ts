@@ -50,6 +50,8 @@ export const CHAT_SEND_TOOL = "app_chat_send";
 export const PROJECT_FILES_TOOL = "app_project_files";
 /** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
 export const WORKSPACE_FILES_TOOL = "app_workspace_files";
+/** #4673 — 「이 앱의 앱 폴더에 파일을 올리고 받기」 권한(permissions.app_folder)이 함의하는 능력 이름. 앱 주체가 file_url 로 제 앱 폴더(apps/<앱>/…)의 서명 주소를 받는다. */
+export const FILE_URL_TOOL = "file_url";
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,10 @@ const permissionsSchema = z.object({
   //  project_files 보다 넓은 능력이라 **따로** 선언하고 따로 동의받는다(app_workspace_files) — 붙은 세션의 프로젝트 밖 파일이 앱으로 들어온다.
   //  읽기뿐이고, 여전히 세션에 붙은 앱 화면에서만 · 프로젝트 공개 범위 안에서만 닿는다(apps/app-project-files.ts).
   workspace_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4673 — 이 앱(화면 · 서버)이 **제 앱 폴더**(워크스페이스 apps/<앱>/)에 파일을 올리고 받을 수 있나. 기본 false(fail-closed).
+  //  그 사람 이름으로 워크스페이스 저장소에 쓰는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 file_url 이 있어야 한다
+  //  (files/file-access.ts). 남의 앱 폴더 · 공유 폴더는 이 선언으로 열리지 않는다(프로젝트 파일 읽기는 project_files 그대로).
+  app_folder: z.boolean().default(false),
 }).strict();
 
 const uiPageSchema = z.object({
@@ -326,6 +332,10 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   // #4629 — `workspace_files: ["html"]` 은 `app_workspace_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「전체 자료에서 파일 읽기」).
   if (m.permissions.workspace_files.length && !m.permissions.tools.includes(WORKSPACE_FILES_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
+  }
+  // #4673 — `app_folder: true` 는 `file_url` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「앱 폴더에 파일을 올리고 받기」).
+  if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

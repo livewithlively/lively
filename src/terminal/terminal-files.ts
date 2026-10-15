@@ -21,6 +21,7 @@ import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userO
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
+import { isInAppFolder } from "../files/app-jail.js";   // #4673 — 앱 폴더 주소는 그 앱 폴더 안에서만
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import {
   supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM,
@@ -45,6 +46,8 @@ import {
   sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
   type SharedFolderGate,
 } from "../v6/shared-folder-store.js";
+import { APPS_ROOT_KEY } from "./catalog.js";
+import { readableAppFoldersFor } from "../files/files-live.js";   // #4673 — 앱 폴더는 그 앱에 동의한 구성원만
 
 // 업로드 상한(#1870) — 종전 50MB 는 화면 녹화·데이터셋이 걸렸다. receiveUpload 가 임시파일로 **스트리밍**하므로
 //  (RAM 상주 없음, upload-file.ts) 상한을 올려도 메모리 위험이 없다. project-routes.ts MAX_UPLOAD 와 같은 값이어야 한다.
@@ -82,8 +85,9 @@ export async function readDirItems(abs: string): Promise<FsListItem[]> {
 // 심링크 봉쇄(#3668 T1) — 해소는 **op 가 실제로 도는 자리**에서 한다(격리면 멤버 uid, 아니면 게이트웨이 로컬 fs).
 //  게이트웨이가 직접 realpath 를 부르면 격리 홈(700)은 못 읽고 매니지드에선 그 경로가 시야에 아예 없다(path-jail.ts 머리말).
 //  거부 문구·코드는 글자 판정과 같다 — 사람에게는 같은 사건이고, 어느 관문에 걸렸는지는 알려 줄 값이 아니다.
-async function assertJailed(base: string, abs: string, osUser: string | null): Promise<void> {
-  const ok = await isConfined(base, abs, osUser ? (b, t) => memberPathProbe(osUser, b, t) : probeLocal);
+async function assertJailed(base: string, abs: string, osUser: string | null, app?: string): Promise<void> {
+  const probe = osUser ? (b: string, t: string) => memberPathProbe(osUser, b, t) : probeLocal;
+  const ok = app ? await isInAppFolder(base, app, abs, probe) : await isConfined(base, abs, probe);
   if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
 }
 
@@ -216,8 +220,25 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
 
   // 공유 루트 요청이면 경로 게이트를, 아니면 null(=검사 없음)을 준다. 목록처럼 여러 번 물을 자리는
   //  이 게이트를 **한 번만** 만들어 항목마다 동기로 물어본다(항목마다 DB 를 때리지 않게).
-  const browseGate = async (req: express.Request): Promise<SharedFolderGate | null> =>
-    (String(req.query.root ?? "") === SHARED_ROOT_KEY ? await sharedFolderGate(viewerFor(req)) : null);
+  //  앱 폴더(#4673)는 같은 모양의 게이트로 «그 앱에 동의한 구성원» 을 가린다 — 맨 위(목록 자리)는 열고, 그 아래는 첫 마디(앱 id)가
+  //   읽을 수 있는 앱일 때만. 신원 없는 요청은 앱 폴더를 아예 못 본다(앱 동의는 사람마다라 «특권 = 전부 통과» 가 없다).
+  const browseGate = async (req: express.Request): Promise<SharedFolderGate | null> => {
+    const root = String(req.query.root ?? "");
+    if (root === SHARED_ROOT_KEY) return sharedFolderGate(viewerFor(req));
+    if (root !== APPS_ROOT_KEY) return null;
+    const viewer = viewerFor(req);
+    const readable = viewer ? await readableAppFoldersFor({ member: viewer, scopes: userOf(req).scopes ?? [] }) : new Set<string>();
+    //  앱 주체(앱 세션 토큰)는 이 자리에서 제 앱 폴더만 — 권한표(#4671 ③)의 «앱은 제 앱 폴더만». 앱 서버 토큰은 이 라우트에 오지 못한다(sessionOrBearer 가 403).
+    const appId = userOf(req).appId;
+    if (appId) for (const id of [...readable]) if (id !== appId) readable.delete(id);
+    const ok = (rel: string): boolean => { const first = String(rel ?? "").split(/[\\/]/)[0] ?? ""; return first === "" || readable.has(first); };
+    return { ok, restricted: () => false, subtreeOk: ok };
+  };
+  // 앱 폴더는 웹에서 쓰지 않는다(#4671 ③ — 앱 폴더는 그 앱이 쓴다. 세션 셸은 앱을 붙여 `.lively/apps/<앱>/` 에서 고친다).
+  //  올리기 · 폴더 만들기 · 이름 바꾸기 · 지우기 전부 이 한 줄을 먼저 지난다.
+  const assertBrowseWritable = (req: express.Request): void => {
+    if (String(req.query.root ?? "") === APPS_ROOT_KEY) throw new HttpError(403, "앱 폴더는 그 앱이 씁니다 — 웹에서는 보고 내려받기만 할 수 있습니다");
+  };
 
   // 안 보이는 경로는 **404**로 막는다 — 403 은 "거기 뭔가 있다"를 알려주는 오라클이라 존재 자체를 숨기지 못한다.
   const assertBrowseVisible = (gate: SharedFolderGate | null, base: string, abs: string): void => {
@@ -239,7 +260,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const gate = await browseGate(req);
     assertBrowseVisible(gate, base, abs);
     const osUser = await userOsUser(u);
-    await assertJailed(base, abs, osUser);   // #3668 T1 — 링크를 해소한 뒤 다시 본다
+    //  #3668 T1 — 링크를 해소한 뒤 다시 본다. 앱 폴더 주소(#4673)는 그 앱 폴더 안에서만 연다(files/app-jail — 서명 주소와 같은 판정).
+    const appSeg = String(req.query.root ?? "") === APPS_ROOT_KEY && abs !== base ? path.relative(base, abs).split(path.sep)[0] : "";
+    await assertJailed(base, abs, osUser, appSeg || undefined);
     return { base, abs, osUser, gate };
   }
 
@@ -249,7 +272,8 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     // 공개범위(#1291)·경로 봉쇄는 resolveBrowse 가 한 자리에서 건다 — ①이 폴더 자체가 안 보이면 404(존재 은닉)
     //  ②목록은 안 보이는 하위 항목을 빼고 준다. 게이트는 한 번만 만들어 항목마다 재사용한다(수백 항목 × DB 왕복 방지).
     const { base, abs, osUser, gate } = await resolveBrowse(req, false);
-    const restrictedProjects = gate ? await restrictedProjectFolders() : new Set<string>();
+    //  🔒 배지(프로젝트 공개범위 · 공유 폴더 ACL)는 공유 자리의 말이다 — 앱 폴더(#4673)는 목록에서 빼는 것으로 끝난다.
+    const restrictedProjects = gate && String(req.query.root ?? "") === SHARED_ROOT_KEY ? await restrictedProjectFolders() : new Set<string>();
     const items: Array<FsListItem & { locked?: boolean }> = [];
     if (osUser) {
       await memberMkdir(osUser, base).catch(() => { /* 루트 없으면 생성 */ });
@@ -286,6 +310,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   app.post("/api/ui/terminal/browse/mkdir", auth, wrap(async (req, res) => {
     // 안 보이는 폴더 안에는 못 만든다(#1291) — 여기를 열어두면 mkdir 의 성공/실패가 그대로 존재 오라클이 되고,
     //  잠긴 폴더 안에 파일을 밀어 넣는 우회 경로가 열린다. 거부는 목록과 같은 404. 폴더 이름도 NFC 정본(#1278b).
+    assertBrowseWritable(req);
     const { abs, osUser } = await resolveBrowse(req, false, true);
     if (osUser) await memberMkdir(osUser, abs);
     else await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
@@ -295,6 +320,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   //  게이트: browse/mkdir 과 동일(auth 만) — 이 루트는 셸(터미널)로 이미 rw 가능하므로 UI CRUD 가 새 권한경계를 열지 않는다.
   //  이름변경 — 같은 폴더 안에서만(to 는 파일명 1개, 경로 구분자 금지). 대상 존재 시 409(덮어쓰기 방지).
   app.post("/api/ui/terminal/browse/rename", auth, wrap(async (req, res) => {
+    assertBrowseWritable(req);
     const { base, abs, osUser } = await resolveBrowse(req, true);
     const toName = nfcPath(req.query.to).trim();   // 새 이름도 NFC 정본(#1278b)
     if (!toName || toName.includes("/") || toName.includes("\\") || toName === "." || toName === "..") throw new HttpError(400, "새 이름이 올바르지 않습니다");
@@ -342,6 +368,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
 
   // 삭제(파일/폴더 재귀). 루트 자체는 거부. 응답 trashed = 휴지통으로 간 자료 수(0 = 바로 지워진 것) — 화면이 그 숫자로 말을 가른다.
   app.delete("/api/ui/terminal/browse", auth, wrap(async (req, res) => {
+    assertBrowseWritable(req);
     const { base, abs, osUser } = await resolveBrowse(req, true);
     //  좌표는 **지우기 전에** 푼다 — 공유 루트 아래 project/<id>/… 는 프로젝트 좌표로 접힌다(같은 파일 = 같은 자료, 보관 자리도 그 프로젝트 폴더 안).
     const loc = await localRootForBrowse(String(req.query.root ?? ""), userOf(req), base, abs).catch(() => null);
@@ -457,6 +484,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
+    assertBrowseWritable(req);
     const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다

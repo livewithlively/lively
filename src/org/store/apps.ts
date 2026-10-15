@@ -156,6 +156,13 @@ export async function getApp(id: string, client?: pg.PoolClient): Promise<OrgApp
   return r.rows[0] ? rowToApp(r.rows[0]) : null;
 }
 
+/** 이 id 들의 앱(없는 id 는 빠진다) — 한 번에 읽는다(#4673 홈 탐색기 root=apps 목록은 동의한 앱만 본다). */
+export async function getAppsByIds(ids: readonly string[]): Promise<OrgApp[]> {
+  if (!ids.length) return [];
+  const r = await itemsPool.query(`SELECT * FROM org_app WHERE id = ANY($1::text[])`, [[...ids]]);
+  return r.rows.map(rowToApp);
+}
+
 export async function listApps(): Promise<OrgApp[]> {
   const r = await itemsPool.query(`SELECT * FROM org_app ORDER BY installed_at DESC`);
   return r.rows.map(rowToApp);
@@ -667,6 +674,12 @@ export async function revokeAllGrantsForMember(memberId: string): Promise<number
 export async function getActiveGrant(appId: string, memberId: string): Promise<AppGrantRow | null> {
   const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
   return r.rows[0] ? rowToGrant(r.rows[0]) : null;
+}
+
+/** 한 멤버의 활성 grant 전부 — 앱 폴더 목록(#4673 홈 탐색기 root=apps)이 «동의한 앱» 을 한 번에 가린다. 부분 인덱스 org_app_grant_member_idx 가 받친다. */
+export async function listActiveGrants(memberId: string): Promise<AppGrantRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]);
+  return r.rows.map(rowToGrant);
 }
 
 // ── 앱 활동(mcp_call_log.app 집계, design D3-5 관측 전용) ──────────────────────

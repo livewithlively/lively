@@ -34,6 +34,7 @@ import {
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
 import { multiFileFallbackHtml } from "../apps/app-front-page.js";
+import { filesCspSource } from "../files/app-screen-csp.js";   // #4673 앱 폴더 서명 주소 자리(앱 화면 CSP)
 import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, appTableCounts, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
 import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan, type PublishPreview } from "../apps/publish-preview.js";
 import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
@@ -1366,7 +1367,7 @@ const appUi: Capability = {
         if (ui.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
-        const csp = ((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
+        const csp = { ...(((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(pub.manifest) };
         const multi = webRootOf(pub.manifest) !== null;
         return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", ...(multi ? { multi_file: true } : {}) };
       }
@@ -1379,7 +1380,8 @@ const appUi: Capability = {
     if (!a) throw new HttpError(404, `UI 페이지 없음: ${key}`);
     // csp = 매니페스트 선언(없으면 빈 객체 = 네트워크·프레임 0). 호스트(app-ui.ts)가 이걸로 srcdoc CSP 를 짓는다 —
     //  선언에 없는 것은 브라우저가 막는다(우리 코드가 아니라 브라우저가 집행하는 경계).
-    const csp = ((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
+    //  #4673 앱 폴더를 선언한 앱은 그 서명 주소 자리(files)를 더 연다 — files/app-screen-csp.
+    const csp = { ...(((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(app.manifest) };
     //  #4481 여러 파일 앱(web.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
     const multi = webRootOf(app.manifest) !== null;
     return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title) : a.html, pages, csp, view: "installed", ...(multi ? { multi_file: true } : {}) };

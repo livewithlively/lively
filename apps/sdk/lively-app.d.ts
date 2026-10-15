@@ -111,6 +111,15 @@ export interface LivelyApp {
     list(opts?: { ext?: string[]; limit?: number; scope?: "project" | "all"; q?: string }): Promise<{ project_id: number | null; files: Array<{ path: string; name: string; size: number; mtime: string; project_id?: number; project_name?: string }>; truncated: boolean; scope?: "all" }>;
     /** 한 파일의 글 내용(UTF-8). path 는 list 가 준 상대경로. 선언하지 않은 확장자는 reject(-32001), 8MB 초과 · 없는 파일도 reject. */
     read(path: string, opts?: { project?: number }): Promise<{ path: string; content: string; size: number; mtime: string }>;
+    /**
+     * 이 앱의 **앱 폴더**(워크스페이스 `apps/<앱>/`)에 올리고(PUT) 받는(GET) 짧은 수명 서명 주소(#4673 · 기본 15분 · 최대 3600초).
+     *  · 매니페스트에 `permissions.app_folder: true` 를 선언하고(동의 창에 「앱 폴더」로 보인다) 사람이 동의해야 한다. 남의 앱 폴더 · 공유 폴더는 안 된다.
+     *  · address 는 `apps/<이 앱 id>/<경로>`. 받은 `url` 에 쿠키 · 토큰 없이 `fetch(url, { method, body })` 하면 된다 — PUT 은 통째 덮어쓰기 · 1GB 까지 ·
+     *    위 폴더는 저절로 생긴다. GET 은 늘 내려받기(attachment)로 오고, 그림 · 소리 · 영상은 `<img src=url>` 처럼 바로 쓸 수 있다.
+     *  · 앱 서버(Lambda)는 같은 일을 REST 로 한다: `POST $LIVELY_API_URL/api/ui/files/url {address, method}`(앱 서버 토큰 + X-Lively-Identity).
+     *  · 그 앱이 붙은 세션은 같은 파일을 `<작업 폴더>/.lively/apps/<앱>/` 에서 폴더로 본다.
+     */
+    url(address: string, opts?: { method?: "GET" | "PUT"; expires_in?: number }): Promise<{ address: string; method: "GET" | "PUT"; url: string; headers: Record<string, string>; expires_at: string; expires_in: number; max_bytes?: number; link: string }>;
   };
 
   /** 이 화면이 붙은 세션과 말하기(#4594). 세션 오른쪽 앱 칸에서 열렸을 때만(lively.session 이 있을 때) 된다. */

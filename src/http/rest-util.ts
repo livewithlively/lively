@@ -11,13 +11,17 @@ export { HttpError };
 
 type AsyncHandler = (req: express.Request, res: express.Response) => Promise<void>;
 
+/** wrap 의 선택. logPath — 로그에 남길 경로 이름(기본 req.path). 경로 자체가 자격인 라우트(서명 주소 #4673)는 고정 이름을 준다. */
+export interface WrapOptions { logPath?: string }
+
 // Express 4 는 async rejection 을 전파하지 않음 — 전 라우트에 적용하는 래퍼.
 // store 의 plain Error 메시지를 상태코드로 매핑: '없음'→404 · 'domainmap'→502 · 검증 문구→400 · 그 외→500.
 // 이 한국어 부분문자열 매핑은 load-bearing — 신규 에러 메시지는 토큰('없음'/'검증 실패' 등)을 포함해야 한다.
-export function wrap(fn: AsyncHandler): express.RequestHandler {
+export function wrap(fn: AsyncHandler, opts: WrapOptions = {}): express.RequestHandler {
   return (req, res) => {
     fn(req, res).catch((err: unknown) => {
       if (res.headersSent) return;
+      const where = opts.logPath ?? req.path;
       // HttpError 라도 **5xx 는 반드시 로그에 남긴다**(#1278) — 종전엔 여기서 바로 응답만 하고 끝나서
       //  `HttpError(500,"업로드 실패")` 같은 서버측 실패가 gateway.log 에 흔적이 0건이었다(원인 추적 불가).
       //  errno 는 message 가 아니라 cause 에 있으니 명시적으로 꺼내 싣는다(pino 버전별 cause 직렬화에 의존하지 않는다).
@@ -25,7 +29,7 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
         if (err.status >= 500) {
           const c = (err as { cause?: unknown }).cause;
           logger.error({
-            path: req.path, status: err.status, msg_out: err.message,
+            path: where, status: err.status, msg_out: err.message,
             cause: c instanceof Error ? { message: c.message, code: (c as NodeJS.ErrnoException).code } : c,
           }, "web ui request failed");
         }
@@ -40,7 +44,7 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       //  ⚠ 순환 import 방지로 여기서 정규식을 직접 둔다(disk-guard 는 rest-util 의 HttpError 를 쓴다).
       if ((err as NodeJS.ErrnoException)?.code === "ENOSPC" || (err as NodeJS.ErrnoException)?.code === "EDQUOT"
           || /ENOSPC|no space left on device|quota exceeded/i.test(msg)) {
-        logger.error({ err, path: req.path }, "디스크 부족으로 실패");
+        logger.error({ err, path: where }, "디스크 부족으로 실패");
         res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 정리하거나 디스크를 늘리세요." });
         return;
       }
@@ -49,14 +53,14 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       //  mkdir 이 이걸로 죽었는데 500 «internal_error» 로 나가 사용자도 운영자도 원인을 몰랐다. 원인이 명확하니 그대로 말한다
       //  (503 — 일시적, 브로커가 판을 재생성하면 풀린다). #813 디스크 부족 매핑과 같은 자리·같은 규율.
       if ((err as NodeJS.ErrnoException)?.code === "ENOTCONN" || /Transport endpoint is not connected|\bENOTCONN\b/i.test(msg)) {
-        logger.error({ err, path: req.path }, "공유 저장소 연결 끊김(ENOTCONN)으로 실패");
+        logger.error({ err, path: where }, "공유 저장소 연결 끊김(ENOTCONN)으로 실패");
         res.status(503).json({ error: "공유 저장소 연결이 끊겼습니다 — 잠시 뒤 다시 시도하세요. 계속되면 이 워크스페이스의 세션 컨테이너를 다시 띄워야 합니다(관리자)." });
         return;
       }
       if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }
       if (msg.includes("domainmap")) { res.status(502).json({ error: `domainmap 연결 실패 — ${msg}` }); return; }
       if (/검증 실패|허용|필수|미지정|형식/.test(msg)) { res.status(400).json({ error: msg }); return; }
-      logger.error({ err, path: req.path }, "web ui request failed");
+      logger.error({ err, path: where }, "web ui request failed");
       res.status(500).json({ error: "internal_error" });
     });
   };
