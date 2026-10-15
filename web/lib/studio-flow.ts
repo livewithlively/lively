@@ -12,7 +12,7 @@ export type StudioStage = 'plan' | 'draft' | 'fix' | 'check' | 'put';
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정 — 시안 확인하고 코멘트해서 고치기»). 속 단계 'draft'(첫 판을 기다리는 중)와
 //   'fix'(판이 있다 · 코멘트 · 고치기)는 사람에게 같은 ③ 이다 — 단계 바 · 만들던 앱 목록 · 둘러보기가 전부 이 표로 잰다.
 export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string }> = [
-  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'fix', n: 3, label: '시안 확인 · 고치기' },
+  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'fix', n: 3, label: '시안 확인 · 수정' },
   { key: 'check', n: 4, label: '확인' }, { key: 'put', n: 5, label: '넣기' },
 ];
 export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === (s === 'draft' ? 'fix' : s)); }
@@ -71,12 +71,21 @@ export function verJ(n: number, j: '을' | '으로' | '이' | '은'): string {
   if (k <= 1) return '초안' + j;
   return 'V' + k + ' ' + ({ 을: '를', 으로: '로', 이: '가', 은: '는' } as const)[j];
 }
-const ORD = ['', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열'];
-/** 새 버전이 왔을 때의 머리글 — 초안이 나왔어요 · 두 번째 버전이 나왔어요 … 열 번째까지 말로, 그 뒤는 V11 이 나왔어요. */
+//  서수는 우리말로 끝까지 — 열한 번째 · 스무 번째 · 아흔아홉 번째(원준 2026-10-16 «그 뒤도 열한 번째 버전이 나왔어요 <- 이렇게»). 백부터는 숫자(100번째).
+const ORD_ONE = ['', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉'];
+const ORD_TEN = ['', '열', '스물', '서른', '마흔', '쉰', '예순', '일흔', '여든', '아흔'];
+/** 2 이상 → 「두 번째」 · 「열한 번째」 · 「스무 번째」 · 「100번째」. */
+export function verOrdinal(n: number): string {
+  const k = Math.floor(Number(n) || 0);
+  if (k >= 100) return k + '번째';
+  if (k <= 1) return '첫 번째';
+  const t = Math.floor(k / 10), o = k % 10;
+  return (o === 0 && t === 2 ? '스무' : ORD_TEN[t] + ORD_ONE[o]) + ' 번째';
+}
+/** 새 버전이 왔을 때의 머리글 — 초안이 나왔어요 · 두 번째 버전이 나왔어요 · 열한 번째 버전이 나왔어요 …(서수는 verOrdinal). */
 export function verArrived(n: number): string {
   const k = Math.floor(Number(n) || 0);
-  if (k <= 1) return '초안이 나왔어요';
-  return k <= 10 ? ORD[k] + ' 번째 버전이 나왔어요' : 'V' + k + ' 이 나왔어요';
+  return k <= 1 ? '초안이 나왔어요' : verOrdinal(k) + ' 버전이 나왔어요';
 }
 
 export const DRAFT_STEPS = ['기획 읽는 중', '화면 짜는 중', '자료 표 만드는 중', '저장하는 중'];
@@ -149,7 +158,7 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
-/** ④ 짚은 곳 — 고른 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
+/** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
 export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number }
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
@@ -157,7 +166,7 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
   pins.forEach((p, i) => {
     if (!p.note.trim()) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
-    if (p.kind === 'pick') lines.push(`[고른 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
+    if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
     else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
     else lines.push(`[핀 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
   });

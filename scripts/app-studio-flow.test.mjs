@@ -61,7 +61,16 @@ check(typeof F.PROBE_JS === "string" && /elementFromPoint/.test(F.PROBE_JS) && /
 check(F.verName(0) === "" && F.verName(-1) === "" && F.verName(NaN) === "" && F.verName(1) === "초안" && F.verName(2) === "V2" && F.verName(10) === "V10" && F.verName(11) === "V11" && F.verName(2.7) === "V2", "F1 verName — 없음 '' · 1 초안 · 2 이상 Vn · 소수는 내림");
 check(F.verJ(1, "을") === "초안을" && F.verJ(1, "으로") === "초안으로" && F.verJ(1, "은") === "초안은" && F.verJ(1, "이") === "초안이" && F.verJ(0, "으로") === "초안으로", "F2 verJ — 초안은 받침 꼴(을 · 으로 · 은 · 이)");
 check(F.verJ(2, "을") === "V2 를" && F.verJ(2, "으로") === "V2 로" && F.verJ(3, "은") === "V3 는" && F.verJ(4, "이") === "V4 가", "F3 verJ — Vn 은 띄어 받침 없는 꼴(를 · 로 · 는 · 가)");
-check(F.verArrived(0) === "초안이 나왔어요" && F.verArrived(1) === "초안이 나왔어요" && F.verArrived(2) === "두 번째 버전이 나왔어요" && F.verArrived(3) === "세 번째 버전이 나왔어요" && F.verArrived(10) === "열 번째 버전이 나왔어요" && F.verArrived(11) === "V11 이 나왔어요", "F4 verArrived — 초안 · 두 번째 … 열 번째 · 그 뒤는 Vn");
+check(F.verArrived(0) === "초안이 나왔어요" && F.verArrived(1) === "초안이 나왔어요" && F.verArrived(NaN) === "초안이 나왔어요" && F.verArrived(-3) === "초안이 나왔어요" && F.verArrived(2) === "두 번째 버전이 나왔어요" && F.verArrived(3) === "세 번째 버전이 나왔어요" && F.verArrived(10) === "열 번째 버전이 나왔어요" && F.verArrived(2.7) === "두 번째 버전이 나왔어요", "F4 verArrived — 초안 · 두 번째 … 열 번째 · 소수는 내림");
+//  원준 2026-10-16 «그 뒤도 열한 번째 버전이 나왔어요 <- 이렇게» — 열 번째 뒤도 우리말 서수(스무는 불규칙) · 백부터는 숫자.
+check(F.verArrived(11) === "열한 번째 버전이 나왔어요" && F.verArrived(19) === "열아홉 번째 버전이 나왔어요" && F.verArrived(20) === "스무 번째 버전이 나왔어요" && F.verArrived(21) === "스물한 번째 버전이 나왔어요" && F.verArrived(30) === "서른 번째 버전이 나왔어요" && F.verArrived(45) === "마흔다섯 번째 버전이 나왔어요" && F.verArrived(99) === "아흔아홉 번째 버전이 나왔어요" && F.verArrived(100) === "100번째 버전이 나왔어요" && F.verArrived(101) === "101번째 버전이 나왔어요", "F5 verArrived — 열한 번째 · 스무 번째 · 스물한 번째 · 아흔아홉 번째 · 100번째", [11, 20, 21, 99, 100].map(F.verArrived));
+{
+  const bad = []; for (let n = 2; n <= 150; n++) { const t = F.verArrived(n); if (/V\s?\d/.test(t) || !/번째 버전이 나왔어요$/.test(t)) bad.push(n + ": " + t); }
+  //  2~99 전부를 글자 그대로 — 십의 자리(쉰 · 예순 · 일흔 · 여든 …) 어느 하나가 틀려도 잡힌다.
+  const ONE = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉"], TEN = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"];
+  for (let n = 2; n <= 99; n++) { const want = (n === 20 ? "스무" : TEN[Math.floor(n / 10)] + ONE[n % 10]) + " 번째 버전이 나왔어요"; if (F.verArrived(n) !== want) bad.push(n + ": " + F.verArrived(n) + " ≠ " + want); }
+  check(bad.length === 0 && F.verOrdinal(0) === "첫 번째" && F.verOrdinal(1) === "첫 번째" && F.verOrdinal(NaN) === "첫 번째", "F6 2~150 어디에도 V 숫자 꼴이 없다 · verOrdinal 은 빈 글을 내지 않는다", bad.slice(0, 5));
+}
 // ══ H 기획 카드 「참고한 것」 · 벤치마크 · 와이어프레임(사양 표 H) ══
 const refCard = F.parseCard("[[기획카드]]\n이름: 회의록\n할 수 있는 것: 올리기 · 정리 · 넣기\n참고한 것: Otter 의 회의 목록 + 정리본 탭\n[[/기획카드]]");
 check(refCard && refCard.ref === "Otter 의 회의 목록 + 정리본 탭", "H1 카드의 「참고한 것」 줄을 읽는다", refCard);

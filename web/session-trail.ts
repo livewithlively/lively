@@ -13,6 +13,7 @@
 //  위젯은 여기 없다 — 그리는 일은 web/timeline.ts 한 곳이 한다(발자취·프로젝트·워크스페이스가 같은 부품).
 import { apiUrl, TOKEN_KEY } from './core.js';
 import { humanTitle, type TimelineHandle, type TlKind, type TlOut, type TlTier } from './timeline.js';
+import { isTrySessionTitle } from './lib/builder-flow.js';
 
 /** session-chat.ts 가 받는 싱크 타입(이름 유지 — 호출부 무변경). */
 export type TrailWidget = TimelineHandle;
@@ -148,6 +149,9 @@ export function classifyToolUse(name: string, input: any): TrailClass | null {
 export const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|Caveat:)/;
 export const INTERRUPT_RE = /^\s*\[Request interrupted/;
 export const CONTINUED_RE = /^\s*This session is being continued/;
+/** 사람이 친 말이 아닌 첫 지시 — 앱빌더 시험 세션의 브리프(앱빌더가 넣는 글). 대화창 · 되감기 어디에도 사람 말로 그리지 않는다
+ *  (#4632 원준 2026-10-16 «이거 안보여줄 수는 없나?» — 사람은 앱을 써 보러 왔지 AI 에게 준 지시를 보러 온 게 아니다). AI 의 첫 답은 그대로 선다. */
+export const isHiddenBrief = (t: string): boolean => isTrySessionTitle(t);
 
 /** 여러 줄에서 **첫 뜻있는 줄**(또는 그 첫 문장)만. 통째로 이으면 제목이 벽이 된다. */
 export const firstLine = (t: string): string => {
@@ -266,7 +270,7 @@ export function replayTrail(w: TimelineHandle, ndjson: string): void {
         }
       }
       if (o.isMeta || !text.trim()) continue;
-      if (INTERRUPT_RE.test(text) || CONTINUED_RE.test(text) || INJECTED_RE.test(text)) continue;
+      if (INTERRUPT_RE.test(text) || CONTINUED_RE.test(text) || INJECTED_RE.test(text) || isHiddenBrief(text)) continue;
       trailSay(w, o, text, 'end');
       continue;
     }

@@ -220,7 +220,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
       el('div', { class: 'v2-bld-chips' }, ...chips.map(([k, t]) => el('span', { class: 'v2-bld-chip' + (k ? ' ' + k : ''), text: t }))),
       el('div', { class: 'v2-bld-acts' },
         own || a.canEdit
-          ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '고치기', title: '이 앱을 말과 의견으로 고쳐요 — 다음 버전이 돼요', onclick: () => { location.hash = builderRoute('app', a.id, 'edit'); } })
+          ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '고치기', title: '이 앱을 말과 코멘트로 고쳐요 — 다음 버전이 돼요', onclick: () => { location.hash = builderRoute('app', a.id, 'edit'); } })
           : el('button', { class: 'v2-bld-pri sm', type: 'button', text: '내 사본 떠서 고치기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
         own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 · 내 식으로', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } })));
     return card;

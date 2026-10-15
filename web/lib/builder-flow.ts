@@ -111,8 +111,8 @@ export function builderTabTitle(where: BuilderWhere): string {
 export function draftStageText(stage: string, hasApp: boolean, done: boolean): string {
   if (done) return '다 만든 앱 · 이어서 고치기';
   if (!hasApp) return stage === 'draft' ? '③ 시안 만드는 중' : '② 세부 기획 정하기';
-  const n: Record<string, string> = { draft: '③ 시안 확인 · 고치기', fix: '③ 시안 확인 · 고치기', check: '④ 확인', put: '⑤ 넣기' };
-  return n[stage] || '③ 시안 확인 · 고치기';
+  const n: Record<string, string> = { draft: '③ 시안 확인 · 수정', fix: '③ 시안 확인 · 수정', check: '④ 확인', put: '⑤ 넣기' };
+  return n[stage] || '③ 시안 확인 · 수정';
 }
 
 /** 이 세션이 앱빌더에서 **새 앱을 만드는** 세션인가 — 이름 «"이름" 앱 제작» · 「새 앱 제작」 · 옛 「앱 만들기 · 」, 또는 그 밖의 이름이어도

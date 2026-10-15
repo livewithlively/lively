@@ -27,7 +27,7 @@ export async function revertApp(appId: string, versionNo: number, title?: string
     const out: any = await api(appPath(appId, '/revert'), { method: 'POST', body: JSON.stringify({ version_no: versionNo, ...(opts && opts.publish ? { publish: true } : {}) }) });
     const draft = out && out.state === 'draft';
     //  #4632 앱빌더에서도 부른다 — 판 번호는 앱빌더의 버전 이름으로(초안 · V2 …, lib/studio-flow verJ).
-    toast(`「${title || appId}」 — ${verJ(versionNo, '으로')} 되돌렸어요 · 문서 · 의견 데이터는 그대로예요.` + (draft ? ' 이 버전은 나에게만 보여요 · 모두에게 쓰게 하려면 「공개하기」.' : ''));
+    toast(`「${title || appId}」 — ${verJ(versionNo, '으로')} 되돌렸어요 · 문서 · 코멘트 데이터는 그대로예요.` + (draft ? ' 이 버전은 나에게만 보여요 · 모두에게 쓰게 하려면 「공개하기」.' : ''));
     return versionNo;
   } catch (e: any) { toast('되돌리지 못했어요 — ' + (e && e.message ? e.message : e), true); return null; }
 }

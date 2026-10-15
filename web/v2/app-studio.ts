@@ -168,6 +168,7 @@ let mountOpts: StudioMountOpts = {};
 export function closeAppStudio(): void {
   if (teardown) { teardown(); teardown = null; }
   if (root) { root.remove(); root = null; }
+  closeCoach();
   const done = mountOpts.onClose; mountOpts = {};
   if (done) done();
 }
@@ -269,7 +270,7 @@ function showTour(onDone?: () => void): void {
   const slides: Array<{ n: number; t: string; now: string; body: () => HTMLElement }> = [
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고 자리 고르기 → 「만들기 시작」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: 'AI 가 쓴 기획 카드에서 틀린 줄만 고치고 「이대로 시안 만들기」', body: () => cardView(c, null) },
-    { n: 3, t: '시안 확인 · 고치기', now: '걸음 넷을 지나 진짜 앱이 생기면 실제 화면에서 써 보고, 고칠 곳을 찍어 한 줄씩 → 「수정하기 · 2건」 → 다음 버전', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2 · 제목에 날짜 · 「끝남」 단추 · 안 끝난 것 먼저' }))) },
+    { n: 3, t: '시안 확인 · 수정', now: '걸음 넷을 지나 진짜 앱이 생기면 실제 화면에서 써 보고, 고칠 곳을 찍어 한 줄씩 → 「수정하기 · 2건」 → 다음 버전', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2 · 제목에 날짜 · 「끝남」 단추 · 안 끝난 것 먼저' }))) },
     { n: 4, t: '확인', now: '네 줄만 보고 「이대로 넣기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? — 셋 다 있어요(AI 가 대조)' }), el('div', { text: '✓ 이름 · 「회의 안건」' }), el('div', { text: '✓ 쓰는 자리 · 세션 위젯' }), el('div', { text: '✓ 누가 쓰나 · 나만 (기본)' }))) },
     { n: 5, t: '넣기', now: '이제 워크스페이스 앱이에요 · 「지금 써 보기」 · 「팀에 알리기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요 — 초안 처음 · V2 날짜와 끝남 단추 · V3 글자 크기' }), el('div', { text: '이렇게 쓰세요 — 세션 오른쪽 위 + 에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기 — 「장원준 님이 「회의 안건」 앱을 만들었어요 · 써 보기」' }))) },
   ];
@@ -289,19 +290,30 @@ function showTour(onDone?: () => void): void {
   };
   ov.append(box); root.append(ov); paint();
 }
-/** 단계마다 첫 번에만 — 지금 눌러야 할 자리 옆에 검은 말풍선 하나. 아무 데나 누르면 사라진다. */
-function coach(key: string, anchor: HTMLElement | null, text: string, example: string, force = false): void {
-  if (!root || !anchor) return;
-  if (!force && readSeen().coach?.[key]) return;
+/** 단계마다 첫 번에만 — 지금 눌러야 할 자리 바로 아래에 안내 한 칸. 화면 흐름 안에 끼워 아래 것을 밀어낸다 — 위에 떠서 다른 것을 가리지 않는다
+ *  (원준 2026-10-16 «다른거 가리게 만드니까 별론데»). 이 브라우저에서 그 단계를 처음 볼 때 한 번 뜨고, 「닫기」 를 누르거나 그 단계를 떠나면 사라진다.
+ *  사라질 때 아래 것이 제자리로 올라오니 아무 데나 누르면 닫히던 것 · 12초 뒤 물러나던 것은 걷었다(누르려던 단추가 손 밑에서 움직인다).
+ *  그 단계 화면을 다시 그려도(새 버전 · 대조 결과) 닫기 전엔 같은 자리에 다시 선다 — 그래서 열린 안내를 여기 들고 있다. */
+let openCoach: { key: string; text: string; example: string } | null = null;
+function coach(key: string, after: Element | null, text: string, example: string): void {
+  if (!root || !after) return;
+  if (!openCoach || openCoach.key !== key) {
+    if (readSeen().coach?.[key]) return;
+    markSeen((s) => { s.coach = s.coach || {}; s.coach[key] = 1; });
+  }
+  openCoach = { key, text, example };
   root.querySelectorAll('.v2-studio-coach').forEach((n) => n.remove());
-  const b = el('div', { class: 'v2-studio-coach', role: 'note' }, el('b', { text: '처음 안내' }), el('span', { text }), el('small', { text: '예: ' + example }));
-  root.append(b);
-  const r = anchor.getBoundingClientRect(), bw = Math.min(300, window.innerWidth - 24);
-  b.style.width = bw + 'px'; b.style.top = Math.min(window.innerHeight - 120, r.bottom + 10) + 'px'; b.style.left = Math.max(12, Math.min(r.left, window.innerWidth - bw - 12)) + 'px';
-  const off = (): void => { b.remove(); document.removeEventListener('pointerdown', off, true); window.clearTimeout(t); markSeen((s) => { s.coach = s.coach || {}; s.coach[key] = 1; }); };
-  const t = window.setTimeout(off, 12000);   // 안 눌러도 12초면 물러난다
-  setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
+  const b = el('div', { class: 'v2-studio-coach', role: 'note' },
+    el('div', {}, el('b', { text: '처음 안내' }), el('span', { text }), el('small', { text: '예: ' + example })),
+    el('button', { class: 'v2-studio-coach-x', type: 'button', text: '×', title: '닫기', 'aria-label': '처음 안내 닫기', onclick: () => { closeCoach(); } }));
+  after.after(b);
 }
+/** 열린 안내를 그 자리에 다시 세운다(그 단계 화면을 다시 그렸을 때) — 닫았거나 다른 단계의 안내면 아무것도 안 한다. */
+function recoach(key: string, after: Element | null): void { if (openCoach && openCoach.key === key) coach(key, after, openCoach.text, openCoach.example); }
+/** 열린 안내를 닫는다(다시 그려도 서지 않는다) — 화면에 있으면 걷는다. */
+function closeCoach(): void { openCoach = null; if (root) root.querySelectorAll('.v2-studio-coach').forEach((n) => n.remove()); }
+/** 단계를 옮겼다 — 그 단계의 안내가 아니면 닫는다(돌아와도 다시 서지 않는다). */
+function leaveCoach(key: string): void { if (openCoach && openCoach.key !== key) closeCoach(); }
 function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): void {
   if (!root) return;
   root.querySelectorAll('.v2-studio-help').forEach((n) => n.remove());
@@ -511,7 +523,7 @@ async function build(rec: StudioRec): Promise<void> {
     const cur = stageIndex(rec.stage);
     bar.replaceChildren(...STAGES.map((x, i) => {
       let label = x.label;
-      if (rec.mode !== 'new' && i < 3) label = i === 0 ? '앱 이름과 기능(원본)' : i === 1 ? '세부 기획(물려받음)' : '원본 시안 확인 · 고치기';
+      if (rec.mode !== 'new' && i < 3) label = i === 0 ? '앱 이름과 기능(원본)' : i === 1 ? '세부 기획(물려받음)' : '원본 시안 확인 · 수정';
       if (x.key === 'fix' && rec.round > 0) label += ' · ' + (rec.round + (rec.stage === 'fix' && !S.waiting ? 1 : 0)) + '번째';
       //  지난 단계는 눌러서 돌아간다(원준 2026-10-14 «뒤로 가는 게 너무 없다») — 적은 것은 기록에 있으니 날아가지 않는다.
       const canGo = i < cur && (rec.mode === 'new' || i >= 2);
@@ -529,7 +541,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const goTo = async (k: 'what' | StudioStage): Promise<void> => {
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);
-    if (k === 'what') { if (teardown) { teardown(); teardown = null; } start(rec); return; }
+    if (k === 'what') { if (teardown) { teardown(); teardown = null; } closeCoach(); start(rec); return; }   // ①로 — 열린 안내는 닫는다(다시 와도 또 서지 않게)
     await setStage(k);
   };
   const nowBtn = (text: string, pri: boolean, run: () => void, disabled = false): HTMLButtonElement => { const b = el('button', { class: pri ? 'v2-studio-now-pri' : 'btn btn-ghost btn-sm', type: 'button', text, onclick: run }) as HTMLButtonElement; b.disabled = disabled; return b; };
@@ -541,14 +553,24 @@ async function build(rec: StudioRec): Promise<void> {
     else if (rec.stage === 'draft' || rec.stage === 'fix') {
       if (!rec.appId) text = 'AI 가 초안을 만드는 중 · ' + (S.step ? DRAFT_STEPS[S.step - 1] : '시작하는 중') + ' (몇 분 걸려요)';
       else if (S.waiting) text = 'AI 가 고치는 중이에요 · 다음 버전이 오면 여기와 실제 화면이 바뀌어요';
-      else if (hasCm) { text = '적은 의견 ' + cmCount() + '건 — 「수정하기」 를 누르면 AI 가 한 번에 고쳐 다음 버전을 내요'; kids.push(nowBtn('마음에 들어요 · 확인으로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
-      else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('마음에 들어요 · 확인으로', rec.round >= 1, () => { void setStage('check'); })); }
+      else if (hasCm) { text = '적은 코멘트 ' + cmCount() + '건 — 「수정하기」 를 누르면 AI 가 한 번에 고쳐 다음 버전을 내요'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
+      else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
     } else if (rec.stage === 'check') { text = '네 줄만 보고 「이대로 넣기」 · 하나라도 아니면 「더 고치기」'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('이대로 넣기', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '이제 내 앱이에요(나만 보여요)' : S.vis && S.vis.draftMine ? '나만 보는 버전으로 두었어요(다른 사람은 공개 버전을 써요)' : '이제 워크스페이스 앱이에요') + ' · 「지금 써 보기」 로 바로 열어 보세요'; }
     const prev = prevOf();
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '한 단계 앞으로 — 적은 것은 그대로예요', onclick: () => { void goTo(prev); } })] : []),
       el('span', { class: 'v2-studio-now-t', text: '지금 할 일: ' + text }), el('span', { class: 'v2-studio-sp' }), ...kids.filter(Boolean) as HTMLElement[]);
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);   // 적던 의견은 늘 기록에(뒤로 가도 · 닫아도 그대로)
+    syncFixIn();
+  };
+  /** 허브 글 속 「수정하기」 단추를 막대의 단추와 맞춘다 — 의견이 있어야 눌리고(「수정하기 · n건」), 고치는 중엔 잠긴다. 뒤 조사도 글에 맞춘다(수정하기를 · n건을). */
+  const syncFixIn = (): void => {
+    const n = cmCount();
+    appBox.querySelectorAll('.v2-studio-fix-in').forEach((b0: Element) => { const b = b0 as HTMLButtonElement;
+      b.textContent = '수정하기' + (n ? ' · ' + n + '건' : ''); b.disabled = S.waiting || n === 0;
+      b.title = S.waiting ? 'AI 가 고치는 중이에요' : n ? '적은 코멘트 ' + n + '건을 AI 에게 한 번에 보내요' : '고칠 곳에 코멘트를 남기면 누를 수 있어요';
+      const j = b.nextElementSibling; if (j && j.classList.contains('v2-studio-fix-j')) j.textContent = n ? '을' : '를';
+    });
   };
   const paintVer = async (): Promise<void> => {
     if (!rec.appId) return;
@@ -623,7 +645,7 @@ async function build(rec: StudioRec): Promise<void> {
       const pid = await studioProject().catch(() => 0);
       if (S.dead) return;
       if (!pid) { toast('앱빌더 프로젝트를 찾지 못했어요 — 잠시 뒤 다시 눌러 주세요', true); return; }
-      if (!rec.trySid) toast('시험 세션을 여는 중이에요 — 처음엔 몇 초 걸려요');
+      if (!rec.trySid) toast('시안을 여는 중이에요 — 처음엔 몇 초 걸려요');
       //  세션 id 는 정해지는 즉시 기록한다 — 붙이기가 실패하거나 그 사이 화면을 떠나도 다음에 같은 세션을 쓴다(숨긴 세션이라 사람은 못 찾는다).
       const keep = (sid: string): void => { if (rec.trySid !== sid) { rec.trySid = sid; saveRec(rec); } };
       const sid = await ensureTrySession({ appId: rec.appId, title: S.title, projectId: pid, prevSid: rec.trySid, onSpawned: keep });
@@ -655,15 +677,15 @@ async function build(rec: StudioRec): Promise<void> {
     if (rec.stage !== 'fix' || !rec.appId) { tray.hidden = true; return; }
     tray.hidden = false;
     const rows = S.pins.map((p, i) => {
-      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 의견' }) as HTMLInputElement; inp.value = p.note;
+      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; paintNow(); if (S.review) S.review.update({}); });
       return el('div', { class: 'v2-studio-tray-row' }, el('span', { class: 'n', text: String(i + 1) }),
         el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 의견을 지워요', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
+        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 코멘트를 지워요', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
     });
-    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 의견(비워 두면 좋다는 뜻) · 예: 글자 조금 크게', 'aria-label': '앱 전체 의견' }) as HTMLInputElement; g.value = S.general;
+    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = S.general;
     g.addEventListener('input', () => { S.general = g.value; paintNow(); if (S.review) S.review.update({ general: S.general }); });
-    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '보낼 의견' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '짚은 자리마다 한 줄 · 실제 화면에서 번호를 누르면 그 자리가 보여요' : '실제 화면에서 고르기 · 핀 · 영역으로 짚으면 여기 모여요 · 앱 전체 의견은 바로 적어도 돼요' })),
+    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '짚은 자리마다 한 줄 · 실제 화면에서 번호를 누르면 그 자리가 보여요' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
       el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
   };
   // ③ 허브 — 판 · 가운데 단추(실제 화면으로) · 보낼 의견
@@ -678,7 +700,7 @@ async function build(rec: StudioRec): Promise<void> {
     //  창째 걷혔으면(앱빌더가 닫힘) 다음 Esc 를 삼키지 않고 손만 뗀다.
     const onKey = (e: KeyboardEvent): void => { if (!ov.isConnected) { document.removeEventListener('keydown', onKey, true); return; } if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     ov.append(el('div', { class: 'v2-studio-wf-card' },
-      el('div', { class: 'v2-studio-wf-head' }, el('b', { text: '「' + S.title + '」 와이어프레임' }), el('small', { text: verName(S.curVer) + ' · 화면 흐름 그림 — 무엇을 누르면 어느 화면으로 가는지' }),
+      el('div', { class: 'v2-studio-wf-head' }, el('b', { text: '「' + S.title + '」 와이어프레임' }), el('small', { text: verName(S.curVer) + ' · 화면에서 무엇을 누르면 다른 어느 화면으로 가는지 보여줍니다.' }),
         el('span', { class: 'v2-studio-sp' }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })),
       body));
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
@@ -710,11 +732,16 @@ async function build(rec: StudioRec): Promise<void> {
     h.replaceChildren(el('div', { class: 'v2-studio-hub' },
       el('div', { class: 'v2-studio-hub-head' },
         el('h2', { text: rec.mode !== 'new' && rec.round === 0 && !S.waiting ? '원본 그대로 열렸어요' : S.waiting ? 'AI 가 고치는 중이에요' : verArrived(S.curVer || 1) }),
-        el('p', { text: '진짜 라이블리 화면에서 눌러 써 보고, 고칠 곳을 짚어 한 줄씩 적으세요. 그 화면에서 하나하나 코멘트를 남기거나, 이 화면으로 돌아와 여기에 적어도 돼요 — 「수정하기」 를 누르면 AI 가 한 번에 고쳐 다음 버전을 내요.' })),
+        //  글 속 「수정하기」 는 진짜 단추다 — 「지금 할 일」 줄 · 코멘트 막대의 「수정하기」 와 같은 꼴 · 같은 일(sendFix) · 같은 때 눌린다(원준 2026-10-16
+        //   «버튼 제대로 똑같이 구현하고, 저 문구 위에 있는 버튼 눌러도 똑같이 작동하게»). 글 · 눌림은 syncFixIn 이 의견 수에 맞춘다.
+        el('p', {}, '진짜 라이블리 화면에서 써 보고, 고칠 곳을 짚어서 적어주세요. 그 화면에서 하나하나 코멘트를 남기거나, 이 화면으로 돌아와 여기에 적어도 돼요 — 다음 화면에서 ',
+          el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } }), el('span', { class: 'v2-studio-fix-j' }), ' 누르면 AI 가 한 번에 고쳐 다음 버전을 내요.')),
       S.waiting ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 오면 여기와 실제 화면이 바뀌어요 · 그동안 AI 세션을 봐도 돼요' })) : go,
-      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임 보기' }), el('small', { text: '화면 흐름 그림 — 무엇을 누르면 어느 화면으로 가는지' })),
+      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 가는지 보여줍니다.' })),
       tray));
-    paintTray();
+    paintTray(); syncFixIn();
+    if (S.waiting) { if (openCoach && openCoach.key === 'draft') closeCoach(); }   // 고침을 보냈다 — 첫 안내는 할 일을 다 했다
+    else recoach('draft', go);
   };
   // 새 버전이 왔다(처음 · 고침 · 되돌림) — 버전 이력 · 띠 · 허브 · 코멘트 층 · 떠 있는 앱 화면을 맞춘다
   const showApp = async (note?: string): Promise<void> => {
@@ -746,7 +773,7 @@ async function build(rec: StudioRec): Promise<void> {
       rec.appId = found; S.title = foundTitle; rec.title = S.title; saveRec(rec); name.textContent = S.title;
       await setStage('fix');
       await showApp('처음 만들었어요');
-      requestAnimationFrame(() => coach('draft', appBox.querySelector('.v2-studio-hub-go') as HTMLElement, '진짜 앱이 생겼어요. 가운데 단추로 실제 라이블리 화면에서 어떻게 동작하는지 테스트해보고, 고칠 곳에 코멘트를 남기세요.', '제목을 누르고 「글자 더 크게」'));
+      coach('draft', appBox.querySelector('.v2-studio-hub-go'), '진짜 앱이 생겼어요. 가운데 단추로 실제 라이블리 화면에서 어떻게 동작하는지 테스트해보고, 고칠 곳에 코멘트를 남기세요.', '제목을 누르고 「글자 더 크게」');
       return;
     }
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
@@ -800,7 +827,7 @@ async function build(rec: StudioRec): Promise<void> {
       saveRec(rec);
     };
     h.replaceChildren(cardView(rec.card, onCard), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
-    requestAnimationFrame(() => coach('plan', h.querySelector('.v2-studio-card') as HTMLElement, 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「이대로 시안 만들기」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요'));
+    coach('plan', h.querySelector('.v2-studio-card'), 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「이대로 시안 만들기」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요');
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
   const paintSteps = (): void => { stepsEl.replaceChildren(...DRAFT_STEPS.map((s, i) => el('span', { class: i < S.step ? 'done' : i === S.step ? 'on' : '', text: s }))); };
@@ -831,7 +858,7 @@ async function build(rec: StudioRec): Promise<void> {
       row(true, '쓰는 자리', places),
       row(true, '누가 쓰나', whoRow()),
       el('p', { class: 'v2-studio-fine', text: '하나라도 아니면 「더 고치기」 로 ③에 돌아가요' })));
-    requestAnimationFrame(() => coach('check', h.querySelector('.v2-studio-chks') as HTMLElement, '다 됐는지 네 줄만 봐요. 하나라도 아니면 「더 고치기」.', '이름이 「' + S.title + '」 이 맞나요?'));
+    coach('check', h.querySelector('.v2-studio-chks'), '다 됐는지 네 줄만 봐요. 하나라도 아니면 「더 고치기」.', '이름이 「' + S.title + '」 이 맞나요?');
   };
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
@@ -888,12 +915,13 @@ async function build(rec: StudioRec): Promise<void> {
           el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: S.vis && S.vis.draftMine ? '이 버전을 모두에게 공개하기' : '워크스페이스 모두에게 공개하기', disabled: !!S.vis && !S.vis.canPublish,
             onclick: async (e: Event) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; if (await setVisibility('all')) { toast('워크스페이스 모두에게 공개했어요'); paintNow(); paintPut(); } else b.disabled = false; } }))),
       el('div', { class: 'v2-studio-fin-act' }, tryBtn, el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; void setStage('fix'); } }))));
-    requestAnimationFrame(() => coach('put', tryBtn, (shared ? '이제 워크스페이스 앱이에요. ' : S.vis && S.vis.draftMine ? '나만 보는 버전으로 두었어요(다른 사람은 공개 버전을 써요). ' : '이제 내 앱이에요(나만 보여요). ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요'));
+    coach('put', tryBtn.parentElement, (shared ? '이제 워크스페이스 앱이에요. ' : S.vis && S.vis.draftMine ? '나만 보는 버전으로 두었어요(다른 사람은 공개 버전을 써요). ' : '이제 내 앱이에요(나만 보여요). ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요');
   };
 
   // ── 단계 넘기기 — 속 단계 draft(첫 판 기다림)는 앱이 생기면 fix 다(사람에게는 같은 ③) ──
   const setStage = async (s0: StudioStage): Promise<void> => {
     const s: StudioStage = s0 === 'draft' && rec.appId ? 'fix' : s0;
+    leaveCoach(s === 'fix' || s === 'draft' ? 'draft' : s);
     rec.stage = s; if (s !== 'put') rec.done = false; saveRec(rec);
     if (s !== 'fix' && S.review) backToBuilder();
     body.classList.toggle('v2-studio-body--put', s === 'put'); body.classList.toggle('v2-studio-body--hub', s === 'fix' || s === 'draft'); body.classList.toggle('v2-studio-body--plan', s === 'plan' || s === 'check');
