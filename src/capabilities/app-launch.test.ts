@@ -22,7 +22,9 @@ function deps(over: Partial<LaunchDeps> = {}) {
     env: ENV,
     tenant: () => T,
     getMember: async (id) => ({ alice: { id, kind: "human", state: "active" }, admin: { id, kind: "human", state: "active" }, robo: { id, kind: "agent", state: "active" }, bob: { id, kind: "human", state: "inactive" } } as Record<string, { id: string; kind: "human" | "agent"; state: "active" | "inactive" }>)[id] ?? null,
-    getApp: async (id) => ({ "deck-edit": app("deck-edit"), off: app("off", { enabled: false }), failed: app("failed", { status: "failed" }), mine: app("mine", { visibility: "me", installed_by: "carol" }), empty: app("empty"), [`a${"b".repeat(31)}`]: app(`a${"b".repeat(31)}`) } as Record<string, OrgApp>)[id] ?? null,
+    getApp: async (id) => ({ "deck-edit": app("deck-edit"), off: app("off", { enabled: false }), failed: app("failed", { status: "failed" }), mine: app("mine", { visibility: "me", installed_by: "carol" }), empty: app("empty"), [`a${"b".repeat(31)}`]: app(`a${"b".repeat(31)}`),
+      //  #4667 공개 앱에 carol 의 초안 — 공개 판(3판)은 화면 main 하나, 설치된 초안은 main · settings · draft-only
+      drafted: app("drafted", { visibility: "all", draft_by: "carol", published_version_no: 3 }) } as Record<string, OrgApp>)[id] ?? null,
     listUiAssets: async (id) => (id === "empty" ? [] : [{ page_key: "main" }, { page_key: "settings" }]),
     mint: async (i) => { mints.push(i); return { code: "lva_" + "c".repeat(32) }; },
     now: () => NOW_MS,
@@ -60,12 +62,11 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
 // ── F3 판 · 경로 · state ──
 {
   const { d, mints } = deps();
-  assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit", variant: "draft" }, user(), d)), { status: 409, code: "draft_unavailable" });
   for (const next of ["//evil.com", "https://evil.com", "/a b"]) assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit", next }, user(), d)), { status: 400, code: "bad_next" }, next);
   assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit", mode: "top" }, user(), d)), { status: 400, code: "bad_state" });
   assert.deepEqual(await status(launchAppFor({ app_id: "deck-edit", mode: "top", state: "짧" }, user(), d)), { status: 400, code: "bad_state" });
   assert.equal(mints.length, 0);
-  ok("F3 초안 409 · next 400 · top state 400");
+  ok("F3 next 400 · top state 400");
 }
 
 // ── F4 앱 — 없음 · 남의 「나만」 · 꺼짐 · 실패 · 화면 없음 · 없는 화면 키 · 주소 못 만듦 ──
@@ -117,6 +118,32 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   await launchAppFor({ app_id: "deck-edit", exp: nowSec - 1 }, user(), d);   // embed 는 경유 주소가 없다 — exp 를 안 본다
   assert.equal(mints.length, 3);
   ok("F6 지난 경유 주소 — 410 app_open_expired(같은 초 · 지남 · 0 · 숫자 아님) · 남음/없음/embed 는 발급");
+}
+
+// ── F6 #4667 판 — 초안 주소는 초안 주인만 · 판을 안 정하면 보는 판의 주소 · 공개 주소의 화면 키는 공개 판에서 ──
+{
+  const pubManifest = { id: "drafted", title: "장표", version: "1", ui: { pages: [{ key: "main", title: "장표", entry: "ui/index.html" }] } };
+  const asked: number[] = [];
+  const { d, mints } = deps({
+    getMember: async (id) => ({ id, kind: "human", state: "active" }),
+    getAppVersion: async (_id, no) => { asked.push(no); return { manifest: pubManifest, files: [{ path: "ui/index.html", content: "<p>공개 판</p>" }] }; },
+  });
+  const carol = user({ userId: "carol" });
+  const auto = await launchAppFor({ app_id: "drafted" }, carol, d) as Record<string, unknown>;
+  assert.equal(auto.variant, "draft", "초안 주인 — 판을 안 정하면 초안 주소");
+  assert.equal(auto.origin, "https://drafted-lively-46e3-draft.lvly.app");
+  assert.equal(mints[0].host, "drafted-lively-46e3-draft.lvly.app");
+  const other = await launchAppFor({ app_id: "drafted" }, user(), d) as Record<string, unknown>;
+  assert.equal(other.variant, "pub", "남은 공개 주소");
+  assert.deepEqual(asked, [3], "공개 주소의 화면 키는 공개 판(3판) 행에서 본다");
+  assert.equal((await status(launchAppFor({ app_id: "drafted", variant: "draft" }, user(), d))).status, 404, "남의 초안 주소는 없는 판");
+  assert.equal((await status(launchAppFor({ app_id: "drafted", variant: "draft" }, user({ userId: "admin", scopes: ["admin"] }), d))).status, 404, "관리자에게도");
+  assert.equal((await status(launchAppFor({ app_id: "drafted", next: "/?page=settings" }, user(), d))).status, 404, "공개 판에 없는 화면 키(초안에만 있음)");
+  const carolPub = await launchAppFor({ app_id: "drafted", variant: "pub" }, carol, d) as Record<string, unknown>;
+  assert.equal(carolPub.origin, "https://drafted-lively-46e3.lvly.app", "초안 주인도 공개 주소를 고르면 공개 주소");
+  const plainDraft = await launchAppFor({ app_id: "deck-edit", variant: "draft" }, user(), d) as Record<string, unknown>;
+  assert.equal(plainDraft.origin, "https://deck-edit-lively-46e3-draft.lvly.app", "초안이 없으면 초안 주소도 열린다(같은 판)");
+  ok("F6 판 — 초안 주소 = 초안 주인만(남 · 관리자 404) · 안 정하면 보는 판의 주소 · 공개 주소 화면 키는 공개 판");
 }
 
 console.log(`\n${pass} passed`);

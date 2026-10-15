@@ -1,12 +1,12 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
+  addressVariantFor, addressViewFor, appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
   publishDenial, tablesGoneAtPublish, tablesUsableNow, unpublishDenial, type AppVisState,
 } from "./visibility.js";
 import { APP_ID_RE } from "./manifest.js";
 
-// ── 앱 공개 범위 · 만든 사람 · 책임자 (#4632 「나만」 · #4667 앱 v2-15) — 사양 엣지 표 E1~E14 · E18~E21 · E28~E32 ──────────
+// ── 앱 공개 범위 · 만든 사람 · 책임자 (#4632 「나만」 · #4667 앱 v2-15) — 사양 엣지 표 E1~E14 · E18~E21 · E28~E33 ──────────
 //  이게 틀리면: 남이 만들고 있는 앱이 앱 찾기·세션에 뜨거나(나만 보는 앱이 샌다) · 공개 앱을 고치는 순간 모두의 앱이 바뀌거나(초안이 샌다) ·
 //   반대로 초안을 만든 사람이 제 초안을 못 보거나 · 떠난 사람의 앱을 아무도 책임지지 않거나 · 칸이 깨진 앱이 통째로 잠긴다(#4632 V6).
 
@@ -189,4 +189,30 @@ test("E32 남의 공개 전 판 — 공개 판 뒤에 다른 사람이 저장한
   assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: "other", saved_at: "2026-10-14T08:00:00.001Z" }, third, at), true, "공개 뒤 1ms 에 저장한 남의 판");
   assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: null, saved_at: "2026-10-14T09:00:00.000Z" }, third, at), true, "저장한 사람 기록이 없는 공개 뒤 판도 남의 것");
   assert.equal(isOthersPendingVersion(back, { version_no: 7, saved_by: "other", saved_at: "날짜 아님" }, third, at), false, "시각을 못 읽으면 가리지 않는다");
+});
+
+test("E33 앱 주소의 두 판(#4480 · 설계 §13-5) — 공개 주소는 모두에게 공개 판(초안 주인도) · 초안 주소는 초안 주인만 · 주소를 안 정하면 보는 판의 주소", () => {
+  const d = app({ draft_by: "other", published_version_no: 3 });   // 공개 앱에 other 의 초안
+  const third = { userId: "third", scopes: ["memory"] };
+  assert.equal(addressViewFor(d, other, "pub"), "published", "초안 주인도 공개 주소에선 공개 판");
+  assert.equal(addressViewFor(d, third, "pub"), "published");
+  assert.equal(addressViewFor(d, other, "draft"), "installed", "초안 주인은 초안 주소에서 자기 초안");
+  assert.equal(addressViewFor(d, third, "draft"), "none", "남의 초안 주소는 없는 판");
+  assert.equal(addressViewFor(d, maker, "draft"), "none", "책임자에게도 남의 초안은 없는 판");
+  assert.equal(addressViewFor(d, admin, "draft"), "none", "관리자에게도");
+  assert.equal(addressViewFor(app(), third, "draft"), "installed", "초안이 없으면 초안 주소도 설치된 상태(= 공개 판)");
+  assert.equal(addressViewFor(app(), third, "pub"), "installed");
+  assert.equal(addressViewFor(app({ draft_by: "other", published_version_no: null }), third, "pub"), "installed", "포인터 없는 초안 표식(불변식 위반)은 설치된 상태");
+  const p = app({ visibility: "me" });
+  assert.equal(addressViewFor(p, maker, "pub"), "installed", "나만 보는 앱 — 판이 하나");
+  assert.equal(addressViewFor(p, maker, "draft"), "installed");
+  assert.equal(addressViewFor(p, third, "pub"), "none", "남의 나만 보는 앱은 어느 주소로도 없다");
+  assert.equal(addressViewFor(p, third, "draft"), "none");
+  assert.equal(addressVariantFor(d, other), "draft", "초안 주인 — 라이블리 화면이 보이는 판(초안)의 주소");
+  assert.equal(addressVariantFor(d, third), "pub");
+  assert.equal(addressVariantFor(d, maker), "pub", "책임자는 공개 판");
+  assert.equal(addressVariantFor(app(), maker), "pub", "초안 없음");
+  assert.equal(addressVariantFor(p, maker), "pub", "나만 보는 앱은 공개 주소(판이 하나)");
+  assert.equal(addressVariantFor(app({ draft_by: "other", published_version_no: null }), other), "pub", "포인터 없는 초안 표식");
+  for (const who of [other, third, maker, admin]) assert.equal(addressViewFor(d, who, addressVariantFor(d, who)), appViewFor(d, who), `주소를 안 정하고 열면 라이블리 화면과 같은 판 — ${who.userId}`);
 });

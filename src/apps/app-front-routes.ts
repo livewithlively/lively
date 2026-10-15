@@ -20,7 +20,7 @@ import { managedMode } from "../org/tenancy/state.js";
 import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
-import { appViewFor, canSeeApp } from "./visibility.js";
+import { addressViewFor, canSeeApp } from "./visibility.js";
 import { uiPagesFromFiles, type AppFile } from "./app-versions.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
@@ -133,10 +133,13 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
   const path = parseAppPath(rawPath);
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
-  //  #4667 공개 앱에 남의 초안이 걸려 있으면 이 사람은 공개 판을 본다 — 설치된 화면(초안)이 아니라 공개 판 행의 파일에서 꺼낸다(org_app_ui 와 같은 규칙).
+  //  #4667 주소의 판 — 공개 주소는 모두에게 공개 판(초안이 걸려 있으면 공개 판 행의 파일), 초안 주소는 그 초안을 고친 사람에게만 설치된 화면
+  //   (남의 초안은 없는 판 · apps/visibility.ts addressViewFor). 초안 코드가 공개 판 주소에서 돌지 않게 — 설계 §13-5.
+  const view = addressViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }, act.var === "draft" ? "draft" : "pub");
+  if (view === "none") return notFound(`앱 '${w.app.id}' 에 열 수 있는 초안 판이 없습니다.`);
   let asset: { page_key: string; html: string } | null = null;
   let manifest: unknown = w.app.manifest;
-  const pub = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published" && d.getAppVersion
+  const pub = view === "published" && d.getAppVersion
     ? await d.getAppVersion(w.app.id, w.app.published_version_no as number).catch(() => null) : null;
   if (pub) {
     const ui = uiPagesFromFiles(pub.manifest, pub.files as AppFile[]);
