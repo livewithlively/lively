@@ -86,8 +86,9 @@ test("L4 ②→③ 새 대화로도 곧바로 죽으면 종전처럼 안내 + �
   assert.match(r.out, /SHELL_ALIVE/);
 });
 test("L4b ②→① 새 대화가 한동안 돌다 죽으면 셸 없이 끝낸다", () => {
-  const h = fakeHarness("new-then-died", { resumeRc: 1, rc: 4, sleep: 2 });
-  const r = run(stop(h, ["--resume", "c-1"], 2), { LIVELY_LAUNCH_QUICK_SEC: "1" });
+  //  기준 3초 · 새 대화는 5초 돈다 — 병렬 시험 부하에서 첫 실행(셸 기동)이 1초를 넘긴 실측이 있어 여유를 둔다(run-tests 머리말: 상한을 부하 내성 있게).
+  const h = fakeHarness("new-then-died", { resumeRc: 1, rc: 4, sleep: 5 });
+  const r = run(stop(h, ["--resume", "c-1"], 2), { LIVELY_LAUNCH_QUICK_SEC: "3" });
   assert.deepEqual(argsLines(r.out), ["ARGS:--resume c-1", "ARGS:"]);
   assert.equal(r.code, 4);
   assert.doesNotMatch(r.out, /SHELL_ALIVE/);

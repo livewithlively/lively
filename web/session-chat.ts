@@ -597,9 +597,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       window.clearTimeout(composeTimer); saveComposeDraft(target.id, '');
       //  끄기 전에 답을 기다리던 질문이 떠 있으면, 입력칸에 직접 쓴 글은 그 질문의 답이다 — AI 는 그 질문을 기억하지 못하므로 질문을 붙여 보낸다.
       const q = stopQuestionOpen();
-      const out = q && text.trim() ? stopFreeAnswerPrompt(q, text) : text;
-      if (q && text.trim()) clearStopCard();
-      await sendPrompt(out + attachments.tail(), () => attachments.clear());
+      if (q && text.trim()) { text = stopFreeAnswerPrompt(q, text); clearStopCard(); }
+      await sendPrompt(text + attachments.tail(), () => attachments.clear());
     },
     // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
     //  안 와 있으면(방금 만든 세션) 멈춤 버튼과 Esc 가 **그 화면에서 영영 사라졌다**(실측 2026-08-26 사용자 신고).
