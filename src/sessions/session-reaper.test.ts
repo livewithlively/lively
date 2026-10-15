@@ -1,7 +1,7 @@
 // idle 세션 회수 결정 로직 테스트 (#1059 F) — 정당 세션 오kill 금지 안전 불변식(#687 교훈)이 핵심.
 //  주입 seam(deps)으로 tmux·DB 없이 결정만 검증한다. 엣지 표(스크래치패드 spec.md)의 모든 행 = 시나리오.
 import assert from "node:assert/strict";
-import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs, resolveJobVerdicts } from "./session-reaper.js";
+import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs, resolveJobVerdicts, resolveContainerJobVerdicts } from "./session-reaper.js";
 import type { ProcEntry } from "./session-rss.js";
 import { invalidateSessionReclaimPolicyCache, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -1200,6 +1200,25 @@ const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(p
   assert.deepEqual([blind.jobs.size, [...blind.unknown].sort()], [0, ["box-a", "box-b"]], "pane 목록을 못 봤으면 전부 판정 불가");
   const none = await resolveJobVerdicts(new Set(), view([]), gwOnly(), async () => inContainer(true));
   assert.deepEqual([none.jobs.size, none.unknown.size], [0, 0]);
+}
+
+// F7 — #4695 세션 컨테이너(매니지드)의 판정: 세션마다 그 세션을 지목해 pane pid 를 묻고, 그 컨테이너 안의 ps 표로만 본다.
+//  실측(2026-10-15 lively-46e3): 지목 없는 `list-panes -a` 가 세션당 컨테이너의 tmux 에 안 닿아 후보 전부가 «판정 불가» 였다.
+{
+  const asked: string[] = [];
+  const v = await resolveContainerJobVerdicts(new Set(["box-busy", "box-idle", "box-nopane", "box-throw", "box-empty"]),
+    async (sid) => { asked.push(sid); return sid === "box-nopane" ? null : [28]; },
+    async (sid) => {
+      if (sid === "box-throw") throw new Error("중계 타임아웃");
+      if (sid === "box-empty") return new Map();
+      return inContainer(sid === "box-busy");
+    });
+  assert.deepEqual(asked.sort(), ["box-busy", "box-empty", "box-idle", "box-nopane", "box-throw"], "후보마다 그 세션을 지목해 pane 을 묻는다");
+  assert.deepEqual([...v.jobs], ["box-busy"], "컨테이너 안의 표로 작업을 잡는다");
+  assert.deepEqual([...v.unknown].sort(), ["box-empty", "box-nopane", "box-throw"], "pane 못 물음 · 프로브 실패 · 빈 표 = 판정 불가");
+  //  게이트웨이 자기 표는 보지 않는다 — 컨테이너의 pane pid 28 이 게이트웨이의 다른 프로세스와 겹쳐도 엉뚱하게 «판정됨» 이 되지 않는다.
+  const v2 = await resolveContainerJobVerdicts(new Set(["box-x"]), async () => [28], async () => inContainer(true));
+  assert.deepEqual([...v2.jobs], ["box-x"]);
 }
 
 console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");
