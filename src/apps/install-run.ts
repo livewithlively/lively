@@ -3,7 +3,7 @@
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
 import { getApp, listComponents, upsertUiAsset, pruneUiAssets, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import type { LoadedApp } from "./loader.js";
-import { ensureAppTables, appSchemaFor, cleanupDroppedTables, checkAppTableFuse, emptyTableReport, type AppTableReport, type DroppedTablesReport } from "./store-schema.js";
+import { ensureAppTables, appSchemaFor, cleanupDroppedTables, checkAppTableFuse, emptyTableReport, type AppTableReport, type DroppedTablesReport, type ProtectColumns } from "./store-schema.js";
 import { isBuiltinSource, physicalTableName } from "./store-ddl.js";
 import { notifyAppInstaller } from "./notify.js";
 import { HttpError } from "../http-error.js";
@@ -38,6 +38,11 @@ export interface InstallOptions {
    *  초안이 뺀 표를 지우면 공개 판을 쓰는 사람들의 데이터가 사라진다. 「공개하기」(capabilities/apps.ts publishCurrent)가 그때 정리한다.
    */
   keepTables?: readonly string[];
+  /**
+   * #4724 지켜야 할 칸 — 공개 앱에 초안을 깔 때 **공개 판이 선언한 칸**(store-schema ProtectColumns). 그 칸을 깨는 변경(지우기·이름·형
+   *  바꾸기·조이기)은 미뤄 보고서 deferred 에 적고, 「공개하기」(publishCurrent)가 지키지 않고 다시 맞출 때 반영된다.
+   */
+  protect?: ProtectColumns;
 }
 
 export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: WriteCtx, opts: InstallOptions = {}): Promise<InstallOutcome> {
@@ -72,7 +77,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
     //  (빈 테이블이 남는 쪽은 무해하다 — CREATE IF NOT EXISTS 라 다음 설치가 그대로 쓴다.) 이미 있는 테이블엔 늘어난 칸을 더한다.
     const report = emptyTableReport();
     //  #4226 — 자유 SQL 역할도 여기서 맞춘다(비치명 — 못 만들면 report.sql_role 에 까닭이 남고 store_sql 만 막힌다).
-    await ensureAppTables(id, tableSpecs, { schema, strict: true, report, sqlRole: true });
+    await ensureAppTables(id, tableSpecs, { schema, strict: true, report, sqlRole: true, protect: opts.protect });
     tables = { ...report, dropped: [], archived: [], failed: [], schema };
   } else if (isOverrideSource(source)) {
     // #4600 — 워크스페이스가 덮어쓴 빌트인: 표는 그대로 빌트인 스키마에 살지만(코드가 구조의 주인이던 자리), 구성원이 **새로 선언한 표**는
@@ -104,8 +109,12 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 기본 앱 시딩은 종전처럼 비치명 — 워크스페이스마다 주기적으로 돌고, 여기서 던지면 시딩 전체가 보상(롤백)된다.
   //  빠진 테이블은 store_* 첫 호출의 지연 복구가 채운다(capabilities/app-store withTableRepair).
   if (builtin) {
-    try { await ensureAppTables(id, tableSpecs, { schema, tenantScopedIndexes: true }); }
+    //  #4724 공유 표는 지금 있는 칸 전부를 지킨다(store-schema ProtectColumns "existing") — 매니페스트로는 더하기만 된다. 릴리스가 깨는 변경
+    //   (칸 지우기 · 이름 · 형 바꾸기 · 조이기 · 기본값 · 검사)을 담았으면 하지 않고 남긴다 — 그런 변경은 SQL 마이그레이션으로.
+    const shared = emptyTableReport();
+    try { await ensureAppTables(id, tableSpecs, { schema, tenantScopedIndexes: true, report: shared }); }
     catch (err) { logger.warn({ err, id }, "앱 데이터 테이블 보장 실패(비치명 — 첫 사용 때 지연 복구)"); }
+    if (shared.deferred.length) logger.warn({ id, deferred: shared.deferred }, "기본 앱 공유 표 — 매니페스트로는 할 수 없는 구조 변경이라 하지 않았다(SQL 마이그레이션으로)");
   }
 
   for (const c of drop) {
