@@ -3131,6 +3131,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-badge--mine { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }   /* #4632 공개 범위 「나만」 */
 
 /* ── ③ 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 클로드 아티팩트처럼 · 피그마 보드처럼 · 선택 · 핀 · 영역») ── */
+.v2-wb:focus { outline: none; }
 .v2-wb { position: fixed; inset: 0; z-index: 140; display: flex; flex-direction: column; background: var(--bg); color: var(--ink); }
 .v2-wb-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); background: var(--bg); flex-wrap: wrap; }
 .v2-wb-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }

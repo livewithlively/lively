@@ -327,6 +327,8 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   requestAnimationFrame(() => { if (S.dead) return; fit(); if (fallback && wantFocus >= 0) { const i = wantFocus; wantFocus = -1; focusPin(i); } });
   window.setTimeout(() => { if (!S.dead && wantFocus >= 0) { const i = wantFocus; wantFocus = -1; focusPin(i); } }, 1600);
   root.tabIndex = -1; root.focus();   // 닫기 단추에 두면 스페이스 끌기가 그 단추를 누른다
+  //  머리줄 단추를 마우스로 눌러도 초점은 보드에 남긴다 — 단추에 남으면 스페이스가 그 단추를 누르고(끌기 대신) 다음 끌기가 도구를 쓴다. 자판으로 누르기는 그대로.
+  head.addEventListener('mousedown', (e) => { if ((e.target as HTMLElement).closest('button')) e.preventDefault(); });
 
   const api: WireBoard = {
     close() {
