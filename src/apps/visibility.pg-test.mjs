@@ -23,7 +23,8 @@
 //      공개 판 사용자의 자유 SQL 은 막히지 않는다(G10)
 //  B23 #4732 공개 미리 보기 — 할 일 0(나만 보는 앱 · 초안 없음 · 기본 앱) · 남의 초안을 책임자 · 관리자가 본다(칸 지우기 · 행 수 · 꼭 채우기 · 옛 표 정리) ·
 //      그 밖의 구성원 403 · 못 보는 앱 404 · 빈 앱 409 · 빈 행이면 막힘 · 다른 연결이 표를 쥐면 짧게 기다리고 «다 못 봄» · 미리 보기 == 실제 공개 ·
-//      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404
+//      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404 · 전체 시간 상한(E9c) · 설치 락이 바쁘면 짧게(E17) ·
+//      정리할 표 세기도 짧게(E18) · 선언에서만 뺀 칸은 «알아 둘 것» 만(E15b) · 되돌려 공개의 실제 결과 == 미리 본 것(E16)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -646,6 +647,98 @@ try {
       !!e9b?.r && e9b.ms < 3000 && /다 보지 못했습니다/.test(e9b.r.incomplete ?? "") && !/문제가 생겼습니다|aborted/.test(e9b.r.incomplete ?? "") && e9b.r.blocked.length === 0 && f9c === f9d,
       JSON.stringify({ e9b, same: f9c === f9d }));
 
+    // E9c 전체 시간 상한 — 앞 표(items)가 잠금을 0.4초 기다리는 사이 상한(0.1초)이 지나면 뒤 표(logs)는 걸어 보지 않는다(문장 상한 × 문장 수로 길어지지 않게)
+    process.env.LIVELY_APP_PREVIEW_LOCK_MS = "400"; process.env.LIVELY_APP_PREVIEW_TOTAL_MS = "100";
+    const holderC = new pg.Client({ connectionString: dsnFor(DB) }); await holderC.connect();
+    let e9c = null;
+    try {
+      await holderC.query("BEGIN"); await holderC.query(`SELECT count(*) FROM ${rel("items")}`);
+      const t0 = Date.now();
+      e9c = await preview(alice).then((r) => ({ r, ms: Date.now() - t0 }), (err) => ({ err: String(err?.message ?? err), ms: Date.now() - t0 }));
+    } finally {
+      await holderC.query("COMMIT").catch(() => {}); await holderC.end().catch(() => {});
+      delete process.env.LIVELY_APP_PREVIEW_LOCK_MS; delete process.env.LIVELY_APP_PREVIEW_TOTAL_MS;
+    }
+    chk("B23 E9c 전체 시간 상한(0.1초)이 지나면 남은 표(logs)는 걸어 보지 않고 «다 못 봄» · 3초 안",
+      !!e9c?.r && e9c.ms < 3000 && /다 보지 못했습니다/.test(e9c.r.incomplete ?? "") && !e9c.r.changes.some((l) => l.startsWith("logs 표:")) && e9c.r.blocked.length === 0,
+      JSON.stringify(e9c));
+
+    // E17 다른 저장 · 공개가 이 앱의 설치 락을 쥐고 있다 — 미리 보기는 1분이 아니라 짧게(3초)만 기다리고 «다른 사람이 저장 · 공개 중» 으로 돌아온다
+    const lockC = new pg.Client({ connectionString: dsnFor(DB) }); await lockC.connect();
+    let e17 = null;
+    try {
+      await lockC.query("SELECT pg_advisory_lock(hashtext($1))", [`app-install:${PV}`]);
+      const release = setTimeout(() => { lockC.query("SELECT pg_advisory_unlock(hashtext($1))", [`app-install:${PV}`]).catch(() => {}); }, 9000);   // 상한이 안 먹으면 9초를 기다린다
+      const t0 = Date.now();
+      e17 = await preview(alice).then((r) => ({ r, ms: Date.now() - t0 }), (err) => ({ err: String(err?.message ?? err), ms: Date.now() - t0 }));
+      clearTimeout(release);
+    } finally {
+      await lockC.query("SELECT pg_advisory_unlock_all()").catch(() => {}); await lockC.end().catch(() => {});
+    }
+    chk("B23 E17 다른 저장 · 공개가 설치 락을 쥔 채 — 3초쯤만 기다리고 «다른 사람(또는 다른 창)이 지금 저장 · 공개» · 막힘 아님",
+      !!e17?.r && e17.ms >= 2500 && e17.ms < 6000 && /저장 · 공개하고 있어 보지 못했습니다/.test(e17.r.incomplete ?? "") && e17.r.blocked.length === 0 && e17.r.changes.length === 0,
+      JSON.stringify(e17));
+
+    // E18 새 판에 없는 표(arc)를 다른 연결이 통째로 잠갔다 — 행 세기도 짧게(0.4초)만 기다리고 «다 세지 못함» · 다른 표의 할 일은 그대로
+    process.env.LIVELY_APP_PREVIEW_LOCK_MS = "400";
+    const arcHolder = new pg.Client({ connectionString: dsnFor(DB) }); await arcHolder.connect();
+    let e18 = null;
+    try {
+      await arcHolder.query("BEGIN"); await arcHolder.query(`LOCK TABLE ${rel("arc")} IN ACCESS EXCLUSIVE MODE`);
+      const release = setTimeout(() => { arcHolder.query("ROLLBACK").catch(() => {}); }, 4000);   // 상한이 안 먹으면 4초를 기다린다
+      const t0 = Date.now();
+      e18 = await preview(alice).then((r) => ({ r, ms: Date.now() - t0 }), (err) => ({ err: String(err?.message ?? err), ms: Date.now() - t0 }));
+      clearTimeout(release);
+    } finally {
+      await arcHolder.query("ROLLBACK").catch(() => {}); await arcHolder.end().catch(() => {});
+      delete process.env.LIVELY_APP_PREVIEW_LOCK_MS;
+    }
+    chk("B23 E18 새 판에 없는 표(arc)가 잠겨 있으면 세기도 짧게 — «arc … 다 세지 못했습니다» · 3초 안 · logs 의 할 일은 그대로",
+      !!e18?.r && e18.ms < 3000 && /arc/.test(e18.r.incomplete ?? "") && /다 세지 못했습니다/.test(e18.r.incomplete ?? "")
+        && e18.r.changes.includes("logs 표: lvl 칸 지우기 — 값이 있는 1행은 따로 보관(앱에서는 더 안 보임)") && !e18.r.gone_tables.some((g) => g.table === "arc"),
+      JSON.stringify(e18));
+
+    // E19 형 바꾸기의 값 확인(값을 새 형으로 바꿨다 되돌려 견주기 — 표 전체를 훑는다)이 시간 상한에 걸리면 «못 바꿈» 이 아니라 «다 못 봄».
+    //  실제 공개는 상한이 길어(5분) 그 칸을 바꾸므로 «못 바꿈» 은 틀린 말이다. (잠금으로는 못 재현한다 — 칸 목록을 읽는 단계가 기본값 식을
+    //  풀며 표를 먼저 잠그므로 거기서 먼저 걸린다. 그래서 훑기가 오래 걸리는 큰 값 하나로 문장 상한을 넘긴다: 5MB jsonb 글자 ≈ 0.4초 > 상한 0.1초.)
+    const CV = "pv-conv";
+    const cfiles = (type, html) => pfiles([{ name: "docs", columns: [{ name: "v", type }] }], html, CV);
+    await call("app_save", { files: cfiles("text", "<p>c1</p>") }, alice);
+    await call("app_visibility_set", { app_id: CV, visibility: "all" }, alice);
+    await q(`INSERT INTO app.pv_conv__docs(v) SELECT '[' || repeat('{"a": 1}, ', 500000) || '{"a": 1}]'`);   // jsonb 가 그대로 돌려주는 꼴(왕복해도 같다)
+    await call("app_save", { files: cfiles("json", "<p>c2</p>") }, alice);   // 공개 판이 쓰는 칸의 형 바꾸기 — 공개할 때로 미뤄진다
+    const e19free = await preview(alice, {}, CV);
+    process.env.LIVELY_APP_PREVIEW_STATEMENT_MS = "100";
+    let e19 = null;
+    try { e19 = await preview(alice, {}, CV); } finally { delete process.env.LIVELY_APP_PREVIEW_STATEMENT_MS; }
+    chk("B23 E19 형 바꾸기 값 확인이 시간 상한에 걸리면 «다 못 봄»(«못 바꿈» 이라 하지 않는다) · 상한이 넉넉하면 «종류 바꾸기 text → jsonb»",
+      e19free.changes.includes("docs 표: v 칸 종류 바꾸기 text → jsonb") && e19free.incomplete === null
+        && /다 보지 못했습니다/.test(e19?.incomplete ?? "") && !(e19?.notes ?? []).some((n) => n.includes("못 바꿔")) && (e19?.blocked ?? []).length === 0,
+      JSON.stringify({ e19free: [e19free.changes, e19free.notes, e19free.incomplete], e19: e19 && [e19.changes, e19.notes, e19.incomplete] }));
+
+    // E20 옛 기본 키((tenant_id, id))를 좁히는 일이 잠금 상한에 걸리면 «다 못 봄» — 삼키면 미리 보기가 그 일을 빼고 «할 일 없음» 처럼 보인다
+    const PK = "pv-pk";
+    const kfiles = (cols, html) => pfiles([{ name: "t", columns: cols }], html, PK);
+    await call("app_save", { files: kfiles([{ name: "x", type: "text" }], "<p>k1</p>") }, alice);
+    await call("app_visibility_set", { app_id: PK, visibility: "all" }, alice);
+    await call("app_save", { files: kfiles([{ name: "x", type: "text" }, { name: "y", type: "text" }], "<p>k2</p>") }, alice);   // 새 칸(바로) — 초안이 걸린다
+    const pkName = (await q(`SELECT conname FROM pg_constraint WHERE conrelid = to_regclass('app.pv_pk__t') AND contype = 'p'`))[0].conname;
+    await q(`ALTER TABLE app.pv_pk__t DROP CONSTRAINT "${pkName}", ADD CONSTRAINT "${pkName}" PRIMARY KEY (tenant_id, id)`);   // 옛 모양(#4483 전)
+    const e20free = await preview(alice, {}, PK);
+    process.env.LIVELY_APP_PREVIEW_LOCK_MS = "400";
+    const pkHolder = new pg.Client({ connectionString: dsnFor(DB) }); await pkHolder.connect();
+    let e20 = null;
+    try {
+      await pkHolder.query("BEGIN"); await pkHolder.query("SELECT count(*) FROM app.pv_pk__t");   // 읽는 중 — 키를 바꾸는 ALTER 만 기다린다
+      e20 = await preview(alice, {}, PK);
+    } finally {
+      await pkHolder.query("COMMIT").catch(() => {}); await pkHolder.end().catch(() => {});
+      delete process.env.LIVELY_APP_PREVIEW_LOCK_MS;
+    }
+    chk("B23 E20 옛 기본 키 좁히기가 잠금 상한에 걸리면 «다 못 봄» · 잠금 없을 땐 «t 표: 기본 키 바꾸기»",
+      e20free.changes.includes("t 표: 기본 키 바꾸기") && /다 보지 못했습니다/.test(e20?.incomplete ?? "") && (e20?.blocked ?? []).length === 0,
+      JSON.stringify({ e20free: e20free.changes, e20: e20 && [e20.changes, e20.incomplete] }));
+
     // E14 막힘 → 고침 → 다시 보면 막힘 0
     await q(`UPDATE ${rel("items")} SET title = '채움' WHERE title IS NULL`);
     const e14 = await preview(alice);
@@ -693,11 +786,33 @@ try {
       (await status(preview(alice, { version_no: 99999 }))) === 404 && (await status(preview(carol, { version_no: sD3.version_no }))) === 404,
       JSON.stringify({ sD3: sD3.version_no }));
 
-    // E12 기본 앱(공유 표) — 공개 때 표를 바꾸지 않는다 → 할 일 0(초안 표식이 있어도)
+    // E15b 선언에서만 뺀 칸(note — drop_columns 없음)은 공개해도 남겨 둔다 — 바뀌는 일 0 · «알아 둘 것» 에만 · 그래서 화면은 묻지 않는다
+    const D4 = [{ name: "items", columns: [{ name: "title", type: "text", not_null: true }] }, D[1]];
+    await call("app_save", { files: pfiles(D4, "<p>pv-D4</p>"), note: "D4" }, alice);
+    const e15b = await preview(alice);
+    chk("B23 E15b 선언에서만 뺀 칸 — 바뀌는 일 0 · notes 에 «note 칸은 새 판에 없지만 값을 지키려고 남겨 둠» · 막힘 0",
+      e15b.changes.length === 0 && e15b.notes.includes("items 표: note 칸은 새 판에 없지만 값을 지키려고 남겨 둠") && e15b.blocked.length === 0 && e15b.incomplete === null,
+      JSON.stringify(e15b));
+
+    // E16 되돌려 공개 — 미리 본 것(E10: note 칸 지우기 · 값 1행 보관)과 실제 app_revert {publish:true} 의 결과가 같다
+    const pre16 = await preview(alice, { version_no: sD2.version_no });
+    const rv16 = await call("app_revert", { app_id: PV, version_no: sD2.version_no, publish: true }, alice);
+    const cols16 = (await q(`SELECT attname FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum`, [rel("items")])).map((r) => r.attname).join(",");
+    const arch16 = (await q(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'app_archive' AND table_name LIKE 'pv_app__items__note__%'`)).map((r) => r.table_name);
+    const archRows16 = arch16.length === 1 ? (await q(`SELECT count(*)::int AS n FROM app_archive."${arch16[0]}"`))[0].n : null;
+    chk("B23 E16 되돌려 공개 — 미리 본 «note 칸 지우기 · 값 1행 보관» 그대로 실제로 됐다(칸 없음 · 보관 1행) · 모두의 판",
+      pre16.changes.includes("items 표: note 칸 지우기 — 값이 있는 1행은 따로 보관(앱에서는 더 안 보임)") && (pre16.tables?.dropped_columns ?? []).map((d) => `${d.table}.${d.column}:${d.rows}`).join() === "items.note:1"
+        && rv16.state === "published" && !cols16.split(",").includes("note") && archRows16 === 1,
+      JSON.stringify({ pre16: pre16.changes, rv16: { state: rv16.state, changed: rv16.changed }, cols16, arch16, archRows16 }));
+
+    // E12 기본 앱(공유 표) — 공개 때 표를 바꾸지 않는다 → 할 일 0. 깨는 초안(logs.msg 지우기)이 걸려 있어도 걸어 보지 않는다
+    await call("app_save", { files: pfiles([D2[0], { name: "logs", columns: [{ name: "msg2", type: "text" }], drop_columns: ["msg"] }], "<p>pv-D5</p>"), note: "D5" }, alice);
+    const e12before = await preview(alice);
     await q(`UPDATE org_app SET source = '{"kind":"builtin"}'::jsonb WHERE id = $1`, [PV]);
     const e12 = await preview(alice);
-    chk("B23 E12 기본 앱 — 할 일 0 · 막힘 0", e12.changes.length === 0 && e12.blocked.length === 0 && e12.tables === null && (await row(PV)).draft_by === "pgt-bob",
-      JSON.stringify(e12));
+    chk("B23 E12 기본 앱 — 깨는 초안(logs.msg 지우기)이 걸려 있어도 할 일 0 · 막힘 0(같은 초안이 일반 앱일 땐 할 일이 있었다)",
+      e12before.changes.some((l) => l.startsWith("logs 표: msg 칸 지우기")) && e12.changes.length === 0 && e12.blocked.length === 0 && e12.tables === null && (await row(PV)).draft_by === "pgt-alice",
+      JSON.stringify({ e12before: e12before.changes, e12 }));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);
@@ -705,6 +820,7 @@ try {
   await itemsPool.end().catch(() => {});
   await dbc.end().catch(() => {});
   await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch(() => {});
+  await su.query("DROP ROLE IF EXISTS pgt_pv_role").catch(() => {});   // B23 E9b 가 만든 클러스터 역할 — DB 를 지운 뒤에야 지울 수 있다
   await su.end().catch(() => {});
 }
 console.log(`\n${pass} 통과 · ${fail} 실패`);

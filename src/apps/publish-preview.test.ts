@@ -14,8 +14,8 @@ const rep = (o: Partial<AppTableReport> = {}): AppTableReport => ({
 });
 
 test("E15 빈 보고서 · 정리할 표 없음 → 0줄(묻지 않고 공개)", () => {
-  assert.deepEqual(describeTableChanges(rep(), []), []);
-  assert.deepEqual(describeTableChanges(null, []), []);
+  assert.deepEqual(describeTableChanges(rep(), []), { changes: [], notes: [] });
+  assert.deepEqual(describeTableChanges(null, []), { changes: [], notes: [] });
 });
 
 test("E15 칸 지우기 — 값이 있으면 행 수와 보관 · 값이 없으면(경계 0행) «값 없음»", () => {
@@ -23,7 +23,7 @@ test("E15 칸 지우기 — 값이 있으면 행 수와 보관 · 값이 없으�
     { table: "items", column: "code", rows: 2, archived_as: null },
     { table: "items", column: "memo", rows: 0, archived_as: null },
     { table: "items", column: "one", rows: 1, archived_as: null },
-  ] }), []);
+  ] }), []).changes;
   assert.deepEqual(lines, [
     "items 표: code 칸 지우기 — 값이 있는 2행은 따로 보관(앱에서는 더 안 보임)",
     "items 표: memo 칸 지우기(값 없음)",
@@ -31,8 +31,8 @@ test("E15 칸 지우기 — 값이 있으면 행 수와 보관 · 값이 없으�
   ]);
 });
 
-test("E15 보고서의 칸 종류마다 한 줄 — 새 표 · 새 칸 · 이름 · 종류 · 못 바꾼 종류 · 남겨 둔 칸", () => {
-  const lines = describeTableChanges(rep({
+test("E15 보고서의 칸 종류마다 한 줄 — 새 표 · 새 칸 · 이름 · 종류는 바뀌는 일, 못 바꾼 종류 · 남겨 둔 칸은 알아 둘 것", () => {
+  const out = describeTableChanges(rep({
     created: ["tags"],
     added_columns: [{ table: "items", column: "note", type: "text" }],
     renamed_columns: [{ table: "items", from: "title", to: "headline" }],
@@ -40,17 +40,25 @@ test("E15 보고서의 칸 종류마다 한 줄 — 새 표 · 새 칸 · 이름
     type_mismatches: [{ table: "items", column: "at", declared: "date", actual: "text", reason: "날짜가 아닌 값 3행" }],
     undeclared_columns: [{ table: "items", column: "old" }],
   }), []);
-  assert.deepEqual(lines, [
+  assert.deepEqual(out.changes, [
     "새 표 tags",
     "items 표: 새 칸 note",
     "items 표: title 칸 이름 바꾸기 → headline",
     "items 표: qty 칸 종류 바꾸기 text → integer",
+  ]);
+  assert.deepEqual(out.notes, [
     "items 표: at 칸 종류는 date 로 못 바꿔 그대로(text) — 날짜가 아닌 값 3행",
     "items 표: old 칸은 새 판에 없지만 값을 지키려고 남겨 둠",
   ]);
 });
 
-test("E15 규칙(제약) — 꼭 채우기 · 비워도 됨 · 겹침 · 가리키기 · 검사 · 기본값 · 기본 키 · 칸 없는 규칙", () => {
+test("E15b 맞출 때마다 나오는 상태(남겨 둔 칸 · 못 바꾼 종류)만 있으면 바뀌는 일 0 — 묻지 않는다(늘 뜨는 창은 넘기게 된다)", () => {
+  const out = describeTableChanges(rep({ undeclared_columns: [{ table: "items", column: "note" }], type_mismatches: [{ table: "items", column: "at", declared: "date", actual: "text" }] }), []);
+  assert.deepEqual(out.changes, []);
+  assert.equal(out.notes.length, 2);
+});
+
+test("E15 규칙(제약) — 꼭 채우기 · 비워도 됨 · 가리키기 · 검사 · 기본값 · 기본 키 · 칸 없는 규칙 / 외래키 대상의 안쪽 키(unique)는 싣지 않는다", () => {
   const lines = describeTableChanges(rep({ constraints: [
     { table: "items", column: "title", kind: "not_null", action: "added" },
     { table: "items", column: "memo", kind: "not_null", action: "removed" },
@@ -62,11 +70,10 @@ test("E15 규칙(제약) — 꼭 채우기 · 비워도 됨 · 겹침 · 가리�
     { table: "items", column: "state", kind: "default", action: "changed" },
     { table: "items", column: "state2", kind: "default", action: "removed" },
     { table: "items", kind: "primary_key", action: "changed" },
-  ] }), []);
+  ] }), []).changes;
   assert.deepEqual(lines, [
     "items 표: title 칸을 꼭 채워야 하게 바꿈",
     "items 표: memo 칸을 비워도 되게 바꿈",
-    "tags 표: 겹치는 값 막기",
     "items 표: tag_id 칸이 다른 표의 행을 가리키게 함(가리킬 행이 없는 값은 막힘)",
     "items 표: 다른 표 가리키기 풀기",
     "items 표: qty 칸 값 검사 더하기",
@@ -81,13 +88,13 @@ test("E15 색인 — 겹침을 막는 색인만 싣고 찾기 색인은 싣지 �
   const lines = describeTableChanges(rep({
     added_indexes: [{ table: "items", columns: ["code"], unique: true }, { table: "items", columns: ["title"], unique: false }],
     dropped_indexes: [{ table: "items", index: "lv_ix_items_x" }],
-  }), []);
+  }), []).changes;
   assert.deepEqual(lines, ["items 표: 겹치는 값 막기(code)"]);
 });
 
 test("E7 새 판에 없는 표 — 비었으면 지움 · 행이 있으면 보관(행 수) · 보고서 뒤에 붙는다", () => {
   const gone: GoneTablePlan[] = [{ table: "logs", rows: 3, action: "archive" }, { table: "tmp", rows: 0, action: "drop" }];
-  assert.deepEqual(describeTableChanges(rep({ created: ["x"] }), gone), [
+  assert.deepEqual(describeTableChanges(rep({ created: ["x"] }), gone).changes, [
     "새 표 x",
     "logs 표 따로 보관 — 새 판에 없음 · 3행(앱에서는 더 안 보임)",
     "tmp 표 지우기 — 새 판에 없고 비어 있음",
@@ -130,9 +137,9 @@ test("실패 없음(새로 넣은 모으기가 비었음) → 막힘 0 · 다 �
   assert.deepEqual(splitFailures([]), { blocked: [], incomplete: null });
 });
 
-test("상한 — 기본 잠금 1.5초 · 문장 5초(공개의 10초 · 5분보다 짧다) · 환경으로 바꿈 · 이상한 값(100ms 미만 · 글자)은 기본값", () => {
-  assert.deepEqual(previewLimits({}), { lockMs: 1500, statementMs: 5000 });
-  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "300", LIVELY_APP_PREVIEW_STATEMENT_MS: "2000" }), { lockMs: 300, statementMs: 2000 });
-  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "99", LIVELY_APP_PREVIEW_STATEMENT_MS: "abc" }), { lockMs: 1500, statementMs: 5000 });
-  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "100" }), { lockMs: 100, statementMs: 5000 });   // 경계 — 100 은 받는다
+test("상한 — 기본 잠금 1.5초 · 문장 5초 · 전체 8초(공개의 10초 · 5분보다 짧다) · 환경으로 바꿈 · 이상한 값(100ms 미만 · 글자)은 기본값", () => {
+  assert.deepEqual(previewLimits({}), { lockMs: 1500, statementMs: 5000, totalMs: 8000 });
+  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "300", LIVELY_APP_PREVIEW_STATEMENT_MS: "2000", LIVELY_APP_PREVIEW_TOTAL_MS: "4000" }), { lockMs: 300, statementMs: 2000, totalMs: 4000 });
+  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "99", LIVELY_APP_PREVIEW_STATEMENT_MS: "abc", LIVELY_APP_PREVIEW_TOTAL_MS: "-1" }), { lockMs: 1500, statementMs: 5000, totalMs: 8000 });
+  assert.deepEqual(previewLimits({ LIVELY_APP_PREVIEW_LOCK_MS: "100" }), { lockMs: 100, statementMs: 5000, totalMs: 8000 });   // 경계 — 100 은 받는다
 });

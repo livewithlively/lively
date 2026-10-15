@@ -4802,7 +4802,7 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "a5964e4115dfbfc7"
+  "input_hash": "21ae2091d0c96f43"
  },
  {
   "name": "app_pull",
@@ -4832,7 +4832,7 @@
   "rest": [
    "POST /api/ui/apps/:id/revert"
   ],
-  "input_hash": "9a14c0ea5085897b"
+  "input_hash": "98b2880edfbe6767"
  },
  {
   "name": "app_edit_policy_set",
@@ -4853,6 +4853,16 @@
    "POST /api/ui/apps/:id/visibility"
   ],
   "input_hash": "22621bbc1be7c170"
+ },
+ {
+  "name": "app_publish_preview",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/publish-preview"
+  ],
+  "input_hash": "4e4159a729714c69"
  },
  {
   "name": "app_build_start",

@@ -296,6 +296,12 @@ async function notifyDraftDisplaced(app: { id: string; title: string }, displace
   }).catch((err) => logger.warn({ err, id: app.id }, "밀려난 초안 알림 실패(비치명)"));
 }
 
+/** 「공개하기」 가 표를 맞추나 — 초안이 걸린 공개 앱만(나만 보는 앱의 첫 공개엔 미룬 것이 없고 · 초안이 없으면 공개할 것이 없고 ·
+ *  기본 앱의 공유 표는 저장 때 이미 더하기만 받았다). 공개(publishCurrent)와 공개 미리 보기(#4732)가 같이 쓴다 — 한쪽만 바뀌어 갈라지지 않게. */
+function publishTouchesTables(app: store.OrgApp): boolean {
+  return !isBuiltinSource(app.source) && app.visibility === "all" && !!app.draft_by;
+}
+
 /**
  * 「공개하기」 의 몸통(설치 락 안) — 설치된 상태를 판 행에 맞추고 모두가 보는 판으로 옮긴다. 옛 공개 판에만 있던 표는 이때 정리한다
  *  (초안을 까는 동안은 공개 판이 그 표를 아직 썼다 — install-run keepTables). changed=false 면 이미 그 판이 공개돼 있었다.
@@ -315,7 +321,7 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   //   지키는 칸 없이 끝까지 맞춘다. 있던 데이터가 새 규칙에 어긋나면 여기서 409(몇 행인지)로 멈춰 **공개하지 않는다**(초안은 그대로 남는다).
   //   표 전부를 한 트랜잭션으로(atomic) — 앞 표만 바뀐 채 멈추면 아직 공개 판인 옛 코드가 그 표에서 깨진다.
   //   초안이 걸린 공개 앱만(나만 보는 앱의 첫 공개엔 미룬 것이 없다) · 기본 앱의 공유 표는 하지 않는다(저장 때 이미 더하기만 받았다).
-  const tables = !isBuiltinSource(app.source) && app.visibility === "all" && app.draft_by ? emptyTableReport() : undefined;
+  const tables = publishTouchesTables(app) ? emptyTableReport() : undefined;
   if (tables) {
     await ensureAppTables(app.id, tableSpecsOf(app.manifest), { schema: appSchemaFor(false), strict: true, sqlRole: true, atomic: true, report: tables });
   }
@@ -351,15 +357,15 @@ async function previewPublish(appId: string, who: Viewer, versionNo: number | nu
   const base: PublishPreview = {
     app_id: app.id, kind: versionNo == null ? "publish" : "revert", version_no: versionNo ?? app.current_version_no ?? null,
     published_version_no: app.visibility === "all" ? app.published_version_no ?? null : null,
-    changes: [], blocked: [], incomplete: null, tables: null, gone_tables: [],
+    changes: [], notes: [], blocked: [], incomplete: null, tables: null, gone_tables: [],
   };
   let target: unknown;
   let gone: string[];
   if (versionNo == null) {
     const why = publishDenial(app, who, editDenial(app, who, safeManifest(app)));
     if (why) throw new HttpError(403, why);
-    //  공개가 표를 만지는 경우만(publishCurrent 와 같은 조건) — 나만 보는 앱의 첫 공개 · 초안 없는 공개 앱 · 기본 앱(공유 표)은 할 일이 없다.
-    if (isBuiltinSource(app.source) || app.visibility !== "all" || !app.draft_by) return base;
+    //  공개가 표를 만지는 경우만(publishCurrent 와 같은 판정) — 나만 보는 앱의 첫 공개 · 초안 없는 공개 앱 · 기본 앱(공유 표)은 할 일이 없다.
+    if (!publishTouchesTables(app)) return base;
     target = app.manifest;
     const old = app.published_version_no != null ? await store.getAppVersionHead(app.id, app.published_version_no) : null;
     gone = old ? tablesGoneAtPublish(old.manifest, app.manifest) : [];
@@ -377,17 +383,25 @@ async function previewPublish(appId: string, who: Viewer, versionNo: number | nu
   const report = emptyTableReport();
   const failures: AppTableFailure[] = [];
   const lim = previewLimits();
-  await ensureAppTables(app.id, tableSpecsOf(target), { schema: appSchemaFor(false), atomic: true, dryRun: true, report, failures, lockMs: lim.lockMs, statementMs: lim.statementMs });
+  await ensureAppTables(app.id, tableSpecsOf(target), {
+    schema: appSchemaFor(false), atomic: true, dryRun: true, report, failures,
+    lockMs: lim.lockMs, statementMs: lim.statementMs, deadlineAt: Date.now() + lim.totalMs, surfaceTimeouts: true,
+  });
   //  보관 자리 이름은 공개하는 시각으로 정해진다 — 걸어 본 이름(되돌려 없어진 표)을 내보내지 않는다.
   for (const d of report.dropped_columns) d.archived_as = null;
   const { blocked, incomplete } = splitFailures(failures);
   let goneTables: GoneTablePlan[] = [];
   let goneError: string | null = null;
-  try { goneTables = await planDroppedTables(app.id, gone, appSchemaFor(false)); }
-  catch (err) { goneError = `새 판에 없는 표(${gone.join(", ")})를 어떻게 정리할지 보지 못했습니다: ${(err as Error)?.message ?? err}`; }
+  try { goneTables = await planDroppedTables(app.id, gone, appSchemaFor(false), { lockMs: lim.lockMs, statementMs: lim.statementMs }); }
+  catch (err) {
+    const code = (err as { code?: unknown })?.code;
+    goneError = code === "55P03" || code === "57014"
+      ? `새 판에 없는 표(${gone.join(", ")})는 지금 쓰는 사람이 있거나 커서 다 세지 못했습니다 — 공개할 때 행이 있으면 지우지 않고 보관합니다`
+      : `새 판에 없는 표(${gone.join(", ")})를 어떻게 정리할지 보지 못했습니다: ${(err as Error)?.message ?? err}`;
+  }
+  const { changes, notes } = describeTableChanges(report, goneTables);
   return {
-    ...base, tables: report, gone_tables: goneTables, blocked,
-    changes: describeTableChanges(report, goneTables),
+    ...base, tables: report, gone_tables: goneTables, blocked, changes, notes,
     incomplete: [incomplete, goneError].filter(Boolean).join(" · ") || null,
   };
 }
@@ -1097,6 +1111,10 @@ const appVisibilitySet: Capability = {
 };
 
 // ── 공개 미리 보기(#4732) — 「공개하기」 · 「이 판으로」(되돌려 공개) 전에 표에 할 일을 본다. 아무것도 바꾸지 않는다 ──
+//  읽기전용(#1007) 세션에선 막힌다(POST 파생 = 쓰기) — 아무것도 바꾸지 않지만 진짜 표에 DDL 을 걸었다 되돌리고, 미리 보는 까닭인 공개가
+//   읽기전용에선 어차피 막힌다. 읽기로 열면 «POST 인데 읽기» 예외 목록(readonly.test)만 늘어난다.
+/** 미리 보기가 설치 락(저장 · 공개 · 되돌리기)을 기다리는 상한 — 다른 저장이 끝나기를 1분씩 말없이 기다리지 않게. */
+const PREVIEW_INSTALL_LOCK_WAIT_MS = 3_000;
 const appPublishPreview: Capability = {
   name: "app_publish_preview",
   title: "공개 미리 보기",
@@ -1104,10 +1122,9 @@ const appPublishPreview: Capability = {
     "version_no 있음 = app_revert {version_no, publish:true} 를 하면. changes = 할 일(칸 지우기와 값이 있는 행 수 — 값은 따로 보관 · 이름 · 종류 바꾸기 · " +
     "꼭 채우기 · 겹치는 값 막기 · 다른 표 가리키기 · 새 값 검사 · 기본값 · 새 판에 없는 표의 정리) · blocked = 이대로 공개하면 409 로 멈추는 까닭(표 · 칸 · 행 수 — " +
     "그 행을 고친 뒤 다시 본다) · incomplete = 그 표를 지금 쓰는 사람이 있거나 표가 커서 다 보지 못함(잠시 뒤 다시). changes 가 비었으면 표에 할 일이 없다. " +
-    "실제 공개와 같은 표 맞추기를 한 트랜잭션으로 걸어 보고 되돌려 계산한다(그동안 바뀌는 표를 1~2초 안쪽으로 잠근다). " +
+    "notes = 바뀌는 일은 아니지만 알아 둘 것(새 판에 없지만 값을 지키려고 남겨 둔 칸 · 종류를 못 바꿔 그대로 둔 칸). " +
+    "실제 공개와 같은 표 맞추기를 한 트랜잭션으로 걸어 보고 되돌려 계산한다 — 그동안 바뀌는 표를 잠근다(보통 1초 안쪽 · 잠금 대기 1.5초 · 문장마다 5초 · 전체 8초를 넘으면 남은 표는 incomplete). " +
     "누가: 공개할 수 있는 사람(version_no 면 되돌릴 수 있는 사람). 나만 보는 앱의 첫 공개 · 초안 없는 공개 앱 · 기본 앱은 할 일이 없다.",
-  //  읽기전용(#1007) 세션에선 막힌다(POST 파생 = 쓰기) — 아무것도 바꾸지 않지만 진짜 표에 DDL 을 걸었다 되돌리고, 미리 보는 까닭인 공개가
-  //   읽기전용에선 어차피 막힌다. 읽기로 열면 «POST 인데 읽기» 예외 목록(readonly.test)만 늘어난다.
   scope: null,
   input: { app_id: z.string(), version_no: z.number().int().min(1).optional() },
   expose: {
@@ -1122,7 +1139,18 @@ const appPublishPreview: Capability = {
     const v = input.version_no == null ? null : Number(input.version_no);
     if (v != null && (!Number.isInteger(v) || v < 1)) throw new HttpError(400, "version_no 는 1 이상의 정수여야 합니다");
     //  저장 · 되돌리기 · 공개와 같은 설치 락 안에서 — 걸어 보는 동안 다른 설치가 같은 표를 바꾸지 않게(서로 잠금을 기다리다 멈추지 않게).
-    return store.withAppInstallLock(id, () => previewPublish(id, viewerOf(user), v));
+    //   다른 저장 · 공개가 쥐고 있으면 짧게만 기다리고 «다 못 봄» 으로 돌려준다(화면이 말없이 멈춰 있지 않게).
+    try {
+      return await store.withAppInstallLock(id, () => previewPublish(id, viewerOf(user), v), { waitMs: PREVIEW_INSTALL_LOCK_WAIT_MS });
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== store.APP_INSTALL_LOCK_TIMEOUT) throw err;
+      const busy: PublishPreview = {
+        app_id: id, kind: v == null ? "publish" : "revert", version_no: v, published_version_no: null,
+        changes: [], notes: [], blocked: [], tables: null, gone_tables: [],
+        incomplete: "이 앱을 다른 사람(또는 다른 창)이 지금 저장 · 공개하고 있어 보지 못했습니다 — 잠시 뒤 다시 보세요",
+      };
+      return busy;
+    }
   },
 };
 

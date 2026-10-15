@@ -46,6 +46,8 @@ const ddlLockMs = (): number => { const n = Number(process.env.LIVELY_APP_DDL_LO
 const DDL_STATEMENT_MS = 5 * 60_000;
 /** 호출부가 준 상한(ms)을 SET 문에 넣을 정수로 — 없거나 이상하면 기본값. */
 const msOr = (n: number | undefined, dflt: number): number => (typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : dflt);
+/** 잠금 대기 초과(55P03) · 문장 시간 초과(57014) — 데이터 탓이 아니라 상한에 걸린 것. */
+const isLimitError = (e: unknown): boolean => { const code = (e as { code?: unknown })?.code; return code === "55P03" || code === "57014"; };
 
 export async function withOwnerConn<T>(fn: (db: Q) => Promise<T>): Promise<T> {
   const ddlDsn = (process.env.LIVELY_APP_DDL_DATABASE_URL || "").trim() || (process.env.LIVELY_OWNER_DATABASE_URL || "").trim();
@@ -57,7 +59,7 @@ export async function withOwnerConn<T>(fn: (db: Q) => Promise<T>): Promise<T> {
     //  #4483 — DDL 이 다른 트랜잭션의 잠금을 끝없이 기다리면 그 뒤로 앱 읽기까지 줄을 선다(ACCESS EXCLUSIVE 요청이 앞을 막는다).
     //   store_sql 의 표 보장은 앱마다 한 번만 돌고(single-flight) 다른 호출이 그 약속을 기다리므로, 멎지 않게 상한을 둔다(재검토 4-3).
     await client.query(`SET lock_timeout = '${ddlLockMs()}ms'`);
-    await client.query("SET statement_timeout = '5min'");
+    await client.query(`SET statement_timeout = '${DDL_STATEMENT_MS}ms'`);
     return await fn(client);
   } finally { await client.end().catch(() => { /* noop */ }); }
 }
@@ -149,7 +151,7 @@ const UNIQUE_SAFE_DEFAULTS: ReadonlySet<string> = new Set(["gen_random_uuid()"])
  *  외래키는 다른 표가 다 생긴 뒤 ensureAppTables 가 따로 맞춘다(syncForeignKeys).
  *  schema 기본값 `app` = 종전 동작(기본 앱·단일 테넌트). 워크스페이스가 설치한 앱은 호출부가 appSchemaFor 로 고른다. */
 export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport,
-  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string>; lockMs?: number; statementMs?: number } = {}): Promise<string> {
+  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string>; lockMs?: number; statementMs?: number; surfaceTimeouts?: boolean } = {}): Promise<string> {
   const physical = physicalTableName(appId, spec.table);
   const cols = columnDefs(spec.columns);
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
@@ -183,8 +185,8 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
        )`);
     if (!existed) local.created.push(spec.table);
     else {
-      if (!opts.tenantScopedIndexes) await narrowPrimaryKey(c, schema, physical, rel, spec, local);
-      await syncColumns(c, schema, physical, rel, spec, local, guard);
+      if (!opts.tenantScopedIndexes) await narrowPrimaryKey(c, schema, physical, rel, spec, local, !!opts.surfaceTimeouts);
+      await syncColumns(c, schema, physical, rel, spec, local, guard, undefined, !!opts.surfaceTimeouts);
     }
     await syncColumnRules(c, schema, physical, rel, spec, checks, local, guard);
     //  #4724 이미 켜져 있으면 다시 걸지 않는다 — ALTER TABLE 은 표를 통째로 잠근다(공개 때 표 전부를 한 트랜잭션으로 맞추면
@@ -226,7 +228,7 @@ function guardFor(table: string, protect: ReadonlySet<string> | undefined, repor
  *  id 가 겹치는 행이 있거나(한 표에 여러 테넌트 — 생기지 않아야 하는 상태) 다른 까닭으로 못 바꾸면 떼었던 외래키까지 되돌리고
  *  그대로 둔다(SAVEPOINT) — 표 보장은 계속한다.
  */
-async function narrowPrimaryKey(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport): Promise<void> {
+async function narrowPrimaryKey(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, surfaceTimeouts = false): Promise<void> {
   const pk = (await c.query(
     `SELECT con.conname, array_to_string(array_agg(a.attname::text ORDER BY k.ord), ',') AS cols
        FROM pg_constraint con
@@ -250,6 +252,8 @@ async function narrowPrimaryKey(c: Q, schema: string, physical: string, rel: str
     report.constraints.push({ table: spec.table, kind: "primary_key", action: "changed" });
   } catch (err) {
     await c.query("ROLLBACK TO SAVEPOINT lv_pk");
+    //  #4732 공개 미리 보기는 상한에 걸린 것을 «다 못 봄» 으로 알린다(삼키면 실제와 다른 계획을 보여 준다). 설치 · 공개는 종전처럼 넘어간다.
+    if (surfaceTimeouts && isLimitError(err)) throw err;
     logger.warn({ err, schema, physical }, "기본 키를 (id) 로 바꾸지 못했습니다 — 표는 그대로 씁니다");
   }
 }
@@ -392,7 +396,8 @@ function columnArchiveName(physical: string, column: string, at: Date): string {
  *   · 표에만 있고 선언에도 지울 목록에도 없는 칸 → 그대로 둔다(데이터 보존) — 대신 NOT NULL·기본값을 푼다(선언을 따라 쓰는
  *     INSERT 가 그 칸 때문에 깨지지 않게). 보고서 undeclared_columns 로 알린다 — 지우려면 drop_columns 에 적는다.
  */
-async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, now: Date = new Date()): Promise<void> {
+async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, now: Date = new Date(),
+  surfaceTimeouts = false): Promise<void> {
   let have = await columnsOf(c, rel);
   // 이름 바꾸기
   for (const col of spec.columns) {
@@ -437,7 +442,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
     const cur = have.get(col.name);
     if (!cur || cur.type === ty.canonical) continue;
     if (guard.has(col.name)) { guard.defer(`형 바꾸기 ${spec.table}.${col.name} (${cur.type} → ${ty.canonical})`); guard.pend(col.name); continue; }
-    const lossy = await lossyRows(c, rel, col.name, cur.type, ty.sql);
+    const lossy = await lossyRows(c, rel, col.name, cur.type, ty.sql, surfaceTimeouts);
     if (lossy !== 0) {
       report.type_mismatches.push({
         table: spec.table, column: col.name, declared: col.type, actual: cur.type,
@@ -468,7 +473,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
 }
 
 /** 새 형으로 바꿨다 되돌렸을 때 값이 달라지는 행 수. 바꿀 수 없는 값이 있으면(캐스트 오류) null. 트랜잭션은 SAVEPOINT 로 지킨다. */
-async function lossyRows(c: Q, rel: string, column: string, from: string, to: string): Promise<number | null> {
+async function lossyRows(c: Q, rel: string, column: string, from: string, to: string, surfaceTimeouts = false): Promise<number | null> {
   await c.query("SAVEPOINT lv_conv");
   try {
     const r = await c.query(
@@ -476,8 +481,10 @@ async function lossyRows(c: Q, rel: string, column: string, from: string, to: st
           AND ((${qi(column)}::${to})::${from}) IS DISTINCT FROM ${qi(column)}`);
     await c.query("RELEASE SAVEPOINT lv_conv");
     return Number(r.rows[0]?.n ?? 0);
-  } catch {
+  } catch (err) {
     await c.query("ROLLBACK TO SAVEPOINT lv_conv");
+    //  #4732 상한에 걸려 다 못 센 것을 «못 바꾸는 값이 있다» 로 말하지 않는다(공개 미리 보기 — 짧은 상한). 설치 · 공개는 종전처럼.
+    if (surfaceTimeouts && isLimitError(err)) throw err;
     return null;
   }
 }
@@ -835,12 +842,18 @@ export interface EnsureAppTablesOpts {
   /** #4724 표 전부를 한 트랜잭션으로 — 하나라도 실패하면 어느 표도 바뀌지 않는다. 공개할 때 미뤄 둔 변경을 적용하는 쪽이 쓴다
    *  (표마다 따로 커밋하면 앞 표만 바뀐 채 공개가 멈춰, 아직 공개 판인 옛 코드가 그 표에서 깨진다). 표를 새로 만드는 설치는 쓰지 않는다. */
   atomic?: boolean;
-  /** #4724 걸어 보기만 하고 늘 되돌린다(atomic 과 같은 한 트랜잭션) — report 에 «했을 일» 이 남는다. 기본 앱 저장의 공유 표 판정이 쓴다. */
+  /** #4724 걸어 보기만 하고 늘 되돌린다(atomic 과 같은 한 트랜잭션) — report 에 «했을 일» 이 남는다. 기본 앱 저장의 공유 표 판정과
+   *  #4732 공개 미리 보기가 쓴다. 아래 #4732 옵션(상한 · 실패 모으기)은 공개 미리 보기용이다 — 상한은 한 트랜잭션에서 맞춘 표의 잠금을
+   *  끝까지 쥐는 시간을 줄이려는 것이다. */
   dryRun?: boolean;
-  /** #4732 잠금을 기다리는 상한(ms) — 기본 ddlLockMs(). 공개 미리 보기가 짧게 준다: DDL 이 잠금을 기다리는 동안 그 표를 쓰려는 사람이 뒤에 줄을 선다. */
+  /** #4732 잠금을 기다리는 상한(ms) — 기본 ddlLockMs(). DDL 이 잠금을 기다리는 동안 그 표를 쓰려는 사람이 뒤에 줄을 선다. */
   lockMs?: number;
-  /** #4732 문장 하나의 상한(ms) — 기본 5분. 공개 미리 보기가 짧게 준다: 큰 표를 다시 쓰는 동안 그 표가 잠긴다. */
+  /** #4732 문장 하나의 상한(ms) — 기본 5분. 큰 표를 다시 쓰는 동안 그 표가 잠긴다. */
   statementMs?: number;
+  /** #4732 이 시각(epoch ms)이 지나면 남은 표는 맞추지 않고 «시간 초과»(57014)로 실패에 싣는다 — 문장 상한 × 문장 수로 길어지지 않게. */
+  deadlineAt?: number;
+  /** #4732 잠금 · 시간 상한에 걸린 것을 삼키지 않고 실패로 올린다(형 바꾸기의 값 확인 · 옛 기본 키 좁히기) — 삼키면 «못 바꿈» 처럼 실제와 다른 계획이 된다. */
+  surfaceTimeouts?: boolean;
   /** #4732 넘기면 표마다 실패를 모은다 — 공개 미리 보기가 «데이터가 새 규칙에 어긋남»(막힘)과 «잠금 · 시간 초과»(다 못 봄)를 가른다. */
   failures?: AppTableFailure[];
 }
@@ -867,8 +880,9 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
   //  #4483 — 실패한 까닭이 «있던 데이터가 새 선언에 어긋난다»(4xx — 고칠 사람이 할 일)뿐이면 그 상태로 돌려준다. 그 밖은 503.
   let clientStatus: number | null = null;
   const fail = (table: string, err: unknown, after?: string[]): void => {
-    //  걸어 보기(dryRun)의 실패는 판정 결과다 — 경고로 남기지 않는다(공개 미리 보기가 «막힘» 을 찾을 때마다 경고가 쌓이지 않게).
-    if (opts.dryRun) logger.debug({ err, appId, schema, table }, "앱 데이터 테이블 걸어 보기 실패");
+    //  실패를 모아 가는 걸어 보기(공개 미리 보기)의 실패는 판정 결과다 — 경고로 남기지 않는다(«막힘» 을 찾을 때마다 경고가 쌓이지 않게).
+    //   모으지 않는 걸어 보기(기본 앱 판정)는 경고가 유일한 흔적이라 그대로 둔다.
+    if (opts.dryRun && opts.failures) logger.debug({ err, appId, schema, table }, "앱 데이터 테이블 걸어 보기 실패");
     else logger.warn({ err, appId, schema, table }, opts.strict ? "앱 데이터 테이블 생성 실패" : "앱 데이터 테이블 생성 실패(비치명)");
     failures.push(`${table}: ${(err as Error)?.message ?? err}`);
     const st = (err as { status?: number })?.status;
@@ -900,16 +914,21 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
       }
       //  표마다 «대기 칸»(미룬 이름 바꾸기의 새 이름 · 미룬 형 바꾸기의 칸) — 표 보장과 그 뒤 외래키 단계가 나눠 쓴다.
       const pendingOf = new Map<string, Set<string>>(tables.map((t) => [t.table, new Set<string>()]));
+      //  #4732 전체 시간 상한 — 지나면 남은 표는 맞추지 않는다(이미 맞춘 표의 잠금은 트랜잭션 끝까지 쥐므로 더 늘리지 않는다).
+      const late = (): boolean => opts.deadlineAt != null && Date.now() > opts.deadlineAt;
+      const lateErr = (): Error => Object.assign(new Error("시간 상한을 넘어 이 표는 보지 못했습니다"), { code: "57014" });
       for (const t of tables) {
+        if (late()) { fail(t.table, lateErr()); continue; }
         try {
           done.push(await createAppTable(db, appId, t, schema, report, { tenantScopedIndexes: opts.tenantScopedIndexes, protect: guarded.get(t.table), shared, pending: pendingOf.get(t.table),
-            lockMs: opts.lockMs, statementMs: opts.statementMs }));
+            lockMs: opts.lockMs, statementMs: opts.statementMs, surfaceTimeouts: opts.surfaceTimeouts }));
           ok.add(t.table);
         } catch (err) { fail(t.table, err); }
       }
       // 외래키 — 가리키는 표까지 다 생긴 뒤에. 가리키는 표가 실패했으면 그 표의 외래키도 건너뛴다(실패로 남는다).
       for (const t of tables) {
         if (!ok.has(t.table) || !t.columns.some((c) => c.references)) continue;
+        if (late()) { fail(t.table, lateErr()); continue; }
         const missing = [...new Set(t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table))];
         if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${missing.join(", ")})를 만들지 못했습니다`), missing); continue; }
         const local = emptyTableReport();
@@ -1050,6 +1069,37 @@ async function inOneTx<T>(db: Q, fn: (c: Q) => Promise<T>, commit: () => boolean
   }
 }
 
+/** 빠진 표 하나를 어떻게 하나 — 모든 행을 볼 수 있고 0행이면 지우고(drop), 아니면 보관한다. 정리(잠근 뒤)와 공개 미리 보기(잠그지 않고)가 같이 쓴다. */
+async function droppedTableFate(c: Q, schema: string, physical: string): Promise<{ rows: number; drop: boolean }> {
+  const rows = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${qi(schema)}.${qi(physical)}`)).rows[0]?.n ?? 0);
+  return { rows, drop: rows === 0 && (await seesAllRows(c, schema, physical)) };
+}
+
+/** #4732 공개 뒤 정리될 표 하나 — 새로 공개하는 판에 없는 옛 표(비었으면 지움 · 행이 있으면 보관). */
+export interface GoneTablePlan { table: string; rows: number; action: "drop" | "archive" }
+
+/**
+ * #4732 정리하면 어떻게 될지만 본다(cleanupDroppedTables 와 같은 판단 · 표를 잠그지 않고 아무것도 바꾸지 않는다) — 공개 미리 보기가 쓴다.
+ *  물리 표가 없으면 할 일이 없어 싣지 않는다. 센 뒤 정리 전에 행이 늘 수 있다(그때는 정리가 보관 쪽으로 간다 — 데이터를 지키는 쪽).
+ *  limits — 세는 동안의 잠금 대기 · 문장 상한(미리 보기는 짧게). 넘으면 그 오류를 던진다(호출부가 «다 못 봄» 으로 접는다).
+ */
+export async function planDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA,
+  limits: { lockMs?: number; statementMs?: number } = {}): Promise<GoneTablePlan[]> {
+  if (!tables.length) return [];
+  return withOwnerConn((db) => inTx(db, async (c) => {
+    await c.query(`SET LOCAL lock_timeout = '${msOr(limits.lockMs, ddlLockMs())}ms'`);
+    await c.query(`SET LOCAL statement_timeout = '${msOr(limits.statementMs, DDL_STATEMENT_MS)}ms'`);
+    const out: GoneTablePlan[] = [];
+    for (const table of tables) {
+      const physical = physicalTableName(appId, table);
+      if (!(await tableExists(c, schema, physical))) continue;
+      const { rows, drop } = await droppedTableFate(c, schema, physical);
+      out.push({ table, rows, action: drop ? "drop" : "archive" });
+    }
+    return out;
+  }));
+}
+
 /**
  * 매니페스트에서 빠진 테이블을 정리한다. 테이블마다 한 트랜잭션 — 하나가 실패해도 나머지는 계속하고 failed 로 알린다.
  *  · 물리 테이블이 없으면 할 일 없음(설치 때 생성이 실패했던 앱 등).
@@ -1057,30 +1107,6 @@ async function inOneTx<T>(db: Q, fn: (c: Q) => Promise<T>, commit: () => boolean
  *  · 행이 있거나 다 볼 수 있는지 모르면 → `<스키마>_archive` 로 옮긴다(이름에 시각을 붙여 겹치지 않게). 런타임 role 권한은 걷는다 —
  *    보관된 테이블은 앱이 더는 못 읽고 쓰지만 관리자(DB)는 되살릴 수 있다.
  */
-/** 빠진 표 하나를 어떻게 하나 — 모든 행을 볼 수 있고 0행이면 지우고(drop), 아니면 보관한다. 정리(잠근 뒤)와 공개 미리 보기(잠그지 않고)가 같이 쓴다. */
-async function droppedTableFate(c: Q, schema: string, physical: string): Promise<{ rows: number; drop: boolean }> {
-  const rows = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${qi(schema)}.${qi(physical)}`)).rows[0]?.n ?? 0);
-  return { rows, drop: rows === 0 && (await seesAllRows(c, schema, physical)) };
-}
-
-/**
- * #4732 정리하면 어떻게 될지만 본다(cleanupDroppedTables 와 같은 판단 · 표를 잠그지 않고 아무것도 바꾸지 않는다) — 공개 미리 보기가 쓴다.
- *  물리 표가 없으면 할 일이 없어 싣지 않는다. 센 뒤 정리 전에 행이 늘 수 있다(그때는 정리가 보관 쪽으로 간다 — 데이터를 지키는 쪽).
- */
-export async function planDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA): Promise<Array<{ table: string; rows: number; action: "drop" | "archive" }>> {
-  if (!tables.length) return [];
-  return withOwnerConn(async (db) => {
-    const out: Array<{ table: string; rows: number; action: "drop" | "archive" }> = [];
-    for (const table of tables) {
-      const physical = physicalTableName(appId, table);
-      if (!(await tableExists(db, schema, physical))) continue;
-      const { rows, drop } = await droppedTableFate(db, schema, physical);
-      out.push({ table, rows, action: drop ? "drop" : "archive" });
-    }
-    return out;
-  });
-}
-
 export async function cleanupDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA, now: Date = new Date()): Promise<DroppedTablesReport> {
   const out: DroppedTablesReport = { dropped: [], archived: [], failed: [] };
   if (!tables.length) return out;

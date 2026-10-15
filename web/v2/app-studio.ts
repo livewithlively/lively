@@ -885,7 +885,14 @@ async function build(rec: StudioRec): Promise<void> {
     const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
     if (await sendPrompt(rec, fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
   };
+  //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.
+  let putting = false;
   const putApp = async (): Promise<void> => {
+    if (putting) return;
+    putting = true;
+    try { await putAppOnce(); } finally { putting = false; }
+  };
+  const putAppOnce = async (): Promise<void> => {
     const newName = nameIn.value.trim() || S.title;
     const share = rec.vis || 'me';
     //  #4732 「워크스페이스 모두」 면 이 저장이 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다(새 앱은 할 일이 없어 묻지 않는다).

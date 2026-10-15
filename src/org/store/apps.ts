@@ -88,6 +88,8 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
 //   그래서 ① 키에 테넌트를 넣고(남의 워크스페이스 설치를 기다릴 이유가 없다) ② 기다리는 동안엔 클라이언트를 반납하며
 //   (try-lock 재시도) ③ 상한을 넘기면 던진다(호출부는 이미 비치명 — 다음 시딩·사람의 재시도가 받는다).
 export const APP_INSTALL_LOCK_WAIT_MS = 60_000;
+/** 설치 락을 기다리다 못 얻은 오류의 code — 기다림을 짧게 준 호출부(공개 미리 보기 #4732)가 «다른 저장 중» 으로 접는다. */
+export const APP_INSTALL_LOCK_TIMEOUT = "APP_INSTALL_LOCK_TIMEOUT";
 const APP_INSTALL_LOCK_POLL_MS = 250;
 
 /** 락 키 — 테넌트 컨텍스트가 있으면 그 테넌트로 좁힌다. 컨텍스트 밖(단일 테넌트·부팅)은 종전처럼 앱 id 만. */
@@ -109,7 +111,7 @@ export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>,
     } catch (err) { c.release(); throw err; }
     if (got) { client = c; break; }
     c.release();   // 기다리는 동안 풀 슬롯을 쥐지 않는다 — 락 보유자가 fn 안에서 쓸 자리를 남긴다
-    if (Date.now() >= deadline) throw new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`);
+    if (Date.now() >= deadline) throw Object.assign(new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`), { code: APP_INSTALL_LOCK_TIMEOUT });
     await new Promise((res) => setTimeout(res, opts.pollMs ?? APP_INSTALL_LOCK_POLL_MS));
   }
   try {
