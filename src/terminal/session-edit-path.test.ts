@@ -22,6 +22,15 @@ test("R8 화면이 준 좌표가 기록의 좌표와 다르면(낡은 · 엉뚱�
   assert.equal(p({ nodeId: "n9", rowNode: "n2" }), "node");
   assert.equal(p({ nodeId: "n9", rowNode: "" }), "node");
 });
+test("R9 켜진 노드가 그 세션이 끝났다고 확답하면(gone=true) 이름만은 기록에 — 노드는 끝난 세션의 주인을 못 읽어 거절한다", () => {
+  assert.equal(p({ nodeId: "n1", rowNode: "n1", nodeOnline: true, nodeGone: true }), "stored");
+});
+test("R10 켜진 노드에서 살아 있거나(false) 못 물었으면(null) 노드로 · 초대가 섞였거나 기록의 좌표와 다르면 끝났어도 노드로", () => {
+  assert.equal(p({ nodeId: "n1", rowNode: "n1", nodeOnline: true, nodeGone: false }), "node");
+  assert.equal(p({ nodeId: "n1", rowNode: "n1", nodeOnline: true, nodeGone: null }), "node");
+  assert.equal(p({ nodeId: "n1", rowNode: "n1", nodeOnline: true, nodeGone: true, labelOnly: false }), "node");
+  assert.equal(p({ nodeId: "n9", rowNode: "n1", nodeOnline: true, nodeGone: true }), "node");
+});
 test("R4 좌표가 없고 중앙 tmux 가 확답으로 없으면(쉬는 세션) 이름만은 기록에", () => {
   assert.equal(p({ centralGone: true }), "stored");
 });

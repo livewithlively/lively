@@ -5,7 +5,7 @@
 //  AI 가 지은 「회의록 기획카드」 가 남았다. 지금:
 //   · node   — 좌표(화면이 준 것 → 기록 → 스냅샷, 호출부가 sessionRelayNodeId 로 되찾는다)가 있고 그 노드가 켜져 있다. 초대가 섞였으면
 //              노드가 꺼져 있어도 종전대로 노드로 간다(초대 명단의 정본은 그 노드의 tmux 다 — 기록만 고치면 다시 켜질 때 되돌아간다).
-//   · stored — **이름만** 바꾸는데 그 세션이 지금 어디서도 돌지 않는다(노드가 꺼졌거나, 중앙 tmux 가 확답으로 없다). 기록(desired-state)에
+//   · stored — **이름만** 바꾸는데 그 세션이 지금 어디서도 돌지 않는다(노드가 꺼졌거나, 켜진 노드가 «없다» 고 확답했거나, 중앙 tmux 가 확답으로 없다). 기록(desired-state)에
 //              사람 이름으로 적는다 — 복원이 이 이름으로 세션을 다시 띄우고, AI 의 session_rename 은 이 이름을 못 덮는다.
 //   · central — 그 밖(종전). 중앙 tmux 가 살아 있는지 모르면(null) 살아 있다고 본다(#3752 — 모름을 죽음으로 읽지 않는다).
 export type SessionEditPath = "node" | "stored" | "central";
@@ -15,8 +15,10 @@ export type SessionEditPath = "node" | "stored" | "central";
  *  꺼진 노드로 «기록만» 가는 건 그 좌표가 기록의 좌표와 같을 때뿐이다 — 화면이 실어 보낸 낡은(엉뚱한) 좌표 하나로 살아 있는 세션의
  *  이름이 기록에만 적히고 화면(tmux)은 옛 이름으로 남는 일을 막는다(격리 리뷰). 다르면 종전대로 노드로 보낸다(그 노드가 답한다).
  */
-export function sessionEditPath(i: { nodeId: string; rowNode: string; nodeOnline: boolean; labelOnly: boolean; centralGone: boolean | null }): SessionEditPath {
-  if (i.nodeId) return !i.nodeOnline && i.labelOnly && i.nodeId === i.rowNode ? "stored" : "node";
+export function sessionEditPath(i: { nodeId: string; rowNode: string; nodeOnline: boolean; nodeGone?: boolean | null; labelOnly: boolean; centralGone: boolean | null }): SessionEditPath {
+  //  켜진 노드라도 그 세션이 끝났으면(노드의 gone 확답 true — 지우기 라우트와 같은 3값, 모르면 null) 노드는 «본인 세션이 아닙니다» 로 거절한다 —
+  //   끝난 세션은 그 노드의 tmux 에 없어 주인을 못 읽기 때문이다(실측 2026-10-15 「회의록 기획카드」). 이름만이면 기록에 적는다.
+  if (i.nodeId) return i.labelOnly && i.nodeId === i.rowNode && (!i.nodeOnline || i.nodeGone === true) ? "stored" : "node";
   return i.labelOnly && i.centralGone === true ? "stored" : "central";
 }
 
