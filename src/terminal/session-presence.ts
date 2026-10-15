@@ -25,6 +25,51 @@ interface Stamp { first: number; last: number }
 /** 자리 키(워크스페이스 + 세션 id) → (멤버 id → 도착·최근 도장). */
 const stamps = new Map<string, Map<string, Stamp>>();
 
+// ── «보는 중» 판정(#4695 T5 하네스 종료 규칙) ────────────────────────────────────────────────────────────
+//  얼굴 줄(위)은 «지금 누가 보나» 만 안다. 종료 규칙은 하나 더 알아야 한다 — **언제부터 아무도 안 봤나**(그 순간부터 N·M분 시계가 간다).
+//  그래서 자리를 비워도(떠남·만료) 마지막 도장·떠난 시각을 따로 남긴다. 규칙(T2 #4692 §6 실측 → 결정):
+//   · 도장이 45초(TTL) 없으면 «안 봄». 끝난 시각 = 마지막 도장 + 45초.
+//   · 떠남(`/leave`)은 즉시가 아니라 **20초 유예** — 새로고침이 pagehide→/leave 를 보낸 뒤 곧 다시 도장을 찍고, 얼굴은 창이 아니라 사람
+//     단위라 같은 세션을 창 둘로 보다 하나를 닫으면 그 사람의 도장이 지워졌다가 남은 창이 16초 안에 다시 찍는다. 끝난 시각 = 떠남 + 20초.
+//   · 게이트웨이가 막 떴으면(45초 안) **«모름»** — 도장이 메모리에만 있어서, 그 사이엔 «아무도 안 봄» 과 «아직 도장이 안 왔음» 이 같다.
+//  ⚠ 끝난 시각은 이 프로세스가 본 것뿐이다. 재시작 전의 «마지막으로 본 시각» 은 tmux `@box_last_seen`(목록 행 lastViewed)이 들고 있다 —
+//   부르는 쪽(session-stop-rule)이 둘 중 나중 것을 쓴다.
+export const LEAVE_GRACE_MS = 20_000;
+const BOOT_MS = Date.now();
+/** 자리 키 → 마지막 도장 시각(누구든). 자리를 비워도 남는다(끝난 시각의 재료). */
+const lastStampAt = new Map<string, number>();
+/** 자리 키 → 마지막 떠남 시각(누구든). */
+const lastLeaveAt = new Map<string, number>();
+/** 끝난 시각 기록을 이만큼 지나면 버린다 — 그보다 오래된 «끝난 시각» 은 tmux 의 마지막 열람 시각이 대신한다. */
+const VIEW_TRACE_KEEP_MS = 6 * 60 * 60_000;
+
+/** 이 세션을 지금 보는 사람이 있나 · 언제부터 아무도 안 봤나 (#4695). */
+export interface ViewState {
+  /** 지금 보는 중(떠남 유예 20초 포함) */
+  viewing: boolean;
+  /** 판정 불가 — 게이트웨이가 막 떴다(도장이 메모리에만 있다). 부르는 쪽은 «보는 중» 처럼 다룬다(끄지 않는다). */
+  unknown: boolean;
+  /** 아무도 안 보기 시작한 시각(ms). 이 프로세스에서 본 적이 없으면 0(부르는 쪽이 tmux 의 마지막 열람 시각으로 메운다). */
+  endedAtMs: number;
+}
+
+/** (순수) 재료로 «보는 중» 을 판정한다 — 시험은 이 함수로 표를 못박는다. */
+export function viewStateOf(i: { freshViewers: number; lastStamp: number; lastLeave: number; bootMs: number; now: number }): ViewState {
+  if (i.freshViewers > 0) return { viewing: true, unknown: false, endedAtMs: 0 };
+  //  떠남 뒤 유예 — 다시 도장이 오면(위 freshViewers) 끝난 게 아니다. 떠남이 마지막 도장보다 뒤일 때만 떠남이 끝을 정한다.
+  const leftLast = i.lastLeave > 0 && i.lastLeave >= i.lastStamp;
+  if (leftLast && i.now - i.lastLeave < LEAVE_GRACE_MS) return { viewing: true, unknown: false, endedAtMs: 0 };
+  if (i.now - i.bootMs < TTL_MS) return { viewing: false, unknown: true, endedAtMs: 0 };
+  const endedAtMs = leftLast ? i.lastLeave + LEAVE_GRACE_MS : (i.lastStamp > 0 ? i.lastStamp + TTL_MS : 0);
+  return { viewing: false, unknown: false, endedAtMs };
+}
+
+/** 이 세션의 «보는 중» (#4695). 테넌트 컨텍스트 안에서 부른다(자리 키가 워크스페이스를 탄다). */
+export function viewState(sessionId: string, now = Date.now()): ViewState {
+  const k = keyOf(sessionId);
+  return viewStateOf({ freshViewers: viewersAt(k, now).length, lastStamp: lastStampAt.get(k) ?? 0, lastLeave: lastLeaveAt.get(k) ?? 0, bootMs: BOOT_MS, now });
+}
+
 //  ⚠ 자리는 **워크스페이스마다** 따로다(#3870) — 매니지드 공유 게이트웨이는 한 프로세스가 전 워크스페이스를 서빙하고,
 //   구성원 아이디는 워크스페이스끼리 겹칠 수 있다(같은 사람이 두 워크스페이스에 있다). 세션 id 만으로 두면 한 워크스페이스의
 //   얼굴 줄이 다른 워크스페이스로 밀려 나갈 수 있다(pushViewers). 단일 테넌트 배포는 워크스페이스가 비어 종전과 같다.
@@ -39,6 +84,7 @@ export function markViewing(sessionId: string, memberId: string, now = Date.now(
   let m = stamps.get(k);
   if (!m) { m = new Map(); stamps.set(k, m); }
   const cur = m.get(memberId);
+  lastStampAt.set(k, now);   // #4695 — 자리를 비워도 남는 «마지막 도장»(끝난 시각의 재료)
   // 살아 있는 도장은 **연장만** 한다 — first 를 그대로 두는 것이 곧 '자리 유지'다.
   if (cur && fresh(cur, now)) { cur.last = now; return; }
   // 처음 왔거나, 만료된 뒤 돌아왔다 — 그 사이 실제로 자리를 비웠으므로 새 도착으로 친다(first 를 지금으로).
@@ -62,10 +108,11 @@ function viewersAt(k: string, now: number): string[] {
  *  ⚠ 창이 숨은 것(다른 앱으로 전환)은 떠난 것이 아니다 — 그건 도장이 멎고 TTL 이 늦게 지운다(머리말: 늦게 사라지는 쪽으로 실패).
  * @returns 실제로 자리를 비웠나(없던 사람이면 false)
  */
-export function leaveViewing(sessionId: string, memberId: string): boolean {
+export function leaveViewing(sessionId: string, memberId: string, now = Date.now()): boolean {
   const k = keyOf(sessionId);
   const m = stamps.get(k);
   if (!m || !m.delete(memberId)) return false;
+  lastLeaveAt.set(k, now);   // #4695 — 떠난 시각(20초 유예의 기준). 자리에 없던 사람의 떠남은 세지 않는다(아래 false).
   if (!m.size) stamps.delete(k);
   return true;
 }
@@ -105,6 +152,9 @@ export function pushViewers(sessionId: string, faces: ReadonlyArray<{ id: string
 export function sweepPresence(now = Date.now()): void {
   for (const k of [...stamps.keys()]) viewersAt(k, now);
   for (const k of [...pushed.keys()]) if (!stamps.has(k)) pushed.delete(k);
+  //  #4695 — 끝난 시각 기록도 오래되면 버린다(그 뒤엔 tmux 의 마지막 열람 시각이 대신한다 — ViewState 머리말).
+  for (const [k, t] of [...lastStampAt]) if (now - t > VIEW_TRACE_KEEP_MS) lastStampAt.delete(k);
+  for (const [k, t] of [...lastLeaveAt]) if (now - t > VIEW_TRACE_KEEP_MS) lastLeaveAt.delete(k);
 }
 
 /** 세션이 사라졌다(종료·보관·복원) — 그 자리를 즉시 비운다. */
@@ -112,6 +162,8 @@ export function forgetPresence(sessionId: string): void {
   const k = keyOf(sessionId);
   stamps.delete(k);
   pushed.delete(k);
+  //  #4695 — 끝난 시각 기록(lastStampAt·lastLeaveAt)은 **남긴다.** 같은 id 로 되살린 세션(#4694)의 «언제부터 안 봤나» 가 이 기록이다 —
+  //   지우면 되살린 직후의 판정이 tmux 의 열람 시각(새 판은 비어 있다)으로만 서서, 막 보고 떠난 세션의 시계가 너무 일찍 시작될 수 있다.
 }
 
 /** 관측용 — 지금 자리를 잡고 있는 세션 수. 자리 회수(sweep)가 실제로 되는지 밖에서 볼 수 있게 한다. */

@@ -265,7 +265,8 @@ interface ReapSources {
  *  하필 tmux 가 느려지는 때(=메모리 압박·스래싱, 즉 이 회수가 도는 바로 그 순간)에 보호가 통째로 사라진다.
  *  판정 못 함의 대가가 «회수 한 tick 밀림» 대 «작업 중인 세션 사망»이라 방향이 자명하다(#1251 과 같은 교리).
  */
-async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
+//  #4695 T5 — 하네스 종료 규칙(session-stop-rule.ts)도 «끄기 전 마지막 확인» 으로 같은 판정을 쓴다(두 벌 금지 — 판별자는 하나다).
+export async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
   if (!ids.size) return new Set();
   const panes = await listSessionPanePids();
   if (!panes.ok) return new Set(ids);                                   // 못 봤다 ≠ 작업 없다 → 전부 보호

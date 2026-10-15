@@ -30,7 +30,7 @@ import { join } from "node:path";
 import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
-import { countOpenJobs } from "./bg-jobs.mjs";
+import { openWork } from "./bg-jobs.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -335,11 +335,16 @@ try {
       //   어긋날 수 있다 — 서버는 이 수가 0 이면 그 화면으로 파란 점을 켜지 않는다. ⚠ Stop 에서만 세면 idle_prompt 의 bg 없는 idle 이
       //   서버의 bg=0 을 덮어 점이 되살아난다(격리 리뷰 지적 — 몇 시간 노는 세션은 반드시 이 알림을 거친다).
       //   대화 기록 문구가 Claude Code 의 것이라 claude 만 센다. 못 세면(null) 안 싣는다(=종전대로 화면을 믿는다).
-      const bg = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
-        ? countOpenJobs(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
-      const report = bg === null ? { state: phase } : { state: phase, bg };
-      //  같은 보고의 반복만 스로틀한다 — 작업 수가 바뀐 idle 은 새 보고다.
-      const key = bg === null ? phase : `${phase} bg=${bg}`;
+      //  #4695 T5 — 같은 셈에서 **예약 깨움·반복 예약**도 함께 싣는다(bg-jobs.mjs «예약 깨움» 머리말). 하네스 종료 규칙은 이 둘이 있으면
+      //   «완료» 로 보지 않는다(끄면 깨움이 영영 안 온다). wake = 다음 깨움 시각(초, 0 = 없음) — 셈을 믿을 수 있을 때만(sched) 싣는다.
+      //   싣지 않은 보고는 서버가 «예약 모름» 으로 읽어 그 세션을 끄지 않는다(옛 훅·못 셈 — 안전한 쪽).
+      const work = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
+        ? openWork(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
+      const bg = work ? work.bg : null;
+      const sched = work && work.sched ? { wake: work.wakeMs && work.wakeMs > Date.now() ? Math.floor(work.wakeMs / 1000) : 0, cron: work.cron } : null;
+      const report = { state: phase, ...(bg === null ? {} : { bg }), ...(sched ? { wake: sched.wake, cron: sched.cron } : {}) };
+      //  같은 보고의 반복만 스로틀한다 — 작업 수·예약이 바뀐 idle 은 새 보고다.
+      const key = [phase, ...(bg === null ? [] : [`bg=${bg}`]), ...(sched ? [`wake=${sched.wake}`, `cron=${sched.cron}`] : [])].join(" ");
       const stateFile = join(FLAG_DIR, `${boxId}.state`);
       let last = ""; try { last = readFileSync(stateFile, "utf8").trim(); } catch { /* 첫 보고 */ }
       if (last !== key || !cooling(stateFile, 60_000)) {

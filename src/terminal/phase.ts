@@ -185,21 +185,48 @@ export function isReportedPhase(v: unknown): v is ReportedPhase { return typeof 
 //  만료돼도 손실은 없다 — 아래 폴백(스피너·capture-pane)이 종전과 똑같이 답한다.
 export const PHASE_TTL_SEC = 10 * 60;
 
-// "<phase> <epoch초>[ bg=<n>]" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
+// "<phase> <epoch초>[ bg=<n>][ wake=<epoch초> cron=<n>]" → 파싱. 형식이 깨졌거나 모르는 phase 면 null(= 보고 없음 = 폴백).
 //  phase 와 시각을 **한 옵션에 묶은** 이유: 따로 쓰면 두 write 사이에 목록 조회가 끼어 '옛 상태 + 새 시각'이라는
 //  있을 수 없는 조합이 나온다(그 조합은 만료 판정을 속인다). 한 문자열이면 원자적이다.
 //  #4588 — 세 번째 토큰 `bg=<n>` 은 턴 끝(idle)에 하네스가 센 «대화가 띄우고 아직 안 끝난 백그라운드 작업 수»다(formatReportedPhase).
 //   옛 파서는 앞의 둘만 읽어 이 토큰을 모른 채 지나간다(무회귀). 없으면 bg 키가 없다(= 모른다).
-export function parseReportedPhase(raw: string): { phase: ReportedPhase; at: number; bg?: number } | null {
-  const [p, t, x] = String(raw || "").trim().split(/\s+/);
+//  #4695 T5 — 그 뒤 `wake=<epoch초>`(다음 예약 깨움, 0 = 없음)·`cron=<n>`(열린 반복 예약 수)는 턴 끝에 하네스가 센 «AI 가 스스로 다시 깨기로 한
+//   약속»이다(kit/hooks/bg-jobs.mjs openWork). 하네스 종료 규칙이 이 둘이 있으면 «완료» 로 보지 않는다. **둘은 한 벌로만 실린다** —
+//   wake 토큰이 있다는 것 자체가 «예약을 셌다»(sched) 이고, 없으면 «모른다»(옛 훅·옛 세션 호스트·못 셈)다. 옛 파서는 세 번째 토큰만 보므로
+//   bg 를 세 번째에 그대로 둔다(무회귀).
+export interface ReportedState { phase: ReportedPhase; at: number; bg?: number; wake?: number; cron?: number }
+export function parseReportedPhase(raw: string): ReportedState | null {
+  const [p, t, ...rest] = String(raw || "").trim().split(/\s+/);
   const at = Number(t);
   if (!isReportedPhase(p) || !Number.isFinite(at) || at <= 0) return null;
-  const bg = p === "idle" ? /^bg=(\d{1,4})$/.exec(x || "")?.[1] : undefined;
-  return bg === undefined ? { phase: p, at } : { phase: p, at, bg: Number(bg) };
+  const out: ReportedState = { phase: p, at };
+  if (p !== "idle") return out;
+  const bg = /^bg=(\d{1,4})$/.exec(rest[0] || "")?.[1];
+  if (bg !== undefined) out.bg = Number(bg);
+  //  예약 둘은 **함께 있을 때만** 받는다 — 한쪽만 있는 줄은 깨진 보고다(«셌다» 를 반만 믿으면 안 된다).
+  const kv = new Map(rest.map((x) => x.split("=") as [string, string]).filter(([k, v]) => !!k && v !== undefined));
+  const wake = kv.get("wake"), cron = kv.get("cron");
+  if (wake !== undefined && cron !== undefined && /^\d{1,12}$/.test(wake) && /^\d{1,4}$/.test(cron)) {
+    out.wake = Number(wake);
+    out.cron = Number(cron);
+  }
+  return out;
 }
-/** parseReportedPhase 의 짝. bg 는 idle 에만 싣는다 — 도는 턴·대기의 작업 수는 턴이 끝나야 정해진다. */
-export function formatReportedPhase(phase: ReportedPhase, nowSec: number, bg?: number | null): string {
-  return phase === "idle" && isBgCount(bg) ? `${phase} ${nowSec} bg=${bg}` : `${phase} ${nowSec}`;
+/** 턴 끝에 하네스가 센 예약(#4695 T5) — 다음 깨움 시각(epoch초, 0 = 없음)과 열린 반복 예약 수. */
+export interface ReportedSched { wake: number; cron: number }
+/** 예약 보고가 쓸 만한가 — wake 는 0 또는 epoch초(상한 12자리), cron 은 0~9999. */
+export function isReportedSched(v: unknown): v is ReportedSched {
+  if (!v || typeof v !== "object") return false;
+  const { wake, cron } = v as Record<string, unknown>;
+  return typeof wake === "number" && Number.isInteger(wake) && wake >= 0 && wake < 1e12 && isBgCount(cron);
+}
+/** parseReportedPhase 의 짝. bg·예약은 idle 에만 싣는다 — 도는 턴·대기의 작업 수는 턴이 끝나야 정해진다. */
+export function formatReportedPhase(phase: ReportedPhase, nowSec: number, bg?: number | null, sched?: ReportedSched | null): string {
+  if (phase !== "idle") return `${phase} ${nowSec}`;
+  const parts = [`${phase} ${nowSec}`];
+  if (isBgCount(bg)) parts.push(`bg=${bg}`);
+  if (isReportedSched(sched)) parts.push(`wake=${sched.wake}`, `cron=${sched.cron}`);
+  return parts.join(" ");
 }
 /** 보고에 실린 작업 수가 쓸 만한가(0 이상 정수 · 상한 9999 — 형식은 `bg=\d{1,4}`). */
 export function isBgCount(v: unknown): v is number { return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 9999; }
@@ -297,13 +324,14 @@ export function isActivityProgress(phase: ReportedPhase | undefined, prev: Repor
 //  #1842 — **전이(prev→phase)를 반환한다.** 이 함수가 곧 "지금 단계가 바뀌었다"를 아는 유일한 자리라서,
 //   실시간 알림은 이 값 없이는 30초 폴링으로 같은 사실을 다시 발견해야 한다. 알림 관심사를 이 파일에
 //   들이지 않으려고(여긴 tmux 계층이다) **판단은 하지 않고 사실만 돌려준다** — 무엇이 알림인지는 호출자가 정한다.
-export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000), bg?: number | null): Promise<SessionPhaseChange | null> {
+export async function markSessionActive(id: string, phase?: ReportedPhase, nowSec = Math.floor(Date.now() / 1000), bg?: number | null, sched?: ReportedSched | null): Promise<SessionPhaseChange | null> {
   let prev: ReportedPhase | null = null;
   if (phase) {
     prev = parseReportedPhase(await getOpt(id, "@box_state"))?.phase ?? null;   // 전이 여부 판정용(아래)
     //  #4588 idle 엔 bg=<n>. ⚠ bg 없는 idle 에 직전 bg 를 잇지 않는다 — 훅이 «못 셌다»(띄움 문구를 못 알아봄 등)고 말한 idle 에
     //   옛 bg=0 을 이으면 기다리는 세션의 점이 꺼진다(격리 리뷰). 새 훅은 모든 idle 보고에서 센다(work-flag).
-    await tmuxQuiet(["set-option", "-t", id, "@box_state", formatReportedPhase(phase, nowSec, bg)]);
+    //  #4695 — 예약(wake·cron)도 같은 규율이다: 이번 보고에 없으면 안 싣는다(«모른다» — 하네스 종료 규칙이 그 세션을 끄지 않는다).
+    await tmuxQuiet(["set-option", "-t", id, "@box_state", formatReportedPhase(phase, nowSec, bg, sched)]);
   }
   const changed = !!phase && phase !== prev;
   if (!isActivityProgress(phase, prev)) return changed ? { prev, phase: phase as ReportedPhase, at: nowSec } : null;   // 하트비트는 활동 시각을 올리지 않는다(위 표 참조)

@@ -1,0 +1,381 @@
+// 하네스 종료 규칙 (#4695 T5) — «필요할 때만 띄우고, 끝나면 곧 끈다». 정본: 지식 `session-harness-lifecycle-rules-4690`.
+//
+// ── 무엇을 하나 ───────────────────────────────────────────────────────────────────────────────────
+//  매니지드 세션의 하네스를 **사람이 안 보는 채로** 아래 시간이 지나면 끈다(tmux kill-session — 장부 행은 남아 «복원 가능»).
+//   · 작업 중 · 백그라운드 작업 · 예약 깨움(ScheduleWakeup·반복 예약) 대기 → **끄지 않는다(상한 없음)**
+//   · 완료(턴 끝 ∧ 질의 아님 ∧ 기다리는 일 없음) → N분 뒤(기본 3)
+//   · 사람에게 질의 중(승인·선택 대기) → M분 뒤(기본 60 — T2 «승인 대기 상한 1시간» 결정을 잇는다)
+//   · 하네스가 끝나 셸만 남음(기동 실패 안내 — 런처 ③) → 완료와 같이 N분 뒤
+//   · 보는 중이면 어느 상태든 유지. 다시 보거나 프롬프트가 오면 시계가 처음부터다(시계의 시작 = 마지막 활동과 «안 보기 시작» 중 나중).
+//  끄기 **전에** 남긴다(저장 → 종료 순서): 하네스 입력창에 쓰다 만 글 · 질의 중이면 그 질문과 선택지(화면에서 읽는다 — claude 는 대화 파일에
+//   그 질문이 안 남는다, 실측 3/3). 다음에 열면 대화창이 그 쪽지로 입력칸을 채우고 질문을 다시 보여 준다(web/session-chat.ts).
+//  컨테이너 철거는 이 모듈 몫이 아니다 — tmux 가 끝나면 브로커가 걷는다(T6 #4696 이 «즉시» 로 바꾼다).
+//
+// ── 범위 ──────────────────────────────────────────────────────────────────────────────────────────
+//  · 매니지드(세션 컨테이너 배포)만. 셀프호스트는 이 규칙을 안 돌린다(To-Be 의 대상이 매니지드다 — 무회귀).
+//  · 사람 세션(kind human)만 — 위탁 워커·앱·로그인·상시 세션은 저마다 수명 관리자가 따로 있다.
+//  · 하네스: claude · codex · antigravity(agy). grok·opencode 는 제외(옛 회수 방식 유지 — grok 은 같은 대화 이어 열기 불가, opencode 는 대화
+//    파일 없음, T2). codex·agy 는 **대화 id 매핑이 있을 때만**(상민님 2026-10-15 · T2 조건) — 매핑 없이 끄면 다시 열 때 `resume --last`·
+//    `--continue` 가 옆 세션 대화를 잡는다. claude 도 매핑이 없으면 빈 피커에 갇힐 수 있어 같은 조건을 건다.
+//  · codex app-server·대화 런타임(chat) 세션은 pane 이 셸이라 이 판정의 재료(화면·훅)가 다르다 — 제외.
+//
+// ── ⚠ 파괴적 갈래다(#2258) ─────────────────────────────────────────────────────────────────────────
+//  이 모듈은 tmux 세션을 죽인다. 그래서 **모르면 안 끈다**가 모든 갈래의 기본값이다: 관측 못 한 행 · 보는 중인지 모름(게이트웨이가 막 뜸) ·
+//  예약을 못 셌다(옛 훅·옛 세션 호스트) · 프로세스 판정 실패 · 끄기 직전 화면이 그새 바뀜. 판정(순수 `stopVerdict`)과 집행(`sweepSessionStopRule`)을
+//  가르고, 집행은 끄기 직전에 화면을 **다시** 읽어 «그새 턴이 시작됐나 · 답이 났나» 를 본다(목록 → 끄기 사이의 경합).
+//  죽이는 함수는 `reapCentralSession` 하나다 — 옛 회수기와 같은 자리(행 보존 · restorable). 새 회수 갈래가 생겼다는 사실은
+//  `scripts`·회수 가드 시험이 세는 «경로 수» 에 이 모듈이 더해진다는 뜻이다(호출자 감사: 아래 sweepSessionStopRule 한 곳).
+import { logger } from "../log.js";
+import { listCentralSessions } from "../node/registry.js";
+import { reapCentralSession, type SessionInfo } from "../terminal/terminal-sessions.js";
+import { tmux, tmuxQuiet } from "../terminal/tmux-exec.js";
+import { tenantSlug, STOP_RULE_HARNESSES } from "../terminal/catalog.js";
+import { tmuxInSessionContainer } from "../terminal/session-tmux.js";
+import { viewState, PRESENCE_TTL_MS, type ViewState } from "../terminal/session-presence.js";
+import { codexChatMode } from "../terminal/codex-chat-mode.js";
+import { harnessIo } from "../terminal/harness-io/adapter.js";
+import {
+  captureOf, draftFromScreen, questionFromScreen, questionItemFromScreen, questionTabs, screenAsks, screenRunning, clampDraft,
+  type ScreenCapture,
+} from "../terminal/harness-io/stop-capture.js";
+import type { ReportedState } from "../terminal/phase.js";
+import { listAllSessionStates, setSessionStopNote, type SessionState, type SessionStopNote, type StopQuestion } from "./session-state.js";
+import { listManagedSessions } from "./managed-sessions.js";
+import { getRuntimeConfig } from "../org/store.js";
+import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
+import { liveJobSessions } from "./session-reaper.js";
+import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
+
+/** 이 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 한 표다(catalog.ts). 그 밖은 옛 회수 방식(유휴·붙음·작업 시계)이 맡는다. */
+export { STOP_RULE_HARNESSES };
+/** 예약 깨움이 지난 뒤에도 이만큼은 «깨어날 참» 으로 본다 — 깨움은 하네스가 쉬고 있을 때 울려 새 턴을 연다(보통 수 초). */
+export const WAKE_GRACE_SEC = 5 * 60;
+/** «안 보기 시작» 의 재료 중 tmux 의 마지막 열람 시각(@box_last_seen)에 더하는 값 — 도장 만료(TTL)와 같다. */
+const SEEN_TTL_SEC = Math.round(PRESENCE_TTL_MS / 1000);
+
+/** 판정 재료 — 목록 행·장부 행에서 뽑는다(순수 판정이 tmux·DB 를 모르게). */
+export interface StopFacts {
+  harness: string;
+  /** 관측한 행인가(목록이 tmux 를 못 보면 DB 행을 observed:false 로 채운다) */
+  observed: boolean;
+  /** 상시 세션 */
+  managed: boolean;
+  /** 장부(desired) 행이 있나 — 꺼도 다시 열 수 있나 */
+  hasState: boolean;
+  /** 세션 종류(human·task·managed·app·login — 장부 행이 없으면 human) */
+  kind: string;
+  /** 하네스 대화 id 를 아나(이어 열기 좌표) */
+  convMapped: boolean;
+  /** 대화가 어디서 도나 — tui(pane 의 하네스) · app-server(codex) · chat(대화 런타임) */
+  runtime: "tui" | "app-server" | "chat";
+  agentState: string;
+  working: boolean;
+  harnessWorking: boolean;
+  awaiting: boolean;
+  background: boolean;
+  lastReport: ReportedState | null;
+  /** 마지막 작업 시각(epoch초) */
+  lastActive: number;
+  /** tmux 에 새겨진 마지막 열람 시각(epoch초) — 게이트웨이를 다시 띄워도 남는다 */
+  lastViewed: number;
+  created: number;
+}
+
+export type StopState = "done" | "asking" | "exited";
+export type KeepWhy =
+  | "unobserved" | "managed" | "no-state" | "kind" | "harness" | "runtime" | "no-conv"
+  | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock";
+export type StopVerdict =
+  | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
+  | { act: "stop"; state: StopState; since: number; dueAt: number };
+
+/** 끄는 시각 — 분. 0 이면 그 상태는 끄지 않는다. */
+export interface StopMinutes { doneMin: number; askingMin: number }
+
+/**
+ * (순수) 이 세션을 지금 끄나 — 사양 엣지 표 V1~V27(session-stop-rule.test.ts). 위에서부터 먼저 걸리는 것이 답이다.
+ *  @param nowSec  지금(epoch초)
+ */
+export function stopVerdict(f: StopFacts, view: Pick<ViewState, "viewing" | "unknown" | "endedAtMs">, p: StopMinutes, nowSec: number): StopVerdict {
+  // ① 범위 — 모르는 것·남의 관리 대상은 건드리지 않는다.
+  if (!f.observed) return { act: "keep", why: "unobserved" };
+  if (f.managed) return { act: "keep", why: "managed" };
+  if (!f.hasState) return { act: "keep", why: "no-state" };
+  if ((f.kind || "human") !== "human") return { act: "keep", why: "kind" };
+  if (!STOP_RULE_HARNESSES.has(f.harness)) return { act: "keep", why: "harness" };
+  if (f.runtime !== "tui") return { act: "keep", why: "runtime" };
+  if (!f.convMapped) return { act: "keep", why: "no-conv" };
+  // ② 보는 중이면 어느 상태든 유지. 모르면(게이트웨이가 막 떴다) 보는 중으로 본다.
+  if (view.viewing) return { act: "keep", why: "viewing" };
+  if (view.unknown) return { act: "keep", why: "view-unknown" };
+  // ③ 상태 — 작업이 질의·완료보다 앞선다(둘 다 참이면 끄지 않는 쪽).
+  let state: StopState;
+  const r = f.lastReport;
+  if (f.agentState === "exited") state = "exited";
+  else if (f.working || f.harnessWorking || f.agentState === "busy") return { act: "keep", why: "working" };
+  else if (f.awaiting || f.agentState === "waiting") state = "asking";
+  else {
+    if (f.background) return { act: "keep", why: "background" };
+    if (r?.phase === "idle" && (r.bg ?? 0) > 0) return { act: "keep", why: "background" };
+    if (r?.phase === "idle" && r.wake !== undefined) {
+      if (r.wake > 0 && r.wake > nowSec - WAKE_GRACE_SEC) return { act: "keep", why: "scheduled" };
+      if ((r.cron ?? 0) > 0) return { act: "keep", why: "scheduled" };
+    }
+    //  claude 는 예약(루프·반복 예약)을 갖는다 — 턴 끝 보고가 그걸 셌을 때만 «완료» 다. 옛 훅·옛 세션 호스트가 낸 보고엔 wake 칸이 없다.
+    //  codex·agy 는 예약 도구가 없다 — 화면이 대기(idle)면 완료다(살아 있는 셸 작업은 집행 직전 프로세스 판정이 지킨다).
+    if (f.harness === "claude" && !(r?.phase === "idle" && r.wake !== undefined)) return { act: "keep", why: "sched-unknown" };
+    state = "done";
+  }
+  // ④ 시계 — 시작 = 마지막 활동(없으면 마지막 보고 → 만든 시각)과 «안 보기 시작» 중 나중. «안 보기 시작» 은 이 게이트웨이가 본 끝과
+  //    tmux 에 새겨진 마지막 열람(+ 도장 TTL) 중 나중이다(게이트웨이를 다시 띄워도 끝난 시각을 안다).
+  const min = state === "asking" ? p.askingMin : p.doneMin;
+  if (!(min > 0)) return { act: "keep", why: "off", state };
+  const base = f.lastActive || (r?.at ?? 0) || f.created || 0;
+  const viewEnd = Math.max(Math.floor((view.endedAtMs || 0) / 1000), f.lastViewed > 0 ? f.lastViewed + SEEN_TTL_SEC : 0);
+  const since = Math.max(base, viewEnd);
+  if (!(since > 0)) return { act: "keep", why: "no-clock", state };
+  const dueAt = since + min * 60;
+  if (nowSec < dueAt) return { act: "keep", why: "clock", state, dueAt };
+  return { act: "stop", state, since, dueAt };
+}
+
+/** 목록 행 + 장부 행 → 판정 재료. */
+export function stopFactsOf(s: SessionInfo, st: SessionState | undefined, managedIds: ReadonlySet<string>): StopFacts {
+  const appServer = codexChatMode({ harness: s.harness, stamp: s.runtimeRaw }) === "app-server";
+  const runtime = appServer ? "app-server" : s.runtimeChoice === "chat" ? "chat" : "tui";
+  return {
+    harness: s.harness || "",
+    observed: (s as SessionInfo & { observed?: boolean }).observed !== false,
+    managed: !!s.managed || managedIds.has(s.id),
+    hasState: !!st,
+    kind: st?.kind || "human",
+    convMapped: !!st?.claude_session_id,
+    runtime,
+    agentState: String(s.agentState || ""),
+    working: !!s.working,
+    harnessWorking: !!s.harnessWorking,
+    awaiting: !!s.awaiting,
+    background: !!s.background,
+    lastReport: s.lastReport ?? null,
+    lastActive: Number(s.lastActive) || 0,
+    lastViewed: Number(s.lastViewed) || 0,
+    created: Number(s.created) || 0,
+  };
+}
+
+/** 끄는 시각(분)을 정책에서 읽는다 — 정책이 모르는 칸이면 기본값. */
+export function stopMinutesOf(p: Partial<SessionReclaimPolicy>): StopMinutes {
+  const n = Number(p.stop_done_minutes), m = Number(p.stop_asking_minutes);
+  return { doneMin: Number.isFinite(n) && n >= 0 ? n : 3, askingMin: Number.isFinite(m) && m >= 0 ? m : 60 };
+}
+
+// ── 집행 ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** 시험 seam — 기본값은 전부 프로덕션 경로다. */
+export interface StopRuleDeps {
+  /** 이 배포(테넌트)에서 이 규칙을 도나 — 기본: 매니지드(세션 컨테이너 안 tmux)만 */
+  enabled: () => boolean;
+  loadPolicy: () => Promise<Partial<SessionReclaimPolicy>>;
+  listLive: () => Promise<SessionInfo[]>;
+  listStates: () => Promise<SessionState[]>;
+  listManaged: () => Promise<Array<{ session_id: string | null }>>;
+  view: (id: string) => ViewState;
+  liveJobs: (ids: ReadonlySet<string>) => Promise<ReadonlySet<string>>;
+  capture: (id: string) => Promise<string>;
+  keys: (id: string, key: string) => Promise<void>;
+  saveNote: (id: string, note: SessionStopNote) => Promise<unknown>;
+  reap: (id: string) => Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  /** 다음 마감에 이 테넌트를 다시 판정하도록 깨움을 건다(시험은 끈다) */
+  arm: (dueAtSec: number) => void;
+}
+
+/** 한 판의 결과 — CP 하우스키핑 틱·요청 정비 로그가 이 모양을 그대로 찍는다. */
+export interface StopRuleResult {
+  enabled: boolean;
+  why?: string;
+  doneMin?: number;
+  askingMin?: number;
+  scanned: number;
+  stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null }>;
+  /** 남겨 둔 이유별 수 */
+  kept: Partial<Record<KeepWhy | "jobs" | "turn-now" | "answered" | "asking-now" | "failed" | "busy-sweep", number>>;
+  /** 다음 마감까지 남은 초(없으면 없음) */
+  nextDueInSec?: number;
+}
+
+/** 테넌트마다 한 판씩만 — 요청 정비·CP 틱·마감 깨움이 겹쳐도 같은 세션을 두 번 끄지 않는다. */
+const inFlight = new Set<string>();
+const tenantKey = (): string => String(currentTenant()?.id ?? "");
+
+/** 질문 탭을 넘길 때 화면이 다시 그려지기를 기다리는 시간 — 실측(2.1.300)에서 0.8초면 넘친다. */
+const TAB_SETTLE_MS = 600;
+/** claude AskUserQuestion 은 질문을 최대 4개까지 한 번에 묻는다(도구 설명). */
+const MAX_TABS = 4;
+
+function defaultDeps(): StopRuleDeps {
+  return {
+    enabled: () => tmuxInSessionContainer(tenantSlug()),
+    loadPolicy: async () => (await getRuntimeConfig()).session_reclaim_policy,
+    listLive: () => listCentralSessions(),
+    listStates: () => listAllSessionStates(),
+    listManaged: () => listManagedSessions(),
+    view: (id) => viewState(id),
+    liveJobs: (ids) => liveJobSessions(ids),
+    capture: (id) => tmux(["capture-pane", "-t", id, "-p", "-e"]),
+    keys: async (id, key) => { await tmuxQuiet(["send-keys", "-t", id, key]); },
+    saveNote: (id, note) => setSessionStopNote(id, note),
+    reap: (id) => reapCentralSession(id),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: () => Date.now(),
+    arm: (dueAtSec) => armStopTimer(dueAtSec),
+  };
+}
+
+/**
+ * 한 테넌트를 한 판 판정·집행한다. **테넌트 컨텍스트 안에서** 부른다(요청 정비 · CP 하우스키핑 틱 · 마감 깨움).
+ *  실패는 던지지 않고 결과에 센다 — 정비 한 판이 다음 판을 막지 않는다.
+ */
+export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Promise<StopRuleResult> {
+  const d: StopRuleDeps = { ...defaultDeps(), ...over };
+  const kept: StopRuleResult["kept"] = {};
+  const count = (k: keyof StopRuleResult["kept"]): void => { kept[k] = (kept[k] ?? 0) + 1; };
+  if (!d.enabled()) return { enabled: false, why: "self-hosted", scanned: 0, stopped: [], kept };
+  const key = tenantKey();
+  if (inFlight.has(key)) { count("busy-sweep"); return { enabled: true, why: "in-flight", scanned: 0, stopped: [], kept }; }
+  inFlight.add(key);
+  try {
+    //  정책은 회수기와 같은 테넌트별 캐시(30초)로 읽는다. 시험이 읽는 법을 바꿔 끼우면 캐시를 거치지 않는다(시험끼리 값이 새지 않게).
+    const policy = over.loadPolicy
+      ? normalizeSessionReclaimPolicy(await over.loadPolicy())
+      : await effectiveSessionReclaimPolicy(async () => normalizeSessionReclaimPolicy(await d.loadPolicy()));
+    const mins = stopMinutesOf(policy);
+    if (!(mins.doneMin > 0) && !(mins.askingMin > 0)) return { enabled: false, why: "policy-off", ...mins, scanned: 0, stopped: [], kept };
+    const [live, states, managed] = await Promise.all([d.listLive(), d.listStates(), d.listManaged()]);
+    const byId = new Map(states.map((s) => [s.id, s]));
+    const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
+    const nowSec = Math.floor(d.now() / 1000);
+    const due: Array<{ s: SessionInfo; state: StopState; since: number }> = [];
+    let nextDue = Infinity;
+    for (const s of live) {
+      const v = stopVerdict(stopFactsOf(s, byId.get(s.id), managedIds), d.view(s.id), mins, nowSec);
+      if (v.act === "keep") {
+        count(v.why);
+        if (v.why === "clock" && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
+        continue;
+      }
+      due.push({ s, state: v.state, since: v.since });
+    }
+    //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정이 실패하면 **이번 판은 아무것도 안 끈다**
+    //   (회수기는 «방어를 멈추지 않으려고» 종전대로 진행하지만, 이 규칙은 메모리 압박 방어가 아니라 «끝난 것을 치우는» 일이라 한 판 미뤄도 된다).
+    let jobs: ReadonlySet<string> = new Set();
+    if (due.length) {
+      try { jobs = await d.liveJobs(new Set(due.map((x) => x.s.id))); }
+      catch (e) {
+        logger.warn({ err: e, candidates: due.length }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
+        for (let i = 0; i < due.length; i++) count("jobs");
+        due.length = 0;
+      }
+    }
+    const stopped: StopRuleResult["stopped"] = [];
+    for (const { s, state, since } of due) {
+      if (jobs.has(s.id)) { count("jobs"); continue; }
+      try {
+        const out = await stopOne(d, s, state);
+        if (out.skip) { count(out.skip); continue; }
+        stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null });
+      } catch (e) {
+        count("failed");
+        logger.warn({ err: e, id: s.id, state }, "하네스 종료 규칙: 끄기 실패(다음 판에 다시)");
+      }
+    }
+    const nextDueInSec = Number.isFinite(nextDue) ? Math.max(0, nextDue - nowSec) : undefined;
+    if (nextDueInSec !== undefined) d.arm(nextDue);
+    const result: StopRuleResult = { enabled: true, ...mins, scanned: live.length, stopped, kept, ...(nextDueInSec !== undefined ? { nextDueInSec } : {}) };
+    //  끈 판은 무엇을 왜 껐는지 남긴다(#2652 교훈 — 개수만 남긴 로그는 사후에 아무것도 못 판다). 아무것도 안 끈 판은 조용히(30초마다 돈다).
+    if (stopped.length) logger.info(result, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
+    return result;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
+ * 한 세션을 끈다 — 저장 → 종료. 끄기 직전 화면을 다시 읽어 그새 바뀌었으면 끄지 않는다.
+ *  @returns skip = 안 끈 이유 · note = 남긴 쪽지
+ */
+async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promise<{ skip?: "turn-now" | "answered" | "asking-now"; note: SessionStopNote }> {
+  const harness = s.harness;
+  const cap = captureOf(await d.capture(s.id));
+  //  마지막 확인 — 목록을 본 뒤 그새 턴이 시작됐거나(깨움·알림이 연 턴) 질문에 답이 났으면 이번엔 안 끈다. 다음 판이 새 사실로 다시 판정한다.
+  if (screenRunning(cap, harnessIo(harness)?.run ?? null)) return { skip: "turn-now", note: { at: 0, why: state, harness } };
+  const asking = screenAsks(cap);
+  if (state === "asking" && !asking) return { skip: "answered", note: { at: 0, why: state, harness } };
+  if (state === "done" && asking) return { skip: "asking-now", note: { at: 0, why: state, harness } };
+  const note: SessionStopNote = { at: Math.floor(d.now() / 1000), why: state, harness };
+  const draft = clampDraft(draftFromScreen(harness, cap));
+  if (draft) note.draft = draft;
+  if (state === "asking") {
+    const q = await readQuestion(d, s.id, harness, cap);
+    if (q) note.question = q;
+  }
+  //  쪽지를 못 적어도 끈다 — 글이 있다고 끄기를 미루지 않는다(규칙 정본). 대신 실패는 남긴다.
+  await Promise.resolve(d.saveNote(s.id, note)).catch((e) => logger.warn({ err: e, id: s.id }, "하네스 종료 규칙: 쪽지 저장 실패(끄기는 계속)"));
+  await d.reap(s.id);
+  return { note };
+}
+
+/** 질의 중인 화면의 질문을 읽는다 — claude 의 여러 질문(탭)은 → 키로 넘기며 하나씩 읽는다(Enter 는 안 누른다 — 제출되지 않는다, 실측). */
+async function readQuestion(d: StopRuleDeps, id: string, harness: string, first: ScreenCapture): Promise<StopQuestion | null> {
+  const q = questionFromScreen(harness, first);
+  if (!q) return null;
+  const tabs = harness === "claude" ? questionTabs(first).slice(0, MAX_TABS) : [];
+  if (tabs.length > 1) {
+    if (!q.items[0].header) q.items[0].header = tabs[0];
+    for (let i = 1; i < tabs.length; i++) {
+      try {
+        await d.keys(id, "Right");
+        await d.sleep(TAB_SETTLE_MS);
+        const item = questionItemFromScreen(captureOf(await d.capture(id)));
+        if (!item) break;
+        q.items.push({ ...item, header: item.header || tabs[i] });
+      } catch { break; }   // 못 넘겼으면 읽은 데까지만 남긴다 — 곧 끈다
+    }
+  }
+  return q;
+}
+
+// ── 마감 깨움 ─────────────────────────────────────────────────────────────────────────────────────
+//  요청 정비(30초)·CP 틱(5분)은 그 테넌트에 요청이 와야 돈다. 아무도 안 쓰는 워크스페이스에서는 5분 틱만 남아 N=3 이 3~8분이 된다.
+//  그래서 한 판이 «다음 마감» 을 알면 그 시각에 이 테넌트를 다시 판정하도록 깨움 하나를 건다(테넌트당 하나 — 더 이른 마감만 갈아 끼운다).
+//  게이트웨이가 다시 뜨면 깨움은 사라진다 — 다음 요청·틱이 판정하며 다시 건다(그 사이 45초는 어차피 «모름» 이라 안 끈다).
+const timers = new Map<string, { atMs: number; t: NodeJS.Timeout }>();
+/** 깨움 하나의 범위 — 너무 이르면 판이 몰리고, 너무 늦으면 CP 틱(5분)보다 못하다. */
+const ARM_MIN_MS = 5_000;
+const ARM_MAX_MS = 10 * 60_000;
+const ARM_SLACK_MS = 2_000;
+
+export function armStopTimer(dueAtSec: number, now = Date.now()): void {
+  const tenant: TenantContext | null = currentTenant() ?? null;
+  const key = String(tenant?.id ?? "");
+  const atMs = dueAtSec * 1000 + ARM_SLACK_MS;
+  const prev = timers.get(key);
+  if (prev && prev.atMs <= atMs && prev.atMs > now) return;   // 더 이른 깨움이 이미 걸려 있다
+  if (prev) clearTimeout(prev.t);
+  const delay = Math.min(ARM_MAX_MS, Math.max(ARM_MIN_MS, atMs - now));
+  const t = setTimeout(() => {
+    timers.delete(key);
+    const run = (): Promise<unknown> => sweepSessionStopRule();
+    void (tenant ? withTenant(tenant, run) : run())
+      .catch((err) => logger.warn({ err, tenant: tenant?.slug }, "하네스 종료 규칙: 마감 깨움 판정 실패(다음 요청·틱이 다시)"));
+  }, delay);
+  t.unref?.();
+  timers.set(key, { atMs: now + delay, t });
+}
+
+/** 시험용 — 걸린 깨움을 모두 거둔다. */
+export function clearStopTimers(): void {
+  for (const { t } of timers.values()) clearTimeout(t);
+  timers.clear();
+}

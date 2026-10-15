@@ -20,7 +20,7 @@
 //  최소 규율이다. attach 만 공유하는 층은 `session-host.ts` 다 — 그래서 층이 둘이다.
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount,
+  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount, isReportedSched,
   type CreateInput,
 } from "./terminal-sessions.js";
 import { sendKeysToSession } from "./send-keys.js";
@@ -65,7 +65,9 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       //  없으므로, 이 응답이 없으면 다른 곳에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
       //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
       //  #4588 — 턴 끝의 열린 백그라운드 작업 수(bg)도 함께 새긴다. 구 게이트웨이는 안 보내므로 undefined(=모른다).
-      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined, undefined, isBgCount(args.bg) ? args.bg : null);
+      //  #4695 T5 — 턴 끝의 예약(다음 깨움 시각·반복 예약 수)도 함께 새긴다. 구 게이트웨이는 안 보내므로 null(=모른다 — 그 세션은 안 끈다).
+      const sched = isReportedSched(args.sched) ? args.sched : null;
+      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined, undefined, isBgCount(args.bg) ? args.bg : null, sched);
       return { ok: true, change: change ?? null };
     }
 
