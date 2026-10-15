@@ -146,6 +146,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
       return await runDailyAppSnapshots();
     });
+    // #4481 — 앱 판 묶음: 옛 판을 파일 목록 + 저장소로 옮기고 · 30일 지난 옛 코어 호환 사본을 비우고 · 안 쓰는 파일을 정리한다(6시간에 한 번).
+    //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
+    await step("app-bundles", async () => {
+      const { runAppBundleHousekeeping } = await import("./apps/app-bundle-migrate.js");
+      return await runAppBundleHousekeeping();
+    });
     await step("session-reaper", () => reapIdleSessions());
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.

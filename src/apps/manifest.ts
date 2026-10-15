@@ -125,6 +125,10 @@ const cspSchema = z.object({
 }).strict().default({});
 
 const uiSchema = z.object({
+  //  #4481 앱 v2-2 — 여러 파일 앱의 화면 폴더(패키지 안 상대경로 · 예: "dist" · 패키지 맨 위면 "."). 주면 그 폴더의 파일 **전부**를
+  //   앱 주소(<앱>-<워크스페이스>.lvly.app)에서 그 경로 그대로 낸다(빌드 산출물 · 이미지 · 폰트). 화면 entry 는 이 폴더 안이어야 한다.
+  //   없으면 종전(v1) — 화면은 entry HTML 한 장이고 앱 주소 맨 앞(/) 에만 선다. 판정은 uiRootOf.
+  root: z.string().min(1).max(512).optional(),
   pages: z.array(uiPageSchema).default([]),
   widgets: z.array(uiWidgetSchema).default([]),
 }).strict();
@@ -259,6 +263,20 @@ export const appManifestSchema = z.object({
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/**
+ * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(ui.root 없음)이면 null. 모양이 틀리면 null(설치 관문은
+ *  loader 가 400 으로 막는다 — 여기는 저장된 매니페스트를 읽는 자리라 던지지 않는다).
+ */
+export function uiRootOf(manifest: unknown): string | null {
+  const raw = (manifest as { ui?: { root?: unknown } } | null)?.ui?.root;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const s = raw.trim();
+  if (s.includes("\\") || s.includes("\0") || s.startsWith("/")) return null;
+  const parts = s.split("/").filter((x) => x !== "" && x !== ".");
+  if (parts.some((x) => x === ".." || x.startsWith("."))) return null;
+  return parts.join("/");
+}
 
 /**
  * 설치 게이트 — 파싱은 통과했지만 이 코어가 **설치**하기엔 너무 새로운 매니페스트를 거부한다(400).

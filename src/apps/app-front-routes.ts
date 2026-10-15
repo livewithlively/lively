@@ -11,8 +11,13 @@
 //        → 200 {member:{id,name,email}, workspace:{slug}, app:{id,variant}, session:null}
 //   GET  /api/app-front/page?path=<앱 주소 안 경로+쿼리>             (op=act)
 //        → 200 text/html(v1 화면 + SDK 런타임 [+ 탐침]) · CSP 는 헤더 · 경로는 `/` 뿐(?page=<키>), 나머지는 404
+//        → #4481 여러 파일 앱(보는 판의 매니페스트에 ui.root): 그 판 묶음의 파일을 그 경로로(규칙은 app-front-files.ts) · HTML 문서엔 SDK 런타임 ·
+//          ETag(내용 지문) · 304 · gzip · 지문 이름은 1년 캐시
 //  ⓘ 매번 구성원(활성 · 사람)과 앱(있음 · 이 사람에게 보임)을 다시 본다 — 앱 주소 쿠키가 살아 있는 동안 빠진 사람·닫힌 앱을 바로 막는다.
 import type express from "express";
+import zlib from "node:zlib";
+import { Readable } from "node:stream";
+import { createHash } from "node:crypto";
 import { wrap } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { currentTenant, type TenantContext } from "../org/tenant-context.js";
@@ -25,7 +30,13 @@ import { uiPagesFromFiles, type AppFile } from "./app-versions.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
-import { appErrorHtml, appPageCsp, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
+import { appErrorHtml, appPageCsp, appPageCspMulti, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
+import { uiRootOf } from "./manifest.js";
+import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
+import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
+import {
+  cacheControlFor, compressible, contentTypeFor, etagMatches, indexUnderRoot, isHtmlPath, parseFrontUrl, resolveFrontPath, REVALIDATE,
+} from "./app-front-files.js";
 
 /** 화면 규칙과 같은 이름(web/lib/person-name.ts · v6/comment-notify.ts memberName) — 닉네임을 쓰기로 켠 사람만 닉네임. */
 export function memberDisplayName(m: Pick<OrgMember, "id" | "display_name" | "nickname" | "use_nickname">): string {
@@ -45,6 +56,10 @@ export interface AppFrontDeps {
   getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   redeem: (i: RedeemLaunchInput) => Promise<RedeemedLaunch | null>;
   scripts: () => Promise<AppScripts>;
+  /** #4481 판 하나의 내용 지문(요청마다 — 싸다) · 그 판의 머리 + 파일 목록(캐시가 비었을 때만) · 파일 내용(작으면 바이트, 크면 흘려 받기). */
+  versionHash?: (appId: string, versionNo: number) => Promise<{ content_hash: string | null; has_bundle: boolean } | null>;
+  versionBundle?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; content_hash: string | null; bundle: unknown | null; bundle_store: string | null } | null>;
+  readBlob?: (kind: BlobStoreKind, h: string, size: number) => Promise<Buffer | Readable | null>;
 }
 const liveDeps = (): AppFrontDeps => ({
   env: process.env,
@@ -56,9 +71,12 @@ const liveDeps = (): AppFrontDeps => ({
   getAppVersion: (id, no) => appStore.getAppVersion(id, no),
   redeem: (i) => redeemAppLaunchCode(i),
   scripts: () => loadAppScripts(),
+  versionHash: (id, no) => appStore.getAppVersionHash(id, no),
+  versionBundle: (id, no) => appStore.getAppVersionBundle(id, no),
+  readBlob: (kind, h, size) => (size <= BLOB_CACHE_ENTRY_MAX ? getBlob(kind, h) : streamBlob(kind, h, size)),
 });
 
-export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string> }
+export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string>; body?: Buffer; stream?: Readable }
 
 /** 문 — 꺼졌으면 404, 서명이 틀리면 401(사유는 로그로만). 통과하면 서명 안의 값. */
 export function appFrontGate(headers: Record<string, string | string[] | undefined>, op: AppFrontOp, d: AppFrontDeps):
@@ -131,6 +149,9 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if ("reply" in w) return w.reply;
   const notFound = (detail: string): FrontReply => ({ status: 404, html: appErrorHtml("화면을 찾지 못했습니다", detail) });
   if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
+  //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 ui.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길).
+  const multi = await multiFilePage(w, rawPath, headers, d, g.tenant.id);
+  if (multi) return multi;
   const path = parseAppPath(rawPath);
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
   //  #4667 공개 앱에 남의 초안이 걸려 있으면 이 사람은 공개 판을 본다 — 설치된 화면(초안)이 아니라 공개 판 행의 파일에서 꺼낸다(org_app_ui 와 같은 규칙).
@@ -165,10 +186,131 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   };
 }
 
+// ── #4481 여러 파일 앱 ───────────────────────────────────────────────────────────
+
+interface CachedBundle { kind: BlobStoreKind; bundle: AppBundle; manifest: unknown; index: Map<string, BundleEntry> | null; rootRel: string | null }
+/** 판 묶음 캐시 — 키에 내용 지문을 넣는다(「원본 · 릴리스」 판은 번호 그대로 내용이 바뀐다 · store.refreshOriginVersion). */
+const bundleCache = new Map<string, CachedBundle>();
+const BUNDLE_CACHE_MAX = 200;
+export function clearFrontBundleCacheForTest(): void { bundleCache.clear(); }
+
+async function loadBundle(d: AppFrontDeps, tenant: string, appId: string, no: number): Promise<CachedBundle | "no-bundle" | null> {
+  if (!d.versionHash || !d.versionBundle) return null;
+  const h = await d.versionHash(appId, no);
+  if (!h) return null;
+  if (!h.has_bundle) return "no-bundle";
+  const key = `${tenant}|${appId}|${no}|${h.content_hash ?? ""}`;
+  const hit = bundleCache.get(key);
+  if (hit) { bundleCache.delete(key); bundleCache.set(key, hit); return hit; }
+  const head = await d.versionBundle(appId, no);
+  const bundle = head ? parseBundle(head.bundle) : null;
+  if (!head || !bundle) return "no-bundle";
+  const rootRel = uiRootOf(head.manifest);
+  const c: CachedBundle = { kind: head.bundle_store === "db" ? "db" : "s3", bundle, manifest: head.manifest, rootRel, index: rootRel === null ? null : indexUnderRoot(bundle, rootRel) };
+  bundleCache.set(key, c);
+  while (bundleCache.size > BUNDLE_CACHE_MAX) bundleCache.delete(bundleCache.keys().next().value as string);
+  return c;
+}
+
+/** 화면 키 → ui.root 기준 entry 경로(`/?page=<키>` 를 풀 때). */
+function pageEntries(manifest: unknown, rootRel: string): Map<string, string> {
+  const ui = (manifest as { ui?: { pages?: Array<{ key?: unknown; entry?: unknown }> } } | null)?.ui;
+  const pre = rootRel ? rootRel + "/" : "";
+  const m = new Map<string, string>();
+  for (const p of Array.isArray(ui?.pages) ? ui!.pages! : []) {
+    const e = String(p?.entry ?? "").split("/").filter((x) => x && x !== ".").join("/");
+    if (p?.key && (!pre || e.startsWith(pre))) m.set(String(p.key), e.slice(pre.length));
+  }
+  return m;
+}
+
+const hdr = (headers: Record<string, string | string[] | undefined>, k: string): string => {
+  const v = headers[k];
+  return Array.isArray(v) ? v.join(",") : String(v ?? "");
+};
+
+/**
+ * 여러 파일 앱이면 응답, 아니면 null(v1 길). 보는 판(#4667): 초안을 만든 사람 · 나만 보는 앱의 책임자는 설치된 판(지금 판 번호 — 내용이 같을 때만),
+ *  나머지는 공개 판. 판 묶음 쪽 문제는 그 판으로 다시 저장하라고 알린다(조용히 v1 화면으로 떨어지면 깨진 화면이 남는다).
+ */
+async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, rawPath: unknown, headers: Record<string, string | string[] | undefined>,
+  d: AppFrontDeps, tenant: string): Promise<FrontReply | null> {
+  const published = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published";
+  //  설치된 판을 보는 사람 — 앱 행의 매니페스트로 먼저 가른다(v1 앱은 DB 를 더 안 읽는다).
+  if (!published && uiRootOf(w.app.manifest) === null) return null;
+  const no = published ? w.app.published_version_no : w.app.current_version_no;
+  const broken = (detail: string): FrontReply => ({ status: 409, html: appErrorHtml("앱 파일을 찾지 못했습니다", detail) });
+  if (no == null) return published ? null : broken(`앱 '${w.app.id}' 의 지금 판에 파일 묶음이 없습니다 — 앱을 다시 저장해 주세요(app_save).`);
+  const c = await loadBundle(d, tenant, w.app.id, no);
+  if (c === null) return published ? null : broken(`앱 '${w.app.id}' 의 ${no}판을 찾지 못했습니다 — 앱을 다시 저장해 주세요.`);
+  if (c === "no-bundle") {
+    if (published && uiRootOf(w.app.manifest) === null) return null;   // 공개 판이 v1(옛 판) — 종전 길
+    return broken(`앱 '${w.app.id}' 의 ${no}판은 아직 파일 묶음으로 옮겨지지 않았습니다 — 잠시 뒤 다시 열어 주세요.`);
+  }
+  if (c.rootRel === null || !c.index) return null;   // 그 판이 v1 앱이다(공개 판이 ui.root 를 넣기 전 판)
+  if (!published) {
+    const h = d.versionHash ? await d.versionHash(w.app.id, no) : null;
+    if (!h || h.content_hash !== w.app.content_hash) return broken(`앱 '${w.app.id}' 의 설치된 내용과 ${no}판이 다릅니다 — 앱을 다시 저장해 주세요(app_save).`);
+  }
+  const url = parseFrontUrl(rawPath);
+  if (!url) return { status: 400, html: appErrorHtml("주소가 틀렸습니다", "앱 주소 안의 경로를 읽지 못했습니다.") };
+  const r = resolveFrontPath(c.index, url, pageEntries(c.manifest, c.rootRel));
+  if (r.kind === "redirect") return { status: 308, headers: { Location: r.location, "Cache-Control": REVALIDATE }, html: appErrorHtml("옮겨 갑니다", r.location) };
+  if (r.kind === "notfound") return { status: 404, html: appErrorHtml("화면을 찾지 못했습니다", `'/${url.path}' 에 해당하는 파일이 이 앱에 없습니다.`) };
+  const e = r.entry;
+  const type = contentTypeFor(r.rel);
+  const gz = /\bgzip\b/.test(hdr(headers, "accept-encoding")) && compressible(type) && e.s >= 1024;
+  if (!d.readBlob) return broken("앱 파일 저장소가 연결돼 있지 않습니다.");
+  if (isHtmlPath(r.rel)) {
+    let scripts: AppScripts;
+    try { scripts = await d.scripts(); } catch (err) {
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, "[app-front] SDK 런타임 준비물 없음");
+      return { status: 503, html: appErrorHtml("앱 화면을 준비하지 못했습니다", "게이트웨이에 웹 빌드 산출물이 없습니다. 잠시 뒤 다시 열어 주세요.") };
+    }
+    const raw = await d.readBlob(c.kind, e.h, Math.min(e.s, BLOB_CACHE_ENTRY_MAX));
+    const buf = raw instanceof Readable ? await streamToBuffer(raw) : raw;
+    if (!buf) return broken(`파일 '${r.rel}' 을(를) 저장소에서 찾지 못했습니다 — 앱을 다시 저장해 주세요.`);
+    const probe = url.search.get("__lively_probe") === "1";
+    const out = Buffer.from(buildAppPageHtml(buf.toString("utf8"), { runtime: scripts.runtime, probe: probe ? scripts.probe : null }), "utf8");
+    const etag = `"${createHash("sha256").update(out).digest("hex").slice(0, 32)}${gz ? "-gz" : ""}"`;
+    const base: Record<string, string> = {
+      "Content-Type": type, ETag: etag, "Cache-Control": REVALIDATE, Vary: "Accept-Encoding",
+      "Content-Security-Policy": appPageCspMulti(((c.manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp),
+    };
+    if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base };
+    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: zlib.gzipSync(out) } : { status: r.status, headers: base, body: out };
+  }
+  const etag = `"${e.h.slice(0, 32)}${gz ? "-gz" : ""}"`;
+  const base: Record<string, string> = { "Content-Type": type, ETag: etag, "Cache-Control": cacheControlFor(r.rel), Vary: "Accept-Encoding", "Accept-Ranges": "none" };
+  if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base };
+  const data = await d.readBlob(c.kind, e.h, e.s);
+  if (!data) return broken(`파일 '${r.rel}' 을(를) 저장소에서 찾지 못했습니다 — 앱을 다시 저장해 주세요.`);
+  if (data instanceof Readable) {
+    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, stream: data.pipe(zlib.createGzip()) }
+      : { status: r.status, headers: { ...base, "Content-Length": String(e.s) }, stream: data };
+  }
+  return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: zlib.gzipSync(data) } : { status: r.status, headers: base, body: data };
+}
+
+async function streamToBuffer(s: Readable): Promise<Buffer> {
+  const parts: Buffer[] = [];
+  for await (const chunk of s) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+  return Buffer.concat(parts);
+}
+
 function send(res: express.Response, r: FrontReply): void {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   for (const [k, v] of Object.entries(r.headers ?? {})) res.setHeader(k, v);
+  //  #4481 여러 파일 앱 — 파일 바이트 · 흘려 보내기 · 304(본문 없음). 머리(Content-Type · ETag · 캐시)는 r.headers 가 이미 정했다.
+  if (r.status === 304) { res.status(304).end(); return; }
+  if (r.stream) {
+    res.status(r.status);
+    r.stream.on("error", (err) => { logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[app-front] 앱 파일 흘려 보내기 실패"); res.destroy(); });
+    r.stream.pipe(res);
+    return;
+  }
+  if (r.body) { res.status(r.status).end(r.body); return; }
   if (r.html !== undefined) { res.status(r.status).type("html").send(r.html); return; }
   res.status(r.status).json(r.json ?? {});
 }

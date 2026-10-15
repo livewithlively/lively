@@ -164,6 +164,11 @@
         "ui": {
           "type": "object",
           "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
             "pages": {
               "type": "array",
               "items": {
@@ -461,6 +466,58 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 64
+                        },
+                        "not_null": {
+                          "type": "boolean"
+                        },
+                        "default": {},
+                        "default_expr": {
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "unique": {
+                          "type": "boolean"
+                        },
+                        "check": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "references": {
+                          "type": "object",
+                          "properties": {
+                            "table": {
+                              "type": "string",
+                              "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                            },
+                            "on_delete": {
+                              "type": "string",
+                              "enum": [
+                                "cascade",
+                                "set null",
+                                "restrict",
+                                "no action"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "table"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "minItems": 1,
+                          "maxItems": 200
+                        },
+                        "renamed_from": {
+                          "type": "string",
+                          "pattern": "^[a-z_][a-z0-9_]{0,62}$"
                         }
                       },
                       "required": [
@@ -496,6 +553,25 @@
                       "additionalProperties": false
                     },
                     "maxItems": 20,
+                    "default": []
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1000
+                    },
+                    "maxItems": 20,
+                    "default": []
+                  },
+                  "drop_columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                    },
+                    "maxItems": 100,
                     "default": []
                   }
                 },

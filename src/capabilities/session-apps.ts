@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
-import { getApp, getActiveGrant, getAppVersion, type OrgApp } from "../org/store/apps.js";
+import { getApp, getActiveGrant, getAppVersionHead, type OrgApp } from "../org/store/apps.js";
 import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { canAttach } from "../terminal/terminal-sessions.js";
@@ -83,7 +83,8 @@ async function describeOne(row: SessionAppRow, app: OrgApp | null, who: Viewer):
   if (app && !canSeeApp(app, who)) return { ...describeAttached(row, null), usable: false, hidden: true };
   const shown = app ? (await viewAppFor(app, who)).app : null;
   const no = shown?.current_version_no;
-  const ver = shown && no != null ? await getAppVersion(shown.id, no).catch(() => null) : null;
+  //  #4481 저장한 사람만 본다 — 판 머리만(파일 내용을 읽지 않는다).
+  const ver = shown && no != null ? await getAppVersionHead(shown.id, no).catch(() => null) : null;
   return describeAttached(row, shown, ver?.saved_by ?? null);
 }
 

@@ -4802,7 +4802,7 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "eb76cebecd332d40"
+  "input_hash": "87d1f65a72ad2d77"
  },
  {
   "name": "app_pull",
@@ -4812,7 +4812,7 @@
   "rest": [
    "GET /api/ui/apps/:id/pull"
   ],
-  "input_hash": "eeaa30c0ba805f7f"
+  "input_hash": "e80d57855a26e005"
  },
  {
   "name": "app_versions",
@@ -5084,6 +5084,26 @@
    "GET /api/ui/apps/:id/file"
   ],
   "input_hash": "0f7eb0eddc7e4175"
+ },
+ {
+  "name": "app_bundle_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-bundle-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_bundle_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-bundle-limits"
+  ],
+  "input_hash": "b60091dda62bcc13"
  },
  {
   "name": "org_app_chat_send",
