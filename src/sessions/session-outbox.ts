@@ -42,6 +42,7 @@ import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
 import { firstPromptStep, acceptTrustDialog } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수)
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
+import { confirmRuntimeSwitch } from "../terminal/runtime-switch-confirm.js";   // #4772 — 전환 확인창을 눌러 준다
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
 import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
@@ -394,7 +395,22 @@ async function deliverLoop(sessionId: string): Promise<void> {
     // 설정 명령(#1758)은 에코로 확인할 수 없다 — 슬래시 명령은 트랜스크립트에 친 글자 그대로가 아니라
     //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
     //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
-    if (row.kind === "control") { await mark(row.id, "sent", "control-no-echo"); continue; }
+    if (row.kind === "control") {
+      //  #4772 — 모델·추론강도 전환(control)은 Claude Code 2.1.29x+ 에서 확인창을 띄운다(캐시 따뜻할 때). 제출만 하면
+      //   «안 바뀐» 채로 남고 치워 둔 초안이 창 뒤에 숨는다. 다음 행을 넣기 **전에** 이 창을 눌러 준다 — 안 누르면
+      //   두 번째 명령(/effort)이 첫 창에 타이핑돼 버린다. 게이트웨이 tmux 로 화면을 읽고 Enter.
+      if (harness === "claude") {
+        const switchExec = {
+          peek: async (): Promise<{ ok: boolean; pane?: string }> => {
+            try { return { ok: true, pane: await tmux(["capture-pane", "-t", sessionId, "-p"]) }; }
+            catch { return { ok: false }; }
+          },
+          enter: async (): Promise<void> => { await sendKeyToSession(sessionId, "Enter").catch(() => { /* 비치명 */ }); },
+        };
+        await confirmRuntimeSwitch(switchExec, { sleep }).catch((e) => logger.warn({ err: e, sessionId }, "outbox: 전환 확인창 처리 실패(비치명)"));
+      }
+      await mark(row.id, "sent", "control-no-echo"); continue;
+    }
     let echoed = await waitEcho(sessionId, st, oneLine);
     if (needsSubmitRetry(echoed, harness)) {
       // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
