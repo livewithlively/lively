@@ -1,6 +1,6 @@
 // 앱 서버 빌더(#4484) 단위 시험 — 진짜 빌더(SERVER_BUILDER_JS)를 `node -e` 로 돌린다. 세션 경계 중계처럼 **stdin 을 닫지 않고**(EOF 없음) 길이로 끝을 알린다.
 // 실행: npm run build && node dist/apps/app-server-builder.test.js
-//  A1~A16 은 사양 엣지 표(지식 app-server-deploy-asbuilt-4484 · 스크래치패드 spec-4484.md A절)의 행 번호다.
+//  A1~A16 · E1~E9 는 사양 엣지 표(지식 app-server-deploy-asbuilt-4484 · 스크래치패드 spec-4484.md A절 · E절)의 행 번호다.
 //  단언은 문구가 아니라 관찰 가능한 결과로 — 실패 단계(stage) · 올린 횟수 · 올린 바이트 · zip 안 내용(이 시험이 직접 푼다: 중앙 디렉터리 · 로컬 머리 · inflate · CRC).
 //  npm 은 의존성 없는 표본이라 네트워크 없이 돈다(npm ci 가 0개를 깐다). A14b(잠금 파일 없이 의존성 있음 → npm install)는 네트워크가 필요해 뺐다.
 import assert from "node:assert/strict";
@@ -102,6 +102,25 @@ function readZip(buf: Buffer): ZEnt[] {
   return out;
 }
 const fileOf = (z: ZEnt[], n: string): ZEnt | undefined => z.find((e) => e.name === n);
+/** zip 을 새 폴더에 풀고(링크는 링크로) 시작 스크립트(lively-run.sh)로 띄워 «/» 의 본문을 받는다 — 5초 안에 못 받으면 "". */
+async function bootZip(z: ZEnt[]): Promise<string> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "boot-"));
+  for (const e of z) {
+    const abs = path.join(dir, e.name);
+    if (e.name.endsWith("/")) { fs.mkdirSync(abs, { recursive: true }); continue; }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    if ((e.mode & 0o170000) === 0o120000) fs.symlinkSync(e.data.toString(), abs); else fs.writeFileSync(abs, e.data, { mode: e.mode & 0o777 });
+  }
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore" });
+  let body = "";
+  for (let i = 0; i < 50 && !body; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
+  }
+  srvProc.kill("SIGKILL");
+  return body;
+}
 const memFile = (mb: number): string => {
   const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mem-")), "meminfo");
   fs.writeFileSync(f, `MemTotal: 2621440 kB\nMemFree: ${mb * 1024} kB\nMemAvailable: ${mb * 1024} kB\n`);
@@ -141,22 +160,7 @@ await t("A1 · A16 성공 — 설치 · 빌드 · 정리 · zip · 올림 · 지
   assert.equal(fileOf(z, "src/empty.txt")!.data.length, 0, "크기 0 파일");
   assert.equal(fileOf(z, "dist/")!.mode & 0o170000, 0o040000, "폴더 항목");
   //  시작 스크립트가 실제로 돈다 — 풀어서 실행하면 $PORT 에서 받는다.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "a1-"));
-  for (const e of z) {
-    const abs = path.join(dir, e.name);
-    if (e.name.endsWith("/")) { fs.mkdirSync(abs, { recursive: true }); continue; }
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    if ((e.mode & 0o170000) === 0o120000) fs.symlinkSync(e.data.toString(), abs); else fs.writeFileSync(abs, e.data, { mode: e.mode & 0o777 });
-  }
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore" });
-  let body = "";
-  for (let i = 0; i < 50 && !body; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
-  }
-  srvProc.kill("SIGKILL");
-  assert.equal(body, "hi", "풀어서 시작 스크립트로 띄운 서버가 응답한다");
+  assert.equal(await bootZip(z), "hi", "풀어서 시작 스크립트로 띄운 서버가 응답한다");
 });
 
 await t("A2 같은 입력이면 같은 zip(바이트 단위)", async () => {
@@ -280,6 +284,98 @@ await t("A15 머리 JSON 이 깨짐 → input · 결과 줄은 남김", async ()
   const r = await runBuilder({}, {}, { rawHeader: "{not json\n" });
   assert.equal(r.res?.stage, "input");
   assert.equal(r.code, 3);
+});
+
+// ── E: 올릴 폴더(web.server.dir) · /tmp 링크 ──
+const OUT_SERVER = "require('http').createServer((q,s)=>s.end('from-out')).listen(Number(process.env.PORT||8080));";
+/** 빌드가 out/ 에 자기 완결 서버를 만든다(+ more 는 그 뒤에 더 할 일). */
+const outBuild = (more = ""): string => `const fs=require('fs');fs.mkdirSync('out/sub',{recursive:true});fs.writeFileSync('out/server.js',${JSON.stringify(OUT_SERVER)});` +
+  `fs.writeFileSync('out/sub/a.txt','A');${more}console.log('BUILD-DONE');\n`;
+
+await t("E1 올릴 폴더 = 빌드가 만든 폴더 → zip 맨 위 = 그 폴더 + 시작 스크립트 · 밖 파일 없음 · 정리 없음 · 그 폴더에서 뜬다", async () => {
+  const r = await runBuilder(baseApp({ "build.js": outBuild() }), { dir: "out", start: "node server.js" });
+  assert.equal(r.res?.ok, true, JSON.stringify(r.res));
+  assert.deepEqual(r.res!.steps.map((s) => s.name), ["install", "build", "zip", "upload"], "정리(prune) 없음");
+  assert.equal(r.res!.dir, "out");
+  const z = readZip(r.zip!);
+  assert.deepEqual(z.map((e) => e.name).sort(), ["lively-run.sh", "lively-start.sh", "server.js", "sub/", "sub/a.txt"]);
+  assert.equal(fileOf(z, "server.js")!.data.toString(), OUT_SERVER, "앱 맨 위 server.js 가 아니라 out/server.js");
+  assert.equal(fileOf(z, "lively-run.sh")!.mode & 0o777, 0o755);
+  assert.equal(await bootZip(z), "from-out", "그 폴더를 맨 위로 풀어 시작 스크립트로 띄운다");
+});
+
+await t("E2 · E3 올릴 폴더가 빌드 뒤에 없거나 파일이면 dir · 올리지 않음", async () => {
+  const missing = await runBuilder(baseApp(), { dir: "out" });
+  assert.equal(missing.res?.stage, "dir", JSON.stringify(missing.res));
+  assert.ok(missing.res!.steps.some((s) => s.name === "build"), "빌드 뒤에 안다");
+  assert.equal(missing.uploads, 0);
+  const file = await runBuilder(baseApp({ "build.js": "require('fs').writeFileSync('out','x');\n" }), { dir: "out" });
+  assert.equal(file.res?.stage, "dir");
+  assert.equal(file.uploads, 0);
+});
+
+await t("E4 올릴 폴더가 .. · 절대 · 역슬래시 · NUL 이면 빌드 전에 dir(설치 · 빌드 0)", async () => {
+  for (const dir of ["../x", "a/../../x", "/abs", "a\\b", "a\u0000b"]) {
+    const r = await runBuilder(baseApp(), { dir });
+    assert.equal(r.res?.stage, "dir", `${JSON.stringify(dir)} → ${JSON.stringify(r.res)}`);
+    assert.deepEqual(r.res!.steps, [], `${dir} — 아무 단계도 돌지 않았다`);
+    assert.ok(!r.stderr.includes("BUILD-DONE"));
+  }
+});
+
+await t("E5 (새 변수 부재) 올릴 폴더 없음 · 빈 글 · '.' · './' → 앱 폴더 전체(A1 과 같은 zip)", async () => {
+  for (const dir of [null, "", ".", "./"]) {
+    const r = await runBuilder(baseApp(), { dir });
+    assert.equal(r.res?.zip?.sha256_hex, baseline.res!.zip!.sha256_hex, `dir=${JSON.stringify(dir)}`);
+    assert.equal(r.res!.dir, undefined);
+  }
+});
+
+await t("E6 올릴 폴더 맨 위에 lively-run.sh → start", async () => {
+  const r = await runBuilder(baseApp({ "build.js": outBuild("fs.writeFileSync('out/lively-run.sh','x');") }), { dir: "out" });
+  assert.equal(r.res?.stage, "start", JSON.stringify(r.res));
+  assert.equal(r.uploads, 0);
+});
+
+await t("E7 풀린 크기를 넘고 큰 의존성에 next 가 있으면 standalone · web.server.dir 을 알린다", async () => {
+  const f = baseApp({ "node_modules/next/blob.bin": Buffer.alloc(300 * 1024, 1), "node_modules/next/package.json": "{\"name\":\"next\"}" });
+  delete f["package-lock.json"];
+  const r = await runBuilder(f, { unzipped_max: 100 * 1024 });
+  assert.equal(r.res?.stage, "size");
+  assert.ok(r.res!.error!.includes("standalone") && r.res!.error!.includes("web.server.dir"), r.res!.error);
+  const plain = baseApp({ "node_modules/fat-pkg/blob.bin": Buffer.alloc(300 * 1024, 1), "node_modules/fat-pkg/package.json": "{\"name\":\"fat-pkg\"}" });
+  delete plain["package-lock.json"];
+  const r2 = await runBuilder(plain, { unzipped_max: 100 * 1024 });
+  assert.ok(!r2.res!.error!.includes("standalone"), "next 가 아니면 Next.js 안내는 없다");
+});
+
+await t("E8 /tmp 아래를 가리키는 링크 → 링크로 담고 · 시작 스크립트가 그 자리를 만들어 앱이 그리로 쓴다", async () => {
+  const target = `/tmp/lv-e8-${process.pid}-${Date.now()}/cache`;
+  const writer = "const fs=require('fs');require('http').createServer((q,s)=>{fs.writeFileSync('.cache/w.txt','w');s.end('wrote')}).listen(Number(process.env.PORT||8080));";
+  const build = `const fs=require('fs');fs.mkdirSync('out',{recursive:true});fs.writeFileSync('out/server.js',${JSON.stringify(writer)});fs.symlinkSync(${JSON.stringify(target)},'out/.cache');\n`;
+  const r = await runBuilder(baseApp({ "build.js": build }), { dir: "out", start: "node server.js" });
+  assert.equal(r.res?.ok, true, JSON.stringify(r.res));
+  const z = readZip(r.zip!);
+  const link = fileOf(z, ".cache")!;
+  assert.equal(link.mode & 0o170000, 0o120000, "링크로 담았다");
+  assert.equal(link.data.toString(), target);
+  assert.ok(!fs.existsSync(target), "시험 전엔 그 자리가 없다");
+  try {
+    assert.equal(await bootZip(z), "wrote", "시작 전에 그 자리를 만들어 앱이 링크로 썼다");
+    assert.equal(fs.readFileSync(path.join(target, "w.txt"), "utf8"), "w");
+  } finally { fs.rmSync(path.dirname(target), { recursive: true, force: true }); }
+});
+
+await t("E9 (경계) /tmp 자체는 허락 · /tmpx · /tmp/../etc 는 zip", async () => {
+  const mk = (t: string): string => `const fs=require('fs');fs.mkdirSync('out',{recursive:true});fs.writeFileSync('out/server.js','');fs.symlinkSync(${JSON.stringify(t)},'out/l');\n`;
+  const ok = await runBuilder(baseApp({ "build.js": mk("/tmp") }), { dir: "out", start: "node server.js" });
+  assert.equal(ok.res?.ok, true, JSON.stringify(ok.res));
+  assert.ok(!fileOf(readZip(ok.zip!), "lively-run.sh")!.data.toString().includes("mkdir"), "/tmp 자체는 만들 것이 없다");
+  for (const bad of ["/tmpx", "/tmp/../etc", "/tmpx/y"]) {
+    const r = await runBuilder(baseApp({ "build.js": mk(bad) }), { dir: "out", start: "node server.js" });
+    assert.equal(r.res?.stage, "zip", `${bad} → ${JSON.stringify(r.res)}`);
+    assert.equal(r.uploads, 0);
+  }
 });
 
 await t("결과 줄 읽기 — 마지막 표식 줄 · 깨진 줄은 건너뛰고 앞을 본다 · 없으면 null", () => {

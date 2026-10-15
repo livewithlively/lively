@@ -20,7 +20,7 @@ import type { ChildProcess } from "node:child_process";
 declare const require: (id: string) => unknown;   // builderMain 이 `node -e` 로 돌 때의 CommonJS require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 빌더 판 — 빌드 지문에 들어간다(빌더가 바뀌면 같은 코드라도 다시 빌드한다). */
-export const BUILDER_VERSION = 1;
+export const BUILDER_VERSION = 2;   // 2 = 올릴 폴더(dir) · /tmp 링크(시작할 때 그 자리를 만든다)
 /** 결과 줄 표식 — builderMain 안의 MARK 와 같아야 한다(app-server-builder.test 가 본다). */
 export const BUILD_RESULT_MARK = "@@lively-build-result@@ ";
 /** zip 에 우리가 더하는 시작 스크립트 — Lambda 핸들러 이름이 RUN_SCRIPT 다(AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap 이 그 파일을 실행한다). */
@@ -39,6 +39,8 @@ export interface BuildHeader {
   build: string | null;
   /** 시작 명령(sh) — null 이면 package.json scripts.start. 둘 다 없으면 실패. */
   start: string | null;
+  /** 올릴 폴더(앱 폴더 안 상대 경로) — 빌드 뒤 이 폴더만 zip 의 맨 위로 올리고 시작 명령도 여기서 돈다. null · 빈 글 · '.' 이면 앱 폴더 전체. */
+  dir?: string | null;
   /** 풀린 크기 상한(바이트) — Lambda 상한 250MB 에서 레이어 몫을 뺀 값. */
   unzipped_max: number;
   /** 세션 안 남은 메모리 바닥(MB) — 이 밑이면 빌드를 멈춘다. */
@@ -54,7 +56,7 @@ export interface BuildHeader {
 export interface BuildStep { name: string; ms: number; code: number | null; signal: string | null }
 export interface BuildResult {
   ok: boolean;
-  /** 실패한 단계 — input · detect · install · build · prune · start · size · zip · upload · memory · time */
+  /** 실패한 단계 — input · detect · dir · install · build · prune · start · size · zip · upload · memory · time */
   stage?: string;
   error?: string;
   steps: BuildStep[];
@@ -64,6 +66,8 @@ export interface BuildResult {
   install?: "ci" | "install" | "none";
   build_cmd?: string | null;
   start_cmd?: string | null;
+  /** 올린 폴더(web.server.dir) — 앱 폴더 전체면 없음. */
+  dir?: string;
   zip?: { bytes: number; sha256_hex: string; sha256_b64: string; entries: number; unzipped: number };
   /** 세션 안 남은 메모리(MB) — 시작 · 가장 낮았던 때. 빌드가 쓴 양 ≈ 시작 − 최저. */
   mem?: { start_mb: number | null; min_mb: number | null; floor_mb: number };
@@ -85,7 +89,7 @@ function builderMain(): void {
   const warnings: string[] = [];
   const result: Record<string, unknown> = { ok: false, steps, warnings };
   let hdr: {
-    deadline_ms: number; files: Array<[string, number]>; build: string | null; start: string | null; unzipped_max: number;
+    deadline_ms: number; files: Array<[string, number]>; build: string | null; start: string | null; dir?: string | null; unzipped_max: number;
     mem_floor_mb: number; heap_mb: number; upload_url: string; meminfo_path?: string;
   } | null = null;
   let base = "";
@@ -167,6 +171,14 @@ function builderMain(): void {
     return (c ^ -1) >>> 0;
   };
   interface Ent { rel: string; abs: string; kind: "dir" | "file" | "link"; mode: number; size: number }
+  //  /tmp 아래를 가리키는 링크 — Lambda 에서 쓸 수 있는 유일한 자리라(/var/task 는 읽기 전용) 허락한다(예 Next.js 의 .next/cache → /tmp/cache).
+  //   그 자리는 Lambda 가 새로 뜰 때 비어 있으니 시작 스크립트가 시작 전에 만든다. 여기에 모은다.
+  const tmpLinks = new Set<string>();
+  const tmpTarget = (target: string): string | null => {
+    if (!path.isAbsolute(target)) return null;
+    const n = path.posix.normalize(target);
+    return n === "/tmp" || n.startsWith("/tmp/") ? n : null;
+  };
   const walk = (root: string): Ent[] => {
     const out: Ent[] = [];
     const go = (rel: string): void => {
@@ -180,8 +192,10 @@ function builderMain(): void {
         if (st.isSymbolicLink()) {
           const target = fs.readlinkSync(abs);
           const to = path.resolve(path.dirname(abs), target);
-          if (path.isAbsolute(target) || !(to === root || to.startsWith(root + path.sep))) {
-            throw new Error(`zip 에 담을 수 없는 심링크입니다(폴더 밖을 가리킴): ${r} → ${target}`);
+          const tmp = tmpTarget(target);
+          if (tmp) tmpLinks.add(tmp);
+          else if (path.isAbsolute(target) || !(to === root || to.startsWith(root + path.sep))) {
+            throw new Error(`zip 에 담을 수 없는 심링크입니다(올릴 폴더 밖을 가리킴 — /tmp 아래만 허락): ${r} → ${target}`);
           }
           out.push({ rel: r, abs, kind: "link", mode: 0o120777, size: Buffer.byteLength(target) });
         } else if (st.isDirectory()) {
@@ -312,8 +326,14 @@ function builderMain(): void {
     const scripts = pkg.scripts && typeof pkg.scripts === "object" ? pkg.scripts : {};
     const startCmd = h.start || (typeof scripts.start === "string" && scripts.start.trim() ? scripts.start.trim() : null);
     if (!startCmd) return fail("start", "시작 명령이 없습니다 — package.json 의 scripts.start 또는 매니페스트 web.server.start 에 서버를 띄우는 명령(예: node server.js)을 적으세요. 서버는 $PORT 에서 받아야 합니다");
-    for (const f of [RUN, START]) {
-      if (fs.existsSync(path.join(app, f))) return fail("start", `앱 폴더 맨 위에 ${f} 가 있습니다 — 라이블리가 쓰는 이름이라 다른 이름으로 바꾸세요`);
+    //  올릴 폴더 — 모양은 빌드 전에 본다(틀린 경로로 몇 분 빌드한 뒤 실패하지 않게).
+    const dirRaw = h.dir == null ? "" : String(h.dir).trim().replace(/\/+$/, "");
+    const dirRel = dirRaw === "" || dirRaw === "." ? null : safeRel(dirRaw);
+    if (dirRaw !== "" && dirRaw !== "." && !dirRel) return fail("dir", `올릴 폴더(web.server.dir)는 앱 폴더 안 상대 경로여야 합니다(.. · 절대 경로 · 역슬래시 안 됨): ${dirRaw.slice(0, 200)}`);
+    if (!dirRel) {
+      for (const f of [RUN, START]) {
+        if (fs.existsSync(path.join(app, f))) return fail("start", `앱 폴더 맨 위에 ${f} 가 있습니다 — 라이블리가 쓰는 이름이라 다른 이름으로 바꾸세요`);
+      }
     }
     result.start_cmd = startCmd;
     const env: NodeJS.ProcessEnv = {
@@ -339,27 +359,48 @@ function builderMain(): void {
     const buildCmd = h.build || (typeof scripts.build === "string" && scripts.build.trim() ? "npm run build" : null);
     result.build_cmd = buildCmd;
     if (buildCmd && !(await step("build", ["-c", buildCmd], "sh"))) return;
-    if (install !== "none" && !(await step("prune", ["prune", "--omit=dev", "--no-audit", "--no-fund"]))) return;
-    //  시작 스크립트 — Lambda 의 핸들러(RUN)가 앱 폴더에서 START 를 sh 로 돌린다. PATH 에 node_modules/.bin 을 앞세운다(npm start 와 같게 —
+    //  올릴 폴더면 그 폴더가 자기 완결이라 앱 폴더의 node_modules 는 올리지 않는다 — 정리(prune)도 필요 없다.
+    if (install !== "none" && !dirRel && !(await step("prune", ["prune", "--omit=dev", "--no-audit", "--no-fund"]))) return;
+    let root = app;
+    if (dirRel) {
+      root = path.join(app, dirRel);
+      let st: import("node:fs").Stats | null = null;
+      try { st = fs.lstatSync(root); } catch { /* 없다 */ }
+      if (!st) return fail("dir", `빌드 뒤에 올릴 폴더(web.server.dir) ${dirRel} 가 없습니다 — 빌드가 그 폴더를 만드는지 보세요(예 Next.js 는 next.config 의 output:'standalone')`);
+      if (!st.isDirectory()) return fail("dir", `올릴 폴더(web.server.dir) ${dirRel} 가 폴더가 아닙니다${st.isSymbolicLink() ? "(링크)" : ""}`);
+      for (const f of [RUN, START]) {
+        if (fs.existsSync(path.join(root, f))) return fail("start", `올릴 폴더 맨 위에 ${f} 가 있습니다 — 라이블리가 쓰는 이름이라 다른 이름으로 바꾸세요`);
+      }
+      result.dir = dirRel;
+    }
+    //  링크를 먼저 훑는다 — 폴더 밖 링크는 여기서 거부하고 /tmp 링크는 시작 스크립트가 만들 자리로 모은다.
+    try { walk(root); } catch (e) { return fail("zip", (e as Error).message); }
+    const q = (v: string): string => "'" + v.replace(/'/g, "'\\''") + "'";
+    const mk = [...tmpLinks].sort().filter((t) => t !== "/tmp");
+    //  시작 스크립트 — Lambda 의 핸들러(RUN)가 올릴 폴더(zip 맨 위)에서 START 를 sh 로 돌린다. PATH 에 node_modules/.bin 을 앞세운다(npm start 와 같게 —
     //   Lambda 런타임에 npm 이 있다고 기대하지 않는다).
-    fs.writeFileSync(path.join(app, RUN),
+    fs.writeFileSync(path.join(root, RUN),
       "#!/bin/sh\n# 라이블리가 더한 시작 스크립트(#4484) — 앱 서버는 $PORT 에서 받는다.\n" +
-      "cd \"${LAMBDA_TASK_ROOT:-$(dirname \"$0\")}\" || exit 1\nPATH=\"$PWD/node_modules/.bin:$PATH\"\nexport PATH\nexec /bin/sh ./" + START + "\n", { mode: 0o755 });
-    fs.writeFileSync(path.join(app, START), startCmd + "\n", { mode: 0o644 });
+      "cd \"${LAMBDA_TASK_ROOT:-$(dirname \"$0\")}\" || exit 1\nPATH=\"$PWD/node_modules/.bin:$PATH\"\nexport PATH\n" +
+      (mk.length ? "mkdir -p " + mk.map(q).join(" ") + "\n" : "") +
+      "exec /bin/sh ./" + START + "\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(root, START), startCmd + "\n", { mode: 0o644 });
     let ents: Ent[];
-    try { ents = walk(app); } catch (e) { return fail("zip", (e as Error).message); }
+    try { ents = walk(root); } catch (e) { return fail("zip", (e as Error).message); }
     const unzipped = ents.reduce((n, e) => n + e.size, 0);
     if (unzipped > h.unzipped_max) {
       const mb = (n: number): string => (n / 1048576).toFixed(1) + "MB";
       const big = new Map<string, number>();
       for (const e of ents) { const m = /^node_modules\/(@[^/]+\/[^/]+|[^/]+)/.exec(e.rel); if (m) big.set(m[1]!, (big.get(m[1]!) ?? 0) + e.size); }
       const top = [...big.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k} ${mb(v)}`).join(" · ");
-      return fail("size", `빌드 결과가 너무 큽니다(풀린 크기 ${mb(unzipped)} > ${mb(h.unzipped_max)}) — 개발용 도구가 dependencies 에 들어가 있지 않은지 보세요${top ? ` (큰 의존성: ${top})` : ""}`);
+      const standalone = big.has("next") ? " · Next.js 는 next.config 에 output:'standalone' 을 두고 매니페스트 web.server.dir 을 \".next/standalone\" 으로 하면 그 폴더만 올립니다" : "";
+      return fail("size", `빌드 결과가 너무 큽니다(풀린 크기 ${mb(unzipped)} > ${mb(h.unzipped_max)}) — 개발용 도구가 dependencies 에 들어가 있지 않은지 보세요${top ? ` (큰 의존성: ${top})` : ""}` +
+        `${standalone} · 빌드가 자기 완결 출력 폴더를 만들면 web.server.dir 로 그 폴더만 올릴 수 있습니다`);
     }
     const zipFile = path.join(base, "server.zip");
     let bytes: number;
     const tz = Date.now();
-    try { bytes = await writeZip(app, zipFile, ents); } catch (e) { return fail("zip", `zip 을 만들지 못했습니다: ${(e as Error).message}`); }
+    try { bytes = await writeZip(root, zipFile, ents); } catch (e) { return fail("zip", `zip 을 만들지 못했습니다: ${(e as Error).message}`); }
     steps.push({ name: "zip", ms: Date.now() - tz, code: 0, signal: null });
     const why = stopError();
     if (why) return fail(why[0], why[1]);

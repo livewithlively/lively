@@ -171,7 +171,7 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     const files = input.bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p));
     const header: BuildHeader = {
       v: 1, deadline_ms: deadlineMs, files: files.map((f) => [f.p, f.s]),
-      build: input.decl.build, start: input.decl.start,
+      build: input.decl.build, start: input.decl.start, dir: input.decl.dir,
       unzipped_max: (250 - 5) * 1024 * 1024,   // Lambda 풀린 크기 250MB 에서 웹 어댑터 레이어(약 2MB)와 여유를 뺀다
       mem_floor_mb: input.policy.build_mem_floor_mb, heap_mb: input.policy.build_heap_mb, upload_url: uploadUrl,
     };

@@ -3,6 +3,8 @@
 //  설계: 지식 app-framework-v2-general-web-design §3-C · §12 ③ · §17(결정 상민 2026-10-15).
 //   앱은 매니페스트 최상위 `web.server` 로 서버가 있다고 알린다(`web` 은 passthrough — 옛 코어로 되돌려도 매니페스트를 읽는다, #4481).
 //    {"web": {"server": {"start": "node server.js", "build": "npm run build"}}} — 둘 다 생략하면 package.json 의 scripts.start · scripts.build.
+//    "dir" — 빌드가 자기 완결 출력 폴더를 만들면 그 폴더만 올린다(예 Next.js output:'standalone' → ".next/standalone"). 기본 Next.js 앱은
+//     풀린 크기가 449MB 라 Lambda 250MB 를 넘는다(2026-10-15 실측 — next 131MB · swc 두 벌 259MB). 비거나 '.' 이면 앱 폴더 전체.
 //   함수는 앱 × 워크스페이스마다 하나(`<접두>-<앱>-<워크스페이스 슬러그>`) · 별칭 둘(cur = 고친 사람이 보는 판(초안 주소) · pub = 공개 판).
 //   같은 코드는 다시 빌드하지 않는다 — 빌드 지문 = 매니페스트를 뺀 파일 목록 + 서버 선언 + 빌더 판 + 런타임. 이름·설명만 바꾼 판 ·
 //    되돌리기 · 공개하기는 그 지문의 zip 을 그대로 쓴다(설계 §3-C «판 되돌리기·판 복사는 그 판의 zip 을 다시 쓰므로 빌드가 필요 없다»).
@@ -10,8 +12,8 @@ import crypto from "node:crypto";
 import type { AppBundle } from "./app-bundle.js";
 import { BUILDER_VERSION, ZIP_EXCLUDE, RUN_SCRIPT } from "./app-server-builder.js";
 
-/** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다. */
-export interface AppServerDecl { start: string | null; build: string | null }
+/** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
+export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
 
 const cmd = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -22,11 +24,18 @@ const cmd = (v: unknown): string | null => {
 /** 매니페스트 → 서버 선언(없으면 null). `web.server` 가 객체이거나 true 면 서버 앱이다. */
 export function serverDeclOf(manifest: unknown): AppServerDecl | null {
   const s = (manifest as { web?: { server?: unknown } } | null)?.web?.server;
-  if (s === true) return { start: null, build: null };
+  if (s === true) return { start: null, build: null, dir: null };
   if (!s || typeof s !== "object" || Array.isArray(s)) return null;
   const o = s as Record<string, unknown>;
-  return { start: cmd(o.start), build: cmd(o.build) };
+  return { start: cmd(o.start), build: cmd(o.build), dir: dirOf(o.dir) };
 }
+
+/** 올릴 폴더 — 다듬기만 한다(경로 모양 검사는 빌더가 빌드 전에 한다 · 틀리면 빌드가 «dir» 로 실패해 까닭을 말한다). '.' · './' 는 전체(null). */
+const dirOf = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const s = v.trim().replace(/\/+$/, "");
+  return !s || s === "." || s.length > 200 ? null : s;
+};
 
 /** 배포 설정(env) — 실행 역할이 없으면 null(= 이 배포는 앱 서버를 돌리지 않는다 · 자가호스팅은 v2-8). */
 export interface AppServerEnv {
@@ -79,7 +88,7 @@ export const zipKeyFor = (prefix: string, tenant: string, buildKey: string): str
  */
 export function buildKeyOf(bundle: AppBundle, decl: AppServerDecl, rt: { runtime: string; arch: string }): string {
   const files = bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p)).map((f) => [f.p, f.h]).sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
-  const canon = JSON.stringify({ v: BUILDER_VERSION, runtime: rt.runtime, arch: rt.arch, start: decl.start, build: decl.build, files });
+  const canon = JSON.stringify({ v: BUILDER_VERSION, runtime: rt.runtime, arch: rt.arch, start: decl.start, build: decl.build, dir: decl.dir, files });
   return crypto.createHash("sha256").update(canon).digest("hex");
 }
 

@@ -1,6 +1,6 @@
 // 앱 서버 순수 판정(#4484) 단위 시험 — 서버 선언 · 함수 이름 · 빌드 지문 · 배포 설정 · 시험 호출 판독 · 상한 정규화 · 자동 멈춤.
 // 실행: npm run build && node dist/apps/app-server-config.test.js
-//  B1~B10 은 사양 엣지 표(spec-4484.md B절)의 행 번호다.
+//  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
 import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
 import { APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, envAppServerPolicy, normalizeAppServerPolicy, retentionDaysFor } from "./app-server-policy.js";
@@ -11,8 +11,8 @@ const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`o
 const h = (c: string): string => c.repeat(64).slice(0, 64);
 
 t("B1 서버 선언 — true · 객체(다듬음) · 없음 · 배열 · 문자열", () => {
-  assert.deepEqual(serverDeclOf({ web: { server: true } }), { start: null, build: null });
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "  node s.js ", build: "npm run b" } } }), { start: "node s.js", build: "npm run b" });
+  assert.deepEqual(serverDeclOf({ web: { server: true } }), { start: null, build: null, dir: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "  node s.js ", build: "npm run b" } } }), { start: "node s.js", build: "npm run b", dir: null });
   assert.equal(serverDeclOf({ web: { root: "dist" } }), null);
   assert.equal(serverDeclOf({}), null);
   assert.equal(serverDeclOf(null), null);
@@ -21,10 +21,22 @@ t("B1 서버 선언 — true · 객체(다듬음) · 없음 · 배열 · 문자�
 });
 
 t("B2 서버 선언 칸 — 빈 글 · 2,001자 · NUL · 숫자는 null(=package.json 을 쓴다)", () => {
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "   " } } }), { start: null, build: null });
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2001), build: "a\0b" } } }), { start: null, build: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "   " } } }), { start: null, build: null, dir: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2001), build: "a\0b" } } }), { start: null, build: null, dir: null });
   assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2000) } } })?.start?.length, 2000);
-  assert.deepEqual(serverDeclOf({ web: { server: { start: 5 } } }), { start: null, build: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: 5 } } }), { start: null, build: null, dir: null });
+});
+
+t("B11 서버 선언 dir — 다듬음 · 끝 빗금 · '.' · 200자 경계 · 201자 · 숫자", () => {
+  assert.equal(serverDeclOf({ web: { server: { dir: "  .next/standalone/ " } } })?.dir, ".next/standalone");
+  assert.equal(serverDeclOf({ web: { server: { dir: "." } } })?.dir, null, "'.' 은 앱 폴더 전체");
+  assert.equal(serverDeclOf({ web: { server: { dir: "./" } } })?.dir, null, "'./' 도 전체");
+  assert.equal(serverDeclOf({ web: { server: { dir: "" } } })?.dir, null);
+  assert.equal(serverDeclOf({ web: { server: { dir: "d".repeat(200) } } })?.dir?.length, 200, "200자(경계)");
+  assert.equal(serverDeclOf({ web: { server: { dir: "d".repeat(201) } } })?.dir, null, "201자");
+  assert.equal(serverDeclOf({ web: { server: { dir: 3 } } })?.dir, null);
+  //  모양 검사(.. · 절대)는 빌더가 한다 — 여기서 버리면 «왜 전체가 올라갔나» 를 아무도 모른다
+  assert.equal(serverDeclOf({ web: { server: { dir: "../x" } } })?.dir, "../x");
 });
 
 t("B3 함수 이름 — 64자까지 · 65자 null · 금지 글자 null", () => {
@@ -39,7 +51,7 @@ t("B3 함수 이름 — 64자까지 · 65자 null · 금지 글자 null", () => 
 
 const bundle = (files: Array<[string, string]>): AppBundle => ({ v: 1, files: files.map(([p, c]) => ({ p, h: h(c), s: 1 })) });
 const rt = { runtime: "nodejs22.x", arch: "arm64" };
-const decl = { start: null, build: null };
+const decl = { start: null, build: null, dir: null };
 t("B4 빌드 지문 — 매니페스트만 다름 · 파일 순서만 다름이면 같다", () => {
   const a = buildKeyOf(bundle([["lively-app.json", "1"], ["server.js", "2"], ["package.json", "3"]]), decl, rt);
   const b = buildKeyOf(bundle([["package.json", "3"], ["lively-app.json", "9"], ["server.js", "2"]]), decl, rt);
@@ -53,8 +65,9 @@ t("B5 빌드 지문 — 다른 파일 하나 · 경로만 다름 · start · bui
   const k = buildKeyOf(base, decl, rt);
   assert.notEqual(buildKeyOf(bundle([["server.js", "4"], ["package.json", "3"]]), decl, rt), k);
   assert.notEqual(buildKeyOf(bundle([["server2.js", "2"], ["package.json", "3"]]), decl, rt), k);
-  assert.notEqual(buildKeyOf(base, { start: "node x", build: null }, rt), k);
-  assert.notEqual(buildKeyOf(base, { start: null, build: "npm run b" }, rt), k);
+  assert.notEqual(buildKeyOf(base, { ...decl, start: "node x" }, rt), k);
+  assert.notEqual(buildKeyOf(base, { ...decl, build: "npm run b" }, rt), k);
+  assert.notEqual(buildKeyOf(base, { ...decl, dir: ".next/standalone" }, rt), k, "B12 올릴 폴더만 달라도 다른 zip");
   assert.notEqual(buildKeyOf(base, decl, { runtime: "nodejs24.x", arch: "arm64" }), k);
   assert.notEqual(buildKeyOf(base, decl, { runtime: "nodejs22.x", arch: "x86_64" }), k);
   assert.equal(zipKeyFor("p/", "ws-1", k), `p/t/ws-1/z/${k}.zip`);
