@@ -3048,20 +3048,16 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub-go button small { font-size: 12.5px; opacity: .9; }
 .v2-studio-hub-go button:disabled { opacity: .6; cursor: default; box-shadow: none; }
 .v2-studio-hub-go button.alt { background: var(--bg); color: var(--purple-text, #5B3FD0); box-shadow: 0 0 0 1.5px var(--purple, #7B61E0); }
+/* 단추 속 그림 — ① 「어디에서 쓰나」 그림(.v2-studio-pk)을 작게. 보라 단추 위에선 밝은 판 위에 얹는다 */
+.v2-studio-hub-go button .v2-studio-pk { width: min(220px, 100%); height: 58px; margin: 0 0 8px; box-sizing: border-box; }
+.v2-studio-hub-go button:not(.alt) .v2-studio-pk { background: rgba(255, 255, 255, .92); }
+.v2-studio-hub-go button .v2-studio-pk .tg { font-size: 10px; line-height: 14px; }
 .v2-studio-hub .v2-studio-tray { width: 100%; }
 /* 와이어프레임 보기(#4632 원준 2026-10-15 «클로드 아티팩트처럼 버튼 누르면») — 두 단추 아래 조용한 줄 하나 · 누르면 이 자리 위에 그림 창 */
 .v2-studio-wf-btn { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: -4px auto 0; padding: 6px 12px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--purple-text, #5B3FD0); cursor: pointer; }
 .v2-studio-wf-btn b { font-size: 13.5px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
 .v2-studio-wf-btn small { font-size: 12px; color: var(--muted); }
 .v2-studio-wf-btn:hover { background: rgba(123, 97, 224, .08); }
-.v2-studio-wf { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15, 18, 30, .42); }
-.v2-studio-wf-card { width: min(1180px, 100%); height: min(820px, 100%); display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--bg); box-shadow: 0 24px 60px rgba(15, 18, 30, .35); }
-.v2-studio-wf-head { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
-.v2-studio-wf-head small { color: var(--muted); font-size: 12px; }
-.v2-studio-wf-body { flex: 1; min-height: 0; display: flex; background: var(--surface); }
-.v2-studio-wf-frame { flex: 1; width: 100%; border: 0; background: #fff; }
-.v2-studio-wf-empty { margin: auto; max-width: 420px; padding: 24px; display: grid; gap: 10px; justify-items: center; text-align: center; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
-.v2-studio-wf-empty p { margin: 0; }
 .v2-studio-hub .v2-studio-tray-list { max-height: 300px; gap: 8px; }
 /* 허브의 「보낼 의견」 칸은 크게(원준 2026-10-16 «좀 더 사이즈를 키웠으면») — 시험 세션 막대의 「의견 n건」 칸은 그대로 */
 .v2-studio-hub .v2-studio-tray { padding: 14px 18px; gap: 10px; border-radius: 14px; }
@@ -3086,6 +3082,12 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-review-hint { flex-basis: 100%; color: var(--muted); font-size: 12px; padding: 0 4px; }
 .v2-review-tray { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); max-height: 50vh; overflow: auto; box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); }
 .v2-review-bar--top .v2-review-tray { bottom: auto; top: calc(100% + 8px); }
+/* 막대 + 코멘트 칸 = 한 덩어리 — 칸이 막대에 맞붙고(틈 0) 맞닿은 모서리는 각지며 그림자는 하나처럼(원준 2026-10-16) */
+.v2-review-bar.v2-review-bar--tray:not(.v2-review-bar--dock) { border-top-left-radius: 0; border-top-right-radius: 0; }
+.v2-review-bar.v2-review-bar--tray.v2-review-bar--top:not(.v2-review-bar--dock) { border-radius: 14px 14px 0 0; }
+.v2-review-bar--tray > .v2-review-tray { bottom: 100%; border-radius: 14px 14px 0 0; box-shadow: 0 0 0 1px var(--line), 0 -12px 30px rgba(21, 35, 59, .16); clip-path: inset(-40px -40px 0 -40px); }
+.v2-review-bar--tray.v2-review-bar--top > .v2-review-tray { bottom: auto; top: 100%; border-radius: 0 0 14px 14px; clip-path: inset(0 -40px -40px -40px); }
+.v2-review-tray.v2-review-tray--fixed { border-radius: 0 0 12px 12px; }
 .v2-review-layer { position: fixed; z-index: 84; pointer-events: none; }
 .v2-review-layer[hidden] { display: none; }
 .v2-review-layer > * { pointer-events: auto; }
@@ -3127,3 +3129,58 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bld-card--sel:hover { border-color: rgba(123, 97, 224, .5); }
 .v2-bld-card--sel:focus-visible { outline: 2px solid var(--purple, #7B61E0); outline-offset: 2px; }
 .v2-pad-badge--mine { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }   /* #4632 공개 범위 「나만」 */
+
+/* ── ③ 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 클로드 아티팩트처럼 · 피그마 보드처럼 · 선택 · 핀 · 영역») ── */
+.v2-wb:focus { outline: none; }
+.v2-wb { position: fixed; inset: 0; z-index: 140; display: flex; flex-direction: column; background: var(--bg); color: var(--ink); }
+.v2-wb-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); background: var(--bg); flex-wrap: wrap; }
+.v2-wb-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.v2-wb-name b { font-size: 15px; font-weight: 800; white-space: nowrap; }
+.v2-wb-name small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-wb-ver { flex: none; font-size: 11.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); background: rgba(123, 97, 224, .1); border-radius: 6px; padding: 1px 7px; }
+.v2-wb-tools { display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: var(--gray-bg-2, #EEF2F7); }
+.v2-wb-tools button { display: flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.v2-wb-tools button .ico { display: flex; }
+.v2-wb-tools button.on { background: var(--purple, #7B61E0); color: #fff; }
+.v2-wb-zoom { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; box-shadow: 0 0 0 1px var(--line); }
+.v2-wb-zoom button { min-width: 28px; height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: none; color: var(--ink); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.v2-wb-zoom button:hover, .v2-wb-x:hover { background: rgba(var(--tint-ink), .07); }
+.v2-wb-zoom .v2-wb-pct { min-width: 54px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.v2-wb-zoom .fit { font-size: 12.5px; }
+.v2-wb-x { width: 34px; height: 34px; border: 0; border-radius: 9px; background: none; color: var(--ink-sub); font-size: 22px; line-height: 1; cursor: pointer; }
+.v2-wb-body { flex: 1; min-height: 0; display: flex; }
+/* 보드 — 피그마처럼 점 박힌 바탕 · 그림은 원래 크기로 놓고 옮기고 키운다 */
+.v2-wb-stage { position: relative; flex: 1; min-width: 0; overflow: hidden; background-color: #F3F4F7; background-image: radial-gradient(circle, rgba(21, 35, 59, .16) 1px, transparent 1.2px); background-size: 20px 20px; }
+.v2-wb-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.v2-wb-frame { display: block; border: 0; background: #fff; box-shadow: 0 0 0 1px rgba(21, 35, 59, .12), 0 8px 30px rgba(21, 35, 59, .08); pointer-events: none; }
+.v2-wb-card { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(21, 35, 59, .14), 0 8px 30px rgba(21, 35, 59, .08); }
+.v2-wb-card-l { position: absolute; left: 0; bottom: calc(100% + 8px); font-size: 13px; font-weight: 800; color: var(--ink-sub); white-space: nowrap; }
+.v2-wb-slot { position: absolute; inset: 0; display: flex; pointer-events: none; }
+.v2-wb-slot > * { flex: 1; min-width: 0; }
+.v2-wb-err { margin: auto; color: var(--muted); font-size: 13px; }
+.v2-wb-catch { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+.v2-wb[data-tool="move"] .v2-wb-catch { cursor: grab; }
+.v2-wb[data-tool="move"] .v2-wb-catch:active { cursor: grabbing; }
+.v2-wb[data-tool="pick"] .v2-wb-catch { cursor: default; }
+.v2-wb-marks { position: absolute; inset: 0; pointer-events: none; }
+.v2-wb-mk-box { position: absolute; border: 2px solid #E56450; border-radius: 4px; background: rgba(229, 100, 80, .08); }
+.v2-wb-mk-box.pick { border-color: var(--purple, #7B61E0); background: rgba(123, 97, 224, .08); }
+.v2-wb-mk-box.hot { box-shadow: 0 0 0 3px rgba(123, 97, 224, .3); }
+.v2-wb-mk-n { position: absolute; pointer-events: auto; width: 24px; height: 24px; padding: 0; border: 2px solid #fff; border-radius: 50%; background: #E56450; color: #fff; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; box-shadow: 0 2px 6px rgba(21, 35, 59, .25); }
+.v2-wb-mk-n.hot { background: var(--purple, #7B61E0); }
+.v2-wb-ghost { position: absolute; border: 2px dashed var(--purple, #7B61E0); background: rgba(123, 97, 224, .08); border-radius: 4px; pointer-events: none; }
+.v2-wb-pop { z-index: 3; }
+.v2-wb-hint { position: absolute; left: 14px; bottom: 12px; z-index: 2; padding: 5px 10px; border-radius: 8px; background: rgba(255, 255, 255, .92); box-shadow: 0 0 0 1px var(--line); color: var(--muted); font-size: 12px; pointer-events: none; }
+.v2-wb-note { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); z-index: 2; max-width: min(640px, calc(100% - 32px)); padding: 8px 14px; border-radius: 10px; background: #FFF8E6; box-shadow: 0 0 0 1px #F0D9A2; color: #6B5313; font-size: 12.5px; line-height: 1.5; text-align: center; }
+.v2-wb-list { flex: none; width: 300px; border-left: 1px solid var(--line); background: var(--bg); overflow: auto; padding: 12px; display: grid; gap: 6px; align-content: start; }
+.v2-wb-list[hidden] { display: none; }
+.v2-wb-list-h { display: grid; gap: 2px; margin-bottom: 4px; }
+.v2-wb-list-h small { color: var(--muted); font-size: 12px; }
+.v2-wb-list-row { display: flex; gap: 8px; align-items: flex-start; text-align: left; padding: 8px; border: 0; border-radius: 9px; background: var(--gray-bg-2, #EEF2F7); font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; }
+.v2-wb-list-row .n { flex: none; width: 20px; height: 20px; border-radius: 50%; background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
+.v2-wb-list-row .w { min-width: 0; overflow-wrap: anywhere; }
+.v2-wb-list-empty { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+@media (max-width: 760px) {
+  .v2-wb-name small, .v2-wb-hint, .v2-wb-tools button span:not(.ico) { display: none; }
+  .v2-wb-list { position: absolute; right: 0; top: 52px; bottom: 0; box-shadow: -10px 0 30px rgba(21, 35, 59, .12); }
+}

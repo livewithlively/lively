@@ -177,6 +177,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const paintMarks = (): void => {
     layer.querySelectorAll('.v2-studio-mk').forEach((n) => n.remove());
     host.pins.forEach((p, i) => {
+      if (p.on === 'wire') return;   // 와이어프레임 보드에서 짚은 곳 — 앱 화면 위엔 그리지 않는다(번호는 그대로 i + 1)
       const hot = i === S.active;
       if (p.kind === 'pick' || p.kind === 'box') {
         const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') });
@@ -219,15 +220,16 @@ export function openReview(host: ReviewHost): ReviewApi {
   };
   // 의견 한눈에 — 막대 위에 뜨는 칸(짚은 곳마다 한 줄 · 앱 전체 한 칸)
   let tray: HTMLElement | null = null;
-  const closeTray = (): void => { if (tray) { tray.remove(); tray = null; document.removeEventListener('pointerdown', onTrayOut, true); } };
+  const closeTray = (): void => { if (tray) { tray.remove(); tray = null; bar.classList.remove('v2-review-bar--tray'); document.removeEventListener('pointerdown', onTrayOut, true); } };
   const onTrayOut = (e: Event): void => { if (tray && !tray.contains(e.target as Node) && e.target !== count) closeTray(); };
   const openTray = (): void => {
     if (tray) { closeTray(); return; }
     const rows = host.pins.map((p, i) => {
       const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; changed(); });
-      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: '그 자리 보기', onclick: () => { closeTray(); openPop(i); } }),
-        el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
+      const wire = p.on === 'wire';
+      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에서 짚은 곳 — 앱빌더의 「와이어프레임(화면 흐름) 보기」 에서 보여요' : '그 자리 보기', disabled: wire, onclick: () => { closeTray(); openPop(i); } }),
+        el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
         el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 코멘트를 지워요', onclick: () => { removePin(i); closeTray(); openTray(); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = host.general;
@@ -241,9 +243,11 @@ export function openReview(host: ReviewHost): ReviewApi {
       //  막대가 화면 맨 위 줄에 들어앉았으면 칸은 막대 **아래로** — 몸(body)에 붙여 앱 위 층(.v2-review-layer)보다 위에 선다(그 층이 사이드바의 앱을 덮고 있다).
       const br = bar.getBoundingClientRect(), cr = count.getBoundingClientRect(), w = Math.min(560, window.innerWidth - 16);
       t.classList.add('v2-review-tray--fixed');
-      Object.assign(t.style, { top: Math.round(br.bottom + 6) + 'px', left: Math.round(Math.max(8, Math.min(cr.left, window.innerWidth - w - 8))) + 'px', width: w + 'px' });
+      Object.assign(t.style, { top: Math.round(br.bottom) + 'px', left: Math.round(Math.max(8, Math.min(cr.left, window.innerWidth - w - 8))) + 'px', width: w + 'px' });
       document.body.append(t);
     } else bar.append(t);
+    //  막대와 칸은 한 덩어리(원준 2026-10-16 «이거 두 개를 왜 하나로 안 붙이는 거야») — 사이 틈 없이 맞붙고 맞닿은 모서리는 각진다.
+    bar.classList.add('v2-review-bar--tray');
     setTimeout(() => document.addEventListener('pointerdown', onTrayOut, true), 0);
   };
   const tickWait = (): void => {

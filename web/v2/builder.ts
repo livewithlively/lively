@@ -209,7 +209,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     if (hidden.has(padTileId('installed', a.id))) chips.push(['', '앱 찾기에 안 보임']);
     //  #4667 공개 상태 · 내 초안 · 원본 · 만든 사람 — 전부 서버 기록
     chips.unshift(a.visibility === 'me' ? ['me', '나만 씀'] : ['ok', '모두 씀']);
-    if (a.draft) chips.push(['st', '나만 보는 ' + verName(a.draft.versionNo)]);
+    if (a.draft) chips.push(['st', '비공개 ' + verName(a.draft.versionNo)]);
     if (a.origin) chips.push(['', '원본: ' + (a.origin.title || a.origin.id)]);
     if (!own && a.madeBy) chips.push(['me', a.madeBy + ' 만듦']);
     //  카드 자체가 배포 설정의 문이다(원준 2026-10-14) — 안의 단추는 제 일을 하고(위로 번지지 않는다), 그 밖 어디를 눌러도 오른쪽에 이 앱의 배포 설정이 선다.
@@ -254,7 +254,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     const trySid = (studioRecs().find((r) => r.sid === d.sid) || { trySid: '' }).trySid;
     if (trySid) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(trySid) + '?reclaim=1', { method: 'DELETE' }); } catch (_) { /* 이미 없으면 그만 */ } }
     deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) v.sel = '';
-    toast('「' + d.title + '」 을 지웠어요' + (shared ? ' — 앱빌딩 세션 · 기록만(공개한 앱은 그대로 · 나만 보는 버전은 버전 이력에 남아요)' : d.appId ? ' — 앱 · 앱빌딩 세션 · 기록 전부' : ' — 앱빌딩 세션 · 기록'));
+    toast('「' + d.title + '」 을 지웠어요' + (shared ? ' — 앱빌딩 세션 · 기록만(공개한 앱은 그대로 · 비공개 버전은 버전 이력에 남아요)' : d.appId ? ' — 앱 · 앱빌딩 세션 · 기록 전부' : ' — 앱빌딩 세션 · 기록'));
     refresh();
   };
 
@@ -334,7 +334,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   const cur = a.visibility;
   const canFlip = cur === 'me' ? a.canPublish : a.canUnpublish;
   const visNote = a.visibility === 'me' ? '나만 쓰는 앱이에요 — 다른 사람에겐 없는 것과 같아요(앱 찾기 · 세션 위젯 목록에 안 보임)' + (a.canPublish ? ' · 「워크스페이스 모두」 를 누르면 공개돼요' : '')
-    : a.draft ? '모두가 공개 버전을 써요 · 나만 보는 ' + verJ(a.draft.versionNo, '은') + ' ' + (a.draft.by === m.id ? '나' : a.draft.by) + '에게만 보여요'
+    : a.draft ? '모두가 공개 버전을 써요 · 비공개 ' + verJ(a.draft.versionNo, '은') + ' ' + (a.draft.by === m.id ? '나' : a.draft.by) + '에게만 보여요'
       : '워크스페이스 모두가 써요' + (a.canUnpublish ? ' · 「나만」 을 누르면 다른 사람은 더 열지 못해요' : '');
   v.panel.replaceChildren(
     el('h3', { text: '배포 설정 — 「' + a.title + '」' }),
@@ -342,7 +342,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
       if (k === 'all' && !(await confirmPublish(a.id, { title: a.title }))) return;   // #4732
       void post('/visibility', { visibility: k }, k === 'all' ? '워크스페이스 모두에게 공개했어요' : '이제 나만 쓰는 앱이에요 — 다른 사람은 더 열지 못해요');
     }, !canFlip), el('small', { text: visNote })),
-    ...(a.draft && a.canPublish ? [el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '나만 보는 버전' }), el('small', { text: verName(a.draft.versionNo) + ' — 아직 공개 전이에요' }),
+    ...(a.draft && a.canPublish ? [el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '비공개 버전' }), el('small', { text: verName(a.draft.versionNo) + ' — 아직 공개 전이에요' }),
       el('button', { class: 'v2-bld-pri sm', type: 'button', text: '공개하기', onclick: async () => {
         //  #4732 남의 것이어도(책임자 · 관리자) 공개하면 표에 무엇을 하는지 먼저 보여 주고 묻는다.
         if (!(await confirmPublish(a.id, { title: a.title }))) return;
@@ -351,7 +351,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '쓰는 자리' }), seg([['side', '세션 위젯'], ['full', '앱 화면'], ['both', '둘 다']], pl, async (k) => {
       //  배포 설정이라 공개 앱이면 바로 모두에게(초안이 걸려 있으면 그 초안에 담기고 공개는 「공개하기」 로).
       const now = a.visibility === 'all' && !a.draft;
-      try { await patchManifest(a.id, (man) => { man.studio = { ...studioUiOnly(man.studio), place: k }; }, '쓰는 자리 · ' + PLACE[k as StudioPlace].title, { publish: now }); toast('쓰는 자리를 바꿨어요 — ' + (now ? '모두에게 바로 적용돼요' : a.visibility === 'me' ? '새 버전으로 저장됐어요' : '나만 보는 버전에 담겼어요 · 「공개하기」 로 모두에게')); refresh(); }
+      try { await patchManifest(a.id, (man) => { man.studio = { ...studioUiOnly(man.studio), place: k }; }, '쓰는 자리 · ' + PLACE[k as StudioPlace].title, { publish: now }); toast('쓰는 자리를 바꿨어요 — ' + (now ? '모두에게 바로 적용돼요' : a.visibility === 'me' ? '새 버전으로 저장됐어요' : '비공개 버전에 담겼어요 · 「공개하기」 로 모두에게')); refresh(); }
       catch (e: any) { toast('바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true); }
     }, !a.canEdit), el('small', { text: pl ? PLACE[pl].sub : '아직 정하지 않았어요 — 고르면 AI 가 다음 고침부터 그 자리에 맞춰요' })),
     tog(a.enabled, a.enabled ? '켜 둠 — 앱 찾기와 세션 위젯 목록에 보여요' : '꺼 둠 — 아무도 열 수 없어요', () => { void post('/enabled', { enabled: !a.enabled }, a.enabled ? '껐어요' : '켰어요'); }),

@@ -33,7 +33,7 @@ import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatal
 import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults } from './run-prefs.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, wireframeBrief, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, notifyBrief, parseCard, parseCheck, parseStep, planBrief, splitList, stageIndex, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, notifyBrief, parseCard, parseCheck, parseStep, planBrief, splitList, stageIndex, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -269,9 +269,9 @@ function showTour(onDone?: () => void): void {
   const c = EXAMPLE.card;
   const slides: Array<{ n: number; t: string; now: string; body: () => HTMLElement }> = [
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고 자리 고르기 → 「만들기 시작」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
-    { n: 2, t: '세부 기획 정하기', now: 'AI 가 쓴 기획 카드에서 틀린 줄만 고치고 「이대로 시안 만들기」', body: () => cardView(c, null) },
+    { n: 2, t: '세부 기획 정하기', now: 'AI 가 쓴 기획 카드에서 틀린 줄만 고치고 「완료 · 다음 단계로」', body: () => cardView(c, null) },
     { n: 3, t: '시안 확인 · 수정', now: '걸음 넷을 지나 진짜 앱이 생기면 실제 화면에서 써 보고, 고칠 곳을 찍어 한 줄씩 → 「수정하기 · 2건」 → 다음 버전', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2 · 제목에 날짜 · 「끝남」 단추 · 안 끝난 것 먼저' }))) },
-    { n: 4, t: '확인', now: '네 줄만 보고 「이대로 넣기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? — 셋 다 있어요(AI 가 대조)' }), el('div', { text: '✓ 이름 · 「회의 안건」' }), el('div', { text: '✓ 쓰는 자리 · 세션 위젯' }), el('div', { text: '✓ 누가 쓰나 · 나만 (기본)' }))) },
+    { n: 4, t: '확인', now: '네 줄만 보고 「완료 · 다음 단계로」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? — 셋 다 있어요(AI 가 대조)' }), el('div', { text: '✓ 이름 · 「회의 안건」' }), el('div', { text: '✓ 쓰는 자리 · 세션 위젯' }), el('div', { text: '✓ 누가 쓰나 · 나만 (기본)' }))) },
     { n: 5, t: '넣기', now: '이제 워크스페이스 앱이에요 · 「지금 써 보기」 · 「팀에 알리기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요 — 초안 처음 · V2 날짜와 끝남 단추 · V3 글자 크기' }), el('div', { text: '이렇게 쓰세요 — 세션 오른쪽 위 + 에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기 — 「장원준 님이 「회의 안건」 앱을 만들었어요 · 써 보기」' }))) },
   ];
   let i = 0; const ov = el('div', { class: 'v2-studio-intro v2-studio-tour' }); const box = el('div', { class: 'v2-studio-intro-box' });
@@ -470,7 +470,7 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null };
+    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null };
   const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
   const name = el('b', { class: 'v2-studio-name', text: S.title });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
@@ -549,14 +549,14 @@ async function build(rec: StudioRec): Promise<void> {
   const paintNow = (): void => {
     const kids: Array<HTMLElement | null> = []; let text = '';
     const hasCm = cmCount() > 0;
-    if (rec.stage === 'plan') { text = rec.card ? '기획 카드에서 틀린 줄만 고치고 「이대로 시안 만들기」' : 'AI 가 기획 카드를 쓰는 중이에요 · 잠깐만요'; kids.push(nowBtn('이대로 시안 만들기', true, () => { void toDraft(); }, !rec.card)); }
+    if (rec.stage === 'plan') { text = rec.card ? '기획 카드에서 틀린 줄만 고치고 「완료 · 다음 단계로」' : 'AI 가 기획 카드를 쓰는 중이에요 · 잠깐만요'; kids.push(nowBtn('완료 · 다음 단계로', true, () => { void toDraft(); }, !rec.card)); }
     else if (rec.stage === 'draft' || rec.stage === 'fix') {
       if (!rec.appId) text = 'AI 가 초안을 만드는 중 · ' + (S.step ? DRAFT_STEPS[S.step - 1] : '시작하는 중') + ' (몇 분 걸려요)';
       else if (S.waiting) text = 'AI 가 고치는 중이에요 · 다음 버전이 오면 여기와 실제 화면이 바뀌어요';
       else if (hasCm) { text = '적은 코멘트 ' + cmCount() + '건 — 「수정하기」 를 누르면 AI 가 한 번에 고쳐 다음 버전을 내요'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
-    } else if (rec.stage === 'check') { text = '네 줄만 보고 「이대로 넣기」 · 하나라도 아니면 「더 고치기」'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('이대로 넣기', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
-    else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '이제 내 앱이에요(나만 보여요)' : S.vis && S.vis.draftMine ? '나만 보는 버전으로 두었어요(다른 사람은 공개 버전을 써요)' : '이제 워크스페이스 앱이에요') + ' · 「지금 써 보기」 로 바로 열어 보세요'; }
+    } else if (rec.stage === 'check') { text = '네 줄만 보고 「완료 · 다음 단계로」 · 하나라도 아니면 「더 고치기」'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
+    else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '이제 내 앱이에요(나만 보여요)' : S.vis && S.vis.draftMine ? '비공개로 두었어요(다른 사람은 공개 버전을 써요)' : '이제 워크스페이스 앱이에요') + ' · 「지금 써 보기」 로 바로 열어 보세요'; }
     const prev = prevOf();
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '한 단계 앞으로 — 적은 것은 그대로예요', onclick: () => { void goTo(prev); } })] : []),
       el('span', { class: 'v2-studio-now-t', text: '지금 할 일: ' + text }), el('span', { class: 'v2-studio-sp' }), ...kids.filter(Boolean) as HTMLElement[]);
@@ -588,7 +588,7 @@ async function build(rec: StudioRec): Promise<void> {
   //  #4667 머리줄의 판 글 — 「n판 · 나만 보는 초안」(공개 전) · 「n판 · 초안 · 공개 판은 m판」(공개한 앱을 내가 고침) · 「n판 · 공개됨」.
   const paintVis = (): void => {
     const v = S.vis;
-    const state = !v ? '' : v.visibility === 'me' ? '나만 보는 버전' : v.draftMine ? '나만 보는 버전 · 공개 버전은 ' + verName(v.publishedNo) : '공개됨';
+    const state = !v ? '' : v.visibility === 'me' ? '비공개' : v.draftMine ? '비공개 · 공개 버전은 ' + verName(v.publishedNo) : '공개됨';
     ver.textContent = verName(S.curVer) + (state ? (S.curVer ? ' · ' : '') + state : '');
     ver.title = !v ? '' : v.visibility === 'me' ? '공개하지 않은 앱이라 나에게만 보여요' : v.draftMine ? '이 버전은 나에게만 보여요 · 다른 사람은 ' + verJ(v.publishedNo, '을') + ' 써요' : '워크스페이스 모두가 이 버전을 써요';
     pubBtn.hidden = !v || !v.canPublish || !(v.draftMine || (v.visibility === 'me' && !!rec.done));
@@ -600,7 +600,7 @@ async function build(rec: StudioRec): Promise<void> {
       if (!(await confirmPublish(rec.appId, { title: S.title }))) { pubBtn.disabled = false; return; }
       const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) });
       const n = Number(out && out.version_no) || S.curVer;
-      toast(verJ(n, '을') + ' 공개했어요 · 워크스페이스 모두에게 보여요. 이어서 고치면 ' + verJ(n + 1, '은') + ' 다시 나만 보는 버전이에요');
+      toast(verJ(n, '을') + ' 공개했어요 · 워크스페이스 모두에게 보여요. 이어서 고치면 ' + verJ(n + 1, '은') + ' 다시 비공개예요');
       S.vis = await readVis(rec.appId); paintVis();
       if (rec.stage === 'put') paintPut();
       paintNow();
@@ -679,8 +679,9 @@ async function build(rec: StudioRec): Promise<void> {
     const rows = S.pins.map((p, i) => {
       const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; paintNow(); if (S.review) S.review.update({}); });
-      return el('div', { class: 'v2-studio-tray-row' }, el('span', { class: 'n', text: String(i + 1) }),
-        el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
+      const wire = p.on === 'wire';
+      return el('div', { class: 'v2-studio-tray-row' }, wire ? el('button', { type: 'button', class: 'n', text: String(i + 1), title: '와이어프레임에서 그 자리 보기', onclick: () => { void openWireframe(i); } }) : el('span', { class: 'n', text: String(i + 1) }),
+        el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
         el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 코멘트를 지워요', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = S.general;
@@ -689,46 +690,33 @@ async function build(rec: StudioRec): Promise<void> {
       el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
   };
   // ③ 허브 — 판 · 가운데 단추(실제 화면으로) · 보낼 의견
-  // ── 와이어프레임 보기(원준 2026-10-15 «초안 만든 뒤에 와이어프레임 볼 수 있게 · 클로드 아티팩트처럼 버튼 누르면») — AI 가 초안과 함께 앱 패키지에 둔
-  //   화면 흐름 그림(lib/studio-flow WIREFRAME_PATH)을 이 자리 위에 띄운다. 그림은 앱이 아니라 설명 그림이라 스크립트만 허락한 샌드박스(출처 없음)에 싣는다.
-  //   없으면(옛 앱 · AI 가 빠뜨림) 그려 달라고 한 번에 보낸다 — 그리면 새 버전으로 저장된다.
-  const openWireframe = async (): Promise<void> => {
+  // ── 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 피그마 보드처럼 · 여기서도 선택 · 핀 · 영역»).
+  //   AI 가 앱과 함께 저장한 그림(lib/studio-flow WIREFRAME_PATH)을 놓는다. 그림이 아직 없는 앱은 앱 화면 그대로를 한 장으로(«한 장만 나와도 그냥 있는 거지») —
+  //   「그려 달라기」 단추는 걷었다. 다음 「수정하기」 가 그 그림을 함께 그리게 한다(fixBrief). 보드에서 단 코멘트는 on:'wire' 로 같은 목록에 모인다.
+  const openWireframe = async (focus?: number): Promise<void> => {
     if (!rec.appId || !root) return;
-    const body = el('div', { class: 'v2-studio-wf-body' }, el('p', { class: 'v2-studio-wf-empty', text: '와이어프레임을 읽는 중…' }));
-    const ov = el('div', { class: 'v2-studio-wf', role: 'dialog', 'aria-modal': 'true', 'aria-label': '와이어프레임' });
-    const close = (): void => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
-    //  창째 걷혔으면(앱빌더가 닫힘) 다음 Esc 를 삼키지 않고 손만 뗀다.
-    const onKey = (e: KeyboardEvent): void => { if (!ov.isConnected) { document.removeEventListener('keydown', onKey, true); return; } if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-    ov.append(el('div', { class: 'v2-studio-wf-card' },
-      el('div', { class: 'v2-studio-wf-head' }, el('b', { text: '「' + S.title + '」 와이어프레임' }), el('small', { text: verName(S.curVer) + ' · 화면에서 무엇을 누르면 다른 어느 화면으로 가는지 보여줍니다.' }),
-        el('span', { class: 'v2-studio-sp' }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })),
-      body));
-    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
-    document.addEventListener('keydown', onKey, true);
-    root.append(ov);
-    (ov.querySelector('.v2-studio-wf-head button') as HTMLButtonElement | null)?.focus();
     let html = '';
     try {
       const d: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/pull');
       const f = (Array.isArray(d && d.files) ? d.files : []).find((x: any) => x && x.path === WIREFRAME_PATH);
       html = f && typeof f.content === 'string' ? f.content : '';
-    } catch (e: any) { body.replaceChildren(el('p', { class: 'v2-studio-wf-empty', text: '와이어프레임을 읽지 못했어요 — ' + (e && e.message ? e.message : e) })); return; }
-    if (!ov.isConnected) return;
-    //  AI(또는 사본이면 그 원본을 만든 사람)가 쓴 HTML 이다 — 출처 없는 샌드박스에 바깥으로 나가는 길을 막는 CSP 를 앞에 붙여 싣는다(앱 화면 app-ui 의 CSP 와 같은 뜻).
-    const WF_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:";
-    if (html.trim()) { body.replaceChildren(el('iframe', { class: 'v2-studio-wf-frame', title: '「' + S.title + '」 와이어프레임', sandbox: 'allow-scripts', srcdoc: '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + WF_CSP + '">' + html })); return; }
-    const ask = el('button', { class: 'v2-studio-now-pri', type: 'button', text: 'AI 에게 그려 달라기' }) as HTMLButtonElement;
-    ask.onclick = async () => { ask.disabled = true; if (await sendPrompt(rec, wireframeBrief(rec.appId))) { toast('AI 가 와이어프레임을 그리는 중이에요 — 다 되면 새 버전으로 오고, 이 단추로 다시 볼 수 있어요'); close(); } else ask.disabled = false; };
-    body.replaceChildren(el('div', { class: 'v2-studio-wf-empty' }, el('b', { text: '아직 와이어프레임이 없어요' }),
-      el('p', { text: '이 앱을 만든 AI 에게 화면 흐름 그림을 그려 달라고 할 수 있어요. 앱 화면은 그대로 두고 그림만 더해 새 버전으로 저장해요.' }), ask));
+    } catch (e: any) { toast('와이어프레임을 읽지 못했어요 — ' + (e && e.message ? e.message : e), true); return; }
+    if (S.dead) return;
+    const { openWireBoard } = await import('./wire-board.js');
+    if (S.dead) return;
+    S.board = openWireBoard({ appId: rec.appId, title: S.title, version: verName(S.curVer), place: rec.place, html, focus,
+      pins: () => S.pins,
+      onPins: (ps) => { if (S.dead) return; S.pins = ps; rec.pins = ps; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); },
+      onClose: () => { S.board = null; } });
   };
   const paintHub = (): void => {
     const h = appHost();
     const views: Array<['widget' | 'app', string, string]> = [];
     if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', 'AI 세션의 우측 사이드바에 붙은 모습']);
-    if (rec.place !== 'side') views.push(['app', '앱 화면으로 보기', '앱 찾기에서 열었을 때 모습 · 화면 가득']);
+    if (rec.place !== 'side') views.push(['app', '앱 화면으로 보기', '실제 앱의 사용 화면과 동일한 화면']);
     const first = views.findIndex((v) => v[0] === rec.view); if (first > 0) views.unshift(...views.splice(first, 1));   // 지난번에 본 꼴을 앞에
-    const go = el('div', { class: 'v2-studio-hub-go' }, ...views.map(([k, t, s], i) => el('button', { type: 'button', class: i ? 'alt' : '', onclick: () => { void openReal(k); } }, el('b', { text: t }), el('small', { text: s }))));
+    //  단추마다 ① 「어디에서 쓰나」 의 그림을 작게(원준 2026-10-16 «맨 처음 페이지에서 그림 있었던 거 참고해서 · 적당히 예쁘게 · 이전처럼 크지 않더라도»).
+    const go = el('div', { class: 'v2-studio-hub-go' }, ...views.map(([k, t, s], i) => el('button', { type: 'button', class: i ? 'alt' : '', onclick: () => { void openReal(k); } }, placePic(k === 'widget' ? 'side' : 'full'), el('b', { text: t }), el('small', { text: s }))));
     h.replaceChildren(el('div', { class: 'v2-studio-hub' },
       el('div', { class: 'v2-studio-hub-head' },
         el('h2', { text: rec.mode !== 'new' && rec.round === 0 && !S.waiting ? '원본 그대로 열렸어요' : S.waiting ? 'AI 가 고치는 중이에요' : verArrived(S.curVer || 1) }),
@@ -737,7 +725,7 @@ async function build(rec: StudioRec): Promise<void> {
         el('p', {}, '진짜 라이블리 화면에서 써 보고, 고칠 곳을 짚어서 적어주세요. 그 화면에서 하나하나 코멘트를 남기거나, 이 화면으로 돌아와 여기에 적어도 돼요 — 다음 화면에서 ',
           el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } }), el('span', { class: 'v2-studio-fix-j' }), ' 누르면 AI 가 한 번에 고쳐 다음 버전을 내요.')),
       S.waiting ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 오면 여기와 실제 화면이 바뀌어요 · 그동안 AI 세션을 봐도 돼요' })) : go,
-      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 가는지 보여줍니다.' })),
+      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
       tray));
     paintTray(); syncFixIn();
     if (S.waiting) { if (openCoach && openCoach.key === 'draft') closeCoach(); }   // 고침을 보냈다 — 첫 안내는 할 일을 다 했다
@@ -827,7 +815,7 @@ async function build(rec: StudioRec): Promise<void> {
       saveRec(rec);
     };
     h.replaceChildren(cardView(rec.card, onCard), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
-    coach('plan', h.querySelector('.v2-studio-card'), 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「이대로 시안 만들기」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요');
+    coach('plan', h.querySelector('.v2-studio-card'), 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「완료 · 다음 단계로」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요');
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
   const paintSteps = (): void => { stepsEl.replaceChildren(...DRAFT_STEPS.map((s, i) => el('span', { class: i < S.step ? 'done' : i === S.step ? 'on' : '', text: s }))); };
@@ -838,10 +826,10 @@ async function build(rec: StudioRec): Promise<void> {
   const whoRow = (): HTMLElement => {
     const vis = rec.vis || 'me';
     const live = !!S.vis && S.vis.visibility === 'all';
-    const opts: Array<['all' | 'me', string]> = [['me', live ? '나만 보는 버전으로 두기 (기본)' : '나만 (기본)'], ['all', live ? '모두에게 공개' : '워크스페이스 모두']];
+    const opts: Array<['all' | 'me', string]> = [['me', live ? '비공개로 두기 (기본)' : '나만 (기본)'], ['all', live ? '모두에게 공개' : '워크스페이스 모두']];
     return el('span', {},
       el('div', { class: 'v2-studio-chk-places' }, ...opts.map(([k, t]) => el('button', { type: 'button', class: k === vis ? 'on' : '', text: t, onclick: () => { rec.vis = k; saveRec(rec); paintCheck(); } }))),
-      el('small', { text: vis === 'all' ? '「이대로 넣기」 를 누르면 공개돼요 — 그때부터 워크스페이스 사람 모두 앱 찾기에서 보고 써요'
+      el('small', { text: vis === 'all' ? '「완료 · 다음 단계로」 를 누르면 공개돼요 — 그때부터 워크스페이스 사람 모두 앱 찾기에서 보고 써요'
         : live ? '공개하지 않아요 — 다른 사람은 지금 공개 버전을 계속 쓰고, 이 버전은 나에게만 보여요'
           : '나만 보고 써요 · 다른 사람에겐 없는 것과 같아요 · 나중에 앱빌더 배포 설정에서 공개할 수 있어요' }));
   };
@@ -878,14 +866,14 @@ async function build(rec: StudioRec): Promise<void> {
         ? el('div', { class: 'v2-studio-step' }, el('b', { text: '워크스페이스 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」 에 있어요 — 이름은 「' + title + '」. 워크스페이스 사람 모두 쓸 수 있어요.' }))
         : v.visibility === 'me'
           ? el('div', { class: 'v2-studio-step' }, el('b', { text: '내 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)에 나에게만 보여요 — 이름은 「' + title + '」. 지금은 나만 보고 써요 · 아래에서 팀에 공개할 수 있어요.' }))
-          : el('div', { class: 'v2-studio-step' }, el('b', { text: '나만 보는 버전으로 두었어요' }), el('p', { text: '이 버전은 나에게만 보이고, 다른 사람은 공개 버전(' + verName(v.publishedNo) + ')을 계속 써요. 모두에게 내보내려면 아래 「공개하기」.' })));
+          : el('div', { class: 'v2-studio-step' }, el('b', { text: '비공개로 두었어요' }), el('p', { text: '이 버전은 나에게만 보이고, 다른 사람은 공개 버전(' + verName(v.publishedNo) + ')을 계속 써요. 모두에게 내보내려면 아래 「공개하기」.' })));
     }).catch(() => { /* 판 이력 없이도 안내한다 */ });
     const how: HTMLElement[] = [];
     if (rec.place !== 'full') how.push(el('div', {}, el('span', { class: 'k', text: '세션 위젯으로' }), el('span', { text: '세션을 열고 오른쪽 위 + 에서 이 앱을 고르면 세션 위젯으로 붙어요. 그 세션의 AI 도 같이 봐요 — 세션에 말로 시키면 AI 가 위젯 내용을 읽고 바꿔요.' })));
     if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '앱 화면으로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 사이드바 없이 화면 가득 열려요.' })));
     how.push(el('div', {}, el('span', { class: 'k', text: '더 고치려면' }), el('span', { text: '앱빌더의 「내가 만든 앱」 에서 「고치기」. 말로 고치면 다음 버전이 되고, 마음에 안 들면 이전 버전으로 되돌릴 수 있어요.' })));
     const shared = !S.vis || (S.vis.visibility === 'all' && !S.vis.draftMine);
-    if (shared) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기 ⋯ 에서 「내 사본 떠서 고치기」 로 자기 식으로 바꿔 쓰거나, 「원본을 고치기」 로 고쳐 나만 보는 버전을 만든 뒤 공개할 수 있어요.' })));
+    if (shared) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기 ⋯ 에서 「내 사본 떠서 고치기」 로 자기 식으로 바꿔 쓰거나, 「원본을 고치기」 로 고쳐 비공개 버전을 만든 뒤 공개할 수 있어요.' })));
     // ⑦ 팀에 알리기 — 글은 기획 카드에서 미리 적는다. 지식 「앱 소개」 + 슬랙(적으면).
     const line = el('textarea', { class: 'ta', rows: '2' }) as HTMLTextAreaElement;
     line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요 · ' + (c ? c.can.join(' · ') : rec.what) + ' · ' + placeName + ' · 앱 찾기(왼쪽 「앱」)의 워크스페이스 앱에 있어요';
@@ -915,7 +903,7 @@ async function build(rec: StudioRec): Promise<void> {
           el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: S.vis && S.vis.draftMine ? '이 버전을 모두에게 공개하기' : '워크스페이스 모두에게 공개하기', disabled: !!S.vis && !S.vis.canPublish,
             onclick: async (e: Event) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; if (await setVisibility('all')) { toast('워크스페이스 모두에게 공개했어요'); paintNow(); paintPut(); } else b.disabled = false; } }))),
       el('div', { class: 'v2-studio-fin-act' }, tryBtn, el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; void setStage('fix'); } }))));
-    coach('put', tryBtn.parentElement, (shared ? '이제 워크스페이스 앱이에요. ' : S.vis && S.vis.draftMine ? '나만 보는 버전으로 두었어요(다른 사람은 공개 버전을 써요). ' : '이제 내 앱이에요(나만 보여요). ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요');
+    coach('put', tryBtn.parentElement, (shared ? '이제 워크스페이스 앱이에요. ' : S.vis && S.vis.draftMine ? '비공개로 두었어요(다른 사람은 공개 버전을 써요). ' : '이제 내 앱이에요(나만 보여요). ') + '여기서 바로 열어 보세요.', rec.place === 'full' ? '크게 열어 한 바퀴 눌러 보세요' : '세션 위젯으로 붙이고 「안건 3개 적어 줘」 라고 시켜 보세요');
   };
 
   // ── 단계 넘기기 — 속 단계 draft(첫 판 기다림)는 앱이 생기면 fix 다(사람에게는 같은 ③) ──
@@ -978,7 +966,8 @@ async function build(rec: StudioRec): Promise<void> {
     if (to != null) await showApp(verJ(to, '으로') + ' 되돌렸어요');
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
-  teardown = () => { S.dead = true; window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+  teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),

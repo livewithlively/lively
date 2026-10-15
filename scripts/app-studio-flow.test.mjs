@@ -92,6 +92,22 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(B.isTrySessionTitle(tb2) && B.isTrySessionTitle(F.tryBrief("메모 · 원준", "memo-wonjoon-jang").slice(0, 120)), "H8 tryBrief 의 머리 = 시험 세션 대화 제목 판정(120자로 잘린 제목도)", tb2.slice(0, 80));
 }
 
+// ══ W 와이어프레임 보드(#4632 원준 2026-10-16 묶음 #8) — 보드에서 짚은 곳은 그 그림의 자리로 AI 에게 간다 · 그림은 늘 있다 ══
+{
+  const pins = [
+    { kind: "pin", x: 0.3, y: 0.4, where: "<div 「목록」>", note: "글자 크게", on: "wire" },
+    { kind: "pick", x: 0.1, y: 0.2, w: 0.2, h: 0.05, where: "<button 「세션에 넣기」>", note: "더 눈에 띄게" },
+    { kind: "box", x: 0.5, y: 0.1, w: 0.3, h: 0.3, where: "", note: "비어 보여요", on: "wire" },
+  ];
+  const fb = F.fixBrief(2, pins, "", "both", "meeting-notes");
+  const L = fb.split("\n");
+  check(/^\[핀 1\] 와이어프레임\(studio\/wireframe\.html\)의 왼쪽에서 30% · 위에서 40% 자리/.test(L[1]) && /^\[선택한 요소 2\] <button 「세션에 넣기」> — 화면의 왼쪽에서 10%/.test(L[2]) && /^\[영역 3\] 와이어프레임\(studio\/wireframe\.html\)의 왼쪽에서 50%/.test(L[3]),
+    "W1 fixBrief — 보드에서 짚은 곳(on:wire)은 「와이어프레임의 … 자리」, 앱 화면에서 짚은 곳은 「화면의 … 자리」", L.slice(1));
+  check(/그 파일이 아직 없으면 이번에 함께 그려/.test(fb), "W2 fixBrief — 그림이 없는 앱이면 이번 고침에 함께 그리게 한다(«한 장만 나와도 와이어프레임은 그냥 있는 거지»)", fb.slice(0, 200));
+  const db3 = F.draftBrief(refCard, "both", "meeting-notes");
+  check(/피그마 보드처럼/.test(db3) && /단추 하나하나마다/.test(db3) && /얇은 선/.test(db3) && /화면이 하나여도 한 장/.test(db3), "W3 draftBrief — 그림은 피그마 보드처럼 · 얇은 선 · 단추마다 이어지는 화살표 · 화면이 하나여도 한 장", db3.slice(0, 120));
+}
+
 // ══ K 「판」 이 화면 글에 남지 않는다(#4632 원준 2026-10-15 «판 이라는 워딩 전면 금지 · 앱빌더 어디서도») — 주석을 걷은 소스에서 본다 ══
 //  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.
 {
