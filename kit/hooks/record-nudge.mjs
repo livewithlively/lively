@@ -18,7 +18,7 @@
 //                                      같은 파일을 덮어써 두 번 세지 않는다. UserPromptSubmit(턴 시작)에 전부 지운다.
 //   <sid>.inline-nudged                이번 턴에 이미 넛지함(O_EXCL — 동시에 넘은 두 훅 중 하나만 낸다). 턴 시작에 지운다.
 //   <sid>.inline-nudge.<n>             세션당 넛지 횟수(n = 1..상한, O_EXCL 로 한 칸씩 점유).
-//   <sid>.compact-nudge.<pre|resume>.<분>  압축 넛지를 이 1분 칸에 이미 냈음(두 벌 배선의 중복 출력 방지, claimCompactOnce).
+//   <sid>.compact-once.<pre|resume>.<n>  n 번째 압축의 넛지를 냈음 — 내용은 낸 시각(ms). 두 벌 배선의 중복 출력 방지(claimCompactOnce).
 // 페일오픈: 어떤 실패든 null(무출력). 판단은 전부 결정적이다(LLM 호출 0).
 import { readdirSync, readFileSync, writeFileSync, unlinkSync, statSync, openSync, readSync, closeSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -133,10 +133,30 @@ export function hasUnrecordedWork(flagDir, sid) {
 }
 
 // 압축 한 번에 한 번만 — 같은 이벤트에 이 훅이 유저·프로젝트 settings 두 벌로 배선돼 있으면(명령 문자열이 달라 하네스가 합치지 않는다)
-//  둘이 나란히 돌아 같은 지시문이 두 번 붙는다. 페이로드에 압축마다 다른 id 가 없어 1분 칸으로 가르고 O_EXCL 로 하나만 낸다
-//  (압축은 수십 초가 걸려 같은 1분에 두 번 일어나지 않는다).
+//  둘이 나란히 돌아 같은 지시문이 두 번 붙는다. 페이로드에 압축마다 다른 id 가 없어서, 압축마다 번호 칸 하나를 O_EXCL 로 차지하고
+//  가장 최근 칸을 차지한 지 COMPACT_ONCE_MS 가 안 됐으면 같은 압축의 다른 벌로 본다. 두 벌이 같은 칸을 노리면 O_EXCL 이 하나만 남긴다.
+//  ⚠ 옛 방식은 1분 칸(Math.floor(Date.now() / 60_000))이라, 두 벌이 분 경계(…:59.9 → …:00.0)를 사이에 두면 서로 다른 칸을 잡아
+//   둘 다 냈다(CI 실측 2026-10-14 · #4729). 그래서 시계의 칸이 아니라 앞 벌과의 간격으로 가른다.
+//  창 10초 = 두 벌의 간격(나란히 뜬다 — 수 ms, 느린 기계에서도 수 초)보다 넉넉히 길고, 압축 한 번(요약 생성 수십 초)보다 짧다.
+export const COMPACT_ONCE_MS = 10_000;
 function claimCompactOnce(flagDir, sid, kind) {
-  return claimOnce(join(flagDir, `${sid}.compact-nudge.${kind}.${Math.floor(Date.now() / 60_000)}`));
+  const now = Date.now();
+  const prefix = `${sid}.compact-once.${kind}.`;
+  try {
+    let last = 0;
+    for (const f of readdirSync(flagDir)) {
+      const n = f.startsWith(prefix) ? Number(f.slice(prefix.length)) : 0;
+      if (Number.isInteger(n) && n > last) last = n;
+    }
+    if (last) {
+      const p = join(flagDir, prefix + last);
+      // 빈 내용 = 다른 벌이 칸을 만들고 아직 시각을 못 쓴 순간 — 파일 시각으로 본다(곧 «방금»이다).
+      const at = Number(readFileSync(p, "utf8")) || statSync(p).mtimeMs;
+      if (Math.abs(now - at) < COMPACT_ONCE_MS) return false;                    // 같은 압축 — 다른 벌이 이미 냈다
+    }
+    writeFileSync(join(flagDir, prefix + (last + 1)), String(now), { flag: "wx" });  // 같은 칸을 노린 다른 벌이 있으면 여기서 진다
+    return true;
+  } catch { return false; }
 }
 
 // ② claude PreCompact — stdout 이 그대로 압축 요약 지시문에 붙는다(모델에게 직접 가지 않는다). 사람 화면에도 한 줄로 보이므로 짧게.

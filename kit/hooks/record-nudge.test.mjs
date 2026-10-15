@@ -22,7 +22,7 @@ import { execFileSync, execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME/TMPDIR 만으론 윈도우 격리가 안 된다(#1510)
-import { RECORD_FORK_PROMPT } from "./record-nudge.mjs";   // 고정 지시문 — 넛지가 가리키는 호출의 계약
+import { RECORD_FORK_PROMPT, COMPACT_ONCE_MS } from "./record-nudge.mjs";   // 고정 지시문 — 넛지가 가리키는 호출의 계약 · 압축 1회 창
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const HOOKS = process.env.RN_HOOKS_DIR || HERE;
@@ -44,8 +44,13 @@ const env = (extra = {}, tmp = TMP) => ({
   ...process.env, ...sandboxEnv({ home: HOME, tmp }), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "",
   CLAUDE_CODE_ENTRYPOINT: "", CLAUDE_CODE_SESSION_ATTENDED: "", ...extra,
 });
-function run(payload, { harness = "claude", extra = {}, tmp } = {}) {
-  return execFileSync(process.execPath, [WF], { input: JSON.stringify(payload), env: env({ LIVELY_HARNESS: harness, ...extra }, tmp), encoding: "utf8" });
+// 시계 못박기 — now 를 주면 자식 node 의 Date.now 를 그 값으로 고정한다(훅보다 먼저 --import 로 싣는다). 분 경계·몇 분 뒤 같은
+//  시각 조건을 벽시계 운에 맡기지 않고 매번 같게 재현한다.
+const CLOCK = "data:text/javascript," + encodeURIComponent("const t=Number(process.env.RN_NOW_MS);if(t>0)Date.now=()=>t;");
+function run(payload, { harness = "claude", extra = {}, tmp, now } = {}) {
+  const args = now ? ["--import", CLOCK, WF] : [WF];
+  const clock = now ? { RN_NOW_MS: String(now) } : {};
+  return execFileSync(process.execPath, args, { input: JSON.stringify(payload), env: env({ LIVELY_HARNESS: harness, ...extra, ...clock }, tmp), encoding: "utf8" });
 }
 function runAsync(payload, { harness = "claude", extra = {} } = {}) {
   return new Promise((resolve) => {
@@ -214,9 +219,10 @@ function session({ lively = true, worked = true, writebackAgo = null, workedAgo 
   if (writebackAgo !== null) at("writeback", writebackAgo);
   return sid;
 }
-const precompact = (sid, { harness = "claude", payload = {} } = {}) => run({ session_id: sid, hook_event_name: "PreCompact", trigger: "auto", custom_instructions: null, ...payload }, { harness });
-const compactStart = (sid, { harness = "claude", source = "compact", payload = {} } = {}) =>
-  run({ session_id: sid, hook_event_name: "SessionStart", source, ...payload }, { harness });
+const precompactPayload = (sid, payload = {}) => ({ session_id: sid, hook_event_name: "PreCompact", trigger: "auto", custom_instructions: null, ...payload });
+const precompact = (sid, { harness = "claude", payload = {}, now } = {}) => run(precompactPayload(sid, payload), { harness, now });
+const compactStart = (sid, { harness = "claude", source = "compact", payload = {}, now } = {}) =>
+  run({ session_id: sid, hook_event_name: "SessionStart", source, ...payload }, { harness, now });
 // claude PreCompact 의 stdout 은 **평문**이어야 한다(JSON 이면 압축 요약 지시문이 아니라 봉투로 읽힌다) — 비어 있지 않은 평문인가.
 const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !out.trim().startsWith("{");
 {
@@ -261,6 +267,55 @@ const plainText = (out) => out.trim().length > 0 && envelope(out) === null && !o
   const a = precompact(sid), b = precompact(sid);
   const c = compactStart(sid), d = compactStart(sid);
   check("C5c 같은 압축에 훅이 두 벌(유저·프로젝트 settings)이어도 지시문·알림은 한 번씩", plainText(a) && !b.trim() && envelope(c) !== null && !d.trim(), `pre=[${!!a.trim()},${!!b.trim()}] resume=[${!!c.trim()},${!!d.trim()}]`);
+}
+{
+  // 시계 못박기가 죽어 있으면 아래 행들은 벽시계로 돌아 아무 경계도 안 걸친 채 통과한다 — 먹는지부터 본다.
+  const seen = execFileSync(process.execPath, ["--import", CLOCK, "-e", "process.stdout.write(String(Date.now()))"], { env: { ...process.env, RN_NOW_MS: "1234567890123" }, encoding: "utf8" });
+  check("C5d0 배선 — 못박은 시계가 자식 node 에 실제로 먹는다", seen === "1234567890123", `seen=${seen}`);
+}
+{
+  // CI 실측(2026-10-14 10:33:00Z · #4729): C5c 가 pre=[true,true] 로 한 번 빨갰다. 두 벌이 분 경계(…:59.9 → …:00.0)를
+  //  사이에 두고 돌면 1분 칸 표식이 서로 다른 칸을 잡아 둘 다 냈다. 경계 50ms 앞·뒤로 시계를 못박아 그 조건을 매번 재현한다.
+  const edge = (Math.floor(Date.now() / 60_000) + 1) * 60_000;
+  const sid = session();
+  const a = precompact(sid, { now: edge - 50 }), b = precompact(sid, { now: edge + 50 });
+  const c = compactStart(sid, { now: edge + 60_000 - 50 }), d = compactStart(sid, { now: edge + 60_000 + 50 });
+  check("C5d 두 벌이 분 경계를 사이에 두고 돌아도(…:59.95 → …:00.05) 지시문·알림은 한 번씩", plainText(a) && !b.trim() && envelope(c) !== null && !d.trim(), `pre=[${!!a.trim()},${!!b.trim()}] resume=[${!!c.trim()},${!!d.trim()}]`);
+}
+{
+  const t = Date.now();
+  const sid = session();
+  const r = [precompact(sid, { now: t }), compactStart(sid, { now: t + 30_000 }), precompact(sid, { now: t + 120_000 }), compactStart(sid, { now: t + 150_000 })];
+  check("C5e 같은 세션의 다음 압축(2분 뒤)은 지시문·알림을 다시 낸다", plainText(r[0]) && envelope(r[1]) !== null && plainText(r[2]) && envelope(r[3]) !== null, `pre=[${!!r[0].trim()},${!!r[2].trim()}] resume=[${!!r[1].trim()},${!!r[3].trim()}]`);
+}
+{
+  // 창의 경계 — 앞 벌이 낸 뒤 창 안(창-1ms)이면 같은 압축의 두 번째 벌, 창만큼 지났으면 다음 압축이다. 시계 칸과 무관하게 정각에서 잰다.
+  const t = Math.floor(Date.now() / 60_000) * 60_000;
+  const sid = session();
+  const r = [precompact(sid, { now: t }), precompact(sid, { now: t + COMPACT_ONCE_MS - 1 }), precompact(sid, { now: t + COMPACT_ONCE_MS })];
+  check(`C5f 경계 — 앞 벌 뒤 ${COMPACT_ONCE_MS - 1}ms 는 무출력, ${COMPACT_ONCE_MS}ms 는 다음 압축으로 보고 낸다`, plainText(r[0]) && !r[1].trim() && plainText(r[2]), `pre=[${r.map((o) => !!o.trim())}]`);
+}
+{
+  // 실제 배선의 모양 — 두 벌은 하네스가 **나란히** 띄운다. 동시에 떠도 정확히 하나만 낸다(세 번 — 경합을 여러 번 굴린다).
+  const counts = [];
+  for (let i = 0; i < 3; i++) {
+    const sid = session();
+    const outs = await Promise.all([runAsync(precompactPayload(sid)), runAsync(precompactPayload(sid))]);
+    counts.push(outs.filter((o) => plainText(o)).length);
+  }
+  check("C5g 두 벌이 동시에 떠도 지시문은 정확히 한 번", counts.every((c) => c === 1), JSON.stringify(counts));
+}
+{
+  // 그 경합의 좁은 틈 — 다른 벌이 칸을 막 만들고 시각을 아직 못 쓴 순간(빈 칸)도 «방금 낸 것» 이다.
+  const sid = session();
+  writeFileSync(flag(sid, "compact-once.pre.1"), "");
+  const out = precompact(sid);
+  check("C5h 다른 벌이 칸만 만들고 시각을 아직 못 쓴 순간이면 무출력", !out.trim(), out.slice(0, 120));
+}
+{
+  const t = Date.now();
+  const a = precompact(session(), { now: t }), b = precompact(session(), { now: t });
+  check("C5i 다른 세션이 같은 순간 압축하면 둘 다 낸다(한 번 판정은 세션마다)", plainText(a) && plainText(b), `a=${!!a.trim()} b=${!!b.trim()}`);
 }
 {
   const a = compactStart(session(), { source: "startup" });
