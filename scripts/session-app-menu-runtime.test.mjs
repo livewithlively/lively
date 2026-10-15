@@ -112,7 +112,7 @@ window.addEventListener('error',(e)=>window.__errs.push(String(e.message)));
   // R2
   await openMore();
   R.R2_rows=menuRows().map((b)=>b.querySelector('.pn-ctx-l').textContent);
-  R.R2_prefsOff=!!(row('표시 설정')&&row('표시 설정').disabled); R.R2_prefsHint=hintOf(row('표시 설정')); R.R2_verHint=hintOf(row('판 이력…')); R.R2_origOff=!!(row('원본으로 되돌리기')&&row('원본으로 되돌리기').disabled);
+  R.R2_prefsOff=!!(row('표시 설정')&&row('표시 설정').disabled); R.R2_prefsHint=hintOf(row('표시 설정')); R.R2_verHint=hintOf(row('버전 이력…')); R.R2_origOff=!!(row('원본으로 되돌리기')&&row('원본으로 되돌리기').disabled);
   ESC(); await until(()=>!document.querySelector('.pn-ctx'));
   // R3 — 앱이 구독했다(SDK 가 보내는 것과 같은 알림을 그 프레임 창에서 온 것처럼)
   window.dispatchEvent(new MessageEvent('message',{data:{jsonrpc:'2.0',method:'ui/subscribe',params:{topic:'prefs-open'}},source:iframe.contentWindow}));
@@ -160,11 +160,11 @@ window.addEventListener('error',(e)=>window.__errs.push(String(e.message)));
   await until(()=>head.querySelector('.pn-sessapp-ver'));
   R.R4_pill=(head.querySelector('.pn-sessapp-ver')||{}).textContent||null;
   await openMore();
-  R.R4_verHint=hintOf(row('판 이력…')); R.R4_origOff=!!(row('원본으로 되돌리기')&&row('원본으로 되돌리기').disabled);
+  R.R4_verHint=hintOf(row('버전 이력…')); R.R4_origOff=!!(row('원본으로 되돌리기')&&row('원본으로 되돌리기').disabled);
   // R5 — 판 이력 → 2판으로
-  row('판 이력…').click(); await until(()=>row('2판 · 글 줄 칸을 아래로'));
-  R.R5_rows=menuRows().map((b)=>b.querySelector('.pn-ctx-l').textContent); R.R5_curOff=!!(row('3판 · 보낸 줄 접기')&&row('3판 · 보낸 줄 접기').disabled);
-  const before=reloadN(); row('2판 · 글 줄 칸을 아래로').click();
+  row('버전 이력…').click(); await until(()=>row('V2 · 글 줄 칸을 아래로'));
+  R.R5_rows=menuRows().map((b)=>b.querySelector('.pn-ctx-l').textContent); R.R5_curOff=!!(row('V3 · 보낸 줄 접기')&&row('V3 · 보낸 줄 접기').disabled);
+  const before=reloadN(); row('V2 · 글 줄 칸을 아래로').click();
   await until(()=>reloadN()>before, 3000);
   R.R5_revert=window.__reverts.slice(); R.R5_reloadN=reloadN();
   await until(()=>!document.querySelector('.pn-ctx'));
@@ -201,7 +201,7 @@ if (R.error) { console.error("FAIL  페이지 오류\n" + R.error + "\n요청: "
 let pass = 0, fail = 0;
 const t = (cond, name, extra) => { if (cond) { pass++; console.log(`ok  ${name}`); } else { fail++; console.error(`FAIL ${name}${extra !== undefined ? " — " + JSON.stringify(extra) : ""}`); } };
 t(R.R1_title === "장표 수정" && R.R1_pill === false && R.R1_tab === "장표 수정" && R.R1_iframe, "R1 머리줄에 앱 이름 · 판을 모르면 「N판」 없음 · 탭 이름 = 앱 이름 · 앱 화면이 떴다", R);
-t(JSON.stringify(R.R2_rows) === JSON.stringify(["AI에게 고치기…", "표시 설정", "판 이력…", "원본으로 되돌리기", "크게 보기", "이 세션에서 떼기"]), "R2 ⋯ 메뉴 여섯 줄 · 순서", R.R2_rows);
+t(JSON.stringify(R.R2_rows) === JSON.stringify(["AI에게 고치기…", "표시 설정", "버전 이력…", "원본으로 되돌리기", "크게 보기", "이 세션에서 떼기"]), "R2 ⋯ 메뉴 여섯 줄 · 순서", R.R2_rows);
 t(R.R2_prefsOff === true && R.R2_prefsHint === "이 앱은 표시 설정이 없어요", "R2 구독 전 「표시 설정」은 흐리고 까닭을 힌트로(리뷰 (1))", [R.R2_prefsOff, R.R2_prefsHint]);
 t(R.R2_verHint === null && R.R2_origOff === true, "R2 판을 모르면 「판 이력…」 힌트 없음 · 원본 그대로면 「원본으로」 흐림(리뷰 (3))", [R.R2_verHint, R.R2_origOff]);
 t(R.R3_prefsOff === false && R.R3_prefsHint === "나에게만" && R.R3_prefsGot >= 1, "R3 앱이 prefs-open 을 구독하면 켜지고, 누르면 앱 문서가 알림을 받는다", [R.R3_prefsOff, R.R3_prefsHint, R.R3_prefsGot, "rpc:" + R.R3_rpc, "ready:" + R.R3_appReady]);
@@ -209,14 +209,14 @@ t(!!R.R3i_set && R.R3i_set.css === "70px" && R.R3i_set.api === 70, "R3i-1 ★ �
 t(!!R.R3i_change && R.R3i_change.css === "36px" && !!R.R3i_clear && R.R3i_clear.css === "0px" && R.R3i_clear.api === 0, "R3i-2 독 크기가 바뀌거나 독이 비키면(이음매로 옮김) 따라 바뀐다", [R.R3i_change, R.R3i_clear]);
 t(!!R.R3i_reload && R.R3i_reload.css === "52px", "R3i-3 앱 화면이 다시 불러와져도(새 문서) 지금 값을 다시 받는다", R.R3i_reload);
 t(R.R3h_before === true && R.R3h_hidden === true && R.R3h_ok === true && !!R.R3h_caps && R.R3h_caps.menu === true && R.R3h_caps.chrome === true, "R3h-1 ★ 앱이 청하면 호스트의 앱 머리줄(이름 · 판 · ⋯)이 접힌다 — 인사의 capabilities 가 menu · chrome 을 알린다", [R.R3h_before, R.R3h_hidden, R.R3h_ok, R.R3h_caps]);
-t(Array.isArray(R.R3h_rows) && R.R3h_rows[0] === "문서 전체 의견" && R.R3h_rows.includes("AI에게 고치기…") && R.R3h_rows.includes("판 이력…") && R.R3h_rows.includes("이 세션에서 떼기") && !R.R3h_rows.includes("빈 id 는 버린다") && Math.abs(R.R3h_at[0] - 300) < 260 && R.R3h_at[1] >= 0, "R3h-2 ★ 앱의 ⋯ 가 여는 메뉴 = 앱의 항목(맨 위) + 호스트의 앱 메뉴 · 앱이 알려 준 자리 근처에 선다", [R.R3h_rows, R.R3h_at]);
+t(Array.isArray(R.R3h_rows) && R.R3h_rows[0] === "문서 전체 의견" && R.R3h_rows.includes("AI에게 고치기…") && R.R3h_rows.includes("버전 이력…") && R.R3h_rows.includes("이 세션에서 떼기") && !R.R3h_rows.includes("빈 id 는 버린다") && Math.abs(R.R3h_at[0] - 300) < 260 && R.R3h_at[1] >= 0, "R3h-2 ★ 앱의 ⋯ 가 여는 메뉴 = 앱의 항목(맨 위) + 호스트의 앱 메뉴 · 앱이 알려 준 자리 근처에 선다", [R.R3h_rows, R.R3h_at]);
 t(R.R3h_picked === "doccm" && R.R3h_null === null, "R3h-3 앱의 항목을 고르면 그 id 가, 닫으면 null 이 앱에 돌아간다", [R.R3h_picked, R.R3h_null]);
 t(R.R3h_reloadHold === true && R.R3h_reloadBack === true, "R3h-4 새 문서(다시 불러옴)가 다시 청하지 않으면 머리줄이 돌아온다(잠깐 기다렸다가 — 깜빡이지 않게)", [R.R3h_reloadHold, R.R3h_reloadBack]);
-t(R.R4_pill === "3판" && R.R4_verHint === "3판" && R.R4_origOff === false, "R4 목록이 다시 오면 「3판」 알약 · 힌트 · 「원본으로」 켜짐", [R.R4_pill, R.R4_verHint, R.R4_origOff]);
-t(JSON.stringify(R.R5_rows) === JSON.stringify(["3판 · 보낸 줄 접기", "2판 · 글 줄 칸을 아래로", "1판 · 라이블리 기본 앱"]) && R.R5_curOff === true, "R5 판 이력 메뉴 — 최신 먼저 · 지금 판은 흐림", [R.R5_rows, R.R5_curOff]);
+t(R.R4_pill === "V3" && R.R4_verHint === "V3" && R.R4_origOff === false, "R4 목록이 다시 오면 「3판」 알약 · 힌트 · 「원본으로」 켜짐", [R.R4_pill, R.R4_verHint, R.R4_origOff]);
+t(JSON.stringify(R.R5_rows) === JSON.stringify(["V3 · 보낸 줄 접기", "V2 · 글 줄 칸을 아래로", "초안 · 라이블리 기본 앱"]) && R.R5_curOff === true, "R5 판 이력 메뉴 — 최신 먼저 · 지금 판은 흐림", [R.R5_rows, R.R5_curOff]);
 t(JSON.stringify(R.R5_revert) === JSON.stringify([{ version_no: 2 }]) && R.R5_reloadN === 1, "R5 「2판」 → POST /revert {version_no:2} → 그 자리에서 다시 띄움(1회)(리뷰 (2))", [R.R5_revert, R.R5_reloadN]);
-t(R.R6_reloadN === 1 && R.R6_band === "2판 · 방금 고침 · 글 줄 칸을 아래로", "R6 같은 번호의 updated 사건은 다시 띄우지 않고 띠만(리뷰 (2))", [R.R6_reloadN, R.R6_band]);
-t(R.R7_reloadN === 2 && R.R7_band === "4판 · 방금 고침 · 보낸 줄 접기", "R7 다른 번호의 updated 사건은 다시 띄운다(2회) · 띠 갱신", [R.R7_reloadN, R.R7_band]);
+t(R.R6_reloadN === 1 && R.R6_band === "V2 · 방금 고침 · 글 줄 칸을 아래로", "R6 같은 번호의 updated 사건은 다시 띄우지 않고 띠만(리뷰 (2))", [R.R6_reloadN, R.R6_band]);
+t(R.R7_reloadN === 2 && R.R7_band === "V4 · 방금 고침 · 보낸 줄 접기", "R7 다른 번호의 updated 사건은 다시 띄운다(2회) · 띠 갱신", [R.R7_reloadN, R.R7_band]);
 t(JSON.stringify(R.R8_revert) === JSON.stringify({ version_no: 2 }) && R.R8_reloadN === 3, "R8 띠의 「되돌리기」 = 바로 앞 판(2) · 다시 띄움(3회)", [R.R8_revert, R.R8_reloadN]);
 t(R.R9_draft && R.R9_draft.session === "sid-1" && R.R9_draft.text === "「장표 수정」 앱을 이렇게 고쳐 줘: ", "R9 「AI에게 고치기…」 → lively:compose-draft {session, text}", R.R9_draft);
 console.log(`\n${pass} passed${fail ? `, ${fail} failed` : ""}`);

@@ -85,5 +85,12 @@ check(F.draftTitle({ label: "새 앱 제작", what: "첫 줄\n둘째 줄" }) ===
 check(F.draftTitle({}) === "이름 없는 앱" && F.draftTitle({ title: null, cardName: null, label: null, appTitle: null, what: null }) === "이름 없는 앱", "T7 아무것도 없으면 「이름 없는 앱」");
 check(F.builderSessionName('"회의록" 앱 제작') === "회의록" && F.builderSessionName('"메모 · 원준" 앱 고치기') === "메모 · 원준" && F.builderSessionName("새 앱 제작") === "" && F.builderSessionName("회의록 기획카드") === "" && F.builderSessionName(null) === "", "N1 세션 이름에 박힌 앱 이름 — 그 꼴이 아니면 빈 글");
 
+// ══ G 시험 세션 «"이름" 앱 시험»(#4632 원준 2026-10-15 · 사양 표 G) — 앱빌딩 세션이 아니고 목록에 안 선다 ══
+check(F.isTrySession('"회의록" 앱 시험') && F.isTrySession('  "회의록" 앱 시험  ') && !F.isTrySession('"회의록" 앱 제작') && !F.isTrySession("회의록 시험") && !F.isTrySession("") && !F.isTrySession(null), "G1 isTrySession — 그 꼴만");
+check(!F.isBuilderSession('"회의록" 앱 시험', "앱빌더") && !F.isBuilderSession('"회의록" 앱 시험', "") && F.isBuilderSession('"회의록" 앱 제작', "앱빌더") && F.isBuilderSession("회의록 시험", "앱빌더"), "G2 isBuilderSession — 시험 세션은 앱빌더 소속이어도 아니다 · 나머지는 종전");
+check(!F.isBuildingSession('"회의록" 앱 시험', "앱빌더") && F.isBuildingSession('"회의록" 앱 제작', "앱빌더") && F.isBuildingSession("회의록 시험", "앱빌더"), "G3 isBuildingSession — 시험 세션은 만드는 세션이 아니다 · 나머지는 종전");
+check(F.trySessionLabel("회의록") === '"회의록" 앱 시험' && F.trySessionLabel("") === '"앱" 앱 시험' && F.trySessionLabel("   ") === '"앱" 앱 시험' && F.trySessionLabel(null) === '"앱" 앱 시험' && F.trySessionLabel('a"b\n') === '"a b" 앱 시험' && F.trySessionLabel("가".repeat(50)) === '"' + "가".repeat(40) + '" 앱 시험', "G4 trySessionLabel — 빈 이름은 「앱」 · 따옴표 · 줄바꿈은 빈칸 · 40자");
+check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySessionLabel("")), "G5 지은 이름은 늘 시험 세션으로 읽힌다(왕복)");
+
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);
 if (fail) process.exit(1);

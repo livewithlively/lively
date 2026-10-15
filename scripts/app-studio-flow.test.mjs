@@ -57,5 +57,26 @@ check(/있던 것은 그대로/.test(F.editBrief("a", "A", "side")), "B7 원본 
 check(F.whereText({ tag: "h1", text: "이번 회의 안건" }) === "<h1 「이번 회의 안건」>" && F.whereText(null) === "" && F.whereText({ tag: "div", text: "" }) === "<div>", "W1 찍은 자리 글");
 check(typeof F.PROBE_JS === "string" && /elementFromPoint/.test(F.PROBE_JS) && /__studio/.test(F.PROBE_JS) && !/`/.test(F.PROBE_JS), "P1 탐침 스크립트 — 백틱 없음(스크립트 태그 안에 그대로 들어간다)");
 
+// ══ F 버전 이름 — 「판」 금지(#4632 원준 2026-10-15 · 사양 표 F) ══
+check(F.verName(0) === "" && F.verName(-1) === "" && F.verName(NaN) === "" && F.verName(1) === "초안" && F.verName(2) === "V2" && F.verName(10) === "V10" && F.verName(11) === "V11" && F.verName(2.7) === "V2", "F1 verName — 없음 '' · 1 초안 · 2 이상 Vn · 소수는 내림");
+check(F.verJ(1, "을") === "초안을" && F.verJ(1, "으로") === "초안으로" && F.verJ(1, "은") === "초안은" && F.verJ(1, "이") === "초안이" && F.verJ(0, "으로") === "초안으로", "F2 verJ — 초안은 받침 꼴(을 · 으로 · 은 · 이)");
+check(F.verJ(2, "을") === "V2 를" && F.verJ(2, "으로") === "V2 로" && F.verJ(3, "은") === "V3 는" && F.verJ(4, "이") === "V4 가", "F3 verJ — Vn 은 띄어 받침 없는 꼴(를 · 로 · 는 · 가)");
+check(F.verArrived(0) === "초안이 나왔어요" && F.verArrived(1) === "초안이 나왔어요" && F.verArrived(2) === "두 번째 버전이 나왔어요" && F.verArrived(3) === "세 번째 버전이 나왔어요" && F.verArrived(10) === "열 번째 버전이 나왔어요" && F.verArrived(11) === "V11 이 나왔어요", "F4 verArrived — 초안 · 두 번째 … 열 번째 · 그 뒤는 Vn");
+// ══ H 기획 카드 「참고한 것」 · 벤치마크 · 와이어프레임(사양 표 H) ══
+const refCard = F.parseCard("[[기획카드]]\n이름: 회의록\n할 수 있는 것: 올리기 · 정리 · 넣기\n참고한 것: Otter 의 회의 목록 + 정리본 탭\n[[/기획카드]]");
+check(refCard && refCard.ref === "Otter 의 회의 목록 + 정리본 탭", "H1 카드의 「참고한 것」 줄을 읽는다", refCard);
+const oldCard = { name: "회의 안건", who: "준비하는 사람", items: "제목", can: ["더하기"], not: "", first: "목록" };   // 기록 · 매니페스트에 남은 옛 카드(ref 칸이 아예 없다)
+check(card && !card.ref && !/undefined/.test(F.cardText(oldCard)) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(F.cardText(oldCard)), "H2 옛 카드(참고 줄 없음)도 읽히고 cardText 에 undefined 가 없다", F.cardText(oldCard));
+const pb2 = F.planBrief("회의록 정리", "both", "회의록");
+check(/비슷한 앱 · 서비스/.test(pb2) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(pb2), "H3 planBrief — 비슷한 앱 · 서비스를 견주고 카드에 「참고한 것」 줄", pb2);
+const db2 = F.draftBrief(refCard, "both", "meeting-notes");
+check(/초안을 만들어/.test(db2) && db2.includes(F.WIREFRAME_PATH) && F.WIREFRAME_PATH === "studio/wireframe.html" && !/첫 판/.test(db2) && !/판/.test(db2.replace(/참고한 것[^\n]*/g, "")), "H4 draftBrief — 초안 · 와이어프레임 파일을 함께 저장 · 「판」 없음", db2);
+const fb2 = F.fixBrief(2, [{ x: 0.1, y: 0.2, where: "", note: "크게", kind: "pin" }], "", "both", "meeting-notes");
+check(/새 버전으로 저장/.test(fb2) && fb2.includes(F.WIREFRAME_PATH) && !/판/.test(fb2), "H5 fixBrief — 새 버전 · 와이어프레임도 맞춰 · 「판」 없음", fb2);
+const wb2 = F.wireframeBrief("meeting-notes");
+check(/app_pull meeting-notes/.test(wb2) && wb2.includes(F.WIREFRAME_PATH) && /앱 화면은 그대로/.test(wb2), "H6 wireframeBrief — 받아서 그림 파일만 더해 저장", wb2);
+const tb2 = F.tryBrief("회의록", "meeting-notes");
+check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_save 금지/.test(tb2), "H7 tryBrief — 써 보는 세션 · 앱 코드는 고치지 않는다", tb2);
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

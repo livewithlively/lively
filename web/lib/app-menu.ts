@@ -5,6 +5,8 @@
 //  왜 메뉴가 있나(원준 2026-10-07): 이 앱들은 완성품이 아니라 **각자 AI 에게 시켜 고쳐 쓰는 앱**이다. 「고치고 싶다」는 생각은
 //   앱을 보고 있을 때 들므로 그 자리(앱 탭)에 문을 둔다 — 세션이 곧 빌더다. 별도 「앱 빌더」 앱은 만들지 않는다(기획안 2판 05절).
 
+import { verName } from './studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …) — 원준 2026-10-15 «판 이라는 워딩 전면 금지»
+
 /** 서버 app_versions 한 줄(SPEC §1-3). */
 export interface AppVersion {
   version_no: number;
@@ -41,8 +43,8 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
   return [
     { label: 'AI에게 고치기…', icon: 'pencil', hint: '세션에 말하기', run: h.edit },
     { label: '표시 설정', icon: 'sliders', off: !app.hasPrefs, hint: app.hasPrefs ? '나에게만' : '이 앱은 표시 설정이 없어요', run: h.prefs },
-    { label: '판 이력…', icon: 'clock', hint: app.versionNo ? `${app.versionNo}판` : undefined, run: h.versions },
-    { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 판으로' : '지금이 원본', run: h.original },
+    { label: '버전 이력…', icon: 'clock', hint: app.versionNo ? verName(app.versionNo) : undefined, run: h.versions },
+    { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 버전으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
     { label: '크게 보기', icon: 'expand', hint: '새 탭 · 화면 가득', run: h.big },
     { label: '이 세션에서 떼기', icon: 'x', danger: true, hint: '데이터는 남음', run: h.detach },
@@ -54,7 +56,7 @@ export function draftTextFor(title: string): string { return `「${title}」 앱
 
 /** 방금 고침 띠의 글. */
 export function bandText(ev: { version_no?: number; note?: string }): string {
-  const n = ev.version_no ? `${ev.version_no}판 · ` : '';
+  const n = ev.version_no ? `${verName(ev.version_no)} · ` : '';
   return `${n}방금 고침${ev.note ? ' · ' + ev.note : ''}`;
 }
 
@@ -86,7 +88,7 @@ export function versionRows(versions: readonly AppVersion[], revert: (versionNo:
   return [...versions].sort((a, b) => b.version_no - a.version_no).map((v) => {
     const who = v.origin === 'builtin' ? '원본 · 릴리스 ' + v.version : [v.saved_by, when(v.saved_at)].filter(Boolean).join(' · ');
     return {
-      label: `${v.version_no}판${v.note ? ' · ' + v.note : v.origin === 'builtin' ? ' · 라이블리 기본 앱' : ''}`,
+      label: `${verName(v.version_no)}${v.note ? ' · ' + v.note : v.origin === 'builtin' ? ' · 라이블리 기본 앱' : ''}`,
       hint: v.is_current ? '지금' : who,
       off: v.is_current,
       icon: v.is_current ? 'check' : undefined,

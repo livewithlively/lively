@@ -22,6 +22,7 @@ import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versio
 import { bandText, draftTextFor, sessAppMenuRows } from '../lib/app-menu.js';
 import { builtinAppIcon } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
+import { verName } from '../lib/studio-flow.js';
 
 export interface AttachedApp {
   app_id: string;
@@ -45,6 +46,19 @@ export function composeDraft(session: string, text: string): void {
 
 /** 곁칸의 붙은 앱 탭 — 부품 종류 이름이자 탭 열쇠. 배치에 저장하지 않는다(머리말). */
 export const SESSAPP_TAB = 'sessapp';
+/** 세션마다 마지막으로 보던 곁칸 탭(v2/panes.ts 가 읽고 쓴다) — 이 브라우저 저장 열쇠. */
+export const PANE_ACT_KEY = 'pn_act_by_sess';
+/** 이 세션을 다음에 열면 우측 사이드바가 붙은 앱 탭으로 열리게 적어 둔다(#4632 앱빌더 「세션 위젯으로 보기」 — 늘 서던 「자료」 대신 만든 앱).
+ *  셸은 앱 탭이 처음 설 때 이 기록을 보고 그 탭을 켠다(panes.ts syncSessApps). */
+export function preferSessAppTab(sid: string): void {
+  if (!sid) return;
+  try {
+    const m = JSON.parse(localStorage.getItem(PANE_ACT_KEY) || '{}');
+    const all = m && typeof m === 'object' ? m : {};
+    all[sid] = { ...(all[sid] && typeof all[sid] === 'object' ? all[sid] : {}), side: SESSAPP_TAB };
+    localStorage.setItem(PANE_ACT_KEY, JSON.stringify(all));
+  } catch (_) { /* 기록을 못 남겨도 화면은 선다 — 코멘트 층이 앱 탭을 다시 부른다 */ }
+}
 /** «그 앱 탭을 보여 달라» — 곁칸 [앱]에서 **이미 붙은** 앱을 다시 눌렀을 때(새로 붙은 게 아니라 셸이 스스로는 안 켠다).
  *  이 곁칸 한 벌의 뿌리(paneRoot)에서만 오간다. detail.app_id = 앞에 세울 앱. */
 export const SHOW_SESSAPP_EVT = 'pn:show-sessapp';
@@ -303,7 +317,7 @@ export function sessAppPart(ctx: PartCtx): Part {
     //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.
     const extra = (o?.extra ?? []).map((it) => ({ label: it.label, run: () => answer(it.id) }));
     const all = extra.length ? [...extra, { label: '', sep: true }, ...rows] : rows;
-    ctxMenu(x, y, all, { title: cur.title, sub: cur.version_no ? `${cur.version_no}판 · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220,
+    ctxMenu(x, y, all, { title: cur.title, sub: cur.version_no ? `${verName(cur.version_no)} · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220,
       //  메뉴 엔진은 줄을 누르면 «닫고 나서» 그 줄의 일을 한다 — 닫힘에서 곧바로 null 을 돌려주면 고른 것이 묻힌다. 한 박자 늦춰 고른 것이 먼저 가게 한다.
       onClose: () => { window.setTimeout(() => answer(null), 60); } });
   }
@@ -311,12 +325,12 @@ export function sessAppPart(ctx: PartCtx): Part {
   function paintHead(cur: AttachedApp | null): void {
     head.hidden = !cur || headless;
     if (!cur) { head.replaceChildren(); return; }
-    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 판 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
+    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 버전 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
       onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openMenu(cur, r.right, r.bottom + 4); } }, pnIcon('more', 'pn-i sm'));
     head.replaceChildren(
       faceIcon(cur, 'pn-i sm'),
       el('b', { class: 'pn-sessapp-title ell', text: cur.title }),
-      ...(cur.version_no ? [el('span', { class: 'pn-sessapp-ver', text: `${cur.version_no}판` })] : []),
+      ...(cur.version_no ? [el('span', { class: 'pn-sessapp-ver', text: verName(cur.version_no) })] : []),
       el('span', { class: 'pn-sp' }),
       more);
     //  우클릭도 같은 메뉴 — 머리줄 어디서든.

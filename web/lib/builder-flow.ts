@@ -17,6 +17,18 @@ export function builderSessionLabel(name: string | null | undefined, mode: 'new'
   return `"${n || '앱'}" 앱 고치기`;
 }
 
+/** ③ 「세션 위젯으로 보기」 의 **시험 세션** 이름 — «"이름" 앱 시험»(원준 2026-10-15 «수정을 위한 AI 세션이 아니어야 · 회의록 위젯을 가지고 세션과 상호작용 ·
+ *  다른 사이드바나 이런 곳에 노출하지는 말고»). 사람이 지은 이름으로 박혀(AI 가 못 덮는다) 이 꼴이 곧 표식이다 — 목록 어디에도 세우지 않는다(isTrySession). */
+export const TRY_SESSION_RE = /^"(.+)" 앱 시험$/;
+export function trySessionLabel(name: string | null | undefined): string {
+  const n = String(name || '').replace(/[\t\n\r"]/g, ' ').trim().slice(0, 40);
+  return `"${n || '앱'}" 앱 시험`;
+}
+/** 앱빌더의 시험 세션인가 — 셸의 세션 목록(사이드바 · 홈 · 서랍 · 대시보드)에서 뺀다. 앱빌딩 세션도 아니다. */
+export function isTrySession(label: string | null | undefined): boolean {
+  return TRY_SESSION_RE.test(String(label || '').trim());
+}
+
 /** 이 이름의 프로젝트가 앱빌더 프로젝트인가 — 정확히 「앱빌더」 만. 옛 「앱 만들기」 는 사람이 지은 프로젝트와 겹쳐(#4632 가 그 이름이다) 이름으로 못 가른다. */
 export function isBuilderProjectName(name: string | null | undefined): boolean {
   return String(name || '').trim() === BUILDER_PROJECT_NAME;
@@ -28,6 +40,7 @@ export function isBuilderSessionLabel(label: string | null | undefined): boolean
 }
 /** 앱빌딩 세션인가 — 이름 꼴이거나 앱빌더 프로젝트 소속이면. 위탁 워커(task 표식)는 부르는 쪽이 먼저 가른다. */
 export function isBuilderSession(label: string | null | undefined, projectName: string | null | undefined): boolean {
+  if (isTrySession(label)) return false;   // 앱빌더 프로젝트에 살지만 만드는 세션이 아니다 — 시험 세션
   return isBuilderSessionLabel(label) || isBuilderProjectName(projectName);
 }
 /** 세션 이름에서 앱빌더 머리말을 뗀 「무엇을」 — 「앱 만들기 · 회의 안건」 → 「회의 안건」. 머리말이 없으면 그대로. */
@@ -77,6 +90,7 @@ export function draftStageText(stage: string, hasApp: boolean, done: boolean): s
  *  보통 AI 세션(앱빌더 밖)이 저장한 앱도 아니다: 그 앱은 만든 대로 다 된 앱이다(서버는 어느 세션이 첫 저장을 해도 build_session 을 적는다). */
 export function isBuildingSession(label: string | null | undefined, projectName: string | null | undefined): boolean {
   const l = String(label || '').trim();
+  if (isTrySession(l)) return false;   // 시험 세션은 만드는 세션이 아니다(같은 앱빌더 프로젝트에 산다)
   const m = BUILDER_SESSION_RE.exec(l);
   if (m) return m[2] === '제작';
   if (l === BUILDER_SESSION_UNNAMED || l.startsWith(BUILDER_SESSION_PREFIXES[0])) return true;
