@@ -3185,3 +3185,18 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-wb-name small, .v2-wb-hint, .v2-wb-tools button span:not(.ico) { display: none; }
   .v2-wb-list { position: absolute; right: 0; top: 52px; bottom: 0; box-shadow: -10px 0 30px rgba(21, 35, 59, .12); }
 }
+
+/* ③ 막대 — 지금 보는 꼴 · 앱 전체 코멘트 칸(원준 2026-10-16 «위젯 창인지 앱 전체 창인지 · 막대에서 바로 앱 전체 코멘트») */
+.v2-review-mode { flex: none; font-size: 11.5px; font-weight: 800; line-height: 20px; padding: 0 8px; border-radius: 10px; white-space: nowrap; }
+.v2-review-mode.app { color: #0E7A55; background: rgba(31, 157, 107, .12); }
+.v2-review-mode.widget { color: #1F4FC4; background: rgba(34, 99, 239, .1); }
+.v2-review-gen { flex: 1 1 220px; min-width: 160px; max-width: 360px; height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-review-gen:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .14); }
+.v2-review-gen:disabled { opacity: .5; }
+.v2-review-bar--dock .v2-review-gen { flex: 1 1 150px; min-width: 120px; max-width: 280px; }
+/* 문패 줄은 한 줄 — 보는 꼴 · 앱 전체 칸이 들어오며 빠듯해졌다. 도구 이름은 줄바꿈 없이, 창이 1600 아래면 도움말은 걷고(도구 툴팁에 같은 글) 도구는 그림만(이름은 툴팁). */
+.v2-review-bar--dock .v2-review-tools button > span:not(.ico) { white-space: nowrap; }
+@media (max-width: 1599px) { .v2-review-bar--dock .v2-review-hint { display: none; } }
+@media (max-width: 1499px) { .v2-review-bar--dock .v2-review-tools button > span:not(.ico) { display: none; } .v2-review-bar--dock .v2-review-tools button { padding: 0 9px; } }
+@media (max-width: 1100px) { .v2-review-bar--dock .v2-review-mode { display: none; } }
+@media (max-width: 760px) { .v2-review-gen { flex-basis: 100%; max-width: none; order: 20; } }

@@ -137,7 +137,9 @@ export function copyId(originId: string, memberId: string): string {
 const NO_PUBLISH = '저장하면 비공개 버전이 되고, 공개는 내가 정하니 app_visibility_set 은 부르지 마.';
 const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_get 으로 그것만 읽고 다른 건 찾아보지 마). ' + NO_PUBLISH;
 //  벤치마크(원준 2026-10-15) — 기획 카드를 쓰기 전에 비슷한 앱 · 서비스의 구조 · 기능을 견준다. 라이블리 지식을 뒤지라는 말이 아니다(RULE 과 어긋나지 않게).
-const BENCH = '먼저 비슷한 앱 · 서비스(널리 쓰는 것 두셋)를 떠올려 화면 구조 · 기능을 견줘 보고 좋은 점을 기획에 담아 줘(웹 검색을 쓸 수 있으면 찾아봐도 돼 · 라이블리 지식은 더 찾지 말고).';
+const BENCH = '먼저 비슷한 앱 · 서비스(같은 일을 하며 오래 널리 쓰여 온 회사 제품 두셋)를 조사해 화면 구조 · 기능을 견줘 보고 좋은 점을 기획에 담아 줘(웹 검색을 쓸 수 있으면 찾아봐도 돼 · 라이블리 지식은 더 찾지 말고).';
+//  초안을 짤 때 맨 먼저 할 일(원준 2026-10-16 «처음에 시안 짤 때 비슷한 기능 하는 레거시 회사들이나 UI 조사도 해서 그거랑 비슷하게 만드는 걸 높은 우선순위로»).
+const LEGACY = '★ 우선순위 높음 — 짜기 전에 이 앱과 같은 일을 하는 기존 서비스(오래 쓰여 온 회사 제품 두셋)의 화면 구성 · 기능 · UI 를 조사하고(웹 검색을 쓸 수 있으면 찾아봐), 그 익숙한 꼴과 비슷하게 짜 줘 — 처음 보는 사람도 바로 쓸 줄 아는 화면이 목표야. 카드의 「참고한 것」 이 그 출발점이야.';
 /** 화면 흐름 와이어프레임(원준 2026-10-15 «초안 만든 뒤 와이어프레임 볼 수 있게 · 클로드 아티팩트처럼 버튼 누르면») — 앱 패키지의 이 파일을 앱빌더 ③ 「와이어프레임 보기」 가 띄운다. */
 export const WIREFRAME_PATH = 'studio/wireframe.html';
 const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 피그마 보드처럼 이 앱의 화면을 한 장씩 프레임으로 가로로 나란히 놓고(화면이 하나여도 한 장), 프레임마다 위에 화면 이름표 · 안은 얇은 선(1px 회색)으로 그린 칸 · 글 · 단추, 그리고 **단추 하나하나마다** 그 단추에서 나가는 화살표로 어느 화면(또는 어느 칸)으로 이어지는지 이어 그린 HTML 한 장(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림 · 화면 수만큼 넓어도 된다).`;
@@ -153,7 +155,7 @@ export function planBrief(what: string, place: StudioPlace, name = ''): string {
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
   const id = String(appId || '').trim();
-  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say} 카드의 「참고한 것」 처럼 비슷한 앱의 화면 구조(목록 · 상세 · 입력 흐름)와 기능을 참고해서 짜 줘.\n${cardText(card)}\n${RULE}\n${WIRE}\n`
+  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${WIRE}\n`
     + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';

@@ -8,6 +8,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
+import { reviewResumeTarget } from './review-resume.js';   // #4632 ③ 앱 화면 새로고침 복귀
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
@@ -310,6 +311,8 @@ function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; 
 export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
+  //  #4632 앱빌더 ③ 의 앱 화면(#/i/…)을 보던 중 새로고침 — 앱빌더로 돌려보내 같은 화면과 코멘트 막대를 다시 연다(v2/review-resume.ts).
+  { const to = reviewResumeTarget(location.hash); if (to) location.replace(location.pathname + location.search + to); }
   root.hidden = false;
   watchStaleShell();   // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
   // ★ 이 부팅이 «워크스페이스 전환»으로 온 것인가 — switcher.ts switchTo 가 찍고 가는 표식(#2171).

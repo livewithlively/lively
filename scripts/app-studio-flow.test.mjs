@@ -108,6 +108,16 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(/피그마 보드처럼/.test(db3) && /단추 하나하나마다/.test(db3) && /얇은 선/.test(db3) && /화면이 하나여도 한 장/.test(db3), "W3 draftBrief — 그림은 피그마 보드처럼 · 얇은 선 · 단추마다 이어지는 화살표 · 화면이 하나여도 한 장", db3.slice(0, 120));
 }
 
+// ══ L 초안은 기존 서비스의 꼴을 따라 — 우선순위 높게(#4632 원준 2026-10-16 «레거시 회사들이나 UI 조사해서 그거랑 비슷하게 · 높은 우선순위로») ══
+{
+  const db4 = F.draftBrief(refCard, "both", "meeting-notes");
+  const L = db4.split("\n");
+  const at = L.findIndex((l) => /우선순위 높음/.test(l)), cardAt = L.findIndex((l) => /^\[\[기획카드\]\]/.test(l));
+  check(at >= 0 && /기존 서비스/.test(L[at]) && /UI/.test(L[at]) && /비슷하게/.test(L[at]) && /조사/.test(L[at]) && cardAt > at,
+    "L1 draftBrief — 짜기 전에 기존 서비스의 화면 · 기능 · UI 를 조사해 비슷하게, 「우선순위 높음」 으로 카드보다 먼저 말한다", L.slice(0, 3));
+  check(/회사 제품/.test(F.planBrief("회의록", "both")) && /조사/.test(F.planBrief("회의록", "both")), "L2 planBrief — 기획도 오래 쓰인 회사 제품을 조사해 견준다");
+}
+
 // ══ K 「판」 이 화면 글에 남지 않는다(#4632 원준 2026-10-15 «판 이라는 워딩 전면 금지 · 앱빌더 어디서도») — 주석을 걷은 소스에서 본다 ══
 //  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.
 {
