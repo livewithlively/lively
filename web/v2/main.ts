@@ -33,7 +33,7 @@ import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 �
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
 import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
 import { builderTabTitleFor, renderBuilderApp } from './builder.js';   // #4632 앱빌더(셸이 직접 그린다 · 앱 만들기 여섯 단계가 이 안에 선다)
-import { isBuilderProjectName, isBuilderSession } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
+import { isBuilderProjectName, isBuilderSession, isTrySessionRow } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
 import { guideTabTitle, parseGuideRoute, renderGuideApp } from '../guide/app.js';   // #4179 사용 가이드 앱(셸이 직접 그린다)
 import { renderWikiMain } from './wiki-main.js';   // #4233 [위키] 본문 목록(사이드 피크 · 우측 사이드바에 고정)
 import { wikiScopeOf } from '../lib/wiki-list.js';
@@ -953,7 +953,8 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   }
   const merged = mergeSessions(lastLive, lastLogs);
   //  끝난 로그인 세션은 목록에 세우지 않는다(#4551 — lib/proj-none 머리말). 도는 것은 둔다(지금 로그인 중인 창이다).
-  const sessions = merged.filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive));
+  //  앱빌더의 시험 세션(«"이름" 앱 시험» — ③ 세션 위젯으로 보기)도 세우지 않는다 — 앱빌더 안에서만 산다(원준 2026-10-15 «다른 사이드바나 이런 곳에 노출하지는 말고»).
+  const sessions = merged.filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive) && !isTrySessionRow(s));
   //  위탁 워커가 사이드바에서 설 프로젝트를 적는다(#4551) — 소속은 안 건드린다(lib/liv-work sideProjectId 머리말).
   placeLivWork(sessions, new Set(projects.map((p) => Number(p.id))));
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
@@ -1199,7 +1200,8 @@ function applyTabChrome(tab: ShellTab): void {
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
   //   mountProjectShell 끝에서 이 함수를 한 번 더 부른다.
-  const paneSide = tab.center.querySelector('.pn-pane[data-zone="side"]') as HTMLElement | null;
+  //  앱빌더 안의 시험 세션 화면(#4632 · .v2-try)은 제 우측 사이드바를 세션 아래에 쌓아 늘 보인다 — 셸의 서랍 대상이 아니다.
+  const paneSide = [...tab.center.querySelectorAll('.pn-pane[data-zone="side"]')].find((n) => !n.closest('.v2-try')) as HTMLElement | undefined || null;
   if (mobile) mobile.setAside(!tab.noAside || !!shown || (mobile.isMobile() && !!paneSide));
   //  단추의 얼굴도 서랍의 정체를 따른다(#4088 후속): 칸 셸이면 폴더 아이콘·«자료·곁칸 열기», 그 밖은 타임라인. 초점도 그 곁칸으로.
   if (mobile) { mobile.setAsideKind(paneSide ? 'panes' : 'timeline'); mobile.setAsideTarget(paneSide); }

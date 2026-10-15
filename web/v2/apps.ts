@@ -16,6 +16,7 @@ import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';
 import { ctxMenu } from './panes-kit.js';
 import { studioRecBuildingFor, studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
 import { builderRoute, isAppInProgress, isBuildingSession } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
+import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -257,7 +258,7 @@ export function openLaunchpad(): void {
         ...(draft ? [{ label: '이어서 만들기', icon: MENU_ICON.resume, hint: 'AI 와 말로 고쳐요', run: () => { closeLaunchpad(); location.hash = builderRoute('resume', draft.sid); } }] : []),
         ...(forApp ? [
           { label: '내 사본 떠서 고치기', icon: MENU_ICON.copy, hint: '원본은 그대로 · 내 식으로', run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'copy'); } },
-          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '고친 판은 내 초안 · 공개하면 모두에게' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
+          { label: '원본을 고치기', icon: MENU_ICON.edit, hint: ws && ws.canEdit ? '고친 버전은 나만 봐요 · 공개하면 모두에게' : '지정한 사람만 고칠 수 있어요', off: !(ws && ws.canEdit), run: () => { closeLaunchpad(); location.hash = builderRoute('app', forApp.id, 'edit'); } },
           { sep: true, label: '' },
         ] : []),
         { label: isHidden ? '다시 넣기' : '목록에서 빼기', icon: isHidden ? 'plus' : 'minus', hint: isHidden ? '앱 찾기에 다시 보여요' : '앱은 그대로 · 나한테만 안 보여요',
@@ -311,7 +312,7 @@ export function openLaunchpad(): void {
         isScreen ? null : el('span', { class: 'v2-pad-badge', text: '세션 앱' }),
         //  #4667 나만 보는 앱(공개 전 — 나에게만 이 칸이 선다) · 내 초안이 걸린 공개 앱(나는 초안을, 남은 공개 판을 본다).
         a.visibility === 'me' ? el('span', { class: 'v2-pad-badge v2-pad-badge--mine', text: '나만', title: '공개하지 않은 앱이라 나에게만 보여요 · 앱빌더 배포 설정에서 공개할 수 있어요' })
-          : a.draft && a.view === 'installed' ? el('span', { class: 'v2-pad-badge v2-pad-badge--draft', text: '초안', title: a.draft.versionNo + '판은 나에게만 보이는 초안이에요 · 다른 사람은 공개 판을 써요' }) : null,
+          : a.draft && a.view === 'installed' ? el('span', { class: 'v2-pad-badge v2-pad-badge--draft', text: '내 버전', title: verJ(a.draft.versionNo, '은') + ' 나에게만 보이는 버전이에요 · 다른 사람은 공개 버전을 써요' }) : null,
         //  #4592 ⑦ 팀에 알리기의 흔적 — 일주일 안에 생긴 워크스페이스 앱은 「새로 · 누구」, 사본은 「원본: …」(만든 사람 · 원본은 서버 기록 #4667).
         a.visibility !== 'me' && a.source.kind !== 'builtin' && a.installedAt && Date.now() - a.installedAt < 7 * 86400000 ? el('span', { class: 'v2-pad-badge v2-pad-badge--new', text: '새로' + (a.madeBy ? ' · ' + a.madeBy : '') }) : null,
         a.origin && a.origin.title ? el('small', { class: 'v2-pad-origin', text: '원본: ' + a.origin.title }) : null);

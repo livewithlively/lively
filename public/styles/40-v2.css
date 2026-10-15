@@ -1792,7 +1792,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-steps-list { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
 /* 말풍선 · 처음 안내 · 둘러보기 · ? 메뉴 */
 .v2-studio-coach { position: fixed; z-index: 5; background: var(--ink); color: #fff; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px rgba(21, 35, 59, .25); pointer-events: none; }   /* 누름은 아래로 통과 — 첫 누름이 말풍선에 먹히지 않는다 */
-.v2-studio-coach b { color: #C8B9FF; }
+.v2-studio-coach b { display: block; margin-bottom: 2px; color: #C8B9FF; }   /* 「처음 안내」 머리 뒤에 줄을 바꾼다(원준 2026-10-15 «그 뒤 본문과 엔터가 없음») */
 .v2-studio-coach small { display: block; margin-top: 4px; color: #C8B9FF; font-size: 12px; }
 .v2-studio-intro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(21, 35, 59, .35); padding: 20px; overflow: auto; }
 .v2-studio-intro-box { width: min(760px, 100%); background: var(--bg); border-radius: 16px; padding: 22px 24px; display: grid; gap: 14px; box-shadow: 0 20px 60px rgba(21, 35, 59, .3); }
@@ -1860,7 +1860,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-toolrow { display: flex; align-items: center; gap: 8px; }
 .v2-studio-tools { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
 .v2-studio-tools button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; height: 32px; padding: 0 13px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 800; color: var(--ink-sub); cursor: pointer; }
-.v2-studio-tools button .ico { font-size: 13px; }
+.v2-studio-tools button .ico { display: inline-flex; font-size: 13px; }
+.v2-studio-tools button .ico svg { display: block; }
 .v2-studio-tools button.on { background: var(--purple, #7B61E0); color: #fff; }
 .v2-studio-toolcount { color: var(--muted); font-size: 12.5px; }
 .v2-studio-toolhelp { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border-radius: 10px; background: rgba(123, 97, 224, .08); border: 1px solid rgba(123, 97, 224, .22); font-size: 13px; line-height: 1.5; color: var(--ink-sub); }
@@ -3037,6 +3038,19 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub-go button:disabled { opacity: .6; cursor: default; box-shadow: none; }
 .v2-studio-hub-go button.alt { background: var(--bg); color: var(--purple-text, #5B3FD0); box-shadow: 0 0 0 1.5px var(--purple, #7B61E0); }
 .v2-studio-hub .v2-studio-tray { width: 100%; }
+/* 와이어프레임 보기(#4632 원준 2026-10-15 «클로드 아티팩트처럼 버튼 누르면») — 두 단추 아래 조용한 줄 하나 · 누르면 이 자리 위에 그림 창 */
+.v2-studio-wf-btn { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: -4px auto 0; padding: 6px 12px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--purple-text, #5B3FD0); cursor: pointer; }
+.v2-studio-wf-btn b { font-size: 13.5px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+.v2-studio-wf-btn small { font-size: 12px; color: var(--muted); }
+.v2-studio-wf-btn:hover { background: rgba(123, 97, 224, .08); }
+.v2-studio-wf { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15, 18, 30, .42); }
+.v2-studio-wf-card { width: min(1180px, 100%); height: min(820px, 100%); display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--bg); box-shadow: 0 24px 60px rgba(15, 18, 30, .35); }
+.v2-studio-wf-head { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+.v2-studio-wf-head small { color: var(--muted); font-size: 12px; }
+.v2-studio-wf-body { flex: 1; min-height: 0; display: flex; background: var(--surface); }
+.v2-studio-wf-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.v2-studio-wf-empty { margin: auto; max-width: 420px; padding: 24px; display: grid; gap: 10px; justify-items: center; text-align: center; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
+.v2-studio-wf-empty p { margin: 0; }
 .v2-studio-hub .v2-studio-tray-list { max-height: 260px; }
 .v2-studio-hub-wait { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
 .v2-studio-hub-fine { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
@@ -3062,6 +3076,31 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 @media (max-width: 900px) {
   .v2-review-bar { left: 8px; right: 8px; transform: none; max-width: none; }
   .v2-studio-hub-go button { min-width: 0; width: 100%; }
+}
+/* 막대가 시험 세션 맨 위(문패 줄)에 얹힌 꼴 — 떠 있지 않아 세션의 입력칸 · 앱을 가리지 않는다(원준 2026-10-15). 의견 칸은 막대 아래로(.v2-review-tray--fixed). */
+.v2-review-bar.v2-review-bar--dock { position: relative; z-index: auto; left: auto; right: auto; bottom: auto; top: auto; transform: none; max-width: none; border-radius: 0; padding: 8px 16px; box-shadow: none; border-bottom: 1px solid color-mix(in srgb, var(--purple, #7B61E0) 28%, var(--line)); background: color-mix(in srgb, var(--purple, #7B61E0) 7%, var(--bg)); }
+.v2-review-tray.v2-review-tray--fixed { position: fixed; z-index: 86; right: auto; bottom: auto; }
+.v2-review-flip[hidden] { display: none; }
+
+/* ── ③ 시험 세션(#4632 · v2/app-try-session.ts) — 「세션 위젯으로 보기」. 진짜 세션 화면(mountPanes)을 앱빌더 자리에 그대로 세우고,
+   코멘트 막대는 맨 위 문패 줄 **위에 얹는다** — 세션 · 우측 사이드바의 자리와 크기는 진짜와 같다(원준 2026-10-15 «윗부분을 차지하면 사실과 다르다»). ── */
+.v2-try { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.v2-try--fixed { position: fixed; z-index: 80; }
+.v2-try-shell { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-try-dock { position: absolute; z-index: 9; top: 0; left: 0; right: 0; }
+.v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 57px); box-sizing: border-box; flex-wrap: nowrap; }   /* 문패(.pn-door) 높이를 꼭 덮는다 — 높이는 app-try-session 이 재어 넘긴다 */
+.v2-review-bar--dock > .v2-studio-sp { display: none; }
+.v2-review-bar--dock .v2-review-note { flex: 0 1 auto; min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }   /* 긴 AI 소식이 도구 단추를 밀어 줄바꿈시키지 않게 */
+.v2-review-bar--dock .v2-review-hint { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+/* 좁은 폭(≤900) — 진짜 셸은 우측 사이드바를 서랍으로 접지만(42-v2-panes · 모바일 크롬), 시험 세션은 앱을 보려고 여는 화면이라 세션 아래에 쌓아 늘 보인다.
+   막대는 한 줄을 지킨다 — 도구는 그림만(이름은 툴팁) · 도움말은 숨긴다. */
+@media (max-width: 900px) {
+  .v2-try .pn-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 36%) minmax(0, 1fr); }
+  .v2-try .pn-body > .pn-pane[data-zone="side"] { display: flex; position: static; width: auto; border-left: 0; border-top: 1px solid var(--line); box-shadow: none; }
+  .v2-try .pn-body > .v2-split-x, .v2-try .pn-side-reopen { display: none; }
+  .v2-review-bar--dock .v2-review-tools button > span:not(.ico) { display: none; }
+  .v2-review-bar--dock .v2-review-hint { display: none; }
+  .v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 47px); padding-block: 6px; }   /* 좁은 폭의 문패 높이 */
 }
 .v2-studio-body--hub { grid-template-columns: minmax(0, 1fr) clamp(300px, 28%, 380px); }
 .v2-studio-body--hub .v2-studio-app { box-shadow: none; background: none; }

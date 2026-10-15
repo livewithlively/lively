@@ -9,6 +9,7 @@
 //     권한 · 없는 앱(4xx)이면 공개도 같은 까닭으로 안 되니 묻지 않고 알린다.
 import { api, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
+import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
 
 interface PublishPreview {
   changes?: string[]; notes?: string[]; blocked?: string[]; incomplete?: string | null;
@@ -58,12 +59,12 @@ async function ask(appId: string, opts?: { versionNo?: number; title?: string })
   const dropped = (p.tables && Array.isArray(p.tables.dropped_columns)) ? p.tables.dropped_columns : [];
   const gone = Array.isArray(p.gone_tables) ? p.gone_tables : [];
   const kept = dropped.some((d) => Number(d && d.rows) > 0) || gone.some((g) => g && g.action === 'archive');
-  const what = opts && opts.versionNo ? opts.versionNo + '판으로 되돌려 공개하면' : '공개하면';
+  const what = opts && opts.versionNo ? verJ(opts.versionNo, '으로') + ' 되돌려 공개하면' : '공개하면';
   return confirmDialog({
     title: changes.length ? what + ' 표가 이렇게 바뀌어요' : '표에 할 일을 다 보지 못했어요',
     message: p.incomplete ? (changes.length ? '다 보지는 못했어요 — ' : '') + p.incomplete : undefined,
     lines: [...changes, ...notes.map((n) => '참고 — ' + n)],
-    note: '공개하면 다른 사람도 모두 이 판을 써요.' + (kept ? ' 지운 값은 따로 보관돼요(앱에서는 더 안 보여요).' : '')
+    note: '공개하면 다른 사람도 모두 이 버전을 써요.' + (kept ? ' 지운 값은 따로 보관돼요(앱에서는 더 안 보여요).' : '')
       + (p.incomplete ? ' 공개하다가 데이터가 새 규칙에 맞지 않으면 아무것도 바뀌지 않고 멈춰요.' : ''),
     confirmText: changes.length ? '공개하기' : '그래도 공개하기',
     danger: dropped.length > 0 || gone.length > 0,

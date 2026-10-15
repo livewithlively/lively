@@ -22,6 +22,7 @@ import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versio
 import { bandText, draftTextFor, sessAppMenuRows } from '../lib/app-menu.js';
 import { builtinAppIcon } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
+import { verName } from '../lib/studio-flow.js';
 
 export interface AttachedApp {
   app_id: string;
@@ -316,7 +317,7 @@ export function sessAppPart(ctx: PartCtx): Part {
     //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.
     const extra = (o?.extra ?? []).map((it) => ({ label: it.label, run: () => answer(it.id) }));
     const all = extra.length ? [...extra, { label: '', sep: true }, ...rows] : rows;
-    ctxMenu(x, y, all, { title: cur.title, sub: cur.version_no ? `${cur.version_no}판 · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220,
+    ctxMenu(x, y, all, { title: cur.title, sub: cur.version_no ? `${verName(cur.version_no)} · 이 세션에 붙음` : '이 세션에 붙음', minWidth: 220,
       //  메뉴 엔진은 줄을 누르면 «닫고 나서» 그 줄의 일을 한다 — 닫힘에서 곧바로 null 을 돌려주면 고른 것이 묻힌다. 한 박자 늦춰 고른 것이 먼저 가게 한다.
       onClose: () => { window.setTimeout(() => answer(null), 60); } });
   }
@@ -324,12 +325,12 @@ export function sessAppPart(ctx: PartCtx): Part {
   function paintHead(cur: AttachedApp | null): void {
     head.hidden = !cur || headless;
     if (!cur) { head.replaceChildren(); return; }
-    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 판 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
+    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 버전 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
       onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openMenu(cur, r.right, r.bottom + 4); } }, pnIcon('more', 'pn-i sm'));
     head.replaceChildren(
       faceIcon(cur, 'pn-i sm'),
       el('b', { class: 'pn-sessapp-title ell', text: cur.title }),
-      ...(cur.version_no ? [el('span', { class: 'pn-sessapp-ver', text: `${cur.version_no}판` })] : []),
+      ...(cur.version_no ? [el('span', { class: 'pn-sessapp-ver', text: verName(cur.version_no) })] : []),
       el('span', { class: 'pn-sp' }),
       more);
     //  우클릭도 같은 메뉴 — 머리줄 어디서든.

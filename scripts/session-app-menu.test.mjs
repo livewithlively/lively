@@ -25,11 +25,11 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   const calls = [];
   const h = Object.fromEntries(["edit", "prefs", "versions", "original", "big", "detach"].map((k) => [k, () => calls.push(k)]));
   const rows = menu.sessAppMenuRows({ title: "장표 수정", hasPrefs: true, overridesBuiltin: true, versionNo: 3 }, h);
-  eq(rows.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "판 이력…", "원본으로 되돌리기", "—", "크게 보기", "이 세션에서 떼기"], "S6-1 여섯 항목 + 구분선, 고치는 길 → 보는 길 → 떼기 순서");
+  eq(rows.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "버전 이력…", "원본으로 되돌리기", "—", "크게 보기", "이 세션에서 떼기"], "S6-1 여섯 항목 + 구분선, 고치는 길 → 보는 길 → 떼기 순서");
   rows.filter((r) => r.run).forEach((r) => r.run());
   eq(calls, ["edit", "prefs", "versions", "original", "big", "detach"], "S6-1 줄마다 제 손잡이를 부른다");
   ok(rows[rows.length - 1].danger === true && !rows[0].danger, "S6-1 떼기만 위험색(맨 아래 관례)");
-  eq(rows[2].hint, "3판", "S6-1 판 이력 줄의 힌트는 지금 판 번호");
+  eq(rows[2].hint, "V3", "S6-1 버전 이력 줄의 힌트는 지금 버전 이름(#4632 — 판 대신 초안 · V2 …)");
   const bare = menu.sessAppMenuRows({ title: "x", hasPrefs: false, overridesBuiltin: false, versionNo: null }, h);
   eq([bare[1].off, bare[3].off, bare[2].hint], [true, true, undefined], "S6-1 표시 설정을 구독 안 했으면 그 줄이, 원본 그대로면 「원본으로」가 흐려진다 · 판을 모르면(옛 게이트웨이) 힌트 없음");
   ok(bare[1].hint === "이 앱은 표시 설정이 없어요" && /지금이 원본/.test(bare[3].hint), "S6-1 흐린 줄은 힌트가 까닭을 말한다(격리 리뷰 (1)·(3))");
@@ -43,7 +43,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
 
 // ══ S6-3 방금 고침 띠 ══════════════════════════════════════════════════════════
 {
-  eq(menu.bandText({ version_no: 2, note: "글 줄 칸을 아래로" }), "2판 · 방금 고침 · 글 줄 칸을 아래로", "S6-3 띠 글 — 판 · 방금 고침 · 요지");
+  eq(menu.bandText({ version_no: 2, note: "글 줄 칸을 아래로" }), "V2 · 방금 고침 · 글 줄 칸을 아래로", "S6-3 띠 글 — 판 · 방금 고침 · 요지");
   eq(menu.bandText({}), "방금 고침", "S6-3 판·요지를 모르면 「방금 고침」만");
 }
 
@@ -61,7 +61,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   eq(menu.originVersionNo(V.slice(0, 2)), null, "S6-4 빌트인에서 갈라지지 않은 앱은 원본 판이 없다");
   const reverted = [];
   const rows = menu.versionRows([...V].reverse(), (n) => reverted.push(n));
-  eq(rows.map((r) => r.label), ["3판 · 보낸 줄 접기", "2판 · 글 줄 칸을 아래로", "1판 · 라이블리 기본 앱"], "S6-4 줄은 최신 먼저 · 원본 판은 「라이블리 기본 앱」");
+  eq(rows.map((r) => r.label), ["V3 · 보낸 줄 접기", "V2 · 글 줄 칸을 아래로", "초안 · 라이블리 기본 앱"], "S6-4 줄은 최신 먼저 · 원본 판은 「라이블리 기본 앱」");
   eq([rows[0].off, rows[0].hint, rows[1].off], [true, "지금", false], "S6-4 지금 판은 누를 수 없고 「지금」");
   ok(/원본 · 릴리스 1\.0\.0/.test(rows[2].hint), "S6-4 원본 판의 힌트는 릴리스 판 번호");
   rows[1].run(); rows[2].run();
@@ -109,7 +109,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];
   ok((upd.match(/m\.frame\.reload\(\);/g) || []).length === 1 && /showBand\(cur, ev\);/.test(upd) && /^\s*return;$/m.test(upd), "S6-3 updated → 그 앱 화면 다시 띄우기 1회 + 띠, 데이터 분기로 안 내려간다");
-  ok(/^\s*\.\.\.\(cur\.version_no \? \[el\('span', \{ class: 'pn-sessapp-ver', text: `\$\{cur\.version_no\}판` \}\)\] : \[\]\),/m.test(PANE) && /versionNo: cur\.version_no \?\? null/.test(PANE), "S6-1 판 번호를 모르면(null) 머리줄 「N판」을 숨기고 메뉴엔 「판 이력…」만(리뷰 (3))");
+  ok(/^\s*\.\.\.\(cur\.version_no \? \[el\('span', \{ class: 'pn-sessapp-ver', text: verName\(cur\.version_no\) \}\)\] : \[\]\),/m.test(PANE) && /versionNo: cur\.version_no \?\? null/.test(PANE), "S6-1 판 번호를 모르면(null) 머리줄 「N판」을 숨기고 메뉴엔 「판 이력…」만(리뷰 (3))");
   ok(/bandTimer = window\.setTimeout\(\(\) => \{ bandTimer = 0; band\.hidden = true; \}, 60_000\);/.test(PANE), "S6-3 띠는 60초 뒤 걷힌다");
   ok(/onclick: \(\) => \{ void revertToPrevious\(cur\.app_id, cur\.title\)\.then\(\(v\) => \{ if \(v != null\) afterRevert\(v\); \}\); \}/.test(PANE), "S6-3 띠의 「되돌리기」 = 바로 앞 판, 되돌린 뒤 그 자리에서 다시 띄운다");
   ok(/^\s*root\.append\(tabs, head, band, body\);/m.test(PANE) && /^\s*paintHead\(cur\);/m.test(PANE), "S6-1 머리줄은 탭 줄 아래 · 앱이 하나여도 그린다(paint 마다)");

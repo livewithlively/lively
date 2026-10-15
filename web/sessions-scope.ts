@@ -17,6 +17,7 @@ import {
   type HistKind, type HistScope, type HistSideRow, type HistState,
 } from './lib/hist-scope.js';
 import { EMBEDDED } from './v2/embed.js';
+import { isTrySessionRow } from './lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 세우지 않는다
 
 /** 셸이 앱으로 실은 액자인가 — 셸이 붙인 표(embed=1 · shell=classic, v2/apps.ts embedUrl)로 정한다. 부모 창이 있나로 추측하지 않는다(embed.ts 머리말). */
 const IN_SHELL: boolean = ((): boolean => {
@@ -45,7 +46,8 @@ export function loadHistRows(force = false): Promise<HistLoad> {
   if (!force && rowsCache && Date.now() - rowsCache.at < ROWS_TTL_MS) return rowsCache.p;
   const mine = ++rowsSeq;
   const p = Promise.all([
-    api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (Array.isArray(d?.sessions) ? d.sessions : [])).catch(() => null),
+    //  앱빌더 시험 세션(«"이름" 앱 시험»)은 세우지 않는다 — 앱빌더 안에서만 산다(#4632). 기록 쪽은 loadMySessions 가 거른다.
+    api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (Array.isArray(d?.sessions) ? d.sessions.filter((s: any) => !isTrySessionRow(s)) : [])).catch(() => null),
     loadMySessions(force).then((d) => d).catch(() => null),
   ]).then(([live, logs]): HistLoad => {
     const out: HistLoad = { rows: !live && !logs ? [] : mergeHistoryRows(live || [], logs ? logs.sessions : [], Date.now()), live: !!live, logs: !!logs, truncated: !!(logs && logs.truncated) };

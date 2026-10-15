@@ -25,6 +25,7 @@ import { dashCtl, dashEmpty } from './chrome.js';
 import { openSessMenu, sessBaseSessions, sessFilterLabel, sessIsClosedProjSess, sessIsProjClosed, sessMatchSrc, sessMatchState, sessOpenFilterMenu, sessOpenPrefs } from './widget-sessions-popovers.js';
 // #1582 — 세션 종료 확인창은 전 화면 공용 정의 하나만 쓴다(문구가 화면마다 갈라지지 않게).
 import { confirmForceRestore, confirmSessionEnd, notTrashed, retireSessions, retiredToastText } from '../session-actions.js';
+import { isTrySessionRow } from '../lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 목록에 세우지 않는다
 import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { confirmDialog } from '../ui-primitives.js';
 
@@ -340,7 +341,7 @@ function sessDraw(ctx: SessCtx) {
 
 // base 세션 + 프로젝트 세션 재병합(재렌더 없이 sessions 만 갱신).
 async function sessRefetch(ctx: SessCtx) {
-  const d = await api('/api/ui/terminal/sessions?includeProjects=owned'); ctx.sessions = notTrashed<any>((d && d.sessions) || []); // #1139 내 프로젝트 세션·복원 가능 포함 · 휴지통은 뺀다(#3778)
+  const d = await api('/api/ui/terminal/sessions?includeProjects=owned'); ctx.sessions = notTrashed<any>((d && d.sessions) || []).filter((x: any) => !isTrySessionRow(x));   // 앱빌더 시험 세션은 앱빌더 안에서만(#4632) // #1139 내 프로젝트 세션·복원 가능 포함 · 휴지통은 뺀다(#3778)
   const withSess = (ctx.projects || []).filter((p) => Number(p.my_session_count) > 0);
   if (withSess.length) {
     const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
@@ -370,7 +371,7 @@ async function fillSessions(zone, onCount, projectsP?) {
     [sessions, cfg, projects, lists] = await Promise.all([
       // #1139 includeProjects=owned — '내가 만든' 프로젝트 세션까지 서버가 함께 준다(남의 것은 여전히 제외).
       //  아래 프로젝트별 병합만으로는 **세션이 전부 복원 가능(tmux 죽음)인 프로젝트가 통째로 빠져** 복원 가능 세션이 안 보였다.
-      api('/api/ui/terminal/sessions?includeProjects=owned').then((d) => notTrashed<any>((d && d.sessions) || [])),   // 휴지통은 뺀다(#3778)
+      api('/api/ui/terminal/sessions?includeProjects=owned').then((d) => notTrashed<any>((d && d.sessions) || []).filter((x: any) => !isTrySessionRow(x))),   // 휴지통은 뺀다(#3778)
       api('/api/ui/terminal/config').catch(() => null), // 라벨 보강용 — 실패해도 폴백으로 진행
       (projectsP || Promise.resolve([])).catch(() => []),  // 프로젝트 세션의 프로젝트명 매핑용
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []), // 프로젝트 → 리스트(영역) 이름 매핑용
