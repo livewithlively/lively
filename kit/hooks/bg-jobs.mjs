@@ -58,6 +58,92 @@ export const MAX_SCAN_BYTES = 96 * 1024 * 1024;
 const CHUNK = 4 * 1024 * 1024;
 const MAX_IDS = 4000;
 
+// ── 예약 깨움 · 반복 예약 (#4695 T5) ───────────────────────────────────────────────────────────
+//  왜: 하네스 종료 규칙은 «완료(턴 끝 ∧ 질의 아님 ∧ 기다리는 일 없음) ∧ 안 봄» 이 N분 이어지면 하네스를 끈다. 그런데 «기다리는 일» 에는
+//   백그라운드 작업(위 셈) 말고도 **AI 가 스스로 다시 깨어나기로 한 약속**이 있다 — /loop 의 ScheduleWakeup, CronCreate 반복 예약.
+//   그 동안 하네스는 턴 밖에서 «쉬는» 것처럼 보이지만, 끄면 깨움이 영영 안 온다(예약은 그 하네스 프로세스 안에만 산다). T2 실측
+//   (#4692 §3-2): 상민님 매니지드 실행 시간의 42% 가 «다음 턴을 작업 알림·예약 깨움이 연 공백» 이었다 — 프로세스 그룹 판별(#2652)로는
+//   안 잡힌다(깨움은 프로세스가 아니다).
+//  셈(대화 기록 문구 그대로 — Claude Code 2.1.300 실측):
+//   · ScheduleWakeup 결과 줄의 toolUseResult.scheduledFor(ms) = 다음 깨움 시각. 가장 나중 결과가 정본이다(새 깨움이 앞 것을 갈음한다).
+//     stop:true 로 부른 깨움(루프 끝)은 깨움을 지운다. scheduledFor 가 없으면 그 줄 시각 + 입력 delaySeconds 로 잡는다.
+//     깨움이 울린 뒤 새 턴이 다시 깨움을 걸지 않으면 그 값은 과거가 된다 — 지난 깨움을 «기다림» 으로 읽지 않는 것은 받는 쪽 몫이다.
+//   · CronCreate 성공 = 반복(또는 한 번) 예약 하나. CronDelete 성공 · 한 번짜리가 울림(scheduled_task_fire 의 taskId)이면 닫힌다.
+//     반복 예약은 Claude Code 가 7일 뒤 스스로 지운다(도구 설명) — 그보다 오래된 것은 세지 않는다.
+//  ⚠ 틀리는 방향: 결과를 못 알아본 예약 도구 호출이 남으면 «모른다»(sched:false) — 받는 쪽은 그 세션을 끄지 않는다.
+const SCHED_HINTS = ['"name":"ScheduleWakeup"', '"name":"CronCreate"', '"name":"CronDelete"', '"scheduledFor"', "scheduled_task_fire"];
+export const CRON_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+//  캐시 판 — 판이 다르면 처음부터 다시 읽는다(예약 셈이 붙기 전 캐시엔 앞쪽 깨움이 없다 — 그걸 «깨움 없음» 으로 읽으면 루프가 꺼진다).
+const CACHE_V = 2;
+
+function timeOf(o) {
+  const t = Date.parse(String(o?.timestamp ?? ""));
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * 대화 기록 한 줄의 예약 사건(순수) — 표는 bg-jobs.test.mjs.
+ *  uses    = 예약 도구 호출(결과를 기다린다) — { id, kind: wake|cron|uncron, stop?, delay?, recurring?, target? }
+ *  results = 그 호출들에 답이 된 결과 — { id, error, scheduledFor?, key?, at }
+ *  fired   = 울린 예약의 taskId(scheduled_task_fire)
+ */
+export function schedEventsOf(o) {
+  const uses = [], results = [];
+  let fired = null;
+  if (!o || typeof o !== "object" || o.isSidechain === true) return { uses, results, fired };
+  if (o.type === "system" && o.subtype === "scheduled_task_fire" && typeof o.taskId === "string") fired = o.taskId;
+  const msg = o.message && typeof o.message === "object" ? o.message : null;
+  if (msg && o.type === "assistant" && Array.isArray(msg.content)) {
+    for (const b of msg.content) {
+      if (!b || b.type !== "tool_use" || typeof b.id !== "string") continue;
+      const inp = b.input && typeof b.input === "object" ? b.input : {};
+      if (b.name === "ScheduleWakeup") uses.push({ id: b.id, kind: "wake", stop: inp.stop === true, delay: Number(inp.delaySeconds) || 0 });
+      else if (b.name === "CronCreate") uses.push({ id: b.id, kind: "cron", recurring: inp.recurring !== false });
+      else if (b.name === "CronDelete") uses.push({ id: b.id, kind: "uncron", target: String(inp.id ?? "") });
+    }
+  }
+  if (msg && o.type === "user" && Array.isArray(msg.content)) {
+    const tur = o.toolUseResult && typeof o.toolUseResult === "object" ? o.toolUseResult : null;
+    for (const b of msg.content) {
+      if (!b || b.type !== "tool_result" || typeof b.tool_use_id !== "string") continue;
+      const text = textsOf(b.content).join("\n");
+      const sf = Number(tur?.scheduledFor);
+      //  CronCreate 가 돌려주는 작업 id — 구조화 결과가 정본이고, 없으면 글에서 줍는다(형식 미실측 — 못 주우면 호출 id 로 센다).
+      const key = String(tur?.id ?? tur?.jobId ?? tur?.taskId ?? "")
+        || (/\b(?:ID|id|job)\b\W{0,3}([A-Za-z0-9_-]{6,40})/.exec(text)?.[1] ?? "");
+      results.push({ id: b.tool_use_id, error: b.is_error === true, ...(Number.isFinite(sf) && sf > 0 ? { scheduledFor: sf } : {}), ...(key ? { key } : {}), at: timeOf(o) });
+    }
+  }
+  return { uses, results, fired };
+}
+
+/** 예약 상태에 한 줄을 먹인다(순수 — 제자리 갱신). sched = { pend: {id: use}, wake: ms|null, crons: {key: {at, recurring}}, wakeUnknown } */
+function feedSched(o, sched) {
+  const ev = schedEventsOf(o);
+  for (const u of ev.uses) sched.pend[u.id] = u;
+  for (const r of ev.results) {
+    const u = sched.pend[r.id];
+    if (!u) continue;
+    delete sched.pend[r.id];
+    if (r.error) continue;
+    if (u.kind === "wake") {
+      if (u.stop) { sched.wake = null; sched.wakeUnknown = false; continue; }
+      const at = r.scheduledFor ?? (r.at && u.delay > 0 ? r.at + u.delay * 1000 : 0);
+      sched.wake = at > 0 ? at : null;
+      //  깨움은 걸렸는데 시각을 못 구했다(결과 모양이 바뀌었다 — 2주에 판이 열다섯 번 오른다) — «깨움 없음» 이 아니라 «모른다» 다.
+      //   없음으로 읽으면 /loop 세션이 일제히 «완료» 가 되어 끄인다(격리 리뷰). 다음에 시각을 아는 깨움·루프 끝(stop)이 오면 풀린다.
+      sched.wakeUnknown = !(at > 0);
+    } else if (u.kind === "cron") {
+      sched.crons[r.key || u.id] = { at: r.at || 0, recurring: u.recurring !== false };
+    } else if (u.kind === "uncron" && u.target) {
+      delete sched.crons[u.target];
+    }
+  }
+  if (ev.fired && sched.crons[ev.fired] && !sched.crons[ev.fired].recurring) delete sched.crons[ev.fired];
+}
+
+const emptySched = () => ({ pend: {}, wake: null, crons: {}, wakeUnknown: false });
+
 function textsOf(content) {
   if (typeof content === "string") return [content];
   if (!Array.isArray(content)) return [];
@@ -125,9 +211,18 @@ export function jobEventsOf(o) {
 export function feedLines(text, state) {
   const open = new Set(state.open), closed = new Set(state.closed), pending = new Set(state.pending || []);
   const shells = { ...(state.shells || {}) };   // 열린 셸 작업 id → 출력 파일
+  //  #4695 — 예약 깨움·반복 예약(위 머리말). 상태를 복사해 쓴다(이 함수는 들어온 상태를 바꾸지 않는다).
+  const s0 = state.sched && typeof state.sched === "object" ? state.sched : emptySched();
+  const sched = { pend: { ...(s0.pend || {}) }, wake: Number.isFinite(s0.wake) ? s0.wake : null, crons: { ...(s0.crons || {}) }, wakeUnknown: s0.wakeUnknown === true };
   for (const line of text.split("\n")) {
-    if (!line || !HINTS.some((h) => line.includes(h))) continue;
+    if (!line) continue;
+    const jobHint = HINTS.some((h) => line.includes(h));
+    //  예약 도구의 결과 줄은 고유한 낱말이 없을 수 있다(CronCreate 형식 미실측) — 결과를 기다리는 호출이 있으면 결과 줄을 다 본다.
+    const schedHint = SCHED_HINTS.some((h) => line.includes(h)) || (Object.keys(sched.pend).length > 0 && line.includes('"tool_result"'));
+    if (!jobHint && !schedHint) continue;
     let o; try { o = JSON.parse(line); } catch { continue; }
+    if (schedHint) feedSched(o, sched);
+    if (!jobHint) continue;
     const ev = jobEventsOf(o);
     for (const id of ev.expects) pending.add(id);
     for (const id of ev.answered) pending.delete(id);
@@ -136,7 +231,7 @@ export function feedLines(text, state) {
   }
   for (const id of Object.keys(shells)) if (!open.has(id)) delete shells[id];
   //  닫힌 id 는 «끝난 뒤에 띄움 줄이 다시 읽히는» 일(같은 줄 두 벌)을 막는 데만 쓴다 — 오래된 것부터 버린다.
-  return { open: [...open], closed: [...closed].slice(-MAX_IDS), pending: [...pending].slice(-MAX_IDS), shells };
+  return { open: [...open], closed: [...closed].slice(-MAX_IDS), pending: [...pending].slice(-MAX_IDS), shells, sched };
 }
 
 /**
@@ -201,14 +296,30 @@ export function deadShells(shells, deps = {}) {
  * @param {object} [deps]  시험용 — held(paths) 로 «쥔 파일» 판정을 바꿔 끼운다
  */
 export function countOpenJobs(file, cacheFile, deps = {}) {
+  return openWork(file, cacheFile, deps)?.bg ?? null;
+}
+
+/**
+ * 이 대화가 **기다리는 일** 전부(#4695 T5) — 못 읽으면 null.
+ *  · bg     = 열린 백그라운드 작업 수(countOpenJobs 와 같은 값 — 띄움을 못 알아봤으면 null)
+ *  · wakeMs = 가장 나중 ScheduleWakeup 이 잡은 깨움 시각(ms) — 없으면 null. **지났을 수 있다**(받는 쪽이 지금과 비교한다).
+ *  · cron   = 7일 안에 만든 열린 CronCreate 예약 수
+ *  · sched  = 예약 셈을 믿을 수 있나 — 결과를 못 알아본 예약 호출이 남으면 false(받는 쪽은 그 세션을 끄지 않는다)
+ * @param {object} [deps]  시험용 — held(paths) · now()
+ */
+export function openWork(file, cacheFile, deps = {}) {
   try {
     if (!file) return null;
     const size = statSync(file).size;
     let st = null;
     try { st = JSON.parse(readFileSync(cacheFile, "utf8")); } catch { /* 첫 읽기 */ }
-    let state = { open: [], closed: [] }, from = 0;
-    if (st && st.file === file && Number.isFinite(st.size) && st.size <= size && Array.isArray(st.open) && Array.isArray(st.closed)) {
-      state = { open: st.open, closed: st.closed, pending: Array.isArray(st.pending) ? st.pending : [], shells: st.shells && typeof st.shells === "object" ? st.shells : {} }; from = st.size;
+    let state = { open: [], closed: [], sched: emptySched() }, from = 0;
+    if (st && st.v === CACHE_V && st.file === file && Number.isFinite(st.size) && st.size <= size && Array.isArray(st.open) && Array.isArray(st.closed)) {
+      state = {
+        open: st.open, closed: st.closed, pending: Array.isArray(st.pending) ? st.pending : [], shells: st.shells && typeof st.shells === "object" ? st.shells : {},
+        sched: st.sched && typeof st.sched === "object" ? st.sched : emptySched(),
+      };
+      from = st.size;
     }
     if (size - from > MAX_SCAN_BYTES) return null;
     const fd = openSync(file, "r");
@@ -229,11 +340,17 @@ export function countOpenJobs(file, cacheFile, deps = {}) {
       }
     } finally { closeSync(fd); }
     const end = pos - carry.length;
-    try { mkdirSync(dirname(cacheFile), { recursive: true, mode: 0o700 }); writeFileSync(cacheFile, JSON.stringify({ file, size: end, ...state })); } catch { /* 다음 번에 처음부터 */ }
+    try { mkdirSync(dirname(cacheFile), { recursive: true, mode: 0o700 }); writeFileSync(cacheFile, JSON.stringify({ v: CACHE_V, file, size: end, ...state })); } catch { /* 다음 번에 처음부터 */ }
+    //  예약 셈(#4695) — 결과를 못 알아본 예약 호출이 남으면 «모른다». 반복 예약은 7일이 지나면 Claude Code 가 지운다.
+    const now = (deps.now ?? Date.now)();
+    const sc = state.sched || emptySched();
+    const sched = Object.keys(sc.pend || {}).length === 0 && sc.wakeUnknown !== true;
+    const cron = Object.values(sc.crons || {}).filter((c) => !(c && c.at > 0 && now - c.at > CRON_MAX_AGE_MS)).length;
+    const wakeMs = Number.isFinite(sc.wake) && sc.wake > 0 ? sc.wake : null;
     //  띄우라고 부른 호출의 답을 못 알아봤다 — 띄움 문구가 바뀌었을 수 있다. 0 으로 세면 기다리는 세션의 점이 꺼지니 모른다로 둔다.
-    if (state.pending && state.pending.length) return null;
+    if (state.pending && state.pending.length) return { bg: null, wakeMs, cron, sched };
     //  셸 작업은 지금 살아 있는 것만 센다. 끝난 셸을 «닫힘» 으로 저장하지는 않는다 — 한 번 잘못 잰 것이 영구히 남지 않게, 매번 다시 잰다.
     const dead = new Set(deadShells(state.shells, deps));
-    return state.open.filter((id) => !dead.has(id)).length;
+    return { bg: state.open.filter((id) => !dead.has(id)).length, wakeMs, cron, sched };
   } catch { return null; }
 }

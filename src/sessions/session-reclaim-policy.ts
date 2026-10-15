@@ -142,6 +142,19 @@ export interface SessionReclaimPolicy {
    *  ⚠ «강제로 되살리기»(상태 모름)는 이 값이 켜져도 새 id 다 — 옛 판이 살아 있을 수 있어, 옛 id 를 은퇴시켜 브로커가 걷게 한다.
    */
   restore_same_id: boolean;
+  /**
+   * #4695 T5 **하네스 종료 규칙 — 완료 뒤 끄기(분)**(N). 턴이 끝나고(질의 아님 · 백그라운드 작업·예약 깨움 없음) 사람이 이 시간 넘게 안 보면
+   *  하네스를 끈다(tmux 종료 — 행은 남아 다시 열면 같은 대화로 이어진다). 0 = 끔. 기본 3.
+   *  ⚠ 세션 컨테이너 배포(매니지드)에서만 본다 — 셀프호스트는 이 규칙을 돌리지 않는다(sessions/session-stop-rule.ts 머리말).
+   *  짧을수록 메모리(세션당 예약 1GB)가 빨리 돌아오고, 다시 열 때 하네스 기동(운영 p50 약 5초)을 더 자주 기다린다(T2 #4692 §2-3 표).
+   */
+  stop_done_minutes: number;
+  /**
+   * #4695 T5 **하네스 종료 규칙 — 질의 뒤 끄기(분)**(M). 하네스가 사람에게 승인·선택을 묻는 채 이 시간 넘게 아무도 안 보면 끈다.
+   *  끄기 전에 그 질문·선택지를 화면에서 읽어 남겨, 다시 열 때 대화창이 답을 기다리는 질문으로 보여 준다. 0 = 끔. 기본 60
+   *  (T2 «승인 대기 상한 1시간» 결정 — 대기의 절반은 3분 안에 답이 나고 24% 가 1시간을 넘는다).
+   */
+  stop_asking_minutes: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -161,6 +174,8 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   pressure_max_reap: 0,
   pressure_release_margin_pct: 0,
   restore_same_id: true,     // #4694 — 기본 켬(T3 자리 이름 전 테넌트 롤아웃 뒤 · 2026-10-15). 셀프호스트는 이 값과 무관하게 늘 같은 id
+  stop_done_minutes: 3,      // #4695 T5 — 완료+안 봄 3분 뒤 하네스를 끈다(매니지드만 — 셀프호스트는 규칙 자체가 안 돈다)
+  stop_asking_minutes: 60,   // #4695 T5 — 질의+안 봄 60분 뒤(T2 승인 대기 상한 1시간)
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -246,6 +261,9 @@ const policy = definePolicy<SessionReclaimPolicy>({
     pressure_release_margin_pct: { env: "LIVELY_SESSION_PRESSURE_RELEASE_MARGIN_PCT", min: RECLAIM_RELEASE_MARGIN_MIN, max: RECLAIM_RELEASE_MARGIN_MAX },
     // #4694 — env 시드는 매니지드 게이트웨이 전체를 한 번에 **끄는** 자리(기본 켬 — 0|false|off|no 면 끔), 관리탭·org_runtime_update 는 워크스페이스별.
     restore_same_id: { kind: "bool", env: "LIVELY_SESSION_RESTORE_SAME_ID" },
+    // #4695 T5 — 신규 노브라 loose 금지(0='끔'이 의미 있는 선택). env 시드는 게이트웨이 전체 기본값의 자리, 관리탭은 워크스페이스별.
+    stop_done_minutes: { env: "LIVELY_SESSION_STOP_DONE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    stop_asking_minutes: { env: "LIVELY_SESSION_STOP_ASKING_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
   },
 });
 

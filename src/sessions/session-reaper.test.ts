@@ -1,7 +1,7 @@
 // idle 세션 회수 결정 로직 테스트 (#1059 F) — 정당 세션 오kill 금지 안전 불변식(#687 교훈)이 핵심.
 //  주입 seam(deps)으로 tmux·DB 없이 결정만 검증한다. 엣지 표(스크래치패드 spec.md)의 모든 행 = 시나리오.
 import assert from "node:assert/strict";
-import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs } from "./session-reaper.js";
+import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs, resolveJobVerdicts } from "./session-reaper.js";
 import type { ProcEntry } from "./session-rss.js";
 import { invalidateSessionReclaimPolicyCache, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -1182,6 +1182,24 @@ const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(p
   const out = await resolveLiveJobs(new Set(), view([["box-p", [28]]]), gwOnly(), async () => { calls++; return new Map(); });
   assert.equal(out.size, 0);
   assert.equal(calls, 0);
+}
+
+// F6 — #4695 하네스 종료 규칙용 세 갈래(resolveJobVerdicts): 판정 불가를 «작업 없음» 과 가른다. 회수기(resolveLiveJobs)는 위 F3·F4 그대로다.
+//  종료 규칙은 시계가 3분이라 판정 불가를 보호로 다룬다 — `nohup … &` 로 띄운 서버는 훅의 셈에 안 잡히고 이 판정이 유일한 보호다(격리 리뷰).
+{
+  const v = await resolveJobVerdicts(new Set(["box-throw", "box-empty", "box-nopane", "box-idle", "box-busy"]),
+    view([["box-throw", [28]], ["box-empty", [28]], ["box-idle", [28]], ["box-busy", [28]]]), gwOnly(),
+    async (sid) => {
+      if (sid === "box-throw") throw new Error("중계 타임아웃");
+      if (sid === "box-empty") return new Map();
+      return inContainer(sid === "box-busy");
+    });
+  assert.deepEqual([...v.jobs], ["box-busy"], "작업 있음");
+  assert.deepEqual([...v.unknown].sort(), ["box-empty", "box-nopane", "box-throw"], "프로브 실패 · 빈 표 · pane 없음 = 판정 불가");
+  const blind = await resolveJobVerdicts(new Set(["box-a", "box-b"]), { ok: false, panes: new Map() }, gwOnly(), async () => inContainer(true));
+  assert.deepEqual([blind.jobs.size, [...blind.unknown].sort()], [0, ["box-a", "box-b"]], "pane 목록을 못 봤으면 전부 판정 불가");
+  const none = await resolveJobVerdicts(new Set(), view([]), gwOnly(), async () => inContainer(true));
+  assert.deepEqual([none.jobs.size, none.unknown.size], [0, 0]);
 }
 
 console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");

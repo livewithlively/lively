@@ -232,6 +232,21 @@ function storageEditor(detail, data) {
 
     // ── ② 정책 — idle 세션 자동 회수(#1059 F) ── 그 시간 넘게 idle 인 세션을 회수(desired-state 보존→복원 가능). 0=끔(무회귀).
     const srp = st.session_reclaim_policy || {};
+    // #4695 T5 하네스 종료 규칙 — 완료+안 봄 N분 · 질의+안 봄 M분 뒤 하네스를 끈다(매니지드만). 같은 정책(session_reclaim_policy)의 다른 축이라
+    //  버튼을 나눈다(저장은 patch 병합 — 안 보낸 칸은 그대로다). 기본값은 서버와 같다(3 · 60).
+    const stopDoneIn = numIn(srp.stop_done_minutes ?? 3, 0, 43200);
+    const stopAskingIn = numIn(srp.stop_asking_minutes ?? 60, 0, 43200);
+    const stopBtn = el('button', { class: 'btn btn-primary btn-sm', text: '하네스 종료 규칙 저장' }); stopBtn.disabled = !canEdit;
+    stopBtn.addEventListener('click', async () => {
+      stopBtn.disabled = true;
+      try {
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: {
+          stop_done_minutes: Number(stopDoneIn.value),
+          stop_asking_minutes: Number(stopAskingIn.value),
+        } }) });
+        toast('저장됨 — 1분 안에 적용됩니다.'); load();
+      } catch (e: any) { toast(e.message, true); stopBtn.disabled = false; }
+    });
     const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
     // #2148 attach 전용 TTL — attached 를 무기한 존중하면 '탭이 붙어 있다'는 신호가 거짓일 때 회수가 영영 멈춘다
     //  (원격 tmux 재연결 잔재가 그 신호를 영구 참으로 만든 실측이 있다). 테넌트 축엔 이미 같은 노브가 있다(#1445).
@@ -379,6 +394,14 @@ function storageEditor(detail, data) {
         el('p', { class: 'storage-calc', text: 'MemoryMax 를 넘은 세션은 그 세션 안에서만 OOM-kill 되고 박스는 생존합니다(폭주 1개만 죽음). MemoryHigh 는 그 아래 소프트 스로틀. High ≤ Max.' }),
         el('p', { class: 'admin-hint' }, ...uiText('claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.')),
         el('div', { class: 'storage-actions' }, memPolBtn)),
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '하네스 종료 규칙' }),
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '작업이 끝난 뒤 끄기(분, 0=끔)' }), stopDoneIn),
+          el('label', {}, el('span', { text: '답을 기다린 뒤 끄기(분, 0=끔)' }), stopAskingIn)),
+        el('p', { class: 'storage-calc', text: '아무도 세션을 보지 않는 채로 작업이 끝난 지(또는 승인·선택을 묻기 시작한 지) 이 시간이 지나면 그 세션의 AI(하네스)를 끕니다. 대화와 설정은 그대로 남고, 그 세션에 말을 걸면 AI 를 다시 띄워 이어서 답합니다(보통 5초 안팎 걸립니다).' }),
+        el('p', { class: 'admin-hint' }, ...uiText('작업 중인 세션, 백그라운드 작업이나 예약된 다시 깨우기를 기다리는 세션, 누군가 보고 있는 세션은 끄지 않습니다. 끄기 전에 입력창에 쓰다 만 글과 답을 기다리던 질문을 남겨 두었다가, 다시 열 때 대화창에 돌려 놓습니다. 매니지드(세션 컨테이너) 워크스페이스에서만 적용됩니다. 기본값은 작업이 끝난 뒤 3분, 답을 기다린 뒤 60분입니다.')),
+        el('div', { class: 'storage-actions' }, stopBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: 'idle 세션 자동 회수' }),
         ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []),
