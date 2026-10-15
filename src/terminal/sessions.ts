@@ -841,6 +841,18 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  #2545 (3단계) — 이 세션이 **자기 세션 컨테이너 안 tmux** 로 뜨나. 격리(osUser)이고, ensure 훅과 슬러그 목록이 이 테넌트를
   //   가리킬 때만이다. 기존 세션은 안 바뀐다(태어날 때 정해진다) — 옛 경로는 아래 else(wrapAsMember) 그대로다.
   const inside = !!osUser && tmuxInSessionContainer(slug);
+  //  #4684 — 붙은 앱 폴더 능력(게이트웨이 전용 — 노드에는 없어 아무것도 안 한다). 새 id 복원이면 옛 세션의 붙은 앱을 이 id 로 넘긴다
+  //   (앱 칸·store_* 가 이 기록을 본다 — 컨테이너 안 tmux 든 아니든 같다). 검증을 다 지난 **뒤**, 만들기 직전이다 — 검증에서 막힌
+  //   복원(잠긴 폴더 등)이 한 번도 안 뜬 id 에 붙은 앱을 남기지 않게. 만들기가 실패하면 되돌린다(dropCarried). 실패해도 세션은 뜬다.
+  const appFolders = gatewayCapability("sessionAppFolders");
+  let carried = false;
+  if (appFolders && input.carryAppsFrom && input.carryAppsFrom !== id) {
+    carried = (await appFolders.carry(input.carryAppsFrom, id).catch((e) => {
+      console.warn(`[terminal] 붙은 앱 승계 실패(${input.carryAppsFrom} → ${id}) — 세션은 계속:`, (e as Error)?.message ?? e);
+      return 0;
+    })) > 0;
+  }
+  const dropCarried = (): Promise<void> => (carried && appFolders ? appFolders.drop(id).then(() => undefined, () => undefined) : Promise.resolve());
   // 실행 모드 세션(#1007+) — 이 pane 의 하네스만 그 모드로. MCP 헤더 `x-lively-mode: ${LIVELY_MODE:-}` 가 이 env 를 확장해
   //  게이트웨이가 이 세션의 요청에만 모드를 강제한다(readonly=쓰기 툴 소거 · incognito=lively 전체 차단). **per-session env 라 동시 실행 세션 중 이것만, 나머지는 정상**(사용자 요구).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
@@ -900,18 +912,35 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         //   «원한다» 로 보게(바로 위 ① 과 같은 이유 · reviveSessionState 머리말).
         if (mirrored && reuseId) await reviveSessionState(id, ownerId(user)).catch((e) => console.warn(`[terminal] 같은 id 복원 표식 정리 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e));
       }
+      //  #4684 — 붙은 앱 폴더. 새 id 복원이면 옛 세션의 붙은 앱을 먼저 넘기고, 이 세션에 붙어 있어야 할 앱 목록을 확보에 싣는다
+      //   (브로커가 새 컨테이너에 붙인다 — 같은 id 복원·다른 노드로 옮겨 앉아도 같은 길). 못 읽으면 목록을 안 싣는다 — 브로커가 앱 폴더를
+      //   건드리지 않을 뿐 세션은 뜬다(붙이기·떼기 때 다시 맞춘다). 노드에는 능력이 없어 아무것도 안 한다.
+      let folderApps: string[] | undefined;
+      if (appFolders) {
+        folderApps = await appFolders.listFor(id).catch((e) => { console.warn(`[terminal] 붙은 앱 폴더 목록 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); return undefined; });
+      }
       //  ② 컨테이너 — ensure 훅(매니지드: 브로커 /lvly/session/ensure). 실패는 **실패다**: 방금 쓴 행을 지우고 503.
       //   옛 경로로 조용히 접지 않는다(옛 판/새 판이 섞인 반쪽 상태가 가장 나쁘다 — tmux-relocation-plan 규율 1).
       try {
-        await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
+        const made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
           sessionId: id, osUser, cwd: target,
           memMb: cg?.maxMb && cg.maxMb > 0 ? cg.maxMb : (cg?.highMb ?? 0),   // 옛 spawn 훅과 같은 셈(max 없으면 high, 0 = 브로커 기본)
           memRequestMb: cg?.requestMb ?? 0,
           tmux: "inside",
           ...(reuseId ? { fresh: true } : {}),   // #4694 — 같은 id 복원은 늘 새 자리(SessionEnsureRequest.fresh 머리말)
+          //  #4684 — 붙어 있어야 할 앱 폴더(SessionEnsureRequest.apps 머리말). 비었으면 싣지 않는다 — 새 컨테이너엔 뗄 것이 없다.
+          ...(folderApps && folderApps.length ? { apps: folderApps } : {}),
         });
+        //  #4684 — 만들 때 못 붙인 것은 흔적을 남긴다(세션은 뜬다). 그리고 만드는 사이 붙인 앱이 바뀌었으면 한 번 더 맞춘다
+        //   (그 사이의 붙이기·떼기는 컨테이너가 없어 «not-running» 이었다).
+        const ma = made.apps as { supported?: unknown; failed?: unknown } | undefined;
+        if (folderApps?.length && (!ma || ma.supported !== true || (Array.isArray(ma.failed) && ma.failed.length))) {
+          console.warn(`[terminal] 앱 폴더를 다 못 붙였다(${id}) — 세션은 계속:`, ma ? JSON.stringify(ma).slice(0, 300) : "브로커가 앱 폴더를 모른다(이 기능 전 판)");
+        }
+        if (appFolders && folderApps) appFolders.afterCreate(id, folderApps);
       } catch (e) {
         await dropOwnRow();
+        await dropCarried();
         throw new HttpError(503, `세션 컨테이너를 확보하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
       }
     }
@@ -1061,6 +1090,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   catch (e) {
     //  #2545 — 새 경로는 행을 먼저 썼다. 판이 안 떴으면 지운다(안 지우면 화면에 유령 «중단됨» 이 뜬다). 컨테이너는 브로커 ①(유휴)이 거둔다.
     if (inside) await dropOwnRow();
+    await dropCarried();
     throw e;
   }
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
@@ -1097,6 +1127,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //   부류이고, 남는 최악이 «503 뒤 다시 만들기» 라서다 — 위의 ensure·new-session 실패 롤백과 같은 위험 등급이다.
     const gone = await tmux(["kill-session", "-t", id]).then(() => true, (ke) => isSessionGoneError(ke));
     if (gone && inside) await dropOwnRow();
+    if (gone) await dropCarried();
     throw new HttpError(503, `세션 표식을 기록하지 못해 세션 생성을 취소했습니다: ${(e as Error)?.message ?? e}`);
   }
   // 상시세션 keep-alive 가 만든 세션이면 **그 상시세션 id 를 박는다**(#2170). 정리기가 나중에 이 세션을 걷어도

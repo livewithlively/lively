@@ -9,6 +9,7 @@ import { dropAppTables, appSchemaFor } from "./store-schema.js";
 import { isBuiltinSource } from "./store-ddl.js";
 import { pruneAppInstances } from "../org/store/app-instances.js";
 import { pruneSessionApps } from "./session-apps.js";
+import { resyncSessions } from "./session-app-folders.js";
 import { stopWorkersForApp } from "./worker-service.js";
 import { snapshotAppData } from "./app-snapshot.js";
 import { logger } from "../log.js";
@@ -67,9 +68,11 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
       });
   }
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
-  await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
+  const wasAttached = await pruneSessionApps(id);   // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
   await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
   await store.deleteApp(id, ctx);
+  //  #4684 — 그 세션들에 붙어 있던 앱 폴더를 뗀다(기록이 지워졌으니 맞추면 빠진다). 기다리지 않는다 — 제거는 이미 끝났다.
+  if (wasAttached.length) void resyncSessions(wasAttached, "앱 제거");
   return {
     components: comps.length,
     snapshot: snap?.taken_at ? { taken_at: snap.taken_at, tables: snap.tables } : null,

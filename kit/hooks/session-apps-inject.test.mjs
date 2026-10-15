@@ -210,6 +210,30 @@ try {
   assert.equal(await fsp.access(flagOf(sid8)).then(() => true, () => false), false, "앱 없는 세션에 깃발 파일을 만들었다");
   ok("H13 앱 없는 세션 → 깃발 파일 미작성");
 
+  // H-F (#4684) 앱 폴더 — 서버는 자리(folder)만 말한다. 세션 안에 **실제로 있을 때만** 경로를 알린다.
+  {
+    const cwd = path.join(tmp, "work", "proj");
+    await fsp.mkdir(path.join(cwd, ".lively", "apps", "crm"), { recursive: true });
+    const CRM_F = { ...CRM, folder: ".lively/apps/crm" };
+    const DECK_F = { ...DECK, folder: ".lively/apps/deck-edit" };   // 자리는 말하지만 세션 안엔 없다(이 기능 전에 뜬 세션)
+    reply = { status: 200, body: { apps: [CRM_F, DECK_F] } };
+    const out = await run(`${sid}-folder`, {}, { stdin: JSON.stringify({ prompt: "기록해 줘", cwd }) });
+    assert.ok(out && out.includes(`폴더: ${path.join(cwd, ".lively", "apps", "crm")}/`), `있는 앱 폴더를 알려야 한다:\n${out}`);
+    assert.ok(!out.includes(path.join(cwd, ".lively", "apps", "deck-edit")), `없는 폴더를 알리면 AI 가 엉뚱한 곳에 만든다:\n${out}`);
+    ok("H-F1 세션 안에 있는 앱 폴더만 경로를 알린다");
+
+    reply = { status: 200, body: { apps: [{ ...CRM, folder: null }] } };
+    const out2 = await run(`${sid}-folder-none`, {}, { stdin: JSON.stringify({ prompt: "기록해 줘", cwd }) });
+    assert.ok(out2 && !out2.includes("폴더:"), `자리가 없으면(셀프호스트) 폴더 줄이 없어야 한다:\n${out2}`);
+    ok("H-F2 folder 가 없으면(셀프호스트) 폴더 줄이 없다");
+
+    //  cwd 를 안 주면 훅 프로세스의 작업 폴더를 본다 — 그 자리엔 없으므로 알리지 않는다.
+    reply = { status: 200, body: { apps: [CRM_F] } };
+    const out3 = await run(`${sid}-folder-nocwd`, {}, { stdin: JSON.stringify({ prompt: "기록해 줘" }) });
+    assert.ok(out3 && !out3.includes("폴더:"), `기준 폴더에 없는 자리를 알렸다:\n${out3}`);
+    ok("H-F3 페이로드에 cwd 가 없으면 훅의 작업 폴더 기준 — 없으면 침묵");
+  }
+
   console.log(`\n${pass} passed`);
 } finally {
   server.close();

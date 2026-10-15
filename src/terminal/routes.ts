@@ -2011,6 +2011,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const sameId = await sameIdRestoreOn(goneVerdict);
     const session = await createSession(owner, {
       ...(sameId ? { reuseId: id } : {}),
+      //  #4684 — 새 id 면 옛 세션에 붙어 있던 앱을 넘긴다(같은 id 는 기록이 그대로라 필요 없다).
+      ...(sameId ? {} : { carryAppsFrom: id }),
       kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,

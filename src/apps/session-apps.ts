@@ -49,7 +49,11 @@ export async function listAttachedApps(sessionId: string): Promise<SessionAppRow
   return r.rows.map(rowOf);
 }
 
-/** 붙인다 — 이미 붙어 있으면 그대로(멱등), 뗐던 것이면 되살린다. 돌려주는 값 = 이번에 새로 붙었나. */
+/**
+ * 붙인다 — 이미 붙어 있으면 그대로(멱등), 뗐던 것이면 되살린다. 돌려주는 값 = 이번에 새로 붙었나(또는 붙인 사람이 바뀌었나).
+ *  #4684 — 붙어 있는 것을 **다른 사람**이 다시 붙이면 붙인 사람을 그 사람으로 바꾼다. 앱 폴더는 붙인 사람의 동의를 근거로 하므로(
+ *   session-app-folders.folderAppsFor), 처음 붙인 사람이 동의를 거둔 뒤 다른 참가자가 다시 붙여도 폴더가 안 돌아오던 것을 막는다.
+ */
 export async function attachAppRow(sessionId: string, appId: string, memberId: string): Promise<boolean> {
   // ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, session_id, app_id)로 재작성한다(upsertGrant 와 같은 규약).
   const r = await itemsPool.query(
@@ -57,7 +61,7 @@ export async function attachAppRow(sessionId: string, appId: string, memberId: s
        VALUES($1,$2,$3,now(),NULL)
      ON CONFLICT (tenant_id, session_id, app_id) DO UPDATE SET
        member_id=EXCLUDED.member_id, attached_at=now(), detached_at=NULL
-       WHERE org_session_app.detached_at IS NOT NULL
+       WHERE org_session_app.detached_at IS NOT NULL OR org_session_app.member_id <> EXCLUDED.member_id
      RETURNING app_id`, [sessionId, appId, memberId]);
   return (r.rowCount ?? 0) > 0;
 }
@@ -69,9 +73,51 @@ export async function detachAppRow(sessionId: string, appId: string): Promise<bo
   return (r.rowCount ?? 0) > 0;
 }
 
-/** 앱 제거 때 — 그 앱의 연결 기록을 전부 지운다(FK 가 없어 CASCADE 대신 명시 회수, schema/apps.ts 주석). */
-export async function pruneSessionApps(appId: string): Promise<void> {
-  await itemsPool.query(`DELETE FROM org_session_app WHERE app_id=$1`, [appId]);
+/**
+ * 앱 제거 때 — 그 앱의 연결 기록을 전부 지운다(FK 가 없어 CASCADE 대신 명시 회수, schema/apps.ts 주석).
+ *  #4684 — 그때 **붙어 있던** 세션 id 를 돌려준다(그 세션들의 앱 폴더를 떼야 한다 — 기록이 지워진 뒤엔 찾을 길이 없다).
+ */
+export async function pruneSessionApps(appId: string): Promise<string[]> {
+  const r = await itemsPool.query(`DELETE FROM org_session_app WHERE app_id=$1 RETURNING session_id, detached_at`, [appId]);
+  return [...new Set(r.rows.filter((x) => x.detached_at == null).map((x) => String(x.session_id)))];
+}
+
+/**
+ * 새 id 복원 때 옛 세션의 **지금 붙은** 앱을 새 세션으로 넘긴다(#4684). 붙인 사람·시각은 그대로 옮긴다(누가 붙였나가 동의 판정의
+ *  재료다). 새 세션에 이미 있는 행은 건드리지 않는다. 옛 행은 남긴다 — 승계가 실패해 옛 id 를 다시 복원할 때의 재료다
+ *  (routes 복원의 «확인됐을 때만 옛 행을 정리» 와 같은 규율). 돌려주는 값 = 넘긴 행 수.
+ */
+export async function carrySessionApps(fromId: string, toId: string): Promise<number> {
+  if (!fromId || !toId || fromId === toId) return 0;
+  // ON CONFLICT 타깃에 tenant_id — attachAppRow 와 같은 규약(ensureTenantColumn 이 PK 를 (tenant_id, session_id, app_id)로 재작성한다).
+  const r = await itemsPool.query(
+    `INSERT INTO org_session_app(session_id, app_id, member_id, attached_at, detached_at)
+       SELECT $2, app_id, member_id, attached_at, NULL FROM org_session_app WHERE session_id=$1 AND detached_at IS NULL
+     ON CONFLICT (tenant_id, session_id, app_id) DO NOTHING`, [fromId, toId]);
+  return r.rowCount ?? 0;
+}
+
+/**
+ * 한 번도 뜨지 않은 세션 id 의 붙은 앱 기록을 지운다(#4684 검토) — 새 id 복원이 옛 세션의 붙은 앱을 넘긴 뒤 만들기가 실패했을 때만 부른다.
+ *  안 지우면 그 id 가 다시 맞추기 묶음에 계속 끼어든다. 지운 수.
+ */
+export async function dropSessionApps(sessionId: string): Promise<number> {
+  const r = await itemsPool.query(`DELETE FROM org_session_app WHERE session_id=$1`, [sessionId]);
+  return r.rowCount ?? 0;
+}
+
+/** 이 사람이 붙여 둔(지금 붙은) 세션들(#4684 — 멤버 비활성 때 그 세션들의 앱 폴더를 다시 맞춘다). */
+export async function sessionsAttachedBy(memberId: string): Promise<string[]> {
+  const r = await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_app WHERE member_id=$1 AND detached_at IS NULL`, [memberId]);
+  return r.rows.map((x) => String(x.session_id));
+}
+
+/** 이 앱이 지금 붙어 있는 세션들(#4684 — 앱 상태·공개가 바뀌면 그 세션들의 앱 폴더를 다시 맞춘다). */
+export async function sessionsWithApp(appId: string, attachedBy?: string): Promise<string[]> {
+  const r = attachedBy
+    ? await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_app WHERE app_id=$1 AND member_id=$2 AND detached_at IS NULL`, [appId, attachedBy])
+    : await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_app WHERE app_id=$1 AND detached_at IS NULL`, [appId]);
+  return r.rows.map((x) => String(x.session_id));
 }
 
 // ── 세션 주인 ────────────────────────────────────────────────────────────────
@@ -79,6 +125,17 @@ export async function pruneSessionApps(appId: string): Promise<void> {
 /** 세션을 연 사람. desired-state(DB)가 정본이고, 없으면 중앙 tmux 의 @box_owner(자가호스팅 단일 박스). 모르면 null. */
 export async function sessionOwnerOf(sessionId: string): Promise<string | null> {
   const st = await getSessionState(sessionId).catch(() => undefined);
+  if (st?.owner) return st.owner;
+  const o = await getOpt(sessionId, "@box_owner").catch(() => "");
+  return String(o || "").trim() || null;
+}
+
+/**
+ * sessionOwnerOf 와 같되 정본(DB) 조회 오류는 던진다 — «주인이 없다» 와 «못 물었다» 를 가른다(#4684 검토). 앱 폴더 맞추기가 일시
+ *  오류를 «주인 없음 → 붙일 것 없음» 으로 읽어 도는 세션의 앱 폴더를 모두 떼지 않게.
+ */
+export async function sessionOwnerStrict(sessionId: string): Promise<string | null> {
+  const st = await getSessionState(sessionId);
   if (st?.owner) return st.owner;
   const o = await getOpt(sessionId, "@box_owner").catch(() => "");
   return String(o || "").trim() || null;

@@ -16,6 +16,7 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { assertNotAppFolderMount } from "./app-folder-guard.js";   // #4684 — `.lively/apps` 는 세션 앱 폴더 자리
 import { viewerOf } from "../capabilities/principal.js";
 import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userOsUser } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
@@ -311,6 +312,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     // 안 보이는 폴더 안에는 못 만든다(#1291) — 여기를 열어두면 mkdir 의 성공/실패가 그대로 존재 오라클이 되고,
     //  잠긴 폴더 안에 파일을 밀어 넣는 우회 경로가 열린다. 거부는 목록과 같은 404. 폴더 이름도 NFC 정본(#1278b).
     assertBrowseWritable(req);
+    assertNotAppFolderMount(req.query.path);
     const { abs, osUser } = await resolveBrowse(req, false, true);
     if (osUser) await memberMkdir(osUser, abs);
     else await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
@@ -326,6 +328,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     if (!toName || toName.includes("/") || toName.includes("\\") || toName === "." || toName === "..") throw new HttpError(400, "새 이름이 올바르지 않습니다");
     const toAbs = path.resolve(path.dirname(abs), toName);
     if (toAbs !== base && !toAbs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+    assertNotAppFolderMount(path.relative(base, abs), path.relative(base, toAbs));
     if (osUser) {
       if (await memberStat(osUser, toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
       await memberMv(osUser, abs, toAbs);
@@ -485,6 +488,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
   app.put("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
     assertBrowseWritable(req);
+    assertNotAppFolderMount(req.query.path);
     const { base, abs, osUser } = await resolveBrowse(req, true, true);   // 생성 → NFC 정본(#1278b)
     try { await receiveUpload(req, abs, MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
@@ -571,6 +575,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
 
   // 새 폴더 생성. 격리 세션은 멤버 uid 로(생성 파일 소유자=멤버).
   app.post("/api/ui/terminal/sessions/:id/mkdir", auth, wrap(async (req, res) => {
+    assertNotAppFolderMount(req.query.path);
     const nodeId = await nodeFor(req);
     if (nodeId) { await nodeRpc(nodeId, "fsMkdir", { id: req.params.id, sub: String(req.query.path ?? ""), user: { userId: idOf(userOf(req)) } }); res.json({ ok: true }); return; }
     const { abs, osUser } = await resolveInSession(req, true, true);   // 생성 → NFC 정본(#1278b)
@@ -582,6 +587,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 업로드(raw 스트림 → 임시파일 → rename). content-type 무관(express.json 은 json 만 소비하므로 스트림 보존).
   //  격리 세션은 멤버 uid 로 써서 파일 소유자가 멤버가 되게 한다(그래야 세션 셸이 이후 편집 가능).
   app.put("/api/ui/terminal/sessions/:id/file", auth, wrap(async (req, res) => {
+    assertNotAppFolderMount(req.query.path);
     const nodeId = await nodeFor(req);
     if (nodeId) { // 노드 세션 — 본문을 모아 청크 base64 write 릴레이(#875). 순차 청크(offset 0=truncate, 이후 append).
       const rel = String(req.query.path ?? ""); if (!rel) throw new HttpError(400, "파일 경로가 필요합니다");
