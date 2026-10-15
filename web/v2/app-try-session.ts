@@ -50,7 +50,7 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
   let dead = false, handle: { destroy(): void } | null = null, chat: SessionChatHandle | null = null, pollT = 0, tickT = 0, seq = 0;
   let sid = o.sid, detail: any = null;
   const dock = el('div', { class: 'v2-try-dock' });
-  const shell = el('div', { class: 'v2-try-shell' }, el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시험 세션을 여는 중…' })));
+  const shell = el('div', { class: 'v2-try-shell' }, el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시안을 여는 중…' })));
   const root = el('div', { class: 'v2-try' + (host === document.body ? ' v2-try--fixed' : ''), role: 'region', 'aria-label': '시험 세션' }, shell, dock);
   host.append(root);
   //  막대가 문패 줄을 꼭 덮게 — 문패 높이를 재어 넘긴다(폭 · 글꼴이 바뀌면 다시).
@@ -103,7 +103,7 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
     };
     window.clearTimeout(pollT); pollT = window.setTimeout(nudge, 900);
   };
-  const failNote = (e: any): void => { if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시험 세션을 열지 못했어요 — ' + (e && e.message ? e.message : e) }))); };
+  const failNote = (e: any): void => { if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시안을 열지 못했어요 — ' + (e && e.message ? e.message : e) }))); };
   const remount = (): void => { void mountShell().catch(failNote); };
   //  20초마다 세션 줄을 다시 읽어 세션 화면에 흘린다(도는 중 · 멈춤 · 이름) — 셸이 제 탭에 하는 일과 같다(main.ts tab.chat.update).
   const tick = async (): Promise<void> => {

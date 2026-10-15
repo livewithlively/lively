@@ -12,7 +12,7 @@ export type StudioStage = 'plan' | 'draft' | 'fix' | 'check' | 'put';
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정 — 시안 확인하고 코멘트해서 고치기»). 속 단계 'draft'(첫 판을 기다리는 중)와
 //   'fix'(판이 있다 · 코멘트 · 고치기)는 사람에게 같은 ③ 이다 — 단계 바 · 만들던 앱 목록 · 둘러보기가 전부 이 표로 잰다.
 export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string }> = [
-  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'fix', n: 3, label: '시안 확인 · 고치기' },
+  { key: 'what', n: 1, label: '앱 이름과 기능 정하기' }, { key: 'plan', n: 2, label: '세부 기획 정하기' }, { key: 'fix', n: 3, label: '시안 확인 · 수정' },
   { key: 'check', n: 4, label: '확인' }, { key: 'put', n: 5, label: '넣기' },
 ];
 export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === (s === 'draft' ? 'fix' : s)); }
@@ -158,7 +158,7 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
 }
-/** ④ 짚은 곳 — 고른 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
+/** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
 export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number }
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
@@ -166,7 +166,7 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
   pins.forEach((p, i) => {
     if (!p.note.trim()) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
-    if (p.kind === 'pick') lines.push(`[고른 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
+    if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
     else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
     else lines.push(`[핀 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
   });

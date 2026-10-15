@@ -66,6 +66,9 @@ check(F.verArrived(0) === "초안이 나왔어요" && F.verArrived(1) === "초�
 check(F.verArrived(11) === "열한 번째 버전이 나왔어요" && F.verArrived(19) === "열아홉 번째 버전이 나왔어요" && F.verArrived(20) === "스무 번째 버전이 나왔어요" && F.verArrived(21) === "스물한 번째 버전이 나왔어요" && F.verArrived(30) === "서른 번째 버전이 나왔어요" && F.verArrived(45) === "마흔다섯 번째 버전이 나왔어요" && F.verArrived(99) === "아흔아홉 번째 버전이 나왔어요" && F.verArrived(100) === "100번째 버전이 나왔어요" && F.verArrived(101) === "101번째 버전이 나왔어요", "F5 verArrived — 열한 번째 · 스무 번째 · 스물한 번째 · 아흔아홉 번째 · 100번째", [11, 20, 21, 99, 100].map(F.verArrived));
 {
   const bad = []; for (let n = 2; n <= 150; n++) { const t = F.verArrived(n); if (/V\s?\d/.test(t) || !/번째 버전이 나왔어요$/.test(t)) bad.push(n + ": " + t); }
+  //  2~99 전부를 글자 그대로 — 십의 자리(쉰 · 예순 · 일흔 · 여든 …) 어느 하나가 틀려도 잡힌다.
+  const ONE = ["", "한", "두", "세", "네", "다섯", "여섯", "일곱", "여덟", "아홉"], TEN = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"];
+  for (let n = 2; n <= 99; n++) { const want = (n === 20 ? "스무" : TEN[Math.floor(n / 10)] + ONE[n % 10]) + " 번째 버전이 나왔어요"; if (F.verArrived(n) !== want) bad.push(n + ": " + F.verArrived(n) + " ≠ " + want); }
   check(bad.length === 0 && F.verOrdinal(0) === "첫 번째" && F.verOrdinal(1) === "첫 번째" && F.verOrdinal(NaN) === "첫 번째", "F6 2~150 어디에도 V 숫자 꼴이 없다 · verOrdinal 은 빈 글을 내지 않는다", bad.slice(0, 5));
 }
 // ══ H 기획 카드 「참고한 것」 · 벤치마크 · 와이어프레임(사양 표 H) ══

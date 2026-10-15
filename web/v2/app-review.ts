@@ -3,7 +3,7 @@
 //
 //  앱빌더(app-studio.ts ③)가 가운데 단추로 보낸다 — 세션 위젯 = **시험 세션**(app-try-session.ts — 앱을 만드는 세션과 다른 진짜 AI 세션의 진짜 화면, 우측 사이드바에 앱 ·
 //   앱을 만드는 세션은 들이지 않는다 · 원준 2026-10-15), 앱 화면 = 앱 찾기에서 연 것과 같은 #/i/<앱>(셸이 평소대로 그린다). 이 층이 그 위에 뜬다:
-//   · 막대 — 「‹ 앱빌더」 · 앱 이름 · n판 · 도구(써 보기 · 고르기 · 핀 · 영역) · 「의견 n건」 · 「수정하기」 · 「마음에 들어요」.
+//   · 막대 — 「‹ 앱빌더」 · 앱 이름 · 버전 · 도구(써 보기 · 선택 · 핀 · 영역) · 「의견 n건」 · 「수정하기」 · 「완료 · 다음 단계로」.
 //     자리(dock)를 주면 그 안에 들어앉고(시험 세션의 문패 줄 위 — 세션의 입력칸을 가리지 않게), 없으면 아래 가운데 떠 있다(↑ 로 위로).
 //   · 핀 · 상자 · 그 자리 의견 칸 — 그 앱의 프레임(iframe.v2-appui-frame[data-app-id], app-ui.ts) 자리를 따라 fixed 로 뜬다.
 //     화면 구조를 모른다 — 곁칸이든 화면 가득이든 프레임이 보이는 곳이면 거기에 선다. 프레임이 안 보이면 막대가 그 말을 한다.
@@ -35,12 +35,13 @@ export interface ReviewApi {
   isOpen(): boolean;
 }
 //  도구 그림은 이모지가 아니라 선 그림(원준 2026-10-15 «이모지 짜침 · 너가 아이콘 그려 · 써 보기와 맞는 걸로») — 20칸 격자 · 글자색을 따른다.
-//   써 보기 = 누르는 화살표와 눌린 물결 · 고르기 = 점선 테두리 + 화살표 · 핀 = 핀 · 영역 = 모서리 손잡이가 있는 상자.
+//   원준 2026-10-16 «고르기 아이콘이 영역 아이콘 같아 · 영역으로 보내고 · 써 보기에 있는 걸 고르기로 · 써 보기는 새로» —
+//   써 보기 = 누르는 손가락과 눌림 표시 · 선택(옛 고르기) = 누르는 화살표와 눌린 물결 · 핀 = 핀 · 영역 = 점선 상자(묶음 #7 «영역은 점선 박스로»).
 const TOOL_SVG: Record<ReviewTool, string> = {
-  try: '<path d="M7.5 6.5 16.5 11l-4.2 1.1-2 4.2z"/><path d="M3.6 8.2a4.6 4.6 0 0 1 3.1-4.3"/><path d="M3.2 4.6 4.6 5.8"/>',
-  pick: '<rect x="3" y="3" width="11" height="11" rx="1.5" stroke-dasharray="2.2 2"/><path d="M11 11l6.5 2.6-2.8.8-.9 2.8z"/>',
+  try: '<path d="M8.2 12.6V5.4a1.3 1.3 0 0 1 2.6 0v3.8"/><path d="M10.8 9.2v-.6a1.3 1.3 0 0 1 2.6 0v1"/><path d="M13.4 9.6a1.3 1.3 0 0 1 2.6 0v2.8a5.2 5.2 0 0 1-5.2 5.2H10a4.6 4.6 0 0 1-3.6-1.7l-2.5-3.1a1.25 1.25 0 0 1 1.9-1.6l2.4 2.4"/><path d="M5.4 3.4 6.6 4.2M9.5 1v1.3M13.6 3.4l-1.2.8"/>',
+  pick: '<path d="M7.5 6.5 16.5 11l-4.2 1.1-2 4.2z"/><path d="M3.6 8.2a4.6 4.6 0 0 1 3.1-4.3"/><path d="M3.2 4.6 4.6 5.8"/>',
   pin: '<path d="M10 17.5s-5-5-5-8.8a5 5 0 0 1 10 0c0 3.8-5 8.8-5 8.8z"/><circle cx="10" cy="8.6" r="1.8"/>',
-  box: '<rect x="4" y="5" width="12" height="10" rx="1"/><path d="M2.6 3.6h2.8v2.8H2.6zM14.6 3.6h2.8v2.8h-2.8zM2.6 13.6h2.8v2.8H2.6zM14.6 13.6h2.8v2.8h-2.8z" fill="currentColor" stroke="none"/>',
+  box: '<rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2" stroke-dasharray="3 2.2"/>',
 };
 function toolIcon(k: ReviewTool): HTMLElement {
   const s = el('span', { class: 'ico', 'aria-hidden': 'true' });
@@ -48,10 +49,10 @@ function toolIcon(k: ReviewTool): HTMLElement {
   return s;
 }
 const TOOLS: Array<{ k: ReviewTool; t: string; help: string }> = [
-  { k: 'try', t: '써 보기', help: '앱을 그대로 눌러 써 봐요. 의견을 달려면 고르기 · 핀 · 영역을 고르세요.' },
-  { k: 'pick', t: '고르기', help: '앱 안의 버튼 · 칸 · 글을 누르면 그 요소에 의견을 적어요. 올리면 무엇이 골라질지 테두리로 보여요.' },
-  { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 의견을 적어요. 빈 자리나 애매한 곳에 써요.' },
-  { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 의견을 적어요.' },
+  { k: 'try', t: '써 보기', help: '직접 써 보면서 앱의 실제 동작을 확인해요.' },
+  { k: 'pick', t: '선택', help: '앱 안의 버튼 · 칸 · 글을 선택해요' },
+  { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.' },
+  { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.' },
 ];
 let cur: ReviewApi | null = null;
 export function reviewOpen(): boolean { return !!cur && cur.isOpen(); }
@@ -67,15 +68,15 @@ export function openReview(host: ReviewHost): ReviewApi {
   const bar = el('div', { class: 'v2-review-bar', role: 'toolbar', 'aria-label': '시안 코멘트' });
   const name = el('b', { text: '「' + host.title + '」' });
   const ver = el('span', { class: 'v2-review-ver', text: verName(host.version) });
-  const tools = el('span', { class: 'v2-studio-tools v2-review-tools', role: 'tablist', 'aria-label': '의견 다는 도구' });
+  const tools = el('span', { class: 'v2-studio-tools v2-review-tools', role: 'tablist', 'aria-label': '코멘트 다는 도구' });
   const count = el('button', { class: 'btn btn-ghost btn-sm v2-review-count', type: 'button' }) as HTMLButtonElement;
   const send = el('button', { class: 'v2-studio-now-pri', type: 'button' }) as HTMLButtonElement;
-  const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '마음에 들어요 · 확인으로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
+  const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
   const hint = el('small', { class: 'v2-review-hint' });
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위로 · 아래로', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
   bar.append(
-    el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요 — 적은 의견은 그대로예요', onclick: () => host.onBack() }),
+    el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요 — 적은 코멘트는 그대로예요', onclick: () => host.onBack() }),
     el('span', { class: 'v2-review-name' }, name, ver), el('i', { class: 'v2-review-sep' }),
     tools, count, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
     hint);
@@ -92,13 +93,13 @@ export function openReview(host: ReviewHost): ReviewApi {
   const paintBar = (): void => {
     const n = cmCount();
     tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
-    count.textContent = '의견 ' + n + '건' + (host.pins.length > n ? ' · 짚음 ' + host.pins.length : '');
-    count.title = '적은 의견을 한눈에 · 앱 전체 의견도 여기서';
+    count.textContent = '코멘트 ' + n + '건' + (host.pins.length > n ? ' · 짚음 ' + host.pins.length : '');
+    count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 고치는 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 다음 버전이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 앱이 우측 사이드바에 뜨면 여기서 코멘트를 남길 수 있어요' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.t + ' — ' + t.help;
+    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 다음 버전이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.t + ' — ' + t.help;
     layer.hidden = !S.frame || host.waiting;
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
   };
@@ -182,7 +183,7 @@ export function openReview(host: ReviewHost): ReviewApi {
         Object.assign(b.style, { left: p.x * 100 + '%', top: p.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
         layer.append(b);
       }
-      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 의견 열기',
+      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 코멘트 열기',
         onclick: (e: MouseEvent) => { e.stopPropagation(); openPop(i); } }, el('span', { text: String(i + 1) }));
       n.style.left = p.x * 100 + '%'; n.style.top = p.y * 100 + '%';
       layer.append(n);
@@ -196,15 +197,15 @@ export function openReview(host: ReviewHost): ReviewApi {
     const p = host.pins[i]; if (!p) return;
     if (pop) pop.remove();
     S.active = i; paintMarks();
-    const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 의견' }) as HTMLTextAreaElement; ta.value = p.note;
+    const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLTextAreaElement; ta.value = p.note;
     ta.addEventListener('input', () => { p.note = ta.value; changed(); });
     ta.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); closePop(); } if (e.key === 'Escape') closePop(); });
-    const kind = p.kind === 'pick' ? '고른 요소' : p.kind === 'box' ? '영역' : '핀';
-    const pp = el('div', { class: 'v2-studio-pop', role: 'dialog', 'aria-label': (i + 1) + '번 의견' },
+    const kind = p.kind === 'pick' ? '선택한 요소' : p.kind === 'box' ? '영역' : '핀';
+    const pp = el('div', { class: 'v2-studio-pop', role: 'dialog', 'aria-label': (i + 1) + '번 코멘트' },
       el('div', { class: 'k' }, el('span', { class: 'n', text: String(i + 1) }), el('b', { text: kind }), el('span', { class: 'w', text: p.where || '' })),
       ta,
       el('div', { class: 'act' },
-        el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 의견을 지워요', onclick: () => removePin(i) }),
+        el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(i) }),
         el('span', { class: 'v2-studio-sp' }), el('button', { type: 'button', class: 'v2-studio-now-pri', text: '완료', onclick: () => closePop() })));
     pp.addEventListener('pointerdown', (e) => e.stopPropagation());
     const right = p.x + (p.w || 0);
@@ -223,16 +224,16 @@ export function openReview(host: ReviewHost): ReviewApi {
   const openTray = (): void => {
     if (tray) { closeTray(); return; }
     const rows = host.pins.map((p, i) => {
-      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 의견' }) as HTMLInputElement; inp.value = p.note;
+      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; changed(); });
       return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: '그 자리 보기', onclick: () => { closeTray(); openPop(i); } }),
         el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 의견을 지워요', onclick: () => { removePin(i); closeTray(); openTray(); } }));
+        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 코멘트를 지워요', onclick: () => { removePin(i); closeTray(); openTray(); } }));
     });
-    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 의견(비워 두면 좋다는 뜻) · 예: 글자 조금 크게', 'aria-label': '앱 전체 의견' }) as HTMLInputElement; g.value = host.general;
+    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = host.general;
     g.addEventListener('input', () => { host.general = g.value; changed(); });
-    const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '보낼 의견' },
-      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '보낼 의견' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 의견 칸이 열려요' : '막대의 고르기 · 핀 · 영역으로 고칠 곳을 짚어 보세요' })),
+    const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' },
+      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 코멘트 칸이 열려요' : '막대의 선택 · 핀 · 영역으로 고칠 곳을 짚어 보세요' })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));
     tray = t;

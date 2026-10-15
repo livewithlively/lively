@@ -52,9 +52,9 @@ check(T("list") === "앱빌더" && T("new") === "앱빌더 · 새 앱" && T("res
 // ── 만들던 앱 상태 글 ──
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정») — 속 단계 draft · fix 는 사람에게 같은 ③.
 check(F.draftStageText("plan", false, false) === "② 세부 기획 정하기" && F.draftStageText("draft", false, false) === "③ 시안 만드는 중", "D1 앱이 아직 없으면 ②, 첫 판을 만드는 중이면 ③ 만드는 중");
-check(F.draftStageText("draft", true, false) === "③ 시안 확인 · 고치기" && F.draftStageText("fix", true, false) === "③ 시안 확인 · 고치기" && F.draftStageText("check", true, false) === "④ 확인" && F.draftStageText("put", true, false) === "⑤ 넣기", "D2 앱이 있으면 그 단계 — draft 와 fix 는 같은 ③ · 확인 ④ · 넣기 ⑤");
+check(F.draftStageText("draft", true, false) === "③ 시안 확인 · 수정" && F.draftStageText("fix", true, false) === "③ 시안 확인 · 수정" && F.draftStageText("check", true, false) === "④ 확인" && F.draftStageText("put", true, false) === "⑤ 넣기", "D2 앱이 있으면 그 단계 — draft 와 fix 는 같은 ③ · 확인 ④ · 넣기 ⑤");
 check(F.draftStageText("put", true, true) === "다 만든 앱 · 이어서 고치기" && F.draftStageText("fix", false, true) === "다 만든 앱 · 이어서 고치기", "D3 다 만든 것은 단계와 무관");
-check(F.draftStageText("zzz", true, false) === "③ 시안 확인 · 고치기", "D4 모르는 단계(앱 있음)는 ③ 으로");
+check(F.draftStageText("zzz", true, false) === "③ 시안 확인 · 수정", "D4 모르는 단계(앱 있음)는 ③ 으로");
 check(!/④ 고치기|⑥/.test([F.draftStageText("fix", true, false), F.draftStageText("put", true, false), F.draftStageText("zzz", true, false)].join(" ")), "D5 옛 여섯 단계 글(④ 고치기 · ⑥)은 어디에도 없다");
 
 // ── 만드는 중인 앱(원준 2026-10-15 «끝까지 안 만들었는데 왜 먼저 앱으로 나와») — 앱 찾기와 앱빌더가 같은 자로 잰다 ──

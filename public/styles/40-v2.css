@@ -1799,7 +1799,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-coach small { display: block; margin-top: 4px; color: #C8B9FF; font-size: 12px; }
 .v2-studio-coach-x { flex: none; width: 24px; height: 24px; margin: -3px 0 0; padding: 0; border: 0; border-radius: 6px; background: none; color: #C8B9FF; font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
 .v2-studio-coach-x:hover { background: rgba(255, 255, 255, .14); color: #fff; }
-.v2-studio-hub .v2-studio-coach { margin: -4px auto 0; }   /* 허브는 가운데 줄 — 꼬리도 가운데(위 두 단추 사이) */
+.v2-studio-app--side .v2-studio-coach { margin: 2px 16px 8px; }   /* ② 카드 · ④ 네 줄 — 안쪽 여백(16px)에 맞춘다 */
+.v2-studio-hub .v2-studio-coach { margin: -10px auto 0; }   /* 허브는 가운데 줄 — 꼬리도 가운데(위 두 단추 사이) */
 .v2-studio-hub .v2-studio-coach::before { left: 50%; margin-left: -6px; }
 .v2-studio-intro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(21, 35, 59, .35); padding: 20px; overflow: auto; }
 .v2-studio-intro-box { width: min(760px, 100%); background: var(--bg); border-radius: 16px; padding: 22px 24px; display: grid; gap: 14px; box-shadow: 0 20px 60px rgba(21, 35, 59, .3); }
@@ -3037,7 +3038,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-hub-head p { margin: 0; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
 /* 글 속 「수정하기」 — 「지금 할 일」 · 막대의 「수정하기」 와 같은 단추(같은 꼴 · 같은 일). 줄 높이만 글에 맞춘다. */
-.v2-studio-hub-head p .v2-studio-fix-in { height: 26px; padding: 0 11px; margin: 0 1px; font-size: 12.5px; vertical-align: 1px; }
+.v2-studio-hub-head p .v2-studio-fix-in { margin: 2px 1px; vertical-align: middle; }   /* 크기 · 글꼴은 .v2-studio-now-pri 그대로(«버튼 제대로 똑같이») */
 .v2-studio-hub-head p .v2-studio-fix-j { margin-left: 2px; }
 /* 두 단추는 같은 크기 — 같은 너비의 두 칸, 높이는 큰 쪽에 맞춘다(원준 2026-10-15 «박스 크기가 다르네»). 좁으면 한 줄씩. 하나뿐이면 가운데 한 칸. */
 .v2-studio-hub-go { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 6px 0; }
@@ -3061,7 +3062,15 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-wf-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .v2-studio-wf-empty { margin: auto; max-width: 420px; padding: 24px; display: grid; gap: 10px; justify-items: center; text-align: center; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
 .v2-studio-wf-empty p { margin: 0; }
-.v2-studio-hub .v2-studio-tray-list { max-height: 260px; }
+.v2-studio-hub .v2-studio-tray-list { max-height: 300px; gap: 8px; }
+/* 허브의 「보낼 의견」 칸은 크게(원준 2026-10-16 «좀 더 사이즈를 키웠으면») — 시험 세션 막대의 「의견 n건」 칸은 그대로 */
+.v2-studio-hub .v2-studio-tray { padding: 14px 18px; gap: 10px; border-radius: 14px; }
+.v2-studio-hub .v2-studio-tray-h { font-size: 15px; }
+.v2-studio-hub .v2-studio-tray-h small { font-size: 13px; }
+.v2-studio-hub .v2-studio-tray-row { gap: 10px; }
+.v2-studio-hub .v2-studio-tray-row .w { font-size: 14px; }
+.v2-studio-hub .v2-studio-tray-row .n { width: 24px; height: 24px; font-size: 12px; }
+.v2-studio-hub .v2-studio-tray-in { height: 42px; padding: 0 12px; border-radius: 10px; font-size: 14.5px; }
 .v2-studio-hub-wait { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
 .v2-studio-hub-fine { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
 .v2-review-bar { position: fixed; z-index: 85; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: calc(100vw - 24px); padding: 8px 10px 8px 8px; border-radius: 14px; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); font-size: 13px; }
