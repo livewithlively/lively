@@ -13,6 +13,7 @@ import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
 import { appGlassIcon } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
+import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { closeAppStudio, dropStudioRec, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
 import { appStateOf } from './app-session.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
@@ -315,7 +316,11 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x) => el('div', {}, el('b', { text: verName(x.version_no) }), el('span', { text: (x.note || '').trim() || (x.version_no === 1 ? '처음 만듦' : '고침') }),
       x.is_published && !x.is_current ? el('small', { text: '공개 버전' }) : null,
       x.is_current ? el('small', { text: a.visibility === 'all' && x.is_published ? '지금 쓰는 버전 · 공개' : '지금 보는 버전' })
-        : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이 버전으로', onclick: async () => { const to = await revertApp(a.id, x.version_no, a.title, { publish: pubIt }); if (to != null) refresh(); } }))) : [el('span', { class: 'v2-bld-mini', text: '버전 이력이 없어요' })]));
+        : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이 버전으로', onclick: async () => {
+          //  #4732 공개 앱이면 되돌린 버전이 바로 모두의 버전이다 — 그 버전이 표에 할 일을 먼저 보여 주고 묻는다.
+          if (pubIt && !(await confirmPublish(a.id, { versionNo: x.version_no, title: a.title }))) return;
+          const to = await revertApp(a.id, x.version_no, a.title, { publish: pubIt }); if (to != null) refresh();
+        } }))) : [el('span', { class: 'v2-bld-mini', text: '버전 이력이 없어요' })]));
   }).catch(() => { vers.replaceChildren(el('span', { class: 'v2-bld-mini', text: '버전 이력을 읽지 못했어요' })); });
   const del = el('button', { class: 'btn btn-ghost btn-sm v2-bld-danger', type: 'button', text: '앱 지우기' }) as HTMLButtonElement;
   del.onclick = () => {
@@ -333,11 +338,16 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
       : '워크스페이스 모두가 써요' + (a.canUnpublish ? ' · 「나만」 을 누르면 다른 사람은 더 열지 못해요' : '');
   v.panel.replaceChildren(
     el('h3', { text: '배포 설정 — 「' + a.title + '」' }),
-    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['me', '나만'], ['all', '워크스페이스 모두']], cur, (k) => {
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['me', '나만'], ['all', '워크스페이스 모두']], cur, async (k) => {
+      if (k === 'all' && !(await confirmPublish(a.id, { title: a.title }))) return;   // #4732
       void post('/visibility', { visibility: k }, k === 'all' ? '워크스페이스 모두에게 공개했어요' : '이제 나만 쓰는 앱이에요 — 다른 사람은 더 열지 못해요');
     }, !canFlip), el('small', { text: visNote })),
     ...(a.draft && a.canPublish ? [el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '나만 보는 버전' }), el('small', { text: verName(a.draft.versionNo) + ' — 아직 공개 전이에요' }),
-      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '공개하기', onclick: () => { void post('/visibility', { visibility: 'all' }, verJ(a.draft!.versionNo, '을') + ' 공개했어요 — 워크스페이스 모두가 써요'); } }))] : []),
+      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '공개하기', onclick: async () => {
+        //  #4732 남의 것이어도(책임자 · 관리자) 공개하면 표에 무엇을 하는지 먼저 보여 주고 묻는다.
+        if (!(await confirmPublish(a.id, { title: a.title }))) return;
+        void post('/visibility', { visibility: 'all' }, verJ(a.draft!.versionNo, '을') + ' 공개했어요 — 워크스페이스 모두가 써요');
+      } }))] : []),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '쓰는 자리' }), seg([['side', '세션 위젯'], ['full', '앱 화면'], ['both', '둘 다']], pl, async (k) => {
       //  배포 설정이라 공개 앱이면 바로 모두에게(초안이 걸려 있으면 그 초안에 담기고 공개는 「공개하기」 로).
       const now = a.visibility === 'all' && !a.draft;

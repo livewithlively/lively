@@ -18,15 +18,24 @@ import { editDenial, memberAppViolations } from "../apps/member-app.js";
 import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import { builtinAppDir } from "../apps/builtin-root.js";
 import {
-  filesFromStored, filesToInline, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
-  readPackageDir, uiPagesFromFiles, versionsToPrune, versionsToPruneForQuota, APP_VERSION_TOTAL_MAX_BYTES, type AppFile,
+  filesFromStored, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
+  readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
 } from "../apps/app-versions.js";
+//  #4481 앱 v2-2 — 판 파일은 파일 목록(bundle) + 저장소(S3 · 자가호스팅 DB). 읽기·쓰기는 app-version-files 한 자리를 지난다.
+import { appBundlePolicy, insertVersion, publishedScreens, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
+import { bundleFromDir, bundleFromFiles } from "../apps/app-bundle.js";
+import { bundleFilesToWrite, hasRefFiles, stageFromDir, stageFromRefs, takeSkipped, writeFilesToDir, type SaveFileInput } from "../apps/app-bundle-source.js";
+import { webRootOf } from "../apps/manifest.js";
+import { sessionDirAccess } from "./app-bundle-dir.js";
+import type { StagedSource } from "../apps/install-source.js";
 import {
   APP_VISIBILITIES, appViewFor, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAdminViewer, isAppOwner, isEmptyDraftApp, isOthersPendingVersion,
   listsAppFor, publishDenial, tablesGoneAtPublish, unpublishDenial, type AppView, type AppVisibility, type Viewer,
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
-import { asPublished, viewAppFor } from "../apps/app-view.js";
-import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, type AppTableReport } from "../apps/store-schema.js";
+import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
+import { multiFileFallbackHtml } from "../apps/app-front-page.js";
+import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
+import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan, type PublishPreview } from "../apps/publish-preview.js";
 import { notifyAppInstaller } from "../apps/notify.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
 import { getMember } from "../org/store/members.js";
@@ -143,9 +152,11 @@ function safeManifest(a: store.OrgApp): ReturnType<typeof parseAppManifest> | nu
 async function currentPackageFiles(app: store.OrgApp): Promise<{ files: AppFile[]; from: "version" | "folder" | "folder+db" | "db" }> {
   //  덮어쓴 빌트인은 구성원이 저장한 **판의 파일 묶음 그대로**가 지금 서빙본이다(bin/ 을 고쳤어도 거기 있다 — DB 에는 매니페스트·화면만 남아
   //  폴더+DB 로 되살리면 구성원이 고친 bin/ 이 릴리스 것으로 돌아간다. 격리 리뷰 7a). 그 판이 지금 내용과 같을 때만(해시) 믿는다.
-  if (isOverrideSource(app.source) && app.current_version_no != null) {
+  //  #4481 — 덮어쓴 빌트인만이 아니라 판 행이 지금 내용 그대로인 앱 전부(세션이 만든 앱도 — DB 로 되살리면 매니페스트·화면 말고는 잃는다:
+  //   bin/ · 여러 파일 앱의 dist/). 판 묶음은 저장소에서 읽는다.
+  if (app.current_version_no != null) {
     const cur = await store.getAppVersion(app.id, app.current_version_no);
-    if (cur && cur.content_hash != null && cur.content_hash === app.content_hash) return { files: cur.files, from: "version" };
+    if (cur && cur.content_hash != null && cur.content_hash === app.content_hash) return { files: await versionFiles(cur), from: "version" };
   }
   const stored = filesFromStored(app.manifest, await store.listUiAssetsFull(app.id));
   if (isBuiltinSource(app.source)) {
@@ -160,33 +171,53 @@ async function currentPackageFiles(app: store.OrgApp): Promise<{ files: AppFile[
 
 /** 지금 상태를 판으로 떠 둔다(저장·되돌리기 직전). 호출부가 설치 락 안에서 부른다. 반환 = 판 번호. */
 async function snapshotCurrentVersion(app: store.OrgApp, savedBy: string | null, note: string): Promise<number> {
-  const { files } = await currentPackageFiles(app);
-  return store.insertAppVersion(app.id, {
-    origin: originOfCurrent(app.source), version: app.version, manifest: app.manifest, files,
+  const { files, from } = await currentPackageFiles(app);
+  //  #4481 여러 파일 앱은 DB 에 매니페스트·entry HTML 만 남는다 — 거기서 되살린 판은 dist/ 를 잃은 «깨진 판» 이다. 떠 두지 않고 알린다.
+  if (from === "db" && webRootOf(app.manifest) !== null) {
+    throw new HttpError(409, `「${app.title || app.id}」 의 지금 상태를 판으로 떠 둘 파일 묶음이 없습니다 — 앱 폴더에서 다시 저장해 주세요(app_save {dir})`);
+  }
+  return recordVersion(app.id, {
+    origin: originOfCurrent(app.source), version: app.version, manifest: app.manifest,
     content_hash: app.content_hash, note, saved_by: savedBy,
-  });
+  }, bundleFromFiles(files));
 }
 
-/** app_save 입력 파일을 판에 적을 모양으로(순수) — 경로·내용·인코딩만 남긴다. */
-function inputFilesForVersion(files: unknown): AppFile[] {
-  return (Array.isArray(files) ? files : []).map((f) => {
-    const o = (f ?? {}) as Record<string, unknown>;
-    const enc = o.encoding === "base64" ? "base64" as const : undefined;
-    return enc ? { path: String(o.path ?? ""), content: String(o.content ?? ""), encoding: enc } : { path: String(o.path ?? ""), content: String(o.content ?? "") };
-  });
+/**
+ * #4481 구성원 저장(app_save · 그 판으로 되돌리기)이 하네스 자산을 싣지 않게 — 로더는 매니페스트 harness 칸이 없어도 패키지 맨 위의
+ *  skills/ · agents/ · commands/ 를 하네스 자산으로 읽어 조직 전체에 깐다(loader scanHarnessAssets). 설명의 «스킬·훅은 관리자 설치로만» 을
+ *  코드로 지킨다 — 폴더째 저장(dir)이 생기며 앱 폴더의 그런 폴더가 모르게 딸려 올 수 있게 됐다. 있으면 사람에게 보일 까닭, 없으면 null.
+ */
+function memberHarnessAssets(loaded: { items: ReadonlyArray<{ comp: { kind: string; orig_name?: string | null } }> }): string | null {
+  const names = loaded.items.filter((it) => it.comp.kind === "harness_asset").map((it) => String(it.comp.orig_name ?? ""));
+  if (!names.length) return null;
+  return `앱 폴더 맨 위에 하네스 자산(skills/ · agents/ · commands/ — 구성원 컴퓨터에 까는 스킬·명령)이 있어 app_save 로 저장할 수 없습니다: ${names.slice(0, 5).join(" · ")}${names.length > 5 ? " …" : ""} — 그 폴더를 빼거나(이름을 바꾸거나) 관리자 설치(org_app_install)를 부탁하세요`;
 }
 
-/** 구성원 판을 보관 수만큼만 남기고(원본 판은 세지 않는다), 워크스페이스 총량 상한을 넘겼으면 앱 불문 오래된 구성원 판부터 더 지운다.
- *  #4667 지금 판과 공개 판은 보관 수 밖이어도 남긴다(공개 판은 초안이 있는 동안 나머지 모두가 보는 판이다). */
+/**
+ * #4481 app_save 입력 → 설치 스테이지. dir(세션 프로젝트 폴더 — 게이트웨이가 직접 읽는다) · files 의 지문 줄(이 워크스페이스에 이미 있는 파일)
+ *  · files 내용만(종전 inline 길 — 옛 상한 그대로) 중 하나. 판 상한(app_bundle_limits)은 앞의 둘이 걷는 자리에서 먼저 본다.
+ */
+async function stageSaveInput(input: Record<string, unknown>, user: LivelyUser, ctx: { session?: string } | undefined): Promise<StagedSource> {
+  const files = Array.isArray(input.files) ? (input.files as SaveFileInput[]) : null;
+  const dir = input.dir == null || String(input.dir).trim() === "" ? null : String(input.dir);
+  if (dir && files?.length) throw new HttpError(400, "files 와 dir 중 하나만 주세요");
+  if (dir) {
+    const { acc, shown } = await sessionDirAccess(ctx, actorOf(user), dir);
+    return stageFromDir(acc, shown, await appBundlePolicy());
+  }
+  if (!files?.length) throw new HttpError(400, "files(파일 묶음) 또는 dir(이 세션의 앱 폴더)가 필요합니다");
+  if (hasRefFiles(files)) return stageFromRefs(files, await appBundlePolicy());
+  return stageAppSource(parseAppSource({ kind: "inline", files }));
+}
+
+/** 구성원 판을 보관 수만큼만 남긴다(원본 판은 세지 않는다).
+ *  #4667 지금 판과 공개 판은 보관 수 밖이어도 남긴다(공개 판은 초안이 있는 동안 나머지 모두가 보는 판이다).
+ *  #4481 — 종전의 «워크스페이스 총량(DB 64MiB)을 넘으면 앱 불문 오래된 판부터 더 지우기» 는 걷었다. 판 파일이 S3 로 가며 총량은
+ *   워크스페이스 상한(app_bundle_limits workspace_max_mb, 기본 10GB)이 되었고, 넘으면 저장이 413 으로 알린다 — 남의 앱 이력을 말없이 지우지 않는다.
+ *   지운 판만 가리키던 파일은 하우스키핑 정리(app-bundle-migrate)가 하루 뒤 걷는다. */
 async function pruneVersions(appId: string): Promise<void> {
   const app = await store.getApp(appId);
   await store.deleteAppVersions(appId, versionsToPrune(await store.listAppVersions(appId), undefined, [app?.current_version_no, app?.published_version_no]));
-  const total = await store.appVersionBytesTotal();
-  if (total <= APP_VERSION_TOTAL_MAX_BYTES) return;
-  const victims = versionsToPruneForQuota(await store.listMemberVersionsOldestFirst(), total);
-  const byApp = new Map<string, number[]>();
-  for (const v of victims) byApp.set(v.app_id, [...(byApp.get(v.app_id) ?? []), v.version_no]);
-  for (const [id, nos] of byApp) await store.deleteAppVersions(id, nos);
 }
 
 /** 지금 서빙 중인 내용이 이 판 그대로인가 — 번호가 아니라 **내용(해시)** 으로 본다(관리자 org_app_install 이 내용을 바꿔도 맞게 · 격리 리뷰 7b). */
@@ -265,6 +296,12 @@ async function notifyDraftDisplaced(app: { id: string; title: string }, displace
   }).catch((err) => logger.warn({ err, id: app.id }, "밀려난 초안 알림 실패(비치명)"));
 }
 
+/** 「공개하기」 가 표를 맞추나 — 초안이 걸린 공개 앱만(나만 보는 앱의 첫 공개엔 미룬 것이 없고 · 초안이 없으면 공개할 것이 없고 ·
+ *  기본 앱의 공유 표는 저장 때 이미 더하기만 받았다). 공개(publishCurrent)와 공개 미리 보기(#4732)가 같이 쓴다 — 한쪽만 바뀌어 갈라지지 않게. */
+function publishTouchesTables(app: store.OrgApp): boolean {
+  return !isBuiltinSource(app.source) && app.visibility === "all" && !!app.draft_by;
+}
+
 /**
  * 「공개하기」 의 몸통(설치 락 안) — 설치된 상태를 판 행에 맞추고 모두가 보는 판으로 옮긴다. 옛 공개 판에만 있던 표는 이때 정리한다
  *  (초안을 까는 동안은 공개 판이 그 표를 아직 썼다 — install-run keepTables). changed=false 면 이미 그 판이 공개돼 있었다.
@@ -284,7 +321,7 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   //   지키는 칸 없이 끝까지 맞춘다. 있던 데이터가 새 규칙에 어긋나면 여기서 409(몇 행인지)로 멈춰 **공개하지 않는다**(초안은 그대로 남는다).
   //   표 전부를 한 트랜잭션으로(atomic) — 앞 표만 바뀐 채 멈추면 아직 공개 판인 옛 코드가 그 표에서 깨진다.
   //   초안이 걸린 공개 앱만(나만 보는 앱의 첫 공개엔 미룬 것이 없다) · 기본 앱의 공유 표는 하지 않는다(저장 때 이미 더하기만 받았다).
-  const tables = !isBuiltinSource(app.source) && app.visibility === "all" && app.draft_by ? emptyTableReport() : undefined;
+  const tables = publishTouchesTables(app) ? emptyTableReport() : undefined;
   if (tables) {
     await ensureAppTables(app.id, tableSpecsOf(app.manifest), { schema: appSchemaFor(false), strict: true, sqlRole: true, atomic: true, report: tables });
   }
@@ -303,6 +340,70 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
     if (gone.length) await cleanupGoneTables(app, gone, who.userId, "새 공개 판");
   }
   return { version_no: no, changed: true, tables };
+}
+
+/**
+ * #4732 공개 미리 보기(설치 락 안) — 지금 「공개하기」(versionNo 없음) 또는 그 판으로 되돌리고 바로 공개(versionNo)하면 표에 할 일.
+ *  아무것도 바꾸지 않는다: 공개(publishCurrent)와 같은 표 맞추기를 **한 트랜잭션으로 걸어 보고 늘 되돌린다**(dryRun · 지킴 없음 — 공개는 칸을 지키지 않는다).
+ *  그래서 미리 보기와 실제가 같은 규칙으로 계산된다(따로 된 판정기를 두지 않는다 — #4724 격리 리뷰). 걸어 보는 동안 바뀌는 표는 잠기므로
+ *  잠금 대기 · 문장 시간을 짧게 둔다(previewLimits) — 넘으면 «다 보지 못했다»(incomplete)로 돌아오고, 그동안 그 표를 쓰는 사람은 그 시간만 기다린다.
+ *  되돌려 공개(versionNo)는 «그 판 설치(칸 지킴) → 공개(지킴 없음)» 의 합이라 그 판의 선언을 지킴 없이 걸어 본 것과 같다. 정리될 표는
+ *  지금 물리 표(설치된 판 ∪ 공개 판) 중 그 판에 없는 것(설치 때 · 공개 때 정리가 나눠 한다).
+ */
+async function previewPublish(appId: string, who: Viewer, versionNo: number | null): Promise<PublishPreview> {
+  const app = await store.getApp(appId);
+  if (!app || !canSeeApp(app, who)) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (isEmptyDraftApp(app)) throw new HttpError(409, `「${app.title || app.id}」 은(는) 아직 첫 판이 없어 공개할 것이 없습니다 — 먼저 app_save 로 저장하세요`);
+  const base: PublishPreview = {
+    app_id: app.id, kind: versionNo == null ? "publish" : "revert", version_no: versionNo ?? app.current_version_no ?? null,
+    published_version_no: app.visibility === "all" ? app.published_version_no ?? null : null,
+    changes: [], notes: [], blocked: [], incomplete: null, tables: null, gone_tables: [],
+  };
+  let target: unknown;
+  let gone: string[];
+  if (versionNo == null) {
+    const why = publishDenial(app, who, editDenial(app, who, safeManifest(app)));
+    if (why) throw new HttpError(403, why);
+    //  공개가 표를 만지는 경우만(publishCurrent 와 같은 판정) — 나만 보는 앱의 첫 공개 · 초안 없는 공개 앱 · 기본 앱(공유 표)은 할 일이 없다.
+    if (!publishTouchesTables(app)) return base;
+    target = app.manifest;
+    const old = app.published_version_no != null ? await store.getAppVersionHead(app.id, app.published_version_no) : null;
+    gone = old ? tablesGoneAtPublish(old.manifest, app.manifest) : [];
+  } else {
+    const why = editDenial(app, who, safeManifest(app));
+    if (why) throw new HttpError(403, why);
+    const ver = await store.getAppVersion(app.id, versionNo);
+    if (!ver || isOthersPendingVersion(app, ver, who, publishedAtMs(app))) throw new HttpError(404, `앱 '${app.id}' 에 ${versionNo}판이 없습니다`);
+    //  기본 앱의 공유 표는 되돌려도 더하기만 한다(깨는 판은 되돌리기가 409 — assertSharedTablesAccept).
+    if (isBuiltinSource(app.source)) return base;
+    target = ver.manifest;
+    const keep = new Set(declaredTableNames(ver.manifest));
+    gone = (await liveTableNames(app)).filter((t) => !keep.has(t));
+  }
+  const report = emptyTableReport();
+  const failures: AppTableFailure[] = [];
+  const lim = previewLimits();
+  await ensureAppTables(app.id, tableSpecsOf(target), {
+    schema: appSchemaFor(false), atomic: true, dryRun: true, report, failures,
+    lockMs: lim.lockMs, statementMs: lim.statementMs, deadlineAt: Date.now() + lim.totalMs, surfaceTimeouts: true,
+  });
+  //  보관 자리 이름은 공개하는 시각으로 정해진다 — 걸어 본 이름(되돌려 없어진 표)을 내보내지 않는다.
+  for (const d of report.dropped_columns) d.archived_as = null;
+  const { blocked, incomplete } = splitFailures(failures);
+  let goneTables: GoneTablePlan[] = [];
+  let goneError: string | null = null;
+  try { goneTables = await planDroppedTables(app.id, gone, appSchemaFor(false), { lockMs: lim.lockMs, statementMs: lim.statementMs }); }
+  catch (err) {
+    const code = (err as { code?: unknown })?.code;
+    goneError = code === "55P03" || code === "57014"
+      ? `새 판에 없는 표(${gone.join(", ")})는 지금 쓰는 사람이 있거나 커서 다 세지 못했습니다 — 공개할 때 행이 있으면 지우지 않고 보관합니다`
+      : `새 판에 없는 표(${gone.join(", ")})를 어떻게 정리할지 보지 못했습니다: ${(err as Error)?.message ?? err}`;
+  }
+  const { changes, notes } = describeTableChanges(report, goneTables);
+  return {
+    ...base, tables: report, gone_tables: goneTables, blocked, changes, notes,
+    incomplete: [incomplete, goneError].filter(Boolean).join(" · ") || null,
+  };
 }
 
 /** publish:true 의 공개 단계 — 실패해도 저장(설치 · 판 행 · 초안 표식)은 이미 끝났다. 잡아서 돌려주면 부르는 쪽이 저장 사건을 낸 뒤
@@ -525,6 +626,10 @@ const appInstall: Capability = {
       const loaded = await loadAppPackage(staged.dir);
       let previousHash: string | null = null;
       const actor = actorOf(user);
+      //  #4481 여러 파일 앱(web.root)은 화면 파일이 판 묶음에만 있다(설치는 매니페스트·entry HTML 만 보존한다) — 관리자 설치도 판으로 적어
+      //   앱 주소가 그 판을 낸다. 파일은 **설치 전에** 저장소에 둔다 — 상한(413)·저장소 실패가 설치를 반쯤 해 둔 채(화면 파일 없는 여러 파일 앱)
+      //   끝나지 않게. 화면 한 장 앱(v1)은 종전 그대로(판 이력은 처음 고칠 때 생긴다).
+      const bundled = webRootOf(loaded.manifest) !== null ? await storeVersionBundle(await bundleFromDir(staged.dir)) : null;
       const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
         const before = await store.getApp(loaded.manifest.id);
         //  같은 id 의 남의 나만 보는 앱 위에는 깔지 않는다 — 관리자 목록엔 그 앱이 서지 않으니 덮는 줄 모르고 남의 앱 코드를 바꾸게 된다(격리 리뷰 2-1).
@@ -537,6 +642,10 @@ const appInstall: Capability = {
         const pendingDraft = before && before.visibility === "all" && before.draft_by ? before : null;
         const oldPub = pendingDraft && pendingDraft.published_version_no != null ? await store.getAppVersionHead(pendingDraft.id, pendingDraft.published_version_no) : null;
         const out = await installLoadedApp(loaded, staged.meta, wctx(user, ctx));
+        if (bundled) {
+          const no = await insertVersion(out.id, { origin: "member", version: loaded.manifest.version, manifest: loaded.manifest, content_hash: loaded.contentHash, note: "관리자 설치", saved_by: actor }, bundled);
+          await store.setAppCurrentVersion(out.id, no);
+        }
         if (pendingDraft) {
           await store.setAppDraftBy(out.id, null);
           await store.setAppPublishedPointer(out.id, null);
@@ -569,7 +678,11 @@ const appSave: Capability = {
   name: "app_save",
   title: "앱 저장(만들기·고치기)",
   description: "세션이 만든 앱 파일 묶음을 이 워크스페이스에 저장한다 — 새 id 면 만들고, 있는 id 면 고친다(재설치 = 갱신, 롤 불필요). " +
-    "files=[{path, content, encoding?:'utf8'|'base64'}] · lively-app.json 필수. 구성원 누구나 쓸 수 있고, 담을 수 있는 것은 **화면(ui.pages) + 데이터(data.tables) + " +
+    "files=[{path, content, encoding?:'utf8'|'base64'}] · lively-app.json 필수. " +
+    "★ 여러 파일 앱(#4481 — 빌드한 dist/ · 이미지 · 폰트): 매니페스트 web.root 에 화면 폴더(예 \"dist\")를 적고 ui.pages[].entry 를 그 안(예 \"dist/index.html\")으로, " +
+    "그리고 files 대신 **dir**(이 세션의 프로젝트 폴더 안 앱 폴더 — 게이트웨이가 직접 읽는다)로 저장한다. 그 폴더의 파일이 전부 앱 주소에서 그 경로로 뜬다" +
+    "(없는 경로는 index.html — 한 페이지 앱). app_pull 이 준 큰 파일은 content 없이 sha256 만 넣어도 된다. 판·파일 상한은 app_bundle_limits. " +
+    "구성원 누구나 쓸 수 있고, 담을 수 있는 것은 **화면(ui.pages) + 데이터(data.tables) + " +
     "선언한 라이블리 도구(permissions.tools — 쓰는 사람이 동의한 만큼만)**까지다. 스킬·훅·정기 작업·MCP/HTTP 도구·서버 worker·외부 호스트·화면의 직접 네트워크는 관리자 설치(org_app_install)로만. " +
     "★ 공개 범위(#4632 · #4667): 새로 만든 앱은 **나만 보는 앱**(visibility 'me' — 만든 사람만 앱 찾기·세션에서 본다)으로 시작하고, 이미 공개된 앱을 고치면 그 판은 **저장한 사람만 보는 초안**이다 — " +
     "다른 구성원은 공개 판을 계속 쓴다. 모두에게 보이게 하려면 app_visibility_set {app_id, visibility:'all'}(또는 이 호출에 publish: true). 만든 사람·만들기 세션·사본의 원본(origin_app_id)은 서버가 기록한다(매니페스트 studio 칸은 기록이 아니다). " +
@@ -584,27 +697,40 @@ const appSave: Capability = {
     "그때까지 초안도 바뀌기 전 표로 돈다. 이름 · 종류를 바꾸려면 새 칸을 더해 쓰고 옛 칸은 공개할 때 drop_columns 로 지운다. 기본 앱의 표는 여러 워크스페이스가 나눠 써서 깨는 변경이면 409.",
   scope: null,
   input: {
-    files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })),
+    files: z.array(z.object({
+      path: z.string(), content: z.string().optional(), encoding: z.enum(["utf8", "base64"]).optional(),
+      sha256: z.string().regex(/^[0-9a-fA-F]{64}$/).optional().describe("content 대신 — 이 워크스페이스에 이미 있는 파일의 내용 지문(app_pull 이 준 sha256). content 가 있으면 content 가 이긴다"),
+    })).optional(),
+    dir: z.string().max(1024).optional().describe("files 대신 — 이 세션의 프로젝트 폴더 안 앱 폴더(lively-app.json 이 있는 곳 · 프로젝트 폴더 기준 상대경로 또는 세션 안 절대경로). " +
+      "게이트웨이가 그 폴더를 직접 읽는다 — 빌드한 여러 파일 앱(dist/)처럼 도구 본문에 옮겨 적을 수 없는 묶음은 이걸로. 숨김 파일(.git · .env)·node_modules · 심링크 · " +
+      "비밀 열쇠 꼴 파일(*.pem · *.key · *.p12 · *.pfx · *.jks · *.keystore · id_rsa 등)은 뺀다 — 뺀 열쇠 꼴 파일 이름은 응답 skipped(꼭 실어야 하는 공개 인증서면 files 로)"),
     note: z.string().max(500).optional().describe("이 판의 요지 한 줄(판 이력에 남는다 — 예: «글 줄 칸을 아래로 · 보낸 줄 접힘»)"),
-    publish: z.boolean().optional().describe("저장하면서 바로 모두에게 공개한다(app_visibility_set visibility:'all' 과 같다). 생략하면 새 앱은 나만 보는 앱, 공개 앱은 저장한 사람만 보는 초안으로 남는다"),
+    publish: z.boolean().optional().describe("저장하면서 바로 모두에게 공개한다(app_visibility_set visibility:'all' 과 같다). 생략하면 새 앱은 나만 보는 앱, 공개 앱은 저장한 사람만 보는 초안으로 남는다. " +
+      "공개한 앱의 표를 지우거나 조이는 저장이면 publish 없이 저장 → app_publish_preview 로 표에 할 일을 본 뒤 공개한다"),
     origin_app_id: z.string().max(64).optional().describe("새로 만드는 앱이 다른 앱의 사본일 때 원본 앱 id — 서버가 «원본» 으로 기록한다(있는 앱을 고칠 때는 무시)"),
   },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/apps/save"], parse: (req) => {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      return { files: b.files, note: b.note, publish: b.publish === true ? true : undefined, origin_app_id: b.origin_app_id == null || b.origin_app_id === "" ? undefined : String(b.origin_app_id) };
+      return { files: b.files, dir: b.dir == null || b.dir === "" ? undefined : String(b.dir), note: b.note, publish: b.publish === true ? true : undefined, origin_app_id: b.origin_app_id == null || b.origin_app_id === "" ? undefined : String(b.origin_app_id) };
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
-    const source = parseAppSource({ kind: "inline", files: input.files });
-    const staged = await stageAppSource(source);
+    const staged = await stageSaveInput(input, user, ctx);
+    //  폴더째 저장이 뺀 비밀 열쇠 꼴 파일 이름 — 이 응답에만 싣는다(앱 행의 source 에 남기면 앱을 보는 모두에게 그 이름이 보인다 · 격리 리뷰 재검토 7).
+    const skipped = takeSkipped(staged.meta);
     try {
       const loaded = await loadAppPackage(staged.dir);
       const bad = memberAppViolations(loaded.manifest);
       if (bad.length) {
         throw new HttpError(403, `이 앱은 화면·데이터 밖의 기능을 선언해서 app_save 로 저장할 수 없습니다: ${bad.join(" · ")} — 빼고 저장하거나 관리자 설치(org_app_install)를 부탁하세요`);
       }
+      const harness = memberHarnessAssets(loaded);
+      if (harness) throw new HttpError(403, harness);
+      //  #4481 — 판 파일을 저장소에 **먼저** 둔다(상한 413 · 업로드 실패가 초안 표식·예약을 건드리기 전에 나게). 저장이 뒤에서 실패하면
+      //   이 파일들은 어떤 판도 안 가리켜 하루 뒤 정리된다.
+      const bundled = await storeVersionBundle(await bundleFromDir(staged.dir));
       const id = loaded.manifest.id;
       const who = viewerOf(user);
       const note = input.note == null || String(input.note).trim() === "" ? null : String(input.note).trim();
@@ -653,10 +779,10 @@ const appSave: Capability = {
         const meta = isBuiltinSource(app0.source) ? overrideSourceMeta(staged.meta, id) : staged.meta;
         //  판 행을 **설치 전에** 먼저 쓴다(격리 리뷰 7c) — 설치가 됐는데 판 기록이 없는 상태(되돌릴 곳 없음)를 만들지 않는다.
         //  설치가 실패하면 그 행을 거둔다(best-effort — 남아도 current_version_no 가 안 가리키므로 is_current 가 아니다).
-        const versionNo = await store.insertAppVersion(id, {
-          origin: "member", version: loaded.manifest.version, manifest: loaded.manifest, files: inputFilesForVersion(input.files),
+        const versionNo = await insertVersion(id, {
+          origin: "member", version: loaded.manifest.version, manifest: loaded.manifest,
           content_hash: loaded.contentHash, note, saved_by: who.userId,
-        });
+        }, bundled);
         let outcome;
         try {
           //  공개 판이 선언한 표는 초안이 빼도 지우지 않는다 — 공개 판을 쓰는 사람들의 데이터다(「공개하기」 가 그때 정리한다).
@@ -697,7 +823,7 @@ const appSave: Capability = {
       if (tables && r.pub?.tables) { mergeReport(tables, r.pub.tables); tables.deferred = []; }
       return {
         app, created: r.created, tables, version_no: versionNo,
-        visibility: app?.visibility ?? null, state,
+        visibility: app?.visibility ?? null, state, ...(skipped.length ? { skipped } : {}),
         hint: state === "me" ? `나만 보는 앱으로 저장했습니다(책임자에게만 보임) — 워크스페이스 모두가 쓰게 하려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
           : state === "draft" ? `초안으로 저장했습니다 — ${versionNo}판은 저장한 사람에게만 보이고 다른 구성원은 공개 판을 계속 씁니다. 모두에게 내보내려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
             + (deferredNow.length ? ` · 공개 판이 쓰는 칸이라 공개할 때 반영할 표 변경 ${deferredNow.length}개: ${deferredNow.map((d) => d.change).join(" · ")}`
@@ -721,27 +847,54 @@ const appPull: Capability = {
     "기본 앱(빌트인)은 패키지 폴더 전체(bin/ 의 세션 스크립트 · README 포함), 워크스페이스가 덮어쓴 기본 앱은 그 위에 지금 화면, 세션이 만든 앱은 매니페스트 + 화면. " +
     "source_kind · overrides_builtin · builtin_version(폴더의 릴리스 판) · current_version_no 도 함께. 구성원 누구나.",
   scope: null,
-  input: { app_id: z.string() },
+  input: {
+    app_id: z.string(),
+    dir: z.string().max(1024).optional().describe("#4481 내용을 응답에 싣는 대신 이 세션의 프로젝트 폴더 안 새 폴더(없거나 빈 폴더)에 판 파일을 푼다 — 큰 여러 파일 앱으로 사본을 뜰 때"),
+  },
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/apps/:id/pull"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
   },
   //  #4667 — 보는 사람의 판을 준다: 초안을 만든 사람(과 나만 보는 앱의 책임자)은 설치된 상태, 나머지는 공개 판의 파일 묶음.
   //   그래서 남의 앱 「내 사본」 은 늘 모두가 쓰는 공개 판에서 떠진다(남의 초안이 사본에 섞이지 않는다).
-  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+  //  #4481 — 판 행(공개 판 · 지금 내용 그대로인 판)이 있으면 그 묶음을 준다. 줄마다 sha256 · size 를 싣고, 큰 판(2MB 넘음)은 작은 글 파일만 내용,
+  //   나머지는 지문만 — 지문만 받은 줄은 그대로 app_save files 에 다시 넣으면 된다(앱 만들기 화면의 사본 · 설정 바꾸기가 이 길).
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     const id = appId(input.app_id);
     const who = viewerOf(user);
     const installed = await requireVisibleApp(id, who);
     if (isEmptyDraftApp(installed)) throw new HttpError(404, `앱 '${id}' 은(는) 아직 첫 판이 없습니다 — 먼저 app_save 로 저장하세요`);
     const view = appViewFor(installed, who);
     const pub = view === "published" ? await store.getAppVersion(id, installed.published_version_no as number) : null;
-    const { files, from } = pub ? { files: pub.files as AppFile[], from: "version" as const } : await currentPackageFiles(installed);
+    const cur = !pub && installed.current_version_no != null ? await store.getAppVersion(id, installed.current_version_no) : null;
+    const row = pub ?? (cur && cur.content_hash != null && cur.content_hash === installed.content_hash ? cur : null);
+    const base = row ? null : await currentPackageFiles(installed);
+    const from = row ? "version" as const : (base as { from: "version" | "folder" | "folder+db" | "db" }).from;
+    //  #4481 여러 파일 앱인데 판 묶음이 없다 — DB 로 되살리면 dist/ 가 빠진 묶음을 사본·고치기 재료로 주게 된다.
+    if (from === "db" && webRootOf(installed.manifest) !== null) {
+      throw new HttpError(409, `「${installed.title || id}」 의 파일 묶음을 찾지 못했습니다 — 앱 폴더에서 다시 저장한 뒤 내려받으세요`);
+    }
     const app = pub ? asPublished(installed, pub) : installed;
     const src = (app.source ?? {}) as { kind?: unknown };
-    return {
+    const head = {
       app_id: id, title: app.title, version: app.version, source_kind: String(src.kind ?? ""), overrides_builtin: isOverrideSource(app.source),
-      builtin_version: app.builtin_version, current_version_no: app.current_version_no, from, files,
+      builtin_version: app.builtin_version, current_version_no: app.current_version_no, from,
       view: pub ? "published" : "installed", visibility: installed.visibility,
+    };
+    if (input.dir != null && String(input.dir).trim() !== "") {
+      const { acc, shown } = await sessionDirAccess(ctx, who.userId, input.dir);
+      const vb = row ? versionBundle(row) : null;
+      const items = vb ? bundleFilesToWrite(vb.kind, vb.bundle) : ((row ? row.files : (base as { files: AppFile[] }).files) as AppFile[]).map((f) => {
+        const bytes = Buffer.from(f.content, f.encoding === "base64" ? "base64" : "utf8");
+        return { p: f.path, s: bytes.length, read: async () => bytes };
+      });
+      const written = await writeFilesToDir(acc, shown, items);
+      return { ...head, dir: shown, written, files: items.map((x) => ({ path: x.p, size: x.s })) };
+    }
+    const pulled = await pullFiles(row ?? { files: (base as { files: AppFile[] }).files });
+    return {
+      ...head, files: pulled.files,
+      ...(pulled.refs ? { refs: pulled.refs, hint: `큰 판이라 파일 ${pulled.refs}개는 내용 없이 지문(sha256)만 실었습니다 — 고쳐 저장할 땐 그 줄을 그대로 app_save files 에 넣으면 되고(내용 없이 sha256), 파일 내용이 필요하면 app_pull {app_id, dir} 로 세션 폴더에 푸세요` } : {}),
     };
   },
 };
@@ -795,7 +948,7 @@ const appRevert: Capability = {
   scope: null,
   input: {
     app_id: z.string(), version_no: z.number().int().positive(),
-    publish: z.boolean().optional().describe("되돌린 판을 바로 모두에게 공개한다(앱빌더 「배포 설정 ▸ 이 판으로」)"),
+    publish: z.boolean().optional().describe("되돌린 판을 바로 모두에게 공개한다(앱빌더 「배포 설정 ▸ 이 판으로」) — 표에 할 일은 먼저 app_publish_preview {version_no} 로 본다"),
   },
   expose: {
     mcp: true,
@@ -848,18 +1001,21 @@ const appRevert: Capability = {
           const fresh = await store.getApp(id);
           if (fresh && !isCurrentVersion(fresh, ver)) {
             await currentPackageFiles(fresh)
-              .then(({ files }) => store.refreshOriginVersion(id, target, {
-                version: fresh.version, manifest: fresh.manifest, files, content_hash: fresh.content_hash, note: `원본 · 릴리스 ${fresh.version}`,
-              }))
+              .then(({ files }) => refreshOrigin(id, target, {
+                version: fresh.version, manifest: fresh.manifest, content_hash: fresh.content_hash, note: `원본 · 릴리스 ${fresh.version}`,
+              }, bundleFromFiles(files)))
               .catch((err) => logger.warn({ err, id, target }, "원본 판을 지금 릴리스로 맞추지 못했다(비치명 — 되돌리기는 끝났다)"));
           }
         } else {
-          const staged = await stageAppSource(parseAppSource({ kind: "inline", files: filesToInline(ver.files) }));
+          //  #4481 — 판 묶음은 저장소에서 풀어 깐다(옛 inline 상한 8MiB 를 지나지 않는다 · 여러 파일 앱 되돌리기). 옛 판은 종전 inline 길.
+          const staged = await stageVersion(ver);
           try {
             const loaded = await loadAppPackage(staged.dir);
             if (loaded.manifest.id !== id) throw new HttpError(409, `${target}판의 매니페스트 id(${loaded.manifest.id})가 앱 id 와 다릅니다`);
             const bad = memberAppViolations(loaded.manifest);
             if (bad.length) throw new HttpError(403, `${target}판은 화면·데이터 밖의 기능을 선언해서 app_save 경로로 되돌릴 수 없습니다: ${bad.join(" · ")}`);
+            const harness = memberHarnessAssets(loaded);
+            if (harness) throw new HttpError(403, `${target}판 — ${harness}`);
             const out = await installLoadedApp(loaded, builtinLineage ? overrideSourceMeta(staged.meta, id) : staged.meta, wctx(user, ctx), { keepTables, protect });
             deferred = out.tables?.deferred ?? [];
           } finally {
@@ -905,6 +1061,7 @@ const appVisibilitySet: Capability = {
     "옛 공개 판에만 있던 데이터 표는 이때 정리한다(비었으면 삭제 · 데이터 있으면 보관). 초안 저장 때 공개 판이 쓰는 칸이라 미뤄 둔 표 변경(칸 지우기 · 이름 · 형 바꾸기 · 조이기)도 " +
     "이때 적용한다 — 있던 데이터가 새 규칙에 어긋나면 409(몇 행인지)로 공개하지 않는다(어느 표도 바뀌지 않고 초안은 그대로). 'me' = 「나만」 으로 되돌리기 — 다른 구성원은 그 순간부터 이 앱을 열지 못하고 " +
     "그 세션의 AI 도 이 앱 표를 못 쓴다(데이터 · 판 이력 · 동의는 그대로라 다시 공개하면 이어서 쓴다). " +
+    "'all' 전에 app_publish_preview 로 표에 할 일(지울 칸 · 조이기 · 막힐 행)을 볼 수 있다. " +
     "누가: 나만 보는 앱의 공개 · 'me' 로 되돌리기 = 책임자 · 관리자 / 공개 앱의 초안 공개 = 그 초안을 고친 사람 · 책임자 · 관리자. 기본 앱(빌트인)은 'me' 로 못 바꾼다. " +
     "app_save 로 새로 생긴 앱과 앱 만들기가 예약한 앱은 'me' 로 시작한다.",
   scope: null,
@@ -950,6 +1107,50 @@ const appVisibilitySet: Capability = {
       for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
     }
     return { ok: true, app_id: id, visibility: "me", changed };
+  },
+};
+
+// ── 공개 미리 보기(#4732) — 「공개하기」 · 「이 판으로」(되돌려 공개) 전에 표에 할 일을 본다. 아무것도 바꾸지 않는다 ──
+//  읽기전용(#1007) 세션에선 막힌다(POST 파생 = 쓰기) — 아무것도 바꾸지 않지만 진짜 표에 DDL 을 걸었다 되돌리고, 미리 보는 까닭인 공개가
+//   읽기전용에선 어차피 막힌다. 읽기로 열면 «POST 인데 읽기» 예외 목록(readonly.test)만 늘어난다.
+/** 미리 보기가 설치 락(저장 · 공개 · 되돌리기)을 기다리는 상한 — 다른 저장이 끝나기를 1분씩 말없이 기다리지 않게. */
+const PREVIEW_INSTALL_LOCK_WAIT_MS = 3_000;
+const appPublishPreview: Capability = {
+  name: "app_publish_preview",
+  title: "공개 미리 보기",
+  description: "공개하기 전에 «이번 공개가 표에 무엇을 하는지» 본다 — 아무것도 바꾸지 않는다. version_no 없음 = 지금 app_visibility_set visibility:'all' 을 하면 · " +
+    "version_no 있음 = app_revert {version_no, publish:true} 를 하면. changes = 할 일(칸 지우기와 값이 있는 행 수 — 값은 따로 보관 · 이름 · 종류 바꾸기 · " +
+    "꼭 채우기 · 겹치는 값 막기 · 다른 표 가리키기 · 새 값 검사 · 기본값 · 새 판에 없는 표의 정리) · blocked = 이대로 공개하면 409 로 멈추는 까닭(표 · 칸 · 행 수 — " +
+    "그 행을 고친 뒤 다시 본다) · incomplete = 그 표를 지금 쓰는 사람이 있거나 표가 커서 다 보지 못함(잠시 뒤 다시). changes 가 비었으면 표에 할 일이 없다. " +
+    "notes = 바뀌는 일은 아니지만 알아 둘 것(새 판에 없지만 값을 지키려고 남겨 둔 칸 · 종류를 못 바꿔 그대로 둔 칸). " +
+    "실제 공개와 같은 표 맞추기를 한 트랜잭션으로 걸어 보고 되돌려 계산한다 — 그동안 바뀌는 표를 잠근다(보통 1초 안쪽 · 잠금 대기 1.5초 · 문장마다 5초 · 전체 8초를 넘으면 남은 표는 incomplete). " +
+    "누가: 공개할 수 있는 사람(version_no 면 되돌릴 수 있는 사람). 나만 보는 앱의 첫 공개 · 초안 없는 공개 앱 · 기본 앱은 할 일이 없다.",
+  scope: null,
+  input: { app_id: z.string(), version_no: z.number().int().min(1).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/publish-preview"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { app_id: (req.params as Record<string, string>)?.id, ...(b.version_no == null ? {} : { version_no: Number(b.version_no) }) };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+    const id = appId(input.app_id);
+    const v = input.version_no == null ? null : Number(input.version_no);
+    if (v != null && (!Number.isInteger(v) || v < 1)) throw new HttpError(400, "version_no 는 1 이상의 정수여야 합니다");
+    //  저장 · 되돌리기 · 공개와 같은 설치 락 안에서 — 걸어 보는 동안 다른 설치가 같은 표를 바꾸지 않게(서로 잠금을 기다리다 멈추지 않게).
+    //   다른 저장 · 공개가 쥐고 있으면 짧게만 기다리고 «다 못 봄» 으로 돌려준다(화면이 말없이 멈춰 있지 않게).
+    try {
+      return await store.withAppInstallLock(id, () => previewPublish(id, viewerOf(user), v), { waitMs: PREVIEW_INSTALL_LOCK_WAIT_MS });
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== store.APP_INSTALL_LOCK_TIMEOUT) throw err;
+      const busy: PublishPreview = {
+        app_id: id, kind: v == null ? "publish" : "revert", version_no: v, published_version_no: null,
+        changes: [], notes: [], blocked: [], tables: null, gone_tables: [],
+        incomplete: "이 앱을 다른 사람(또는 다른 창)이 지금 저장 · 공개하고 있어 보지 못했습니다 — 잠시 뒤 다시 보세요",
+      };
+      return busy;
+    }
   },
 };
 
@@ -1154,14 +1355,16 @@ const appUi: Capability = {
     if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${id}' 이 활성 상태가 아닙니다`);
     //  #4667 공개 판을 보는 사람 — 설치된 화면(초안을 만든 사람의 판)이 아니라 공개 판 행의 파일에서 화면을 꺼낸다.
     if (appViewFor(app, who) === "published") {
-      const pub = await store.getAppVersion(id, app.published_version_no as number);
+      const pub = await publishedScreens(id, app.published_version_no as number);
       if (pub) {
-        const ui = uiPagesFromFiles(pub.manifest, pub.files as AppFile[]);
+        //  #4481 — 화면 entry 파일만 꺼낸다(판 묶음이면 저장소에서 그 파일만 · 앱 주소 · 앱 열기와 같은 자리).
+        const ui = uiPagesFromFiles(pub.manifest, pub.files);
         if (ui.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
         const csp = ((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
-        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published" };
+        const multi = webRootOf(pub.manifest) !== null;
+        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", ...(multi ? { multi_file: true } : {}) };
       }
       logger.warn({ app: id, published: app.published_version_no }, "공개 판 행이 없어 설치된 화면을 준다(#4667 불변식)");
     }
@@ -1173,7 +1376,9 @@ const appUi: Capability = {
     // csp = 매니페스트 선언(없으면 빈 객체 = 네트워크·프레임 0). 호스트(app-ui.ts)가 이걸로 srcdoc CSP 를 짓는다 —
     //  선언에 없는 것은 브라우저가 막는다(우리 코드가 아니라 브라우저가 집행하는 경계).
     const csp = ((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
-    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: a.html, pages, csp, view: "installed" };
+    //  #4481 여러 파일 앱(web.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
+    const multi = webRootOf(app.manifest) !== null;
+    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title) : a.html, pages, csp, view: "installed", ...(multi ? { multi_file: true } : {}) };
   },
 };
 
@@ -1222,4 +1427,4 @@ const appDataRestore: Capability = {
 };
 
 export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
-  appEditPolicySet, appVisibilitySet, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
+  appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
