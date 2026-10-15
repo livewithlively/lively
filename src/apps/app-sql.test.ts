@@ -569,16 +569,18 @@ test("G7 묶음의 다음 문장 시간 상한 — 다 썼으면 abort, 남은 �
   assert.equal(nextStatementTimeout(250, 5000, 300), 250);
 });
 
-test("G8 앱 서버 빈도 — 사람마다 따로 · 앱 전체 상한 · 앱 전체에 막히면 그 사람 몫은 돌려준다 · 사람 없는 호출은 종전 그대로", async () => {
+test("G8 앱 서버 빈도 — 사람마다 따로 · 앱 전체 상한 · 앱 전체에 막히면 그 사람 몫은 돌려준다 · 사람 없는 호출은 종전 그대로", () => {
   const T = "6f477586-8eed-4e75-a321-3a1f0c9d2e41";
-  //  사람 버킷은 사실상 다시 차지 않게(초당 0.001), 앱 전체는 빨리 차게(초당 1000) — 시계를 기다리지 않고 «돌려줌» 을 본다.
-  resetAppSqlLimits({ LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "2", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "3" });
+  //  사람 버킷은 사실상 다시 차지 않게(초당 0.001), 앱 전체는 빨리 차게(초당 1000) — «돌려줌» 을 본다. 시계는 시험이 쥔다
+  //   (실제 시계면 부하 걸린 병렬 실행에서 막혀야 할 순간에 앱 전체 버킷이 그새 다시 차 흔들렸다).
+  let clock = 1_000_000;
+  resetAppSqlLimits({ LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "2", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "3" }, () => clock);
   try {
     takeAppCall("app", T, 1, "a"); takeAppCall("app", T, 1, "a");
     assert.throws(() => takeAppCall("app", T, 1, "a"), (e: { status?: number; message?: string }) => e.status === 429 && /이 사람/.test(String(e.message)));
     takeAppCall("app", T, 1, "b");                                        // 앱 전체 3번째
     assert.throws(() => takeAppCall("app", T, 1, "c"), (e: { status?: number; message?: string }) => e.status === 429 && /전체/.test(String(e.message)));
-    await new Promise((r) => setTimeout(r, 20));                          // 앱 전체만 다시 찬다
+    clock += 20;                                                          // 앱 전체만 다시 찬다
     takeAppCall("app", T, 1, "c"); takeAppCall("app", T, 1, "c");         // c 는 막혔던 1번을 돌려받아 순간 2 를 그대로 쓴다
     assert.throws(() => takeAppCall("app", T, 1, "c"), /이 사람/);
     takeAppCall("other", T, 1, "a");                                      // 다른 앱은 따로 센다
