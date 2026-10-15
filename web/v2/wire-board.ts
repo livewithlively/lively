@@ -25,9 +25,11 @@ export interface WireBoardOpts {
   pins: () => StudioPin[];
   /** 보드에서 더하거나 고치거나 지웠다 — 목록 전부를 돌려준다. */
   onPins: (pins: StudioPin[]) => void;
+  /** 열자마자 그 코멘트(목록 번호 - 1)로 옮겨 연다 — 허브 칸의 번호를 눌렀을 때. */
+  focus?: number;
   onClose?: () => void;
 }
-export interface WireBoard { close(): void; refresh(): void }
+export interface WireBoard { close(): void }
 
 const TOOLS: Array<{ k: Tool; t: string; help: string; svg: string }> = [
   { k: 'move', t: '이동', help: '끌어서 보드를 옮겨요(스페이스를 누른 채 끌어도 돼요)', svg: '<path d="M10 2.5v15M2.5 10h15"/><path d="M7.6 4.9 10 2.5l2.4 2.4M7.6 15.1 10 17.5l2.4-2.4M4.9 7.6 2.5 10l2.4 2.4M15.1 7.6 17.5 10l-2.4 2.4"/>' },
@@ -52,7 +54,8 @@ export function closeWireBoard(): void { if (cur) { const c = cur; cur = null; c
 export function openWireBoard(o: WireBoardOpts): WireBoard {
   closeWireBoard();
   const S = { tool: 'pick' as Tool, k: 1, tx: 0, ty: 0, cw: 1600, ch: 1000, user: false, space: false, drag: null as null | { kind: 'pan' | 'box'; sx: number; sy: number; tx: number; ty: number; cx: number; cy: number },
-    hitSeq: 1, hitWaits: {} as Record<number, (h: any) => void>, hoverAt: 0, active: -1, dead: false };
+    hitSeq: 1, hoverAt: 0, active: -1, dead: false, down: false };
+  const hitWaits = new Map<number, (h: any) => void>();
   const fallback = !o.html.trim();
   const frames: AppUiFrame[] = [];
 
@@ -113,7 +116,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     pct.textContent = Math.round(S.k * 100) + '%';
     stage.style.backgroundSize = `${20 * S.k}px ${20 * S.k}px`;
     stage.style.backgroundPosition = `${S.tx}px ${S.ty}px`;
-    paintMarks();
+    paintMarks(); placePop();
   };
   const clampK = (k: number): number => Math.min(4, Math.max(0.1, k));
   const zoomAt = (k: number, px: number, py: number): void => {
@@ -131,7 +134,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     e.preventDefault(); S.user = true;
     const r = stage.getBoundingClientRect();
     if (e.ctrlKey || e.metaKey) zoomAt(S.k * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0025)), e.clientX - r.left, e.clientY - r.top);   // 핀치 · ⌘ + 스크롤
-    else { S.tx -= e.deltaX; S.ty -= e.deltaY; apply(); }
+    else { const f = e.deltaMode === 1 ? 16 : 1; S.tx -= e.deltaX * f; S.ty -= e.deltaY * f; apply(); }
   }, { passive: false });
 
   // ── 그림 안의 자리 ↔ 보드 자리 ──
@@ -140,8 +143,8 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   //  그림 안 무엇이 거기 있나 — 탐침(PROBE_JS)에 물어본다. 앱 화면 그대로(대신 놓은 것)는 묻지 않는다(그 자리의 글만 없다).
   const hit = (fx: number, fy: number): Promise<any> => new Promise((res) => {
     const w = iframe && iframe.contentWindow; if (!w) { res(null); return; }
-    const id = S.hitSeq++; S.hitWaits[id] = res; w.postMessage({ __studio: 'hit', x: fx, y: fy, id }, '*');
-    window.setTimeout(() => { if (S.hitWaits[id]) { delete S.hitWaits[id]; res(null); } }, 700);
+    const id = S.hitSeq++; hitWaits.set(id, res); w.postMessage({ __studio: 'hit', x: fx, y: fy, id }, '*');
+    window.setTimeout(() => { if (hitWaits.has(id)) { hitWaits.delete(id); res(null); } }, 700);
   });
   const onMsg = (ev: MessageEvent): void => {
     if (!iframe || ev.source !== iframe.contentWindow) return;
@@ -153,9 +156,14 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
       const w = Math.min(12000, Math.max(1200, rw)), h = Math.min(12000, Math.max(400, rh));
       if (w !== S.cw || h !== S.ch) { S.cw = w; S.ch = h; iframe.style.width = w + 'px'; iframe.style.height = h + 'px'; world.style.width = w + 'px'; world.style.height = h + 'px'; }
       if (!S.user) fit(); else apply();   // 사람이 아직 안 옮기고 안 키웠으면 늘 한눈에
+      if (wantFocus >= 0) { const i = wantFocus; wantFocus = -1; focusPin(i); }
       return;
     }
-    if (m.__studio === 'hitres' && S.hitWaits[m.id]) { const f = S.hitWaits[m.id]; delete S.hitWaits[m.id]; f(m); }
+    if (m.__studio === 'hitres' && typeof m.id === 'number' && hitWaits.has(m.id)) {
+      const f = hitWaits.get(m.id)!; hitWaits.delete(m.id);
+      //  그림(AI 가 쓴 HTML)이 돌려준 값 — 태그 이름은 짧은 영문만, 글은 80자까지만 믿는다(AI 에게 가는 고침 글에 실린다).
+      f({ tag: /^[a-z][a-z0-9-]{0,23}$/.test(String(m.tag || '')) ? String(m.tag) : 'div', text: String(m.text || '').slice(0, 80), rect: m.rect && typeof m.rect === 'object' ? { l: +m.rect.l || 0, t: +m.rect.t || 0, w: +m.rect.w || 0, h: +m.rect.h || 0 } : null });
+    }
   };
   window.addEventListener('message', onMsg);
   const clearProbe = (): void => { const w = iframe && iframe.contentWindow; if (w) w.postMessage({ __studio: 'clear' }, '*'); };
@@ -185,6 +193,14 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     });
   };
   let pop: HTMLElement | null = null;
+  //  칸은 짚은 곳 옆 — 보드 화면의 남는 쪽으로(오른쪽이 모자라면 왼쪽). 옮기고 키울 때마다 따라간다.
+  const placePop = (): void => {
+    const p = pop && S.active >= 0 ? all()[S.active] : null; if (!pop || !p) return;
+    const r = stage.getBoundingClientRect(), W = 300;
+    const ax = S.tx + (p.x + (p.w || 0)) * S.cw * S.k, ay = S.ty + p.y * S.ch * S.k;
+    const left = ax + 14 + W < r.width ? ax + 14 : Math.max(8, S.tx + p.x * S.cw * S.k - W - 14);
+    Object.assign(pop.style, { left: Math.round(left) + 'px', top: Math.round(Math.min(Math.max(8, ay), r.height - 170)) + 'px', width: W + 'px' });
+  };
   const closePop = (): void => { if (pop) { pop.remove(); pop = null; } if (S.active >= 0) { S.active = -1; paintMarks(); } };
   const removePin = (i: number): void => { const ps = all(); ps.splice(i, 1); closePop(); changed(); };
   const openPop = (i: number): void => {
@@ -193,17 +209,12 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     S.active = i; paintMarks();
     const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLTextAreaElement; ta.value = p.note;
     ta.addEventListener('input', () => { p.note = ta.value; o.onPins(all()); paintCount(); });
-    ta.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); closePop(); changed(); } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(); changed(); } });
+    ta.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); closePop(); changed(); } });   // Esc 는 문서의 onKey 가(칸 먼저 닫고 · 다음에 보드)
     const pp = el('div', { class: 'v2-studio-pop v2-wb-pop', role: 'dialog', 'aria-label': (i + 1) + '번 코멘트' },
       el('div', { class: 'h' }, el('b', { text: (i + 1) + ' · ' + (p.kind === 'pick' ? '선택한 요소' : p.kind === 'box' ? '영역' : '핀') }), el('small', { text: p.where || '' })), ta,
       el('div', { class: 'act' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(i) }),
         el('button', { type: 'button', class: 'v2-studio-now-pri', text: '완료', onclick: () => { closePop(); changed(); } })));
-    //  짚은 곳 옆 — 보드 화면의 남는 쪽으로(오른쪽이 모자라면 왼쪽)
-    const r = stage.getBoundingClientRect();
-    const ax = S.tx + (p.x + (p.w || 0)) * S.cw * S.k, ay = S.ty + p.y * S.ch * S.k, W = 300;
-    const left = ax + 14 + W < r.width ? ax + 14 : Math.max(8, S.tx + p.x * S.cw * S.k - W - 14);
-    Object.assign(pp.style, { left: Math.round(left) + 'px', top: Math.round(Math.min(Math.max(8, ay), r.height - 170)) + 'px', width: W + 'px' });
-    pop = pp; stage.append(pp);
+    pop = pp; stage.append(pp); placePop();
     requestAnimationFrame(() => ta.focus());
   };
   const addPin = (p: StudioPin): void => { const ps = all(); ps.push({ ...p, on: 'wire' }); o.onPins(ps); paintCount(); openPop(ps.length - 1); };
@@ -228,13 +239,25 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     root.dataset.tool = S.space ? 'move' : S.tool;
   };
   const panning = (): boolean => S.tool === 'move' || S.space;
+  //  번호 단추는 덮개(catch) 아래에 있다 — 누른 자리가 번호 위면 덮개가 대신 그 코멘트를 연다(도구 동작은 하지 않는다).
+  const badgeAt = (x: number, y: number): number => {
+    for (const n of Array.from(marks.querySelectorAll('.v2-wb-mk-n')) as HTMLElement[]) { const q = n.getBoundingClientRect(); if (x >= q.left && x <= q.right && y >= q.top && y <= q.bottom) return Number(n.textContent) - 1; }
+    return -1;
+  };
   catcher.addEventListener('pointerdown', (e: PointerEvent) => {
+    S.down = false;
     if (e.button !== 0 && e.button !== 1) return;
-    if (pop) { closePop(); changed(); return; }   // 열린 칸 밖을 누르면 먼저 닫기만 한다
+    const bi = e.button === 0 && !panning() ? badgeAt(e.clientX, e.clientY) : -1;
+    if (bi >= 0) { if (pop) changed(); openPop(bi); return; }
+    if (pop) { closePop(); changed(); return; }   // 열린 칸 밖을 누르면 먼저 닫기만 한다(새 코멘트를 만들지 않는다)
     const wp = toWorld(e.clientX, e.clientY);
+    S.down = true;
     if (panning() || e.button === 1) { S.user = true; S.drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, tx: S.tx, ty: S.ty, cx: wp.x, cy: wp.y }; catcher.setPointerCapture(e.pointerId); return; }
     if (S.tool === 'box' && inWorld(wp)) { S.drag = { kind: 'box', sx: e.clientX, sy: e.clientY, tx: S.tx, ty: S.ty, cx: wp.x, cy: wp.y }; catcher.setPointerCapture(e.pointerId); }
   });
+  const cancelDrag = (): void => { S.drag = null; S.down = false; ghost.hidden = true; };
+  catcher.addEventListener('pointercancel', cancelDrag);
+  catcher.addEventListener('lostpointercapture', () => { if (S.drag && S.drag.kind === 'pan') cancelDrag(); });
   catcher.addEventListener('pointermove', (e: PointerEvent) => {
     const d = S.drag;
     if (d && d.kind === 'pan') { S.tx = d.tx + (e.clientX - d.sx); S.ty = d.ty + (e.clientY - d.sy); apply(); return; }
@@ -251,6 +274,8 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     }
   });
   catcher.addEventListener('pointerup', async (e: PointerEvent) => {
+    if (!S.down || (e.button !== 0 && e.button !== 1)) return;   // 눌러 시작한 짓이 없으면(칸 닫기 · 오른쪽 단추) 아무것도 안 한다
+    S.down = false;
     const d = S.drag; S.drag = null;
     if (d && d.kind === 'pan') return;
     const wp = toWorld(e.clientX, e.clientY);
@@ -281,32 +306,37 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     const typing = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
     if (e.key === 'Escape') { e.stopPropagation(); if (pop) { closePop(); changed(); } else api.close(); return; }
     if (typing) return;
+    const onButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON';
     if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomBy(1.25); }
     else if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomBy(1 / 1.25); }
     else if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); pct.click(); }
     else if (e.shiftKey && e.key === '!') { e.preventDefault(); fit(); }
-    else if (e.key === ' ' && !S.space) { e.preventDefault(); S.space = true; paintTools(); }
+    else if (e.key === ' ' && !onButton) { e.preventDefault(); if (!S.space) { S.space = true; paintTools(); } }   // 단추 위의 스페이스는 그 단추를 누른다(자판 사용)
   };
-  const onKeyUp = (e: KeyboardEvent): void => { if (e.key === ' ' && S.space) { S.space = false; paintTools(); } };
+  const onKeyUp = (e: KeyboardEvent): void => { if (e.key === ' ' && S.space) { e.preventDefault(); S.space = false; paintTools(); } };
+  const onBlur = (): void => { if (S.space) { S.space = false; paintTools(); } cancelDrag(); };
+  window.addEventListener('blur', onBlur);
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('keyup', onKeyUp, true);
   const onResize = (): void => { if (!S.dead) apply(); };
   window.addEventListener('resize', onResize);
 
   paintTools(); paintCount();
-  requestAnimationFrame(() => { if (!S.dead) fit(); });
-  (head.querySelector('.v2-wb-x') as HTMLButtonElement | null)?.focus();
+  //  허브 칸의 번호로 열었으면 그 코멘트로 — 그림 크기를 알고 나서(없는 그림이면 바로)
+  let wantFocus = o.focus != null && o.focus >= 0 ? o.focus : -1;
+  requestAnimationFrame(() => { if (S.dead) return; fit(); if (fallback && wantFocus >= 0) { const i = wantFocus; wantFocus = -1; focusPin(i); } });
+  window.setTimeout(() => { if (!S.dead && wantFocus >= 0) { const i = wantFocus; wantFocus = -1; focusPin(i); } }, 1600);
+  root.tabIndex = -1; root.focus();   // 닫기 단추에 두면 스페이스 끌기가 그 단추를 누른다
 
   const api: WireBoard = {
     close() {
       if (S.dead) return; S.dead = true;
       document.removeEventListener('keydown', onKey, true); document.removeEventListener('keyup', onKeyUp, true);
-      window.removeEventListener('message', onMsg); window.removeEventListener('resize', onResize);
+      window.removeEventListener('message', onMsg); window.removeEventListener('resize', onResize); window.removeEventListener('blur', onBlur);
       frames.forEach((f) => { try { f.destroy(); } catch (_) { /* 이미 떨어졌다 */ } });
       root.remove(); if (cur === api) cur = null;
       if (o.onClose) o.onClose();
     },
-    refresh() { if (!S.dead) { paintCount(); paintMarks(); if (!list.hidden) paintList(); } },
   };
   cur = api;
   if (!fallback && !o.html.includes('<')) toast('와이어프레임 그림을 읽지 못했어요 — ' + WIREFRAME_PATH);

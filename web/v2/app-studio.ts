@@ -470,7 +470,7 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null };
+    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null };
   const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
   const name = el('b', { class: 'v2-studio-name', text: S.title });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
@@ -704,11 +704,10 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.dead) return;
     const { openWireBoard } = await import('./wire-board.js');
     if (S.dead) return;
-    const b = openWireBoard({ appId: rec.appId, title: S.title, version: verName(S.curVer), place: rec.place, html,
+    S.board = openWireBoard({ appId: rec.appId, title: S.title, version: verName(S.curVer), place: rec.place, html, focus,
       pins: () => S.pins,
-      onPins: (ps) => { S.pins = ps; rec.pins = ps; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } });
-    if (focus != null) requestAnimationFrame(() => { const btn = document.querySelector('.v2-wb-mk-n[aria-label="' + (focus + 1) + '번 코멘트 열기"]') as HTMLButtonElement | null; if (btn) btn.click(); });
-    void b;
+      onPins: (ps) => { if (S.dead) return; S.pins = ps; rec.pins = ps; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); },
+      onClose: () => { S.board = null; } });
   };
   const paintHub = (): void => {
     const h = appHost();
@@ -967,7 +966,8 @@ async function build(rec: StudioRec): Promise<void> {
     if (to != null) await showApp(verJ(to, '으로') + ' 되돌렸어요');
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
-  teardown = () => { S.dead = true; window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+  teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
