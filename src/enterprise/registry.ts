@@ -81,6 +81,12 @@ export interface IngestPolicyHooks {
  *  SSO 버튼이 안 뜨고 local 계정(auth/local-accounts.ts — 영구 코어 폴백 tier)만 남는 것이 정상 동작이다.
  *  대신 관리탭이 그 사실을 말한다(OidcSettingsPublic.enterprise_required) — 조용한 실패가 최악이므로.
  */
+/**
+ * web_session.auth_method 에 남기는 IdP 로그인 표시. 코어(auth/logout-redirect.ts)는 이 값으로 IdP 세션을 가르고,
+ *  EE(ee/auth/oidc-*.ts)는 세션을 만들 때 이 값을 쓴다. 양쪽이 같은 문자열을 써야 해서 코어에 둔다.
+ */
+export const OIDC_AUTH_METHOD = "oidc";
+
 export interface SsoHooks {
   /** 지금 이 배포에 SSO 가 실제로 쓸 수 있게 설정돼 있는가(로그인 버튼 문구 포함). 미설정이면 null. */
   ssoProvider(): Promise<{ label: string } | null>;

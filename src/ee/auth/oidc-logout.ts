@@ -12,10 +12,8 @@
 //   post_logout_redirect_uri 는 IdP 클라이언트 설정의 허용 목록에 있어야 한다(없으면 IdP 가 오류 화면을 낸다).
 import { logger } from "../../log.js";
 import { encryptSecret, secretsEnabled, tryDecryptSecret } from "../../org/credentials/secret-box.js";
+import { OIDC_AUTH_METHOD } from "../../enterprise/registry.js";
 import { oidcConfig, discover, type OidcConfig, type OidcDiscovery } from "./oidc.js";
-
-/** web_session.auth_method 에 남기는 값 — 코어(auth/logout-redirect.ts)가 이 문자열로 IdP 세션을 가른다. */
-export const OIDC_AUTH_METHOD = "oidc";
 
 // id_token 보관용 봉인. 마스터키(CONNECTOR_SECRET_KEY)가 없으면 보관하지 않는다 — DB 에 평문 토큰을 두지 않는다.
 //  보관 못 하면 로그아웃이 id_token_hint 없이 IdP 로 갈 뿐이라 로그인을 막을 이유가 없다.

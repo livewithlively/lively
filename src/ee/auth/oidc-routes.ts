@@ -18,7 +18,8 @@ import { oidcConfig, discover, buildAuthorizeUrl, exchangeCode, emailFromClaims 
 import { resolveOidcMember, linkOidcToMember } from "./oidc-login.js";
 import { createOidcAuthRequest, consumeOidcAuthRequest, createOidcLink } from "./oidc-auth-store.js";
 import { OIDC_LINK_PATH, registerOidcLinkPage } from "./oidc-link-page.js";
-import { OIDC_AUTH_METHOD, sealIdToken } from "./oidc-logout.js";
+import { OIDC_AUTH_METHOD } from "../../enterprise/registry.js";
+import { sealIdToken } from "./oidc-logout.js";
 
 export function registerOidcRoutes(app: express.Express): void {
   // redirect_uri 는 개시와 콜백에서 **글자 그대로 같아야** IdP 검증을 통과한다 → 한 함수에서만 만든다.

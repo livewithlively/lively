@@ -120,6 +120,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/token-revoke.pg-test.mjs
+      # 웹 세션 회수 — 회수가 지우기 전의 로그인 방식·보관 IdP 토큰을 돌려주는가(CTE), 토큰을 지우는가, 두 번째는 0행인가.
+      - name: 웹 세션 회수 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/auth/session-revoke.pg-test.mjs
       # ④-c 세션 «보임 축»(#3855·#3857) — 목으로는 못 보는 것: **치움이 실제로 남는가 · 되살리기가 풀지 않는가**.
       #    치움의 정본은 org_app_instance 두 칸(status·closed_reason)이고 판정이 전부 SQL 조건이라, 조건 하나를
       #    지워도 목 풀은 초록이다. 사유로 사람/시스템을 가르는지 · 멱등 · 남의 행 불가 · restore 승계를 read-back 으로 본다.

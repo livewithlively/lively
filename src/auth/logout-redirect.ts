@@ -7,7 +7,7 @@
 // IdP 를 거치지 않은 로그인(비밀번호·매니지드 CP 교환)·EE 미탑재·공개 주소 미확정·EE 실패는 전부 null 이다.
 //  null 이면 응답은 종전 그대로 {ok:true} 이고, 로그아웃 자체(세션 회수·쿠키 삭제)는 이미 끝나 있다.
 import type { RevokedSession } from "./sessions.js";
-import type { SsoHooks } from "../enterprise/registry.js";
+import { OIDC_AUTH_METHOD, type SsoHooks } from "../enterprise/registry.js";
 import { logger } from "../log.js";
 
 export async function ssoLogoutRedirect(
@@ -15,7 +15,7 @@ export async function ssoLogoutRedirect(
   publicBase: () => Promise<string | null>,
   sso: Pick<SsoHooks, "ssoLogoutUrl"> | undefined,
 ): Promise<string | null> {
-  if (!ended || ended.authMethod !== "oidc" || !sso) return null;
+  if (!ended || ended.authMethod !== OIDC_AUTH_METHOD || !sso) return null;
   try {
     const base = await publicBase();
     if (!base) return null;

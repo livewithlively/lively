@@ -20,7 +20,7 @@ import { verifyLogin } from "../../auth/local-accounts.js";
 import { linkOidcToMember, provisionOidcMember } from "./oidc-login.js";
 import { createSession, sessionCookie } from "../../auth/sessions.js";
 import { logger } from "../../log.js";
-import { OIDC_AUTH_METHOD } from "./oidc-logout.js";
+import { OIDC_AUTH_METHOD } from "../../enterprise/registry.js";
 
 export const OIDC_LINK_PATH = "/auth/link";
 

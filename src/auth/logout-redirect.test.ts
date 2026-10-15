@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ssoLogoutRedirect } from "./logout-redirect.js";
+import { OIDC_AUTH_METHOD } from "../enterprise/registry.js";
 
 type Call = { session: { authMethod: string | null; ssoIdTokenEnc: string | null }; back: string };
 function fakeSso(out: string | null | Error): { hooks: { ssoLogoutUrl: (s: Call["session"], b: string) => Promise<string | null> }; calls: Call[] } {
@@ -31,7 +32,7 @@ const IDP = "https://sso.example/logout?client_id=lively";
 
 test("R1 IdP 세션 → EE 주소, 돌아올 자리는 공개 주소의 /ui/", async () => {
   const f = fakeSso(IDP);
-  const ended = { authMethod: "oidc", ssoIdTokenEnc: "gcm$x" };
+  const ended = { authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: "gcm$x" };
   assert.equal(await ssoLogoutRedirect(ended, base("https://gw.example/"), f.hooks), IDP);
   assert.equal(f.calls.length, 1);
   assert.deepEqual(f.calls[0].session, ended, "보관 토큰을 EE 에 그대로 넘겨야 id_token_hint 가 붙는다");
@@ -50,15 +51,15 @@ test("R3·R4 이미 끊긴 세션·EE 미탑재 → null", async () => {
   const f = fakeSso(IDP);
   assert.equal(await ssoLogoutRedirect(null, base("https://gw.example"), f.hooks), null);
   assert.equal(f.calls.length, 0);
-  assert.equal(await ssoLogoutRedirect({ authMethod: "oidc", ssoIdTokenEnc: null }, base("https://gw.example"), undefined), null);
+  assert.equal(await ssoLogoutRedirect({ authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: null }, base("https://gw.example"), undefined), null);
 });
 
 test("R5·R6 공개 주소 미확정·EE 실패 → null", async () => {
   const f = fakeSso(IDP);
-  assert.equal(await ssoLogoutRedirect({ authMethod: "oidc", ssoIdTokenEnc: null }, base(null), f.hooks), null);
+  assert.equal(await ssoLogoutRedirect({ authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: null }, base(null), f.hooks), null);
   assert.equal(f.calls.length, 0);
   const g = fakeSso(new Error("boom"));
-  assert.equal(await ssoLogoutRedirect({ authMethod: "oidc", ssoIdTokenEnc: null }, base("https://gw.example"), g.hooks), null);
+  assert.equal(await ssoLogoutRedirect({ authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: null }, base("https://gw.example"), g.hooks), null);
 });
 
 // DB·express 바운드라 라우트와 SQL 은 소스에서 못박는다(nonhuman-login.test.ts 선례).

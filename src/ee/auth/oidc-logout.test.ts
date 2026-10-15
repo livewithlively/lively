@@ -15,10 +15,12 @@
 //   S1 sealIdToken — 마스터키 있으면 암호문(평문 아님)·복원 가능 · S2 마스터키 없으면 보관 안 함
 import test from "node:test";
 import assert from "node:assert/strict";
-import { oidcLogoutUrl, buildEndSessionUrl, sealIdToken, OIDC_AUTH_METHOD, type OidcLogoutDeps } from "./oidc-logout.js";
+import { oidcLogoutUrl, buildEndSessionUrl, sealIdToken, type OidcLogoutDeps } from "./oidc-logout.js";
+import { OIDC_AUTH_METHOD } from "../../enterprise/registry.js";
 import { discover, type OidcConfig, type OidcDiscovery } from "./oidc.js";
 import { tryDecryptSecret } from "../../org/credentials/secret-box.js";
 
+// DB 가 있으면 oidcConfig 가 관리탭(DB) 설정을 읽어 시험이 주입한 설정 밖으로 나간다 — 이 스위트는 DB 없이 돈다.
 delete process.env.ITEMS_DATABASE_URL;
 process.env.CONNECTOR_SECRET_KEY = "a".repeat(64);
 
