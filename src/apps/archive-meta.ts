@@ -54,7 +54,10 @@ export function parseArchiveComment(text: unknown): ArchiveRecord | null {
  * 기록 없는 보관 표의 앱을 이름으로 짐작한다 — 확실할 때만(아니면 null = 주인 모름).
  *  시각 꼬리를 떼고 남은 앞부분(x)에서 첫 `__` 앞이 앱 접두다(접두엔 `__` 가 없으므로 첫 `__` 는 늘 앱과 표를 가르는 자리).
  *  · x 에 `__` 가 없다 → 물리명이 앱 접두 안에서 잘렸다 → 모름.
- *  · 해시꼴(`<24자>__<hex8>`)이고 첫 `__` 가 24번째 → 우리가 붙인 `__` 일 수 있어 앞 24자가 잘린 접두인지 모른다 → 모름.
+ *  · 해시꼴(`<물리명 앞 24자>__<hex8>`)이고 첫 `__` 가 23번째나 24번째 → 우리가 붙인 `__` 에 걸린 자리라 앱 접두가 잘렸는지 모른다 → 모름.
+ *    24번째: 앞 24자가 접두 안에서 잘렸거나 접두가 꼭 24자. 23번째: 접두가 꼭 23자(앞 24자 끝 `_` 는 구분자)이거나, 더 긴 접두의
+ *    24번째 글자가 `_`(하이픈)여서 붙인 `__` 와 이어진 것 — 이름만으로는 둘을 못 가른다(격리 리뷰 #4733 — 31자 앱을 23자 앱 것으로 짐작했다).
+ *    22번째 이하면 그 `__` 는 앞 24자 안에 온전히 있는 구분자다(접두엔 `__` 가 없다).
  *  rest = 앱 접두 뒤(통째 보관이면 원래 표 이름 — 잘렸을 수 있다).
  */
 export function guessArchiveOwner(name: string): { app_id: string; rest: string; hashed: boolean } | null {
@@ -64,7 +67,7 @@ export function guessArchiveOwner(name: string): { app_id: string; rest: string;
   const i = x.indexOf("__");
   if (i <= 0) return null;
   const hashed = x.length === 34 && /^[a-z0-9_]{24}__[0-9a-f]{8}$/.test(x);
-  if (hashed && i === 24) return null;
+  if (hashed && i >= 23) return null;
   const prefix = x.slice(0, i);
   if (!/^[a-z0-9](?:[a-z0-9_]*[a-z0-9])?$/.test(prefix)) return null;
   return { app_id: prefix.replace(/_/g, "-"), rest: x.slice(i + 2), hashed };
@@ -111,6 +114,9 @@ export function archivedAtOf(name: string): string | null {
   const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.000Z`;
   return Number.isNaN(Date.parse(iso)) ? null : iso;
 }
+
+/** 주인 모름 보관 표를 백업에 담을 때의 app_id — 앱 id 에는 `~` 가 올 수 없어 어느 앱과도 겹치지 않고, app_data_snapshots 로 골라 볼 수 있다. */
+export const ARCHIVE_UNKNOWN_APP = "~unknown";
 
 /** 앱 데이터 백업(org_app_snapshot)에 보관 표를 담을 때의 표 이름 — 앱 표와 섞이지 않게 접두를 붙인다. 되살리기는 이것을 건너뛴다. */
 export const ARCHIVE_SNAPSHOT_PREFIX = "archive:";

@@ -13,6 +13,11 @@
 //  C1 비우기(이름) — before-clear 백업 뒤 지움 · 한도 셈이 준다  C2 없는 이름 · 지금 쓰는 표 이름 — 아무것도 안 지움  C3 관리자만
 //  C4 비우기(app_id) — 그 앱 것만  S1 되살리기 — 앱 표만 · 보관 표는 건너뜀  S2 보관 표만 고르면 400  S3 보관 표만 담긴 묶음 409
 //  F1 표 개수 한도 안내 — 보관 표를 관리자가 비울 수 있다
+//  ── 격리 리뷰 반영 ──
+//  E1 서로 외래키로 묶인 보관 표(부모 · 자식을 함께 보관) — 앱 지우기가 둘 다 지운다(다시 시도)  E2 규칙 밖 이름(old-backup) 하나가 목록 · 비우기를 죽이지 않는다
+//  E3 1,000행 넘는 보관 표 — 조각 셋으로 백업  E4 force — 백업 없이 지운다  E5 크기 아닌 까닭으로 백업 실패 — 하나도 안 지운다
+//  E6 지금 쓰는 표가 보관 표를 가리키면 지우지 못하고 까닭과 남긴다  E7 주인 모름의 백업은 app_id '~unknown'  E8 names 가 배열이 아니면 400
+//  E9 비우기는 감사에 남는다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -214,6 +219,87 @@ try {
   const s3 = await errOf(call("app_data_restore", { app_id: "keep", taken_at: c4.taken_at }, boss));
   chk("S3 보관 표만 담긴 묶음(비우기 백업)은 되살릴 앱 표가 없다 — 409 · 아무것도 안 바뀜", s3?.status === 409 && /보관 표만/.test(s3?.message ?? "") && (await exists("app", "keep__items")),
     JSON.stringify([s3?.status, s3?.message]));
+
+  // ── E1 서로 외래키로 묶인 보관 표 — 부모(accounts) 이름이 앞서도 앱 지우기가 둘 다 지운다 ──
+  await save("fk-app", [{ name: "accounts", columns: [{ name: "name", type: "text" }] },
+    { name: "orders", columns: [{ name: "account_id", type: "bigint", references: { table: "accounts" } }, { name: "memo", type: "text" }] }, { name: "notes", columns: [{ name: "v", type: "text" }] }]);
+  await call("me_app_grant", { app_id: "fk-app" }, alice);
+  const acc = await asApp("store_insert", { table: "accounts", row: { name: "a1" } }, alice, "fk-app");
+  await asApp("store_insert", { table: "orders", row: { account_id: acc.id, memo: "o1" } }, alice, "fk-app");
+  await save("fk-app", [{ name: "notes", columns: [{ name: "v", type: "text" }] }]);
+  const fkArch = await archiveNames("fk_app__");
+  const fkLinked = (await q(`SELECT count(*)::int AS n FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace WHERE con.contype = 'f' AND n.nspname = 'app_archive'`))[0].n;
+  const e1 = await call("org_app_remove", { app_id: "fk-app" }, boss);
+  chk("E1 외래키로 묶인 보관 표 둘(부모 이름이 앞섬) — 앱 지우기가 둘 다 지운다 · 남긴 것 없음",
+    fkArch.length === 2 && fkLinked >= 1 && e1.archives?.cleared?.length === 2 && e1.archives?.kept?.length === 0 && (await archiveNames("fk_app__")).length === 0,
+    JSON.stringify({ fkArch, fkLinked, archives: e1.archives }));
+
+  // ── E2 규칙 밖 이름 하나가 목록 · 비우기를 죽이지 않는다 ──
+  await legacy("old-backup");
+  const e2list = await call("app_archives", {}, boss);
+  const e2row = e2list.archives.find((a) => a.name === "old-backup");
+  const e2 = await call("app_archive_clear", { names: ["old-backup"] }, boss);
+  chk("E2 사람이 옮겨 둔 old-backup — 목록에 주인 모름으로 보이고(행 수 셈) · 이름으로 비워진다",
+    e2row?.owner === "unknown" && e2row?.rows === 1 && e2.cleared.map((c) => c.name).join() === "old-backup" && !(await exists("app_archive", "old-backup")),
+    JSON.stringify({ e2row, e2 }));
+
+  // ── E3 1,000행 넘는 보관 표 — 조각 셋 ──
+  await q(`CREATE TABLE app_archive."big_app__t__20250101000000" (tenant_id uuid, id bigint, title text, created_at timestamptz DEFAULT now())`);
+  await q(`INSERT INTO app_archive."big_app__t__20250101000000"(tenant_id, id, title) SELECT '00000000-0000-0000-0000-000000000000', g, 'v' || g FROM generate_series(1, 2500) g`);
+  const e3 = await call("app_archive_clear", { names: ["big_app__t__20250101000000"] }, boss);
+  const e3chunks = await q(`SELECT chunk, row_count, jsonb_array_length(rows) AS len FROM org_app_snapshot WHERE app_id = 'big-app' AND table_name = 'archive:big_app__t__20250101000000' ORDER BY chunk`);
+  chk("E3 2,500행 — 조각 셋(1000 · 1000 · 500)으로 백업 · 행 수 그대로 · 지움",
+    e3chunks.map((c) => `${c.chunk}:${c.row_count}:${c.len}`).join() === "0:1000:1000,1:1000:1000,2:500:500" && e3.cleared[0]?.rows === 2500 && !(await exists("app_archive", "big_app__t__20250101000000")),
+    JSON.stringify({ e3chunks, e3 }));
+
+  // ── E4 force — 너무 커도 백업 없이 지운다 ──
+  await legacy("forced_app__t__20250101000000");
+  process.env.LIVELY_APP_SNAPSHOT_MAX_BYTES = "1";
+  const e4no = await call("app_archive_clear", { names: ["forced_app__t__20250101000000"] }, boss);
+  const e4 = await call("app_archive_clear", { names: ["forced_app__t__20250101000000"], force: true }, boss);
+  delete process.env.LIVELY_APP_SNAPSHOT_MAX_BYTES;
+  chk("E4 너무 크면 force 없이는 남기고, force 면 백업 없이 지운다(백업 시각 없음 · 묶음 행 없음)",
+    e4no.kept.length === 1 && e4no.cleared.length === 0 && e4.cleared.length === 1 && e4.taken_at === null && !(await exists("app_archive", "forced_app__t__20250101000000"))
+      && (await q(`SELECT 1 FROM org_app_snapshot WHERE table_name = 'archive:forced_app__t__20250101000000'`)).length === 0,
+    JSON.stringify({ e4no, e4 }));
+
+  // ── E5 크기 아닌 까닭으로 백업 실패 — 한 트랜잭션이라 하나도 안 담기고 하나도 안 지운다 ──
+  await legacy("blk_app__blocker__20250101000000");
+  await legacy("blk_app__sibling__20250101000000");
+  await q(`ALTER TABLE org_app_snapshot ADD CONSTRAINT pgt_block_4733 CHECK (table_name NOT LIKE 'archive:%blocker%')`);
+  const e5 = await call("app_archive_clear", { names: ["blk_app__sibling__20250101000000", "blk_app__blocker__20250101000000"] }, boss);
+  await q(`ALTER TABLE org_app_snapshot DROP CONSTRAINT pgt_block_4733`);
+  chk("E5 백업이 실패하면(제약 위반) 둘 다 남기고 까닭 · 앞서 담긴 sibling 의 백업도 되돌려졌다",
+    e5.cleared.length === 0 && e5.kept.length === 2 && e5.kept.every((k) => /백업하지 못했습니다/.test(k.why)) && e5.taken_at === null
+      && (await exists("app_archive", "blk_app__blocker__20250101000000")) && (await exists("app_archive", "blk_app__sibling__20250101000000"))
+      && (await q(`SELECT 1 FROM org_app_snapshot WHERE table_name LIKE 'archive:blk_app__%'`)).length === 0, JSON.stringify(e5));
+
+  // ── E6 지금 쓰는 표가 보관 표를 가리키면 — CASCADE 없이 남기고 까닭 ──
+  await q(`CREATE TABLE app_archive."ref_app__target__20250101000000" (tenant_id uuid, id bigint PRIMARY KEY, title text, created_at timestamptz DEFAULT now())`);
+  await q(`CREATE TABLE app."ref_app__live" (x bigint REFERENCES app_archive."ref_app__target__20250101000000"(id))`);
+  const e6 = await call("app_archive_clear", { names: ["ref_app__target__20250101000000"] }, boss);
+  const liveFk = (await q(`SELECT count(*)::int AS n FROM pg_constraint WHERE conrelid = to_regclass('app."ref_app__live"') AND contype = 'f'`))[0].n;
+  chk("E6 쓰는 표가 가리키는 보관 표는 지우지 못하고 kept 에 까닭 · 쓰는 표의 외래키는 그대로(CASCADE 안 함)",
+    e6.cleared.length === 0 && e6.kept.length === 1 && /지우지 못했습니다/.test(e6.kept[0].why) && liveFk === 1 && (await exists("app_archive", "ref_app__target__20250101000000")),
+    JSON.stringify({ e6, liveFk }));
+  await q(`DROP TABLE app."ref_app__live"`);
+
+  // ── E7 주인 모름의 백업 · E9 감사 ──
+  const e7 = await call("app_archive_clear", { names: [unknownName] }, boss);
+  const e7snap = await q(`SELECT app_id, reason, row_count FROM org_app_snapshot WHERE table_name = $1`, [`archive:${unknownName}`]);
+  chk("E7 주인 모름 보관 표의 백업은 app_id '~unknown' 으로 골라 볼 수 있다",
+    e7.cleared.length === 1 && e7snap.length === 1 && e7snap[0].app_id === "~unknown" && e7snap[0].reason === "before-clear" && e7snap[0].row_count === 1
+      && (await call("app_data_snapshots", { app_id: "~unknown" }, boss)).snapshots.some((x) => x.tables.some((t) => t.table === `archive:${unknownName}` && t.archive === true)),
+    JSON.stringify({ e7, e7snap }));
+  const aud = (await q(`SELECT entity_key, op, before, after, actor FROM org_content_audit WHERE entity = 'app_archive' ORDER BY id`));
+  chk("E9 비우기는 감사에 남는다(누가 · 무엇을 지웠고 무엇이 남았나) — 아무것도 안 한 비우기(C2)는 안 남긴다",
+    aud.length >= 6 && aud.every((a) => a.op === "clear" && a.actor === "pgt-boss") && aud.some((a) => a.after?.cleared?.some((c) => c.name === unknownName))
+      && aud.some((a) => a.entity_key === "keep") && !aud.some((a) => (a.before?.names ?? []).includes("keep__items")),
+    JSON.stringify(aud.map((a) => [a.entity_key, a.before?.names, (a.after?.cleared ?? []).length, (a.after?.kept ?? []).length])));
+
+  // ── E8 names 가 배열이 아니면 400(REST 는 zod 를 거치지 않는다 — app_id 와 함께 와도 그 앱 것을 다 지우지 않는다) ──
+  const e8 = await errOf(call("app_archive_clear", { names: "crm_x__deals__20250101000000", app_id: "crm-x" }, boss));
+  chk("E8 names 가 문자열이면 400 · 아무것도 안 지움", e8?.status === 400 && (await exists("app_archive", "crm_x__deals__20250101000000")), JSON.stringify([e8?.status, e8?.message]));
 
   // ── F1 표 개수 한도 안내 ──
   const counted = await q(`SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p'))::int AS cur`);

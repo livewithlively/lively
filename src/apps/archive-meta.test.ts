@@ -1,23 +1,19 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { createHash } from "node:crypto";
 import {
   archiveComment, parseArchiveComment, guessArchiveOwner, identifyArchive, looksLikeColumnArchive, archivedAtOf,
-  archiveSnapshotTable, isArchiveSnapshotTable, ARCHIVE_SNAPSHOT_PREFIX, type ArchiveRecord,
+  archiveSnapshotTable, isArchiveSnapshotTable, ARCHIVE_SNAPSHOT_PREFIX, ARCHIVE_UNKNOWN_APP, type ArchiveRecord,
 } from "./archive-meta.js";
-import { archivedTableName, physicalTableName } from "./store-ddl.js";
+import { archivedTableName, columnArchiveName, physicalTableName } from "./store-ddl.js";
+import { APP_ID_RE } from "./manifest.js";
 
 // ── 보관 표의 주인 기록 · 이름 짐작 (#4733 앱 v2-19) — 사양 엣지 표 G1~G7 ──────────
 //  이게 틀리면: 앱을 지울 때 다른 앱의 보관 표까지 지우거나(이름이 비슷한 앱 · 잘린 이름) · 기록이 망가진 보관 표 하나 때문에 목록이 깨진다.
 
 const AT = new Date("2026-10-15T09:47:08.000Z");
 const TS = "20261015094708";
-/** store-schema columnArchiveName 과 같은 규칙 — 47자를 넘으면 물리명 앞 24자 + 해시 8자. */
-const columnArchive = (physical: string, column: string): string => {
-  const base = `${physical}__${column}`;
-  if (base.length + 16 <= 63) return archivedTableName(base, AT);
-  return archivedTableName(`${physical.slice(0, 24)}__${createHash("sha256").update(base).digest("hex").slice(0, 8)}`, AT);
-};
+/** 실제 이름 규칙(store-ddl columnArchiveName — 보관하는 코드가 쓰는 그 함수). */
+const columnArchive = (physical: string, column: string): string => columnArchiveName(physical, column, AT);
 const rec = (o: Partial<ArchiveRecord> = {}): ArchiveRecord =>
   ({ app_id: "crm-x", table: "deals", column: null, rows: 3, at: AT.toISOString(), reason: "install", ...o });
 
@@ -84,9 +80,51 @@ test("G4 해시꼴이어도 앱 접두가 24자보다 짧으면 짐작한다(원
   assert.equal(g?.hashed, true);
   const id = identifyArchive(name, null, ["tenant_id", "id", "value"]);
   assert.deepEqual([id.owner, id.app_id, id.kind, id.table, id.column], ["guessed", "crm", "column", null, null]);
-  //  접두 23자 — 물리명 앞 24자가 «접두 + 구분자 첫 _» 에서 끊긴 꼴도 앱 부분은 온전하다
+  //  접두 22자 — 앞 24자 안에 구분자 `__` 가 온전히 들어 있다
+  const p22 = "abcdefghijklmnopqrstuv";
+  assert.equal(guessArchiveOwner(columnArchive(physicalTableName(p22, "items_with_a_long_name"), "long_column_name_x"))?.app_id, p22);
+});
+
+test("G3b 해시꼴 · 첫 `__` 가 23번째 — 접두가 꼭 23자인지, 더 긴 접두의 24번째가 하이픈인지 못 가른다 → 주인 모름(격리 리뷰 회귀)", () => {
+  //  격리 리뷰 재현: 31자 앱(24번째 글자가 하이픈)의 칸 보관 표를 23자 앱 «aaaaaaaaaaaaaaaaaaaaaaa» 것으로 짐작했다.
+  const long = columnArchive(physicalTableName("aaaaaaaaaaaaaaaaaaaaaaa-bbbbbbb", "items_with_long_name"), "x");
+  assert.equal(long, "aaaaaaaaaaaaaaaaaaaaaaa___f49c88a6__20261015094708");
+  assert.equal(guessArchiveOwner(long), null);
+  //  접두가 꼭 23자인 앱도 같은 꼴이다 — 이름만으로는 가를 수 없어 모름 쪽으로 기운다
   const p23 = "abcdefghijklmnopqrstuvw";
-  assert.equal(guessArchiveOwner(columnArchive(physicalTableName(p23, "items_with_a_long_name"), "long_column_name_x"))?.app_id, p23);
+  assert.equal(guessArchiveOwner(columnArchive(physicalTableName(p23, "items_with_a_long_name"), "long_column_name_x")), null);
+});
+
+test("G8 실제 이름 규칙으로 만든 이름 — 짐작은 모름(null)이거나 늘 진짜 앱이다(무작위 · 위험한 꼴 위주)", () => {
+  //  짐작이 틀리면 앱을 지울 때 다른 앱의 보관 표를 지운다. 규칙 하나하나가 아니라 «짐작이 맞거나 모른다» 를 실제 이름으로 본다.
+  let seed = 4733;
+  const rnd = (): number => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const pick = (chars: string): string => chars[Math.floor(rnd() * chars.length)];
+  const word = (n: number, chars: string): string => Array.from({ length: n }, () => pick(chars)).join("");
+  const appIdOf = (len: number): string => {           // 하이픈은 연달아 오지 않고 끝에 오지 않는다 — 위험한 자리(22~25번째)에 자주 넣는다
+    let id = pick("abcdefghijklmnopqrstuvwxyz0123456789");
+    while (id.length < len) {
+      const near = id.length >= 21 && id.length <= 25;
+      id += id.length < len - 1 && !id.endsWith("-") && rnd() < (near ? 0.5 : 0.12) ? "-" : pick("abcdefghijklmnopqrstuvwxyz0123456789");
+    }
+    return id;
+  };
+  let wrong = 0, guessed = 0, total = 0;
+  const samples: string[] = [];
+  for (let k = 0; k < 60000; k++) {
+    const app = appIdOf(1 + Math.floor(rnd() * 52));
+    const table = pick("abcdefghijklmnopqrstuvwxyz_") + word(Math.floor(rnd() * 30), "abcdefghijklmnopqrstuvwxyz0123456789__");
+    let physical: string;
+    try { physical = physicalTableName(app, table); } catch { continue; }   // 63자 넘거나 쓸 수 없는 id 는 표가 못 생긴다
+    const name = rnd() < 0.5 ? archivedTableName(physical, AT) : columnArchive(physical, pick("abcdefghijklmnopqrstuvwxyz") + word(Math.floor(rnd() * 25), "abcdefghijklmnopqrstuvwxyz0123456789_"));
+    total++;
+    const g = guessArchiveOwner(name);
+    if (!g) continue;
+    guessed++;
+    if (g.app_id !== app) { wrong++; if (samples.length < 5) samples.push(`${app} → ${g.app_id} (${name})`); }
+  }
+  assert.equal(wrong, 0, samples.join("\n"));
+  assert.ok(total > 40000 && guessed > total * 0.5, `시험이 비어 있지 않다 — 만든 이름 ${total} · 짐작 ${guessed}`);
 });
 
 test("G5 이름 규칙 밖(시각 꼬리 없음 · 접두가 _ 로 시작/끝) → 주인 모름", () => {
@@ -107,6 +145,10 @@ test("종류 — 칸 보관 표는 (tenant_id, id, value) 꼴, 통째 보관은 
   assert.equal(looksLikeColumnArchive(["tenant_id", "id", "value"]), true);
   assert.equal(looksLikeColumnArchive(["tenant_id", "id", "value", "created_at"]), false);
   assert.equal(looksLikeColumnArchive([]), false);
+});
+
+test("주인 모름 백업의 app_id 는 어떤 앱 id 와도 겹치지 않는다", () => {
+  assert.equal(APP_ID_RE.test(ARCHIVE_UNKNOWN_APP), false);
 });
 
 test("이름 꼬리의 시각 · 백업 묶음의 보관 표 이름", () => {

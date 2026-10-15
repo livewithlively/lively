@@ -46,6 +46,7 @@ import { logger } from "../log.js";
 import { randomInt } from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import type { WriteCtx } from "../org/store/audit.js";
+import { audit } from "../org/store/audit.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -1435,7 +1436,7 @@ const appDataRestore: Capability = {
 //  앱 표를 선언에서 빼거나(데이터가 있을 때) 칸을 지우면(drop_columns · 값이 있을 때) 데이터를 잃지 않으려고 보관 자리로 옮긴다
 //  (store-schema). 보관 표도 워크스페이스 표 개수 한도에 세어지는데 앱을 고쳐서는 줄지 않는다 — 관리자가 보고 비운다(백업 뒤).
 //  앱을 지우면 그 앱의 보관 표는 제거가 함께 지운다(remove-run). 판정 · 이름 규칙은 apps/archive-meta.ts, 실행은 apps/app-archive.ts.
-const appArchivesCap: Capability = {
+const appArchivesList: Capability = {
   name: "app_archives",
   title: "앱 보관 표 목록",
   description: "이 워크스페이스의 앱 보관 표 — 앱 표를 선언에서 빼거나(데이터가 있을 때) 칸을 지울 때(drop_columns, 값이 있을 때) 데이터를 잃지 않으려고 옮겨 둔 표. "
@@ -1462,7 +1463,8 @@ const appArchiveClear: Capability = {
   title: "앱 보관 표 비우기",
   description: "앱 보관 표를 지운다 — 지우기 직전 앱 데이터 백업(app_data_snapshots · 7일 · «archive:<이름>» · 까닭 before-clear)에 담는다. 되살리기는 하지 않는다(백업에만 남는다). "
     + "names(app_archives 의 name 그대로) 또는 app_id(그 앱의 보관 표 전부) 중 하나. 보관 자리에 없는 이름은 건드리지 않고 missing 으로 알린다. "
-    + "백업하기엔 너무 크거나 백업이 실패하면 지우지 않고 kept 로 알린다 — force 를 주면 백업 없이 지운다(되살릴 길이 없다). 지우면 표 개수 한도 셈(table_limit)이 준다. 관리자.",
+    + "백업하기엔 너무 크거나 백업이 실패하면 지우지 않고 kept 로 알린다 — force 를 주면 백업 없이 지운다(되살릴 길이 없다). 지우면 표 개수 한도 셈(table_limit)이 준다. "
+    + "주인 모름 보관 표의 백업은 app_id '~unknown' 으로 담긴다(app_data_snapshots {app_id:'~unknown'}). 관리자.",
   scope: "admin",
   input: {
     names: z.array(z.string()).optional(),
@@ -1476,7 +1478,9 @@ const appArchiveClear: Capability = {
       return { names: b.names, app_id: b.app_id, force: b.force };
     } }],
   },
-  handler: async (input: Record<string, unknown>) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    //  REST 는 zod 를 거치지 않는다 — 모양이 틀린 names 를 조용히 [] 로 읽고 app_id 로 그 앱 것을 전부 지우지 않게 거절한다(격리 리뷰).
+    if (input.names != null && !Array.isArray(input.names)) throw new HttpError(400, "names 는 보관 표 이름의 배열이어야 합니다");
     const names = Array.isArray(input.names) ? [...new Set(input.names.map((n) => String(n ?? "").trim()).filter(Boolean))] : [];
     const id = input.app_id == null || input.app_id === "" ? null : appId(input.app_id);
     if (!names.length && !id) throw new HttpError(400, "names(보관 표 이름들) 또는 app_id 가 필요합니다 — app_archives 로 목록을 보세요");
@@ -1484,6 +1488,11 @@ const appArchiveClear: Capability = {
     const run = async (): Promise<Record<string, unknown>> => {
       const list = names.length ? names : (await listAppArchives(id)).archives.map((a) => a.name);
       const out = await clearAppArchives(list, { reason: "before-clear", force: input.force === true });
+      //  표를 지우는 관리자 동작 — 누가 무엇을 지웠고 무엇이 남았나를 감사에 남긴다(백업은 7일이면 사라진다).
+      if (out.cleared.length || out.kept.length) {
+        await audit("app_archive", id ?? null, "clear", { names: list, force: input.force === true },
+          { cleared: out.cleared, kept: out.kept, backup_taken_at: out.taken_at }, user?.userId, ctx?.source).catch((err) => logger.warn({ err }, "보관 표 비우기 감사 기록 실패(비치명)"));
+      }
       return { ok: true, ...out, table_limit: await appTableCounts(appSchemaFor(false)) };
     };
     //  앱 단위로 비우면 그 앱의 설치 · 공개(보관 표를 새로 만들 수 있다)와 엇갈리지 않게 같은 잠금 안에서.
@@ -1493,4 +1502,4 @@ const appArchiveClear: Capability = {
 
 export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
   appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
-  appArchivesCap, appArchiveClear];
+  appArchivesList, appArchiveClear];

@@ -9,14 +9,14 @@ import pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
 import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
-import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
-  APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, PG_IDENT_MAX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
+import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, columnArchiveName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
+  APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, type StoreColumn, type StoreIndex } from "./store-ddl.js";
 import { ensureAppSqlParser, checkExpressionSync } from "./app-sql.js";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
-import { archiveComment, type ArchiveReason } from "./archive-meta.js";
+import { archiveComment, type ArchiveReason, type ArchiveRecord } from "./archive-meta.js";
 
 type Q = pg.Pool | pg.PoolClient | pg.Client;
 // 늘 큰따옴표로 인용하므로 숫자로 시작해도 안전하다 — 숫자로 시작하는 앱 id(`3d-view` → `3d_view__x`)가 여기서 막히지 않게(#4224).
@@ -379,18 +379,10 @@ async function defaultSql(c: Q, col: StoreColumn): Promise<string | null> {
   return sql;
 }
 
-/** 지운 칸 값을 보관하는 표 이름 — `<물리명>__<칸>__<시각>`, 63자를 넘으면 앞을 줄이고 해시를 붙인다. */
-function columnArchiveName(physical: string, column: string, at: Date): string {
-  const base = `${physical}__${column}`;
-  const full = archivedTableName(base, at);
-  if (full.length <= PG_IDENT_MAX && base.length + 16 <= PG_IDENT_MAX) return full;
-  const h = createHash("sha256").update(base).digest("hex").slice(0, 8);
-  return archivedTableName(`${physical.slice(0, 24)}__${h}`, at);
-}
 
 /** #4733 보관 표에 주인을 적는다(표 설명) — 앱 지우기 · 관리자 비우기가 이름이 아니라 이 기록으로 가린다(archive-meta.ts).
  *  COMMENT 는 자리표시자를 못 받아 글자를 직접 넣는다(escapeLiteral — 따옴표 · 역슬래시를 겹친다). */
-async function commentArchive(c: Q, archive: string, name: string, r: Parameters<typeof archiveComment>[0]): Promise<void> {
+async function commentArchive(c: Q, archive: string, name: string, r: ArchiveRecord): Promise<void> {
   await c.query(`COMMENT ON TABLE ${qi(archive)}.${qi(name)} IS ${pg.escapeLiteral(archiveComment(r))}`);
 }
 
@@ -404,8 +396,8 @@ async function commentArchive(c: Q, archive: string, name: string, r: Parameters
  *   · 표에만 있고 선언에도 지울 목록에도 없는 칸 → 그대로 둔다(데이터 보존) — 대신 NOT NULL·기본값을 푼다(선언을 따라 쓰는
  *     INSERT 가 그 칸 때문에 깨지지 않게). 보고서 undeclared_columns 로 알린다 — 지우려면 drop_columns 에 적는다.
  */
-async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, now: Date = new Date(),
-  surfaceTimeouts = false, owner: { appId: string; reason: ArchiveReason } | null = null): Promise<void> {
+async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard, now: Date,
+  surfaceTimeouts: boolean, owner: { appId: string; reason: ArchiveReason }): Promise<void> {
   let have = await columnsOf(c, rel);
   // 이름 바꾸기
   for (const col of spec.columns) {
@@ -430,7 +422,7 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
       await c.query(`CREATE SCHEMA IF NOT EXISTS ${qi(archive)}`);
       await c.query(`CREATE TABLE ${qi(archive)}.${qi(name)} AS SELECT tenant_id, id, ${qi(d)} AS value FROM ${rel} WHERE ${qi(d)} IS NOT NULL`);
       //  #4733 주인 기록 — 이름은 잘리고 해시가 붙어 어느 앱 것인지 못 가릴 수 있다(앱 지우기 · 관리자 비우기가 이 기록으로 가린다).
-      if (owner) await commentArchive(c, archive, name, { app_id: owner.appId, table: spec.table, column: d, rows, at: now.toISOString(), reason: owner.reason });
+      await commentArchive(c, archive, name, { app_id: owner.appId, table: spec.table, column: d, rows, at: now.toISOString(), reason: owner.reason });
       archivedAs = `${archive}.${name}`;
     }
     await c.query(`ALTER TABLE ${rel} DROP COLUMN ${qi(d)}`);
