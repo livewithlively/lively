@@ -72,6 +72,8 @@ export interface SpawnOpts {
   /** #4135 — 태스크 **여러 개**를 이 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기]). 1번이 taskId 와 같은 길로 이어지고,
    *  서버가 첫 지시 = 순서 안내 + 1번 본문 + 적은 말(있으면)로 짓는다. 지시를 비워도 된다. */
   taskIds?: number[] | null;
+  /** 세션 이름 — 주면 서버가 **사람이 지은 이름**으로 박는다(AI 의 session_rename 이 덮지 못한다). 앱빌더가 «"이름" 앱 제작» 을 싣는다(#4632). */
+  label?: string;
 }
 export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id: string; session: any } | null> {
   const t = String(text || '').trim();
@@ -96,6 +98,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
       method: 'POST',
       body: JSON.stringify({
         harness, flags, ...(t ? { initialPrompt: t } : {}),
+        ...(opts && opts.label && opts.label.trim() ? { label: opts.label.trim() } : {}),
         ...(taskIds.length ? { taskIds } : taskId > 0 ? { taskId } : {}),
         // [⚙] 기본값 넷(#3778) — run 이 없으면(구 호출자) 종전대로 기억된 자동 승인만.
         autoApprove: run ? run.autoApprove : !!p.autoApprove,

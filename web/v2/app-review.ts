@@ -114,7 +114,8 @@ export function openReview(host: ReviewHost): ReviewApi {
     //  세션 위젯인데 프레임이 안 보이면 — 붙은 목록을 다시 읽고(붙이기가 이 화면 뒤에서 끝났을 수 있다) 곁칸의 앱 탭을 앞으로 부른다. 2초마다, 열 번까지.
     if (!f && host.sessionId && S.asked < 10 && Date.now() - S.askedAt > 2000) {
       S.asked++; S.askedAt = Date.now(); refreshSessionApps(host.sessionId);
-      const wrap = document.querySelector('.pn-wrap'); if (wrap) wrap.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: host.appId } }));
+      //   지금 보이는 사이드바에만 — 앱빌더 안에 숨은 AI 세션 화면도 같은 꼴(.pn-wrap)이라 첫 번째로 보내면 엉뚱한 데로 간다.
+      document.querySelectorAll('.pn-wrap').forEach((w) => { if ((w as HTMLElement).getClientRects().length) w.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: host.appId } })); });
     }
   };
   S.tick = window.setInterval(follow, 250);

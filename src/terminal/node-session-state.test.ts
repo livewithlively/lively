@@ -44,6 +44,16 @@ test("C1·C2 라벨·하네스 — 노드 응답 우선, 비면 요청값, 그�
   assert.equal(d.harness, "shell", "응답이 이긴다");
 });
 
+test("L1~L3 이름 출처(#4632) — 만들 때 사람이 준 이름은 human(AI 의 session_rename 이 못 덮는다) · 안 줬으면 칸 없음(종전)", () => {
+  //  이게 틀리면: 앱빌더가 만들 때 싣는 «"회의록" 앱 제작» 을 노드 세션의 AI 가 「회의록 기획카드」 로 덮는다(원준 2026-10-15).
+  const a = nodeSessionStateInput(sess({ label: '"회의록" 앱 제작' }), "n1", req({ label: '"회의록" 앱 제작' }), "yoon");
+  assert.equal(a.label_source, "human", "L1 사람이 준 이름");
+  const b = nodeSessionStateInput(sess({ label: "첫 지시로 지은 이름" }), "n1", req({ label: "" }), "yoon");
+  assert.equal("label_source" in b, false, "L2 이름을 안 줬으면 칸을 싣지 않는다(이전 값 보존 · 읽는 쪽이 rule)");
+  const c = nodeSessionStateInput(sess({ label: "x" }), "n1", req({ label: " \n\t " }), "yoon");
+  assert.equal("label_source" in c, false, "L3 공백 · 줄바꿈뿐인 이름은 안 준 것");
+});
+
 test("C3·C4 새 헬퍼가 빈 값을 받는 경우 — created=0 은 지금, flags 부재는 {}, invites 비배열은 []", () => {
   const before = Math.floor(Date.now() / 1000);
   const a = nodeSessionStateInput(sess({ created: 0, flags: undefined as unknown as Record<string, string>, invites: undefined as unknown as string[] }), "n1", req(), "yoon");
