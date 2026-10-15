@@ -1,6 +1,6 @@
 // 세션 폴더 ⇄ 설치 스테이지(#4481) — 게이트웨이 로컬 길(멤버 경계와 **같은 한 줄** WALK_JS · READ_JS · WRITE_JS 를 게이트웨이 node 로 돌린다).
 // 실행: npm run build && node dist/apps/app-bundle-source.test.js
-//  S1~S9. 이게 틀리면: app_save {dir} 가 node_modules · .git · .env(비밀)를 판에 싣거나, 심링크로 폴더 밖 파일을 읽거나, 매니페스트 없는 폴더를
+//  S1~S10. 이게 틀리면: app_save {dir} 가 node_modules · .git · .env(비밀)를 판에 싣거나, 심링크로 폴더 밖 파일을 읽거나, 매니페스트 없는 폴더를
 //   앱으로 저장하거나, 상한을 넘는 폴더를 다 읽은 뒤에야 막거나, app_pull {dir} 이 남의 파일을 덮거나, 비밀 열쇠 파일을 판에 싣거나,
 //   심링크 하위 폴더 너머(폴더 밖)를 읽고 쓴다(격리 리뷰 B4).
 import assert from "node:assert/strict";
@@ -127,6 +127,25 @@ try {
     assert.deepEqual(readdirSync(outside), [], "폴더 밖에 아무것도 안 생긴다");
     assert.equal(existsSync(path.join(dest, "lively-app.json")), true, "폴더 안 파일은 썼다(관측 장치 확인)");
     ok("S9 심링크 하위 폴더로 폴더 밖에 쓰지 않는다");
+  }
+  {
+    //  한글 이름이 많은 폴더 — 걷기 결과(글)가 여러 조각으로 오면 조각 경계에 걸린 글자가 깨져 «없는 파일» 409 가 났다(격리 리뷰 재검토 4).
+    const h = path.join(root, "proj", "hangul");
+    mkdirSync(path.join(h, "dist/이미지"), { recursive: true });
+    writeFileSync(path.join(h, "lively-app.json"), "{}");
+    const names: string[] = [];
+    for (let i = 0; i < 2500; i++) {
+      const n = `dist/이미지/한글파일이름이아주긴그림-${String(i).padStart(4, "0")}.txt`;
+      names.push(n);
+      writeFileSync(path.join(h, n), "x");
+    }
+    const st = await stageFromDir({ base: h, osUser: null }, "hangul", APP_BUNDLE_POLICY_DEFAULT);
+    try {
+      const got = walk(st.dir);
+      assert.equal(got.length, names.length + 1, "다 읽었다");
+      assert.deepEqual(got.filter((x) => x !== "lively-app.json"), [...names].sort(), "이름이 한 글자도 안 깨졌다");
+    } finally { await st.cleanup(); }
+    ok("S10 한글 이름 2,500개 — 걷기 · 읽기 결과가 조각 경계에서 깨지지 않는다");
   }
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log(`\n${pass} passed`);

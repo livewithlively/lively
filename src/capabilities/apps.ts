@@ -18,11 +18,11 @@ import { editDenial, memberAppViolations } from "../apps/member-app.js";
 import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import { builtinAppDir } from "../apps/builtin-root.js";
 import {
-  entriesOfManifest, filesFromStored, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
+  filesFromStored, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
   readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
 } from "../apps/app-versions.js";
 //  #4481 앱 v2-2 — 판 파일은 파일 목록(bundle) + 저장소(S3 · 자가호스팅 DB). 읽기·쓰기는 app-version-files 한 자리를 지난다.
-import { appBundlePolicy, insertVersion, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
+import { appBundlePolicy, insertVersion, publishedScreens, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
 import { bundleFromDir, bundleFromFiles } from "../apps/app-bundle.js";
 import { bundleFilesToWrite, hasRefFiles, stageFromDir, stageFromRefs, writeFilesToDir, type SaveFileInput } from "../apps/app-bundle-source.js";
 import { webRootOf } from "../apps/manifest.js";
@@ -631,7 +631,8 @@ const appSave: Capability = {
       sha256: z.string().regex(/^[0-9a-fA-F]{64}$/).optional().describe("content 대신 — 이 워크스페이스에 이미 있는 파일의 내용 지문(app_pull 이 준 sha256). content 가 있으면 content 가 이긴다"),
     })).optional(),
     dir: z.string().max(1024).optional().describe("files 대신 — 이 세션의 프로젝트 폴더 안 앱 폴더(lively-app.json 이 있는 곳 · 프로젝트 폴더 기준 상대경로 또는 세션 안 절대경로). " +
-      "게이트웨이가 그 폴더를 직접 읽는다 — 빌드한 여러 파일 앱(dist/)처럼 도구 본문에 옮겨 적을 수 없는 묶음은 이걸로. 숨김 파일(.git · .env)·node_modules 는 뺀다"),
+      "게이트웨이가 그 폴더를 직접 읽는다 — 빌드한 여러 파일 앱(dist/)처럼 도구 본문에 옮겨 적을 수 없는 묶음은 이걸로. 숨김 파일(.git · .env)·node_modules · 심링크 · " +
+      "비밀 열쇠 꼴 파일(*.pem · *.key · *.p12 · *.pfx · *.jks · *.keystore · id_rsa 등)은 뺀다 — 뺀 열쇠 꼴 파일 이름은 응답 skipped(꼭 실어야 하는 공개 인증서면 files 로)"),
     note: z.string().max(500).optional().describe("이 판의 요지 한 줄(판 이력에 남는다 — 예: «글 줄 칸을 아래로 · 보낸 줄 접힘»)"),
     publish: z.boolean().optional().describe("저장하면서 바로 모두에게 공개한다(app_visibility_set visibility:'all' 과 같다). 생략하면 새 앱은 나만 보는 앱, 공개 앱은 저장한 사람만 보는 초안으로 남는다"),
     origin_app_id: z.string().max(64).optional().describe("새로 만드는 앱이 다른 앱의 사본일 때 원본 앱 id — 서버가 «원본» 으로 기록한다(있는 앱을 고칠 때는 무시)"),
@@ -645,6 +646,9 @@ const appSave: Capability = {
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     const staged = await stageSaveInput(input, user, ctx);
+    //  폴더째 저장이 뺀 비밀 열쇠 꼴 파일 이름 — 이 응답에만 싣는다(앱 행의 source 에 남기면 앱을 보는 모두에게 그 이름이 보인다 · 격리 리뷰 재검토 7).
+    const skipped = (staged.meta as { skipped?: string[] }).skipped ?? [];
+    delete (staged.meta as { skipped?: string[] }).skipped;
     try {
       const loaded = await loadAppPackage(staged.dir);
       const bad = memberAppViolations(loaded.manifest);
@@ -748,7 +752,7 @@ const appSave: Capability = {
       if (tables && r.pub?.tables) { mergeReport(tables, r.pub.tables); tables.deferred = []; }
       return {
         app, created: r.created, tables, version_no: versionNo,
-        visibility: app?.visibility ?? null, state,
+        visibility: app?.visibility ?? null, state, ...(skipped.length ? { skipped } : {}),
         hint: state === "me" ? `나만 보는 앱으로 저장했습니다(책임자에게만 보임) — 워크스페이스 모두가 쓰게 하려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
           : state === "draft" ? `초안으로 저장했습니다 — ${versionNo}판은 저장한 사람에게만 보이고 다른 구성원은 공개 판을 계속 씁니다. 모두에게 내보내려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
             + (deferredNow.length ? ` · 공개 판이 쓰는 칸이라 공개할 때 반영할 표 변경 ${deferredNow.length}개: ${deferredNow.map((d) => d.change).join(" · ")}`
@@ -1235,10 +1239,10 @@ const appUi: Capability = {
     if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${id}' 이 활성 상태가 아닙니다`);
     //  #4667 공개 판을 보는 사람 — 설치된 화면(초안을 만든 사람의 판)이 아니라 공개 판 행의 파일에서 화면을 꺼낸다.
     if (appViewFor(app, who) === "published") {
-      const pub = await store.getAppVersion(id, app.published_version_no as number);
+      const pub = await publishedScreens(id, app.published_version_no as number);
       if (pub) {
-        //  #4481 — 화면 entry 파일만 꺼낸다(판 묶음이면 저장소에서 그 파일만).
-        const ui = uiPagesFromFiles(pub.manifest, await versionFiles(pub, entriesOfManifest(pub.manifest).map((e) => e.entry)));
+        //  #4481 — 화면 entry 파일만 꺼낸다(판 묶음이면 저장소에서 그 파일만 · 앱 주소 · 앱 열기와 같은 자리).
+        const ui = uiPagesFromFiles(pub.manifest, pub.files);
         if (ui.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);

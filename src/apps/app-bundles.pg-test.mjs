@@ -15,6 +15,7 @@
 //  D10 화면 한 장(v1) 공개 판의 호환 사본(files)을 30일 뒤 비워도 앱 주소 · org_app_ui 가 공개 판 화면을 낸다(격리 리뷰 B2 — 살아 있는 의존으로)
 //  D11 정리 후보가 «오래됐지만 살아 있는» 파일로 막히지 않는다 — 한 바퀴 볼 수(1)보다 그런 파일이 많아도 고아를 지운다(격리 리뷰 B3)
 //  D12 관리자 설치도 판 파일을 설치 **전에** 둔다 — 상한에 걸리면 413 이고 앱이 안 생긴다 · 되는 설치는 판 1개 · 앱 주소가 그 판을 낸다
+//  D13 정리가 S3 실패를 연달아 만나면 그 바퀴를 접는다(후보마다 한 번만 · 잠금을 오래 안 붙든다) · S3 가 돌아오면 다음 바퀴가 지운다
 import pg from "pg";
 import crypto from "node:crypto";
 
@@ -43,6 +44,7 @@ const { signAppFront } = await import(`${D}/apps/app-front-auth.js`);
 const { getMember } = await import(`${D}/org/store.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
 const { versionFiles } = await import(`${D}/apps/app-version-files.js`);
+const { launchAppFor, launchLiveDepsForTest } = await import(`${D}/capabilities/app-launch.js`);
 
 const all = [...appCapabilities, ...appBundleCapabilities];
 const cap = (n) => { const c = all.find((x) => x.name === n); if (!c) throw new Error(`능력 없음: ${n}`); return c; };
@@ -231,11 +233,14 @@ try {
   const bobOne = await appFrontPage(hdr("pgt-bob", "onepage"), "/", live);
   const aliceOne = await appFrontPage(hdr("pgt-alice", "onepage", "draft"), "/", live);
   const bobUi = await call("org_app_ui", { app_id: "onepage" }, bob);
+  //  앱 주소 열기(launch)도 같은 자리에서 — 살아 있는 의존 그대로(호환 사본 files 를 읽으면 화면이 없어 404 였다 · 격리 리뷰 재검토 2).
+  const launchErr = await errOf(launchAppFor({ app_id: "onepage", mode: "embed" }, bob, { ...launchLiveDepsForTest(), env: ENV, tenant: () => T, mint: async () => ({ code: "pgt-code" }) }));
+  const launched = launchErr ? null : await launchAppFor({ app_id: "onepage", mode: "embed" }, bob, { ...launchLiveDepsForTest(), env: ENV, tenant: () => T, mint: async () => ({ code: "pgt-code" }) });
   const emptied = await q(`SELECT count(*)::int AS n FROM org_app_version WHERE app_id='onepage' AND jsonb_array_length(files)=0 AND bundle IS NOT NULL`);
   chk("D10 화면 한 장 공개 판 — 호환 사본을 비워도 앱 주소 · org_app_ui 가 공개 판(파일 목록에서) · 초안을 만든 사람은 초안 주소에서 초안",
     emptied[0].n === 2 && bobOne.status === 200 && text(bobOne).includes("공개 판 한 장") && aliceOne.status === 200 && text(aliceOne).includes("초안 한 장")
-      && bobUi.view === "published" && String(bobUi.html).includes("공개 판 한 장"),
-    JSON.stringify({ emptied: emptied[0].n, bob: [bobOne.status, text(bobOne).slice(0, 80)], alice: [aliceOne.status], ui: [bobUi.view, String(bobUi.html).slice(0, 40)] }));
+      && bobUi.view === "published" && String(bobUi.html).includes("공개 판 한 장") && launched?.page_key === "main" && launched?.variant === "pub",
+    JSON.stringify({ emptied: emptied[0].n, bob: [bobOne.status, text(bobOne).slice(0, 80)], alice: [aliceOne.status], ui: [bobUi.view, String(bobUi.html).slice(0, 40)], launch: launchErr ? [launchErr.status, String(launchErr.message).slice(0, 60)] : launched?.page_key }));
 
   // D11 — 살아 있는 파일을 모두 오래된 것으로(50시간) · 고아 하나는 30시간 → 한 바퀴 1개만 봐도 고아가 지워진다
   const orphan2 = Buffer.from("고아 둘 " + Date.now());
@@ -282,6 +287,31 @@ try {
     e12?.status === 413 && noAdminApp && noAdminVer && i12.created === true && ver12.length === 1 && ver12[0].has_bundle === true
       && js12.status === 200 && text(js12) === 'console.log("관리자")',
     JSON.stringify({ e12: [e12?.status, String(e12?.message).slice(0, 80)], noAdminApp, noAdminVer, i12: i12.created, ver12, js12: [js12.status, text(js12).slice(0, 40)] }));
+
+  // D13 — S3 저장소의 고아 5개(오래됨 · 안 가리킴) · 가짜 S3 는 지우기를 500 으로 → 3번 연달아 실패하면 접는다
+  const s3Hs = Array.from({ length: 5 }, (_, i) => sha(Buffer.from(`s3 고아 ${i} ${Date.now()}`)));
+  await q(`INSERT INTO org_app_blob(sha256, store, size, stored, created_at, last_used_at) SELECT h, 's3', 10, TRUE, now() - interval '3 days', now() - interval '3 days' FROM unnest($1::text[]) AS h`, [s3Hs]);
+  process.env.LIVELY_APP_BUNDLE_BUCKET = "pgt-bucket";
+  const s3calls = { n: 0, mode: "fail" };
+  blob.setBlobS3DepsForTest({
+    creds: async () => ({ accessKeyId: "AK", secretAccessKey: "SK" }), retryDelayMs: 0,
+    fetch: async (_url, init) => { s3calls.n++; return init?.method === "DELETE" && s3calls.mode === "ok" ? new Response(null, { status: 204 }) : new Response("<Error><Code>InternalError</Code></Error>", { status: 500 }); },
+  });
+  let gcFail, gcOk, leftFail, leftOk, callsFail;
+  try {
+    gcFail = await blob.gcBlobs({ limit: 10 });
+    callsFail = s3calls.n;
+    leftFail = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[]) AND store='s3' AND stored`, [s3Hs]))[0].n;
+    s3calls.mode = "ok"; s3calls.n = 0;
+    gcOk = await blob.gcBlobs({ limit: 10 });
+    leftOk = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[])`, [s3Hs]))[0].n;
+  } finally {
+    blob.setBlobS3DepsForTest(undefined);
+    delete process.env.LIVELY_APP_BUNDLE_BUCKET;
+  }
+  chk("D13 정리 — S3 지우기가 3번 연달아 실패하면 그 바퀴를 접는다(후보마다 한 번 · 장부 그대로) · S3 가 돌아오면 다 지운다",
+    gcFail.checked === 3 && gcFail.failed === 3 && gcFail.removed === 0 && callsFail === 3 && leftFail === 5 && gcOk.removed === 5 && leftOk === 0,
+    JSON.stringify({ gcFail, callsFail, leftFail, gcOk, leftOk }));
 } finally {
   console.log(`\n${pass} passed, ${fail} failed`);
   await itemsPool.end().catch(() => {});

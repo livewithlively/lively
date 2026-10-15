@@ -10,7 +10,7 @@ import { logger } from "../log.js";
 import { audit } from "../org/store/audit.js";
 import { HttpError } from "../http-error.js";
 import { parseAppSource, stageAppSource, type StagedSource } from "./install-source.js";
-import { filesToInline, isTextPath, type AppFile, type AppVersionOrigin } from "./app-versions.js";
+import { entriesOfManifest, filesToInline, isTextPath, type AppFile, type AppVersionOrigin } from "./app-versions.js";
 import { defaultBlobStoreKind, referencedBytes, sha256Hex, type BlobStoreKind } from "./app-blob-store.js";
 import {
   COMPAT_MAX_BYTES, COMPAT_MAX_FILES, COMPAT_TOTAL_MAX_BYTES, bundleBytes, compatFilesFor, materializeBundle, parseBundle, persistBundle, stageBundle,
@@ -109,6 +109,18 @@ export async function versionFiles(row: { bundle?: unknown; bundle_store?: strin
   if (vb) return materializeBundle(vb.kind, vb.bundle, paths);
   const want = paths ? new Set(paths.map(norm)) : null;
   return (row.files as AppFile[]).filter((f) => !want || want.has(norm(f.path)));
+}
+
+/**
+ * 공개 판의 화면(매니페스트 + 화면 entry 파일만) — 앱 주소(v1 화면) · 앱 주소 열기(launch) · org_app_ui 가 이 한 자리에서 읽는다.
+ *  판 묶음이면 저장소에서(옛 코어 호환 사본 files 는 30일 뒤 비고, 옛 상한을 넘는 판엔 처음부터 없다), 옛 판이면 files 에서.
+ *  판 행이 없으면 null. 저장소 실패는 **던진다** — 부르는 쪽이 503 으로 닫는다(«공개 판 없음» 으로 읽어 설치된 화면 — 남의 초안 — 으로
+ *  떨어지지 않게 · 격리 리뷰 재검토 1).
+ */
+export async function publishedScreens(appId: string, versionNo: number): Promise<{ manifest: unknown; files: AppFile[] } | null> {
+  const row = await store.getAppVersion(appId, versionNo);
+  if (!row) return null;
+  return { manifest: row.manifest, files: await versionFiles(row, entriesOfManifest(row.manifest).map((e) => e.entry)) };
 }
 
 /** 판을 설치 스테이지로 푼다(되돌리기) — 판 묶음은 옛 inline 상한을 지나지 않는다. 옛 판은 종전 inline 길. cleanup 을 반드시 부를 것. */

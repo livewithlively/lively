@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { signRequestV4 } from "./aws-sigv4.js";
-import { EMPTY_SHA256, S3Error, parseListXml, s3CanonicalQuery, s3Delete, s3EncodeKey, s3Get, s3Head, s3List, s3Put } from "./s3-lite.js";
+import { EMPTY_SHA256, S3Error, parseListXml, s3CanonicalQuery, s3Delete, s3EncodeKey, s3Get, s3GetStream, s3Head, s3List, s3Put } from "./s3-lite.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -169,6 +169,56 @@ await t("E16 자격 함수가 null — NoCredentials · 네트워크 0건", asyn
   await assert.rejects(s3Put(cfg, "k", Buffer.from("x"), {}, { creds: async () => null, fetch: fakeFetch([], seen), retryDelayMs: 0 }),
     (e: unknown) => e instanceof S3Error && e.code === "NoCredentials");
   assert.equal(seen.length, 0);
+});
+
+await t("E17 네트워크 실패 — S3Error NetworkError · 밑의 까닭(cause.code)을 글에 · 다시 하기(3번) · attempts:1 이면 한 번", async () => {
+  const seen: Seen[] = [];
+  const boom = (async (url: string | URL | Request) => {
+    seen.push({ url: String(url), method: "?", headers: {}, body: null });
+    throw new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+  }) as typeof fetch;
+  await assert.rejects(s3Get(cfg, "k", deps(boom)), (e: unknown) => e instanceof S3Error && e.code === "NetworkError" && /ECONNRESET/.test(e.message));
+  assert.equal(seen.length, 3, "일시 오류라 다시 한다");
+  seen.length = 0;
+  await assert.rejects(s3Delete(cfg, "k", { ...deps(boom), attempts: 1 }), (e: unknown) => e instanceof S3Error && e.code === "NetworkError");
+  assert.equal(seen.length, 1, "attempts:1 — 다시 하지 않는다(잠근 채 부르는 정리)");
+});
+
+await t("E18 시간 초과 — 응답이 안 오면 timeoutMs 뒤 S3Error Timeout(다시 하기 포함)", async () => {
+  let calls = 0;
+  const hang = ((_u: string | URL | Request, init?: RequestInit) => new Promise<Response>((_res, rej) => {
+    calls++;
+    init?.signal?.addEventListener("abort", () => rej(init.signal?.reason ?? new DOMException("aborted", "AbortError")));
+  })) as typeof fetch;
+  const t0 = Date.now();
+  //  AbortSignal.timeout 의 시계는 프로세스를 붙잡지 않는다(unref) — 게이트웨이에선 서버가 붙잡지만 이 시험엔 그것이 없어 따로 붙잡는다.
+  const keep = setInterval(() => { /* 붙잡기 */ }, 1000);
+  try {
+    await assert.rejects(s3Get(cfg, "k", { ...deps(hang), timeoutMs: 60 }), (e: unknown) => e instanceof S3Error && e.code === "Timeout");
+  } finally { clearInterval(keep); }
+  assert.equal(calls, 3);
+  assert.ok(Date.now() - t0 < 2000, "시한이 걸렸다(매달리지 않는다)");
+});
+
+await t("E19 흘려 받기는 머리까지만 잰다 — 본문이 timeoutMs 보다 오래 걸려도 끊지 않는다", async () => {
+  const slow = ((_u: string | URL | Request, init?: RequestInit) => {
+    const enc = new TextEncoder();
+    let n = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(ctrl) {
+        if (init?.signal?.aborted) { ctrl.error(init.signal.reason); return; }
+        await new Promise((r) => setTimeout(r, 40));
+        if (++n > 5) { ctrl.close(); return; }
+        ctrl.enqueue(enc.encode(`c${n};`));
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200, headers: { "content-length": "15" } }));
+  }) as typeof fetch;
+  const got = await s3GetStream(cfg, "k", { ...deps(slow), timeoutMs: 60 });
+  assert.ok(got, "머리는 시한 안에 왔다");
+  const parts: Buffer[] = [];
+  for await (const c of got!.stream) parts.push(Buffer.from(c as Uint8Array));
+  assert.equal(Buffer.concat(parts).toString(), "c1;c2;c3;c4;c5;", "본문 200ms(> 시한 60ms)를 끝까지 받았다");
 });
 
 console.log(`\n${pass} passed`);

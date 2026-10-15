@@ -4802,7 +4802,7 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "87d1f65a72ad2d77"
+  "input_hash": "a5964e4115dfbfc7"
  },
  {
   "name": "app_pull",

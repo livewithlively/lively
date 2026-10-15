@@ -72,6 +72,9 @@ export async function runDirJs<T>(acc: DirAccess, js: string, input: unknown): P
   if (acc.osUser) return memberNodeJson<T>(acc.osUser, js, input);
   return new Promise<T>((resolve, reject) => {
     const c = spawn(process.execPath, ["-e", js], { stdio: ["pipe", "pipe", "pipe"] });
+    //  글자로 받는다 — 조각마다 바이트를 글로 풀면 한글 이름이 조각 경계에서 깨진다(격리 리뷰 재검토 4 · 멤버 경계 길은 collectText 가 같은 일).
+    c.stdout.setEncoding("utf8");
+    c.stderr.setEncoding("utf8");
     let out = "", err = "";
     c.stdout.on("data", (d) => { out += d; });
     c.stderr.on("data", (d) => { err += d; });

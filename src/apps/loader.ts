@@ -67,7 +67,7 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   for (const asset of await scanHarnessAssets(manifest, pluginRoot)) items.push(asset);
 
   // 3) UI entry HTML 보존 — ui.pages/widgets 의 entry 파일을 읽어 담는다(소스 무관 서빙 대비, PR5).
-  await checkUiRoot(manifest, root);
+  await checkWebRoot(manifest, root);
   const uiAssets = await readUiAssets(manifest, root);
 
   return { manifest, contentHash, items, uiAssets, runtimeAsset };
@@ -97,7 +97,7 @@ const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가
  * #4481 여러 파일 앱의 화면 폴더(web.root) — 패키지 안의 폴더여야 하고, 화면 entry 는 전부 그 폴더 안이어야 한다(앱 주소가 그 폴더를 맨 앞(/)으로 낸다).
  *  없으면(v1 앱) 아무것도 안 본다.
  */
-async function checkUiRoot(m: LivelyAppManifest, root: string): Promise<void> {
+async function checkWebRoot(m: LivelyAppManifest, root: string): Promise<void> {
   if (m.web?.root === undefined) return;
   const rel = webRootOf(m);
   if (rel === null) throw new HttpError(400, `매니페스트 오류 [web.root]: 패키지 안의 상대 폴더여야 합니다(예: "dist" · 맨 위면 ".") — 받은 값: ${m.web.root}`);

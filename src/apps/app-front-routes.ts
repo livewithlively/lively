@@ -27,8 +27,8 @@ import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import { addressViewFor, canSeeApp } from "./visibility.js";
-import { entriesOfManifest, uiPagesFromFiles, type AppFile } from "./app-versions.js";
-import { versionFiles } from "./app-version-files.js";
+import { uiPagesFromFiles, type AppFile } from "./app-versions.js";
+import { publishedScreens } from "./app-version-files.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
@@ -71,10 +71,7 @@ const liveDeps = (): AppFrontDeps => ({
   listUiAssets: (id) => appStore.listUiAssets(id),
   getUiAsset: (id, key) => appStore.getUiAsset(id, key),
   //  #4481 공개 판의 화면 entry 만 — 판 묶음이 있으면 저장소에서(옛 코어 호환 사본 files 는 30일 뒤 비워지므로 거기서 읽지 않는다).
-  getAppVersion: async (id, no) => {
-    const row = await appStore.getAppVersion(id, no);
-    return row ? { manifest: row.manifest, files: await versionFiles(row, entriesOfManifest(row.manifest).map((e) => e.entry)) } : null;
-  },
+  getAppVersion: (id, no) => publishedScreens(id, no),
   redeem: (i) => redeemAppLaunchCode(i),
   scripts: () => loadAppScripts(),
   versionHash: (id, no) => appStore.getAppVersionHash(id, no),
@@ -169,8 +166,14 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
   let asset: { page_key: string; html: string } | null = null;
   let manifest: unknown = w.app.manifest;
-  const pub = view === "published" && d.getAppVersion
-    ? await d.getAppVersion(w.app.id, w.app.published_version_no as number).catch(() => null) : null;
+  let pub: { manifest: unknown; files: unknown[] } | null = null;
+  if (view === "published" && d.getAppVersion) {
+    try { pub = await d.getAppVersion(w.app.id, w.app.published_version_no as number); } catch (e) {
+      //  저장소(S3) 실패를 «공개 판 없음» 으로 읽으면 아래가 설치된 화면 — 남의 초안 — 을 공개 주소에 낸다. 503 으로 닫는다(격리 리뷰 재검토 1).
+      logger.error({ err: e instanceof Error ? e.message : String(e), app: w.app.id }, "[app-front] 공개 판 화면을 읽지 못했다");
+      return { status: 503, html: appErrorHtml("앱 화면을 준비하지 못했습니다", "공개 판의 화면 파일을 읽지 못했습니다. 잠시 뒤 다시 열어 주세요.") };
+    }
+  }
   if (pub) {
     const ui = uiPagesFromFiles(pub.manifest, pub.files as AppFile[]);
     if (!ui.length) return notFound(`앱 '${w.app.id}' 에 화면이 없습니다.`);
@@ -204,7 +207,13 @@ interface CachedBundle { kind: BlobStoreKind; bundle: AppBundle; manifest: unkno
 /** 판 묶음 캐시 — 키에 내용 지문을 넣는다(「원본 · 릴리스」 판은 번호 그대로 내용이 바뀐다 · store.refreshOriginVersion). */
 const bundleCache = new Map<string, CachedBundle>();
 const BUNDLE_CACHE_MAX = 200;
-export function clearFrontBundleCacheForTest(): void { bundleCache.clear(); }
+export function clearFrontBundleCacheForTest(): void { bundleCache.clear(); gzCache.clear(); gzBytes = 0; }
+/** 시험용 — 압축본 캐시의 셈(줄 수 · 바이트)과 실제 합. */
+export function gzCacheStatsForTest(): { entries: number; counted: number; actual: number } {
+  let actual = 0;
+  for (const v of gzCache.values()) actual += v.length;
+  return { entries: gzCache.size, counted: gzBytes, actual };
+}
 
 async function loadBundle(d: AppFrontDeps, tenant: string, appId: string, no: number): Promise<CachedBundle | "no-bundle" | null> {
   if (!d.versionHash || !d.versionBundle) return null;
@@ -315,6 +324,9 @@ async function gzipCached(etag: string, data: Buffer): Promise<Buffer> {
   const hit = gzCache.get(etag);
   if (hit) { gzCache.delete(etag); gzCache.set(etag, hit); return hit; }
   const out = await gzipAsync(data);
+  //  같은 파일을 동시에 처음 받은 요청 — 한 벌만 센다(셈이 두 번 늘면 언젠가 넣는 족족 밀려나 캐시가 조용히 꺼진다 · 격리 리뷰 재검토 3).
+  const raced = gzCache.get(etag);
+  if (raced) return raced;
   gzCache.set(etag, out); gzBytes += out.length;
   while (gzBytes > GZ_CACHE_MAX) {
     const k = gzCache.keys().next();

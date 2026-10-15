@@ -48,7 +48,7 @@ export function setBlobS3DepsForTest(d: S3Deps | undefined): void { s3DepsForTes
 async function viaS3<T>(what: string, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) {
     if (e instanceof S3Error) {
-      logger.error({ code: e.code, status: e.status, what }, "앱 판 파일 저장소(S3) 실패(#4481)");
+      logger.error({ code: e.code, status: e.status, what, err: e.message }, "앱 판 파일 저장소(S3) 실패(#4481)");
       throw new HttpError(503, `앱 파일 저장소(S3)에 닿지 못했습니다(${what} · ${e.code}) — 잠시 뒤 다시 하세요. 계속되면 운영자에게 알려 주세요`);
     }
     throw e;
@@ -216,6 +216,9 @@ export interface BlobGcResult { checked: number; removed: number; removedBytes: 
  * 정리 한 바퀴(하우스키핑 틱이 워크스페이스마다 부른다). 후보를 한 번 고른 뒤 줄마다 잠그고 조건을 다시 본다(머리말).
  *  limit — 한 바퀴에 볼 후보 수(틱을 오래 붙잡지 않게). 실패한 지우기는 그 줄을 남긴다(다음 바퀴가 다시 본다).
  */
+/** 한 바퀴에서 S3 실패가 이만큼 잇따르면 그 바퀴를 접는다. */
+export const GC_S3_FAIL_STREAK_MAX = 3;
+
 export async function gcBlobs(opts: { limit?: number; graceHours?: number } = {}): Promise<BlobGcResult> {
   const grace = Math.max(1, opts.graceHours ?? BLOB_GC_GRACE_HOURS);
   //  후보는 SQL 에서 «어떤 판도 안 가리킴» 까지 걸러 고른다 — 오래 안 고친 앱의 «오래됐지만 살아 있는» 파일이 앞줄을 채우면
@@ -229,9 +232,15 @@ export async function gcBlobs(opts: { limit?: number; graceHours?: number } = {}
     [grace, Math.max(1, opts.limit ?? 200)]);
   const out: BlobGcResult = { checked: 0, removed: 0, removedBytes: 0, failed: 0 };
   const tenant = blobTenant();
-  //  잠근 채 S3 를 부르는 동안 같은 파일을 쓰려는 저장이 기다린다 — 짧게(다시 하기도 줄여) 붙든다.
-  const gcDeps: S3Deps = { ...(s3DepsForTest ?? {}), timeoutMs: s3DepsForTest?.timeoutMs ?? 10_000 };
+  //  잠근 채 S3 를 부르는 동안 같은 파일을 쓰려는 저장이 기다린다 — 짧게(시한 10초 · 다시 하기 없음) 붙든다.
+  const gcDeps: S3Deps = { ...(s3DepsForTest ?? {}), timeoutMs: s3DepsForTest?.timeoutMs ?? 10_000, attempts: 1 };
+  //  S3 가 연달아 실패하면(설정이 빠짐 · 지우기 권한 없음 · 먹통) 이 바퀴를 접는다 — 후보마다 잠금을 붙든 채 기다리며 한 바퀴가 길어지지 않게.
+  let s3FailStreak = 0;
   for (const row of cand.rows) {
+    if (s3FailStreak >= GC_S3_FAIL_STREAK_MAX) {
+      logger.warn({ streak: s3FailStreak, left: cand.rows.length - out.checked }, "앱 판 파일 정리 — S3 가 연달아 실패해 이 바퀴를 접는다(#4481 · 다음 바퀴가 다시 본다)");
+      break;
+    }
     const h = String(row.sha256); const kind = row.store === "db" ? "db" as const : "s3" as const;
     out.checked++;
     let objectGone = false;
@@ -248,7 +257,8 @@ export async function gcBlobs(opts: { limit?: number; graceHours?: number } = {}
       if (!still || (ref && ref.rows.length)) { await client.query("ROLLBACK"); continue; }
       if (kind === "s3" && still.stored === true) {
         const c = s3OrThrow();
-        await s3Delete(c, s3BlobKey(c.prefix, tenant, h), gcDeps);
+        try { await s3Delete(c, s3BlobKey(c.prefix, tenant, h), gcDeps); } catch (e) { if (e instanceof S3Error) s3FailStreak++; throw e; }
+        s3FailStreak = 0;
         objectGone = true;
       }
       await client.query(`DELETE FROM org_app_blob WHERE sha256 = $1 AND store = $2`, [h, kind]);

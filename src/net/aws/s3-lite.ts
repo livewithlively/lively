@@ -25,6 +25,8 @@ export interface S3Deps {
   timeoutMs?: number;
   /** 일시 오류에서 다시 하기 전 기다림(ms) — 시험은 0. */
   retryDelayMs?: number;
+  /** 한 동작을 몇 번까지 해 보나(처음 포함 · 기본 3). 잠근 채 부르는 정리(gc)는 1 — 잠금을 오래 붙들지 않게. */
+  attempts?: number;
 }
 
 export class S3Error extends Error {
@@ -92,7 +94,10 @@ async function send(cfg: S3Config, deps: S3Deps, r: Req): Promise<Response> {
   } catch (e) {
     //  네트워크 · 시간 초과도 S3Error 로 — 부르는 쪽이 한 가지 꼴로 다루고(503 문구), 다시 하기 판정이 같은 규칙을 쓴다.
     const name = (e as { name?: string })?.name;
-    throw new S3Error(0, name === "TimeoutError" || name === "AbortError" ? "Timeout" : "NetworkError", `S3 ${r.method} ${r.key || "/"} 연결 실패: ${(e as Error)?.message ?? e}`);
+    //  fetch 는 «fetch failed» 만 말한다 — 밑의 까닭(ECONNRESET · ENOTFOUND · 인증서)을 붙여야 운영자가 가른다.
+    const cause = (e as { cause?: { code?: unknown; message?: unknown } })?.cause;
+    const why = cause ? ` (${String(cause.code ?? cause.message ?? "")})` : "";
+    throw new S3Error(0, name === "TimeoutError" || name === "AbortError" ? "Timeout" : "NetworkError", `S3 ${r.method} ${r.key || "/"} 연결 실패: ${(e as Error)?.message ?? e}${why}`);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -113,13 +118,14 @@ const transient = (e: unknown): boolean => {
   return e.status >= 500 || ["SlowDown", "RequestTimeout", "NetworkError", "Timeout"].includes(e.code);
 };
 
-/** 일시 오류(5xx · 네트워크 · 시간 초과)면 두 번까지 다시 한다 — 모든 동작이 멱등이다. */
+/** 일시 오류(5xx · 네트워크 · 시간 초과)면 두 번까지 다시 한다(attempts) — 모든 동작이 멱등이다. */
 async function withRetry<T>(deps: S3Deps, fn: () => Promise<T>): Promise<T> {
   let last: unknown;
-  for (let i = 0; i < 3; i++) {
+  const n = Math.max(1, Math.floor(deps.attempts ?? 3));
+  for (let i = 0; i < n; i++) {
     try { return await fn(); } catch (e) {
       last = e;
-      if (!transient(e) || i === 2) throw e;
+      if (!transient(e) || i === n - 1) throw e;
       const wait = deps.retryDelayMs ?? 200 * (i + 1);
       if (wait > 0) await new Promise((res) => setTimeout(res, wait));
     }

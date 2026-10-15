@@ -1,14 +1,15 @@
 // 앱 주소의 여러 파일 앱 응답(#4481) — 가짜 의존(판 지문 · 판 묶음 · 파일 내용)으로 app-front-routes 의 page 길을 끝까지 본다.
 // 실행: npm run build && node dist/apps/app-front-multi.test.js
-//  M1~M10: 사양 표 B 의 응답 쪽 + D 의 «보는 판»(#4667) · 깨진 판 처리 · v1 앱 무회귀.
+//  M1~M12: 사양 표 B 의 응답 쪽 + D 의 «보는 판»(#4667) · 깨진 판 처리 · v1 앱 무회귀.
 //  이게 틀리면: 빌드한 앱의 스크립트가 HTML 로 오거나(종류) · 새 판이 캐시에 묻히거나(ETag/캐시) · 초안을 남에게 보이거나 ·
 //   설치된 내용과 다른 판의 파일을 내거나 · v1 앱(화면 한 장)이 새 길로 빨려 들어가 깨진다.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 import { Readable } from "node:stream";
+import { HttpError } from "../http-error.js";
 import { signAppFront } from "./app-front-auth.js";
-import { appFrontPage, clearFrontBundleCacheForTest, type AppFrontDeps } from "./app-front-routes.js";
+import { appFrontPage, clearFrontBundleCacheForTest, gzCacheStatsForTest, type AppFrontDeps } from "./app-front-routes.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { OrgApp } from "../org/store/apps.js";
 
@@ -182,5 +183,42 @@ clearFrontBundleCacheForTest();
   assert.equal(r.headers?.["Content-Length"], String(big.length));
   assert.equal(r.headers?.["Content-Encoding"], undefined);
   ok("M10 큰 파일 흘려 보내기 · 길이");
+}
+{
+  //  화면 한 장 앱(v1)에 남의 초안이 걸려 있다 — 공개 판 화면을 저장소에서 못 읽으면(S3 먹통 · 파일 없음) 503 이지,
+  //   설치된 화면(= 남의 초안)을 공개 주소에 내지 않는다(격리 리뷰 재검토 1).
+  const V1 = { csp: {}, ui: { pages: [{ key: "main", title: "한 장", entry: "ui/index.html" }] } };
+  clearFrontBundleCacheForTest();   // 앞 시험이 같은 판 번호 · 지문으로 여러 파일 묶음을 캐시해 두었다
+  let asked = 0;
+  //  판 행의 매니페스트도 화면 한 장 앱(web.root 없음) — 여러 파일 길은 null 을 주고 v1 길로 온다.
+  const v1Bundle = async () => ({ manifest: V1, content_hash: "hash-v1", bundle: V[1].bundle, bundle_store: "db" });
+  const { d } = deps({ manifest: V1, draft_by: "alice", published_version_no: 1, current_version_no: 2 }, {
+    versionBundle: v1Bundle,
+    getAppVersion: async () => { asked++; throw new HttpError(503, "앱 파일 저장소(S3)에 닿지 못했습니다"); },
+    getUiAsset: async () => ({ page_key: "main", html: "<p>alice 의 초안 화면</p>" }),
+  });
+  const r = await appFrontPage(H("bob"), "/", d);
+  assert.equal(asked, 1, "공개 판 화면을 읽으려 했다(관측 장치 확인)");
+  assert.equal(r.status, 503);
+  assert.ok(!String(r.html).includes("초안 화면"), "남의 초안을 내지 않는다");
+  const { d: d2 } = deps({ manifest: V1, draft_by: "alice", published_version_no: 1, current_version_no: 2 }, {
+    versionBundle: v1Bundle,
+    getAppVersion: async () => ({ manifest: V1, files: [{ path: "ui/index.html", content: "<p>공개 판 화면</p>" }] }),
+    getUiAsset: async () => ({ page_key: "main", html: "<p>alice 의 초안 화면</p>" }),
+  });
+  clearFrontBundleCacheForTest();
+  assert.match(String((await appFrontPage(H("bob"), "/", d2)).html), /공개 판 화면/, "읽히면 공개 판");
+  ok("M11 v1 공개 판 화면을 못 읽으면 503 — 남의 초안으로 떨어지지 않는다");
+}
+{
+  //  같은 파일을 동시에 처음 받는 요청 여럿 — 압축본 캐시는 한 벌만 센다(셈과 실제 합이 같다).
+  clearFrontBundleCacheForTest();
+  const { d } = deps();
+  const rs = await Promise.all(Array.from({ length: 6 }, () => appFrontPage({ ...H("bob"), "accept-encoding": "gzip" }, "/assets/index-BjU7aAkd.js", d)));
+  assert.ok(rs.every((r) => r.headers?.["Content-Encoding"] === "gzip"), "압축 길을 탔다(관측 장치 확인)");
+  const st = gzCacheStatsForTest();
+  assert.equal(st.entries, 1);
+  assert.equal(st.counted, st.actual, `셈 ${st.counted} = 실제 ${st.actual}`);
+  ok("M12 동시 첫 요청 — 압축본 캐시 셈이 두 번 늘지 않는다");
 }
 console.log(`\n${pass} passed`);
