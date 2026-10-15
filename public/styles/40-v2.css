@@ -1900,7 +1900,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-tray-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .v2-studio-tray-row .n { flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: #E56450; color: #fff; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
 .v2-studio-tray-row .w { flex: none; width: 200px; color: var(--ink-sub); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-studio-tray-row.all .w { width: 228px; font-weight: 700; }
+.v2-studio-tray-row.all .w { width: auto; min-width: 64px; font-weight: 700; }   /* 「앱 전체」 칸은 말 바로 뒤에서 끝까지(원준 2026-10-16 «이게 말이 되는 사이즈와 위치의 텍스트 박스야?» — 228px 빈 자리 뒤 반쪽 칸이었다) */
 .v2-studio-tray-row .x { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; }
 .v2-studio-tray-in { flex: 1; min-width: 0; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
 /* ② 카드를 통째로 다시 쓰게 하는 한마디 */
@@ -3049,7 +3049,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub-go button:disabled { opacity: .6; cursor: default; box-shadow: none; }
 .v2-studio-hub-go button.alt { background: var(--bg); color: var(--purple-text, #5B3FD0); box-shadow: 0 0 0 1.5px var(--purple, #7B61E0); }
 /* 단추 속 그림 — ① 「어디에서 쓰나」 그림(.v2-studio-pk)을 작게. 보라 단추 위에선 밝은 판 위에 얹는다 */
-.v2-studio-hub-go button .v2-studio-pk { width: min(220px, 100%); height: 58px; margin: 0 0 8px; box-sizing: border-box; }
+.v2-studio-hub-go button .v2-studio-pk { width: 150px; max-width: 100%; height: 94px; margin: 0 0 8px; box-sizing: border-box; }   /* 화면 같은 비율(16:10) — 220×58 은 «가로가 비현실적으로 길어»(원준 2026-10-16) */
 .v2-studio-hub-go button:not(.alt) .v2-studio-pk { background: rgba(255, 255, 255, .92); }
 .v2-studio-hub-go button .v2-studio-pk .tg { font-size: 10px; line-height: 14px; }
 .v2-studio-hub .v2-studio-tray { width: 100%; }
