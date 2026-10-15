@@ -2,8 +2,8 @@
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-bundles.pg-test.mjs
 //
 // 사양 표 D — 새 DB(initAllSchemas) 위에서 끝까지 돈다. 저장소는 DB(자가호스팅 길 — S3 설정 없음): 장부 · 내용 · 정리가 같은 규칙을 탄다.
-//  D1 여러 파일 앱 저장(ui.root=dist) → 판 행에 파일 목록 · 장부에 지문마다 한 줄(stored) · 옛 코어 호환 사본
-//  D2 앱 주소 — `/` 는 런타임을 넣은 index.html · 스크립트는 제 종류 · ui.root 밖(매니페스트 · 소스)은 못 받는다 · 한 페이지 앱
+//  D1 여러 파일 앱 저장(web.root=dist) → 판 행에 파일 목록 · 장부에 지문마다 한 줄(stored) · 옛 코어 호환 사본
+//  D2 앱 주소 — `/` 는 런타임을 넣은 index.html · 스크립트는 제 종류 · web.root 밖(매니페스트 · 소스)은 못 받는다 · 한 페이지 앱
 //  D3 공개 판 · 초안 — 공개한 뒤 고친 판은 고친 사람만 · 남은 공개 판 파일 · 공개 판으로 되돌리면 초안이 걷힌다
 //  D4 N → N-1 되돌리기 — 앱 주소가 앞 판의 내용을 낸다(뒤 판에만 있던 파일은 없다)
 //  D5 사본 — 큰 판 내려받기는 큰 파일을 지문만 · 그 줄 그대로 새 id 로 저장 · 새 앱이 같은 파일을 낸다(장부는 한 벌)
@@ -12,6 +12,9 @@
 //  D7 정리 — 어떤 판도 안 가리키고 24시간 지난 파일만 지운다(가리키는 파일 · 방금 쓴 파일은 남는다)
 //  D9 구성원 저장은 하네스 자산(skills/ · agents/ · commands/)을 싣지 않는다
 //  D8 상한 — 워크스페이스 상한 · 파일 하나 상한을 넘는 저장은 413 이고 앱이 생기지 않는다 · 고치기는 관리자 도구(scope admin)
+//  D10 화면 한 장(v1) 공개 판의 호환 사본(files)을 30일 뒤 비워도 앱 주소 · org_app_ui 가 공개 판 화면을 낸다(격리 리뷰 B2 — 살아 있는 의존으로)
+//  D11 정리 후보가 «오래됐지만 살아 있는» 파일로 막히지 않는다 — 한 바퀴 볼 수(1)보다 그런 파일이 많아도 고아를 지운다(격리 리뷰 B3)
+//  D12 관리자 설치도 판 파일을 설치 **전에** 둔다 — 상한에 걸리면 413 이고 앱이 안 생긴다 · 되는 설치는 판 1개 · 앱 주소가 그 판을 낸다
 import pg from "pg";
 import crypto from "node:crypto";
 
@@ -35,7 +38,7 @@ const { itemsPool } = await import(`${D}/db/client.js`);
 const appStore = await import(`${D}/org/store/apps.js`);
 const blob = await import(`${D}/apps/app-blob-store.js`);
 const { runAppBundleHousekeeping, resetAppBundleHousekeepingForTest } = await import(`${D}/apps/app-bundle-migrate.js`);
-const { appFrontPage, clearFrontBundleCacheForTest } = await import(`${D}/apps/app-front-routes.js`);
+const { appFrontPage, clearFrontBundleCacheForTest, appFrontLiveDepsForTest } = await import(`${D}/apps/app-front-routes.js`);
 const { signAppFront } = await import(`${D}/apps/app-front-auth.js`);
 const { getMember } = await import(`${D}/org/store.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -73,7 +76,7 @@ const text = (r) => (r.body ? r.body.toString() : String(r.html ?? ""));
 
 const manifest = (id, o = {}) => JSON.stringify({
   id, title: o.title ?? "웹 앱", version: o.version ?? "0.1.0", permissions: { scopes: [], tools: [] }, data: { tables: [] },
-  ui: { root: "dist", pages: [{ key: "main", title: o.title ?? "웹 앱", entry: "dist/index.html" }] },
+  web: { root: "dist" }, ui: { pages: [{ key: "main", title: o.title ?? "웹 앱", entry: "dist/index.html" }] },
 }, null, 2);
 const JS = "assets/app-ab12cd34.js";
 const web = (id, label, extra = []) => [
@@ -105,7 +108,7 @@ try {
   const man = await get("pgt-alice", "webapp", "/lively-app.json");
   const src = await get("pgt-alice", "webapp", "/src/main.ts");
   const spa = await get("pgt-alice", "webapp", "/deep/route");
-  chk("D2 앱 주소 — index.html(런타임 주입 · CSP 'self') · 스크립트 종류 · 바이트 그대로 · ui.root 밖 404 · 한 페이지 앱",
+  chk("D2 앱 주소 — index.html(런타임 주입 · CSP 'self') · 스크립트 종류 · 바이트 그대로 · web.root 밖 404 · 한 페이지 앱",
     home.status === 200 && text(home).includes("window.lively={}") && text(home).includes("<title>v1</title>")
       && String(home.headers?.["Content-Security-Policy"]).includes("script-src 'self'")
       && js.status === 200 && js.headers?.["Content-Type"] === "text/javascript; charset=utf-8" && text(js) === 'console.log("v1")'
@@ -212,6 +215,37 @@ try {
     e9?.status === 403 && String(e9?.message).includes("skills") && (await q(`SELECT id FROM org_app WHERE id='withskill'`)).length === 0 && skillRows[0].n === 0,
     JSON.stringify({ e9: [e9?.status, String(e9?.message).slice(0, 80)], skillRows }));
 
+  // D10 — 화면 한 장 앱: 공개(1판) → 고침(2판, alice 의 초안) → 판 행의 호환 사본을 비운다(30일 하우스키핑과 같은 결과)
+  const oneMan = JSON.stringify({ id: "onepage", title: "한 장", version: "0.1.0", permissions: { scopes: [], tools: [] }, data: { tables: [] }, ui: { pages: [{ key: "main", title: "한 장", entry: "ui/index.html" }] } });
+  await call("app_save", { files: [{ path: "lively-app.json", content: oneMan }, { path: "ui/index.html", content: "<p>공개 판 한 장</p>" }], publish: true }, alice);
+  await call("app_save", { files: [{ path: "lively-app.json", content: oneMan }, { path: "ui/index.html", content: "<p>초안 한 장</p>" }] }, alice);
+  await q(`UPDATE org_app_version SET files='[]'::jsonb WHERE app_id='onepage'`);
+  const live = { ...appFrontLiveDepsForTest(), env: ENV, tenant: () => T, scripts: deps.scripts };
+  const hdr = (mid, app) => ({ "x-lvly-app-front": signAppFront("pgt", { op: "act", t: T.id, ws: T.slug, app, var: "pub", mid, iat: Math.floor(Date.now() / 1000) }) });
+  clearFrontBundleCacheForTest();
+  const bobOne = await appFrontPage(hdr("pgt-bob", "onepage"), "/", live);
+  const aliceOne = await appFrontPage(hdr("pgt-alice", "onepage"), "/", live);
+  const bobUi = await call("org_app_ui", { app_id: "onepage" }, bob);
+  const emptied = await q(`SELECT count(*)::int AS n FROM org_app_version WHERE app_id='onepage' AND jsonb_array_length(files)=0 AND bundle IS NOT NULL`);
+  chk("D10 화면 한 장 공개 판 — 호환 사본을 비워도 앱 주소 · org_app_ui 가 공개 판(파일 목록에서) · 초안을 만든 사람은 초안",
+    emptied[0].n === 2 && bobOne.status === 200 && text(bobOne).includes("공개 판 한 장") && aliceOne.status === 200 && text(aliceOne).includes("초안 한 장")
+      && bobUi.view === "published" && String(bobUi.html).includes("공개 판 한 장"),
+    JSON.stringify({ emptied: emptied[0].n, bob: [bobOne.status, text(bobOne).slice(0, 80)], alice: [aliceOne.status], ui: [bobUi.view, String(bobUi.html).slice(0, 40)] }));
+
+  // D11 — 살아 있는 파일을 모두 오래된 것으로(50시간) · 고아 하나는 30시간 → 한 바퀴 1개만 봐도 고아가 지워진다
+  const orphan2 = Buffer.from("고아 둘 " + Date.now());
+  await blob.storeBlobs("db", [{ h: sha(orphan2), size: orphan2.length, read: async () => orphan2 }]);
+  const liveHs = (await q(`SELECT DISTINCT e->>'h' AS h FROM org_app_version v, jsonb_array_elements(v.bundle->'files') e WHERE v.bundle IS NOT NULL`)).map((x) => x.h);
+  await q(`UPDATE org_app_blob SET last_used_at = now() - interval '50 hours' WHERE sha256 = ANY($1::text[])`, [liveHs]);
+  await q(`UPDATE org_app_blob SET last_used_at = now() - interval '30 hours' WHERE sha256 = $1`, [sha(orphan2)]);
+  const liveBefore = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[])`, [liveHs]))[0].n;
+  const gc2 = await blob.gcBlobs({ limit: 1 });
+  const orphanLeft = (await q(`SELECT 1 FROM org_app_blob WHERE sha256 = $1`, [sha(orphan2)])).length;
+  const liveAfter = (await q(`SELECT count(*)::int AS n FROM org_app_blob WHERE sha256 = ANY($1::text[])`, [liveHs]))[0].n;
+  chk("D11 정리 — 오래된 살아 있는 파일이 한 바퀴 볼 수보다 많아도 고아를 지운다 · 살아 있는 파일은 그대로",
+    liveBefore > 1 && gc2.removed === 1 && orphanLeft === 0 && liveAfter === liveBefore,
+    JSON.stringify({ liveBefore, gc2, orphanLeft, liveAfter }));
+
   // D8
   //  관리자 문은 도구 입구(MCP · REST 의 scope 관문)가 지킨다 — 이 코드베이스의 다른 관리자 도구와 같다. 여기선 선언을 본다.
   const adminOnly = cap("app_bundle_limits_set").scope === "admin" && cap("app_bundle_limits").scope === null;
@@ -228,6 +262,21 @@ try {
     adminOnly && lim.policy.workspace_max_mb === 1 && lim.used_mb > 0 && e8?.status === 413 && noApp
       && e8b?.status === 413 && String(e8b?.message).includes("huge.bin") && after.policy.workspace_max_mb === 10240 && after.policy.file_max_mb === 50,
     JSON.stringify({ adminOnly, lim: lim.policy, e8: [e8?.status, String(e8?.message).slice(0, 80)], noApp, e8b: [e8b?.status, String(e8b?.message).slice(0, 80)], after: after.policy }));
+
+  // D12
+  await call("app_bundle_limits_set", { workspace_max_mb: 1 }, boss);
+  const e12 = await errOf(call("org_app_install", { source: { kind: "inline", files: web("adminbig", "x", [{ path: "dist/huge.bin", content: crypto.randomBytes(1_200_000).toString("base64"), encoding: "base64" }]) } }, boss));
+  const noAdminApp = (await q(`SELECT id FROM org_app WHERE id='adminbig'`)).length === 0;
+  const noAdminVer = (await q(`SELECT 1 FROM org_app_version WHERE app_id='adminbig'`)).length === 0;
+  await call("app_bundle_limits_set", { reset: true }, boss);
+  const i12 = await call("org_app_install", { source: { kind: "inline", files: web("adminok", "관리자") } }, boss);
+  const ver12 = await q(`SELECT version_no, bundle_store, (bundle IS NOT NULL) AS has_bundle FROM org_app_version WHERE app_id='adminok'`);
+  clearFrontBundleCacheForTest();
+  const js12 = await get("pgt-bob", "adminok", `/${JS}`);
+  chk("D12 관리자 설치 — 상한에 걸리면 413 이고 앱 · 판이 안 생긴다 · 되는 설치는 판 1개(파일 목록) · 앱 주소가 그 판을 낸다",
+    e12?.status === 413 && noAdminApp && noAdminVer && i12.created === true && ver12.length === 1 && ver12[0].has_bundle === true
+      && js12.status === 200 && text(js12) === 'console.log("관리자")',
+    JSON.stringify({ e12: [e12?.status, String(e12?.message).slice(0, 80)], noAdminApp, noAdminVer, i12: i12.created, ver12, js12: [js12.status, text(js12).slice(0, 40)] }));
 } finally {
   console.log(`\n${pass} passed, ${fail} failed`);
   await itemsPool.end().catch(() => {});

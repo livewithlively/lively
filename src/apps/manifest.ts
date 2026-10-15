@@ -125,10 +125,6 @@ const cspSchema = z.object({
 }).strict().default({});
 
 const uiSchema = z.object({
-  //  #4481 앱 v2-2 — 여러 파일 앱의 화면 폴더(패키지 안 상대경로 · 예: "dist" · 패키지 맨 위면 "."). 주면 그 폴더의 파일 **전부**를
-  //   앱 주소(<앱>-<워크스페이스>.lvly.app)에서 그 경로 그대로 낸다(빌드 산출물 · 이미지 · 폰트). 화면 entry 는 이 폴더 안이어야 한다.
-  //   없으면 종전(v1) — 화면은 entry HTML 한 장이고 앱 주소 맨 앞(/) 에만 선다. 판정은 uiRootOf.
-  root: z.string().min(1).max(512).optional(),
   pages: z.array(uiPageSchema).default([]),
   widgets: z.array(uiWidgetSchema).default([]),
 }).strict();
@@ -250,6 +246,13 @@ export const appManifestSchema = z.object({
     http_tools: z.array(z.record(z.unknown())).default([]),  // org_tool 프리셋 형식(설치가 재검증)
   }).strict().default({}),
   ui: uiSchema.default({}),
+  //  #4481 앱 v2-2 — 여러 파일 앱의 화면 폴더(web.root — 패키지 안 상대경로 · 예: "dist" · 패키지 맨 위면 "."). 주면 그 폴더의 파일 **전부**를
+  //   앱 주소(<앱>-<워크스페이스>.lvly.app)에서 그 경로 그대로 낸다(빌드 산출물 · 이미지 · 폰트). 화면 entry 는 이 폴더 안이어야 한다.
+  //   없으면 종전(v1) — 화면은 entry HTML 한 장이고 앱 주소 맨 앞(/) 에만 선다. 판정은 webRootOf.
+  //   ★ 최상위 칸에 둔다(ui 안이 아니라) — ui 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 여러 파일 앱의 매니페스트를 아예 못 읽는다.
+  //    최상위는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다(그 앱을 화면 한 장 앱으로 본다 — 격리 리뷰 롤백 메모).
+  //    web 안도 같은 까닭으로 passthrough — 다음 단계(v2-5 서버 등)가 web 에 칸을 더한 뒤 이 코어로 되돌려도 읽힌다.
+  web: z.object({ root: z.string().min(1).max(512).optional() }).passthrough().optional(),
   // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
   instances: instancesSchema,
   // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
@@ -265,11 +268,11 @@ export const appManifestSchema = z.object({
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
 
 /**
- * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(ui.root 없음)이면 null. 모양이 틀리면 null(설치 관문은
+ * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(web.root 없음)이면 null. 모양이 틀리면 null(설치 관문은
  *  loader 가 400 으로 막는다 — 여기는 저장된 매니페스트를 읽는 자리라 던지지 않는다).
  */
-export function uiRootOf(manifest: unknown): string | null {
-  const raw = (manifest as { ui?: { root?: unknown } } | null)?.ui?.root;
+export function webRootOf(manifest: unknown): string | null {
+  const raw = (manifest as { web?: { root?: unknown } } | null)?.web?.root;
   if (typeof raw !== "string" || !raw.trim()) return null;
   const s = raw.trim();
   if (s.includes("\\") || s.includes("\0") || s.startsWith("/")) return null;

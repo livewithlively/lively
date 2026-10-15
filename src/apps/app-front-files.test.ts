@@ -1,5 +1,5 @@
-// 앱 주소 → 판 묶음 파일(#4481) — 사양 표 B(R1~R15). 실행: npm run build && node dist/apps/app-front-files.test.js
-//  이게 틀리면: 빌드한 앱의 스크립트·폴더 주소가 안 열리거나, 한 페이지 앱이 새로고침에 404 가 나거나, ui.root 밖(매니페스트 · 소스)이
+// 앱 주소 → 판 묶음 파일(#4481) — 사양 표 B(R1~R16). 실행: npm run build && node dist/apps/app-front-files.test.js
+//  이게 틀리면: 빌드한 앱의 스크립트·폴더 주소가 안 열리거나, 한 페이지 앱이 새로고침에 404 가 나거나, web.root 밖(매니페스트 · 소스)이
 //   주소로 새거나, `..` 로 폴더 밖을 묻거나, 지문이 아닌 이름을 1년 캐시해 새 판이 안 보이거나, 깨진 스크립트 주소가 HTML 을 받는다.
 import assert from "node:assert/strict";
 import type { AppBundle } from "./app-bundle.js";
@@ -53,7 +53,7 @@ const APP = ["lively-app.json", "src/main.ts", "dist/index.html", "dist/assets/a
   //  `%2e%2e` 는 주소 표준(WHATWG)이 먼저 `..` 로 읽어 풀어 버린다 — 맨 앞(/)보다 위로는 못 간다(앞단도 같은 정규화를 거친 경로를 준다).
   assert.equal(parseFrontUrl("/%2e%2e/secret")?.path, "secret");
   assert.equal(parseFrontUrl("/x/%2e%2e/%2E%2E/../y")?.path, "y");
-  assert.equal(fileOf(go(APP, "/%2e%2e/lively-app.json")), "notfound", "풀어도 ui.root 밖으로는 못 나간다");
+  assert.equal(fileOf(go(APP, "/%2e%2e/lively-app.json")), "notfound", "풀어도 web.root 밖으로는 못 나간다");
   ok("R8 꼴 거부(조각 안 `/`·`\\` · `//` · 공백 · 2,049자 · 역슬래시 · NUL · 상대 · 깨진 % 인코딩) · `..` 는 맨 앞 위로 못 감");
 }
 {
@@ -61,7 +61,7 @@ const APP = ["lively-app.json", "src/main.ts", "dist/index.html", "dist/assets/a
   assert.equal(fileOf(r), "notfound", "root 밖 매니페스트를 주소로 못 받는다");
   assert.equal(fileOf(go(APP, "/src/main.ts")), "notfound");
   assert.equal(fileOf(go(APP, "/lively-app.json", "")), "lively-app.json@200", "root 가 패키지 맨 위면 다 보인다");
-  ok("R9 ui.root 밖 파일 0");
+  ok("R9 web.root 밖 파일 0");
 }
 {
   const pages: Array<[string, string]> = [["main", "index.html"], ["list", "list.html"]];
@@ -114,5 +114,19 @@ const APP = ["lively-app.json", "src/main.ts", "dist/index.html", "dist/assets/a
 {
   assert.equal(fileOf(go(APP, "/%ED%95%9C%20a.png")), "한 a.png@200");
   ok("R15 퍼센트 인코딩된 이름(한글·공백)");
+}
+{
+  //  점이 든 화면 주소(사용자 이름 · 판 번호) — 아는 파일 확장자가 아니면 한 페이지 앱 화면으로 본다(격리 리뷰: `/u/john.doe` 가 404 였다).
+  assert.equal(fileOf(go(APP, "/u/john.doe")), "index.html@200");
+  assert.equal(fileOf(go(APP, "/v/1.2")), "index.html@200");
+  assert.equal(fileOf(go(APP, "/x.constructor")), "index.html@200", "Object 의 이름은 확장자가 아니다");
+  assert.equal(fileOf(go(APP, "/missing.PNG")), "notfound", "아는 확장자(대소문자 무시)는 그대로 404");
+  assert.equal(fileOf(go(APP, "/assets/gone.js")), "notfound");
+  assert.equal(fileOf(go(APP, "/src/App.tsx")), "notfound", "빌드 전 소스 꼴도 파일 주소");
+  assert.equal(fileOf(go([...APP, "dist/u/john.doe.html"], "/u/john.doe")), "u/john.doe.html@200", "`<주소>.html` 규칙도 같은 판정");
+  assert.equal(contentTypeFor("x.constructor"), "application/octet-stream");
+  assert.equal(contentTypeFor("x.toString"), "application/octet-stream");
+  assert.equal(contentTypeFor("x.hasOwnProperty"), "application/octet-stream");
+  ok("R16 점이 든 화면 주소는 한 페이지 앱으로 · 아는 확장자만 파일 주소 · Object 이름은 종류가 아니다");
 }
 console.log(`\n${pass} passed`);

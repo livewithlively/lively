@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { parseAppManifest, appAssetId, APP_ID_RE } from "./manifest.js";
+import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf } from "./manifest.js";
 import { assertAssetId } from "../org/asset-id.js";
 
 // 최소 유효 매니페스트(각 케이스가 이걸 얕게 변형).
@@ -271,3 +271,17 @@ for (const [what, tables] of REJECTS_4483) {
     assert.throws(() => parseAppManifest(withTables(tables)), /매니페스트 오류|허용되지 않은 컬럼 타입|default|형식|Unrecognized|unrecognized/, what);
   });
 }
+
+// ── #4481 여러 파일 앱의 화면 폴더(web.root) — 최상위 칸이라 옛 코어(이 칸을 모름)로 되돌려도 매니페스트가 읽힌다 ─────────────
+test("#4481 web.root — 최상위 web 칸 · 정규 상대경로 · 맨 위는 \"\" · 틀린 꼴은 null", () => {
+  const m = parseAppManifest({ ...base(), web: { root: "./dist/" } });
+  assert.equal(webRootOf(m), "dist");
+  assert.equal(webRootOf(parseAppManifest({ ...base(), web: { root: "." } })), "", "패키지 맨 위");
+  assert.equal(webRootOf(parseAppManifest(base())), null, "web 없음 = 화면 한 장 앱(v1)");
+  for (const bad of ["../x", "/abs", "a\\b", "a/.hidden", "  "]) assert.equal(webRootOf({ web: { root: bad } }), null, bad);
+});
+test("#4481 web 안의 모르는 칸은 통과(다음 단계가 더한 칸 — 되돌려도 읽힘) · ui.root 는 없다(ui 는 strict)", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", server: { entry: "server.js" } } }));
+  assert.throws(() => parseAppManifest({ ...base(), ui: { root: "dist", pages: [] } }), /매니페스트/);
+  assert.throws(() => parseAppManifest({ ...base(), web: { root: "" } }), /매니페스트/, "빈 값");
+});

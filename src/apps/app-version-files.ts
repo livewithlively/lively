@@ -13,10 +13,11 @@ import { parseAppSource, stageAppSource, type StagedSource } from "./install-sou
 import { filesToInline, isTextPath, type AppFile, type AppVersionOrigin } from "./app-versions.js";
 import { defaultBlobStoreKind, referencedBytes, sha256Hex, type BlobStoreKind } from "./app-blob-store.js";
 import {
-  COMPAT_TOTAL_MAX_BYTES, bundleBytes, compatFilesFor, materializeBundle, parseBundle, persistBundle, stageBundle,
+  COMPAT_MAX_BYTES, COMPAT_MAX_FILES, COMPAT_TOTAL_MAX_BYTES, bundleBytes, compatFilesFor, materializeBundle, parseBundle, persistBundle, stageBundle,
   type AppBundle, type PreparedBundle,
 } from "./app-bundle.js";
 import { resolveAppBundlePolicy, type AppBundlePolicy } from "./app-bundle-policy.js";
+import { managedMode } from "../org/tenancy/state.js";
 
 /** 이 워크스페이스의 판 묶음 상한 — DB(관리자 app_bundle_limits) → env → 코드 기본값. 칸이 없는 옛 DB 면 기본값. */
 export async function appBundlePolicy(): Promise<AppBundlePolicy> {
@@ -51,9 +52,25 @@ async function compatCopy(prep: PreparedBundle): Promise<AppFile[] | null> {
 /** 저장소에 둔 묶음 — 판 행을 쓰기 전에(상한·업로드를 먼저 끝내 둔다 · app_save 는 초안 표식을 걸기 전에 이걸 부른다). */
 export interface StoredBundle { prep: PreparedBundle; kind: BlobStoreKind }
 
+/**
+ * 매니지드인데 S3 설정이 없으면(cp.env 에 버킷을 적기 전 롤) 새 판도 DB 저장소로 간다 — 그 DB 는 워크스페이스가 함께 쓰는 공용 DB 라
+ *  옛 상한(8MiB · 200개)을 넘는 판은 받지 않는다(503 — 설정이 들어오면 상한이 원래대로 돌아온다). 자가호스팅 DB 저장소는 상한 그대로.
+ */
+export function sharedDbStoreDenial(kind: BlobStoreKind, prep: PreparedBundle, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (kind !== "db" || !managedMode(env)) return null;
+  if (bundleBytes(prep.bundle) <= COMPAT_MAX_BYTES && prep.bundle.files.length <= COMPAT_MAX_FILES) return null;
+  return `앱 파일 저장소(S3)가 아직 준비되지 않아 ${COMPAT_MAX_BYTES / 1024 / 1024}MB · ${COMPAT_MAX_FILES}개를 넘는 판은 지금 저장할 수 없습니다 — 운영자에게 알려 주세요(LIVELY_APP_BUNDLE_BUCKET)`;
+}
+
+async function persistChecked(kind: BlobStoreKind, prep: PreparedBundle): Promise<void> {
+  const why = sharedDbStoreDenial(kind, prep);
+  if (why) throw new HttpError(503, why);
+  await persistBundle(kind, prep, await appBundlePolicy(), referencedBytes);
+}
+
 /** 묶음을 저장소에 둔다(판 상한 · 워크스페이스 상한 판정 포함). 판 행은 아직 안 쓴다 — insertVersion 이 쓴다. */
 export async function storeVersionBundle(prep: PreparedBundle, kind: BlobStoreKind = defaultBlobStoreKind()): Promise<StoredBundle> {
-  await persistBundle(kind, prep, await appBundlePolicy(), referencedBytes);
+  await persistChecked(kind, prep);
   return { prep, kind };
 }
 
@@ -71,7 +88,7 @@ export async function recordVersion(appId: string, meta: VersionMetaWrite, prep:
 /** 「원본 · 릴리스」 판을 지금 깐 릴리스로 고친다(번호 그대로 — store.refreshOriginVersion 머리말). */
 export async function refreshOrigin(appId: string, versionNo: number, meta: Omit<VersionMetaWrite, "origin" | "saved_by">, prep: PreparedBundle): Promise<boolean> {
   const kind = defaultBlobStoreKind();
-  await persistBundle(kind, prep, await appBundlePolicy(), referencedBytes);
+  await persistChecked(kind, prep);
   const compat = await compatCopy(prep);
   return store.refreshOriginVersion(appId, versionNo, { ...meta, files: compat ?? [], bundle: prep.bundle, bundle_store: kind, bundle_bytes: bundleBytes(prep.bundle) });
 }
@@ -108,11 +125,32 @@ export async function stageVersion(row: { bundle?: unknown; bundle_store?: strin
 export const PULL_INLINE_MAX_BYTES = 2 * 1024 * 1024;
 /** 큰 판에서도 내용을 싣는 글 파일 하나의 상한 — 매니페스트 · 화면 HTML 처럼 고쳐 올릴 것. */
 export const PULL_TEXT_FILE_MAX_BYTES = 256 * 1024;
+/** 큰 판에서 내용을 싣는 글 파일들의 합 상한 — 파일이 수천 개면 하나하나 작아도 응답이 커진다(도구 응답 · 대화 맥락). */
+export const PULL_TEXT_TOTAL_MAX_BYTES = 1024 * 1024;
+
+/**
+ * 큰 판에서 내용을 실을 글 파일 고르기(순수) — 매니페스트 → HTML → 작은 것 순으로 합 상한까지. 반환 = 고른 경로.
+ *  매니페스트가 맨 앞인 까닭: 고쳐 저장할 때 가장 먼저 손대는 파일이다(나머지는 지문 줄 그대로 되보내면 된다).
+ */
+export function pickPullInline(files: ReadonlyArray<{ p: string; s: number }>, perFile = PULL_TEXT_FILE_MAX_BYTES, total = PULL_TEXT_TOTAL_MAX_BYTES): string[] {
+  const rank = (p: string): number => (p === "lively-app.json" ? 0 : /\.html?$/i.test(p) ? 1 : 2);
+  const cands = files.filter((f) => isTextPath(f.p) && f.s <= perFile)
+    .sort((a, b) => rank(a.p) - rank(b.p) || a.s - b.s || (a.p < b.p ? -1 : a.p > b.p ? 1 : 0));
+  const out: string[] = [];
+  let sum = 0;
+  for (const f of cands) {
+    if (sum + f.s > total) continue;
+    sum += f.s;
+    out.push(f.p);
+  }
+  return out;
+}
 
 export interface PulledFile { path: string; size: number; sha256: string; content?: string; encoding?: "utf8" | "base64" }
 
 /**
- * 판의 파일 묶음을 내려받기 꼴로 — 작은 판은 내용까지(종전과 같은 모양 + sha256 · size), 큰 판은 작은 글 파일만 내용, 나머지는 지문만.
+ * 판의 파일 묶음을 내려받기 꼴로 — 작은 판은 내용까지(종전과 같은 모양 + sha256 · size), 큰 판은 작은 글 파일만 내용(합 1MB 까지 ·
+ *  pickPullInline), 나머지는 지문만.
  *  지문만 받은 줄은 그대로 app_save files 에 다시 넣으면 된다(content 없이 sha256 — 이 워크스페이스 저장소에서 꺼낸다).
  */
 export async function pullFiles(row: { bundle?: unknown; bundle_store?: string | null; files: ReadonlyArray<AppFile> }): Promise<{ files: PulledFile[]; refs: number }> {
@@ -121,7 +159,7 @@ export async function pullFiles(row: { bundle?: unknown; bundle_store?: string |
     return { files: (row.files as AppFile[]).map((f) => { const b = Buffer.from(f.content, f.encoding === "base64" ? "base64" : "utf8"); return { ...f, size: b.length, sha256: sha256Hex(b) }; }), refs: 0 };
   }
   const small = bundleBytes(vb.bundle) <= PULL_INLINE_MAX_BYTES;
-  const want = vb.bundle.files.filter((f) => small || (isTextPath(f.p) && f.s <= PULL_TEXT_FILE_MAX_BYTES)).map((f) => f.p);
+  const want = small ? vb.bundle.files.map((f) => f.p) : pickPullInline(vb.bundle.files);
   const got = new Map((await materializeBundle(vb.kind, vb.bundle, want)).map((f) => [f.path, f]));
   let refs = 0;
   const files = vb.bundle.files.map((f): PulledFile => {

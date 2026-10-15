@@ -19,29 +19,49 @@ import { normalizeBundlePath, type AppBundle } from "./app-bundle.js";
 import { bundleLimitDenial, policyBytes, type AppBundlePolicy } from "./app-bundle-policy.js";
 import type { BlobStoreKind } from "./app-blob-store.js";
 
-/** 세션 폴더 걷기(멤버 쪽 한 줄) — 입력 {base, maxFiles, maxBytes} · 출력 {files:[[상대경로, 크기]], err}. 상한을 넘으면 그 자리에서 멈춘다. */
-export const WALK_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
-  "const out=[];let total=0,err=null;" +
+/**
+ * 세션 폴더 걷기(멤버 쪽 한 줄) — 입력 {base, maxFiles, maxBytes} · 출력 {files:[[상대경로, 크기]], skipped:[상대경로], err}. 상한을 넘으면 그 자리에서 멈춘다.
+ *  빼는 것: 숨김(점으로 시작 — .git · .env …) · node_modules · 심링크 · 비밀 열쇠 꼴 파일(*.pem · *.key · *.p12 · *.pfx · *.jks · id_rsa …).
+ *  ⓘ 입력은 utf8 로 받는다(한글 경로가 64KB 조각 경계에 걸려도 안 깨지게 — project-storage stdinJs 와 같은 규칙).
+ */
+export const WALK_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
+  "const out=[],skipped=[];let total=0,err=null;" +
+  "const secret=n=>/\\.(pem|key|p12|pfx|jks|keystore)$/i.test(n)||/^id_(rsa|dsa|ecdsa|ed25519)(\\.pub)?$/.test(n);" +
   "const w=(d,r,depth)=>{if(err)return;if(depth>32){err='too_deep';return}let es;try{es=fs.readdirSync(d,{withFileTypes:true})}catch(e){err='unreadable:'+(r||'.');return}" +
   "es.sort((x,y)=>x.name<y.name?-1:x.name>y.name?1:0);" +
   "for(const e of es){if(err)return;if(e.name.startsWith('.')||e.name==='node_modules')continue;const rr=r?r+'/'+e.name:e.name;const ab=P.join(d,e.name);" +
   "let st;try{st=fs.lstatSync(ab)}catch{continue}if(st.isSymbolicLink())continue;if(st.isDirectory()){w(ab,rr,depth+1);continue}if(!st.isFile())continue;" +
+  "if(secret(e.name)){if(skipped.length<50)skipped.push(rr);continue}" +
   "out.push([rr,st.size]);total+=st.size;if(out.length>a.maxFiles){err='too_many';return}if(total>a.maxBytes){err='too_big';return}}};" +
-  "let st;try{st=fs.statSync(a.base)}catch{process.stdout.write(JSON.stringify({files:[],err:'missing'}));return}" +
-  "if(!st.isDirectory()){process.stdout.write(JSON.stringify({files:[],err:'not_dir'}));return}" +
-  "w(a.base,'',0);process.stdout.write(JSON.stringify({files:out,err}))})";
+  "let st;try{st=fs.statSync(a.base)}catch{process.stdout.write(JSON.stringify({files:[],skipped,err:'missing'}));return}" +
+  "if(!st.isDirectory()){process.stdout.write(JSON.stringify({files:[],skipped,err:'not_dir'}));return}" +
+  "w(a.base,'',0);process.stdout.write(JSON.stringify({files:out,skipped,err}))})";
 
-/** 파일 몇 개 읽기(멤버 쪽 한 줄) — 입력 {base, paths} · 출력 {files:[[상대경로, base64]], err}. 심링크·폴더 밖은 읽지 않는다. */
-export const READ_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
-  "const base=P.resolve(a.base);const out=[];let err=null;for(const r of a.paths){const ab=P.resolve(base,r);" +
+/**
+ * 파일 몇 개 읽기(멤버 쪽 한 줄) — 입력 {base, paths} · 출력 {files:[[상대경로, base64]], err}.
+ *  ★ 실제 경로(realpath)가 폴더 안이어야 읽는다 — 글자로만 보면 중간 폴더가 심링크일 때 폴더 밖 파일을 읽는다(격리 리뷰 B4 ·
+ *   자가호스팅 로컬 길은 게이트웨이 권한으로 돈다). 마지막 조각이 심링크·파일 아님이면 읽지 않는다.
+ */
+export const READ_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
+  "const base=P.resolve(a.base);let real;try{real=fs.realpathSync(base)}catch{process.stdout.write(JSON.stringify({files:[],err:'missing:.'}));return}" +
+  "const inside=p=>p===real||p.startsWith(real+P.sep);const out=[];let err=null;for(const r of a.paths){const ab=P.resolve(base,r);" +
   "if(!ab.startsWith(base+P.sep)){err='outside:'+r;break}let st;try{st=fs.lstatSync(ab)}catch{err='missing:'+r;break}" +
-  "if(st.isSymbolicLink()||!st.isFile()){err='not_file:'+r;break}out.push([r,fs.readFileSync(ab).toString('base64')])}" +
+  "if(st.isSymbolicLink()||!st.isFile()){err='not_file:'+r;break}let rp;try{rp=fs.realpathSync(ab)}catch{err='missing:'+r;break}" +
+  "if(!inside(rp)){err='outside:'+r;break}out.push([r,fs.readFileSync(ab).toString('base64')])}" +
   "process.stdout.write(JSON.stringify({files:out,err}))})";
 
-/** 판 파일 몇 개 쓰기(멤버 쪽 한 줄) — 입력 {base, files:[[상대경로, base64]]} · 출력 {written, err}. 폴더 밖·이미 있는 파일은 쓰지 않는다. */
-export const WRITE_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
-  "const base=P.resolve(a.base);let n=0,err=null;for(const [r,b] of a.files){const ab=P.resolve(base,r);if(!ab.startsWith(base+P.sep)){err='outside:'+r;break}" +
-  "try{fs.mkdirSync(P.dirname(ab),{recursive:true});fs.writeFileSync(ab,Buffer.from(b,'base64'),{flag:'wx'});n++}catch(e){err=(e&&e.code==='EEXIST'?'exists:':'write:')+r;break}}" +
+/**
+ * 판 파일 몇 개 쓰기(멤버 쪽 한 줄) — 입력 {base, files:[[상대경로, base64]]} · 출력 {written, err}. 폴더 밖·이미 있는 파일은 쓰지 않는다.
+ *  ★ 만들 폴더의 «있는 가장 깊은 조상» 과 만든 뒤의 폴더가 실제 경로로 폴더 안이어야 쓴다 — 미리 심어 둔 심링크 하위 폴더로
+ *   폴더 밖에 쓰지 못하게(격리 리뷰 B4). 파일은 wx(있으면 실패 · 심링크 이름도 «있음» 이다).
+ */
+export const WRITE_JS = "const fs=require('fs'),P=require('path');let i='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>i+=c).on('end',()=>{const a=JSON.parse(i);" +
+  "const base=P.resolve(a.base);let n=0,err=null;let real;try{fs.mkdirSync(base,{recursive:true});real=fs.realpathSync(base)}catch(e){process.stdout.write(JSON.stringify({written:0,err:'base:'+(e&&e.code)}));return}" +
+  "const inside=p=>p===real||p.startsWith(real+P.sep);" +
+  "for(const [r,b] of a.files){const ab=P.resolve(base,r);if(!ab.startsWith(base+P.sep)){err='outside:'+r;break}" +
+  "try{let anc=P.dirname(ab);while(anc!==base&&!fs.existsSync(anc))anc=P.dirname(anc);if(!inside(fs.realpathSync(anc))){err='outside:'+r;break}" +
+  "fs.mkdirSync(P.dirname(ab),{recursive:true});if(!inside(fs.realpathSync(P.dirname(ab)))){err='outside:'+r;break}" +
+  "fs.writeFileSync(ab,Buffer.from(b,'base64'),{flag:'wx'});n++}catch(e){err=(e&&e.code==='EEXIST'?'exists:':'write:')+r;break}}" +
   "process.stdout.write(JSON.stringify({written:n,err}))})";
 
 /** 폴더를 보는 자리 — 멤버 경계(osUser) 또는 게이트웨이 로컬. */
@@ -83,7 +103,7 @@ const READ_BATCH_BYTES = 8 * 1024 * 1024;
  */
 export async function stageFromDir(acc: DirAccess, dirShown: string, policy: AppBundlePolicy): Promise<StagedSource> {
   const b = policyBytes(policy);
-  const walk = await runDirJs<{ files: Array<[string, number]>; err: string | null }>(acc, WALK_JS, { base: acc.base, maxFiles: b.files, maxBytes: b.version });
+  const walk = await runDirJs<{ files: Array<[string, number]>; skipped?: string[]; err: string | null }>(acc, WALK_JS, { base: acc.base, maxFiles: b.files, maxBytes: b.version });
   if (walk.err) throw new HttpError(walk.err === "missing" || walk.err === "not_dir" ? 404 : 413, walkError(walk.err, dirShown, policy));
   const files = walk.files.map(([p, s]) => ({ path: p, size: s }));
   if (!files.some((f) => f.path === "lively-app.json")) throw new HttpError(400, `그 폴더 맨 위에 lively-app.json 이 없습니다: ${dirShown} — 앱 폴더(매니페스트가 있는 곳)를 주세요`);
@@ -114,7 +134,9 @@ export async function stageFromDir(acc: DirAccess, dirShown: string, policy: App
     await flush();
   } catch (e) { await cleanup(); throw e; }
   const total = files.reduce((n, f) => n + f.size, 0);
-  return { dir: tmp, meta: { kind: "inline", files: files.length, bytes: total, from: "dir" }, cleanup };
+  //  뺀 비밀 열쇠 꼴 파일은 이름만 남긴다(내용은 안 읽었다) — 저장 응답의 app.source 로 사람이 무엇이 빠졌는지 안다.
+  const skipped = walk.skipped ?? [];
+  return { dir: tmp, meta: { kind: "inline", files: files.length, bytes: total, from: "dir", ...(skipped.length ? { skipped } : {}) }, cleanup };
 }
 
 /** 쓸 파일 하나 — 경로 · 크기 · 내용을 읽는 길(판 묶음은 저장소에서, 옛 판은 손에 쥔 내용에서). */
@@ -131,7 +153,7 @@ export function bundleFilesToWrite(kind: BlobStoreKind, bundle: AppBundle): File
 
 /** 판 파일 → 세션 폴더(app_pull {dir}). 그 폴더는 없거나 비어 있어야 한다(남의 파일을 덮지 않는다). 반환 = 쓴 파일 수. */
 export async function writeFilesToDir(acc: DirAccess, dirShown: string, items: ReadonlyArray<FileToWrite>): Promise<number> {
-  const walk = await runDirJs<{ files: Array<[string, number]>; err: string | null }>(acc, WALK_JS, { base: acc.base, maxFiles: 1, maxBytes: Number.MAX_SAFE_INTEGER });
+  const walk = await runDirJs<{ files: Array<[string, number]>; skipped?: string[]; err: string | null }>(acc, WALK_JS, { base: acc.base, maxFiles: 1, maxBytes: Number.MAX_SAFE_INTEGER });
   if (walk.err && walk.err !== "missing") {
     throw new HttpError(409, walk.err === "not_dir" ? `그 자리에 폴더가 아닌 것이 있습니다: ${dirShown}` : `그 폴더가 비어 있지 않습니다: ${dirShown} — 새 폴더 이름을 주세요`);
   }

@@ -145,16 +145,35 @@ export function toAppFile(p: string, bytes: Buffer): AppFile {
   return isTextPath(p) ? { path: p, content: bytes.toString("utf8") } : { path: p, content: bytes.toString("base64"), encoding: "base64" };
 }
 
-/** 저장소에서 판 파일을 읽어 AppFile 로(되돌리기 · 내려받기 · 공개 판 화면). paths 를 주면 그것만. 없는 파일은 503(저장소가 상했다). */
+/** 저장소에서 판 파일을 읽을 때 동시에 읽는 수 — 판 하나가 5,000개일 수 있어 하나씩이면 S3 왕복이 쌓이고, 한꺼번이면 연결·메모리가 튄다. */
+export const BUNDLE_READ_CONCURRENCY = 8;
+
+/**
+ * items 를 동시 n 개까지 — 하나가 실패하면 새로 꺼내지 않고, 돌던 것이 다 끝난 뒤 첫 실패를 던진다
+ *  (스테이지 정리(rm)가 아직 쓰는 중인 파일과 엇갈리지 않게).
+ */
+async function eachLimit<T>(items: ReadonlyArray<T>, n: number, fn: (it: T, i: number) => Promise<void>): Promise<void> {
+  const st: { next: number; failed: { e: unknown } | null } = { next: 0, failed: null };
+  const worker = async (): Promise<void> => {
+    while (!st.failed && st.next < items.length) {
+      const i = st.next++;
+      try { await fn(items[i] as T, i); } catch (e) { st.failed ??= { e }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  if (st.failed) throw st.failed.e;
+}
+
+/** 저장소에서 판 파일을 읽어 AppFile 로(되돌리기 · 내려받기 · 공개 판 화면). paths 를 주면 그것만. 없는 파일은 503(저장소가 상했다). 순서는 묶음 순서. */
 export async function materializeBundle(kind: BlobStoreKind, b: AppBundle, paths?: ReadonlyArray<string>): Promise<AppFile[]> {
   const want = paths ? new Set(paths.map((p) => normalizeBundlePath(p)).filter((p): p is string => !!p)) : null;
-  const out: AppFile[] = [];
-  for (const f of b.files) {
-    if (want && !want.has(f.p)) continue;
+  const pick = want ? b.files.filter((f) => want.has(f.p)) : b.files;
+  const out: AppFile[] = new Array<AppFile>(pick.length);
+  await eachLimit(pick, BUNDLE_READ_CONCURRENCY, async (f, i) => {
     const bytes = await getBlob(kind, f.h);
     if (!bytes) throw new HttpError(503, `판 파일을 저장소에서 찾지 못했습니다: ${f.p}`);
-    out.push(toAppFile(f.p, bytes));
-  }
+    out[i] = toAppFile(f.p, bytes);
+  });
   return out;
 }
 
@@ -163,14 +182,17 @@ export async function stageBundle(kind: BlobStoreKind, b: AppBundle): Promise<{ 
   const tmp = await mkdtemp(path.join(os.tmpdir(), "lively-app-bundle-"));
   const cleanup = async (): Promise<void> => { await rm(tmp, { recursive: true, force: true }).catch(() => { /* noop */ }); };
   try {
-    for (const f of b.files) {
+    const plan = b.files.map((f) => {
       const abs = path.resolve(tmp, f.p);
       if (!abs.startsWith(tmp + path.sep)) throw new HttpError(400, `판 파일 경로가 묶음 밖을 가리킵니다: ${f.p}`);
+      return { f, abs };
+    });
+    await eachLimit(plan, BUNDLE_READ_CONCURRENCY, async ({ f, abs }) => {
       const bytes = await getBlob(kind, f.h);
       if (!bytes) throw new HttpError(503, `판 파일을 저장소에서 찾지 못했습니다: ${f.p}`);
       await mkdir(path.dirname(abs), { recursive: true });
       await writeFile(abs, bytes, { flag: "wx" });
-    }
+    });
   } catch (e) { await cleanup(); throw e; }
   return { dir: tmp, cleanup };
 }

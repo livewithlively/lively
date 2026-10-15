@@ -26,13 +26,13 @@ const member = (id: string, scopes: string[] = []): OrgMember => ({
   avatar: null, avatar_char: null, avatar_color: null, state: "active", scopes, sort: 0, version: 1, updated_at: null, updated_by: null,
 } as unknown as OrgMember);
 
-//  판 둘: 1판(공개) · 2판(alice 의 초안). 둘 다 ui.root=dist.
+//  판 둘: 1판(공개) · 2판(alice 의 초안). 둘 다 web.root=dist.
 const files = (label: string) => ({
   "lively-app.json": "{}", "dist/index.html": `<!doctype html><title>${label}</title><script type="module" src="/assets/index-BjU7aAkd.js"></script>`,
   "dist/assets/index-BjU7aAkd.js": `console.log("${label}");` + "x".repeat(2000), "dist/logo.png": "PNG" + label,
   ...(label === "v2" ? { "dist/only-v2.txt": "new" } : {}),
 });
-const MAN = { ui: { root: "dist", pages: [{ key: "main", title: "웹", entry: "dist/index.html" }] }, csp: { connect_domains: ["api.example.com"] } };
+const MAN = { web: { root: "dist" }, ui: { pages: [{ key: "main", title: "웹", entry: "dist/index.html" }] }, csp: { connect_domains: ["api.example.com"] } };
 function mkVersion(label: string) {
   const blobs = new Map<string, Buffer>();
   const list = Object.entries(files(label)).map(([p, c]) => { const b = Buffer.from(c); blobs.set(sha(b), b); return { p, h: sha(b), s: b.length }; }).sort((a, b) => (a.p < b.p ? -1 : 1));
@@ -145,7 +145,7 @@ clearFrontBundleCacheForTest();
   ok("M7 설치된 내용 ≠ 판 내용 · 판 번호 없음 → 409(다시 저장 안내)");
 }
 {
-  //  v1 앱(ui.root 없음) — 새 길을 타지 않는다(판 묶음 의존을 부르지 않는다).
+  //  v1 앱(web.root 없음) — 새 길을 타지 않는다(판 묶음 의존을 부르지 않는다).
   const { d, calls } = deps({ manifest: { csp: {} }, draft_by: null, published_version_no: null }, {});
   const r = await appFrontPage(H("alice"), "/", d);
   assert.equal(r.status, 200);

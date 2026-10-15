@@ -408,7 +408,7 @@ jobs:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/visibility.pg-test.mjs
       # ⑤-m 앱 판 묶음(#4481 앱 v2-2) — 판 파일을 파일 목록(org_app_version.bundle) + 저장소(자가호스팅 = org_app_blob · 매니지드 = S3)로.
-      #    여러 파일 앱(ui.root) 저장 → 앱 주소가 그 판의 파일을 낸다(ui.root 밖 404 · 한 페이지 앱) · 공개 판/초안 · N → N-1 되돌리기 ·
+      #    여러 파일 앱(web.root) 저장 → 앱 주소가 그 판의 파일을 낸다(web.root 밖 404 · 한 페이지 앱) · 공개 판/초안 · N → N-1 되돌리기 ·
       #    큰 판 사본(지문만 받은 줄 그대로) · 옛 판 옮기기(files 그대로 → 30일 뒤 비움) · 정리(안 가리키고 24시간 지난 파일만) · 상한 413.
       - name: 앱 판 묶음(S3 판 · 여러 파일 서빙 · 옛 판 옮기기) PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}

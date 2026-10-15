@@ -164,11 +164,6 @@
         "ui": {
           "type": "object",
           "properties": {
-            "root": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 512
-            },
             "pages": {
               "type": "array",
               "items": {
@@ -258,6 +253,17 @@
           },
           "additionalProperties": false,
           "default": {}
+        },
+        "web": {
+          "type": "object",
+          "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "additionalProperties": true
         },
         "instances": {
           "type": "object",

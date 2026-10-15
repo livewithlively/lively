@@ -11,12 +11,13 @@
 //        → 200 {member:{id,name,email}, workspace:{slug}, app:{id,variant}, session:null}
 //   GET  /api/app-front/page?path=<앱 주소 안 경로+쿼리>             (op=act)
 //        → 200 text/html(v1 화면 + SDK 런타임 [+ 탐침]) · CSP 는 헤더 · 경로는 `/` 뿐(?page=<키>), 나머지는 404
-//        → #4481 여러 파일 앱(보는 판의 매니페스트에 ui.root): 그 판 묶음의 파일을 그 경로로(규칙은 app-front-files.ts) · HTML 문서엔 SDK 런타임 ·
+//        → #4481 여러 파일 앱(보는 판의 매니페스트에 web.root): 그 판 묶음의 파일을 그 경로로(규칙은 app-front-files.ts) · HTML 문서엔 SDK 런타임 ·
 //          ETag(내용 지문) · 304 · gzip · 지문 이름은 1년 캐시
 //  ⓘ 매번 구성원(활성 · 사람)과 앱(있음 · 이 사람에게 보임)을 다시 본다 — 앱 주소 쿠키가 살아 있는 동안 빠진 사람·닫힌 앱을 바로 막는다.
 import type express from "express";
 import zlib from "node:zlib";
-import { Readable } from "node:stream";
+import { promisify } from "node:util";
+import { Readable, pipeline } from "node:stream";
 import { createHash } from "node:crypto";
 import { wrap } from "../http/rest-util.js";
 import { logger } from "../log.js";
@@ -26,12 +27,13 @@ import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import { appViewFor, canSeeApp } from "./visibility.js";
-import { uiPagesFromFiles, type AppFile } from "./app-versions.js";
+import { entriesOfManifest, uiPagesFromFiles, type AppFile } from "./app-versions.js";
+import { versionFiles } from "./app-version-files.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
 import { appErrorHtml, appPageCsp, appPageCspMulti, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
-import { uiRootOf } from "./manifest.js";
+import { webRootOf } from "./manifest.js";
 import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
 import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
 import {
@@ -68,7 +70,11 @@ const liveDeps = (): AppFrontDeps => ({
   getApp: (id) => appStore.getApp(id),
   listUiAssets: (id) => appStore.listUiAssets(id),
   getUiAsset: (id, key) => appStore.getUiAsset(id, key),
-  getAppVersion: (id, no) => appStore.getAppVersion(id, no),
+  //  #4481 공개 판의 화면 entry 만 — 판 묶음이 있으면 저장소에서(옛 코어 호환 사본 files 는 30일 뒤 비워지므로 거기서 읽지 않는다).
+  getAppVersion: async (id, no) => {
+    const row = await appStore.getAppVersion(id, no);
+    return row ? { manifest: row.manifest, files: await versionFiles(row, entriesOfManifest(row.manifest).map((e) => e.entry)) } : null;
+  },
   redeem: (i) => redeemAppLaunchCode(i),
   scripts: () => loadAppScripts(),
   versionHash: (id, no) => appStore.getAppVersionHash(id, no),
@@ -76,7 +82,10 @@ const liveDeps = (): AppFrontDeps => ({
   readBlob: (kind, h, size) => (size <= BLOB_CACHE_ENTRY_MAX ? getBlob(kind, h) : streamBlob(kind, h, size)),
 });
 
-export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string>; body?: Buffer; stream?: Readable }
+/** 시험용 — 살아 있는 의존(실제 DB · 저장소)을 그대로(시험이 env · 워크스페이스만 바꿔 쓴다 — app-bundles.pg-test D10). */
+export const appFrontLiveDepsForTest = liveDeps;
+
+export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string>; body?: Buffer; stream?: Readable; gzip?: boolean }
 
 /** 문 — 꺼졌으면 404, 서명이 틀리면 401(사유는 로그로만). 통과하면 서명 안의 값. */
 export function appFrontGate(headers: Record<string, string | string[] | undefined>, op: AppFrontOp, d: AppFrontDeps):
@@ -149,7 +158,7 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if ("reply" in w) return w.reply;
   const notFound = (detail: string): FrontReply => ({ status: 404, html: appErrorHtml("화면을 찾지 못했습니다", detail) });
   if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
-  //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 ui.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길).
+  //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 web.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길).
   const multi = await multiFilePage(w, rawPath, headers, d, g.tenant.id);
   if (multi) return multi;
   const path = parseAppPath(rawPath);
@@ -205,14 +214,14 @@ async function loadBundle(d: AppFrontDeps, tenant: string, appId: string, no: nu
   const head = await d.versionBundle(appId, no);
   const bundle = head ? parseBundle(head.bundle) : null;
   if (!head || !bundle) return "no-bundle";
-  const rootRel = uiRootOf(head.manifest);
+  const rootRel = webRootOf(head.manifest);
   const c: CachedBundle = { kind: head.bundle_store === "db" ? "db" : "s3", bundle, manifest: head.manifest, rootRel, index: rootRel === null ? null : indexUnderRoot(bundle, rootRel) };
   bundleCache.set(key, c);
   while (bundleCache.size > BUNDLE_CACHE_MAX) bundleCache.delete(bundleCache.keys().next().value as string);
   return c;
 }
 
-/** 화면 키 → ui.root 기준 entry 경로(`/?page=<키>` 를 풀 때). */
+/** 화면 키 → web.root 기준 entry 경로(`/?page=<키>` 를 풀 때). */
 function pageEntries(manifest: unknown, rootRel: string): Map<string, string> {
   const ui = (manifest as { ui?: { pages?: Array<{ key?: unknown; entry?: unknown }> } } | null)?.ui;
   const pre = rootRel ? rootRel + "/" : "";
@@ -237,17 +246,18 @@ async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, raw
   d: AppFrontDeps, tenant: string): Promise<FrontReply | null> {
   const published = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published";
   //  설치된 판을 보는 사람 — 앱 행의 매니페스트로 먼저 가른다(v1 앱은 DB 를 더 안 읽는다).
-  if (!published && uiRootOf(w.app.manifest) === null) return null;
+  if (!published && webRootOf(w.app.manifest) === null) return null;
   const no = published ? w.app.published_version_no : w.app.current_version_no;
   const broken = (detail: string): FrontReply => ({ status: 409, html: appErrorHtml("앱 파일을 찾지 못했습니다", detail) });
   if (no == null) return published ? null : broken(`앱 '${w.app.id}' 의 지금 판에 파일 묶음이 없습니다 — 앱을 다시 저장해 주세요(app_save).`);
   const c = await loadBundle(d, tenant, w.app.id, no);
   if (c === null) return published ? null : broken(`앱 '${w.app.id}' 의 ${no}판을 찾지 못했습니다 — 앱을 다시 저장해 주세요.`);
   if (c === "no-bundle") {
-    if (published && uiRootOf(w.app.manifest) === null) return null;   // 공개 판이 v1(옛 판) — 종전 길
+    //  공개 판에 목록이 없다 = #4481 전에 저장된 판 = 화면 한 장 앱(v1) — 종전 길로.
+    if (published) return null;
     return broken(`앱 '${w.app.id}' 의 ${no}판은 아직 파일 묶음으로 옮겨지지 않았습니다 — 잠시 뒤 다시 열어 주세요.`);
   }
-  if (c.rootRel === null || !c.index) return null;   // 그 판이 v1 앱이다(공개 판이 ui.root 를 넣기 전 판)
+  if (c.rootRel === null || !c.index) return null;   // 그 판이 v1 앱이다(공개 판이 web.root 를 넣기 전 판)
   if (!published) {
     const h = d.versionHash ? await d.versionHash(w.app.id, no) : null;
     if (!h || h.content_hash !== w.app.content_hash) return broken(`앱 '${w.app.id}' 의 설치된 내용과 ${no}판이 다릅니다 — 앱을 다시 저장해 주세요(app_save).`);
@@ -278,18 +288,38 @@ async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, raw
       "Content-Security-Policy": appPageCspMulti(((c.manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp),
     };
     if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base };
-    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: zlib.gzipSync(out) } : { status: r.status, headers: base, body: out };
+    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: await gzipCached(etag, out) } : { status: r.status, headers: base, body: out };
   }
   const etag = `"${e.h.slice(0, 32)}${gz ? "-gz" : ""}"`;
   const base: Record<string, string> = { "Content-Type": type, ETag: etag, "Cache-Control": cacheControlFor(r.rel), Vary: "Accept-Encoding", "Accept-Ranges": "none" };
   if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base };
   const data = await d.readBlob(c.kind, e.h, e.s);
   if (!data) return broken(`파일 '${r.rel}' 을(를) 저장소에서 찾지 못했습니다 — 앱을 다시 저장해 주세요.`);
+  //  큰 파일은 흘려 보낸다 — 압축·연결은 send() 의 pipeline 이 잇는다(어느 쪽이 끊겨도 나머지를 걷는다 · 오류가 프로세스로 새지 않는다).
   if (data instanceof Readable) {
-    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, stream: data.pipe(zlib.createGzip()) }
+    return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, stream: data, gzip: true }
       : { status: r.status, headers: { ...base, "Content-Length": String(e.s) }, stream: data };
   }
-  return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: zlib.gzipSync(data) } : { status: r.status, headers: base, body: data };
+  return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: await gzipCached(etag, data) } : { status: r.status, headers: base, body: data };
+}
+
+const gzipAsync = promisify(zlib.gzip);
+/** 압축본 캐시 — 지문(ETag)이 키라 무효화가 없다. 같은 화면 파일을 거듭 압축하지 않게(공용 게이트웨이 CPU). */
+const gzCache = new Map<string, Buffer>();
+let gzBytes = 0;
+const GZ_CACHE_MAX = 16 * 1024 * 1024;
+async function gzipCached(etag: string, data: Buffer): Promise<Buffer> {
+  const hit = gzCache.get(etag);
+  if (hit) { gzCache.delete(etag); gzCache.set(etag, hit); return hit; }
+  const out = await gzipAsync(data);
+  gzCache.set(etag, out); gzBytes += out.length;
+  while (gzBytes > GZ_CACHE_MAX) {
+    const k = gzCache.keys().next();
+    if (k.done) break;
+    gzBytes -= gzCache.get(k.value)?.length ?? 0;
+    gzCache.delete(k.value);
+  }
+  return out;
 }
 
 async function streamToBuffer(s: Readable): Promise<Buffer> {
@@ -306,8 +336,13 @@ function send(res: express.Response, r: FrontReply): void {
   if (r.status === 304) { res.status(304).end(); return; }
   if (r.stream) {
     res.status(r.status);
-    r.stream.on("error", (err) => { logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[app-front] 앱 파일 흘려 보내기 실패"); res.destroy(); });
-    r.stream.pipe(res);
+    //  ★ pipe 가 아니라 pipeline — pipe 는 원본 오류를 넘기지 않아(압축을 끼우면 특히) 처리 안 된 오류가 게이트웨이를 내린다(격리 리뷰 B1).
+    //   pipeline 은 어느 쪽이 끊기든(브라우저가 탭을 닫음 · S3 연결이 끊김) 나머지를 destroy 해 S3 연결도 걷는다.
+    const done = (err: NodeJS.ErrnoException | null): void => {
+      if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") logger.warn({ err: err.message }, "[app-front] 앱 파일 흘려 보내기 실패");
+    };
+    if (r.gzip) pipeline(r.stream, zlib.createGzip(), res, done);
+    else pipeline(r.stream, res, done);
     return;
   }
   if (r.body) { res.status(r.status).end(r.body); return; }

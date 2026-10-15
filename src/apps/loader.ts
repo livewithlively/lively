@@ -13,7 +13,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
-import { parseAppManifest, assertInstallableManifest, appAssetId, uiRootOf, type LivelyAppManifest } from "./manifest.js";
+import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
 import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
@@ -94,20 +94,20 @@ async function readRuntimeEntry(m: LivelyAppManifest, root: string): Promise<Loa
 const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).
 
 /**
- * #4481 여러 파일 앱의 화면 폴더(ui.root) — 패키지 안의 폴더여야 하고, 화면 entry 는 전부 그 폴더 안이어야 한다(앱 주소가 그 폴더를 맨 앞(/)으로 낸다).
+ * #4481 여러 파일 앱의 화면 폴더(web.root) — 패키지 안의 폴더여야 하고, 화면 entry 는 전부 그 폴더 안이어야 한다(앱 주소가 그 폴더를 맨 앞(/)으로 낸다).
  *  없으면(v1 앱) 아무것도 안 본다.
  */
 async function checkUiRoot(m: LivelyAppManifest, root: string): Promise<void> {
-  if (m.ui.root === undefined) return;
-  const rel = uiRootOf(m);
-  if (rel === null) throw new HttpError(400, `매니페스트 오류 [ui.root]: 패키지 안의 상대 폴더여야 합니다(예: "dist" · 맨 위면 ".") — 받은 값: ${m.ui.root}`);
+  if (m.web?.root === undefined) return;
+  const rel = webRootOf(m);
+  if (rel === null) throw new HttpError(400, `매니페스트 오류 [web.root]: 패키지 안의 상대 폴더여야 합니다(예: "dist" · 맨 위면 ".") — 받은 값: ${m.web.root}`);
   const abs = path.resolve(root, rel);
   let st;
-  try { st = await stat(abs); } catch { throw new HttpError(400, `ui.root 폴더가 없습니다: ${m.ui.root} — 빌드한 뒤(예: npm run build) 저장하세요`); }
-  if (!st.isDirectory()) throw new HttpError(400, `ui.root 가 폴더가 아닙니다: ${m.ui.root}`);
+  try { st = await stat(abs); } catch { throw new HttpError(400, `web.root 폴더가 없습니다: ${m.web.root} — 빌드한 뒤(예: npm run build) 저장하세요`); }
+  if (!st.isDirectory()) throw new HttpError(400, `web.root 가 폴더가 아닙니다: ${m.web.root}`);
   for (const e of [...m.ui.pages, ...m.ui.widgets]) {
     const ea = path.resolve(root, e.entry);
-    if (abs !== root && !ea.startsWith(abs + path.sep)) throw new HttpError(400, `화면 entry '${e.entry}' 가 ui.root('${m.ui.root}') 밖에 있습니다 — entry 는 그 폴더 안이어야 합니다`);
+    if (abs !== root && !ea.startsWith(abs + path.sep)) throw new HttpError(400, `화면 entry '${e.entry}' 가 web.root('${m.web.root}') 밖에 있습니다 — entry 는 그 폴더 안이어야 합니다`);
   }
 }
 

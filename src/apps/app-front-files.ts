@@ -1,11 +1,12 @@
 // 앱 주소에서 여러 파일 앱을 낸다(#4481 앱 v2-2) — 주소 → 판 묶음의 파일 · 응답 머리(종류 · 캐시 · 지문). 순수 조각(app-front-files.test.ts).
 //
 //  누가 보나: 앱 주소 앞단(CP 라우터)이 `/api/app-front/page?path=<경로+쿼리>` 로 넘긴 것을 app-front-routes 가 받는다. 그 사람이 보는 판(#4667 —
-//   초안을 만든 사람은 설치된 판, 나머지는 공개 판)의 묶음에서 매니페스트 ui.root 폴더를 주소 맨 앞(/)으로 본다.
+//   초안을 만든 사람은 설치된 판, 나머지는 공개 판)의 묶음에서 매니페스트 web.root 폴더를 주소 맨 앞(/)으로 본다.
 //  주소 → 파일 규칙(정적 호스팅이 흔히 따르는 것 — Cloudflare Pages 와 같은 꼴, 특수 규칙을 늘리지 않는다):
-//   ① 정확히 그 파일 ② `/` 로 끝나면 그 폴더의 index.html ③ 확장자 없는 주소는 `<주소>.html`, 폴더면 `<주소>/` 로 보낸다(308 —
-//      상대 경로가 그 폴더 기준으로 풀리게) ④ 없으면: 맨 위 404.html 이 있으면 그것(404), 없으면 확장자 없는 주소는 맨 위 index.html
-//      (한 페이지 앱 화면 이동 — 200), 확장자가 있으면 404(깨진 스크립트 주소가 HTML 을 받아 엉뚱한 오류가 나지 않게).
+//   ① 정확히 그 파일 ② `/` 로 끝나면 그 폴더의 index.html ③ 파일 주소가 아니면(아는 확장자로 안 끝남) `<주소>.html`, 폴더면 `<주소>/` 로
+//      보낸다(308 — 상대 경로가 그 폴더 기준으로 풀리게) ④ 없으면: 맨 위 404.html 이 있으면 그것(404), 없으면 파일 주소가 아닌 것은
+//      맨 위 index.html(한 페이지 앱 화면 이동 — 200 · `/u/john.doe` 도), 아는 확장자(.js · .png …)면 404(깨진 스크립트 주소가 HTML 을 받아
+//      엉뚱한 오류가 나지 않게).
 //   `/?page=<키>` 는 라이블리 화면이 화면을 고를 때 쓰는 꼴(v1 과 같은 쿼리) — 그 화면 entry 로 보낸다.
 //  캐시: 이름에 내용 지문이 든 파일(빌드 도구의 `index-BxAbCdEf.js` 꼴 · `_next/static/`)은 1년 · 나머지는 매번 지문(ETag)으로 확인.
 //   로그인한 사람만 받는 응답이라 늘 private(중간 캐시 금지).
@@ -28,7 +29,7 @@ export function parseFrontUrl(raw: unknown): { path: string; trailingSlash: bool
   return { path: segs.join("/"), trailingSlash: u.pathname.endsWith("/"), search: u.searchParams };
 }
 
-/** 판 묶음의 ui.root 아래 파일 → (root 기준 경로 → 파일) 표. */
+/** 판 묶음의 web.root 아래 파일 → (root 기준 경로 → 파일) 표. */
 export function indexUnderRoot(bundle: AppBundle, rootRel: string): Map<string, BundleEntry> {
   const pre = rootRel ? rootRel + "/" : "";
   const m = new Map<string, BundleEntry>();
@@ -37,7 +38,14 @@ export function indexUnderRoot(bundle: AppBundle, rootRel: string): Map<string, 
 }
 
 const lastSeg = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
-const hasExt = (p: string): boolean => /\.[A-Za-z0-9]+$/.test(lastSeg(p));
+const extOf = (p: string): string | null => { const m = /\.([A-Za-z0-9]+)$/.exec(lastSeg(p)); return m ? m[1].toLowerCase() : null; };
+/** 내는 종류(TYPES)엔 없지만 파일 주소로 보는 확장자 — 빌드 전 소스 · 설정 꼴(없으면 HTML 대신 404 — 스크립트 주소가 HTML 을 받지 않게). */
+const SOURCE_EXTS = new Set(["ts", "tsx", "jsx", "mts", "cts", "vue", "svelte", "scss", "sass", "less", "yml", "yaml", "toml", "lock", "php", "py", "rb", "sh"]);
+/**
+ * 파일을 가리키는 주소인가 — 아는 파일 확장자(아래 TYPES · SOURCE_EXTS — 스크립트 · 그림 · 폰트 · 소스 …)로 끝나야 그렇게 본다.
+ *  `/u/john.doe` · `/v/1.2` 처럼 점이 든 한 페이지 앱 주소는 화면 주소로 본다(맨 위 index.html 로 간다).
+ */
+const looksLikeFile = (p: string): boolean => { const e = extOf(p); return e !== null && (Object.hasOwn(TYPES, e) || SOURCE_EXTS.has(e)); };
 
 export type FrontResolve =
   | { kind: "file"; rel: string; entry: BundleEntry; status: 200 | 404 }
@@ -74,7 +82,7 @@ export function resolveFrontPath(index: ReadonlyMap<string, BundleEntry>, url: {
   } else {
     const hit = file(url.path);
     if (hit) return hit;
-    if (!hasExt(url.path)) {
+    if (!looksLikeFile(url.path)) {
       const html = file(url.path + ".html");
       if (html) return html;
       if (index.has(url.path + "/index.html")) return { kind: "redirect", location: "/" + enc(url.path) + "/" + keep() };
@@ -82,7 +90,7 @@ export function resolveFrontPath(index: ReadonlyMap<string, BundleEntry>, url: {
   }
   const nf = file("404.html", 404);
   if (nf) return nf;
-  if (!hasExt(url.path)) { const spa = file("index.html"); if (spa) return spa; }
+  if (!looksLikeFile(url.path)) { const spa = file("index.html"); if (spa) return spa; }
   return { kind: "notfound" };
 }
 
@@ -99,8 +107,9 @@ const TYPES: Record<string, string> = {
 };
 /** 확장자 → Content-Type. 모르는 것은 application/octet-stream(nosniff 와 함께 — 브라우저가 내용을 보고 짐작하지 않게). */
 export function contentTypeFor(p: string): string {
-  const m = /\.([A-Za-z0-9]+)$/.exec(lastSeg(p));
-  return (m && TYPES[m[1].toLowerCase()]) || "application/octet-stream";
+  const e = extOf(p);
+  //  hasOwn — `x.constructor` · `x.toString` 같은 이름이 Object 의 함수를 집어 머리에 들어가지 않게.
+  return e !== null && Object.hasOwn(TYPES, e) ? TYPES[e] : "application/octet-stream";
 }
 export const isHtmlPath = (p: string): boolean => /\.html?$/i.test(lastSeg(p));
 /** gzip 으로 줄일 만한 종류(글 · 벡터 · wasm). 이미 압축된 그림·영상·폰트(woff2)는 건드리지 않는다. */

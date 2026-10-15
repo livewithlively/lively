@@ -26,7 +26,7 @@ import {
 import { appBundlePolicy, insertVersion, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
 import { bundleFromDir, bundleFromFiles } from "../apps/app-bundle.js";
 import { bundleFilesToWrite, hasRefFiles, stageFromDir, stageFromRefs, writeFilesToDir, type SaveFileInput } from "../apps/app-bundle-source.js";
-import { uiRootOf } from "../apps/manifest.js";
+import { webRootOf } from "../apps/manifest.js";
 import { sessionDirAccess } from "./app-bundle-dir.js";
 import type { StagedSource } from "../apps/install-source.js";
 import {
@@ -173,7 +173,7 @@ async function currentPackageFiles(app: store.OrgApp): Promise<{ files: AppFile[
 async function snapshotCurrentVersion(app: store.OrgApp, savedBy: string | null, note: string): Promise<number> {
   const { files, from } = await currentPackageFiles(app);
   //  #4481 여러 파일 앱은 DB 에 매니페스트·entry HTML 만 남는다 — 거기서 되살린 판은 dist/ 를 잃은 «깨진 판» 이다. 떠 두지 않고 알린다.
-  if (from === "db" && uiRootOf(app.manifest) !== null) {
+  if (from === "db" && webRootOf(app.manifest) !== null) {
     throw new HttpError(409, `「${app.title || app.id}」 의 지금 상태를 판으로 떠 둘 파일 묶음이 없습니다 — 앱 폴더에서 다시 저장해 주세요(app_save {dir})`);
   }
   return recordVersion(app.id, {
@@ -489,6 +489,10 @@ const appInstall: Capability = {
       const loaded = await loadAppPackage(staged.dir);
       let previousHash: string | null = null;
       const actor = actorOf(user);
+      //  #4481 여러 파일 앱(web.root)은 화면 파일이 판 묶음에만 있다(설치는 매니페스트·entry HTML 만 보존한다) — 관리자 설치도 판으로 적어
+      //   앱 주소가 그 판을 낸다. 파일은 **설치 전에** 저장소에 둔다 — 상한(413)·저장소 실패가 설치를 반쯤 해 둔 채(화면 파일 없는 여러 파일 앱)
+      //   끝나지 않게. 화면 한 장 앱(v1)은 종전 그대로(판 이력은 처음 고칠 때 생긴다).
+      const bundled = webRootOf(loaded.manifest) !== null ? await storeVersionBundle(await bundleFromDir(staged.dir)) : null;
       const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
         const before = await store.getApp(loaded.manifest.id);
         //  같은 id 의 남의 나만 보는 앱 위에는 깔지 않는다 — 관리자 목록엔 그 앱이 서지 않으니 덮는 줄 모르고 남의 앱 코드를 바꾸게 된다(격리 리뷰 2-1).
@@ -501,11 +505,8 @@ const appInstall: Capability = {
         const pendingDraft = before && before.visibility === "all" && before.draft_by ? before : null;
         const oldPub = pendingDraft && pendingDraft.published_version_no != null ? await store.getAppVersionHead(pendingDraft.id, pendingDraft.published_version_no) : null;
         const out = await installLoadedApp(loaded, staged.meta, wctx(user, ctx));
-        //  #4481 여러 파일 앱(ui.root)은 화면 파일이 판 묶음에만 있다(설치는 매니페스트·entry HTML 만 보존한다) — 관리자 설치도 판으로 적어
-        //   앱 주소가 그 판을 낸다. 화면 한 장 앱(v1)은 종전 그대로(판 이력은 처음 고칠 때 생긴다).
-        if (uiRootOf(loaded.manifest) !== null) {
-          const no = await recordVersion(out.id, { origin: "member", version: loaded.manifest.version, manifest: loaded.manifest, content_hash: loaded.contentHash, note: "관리자 설치", saved_by: actor },
-            await bundleFromDir(staged.dir));
+        if (bundled) {
+          const no = await insertVersion(out.id, { origin: "member", version: loaded.manifest.version, manifest: loaded.manifest, content_hash: loaded.contentHash, note: "관리자 설치", saved_by: actor }, bundled);
           await store.setAppCurrentVersion(out.id, no);
         }
         if (pendingDraft) {
@@ -541,7 +542,7 @@ const appSave: Capability = {
   title: "앱 저장(만들기·고치기)",
   description: "세션이 만든 앱 파일 묶음을 이 워크스페이스에 저장한다 — 새 id 면 만들고, 있는 id 면 고친다(재설치 = 갱신, 롤 불필요). " +
     "files=[{path, content, encoding?:'utf8'|'base64'}] · lively-app.json 필수. " +
-    "★ 여러 파일 앱(#4481 — 빌드한 dist/ · 이미지 · 폰트): 매니페스트 ui.root 에 화면 폴더(예 \"dist\")를 적고 ui.pages[].entry 를 그 안(예 \"dist/index.html\")으로, " +
+    "★ 여러 파일 앱(#4481 — 빌드한 dist/ · 이미지 · 폰트): 매니페스트 web.root 에 화면 폴더(예 \"dist\")를 적고 ui.pages[].entry 를 그 안(예 \"dist/index.html\")으로, " +
     "그리고 files 대신 **dir**(이 세션의 프로젝트 폴더 안 앱 폴더 — 게이트웨이가 직접 읽는다)로 저장한다. 그 폴더의 파일이 전부 앱 주소에서 그 경로로 뜬다" +
     "(없는 경로는 index.html — 한 페이지 앱). app_pull 이 준 큰 파일은 content 없이 sha256 만 넣어도 된다. 판·파일 상한은 app_bundle_limits. " +
     "구성원 누구나 쓸 수 있고, 담을 수 있는 것은 **화면(ui.pages) + 데이터(data.tables) + " +
@@ -717,7 +718,7 @@ const appPull: Capability = {
     const base = row ? null : await currentPackageFiles(installed);
     const from = row ? "version" as const : (base as { from: "version" | "folder" | "folder+db" | "db" }).from;
     //  #4481 여러 파일 앱인데 판 묶음이 없다 — DB 로 되살리면 dist/ 가 빠진 묶음을 사본·고치기 재료로 주게 된다.
-    if (from === "db" && uiRootOf(installed.manifest) !== null) {
+    if (from === "db" && webRootOf(installed.manifest) !== null) {
       throw new HttpError(409, `「${installed.title || id}」 의 파일 묶음을 찾지 못했습니다 — 앱 폴더에서 다시 저장한 뒤 내려받으세요`);
     }
     const app = pub ? asPublished(installed, pub) : installed;
@@ -1154,7 +1155,7 @@ const appUi: Capability = {
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
         const csp = ((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
-        const multi = uiRootOf(pub.manifest) !== null;
+        const multi = webRootOf(pub.manifest) !== null;
         return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", ...(multi ? { multi_file: true } : {}) };
       }
       logger.warn({ app: id, published: app.published_version_no }, "공개 판 행이 없어 설치된 화면을 준다(#4667 불변식)");
@@ -1167,8 +1168,8 @@ const appUi: Capability = {
     // csp = 매니페스트 선언(없으면 빈 객체 = 네트워크·프레임 0). 호스트(app-ui.ts)가 이걸로 srcdoc CSP 를 짓는다 —
     //  선언에 없는 것은 브라우저가 막는다(우리 코드가 아니라 브라우저가 집행하는 경계).
     const csp = ((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
-    //  #4481 여러 파일 앱(ui.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
-    const multi = uiRootOf(app.manifest) !== null;
+    //  #4481 여러 파일 앱(web.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
+    const multi = webRootOf(app.manifest) !== null;
     return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title) : a.html, pages, csp, view: "installed", ...(multi ? { multi_file: true } : {}) };
   },
 };

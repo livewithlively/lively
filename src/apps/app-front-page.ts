@@ -40,7 +40,7 @@ export function appPageCsp(csp?: AppCsp | null): string {
 }
 
 /**
- * #4481 여러 파일 앱(ui.root)의 문서 CSP — 위(v1)와 같은 선언(connect · resource · frame)을 따르되 **제 주소('self')의 파일**을 연다:
+ * #4481 여러 파일 앱(web.root)의 문서 CSP — 위(v1)와 같은 선언(connect · resource · frame)을 따르되 **제 주소('self')의 파일**을 연다:
  *  빌드 도구가 만든 `<script type="module" src="/assets/…">` · 스타일 · 그림 · 폰트 · 워커 · 매니페스트. 외부 스크립트는 여전히 어떤 선언으로도 못 연다.
  *  'wasm-unsafe-eval' 은 WebAssembly 컴파일만 허락한다(JS eval 은 아니다 — 같은 샌드박스 안이라 새 권한이 아니다).
  *  form-action 은 v2-3(#4482 — iframe 제한 완화)까지 'none' 그대로.

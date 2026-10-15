@@ -59,7 +59,11 @@ function target(cfg: S3Config, key: string): Target {
   return { url: `https://${host}${path}`, host, path };
 }
 
-interface Req { method: "GET" | "PUT" | "HEAD" | "DELETE"; key: string; query?: Record<string, string>; body?: Buffer; headers?: Record<string, string> }
+interface Req {
+  method: "GET" | "PUT" | "HEAD" | "DELETE"; key: string; query?: Record<string, string>; body?: Buffer; headers?: Record<string, string>;
+  /** 'headers' = 응답 머리가 올 때까지만 시간을 잰다(흘려 받기 — 본문은 받는 쪽 속도로 오래 걸릴 수 있다). 기본 'total'(본문까지). */
+  timeout?: "total" | "headers";
+}
 
 async function send(cfg: S3Config, deps: S3Deps, r: Req): Promise<Response> {
   const creds = await (deps.creds ?? resolveGatewayBaseCreds)();
@@ -73,13 +77,25 @@ async function send(cfg: S3Config, deps: S3Deps, r: Req): Promise<Response> {
     headers: signedHeaders, creds, now: (deps.now ?? (() => new Date()))(), query, payloadHash,
   });
   const f = deps.fetch ?? fetch;
-  return f(t.url + (query ? "?" + query : ""), {
-    method: r.method,
-    headers: { ...signedHeaders, ...auth },
-    //  Buffer 를 복사 없이 바이트 보기로 넘긴다(fetch 의 BodyInit 타입이 Buffer 를 직접 받지 않는다).
-    body: r.body ? (new Uint8Array(r.body.buffer, r.body.byteOffset, r.body.byteLength) as unknown as BodyInit) : undefined,
-    signal: AbortSignal.timeout(deps.timeoutMs ?? 30_000),
-  });
+  const ms = deps.timeoutMs ?? 30_000;
+  //  흘려 받기는 머리까지만 잰다 — 본문 전체에 시한을 걸면 받는 쪽(브라우저)이 느리거나 멈춘 사이 시한이 지나 스트림이 오류로 끝난다.
+  const ac = r.timeout === "headers" ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(new DOMException("S3 응답 머리 시간 초과", "TimeoutError")), ms) : null;
+  try {
+    return await f(t.url + (query ? "?" + query : ""), {
+      method: r.method,
+      headers: { ...signedHeaders, ...auth },
+      //  Buffer 를 복사 없이 바이트 보기로 넘긴다(fetch 의 BodyInit 타입이 Buffer 를 직접 받지 않는다).
+      body: r.body ? (new Uint8Array(r.body.buffer, r.body.byteOffset, r.body.byteLength) as unknown as BodyInit) : undefined,
+      signal: ac ? ac.signal : AbortSignal.timeout(ms),
+    });
+  } catch (e) {
+    //  네트워크 · 시간 초과도 S3Error 로 — 부르는 쪽이 한 가지 꼴로 다루고(503 문구), 다시 하기 판정이 같은 규칙을 쓴다.
+    const name = (e as { name?: string })?.name;
+    throw new S3Error(0, name === "TimeoutError" || name === "AbortError" ? "Timeout" : "NetworkError", `S3 ${r.method} ${r.key || "/"} 연결 실패: ${(e as Error)?.message ?? e}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** 오류 응답 → S3Error(본문 XML 의 Code). */
@@ -90,11 +106,11 @@ async function fail(res: Response, what: string): Promise<S3Error> {
   return new S3Error(res.status, code, `S3 ${what} 실패: ${res.status} ${code}${msg ? " — " + msg : ""}`);
 }
 
-/** 다시 해 볼 만한 실패인가 — 네트워크·시간 초과(S3Error 가 아닌 것) · 5xx · SlowDown. 자격 없음 · 4xx 는 다시 해도 같다. */
+/** 다시 해 볼 만한 실패인가 — 네트워크 · 시간 초과 · 5xx · SlowDown. 자격 없음 · 4xx 는 다시 해도 같다. */
 const transient = (e: unknown): boolean => {
   if (!(e instanceof S3Error)) return true;
   if (e.code === "NoCredentials") return false;
-  return e.status >= 500 || e.code === "SlowDown" || e.code === "RequestTimeout";
+  return e.status >= 500 || ["SlowDown", "RequestTimeout", "NetworkError", "Timeout"].includes(e.code);
 };
 
 /** 일시 오류(5xx · 네트워크 · 시간 초과)면 두 번까지 다시 한다 — 모든 동작이 멱등이다. */
@@ -143,9 +159,10 @@ export async function s3Get(cfg: S3Config, key: string, deps: S3Deps = {}): Prom
 /** 흘려 받기(큰 객체 — 앱 주소가 그대로 흘려 보낸다). 없으면 null. 받기 시작한 뒤의 실패는 스트림 오류로 온다(다시 하지 않는다). */
 export async function s3GetStream(cfg: S3Config, key: string, deps: S3Deps = {}): Promise<{ stream: Readable; size: number } | null> {
   return withRetry(deps, async () => {
-    const res = await send(cfg, deps, { method: "GET", key });
+    const res = await send(cfg, deps, { method: "GET", key, timeout: "headers" });
     if (res.status === 404) { await res.arrayBuffer().catch(() => undefined); return null; }
     if (!res.ok || !res.body) throw await fail(res, `GET ${key}`);
+    //  받는 쪽이 이 스트림을 destroy 하면(브라우저가 끊음) 밑의 S3 연결도 걷힌다(Readable.fromWeb 이 reader 를 cancel 한다).
     return { stream: Readable.fromWeb(res.body as unknown as import("node:stream/web").ReadableStream), size: Number(res.headers.get("content-length") ?? "0") };
   });
 }

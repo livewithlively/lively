@@ -82,6 +82,13 @@ function cachePut(k: string, v: Buffer): void {
   }
 }
 const cacheKey = (kind: BlobStoreKind, tenant: string, h: string): string => `${kind}:${tenant}:${h}`;
+/** 캐시에서 걷기 — 바이트 셈도 같이(셈만 늘면 언젠가 넣는 족족 밀려나 캐시가 조용히 꺼진다). */
+function cacheDrop(k: string): void {
+  const v = cache.get(k);
+  if (!v) return;
+  cacheBytes -= v.length;
+  cache.delete(k);
+}
 export function clearBlobCacheForTest(): void { cache.clear(); cacheBytes = 0; }
 
 // ── 쓰기 ─────────────────────────────────────────────────────────────────────
@@ -149,6 +156,11 @@ export async function getBlob(kind: BlobStoreKind, h: string): Promise<Buffer | 
   if (kind === "s3") {
     const c = s3OrThrow();
     bytes = await viaS3("읽기", () => s3Get(c, s3BlobKey(c.prefix, tenant, h), s3DepsForTest));
+    //  장부엔 있는데 객체가 없다(정리 사고 · 손으로 지움) — 장부를 «안 올라감» 으로 돌려 다음 저장이 다시 올리게 한다(스스로 낫는 길).
+    if (!bytes) {
+      await itemsPool.query(`UPDATE org_app_blob SET stored = FALSE WHERE sha256 = $1 AND store = 's3' AND stored`, [h])
+        .catch((err) => logger.warn({ err: String(err), h }, "없는 판 파일의 장부 되돌리기 실패(#4481)"));
+    }
   } else {
     const r = await itemsPool.query(`SELECT bytes FROM org_app_blob WHERE sha256 = $1 AND store = 'db' AND stored`, [h]);
     const b = r.rows[0]?.bytes;
@@ -198,14 +210,6 @@ export async function referencedBytes(): Promise<number> {
 
 export const BLOB_GC_GRACE_HOURS = 24;
 
-/** 판 행들이 가리키는 지문 전부(이 워크스페이스). */
-async function referencedHashes(): Promise<Set<string>> {
-  const r = await itemsPool.query(
-    `SELECT DISTINCT e->>'h' AS h FROM org_app_version v CROSS JOIN LATERAL jsonb_array_elements(COALESCE(v.bundle->'files', '[]'::jsonb)) e
-      WHERE v.bundle IS NOT NULL`);
-  return new Set(r.rows.map((x) => String(x.h)));
-}
-
 export interface BlobGcResult { checked: number; removed: number; removedBytes: number; failed: number }
 
 /**
@@ -214,16 +218,23 @@ export interface BlobGcResult { checked: number; removed: number; removedBytes: 
  */
 export async function gcBlobs(opts: { limit?: number; graceHours?: number } = {}): Promise<BlobGcResult> {
   const grace = Math.max(1, opts.graceHours ?? BLOB_GC_GRACE_HOURS);
-  const refs = await referencedHashes();
+  //  후보는 SQL 에서 «어떤 판도 안 가리킴» 까지 걸러 고른다 — 오래 안 고친 앱의 «오래됐지만 살아 있는» 파일이 앞줄을 채우면
+  //   한 바퀴에 볼 수(limit)를 그 파일들이 다 먹어 아무것도 못 지운다(격리 리뷰 B3). 지문 집합을 한 번 만들어 반조인한다.
   const cand = await itemsPool.query(
-    `SELECT sha256, store FROM org_app_blob WHERE last_used_at < now() - make_interval(hours => $1) ORDER BY last_used_at ASC LIMIT $2`,
+    `WITH refs AS (SELECT DISTINCT e->>'h' AS h FROM org_app_version v CROSS JOIN LATERAL jsonb_array_elements(COALESCE(v.bundle->'files', '[]'::jsonb)) e
+                    WHERE v.bundle IS NOT NULL)
+     SELECT b.sha256, b.store FROM org_app_blob b LEFT JOIN refs r ON r.h = b.sha256
+      WHERE r.h IS NULL AND b.last_used_at < now() - make_interval(hours => $1)
+      ORDER BY b.last_used_at ASC LIMIT $2`,
     [grace, Math.max(1, opts.limit ?? 200)]);
   const out: BlobGcResult = { checked: 0, removed: 0, removedBytes: 0, failed: 0 };
   const tenant = blobTenant();
+  //  잠근 채 S3 를 부르는 동안 같은 파일을 쓰려는 저장이 기다린다 — 짧게(다시 하기도 줄여) 붙든다.
+  const gcDeps: S3Deps = { ...(s3DepsForTest ?? {}), timeoutMs: s3DepsForTest?.timeoutMs ?? 10_000 };
   for (const row of cand.rows) {
     const h = String(row.sha256); const kind = row.store === "db" ? "db" as const : "s3" as const;
-    if (refs.has(h)) continue;
     out.checked++;
+    let objectGone = false;
     const client = await itemsPool.connect();
     try {
       await client.query("BEGIN");
@@ -237,14 +248,21 @@ export async function gcBlobs(opts: { limit?: number; graceHours?: number } = {}
       if (!still || (ref && ref.rows.length)) { await client.query("ROLLBACK"); continue; }
       if (kind === "s3" && still.stored === true) {
         const c = s3OrThrow();
-        await s3Delete(c, s3BlobKey(c.prefix, tenant, h), s3DepsForTest);
+        await s3Delete(c, s3BlobKey(c.prefix, tenant, h), gcDeps);
+        objectGone = true;
       }
       await client.query(`DELETE FROM org_app_blob WHERE sha256 = $1 AND store = $2`, [h, kind]);
       await client.query("COMMIT");
-      cache.delete(cacheKey(kind, tenant, h));
+      cacheDrop(cacheKey(kind, tenant, h));
       out.removed++; out.removedBytes += Number(still.size ?? 0);
     } catch (e) {
       await client.query("ROLLBACK").catch(() => { /* noop */ });
+      //  객체는 지웠는데 장부 지우기가 실패했으면 장부를 «안 올라감» 으로 — stored=true 로 남으면 다음 저장이 올리기를 건너뛰어 없는 파일을 가리킨다.
+      if (objectGone) {
+        await itemsPool.query(`UPDATE org_app_blob SET stored = FALSE WHERE sha256 = $1 AND store = $2`, [h, kind])
+          .catch((err) => logger.error({ err: String(err), h }, "정리 뒤 장부 되돌리기 실패 — 이 지문의 다음 저장이 올리기를 건너뛸 수 있다(#4481)"));
+        cacheDrop(cacheKey(kind, tenant, h));
+      }
       out.failed++;
       logger.warn({ err: e instanceof Error ? e.message : String(e), h }, "앱 판 파일 정리 실패(비치명 — 다음 바퀴가 다시 본다)");
     } finally {
