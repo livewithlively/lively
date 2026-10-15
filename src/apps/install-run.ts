@@ -3,7 +3,7 @@
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
 import { getApp, listComponents, upsertUiAsset, pruneUiAssets, upsertRuntimeAsset, pruneRuntimeAssets } from "../org/store/apps.js";
 import type { LoadedApp } from "./loader.js";
-import { ensureAppTables, appSchemaFor, cleanupDroppedTables, checkAppTableFuse, emptyTableReport, type AppTableReport, type DroppedTablesReport, type ProtectColumns } from "./store-schema.js";
+import { ensureAppTables, appSchemaFor, cleanupDroppedTables, checkAppTableFuse, archivedFuseHint, emptyTableReport, type AppTableReport, type DroppedTablesReport, type ProtectColumns } from "./store-schema.js";
 import { isBuiltinSource, physicalTableName } from "./store-ddl.js";
 import { notifyAppInstaller } from "./notify.js";
 import { HttpError } from "../http-error.js";
@@ -66,7 +66,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
     if (tableSpecs.length) {
       const fuse = await checkAppTableFuse(id, tableSpecs.map((t) => t.table), schema);
       if (!fuse.ok) {
-        const msg = `이 워크스페이스의 앱 테이블이 상한(${fuse.limit}개)을 넘게 됩니다 — 지금 ${fuse.current}개 · 보관 ${fuse.archived}개 · 이번에 새로 ${fuse.adding}개. 쓰지 않는 앱을 제거하거나 관리자에게 알려 주세요`;
+        const msg = `이 워크스페이스의 앱 테이블이 상한(${fuse.limit}개)을 넘게 됩니다 — 지금 ${fuse.current}개 · 보관 ${fuse.archived}개 · 이번에 새로 ${fuse.adding}개. 쓰지 않는 앱을 제거하거나 관리자에게 알려 주세요.${archivedFuseHint(fuse.archived)}`;
         const who = installerOf(ctx);
         if (who) await notifyAppInstaller({ appId: id, memberId: who, title: `앱 '${loaded.manifest.title}' 설치를 거절했습니다`, body: msg, dedupe_key: `app-table-fuse:${id}` }).catch(() => undefined);
         throw new HttpError(409, `앱 '${id}' 설치 거절: ${msg}`);
@@ -88,7 +88,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
     if (fresh.length) {
       const fuse = await checkAppTableFuse(id, fresh, schema);
       if (!fuse.ok) {
-        throw new HttpError(409, `앱 '${id}' 저장 거절: 새 표 ${fresh.length}개로 이 워크스페이스의 앱 테이블이 상한(${fuse.limit}개)을 넘게 됩니다 — 지금 ${fuse.current}개 · 보관 ${fuse.archived}개`);
+        throw new HttpError(409, `앱 '${id}' 저장 거절: 새 표 ${fresh.length}개로 이 워크스페이스의 앱 테이블이 상한(${fuse.limit}개)을 넘게 됩니다 — 지금 ${fuse.current}개 · 보관 ${fuse.archived}개.${archivedFuseHint(fuse.archived)}`);
       }
     }
   }
@@ -139,7 +139,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
         await notifyAppInstaller({
           appId: id, memberId: who,
           title: `앱 '${loaded.manifest.title}' 에서 빠진 테이블에 데이터가 있어 보관했습니다`,
-          body: `매니페스트에서 빠진 테이블을 지우지 않고 옮겨 두었습니다: ${parts.join(" · ")}. 앱 화면과 세션에서는 더 보이지 않지만 데이터는 DB 의 보관 스키마에 그대로 남아 있습니다.`,
+          body: `매니페스트에서 빠진 테이블을 지우지 않고 옮겨 두었습니다: ${parts.join(" · ")}. 앱 화면과 세션에서는 더 보이지 않지만 데이터는 DB 의 보관 스키마에 그대로 남아 있습니다(관리자가 관리탭 ▸ 앱 보관 표에서 보고 비울 수 있습니다).`,
         }).catch((err) => logger.warn({ err, id }, "보관 알림 발송 실패(비치명)"));
       }
     }

@@ -17,6 +17,7 @@
 //  ── #4224 (세션이 만든 앱 설치) ──
 //  S8 매니페스트에 칸이 늘면 ADD COLUMN — 기존 행 보존 · 런타임 role 이 새 칸에 쓴다 · 타입이 다르면 바꾸지 않고 알린다
 //  S9 매니페스트에서 빠진 테이블 — 비었으면 DROP · 데이터가 있으면 보관 스키마로(런타임 role 은 못 읽음) · 주인 아닌 테이블은 정리 실패로 남긴다
+//      (S9c2 #4733 보관 표에 주인 기록 — DDL 전용 역할로도)
 //  S10 하이픈 id 앱도 테이블이 생기고 쓰인다(종전엔 생성이 늘 실패)
 //  S11 워크스페이스 퓨즈 — 새로 생길 테이블까지 세어 상한을 넘으면 ok=false
 import pg from "pg";
@@ -208,6 +209,11 @@ try {
       && (await su.query("SELECT to_regclass($1) AS r", [`"${SA}"."crm__logs"`])).rows[0].r === null, JSON.stringify(rep));
     const saved = (await su.query(`SELECT line FROM "${archiveSchema}"."crm__logs__20260928010203"`)).rows;
     chk("S9c 보관된 테이블의 행은 그대로 남는다", saved.length === 1 && saved[0].line === "남길 기록", JSON.stringify(saved));
+    //  #4733 매니지드 모양(DDL 전용 역할이 보관) — 표 설명에 주인 기록이 붙는다(앱 지우기 · 관리자 비우기가 이 기록으로 가린다).
+    const note = (await su.query(`SELECT obj_description(to_regclass($1), 'pg_class') AS c`, [`"${archiveSchema}"."crm__logs__20260928010203"`])).rows[0]?.c ?? "";
+    const rec = note.startsWith("lively-archive:") ? JSON.parse(note.slice("lively-archive:".length)) : null;
+    chk("S9c2 DDL 전용 역할이 보관해도 주인 기록이 붙는다(앱 · 표 · 행 수 · 시각 · 까닭)",
+      rec?.app_id === "crm" && rec?.table === "logs" && rec?.column === null && rec?.rows === 1 && rec?.at === at.toISOString() && rec?.reason === "install", note);
     let rtDenied = false;
     try { await asTenant(TA, `SELECT 1 FROM "${archiveSchema}"."crm__logs__20260928010203"`); } catch (e) { rtDenied = e.code === "42501"; }
     chk("S9d 런타임 role(앱)은 보관된 테이블을 못 읽는다", rtDenied);

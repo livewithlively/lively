@@ -34,8 +34,10 @@ import {
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
 import { multiFileFallbackHtml } from "../apps/app-front-page.js";
-import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
+import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, appTableCounts, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
 import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan, type PublishPreview } from "../apps/publish-preview.js";
+import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
+import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
 import { getMember } from "../org/store/members.js";
@@ -323,7 +325,7 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   //   초안이 걸린 공개 앱만(나만 보는 앱의 첫 공개엔 미룬 것이 없다) · 기본 앱의 공유 표는 하지 않는다(저장 때 이미 더하기만 받았다).
   const tables = publishTouchesTables(app) ? emptyTableReport() : undefined;
   if (tables) {
-    await ensureAppTables(app.id, tableSpecsOf(app.manifest), { schema: appSchemaFor(false), strict: true, sqlRole: true, atomic: true, report: tables });
+    await ensureAppTables(app.id, tableSpecsOf(app.manifest), { schema: appSchemaFor(false), strict: true, sqlRole: true, atomic: true, report: tables, archiveReason: "publish" });
   }
   try {
     await store.markAppPublished(app.id, no, who.userId, w);
@@ -337,7 +339,7 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   }
   if (old && !isBuiltinSource(app.source)) {
     const gone = tablesGoneAtPublish(old.manifest, app.manifest);
-    if (gone.length) await cleanupGoneTables(app, gone, who.userId, "새 공개 판");
+    if (gone.length) await cleanupGoneTables(app, gone, who.userId, "새 공개 판", "publish");
   }
   return { version_no: no, changed: true, tables };
 }
@@ -454,8 +456,8 @@ async function assertSharedTablesAccept(appId: string, current: unknown, next: u
  * 옛 공개 판에만 있던 표를 정리한다(비었으면 삭제 · 데이터 있으면 보관) — 「공개하기」 · 관리자 설치가 부른다. 공개는 이미 끝난 뒤라
  *  정리가 실패해도 던지지 않는다(표는 그 자리에 남고 다음 정리가 다시 본다 · 격리 리뷰 NB-10). 보관했거나 실패했으면 그 일을 한 사람에게 알린다.
  */
-async function cleanupGoneTables(app: { id: string; title: string }, gone: string[], actor: string, why: string): Promise<void> {
-  const cleaned = await cleanupDroppedTables(app.id, gone, appSchemaFor(false)).catch((err) => {
+async function cleanupGoneTables(app: { id: string; title: string }, gone: string[], actor: string, why: string, reason: ArchiveReason): Promise<void> {
+  const cleaned = await cleanupDroppedTables(app.id, gone, appSchemaFor(false), new Date(), reason).catch((err) => {
     logger.warn({ err, id: app.id, gone }, "옛 공개 판 표 정리 실패(비치명 — 표는 그 자리에 남는다)");
     return null;
   });
@@ -653,7 +655,7 @@ const appInstall: Capability = {
           //   여기서 「공개하기」 처럼 정리한다(비었으면 삭제 · 데이터 있으면 보관 + 알림).
           const draftTables = new Set(declaredTableNames(pendingDraft.manifest));
           const gone = oldPub && !isBuiltinSource(pendingDraft.source) ? tablesGoneAtPublish(oldPub.manifest, loaded.manifest).filter((t) => !draftTables.has(t)) : [];
-          if (gone.length) await cleanupGoneTables({ id: out.id, title: loaded.manifest.title }, gone, actor, "관리자 설치");
+          if (gone.length) await cleanupGoneTables({ id: out.id, title: loaded.manifest.title }, gone, actor, "관리자 설치", "install");
           if (pendingDraft.draft_by && pendingDraft.draft_by !== actor) await notifyDraftDisplaced({ id: out.id, title: loaded.manifest.title }, { by: pendingDraft.draft_by, version_no: pendingDraft.current_version_no }, actor);
         }
         return out;
@@ -1292,7 +1294,8 @@ const appEditPolicySet: Capability = {
 const appRemove: Capability = {
   name: "org_app_remove",
   title: "앱 제거",
-  description: "앱과 그 전개물(하네스 자산·크론·툴·호스트)을 회수하고 레지스트리에서 삭제한다. builtin(코드 소유) 앱은 제거 대신 org_app_set_enabled 로 끈다(부팅 재시드). 관리자.",
+  description: "앱과 그 전개물(하네스 자산·크론·툴·호스트)을 회수하고 레지스트리에서 삭제한다. 데이터 표와 그 앱의 보관 표(archives)는 지우기 직전 떠 둔다(7일, app_data_snapshots). "
+    + "builtin(코드 소유) 앱은 제거 대신 org_app_set_enabled 로 끈다(부팅 재시드). 관리자.",
   scope: "admin",
   input: { app_id: z.string() },
   expose: {
@@ -1388,7 +1391,8 @@ const appUi: Capability = {
 const appDataSnapshots: Capability = {
   name: "app_data_snapshots",
   title: "앱 데이터 떠 둔 것 목록",
-  description: "워크스페이스가 만든 앱의 데이터를 떠 둔 목록(하루 한 번 + 앱 제거·되돌리기 직전, 7일 보관). app_id 를 주면 그 앱만. 항목 = 시각·까닭(daily·before-remove·before-restore)·테이블별 행 수. 관리자.",
+  description: "워크스페이스가 만든 앱의 데이터를 떠 둔 목록(하루 한 번 + 앱 제거·되돌리기·보관 표 비우기 직전, 7일 보관). app_id 를 주면 그 앱만. "
+    + "항목 = 시각·까닭(daily·before-remove·before-restore·before-clear)·테이블별 행 수. 보관 표는 «archive:<이름>»(archive:true)으로 담기고 되살리지 않는다. 관리자.",
   scope: "admin",
   input: { app_id: z.string().optional() },
   expose: {
@@ -1406,7 +1410,8 @@ const appDataRestore: Capability = {
   name: "app_data_restore",
   title: "앱 데이터 되돌리기",
   description: "떠 둔 시점(taken_at — app_data_snapshots 의 값 그대로)으로 앱 테이블을 되돌린다. table 을 주면 그 테이블만, 없으면 그 묶음의 테이블 전부. "
-    + "이 워크스페이스 행을 통째로 그 시점으로 바꾸고(원래 id 유지), 되돌리기 직전 지금 상태를 먼저 떠 둔다(before-restore — 되돌리기도 되돌릴 수 있다). 직전 상태를 못 떠 두면(너무 큰 앱) force 없이는 멈춘다. 관리자.",
+    + "이 워크스페이스 행을 통째로 그 시점으로 바꾸고(원래 id 유지), 되돌리기 직전 지금 상태를 먼저 떠 둔다(before-restore — 되돌리기도 되돌릴 수 있다). 직전 상태를 못 떠 두면(너무 큰 앱) force 없이는 멈춘다. "
+    + "묶음에 담긴 보관 표(archive:…)는 되살리지 않고 건너뛴다(archives_skipped). 관리자.",
   scope: "admin",
   input: { app_id: z.string(), taken_at: z.string(), table: z.string().optional(), force: z.boolean().optional().describe("되돌리기 직전 상태를 떠 두지 못해도(너무 큰 앱 등) 되돌린다 — 되돌린 것을 다시 되돌릴 수 없다") },
   expose: {
@@ -1421,10 +1426,71 @@ const appDataRestore: Capability = {
     return store.withAppInstallLock(id, async () => {
       const table = input.table == null || input.table === "" ? null : String(input.table);
       const out = await restoreAppSnapshot(id, String(input.taken_at ?? ""), table, { force: input.force === true });
-      return { ok: true, app_id: id, restored: out.restored, before_restore: out.safety.taken_at };
+      return { ok: true, app_id: id, restored: out.restored, before_restore: out.safety.taken_at, archives_skipped: out.archives_skipped };
     });
   },
 };
 
+// ── 앱 보관 표 보기·비우기(#4733, 관리자) ──
+//  앱 표를 선언에서 빼거나(데이터가 있을 때) 칸을 지우면(drop_columns · 값이 있을 때) 데이터를 잃지 않으려고 보관 자리로 옮긴다
+//  (store-schema). 보관 표도 워크스페이스 표 개수 한도에 세어지는데 앱을 고쳐서는 줄지 않는다 — 관리자가 보고 비운다(백업 뒤).
+//  앱을 지우면 그 앱의 보관 표는 제거가 함께 지운다(remove-run). 판정 · 이름 규칙은 apps/archive-meta.ts, 실행은 apps/app-archive.ts.
+const appArchivesCap: Capability = {
+  name: "app_archives",
+  title: "앱 보관 표 목록",
+  description: "이 워크스페이스의 앱 보관 표 — 앱 표를 선언에서 빼거나(데이터가 있을 때) 칸을 지울 때(drop_columns, 값이 있을 때) 데이터를 잃지 않으려고 옮겨 둔 표. "
+    + "항목 = name(비우기에 그대로) · app_id · owner(recorded 보관할 때 남긴 기록 · guessed 이름으로 짐작 · unknown 주인 모름) · kind(table 표 통째 · column 지운 칸의 값) · "
+    + "table · column · rows · bytes · archived_at · reason(install 설치·저장 · publish 공개). 보관 표도 워크스페이스 표 개수 한도에 센다(table_limit). "
+    + "app_id 를 주면 그 앱 것만. 비우기는 app_archive_clear. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string().optional() },
+  expose: {
+    mcp: true,
+    //  /api/ui/apps/archives 는 앞서 마운트된 GET /api/ui/apps/:id(org_app_get)에 가려진다 — app-snapshots 와 같은 모양으로.
+    rest: [{ method: "GET", paths: ["/api/ui/app-archives"], parse: (req) => ({ app_id: (req.query as Record<string, unknown>)?.app_id }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = input.app_id == null || input.app_id === "" ? null : appId(input.app_id);
+    const { schema, archives } = await listAppArchives(id);
+    const counts = await appTableCounts(appSchemaFor(false));
+    return { schema, archives, count: archives.length, bytes: archives.reduce((n, a) => n + a.bytes, 0), table_limit: counts };
+  },
+};
+
+const appArchiveClear: Capability = {
+  name: "app_archive_clear",
+  title: "앱 보관 표 비우기",
+  description: "앱 보관 표를 지운다 — 지우기 직전 앱 데이터 백업(app_data_snapshots · 7일 · «archive:<이름>» · 까닭 before-clear)에 담는다. 되살리기는 하지 않는다(백업에만 남는다). "
+    + "names(app_archives 의 name 그대로) 또는 app_id(그 앱의 보관 표 전부) 중 하나. 보관 자리에 없는 이름은 건드리지 않고 missing 으로 알린다. "
+    + "백업하기엔 너무 크거나 백업이 실패하면 지우지 않고 kept 로 알린다 — force 를 주면 백업 없이 지운다(되살릴 길이 없다). 지우면 표 개수 한도 셈(table_limit)이 준다. 관리자.",
+  scope: "admin",
+  input: {
+    names: z.array(z.string()).optional(),
+    app_id: z.string().optional(),
+    force: z.boolean().optional().describe("백업하지 못해도(너무 큼 · 실패) 지운다 — 지운 것을 되살릴 길이 없다"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-archives/clear"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { names: b.names, app_id: b.app_id, force: b.force };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const names = Array.isArray(input.names) ? [...new Set(input.names.map((n) => String(n ?? "").trim()).filter(Boolean))] : [];
+    const id = input.app_id == null || input.app_id === "" ? null : appId(input.app_id);
+    if (!names.length && !id) throw new HttpError(400, "names(보관 표 이름들) 또는 app_id 가 필요합니다 — app_archives 로 목록을 보세요");
+    if (names.length && id) throw new HttpError(400, "names 와 app_id 중 하나만 주세요");
+    const run = async (): Promise<Record<string, unknown>> => {
+      const list = names.length ? names : (await listAppArchives(id)).archives.map((a) => a.name);
+      const out = await clearAppArchives(list, { reason: "before-clear", force: input.force === true });
+      return { ok: true, ...out, table_limit: await appTableCounts(appSchemaFor(false)) };
+    };
+    //  앱 단위로 비우면 그 앱의 설치 · 공개(보관 표를 새로 만들 수 있다)와 엇갈리지 않게 같은 잠금 안에서.
+    return id ? store.withAppInstallLock(id, run) : run();
+  },
+};
+
 export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
-  appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore];
+  appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
+  appArchivesCap, appArchiveClear];
