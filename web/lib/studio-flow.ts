@@ -71,12 +71,21 @@ export function verJ(n: number, j: '을' | '으로' | '이' | '은'): string {
   if (k <= 1) return '초안' + j;
   return 'V' + k + ' ' + ({ 을: '를', 으로: '로', 이: '가', 은: '는' } as const)[j];
 }
-const ORD = ['', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열'];
-/** 새 버전이 왔을 때의 머리글 — 초안이 나왔어요 · 두 번째 버전이 나왔어요 … 열 번째까지 말로, 그 뒤는 V11 이 나왔어요. */
+//  서수는 우리말로 끝까지 — 열한 번째 · 스무 번째 · 아흔아홉 번째(원준 2026-10-16 «그 뒤도 열한 번째 버전이 나왔어요 <- 이렇게»). 백부터는 숫자(100번째).
+const ORD_ONE = ['', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉'];
+const ORD_TEN = ['', '열', '스물', '서른', '마흔', '쉰', '예순', '일흔', '여든', '아흔'];
+/** 2 이상 → 「두 번째」 · 「열한 번째」 · 「스무 번째」 · 「100번째」. */
+export function verOrdinal(n: number): string {
+  const k = Math.floor(Number(n) || 0);
+  if (k >= 100) return k + '번째';
+  if (k <= 1) return '첫 번째';
+  const t = Math.floor(k / 10), o = k % 10;
+  return (o === 0 && t === 2 ? '스무' : ORD_TEN[t] + ORD_ONE[o]) + ' 번째';
+}
+/** 새 버전이 왔을 때의 머리글 — 초안이 나왔어요 · 두 번째 버전이 나왔어요 · 열한 번째 버전이 나왔어요 …(서수는 verOrdinal). */
 export function verArrived(n: number): string {
   const k = Math.floor(Number(n) || 0);
-  if (k <= 1) return '초안이 나왔어요';
-  return k <= 10 ? ORD[k] + ' 번째 버전이 나왔어요' : 'V' + k + ' 이 나왔어요';
+  return k <= 1 ? '초안이 나왔어요' : verOrdinal(k) + ' 버전이 나왔어요';
 }
 
 export const DRAFT_STEPS = ['기획 읽는 중', '화면 짜는 중', '자료 표 만드는 중', '저장하는 중'];

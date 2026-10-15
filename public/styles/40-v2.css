@@ -1791,9 +1791,16 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-go.sm { height: 36px; padding: 0 16px; font-size: 13.5px; border-radius: 10px; }
 .v2-studio-steps-list { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
 /* 말풍선 · 처음 안내 · 둘러보기 · ? 메뉴 */
-.v2-studio-coach { position: fixed; z-index: 5; background: var(--ink); color: #fff; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px rgba(21, 35, 59, .25); pointer-events: none; }   /* 누름은 아래로 통과 — 첫 누름이 말풍선에 먹히지 않는다 */
+/* 처음 안내 — 지금 눌러야 할 자리 바로 아래에 끼워 아래 것을 밀어낸다(위에 떠서 가리지 않는다, 원준 2026-10-16). 꼬리는 위의 자리를 가리킨다 · 「×」 로 닫는다. */
+.v2-studio-coach { position: relative; display: flex; align-items: flex-start; gap: 6px; width: fit-content; max-width: min(440px, 100%); box-sizing: border-box; margin: 10px 0 4px; text-align: left; background: var(--ink); color: #fff; border-radius: 10px; padding: 9px 6px 9px 12px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 6px 16px rgba(21, 35, 59, .18); }
+.v2-studio-coach::before { content: ''; position: absolute; top: -6px; left: 22px; border: 6px solid transparent; border-top: 0; border-bottom-color: var(--ink); }
+.v2-studio-coach > div { flex: 1; min-width: 0; }
 .v2-studio-coach b { display: block; margin-bottom: 2px; color: #C8B9FF; }   /* 「처음 안내」 머리 뒤에 줄을 바꾼다(원준 2026-10-15 «그 뒤 본문과 엔터가 없음») */
 .v2-studio-coach small { display: block; margin-top: 4px; color: #C8B9FF; font-size: 12px; }
+.v2-studio-coach-x { flex: none; width: 24px; height: 24px; margin: -3px 0 0; padding: 0; border: 0; border-radius: 6px; background: none; color: #C8B9FF; font: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
+.v2-studio-coach-x:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+.v2-studio-hub .v2-studio-coach { margin: -4px auto 0; }   /* 허브는 가운데 줄 — 꼬리도 가운데(위 두 단추 사이) */
+.v2-studio-hub .v2-studio-coach::before { left: 50%; margin-left: -6px; }
 .v2-studio-intro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(21, 35, 59, .35); padding: 20px; overflow: auto; }
 .v2-studio-intro-box { width: min(760px, 100%); background: var(--bg); border-radius: 16px; padding: 22px 24px; display: grid; gap: 14px; box-shadow: 0 20px 60px rgba(21, 35, 59, .3); }
 .v2-studio-intro-box h2 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
@@ -3029,6 +3036,9 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub-head { text-align: center; display: grid; gap: 6px; }
 .v2-studio-hub-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-hub-head p { margin: 0; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
+/* 글 속 「수정하기」 — 「지금 할 일」 · 막대의 「수정하기」 와 같은 단추(같은 꼴 · 같은 일). 줄 높이만 글에 맞춘다. */
+.v2-studio-hub-head p .v2-studio-fix-in { height: 26px; padding: 0 11px; margin: 0 1px; font-size: 12.5px; vertical-align: 1px; }
+.v2-studio-hub-head p .v2-studio-fix-j { margin-left: 2px; }
 /* 두 단추는 같은 크기 — 같은 너비의 두 칸, 높이는 큰 쪽에 맞춘다(원준 2026-10-15 «박스 크기가 다르네»). 좁으면 한 줄씩. 하나뿐이면 가운데 한 칸. */
 .v2-studio-hub-go { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 6px 0; }
 .v2-studio-hub-go:has(> button:only-child) { grid-template-columns: minmax(0, 340px); justify-content: center; }
