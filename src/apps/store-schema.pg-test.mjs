@@ -17,8 +17,11 @@
 //  ── #4224 (세션이 만든 앱 설치) ──
 //  S8 매니페스트에 칸이 늘면 ADD COLUMN — 기존 행 보존 · 런타임 role 이 새 칸에 쓴다 · 타입이 다르면 바꾸지 않고 알린다
 //  S9 매니페스트에서 빠진 테이블 — 비었으면 DROP · 데이터가 있으면 보관 스키마로(런타임 role 은 못 읽음) · 주인 아닌 테이블은 정리 실패로 남긴다
+//      (S9c2 #4733 보관 표에 주인 기록 — DDL 전용 역할로도)
 //  S10 하이픈 id 앱도 테이블이 생기고 쓰인다(종전엔 생성이 늘 실패)
 //  S11 워크스페이스 퓨즈 — 새로 생길 테이블까지 세어 상한을 넘으면 ok=false
+//  ── #4733 (보관 표 정리) ──
+//  S12 매니지드 모양에서 보관 표 목록 → 비우기 — 보관 표는 DDL 역할만 읽는데(S9d) 백업은 런타임 역할이 쓰고, 지우기는 DDL 역할이 한다
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -35,7 +38,9 @@ const su = new pg.Client({ connectionString: SUPER });
 await su.connect();
 const dbName = (await su.query("SELECT current_database() AS d")).rows[0].d;
 
+let SNAP_PREEXISTED = null; // S12 — 이 시험이 org_app_snapshot 을 만들었으면 걷는다(먼저 있던 것은 건드리지 않는다)
 async function dropAll() {
+  if (SNAP_PREEXISTED === false) await su.query(`DROP TABLE IF EXISTS public.org_app_snapshot`);
   for (const t of [TA, TB]) for (const suf of ["", "_archive"]) await su.query(`DROP SCHEMA IF EXISTS "app_${t.replace(/-/g, "")}${suf}" CASCADE`);
   await su.query(`DROP TABLE IF EXISTS app."pgtbuiltin__marks" CASCADE`);
   // 이 시험이 만든 app 스키마면(매니지드 경로) 걷는다 — 먼저 있던 것은 건드리지 않는다.
@@ -67,6 +72,8 @@ delete process.env.LIVELY_OWNER_DATABASE_URL;
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { ensureAppTables, dropAppTables, cleanupDroppedTables, checkAppTableFuse, emptyTableReport } = await import(`${DIST}/apps/store-schema.js`);
 const { appSchemaName } = await import(`${DIST}/apps/store-ddl.js`);
+const { listAppArchives, clearAppArchives } = await import(`${DIST}/apps/app-archive.js`);
+const { withTenant } = await import(`${DIST}/org/tenant-context.js`);
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 
 let pass = 0, fail = 0;
@@ -208,6 +215,11 @@ try {
       && (await su.query("SELECT to_regclass($1) AS r", [`"${SA}"."crm__logs"`])).rows[0].r === null, JSON.stringify(rep));
     const saved = (await su.query(`SELECT line FROM "${archiveSchema}"."crm__logs__20260928010203"`)).rows;
     chk("S9c 보관된 테이블의 행은 그대로 남는다", saved.length === 1 && saved[0].line === "남길 기록", JSON.stringify(saved));
+    //  #4733 매니지드 모양(DDL 전용 역할이 보관) — 표 설명에 주인 기록이 붙는다(앱 지우기 · 관리자 비우기가 이 기록으로 가린다).
+    const note = (await su.query(`SELECT obj_description(to_regclass($1), 'pg_class') AS c`, [`"${archiveSchema}"."crm__logs__20260928010203"`])).rows[0]?.c ?? "";
+    const rec = note.startsWith("lively-archive:") ? JSON.parse(note.slice("lively-archive:".length)) : null;
+    chk("S9c2 DDL 전용 역할이 보관해도 주인 기록이 붙는다(앱 · 표 · 행 수 · 시각 · 까닭)",
+      rec?.app_id === "crm" && rec?.table === "logs" && rec?.column === null && rec?.rows === 1 && rec?.at === at.toISOString() && rec?.reason === "install", note);
     let rtDenied = false;
     try { await asTenant(TA, `SELECT 1 FROM "${archiveSchema}"."crm__logs__20260928010203"`); } catch (e) { rtDenied = e.code === "42501"; }
     chk("S9d 런타임 role(앱)은 보관된 테이블을 못 읽는다", rtDenied);
@@ -239,6 +251,35 @@ try {
     chk("S11b 상한을 한 개라도 넘으면 ok=false", tight.ok === false, JSON.stringify(tight));
     const exact = await checkAppTableFuse("crm", ["contacts"], SA, wide.current + wide.archived);
     chk("S11c 새 테이블이 없으면 상한과 같아도 ok", exact.ok === true, JSON.stringify(exact));
+  }
+
+  // ── S12 #4733 매니지드 모양에서 보관 표 목록 → 비우기(백업 → 지움) ──
+  //  S9 가 워크스페이스 A 의 보관 자리에 crm__logs 를 둘 보관했다(DDL 역할 · 주인 기록). 런타임 역할은 그 표를 못 읽는다(S9d) —
+  //  그래도 목록 · 백업 읽기 · 지우기는 DDL 역할 연결이, 백업 쓰기(org_app_snapshot)는 런타임 역할 풀이 해서 끝까지 된다.
+  {
+    SNAP_PREEXISTED = (await su.query("SELECT to_regclass('public.org_app_snapshot') AS r")).rows[0].r !== null;
+    if (!SNAP_PREEXISTED) {
+      await su.query(`CREATE TABLE public.org_app_snapshot(app_id TEXT NOT NULL, taken_at TIMESTAMPTZ NOT NULL, table_name TEXT NOT NULL, chunk INT NOT NULL,
+        reason TEXT NOT NULL DEFAULT 'daily', row_count INT NOT NULL DEFAULT 0, rows JSONB NOT NULL DEFAULT '[]'::jsonb, PRIMARY KEY (app_id, taken_at, table_name, chunk))`);
+    }
+    await su.query(`GRANT USAGE ON SCHEMA public TO "${RT}"`);
+    await su.query(`GRANT SELECT, INSERT ON public.org_app_snapshot TO "${RT}"`);
+    const archiveSchema = `${SA}_archive`;
+    const TEN = { id: TA, slug: "pgt-a" };
+    const listed = await withTenant(TEN, () => listAppArchives("crm"));
+    const names = listed.archives.map((a) => a.name).sort();
+    chk("S12 워크스페이스 A 의 보관 자리를 DDL 역할로 읽는다 — 주인 기록 둘 · 행 수",
+      listed.schema === archiveSchema && names.join() === "crm__logs__20260928010203,crm__logs__20260928010204"
+        && listed.archives.every((a) => a.owner === "recorded" && a.app_id === "crm" && a.rows === 1), JSON.stringify(listed));
+    const at = new Date("2026-10-15T00:00:00Z");
+    const out = await withTenant(TEN, () => clearAppArchives(names, { reason: "before-clear", now: at }));
+    const gone = (await su.query(`SELECT count(*)::int AS n FROM pg_tables WHERE schemaname = $1 AND tablename LIKE 'crm__logs__%'`, [archiveSchema])).rows[0].n;
+    const snaps = (await su.query(`SELECT table_name, row_count, rows->0->>'line' AS line FROM public.org_app_snapshot WHERE app_id = 'crm' AND taken_at = $1 ORDER BY table_name`, [at])).rows;
+    chk("S12b 런타임 역할이 백업을 쓰고(행 그대로) DDL 역할이 지운다 — 둘 다 사라짐 · 남긴 것 없음",
+      out.cleared.length === 2 && out.kept.length === 0 && out.taken_at === at.toISOString() && gone === 0
+        && snaps.map((x) => `${x.table_name}:${x.row_count}:${x.line}`).join() === "archive:crm__logs__20260928010203:1:남길 기록,archive:crm__logs__20260928010204:1:두 번째",
+      JSON.stringify({ out, gone, snaps }));
+    if (SNAP_PREEXISTED) await su.query(`DELETE FROM public.org_app_snapshot WHERE app_id = 'crm' AND taken_at = $1`, [at]);   // 먼저 있던 표면 남긴 행만 걷는다
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);

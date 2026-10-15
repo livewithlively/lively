@@ -4946,6 +4946,26 @@
   "input_hash": "64c3b3c10e0c4859"
  },
  {
+  "name": "app_archives",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-archives"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_archive_clear",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-archives/clear"
+  ],
+  "input_hash": "f4ff2ba3f33fd5ef"
+ },
+ {
   "name": "org_app_tool_call",
   "scope": null,
   "mcp": false,

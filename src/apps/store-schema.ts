@@ -9,13 +9,14 @@ import pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
 import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
-import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
-  APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, PG_IDENT_MAX, type StoreColumn, type StoreIndex } from "./store-ddl.js";
+import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, columnArchiveName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
+  APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, type StoreColumn, type StoreIndex } from "./store-ddl.js";
 import { ensureAppSqlParser, checkExpressionSync } from "./app-sql.js";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
+import { archiveComment, type ArchiveReason, type ArchiveRecord } from "./archive-meta.js";
 
 type Q = pg.Pool | pg.PoolClient | pg.Client;
 // 늘 큰따옴표로 인용하므로 숫자로 시작해도 안전하다 — 숫자로 시작하는 앱 id(`3d-view` → `3d_view__x`)가 여기서 막히지 않게(#4224).
@@ -151,7 +152,8 @@ const UNIQUE_SAFE_DEFAULTS: ReadonlySet<string> = new Set(["gen_random_uuid()"])
  *  외래키는 다른 표가 다 생긴 뒤 ensureAppTables 가 따로 맞춘다(syncForeignKeys).
  *  schema 기본값 `app` = 종전 동작(기본 앱·단일 테넌트). 워크스페이스가 설치한 앱은 호출부가 appSchemaFor 로 고른다. */
 export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, schema: string = SHARED_APP_SCHEMA, report?: AppTableReport,
-  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string>; lockMs?: number; statementMs?: number; surfaceTimeouts?: boolean } = {}): Promise<string> {
+  opts: { tenantScopedIndexes?: boolean; protect?: ReadonlySet<string>; shared?: boolean; pending?: Set<string>; lockMs?: number; statementMs?: number; surfaceTimeouts?: boolean;
+    archiveReason?: ArchiveReason } = {}): Promise<string> {
   const physical = physicalTableName(appId, spec.table);
   const cols = columnDefs(spec.columns);
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
@@ -186,7 +188,7 @@ export async function createAppTable(db: Q, appId: string, spec: AppTableSpec, s
     if (!existed) local.created.push(spec.table);
     else {
       if (!opts.tenantScopedIndexes) await narrowPrimaryKey(c, schema, physical, rel, spec, local, !!opts.surfaceTimeouts);
-      await syncColumns(c, schema, physical, rel, spec, local, guard, undefined, !!opts.surfaceTimeouts);
+      await syncColumns(c, schema, physical, rel, spec, local, guard, new Date(), !!opts.surfaceTimeouts, { appId, reason: opts.archiveReason ?? "install" });
     }
     await syncColumnRules(c, schema, physical, rel, spec, checks, local, guard);
     //  #4724 이미 켜져 있으면 다시 걸지 않는다 — ALTER TABLE 은 표를 통째로 잠근다(공개 때 표 전부를 한 트랜잭션으로 맞추면
@@ -377,13 +379,11 @@ async function defaultSql(c: Q, col: StoreColumn): Promise<string | null> {
   return sql;
 }
 
-/** 지운 칸 값을 보관하는 표 이름 — `<물리명>__<칸>__<시각>`, 63자를 넘으면 앞을 줄이고 해시를 붙인다. */
-function columnArchiveName(physical: string, column: string, at: Date): string {
-  const base = `${physical}__${column}`;
-  const full = archivedTableName(base, at);
-  if (full.length <= PG_IDENT_MAX && base.length + 16 <= PG_IDENT_MAX) return full;
-  const h = createHash("sha256").update(base).digest("hex").slice(0, 8);
-  return archivedTableName(`${physical.slice(0, 24)}__${h}`, at);
+
+/** #4733 보관 표에 주인을 적는다(표 설명) — 앱 지우기 · 관리자 비우기가 이름이 아니라 이 기록으로 가린다(archive-meta.ts).
+ *  COMMENT 는 자리표시자를 못 받아 글자를 직접 넣는다(escapeLiteral — 따옴표 · 역슬래시를 겹친다). */
+async function commentArchive(c: Q, archive: string, name: string, r: ArchiveRecord): Promise<void> {
+  await c.query(`COMMENT ON TABLE ${qi(archive)}.${qi(name)} IS ${pg.escapeLiteral(archiveComment(r))}`);
 }
 
 /**
@@ -396,8 +396,8 @@ function columnArchiveName(physical: string, column: string, at: Date): string {
  *   · 표에만 있고 선언에도 지울 목록에도 없는 칸 → 그대로 둔다(데이터 보존) — 대신 NOT NULL·기본값을 푼다(선언을 따라 쓰는
  *     INSERT 가 그 칸 때문에 깨지지 않게). 보고서 undeclared_columns 로 알린다 — 지우려면 drop_columns 에 적는다.
  */
-async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, now: Date = new Date(),
-  surfaceTimeouts = false): Promise<void> {
+async function syncColumns(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, report: AppTableReport, guard: Guard, now: Date,
+  surfaceTimeouts: boolean, owner: { appId: string; reason: ArchiveReason }): Promise<void> {
   let have = await columnsOf(c, rel);
   // 이름 바꾸기
   for (const col of spec.columns) {
@@ -421,6 +421,8 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
       const name = columnArchiveName(physical, d, now);
       await c.query(`CREATE SCHEMA IF NOT EXISTS ${qi(archive)}`);
       await c.query(`CREATE TABLE ${qi(archive)}.${qi(name)} AS SELECT tenant_id, id, ${qi(d)} AS value FROM ${rel} WHERE ${qi(d)} IS NOT NULL`);
+      //  #4733 주인 기록 — 이름은 잘리고 해시가 붙어 어느 앱 것인지 못 가릴 수 있다(앱 지우기 · 관리자 비우기가 이 기록으로 가린다).
+      await commentArchive(c, archive, name, { app_id: owner.appId, table: spec.table, column: d, rows, at: now.toISOString(), reason: owner.reason });
       archivedAs = `${archive}.${name}`;
     }
     await c.query(`ALTER TABLE ${rel} DROP COLUMN ${qi(d)}`);
@@ -856,6 +858,8 @@ export interface EnsureAppTablesOpts {
   surfaceTimeouts?: boolean;
   /** #4732 넘기면 표마다 실패를 모은다 — 공개 미리 보기가 «데이터가 새 규칙에 어긋남»(막힘)과 «잠금 · 시간 초과»(다 못 봄)를 가른다. */
   failures?: AppTableFailure[];
+  /** #4733 이번 설치가 보관 표를 만들면 그 표 설명에 적을 까닭 — 공개하며 미룬 칸 지우기를 적용하면 "publish"(기본 "install"). */
+  archiveReason?: ArchiveReason;
 }
 
 /** #4732 표 하나의 실패 — status 는 HttpError 의 상태(데이터가 어긋나면 4xx), code 는 Postgres 오류 코드(잠금 대기 초과 55P03 · 시간 초과 57014). */
@@ -921,7 +925,7 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
         if (late()) { fail(t.table, lateErr()); continue; }
         try {
           done.push(await createAppTable(db, appId, t, schema, report, { tenantScopedIndexes: opts.tenantScopedIndexes, protect: guarded.get(t.table), shared, pending: pendingOf.get(t.table),
-            lockMs: opts.lockMs, statementMs: opts.statementMs, surfaceTimeouts: opts.surfaceTimeouts }));
+            lockMs: opts.lockMs, statementMs: opts.statementMs, surfaceTimeouts: opts.surfaceTimeouts, archiveReason: opts.archiveReason }));
           ok.add(t.table);
         } catch (err) { fail(t.table, err); }
       }
@@ -1105,9 +1109,11 @@ export async function planDroppedTables(appId: string, tables: string[], schema:
  *  · 물리 테이블이 없으면 할 일 없음(설치 때 생성이 실패했던 앱 등).
  *  · 모든 행을 볼 수 있고 0행 → DROP.
  *  · 행이 있거나 다 볼 수 있는지 모르면 → `<스키마>_archive` 로 옮긴다(이름에 시각을 붙여 겹치지 않게). 런타임 role 권한은 걷는다 —
- *    보관된 테이블은 앱이 더는 못 읽고 쓰지만 관리자(DB)는 되살릴 수 있다.
+ *    보관된 테이블은 앱이 더는 못 읽고 쓰지만 관리자(DB)는 되살릴 수 있다. #4733 표 설명에 주인(앱 · 표 · 행 수 · 시각 · 까닭)을 적는다 —
+ *    관리자 목록 · 비우기(app_archives · app_archive_clear)와 앱 제거가 이 기록으로 그 앱의 보관 표를 가린다.
  */
-export async function cleanupDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA, now: Date = new Date()): Promise<DroppedTablesReport> {
+export async function cleanupDroppedTables(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA, now: Date = new Date(),
+  reason: ArchiveReason = "install"): Promise<DroppedTablesReport> {
   const out: DroppedTablesReport = { dropped: [], archived: [], failed: [] };
   if (!tables.length) return out;
   const archive = archiveSchemaName(schema);
@@ -1136,6 +1142,7 @@ export async function cleanupDroppedTables(appId: string, tables: string[], sche
           await c.query(`ALTER TABLE ${rel} RENAME TO ${qi(target)}`);
           await renameCompanions(c, schema, target, physical, now);
           await c.query(`ALTER TABLE ${qi(schema)}.${qi(target)} SET SCHEMA ${qi(archive)}`);
+          await commentArchive(c, archive, target, { app_id: appId, table, column: null, rows, at: now.toISOString(), reason });   // #4733 주인 기록
           if (appRole) await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(appRole)}`);
           if (hasSqlRole) {
             await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(sqlRole)}`);
@@ -1166,22 +1173,32 @@ export function appTableFuse(env: NodeJS.ProcessEnv = process.env): number {
 
 export interface FuseCheck { limit: number; current: number; archived: number; adding: number; ok: boolean }
 
+/** 워크스페이스 스키마 · 보관 스키마의 표 수(퓨즈의 셈 — #4733 관리자 화면 · 비우기 응답도 이것을 보여 준다). */
+export async function appTableCounts(schema: string = SHARED_APP_SCHEMA, limit: number = appTableFuse()): Promise<{ limit: number; current: number; archived: number }> {
+  const count = async (s: string): Promise<number> => Number((await itemsPool.query(
+    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1 AND c.relkind IN ('r','p')`, [s])).rows[0]?.n ?? 0);
+  return { limit, current: await count(schema), archived: await count(archiveSchemaName(schema)) };
+}
+
 /**
  * 이 설치 뒤 워크스페이스의 앱 테이블 수(상한 추정)가 퓨즈를 넘나. 셈 = 지금 워크스페이스 스키마 + 보관 스키마의 테이블 +
  *  이번에 **새로** 생길 테이블. 빠진 테이블 정리로 줄어들 몫은 빼지 않는다(보관은 그대로 세어지고, 넉넉한 쪽으로 판정한다).
  *  pg_class 는 누구나 읽는 카탈로그라 런타임 풀로 센다(DDL 자격 불요).
  */
 export async function checkAppTableFuse(appId: string, tables: string[], schema: string = SHARED_APP_SCHEMA, limit: number = appTableFuse()): Promise<FuseCheck> {
-  const archive = archiveSchemaName(schema);
-  const count = async (s: string): Promise<number> => Number((await itemsPool.query(
-    `SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = $1 AND c.relkind IN ('r','p')`, [s])).rows[0]?.n ?? 0);
-  const current = await count(schema);
-  const archived = await count(archive);
+  const { current, archived } = await appTableCounts(schema, limit);
   let adding = 0;
   for (const t of tables) {
     const r = await itemsPool.query("SELECT to_regclass($1) AS r", [`${qi(schema)}.${qi(physicalTableName(appId, t))}`]);
     if (r.rows[0]?.r == null) adding++;
   }
   return { limit, current, archived, adding, ok: current + archived + adding <= limit };
+}
+
+/** #4733 표 개수 한도 안내의 꼬리 — 보관 표도 한도에 세지만 앱을 고쳐서는 줄지 않는다. 관리자가 비울 수 있고, 앱을 지우면 그 앱 것은 함께 지워진다. */
+export function archivedFuseHint(archived: number): string {
+  return archived > 0
+    ? ` 보관 표 ${archived}개는 관리자가 비울 수 있습니다(관리탭 ▸ 앱 보관 표 · app_archive_clear) — 앱을 지우면 그 앱의 보관 표도 함께 지워집니다.`
+    : "";
 }

@@ -6,6 +6,8 @@
 //   · 하루 한 번(daily) — 매니지드는 CP 하우스키핑 틱, 자가호스팅은 부팅 정비 타이머가 부른다
 //   · 앱 제거 직전(before-remove) — 제거는 테이블을 지운다. 7일 안에 같은 앱을 다시 설치하면 되돌릴 수 있다
 //   · 되돌리기 직전(before-restore) — 되돌리기도 되돌릴 수 있게
+//   · 보관 표 비우기 직전(before-clear, #4733) — 보관 표는 «archive:<이름>» 으로 담긴다(앱 제거 때도 같은 묶음에). 되돌리기는 이것을
+//     되살리지 않는다(상민 2026-10-15 — 보관 표는 원래 앱이 쓰지 않는 표다. 백업에만 남긴다 · app-archive.ts)
 //  7일이 지나면 지운다. 기본 앱(여러 워크스페이스가 테이블을 나눠 쓰는 앱)은 뜨지 않는다 — 워크스페이스가 만든 앱만.
 //
 // ── 어떻게 ────────────────────────────────────────────────────────────────────────────────
@@ -21,8 +23,9 @@ import { isBuiltinSource, qualifiedAppTable, physicalTableName } from "./store-d
 import { appSchemaFor, withOwnerConn, inTx } from "./store-schema.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import { liveTableNames } from "./app-view.js";
+import { ARCHIVE_SNAPSHOT_PREFIX, isArchiveSnapshotTable } from "./archive-meta.js";
 
-export type SnapshotReason = "daily" | "before-remove" | "before-restore";
+export type SnapshotReason = "daily" | "before-remove" | "before-restore" | "before-clear";
 const CHUNK = 1000;
 
 const num = (v: unknown, dflt: number): number => { const n = Number(String(v ?? "").trim()); return Number.isFinite(n) && n > 0 ? n : dflt; };
@@ -139,7 +142,8 @@ export interface SnapshotListing {
   app_id: string;
   taken_at: string;
   reason: string;
-  tables: Array<{ table: string; rows: number }>;
+  /** archive = 보관 표(#4733 — «archive:<이름>», 되살리지 않는다). */
+  tables: Array<{ table: string; rows: number; archive?: true }>;
 }
 
 export async function listAppSnapshots(appId?: string | null): Promise<SnapshotListing[]> {
@@ -153,7 +157,8 @@ export async function listAppSnapshots(appId?: string | null): Promise<SnapshotL
     const at = row.taken_at instanceof Date ? row.taken_at.toISOString() : String(row.taken_at);
     const k = `${row.app_id}\0${at}`;
     const cur: SnapshotListing = by.get(k) ?? { app_id: String(row.app_id), taken_at: at, reason: String(row.reason), tables: [] };
-    cur.tables.push({ table: String(row.table_name), rows: Number(row.rows) });
+    const table = String(row.table_name);
+    cur.tables.push({ table, rows: Number(row.rows), ...(isArchiveSnapshotTable(table) ? { archive: true as const } : {}) });
     by.set(k, cur);
   }
   return [...by.values()];
@@ -198,15 +203,24 @@ export function parentsFirst(tables: string[], fks: Array<{ child: string; paren
  *  격리 리뷰 재현). 되돌릴 표끼리는 지우기는 가리키는 쪽(자식)부터, 넣기는 가리켜지는 쪽(부모)부터. 넣은 행이 가리킬 행이
  *  지금 없으면(23503) 전부 취소하고 409.
  */
-export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTable?: string | null, opts: { force?: boolean } = {}): Promise<{ restored: Array<{ table: string; rows: number }>; safety: SnapshotOutcome }> {
+export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTable?: string | null, opts: { force?: boolean } = {}): Promise<{ restored: Array<{ table: string; rows: number }>; safety: SnapshotOutcome; archives_skipped: string[] }> {
   const app = await getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId} — 제거한 앱이면 같은 id 로 다시 설치한 뒤 되돌리세요`);
   if (isBuiltinSource(app.source)) throw new HttpError(400, "기본 앱은 되돌리기 대상이 아닙니다");
   const at = new Date(takenAt);
   if (Number.isNaN(at.getTime())) throw new HttpError(400, `taken_at 형식이 아닙니다: ${takenAt}`);
-  const listed = (await itemsPool.query(
+  const inBundle = (await itemsPool.query(
     `SELECT DISTINCT table_name FROM org_app_snapshot WHERE app_id=$1 AND taken_at=$2`, [appId, at])).rows.map((r) => String(r.table_name));
-  if (!listed.length) throw new HttpError(404, `그 시각(${takenAt})에 떠 둔 '${appId}' 데이터가 없습니다 — app_data_snapshots 로 목록을 보세요`);
+  if (!inBundle.length) throw new HttpError(404, `그 시각(${takenAt})에 떠 둔 '${appId}' 데이터가 없습니다 — app_data_snapshots 로 목록을 보세요`);
+  //  #4733 보관 표(«archive:<이름>» — 앱 제거 · 보관 표 비우기 때 함께 담긴다)는 되살리지 않는다 — 묶음을 되살릴 땐 건너뛰고, 그것만 고르면 거절.
+  const listed = inBundle.filter((t) => !isArchiveSnapshotTable(t));
+  const archivesSkipped = onlyTable ? [] : inBundle.filter(isArchiveSnapshotTable).map((t) => t.slice(ARCHIVE_SNAPSHOT_PREFIX.length));
+  if (onlyTable && isArchiveSnapshotTable(onlyTable)) {
+    throw new HttpError(400, `보관 표(${onlyTable.slice(ARCHIVE_SNAPSHOT_PREFIX.length)})는 되살리지 않습니다 — 백업에만 남깁니다. 앱 표를 고르세요`);
+  }
+  if (!onlyTable && !listed.length) {
+    throw new HttpError(409, `그 시각(${takenAt})의 묶음엔 보관 표만 담겨 있어 되살릴 앱 표가 없습니다 — 보관 표는 되살리지 않습니다. 아무것도 바꾸지 않았습니다`);
+  }
   const targets = onlyTable ? [onlyTable] : listed;
   for (const t of targets) if (!listed.includes(t)) throw new HttpError(404, `그 묶음에 '${t}' 테이블이 없습니다`);
   const declared = new Set(await liveTableNames(app));
@@ -267,6 +281,6 @@ export async function restoreAppSnapshot(appId: string, takenAt: string, onlyTab
       await c.query(`SELECT setval(pg_get_serial_sequence($1, 'id'), GREATEST((SELECT COALESCE(max(id), 0) FROM ${rel}), 1), (SELECT count(*) > 0 FROM ${rel}))`, [rel]);
       restored.push({ table, rows: count });
     }
-    return { restored, safety };
+    return { restored, safety, archives_skipped: archivesSkipped };
   }));
 }

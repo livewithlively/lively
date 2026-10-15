@@ -325,7 +325,7 @@ export function takeAppCall(appId: string, tenantId: string = appSqlTenantId(), 
 //  워크스페이스 스키마 테이블(인덱스·TOAST 포함)의 합. 10초 기억 — 쓰기마다 카탈로그를 훑지 않게.
 //  ⚠ **소프트 상한**이다: 문장 전에만 재고 기억이 10초라, 그 사이 큰 INSERT … SELECT 몇 개가 상한을 넘겨 쓸 수 있다
 //   (문장 5초 · 동시 2 가 넘는 폭을 묶는다). 넘은 뒤엔 다음 측정부터 쓰기가 막힌다.
-//  세지 않는 것: 보관 스키마(<스키마>_archive — 사람이 비울 도구가 아직 없어 거기서 막히면 풀 길이 없다) ·
+//  세지 않는 것: 보관 스키마(<스키마>_archive — 앱이 쓰지 않는 자리라 앱을 쓰는 사람이 비울 수 없다. 관리자가 비운다 — #4733 app_archive_clear) ·
 //   떠 두기(org_app_snapshot — 본체 테이블에 있고 7일이면 지워진다).
 const QUOTA_TTL_MS = 10_000;
 const quotaCache = new Map<string, { bytes: number; at: number }>();
