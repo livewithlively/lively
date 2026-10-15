@@ -44,7 +44,6 @@ import { toolLabel } from './session-tool-labels.js';
 // #1850 기록 완전 삭제 — 확인창·실행·토스트의 단일 정의(#1582 규약).
 import { confirmSessionTrash, eulReul, leaveInvitedSession, sessionNames, sessionTrashOp } from './session-actions.js';
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, isHiddenBrief, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
-import { isTrySession } from './lib/builder-flow.js';   // #4632 앱빌더 시험 세션 — 대화가 본자리(첫 지시를 숨긴다)
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
 import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
@@ -646,9 +645,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   대화창을 만들기 **전**에 그 이름을 봐야 해서 올렸다(#4707). 규칙·사연은 그 자리 주석 그대로다.
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
   const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
-  //  #4632 앱빌더 시험 세션(«"이름" 앱 시험») — 리브 킥오프처럼 대화가 본자리다. 터미널로 열면 앱빌더가 넣은 첫 지시가 스크롤에 그대로 남는다
-  //   (원준 2026-10-16 «이거 안보여줄 수는 없나?»). 대화 겹은 그 첫 지시를 그리지 않는다(session-trail isHiddenBrief) · 모양은 tui 그대로.
-  const trySess = (): boolean => isTrySession(String(target.label || ''));
   //  ★ #4135 — 종전엔 여기에 `!isCodex() &&` 가 붙어 «코덱스는 무조건 터미널» 이었다. 그 한 줄은 **화면만**
   //   바꾼 것이라, pane 이 셸인 app-server 세션에서 사람이 터미널에 친 말이 zsh 로 갔다(원준님 실측 2026-09-25 —
   //   «터미널 뷰로 보고 명령을 쳐도 코덱스로 안 간다»). 이제 서버가 codex 를 기본으로 tmux(TUI)로 띄우므로
@@ -667,7 +663,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //    태어난 app-server 세션**이고, 그 세션에서도 사람은 터미널을 먼저 보길 원한다.
   //   ⚠ 리브 세션(livKickoff·livChat)과 화면이 명시로 요청한 자리(opts.chatHome)는 그대로 대화가 본자리다 —
   //    그건 codex 여부와 무관한 «이 화면은 대화로 쓰라» 는 요청이다.
-  const chatHome = (): boolean => livKickoff() || livChat() || trySess() || !!opts.chatHome
+  const chatHome = (): boolean => livKickoff() || livChat() || !!opts.chatHome
     || (!isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat'));
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).

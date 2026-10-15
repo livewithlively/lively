@@ -3069,7 +3069,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-hub .v2-studio-tray-in { height: 42px; padding: 0 12px; border-radius: 10px; font-size: 14.5px; }
 .v2-studio-hub-wait { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
 .v2-studio-hub-fine { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
-.v2-review-bar { position: fixed; z-index: 85; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: calc(100vw - 24px); padding: 8px 10px 8px 8px; border-radius: 14px; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); font-size: 13px; }
+.v2-review-bar { position: fixed; z-index: 85; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 24px); padding: 8px 10px 8px 8px; border-radius: 14px; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); font-size: 13px; }
+/* width: max-content — left:50% 로 놓인 고정 상자는 저절로는 남은 폭(창의 절반)까지만 커져 단추가 둘째 줄로 밀렸다. 한 줄이 기본 · 창보다 넓으면 그때 접힌다. */
 .v2-review-bar--top { bottom: auto; top: 56px; }
 .v2-review-back { font-weight: 800; white-space: nowrap; }
 .v2-review-name { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
@@ -3095,11 +3096,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-review-ov { position: absolute; inset: 0; z-index: 3; }
 .v2-review-ov[hidden] { display: none; }
 @media (max-width: 900px) {
-  .v2-review-bar { left: 8px; right: 8px; transform: none; max-width: none; }
+  .v2-review-bar { left: 8px; right: 8px; transform: none; max-width: none; width: auto; }
   .v2-studio-hub-go button { min-width: 0; width: 100%; }
 }
 /* 막대가 시험 세션 맨 위(문패 줄)에 얹힌 꼴 — 떠 있지 않아 세션의 입력칸 · 앱을 가리지 않는다(원준 2026-10-15). 의견 칸은 막대 아래로(.v2-review-tray--fixed). */
-.v2-review-bar.v2-review-bar--dock { position: relative; z-index: auto; left: auto; right: auto; bottom: auto; top: auto; transform: none; max-width: none; border-radius: 0; padding: 8px 16px; box-shadow: none; border-bottom: 1px solid color-mix(in srgb, var(--purple, #7B61E0) 28%, var(--line)); background: color-mix(in srgb, var(--purple, #7B61E0) 7%, var(--bg)); }
+.v2-review-bar.v2-review-bar--dock { width: auto; position: relative; z-index: auto; left: auto; right: auto; bottom: auto; top: auto; transform: none; max-width: none; border-radius: 0; padding: 8px 16px; box-shadow: none; border-bottom: 1px solid color-mix(in srgb, var(--purple, #7B61E0) 28%, var(--line)); background: color-mix(in srgb, var(--purple, #7B61E0) 7%, var(--bg)); }
 .v2-review-tray.v2-review-tray--fixed { position: fixed; z-index: 86; right: auto; bottom: auto; }
 .v2-review-flip[hidden] { display: none; }
 

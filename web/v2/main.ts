@@ -1195,7 +1195,9 @@ function applyTabChrome(tab: ShellTab): void {
   //   이 앱에 있는 동안만 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 전환은 레일 몫).
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
   //    한 칸씩 밀려 본문이 0px 열에 앉는다. 판정은 화면 키 하나(app:context)로, 여기 한 자리에서만 한다.
-  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)));
+  //   #4632 앱 화면(#/i/<앱>)도 — 앱이 화면 가득, 왼쪽 세션 목록은 접는다(원준 2026-10-16 질문 #732 «실제 화면도 사이드바 없이 — 앱 화면으로 열면
+  //    왼쪽 세션 목록을 접고 앱이 화면 가득»). 앱은 셸 사이드바에서 아무것도 안 읽는다. 레일은 남아 다른 구역으로 갈 수 있다.
+  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)) || parseRoute(tab.route).segs[0] === 'i');
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면

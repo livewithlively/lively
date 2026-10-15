@@ -178,9 +178,9 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
 }
 /** ③ 「세션 위젯으로 보기」 시험 세션의 첫 지시 — 앱을 **써 보는** 세션이지 고치는 세션이 아니다(원준 2026-10-15 «수정을 위한 AI 세션이 아니어야»). */
 export function tryBrief(title: string, appId: string): string {
-  return `이 세션은 「${title}」 앱(app_id ${appId})을 시험해 보는 세션이야. 이 세션 오른쪽에 그 앱이 붙어 있고, 사람이 앱을 써 보면서 너에게 말을 걸 거야 — `
-    + '앱이 세션에 붙었을 때처럼 앱의 지침과 표로 도와줘. 앱 코드는 고치지 마(app_pull · app_save 금지 — 고칠 곳은 사람이 앱빌더에서 모아 보낸다). '
-    + '지금은 「준비됐어요 — 앱을 써 보면서 말을 걸어 보세요」 한 줄만.';
+  //  시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로 보이게») — 터미널엔 이 글이 첫 줄로 남으니 한 줄로 짧게.
+  //   머리(이 세션은 「…」 앱(app_id …)을 시험해 보는 세션이야)는 lib/builder-flow TRY_TITLE_RE 가 시험 세션을 알아보는 표식이라 그대로 둔다.
+  return `이 세션은 「${title}」 앱(app_id ${appId})을 시험해 보는 세션이야. 앱 코드는 고치지 말고(app_pull · app_save 금지), 사람이 앱을 쓰며 묻는 것에 앱의 지침과 표로 답해 줘. 지금은 「준비됐어요」 한 줄만.`;
 }
 /** ③ 「와이어프레임 보기」 — 와이어프레임이 없는 앱(옛 앱)에 그려 달라고 한다. 앱 화면은 그대로 두고 그 파일만 더해 저장한다. */
 export function wireframeBrief(appId: string): string {

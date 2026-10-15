@@ -140,12 +140,11 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
     "㉚ 코덱스 여부를 하네스 행으로 판정한다");
   ok(/!isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
     "㉚-b ★ 코덱스는 app-server·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
-  ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| livChat\(\) \|\| trySess\(\) \|\| !!opts\.chatHome/.test(chat),
-    "㉚-c 리브 세션·앱빌더 시험 세션·명시 요청은 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
-  //  ㉚-d #4632 앱빌더 시험 세션(«"이름" 앱 시험»)은 대화가 본자리 — 터미널로 열면 앱빌더가 넣은 첫 지시가 스크롤에 남는다(원준 2026-10-16
-  //   «이거 안보여줄 수는 없나?»). 대화 겹은 그 첫 지시를 사람 말로 그리지 않는다: 라이브(applyLine) · 되그리기(older) · 낙관 첫 말 · 되감기 넷 다.
-  ok(/const trySess = \(\): boolean => isTrySession\(String\(target\.label \|\| ''\)\);/.test(chat),
-    "㉚-d 시험 세션 판정이 이름(«\"이름\" 앱 시험» — lib/builder-flow isTrySession)으로 선다");
+  ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| livChat\(\) \|\| !!opts\.chatHome/.test(chat),
+    "㉚-c 리브 세션·명시 요청은 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
+  //  ㉚-d #4632 앱빌더 시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로») — 대화 겹으로 바꿔 보면 앱빌더가 넣은 첫 지시는
+  //   사람 말로 그리지 않는다(«이거 안보여줄 수는 없나?»): 라이브(applyLine) · 되그리기(older) · 낙관 첫 말 · 되감기 넷 다.
+  ok(!/trySess\(\)/.test(chat), "㉚-d 시험 세션을 대화 보기로 붙잡지 않는다(터미널이 본자리)");
   ok(/if \(isHiddenBrief\(text\)\) \{ cur = newRec\(null, o\.timestamp\); running = true; return; \}/.test(chat)
     && /if \(isHiddenBrief\(ut\)\) \{ b = \{ text: null,/.test(chat)
     && /opts\.firstPrompt && !isHiddenBrief\(String\(opts\.firstPrompt\)\)/.test(chat),
