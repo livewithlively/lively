@@ -11,6 +11,7 @@
 import crypto from "node:crypto";
 import type { AppBundle } from "./app-bundle.js";
 import { BUILDER_VERSION, ZIP_EXCLUDE, RUN_SCRIPT } from "./app-server-builder.js";
+import { currentTenant } from "../org/tenant-context.js";
 
 /** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
 export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
@@ -56,9 +57,24 @@ const PREFIX_RE = /^lvly-app-([a-z0-9]{1,8}-)?$/;
 const ROLE_RE = /^arn:aws:iam::\d{12}:role\/[\w+=,.@-]{1,64}$/;
 const LAYER_RE = /^arn:aws:lambda:[a-z0-9-]+:\d{12}:layer:[A-Za-z0-9_-]+:\d+$/;
 
-export function appServerEnv(env: NodeJS.ProcessEnv = process.env): AppServerEnv | null {
+/**
+ * 워크스페이스 단위 스위치(앱 주소 #4480 과 같은 켜는 순서) — env `LIVELY_APP_SERVER_TENANTS`(쉼표로 가른 슬러그)에 든 워크스페이스만 앱 서버를 켠다.
+ *  비거나 `*` 면 전부. 매니지드는 게이트웨이 하나가 모든 워크스페이스를 받아서, 실행 역할 한 줄로는 «우리 워크스페이스에서 먼저 실측 → 전체» 로
+ *  나눠 켤 수 없다 — 그 사이를 이 목록이 맡는다(CP cp.env `LVLY_APP_SERVER_TENANTS` → lvly-gw.sh). 목록이 있는데 워크스페이스를 모르면 끈다.
+ */
+export function appServerEnabledFor(slug: string | null | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = String(env.LIVELY_APP_SERVER_TENANTS ?? "").trim().toLowerCase();
+  if (!raw || raw === "*") return true;
+  const s = String(slug ?? "").trim().toLowerCase();
+  if (!s) return false;
+  return raw.split(",").map((x) => x.trim()).filter(Boolean).includes(s);
+}
+
+/** 이 요청(워크스페이스)의 앱 서버 설정 — 실행 역할이 없거나 · 모양이 틀렸거나 · 워크스페이스 스위치 밖이면 null(= 앱 서버 꺼짐). */
+export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string | null | undefined = currentTenant()?.slug): AppServerEnv | null {
   const execRoleArn = String(env.LIVELY_APP_SERVER_EXEC_ROLE ?? "").trim();
   if (!execRoleArn || !ROLE_RE.test(execRoleArn)) return null;
+  if (!appServerEnabledFor(slug, env)) return null;
   const region = String(env.LIVELY_APP_SERVER_REGION ?? env.LIVELY_APP_BUNDLE_REGION ?? env.AWS_REGION ?? "").trim() || "ap-northeast-2";
   const layer = String(env.LIVELY_APP_SERVER_LAYER ?? "").trim();
   const layerArn = layer && LAYER_RE.test(layer) ? layer : `arn:aws:lambda:${region}:753240598075:layer:LambdaAdapterLayerArm64:${DEFAULT_ADAPTER_LAYER_VERSION}`;

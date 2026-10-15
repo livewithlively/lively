@@ -6,6 +6,8 @@ import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, 
 import { APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, envAppServerPolicy, normalizeAppServerPolicy, retentionDaysFor } from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
 import { publicError } from "./app-server-deploy.js";
+import { appServerEnabledFor } from "./app-server-config.js";
+import { withTenant } from "../org/tenant-context.js";
 import { AwsError } from "../net/aws/aws-json.js";
 
 let pass = 0;
@@ -145,6 +147,22 @@ t("B13 구성원에게 보일 오류 — 권한 · 자격 오류는 코드와 �
   assert.ok(b.includes("Unzipped size must be smaller") && b.includes("req-2"), b);
   assert.ok(!b.includes("425515538094") && !b.includes("arn:aws"), b);
   assert.equal(publicError(new Error("우리 오류")), "우리 오류");
+});
+
+t("B14 워크스페이스 스위치 — 목록 없음 · '*' 은 전부 · 목록이면 든 워크스페이스만(대소문자 · 빈칸 무시) · 목록이 있는데 워크스페이스를 모르면 끔", () => {
+  assert.equal(appServerEnabledFor("any", {}), true);
+  assert.equal(appServerEnabledFor("any", { LIVELY_APP_SERVER_TENANTS: " * " }), true);
+  const L = { LIVELY_APP_SERVER_TENANTS: "lively-46e3, Other-1" };
+  assert.equal(appServerEnabledFor("lively-46e3", L), true);
+  assert.equal(appServerEnabledFor("OTHER-1", L), true);
+  assert.equal(appServerEnabledFor("lively-46e", L), false, "앞부분만 같은 슬러그는 아니다");
+  assert.equal(appServerEnabledFor(null, L), false);
+  const ROLE2 = "arn:aws:iam::425515538094:role/lvly-app-exec";
+  const env = { LIVELY_APP_SERVER_EXEC_ROLE: ROLE2, ...L };
+  assert.notEqual(withTenant({ id: "t1", slug: "lively-46e3" }, () => appServerEnv(env)), null, "든 워크스페이스의 요청이면 켜짐");
+  assert.equal(withTenant({ id: "t2", slug: "someone-else" }, () => appServerEnv(env)), null, "목록 밖 워크스페이스의 요청이면 꺼짐");
+  assert.equal(appServerEnv(env), null, "워크스페이스를 모르면 꺼짐");
+  assert.notEqual(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE2 }), null, "목록이 없으면 워크스페이스를 몰라도 켜짐(자가호스팅 · 시험)");
 });
 
 console.log(`\n${pass} passed`);
