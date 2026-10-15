@@ -669,6 +669,12 @@ export async function getActiveGrant(appId: string, memberId: string): Promise<A
   return r.rows[0] ? rowToGrant(r.rows[0]) : null;
 }
 
+/** 한 멤버의 활성 grant 전부 — 앱 폴더 목록(#4673 홈 탐색기 root=apps)이 «동의한 앱» 을 한 번에 가린다. 부분 인덱스 org_app_grant_member_idx 가 받친다. */
+export async function listActiveGrants(memberId: string): Promise<AppGrantRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]);
+  return r.rows.map(rowToGrant);
+}
+
 // ── 앱 활동(mcp_call_log.app 집계, design D3-5 관측 전용) ──────────────────────
 export interface AppActivityRow { app: string; tool: string; calls: number; ok: number; errors: number; last_called_at: string }
 

@@ -50,10 +50,12 @@ lvly_session_env() {
   # ② PATH — **멤버 소유 bin 이 시스템보다 앞**(#1023). 이유: claude 가 root 전역으로 깔린 박스는
   #   비-root 멤버가 못 고쳐 자동 업뎃이 no_permissions 로 스테일된다. 멤버 홈의 self-update claude 를
   #   우선 해소하고, 없으면 파일이 없어 시스템 claude 로 자연 폴백(무회귀).
+  #   ~/.lively/bin = lively CLI 런처(#4673 — 세션 안 `lively file address|path|url`). 설치기가 rc 에 PATH 블록을 심지만
+  #   그 rc 가 세션 셸과 어긋날 수 있다(매니지드 실측 2026-10-15: 블록은 ~/.zshrc 에만 · 세션 셸은 bash) — 계약에 직접 둔다.
   if [ "$_inherit_path" = 1 ]; then
-    export PATH="$_home/.local/bin:$_home/.npm-global/bin:${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    export PATH="$_home/.local/bin:$_home/.npm-global/bin:$_home/.lively/bin:${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   else
-    export PATH="$_home/.local/bin:$_home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    export PATH="$_home/.local/bin:$_home/.npm-global/bin:$_home/.lively/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   fi
 
   # ③ 로케일 — 없으면 tmux 한글 렌더가 깨진다(게이트웨이 불변식과 동일).

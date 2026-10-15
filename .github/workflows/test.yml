@@ -341,6 +341,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/lively-db-sdk.pg-test.mjs
+      # ⑤-i4 파일 서명 주소(#4673) — 진짜 게이트웨이(구성원 토큰 · 앱 서버 토큰 + 서명한 사람 신원 · 서명 주소 받는 곳 · 홈 탐색기).
+      #    앱 서버가 제 앱 폴더에 올리고 받기(바이트 같음) · 동의 없음 · 공유 폴더 · 남의 앱 폴더 403 · 신원 없음 401 ·
+      #    사람은 앱 폴더 받기만 · 동의를 거두면 이미 받은 주소도 막힘 · 탐색기는 동의한 앱만 · 공유 폴더 올리기만 자료가 생김.
+      - name: 파일 서명 주소(앱 폴더 · 앱 서버 자격) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/files/file-url.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.

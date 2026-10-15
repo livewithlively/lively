@@ -18,6 +18,8 @@ import { finishConsent, abandonConsent, describeMicrosoftConsentError, MICROSOFT
 import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
+import { fileUrlRouter } from "./files/signed-routes.js";   // #4673 서명 주소 받는 곳
+import { liveSignedRouteDeps } from "./files/files-live.js";
 import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
@@ -136,6 +138,11 @@ app.use(outboxRequestSweepMiddleware());
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
 // bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
 app.use("/api/webhook", domainmapWebhookRouter());
+
+// 서명 주소 받는 곳(#4673 — GET·HEAD·PUT /api/files/s/<토큰>). 역시 전역 express.json() **이전**: PUT 본문이 그대로 파일 바이트라
+//  앱이 `Content-Type: application/json` 으로 JSON 파일을 올리면 전역 파서가 먼저 본문을 먹어 빈 파일이 된다(다른 업로드 입구는
+//  octet-stream 으로만 와서 이 일이 없었다). 인증 미들웨어 밖이다 — 토큰 서명이 자격이고, 판정은 쓰는 순간 다시 탄다(files/signed-routes).
+app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
 
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.

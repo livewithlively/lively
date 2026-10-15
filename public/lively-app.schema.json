@@ -133,6 +133,10 @@
               },
               "maxItems": 8,
               "default": []
+            },
+            "app_folder": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,

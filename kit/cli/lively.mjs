@@ -2862,6 +2862,9 @@ ${bold("작업")}
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
   reclaim [<경로>]       재생성 가능한 파생물 회수(node_modules·dist…) — ${dim("기본 dry-run  ·  --apply 로 실제 삭제  ·  --remove-worktree")}
+  file address <경로>     세션 안 경로 → 파일 주소 + 링크 ${dim("(shared/project/<번호>/… · apps/<앱>/… — 매니지드는 /work/ 를 뗀 것)")}
+  file path <주소>        파일 주소 → 이 세션 안 경로 ${dim("(이 세션에 안 붙은 곳이면 까닭을 알려 줍니다)")}
+  file url <주소>         받기 서명 주소(15분) ${dim("--put 올리기 주소  ·  --ttl <초>  ·  --json")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -2911,6 +2914,56 @@ async function cmdBackfill(args) {
 async function cmdShare(args) {
   const { sessionCommands } = await import(new URL("./cmd-session.mjs", import.meta.url));
   return sessionCommands(cliCtx()).cmdShare(args);
+}
+
+// lively file address <경로> · file path <주소> · file url <주소> [--put] [--ttl 초] [--json] — 파일 주소(#4673).
+//  판정 · 변환의 정본은 게이트웨이(capabilities/files.ts — MCP 도구 file_address · file_path · file_url 와 같은 handler)이고 여기는 겉이다.
+//  이 명령을 부른 세션(LIVELY_SESSION_ID)을 함께 싣는다 — 「이 세션 안 경로」 를 서버가 그 세션의 작업 폴더 · 붙은 앱으로 푼다.
+//  사람용 안내는 stderr, 결과 한 줄(주소 · 경로 · url)은 stdout — 스크립트가 `$(lively file path …)` 로 받게.
+async function cmdFile(args) {
+  const sub = args[0] || "";
+  const rest = args.slice(1);
+  const json = rest.includes("--json");
+  const ti = rest.indexOf("--ttl");
+  const ttl = ti >= 0 ? Number(rest[ti + 1]) : undefined;
+  const target = rest.filter((a, i) => !a.startsWith("--") && !(ti >= 0 && i === ti + 1)).join(" ").trim();   // 빈칸 든 경로를 따옴표 없이 줘도
+  if (!["address", "path", "url"].includes(sub) || !target) {
+    say("사용법: lively file address <경로> · lively file path <주소> · lively file url <주소> [--put] [--ttl 초] [--json]");
+    process.exit(2);
+  }
+  const gw = gateway(), tok = token();
+  if (!gw) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
+  if (!tok) die("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.");
+  //  상대경로는 지금 폴더 기준 절대경로로 — 그 자리에 파일 · 폴더가 있을 때만(주소 `shared/…` 를 경로로 잘못 읽지 않게).
+  let arg = target;
+  if (sub === "address" && !isAbsolute(arg) && existsSync(resolve(process.cwd(), arg))) arg = resolve(process.cwd(), arg);
+  //  address · path 는 읽기(GET ?path= · ?address=), url 은 발급(POST 본문).
+  const isUrl = sub === "url";
+  const route = sub === "address" ? `/api/ui/files/address?path=${encodeURIComponent(arg)}`
+    : sub === "path" ? `/api/ui/files/path?address=${encodeURIComponent(arg)}` : "/api/ui/files/url";
+  const body = isUrl ? { address: arg, method: rest.includes("--put") ? "PUT" : "GET", ...(Number.isFinite(ttl) ? { expires_in: ttl } : {}) } : null;
+  const headers = { authorization: `Bearer ${tok}`, ...(isUrl ? { "content-type": "application/json" } : {}) };
+  const sess = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (sess) headers["x-lively-session"] = sess;
+  let r, j = null;
+  try { r = await fetch(gw + route, { method: isUrl ? "POST" : "GET", headers, ...(isUrl ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
+  catch (e) { die(`게이트웨이에 닿지 못했습니다 — ${e?.cause?.code || e?.message || e}`); }
+  try { j = await r.json(); } catch { /* 본문 없음 */ }
+  if (!r.ok) die((j && j.error) || `게이트웨이 오류 ${r.status}`);
+  if (json) { process.stdout.write(JSON.stringify(j) + "\n"); return; }
+  if (sub === "address") {
+    if (!j.address) { say(red(j.reason || "주소가 없습니다")); process.exit(1); }
+    process.stdout.write(j.address + "\n");
+    if (j.link) say(dim(j.link));
+    return;
+  }
+  if (sub === "path") {
+    if (!j.path) { say(red(j.reason || "이 세션엔 없는 자리입니다")); process.exit(1); }
+    process.stdout.write(j.path + "\n");
+    return;
+  }
+  process.stdout.write(j.url + "\n");
+  say(dim(`${j.method === "PUT" ? "올리기" : "받기"} · ${j.expires_at} 까지 — ${j.method === "PUT" ? "curl -fsS -T <파일> '<url>'" : "curl -fsSL -o <파일> '<url>'"}`));
 }
 
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
@@ -3015,6 +3068,8 @@ async function dispatch(cmd, o, argv) {
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
     case "backfill": return cmdBackfill(argv.slice(argv.indexOf("backfill") + 1));
     case "share": return cmdShare(argv.slice(argv.indexOf("share") + 1));
+    // file — 파일 주소(#4673): 세션 안 경로 ↔ 주소 · 서명 주소. 나머지 인자 원형 보존(빈칸 든 경로).
+    case "file": return cmdFile(argv.slice(argv.indexOf("file") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:

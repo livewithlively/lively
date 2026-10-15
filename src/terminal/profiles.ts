@@ -49,7 +49,9 @@ export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath
   const iso = osUser === undefined ? await resolveMemberOsUser(userSlug(user)) : osUser;
   let base: string;
   if (iso) {
-    base = root.perUser ? path.join(MEMBER_HOME_BASE, iso, PERSONAL_SUBDIR) : SHARED_ISOLATED_BASE;
+    //  자리마다 격리 기준이 다를 수 있다(#4673 apps — 매니지드 세션 경로 `/work/apps` 는 없고 파일 작업 헬퍼가 `<테넌트>/apps` 를 본다).
+    //   isolatedBase 를 적지 않은 자리는 종전 규칙 그대로(공유 자리 하나).
+    base = root.perUser ? path.join(MEMBER_HOME_BASE, iso, PERSONAL_SUBDIR) : (root.isolatedBase ?? SHARED_ISOLATED_BASE);
   } else {
     base = root.base;
     if (root.perUser) base = path.join(base, userSlug(user));

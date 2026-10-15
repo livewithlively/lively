@@ -9,7 +9,19 @@
 //     connect-src 에 'self' 하나만 더한다(같은 주소의 /_lively/me 를 부를 수 있게 — 바깥 연결은 여전히 매니페스트 선언만).
 //  frame-ancestors(그 워크스페이스 라이블리 주소 안에서만 iframe)는 앞단(CP 라우터)이 모든 응답에 붙인다.
 
-export interface AppCsp { connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[] }
+export interface AppCsp {
+  connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[];
+  /** #4673 — 앱 폴더를 선언한 앱의 서명 주소 자리(`<게이트웨이>/api/files/s/` — files/app-screen-csp). 매니페스트 칸이 아니라 서버가 채운다. */
+  files?: string | null;
+}
+
+// 서명 주소 자리 출처 식의 모양 — 헤더에 그대로 들어가므로 ; · 공백이 끼면 지시문이 는다. 모양이 아니면 버린다.
+const FILES_SRC_RE = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/api\/files\/s\/$/;
+/** 지시문 값 뒤에 서명 주소 자리를 붙인다('none' 이면 그 자리로 바꾼다). */
+function withFiles(list: string, files: string | null | undefined): string {
+  if (!files || !FILES_SRC_RE.test(files)) return list;
+  return list === "'none'" ? files : `${list} ${files}`;
+}
 
 const CSP_HOST_RE = /^(\*|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*)$/;
 
@@ -29,10 +41,10 @@ export function appPageCsp(csp?: AppCsp | null): string {
     "default-src 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
-    "img-src " + srcList(c.resource_domains, "data:"),
+    "img-src " + withFiles(srcList(c.resource_domains, "data:"), c.files),
     "font-src " + srcList(c.resource_domains, "data:"),
-    "media-src " + srcList(c.resource_domains),
-    "connect-src " + srcList(c.connect_domains, "'self'"),
+    "media-src " + withFiles(srcList(c.resource_domains), c.files),
+    "connect-src " + withFiles(srcList(c.connect_domains, "'self'"), c.files),
     "frame-src " + srcList(c.frame_domains),
     "form-action 'none'",
     "base-uri 'none'",
@@ -51,10 +63,10 @@ export function appPageCspMulti(csp?: AppCsp | null): string {
     "default-src 'none'",
     "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src " + srcList(c.resource_domains, "'self' data: blob:"),
+    "img-src " + withFiles(srcList(c.resource_domains, "'self' data: blob:"), c.files),
     "font-src " + srcList(c.resource_domains, "'self' data:"),
-    "media-src " + srcList(c.resource_domains, "'self' blob:"),
-    "connect-src " + srcList(c.connect_domains, "'self'"),
+    "media-src " + withFiles(srcList(c.resource_domains, "'self' blob:"), c.files),
+    "connect-src " + withFiles(srcList(c.connect_domains, "'self'"), c.files),
     "frame-src " + srcList(c.frame_domains),
     "worker-src 'self' blob:",
     "manifest-src 'self'",
