@@ -72,8 +72,6 @@ export interface ServerDeps extends BuildDeps {
   sleep?: (ms: number) => Promise<void>;
   /** 시험 — zip 버킷 이름. 기본 = LIVELY_APP_BUNDLE_BUCKET. */
   bucket?: string;
-  /** 시험 — zip 지우기(앱 지우기). 기본 = S3. */
-  deleteZip?: (key: string) => Promise<void>;
 }
 
 /** 시험이 끼우는 기본 의존(가짜 Lambda · zip 저장소 · 세션 실행) — 운영에서는 비어 있다. */
@@ -271,8 +269,9 @@ export async function deployBuildToAliases(i: {
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
     return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke };
   } catch (e) {
-    //  zip 이 저장소에 없다(Lambda 가 GetObject NoSuchKey) — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
-    if (e instanceof AwsError && /NoSuchKey|GetObject/i.test(e.message)) {
+    //  zip 이 저장소에 없다(Lambda 가 «S3 Error Code: NoSuchKey») — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
+    //   S3 권한 오류(AccessDenied 등)는 zip 탓이 아니다 — 무효로 적으면 누를 때마다 저장한 사람의 세션에서 처음부터 다시 빌드한다.
+    if (e instanceof AwsError && /S3 Error Code: NoSuchKey/i.test(e.message)) {
       await st.invalidateServerBuild(i.app.id, i.buildKey, "빌드 결과(zip)를 함수에 올리지 못했습니다(저장소에 없음)").catch(() => { /* 다음에 */ });
     }
     if (e instanceof AwsError) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 AWS 오류(#4484)");

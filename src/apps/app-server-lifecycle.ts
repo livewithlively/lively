@@ -123,7 +123,8 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
         installed = {
           version_no: t.versionNo, build_key: key, saved_by: t.savedBy,
           build: b ? { status: b.status, stage: b.stage, error: b.error, started_at: b.started_at, finished_at: b.finished_at, ...(progress ? { now: progress.last, running_s: Math.round((Date.now() - progress.startedAt) / 1000) } : {}) } : null,
-          deployed_to_cur: row?.cur_build_key === key, deployed_to_pub: row?.pub_build_key === key,
+          //  «올라가 있음» 은 그 빌드를 아직 쓸 수 있을 때만 — 빌드가 무효(zip 유실)면 공개 확인(publishServerDenial)이 막으니 화면도 다시 빌드하게 한다.
+          deployed_to_cur: row?.cur_build_key === key && b?.status === "ok", deployed_to_pub: row?.pub_build_key === key && b?.status === "ok",
         };
       }
     } catch (e) { installed = { error: (e as Error)?.message ?? String(e) }; }

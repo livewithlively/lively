@@ -129,8 +129,10 @@ const memFile = (mb: number): string => {
 
 await t("A0b 빌더 글이 바뀌면 빌더 판(BUILDER_VERSION)도 올린다 — 빌드 지문에 들어가는 판이라 안 올리면 같은 코드가 옛 빌더의 zip 을 재사용한다", () => {
   //  빌더를 고쳤으면: BUILDER_VERSION 을 올리고 아래 표에 새 판의 지문을 적는다(지문 = 아래 실패 글의 actual). TypeScript 판이 바뀌어 글이 바뀌어도 같다.
-  const PIN: Record<number, string> = { 2: "e730ccb23bc8a9c1987631a1a9a0b59bf5a6529f9e8579b3f48bfd509ebc4538" };
-  assert.equal(crypto.createHash("sha256").update(SERVER_BUILDER_JS).digest("hex"), PIN[BUILDER_VERSION], `빌더 글이 바뀌었다 — BUILDER_VERSION(${BUILDER_VERSION})을 올리고 지문을 적으세요`);
+  //   줄 전체가 주석인 줄은 빼고 잰다 — 주석만 고친 것은 빌드 결과가 같으니 판을 올릴(= 전 앱 재빌드) 까닭이 아니다.
+  const PIN: Record<number, string> = { 2: "1ac92efd5981f7e20a6262ff5358cf86a7db5d1e6919affffc1b441ff546ab6b" };
+  const codeOnly = SERVER_BUILDER_JS.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  assert.equal(crypto.createHash("sha256").update(codeOnly).digest("hex"), PIN[BUILDER_VERSION], `빌더 글이 바뀌었다 — BUILDER_VERSION(${BUILDER_VERSION})을 올리고 지문을 적으세요`);
 });
 
 await t("A0 결과 표식이 빌더 안의 상수와 같다(바깥 이름을 못 쓰는 함수라 두 벌이다)", () => {

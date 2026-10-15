@@ -81,6 +81,7 @@ const cfgOf = (f) => JSON.parse(JSON.stringify(f.cfg));
 //  Lambda 는 만들기 · 코드 고치기 때 S3 에서 zip 을 읽는다 — 없으면 실제와 같은 오류(InvalidParameterValueException · NoSuchKey).
 const zipOr = (k) => { const z = zips.get(k); if (!z) throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: NoSuchKey. S3 Error Message: The specified key does not exist."); return z; };
 const failDelete = new Set();   // R4 — 이 함수 지우기는 실패한다(AWS 오류 흉내)
+let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 오류로(zip 은 있다)
 const api = {
   getFunction: async (n) => { const f = fns.get(n); return f ? { Configuration: cfgOf(f), Tags: { ...f.tags } } : null; },
   //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
@@ -98,7 +99,11 @@ const api = {
       tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
     return cfgOf(fns.get(i.FunctionName));
   },
-  updateFunctionCode: async (n, code) => { log.push(["updateFunctionCode", n, code.S3Key]); const f = fns.get(n); f.cfg.CodeSha256 = shaB64(zipOr(code.S3Key)); return cfgOf(f); },
+  updateFunctionCode: async (n, code) => {
+    log.push(["updateFunctionCode", n, code.S3Key]);
+    if (s3Denied) { s3Denied = false; throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: AccessDenied. S3 Error Message: Access Denied"); }
+    const f = fns.get(n); f.cfg.CodeSha256 = shaB64(zipOr(code.S3Key)); return cfgOf(f);
+  },
   updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
   publishVersion: async (n, i) => {
     log.push(["publishVersion", n, i.CodeSha256]);
@@ -305,6 +310,14 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
   await watchAppServers(policy, { api, metrics: rec(51), now: () => 9_500_000 });
   const durAt51 = metricsAsked.filter((m) => m === "Duration").length - durAt50;
   chk("D9e 호출 50번(경계)이면 실행 시간을 묻지 않고 · 51번이면 묻는다(지표 비용)", durAt50 === 0 && durAt51 === 1, JSON.stringify({ durAt50, durAt51 }));
+  //  기준을 넘었는데 멈추지 못하면(여기선 함수가 남의 것으로 보임) — 관리자 · 책임자에게 «멈추지 못함» 을 알린다(조용히 넘어가지 않는다).
+  resetWatchStateForTest();
+  fns.get(FN).tags["lvly:tenant"] = "11111111-2222-3333-4444-555555555555";
+  const fails9 = [];
+  const w9 = await watchAppServers(policy, { api, metrics: mk(30_001, 1000), notify: async (a, title, body, kind) => { fails9.push(kind); }, now: () => 9_900_000 });
+  fns.get(FN).tags["lvly:tenant"] = SINGLE_TENANT_ID;
+  chk("D9f 기준을 넘었는데 멈추지 못하면 «멈추지 못함» 알림 · 멈춤 기록 없음", w9.stopped.length === 0 && fails9.includes("stop-failed") && fns.get(FN).conc === null && !(await serverRow()).stopped_at,
+    JSON.stringify({ w9, fails9 }));
 }
 
 // D10 빌드 있는 판으로 되돌리기 → cur 가 따라간다
@@ -443,6 +456,60 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   chk("R6c 저장한 사람이 화면에서 누르면 그 사람의 만들기 세션에서 빌드", ok.status === "deployed" && seats.length === seats0 + 1 && seats[seats.length - 1].sessionId === "box-pgt-alice-1",
     JSON.stringify({ status: ok.status, seat: seats[seats.length - 1] }));
   await call("org_app_remove", { app_id: "scr" }, boss);
+}
+
+// R7 쓸 빌드가 무효가 되면(zip 유실) 상태도 «올라가 있음» 이 아니다 — 화면이 다시 빌드하게
+{
+  await call("app_save", { files: twin("lost") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lost", wait_s: 120 }, alice, aliceCtx);
+  const kL = (await q(`SELECT zip_key, build_key FROM org_app_server_build WHERE app_id='lost' AND status='ok'`))[0];
+  const st0 = await call("app_server_status", { app_id: "lost" }, alice, aliceCtx);
+  zips.delete(kL.zip_key);
+  const ep = await errOf(call("app_visibility_set", { app_id: "lost", visibility: "all" }, alice, aliceCtx));
+  const st1 = await call("app_server_status", { app_id: "lost" }, alice, aliceCtx);
+  chk("R7 zip 이 사라진 빌드는 공개 409 · 상태도 «올라가 있지 않음»(화면이 다시 빌드를 건다)", st0.installed?.deployed_to_cur === true && ep?.status === 409
+    && st1.installed?.deployed_to_cur === false && st1.installed?.build?.status === "failed", JSON.stringify({ ep: ep?.status, st1: st1.installed }));
+  const heal = await call("app_server_deploy", { app_id: "lost", wait_s: 120 }, alice, aliceCtx);
+  const st2 = await call("app_server_status", { app_id: "lost" }, alice, aliceCtx);
+  chk("R7b 다시 빌드하면 «올라가 있음»", heal.status === "deployed" && st2.installed?.deployed_to_cur === true, JSON.stringify(st2.installed));
+
+  // R1g S3 권한 오류는 zip 탓이 아니다 — 빌드를 무효로 적지 않는다(누를 때마다 처음부터 빌드하지 않게)
+  const vL1 = (await q(`SELECT current_version_no FROM org_app WHERE id='lost'`))[0].current_version_no;
+  await call("app_save", { files: twin("lost", "require('http').createServer((q,s)=>s.end('l2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lost", wait_s: 120 }, alice, aliceCtx);
+  s3Denied = true;
+  await call("app_revert", { app_id: "lost", version_no: vL1 }, alice, aliceCtx);
+  const errSet = await waitFor(async () => { const r = await rowOf("lost"); return r.last_error ? r : null; });
+  const b1 = (await q(`SELECT status FROM org_app_server_build WHERE app_id='lost' AND build_key=$1`, [kL.build_key]))[0];
+  chk("R1g S3 권한 오류(AccessDenied)면 빌드는 그대로 ok · 오류만 남긴다", !!errSet && b1?.status === "ok" && !s3Denied, JSON.stringify({ b1, last_error: errSet?.last_error }));
+  await call("org_app_remove", { app_id: "lost" }, boss);
+}
+
+// R8 이미 만들어진 표에도 stop_kind 칸이 붙는다(표를 만든 뒤에 더한 칸)
+{
+  await q(`ALTER TABLE org_app_server DROP COLUMN stop_kind`);
+  await initAllSchemas({ quiet: true });
+  const col = await q(`SELECT 1 FROM information_schema.columns WHERE table_name='org_app_server' AND column_name='stop_kind'`);
+  chk("R8 옛 표에 스키마를 다시 돌리면 stop_kind 칸이 생긴다", col.length === 1);
+}
+
+// R9 빌드하는 동안 앱이 지워지면 — 나중에 올라온 zip 을 지운다(주인 없는 zip 을 남기지 않는다)
+{
+  await call("app_save", { files: twin("gone") }, alice, aliceCtx);
+  const realHead = async (key) => (zips.has(key) ? { size: zips.get(key).length } : null);
+  const baseDeps = { api, bucket: "fake-bucket", pollMs: 1, sleep: async () => {}, headZip: realHead,
+    presignPut: async (key) => `http://127.0.0.1:${zport}/${encodeURIComponent(key)}`, deleteZip: async (key) => { deletedZips.push(key); zips.delete(key); } };
+  setServerDepsForTest({ ...baseDeps, spawnInSession: async (seat, argv) => {
+    const c = await spawnInSession(seat, argv);
+    setTimeout(() => { void q(`DELETE FROM org_app_server_build WHERE app_id='gone'`); }, 150);   // 앱 지우기가 빌드 기록을 걷는 것 흉내
+    return c;
+  } });
+  const d9 = await call("app_server_deploy", { app_id: "gone", wait_s: 120 }, alice, aliceCtx);
+  setServerDepsForTest({ ...baseDeps, spawnInSession });
+  const leftZips = [...zips.keys()].filter((k) => k.includes("/z/gone/"));
+  chk("R9 빌드 도중 기록이 지워지면 방금 올린 zip 을 지운다 · 함수에 올리지 않는다", d9.status === "failed" && leftZips.length === 0 && deletedZips.some((k) => k.includes("/z/gone/"))
+    && !calls("createFunction").some((x) => x[1].FunctionName.includes("gone")), JSON.stringify({ status: d9.status, stage: d9.stage, error: d9.error, leftZips }));
+  await call("org_app_remove", { app_id: "gone" }, boss);
 }
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip

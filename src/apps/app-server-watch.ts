@@ -14,7 +14,7 @@ import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import { appServerEnv } from "./app-server-config.js";
 import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import type { LambdaApi } from "./app-server-deploy.js";
+import { publicError, type LambdaApi } from "./app-server-deploy.js";
 import { removeServer, stopServer } from "./app-server-lifecycle.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
@@ -32,7 +32,8 @@ export function resetWatchStateForTest(): void { seen.clear(); }
 export interface WatchDeps {
   api?: LambdaApi;
   metrics?: (queries: MetricQuery[], range: { start: Date; end: Date; periodSec: number }) => Promise<MetricResult[]>;
-  notify?: (appId: string, title: string, body: string) => Promise<void>;
+  /** kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함). 같은 앱 · 같은 종류는 읽기 전까지 한 장. */
+  notify?: (appId: string, title: string, body: string, kind: "stopped" | "stop-failed") => Promise<void>;
   now?: () => number;
 }
 
@@ -44,12 +45,12 @@ export function dueForCheck(fn: string, now: number): boolean {
 
 const maxOf = (r: MetricResult | undefined): number | null => (r && r.values.length ? Math.max(...r.values) : null);
 
-async function defaultNotify(appId: string, title: string, body: string): Promise<void> {
+async function defaultNotify(appId: string, title: string, body: string, kind: "stopped" | "stop-failed"): Promise<void> {
   const app = await getApp(appId).catch(() => null);
   const to = new Set<string>(await listActiveAdminIds().catch(() => [] as string[]));
   if (app?.owner_member) to.add(app.owner_member);
   for (const m of to) {
-    await notifyAppInstaller({ appId, memberId: m, title, body, dedupe_key: `app-server-stop:${appId}` }).catch(() => null);
+    await notifyAppInstaller({ appId, memberId: m, title, body, dedupe_key: `app-server-${kind}:${appId}` }).catch(() => null);
   }
 }
 
@@ -84,9 +85,13 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
       const title = `앱 「${r.app_id}」 의 서버를 자동으로 멈췄습니다`;
       const body = `까닭: ${why}. 앱 화면은 그대로 열리지만 서버가 하는 일(데이터 처리 등)은 멈춥니다. 원인을 고친 뒤 관리자가 app_server_resume 으로 다시 켭니다. ` +
         "기준은 관리자가 app_server_limits_set(stop_invocations_5m · stop_duration_s_5m)으로 바꿀 수 있습니다.";
-      await (deps.notify ?? defaultNotify)(r.app_id, title, body).catch(() => { /* 알림 실패는 멈춤을 되돌리지 않는다 */ });
+      await (deps.notify ?? defaultNotify)(r.app_id, title, body, "stopped").catch(() => { /* 알림 실패는 멈춤을 되돌리지 않는다 */ });
     } catch (e) {
       logger.error({ err: e, app: r.app_id }, "앱 서버 자동 멈춤 실패(#4484) — 다음 틱에 다시 본다");
+      //  비용 안전망이 풀린 채라는 걸 사람이 알아야 한다(예: 권한이 빠져 모든 함수가 «남의 것» 으로 보여 조용히 안 멈춤 — 격리 리뷰).
+      const title = `앱 「${r.app_id}」 의 서버가 기준을 넘었는데 자동으로 멈추지 못했습니다`;
+      const body = `까닭: ${why}. 멈추기 실패: ${publicError(e)}. 비용 상한이 풀린 상태일 수 있습니다 — 관리자가 app_server_status 로 보고 app_server_stop 으로 멈춰 주세요(다음 틱에 다시 시도합니다).`;
+      await (deps.notify ?? defaultNotify)(r.app_id, title, body, "stop-failed").catch(() => { /* 알림 실패 — 로그는 남았다 */ });
     }
   }
   return { checked: due.length, stopped };

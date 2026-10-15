@@ -128,13 +128,7 @@ export async function patchManifest(appId: string, patch: (man: any) => void, no
   const man = JSON.parse(String(mf.content)); patch(man); mf.content = JSON.stringify(man, null, 2);
   await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note, ...(opts && opts.publish ? { publish: true } : {}) }) });
 }
-/**
- * #4484 서버가 있는 앱(매니페스트 web.server)이면 「이대로 넣기」·「공개하기」 전에 서버를 빌드해 올린다(결정 상민 2026-10-15 — 저장만으로는 빌드하지 않는다).
- *  같은 코드가 이미 올라가 있으면 바로 지나간다. 빌드는 몇 분 걸릴 수 있어 시작만 하고 상태를 3초마다 본다(최대 12분).
- *  돌려주는 값: true = 넣기 · 공개를 이어서 해도 된다(서버 앱이 아니거나 · 이 워크스페이스에 앱 서버가 없거나 · 올라갔다) · false = 멈춘다(실패 · 시간 초과).
- *  실패하면 그 기록은 서버가 이 앱의 만들기 세션에도 넣는다 — 그 세션의 AI 가 보고 고친다.
- */
-/** GET /api/ui/apps/:id/server 응답에서 이 화면이 읽는 칸(src/apps/app-server-deploy.ts serverStatus). */
+/** GET /api/ui/apps/:id/server 응답에서 이 화면이 읽는 칸(src/apps/app-server-lifecycle.ts serverStatus). */
 interface ServerStatusView {
   server_declared?: boolean;
   available?: string | null;
@@ -142,6 +136,12 @@ interface ServerStatusView {
   installed?: { deployed_to_cur?: boolean; build?: { status?: string; stage?: string | null; error?: string | null; now?: string } | null } | null;
   function?: { last_error?: string | null } | null;
 }
+/**
+ * #4484 서버가 있는 앱(매니페스트 web.server)이면 「이대로 넣기」·「공개하기」 전에 서버를 빌드해 올린다(결정 상민 2026-10-15 — 저장만으로는 빌드하지 않는다).
+ *  같은 코드가 이미 올라가 있으면 바로 지나간다. 빌드는 몇 분 걸릴 수 있어 시작만 하고 상태를 3초마다 본다(최대 12분).
+ *  돌려주는 값: true = 넣기 · 공개를 이어서 해도 된다(서버 앱이 아니거나 · 이 워크스페이스에 앱 서버가 없거나 · 올라갔다) · false = 멈춘다(실패 · 시간 초과).
+ *  실패하면 그 기록은 서버가 이 앱의 만들기 세션에도 넣는다 — 그 세션의 AI 가 보고 고친다.
+ */
 export async function ensureAppServer(appId: string, onProgress?: (text: string) => void): Promise<boolean> {
   const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/server';
   let st: ServerStatusView | null;

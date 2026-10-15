@@ -226,7 +226,6 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       pub_at TIMESTAMPTZ,
       stopped_at TIMESTAMPTZ,
       stopped_by TEXT,
-      stop_kind TEXT CHECK (stop_kind IN ('auto','manual')),
       stop_reason TEXT,
       lock_until TIMESTAMPTZ,
       last_error TEXT,
@@ -234,6 +233,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  //  stop_kind 는 표를 만든 뒤에 더한 칸이라 ALTER 로(이미 만들어진 표에도 붙게 — 관례).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS stop_kind TEXT CHECK (stop_kind IN ('auto','manual'));`);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).

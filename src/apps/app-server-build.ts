@@ -15,7 +15,7 @@ import { SERVER_BUILDER_JS, ZIP_EXCLUDE, encodeBuildHeader, parseBuildResult, ty
 import { buildKeyOf, tailText, zipKeyFor, type AppServerDecl, type AppServerEnv } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
 import { claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
-import { s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
+import { s3Delete, s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
 import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 
 /** 빌드할 자리 — 그 판을 저장한 사람과 그 사람의 세션(컨테이너가 떠 있어야 한다). */
@@ -39,6 +39,8 @@ export interface BuildDeps {
   presignPut?: (key: string, expiresSec: number) => Promise<string>;
   /** S3 에 zip 이 실제로 있나(크기). */
   headZip?: (key: string) => Promise<{ size: number } | null>;
+  /** 시험 — zip 지우기(빌드 도중 앱이 지워진 경우 · 앱 지우기). 기본 = S3. */
+  deleteZip?: (key: string) => Promise<void>;
   readBlob?: (kind: BlobStoreKind, h: string) => Promise<Buffer | null>;
   now?: () => number;
 }
@@ -154,7 +156,8 @@ export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = 
   try {
     const s3 = appBundleS3Config();
     if (!deps.headZip && !s3) return row;
-    head = deps.headZip ? await deps.headZip(row.zip_key) : await s3Head(s3!, row.zip_key);
+    //  공개 확인은 앱 설치 락 안에서 부른다 — 한 번 · 5초만(s3-lite «잠근 채 부르는 일은 attempts:1» 관례). 못 보면 아래에서 있다고 본다.
+    head = deps.headZip ? await deps.headZip(row.zip_key) : await s3Head(s3!, row.zip_key, { attempts: 1, timeoutMs: 5_000 });
   } catch (e) {
     logger.warn({ err: e, appId: row.app_id, key: row.build_key }, "빌드 zip 을 확인하지 못했다 — 있다고 보고 진행(#4484)");
     return row;
@@ -241,7 +244,11 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
       ok: true, zip: { key: zipKey, bytes: res.zip.bytes, sha256_b64: res.zip.sha256_b64, unzipped: res.zip.unzipped, entries: res.zip.entries },
       log_tail: tailText(log, 16 * 1024), detail,
     });
-    if (!row) throw new HttpError(500, "빌드 기록을 닫지 못했습니다");
+    if (!row) {
+      //  빌드하는 동안 앱(과 그 빌드 기록)이 지워졌다 — 방금 올린 zip 은 주인이 없다. 지운다(best-effort · 남으면 버킷 수명 규칙이 걷는다).
+      await (deps.deleteZip ? deps.deleteZip(zipKey) : s3 ? s3Delete(s3, zipKey, { attempts: 1, timeoutMs: 10_000 }) : Promise.resolve()).catch(() => { /* best-effort */ });
+      throw new HttpError(409, "빌드하는 동안 앱이 지워졌습니다");
+    }
     return row;
   } catch (e) {
     logger.warn({ err: e, appId: input.appId, key }, "앱 서버 빌드 실패(#4484)");
