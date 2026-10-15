@@ -271,6 +271,21 @@ async function main() {
   //  이 판의 지문을 적어 둔다 — 앱이 자료의 파일을 이 값으로 견줘 «이 판과 같은 파일» · «이 판 뒤에 바뀐 파일» 을 가린다(경로 · 시각이 아니라 내용).
   //  안(variant)만 올릴 때는 판이 그대로라 적지 않는다. 표가 아직 없는 옛 앱 판이면 조용히 넘어간다(앱이 행에서 다시 센다).
   if (!a.variant) await ins("sources", { doc: a.doc, ver, fp: fpOf(p.rows), path: src, bytes: statSync(file).size, mtime: "", session: sid }).catch(() => {});
+  //  원본이 든 프로젝트의 이름을 적어 둔다 — 세션 없이 연 앱의 홈이 「프로젝트 #번호」 가 아니라 이름으로 묶는다(그 화면은 프로젝트를 읽을 길이 없다).
+  //  못 읽거나 표가 없는 옛 앱 판이면 조용히 넘어간다(올리기는 이미 끝났다).
+  const pm = /(?:^|\/)project\/(\d+)\//.exec(src);
+  if (pm) {
+    try {
+      const pid = Number(pm[1]);
+      const r = await fetch(`${gw}/api/ui/v6/projects/${pid}`, { headers });
+      const name = r.ok ? ((await r.json()).project || {}).name : "";
+      if (name) {
+        const had = await q("projects", { pid }, 1);
+        if (!had.length) await ins("projects", { pid, name });
+        else if (had[0].name !== name) await upd("projects", { id: had[0].id }, { name });
+      }
+    } catch {}
+  }
   console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}`);
 }
 
