@@ -41,6 +41,7 @@ import path from "node:path";
 import { itemsPool } from "../db/client.js";
 import { firstPromptStep, acceptTrustDialog, dismissUpdatePrompt, UPDATE_ESC_MAX } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수) · #4135 후속 — codex 업데이트 창은 Escape
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
+import { confirmRuntimeSwitch } from "../terminal/runtime-switch-confirm.js";   // #4772 — 전환 확인창을 눌러 준다
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
 import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
@@ -379,6 +380,12 @@ async function deliverLoop(sessionId: string): Promise<void> {
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
+    }
+    //  #4772 — 모델·추론강도 전환(control)은 Claude Code 2.1.29x+ 에서 확인창을 띄운다(캐시 따뜻할 때). 제출만 하면
+    //   «안 바뀐» 채로 남고 치워 둔 초안이 창 뒤에 숨는다. 다음 행을 넣기 **전에** 이 창을 눌러 준다 — 안 누르면
+    //   두 번째 명령(/effort)이 첫 창에 타이핑돼 버린다. 같은 exec(게이트웨이·호스트 공용)으로 화면을 읽고 Enter.
+    if (row.kind === "control" && harness === "claude" && sent.status !== "failed") {
+      await confirmRuntimeSwitch(exec, { sleep }).catch((e) => logger.warn({ err: e, sessionId }, "outbox: 전환 확인창 처리 실패(비치명)"));
     }
     await mark(row.id, sent.status, sent.error);
   }

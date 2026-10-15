@@ -106,6 +106,7 @@
   "dist/terminal/phase.js",
   "dist/terminal/profile-kit-seed.js",
   "dist/terminal/profiles.js",
+  "dist/terminal/runtime-switch-confirm.js",
   "dist/terminal/send-keys.js",
   "dist/terminal/session-create-guards.js",
   "dist/terminal/session-env-contract.js",
