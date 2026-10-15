@@ -92,5 +92,13 @@ check(!F.isBuildingSession('"회의록" 앱 시험', "앱빌더") && F.isBuildin
 check(F.trySessionLabel("회의록") === '"회의록" 앱 시험' && F.trySessionLabel("") === '"앱" 앱 시험' && F.trySessionLabel("   ") === '"앱" 앱 시험' && F.trySessionLabel(null) === '"앱" 앱 시험' && F.trySessionLabel('a"b\n') === '"a b" 앱 시험' && F.trySessionLabel("가".repeat(50)) === '"' + "가".repeat(40) + '" 앱 시험', "G4 trySessionLabel — 빈 이름은 「앱」 · 따옴표 · 줄바꿈은 빈칸 · 40자");
 check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySessionLabel("")), "G5 지은 이름은 늘 시험 세션으로 읽힌다(왕복)");
 
+// G6 기록을 잃은 시험 세션을 이름으로 다시 찾는다(격리 리뷰 #1 — 숨긴 세션이라 사람은 못 찾는다)
+{
+  const L = '"회의록" 앱 시험';
+  const rows = [null, { id: "box-a", label: '"회의록" 앱 제작', projectId: 4680 }, { id: "box-b", label: L, projectId: 999 }, { id: "", label: L, projectId: 4680 }, { id: "box-c", label: L, project_id: 4680 }, { id: "box-d", label: L, projectId: 4680 }];
+  check(F.findTrySession(rows, L, 4680) === "box-c", "G6 같은 이름 · 같은 프로젝트의 첫 줄(다른 프로젝트 · 빈 id · 만드는 세션은 건너뛴다 · project_id 도 읽는다)");
+  check(F.findTrySession([{ id: "box-e", label: L }], L, 4680) === "box-e" && F.findTrySession(rows, '"메모" 앱 시험', 4680) === "" && F.findTrySession(rows, '"회의록" 앱 제작', 4680) === "" && F.findTrySession([], L, 4680) === "", "G7 프로젝트를 모르는 줄은 이름만으로 · 없으면 빈 글 · 시험 세션 이름이 아니면 찾지 않는다");
+}
+
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);
 if (fail) process.exit(1);

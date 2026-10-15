@@ -3088,8 +3088,9 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-try--fixed { position: fixed; z-index: 80; }
 .v2-try-shell { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .v2-try-dock { position: absolute; z-index: 9; top: 0; left: 0; right: 0; }
-.v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: 57px; box-sizing: border-box; flex-wrap: nowrap; }   /* 문패(.pn-door) 높이를 꼭 덮는다 */
+.v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 57px); box-sizing: border-box; flex-wrap: nowrap; }   /* 문패(.pn-door) 높이를 꼭 덮는다 — 높이는 app-try-session 이 재어 넘긴다 */
 .v2-review-bar--dock > .v2-studio-sp { display: none; }
+.v2-review-bar--dock .v2-review-note { flex: 0 1 auto; min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }   /* 긴 AI 소식이 도구 단추를 밀어 줄바꿈시키지 않게 */
 .v2-review-bar--dock .v2-review-hint { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
 /* 좁은 폭(≤900) — 진짜 셸은 우측 사이드바를 서랍으로 접지만(42-v2-panes · 모바일 크롬), 시험 세션은 앱을 보려고 여는 화면이라 세션 아래에 쌓아 늘 보인다.
    막대는 한 줄을 지킨다 — 도구는 그림만(이름은 툴팁) · 도움말은 숨긴다. */
@@ -3099,7 +3100,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-try .pn-body > .v2-split-x, .v2-try .pn-side-reopen { display: none; }
   .v2-review-bar--dock .v2-review-tools button > span:not(.ico) { display: none; }
   .v2-review-bar--dock .v2-review-hint { display: none; }
-  .v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: 47px; padding-block: 6px; }   /* 좁은 폭의 문패 높이(.pn-door 8px 위아래) */
+  .v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 47px); padding-block: 6px; }   /* 좁은 폭의 문패 높이 */
 }
 .v2-studio-body--hub { grid-template-columns: minmax(0, 1fr) clamp(300px, 28%, 380px); }
 .v2-studio-body--hub .v2-studio-app { box-shadow: none; background: none; }

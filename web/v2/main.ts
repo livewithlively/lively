@@ -1200,7 +1200,8 @@ function applyTabChrome(tab: ShellTab): void {
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
   //   mountProjectShell 끝에서 이 함수를 한 번 더 부른다.
-  const paneSide = tab.center.querySelector('.pn-pane[data-zone="side"]') as HTMLElement | null;
+  //  앱빌더 안의 시험 세션 화면(#4632 · .v2-try)은 제 우측 사이드바를 세션 아래에 쌓아 늘 보인다 — 셸의 서랍 대상이 아니다.
+  const paneSide = [...tab.center.querySelectorAll('.pn-pane[data-zone="side"]')].find((n) => !n.closest('.v2-try')) as HTMLElement | undefined || null;
   if (mobile) mobile.setAside(!tab.noAside || !!shown || (mobile.isMobile() && !!paneSide));
   //  단추의 얼굴도 서랍의 정체를 따른다(#4088 후속): 칸 셸이면 폴더 아이콘·«자료·곁칸 열기», 그 밖은 타임라인. 초점도 그 곁칸으로.
   if (mobile) { mobile.setAsideKind(paneSide ? 'panes' : 'timeline'); mobile.setAsideTarget(paneSide); }

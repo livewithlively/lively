@@ -227,7 +227,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       inp.addEventListener('input', () => { p.note = inp.value; changed(); });
       return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: '그 자리 보기', onclick: () => { closeTray(); openPop(i); } }),
         el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '빼기', onclick: () => { removePin(i); closeTray(); openTray(); } }));
+        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 의견을 지워요', onclick: () => { removePin(i); closeTray(); openTray(); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 의견(비워 두면 좋다는 뜻) · 예: 글자 조금 크게', 'aria-label': '앱 전체 의견' }) as HTMLInputElement; g.value = host.general;
     g.addEventListener('input', () => { host.general = g.value; changed(); });

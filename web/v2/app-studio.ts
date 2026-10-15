@@ -268,7 +268,7 @@ function showTour(onDone?: () => void): void {
   const slides: Array<{ n: number; t: string; now: string; body: () => HTMLElement }> = [
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고 자리 고르기 → 「만들기 시작」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: 'AI 가 쓴 기획 카드에서 틀린 줄만 고치고 「이대로 시안 만들기」', body: () => cardView(c, null) },
-    { n: 3, t: '시안 확인 · 고치기', now: '걸음 넷을 지나 진짜 앱이 생기면 실제 화면에서 써 보고, 고칠 곳을 찍어 한 줄씩 → 「수정하기 · 2건」 → 다음 버전', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ 2판 · 제목에 날짜 · 「끝남」 단추 · 안 끝난 것 먼저' }))) },
+    { n: 3, t: '시안 확인 · 고치기', now: '걸음 넷을 지나 진짜 앱이 생기면 실제 화면에서 써 보고, 고칠 곳을 찍어 한 줄씩 → 「수정하기 · 2건」 → 다음 버전', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2 · 제목에 날짜 · 「끝남」 단추 · 안 끝난 것 먼저' }))) },
     { n: 4, t: '확인', now: '네 줄만 보고 「이대로 넣기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? — 셋 다 있어요(AI 가 대조)' }), el('div', { text: '✓ 이름 · 「회의 안건」' }), el('div', { text: '✓ 쓰는 자리 · 세션 위젯' }), el('div', { text: '✓ 누가 쓰나 · 나만 (기본)' }))) },
     { n: 5, t: '넣기', now: '이제 워크스페이스 앱이에요 · 「지금 써 보기」 · 「팀에 알리기」', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요 — 초안 처음 · V2 날짜와 끝남 단추 · V3 글자 크기' }), el('div', { text: '이렇게 쓰세요 — 세션 오른쪽 위 + 에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기 — 「장원준 님이 「회의 안건」 앱을 만들었어요 · 써 보기」' }))) },
   ];
@@ -622,10 +622,11 @@ async function build(rec: StudioRec): Promise<void> {
       if (S.dead) return;
       if (!pid) { toast('앱빌더 프로젝트를 찾지 못했어요 — 잠시 뒤 다시 눌러 주세요', true); return; }
       if (!rec.trySid) toast('시험 세션을 여는 중이에요 — 처음엔 몇 초 걸려요');
-      const sid = await ensureTrySession({ appId: rec.appId, title: S.title, projectId: pid, prevSid: rec.trySid });
+      //  세션 id 는 정해지는 즉시 기록한다 — 붙이기가 실패하거나 그 사이 화면을 떠나도 다음에 같은 세션을 쓴다(숨긴 세션이라 사람은 못 찾는다).
+      const keep = (sid: string): void => { if (rec.trySid !== sid) { rec.trySid = sid; saveRec(rec); } };
+      const sid = await ensureTrySession({ appId: rec.appId, title: S.title, projectId: pid, prevSid: rec.trySid, onSpawned: keep });
       if (!sid || S.dead) return;
-      if (rec.trySid !== sid) { rec.trySid = sid; saveRec(rec); }
-      S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, sid, projectId: pid });
+      S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, sid, projectId: pid, onResumed: keep });
     }
     if (view === 'app') {
       //  앱 화면 = 앱 찾기가 여는 것과 같은 앱 인스턴스 탭(#/i/<인스턴스>, app-instance openInstalledApp 과 같은 길). 한 번 연 것은 다시 쓴다.
@@ -636,7 +637,7 @@ async function build(rec: StudioRec): Promise<void> {
       } catch (e: any) { toast('앱 화면을 열지 못했어요 — ' + (e && e.message ? e.message : e), true); return; }
       if (S.dead) return;
     }
-    if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 가상 세션이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
+    if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 시험 세션 화면이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
     S.review = openReview({
       appId: rec.appId, title: S.title, route, dock: S.tryS ? S.tryS.dock : undefined,
       pins: S.pins, general: S.general, version: S.curVer, waiting: S.waiting,
@@ -656,7 +657,7 @@ async function build(rec: StudioRec): Promise<void> {
       inp.addEventListener('input', () => { p.note = inp.value; paintNow(); if (S.review) S.review.update({}); });
       return el('div', { class: 'v2-studio-tray-row' }, el('span', { class: 'n', text: String(i + 1) }),
         el('span', { class: 'w', text: (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '빼기', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
+        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 의견을 지워요', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 의견(비워 두면 좋다는 뜻) · 예: 글자 조금 크게', 'aria-label': '앱 전체 의견' }) as HTMLInputElement; g.value = S.general;
     g.addEventListener('input', () => { S.general = g.value; paintNow(); if (S.review) S.review.update({ general: S.general }); });
@@ -672,7 +673,8 @@ async function build(rec: StudioRec): Promise<void> {
     const body = el('div', { class: 'v2-studio-wf-body' }, el('p', { class: 'v2-studio-wf-empty', text: '와이어프레임을 읽는 중…' }));
     const ov = el('div', { class: 'v2-studio-wf', role: 'dialog', 'aria-modal': 'true', 'aria-label': '와이어프레임' });
     const close = (): void => { ov.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    //  창째 걷혔으면(앱빌더가 닫힘) 다음 Esc 를 삼키지 않고 손만 뗀다.
+    const onKey = (e: KeyboardEvent): void => { if (!ov.isConnected) { document.removeEventListener('keydown', onKey, true); return; } if (e.key === 'Escape') { e.stopPropagation(); close(); } };
     ov.append(el('div', { class: 'v2-studio-wf-card' },
       el('div', { class: 'v2-studio-wf-head' }, el('b', { text: '「' + S.title + '」 와이어프레임' }), el('small', { text: verName(S.curVer) + ' · 화면 흐름 그림 — 무엇을 누르면 어느 화면으로 가는지' }),
         el('span', { class: 'v2-studio-sp' }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })),
@@ -680,6 +682,7 @@ async function build(rec: StudioRec): Promise<void> {
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
     document.addEventListener('keydown', onKey, true);
     root.append(ov);
+    (ov.querySelector('.v2-studio-wf-head button') as HTMLButtonElement | null)?.focus();
     let html = '';
     try {
       const d: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/pull');
@@ -687,7 +690,9 @@ async function build(rec: StudioRec): Promise<void> {
       html = f && typeof f.content === 'string' ? f.content : '';
     } catch (e: any) { body.replaceChildren(el('p', { class: 'v2-studio-wf-empty', text: '와이어프레임을 읽지 못했어요 — ' + (e && e.message ? e.message : e) })); return; }
     if (!ov.isConnected) return;
-    if (html.trim()) { body.replaceChildren(el('iframe', { class: 'v2-studio-wf-frame', title: '「' + S.title + '」 와이어프레임', sandbox: 'allow-scripts', srcdoc: html })); return; }
+    //  AI(또는 사본이면 그 원본을 만든 사람)가 쓴 HTML 이다 — 출처 없는 샌드박스에 바깥으로 나가는 길을 막는 CSP 를 앞에 붙여 싣는다(앱 화면 app-ui 의 CSP 와 같은 뜻).
+    const WF_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:";
+    if (html.trim()) { body.replaceChildren(el('iframe', { class: 'v2-studio-wf-frame', title: '「' + S.title + '」 와이어프레임', sandbox: 'allow-scripts', srcdoc: '<!doctype html><meta http-equiv="Content-Security-Policy" content="' + WF_CSP + '">' + html })); return; }
     const ask = el('button', { class: 'v2-studio-now-pri', type: 'button', text: 'AI 에게 그려 달라기' }) as HTMLButtonElement;
     ask.onclick = async () => { ask.disabled = true; if (await sendPrompt(rec, wireframeBrief(rec.appId))) { toast('AI 가 와이어프레임을 그리는 중이에요 — 다 되면 새 버전으로 오고, 이 단추로 다시 볼 수 있어요'); close(); } else ask.disabled = false; };
     body.replaceChildren(el('div', { class: 'v2-studio-wf-empty' }, el('b', { text: '아직 와이어프레임이 없어요' }),
@@ -830,7 +835,7 @@ async function build(rec: StudioRec): Promise<void> {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
     const steps: HTMLElement[] = [
       el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : '이렇게 부탁했어요' }), el('p', { text: rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + rec.origin.by + ' 님이 만듦)' : '') + ' 의 사본으로 · ' + placeName : '「' + firstLine(rec.what) + '」 · ' + placeName })),
-      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 적는 것: ' + c.items + ' · 할 수 있는 것: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI 가 세션에서 만들었어요' }), el('p', { text: '대화로 고칠 때마다 판이 하나씩 올라갔어요.' })),
+      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 적는 것: ' + c.items + ' · 할 수 있는 것: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI 가 세션에서 만들었어요' }), el('p', { text: '대화로 고칠 때마다 버전이 하나씩 올라갔어요(초안 → V2 → V3 …).' })),
     ];
     const list = el('div', { class: 'v2-studio-steps-list' }, ...steps);
     fetchAppVersions(rec.appId).then((vs) => {

@@ -29,6 +29,21 @@ export function isTrySession(label: string | null | undefined): boolean {
   return TRY_SESSION_RE.test(String(label || '').trim());
 }
 
+/** 목록 줄 가운데 이 앱의 시험 세션 — 이름(«"이름" 앱 시험»)과 앱빌더 프로젝트가 맞는 첫 줄의 박스 id. 기록을 잃었어도(다른 컴퓨터 · 붙이기 실패 ·
+ *  띄우는 도중 떠남) 같은 세션을 다시 쓰게 — 숨긴 세션이라 사람은 못 찾는다(격리 리뷰 #1). 프로젝트를 모르는 줄은 이름만으로 맞춘다. 없으면 빈 글. */
+export function findTrySession(rows: ReadonlyArray<{ id?: unknown; label?: unknown; projectId?: unknown; project_id?: unknown } | null | undefined>, label: string, projectId: number): string {
+  const want = String(label || '').trim();
+  if (!want || !isTrySession(want)) return '';
+  for (const r of rows) {
+    if (!r || typeof r.id !== 'string' || !r.id) continue;
+    if (String(r.label || '').trim() !== want) continue;
+    const pid = Number(r.projectId ?? r.project_id ?? 0) || 0;
+    if (pid && projectId && pid !== projectId) continue;
+    return r.id;
+  }
+  return '';
+}
+
 /** 이 이름의 프로젝트가 앱빌더 프로젝트인가 — 정확히 「앱빌더」 만. 옛 「앱 만들기」 는 사람이 지은 프로젝트와 겹쳐(#4632 가 그 이름이다) 이름으로 못 가른다. */
 export function isBuilderProjectName(name: string | null | undefined): boolean {
   return String(name || '').trim() === BUILDER_PROJECT_NAME;

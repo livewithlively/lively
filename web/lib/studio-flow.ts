@@ -158,8 +158,8 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
     if (!p.note.trim()) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
     if (p.kind === 'pick') lines.push(`[고른 요소 ${i + 1}] ${p.where || '요소'} — 화면의 ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
-    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 에서 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
-    else lines.push(`[찍은 곳 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
+    else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] 화면의 ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
+    else lines.push(`[핀 ${i + 1}] 화면의 ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
   });
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
   return `${round}번째 고침이야. 아래를 반영해 새 버전으로 저장해 줘(app_pull ${appId} 로 지금 버전을 받아 고치고 app_save · note 는 바뀐 점 한 줄 · 화면 흐름이 바뀌면 ${WIREFRAME_PATH} 도 맞춰 고쳐). ${PLACE[place].say} ${NO_PUBLISH} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;

@@ -78,5 +78,18 @@ check(/app_pull meeting-notes/.test(wb2) && wb2.includes(F.WIREFRAME_PATH) && /�
 const tb2 = F.tryBrief("회의록", "meeting-notes");
 check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_save 금지/.test(tb2), "H7 tryBrief — 써 보는 세션 · 앱 코드는 고치지 않는다", tb2);
 
+// ══ K 「판」 이 화면 글에 남지 않는다(#4632 원준 2026-10-15 «판 이라는 워딩 전면 금지 · 앱빌더 어디서도») — 주석을 걷은 소스에서 본다 ══
+//  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.
+{
+  const { readFileSync } = await import("node:fs");
+  const files = ["web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/builder.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts", "web/v2/app-versions.ts", "web/v2/session-app-pane.ts", "web/lib/app-menu.ts", "web/lib/studio-flow.ts", "web/lib/builder-flow.ts"];
+  const left = [];
+  for (const f of files) {
+    const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
+    for (const m of src.matchAll(/.{0,20}판.{0,10}/g)) if (!/판단|한 판에/.test(m[0])) left.push(f + ": " + m[0].trim());
+  }
+  check(left.length === 0, "K1 앱빌더 · 세션 사이드바 앱 머리줄 · 버전 메뉴 · 앱 찾기의 글에 「판」 이 없다", left);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);
