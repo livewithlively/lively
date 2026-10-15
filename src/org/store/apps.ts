@@ -281,7 +281,16 @@ export interface AppVersionMeta {
   app_id: string; version_no: number; origin: AppVersionOrigin; version: string; content_hash: string | null;
   note: string | null; saved_by: string | null; saved_at: string;
 }
-export interface AppVersionRow extends AppVersionMeta { manifest: unknown; files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }> }
+export interface AppVersionRow extends AppVersionMeta {
+  manifest: unknown;
+  /** 옛 판(#4600)의 파일 내용 — #4481 뒤로는 옛 코어 호환 사본(상한 안의 판만 · 30일 뒤 비운다). 판의 정본은 bundle 이 있으면 bundle. */
+  files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }>;
+  /** #4481 파일 목록 {v:1, files:[{p,h,s}]} — NULL 이면 아직 안 옮긴 옛 판(files 가 정본). 읽기는 apps/app-version-files.ts 를 지난다. */
+  bundle: unknown | null;
+  bundle_store: string | null;
+}
+/** #4481 판 쓰기에 실을 묶음 — 파일 목록 + 그 파일들이 있는 저장소 + 합(바이트). */
+export interface AppVersionBundleWrite { bundle: unknown; bundle_store: string; bundle_bytes: number }
 
 function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
   return {
@@ -298,14 +307,16 @@ function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
  */
 export async function insertAppVersion(
   appId: string,
-  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null },
+  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null } & Partial<AppVersionBundleWrite>,
 ): Promise<number> {
+  //  #4481 — bundle 을 주면 파일 목록이 정본이고 files 는 옛 코어 호환 사본이다(apps/app-version-files.ts recordVersion 만 이 길로 쓴다).
   const r = await itemsPool.query(
-    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at)
-       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now()
+    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at, bundle, bundle_store, bundle_bytes, bundle_at)
+       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now(), $9::jsonb, $10, $11, CASE WHEN $9::jsonb IS NULL THEN NULL ELSE now() END
          FROM org_app_version WHERE app_id = $1
      RETURNING version_no`,
-    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by],
+    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by,
+     v.bundle == null ? null : JSON.stringify(v.bundle), v.bundle == null ? null : (v.bundle_store ?? null), v.bundle == null ? null : (v.bundle_bytes ?? null)],
   );
   return Number(r.rows[0].version_no);
 }
@@ -318,12 +329,14 @@ export async function insertAppVersion(
  */
 export async function refreshOriginVersion(
   appId: string, versionNo: number,
-  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null },
+  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null } & Partial<AppVersionBundleWrite>,
 ): Promise<boolean> {
   const r = await itemsPool.query(
-    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now()
+    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now(),
+            bundle=$8::jsonb, bundle_store=$9, bundle_bytes=$10, bundle_at=CASE WHEN $8::jsonb IS NULL THEN NULL ELSE now() END
       WHERE app_id=$1 AND version_no=$2 AND origin='builtin'`,
-    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note],
+    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note,
+     v.bundle == null ? null : JSON.stringify(v.bundle), v.bundle == null ? null : (v.bundle_store ?? null), v.bundle == null ? null : (v.bundle_bytes ?? null)],
   );
   return (r.rowCount ?? 0) > 0;
 }
@@ -340,7 +353,64 @@ export async function getAppVersion(appId: string, versionNo: number): Promise<A
   const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
   const x = r.rows[0];
   if (!x) return null;
-  return { ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [] };
+  return {
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [],
+    bundle: x.bundle ?? null, bundle_store: x.bundle_store == null ? null : String(x.bundle_store),
+  };
+}
+
+/** #4481 판 1건의 머리 + 파일 목록(옛 files 내용은 읽지 않는다 — 앱 주소 서빙 · 내려받기 목록용). 옛 판이면 bundle null. */
+export interface AppVersionBundleHead extends AppVersionHead { bundle: unknown | null; bundle_store: string | null; bundle_bytes: number | null }
+export async function getAppVersionBundle(appId: string, versionNo: number): Promise<AppVersionBundleHead | null> {
+  const r = await itemsPool.query(
+    `SELECT app_id, version_no, origin, version, content_hash, note, saved_by, saved_at, manifest, bundle, bundle_store, bundle_bytes
+       FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  return x ? {
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, bundle: x.bundle ?? null, bundle_store: x.bundle_store == null ? null : String(x.bundle_store),
+    bundle_bytes: x.bundle_bytes == null ? null : Number(x.bundle_bytes),
+  } : null;
+}
+
+/** #4481 판 1건의 내용 지문만(앱 주소가 요청마다 «그 판이 아직 그 내용인가» 를 싸게 본다). */
+export async function getAppVersionHash(appId: string, versionNo: number): Promise<{ content_hash: string | null; has_bundle: boolean } | null> {
+  const r = await itemsPool.query(`SELECT content_hash, (bundle IS NOT NULL) AS has_bundle FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  return x ? { content_hash: x.content_hash == null ? null : String(x.content_hash), has_bundle: x.has_bundle === true } : null;
+}
+
+// ── #4481 옛 판 옮기기 · 옛 코어 호환 사본 정리(apps/app-bundle-migrate.ts 가 하우스키핑에서 부른다) ──
+
+/** 아직 파일 목록이 없는 옛 판(오래된 것부터). */
+export async function listLegacyVersions(limit: number): Promise<AppVersionRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE bundle IS NULL ORDER BY saved_at ASC, app_id ASC, version_no ASC LIMIT $1`, [Math.max(1, limit)]);
+  return r.rows.map((x) => ({
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [], bundle: null, bundle_store: null,
+  }));
+}
+
+/** 옛 판에 파일 목록을 단다(files 는 그대로 둔다 — 호환 사본이 된다). 그 사이 누가 먼저 달았으면 false. */
+export async function setLegacyVersionBundle(appId: string, versionNo: number, w: AppVersionBundleWrite): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET bundle=$3::jsonb, bundle_store=$4, bundle_bytes=$5, bundle_at=now() WHERE app_id=$1 AND version_no=$2 AND bundle IS NULL`,
+    [appId, versionNo, JSON.stringify(w.bundle), w.bundle_store, w.bundle_bytes]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 파일 목록을 단 지 days 일이 지난 판의 옛 코어 호환 사본(files)을 비운다. 반환 = 비운 판 수. */
+export async function purgeCompatCopies(days: number, limit = 500): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET files='[]'::jsonb
+      WHERE (app_id, version_no) IN (SELECT app_id, version_no FROM org_app_version
+                                      WHERE bundle IS NOT NULL AND bundle_at < now() - make_interval(days => $1) AND files <> '[]'::jsonb LIMIT $2)`,
+    [Math.max(0, days), Math.max(1, limit)]);
+  return r.rowCount ?? 0;
+}
+
+/** 워크스페이스 전체 옛 코어 호환 사본(files)의 바이트 합 — 새 사본을 남길지 정할 때(옛 총량 상한 64MiB 안에서만). */
+export async function compatBytesTotal(): Promise<number> {
+  const r = await itemsPool.query(`SELECT COALESCE(SUM(octet_length(files::text)), 0)::bigint AS n FROM org_app_version WHERE files <> '[]'::jsonb`);
+  return Number(r.rows[0]?.n ?? 0);
 }
 
 /** 판 여럿 삭제(보관 수 넘긴 구성원 판). 비면 아무것도 안 한다. */

@@ -39,6 +39,37 @@ export function appPageCsp(csp?: AppCsp | null): string {
   ].join("; ");
 }
 
+/**
+ * #4481 여러 파일 앱(web.root)의 문서 CSP — 위(v1)와 같은 선언(connect · resource · frame)을 따르되 **제 주소('self')의 파일**을 연다:
+ *  빌드 도구가 만든 `<script type="module" src="/assets/…">` · 스타일 · 그림 · 폰트 · 워커 · 매니페스트. 외부 스크립트는 여전히 어떤 선언으로도 못 연다.
+ *  'wasm-unsafe-eval' 은 WebAssembly 컴파일만 허락한다(JS eval 은 아니다 — 같은 샌드박스 안이라 새 권한이 아니다).
+ *  form-action 은 v2-3(#4482 — iframe 제한 완화)까지 'none' 그대로.
+ */
+export function appPageCspMulti(csp?: AppCsp | null): string {
+  const c = csp ?? {};
+  return [
+    "default-src 'none'",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src " + srcList(c.resource_domains, "'self' data: blob:"),
+    "font-src " + srcList(c.resource_domains, "'self' data:"),
+    "media-src " + srcList(c.resource_domains, "'self' blob:"),
+    "connect-src " + srcList(c.connect_domains, "'self'"),
+    "frame-src " + srcList(c.frame_domains),
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "form-action 'none'",
+    "base-uri 'self'",
+  ].join("; ");
+}
+
+/** #4481 여러 파일 앱을 srcdoc(종전 길)으로 열게 됐을 때 — 이 브라우저가 앱 주소 로그인 쿠키를 막은 경우. 까닭과 할 일을 보인다. */
+export function multiFileFallbackHtml(title: string): string {
+  return appErrorHtml(`「${title}」 은(는) 이 브라우저에서 열 수 없습니다`,
+    "이 앱은 여러 파일로 된 앱이라 앱 주소(lvly.app)에서만 열립니다. 이 브라우저가 앱 주소의 로그인 쿠키를 막고 있어요 — "
+    + "크롬 · 파이어폭스 · 최신 사파리(26.2 이상) · 라이블리 데스크톱 앱에서 열어 주세요.");
+}
+
 /** HTML 안에 넣는 스크립트가 문서를 깨지 않게 — `</script` 를 끊는다(원본 둘 다 우리 코드지만 한 번 더 막는다). */
 const inlineSafe = (js: string): string => js.replace(/<\/script/gi, "<\\/script");
 

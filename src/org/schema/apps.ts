@@ -150,6 +150,33 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_version_app_idx ON org_app_version(app_id);`);
+  //  #4481(앱 v2-2) — 판의 파일 내용은 S3(자가호스팅은 org_app_blob.bytes)로 옮긴다. 여기 남는 것은 «파일 목록»(apps/app-bundle.ts):
+  //   bundle = {v:1, files:[{p 경로, h sha256, s 크기}]} · bundle_store = 그 파일들이 있는 저장소('s3' | 'db' — 설정이 바뀌어도 옛 판은 제자리에서 읽는다)
+  //   · bundle_bytes = 판 하나의 합 · bundle_at = 목록을 적은 때(옛 코어 호환 사본 files 를 30일 뒤 지우는 기준 — 상민 2026-10-15).
+  //   bundle 이 NULL 인 줄은 아직 안 옮긴 옛 판이다 — files 가 정본(하우스키핑이 옮긴다 · app-bundle-migrate.ts).
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle JSONB;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_store TEXT;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_bytes BIGINT;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_at TIMESTAMPTZ;`);
+
+  // ── org_app_blob — 앱 판 파일의 장부(#4481) ──
+  //  파일 하나(지문 하나)당 한 줄: 어느 저장소에 · 크기 · 실제로 올라갔나(stored) · 마지막으로 판이 가리키려 한 때(last_used_at).
+  //   자가호스팅(S3 없음)은 bytes 칸에 내용을 둔다. 판 쓰기는 파일을 가리키기 전에 이 줄을 «방금 씀» 으로 찍고, 정리는 이 줄을 잠근 채
+  //   «24시간 안 쓰였고 어떤 판도 안 가리킴» 을 다시 본 뒤에만 지운다(엇갈림 규칙은 apps/app-blob-store.ts 머리말).
+  //   PK 는 ensureTenantColumn 이 (tenant_id, sha256, store) 로 다시 쓴다 — ON CONFLICT 타깃도 그 셋.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_blob(
+      sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      store TEXT NOT NULL CHECK (store IN ('s3','db')),
+      size BIGINT NOT NULL CHECK (size >= 0),
+      stored BOOLEAN NOT NULL DEFAULT FALSE,
+      bytes BYTEA,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (sha256, store)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_blob_last_used_idx ON org_app_blob(last_used_at);`);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).

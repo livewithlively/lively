@@ -452,6 +452,13 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void appSnapshot(); }, 180_000).unref();
   setInterval(() => { void appSnapshot(); }, 60 * 60_000).unref();
 
+  // #4481 — 앱 판 묶음(옛 판 옮기기 · 30일 지난 호환 사본 비우기 · 안 쓰는 파일 정리). 워크스페이스 스코프라 순회한다.
+  //  옮기기는 한 번에 조금씩이라 10분 주기 · 정리는 함수가 워크스페이스마다 6시간에 한 번으로 스스로 잠근다. 부팅 4분 뒤 1회.
+  const appBundles = () => perTenant("app-bundles",
+    () => import("../apps/app-bundle-migrate.js").then((m) => m.runAppBundleHousekeeping()));
+  setTimeout(() => { void appBundles(); }, 240_000).unref();
+  setInterval(() => { void appBundles(); }, 10 * 60_000).unref();
+
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
   setTimeout(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 90_000).unref();

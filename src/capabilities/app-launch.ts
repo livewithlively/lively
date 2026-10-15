@@ -19,11 +19,13 @@ import * as store from "../org/store/apps.js";
 import { getMember } from "../org/store.js";
 import { addressVariantFor, addressViewFor, canSeeApp } from "../apps/visibility.js";
 import { uiPagesFromFiles, type AppFile } from "../apps/app-versions.js";
+import { publishedScreens } from "../apps/app-version-files.js";
 import { appDomainFor, appHost, appOrigin, parseAppPath, safeAppNext, type AppVariant } from "../apps/app-address.js";
 import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunchMode, type MintLaunchInput } from "../apps/app-launch-store.js";
 import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
+import { logger } from "../log.js";
 
 const launchInput = {
   app_id: z.string(),
@@ -43,18 +45,21 @@ export interface LaunchDeps {
   getMember: (id: string) => Promise<Pick<OrgMember, "id" | "kind" | "state"> | null>;
   getApp: (id: string) => Promise<store.OrgApp | null>;
   listUiAssets: (id: string) => Promise<Array<{ page_key: string }>>;
-  /** #4667 공개 판 행 — 공개 주소로 여는데 남의 초안이 걸려 있으면 화면 키를 공개 판에서 본다. 없으면(시험 등) 설치된 화면으로 본다. */
+  /** #4667 공개 판 행 — 공개 주소로 여는데 남의 초안이 걸려 있으면 화면 키를 공개 판에서 본다. 없으면(시험 등) 설치된 화면으로 본다.
+   *  null = 판 행 없음(설치된 화면으로) · 던짐 = 저장소 실패(503 — 설치된 화면, 곧 남의 초안으로 떨어지지 않는다). */
   getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   mint: (i: MintLaunchInput) => Promise<{ code: string }>;
   now: () => number;
 }
+export const launchLiveDepsForTest = (): LaunchDeps => liveDeps;
 const liveDeps: LaunchDeps = {
   env: process.env,
   tenant: currentTenant,
   getMember: (id) => getMember(id),
   getApp: (id) => store.getApp(id),
   listUiAssets: (id) => store.listUiAssets(id),
-  getAppVersion: (id, no) => store.getAppVersion(id, no),
+  //  #4481 판 묶음에서 화면 entry 만(호환 사본 files 는 30일 뒤 비고, 큰 판엔 처음부터 없다 — 격리 리뷰 재검토 2).
+  getAppVersion: (id, no) => publishedScreens(id, no),
   mint: (i) => mintAppLaunchCode(i),
   now: () => Date.now(),
 };
@@ -100,7 +105,15 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   const view = addressViewFor(app, viewer, variant);
   if (view === "none") throw new HttpError(404, `앱 '${appId}' 에 열 수 있는 초안 판이 없습니다`);
   //  화면 키는 그 판의 화면에서 — 공개 판을 여는데 남의 초안이 깔려 있으면 설치된 화면이 아니라 공개 판 행의 화면을 본다.
-  const pub = view === "published" && d.getAppVersion ? await d.getAppVersion(appId, app.published_version_no as number).catch(() => null) : null;
+  //  저장소 실패는 503 — «공개 판 없음» 으로 읽어 설치된 화면(남의 초안)의 화면 키로 판정하지 않는다.
+  let pub: { manifest: unknown; files: unknown[] } | null = null;
+  if (view === "published" && d.getAppVersion) {
+    try { pub = await d.getAppVersion(appId, app.published_version_no as number); } catch (e) {
+      //  까닭은 로그로만 — DB · 저장소 오류 글(주소 · 역할 이름)을 구성원에게 내보이지 않는다.
+      logger.error({ err: e instanceof Error ? e.message : String(e), app: appId }, "[app-launch] 공개 판 화면을 읽지 못했다");
+      throw new HttpError(503, `앱 '${appId}' 의 공개 판 화면을 읽지 못했습니다 — 잠시 뒤 다시 열어 주세요`);
+    }
+  }
   const pages = pub ? uiPagesFromFiles(pub.manifest, pub.files as AppFile[]) : await d.listUiAssets(appId);
   if (pages.length === 0) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);
   const path = parseAppPath(next);
