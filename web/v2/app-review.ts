@@ -1,9 +1,10 @@
 // v2/app-review.ts — 앱빌더 「③ 시안 확인 · 고치기」 의 **진짜 화면 위 코멘트 층**(#4632, 원준 2026-10-14 «대충 구현한 앱 화면이랑 세션 위젯을 보여주지 말고
 //  … 실제로 이게 들어간 라이블리 화면에서 활용되는 진짜 리얼 뷰 · 사이드바 그대로 있고, 대신 그 위에 코멘트 남기는 거만 기능으로»).
 //
-//  앱빌더(app-studio.ts ③)가 가운데 단추로 **실제 라이블리 화면**으로 보낸다 — 세션 위젯 = 앱빌딩 세션 화면(#/s/<세션>)의 곁칸 앱 탭,
-//   앱 화면 = 앱 찾기에서 연 것과 같은 #/i/<앱>. 그 화면은 셸이 평소대로 그리고(사이드바 · 머리줄 · 곁칸 전부 그대로), 이 층이 그 위에 뜬다:
-//   · 아래 가운데 떠 있는 작은 막대 — 「‹ 앱빌더」 · 앱 이름 · n판 · 도구(써 보기 · 고르기 · 핀 · 영역) · 「의견 n건」 · 「수정하기」 · 「마음에 들어요」
+//  앱빌더(app-studio.ts ③)가 가운데 단추로 보낸다 — 세션 위젯 = **가상 세션**(app-try-session.ts — 진짜 세션 화면과 같은 꼴, 우측 사이드바에 진짜 앱 ·
+//   앱을 만드는 세션은 들이지 않는다 · 원준 2026-10-15), 앱 화면 = 앱 찾기에서 연 것과 같은 #/i/<앱>(셸이 평소대로 그린다). 이 층이 그 위에 뜬다:
+//   · 막대 — 「‹ 앱빌더」 · 앱 이름 · n판 · 도구(써 보기 · 고르기 · 핀 · 영역) · 「의견 n건」 · 「수정하기」 · 「마음에 들어요」.
+//     자리(dock)를 주면 그 안에 들어앉고(가상 세션의 맨 위 줄 — 세션의 입력칸을 가리지 않게), 없으면 아래 가운데 떠 있다(↑ 로 위로).
 //   · 핀 · 상자 · 그 자리 의견 칸 — 그 앱의 프레임(iframe.v2-appui-frame[data-app-id], app-ui.ts) 자리를 따라 fixed 로 뜬다.
 //     화면 구조를 모른다 — 곁칸이든 화면 가득이든 프레임이 보이는 곳이면 거기에 선다. 프레임이 안 보이면 막대가 그 말을 한다.
 //   · 고르기 · 핀은 프레임 안 탐침(PROBE_JS)에게 그 자리의 요소(태그 · 글 · 테두리)를 묻는다 — app-ui 가 검토 중인 앱(markReviewProbe)의 문서에만 넣는다.
@@ -11,16 +12,15 @@
 //  떠나면(다른 주소로 · 「‹ 앱빌더」 · 부르는 쪽이 close) 층과 막대를 걷는다. 한 번에 하나만 뜬다.
 import { el } from '../core.js';
 import { markReviewProbe } from './app-ui.js';
-import { SHOW_SESSAPP_EVT, refreshSessionApps } from './session-app-pane.js';
 import { whereText, type StudioPin } from '../lib/studio-flow.js';
 
 export type ReviewTool = 'try' | 'pick' | 'pin' | 'box';
 export interface ReviewHost {
   appId: string; title: string;
-  /** 보낼 실제 화면의 주소 — #/s/<세션>(세션 위젯) · #/i/<앱>(앱 화면). 이 주소를 벗어나면 층을 걷는다. */
+  /** 보낼 실제 화면의 주소 — #/i/<앱>(앱 화면) · 가상 세션은 지금 주소(앱빌더). 이 주소를 벗어나면 층을 걷는다. */
   route: string;
-  /** 세션 위젯이면 그 세션 — 곁칸의 앱 탭을 앞으로 가져온다. */
-  sessionId?: string;
+  /** 막대가 들어앉을 자리(가상 세션의 맨 위 줄) — 없으면 화면 아래 가운데 떠 있다. */
+  dock?: HTMLElement;
   pins: StudioPin[]; general: string;   // 부르는 쪽의 것 **그대로**(같은 배열 · 값) — 이 층이 더하고 지우고 고친 뒤 onChange 로 알린다
   version: number; waiting: boolean;
   onChange: (p: { pins: StudioPin[]; general: string }) => void;
@@ -47,7 +47,7 @@ export function closeReview(): void { if (cur) { const c = cur; cur = null; c.cl
 export function openReview(host: ReviewHost): ReviewApi {
   closeReview();
   const routeBase = host.route.split('?')[0];
-  const S = { tool: 'pick' as ReviewTool, active: -1, hoverAt: 0, hitSeq: 1, hitWaits: {} as Record<number, (h: any) => void>, frame: null as HTMLIFrameElement | null, dead: false, tick: 0, noteT: 0, waitT0: 0, waitTick: 0, top: false, asked: 0, askedAt: 0 };
+  const S = { tool: 'pick' as ReviewTool, active: -1, hoverAt: 0, hitSeq: 1, hitWaits: {} as Record<number, (h: any) => void>, frame: null as HTMLIFrameElement | null, dead: false, tick: 0, noteT: 0, waitT0: 0, waitTick: 0, top: false };
   markReviewProbe(host.appId, true);
 
   // ── 막대 ──
@@ -70,7 +70,8 @@ export function openReview(host: ReviewHost): ReviewApi {
   const layer = el('div', { class: 'v2-review-layer', hidden: true });
   const ov = el('div', { class: 'v2-studio-overlay v2-review-ov' });
   layer.append(ov);
-  document.body.append(layer, bar);
+  if (host.dock) { bar.classList.add('v2-review-bar--dock'); flip.hidden = true; host.dock.append(bar); document.body.append(layer); }
+  else document.body.append(layer, bar);
 
   const cmCount = (): number => host.pins.filter((p) => p.note.trim()).length + (host.general.trim() ? 1 : 0);
   const changed = (): void => { host.onChange({ pins: host.pins, general: host.general }); paintBar(); };
@@ -83,7 +84,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
     ver.textContent = host.version ? host.version + '판' : '';
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 새 판이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.sessionId ? '앱이 아직 안 보여요 — 세션 우측 사이드바에서 「' + host.title + '」 탭을 여세요' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.ico + ' ' + t.t + ' — ' + t.help;
+    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 새 판이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.dock ? '앱을 여는 중이에요 — 우측 사이드바에 뜨면 여기서 코멘트를 남길 수 있어요' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.ico + ' ' + t.t + ' — ' + t.help;
     layer.hidden = !S.frame || host.waiting;
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
   };
@@ -111,12 +112,6 @@ export function openReview(host: ReviewHost): ReviewApi {
     const f = findFrame();
     if (f !== S.frame) { S.frame = f; closePop(); paintBar(); paintMarks(); }
     if (f) { const r = f.getBoundingClientRect(); layer.style.left = r.left + 'px'; layer.style.top = r.top + 'px'; layer.style.width = r.width + 'px'; layer.style.height = r.height + 'px'; }
-    //  세션 위젯인데 프레임이 안 보이면 — 붙은 목록을 다시 읽고(붙이기가 이 화면 뒤에서 끝났을 수 있다) 곁칸의 앱 탭을 앞으로 부른다. 2초마다, 열 번까지.
-    if (!f && host.sessionId && S.asked < 10 && Date.now() - S.askedAt > 2000) {
-      S.asked++; S.askedAt = Date.now(); refreshSessionApps(host.sessionId);
-      //   지금 보이는 사이드바에만 — 앱빌더 안에 숨은 AI 세션 화면도 같은 꼴(.pn-wrap)이라 첫 번째로 보내면 엉뚱한 데로 간다.
-      document.querySelectorAll('.pn-wrap').forEach((w) => { if ((w as HTMLElement).getClientRects().length) w.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: host.appId } })); });
-    }
   };
   S.tick = window.setInterval(follow, 250);
   const onScroll = (): void => { follow(); };
@@ -200,7 +195,11 @@ export function openReview(host: ReviewHost): ReviewApi {
     pp.addEventListener('pointerdown', (e) => e.stopPropagation());
     const right = p.x + (p.w || 0);
     pp.style.top = Math.min(p.y * 100, 66) + '%';
-    if (right < 0.6) pp.style.left = 'calc(' + right * 100 + '% + 12px)'; else pp.style.right = 'calc(' + (100 - p.x * 100) + '% + 12px)';
+    //  짚은 곳의 오른쪽 · 왼쪽 중 **화면에** 자리가 있는 쪽 — 앱 칸 안의 비율로만 고르면 화면 오른쪽 끝의 좁은 사이드바(340)에서 칸이 화면 밖으로 나갔다.
+    const lr = layer.getBoundingClientRect(), need = 280 + 12 + 8;
+    const roomR = window.innerWidth - (lr.left + right * lr.width), roomL = lr.left + p.x * lr.width;
+    const toRight = roomR >= need ? true : roomL >= need ? false : roomR >= roomL;
+    if (toRight) pp.style.left = 'calc(' + right * 100 + '% + 12px)'; else pp.style.right = 'calc(' + (100 - p.x * 100) + '% + 12px)';
     pop = pp; layer.append(pp); ta.focus();
   };
   // 의견 한눈에 — 막대 위에 뜨는 칸(짚은 곳마다 한 줄 · 앱 전체 한 칸)
@@ -218,10 +217,17 @@ export function openReview(host: ReviewHost): ReviewApi {
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 의견(비워 두면 좋다는 뜻) · 예: 글자 조금 크게', 'aria-label': '앱 전체 의견' }) as HTMLInputElement; g.value = host.general;
     g.addEventListener('input', () => { host.general = g.value; changed(); });
-    tray = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '보낼 의견' },
-      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '보낼 의견' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 의견 칸이 열려요' : '위 도구로 고칠 곳을 짚어 보세요' })),
+    const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '보낼 의견' },
+      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '보낼 의견' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 의견 칸이 열려요' : '막대의 고르기 · 핀 · 영역으로 고칠 곳을 짚어 보세요' })),
       el('div', { class: 'v2-studio-tray-list' }, ...rows, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g)));
-    bar.append(tray);
+    tray = t;
+    if (host.dock) {
+      //  막대가 화면 맨 위 줄에 들어앉았으면 칸은 막대 **아래로** — 몸(body)에 붙여 앱 위 층(.v2-review-layer)보다 위에 선다(그 층이 사이드바의 앱을 덮고 있다).
+      const br = bar.getBoundingClientRect(), cr = count.getBoundingClientRect(), w = Math.min(560, window.innerWidth - 16);
+      t.classList.add('v2-review-tray--fixed');
+      Object.assign(t.style, { top: Math.round(br.bottom + 6) + 'px', left: Math.round(Math.max(8, Math.min(cr.left, window.innerWidth - w - 8))) + 'px', width: w + 'px' });
+      document.body.append(t);
+    } else bar.append(t);
     setTimeout(() => document.addEventListener('pointerdown', onTrayOut, true), 0);
   };
   const tickWait = (): void => {

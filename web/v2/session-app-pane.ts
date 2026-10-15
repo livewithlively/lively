@@ -45,19 +45,6 @@ export function composeDraft(session: string, text: string): void {
 
 /** 곁칸의 붙은 앱 탭 — 부품 종류 이름이자 탭 열쇠. 배치에 저장하지 않는다(머리말). */
 export const SESSAPP_TAB = 'sessapp';
-/** 세션마다 마지막으로 보던 곁칸 탭(v2/panes.ts 가 읽고 쓴다) — 이 브라우저 저장 열쇠. */
-export const PANE_ACT_KEY = 'pn_act_by_sess';
-/** 이 세션을 다음에 열면 우측 사이드바가 붙은 앱 탭으로 열리게 적어 둔다(#4632 앱빌더 「세션 위젯으로 보기」 — 늘 서던 「자료」 대신 만든 앱).
- *  셸은 앱 탭이 처음 설 때 이 기록을 보고 그 탭을 켠다(panes.ts syncSessApps). */
-export function preferSessAppTab(sid: string): void {
-  if (!sid) return;
-  try {
-    const m = JSON.parse(localStorage.getItem(PANE_ACT_KEY) || '{}');
-    const all = m && typeof m === 'object' ? m : {};
-    all[sid] = { ...(all[sid] && typeof all[sid] === 'object' ? all[sid] : {}), side: SESSAPP_TAB };
-    localStorage.setItem(PANE_ACT_KEY, JSON.stringify(all));
-  } catch (_) { /* 기록을 못 남겨도 화면은 선다 — 코멘트 층이 앱 탭을 다시 부른다 */ }
-}
 /** «그 앱 탭을 보여 달라» — 곁칸 [앱]에서 **이미 붙은** 앱을 다시 눌렀을 때(새로 붙은 게 아니라 셸이 스스로는 안 켠다).
  *  이 곁칸 한 벌의 뿌리(paneRoot)에서만 오간다. detail.app_id = 앞에 세울 앱. */
 export const SHOW_SESSAPP_EVT = 'pn:show-sessapp';

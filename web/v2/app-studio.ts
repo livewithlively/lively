@@ -3,7 +3,7 @@
 //  들어오는 길: 앱 찾기(런치패드) 「워크스페이스 앱」 끝의 「+ 새 앱」 → 런치패드가 닫히고 이 화면이 창 전체에 선다.
 //  빈 대화 칸 대신 **다섯 단계**가 머리줄 아래 늘 서고, 그 아래 「지금 할 일」 한 문장 + 주 단추 하나. 대화는 곁이다.
 //   ① 무엇을(이름 · 설명 · 어디서 쓰나)  ② 내용 — AI 가 먼저 기획 카드를 쓰고 사람은 틀린 줄만 고친다
-//   ③ 시안 확인 · 고치기 — 걸음 넷을 지나 진짜 앱이 생기면 **실제 라이블리 화면**으로 가서 써 보고 그 위에 코멘트(고르기 · 핀 · 영역)를 남겨 「수정하기」 → 새 판
+//   ③ 시안 확인 · 고치기 — 걸음 넷을 지나 진짜 앱이 생기면 **실제 화면 그대로**(세션 위젯 = 가상 세션 · 앱 화면 = #/i) 가서 써 보고 그 위에 코멘트(고르기 · 핀 · 영역)를 남겨 「수정하기」 → 새 판
 //     (원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정 · 목업 말고 진짜 리얼 뷰 · 사이드바 그대로 · 그 위에 코멘트만» — app-review.ts)
 //   ④ 확인 — AI 가 기획 카드와 대조 · 이름 · 자리  ⑤ 넣기 — 이렇게 만들었어요 · 써 보기 · 팀에 알리기(지식 「앱 소개」 + 슬랙)
 //   ⑧ 남이 만든 앱을 내게 맞게 — 앱빌더 ⋯ 「내 사본 떠서 고치기」 · 「원본을 고치기」 → ③부터 짧게.
@@ -24,7 +24,8 @@ import { takeCreated } from './created-cache.js';
 import { openAppUi, reloadAppFrames } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
-import { attachAppToSession, listAttached, preferSessAppTab } from './session-app-pane.js';
+import { attachAppToSession } from './session-app-pane.js';   // ⑤ 「지금 써 보기」 — 보고 있던 (다른) 세션에 붙인다
+import { mountTrySession, type TrySession } from './app-try-session.js';   // ③ 세션 위젯 = 가상 세션(앱을 만드는 세션은 들이지 않는다)
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
 import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
 import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
@@ -39,8 +40,6 @@ export interface StudioRec {
   stage: StudioStage; card: StudioCard | null; round: number; from: number;
   mode: 'new' | 'copy' | 'edit'; origin?: { id: string; title: string; by: string }; title?: string; done?: boolean; notified?: boolean;
   view?: 'widget' | 'app';   // ③ 에서 마지막으로 본 실제 화면 — 세션 위젯 · 앱 화면
-  /** 앱을 앱빌딩 세션에 붙였나(③ 첫 판) — 세션 곁칸이 진짜 세션 위젯이고 앱의 「세션에 글 보내기」 도 붙어야 된다. */
-  attached?: boolean;
   /** ③ 「앱 화면으로 보기」 가 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로. */
   instId?: string;
   /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「이대로 넣기」 가 공개한다(app_save publish).
@@ -448,14 +447,15 @@ function placePic(k: StudioPlace): HTMLElement {
 
 // ── ②~⑤ 만드는 화면 — 머리줄 · 단계 바 · 지금 할 일 · 가운데(기획 카드 · 시안 허브 · 점검표 · 마무리) · AI 세션(접힘 → 떠 있는 창 → 오른쪽에 붙임) ──
 //  ③ 시안 확인 · 고치기(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정 · 대충 구현한 앱 화면/세션 위젯 말고 진짜 리얼 뷰 · 사이드바 그대로 · 그 위에 코멘트만»):
-//   여기엔 앱을 띄우지 않는다. 가운데 단추가 **실제 라이블리 화면**(세션 위젯 = 앱빌딩 세션의 곁칸 · 앱 화면 = #/i/<앱>)으로 보내고 그 위에 코멘트 층(app-review.ts)이 선다.
-//   첫 판이 나오면 앱을 앱빌딩 세션에 **붙인다** — 세션 곁칸이 곧 진짜 세션 위젯이고, 앱의 「세션에 글 보내기」(app_chat_send) 도 붙어야 된다(원준 신고: «세션에 보내지 못했어요»).
+//   여기엔 앱을 띄우지 않는다. 가운데 단추가 실제 화면으로 보내고 그 위에 코멘트 층(app-review.ts)이 선다 — 세션 위젯 = **가상 세션**(app-try-session.ts:
+//   진짜 세션 화면과 같은 꼴 · 우측 사이드바에 진짜 앱 · 앱이 「세션에 보내기」 로 보낸 글은 그 가상 세션에 찍힌다), 앱 화면 = #/i/<앱>.
+//   앱을 앱빌딩 세션에 붙이지 않는다(원준 2026-10-15 «시연 중이잖아 · 앱을 수정하는 세션이 들어가면 안 되지» — 붙여 두면 앱이 보낸 글이 만드는 대화에 섞였다).
 async function build(rec: StudioRec): Promise<void> {
   if (!root) return;
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, lastNote: '', vis: null as StudioVis | null };
+    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null };
   const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
   const name = el('b', { class: 'v2-studio-name', text: S.title });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
@@ -595,29 +595,14 @@ async function build(rec: StudioRec): Promise<void> {
     appHost().replaceChildren(el('div', { class: 'v2-studio-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: title }), ...(steps ? [steps] : []), el('p', { text: sub })));
   };
 
-  // ── ③ 실제 화면으로 — 앱을 앱빌딩 세션에 붙이고(한 번), 코멘트 층과 함께 그 화면으로 보낸다 ──
-  //   붙었는지는 매번 서버 목록으로 본다(기록의 rec.attached 는 목록을 못 읽을 때만 믿는다 — 사람이 떼었을 수 있다). 동시에 부르면 한 번만 간다.
-  let attachRun: Promise<boolean> | null = null;
-  const ensureAttached = (): Promise<boolean> => {
-    if (S.dead || !rec.appId) return Promise.resolve(false);
-    if (attachRun) return attachRun;
-    attachRun = (async (): Promise<boolean> => {
-      try {
-        const have = await listAttached(rec.sid).catch(() => null);
-        if (have && have.some((x) => x.app_id === rec.appId)) { if (!rec.attached) { rec.attached = true; saveRec(rec); } return true; }
-        if (!have && rec.attached) return true;
-        const ok = await attachAppToSession(rec.sid, rec.appId, S.title);
-        rec.attached = ok; saveRec(rec); return ok;
-      } finally { attachRun = null; }
-    })();
-    return attachRun;
-  };
+  // ── ③ 실제 화면으로 — 코멘트 층과 함께 가상 세션(세션 위젯) · 앱 화면(#/i)으로 ──
+  const dropTry = (): void => { if (S.tryS) { S.tryS.destroy(); S.tryS = null; } };
   const backToBuilder = (): void => {
-    closeReview(); S.review = null;
+    closeReview(); S.review = null; dropTry();
     if (root) root.hidden = false;
     if (mountOpts.host && !/^#\/builder(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('resume', rec.sid);
   };
-  let opening = false;   // 붙이기 · 동의를 기다리는 동안 두 번 눌러도 한 번만 간다
+  let opening = false;   // 앱 화면을 마련하는 동안 두 번 눌러도 한 번만 간다
   const openReal = async (view: 'widget' | 'app'): Promise<void> => {
     if (!rec.appId || S.waiting || opening) return;
     opening = true;
@@ -625,14 +610,12 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const openRealNow = async (view: 'widget' | 'app'): Promise<void> => {
     rec.view = view; saveRec(rec);
-    let route = '#/s/' + encodeURIComponent(rec.sid);
+    let route = location.hash;
+    dropTry();
     if (view === 'widget') {
-      //  세션 위젯 = 그 세션 우측 사이드바의 앱 탭. 붙이기가 **끝난 뒤** 넘어가고, 그 세션의 사이드바가 앱 탭으로 열리게 먼저 적어 둔다 —
-      //   종전엔 붙이기를 기다리지 않고 넘어가 첫 화면에 앱 탭이 없었고, 사이드바는 늘 서던 「자료」 로 열렸다(원준 2026-10-15 «회의록 위젯 찾아야 하는 거»).
-      //   못 붙였으면 넘어가지 않는다(까닭은 붙이기가 이미 말했다 · 동의를 거절했으면 조용히).
-      if (!(await ensureAttached()) || S.dead) return;
-      preferSessAppTab(rec.sid);
-    } else void ensureAttached();
+      //  세션 위젯 = **가상 세션**의 우측 사이드바(이 자리 · 이 주소에 선다 — 앱빌더 화면만 비킨다). 앱 탭이 처음부터 열려 있다.
+      S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, title: S.title, version: S.curVer });
+    }
     if (view === 'app') {
       //  앱 화면 = 앱 찾기가 여는 것과 같은 앱 인스턴스 탭(#/i/<인스턴스>, app-instance openInstalledApp 과 같은 길). 한 번 연 것은 다시 쓴다.
       try {
@@ -642,15 +625,15 @@ async function build(rec: StudioRec): Promise<void> {
       } catch (e: any) { toast('앱 화면을 열지 못했어요 — ' + (e && e.message ? e.message : e), true); return; }
       if (S.dead) return;
     }
-    if (!mountOpts.host && root) root.hidden = true;   // 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
+    if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 가상 세션이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
     S.review = openReview({
-      appId: rec.appId, title: S.title, route, sessionId: view === 'widget' ? rec.sid : undefined,
+      appId: rec.appId, title: S.title, route, dock: S.tryS ? S.tryS.dock : undefined,
       pins: S.pins, general: S.general, version: S.curVer, waiting: S.waiting,
       onChange: (p) => { S.pins = p.pins; S.general = p.general; rec.pins = S.pins; rec.general = S.general; saveRec(rec); paintTray(); paintNow(); },
       onSend: () => { void sendFix(); },
       onLike: () => { backToBuilder(); void setStage('check'); },
       onBack: () => { backToBuilder(); },
-      onClose: () => { S.review = null; if (root) root.hidden = false; },
+      onClose: () => { S.review = null; dropTry(); if (root) root.hidden = false; },
     });
   };
   // 보낼 의견 — 짚은 곳마다 한 줄 · 앱 전체 한 칸(실제 화면의 막대 「의견 n건」 과 같은 것)
@@ -673,14 +656,14 @@ async function build(rec: StudioRec): Promise<void> {
   const paintHub = (): void => {
     const h = appHost();
     const views: Array<['widget' | 'app', string, string]> = [];
-    if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', '앱빌딩 세션의 우측 사이드바에 붙은 모습']);
+    if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', '가상 세션의 우측 사이드바에 붙은 모습']);
     if (rec.place !== 'side') views.push(['app', '앱 화면으로 보기', '앱 찾기에서 열었을 때 모습 · 화면 가득']);
     const first = views.findIndex((v) => v[0] === rec.view); if (first > 0) views.unshift(...views.splice(first, 1));   // 지난번에 본 꼴을 앞에
     const go = el('div', { class: 'v2-studio-hub-go' }, ...views.map(([k, t, s], i) => el('button', { type: 'button', class: i ? 'alt' : '', onclick: () => { void openReal(k); } }, el('b', { text: t }), el('small', { text: s }))));
     h.replaceChildren(el('div', { class: 'v2-studio-hub' },
       el('div', { class: 'v2-studio-hub-head' },
         el('h2', { text: rec.mode !== 'new' && rec.round === 0 && !S.waiting ? '원본 그대로 열렸어요' : S.waiting ? 'AI 가 고치는 중이에요' : (S.curVer ? S.curVer + '판이 나왔어요' : '첫 판이 나왔어요') }),
-        el('p', { text: '진짜 라이블리 화면(사이드바 그대로)에서 눌러 써 보고, 고칠 곳을 짚어 한 줄씩 적으세요. 그 화면 아래 막대의 「수정하기」 나 여기 「수정하기」 로 보내면 AI 가 한 번에 고쳐 새 판을 내요.' })),
+        el('p', { text: '실제 화면 그대로(세션 위젯은 가상 세션의 우측 사이드바)에서 눌러 써 보고, 고칠 곳을 짚어 한 줄씩 적으세요. 그 화면 막대의 「수정하기」 나 여기 「수정하기」 로 보내면 AI 가 한 번에 고쳐 새 판을 내요.' })),
       S.waiting ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '새 판이 오면 여기와 실제 화면이 바뀌어요 · 그동안 AI 세션을 봐도 돼요' })) : go,
       tray,
       el('p', { class: 'v2-studio-hub-fine', text: '이전 판으로 되돌리기는 위 머리줄에 있어요 · 실제 화면에서 「‹ 앱빌더」 를 누르면 여기로 돌아와요' })));
@@ -694,6 +677,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (rec.stage === 'fix') paintHub();
     paintBar(); paintNow();
     if (S.review) S.review.update({ version: S.curVer, waiting: S.waiting, title: S.title, pins: S.pins, general: S.general, note: note || undefined });
+    if (S.tryS) S.tryS.update({ title: S.title, version: S.curVer });
     reloadAppFrames(rec.appId);   // 앱 화면(#/i) 탭은 제 사건이 없다 — 새 판을 다시 띄운다(세션 곁칸은 스스로 띄운다)
   };
   // 새로 생긴 앱 찾기 — 시작할 때 없던 id. 여럿이면 가장 나중 것. 생기면 ③ 허브로(붙이기는 setStage 가).
@@ -716,7 +700,7 @@ async function build(rec: StudioRec): Promise<void> {
       rec.appId = found; S.title = foundTitle; rec.title = S.title; saveRec(rec); name.textContent = S.title;
       await setStage('fix');
       await showApp('첫 판이 나왔어요');
-      requestAnimationFrame(() => coach('draft', appBox.querySelector('.v2-studio-hub-go') as HTMLElement, '진짜 앱이 생겼어요. 가운데 단추로 실제 라이블리 화면에서 눌러 써 보고, 고칠 곳에 코멘트를 남기세요.', '제목을 고르기로 누르고 「글자 더 크게」'));
+      requestAnimationFrame(() => coach('draft', appBox.querySelector('.v2-studio-hub-go') as HTMLElement, '진짜 앱이 생겼어요. 가운데 단추로 실제 화면 그대로 눌러 써 보고, 고칠 곳에 코멘트를 남기세요.', '제목을 고르기로 누르고 「글자 더 크게」'));
       return;
     }
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
@@ -873,7 +857,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (s === 'put') { rec.done = true; saveRec(rec); paintPut(); }
     else if (s === 'plan') paintPlan();
     else if (s === 'draft') paintDraft();
-    else if (s === 'fix') { if (!rec.appId) paintDraft(); else { paintHub(); void paintVer().then(() => { if (!S.dead && rec.stage === 'fix') paintHub(); }); void ensureAttached(); } }
+    else if (s === 'fix') { if (!rec.appId) paintDraft(); else { paintHub(); void paintVer().then(() => { if (!S.dead && rec.stage === 'fix') paintHub(); }); } }
     else if (s === 'check') { S.check = null; paintCheck(); if (rec.card && rec.appId) { S.checkWait = true; void sendPrompt(rec, checkBrief(rec.card, rec.appId)); } }
     applyPlace(); paintBar(); paintNow(); paintTray();
   };
@@ -910,7 +894,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (to != null) await showApp(to + '판으로 되돌렸어요');
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
-  teardown = () => { S.dead = true; window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } if (S.chat) S.chat.destroy(); };
+  teardown = () => { S.dead = true; window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),

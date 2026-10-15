@@ -110,7 +110,12 @@ export interface AppUiMountOpts {
   onTyping?: (on: boolean) => void;
   /** #4592 앱 만들기 — 띄우는 쪽이 앱 문서에 함께 넣는 스크립트(찍어서 의견의 탐침). 셸 코드만 넘긴다(앱이 주는 것이 아니다). */
   extraScript?: string;
+  /** #4632 앱빌더의 가상 세션(app-try-session.ts) — 앱의 「세션에 보내기」(chat.send)를 진짜 세션 대신 이 함수가 받는다(서버에 가지 않는다).
+   *  있으면 앱은 세션에 붙어 열린 것으로 안다(인사의 session = TRY_SESSION_ID) — 세션이 있어야 서는 단추가 진짜 곁칸처럼 선다. sessionId 와 함께 주지 않는다. */
+  chatSink?: (text: string) => void;
 }
+/** 가상 세션의 id — 앱이 lively.session 으로 읽는다(진짜 세션 id 꼴 box-… 와 겹치지 않는다). */
+export const TRY_SESSION_ID = 'preview';
 // ── #4632 앱빌더 「③ 시안 확인 · 고치기」 가 **진짜 화면**(세션 곁칸 · 앱 화면) 위에 코멘트 층을 띄운다(app-review.ts) — 그 층이 이 프레임을 찾고(data-app-id),
 //   찍은 자리의 요소를 묻고(탐침 PROBE_JS — 검토 중인 앱의 문서에만 넣는다), 새 판이 오면 다시 띄운다(reloadAppFrames). 셸 코드만 넘긴다(앱이 주는 것이 아니다).
 const reviewProbe = new Set<string>();
@@ -260,7 +265,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     if (msg.method === 'ui/initialize') {
       relaunches = 0;   // 앱 문서가 제대로 떴다 — 다음에 쿠키가 만료돼 로그인 신호가 오면 다시 한 번 새 코드로 띄울 수 있다
       greeted = true; clearHello();   // 인사 감시 끝 — 이 문서는 살아 있다
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? (opts?.chatSink ? TRY_SESSION_ID : null), capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -290,8 +295,19 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       //   그 API 가 없는 옛 브라우저는 막지 않는다(막으면 기능이 통째로 죽는다 — 서버의 빈도 상한이 남는다).
       const sid = opts?.sessionId ?? '';
       const text = String((msg.params as { text?: unknown } | undefined)?.text ?? '');
-      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다' } }); return; }
       const ua = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation;
+      if (opts?.chatSink && !sid) {
+        //  #4632 가상 세션 — 진짜 세션에 보내지 않고 그 화면에 찍는다. 사람이 누른 동작에서만(진짜와 같은 규칙 — 앱이 저 혼자 보내는 꼴을 미리보기에서 놓치지 않게).
+        if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 보낼 수 있습니다' } }); return; }
+        //   진짜 서버가 거절하는 글은 여기서도 거절한다(src/apps/app-chat-send.ts 와 같은 문턱) — 미리보기에서 되던 것이 진짜 세션에서 안 되는 일이 없게.
+        const t = text.trim();
+        if (!t) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: '보낼 내용이 없습니다' } }); return; }
+        if (t.length > 4000) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: '보낼 글이 너무 깁니다(' + t.length + '자 > 4000자) — 내용은 앱 표에 두고 한 줄로 알리세요' } }); return; }
+        opts.chatSink(t);
+        reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: true, session: TRY_SESSION_ID, transport: 'preview' } });
+        return;
+      }
+      if (!sid) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: '붙은 세션이 없습니다 — 세션에 붙은 앱 화면에서만 보낼 수 있습니다' } }); return; }
       if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 보낼 수 있습니다' } }); return; }
       const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/chat-send', { method: 'POST', body: JSON.stringify({ session_id: sid, text }) });
       void send()

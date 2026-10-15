@@ -364,6 +364,50 @@ if (!existsSync(built)) {
     eq(lastReply(), { jsonrpc: "2.0", id: 6, result: { sent: false, session: "box-mine", draft: true } }, "S2-9 draft:true");
     off();
   }
+  // S2-15 #4632 가상 세션(chatSink) — 앱의 「세션에 보내기」 는 진짜 세션에 가지 않고 그 화면이 받는다 · 진짜 서버가 거절하는 글은 여기서도 거절
+  {
+    const got = [];
+    const { fire } = await mount({ title: "회의록", chatSink: (t) => got.push(t) });
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 81, method: "ui/initialize", params: {} });
+    await settle();
+    eq(lastReply().result.session, "preview", "S2-15 가상 세션 화면의 앱은 세션에 붙어 열린 줄 안다(lively.session = 'preview')");
+    fire({ jsonrpc: "2.0", id: 82, method: "chat/send", params: { text: "안녕", session_id: "box-victim" } });
+    await settle();
+    eq(got, ["안녕"], "S2-15 보낸 글은 가상 세션이 받는다(앱이 말한 session_id 는 버린다)");
+    eq(lastReply(), { jsonrpc: "2.0", id: 82, result: { sent: true, session: "preview", transport: "preview" } }, "S2-15 앱에는 보냈다고 답한다");
+    fire({ jsonrpc: "2.0", id: 83, method: "chat/send", params: { text: "  안녕  " } });
+    await settle();
+    eq(got[got.length - 1], "안녕", "S2-15 앞뒤 빈칸은 다듬는다(서버 normalizeChatText 와 같다)");
+    globalThis.navigator.userActivation.isActive = false;
+    fire({ jsonrpc: "2.0", id: 84, method: "chat/send", params: { text: "저 혼자" } });
+    await settle();
+    globalThis.navigator.userActivation.isActive = true;
+    ok(lastReply().error && lastReply().error.code === -32001, "S2-15 사람이 누른 동작이 아니면 -32001(진짜와 같은 규칙)");
+    const n0 = got.length;
+    fire({ jsonrpc: "2.0", id: 85, method: "chat/send", params: { text: "   " } });
+    await settle();
+    ok(lastReply().error && got.length === n0, "S2-15 공백뿐인 글은 거절 · 화면에 안 찍힌다");
+    fire({ jsonrpc: "2.0", id: 86, method: "chat/send", params: { text: "가".repeat(4000) } });
+    await settle();
+    ok(!lastReply().error && got.length === n0 + 1, "S2-15 정확히 4000자는 받는다(경계)");
+    fire({ jsonrpc: "2.0", id: 87, method: "chat/send", params: { text: "가".repeat(4001) } });
+    await settle();
+    ok(lastReply().error && /4000자/.test(lastReply().error.message) && got.length === n0 + 1, "S2-15 4001자는 거절(서버 상한과 같다)");
+    eq(fetches.filter((x) => /chat-send|\/prompt/.test(x.url)).length, 0, "S2-15 ★ 가상 세션에서는 서버로 아무것도 보내지 않는다");
+    //  진짜 세션 id 가 함께 오면 진짜 세션이 이긴다(종전 길) — 가상 세션 화면은 받지 않는다
+    const got2 = [];
+    const { fire: fire2 } = await mount({ sessionId: "box-mine", chatSink: (t) => got2.push(t) });
+    plan = { "/chat-send": { status: 200, json: { sent: true, session: "box-mine", transport: "outbox" } } };
+    fetches.length = 0;
+    fire2({ jsonrpc: "2.0", id: 88, method: "chat/send", params: { text: "x" } });
+    await settle();
+    ok(fetches.some((x) => x.url.includes("/chat-send") && x.body && x.body.session_id === "box-mine") && got2.length === 0, "S2-15 sessionId 가 있으면 진짜 세션으로 간다(가상 세션은 안 받는다)");
+    const { fire: fire3 } = await mount({});
+    fire3({ jsonrpc: "2.0", id: 89, method: "ui/initialize", params: {} });
+    await settle();
+    eq(lastReply().result.session, null, "S2-15 세션도 가상 세션도 없는 화면의 인사는 session null(종전)");
+  }
   // S2-10 prefs 다리 — GET 은 /prefs · set 은 POST {patch}
   {
     const { fire } = await mount({ sessionId: "box-mine" });
