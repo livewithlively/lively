@@ -12,6 +12,8 @@ import { pruneSessionApps } from "./session-apps.js";
 import { stopWorkersForApp } from "./worker-service.js";
 import { snapshotAppData } from "./app-snapshot.js";
 import { logger } from "../log.js";
+import { liveTableNames } from "./app-view.js";
+import { removeAppArchives, type ClearArchivesOutcome } from "./app-archive.js";
 
 export interface RemoveAppOutcome {
   components: number;
@@ -20,6 +22,8 @@ export interface RemoveAppOutcome {
   snapshot_skipped?: unknown;
   /** 떠 두기가 실패한 사유(있을 때만) — 관리자가 «되돌릴 수 없는 제거였나» 를 알아야 한다. */
   snapshot_error?: string;
+  /** #4733 그 앱의 보관 표 — 지운 것(백업 묶음은 위 snapshot 과 같은 시각) · 못 지워 남긴 것과 까닭. 기본 앱은 없음(공유 보관 자리). */
+  archives?: Pick<ClearArchivesOutcome, "taken_at" | "cleared" | "kept"> & { error?: string };
 }
 
 /**
@@ -40,15 +44,28 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
   // #4226 — 테이블을 지우기 전에 데이터를 떠 둔다(7일 보관). 같은 id 로 다시 설치하면 app_data_restore 로 되돌린다.
   //  떠 두기가 실패해도 제거는 막지 않는다 — 명시로 요청한 제거다(로그는 남긴다).
   let snapError: string | null = null;
-  const snap = await snapshotAppData(id, "before-remove").catch((err) => {
+  const now = new Date();   // #4733 앱 표와 보관 표를 한 묶음(같은 시각)으로 떠 둔다
+  const snap = await snapshotAppData(id, "before-remove", now).catch((err) => {
     logger.warn({ err, id }, "제거 전 앱 데이터 떠 두기 실패");
     snapError = (err as Error)?.message ?? String(err);
     return null;
   });
   // 앱 데이터 테이블(app 스키마)도 명시 DROP(소유자) — 매니페스트 선언분. best-effort.
-  const dataTables = ((app.manifest as { data?: { tables?: Array<{ name?: string }> } })?.data?.tables ?? []).map((t) => String(t.name));
+  //  #4667 물리 표 전부 — 공개 앱에 초안이 걸려 있으면 초안이 뺀(공개 판이 아직 쓰는) 표도 지운다(고아로 남지 않게 · 격리 리뷰 NB-7).
+  const dataTables = await liveTableNames(app);
   //  스키마는 설치 때와 같은 규칙(#4223) — 워크스페이스가 설치한 앱이면 그 워크스페이스 스키마의 테이블만 지운다.
   try { await dropAppTables(id, dataTables, appSchemaFor(isBuiltinSource(app.source))); } catch { /* best-effort */ }
+  //  #4733 그 앱의 보관 표도 — 지우기 직전 백업(위와 같은 묶음)에 담고 지운다. 못 담으면 지우지 않고 남긴다(제거는 막지 않는다 —
+  //   명시로 요청한 제거다). 기본 앱(시더의 은퇴 회수)은 보관 자리가 여러 워크스페이스의 것이라 건드리지 않는다.
+  let archives: RemoveAppOutcome["archives"];
+  if (!isBuiltinSource(app.source)) {
+    archives = await removeAppArchives(id, now)
+      .then(({ taken_at, cleared, kept }) => ({ taken_at, cleared, kept }))
+      .catch((err) => {
+        logger.warn({ err, id }, "제거하는 앱의 보관 표 정리 실패 — 그 자리에 둔다");
+        return { taken_at: null, cleared: [], kept: [], error: (err as Error)?.message ?? String(err) };
+      });
+  }
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
   await pruneSessionApps(id);              // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
   await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
@@ -58,5 +75,6 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
     snapshot: snap?.taken_at ? { taken_at: snap.taken_at, tables: snap.tables } : null,
     ...(snap && !snap.taken_at ? { snapshot_skipped: snap.skipped ?? null } : {}),
     ...(snapError ? { snapshot_error: snapError } : {}),
+    ...(archives ? { archives } : {}),
   };
 }

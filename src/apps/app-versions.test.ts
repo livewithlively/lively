@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   APP_VERSION_KEEP, APP_VERSION_TOTAL_MAX_BYTES, entriesOfManifest, filesFromStored, filesToInline, hasPackageDir, isOverrideSource, isTextPath,
-  newTablesForOverride, originOfCurrent, overlayFiles, overrideSourceMeta, readPackageDir, seedShouldSkipOverride, versionsToPrune,
+  newTablesForOverride, originOfCurrent, overlayFiles, overrideSourceMeta, readPackageDir, seedShouldSkipOverride, uiPagesFromFiles, versionsToPrune,
   versionsToPruneForQuota, PACKAGE_FILE_MAX_BYTES,
 } from "./app-versions.js";
 import { isBuiltinSource } from "./store-ddl.js";
@@ -100,7 +100,7 @@ const base = { id: "deck-edit", title: "장표 수정", version: "1.0.0", ui: { 
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "deck-edit", title: "장표 수정", version: "1.0.0", manifest: base, source: { kind: "builtin" }, content_hash: null,
   status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
-  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
+  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, visibility: "all", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...over,
 });
 const bob = { userId: "bob", scopes: ["memory"] };
 
@@ -175,9 +175,42 @@ test("[V14] 글 파일 판정은 확장자로 — 화면·스크립트·문서�
   for (const p of ["icon.png", "font.woff2", "x.bin", "noext"]) assert.equal(isTextPath(p), false, p);
 });
 
+// ── #4667 공개 판 보호 · 공개 판 화면 (사양 엣지 표 E22~E27) ──
+const members = (n: number) => Array.from({ length: n }, (_, i) => ({ version_no: i + 1, origin: "member" as const }));
+test("E22 보관 — 구성원 판 22개 · 보호 없음이면 가장 오래된 둘을 지운다", () => {
+  assert.deepEqual(versionsToPrune(members(22), 20).sort((a, b) => a - b), [1, 2]);
+});
+
+test("E23 보관 — 공개 판(1판)은 보관 수 밖이어도 지우지 않는다", () => {
+  assert.deepEqual(versionsToPrune(members(22), 20, [1]), [2]);
+  assert.deepEqual(versionsToPrune(members(22), 20, [22, 1]), [2], "지금 판(22)과 공개 판(1)을 함께 보호해도 결과는 같다");
+});
+
+test("E24 보관 — 보호 목록의 null · undefined 는 보호 없음과 같다", () => {
+  assert.deepEqual(versionsToPrune(members(22), 20, [null, undefined]).sort((a, b) => a - b), [1, 2]);
+});
+
+const pubManifest = { id: "memo", ui: { pages: [{ key: "main", title: "메모", entry: "ui/index.html" }, { key: "help", title: "도움말", entry: "ui/help.html" }], widgets: [{ key: "side", title: "곁", entry: "./ui/side.html" }] } };
+test("E25 공개 판 화면 — entry 경로와 파일 경로의 ./ 차이는 같은 파일", () => {
+  const ui = uiPagesFromFiles(pubManifest, [{ path: "lively-app.json", content: "{}" }, { path: "./ui/index.html", content: "<p>메인</p>" }, { path: "ui/side.html", content: "<p>곁</p>" }]);
+  assert.deepEqual(ui.map((u) => [u.page_key, u.kind, u.title, u.html]), [["main", "page", "메모", "<p>메인</p>"], ["side", "widget", "곁", "<p>곁</p>"]]);
+});
+
+test("E26 공개 판 화면 — 묶음에 없는 entry 는 건너뛴다(그 판에 없는 화면)", () => {
+  const ui = uiPagesFromFiles(pubManifest, [{ path: "ui/index.html", content: "<p>메인</p>" }]);
+  assert.deepEqual(ui.map((u) => u.page_key), ["main"]);
+  assert.deepEqual(uiPagesFromFiles(null, [{ path: "ui/index.html", content: "x" }]), [], "매니페스트가 비면 화면도 없다");
+});
+
+test("E27 공개 판 화면 — base64 로 담긴 화면도 글자로 풀어 준다", () => {
+  const html = "<p>한글 화면</p>";
+  const ui = uiPagesFromFiles(pubManifest, [{ path: "ui/index.html", content: Buffer.from(html, "utf8").toString("base64"), encoding: "base64" }]);
+  assert.equal(ui[0]?.html, html);
+});
+
 test("[W1] 새 능력 셋이 등록돼 있고 scope 가 없다(구성원 누구나) · app_save 가 note 를 받는다", async () => {
   const { appCapabilities } = await import("../capabilities/apps.js");
-  for (const name of ["app_pull", "app_versions", "app_revert"]) {
+  for (const name of ["app_pull", "app_versions", "app_revert", "app_visibility_set", "app_build_start", "app_draft_remove"]) {
     const cap = appCapabilities.find((c) => c.name === name);
     assert.ok(cap, `${name} 등록`);
     assert.equal(cap!.scope, null, `${name} scope`);

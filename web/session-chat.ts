@@ -18,10 +18,13 @@
 //
 //  ── 안 하는 것 ──
 //   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
-import { anchoredPopover, api, apiUrl, el, personFace, replaceKids, sv, toast, TOKEN_KEY } from './core.js';
+import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replaceKids, state, sv, toast, TOKEN_KEY } from './core.js';
+import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
-import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
+import { ccModelName, ctxFeed, ctxNew, ctxTokens, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
+import { parseTermPrefs, serializeTermPrefs, TERM_CURSORS, TERM_FONTS, TERM_PREFS_KEY, TERM_THEMES, type TermPrefs } from './lib/term-prefs.js';   // #4707 웹 터미널 설정 = 대화창 설정
 import { composerAttach } from './v2/compose-attach.js';
 import { registerSessionInput, putIntoSession, SESSION_INPUT_EVENT } from './v2/sess-input.js';   // #4135 곁칸이 이 세션 입력칸에 글을 넣는 다리
 
@@ -50,6 +53,7 @@ import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
+import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
@@ -133,6 +137,26 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 export interface SessAppDoor {
   watch(fn: (d: { title: string; count: number; icon: SVGElement | null } | null) => void): () => void;
   open(): void;
+}
+
+//  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
+//   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
+const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
+//  #4032 — 리브 탭에서 첫 말로 연 리브 세션(src/org/liv/session.ts LIV_CHAT_LABEL). 대화가 본자리인 것은 같고, 첫 말은 사람이 쓴 것이라 숨기지 않는다.
+const LIV_CHAT_LABEL = '리브 — 대화';
+
+/**
+ * 이 세션 대화창을 **Claude Code 터미널 문법(tui)** 으로 그리나 (#4707, 상민님 «세션 대화창 ui를 클로드코드 tui랑 최대한 똑같이»).
+ *
+ *  세션 화면은 같은 세션을 터미널과 대화 두 겹으로 보여 준다 — 대화 겹이 터미널과 같은 글자·같은 줄 문법이어야 두 겹을 오가도
+ *  같은 세션으로 읽힌다. 그래서 세션 화면은 tui 가 기본이다.
+ *  ⚠ **리브 대화는 예외**(종전 desktop 문법 그대로): 가입 온보딩의 리브 세션(킥오프)과 리브 탭(chatHome)은 «터미널이 낯선 사람에게
+ *   대화로 보여 준다» 가 존재 이유다(원준 2026-09-14 «가입 온보딩 때 처음에 만들어 주는 세션은 대화로 보기 형식으로 기본»).
+ *   그 화면을 터미널 모양으로 바꾸면 그 결정을 뒤집는다.
+ */
+export function sessionChatLook(label: string, chatHome: boolean): 'tui' | 'desktop' {
+  const l = String(label || '');
+  return chatHome || l === LIV_KICKOFF_LABEL || l === LIV_CHAT_LABEL ? 'desktop' : 'tui';
 }
 
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
@@ -426,23 +450,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const sh = shareSessOf(target);
     // 공유할 대상이 없으면(기록만 남은 행 등) 자리를 비운다 — 눌러서 "무엇을?"이 되지 않게.
     if (!sh) { facesEl.hidden = true; return; }
+    //  초대 명단(소유자 + 초대받은 사람)이 줄이다 — 지금 보고 있는 사람은 진하게, 아직 안 보는 사람은 흐리게(lib/face-roster).
     const vs = viewersOf(target.id);
-    const shown = vs.slice(0, FACE_MAX);
-    const rest = vs.length - shown.length;
+    const all = faceRoster(sh.owner, sh.invites, vs, String((state.me as any)?.userId || ''), personDisplayName);
+    const shown = all.slice(0, FACE_MAX);
+    const rest = all.length - shown.length;
+    const roster = all.map((f) => f.name + (f.here ? '' : ' (안 보는 중)')).join(', ');
     facesEl.title = sh.owned
-      ? (vs.length ? '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') + '\n눌러서 함께 볼 사람을 고릅니다' : '눌러서 함께 볼 사람을 고릅니다')
-      : '이 세션을 누가 볼 수 있는지 봅니다';
+      ? '초대한 사람 — ' + roster + '\n눌러서 함께 볼 사람을 고릅니다'
+      : '이 세션을 볼 수 있는 사람 — ' + roster;
     facesEl.setAttribute('aria-label', sh.owned ? '함께 볼 사람 고르기' : '볼 수 있는 사람 보기');
     //  ⚠ 여기서 DOM 의 replaceChildren 을 직접 부르지 않는다 — el() 과 달리 null 을 안 걸러 문자열 "null" 이
     //   텍스트 노드로 박힌다(실측 2026-09-10: 보는 사람이 하나뿐이라 rest 가 0 이던 화면에 «null» 이 찍혔다).
     //   replaceKids 가 el() 과 **같은 자식 규칙**으로 그 자리를 받는다(lib/dom.ts).
     replaceKids(facesEl,
-      ...shown.map((v) => personFace(v.id, 'sc-face', v.name)),
+      ...shown.map((v) => personFace(v.id, v.here ? 'sc-face' : 'sc-face sc-face-off', v.name)),
       rest > 0 ? el('span', { class: 'sc-face sc-face-more', text: '+' + rest }) : null,
       el('span', { class: 'sc-face sc-face-add', text: '＋' }));
     facesEl.hidden = false;
   }
-  facesEl.onclick = () => { const sh = shareSessOf(target); if (sh) openSharePopover(facesEl, sh); };
+  //  저장하면 명단을 바로 줄에 반영한다 — 사이드바 목록을 다시 받을 때까지 옛 명단이 남지 않게.
+  facesEl.onclick = () => {
+    const sh = shareSessOf(target);
+    if (sh) openSharePopover(facesEl, sh, (invites) => { try { (target.raw ||= {}).invites = invites; } catch (_) { /* 읽기 전용이면 다음 목록 갱신이 맞춘다 */ } paintFaces(); });
+  };
   paintFaces();
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
   const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
@@ -543,6 +574,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const attachments = composerAttach({ projectId: () => Number(target.projectId) || 0 });
 
   // 대화창 ————
+  //  문법은 마운트 때 한 번 정한다(sessionChatLook 머리말) — 세션 화면은 Claude Code 터미널 문법, 리브 대화는 종전 문법.
+  const look = sessionChatLook(first.label, !!opts.chatHome);
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
     // ⚠ '그 컴퓨터로 전달'은 **정말 다른 컴퓨터일 때만** 맞는 말이다. 게이트웨이 박스가 노드로도 등록돼
@@ -552,13 +585,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     toolLabel,
     thinking: 'fold',
     sendWhileBusy: true,
-    style: 'desktop',
-    bar: { right: el('span', { class: 'dt-chips' }, chipMode) },
+    style: look,
+    //  tui 에선 권한 모드를 상태 줄이 Claude Code 문법(`⏵⏵ accept edits on`)으로 말한다(setPermissionMode) — 같은 사실을 칩으로 또 쓰지 않는다.
+    bar: { right: look === 'tui' ? null : el('span', { class: 'dt-chips' }, chipMode) },
     compose: { chips: attachments.chips, button: attachments.btn, fileInput: attachments.fileIn },
     canSendEmpty: () => !!attachments.tail(),
     askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: async (text) => {
       if (attachments.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
+      //  #4695 T5 — 보낸 글은 더 이상 «쓰던 글» 이 아니다(세션별 기억을 비운다). 못 보내 입력칸으로 돌아오면 그때 다시 기억한다.
+      window.clearTimeout(composeTimer); saveComposeDraft(target.id, '');
+      //  끄기 전에 답을 기다리던 질문이 떠 있으면, 입력칸에 직접 쓴 글은 그 질문의 답이다 — AI 는 그 질문을 기억하지 못하므로 질문을 붙여 보낸다.
+      const q = stopQuestionOpen();
+      if (q && text.trim()) { text = stopFreeAnswerPrompt(q, text); stopAnsweredAt = stopCardAt; clearStopCard(); }
       await sendPrompt(text + attachments.tail(), () => attachments.clear());
     },
     // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
@@ -573,6 +612,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.input.value = opts.draft;
     view.input.dispatchEvent(new Event('input'));
   }
+  //  #4695 T5 ⑤ — 입력칸의 쓰던 글을 **세션별로** 기억한다(하네스 상태 무관). 종전엔 다른 세션에 다녀오면 사라졌다.
+  //   돌려 둔 글(opts.draft)이 먼저다 — 그게 없을 때만 기억해 둔 글을 채운다. 기억은 이 사람·이 브라우저의 것이다(web/lib/stop-note.ts).
+  let composeTimer = 0;
+  if (!view.input.value) {
+    const kept = loadComposeDraft(first.id);
+    if (kept) { view.input.value = kept; view.input.dispatchEvent(new Event('input')); }
+  }
+  view.input.addEventListener('input', () => {
+    window.clearTimeout(composeTimer);
+    composeTimer = window.setTimeout(() => saveComposeDraft(target.id, view.input.value), 400);
+  });
   attachments.wirePaste(view.input);
   attachments.wireDrop(view.root, view.root);
 
@@ -591,11 +641,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *   리브 킥오프 세션(src/org/liv/kickoff.ts LIV_SESSION_LABEL)은 터미널이 아니라 대화창으로 연다. 알아보는 자는 세션 이름이다
    *   (서버 상수와 같은 글자 — liv-kickoff-chat-view 시험이 둘을 맞춘다). 사람이 이름을 바꾸면 여느 세션처럼 터미널이 기본으로 돌아간다.
    */
-  //  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
-  //   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
-  const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
-  //  #4032 — 리브 탭에서 첫 말로 연 리브 세션(src/org/liv/session.ts LIV_CHAT_LABEL). 대화가 본자리인 것은 같고, 첫 말은 사람이 쓴 것이라 숨기지 않는다.
-  const LIV_CHAT_LABEL = '리브 — 대화';
+  //  리브 세션 이름(LIV_KICKOFF_LABEL · LIV_CHAT_LABEL)은 파일 머리(mountSessionChat 위)에 있다 — 대화창 문법을 고르는 자리가
+  //   대화창을 만들기 **전**에 그 이름을 봐야 해서 올렸다(#4707). 규칙·사연은 그 자리 주석 그대로다.
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
   const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
   //  ★ #4135 — 종전엔 여기에 `!isCodex() &&` 가 붙어 «코덱스는 무조건 터미널» 이었다. 그 한 줄은 **화면만**
@@ -859,8 +906,97 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
     }
-    if (dead()) paintDeadFooter();
+    if (dead()) { paintDeadFooter(); applyStopNote(); } else clearStopCard();
   };
+
+  // ── #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(서버 sessions/session-stop-rule.ts → 행 stopNote) ─────────────────────────
+  //  ① 쓰다 만 글 → 입력칸(사람이 지운 뒤 다시 채우지 않는다 — 쪽지마다 한 번) ② 답을 기다리던 질문 → 입력칸 바로 위 카드.
+  //  카드는 **멈춘 세션에서만** 선다 — 다시 살아나면(되살렸거나 다른 곳에서 열었다) 걷는다(paintState). 남의 세션엔 안 선다(canRevive).
+  let stopCard: HTMLElement | null = null;
+  let stopCardAt = 0;
+  //  답을 이미 보낸(또는 열기를 누른) 쪽지 — 보내는 동안 목록 갱신(3초)이 같은 멈춘 행을 주면 카드가 되살아나 같은 답이 두 번 갈 수 있었다(격리 리뷰).
+  //   쪽지는 끈 시각(at)으로 갈린다 — 다음에 꺼서 새로 남긴 쪽지는 다시 보인다.
+  let stopAnsweredAt = 0;
+  function clearStopCard(): void { if (stopCard) { stopCard.remove(); stopCard = null; } }
+  /** 지금 답을 기다리는 질문 카드의 질문(없으면 null) — 입력칸에 직접 쓴 답을 그 질문에 붙여 보낼 때 쓴다. */
+  function stopQuestionOpen(): StopNote['question'] | null {
+    if (!stopCard || !stopCard.isConnected) return null;
+    const note = stopNoteOf(target.raw?.stopNote);
+    return note?.question && !note.question.reappears ? note.question : null;
+  }
+  /** 쪽지를 화면에 되돌린다(여러 번 불러도 같다). 돌려준 것 — draft: 입력칸을 채웠나. */
+  function applyStopNote(): { draft: boolean } {
+    const note = stopNoteOf(target.raw?.stopNote);
+    if (!note || !canRevive() || destroyed) return { draft: false };
+    let draft = false;
+    if (note.draft && !view.input.value && !stopDraftSeen(target.id, note.at)) {
+      view.input.value = note.draft;
+      view.input.dispatchEvent(new Event('input'));   // 높이 맞춤 + 세션별 쓰던 글로도 기억
+      markStopDraftSeen(target.id, note.at);
+      draft = true;
+    }
+    if (note.question && note.at !== stopAnsweredAt && (!stopCard || stopCardAt !== note.at)) {
+      clearStopCard();
+      stopCard = renderStopQuestion(note);
+      stopCardAt = note.at;
+      liveDock.prepend(stopCard);
+      //  질문은 대화창에서 답한다 — 사람이 직접 고른 화면이 아니면 대화로 옮긴다(멈춘 세션은 어차피 터미널이 없다).
+      if (!modeChosen && mode === 'term') setMode('chat');
+    }
+    return { draft };
+  }
+  /** 답을 기다리던 질문 카드. claude 는 다시 열어도 그 질문 창이 안 뜬다 → 고른 답을 «앞서 물은 … 에 대한 답» 으로 보내 되살린다.
+   *  codex 는 다시 열면 같은 창이 다시 뜬다(reappears) → 열기만 하고 그 창에서 답하게 한다. */
+  function renderStopQuestion(note: StopNote): HTMLElement {
+    const q = note.question!;
+    const title = q.kind === 'permission' ? '실행 허락을 기다리던 질문이에요' : q.kind === 'plan' ? '계획 승인을 기다리던 질문이에요' : '답을 기다리던 질문이에요';
+    const body = el('div', { class: 'sc-wait-t sc-stopq-t' }, el('b', { text: title }));
+    const items = q.items.map((it) => {
+      const box = el('div', { class: 'sc-stopq-item' });
+      if (it.header) box.append(el('div', { class: 'sc-stopq-h', text: it.header }));
+      if (it.text) box.append(el('div', { class: 'sc-stopq-q', text: it.text }));
+      return box;
+    });
+    if (q.target) body.append(el('code', { class: 'sc-stopq-target', text: q.target }));
+    body.append(...items);
+    const acts = el('div', { class: 'sc-wait-acts sc-stopq-acts' });
+    const card = el('div', { class: 'sc-wait sc-stopq' }, el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }), body, acts);
+    if (q.reappears) {
+      //  codex — 다시 열면 같은 승인 창이 다시 뜬다(실측 0.162.1). 고른 답을 미리 받아 둘 이유가 없다 — 열고 그 창에서 답한다.
+      body.append(el('div', { class: 'sc-stopq-hint', text: '다시 열면 같은 창이 다시 떠요 — 거기서 답해 주세요.' }));
+      acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이어서 열고 답하기',
+        onclick: () => { stopAnsweredAt = note.at; clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true }); } }));
+      return card;
+    }
+    const picks = q.items.map(() => ({ labels: [] as string[] }));
+    const send = (): void => {
+      const text = stopAnswerPrompt(q, picks);
+      if (!text) { toast('답을 하나 이상 골라 주세요.'); return; }
+      stopAnsweredAt = note.at;
+      clearStopCard();
+      void sendPrompt(text);
+    };
+    //  질문이 하나이고 하나만 고르는 것이면 누르는 즉시 보낸다. 여럿이거나 여러 개 고르기면 골라 두었다가 [답 보내기].
+    const instant = q.items.length === 1 && !q.items[0].multi;
+    q.items.forEach((it, i) => {
+      const row = el('div', { class: 'sc-stopq-opts' }) as HTMLElement;
+      for (const op of it.options) {
+        const b = el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: op.label, title: op.desc || op.label }) as HTMLButtonElement;
+        b.addEventListener('click', () => {
+          if (instant) { picks[i].labels = [op.label]; send(); return; }
+          const cur = picks[i].labels;
+          const on = cur.includes(op.label);
+          picks[i].labels = it.multi ? (on ? cur.filter((x) => x !== op.label) : [...cur, op.label]) : (on ? [] : [op.label]);
+          for (const sib of Array.from(row.querySelectorAll('button'))) sib.classList.toggle('btn-primary', picks[i].labels.includes(sib.textContent || ''));
+        });
+        row.append(b);
+      }
+      items[i].append(row);
+    });
+    if (!instant) acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '답 보내기', onclick: send }));
+    if (q.items.some((it) => it.free)) body.append(el('div', { class: 'sc-stopq-hint', text: '고를 것이 없으면 아래 입력칸에 직접 답을 써 보내세요 — 이 질문에 대한 답으로 들어갑니다.' }));
+    return card;
+  }
   let deadFooterOn = false;
   const paintDeadFooter = (): void => {
     if (deadFooterOn) return; deadFooterOn = true;
@@ -871,7 +1007,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   되살릴 수 없는 세션(남의 것·휴지통·좌표 없음)만 종전대로 footer 로 사실을 말한다(막다른 입력창을 두지 않는다).
     if (canRevive()) {
       view.setFooter(null);
-      view.setNote(`${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
+      //  #4695 T5 — 하네스 종료 규칙이 끈 세션이면 쪽지로 왜 꺼졌는지 말하고, 쓰다 만 글·답을 기다리던 질문을 되돌린다(applyStopNote).
+      const restored = applyStopNote();
+      const note = stopNoteOf(target.raw?.stopNote);
+      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션이 다시 열리고 그 말이 들어갑니다.'
+        : note ? `${stopNoteWhy(note)} — 아래에 말을 걸면 다시 띄워 이어서 답합니다.`
+        : `${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
       view.busy(false);
       return;
     }
@@ -933,6 +1074,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       void resumeSession(null, { canRestore: true });
     }
     mode = m;
+    //  #4707 tui — 확인 대기 배너는 대화를 볼 때 **입력칸 바로 위**(Claude Code 가 승인 창을 그리는 자리)에 선다.
+    //   터미널을 볼 때는 종전 자리(머리줄 아래)로 돌아간다 — 그때 대화창은 숨어 있다.
+    if (look === 'tui') {
+      if (m === 'chat') { if (waitBar.parentElement !== liveDock) liveDock.prepend(waitBar); }
+      else if (waitBar.parentElement !== wrap) wrap.insertBefore(waitBar, chatHost);
+    }
     const src0 = termUrl();
     if (m === 'term' && !termFrame && src0) {
       termFrame = el('iframe', { class: 'sc-term-frame', src: src0, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
@@ -942,7 +1089,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintShellBar();
     termHost.hidden = m !== 'term';
     chatHost.hidden = m === 'term';
-    chatBadge.hidden = m !== 'chat';
+    //  #4707 — tui 대화창은 터미널과 같은 얼굴이라 «베타» 표지를 달지 않는다(두 보기를 오갈 때 머리줄이 달라지면 그게 곧 이질감이다).
+    chatBadge.hidden = m !== 'chat' || look === 'tui';
     //  ★ 판정을 «터미널을 보고 있나(m)» 에서 «터미널이 있나(hasTerm)» 로 옮긴다(원준 2026-09-10:
     //   «환경설정은 중요한거같아»). 종전엔 대화로 보기만 해도 [화면 복구]·[환경 설정]·연결 상태가 통째로
     //   사라졌다 — 폭과 무관하게. 터미널이 있으면 그 조작은 보고 있지 않아도 할 수 있어야 한다.
@@ -1143,6 +1291,58 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   (종전엔 [실행] 이라는 따로 된 칸이었다 — 2026-09-19 [이 세션] 아래로 합쳤다.)
   //   복제하면 paintAxis/switchAxis 배선이 두 벌이 되어 언젠가 갈린다. 그리고 이 구역이 있어야
   //   좁은 칸(≤620px, 칩이 물러난 상태)에서도 모델·추론강도를 바꿀 수 있다 — 사다리가 만든 구멍을 여기서 받는다.
+  /**
+   * [⋯ ▸ 화면] 줄들(#4707, 상민님 «웹터미널의 설정이 똑같이 대화화면에도 적용되도록해»).
+   *  웹 터미널의 환경 설정 창과 **같은 칸·같은 저장소**(localStorage lively_term_prefs)다 — 여기서 바꾸면 대화창은 그 자리에서(TERM_PREFS_EVENT),
+   *  이 세션의 터미널 액자는 storage 신호로 따라온다(web/standalone/terminal.ts). 저장하지 않는 칸(폰 입력 줄·줄 선택)은 건드리지 않는다.
+   */
+  function termLookRows(): HTMLElement[] {
+    //  기본 글자 크기(폰 12 · 그 밖 14)는 터미널·대화창과 **같은 판정**으로 고른다(좁은 데스크톱 창을 폰으로 보면 [화면] 이 12 를 보이고
+    //   «+» 가 13 을 저장해 글자가 줄었다 — 리뷰 실측).
+    const mobile = termMobile();
+    const read = (): TermPrefs => { let s: string | null = null; try { s = localStorage.getItem(TERM_PREFS_KEY); } catch { s = null; } return parseTermPrefs(s, mobile); };
+    const save = (mut: (p: TermPrefs) => void): void => {
+      const p = read(); mut(p);
+      try { localStorage.setItem(TERM_PREFS_KEY, serializeTermPrefs(p)); }
+      catch { toast('이 브라우저는 설정을 저장하지 못해요 — 비공개 창이면 저장이 막혀 있어요.', true); return; }
+      window.dispatchEvent(new CustomEvent(TERM_PREFS_EVENT));
+    };
+    const p0 = read();
+    const ctl = (label: string, desc: string, control: HTMLElement): HTMLElement =>
+      el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc })), control);
+    const pick = (opts: Array<[string, string]>, cur: string, on: (v: string) => void, aria: string): HTMLSelectElement => {
+      //  저장값이 목록 밖(옛 판이 쓰던 글꼴 등)이면 그 값도 한 칸으로 세운다 — 고른 적 없는 값으로 슬쩍 바꾸지 않는다.
+      const all = opts.some(([v]) => v === cur) ? opts : [[cur, cur] as [string, string], ...opts];
+      const s = el('select', { class: 'v2set-sel', 'aria-label': aria }, ...all.map(([v, t]) => el('option', { value: v }, t))) as HTMLSelectElement;
+      s.value = cur;
+      s.addEventListener('change', () => on(s.value));
+      return s;
+    };
+    const num = (v: number, min: number, max: number, step: number, aria: string, on: (n: number) => void): HTMLInputElement => {
+      const i = el('input', { class: 'v2set-num', type: 'number', min: String(min), max: String(max), step: String(step), value: String(v), 'aria-label': aria }) as HTMLInputElement;
+      i.addEventListener('change', () => { const n = Number(i.value); if (Number.isFinite(n)) { const c = Math.max(min, Math.min(max, n)); i.value = String(c); on(c); } });
+      return i;
+    };
+    const sizeV = el('span', { class: 'v2set-stepv', text: String(p0.fontSize) });
+    const step = (d: number): void => save((p) => { p.fontSize = Math.max(9, Math.min(30, Math.round(p.fontSize) + d)); sizeV.textContent = String(p.fontSize); });
+    const sizeCtl = el('div', { class: 'v2set-step' },
+      el('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': '글자 작게', text: '−', onclick: () => step(-1) }), sizeV,
+      el('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': '글자 크게', text: '+', onclick: () => step(1) }));
+    return [
+      ctl('글꼴', '영문 글꼴이에요. 한글은 늘 D2Coding 으로 보여요.',
+        pick(TERM_FONTS.map((f) => [f.v, f.label] as [string, string]), p0.fontFamily, (v) => save((p) => { p.fontFamily = v; }), '글꼴')),
+      ctl('글자 크기', '터미널과 같은 크기로 보여요.', sizeCtl),
+      ctl('색', '«앱 테마 따름» 이면 앱의 밝기를 따라가요.',
+        pick(TERM_THEMES.map((t) => [t.key, t.name] as [string, string]), p0.theme, (v) => save((p) => { p.theme = v; }), '색 테마')),
+      ctl('커서 모양', '입력칸의 커서예요. 터미널은 이 모양으로, 대화창은 브라우저가 그릴 수 있는 만큼 따라가요.',
+        pick(TERM_CURSORS.map((c) => [c.v, c.label] as [string, string]), p0.cursorStyle, (v) => save((p) => { p.cursorStyle = v === 'block' || v === 'underline' ? v : 'bar'; }), '커서 모양')),
+      ctl('마우스 휠 속도', '휠 한 칸에 굴리는 줄 수예요(1~12).', num(p0.scrollSpeed, 1, 12, 1, '마우스 휠 속도', (n) => save((p) => { p.scrollSpeed = n; }))),
+      ctl('트랙패드 배수', '손가락 이동의 몇 배로 굴릴지예요(0.5~6, 1 이면 그대로).', num(p0.padGain, 0.5, 6, 0.5, '트랙패드 배수', (n) => save((p) => { p.padGain = n; }))),
+      el('p', { class: 'v2set-note', text: '웹 터미널과 같은 설정이에요 — 여기서 바꾸면 이 세션의 터미널 화면도 함께 바뀌어요. 이 브라우저에만 저장돼요.' }),
+    ];
+  }
+
   let moreOpen = false;   // 두 번 열면 창 둘이 **같은 선택기**를 서로 뺏어간다(아래 ★ 이주) — 한 번에 하나만.
   function openMore(): void {
     if (moreOpen) return;
@@ -1234,7 +1434,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
             chatFirst() ? '같은 작업 폴더의 셸을 엽니다 — 대화창의 응답과 승인도 계속 확인할 수 있어요' : '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요',
             '터미널로', () => { modeChosen = true; setMode('term'); })) : null,
       row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', '열기', () => openIndex()),
-      row('글자 크기', `지금 ${CHAT_FONT_LABELS[fontStep] ?? '보통'} — 이 세션에만 적용돼요`, '다음 크기', () => {
+      //  tui 대화창의 글자 크기는 웹 터미널 설정이 정한다(아래 [화면] 칸) — 대화창만의 배율을 따로 두면 두 보기가 다시 갈라진다(#4707).
+      look === 'tui' ? null : row('글자 크기', `지금 ${CHAT_FONT_LABELS[fontStep] ?? '보통'} — 이 세션에만 적용돼요`, '다음 크기', () => {
         fontStep = nextFontStep(fontStep);
         view.setFontStep(fontStep);
         toast(`글자 크기: ${CHAT_FONT_LABELS[fontStep]}`);
@@ -1243,13 +1444,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ? row('대화를 터미널로 넘기기', '대화창이 쥔 Codex 대화를 놓고, 터미널에서 Codex 를 이어 띄웁니다', '넘기기', () => void handoffToTerminal()) : null,
     ] });
 
+    // ── 화면(#4707) — 웹 터미널과 대화창이 **함께 쓰는** 글꼴·크기·색·커서·스크롤. tui 대화창일 때만 선다 ──
+    if (look === 'tui') secs.push({ key: 'look', label: '화면', icon: ['M4 6h16', 'M4 12h10', 'M4 18h13'], kids: termLookRows() });
+
     // ── 터미널 ──
     if (hasTerm()) secs.push({ key: 'term', label: '터미널', icon: ['M4 5.5h16v13H4z', 'M8 10l3 2.5-3 2.5', 'M13 15.5h4'], kids: [
       row('화면 복구', (termStatusEl.textContent ? '지금 ' + termStatusEl.textContent + '. ' : '') + '화면이 깨지거나 어긋났을 때 다시 연결합니다', '복구', () => termAct('reconnect')),
       //  폰은 터미널 쪽 창이 폰 전용 시트다(#4229 후속) — 이름과 설명을 그 시트에 맞춘다.
+      //  #4707 — 이 설정은 이제 대화창도 함께 쓴다(tui). 설명이 «이 터미널에만» 이면 거짓말이 된다.
       phoneNow()
-        ? row('터미널 설정', '글자 크기·글꼴·색·커서 모양', '열기', () => termAct('settings'))
-        : row('환경 설정', '글꼴·크기·테마·커서·스크롤 속도 — 이 터미널에만 적용돼요', '열기', () => termAct('settings')),
+        ? row('터미널 설정', look === 'tui' ? '글자 크기·글꼴·색·커서 모양 — 대화 화면도 같이 바뀌어요' : '글자 크기·글꼴·색·커서 모양', '열기', () => termAct('settings'))
+        : row('환경 설정', look === 'tui' ? '글꼴·크기·테마·커서·스크롤 속도 — 대화 화면에도 같이 적용돼요' : '글꼴·크기·테마·커서·스크롤 속도 — 이 터미널에만 적용돼요', '열기', () => termAct('settings')),
       phoneNow()
         ? row('폰에서 쓰는 법', '입력 줄·글쇠 줄·사진 올리기·번호로 고르기', '보기', () => termAct('help'))
         : row('사용법 안내', '터미널·단축키 간단 사용법', '보기', () => termAct('help')),
@@ -1319,6 +1524,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   interface Rec { t: ChatTurn; evs: any[] }
   const recs: Rec[] = [];                     // 화면 순서(위→아래)
   let cur: Rec | null = null;
+  //  #4707 tui — 문맥 토큰 셈(쉬는 동안의 안내 `new task? /clear to save 550.8k tokens` 의 수). 앞에서부터 차례로 먹인다.
+  let ctx = ctxNew();
   let src: Source | null = null;
   let loadedFrom = 0; let loadedTo = 0;
   // 노드(멤버 PC) 세션의 중앙 기록 좌표(#1744) — 행이 아는 대화 uuid(logId·claudeSessionId) 또는 서버 409 `node` 응답이 준 uuid(nodeHint).
@@ -1380,15 +1587,47 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function applyLine(o: any): void {
     if (!o || typeof o !== 'object' || o.isSidechain) return;
     if (o.timestamp) { const ms = new Date(o.timestamp).getTime(); if (Number.isFinite(ms)) lastLineAt = ms; }
+    if (look === 'tui') ctxFeed(ctx, o);
+    //  #4707 — Claude Code 2.1.299 는 권한 모드를 사람 말 줄이 아니라 따로 `{"type":"permission-mode","permissionMode":"auto"}` 줄에 적는다
+    //   (긴 턴 중간부터 읽은 창엔 사람 말 줄이 없어 모드를 영영 몰랐다 — 상태 줄의 `⏵⏵ auto mode on` 이 비었다, 실측).
+    if (o.type === 'permission-mode') {
+      if (o.permissionMode) { chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode)); view.setPermissionMode(String(o.permissionMode)); }
+      return;
+    }
+    //  #4707 tui — 도는 동안 도착한 «끝났다» 알림은 사람 말 줄이 아니라 끼워 넣기 줄(attachment · queued_command)로 적힌다.
+    //   터미널은 그 자리(지금 턴 안)에 같은 한 줄을 그린다 — 셈(bgDone)도 여기서 지운다(안 지우면 `Waiting for …` 가 영영 남는다).
+    if (o.type === 'attachment') {
+      const n = look === 'tui' ? lineNotice(o) : null;
+      if (n) {
+        view.bgDone(n.taskId);
+        if (!cur) cur = newRec(null, o.timestamp);
+        view.notice(cur.t, n.segs, n.tone);
+      }
+      return;
+    }
     if (o.type === 'user') {
-      if (o.permissionMode) chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode));
+      if (o.permissionMode) { chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode)); view.setPermissionMode(String(o.permissionMode)); }
       const { text, results } = userText(o);
       const sm = SET_MODEL_RE.exec(text.replace(/\u001b\[[0-9;]*m/g, ''));   // ANSI 굵기를 걷어내고 본다
       if (sm && sm[1]) setModel(sm[1].trim());
-      if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results } }); trailResults(results); }
+      //  toolUseResult — 하네스가 결과와 함께 적은 구조화 값(Read 의 줄 수 · Edit 의 패치 · Task 의 도구 수…). tui 결과 줄이 그 수를 쓴다(#4707).
+      //   permissionDecision — 자동 모드 판정기가 허락한 호출이면 tui 가 `⎿  Allowed by auto mode classifier` 를 단다(Claude Code 와 같다).
+      if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); trailResults(results); }
       if (o.isMeta || !text.trim()) return;
-      if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
-      if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text); cur = newRec(null); running = true; return; }
+      if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); return; }
+      if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text, 'end', 'compact'); cur = newRec(null); running = true; return; }
+      //  #4707 tui — 보조 에이전트·백그라운드 작업의 «끝났다» 알림. 사람 말은 아니지만 터미널은 한 줄로 보인다:
+      //   `● Agent "기록: …" finished · 1m 1s`(2.1.299 실측). 그 알림이 새 턴을 연다 — 뒤따르는 답이 그 아래에 선다(터미널과 같은 순서).
+      if (look === 'tui') {
+        const tn = parseTaskNotification(text);
+        if (tn) {
+          view.bgDone(tn.taskId);
+          cur = newRec(null, o.timestamp); running = true;
+          cur.t.root.dataset.notice = '1';
+          view.notice(cur.t, taskNoticeSegs(tn), /^(failed|killed|error)/i.test(tn.status) ? 'err' : 'ok');
+          return;
+        }
+      }
       if (INJECTED_RE.test(text)) return;                       // 슬래시 명령·리마인더 — 사람 말이 아니다
       //  #1631 — 킥오프 세션의 **첫 지시**(서버가 넣은 것)는 사람 말풍선으로도 발자취로도 그리지 않는다. 그 위엔 «살펴보는 중» 을 띄우고,
       //   답(assistant)이 오면 아래 assistant 분기가 로딩을 걷고 그 자리에 이어진다. 이후 사람이 직접 친 말은 kickoffOpened 로 통과한다.
@@ -1432,15 +1671,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     if (o.type === 'system') {
       // 턴의 끝 — turn_duration(소요 시간)·stop_hook_summary(Stop 훅 요약) 둘 다 턴이 끝난 뒤에만 찍힌다(둘 중 하나만 있어도 마감).
-      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, { durationMs: Number(o.durationMs) || 0 }); running = false; }
+      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, turnEndOf(o)); running = false; idleFrom(o); }
       // 공통 ChatLine(#1746) — 중단(사용자가 끊음)·맥락 압축(어댑터가 system 줄로 올린다. claude 는 위의 사용자 줄 표식으로도 온다).
-      else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; }
-      else if (o.subtype === 'compact') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined); cur = newRec(null); running = true; }
+      else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); }
+      else if (o.subtype === 'compact') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined, 'end', 'compact'); cur = newRec(null); running = true; }
       // ★ 하네스가 올린 오류 — **반드시 보이게** 하고 턴을 마감한다. 삼키면 화면이 «작업 중» 에 갇힌다
       //  (실측 2026-08-27: codex 401 이 그렇게 «10초 생각중 → 죽은 세션» 으로 보였다).
-      else if (o.subtype === 'error') { view.divider('오류', typeof o.text === 'string' ? o.text : undefined); if (cur) view.settle(cur.t, {}); running = false; }
+      else if (o.subtype === 'error') { view.divider('오류', typeof o.text === 'string' ? o.text : undefined, 'end', 'error'); if (cur) view.settle(cur.t, {}); running = false; }
       return;
     }
+  }
+  /**
+   * #4707 tui — 턴이 끝났다(끊김 포함): 그 시각과 지금까지의 문맥 토큰을 화면에 알린다 — 75분 쉬면 `new task? /clear …` 가 선다.
+   *  끝난 세션엔 세우지 않는다 — 그 안내는 살아 있는 Claude Code 가 그리는 것이고, 끝난 세션엔 /clear 를 칠 자리가 없다.
+   */
+  function idleFrom(o: { timestamp?: unknown }): void {
+    if (look !== 'tui') return;
+    const at = Date.parse(String(o?.timestamp ?? ''));
+    view.idle(Number.isFinite(at) && !dead() ? { at, tokens: ctxTokens(ctx) } : null);
   }
   // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
   const trail = opts.trail || null;
@@ -1546,7 +1794,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     setMode('term');
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
-  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 새 id 로 새 노드에 앉히고 대기 중인 지시(큐)를 승계한다(routes.ts). */
+  /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 지금 서빙 노드에 다시 앉힌다(routes.ts) — #4694 이후 대개 **같은 id** 라
+   *  대기 중인 지시(큐)가 그 id 에 그대로 있다. 새 id 로 열리는 경우(강제 복원 등)는 서버가 큐를 그 세션으로 승계한다. */
   async function restoreUnreachable(pd: Pending): Promise<void> {
     const btn = pd.restoreBtn;
     if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
@@ -1568,6 +1817,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
           ? '이어받을 대화 기록이 그 컴퓨터에 없어 새 대화로 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.'
           : '이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
         if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
+        return;
+      }
+      //  #4694 — **같은 id 로 다시 띄웠다**(새 세션이 아니라 이 세션 그대로). 종전 판정(`next !== target.id`)은 이걸 실패로 읽어
+      //   «지금은 복원할 수 있는 상태가 아니에요» 를 띄웠다 — 실제로는 세션이 떠 있는데. 대기 중이던 지시는 이 id 의 큐에 그대로 있다.
+      if (r?.session && next === target.id) {
+        toast(r?.resumed === 'fresh'
+          ? '이어받을 대화 기록이 없어 새 대화로 다시 띄웠어요 — 대기 중이던 지시가 곧 들어갑니다.'
+          : '세션을 다시 띄웠어요 — 대기 중이던 지시가 곧 들어갑니다.');
+        if (opts.onResumed) opts.onResumed(next);   // 셸이 이 탭을 살아 있는 세션으로 다시 그린다(주소는 그대로라 hashchange 가 없다)
         return;
       }
       //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
@@ -1731,6 +1989,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     loadedFrom = chunk.from; loadedTo = chunk.to;      // 서버가 줄 경계로 맞춘 창 — 첫 줄 버리기·조각 이어붙이기가 필요 없다(#1746 window.ts)
     curUuid = chunk.uuid || null; oldestUuid = curUuid; oldestPrev = chunk.from === 0 ? (chunk.prev || null) : null;
+    if (chunk.from === 0) noteBannerFrom(chunk.text);
     applyText(chunk.text);
     olderBar();
     finishReplay();
@@ -1763,8 +2022,36 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     return [el('span', { class: 'sc-older-spin', 'aria-hidden': 'true' }),
       el('span', { class: 'sc-older-t', text: loadedFrom > 0 ? '이전 대화 불러오는 중…' : '압축 전 대화 불러오는 중…' })];
   }
+  // ── tui 환영 상자(#4707) — Claude Code 가 세션을 열 때 그리는 첫 화면. **대화의 맨 처음**을 읽었을 때만 맨 위에 선다 ──
+  //  재료는 대화 파일의 첫 줄들(그 세션을 연 순간의 작업 폴더·하네스 버전·모델). 줄마다 version 을 적는 것은 Claude Code 뿐이라,
+  //  그 값이 없으면(다른 하네스) 상자를 그리지 않는다 — 남의 첫 화면을 지어내지 않는다.
+  let bannerInfo: { cwd: string; version: string; model: string } | null = null;
+  function noteBannerFrom(text: string): void {
+    let cwd = '', version = '', model = '';
+    let n = 0;
+    for (const line of text.split('\n')) {
+      if (++n > 400 || (cwd && version && model)) break;
+      if (!line.trim()) continue;
+      let o: any; try { o = JSON.parse(line); } catch { continue; }
+      if (!cwd && o?.cwd) cwd = String(o.cwd);
+      if (!version && o?.version) version = String(o.version);
+      if (!model && o?.type === 'assistant' && realModelId(String(o?.message?.model || ''))) model = String(o.message.model);
+    }
+    bannerInfo = version ? { cwd, version, model } : null;
+  }
+  function paintBanner(): void {
+    if (look !== 'tui') return;
+    if (loadedFrom > 0 || oldestPrev || !bannerInfo) { view.banner(null); return; }
+    const me = (state.me || {}) as { display_name?: string; userId?: string };
+    const name = String(me.display_name || personDisplayName(String(me.userId || '')) || '').trim();
+    view.banner({
+      title: 'Claude Code', version: bannerInfo.version, welcome: name ? `Welcome back ${name}!` : 'Welcome back!',
+      model: bannerInfo.model ? ccModelName(bannerInfo.model) : undefined, cwd: bannerInfo.cwd || undefined, mascot: true,
+    });
+  }
   function olderBar(): void {
     olderEl?.remove();
+    paintBanner();
     // ⚠ 타임라인 범위는 이제 이 창과 무관하다(#1819) — 얇은 판으로 **세션 전체**를 따로 붓는다(loadThinTrail).
     if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; olderAuto.watch(null); return; }
     //  표지는 «불러오는 중» 한 가지 얼굴이다 — 이게 화면에 보인다는 건 곧 부르고 있다는 뜻이다(보이기 두 장 전에 이미 불렀다).
@@ -1804,8 +2091,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (intoPrev) { oldestUuid = oldestPrev; oldestPrev = null; }
     if (from === 0) oldestPrev = chunk.prev || null;
     const text = chunk.text;
+    if (from === 0) noteBannerFrom(text);              // 대화의 맨 처음에 닿았다 — 환영 상자의 재료(#4707). 그리는 것은 olderBar 가 한다
+
     // 줄 → 턴 묶음(사람 말 기준). 첫 묶음은 사람 말 없는 이어짐일 수 있다.
-    type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string };
+    type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string; notice?: { text: TuiSeg[]; tone: 'ok' | 'err'; taskId: string } };
     const bundles: Bundle[] = [];
     let b: Bundle | null = null;
     for (const line of text.split('\n')) {
@@ -1814,10 +2103,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!o || o.isSidechain) continue;
       if (o.type === 'user') {
         const { text: ut, results } = userText(o);
+        //  #4707 tui — 완료 알림은 새 턴을 연다(applyLine 과 같은 규칙 — isMeta·빈 줄은 알림이 아니다).
+        const tn = look === 'tui' && !results.length && !o.isMeta ? parseTaskNotification(ut) : null;
+        if (tn) { b = { text: null, ts: o.timestamp, lines: [], kind: 'cont', notice: { text: taskNoticeSegs(tn), tone: /^(failed|killed|error)/i.test(tn.status) ? 'err' : 'ok', taskId: tn.taskId } }; bundles.push(b); continue; }
         if (results.length) { if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); } b.lines.push(o); }
         if (o.isMeta || !ut.trim() || INTERRUPT_RE.test(ut) || INJECTED_RE.test(ut)) { if (INTERRUPT_RE.test(ut) && b) b.lines.push(o); continue; }
         if (CONTINUED_RE.test(ut)) { bundles.push({ text: null, lines: [], kind: 'divider', raw: ut }); b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); continue; }
         b = { text: ut, ts: o.timestamp, lines: [], kind: 'turn' }; bundles.push(b);
+      } else if (o.type === 'attachment') {
+        //  도는 동안 끼워 넣은 완료 알림 — 그 턴 안에 둔다(그릴 때 셈도 지운다).
+        if (look === 'tui' && lineNotice(o)) { if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); } b.lines.push(o); }
       } else if (o.type === 'system' && o.subtype === 'compact') {
         bundles.push({ text: null, lines: [], kind: 'divider', raw: typeof o.text === 'string' ? o.text : undefined }); b = { text: null, lines: [], kind: 'cont' }; bundles.push(b);
       } else if (o.type === 'assistant' || (o.type === 'system' && (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary' || o.subtype === 'interrupted'))) {
@@ -1844,18 +2139,22 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // 화면 맨 위가 '이어짐'(사람 말 없음)이었으면 그 내용은 이 창의 마지막 턴에 속한다 — 합친다.
     const firstRec = recs[0];
     let orphan: Rec | null = null;
-    if (firstRec && !firstRec.t.ask && bundles.length && bundles[bundles.length - 1].kind !== 'divider') { orphan = firstRec; }
+    //  ⚠ 완료 알림이 연 턴(#4707 tui)은 «중간부터 읽은 턴»이 아니라 그 자체로 턴의 시작이다 — 합치지 않는다(합치면 알림 줄이 사라진다).
+    if (firstRec && !firstRec.t.ask && !firstRec.t.root.dataset.notice && bundles.length && bundles[bundles.length - 1].kind !== 'divider') { orphan = firstRec; }
     view.prependKeepingView(() => {
       const savedCur = cur;
       for (let i = bundles.length - 1; i >= 0; i--) {
         const bd = bundles[i];
-        if (bd.kind === 'divider') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', bd.raw, 'start'); continue; }
+        if (bd.kind === 'divider') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', bd.raw, 'start', 'compact'); continue; }
         const rec = newRec(bd.text, bd.ts, 'start');
         cur = rec;
+        //  알림 묶음 — 셈도 지운다. 묶음은 새 것부터 그리므로 알림이 그 에이전트를 띄운 줄보다 먼저 온다(chat-view 의 bgFinished 가 받아 준다).
+        if (bd.notice) { rec.t.root.dataset.notice = '1'; view.bgDone(bd.notice.taskId); view.notice(rec.t, bd.notice.text, bd.notice.tone); }
         for (const o of bd.lines) {
-          if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results } }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
+          if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
           else if (o.type === 'assistant') view.event(rec.t, o);
-          else if (o.type === 'system') view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : { durationMs: Number(o.durationMs) || 0 });
+          else if (o.type === 'attachment') { const n = lineNotice(o); if (n) { view.bgDone(n.taskId); view.notice(rec.t, n.segs, n.tone); } }
+          else if (o.type === 'system') view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : turnEndOf(o));
         }
         if (i === bundles.length - 1 && orphan) {
           // 고아 이어짐의 이벤트를 이 턴 뒤에 다시 그리고 고아는 치운다. 고아가 '지금 도는 턴'이었으면 그 표시(깜빡임·경과 줄)도 옮긴다.
@@ -1928,6 +2227,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
         curUuid = c.uuid; loadedTo = 0; carry = '';
+        ctx = ctxNew(); view.idle(null);   // #4707 — 새 기록(압축·/clear)은 문맥을 새로 센다. 지난 파일의 «쉬는 동안의 안내» 는 걷는다.
         c = await rawGet(srcPath(src, { from: 0 }));
         if (destroyed) return;
       } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
@@ -1971,7 +2271,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     schedule();
   }
   function clearAll(): void {
-    recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false;
+    recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false; ctx = ctxNew(); view.idle(null);
     view.list.replaceChildren(); olderEl = null; olderAuto.watch(null); olderGen++; olderStalls = 0;
     trail?.clear();
   }
@@ -2018,6 +2318,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       view.settle(pd.t); view.busy(false);
       view.error(pd.t, `보내지 못했습니다. ${e?.message || ''}`);
       view.input.value = text;               // 친 글은 돌려준다
+      view.input.dispatchEvent(new Event('input'));   // #4695 — 돌려준 글도 세션별로 다시 기억한다
     }
   }
   /** 돌던 턴을 멈춘다. app-server 세션(#2055)은 tmux 키가 아니라 **그 런타임**에 직접 말한다 —
@@ -2083,7 +2384,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     reviving = true;
     view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
     const pd = addPending(text);
-    pd.state.textContent = '세션을 이어서 여는 중…';
+    //  #4695 T5 — 하네스 종료 규칙이 끈 세션에 말을 걸면 여기로 온다(컨테이너 → tmux → 하네스 이어 열기 → 전달). 운영 p50 약 5초다.
+    pd.state.textContent = '준비 중이에요 — AI 를 다시 띄워 이 말을 전달합니다(보통 5초 안팎 걸립니다).';
     view.scrollToBottom();
     let routed = false;
     try {
@@ -2121,6 +2423,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     try {
       let nextId = '';
       let moved = '';                            // #2231 — 이 세션은 이미 이어졌다(서버가 알려준 새 id)
+      let revivedInPlace = false;                // #4694 — 서버가 새 세션이 아니라 **이 id 그대로** 다시 띄웠다
       // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
       //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
       //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
@@ -2139,6 +2442,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         //  막다른 길이었다. 이제는 그 새 id 로 **옮겨 간다**(아래 공통 라우팅). 새로고침을 시킬 이유가 없다.
         moved = String(r?.movedTo || '');
         nextId = String(r?.session?.id || moved || (r?.already ? target.id : ''));
+        revivedInPlace = !!r?.session && nextId === target.id;
       } else {
         const sid = !isBox() ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
         const node = !isBox() ? String(target.node ?? '') : String(target.logNode ?? '');
@@ -2150,7 +2454,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
-      toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.' : '이어받기 세션을 열었어요.');
+      toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.'
+        : revivedInPlace ? '세션을 다시 띄웠어요 — 대화가 이어집니다.' : '이어받기 세션을 열었어요.');
       //  ⚠ 라우팅 **전에** 훅을 부른다(#2439) — 되살린 세션에 말을 넣는 일이 여기서 일어나야 한다. 옮겨 간 뒤에
       //   넣으면 이 컴포넌트는 이미 destroy 된 뒤라 실패해도 아무도 모른다.
       if (beforeRoute) await beforeRoute(nextId);
@@ -2437,7 +2742,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const ls = logSrc();
       if (!destroyed && ls) {
         if (!src && !!t.node && canType()) { void open(); }
-        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
+        else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
     destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },

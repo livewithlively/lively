@@ -120,7 +120,7 @@ export function outboxAlertFor(prev: OutboxPhase | null, cur: OutboxPhase, obs: 
         + `잡은 정상(ok)으로 보입니다 — 예산 소진은 실패가 아니라 정상 종료이기 때문입니다.\n`
         + `→ 관리 ▸ 스케줄 의 마지막 실행 요약에서 pushed·visited 를 보세요.`
         + ` 매 틱 pushed 가 0 이면 큐 머리가 막힌 것이고, pushed 는 있는데 remaining 이 안 줄면 유입이 처리보다 빠릅니다.\n`
-        + `(남은 항목 수에는 반출 대상이 아닌 행 — 컨테이너 미설정 네이티브·고아 — 도 함께 잡힙니다.)`,
+        + `(남은 항목 수에는 반출 대상이 아닌 행 — 컨테이너 미설정 네이티브·고아·반복 거절로 파킹된 행 — 도 함께 잡힙니다.)`,
       detail,
     };
   }

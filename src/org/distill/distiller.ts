@@ -16,6 +16,7 @@ import { itemsPool, q } from "../../db/client.js";
 import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
 import { sourceVisSql, resolveSourceViewer, S_LIST_SEL } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
+import { isAutoDisabledLane } from "./lanes.js";
 
 export interface DistillerRow {
   id: number;
@@ -68,19 +69,8 @@ export const DISTILLER_SEL = `id, key, label, enabled, priority,
   batch_size, batch_max_msgs, mode, session_ref, harness, model, effort, requester,
   last_run_at, last_status, last_summary, note, updated_at`;
 
-/** 자동 정지 표식 키 — 자격 실패 대응(node/auth-failure-response.stopLanes)이 last_summary 에 남기고, 사람이 레인을 저장하면 지운다. */
-export const AUTO_DISABLED_MARK = "auto_disabled";
-
-/**
- * 실행 계정의 자격 실패로 **자동으로** 꺼진 레인인가.
- *  이런 레인은 배치를 내지 않지만 자기 스코프는 계속 «맡는다» — 안 그러면 그 몫이 방치(stranded)·전역 폴백으로 넘어가
- *  잡 계정과 기본 기준으로 증류되고, 사람이 다시 켜도 되돌릴 수 없다(종전 크론 정지에선 아무것도 안 돌았다).
- */
-export function isAutoDisabledLane(d: Pick<DistillerRow, "enabled" | "last_summary">): boolean {
-  if (d.enabled) return false;
-  const s = d.last_summary;
-  return !!s && typeof s === "object" && (s as Record<string, unknown>)[AUTO_DISABLED_MARK] === true;
-}
+//  자동 정지 표식 판정은 레인 종류(증류·분류·관리) 공용이라 lanes.ts 에 둔다 — 표식 키가 갈리면 한쪽 레인이 표식을 못 읽는다.
+export { AUTO_DISABLED_MARK, isAutoDisabledLane } from "./lanes.js";
 
 // 배정 순서 = priority DESC, id ASC. 한 자료는 이 순서상 **가장 앞선(=우선순위 높은) 증류기 하나에만** 배정된다.
 //  → 낮은 우선순위에 넓은(또는 빈) 스코프를 두면 그게 자연히 catch-all 레인이 된다.

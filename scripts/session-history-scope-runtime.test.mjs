@@ -40,7 +40,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
-import { dumpDom, findChrome } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
@@ -460,9 +460,9 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 
 async function run(inShell) {
   const dom = await dumpDom(chrome, { html: pageOf(inShell), copy: CSS, prefix: "session-history-scope-", virtualTimeBudget: 90000, args: ["--window-size=1400,900"] });
-  const m = /<pre id="out">([\s\S]*?)ENDRESULT/.exec(dom);
-  if (!m) { console.error("FAIL  결과 표지를 못 받았다\n" + dom.slice(0, 1500)); process.exit(1); }
-  return JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+  const res = readOut(dom);
+  if (res.text === null) { console.error(`FAIL  결과 표지를 못 받았다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 1500)); process.exit(1); }
+  return JSON.parse(res.text);
 }
 const A = await run(true);    // 셸 액자 안
 const B = await run(false);   // 셸 밖

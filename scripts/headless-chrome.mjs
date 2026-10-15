@@ -9,6 +9,7 @@
 //   ② 재시도하며 지운다   ③ 그래도 못 지우면 알리기만 한다(임시 디렉터리다 — 테스트를 실패시킬 이유가 없다).
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -28,6 +29,33 @@ export function findChrome() {
 }
 
 /**
+ * 가상 시간 «숨 고르기» 자리 — 페이지 html 에 이 글자가 있으면 dumpDom 이 127.0.0.1 에 작은 서버를 띄우고
+ *  그 주소로 바꿔 싣는다. 페이지는 기다리는 자리(폴링·고정 대기)마다 이 주소를 진짜 fetch 로 한 번 부른다.
+ *
+ *  왜: `--virtual-time-budget` 의 가상 시간은 **진짜 비동기**(blob 읽기 · createImageBitmap · canvas.toBlob)를
+ *   기다려 주지 않는다. 그동안 페이지가 sleep(20) 으로 폴링하면 가상 시계만 빨리 흘러, 4초(가상) 대기가 실시간
+ *   수십 ms 만에 끝난다 — 부하가 걸린 CI 에서는 그 사이 작업이 안 끝나 시험이 빨갛다(side-files-finder R23·R28).
+ *   타이머 없이 진짜 비동기만 기다리면 가상 시계가 예산 끝으로 뛰어 결과를 쓰기 전에 DOM 을 뜬다(PENDING).
+ *   크롬은 **네트워크 요청이 걸려 있는 동안 가상 시간을 멈춘다**(pauseIfNetworkFetchesPending) — 대기마다 실시간
+ *   몇 ms 짜리 요청을 끼우면 가상 대기 한도가 실시간 진척과 함께 간다(실측 2026-10-14: blob 읽기 8MB×20 을
+ *   4초 폴링이 sleep(20) 만으로는 놓쳤고 · 요청을 끼우니 360ms(가상)에 잡았다 · headless-chrome-breathe.test.mjs).
+ *  페이지는 가짜 서버로 window.fetch 를 바꾸기 **전에** 진짜 fetch 를 쥐어 둬야 한다.
+ */
+export const BREATHE_URL = "__LV_BREATHE_URL__";
+const BREATHE_MS = 5;   // 한 번 숨 고를 때 실시간으로 쉬는 몫 — 작업이 다른 스레드에서 진척할 틈
+
+async function startBreather() {
+  const srv = http.createServer((q, r) => {
+    setTimeout(() => { r.writeHead(200, { "access-control-allow-origin": "*", "content-type": "text/plain" }); r.end("ok"); }, BREATHE_MS);
+  });
+  await new Promise((res, rej) => { srv.once("error", rej); srv.listen(0, "127.0.0.1", res); });
+  return {
+    url: `http://127.0.0.1:${srv.address().port}/breathe`,
+    close: () => { try { srv.closeAllConnections(); } catch (_) { /* 이미 닫혔다 */ } srv.close(); },
+  };
+}
+
+/**
  * `html` 을 임시 디렉터리의 page.html 로 쓰고(`copy` 의 파일은 같은 이름으로 옆에 둔다) 크롬 `--dump-dom` 으로 돌린다.
  *  stdout 에 `marker` 가 보이는 순간 끊는다 — ⚠ 종료를 기다리면 매달리는 페이지가 있다(ctx-rclick-runtime 실측:
  *  DOM 을 다 뱉고도 단독 2초, 러너 안에서는 45초 상한까지). 그 대기가 그대로 테스트 시간이 된다.
@@ -36,7 +64,9 @@ export function findChrome() {
 export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [] }) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   let closed = Promise.resolve();
+  let breather = null;
   try {
+    if (html.includes(BREATHE_URL)) { breather = await startBreather(); html = html.split(BREATHE_URL).join(breather.url); }
     for (const src of copy) copyFileSync(src, path.join(dir, path.basename(src)));
     writeFileSync(path.join(dir, "page.html"), html);
     return await new Promise((resolve, reject) => {
@@ -72,8 +102,30 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
       child.on("close", () => done(resolve, out));
     });
   } finally {
+    breather?.close();
     await new Promise((r) => { const t = setTimeout(r, 3000); closed.then(() => { clearTimeout(t); r(); }); });
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
     catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
   }
+}
+
+/**
+ * dump 된 DOM 에서 `<pre id="out">` 의 결과 본문을 꺼내 엔티티를 되돌린다.
+ *  ⚠ 본문은 `[^<]` 로만 잡는다 — `[\s\S]*?` 로 잡으면 페이지가 결과를 쓰기 전에 덤프됐을 때(본문이 아직 PENDING)
+ *   `</pre>` 를 넘어 인라인 스크립트 속 marker 문자열까지 건너가 그 사이 HTML 을 결과로 집는다. 그러면 «결과 없음» 이
+ *   JSON 파싱 오류로 둔갑해 원인을 가린다. 텍스트 노드의 `<` 는 직렬화에서 `&lt;` 가 되므로 결과 본문에 `<` 는 없다.
+ *  여는 태그에 속성이 붙어도 된다(`<pre id="out" style="…">` — 화면 밖으로 치운 결과 칸). `[^>]*` 는 태그 밖으로 못 나간다.
+ * @returns {{ text: string | null, out: string | null }} text = 결과 본문(marker 앞까지) · 못 찾으면 null 이고
+ *   out 에 `<pre id="out">` 의 지금 내용(예: "PENDING")을 실어 호출자가 실패 사유로 쓰게 한다.
+ */
+export function readOut(dom, marker = "ENDRESULT") {
+  const esc = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`<pre id="out"[^>]*>([^<]*?)${esc}`).exec(dom);
+  if (m) return { text: decodeText(m[1]), out: null };
+  const p = /<pre id="out"[^>]*>([^<]*)/.exec(dom);
+  return { text: null, out: p ? decodeText(p[1]) : null };
+}
+
+function decodeText(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, "\u00a0").replace(/&amp;/g, "&");
 }

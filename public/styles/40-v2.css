@@ -1691,10 +1691,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-stage--side > * { flex: none; width: 360px; }   /* 세션 옆에 붙는 앱은 곁칸 폭으로 미리 본다 */
 .v2-studio-stage .v2-appui-frame { flex: 1; width: 100%; border: 0; }
 .v2-studio-stage--side > .v2-appui-frame, .v2-studio-stage--side > .v2-studio-wait { flex: none; width: 360px; }
-.v2-studio-wait { align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
+.v2-studio-wait { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
 .v2-studio-wait b { color: var(--ink); font-size: 16px; }
 .v2-studio-wait p { margin: 0; max-width: 300px; font-size: 13.5px; line-height: 1.6; }
-.v2-studio-spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
+.v2-studio-spin { display: block; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
 @keyframes v2-studio-spin { to { transform: rotate(360deg); } }
 .v2-studio-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }
 .v2-studio-chat > * { flex: 1; min-height: 0; }
@@ -1703,6 +1703,9 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-bar span { flex: 1; min-width: 0; text-align: center; padding: 4px 6px; border-radius: 7px; font-size: 12.5px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v2-studio-bar span.on { background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); }
 .v2-studio-bar span.done { color: var(--ink-sub); }
+.v2-studio-bar button.go { flex: 1; min-width: 0; text-align: center; padding: 4px 6px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.v2-studio-bar button.go:hover { background: rgba(123, 97, 224, .08); color: var(--purple-text, #5B3FD0); }
+.v2-studio-back { flex: none; }
 .v2-studio-now { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(123, 97, 224, .08); color: var(--purple-text, #5B3FD0); font-size: 13.5px; font-weight: 800; flex-wrap: wrap; }
 .v2-studio-now-t { min-width: 0; }
 .v2-studio-now-pri { height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }
@@ -1734,6 +1737,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-app { display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(var(--shadow-ink), .10); overflow: hidden; width: 100%; min-height: 320px; flex: 1 1 auto !important; }
 .v2-studio-app--side { width: 360px; flex: none !important; min-height: min(640px, 100%); }
 .v2-studio-app-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2, #F6F8FB); font-size: 12px; color: var(--muted); }
+.v2-studio-app-head--pn { padding: 0; background: none; border-bottom: 0; display: block; pointer-events: none; }   /* 실제 곁칸 탭 줄(pn-tabbar)을 그대로 싣는다 — 보이기만 */
+.v2-studio-app-head--pn[hidden] { display: none; }
 .v2-studio-app-head .tab { padding: 2px 8px; border-radius: 6px; }
 .v2-studio-app-head .tab.on { background: var(--bg); color: var(--ink); font-weight: 800; box-shadow: 0 0 0 1px var(--line); }
 .v2-studio-app-head .dot { width: 10px; height: 10px; border-radius: 50%; background: #E56450; box-shadow: 14px 0 0 #F2B84B, 28px 0 0 #4CBB6C; margin-right: 26px; }
@@ -1745,7 +1750,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-overlay[hidden] { display: none; }
 .v2-studio-pinm { position: absolute; z-index: 4; width: 20px; height: 20px; margin: -20px 0 0 -10px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); pointer-events: none; }
 .v2-studio-pinm::after { content: ""; }
-.v2-studio-steps { display: grid; gap: 4px; margin: 4px 0; }
+.v2-studio-steps { display: grid; gap: 4px; margin: 4px 0; min-width: 200px; }
 .v2-studio-steps span { font-size: 13px; color: var(--muted); padding: 3px 10px; border-radius: 7px; }
 .v2-studio-steps span.on { background: rgba(123, 97, 224, .12); color: var(--purple-text, #5B3FD0); font-weight: 800; }
 .v2-studio-steps span.done { color: var(--ink-sub); text-decoration: line-through; }
@@ -1787,7 +1792,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-steps-list { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
 /* 말풍선 · 처음 안내 · 둘러보기 · ? 메뉴 */
 .v2-studio-coach { position: fixed; z-index: 5; background: var(--ink); color: #fff; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 20px rgba(21, 35, 59, .25); pointer-events: none; }   /* 누름은 아래로 통과 — 첫 누름이 말풍선에 먹히지 않는다 */
-.v2-studio-coach b { color: #C8B9FF; }
+.v2-studio-coach b { display: block; margin-bottom: 2px; color: #C8B9FF; }   /* 「처음 안내」 머리 뒤에 줄을 바꾼다(원준 2026-10-15 «그 뒤 본문과 엔터가 없음») */
 .v2-studio-coach small { display: block; margin-top: 4px; color: #C8B9FF; font-size: 12px; }
 .v2-studio-intro { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(21, 35, 59, .35); padding: 20px; overflow: auto; }
 .v2-studio-intro-box { width: min(760px, 100%); background: var(--bg); border-radius: 16px; padding: 22px 24px; display: grid; gap: 14px; box-shadow: 0 20px 60px rgba(21, 35, 59, .3); }
@@ -1855,7 +1860,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-toolrow { display: flex; align-items: center; gap: 8px; }
 .v2-studio-tools { display: inline-flex; padding: 3px; gap: 3px; border-radius: 11px; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
 .v2-studio-tools button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; height: 32px; padding: 0 13px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 800; color: var(--ink-sub); cursor: pointer; }
-.v2-studio-tools button .ico { font-size: 13px; }
+.v2-studio-tools button .ico { display: inline-flex; font-size: 13px; }
+.v2-studio-tools button .ico svg { display: block; }
 .v2-studio-tools button.on { background: var(--purple, #7B61E0); color: #fff; }
 .v2-studio-toolcount { color: var(--muted); font-size: 12.5px; }
 .v2-studio-toolhelp { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border-radius: 10px; background: rgba(123, 97, 224, .08); border: 1px solid rgba(123, 97, 224, .22); font-size: 13px; line-height: 1.5; color: var(--ink-sub); }
@@ -1890,7 +1896,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-tray-row .x { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; }
 .v2-studio-tray-in { flex: 1; min-width: 0; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
 /* ② 카드를 통째로 다시 쓰게 하는 한마디 */
-.v2-studio-ask { display: flex; gap: 6px; padding: 0 16px 14px; }
+.v2-studio-ask { display: flex; gap: 6px; padding: 10px 16px 14px; }
 .v2-studio-ask-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
 .v2-studio-intro-cards b { display: block; font-size: 14px; margin-bottom: 3px; }
 .v2-studio-intro-cards small { color: var(--ink-sub); line-height: 1.5; display: block; }
@@ -1915,12 +1921,13 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-help button { text-align: left; border: 0; background: none; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: var(--ink); }
 .v2-studio-help button:hover { background: var(--gray-bg-2, #F6F8FB); }
 .v2-pad-badge--new { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }
+/* #4667 내 초안이 걸린 공개 앱 — 나에게만 서는 표시라 흐린 테두리로(«새로» 와 겹쳐도 구분되게). 「나만」 은 아래 --mine(#4632) */
+.v2-pad-badge--draft { background: transparent; color: var(--purple-text, #5B3FD0); border-color: rgba(123, 97, 224, .45); border-style: dashed; }
 .v2-pad-origin { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
 /* ③ 다 만들었어요 — 이렇게 만들었어요(판마다 한 줄) · 이렇게 쓰세요 · [지금 써 보기] */
 .v2-studio-fin { flex: 1; min-height: 0; overflow: auto; width: min(720px, 100%); margin: 0 auto; padding: 24px 20px 60px; display: flex; flex-direction: column; }
 .v2-studio-fin h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-fin h3 { margin: 28px 0 12px; font-size: 15px; font-weight: 800; }
-.v2-studio-steps { display: grid; margin-left: 8px; padding-left: 20px; border-left: 2px solid rgba(123, 97, 224, .35); }
 .v2-studio-step { position: relative; padding: 0 0 16px; }
 .v2-studio-step:last-child { padding-bottom: 2px; }
 .v2-studio-step::before { content: ""; position: absolute; left: -27px; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: var(--purple, #7B61E0); box-shadow: 0 0 0 3px var(--gray-bg-2, #F6F8FB); }
@@ -3016,3 +3023,88 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
   .v2-mention { left: 6px !important; width: calc(100% - 12px); max-width: none; }
   .ov-box.v2-def-box { padding: 18px 16px 14px; }
 }
+
+/* ── ③ 시안 확인 · 고치기(#4632) — 앱빌더 안의 가운데 단추(.v2-studio-hub) · 진짜 화면 위 코멘트 층(v2/app-review.ts: .v2-review-bar · .v2-review-layer) ── */
+.v2-studio-hub { flex: 1; min-height: 0; overflow: auto; width: min(680px, 100%); margin: 0 auto; padding: 28px 20px 40px; display: flex; flex-direction: column; gap: 16px; }
+.v2-studio-hub-head { text-align: center; display: grid; gap: 6px; }
+.v2-studio-hub-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+.v2-studio-hub-head p { margin: 0; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
+/* 두 단추는 같은 크기 — 같은 너비의 두 칸, 높이는 큰 쪽에 맞춘다(원준 2026-10-15 «박스 크기가 다르네»). 좁으면 한 줄씩. 하나뿐이면 가운데 한 칸. */
+.v2-studio-hub-go { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 6px 0; }
+.v2-studio-hub-go:has(> button:only-child) { grid-template-columns: minmax(0, 340px); justify-content: center; }
+.v2-studio-hub-go button { display: grid; gap: 4px; justify-items: center; align-content: center; text-align: center; min-width: 0; min-height: 96px; padding: 18px 22px; border-radius: 16px; border: 0; background: var(--purple, #7B61E0); color: #fff; font: inherit; cursor: pointer; box-shadow: 0 10px 30px rgba(123, 97, 224, .35); }
+.v2-studio-hub-go button b { font-size: 16px; font-weight: 800; }
+.v2-studio-hub-go button small { font-size: 12.5px; opacity: .9; }
+.v2-studio-hub-go button:disabled { opacity: .6; cursor: default; box-shadow: none; }
+.v2-studio-hub-go button.alt { background: var(--bg); color: var(--purple-text, #5B3FD0); box-shadow: 0 0 0 1.5px var(--purple, #7B61E0); }
+.v2-studio-hub .v2-studio-tray { width: 100%; }
+/* 와이어프레임 보기(#4632 원준 2026-10-15 «클로드 아티팩트처럼 버튼 누르면») — 두 단추 아래 조용한 줄 하나 · 누르면 이 자리 위에 그림 창 */
+.v2-studio-wf-btn { display: flex; align-items: baseline; justify-content: center; gap: 8px; margin: -4px auto 0; padding: 6px 12px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--purple-text, #5B3FD0); cursor: pointer; }
+.v2-studio-wf-btn b { font-size: 13.5px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+.v2-studio-wf-btn small { font-size: 12px; color: var(--muted); }
+.v2-studio-wf-btn:hover { background: rgba(123, 97, 224, .08); }
+.v2-studio-wf { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15, 18, 30, .42); }
+.v2-studio-wf-card { width: min(1180px, 100%); height: min(820px, 100%); display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; background: var(--bg); box-shadow: 0 24px 60px rgba(15, 18, 30, .35); }
+.v2-studio-wf-head { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+.v2-studio-wf-head small { color: var(--muted); font-size: 12px; }
+.v2-studio-wf-body { flex: 1; min-height: 0; display: flex; background: var(--surface); }
+.v2-studio-wf-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.v2-studio-wf-empty { margin: auto; max-width: 420px; padding: 24px; display: grid; gap: 10px; justify-items: center; text-align: center; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
+.v2-studio-wf-empty p { margin: 0; }
+.v2-studio-hub .v2-studio-tray-list { max-height: 260px; }
+.v2-studio-hub-wait { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
+.v2-studio-hub-fine { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
+.v2-review-bar { position: fixed; z-index: 85; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: calc(100vw - 24px); padding: 8px 10px 8px 8px; border-radius: 14px; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); font-size: 13px; }
+.v2-review-bar--top { bottom: auto; top: 56px; }
+.v2-review-back { font-weight: 800; white-space: nowrap; }
+.v2-review-name { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.v2-review-ver { color: var(--muted); font-size: 12px; }
+.v2-review-sep { width: 1px; height: 22px; background: var(--line); }
+.v2-review-tools button { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.v2-review-count { white-space: nowrap; }
+.v2-review-note { font-size: 12.5px; font-weight: 700; color: var(--purple-text, #5B3FD0); background: rgba(123, 97, 224, .1); border-radius: 8px; padding: 4px 8px; white-space: nowrap; }
+.v2-review-note[hidden] { display: none; }
+.v2-review-hint { flex-basis: 100%; color: var(--muted); font-size: 12px; padding: 0 4px; }
+.v2-review-tray { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); max-height: 50vh; overflow: auto; box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); }
+.v2-review-bar--top .v2-review-tray { bottom: auto; top: calc(100% + 8px); }
+.v2-review-layer { position: fixed; z-index: 84; pointer-events: none; }
+.v2-review-layer[hidden] { display: none; }
+.v2-review-layer > * { pointer-events: auto; }
+.v2-review-layer .v2-studio-mk-box { pointer-events: none; }
+.v2-review-ov { position: absolute; inset: 0; z-index: 3; }
+.v2-review-ov[hidden] { display: none; }
+@media (max-width: 900px) {
+  .v2-review-bar { left: 8px; right: 8px; transform: none; max-width: none; }
+  .v2-studio-hub-go button { min-width: 0; width: 100%; }
+}
+/* 막대가 시험 세션 맨 위(문패 줄)에 얹힌 꼴 — 떠 있지 않아 세션의 입력칸 · 앱을 가리지 않는다(원준 2026-10-15). 의견 칸은 막대 아래로(.v2-review-tray--fixed). */
+.v2-review-bar.v2-review-bar--dock { position: relative; z-index: auto; left: auto; right: auto; bottom: auto; top: auto; transform: none; max-width: none; border-radius: 0; padding: 8px 16px; box-shadow: none; border-bottom: 1px solid color-mix(in srgb, var(--purple, #7B61E0) 28%, var(--line)); background: color-mix(in srgb, var(--purple, #7B61E0) 7%, var(--bg)); }
+.v2-review-tray.v2-review-tray--fixed { position: fixed; z-index: 86; right: auto; bottom: auto; }
+.v2-review-flip[hidden] { display: none; }
+
+/* ── ③ 시험 세션(#4632 · v2/app-try-session.ts) — 「세션 위젯으로 보기」. 진짜 세션 화면(mountPanes)을 앱빌더 자리에 그대로 세우고,
+   코멘트 막대는 맨 위 문패 줄 **위에 얹는다** — 세션 · 우측 사이드바의 자리와 크기는 진짜와 같다(원준 2026-10-15 «윗부분을 차지하면 사실과 다르다»). ── */
+.v2-try { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.v2-try--fixed { position: fixed; z-index: 80; }
+.v2-try-shell { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-try-dock { position: absolute; z-index: 9; top: 0; left: 0; right: 0; }
+.v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 57px); box-sizing: border-box; flex-wrap: nowrap; }   /* 문패(.pn-door) 높이를 꼭 덮는다 — 높이는 app-try-session 이 재어 넘긴다 */
+.v2-review-bar--dock > .v2-studio-sp { display: none; }
+.v2-review-bar--dock .v2-review-note { flex: 0 1 auto; min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }   /* 긴 AI 소식이 도구 단추를 밀어 줄바꿈시키지 않게 */
+.v2-review-bar--dock .v2-review-hint { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; }
+/* 좁은 폭(≤900) — 진짜 셸은 우측 사이드바를 서랍으로 접지만(42-v2-panes · 모바일 크롬), 시험 세션은 앱을 보려고 여는 화면이라 세션 아래에 쌓아 늘 보인다.
+   막대는 한 줄을 지킨다 — 도구는 그림만(이름은 툴팁) · 도움말은 숨긴다. */
+@media (max-width: 900px) {
+  .v2-try .pn-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 36%) minmax(0, 1fr); }
+  .v2-try .pn-body > .pn-pane[data-zone="side"] { display: flex; position: static; width: auto; border-left: 0; border-top: 1px solid var(--line); box-shadow: none; }
+  .v2-try .pn-body > .v2-split-x, .v2-try .pn-side-reopen { display: none; }
+  .v2-review-bar--dock .v2-review-tools button > span:not(.ico) { display: none; }
+  .v2-review-bar--dock .v2-review-hint { display: none; }
+  .v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 47px); padding-block: 6px; }   /* 좁은 폭의 문패 높이 */
+}
+.v2-studio-body--hub { grid-template-columns: minmax(0, 1fr) clamp(300px, 28%, 380px); }
+.v2-studio-body--hub .v2-studio-app { box-shadow: none; background: none; }
+.v2-bld-card--sel { cursor: pointer; }
+.v2-bld-card--sel:hover { border-color: rgba(123, 97, 224, .5); }
+.v2-bld-card--sel:focus-visible { outline: 2px solid var(--purple, #7B61E0); outline-offset: 2px; }
+.v2-pad-badge--mine { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }   /* #4632 공개 범위 「나만」 */

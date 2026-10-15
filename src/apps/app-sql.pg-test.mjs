@@ -16,6 +16,19 @@
 //  D8 선언 인덱스 생성 · unique 로 ON CONFLICT · 선언에서 빠지면 라이블리 것만 지운다(사람이 만든 인덱스는 남는다)
 //  D9 보관된 테이블은 앱 역할 권한이 없다 · 앱 제거 때 역할도 지운다
 //  D10 CREATEROLE 없는 DDL → 테이블 설치는 되고 sql_role.ok=false · ensureAppSqlRole 은 503
+//  ── #4483 ──
+//  D11 실행 한 번 = DB 왕복 3번(준비 한 덩이 · 문장 · 끝) · 묶음 n 문장 = n+2
+//  D12 문장 안에서 standard_conforming_strings=on · search_path=pg_catalog(검사기 렉서와 DB 렉서가 같다)
+//  D13 묶음 — 전부 되거나 전부 취소(실패 문장 번호 body.index, 앞 문장 쓰기도 사라진다)
+//  D14 묶음 전체 시간 상한 → 408 · 전부 취소
+//  D15 묶음 결과 바이트는 문장 전체가 나눠 쓴다 — 뒤 문장이 잘린다 · strict 면 413
+//  D16 wire — 값은 DB 글자 그대로(numeric·int8·timestamptz·date·jsonb·bool·배열·interval) + 형 OID
+//  D17 strict — 쓰기 RETURNING 이 잘리면 413 이고 쓰기도 취소된다
+//  D18 행 잠금(FOR UPDATE SKIP LOCKED)은 읽기·쓰기 트랜잭션으로 돈다 — 작업 꺼내 가기 한 문장
+//  D19 공평 분배 — 자리가 비면 지금 가장 적게 쓰는 고객부터(먼저 줄 선 다른 고객의 두 번째 문장보다 먼저)
+//  D20 카탈로그 전수 — OID 계열 형(oid · reg* · aclitem · oidvector)을 받거나 내는 pg_catalog 함수(pg_ 아님 · internal 인자 없음)는
+//      검사기가 거부하거나 «검토한 무해 목록» 에 있다 · reg*·aclitem 계열 형은 전부 거부. PG 판이 올라 새 것이 생기면 실패한다.
+//      (격리 리뷰: _regclass 배열형 · format_type · acldefault 로 다른 워크스페이스의 스키마·표·역할 이름이 읽혔다)
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -62,7 +75,7 @@ delete process.env.LIVELY_OWNER_DATABASE_URL;
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { ensureAppTables, dropAppTables, cleanupDroppedTables, emptyTableReport, ensureAppSqlRole } = await import(`${DIST}/apps/store-schema.js`);
 const { appSchemaName, appSqlRoleName } = await import(`${DIST}/apps/store-ddl.js`);
-const { planAppSql } = await import(`${DIST}/apps/app-sql.js`);
+const { planAppSql, forbiddenFunction } = await import(`${DIST}/apps/app-sql.js`);
 const X = await import(`${DIST}/apps/app-sql-exec.js`);
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 
@@ -83,13 +96,21 @@ const env0 = { ...process.env };
 const limits = (over = {}) => X.resetAppSqlLimits({ ...env0, ...over });
 
 /** 검사기 → 실행기(가게 핸들러와 같은 순서, 빈도·용량 게이트 없이). */
-const run = (sql, params = [], o = {}) => {
+const run = async (sql, params = [], o = {}) => {
   const app = o.app ?? "crm", tables = o.tables ?? CRM.map((t) => t.table);
-  const plan = o.plan ?? planAppSql(sql, { appId: app, schema: SA, tables });
-  return X.runAppSql({ plan, params, role: roleOf(SA, app), appId: app, schema: SA, physicalPrefix: `${app}__`, tenantId: o.tenant ?? TA });
+  const plan = o.plan ?? await planAppSql(sql, { appId: app, schema: SA, tables });
+  return X.runAppSql({ plan, params, role: roleOf(SA, app), appId: app, schema: SA, physicalPrefix: `${app}__`, tenantId: o.tenant ?? TA, format: o.format, strict: o.strict });
+};
+/** 묶음 — 문장마다 검사기를 거친 계획(또는 raw). */
+const batch = async (stmts, o = {}) => {
+  const app = o.app ?? "crm", tables = o.tables ?? CRM.map((t) => t.table);
+  const items = [];
+  for (const st of stmts) items.push({ plan: st.plan ?? await planAppSql(st.sql, { appId: app, schema: SA, tables }), params: st.params ?? [] });
+  return X.runAppSqlBatch({ items, role: roleOf(SA, app), appId: app, schema: SA, physicalPrefix: `${app}__`, tenantId: o.tenant ?? TA, format: o.format, strict: o.strict });
 };
 /** 검사기를 건너뛴 계획 — DB 경계만 남았을 때를 잰다. */
-const raw = (sql, writes = false) => ({ kind: writes ? "insert" : "select", writes, returning: !writes, tables: [], targets: [], sql, paramCount: 0 });
+const raw = (sql, writes = false) => ({ kind: writes ? "insert" : "select", writes, locks: false, returning: !writes, tables: [], targets: [], sql, paramCount: 0 });
+const errOf = async (p) => { try { await p; return null; } catch (e) { return e; } };
 
 try {
   limits();
@@ -144,13 +165,14 @@ try {
     const r = await run("", [], { plan: raw("SELECT set_config('role', 'none', true) AS s, current_user AS u") });
     chk("D3b 전제 — 검사기 없이는 set_config('role') 한 줄로 런타임 역할로 돌아간다(그래서 검사기가 그 길을 막는다)", r.rows[0]?.u === RT, JSON.stringify(r.rows));
     let refused = null;
-    try { planAppSql("SELECT set_config('role', 'none', true)", { appId: "crm", schema: SA, tables: ["contacts"] }); } catch (e) { refused = e.status; }
+    try { await planAppSql("SELECT set_config('role', 'none', true)", { appId: "crm", schema: SA, tables: ["contacts"] }); } catch (e) { refused = e.status; }
     chk("D3b 같은 문장을 검사기는 거부한다", refused === 400, String(refused));
-    //  격리 리뷰 실측: 괄호로 묶은 조인은 파서가 테이블을 못 본다 — 앱 역할로도 카탈로그(다른 워크스페이스 스키마 이름)가 읽힌다.
+    //  격리 리뷰 실측: 앱 역할로도 카탈로그(다른 워크스페이스 스키마 이름)가 읽힌다 — 그래서 검사기가 카탈로그 표를 막아야 한다.
+    //  종전 파서는 괄호 조인 안의 표를 못 봐 이 길이 뚫렸다. 실제 파서는 그 안의 pg_namespace 를 그대로 보고 403 이다.
     const cat = await run("", [], { plan: raw("SELECT nspname FROM (pg_namespace n JOIN pg_roles r ON true) WHERE nspname LIKE 'app\\_%' LIMIT 1") });
     let refused2 = null;
-    try { planAppSql("SELECT nspname FROM (pg_namespace n JOIN pg_roles r ON true)", { appId: "crm", schema: SA, tables: ["contacts"] }); } catch (e) { refused2 = e.status; }
-    chk("D3c 전제 — 앱 역할로도 카탈로그는 읽힌다(데이터 아닌 이름) · 괄호 조인 우회를 검사기가 거부한다", cat.row_count === 1 && refused2 === 400, JSON.stringify({ cat: cat.rows, refused2 }));
+    try { await planAppSql("SELECT nspname FROM (pg_namespace n JOIN pg_roles r ON true)", { appId: "crm", schema: SA, tables: ["contacts"] }); } catch (e) { refused2 = e.status; }
+    chk("D3c 전제 — 앱 역할로도 카탈로그는 읽힌다(데이터 아닌 이름) · 괄호 조인 안의 카탈로그를 검사기가 거부한다(403)", cat.row_count === 1 && refused2 === 403, JSON.stringify({ cat: cat.rows, refused2 }));
   }
 
   // ── D4 ──
@@ -179,12 +201,14 @@ try {
     const slow = await status(run("SELECT count(*) FROM generate_series(1, 500000000) g"));
     const tookSlow = Date.now() - t0;
     const holder = new pg.Client({ connectionString: SUPER }); await holder.connect();
-    await holder.query("BEGIN");
-    await holder.query(`SELECT * FROM "${SA}"."crm__contacts" WHERE email = 'b@x' FOR UPDATE`);
-    const t1 = Date.now();
-    const locked = await status(run("UPDATE contacts SET stage = 'q' WHERE email = 'b@x'"));
-    const tookLock = Date.now() - t1;
-    await holder.query("ROLLBACK"); await holder.end();
+    let locked = null, tookLock = 0;
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT * FROM "${SA}"."crm__contacts" WHERE email = 'b@x' FOR UPDATE`);
+      const t1 = Date.now();
+      locked = await status(run("UPDATE contacts SET stage = 'q' WHERE email = 'b@x'"));
+      tookLock = Date.now() - t1;
+    } finally { await holder.query("ROLLBACK").catch(() => {}); await holder.end().catch(() => {}); }
     chk("D6 문장 시간 초과 → 408(상한 근처에서 끊김)", slow === 408 && tookSlow < 3000, JSON.stringify({ slow, tookSlow }));
     chk("D6 잠금 대기 → 409(상한 근처에서 끊김)", locked === 409 && tookLock < 3000, JSON.stringify({ locked, tookLock }));
     limits();
@@ -219,6 +243,154 @@ try {
     chk("D8 선언에서 빠진 인덱스만 지운다(사람이 만든 인덱스·PK 는 남는다)",
       !after.includes(multi?.indexname) && after.includes(uniq?.indexname) && after.includes("pgt_manual_ix") && rep.dropped_indexes.length === 1 && rep.added_indexes.length === 0,
       JSON.stringify({ after, rep }));
+  }
+
+  // ── D11 · D12 (#4483) ──
+  {
+    limits();
+    const orig = pg.Client.prototype.query;
+    let count = 0;
+    pg.Client.prototype.query = function (...a) { if (this.connectionParameters?.application_name === "lively-app-sql") count++; return orig.apply(this, a); };
+    try {
+      count = 0; await run("SELECT name FROM contacts WHERE email = $1", ["a@x"]); const one = count;
+      count = 0; await batch([{ sql: "SELECT 1" }, { sql: "SELECT count(*) FROM contacts" }, { sql: "SELECT name FROM contacts LIMIT 1" }]); const three = count;
+      chk("D11 실행 한 번 = DB 왕복 3번 · 묶음 3문장 = 5번(종전 9번)", one === 3 && three === 5, JSON.stringify({ one, three }));
+    } finally { pg.Client.prototype.query = orig; }
+    //  런타임 역할의 기본값을 off 로 바꿔 둔다 — 실행기가 문장마다 on 으로 고정하지 않으면 여기서 off 가 보인다(검사기의 렉서는 on 을 가정).
+    await su.query(`ALTER ROLE "${RT}" SET standard_conforming_strings = off`);
+    limits();                                                          // 새 연결이 바뀐 역할 기본값을 받게 풀을 새로 만든다
+    let s;
+    try { s = await run("", [], { plan: raw("SELECT current_setting('standard_conforming_strings') AS scs, current_setting('search_path') AS sp, current_setting('transaction_read_only') AS ro") }); }
+    finally { await su.query(`ALTER ROLE "${RT}" RESET standard_conforming_strings`); limits(); }
+    chk("D12 문장 안 — standard_conforming_strings=on(역할 기본값이 off 여도) · search_path=pg_catalog · 읽기 문장은 읽기 전용", s.rows[0]?.scs === "on" && /^pg_catalog, pg_temp$/.test(s.rows[0]?.sp) && s.rows[0]?.ro === "on", JSON.stringify(s.rows));
+  }
+
+  // ── D13 · D14 · D15 ──
+  {
+    limits();
+    const n0 = (await run("SELECT count(*)::int AS n FROM contacts")).rows[0].n;
+    const ok = await batch([
+      { sql: "INSERT INTO contacts(name, email) VALUES ($1, $2) RETURNING id", params: ["묶1", "batch1@x"] },
+      { sql: "INSERT INTO conversations(contact_id, note) SELECT id, '묶음' FROM contacts WHERE email = 'batch1@x'" },
+      { sql: "SELECT count(*)::int AS n FROM contacts" },
+    ]);
+    chk("D13 묶음 — 세 문장 결과 · 앞 문장 쓰기를 뒤 문장이 본다(한 트랜잭션)",
+      ok.results.length === 3 && Number(ok.results[0].rows[0]?.id) > 0 && ok.results[1].changed === 1 && ok.results[2].rows[0]?.n === n0 + 1, JSON.stringify(ok));
+    const e = await errOf(batch([
+      { sql: "INSERT INTO contacts(name, email) VALUES ('묶2', 'batch2@x')" },
+      { sql: "INSERT INTO contacts(name, email) VALUES ('중복', 'batch1@x')" },
+    ]));
+    const left = (await run("SELECT count(*)::int AS n FROM contacts WHERE email = 'batch2@x'")).rows[0].n;
+    chk("D13 묶음 실패 — 409 · body.index=1 · «2번째» · 앞 문장 쓰기도 취소", e?.status === 409 && e?.body?.index === 1 && /2번째/.test(e?.message) && left === 0, JSON.stringify({ st: e?.status, body: e?.body, msg: e?.message, left }));
+
+    limits({ LIVELY_APP_SQL_BATCH_MS: "300" });
+    const t0 = Date.now();
+    const slow = await errOf(batch([
+      { plan: raw("SELECT pg_sleep(0.2)") },
+      { sql: "INSERT INTO contacts(name, email) VALUES ('시간', 'batch-time@x')" },
+      { plan: raw("SELECT pg_sleep(0.2)") },
+    ]));
+    const took = Date.now() - t0;
+    const kept = (await run("SELECT count(*)::int AS n FROM contacts WHERE email = 'batch-time@x'")).rows[0].n;
+    chk("D14 묶음 전체 시간 상한 — 408 · 3번째에서 멈춤 · 앞 쓰기 취소 · 상한 근처에서 끊김", slow?.status === 408 && slow?.body?.index === 2 && kept === 0 && took < 1500, JSON.stringify({ st: slow?.status, body: slow?.body, kept, took }));
+
+    limits({ LIVELY_APP_SQL_MAX_BYTES: "3000" });
+    const two = await batch([{ plan: raw("SELECT lpad('', 2000, 'x') AS s") }, { plan: raw("SELECT lpad('', 2000, 'y') AS s") }]);
+    const strictE = await errOf(batch([{ plan: raw("SELECT lpad('', 2000, 'x') AS s") }, { plan: raw("SELECT lpad('', 2000, 'y') AS s") }], { strict: true }));
+    chk("D15 묶음 결과 바이트는 나눠 쓴다 — 첫 문장 2,000자는 오고 둘째는 잘린다 · strict 면 413(index 1)",
+      two.results[0].row_count === 1 && two.results[0].truncated === false && two.results[1].row_count === 0 && two.results[1].truncated === true
+      && strictE?.status === 413 && strictE?.body?.index === 1, JSON.stringify({ r: two.results.map((r) => [r.row_count, r.truncated]), st: strictE?.status, body: strictE?.body }));
+    limits();
+  }
+
+  // ── D16 · D17 · D18 ──
+  {
+    limits();
+    const w = await run("", [], { format: "wire", plan: raw(`SELECT 12.50::numeric(12,2) AS a, 9007199254740993::int8 AS b, '2026-10-14 09:00:00+09'::timestamptz AS c,
+      '2026-10-14'::date AS d, '{"k": 1}'::jsonb AS e, true AS f, ARRAY['x','y'] AS g, '1 day 02:00:00'::interval AS h, 'NaN'::float8 AS i, NULL::text AS j, 7::int4 AS id, 8::int4 AS id`) });
+    const types = w.fields.map((f) => f.type), row = w.rows[0] ?? [];
+    chk("D16 wire — 형 OID(numeric·int8·timestamptz·date·jsonb·bool·text[]·interval·float8·text·int4·int4) · 겹친 이름 그대로",
+      JSON.stringify(types) === JSON.stringify([1700, 20, 1184, 1082, 3802, 16, 1009, 1186, 701, 25, 23, 23]) && w.fields[10].name === "id" && w.fields[11].name === "id", JSON.stringify(w.fields));
+    chk("D16 wire — 값은 DB 글자 그대로(12.50 · 2^53+1 · 같은 순간 · 날짜 · NaN · NULL · {x,y} · t)",
+      row[0] === "12.50" && row[1] === "9007199254740993" && new Date(row[2]).toISOString() === "2026-10-14T00:00:00.000Z" && row[3] === "2026-10-14"
+      && row[4] === '{"k": 1}' && row[5] === "t" && row[6] === "{x,y}" && row[7] === "1 day 02:00:00" && row[8] === "NaN" && row[9] === null && row[10] === "7",
+      JSON.stringify(row));
+
+    limits({ LIVELY_APP_SQL_MAX_ROWS: "1" });
+    const e = await errOf(run("UPDATE contacts SET stage = 'strict' WHERE id > 0 RETURNING id", [], { strict: true }));
+    limits();
+    const n = (await run("SELECT count(*)::int AS n FROM contacts WHERE stage = 'strict'")).rows[0].n;
+    chk("D17 strict — 쓰기 RETURNING 이 잘리면 413 이고 쓰기도 취소된다", e?.status === 413 && n === 0, JSON.stringify({ st: e?.status, n }));
+
+    const ids = (await run("SELECT id FROM contacts ORDER BY id")).rows.map((r) => Number(r.id));
+    //  잠금을 쥔 연결은 무슨 일이 있어도 풀고 닫는다 — 안 그러면 아래 정리(DROP SCHEMA)가 이 프로세스 자신의 잠금을 영원히 기다린다.
+    const holder = new pg.Client({ connectionString: SUPER }); await holder.connect();
+    let skip = null, claim = null, took = 0, err = null;
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT * FROM "${SA}"."crm__contacts" WHERE id = $1 FOR UPDATE`, [ids[0]]);
+      const t0 = Date.now();
+      skip = await run("SELECT id FROM contacts ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED");
+      claim = await run("UPDATE contacts SET stage = 'taken' WHERE id = (SELECT id FROM contacts WHERE stage IS DISTINCT FROM 'taken' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id");
+      took = Date.now() - t0;
+    } catch (e) { err = e; }
+    finally { await holder.query("ROLLBACK").catch(() => {}); await holder.end().catch(() => {}); }
+    if (err) chk("D18 FOR UPDATE SKIP LOCKED — 예외 없이", false, String(err?.status ?? "") + " " + String(err?.message ?? err));
+    chk("D18 FOR UPDATE SKIP LOCKED — 잠긴 첫 행을 건너 다음 행 · 꺼내 가기 한 문장 · 기다리지 않는다",
+      Number(skip?.rows[0]?.id) === ids[1] && claim?.changed === 1 && Number(claim?.rows[0]?.id) === ids[1] && took < 1000, JSON.stringify({ ids, skip: skip?.rows, claim: claim?.rows, took }));
+  }
+
+  // ── D19 공평 분배 ──
+  {
+    //  풀 2 · 고객당 2. A1(0.4초)·B1(0.2초)이 자리를 채우고, A2 가 먼저 줄 서고, C1 이 나중에 줄 선다.
+    //  0.2초에 B1 이 끝나 자리가 나면 — 지금 0 자리인 C 가 1 자리 쓰는 A 보다 먼저 받는다(종전 FIFO 면 A2 → C1 은 0.4초 뒤).
+    limits({ LIVELY_APP_SQL_POOL: "2", LIVELY_APP_SQL_PER_WORKSPACE: "2" });
+    const t0 = Date.now();
+    const done = {};
+    const go = (name, tenant, sec) => run("", [], { tenant, plan: raw(`SELECT pg_sleep(${sec}) AS s`) }).then(() => { done[name] = Date.now() - t0; });
+    const pA1 = go("A1", TA, 0.4), pB1 = go("B1", TB, 0.2);
+    await new Promise((r) => setTimeout(r, 60));
+    const pA2 = go("A2", TA, 0.05);
+    await new Promise((r) => setTimeout(r, 30));
+    const pC1 = go("C1", TC, 0);
+    await Promise.all([pA1, pB1, pA2, pC1]);
+    chk("D19 빈 자리는 가장 적게 쓰는 고객(C)에게 — C1 이 A2 보다 먼저 끝나고 0.4초 전에 끝난다",
+      done.C1 < done.A2 && done.C1 < 380, JSON.stringify(done));
+    const st = X.appSqlStats();
+    chk("D19 지표 — 대기 표본·문장 표본·CPU 가 쌓인다", st.wait_ms.n > 0 && st.statement_ms.n > 0 && st.process.cpu_user_ms >= 0 && st.scheduler.used === 0, JSON.stringify(st));
+    limits();
+  }
+
+  // ── D20 카탈로그 전수 ──
+  {
+    //  검토한 무해 목록 — 고르는 기준: 카탈로그를 이름으로 찾아 글자로 돌려주지 않는다(오류 문구에도 이름을 싣지 않는다).
+    //   받아들인 잔여 위험(재검토): 전문 검색 8개는 regconfig 인자로 «스키마.이름» 글자를 받아, 그 스키마가 있는지를 오류 문구 차이
+    //   («permission denied for schema …» ↔ «… does not exist»)로 가린다. 이름을 내주지는 않고, 테넌트 스키마는 UUID 라 알아야 확인만 된다.
+    const REVIEWED = new Set([
+      // OID 를 숫자로만 다룬다
+      "btoidcmp", "btoidvectorcmp", "hashoid", "hashoidextended", "hashoidvector", "hashoidvectorextended", "int8", "oid",
+      "oideq", "oidge", "oidgt", "oidin", "oidlarger", "oidle", "oidlt", "oidne", "oidout", "oidsend", "oidsmaller",
+      "oidvectoreq", "oidvectorge", "oidvectorgt", "oidvectorin", "oidvectorle", "oidvectorlt", "oidvectorne", "oidvectorout", "oidvectorsend",
+      "max", "min", "nameconcatoid",
+      // 전문 검색 — regconfig 인자는 문자 검색 설정(전역 객체 · 워크스페이스가 만들 수 없다)을 찾는다
+      "json_to_tsvector", "jsonb_to_tsvector", "phraseto_tsquery", "plainto_tsquery", "to_tsquery", "to_tsvector", "ts_headline", "websearch_to_tsquery",
+    ]);
+    const OIDISH = "'^_?(oid|reg[a-z]+|aclitem|oidvector)$'";
+    const fns = (await su.query(`
+      SELECT DISTINCT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'pg_catalog' AND p.proname !~ '^pg_'
+         AND NOT ('internal'::regtype::oid = ANY (p.proargtypes::oid[]))
+         AND (p.prorettype IN (SELECT oid FROM pg_type WHERE typname ~ ${OIDISH})
+              OR EXISTS (SELECT 1 FROM unnest(p.proargtypes::oid[]) a WHERE a IN (SELECT oid FROM pg_type WHERE typname ~ ${OIDISH})))
+       ORDER BY 1`)).rows.map((r) => r.proname);
+    const unreviewed = fns.filter((f) => !forbiddenFunction(f) && !REVIEWED.has(f));
+    chk(`D20 OID 계열 함수 ${fns.length}개 — 전부 거부되거나 검토한 무해 목록에 있다`, fns.length > 100 && unreviewed.length === 0,
+      `검토 안 된 함수: ${unreviewed.join(", ")} — 이름이 새는지 보고 app-sql.ts 거부 목록에 넣거나, 무해하면 이 시험의 REVIEWED 에 올린다`);
+    const types = (await su.query(`SELECT t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+       WHERE n.nspname = 'pg_catalog' AND t.typname ~ '^_?(reg[a-z]+|aclitem)$' ORDER BY 1`)).rows.map((r) => r.typname);
+    const opened = [];
+    for (const t of types) if ((await status(planAppSql(`SELECT NULL::${t}`, { appId: "crm", schema: SA, tables: ["contacts"] }))) !== 400) opened.push(t);
+    chk(`D20 reg*·aclitem 계열 형 ${types.length}개 — 전부 거부`, types.length >= 24 && opened.length === 0, `거부되지 않은 형: ${opened.join(", ")}`);
   }
 
   // ── D9 ──

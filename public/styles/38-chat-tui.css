@@ -1,0 +1,454 @@
+/* 38-chat-tui.css — 세션 대화창의 **Claude Code 터미널 문법**(web/chat-view.ts style:'tui', #4707).
+ *
+ *  목적(상민님 2026-10-14): «유저가 대화창·터미널창을 왔다갔다해도 보기에 이질적이지 않고 거의 똑같다고 느끼게».
+ *  그래서 이 판의 자는 디자인 시스템이 아니라 **옆의 터미널 화면**이다 — 같은 글꼴·같은 칸·같은 색·같은 표식.
+ *   · 글꼴·크기·색(바탕·글자·커서·선택)은 웹 터미널의 환경 설정을 JS 가 그대로 박는다(--tui-font·--tui-fs·--tui-bg…).
+ *   · 칸 폭·줄 높이는 xterm 이 재는 셈 그대로(measureCell) — 글자 사이(--tui-ls)·한글 두 칸(--tui-wgap)까지.
+ *   · 나머지 색은 Claude Code 테마의 RGB 값(라이트/다크 두 판). 판은 터미널 테마가 어두운가로 고른다(data-tui-scheme).
+ *  가로 단위는 «칸»(--tui-cw)이다 — ch 는 브라우저의 글자 폭이라 xterm 칸(기기 픽셀로 내림)과 어긋난다.
+ *  ⚠ DS-EXCEPTION: Claude Code 화면을 옮기는 자리라 제품 팔레트 밖의 색(주황 ✻ · 변경분 배경 · 권한 보라)을 쓴다 —
+ *   터미널 보기에서 사람이 이미 보는 바로 그 색이다. 이 파일 밖으로 새지 않게 전부 .livc-tui 아래에 둔다. */
+
+.livc-tui {
+  /* JS(applyTermLook)가 덮는 기본값 — 스크립트 전 첫 페인트·스토리지 막힌 브라우저용. 값은 터미널 기본(앱 테마 따름 · JetBrains Mono 14). */
+  --tui-font: 'JetBrains Mono', 'D2Coding', monospace;
+  --tui-fs: 14px;
+  --tui-cw: 8px;
+  --tui-lh: 19px;
+  --tui-ls: 0px;
+  --tui-wgap: 2px;
+  --tui-bgap: 0px;
+  --tui-bg: var(--bg);
+  --tui-fg: var(--ink);
+  --tui-cursor: var(--blue);
+  --tui-sel: var(--bg-sel);
+  --tui-link: var(--blue);   /* 터미널 테마의 ANSI 파랑 — JS 가 덮는다 */
+  /* ★ 색은 **터미널 화면에서 잰 값**이다(2026-10-14, Claude Code 2.1.299 · 라이블리 웹 터미널). 그 터미널의 Claude Code 는
+     256색으로 그린다 — 테마의 RGB 를 xterm 256색 칸(#5f875f 같은 고정 색)으로 접어 찍는다. 그래서 여기도 그 접힌 색을 쓴다
+     (테마 RGB 를 그대로 쓰면 «같은데 미묘하게 다른 색»이 된다). 라이트 테마 값 — 다크는 아래 [data-tui-scheme="dark"]
+     (다크는 같은 접기 셈으로 구한 값: 테마 RGB → 256색). 괄호 안 = 256색 번호. */
+  --tui-text: #000000;       /* (16) text — 답의 ⏺ · 사람 말 글자 */
+  --tui-dim: #626262;        /* (241) inactive — 흐린 글자(묶음 줄 · … +N lines · 상태 줄 · ✻ 턴 끝) */
+  --tui-subtle: #a8a8a8;     /* (248) subtle — 위에 붙는 사람 말 머리 · 거절 */
+  --tui-rule: #8a8a8a;       /* (245) promptBorder — 입력칸 위아래 가로줄 */
+  --tui-user-bg: #eeeeee;    /* (255) userMessageBackground — 사람 말 띠 */
+  --tui-claude: #d78787;     /* (174) ✻ 스피너 · 동사 — 반짝임이 지나가는 동안엔 잠깐 다른 칸(173 …)을 지난다 */
+  --tui-shimmer: #ebb79c;
+  --tui-ok: #5f875f;         /* (65) success — 성공한 도구·알림의 ⏺ */
+  --tui-err: #af5f5f;        /* (131) error */
+  --tui-warn: #af875f;       /* (137) warning — ⏵⏵ auto mode on */
+  --tui-perm: #8787ff;       /* (105) permission — 인라인 코드 · 언어 없는 코드 블록 · 권한 상자 */
+  --tui-plan: #008787;       /* (30) planMode */
+  --tui-accept: #af00ff;     /* (129) autoAccept */
+  --tui-think: #afaf87;      /* (144) still thinking … */
+  --tui-add-word: #5faf5f;   /* (71) diffAddedWord — 묶음 줄의 +2 */
+  --tui-del-word: #d75f5f;   /* (167) diffRemovedWord — 묶음 줄의 -2 */
+  /* 변경분(색칠 모듈 color-diff 의 라이트 판 · 가장 가까운 256색으로 접힘 — 실측) */
+  --tui-dfg: #303030;        /* (236) 코드 글자 */
+  --tui-add-bg: #d7ffd7;     /* (194) 더한 줄 */
+  --tui-del-bg: #ffd7d7;     /* (224) 지운 줄 */
+  --tui-add-sign: #00875f;   /* (29) 더한 줄의 번호·+ */
+  --tui-del-sign: #d70000;   /* (160) 지운 줄의 번호·- */
+  --tui-add-hl: #afffaf;     /* (157) 더한 줄의 바뀐 낱말 */
+  --tui-del-hl: #ffd7d7;     /* (224) 지운 줄의 바뀐 낱말(라이트는 줄 바탕과 같은 칸으로 접힌다) */
+  /* 문법 색(GitHub 판 — 실측: 키워드 125 · 함수 97 · 글자 24 · 속성 31 · 주석 246) */
+  --tui-hk-kw: #af005f; --tui-hk-store: #af005f; --tui-hk-fn: #875faf; --tui-hk-cls: #000000; --tui-hk-str: #005f87;
+  --tui-hk-num: #0087af; --tui-hk-lit: #0087af; --tui-hk-bi: #0087af; --tui-hk-attr: #0087af; --tui-hk-prop: #0087af; --tui-hk-com: #949494;
+  font-family: var(--tui-font);
+  font-size: var(--tui-fs);
+  line-height: var(--tui-lh);
+  letter-spacing: var(--tui-ls);
+  font-variant-ligatures: none;   /* 터미널은 합자를 안 그린다(Fira Code 의 -> 같은 것) */
+  font-weight: 400;
+  background: var(--tui-bg);
+  color: var(--tui-fg);
+}
+/* Claude Code 다크 테마 — 터미널 테마가 어두운 판이면(앱 테마와 무관하게) */
+.livc-tui[data-tui-scheme="dark"] {
+  --tui-text: #ffffff;       /* (231) */
+  --tui-dim: #949494;        /* (246) */
+  --tui-subtle: #4e4e4e;     /* (239) */
+  --tui-rule: #808080;       /* (244) */
+  --tui-user-bg: #3a3a3a;    /* (237) */
+  --tui-shimmer: #f0b896;
+  --tui-ok: #87d787;         /* (114) */
+  --tui-err: #ff87af;        /* (211) */
+  --tui-warn: #ffd700;       /* (220) */
+  --tui-perm: #afd7ff;       /* (153) */
+  --tui-plan: #5fafaf;       /* (73) */
+  --tui-accept: #afafff;     /* (147) */
+  --tui-think: #afaf87;
+  --tui-add-word: #5faf87;   /* (72) */
+  --tui-del-word: #d78787;   /* (174) */
+  --tui-dfg: #eeeeee;        /* (255) Monokai 글자 */
+  --tui-add-bg: #005f00;     /* (22) */
+  --tui-del-bg: #5f0000;     /* (52) */
+  --tui-add-sign: #5fd75f;   /* (77) */
+  --tui-del-sign: #d75f5f;   /* (167) */
+  --tui-add-hl: #008700;     /* (28) */
+  --tui-del-hl: #5f0000;     /* (52) */
+  /* 문법 색(Monokai Extended 판) */
+  --tui-hk-kw: #ff005f; --tui-hk-store: #5fd7ff; --tui-hk-fn: #afd700; --tui-hk-cls: #afd700; --tui-hk-str: #d7d787;
+  --tui-hk-num: #af87ff; --tui-hk-lit: #af87ff; --tui-hk-bi: #afd700; --tui-hk-attr: #afd700; --tui-hk-prop: #ffffff; --tui-hk-com: #6c6c6c;
+  color-scheme: dark;
+}
+.livc-tui[data-tui-scheme="light"] { color-scheme: light; }
+.livc-tui ::selection { background: var(--tui-sel); }
+/* 한글·한자는 터미널처럼 두 칸 폭, 상자 글자(─│┌)는 한 칸 폭(web/chat-view.ts wrapWide — 대체 글꼴 폭을 칸에 맞춘다) */
+.livc-tui .tui-w { letter-spacing: var(--tui-wgap); }
+.livc-tui .tui-bx { letter-spacing: var(--tui-bgap); }
+/* 가로선 덩이 — 글자(복사용)는 두고, 칸 한가운데 1px 선으로 그린다(터미널 xterm 이 상자 글자를 칸에 맞춰 직접 긋는 것과 같은 모양) */
+.livc-tui .tui-bxh { -webkit-text-fill-color: transparent; background: linear-gradient(currentColor, currentColor) 0 50% / 100% 1px no-repeat; }
+
+/* ── 목록 — 위에서부터 쌓는다(터미널처럼). 여백은 **터미널 액자 안 글자 격자의 자리**와 같다(2026-10-14 실측: 위·왼쪽 4px,
+   오른쪽 16px — xterm 이 자기 스크롤 자리로 남기는 폭). 스크롤바는 숨긴다: 전체 화면 Claude Code 엔 스크롤바가 없고,
+   있으면 그 폭만큼 한 줄이 두 칸 좁아져 같은 글이 다른 자리에서 꺾인다(92칸 vs 90칸 실측). 굴리기는 휠·트랙패드·키로 된다. ── */
+.livc-tui .livc-list { padding: 4px 16px var(--tui-lh) 4px; gap: 0; scrollbar-width: none; }
+.livc-tui .livc-list::-webkit-scrollbar { display: none; }
+.livc-tui .livc-list > :first-child { margin-top: 0; }
+.livc-tui .livc-turn { animation: none; }
+.livc-tui .livc-turn + .livc-turn { border-top: 0; margin-top: 0; padding-top: 0; }
+.livc-tui .livc-turn-cont > .livc-work { margin-top: 0; }
+/* 덩이 사이 = 빈 줄 하나(Claude Code 가 메시지마다 한 줄을 띄운다) */
+.livc-tui .tui-user, .livc-tui .livc-work.tui-ai > *, .livc-tui .livc-list > .livc-divider, .livc-tui .livc-list > .tui-lone,
+.livc-tui .livc-list > .sc-empty, .livc-tui .livc-list > .livc-err { margin-top: var(--tui-lh); }
+.livc-tui .livc-list > .tui-banner:first-child { margin-top: 0; }
+.livc-tui .livc-work.tui-ai { margin: 0; padding: 0; border: 0; display: block; gap: 0; }
+
+/* ── 내 말 — `> …` 한 띠 ── */
+.livc-tui .tui-user { position: relative; display: block; padding: 0 var(--tui-cw) 0 calc(var(--tui-cw) * 2); background: var(--tui-user-bg);
+  scroll-margin-top: var(--tui-lh); }   /* 위에 붙는 머리를 눌러 올라왔을 때 그 머리가 이 말의 첫 줄을 가리지 않게 */
+.livc-tui .tui-user::before { content: '\276F'; position: absolute; left: 0; top: 0; color: var(--tui-dim); }
+.livc-tui .tui-user .livc-ask-text { font: inherit; font-weight: 400; color: var(--tui-text); white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
+.livc-tui .dt-qstate { font: inherit; text-align: left; margin: 0; color: var(--tui-dim); }
+.livc-tui .dt-qstate::before { content: '⎿  '; }
+.livc-tui .dt-qfail { color: var(--tui-err); }
+.livc-tui .dt-qact { font: inherit; padding: 0 var(--tui-cw); margin: 0; color: var(--tui-perm); background: none; border: 0; text-decoration: underline; }
+
+/* ── AI 의 글 — `⏺ …` ── */
+.livc-tui .livc-work > .livc-said { position: relative; padding-left: calc(var(--tui-cw) * 2); font: inherit; color: var(--tui-fg); margin-bottom: 0; word-break: keep-all; overflow-wrap: anywhere; }
+.livc-tui .livc-work > .livc-said::before { content: '\23FA\FE0E'; position: absolute; left: 0; top: 0; color: var(--tui-text); }
+.livc-tui .livc-said .md { font: inherit; color: inherit; }
+/* 줄 단위 렌더러(web/chat-view.ts tuiMarkdown) — 한 줄 = 한 칸, 빈 줄은 원문에 있던 자리에만. 블록 사이 여백은 없다. */
+.livc-tui .livc-said .tui-md > * { margin: 0; padding-top: 0; padding-bottom: 0; }
+.livc-tui .tui-ml { white-space: pre-wrap; min-height: var(--tui-lh); }
+.livc-tui .tui-h { font-weight: 700; }
+.livc-tui .tui-h1 { font-style: italic; text-decoration: underline; }
+.livc-tui .tui-bq { color: var(--tui-dim); font-style: italic; }
+.livc-tui .tui-bq::before { content: '\258E '; }
+/* 코드 블록 — 언어가 없으면 권한색 글자, 있으면 문법 색(바탕·들여쓰기 없음 — Claude Code 2.1.299) */
+.livc-tui .tui-code { font: inherit; background: none; border: 0; border-radius: 0; padding: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--tui-fg); }
+.livc-tui .tui-code-plain { color: var(--tui-perm); }
+.livc-tui .livc-said .md pre.tui-code-plain code { color: var(--tui-perm); }
+/* 표 — 상자 글자(┌─┬─┐)로 그린 줄들. 칸 폭은 글자 수로 맞췄으므로 줄을 바꾸지 않는다. */
+.livc-tui .tui-tl { white-space: pre; }
+.livc-tui .livc-said .md p { margin: 0; line-height: inherit; }
+.livc-tui .livc-said .md h1, .livc-tui .livc-said .md h2, .livc-tui .livc-said .md h3,
+.livc-tui .livc-said .md h4, .livc-tui .livc-said .md h5, .livc-tui .livc-said .md h6 { font: inherit; font-weight: 700; margin: 0; letter-spacing: inherit; color: inherit; border: 0; padding: 0; }
+.livc-tui .livc-said .md h1 { font-style: italic; text-decoration: underline; }
+.livc-tui .livc-said .md strong { font-weight: 700; }
+.livc-tui .livc-said .md em { font-style: italic; }
+/* 인라인 코드 — Claude Code 는 바탕 없이 권한색(보라)으로 칠한다 */
+.livc-tui .livc-said .md code, .livc-tui .livc-said .md .md-code { font: inherit; background: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; color: var(--tui-perm);
+  word-break: inherit; }   /* .md-code 의 break-all 을 걷는다 — 터미널은 낱말(빈칸) 단위로 꺾는다(`s` / `ecret-scan` 으로 쪼개지던 것) */
+.livc-tui .livc-said .md pre { font: inherit; background: none; border: 0; border-radius: 0; padding: 0; margin: 0; overflow-x: auto; white-space: pre; }
+.livc-tui .livc-said .md pre code { color: var(--tui-fg); }
+.livc-tui .livc-said .md * + pre, .livc-tui .livc-said .md pre + * { margin-top: var(--tui-lh); }
+.livc-tui .livc-said .md ul, .livc-tui .livc-said .md ol { margin: 0; padding-left: calc(var(--tui-cw) * 2); }
+.livc-tui .livc-said .md ul { list-style: '- ' outside; }
+.livc-tui .livc-said .md ol { list-style: decimal outside; padding-left: calc(var(--tui-cw) * 3); }
+.livc-tui .livc-said .md li { margin: 0; line-height: inherit; padding: 0; }
+.livc-tui .livc-said .md li::marker { color: var(--tui-fg); font: inherit; }
+.livc-tui .livc-said .md li > ul, .livc-tui .livc-said .md li > ol { margin-top: 0; }
+.livc-tui .livc-said .md blockquote { margin: 0; padding: 0 0 0 calc(var(--tui-cw) * 2); border: 0; position: relative; color: var(--tui-dim); font-style: italic; background: none; }
+.livc-tui .livc-said .md blockquote::before { content: '▎'; position: absolute; left: 0; top: 0; }
+.livc-tui .livc-said .md table { border-collapse: collapse; font: inherit; margin: 0; }
+.livc-tui .livc-said .md th, .livc-tui .livc-said .md td { border: 1px solid var(--tui-rule); padding: 0 var(--tui-cw); text-align: left; font: inherit; background: none; }
+.livc-tui .livc-said .md th { font-weight: 700; }
+.livc-tui .livc-said .md hr { border: 0; border-top: 1px solid var(--tui-rule); margin: calc(var(--tui-lh) / 2) 0; height: 0; }
+.livc-tui .livc-said .md a { color: var(--tui-link); text-decoration: none; }
+.livc-tui .livc-said .md a:hover { text-decoration: underline; }
+.livc-tui .livc-said .md img { max-width: 100%; }
+.livc-tui .livc-said-live { white-space: pre-wrap; }
+/* 복사 단추 — 터미널엔 없다. 손을 얹을 때만 조용한 글자로. */
+.livc-tui .livc-said-copy, .livc-tui .livc-copy { font: inherit; font-size: calc(var(--tui-fs) * .85); line-height: 1.4; padding: 0 var(--tui-cw); border-radius: 0;
+  background: var(--tui-bg); border: 1px solid var(--tui-rule); color: var(--tui-dim); }
+.livc-tui .livc-said-copy:hover, .livc-tui .livc-copy:hover { color: var(--tui-fg); border-color: var(--tui-fg); }
+
+/* ── 생각 — `∴ Thinking…`. Claude Code 전체 화면은 평소엔 생각을 따로 세우지 않는다 — Ctrl+O(다 펼친 판)에서만 보인다. ── */
+.livc-tui .tui-think { display: none; }
+.livc-tui.tui-verbose .tui-think { display: block; }
+.livc-tui .tui-think > summary { list-style: none; cursor: pointer; color: var(--tui-dim); font-style: italic; display: block; }
+.livc-tui .tui-think > summary::-webkit-details-marker { display: none; }
+.livc-tui .tui-think-body { padding-left: calc(var(--tui-cw) * 2); color: var(--tui-dim); font-style: italic; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
+
+/* ── 도구 — `⏺ Bash(npm test)` + `⎿  결과` ── */
+.livc-tui .tui-tool-head { position: relative; padding-left: calc(var(--tui-cw) * 2); cursor: pointer; overflow-wrap: anywhere; word-break: break-all; }
+.livc-tui .tui-tool-head:focus-visible { outline: 1px dotted var(--tui-dim); outline-offset: 1px; }
+.livc-tui .tui-tool:not(.tui-open) .tui-tool-head { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.livc-tui .tui-dot { position: absolute; left: 0; top: 0; color: var(--tui-dim); }
+.livc-tui .tui-tool-name { font-weight: 700; }
+.livc-tui .tui-tool-args { color: var(--tui-fg); white-space: pre-wrap; }
+.livc-tui .tui-tool[data-st="ok"] .tui-dot { color: var(--tui-ok); }
+.livc-tui .tui-tool[data-st="err"] .tui-dot { color: var(--tui-err); }
+.livc-tui .tui-tool[data-st="run"] .tui-dot { animation: tui-blink 1s steps(1, end) infinite; }
+@keyframes tui-blink { 50% { opacity: 0; } }
+.livc-tui .tui-res { position: relative; padding-left: calc(var(--tui-cw) * 5); white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; color: var(--tui-fg); }
+.livc-tui .tui-res:empty { display: none; }
+.livc-tui .tui-res::before { content: '⎿'; position: absolute; left: calc(var(--tui-cw) * 2); top: 0; color: var(--tui-dim); }
+.livc-tui .tui-res.tui-err, .livc-tui .tui-res.tui-err .tui-rl { color: var(--tui-err); }
+.livc-tui .tui-rl { min-height: var(--tui-lh); }
+.livc-tui .tui-dim { color: var(--tui-dim); }
+/* `… +N lines` — 터미널은 이 줄을 SGR 2(반투명)로 찍는다: 글자색의 반 */
+.livc-tui .tui-more { color: color-mix(in srgb, var(--tui-fg) 50%, var(--tui-bg)); }
+.livc-tui .tui-more { cursor: pointer; }
+.livc-tui .tui-more:hover { color: var(--tui-fg); }
+.livc-tui .tui-full { white-space: pre-wrap; }
+.livc-tui .tui-todo.is-completed .tui-todo-t { text-decoration: line-through; color: var(--tui-dim); }
+.livc-tui .tui-todo.is-in_progress .tui-todo-t { font-weight: 700; }
+/* 변경분 — ` 186 -` · ` 186 +` · ` 183  ` 뒤에 코드(Claude Code 2.1.299 실측). 지운 줄·더한 줄은 줄 끝까지 물들고 번호·부호가
+   빨강/초록, 문맥 줄은 번호가 흐리다(SGR 2 = 반투명). 코드는 넘치면 코드 칸 안에서 잇는다. */
+.livc-tui .tui-diff { margin: 0; }
+.livc-tui .tui-dl { display: flex; color: var(--tui-dfg); }
+.livc-tui .tui-dgut, .livc-tui .tui-dsign { flex: none; white-space: pre; }
+.livc-tui .tui-dtext { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere; }
+.livc-tui .tui-dl.is-ctx .tui-dgut { color: color-mix(in srgb, var(--tui-dfg) 50%, var(--tui-bg)); }
+.livc-tui .tui-dl.is-add { background: var(--tui-add-bg); }
+.livc-tui .tui-dl.is-del { background: var(--tui-del-bg); }
+.livc-tui .tui-dl.is-add .tui-dgut, .livc-tui .tui-dl.is-add .tui-dsign { color: var(--tui-add-sign); }
+.livc-tui .tui-dl.is-del .tui-dgut, .livc-tui .tui-dl.is-del .tui-dsign { color: var(--tui-del-sign); }
+.livc-tui .tui-dl.is-add .tui-hl { background: var(--tui-add-hl); }
+.livc-tui .tui-dl.is-del .tui-hl { background: var(--tui-del-hl); }
+.livc-tui .tui-dl.is-gap { display: block; color: var(--tui-dim); }
+/* 문법 색 — 갈래마다 한 색(chat-tui.ts tuiHighlight) */
+.livc-tui .tui-hk-kw { color: var(--tui-hk-kw); }
+.livc-tui .tui-hk-store { color: var(--tui-hk-store); }
+.livc-tui .tui-hk-fn { color: var(--tui-hk-fn); }
+.livc-tui .tui-hk-cls { color: var(--tui-hk-cls); }
+.livc-tui .tui-hk-str { color: var(--tui-hk-str); }
+.livc-tui .tui-hk-num { color: var(--tui-hk-num); }
+.livc-tui .tui-hk-lit { color: var(--tui-hk-lit); }
+.livc-tui .tui-hk-bi { color: var(--tui-hk-bi); }
+.livc-tui .tui-hk-attr { color: var(--tui-hk-attr); }
+.livc-tui .tui-hk-prop { color: var(--tui-hk-prop); }
+.livc-tui .tui-hk-com { color: var(--tui-hk-com); }
+/* 꾸민 조각 — 굵게 · 흐림 · +N/-N */
+.livc-tui .tui-b { font-weight: 700; }
+.livc-tui .tui-d { color: var(--tui-dim); }
+.livc-tui .tui-add { color: var(--tui-add-word); }
+.livc-tui .tui-del { color: var(--tui-del-word); }
+.livc-tui .tui-sug { color: var(--tui-perm); }   /* 제안 색(suggestion) — Claude Code 테마에서 권한 색과 같은 값(256색 105 · 다크 153) */
+.livc-tui .tui-res.tui-subtle, .livc-tui .tui-res.tui-subtle .tui-rl { color: var(--tui-subtle); }
+
+/* ── 도구 묶음 — `  Ran 2 shell commands`(끝나면 2칸 들여쓴 흐린 줄) · 도는 동안 `⏺ Running 1 shell command…` + `⎿  $ 명령` ── */
+.livc-tui .tui-group-line { position: relative; padding-left: calc(var(--tui-cw) * 2); color: var(--tui-dim); cursor: pointer; overflow-wrap: anywhere; }
+.livc-tui .tui-group-line:focus-visible { outline: 1px dotted var(--tui-dim); outline-offset: 1px; }
+.livc-tui .tui-group-line .tui-dot { display: none; }
+.livc-tui .tui-group[data-st="run"] > .tui-group-line { color: var(--tui-fg); }
+.livc-tui .tui-group[data-st="run"] > .tui-group-line .tui-dot { display: inline; color: var(--tui-dim); animation: tui-blink 1s steps(1, end) infinite; }
+.livc-tui .tui-group-hint { color: var(--tui-dim); }
+.livc-tui .tui-group-body { display: none; }
+.livc-tui .tui-group.tui-open > .tui-group-body, .livc-tui.tui-verbose .tui-group-body { display: block; }
+.livc-tui .tui-group-body > .tui-tool { margin-top: var(--tui-lh); }
+
+/* ── 도는 중 — `✻ Cogitating… (12s · ↓ 1.2k tokens · esc to interrupt)` ── */
+.livc-tui .tui-spin { color: var(--tui-claude); white-space: pre-wrap; }
+.livc-tui .tui-spin-g { display: inline-block; width: calc(var(--tui-cw) * 2); }
+.livc-tui .tui-spin-v { background: linear-gradient(90deg, var(--tui-claude) 0%, var(--tui-claude) 42%, var(--tui-shimmer) 50%, var(--tui-claude) 58%, var(--tui-claude) 100%);
+  background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: tui-shimmer 2.2s linear infinite; }
+@keyframes tui-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.livc-tui .tui-spin-m { color: var(--tui-dim); }
+.livc-tui .tui-esc { font: inherit; letter-spacing: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: pointer; }
+.livc-tui .tui-esc:hover { color: var(--tui-fg); text-decoration: underline; }
+.livc-tui .tui-done { position: relative; padding-left: calc(var(--tui-cw) * 2); color: var(--tui-dim); }
+.livc-tui .tui-done-g { position: absolute; left: 0; top: 0; }
+/* 완료 알림 — `● Agent "…" finished · 1m 1s`(점 색이 결과) */
+.livc-tui .tui-notice { position: relative; overflow-wrap: anywhere; }
+.livc-tui .tui-notice .tui-dot { position: static; color: var(--tui-ok); }
+.livc-tui .tui-notice-err .tui-dot { color: var(--tui-err); }
+.livc-tui .tui-notice-dim .tui-dot { color: var(--tui-dim); }
+/* 맥락 압축 — `✻ Conversation compacted · ctrl+o for history` */
+.livc-tui .livc-divider.tui-compact { display: block; margin-bottom: 0; font: inherit; letter-spacing: inherit; color: var(--tui-dim); }
+.livc-tui .livc-divider.tui-compact::before, .livc-tui .livc-divider.tui-compact::after { content: none; }
+.livc-tui details.livc-divider.tui-compact > summary { display: block; cursor: pointer; }
+.livc-tui details.livc-divider.tui-compact > summary::before, .livc-tui details.livc-divider.tui-compact > summary::after { content: none; }
+.livc-tui .tui-compact .livc-divider-body { margin: 0; padding: 0 0 0 calc(var(--tui-cw) * 2); border: 0; border-radius: 0; background: none; font: inherit; color: var(--tui-dim); max-height: none; overflow: visible; }
+/* 오류 — 빨간 `⎿` 덩이(35-liv 의 왼쪽 막대는 걷는다) */
+.livc-tui .livc-err { font: inherit; border: 0; padding: 0 0 0 calc(var(--tui-cw) * 5); color: var(--tui-err); margin-left: 0; }
+.livc-tui .livc-mark { font: inherit; color: var(--tui-err); }
+
+/* ── 환영 상자 — Claude Code 가 세션을 열 때의 첫 화면(좁은 판) ── */
+.livc-tui .tui-banner { position: relative; margin: calc(var(--tui-lh) / 2) 0 0; max-width: calc(var(--tui-cw) * 58); border: 1px solid var(--tui-claude); border-radius: 6px;
+  padding: var(--tui-lh) calc(var(--tui-cw) * 2) calc(var(--tui-lh) / 2); text-align: center; }
+.livc-tui .tui-banner-t { position: absolute; top: calc(var(--tui-lh) / -2); left: calc(var(--tui-cw) * 3); padding: 0 var(--tui-cw); background: var(--tui-bg); color: var(--tui-claude); white-space: nowrap; }
+.livc-tui .tui-banner-ver { color: var(--tui-dim); }
+.livc-tui .tui-banner-hi { font-weight: 700; margin-bottom: var(--tui-lh); }
+.livc-tui .tui-mascot { display: inline-block; white-space: pre; text-align: left; color: var(--tui-claude); line-height: var(--tui-lh); letter-spacing: 0; margin-bottom: var(--tui-lh); }
+.livc-tui .tui-banner-dim { color: var(--tui-dim); overflow-wrap: anywhere; }
+
+/* ── 입력 — 가로줄 둘 사이의 `>` 한 줄 + 아래 상태 줄(Claude Code v2) ── */
+.livc-tui .livc-foot { padding: 0 16px 0 4px; }
+.livc-tui .tui-compose { display: block; padding: calc(var(--tui-lh) / 2) 0 2px; }
+/* 가로줄은 터미널에서 한 칸 줄의 한가운데에 그어진다 — 그래서 줄과 줄 사이가 정확히 두 줄(위 반 줄 + 입력 한 줄 + 아래 반 줄). */
+.livc-tui .tui-box { position: relative; display: flex; align-items: flex-start; border-top: 1px solid var(--tui-rule); border-bottom: 1px solid var(--tui-rule);
+  padding: calc(var(--tui-lh) / 2 - 1px) 0 calc(var(--tui-lh) / 2); }
+.livc-tui .tui-prompt { flex: none; width: calc(var(--tui-cw) * 2); color: var(--tui-fg); }
+/* 도는 동안 `❯` 는 흐려진다(Claude Code 2.1.299 실측) */
+.livc-tui .tui-busy .tui-prompt { color: var(--tui-dim); }
+.livc-tui .tui-box .livc-input { flex: 1; min-width: 0; border: 0; border-radius: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; letter-spacing: inherit; line-height: var(--tui-lh); color: var(--tui-fg); caret-color: var(--tui-cursor); max-height: none; resize: none; box-shadow: none; }
+.livc-tui .tui-box .livc-input:focus, .livc-tui .tui-box .livc-input:focus-visible { outline: none; border: 0; box-shadow: none; }
+.livc-tui .livc-input::placeholder { color: var(--tui-dim); opacity: 1; }
+.livc-tui .livc-input:disabled { opacity: .55; }
+.livc-tui[data-tui-caret="block"] .livc-input { caret-shape: block; }
+.livc-tui[data-tui-caret="underscore"] .livc-input { caret-shape: underscore; }
+.livc-tui[data-tui-caret="bar"] .livc-input { caret-shape: bar; }
+/* 손가락 화면(Esc·Enter 가 불편한 자판)에서만 보내기·멈춤 단추가 선다 — 데스크톱의 Claude Code 엔 단추가 없다. */
+.livc-tui .tui-box-acts { display: none; }
+@media (pointer: coarse) {
+  .livc-tui .tui-box-acts { display: inline-flex; gap: 4px; align-self: center; margin-left: var(--tui-cw); }
+  .livc-tui .tui-box .livc-input { font-size: max(16px, var(--tui-fs)); }   /* iOS — 16px 미만 입력칸은 포커스 때 화면을 확대한다 */
+}
+.livc-tui .tui-send { font: inherit; letter-spacing: 0; min-width: 34px; height: 30px; padding: 0 6px; border: 1px solid var(--tui-rule); border-radius: 4px; background: none; color: var(--tui-fg); cursor: pointer; }
+.livc-tui .tui-send[hidden] { display: none; }
+.livc-tui .tui-stop { color: var(--tui-err); border-color: var(--tui-err); }
+.livc-tui .tui-status { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--tui-cw) * 2); min-height: var(--tui-lh);
+  padding: calc(var(--tui-lh) / 2) 0 0 calc(var(--tui-cw) * 2); color: var(--tui-dim); }
+.livc-tui .tui-cycle { color: var(--tui-dim); }
+.livc-tui .tui-cycle[hidden] { display: none; }
+.livc-tui .tui-status-l, .livc-tui .tui-status-r { display: inline-flex; align-items: center; gap: calc(var(--tui-cw) * 2); min-width: 0; }
+.livc-tui .tui-mode { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.livc-tui .tui-mode-accept { color: var(--tui-accept); }
+.livc-tui .tui-mode-plan { color: var(--tui-plan); }
+.livc-tui .tui-mode-danger { color: var(--tui-err); }
+.livc-tui .tui-mode-warn { color: var(--tui-warn); }
+.livc-tui .tui-status-mode { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.livc-tui .tui-status-mode [hidden] { display: none; }
+.livc-tui .tui-mode[hidden] { display: none; }
+.livc-tui .tui-help { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--tui-cw) * 30), 1fr)); gap: 0 calc(var(--tui-cw) * 2);
+  padding: 0 0 0 calc(var(--tui-cw) * 2); color: var(--tui-dim); }
+.livc-tui .tui-help[hidden] { display: none; }
+.livc-tui .tui-help-on .tui-status { display: none; }
+/* 첨부 단추(상태 줄 오른쪽) — 터미널엔 없다. 상태 줄 글자처럼 조용히, 높이도 한 줄(키가 크면 상태 줄 전체가 내려앉는다 — 실측 7px). */
+.livc-tui .tui-status-r .v2-launch-att { color: var(--tui-dim); background: none; border: 0; height: var(--tui-lh); min-height: 0; line-height: var(--tui-lh); padding: 0 var(--tui-cw); }
+.livc-tui .tui-status-r .v2-launch-att:hover { color: var(--tui-fg); }
+.livc-tui .pn-att { font: inherit; padding: 0 0 2px; }
+/* 안내줄 — 상태 줄과 같은 흐린 글자(라이블리가 덧붙이는 말이라 한국어 그대로) */
+.livc-tui .livc-note:not(:empty) { font: inherit; letter-spacing: inherit; padding: 0 16px 0 calc(4px + var(--tui-cw) * 2); color: var(--tui-dim); line-height: var(--tui-lh); }
+/* 아래로 — Claude Code 전체 화면의 그 한 줄: 맨 아래 가운데 ` Jump to bottom (click) ↓ `(사람 말 띠 바탕 · 글자색) */
+.livc-tui .livc-jump { font: inherit; letter-spacing: inherit; line-height: var(--tui-lh); padding: 0 var(--tui-cw); border: 0; border-radius: 0;
+  background: var(--tui-user-bg); color: var(--tui-text); box-shadow: none; bottom: var(--tui-lh); }   /* 목록 아래 빈 줄 위 — 터미널은 입력 가로줄 두 줄 위 */
+.livc-tui .livc-jump:hover { border: 0; text-decoration: underline; }
+/* 쉬는 동안의 안내 — 입력칸 바로 위 한 줄 오른쪽 `new task? /clear to save 550.8k tokens`(Claude Code 2.1.299: 75분 쉼 · 문맥 10만 토큰 이상).
+   그 줄은 목록 아래 빈 줄 자리다 — 안내가 서 있는 동안엔 터미널처럼 그 줄로 글이 지나가지 않게 바탕으로 덮는다.
+   오른쪽 끝은 두 칸 안쪽에서 끝난다(실측: 92칸 중 90칸째). */
+.livc-tui .tui-idle { position: absolute; left: 4px; right: 16px; bottom: 0; height: var(--tui-lh); line-height: var(--tui-lh); padding-right: calc(var(--tui-cw) * 2);
+  text-align: right; white-space: nowrap; overflow: hidden; background: var(--tui-bg); color: var(--tui-dim); z-index: 1; pointer-events: none; }
+.livc-tui .tui-idle[hidden] { display: none; }
+/* 위에 붙는 사람 말 머리 — 지금 읽는 턴의 사람 말이 위로 지나가면 맨 위 한 줄에 `❯ …`(옅은 글자 · 사람 말 띠 바탕) */
+.livc-tui .tui-sticky { position: absolute; top: 0; left: 4px; right: 16px; height: var(--tui-lh); line-height: var(--tui-lh); background: var(--tui-user-bg);
+  color: var(--tui-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; cursor: pointer; }
+.livc-tui .tui-sticky[hidden] { display: none; }
+
+/* ── 입력칸 위 칸(승인·질문·작업·로그인) — Claude Code 의 권한 상자 문법 ── */
+.livc-tui .cxl-dock { padding: 0 16px 0 4px; }
+.livc-tui .cxl-asks { margin: 0 0 calc(var(--tui-lh) / 2); gap: calc(var(--tui-lh) / 2); max-height: 50vh; }
+.livc-tui .cxl-ask, .livc-tui .sc-wait { font: inherit; letter-spacing: inherit; display: block; border: 1px solid var(--tui-perm); border-radius: 6px; box-shadow: none;
+  background: var(--tui-bg); padding: calc(var(--tui-lh) / 2) var(--tui-cw); margin: 0 0 calc(var(--tui-lh) / 2); color: var(--tui-fg); }
+.livc-tui .cxl-ask.is-risky { border-color: var(--tui-err); }
+.livc-tui .cxl-ask-head { display: block; }
+.livc-tui .cxl-ask-kind { font: inherit; letter-spacing: inherit; color: var(--tui-perm); font-weight: 700; }
+.livc-tui .cxl-ask-kind::after { content: ' · '; font-weight: 400; color: var(--tui-dim); }
+.livc-tui .cxl-ask-title { font: inherit; font-weight: 700; color: var(--tui-perm); }
+.livc-tui .cxl-ask-body { font: inherit; letter-spacing: inherit; border: 0; border-radius: 0; background: none; margin: calc(var(--tui-lh) / 2) 0 0; padding: 0 0 0 calc(var(--tui-cw) * 2);
+  max-height: 12em; color: var(--tui-fg); }
+.livc-tui .stk-warn { font: inherit; border: 0; background: none; padding: 0; color: var(--tui-err); margin-top: calc(var(--tui-lh) / 2); }
+.livc-tui .stk-askwhy { font: inherit; color: var(--tui-dim); padding-left: calc(var(--tui-cw) * 2); }
+/* 고르는 줄 — `❯ 1. Yes` / `  2. No`. 쉬는 동안엔 기본 선택(파란 단추였던 것)에 ❯ 가 선다. */
+.livc-tui .cxl-ask-acts, .livc-tui .sc-wait-acts { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: calc(var(--tui-lh) / 2); counter-reset: tui-opt; }
+.livc-tui .cxl-ask-btn, .livc-tui .sc-wait-acts .btn { counter-increment: tui-opt; font: inherit; letter-spacing: inherit; text-align: left; border: 0; border-radius: 0; background: none;
+  color: var(--tui-fg); padding: 0; margin: 0; min-height: var(--tui-lh); height: auto; cursor: pointer; box-shadow: none; font-weight: 400; justify-content: flex-start; }
+.livc-tui .cxl-ask-btn::before, .livc-tui .sc-wait-acts .btn::before { content: '  ' counter(tui-opt) '. '; white-space: pre; }
+.livc-tui .cxl-ask-btn:hover, .livc-tui .cxl-ask-btn:focus-visible, .livc-tui .sc-wait-acts .btn:hover, .livc-tui .sc-wait-acts .btn:focus-visible { color: var(--tui-perm); outline: none; background: none; }
+.livc-tui .cxl-ask-btn:hover::before, .livc-tui .cxl-ask-btn:focus-visible::before,
+.livc-tui .sc-wait-acts .btn:hover::before, .livc-tui .sc-wait-acts .btn:focus-visible::before { content: '\276F ' counter(tui-opt) '. '; }
+.livc-tui .cxl-ask-acts:not(:hover):not(:focus-within) .cxl-ask-btn.is-go,
+.livc-tui .sc-wait-acts:not(:hover):not(:focus-within) .btn-primary { color: var(--tui-perm); background: none; border: 0; }
+.livc-tui .cxl-ask-acts:not(:hover):not(:focus-within) .cxl-ask-btn.is-go::before,
+.livc-tui .sc-wait-acts:not(:hover):not(:focus-within) .btn-primary::before { content: '\276F ' counter(tui-opt) '. '; }
+.livc-tui .cxl-ask-btn.is-go { background: none; border: 0; color: var(--tui-fg); font-weight: 400; }
+.livc-tui .cxl-ask-btn:disabled { opacity: .45; }
+.livc-tui .cxl-ask-said { font: inherit; color: var(--tui-dim); }
+.livc-tui .sc-wait .v2-dot { display: none; }
+.livc-tui .sc-wait-t { font: inherit; color: var(--tui-fg); }
+.livc-tui .sc-wait-t b { color: var(--tui-perm); }
+/* #4695 T5 — 끄기 전에 남긴 «답을 기다리던 질문» 카드도 Claude Code 질문 창 문법으로 — 선택지는 번호 붙은 세로 목록, 고른 것엔 ❯ */
+.livc-tui .sc-stopq-opts { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: calc(var(--tui-lh) / 2); counter-reset: tui-opt; }
+.livc-tui .sc-stopq-opts .btn { counter-increment: tui-opt; font: inherit; letter-spacing: inherit; text-align: left; border: 0; border-radius: 0; background: none;
+  color: var(--tui-fg); padding: 0; margin: 0; min-height: var(--tui-lh); height: auto; cursor: pointer; box-shadow: none; font-weight: 400; justify-content: flex-start; }
+.livc-tui .sc-stopq-opts .btn::before { content: '  ' counter(tui-opt) '. '; white-space: pre; }
+.livc-tui .sc-stopq-opts .btn:hover, .livc-tui .sc-stopq-opts .btn:focus-visible, .livc-tui .sc-stopq-opts .btn.btn-primary { color: var(--tui-perm); outline: none; background: none; }
+.livc-tui .sc-stopq-opts .btn:hover::before, .livc-tui .sc-stopq-opts .btn:focus-visible::before, .livc-tui .sc-stopq-opts .btn.btn-primary::before { content: '\276F ' counter(tui-opt) '. '; }
+.livc-tui .sc-stopq-h, .livc-tui .sc-stopq-hint, .livc-tui .sc-stopq-target { font: inherit; color: var(--tui-dim); }
+/* 질문(AskUserQuestion) — 번호 붙은 고르기 줄 + 아래 설명 */
+.livc-tui .stk-q .cxl-ask-kind { color: var(--tui-perm); }
+.livc-tui .stk-q-item + .stk-q-item { border-top: 0; padding-top: 0; margin-top: calc(var(--tui-lh) / 2); }
+.livc-tui .stk-q-text { font: inherit; font-weight: 700; color: var(--tui-fg); }
+.livc-tui .stk-q-hint { font: inherit; color: var(--tui-dim); }
+.livc-tui .stk-q-opts { display: block; margin-top: calc(var(--tui-lh) / 2); counter-reset: tui-q; }
+.livc-tui .stk-q-opt { counter-increment: tui-q; display: block; position: relative; width: 100%; font: inherit; letter-spacing: inherit; text-align: left; border: 0; border-radius: 0;
+  background: none; color: var(--tui-fg); padding: 0 0 0 calc(var(--tui-cw) * 5); margin: 0; cursor: pointer; }
+.livc-tui .stk-q-opt::before { content: counter(tui-q) '.'; position: absolute; left: calc(var(--tui-cw) * 2); top: 0; }
+.livc-tui .stk-q-opt:hover::before, .livc-tui .stk-q-opt:focus-visible::before { content: '\276F ' counter(tui-q) '.'; left: 0; }
+.livc-tui .stk-q-opt:hover, .livc-tui .stk-q-opt:focus-visible, .livc-tui .stk-q-opt.is-on { color: var(--tui-perm); background: none; outline: none; }
+.livc-tui .stk-q-label { font: inherit; font-weight: 400; }
+.livc-tui .stk-q-desc { display: block; font: inherit; color: var(--tui-dim); }
+.livc-tui .stk-q-opt.is-on .stk-q-desc { color: var(--tui-dim); opacity: 1; }
+/* 작업(백그라운드 셸·서브에이전트)·사실·사용량 — 흐린 한 줄씩 */
+.livc-tui .stk-dock { font: inherit; letter-spacing: inherit; border: 0; border-radius: 0; background: none; padding: 0; margin: 0 0 calc(var(--tui-lh) / 2); }
+.livc-tui .stk-head { font: inherit; color: var(--tui-dim); margin: 0; }
+.livc-tui .stk-row { font: inherit; padding: 0 0 0 calc(var(--tui-cw) * 2); gap: var(--tui-cw); }
+.livc-tui .stk-chip, .livc-tui .stk-state, .livc-tui .stk-time { font: inherit; border: 0; padding: 0; color: var(--tui-dim); }
+.livc-tui .stk-info { gap: 0 calc(var(--tui-cw) * 2); padding: 0 0 0 calc(var(--tui-cw) * 2); margin: 0; }
+.livc-tui .stk-fact { font: inherit; border: 0; padding: 0; border-radius: 0; color: var(--tui-dim); }
+.livc-tui .stk-hot { color: var(--tui-err); }
+.livc-tui .cxl-usage { font: inherit; letter-spacing: inherit; color: var(--tui-dim); margin: 0 0 2px; }
+/* 슬래시 목록 — `/compact   Clear conversation…` 줄, 고른 줄은 권한색 글자(바탕 없음) */
+.livc-tui .stk-slash { font: inherit; letter-spacing: inherit; border: 0; border-radius: 0; box-shadow: none; background: var(--tui-bg); margin: 0; padding: 2px 0; }
+.livc-tui .stk-slash-row { font: inherit; padding: 0 0 0 calc(var(--tui-cw) * 2); gap: calc(var(--tui-cw) * 2); }
+.livc-tui .stk-slash-row + .stk-slash-row { border-top: 0; }
+.livc-tui .stk-slash-row.is-sel { background: none; color: var(--tui-perm); }
+.livc-tui .stk-slash-name { font: inherit; font-weight: 400; min-width: calc(var(--tui-cw) * 18); }
+.livc-tui .stk-slash-desc { font: inherit; color: var(--tui-dim); }
+.livc-tui .stk-slash-row.is-sel .stk-slash-desc { color: var(--tui-perm); opacity: 1; }
+/* 로그인 관문(codex) — 주의색 테두리 상자 */
+.livc-tui .cxl-gate { font: inherit; letter-spacing: inherit; border: 1px solid var(--tui-warn); border-radius: 6px; box-shadow: none; background: var(--tui-bg); margin: 0 0 calc(var(--tui-lh) / 2); }
+.livc-tui .cxl-gate-t { color: var(--tui-warn); font-weight: 700; }
+.livc-tui .cxl-gate-d, .livc-tui .cxl-gate-s, .livc-tui .cxl-gate-k { font: inherit; color: var(--tui-dim); }
+
+/* ── 세션 화면이 대화창 안에 얹는 것 — 끝난 세션 바 · 빈 화면 안내 · 이전 대화 불러오기 ── */
+.livc-tui .sc-bar { font: inherit; letter-spacing: inherit; border-top: 1px solid var(--tui-rule); background: none; padding: calc(var(--tui-lh) / 2) 0; gap: calc(var(--tui-cw) * 2); }
+.livc-tui .sc-bar-t { font: inherit; color: var(--tui-dim); }
+.livc-tui .sc-empty p { font: inherit; letter-spacing: inherit; color: var(--tui-dim); margin: 0 0 calc(var(--tui-lh) / 2); }
+.livc-tui .livc-open { padding: 0; }
+.livc-tui .sc-older-t { font: inherit; color: var(--tui-dim); }
+.livc-tui .sc-liv-boot { font: inherit; border: 0; background: none; padding: 0; color: var(--tui-dim); }
+
+/* 움직임을 줄이라는 설정 — 깜빡임·반짝임을 멈춘다(글리프 돌기는 JS 가 멈춘다) */
+@media (prefers-reduced-motion: reduce) {
+  .livc-tui .tui-tool[data-st="run"] .tui-dot, .livc-tui .tui-spin-v { animation: none; }
+  .livc-tui .tui-spin-v { color: var(--tui-claude); background: none; }
+}
+/* 폰 — 좌우 여백만 좁힌다(글자 크기는 터미널 설정이 정한다 — 폰 기본 12px) */
+@media (max-width: 760px) {
+  .livc-tui .livc-list { padding: 4px 6px var(--tui-lh); }
+  .livc-tui .livc-foot { padding: 0 6px env(safe-area-inset-bottom, 0px); }
+  .livc-tui .tui-idle { left: 6px; right: 6px; }
+  .livc-tui .cxl-dock { padding: 0 6px; }
+}
+
+/* [⋯ ▸ 화면] — 터미널 설정 칸(web/session-chat.ts termLookRows). 줄의 생김새는 .v2set-row 그대로, 조작부만 여기서. */
+.v2set-sel { font: inherit; font-size: 13px; max-width: 220px; padding: 5px 8px; border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg); color: var(--ink); }
+.v2set-num { font: inherit; font-size: 13px; width: 76px; padding: 5px 8px; border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg); color: var(--ink); }
+.v2set-step { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.v2set-stepv { min-width: 2.5em; text-align: center; font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink); }

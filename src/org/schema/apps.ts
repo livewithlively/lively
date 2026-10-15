@@ -60,6 +60,11 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS edit_members JSONB NOT NULL DEFAULT '[]'::jsonb;`);
   await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_edit_mode_check;`);
   await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_edit_mode_check CHECK (edit_mode IN ('all','members'));`);
+  //  #4632 — 공개 범위(apps/visibility.ts). 'all' = 구성원 모두(설치 · 기본 앱의 기본) · 'me' = 나만 보는 앱(app_save 로 새로 생긴 앱의 기본 —
+  //   원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 있던 행은 'all' 그대로. 'me' 앱을 보는 사람은 책임자(owner_member, #4667 아래)와 관리자.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'all';`);
+  await pool.query(`ALTER TABLE org_app DROP CONSTRAINT IF EXISTS org_app_visibility_check;`);
+  await pool.query(`ALTER TABLE org_app ADD CONSTRAINT org_app_visibility_check CHECK (visibility IN ('all','me'));`);
 
   // ── org_app_component — 앱이 전개한 구성요소 행 조인(무엇을 심었나 = 무엇을 회수하나) ──
   //  PK(app_id, kind, ref). ref 는 대상 행의 자연키(문자열). orig_name = 자산 번들 내 원명(물질화 시 복원, design R1-F4).
@@ -145,11 +150,69 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_version_app_idx ON org_app_version(app_id);`);
+  //  #4481(앱 v2-2) — 판의 파일 내용은 S3(자가호스팅은 org_app_blob.bytes)로 옮긴다. 여기 남는 것은 «파일 목록»(apps/app-bundle.ts):
+  //   bundle = {v:1, files:[{p 경로, h sha256, s 크기}]} · bundle_store = 그 파일들이 있는 저장소('s3' | 'db' — 설정이 바뀌어도 옛 판은 제자리에서 읽는다)
+  //   · bundle_bytes = 판 하나의 합 · bundle_at = 목록을 적은 때(옛 코어 호환 사본 files 를 30일 뒤 지우는 기준 — 상민 2026-10-15).
+  //   bundle 이 NULL 인 줄은 아직 안 옮긴 옛 판이다 — files 가 정본(하우스키핑이 옮긴다 · app-bundle-migrate.ts).
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle JSONB;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_store TEXT;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_bytes BIGINT;`);
+  await pool.query(`ALTER TABLE org_app_version ADD COLUMN IF NOT EXISTS bundle_at TIMESTAMPTZ;`);
+
+  // ── org_app_blob — 앱 판 파일의 장부(#4481) ──
+  //  파일 하나(지문 하나)당 한 줄: 어느 저장소에 · 크기 · 실제로 올라갔나(stored) · 마지막으로 판이 가리키려 한 때(last_used_at).
+  //   자가호스팅(S3 없음)은 bytes 칸에 내용을 둔다. 판 쓰기는 파일을 가리키기 전에 이 줄을 «방금 씀» 으로 찍고, 정리는 이 줄을 잠근 채
+  //   «24시간 안 쓰였고 어떤 판도 안 가리킴» 을 다시 본 뒤에만 지운다(엇갈림 규칙은 apps/app-blob-store.ts 머리말).
+  //   PK 는 ensureTenantColumn 이 (tenant_id, sha256, store) 로 다시 쓴다 — ON CONFLICT 타깃도 그 셋.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_blob(
+      sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+      store TEXT NOT NULL CHECK (store IN ('s3','db')),
+      size BIGINT NOT NULL CHECK (size >= 0),
+      stored BOOLEAN NOT NULL DEFAULT FALSE,
+      bytes BYTEA,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (sha256, store)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_blob_last_used_idx ON org_app_blob(last_used_at);`);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS builtin_version TEXT;`);
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS current_version_no INT;`);
+
+  //  #4667(앱 v2-15) — 공개 판 · 초안 · 만든 사람 · 만들기 세션 · 책임자(공개 범위 visibility 칸은 위 #4632). 판정은 apps/visibility.ts 머리말.
+  //   published_version_no = 모두가 보는 판(org_app_version) · draft_by = 설치된 상태가 공개 판과 다를 때 그 초안을 만든 사람(그 사람만 초안을 본다).
+  //   made_by = 처음 만든 사람(서버가 만들 때 한 번 찍는다 · 매니페스트 studio.made_by 는 앱 코드라 믿지 않는다) · owner_member = 지금 책임자
+  //    (NULL = 관리자 — 만든 사람이 떠나면 여기로 넘어온다 · 'me' 앱을 보는 사람) · build_session = 이 앱을 만드는 세션(세션 → 앱 역조회 ·
+  //    다른 기기에서 이어 만들기) · origin_app_id = 사본이면 원본 앱.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_version_no INT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS published_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS draft_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS made_by TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS owner_member TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS build_session TEXT;`);
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS origin_app_id TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_build_session_idx ON org_app(build_session) WHERE build_session IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_owner_idx ON org_app(owner_member) WHERE owner_member IS NOT NULL;`);
+  //  옛 앱 채우기(멱등) — 워크스페이스가 만든 앱의 «만든 사람» 은 처음 설치한 사람이다(installed_by 는 upsertApp 이 처음 한 번만 쓴다).
+  //   made_by 가 빈 줄만 채우므로 한 번 채운 뒤엔 다시 돌지 않는다 — 떠난 사람의 책임자를 관리자로 넘긴 줄(owner NULL · made_by 있음)을 되돌리지 않는다.
+  //   책임자는 그 사람이 지금 활성 구성원일 때만 — 이미 떠난 사람이면 비워 둔다(= 관리자 · 떠날 때의 이관 훅은 앞으로의 전이에서만 돈다 · 격리 리뷰 NB-11).
+  //   관리자가 고치기를 «지정한 사람만» 으로 좁히며 만든 사람을 뺀 앱도 비워 둔다 — 책임자는 고치기 설정과 무관하게 고치므로(member-app editDenial)
+  //   채우기 하나로 관리자가 막아 둔 고치기가 풀리면 안 된다(격리 리뷰 2-8b).
+  //   빌트인(릴리스가 만든 앱)·시더/익명 행위자는 비워 둔다(책임자 = 관리자). 두 표에 tenant_id 가 있으면(첫 부팅 뒤) 같은 워크스페이스의 구성원만 본다.
+  const tenantCols = await pool.query(`SELECT table_name FROM information_schema.columns
+                                        WHERE table_schema = current_schema() AND column_name = 'tenant_id' AND table_name IN ('org_app','org_member')`);
+  const sameTenant = tenantCols.rows.length === 2 ? "AND m.tenant_id = a.tenant_id" : "";
+  await pool.query(`UPDATE org_app a SET made_by = a.installed_by,
+                            owner_member = CASE WHEN EXISTS (SELECT 1 FROM org_member m WHERE m.id = a.installed_by AND m.state = 'active' ${sameTenant})
+                                                     AND (a.edit_mode <> 'members' OR a.edit_members ? a.installed_by)
+                                                THEN a.installed_by ELSE NULL END
+                     WHERE a.made_by IS NULL AND a.installed_by IS NOT NULL AND a.installed_by NOT IN ('system','unknown','')
+                       AND COALESCE(a.source->>'kind','') <> 'builtin';`);
 
   // ── org_app_runtime_asset — 설치 stage가 사라진 뒤에도 정확한 package hash의 worker를 실행한다 ──
   //  코드는 단일 ESM 번들(8MiB 이하). FK 대신 remove/reclaim에서 명시 회수(v2.1 신규표 규약).
@@ -343,6 +406,27 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       PRIMARY KEY (app_id, member_id)
     );
   `);
+
+  // ── app_launch_code — 앱 주소 로그인의 일회용 코드(#4480 v2-1) ──
+  //  라이블리 화면(로그인한 구성원)이 받아 앱 주소(<앱>-<워크스페이스>.lvly.app)에 붙이고, 앱 주소 앞단(CP 라우터)이 앱 주소 전용
+  //   쿠키로 바꾼다. 평문 코드는 저장하지 않고 sha256 만(code_hash) · TTL 60초 · used_at 으로 1회. host = 그 코드가 열 수 있는
+  //   앱 주소 하나 · mode = embed(라이블리 안 iframe) | top(직접 접속) · state_hash = top 의 앞단 상태 쿠키 지문. 저장 계층은
+  //   apps/app-launch-store.ts. **테넌트 범위의 일반 표**다(발급·교환 모두 그 워크스페이스 헤더를 달고 온다 — 매니지드 RLS 가 가른다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_launch_code(
+      code_hash TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      variant TEXT NOT NULL DEFAULT 'pub' CHECK (variant IN ('pub','draft')),
+      host TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('embed','top')),
+      state_hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS app_launch_code_exp_idx ON app_launch_code(expires_at);`);
 
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.

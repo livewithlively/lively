@@ -82,6 +82,11 @@
   게이트웨이는 `"idle <epoch초> bg=<n>"` 으로 새기고(옛 파서는 앞 두 토큰만 읽는다). bg 없는 idle 에 직전 bg 를 **잇지 않는다**(못 센 훅이 옛 0 을 물려받으면 안 된다).
   목록은 마지막 보고가 idle·`bg=0` 이면 화면의 «… · 1 shell still running»(#4502 background)을 사이드바 점에 싣지 않는다 — 화면 숫자가
   AI 가 기다리는 작업과 어긋나 끝난 세션이 몇 시간씩 «작업 중» 으로 깜빡였다. 못 세면 bg 를 안 싣고 종전대로 화면을 믿는다.
+- #4695 — 같은 idle 보고에 **예약 깨움**도 싣는다: `wake=<epoch초>`(다음 ScheduleWakeup — 가장 나중 결과의 `toolUseResult.scheduledFor`, `stop:true` 깨움이
+  지운다 · 0 = 없음 또는 이미 지남) · `cron=<n>`(7일 안에 만든 열린 CronCreate 예약 수 — CronDelete · 한 번짜리 예약의 발화가 닫는다).
+  `"idle <epoch초> bg=<n> wake=<epoch초> cron=<n>"` 으로 새긴다 — bg 는 세 번째 토큰 자리를 지켜 옛 파서는 그대로다. **둘은 함께 오거나 안 온다**:
+  결과를 못 알아본 예약 호출이 남았거나 깨움 시각을 못 구했으면 «모른다» 라 훅이 둘 다 안 싣는다. 하네스 종료 규칙(`src/sessions/session-stop-rule.ts`)은
+  이 둘 없이는 claude 세션을 «완료» 로 보지 않는다 — 옛 훅·못 알아본 결과는 세션을 살려 둘 뿐 끄지 않는다.
 - **판정 우선순위**(`src/terminal/phase.ts resolveAgentPhase` — `terminal-sessions.ts` 가 재수출, 표는 `terminal-sessions.test.ts` 가 고정):
   신선한 `waiting` 보고 → 신선한 `busy` 보고 → 스피너(레거시) → capture-pane 대기(레거시) → `idle`.
   스피너가 보고된 `idle` 보다 위인 건 **Stop 게이트가 block 해 턴이 이어진 경우**를 구제하기 위해서다.

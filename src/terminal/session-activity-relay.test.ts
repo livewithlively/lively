@@ -23,7 +23,10 @@ function harness(o: {
   const deps: ActivityReportDeps = {
     hostFor: (id) => { calls.push(["hostFor", id]); return o.host === undefined ? HOST : o.host; },
     rpc: async (host, args) => { calls.push(["rpc", host, args]); return o.rpc ? o.rpc(host, args) : { ok: true, change: null }; },
-    local: async (id, phase, bg) => { calls.push(bg === undefined || bg === null ? ["local", id, phase] : ["local", id, phase, bg]); return (o.localChange ?? null) as never; },
+    local: async (id, phase, bg, sched) => {
+      calls.push([...(bg === undefined || bg === null ? ["local", id, phase] : ["local", id, phase, bg]), ...(sched ? [{ sched }] : [])] as [string, ...unknown[]]);
+      return (o.localChange ?? null) as never;
+    },
     touch: async (id, sec) => { calls.push(["touch", id, sec]); if (o.touchThrows) throw new Error("db down"); },
     nowSec: () => NOW,
     warn: (_o, msg) => { calls.push(["warn", msg]); },
@@ -119,10 +122,31 @@ test("B10 /active 는 idle 의 bg 만 받아 넘기고, 호스트 op 는 그걸 
   const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
   const routes = readFileSync(`${here}routes.ts`, "utf8");
   assert.match(routes, /const bg = phase === "idle" && isBgCount\(rawBg\) \? rawBg : null;/);
-  assert.match(routes, /reportSessionActivity\(id, phase, \{\}, bg\)/, "박스 세션 경로");
+  assert.match(routes, /reportSessionActivity\(id, phase, \{\}, bg, sched\)/, "박스 세션 경로");
+  //  #4695 — 예약(wake·cron)은 idle 에서, 둘이 함께 올 때만 받는다.
+  assert.match(routes, /const sched = phase === "idle" && isReportedSched\(schedIn\) \? schedIn : null;/);
   assert.match(routes, /nodeRpc\(ns\.node\.id, "markActive", bg === null \? \{ id, state: phase \} : \{ id, state: phase, bg \}\)/, "노드 세션 경로");
   const ops = readFileSync(`${here}session-ops.ts`, "utf8");
-  assert.match(ops, /markSessionActive\(String\(args\.id\), isReportedPhase\(st\) \? st : undefined, undefined, isBgCount\(args\.bg\) \? args\.bg : null\)/);
+  assert.match(ops, /markSessionActive\(String\(args\.id\), isReportedPhase\(st\) \? st : undefined, undefined, isBgCount\(args\.bg\) \? args\.bg : null, sched\)/);
+  assert.match(ops, /const sched = isReportedSched\(args\.sched\) \? args\.sched : null;/, "구 게이트웨이(예약 칸 없음)는 «모른다» 로 새긴다");
   const phase = readFileSync(`${here}phase.ts`, "utf8");
-  assert.match(phase, /"@box_state", formatReportedPhase\(phase, nowSec, bg\)\]/, "bg 없는 idle 은 bg 없이 새긴다(직전 값을 잇지 않는다)");
+  assert.match(phase, /"@box_state", formatReportedPhase\(phase, nowSec, bg, sched\)\]/, "bg·예약 없는 idle 은 그것 없이 새긴다(직전 값을 잇지 않는다)");
+});
+
+//  #4695 T5 — 턴 끝의 예약(다음 깨움·반복 예약)도 bg 와 같은 세 길로 tmux(@box_state)까지 닿는다. 빠지면 하네스 종료 규칙이
+//   그 세션을 «예약 모름» 으로 남긴다(안 끈다 — 안전하지만 규칙이 안 선다). 없을 땐 키를 안 싣는다(구 호스트 무회귀).
+test("B11 ★ 예약(sched)은 호스트에도 · 폴백 직접 새기기에도 · 호스트 없는 경로에도 실린다 — 없으면 키가 없다", async () => {
+  const sched = { wake: 1_789_000_600, cron: 1 };
+  const h1 = harness({ rpc: async () => ({ ok: true, change: null }) });
+  await reportSessionActivity("box-a", "idle", h1.deps, 0, sched);
+  assert.deepEqual(h1.calls.filter((c) => c[0] === "rpc"), [["rpc", HOST, { id: "box-a", state: "idle", bg: 0, sched }]], "호스트에 예약이 안 갔다");
+  const h2 = harness({ rpc: async () => { throw new Error("host down"); } });
+  await reportSessionActivity("box-a", "idle", h2.deps, 0, sched);
+  assert.deepEqual(h2.calls.filter((c) => c[0] === "local"), [["local", "box-a", "idle", 0, { sched }]], "폴백이 예약을 잃었다");
+  const h3 = harness({ host: null });
+  await reportSessionActivity("box-a", "idle", h3.deps, null, sched);
+  assert.deepEqual(h3.calls.filter((c) => c[0] === "local"), [["local", "box-a", "idle", { sched }]], "호스트 없는 경로가 예약을 잃었다");
+  const h4 = harness({ rpc: async () => ({ ok: true, change: null }) });
+  await reportSessionActivity("box-a", "idle", h4.deps, 0);
+  assert.deepEqual(h4.calls.filter((c) => c[0] === "rpc"), [["rpc", HOST, { id: "box-a", state: "idle", bg: 0 }]], "모르는 예약을 실었다");
 });

@@ -476,8 +476,9 @@ function archivePart(ctx: PartCtx): Part {
       const r: any = await api(restorePath(s.id, force), { method: 'POST' });
       toast('세션을 되살렸어요 — 대화가 이어집니다.');
       ctx.onChanged?.();
-      // #1820 — 되살린 세션은 **새 id** 를 받는다. 그 화면으로 데려가지 않으면 "되살렸다는데 어디 있지?"가 된다
-      //  (이 목록에서는 사라지고, 사용자는 사이드바를 뒤져야 했다). 생성 응답을 캐시에 남겨 라우트가 곧바로 그린다.
+      // #1820 — 되살린 세션의 화면으로 데려간다. 안 데려가면 "되살렸다는데 어디 있지?"가 된다(이 목록에서는 사라지고,
+      //  사용자는 사이드바를 뒤져야 했다). 생성 응답을 캐시에 남겨 라우트가 곧바로 그린다 — #4694 이후 대개 **같은 id** 라
+      //  목록에 «중단됨» 행이 아직 남아 있는데, 라우트(main.ts seedCreated)가 그 행을 이 응답으로 바꿔 끼운다.
       const ns = r && r.session;
       if (ns && ns.id) { rememberCreated(ns); location.hash = '#/s/' + encodeURIComponent(String(ns.id)); }
       else if (r && r.already) location.hash = '#/s/' + encodeURIComponent(s.id);

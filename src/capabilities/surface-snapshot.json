@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "8ae2d83f0fcf3e7b"
+  "input_hash": "7595259ffd0b1f78"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -4742,7 +4742,7 @@
   "rest": [
    "GET /api/ui/apps"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "8fe1989243ccf95d"
  },
  {
   "name": "org_app_get",
@@ -4802,7 +4802,7 @@
   "rest": [
    "POST /api/ui/apps/save"
   ],
-  "input_hash": "cba677a050e2819f"
+  "input_hash": "21ae2091d0c96f43"
  },
  {
   "name": "app_pull",
@@ -4812,7 +4812,7 @@
   "rest": [
    "GET /api/ui/apps/:id/pull"
   ],
-  "input_hash": "eeaa30c0ba805f7f"
+  "input_hash": "e80d57855a26e005"
  },
  {
   "name": "app_versions",
@@ -4832,7 +4832,7 @@
   "rest": [
    "POST /api/ui/apps/:id/revert"
   ],
-  "input_hash": "354df45edf0f2d77"
+  "input_hash": "98b2880edfbe6767"
  },
  {
   "name": "app_edit_policy_set",
@@ -4843,6 +4843,56 @@
    "POST /api/ui/apps/:id/edit-policy"
   ],
   "input_hash": "9018d760e68657cc"
+ },
+ {
+  "name": "app_visibility_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/visibility"
+  ],
+  "input_hash": "22621bbc1be7c170"
+ },
+ {
+  "name": "app_publish_preview",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/publish-preview"
+  ],
+  "input_hash": "4e4159a729714c69"
+ },
+ {
+  "name": "app_build_start",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/build-start"
+  ],
+  "input_hash": "0617670246be50c4"
+ },
+ {
+  "name": "app_owner_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/owner"
+  ],
+  "input_hash": "35878f8a814a7481"
+ },
+ {
+  "name": "app_draft_remove",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/discard"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
  },
  {
   "name": "org_app_remove",
@@ -4894,6 +4944,26 @@
    "POST /api/ui/apps/:id/restore"
   ],
   "input_hash": "64c3b3c10e0c4859"
+ },
+ {
+  "name": "app_archives",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-archives"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_archive_clear",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-archives/clear"
+  ],
+  "input_hash": "f4ff2ba3f33fd5ef"
  },
  {
   "name": "org_app_tool_call",
@@ -4953,7 +5023,17 @@
   "rest": [
    "POST /api/ui/store/sql"
   ],
-  "input_hash": "e5ee7bc163a0f9d5"
+  "input_hash": "e7aee028486226d7"
+ },
+ {
+  "name": "store_sql_batch",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/sql/batch"
+  ],
+  "input_hash": "2a1faf718f68c758"
  },
  {
   "name": "store_tables",
@@ -4964,6 +5044,26 @@
    "GET /api/ui/store/tables"
   ],
   "input_hash": "5e3516baa81e01e2"
+ },
+ {
+  "name": "app_sql_stats",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-sql/stats"
+  ],
+  "input_hash": "1d866f77bb8d8e0b"
+ },
+ {
+  "name": "app_server_token_mint",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server-token"
+  ],
+  "input_hash": "82545e035aa6b6f6"
  },
  {
   "name": "session_apps",
@@ -5016,6 +5116,26 @@
   "input_hash": "0f7eb0eddc7e4175"
  },
  {
+  "name": "app_bundle_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-bundle-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_bundle_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-bundle-limits"
+  ],
+  "input_hash": "b60091dda62bcc13"
+ },
+ {
   "name": "org_app_chat_send",
   "scope": null,
   "mcp": false,
@@ -5044,5 +5164,15 @@
    "POST /api/ui/apps/:id/prefs"
   ],
   "input_hash": "ae606a987e382959"
+ },
+ {
+  "name": "org_app_launch",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/launch"
+  ],
+  "input_hash": "610459ffd9582355"
  }
 ]

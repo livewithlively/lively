@@ -9,6 +9,7 @@
 import { TOKEN_KEY, api, apiUrl } from './net.js';
 import { el } from './dom.js';
 import { relTime } from './format.js';
+import { mermaidFigure } from './mermaid.js';
 import { uiKeyCls } from './uitext.js';
 
 // :::shot 첫 만남 시연을 이미 튼 라우트(#1107 v2) — 같은 페이지에서 한 번만, 재방문에도 다시 안 튼다.
@@ -19,6 +20,7 @@ let shotDemoRoute = '';
 // 직접 파싱한다. 보안 불변식(P4b): **모든 텍스트는 textContent/createTextNode 만** 거치고
 // DOM 은 createElement(el 헬퍼)로만 구성한다 — innerHTML 류 절대 미사용이라 HTML 주입 불가능.
 // 파싱 못 하는 줄/토큰은 평문 텍스트로 안전 폴백(raw HTML 노출·렌더 깨짐 없음).
+// ```mermaid(#4685)만은 외부 도구(mermaid)가 그린다 — 단 격리 프레임에서 그리고 결과는 <img> 로만 받아 이 불변식은 그대로다(lib/mermaid.ts).
 
 // 링크 href 안전 스킴만 허용(javascript:/data:/vbscript: 등은 거부 → 링크 대신 평문 표시).
 // 상대경로·앵커(#)·프로토콜상대(//)·http/https/mailto 만 통과.
@@ -991,7 +993,13 @@ function renderMarkdown(md, opts?: any) {
         code.push(lines[i]);
         i++;
       }
-      if (i < lines.length) i++; // 닫는 펜스 소비
+      const closed = i < lines.length;
+      if (closed) i++; // 닫는 펜스 소비
+      // ```mermaid → 그림(#4685, lib/mermaid.ts). 닫힌 펜스만 — 안 닫혔으면 아직 쓰는 중이거나 잘린 본문이다(코드 그대로).
+      if (closed && /^mermaid$/i.test(fence[2].trim().split(/\s+/)[0] || '') && code.join('').trim()) {
+        root.append(mermaidFigure(code.join('\n')));
+        continue;
+      }
       root.append(el('pre', { class: 'md-pre' }, el('code', { text: code.join('\n') })));
       continue;
     }

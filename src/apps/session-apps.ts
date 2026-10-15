@@ -21,6 +21,7 @@ import { getApp, getActiveGrant, type OrgApp, type AppGrantRow } from "../org/st
 import { getSessionState } from "../sessions/session-state.js";
 import { getOpt } from "../terminal/tmux-exec.js";
 import { decideAppTool } from "./principal.js";
+import { canSeeApp } from "./visibility.js";
 import { publishNotify, type NotifyAppEvent } from "../v6/notify-bus.js";
 import { hereSlug } from "../v6/notify-scope.js";
 
@@ -139,7 +140,7 @@ export function requireUsableApp(app: OrgApp | null, appId: string): OrgApp {
  *  ⚠ 캐시하지 않는다 — 떼는 순간 막혀야 한다(머리말).
  */
 export async function requireAttachedApp(
-  q: { sessionId: string; member: string; appId?: string | null; tool: string },
+  q: { sessionId: string; member: string; appId?: string | null; tool: string; scopes?: readonly string[] },
   deps: AttachDeps = liveDeps,
 ): Promise<string> {
   await requireSessionParticipant(q.sessionId, q.member, deps);
@@ -159,7 +160,9 @@ export async function requireAttachedApp(
   } else {
     throw new HttpError(400, `이 세션에 앱이 여럿 붙어 있습니다(${attached.map((a) => a.app_id).join(", ")}) — app_id 를 지정하세요`);
   }
-  requireUsableApp(await deps.getApp(appId), appId);
+  const app = requireUsableApp(await deps.getApp(appId), appId);
+  //  #4667 — 공개를 거둔 남의 앱(나만 보는 앱)은 붙어 있어도 못 쓴다. 판정은 매 호출(머리말) — 거두는 순간부터 막힌다.
+  if (!canSeeApp(app, { userId: q.member, scopes: q.scopes })) throw new HttpError(404, `앱 없음: ${appId}`);   // 관리자는 책임자가 떠난 앱도 쓴다(격리 리뷰 NB-5)
   const grant = await deps.getGrant(appId, q.member);
   if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — 사람이 앱을 열어 동의해야 합니다`);
   if (!decideAppTool(appId, grant.tools, q.tool)) {

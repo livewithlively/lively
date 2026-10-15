@@ -251,6 +251,12 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   가시성), 옛 id 로 오는 복원·메타 조회는 이 값을 따라가 새 세션으로 **안내**한다. 행 하나는 수백 바이트라 남겨 두는
   //   비용보다 '옛 링크가 영원히 산다'는 값이 크다(그래서 만료 삭제도 두지 않는다).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS superseded_by TEXT;`);
+  // #4695 T5 — **하네스를 끄기 전에 남긴 쪽지**(하네스 종료 규칙 — 완료+안 봄 N분 · 질의+안 봄 M분). JSON 하나:
+  //  { at(끈 시각 epoch초) · why(done|asking|exited) · harness · draft?(하네스 입력창에 쓰다 만 글) · question?(답을 기다리던 질문·선택지) }.
+  //  왜 DB 인가: 끄는 순간 그 화면(tmux)이 사라진다. 질문은 대화 파일에도 안 남는다(실측 claude 2.1.300 3/3 — 질문 창이 떠 있을 때 끄면
+  //   그 AI 메시지가 파일에 없다). 다음에 열 때 대화창이 이 쪽지로 입력칸을 채우고 답을 기다리던 질문을 다시 보여 준다.
+  //  수명: 끌 때 쓰고(덮어쓴다) · 다음 턴이 돌기 시작하면(훅 busy 보고) 지운다. NULL = 쪽지 없음.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS stop_note JSONB;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)

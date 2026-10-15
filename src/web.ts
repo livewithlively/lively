@@ -39,6 +39,7 @@ import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
+import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -85,7 +86,11 @@ export function assetReloadPolicy(raw: string | undefined): "auto" | "notify" {
 
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
+  //  앱 서버 토큰(#4483)은 기본으로 403 이다(fail-closed — 여기 라우트를 더해도 닫힌 채로 생긴다). 사람 신원과 함께 받는 자리는
+  //  아래 능력 REST 마운트(mwCap) 하나뿐이고, 거기선 requireAppTool 이 그 앱 동의로 도구를 좁힌다. 비밀번호 바꾸기·로그인 수단 같은
+  //  mw(null) 라우트는 앱 동의 게이트를 안 타므로 앱 서버 코드가 방문자 이름으로 부르면 안 된다(격리 리뷰 지적).
   const authResolve = sessionOrBearer(verifier);
+  const authCap = sessionOrBearer(verifier, { appServer: true });
 
   // scope 게이트(세션·bearer 공통). null=인증만. fail-closed(미인증 401 / 권한부족 403).
   const requireScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
@@ -98,6 +103,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   };
 
   const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
+  /** 능력 REST 마운트 전용 — 앱 서버 토큰을 «그 구성원 ∩ 앱 동의» 주체로 바꿔 받는 유일한 자리. */
+  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireScope(scope)];
 
   // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
   // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —
@@ -139,7 +146,16 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
       return await runDailyAppSnapshots();
     });
+    // #4481 — 앱 판 묶음: 옛 판을 파일 목록 + 저장소로 옮기고 · 30일 지난 옛 코어 호환 사본을 비우고 · 안 쓰는 파일을 정리한다(6시간에 한 번).
+    //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
+    await step("app-bundles", async () => {
+      const { runAppBundleHousekeeping } = await import("./apps/app-bundle-migrate.js");
+      return await runAppBundleHousekeeping();
+    });
     await step("session-reaper", () => reapIdleSessions());
+    // #4695 T5 — 하네스 종료 규칙(완료+안 봄 N분 · 질의+안 봄 M분). 주로는 요청에 얹은 정비(30초)와 마감 깨움이 돌리고, 이 틱(5분)은
+    //  아무도 안 쓰는 테넌트의 받침이다. 셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다.
+    await step("session-stop-rule", async () => (await import("./sessions/session-stop-rule.js")).sweepSessionStopRule());
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
@@ -197,6 +213,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
     res.redirect(302, exchangeLandingPath(req.query?.to));
   }));
+
+  // ── 앱 주소 앞단의 기계 엔드포인트(#4480 v2-1) — /api/app-front/{redeem,me,page}. **사람 로그인을 타지 않는다**:
+  //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
+  //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
+  registerAppFrontRoutes(app);
 
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);
@@ -343,8 +364,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       }));
     });
     for (const path of mount.paths) {
-      if (mount.method === "GET") app.get(path, ...mw(cap.scope), handler);
-      else app.post(path, ...mw(cap.scope), handler);
+      if (mount.method === "GET") app.get(path, ...mwCap(cap.scope), handler);
+      else app.post(path, ...mwCap(cap.scope), handler);
     }
   }
 

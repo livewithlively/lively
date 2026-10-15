@@ -224,4 +224,10 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     --   빈 객체 = 제품 기본값(꺼짐). 조직이 바꾼 칸만 담는다 — 기본값을 여기 굳히면 제품 기본값 개선이 안 먹는다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS writing_format JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── org_runtime_config 확장(#4481 앱 v2-2): 앱 판 묶음 상한 — 판 하나 · 파일 하나 · 파일 수 · 워크스페이스 전체(MiB·개수).
+  //  비면 '{}' = env LIVELY_APP_BUNDLE_POLICY → 코드 기본값(apps/app-bundle-policy.ts). 관리자 도구 app_bundle_limits 가 이 칸만 쓴다
+  //  (상민 2026-10-15 «상한도 동적으로 수정 가능하게»).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_bundle_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
 }

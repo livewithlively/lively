@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { parseAppManifest, appAssetId, APP_ID_RE } from "./manifest.js";
+import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf } from "./manifest.js";
 import { assertAssetId } from "../org/asset-id.js";
 
 // 최소 유효 매니페스트(각 케이스가 이걸 얕게 변형).
@@ -219,3 +219,69 @@ for (const [what, v] of [["0", 0], ["1.5", 1.5], ["'1'(문자열)", "1"]] as con
     assert.throws(() => parseAppManifest({ ...base(), schema_version: v }), (e: unknown) => e instanceof HttpError && e.status === 400);
   });
 }
+
+// ── #4483 칸 타입·제약·구조 변경 — 모양 검증(DB 없이). 뜻(검사 식의 칸·함수)은 설치 때 검사기가 본다 ─────────────
+const withTables = (tables: unknown[]): Record<string, unknown> => ({ ...base(), data: { tables } });
+const T = (columns: unknown[], extra: Record<string, unknown> = {}) => ({ name: "orders", columns, ...extra });
+
+test("#4483 받는 것 — 새 타입 · not_null · default(값·식) · unique · check · enum values · references · renamed_from · checks · drop_columns", () => {
+  const m = parseAppManifest(withTables([
+    { name: "contacts", columns: [{ name: "name", type: "text", not_null: true }, { name: "stage", type: "enum", values: ["lead", "won"], default: "lead" }] },
+    T([
+      { name: "contact_id", type: "bigint", references: { table: "contacts", on_delete: "cascade" } },
+      { name: "amount", type: "numeric(12,2)", not_null: true, default: 0, check: "amount >= 0" },
+      { name: "tags", type: "text[]", default: ["a"] },
+      { name: "made", type: "timestamp", default_expr: "now()" },
+      { name: "code", type: "varchar(20)", unique: true, renamed_from: "old_code" },
+    ], { checks: ["amount < 1000000"], drop_columns: ["legacy"] }),
+  ]));
+  const o = m.data.tables[1];
+  assert.deepEqual(o.checks, ["amount < 1000000"]);
+  assert.deepEqual(o.drop_columns, ["legacy"]);
+  assert.equal(o.columns[1].not_null, true);
+  assert.equal(parseAppManifest(withTables([T([{ name: "a", type: "text" }])])).data.tables[0].checks.length, 0);   // 기본값 []
+});
+
+const REJECTS_4483: Array<[string, unknown[]]> = [
+  ["허용 밖 타입", [T([{ name: "a", type: "money" }])]],
+  ["numeric 소수 자릿수 > 자릿수", [T([{ name: "a", type: "numeric(4,5)" }])]],
+  ["enum 인데 values 없음", [T([{ name: "a", type: "enum" }])]],
+  ["values 는 enum 에만", [T([{ name: "a", type: "text", values: ["x"] }])]],
+  ["values 중복", [T([{ name: "a", type: "enum", values: ["x", "x"] }])]],
+  ["default 와 default_expr 함께", [T([{ name: "a", type: "timestamp", default: "2026-01-01", default_expr: "now()" }])]],
+  ["default_expr 목록 밖", [T([{ name: "a", type: "timestamp", default_expr: "clock_timestamp()" }])]],
+  ["default_expr 상속 키 constructor", [T([{ name: "a", type: "timestamp", default_expr: "constructor" }])]],
+  ["default_expr 상속 키 __proto__", [T([{ name: "a", type: "timestamp", default_expr: "__proto__" }])]],
+  ["default_expr 상속 키 hasownproperty", [T([{ name: "a", type: "timestamp", default_expr: "hasOwnProperty" }])]],
+  ["배열 칸에 배열 아닌 default", [T([{ name: "a", type: "text[]", default: "x" }])]],
+  ["enum default 가 values 밖", [T([{ name: "a", type: "enum", values: ["x"], default: "y" }])]],
+  ["references 가 없는 표", [T([{ name: "a", type: "bigint", references: { table: "nope" } }])]],
+  ["references 칸이 정수가 아님", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "text", references: { table: "c" } }])]],
+  ["on_delete set null + not_null", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "bigint", not_null: true, references: { table: "c", on_delete: "set null" } }])]],
+  ["on_delete 목록 밖", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "bigint", references: { table: "c", on_delete: "explode" } }])]],
+  ["renamed_from 이 지금 선언한 칸", [T([{ name: "a", type: "text", renamed_from: "b" }, { name: "b", type: "text" }])]],
+  ["check 에 세미콜론", [T([{ name: "a", type: "int", check: "a > 0; DROP TABLE x" }])]],
+  ["drop_columns 가 선언한 칸", [T([{ name: "a", type: "text" }], { drop_columns: ["a"] })]],
+  ["drop_columns 가 시스템 칸", [T([{ name: "a", type: "text" }], { drop_columns: ["id"] })]],
+  ["같은 칸 이름 두 번", [T([{ name: "a", type: "text" }, { name: "a", type: "int" }])]],
+  ["칸에 모르는 속성", [T([{ name: "a", type: "text", nullable: false }])]],
+];
+for (const [what, tables] of REJECTS_4483) {
+  test(`#4483 거부 — ${what}`, () => {
+    assert.throws(() => parseAppManifest(withTables(tables)), /매니페스트 오류|허용되지 않은 컬럼 타입|default|형식|Unrecognized|unrecognized/, what);
+  });
+}
+
+// ── #4481 여러 파일 앱의 화면 폴더(web.root) — 최상위 칸이라 옛 코어(이 칸을 모름)로 되돌려도 매니페스트가 읽힌다 ─────────────
+test("#4481 web.root — 최상위 web 칸 · 정규 상대경로 · 맨 위는 \"\" · 틀린 꼴은 null", () => {
+  const m = parseAppManifest({ ...base(), web: { root: "./dist/" } });
+  assert.equal(webRootOf(m), "dist");
+  assert.equal(webRootOf(parseAppManifest({ ...base(), web: { root: "." } })), "", "패키지 맨 위");
+  assert.equal(webRootOf(parseAppManifest(base())), null, "web 없음 = 화면 한 장 앱(v1)");
+  for (const bad of ["../x", "/abs", "a\\b", "a/.hidden", "  "]) assert.equal(webRootOf({ web: { root: bad } }), null, bad);
+});
+test("#4481 web 안의 모르는 칸은 통과(다음 단계가 더한 칸 — 되돌려도 읽힘) · ui.root 는 없다(ui 는 strict)", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", server: { entry: "server.js" } } }));
+  assert.throws(() => parseAppManifest({ ...base(), ui: { root: "dist", pages: [] } }), /매니페스트/);
+  assert.throws(() => parseAppManifest({ ...base(), web: { root: "" } }), /매니페스트/, "빈 값");
+});

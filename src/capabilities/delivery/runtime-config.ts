@@ -299,6 +299,19 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_RELEASE_MARGIN_MIN || n > RECLAIM_RELEASE_MARGIN_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_release_margin_pct 는 ${RECLAIM_RELEASE_MARGIN_MIN}~${RECLAIM_RELEASE_MARGIN_MAX} 정수(%p)여야 합니다 (0=임계 바로 밑에서 정지)`);
           patchIn.pressure_release_margin_pct = Math.floor(n);
         }
+        //  #4694 — 같은 id 복원(매니지드 전용 스위치). ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.restore_same_id !== undefined) patchIn.restore_same_id = Boolean(s.restore_same_id);
+        //  #4695 T5 — 하네스 종료 규칙의 N(완료 뒤)·M(질의 뒤) 분. ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.stop_done_minutes !== undefined) {
+          const n = Number(s.stop_done_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.stop_done_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=완료 세션을 끄지 않음)`);
+          patchIn.stop_done_minutes = Math.floor(n);
+        }
+        if (s.stop_asking_minutes !== undefined) {
+          const n = Number(s.stop_asking_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.stop_asking_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=질의 중인 세션을 끄지 않음)`);
+          patchIn.stop_asking_minutes = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -715,6 +728,9 @@ export const runtimeConfigCapabilities: Capability[] = [
         pressure_priority: z.number().int().min(RECLAIM_PRIORITY_MIN).max(RECLAIM_PRIORITY_MAX).optional().describe("전역 압박 회수에서 이 워크스페이스의 순번 — 낮을수록 먼저 걷힌다(#2509). 기본 100. 압박 축은 박스 전역이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가 박스 단위로 한 번 돈다 — 그때 «어느 워크스페이스부터»를 정하는 값이다. 실서비스 200 · 개발용 50 처럼 두면 개발용이 먼저 걷힌다. ⚠ 참가 여부가 아니다(그건 pressure_used_pct/pressure_swap_pct 가 정한다). 전부 같으면 순수 RSS 내림차순"),
         pressure_max_reap: z.number().int().min(RECLAIM_MAX_REAP_MIN).max(RECLAIM_MAX_REAP_MAX).optional().describe("한 tick 에 이 워크스페이스에서 걷을 최대 세션 수(#2509). 0=무제한(기본). 회수는 되돌릴 수 없어 폭발반경 상한이 필요하다 — RSS 측정 실패로 목표 판정이 영영 안 서는 경우가 실제로 있는데, 그때 한 워크스페이스를 통째로 비우지 않게 막는다"),
         pressure_release_margin_pct: z.number().int().min(RECLAIM_RELEASE_MARGIN_MIN).max(RECLAIM_RELEASE_MARGIN_MAX).optional().describe("압박 회수의 정지 여유(%p) — 임계보다 이만큼 더 내려갈 때까지 걷는다(#2509). 0=종전(임계 바로 밑에서 정지). 정지선이 임계에 붙어 있으면 회수 직후 다음 tick 이 또 발동해 세션이 계속 걷힌다 — 히스테리시스다. ⚠ 임계를 낮추는 것과 다르다: 발동은 원래 임계로 하고 정지만 더 내려간다"),
+        restore_same_id: z.boolean().optional().describe("복원을 같은 세션 id 로 한다(#4694) — 세션 컨테이너 배포(매니지드)에서만 본다. 기본 켬. 같은 id 면 주소·장부 행·이름·핀·소속·미전달 지시가 그대로 이어진다. false 면 종전(새 id + 옛 행 이정표). ⚠ 브로커의 «자리 이름»(#4693)을 전제한다 — 브로커를 그 이전으로 되돌릴 때는 끈다(같은 id 의 옛 컨테이너가 철거와 겹친다). 셀프호스트는 이 값과 무관하게 늘 같은 id 다"),
+        stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 턴이 끝나고(질의 아님 · 백그라운드 작업·예약 깨움 없음) 아무도 안 보는 채 이 분이 지나면 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 3. 세션 컨테이너 배포(매니지드)에서만 돈다"),
+        stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 하네스가 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다. 끄기 전에 그 질문·선택지를 남겨 다시 열 때 대화창에 보여 준다. 0=끔. 기본 60"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),

@@ -42,9 +42,14 @@ export function overrideSourceMeta(stageMeta: Record<string, unknown>, builtinId
  * 지울 판(순수) — 구성원 판 가운데 최신 keep 개 밖의 것. 원본 판은 절대 안 지운다.
  *  rows 의 순서는 가리지 않는다(version_no 로 정렬해서 본다).
  */
-export function versionsToPrune(rows: ReadonlyArray<{ version_no: number; origin: AppVersionOrigin | string }>, keep: number = APP_VERSION_KEEP): number[] {
+export function versionsToPrune(
+  rows: ReadonlyArray<{ version_no: number; origin: AppVersionOrigin | string }>, keep: number = APP_VERSION_KEEP,
+  protect: ReadonlyArray<number | null | undefined> = [],
+): number[] {
+  //  #4667 공개 판(초안이 있는 동안 나머지 모두가 보는 판)과 지금 판은 몇 판 전이든 지우지 않는다 — 지우면 그 사람들의 앱이 사라진다.
+  const keepNos = new Set(protect.filter((n): n is number => typeof n === "number"));
   const members = rows.filter((r) => r.origin !== "builtin").map((r) => r.version_no).sort((a, b) => b - a);
-  return members.slice(Math.max(0, keep));
+  return members.slice(Math.max(0, keep)).filter((n) => !keepNos.has(n));
 }
 
 /**
@@ -97,6 +102,27 @@ export function filesFromStored(manifest: unknown, ui: ReadonlyArray<{ page_key:
     if (e) files.push({ path: normalizeRel(e.entry), content: u.html });
   }
   return files;
+}
+
+/**
+ * 판 묶음(files)에서 화면을 꺼낸다(순수) — #4667 공개 판을 보는 사람에겐 설치된 화면(org_app_ui_asset — 초안일 수 있다) 대신
+ *  판 행의 파일로 화면을 준다. 매니페스트의 entry 경로로 찾고, 묶음에 없는 entry 는 건너뛴다(그 판에 없는 화면).
+ */
+export function uiPagesFromFiles(manifest: unknown, files: ReadonlyArray<AppFile>): Array<{ page_key: string; kind: "page" | "widget"; title: string | null; html: string }> {
+  const ui = (manifest as { ui?: { pages?: Array<{ key?: unknown; title?: unknown }>; widgets?: Array<{ key?: unknown; title?: unknown }> } } | null)?.ui;
+  const titles = new Map<string, string>();
+  for (const p of [...(Array.isArray(ui?.pages) ? ui!.pages! : []), ...(Array.isArray(ui?.widgets) ? ui!.widgets! : [])]) {
+    if (p?.key) titles.set(String(p.key), String(p.title ?? p.key));
+  }
+  const out: Array<{ page_key: string; kind: "page" | "widget"; title: string | null; html: string }> = [];
+  for (const e of entriesOfManifest(manifest)) {
+    const want = normalizeRel(e.entry);
+    const f = files.find((x) => normalizeRel(x.path) === want);
+    if (!f) continue;
+    const html = f.encoding === "base64" ? Buffer.from(f.content, "base64").toString("utf8") : f.content;
+    out.push({ page_key: e.key, kind: e.kind, title: titles.get(e.key) ?? null, html });
+  }
+  return out;
 }
 
 /** base 위에 top 을 덮는다(같은 path 는 top 이 이긴다 · 순서는 base 차례 뒤에 새 path). 순수. */

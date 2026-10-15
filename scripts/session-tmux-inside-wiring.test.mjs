@@ -54,10 +54,13 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   ok(quietHit && quietHit.index < ns, "②-f 그 전역 옵션은 판 명령보다 **먼저** 나간다(새 pane 에만 적용된다)");
   // ── 실패 시 되돌린다 — 행만 남으면 화면에 유령 «중단됨» 이 뜬다 ──
   const rb = blk.slice(ens, ns);
-  ok(/deleteSessionState\(id\)/.test(rb), "③-a ensure 실패 시 방금 쓴 desired 행을 지운다");
+  //  #4694 — 지우는 자리는 dropOwnRow 한 곳이다: **이번 호출이 쓴 행**만 지운다(같은 id 복원의 행은 이 호출 전부터 있던 복원 좌표라 남긴다).
+  ok(/await dropOwnRow\(\)/.test(rb), "③-a ensure 실패 시 방금 쓴 desired 행을 지운다(dropOwnRow)");
+  ok(/const dropOwnRow = \(\): Promise<void> => \(mirrored && !reuseId \? deleteSessionState\(id\)/.test(blk),
+    "③-a2 그 삭제는 이번 호출이 쓴 행(mirrored)이고 같은 id 재생성이 아닐 때만 — 되살리기 한 번 실패가 세션을 지우지 않게(#4694)");
   ok(/HttpError\(503/.test(rb), "③-b ensure 실패는 503 — 조용한 옛 경로 폴백이 없다");
   const after = blk.slice(ns, ns + 600);
-  ok(/if \(inside\)[^\n]*deleteSessionState\(id\)|inside[\s\S]{0,200}deleteSessionState\(id\)/.test(after), "③-c new-session 실패에도 행을 지운다");
+  ok(/if \(inside\)[^\n]*dropOwnRow\(\)|inside[\s\S]{0,200}dropOwnRow\(\)/.test(after), "③-c new-session 실패에도 (이번 호출이 쓴) 행을 지운다");
   // ── 새 경로에서만 빠지는 env: 공유 빌드 캐시(경로가 세션 컨테이너에 없다) ──
   ok(/if \(!inside\)[\s\S]{0,400}sessionCacheEnv\(|sessionCacheEnv\([\s\S]{0,600}if \(!inside\)/.test(blk), "④ 공유 캐시 env 는 옛 경로에만 실린다(컨테이너엔 그 경로가 없다)");
   // ── DB 미러가 두 번 쓰이지 않는다 ──

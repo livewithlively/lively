@@ -12,6 +12,8 @@ import { mintToken } from "../org/store/tokens.js";
 import { getActiveGrant } from "../org/store/apps.js";
 import { getApp } from "../org/store/apps.js";
 import { toolAllowed } from "./grant.js";
+import { canSeeApp } from "./visibility.js";
+import { getMember } from "../org/store/members.js";
 
 // 앱 세션 토큰 기본 수명 — reaper 밖에서 죽는 세션(박스 재부팅·노드 종료)의 고아 토큰을 막는다(design R2-6).
 //  세션이 살아 있으면 heartbeat 로 재발급/연장한다(PR3 스폰 배선). 12시간.
@@ -24,7 +26,9 @@ export const APP_TOKEN_TTL_SEC = 12 * 60 * 60;
  */
 export async function mintAppToken(memberId: string, appId: string, actor?: string): Promise<{ token: string; expiresAt: Date | null }> {
   const app = await getApp(appId);
-  if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
+  //  #4667 — 남이 만들고 있는(나만 보는) 앱으로는 세션을 못 연다(없는 앱과 같다).
+  //   관리자는 책임자가 떠난 앱도 연다 — 그 사람의 지금 권한으로 본다(드문 경우에만 한 번 더 읽는다 · 격리 리뷰 NB-5).
+  if (!app || (!canSeeApp(app, { userId: memberId }) && !canSeeApp(app, { userId: memberId, scopes: (await getMember(memberId))?.scopes ?? [] }))) throw new HttpError(404, `앱 없음: ${appId}`);
   if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다(${app.status})`);
   const grant = await getActiveGrant(appId, memberId);
   if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — me_app_grant 필요`);
@@ -91,9 +95,9 @@ export const APP_TOOL_EXEMPT: ReadonlySet<string> = new Set([
  *  - appId 있는데 grant.tools 가 null(grant 사라짐) → 전부 차단(fail-closed)
  *  - 그 외 → toolAllowed(글롭 매칭)
  */
-export function decideAppTool(appId: string | undefined, tools: string[] | null, toolName: string): boolean {
+export function decideAppTool(appId: string | undefined, tools: string[] | null, toolName: string, exempt = true): boolean {
   if (!appId) return true;
-  if (APP_TOOL_EXEMPT.has(toolName)) return true; // 읽기/보고/인프라 배관 — grant 무관(콘텐츠 쓰기는 여기 없음)
+  if (exempt && APP_TOOL_EXEMPT.has(toolName)) return true; // 읽기/보고/인프라 배관 — grant 무관(콘텐츠 쓰기는 여기 없음)
   if (tools === null) return false;
   return toolAllowed(tools, toolName);
 }
@@ -102,7 +106,9 @@ export function decideAppTool(appId: string | undefined, tools: string[] | null,
 export async function appToolAllowed(user: LivelyUser, toolName: string): Promise<boolean> {
   if (!user.appId) return true; // DB 조회 없이 빠르게 통과(일반 세션 핫패스)
   const tools = await grantTools(user.appId, user.userId);
-  return decideAppTool(user.appId, tools, toolName);
+  //  #4483 앱 서버 주체(제3자 서버 코드가 방문자 이름으로 부른다)는 세션 배관 면제를 안 탄다 — 훅 소스·자산 본문·회사 컨텍스트를
+  //   동의와 무관하게 읽게 되므로(재검토 4-1). 배관은 라이블리 하네스의 앱 세션 토큰 몫이다.
+  return decideAppTool(user.appId, tools, toolName, !user.appServer);
 }
 
 /** requireScope 옆에서 부르는 게이트. 앱 세션이 허용 밖 도구를 부르면 403. */

@@ -25,6 +25,7 @@ import { reposPanel } from './admin-repos.js';
 import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
 import { storageEditor } from './admin-storage.js';
+import { appArchivesEditor } from './admin-app-archives.js';
 import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops.js';
 import { uiModeSection } from './admin-ui-mode.js'; // #1719 관리탭 ▸ 화면(새 셸/클래식)
 import { embeddingsEditor } from './admin-embeddings.js';
@@ -228,6 +229,9 @@ const ADMIN_SECTIONS = [
   { key: 'storage', label: '컴퓨팅 리소스', meaning: null, group: 'ops' },
   // #1059 — 로그(회전·보관)는 별도 메뉴. 컴퓨팅 리소스(메모리·저장소)와 성격이 달라 분리(사용자 피드백).
   { key: 'logs', label: '로그', meaning: null, group: 'ops' },
+  // #4733 앱 보관 표 — 앱이 표를 빼거나 칸을 지울 때 데이터를 잃지 않으려고 옮겨 둔 표. 워크스페이스 표 개수 한도에 세어지는데
+  //  앱을 고쳐서는 줄지 않아 관리자가 보고 비운다(지우기 직전 백업 7일). 서버 scope 가 admin 이라 ADMIN_ONLY.
+  { key: 'app-archives', label: '앱 보관 표', meaning: null, group: 'ops' },
   // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
   { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
   // 컴퓨터(노드) — 조직에 연결된 컴퓨터 **전체**와 공유 지정(#1540). 개인이 자기 컴퓨터를 관리하는 화면은
@@ -270,7 +274,7 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
 // 2026-09-12 대표 결정 — 워크스페이스 관리(외부 내보내기·자동화)는 구성원도 한다. 여기 남는 것은 인원 관리와 인프라·감사다.
 //  ('embeddings' 는 남긴다 — 백필은 구성원이 할 수 있으나 그 화면의 설정 저장이 runtime-config(admin) 이라 반쪽이 된다.)
-const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'audit', 'session-share', 'visibility-axes',
+const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'db-sources', 'storage', 'logs', 'app-archives', 'sessions', 'embeddings', 'audit', 'session-share', 'visibility-axes',
   // 'nodes' = 조직 전체 컴퓨터 + 공유 지정. 구성원 개인 컴퓨터가 그대로 보이고, 공유 지정은 남의 기계를
   //  전체에 여는 결정이라 관리자 전용. (개인용 [내 설정 ▸ 내 컴퓨터]='me-nodes' 는 여기 넣지 않는다.)
   'nodes'];
@@ -498,6 +502,7 @@ registerPanel('db-sources', (detail, data) => dbSourceEditor(detail, data));
 registerPanel('credentials', (detail) => credentialsEditor(detail));
 registerPanel('storage', (detail, data) => storageEditor(detail, data));
 registerPanel('logs', (detail, data) => logsEditor(detail, data));
+registerPanel('app-archives', (detail, data) => appArchivesEditor(detail, data));
 registerPanel('sessions', (detail, data) => sessionsAdminEditor(detail, data));
 registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data));
 registerPanel('ui', (detail, data) => uiModeSection(detail, data)); // #1719

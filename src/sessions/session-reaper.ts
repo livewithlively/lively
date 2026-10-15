@@ -75,6 +75,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { logger } from "../log.js";
 import { listSessionsRaw, listSessionPanePids, reapCentralSession } from "../terminal/terminal-sessions.js";
+import { tmux } from "../terminal/tmux-exec.js";
 //  #2600 T2 d6 — 회수기 목록도 «지금 중앙 tmux 에 무엇이 있나» 의 출처 한 곳을 지난다(소유가 넘어간 테넌트는 호스트 스냅샷).
 //   2026-09-14 계수: 카나리아에서 회수기 목록이 분당 1.5+ 번 전 세션 capture-pane 을 쳤다. 행은 호스트가 같은 함수로 만든다.
 import { listCentralSessions } from "../node/registry.js";
@@ -265,11 +266,74 @@ interface ReapSources {
  *  하필 tmux 가 느려지는 때(=메모리 압박·스래싱, 즉 이 회수가 도는 바로 그 순간)에 보호가 통째로 사라진다.
  *  판정 못 함의 대가가 «회수 한 tick 밀림» 대 «작업 중인 세션 사망»이라 방향이 자명하다(#1251 과 같은 교리).
  */
-async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
+export async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
   if (!ids.size) return new Set();
   const panes = await listSessionPanePids();
   if (!panes.ok) return new Set(ids);                                   // 못 봤다 ≠ 작업 없다 → 전부 보호
   return resolveLiveJobs(ids, panes, table ?? await readProcTable(), probeSessionProcTable);
+}
+
+/** ⑥ 판정의 세 갈래 — 작업이 있다(jobs) · **판정하지 못했다**(unknown) · 그 밖은 «없음 확정». */
+export interface JobVerdicts { jobs: ReadonlySet<string>; unknown: ReadonlySet<string> }
+
+/**
+ * #4695 T5 — 하네스 종료 규칙(session-stop-rule.ts)의 «끄기 전 마지막 확인». 판별자는 위와 **같다**(두 벌 금지) — 다른 것은
+ *  «판정 불가» 를 따로 돌려준다는 것 하나다. 회수기는 판정 불가를 «작업 없음» 으로 접는다(유휴 120분 · 메모리 압박 — 회수를 막지 않으려고, S5).
+ *  종료 규칙은 시계가 3분이라 그 접기를 못 견딘다 — 사람이 `!` 나 `nohup … &` 로 띄운 서버는 훅의 셈에 안 잡히고 이 판정이 유일한 보호다
+ *  (격리 리뷰 지적). 그래서 판정 불가인 세션은 **이번 판에 끄지 않는다**(부르는 쪽이 unknown 을 보호로 다룬다).
+ */
+export async function liveJobVerdicts(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<JobVerdicts> {
+  if (!ids.size) return { jobs: new Set(), unknown: new Set() };
+  //  매니지드(세션 컨테이너) — 세션마다 그 세션을 **지목해** 묻는다(아래 resolveContainerJobVerdicts 머리말).
+  if (sessionExecConfigured()) return resolveContainerJobVerdicts(ids, sessionPanePids, probeSessionProcTable);
+  const panes = await listSessionPanePids();
+  if (!panes.ok) return { jobs: new Set(), unknown: new Set(ids) };     // 못 봤다 ≠ 작업 없다 → 전부 판정 불가
+  return resolveJobVerdicts(ids, panes, table ?? await readProcTable(), probeSessionProcTable);
+}
+
+/** 그 세션 하나의 pane pid — 그 세션을 지목해(-t) 묻는다. 매니지드에선 중계가 그 세션 컨테이너의 tmux 로 보낸다. 못 물으면 null. */
+async function sessionPanePids(sid: string): Promise<number[] | null> {
+  try {
+    const out = await tmux(["list-panes", "-t", sid, "-F", "#{pane_pid}"]);
+    const pids = out.split("\n").map((l) => Number(l.trim())).filter((n) => Number.isInteger(n) && n > 0);
+    return pids.length ? pids : null;
+  } catch { return null; }
+}
+
+/**
+ * #4695 — 세션 컨테이너(매니지드)의 ⑥ 판정. **세션마다 그 세션의 컨테이너 안에서만** 본다: pane pid 도(그 세션을 지목한 list-panes) ·
+ *  프로세스 표도(그 컨테이너 안의 ps). 둘은 같은 pid 이름공간이라 맞물린다.
+ *  ⚠ 왜 resolveJobVerdicts 를 그대로 못 쓰나(실측 2026-10-15 lively-46e3 롤 직후): ① 세션을 지목하지 않은 `list-panes -a` 는 세션당 컨테이너
+ *   구조에서 그 세션들의 tmux 에 닿지 않는다 — 후보 전부가 «pane 없음» 이라 종료 규칙이 한 세션도 못 껐다(정비 로그 kept.jobs-unknown).
+ *   ② 게이트웨이 자기 /proc 표(local)는 pid 이름공간이 달라, 컨테이너 안의 pane pid(예: 28)가 게이트웨이의 **다른** 프로세스와 겹치면
+ *   엉뚱한 나무로 «판정됨» 이 될 수 있다 — 그래서 여기선 local 을 아예 안 본다.
+ *  판정 불가(pane 을 못 물음 · 프로브가 던짐 · 빈 표)는 unknown — 종료 규칙은 그 세션을 이번 판에 끄지 않는다.
+ */
+export async function resolveContainerJobVerdicts(
+  ids: ReadonlySet<string>,
+  panePidsOf: (sid: string) => Promise<number[] | null>,
+  probe: (sid: string) => Promise<Map<number, ProcEntry>>,
+): Promise<JobVerdicts> {
+  const jobs = new Map<string, string[]>();
+  const unknown = new Set<string>();
+  await Promise.all([...ids].map(async (sid) => {
+    const pids = await panePidsOf(sid).catch(() => null);
+    if (!pids?.length) { unknown.add(sid); return; }
+    let t: Map<number, ProcEntry>;
+    try { t = await probe(sid); }
+    catch (e) {
+      logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
+      unknown.add(sid); return;
+    }
+    if (!t.size) { unknown.add(sid); return; }
+    const d = sessionJobDetails(t, new Map([[sid, pids]])).get(sid);
+    if (d) jobs.set(sid, d);
+  }));
+  if (jobs.size) {
+    logger.info({ count: jobs.size, evidence: Object.fromEntries([...jobs].slice(0, JOB_EVIDENCE_SESSIONS)) },
+      "session-reaper: ⑥ 하네스가 띄운 작업이 살아 있어 보호한 세션(세션 컨테이너)");
+  }
+  return { jobs: new Set(jobs.keys()), unknown };
 }
 
 /**
@@ -291,23 +355,44 @@ export async function resolveLiveJobs(
 ): Promise<ReadonlySet<string>> {
   if (!ids.size) return new Set();
   if (!view.ok) return new Set(ids);                                        // 못 봤다 ≠ 작업 없다 → 전부 보호
+  //  판정 불가(프로브 실패 · 빈 표 · pane 없음)는 회수기에선 «작업 없음» 이다(회수를 막지 않는다 — S5). 종료 규칙은 liveJobVerdicts 로 따로 받는다.
+  return (await resolveJobVerdicts(ids, view, local, probe)).jobs;
+}
+
+/**
+ * resolveLiveJobs 의 몸통 — «판정 불가» 를 따로 센다(#4695). 판정 규칙은 그대로다.
+ *  unknown = 그 세션의 pane 이 목록에 없거나 · 컨테이너 프로브가 던졌거나(타임아웃 포함) · 빈 표를 돌려준 세션.
+ */
+export async function resolveJobVerdicts(
+  ids: ReadonlySet<string>,
+  view: { ok: boolean; panes: Map<string, number[]> },
+  local: Map<number, ProcEntry>,
+  probe: (sid: string) => Promise<Map<number, ProcEntry>>,
+): Promise<JobVerdicts> {
+  const unknown = new Set<string>();
+  if (!ids.size) return { jobs: new Set(), unknown };
+  if (!view.ok) return { jobs: new Set(), unknown: new Set(ids) };          // 못 봤다 ≠ 작업 없다
   const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));    // 후보 서브트리만 걷는다
   const detail = sessionJobDetails(local, mine);
   const unresolved = [...ids].filter((sid) => !detail.has(sid) && !judgedLocally(sid, view.panes, local));
   if (unresolved.length) {
-    const extra = await Promise.all(unresolved.map(async (sid) => {
+    const extra = await Promise.all(unresolved.map(async (sid): Promise<string[] | "none" | "unknown"> => {
       const panePids = view.panes.get(sid);
-      if (!panePids?.length) return null;
+      if (!panePids?.length) return "unknown";                              // pane 이 안 보인다 → 판정 불가
       try {
         const t = await probe(sid);
-        if (!t.size) return null;                                          // 프로브 실패·중계 없음 → 판정 불가
-        return sessionJobDetails(t, new Map([[sid, panePids]])).get(sid) ?? null;
+        if (!t.size) return "unknown";                                     // 프로브 실패·중계 없음 → 판정 불가
+        return sessionJobDetails(t, new Map([[sid, panePids]])).get(sid) ?? "none";
       } catch (e) {
         logger.warn({ err: e, id: sid }, "session-reaper: 세션 컨테이너 작업 프로브 실패(그 세션만 판정 불가)");
-        return null;
+        return "unknown";
       }
     }));
-    unresolved.forEach((sid, i) => { const d = extra[i]; if (d) detail.set(sid, d); });
+    unresolved.forEach((sid, i) => {
+      const d = extra[i];
+      if (d === "unknown") unknown.add(sid);
+      else if (d && d !== "none") detail.set(sid, d);
+    });
   }
   // ⚠ **무엇을 작업으로 봤는지 남긴다**(#2652 후속). 2026-09-04 실측: 매니지드에서 후보 453개가 **전부**
   //  이 신호에 걸려 회수가 2시간 멈춘 창이 있었는데, 로그에 개수뿐이라 사후에 원인을 못 좁혔다.
@@ -318,7 +403,7 @@ export async function resolveLiveJobs(
       evidence: Object.fromEntries([...detail].slice(0, JOB_EVIDENCE_SESSIONS)),
     }, "session-reaper: ⑥ 하네스가 띄운 작업이 살아 있어 보호한 세션");
   }
-  return new Set(detail.keys());
+  return { jobs: new Set(detail.keys()), unknown };
 }
 
 /** 로그 한 줄에 실을 세션 수(각 세션당 증거는 session-rss 가 3건으로 자른다). */

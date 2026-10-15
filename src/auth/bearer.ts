@@ -5,6 +5,9 @@ import { verifyDbToken } from "../org/store.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { isOwnResource } from "./resource-id.js";
+import { parseAppServerUserId } from "../apps/app-server-id.js";
+import { boundTenantId } from "../db/client.js";
+import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
 import { logger } from "../log.js";
 
 const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
@@ -110,7 +113,15 @@ export class BearerVerifier {
           throw new InvalidTokenError("token audience does not match this resource server");
         }
         // 워크스페이스 게이트(#1750) — 토큰은 유효하되 이 워크스페이스의 멤버가 아니면 403.
-        await assertWorkspaceMember(dbUser.userId);
+        //  앱 서버 토큰(#4483 — 멤버 없는 앱 토큰)은 구성원이 아니라 (테넌트, 앱)에 묶여 있다 — 굽힌 테넌트가 이 요청의
+        //  테넌트와 같아야 한다. 이 토큰은 사람 신원 없이는 아무것도 못 한다(auth/http-auth 가 신원으로 바꾸거나 거부한다).
+        const appServer = parseAppServerUserId(dbUser.userId);
+        if (appServer) {
+          const here = (boundTenantId() ?? SINGLE_TENANT_ID).toLowerCase();
+          if (appServer.appId !== dbUser.appId || appServer.tenantId !== here) throw new InvalidTokenError("app server token is bound to another workspace");
+        } else {
+          await assertWorkspaceMember(dbUser.userId);
+        }
         const { clientId, resource, expiresAt, appId, ...identity } = dbUser;
         return authInfo(
           {

@@ -144,6 +144,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/session-task.pg-test.mjs
+      # ④-d2b 같은 id 복원(#4694) — 목으로는 못 보는 것: **같은 id 로 다시 쓴 행이 무엇을 남기고 무엇을 잃나**. upsert 의
+      #    ON CONFLICT 가 지난 판의 종료 표식은 남기고(그래서 정리가 필요하다) 대화 매핑·이름 출처는 지키는지, 정리가 주인·이음
+      #    조건을 지키는지, 되살린 세션이 사람이 치운 인스턴스를 목록에 되올리지 않는지 — 전부 SQL 조건이라 행을 되읽어 판정한다.
+      - name: 같은 id 복원 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-revive.pg-test.mjs
       # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
       #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
       - name: 위탁 running 기록 PG 통합 테스트
@@ -315,6 +323,24 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-sql-e2e.pg-test.mjs
+      # ⑤-i2 앱 데이터 v2(#4483) — 칸 타입(numeric(p,s)·varchar(n)·배열·enum…)이 format_type 과 맞는가 · 제약(not_null·default·
+      #    unique·check·외래키 (tenant_id, 칸) → (tenant_id, id))이 앱 역할의 쓰기에서 걸리는가 · 구조 변경(이름 바꾸기·무손실
+      #    변환·drop_columns 보관)과, 있던 데이터가 새 제약에 어긋나면 그 표 전체가 되돌아가는가. 검사 식이 CHECK 괄호 밖으로
+      #    새지 않는가(T6). 설치 앱 표의 기본 키가 (id) 라 `GROUP BY id` 뒤 다른 칸을 고를 수 있는가 · 예전 판 표를 옮기는가(T8).
+      #    목으로는 format_type·제약 검증·트랜잭션 되돌림이 안 보인다.
+      - name: 앱 데이터 v2(타입·제약·구조 변경) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-data-v2.pg-test.mjs
+      # ⑤-i3 앱 서버 끝단(#4483) — 진짜 게이트웨이 REST(registerWebUi) + Drizzle 로 만든 Express 앱 서버(public/sdk/lively-db.mjs)
+      #    + 서명한 사람 신원. upsert · 묶음 트랜잭션(전부 아니면 전무) · 관계 조회 · 조인 집계(numeric 정확) · 외래키 409,
+      #    신원 없음·다른 앱·위조 401 · 동의 없음 403 · 앱 서버 토큰은 터미널류·/mcp 에서 403 · 앱 서버 빈도는 사람마다.
+      - name: 앱 서버 끝단(SDK·Drizzle·앱 서버 자격) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/lively-db-sdk.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.
@@ -344,6 +370,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/visibility.pg-test.mjs
+      # ⑤-m2 지식 쓰기 게이트의 이름 — 같은 경계다. 저장 경로 일부는 받은 이름을 정규화(slugify)한 이름의 행을 고치므로
+      #    게이트도 그 이름을 봐야 한다. 판정이 «그 이름의 행이 있나» 라 목으로는 어긋남이 초록으로 지나간다.
+      - name: 지식 쓰기 게이트 이름 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/knowledge/write-gate-name.pg-test.mjs
       # ⑤-n 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
       #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
       - name: 가시성 개인 해제 PG 통합 테스트
@@ -351,6 +384,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/vis-personal-unlock.pg-test.mjs
+      # ⑤-n2 ClickUp 반출의 부모 좌표 치유 — 위 가시성 축과 같은 경계다. 치유가 부모 프로젝트의 list_id 를 옮기는데,
+      #    미러 안 된 리스트로 옮겨졌을 때 list_id 를 비우면 «미분류 = 전원 공개» 가 된다. 판정이 UPDATE 한 문장의
+      #    CASE·서브쿼리·NULL 비교라 목으로는 조건 하나를 지워도 초록이다 — 행을 깔고 기록 뒤 되읽어 바깥 사람 가시성까지 본다.
+      - name: ClickUp 부모 좌표 치유(list_id·공개범위) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/connectors/clickup-push-heal.pg-test.mjs
       # ④-d2 앱 판(#4600 · 장표 수정 앱 #4592) — 목으로는 못 보는 것: 덮어쓴 빌트인의 source 가 kind builtin 을 **유지**한 채 overrides_builtin 이 붙어
       #    데이터 표 스키마가 안 바뀌는지 · 시더가 그 행을 건너뛰는지 · 되돌리기가 폴더에서 빌트인으로 재설치하는지 · 보관 20 과 판 행이 설치 전에 쓰이는지.
       - name: 앱 판(덮어쓰기·이력·되돌리기) PG 통합 테스트
@@ -358,6 +399,29 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-versions.pg-test.mjs
+      # ④-d3 앱 공개 상태(#4667 · 앱 v2-15) — 목으로는 못 보는 것: 예약한 빈 앱이 설치로 채워져도 만든 사람·만들기 세션이 **남는지** ·
+      #    공개 앱에 초안을 깔 때 공개 판이 판 행에 못 박혀 남에겐 그 판의 화면·제목이 가는지 · 초안이 뺀 표가 공개 전까지 살아 있다가 공개 때 보관되는지 ·
+      #    공개를 거두면 붙여 둔 세션의 데이터까지 막히는지 · 떠난 사람의 책임자 이관과 관리자 알림.
+      - name: 앱 공개 상태(나만 보는 앱·초안·공개·책임자) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/visibility.pg-test.mjs
+      # ⑤-m 앱 판 묶음(#4481 앱 v2-2) — 판 파일을 파일 목록(org_app_version.bundle) + 저장소(자가호스팅 = org_app_blob · 매니지드 = S3)로.
+      #    여러 파일 앱(web.root) 저장 → 앱 주소가 그 판의 파일을 낸다(web.root 밖 404 · 한 페이지 앱) · 공개 판/초안 · N → N-1 되돌리기 ·
+      #    큰 판 사본(지문만 받은 줄 그대로) · 옛 판 옮기기(files 그대로 → 30일 뒤 비움) · 정리(안 가리키고 24시간 지난 파일만) · 상한 413.
+      - name: 앱 판 묶음(S3 판 · 여러 파일 서빙 · 옛 판 옮기기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-bundles.pg-test.mjs
+      # ⑤-n2 앱 보관 표(#4733) — 보관할 때 표 설명에 남긴 주인 기록이 목록 · 앱 지우기 · 비우기에서 이름보다 먼저 쓰이는지,
+      #    지우기 직전 백업(org_app_snapshot)에 담기는지, 되살리기가 보관 표를 건너뛰는지는 실제 카탈로그 · 표 · 묶음 행에서만 보인다.
+      - name: 앱 보관 표(기록 · 목록 · 비우기 · 앱 지우기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-archive.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

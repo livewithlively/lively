@@ -36,6 +36,8 @@ export interface DrainSummary {
   remaining: number;
   /** 이 실행이 시간예산에 걸려 스스로 멈췄나(connectors/push-budget.ts). */
   budgetStopped: boolean;
+  /** 반복 거절로 드레인에서 빠진(파킹) 행 수 — remaining 에 포함된다(push-failure.ts). 자식이 안 실었으면 없다. */
+  parked?: number;
 }
 
 /**
@@ -54,7 +56,9 @@ export function childDrainSummary(stdout: unknown): DrainSummary | undefined {
   try {
     const o = JSON.parse(last) as Record<string, unknown>;
     if (typeof o.remaining !== "number" || typeof o.budgetStopped !== "boolean") return undefined;
-    return { remaining: o.remaining, budgetStopped: o.budgetStopped };
+    return typeof o.parked === "number"
+      ? { remaining: o.remaining, budgetStopped: o.budgetStopped, parked: o.parked }
+      : { remaining: o.remaining, budgetStopped: o.budgetStopped };
   } catch { return undefined; }
 }
 

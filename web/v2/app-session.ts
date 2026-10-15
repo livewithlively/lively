@@ -22,9 +22,20 @@ export interface SessionApp {
   editMode: 'all' | 'members';   // #4225 누가 고칠 수 있나(app_save) — 기본 전원
   editMembers: string[];
   canEdit: boolean;              // 이 사람이 고칠 수 있나(서버 판정)
-  installedBy: string;           // #4592 누가 만들었나(처음 저장한 사람) · 앱 찾기의 「새로 · 누구」 표시와 사본의 「원본」 표시에
+  installedBy: string;           // #4592 누가 처음 설치했나 — 「만든 사람」 은 madeBy(서버 기록)를 쓴다
   installedAt: number;           // 〃 처음 저장된 때(ms · 모르면 0)
-  studio: { origin?: { id: string; title: string; by: string }; made_by?: string; place?: string } | null;   // 매니페스트의 앱 만들기 표시(passthrough 칸)
+  studio: { place?: string; card?: unknown; put?: boolean } | null;   // 매니페스트의 앱 만들기 표시(passthrough 칸) — 자리·기획 카드뿐. 누가·어느 세션·원본은 아래 서버 칸
+  //  #4667 서버가 찍은 기록 · 공개 상태 — 매니페스트 studio.made_by 같은 앱 코드 칸은 믿지 않는다(아무나 고쳐 저장할 수 있다).
+  visibility: 'all' | 'me';   // #4632 공개 범위 — 'me' = 나만 보는 앱(공개 전 · 서버가 책임자에게만 준다) · 'all' = 모두
+  madeBy: string;                      // 만든 사람(서버 기록 · 옛 앱은 처음 설치한 사람)
+  ownerMember: string | null;          // 지금 책임자(null = 관리자)
+  origin: { id: string; title: string; madeBy: string } | null;   // 사본이면 원본(못 보는 원본이면 title 이 비어 있다)
+  view: 'installed' | 'published';     // 이 사람이 보는 판 — 남의 초안이 있으면 공개 판
+  draft: { by: string; versionNo: number } | null;   // 공개 앱에 걸린 초안(그 초안을 만든 사람 · 책임자에게만 온다)
+  buildSession: string;                // 이 앱을 만드는 세션(책임자에게만 온다 — 다른 기기에서 이어 만들기)
+  isOwner: boolean;
+  canPublish: boolean;
+  canUnpublish: boolean;
   sites: string[];   // csp.frame_domains — 이 앱이 **화면에 싣는** 사이트(동의 창에 보여 준다)
   net: string[];     // csp.connect_domains ∪ permissions.hosts — 이 앱이 **직접 연결하는** 곳
   instances: { project: 'global' | 'optional' | 'required'; multiplicity: 'single' | 'multiple' };
@@ -61,6 +72,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           editMembers: Array.isArray(a.edit_members) ? a.edit_members.map(String) : [], canEdit: a.can_edit === true,
           installedBy: String(a.installed_by || ''), installedAt: (() => { const t = Date.parse(String(a.installed_at || '')); return Number.isFinite(t) ? t : 0; })(),
           studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
+          ...appStateOf(a),
           notifications: perm.notifications === true,     // #1891 — 동의 창이 제 줄로 보여 준다
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
           workspaceFiles: Array.isArray(perm.workspace_files) ? perm.workspace_files.map(String) : [],   // #4629
@@ -70,6 +82,22 @@ export async function listSessionApps(): Promise<SessionApp[]> {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
     return [];
   }
+}
+
+/** #4667 서버가 실어 준 공개 상태 · 기록 칸(org_apps · org_app_get 의 한 줄) — 앱 찾기 · 앱빌더 · 앱 만들기가 같은 자로 읽는다. */
+export function appStateOf(a: any): Pick<SessionApp, 'visibility' | 'madeBy' | 'ownerMember' | 'origin' | 'view' | 'draft' | 'buildSession' | 'isOwner' | 'canPublish' | 'canUnpublish'> {
+  const o = a && a.origin && typeof a.origin === 'object' ? a.origin : null;
+  const d = a && a.draft && typeof a.draft === 'object' ? a.draft : null;
+  return {
+    visibility: a && a.visibility === 'me' ? 'me' : 'all',
+    madeBy: String((a && (a.made_by || a.installed_by)) || ''),
+    ownerMember: a && a.owner_member ? String(a.owner_member) : null,
+    origin: o && o.id ? { id: String(o.id), title: String(o.title || ''), madeBy: String(o.made_by || '') } : null,
+    view: a && a.view === 'published' ? 'published' : 'installed',
+    draft: d && d.by ? { by: String(d.by), versionNo: Number(d.version_no) || 0 } : null,
+    buildSession: String((a && a.build_session) || ''),
+    isOwner: !!(a && a.is_owner), canPublish: !!(a && a.can_publish), canUnpublish: !!(a && a.can_unpublish),
+  };
 }
 
 let spawning = false;
@@ -94,7 +122,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [],
-        editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null,
+        editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null, ...appStateOf(null),
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
@@ -179,7 +207,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
         // 세션에 글 보내기(#4594) — 이것도 성격이 다르다: '앱이 내 AI 세션을 움직이나'. 붙은 세션에만, 내가 누른 동작에서만 들어간다.
         app.chatSend ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '세션에 글 보내기' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션에 글을 바로 보낼 수 있어요(내가 누를 때만)' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱에서 내가 단추를 누르면 그 내용이 이 앱을 붙인 AI 세션에 메시지로 들어가요 — 앱이 혼자 보내진 않아요(분당 20건까지)' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },

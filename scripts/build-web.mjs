@@ -137,6 +137,23 @@ function pruneEmptyDirs(dir) {
   }
 }
 
+// ── 벤더 자산 — mermaid (#4685) ──────────────────────────────────────────────
+//  본문 속 ```mermaid 를 그림으로 그린다(web/lib/mermaid.ts). 격리 프레임(불투명 오리진)이 **클래식 <script>** 로 싣는다 —
+//  불투명 오리진 문서의 모듈 import 는 CORS 를 요구해 못 쓰므로, 한 파일짜리 판(mermaid.min.js · 전역 mermaid)을 쓴다.
+//  정본은 package.json 의 핀 하나(devDependencies — 서버 런타임은 안 쓰고 빌드 때 여기서만 읽는다).
+{
+  const src = path.join(root, "node_modules/mermaid/dist/mermaid.min.js");
+  const dst = path.join(OUT, "vendor/mermaid");
+  if (existsSync(src)) {
+    mkdirSync(dst, { recursive: true });
+    cpSync(src, path.join(dst, "mermaid.min.js"));
+    console.log("[build:web] vendor/mermaid 복사 완료 (mermaid.min.js)");
+  } else {
+    //  pdf.js 와 같은 자세 — 조용히 넘어가지 않는다. 없으면 그림 대신 코드와 «도구를 불러오지 못했다» 가 뜬다.
+    console.error("[build:web] ⚠ mermaid 가 없다 — 본문의 ```mermaid 가 그림 대신 코드로 뜬다. `npm ci` 를 먼저 돌려라.");
+  }
+}
+
 // 스왑: 준비(NEXT 채우기) → 교체(rename 2회) → 뒷정리. 교체 구간만 짧게 가져간다.
 rmSync(NEXT, { recursive: true, force: true });
 rmSync(OLD, { recursive: true, force: true });

@@ -25,11 +25,11 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   const calls = [];
   const h = Object.fromEntries(["edit", "prefs", "versions", "original", "big", "detach"].map((k) => [k, () => calls.push(k)]));
   const rows = menu.sessAppMenuRows({ title: "장표 수정", hasPrefs: true, overridesBuiltin: true, versionNo: 3 }, h);
-  eq(rows.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "판 이력…", "원본으로 되돌리기", "—", "크게 보기", "이 세션에서 떼기"], "S6-1 여섯 항목 + 구분선, 고치는 길 → 보는 길 → 떼기 순서");
+  eq(rows.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "버전 이력…", "원본으로 되돌리기", "—", "크게 보기", "이 세션에서 떼기"], "S6-1 여섯 항목 + 구분선, 고치는 길 → 보는 길 → 떼기 순서");
   rows.filter((r) => r.run).forEach((r) => r.run());
   eq(calls, ["edit", "prefs", "versions", "original", "big", "detach"], "S6-1 줄마다 제 손잡이를 부른다");
   ok(rows[rows.length - 1].danger === true && !rows[0].danger, "S6-1 떼기만 위험색(맨 아래 관례)");
-  eq(rows[2].hint, "3판", "S6-1 판 이력 줄의 힌트는 지금 판 번호");
+  eq(rows[2].hint, "V3", "S6-1 버전 이력 줄의 힌트는 지금 버전 이름(#4632 — 판 대신 초안 · V2 …)");
   const bare = menu.sessAppMenuRows({ title: "x", hasPrefs: false, overridesBuiltin: false, versionNo: null }, h);
   eq([bare[1].off, bare[3].off, bare[2].hint], [true, true, undefined], "S6-1 표시 설정을 구독 안 했으면 그 줄이, 원본 그대로면 「원본으로」가 흐려진다 · 판을 모르면(옛 게이트웨이) 힌트 없음");
   ok(bare[1].hint === "이 앱은 표시 설정이 없어요" && /지금이 원본/.test(bare[3].hint), "S6-1 흐린 줄은 힌트가 까닭을 말한다(격리 리뷰 (1)·(3))");
@@ -43,7 +43,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
 
 // ══ S6-3 방금 고침 띠 ══════════════════════════════════════════════════════════
 {
-  eq(menu.bandText({ version_no: 2, note: "글 줄 칸을 아래로" }), "2판 · 방금 고침 · 글 줄 칸을 아래로", "S6-3 띠 글 — 판 · 방금 고침 · 요지");
+  eq(menu.bandText({ version_no: 2, note: "글 줄 칸을 아래로" }), "V2 · 방금 고침 · 글 줄 칸을 아래로", "S6-3 띠 글 — 판 · 방금 고침 · 요지");
   eq(menu.bandText({}), "방금 고침", "S6-3 판·요지를 모르면 「방금 고침」만");
 }
 
@@ -61,7 +61,7 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   eq(menu.originVersionNo(V.slice(0, 2)), null, "S6-4 빌트인에서 갈라지지 않은 앱은 원본 판이 없다");
   const reverted = [];
   const rows = menu.versionRows([...V].reverse(), (n) => reverted.push(n));
-  eq(rows.map((r) => r.label), ["3판 · 보낸 줄 접기", "2판 · 글 줄 칸을 아래로", "1판 · 라이블리 기본 앱"], "S6-4 줄은 최신 먼저 · 원본 판은 「라이블리 기본 앱」");
+  eq(rows.map((r) => r.label), ["V3 · 보낸 줄 접기", "V2 · 글 줄 칸을 아래로", "초안 · 라이블리 기본 앱"], "S6-4 줄은 최신 먼저 · 원본 판은 「라이블리 기본 앱」");
   eq([rows[0].off, rows[0].hint, rows[1].off], [true, "지금", false], "S6-4 지금 판은 누를 수 없고 「지금」");
   ok(/원본 · 릴리스 1\.0\.0/.test(rows[2].hint), "S6-4 원본 판의 힌트는 릴리스 판 번호");
   rows[1].run(); rows[2].run();
@@ -96,15 +96,26 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/^\s*big: \(\) => \{ openAppBig\(cur\.app_id, \{ title: cur\.title, sessionId: s, page: cur\.pages\[0\]\?\.key \}\); \},/m.test(PANE), "S6-1 「크게 보기」는 같은 세션에 붙은 채로 크게 띄운다(openAppBig — 새 탭 #/full, 폰·팝업 막힘은 그 자리에서 가득)");
   ok(/^export function openAppBig\(/m.test(UI) && /window\.open\(appFullHref\(appId, opts\), '_blank'\)/.test(UI) && !/fullKey|localStorage\.getItem\(['"]lively_v2_appui_full/.test(UI), "S6-1 「크게 보기」는 새 탭으로 가고 창⇄가득 토글이 없다(원준 2026-10-12 «모달이라는 건 아예 없던 거야»)");
   ok(/opts\?: \{ page\?: string; title\?: string; sessionId\?: string; full\?: boolean; onClose\?: \(\) => void \}\): Promise<boolean>/.test(UI), "S6-1 openAppUi 가 sessionId 를 받는다(mountAppUiFrame 으로 그대로) · onClose 는 새 탭이 닫히는 길");
+  {
+    //  #4480 (2026-10-14 상민님 실측) — 데스크톱 앱 본 창에서 #/full 을 열면 ① 알림을 눌러 다른 화면으로 가도 덮개가 남고
+    //   ② 닫기가 window.close() → 본 창 «트레이로 숨기기» 로 창이 통째로 사라졌다.
+    const MAIN = read("web/v2/main.ts");
+    ok(/^export function dismissAppUi\(\): void \{ onCloseFn = null; closeAppUi\(\); \}/m.test(UI), "S6-1b 덮개를 조용히 걷는 길(dismissAppUi)이 있다 — 닫기 뒷일(onClose) 없이");
+    ok(/\n    dismissAppUi\(\);\n    openFrame = f;/.test(UI), "S6-1b 새 덮개를 열 때 앞 덮개는 조용히 걷는다(앞 덮개의 onClose — 창 닫기 — 를 돌리지 않는다)");
+    ok(/const page = segs\[0\] \|\| '';\n[\s\S]{0,400}?if \(page !== 'full'\) dismissAppUi\(\);/.test(MAIN), "S6-1b 화면을 옮기면(full 밖) 덮개를 걷는다 — 알림 클릭이 화면을 바꾼다");
+    const full = (MAIN.match(/page === 'full' && segs\[1\]\) \{[\s\S]*?\n    \} else if/) || [""])[0];
+    ok(/if \(!window\.opener\) \{ back\(\); return; \}/.test(full) && full.indexOf("if (!window.opener)") >= 0 && full.indexOf("if (!window.opener)") < full.indexOf("try { window.close(); }"), "S6-1c #/full 닫기는 스크립트가 연 창(window.opener)일 때만 window.close() — 아니면 그 자리에서 되돌아간다(데스크톱 앱 본 창이 숨지 않게)");
+  }
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];
   ok((upd.match(/m\.frame\.reload\(\);/g) || []).length === 1 && /showBand\(cur, ev\);/.test(upd) && /^\s*return;$/m.test(upd), "S6-3 updated → 그 앱 화면 다시 띄우기 1회 + 띠, 데이터 분기로 안 내려간다");
-  ok(/^\s*\.\.\.\(cur\.version_no \? \[el\('span', \{ class: 'pn-sessapp-ver', text: `\$\{cur\.version_no\}판` \}\)\] : \[\]\),/m.test(PANE) && /versionNo: cur\.version_no \?\? null/.test(PANE), "S6-1 판 번호를 모르면(null) 머리줄 「N판」을 숨기고 메뉴엔 「판 이력…」만(리뷰 (3))");
+  ok(/^\s*\.\.\.\(cur\.version_no \? \[el\('span', \{ class: 'pn-sessapp-ver', text: verName\(cur\.version_no\) \}\)\] : \[\]\),/m.test(PANE) && /versionNo: cur\.version_no \?\? null/.test(PANE), "S6-1 판 번호를 모르면(null) 머리줄 「N판」을 숨기고 메뉴엔 「판 이력…」만(리뷰 (3))");
   ok(/bandTimer = window\.setTimeout\(\(\) => \{ bandTimer = 0; band\.hidden = true; \}, 60_000\);/.test(PANE), "S6-3 띠는 60초 뒤 걷힌다");
   ok(/onclick: \(\) => \{ void revertToPrevious\(cur\.app_id, cur\.title\)\.then\(\(v\) => \{ if \(v != null\) afterRevert\(v\); \}\); \}/.test(PANE), "S6-3 띠의 「되돌리기」 = 바로 앞 판, 되돌린 뒤 그 자리에서 다시 띄운다");
   ok(/^\s*root\.append\(tabs, head, band, body\);/m.test(PANE) && /^\s*paintHead\(cur\);/m.test(PANE), "S6-1 머리줄은 탭 줄 아래 · 앱이 하나여도 그린다(paint 마다)");
   ok(/^\s*const redrawn = !!e\.apps && attachedSignature\(e\.apps\) !== attachedSignature\(rows\);/m.test(PANE) && /^\s*if \(!d\.changed && !redrawn\) return;/m.test(PANE), "S6-1 붙은 목록은 id 가 같아도 판·이름이 바뀌면 다시 그린다(앱을 고친 뒤 머리줄이 옛 판을 보이지 않게)");
-  ok(/appPath\(appId, '\/versions'\)/.test(VER) && /appPath\(appId, '\/revert'\), \{ method: 'POST', body: JSON\.stringify\(\{ version_no: versionNo \}\) \}/.test(VER), "S6-4 판 이력 · 되돌리기는 SPEC §1-3 경로(GET /versions · POST /revert {version_no})");
+  //  #4667 되돌리기 본문은 version_no 가 앞에 서고, 배포 설정의 「이 판으로」 만 publish 를 덧붙인다(그 밖 호출은 종전 본문 그대로).
+  ok(/appPath\(appId, '\/versions'\)/.test(VER) && /appPath\(appId, '\/revert'\), \{ method: 'POST', body: JSON\.stringify\(\{ version_no: versionNo(?: \}|, \.\.\.\(opts && opts\.publish \? \{ publish: true \} : \{\}\) \})\) \}/.test(VER), "S6-4 판 이력 · 되돌리기는 SPEC §1-3 경로(GET /versions · POST /revert {version_no} · 배포 설정만 publish)");
   ok(/^export const PAD_HIDDEN_STORE = shellPrefStore\('lively_v2_pad_hidden', 'list'\);/m.test(APPS) && /^\s*shellPrefsPush\(\);\s*$/m.test((APPS.match(/export function togglePadHidden[\s\S]*?\n\}/) || [""])[0]), "S6-5 뺀 목록은 계정의 것(shell-prefs — 최근 앱과 같은 길)");
   ok(/padPlacement\(t\.tid, hidden, !!q\) !== 'hidden'/.test(APPS) && /padPlacement\(t\.tid, hidden, !!q\) === 'hidden'/.test(APPS), "S6-5 격자는 순수 판정(padPlacement)으로 가른다");
   ok(/class: 'v2-pad-sec v2-pad-hid'/.test(APPS) && /text: `뺀 앱 \$\{gone\.length\}`/.test(APPS), "S6-5 뺀 칸은 격자 아래 접힌 「뺀 앱 N」 묶음");

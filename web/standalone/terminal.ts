@@ -490,7 +490,8 @@ declare global {
   }
 }
 const TOKEN_KEY = 'lively_ui_token';
-const PREFS_KEY = 'lively_term_prefs';
+//  #4707 — 세션 대화창이 같은 키를 읽고 쓴다(web/lib/term-prefs.ts TERM_PREFS_KEY) — 패리티 시험이 맞대려고 export 한다.
+export const PREFS_KEY = 'lively_term_prefs';
 const SESSION_ID = new URLSearchParams(location.search).get('session') || '';
 // 세션 라벨 — 입장 링크가 ?label= 로 실어 보낸다(프로젝트/팀 세션은 개인 /sessions 목록에 없어 API 폴백이 못 찾음).
 const SESSION_LABEL = new URLSearchParams(location.search).get('label') || '';
@@ -547,7 +548,9 @@ function whenTermUi(fn: () => void) { if (termUiDone) fn(); else termUiWaiters.p
 
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
 // 어떤 글꼴을 골라도 한글은 D2Coding 으로 또렷하게 렌더된다(#279 한글 가독성). @font-face=terminal.html.
-const FONTS = [
+//  #4707 — 세션 대화창도 이 목록·아래 THEMES 를 그대로 쓴다(web/lib/term-prefs.ts 의 사본). 둘이 갈라지지 않게
+//   scripts/term-prefs-parity.test.mjs 가 이 모듈의 값과 맞대어 잠근다 — 그래서 export 한다.
+export const FONTS = [
   { v: "'JetBrains Mono', 'D2Coding', monospace", label: 'JetBrains Mono' },
   { v: "'D2Coding', monospace", label: 'D2Coding · 한글 코딩' },
   { v: "'Fira Code', 'D2Coding', monospace", label: 'Fira Code' },
@@ -721,7 +724,8 @@ function withKR(ff) {
   if (/,?\s*monospace\s*$/i.test(ff)) return ff.replace(/,?\s*monospace\s*$/i, ", 'D2Coding', monospace");
   return ff + ", 'D2Coding', monospace";
 }
-function prefs() {
+//  #4707 — 대화창의 parseTermPrefs 가 이 해석을 옮겨 적었다(기본값·이관·한글 폴백). 둘이 갈라지지 않게 시험이 맞대려고 export 한다.
+export function prefs() {
   let p: any = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   // 폰트 기본값·mobileDock 은 main 의 모바일 대응(IS_MOBILE), theme 기본값 'auto' 는 #1683 — 둘 다 살린다.
@@ -758,8 +762,24 @@ function syncAppTheme() {
   applyChrome('auto');
   try { doResize(); } catch (_) { /* 레이아웃 준비 전 */ }
 }
+//  #4707 — 세션 대화창(부모 문서)의 [⋯ ▸ 화면] 이 같은 설정을 바꿨다. 저장은 저쪽이 이미 했으니 **화면에만** 반영한다
+//   (applyPrefsNow 는 다시 저장한다 — 같은 값이라 신호가 돌지는 않지만, 남의 저장을 덮어쓸 이유가 없다).
+function adoptPrefs() {
+  if (!term) return;
+  const np = prefs();
+  const prevFamily = term.options.fontFamily;
+  term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
+  term.options.theme = themeFor(np.theme);
+  scrollSpeed = Math.max(1, Math.min(12, Number(np.scrollSpeed) || 3));
+  padGain = Math.max(0.5, Math.min(6, Number(np.padGain) || 3));
+  applyChrome(np.theme); doResize();
+  if (np.fontFamily !== prevFamily) remeasureAfterFonts(np.fontFamily);
+}
 function watchAppTheme() {
-  window.addEventListener('storage', (e) => { if (!e.key || e.key === 'lv:theme') { syncGlassTheme(); syncAppTheme(); } });
+  window.addEventListener('storage', (e) => {
+    if (!e.key || e.key === 'lv:theme') { syncGlassTheme(); syncAppTheme(); }
+    if (e.key === PREFS_KEY) { try { adoptPrefs(); } catch (_) { /* 렌더러 준비 전 — 다음 부팅이 저장값을 읽는다 */ } }
+  });
   try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { syncGlassTheme(); syncAppTheme(); }); } catch (_) { /* 구형 */ }
 }
 
@@ -4105,6 +4125,31 @@ function setupEmbedBridge() {
   post();
 }
 
+/**
+ * #4695 T5 — 이 창이 **세션 화면 밖에서** 열렸으면(격자 보기 public/terminal-grid.html · 주소로 직접 연 창) 스스로 «보는 중» 도장을 찍는다.
+ *  하네스 종료 규칙은 «아무도 안 보는» 세션만 끄는데, 그 «보는 중» 의 출처는 웹 셸의 도장(web/v2/main.ts markViewedSessionSeen)뿐이었다.
+ *  그래서 이 창으로만 보는 세션은 보는 중인데도 «안 봄» 으로 읽혀 꺼질 수 있었다. 세션 화면 안의 액자(embed=1)는 바깥 셸이 이미 찍는다 — 두 번 찍지 않는다.
+ *  주기·규칙은 셸과 같다: 보이는 동안 15초마다(8초 틱에 얹는다) · 숨은 창은 안 찍는다 · 창을 닫을 때 떠남(/leave)을 알린다.
+ *  실패는 삼킨다 — 못 찍은 최악의 결과는 «보는 중» 이 TTL(45초) 뒤 풀리는 것이고, 그건 이 변경 전과 같다.
+ */
+function startSeenStamp(): void {
+  const SEEN_EVERY_MS = 15_000;
+  let sentAt = 0;
+  const post = (suffix: string, keepalive = false): Promise<unknown> =>
+    fetchAuth(sUrl(suffix), Object.assign({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, keepalive ? { keepalive: true } : {}));
+  const tick = (): void => {
+    if (document.hidden) return;
+    const now = Date.now();
+    if (now - sentAt < SEEN_EVERY_MS) return;
+    sentAt = now;
+    void post('/seen').catch(() => { sentAt = 0; });   // 못 찍었으면 다음 틱에 다시
+  };
+  tick();
+  setInterval(tick, 8_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { sentAt = 0; tick(); } });
+  window.addEventListener('pagehide', () => { void post('/leave', true).catch(() => { /* 비치명 — TTL 이 늦게라도 걷는다 */ }); });
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -4161,6 +4206,7 @@ export async function boot() {
   // #1820 — 메타는 어차피 제목·프로젝트 링크 때문에 받는다. 그 값으로 **붙기 전에** '되살릴 세션인가'를 판정한다
   //  (아래 connectNow 직전에서 await). 여기서 await 하지 않는 이유: 화면 구성·폰트 로드를 1 RTT 만큼 늦추지 않으려고.
   const metaAtBoot = loadSessionMeta();
+  if (!EMBED) startSeenStamp();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {

@@ -7,7 +7,7 @@
 //
 // 실행: npm run build && node dist/connectors/clickup-push.test.js
 import assert from "node:assert/strict";
-import { isClickupTaskGone, pushLinkedUpsert } from "./clickup-push.js";
+import { isClickupTaskGone, isClickupTaskInaccessible, pushLinkedUpsert } from "./clickup-push.js";
 
 let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
@@ -26,6 +26,17 @@ const serverErr = new Error("ClickUp 502 /task/abc123: bad gateway");
   assert.equal(isClickupTaskGone(new Error("ClickUp 500 /task/x404y: upstream 404 lookup failed")), false);
   assert.equal(isClickupTaskGone("not an error"), false);
   ok("isClickupTaskGone — 상태코드 404 만 «태스크 없음»으로 본다");
+}
+
+{
+  //  본문은 실측이다 — 다른 워크스페이스로 옮겨진 부모 카드를 조직 토큰으로 GET 하면 이 401/OAUTH_027 이 온다(2026-10-11).
+  const otherTeam = new Error('ClickUp 401 /task/abc999: {"err":"Team not authorized","ECODE":"OAUTH_027"}');
+  assert.equal(isClickupTaskInaccessible(otherTeam), true, "다른 워크스페이스 카드를 «볼 수 없음» 으로 못 본다 — 부모 연결을 못 끊어 매 틱 실패한다");
+  assert.equal(isClickupTaskInaccessible(unauthorized), false, "토큰 자체가 죽은 401 을 «카드 없음» 으로 덮는다 — 토큰 장애가 부모 연결 끊기로 둔갑한다");
+  assert.equal(isClickupTaskInaccessible(gone), false);
+  assert.equal(isClickupTaskInaccessible(new Error('ClickUp 500 /task/x: OAUTH_027 echoed')), false, "상태코드가 아니라 본문 문자열로 판정한다");
+  assert.equal(isClickupTaskInaccessible("OAUTH_027"), false);
+  ok("isClickupTaskInaccessible — 401 OAUTH_027 만 «이 워크스페이스에서 볼 수 없음» 으로 본다");
 }
 
 {

@@ -6,6 +6,7 @@
 import { api, toast } from '../core.js';
 import { ctxMenu } from './panes-kit.js';
 import { originVersionNo, previousVersionNo, versionRows, type AppVersion } from '../lib/app-menu.js';
+import { verJ } from '../lib/studio-flow.js';
 export type { AppVersion };
 
 const appPath = (id: string, tail: string): string => '/api/ui/apps/' + encodeURIComponent(id) + tail;
@@ -20,10 +21,13 @@ export async function fetchAppVersions(appId: string): Promise<AppVersion[]> {
  *  부르는 쪽(붙은 앱 탭)이 이 번호로 프레임을 **바로** 다시 띄운다 — 서버의 'updated' 사건(SSE)에만 기대지 않는다(스트림이 없는 게이트웨이도 있다).
  *  사건이 뒤따라 오면 같은 번호라 두 번 띄우지 않는다(session-app-pane).
  */
-export async function revertApp(appId: string, versionNo: number, title?: string): Promise<number | null> {
+export async function revertApp(appId: string, versionNo: number, title?: string, opts?: { publish?: boolean }): Promise<number | null> {
   try {
-    await api(appPath(appId, '/revert'), { method: 'POST', body: JSON.stringify({ version_no: versionNo }) });
-    toast(`「${title || appId}」을(를) ${versionNo}판으로 되돌렸어요 — 문서·의견 데이터는 그대로예요.`);
+    //  #4667 publish — 되돌린 판을 바로 모두의 판으로(앱빌더 배포 설정 「이 판으로」). 없으면 공개 앱에선 되돌린 사람의 초안이 된다.
+    const out: any = await api(appPath(appId, '/revert'), { method: 'POST', body: JSON.stringify({ version_no: versionNo, ...(opts && opts.publish ? { publish: true } : {}) }) });
+    const draft = out && out.state === 'draft';
+    //  #4632 앱빌더에서도 부른다 — 판 번호는 앱빌더의 버전 이름으로(초안 · V2 …, lib/studio-flow verJ).
+    toast(`「${title || appId}」 — ${verJ(versionNo, '으로')} 되돌렸어요 · 문서 · 의견 데이터는 그대로예요.` + (draft ? ' 이 버전은 나에게만 보여요 · 모두에게 쓰게 하려면 「공개하기」.' : ''));
     return versionNo;
   } catch (e: any) { toast('되돌리지 못했어요 — ' + (e && e.message ? e.message : e), true); return null; }
 }
@@ -32,7 +36,7 @@ export async function revertApp(appId: string, versionNo: number, title?: string
 export async function revertToPrevious(appId: string, title?: string): Promise<number | null> {
   const versions = await fetchAppVersions(appId).catch(() => [] as AppVersion[]);
   const prev = previousVersionNo(versions);
-  if (prev == null) { toast('되돌릴 앞 판이 없어요 — 이 판이 처음이에요.'); return null; }
+  if (prev == null) { toast('되돌릴 앞 버전이 없어요 — 이 버전이 처음이에요.'); return null; }
   return revertApp(appId, prev, title);
 }
 
@@ -40,7 +44,7 @@ export async function revertToPrevious(appId: string, title?: string): Promise<n
 export async function revertToOrigin(appId: string, title?: string): Promise<number | null> {
   const versions = await fetchAppVersions(appId).catch(() => [] as AppVersion[]);
   const origin = originVersionNo(versions);
-  if (origin == null) { toast('이 앱은 라이블리 원본에서 갈라진 판이 없어요 — 지금이 원본이에요.'); return null; }
+  if (origin == null) { toast('이 앱은 라이블리 원본에서 갈라진 버전이 없어요 — 지금이 원본이에요.'); return null; }
   return revertApp(appId, origin, title);
 }
 
@@ -48,8 +52,8 @@ export async function revertToOrigin(appId: string, title?: string): Promise<num
 export async function openVersionsMenu(x: number, y: number, app: { id: string; title: string }, onReverted?: (versionNo: number) => void): Promise<void> {
   let versions: AppVersion[] = [];
   try { versions = await fetchAppVersions(app.id); }
-  catch (e: any) { toast('판 이력을 불러오지 못했어요 — ' + (e && e.message ? e.message : e), true); return; }
-  if (!versions.length) { toast('아직 고친 판이 없어요 — 세션에 「이 앱을 이렇게 고쳐 줘」라고 말하면 판이 생겨요.'); return; }
+  catch (e: any) { toast('버전 이력을 불러오지 못했어요 — ' + (e && e.message ? e.message : e), true); return; }
+  if (!versions.length) { toast('아직 고친 버전이 없어요 — 세션에 「이 앱을 이렇게 고쳐 줘」라고 말하면 새 버전이 생겨요.'); return; }
   const rows = versionRows(versions, (n) => { void revertApp(app.id, n, app.title).then((v) => { if (v != null) onReverted?.(v); }); });
-  ctxMenu(x, y, rows, { title: `「${app.title}」 판 이력`, sub: '누르면 그 판으로 되돌려요 · 데이터는 그대로', minWidth: 260 });
+  ctxMenu(x, y, rows, { title: `「${app.title}」 버전 이력`, sub: '누르면 그 버전으로 되돌려요 · 데이터는 그대로', minWidth: 260 });
 }

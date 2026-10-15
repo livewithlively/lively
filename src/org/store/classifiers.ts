@@ -7,7 +7,7 @@
 //  만드는 순간 둘이 같은 지식을 동시에 분류해 서로의 제안을 덮는다.
 import { itemsPool, q } from "../../db/client.js";
 import { audit } from "./audit.js";
-import { isActiveLane } from "../distill/lanes.js";
+import { isClaimingLane } from "../distill/lanes.js";
 
 export interface ClassifierRow {
   id: number; key: string; label: string | null; enabled: boolean; priority: number;
@@ -97,7 +97,8 @@ export async function getClassifier(idOrKey: number | string): Promise<Classifie
  *
  *  한 지식은 스코프가 겹치는 레인 중 **우선순위가 가장 높은 하나**에만 배정된다. 안 그러면 레인을 둘
  *  만드는 순간 둘이 같은 지식을 동시에 분류해 서로의 제안을 덮어쓴다(마지막에 쓴 쪽이 이긴다 — 비결정적).
- *  구현: 나보다 앞선(우선순위 높은) **일하는**(isActiveLane — 폐지 모드 제외) 레인의 스코프에 걸리는 지식을 뺀다.
+ *  구현: 나보다 앞선(우선순위 높은) **맡은**(isClaimingLane — 일하는 레인 + 자격 실패로 자동 정지된 레인, 폐지 모드 제외)
+ *  레인의 스코프에 걸리는 지식을 뺀다. 자동 정지 레인을 빼면 그 몫이 뒤 레인으로 넘어가 다른 계정·기준으로 분류된다.
  *
  *  ⚠ 이미 판정한 것(org_classifier_seen)도 뺀다 — 증류기 실측(#1289)에서 'skip 한 것이 매 배치 재등장'이
  *   진행을 0 으로 만들었다. 분류는 updated_at DESC 정렬이라 더 나쁘다(못 정한 것이 영원히 맨 앞).
@@ -106,10 +107,11 @@ export async function getClassifier(idOrKey: number | string): Promise<Classifie
 async function inboxWhere(r: ClassifierRow): Promise<{ where: string; params: unknown[] }> {
   const params: unknown[] = [];
   const where = scopeWhere(r, params);
-  const ahead = (await q(itemsPool,
+  //  SQL 은 상위집합만 거르고 «맡은» 판정은 isClaimingLane 한 곳에서 한다 — 크론·커버리지와 판정이 갈리지 않게.
+  const ahead = ((await q(itemsPool,
     `SELECT ${COLS} FROM org_classifier
-      WHERE enabled=true AND target <> 'low_confidence' AND (priority > $1 OR (priority = $1 AND id < $2))
-      ORDER BY priority DESC, id`, [r.priority, r.id])) as ClassifierRow[];
+      WHERE target <> 'low_confidence' AND (priority > $1 OR (priority = $1 AND id < $2))
+      ORDER BY priority DESC, id`, [r.priority, r.id])) as ClassifierRow[]).filter(isClaimingLane);
   const notClauses = ahead.map((a) => `NOT (${scopeWhere(a, params)})`);
   params.push(r.id);
   const seenP = `$${params.length}`;
@@ -147,7 +149,7 @@ export async function classifierBacklog(r: ClassifierRow): Promise<number> {
 }
 
 /**
- * 어느 일하는 레인의 **스코프**에도 안 드는 미분류 지식을 세는 쿼리 — 일하는 레인이 없으면 null(= 0: 기본 기준 하나가 전부 받는다).
+ * 어느 맡은 레인(isClaimingLane)의 **스코프**에도 안 드는 미분류 지식을 세는 쿼리 — 맡은 레인이 없으면 null(= 0: 기본 기준 하나가 전부 받는다).
  *  ⚠ 인박스(‘봤다’ 제외·상한)로 세면 안 된다 — 레인이 이미 보고 넘긴 지식까지 사각지대로 세어 «영영 못 받는다» 고 거짓 경보를 낸다(#4194 적대검증).
  *  @internal 테스트 노출(classifier-scope.test.ts [U1]~[U3] — 순수 조립 · classifier-lanes.pg-test.mjs — 실DB 수).
  */
@@ -164,15 +166,16 @@ export function uncoveredQuery(active: ClassifierRow[]): { sql: string; params: 
 }
 
 /**
- * 커버리지 — 레인별 잔량(아직 안 본 몫) · '봤다' 수 + 어느 일하는 레인에도 안 걸리는 사각지대. 화면 최상단(#1289 UX 계승).
- *  classifiers[] 는 **일하는 레인만**(isActiveLane) — 꺼진 레인·폐지 모드 레인은 아무것도 맡지 않는다.
+ * 커버리지 — 레인별 잔량(아직 안 본 몫) · '봤다' 수 + 어느 맡은 레인에도 안 걸리는 사각지대. 화면 최상단(#1289 UX 계승).
+ *  classifiers[] 는 **맡은 레인만**(isClaimingLane) — 사람이 끈 레인·폐지 모드 레인은 아무것도 맡지 않는다.
+ *  자동 정지 레인의 몫은 사각지대가 아니다 — 계정을 다시 연결해 켜면 그 레인이 처리한다(classify.ts 폴백 판정과 같은 집합).
  */
 export async function classifierCoverage(): Promise<{
   total_unclassified: number; uncovered: number;
   classifiers: Array<{ id: number; key: string; backlog: number; reviewed: number }>;
 }> {
   const all = await listClassifiers();
-  const on = all.filter(isActiveLane);
+  const on = all.filter(isClaimingLane);
   const totalRow = await q(itemsPool,
     `SELECT count(*)::int AS n FROM knowledge k WHERE k.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name)`);
@@ -183,7 +186,7 @@ export async function classifierCoverage(): Promise<{
     const rv = await q(itemsPool, `SELECT count(*)::int AS n FROM org_classifier_seen WHERE classifier_id=$1`, [c.id]);
     per.push({ id: c.id, key: c.key, backlog: await classifierBacklog(c), reviewed: Number((rv[0] as { n: number } | undefined)?.n ?? 0) });
   }
-  //  사각지대 — 일하는 레인이 없으면 0(크론이 기본 기준 하나로 전부 본다 — classify.ts 레거시 경로). 있으면 스코프로 센다.
+  //  사각지대 — 맡은 레인이 없으면 0(크론이 기본 기준 하나로 전부 본다 — classify.ts 레거시 경로). 있으면 스코프로 센다.
   const uq = uncoveredQuery(on);
   const uncovered = uq ? Number(((await q(itemsPool, uq.sql, uq.params))[0] as { n: number } | undefined)?.n ?? 0) : 0;
   return { total_unclassified: total, uncovered, classifiers: per };
@@ -268,8 +271,12 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
               min_chars=$11, lookback_days=$12, criteria_md=$13, candidate_categories=$14, confirm_threshold=$15,
               batch_size=$16, mode=$17, session_ref=$18, model=$19, effort=$20, requester=$21, note=$22,
               harness=$24,
+              --  스위치(enabled)를 **바꿔** 저장했을 때만 자동 정지 표식을 지운다. 관리탭 폼은 바꾸지 않은 스위치 값도
+              --   늘 보내므로 «명시» 로 판정하면 폼 저장 한 번에 자동 정지 레인이 «사람이 끈 레인» 이 되어 그 몫이 샌다
+              --   (org/distill/lanes.isClaimingLane · 증류기 upsertDistiller 와 같은 규칙).
+              last_summary=(CASE WHEN $26::boolean AND jsonb_typeof(last_summary)='object' THEN last_summary - 'auto_disabled' ELSE last_summary END),
               version=version+1, updated_at=now(), updated_by=$23
-         WHERE id=$25`, [...vals, cur.id]);
+         WHERE id=$25`, [...vals, cur.id, input.enabled !== undefined && Boolean(input.enabled) !== Boolean(cur.enabled)]);
     id = cur.id;
   } else {
     const ins = await itemsPool.query(
@@ -303,6 +310,12 @@ export async function removeClassifier(id: number, actor?: string, source?: stri
 /** 실행 결과 기록 — 크론 액션이 배치를 접수한 뒤 부른다(증류기 recordDistillerRun 과 동형). */
 export async function recordClassifierRun(id: number, status: string, summary: unknown): Promise<void> {
   await itemsPool.query(
-    `UPDATE org_classifier SET last_run_at=now(), last_status=$2, last_summary=$3::jsonb WHERE id=$1`,
+    //  자동 정지 표식은 보존한다 — 틱이 배치를 낸 직후 같은 계정의 형제 레인이 401 로 이 레인을 자동 정지시키면,
+    //   뒤이은 이 기록이 표식을 덮어 «사람이 끈 레인» 으로 바뀌고 그 몫이 샌다(node/auth-failure-response.stopLanes).
+    `UPDATE org_classifier SET last_run_at=now(), last_status=$2,
+            last_summary=(CASE WHEN jsonb_typeof(last_summary)='object' AND last_summary ? 'auto_disabled'
+                               THEN $3::jsonb || jsonb_build_object('auto_disabled', last_summary->'auto_disabled', 'auto_disabled_reason', last_summary->'auto_disabled_reason')
+                               ELSE $3::jsonb END)
+      WHERE id=$1`,
     [id, status, JSON.stringify(summary ?? {})]).catch(() => undefined);
 }

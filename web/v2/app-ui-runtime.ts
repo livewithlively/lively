@@ -47,8 +47,17 @@ export const APP_RUNTIME_JS = `
 (function () {
   if (window.lively) return;
   var seq = 1, pend = {};
+  // #4480 — 앱 주소(<앱>-<워크스페이스>.lvly.app)를 새 탭에 맨몸으로 열면 감싸는 라이블리 화면이 없다(parent === window).
+  //  그때 부르면 제 창에 보낸 요청을 제가 받아 «빈 답» 으로 풀어 버린다 — 조용히 틀린 값을 주느니 분명히 실패한다.
+  var alone = (function () { try { return window.parent === window; } catch (_) { return false; } })();
   function post(method, params) {
     return new Promise(function (resolve, reject) {
+      if (alone) {
+        var e0 = new Error('이 기능은 라이블리 화면 안에서 연 앱에서만 쓸 수 있습니다 — 라이블리에서 이 앱을 열어 주세요.');
+        e0.code = -32601;
+        reject(e0);
+        return;
+      }
       var id = seq++;
       pend[id] = { resolve: resolve, reject: reject };
       parent.postMessage({ jsonrpc: '2.0', id: id, method: method, params: params || {} }, '*');
@@ -67,6 +76,8 @@ export const APP_RUNTIME_JS = `
     for (var i = 0; i < list.length; i++) { try { list[i](payload); } catch (err) { setTimeout(function () { throw err; }); } }
   }
   window.addEventListener('message', function (e) {
+    // 답과 알림은 감싸는 라이블리 화면(부모 창)에서만 온다 — 앱이 제 주소에서 돌면(#4480) 다른 창이 가짜 답을 보낼 수 있다.
+    if (e.source !== parent || alone) return;
     var m = e.data;
     if (!m || typeof m !== 'object') return;
     if (m.id == null) {
@@ -183,6 +194,7 @@ export const APP_RUNTIME_JS = `
     api.session = (r && r.session) || null;
     return r;
   });
+  api.ready['catch'](function () {});   // 맨몸(#4480)이면 실패한다 — 기다리지 않는 앱의 콘솔에 «처리 안 된 실패» 가 찍히지 않게(기다리는 앱은 그대로 실패를 받는다)
   window.lively = api;
 })();
 `;

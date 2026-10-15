@@ -30,6 +30,7 @@ export function drainBudgetExceeded(startedAtMs: number, nowMs: number, budgetMs
 
 // 드레인 결과 → CLI exit 코드. **예산 소진은 실패가 아니다** — 여기에 budgetStopped 를 더하면
 //  이 파일이 없애려는 서킷브레이커 트립이 그대로 돌아온다. 판정을 순수로 빼 둔 이유가 그것이다.
+//  행 고유 거절(rejected)도 같은 이유로 세지 않는다 — 행 하나의 영구 거절이 크론 전체를 세운다(push-failure.ts).
 export function exitCodeForPush(res: { failed: number }): number {
   return res.failed > 0 ? 1 : 0;
 }

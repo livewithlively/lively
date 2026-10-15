@@ -40,6 +40,11 @@ export function nodeSessionStateInput(session: SessionInfo, nodeId: string, inpu
     created: session.created || Math.floor(Date.now() / 1000), last_busy: null,
     node_id: nodeId,
     app_id: input.appId || null,
+    //  #4632 — 사람이 준 이름(input.label)으로 만든 세션은 그 이름이 **사람 것**이다. 중앙 createSession 과 같은 판정(sessions.ts labelSource).
+    //   종전엔 이 칸을 안 실어 노드 세션은 'rule' 로 읽혔다 — 만들 때 준 이름도 AI 의 session_rename(agent)이 걸쇠를 이겨 덮는다.
+    //   앱빌더가 세션 이름 «"이름" 앱 제작» 을 만들 때 싣게 되면서(「회의록 기획카드」 로 덮인 것, 원준 2026-10-15) 이 구멍이 드러났다.
+    //   이름을 안 줬으면 종전 그대로(칸 없음).
+    ...(String(input.label ?? "").replace(/[\t\n\r]/g, " ").trim() ? { label_source: "human" } : {}),
   };
 }
 

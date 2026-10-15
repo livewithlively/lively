@@ -32,8 +32,20 @@ export interface OrgApp {
   builtin_version: string | null;
   /** #4600 지금 서빙 중인 상태 = org_app_version 의 이 판. 판 이력 도입 전 설치는 null. */
   current_version_no: number | null;
+  /** #4632 공개 범위 — 'all'(구성원 모두, 기본) · 'me'(나만 보는 앱 — app_save 로 새로 생긴 앱 · 앱 만들기가 예약한 앱의 시작). 판정은 apps/visibility.ts. */
+  visibility: AppVisibility;
+  /** #4667 공개 판 · 초안 · 만든 사람 · 책임자 · 만들기 세션 · 사본의 원본 — 판정은 apps/visibility.ts. */
+  published_version_no: number | null;
+  published_at: string | null;
+  published_by: string | null;
+  draft_by: string | null;
+  made_by: string | null;
+  owner_member: string | null;
+  build_session: string | null;
+  origin_app_id: string | null;
 }
 export type AppEditMode = "all" | "members";
+export type AppVisibility = "all" | "me";
 
 export interface AppComponentRow { app_id: string; kind: string; ref: string; orig_name: string | null }
 export interface AppGrantRow {
@@ -54,6 +66,15 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     edit_members: Array.isArray(r.edit_members) ? (r.edit_members as unknown[]).map(String) : [],
     builtin_version: r.builtin_version == null ? null : String(r.builtin_version),
     current_version_no: r.current_version_no == null ? null : Number(r.current_version_no),
+    visibility: r.visibility === "me" ? "me" : "all",
+    published_version_no: r.published_version_no == null ? null : Number(r.published_version_no),
+    published_at: r.published_at == null ? null : (r.published_at instanceof Date ? r.published_at.toISOString() : String(r.published_at)),
+    published_by: r.published_by == null ? null : String(r.published_by),
+    draft_by: r.draft_by == null ? null : String(r.draft_by),
+    made_by: r.made_by == null ? null : String(r.made_by),
+    owner_member: r.owner_member == null ? null : String(r.owner_member),
+    build_session: r.build_session == null ? null : String(r.build_session),
+    origin_app_id: r.origin_app_id == null ? null : String(r.origin_app_id),
   };
 }
 
@@ -67,6 +88,8 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
 //   그래서 ① 키에 테넌트를 넣고(남의 워크스페이스 설치를 기다릴 이유가 없다) ② 기다리는 동안엔 클라이언트를 반납하며
 //   (try-lock 재시도) ③ 상한을 넘기면 던진다(호출부는 이미 비치명 — 다음 시딩·사람의 재시도가 받는다).
 export const APP_INSTALL_LOCK_WAIT_MS = 60_000;
+/** 설치 락을 기다리다 못 얻은 오류의 code — 기다림을 짧게 준 호출부(공개 미리 보기 #4732)가 «다른 저장 중» 으로 접는다. */
+export const APP_INSTALL_LOCK_TIMEOUT = "APP_INSTALL_LOCK_TIMEOUT";
 const APP_INSTALL_LOCK_POLL_MS = 250;
 
 /** 락 키 — 테넌트 컨텍스트가 있으면 그 테넌트로 좁힌다. 컨텍스트 밖(단일 테넌트·부팅)은 종전처럼 앱 id 만. */
@@ -88,7 +111,7 @@ export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>,
     } catch (err) { c.release(); throw err; }
     if (got) { client = c; break; }
     c.release();   // 기다리는 동안 풀 슬롯을 쥐지 않는다 — 락 보유자가 fn 안에서 쓸 자리를 남긴다
-    if (Date.now() >= deadline) throw new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`);
+    if (Date.now() >= deadline) throw Object.assign(new Error(`앱 설치 락 대기 시간 초과(${appId}) — 다른 설치가 아직 진행 중입니다`), { code: APP_INSTALL_LOCK_TIMEOUT });
     await new Promise((res) => setTimeout(res, opts.pollMs ?? APP_INSTALL_LOCK_POLL_MS));
   }
   try {
@@ -260,13 +283,23 @@ export interface AppVersionMeta {
   app_id: string; version_no: number; origin: AppVersionOrigin; version: string; content_hash: string | null;
   note: string | null; saved_by: string | null; saved_at: string;
 }
-export interface AppVersionRow extends AppVersionMeta { manifest: unknown; files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }> }
+export interface AppVersionRow extends AppVersionMeta {
+  manifest: unknown;
+  /** 옛 판(#4600)의 파일 내용 — #4481 뒤로는 옛 코어 호환 사본(상한 안의 판만 · 30일 뒤 비운다). 판의 정본은 bundle 이 있으면 bundle. */
+  files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }>;
+  /** #4481 파일 목록 {v:1, files:[{p,h,s}]} — NULL 이면 아직 안 옮긴 옛 판(files 가 정본). 읽기는 apps/app-version-files.ts 를 지난다. */
+  bundle: unknown | null;
+  bundle_store: string | null;
+}
+/** #4481 판 쓰기에 실을 묶음 — 파일 목록 + 그 파일들이 있는 저장소 + 합(바이트). */
+export interface AppVersionBundleWrite { bundle: unknown; bundle_store: string; bundle_bytes: number }
 
 function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
   return {
     app_id: String(x.app_id), version_no: Number(x.version_no), origin: x.origin === "builtin" ? "builtin" : "member",
     version: String(x.version ?? "0.0.0"), content_hash: x.content_hash == null ? null : String(x.content_hash),
-    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by), saved_at: String(x.saved_at),
+    note: x.note == null ? null : String(x.note), saved_by: x.saved_by == null ? null : String(x.saved_by),
+    saved_at: x.saved_at instanceof Date ? x.saved_at.toISOString() : String(x.saved_at),   // ms 까지(공개 시각과 견준다 · #4667)
   };
 }
 
@@ -276,14 +309,16 @@ function rowToVersionMeta(x: Record<string, unknown>): AppVersionMeta {
  */
 export async function insertAppVersion(
   appId: string,
-  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null },
+  v: { origin: AppVersionOrigin; version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null; saved_by: string | null } & Partial<AppVersionBundleWrite>,
 ): Promise<number> {
+  //  #4481 — bundle 을 주면 파일 목록이 정본이고 files 는 옛 코어 호환 사본이다(apps/app-version-files.ts recordVersion 만 이 길로 쓴다).
   const r = await itemsPool.query(
-    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at)
-       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now()
+    `INSERT INTO org_app_version(app_id, version_no, origin, version, manifest, files, content_hash, note, saved_by, saved_at, bundle, bundle_store, bundle_bytes, bundle_at)
+       SELECT $1, COALESCE(MAX(version_no), 0) + 1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now(), $9::jsonb, $10, $11, CASE WHEN $9::jsonb IS NULL THEN NULL ELSE now() END
          FROM org_app_version WHERE app_id = $1
      RETURNING version_no`,
-    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by],
+    [appId, v.origin, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note, v.saved_by,
+     v.bundle == null ? null : JSON.stringify(v.bundle), v.bundle == null ? null : (v.bundle_store ?? null), v.bundle == null ? null : (v.bundle_bytes ?? null)],
   );
   return Number(r.rows[0].version_no);
 }
@@ -296,12 +331,14 @@ export async function insertAppVersion(
  */
 export async function refreshOriginVersion(
   appId: string, versionNo: number,
-  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null },
+  v: { version: string; manifest: unknown; files: unknown[]; content_hash: string | null; note: string | null } & Partial<AppVersionBundleWrite>,
 ): Promise<boolean> {
   const r = await itemsPool.query(
-    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now()
+    `UPDATE org_app_version SET version=$3, manifest=$4::jsonb, files=$5::jsonb, content_hash=$6, note=$7, saved_at=now(),
+            bundle=$8::jsonb, bundle_store=$9, bundle_bytes=$10, bundle_at=CASE WHEN $8::jsonb IS NULL THEN NULL ELSE now() END
       WHERE app_id=$1 AND version_no=$2 AND origin='builtin'`,
-    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note],
+    [appId, versionNo, v.version, JSON.stringify(v.manifest ?? {}), JSON.stringify(v.files ?? []), v.content_hash, v.note,
+     v.bundle == null ? null : JSON.stringify(v.bundle), v.bundle == null ? null : (v.bundle_store ?? null), v.bundle == null ? null : (v.bundle_bytes ?? null)],
   );
   return (r.rowCount ?? 0) > 0;
 }
@@ -318,7 +355,64 @@ export async function getAppVersion(appId: string, versionNo: number): Promise<A
   const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
   const x = r.rows[0];
   if (!x) return null;
-  return { ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [] };
+  return {
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [],
+    bundle: x.bundle ?? null, bundle_store: x.bundle_store == null ? null : String(x.bundle_store),
+  };
+}
+
+/** #4481 판 1건의 머리 + 파일 목록(옛 files 내용은 읽지 않는다 — 앱 주소 서빙 · 내려받기 목록용). 옛 판이면 bundle null. */
+export interface AppVersionBundleHead extends AppVersionHead { bundle: unknown | null; bundle_store: string | null; bundle_bytes: number | null }
+export async function getAppVersionBundle(appId: string, versionNo: number): Promise<AppVersionBundleHead | null> {
+  const r = await itemsPool.query(
+    `SELECT app_id, version_no, origin, version, content_hash, note, saved_by, saved_at, manifest, bundle, bundle_store, bundle_bytes
+       FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  return x ? {
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, bundle: x.bundle ?? null, bundle_store: x.bundle_store == null ? null : String(x.bundle_store),
+    bundle_bytes: x.bundle_bytes == null ? null : Number(x.bundle_bytes),
+  } : null;
+}
+
+/** #4481 판 1건의 내용 지문만(앱 주소가 요청마다 «그 판이 아직 그 내용인가» 를 싸게 본다). */
+export async function getAppVersionHash(appId: string, versionNo: number): Promise<{ content_hash: string | null; has_bundle: boolean } | null> {
+  const r = await itemsPool.query(`SELECT content_hash, (bundle IS NOT NULL) AS has_bundle FROM org_app_version WHERE app_id=$1 AND version_no=$2`, [appId, versionNo]);
+  const x = r.rows[0];
+  return x ? { content_hash: x.content_hash == null ? null : String(x.content_hash), has_bundle: x.has_bundle === true } : null;
+}
+
+// ── #4481 옛 판 옮기기 · 옛 코어 호환 사본 정리(apps/app-bundle-migrate.ts 가 하우스키핑에서 부른다) ──
+
+/** 아직 파일 목록이 없는 옛 판(오래된 것부터). */
+export async function listLegacyVersions(limit: number): Promise<AppVersionRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_version WHERE bundle IS NULL ORDER BY saved_at ASC, app_id ASC, version_no ASC LIMIT $1`, [Math.max(1, limit)]);
+  return r.rows.map((x) => ({
+    ...rowToVersionMeta(x), manifest: x.manifest ?? {}, files: Array.isArray(x.files) ? (x.files as AppVersionRow["files"]) : [], bundle: null, bundle_store: null,
+  }));
+}
+
+/** 옛 판에 파일 목록을 단다(files 는 그대로 둔다 — 호환 사본이 된다). 그 사이 누가 먼저 달았으면 false. */
+export async function setLegacyVersionBundle(appId: string, versionNo: number, w: AppVersionBundleWrite): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET bundle=$3::jsonb, bundle_store=$4, bundle_bytes=$5, bundle_at=now() WHERE app_id=$1 AND version_no=$2 AND bundle IS NULL`,
+    [appId, versionNo, JSON.stringify(w.bundle), w.bundle_store, w.bundle_bytes]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 파일 목록을 단 지 days 일이 지난 판의 옛 코어 호환 사본(files)을 비운다. 반환 = 비운 판 수. */
+export async function purgeCompatCopies(days: number, limit = 500): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_version SET files='[]'::jsonb
+      WHERE (app_id, version_no) IN (SELECT app_id, version_no FROM org_app_version
+                                      WHERE bundle IS NOT NULL AND bundle_at < now() - make_interval(days => $1) AND files <> '[]'::jsonb LIMIT $2)`,
+    [Math.max(0, days), Math.max(1, limit)]);
+  return r.rowCount ?? 0;
+}
+
+/** 워크스페이스 전체 옛 코어 호환 사본(files)의 바이트 합 — 새 사본을 남길지 정할 때(옛 총량 상한 64MiB 안에서만). */
+export async function compatBytesTotal(): Promise<number> {
+  const r = await itemsPool.query(`SELECT COALESCE(SUM(octet_length(files::text)), 0)::bigint AS n FROM org_app_version WHERE files <> '[]'::jsonb`);
+  return Number(r.rows[0]?.n ?? 0);
 }
 
 /** 판 여럿 삭제(보관 수 넘긴 구성원 판). 비면 아무것도 안 한다. */
@@ -333,10 +427,12 @@ export async function appVersionBytesTotal(): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-/** 구성원 판을 오래된 순으로(앱 불문) — 총량 상한을 넘겼을 때 지울 후보. 지금 서빙 중인 판(org_app.current_version_no)은 표시만 하고 호출부가 건너뛴다. */
+/** 구성원 판을 오래된 순으로(앱 불문) — 총량 상한을 넘겼을 때 지울 후보. 지금 서빙 중인 판(org_app.current_version_no)과
+ *  #4667 공개 판(published_version_no — 초안이 있는 동안 나머지 모두가 보는 판)은 is_current 로 표시만 하고 호출부가 건너뛴다. */
 export async function listMemberVersionsOldestFirst(): Promise<Array<{ app_id: string; version_no: number; bytes: number; is_current: boolean }>> {
   const r = await itemsPool.query(
-    `SELECT v.app_id, v.version_no, octet_length(v.files::text)::bigint AS bytes, (a.current_version_no = v.version_no) AS is_current
+    `SELECT v.app_id, v.version_no, octet_length(v.files::text)::bigint AS bytes,
+            (a.current_version_no = v.version_no OR a.published_version_no = v.version_no) AS is_current
        FROM org_app_version v LEFT JOIN org_app a ON a.id = v.app_id
       WHERE v.origin = 'member'
       ORDER BY v.saved_at ASC, v.app_id ASC, v.version_no ASC`);
@@ -357,6 +453,144 @@ export async function setAppBuiltinVersion(appId: string, version: string): Prom
 /** 지금 서빙 중인 상태가 어느 판인가. null = 모름(판 밖의 상태). */
 export async function setAppCurrentVersion(appId: string, versionNo: number | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app SET current_version_no=$2 WHERE id=$1`, [appId, versionNo]);
+}
+
+/** 판 1건의 머리(파일 제외 — 목록·공개 판 대조용). 없으면 null. */
+export interface AppVersionHead extends AppVersionMeta { manifest: unknown }
+export async function getAppVersionHead(appId: string, versionNo: number): Promise<AppVersionHead | null> {
+  const r = await itemsPool.query(
+    `SELECT app_id, version_no, origin, version, content_hash, note, saved_by, saved_at, manifest FROM org_app_version WHERE app_id=$1 AND version_no=$2`,
+    [appId, versionNo]);
+  const x = r.rows[0];
+  return x ? { ...rowToVersionMeta(x), manifest: x.manifest ?? {} } : null;
+}
+
+/** 이 내용(해시)을 담은 가장 최근 판 번호 — 설치된 상태를 판 행에 못 박을 때 새로 떠 두기 전에 찾아본다. 없으면 null. */
+export async function findVersionByHash(appId: string, contentHash: string): Promise<number | null> {
+  const r = await itemsPool.query(
+    `SELECT version_no FROM org_app_version WHERE app_id=$1 AND content_hash=$2 ORDER BY version_no DESC LIMIT 1`, [appId, contentHash]);
+  return r.rows[0] ? Number(r.rows[0].version_no) : null;
+}
+
+/** 여러 앱의 공개 판 머리를 한 번에(목록이 «공개 판을 보는 사람» 에게 제목·매니페스트를 갈아 끼울 때). 키 = 앱 id. */
+export async function listPublishedHeads(appIds: readonly string[]): Promise<Map<string, AppVersionHead>> {
+  const out = new Map<string, AppVersionHead>();
+  if (!appIds.length) return out;
+  const r = await itemsPool.query(
+    `SELECT v.app_id, v.version_no, v.origin, v.version, v.content_hash, v.note, v.saved_by, v.saved_at, v.manifest
+       FROM org_app a JOIN org_app_version v ON v.app_id = a.id AND v.version_no = a.published_version_no
+      WHERE a.id = ANY($1::text[])`, [[...appIds]]);
+  for (const x of r.rows) out.set(String(x.app_id), { ...rowToVersionMeta(x), manifest: x.manifest ?? {} });
+  return out;
+}
+
+// ── #4667 공개 상태 · 만든 사람 · 만들기 세션 · 책임자 ─────────────────────────────
+//  판정(누가 보나 · 누가 공개하나)은 apps/visibility.ts. 여기는 칸 쓰기뿐이다.
+
+/**
+ * 비어 있는 «나만 보는 앱» 을 예약한다 — 앱 만들기 「만들기 시작」 과 app_save 의 새 id 가 먼저 이 행을 만들고 설치가 그 위를 채운다.
+ *  설치 코어의 upsertApp 은 ON CONFLICT 로 내용 칸(제목·매니페스트·해시·상태)만 바꾸고 이 칸들은 건드리지 않으므로, 한 번 찍은
+ *  만든 사람 · 책임자 · 만들기 세션 · 원본이 그대로 남는다. 같은 id 가 이미 있으면 false(아무것도 안 바꾼다).
+ *  content_hash NULL = 아직 첫 판 전 — 목록·붙이기에 서지 않는다(visibility.isEmptyDraftApp).
+ */
+export async function reserveDraftApp(
+  a: { id: string; title: string; made_by: string; build_session: string | null; origin_app_id: string | null },
+  ctx: WriteCtx = {},
+): Promise<boolean> {
+  const manifest = { id: a.id, title: a.title, version: "0.0.0" };
+  const r = await itemsPool.query(
+    `INSERT INTO org_app(id, title, version, manifest, source, content_hash, status, enabled, installed_by, installed_at, updated_at, updated_by,
+                         visibility, made_by, owner_member, build_session, origin_app_id)
+       VALUES($1, $2, '0.0.0', $3::jsonb, '{"kind":"inline"}'::jsonb, NULL, 'active', true, $4, now(), now(), $4,
+              'me', $4, $4, $5, $6)
+     ON CONFLICT (tenant_id, id) DO NOTHING
+     RETURNING *`,
+    [a.id, a.title, JSON.stringify(manifest), a.made_by, a.build_session, a.origin_app_id]);
+  if (!r.rows[0]) return false;
+  await audit("org_app", a.id, "insert", null, rowToApp(r.rows[0]), ctx.actor, ctx.source);
+  return true;
+}
+
+/** 예약만 하고 첫 판을 못 채운 앱 행을 거둔다(그 호출 안에서 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다. */
+export async function dropEmptyDraftApp(appId: string): Promise<void> {
+  await itemsPool.query(`DELETE FROM org_app WHERE id=$1 AND content_hash IS NULL AND current_version_no IS NULL`, [appId]);
+}
+
+/** 그만둔 만들기가 남긴 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 새로 「만들기 시작」 할 때. 거둔 수. */
+export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<number> {
+  const r = await itemsPool.query(
+    `DELETE FROM org_app WHERE owner_member=$1 AND visibility='me' AND content_hash IS NULL AND current_version_no IS NULL
+        AND installed_at < now() - make_interval(days => $2::int)`, [owner, days]);
+  return r.rowCount ?? 0;
+}
+
+/** 이 세션이 만드는 앱들(최근 것 먼저) — 세션 → 앱 역조회. 판정(볼 수 있나)은 호출부. */
+export async function findAppsByBuildSession(sessionId: string): Promise<OrgApp[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app WHERE build_session=$1 ORDER BY updated_at DESC, id`, [sessionId]);
+  return r.rows.map(rowToApp);
+}
+
+/** 이 앱을 만드는(고치는) 세션을 바꾼다 — 책임자가 새 만들기 세션을 열었을 때(앱빌더 「고치기」). */
+export async function setAppBuildSession(appId: string, sessionId: string | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET build_session=$2 WHERE id=$1`, [appId, sessionId]);
+}
+
+/** 관리자 설치(org_app_install)로 새로 생긴 앱 — 만든 사람·책임자가 비었으면 설치한 사람으로(빈 칸만 채운다). */
+export async function stampAppCreatorIfMissing(appId: string, member: string): Promise<void> {
+  await itemsPool.query(
+    `UPDATE org_app SET made_by=COALESCE(made_by,$2), owner_member=CASE WHEN made_by IS NULL THEN $2 ELSE owner_member END WHERE id=$1`,
+    [appId, member]);
+}
+
+/** 초안 표식 — 설치된 상태가 공개 판과 다를 때 그 초안을 만든 사람(null = 초안 없음). */
+export async function setAppDraftBy(appId: string, member: string | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET draft_by=$2 WHERE id=$1`, [appId, member]);
+}
+
+/** 공개 판을 판 행에 못 박는다(초안이 생기기 직전) — 공개 상태·시각은 그대로, 가리키는 번호만. */
+export async function setAppPublishedPointer(appId: string, versionNo: number | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_app SET published_version_no=$2 WHERE id=$1`, [appId, versionNo]);
+}
+
+/** 「공개하기」 — 이 판을 모두가 보는 판으로. 초안 표식은 걷힌다(설치된 상태 = 공개 판). */
+export async function markAppPublished(appId: string, versionNo: number | null, by: string, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(appId);
+  const r = await itemsPool.query(
+    `UPDATE org_app SET visibility='all', published_version_no=$2, published_at=now(), published_by=$3, draft_by=NULL,
+                        updated_at=now(), updated_by=$3
+      WHERE id=$1 RETURNING *`, [appId, versionNo, by]);
+  const after = r.rows[0] ? rowToApp(r.rows[0]) : null;
+  if (after) await audit("org_app", appId, "update", before, after, ctx.actor ?? by, ctx.source);
+  return after;
+}
+
+/** 「나만」 으로 되돌리기(공개 취소) — 다시 책임자만 보는 앱으로. 공개 판 포인터·초안 표식은 걷는다(나만 보는 앱엔 판이 하나다 — 설치된 상태). */
+export async function markAppPrivate(appId: string, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(appId);
+  const r = await itemsPool.query(
+    `UPDATE org_app SET visibility='me', published_version_no=NULL, draft_by=NULL, updated_at=now(), updated_by=$2
+      WHERE id=$1 RETURNING *`, [appId, ctx.actor ?? null]);
+  const after = r.rows[0] ? rowToApp(r.rows[0]) : null;
+  if (after) await audit("org_app", appId, "update", before, after, ctx.actor, ctx.source);
+  return after;
+}
+
+/** 책임자를 바꾼다(관리자) — null = 관리자. 만든 사람(made_by)은 바꾸지 않는다. */
+export async function setAppOwner(appId: string, member: string | null, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(appId);
+  if (!before) return null;
+  const r = await itemsPool.query(`UPDATE org_app SET owner_member=$2, updated_at=now(), updated_by=$3 WHERE id=$1 RETURNING *`,
+    [appId, member, ctx.actor ?? null]);
+  const after = r.rows[0] ? rowToApp(r.rows[0]) : null;
+  if (after) await audit("org_app", appId, "update", before, after, ctx.actor, ctx.source);
+  return after;
+}
+
+/** 떠난 사람이 책임지던 앱을 전부 관리자에게(owner NULL) — 돌려주는 값 = 넘어온 앱들(관리자 알림 재료). 만든 사람 기록은 그대로. */
+export async function transferOwnedAppsToAdmins(memberId: string): Promise<Array<{ id: string; title: string; visibility: AppVisibility }>> {
+  const r = await itemsPool.query(
+    `UPDATE org_app SET owner_member=NULL, updated_at=now(), updated_by='system' WHERE owner_member=$1 RETURNING id, title, visibility`, [memberId]);
+  return r.rows.map((x) => ({ id: String(x.id), title: String(x.title ?? x.id), visibility: x.visibility === "me" ? "me" as const : "all" as const }));
 }
 
 // ── org_app_runtime_asset — 실행할 worker 번들(Stage B) ──────────────────────

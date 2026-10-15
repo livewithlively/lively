@@ -96,11 +96,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws = null;
 try {
   const pf = path.join(dir, "profile", "DevToolsActivePort");
-  for (let i = 0; i < 200 && !existsSync(pf); i++) await sleep(50);
-  assert.ok(existsSync(pf), "크롬 디버깅 포트가 안 열렸다");
+  //  기동 대기는 넉넉히(30초) — 병렬 러너(-j 4)에서 다른 크롬 시험과 겹치면 10초 안에 못 뜬 판이 있었다(CI 실측 2026-10-12·14).
+  for (let i = 0; i < 600 && !existsSync(pf); i++) await sleep(50);
+  assert.ok(existsSync(pf), "크롬 디버깅 포트가 30초 안에 안 열렸다");
   const port = readFileSync(pf, "utf8").split("\n")[0];
+  //  크롬 판을 남긴다 — CI 리눅스에서만 가끔 빨간 «숨겼다 보여도 보던 자리»(R4·R14)가 맥·도커 Chromium 155 에서는 재현되지
+  //   않았다(2026-10-14). 빨개진 판의 로그에서 어느 판이었는지 바로 보이게 한다.
+  const ver = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json()).catch(() => null);
+  console.log(`note  크롬 판: ${ver?.Browser ?? "모름"}`);
   let targets = [];
-  for (let i = 0; i < 40 && !targets.some((t) => t.type === "page"); i++) {
+  for (let i = 0; i < 150 && !targets.some((t) => t.type === "page"); i++) {
     targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
     if (!targets.some((t) => t.type === "page")) await sleep(100);
   }
@@ -150,7 +155,9 @@ try {
     await ev("document.getElementById('wrap').hidden = false");
     const yh = await until(y, (v) => v === y2);
     ok(yh === y2, `R${++n} ${kind}: 숨겼다(곁칸 다른 탭) 보여도 보던 자리`, { y2, yh });
-    for (let i = 0; i < 10 && (await y()) !== 0; i++) await wheel({ dy: -8000 });
+    //  맨 위까지도 닿을 때까지만 굴린다(rollTo 와 같은 꼴). 한 번에 -8000(틱 80개)을 보내면 1800 에서 18틱이면 될 것을 62틱 더
+    //   보낸다 — CDP 휠 틱 하나가 ~50ms + 간격 15ms 라 그 헛틱이 문서마다 ~4초, 파일 시간의 1/3 이었다(2026-10-15 실측 · #4729).
+    for (let i = 0; i < 60 && (await y()) !== 0; i++) await wheel({ dy: -300 });
     assert.equal(await stable(), 0, `${kind}: 맨 위로 못 올렸다(관측 장치 고장)`);
     await settle(kind, 0);
     await ev("mk()"); await tall(); await sleep(400);

@@ -37,7 +37,7 @@ import type { NodeOp } from "../node/protocol.js";
 import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오프라인 원인 추정 한 문장
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
-import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { createAppInstance, sessionInstanceStatus } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954) · #4694 같은 id 복원
 import { bindSessionTask, ensureSessionTask, setSessionTaskOrder } from "../v6/session-task.js";   // #4084 세션 = 태스크
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
@@ -104,6 +104,20 @@ export const registerSessionInstance = async (sessionId: string, owner: string, 
   await createAppInstance({ appId: opts.appId || "ai-session", owner, projectId: opts.projectId ?? null,
     subjectKind: "session", subjectRef: sessionId, title: opts.title || null })
     .catch((e) => logger.warn({ err: e, sessionId }, "앱 인스턴스 등록 실패(비치명) — 세션은 살아 있다"));
+};
+
+/**
+ * #4694 — **같은 id 로 되살린** 세션의 인스턴스. registerSessionInstance 를 그대로 부르면 안 된다 — 그 upsert 는 있는 행을
+ *  active 로 되살리며 상태 칸을 비운다(createAppInstanceTx): 사람이 «치움» 해 둔 세션이 일괄 복원으로 목록에 되올라오고(#3857 위반),
+ *  목록에 이미 있던 인스턴스는 화면 상태를 잃는다. 그래서 지금 상태로 가른다:
+ *   · 행 없음 → 세운다(목록에 서게) · 시스템이 닫은 행 → 다시 연다(세션이 다시 산다)
+ *   · active → 그대로 · 사람이 치운 행 → **그대로**(보임 축은 사람만 바꾼다 — 직접 열면 화면의 멱등 생성이 연다)
+ *  상태를 못 읽으면 아무것도 안 한다 — 모르는 채 세우면 치움을 풀 수 있다(목록은 열 때 화면이 다시 세운다).
+ */
+export const reviveSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
+  const state = await sessionInstanceStatus(opts.appId || "ai-session", owner, sessionId)
+    .catch((e) => { logger.warn({ err: e, sessionId }, "같은 id 복원: 인스턴스 상태를 못 읽었다(비치명) — 손대지 않는다"); return null; });
+  if (state === "none" || state === "closed") await registerSessionInstance(sessionId, owner, opts);
 };
 
 // 세션 → 워크스페이스 정본 기록(#1750 후속) — 헤더를 못 싣는 표면(SSE·iframe·WS·훅·구 kit)이

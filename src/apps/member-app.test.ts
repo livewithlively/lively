@@ -47,7 +47,7 @@ test("S7-2~12 화면·데이터 밖의 선언은 하나씩 전부 위반으로 �
 const app = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "memo", title: "메모", version: "1.0.0", manifest: base, source: { kind: "inline" }, content_hash: null,
   status: "active", enabled: true, installed_by: "alice", installed_at: "", updated_at: "", updated_by: null,
-  edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, ...over,
+  edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null, visibility: "all", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...over,
 });
 const ok = m();
 const bob = { userId: "bob", scopes: ["memory"] };
@@ -88,6 +88,29 @@ test("S8-8 지정인데 명단이 비었다(경계) — 일반은 안 되고 관
   const a = app({ edit_mode: "members", edit_members: [] });
   assert.ok(editDenial(a, bob, ok));
   assert.equal(editDenial(a, admin, ok), null);
+});
+
+// ── #4667 나만 보는 앱 · 책임자 (사양 엣지 표 E15~E17) ──
+test("E15 나만 보는 앱(공개 전) — 책임자 · 관리자만 고친다(남은 같은 id 로 덮어쓰지 못한다)", () => {
+  const p = app({ visibility: "me", owner_member: "alice", made_by: "alice" });
+  assert.equal(editDenial(p, { userId: "alice", scopes: ["memory"] }, ok), null);
+  assert.ok(editDenial(p, bob, ok));
+  const why = String(editDenial(p, bob, ok));
+  assert.ok(!why.includes("메모") && why.includes("다른 id"), `남의 나만 보는 앱의 제목을 밝히지 않고 다른 id 를 말한다(#4632 «없는 것과 같다») — ${why}`);
+  assert.equal(editDenial(p, admin, ok), null);
+  //  고치기 설정이 «전원» 이어도 나만 보는 앱은 남이 못 고친다
+  assert.ok(editDenial(app({ visibility: "me", owner_member: "alice", edit_mode: "all" }), bob, ok));
+});
+
+test("E16 공개 앱 · 지정한 사람만(명단 비었음) — 책임자는 명단 밖이어도 고친다", () => {
+  const a = app({ edit_mode: "members", edit_members: [], owner_member: "alice" });
+  assert.equal(editDenial(a, { userId: "alice", scopes: ["memory"] }, ok), null);
+});
+
+test("E17 공개 앱 · 지정한 사람만 — 명단 밖의 남은 종전대로 막힌다(책임자 규칙이 문을 넓히지 않는다)", () => {
+  const a = app({ edit_mode: "members", edit_members: ["carol"], owner_member: "alice" });
+  assert.ok(editDenial(a, bob, ok));
+  assert.ok(editDenial(app({ edit_mode: "members", edit_members: [], owner_member: null }), bob, ok), "책임자가 관리자(null)여도 일반 구성원은 막힌다");
 });
 
 test("S7-13 app_save 로 화면·데이터 밖을 선언한 묶음을 보내면 403 — DB 에 닿기 전에", async () => {

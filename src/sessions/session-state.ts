@@ -70,11 +70,41 @@ export interface SessionState {
   //  옛 id 를 가리키던 화면·링크가 막다른 길이 되지 않게 하는 이정표다 — 목록에는 안 나오고(listAllSessionStates),
   //  옛 id 로 오는 복원·메타 조회만 이 값을 따라 새 세션으로 안내한다(terminal/routes.ts · session-meta.ts).
   superseded_by?: string | null;
+  // #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). 조회 결과에만 실린다(입력에선 안 받는다 —
+  //  쓰는 자리는 setSessionStopNote 하나다). 모양은 session-stop-rule.ts StopNote.
+  stop_note?: SessionStopNote | null;
+}
+
+/**
+ * 하네스를 끄기 전에 남긴 쪽지(#4695 T5) — 대화창이 다음에 열 때 입력칸·답을 기다리는 질문으로 되돌린다.
+ *  저장은 JSON 그대로다(이 모듈은 모양을 판정하지 않는다 — 쓰는 쪽이 session-stop-rule.ts, 읽는 쪽이 화면).
+ */
+export interface SessionStopNote {
+  /** 끈 시각(epoch초) */
+  at: number;
+  /** 왜 껐나 — done(완료+안 봄) · asking(질의+안 봄) · exited(하네스가 끝나 셸만 남음) */
+  why: "done" | "asking" | "exited";
+  harness: string;
+  /** 하네스 입력창에 쓰다 만 글 */
+  draft?: string;
+  /** 답을 기다리던 질문(화면에서 읽은 것) */
+  question?: StopQuestion;
+}
+export interface StopQuestion {
+  /** ask = 선택 질문(AskUserQuestion 류) · permission = 실행 승인 · plan = 계획 승인 · other = 그 밖의 대화상자 */
+  kind: "ask" | "permission" | "plan" | "other";
+  /** 질문 묶음 — 선택 질문은 여러 개일 수 있다(claude 탭). 승인은 하나. */
+  //  multi = 여러 개 고르기 · free = 직접 써서 답할 수 있다(claude «Type something»).
+  items: Array<{ header?: string; text: string; options: Array<{ n: number; label: string; desc?: string }>; multi?: boolean; free?: boolean }>;
+  /** 승인이면 실행하려던 대상(명령·파일) */
+  target?: string;
+  /** 다시 열면 같은 창이 다시 뜨나(codex 실측 — 대화 파일에 그 요청이 남는다). 참이면 화면은 «다시 열고 그 창에서 답하기» 로 안내한다. */
+  reappears?: boolean;
 }
 
 // createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
 //  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
-export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "transcript_path" | "exited_at" | "exit_reason">;
+export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "transcript_path" | "exited_at" | "exit_reason" | "stop_note">;
 
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
@@ -100,7 +130,31 @@ export function rowToState(r: Record<string, any>): SessionState {
     node_id: (r.node_id as string | null) ?? null,
     discovered: !!r.discovered,   // #2022 — 노드 스냅샷에서 발견한 행(좌표 미상)
     superseded_by: (r.superseded_by as string | null) ?? null,   // #2231 — 이어진 새 세션 id(이정표)
+    stop_note: stopNoteOf(r.stop_note),                            // #4695 T5 — 끄기 전에 남긴 쪽지(모양이 틀리면 없음)
   };
+}
+
+/** #4695 T5 — DB 의 쪽지를 읽는다. 끈 시각·사유가 없는 값은 쪽지가 아니다(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
+export function stopNoteOf(v: unknown): SessionStopNote | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const n = v as Record<string, unknown>;
+  if (typeof n.at !== "number" || !Number.isFinite(n.at)) return null;
+  if (n.why !== "done" && n.why !== "asking" && n.why !== "exited") return null;
+  return n as unknown as SessionStopNote;
+}
+
+/** #4695 T5 — 하네스를 끄기 전에 쪽지를 남긴다(덮어쓴다). 행이 없으면 아무 일도 없다 — 반환은 «적었나». best-effort. */
+export async function setSessionStopNote(id: string, note: SessionStopNote): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query("UPDATE org_session_state SET stop_note=$2::jsonb, updated_at=now() WHERE id=$1", [id, JSON.stringify(note)]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** #4695 T5 — 쪽지를 지운다(다음 턴이 돌기 시작했다 — 쪽지는 지난 일이다). 쪽지가 없는 행은 안 건드린다. */
+export async function clearSessionStopNote(id: string): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query("UPDATE org_session_state SET stop_note=NULL WHERE id=$1 AND stop_note IS NOT NULL", [id]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 // #1059 정밀복원 — work-flag 훅이 (box-id, claude session UUID)를 보고. **owner-gated**(호출자가 그 box 소유자일 때만) +
@@ -296,6 +350,28 @@ export async function markSessionOomKilled(id: string): Promise<boolean> {
   const r = await itemsPool.query(
     "UPDATE org_session_state SET exit_reason='oom', updated_at=now() WHERE id=$1 AND exited_at IS NULL",
     [id],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #4694 — **같은 id 로 다시 띄운 세션**의 «끝났다» 표식을 지운다(createSession reuseId 가 행을 다시 쓴 직후 부른다).
+ *
+ *  upsertSessionState 는 이 칸들을 일부러 안 건드린다(생성 시점엔 미상 — 훅이 사후에 채운다). 새 id 로 복원하던 때는
+ *  새 행이라 늘 비어 있었지만, 같은 id 면 지난 판의 표식이 그대로 남는다:
+ *   · `exited_at` — 브로커 장부가 이 세션을 «원한다» 가 아니라 «사람이 끝냈다(exited)» 로 읽는다(lvly-cloud sessionledger
+ *     parseLedger) — 새로 뜬 컨테이너의 안이 아직 비어 있는 창(tmux 전)에 걷힐 수 있다. 목록도 «시작 중» 대신 «종료됨».
+ *   · `exit_reason` — 'oom' 이면 화면이 «메모리 부족으로 죽은 세션» 으로 그린다.
+ *   · `discovered` — 노드 스냅샷에서 발견한 행 표식(#2022). 게이트웨이가 좌표를 정해 다시 띄웠으니 더는 «좌표 미상» 이 아니다.
+ *  `superseded_by` 는 건드리지 않는다 — 이어진 행은 복원 라우트가 먼저 그 이음으로 안내하고 여기까지 오지 않는다.
+ *  반환 = 고친 행이 있었나(없으면 행이 없는 것 — 호출자는 그대로 진행한다).
+ */
+export async function reviveSessionState(id: string, owner: string): Promise<boolean> {
+  if (onNode()) return false;   // 노드엔 DB 가 없다(같은 id 복원은 게이트웨이 박스 갈래뿐이다)
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET exited_at=NULL, exit_reason=NULL, discovered=false, updated_at=now()
+      WHERE id=$1 AND owner=$2 AND superseded_by IS NULL`,
+    [id, owner],
   );
   return (r.rowCount ?? 0) > 0;
 }

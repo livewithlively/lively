@@ -20,6 +20,7 @@ import { openGridPicker, openSessionSelectPicker, termUrl } from './select-bar.j
 import { loginBannerEl, openNodeManager, openTermCreateForm, setTerminalRerender } from './session-form.js';
 import { buildSessProjFilter, openGlobalPromptSearch, tsessColHead, tsessRow } from './session-list.js';
 import { notTrashed, retireSessions, retiredToastText } from '../session-actions.js';
+import { isTrySessionRow } from '../lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 세우지 않는다
 
 // 폼·다이얼로그(session-form)가 끝난 뒤 목록을 다시 그리게 등록 — 이 방향(위→아래)이라야 순환이 안 생긴다.
 setTerminalRerender(renderTerminal);
@@ -42,7 +43,7 @@ async function renderTerminal(view) {
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
     ]);
   } catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
-  const sessions = notTrashed<any>((data && data.sessions) || []);   // 휴지통에 있는 세션은 이 목록에 서지 않는다(#3778)
+  const sessions = notTrashed<any>((data && data.sessions) || []).filter((s: any) => !isTrySessionRow(s));   // 휴지통에 있는 세션 · 앱빌더 시험 세션(#4632)은 이 목록에 서지 않는다(#3778)
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
   // '내 프로젝트'(칩 강조용) = 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 전체 목록에서 그대로 판정.
   const meIdNow = (state.me && state.me.userId) || '';

@@ -9,6 +9,7 @@ import { requestOpenRoute } from './v2/ctx-registry.js';
 import { EMBEDDED } from './v2/embed.js';
 import { openSessionWindow } from './lib/session-open.js';
 import type { JActivity, JRow } from './session-history.js';
+import { isTrySessionRow } from './lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 세우지 않는다
 
 export const fmtBytes = (b: number): string => !b ? '' : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b >= 1024 ? Math.round(b / 1024) + 'KB' : b + 'B';
 
@@ -61,7 +62,8 @@ export function loadMySessions(force = false): Promise<MySessions> {
   if (!force && myCache && Date.now() - myCache.at < MY_TTL_MS) return myCache.p;
   const p = api('/api/ui/v6/sessions?limit=2000').then((d: any): MySessions => ({
     //  내용 없는 세션(0바이트)과 휴지통에 있는 세션은 뺀다(#3778 — 되돌리기·완전 삭제는 휴지통 화면의 몫이다).
-    sessions: (Array.isArray(d?.sessions) ? d.sessions : []).filter((s: any) => (s.bytes || 0) > 0 && !s.trashed_at),
+    //  앱빌더 시험 세션도 뺀다(#4632 — 앱빌더 안에서만 산다 · 기록 줄은 첫 지시 머리로 알아본다: lib/builder-flow isTrySessionRow).
+    sessions: (Array.isArray(d?.sessions) ? d.sessions : []).filter((s: any) => (s.bytes || 0) > 0 && !s.trashed_at && !isTrySessionRow(s)),
     truncated: !!d?.truncated,
   }));
   myCache = { at: Date.now(), p };

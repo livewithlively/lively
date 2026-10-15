@@ -80,6 +80,7 @@ injected into each `<link href>`, and requests whose `?v=` matches the current v
 | 35 | `35-liv.css` | Liv (#/liv) — action cards + conversation (#1631) |
 | 36 | `36-chat.css` | Shared chat view additions (web/chat-view.ts) + session conversation screen + desktop variant (#1719) |
 | 37 | `37-projects-hub.css` | Project detail = tool widget hub (#3916) — three-column widget grid · resizing (#4164) · layout editing |
+| 38 | `38-chat-tui.css` | Session chat in Claude Code's terminal grammar (#4707) — scoped under `.livc-tui` · wears the web terminal's settings (font · size · colors · cell grid) |
 | 40 | `40-v2.css` | New single-tab shell (#1719) + classic embed (?embed=1) — reclaims classic rules after the classic files (`01`~`37`) |
 | 41 | `41-onboarding.css` | First-time setup (#/welcome, #1813) — all classes use the `ob-` prefix |
 | 42 | `42-v2-panes.css` | New shell project = docked screen — splitting/collapsing panes (session · sources · knowledge · timeline) |

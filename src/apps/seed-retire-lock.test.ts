@@ -13,7 +13,7 @@ import type { OrgApp } from "../org/store/apps.js";
 const row = (over: Partial<OrgApp> = {}): OrgApp => ({
   id: "hello", title: "안녕", version: "1.0.0", manifest: {}, source: { kind: "builtin" }, content_hash: "h",
   status: "active", enabled: true, installed_by: null, installed_at: "", updated_at: "", updated_by: null,
-  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, ...over,
+  edit_mode: "all", edit_members: [], builtin_version: "1.0.0", current_version_no: null, visibility: "all", published_version_no: null, published_at: null, published_by: null, draft_by: null, made_by: null, owner_member: null, build_session: null, origin_app_id: null, ...over,
 });
 
 /** 가짜 세계 — getApp 은 부를 때마다 `answers` 를 차례로 답한다(Error 면 던진다). 락·회수 호출을 적는다. */

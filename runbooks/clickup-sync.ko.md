@@ -80,13 +80,18 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
 
 | op | 의미론 |
 |---|---|
-| 생성 | project=컨테이너 List 안 최상위 Task, task=Subtask(parent=project-Task), subtask=중첩 Subtask. `CLICKUP_CONTAINER_LIST_ID`(관리탭 '컨테이너 리스트') 필수 — 없으면 그 행은 에러로 남는다. 부모가 아직 미푸시면 자식은 다음 틱으로 defer. 생성 후 external_id/url 링크백 |
+| 생성 | project=컨테이너 List 안 최상위 Task, task=Subtask(parent=project-Task), subtask=중첩 Subtask. `CLICKUP_CONTAINER_LIST_ID`(관리탭 '컨테이너 리스트') 필수 — 없으면 그 행은 에러로 남는다. 부모가 아직 미푸시면 자식은 다음 틱으로 defer(부모 행이 반출 대기 중일 때만 — 부모가 반출 대상이 아니면(공개범위 잠금·카드 삭제로 연결 해제 등) 자식 반출을 닫는다. 부모가 다시 올라간 뒤 자식을 다시 편집하면 그 아래에 만들어진다). 생성 후 external_id/url 링크백 |
 | 수정 | name·`markdown_description`·status·priority·start/due 를 PUT. status 는 정규 카테고리 → 스페이스 상태셋으로 매핑하고, 불일치면 status 를 빼고 1회 재시도 |
 | 삭제 | ClickUp 태스크 **하드 삭제**(`DELETE /task/<id>` — 이미 없으면(404) 성공 취급) |
 
 - 멱등: 드레인이 현재 project 행을 다시 읽어 upsert — 두 번 돌려도 같은 ClickUp 상태로 수렴한다. 푸시한 값은
   `external_base`(3-way 머지의 공통조상)로 전진해, 다음 인바운드가 외부 편집만 골라낸다.
-- 실패 행은 `attempts`·`last_error` 가 남고 다음 틱에 재시도한다. exit 1 = 실패 행 존재.
+- 실패 행은 `attempts`·`last_error` 가 남고 다음 틱에 재시도한다. exit 1 = 시스템성 실패(5xx·네트워크·401·403·429) 존재.
+- 행 고유 거절(그 밖의 4xx)은 실행 실패로 세지 않고(`rejected`), 같은 행이 3회 거절되면 드레인에서 뺀다(파킹 — `parked`, 경보 1회). 그 항목을 다시 편집하면 풀린다. 한 실행에서 거절이 5건 이상인데 반출이 0건이면 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다).
+- 파킹 행 일괄 해제(원인을 고친 뒤): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
+  조건 값은 `src/connectors/push-failure.ts` 의 `parkedParams()` 와 같아야 한다 — 그쪽을 바꾸면 이 SQL 도 고친다.
+- 배포 직후 확인: 이 동작이 들어가기 전부터 같은 4xx 로 3회 이상 실패해 온 행은 첫 실행부터 드레인에서 빠지고 **경보가 나가지 않는다**(경보는 그 실행에서 새로 파킹된 행에만 나간다). 배포 뒤 첫 실행 요약(관리 ▸ 스케줄 ▸ push 요약)의 `parked` 를 확인하고, 0 이 아니면 아래로 그 행을 보고 원인을 고친 뒤 위 SQL 로 푼다:
+  `SELECT entity_id, attempts, last_error FROM external_outbox WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
 - 공개범위가 잠긴 리스트의 **네이티브**(우리에서 태어난) 프로젝트는 반출하지 않는다(#1291). 미러 기원 행은 그대로 푸시한다.
 
 ## 4. 스케줄

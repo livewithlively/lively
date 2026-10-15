@@ -30,7 +30,8 @@ function boot() {
   const win = { addEventListener: (type, fn) => { (listeners[type] || (listeners[type] = [])).push(fn); } };
   const ctx = vm.createContext({ window: win, parent: { postMessage: (m) => posted.push(m) }, setTimeout, Promise, Error, Object, String });
   vm.runInContext(runtimeSource(), ctx);
-  const deliver = (data) => { for (const fn of listeners.message) fn({ data }); };
+  //  부모(라이블리 화면)가 보낸 답은 브라우저에서 ev.source === parent 다(#4480 — 런타임이 그것만 받는다). 그 모양 그대로 넣는다.
+  const deliver = (data, source = ctx.parent) => { for (const fn of listeners.message) fn({ data, source }); };
   return { lively: win.lively, posted, deliver };
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -139,7 +140,7 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   const doc = { documentElement: { style: { setProperty: (k, v) => { vars[k] = v; } } } };
   const ctx = vm.createContext({ window: win, document: doc, parent: { postMessage: (m) => posted.push(m) }, setTimeout, Promise, Error, Object, String });
   vm.runInContext(runtimeSource(), ctx);
-  const lively = win.lively; const deliver = (data) => { for (const fn of listeners.message) fn({ data }); };
+  const lively = win.lively; const deliver = (data) => { for (const fn of listeners.message) fn({ data, source: ctx.parent }); };
   eq(lively.ui.insets, { top: 0, right: 0, bottom: 0, left: 0 }, "S2-11 알린 적이 없으면 전부 0");
   const got = []; const off = lively.ui.onInsets((i) => got.push(i));
   deliver({ jsonrpc: "2.0", method: "ui/notifications/insets", params: { top: 0, right: 0, bottom: 70.4, left: 0 } });
@@ -208,6 +209,32 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(/projectFiles: Array\.isArray\(perm\.project_files\)/.test(consent) && /프로젝트 자료 읽기/.test(consent) && /쓰지는 못해요/.test(consent), "S2-5b 동의 창에 「프로젝트 자료 읽기」 줄이 선다(읽기뿐임을 말한다)");
 }
 
+// ══ S2-17 (#4480) 앱 주소에서 도는 런타임 — 부모가 아닌 창의 답은 버린다 · 맨몸(새 탭)이면 분명히 실패한다 ══
+{
+  const { lively, posted, deliver } = boot();
+  const p = lively.prefs.get();
+  const req = posted.find((m) => m.method === "prefs/get");
+  let settled = false; p.then(() => { settled = true; }, () => { settled = true; });
+  deliver({ jsonrpc: "2.0", id: req.id, result: { prefs: { evil: 1 } } }, { postMessage() {} });   // 다른 창(형제 앱 · 열린 창)이 보낸 가짜 답
+  await tick();
+  ok(!settled, "S2-17 부모가 아닌 창의 답으로는 풀리지 않는다");
+  deliver({ jsonrpc: "2.0", id: req.id, result: { prefs: { real: 1 } } });
+  eq(await p, { real: 1 }, "S2-17 부모의 답으로 풀린다");
+  //  맨몸 — window.parent === window(새 탭에 앱 주소를 바로 연 것)
+  const posted2 = []; const listeners2 = { message: [] };
+  const win2 = { addEventListener: (type, fn) => { (listeners2[type] || (listeners2[type] = [])).push(fn); } };
+  win2.parent = win2;
+  const ctx2 = vm.createContext({ window: win2, parent: { postMessage: (m) => posted2.push(m) }, setTimeout, Promise, Error, Object, String });
+  vm.runInContext(runtimeSource(), ctx2);
+  let err = null;
+  try { await win2.lively.tools.call("store_query", {}); } catch (e) { err = e; }
+  ok(err && err.code === -32601 && /라이블리 화면 안/.test(err.message), "S2-17b 맨몸이면 -32601 로 분명히 실패한다(빈 답으로 풀리지 않는다)");
+  let readyErr = null;
+  try { await win2.lively.ready; } catch (e) { readyErr = e; }
+  ok(readyErr && readyErr.code === -32601, "S2-17b ready 도 실패한다");
+  eq(posted2.filter((m) => m && m.method).length, 0, "S2-17b 맨몸이면 어디에도 요청을 보내지 않는다");
+}
+
 // ══ S2-6~9 호스트 다리를 **실제로** 돌린다(컴파일된 app-ui.js + 가짜 iframe) ══
 const built = join(root, "public/app/v2/app-ui.js");
 if (!existsSync(built)) {
@@ -222,7 +249,14 @@ if (!existsSync(built)) {
       setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k] ?? null; }, hasAttribute(k) { return k in this.attrs; }, removeAttribute(k) { delete this.attrs[k]; },
       append(...c) { this.children.push(...c); }, appendChild(c) { this.children.push(c); return c; }, prepend() {}, remove() {}, replaceChildren() {},
       addEventListener() {}, removeEventListener() {}, querySelector: () => null, querySelectorAll: () => [], focus() {}, closest: () => null };
-    if (tag === "iframe") n.contentWindow = { postMessage: (m) => replies.push(m) };
+    if (tag === "iframe") {
+      n.contentWindow = { postMessage: (m, target) => { replies.push(m); targets.push(target); } };
+      //  #4480 인사 감시 — iframe 의 load 를 시험이 직접 울린다(n.fireLoad()).
+      n._ls = {};
+      n.addEventListener = (t, fn) => { (n._ls[t] || (n._ls[t] = [])).push(fn); };
+      n.fireLoad = () => { for (const fn of n._ls.load || []) fn(); };
+    }
+    n.replaceWith = function (next) { this.replacedBy = next; };
     return n;
   };
   const toastsEl = mkEl("div");   // toast() 가 붙는 자리
@@ -242,16 +276,31 @@ if (!existsSync(built)) {
   Object.defineProperty(globalThis, "navigator", { value: { userActivation: { isActive: true } }, configurable: true, writable: true });
   globalThis.open = () => null;
   let replies = [];
+  let targets = [];   // 호스트가 앱에 보낸 메시지의 targetOrigin(#4480 — 앱 주소면 그 출처, srcdoc 이면 '*')
   const fetches = [];
   let plan = {};       // url 부분문자열 → 응답 { status, json }
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     fetches.push({ url: u, body: init && init.body ? JSON.parse(init.body) : null });
     const hit = Object.entries(plan).find(([k]) => u.includes(k));
-    const r = hit ? hit[1] : { status: 200, json: {} };
+    const r0 = hit ? hit[1] : { status: 200, json: {} };
+    const r = typeof r0 === "function" ? r0() : r0;   // 부를 때마다 다른 답(#4480 — 새 코드)
     return { status: r.status, ok: r.status >= 200 && r.status < 300, headers: { get: () => null }, json: async () => r.json };
   };
+  //  #4480 인사 감시용 가짜 시계 — 5초 이상 타이머(감시의 8초·20초)는 붙잡아 두고 시험이 손으로 울린다(fireLong).
+  //   진짜로 기다리면 시험이 20초씩 늘고, 안 붙잡으면 끝난 프레임의 타이머가 프로세스를 붙잡는다. 짧은 타이머(tick 등)는 그대로.
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const longTimers = new Map();
+  let nextLong = 1e6;
+  globalThis.setTimeout = (fn, ms, ...a) => {
+    if (typeof ms === "number" && ms >= 5000) { const id = nextLong++; longTimers.set(id, { fn, ms }); return id; }
+    return realSetTimeout(fn, ms, ...a);
+  };
+  globalThis.clearTimeout = (id) => { if (longTimers.has(id)) { longTimers.delete(id); return; } realClearTimeout(id); };
+  const fireLong = (ms) => { for (const [id, t] of [...longTimers]) if (t.ms === ms) { longTimers.delete(id); t.fn(); } };
   const { mountAppUiFrame } = await import(built);
+  const { state } = await import(join(root, "public/app/lib/state.js"));
   const { registerSessionInput } = await import(join(root, "public/app/v2/sess-input.js"));
 
   async function mount(opts) {
@@ -441,6 +490,129 @@ if (!existsSync(built)) {
     eq([replies.find((m) => m && m.id === 53).result.capabilities.expand, replies.find((m) => m && m.id === 54).error.code], [false, -32601], "S2-16b 띄울 쪽이 없는 자리(이미 크게 뜬 화면)는 expand 가 false · 부르면 -32601");
   }
 
+
+  // S2-18 (#4480) 앱 주소 — 켜진 워크스페이스면 코드를 받아 앱 주소로 · 그 출처하고만 말한다 · 로그인 신호 · 쿠키 막힘 → srcdoc
+  {
+    const ORIGIN = "https://deck-edit-lively-46e3.lvly.app";
+    const URL0 = ORIGIN + "/_lively/auth?code=lva_" + "a".repeat(32) + "&next=%2F";
+    const URL1 = ORIGIN + "/_lively/auth?code=lva_" + "b".repeat(32) + "&next=%2F";
+    state.me = { userId: "alice", app_domain: "lvly.app" };
+    let launches = 0;
+    const launchPlan = () => ({ status: 200, json: { url: launches++ === 0 ? URL0 : URL1, origin: ORIGIN, page_key: "main", title: "장표" } });
+    const mountAddr = async (opts) => {
+      fetches.length = 0; launches = 0;
+      plan = { "/launch": launchPlan, "/ui": { status: 200, json: { html: "<!doctype html><p>앱</p>" } } };
+      const f = await mountAppUiFrame("deck-edit", opts);
+      replies = []; targets = [];
+      const fire = (data, origin = ORIGIN, source = f.root.contentWindow) => { for (const fn of winListeners.slice()) fn({ source, origin, data }); };
+      return { f, fire };
+    };
+    const { f, fire } = await mountAddr({ sessionId: "box-mine", page: "settings" });
+    const launch = fetches.find((x) => x.url.includes("/launch"));
+    eq(launch && launch.body, { mode: "embed", next: "/?page=settings" }, "S2-18 코드를 embed 로 받는다(화면 키는 앱 안 경로로)");
+    ok(!fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 앱 주소로 띄우면 HTML 을 따로 받지 않는다");
+    eq([f.root.attrs.src, f.root.attrs.sandbox, f.root.attrs.srcdoc], [URL0, "allow-scripts allow-same-origin", undefined], "S2-18 src = 코드 붙은 앱 주소 · sandbox 에 allow-same-origin(다른 사이트) · srcdoc 없음");
+    fire({ jsonrpc: "2.0", id: 61, method: "ui/initialize", params: {} }, "https://evil.lvly.app");
+    await settle();
+    eq(replies.length, 0, "S2-18 같은 프레임이어도 출처가 다르면 답하지 않는다");
+    fire({ jsonrpc: "2.0", id: 62, method: "ui/initialize", params: {} });
+    await settle();
+    eq([replies[0] && replies[0].result.page, targets[0]], ["main", ORIGIN], "S2-18 맞는 출처면 답한다 · 답은 그 출처로만(target)");
+    // 로그인 신호 — 한 번은 새 코드로 다시
+    fire({ type: "lively:app-auth", status: "login-required" });
+    await settle();
+    eq([fetches.filter((x) => x.url.includes("/launch")).length, f.root.src], [2, URL1], "S2-18 login-required → 새 코드로 한 번 다시 띄운다");
+    fire({ type: "lively:app-auth", status: "code-invalid" });
+    await settle();
+    const swapped = f.root;
+    eq([swapped.attrs.sandbox, typeof swapped.attrs.srcdoc, swapped.attrs.src], ["allow-scripts", "string", undefined], "S2-18 두 번째 신호면 srcdoc 으로 — 새 프레임 · allow-same-origin 없음");
+    ok(fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 srcdoc 으로 바꿀 때 HTML 을 받는다");
+    // 쿠키 막힘 → 이 브라우저는 다음부터 바로 srcdoc
+    const m2 = await mountAddr({});
+    m2.fire({ type: "lively:app-auth", status: "cookie-blocked" });
+    await settle();
+    eq(m2.f.root.attrs.sandbox, "allow-scripts", "S2-18 cookie-blocked → 그 자리에서 srcdoc");
+    ok(localStorage.getItem("lively.appAddr.blocked"), "S2-18 쿠키 막힘을 기억한다");
+    const m3 = await mountAddr({});
+    ok(!fetches.some((x) => x.url.includes("/launch")) && m3.f.root.attrs.sandbox === "allow-scripts", "S2-18 기억된 브라우저는 코드를 받지 않고 바로 srcdoc");
+    localStorage.removeItem("lively.appAddr.blocked");
+    // 다른 출처의 신호는 무시
+    const m4 = await mountAddr({});
+    m4.fire({ type: "lively:app-auth", status: "cookie-blocked" }, "https://evil.lvly.app");
+    await settle();
+    eq([m4.f.root.attrs.sandbox, localStorage.getItem("lively.appAddr.blocked")], ["allow-scripts allow-same-origin", null], "S2-18 다른 출처가 보낸 신호로는 바꾸지 않는다");
+    // 코드를 못 받으면(꺼짐 · 주소 없음 · 권한) 종전 길
+    fetches.length = 0;
+    plan = { "/launch": { status: 409, json: { code: "no_address", error: "x" } }, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
+    const f5 = await mountAppUiFrame("deck-edit", {});
+    eq([f5.root.attrs.sandbox, typeof f5.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-18 코드를 못 받으면 종전 srcdoc");
+    // 그 밖의 덧붙임 스크립트(탐침이 아닌 것)는 앱 주소로 못 넣는다 → srcdoc
+    fetches.length = 0;
+    plan = { "/launch": launchPlan, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
+    const f6 = await mountAppUiFrame("deck-edit", { extraScript: "console.log(1)" });
+    ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === "allow-scripts", "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
+    state.me = null;
+  }
+
+  // S2-19 (#4480) 인사 감시 — 앱 주소 문서가 인사(ui/initialize)하지 않으면 그 자리에서 srcdoc 으로(앞단 오류 화면 · DNS·인증서 문제는
+  //  postMessage 신호를 못 낸다). 이 브라우저를 «막힘» 으로 적지는 않는다(그 순간의 장애일 수 있다 — 다음엔 다시 앱 주소로 시도).
+  {
+    const ORIGIN = "https://deck-edit-lively-46e3.lvly.app";
+    const URL0 = ORIGIN + "/_lively/auth?code=lva_" + "c".repeat(32) + "&next=%2F";
+    state.me = { userId: "alice", app_domain: "lvly.app" };
+    localStorage.removeItem("lively.appAddr.blocked");
+    longTimers.clear();   // 앞 시험의 프레임들이 남긴 감시 타이머는 이 시험과 무관하다
+    const mountAddr = async () => {
+      fetches.length = 0;
+      plan = { "/launch": { status: 200, json: { url: URL0, origin: ORIGIN, page_key: "main", title: "장표" } }, "/ui": { status: 200, json: { html: "<!doctype html><p>앱</p>" } } };
+      const g = await mountAppUiFrame("deck-edit", {});
+      replies = []; targets = [];
+      const fire = (data, origin = ORIGIN) => { for (const fn of winListeners.slice()) fn({ source: g.root.contentWindow, origin, data }); };
+      return { g, fire };
+    };
+    // ① load 뒤 8초 안에 인사가 없으면 srcdoc
+    const a = await mountAddr();
+    eq(a.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 앱 주소로 뜬다");
+    a.g.root.fireLoad();
+    fireLong(8000);
+    await settle();
+    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
+    eq(localStorage.getItem("lively.appAddr.blocked"), null, "S2-19 막힘으로 적지 않는다(다음엔 다시 앱 주소로)");
+    // ② 인사한 문서는 감시가 멈춘다 — 이후 load·시간이 지나도 그대로
+    longTimers.clear();
+    const b = await mountAddr();
+    b.fire({ jsonrpc: "2.0", id: 71, method: "ui/initialize", params: {} });
+    await settle();
+    b.g.root.fireLoad();
+    fireLong(8000); fireLong(20000);
+    await settle();
+    eq(b.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 인사한 문서는 그대로 둔다");
+    eq(longTimers.size, 0, "S2-19 인사하면 감시 타이머를 거둔다");
+    // ③ 다른 출처가 보낸 인사로는 감시가 안 멈춘다 · load 가 아예 안 와도 20초 받침
+    longTimers.clear();
+    const c = await mountAddr();
+    c.fire({ jsonrpc: "2.0", id: 72, method: "ui/initialize", params: {} }, "https://evil.lvly.app");
+    await settle();
+    fireLong(20000);
+    await settle();
+    eq(c.g.root.attrs.sandbox, "allow-scripts", "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
+    // ④ 새 코드로 다시 띄우면(로그인 신호) 감시를 다시 건다 — 새 문서도 인사해야 한다
+    longTimers.clear();
+    const d = await mountAddr();
+    d.fire({ jsonrpc: "2.0", id: 73, method: "ui/initialize", params: {} });
+    await settle();
+    d.fire({ type: "lively:app-auth", status: "login-required" });
+    await settle();
+    ok([...longTimers.values()].some((t) => t.ms === 20000), "S2-19 다시 띄우면 감시를 다시 건다");
+    d.g.root.fireLoad();
+    fireLong(8000);
+    await settle();
+    eq(d.g.root.attrs.sandbox, "allow-scripts", "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
+    longTimers.clear();
+    state.me = null;
+  }
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
 }
 
 console.log(`app-sdk-bridge: ${pass} 단언 통과`);
