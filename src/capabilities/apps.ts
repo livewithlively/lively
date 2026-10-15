@@ -232,11 +232,15 @@ async function pinPublished(app: store.OrgApp, actor: string): Promise<{ no: num
 }
 
 /** 설치를 마친 뒤 초안 표식을 다시 맞춘다 — 공개 판 행과 내용이 같으면 초안 없음, 다르면 이 일을 한 사람의 초안(나만 보는 앱은 늘 없음). */
-async function settleDraft(appId: string, actor: string): Promise<void> {
+async function settleDraft(appId: string, actor: string, deferredPending = false): Promise<void> {
   const app = await store.getApp(appId);
   if (!app || app.visibility !== "all") return;
   const head = app.published_version_no != null ? await store.getAppVersionHead(app.id, app.published_version_no) : null;
-  await store.setAppDraftBy(appId, draftByAfterInstall("all", app.content_hash, head?.content_hash ?? null, actor));
+  //  #4724 내용이 공개 판과 같아져도 이번 설치가 표 변경을 미뤘으면(공개 판의 칸을 지키느라 — 초안이 풀어 둔 not_null 을 다시 조이기 등)
+  //   초안으로 남긴다. 표식을 걷으면 미룬 일이 올 때(「공개하기」)가 사라진다(격리 리뷰 — 초안에서 푼 not_null 뒤 빈 행이 생긴 채 공개 판과
+  //   같은 파일을 다시 저장하면 조이기가 영영 안 왔다).
+  const next = draftByAfterInstall("all", app.content_hash, head?.content_hash ?? null, actor);
+  await store.setAppDraftBy(appId, next ?? (deferredPending ? actor : null));
 }
 
 /**
@@ -288,8 +292,11 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
     await store.markAppPublished(app.id, no, who.userId, w);
   } catch (err) {
     if (!tables) throw err;
-    logger.error({ err, id: app.id, no }, "표는 새 공개 판에 맞췄는데 공개 표시를 못 했다");
-    throw new HttpError(503, `표는 새 공개 판(${no}판)에 맞췄지만 공개 표시를 하지 못했습니다 — 같은 공개를 다시 하면 이어서 됩니다(${(err as Error)?.message ?? err})`);
+    //  다시 공개하면 표는 이미 맞아 응답 tables 가 비므로, 이번에 한 일(지운 칸 · 보관 자리)을 여기서 남긴다(격리 리뷰).
+    const did = tables.dropped_columns.map((d) => `${d.table}.${d.column}${d.archived_as ? ` → ${d.archived_as}` : ""}`);
+    logger.error({ err, id: app.id, no, tables }, "표는 새 공개 판에 맞췄는데 공개 표시를 못 했다");
+    throw new HttpError(503, `표는 새 공개 판(${no}판)에 맞췄지만 공개 표시를 하지 못했습니다 — 같은 공개를 다시 하면 이어서 됩니다`
+      + `${did.length ? ` (지운 칸: ${did.join(" · ")})` : ""}(${(err as Error)?.message ?? err})`, { cause: err, body: { tables } });
   }
   if (old && !isBuiltinSource(app.source)) {
     const gone = tablesGoneAtPublish(old.manifest, app.manifest);
@@ -306,21 +313,38 @@ async function tryPublish(id: string, who: Viewer, w: WriteCtx): Promise<{ pub: 
 }
 function publishFailed(saved: string, e: unknown): HttpError {
   const st = (e as { status?: unknown })?.status;
-  return new HttpError(typeof st === "number" ? st : 500, `${saved} — 공개는 하지 못했습니다: ${(e as Error)?.message ?? String(e)}`);
+  return new HttpError(typeof st === "number" ? st : 500, `${saved} — 공개는 하지 못했습니다: ${(e as Error)?.message ?? String(e)}`,
+    { cause: e, body: e instanceof HttpError ? e.body : undefined });
 }
 
 /**
  * #4724 기본 앱의 표는 여러 워크스페이스가 나눠 쓰는 공유 표다 — 늘 지금 있는 칸 전부를 지켜서(store-schema "existing") 깨는 변경은 미뤄도
- *  할 때가 오지 않는다. 그래서 저장 · 되돌리기 전에 이 선언을 **걸어 보고 되돌려서**(dryRun — 한 트랜잭션) 미뤄질 변경이 하나라도 있으면 409.
+ *  할 때가 오지 않는다. 그래서 저장 · 되돌리기 전에 이 선언을 **걸어 보고 되돌려서**(dryRun — 한 트랜잭션) 이번 저장이 새로 만드는 미룸이 있으면 409.
  *  매니페스트를 견주는 따로 된 판정이 아니라 실제 표 보장을 돌리므로 둘이 어긋나지 않는다(격리 리뷰 — 판정기와 표 보장의 규칙이 갈라졌었다).
+ *  · 선언이 그대로인 표는 보지 않고, 바뀐 표도 지금 깔린 선언을 걸어 본 미룸(릴리스가 담았다가 시딩이 미룬 조이기 등 — 이 저장이 만든 것이
+ *    아니다)을 빼고 견준다(격리 리뷰 — 화면만 고친 저장이 남의 미룸으로 409 가 되지 않게).
+ *  · 판정 자체가 못 돌면(잠금 시간 초과 · 연결) 저장은 막지 않는다 — 기본 앱 설치도 표 일은 비치명이다(#4600 · 깔 때 미뤄지면 경고 로그).
  */
-async function assertSharedTablesAccept(appId: string, manifest: unknown): Promise<void> {
-  const specs = tableSpecsOf(manifest);
-  if (!specs.length) return;
-  const dry = emptyTableReport();
-  await ensureAppTables(appId, specs, { schema: appSchemaFor(true), tenantScopedIndexes: true, strict: true, report: dry, dryRun: true });
-  if (dry.deferred.length) {
-    throw new HttpError(409, `기본 앱의 표는 여러 워크스페이스가 나눠 써서 이 변경을 할 수 없습니다: ${dry.deferred.map((d) => d.change).join(" · ")} — `
+async function assertSharedTablesAccept(appId: string, current: unknown, next: unknown): Promise<void> {
+  const before = new Map(tableSpecsOf(current).map((t) => [t.table, JSON.stringify(t)]));
+  const changed = tableSpecsOf(next).filter((t) => before.get(t.table) !== JSON.stringify(t));
+  if (!changed.length) return;
+  const deferredOf = async (specs: ReturnType<typeof tableSpecsOf>): Promise<Set<string>> => {
+    if (!specs.length) return new Set();
+    const r = emptyTableReport();
+    await ensureAppTables(appId, specs, { schema: appSchemaFor(true), tenantScopedIndexes: true, report: r, dryRun: true });
+    return new Set(r.deferred.map((d) => d.change));
+  };
+  let introduced: string[];
+  try {
+    const base = await deferredOf(tableSpecsOf(current).filter((t) => changed.some((c) => c.table === t.table)));
+    introduced = [...(await deferredOf(changed))].filter((c) => !base.has(c));
+  } catch (err) {
+    logger.warn({ err, appId }, "기본 앱 공유 표 판정을 하지 못했다(비치명 — 저장은 계속, 깔 때 미뤄지면 경고 로그)");
+    return;
+  }
+  if (introduced.length) {
+    throw new HttpError(409, `기본 앱의 표는 여러 워크스페이스가 나눠 써서 이 변경을 할 수 없습니다: ${introduced.join(" · ")} — `
       + "칸을 지우거나 이름·종류를 바꾸거나 조이지 말고, 새 칸을 더하는 쪽으로 바꾸세요(검사 · 기본값을 바꾸는 것도 안 됩니다)");
   }
 }
@@ -554,9 +578,10 @@ const appSave: Capability = {
     "기본 앱(빌트인)도 화면·데이터만으로 된 앱이면 고칠 수 있다 — 그러면 이 워크스페이스의 판이 릴리스 원본을 덮고(데이터 표는 그대로), " +
     "원본으로 되돌리려면 app_revert(원본 판). 저장마다 판이 남는다(app_versions · note 에 요지 한 줄). " +
     "앱 화면은 샌드박스라 폼 제출이 막힌다 — 입력은 버튼 click · Enter keydown 으로. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관(공개 판이 아직 쓰는 표는 공개할 때까지 그대로). " +
-    "★ 표 구조(#4724): 공개 앱의 초안에서 새 표·새 칸·풀기는 저장 때 바로 되고, 공개 판이 쓰는 칸을 깨는 변경(drop_columns · 이름 · 종류 바꾸기 · not_null · 검사 · unique 조이기 · 기본값 빼기)은 " +
-    "공개할 때 적용된다(응답 tables.deferred · hint — 그때까지 초안도 바뀌기 전 칸으로 돈다). 이름·종류를 바꾸려면 새 칸을 더해 쓰고 옛 칸은 공개할 때 drop_columns 로 지운다. " +
-    "기본 앱의 표는 여러 워크스페이스가 나눠 써서 깨는 변경이면 409.",
+    "★ 표 구조(#4724): 공개 앱의 초안에서 새 표 · 새 칸 · 풀기(not_null · 검사 빼기)는 저장 때 바로 되고, 공개 판이 쓰는 표를 깨는 변경은 공개할 때 적용된다 — " +
+    "공개 판의 칸을 지우기(drop_columns) · 이름 · 종류 바꾸기 · not_null · unique · 외래키 조이기 · 기본값 더하기/바꾸기/빼기, 그 표의 새 검사 전부(새 칸 것까지), " +
+    "기본값 없는 not_null 새 칸, 같은 값 기본값이 있는 칸의 unique · 외래키(옛 코드의 INSERT 는 모르는 칸을 빼고 넣는다). 목록은 응답 tables.deferred · hint — " +
+    "그때까지 초안도 바뀌기 전 표로 돈다. 이름 · 종류를 바꾸려면 새 칸을 더해 쓰고 옛 칸은 공개할 때 drop_columns 로 지운다. 기본 앱의 표는 여러 워크스페이스가 나눠 써서 깨는 변경이면 409.",
   scope: null,
   input: {
     files: z.array(z.object({ path: z.string(), content: z.string(), encoding: z.enum(["utf8", "base64"]).optional() })),
@@ -617,7 +642,7 @@ const appSave: Capability = {
         //  #4724 초안 = «개인 대상 프로덕션»(상민 2026-10-15) — 공개 판을 쓰는 사람들의 옛 코드가 같은 물리 표를 쓰는 동안, 그 코드를 깨는
         //   표 변경(칸 지우기·이름·형 바꾸기·조이기 …)은 공개할 때까지 미룬다(설치가 공개 판의 칸을 지킨다 — protect). 새 표·새 칸은 바로 생긴다.
         //  기본 앱(여러 워크스페이스가 나눠 쓰는 공유 표)은 늘 지키므로 미뤄도 할 수 없다 — 초안 표식을 걸기 전에 거절한다.
-        if (isBuiltinSource(app0.source)) await assertSharedTablesAccept(id, loaded.manifest);
+        if (isBuiltinSource(app0.source)) await assertSharedTablesAccept(id, app0.manifest, loaded.manifest);
         const claim = published ? await claimDraft(app0, who.userId) : null;
         //  #4600 — 이력이 비어 있는 나만 보는 앱을 처음 고치면 지금 상태를 먼저 판으로 떠 둔다(예약만 된 빈 앱은 떠 둘 것이 없다).
         if (!published && !firstFill && (await store.listAppVersions(id)).length === 0) {
@@ -653,7 +678,7 @@ const appSave: Capability = {
           if (now && now.visibility !== "me") await store.markAppPrivate(id, wctx(user, ctx));
           if (now && !now.made_by) await store.stampAppCreatorIfMissing(id, who.userId);
         }
-        if (published) await settleDraft(id, who.userId);
+        if (published) await settleDraft(id, who.userId, (outcome.tables?.deferred.length ?? 0) > 0);
         if (claim?.displaced) await notifyDraftDisplaced({ id, title: loaded.manifest.title }, claim.displaced, who.userId);
         const { pub, pubError } = input.publish === true ? await tryPublish(id, who, wctx(user, ctx)) : { pub: null, pubError: null };
         await pruneVersions(id).catch((err) => logger.warn({ err, id }, "판 보관 정리 실패(비치명 — 다음 저장이 다시 정리)"));
@@ -803,7 +828,7 @@ const appRevert: Capability = {
 
       //  #4724 — app_save 와 같은 규칙: 공개 판의 칸은 지키고(깨는 변경은 공개할 때) · 기본 앱의 공유 표를 깨는 판으로는 되돌리지 않는다
       //   (판을 떠 두기 전에 — 거절하면 아무것도 남기지 않는다). 원본 판(릴리스)으로 가는 길은 부팅 시딩과 같은 것을 까니 보지 않는다.
-      if (isBuiltinSource(app.source) && !(ver.origin === "builtin" && (await hasPackageDir(builtinAppDir(id))))) await assertSharedTablesAccept(id, ver.manifest);
+      if (isBuiltinSource(app.source) && !(ver.origin === "builtin" && (await hasPackageDir(builtinAppDir(id))))) await assertSharedTablesAccept(id, app.manifest, ver.manifest);
       // 지금 상태가 어느 판 그대로가 아니면 먼저 떠 둔다.
       const cur = app.current_version_no == null ? null : await store.getAppVersion(id, app.current_version_no);
       if (!cur || !isCurrentVersion(app, cur)) await snapshotCurrentVersion(app, who.userId, "되돌리기 직전");
@@ -849,7 +874,7 @@ const appRevert: Capability = {
       await store.setAppCurrentVersion(id, target).catch((err) => logger.warn({ err, id, target }, "되돌린 판 번호 기록 실패(비치명 — is_current 는 해시로 판정)"));
       //  공개 판 그 자체로 되돌렸으면 초안이 없다 — 해시로 견주지 않는다: 못 박아 둔 판(저장 전 상태 · 되돌리기 직전)의 파일은 DB 에서 다시 엮은 것이라
       //   다시 깔면 내용 해시가 원래와 달라질 수 있다(매니페스트 재직렬화). 그 밖의 판은 해시로 맞춘다.
-      if (published) { if (target === published.no) await store.setAppDraftBy(id, null); else await settleDraft(id, who.userId); }
+      if (published) { if (target === published.no) await store.setAppDraftBy(id, null); else await settleDraft(id, who.userId, deferred.length > 0); }
       const { pub, pubError } = input.publish === true ? await tryPublish(id, who, wctx(user, ctx)) : { pub: null, pubError: null };
       await pruneVersions(id).catch((err) => logger.warn({ err, id }, "판 보관 정리 실패(비치명)"));
       return { app: await store.getApp(id), version_no: target, changed: true, published: !!pub?.changed, deferred: pub?.changed ? [] : deferred, pubError };

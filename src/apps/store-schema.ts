@@ -299,9 +299,11 @@ async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel:
   const have = new Set(haveRows.map((r) => String(r.name)));
   for (const h of haveRows) {
     if (want.has(h.name)) continue;
-    //  #4724 지키는 칸의 unique 를 빼면 다른 판의 `ON CONFLICT (칸)` 이 깨진다 — 미룬다(일반 인덱스는 빼도 아무것도 안 깨진다).
+    //  #4724 지키는 칸의 unique 를 빼면 다른 판의 `ON CONFLICT (칸)` 이 깨진다 — 미룬다. 일반 인덱스는 빼도 깨지지 않지만, 공개 판이 아직 쓰는
+    //   칸(이 선언에 없는 지키는 칸)의 것이면 칸과 함께 공개할 때 걷는다(그 칸 조회가 초안 기간에 느려지지 않게).
     const own = (h.cols ?? []).filter((c) => c !== "tenant_id");
     if (h.uniq && own.some((c) => guard.has(c))) { guard.defer(`unique 인덱스 빼기 ${spec.table}(${own.join(",")})`); continue; }
+    if (keptColumn(guard, spec, own)) continue;
     await db.query(`DROP INDEX IF EXISTS ${qi(schema)}.${qi(h.name)}`);
     report?.dropped_indexes.push({ table: spec.table, index: h.name });
   }
@@ -505,14 +507,17 @@ async function desiredChecks(schema: string, physical: string, spec: AppTableSpe
 async function syncColumnRules(c: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, checks: Map<string, { expr: string; column?: string }>, report: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
   const t = spec.table;
   // 검사 — 빠진 것부터 지운다(뒤의 기본값·NOT NULL 이 옛 검사에 걸리지 않게)
-  const haveChecks = new Set((await c.query(
-    `SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = 'c' AND starts_with(conname, $2)`,
-    [rel, APP_CHECK_PREFIX])).rows.map((r) => String(r.conname)));
-  for (const name of haveChecks) {
-    if (checks.has(name)) continue;
+  const haveRows = (await c.query(
+    `SELECT con.conname, array(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) AS cols
+       FROM pg_constraint con WHERE con.conrelid = to_regclass($1) AND con.contype = 'c' AND starts_with(con.conname, $2)`,
+    [rel, APP_CHECK_PREFIX])).rows as Array<{ conname: string; cols: string[] | null }>;
+  const haveChecks = new Set(haveRows.map((r) => String(r.conname)));
+  for (const h of haveRows) {
+    if (checks.has(h.conname)) continue;
     //  #4724 공유 표는 옛 검사를 걷지 않는다 — 새 검사는 아래에서 미뤄지고 영영 오지 않으므로, 걷으면 검사 없는 표가 된다.
-    if (guard.shared) continue;
-    await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(name)}`);
+    //   공개 판이 아직 쓰는 칸인데 이 선언에 없는 칸(이름 바꾸기 · 지우기를 미뤘거나 선언에서 뺀 칸)의 검사도 칸과 함께 공개할 때 걷는다.
+    if (guard.shared || keptColumn(guard, spec, h.cols ?? [])) continue;
+    await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(h.conname)}`);
     report.constraints.push({ table: t, kind: "check", action: "removed" });
   }
   let have = await columnsOf(c, rel);
@@ -523,21 +528,30 @@ async function syncColumnRules(c: Q, schema: string, physical: string, rel: stri
     //  #4724 공개 판이 쓰는 표(guard.any)의 새 칸 — 공개 판의 코드는 이 칸을 몰라 빼고 넣는다. 그 INSERT 가 깨지지 않게
     //   «값이 꼭 있어야 하는데 기본값이 없는» 상태로 만드는 일(기본값 없는 not_null 더하기 · not_null 칸의 기본값 빼기)은 공개할 때로 미룬다.
     const omitted = guard.any;
-    // 기본값 — 같으면 걸지 않는다(sameDefault — 진짜 표는 잠그지 않고 견준다)
+    // 기본값 — 같으면 걸지 않는다(sameDefault — 진짜 표는 잠그지 않고 견준다). effDefault = 이번 맞추기 뒤의 기본값(미루면 그대로).
     const def = await defaultSql(c, col);
+    let effDefault = cur.default;
     if (def !== null) {
-      if (!(await sameDefault(c, schema, cur.type, def, cur.default))) {
+      if (await sameDefault(c, schema, cur.type, def, cur.default)) {
+        // 그대로
+      } else if (omitted && (await defaultBreaksRules(c, rel, col.name, def))) {
+        //  #4724 다른 판의 코드가 빼고 넣는 칸에 이미 unique · 외래키 · 검사가 걸려 있으면, 기본값을 걸면 그 코드의 INSERT 가 같은 값을 넣어
+        //   겹치거나 · 가리킬 행이 없거나 · 검사에 걸린다 — 공개할 때(격리 리뷰: 규칙을 먼저 걸고 기본값을 다음 저장에서 더하는 순서).
+        guard.defer(`기본값 ${cur.default === null ? "더하기" : "바꾸기"} ${t}.${col.name}`);
+      } else {
         await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} SET DEFAULT ${def}`);
         report.constraints.push({ table: t, column: col.name, kind: "default", action: cur.default === null ? "added" : "changed" });
+        effDefault = def;
       }
     } else if (cur.default !== null && omitted && (cur.notNull || col.not_null)) {
       guard.defer(`기본값 빼기 ${t}.${col.name}`);
     } else if (cur.default !== null) {
       await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} DROP DEFAULT`);
       report.constraints.push({ table: t, column: col.name, kind: "default", action: "removed" });
+      effDefault = null;
     }
     // NOT NULL
-    if (col.not_null && !cur.notNull && omitted && def === null && cur.default === null) {
+    if (col.not_null && !cur.notNull && omitted && effDefault === null) {
       guard.defer(`not_null 더하기 ${t}.${col.name}`);
     } else if (col.not_null && !cur.notNull) {
       const nulls = Number((await c.query(`SELECT count(*)::bigint AS n FROM ${rel} WHERE ${qi(col.name)} IS NULL`)).rows[0]?.n ?? 0);
@@ -599,6 +613,22 @@ async function guardedColumnRules(c: Q, schema: string, rel: string, t: string, 
   }
 }
 
+/** #4724 지키는 칸인데 이 선언에 없는 칸(이름 바꾸기 · 지우기를 미뤘거나 선언에서만 뺀 칸)이 끼었나 — 공개 판의 코드가 아직 쓰므로 그 칸에
+ *  걸린 검사 · 외래키 · 인덱스는 칸과 함께 공개할 때 걷는다(격리 리뷰 — 초안 기간에 무결성 · 조회 속도가 약해졌다). 시스템 칸은 보지 않는다. */
+function keptColumn(guard: Guard, spec: AppTableSpec, cols: readonly string[]): boolean {
+  return cols.some((x) => !SYSTEM_COLUMNS.has(x) && guard.has(x) && !spec.columns.some((col) => col.name === x));
+}
+
+/** 이 칸에 기본값 def 를 걸면 칸을 빼고 넣는 INSERT 가 지금 걸린 규칙에 걸릴 수 있나 — 외래키 · 검사가 있거나, unique 인데 같은 값을 거듭 넣는 기본값. */
+async function defaultBreaksRules(c: Q, rel: string, col: string, def: string): Promise<boolean> {
+  const r = (await c.query(
+    `SELECT EXISTS (SELECT 1 FROM pg_index x JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = ANY (x.indkey)
+                     WHERE x.indrelid = to_regclass($1) AND x.indisunique AND NOT x.indisprimary AND a.attname = $2) AS uniq,
+            EXISTS (SELECT 1 FROM pg_constraint con JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+                     WHERE con.conrelid = to_regclass($1) AND con.contype IN ('f', 'c') AND a.attname = $2) AS other`, [rel, col])).rows[0];
+  return r?.other === true || (r?.uniq === true && !UNIQUE_SAFE_DEFAULTS.has(def));
+}
+
 /**
  * 이 기본값 식(def)을 지금 칸(형 type · 기본값 cur)에 걸면 지금과 같은가 — DB 가 정규화한 꼴로 견준다('5'::integer 는 5 로 저장된다).
  *  #4724 진짜 표에 걸어 보면(되돌려도) 거는 순간 표를 통째로 잠그려고 그 표를 읽는 사람 뒤에 줄을 선다 — 같은 스키마에 칸 하나짜리
@@ -634,13 +664,17 @@ async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTab
     const onDelete = col.references.on_delete ?? "no action";
     want.set(appConstraintName(APP_FK_PREFIX, schema, physical, col.name, target, onDelete), { col: col.name, target, onDelete });
   }
-  const have = new Set((await c.query(
-    `SELECT conname FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = 'f' AND starts_with(conname, $2)`,
-    [rel, APP_FK_PREFIX])).rows.map((r) => String(r.conname)));
-  for (const name of have) {
+  const haveRows = (await c.query(
+    `SELECT con.conname, array(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) AS cols
+       FROM pg_constraint con WHERE con.conrelid = to_regclass($1) AND con.contype = 'f' AND starts_with(con.conname, $2)`,
+    [rel, APP_FK_PREFIX])).rows as Array<{ conname: string; cols: string[] | null }>;
+  const have = new Set(haveRows.map((r) => String(r.conname)));
+  for (const h of haveRows) {
+    const name = h.conname;
     if (want.has(name)) continue;
-    //  #4724 공유 표는 옛 외래키를 걷지 않는다 — 새 외래키는 미뤄지고 영영 오지 않으므로.
-    if (guard.shared) continue;
+    //  #4724 공유 표는 옛 외래키를 걷지 않는다 — 새 외래키는 미뤄지고 영영 오지 않으므로. 공개 판이 아직 쓰는 칸(이 선언에 없는 지키는 칸)의
+    //   외래키도 칸과 함께 공개할 때 걷는다.
+    if (guard.shared || keptColumn(guard, spec, h.cols ?? [])) continue;
     await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(name)}`);
     report.constraints.push({ table: spec.table, kind: "foreign_key", action: "removed" });
   }

@@ -15,7 +15,8 @@
 //      지킴 없이 다시 보장(공개하기)하면 미룬 것이 다 된다 · 공유 표는 있는 칸 전부를 지킨다 · 초안에서만 생긴 칸은 바로 바뀐다 ·
 //      공개 판이 쓰는 표의 새 칸에 기본값 없는 not_null · not_null 칸의 기본값 빼기는 미룬다(옛 코드 INSERT 가 새 칸을 빼고 넣는다) ·
 //      D9 미룬 칸(이름 · 형 바꾸기)에 걸린 규칙도 미룸 · D10 같은 값 기본값 새 칸의 unique · 외래키 미룸 · D11 한 트랜잭션 공개(별도 DDL 연결) ·
-//      D12 공유 표는 옛 검사를 걷지 않음 · D13 공유 표는 지킬 칸 목록을 줘도 있는 칸 전부를 지킴
+//      D12 공유 표는 옛 검사를 걷지 않음 · D13 공유 표는 지킬 칸 목록을 줘도 있는 칸 전부를 지킴 ·
+//      D14 규칙을 먼저 건 새 칸에 나중에 더한 기본값은 미룸 · D15 미룬 칸의 검사 · 외래키 · 일반 인덱스는 초안 동안 그대로
 //  T12 바뀌는 것 없는 표 보장은 표를 통째로 잠그지 않는다(읽는 사람이 있어도 기다리지 않는다)
 //  T10 다른 트랜잭션이 표를 잡고 있으면 표 보장은 잠금 상한(LIVELY_APP_DDL_LOCK_MS) 안에 실패한다 — 멎지 않는다 · 풀리면 된다
 //  T9 형 바꾸기 + 검사 — 옛 형을 전제로 한 검사(length(code) > 0)가 걸린 칸도 바꾼다(검사를 먼저 떼고 새 검사를 건다) ·
@@ -535,6 +536,45 @@ try {
     chk("T11 D12 공유 표 — enum 넓히기는 미루고 옛 검사를 걷지 않는다(검사 없는 표가 되지 않게)",
       before12.length === 1 && JSON.stringify(after12) === JSON.stringify(before12) && rep12.deferred.some((d) => /^검사 더하기 kinds\.k: /.test(d.change)),
       JSON.stringify({ before12, after12, deferred: rep12.deferred }));
+    // D14 — 순서: 새 칸에 unique · 외래키를 먼저 걸고(기본값 없음 — 바로) 다음 저장에서 기본값을 더하면 그 기본값을 미룬다(격리 리뷰 —
+    //  옛 코드의 INSERT 가 같은 값을 넣어 겹치거나 가리킬 행이 없다) · uuid 기본값은 unique 칸이라도 바로
+    const ePub = T("ord", [{ name: "name", type: "text" }]);
+    const eProt = declaredColumnsOf({ data: { tables: [acc, ePub].map((t) => ({ name: t.table, columns: t.columns })) } });
+    await ensure([acc, ePub]);
+    const e1 = await ensure([acc, T("ord", [{ name: "name", type: "text" }, { name: "tok", type: "text", unique: true },
+      { name: "ref", type: "bigint", references: { table: "acc" } }, { name: "uid", type: "uuid", unique: true }])], { protect: eProt });
+    const e2 = await ensure([acc, T("ord", [{ name: "name", type: "text" }, { name: "tok", type: "text", unique: true, default: "x" },
+      { name: "ref", type: "bigint", references: { table: "acc" }, default: 1 }, { name: "uid", type: "uuid", unique: true, default_expr: "gen_random_uuid()" }])], { protect: eProt });
+    const old14 = await errOf(run("INSERT INTO ord(name) VALUES ('a'), ('b')", [], { tables: ["acc", "ord"] }));
+    const dOrd = async (col) => (await su.query(`SELECT pg_get_expr(d.adbin, d.adrelid) AS e FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+      WHERE d.adrelid = to_regclass($1) AND a.attname = $2`, [`"${SA}"."crm__ord"`, col])).rows[0]?.e ?? null;
+    chk("T11 D14 unique · 외래키를 먼저 건 새 칸에 나중 저장이 기본값을 더하면 미룬다 · uuid 기본값은 바로 · 옛 코드 두 번 INSERT 통과",
+      e1.deferred.length === 0 && (await uniqIxOf("crm__ord")).includes("tok")
+        && e2.deferred.map((d) => d.change).sort().join(" | ") === "기본값 더하기 ord.ref | 기본값 더하기 ord.tok"
+        && (await dOrd("tok")) === null && (await dOrd("ref")) === null && (await dOrd("uid")) === "gen_random_uuid()" && old14 === null,
+      JSON.stringify({ e1: e1.deferred, e2: e2.deferred, tok: await dOrd("tok"), uid: await dOrd("uid"), old14: old14?.message }));
+
+    // D15 — 이름 바꾸기 · 지우기를 미룬 칸(공개 판이 아직 쓴다)의 검사 · 외래키 · 일반 인덱스는 칸과 함께 공개할 때 걷는다(격리 리뷰 — 초안 기간에
+    //  무결성 · 조회 속도가 약해졌다) · 공개하면 새 이름 쪽으로 다 옮겨 간다
+    const plainIx = async (physical) => (await su.query(`SELECT array_to_string(array(SELECT a.attname::text FROM unnest(x.indkey) k JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k), ',') AS c
+      FROM pg_index x WHERE x.indrelid = to_regclass($1) AND NOT x.indisunique AND NOT x.indisprimary`, [`"${SA}"."${physical}"`])).rows.map((r) => r.c).sort();
+    const fPub = T("keep", [{ name: "acc_id", type: "bigint", references: { table: "acc" } }, { name: "lvl", type: "text", values: ["a", "b"] },
+      { name: "nick", type: "text" }, { name: "old", type: "int4", check: "old >= 0" }], { indexes: [{ columns: ["nick"] }] });
+    const fDraft = T("keep", [{ name: "account_id", type: "bigint", references: { table: "acc" }, renamed_from: "acc_id" },
+      { name: "level", type: "text", values: ["a", "b"], renamed_from: "lvl" }, { name: "handle", type: "text", renamed_from: "nick" }],
+      { indexes: [{ columns: ["handle"] }], drop_columns: ["old"] });
+    await ensure([acc, fPub]);
+    const shape15 = async () => ({ fk: (await conDefs("crm__keep", "f")).length, ck: (await conDefs("crm__keep", "c")).length, ix: (await plainIx("crm__keep")).join("|") });
+    const before15 = await shape15();
+    await ensure([acc, fDraft], { protect: declaredColumnsOf({ data: { tables: [acc, fPub].map((t) => ({ name: t.table, columns: t.columns })) } }) });
+    const draft15 = await shape15();
+    const pub15 = await errOf(ensure([acc, fDraft], { atomic: true }));
+    const after15 = await shape15();
+    chk("T11 D15 미룬 칸의 검사 · 외래키 · 일반 인덱스는 초안 동안 그대로 · 공개하면 새 이름 쪽으로(옛 칸 검사는 칸과 함께 사라짐)",
+      before15.fk === 1 && before15.ck === 2 && before15.ix === "acc_id|nick" && JSON.stringify(draft15) === JSON.stringify(before15)
+        && pub15 === null && after15.fk === 1 && after15.ck === 1 && after15.ix === "account_id|handle",
+      JSON.stringify({ before15, draft15, pub15: pub15?.message, after15 }));
+
     // D13 — 공유 표는 지킬 칸 목록(Map)을 따로 줘도 지금 있는 칸 전부를 지킨다(초안이 걸린 기본 앱의 지연 복구가 공개 판의 칸만 주던 자리 — 격리 리뷰)
     await ensureAppTables("crmd", [{ table: "marks", columns: [{ name: "url", type: "text" }, { name: "hits", type: "text" }] }], { schema: SA, strict: true, tenantScopedIndexes: true });
     const rep13 = emptyTableReport();

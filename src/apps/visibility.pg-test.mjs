@@ -19,7 +19,8 @@
 //  B21 관리자 설치가 남의 나만 보는 앱을 못 덮음 · 초안이 걸린 공개 앱은 「나만」 불가(격리 리뷰 2-1 · 2-3)
 //  B22 #4724 초안 = 개인 대상 프로덕션 — 공개 판이 쓰는 칸을 깨는 표 변경(칸 지우기 · 조이기 …)은 초안 저장 때 미루고 공개할 때 적용 ·
 //      새 칸은 바로 · 공개 때 데이터가 어긋나면 409 · 어느 표도 안 바뀜(한 트랜잭션) · 되돌리기도 같은 규칙 · 나만 보는 앱은 바로 ·
-//      publish:true 의 이름 바꾸기 + unique(G8) · 공개 단계 409 면 «초안으로 저장했다» 안내(G9)
+//      publish:true 의 이름 바꾸기 + unique(G8) · 공개 단계 409 면 «초안으로 저장했다» 안내(G9) · 풀었다가 같은 파일로 되돌린 저장은 초안으로 남고
+//      공개 판 사용자의 자유 SQL 은 막히지 않는다(G10)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -465,6 +466,33 @@ try {
       g9?.status === 409 && /판을 초안으로 저장했습니다/.test(g9?.message ?? "") && /공개는 하지 못했습니다/.test(g9?.message ?? "") && /length\(headline\) > 5/.test(g9?.message ?? "")
         && r9.draft_by === "pgt-alice" && r9.published_version_no === pubBefore9 && (await ui(GID, alice)).includes("draft-C") && (await ui(GID, bob)).includes("pub-H"),
       JSON.stringify({ g9: [g9?.status, g9?.message], draft: r9.draft_by, pub: [r9.published_version_no, pubBefore9] }));
+  }
+  // G10 초안에서 not_null 을 풀고(바로) 빈 행이 생긴 뒤 공개 판과 같은 파일로 다시 저장 — 다시 조이기가 미뤄져 있으므로 초안으로 남는다 ·
+  //  그사이 공개 판 사용자의 자유 SQL 은 막히지 않는다(지연 맞추기는 조이지 않는다) · 공개하면 409(빈 행) → 채우면 된다(격리 리뷰 재검토 (a))
+  {
+    const G2 = "guard2-app";
+    const man2 = (cols) => JSON.stringify({ id: G2, title: "가드2", version: "0.1.0", permissions: { scopes: [], tools: ["store_insert", "store_query", "store_sql"] },
+      data: { tables: [{ name: "items", columns: cols }] }, ui: { pages: [{ key: "main", title: "가드2", entry: "ui/index.html" }] } });
+    const files2 = (cols, html) => [{ path: "lively-app.json", content: man2(cols) }, { path: "ui/index.html", content: html }];
+    const PUB = [{ name: "title", type: "text", not_null: true }];
+    const titleNN = async () => (await q(`SELECT attnotnull AS nn FROM pg_attribute WHERE attrelid = to_regclass('app.guard2_app__items') AND attname = 'title'`))[0]?.nn === true;
+    await call("app_save", { files: files2(PUB, "<p>p</p>") }, alice);
+    await call("app_visibility_set", { app_id: G2, visibility: "all" }, alice);
+    await call("me_app_grant", { app_id: G2 }, bob);
+    const bob2 = { ...bob, appId: G2, scopes: [] };
+    await call("app_save", { files: files2([{ name: "title", type: "text" }], "<p>d</p>") }, alice);     // not_null 풀기 — 바로
+    const relaxed = !(await titleNN());
+    await q(`INSERT INTO app.guard2_app__items(title) VALUES (NULL)`);                                    // 누구든 빈 행을 남겼다
+    const g10 = await call("app_save", { files: files2(PUB, "<p>p</p>") }, alice);                        // 공개 판과 같은 파일
+    const r10 = await row(G2);
+    const sql10 = await status(call("store_sql", { sql: "SELECT count(*)::int AS n FROM items" }, bob2, { source: "app-ui" }));
+    const pub10 = await errOf(call("app_visibility_set", { app_id: G2, visibility: "all" }, alice));
+    await q(`UPDATE app.guard2_app__items SET title = '채움' WHERE title IS NULL`);
+    const pub10b = await call("app_visibility_set", { app_id: G2, visibility: "all" }, alice);
+    chk("B22 G10 풀었다가 공개 판과 같은 파일로 다시 저장 — 다시 조이기가 미뤄져 초안으로 남는다 · 공개 판 사용자의 자유 SQL 은 된다 · 공개는 빈 행이면 409 → 채우면 not_null",
+      relaxed && g10.state === "draft" && (g10.tables?.deferred ?? []).some((d) => d.change === "not_null 더하기 items.title") && r10.draft_by === "pgt-alice"
+        && sql10 === 200 && pub10?.status === 409 && /1개/.test(pub10?.message ?? "") && pub10b.changed === true && (await titleNN()) && (await row(G2)).draft_by === null,
+      JSON.stringify({ relaxed, g10: [g10.state, g10.tables?.deferred], draft: r10.draft_by, sql10, pub10: [pub10?.status, pub10?.message], pub10b: pub10b.changed }));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

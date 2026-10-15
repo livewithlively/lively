@@ -17,7 +17,7 @@ import { getApp, type OrgApp } from "../org/store/apps.js";
 import { liveManifests, viewAppFor } from "../apps/app-view.js";
 import type { Viewer } from "../apps/visibility.js";
 import { qualifiedAppTable, assertIdent, isBuiltinSource, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
-import { appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, type AppTableSpec, type ProtectColumns } from "../apps/store-schema.js";
+import { appSchemaFor, ensureAppTables, tableSpecsOf, type AppTableSpec, type ProtectColumns } from "../apps/store-schema.js";
 import { logger } from "../log.js";
 import { requireAttachedApp, publishAppEventToSession } from "../apps/session-apps.js";
 import { planAppSql, APP_SQL_MAX_LEN, APP_SQL_MAX_PARAMS, type AppSqlPlan } from "../apps/app-sql.js";
@@ -66,12 +66,13 @@ function unionSpecs(manifests: unknown[]): AppTableSpec[] {
   for (const m of manifests) for (const t of tableSpecsOf(m)) if (!out.some((d) => d.table === t.table)) out.push(t);
   return out;
 }
-/** 물리 표 전부의 명세(설치된 판 ∪ 공개 판) + 지킬 칸 — 초안이 걸린 공개 앱이면 공개 판이 선언한 칸(#4724: 표 보장이 그 칸을 깨지 않는다).
- *  초안이 걸렸는데 공개 판 행을 못 읽었으면(liveManifests 가 설치된 판만 준다) 지금 있는 칸 전부를 지킨다 — 모르면 깨지 않는 쪽으로. */
-async function liveSpecs(app: OrgApp): Promise<{ specs: AppTableSpec[]; protect?: ProtectColumns }> {
-  const ms = await liveManifests(app);
-  const drafted = app.visibility === "all" && !!app.draft_by && app.published_version_no != null;
-  return { specs: unionSpecs(ms), protect: ms.length > 1 ? declaredColumnsOf(ms[1]) : drafted ? "existing" : undefined };
+/**
+ * 물리 표 전부의 명세(설치된 판 ∪ 공개 판) + 지킬 칸. #4724 — 지연 복구 · 자유 SQL 의 역할 준비는 사람의 호출 길에서 도는 «모자란 것 채우기» 다:
+ *  늘 지금 있는 칸 전부를 지켜(더하기 · 풀기만) 칸을 지우거나 조이는 일은 하지 않는다. 그 일은 설치 · 「공개하기」 의 몫이고, 여기서 하면
+ *  아무 사용자의 호출이 남의 데이터 때문에 409 로 막힌다(격리 리뷰 — 초안 표식이 걷힌 뒤 남은 조이기를 첫 store_sql 이 하려다 모두가 막혔다).
+ */
+async function liveSpecs(app: OrgApp): Promise<{ specs: AppTableSpec[]; protect: ProtectColumns }> {
+  return { specs: unionSpecs(await liveManifests(app)), protect: "existing" };
 }
 const viewerOf = (user: LivelyUser | undefined): Viewer => ({ userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [] });
 /** #4667 이 사람이 쓰는 판의 표 명세 — 공개 판을 보는 사람은 공개 판이 선언한 표, 초안을 만든 사람은 초안의 표(격리 리뷰 B3). */

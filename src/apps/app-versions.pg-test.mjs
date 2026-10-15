@@ -10,6 +10,7 @@
 //  P6 app_revert 1 → 릴리스 원본 재설치 · 표식 걷힘 · 「되돌리기 직전」 판   P7 app_revert 2 → 다시 덮어쓰기   P8 보관 20 · 원본 유지
 //  P9 셸 렌더러 빌트인 덮어쓰기 403   P10 덮어쓰기에서 새로 선언한 표는 이름 검증을 지난다(63자 초과 400)
 //  P11 #4724 기본 앱 공유 표 — 칸 지우기 · 형 바꾸기 저장 · 깨는 판으로 되돌리기 409 · 새 칸은 된다 · 검사 · 기본값도 409(걸어 보고 되돌린 판정 · 흔적 없음)
+//  P12 릴리스가 남긴 미룸이 있어도 화면만 고친 저장은 된다 · 새로 깨는 변경만 409
 import pg from "pg";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -185,6 +186,26 @@ try {
       shared(eCheck) && /검사 더하기 notes\.score: score >= 0/.test(eCheck.message) && shared(eDefault) && /기본값 더하기 notes\.text/.test(eDefault.message)
         && (await cols()) === c0 && checksNow === 0 && (await versions()).length === n0,
       JSON.stringify({ eCheck: [eCheck?.status, eCheck?.message], eDefault: [eDefault?.status, eDefault?.message], cols: await cols(), c0, checksNow }));
+  }
+
+  // P12 — #4724 릴리스가 공유 표를 조이는 선언을 담았다가 시딩이 미룬 뒤에도 화면만 고친 저장은 된다(이 저장이 새로 만드는 미룸만 본다 — 격리
+  //  리뷰 재검토 (b)) · 거기에 새로 깨는 변경을 더하면 그것만 409
+  {
+    const errOf = async (p) => { try { await p; return null; } catch (err) { return err; } };
+    const origin = (await versions()).find((v) => v.origin === "builtin");
+    await cap("app_revert").handler({ app_id: "memo2", version_no: origin.version_no }, bob, ctx);            // 덮어쓰기를 걷어 릴리스 그대로
+    const tight = [{ name: "notes", columns: [{ name: "text", type: "text", not_null: true, default: "빈 글" }, { name: "tag", type: "text", unique: true }] }];
+    writeFileSync(path.join(APP, "lively-app.json"), manifest("1.2.0", tight));
+    await seedBuiltinApps(ROOT);                                                                                // 릴리스 1.2.0 — 조이기는 미뤄진다(경고 로그)
+    const a12 = await app();
+    const nn12 = (await q(`SELECT attnotnull AS nn FROM pg_attribute WHERE attrelid = to_regclass('app.memo2__notes') AND attname = 'text'`))[0]?.nn === true;
+    const save = (tables, html) => cap("app_save").handler({ files: [{ path: "lively-app.json", content: manifest("1.2.0", tables) }, { path: "ui/index.html", content: html }] }, bob, ctx);
+    const s12 = await errOf(save(tight, "<p>화면만 고침</p>"));
+    const s12b = await errOf(save([{ name: "notes", columns: [tight[0].columns[0], { name: "tag", type: "int4", unique: true }] }], "<p>형 바꿈</p>"));
+    chk("P12 릴리스가 남긴 미룸이 있어도 화면만 고친 저장은 된다 · 새로 깨는 변경(형 바꾸기)만 409 에 실린다",
+      a12.builtin_version === "1.2.0" && !nn12 && s12 === null && (await ui()).includes("화면만 고침")
+        && s12b?.status === 409 && /형 바꾸기 notes\.tag/.test(s12b?.message ?? "") && !/not_null 더하기|기본값 더하기/.test(s12b?.message ?? ""),
+      JSON.stringify({ v: a12.builtin_version, nn12, s12: s12?.message, s12b: [s12b?.status, s12b?.message] }));
   }
 } catch (e) { fail++; console.error("FAIL 예외 —", e); }
 finally {
