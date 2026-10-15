@@ -91,6 +91,24 @@ export function appViewFor(app: AppVisState, who: Viewer): AppView {
 }
 
 /**
+ * 앱 주소의 두 판(#4480 v2-1 · 설계 §13-5)에서 이 사람이 보는 판 — 공개 주소(`<앱>-<워크스페이스>`)는 **모두에게 공개 판**(초안을 고친 사람에게도),
+ *  초안 주소(`…-draft`)는 설치된 상태이되 공개 앱에 남의 초안이 걸려 있으면 없는 판('none' — 그 초안은 고친 사람만 본다).
+ *  주소를 나눈 까닭이 «초안 코드가 남긴 서비스 워커 · 저장소가 공개 판 주소에 남지 않게» 라서, 초안 코드는 초안 주소에서만 돈다.
+ *  나만 보는 앱은 판이 하나(설치된 상태)라 두 주소 모두 그 판이다. 못 보는 앱은 'none'.
+ */
+export function addressViewFor(app: AppVisState, who: Viewer, variant: "pub" | "draft"): AppView {
+  if (!canSeeApp(app, who)) return "none";
+  const pending = appVisibilityOf(app) === "all" && !!app.draft_by && app.published_version_no != null;
+  if (variant === "draft") return pending && app.draft_by !== who.userId ? "none" : "installed";
+  return pending ? "published" : "installed";
+}
+
+/** 주소 종류를 정하지 않고 열 때 고를 주소 — 이 사람이 고친 초안이 걸려 있으면 초안 주소, 아니면 공개 주소(라이블리 화면이 이 사람에게 보이는 판과 같다 · appViewFor). */
+export function addressVariantFor(app: AppVisState, who: Viewer): "pub" | "draft" {
+  return appVisibilityOf(app) === "all" && !!app.draft_by && app.draft_by === who.userId && app.published_version_no != null ? "draft" : "pub";
+}
+
+/**
  * 공개 앱에 설치를 마친 뒤의 초안 표식(순수) — 설치된 내용이 공개 판과 같으면 초안 없음(null), 다르면 그 일을 한 사람의 초안.
  *  나만 보는 앱엔 초안 표식이 없다(앱 전체가 책임자의 것이다).
  */

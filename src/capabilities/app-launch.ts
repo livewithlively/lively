@@ -5,8 +5,9 @@
 //   앱이 앱을 여는 길이 된다)과 정적 토큰(회수 불가 — 누구인지가 사람이 아니다)은 거부한다. 에이전트 구성원도 거부.
 //  무엇을: 앱이 있고(active·enabled) 이 사람에게 보이고(공개 범위 — apps/visibility.ts) 화면이 있을 때, 그 앱 주소 하나에 묶인
 //   60초짜리 코드. 자리 둘 — embed(라이블리 안 iframe) · top(직접 접속, 앞단 상태값 state 필수). 교환은 앱 주소 앞단이 한다
-//   (apps/app-front-routes.ts redeem). 초안 판(draft)은 «만든 사람만 연다» 가 맞는데, 서버가 기록한 «만든 사람» 이
-//   v2-15(#4667)에서 생긴다 — 그 전에는 409 draft_unavailable 로 닫아 둔다(매니페스트 studio.made_by 는 앱 코드라 위조 가능).
+//   (apps/app-front-routes.ts redeem). 판(variant): 공개 주소는 모두에게 공개 판, 초안 주소는 그 초안을 고친 사람에게만(#4667 서버 기록
+//   draft_by · 판정 apps/visibility.ts addressViewFor — 남의 초안 주소는 없는 판과 같은 404). 판을 안 정하면 이 사람이 라이블리 화면에서
+//   보는 판의 주소를 고른다(고친 초안이 걸려 있으면 초안 주소 — addressVariantFor).
 //  꺼짐: 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 409 app_domain_off — 화면은 종전 srcdoc 으로 띄운다(무회귀).
 //  지난 경유 주소: top 의 exp(앞단이 #/app-open 주소에 붙인 만료 · 초)가 지났으면 410 app_open_expired — 화면은 앱으로 가지 않고
 //   첫 화면으로 간다(되살린 탭 · 방문 기록으로 같은 주소에 다시 들어온 사람 — 2026-10-14 사파리 실측). 서버 시계로 본다.
@@ -16,7 +17,8 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import * as store from "../org/store/apps.js";
 import { getMember } from "../org/store.js";
-import { canSeeApp } from "../apps/visibility.js";
+import { addressVariantFor, addressViewFor, canSeeApp } from "../apps/visibility.js";
+import { uiPagesFromFiles, type AppFile } from "../apps/app-versions.js";
 import { appDomainFor, appHost, appOrigin, parseAppPath, safeAppNext, type AppVariant } from "../apps/app-address.js";
 import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunchMode, type MintLaunchInput } from "../apps/app-launch-store.js";
 import type { OrgMember } from "../org/store/members.js";
@@ -41,6 +43,8 @@ export interface LaunchDeps {
   getMember: (id: string) => Promise<Pick<OrgMember, "id" | "kind" | "state"> | null>;
   getApp: (id: string) => Promise<store.OrgApp | null>;
   listUiAssets: (id: string) => Promise<Array<{ page_key: string }>>;
+  /** #4667 공개 판 행 — 공개 주소로 여는데 남의 초안이 걸려 있으면 화면 키를 공개 판에서 본다. 없으면(시험 등) 설치된 화면으로 본다. */
+  getAppVersion?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; files: unknown[] } | null>;
   mint: (i: MintLaunchInput) => Promise<{ code: string }>;
   now: () => number;
 }
@@ -50,6 +54,7 @@ const liveDeps: LaunchDeps = {
   getMember: (id) => getMember(id),
   getApp: (id) => store.getApp(id),
   listUiAssets: (id) => store.listUiAssets(id),
+  getAppVersion: (id, no) => store.getAppVersion(id, no),
   mint: (i) => mintAppLaunchCode(i),
   now: () => Date.now(),
 };
@@ -70,9 +75,7 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   if (!managedMode(d.env) || !domain || !tenant) throw deny(409, "app_domain_off", "이 워크스페이스에서는 앱 주소가 꺼져 있습니다");
 
   const mode: AppLaunchMode = input.mode === "top" ? "top" : "embed";
-  const variant: AppVariant = input.variant === "draft" ? "draft" : "pub";
-  //  v2-15(#4667) 가 «만든 사람» 을 서버에 기록하면 그 사람에게만 연다. 그 전에는 닫아 둔다.
-  if (variant === "draft") throw deny(409, "draft_unavailable", "초안 판 주소는 아직 열리지 않습니다 — 공개 판 주소로 열어 주세요");
+  const asked: AppVariant | null = input.variant === "draft" ? "draft" : input.variant === "pub" ? "pub" : null;
   const next = safeAppNext(input.next);
   if (next === null) throw deny(400, "bad_next", "next 는 앱 주소 안의 상대 경로(/ 로 시작)여야 합니다");
   const state = typeof input.state === "string" ? input.state : "";
@@ -89,9 +92,16 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
   const app = await d.getApp(appId);
   if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
   //  #4667 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404 — 있는지조차 알리지 않는다).
-  if (!canSeeApp(app, { userId: memberId, scopes: user?.scopes })) throw new HttpError(404, `앱 없음: ${appId}`);
+  const viewer = { userId: memberId, scopes: user?.scopes };
+  if (!canSeeApp(app, viewer)) throw new HttpError(404, `앱 없음: ${appId}`);
   if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
-  const pages = await d.listUiAssets(appId);
+  //  판 — 정하지 않았으면 이 사람이 보는 판의 주소. 남의 초안이 걸린 앱의 초안 주소는 없는 판과 같다(그 초안은 고친 사람만 본다).
+  const variant: AppVariant = asked ?? addressVariantFor(app, viewer);
+  const view = addressViewFor(app, viewer, variant);
+  if (view === "none") throw new HttpError(404, `앱 '${appId}' 에 열 수 있는 초안 판이 없습니다`);
+  //  화면 키는 그 판의 화면에서 — 공개 판을 여는데 남의 초안이 깔려 있으면 설치된 화면이 아니라 공개 판 행의 화면을 본다.
+  const pub = view === "published" && d.getAppVersion ? await d.getAppVersion(appId, app.published_version_no as number).catch(() => null) : null;
+  const pages = pub ? uiPagesFromFiles(pub.manifest, pub.files as AppFile[]) : await d.listUiAssets(appId);
   if (pages.length === 0) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);
   const path = parseAppPath(next);
   const pageKey = path?.page ?? pages[0].page_key;
