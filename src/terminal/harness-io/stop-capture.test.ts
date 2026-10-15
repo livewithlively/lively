@@ -145,6 +145,31 @@ test("Q5 codex 실행 승인 — 대상($ 줄)·선택지(단축키 꼬리 제�
   ]);
 });
 
+test("Q8 전사(대화)에 번호 목록이 남아 있어도 질문은 화면 맨 아래 대화상자에서만 읽는다(격리 리뷰 재현)", () => {
+  //  실측 승인 화면의 대화상자 위(전사)에 AI 가 쓴 번호 목록을 얹는다 — 승인 직전 AI 가 계획을 번호로 적는 일은 흔하다.
+  const raw = fx("claude-2.1.300-permission.ansi");
+  const lines = raw.split("\n");
+  const at = lines.findIndex((l) => stripAnsi(l).startsWith("⏺ Creating empty test file"));
+  assert.ok(at > 0, "[배선] 픽스처에서 끼울 자리를 찾았다");
+  lines.splice(at, 0, "⏺ 다음 순서로 하겠습니다:", "  1. 빈 파일을 만든다", "  2. 권한을 확인한다", "  3. 결과를 알린다", "");
+  const withList = questionFromScreen("claude", captureOf(lines.join("\n")));
+  const plain = questionFromScreen("claude", cap("claude-2.1.300-permission.ansi"));
+  assert.ok(plain && withList);
+  assert.deepEqual(withList, plain, "전사의 번호 목록이 질문·선택지·종류를 바꾸지 않는다");
+  assert.equal(withList!.kind, "permission");
+});
+test("Q8b 커서가 «Chat about this»(선택지 사이 가로줄 아래)에 있어도 같은 질문으로 읽는다 — 그 가로줄은 대화상자 경계가 아니다", () => {
+  const raw = fx("claude-2.1.300-ask-one.ansi").replace("❯ 1. 빨강", "  1. 빨강").replace("  5. Chat about this", "❯ 5. Chat about this");
+  assert.notEqual(raw, fx("claude-2.1.300-ask-one.ansi"), "[배선] 커서를 옮겼다");
+  const q = questionFromScreen("claude", captureOf(raw));
+  assert.deepEqual(q?.items[0].options.map((o) => o.label), ["빨강", "파랑", "초록"]);
+  assert.equal(q?.items[0].text, "가장 좋아하는 색은?");
+});
+test("D8c 머리 글 없는 대화상자(가로줄 바로 아래가 «❯ 1.»)를 쓰다 만 글로 읽지 않는다", () => {
+  const c = captureOf(["● 계획을 세웠습니다.", "────────────────────────────────────────", "❯ 1. 이대로 진행", "  2. 고쳐서 진행", "────────────────────────────────────────", "Enter to select · ↑/↓ to navigate · Esc to cancel"].join("\n"));
+  assert.equal(draftFromScreen("claude", c), null);
+  assert.equal(draftFromScreen("antigravity", c), null);
+});
 test("Q6 입력칸만 있는 화면 → 질문 없음 · 묻는 화면 아님", () => {
   for (const [h, f] of [["claude", "claude-2.1.300-draft.ansi"], ["claude", "claude-2.1.300-empty.ansi"], ["codex", "codex-0.162.1-draft.ansi"], ["antigravity", "agy-1.3.5-draft.ansi"]] as const) {
     const c = cap(f);

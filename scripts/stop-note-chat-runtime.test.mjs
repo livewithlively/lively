@@ -92,6 +92,10 @@ async function PAGE_MAIN() {
       R.k3.calls = got();
       R.k3.cardAfter = !!v.card();
       R.k3.routed = v.routed();
+      // K3b — 답을 보낸 뒤 목록 갱신이 같은 멈춘 행을 줘도 카드가 되살아나지 않는다(같은 답이 두 번 가지 않게)
+      v.h.update(mk("box-k3", { stopNote: NOTE_ASK }));
+      await sleep(300);
+      R.k3.cardAfterUpdate = !!v.card();
       v.done();
     }
     // K4 — 질문 여럿 · 여러 개 고르기 → [답 보내기]
@@ -121,6 +125,9 @@ async function PAGE_MAIN() {
       if (form && form.requestSubmit) form.requestSubmit(); else v.input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await waitFor(() => got().some((c) => c.p.endsWith("/prompt")), 4000);
       R.k5 = { calls: got(), cardAfter: !!v.card(), form: !!form };
+      v.h.update(mk("box-k5", { stopNote: NOTE_ASK }));
+      await sleep(300);
+      R.k5.cardAfterUpdate = !!v.card();
       v.done();
     }
     // K6 — codex: 다시 열면 같은 창이 뜬다 → 열기만
@@ -195,6 +202,7 @@ check(p5.length === 1 && p5[0].startsWith("앞서 물은 ‹가장 좋아하는 
 const k6 = R.k6 || {};
 check(Js(k6.btns) === Js(["이어서 열고 답하기"]) && /touch a\.txt/.test(k6.text), "K6 codex — 같은 창이 다시 뜨니 [이어서 열고 답하기] 하나 · 대상 명령을 보여 준다", { btns: k6.btns });
 check(k6.clicked && restores(k6.calls) === 1 && prompts(k6.calls).length === 0, "K6 누르면 열기만 한다(/restore 1 · /prompt 0)", k6.calls);
+check(k3.cardAfterUpdate === false && k5.cardAfterUpdate === false, "K3b 답을 보낸 뒤 목록 갱신이 같은 멈춘 행을 줘도 카드가 되살아나지 않는다(고른 답 · 직접 쓴 답)", { k3: k3.cardAfterUpdate, k5: k5.cardAfterUpdate });
 check(!!R.k7 && R.k7.before && !R.k7.after, "K7 다시 살아나면 카드를 걷는다", R.k7);
 check(!!R.k8 && !R.k8.card && R.k8.value === "", "K8 남의 세션엔 카드도 입력칸 채움도 없다", R.k8);
 check((R.pageErrors || []).length === 0, "E 페이지 오류 없음", R.pageErrors);

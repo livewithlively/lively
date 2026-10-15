@@ -130,6 +130,8 @@ function joinWrapped(first: string, rest: string[], sep: string): string {
  */
 export function draftFromScreen(harness: string, cap: ScreenCapture): string | null {
   if (harness === "codex") return codexDraft(cap);
+  //  대화상자(질문·승인)가 떠 있으면 입력칸이 없다 — 대화상자의 가로줄 사이를 입력칸으로 읽지 않는다(격리 리뷰 — 지금 실측 화면에선 재현 안 되는 보험).
+  if (screenAsks(cap)) return null;
   const box = ruledInputBox(cap);
   if (!box) return null;
   const marks = /^\s*(?:│\s*)?(?:❯|>)\s?/u;
@@ -227,17 +229,41 @@ export function questionFromScreen(harness: string, cap: ScreenCapture): StopQue
   };
 }
 
+const BULLET = /^\s*•\s/u;
+/**
+ * 대화상자의 자리 — 닻(마지막 커서 줄 «❯/› N.», 없으면 마지막 안내 줄 바로 위의 번호 줄)에서 위로 올라가 가장 가까운 경계(가로줄 · 탭 줄 ·
+ *  codex «•» 줄)까지가 대화상자다. ⚠ 화면 전체의 첫 번호 줄을 잡으면 **전사(대화)에 남은 번호 목록**이 질문·선택지로 섞인다(격리 리뷰 재현:
+ *  승인 창 위에 AI 가 쓴 «1. … 2. …» 가 있으면 kind 가 permission → other 로 바뀌고 선택지 앞에 목록이 붙었다). 대화상자는 늘 화면 맨 아래에 있다.
+ *  선택지 사이를 가르는 가로줄(«4. Type something.» 과 «5. Chat about this» 사이)은 경계가 아니다 — 그 줄 바로 다음이 번호 줄이면 더 올라간다.
+ */
+function dialogSpan(p: string[]): { top: number; first: number } | null {
+  let anchor = -1;
+  for (let i = p.length - 1; i >= 0; i--) if (MENU_CURSOR.test(p[i])) { anchor = i; break; }
+  if (anchor < 0) {
+    let hint = -1;
+    for (let i = p.length - 1; i >= 0; i--) if (HINT.test(p[i])) { hint = i; break; }
+    for (let i = hint - 1; hint > 0 && i >= 0; i--) if (OPT.test(p[i]) && !RULE.test(p[i])) { anchor = i; break; }
+    if (anchor < 0) return null;
+  }
+  const nextFilled = (i: number): string => { for (let j = i + 1; j < p.length; j++) if (p[j].trim()) return p[j]; return ""; };
+  let top = anchor - 1;
+  for (; top >= 0; top--) {
+    if (TAB_BAR.test(p[top]) || BULLET.test(p[top])) break;
+    if (RULE.test(p[top]) && !OPT.test(nextFilled(top))) break;
+  }
+  for (let i = top + 1; i <= anchor; i++) if (OPT.test(p[i]) && !RULE.test(p[i])) return { top, first: i };
+  return null;
+}
+
 /** 지금 보이는 질문 하나(머리·글·선택지). 번호 선택지가 없으면 null. */
 export function questionItemFromScreen(cap: ScreenCapture): StopQuestion["items"][number] | null {
   const p = cap.plain;
-  const first = p.findIndex((l) => OPT.test(l) && !RULE.test(l));
-  if (first < 0) return null;
-  //  대화상자 머리 — 첫 선택지에서 위로 올라가 가장 가까운 가로줄·탭 줄·«•» 줄(codex)까지.
-  let top = first - 1;
-  while (top >= 0 && !RULE.test(p[top]) && !TAB_BAR.test(p[top]) && !/^\s*•\s/u.test(p[top])) top--;
+  const span = dialogSpan(p);
+  if (!span) return null;
+  const { top, first } = span;
   const head = p.slice(top + 1, first).map((l) => l.trim()).filter((l) => !!l && !DASH.test(l) && !/^Tip:/i.test(l));
   //  codex 승인은 «•» 줄 자체가 머리(무엇을 하려던 참인가)다.
-  const bullet = top >= 0 && /^\s*•\s/u.test(p[top]) ? p[top].replace(/^\s*•\s*/u, "").trim() : "";
+  const bullet = top >= 0 && BULLET.test(p[top]) ? p[top].replace(/^\s*•\s*/u, "").trim() : "";
   //  claude 단일 질문의 머리 이름(☐ 색상)과 승인 창의 제목(Bash command)은 첫 줄이다 — 글에서 떼어 header 로 둔다.
   let header: string | undefined;
   if (head.length && /^[☐☒✔✓]\s+/u.test(head[0])) header = head.shift()!.replace(/^[☐☒✔✓]\s+/u, "");

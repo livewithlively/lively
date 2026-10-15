@@ -117,7 +117,7 @@ export function schedEventsOf(o) {
   return { uses, results, fired };
 }
 
-/** 예약 상태에 한 줄을 먹인다(순수 — 제자리 갱신). sched = { pend: {id: use}, wake: ms|null, crons: {key: {at, recurring}} } */
+/** 예약 상태에 한 줄을 먹인다(순수 — 제자리 갱신). sched = { pend: {id: use}, wake: ms|null, crons: {key: {at, recurring}}, wakeUnknown } */
 function feedSched(o, sched) {
   const ev = schedEventsOf(o);
   for (const u of ev.uses) sched.pend[u.id] = u;
@@ -127,9 +127,12 @@ function feedSched(o, sched) {
     delete sched.pend[r.id];
     if (r.error) continue;
     if (u.kind === "wake") {
-      if (u.stop) { sched.wake = null; continue; }
+      if (u.stop) { sched.wake = null; sched.wakeUnknown = false; continue; }
       const at = r.scheduledFor ?? (r.at && u.delay > 0 ? r.at + u.delay * 1000 : 0);
       sched.wake = at > 0 ? at : null;
+      //  깨움은 걸렸는데 시각을 못 구했다(결과 모양이 바뀌었다 — 2주에 판이 열다섯 번 오른다) — «깨움 없음» 이 아니라 «모른다» 다.
+      //   없음으로 읽으면 /loop 세션이 일제히 «완료» 가 되어 끄인다(격리 리뷰). 다음에 시각을 아는 깨움·루프 끝(stop)이 오면 풀린다.
+      sched.wakeUnknown = !(at > 0);
     } else if (u.kind === "cron") {
       sched.crons[r.key || u.id] = { at: r.at || 0, recurring: u.recurring !== false };
     } else if (u.kind === "uncron" && u.target) {
@@ -139,7 +142,7 @@ function feedSched(o, sched) {
   if (ev.fired && sched.crons[ev.fired] && !sched.crons[ev.fired].recurring) delete sched.crons[ev.fired];
 }
 
-const emptySched = () => ({ pend: {}, wake: null, crons: {} });
+const emptySched = () => ({ pend: {}, wake: null, crons: {}, wakeUnknown: false });
 
 function textsOf(content) {
   if (typeof content === "string") return [content];
@@ -210,7 +213,7 @@ export function feedLines(text, state) {
   const shells = { ...(state.shells || {}) };   // 열린 셸 작업 id → 출력 파일
   //  #4695 — 예약 깨움·반복 예약(위 머리말). 상태를 복사해 쓴다(이 함수는 들어온 상태를 바꾸지 않는다).
   const s0 = state.sched && typeof state.sched === "object" ? state.sched : emptySched();
-  const sched = { pend: { ...(s0.pend || {}) }, wake: Number.isFinite(s0.wake) ? s0.wake : null, crons: { ...(s0.crons || {}) } };
+  const sched = { pend: { ...(s0.pend || {}) }, wake: Number.isFinite(s0.wake) ? s0.wake : null, crons: { ...(s0.crons || {}) }, wakeUnknown: s0.wakeUnknown === true };
   for (const line of text.split("\n")) {
     if (!line) continue;
     const jobHint = HINTS.some((h) => line.includes(h));
@@ -341,7 +344,7 @@ export function openWork(file, cacheFile, deps = {}) {
     //  예약 셈(#4695) — 결과를 못 알아본 예약 호출이 남으면 «모른다». 반복 예약은 7일이 지나면 Claude Code 가 지운다.
     const now = (deps.now ?? Date.now)();
     const sc = state.sched || emptySched();
-    const sched = Object.keys(sc.pend || {}).length === 0;
+    const sched = Object.keys(sc.pend || {}).length === 0 && sc.wakeUnknown !== true;
     const cron = Object.values(sc.crons || {}).filter((c) => !(c && c.at > 0 && now - c.at > CRON_MAX_AGE_MS)).length;
     const wakeMs = Number.isFinite(sc.wake) && sc.wake > 0 ? sc.wake : null;
     //  띄우라고 부른 호출의 답을 못 알아봤다 — 띄움 문구가 바뀌었을 수 있다. 0 으로 세면 기다리는 세션의 점이 꺼지니 모른다로 둔다.

@@ -43,7 +43,7 @@ import { listAllSessionStates, setSessionStopNote, type SessionState, type Sessi
 import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
-import { liveJobSessions } from "./session-reaper.js";
+import { liveJobVerdicts, type JobVerdicts } from "./session-reaper.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 
 /** 이 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 한 표다(catalog.ts). 그 밖은 옛 회수 방식(유휴·붙음·작업 시계)이 맡는다. */
@@ -85,6 +85,8 @@ export type StopState = "done" | "asking" | "exited";
 export type KeepWhy =
   | "unobserved" | "managed" | "no-state" | "kind" | "harness" | "runtime" | "no-conv"
   | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock";
+/** 판정은 끄라는데 집행이 멈춘 이유(stopOne · 집행 상한 · 작업 판별). */
+export type HoldWhy = "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep";
 export type StopVerdict =
   | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
   | { act: "stop"; state: StopState; since: number; dueAt: number };
@@ -180,7 +182,8 @@ export interface StopRuleDeps {
   listStates: () => Promise<SessionState[]>;
   listManaged: () => Promise<Array<{ session_id: string | null }>>;
   view: (id: string) => ViewState;
-  liveJobs: (ids: ReadonlySet<string>) => Promise<ReadonlySet<string>>;
+  /** ⑥ 하네스가 띄운 작업 — 있음(jobs) · 판정 불가(unknown). 둘 다 이번 판엔 끄지 않는다. */
+  jobVerdicts: (ids: ReadonlySet<string>) => Promise<JobVerdicts>;
   capture: (id: string) => Promise<string>;
   keys: (id: string, key: string) => Promise<void>;
   saveNote: (id: string, note: SessionStopNote) => Promise<unknown>;
@@ -200,7 +203,7 @@ export interface StopRuleResult {
   scanned: number;
   stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null }>;
   /** 남겨 둔 이유별 수 */
-  kept: Partial<Record<KeepWhy | "jobs" | "turn-now" | "answered" | "asking-now" | "failed" | "busy-sweep", number>>;
+  kept: Partial<Record<KeepWhy | HoldWhy, number>>;
   /** 다음 마감까지 남은 초(없으면 없음) */
   nextDueInSec?: number;
 }
@@ -213,6 +216,15 @@ const tenantKey = (): string => String(currentTenant()?.id ?? "");
 const TAB_SETTLE_MS = 600;
 /** claude AskUserQuestion 은 질문을 최대 4개까지 한 번에 묻는다(도구 설명). */
 const MAX_TABS = 4;
+/**
+ * 한 판에 끄는 세션 수 상한(격리 리뷰 — 폭발 반경). 롤 직후 첫 판은 «3분 넘게 놀던» 세션을 한 테넌트에서 한꺼번에 만난다.
+ *  판정이 틀렸다면(#2258 — 가드 없는 갈래가 살아 있는 세션 ~24개를 지웠다) 그 판 하나가 전부를 끈다. 넘친 것은 곧 다음 판(5초 뒤 깨움)이 잇는다.
+ */
+export const MAX_STOPS_PER_SWEEP = 10;
+/** 하네스가 띄운 작업이 살아 있던 세션은 이만큼 다시 재지 않는다 — 30초마다 컨테이너 프로브를 맞지 않게(옛 회수기는 5분 간격). */
+export const JOB_HOLD_MS = 3 * 60_000;
+/** 테넌트·세션 → 작업 보호가 풀리는 시각(ms). */
+const jobHold = new Map<string, number>();
 
 function defaultDeps(): StopRuleDeps {
   return {
@@ -222,7 +234,7 @@ function defaultDeps(): StopRuleDeps {
     listStates: () => listAllSessionStates(),
     listManaged: () => listManagedSessions(),
     view: (id) => viewState(id),
-    liveJobs: (ids) => liveJobSessions(ids),
+    jobVerdicts: (ids) => liveJobVerdicts(ids),
     capture: (id) => tmux(["capture-pane", "-t", id, "-p", "-e"]),
     keys: async (id, key) => { await tmuxQuiet(["send-keys", "-t", id, key]); },
     saveNote: (id, note) => setSessionStopNote(id, note),
@@ -267,20 +279,31 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       }
       due.push({ s, state: v.state, since: v.since });
     }
-    //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정이 실패하면 **이번 판은 아무것도 안 끈다**
+    //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정 자체가 실패하면 **이번 판은 아무것도 안 끈다**
     //   (회수기는 «방어를 멈추지 않으려고» 종전대로 진행하지만, 이 규칙은 메모리 압박 방어가 아니라 «끝난 것을 치우는» 일이라 한 판 미뤄도 된다).
-    let jobs: ReadonlySet<string> = new Set();
-    if (due.length) {
-      try { jobs = await d.liveJobs(new Set(due.map((x) => x.s.id))); }
+    //   세션 하나를 판정하지 못했으면(프로브 실패·타임아웃·빈 표) **그 세션만** 이번 판에 안 끈다(jobs-unknown — 격리 리뷰: 회수기처럼 «작업 없음» 으로
+    //   접으면 `nohup … &` 로 띄운 서버가 3분 만에 죽는다). 작업이 살아 있던 세션은 JOB_HOLD_MS 동안 다시 재지 않는다.
+    const nowMs = d.now();
+    const holdKey = (id: string): string => key + "\u0000" + id;
+    for (const [k, until] of jobHold) if (until <= nowMs) jobHold.delete(k);
+    const held = due.filter((x) => jobHold.has(holdKey(x.s.id)));
+    for (let i = 0; i < held.length; i++) count("jobs");
+    const toJudge = due.filter((x) => !jobHold.has(holdKey(x.s.id)));
+    let verdicts: JobVerdicts = { jobs: new Set(), unknown: new Set() };
+    if (toJudge.length) {
+      try { verdicts = await d.jobVerdicts(new Set(toJudge.map((x) => x.s.id))); }
       catch (e) {
-        logger.warn({ err: e, candidates: due.length }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
-        for (let i = 0; i < due.length; i++) count("jobs");
-        due.length = 0;
+        logger.warn({ err: e, candidates: toJudge.length }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
+        for (let i = 0; i < toJudge.length; i++) count("jobs-unknown");
+        toJudge.length = 0;
       }
     }
     const stopped: StopRuleResult["stopped"] = [];
-    for (const { s, state, since } of due) {
-      if (jobs.has(s.id)) { count("jobs"); continue; }
+    let capped = false;
+    for (const { s, state, since } of toJudge) {
+      if (verdicts.jobs.has(s.id)) { count("jobs"); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
+      if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); continue; }
+      if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); capped = true; continue; }
       try {
         const out = await stopOne(d, s, state);
         if (out.skip) { count(out.skip); continue; }
@@ -290,6 +313,8 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
         logger.warn({ err: e, id: s.id, state }, "하네스 종료 규칙: 끄기 실패(다음 판에 다시)");
       }
     }
+    //  상한에 걸려 남긴 세션은 곧바로 다음 판이 잇는다(깨움 하한 5초).
+    if (capped) nextDue = Math.min(nextDue, nowSec);
     const nextDueInSec = Number.isFinite(nextDue) ? Math.max(0, nextDue - nowSec) : undefined;
     if (nextDueInSec !== undefined) d.arm(nextDue);
     const result: StopRuleResult = { enabled: true, ...mins, scanned: live.length, stopped, kept, ...(nextDueInSec !== undefined ? { nextDueInSec } : {}) };
@@ -305,7 +330,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
  * 한 세션을 끈다 — 저장 → 종료. 끄기 직전 화면을 다시 읽어 그새 바뀌었으면 끄지 않는다.
  *  @returns skip = 안 끈 이유 · note = 남긴 쪽지
  */
-async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promise<{ skip?: "turn-now" | "answered" | "asking-now"; note: SessionStopNote }> {
+async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promise<{ skip?: "turn-now" | "answered" | "asking-now" | "viewing-now"; note: SessionStopNote }> {
   const harness = s.harness;
   const cap = captureOf(await d.capture(s.id));
   //  마지막 확인 — 목록을 본 뒤 그새 턴이 시작됐거나(깨움·알림이 연 턴) 질문에 답이 났으면 이번엔 안 끈다. 다음 판이 새 사실로 다시 판정한다.
@@ -320,6 +345,9 @@ async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promi
     const q = await readQuestion(d, s.id, harness, cap);
     if (q) note.question = q;
   }
+  //  마지막 확인 둘째 — 판정 뒤(작업 판별 · 앞 세션들 · 질문 탭 넘기기로 수 초가 지났다) 그새 사람이 돌아왔으면 끄지 않는다(보는 중을 끄는 것이 첫째 금지).
+  const v = d.view(s.id);
+  if (v.viewing || v.unknown) return { skip: "viewing-now", note };
   //  쪽지를 못 적어도 끈다 — 글이 있다고 끄기를 미루지 않는다(규칙 정본). 대신 실패는 남긴다.
   await Promise.resolve(d.saveNote(s.id, note)).catch((e) => logger.warn({ err: e, id: s.id }, "하네스 종료 규칙: 쪽지 저장 실패(끄기는 계속)"));
   await d.reap(s.id);
@@ -339,6 +367,9 @@ async function readQuestion(d: StopRuleDeps, id: string, harness: string, first:
         await d.sleep(TAB_SETTLE_MS);
         const item = questionItemFromScreen(captureOf(await d.capture(id)));
         if (!item) break;
+        //  못 넘겼으면(키 보내기 실패를 tmuxQuiet 가 삼킨다) 같은 질문이 다시 읽힌다 — 같은 것을 두 번 남기지 않는다.
+        const prev = q.items[q.items.length - 1];
+        if (prev && prev.text === item.text && JSON.stringify(prev.options) === JSON.stringify(item.options)) break;
         q.items.push({ ...item, header: item.header || tabs[i] });
       } catch { break; }   // 못 넘겼으면 읽은 데까지만 남긴다 — 곧 끈다
     }
@@ -378,4 +409,11 @@ export function armStopTimer(dueAtSec: number, now = Date.now()): void {
 export function clearStopTimers(): void {
   for (const { t } of timers.values()) clearTimeout(t);
   timers.clear();
+}
+
+/** 시험용 — 모듈 상태(깨움 · 작업 보호 · 진행 중 표시)를 비운다. 시나리오끼리 새지 않게. */
+export function resetStopRule(): void {
+  clearStopTimers();
+  jobHold.clear();
+  inFlight.clear();
 }

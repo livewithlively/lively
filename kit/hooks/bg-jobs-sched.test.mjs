@@ -115,3 +115,14 @@ test("R15 countOpenJobs 는 종전 값 그대로 — 예약과 무관하게 bg �
   const w = openWork(f, join(dir, "r15b.cache.json"), { held: () => null, now: () => T0 });
   assert.deepEqual([w.bg, w.sched, w.wakeMs], [1, false, T0 + 1_200_000]);
 });
+test("R16 깨움은 걸렸는데 시각을 못 구하면(결과에 scheduledFor 도, 입력에 delaySeconds 도 없음) «모른다» — 다음에 시각을 아는 깨움·루프 끝이 오면 풀린다", () => {
+  const f = join(dir, "r16.jsonl"), c = join(dir, "r16.cache.json");
+  writeFileSync(f, call("tw1", "ScheduleWakeup", { prompt: "/loop x" }) + res("tw1", "Wakeup scheduled."));
+  const w1 = openWork(f, c, { now: () => T0 });
+  assert.deepEqual([w1.sched, w1.wakeMs], [false, null], "🔴 «깨움 없음» 으로 읽으면 /loop 세션이 끄인다");
+  appendFileSync(f, wake("tw2", 600, T0 + 600_000));
+  const w2 = openWork(f, c, { now: () => T0 });
+  assert.deepEqual([w2.sched, w2.wakeMs], [true, T0 + 600_000], "시각을 아는 깨움이 오면 풀린다(캐시를 거쳐도)");
+  writeFileSync(f, call("tw1", "ScheduleWakeup", { prompt: "/loop x" }) + res("tw1", "Wakeup scheduled.") + wake("tw3", 60, T0 + 60_000, { stop: true }));
+  assert.equal(openWork(f, join(dir, "r16b.cache.json"), { now: () => T0 }).sched, true, "루프 끝(stop)도 푼다");
+});

@@ -7,7 +7,7 @@
 //   🔴 시계를 «안 보기 시작» 이 아니라 «마지막 활동» 으로만 재면 — 막 보고 떠난 세션이 곧바로 꺼진다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, WAKE_GRACE_SEC, type StopFacts } from "./session-stop-rule.js";
+import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, type StopFacts } from "./session-stop-rule.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { SessionState } from "./session-state.js";
 
@@ -188,7 +188,11 @@ const CLAUDE_TURN_SCREEN = [
   "  ⏵⏵ auto mode on · esc to interrupt",
 ].join("\n");
 
-function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Record<string, string>; jobs?: string[]; view?: (id: string) => { viewing: boolean; unknown: boolean; endedAtMs: number }; enabled?: boolean; policy?: Record<string, number> } = {}) {
+test.beforeEach(() => resetStopRule());
+const verdictsOf = (jobs: string[] = [], unknown: string[] = []) => async (ids: ReadonlySet<string>) => ({
+  jobs: new Set([...ids].filter((id) => jobs.includes(id))), unknown: new Set([...ids].filter((id) => unknown.includes(id))),
+});
+function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Record<string, string>; jobs?: string[]; unknown?: string[]; view?: (id: string) => { viewing: boolean; unknown: boolean; endedAtMs: number }; enabled?: boolean; policy?: Record<string, number>; nowMs?: number } = {}) {
   const reaped: string[] = [];
   const notes: Array<[string, unknown]> = [];
   const keys: Array<[string, string]> = [];
@@ -200,13 +204,13 @@ function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Re
     listStates: async () => states,
     listManaged: async () => [],
     view: o.view ?? (() => NOT_VIEWING),
-    liveJobs: async (ids) => new Set([...ids].filter((id) => (o.jobs ?? []).includes(id))),
+    jobVerdicts: verdictsOf(o.jobs, o.unknown),
     capture: async (id) => o.screen?.[id] ?? CLAUDE_DRAFT_SCREEN,
     keys: async (id, k) => { keys.push([id, k]); },
     saveNote: async (id, n) => { notes.push([id, n]); },
     reap: async (id) => { reaped.push(id); },
     sleep: async () => {},
-    now: () => NOW * 1000,
+    now: () => o.nowMs ?? NOW * 1000,
     arm: (at) => { armed.push(at); },
   });
   return run.then((r) => ({ r, reaped, notes, keys, armed }));
@@ -226,7 +230,7 @@ test("S2 완료+안 봄 3분 → 쓰다 만 글을 쪽지로 남기고 끈다(�
   const reaped: string[] = [];
   const r = await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, liveJobs: async () => new Set(), capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async (id, n) => { order.push(`save:${id}:${(n as { draft?: string }).draft}`); },
     reap: async (id) => { order.push(`reap:${id}`); reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -248,14 +252,15 @@ test("S4 하네스가 띄운 작업이 살아 있으면(⑥) 끄지 않는다 �
   const a = await sweepWith([liveDone("box-a-1")], [stOf("box-a-1")], { jobs: ["box-a-1"] });
   assert.deepEqual(a.reaped, []);
   assert.equal(a.r.kept.jobs, 1);
+  resetStopRule();   // 위 판이 건 작업 보호(3분)를 걷는다 — 아래는 «판정 자체의 실패» 를 본다
   const reaped: string[] = [];
   const r = await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, liveJobs: async () => { throw new Error("ps 실패"); }, capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: async () => { throw new Error("ps 실패"); }, capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.deepEqual(reaped, []);
-  assert.equal(r.kept.jobs, 1);
+  assert.equal(r.kept["jobs-unknown"], 1);
 });
 test("S5 끄기 직전 화면이 «턴이 도는 중» 으로 바뀌었으면 끄지 않는다(목록→끄기 사이의 경합)", async () => {
   const { reaped, r } = await sweepWith([liveDone("box-a-1")], [stOf("box-a-1")], { screen: { "box-a-1": CLAUDE_TURN_SCREEN } });
@@ -303,7 +308,7 @@ test("S8 claude 여러 질문(탭) — → 키로 넘기며 각 질문을 읽는
   const notes: unknown[] = [];
   await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [asking], listStates: async () => [stOf("box-a-6")],
-    listManaged: async () => [], view: () => NOT_VIEWING, liveJobs: async () => new Set(), capture: async () => shown,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => shown,
     keys: async (_id, k) => { keys.push(k); shown = tabs1; }, saveNote: async (_id, n) => { notes.push(n); },
     reap: async () => {}, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -315,7 +320,7 @@ test("S9 쪽지 저장이 실패해도 끈다(글이 있다고 끄기를 미루�
   const reaped: string[] = [];
   await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, liveJobs: async () => new Set(), capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async () => { throw new Error("DB 다운"); }, reap: async (id) => { reaped.push(id); },
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -325,4 +330,64 @@ test("S10 정책이 둘 다 0 이면 아무것도 안 끈다", async () => {
   const { reaped, r } = await sweepWith([liveDone("box-a-1")], [stOf("box-a-1")], { policy: { stop_done_minutes: 0, stop_asking_minutes: 0 } });
   assert.deepEqual(reaped, []);
   assert.equal(r.why, "policy-off");
+});
+test("S11 세션 하나를 판정하지 못했으면(프로브 실패·빈 표) 그 세션만 안 끈다 — 회수기처럼 «작업 없음» 으로 접지 않는다", async () => {
+  const { reaped, r } = await sweepWith([liveDone("box-a-1"), liveDone("box-a-2")], [stOf("box-a-1"), stOf("box-a-2")], { unknown: ["box-a-1"] });
+  assert.deepEqual(reaped, ["box-a-2"]);
+  assert.equal(r.kept["jobs-unknown"], 1);
+});
+test("S12 작업이 살아 있던 세션은 3분 동안 다시 재지 않고(프로브 0) 끄지도 않는다 — 3분이 지나면 다시 잰다", async () => {
+  const asked: string[][] = [];
+  const reaped: string[] = [];
+  const run = (nowMs: number, jobs: string[]) => sweepSessionStopRule({
+    enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
+    listManaged: async () => [], view: () => NOT_VIEWING,
+    jobVerdicts: async (ids) => { asked.push([...ids]); return verdictsOf(jobs)(ids); },
+    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
+    sleep: async () => {}, now: () => nowMs, arm: () => {},
+  });
+  await run(NOW * 1000, ["box-a-1"]);
+  const r2 = await run(NOW * 1000 + JOB_HOLD_MS - 1, []);
+  assert.deepEqual(asked, [["box-a-1"]], "보호 중엔 다시 재지 않는다");
+  assert.equal(r2.kept.jobs, 1);
+  assert.deepEqual(reaped, []);
+  await run(NOW * 1000 + JOB_HOLD_MS, []);
+  assert.deepEqual(asked, [["box-a-1"], ["box-a-1"]], "3분이 지나면 다시 잰다");
+  assert.deepEqual(reaped, ["box-a-1"]);
+});
+test("S13 한 판에 끄는 수는 상한(10)까지 — 넘친 것은 남겨 두고 곧바로 다음 판을 건다", async () => {
+  const ids = Array.from({ length: MAX_STOPS_PER_SWEEP + 2 }, (_, i) => `box-a-${100 + i}`);
+  const { reaped, r, armed } = await sweepWith(ids.map((id) => liveDone(id)), ids.map(stOf));
+  assert.equal(reaped.length, MAX_STOPS_PER_SWEEP);
+  assert.equal(r.kept.capped, 2);
+  assert.ok(armed.length === 1 && armed[0] <= NOW, `곧바로 다음 판 — ${armed}`);
+});
+test("S14 판정 뒤 끄기 직전에 사람이 돌아왔으면(보는 중 · 모름) 끄지 않는다", async () => {
+  for (const back of [{ viewing: true, unknown: false, endedAtMs: 0 }, { viewing: false, unknown: true, endedAtMs: 0 }]) {
+    resetStopRule();
+    let calls = 0;
+    const { reaped, notes, r } = await sweepWith([liveDone("box-a-1")], [stOf("box-a-1")], { view: () => (calls++ === 0 ? NOT_VIEWING : back) });
+    assert.deepEqual(reaped, [], JSON.stringify(back));
+    assert.deepEqual(notes, [], "쪽지도 남기지 않는다(그 사람이 지금 보고 있다)");
+    assert.equal(r.kept["viewing-now"], 1);
+  }
+});
+test("S15 질문 탭을 못 넘겼으면(같은 질문이 다시 보인다) 같은 질문을 두 번 남기지 않는다", async () => {
+  const tabs0 = [
+    "────────────────────────────────────────",
+    "←  ☐ 색  ☐ 과일  ✔ Submit  →",
+    "가장 좋아하는 색은?",
+    "❯ 1. 빨강",
+    "  2. 파랑",
+    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+  ].join("\n");
+  const notes: unknown[] = [];
+  await sweepSessionStopRule({
+    enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-7", { awaiting: true, agentState: "waiting", lastActive: NOW - 4000 })],
+    listStates: async () => [stOf("box-a-7")], listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => tabs0,
+    keys: async () => { /* 키가 안 먹었다 — 화면이 그대로다 */ }, saveNote: async (_id, n) => { notes.push(n); },
+    reap: async () => {}, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
+  });
+  const q = (notes[0] as { question: { items: unknown[] } }).question;
+  assert.equal(q.items.length, 1);
 });

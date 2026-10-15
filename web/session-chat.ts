@@ -597,7 +597,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       window.clearTimeout(composeTimer); saveComposeDraft(target.id, '');
       //  끄기 전에 답을 기다리던 질문이 떠 있으면, 입력칸에 직접 쓴 글은 그 질문의 답이다 — AI 는 그 질문을 기억하지 못하므로 질문을 붙여 보낸다.
       const q = stopQuestionOpen();
-      if (q && text.trim()) { text = stopFreeAnswerPrompt(q, text); clearStopCard(); }
+      if (q && text.trim()) { text = stopFreeAnswerPrompt(q, text); stopAnsweredAt = stopCardAt; clearStopCard(); }
       await sendPrompt(text + attachments.tail(), () => attachments.clear());
     },
     // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
@@ -914,6 +914,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  카드는 **멈춘 세션에서만** 선다 — 다시 살아나면(되살렸거나 다른 곳에서 열었다) 걷는다(paintState). 남의 세션엔 안 선다(canRevive).
   let stopCard: HTMLElement | null = null;
   let stopCardAt = 0;
+  //  답을 이미 보낸(또는 열기를 누른) 쪽지 — 보내는 동안 목록 갱신(3초)이 같은 멈춘 행을 주면 카드가 되살아나 같은 답이 두 번 갈 수 있었다(격리 리뷰).
+  //   쪽지는 끈 시각(at)으로 갈린다 — 다음에 꺼서 새로 남긴 쪽지는 다시 보인다.
+  let stopAnsweredAt = 0;
   function clearStopCard(): void { if (stopCard) { stopCard.remove(); stopCard = null; } }
   /** 지금 답을 기다리는 질문 카드의 질문(없으면 null) — 입력칸에 직접 쓴 답을 그 질문에 붙여 보낼 때 쓴다. */
   function stopQuestionOpen(): StopNote['question'] | null {
@@ -932,7 +935,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       markStopDraftSeen(target.id, note.at);
       draft = true;
     }
-    if (note.question && (!stopCard || stopCardAt !== note.at)) {
+    if (note.question && note.at !== stopAnsweredAt && (!stopCard || stopCardAt !== note.at)) {
       clearStopCard();
       stopCard = renderStopQuestion(note);
       stopCardAt = note.at;
@@ -962,13 +965,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  codex — 다시 열면 같은 승인 창이 다시 뜬다(실측 0.162.1). 고른 답을 미리 받아 둘 이유가 없다 — 열고 그 창에서 답한다.
       body.append(el('div', { class: 'sc-stopq-hint', text: '다시 열면 같은 창이 다시 떠요 — 거기서 답해 주세요.' }));
       acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이어서 열고 답하기',
-        onclick: () => { clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true }); } }));
+        onclick: () => { stopAnsweredAt = note.at; clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true }); } }));
       return card;
     }
     const picks = q.items.map(() => ({ labels: [] as string[] }));
     const send = (): void => {
       const text = stopAnswerPrompt(q, picks);
       if (!text) { toast('답을 하나 이상 골라 주세요.'); return; }
+      stopAnsweredAt = note.at;
       clearStopCard();
       void sendPrompt(text);
     };

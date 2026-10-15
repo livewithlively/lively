@@ -192,7 +192,9 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       claudeSessionId: s.claude_session_id || undefined,   // #1719 — 죽은 세션도 대화 uuid 를 알면 기록을 잇는다
       //  #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). 대화창이 입력칸·질문으로 되돌린다.
       //   시작 중인 행(아래 starting)엔 싣지 않는다 — 그건 끈 세션이 아니라 갓 만든 세션이다.
-      ...(s.stop_note && !starting ? { stopNote: s.stop_note } : {}),
+      //   **주인에게만** 싣는다 — 보내지 않은 글은 주인만의 것이다. 초대받은 사람·프로젝트 동료도 이 행을 받지만(가시성), 화면이 되돌리는 것도
+      //   주인뿐이라(canRevive) 그 사람들에게 실을 까닭이 없다(격리 리뷰 — 목록 응답만 열어도 남이 쓰다 만 글이 보였다).
+      ...(s.stop_note && !starting && s.owner === me ? { stopNote: s.stop_note } : {}),
       // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
       //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
       ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),

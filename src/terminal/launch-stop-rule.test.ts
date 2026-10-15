@@ -106,6 +106,15 @@ test("L6 실행 파일이 없으면(127) 이어 열기여도 다시 띄우지 �
   assert.doesNotMatch(r.out, new RegExp(RETRY));
   assert.match(r.out, /SHELL_ALIVE/);
 });
+test("L6b 이어 열기가 곧바로 죽어도 종료코드가 1 이 아니면(137 메모리 부족 · 143 신호) 새 대화로 열지 않는다 — 안내 + 셸", () => {
+  for (const rc of [137, 143, 2]) {
+    const h = fakeHarness(`resume-killed-${rc}`, { resumeRc: rc, rc: 0 });
+    const r = run(stop(h, ["--resume", "c-1"], 2));
+    assert.deepEqual(argsLines(r.out), ["ARGS:--resume c-1"], `rc=${rc}`);
+    assert.doesNotMatch(r.out, new RegExp(RETRY), `rc=${rc}`);
+    assert.match(r.out, /SHELL_ALIVE/, `rc=${rc}`);
+  }
+});
 test("L7 시계(date)를 못 읽으면 종전 런처처럼 군다 — 다시 띄우지도, 조용히 끝내지도 않는다(안내 + 셸)", () => {
   const h = fakeHarness("noclock", { resumeRc: 1, rc: 1 });
   const argv = stop(h, ["--resume", "c-1"], 2);
