@@ -244,10 +244,10 @@ t("S5 countOpenJobs — 신고 세션 모양(완료 알림 없이 남은 대기 
 
 t("W1 work-flag 배선 — idle 보고(Stop · idle_prompt) · claude 에서만 세고, 못 세면 싣지 않으며, 작업 수가 바뀐 idle 은 스로틀에 안 걸린다", () => {
   const src = readFileSync(join(HERE, "work-flag.mjs"), "utf8");
-  assert.match(src, /import \{ countOpenJobs \} from "\.\/bg-jobs\.mjs";/);
-  assert.match(src, /const bg = phase === "idle" && HARNESS === "claude" && typeof input\?\.transcript_path === "string"\s*\? countOpenJobs\(input\.transcript_path, join\(FLAG_DIR, `\$\{sid\}\.bg-jobs\.json`\)\) : null;/);
-  assert.match(src, /const report = bg === null \? \{ state: phase \} : \{ state: phase, bg \};/);
-  assert.match(src, /const key = bg === null \? phase : `\$\{phase\} bg=\$\{bg\}`;/);
+  //  #4695 — 같은 셈이 예약(깨움·반복 예약)도 돌려준다(openWork). 보고 본문·스로틀은 훅을 실제로 띄워 받은 POST 로 본다
+  //   (work-flag-lifecycle.test.mjs E18 bg · E19 예약) — 여기선 «claude 의 idle 보고에서만 센다» 는 배선만 못박는다.
+  assert.match(src, /import \{ openWork \} from "\.\/bg-jobs\.mjs";/);
+  assert.match(src, /const work = phase === "idle" && HARNESS === "claude" && typeof input\?\.transcript_path === "string"\s*\? openWork\(input\.transcript_path, join\(FLAG_DIR, `\$\{sid\}\.bg-jobs\.json`\)\) : null;/);
   assert.match(src, /if \(last !== key \|\| !cooling\(stateFile, 60_000\)\) \{[\s\S]{0,200}writeFileSync\(stateFile, key\);\s*jobs\.push\(post\("\/active", report\)\);/);
   const manifest = readFileSync(join(HERE, "..", "setup", "kit-manifest.mjs"), "utf8");
   assert.match(manifest, /"bg-jobs\.mjs",/, "훅 디렉터리에 평평하게 같이 깔린다(빠지면 work-flag 가 import 로 죽는다)");

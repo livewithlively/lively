@@ -26,7 +26,7 @@ import { managedMode } from "../org/tenancy/state.js";
 import { getMember } from "../org/store.js";
 import * as appStore from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
-import { appViewFor, canSeeApp } from "./visibility.js";
+import { addressViewFor, canSeeApp } from "./visibility.js";
 import { entriesOfManifest, uiPagesFromFiles, type AppFile } from "./app-versions.js";
 import { versionFiles } from "./app-version-files.js";
 import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
@@ -158,15 +158,18 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   if ("reply" in w) return w.reply;
   const notFound = (detail: string): FrontReply => ({ status: 404, html: appErrorHtml("화면을 찾지 못했습니다", detail) });
   if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
-  //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 web.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길).
-  const multi = await multiFilePage(w, rawPath, headers, d, g.tenant.id);
+  //  #4667 주소의 판 — 공개 주소는 모두에게 공개 판(초안이 걸려 있으면 공개 판 행의 파일), 초안 주소는 그 초안을 고친 사람에게만 설치된 화면
+  //   (남의 초안은 없는 판 · apps/visibility.ts addressViewFor). 초안 코드가 공개 판 주소에서 돌지 않게 — 설계 §13-5.
+  const view = addressViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }, act.var === "draft" ? "draft" : "pub");
+  if (view === "none") return notFound(`앱 '${w.app.id}' 에 열 수 있는 초안 판이 없습니다.`);
+  //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 web.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길). 판은 위 주소의 판 그대로.
+  const multi = await multiFilePage(w, view === "published", rawPath, headers, d, g.tenant.id);
   if (multi) return multi;
   const path = parseAppPath(rawPath);
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
-  //  #4667 공개 앱에 남의 초안이 걸려 있으면 이 사람은 공개 판을 본다 — 설치된 화면(초안)이 아니라 공개 판 행의 파일에서 꺼낸다(org_app_ui 와 같은 규칙).
   let asset: { page_key: string; html: string } | null = null;
   let manifest: unknown = w.app.manifest;
-  const pub = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published" && d.getAppVersion
+  const pub = view === "published" && d.getAppVersion
     ? await d.getAppVersion(w.app.id, w.app.published_version_no as number).catch(() => null) : null;
   if (pub) {
     const ui = uiPagesFromFiles(pub.manifest, pub.files as AppFile[]);
@@ -239,12 +242,12 @@ const hdr = (headers: Record<string, string | string[] | undefined>, k: string):
 };
 
 /**
- * 여러 파일 앱이면 응답, 아니면 null(v1 길). 보는 판(#4667): 초안을 만든 사람 · 나만 보는 앱의 책임자는 설치된 판(지금 판 번호 — 내용이 같을 때만),
- *  나머지는 공개 판. 판 묶음 쪽 문제는 그 판으로 다시 저장하라고 알린다(조용히 v1 화면으로 떨어지면 깨진 화면이 남는다).
+ * 여러 파일 앱이면 응답, 아니면 null(v1 길). published — 이 주소가 보이는 판(#4667 addressViewFor): 공개 판이면 공개 판 번호,
+ *  아니면 설치된 판(지금 판 번호 — 내용이 같을 때만 · 초안 주소의 초안 주인 · 나만 보는 앱 · 초안 없는 공개 앱).
+ *  판 묶음 쪽 문제는 그 판으로 다시 저장하라고 알린다(조용히 v1 화면으로 떨어지면 깨진 화면이 남는다).
  */
-async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, rawPath: unknown, headers: Record<string, string | string[] | undefined>,
+async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, published: boolean, rawPath: unknown, headers: Record<string, string | string[] | undefined>,
   d: AppFrontDeps, tenant: string): Promise<FrontReply | null> {
-  const published = appViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }) === "published";
   //  설치된 판을 보는 사람 — 앱 행의 매니페스트로 먼저 가른다(v1 앱은 DB 를 더 안 읽는다).
   if (!published && webRootOf(w.app.manifest) === null) return null;
   const no = published ? w.app.published_version_no : w.app.current_version_no;

@@ -24,13 +24,13 @@ import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, clearSessionStopNote, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
 import { adoptVerdict, createKeyedSerializer, type AdoptProbe } from "./restore-adopt.js";   // #3891 — 복원을 다시(또는 동시에) 불러도 같은 대화를 둘로 만들지 않는다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -54,6 +54,7 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, node
 import type { NodeSessionInfo } from "../node/registry.js";
 import { reportSessionActivity } from "./session-activity-relay.js";   // #2600 T2 d6 — 하네스 활동 보고를 그 세션의 호스트에
 import { relayNodeId, sessionRelayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다) · #2636 — 화면이 안 준 좌표는 서버가 되찾는다 · #3745 — 박스 세션엔 세션 호스트 좌표도 같은 tmux 다
+import { cleanEditLabel, sessionEditPath, storedLabelRefusal } from "./session-edit-path.js";   // #4632 — 세션 고치기가 노드 · 기록 · 중앙 중 어디로 가나(순수)
 import type { NodeOp } from "../node/protocol.js";
 import { normalizeTheme, harnessResumeCommand } from "./catalog.js"; // #1683 테마 값 정규화 · #4135 셸에서 대화를 이어 여는 한 줄(순수 — catalog 가 소유)
 import { getNode, listNodes } from "../node/store.js";
@@ -1519,11 +1520,39 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
-    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
-    const nodeId = relayNodeId(String(b.node ?? req.query.node ?? ""), isSelfNode);
     //  #3870 — 초대 알림은 «이번 저장으로 새로 들어온 사람» 에게만(session-invite.ts). 이전 명단은 저장 **전에** 읽는다.
     //   명단 정본은 DB 행이다(ownerMeta 가 DB 를 먼저 본다). 못 읽으면 null — newInvitees 가 «모름» 으로 다룬다.
-    const before = b.invites !== undefined ? await getSessionState(req.params.id).catch(() => undefined) : undefined;
+    let readFailed = false;
+    const desired = await getSessionState(req.params.id).catch(() => { readFailed = true; return undefined; });
+    const before = b.invites !== undefined ? desired : undefined;
+    //  #2592 — 셀프 노드 좌표는 접는다: 같은 tmux 라 아래 중앙 경로가 같은 답을 즉답으로 준다(relayNodeId 머리말).
+    //  #4632 — 화면이 좌표를 안 줘도 그 세션이 사는 노드를 되찾는다(기록 → 스냅샷 · 지우기 라우트와 같은 자). 종전엔 좌표 없이 온 고침이
+    //   중앙으로 가 노드 세션 · 쉬는 세션에서 500 이 났다 — 앱빌더의 세션 이름이 그렇게 조용히 안 박혔다(session-edit-path.ts 머리말).
+    const fold = sameTmuxCoordinate({ boxRow: isBoxSessionRow(desired), isSelf: isSelfNode, isSessionHost: isSessionHostNode });
+    const relayId = sessionRelayNodeId({
+      query: String(b.node ?? req.query.node ?? ""),
+      desired: desired?.node_id,
+      snapshot: nodeOfSession(req.params.id),
+    }, fold);
+    const labelOnly = b.label !== undefined && b.invites === undefined;
+    const centralGone = !relayId && labelOnly ? await sessionGoneVerdict(req.params.id).catch(() => null) : null;
+    const rowNode = sessionRelayNodeId({ desired: desired?.node_id }, fold);
+    const onNodeUp = !!relayId && nodeOnline(relayId);
+    //  켜진 노드의 끝난 세션 — 이름만 바꿀 때는 그 노드에 «아직 있나» 를 묻는다(지우기 라우트의 gone op · 못 물으면 null = 살아 있다고 본다).
+    const nodeGone = onNodeUp && labelOnly && relayId === rowNode ? await nodeRpc<boolean>(relayId, "gone", { id: req.params.id }).catch(() => null) : null;
+    const editPath = sessionEditPath({ nodeId: relayId, rowNode, nodeOnline: onNodeUp, nodeGone, labelOnly, centralGone });
+    if (editPath === "stored") {
+      //  지금 어디서도 돌지 않는 세션의 이름 — 기록에 사람 이름으로 적는다(복원이 이 이름으로 띄운다 · AI 가 못 덮는다). 주인만.
+      const me = idOf(userOf(req));
+      const clean = cleanEditLabel(b.label);
+      const no = storedLabelRefusal(desired, me, clean, readFailed);
+      if (no) throw new HttpError(no.status, no.message);
+      //  걸쇠 UPDATE 가 아무 행도 못 바꿨으면(그 사이 지워졌다) 적은 척하지 않는다.
+      if (!(await claimSessionLabel(req.params.id, clean, "human", me))) throw new HttpError(404, "세션을 찾을 수 없습니다");
+      res.json({ ok: true, notified: 0, stored: true });
+      return;
+    }
+    const nodeId = editPath === "node" ? relayId : "";
     //  보낸 수를 답에 싣는다(notified) — 화면이 «알림을 보냈어요» 를 사실일 때만 말하게. 알림 실패는 던지지 않는다(초대는 이미 저장됐다).
     const announce = async (invites: string[] | undefined, actor: string): Promise<number> => {
       if (!invites) return 0;
@@ -2088,6 +2117,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  #4588 — 턴 끝(idle)의 «열린 백그라운드 작업 수». 형식이 틀리거나 없으면 null(=모른다 → 목록은 종전대로 화면을 믿는다).
     const rawBg = ((req.body ?? {}) as Record<string, unknown>).bg;
     const bg = phase === "idle" && isBgCount(rawBg) ? rawBg : null;
+    //  #4695 T5 — 턴 끝의 예약(다음 깨움 epoch초 · 열린 반복 예약 수). 둘이 함께 와야 받는다 — 한쪽만이면 «모른다»(그 세션은 안 끈다).
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const schedIn = { wake: body.wake, cron: body.cron };
+    const sched = phase === "idle" && isReportedSched(schedIn) ? schedIn : null;
     const me = idOf(userOf(req));
     const st = await getSessionState(id);
     // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
@@ -2097,7 +2130,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
       //  #2600 T2 d6 — 그 세션의 호스트가 서 있으면 보고를 **호스트에** 맡긴다(게이트웨이 tmux 세 번 → 0, 2026-09-14 계수
       //   카나리아 10/분). 맡길 곳 판정·실패 시 직접 새기기·DB 미러는 `reportSessionActivity` 가 쥔다(불리는 함수 안에).
-      const change = await reportSessionActivity(id, phase, {}, bg).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      const change = await reportSessionActivity(id, phase, {}, bg, sched).catch((e) => { logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"); return null; });
+      //  #4695 T5 — 새 턴이 돌기 시작했다(busy) → 끄기 전에 남겨 둔 쪽지(보내지 않은 글·답을 기다리던 질문)는 이제 지난 일이다.
+      //   행에 쪽지가 있을 때만 지운다(대부분의 보고는 쪽지가 없어 DB 를 안 건드린다 — 훅은 핫패스다).
+      if (phase === "busy" && st.stop_note) void clearSessionStopNote(id).catch((e) => logger.warn({ err: e, id }, "끄기 쪽지 정리 실패(비치명)"));
       // #1842 — 단계가 **바뀐** 순간 그 자리에서 앱으로 민다. 폴링이 30초 뒤에 같은 사실을 다시 발견하는 대신,
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).

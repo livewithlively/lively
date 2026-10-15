@@ -16,8 +16,8 @@ import { itemsPool } from "../db/client.js";
 import { getApp, type OrgApp } from "../org/store/apps.js";
 import { liveManifests, viewAppFor } from "../apps/app-view.js";
 import type { Viewer } from "../apps/visibility.js";
-import { qualifiedAppTable, assertIdent, isBuiltinSource, type StoreColumn, type StoreIndex, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
-import { appSchemaFor, ensureAppTables, type AppTableSpec } from "../apps/store-schema.js";
+import { qualifiedAppTable, assertIdent, isBuiltinSource, assertMatchIdent, assertMatchId } from "../apps/store-ddl.js";
+import { appSchemaFor, ensureAppTables, tableSpecsOf, type AppTableSpec, type ProtectColumns } from "../apps/store-schema.js";
 import { logger } from "../log.js";
 import { requireAttachedApp, publishAppEventToSession } from "../apps/session-apps.js";
 import { planAppSql, APP_SQL_MAX_LEN, APP_SQL_MAX_PARAMS, type AppSqlPlan } from "../apps/app-sql.js";
@@ -59,23 +59,25 @@ const appIdOf = (b: Record<string, unknown>): string | undefined => (b.app_id ==
 
 // 선언된 테이블만 — 매니페스트 data.tables 에 있는 이름이어야(오타·미생성 테이블 접근 차단).
 //  반환 = 이 요청(테넌트)에서 그 테이블의 인용 relation + 지연 복구에 쓸 선언 목록(#4223).
-interface AppTableTarget { rel: string; schema: string; builtin: boolean; tables: AppTableSpec[] }
-/** 매니페스트 data.tables → 테이블 명세(모양이 어긋나도 던지지 않는다 — 저장된 매니페스트를 읽는 자리). */
-function declaredSpecs(manifest: unknown): AppTableSpec[] {
-  return ((manifest as { data?: { tables?: Array<{ name?: string; columns?: StoreColumn[]; indexes?: StoreIndex[]; checks?: string[]; drop_columns?: string[] }> } })?.data?.tables ?? [])
-    .map((t) => ({ table: String(t.name), columns: (t.columns ?? []) as StoreColumn[], indexes: (t.indexes ?? []) as StoreIndex[],
-      checks: Array.isArray(t.checks) ? t.checks : [], drop_columns: Array.isArray(t.drop_columns) ? t.drop_columns : [] }));
-}
+interface AppTableTarget { rel: string; schema: string; builtin: boolean; tables: AppTableSpec[]; protect?: ProtectColumns }
 /** 여러 매니페스트의 표 명세 합 — 같은 이름이면 앞의 것(설치된 판 — 새 칸이 더해진 쪽). */
 function unionSpecs(manifests: unknown[]): AppTableSpec[] {
   const out: AppTableSpec[] = [];
-  for (const m of manifests) for (const t of declaredSpecs(m)) if (!out.some((d) => d.table === t.table)) out.push(t);
+  for (const m of manifests) for (const t of tableSpecsOf(m)) if (!out.some((d) => d.table === t.table)) out.push(t);
   return out;
+}
+/**
+ * 물리 표 전부의 명세(설치된 판 ∪ 공개 판) + 지킬 칸. #4724 — 지연 복구 · 자유 SQL 의 역할 준비는 사람의 호출 길에서 도는 «모자란 것 채우기» 다:
+ *  늘 지금 있는 칸 전부를 지켜(더하기 · 풀기만) 칸을 지우거나 조이는 일은 하지 않는다. 그 일은 설치 · 「공개하기」 의 몫이고, 여기서 하면
+ *  아무 사용자의 호출이 남의 데이터 때문에 409 로 막힌다(격리 리뷰 — 초안 표식이 걷힌 뒤 남은 조이기를 첫 store_sql 이 하려다 모두가 막혔다).
+ */
+async function liveSpecs(app: OrgApp): Promise<{ specs: AppTableSpec[]; protect: ProtectColumns }> {
+  return { specs: unionSpecs(await liveManifests(app)), protect: "existing" };
 }
 const viewerOf = (user: LivelyUser | undefined): Viewer => ({ userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [] });
 /** #4667 이 사람이 쓰는 판의 표 명세 — 공개 판을 보는 사람은 공개 판이 선언한 표, 초안을 만든 사람은 초안의 표(격리 리뷰 B3). */
 async function viewSpecs(app: OrgApp, who: Viewer): Promise<AppTableSpec[]> {
-  return declaredSpecs((await viewAppFor(app, who)).app.manifest);
+  return tableSpecsOf((await viewAppFor(app, who)).app.manifest);
 }
 async function resolveDeclaredTable(appId: string, table: string, who: Viewer): Promise<AppTableTarget> {
   const app = await getApp(appId);
@@ -85,7 +87,8 @@ async function resolveDeclaredTable(appId: string, table: string, who: Viewer): 
   if (!(await viewSpecs(app, who)).some((t) => t.table === table)) throw new HttpError(404, `선언되지 않은 데이터 테이블: ${table}`);
   const builtin = isBuiltinSource(app.source);
   const schema = appSchemaFor(builtin);
-  return { rel: qualifiedAppTable(schema, appId, table), schema, builtin, tables: unionSpecs(await liveManifests(app)) };
+  const live = await liveSpecs(app);
+  return { rel: qualifiedAppTable(schema, appId, table), schema, builtin, tables: live.specs, protect: live.protect };
 }
 
 // 지연 복구(#4223) — 선언은 있는데 물리 테이블·스키마가 없으면(42P01 undefined_table · 3F000 invalid_schema_name)
@@ -97,7 +100,7 @@ async function withTableRepair<T>(appId: string, target: AppTableTarget, run: ()
     const code = (e as { code?: unknown })?.code;
     if (code !== "42P01" && code !== "3F000") throw e;
     logger.warn({ appId, schema: target.schema, code }, "앱 데이터 테이블이 없어 만든 뒤 재시도합니다");
-    await ensureAppTables(appId, target.tables, { schema: target.schema, strict: true, tenantScopedIndexes: target.builtin, sqlRole: !target.builtin });
+    await ensureAppTables(appId, target.tables, { schema: target.schema, strict: true, tenantScopedIndexes: target.builtin, sqlRole: !target.builtin, protect: target.protect });
     return run();
   }
 }
@@ -208,13 +211,13 @@ const storeDelete: Capability = {
 //  #4483 — 결과가 아니라 진행 중인 약속을 기억한다(single-flight): 콜드스타트에 같은 앱으로 동시 호출이 몰려도 표 보장
 //  (표마다 ACCESS EXCLUSIVE 트랜잭션 · 칸·제약·외래키 동기화)은 한 번만 돈다. 실패하면 지워 다음 호출이 다시 한다.
 const sqlRoleCache = new Map<string, Promise<string>>();
-function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown; draft_by?: string | null; published_version_no?: number | null }, specs: AppTableSpec[], schema: string): Promise<string> {
+function sqlRoleFor(appId: string, app: { content_hash?: string | null; updated_at?: unknown; draft_by?: string | null; published_version_no?: number | null }, specs: AppTableSpec[], schema: string, protect?: ProtectColumns): Promise<string> {
   //  #4667 역할이 받는 표는 물리 표 전부(설치된 판 ∪ 공개 판) — 초안 표식 · 공개 판 포인터가 바뀌면 그 합도 바뀌므로 열쇠에 넣는다.
   const key = `${appSqlTenantId()}\0${appId}\0${app.content_hash ?? ""}\0${String(app.updated_at ?? "")}\0${app.draft_by ?? ""}\0${app.published_version_no ?? ""}\0${schema}`;
   const hit = sqlRoleCache.get(key);
   if (hit) return hit;
   const p = (async () => {
-    await ensureAppTables(appId, specs, { schema, strict: true });          // 테이블이 없던 앱(설치 때 실패)도 여기서 낫는다
+    await ensureAppTables(appId, specs, { schema, strict: true, protect });          // 테이블이 없던 앱(설치 때 실패)도 여기서 낫는다 · #4724 공개 판의 칸은 지킨다
     return ensureAppSqlRole(appId, specs.map((t) => t.table), schema);
   })();
   if (sqlRoleCache.size > 5000) sqlRoleCache.clear();
@@ -235,6 +238,8 @@ interface SqlTarget {
   specs: AppTableSpec[];
   /** 앱 역할이 받는 표 — 물리 표 전부(설치된 판 ∪ 공개 판, #4667). */
   roleSpecs: AppTableSpec[];
+  /** #4724 표 보장이 지킬 칸(초안이 걸린 공개 앱 — 공개 판의 칸). */
+  protect?: ProtectColumns;
   schema: string;
 }
 /** store_sql·store_sql_batch 공통 — 어느 앱인가 · 기본 앱 거부 · 선언 표 · 스키마. */
@@ -248,7 +253,8 @@ async function sqlTarget(user: LivelyUser | undefined, input: Record<string, unk
   //  #4667 문장이 쓸 수 있는 표 = 이 사람이 보는 판이 선언한 표(공개 판을 보는 사람은 공개 판의 표 · 격리 리뷰 B3).
   const specs = await viewSpecs(app, viewerOf(user));
   if (!specs.length) throw new HttpError(400, `앱 '${appId}' 은(는) 데이터 테이블을 선언하지 않았습니다 — 매니페스트 data.tables 에 먼저 선언하세요`);
-  return { appId, app, specs, roleSpecs: unionSpecs(await liveManifests(app)), schema: appSchemaFor(false) };
+  const live = await liveSpecs(app);
+  return { appId, app, specs, roleSpecs: live.specs, protect: live.protect, schema: appSchemaFor(false) };
 }
 
 /** 문장 하나 — 검사(검사기 시간을 지표에 남긴다) · params 개수 맞춤. where = 오류 문구 앞머리(묶음이면 «n번째 문장»). */
@@ -273,7 +279,7 @@ type SqlOut = { kind: string } & (AppSqlResult | AppSqlWireResult);
  *  (격리 리뷰: 60KB 문장 해석 약 70ms — 빈도가 해석 뒤면 거절되는 문장을 무한히 보내 공유 게이트웨이의 이벤트 루프를 채울 수 있었다). */
 async function runPlanned(t: SqlTarget, items: Array<{ plan: AppSqlPlan; params: unknown[] }>, input: Record<string, unknown>, user: LivelyUser | undefined, ctx: CapabilityCtx | undefined, batch: boolean): Promise<{ results: SqlOut[]; ms: number }> {
   if (items.some((it) => it.plan.kind === "insert" || it.plan.kind === "update")) await assertAppDataQuota(t.schema, false);
-  const role = await sqlRoleFor(t.appId, t.app, t.roleSpecs, t.schema);
+  const role = await sqlRoleFor(t.appId, t.app, t.roleSpecs, t.schema, t.protect);
   const base = { role, appId: t.appId, schema: t.schema, physicalPrefix: `${physicalAppPrefix(t.appId)}__`, format: input.format === "wire" ? "wire" as const : "objects" as const, strict: input.strict === true };
   const out = batch
     ? await runAppSqlBatch({ ...base, items })

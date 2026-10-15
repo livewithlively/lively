@@ -382,6 +382,14 @@
 .livc-tui .sc-wait .v2-dot { display: none; }
 .livc-tui .sc-wait-t { font: inherit; color: var(--tui-fg); }
 .livc-tui .sc-wait-t b { color: var(--tui-perm); }
+/* #4695 T5 — 끄기 전에 남긴 «답을 기다리던 질문» 카드도 Claude Code 질문 창 문법으로 — 선택지는 번호 붙은 세로 목록, 고른 것엔 ❯ */
+.livc-tui .sc-stopq-opts { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: calc(var(--tui-lh) / 2); counter-reset: tui-opt; }
+.livc-tui .sc-stopq-opts .btn { counter-increment: tui-opt; font: inherit; letter-spacing: inherit; text-align: left; border: 0; border-radius: 0; background: none;
+  color: var(--tui-fg); padding: 0; margin: 0; min-height: var(--tui-lh); height: auto; cursor: pointer; box-shadow: none; font-weight: 400; justify-content: flex-start; }
+.livc-tui .sc-stopq-opts .btn::before { content: '  ' counter(tui-opt) '. '; white-space: pre; }
+.livc-tui .sc-stopq-opts .btn:hover, .livc-tui .sc-stopq-opts .btn:focus-visible, .livc-tui .sc-stopq-opts .btn.btn-primary { color: var(--tui-perm); outline: none; background: none; }
+.livc-tui .sc-stopq-opts .btn:hover::before, .livc-tui .sc-stopq-opts .btn:focus-visible::before, .livc-tui .sc-stopq-opts .btn.btn-primary::before { content: '\276F ' counter(tui-opt) '. '; }
+.livc-tui .sc-stopq-h, .livc-tui .sc-stopq-hint, .livc-tui .sc-stopq-target { font: inherit; color: var(--tui-dim); }
 /* 질문(AskUserQuestion) — 번호 붙은 고르기 줄 + 아래 설명 */
 .livc-tui .stk-q .cxl-ask-kind { color: var(--tui-perm); }
 .livc-tui .stk-q-item + .stk-q-item { border-top: 0; padding-top: 0; margin-top: calc(var(--tui-lh) / 2); }

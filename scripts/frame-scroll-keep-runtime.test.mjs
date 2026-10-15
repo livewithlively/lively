@@ -155,7 +155,9 @@ try {
     await ev("document.getElementById('wrap').hidden = false");
     const yh = await until(y, (v) => v === y2);
     ok(yh === y2, `R${++n} ${kind}: 숨겼다(곁칸 다른 탭) 보여도 보던 자리`, { y2, yh });
-    for (let i = 0; i < 10 && (await y()) !== 0; i++) await wheel({ dy: -8000 });
+    //  맨 위까지도 닿을 때까지만 굴린다(rollTo 와 같은 꼴). 한 번에 -8000(틱 80개)을 보내면 1800 에서 18틱이면 될 것을 62틱 더
+    //   보낸다 — CDP 휠 틱 하나가 ~50ms + 간격 15ms 라 그 헛틱이 문서마다 ~4초, 파일 시간의 1/3 이었다(2026-10-15 실측 · #4729).
+    for (let i = 0; i < 60 && (await y()) !== 0; i++) await wheel({ dy: -300 });
     assert.equal(await stable(), 0, `${kind}: 맨 위로 못 올렸다(관측 장치 고장)`);
     await settle(kind, 0);
     await ev("mk()"); await tall(); await sleep(400);

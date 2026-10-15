@@ -53,6 +53,7 @@ import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
+import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
@@ -592,6 +593,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: async (text) => {
       if (attachments.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }
+      //  #4695 T5 — 보낸 글은 더 이상 «쓰던 글» 이 아니다(세션별 기억을 비운다). 못 보내 입력칸으로 돌아오면 그때 다시 기억한다.
+      window.clearTimeout(composeTimer); saveComposeDraft(target.id, '');
+      //  끄기 전에 답을 기다리던 질문이 떠 있으면, 입력칸에 직접 쓴 글은 그 질문의 답이다 — AI 는 그 질문을 기억하지 못하므로 질문을 붙여 보낸다.
+      const q = stopQuestionOpen();
+      if (q && text.trim()) { text = stopFreeAnswerPrompt(q, text); stopAnsweredAt = stopCardAt; clearStopCard(); }
       await sendPrompt(text + attachments.tail(), () => attachments.clear());
     },
     // ★ 항상 준다 — **판단은 누를 때** 한다. 종전엔 여기서 한 번 정하고 끝이라, 화면을 열 때 아직 세션 행이
@@ -606,6 +612,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.input.value = opts.draft;
     view.input.dispatchEvent(new Event('input'));
   }
+  //  #4695 T5 ⑤ — 입력칸의 쓰던 글을 **세션별로** 기억한다(하네스 상태 무관). 종전엔 다른 세션에 다녀오면 사라졌다.
+  //   돌려 둔 글(opts.draft)이 먼저다 — 그게 없을 때만 기억해 둔 글을 채운다. 기억은 이 사람·이 브라우저의 것이다(web/lib/stop-note.ts).
+  let composeTimer = 0;
+  if (!view.input.value) {
+    const kept = loadComposeDraft(first.id);
+    if (kept) { view.input.value = kept; view.input.dispatchEvent(new Event('input')); }
+  }
+  view.input.addEventListener('input', () => {
+    window.clearTimeout(composeTimer);
+    composeTimer = window.setTimeout(() => saveComposeDraft(target.id, view.input.value), 400);
+  });
   attachments.wirePaste(view.input);
   attachments.wireDrop(view.root, view.root);
 
@@ -889,8 +906,97 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
     }
-    if (dead()) paintDeadFooter();
+    if (dead()) { paintDeadFooter(); applyStopNote(); } else clearStopCard();
   };
+
+  // ── #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(서버 sessions/session-stop-rule.ts → 행 stopNote) ─────────────────────────
+  //  ① 쓰다 만 글 → 입력칸(사람이 지운 뒤 다시 채우지 않는다 — 쪽지마다 한 번) ② 답을 기다리던 질문 → 입력칸 바로 위 카드.
+  //  카드는 **멈춘 세션에서만** 선다 — 다시 살아나면(되살렸거나 다른 곳에서 열었다) 걷는다(paintState). 남의 세션엔 안 선다(canRevive).
+  let stopCard: HTMLElement | null = null;
+  let stopCardAt = 0;
+  //  답을 이미 보낸(또는 열기를 누른) 쪽지 — 보내는 동안 목록 갱신(3초)이 같은 멈춘 행을 주면 카드가 되살아나 같은 답이 두 번 갈 수 있었다(격리 리뷰).
+  //   쪽지는 끈 시각(at)으로 갈린다 — 다음에 꺼서 새로 남긴 쪽지는 다시 보인다.
+  let stopAnsweredAt = 0;
+  function clearStopCard(): void { if (stopCard) { stopCard.remove(); stopCard = null; } }
+  /** 지금 답을 기다리는 질문 카드의 질문(없으면 null) — 입력칸에 직접 쓴 답을 그 질문에 붙여 보낼 때 쓴다. */
+  function stopQuestionOpen(): StopNote['question'] | null {
+    if (!stopCard || !stopCard.isConnected) return null;
+    const note = stopNoteOf(target.raw?.stopNote);
+    return note?.question && !note.question.reappears ? note.question : null;
+  }
+  /** 쪽지를 화면에 되돌린다(여러 번 불러도 같다). 돌려준 것 — draft: 입력칸을 채웠나. */
+  function applyStopNote(): { draft: boolean } {
+    const note = stopNoteOf(target.raw?.stopNote);
+    if (!note || !canRevive() || destroyed) return { draft: false };
+    let draft = false;
+    if (note.draft && !view.input.value && !stopDraftSeen(target.id, note.at)) {
+      view.input.value = note.draft;
+      view.input.dispatchEvent(new Event('input'));   // 높이 맞춤 + 세션별 쓰던 글로도 기억
+      markStopDraftSeen(target.id, note.at);
+      draft = true;
+    }
+    if (note.question && note.at !== stopAnsweredAt && (!stopCard || stopCardAt !== note.at)) {
+      clearStopCard();
+      stopCard = renderStopQuestion(note);
+      stopCardAt = note.at;
+      liveDock.prepend(stopCard);
+      //  질문은 대화창에서 답한다 — 사람이 직접 고른 화면이 아니면 대화로 옮긴다(멈춘 세션은 어차피 터미널이 없다).
+      if (!modeChosen && mode === 'term') setMode('chat');
+    }
+    return { draft };
+  }
+  /** 답을 기다리던 질문 카드. claude 는 다시 열어도 그 질문 창이 안 뜬다 → 고른 답을 «앞서 물은 … 에 대한 답» 으로 보내 되살린다.
+   *  codex 는 다시 열면 같은 창이 다시 뜬다(reappears) → 열기만 하고 그 창에서 답하게 한다. */
+  function renderStopQuestion(note: StopNote): HTMLElement {
+    const q = note.question!;
+    const title = q.kind === 'permission' ? '실행 허락을 기다리던 질문이에요' : q.kind === 'plan' ? '계획 승인을 기다리던 질문이에요' : '답을 기다리던 질문이에요';
+    const body = el('div', { class: 'sc-wait-t sc-stopq-t' }, el('b', { text: title }));
+    const items = q.items.map((it) => {
+      const box = el('div', { class: 'sc-stopq-item' });
+      if (it.header) box.append(el('div', { class: 'sc-stopq-h', text: it.header }));
+      if (it.text) box.append(el('div', { class: 'sc-stopq-q', text: it.text }));
+      return box;
+    });
+    if (q.target) body.append(el('code', { class: 'sc-stopq-target', text: q.target }));
+    body.append(...items);
+    const acts = el('div', { class: 'sc-wait-acts sc-stopq-acts' });
+    const card = el('div', { class: 'sc-wait sc-stopq' }, el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }), body, acts);
+    if (q.reappears) {
+      //  codex — 다시 열면 같은 승인 창이 다시 뜬다(실측 0.162.1). 고른 답을 미리 받아 둘 이유가 없다 — 열고 그 창에서 답한다.
+      body.append(el('div', { class: 'sc-stopq-hint', text: '다시 열면 같은 창이 다시 떠요 — 거기서 답해 주세요.' }));
+      acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이어서 열고 답하기',
+        onclick: () => { stopAnsweredAt = note.at; clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true }); } }));
+      return card;
+    }
+    const picks = q.items.map(() => ({ labels: [] as string[] }));
+    const send = (): void => {
+      const text = stopAnswerPrompt(q, picks);
+      if (!text) { toast('답을 하나 이상 골라 주세요.'); return; }
+      stopAnsweredAt = note.at;
+      clearStopCard();
+      void sendPrompt(text);
+    };
+    //  질문이 하나이고 하나만 고르는 것이면 누르는 즉시 보낸다. 여럿이거나 여러 개 고르기면 골라 두었다가 [답 보내기].
+    const instant = q.items.length === 1 && !q.items[0].multi;
+    q.items.forEach((it, i) => {
+      const row = el('div', { class: 'sc-stopq-opts' }) as HTMLElement;
+      for (const op of it.options) {
+        const b = el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: op.label, title: op.desc || op.label }) as HTMLButtonElement;
+        b.addEventListener('click', () => {
+          if (instant) { picks[i].labels = [op.label]; send(); return; }
+          const cur = picks[i].labels;
+          const on = cur.includes(op.label);
+          picks[i].labels = it.multi ? (on ? cur.filter((x) => x !== op.label) : [...cur, op.label]) : (on ? [] : [op.label]);
+          for (const sib of Array.from(row.querySelectorAll('button'))) sib.classList.toggle('btn-primary', picks[i].labels.includes(sib.textContent || ''));
+        });
+        row.append(b);
+      }
+      items[i].append(row);
+    });
+    if (!instant) acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '답 보내기', onclick: send }));
+    if (q.items.some((it) => it.free)) body.append(el('div', { class: 'sc-stopq-hint', text: '고를 것이 없으면 아래 입력칸에 직접 답을 써 보내세요 — 이 질문에 대한 답으로 들어갑니다.' }));
+    return card;
+  }
   let deadFooterOn = false;
   const paintDeadFooter = (): void => {
     if (deadFooterOn) return; deadFooterOn = true;
@@ -901,7 +1007,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   되살릴 수 없는 세션(남의 것·휴지통·좌표 없음)만 종전대로 footer 로 사실을 말한다(막다른 입력창을 두지 않는다).
     if (canRevive()) {
       view.setFooter(null);
-      view.setNote(`${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
+      //  #4695 T5 — 하네스 종료 규칙이 끈 세션이면 쪽지로 왜 꺼졌는지 말하고, 쓰다 만 글·답을 기다리던 질문을 되돌린다(applyStopNote).
+      const restored = applyStopNote();
+      const note = stopNoteOf(target.raw?.stopNote);
+      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션이 다시 열리고 그 말이 들어갑니다.'
+        : note ? `${stopNoteWhy(note)} — 아래에 말을 걸면 다시 띄워 이어서 답합니다.`
+        : `${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
       view.busy(false);
       return;
     }
@@ -2207,6 +2318,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       view.settle(pd.t); view.busy(false);
       view.error(pd.t, `보내지 못했습니다. ${e?.message || ''}`);
       view.input.value = text;               // 친 글은 돌려준다
+      view.input.dispatchEvent(new Event('input'));   // #4695 — 돌려준 글도 세션별로 다시 기억한다
     }
   }
   /** 돌던 턴을 멈춘다. app-server 세션(#2055)은 tmux 키가 아니라 **그 런타임**에 직접 말한다 —
@@ -2272,7 +2384,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     reviving = true;
     view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
     const pd = addPending(text);
-    pd.state.textContent = '세션을 이어서 여는 중…';
+    //  #4695 T5 — 하네스 종료 규칙이 끈 세션에 말을 걸면 여기로 온다(컨테이너 → tmux → 하네스 이어 열기 → 전달). 운영 p50 약 5초다.
+    pd.state.textContent = '준비 중이에요 — AI 를 다시 띄워 이 말을 전달합니다(보통 5초 안팎 걸립니다).';
     view.scrollToBottom();
     let routed = false;
     try {

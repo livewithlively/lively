@@ -1,6 +1,8 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
+import type { SessionStopNote } from "../sessions/session-state.js";   // #4695 — 타입만(이 모듈은 노드 번들에도 들어간다)
+import type { ReportedState } from "./phase.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -453,6 +455,13 @@ export interface SessionInfo {
   //  working 과 따로인 이유: working 은 «턴이 돈다» 이고 리브 2턴·대화창·회수·CP 유휴가 그 뜻으로 읽는다(phase.screenRunEffects).
   //  참일 때만 실린다(없음 = 거짓).
   background?: boolean;
+  // #4695 T5 — 하네스가 **마지막으로 한 보고** 그대로(만료 무관 — @box_state). 하네스 종료 규칙(sessions/session-stop-rule.ts)이 «완료» 를 가르는
+  //  재료다: 턴 끝(idle)에 실린 열린 백그라운드 작업 수(bg)·다음 예약 깨움(wake)·반복 예약 수(cron). AI 가 안 돌면(셸·꺼짐) 없다.
+  //  ⚠ 이 칸이 없는 행(옛 세션 호스트·옛 노드가 만든 행)은 «모른다» 다 — 그 규칙은 그런 세션을 끄지 않는다.
+  lastReport?: ReportedState;
+  // #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). **복원 가능 행에만** 실린다 — 대화창이 입력칸을 채우고
+  //  질문을 다시 보여 주는 재료다(web/session-chat.ts). 살아 있는 행엔 없다(그때 쪽지는 지난 일이다).
+  stopNote?: SessionStopNote;
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
@@ -661,6 +670,57 @@ const LAUNCH_SH = [
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
 
+// ── 하네스 종료 규칙 세션의 런처(#4695 T5 — 상민님 2026-10-15 ①②③) ──
+//  위 런처는 비정상 종료(rc≠0)면 언제나 셸로 떨어진다. 하네스 종료 규칙(sessions/session-stop-rule.ts)을 따르는 세션은 «하네스가 끝나면
+//  세션도 끝나고 컨테이너가 걷힌다» 가 전제라, 셸이 tmux 를 붙잡고 있으면 그 전제가 깨진다(예약 1GB 를 계속 잡는다). 그래서 갈래를 셋으로 나눈다:
+//   ① 한동안 돌던 하네스가 죽었다(기동 20초 뒤) → 셸 없이 끝낸다. 장부 행은 남아 다시 열면 같은 대화로 이어진다.
+//   ② 이어 열기(--resume <id> 등)가 기동 20초 안에 죽었다 → 이어 열기 인자를 빼고 **새 대화로 한 번 더** 띄운다.
+//      없는 대화 id 로 열면 claude·codex·opencode 모두 종료코드 1 로 곧바로 끝난다(T2 #4692 §4 실측) — 그대로 두면 다시 열 때마다 죽는다.
+//   ③ 새 대화로도 기동 20초 안에 죽었다(로그인 만료·실행 파일 없음 등) → 종전처럼 안내 + 셸을 남긴다. 사람이 원인을 읽고 고칠 자리다(#1516).
+//      아무도 안 보면 하네스 종료 규칙이 «하네스가 끝나 셸만 남음(exited)» 으로 보고 완료와 같이 N분 뒤 끈다.
+//  ⚠ 시계를 못 읽으면(date 가 없음) 종전 런처와 똑같이 군다 — 얼마나 돌았는지 모르면 ①(끝내기)도 ②(새 대화)도 고를 근거가 없다.
+//  ⚠ 인젝션 안전은 위와 같다 — 고정 문자열이고 값은 위치인자로만 들어간다. 이어 열기 인자 수(nres)도 위치인자다(숫자가 아니면 0 으로 본다).
+//  ⓘ 이어 열기 인자는 실행 파일 **바로 뒤**에 붙는다(createSession — codex 는 서브커맨드라 그 자리가 계약이다). 그래서 빼는 자리는 [2, 1+nres] 다.
+//  ⓘ «20초» 는 LIVELY_LAUNCH_QUICK_SEC 로 바꿀 수 있다(시험·진단용 — 운영에선 안 둔다).
+const LAUNCH_STOP_SH = [
+  'set -m',
+  'notice=$1; notfound=$2; nres=$3; shift 3',
+  'case "$nres" in ""|*[!0-9]*) nres=0;; esac',
+  'quick_sec=${LIVELY_LAUNCH_QUICK_SEC:-20}',
+  'case "$quick_sec" in ""|*[!0-9]*) quick_sec=20;; esac',
+  'clock() { date +%s 2>/dev/null || echo 0; }',
+  //  기동 직후에 끝났나 — 시계가 없으면 «모른다»(2) 를 돌려 종전 동작으로 떨어진다.
+  'early() { t1=$(clock); case "$t0$t1" in *[!0-9]*) return 2;; esac; [ "$t0" -gt 0 ] && [ "$t1" -ge "$t0" ] || return 2; [ $((t1 - t0)) -le "$quick_sec" ]; }',
+  't0=$(clock)',
+  '"$@"',
+  'rc=$?',
+  '[ "$rc" -eq 0 ] && exit 0',
+  'early; e=$?',
+  //  ② 이어 열기가 곧바로 죽었다 → 이어 열기 인자를 빼고 새 대화로 한 번 더. 갈래는 **종료코드 1** 뿐이다 — 없는 대화 id 로 열면 claude·codex 가
+  //   1 로 끝난다(T2 실측). 그 밖(127 실행 파일 없음 · 137 메모리 부족 강제 종료 · 143 신호)은 «대화를 못 찾았다» 가 아니다 — 새 대화로 열면
+  //   대화 매핑이 고아가 되고 안내가 사실과 다르다(격리 리뷰). 그런 실패는 ③(안내 + 셸)으로 간다.
+  'if [ "$e" -eq 0 ] && [ "$rc" -eq 1 ] && [ "$nres" -gt 0 ] && [ "$#" -gt "$nres" ]; then',
+  '  bin=$1; shift; n=$#; i=0',
+  '  for a in "$@"; do i=$((i+1)); [ "$i" -gt "$nres" ] && set -- "$@" "$a"; done',
+  '  shift "$n"',
+  '  set -- "$bin" "$@"',
+  '  printf \'\\n%s\\n\' "이어서 열 대화를 찾지 못해 새 대화로 시작합니다."',
+  '  t0=$(clock)',
+  '  "$@"',
+  '  rc=$?',
+  '  [ "$rc" -eq 0 ] && exit 0',
+  '  early; e=$?',
+  'fi',
+  //  ① 한동안 돌던 하네스가 죽었다 → 셸 없이 끝낸다(tmux 가 끝나면 컨테이너도 걷힌다 — 다시 열면 이어진다).
+  '[ "$e" -eq 1 ] && exit "$rc"',
+  //  ③ 기동하자마자 죽었다(또는 시계를 못 읽었다) → 원인을 읽고 고칠 수 있게 안내와 셸을 남긴다(종전 런처와 같다).
+  'if [ "$rc" -eq 127 ]; then printf \'\\n%s\\n\' "$notfound"; else printf \'\\n%s\\n\' "$notice"; fi',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+
+/** 하네스 종료 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 sessions/session-stop-rule.ts 가 같은 표를 본다. */
+export const STOP_RULE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);
+
 // 비정상 종료 안내 — **비개발자가 그대로 따라 할 수 있는 한 줄**을 준다(원문 영문 에러는 위에 그대로 남는다).
 //  codex 로그인은 `--device-auth` 가 정답이다: 웹터미널은 본질적으로 원격이라 기본 플로우가 띄우는
 //  `http://localhost:1455`(서버의 localhost) 에 사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라
@@ -767,13 +827,21 @@ export function harnessResumeCommand(harnessKey: string, convId: string): string
   return [h.bin || h.key, ...h.resumeArgv(id)].join(" ");
 }
 
-export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
+/**
+ * @param opts.stopRule  하네스 종료 규칙을 따르는 세션인가(#4695 — 매니지드 ∧ STOP_RULE_HARNESSES). 참이면 런처 ①②③(LAUNCH_STOP_SH).
+ * @param opts.resumeArgc 실행 파일 바로 뒤에 붙은 이어 열기 인자 수(②가 빼는 수). 0 이면 ② 는 없다.
+ */
+export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform, opts: { stopRule?: boolean; resumeArgc?: number } = {}): string[] {
   const argv = Array.isArray(cmd) ? cmd : [];
   // #3982 hammurabi 실측: Windows PowerShell 5.1은 CreateProcessW access denied였고, 명령 없는 pane도
   // psmux가 실행 가능성이 아니라 파일 존재만 보고 그 PowerShell을 먼저 골라 즉시 죽었다. 빈 pane은 실행 정책의
   // 영향을 받지 않는 cmd.exe를 명시한다. 실제 하네스 argv는 계속 raw argv 직접 실행 경계를 탄다.
   if (platform === "win32") return argv.length ? argv : ["cmd.exe", "/K"];
   if (!argv.length) return argv;
+  if (opts.stopRule && STOP_RULE_HARNESSES.has(harnessKey)) {
+    const nres = Number.isInteger(opts.resumeArgc) && (opts.resumeArgc as number) > 0 ? String(opts.resumeArgc) : "0";
+    return ["sh", "-c", LAUNCH_STOP_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), nres, ...argv];
+  }
   return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), ...argv];
 }
 

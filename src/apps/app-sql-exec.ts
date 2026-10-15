@@ -255,10 +255,11 @@ const closing: Array<Promise<void>> = [];
 export function currentAppSqlLimits(): AppSqlLimits { return { ...limits }; }
 
 /** 테스트·운영 조정 — 상한을 다시 읽고 기억(버킷·스케줄러)을 새로 만든다. 풀은 다음 사용 때 새 크기로 만든다. */
-export function resetAppSqlLimits(env: NodeJS.ProcessEnv = process.env): AppSqlLimits {
+export function resetAppSqlLimits(env: NodeJS.ProcessEnv = process.env, now: () => number = Date.now): AppSqlLimits {
   limits = appSqlLimits(env);
-  buckets = new TokenBuckets(limits.ratePerSec, limits.burst);
-  serverBuckets = new TokenBuckets(limits.serverRatePerSec, limits.serverBurst);
+  //  now — 시험이 시계를 넘겨 준다(빈도 버킷이 실제 시간에 기대면 부하 걸린 CI 에서 그새 다시 차 흔들린다).
+  buckets = new TokenBuckets(limits.ratePerSec, limits.burst, now);
+  serverBuckets = new TokenBuckets(limits.serverRatePerSec, limits.serverBurst, now);
   slots = new FairScheduler(limits.poolMax, limits.perWorkspace);
   if (pool) { const p = pool; pool = null; closing.push(p.end().catch(() => undefined)); }
   quotaCache.clear();

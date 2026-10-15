@@ -254,6 +254,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-wait[hidden] { display: none; }
 .sc-wait-t { font-size: 13px; color: var(--ink); line-height: 1.5; min-width: 0; flex: 1; }
 .sc-wait-acts { display: inline-flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+/* #4695 T5 — 하네스를 끄기 전에 남긴 «답을 기다리던 질문» 카드. 확인 대기 줄(.sc-wait)의 모양을 그대로 쓰고 질문·선택지만 더한다. */
+.sc-stopq { align-items: flex-start; }
+.sc-stopq-item { margin-top: 6px; }
+.sc-stopq-h { font-size: 12px; font-weight: 600; color: var(--ink-sub); }
+.sc-stopq-q { white-space: pre-wrap; }
+.sc-stopq-target { display: block; margin-top: 6px; white-space: pre-wrap; word-break: break-all; font-family: var(--livc-mono); font-size: 12px; color: var(--ink-sub); }
+.sc-stopq-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.sc-stopq-hint { margin-top: 6px; font-size: 12px; color: var(--muted); }
 
 .sc-bar { display: flex; align-items: center; gap: 12px; padding: 12px 22px 16px; border-top: 1px solid var(--line); background: var(--bg-tint); }
 .sc-bar-t { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 0; line-height: 1.5; }

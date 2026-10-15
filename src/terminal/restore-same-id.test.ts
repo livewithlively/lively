@@ -1,9 +1,10 @@
 // #4694 T4 — 복원을 **같은 세션 id** 로. 사양 기반 엣지 표 + 배선 가드.
 //
-//  사양(태스크 #4694 · 상민님 결정 2026-10-14 «T3 뒤에 켠다»):
+//  사양(태스크 #4694 · 상민님 결정 2026-10-14 «T3 뒤에 켠다» → 2026-10-15 T3 전 테넌트·실측 뒤 «다른 워크스페이스도 켠다»):
 //   · 옛 판이 없다는 확답이 있을 때만 같은 id 로 다시 띄운다. 살아 있으면 복원할 것이 없고(already), «모름» 에서 사람이 고른
 //     강제 복원은 종전대로 새 id(옛 id 를 은퇴시켜 브로커가 걷게) — 같은 id 로 강제하면 한 대화에 하네스 둘이 붙을 수 있다.
-//   · 셀프호스트(세션 컨테이너 없음)는 늘. 매니지드는 워크스페이스 스위치(session_reclaim_policy.restore_same_id, 기본 끔).
+//   · 셀프호스트(세션 컨테이너 없음)는 늘. 매니지드는 워크스페이스 스위치(session_reclaim_policy.restore_same_id, 기본 켬 —
+//     저장값 false 는 그 워크스페이스만, env 시드 0|off 는 게이트웨이 전체를 끈다).
 //   · 같은 id 로 다시 띄운 세션은 프로세스가 기억하던 옛 판의 작업 시각으로 판정되지 않는다.
 //   · 같은 id 갈래는 옮길 것이 없다 — 승계·옛 id 정리를 하지 않고, 실패해도 이 호출 전부터 있던 행을 지우지 않는다.
 //  DB 쪽 사양(표식 정리 R1~R7 · 인스턴스 I1~I5)은 실 PG 로 잰다 — src/sessions/session-revive.pg-test.mjs.
@@ -15,7 +16,7 @@
 //   V4 살아 있음(false) — 어떤 토폴로지·스위치든      → 같은 id 아님(already 로 끝난다)
 //   V5 모름(null, 강제 복원) — 어떤 토폴로지·스위치든 → 같은 id 아님
 //   L1~L6 마지막 작업 시각(lastBusyFor) — 옛 기억 버림 · 지금 판 유지 · 태어난 시각 모름 · 영속값 · 경계 · 기억 없음
-//   P1~P3 스위치 기본값 · 워크스페이스 저장값 · env 시드
+//   P1~P4 스위치 기본 켬 · 워크스페이스 저장값이 끔 · env 시드가 전체를 끔(저장값이 이김) · 빈 env 시드는 없는 것
 //   W1~W5 배선 — 같은 id 갈래가 승계·정리를 안 하고, 롤백이 행을 안 지우고, 화면이 같은 id 를 성공으로 읽는다
 import { strict as assert } from "node:assert";
 import test from "node:test";
@@ -45,16 +46,20 @@ test("[L1~L6] 마지막 작업 시각 — 프로세스 기억이 지금 tmux 세
   assert.equal(lastBusyFor(0, 0, 200), 0, "L6 기억도 영속값도 없으면 0(회수기는 생성 시각으로 폴백한다)");
 });
 
-test("[P1~P3] 매니지드 스위치 — 기본 끔 · 워크스페이스 저장값 · env 시드", () => {
+test("[P1~P4] 매니지드 스위치 — 기본 켬 · 워크스페이스 저장값 · env 시드(끄는 수단)", () => {
   const saved = process.env.LIVELY_SESSION_RESTORE_SAME_ID;
   try {
     delete process.env.LIVELY_SESSION_RESTORE_SAME_ID;
-    assert.equal(normalizeSessionReclaimPolicy(null).restore_same_id, false, "P1 값이 없으면 끔(매니지드는 T3 자리 이름 뒤에 켠다)");
-    assert.equal(normalizeSessionReclaimPolicy({ idle_ttl_minutes: 120 }).restore_same_id, false, "P1 옛 저장값(이 칸 이전)도 끔");
-    assert.equal(normalizeSessionReclaimPolicy({ restore_same_id: true }).restore_same_id, true, "P2 워크스페이스 저장값이 켠다");
-    process.env.LIVELY_SESSION_RESTORE_SAME_ID = "1";
-    assert.equal(normalizeSessionReclaimPolicy(null).restore_same_id, true, "P3 env 시드가 게이트웨이 전체 기본을 켠다");
-    assert.equal(normalizeSessionReclaimPolicy({ restore_same_id: false }).restore_same_id, false, "P3 워크스페이스 저장값이 env 시드를 이긴다");
+    assert.equal(normalizeSessionReclaimPolicy(null).restore_same_id, true, "P1 값이 없으면 켬(T3 자리 이름 전 테넌트 롤아웃 뒤)");
+    assert.equal(normalizeSessionReclaimPolicy({ idle_ttl_minutes: 120 }).restore_same_id, true, "P1 옛 저장값(이 칸 이전)도 켬");
+    assert.equal(normalizeSessionReclaimPolicy({ restore_same_id: false }).restore_same_id, false, "P2 워크스페이스 저장값이 그 워크스페이스만 끈다");
+    process.env.LIVELY_SESSION_RESTORE_SAME_ID = "0";
+    assert.equal(normalizeSessionReclaimPolicy(null).restore_same_id, false, "P3 env 시드 0 이 게이트웨이 전체를 끈다");
+    process.env.LIVELY_SESSION_RESTORE_SAME_ID = "off";
+    assert.equal(normalizeSessionReclaimPolicy({ idle_ttl_minutes: 120 }).restore_same_id, false, "P3 env 시드 off 도 끈다(이 칸 없는 옛 저장값 위에서도)");
+    assert.equal(normalizeSessionReclaimPolicy({ restore_same_id: true }).restore_same_id, true, "P3 워크스페이스 저장값이 env 시드를 이긴다");
+    process.env.LIVELY_SESSION_RESTORE_SAME_ID = "";
+    assert.equal(normalizeSessionReclaimPolicy(null).restore_same_id, true, "P4 빈 env 시드는 없는 것과 같다(켬)");
   } finally {
     if (saved === undefined) delete process.env.LIVELY_SESSION_RESTORE_SAME_ID; else process.env.LIVELY_SESSION_RESTORE_SAME_ID = saved;
   }

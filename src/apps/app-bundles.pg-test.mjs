@@ -4,7 +4,7 @@
 // 사양 표 D — 새 DB(initAllSchemas) 위에서 끝까지 돈다. 저장소는 DB(자가호스팅 길 — S3 설정 없음): 장부 · 내용 · 정리가 같은 규칙을 탄다.
 //  D1 여러 파일 앱 저장(web.root=dist) → 판 행에 파일 목록 · 장부에 지문마다 한 줄(stored) · 옛 코어 호환 사본
 //  D2 앱 주소 — `/` 는 런타임을 넣은 index.html · 스크립트는 제 종류 · web.root 밖(매니페스트 · 소스)은 못 받는다 · 한 페이지 앱
-//  D3 공개 판 · 초안 — 공개한 뒤 고친 판은 고친 사람만 · 남은 공개 판 파일 · 공개 판으로 되돌리면 초안이 걷힌다
+//  D3 공개 판 · 초안 — 공개한 뒤 고친 판은 고친 사람의 초안 주소에서만(공개 주소는 모두에게 공개 판 · #4667) · 공개 판으로 되돌리면 초안이 걷힌다
 //  D4 N → N-1 되돌리기 — 앱 주소가 앞 판의 내용을 낸다(뒤 판에만 있던 파일은 없다)
 //  D5 사본 — 큰 판 내려받기는 큰 파일을 지문만 · 그 줄 그대로 새 id 로 저장 · 새 앱이 같은 파일을 낸다(장부는 한 벌)
 //  D6 옛 판 옮기기 — bundle 없는 판 → 하우스키핑이 목록을 단다(files 그대로) · 30일 뒤 files 비움 · 그 뒤에도 되돌리기 · 내려받기 ·
@@ -69,9 +69,11 @@ const deps = {
   versionHash: (id, no) => appStore.getAppVersionHash(id, no), versionBundle: (id, no) => appStore.getAppVersionBundle(id, no),
   readBlob: (k, h) => blob.getBlob(k, h),
 };
-const get = (mid, app, path, extra = {}) => appFrontPage({
-  "x-lvly-app-front": signAppFront("pgt", { op: "act", t: T.id, ws: T.slug, app, var: "pub", mid, iat: Math.floor(Date.now() / 1000) }), ...extra,
+const get = (mid, app, path, extra = {}, variant = "pub") => appFrontPage({
+  "x-lvly-app-front": signAppFront("pgt", { op: "act", t: T.id, ws: T.slug, app, var: variant, mid, iat: Math.floor(Date.now() / 1000) }), ...extra,
 }, path, deps);
+//  초안 주소(`…-draft`) — 공개 앱에 걸린 초안은 그 초안을 고친 사람이 이 주소에서만 본다(#4667 · 설계 §13-5).
+const getDraft = (mid, app, path, extra = {}) => get(mid, app, path, extra, "draft");
 const text = (r) => (r.body ? r.body.toString() : String(r.html ?? ""));
 
 const manifest = (id, o = {}) => JSON.stringify({
@@ -122,12 +124,15 @@ try {
   const s2 = await call("app_save", { files: web("webapp", "v2", [{ path: "dist/only-v2.txt", content: "new" }]), note: "둘째 판" }, alice);
   clearFrontBundleCacheForTest();
   const bobJs = text(await get("pgt-bob", "webapp", `/${JS}`));
-  const aliceJs = text(await get("pgt-alice", "webapp", `/${JS}`));
+  const alicePubJs = text(await get("pgt-alice", "webapp", `/${JS}`));
+  const aliceJs = text(await getDraft("pgt-alice", "webapp", `/${JS}`));
+  const bobDraft = (await getDraft("pgt-bob", "webapp", `/${JS}`)).status;
   const bobOnly = (await get("pgt-bob", "webapp", "/only-v2.txt")).status;
-  const aliceOnly = (await get("pgt-alice", "webapp", "/only-v2.txt")).status;
-  chk("D3 공개 판 · 초안 — 공개 뒤 고친 2판은 고친 사람만 · 남은 1판 파일 · 초안에만 있는 파일은 남에게 404",
-    s2.version_no === 2 && s2.state === "draft" && bobJs === 'console.log("v1")' && aliceJs === 'console.log("v2")' && bobOnly === 404 && aliceOnly === 200,
-    JSON.stringify({ s2: [s2.version_no, s2.state], bobJs, aliceJs, bobOnly, aliceOnly }));
+  const aliceOnly = (await getDraft("pgt-alice", "webapp", "/only-v2.txt")).status;
+  chk("D3 공개 판 · 초안 — 공개 주소는 모두에게 1판(고친 사람 포함) · 초안 주소는 고친 사람만 2판 · 남의 초안 주소 404 · 초안에만 있는 파일은 남에게 404",
+    s2.version_no === 2 && s2.state === "draft" && bobJs === 'console.log("v1")' && alicePubJs === 'console.log("v1")' && aliceJs === 'console.log("v2")'
+      && bobDraft === 404 && bobOnly === 404 && aliceOnly === 200,
+    JSON.stringify({ s2: [s2.version_no, s2.state], bobJs, alicePubJs, aliceJs, bobDraft, bobOnly, aliceOnly }));
 
   const r1 = await call("app_revert", { app_id: "webapp", version_no: 1 }, alice);
   clearFrontBundleCacheForTest();
@@ -221,13 +226,13 @@ try {
   await call("app_save", { files: [{ path: "lively-app.json", content: oneMan }, { path: "ui/index.html", content: "<p>초안 한 장</p>" }] }, alice);
   await q(`UPDATE org_app_version SET files='[]'::jsonb WHERE app_id='onepage'`);
   const live = { ...appFrontLiveDepsForTest(), env: ENV, tenant: () => T, scripts: deps.scripts };
-  const hdr = (mid, app) => ({ "x-lvly-app-front": signAppFront("pgt", { op: "act", t: T.id, ws: T.slug, app, var: "pub", mid, iat: Math.floor(Date.now() / 1000) }) });
+  const hdr = (mid, app, variant = "pub") => ({ "x-lvly-app-front": signAppFront("pgt", { op: "act", t: T.id, ws: T.slug, app, var: variant, mid, iat: Math.floor(Date.now() / 1000) }) });
   clearFrontBundleCacheForTest();
   const bobOne = await appFrontPage(hdr("pgt-bob", "onepage"), "/", live);
-  const aliceOne = await appFrontPage(hdr("pgt-alice", "onepage"), "/", live);
+  const aliceOne = await appFrontPage(hdr("pgt-alice", "onepage", "draft"), "/", live);
   const bobUi = await call("org_app_ui", { app_id: "onepage" }, bob);
   const emptied = await q(`SELECT count(*)::int AS n FROM org_app_version WHERE app_id='onepage' AND jsonb_array_length(files)=0 AND bundle IS NOT NULL`);
-  chk("D10 화면 한 장 공개 판 — 호환 사본을 비워도 앱 주소 · org_app_ui 가 공개 판(파일 목록에서) · 초안을 만든 사람은 초안",
+  chk("D10 화면 한 장 공개 판 — 호환 사본을 비워도 앱 주소 · org_app_ui 가 공개 판(파일 목록에서) · 초안을 만든 사람은 초안 주소에서 초안",
     emptied[0].n === 2 && bobOne.status === 200 && text(bobOne).includes("공개 판 한 장") && aliceOne.status === 200 && text(aliceOne).includes("초안 한 장")
       && bobUi.view === "published" && String(bobUi.html).includes("공개 판 한 장"),
     JSON.stringify({ emptied: emptied[0].n, bob: [bobOne.status, text(bobOne).slice(0, 80)], alice: [aliceOne.status], ui: [bobUi.view, String(bobUi.html).slice(0, 40)] }));

@@ -148,9 +148,13 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   assert.ok(/pub\.example\.com/.test(pub.headers!["Content-Security-Policy"]) && !/draft\.example\.com/.test(pub.headers!["Content-Security-Policy"]), "공개 판의 CSP");
   assert.deepEqual(asked, [["deck-edit", 3]], "공개 판 번호의 판 행을 읽는다");
   assert.equal((await appFrontPage(actH({ mid: "alice" }), "/?page=nope", d)).status, 404, "공개 판에 없는 화면 키");
-  const own = await appFrontPage(actH({ mid: "carol" }), "/", d);
-  assert.ok(own.status === 200 && own.html!.includes("<p>main</p>"), "초안을 만든 사람은 설치된 화면");
-  ok("E6 page — 남의 초안이 걸린 공개 앱은 공개 판의 화면 · CSP(#4667) · 초안 주인은 설치된 화면");
+  //  공개 주소는 초안 주인에게도 공개 판 — 초안 코드는 초안 주소에서만 돈다(설계 §13-5: 초안 코드의 서비스 워커 · 저장소가 공개 주소에 남지 않게)
+  const ownPub = await appFrontPage(actH({ mid: "carol" }), "/", d);
+  assert.ok(ownPub.status === 200 && ownPub.html!.includes("<p>공개 판</p>"), "초안 주인도 공개 주소에선 공개 판");
+  const ownDraft = await appFrontPage(actH({ mid: "carol", var: "draft" }), "/", d);
+  assert.ok(ownDraft.status === 200 && ownDraft.html!.includes("<p>main</p>") && /draft\.example\.com/.test(ownDraft.headers!["Content-Security-Policy"]), "초안 주인은 초안 주소에서 설치된 화면 · 초안의 CSP");
+  assert.equal((await appFrontPage(actH({ mid: "alice", var: "draft" }), "/", d)).status, 404, "남의 초안 주소는 없는 판");
+  ok("E6 page — 남의 초안이 걸린 공개 앱: 공개 주소는 모두에게 공개 판의 화면 · CSP(초안 주인 포함) · 초안 주소는 초안 주인만(#4667)");
 }
 
 console.log(`\n${pass} passed`);

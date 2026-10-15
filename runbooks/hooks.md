@@ -83,6 +83,12 @@ The **phase itself** is now sent over the same path (`POST …/active`) that #10
   `"idle <epoch seconds> bg=<n>"` (old parsers read only the first two tokens) and does **not** carry a previous bg over a report that has
   none (a hook that could not count must not inherit an old 0). The session list drops the screen's «… · 1 shell still running» (#4502 background) from the sidebar dot when the
   last report is idle with `bg=0` — the screen counter can disagree with what the AI is actually waiting for. No count → no `bg` → the screen is trusted as before.
+- #4695 — the same idle reports also carry **scheduled wake-ups**: `wake=<epoch seconds>` (the next ScheduleWakeup — `toolUseResult.scheduledFor`
+  of the latest result, cleared by a `stop:true` wake; 0 = none or already past) and `cron=<n>` (open CronCreate jobs younger than 7 days, closed by
+  CronDelete or by the fire of a one-shot job). Written as `"idle <epoch seconds> bg=<n> wake=<epoch seconds> cron=<n>"` — `bg` keeps the third token
+  so old parsers are unaffected. **Both tokens travel together or not at all**: a scheduling call whose result was not recognised, or a wake whose
+  time could not be derived, means «unknown» and the hook omits them. The harness stop rule (`src/sessions/session-stop-rule.ts`) never treats a
+  claude session as «done» without them, so an old hook or an unrecognised result can only keep a session alive, never stop it.
 - **Decision priority** (`src/terminal/phase.ts resolveAgentPhase` — re-exported by `terminal-sessions.ts`; the table is pinned by `terminal-sessions.test.ts`):
   fresh `waiting` report → fresh `busy` report → spinner (legacy) → capture-pane waiting (legacy) → `idle`.
   The spinner ranks above a reported `idle` to rescue **the case where the Stop gate blocked and the turn continued**.

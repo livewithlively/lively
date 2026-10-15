@@ -336,6 +336,41 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
     ? ok("E18 못 세면 bg 를 싣지 않는다(경로 없음 · 없는 파일 · codex · 도는 턴)") : bad("E18 noBg", `실제=${JSON.stringify(noBg)}`);
 }
 
+// ── E19(#4695 T5): 턴 끝 보고엔 **예약 깨움·반복 예약**도 함께 싣는다(wake=다음 깨움 epoch초 · 0=없음/지남 · cron=열린 예약 수) ──────
+//  하네스 종료 규칙은 이 둘이 있으면 «완료» 로 보지 않는다(끄면 깨움이 영영 안 온다). 셈을 못 믿으면(결과 없는 예약 호출) 싣지 않는다 —
+//  서버는 예약 칸이 없는 claude 보고를 «모른다» 로 읽어 끄지 않는다.
+{
+  const bodies = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/active`)
+    .map((x) => { try { return JSON.parse(x.body); } catch { return null; } });
+  const conv = join(SANDBOX, "conv-sched.jsonl");
+  const now = Date.now();
+  const wakeLines = (id, sf) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "ScheduleWakeup", input: { delaySeconds: 1200, prompt: "/loop x" } }] } }) + "\n"
+    + JSON.stringify({ type: "user", timestamp: new Date(now).toISOString(), message: { content: [{ type: "tool_result", tool_use_id: id, content: "Next wakeup scheduled for 09:00:00 (in 1200s)." }] }, toolUseResult: { scheduledFor: sf } }) + "\n";
+  writeFileSync(conv, wakeLines("tw1", now + 1_200_000));
+  fresh();
+  const sid = `sc${++n}`;
+  const b1 = bodies(await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b1.length === 1 && b1[0].state === "idle" && b1[0].bg === 0 && b1[0].wake === Math.floor((now + 1_200_000) / 1000) && b1[0].cron === 0
+    ? ok("E19 Stop → {state:idle, bg:0, wake:<깨움 epoch초>, cron:0}") : bad("E19 wake", `실제=${JSON.stringify(b1)}`);
+  //  깨움이 바뀐 idle 은 스로틀을 뚫는다 · 이미 지난 깨움은 0 으로 싣는다(받는 쪽이 «기다림» 으로 읽지 않게)
+  appendFileSync(conv, wakeLines("tw2", now - 60_000));
+  const b2 = bodies(await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b2.length === 1 && b2[0].wake === 0 && b2[0].cron === 0
+    ? ok("E19 깨움이 바뀐 idle 은 스로틀에 안 걸린다 · 지난 깨움은 wake=0") : bad("E19 지난 깨움", `실제=${JSON.stringify(b2)}`);
+  //  결과를 못 받은 예약 호출이 남으면 예약 칸을 싣지 않는다(bg 는 그대로 싣는다)
+  appendFileSync(conv, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tw3", name: "ScheduleWakeup", input: { delaySeconds: 60 } }] } }) + "\n");
+  fresh();
+  const b3 = bodies(await runHook({ session_id: `sc${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b3.length === 1 && b3[0].bg === 0 && !("wake" in b3[0]) && !("cron" in b3[0])
+    ? ok("E19 예약 셈을 못 믿으면 wake·cron 을 싣지 않는다(bg 는 싣는다)") : bad("E19 sched 모름", `실제=${JSON.stringify(b3)}`);
+  //  codex 는 예약 도구가 없다 — 싣지 않는다
+  writeFileSync(conv, wakeLines("tw1", now + 1_200_000));
+  fresh();
+  const b4 = bodies(await runHook({ session_id: `sc${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }, { LIVELY_HARNESS: "codex" }));
+  b4.length === 1 && !("wake" in b4[0]) && !("cron" in b4[0])
+    ? ok("E19 claude 가 아니면 예약 칸이 없다") : bad("E19 codex", `실제=${JSON.stringify(b4)}`);
+}
+
 server.close();
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`work-flag-lifecycle tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

@@ -18,7 +18,9 @@ const SECRET = "s3cret";
 const T = { id: "11111111-1111-1111-1111-111111111111", slug: "lively-46e3" };
 const ENV = { LIVELY_TENANT_HEADER_SECRET: SECRET, LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv;
 const now = (): number => Math.floor(Date.now() / 1000);
-const H = (mid = "alice", app = "web") => ({ "x-lvly-app-front": signAppFront(SECRET, { op: "act", t: T.id, ws: T.slug, app, var: "pub", mid, iat: now() } as never) });
+const H = (mid = "alice", app = "web", v: "pub" | "draft" = "pub") => ({ "x-lvly-app-front": signAppFront(SECRET, { op: "act", t: T.id, ws: T.slug, app, var: v, mid, iat: now() } as never) });
+/** 초안 주소(`…-draft`) — 초안 코드는 이 주소에서만 돈다(#4667 · 설계 §13-5). */
+const HD = (mid = "alice", app = "web") => H(mid, app, "draft");
 const sha = (b: Buffer | string): string => crypto.createHash("sha256").update(b).digest("hex");
 
 const member = (id: string, scopes: string[] = []): OrgMember => ({
@@ -74,17 +76,22 @@ clearFrontBundleCacheForTest();
   assert.equal(js.headers?.["Content-Type"], "text/javascript; charset=utf-8");
   assert.equal(js.headers?.["Cache-Control"], "private, max-age=31536000, immutable");
   assert.match(text(js), /console\.log\("v1"\)/, "bob 은 공개 판(1판)");
-  const own = await appFrontPage(H("alice"), "/assets/index-BjU7aAkd.js", d);
-  assert.match(text(own), /console\.log\("v2"\)/, "초안을 만든 alice 는 설치된 판(2판)");
-  ok("M1 보는 판 — 공개 판을 보는 사람은 1판 · 초안을 만든 사람은 2판(#4667)");
+  const ownPub = await appFrontPage(H("alice"), "/assets/index-BjU7aAkd.js", d);
+  assert.match(text(ownPub), /console\.log\("v1"\)/, "공개 주소는 초안을 만든 alice 에게도 공개 판(1판)");
+  const own = await appFrontPage(HD("alice"), "/assets/index-BjU7aAkd.js", d);
+  assert.match(text(own), /console\.log\("v2"\)/, "초안 주소에서 alice 는 설치된 판(2판)");
+  const other = await appFrontPage(HD("bob"), "/assets/index-BjU7aAkd.js", d);
+  assert.equal(other.status, 404, "남의 초안 주소는 없는 판");
+  ok("M1 보는 판 — 공개 주소는 모두에게 1판(초안 주인 포함) · 초안 주소는 초안 주인만 2판 · 남에겐 404(#4667)");
 }
 {
   const { d } = deps();
   const r = await appFrontPage(H("bob"), "/only-v2.txt", d);
   assert.equal(r.status, 404, "공개 판에 없는 파일은 남에게 안 보인다");
-  const a = await appFrontPage(H("alice"), "/only-v2.txt", d);
+  assert.equal((await appFrontPage(H("alice"), "/only-v2.txt", d)).status, 404, "초안 주인도 공개 주소에선 공개 판");
+  const a = await appFrontPage(HD("alice"), "/only-v2.txt", d);
   assert.equal(a.status, 200);
-  ok("M2 초안에만 있는 파일은 초안 주인만");
+  ok("M2 초안에만 있는 파일은 초안 주인의 초안 주소에서만");
 }
 {
   const { d } = deps();
@@ -138,10 +145,10 @@ clearFrontBundleCacheForTest();
 }
 {
   const { d } = deps({ content_hash: "something-else" });
-  const r = await appFrontPage(H("alice"), "/", d);
+  const r = await appFrontPage(HD("alice"), "/", d);
   assert.equal(r.status, 409, "설치된 내용과 지금 판 번호의 내용이 다르면 그 판을 내지 않는다");
   const { d: d2 } = deps({ current_version_no: null });
-  assert.equal((await appFrontPage(H("alice"), "/", d2)).status, 409);
+  assert.equal((await appFrontPage(HD("alice"), "/", d2)).status, 409);
   ok("M7 설치된 내용 ≠ 판 내용 · 판 번호 없음 → 409(다시 저장 안내)");
 }
 {

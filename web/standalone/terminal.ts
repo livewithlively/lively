@@ -4125,6 +4125,31 @@ function setupEmbedBridge() {
   post();
 }
 
+/**
+ * #4695 T5 — 이 창이 **세션 화면 밖에서** 열렸으면(격자 보기 public/terminal-grid.html · 주소로 직접 연 창) 스스로 «보는 중» 도장을 찍는다.
+ *  하네스 종료 규칙은 «아무도 안 보는» 세션만 끄는데, 그 «보는 중» 의 출처는 웹 셸의 도장(web/v2/main.ts markViewedSessionSeen)뿐이었다.
+ *  그래서 이 창으로만 보는 세션은 보는 중인데도 «안 봄» 으로 읽혀 꺼질 수 있었다. 세션 화면 안의 액자(embed=1)는 바깥 셸이 이미 찍는다 — 두 번 찍지 않는다.
+ *  주기·규칙은 셸과 같다: 보이는 동안 15초마다(8초 틱에 얹는다) · 숨은 창은 안 찍는다 · 창을 닫을 때 떠남(/leave)을 알린다.
+ *  실패는 삼킨다 — 못 찍은 최악의 결과는 «보는 중» 이 TTL(45초) 뒤 풀리는 것이고, 그건 이 변경 전과 같다.
+ */
+function startSeenStamp(): void {
+  const SEEN_EVERY_MS = 15_000;
+  let sentAt = 0;
+  const post = (suffix: string, keepalive = false): Promise<unknown> =>
+    fetchAuth(sUrl(suffix), Object.assign({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, keepalive ? { keepalive: true } : {}));
+  const tick = (): void => {
+    if (document.hidden) return;
+    const now = Date.now();
+    if (now - sentAt < SEEN_EVERY_MS) return;
+    sentAt = now;
+    void post('/seen').catch(() => { sentAt = 0; });   // 못 찍었으면 다음 틱에 다시
+  };
+  tick();
+  setInterval(tick, 8_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { sentAt = 0; tick(); } });
+  window.addEventListener('pagehide', () => { void post('/leave', true).catch(() => { /* 비치명 — TTL 이 늦게라도 걷는다 */ }); });
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -4181,6 +4206,7 @@ export async function boot() {
   // #1820 — 메타는 어차피 제목·프로젝트 링크 때문에 받는다. 그 값으로 **붙기 전에** '되살릴 세션인가'를 판정한다
   //  (아래 connectNow 직전에서 await). 여기서 await 하지 않는 이유: 화면 구성·폰트 로드를 1 RTT 만큼 늦추지 않으려고.
   const metaAtBoot = loadSessionMeta();
+  if (!EMBED) startSeenStamp();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {

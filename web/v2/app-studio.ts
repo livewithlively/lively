@@ -24,7 +24,7 @@ import { takeCreated } from './created-cache.js';
 import { openAppUi, reloadAppFrames } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
-import { attachAppToSession, listAttached } from './session-app-pane.js';
+import { attachAppToSession, listAttached, preferSessAppTab } from './session-app-pane.js';
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
 import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
 import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
@@ -78,6 +78,8 @@ export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
 export function dropStudioRec(sid: string): void { writeRecs(readRecs().filter((x) => x.sid !== sid)); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
+/** 이 브라우저에서 이 앱을 **새로** 만드는 중인가(⑤ 「이대로 넣기」 전 · 고치기 · 사본은 아니다) — 앱 찾기 · 앱빌더가 만드는 중인 앱을 가른다(builder-flow isAppInProgress · 원준 2026-10-15). */
+export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && x.mode === 'new'); }
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
@@ -222,9 +224,8 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     const known = (await listApps()).map((a) => String(a.id));
     const pid = await studioProject();
     const brief = how === 'copy' ? copyBrief(target.id, target.title, app.title, app.by, place) : editBrief(app.id, app.title, place);
-    const s = await spawnSession(brief, pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME });
+    const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), label: builderSessionLabel(target.title, how) });
     if (!s) { toast('세션을 열지 못했어요', true); closeAppStudio(); return; }
-    void relabel(s.id, target.title, how);
     //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
     void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
@@ -391,11 +392,11 @@ function start(prefill?: StudioRec | null): void {
     const known = (await listApps()).map((a) => String(a.id));   // 이 뒤에 새로 생기는 앱이 «내가 만들고 있는 앱»
     const pid = await studioProject();
     const run = await studioRun();
-    const s = await spawnSession(planBrief(what, place, nm), { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run });
+    //  이름은 만들 때 같이 싣는다 — 서버가 사람 이름으로 박아 AI 가 제 이름(「회의록 기획카드」 같은)으로 덮지 못한다(원준 2026-10-15).
+    const s = await spawnSession(planBrief(what, place, nm), { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(nm, 'new') });
     if (!s) { go.disabled = false; go.textContent = '만들기 시작'; return; }
     const rec: StudioRec = { sid: s.id, pid, what, place, appId: '', known, at: Date.now(), stage: 'plan', card: null, round: 0, from: 0, mode: 'new', ...(nm ? { title: nm, named: true } : {}) };
-    saveRec(rec); writeDraft(null);
-    void relabel(s.id, nm, 'new');   // «"이름" 앱 제작» · 이름을 비웠으면 «새 앱 제작» → 기획 카드가 오면 그 이름으로
+    saveRec(rec); writeDraft(null);   // 세션 이름은 위에서 같이 실었다 — «"이름" 앱 제작» · 이름을 비웠으면 «새 앱 제작» → 기획 카드가 오면 그 이름으로
     //  #4667 초안 앱을 지금 만든다(나만 보는 빈 앱 · 만든 사람 = 나 · 만들기 세션 = 이 세션). AI 는 이 id 로 저장한다(시안 글에 실린다).
     //   못 만들면 종전처럼 «새로 생긴 앱» 을 찾는다(예약 없는 길).
     try { const r: any = await api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, title: nm || firstLine(what) }) }); if (r && r.app_id) { rec.draftId = String(r.app_id); saveRec(rec); } }
@@ -452,9 +453,9 @@ function placePic(k: StudioPlace): HTMLElement {
 async function build(rec: StudioRec): Promise<void> {
   if (!root) return;
   if (teardown) { teardown(); teardown = null; }
-  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
+  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, lastNote: '', attaching: false, vis: null as StudioVis | null };
+    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, lastNote: '', vis: null as StudioVis | null };
   const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
   const name = el('b', { class: 'v2-studio-name', text: S.title });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
@@ -595,24 +596,43 @@ async function build(rec: StudioRec): Promise<void> {
   };
 
   // ── ③ 실제 화면으로 — 앱을 앱빌딩 세션에 붙이고(한 번), 코멘트 층과 함께 그 화면으로 보낸다 ──
-  const ensureAttached = async (): Promise<void> => {
-    if (S.dead || !rec.appId || rec.attached || S.attaching) return;
-    S.attaching = true;
-    try {
-      const have = await listAttached(rec.sid).catch(() => [] as Array<{ app_id: string }>);
-      if (have.some((x) => x.app_id === rec.appId) || await attachAppToSession(rec.sid, rec.appId, S.title)) { rec.attached = true; saveRec(rec); }
-    } finally { S.attaching = false; }
+  //   붙었는지는 매번 서버 목록으로 본다(기록의 rec.attached 는 목록을 못 읽을 때만 믿는다 — 사람이 떼었을 수 있다). 동시에 부르면 한 번만 간다.
+  let attachRun: Promise<boolean> | null = null;
+  const ensureAttached = (): Promise<boolean> => {
+    if (S.dead || !rec.appId) return Promise.resolve(false);
+    if (attachRun) return attachRun;
+    attachRun = (async (): Promise<boolean> => {
+      try {
+        const have = await listAttached(rec.sid).catch(() => null);
+        if (have && have.some((x) => x.app_id === rec.appId)) { if (!rec.attached) { rec.attached = true; saveRec(rec); } return true; }
+        if (!have && rec.attached) return true;
+        const ok = await attachAppToSession(rec.sid, rec.appId, S.title);
+        rec.attached = ok; saveRec(rec); return ok;
+      } finally { attachRun = null; }
+    })();
+    return attachRun;
   };
   const backToBuilder = (): void => {
     closeReview(); S.review = null;
     if (root) root.hidden = false;
     if (mountOpts.host && !/^#\/builder(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('resume', rec.sid);
   };
+  let opening = false;   // 붙이기 · 동의를 기다리는 동안 두 번 눌러도 한 번만 간다
   const openReal = async (view: 'widget' | 'app'): Promise<void> => {
-    if (!rec.appId || S.waiting) return;
+    if (!rec.appId || S.waiting || opening) return;
+    opening = true;
+    try { await openRealNow(view); } finally { opening = false; }
+  };
+  const openRealNow = async (view: 'widget' | 'app'): Promise<void> => {
     rec.view = view; saveRec(rec);
-    void ensureAttached();
     let route = '#/s/' + encodeURIComponent(rec.sid);
+    if (view === 'widget') {
+      //  세션 위젯 = 그 세션 우측 사이드바의 앱 탭. 붙이기가 **끝난 뒤** 넘어가고, 그 세션의 사이드바가 앱 탭으로 열리게 먼저 적어 둔다 —
+      //   종전엔 붙이기를 기다리지 않고 넘어가 첫 화면에 앱 탭이 없었고, 사이드바는 늘 서던 「자료」 로 열렸다(원준 2026-10-15 «회의록 위젯 찾아야 하는 거»).
+      //   못 붙였으면 넘어가지 않는다(까닭은 붙이기가 이미 말했다 · 동의를 거절했으면 조용히).
+      if (!(await ensureAttached()) || S.dead) return;
+      preferSessAppTab(rec.sid);
+    } else void ensureAttached();
     if (view === 'app') {
       //  앱 화면 = 앱 찾기가 여는 것과 같은 앱 인스턴스 탭(#/i/<인스턴스>, app-instance openInstalledApp 과 같은 길). 한 번 연 것은 다시 쓴다.
       try {
@@ -653,7 +673,7 @@ async function build(rec: StudioRec): Promise<void> {
   const paintHub = (): void => {
     const h = appHost();
     const views: Array<['widget' | 'app', string, string]> = [];
-    if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', '앱빌딩 세션 화면 오른쪽에 붙은 모습 · 세션에 「안건 3개 적어 줘」 처럼 시키면 위젯이 바뀌어요']);
+    if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', '앱빌딩 세션의 우측 사이드바에 붙은 모습']);
     if (rec.place !== 'side') views.push(['app', '앱 화면으로 보기', '앱 찾기에서 열었을 때 모습 · 화면 가득']);
     const first = views.findIndex((v) => v[0] === rec.view); if (first > 0) views.unshift(...views.splice(first, 1));   // 지난번에 본 꼴을 앞에
     const go = el('div', { class: 'v2-studio-hub-go' }, ...views.map(([k, t, s], i) => el('button', { type: 'button', class: i ? 'alt' : '', onclick: () => { void openReal(k); } }, el('b', { text: t }), el('small', { text: s }))));
@@ -714,7 +734,8 @@ async function build(rec: StudioRec): Promise<void> {
   const onText = (t: string): void => {
     if (rec.stage === 'plan') { const c = parseCard(t); if (c) { rec.card = c; saveRec(rec); paintPlan(); paintNow();
       //  ①에서 이름을 비웠으면 기획 카드의 이름으로 세션 이름을 한 번 짓는다 — «"회의 안건" 앱 제작».
-      if (!rec.named && !rec.title && c.name) { rec.named = true; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } } }
+      //   그 이름이 곧 이 앱의 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름이 같은 글을 쓴다(원준 2026-10-15).
+      if (!rec.named && !rec.title && c.name) { rec.named = true; rec.title = c.name; S.title = c.name; name.textContent = c.name; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } } }
     else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; paintSteps(); paintNow(); } }
     else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; paintCheck(); paintNow(); } }
   };
@@ -742,7 +763,13 @@ async function build(rec: StudioRec): Promise<void> {
     };
     askGo.onclick = () => { void doAsk(); };
     ask.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); void doAsk(); } });
-    h.replaceChildren(cardView(rec.card, (c) => { rec.card = c; saveRec(rec); }), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
+    //  카드의 이름 줄을 고치면 그게 앱 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름 «"이름" 앱 제작» 이 따라간다(원준 2026-10-15 «내가 이름 정해 주지 않았나»).
+    const onCard = (c: StudioCard): void => {
+      rec.card = c; const nn = String(c.name || '').trim();
+      if (nn && nn !== String(rec.title || '').trim()) { rec.title = nn; rec.named = true; S.title = nn; name.textContent = nn; void relabel(rec.sid, nn, rec.mode); }
+      saveRec(rec);
+    };
+    h.replaceChildren(cardView(rec.card, onCard), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
     requestAnimationFrame(() => coach('plan', h.querySelector('.v2-studio-card') as HTMLElement, 'AI 가 읽은 대로 적은 카드예요. 틀린 줄만 고치고 「이대로 시안 만들기」 를 누르세요.', '「무엇을 적나」 에 「담당자」 를 더하면 그 칸이 생겨요'));
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
@@ -908,6 +935,10 @@ async function build(rec: StudioRec): Promise<void> {
     const { mergeSessions, renderSession } = await import('./views.js');   // 정적으로 들여오면 views → apps → app-studio → views 순환(check-imports)
     const made = takeCreated(rec.sid);
     const rows = made ? [made, ...(live as any[])] : (live as any[]);
+    //  세션 이름 되맞추기 — 정한 앱 이름이 있는데 세션 이름이 «"이름" 앱 제작» 꼴이 아니면(옛 머리말 · AI 가 지은 이름) 한 번 바로잡는다(원준 2026-10-15).
+    const row = rows.find((x: any) => x && x.id === rec.sid);
+    const nm = String(rec.title || (rec.card && rec.card.name) || '').trim();
+    if (row && nm && String(row.label || '').trim() !== builderSessionLabel(nm, rec.mode)) void relabel(rec.sid, nm, rec.mode);
     S.chat = renderSession(chatHost, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() } as any, rec.sid, { solo: true, isVisible: () => !!root && chatHost.isConnected });
   } catch (e: any) {
     chatHost.replaceChildren(el('p', { class: 'v2-muted', text: 'AI 세션을 열지 못했어요 — ' + (e && e.message ? e.message : e) }));

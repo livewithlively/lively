@@ -190,6 +190,11 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
       claudeSessionId: s.claude_session_id || undefined,   // #1719 — 죽은 세션도 대화 uuid 를 알면 기록을 잇는다
+      //  #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). 대화창이 입력칸·질문으로 되돌린다.
+      //   시작 중인 행(아래 starting)엔 싣지 않는다 — 그건 끈 세션이 아니라 갓 만든 세션이다.
+      //   **주인에게만** 싣는다 — 보내지 않은 글은 주인만의 것이다. 초대받은 사람·프로젝트 동료도 이 행을 받지만(가시성), 화면이 되돌리는 것도
+      //   주인뿐이라(canRevive) 그 사람들에게 실을 까닭이 없다(격리 리뷰 — 목록 응답만 열어도 남이 쓰다 만 글이 보였다).
+      ...(s.stop_note && !starting && s.owner === me ? { stopNote: s.stop_note } : {}),
       // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
       //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
       ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),
@@ -498,6 +503,9 @@ async function collectSessions(me: string | null, strict = false): Promise<Sessi
       //  #4588 — 단, 턴 끝에 하네스가 대화 기록으로 센 «열린 백그라운드 작업» 이 0 이면 싣지 않는다(화면 숫자가 AI 가 기다리는 작업과
       //   어긋난 세션이 몇 시간씩 «작업 중» 으로 깜빡였다 — phase.backgroundHolds 머리말).
       ...(backgroundHolds(screen.background, r.reportedLast) ? { background: true } : {}),
+      //  #4695 T5 — 하네스의 마지막 보고 그대로(만료 무관). 하네스 종료 규칙이 «완료»(턴 끝 · 기다리는 일 없음)를 가르는 재료다.
+      //   AI 가 안 돌면(셸·꺼짐) 없다 — reportedLast 가 이미 offline 이면 null 이다.
+      ...(r.reportedLast ? { lastReport: r.reportedLast } : {}),
       title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
       lastAttached: r.lastAttached || undefined, // #1098 마지막 열람(탭 붙음) 시각 — '안 본 작업 완료' 판정용.
@@ -664,6 +672,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const harness = HARNESSES.find((h) => h.key === input.harness);
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");
   const cmd: string[] = [];
+  //  #4695 T5 — 실행 파일 바로 뒤에 붙인 이어 열기 인자 수. 하네스 종료 규칙 세션의 런처가 «이어 열기가 곧바로 죽으면 이 인자를 빼고 새 대화로
+  //   한 번 더» 띄울 때 쓴다(catalog LAUNCH_STOP_SH ②). 복제(fork)는 이어 열기가 아니다 — 세지 않는다.
+  let resumeArgc = 0;
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
     // 모델을 명시해서 띄울 때는 그 모델이 받는 추론강도 조합까지 검증한다. 화면은 모델 변경 때 목록을 좁히지만,
@@ -689,9 +700,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       cmd.push(...harness.forkArgv(input.fork));
     } else if (input.resume) {
       if (!RESUME_ID_RE.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
-      cmd.push(...(harness.resumeArgv?.(input.resume) ?? []));
+      const ra = harness.resumeArgv?.(input.resume) ?? [];
+      cmd.push(...ra);
+      resumeArgc = ra.length;
     } else if (input.resumePick) {
-      cmd.push(...(harness.resumeArgv?.() ?? []));
+      const ra = harness.resumeArgv?.() ?? [];
+      cmd.push(...ra);
+      resumeArgc = ra.length;
     }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
@@ -744,7 +759,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       ? codexAppServerPaneArgv()
       : chatRuntime
         ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
-        : harnessLaunchArgv(harness.key, cmd);
+        //  #4695 T5 — 하네스 종료 규칙을 따르는 세션(매니지드 ∧ 사람 세션 ∧ claude·codex·agy)은 런처 ①②③(비정상 종료 처리)을 쓴다.
+        //   그 밖(셀프호스트·위탁·앱·grok·opencode)은 종전 런처 그대로 — 셸로 떨어진다.
+        : harnessLaunchArgv(harness.key, cmd, process.platform, { stopRule: input.kind === "human" && tmuxInSessionContainer(tenantSlug()), resumeArgc });
   const invites = await validInvites(input.invites, ownerId(user));
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
   //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
