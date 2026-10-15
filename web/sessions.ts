@@ -55,7 +55,7 @@ export function parseSel(): { sid: string; node: string; q: string; ln: string }
 export function renderSessionListInto(container: any, sessions: SessRow[], emptyMsg: string, onGo?: () => void): void {
   //  휴지통에 있는 세션은 뺀다(#3778) — 서버가 trashed_at 을 얹어 준다. 되돌리기·완전 삭제는 휴지통 화면의 몫이다.
   //  앱빌더 시험 세션도 뺀다(#4632 — 앱빌더 안에서만 산다 · lib/builder-flow isTrySessionRow).
-  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0 && !(s as SessRow & { trashed_at?: string | null }).trashed_at && !isTrySessionRow(s as any));
+  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0 && !(s as SessRow & { trashed_at?: string | null }).trashed_at).filter((s) => !isTrySessionRow(s as any));
   if (!rows.length) { container.replaceChildren(el('p', { class: 'admin-hint', text: emptyMsg })); return; }
   let page = 0;
   const listBox = el('div');
