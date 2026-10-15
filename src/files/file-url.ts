@@ -4,17 +4,17 @@
 //   응답 칸(url · method · headers · expires_at)은 같다(앱 코드 무변경).
 import { HttpError } from "../http-error.js";
 import { formatAddress, type FileAddress } from "./address.js";
-import { signFileUrlToken, FILE_URL_MAX_UPLOAD, type FileUrlMethod } from "./file-url-token.js";
+import { signFileUrlToken, clampTtl, FILE_URL_MAX_UPLOAD, type FileUrlMethod } from "./file-url-token.js";
 import { authorizeFileAccess, assertWritableTarget, type FileAccessDeps, type FilePrincipal } from "./file-access.js";
 
 export interface MintFileUrlInput {
   address: FileAddress;
   method: FileUrlMethod;
-  /** 수명(초) — 부르는 쪽이 clampTtl 로 맞춘 값 */
+  /** 수명(초) — 범위 밖이면 여기서 경계로 맞춘다(clampTtl) */
   ttlSec: number;
   principal: FilePrincipal;
-  /** 읽기전용 세션(#1007)이면 올리기 주소를 주지 않는다 */
-  readOnly?: boolean;
+  /** 읽기전용 세션(#1007)이면 올리기 주소를 주지 않는다. 빠뜨리면 «쓰기 가능» 이 되므로 필수 칸이다(부르는 쪽이 늘 명시한다). */
+  readOnly: boolean;
 }
 
 export interface MintFileUrlDeps {
@@ -43,23 +43,26 @@ export interface MintedFileUrl {
 }
 
 export async function mintFileUrl(i: MintFileUrlInput, d: MintFileUrlDeps): Promise<MintedFileUrl> {
-  if (i.method === "PUT" && i.readOnly) throw new HttpError(403, "읽기전용 세션 — 올리기 주소는 줄 수 없습니다(#1007)");
-  await authorizeFileAccess(i.principal, i.address, i.method === "PUT" ? "write" : "read", d.access);
-  if (i.method === "PUT") assertWritableTarget(i.address);
+  if (i.method === "PUT" && i.readOnly !== false) throw new HttpError(403, "읽기전용 세션 — 올리기 주소는 줄 수 없습니다(#1007)");
+  //  올리기는 NFC 로 맞춘 이름으로 판정하고 그 이름을 서명한다 — 받는 곳이 NFC 로 저장하므로 판정한 글자와 쓰는 글자가 같아야 한다(#1278b).
+  const address: FileAddress = i.method === "PUT" ? { root: i.address.root, rel: i.address.rel.normalize("NFC") } : i.address;
+  await authorizeFileAccess(i.principal, address, i.method === "PUT" ? "write" : "read", d.access);
+  if (i.method === "PUT") assertWritableTarget(address);
   const key = d.key();
   if (!key) throw new HttpError(503, "이 게이트웨이에 서명 키(CONNECTOR_SECRET_KEY)가 없어 서명 주소를 만들 수 없습니다 — 관리자에게 알려 주세요");
-  const exp = (d.now ? d.now() : Math.floor(Date.now() / 1000)) + i.ttlSec;
+  const ttl = clampTtl(i.ttlSec);
+  const exp = (d.now ? d.now() : Math.floor(Date.now() / 1000)) + ttl;
   const token = signFileUrlToken({
-    t: d.tenantId(), m: i.method, r: i.address.root, p: i.address.rel, s: i.principal.member,
+    t: d.tenantId(), m: i.method, r: address.root, p: address.rel, s: i.principal.member,
     ...(i.principal.app ? { a: i.principal.app } : {}), e: exp,
   }, key);
   const base = await d.base();
   const slug = d.workspaceSlug();
   return {
-    address: formatAddress(i.address), method: i.method,
+    address: formatAddress(address), method: i.method,
     url: `${base ?? ""}/api/files/s/${token}${slug ? `?lvly_ws=${encodeURIComponent(slug)}` : ""}`,
     headers: {},
-    expires_at: new Date(exp * 1000).toISOString(), expires_in: i.ttlSec,
+    expires_at: new Date(exp * 1000).toISOString(), expires_in: ttl,
     ...(i.method === "PUT" ? { max_bytes: FILE_URL_MAX_UPLOAD } : {}),
     ...(base ? {} : { note: "게이트웨이 공개 주소가 정해지지 않아 url 이 상대경로입니다 — 관리 ▸ 게이트웨이 주소를 설정하세요" }),
   };

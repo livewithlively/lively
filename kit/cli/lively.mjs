@@ -2945,6 +2945,9 @@ async function cmdFile(args) {
   const headers = { authorization: `Bearer ${tok}`, ...(isUrl ? { "content-type": "application/json" } : {}) };
   const sess = (process.env.LIVELY_SESSION_ID || "").trim();
   if (sess) headers["x-lively-session"] = sess;
+  //  세션 모드(#1007+) — MCP 프록시와 같은 헤더를 싣는다. 읽기전용 세션이면 게이트웨이가 올리기 주소를 주지 않는다.
+  const mode = (process.env.LIVELY_MODE || "").trim().toLowerCase();
+  if (mode) headers["x-lively-mode"] = mode;
   let r, j = null;
   try { r = await fetch(gw + route, { method: isUrl ? "POST" : "GET", headers, ...(isUrl ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
   catch (e) { die(`게이트웨이에 닿지 못했습니다 — ${e?.cause?.code || e?.message || e}`); }

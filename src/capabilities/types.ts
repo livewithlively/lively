@@ -16,7 +16,7 @@ export interface CapabilityCtx {
   session?: string;         // 작업이 이뤄진 터미널 세션(tmux box) — 접속 헤더 x-lively-session 으로 식별(#852). 형식만 검증됨(권한은 소비처가)
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
-  readOnly?: boolean;       // 읽기전용 세션(#1007+) — 이 요청이 read-only 모드인가(x-lively-mode=readonly 파생). 강제는 어댑터가 하고, 여기선 관측용(me 가 반환).
+  readOnly?: boolean;       // 읽기전용 세션(#1007+) — 이 요청이 read-only 모드인가(x-lively-mode=readonly 파생). 쓰기 capability 의 강제는 어댑터가 한다. 쓰기 아닌 capability 의 쓰기 갈래는 핸들러가 이 값으로 막는다(file_url PUT #4673). me 가 반환.
   incognito?: boolean;      // 인코그니토 세션(#1007+) — 이 요청이 incognito 모드인가(x-lively-mode=incognito 파생). incognito = lively 툴 0개+전체 차단(읽기·쓰기 모두). 관측용.
   // 맥락 가시성(#1291) — 이 요청의 **열람 신원**. 문자열=그 멤버로 필터, null=특권(admin·내부 경로, 필터 없음).
   //  actor 와 값은 같지만 의미가 다르다: actor 는 '누가 썼나'(감사), viewer 는 '누가 보나'(접근통제).

@@ -21,6 +21,7 @@ import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userO
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, memberPathProbe, type LsEntry } from "./terminal-member-fs.js";
 import { isConfined, probeLocal } from "./path-jail.js";   // #3668 T1 — 심링크를 해소한 뒤 접두를 본다
+import { isInAppFolder } from "../files/app-jail.js";   // #4673 — 앱 폴더 주소는 그 앱 폴더 안에서만
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import {
   supersedeLocalPath, localRootForBrowse, parseLocalExternalId, LOCAL_SYSTEM,
@@ -84,8 +85,9 @@ export async function readDirItems(abs: string): Promise<FsListItem[]> {
 // 심링크 봉쇄(#3668 T1) — 해소는 **op 가 실제로 도는 자리**에서 한다(격리면 멤버 uid, 아니면 게이트웨이 로컬 fs).
 //  게이트웨이가 직접 realpath 를 부르면 격리 홈(700)은 못 읽고 매니지드에선 그 경로가 시야에 아예 없다(path-jail.ts 머리말).
 //  거부 문구·코드는 글자 판정과 같다 — 사람에게는 같은 사건이고, 어느 관문에 걸렸는지는 알려 줄 값이 아니다.
-async function assertJailed(base: string, abs: string, osUser: string | null): Promise<void> {
-  const ok = await isConfined(base, abs, osUser ? (b, t) => memberPathProbe(osUser, b, t) : probeLocal);
+async function assertJailed(base: string, abs: string, osUser: string | null, app?: string): Promise<void> {
+  const probe = osUser ? (b: string, t: string) => memberPathProbe(osUser, b, t) : probeLocal;
+  const ok = app ? await isInAppFolder(base, app, abs, probe) : await isConfined(base, abs, probe);
   if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
 }
 
@@ -226,6 +228,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     if (root !== APPS_ROOT_KEY) return null;
     const viewer = viewerFor(req);
     const readable = viewer ? await readableAppFoldersFor({ member: viewer, scopes: userOf(req).scopes ?? [] }) : new Set<string>();
+    //  앱 주체(앱 세션 토큰 · 앱 서버 토큰 + 신원)는 제 앱 폴더만 — 권한표(#4671 ③)의 «앱은 제 앱 폴더만» 을 탐색기에도 건다.
+    const appId = userOf(req).appId;
+    if (appId) for (const id of [...readable]) if (id !== appId) readable.delete(id);
     const ok = (rel: string): boolean => { const first = String(rel ?? "").split(/[\\/]/)[0] ?? ""; return first === "" || readable.has(first); };
     return { ok, restricted: () => false, subtreeOk: ok };
   };
@@ -255,10 +260,9 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const gate = await browseGate(req);
     assertBrowseVisible(gate, base, abs);
     const osUser = await userOsUser(u);
-    //  #3668 T1 — 링크를 해소한 뒤 다시 본다. 앱 폴더(#4673)는 그 **앱 폴더**로 봉쇄한다 — 자리 맨 위로만 막으면 한 앱 폴더에
-    //   심은 링크로 동의하지 않은 다른 앱 폴더를 읽게 된다(앱 폴더는 그 앱이 붙은 세션의 셸이 쓴다).
+    //  #3668 T1 — 링크를 해소한 뒤 다시 본다. 앱 폴더 주소(#4673)는 그 앱 폴더 안에서만 연다(files/app-jail — 서명 주소와 같은 판정).
     const appSeg = String(req.query.root ?? "") === APPS_ROOT_KEY && abs !== base ? path.relative(base, abs).split(path.sep)[0] : "";
-    await assertJailed(appSeg ? path.join(base, appSeg) : base, abs, osUser);
+    await assertJailed(base, abs, osUser, appSeg || undefined);
     return { base, abs, osUser, gate };
   }
 

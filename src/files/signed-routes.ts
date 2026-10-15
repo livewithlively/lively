@@ -27,6 +27,7 @@ import { logger } from "../log.js";
 import { resolveRootPath, userOsUser } from "../terminal/profiles.js";
 import { memberStat, memberReadTo, memberPathProbe } from "../terminal/terminal-member-fs.js";
 import { isConfined, probeLocal } from "../terminal/path-jail.js";
+import { isInAppFolder } from "./app-jail.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { uploadEntryOf, type UploadEntry } from "../ingest/upload-entry.js";
 import { grantSharedGroupWrite } from "../project/project-fs.js";
@@ -94,23 +95,26 @@ function claimsOf(token: string, want: "GET" | "PUT", d: SignedRouteDeps): { cla
 async function principalUser(claims: FileUrlClaims, d: SignedRouteDeps): Promise<LivelyUser> {
   const m = await d.activeMember(claims.s);
   if (!m) throw new HttpError(403, "이 주소를 받은 구성원이 지금 이 워크스페이스에서 활성 상태가 아닙니다");
-  return { userId: m.id, email: m.email, scopes: m.scopes, projects: ["*"] } as unknown as LivelyUser;
+  return { userId: m.id, email: m.email, scopes: m.scopes, projects: [] } as LivelyUser;
 }
 
-/**
- * 주소 → 절대경로 + 파일 op 를 내릴 uid. 앱 폴더는 **그 앱 폴더**로 봉쇄한다 — 자리 맨 위(apps)로만 봉쇄하면 한 앱 폴더에
- *  심은 링크로 다른 앱 폴더를 읽게 된다(앱 폴더는 그 앱이 붙은 세션의 셸이 쓴다).
- */
+/** 주소 → 절대경로 + 파일 op 를 내릴 uid. 앱 폴더 주소는 그 앱 폴더 안에서만 연다(app-jail) · 그 밖은 자리 안에서만(path-jail). */
 async function locate(user: LivelyUser, a: FileAddress, op: FileOp): Promise<{ abs: string; base: string; osUser: string | null }> {
-  const rel = op === "write" ? nfcPath(a.rel) : a.rel;   // 새로 만드는 이름은 NFC 정본(#1278b) · 읽기는 그대로(옛 NFD 파일)
+  const rel = op === "write" ? nfcPath(a.rel) : a.rel;   // 새로 만드는 이름은 NFC 정본(#1278b) · 읽기는 그대로(옛 NFD 파일). 쓰기는 부르는 쪽이 이미 NFC 로 판정했다
   const osUser = await userOsUser(user);
   const { base, abs } = await resolveRootPath(user, a.root, rel, osUser);
+  const probe = osUser ? (b: string, t: string) => memberPathProbe(osUser, b, t) : probeLocal;
   const app = appOfAddress(a);
-  const jailBase = app ? path.join(base, app.app) : base;
-  const ok = await isConfined(jailBase, abs, osUser ? (b, t) => memberPathProbe(osUser, b, t) : probeLocal);
+  const ok = app ? await isInAppFolder(base, app.app, abs, probe) : await isConfined(base, abs, probe);
   if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
   return { abs, base, osUser };
 }
+
+// 이 라우트의 경로는 곧 자격(토큰)이다 — 실패 로그에는 고정 이름만 남긴다.
+const LOG_PATH = { logPath: "/api/files/s/:token" };
+
+/** 쓰기 주소는 NFC 로 맞춘 꼴로 판정 · 저장한다(#1278b — 새로 만드는 이름의 정본). 판정과 저장이 같은 글자를 보게. */
+const canonicalWrite = (a: FileAddress): FileAddress => ({ root: a.root, rel: a.rel.normalize("NFC") });
 
 async function statOf(abs: string, osUser: string | null): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
   if (osUser) return memberStat(osUser, abs);
@@ -145,13 +149,15 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
       return;
     }
     fs.createReadStream(abs).on("error", (e) => { if (!res.headersSent) res.status(500).json({ error: "읽기 실패" }); else res.destroy(e); }).pipe(res);
-  });
+  }, LOG_PATH);
   router.head("/:token", download(true));
   router.get("/:token", download(false));
 
   router.put("/:token", wrap(async (req, res) => {
     setCommonHeaders(res);
-    const { claims, address } = claimsOf(String(req.params.token ?? ""), "PUT", d);
+    const c = claimsOf(String(req.params.token ?? ""), "PUT", d);
+    const claims = c.claims;
+    const address = canonicalWrite(c.address);
     const user = await principalUser(claims, d);
     await authorizeFileAccess({ member: user.userId, scopes: user.scopes ?? [], app: claims.a ?? null }, address, "write", d.access);
     assertWritableTarget(address);
@@ -171,7 +177,7 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
     await grantSharedGroupWrite(abs, base, "file").catch((e) => logger.warn({ err: e, abs }, "[file-url] 그룹 rw 부여 실패"));
     const st = await statOf(abs, osUser);
     res.json({ ok: true, address: stored, ...(st ? { size: st.size, ...(st.mtime ? { mtime: st.mtime } : {}) } : {}) });
-  }));
+  }, LOG_PATH));
 
   return router;
 }

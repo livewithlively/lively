@@ -44,10 +44,11 @@ const home = fs.mkdtempSync(path.join(root, "home-"));
 const cwd = fs.realpathSync(fs.mkdtempSync(path.join(root, "proj-")));
 fs.writeFileSync(path.join(cwd, "notes.md"), "n");
 
-function run(args, { session = "box-me-1" } = {}) {
+function run(args, { session = "box-me-1", mode = "" } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env, ...offlineLivelyEnv(), PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "tok-1" };
     if (session) env.LIVELY_SESSION_ID = session; else delete env.LIVELY_SESSION_ID;
+    if (mode) env.LIVELY_MODE = mode; else delete env.LIVELY_MODE;
     const c = spawn(process.execPath, [CLI, "file", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (err += d));
     c.on("close", (status) => resolve({ status, stdout: out, stderr: err }));
@@ -136,6 +137,16 @@ try {
     await run(["address", "shared/x"], { session: "" });
     assert.equal(seen[0].headers["x-lively-session"], undefined, "세션 밖에서 세션 머리글을 지어내지 않는다");
     ok("L9 LIVELY_SESSION_ID 가 없으면 세션 머리글 없음");
+  }
+  {
+    reset(() => ({ status: 403, body: { error: "읽기전용 세션 — 올리기 주소는 줄 수 없습니다(#1007)" } }));
+    const r = await run(["url", "shared/x", "--put"], { mode: "readonly" });
+    assert.equal(seen[0].headers["x-lively-mode"], "readonly", "세션 모드를 MCP 프록시와 같은 머리글로 싣는다");
+    assert.equal(r.status, 1);
+    reset(() => ({ status: 200, body: { address: "shared/x", link: "l" } }));
+    await run(["address", "shared/x"]);
+    assert.equal(seen[0].headers["x-lively-mode"], undefined, "모드가 없으면 머리글도 없다");
+    ok("L10 LIVELY_MODE 를 x-lively-mode 로 싣는다(읽기전용 세션이면 게이트웨이가 올리기 주소를 막는다)");
   }
   console.error(`\n${pass} passed`);
 } finally {

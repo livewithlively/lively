@@ -28,8 +28,21 @@ export interface FileAccessDeps {
   /** #4667 이 사람이 보는 판(공개 앱에 남의 초안이 있으면 공개 판의 선언). 없으면 설치된 상태 그대로. */
   viewFor?(app: OrgApp, member: string, scopes: readonly string[]): Promise<OrgApp>;
   getGrant(appId: string, member: string): Promise<AppGrantRow | null>;
-  /** 공유 자리 기준 상대경로를 이 사람이 볼 수 있나(sharedFolderGate.ok). 판정 불가면 던진다(fail-closed). */
-  sharedOk(member: string, rel: string): Promise<boolean>;
+  /** 이 사람의 공유 자리 판정기(sharedFolderGate) — 공유 자리 기준 상대경로를 볼 수 있나. 판정 불가면 던진다(fail-closed). */
+  sharedGate(member: string): Promise<{ ok(rel: string): boolean }>;
+}
+
+/** 매니페스트가 앱 폴더(permissions.app_folder)를 선언했나 — 권한표의 «앱 선언». 도구 이름(file_url)만 적은 것은 선언이 아니다. */
+export function declaresAppFolder(manifest: unknown): boolean {
+  return (manifest as { permissions?: { app_folder?: unknown } } | null)?.permissions?.app_folder === true;
+}
+
+/**
+ * 같은 이름의 유니코드 꼴들(그대로 · NFC · NFD). 판정은 이 꼴 **전부**에 건다 — 잠금 경로는 한 꼴로 적혀 있는데, 파일 시스템에 따라
+ *  다른 꼴의 이름이 같은 폴더로 열리고(정규화를 무시하는 파일 시스템) 새로 만드는 이름은 NFC 로 맞춰지기 때문이다(#1278b).
+ */
+export function unicodeForms(rel: string): string[] {
+  return [...new Set([rel, rel.normalize("NFC"), rel.normalize("NFD")])];
 }
 
 const notFound = (): HttpError => new HttpError(404, "경로를 찾을 수 없습니다");
@@ -63,7 +76,7 @@ export async function authorizeFileAccess(p: FilePrincipal, a: FileAddress, op: 
     }
     const view = await usableApp(p.app, p, deps);
     const declared = declaredTools(view);
-    if (!toolAllowed(declared, FILE_URL_TOOL)) {
+    if (!declaresAppFolder(view.manifest) || !toolAllowed(declared, FILE_URL_TOOL)) {
       throw new HttpError(403, `앱 '${p.app}' 은(는) 앱 폴더(permissions.app_folder)를 선언하지 않았습니다 — 매니페스트에 "app_folder": true 를 적고 다시 저장하세요`);
     }
     const grant = await deps.getGrant(p.app, p.member);
@@ -76,7 +89,8 @@ export async function authorizeFileAccess(p: FilePrincipal, a: FileAddress, op: 
 
   // ── 사람 · 사람의 AI ───────────────────────────────────────────────────────────────────
   if (a.root === "shared") {
-    if (!(await deps.sharedOk(p.member, a.rel))) throw notFound();
+    const gate = await deps.sharedGate(p.member);
+    if (!unicodeForms(a.rel).every((form) => gate.ok(form))) throw notFound();
     return;
   }
   //  앱 폴더: 그 앱에 동의한 구성원만 · 읽기만. 맨 위(`apps`)는 목록 자리라 읽기는 통과(목록은 부르는 쪽이 동의한 앱만 남긴다).

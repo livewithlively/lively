@@ -5,8 +5,9 @@ import { parseAddress } from "./address.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 
 // 파일 주소 권한 판정(#4673) — 권한표 #4671 ③ = 사양 표 F1~F19 · W1~W5 · R1~R5.
-const app = (id: string, over: Partial<OrgApp> = {}, tools: string[] = ["file_url"]): OrgApp => ({
-  id, title: id, version: "1.0.0", manifest: { permissions: { tools } }, source: {}, content_hash: null,
+//  perms = 저장된 매니페스트의 permissions(저장 때 app_folder:true 는 file_url 도구를 함의한다 — apps/manifest.ts).
+const app = (id: string, over: Partial<OrgApp> = {}, perms: Record<string, unknown> = { app_folder: true, tools: ["file_url"] }): OrgApp => ({
+  id, title: id, version: "1.0.0", manifest: { permissions: perms }, source: {}, content_hash: null,
   status: "active", enabled: true, installed_by: "owner", installed_at: "", updated_at: "", updated_by: null,
   edit_mode: "all", edit_members: [], builtin_version: null, current_version_no: null,
   visibility: "all", published_version_no: null, published_at: null, published_by: null, draft_by: null,
@@ -21,7 +22,7 @@ function deps(w: World, calls: string[] = []): FileAccessDeps {
   return {
     getApp: async (id) => { calls.push(`getApp:${id}`); return w.apps.get(id) ?? null; },
     getGrant: async (id, m) => { calls.push(`getGrant:${id}:${m}`); return w.grants.find((g) => g.app_id === id && g.member_id === m && !g.revoked_at) ?? null; },
-    sharedOk: async (m, rel) => { calls.push(`sharedOk:${m}:${rel}`); return w.shared(m, rel); },
+    sharedGate: async (m) => { calls.push(`sharedGate:${m}`); return { ok: (rel: string) => { calls.push(`ok:${rel}`); return w.shared(m, rel); } }; },
     ...(w.views ? { viewFor: async (a: OrgApp) => w.views!.get(a.id) ?? a } : {}),
   };
 }
@@ -42,7 +43,7 @@ const no = async (p: FilePrincipal, a: string, op: FileOp, status: number, w: Wo
 test("F1 사람 · 공유 읽기 · 공개범위 OK → 통과(판정에 경로가 그대로 간다)", async () => {
   const calls: string[] = [];
   await authorizeFileAccess(ME, parseAddress("shared/project/4670/a.md"), "read", deps(world(), calls));
-  assert.deepEqual(calls, ["sharedOk:m1:project/4670/a.md"]);
+  assert.deepEqual(calls, ["sharedGate:m1", "ok:project/4670/a.md"]);
 });
 test("F2 사람 · 공유 · 공개범위 NO → 404(존재 은닉)", async () => {
   await no(ME, "shared/project/9/x", "read", 404, world({ shared: () => false }));
@@ -84,7 +85,14 @@ test("F13 앱 crm · 공유 폴더 → 403 이고 공유 판정을 부르지도 
   assert.deepEqual(calls, [], "앱 주체는 공유 폴더 판정까지 가면 안 된다");
 });
 test("F14 앱 crm · 앱 폴더 선언 없음 → 403", async () => {
-  await no(ASAPP, "apps/crm/x", "read", 403, world({ apps: new Map([["crm", app("crm", {}, ["store_query"])]]) }), /app_folder/);
+  await no(ASAPP, "apps/crm/x", "read", 403, world({ apps: new Map([["crm", app("crm", {}, { tools: ["store_query"] })]]) }), /app_folder/);
+});
+test("F14b 앱 crm · 도구 이름(file_url · *)만 있고 app_folder 선언이 없으면 403 — 선언은 app_folder 다", async () => {
+  for (const tools of [["file_url"], ["*"]]) {
+    const w = world({ apps: new Map([["crm", app("crm", {}, { tools })]]), grants: [grant("crm", "m1", tools)] });
+    await no(ASAPP, "apps/crm/x", "read", 403, w, /app_folder/);
+    await no(ASAPP, "apps/crm/x", "write", 403, w, /app_folder/);
+  }
 });
 test("F15 앱 crm · 그 사람의 동의 없음 → 403", async () => {
   await no(ASAPP, "apps/crm/x", "write", 403, world({ grants: [] }), /동의/);
@@ -96,11 +104,25 @@ test("F17 앱 crm · 꺼짐 → 409", async () => {
   await no(ASAPP, "apps/crm/x", "read", 409, world({ apps: new Map([["crm", app("crm", { enabled: false })]]) }));
 });
 test("F18 선언은 이 사람이 보는 판으로 본다 — 공개 판에 선언이 없으면 403", async () => {
-  const w = world({ views: new Map([["crm", app("crm", {}, [])]]) });
+  const w = world({ views: new Map([["crm", app("crm", {}, { tools: [] })]]) });
   await no(ASAPP, "apps/crm/x", "read", 403, w, /app_folder/);
 });
 test("F19 구성원 빈 값 → 401", async () => {
   await no({ member: "", scopes: [] }, "shared/x", "read", 401);
+});
+test("F20 공유 판정은 같은 이름의 유니코드 꼴(NFC · NFD) 전부에 건다 — 잠금이 어느 꼴로 적혀 있어도", async () => {
+  const NFC = "영업/비공개", NFD = NFC.normalize("NFD");
+  assert.notEqual(NFC, NFD, "시험 전제: 두 꼴의 글자가 달라야 한다");
+  for (const [locked, asked] of [[NFC, NFD], [NFD, NFC], [NFC, NFC]] as const) {
+    //  sharedFolderGate 처럼 글자 그대로 접두를 비교하는 판정기 — 잠긴 꼴만 막는다.
+    const w = world({ shared: (_m, rel) => !(rel === locked || rel.startsWith(locked + "/")) });
+    await no(ME, `shared/${asked}/x.txt`, "read", 404, w);
+    await no(ME, `shared/${asked}/x.txt`, "write", 404, w);
+  }
+  //  허락된 사람(어느 꼴도 막히지 않음)은 지나간다 · 판정기는 꼴마다 불린다.
+  const calls: string[] = [];
+  await authorizeFileAccess(ME, parseAddress(`shared/${NFD}/x.txt`), "write", deps(world(), calls));
+  assert.deepEqual(calls.filter((c) => c.startsWith("ok:")).sort(), [`ok:${NFC}/x.txt`, `ok:${NFD}/x.txt`].sort());
 });
 
 // ── 쓰기 대상 ───────────────────────────────────────────────────────────────────

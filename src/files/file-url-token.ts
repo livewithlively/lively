@@ -22,7 +22,7 @@ import type { AddressRoot } from "./address.js";
 export type FileUrlMethod = "GET" | "PUT";
 
 export interface FileUrlClaims {
-  /** 워크스페이스(테넌트) id — 단일 테넌트 배포는 "" */
+  /** 워크스페이스(테넌트) id — 단일 테넌트 배포는 SINGLE_TENANT_ID(db/tenant-column) */
   t: string;
   m: FileUrlMethod;
   r: AddressRoot;

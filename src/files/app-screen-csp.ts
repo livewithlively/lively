@@ -4,14 +4,12 @@
 //   그 경로 하나(`<게이트웨이>/api/files/s/`)를 connect · img · media 에 연다 — 토큰 없이는 아무것도 열리지 않는 자리라 바깥으로 새는 통로가 아니다.
 //  경로까지 적는 까닭: 같은 출처의 다른 API(/api/ui/…)는 계속 막힌다(CSP 출처 식은 경로 접두를 본다).
 import { gatewayUrl, SAFE_GATEWAY_URL } from "../gateway-url.js";
+import { declaresAppFolder } from "./file-access.js";
+
+export { declaresAppFolder };
 
 /** 서명 주소의 경로 접두 — files/signed-routes 가 붙는 자리(index.ts `/api/files/s`). */
 export const FILE_URL_PATH = "/api/files/s/";
-
-/** 매니페스트가 앱 폴더(permissions.app_folder)를 선언했나. */
-export function declaresAppFolder(manifest: unknown): boolean {
-  return (manifest as { permissions?: { app_folder?: unknown } } | null)?.permissions?.app_folder === true;
-}
 
 /** (순수) 이 앱 화면의 CSP 에 더할 출처 식 — 선언이 없거나 게이트웨이 주소가 모양이 아니면 null. */
 export function filesCspSourceFor(manifest: unknown, base: string | null): string | null {
@@ -21,5 +19,6 @@ export function filesCspSourceFor(manifest: unknown, base: string | null): strin
 
 /** 게이트웨이 공개 주소로 출처 식을 만든다(org 프로필 > PUBLIC_URL). */
 export async function filesCspSource(manifest: unknown): Promise<string | null> {
+  if (!declaresAppFolder(manifest)) return null;   // 대부분의 앱 — 게이트웨이 주소(DB)를 읽을 까닭이 없다
   return filesCspSourceFor(manifest, await gatewayUrl());
 }

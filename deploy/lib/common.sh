@@ -64,6 +64,10 @@ ensure_service_user() {
   #  커스텀 존중), 아니면 shared=격리공유dir(/srv/lively/shared, lively-shared 그룹 rw)·personal=서비스홈/box 로 repoint.
   local shared_dir="${LIVELY_SHARED_DIR:-/srv/lively/shared}"
   getent group lively-shared >/dev/null 2>&1 && sudo install -d -g lively-shared -m 2775 "$shared_dir" 2>/dev/null || sudo mkdir -p "$shared_dir"
+  #  앱 폴더 자리(#4673)도 같은 규칙 — 격리 멤버의 파일 작업은 LIVELY_APPS_DIR(install-isolation 이 만든다)로 가므로 게이트웨이 자신의
+  #   자리(TERMINAL_ROOT_APPS)도 그곳이어야 한다(아니면 OS 계정이 아직 없는 멤버의 앱 폴더가 다른 폴더에 생겨 둘로 갈린다).
+  local apps_dir="${LIVELY_APPS_DIR:-/srv/lively/apps}"
+  getent group lively-shared >/dev/null 2>&1 && sudo install -d -g lively-shared -m 2775 "$apps_dir" 2>/dev/null || sudo mkdir -p "$apps_dir"
   sudo install -d -o "$user" -g "$user" -m 700 "$LIVELY_SERVICE_HOME/box" 2>/dev/null || true
   if [ -f "$APP_DIR/.env" ]; then
     local cur
@@ -71,6 +75,8 @@ ensure_service_user() {
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_SHARED "$shared_dir"; log "세션 shared 루트 → $shared_dir ($user 접근가능)"; }
     cur="$(sudo grep -E '^TERMINAL_ROOT_PERSONAL=' "$APP_DIR/.env" | cut -d= -f2-)"
     sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_PERSONAL "$LIVELY_SERVICE_HOME/box"; log "세션 personal 루트 → $LIVELY_SERVICE_HOME/box"; }
+    cur="$(sudo grep -E '^TERMINAL_ROOT_APPS=' "$APP_DIR/.env" | cut -d= -f2-)"
+    sudo -u "$user" test -w "$cur" 2>/dev/null || { set_env "$APP_DIR/.env" TERMINAL_ROOT_APPS "$apps_dir"; log "앱 폴더 자리 → $apps_dir ($user 접근가능)"; }
   fi
   # ⭐ .env 소유권 불변식 최종 적용 — 위 모든 .env 편집(set_env 세션루트 repoint 등) '뒤' 마지막에 강제.
   #  게이트웨이(서비스유저 그룹)가 .env 를 group-read 해야 DB 접속정보를 로드한다(못 읽으면 password=undefined→SASL 다운:
@@ -351,7 +357,7 @@ dc() {
 }
 
 # ── .env 생성 (비파괴: 이미 있으면 보존) ──
-#  caller 가 export 로 넘길 수 있는 값: PUBLIC_URL, TMUX_BIN, TERMINAL_ROOT_SHARED, TERMINAL_ROOT_PERSONAL,
+#  caller 가 export 로 넘길 수 있는 값: PUBLIC_URL, TMUX_BIN, TERMINAL_ROOT_SHARED, TERMINAL_ROOT_PERSONAL, TERMINAL_ROOT_APPS,
 #    ORG_DOMAIN(에이전트 토큰 이메일 도메인), PORT, ITEMS_DB_PORT, WITH_EMBEDDINGS
 ensure_env() {
   local envf="$APP_DIR/.env"
@@ -368,8 +374,9 @@ ensure_env() {
   local tmux_bin="${TMUX_BIN:-$(command -v tmux || echo /usr/bin/tmux)}"
   local rshared="${TERMINAL_ROOT_SHARED:-$HOME/workspace}"
   local rpersonal="${TERMINAL_ROOT_PERSONAL:-$HOME/box}"
+  local rapps="${TERMINAL_ROOT_APPS:-$HOME/apps}"
   local orgdom="${ORG_DOMAIN:-example.com}"
-  mkdir -p "$rshared" "$rpersonal" 2>/dev/null || true   # 중앙박스 세션 루트(없으면 세션 생성 실패)
+  mkdir -p "$rshared" "$rpersonal" "$rapps" 2>/dev/null || true   # 중앙박스 세션 루트(없으면 세션 생성 실패) · 앱 폴더 자리(#4673)
   # 임베딩(#172) — WITH_EMBEDDINGS=1(또는 EMBEDDINGS_PROVIDER=http)면 provider 를 켜서 기록(사이드카는 store_up 이 기동,
   #  기존 지식 백필은 install.sh 말미). 아니면 off(grep 폴백). base_url/model/dim/auth 는 caller env 로 오버라이드 가능.
   local emb_provider="off"
@@ -421,6 +428,7 @@ LC_CTYPE=C.UTF-8
 TMUX_BIN=$tmux_bin
 TERMINAL_ROOT_SHARED=$rshared
 TERMINAL_ROOT_PERSONAL=$rpersonal
+TERMINAL_ROOT_APPS=$rapps
 
 # ── 임베딩 / 벡터검색(#172) — off=knowledge_search grep 폴백. http=OpenAI-compatible /v1/embeddings. ──
 #  뒤늦게 켜기: deploy/enable-embeddings.sh (사이드카→provider=http→재시작→기존 지식 백필). 또는 관리탭 '임베딩(벡터검색)'.

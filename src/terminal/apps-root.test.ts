@@ -97,6 +97,8 @@ test("G7 탐색기 root=apps — 동의한 앱만 보이는 게이트 · 신원 
   assert.match(g, /readableAppFoldersFor\(\{ member: viewer, scopes: /, "★ 앱 폴더 목록을 동의로 거르지 않는다 — 누구나 모든 앱 폴더를 본다");
   assert.match(g, /viewer \? await readableAppFoldersFor\(.*?\) : new Set<string>\(\)/, "신원 없는 요청에 앱 폴더를 연다");
   assert.match(g, /first === "" \|\| readable\.has\(first\)/);
+  assert.match(g, /const appId = userOf\(req\)\.appId;\s*if \(appId\) for \(const id of \[\.\.\.readable\]\) if \(id !== appId\) readable\.delete\(id\);/,
+    "★ 앱 주체(앱 세션 토큰)가 탐색기에서 다른 앱 폴더를 본다 — 앱은 제 앱 폴더만(Postgres 통합 시험 P11 이 끝단을 잰다)");
 });
 
 test("G8 탐색기 root=apps — 웹 쓰기(폴더 만들기 · 이름 바꾸기 · 지우기 · 올리기)는 판정보다 먼저 403", () => {
@@ -108,7 +110,9 @@ test("G8 탐색기 root=apps — 웹 쓰기(폴더 만들기 · 이름 바꾸기
   assert.match(TF, /const assertBrowseWritable = \(req: express\.Request\): void => \{\s*if \(String\(req\.query\.root \?\? ""\) === APPS_ROOT_KEY\) throw new HttpError\(403/);
 });
 
-test("G9 탐색기 root=apps — 봉쇄는 그 앱 폴더로(자리 맨 위가 아니라)", () => {
+test("G9 탐색기 root=apps — 봉쇄는 그 앱 폴더로(files/app-jail — 서명 주소와 같은 판정)", () => {
   const r = TF.slice(TF.indexOf("async function resolveBrowse("), TF.indexOf("// 생성폼 폴더 탐색 + 공유 폴더 브라우저"));
-  assert.match(r, /assertJailed\(appSeg \? path\.join\(base, appSeg\) : base, abs, osUser\)/, "★ 앱 폴더 안 링크로 다른 앱 폴더를 읽는다");
+  assert.match(r, /assertJailed\(base, abs, osUser, appSeg \|\| undefined\)/, "★ 앱 폴더 주소를 그 앱 폴더로 봉쇄하지 않는다");
+  const j = TF.slice(TF.indexOf("async function assertJailed("), TF.indexOf("// 파일 한 개를 응답으로"));
+  assert.match(j, /app \? await isInAppFolder\(base, app, abs, probe\) : await isConfined\(base, abs, probe\)/);
 });

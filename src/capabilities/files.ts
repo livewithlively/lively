@@ -128,7 +128,7 @@ const fileUrl: Capability = {
     if (!rate.take(`${fileUrlTenantId()}\0${p.member}\0${p.app ?? "-"}`, Date.now())) {
       throw new HttpError(429, `서명 주소를 너무 자주 받고 있습니다(분당 ${FILE_URL_PER_MINUTE}개)`);
     }
-    const minted = await mintFileUrl({ address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly }, liveMintDeps);
+    const minted = await mintFileUrl({ address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true }, liveMintDeps);
     return { ...minted, link: await humanLink(address) };
   },
 };

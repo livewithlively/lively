@@ -156,6 +156,13 @@ export async function getApp(id: string, client?: pg.PoolClient): Promise<OrgApp
   return r.rows[0] ? rowToApp(r.rows[0]) : null;
 }
 
+/** 이 id 들의 앱(없는 id 는 빠진다) — 한 번에 읽는다(#4673 홈 탐색기 root=apps 목록은 동의한 앱만 본다). */
+export async function getAppsByIds(ids: readonly string[]): Promise<OrgApp[]> {
+  if (!ids.length) return [];
+  const r = await itemsPool.query(`SELECT * FROM org_app WHERE id = ANY($1::text[])`, [[...ids]]);
+  return r.rows.map(rowToApp);
+}
+
 export async function listApps(): Promise<OrgApp[]> {
   const r = await itemsPool.query(`SELECT * FROM org_app ORDER BY installed_at DESC`);
   return r.rows.map(rowToApp);

@@ -6,7 +6,7 @@ import { readableAppFolders } from "./file-access.js";
 import type { MintFileUrlDeps } from "./file-url.js";
 import type { SignedRouteDeps } from "./signed-routes.js";
 import { fileUrlKey } from "./file-url-token.js";
-import { getApp, getActiveGrant, listApps, listActiveGrants } from "../org/store/apps.js";
+import { getApp, getAppsByIds, getActiveGrant, listActiveGrants } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { registryModeActive } from "../org/tenancy/state.js";
@@ -30,13 +30,14 @@ export const liveFileAccessDeps: FileAccessDeps = {
   getGrant: getActiveGrant,
   viewFor: async (app, member, scopes) => (await viewAppFor(app, { userId: member, scopes: [...scopes] })).app,
   //  공유 폴더 공개범위 — 링크 · MCP · 탐색기와 같은 판정(sharedFolderGate). 판정 불가(DB 장애)면 던진다(fail-closed).
-  sharedOk: async (member, rel) => (await sharedFolderGate(member)).ok(rel),
+  sharedGate: (member) => sharedFolderGate(member),
 };
 
-/** 이 사람이 읽을 수 있는 앱 폴더(앱 id) — 홈 탐색기 root=apps 목록 한 번에 한 번. */
+/** 이 사람이 읽을 수 있는 앱 폴더(앱 id) — 홈 탐색기 root=apps 목록 한 번에 한 번. 동의한 앱만 읽는다(앱 전부를 훑지 않는다). */
 export async function readableAppFoldersFor(p: FilePrincipal): Promise<Set<string>> {
-  const [apps, grants] = await Promise.all([listApps(), listActiveGrants(p.member)]);
-  return readableAppFolders(p, apps, grants);
+  const grants = await listActiveGrants(p.member);
+  if (!grants.length) return new Set();
+  return readableAppFolders(p, await getAppsByIds(grants.map((g) => g.app_id)), grants);
 }
 
 export const liveMintDeps: MintFileUrlDeps = {

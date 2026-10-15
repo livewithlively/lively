@@ -19,7 +19,8 @@ for (const d of ["shared", "apps", "box"]) fs.mkdirSync(path.join(ROOT, d), { re
 
 const { fileUrlRouter } = await import("./signed-routes.js");
 const { mintFileUrl } = await import("./file-url.js");
-const { fileUrlKey } = await import("./file-url-token.js");
+const { fileUrlKey, signFileUrlToken } = await import("./file-url-token.js");
+const { logger } = await import("../log.js");
 const { parseAddress } = await import("./address.js");
 type Principal = import("./file-access.js").FilePrincipal;
 
@@ -36,19 +37,19 @@ const grant = (appId: string, member: string): AppGrantRow => ({ app_id: appId, 
 // 바꿀 수 있는 세계 — 시험마다 되돌린다.
 const W = {
   apps: new Map<string, OrgApp>(), grants: [] as AppGrantRow[], members: new Set<string>(),
-  shared: (_m: string, _rel: string) => true, keyOn: true, tenant: "t1", finished: [] as string[],
+  shared: (_m: string, _rel: string) => true, keyOn: true, tenant: "t1", finished: [] as string[], finishThrows: false,
 };
 function reset(): void {
   W.apps = new Map([["crm", app("crm")], ["other", app("other")]]);
   W.grants = [grant("crm", "m1"), grant("other", "m1")];
   W.members = new Set(["m1"]);
-  W.shared = () => true; W.keyOn = true; W.tenant = "t1"; W.finished = [];
+  W.shared = () => true; W.keyOn = true; W.tenant = "t1"; W.finished = []; W.finishThrows = false;
 }
 reset();
 const access = {
   getApp: async (id: string) => W.apps.get(id) ?? null,
   getGrant: async (id: string, m: string) => W.grants.find((g) => g.app_id === id && g.member_id === m) ?? null,
-  sharedOk: async (m: string, rel: string) => W.shared(m, rel),
+  sharedGate: async (m: string) => ({ ok: (rel: string) => W.shared(m, rel) }),
 };
 const server = express();
 server.use("/api/files/s", fileUrlRouter({
@@ -56,7 +57,10 @@ server.use("/api/files/s", fileUrlRouter({
   tenantId: () => W.tenant,
   activeMember: async (id) => (W.members.has(id) ? { id, email: `${id}@x`, scopes: ["memory"] } : null),
   access,
-  finishShared: async ({ abs }) => { W.finished.push(abs); return { size: fs.statSync(abs).size, ref: "shared/" + path.basename(abs) }; },
+  finishShared: async ({ abs }) => {
+    if (W.finishThrows) throw new Error("finish exploded");
+    W.finished.push(abs); return { size: fs.statSync(abs).size, ref: "shared/" + path.basename(abs) };
+  },
 }));
 server.use(express.json({ limit: "1mb" }));   // 전역 파서는 서명 주소 라우트 **뒤**(index.ts 와 같은 순서) — J12
 const listener = server.listen(0);
@@ -70,7 +74,7 @@ const mintDeps = (over: Partial<Parameters<typeof mintFileUrl>[1]> = {}): Parame
   access, key: () => KEY, tenantId: () => "t1", base: async () => BASE, workspaceSlug: () => null, ...over,
 });
 const mint = (address: string, method: "GET" | "PUT", principal: Principal, over: Partial<Parameters<typeof mintFileUrl>[0]> = {}, d = mintDeps()) =>
-  mintFileUrl({ address: parseAddress(address), method, ttlSec: 900, principal, ...over }, d);
+  mintFileUrl({ address: parseAddress(address), method, ttlSec: 900, principal, readOnly: false, ...over }, d);
 const onDisk = (rel: string): string => path.join(ROOT, rel);
 
 test("J1 앱 주체로 올리기 — 앱 폴더에 파일이 생기고(바이트 같음) 자료 마무리는 안 탄다", async () => {
@@ -214,6 +218,83 @@ test("J14 HTML 은 문서로 열리지 않게 octet-stream 으로 준다", async
   assert.match(r.headers.get("content-disposition") ?? "", /^attachment/);
 });
 
+test("J15 공유 쓰기 판정은 저장되는 이름과 같은 글자로 — 잠금이 NFC 로 적혀 있으면 NFD 로 적은 주소도 막힌다(발급 · 받는 곳 둘 다)", async () => {
+  reset();
+  const NFC = "영업/비공개", NFD = NFC.normalize("NFD");
+  assert.notEqual(NFC, NFD);
+  W.shared = (_m, rel) => !(rel === NFC || rel.startsWith(NFC + "/"));
+  await assert.rejects(() => mint(`shared/${NFD}/x.txt`, "PUT", PERSON), (e: { status?: number }) => e.status === 404);
+  //  받는 곳 단독 — 발급을 거치지 않은 토큰이어도 같은 판정이다.
+  const tok = signFileUrlToken({ t: "t1", m: "PUT", r: "shared", p: `${NFD}/x.txt`, s: "m1", e: Math.floor(Date.now() / 1000) + 600 }, KEY);
+  assert.equal((await fetch(`${BASE}/api/files/s/${tok}`, { method: "PUT", body: "x" })).status, 404);
+  assert.equal(fs.existsSync(onDisk(`shared/${NFC}/x.txt`)), false);
+  assert.equal(fs.existsSync(onDisk(`shared/${NFD}/x.txt`)), false);
+});
+
+test("J15b 허락된 사람이 NFD 로 적은 주소에 올리기 — NFC 이름으로 저장되고 그 저장 이름이 판정에 들어간다", async () => {
+  reset();
+  const NFC = "영업/공개", NFD = NFC.normalize("NFD");
+  const seen: string[] = [];
+  W.shared = (_m, rel) => { seen.push(rel); return true; };
+  const u = await mint(`shared/${NFD}/y.txt`, "PUT", PERSON);
+  assert.equal(u.address, `shared/${NFC}/y.txt`, "서명한 주소는 NFC 이름");
+  seen.length = 0;
+  const r = await fetch(u.url, { method: "PUT", body: "y" });
+  assert.equal(r.status, 200, await r.clone().text());
+  assert.equal(((await r.json()) as { address: string }).address, `shared/${NFC}/y.txt`);
+  assert.equal(fs.readFileSync(onDisk(`shared/${NFC}/y.txt`), "utf8"), "y");
+  const storedRel = path.relative(onDisk("shared"), W.finished[0]!).split(path.sep).join("/");
+  assert.ok(seen.includes(storedRel), `받는 곳의 판정에 저장 이름이 없다: ${JSON.stringify(seen)}`);
+});
+
+test("J16 앱 폴더 자신이 이웃 앱 폴더로 가는 링크면 받기 · 올리기 모두 400 · 이웃 폴더에 아무것도 생기지 않는다", async () => {
+  reset();
+  W.apps.set("crm2", app("crm2")); W.grants.push(grant("crm2", "m1"));
+  fs.mkdirSync(onDisk("apps/other2"), { recursive: true });
+  fs.writeFileSync(onDisk("apps/other2/secret.txt"), "other2 secret");
+  fs.rmSync(onDisk("apps/crm2"), { recursive: true, force: true });
+  fs.symlinkSync(onDisk("apps/other2"), onDisk("apps/crm2"));
+  const AS_CRM2: Principal = { member: "m1", scopes: ["memory"], app: "crm2" };
+  const g = await fetch((await mint("apps/crm2/secret.txt", "GET", AS_CRM2)).url);
+  assert.equal(g.status, 400);
+  assert.doesNotMatch(await g.text(), /other2 secret/);
+  const p = await mint("apps/crm2/planted.txt", "PUT", AS_CRM2);
+  assert.equal((await fetch(p.url, { method: "PUT", body: "x" })).status, 400);
+  assert.equal(fs.existsSync(onDisk("apps/other2/planted.txt")), false);
+});
+
+test("J17 실패 로그에 주소(토큰)를 남기지 않는다 — 5xx 두 갈래(HttpError · 그 밖의 오류)", async () => {
+  reset();
+  const logged: string[] = [];
+  const orig = logger.error;
+  (logger as { error: unknown }).error = (...args: unknown[]) => { logged.push(JSON.stringify(args)); };
+  try {
+    W.finishThrows = true;
+    const u = await mint("shared/docs/j17.txt", "PUT", PERSON);
+    assert.equal((await fetch(u.url, { method: "PUT", body: "x" })).status, 500);
+    W.finishThrows = false;
+    const v = await mint("apps/crm/j17.txt", "PUT", AS_APP);
+    W.keyOn = false;
+    assert.equal((await fetch(v.url, { method: "PUT", body: "x" })).status, 503);
+    W.keyOn = true;
+    assert.ok(logged.length >= 2, `실패가 로그에 남지 않았다: ${logged.length}`);
+    const all = logged.join("\n");
+    for (const url of [u.url, v.url]) assert.ok(!all.includes(new URL(url).pathname.split("/").pop()!), "로그에 토큰이 남았다");
+    assert.ok(logged.every((l) => l.includes("/api/files/s/:token")), "로그에 어느 라우트인지 남는다");
+  } finally {
+    (logger as { error: unknown }).error = orig;
+  }
+});
+
+test("J18 index.ts 는 서명 주소 라우트를 전역 express.json 앞에 붙인다(J12 의 전제)", () => {
+  const src = fs.readFileSync("src/index.ts", "utf8");
+  const route = src.indexOf('app.use("/api/files/s", fileUrlRouter(');
+  const json = src.search(/^app\.use\(express\.json\(/m);
+  assert.ok(route > 0, "서명 주소 라우트가 index.ts 에 없다");
+  assert.ok(json > 0, "전역 express.json 이 index.ts 에 없다");
+  assert.ok(route < json, "서명 주소 라우트가 전역 JSON 파서 뒤에 붙었다 — JSON 본문 올리기가 비게 된다");
+});
+
 test("J 공유 자리 올리기 — 사람 · 다른 업로드와 같은 마무리를 탄다 · 응답에 그 결과", async () => {
   reset();
   const u = await mint("shared/docs/a.txt", "PUT", PERSON);
@@ -253,6 +334,19 @@ test("K2 읽기전용 세션 — 올리기 주소는 403 · 받기 주소는 준
   reset();
   await assert.rejects(() => mint("apps/crm/k2.txt", "PUT", AS_APP, { readOnly: true }), (e: { status?: number }) => e.status === 403);
   assert.ok((await mint("apps/crm/k2.txt", "GET", AS_APP, { readOnly: true })).url);
+});
+
+test("K2b 읽기전용 여부를 모르면(빈 값) 올리기 주소를 주지 않는다", async () => {
+  reset();
+  await assert.rejects(() => mint("apps/crm/k2b.txt", "PUT", AS_APP, { readOnly: undefined as unknown as boolean }), (e: { status?: number }) => e.status === 403);
+});
+
+test("K2c file_url 도구 — 읽기전용 세션(ctx.readOnly)이면 올리기 주소를 주지 않는다(판정 · 서명 전에)", async () => {
+  const { fileCapabilities } = await import("../capabilities/files.js");
+  const cap = fileCapabilities.find((c) => c.name === "file_url")!;
+  const user = { userId: "m1", email: "m1@x", scopes: ["memory"], projects: [] } as unknown as import("../context.js").LivelyUser;
+  await assert.rejects(() => cap.handler({ address: "apps/crm/k2c.txt", method: "PUT" }, user, { source: "mcp", actor: "m1", readOnly: true }),
+    (e: { status?: number; message?: string }) => e.status === 403 && /읽기전용/.test(String(e.message)));
 });
 
 test("K3 서명 키가 없으면 503", async () => {

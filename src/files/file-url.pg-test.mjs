@@ -51,6 +51,7 @@ const { appCapabilities } = await import(`${D}/capabilities/apps.js`);
 const { upsertMember } = await import(`${D}/org/store/members.js`);
 const { mintToken } = await import(`${D}/org/store/tokens.js`);
 const { mintAppServerToken } = await import(`${D}/apps/app-server-auth.js`);
+const { mintAppToken } = await import(`${D}/apps/principal.js`);
 const { itemsPool } = await import(`${D}/db/client.js`);
 const cap = (n) => appCapabilities.find((c) => c.name === n);
 
@@ -69,6 +70,7 @@ try {
   await upsertMember({ id: "pgt-admin", display_name: "관리자", state: "active", scopes: ["admin", "items"] }, "pgt");
   await upsertMember({ id: "pgt-user", display_name: "사용자", state: "active", scopes: ["items"] }, "pgt");
   await upsertMember({ id: "pgt-other", display_name: "동의 안 함", state: "active", scopes: ["items"] }, "pgt");
+  await upsertMember({ id: "pgt-guest", display_name: "초대받은 사람", state: "active", scopes: ["items"] }, "pgt");
   await install("files-app", true);
   await install("other-app", true);
   await cap("me_app_grant").handler({ app_id: "files-app" }, { userId: "pgt-user", scopes: ["items"] }, { source: "mcp" });
@@ -76,6 +78,7 @@ try {
   const { token: appToken } = await mintAppServerToken("files-app", "pgt-admin");
   const userTok = (await mintToken({ userId: "pgt-user", memberId: "pgt-user", scopes: ["items"] }, "pgt")).token;
   const otherTok = (await mintToken({ userId: "pgt-other", memberId: "pgt-other", scopes: ["items"] }, "pgt")).token;
+  const guestTok = (await mintToken({ userId: "pgt-guest", memberId: "pgt-guest", scopes: ["items"] }, "pgt")).token;
 
   const gw = express();
   gw.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
@@ -131,6 +134,18 @@ try {
     && !existsSync(path.join(ROOT, "apps", "files-app", "w.txt")),
     JSON.stringify({ user: listUser.dirs, other: listOther.dirs, intoOther: intoOther.status, webPut: webPut.status }));
 
+  // ── P11 ── 앱 세션 토큰은 탐색기에서도 제 앱 폴더만(사람은 동의한 앱 폴더 전부) — P4(동의 철회) 전에
+  mkdirSync(path.join(ROOT, "apps", "other-app"), { recursive: true });
+  const { token: appSessTok } = await mintAppToken("pgt-user", "files-app");
+  const browse = (tok, p) => fetch(`${GW}/api/ui/terminal/browse?root=apps&path=${encodeURIComponent(p)}`, { headers: { authorization: `Bearer ${tok}` } });
+  const listHuman = await (await browse(userTok, "")).json();
+  const listAppSess = await (await browse(appSessTok, "")).json();
+  const intoOtherAsApp = await browse(appSessTok, "other-app");
+  chk("P11 앱 세션 토큰은 탐색기에서도 제 앱 폴더만 — 사람은 동의한 앱 폴더 둘 다",
+    (listHuman.dirs ?? []).includes("files-app") && (listHuman.dirs ?? []).includes("other-app")
+    && (listAppSess.dirs ?? []).includes("files-app") && !(listAppSess.dirs ?? []).includes("other-app") && intoOtherAsApp.status === 404,
+    JSON.stringify({ human: listHuman.dirs, app: listAppSess.dirs ?? listAppSess, into: intoOtherAsApp.status }));
+
   // ── P4 ──
   const pending = await (await mintAsApp("pgt-user", { address: "apps/files-app/late.txt", method: "PUT" })).json();
   await cap("me_app_revoke").handler({ app_id: "files-app" }, { userId: "pgt-user", scopes: ["items"] }, { source: "mcp" });
@@ -144,6 +159,46 @@ try {
   const appFileSources = await itemsPool.query(`SELECT count(*)::int AS n FROM source WHERE external_system='local' AND external_id LIKE '%files-app%'`);
   chk("P6 공유 폴더 올리기는 자료가 생기고(ref · source_id) 앱 폴더 올리기는 자료가 없다",
     sp.status === 200 && spBody.ref === "shared/docs/note.md" && Number(spBody.source_id) > 0 && appFileSources.rows[0].n === 0, JSON.stringify(spBody));
+
+  // ── P7 ── 읽기전용 세션(x-lively-mode: readonly — 세션 안 MCP 프록시 · lively CLI 가 싣는 헤더)
+  const ro = { authorization: `Bearer ${userTok}`, "content-type": "application/json", "x-lively-mode": "readonly" };
+  const p7a = await fetch(GW + "/api/ui/files/url", { method: "POST", headers: ro, body: JSON.stringify({ address: "shared/docs/ro.md", method: "PUT" }) });
+  const p7b = await fetch(GW + "/api/ui/files/url", { method: "POST", headers: ro, body: JSON.stringify({ address: "shared/docs/note.md" }) });
+  chk("P7 읽기전용 세션 — 올리기 주소 403 · 받기 주소 200", p7a.status === 403 && p7b.status === 200, JSON.stringify([p7a.status, p7b.status]));
+
+  // ── P8 ── method 는 GET · PUT 만(소문자 · 다른 값이 받기로 바뀌지 않는다)
+  const p8 = await Promise.all(["put", "POST"].map((m) => mintAs(userTok, { address: "shared/docs/note.md", method: m })));
+  chk("P8 method 허용값 밖 → 400", p8.every((r) => r.status === 400), JSON.stringify(p8.map((r) => r.status)));
+
+  // ── P9 ── 도구 이름(file_url)만 적고 app_folder 를 선언하지 않은 앱 → 403(선언은 app_folder)
+  await cap("org_app_install").handler({ source: { kind: "inline", files: [
+    { path: "lively-app.json", content: JSON.stringify({ ...appManifest("tools-only-app", false), permissions: { app_folder: false, tools: ["file_url"] } }) },
+    { path: "ui/index.html", content: "<p>x</p>" }] } }, { userId: "pgt-admin", email: "a@x", scopes: ["admin", "items"] }, { source: "mcp" });
+  await cap("me_app_grant").handler({ app_id: "tools-only-app" }, { userId: "pgt-user", scopes: ["items"] }, { source: "mcp" });
+  const { token: toolsOnlyTok } = await mintAppServerToken("tools-only-app", "pgt-admin");
+  const p9 = await fetch(GW + "/api/ui/files/url", { method: "POST", headers: { authorization: `Bearer ${toolsOnlyTok}`,
+    "x-lively-identity": identity("pgt-user", "tools-only-app"), "content-type": "application/json" }, body: JSON.stringify({ address: "apps/tools-only-app/x.txt", method: "PUT" }) });
+  chk("P9 app_folder 를 선언하지 않은 앱(도구 이름만) → 403", p9.status === 403, `${p9.status} ${await p9.clone().text()}`);
+
+  // ── P10 ── 세션 안 경로 ↔ 주소는 그 세션의 참가자(연 사람 · 초대받은 사람)만 — 셀프호스트(같은 파일 시스템) 세션
+  const SID = "box-pgt-files-4673abcd";
+  const st = await import(`${D}/sessions/session-state.js`);
+  const docsDir = path.join(ROOT, "shared", "docs");
+  await st.upsertSessionState({ id: SID, owner: "pgt-user", label: "주소 시험", harness: "claude", dir: docsDir, root_key: "shared", subpath: "docs",
+    flags: {}, auto_approve: false, invites: ["pgt-guest"], project_id: null, project_src: null, read_only: false, incognito: false,
+    created: 1_000, last_busy: 1_100, label_source: "human", kind: "human" });
+  const conv = (tok, kind, q, sid = SID) => fetch(`${GW}/api/ui/files/${kind}?${new URLSearchParams(q)}`, { headers: { authorization: `Bearer ${tok}`, "x-lively-session": sid } });
+  const a1 = await conv(userTok, "address", { path: path.join(docsDir, "note.md") });
+  const a1b = await a1.json();
+  const a2 = await conv(guestTok, "path", { address: "shared/docs/note.md" });
+  const a2b = await a2.json();
+  const a3 = await conv(otherTok, "address", { path: path.join(docsDir, "note.md") });
+  const a4 = await conv(otherTok, "path", { address: "shared/docs/note.md" });
+  const a5 = await conv(userTok, "address", { path: path.join(docsDir, "note.md") }, "box-pgt-nosuch-0000beef");
+  chk("P10 주인 · 초대받은 사람은 바꾼다(경로 ↔ 주소) · 참가자 아닌 사람 403 · 없는 세션 404",
+    a1.status === 200 && a1b.address === "shared/docs/note.md" && a2.status === 200 && a2b.path === path.join(docsDir, "note.md")
+    && a3.status === 403 && a4.status === 403 && a5.status === 404,
+    JSON.stringify({ a1: [a1.status, a1b], a2: [a2.status, a2b], a3: a3.status, a4: a4.status, a5: a5.status }));
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {
