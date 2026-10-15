@@ -24,7 +24,8 @@
 import { el, sv } from './dom.js';
 import { toast } from './overlay.js';
 
-const SHARE_ROOTS: Record<string, string> = { shared: '공유 워크스페이스', personal: '개인 폴더' };
+//  apps(#4673) = 앱 폴더(apps/<앱>/…) — 그 앱에 동의한 구성원만 연다(서버 판정 — 이 표는 이름만).
+const SHARE_ROOTS: Record<string, string> = { shared: '공유 워크스페이스', personal: '개인 폴더', apps: '앱 폴더' };
 
 /** 루트 키의 사람용 이름. 모르는 키는 그대로(방어적). */
 function shareRootLabel(root: string): string {
@@ -77,7 +78,9 @@ async function copyFileLink(root: string, rel: string, kind?: 'file' | 'dir'): P
   // 개인 폴더는 멤버별로 갈린 자리라 남이 열면 자기 폴더를 본다 — 링크를 건네도 내 파일은 안 보인다(위 헤더 주석).
   const who = root === 'personal'
     ? '개인 폴더라 이 링크는 나만 열 수 있어요'
-    : '볼 권한이 있는 팀원이 열 수 있어요';
+    : root === 'apps'
+      ? '이 앱에 동의한 팀원이 열 수 있어요'
+      : '볼 권한이 있는 팀원이 열 수 있어요';
   try {
     if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('no clipboard');
     await navigator.clipboard.writeText(url);

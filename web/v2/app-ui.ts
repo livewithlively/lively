@@ -25,7 +25,18 @@ import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 �
 import { OMNI_MSG } from '../lib/omni-chord.js';
 let lastOmniAsk = 0;   // 앱이 보낸 «통합검색 열기» 의 마지막 때(1초에 한 번)
 
-export interface AppCsp { connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[] }
+export interface AppCsp {
+  connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[];
+  /** #4673 — 앱 폴더를 선언한 앱의 서명 주소 자리(`<게이트웨이>/api/files/s/`). 서버가 채운다(src/files/app-screen-csp.ts). */
+  files?: string | null;
+}
+
+const FILES_SRC_RE = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/api\/files\/s\/$/;
+/** 지시문 값 뒤에 서명 주소 자리를 붙인다('none' 이면 그 자리로 바꾼다) — src/apps/app-front-page.ts withFiles 와 같은 규칙. */
+function withFiles(list: string, files: string | null | undefined): string {
+  if (!files || !FILES_SRC_RE.test(files)) return list;
+  return list === "'none'" ? files : list + ' ' + files;
+}
 
 /** 선언 도메인 목록 → CSP 소스 표현. 빈 목록이면 'none', `*` 이 있으면 https: (스킴 전체 — http 는 안 준다). */
 function srcList(domains: string[] | undefined, extra?: string): string {
@@ -45,10 +56,10 @@ function buildCsp(csp?: AppCsp): string {
     "default-src 'none'",
     "script-src 'unsafe-inline'",         // ⚠ 외부 스크립트는 어떤 선언으로도 열지 않는다
     "style-src 'unsafe-inline'",
-    'img-src ' + srcList(csp?.resource_domains, 'data:'),
+    'img-src ' + withFiles(srcList(csp?.resource_domains, 'data:'), csp?.files),
     'font-src ' + srcList(csp?.resource_domains, 'data:'),
-    'media-src ' + srcList(csp?.resource_domains),
-    'connect-src ' + srcList(csp?.connect_domains),
+    'media-src ' + withFiles(srcList(csp?.resource_domains), csp?.files),
+    'connect-src ' + withFiles(srcList(csp?.connect_domains), csp?.files),
     'frame-src ' + srcList(csp?.frame_domains),
     "form-action 'none'",
     "base-uri 'none'",

@@ -5174,5 +5174,35 @@
    "POST /api/ui/apps/:id/launch"
   ],
   "input_hash": "610459ffd9582355"
+ },
+ {
+  "name": "file_url",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/files/url"
+  ],
+  "input_hash": "ce0618b5da942eb8"
+ },
+ {
+  "name": "file_address",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/files/address"
+  ],
+  "input_hash": "7c733ea4a6dd1a32"
+ },
+ {
+  "name": "file_path",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/files/path"
+  ],
+  "input_hash": "a17b1277b546d6bc"
  }
 ]

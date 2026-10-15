@@ -65,8 +65,9 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-env-"));
   const parts = e.PATH.split(":");
   assert.equal(parts[0], `${HOME}/.local/bin`, `PATH 첫 항목이 아니다: ${e.PATH}`);
   assert.equal(parts[1], `${HOME}/.npm-global/bin`);
-  assert.ok(parts.indexOf("/usr/bin") > 1, "시스템 경로가 멤버 bin 보다 앞이면 스테일 claude 가 이긴다");
-  ok("② PATH — 멤버 bin 이 시스템보다 앞");
+  assert.equal(parts[2], `${HOME}/.lively/bin`, "lively CLI 런처 자리가 PATH 에 없다(#4673 — 세션 안 `lively file …`)");
+  assert.ok(parts.indexOf("/usr/bin") > 2, "시스템 경로가 멤버 bin 보다 앞이면 스테일 claude 가 이긴다");
+  ok("② PATH — 멤버 bin(+ lively CLI)이 시스템보다 앞");
 
   //  상속은 **표면이 고른다**. 컨테이너엔 이어받을 PATH 가 없다(도커가 준 최소값).
   assert.ok(!e.PATH.includes("/inherited/bin"), "기본은 상속 안 함(컨테이너 표면)");

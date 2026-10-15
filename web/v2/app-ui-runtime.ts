@@ -27,6 +27,9 @@
 //    await lively.files.list({ scope:'all', q:'덱' }) → { scope:'all', files:[{ …, project_id, project_name }] } — 볼 수 있는 **모든 프로젝트의 자료**(#4629 ·
 //                                                permissions.workspace_files 선언 + 따로 동의). 읽을 때는 lively.files.read(path, { project: project_id }).
 //                                                답에 scope:'all' 이 없으면 옛 호스트다(붙은 프로젝트의 목록이 왔다) — 그 목록을 전체로 쓰지 않는다.
+//    await lively.files.url('apps/<이 앱>/out/a.png', { method:'PUT' }) → { url, method, headers, expires_at, address } — 이 앱의 **앱 폴더**
+//                                                (apps/<앱>/…)에 올리고(PUT) 받는(GET) 짧은 수명 서명 주소(#4673). 매니페스트 permissions.app_folder 선언 +
+//                                                그 사람의 동의가 있어야 한다. 받은 url 에 쿠키 없이 fetch(url, { method, body }) 하면 된다(앱 화면 CSP 가 그 자리를 연다).
 //    await lively.ui.chrome({ head:false })  → 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접어 달라고 한다(#4592 — 제 머리줄이 있는 앱이
 //                                                두 줄이 되지 않게). 접으면 그 ⋯ 메뉴는 아래 openMenu 로 앱이 대신 연다. { ok } — 못 접는 자리면 false.
 //    await lively.ui.openMenu(items, { x, y }) → 호스트의 앱 메뉴(고치기 · 표시 설정 · 판 이력 · 크게 보기 · 떼기)를 그 자리에 연다. items =
@@ -164,7 +167,8 @@ export const APP_RUNTIME_JS = `
     },
     files: {
       list: function (opts) { var o = opts || {}; return post('files/list', { ext: o.ext, limit: o.limit, scope: o.scope, q: o.q }); },
-      read: function (path, opts) { var o = opts || {}; return post('files/read', { path: String(path), project: o.project }); }
+      read: function (path, opts) { var o = opts || {}; return post('files/read', { path: String(path), project: o.project }); },
+      url: function (address, opts) { var o = opts || {}; return api.tools.call('file_url', { address: String(address), method: o.method === 'PUT' ? 'PUT' : 'GET', expires_in: o.expires_in }); }
     },
     chat: {
       send: function (text) { return post('chat/send', { text: String(text) }); }

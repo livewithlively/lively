@@ -33,6 +33,7 @@ import { appDomain, appDomainFor, parseAppPath } from "./app-address.js";
 import { APP_FRONT_HEADER, verifyAppFront, type AppFrontAct, type AppFrontOp } from "./app-front-auth.js";
 import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from "./app-launch-store.js";
 import { appErrorHtml, appPageCsp, appPageCspMulti, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
+import { filesCspSource } from "../files/app-screen-csp.js";   // #4673 앱 폴더 서명 주소 자리
 import { webRootOf } from "./manifest.js";
 import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
 import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
@@ -198,7 +199,7 @@ export async function appFrontPage(headers: Record<string, string | string[] | u
   return {
     status: 200,
     html: buildAppPageHtml(asset.html, { runtime: scripts.runtime, probe: path.probe ? scripts.probe : null }),
-    headers: { "Content-Security-Policy": appPageCsp(csp) },
+    headers: { "Content-Security-Policy": appPageCsp({ ...csp, files: await filesCspSource(manifest) }) },
   };
 }
 
@@ -298,7 +299,7 @@ async function multiFilePage(w: { member: OrgMember; app: appStore.OrgApp }, pub
     const etag = `"${createHash("sha256").update(out).digest("hex").slice(0, 32)}${gz ? "-gz" : ""}"`;
     const base: Record<string, string> = {
       "Content-Type": type, ETag: etag, "Cache-Control": REVALIDATE, Vary: "Accept-Encoding",
-      "Content-Security-Policy": appPageCspMulti(((c.manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp),
+      "Content-Security-Policy": appPageCspMulti({ ...(((c.manifest as { csp?: AppCsp } | null)?.csp ?? {}) as AppCsp), files: await filesCspSource(c.manifest) }),
     };
     if (etagMatches(headers["if-none-match"], etag)) return { status: 304, headers: base };
     return gz ? { status: r.status, headers: { ...base, "Content-Encoding": "gzip" }, body: await gzipCached(etag, out) } : { status: r.status, headers: base, body: out };

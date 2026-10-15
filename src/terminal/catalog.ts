@@ -29,7 +29,16 @@ export const PANE_LOCALE: string = (() => {
 })();
 
 // ── 큐레이트 허용 루트 ──
-export interface Root { key: string; label: string; base: string; perUser?: boolean; }
+export interface Root {
+  key: string; label: string; base: string; perUser?: boolean;
+  /**
+   * 격리 멤버(#524)의 파일 op 가 이 자리를 보는 기준 경로(profiles.resolveRootPath). 없으면 종전 규칙 — 개인 = 멤버 홈/box,
+   *  그 밖 = 공유 자리(LIVELY_SHARED_DIR). 자리마다 기준이 다를 때만 적는다(#4673 apps — 매니지드 세션 경로 `/work/apps` 는 없다).
+   */
+  isolatedBase?: string;
+  /** false = 이 자리에서는 세션(셸)을 열지 않는다 — 세션 만들기 폼의 자리 목록에서 빠진다(#4673 apps · 판정은 #4687 sessionCwdRefusal). */
+  session?: boolean;
+}
 
 // ── 왜 상수가 아니라 함수인가 ───────────────────────────────────────────────
 //
@@ -104,18 +113,32 @@ function tenantRootBase(): string | null {
   return tpl.replace("{slug}", slug);
 }
 
-/** 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말). */
+/** 앱 폴더 자리의 키(#4671 ② · #4673) — 주소 `apps/<앱>/…` 의 첫 조각과 같은 말. */
+export const APPS_ROOT_KEY = "apps";
+
+/**
+ * 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말).
+ *  apps(#4673) = 앱 폴더 원본 `<테넌트>/apps/<앱>/`(공유 폴더 옆, #4671 ②). 누가 볼 수 있나(그 앱에 동의한 구성원)는 여기서 정하지 않는다 —
+ *   탐색기(terminal-files)와 주소 API(files/)가 files/file-access 로 가린다. 세션은 여기서 열지 않는다(session:false — 앱 에이전트 세션은 #4490).
+ *   · 매니지드(테넌트 템플릿): `<테넌트>/apps` — 파일 작업 헬퍼 감옥이 이 경로를 붙인다(lvly-cloud #4689). 격리 op 도 같은 경로를 본다.
+ *   · 셀프호스트: TERMINAL_ROOT_APPS(기본 ~/apps — 상민님 2026-10-15) · 중앙 박스 격리 멤버는 LIVELY_APPS_DIR(기본 /srv/lively/apps,
+ *     deploy/linux/install-isolation.sh 가 공유 자리와 같은 그룹 · setgid 로 만든다).
+ *   ⚠ 테넌트 템플릿 배포에선 LIVELY_APPS_DIR 을 보지 않는다 — 값 하나로 모든 워크스페이스가 같은 앱 폴더를 쓰게 되기 때문이다.
+ */
 export function roots(): Root[] {
   const t = tenantRootBase();
   if (t) {
     return [
       { key: "shared", label: "공유 워크스페이스", base: path.join(t, "shared") },
       { key: "personal", label: "개인 폴더", base: path.join(t, "personal"), perUser: true },
+      { key: APPS_ROOT_KEY, label: "앱 폴더", base: path.join(t, "apps"), isolatedBase: path.join(t, "apps"), session: false },
     ];
   }
   return [
     { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
     { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
+    { key: APPS_ROOT_KEY, label: "앱 폴더", base: process.env.TERMINAL_ROOT_APPS || path.join(os.homedir(), "apps"),
+      isolatedBase: process.env.LIVELY_APPS_DIR || "/srv/lively/apps", session: false },
   ];
 }
 
