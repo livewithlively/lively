@@ -73,12 +73,23 @@ export function openReview(host: ReviewHost): ReviewApi {
   const send = el('button', { class: 'v2-studio-now-pri', type: 'button' }) as HTMLButtonElement;
   const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
   const hint = el('small', { class: 'v2-review-hint' });
+  //  지금 보는 화면이 어느 꼴인지(원준 2026-10-16 «지금 보고 있는 창이 앱 전체 창인지 위젯 창인지만 구분해서 알려 주고») — 막대가 문패 줄에 얹혔으면 시험 세션의 세션 위젯.
+  const mode = el('span', { class: 'v2-review-mode' + (host.dock ? ' widget' : ' app'), text: host.dock ? '세션 위젯으로 보는 중' : '앱 화면으로 보는 중',
+    title: host.dock ? '시험 세션의 우측 사이드바에 붙은 모습이에요' : '실제 앱의 사용 화면과 동일한 화면이에요' });
+  //  앱 전체 코멘트를 막대에서 바로(원준 2026-10-16 «그 창에 바로바로 텍스트 쳐서 전체 앱 코멘트도 바로바로») — 「코멘트 n건」 칸의 앱 전체 줄과 같은 값.
+  const gen = el('input', { class: 'v2-review-gen', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement;
+  gen.value = host.general;
+  gen.addEventListener('input', () => {
+    host.general = gen.value; changed();
+    const tg = document.querySelector('.v2-review-tray .v2-studio-tray-row.all input') as HTMLInputElement | null; if (tg) tg.value = gen.value;   // 열린 코멘트 칸의 앱 전체 줄도 같이
+  });
+  gen.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); gen.blur(); } });
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위로 · 아래로', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
   bar.append(
     el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요 — 적은 코멘트는 그대로예요', onclick: () => host.onBack() }),
-    el('span', { class: 'v2-review-name' }, name, ver), el('i', { class: 'v2-review-sep' }),
-    tools, count, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
+    el('span', { class: 'v2-review-name' }, name, ver), mode, el('i', { class: 'v2-review-sep' }),
+    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
     hint);
   // ── 층 — 프레임 자리를 따라간다 ──
   const layer = el('div', { class: 'v2-review-layer', hidden: true });
@@ -92,11 +103,13 @@ export function openReview(host: ReviewHost): ReviewApi {
   const changed = (): void => { host.onChange({ pins: host.pins, general: host.general }); paintBar(); };
   const paintBar = (): void => {
     const n = cmCount();
-    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
+    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + ' — ' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
     count.textContent = '코멘트 ' + n + '건' + (host.pins.length > n ? ' · 짚음 ' + host.pins.length : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 고치는 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
+    if (document.activeElement !== gen) gen.value = host.general;   // 허브 · 코멘트 칸에서 고친 것도 막대 칸에 · 치는 중엔 건드리지 않는다
+    gen.disabled = host.waiting;
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
     hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 다음 버전이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.t + ' — ' + t.help;

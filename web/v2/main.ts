@@ -8,6 +8,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
+import { reviewResumeTarget } from './review-resume.js';   // #4632 ③ 앱 화면 새로고침 복귀
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
@@ -310,6 +311,8 @@ function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; 
 export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
+  //  #4632 앱빌더 ③ 의 앱 화면(#/i/…)을 보던 중 새로고침 — 앱빌더로 돌려보내 같은 화면과 코멘트 막대를 다시 연다(v2/review-resume.ts).
+  { const to = reviewResumeTarget(location.hash); if (to) location.replace(location.pathname + location.search + to); }
   root.hidden = false;
   watchStaleShell();   // #1841 낡은 화면 자가복구 — 데스크톱 앱 창은 다시 열려도 loadURL 을 건너뛴다.
   // ★ 이 부팅이 «워크스페이스 전환»으로 온 것인가 — switcher.ts switchTo 가 찍고 가는 표식(#2171).
@@ -1195,7 +1198,9 @@ function applyTabChrome(tab: ShellTab): void {
   //   이 앱에 있는 동안만 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 전환은 레일 몫).
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
   //    한 칸씩 밀려 본문이 0px 열에 앉는다. 판정은 화면 키 하나(app:context)로, 여기 한 자리에서만 한다.
-  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)));
+  //   #4632 앱 화면(#/i/<앱>)도 — 앱이 화면 가득, 왼쪽 세션 목록은 접는다(원준 2026-10-16 질문 #732 «실제 화면도 사이드바 없이 — 앱 화면으로 열면
+  //    왼쪽 세션 목록을 접고 앱이 화면 가득»). 앱은 셸 사이드바에서 아무것도 안 읽는다. 레일은 남아 다른 구역으로 갈 수 있다.
+  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)) || parseRoute(tab.route).segs[0] === 'i');
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면

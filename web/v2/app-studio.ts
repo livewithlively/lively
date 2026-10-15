@@ -26,6 +26,7 @@ import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { attachAppToSession } from './session-app-pane.js';   // ⑤ 「지금 써 보기」 — 보고 있던 (다른) 세션에 붙인다
+import { markReviewOpen, readReviewOpen } from './review-resume.js';   // ③ 실제 화면을 보던 중 새로고침 → 같은 화면 · 막대로
 import { ensureTrySession, mountTrySession, type TrySession } from './app-try-session.js';   // ③ 세션 위젯 = 시험 세션(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
 import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
@@ -624,6 +625,7 @@ async function build(rec: StudioRec): Promise<void> {
   // ── ③ 실제 화면으로 — 코멘트 층과 함께 시험 세션(세션 위젯) · 앱 화면(#/i)으로 ──
   const dropTry = (): void => { if (S.tryS) { S.tryS.destroy(); S.tryS = null; } };
   const backToBuilder = (): void => {
+    markReviewOpen(null);   // 앱빌더로 돌아왔다 — 새로고침해도 이 화면(허브)으로
     closeReview(); S.review = null; dropTry();
     if (root) root.hidden = false;
     if (mountOpts.host && !/^#\/builder(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('resume', rec.sid);
@@ -669,8 +671,10 @@ async function build(rec: StudioRec): Promise<void> {
       onSend: () => { void sendFix(); },
       onLike: () => { backToBuilder(); void setStage('check'); },
       onBack: () => { backToBuilder(); },
-      onClose: () => { S.review = null; dropTry(); if (root) root.hidden = false; },
+      onClose: () => { S.review = null; dropTry(); if (root) root.hidden = false; markReviewOpen(null); },   // 막대가 걷혔다(돌아옴 · 다른 데로 · 창 닫힘) — 새로고침으로는 안 불린다
     });
+    //  이 화면을 보는 중이라고 적어 둔다 — 새로고침하면 앱빌더가 같은 화면 · 막대로 다시 연다(v2/review-resume.ts).
+    markReviewOpen({ sid: rec.sid, appId: rec.appId, view, route });
   };
   // 보낼 의견 — 짚은 곳마다 한 줄 · 앱 전체 한 칸(실제 화면의 막대 「의견 n건」 과 같은 것)
   const paintTray = (): void => {
@@ -982,6 +986,8 @@ async function build(rec: StudioRec): Promise<void> {
   if (!rec.from) rec.from = await logEnd(rec.sid);
   await setStage(rec.stage);
   void pump();
+  //  새로고침 전에 실제 화면(시험 세션 · 앱 화면)을 보던 중이었으면 그 화면과 막대를 다시 연다(원준 2026-10-16 «새로고침하니까 밑에 떠 있는 창 사라짐»).
+  { const m = readReviewOpen(); if (m && m.sid === rec.sid && m.appId === rec.appId && rec.stage === 'fix' && rec.appId && !S.dead) void openReal(m.view); }
   // AI 세션 — 그 세션 화면을 끼운다(리브와 같은 방식: 목록을 한 번 읽어 그 세션 한 장으로). 기본 터미널 보기(chatHome 아님).
   try {
     const [live, logs] = await Promise.all([
