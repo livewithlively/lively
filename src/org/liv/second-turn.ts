@@ -144,7 +144,9 @@ export interface SecondTurnState {
     distill_reopened_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
-  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거. */
+  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
+   *  ⚠ #4851 — 기록과 다시 대조한 목록(outbox-late-echo.listOutboxReconciled)으로 센다. 15초 창의 «미확인» 을 그대로 세면 기록에 이미 들어간
+   *   1턴을 «안 들어갔다» 로 읽어 2시간 뒤 turn1-never-delivered 로 포기한다(매니지드 실측 2026-09-19: 사람 턴 4개가 다 적힌 세션). */
   outboxPending: number;
   collectors: Array<{ enabled: boolean; lastRunAt: string | null }>;
   now: number;
@@ -156,6 +158,37 @@ export type SecondTurnDecision =
   | { action: "reopen"; reason: "session-gone" }
   | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" }
   | { action: "fire"; partial: boolean; waitedMin: number };
+
+// ── 어느 워크스페이스 안에서 하나(#4851) ──────────────────────────────────────────
+export interface TenantRef { id: string; slug: string }
+/**
+ * (순수) 후보 한 사람의 2턴 일 — 세션 보기 · 아웃박스 세기 · 2턴 넣기 · 표식(distill_at·distill_gave_up_at) — 을 **어느 워크스페이스 안에서** 하나.
+ *  ① 세션 등록부가 아는 워크스페이스(mapped — workspaceForSession: 자체호스팅 다중 워크스페이스).
+ *  ② 그 사람 welcome 이 사는 칸(welcomeWs — 후보 목록이 주는 by_workspace 키): 지금 요청의 워크스페이스면 그것, 아니면 등록부에서 이름을 찾는다.
+ *  ③ 배포 규칙의 기본값(registry.defaultWorkspaceId 와 같은 규칙) — 매니지드는 **지금 요청의 워크스페이스**, 자체호스팅은 primary.
+ *  ⚠ 종전엔 ① 이 없으면 곧바로 primary 였다. 매니지드는 등록부(gw_workspace)가 비어 있어 ① 이 **늘** 없다 — 그래서 늘 primary 로 떨어져
+ *   (실측 2026-10-17, 매니지드 로그 09-03~10-16): 포기·발사 표식이 «구성원 정보를 찾을 수 없습니다» 로 9,049번 실패해 같은 후보를 틱마다
+ *   다시 판정했고, 2턴 지시(«증류 지시 주입» 39줄)는 그 사람 워크스페이스가 아니라 primary 의 아웃박스에 쌓였다(배달 0). 매니지드의 구성원 표는
+ *   워크스페이스마다 갈려 있어(행 수준 격리) 틱이 보는 후보는 곧 그 틱 워크스페이스의 사람이다 — ③ 이 맞는 까닭이다.
+ *   slug 도 맞아야 한다 — 매니지드에선 세션 경로·컨테이너 이름에 들어간다(terminal/catalog tenantSlug).
+ */
+export function secondTurnTenant(i: {
+  mapped: TenantRef | null;
+  welcomeWs: string | null;
+  registry: readonly TenantRef[];
+  current: TenantRef | null;
+  managed: boolean;
+  primary: TenantRef;
+}): TenantRef {
+  if (i.mapped) return i.mapped;
+  if (i.welcomeWs) {
+    if (i.current && i.current.id === i.welcomeWs) return i.current;
+    const r = i.registry.find((w) => w.id === i.welcomeWs);
+    if (r) return r;
+  }
+  if (i.managed && i.current) return i.current;
+  return i.primary;
+}
 
 /** 수집 대기 상한 — 이 안에 첫 배치가 안 끝나면 있는 것으로 시작한다(영원히 안 쏘는 것이 최악이다). */
 export const SECOND_TURN_MAX_WAIT_MS = 20 * 60_000;

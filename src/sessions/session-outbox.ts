@@ -49,11 +49,13 @@ import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { oneLineOf, pastesFor } from "../terminal/send-keys.js";     // #4818 — 친 한 줄의 정본 · 붙여넣기로 싣는 하네스
-import { submitGuard, SUBMIT_PEEK_LINES } from "../terminal/submit-check.js";   // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
+import { submitGuard, SUBMIT_PEEK_LINES, type InputHold } from "../terminal/submit-check.js";   // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
 import { logger } from "../log.js";
 import { emitSessionEvent, sessionListenerCount } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
+//  #4851 — 에코 판정 한 벌(늦은 에코·화면과 같은 규칙). 순수 판정 + 줄 맞춤 훑기뿐이라 노드 번들 승인 목록에 올렸다(기록 찾기는 안 들인다).
+import { alignedSource, findPromptInTranscript, looksLikeSlashCommand, ECHO_HEAD_CHARS, ECHO_SKEW_MS, type EchoMemo, type EchoWindow } from "./outbox-echo-scan.js";
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
 /** prompt=사람이 보낸 말(대화창 말풍선) · control=설정 슬래시 명령(모델·추론강도 바꾸기, #1758 — 말풍선 아님·에코 없음). */
@@ -81,10 +83,20 @@ export const NOT_READY_TTL_MS = 2 * 60 * 60_000;
 /** 세션에 **닿지 못하는** 동안 큐가 지시를 들고 있는 상한(#2154 ②) — 노드 재기동·복원 대기가 여기 걸린다.
  *  하루를 넘기면 그 세션은 사람이 잊은 것으로 본다(그때는 failed 로 남겨 화면이 재시도·삭제를 준다). */
 export const UNREACHABLE_TTL_MS = 24 * 60 * 60_000;
-/** 보낸 뒤 에코(트랜스크립트 등장)를 기다리는 시간. 하네스가 받았다면 user 줄은 수 초 안에 적힌다. */
+/** 보낸 뒤 에코(트랜스크립트 등장)를 기다리는 첫 창. 바쁘지 않은 하네스가 받았다면 user 줄은 수 초 안에 적힌다. */
 export const ECHO_WINDOW_MS = 15_000;
-/** 에코를 찾을 때 읽는 파일 꼬리 크기 — 중계에선 이 바이트가 그대로 네트워크를 탄다(작게 유지할 이유). */
+/**
+ * 첫 창에서 못 봤을 때(claude — 창 끝 «미제출 방어 Enter» 뒤) 더 기다리는 늦은 창(#4851).
+ *  ⚠ 종전엔 15초(합 30초)였다. Claude Code 는 사람 말을 **UserPromptSubmit 훅이 다 끝난 뒤에야** 기록에 적는다(#4819 실측: 훅 22.5초 →
+ *   줄이 창 마감 2초 뒤에 적혀 «미확인» · 회수 뒤 다시 열면 경고가 또 보였다). 훅의 기본 시한은 60초이고(우리 훅엔 따로 시한이 없다),
+ *   창 끝에 누른 Enter 로 제출됐으면 그때부터 훅이 다시 돈다 — 그래서 늦은 창은 그 60초를 덮는다.
+ *  비용: 그 세션의 다음 말이 이 행의 결말을 기다린다(세션당 직렬). 길어지는 것은 **에코가 정말 안 오는 판**뿐이다 — 오면 그 자리에서 끝난다.
+ */
+export const ECHO_LATE_WINDOW_MS = 60_000;
+/** 에코를 찾을 때 처음 거슬러 읽는 창(꼬리) — 중계에선 이 바이트가 그대로 네트워크를 탄다(작게 유지할 이유). 그 뒤엔 자란 만큼만 읽는다. */
 export const ECHO_TAIL_BYTES = 256 * 1024;
+/** 한 번의 확인에서 읽는 상한(실제로 읽은 바이트) — 폴 사이에 기록이 이보다 많이 자라면 나머지는 다음 폴이 잇는다. */
+export const ECHO_SCAN_BYTES = 4 * 1024 * 1024;
 /** 에코 폴 간격 — 로컬은 파일 한 번 읽기라 촘촘히, **중계는 폴마다 원격 프로세스 왕복**이라 성기게(#2154 ①).
  *  창(ECHO_WINDOW_MS)은 같으니 중계에서도 확인 기회가 여러 번 있고, 자라지 않은 파일은 아예 안 읽는다(아래 waitEcho). */
 export const ECHO_POLL_LOCAL_MS = 700;
@@ -161,16 +173,25 @@ export function stalledSinceNext(prev: string | null | undefined, reason: string
 //   표 시험(session-outbox.test)이 이 이름으로 부르므로 여기서 다시 내보낸다.
 export { readyVerdictOnError } from "./outbox-exec.js";
 
-/** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
- *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
- *  전문 일치는 실제로 전달됐는데 'echo-unconfirmed' 로 오판한다. 접두 160자는 충분히 특정적이고 머리는 안 섞인다. */
-/** 에코 바늘의 접두 길이 — 늦은 에코 대조(outbox-late-echo.ts samePrompt)와 화면 판정(web/lib/outbox-echo.ts)도 같은 값을 쓴다. */
-export const ECHO_HEAD_CHARS = 160;
-export function echoNeedle(oneLine: string): string {
-  return JSON.stringify(oneLine.slice(0, ECHO_HEAD_CHARS)).slice(1, -1);
-}
+//  같은 말 판정의 머리 길이 — 판정 한 벌(outbox-echo-scan)의 값을 그대로 낸다(«다 쳤다» 알림 머리 typedHead 와 화면 계약 시험이 이 이름으로 읽는다).
+//   ⚠ #4851 — 종전 에코 확인은 이 머리를 JSON 으로 이스케이프한 «바늘» 이 기록 꼬리 256KB 에 **글자로 있기만 하면** «전달됨» 이었다(echoNeedle ·
+//    tailContains). 보내기 전에 있던 같은 말·last-prompt 줄·AI 답 속 같은 글에 곧바로 걸렸다 — 이제 «친 뒤에 적힌 사람 말 줄» 만 본다(waitEcho).
+export { ECHO_HEAD_CHARS };
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 줄을 가르는 글자는 공백으로). 에코도 이 형태로 찾아야 한다 — 그래서 같은 함수다. */
 export const flatOneLine = (text: string): string => oneLineOf(text);
+
+/**
+ * 한 행의 에코 확인 상태(#4851) — 치기 **직전**에 만들어 그 행의 창들(첫 창 · 늦은 창)이 함께 쓴다.
+ *  · typedAt — 친 때(게이트웨이 시계). 이 행의 짝은 이보다 (시계 차 ECHO_SKEW_MS 를 빼고) 앞에 제출될 수 없다 — 그 앞의 같은 말은
+ *    같은 지시를 전에 보낸 것이다(«진행해» 처럼 짧고 자주 쓰는 말이 종전 확인에서 곧바로 «전달됨» 이 된 자리).
+ *  · memo — 그 기록을 어디까지 읽었나. 다음 폴·다음 창은 자란 만큼만 읽는다(중계에선 이 읽기가 네트워크를 탄다).
+ */
+export interface EchoWatch { typedAt: number; memo: EchoMemo | null }
+export const echoWatch = (typedAt: number): EchoWatch => ({ typedAt, memo: null });
+/** (순수) 친 직후 판정의 증거 창 — 하한만 있다. 기다리는 동안 적힌 사람 말 줄이 곧 그 말의 짝이다(늦은 에코의 «제때» 상한은 마감 뒤의 일). */
+export function typedEchoWindow(watch: Pick<EchoWatch, "typedAt">): EchoWindow {
+  return { notBefore: watch.typedAt - ECHO_SKEW_MS, userNotAfter: Infinity, queuedNotAfter: Infinity };
+}
 
 /** #4794 «다 쳤다» 알림의 머리 — 공백을 하나로 접고 앞뒤를 다듬은 뒤 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
  *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 접기·같은 길이다.
@@ -417,7 +438,9 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const sent = await sendReadyRow(row, harness, exec, (oneLine, tick) => waitEcho(sessionId, st, oneLine, tick), undefined, () => emitTypedNotice(sessionId, row));
+    //  #4851 — 치기 **직전**의 시각을 이 행의 에코 하한으로 잡는다(그 앞에 적힌 같은 말은 이 행의 짝이 아니다). 두 창이 같은 기억을 쓴다.
+    const watch = echoWatch(Date.now());
+    const sent = await sendReadyRow(row, harness, exec, (oneLine, tick, windowMs) => waitEcho(sessionId, st, oneLine, watch, windowMs ?? ECHO_WINDOW_MS, tick), undefined, () => emitTypedNotice(sessionId, row));
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
@@ -438,6 +461,24 @@ export type SendOutcome =
   | { kind: "stall"; verdict: "gone" | "unknown" }
   | { kind: "mark"; status: "delivered" | "sent" | "failed"; error?: string; extraEnters?: number };
 
+/** 한 창 동안 에코를 기다린다 — 창 길이는 sendReadyRow 가 정한다(첫 창 ECHO_WINDOW_MS · 늦은 창 ECHO_LATE_WINDOW_MS). tick = 제출 지킴이 박자. */
+export type EchoWait = (oneLine: string, tick?: () => Promise<void>, windowMs?: number) => Promise<"confirmed" | "timeout" | "unreadable">;
+
+/**
+ * (순수, #4851) 기록에 친 글이 안 남을 수 있는 말 — 빗금 명령 — 이 **입력칸을 떠났나**. 지킴이의 마지막 관측(InputHold)으로 판단한다.
+ *  · true  — 빗금 명령이고 입력칸에 우리 글이 없다(비었음 · 다른 글 · 대화상자 — /resume·/config 같은 명령이 연다 · 입력칸이 사라짐 — /exit 로
+ *            하네스가 끝났다). 명령이 돌았다 — 경고 대신 「command-no-echo」 로 마감한다.
+ *  · false — 빗금 명령이 아니거나, 우리 글이 입력칸에 그대로 있다(정말 안 들어갔다 — 종전대로 Enter·경고).
+ *  · null  — 화면을 아직 못 봤다(못 읽음 · 방금 Enter 를 눌러 그 뒤를 모름). 부르는 쪽이 정한다: 첫 창 끝엔 종전 길로, 마지막엔 마감 쪽으로.
+ *  왜: 대화창에서 친 `/exit` 가 늘 «보냈지만 세션 기록에서 확인되지 않았어요 — 다시 보내기» 로 남았다(매니지드 행 131318). 거기서 다시 보내기를
+ *   누르면 같은 명령이 한 번 더 간다. 기록에 남는 명령(/model … — `<command-name>` 줄)은 판정 한 벌이 친 꼴로 되돌려 그대로 «전달됨» 이 된다.
+ */
+export function slashCommandLeftInput(text: string, last: InputHold | null): boolean | null {
+  if (!looksLikeSlashCommand(text)) return false;
+  if (last === null) return null;
+  return last !== "ours";
+}
+
 /**
  * 준비가 확인된 한 행을 친다 — 치기 → 에코 확인 → (미제출이면) Enter 한 번 더 (#1753 · #3773).
  *  DB 는 만지지 않는다 — 결말을 값으로 돌려주고 배달 루프가 새긴다. 그래서 시험이 가짜 실행 자리·에코를 끼워 이 함수를 그대로 부른다.
@@ -456,6 +497,10 @@ export type SendOutcome =
  *   ③ 창 끝의 «미제출 방어 Enter» 도 화면으로 거른다(비었거나·다른 글·대화상자면 안 누른다 · 입력칸을 모르면 종전대로 누른다).
  *   `echo` 는 폴마다 `tick` 을 불러 준다(waitEcho). 시험은 가짜 시계(`clock`)를 넘긴다.
  *
+ *  #4851 — 창은 둘이다: 첫 창(ECHO_WINDOW_MS) → (claude · 못 봤으면) 창 끝 Enter → **늦은 창(ECHO_LATE_WINDOW_MS)**. 늦은 창이 긴 까닭은
+ *   ECHO_LATE_WINDOW_MS 머리말(사람 말은 UserPromptSubmit 훅이 끝난 뒤에야 적힌다). 쳤는지 모르는 갈래(echo-only)도 claude 면 두 창을 합친 만큼 본다.
+ *   빗금 명령이 기록 없이 입력칸을 떠났으면(slashCommandLeftInput) 경고 대신 「command-no-echo」 로 마감한다 — 첫 창 끝에 이미 떠났으면 늦은 창도 안 기다린다.
+ *
  *  onTyped(#4794) — 사람의 말(prompt)이 **실제로 제출된 때** 한 번 부른다. 사람에게 «보냈다» 는 이때다: Claude Code 는 제출 훅을 다 돈 뒤에야
  *   그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16: 제출 10.57초 · 기록에 적힘 14.51초).
  *   «제출됐다» 를 어떻게 아나: 입력칸을 볼 수 있으면(claude — 지킴이) **입력칸이 빈 것을 본 때**, 못 보면 다 치고 Enter 를 누른 때,
@@ -469,7 +514,7 @@ export async function sendReadyRow(
   row: Pick<OutboxRow, "text" | "kind">,
   harness: string,
   exec: Pick<OutboxExec, "type" | "enter" | "peek">,
-  echo: (oneLine: string, tick?: () => Promise<void>) => Promise<"confirmed" | "timeout" | "unreadable">,
+  echo: EchoWait,
   clock: { now: () => number } = { now: Date.now },
   onTyped?: () => void,
 ): Promise<SendOutcome> {
@@ -480,7 +525,9 @@ export async function sendReadyRow(
   if (typed.next === "stall") return { kind: "stall", verdict: typed.verdict };
   if (typed.next === "fail") return { kind: "mark", status: "failed", error: typed.error };
   if (typed.next === "echo-only") {
-    return (await echo(oneLine)) === "confirmed"
+    //  #4851 — 쳤다면 그 말도 훅 뒤에 적힌다. claude 는 두 창을 합친 만큼 기다린다(다시 치지도 Enter 를 누르지도 않는다 — 위 머리말).
+    const windowMs = harness === "claude" ? ECHO_WINDOW_MS + ECHO_LATE_WINDOW_MS : ECHO_WINDOW_MS;
+    return (await echo(oneLine, undefined, windowMs)) === "confirmed"
       ? { kind: "mark", status: "delivered" }
       : { kind: "mark", status: "failed", error: "send: host-unknown" };
   }
@@ -505,20 +552,23 @@ export async function sendReadyRow(
   };
   if (!guard) tell();
   const tick = guard ? async (): Promise<void> => { await guard.tick(); if (guard.last() === "empty") tell(); } : undefined;
-  let echoed = await echo(oneLine, tick);
+  //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).
+  const extra = (): { extraEnters?: number } => (guard?.presses() ? { extraEnters: guard.presses() } : {});
+  let echoed = await echo(oneLine, tick, ECHO_WINDOW_MS);
   if (needsSubmitRetry(echoed, harness)) {
+    //  #4851 — 빗금 명령이 이미 입력칸을 떠났다(기록에 안 남는 명령 — /exit 등). 더 누를 것도 더 기다릴 것도 없다.
+    if (echoed === "timeout" && slashCommandLeftInput(row.text, guard?.last() ?? null) === true) { tell(); return { kind: "mark", status: "sent", error: "command-no-echo", ...extra() }; }
     // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
     //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
     //  #4818 — 누르기 전에 화면을 본다(지킴이의 마지막 관측). 우리 글이 없는 입력칸에 누르면 **거기 있는 무엇이든** 제출된다.
     if (!guard) await exec.enter();
     else await guard.pressAtWindowEnd();
-    echoed = await echo(oneLine, tick);
+    echoed = await echo(oneLine, tick, ECHO_LATE_WINDOW_MS);
   }
-  if (echoed === "confirmed") tell();
-  //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).
-  const extra = guard?.presses() ? { extraEnters: guard.presses() } : {};
-  if (echoed === "confirmed") return { kind: "mark", status: "delivered", ...extra };
-  return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed", ...extra };
+  if (echoed === "confirmed") { tell(); return { kind: "mark", status: "delivered", ...extra() }; }
+  //  #4851 — 늦은 창도 지났다. 빗금 명령이 입력칸에 그대로 남은 게 아니면(모름 포함) 경고하지 않는다 — 기록에 안 남는 명령이 있다.
+  if (echoed === "timeout" && guard && slashCommandLeftInput(row.text, guard.last()) !== false) { tell(); return { kind: "mark", status: "sent", error: "command-no-echo", ...extra() }; }
+  return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed", ...extra() };
 }
 
 /**
@@ -657,18 +707,24 @@ export function needsSubmitRetry(echoed: "confirmed" | "timeout" | "unreadable",
 }
 
 /**
+ *  한 창(windowMs) 동안 그 말의 에코를 기다린다. 무엇이 에코인가는 판정 한 벌(outbox-echo-scan)이 정한다(#4851):
+ *   **친 뒤(watch.typedAt − 시계 차)에 적힌 사람 말 줄**(user 의 text · 도는 중 받은 말의 «대기열에 넣었다» 줄과 끼워 넣은 말 줄 ·
+ *   빗금 명령 줄 — user 또는 system local_command)에 같은 말.
+ *   ⚠ 종전엔 기록 꼬리 256KB 에 머리 160자가 글자로 있기만 하면 «전달됨» 이었다 — 보내기 전에 있던 같은 말·Claude Code 가 매 턴 지난 말을
+ *    되풀이해 적는 last-prompt 줄·AI 답 속 같은 글에 첫 폴에서 걸렸고(«진행해»·«1» 같은 짧은 말은 거의 늘), 그러면 제출 지킴이(tick)가
+ *    한 번도 안 돌아 입력칸에 남은 지시가 그대로 «전달됨» 이 됐다.
  *  `tick` — 폴마다 한 번 부른다(#4818 제출 지킴이 — 입력칸을 보고 필요하면 Enter). 창 안에서만 부른다: 창이 끝났으면 부르지 않고 돌아간다.
  *   지킴이는 박자마다 걸음 하나(RPC 하나)라 한 창이 넘치는 것은 마지막 박자의 걸음 하나뿐이다(STALE_SENDING 이 그 수를 센다).
  */
-async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine: string, tick?: () => Promise<void>): Promise<"confirmed" | "timeout" | "unreadable"> {
+async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine: string, watch: EchoWatch, windowMs: number, tick?: () => Promise<void>): Promise<"confirmed" | "timeout" | "unreadable"> {
   const io = harnessIo(st?.harness || "claude");
   if (!io || !io.parse) return "unreadable";
+  const parse = io.parse;
   const tfs = transcriptFsFor(await sessionOsUser(sessionId).catch(() => null));
   const pollMs = tfs === localTranscriptFs ? ECHO_POLL_LOCAL_MS : ECHO_POLL_RELAY_MS;
-  const needle = echoNeedle(oneLine);
   const sentAt = Date.now();
   const cwd = st?.dir || "";
-  //  같은 바이트를 다시 읽지 않는다 — 파일이 **자랐을 때만** 꼬리를 본다(중계에선 이 읽기가 네트워크를 탄다).
+  //  같은 바이트를 다시 읽지 않는다 — 파일이 **자랐을 때만** 본다(중계에선 이 읽기가 네트워크를 탄다). 어디까지 읽었나(watch.memo)는 창을 넘어 잇는다.
   let seenFile = ""; let seenSize = -1;
   for (;;) {
     let file: string | null = null; let size = -1;
@@ -676,18 +732,18 @@ async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine
       const found = await locateTranscript(io, { cwd, convId: st.claude_session_id || "", owner: st.owner || "", reportedPath: st.transcript_path }, tfs.stat).catch(() => null);
       if (found) { file = found.file; size = found.size; }        // locate 가 이미 stat 했다 — 다시 묻지 않는다
     }
-    if (!file && cwd && st) file = await newestGrownFile(tfs, io, cwd, st.owner || "", sentAt - 10_000);
+    if (!file && cwd && st) file = await newestGrownFile(tfs, io, cwd, st.owner || "", watch.typedAt - 10_000);
     if (file) {
       if (size < 0) size = (await tfs.stat(file).catch(() => null)) ?? -1;
       if (size < 0) return "unreadable";
       if (file !== seenFile || size !== seenSize) {
         seenFile = file; seenSize = size;
-        const hit = await tailContains(tfs, file, size, needle).catch(() => null);
+        const hit = await echoInTranscript(tfs, file, size, oneLine, watch, (text) => parse(text, {}).lines).catch(() => null);
         if (hit === null) return "unreadable";
         if (hit) return "confirmed";
       }
     }
-    if (Date.now() - sentAt >= ECHO_WINDOW_MS) return file ? "timeout" : "unreadable";
+    if (Date.now() - sentAt >= windowMs) return file ? "timeout" : "unreadable";
     if (tick) await tick().catch(() => { /* 지킴이 실패는 에코 확인을 멈추지 않는다 */ });
     await sleep(pollMs);
   }
@@ -711,20 +767,26 @@ async function newestGrownFile(tfs: TranscriptFs, io: NonNullable<ReturnType<typ
   return best?.file ?? null;
 }
 
-/** 파일 꼬리(ECHO_TAIL_BYTES)에 바늘이 있나. size 는 부른 쪽이 방금 잰 값. 읽기 실패는 null(못 읽는 자리 — 재전송 금지 신호). */
-async function tailContains(tfs: TranscriptFs, file: string, size: number, needle: string): Promise<boolean | null> {
-  if (size <= 0) return false;
-  const from = Math.max(0, size - ECHO_TAIL_BYTES);
-  try {
-    return await tfs.read(file, size, async (r) => (await r.read(from, size)).toString("utf8").includes(needle));
-  } catch { return null; }
+/**
+ * 그 파일에 이 행의 말이 친 뒤의 사람 말 줄로 적혔나(#4851). size 는 부른 쪽이 방금 잰 값. 읽기 실패는 던진다(부른 쪽이 unreadable — 재전송 금지 신호).
+ *  처음엔 꼬리(ECHO_TAIL_BYTES 창)부터 거슬러 친 때 앞까지 읽고, 그 뒤엔 지난번 읽은 데 뒤만 읽는다(watch.memo — 파일이 바뀌면 다시 꼬리부터).
+ *  파일 끝의 쓰는 중인 반 줄은 세지 않는다 — 다 적힌 뒤 다음 폴이 그 줄부터 다시 읽는다.
+ */
+export async function echoInTranscript(
+  tfs: Pick<TranscriptFs, "read">, file: string, size: number, oneLine: string, watch: EchoWatch, parse: (text: string) => unknown[],
+): Promise<boolean> {
+  const src = alignedSource(file, size, (fn) => tfs.read(file, size, fn), parse);
+  const got = await findPromptInTranscript(src, oneLine, typedEchoWindow(watch), watch.memo, { windowBytes: ECHO_TAIL_BYTES, scanBytes: ECHO_SCAN_BYTES });
+  watch.memo = { file, scannedTo: got.scannedTo, aligned: got.aligned };
+  return got.found;
 }
 
 /** 'sending' 이 이 시간을 넘으면 **죽은 배달자의 잔재**로 본다 — 준비 판정+에코까지 한 행이 이 시간을 넘지 않는다
- *  (READY_WINDOW 20s + ECHO 15s ×2 + 원격 걸음들 — 상한의 합은 outbox-exec.test E15 가 잰다). resumeOutbox 와 recoverStaleSending 이 같은 자를 쓴다.
+ *  (READY_WINDOW 20s + 에코 첫 창 15s + 늦은 창 60s + 원격 걸음들 — 상한의 합은 outbox-exec.test E15 가 잰다). resumeOutbox 와 recoverStaleSending 이 같은 자를 쓴다.
  *  #4818 — 2분 → 3분. 제출 지킴이가 에코 창마다 원격 걸음 하나를 더 넘길 수 있다(창 끝에 걸린 보기·누르기). 짧으면 살아 있는 배달이
- *   «죽은 잔재» 로 회수돼 **같은 지시가 다시 보내진다.** 길어지는 것은 정말 죽은 배달의 재개가 1분 늦는 것뿐이다. */
-export const STALE_SENDING = "3 minutes";
+ *   «죽은 잔재» 로 회수돼 **같은 지시가 다시 보내진다.** 길어지는 것은 정말 죽은 배달의 재개가 1분 늦는 것뿐이다.
+ *  #4851 — 3분 → 4분. 늦은 창이 15초 → 60초가 돼 한 행의 상한이 144.5초 → 189.5초다(ECHO_LATE_WINDOW_MS 머리말). */
+export const STALE_SENDING = "4 minutes";
 
 /**
  * **이 세션의** 죽은 배달 잔재를 회수한다(#2244) — 배달자가 돌기 직전에 스스로 부른다.

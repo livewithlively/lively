@@ -131,7 +131,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     // #1631 — 리브 2턴(증류 지시). 자체호스팅은 background-sweeps 가 1분마다 돌리지만 그 스텝은
     //  요청별 테넌시에서 통째로 꺼진다(gate:'scheduler') — 되살리는 자리가 여기다. 이게 없으면
     //  매니지드 고객은 처음 설정 뒤 1턴(현황 보고)만 받고 **2턴이 영영 안 와서 레인이 안 세워진다.**
-    //  후보 목록은 신원 전역이라 어느 테넌트의 틱으로 불러도 전부 훑는다(내부 가드가 동시 실행을 막는다).
+    //  ⚠ #4851 실측 — 매니지드의 구성원 표는 워크스페이스마다 갈려 있어(행 수준 격리) 이 틱은 **이 워크스페이스의 후보만** 본다.
+    //   그래서 스윕은 등록부가 모르는 후보를 이 틱의 워크스페이스로 다룬다(second-turn.secondTurnTenant). 내부 가드가 동시 실행을 막는다.
     await step("liv-second-turn", async () => {
       const { sweepLivSecondTurn } = await import("./org/liv/second-turn-sweep.js");
       return await sweepLivSecondTurn();
