@@ -18,6 +18,7 @@
 //   W15 잠금을 기다리는 사이 줄이 사라지면 다시 잡는다 · X2 40일 된 빌드도 걷은 뒤 유예 · X8 잠긴 함수 · X9 남의 함수 · X10 지우기 실패
 //   재검토 뒤: W16 기다리는 사이 앱이 지워지면 줄을 되살리지 않는다 · W17 있는 함수가 자리를 잡은 뒤 실패해도 실측 · W18 만들기 응답 실패(함수는 생김)도 실측
 //   W19 하우스키핑의 늦은 측정이 배포가 적은 값을 덮지 않는다 · W20 못 재는 줄이 앞자리를 차지해도 다른 줄이 굶지 않는다
+//   W21 남의 함수 크기는 우리 줄에 적지 않는다 · W22 함수가 있는지 확인 못 하면 줄을 지우지 않는다
 //  #4791 서버 선언을 뺀 앱의 함수 정리(X — 사양 엣지 표 R1~R9): X1 표시 · 상태 retire_at · X2 7일 경계 · 걷기(빌드는 남김) · X3 되돌리면 다시 생김
 //   X4 공개 판에 서버가 남아 있으면 표시 안 함 · X5 서버 선언이 돌아오면 표시를 걷음(X5b 다시 배포하면 곧바로) · X6 멈춘 함수는 걷지 않음 · X7 걷기 직전 다시 봄
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
@@ -833,6 +834,35 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   const b = Number((await q(`SELECT code_bytes FROM org_app_server WHERE app_id='st-b'`))[0].code_bytes);
   chk("W20 못 잰 줄은 뒤로 — 두 번째 틱엔 다음 줄을 잰다", b === 777, JSON.stringify({ b }));
   await q(`DELETE FROM org_app_server WHERE app_id IN ('st-a', 'st-b')`);
+}
+
+// W21 같은 이름의 남의 함수(다른 워크스페이스 태그)면 배포가 실패해도 그 함수의 크기를 우리 줄에 적지 않는다(재검토 M1 — 남의 코드가 우리 사용량에 얹힌다)
+{
+  fns.get(FN).tags["lvly:tenant"] = "11111111-2222-3333-4444-555555555555";
+  await q(`UPDATE org_app_server SET code_bytes = 1234 WHERE app_id='srv'`);
+  await call("app_save", { files: srvCode("w21") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const cb = await codeBytes();
+  fns.get(FN).tags["lvly:tenant"] = SINGLE_TENANT_ID;
+  await q(`UPDATE org_app_server SET code_bytes = $1 WHERE app_id='srv'`, [codeOf(FN)]);
+  chk("W21 남의 함수 → 실패 · 우리 줄의 code_bytes 그대로", d.status === "failed" && /다른 워크스페이스/.test(String(d.error)) && cb === 1234,
+    JSON.stringify({ status: d.status, error: d.error, cb, foreign: codeOf(FN) }));
+}
+
+// W22 첫 배포의 함수 만들기가 실패하고 뒤이은 확인(함수 조회)도 실패하면 줄을 남긴다 — 함수가 있는지 모르는 채로 지우지 않는다(재검토 M1)
+{
+  createFail = new AwsError(400, "CodeStorageExceededException", "Code storage limit exceeded");
+  let blind = false;
+  const blindApi = { ...api,
+    createFunction: async (i) => { try { return await api.createFunction(i); } catch (e) { blind = true; throw e; } },
+    getFunction: async (n) => { if (blind) { blind = false; throw new AwsError(503, "ServiceUnavailableException", "흉내 — 조회 실패"); } return api.getFunction(n); } };
+  setServerDepsForTest({ ...baseDepsW(), api: blindApi });
+  await call("app_save", { files: twin("uk-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "uk-a", wait_s: 120 }, alice, aliceCtx);
+  setServerDepsForTest(baseDepsW());
+  chk("W22 만들기 실패 뒤 확인도 실패 → 실패 · 줄 남김(모르는 채로 지우지 않음)", d.status === "failed" && createFail === null && !blind && !fns.has(fnOf("uk-a"))
+    && !!(await rowOf("uk-a")), JSON.stringify({ status: d.status, error: d.error, blind }));
+  await call("org_app_remove", { app_id: "uk-a" }, boss);
 }
 
 // ── #4791 서버 선언을 뺀 앱의 함수 정리(X) ──
