@@ -421,10 +421,12 @@ export function registerAppFrontRoutes(app: express.Express, deps: () => AppFron
   app.all("/api/app-front/lively", express.json({ limit: APP_FRONT_API_BODY_LIMIT, type: () => true }),
     wrap(async (req, res) => { send(res, await appFrontLively(H(req), req.method, (req.query as Record<string, unknown>)?.path, req.body, deps())); }));
   //  본문을 못 읽었다(깨진 JSON · 큼) — 파서의 오류는 wrap 밖이라 Express 기본 HTML 400 이 나갔다(격리 리뷰). 이 길의 답은 늘 JSON 이다.
+  //   본문 파서의 오류(type 이 붙은 4xx)만 여기서 답한다 — 그 밖의 오류는 감추지 않고 다음(전역 처리 · 로그)으로 넘긴다.
   app.use("/api/app-front/lively", (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (res.headersSent) { next(err); return; }
     const e = err as { status?: unknown; type?: unknown };
-    const big = e?.status === 413 || e?.type === "entity.too.large";
+    const parserErr = typeof e?.type === "string" && typeof e?.status === "number" && e.status >= 400 && e.status < 500;
+    if (res.headersSent || !parserErr) { next(err); return; }
+    const big = e.status === 413 || e.type === "entity.too.large";
     send(res, { status: big ? 413 : 400, json: { error: big ? "본문이 너무 큽니다(1MB 까지)" : "본문을 JSON 으로 읽지 못했습니다", code: big ? "body_too_large" : "bad_body" } });
   });
 }

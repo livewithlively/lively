@@ -852,12 +852,20 @@ try {
         && got.sqlPub === 200 && got.sqlPubDraftT !== 200 && got.bobDraftAddr === 404
         && noGrant?.status === 403 && noGrant?.body?.code === "consent_required",
       JSON.stringify({ sd: sd.state, got, noGrant: { status: noGrant?.status, body: noGrant?.body, msg: noGrant?.message } }));
-    //  빈도 — 주소로 들어온 호출은 사람마다 센다: 앨리스가 제 몫(순간 30)을 다 써도 밥은 된다(앱 하나에 한 통이면 한 사람이 모두를 막는다)
+    //  빈도 — 주소로 들어온 호출은 사람마다 센다: 앨리스가 제 몫을 다 써도 밥은 된다(앱 하나에 한 통이면 한 사람이 모두를 막는다).
+    //   시계는 시험이 쥔다 — 실제 시계면 호출이 느린 CI 에서 버킷이 그새 다시 차 429 가 안 날 수 있다(격리 리뷰). 사람 순간 3 · 거의 안 참.
     await call("me_app_grant", { app_id: AID }, bob);
-    let first429 = -1;
-    for (let i = 0; i < 80 && first429 < 0; i++) if ((await status(viaAddr(memA, "pub", "store_query", { table: "pubt" }))) === 429) first429 = i;
-    const bobAfter = await status(viaAddr(memB, "pub", "store_query", { table: "pubt" }));
-    chk("B24 빈도 — /_lively/* 는 사람마다: 앨리스가 429 를 받은 뒤에도 밥은 200", first429 > 0 && bobAfter === 200, JSON.stringify({ first429, bobAfter }));
+    const { resetAppSqlLimits } = await import(`${D}/apps/app-sql-exec.js`);
+    const clock = 5_000_000;
+    resetAppSqlLimits({ LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "1000" }, () => clock);
+    let rate;
+    try {
+      const a = [];
+      for (let i = 0; i < 4; i++) a.push(await status(viaAddr(memA, "pub", "store_query", { table: "pubt" })));
+      rate = { a, bob: await status(viaAddr(memB, "pub", "store_query", { table: "pubt" })) };
+    } finally { resetAppSqlLimits(process.env); }
+    chk("B24 빈도 — /_lively/* 는 사람마다: 앨리스가 순간 3 을 다 쓰면 넷째는 429 · 그 뒤에도 밥은 200",
+      JSON.stringify(rate.a) === JSON.stringify([200, 200, 200, 429]) && rate.bob === 200, JSON.stringify(rate));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

@@ -34,7 +34,7 @@ export interface LivelyApp {
    * #4482 보는 사람 · 워크스페이스 · 이 앱 · 붙은 세션. 도구 선언 없이 쓴다. 세션은 세션에 붙은 앱 칸에서 연 화면만(새 탭 · 폰은 늘 null).
    *  같은 내용을 SDK 없이 받으려면 `fetch('/_lively/me')`(앱 주소에서만 — 이때 session 은 늘 null).
    */
-  me(): Promise<{ member: { id: string; name: string; email: string | null }; workspace: { slug: string | null }; app: { id: string; variant: "pub" | "draft" | null; title?: string }; session: string | null }>;
+  me(): Promise<{ member: { id: string; name: string; email: string | null }; workspace: { slug: string | null }; app: { id: string; variant: "pub" | "draft" | null }; session: string | null }>;
   /**
    * #4482 이 앱 사용 동의를 청한다 — SDK 의 도구 호출은 동의가 없으면 저절로 묻지만, `/_lively/*` 를 fetch 로 직접 부르다 403 `consent_required` 를
    *  받았을 때 쓴다. 라이블리 안이면 그 자리 동의 창(사람이 누른 동작 안에서만 — 아니면 -32001) → `{ granted }`. 맨몸이면 라이블리의 동의 화면으로
@@ -74,9 +74,11 @@ export interface LivelyApp {
     }>;
     /**
      * 이 앱의 데이터가 바뀌었다(#4225) — 세션에 붙은 AI 가 썼거나 다른 화면에서 썼다. 받으면 필요한 표를 다시 읽는다.
-     *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 앱 화면 · web = 스크립트). 돌려주는 함수를 부르면 끊는다.
-     *  ⚠ 이걸 걸지 않은 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(입력 중인 글·스크롤이 처음으로 돌아간다).
-     *   화면 상태를 지키려면 걸고 스스로 다시 읽어라.
+     *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 라이블리 안의 앱 화면 · app-front = 앱 주소의 같은 주소 API(/_lively/*, #4482) ·
+     *  web = 스크립트 · visibility = 맨몸 화면이 다시 보였다). 돌려주는 함수를 부르면 끊는다.
+     *  ⚠ 이걸 걸지 않은 앱은 바깥(세션의 AI · 다른 사람)에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(입력 중인 글·스크롤이 처음으로 돌아간다).
+     *   앱 화면이 쓴 것(app-ui · app-front — 다른 창 · 새 탭 · 폰에서 쓴 것도)으로는 다시 불러오지 않는다 — 그것까지 세션 칸에 따라오게 하려면,
+     *   그리고 화면 상태를 지키려면 이걸 걸고 스스로 다시 읽어라.
      */
     onChange(cb: (ev: { table: string | null; op: "insert" | "update" | "delete" | null; source: string | null; session: string | null }) => void): () => void;
   };

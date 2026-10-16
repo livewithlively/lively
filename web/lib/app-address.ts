@@ -27,15 +27,16 @@ export function addrBlockValid(raw: string | null, ua: string, now: number): boo
   } catch (_) { return false; }
 }
 
+//  동의 경유의 앱 주소 칸 꼴 — 서버 src/apps/app-address.ts 의 앱 id · 슬러그 · 라벨 규칙과 글자까지 같다.
+const GRANT_APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+const GRANT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const GRANT_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 /**
  * #4482 동의 경유(#/app-grant/<앱>?v=<판>&next=<앱 안 경로>)에서 돌아갈 곳 — **지금 워크스페이스의 그 앱 주소**를 여기서 만든다.
  *  링크가 주는 주소는 받지 않는다(격리 리뷰: `<같은 앱 id>-<남의 워크스페이스>.lvly.app` 으로 보내는 열린 리다이렉트가 됐다).
  *  주소 규칙은 서버 src/apps/app-address.ts appHostLabel 과 같다(앱 id · 슬러그 꼴 · 63자 · IDNA 자리). next 는 그 주소 안의 상대 경로
  *  (`/` 로 시작 · `//` 아님 · 공백 · 역슬래시 · 제어문자 없음 · 2,048자 이하). 하나라도 틀리면 null(돌려보내지 않는다).
  */
-const GRANT_APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
-const GRANT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const GRANT_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 export function appGrantReturn(appId: string, variant: 'pub' | 'draft', next: string | null | undefined,
   slug: string | null | undefined, appDomain: string | null | undefined): string | null {
   const a = String(appId || '').trim().toLowerCase();
@@ -63,9 +64,9 @@ export function frameSandbox(kind: 'address' | 'srcdoc'): string {
     ? ['allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-modals', 'allow-popups', 'allow-downloads']
     : ['allow-scripts', 'allow-forms', 'allow-modals', 'allow-downloads']).join(' ');
 }
-/** 앱 주소 iframe 의 권한 정책(allow) — 늘 주는 것(사람이 누를 때만 도는 것) + 앱이 선언한 장치(web.devices). 모르는 값은 버린다. */
 /** 선언으로만 위임하는 장치 — 서버 src/apps/manifest.ts APP_DEVICES 와 같은 목록(builtin-app-ui-sandbox 시험이 대조한다). */
 export const FRAME_DEVICES = ['microphone', 'camera', 'clipboard-read', 'geolocation'];
+/** 앱 주소 iframe 의 권한 정책(allow) — 늘 주는 것(사람이 누를 때만 도는 것) + 앱이 선언한 장치(web.devices). 모르는 값은 버린다. */
 export function frameAllow(devices?: readonly unknown[] | null): string {
   const declared = FRAME_DEVICES.filter((d) => Array.isArray(devices) && devices.includes(d));
   return ['clipboard-write', 'fullscreen', 'web-share', ...declared].join('; ');
