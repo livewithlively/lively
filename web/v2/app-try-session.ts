@@ -103,7 +103,7 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
     };
     window.clearTimeout(pollT); pollT = window.setTimeout(nudge, 900);
   };
-  const failNote = (e: any): void => { if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시안을 열지 못했어요 — ' + (e && e.message ? e.message : e) }))); };
+  const failNote = (e: any): void => { if (!dead) shell.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '시안을 열지 못했어요. ' + (e && e.message ? e.message : e) }))); };
   const remount = (): void => { void mountShell().catch(failNote); };
   //  20초마다 세션 줄을 다시 읽어 세션 화면에 흘린다(도는 중 · 멈춤 · 이름) — 셸이 제 탭에 하는 일과 같다(main.ts tab.chat.update).
   const tick = async (): Promise<void> => {

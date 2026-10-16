@@ -1694,6 +1694,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-wait { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
 .v2-studio-wait b { color: var(--ink); font-size: 16px; }
 .v2-studio-wait p { margin: 0; max-width: 300px; font-size: 13.5px; line-height: 1.6; }
+.v2-studio-wait p + p { margin-top: -6px; }
 .v2-studio-spin { display: block; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
 @keyframes v2-studio-spin { to { transform: rotate(360deg); } }
 .v2-studio-chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }

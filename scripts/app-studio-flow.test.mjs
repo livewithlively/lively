@@ -131,5 +131,25 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(left.length === 0, "K1 앱빌더 · 세션 사이드바 앱 머리줄 · 버전 메뉴 · 앱 찾기의 글에 「판」 이 없다", left);
 }
 
+// ══ K2 앱빌더 화면 글 — 「지금 할 일:」 머리말 없이 바로 「~해주세요」 · 「—」 로 잇지 않는다(#4632 원준 2026-10-16 묶음 #12 «1.2.3.4.5. 전면에서 [지금 할 일: ]
+//  이 멘트 없이» · ② 묶음 #1 «AI 풍의 어조» · «- 이런 하이픈? 이건 왜캐쓰는거야») — 주석을 걷은 소스의 한글 글자열에서 본다. AI 에게 가는 글(studio-flow)은 화면 글이 아니라 뺀다.
+{
+  const { readFileSync } = await import("node:fs");
+  const files = ["web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/wire-board.ts", "web/v2/builder.ts", "web/v2/app-try-session.ts", "web/v2/app-versions.ts", "web/v2/publish-preview.ts"];
+  const dash = [], label = [];
+  let seen = 0;
+  for (const f of files) {
+    const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
+    for (const m of src.matchAll(/(['"`])((?:\\.|(?!\1)[^\\\n])*?[가-힣](?:\\.|(?!\1)[^\\\n])*?)\1/g)) {
+      seen++;
+      if (m[2].includes("—")) dash.push(f + ": " + m[2].slice(0, 60));
+      if (/지금 할 일/.test(m[2])) label.push(f + ": " + m[2].slice(0, 60));
+    }
+  }
+  check(seen > 300, "K2 배선 — 화면 글자열을 실제로 읽었다", seen);
+  check(label.length === 0, "K3 「지금 할 일:」 머리말이 화면 글에 없다(단계 줄 · 둘러보기)", label);
+  check(dash.length === 0, "K4 앱빌더 화면 글에 「—」 가 없다(문장은 마침표로 끊는다)", dash);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);
