@@ -4015,6 +4015,36 @@
   "input_hash": "2edc6e74a828aeb9"
  },
  {
+  "name": "member_ai_connectors",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/member-ai-connectors"
+  ],
+  "input_hash": "26f37a18b5b7959a"
+ },
+ {
+  "name": "member_ai_connectors_refresh",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/ai-connectors/refresh"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "member_ai_connectors_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/member-ai-connectors/policy"
+  ],
+  "input_hash": "b192b6b4091c9508"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,

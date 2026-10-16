@@ -143,6 +143,8 @@ const keyOf = (user: LivelyUser): string => `${tenantSlug() ?? ""}|${ownerId(use
 export async function probeMemberAiConnectors(user: LivelyUser, deps: {
   run?: (user: LivelyUser, osUser: string | null, script: string) => Promise<string>;
   now?: () => number;
+  /** 시험 이음매 — 수집 단위 표(T10)에 «다시 연결됨» 을 알리는 자리. 기본은 unit-store.markAssigneeHealthy. */
+  markHealthy?: (member: string, connector: string) => Promise<void>;
 } = {}): Promise<ProbeResult> {
   const memberId = ownerId(user);
   if (!memberId) throw new HttpError(401, "누구의 커넥터를 확인할지 알 수 없습니다");
@@ -181,10 +183,29 @@ export async function probeMemberAiConnectors(user: LivelyUser, deps: {
     }
     const record = await recordMemberAiConnectors({ memberId, origin: "probe", servers: parsed.servers, error: parsed.error });
     lastDone.set(key, (deps.now ?? Date.now)());
+    if (parsed.servers) await markReconnected(memberId, claudeAiConnectorsOf(parsed.servers).filter((c) => c.status === "connected").map((c) => c.app), deps.markHealthy);
     return { probed: true, skipped: null, record };
   })().finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
+}
+
+/**
+ * 확인에서 «connected» 로 본 앱마다 수집 단위 표(T10)에 «다시 연결됨» 을 알린다 — 그 사람이 그 앱의 담당 후보 줄에 다시 선다
+ *  (unit-store 머리말 «T6 커넥터 상태·로그인: markAssigneeHealthy(member, connector?) — 다시 연결된 것을 본 쪽이 부른다»).
+ *  · 앱별 칸만 푼다. 전체 칸(`*`)은 건드리지 않는다 — 그 칸은 로그인 끊김과 **한도 초과**를 함께 담는데, 목록 확인은 모델을 부르지
+ *    않아 한도가 풀렸는지 모른다(로그인 회복은 [로그인했어요] 확인과 수집 실행이 푼다).
+ *  · 끊긴 적 없는 칸은 만들지 않는다(setHealth 가 그렇게 한다) — 연결된 앱이 많아도 칸마다 조회 한 번이다.
+ *  · 던지지 않는다 — 확인 결과는 이미 적었고, 단위 표 알림이 실패해도 다음 수집 실행이 그 칸을 다시 판정한다.
+ */
+async function markReconnected(memberId: string, apps: readonly string[], markHealthy?: (member: string, connector: string) => Promise<void>): Promise<void> {
+  if (!apps.length) return;
+  try {
+    const mark = markHealthy ?? (await import("../org/collect/unit-store.js")).markAssigneeHealthy;
+    for (const app of apps) await mark(memberId, app);
+  } catch (e) {
+    logger.warn({ memberId, err: (e as Error)?.message }, "수집 단위 표에 «다시 연결됨» 을 알리지 못했다 — 다음 수집 실행이 다시 판정한다(#4427)");
+  }
 }
 
 /** (시험용) 겹침·최근 표를 비운다. */

@@ -183,10 +183,12 @@ try {
       + "claude.ai Slack: https://p.example.invalid - ✔ Connected\nclaude.ai Google Drive: https://p.example.invalid - ! Needs authentication\n"
       + "lively: /bin/lively mcp - ✔ Connected\n@@exit 0\n";
     const calls = [];
+    const marked = [];
     const run = async (_u, _os, script) => { calls.push(script); return OUT; };
     const u3 = { userId: M3, email: "", scopes: [], projects: [] };
     let clock = 1_000_000;
-    const r1 = await pr.probeMemberAiConnectors(u3, { run, now: () => clock });
+    const r1 = await pr.probeMemberAiConnectors(u3, { run, now: () => clock, markHealthy: async (m, c) => { marked.push(`${m}:${c}`); } });
+    chk("R10 «다시 연결됨» 은 connected 인 앱만 · 전체 칸(*)은 안 건드린다", JSON.stringify(marked) === JSON.stringify([`${M3}:Slack`]), JSON.stringify(marked));
     chk("R10 정상 → probed · Drive needs-auth · origin probe", r1.probed === true && r1.skipped === null
       && byApp(r1.record)["Google Drive"]?.status === "needs-auth" && r1.record.scan.origin === "probe", JSON.stringify(r1));
     chk("R10 실제로 auth 다음 mcp list 스크립트를 한 번 넘겼다", calls.length === 1 && calls[0].indexOf("auth status") < calls[0].indexOf("mcp list"), String(calls.length));
