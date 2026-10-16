@@ -160,6 +160,26 @@ export function unitInstruction(u: PlannedUnit): string | null {
   return null;
 }
 
+/** 맡은 단위 한 줄(T10 AssignedUnit 에서 고르는 데 필요한 칸만). */
+export interface AssignedLike {
+  id: number; app: string; instance: string; ref: string; kind: string; read_at: string | null;
+  cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean;
+}
+
+/**
+ * 한 판에 실을 단위 — 아는 앱 · ref 가 앱 모양(본인 신고로 들어온 임의의 글이 지시에 섞이지 않게) · 앱을 정했으면 그 앱만 ·
+ *  오래 안 읽은 것부터(처음 읽는 단위가 맨 앞, 같으면 id 순 — 맡은 단위가 한 판보다 많아도 돌아가며 다 읽힌다) · UNITS_PER_RUN 개.
+ *  커넥터 이름은 앱 키에서 고정한다(저장된 칸을 믿지 않는다 — 비면 러너가 «연결된 것 전부» 를 허락한다).
+ */
+export function pickUnitsForRun(assigned: readonly AssignedLike[], opts: { now: number; app?: string | null }): PlannedUnit[] {
+  return assigned
+    .filter((u) => !!CLAUDE_COLLECT_APPS[u.app] && (!opts.app || u.app === opts.app) && validUnitRef(u.app, u.ref))
+    .slice()
+    .sort((a, b) => (a.read_at ? Date.parse(a.read_at) : 0) - (b.read_at ? Date.parse(b.read_at) : 0) || a.id - b.id)
+    .slice(0, UNITS_PER_RUN)
+    .map((u) => ({ id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app], ...unitWindow(u, opts.now) }));
+}
+
 /** 수집 실행 지시 — 단위마다 한 줄. 지시를 못 만드는 단위는 빼고 돌려준다. */
 export function collectPrompt(units: readonly PlannedUnit[]): { prompt: string; units: PlannedUnit[] } {
   const kept: PlannedUnit[] = [];
@@ -196,8 +216,10 @@ export interface UnitHarvest {
   advanced: boolean;
   /** 이 판에 본 가장 새 항목의 시각(계획 시각을 넘지 않는다). */
   lastItemAt: string | null;
-  /** 제 모양이 아닌 결과 수(오류 문구 · 형식이 바뀐 글) — 하나라도 있으면 끝까지 읽은 것이 아니다. */
+  /** 제 모양이 아닌 결과 수(오류 문구 · 형식이 바뀐 글) — 하나라도 있으면 끝까지 읽은 것이 아니다. 같은 인자로 다시 불러 제 모양을 받은 것은 빼고 센다. */
   unparsed: number;
+  /** 못 다 읽었는데 구간을 더 줄일 수 없다(이미 1시간) — 같은 자리에 머문다. 화면·기록이 사람에게 보이게 센다. */
+  stuck: boolean;
 }
 
 export interface HarvestOpts {
@@ -236,7 +258,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
   //  같은 좌표가 여러 번 나오면 rank 가 큰 쪽(같으면 먼저 본 것)이 남는다.
   const seen = new Map<number, Map<string, { it: RawItem; rank: number }>>();
   for (const u of units) {
-    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0 });
+    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0, stuck: false });
     seen.set(u.id, new Map());
   }
   let stray = 0;
@@ -250,10 +272,17 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
   const gmailUnits = units.filter((u) => u.app === "gmail");
   const chanPages = new Map<number, Array<Page & { inWindow: boolean; msgs: SlackMsg[] }>>();
   const threadPages = new Map<number, Array<Page & { ts: string }>>();
-  const searchPages = new Map<number, Array<Page & { inPlan: boolean; threads: string[] }>>();
-  const fetched = new Map<number, Set<string>>();
+  const searchPages = new Map<number, Array<Page & { inPlan: boolean; threads: Array<{ id: string; msgs: string[] }> }>>();
+  //  지메일 «펼침» 의 증거는 메시지 단위 — 검색이 준 스레드의 메시지 id 를 펼친 결과가 다 덮어야 그 스레드를 펼친 것이다.
+  const fetchedMsgs = new Map<number, Set<string>>();
   const notionOk = new Set<number>();
   const push = <T>(m: Map<number, T[]>, id: number, v: T) => { if (!m.has(id)) m.set(id, []); m.get(id)!.push(v); };
+  //  같은 인자로 다시 부른 호출이 제 모양을 받았으면 앞의 실패(속도 제한 등)는 «못 풂» 으로 세지 않는다.
+  const badKeys = new Map<number, Set<string>>(), okKeys = new Map<number, Set<string>>();
+  const callKey = (c: Capture) => `${c.tool}\u0001${JSON.stringify(Object.keys(c.input).sort().map((k) => [k, c.input[k]]))}`;
+  const mark = (m: Map<number, Set<string>>, id: number, c: Capture) => { if (!m.has(id)) m.set(id, new Set()); m.get(id)!.add(callKey(c)); };
+  const bad = (u: PlannedUnit, c: Capture) => { mark(badKeys, u.id, c); };
+  const good = (u: PlannedUnit, c: Capture) => { mark(okKeys, u.id, c); };
 
   for (const c of caps) {
     if (c.tool === "slack_read_channel") {
@@ -262,7 +291,8 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      if (!r.wellFormed) { h.unparsed++; continue; }
+      if (!r.wellFormed) { bad(u, c); continue; }
+      good(u, c);
       for (const m of r.messages) put(u, slackItem(m, { instance: u.instance, channel: u.ref, channelName: r.channel?.name }), 1);
       push(chanPages, u.id, {
         inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end, msgs: r.messages,
@@ -277,10 +307,17 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       const asked = typeof c.input.message_ts === "string" && SLACK_TS.test(c.input.message_ts) ? c.input.message_ts : null;
       //  이어 읽은 쪽(입력 cursor 있음)은 부모 머리가 다시 안 올 수 있다 — 쪽 안내만 분명하면 제 모양으로 본다.
       const shaped = r.wellFormed || (!!str(c.input.cursor) && (r.end || !!r.cursor));
-      const parentTs = asked ?? r.parent?.ts ?? null;
-      if (!shaped || !parentTs) { h.unparsed++; continue; }
+      //  부모는 결과가 먼저(모델이 답글 ts 를 넘겨도 좌표가 안 틀어진다) · 이어 읽은 쪽은 결과에 부모가 없어 입력으로.
+      const parentTs = r.parent?.ts ?? asked;
+      if (!shaped || !parentTs) { bad(u, c); continue; }
+      good(u, c);
       if (r.parent) put(u, slackItem({ ...r.parent, reply_count: r.parent.reply_count ?? (r.replies.length || null) }, { instance: u.instance, channel: u.ref }), 1);
-      for (const m of r.replies) put(u, slackItem(m, { instance: u.instance, channel: u.ref, threadParentTs: parentTs }), 1);
+      //  답글은 부모보다 뒤 · 계획 시각(+5분)보다 앞이어야 한다 — 본문이 «--- Reply» 머리를 흉내 낸 가짜 답글을 거른다.
+      for (const m of r.replies) {
+        const t = Number(m.ts);
+        if (!(t > Number(parentTs)) || (plannedAt != null && t > plannedAt + 300)) continue;
+        put(u, slackItem(m, { instance: u.instance, channel: u.ref, threadParentTs: parentTs }), 1);
+      }
       push(threadPages, u.id, { ts: parentTs, inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end });
     } else if (c.tool === "search_threads" || c.tool === "get_thread" || c.tool === "get_message") {
       const msgs = parseGmailMessages(c);
@@ -291,19 +328,25 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       const h = byUnit.get(u.id)!;
       h.reads++;
       if (c.tool === "search_threads") {
-        if (!isGmailSearch(c)) { h.unparsed++; continue; }
+        if (!isGmailSearch(c)) { bad(u, c); continue; }
+        good(u, c);
         const j = c.json as Record<string, unknown>;
-        const threads = (j.threads as unknown[]).map((t) => (isRec(t) ? str(t.id) : null)).filter((t): t is string => !!t);
+        const threads = (Array.isArray(j.threads) ? j.threads : []).map((t) => {
+          if (!isRec(t) || !str(t.id)) return null;
+          const msgs = Array.isArray(t.messages) ? t.messages.map((m) => (isRec(m) ? str(m.id) : null)).filter((x): x is string => !!x) : [];
+          return { id: String(t.id), msgs };
+        }).filter((t): t is { id: string; msgs: string[] } => !!t);
         const next = str(j.nextPageToken);
         //  검색 결과의 메시지는 한 줄 요약이라 자료로 넣지 않는다(본문 전체가 있던 자료를 요약으로 덮지 않게) — 펼친 스레드에서만 넣는다.
         push(searchPages, u.id, { inCursor: str(c.input.pageToken), outCursor: next, end: !next, inPlan: sameText(c.input.query, gmailQuery(u)), threads });
       } else {
-        if (!isGmailFetch(c)) { h.unparsed++; continue; }
-        const j = c.json as Record<string, unknown>;
-        const tid = c.tool === "get_thread" ? String(j.id) : (str(j.threadId) ?? String(j.id));
-        if (!fetched.has(u.id)) fetched.set(u.id, new Set());
-        fetched.get(u.id)!.add(tid);
-        for (const m of msgs) put(u, gmailItem(m, { instance: u.instance || "default", mailbox: u.ref }), m.full ? 2 : 1);
+        if (!isGmailFetch(c)) { bad(u, c); continue; }
+        good(u, c);
+        if (!fetchedMsgs.has(u.id)) fetchedMsgs.set(u.id, new Set());
+        for (const m of msgs) {
+          fetchedMsgs.get(u.id)!.add(m.id);
+          put(u, gmailItem(m, { instance: u.instance || "default", mailbox: u.ref }), m.full ? 2 : 1);
+        }
       }
     } else if (c.tool === "notion-fetch") {
       const p = parseNotionFetch(c);
@@ -312,7 +355,8 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      if (!p) { h.unparsed++; continue; }
+      if (!p) { bad(u, c); continue; }
+      good(u, c);
       put(u, notionItem(p, { instance: u.instance }), 1);
       notionOk.add(u.id);
     }
@@ -326,6 +370,8 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     const newest = times.length ? times[times.length - 1] : null;
     //  마지막 글 시각도 계획 시각을 넘지 않는다(시계가 앞선 발신자 한 명이 단위의 «마지막 글» 을 미래로 밀지 못하게).
     h.lastItemAt = newest && capIso && newest > capIso ? capIso : newest;
+    const okSet = okKeys.get(u.id) ?? new Set<string>();
+    h.unparsed = [...(badKeys.get(u.id) ?? [])].filter((k) => !okSet.has(k)).length;
     if (!h.reads) continue;
 
     //  ① ~ ③ — 앱마다 «다 읽었다» 의 증거를 모은다.
@@ -340,9 +386,9 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     } else if (u.app === "gmail") {
       const pages = searchPages.get(u.id) ?? [];
       const ch = walkChain(pages.filter((p) => p.inPlan));
-      const found = new Set(ch.used.flatMap((p) => p.threads));
-      const done = fetched.get(u.id) ?? new Set<string>();
-      const missing = [...found].filter((t) => !done.has(t));
+      const done = fetchedMsgs.get(u.id) ?? new Set<string>();
+      //  스레드마다 검색이 준 메시지 id 가 펼친 결과에 다 있어야 한다(메시지 id 를 안 준 스레드는 그 스레드 id 의 메시지라도 와야 한다).
+      const missing = ch.used.flatMap((p) => p.threads).filter((t) => (t.msgs.length ? t.msgs.some((m) => !done.has(m)) : !done.has(t.id)));
       h.why = h.unparsed ? "풀지 못한 결과" : !pages.some((p) => p.inPlan) ? (pages.length ? "계획과 다른 검색어" : "검색을 안 함")
         : !ch.done ? "쪽을 끝까지 못 읽음" : missing.length ? `스레드 ${missing.length}개를 못 펼침` : null;
     } else if (u.app === "notion") {
@@ -373,6 +419,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       const cur = (u.until != null ? Math.floor(Number(u.until)) : plannedAt ?? start + max) - start;
       h.nextCursor = { [key]: here, span: Math.max(MIN_WINDOW_SEC, Math.floor(Math.min(cur, max) / 2)) };
       h.advanced = false;
+      h.stuck = cur <= MIN_WINDOW_SEC;
     }
   }
   return { byUnit, stray };

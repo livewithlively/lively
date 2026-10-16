@@ -408,8 +408,10 @@ t("S4 원문 읽기 — 받은 순서대로 · 이름 모양이 맞는 파일만
 });
 
 // ── 커넥터가 안 뜬 판 — 다시 띄우기(R11~R13) ──
-//  시작 알림 기다림 — 가짜 claude(node)가 뜨는 데 CI 부하에서 수백 ms 가 걸린다. 그보다 넉넉히(4초) 잡아 «안 옴» 을 오판하지 않게.
-const fast = { LVLY_COLLECT_INIT_WAIT_MS: "4000", LVLY_COLLECT_RETRY_GAP_MS: "50" };
+//  시작 알림 기다림 — 알림이 **오는** 시험(R11·R12·R14·R15)은 넉넉히(10초 — 알림이 오면 바로 판정하므로 평소엔 기다리지 않는다,
+//   부하에서 가짜 claude(node)가 늦게 떠도 «안 옴» 으로 오판하지 않게). 알림이 **안 오는** 시험(R13)만 짧게(0.8초) 기다린다.
+const fast = { LVLY_COLLECT_INIT_WAIT_MS: "10000", LVLY_COLLECT_RETRY_GAP_MS: "50" };
+const noInitWait = { LVLY_COLLECT_INIT_WAIT_MS: "800", LVLY_COLLECT_RETRY_GAP_MS: "50" };
 const attemptsOf = (label: string): number => Number(fs.readFileSync(path.join(tmp, `fake-${label}.json.attempts`), "utf8"));
 t("R11 첫 판에 커넥터가 안 뜨면 다시 띄워 둘째 판으로 끝낸다 — 첫 판의 출력은 버린다", () => {
   const r = runOnce("r11", { apps: ["Slack"], mode: "noload1", env: fast });
@@ -430,7 +432,7 @@ t("R12 세 번 다 안 뜨면 connector-not-loaded 로 끝낸다(네 번째는 �
   assert.equal(r.summary.captures, 0);
 });
 t("R13 시작 알림이 안 오면 같은 것으로 본다 — 기다림이 지나면 끊고 다시", () => {
-  const r = runOnce("r13", { apps: ["Slack"], mode: "noinit", env: fast });
+  const r = runOnce("r13", { apps: ["Slack"], mode: "noinit", env: noInitWait });
   assert.equal(attemptsOf("r13"), 3);
   assert.equal(r.exit.error, "connector-not-loaded");
   assert.deepEqual(r.summary.loadMisses.map((m: { why: string }) => m.why), ["no-init", "no-init", "no-init"]);

@@ -115,7 +115,7 @@ export interface CollectRunListRow {
   /** 저장 단계 결과의 요약(목록·수집 실행만) — 화면은 수만 쓴다. */
   ingest: {
     state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
-    unparsed?: number; failed?: number; incomplete?: number; partial?: boolean; error?: string;
+    unparsed?: number; failed?: number; incomplete?: number; unread?: number; stuck?: number; partial?: boolean; error?: string;
   } | null;
 }
 
@@ -186,7 +186,8 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
   return {
     state: typeof j.state === "string" ? j.state : undefined,
     stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created), refused: n(j.refused),
-    unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), partial: j.partial === true ? true : undefined,
+    unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), unread: n(j.unread), stuck: n(j.stuck),
+    partial: j.partial === true ? true : undefined,
     error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
   };
 }

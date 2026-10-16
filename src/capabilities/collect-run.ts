@@ -4,6 +4,7 @@
 //    남을 대신해 띄우는 길(담당자 배정)은 수집 단위 표(T10)와 함께 서버 안쪽에서 연다. 여기는 그 실행기의 바깥 손잡이다.
 //  · 이번 판은 **실행기와 실측**까지다 — 원문은 그 사람 홈에만 남고, 응답에는 목록(도구·크기·해시)만 싣는다.
 //  · 지시를 직접 줄 수 있지만 도구는 늘 «허락한 claude.ai 커넥터의 읽기 도구» 뿐이다(문지기 훅 — collect-run-script.ts).
+import { UNITS_PER_RUN } from "../org/collect/collect-plan.js";
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
@@ -22,7 +23,7 @@ const startInput = {
     "수집 단위 표에 «볼 수 있는 구성원» 으로 올린다 — 새 단위는 후보) · collect(그 사람이 지금 담당인 수집 중 단위를 읽어 자료로 넣고 읽은 위치를 옮긴다). " +
     "listing·collect 는 지시를 서버가 만들고, 끝나면 원문을 서버가 풀어 저장한다(collect_claude_run_get 의 ingest)"),
   app: z.string().max(32).optional().describe("listing 의 앱(slack · gmail · notion — 필수) · collect 에서 주면 그 앱 단위만"),
-  due_only: z.boolean().optional().describe("collect — 주기가 된 단위만(기본 false: 맡은 단위 전부, 한 판에 최대 12개)"),
+  due_only: z.boolean().optional().describe(`collect — 주기가 된 단위만(기본 false: 맡은 단위 전부, 오래 안 읽은 것부터 한 판에 최대 ${UNITS_PER_RUN}개)`),
   apps: z.array(z.string().max(64)).max(12).optional().describe(
     "읽을 claude.ai 커넥터 앱 이름(«claude.ai » 뒤 이름 — 예 Slack · Notion · Gmail · Google Drive). 생략하면 연결된 것 전부. " +
     "앱이 많을수록 도구 정의가 문맥을 크게 먹는다(맥 실측: 다섯 개 15만 토큰 · 하나 8천 토큰) — 필요한 앱만 준다"),

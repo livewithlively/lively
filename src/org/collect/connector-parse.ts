@@ -12,8 +12,11 @@
 //     채널 읽기: `Channel: #이름 (C…)` · `=== Message from 이름 <메일> (U…) at 2026-08-20 11:45:38 KST ===` · `Message TS: 1787193938.792269`
 //     · 본문 · 꼬리 `Thread: N replies (latest: …)` / `Reactions: …` / `Files: …`. 다음 쪽은 pagination_info 의 «use cursor: `…`».
 //     스레드 읽기: `=== THREAD PARENT MESSAGE ===` · `--- Reply i of N ---` · `From: 이름 <메일> (U…)` · `Time: …` · `Message TS: …`.
-//   · 지메일 — 결과는 JSON 문자열. search_threads {threads:[{id, messages:[…]}], nextPageToken} · get_thread {id, messages} ·
-//     get_message {id, …}. 메시지: id · threadId · subject · sender · date · plaintextBody · snippet · labelIds · viewUrl(authuser=메일함).
+//   · 지메일 — 결과는 JSON 문자열. search_threads {resultCountEstimate, threads:[{id, messageCount, messages:[…], viewUrl}], nextPageToken} ·
+//     **빈 검색은 {}** (칸이 하나도 없다) · get_thread {id, messageCount, messages, viewUrl} · get_message {id, …}.
+//     메시지: id · threadId · subject · sender · date · internalDate · plaintextBody · htmlBody · snippet · labelIds · viewUrl(authuser=메일함).
+//     검색어의 after:<epoch 초> 는 분 단위로 내림된다(after:T+1 은 T 의 메일을 주고 after:T+59 는 안 준다) · before: 는 정확하다 —
+//     그래서 «after:a before:b» · «after:b before:c» 로 이어 붙인 구간 사이에 빈틈이 없다(맥 실측 2026-10-16).
 //   · 노션 — 결과는 [{type:"text", text:"<JSON>"}]. notion-fetch {metadata:{type}, title, url, text(<content>…</content>), page_last_edited_at} ·
 //     list-recent/shared/private · search {results:[{type, url, title}]}.
 //  형식이 바뀌면 빈 결과가 된다(던지지 않는다). 호출부(collect-plan)는 **제 모양 표시**(wellFormed · end · isGmailSearch …)가 있는
@@ -72,6 +75,9 @@ function innerText(cap: Capture, keys: readonly string[]): string {
 // ── 공통 ─────────────────────────────────────────────────────────────────────
 
 export interface ListedUnit { ref: string; name: string | null; kind: string }
+
+/** Postgres 글 칸은 NUL(\u0000)을 받지 않는다 — 그대로 넣으면 그 글의 저장이 매번 실패해 단위가 멈춘다. 다른 저장 경로처럼 걷어 낸다. */
+const clean = (s: string | null | undefined): string | undefined => (s == null ? undefined : s.replace(/\u0000/g, ""));
 
 /** 제목 보조 — 본문 첫 줄을 짧게(connectors/slack.ts deriveTitle 와 같은 결: 메시지에는 제목이 없다). */
 export function firstLineTitle(body: string, max = 80): string | undefined {
@@ -253,8 +259,8 @@ export function slackItem(m: SlackMsg, ctx: { instance: string; channel: string;
     container_ref: ctx.channel,
     container_name: ctx.channelName ?? undefined,
     parent_external_id: parent ? `${ctx.channel}:${parent}` : undefined,
-    title: firstLineTitle(m.body),
-    body: m.body || undefined,
+    title: firstLineTitle(clean(m.body) ?? ""),
+    body: clean(m.body) || undefined,
     occurred_at: slackTsIso(m.ts),
     fields: {
       ts: m.ts,
@@ -312,9 +318,15 @@ export function parseGmailMessages(cap: Capture): GmailMsg[] {
   return [...out.values()];
 }
 
-/** search_threads 결과가 제 모양인가 — {threads:[…]}. 오류 문구 · 형식이 바뀐 글은 «검색했다» 의 증거가 못 된다. */
+/**
+ * search_threads 결과가 제 모양인가 — {threads:[…]} 또는 빈 검색 {}(· {resultCountEstimate: 0}). 오류 · 형식이 바뀐 글은 «검색했다» 의
+ *  증거가 못 된다. 빈 검색을 제 모양으로 안 보면 한가한 메일함은 구간을 영영 못 넘긴다(실측: 빈 결과는 칸 없는 {}).
+ */
 export function isGmailSearch(cap: Capture): boolean {
-  return isRec(cap.json) && Array.isArray(cap.json.threads);
+  const j = cap.json;
+  if (!isRec(j) || j.error != null) return false;
+  if (Array.isArray(j.threads)) return true;
+  return j.threads === undefined && Object.keys(j).every((k) => k === "resultCountEstimate" || k === "resultSizeEstimate") && !j.nextPageToken;
 }
 
 /** get_thread · get_message 결과가 제 모양인가 — {id, messages:[…]} · {id, …메시지 칸}. */
@@ -351,11 +363,11 @@ export function gmailItem(m: GmailMsg, ctx: { instance: string; mailbox: string 
     actor: who.email ? { external_id: who.email, display_name: who.name ?? undefined, email: who.email } : undefined,
     container_ref: ctx.mailbox,
     parent_external_id: m.threadId && m.threadId !== m.id ? m.threadId : undefined,
-    title: m.subject || undefined,
-    body: (m.body ?? m.snippet) || undefined,
+    title: clean(m.subject) || undefined,
+    body: clean(m.body ?? m.snippet) || undefined,
     occurred_at: iso,
     updated_at: iso,
-    fields: { threadId: m.threadId ?? undefined, labelIds: m.labelIds, snippet: m.snippet ?? undefined, date_header: m.dateHeader ?? undefined, via: "claude_connector" },
+    fields: { threadId: m.threadId ?? undefined, labelIds: m.labelIds, snippet: clean(m.snippet), date_header: m.dateHeader ?? undefined, via: "claude_connector" },
   };
 }
 
@@ -411,8 +423,8 @@ export function notionItem(p: NotionPage, ctx: { instance: string }): RawItem {
   return {
     type: "doc",
     provenance: { category: "collab_tool", system: "notion", instance: ctx.instance, external_id: p.id, external_url: p.url ?? undefined },
-    title: p.title || "(제목 없음)",
-    body: p.body || undefined,
+    title: clean(p.title) || "(제목 없음)",
+    body: clean(p.body) || undefined,
     updated_at: p.edited_at ?? undefined,
     fields: { notion: { kind: p.kind, url: p.url }, via: "claude_connector" },
   };

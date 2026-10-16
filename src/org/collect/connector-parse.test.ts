@@ -209,6 +209,11 @@ t("G3 제 모양 — search 는 {threads:[…]} · get_thread 는 {id, messages:
   assert.equal(isGmailSearch(cap("search_threads", { threads: [] }, {}, "Gmail")), true);
   assert.equal(isGmailSearch(cap("search_threads", "Error: invalid query", {}, "Gmail")), false);
   assert.equal(isGmailSearch(cap("search_threads", { error: "x" }, {}, "Gmail")), false);
+  //  빈 검색은 칸이 하나도 없는 {} 로 온다(맥 실측) — 제 모양이다. 추정 수만 있어도. 다음 쪽 토큰만 있고 결과 칸이 없으면 아니다.
+  assert.equal(isGmailSearch(cap("search_threads", {}, {}, "Gmail")), true);
+  assert.equal(isGmailSearch(cap("search_threads", { resultCountEstimate: 0 }, {}, "Gmail")), true);
+  assert.equal(isGmailSearch(cap("search_threads", { nextPageToken: "p2" }, {}, "Gmail")), false);
+  assert.equal(isGmailSearch(cap("search_threads", { weird: 1 }, {}, "Gmail")), false);
   assert.equal(isGmailFetch(cap("get_thread", { id: "18f0a1b2c3d4e5f6", messages: [] }, {}, "Gmail")), true);
   assert.equal(isGmailFetch(cap("get_thread", { id: "18f0a1b2c3d4e5f6" }, {}, "Gmail")), false);
   assert.equal(isGmailFetch(cap("get_message", MSG("18f0a1b2c3d4e5f6", { plaintextBody: "x" }), {}, "Gmail")), true);
@@ -284,6 +289,17 @@ t("N3 RawItem — 좌표 = 하이픈 UUID(connectors/notion 과 같다) · doc �
   assert.deepEqual([it.type, it.title, it.body, it.updated_at], ["doc", "회의록", "본문 첫 줄\n둘째", "2026-08-25T10:37:30.618Z"]);
   assert.equal(notionItem({ ...p, title: null, body: "" }, { instance: "" }).title, "(제목 없음)");
   assert.equal(notionItem({ ...p, title: null, body: "" }, { instance: "" }).body, undefined);
+});
+
+t("X3 Postgres 가 안 받는 NUL 은 걷어 낸다 — 그대로 두면 그 글 저장이 매번 실패해 단위가 멈춘다(슬랙·지메일·노션)", () => {
+  const [kim] = parseSlackChannelMessages(chCap()).messages;
+  const s1 = slackItem({ ...kim, body: "앞\u0000뒤" }, { instance: "", channel: "C0AAAAAAA1" });
+  assert.deepEqual([s1.body, s1.title], ["앞뒤", "앞뒤"]);
+  const [m] = parseGmailMessages(cap("get_message", MSG("18f0a1b2c3d4e5f6", { plaintextBody: "본\u0000문", subject: "제\u0000목", snippet: "요\u0000약" }), {}, "Gmail"));
+  const g = gmailItem(m, { instance: "default", mailbox: "me@example.com" });
+  assert.deepEqual([g.body, g.title, g.fields?.snippet], ["본문", "제목", "요약"]);
+  const n = notionItem({ id: "abcdef01-2345-6789-abcd-ef0123456789", title: "회\u0000의", url: null, body: "본\u0000문", edited_at: null, kind: "page" }, { instance: "" });
+  assert.deepEqual([n.title, n.body], ["회의", "본문"]);
 });
 
 // ── E 모양을 모르는 글 ──

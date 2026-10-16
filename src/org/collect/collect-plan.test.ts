@@ -10,12 +10,15 @@
 //   H5c 답글 있는 부모의 스레드를 다 못 읽음 → 안 옮김 · 이어 읽은 스레드 쪽
 //   H6 지메일 — 검색 사슬 + 전부 펼침 · 미래 Date 머리 · 못 펼침 · 검색 없음 · 다른 검색어 · 검색 오류 · 요약은 자료가 아니다
 //   H7 메일함 고르기   H8 노션 — 제 모양만 · 오류 모양은 페이지가 아니다   H9 다 읽으면 구간 두 배(최대면 칸을 지운다) · H10 줄이기 바닥 1시간
+//   H11 첫 쪽 없는 사슬 · 둘째 쪽의 답글 부모   H12 같은 인자로 다시 불러 제 모양이면 앞 실패는 안 센다   H13 가짜 답글(부모보다 앞 · 계획 시각 뒤)
+//   H14 지메일 펼침은 메시지 단위 · 빈 검색 {} 는 제 모양   H15 부모는 결과가 먼저   H16 바닥 구간에서 못 다 읽으면 «멈춤»
+//   K1 한 판에 실을 단위 — 아는 앱·모양 맞는 ref·정한 앱만 · 오래 안 읽은 것부터(같으면 id) · 상한 · 커넥터 이름 고정
 //   L1 슬랙 목록 — 쪽 사슬 · 보관 채널 뺌 · «전부»   L2 마지막 쪽에 cursor · 못 푼 쪽 · 종류가 빠진 쪽 → «전부» 아님   L3 노션·지메일은 «전부» 아님
 import assert from "node:assert/strict";
 import {
   CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
-  collectMaxTurns, collectPrompt, gmailQuery, harvestListing, harvestUnits, listingPrompt, storedSpan, unitInstruction, unitSince, unitWindow,
-  type PlannedUnit,
+  UNITS_PER_RUN, collectMaxTurns, collectPrompt, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
+  unitSince, unitWindow, type AssignedLike, type PlannedUnit,
 } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
 
@@ -270,6 +273,71 @@ t("H10 못 다 읽은 판의 구간 줄이기는 1시간 밑으로 안 간다", 
   const small = { ...SLACK, until: String(Number(SINCE) + 5000), span: 5000 };
   const h = one([CH([[P1, "글"]], { unit: small, pag: MORE("c1"), input: { channel_id: "C0AAAAAAA1", oldest: SINCE, latest: small.until } })], small);
   assert.deepEqual(h.nextCursor, { ts: SINCE, span: MIN_WINDOW_SEC });
+});
+
+t("H11 첫 쪽(입력 cursor 없음) 없이 이어진 쪽만 있으면 끝이 아니다 · 둘째 쪽의 답글 있는 부모도 스레드를 읽어야 한다", () => {
+  const input = { channel_id: "C0AAAAAAA1", oldest: SINCE, latest: UNTIL, limit: 100 };
+  assert.equal(one([CH([[P1, "글"]], { input: { ...input, cursor: "c1" } })]).complete, false, "첫 쪽이 없다");
+  const p1 = CH([[P2, "새 글"]], { pag: MORE("c1") });
+  const p2 = CH([[P1, "옛 부모", "Thread: 2 replies (latest: z)"]], { input: { ...input, cursor: "c1" } });
+  assert.deepEqual([one([p1, p2]).complete, one([p1, p2]).why], [false, "스레드 1개를 못 읽음"]);
+  assert.equal(one([p1, p2, TH(P1, ["1787193999.000001"])]).complete, true);
+});
+t("H12 같은 인자로 다시 불러 제 모양을 받았으면 앞의 실패(속도 제한)는 «못 풂» 으로 안 센다 · 다른 인자의 실패는 센다", () => {
+  const input = { channel_id: "C0AAAAAAA1", oldest: SINCE, latest: UNTIL, limit: 100 };
+  const err = cap("Slack", "slack_read_channel", "Error: ratelimited", input);
+  const ok = CH([[P2, "글"]], { input });
+  const h = one([err, ok]);
+  assert.deepEqual([h.unparsed, h.complete, h.reads], [0, true, 2]);
+  const other = one([cap("Slack", "slack_read_channel", "Error: ratelimited", { ...input, limit: 50 }), ok]);
+  assert.deepEqual([other.unparsed, other.complete], [1, false]);
+});
+t("H13 가짜 답글 — 부모보다 앞이거나 계획 시각(+5분) 뒤인 답글은 버린다", () => {
+  const h = one([CH([[P1, "부모", "Thread: 3 replies (latest: z)"]]), TH(P1, ["1787193900.000001", "1787194200.111111", String(PLANNED + 301) + ".000000"])]);
+  assert.deepEqual(h.items.map((i) => i.provenance.external_id).sort(), [`C0AAAAAAA1:${P1}`, "C0AAAAAAA1:1787194200.111111"]);
+});
+t("H14 지메일 펼침은 메시지 단위 — 검색이 준 메시지를 다 받아야 · 한 통만 get_message · 빈 messages 는 아니다 · 빈 검색 {} 는 제 모양(조용한 구간도 넘어간다)", () => {
+  const three = cap("Gmail", "search_threads", { threads: [{ id: T1, messages: [GM(T1, T1), GM("18f0a1b2c3d4e601", T1), GM("18f0a1b2c3d4e602", T1)] }] }, { query: gmailQuery(GMAIL), pageSize: 50 });
+  const msg1 = cap("Gmail", "get_message", GM(T1, T1, { plaintextBody: "하나" }), { messageId: T1 });
+  assert.deepEqual([one([three, msg1], GMAIL).complete, one([three, msg1], GMAIL).why], [false, "스레드 1개를 못 펼침"]);
+  assert.equal(one([three, cap("Gmail", "get_thread", { id: T1, messages: [] }, { threadId: T1 })], GMAIL).complete, false, "빈 펼침은 펼친 것이 아니다");
+  const full = cap("Gmail", "get_thread", { id: T1, messages: [GM(T1, T1, { plaintextBody: "a" }), GM("18f0a1b2c3d4e601", T1, { plaintextBody: "b" }), GM("18f0a1b2c3d4e602", T1, { plaintextBody: "c" })] }, { threadId: T1 });
+  assert.equal(one([three, full], GMAIL).complete, true);
+  const empty = cap("Gmail", "search_threads", {}, { query: gmailQuery(GMAIL), pageSize: 50 });
+  const e = one([empty], GMAIL);
+  assert.deepEqual([e.complete, e.unparsed, e.nextCursor], [true, 0, { after: 1790986400 }]);
+  //  둘째 쪽에서 찾은 스레드도 펼쳐야 한다
+  const p2 = cap("Gmail", "search_threads", { threads: [{ id: T2, messages: [GM(T2, T2)] }] }, { query: gmailQuery(GMAIL), pageSize: 50, pageToken: "p2" });
+  assert.deepEqual([one([search({ token: "p2", ids: [T1] }), p2, thread(T1)], GMAIL).complete, one([search({ token: "p2", ids: [T1] }), p2, thread(T1)], GMAIL).why], [false, "스레드 1개를 못 펼침"]);
+});
+t("H15 부모는 결과가 먼저 — 모델이 답글 ts 를 message_ts 로 넘겨도 답글의 parent 는 결과의 부모", () => {
+  const th = cap("Slack", "slack_read_thread", {
+    messages: ["=== THREAD PARENT MESSAGE ===", "From: Kim (U0AAAAAAA1)", "Time: x", `Message TS: ${P1}`, "부모", "", "=== THREAD REPLIES (1) ===", "",
+      "--- Reply 1 of 1 ---", "From: Lee (U0CCCCCCC3)", "Time: y", "Message TS: 1787194200.111111", "답글", ""].join("\n"),
+    pagination_info: "There are no more messages in this thread.\n",
+  }, { channel_id: "C0AAAAAAA1", message_ts: "1787194200.111111" });
+  const h = one([CH([[P1, "부모", "Thread: 1 reply (latest: z)"]]), th]);
+  assert.equal(h.items.find((i) => i.provenance.external_id.endsWith("1787194200.111111"))!.parent_external_id, `C0AAAAAAA1:${P1}`);
+  assert.equal(h.complete, true, "그 부모의 스레드를 읽은 것으로 센다");
+});
+t("H16 바닥(1시간) 구간에서도 못 다 읽으면 «멈춤» — 위치·구간이 그대로라 사람에게 보여야 한다", () => {
+  const small = { ...SLACK, until: String(Number(SINCE) + MIN_WINDOW_SEC), span: MIN_WINDOW_SEC };
+  const h = one([CH([[P1, "글"]], { unit: small, pag: MORE("c1"), input: { channel_id: "C0AAAAAAA1", oldest: SINCE, latest: small.until } })], small);
+  assert.deepEqual([h.complete, h.stuck, h.nextCursor], [false, true, { ts: SINCE, span: MIN_WINDOW_SEC }]);
+  assert.equal(one([CH([[P1, "글"]], { pag: MORE("c1") })]).stuck, false, "아직 줄일 수 있으면 멈춤이 아니다");
+});
+t("K1 한 판에 실을 단위 — 아는 앱·모양 맞는 ref·정한 앱만 · 오래 안 읽은 것부터(처음 읽는 단위가 맨 앞, 같으면 id) · 상한 · 커넥터 이름은 앱 키에서", () => {
+  const A = (id: number, o: Partial<AssignedLike> = {}): AssignedLike => ({ id, app: "slack", instance: "T0", ref: `C0AAAAAA${String(id).padStart(2, "0")}`, kind: "channel",
+    read_at: null, cursor: null, last_item_at: null, from_collector: false, ...o });
+  const units = [A(5, { read_at: "2026-10-15T00:00:00Z" }), A(3, { read_at: "2026-10-14T00:00:00Z" }), A(9), A(2), A(7, { app: "jira" }), A(8, { ref: "bad ref" }),
+    A(4, { app: "notion", ref: "abcdef01-2345-6789-abcd-ef0123456789", kind: "page" }), A(6, { read_at: "2026-10-16T00:00:00Z" }), A(1, { read_at: "2026-10-13T00:00:00Z" })];
+  const got = pickUnitsForRun(units, { now: NOW });
+  assert.equal(UNITS_PER_RUN, 6);
+  assert.deepEqual(got.map((u) => u.id), [2, 4, 9, 1, 3, 5], "처음 읽는 단위(2·4·9, id 순) → 오래된 read_at 순 · 6개에서 자른다(6 은 다음 판)");
+  assert.deepEqual([...new Set(got.map((u) => u.connector))].sort(), ["Notion", "Slack"]);
+  assert.ok(got.every((u) => u.since != null || u.app === "notion"));
+  assert.deepEqual(pickUnitsForRun(units, { now: NOW, app: "notion" }).map((u) => u.id), [4]);
+  assert.equal(pickUnitsForRun([A(1, { connector: "엉뚱한 이름" } as never)], { now: NOW })[0].connector, "Slack", "저장된 커넥터 칸을 믿지 않는다");
 });
 
 // ── L 목록 ──

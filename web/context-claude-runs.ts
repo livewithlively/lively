@@ -43,9 +43,10 @@ function ingestText(r: any): { text: string; title: string; fail: boolean } {
     };
   }
   //  다 못 읽은 단위 · 못 푼 결과 · 저장 실패가 있으면 «확인 필요» — 위치는 그대로라 다음 판이 다시 읽지만, 계속되면 형식이 바뀌었을 수 있다.
-  const why = [g.incomplete ? '다 못 읽은 단위 ' + fmtNum(g.incomplete) : '', g.unparsed ? '풀지 못한 결과 ' + fmtNum(g.unparsed) : '',
+  const why = [g.incomplete ? '다 못 읽은 단위 ' + fmtNum(g.incomplete) : '', g.stuck ? '구간을 더 줄일 수 없는 단위 ' + fmtNum(g.stuck) : '',
+    g.unread ? '안 읽은 단위 ' + fmtNum(g.unread) : '', g.unparsed ? '풀지 못한 결과 ' + fmtNum(g.unparsed) : '',
     g.failed ? '저장 실패 ' + fmtNum(g.failed) : ''].filter(Boolean).join(' · ');
-  return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : '') + (g.partial ? ' · 확인 필요' : ''), title: why || g.error || '', fail: false };
+  return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : '') + (g.partial ? ' · 확인 필요' : ''), title: why || g.error || '', fail: !!g.stuck };
 }
 
 async function fetchStats(d: number, recent: number): Promise<any> {

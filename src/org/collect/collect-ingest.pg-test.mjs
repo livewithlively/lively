@@ -14,7 +14,7 @@ const { ingestRun, resolveInstance, toIngestPlan } = await import(`${DIST}/org/c
 const { NOW_MARGIN_SEC } = await import(`${DIST}/org/collect/collect-plan.js`);
 const log = await import(`${DIST}/org/collect/run-log.js`);
 const { collectRunCapabilities } = await import(`${DIST}/capabilities/collect-run.js`);
-const { invalidateSourceVisRules, sourceVisRules } = await import(`${DIST}/v6/source-vis-policy.js`);
+const { invalidateSourceVisRules } = await import(`${DIST}/v6/source-vis-policy.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -139,57 +139,67 @@ try {
         && rows.every((r) => r.external_id.startsWith(`${CH1}:`)) && reply?.parent_external_id === `${CH1}:1787193938.792269`,
       JSON.stringify({ res: { ...res, per_unit: undefined }, rows: rows.map((r) => r.external_id) }));
     chk("I3 요청 안 한 채널의 글은 안 들어간다(stray)", res.stray === 1 && (await sources("slack", TEAM, STRAY)).length === 0, `stray=${res.stray}`);
-    const vis = await Promise.all(rows.map((r) => audienceHas(r.id, A)));
-    let diag = null;
-    if (!vis.every(Boolean)) {
-      //  CI 에서만 보인 실패의 진단 — 자료의 공개범위 · 볼 수 있는 사람 행 · 단위 연결 · 단위 구성원 · 축 · 다시 맞춘 뒤 결과.
-      const ids = rows.map((r) => r.id);
-      const q = async (sql, args) => (await itemsPool.query(sql, args).catch((e) => ({ rows: [{ err: e.message }] }))).rows;
-      diag = {
-        src: await q(`SELECT id, visibility FROM source WHERE id = ANY($1::int[])`, [ids]),
-        sm: await q(`SELECT source_id, subject_kind, member_id FROM source_member WHERE source_id = ANY($1::int[])`, [ids]),
-        cus: await q(`SELECT unit_id, source_id, audience FROM collect_unit_source WHERE source_id = ANY($1::int[])`, [ids]),
-        members: await q(`SELECT member_id, via, priority, verified_at IS NOT NULL AS verified FROM collect_unit_member WHERE unit_id=$1`, [u1.id]),
-        axes: await q(`SELECT visibility_axes FROM org_runtime_config WHERE id=1`, []),
-        slackRules: (await sourceVisRules()).filter((r) => r.match_system === "slack").map((r) => [r.match_channel, r.visibility]),
-        resync: await store.syncUnitAudience(itemsPool, [u1.id]).catch((e) => `err ${e.message}`),
-        after: await Promise.all(rows.map((r) => audienceHas(r.id, A))),
-      };
-    }
-    chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean), JSON.stringify({ vis, diag }));
+    //  공개 채널 단위의 기본 공개범위는 «모두»(T10 #4742) — 자료는 열린 채로 남고 볼 수 있는 사람 행이 없다. 비공개 채널은 I2e 에서 본다.
+    const openRows = (await itemsPool.query(`SELECT id, visibility FROM source WHERE id = ANY($1::int[])`, [rows.map((r) => r.id)])).rows;
+    const sm = (await itemsPool.query(`SELECT count(*)::int AS n FROM source_member WHERE source_id = ANY($1::int[])`, [rows.map((r) => r.id)])).rows[0].n;
+    chk("I2b 공개 채널(기본 «모두») 의 자료는 열린 채 · 볼 수 있는 사람 행 없음 · 단위 공개범위는 all",
+      openRows.length === 3 && openRows.every((r) => r.visibility === "open") && sm === 0 && u1.visibility === "all",
+      JSON.stringify({ openRows, sm, unitVis: u1.visibility }));
     const a1 = await unitBy(CH1), a2 = await unitBy(CH2);
     chk("I2c 끝까지 읽은 단위(끝이 «지금»)는 위치 = 계획 시각 − 60초 · 읽은 시각 = 이 판", a1.cursor?.ts === `${PLANNED - NOW_MARGIN_SEC}.000000`
       && new Date(a1.read_at).getTime() === NOW && p1?.cursor_moved === true && p1?.complete === true, JSON.stringify({ cursor: a1.cursor, read_at: a1.read_at, p1 }));
-    chk("I2d 이 판이 안 읽은 단위는 위치·읽은 시각을 안 옮긴다(다음 판이 다시 맡는다)", p2?.reads === 0 && p2?.reason === "이 판이 읽지 않음" && a2.read_at == null
-      && JSON.stringify(a2.cursor ?? {}) === "{}", JSON.stringify({ p2, read_at: a2.read_at, cursor: a2.cursor }));
+    chk("I2d 이 판이 안 읽은 단위는 위치·읽은 시각을 안 옮긴다(다음 판이 다시 맡는다) · 안 읽은 단위·남의 채널은 «확인 필요»", p2?.reads === 0 && p2?.reason === "이 판이 읽지 않음" && a2.read_at == null
+      && JSON.stringify(a2.cursor ?? {}) === "{}" && res.unread === 1 && res.partial === true, JSON.stringify({ p2, read_at: a2.read_at, cursor: a2.cursor, unread: res.unread, partial: res.partial }));
     const again = await ingestRun({ member: A, plan, files, now: NOW + 60_000 });
     const rows2 = await sources("slack", TEAM, "C0CIPG");
     chk("I5 같은 원문을 다시 넣어도 새 행이 없다(inserted 0) — 같은 좌표", again.inserted === 0 && again.stored === 3 && rows2.length === 3, JSON.stringify({ ...again, per_unit: undefined }));
+    const onlyOne = await ingestRun({ member: A, plan, files: [chFile(CH1, [["1787195400.000200", "나중 글"]])], now: NOW + 120_000 });
+    chk("I2d' 맡긴 단위 하나를 안 읽은 판은 다른 이상이 없어도 «확인 필요»", onlyOne.unread === 1 && onlyOne.incomplete === 0 && onlyOne.stray === 0
+      && onlyOne.unparsed === 0 && onlyOne.partial === true, JSON.stringify({ ...onlyOne, per_unit: undefined }));
   }
   {
     //  못 다 읽은 판 — 시작점은 그대로(못 다 읽은 구간을 넘기지 않는다) · 구간만 줄인다 · 읽은 항목은 저장한다.
     const res = await ingestRun({ member: A, plan: { ...plan, units: [planned(u2)] }, now: NOW,
       files: [chFile(CH2, [["1787300000.000001", "글", "Thread: 2 replies (latest: z)"]])] });
     const a2 = await unitBy(CH2), p = res.per_unit?.[0];
+    const priv = (await sources("slack", TEAM, `${CH2}:`))[0];
+    const privVis = priv ? (await itemsPool.query(`SELECT visibility FROM source WHERE id=$1`, [priv.id])).rows[0]?.visibility : null;
+    chk("I2b' 비공개 채널(기본 «볼 수 있는 사람만») 의 자료는 잠기고 그 단위의 확인된 구성원(A)에게만 보인다",
+      a2.visibility === "viewers" && privVis === "members" && !!priv && await audienceHas(priv.id, A) && !(await audienceHas(priv.id, B)),
+      JSON.stringify({ unitVis: a2.visibility, privVis, priv: !!priv }));
     chk("I2e 답글 있는 부모의 스레드를 안 읽은 판 — 위치 그대로 + 구간 반 · 항목은 저장 · «확인 필요»",
       p?.complete === false && p?.cursor_moved === false && p?.window_shrunk === true && p?.inserted === 1 && a2.cursor?.ts === SINCE
         && a2.cursor?.span === 7 * 86400 / 2 && res.partial === true && res.incomplete === 1,
       JSON.stringify({ p, cursor: a2.cursor, partial: res.partial }));
   }
   {
-    //  저장이 하나라도 실패한 판(NUL 글자 — Postgres 가 받지 않는다) · 원문이 잘린 판은 위치·구간을 아예 건드리지 않는다.
-    const before = (await unitBy(CH1)).cursor;
-    const nul = await ingestRun({ member: A, plan: { ...plan, planned_at: PLANNED + 3600 }, now: NOW + 3_600_000,
-      files: [chFile(CH1, [["1787199000.000001", "깨진\u0000글"], ["1787199100.000001", "멀쩡한 글"]])] });
-    const afterNul = (await unitBy(CH1)).cursor, pn = nul.per_unit?.find((p) => p.id === u1.id);
-    chk("I6a 저장 실패가 있으면 위치를 안 옮긴다(다음 판이 다시 읽어 합친다) · 실패 수를 남긴다",
-      pn?.failed === 1 && pn?.stored === 1 && JSON.stringify(afterNul) === JSON.stringify(before) && /저장 실패/.test(pn?.reason ?? "") && nul.partial === true,
-      JSON.stringify({ pn, before, afterNul }));
+    //  저장이 하나라도 실패한 판 · 원문이 잘린 판은 위치·구간·«마지막 글 시각» 을 아예 건드리지 않는다(수집기에서 넘어온 단위는 마지막 글
+    //   시각이 곧 다음 시작점이다). 실패는 시험용 트리거로 낸다(NUL 은 이제 걷어 내므로 실패가 아니다).
+    await itemsPool.query(`CREATE OR REPLACE FUNCTION pgtest_ci_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'pgtest-ci forced failure'; END $$ LANGUAGE plpgsql`);
+    await itemsPool.query(`DROP TRIGGER IF EXISTS pgtest_ci_fail_trg ON source`);
+    await itemsPool.query(`CREATE TRIGGER pgtest_ci_fail_trg BEFORE INSERT ON source FOR EACH ROW WHEN (NEW.external_id = '${CH1}:1787199000.000001') EXECUTE FUNCTION pgtest_ci_fail()`);
+    const before = await unitBy(CH1);
+    let nul, afterNul;
+    try {
+      nul = await ingestRun({ member: A, plan: { ...plan, planned_at: PLANNED + 3600 }, now: NOW + 3_600_000,
+        files: [chFile(CH1, [["1787199000.000001", "실패할 글"], ["1787199100.000001", "멀쩡한\u0000글"]])] });
+      afterNul = await unitBy(CH1);
+    } finally {
+      await itemsPool.query(`DROP TRIGGER IF EXISTS pgtest_ci_fail_trg ON source`);
+      await itemsPool.query(`DROP FUNCTION IF EXISTS pgtest_ci_fail()`);
+    }
+    const pn = nul.per_unit?.find((p) => p.id === u1.id);
+    const nulRow = (await itemsPool.query(`SELECT body_md FROM source WHERE external_system='slack' AND external_instance=$1 AND external_id=$2`, [TEAM, `${CH1}:1787199100.000001`])).rows[0];
+    chk("I6a 저장 실패가 있으면 위치·마지막 글 시각을 안 옮긴다(다음 판이 다시 읽어 합친다) · 실패 수를 남긴다 · NUL 은 걷어 내고 저장",
+      pn?.failed === 1 && pn?.stored === 1 && JSON.stringify(afterNul.cursor) === JSON.stringify(before.cursor)
+        && String(afterNul.last_item_at) === String(before.last_item_at) && /저장 실패/.test(pn?.reason ?? "") && nul.partial === true && nulRow?.body_md === "멀쩡한글",
+      JSON.stringify({ pn, before: [before.cursor, before.last_item_at], after: [afterNul.cursor, afterNul.last_item_at], nulRow }));
     const cut = await ingestRun({ member: A, plan: { ...plan, planned_at: PLANNED + 7200 }, now: NOW + 7_200_000, truncated: true,
       files: [chFile(CH1, [["1787199200.000001", "잘린 판의 글"]])] });
-    const afterCut = (await unitBy(CH1)).cursor, pc = cut.per_unit?.find((p) => p.id === u1.id);
-    chk("I6b 원문이 잘린 판(뒤쪽 결과를 못 봤다)은 위치를 안 옮긴다 · 읽은 항목은 저장한다",
-      pc?.inserted === 1 && JSON.stringify(afterCut) === JSON.stringify(before) && pc?.reason === "원문이 잘림", JSON.stringify({ pc, afterCut }));
+    const afterCut = await unitBy(CH1), pc = cut.per_unit?.find((p) => p.id === u1.id);
+    chk("I6b 원문이 잘린 판(뒤쪽 결과를 못 봤다)은 위치·마지막 글 시각을 안 옮긴다 · 읽은 항목은 저장한다",
+      pc?.inserted === 1 && JSON.stringify(afterCut.cursor) === JSON.stringify(before.cursor) && String(afterCut.last_item_at) === String(before.last_item_at)
+        && pc?.reason === "원문이 잘림", JSON.stringify({ pc, after: [afterCut.cursor, afterCut.last_item_at], before: [before.cursor, before.last_item_at] }));
   }
   {
     //  B 는 이 단위를 볼 수 있는 구성원이 아니다 — 원문을 B 의 실행 결과로 넣으면 저장도 위치도 거절된다.

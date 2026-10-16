@@ -31,7 +31,7 @@ export function toIngestPlan(mode: unknown, raw: unknown): IngestPlan | null {
 export interface IngestUnitResult {
   id: number; app: string; ref: string; reads: number; items: number;
   stored: number; inserted: number; conflicts: number; failed: number; unparsed: number;
-  complete: boolean; cursor_moved: boolean; window_shrunk: boolean; reason?: string;
+  complete: boolean; cursor_moved: boolean; window_shrunk: boolean; stuck: boolean; reason?: string;
 }
 
 export interface IngestResult {
@@ -43,7 +43,10 @@ export interface IngestResult {
   /** 목록: 올린 단위 수 · 새로 생긴 단위 수 · 받지 않은 수(남의 메일함 등) · 전부였나 · 인스턴스. */
   listed?: number; created?: number; refused?: number; complete?: boolean; instance?: string;
   /** 수집: 단위별 결과와 합계. partial — 못 다 읽은 단위 · 못 푼 결과 · 저장 실패가 하나라도 있다(화면이 «확인 필요» 로 보인다). */
-  units?: number; stored?: number; inserted?: number; stray?: number; unparsed?: number; failed?: number; incomplete?: number; partial?: boolean;
+  units?: number; stored?: number; inserted?: number; stray?: number; unparsed?: number; failed?: number; incomplete?: number;
+  /** 맡겼는데 이 판이 안 읽은 단위 · 구간을 더 줄일 수 없는데 못 다 읽은 단위(같은 자리에 머문다). */
+  unread?: number; stuck?: number;
+  partial?: boolean;
   per_unit?: IngestUnitResult[];
 }
 
@@ -97,15 +100,15 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
   if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
   const { byUnit, stray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null });
   const per: IngestUnitResult[] = [];
-  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0;
+  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0;
   for (const u of units) {
     const h = byUnit.get(u.id)!;
     const row: IngestUnitResult = {
       id: u.id, app: u.app, ref: u.ref, reads: h.reads, items: h.items.length,
-      stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false,
+      stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false, stuck: false,
     };
     unparsed += h.unparsed;
-    if (!h.reads) { row.reason = "이 판이 읽지 않음"; per.push(row); continue; }
+    if (!h.reads) { row.reason = "이 판이 읽지 않음"; unread++; per.push(row); continue; }
     if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
     try {
       if (h.items.length) {
@@ -114,22 +117,28 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
         stored += r.stored; inserted += r.inserted; failed += r.failed;
       }
       //  원문이 잘렸거나(뒤쪽 결과를 못 봤다) 저장이 하나라도 실패했으면 위치도 구간도 그대로 둔다 — 다음 판이 같은 자리부터 다시 읽는다.
+      //   «마지막 글 시각» 도 그대로 둔다 — 수집기에서 넘어온 단위(위치 칸이 빔)는 그 시각이 곧 다음 시작점이다.
       const blocked = truncated ? "원문이 잘림" : row.failed ? `저장 실패 ${row.failed}건` : null;
-      const a = await advanceUnitCursor(u.id, { member }, { cursor: blocked ? null : h.nextCursor, readAt: new Date(now), lastItemAt: h.lastItemAt });
+      const a = await advanceUnitCursor(u.id, { member }, { cursor: blocked ? null : h.nextCursor, readAt: new Date(now), lastItemAt: blocked ? null : h.lastItemAt });
       if (!a.ok) row.reason = a.reason;
       else if (blocked) row.reason = blocked;
       row.cursor_moved = a.ok && !blocked && h.advanced;
       row.window_shrunk = a.ok && !blocked && !h.complete && h.nextCursor != null;
+      row.stuck = row.window_shrunk && h.stuck;
+      if (row.stuck) stuck++;
     } catch (e) {
       row.reason = String((e as Error)?.message ?? e).slice(0, 200);
+      row.failed = Math.max(row.failed, 1);
+      failed += 1;
       logger.warn({ unitId: u.id, member, err: row.reason }, "[collect-ingest] 단위 저장 실패 — 다음 판이 같은 위치부터 다시 읽는다");
     }
     per.push(row);
   }
   const anyRead = per.some((p) => p.reads > 0);
   return {
-    state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete,
-    partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated, per_unit: per,
+    state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete, unread, stuck,
+    //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남).
+    partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated || unread > 0 || stray > 0, per_unit: per,
     ...(anyRead ? {} : { error: "맡긴 단위를 하나도 읽지 않았다" }),
   };
 }

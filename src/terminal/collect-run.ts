@@ -28,8 +28,7 @@ import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
 import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
 import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
-  CLAUDE_COLLECT_APPS, UNITS_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, unitWindow, validUnitRef,
-  type CollectMode, type CollectPlan, type PlannedUnit,
+  CLAUDE_COLLECT_APPS, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, type CollectMode, type CollectPlan,
 } from "../org/collect/collect-plan.js";
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
@@ -167,15 +166,7 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
   const { listAssignedUnits } = await import("../org/collect/unit-store.js");
   const member = memberOf(user);
   const now = Date.now();
-  //  오래 안 읽은 단위부터(처음 읽는 단위가 맨 앞) — 맡은 단위가 한 판보다 많아도 돌아가며 다 읽힌다. ref 가 앱 모양이 아닌 단위는
-  //   지시에 싣지 않는다(본인 신고로 들어온 임의의 글이 지시에 섞이지 않게).
-  const assigned = (await listAssignedUnits(member, { dueOnly: input.dueOnly === true, now }))
-    .filter((u) => !!CLAUDE_COLLECT_APPS[u.app] && (!app || u.app === app) && validUnitRef(u.app, u.ref))
-    .sort((a, b) => (a.read_at ? Date.parse(a.read_at) : 0) - (b.read_at ? Date.parse(b.read_at) : 0) || a.id - b.id);
-  const planned: PlannedUnit[] = assigned.slice(0, UNITS_PER_RUN).map((u) => ({
-    id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app],
-    ...unitWindow(u, now),
-  }));
+  const planned = pickUnitsForRun(await listAssignedUnits(member, { dueOnly: input.dueOnly === true, now }), { now, app });
   const { prompt, units } = collectPrompt(planned);
   if (!units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
   //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
