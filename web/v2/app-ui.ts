@@ -513,6 +513,10 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
         f.root));
     document.body.append(uiEl as HTMLElement);
     document.addEventListener('keydown', uiKey);
+    //  #4480 초점을 덮개로 옮긴다 — 세션 터미널(iframe)에 초점이 있던 채 열면 키가 덮개 뒤에 숨은 터미널 문서로 가서 Esc 로 닫히지 않았다
+    //   (2026-10-16 운영 실측). 머리줄을 누르거나 Esc 를 치면 셸이 받는다 — 앱 화면을 누르면 초점은 앱 문서로 간다(그때 Esc 는 앱의 것).
+    (uiEl as HTMLElement).tabIndex = -1;
+    (uiEl as HTMLElement).focus({ preventScroll: true });
     return true;
   } catch (e: any) {
     toast('앱 UI 를 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
