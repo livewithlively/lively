@@ -1,6 +1,7 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
+import type { LabelSource } from "../sessions/session-label-source.js";   // #4418 — 타입만(노드 번들에도 들어간다)
 import type { SessionStopNote } from "../sessions/session-state.js";   // #4695 — 타입만(이 모듈은 노드 번들에도 들어간다)
 import type { SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 타입만(같은 이유)
 import type { ReportedState } from "./phase.js";
@@ -490,6 +491,9 @@ export interface SessionInfo {
   // #4783 — 이 판이 **왜 끝났나**(sessions/session-end.ts). **복원 가능 행에만** 실린다 — 화면이 «사람이 끝냄(지난 세션) · 시스템이 끔
   //  (끄기 직전 모습) · 고장(오류)» 을 가르는 재료다. 없음 = 모름(옛 판이거나 아직 확인 전) — 화면은 종전처럼 지난 세션으로 그린다.
   endNote?: SessionEndForRow;
+  // #4783 후속 — 종료 규칙이 **마지막으로 관측한 실행 상태**(session-state.ts last_run_state). **복원 가능 행에만** 실린다 — endNote 가 비어도
+  //  (세션이 끝낸 자리를 안 거치고 꺼짐) 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 끊김=고장 · asking=확인 필요). 없음 = 아직 관측 전.
+  lastRun?: { at: number; run: "working" | "done" | "asking" | "bg" | "scheduled" };
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
@@ -566,6 +570,12 @@ export interface CreateInput {
   //  실행 모드(readOnly·incognito)는 **직교 축**이니 여기 흡수하지 마라(읽기전용 위탁이 표현 불가해진다).
   kind: SessionKind;
   label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  /**
+   * #4418 — `label` 의 **원래 출처**. 있던 세션을 잇는 길(복원 · 다른 AI 로 전환)만 싣는다 — 그 길은 저장된 이름을 `label` 로
+   *  싣고 오는데, 출처가 없으면 «받아 온 이름 = 사람 것» 으로 읽혀 새 id 로 뜨는 순간 규칙 이름도 사람 이름으로 굳는다.
+   *  새로 여는 세션은 비워 둔다(받아 온 이름은 사람 것 · 없으면 rule/id — session-label-source.openingLabelSource).
+   */
+  labelSource?: LabelSource;
   /**
    * 이 세션의 **대화 런타임 모드** — "chat" 이면 pane 이 셸이고 대화는 런타임이 쥔다 (#2439).
    *  ⚠ 이 축이 없어서 «한 세션만 켜 보기» 가 불가능했고, 확인하려면 **남의 기본까지** 바꿔야 했다.

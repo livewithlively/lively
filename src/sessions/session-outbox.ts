@@ -48,7 +48,10 @@ import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../termin
 import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
+import { oneLineOf, pastesFor } from "../terminal/send-keys.js";     // #4818 — 친 한 줄의 정본 · 붙여넣기로 싣는 하네스
+import { submitGuard, SUBMIT_PEEK_LINES } from "../terminal/submit-check.js";   // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
 import { logger } from "../log.js";
+import { emitSessionEvent, sessionListenerCount } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 
@@ -161,11 +164,26 @@ export { readyVerdictOnError } from "./outbox-exec.js";
 /** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
  *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
  *  전문 일치는 실제로 전달됐는데 'echo-unconfirmed' 로 오판한다. 접두 160자는 충분히 특정적이고 머리는 안 섞인다. */
+/** 에코 바늘의 접두 길이 — 늦은 에코 대조(outbox-late-echo.ts samePrompt)와 화면 판정(web/lib/outbox-echo.ts)도 같은 값을 쓴다. */
+export const ECHO_HEAD_CHARS = 160;
 export function echoNeedle(oneLine: string): string {
-  return JSON.stringify(oneLine.slice(0, 160)).slice(1, -1);
+  return JSON.stringify(oneLine.slice(0, ECHO_HEAD_CHARS)).slice(1, -1);
 }
-/** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 개행은 공백으로). 에코도 이 형태로 찾아야 한다. */
-export const flatOneLine = (text: string): string => String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
+/** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 줄을 가르는 글자는 공백으로). 에코도 이 형태로 찾아야 한다 — 그래서 같은 함수다. */
+export const flatOneLine = (text: string): string => oneLineOf(text);
+
+/** #4794 «다 쳤다» 알림의 머리 — 공백을 하나로 접고 앞뒤를 다듬은 뒤 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
+ *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 접기·같은 길이다.
+ *  ⚠ 두 함수가 갈리면 긴 말이 안 맞아 넘김이 유예(8초)로 밀린다 — 계약 시험 scripts/outbox-typed-contract.test.mjs 가 맞춘다. */
+export const typedHead = (text: string): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, ECHO_HEAD_CHARS);
+
+/** #4794 아웃박스가 사람의 말을 다 치고 Enter 까지 눌렀다 — 세션 상태 통로로 알린다(화면이 터미널로 넘기는 신호).
+ *  듣는 쪽 수를 남긴다 — 그 신호가 운영에서 실제로 닿았는지(아무도 안 들었으면 화면은 에코·유예로 넘겼다)를 여기서 읽는다. */
+export function emitTypedNotice(sessionId: string, row: Pick<OutboxRow, "id" | "text">): void {
+  const listeners = sessionListenerCount(sessionId);
+  emitSessionEvent(sessionId, { t: "outbox.typed", id: row.id, head: typedHead(row.text) });
+  logger.info({ sessionId, outboxId: row.id, listeners }, "outbox: 다 쳤다 알림");
+}
 
 // ── 저장 ────────────────────────────────────────────────────────────────────────
 export async function enqueuePrompt(sessionId: string, text: string, opts?: { trustOk?: boolean; kind?: OutboxKind }): Promise<{ id: number; seq: number }> {
@@ -184,6 +202,8 @@ export async function enqueuePrompt(sessionId: string, text: string, opts?: { tr
 // 화면용 — 미완(queued·sending·failed) + **에코 미확인**(sent·echo-unconfirmed). 후자를 숨기면 "보낸 걸로 떠서 영영
 //  대답을 못 받는" 거짓 화면이 된다(antigravity 인증 거부 실측 2026-08-18) — 재시도·지우기를 사람 손에 준다.
 //  (echo-unreadable 은 파일을 못 읽는 자리의 정상적 '모름' — 표시하지 않는다.)
+//  ⚠ #4819 — 그 «미확인» 은 15초 창의 판정일 뿐이다(Claude Code 는 UserPromptSubmit 훅이 끝난 뒤에야 사람 말을 적는다). 화면은 이 함수가
+//   아니라 outbox-late-echo.listOutboxReconciled 로 읽는다 — 기록에 이미 있는 말은 거기서 'delivered·echo-late' 로 바로잡혀 빠진다.
 export async function listOutbox(sessionId: string): Promise<OutboxRow[]> {
   const r = await itemsPool.query(
     `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND
@@ -256,6 +276,22 @@ export async function carryOutbox(oldId: string, newId: string): Promise<number>
   const moved = r.rowCount ?? 0;
   if (moved) kickOutbox(newId);
   return moved;
+}
+
+/**
+ * 늦은 에코(#4819) — 15초 창이 «못 봤다» 고 마감한 행을, 기록에서 그 말을 찾은 뒤 'delivered·echo-late' 로 바로잡는다.
+ *  찾는 일은 outbox-late-echo.ts 가 한다(대화 파일 찾기가 그쪽에 있다 — 이 모듈은 노드 번들의 알려진 부채라 그 무게를 들이지 않는다).
+ *  조건부 UPDATE — 그새 사람이 [다시 보내기](queued)·[지우기]를 골랐으면 건드리지 않는다.
+ *  delivered_at 은 기록에 적힌 그 줄의 시각(하네스가 받은 때)이고, 못 읽으면 지금이다.
+ */
+export async function settleLateEcho(sessionId: string, id: number, echoedAt: string | null): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_session_outbox SET status='delivered', last_error='echo-late', updated_at=now(),
+       delivered_at=COALESCE($3::timestamptz, now())
+     WHERE session_id=$1 AND id=$2 AND kind='prompt'
+       AND ((status='sent' AND last_error='echo-unconfirmed') OR (status='failed' AND last_error='send: host-unknown'))`,
+    [sessionId, id, echoedAt]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function discardOutbox(sessionId: string, id: number): Promise<boolean> {
@@ -381,7 +417,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine));
+    const sent = await sendReadyRow(row, harness, exec, (oneLine, tick) => waitEcho(sessionId, st, oneLine, tick), undefined, () => emitTypedNotice(sessionId, row));
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
@@ -392,6 +428,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
     if (row.kind === "control" && harness === "claude" && sent.status !== "failed") {
       await confirmRuntimeSwitch(exec, { sleep }).catch((e) => logger.warn({ err: e, sessionId }, "outbox: 전환 확인창 처리 실패(비치명)"));
     }
+    if (sent.extraEnters) logger.info({ sessionId, seq: row.seq, extraEnters: sent.extraEnters, status: sent.status }, "outbox: 입력칸에 남은 지시에 Enter 를 더 눌렀다(#4818 제출 확인)");
     await mark(row.id, sent.status, sent.error);
   }
 }
@@ -399,7 +436,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
 /** 준비가 확인된 한 행의 결말 — 배달 루프가 새긴다(`stall` 은 settleStall · 나머지는 그 상태로 mark). */
 export type SendOutcome =
   | { kind: "stall"; verdict: "gone" | "unknown" }
-  | { kind: "mark"; status: "delivered" | "sent" | "failed"; error?: string };
+  | { kind: "mark"; status: "delivered" | "sent" | "failed"; error?: string; extraEnters?: number };
 
 /**
  * 준비가 확인된 한 행을 친다 — 치기 → 에코 확인 → (미제출이면) Enter 한 번 더 (#1753 · #3773).
@@ -412,16 +449,34 @@ export type SendOutcome =
  *   · echo-only — 세션 호스트에 보냈는데 **쳤는지 모른다**(RPC 시간 초과·응답 전 끊김·모양 틀린 답). **다시 치지 않는다** — 에코가 확정해
  *     줄 때만 delivered 이고 아니면 failed `send: host-unknown`(화면이 사람에게 재시도·삭제를 준다). 같은 지시가 두 번 가는 것보다
  *     사람이 한 번 더 누르는 편이 되돌리기 쉽다. 미제출 방어 Enter 도 누르지 않는다 — 입력칸이 어떤 상태인지 모른다.
- *   · echo — 다 쳤다. 아래 확인 경로(종전 그대로).
+ *   · echo — 다 쳤다. 아래 확인 경로.
+ *
+ *  #4818 — claude 는 ① 글을 **붙여넣기로** 싣고(send-keys 규약 ⑤ — 글과 Enter 가 한 덩어리로 읽혀도 Enter 가 제 키로 남는다)
+ *   ② 에코를 기다리는 동안 **입력칸을 본다**(submit-check — 우리 글이 그대로 남아 있으면 Enter 를 더 누른다, 행당 SUBMIT_PRESS_MAX)
+ *   ③ 창 끝의 «미제출 방어 Enter» 도 화면으로 거른다(비었거나·다른 글·대화상자면 안 누른다 · 입력칸을 모르면 종전대로 누른다).
+ *   `echo` 는 폴마다 `tick` 을 불러 준다(waitEcho). 시험은 가짜 시계(`clock`)를 넘긴다.
+ *
+ *  onTyped(#4794) — 사람의 말(prompt)이 **실제로 제출된 때** 한 번 부른다. 사람에게 «보냈다» 는 이때다: Claude Code 는 제출 훅을 다 돈 뒤에야
+ *   그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16: 제출 10.57초 · 기록에 적힘 14.51초).
+ *   «제출됐다» 를 어떻게 아나: 입력칸을 볼 수 있으면(claude — 지킴이) **입력칸이 빈 것을 본 때**, 못 보면 다 치고 Enter 를 누른 때,
+ *   그보다 에코가 먼저 확인되면 그때. 다 친 때로만 알리면 이르다 — 붙여넣기 뒤 Claude Code 가 실제로 제출하기까지 1.4~2.3초가 걸려,
+ *   그동안 화면은 입력칸에 그 말이 그대로 남은 터미널을 보였다(매니지드 실측 2026-10-16 · 1b1b093e).
+ *   쳤는지 모르는 갈래(echo-only)·설정 명령(control)·못 친 갈래에선 부르지 않는다.
+ *   ⚠ 배달의 확정은 여전히 에코다 — 이 알림으로 delivered 를 매기지 않는다(Enter 가 줄바꿈으로 먹힌 판이 있다).
+ *   시계(clock) 뒤 마지막 인자다 — #4818 의 시험이 넷째·다섯째 자리를 쓴다.
  */
 export async function sendReadyRow(
   row: Pick<OutboxRow, "text" | "kind">,
   harness: string,
-  exec: Pick<OutboxExec, "type" | "enter">,
-  echo: (oneLine: string) => Promise<"confirmed" | "timeout" | "unreadable">,
+  exec: Pick<OutboxExec, "type" | "enter" | "peek">,
+  echo: (oneLine: string, tick?: () => Promise<void>) => Promise<"confirmed" | "timeout" | "unreadable">,
+  clock: { now: () => number } = { now: Date.now },
+  onTyped?: () => void,
 ): Promise<SendOutcome> {
   const oneLine = flatOneLine(row.text);
-  const typed = await exec.type(row.text);
+  //  붙여넣는 것은 **사람이 보낸 말**뿐이다. 설정 명령(control)은 앞에 «치던 글 치워 두기» 키(Ctrl+S)가 붙어 있어 키로 쳐야 한다
+  //   (send-keys KEYS_IN_TEXT 머리말) — #4772 가 실측으로 맞춘 그대로 둔다. 짧아서(64자 미만) 한 덩어리로 읽혀도 Enter 가 키로 남는다.
+  const typed = await exec.type(row.text, pastesFor(harness) && row.kind === "prompt" ? { paste: true } : undefined);
   if (typed.next === "stall") return { kind: "stall", verdict: typed.verdict };
   if (typed.next === "fail") return { kind: "mark", status: "failed", error: typed.error };
   if (typed.next === "echo-only") {
@@ -433,15 +488,37 @@ export async function sendReadyRow(
   //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
   //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
   if (row.kind === "control") return { kind: "mark", status: "sent", error: "control-no-echo" };
-  let echoed = await echo(oneLine);
+  //  claude 만 지킨다 — 다른 하네스의 입력칸 문법은 모른다(needsSubmitRetry 와 같은 경계).
+  const guard = harness === "claude"
+    ? submitGuard({
+      peek: async () => { const seen = await exec.peek(SUBMIT_PEEK_LINES); return seen.ok ? { ok: true, pane: seen.pane } : { ok: false }; },
+      enter: () => exec.enter(),
+      now: clock.now,
+    }, oneLine)
+    : null;
+  //  #4794 «보냈다» 알림(onTyped 머리말) — 한 번만. 지킴이가 없으면 지금(다 쳤다), 있으면 입력칸이 빈 것을 본 박자에, 에코가 먼저면 그때.
+  let told = false;
+  const tell = (): void => {
+    if (told) return;
+    told = true;
+    try { onTyped?.(); } catch (e) { logger.warn({ err: e }, "outbox: «보냈다» 알림 실패(비치명)"); }
+  };
+  if (!guard) tell();
+  const tick = guard ? async (): Promise<void> => { await guard.tick(); if (guard.last() === "empty") tell(); } : undefined;
+  let echoed = await echo(oneLine, tick);
   if (needsSubmitRetry(echoed, harness)) {
     // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
     //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
-    await exec.enter();
-    echoed = await echo(oneLine);
+    //  #4818 — 누르기 전에 화면을 본다(지킴이의 마지막 관측). 우리 글이 없는 입력칸에 누르면 **거기 있는 무엇이든** 제출된다.
+    if (!guard) await exec.enter();
+    else await guard.pressAtWindowEnd();
+    echoed = await echo(oneLine, tick);
   }
-  if (echoed === "confirmed") return { kind: "mark", status: "delivered" };
-  return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed" };
+  if (echoed === "confirmed") tell();
+  //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).
+  const extra = guard?.presses() ? { extraEnters: guard.presses() } : {};
+  if (echoed === "confirmed") return { kind: "mark", status: "delivered", ...extra };
+  return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed", ...extra };
 }
 
 /**
@@ -579,7 +656,11 @@ export function needsSubmitRetry(echoed: "confirmed" | "timeout" | "unreadable",
   return echoed !== "confirmed" && harness === "claude";
 }
 
-async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine: string): Promise<"confirmed" | "timeout" | "unreadable"> {
+/**
+ *  `tick` — 폴마다 한 번 부른다(#4818 제출 지킴이 — 입력칸을 보고 필요하면 Enter). 창 안에서만 부른다: 창이 끝났으면 부르지 않고 돌아간다.
+ *   지킴이는 박자마다 걸음 하나(RPC 하나)라 한 창이 넘치는 것은 마지막 박자의 걸음 하나뿐이다(STALE_SENDING 이 그 수를 센다).
+ */
+async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine: string, tick?: () => Promise<void>): Promise<"confirmed" | "timeout" | "unreadable"> {
   const io = harnessIo(st?.harness || "claude");
   if (!io || !io.parse) return "unreadable";
   const tfs = transcriptFsFor(await sessionOsUser(sessionId).catch(() => null));
@@ -607,6 +688,7 @@ async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine
       }
     }
     if (Date.now() - sentAt >= ECHO_WINDOW_MS) return file ? "timeout" : "unreadable";
+    if (tick) await tick().catch(() => { /* 지킴이 실패는 에코 확인을 멈추지 않는다 */ });
     await sleep(pollMs);
   }
 }
@@ -638,9 +720,11 @@ async function tailContains(tfs: TranscriptFs, file: string, size: number, needl
   } catch { return null; }
 }
 
-/** 'sending' 이 이 시간을 넘으면 **죽은 배달자의 잔재**로 본다 — 준비 판정+에코까지 한 행이 2분을 넘지 않는다
- *  (READY_WINDOW 20s + ECHO 15s + 여유). resumeOutbox 와 recoverStaleSending 이 같은 자를 쓴다. */
-export const STALE_SENDING = "2 minutes";
+/** 'sending' 이 이 시간을 넘으면 **죽은 배달자의 잔재**로 본다 — 준비 판정+에코까지 한 행이 이 시간을 넘지 않는다
+ *  (READY_WINDOW 20s + ECHO 15s ×2 + 원격 걸음들 — 상한의 합은 outbox-exec.test E15 가 잰다). resumeOutbox 와 recoverStaleSending 이 같은 자를 쓴다.
+ *  #4818 — 2분 → 3분. 제출 지킴이가 에코 창마다 원격 걸음 하나를 더 넘길 수 있다(창 끝에 걸린 보기·누르기). 짧으면 살아 있는 배달이
+ *   «죽은 잔재» 로 회수돼 **같은 지시가 다시 보내진다.** 길어지는 것은 정말 죽은 배달의 재개가 1분 늦는 것뿐이다. */
+export const STALE_SENDING = "3 minutes";
 
 /**
  * **이 세션의** 죽은 배달 잔재를 회수한다(#2244) — 배달자가 돌기 직전에 스스로 부른다.
@@ -681,7 +765,7 @@ export async function resumeOutbox(): Promise<void> {
   // 끝난 행 청소(하루) — 진행 중(queued·failed)은 남긴다: failed 는 사람이 봐야 할 사실이다.
   await itemsPool.query(`DELETE FROM org_session_outbox WHERE status IN ('delivered','sent') AND updated_at < now() - interval '1 day'`);
   // ⚠ 'sending' 을 무조건 되돌리면 **지금 배달 중인** 행을 건드린다(5분 sweep 에서도 불린다) — 준비 판정+에코까지 한 행이
-  //  2분을 넘지 않으므로(READY_WINDOW 20s + ECHO 15s + 여유), 2분 넘게 sending 인 것만 '죽은 배달자의 잔재'로 본다.
+  //  STALE_SENDING 을 넘지 않으므로(그 머리말), 그보다 오래 sending 인 것만 '죽은 배달자의 잔재'로 본다.
   await itemsPool.query(`UPDATE org_session_outbox SET status='queued', attempts=attempts+1, updated_at=now(), stalled_since=NULL
     WHERE status='sending' AND updated_at < now() - interval '${STALE_SENDING}'`);
   const r = await itemsPool.query(`SELECT DISTINCT session_id FROM org_session_outbox WHERE status='queued'`);

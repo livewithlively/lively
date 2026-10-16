@@ -110,3 +110,25 @@ test("F5 꺼진 세션의 이름 — 누가 끝냈나로 부르고, 모르면 �
   //  이름은 전부 «세션» 으로 끝난다 — 부르는 쪽이 «이에요» 를 붙인다(받침 있는 글자).
   for (const o of [{ exitedByUser: true }, { endNote: { why: "lost", at: sec } }, { endNote: { why: "reclaim", at: sec } }]) assert.match(n(o), /세션$/);
 });
+
+test("F6 사유를 안 남기고 꺼짐 — 마지막 관측 실행 상태로 가른다(유저 행동 필요한 세션을 숨기지 않는다, #4783 후속)", () => {
+  const k = (o) => S.sessEndKind(stopped(o));
+  assert.equal(k({ lastRun: { at: sec, run: "working" } }), "error", "작업 도중 끊김 = 고장");
+  assert.equal(k({ lastRun: { at: sec, run: "asking" } }), "system", "답 대기 중 꺼짐");
+  assert.equal(k({ lastRun: { at: sec, run: "done" } }), "system");
+  assert.equal(k({ lastRun: { at: sec, run: "bg" } }), "system");
+  assert.equal(k({ lastRun: { at: sec, run: "scheduled" } }), "system");
+  assert.equal(k({}), "unknown", "정말 아무 기록도 없을 때만 모름");
+  //  끝낸 자리가 적은 사유가 있으면 그게 이긴다(마지막 관측보다 우선 — 확정 사실).
+  assert.equal(k({ endNote: { why: "stop", at: sec }, lastRun: { at: sec, run: "working" } }), "user");
+  assert.equal(k({ exitedByUser: true, lastRun: { at: sec, run: "asking" } }), "user");
+  //  점 — 유저 행동이 필요한 상태는 숨기지 않는다.
+  const d = (o) => S.stoppedDotKey(stopped(o), sec * 1000);
+  assert.equal(d({ lastRun: { at: sec, run: "working" } }), "error", "도중 끊김 = 오류 점");
+  assert.equal(d({ lastRun: { at: sec, run: "asking" } }), "waiting", "답 대기 = 확인 필요 점");
+  assert.equal(d({ lastRun: { at: sec, run: "done" } }), "", "완료는 봤는지 몰라 점 없음(보통 줄)");
+  assert.equal(d({ lastRun: { at: sec, run: "bg" } }), "");
+  //  접힘 — system·error 는 «지난 세션» 으로 안 접힌다(끄기 직전 모습을 유지, 사람이 끝낸 것만 접는다).
+  assert.equal(S.stoppedIsPast(stopped({ lastRun: { at: sec, run: "asking" } })), false);
+  assert.equal(S.stoppedIsPast(stopped({ lastRun: { at: sec, run: "working" } })), false);
+});

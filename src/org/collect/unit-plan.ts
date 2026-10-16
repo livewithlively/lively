@@ -6,13 +6,15 @@
 //      **건강한 첫 사람**이 모은다 — 1순위가 끊기면 2순위가 이어받고, 1순위가 회복되면 다시 1순위다.
 //   ② «다시 로그인» 알림 대상 — 아무도 메우지 못해 멈춘 단위만, 사람이 고칠 수 있는 끊김인 첫 사람에게 한 번.
 //   ③ 수집 실행(T11 collect-run) 결과 분류 — 로그인 끊김 · 한도 초과 · 커넥터 끊김 · 정상 · 모름.
-//   ④ 자료의 볼 수 있는 사람 — 단위 구성원의 합집합, 조직 공개범위 정책이 있으면 그 안으로.
+//   ④ 자료의 볼 수 있는 사람 — 단위마다 공개범위(나만 · 볼 수 있는 사람만 · 모두) 몫의 합집합, 조직 공개범위 정책이 있으면 그 안으로.
 //   ⑤ 목록 정규화 · 좌표 정규화 · 쪼개기 검사 · 조회/수정 권한 · 수집기 자격 실패 판정.
 //
 //  ★ 볼 수 있는 구성원은 두 층이다 — **본인 신고(claim)** 와 **확인됨(verified)**. 목록 반영 표면(MCP·REST)으로 «나도 이 채널을
 //   본다» 고 적은 것만으로는 후보(뒤 순번)일 뿐이고, 이미 모인 자료는 열리지 않는다. 그 사람 커넥터로 그 단위를 **실제로 읽은 것**
 //   (서버가 연 목록 실행 · 그 사람 실행의 저장)이 확인돼야 볼 수 있는 사람이 된다. 아니면 채널 id 하나 아는 구성원이나, 외부 글에 심긴
 //   지시를 읽은 그 사람의 AI 가 신고 한 번으로 남의 비공개 채널 자료를 열 수 있다(리뷰 2026-10-16).
+//   같은 이유로 신고가 적은 «종류» 도 믿지 않는다 — 신고로 생긴 단위의 공개범위는 늘 «볼 수 있는 사람만» 이고, 종류별 첫 제안
+//   (공개 채널=모두 · DM=나만)은 서버가 연 목록만 쓴다(리뷰 2026-10-16 B2).
 //
 //  설계 정본: 지식 connect-collect-tobe-claude-connector-4213 §2. 사양·엣지 표: as-built 지식 «수집 단위 표».
 import { detectAuthFailure } from "../../node/task-failure.js";
@@ -59,11 +61,14 @@ export interface PlanUnit {
   connector: string;
   collector: PlanCollector | null;
   candidates: PlanCandidate[];
+  /** 공개범위 — «나만(me)» 이면 정한 사람(owner)의 계정으로만 모은다. */
+  visibility: UnitVisibility;
+  owner: string | null;
 }
 export type PlanAssignee =
   | { kind: "collector"; collector_id: number }
   | { kind: "member"; member_id: string; rank: number };
-export type PlanReason = "ok" | "not_active" | "collector_off" | "no_viewer" | "all_unhealthy" | "source_axis_off";
+export type PlanReason = "ok" | "not_active" | "collector_off" | "no_viewer" | "all_unhealthy";
 export interface PlanSkip { member_id: string; state: AssigneeState; connector: string }
 export interface UnitPlan {
   unit_id: number;
@@ -72,7 +77,7 @@ export interface UnitPlan {
   /** 건강하지 않아 건너뛴 후보(순서대로) — «왜 2순위가 모으나» 와 알림 대상의 재료. */
   skipped: PlanSkip[];
 }
-export interface PlanOpts { now: number; sourceAxisOn: boolean }
+export interface PlanOpts { now: number }
 
 export type HealthIndex = Map<string, PlanHealth>;
 const hkey = (member: string, connector: string): string => `${member}\u0000${connectorKey(connector)}`;
@@ -112,9 +117,12 @@ export function planUnit(unit: PlanUnit, idx: HealthIndex, opts: PlanOpts): Unit
     if (!c.broken) return { ...base, assignee: { kind: "collector", collector_id: c.id }, reason: "ok", skipped: [] };
     //  켜져 있는데 자격이 끊겼다 → 구성원 후보로 넘어간다(아래).
   }
-  //  자료 축이 꺼져 있으면 잠금이 지켜지지 않는다 — 한 사람만 볼 자료(DM·개인 메일함)가 전원에게 열린다.
-  if (!opts.sourceAxisOn) return { ...base, assignee: null, reason: "source_axis_off", skipped: [] };
-  const ordered = orderCandidates(unit.candidates);
+  //  자료 공개범위 적용을 끈 워크스페이스도 막지 않는다(상민님 2026-10-16) — 거기서는 무엇을 모아도 모두에게 보이고,
+  //   그 사실은 수집 전 검토에서 리브가 알린다(collect_units 의 visibility_enforced).
+  //  «나만» 단위는 정한 사람의 계정으로만 모은다 — 그 사람만 볼 자료를 남의 로그인으로 모으지 않고,
+  //   신고만으로 주인이 된 사람이 남이 모은 자료를 보게 되는 길을 막는다(주인 계정으로 못 읽으면 자료가 없다).
+  const pool = unit.visibility === "me" ? unit.candidates.filter((c) => c.member_id === unit.owner) : unit.candidates;
+  const ordered = orderCandidates(pool);
   if (!ordered.length) return { ...base, assignee: null, reason: "no_viewer", skipped: [] };
   const skipped: PlanSkip[] = [];
   for (let i = 0; i < ordered.length; i++) {
@@ -231,20 +239,51 @@ export function retryDelayMs(state: AssigneeState, fails: number): number {
 
 // ── ④ 자료의 볼 수 있는 사람 ──────────────────────────────────────────────────
 
+/**
+ * 단위의 공개범위(상민님 2026-10-16) — 수집을 시작하기 전 검토에서 사람이 단위마다 정한다(리브가 종류별로 먼저 제안한다).
+ *  · me      — 나만: 그렇게 정한 사람(owner_member) 한 명.
+ *  · viewers — 볼 수 있는 사람만: 그 단위의 **확인된** 볼 수 있는 구성원(본인 신고만 한 사람은 빠진다).
+ *  · all     — 모두: 워크스페이스 전원(잠그지 않는다).
+ *  조직 공개범위 정책이 그 앱·채널을 묶었으면 어느 단계든 그 정책 안으로만이다. 공개범위 적용을 끈 워크스페이스에서는 무엇을 골라도
+ *  모두에게 보인다(읽기가 거르지 않는다). 라이블리 수집기가 모은 자료는 수집기 쪽 정책을 따르고, 이 칸은 단위 체계가 저장한 자료에만 쓰인다.
+ */
+export const UNIT_VISIBILITIES = ["me", "viewers", "all"] as const;
+export type UnitVisibility = (typeof UNIT_VISIBILITIES)[number];
+
+const ME_KINDS: ReadonlySet<string> = new Set(["dm", "group_dm", "mailbox", "label"]);
+/** 리브의 첫 제안 — 공개 채널은 모두 · DM·메일함은 나만 · 그 밖(비공개 채널·페이지·폴더·저장소…)은 볼 수 있는 사람만. 사람이 검토에서 고친다. */
+export function defaultVisibilityForKind(kind: string): UnitVisibility {
+  if (kind === "channel") return "all";
+  if (ME_KINDS.has(kind)) return "me";
+  return "viewers";
+}
+
 export interface AudiencePolicy {
   visibility: "open" | "members";
   members: Array<{ subject_kind: "member" | "team"; member_id: string }>;
 }
 
+export interface AudienceUnit {
+  visibility: UnitVisibility;
+  /** 그 단위의 확인된 볼 수 있는 구성원. */
+  viewers: readonly string[];
+  /** «나만» 으로 정한 사람. */
+  owner: string | null;
+  policy: AudiencePolicy | null;
+}
+
 /**
- * 자료 1건의 볼 수 있는 구성원 = 그 자료를 들여온 단위마다 «단위 구성원(∩ 그 단위에 걸린 조직 정책)» 의 합집합.
- *  조직 공개범위 정책이 그 앱·채널을 특정 대상으로 묶었으면 그 단위 몫은 그 안으로만(정책을 넘지 않는다).
- *  정책이 open 이거나 없으면 단위 구성원 그대로. 비면 아무도 못 본다(호출부가 잠근 채 둔다).
+ * 자료 1건의 볼 수 있는 사람 = 그 자료를 들여온 단위마다 «그 단위의 공개범위 몫(∩ 그 단위에 걸린 조직 정책)» 의 합집합.
+ *  · 모두(all) 단위가 하나라도 있고 그 단위에 조직 정책이 없으면 → 잠그지 않는다(open).
+ *  · 모두 + 조직 정책(members) → 정책 대상 전원 · 볼 수 있는 사람만 → 확인된 구성원 · 나만 → 정한 사람.
+ *  «나만» 의 주인도 그 단위의 확인된 구성원일 때만이다 — 그 채널·DM 에서 빠지면(목록에서 사라지면) 이미 모은 자료도 못 본다
+ *   («볼 수 있는 사람만» 에서 빠진 사람과 같다 · 리뷰 N6). 그때는 남은 확인된 구성원이 넘겨받을 수 있다(visibilityChangeError).
+ *  조직 정책을 넘지 않는다. 다 모아 비면 잠긴 채 아무도 못 본다(fail-closed).
  */
 export function computeAudience(input: {
-  units: ReadonlyArray<{ viewers: readonly string[]; policy: AudiencePolicy | null }>;
+  units: ReadonlyArray<AudienceUnit>;
   teamMembers: ReadonlyMap<string, ReadonlySet<string>>;
-}): string[] {
+}): { open: boolean; members: string[] } {
   const out = new Set<string>();
   for (const u of input.units) {
     let allowed: Set<string> | null = null;
@@ -255,9 +294,45 @@ export function computeAudience(input: {
         else for (const m of input.teamMembers.get(s.member_id) ?? []) allowed.add(m);
       }
     }
-    for (const v of u.viewers) if (v && (!allowed || allowed.has(v))) out.add(v);
+    if (u.visibility === "all") {
+      if (!allowed) return { open: true, members: [] };
+      for (const m of allowed) out.add(m);
+      continue;
+    }
+    const mine = u.visibility === "me" ? (u.owner && u.viewers.includes(u.owner) ? [u.owner] : []) : u.viewers;
+    for (const v of mine) if (v && (!allowed || allowed.has(v))) out.add(v);
   }
-  return [...out].sort();
+  return { open: false, members: [...out].sort() };
+}
+
+const VIS_RANK: Record<UnitVisibility, number> = { me: 0, viewers: 1, all: 2 };
+/** 넓히기인가 — 나만 → 볼 수 있는 사람만 → 모두 쪽으로. 이미 모은 자료가 있으면 사람의 확인(confirm)을 받는다(축 끄기와 같은 결). */
+export function isWidening(from: UnitVisibility, to: UnitVisibility): boolean {
+  return VIS_RANK[to] > VIS_RANK[from];
+}
+
+/**
+ * 공개범위를 바꿀 수 있나 — 고칠 수 있는 사람(canEditUnit)이어야 한다. 남이 정한 «나만» 단위는:
+ *  · 정한 사람이 그 단위의 확인된 구성원이면 — 다른 확인된 구성원은 «볼 수 있는 사람만» 으로만 바꿀 수 있다(상민님 2026-10-16).
+ *    그 구성원들은 원래 앱에서 같은 내용을 이미 본다 — 새로 열리는 사람이 없다. 한 사람의 «나만» 이 공유 채널을 막고, 그 사람
+ *    로그인이 끊기면 아무도 못 모으는 일을 풀려고. «모두» 로 넓히기·주인 바꾸기(«나만» 다시 고르기)는 정한 사람만.
+ *  · 정한 사람이 확인되지 않았으면(그 단위에서 빠짐 · 신고만 · 내보낸 사람) — 확인된 구성원이 넘겨받는다(무엇으로든).
+ *  확인되지 않은 사람(관리자 포함)은 남의 «나만» 을 바꾸지 못한다 — 메일함처럼 주인 한 명만 볼 수 있는 단위는 주인만 바꾼다.
+ *  «나만» 으로 정하는 사람은 그 단위의 확인된 볼 수 있는 구성원이어야 한다(못 보는 사람이 자기 것으로 가져가지 못하게).
+ */
+export function visibilityChangeError(
+  u: UnitAccessInput & { visibility: UnitVisibility; owner: string | null }, next: UnitVisibility, member: string, isAdmin: boolean,
+): string | null {
+  if (!canEditUnit(u, member, isAdmin)) return "이 단위를 고칠 권한이 없습니다";
+  const confirmed = (m: string | null): boolean => !!m && u.members.some((x) => x.member_id === m && x.verified && x.active !== false);
+  if (u.visibility === "me" && u.owner && u.owner !== member) {
+    if (!confirmed(member)) return "«나만» 으로 정한 사람만 이 단위의 공개범위를 바꿀 수 있습니다";
+    if (confirmed(u.owner) && next !== "viewers") {
+      return "남이 정한 «나만» 단위는 «볼 수 있는 사람만» 으로만 바꿀 수 있습니다 — «모두» 로 넓히거나 «나만» 을 다시 고르는 것은 정한 사람만";
+    }
+  }
+  if (next === "me" && !confirmed(member)) return "«나만» 은 이 단위를 볼 수 있는 것이 확인된 사람만 고를 수 있습니다";
+  return null;
 }
 
 // ── ⑤ 목록 · 쪼개기 · 권한 ───────────────────────────────────────────────────
@@ -326,8 +401,8 @@ export function splitOverreach(parentViewers: readonly string[], childViewers: r
 
 export interface UnitAccessInput {
   route: CollectRoute;
-  /** 볼 수 있는 구성원 — verified=false 는 본인 신고만 한 사람. */
-  members: ReadonlyArray<{ member_id: string; verified: boolean }>;
+  /** 볼 수 있는 구성원 — verified=false 는 본인 신고만 한 사람 · active=false 는 내보낸 사람(없으면 활성). */
+  members: ReadonlyArray<{ member_id: string; verified: boolean; active?: boolean }>;
 }
 /**
  * 이 사람이 이 단위를 어디까지 보나.

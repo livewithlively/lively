@@ -2,10 +2,16 @@
 // 실행: npm run build && node dist/apps/app-server-config.test.js
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
-import { GUARD_ENV, appServerApiUrl, appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
-import { APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, envAppServerPolicy, normalizeAppServerPolicy, retentionDaysFor } from "./app-server-policy.js";
+import {
+  GUARD_ENV, LOG_GROUP_TAG, appServerApiUrl, appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor, logGroupTagsFor, serverDeclOf,
+  smokeFailure, zipKeyFor,
+} from "./app-server-config.js";
+import {
+  APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
+  normalizeAppServerPolicy, retentionDaysFor,
+} from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
-import { configDrift, publicError } from "./app-server-deploy.js";
+import { configDrift, publicError, realLambdaApi } from "./app-server-deploy.js";
 import { GUARD_BOOTSTRAP_PATH, GUARD_PORT, GUARD_READY_PATH } from "./app-server-guard.js";
 import type { FnConfiguration } from "../net/aws/lambda-lite.js";
 import { appServerEnabledFor } from "./app-server-config.js";
@@ -89,7 +95,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
+  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");
@@ -223,5 +229,106 @@ t("B14 워크스페이스 스위치 — 목록 없음 · '*' 은 전부 · 목�
   assert.equal(appServerEnv(env), null, "워크스페이스를 모르면 꺼짐");
   assert.notEqual(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE2 }), null, "목록이 없으면 워크스페이스를 몰라도 켜짐(자가호스팅 · 시험)");
 });
+
+//  #4792 워크스페이스 상한 — 사양 엣지 표(spec-4792.md P · F · C 절)의 행마다 시험 하나.
+t("B15 워크스페이스 상한 정규화(P1~P4) — 0 · 잡값은 기본 20개 · 5120MB · 바닥 100MB · 천장 200개 · 20480MB · 글자 숫자 · env 기본", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.workspace_functions_max, 20);
+  assert.equal(APP_SERVER_POLICY_DEFAULT.workspace_code_mb, 5120);
+  const z = normalizeAppServerPolicy({ workspace_functions_max: 0, workspace_code_mb: "x" });
+  assert.equal(z.workspace_functions_max, 20, "0 은 «그 값 없음»");
+  assert.equal(z.workspace_code_mb, 5120, "잡값");
+  assert.equal(normalizeAppServerPolicy({ workspace_code_mb: 5 }).workspace_code_mb, 100, "바닥");
+  assert.equal(normalizeAppServerPolicy({ workspace_functions_max: 1 }).workspace_functions_max, 1, "바닥(1개) 그대로");
+  const big = normalizeAppServerPolicy({ workspace_functions_max: 10_000, workspace_code_mb: 10 ** 7 });
+  assert.equal(big.workspace_functions_max, 200, "천장 — 관리자가 스스로 올릴 수 있는 끝");
+  assert.equal(big.workspace_code_mb, 20480);
+  assert.equal(normalizeAppServerPolicy({ workspace_functions_max: "7" }).workspace_functions_max, 7);
+  assert.equal(envAppServerPolicy({ LIVELY_APP_SERVER_POLICY: "{\"workspace_functions_max\":50}" }).workspace_functions_max, 50, "플랫폼 기본(env)");
+  assert.equal(APP_SERVER_POLICY_MIN.workspace_functions_max, 1);
+  assert.equal(APP_SERVER_POLICY_MAX.workspace_code_mb, 20480);
+});
+
+t("B16 함수 수 판정(F6) — 상한−1 개면 통과 · 상한 개면 막음(까닭에 수 · 상한 · 고치는 길) · 상한을 내려 이미 넘친 수도 막음", () => {
+  const p = { ...APP_SERVER_POLICY_DEFAULT, workspace_functions_max: 3 };
+  assert.equal(functionsCapDenial(p, 0), null, "함수가 하나도 없는 워크스페이스");
+  assert.equal(functionsCapDenial(p, 2), null, "2개 있으면 세 번째는 된다(경계)");
+  const m = functionsCapDenial(p, 3)!;
+  assert.ok(m.includes("3개") && m.includes("workspace_functions_max") && m.includes("org_app_remove"), m);
+  assert.notEqual(functionsCapDenial(p, 9), null, "상한을 내려 이미 넘쳤으면 새 함수는 막는다");
+});
+
+const MB = 1024 * 1024;
+t("B17 배포 뒤 코드 크기(C8 · C10) — 새 함수 2벌 · 최근 keep−1 판 · 옮기지 않는 별칭의 판 · 겹치면 한 번 · keep 1 · 크기 없는 줄 0 · zip 0", () => {
+  const vs = [{ Version: "$LATEST", CodeSize: 3 * MB }, { Version: "1", CodeSize: 1 * MB }, { Version: "2", CodeSize: 2 * MB }, { Version: "3", CodeSize: 3 * MB }];
+  assert.equal(codeBytesAfterDeploy([], 5 * MB, 3, []), 10 * MB, "새 함수 = $LATEST + 판 1");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, []), 10 * MB + 3 * MB + 2 * MB, "cur · pub 를 함께 옮김 — 옛 판은 최근 2개(3 · 2)만 남는다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, ["1"]), 10 * MB + 3 * MB + 2 * MB + 1 * MB, "초안만 올림 — pub 가 가리키는 1판도 남는다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, ["3", null]), 10 * MB + 3 * MB + 2 * MB, "pub 판이 이미 최근 판이면 한 번만 센다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 1, []), 10 * MB, "keep 1 — 옛 판은 하나도 안 남는다");
+  assert.equal(codeBytesAfterDeploy([{ Version: "$LATEST" }, { Version: "4" }], 0, 3, []), 0, "크기 없는 줄 · zip 0 은 0 으로 센다");
+  assert.equal(codeBytesOf(vs), 9 * MB, "지금 크기 = $LATEST 포함 합(AWS TotalCodeSize 와 같은 셈)");
+  assert.equal(codeBytesOf([]), 0, "함수가 없으면 0");
+});
+
+t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1바이트 넘고 늘면 막음 · 넘어도 줄거나 그대로면 통과", () => {
+  const p = { ...APP_SERVER_POLICY_DEFAULT, workspace_code_mb: 100 };
+  assert.equal(codeCapDenial(p, 90 * MB, 0, 10 * MB), null, "합이 꼭 상한이면 된다(경계)");
+  const m = codeCapDenial(p, 90 * MB, 0, 10 * MB + 1)!;
+  assert.ok(m.includes("100MB") && m.includes("workspace_code_mb") && m.includes("org_app_remove"), m);
+  assert.ok(m.includes("1KB 넘습니다"), `넘는 양을 적는다(반올림한 합만 보면 앞뒤가 안 맞아 보인다): ${m}`);
+  assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB), null, "이미 넘었어도 이 함수가 그대로면 막지 않는다");
+  assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 15 * MB), null, "줄어드는 배포도 된다");
+  assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");
+});
+
+//  #4790 앱마다 로그 그룹 — 실행 역할의 쓰기 조건(lively-infra WriteOwnAppLogs)이 보는 태그와 그룹 ARN.
+t("B20 로그 그룹 태그 · ARN(#4790) — 태그 키 lvly-fn = 함수 이름 · ARN 은 끝 :* 없이 · 계정은 실행 역할 ARN 에서", () => {
+  assert.equal(LOG_GROUP_TAG, "lvly-fn", "lively-infra app-servers.tf 의 ${aws:ResourceTag/lvly-fn} 과 같은 이름");
+  assert.deepEqual(logGroupTagsFor("lvly-app-x-ws"), { "lvly-fn": "lvly-app-x-ws" });
+  const env = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: "arn:aws:iam::425515538094:role/lvly-app-exec" })!;
+  assert.equal(env.awsAccountId, "425515538094");
+  assert.equal(logGroupArnFor(env, "/aws/lambda/lvly-app-x-ws"), "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws");
+  assert.deepEqual(logGroupTagBundleFor(env, "lvly-app-x-ws"), { tags: { "lvly-fn": "lvly-app-x-ws" }, arn: "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws" }, "배포가 넘기는 묶음");
+});
+
+//  #4791 서버 선언을 뺀 앱의 함수 정리 — 사양 엣지 표 R10.
+t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 기본 · 바닥 1 · 천장 365", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0 }).unused_retire_days, 7, "0 은 «그 값 없음»");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: "x" }).unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0.5 }).unused_retire_days, 1, "바닥");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 9999 }).unused_retire_days, 365, "천장");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 30 }).unused_retire_days, 30);
+});
+
+//  #4790 재검토 4 — 실제 어댑터(realLambdaApi)가 태그 묶음을 그대로 넘기는가. 다른 시험은 가짜 api 를 끼워 이 이음매를 지나지 않는다 —
+//   여기서 태그가 빠지면 배포는 초록인데 운영에서 그 함수 기록만 사라진다. 전역 fetch 와 env 자격을 잠깐 바꿔 AWS 를 부르지 않는다.
+{
+  const seen: Array<{ op: string; body: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  const keep = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY, token: process.env.AWS_SESSION_TOKEN };
+  process.env.AWS_ACCESS_KEY_ID = "AKIDEXAMPLE"; process.env.AWS_SECRET_ACCESS_KEY = "example-secret"; delete process.env.AWS_SESSION_TOKEN;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const h: Record<string, string> = {};
+    for (const [k, v] of Object.entries((init?.headers ?? {}) as Record<string, string>)) h[k.toLowerCase()] = String(v);
+    const op = String(h["x-amz-target"] ?? "").split(".")[1] ?? "";
+    seen.push({ op, body: JSON.parse(String(init?.body ?? "{}")) });
+    return op === "CreateLogGroup" ? new Response("{\"__type\":\"ResourceAlreadyExistsException\"}", { status: 400 }) : new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const tag = { tags: { "lvly-fn": "lvly-app-x-ws" }, arn: "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws" };
+  try {
+    await realLambdaApi("ap-northeast-2").ensureLogGroup("/aws/lambda/lvly-app-x-ws", 14, tag);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of [["AWS_ACCESS_KEY_ID", keep.id], ["AWS_SECRET_ACCESS_KEY", keep.secret], ["AWS_SESSION_TOKEN", keep.token]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  t("B21 실제 어댑터가 로그 그룹 태그 묶음을 넘긴다 — 만들기에 tags · 있던 그룹은 TagResource(그룹 ARN)", () => {
+    assert.deepEqual(seen.map((x) => x.op), ["CreateLogGroup", "TagResource", "PutRetentionPolicy"]);
+    assert.deepEqual(seen[0]!.body, { logGroupName: "/aws/lambda/lvly-app-x-ws", tags: tag.tags });
+    assert.deepEqual(seen[1]!.body, { resourceArn: tag.arn, tags: tag.tags });
+  });
+}
 
 console.log(`\n${pass} passed`);

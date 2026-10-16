@@ -1301,7 +1301,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .fx-act { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; background: none; border-radius: 5px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
 .fx-act:hover { background: var(--bg-punch); color: var(--ink); }
 .fx-act svg { width: 13px; height: 13px; }
-/* 미리보기 — 목록 자리에 제자리 전환(대시보드 폴더 위젯과 같은 문법). 정독·공유는 [⛶] 전체페이지가 맡는다. */
+/* 미리보기 — 목록 자리에 제자리 전환(대시보드 폴더 위젯과 같은 문법). 정독·공유는 [↗] 자료 보기 화면(#4672 — 새 탭)이 맡는다. */
 .fx-pbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--line-row); }
 .fx-pname { font-size: 12px; font-weight: 700; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-pstage { padding: 10px 2px 0; }
@@ -2025,6 +2025,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-bld-empty { color: var(--muted); font-size: 13px; padding: 16px; text-align: center; background: var(--bg); border: 1px dashed var(--line); border-radius: 12px; margin: 0; }
 .v2-bld-stage { position: relative; flex: 1; min-height: 0; }
 .v2-bld-danger { color: #B0323F !important; }
+.v2-bld-folder { display: inline-flex; align-items: center; gap: 6px; width: max-content; }
+.v2-bld-num { width: 84px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
 @media (max-width: 900px) {
   .v2-bld-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .v2-bld-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 46%; }
@@ -2032,6 +2034,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
 .v2-appui-ov { position: fixed; inset: 0; padding-top: var(--v2-desk-tb, 0px); z-index: 88; background: var(--bg); }   /* 창 맨 윗줄 비우기 — .v2-studio 위 설명(#4480) */
+.v2-appui-ov:focus { outline: none; }   /* 열 때 초점을 덮개로 옮긴다(openAppUi · #4480) — 덮개 테두리는 그리지 않는다 */
 /* 크게 보기 = 화면 가득 — 사이드바도 여백도 없이 앱만(#4592 · 원준 2026-10-12 «완전 전체화면으로»). 머리줄은 한 줄 얇게(이름 · 닫기) */
 .v2-appui { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg); }
 .v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line); flex: none; }
@@ -2039,7 +2042,6 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 999px; padding: 1px 7px; }
 .v2-appui-spacer { flex: 1; }
 .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
-.v2-appui-esc { margin-left: .3em; }   /* 닫기 단추의 키 안내(폰은 50-mobile.css 가 걷는다) */
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로

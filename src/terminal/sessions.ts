@@ -63,7 +63,7 @@ import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 import { shouldFallbackToDesired, unobservedSessionInfo } from "./session-unobserved.js";   // #2544 — 중계가 «못 봤을 때» 목록의 정본은 DB(tmux 는 관측)
 import { sessionNameFromPrompt } from "./session-name.js";
-import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
+import { type LabelSource, canRelabel, openingLabelSource, SESSION_LABEL_SOURCE_ENV } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
 import { sessionPrefix, acceptPreissuedId } from "./session-id.js";   // #4135 — id 모양은 리프 한 자리(게이트웨이 preissue 와 같은 규칙)
 export { sessionPrefix };
@@ -201,6 +201,8 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       //  #4783 — 이 판이 왜 끝났나. 시작 중인 행엔 싣지 않는다(끝난 판이 아니다). 남에게도 싣는다 — 사유는 사적인 글이 아니고,
       //   초대받은 사람·프로젝트 동료의 화면도 «지난 세션 / 끄기 직전 모습 / 오류» 를 같은 규칙으로 그려야 한다.
       ...(!starting && endNoteForRow(s.end_note) ? { endNote: endNoteForRow(s.end_note) } : {}),
+      //  #4783 후속 — 마지막 관측 실행 상태. endNote 가 비어도 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 끊김=고장 · asking=확인 필요).
+      ...(!starting && s.last_run_state ? { lastRun: { at: s.last_run_state.at, run: s.last_run_state.run } } : {}),
       // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
       //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
       ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),
@@ -575,7 +577,7 @@ async function desiredFallbackSessions(me: string | null, cause: unknown): Promi
  * ⚠ 넘기는 자리(at)는 «세션 컨테이너 안 tmux» 인 배포에서만 세션 id 를 싣는다. 셀프호스트 격리는 문자열
  *  osUser 그대로 = 종전과 한 글자도 다르지 않다.
  */
-async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {
+export async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {   // #4490 — 작업 컨테이너(agent-jobs/launch.ts)도 같은 준비를 쓴다
   const { osUser } = execAt(at);
   // 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서 심는다
   //  (멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.
@@ -783,7 +785,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
   //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
   const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
-  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
+  //  #4418 — 있던 세션을 잇는 길(복원·전환)은 저장된 이름과 함께 그 출처를 싣고 온다(CreateInput.labelSource) — 그대로 잇는다.
+  const labelSource: LabelSource = openingLabelSource(cleanLabel(input.label), label, id, input.labelSource);
   const createdSec = Math.floor(Date.now() / 1000);
   //  desired-state 행(#1059 E) — 두 자리에서 쓴다(새 경로: 컨테이너 확보 전 · 옛 경로: 종전대로 생성 뒤). 한 벌로 둔다.
   const desiredRow = (): SessionStateInput => ({
@@ -843,6 +846,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // #2162 — **훅이 읽는 유일한 종류 신호.** 종전엔 서버만 알고(managed·loginFor·appId) pane 엔 안 나가서,
   //  훅은 `LIVELY_TASK_WS` 같은 부산물을 스니핑해 종류를 되짚어야 했다. 이제 한 축이다.
   args.push("-e", `${SESSION_KIND_ENV}=${input.kind}`);
+  // #4418 — 이 세션 이름의 출처. 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 세션 이름짓기를 안내하지 않는다(SESSION_LABEL_SOURCE_ENV 머리말).
+  args.push("-e", `${SESSION_LABEL_SOURCE_ENV}=${labelSource}`);
   // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
   //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):
   //   · COLORFGBG — 오래된 관습(vim/neovim 의 background 자동판정, less 등). "<fg>;<bg>" ANSI 번호.
@@ -952,6 +957,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       }
       //  ② 컨테이너 — ensure 훅(매니지드: 브로커 /lvly/session/ensure). 실패는 **실패다**: 방금 쓴 행을 지우고 503.
       //   옛 경로로 조용히 접지 않는다(옛 판/새 판이 섞인 반쪽 상태가 가장 나쁘다 — tmux-relocation-plan 규율 1).
+      const ensureStartedAt = Date.now();   // #4786 — 만든 뒤 기록이 그사이의 맞추기 기록을 덮지 않게(afterSessionCreate)
       try {
         const made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
           sessionId: id, osUser, cwd: target,
@@ -968,7 +974,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         if (folderApps?.length && (!ma || ma.supported !== true || (Array.isArray(ma.failed) && ma.failed.length))) {
           console.warn(`[terminal] 앱 폴더를 다 못 붙였다(${id}) — 세션은 계속:`, ma ? JSON.stringify(ma).slice(0, 300) : "브로커가 앱 폴더를 모른다(이 기능 전 판)");
         }
-        if (appFolders && folderApps) appFolders.afterCreate(id, folderApps);
+        if (appFolders) appFolders.afterCreate(id, folderApps, made.apps, ensureStartedAt);
       } catch (e) {
         await dropOwnRow();
         await dropCarried();
@@ -1130,8 +1136,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  (label 선언은 위로 올렸다 — #2545. 값·규칙은 그대로다.)
   // #1979 — 이름 옆에 **누가 지었나**를 같이 남긴다. 이게 "한 번만 짓고 고정"의 걸쇠다(session-label-source.ts).
   //  사람이 준 이름 = human(에이전트가 못 덮는다) · 첫 지시 규칙 이름 = rule(에이전트가 한 번 다듬는다) · id = 아직 이름 없음.
-  //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
-  //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
+  //  ⚠ 복원(restore)도 이 함수를 탄다. 같은 id 복원은 upsert 의 ON CONFLICT 가 label_source 를 손대지 않고
+  //   (안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석), 새 id 복원·전환은 원래 출처를
+  //   CreateInput.labelSource 로 싣고 와 그대로 잇는다(#4418 — 종전엔 저장된 이름이 «받아 온 이름» 이라 human 으로 굳었다).
   //  (labelSource 선언도 위로 — #2545.)
   // ── 세션 메타(@box_*)를 **한 번에** 박는다 (#3537) ──────────────────────────────
   //  종전엔 값 하나에 중계 왕복 하나였다 — 매니지드에서 회당 0.45~1.0초라 이 블록만으로 5~10초였다

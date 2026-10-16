@@ -54,6 +54,23 @@ test("L1~L3 이름 출처(#4632) — 만들 때 사람이 준 이름은 human(AI
   assert.equal("label_source" in c, false, "L3 공백 · 줄바꿈뿐인 이름은 안 준 것");
 });
 
+test("L4~L7 이름 출처를 실어 온 경우(#4418 복원·전환) — 그 출처를 잇는다 · 이름이 비면 칸 없음 · 모르는 값은 rule", () => {
+  //  이게 틀리면: 규칙 이름 세션을 새 id 로 복원하는 순간 그 이름이 «사람 이름» 으로 굳어 AI 가 영영 못 다듬는다.
+  const a = nodeSessionStateInput(sess({ label: "첫 지시로 지은 이름" }), "n1", req({ label: "첫 지시로 지은 이름", labelSource: "rule" }), "yoon");
+  assert.equal(a.label_source, "rule", "L4 규칙 이름 복원은 rule");
+  const b = nodeSessionStateInput(sess({ label: "AI 이름" }), "n1", req({ label: "AI 이름", labelSource: "agent" }), "yoon");
+  assert.equal(b.label_source, "agent", "L5 AI 이름 복원은 agent");
+  const c = nodeSessionStateInput(sess({ label: "x" }), "n1", req({ label: "", labelSource: "human" }), "yoon");
+  assert.equal("label_source" in c, false, "L6 이름이 비었으면 실어 온 출처도 쓰지 않는다");
+  const d = nodeSessionStateInput(sess({ label: "x" }), "n1", req({ label: "x", labelSource: "???" as never }), "yoon");
+  assert.equal(d.label_source, "rule", "L7 모르는 출처 값은 rule");
+});
+
+test("K1 세션 종류(#4418) — 요청의 kind 를 그대로 싣는다(복원이 이 값으로 종류를 되살린다)", () => {
+  assert.equal(nodeSessionStateInput(sess(), "n1", req({ kind: "app", appId: "memo" }), "yoon").kind, "app", "앱 세션이 human 으로 적히면 복원 때 사람 세션으로 뜬다");
+  assert.equal(nodeSessionStateInput(sess(), "n1", req({ kind: "human" }), "yoon").kind, "human");
+});
+
 test("C3·C4 새 헬퍼가 빈 값을 받는 경우 — created=0 은 지금, flags 부재는 {}, invites 비배열은 []", () => {
   const before = Math.floor(Date.now() / 1000);
   const a = nodeSessionStateInput(sess({ created: 0, flags: undefined as unknown as Record<string, string>, invites: undefined as unknown as string[] }), "n1", req(), "yoon");

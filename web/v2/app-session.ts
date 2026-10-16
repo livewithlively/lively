@@ -210,6 +210,16 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.chatSend ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '세션에 글 보내기' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱에서 내가 단추를 누르면 그 내용이 이 앱을 붙인 AI 세션에 메시지로 들어가요 — 앱이 혼자 보내진 않아요(분당 20건까지)' }))) : null,
+        // 에이전트 작업(#4490) — '앱이 내 Claude 구독으로 사람 없는 작업을 돌리나'. 도구 칩 하나로는 무게가 안 보인다: 작업은 나로서(내 구독 · 내 홈의
+        //  로그인·파일) 돌고, 받는 길은 이 앱 화면에서 내가 보낸 것뿐이다(앱 서버 · 자동화 · 작업 안에서는 거절 — agent-jobs/service.ts).
+        app.tools.includes('agent_job_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '에이전트 작업' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱 화면에서 내가 보낸 지시를 별도 작업 컨테이너에서 나로서 돌려요 — 내 Claude 구독을 쓰고 내 홈의 파일·로그인에 닿아요. 앱 서버나 자동화가 혼자 보내진 않아요' }))) : null,
+        // AI 실행(#4488 앱 v2-9) — '앱이 AI 를 돌리나(누구 돈 · 누구 계정으로)'. 실행 계정은 워크스페이스가 정한다: API 키면 워크스페이스 돈,
+        //  구독이면 **내 구독**(내가 이 앱 화면에서 보낸 요청만 · 내 자리). 설계 §5 «grant 항목 — 내 AI 계정 사용 · 붙은 세션에서 실행 · 새 대화 만들기» 를 한 줄에.
+        app.tools.includes('app_ai_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: 'AI 실행' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱이 AI 에게 일을 시킬 수 있어요 — 워크스페이스 API 키가 있으면 그 돈으로, 아니면 내 Claude 구독으로(내가 이 앱 화면에서 보낸 요청만 · 내 이름으로 새 대화) 돌아요. 실행 기록은 이 앱의 AI 실행 목록에 남아요' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },

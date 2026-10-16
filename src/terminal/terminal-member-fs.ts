@@ -160,16 +160,21 @@ export function memberShOut(osUser: string, script: string): Promise<string> {
 
 // 멤버 uid 로 node 한 줄(고정 리터럴)을 돌리고 stdin JSON → stdout JSON 을 받는다(#1719 session-project — 세션 폴더 안
 //  마커·링크·셔틀을 격리 홈(700)에 쓰려면 이 통로뿐이다). 스크립트는 우리 코드의 **고정 리터럴**, 값은 전부 stdin JSON.
-export function memberNodeJson<T>(osUser: string, js: string, input: unknown): Promise<T> {
+//  opts.timeoutMs — 그 안에 안 끝나면 자식을 끝내고(SIGTERM) 실패로 돌려준다(사람이 기다리는 조회용 — #4672 같은 이름 후보).
+//   중계 너머의 프로세스까지 멈춘다는 보장은 아니다 — 스크립트가 스스로 시간 상한을 지는 것이 먼저고, 이것은 기다리는 쪽의 안전판이다.
+export function memberNodeJson<T>(osUser: string, js: string, input: unknown, opts: { timeoutMs?: number } = {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", js], ["pipe", "pipe", "pipe"]);
     const err = collectErr(c);
     const out = collectText(c.stdout);
-    c.on("error", reject);
+    let timer: NodeJS.Timeout | null = null;
+    c.on("error", (e) => { if (timer) clearTimeout(timer); reject(e); });
     if (!c.stdin) return reject(new Error("member node: no stdin"));
+    if (opts.timeoutMs) timer = setTimeout(() => { c.kill(); reject(new Error(`member node: ${opts.timeoutMs}ms 안에 끝나지 않음`)); }, opts.timeoutMs);
     c.stdin.on("error", reject);
     c.stdin.end(JSON.stringify(input));
     c.on("close", (code) => {
+      if (timer) clearTimeout(timer);
       if (code !== 0) return reject(new Error(err.get() || `member node exit ${code}`));
       try { resolve(JSON.parse(out.get() || "null") as T); } catch (e) { reject(e as Error); }
     });

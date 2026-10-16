@@ -151,9 +151,16 @@ export interface SharedFolderGate {
    *  세션 작업 폴더 판정용이다: 세션 셸은 작업 폴더 아래를 전부 파일로 보는데, ok 는 그 폴더 하나(자기·조상)만 본다.
    */
   subtreeOk(rel: string): boolean;
+  /**
+   * `rel` **아래**(자기는 빼고)에서 이 뷰어가 못 보는 자리들(공유 자리 기준 경로) — 숨은 프로젝트 폴더(project/ ↔ legacy-project/ 양형)와
+   *  막힌 ACL 경로. 같은 이름 후보 찾기(#4672)가 그 안으로 들어가지 않게 넘긴다 — 들어가면 못 보는 자리의 같은 이름이 후보 상한을 먼저 채운다.
+   *  보이는지의 판정은 여전히 ok 가 한다(이것은 걷는 양을 줄이는 몫). 게이트마다 반드시 답한다 — 빠뜨리면 못 보는 자리가 다시
+   *  후보 상한을 채우는데 아무 데서도 드러나지 않는다(전부 통과 · 앱 폴더 게이트는 빈 목록).
+   */
+  hiddenWithin(rel: string): string[];
 }
 
-const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false, subtreeOk: () => true };
+const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false, subtreeOk: () => true, hiddenWithin: () => [] };
 
 /**
  * `rel` **아래**(자기 포함)에 못 보는 프로젝트 폴더나 막힌 ACL 경로가 있는가 — 없으면 참(순수, #4687).
@@ -236,6 +243,22 @@ export function gateFromSets(sets: { hiddenFolders: ReadonlySet<string>; locked:
       return selfAndAncestors(norm).some((a) => locked.has(a));
     },
     subtreeOk: (rel: string): boolean => ok(rel) && subtreeFullyVisible(rel, hiddenFolders, blocked),
+    hiddenWithin(rel: string): string[] {
+      let norm: string;
+      try { norm = normalizeSharedPath(rel); } catch { return []; }
+      //  담김은 subtreeFullyVisible 과 같은 자(`rel + "/"`) — 자기 자신은 빼고(자기가 안 보이면 ok 가 이미 막았다).
+      const under = (p: string): boolean => (norm === "" ? p !== "" : p.startsWith(norm + "/"));
+      const out = new Set<string>();
+      for (const f of hiddenFolders) {
+        for (const v of folderVariants(f)) {
+          let nv: string;
+          try { nv = normalizeSharedPath(v); } catch { continue; }
+          if (under(nv)) out.add(nv);
+        }
+      }
+      for (const b of blocked) if (under(b)) out.add(b);
+      return [...out].sort();
+    },
   };
 }
 

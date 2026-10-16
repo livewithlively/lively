@@ -6,7 +6,7 @@
 //  두면 terminal → node 가 생겨 순환이 된다. 그래서 라우팅은 node 계층이 진다 — '노드가 있으면 노드로'라는
 //  판단 자체가 node 의 관심사이기도 하다.
 import { nodeOfSession, nodeRpc } from "./registry.js";
-import { sendKeysToSession } from "../terminal/send-keys.js";
+import { sendKeysToSession, sessionPastes } from "../terminal/send-keys.js";
 
 /**
  * 세션 PTY 에 텍스트를 넣고 제출한다. **인가는 호출자 책임**이다 — 크론은 관리세션 해소로,
@@ -15,8 +15,9 @@ import { sendKeysToSession } from "../terminal/send-keys.js";
  * 노드 세션인데 그 노드가 오프라인이거나 구버전(sendKeys 미지원)이면 nodeRpc 가 고정 문자열 에러로 던진다
  * (`node-offline` / `node-unsupported-op:sendKeys`) — 호출자가 사람 말로 옮긴다.
  */
-export async function injectPrompt(sessionId: string, text: string): Promise<void> {
+export async function injectPrompt(sessionId: string, text: string, opts?: { harness?: string | null }): Promise<void> {
   const nodeId = nodeOfSession(sessionId);
-  if (nodeId) { await nodeRpc(nodeId, "sendKeys", { id: sessionId, text }); return; }
-  await sendKeysToSession(sessionId, text);
+  //  #4818 — 하네스를 알면 함께 싣는다: Claude Code 세션이면 노드가 붙여넣기로 싣는다(send-keys 규약 ⑤). 옛 노드는 이 칸을 무시하고 친다.
+  if (nodeId) { await nodeRpc(nodeId, "sendKeys", { id: sessionId, text, ...(opts?.harness ? { harness: opts.harness } : {}) }); return; }
+  await sendKeysToSession(sessionId, text, { paste: await sessionPastes(sessionId, opts?.harness) });
 }

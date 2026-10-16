@@ -43,6 +43,8 @@ export interface OrgApp {
   owner_member: string | null;
   build_session: string | null;
   origin_app_id: string | null;
+  /** #4785 앱 폴더 상한(GiB) — null = 무제한(기본). 거는 것은 CP 의 쿼터 정비다(apps/app-folder-quota.ts 머리말). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
+  folder_limit_gb?: number | null;
 }
 export type AppEditMode = "all" | "members";
 export type AppVisibility = "all" | "me";
@@ -75,6 +77,7 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     owner_member: r.owner_member == null ? null : String(r.owner_member),
     build_session: r.build_session == null ? null : String(r.build_session),
     origin_app_id: r.origin_app_id == null ? null : String(r.origin_app_id),
+    folder_limit_gb: r.folder_limit_gb == null ? null : Number(r.folder_limit_gb),
   };
 }
 
@@ -189,6 +192,22 @@ export async function setAppEditPolicy(id: string, mode: AppEditMode, members: s
   const after = await getApp(id);
   await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
   return after;
+}
+
+/** #4785 앱 폴더 상한(GiB, null = 무제한)을 바꾼다 — 판정(관리자 · 책임자)은 부르는 쪽(capabilities/app-folders.ts). 없는 앱이면 null. */
+export async function setAppFolderLimit(id: string, limitGb: number | null, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(id);
+  if (!before) return null;
+  await itemsPool.query(`UPDATE org_app SET folder_limit_gb=$2, updated_at=now(), updated_by=$3 WHERE id=$1`, [id, limitGb, ctx.actor ?? null]);
+  const after = await getApp(id);
+  await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
+  return after;
+}
+
+/** #4785 설치된 앱마다 앱 폴더 상한 — CP 의 쿼터 정비가 읽는다(앱이 없는 폴더는 그 정비가 쿼터를 걷는다). */
+export async function listAppFolderLimits(): Promise<Array<{ app_id: string; limit_gb: number | null }>> {
+  const r = await itemsPool.query(`SELECT id, folder_limit_gb FROM org_app ORDER BY id`);
+  return r.rows.map((x) => ({ app_id: String(x.id), limit_gb: x.folder_limit_gb == null ? null : Number(x.folder_limit_gb) }));
 }
 
 /**

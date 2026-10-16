@@ -23,7 +23,7 @@ import {
   sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount, isReportedSched,
   type CreateInput,
 } from "./terminal-sessions.js";
-import { sendKeysToSession } from "./send-keys.js";
+import { sendKeysToSession, sessionPastes } from "./send-keys.js";
 import { injectFirstPrompt } from "./session-first-prompt.js";
 import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
@@ -79,8 +79,12 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
 
     // #1664 — 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와
     //  flush 지연 규약은 terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
+    //  #4818 — Claude Code 세션이면 붙여넣기로 싣는다(send-keys 규약 ⑤). 게이트웨이가 하네스를 실어 보내면 그것을, 옛 게이트웨이면
+    //   이 노드 tmux 의 @box_harness 를 본다(못 읽으면 종전대로 친다).
     case "sendKeys": {
-      await sendKeysToSession(String(args.id), String(args.text ?? ""));
+      const id = String(args.id);
+      const paste = await sessionPastes(id, typeof args.harness === "string" ? args.harness : null);
+      await sendKeysToSession(id, String(args.text ?? ""), { paste });
       return { ok: true };
     }
 

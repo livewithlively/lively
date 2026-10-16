@@ -22,6 +22,7 @@ import {
 } from './sources-plan.js';   // #4233 들어온 길 규칙(순수)
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
+import { fileLinkHash } from '../lib/sharelink.js';
 import { confirmDialog } from '../ui-primitives.js';
 
 // ── 자료 한 건(목록용 얕은 행) ─────────────────────────────────────────────
@@ -624,7 +625,9 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       onclick: () => { void authDownload(apiUrl(dl), String(s.title || 'file')); } },
       treeIcon('down'), el('span', { text: '내려받기' })));
     //  폴더 문은 내 개인 폴더이거나 누구에게나 같은 자리(공유·프로젝트)일 때만 — 남의 개인 폴더 주소(#/f?root=personal)는 내 폴더로 풀린다.
-    if (!orig || mine) acts.append(el('a', { class: 'btn btn-sm', href: String(s.external_url), text: '폴더에서 열기' }));
+    //  파일이 든 **폴더**를 연다(라벨대로) — 파일 링크(external_url)는 이제 그 파일의 자료 보기 화면이라(#4672) 여기서 다시 열면 같은 원문이 한 번 더 선다.
+    const folderRel = co.path.includes('/') ? co.path.slice(0, co.path.lastIndexOf('/')) : '';
+    if (!orig || mine) acts.append(el('a', { class: 'btn btn-sm', href: fileLinkHash(co.root, folderRel), text: '폴더에서 열기' }));
   } else if (s.external_url && String(s.external_url).startsWith('#')) {
     acts.append(el('a', { class: 'btn btn-sm v2-src-primary', href: String(s.external_url), text: '폴더에서 열기' }));
   } else if (s.external_url) {

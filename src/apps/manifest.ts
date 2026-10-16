@@ -55,6 +55,9 @@ export const PROJECT_FILES_TOOL = "app_project_files";
 export const WORKSPACE_FILES_TOOL = "app_workspace_files";
 /** #4673 — 「이 앱의 앱 폴더에 파일을 올리고 받기」 권한(permissions.app_folder)이 함의하는 능력 이름. 앱 주체가 file_url 로 제 앱 폴더(apps/<앱>/…)의 서명 주소를 받는다. */
 export const FILE_URL_TOOL = "file_url";
+/** #4488 — 「AI 실행」 권한(permissions.ai_runs)이 함의하는 능력 이름들(capabilities/ai-runs.ts AI_RUN_TOOLS 와 같은 글자). 앱 주소 /_lively/ai/* · lively.ai.* 가 이 도구를 grant 에서 찾는다. */
+export const AI_RUN_TOOLS = ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"] as const;
+export const AI_RUN_TOOL = AI_RUN_TOOLS[0];
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -101,7 +104,18 @@ const permissionsSchema = z.object({
   //  그 사람 이름으로 워크스페이스 저장소에 쓰는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 file_url 이 있어야 한다
   //  (files/file-access.ts). 남의 앱 폴더 · 공유 폴더는 이 선언으로 열리지 않는다(프로젝트 파일 읽기는 project_files 그대로).
   app_folder: z.boolean().default(false),
+  // #4488 — 이 앱이 **AI 를 실행**할 수 있나(/_lively/ai/runs · lively.ai.run). 기본 false(fail-closed). 워크스페이스 API 키의 돈을 쓰거나 그 사람 구독으로 작업을
+  //  돌리는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_ai_run 이 있어야 한다(ai-runs/service · 동의 창 web/v2/app-session.ts).
+  ai_runs: z.boolean().default(false),
 }).strict();
+
+// #4488 — AI 를 쓰는 작업 선언(ai.jobs). 이름으로 선언해 두면 워크스페이스 관리 도구(app_ai_account_set)에서 작업별 실행 계정을 따로 걸 수 있다(설계 §12 ④ 조건 ④).
+const aiJobSchema = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "ai.jobs[].name 은 소문자·숫자·_·- 1~64자"),
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+}).strict();
+const aiSchema = z.object({ jobs: z.array(aiJobSchema).max(32).default([]) }).passthrough().optional();
 
 const uiPageSchema = z.object({
   key: slugSchema,
@@ -279,6 +293,8 @@ export const appManifestSchema = z.object({
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
   agent: agentSchema,
+  //  #4488 AI 실행 작업 선언 — 최상위 passthrough 라 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  ai: aiSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
@@ -351,6 +367,10 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
     m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
   }
   // #4673 — `app_folder: true` 는 `file_url` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「앱 폴더에 파일을 올리고 받기」).
+  // #4488 — `ai_runs: true` 는 AI 실행 도구 다섯을 함의한다(사람에게 보이는 권한은 「AI 실행」, 도구 이름은 배관).
+  if (m.permissions.ai_runs) {
+    for (const t of AI_RUN_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
   if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];
   }

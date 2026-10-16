@@ -4,6 +4,8 @@
 //
 //  표 다섯:
 //   · collect_unit          — 단위 1행. 좌표 = 앱(source.external_system 과 같은 키) + 외부 인스턴스 + 단위 id.
+//                             공개범위(visibility) = 나만(me — owner_member 한 명) · 볼 수 있는 사람만(viewers) · 모두(all).
+//                             수집 전 검토에서 사람이 단위마다 정한다(리브가 종류별로 먼저 제안 — 상민님 2026-10-16).
 //                             경로(라이블리 수집기 / 구성원 Claude 커넥터 / 리브 직접 연결) · 상태 · 읽은 위치 · 주기 · 메타데이터.
 //   · collect_unit_member   — 볼 수 있는 구성원 = 담당 후보. priority 가 작을수록 먼저 모은다(1순위가 끊기면 다음).
 //                             verified_at 이 비면 «본인 신고만» — 후보(확인된 사람 뒤)일 뿐 자료는 열리지 않는다. 그 사람 커넥터로
@@ -16,6 +18,8 @@
 //   · collect_run          — 수집 실행(#4213 T11) 한 판 = 한 행. 시작에 그때 크기(상한·예약)를, 끝에 결과(성공·실패 사유)·최고 메모리·
 //                             걸린 시간·비용을 적는다. [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 의 실패율·메모리 지표가 이 표에서 나온다.
 //                             원문·결과 문장은 싣지 않는다(그 사람 홈의 실행 폴더에만 있다). 90일 지난 행은 지운다(run-log.ts).
+//                             목록·수집 실행은 계획(plan — 단위 id·ref·구간, 이름은 뺀다)과 저장 결과(ingest — 수)를 싣는다. ref 만으로도
+//                             «누가 어떤 비공개 대화를 읽었나» 가 보이므로 이 표도 DENIED_TABLES 에 올렸다(조회는 관리자 지표 표면으로만).
 //
 //  ⚠ tenant_id 는 boot/schemas.ts 의 ensureTenantColumn 이 붙인다. 자연키(collect_unit 좌표 · collect_assignee_state PK)는
 //   (tenant_id, …) 로 다시 쓰이므로 store 의 ON CONFLICT 는 tenant_id 를 명시한다. 대리키를 가리키는 PK(unit_id, …)는 그대로다.
@@ -57,6 +61,12 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS collect_unit_coord_uq ON collect_unit(app, instance, ref);
     CREATE INDEX IF NOT EXISTS collect_unit_collector_idx ON collect_unit(collector_id) WHERE collector_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS collect_unit_parent_idx ON collect_unit(parent_id) WHERE parent_id IS NOT NULL;
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'viewers';
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS owner_member TEXT;
+    ${ensureCheck("collect_unit", {
+      collect_unit_visibility_chk: "visibility IN ('me','viewers','all')",
+      collect_unit_owner_chk: "visibility <> 'me' OR owner_member IS NOT NULL",
+    })}
   `);
 
   await pool.query(`
@@ -133,5 +143,10 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
       collect_run_ended_by_chk: "ended_by IS NULL OR ended_by IN ('runner','gateway')",
     })}
     CREATE INDEX IF NOT EXISTS collect_run_started_idx ON collect_run(started_at DESC);
+    -- 저장 단계(#4213 T11): 실행 종류(probe · listing · collect) · 계획(단위·앱) · 저장 결과 · claude 를 띄운 수(커넥터가 안 떠 다시 띄운 것 포함)
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS mode TEXT;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS plan JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS ingest JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS attempts INT;
   `);
 }

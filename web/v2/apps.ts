@@ -96,10 +96,30 @@ export const CLASSIC_PAGES: Record<string, string> = {
   knowledge: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge', trash: 'knowledge',
   context: 'context',
   system: 'system', start: 'learn', onboarding: 'learn', install: 'learn',   // #/learn 은 셸이 직접 그린다(#4179). 여기 두면 클래식 액자가 먼저 선다
-  sessions: 'sessions', activate: 'system', f: 'knowledge',
+  sessions: 'sessions', activate: 'system',
+  //  'f'(파일 링크 #/f?root=&path=)는 여기 없다 — 셸이 자료 앱의 한 화면(자료 보기 #4672)으로 직접 그린다(main.ts 의 'f' 갈래).
 };
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden && (!a.tab || navOn(a.tab))); }
+
+/**
+ * 설치된 앱 하나를 연다 — 앱 찾기의 칸을 누를 때의 규칙 한 벌(자료 보기 #4672 의 «앱 열기» 도 이것을 쓴다).
+ *  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
+ *  여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
+ *  UI 앱이면 UI 를(샌드박스 iframe), 아니면 그 앱 전용 AI 세션을 연다.
+ */
+export function openAppEntry(a: SessionApp): void {
+  if (a.system?.route) { location.hash = a.system.route; return; }
+  if (a.pages.length > 0 || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
+}
+
+/** 앱 id 로 연다 — 지금 이 사람에게 서 있는 앱(앱 찾기와 같은 목록)이면 openAppEntry, 없으면 false(호출부가 말한다). */
+export async function openAppById(appId: string): Promise<boolean> {
+  const a = (await listSessionApps()).find((x) => x.id === appId);
+  if (!a) return false;
+  openAppEntry(a);
+  return true;
+}
 
 // ── 최근 쓴 앱(#1954) — 홈 한 줄이 읽는 기억. ──
 //  #2460 — **계정에 둔다**(종전엔 이 기기의 습관이라 브라우저에만 뒀다): 사무실 데스크톱에서 연 앱이
@@ -298,13 +318,7 @@ export function openLaunchpad(): void {
       const isScreen = !!a.system?.route || hasUi;
       const node = el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-        onclick: () => {
-          closeLaunchpad();
-          //  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
-          //   여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
-          if (a.system?.route) { location.hash = a.system.route; return; }
-          if (hasUi || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
-        } },
+        onclick: () => { closeLaunchpad(); openAppEntry(a); } },
         el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
         el('b', { text: a.title }),
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의

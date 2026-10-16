@@ -5,6 +5,7 @@ import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
 import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, logGroupFor, serverDeclOf } from "./app-server-config.js";
+import { mbOf } from "./app-server-policy.js";
 import { buildKeyFor, liveBuildProgress } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { revokeStaleFunctionTokens } from "./app-server-auth.js";
@@ -109,6 +110,49 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   return { removed: !!row && !pending, errors, pending };
 }
 
+/** 걷은 함수가 쓰던 빌드를 정리에서 빼 두는 날수(#4791) — 그동안 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다. */
+export const BUILD_KEEP_AFTER_RETIRE_DAYS = 30;
+
+/**
+ * 서버 선언을 뺀 앱의 함수를 걷는다(#4791) — 함수 · 로그 그룹 · 함수 줄. 빌드 기록 · zip 은 남긴다: 서버 판으로 되돌리면 그 빌드로 함수를 다시
+ *  만든다(빌드 없이). 별칭이 가리키던 빌드는 걷은 때부터 30일 정리 유예(keep_until)를 받는다. 잠금은 한 번만 잡아 본다(배포 중이면 다음 틱에 다시).
+ *  잠근 뒤 recheck 로 «아직도 쓰지 않나» 를 다시 본다 — 고를 때 읽은 매니페스트가 낡았을 수 있다(그 사이 서버 판을 저장 · 배포하면 지우지 않는다).
+ */
+export async function retireServer(appId: string, recheck: () => Promise<boolean>, deps0: ServerDeps = {}): Promise<{ retired: boolean; skipped?: string; errors: string[] }> {
+  const deps = withDeps(deps0);
+  const env = deps.env ?? appServerEnv();
+  if (!env) return { retired: false, skipped: "disabled", errors: [] };
+  const row = await st.getServerRow(appId);
+  if (!row) return { retired: false, skipped: "no-row", errors: [] };
+  if (!(await st.lockServer(appId, 5 * 60))) return { retired: false, skipped: "locked", errors: [] };
+  let gone = false;
+  const errors: string[] = [];
+  try {
+    if (!(await recheck())) return { retired: false, skipped: "in-use", errors };
+    const api = deps.api ?? realLambdaApi(env.region);
+    const own = await functionOwnership(api, row.function_name);
+    if (own === "foreign") errors.push(`함수: ${foreignMsg(row.function_name)} — 지우지 않았습니다`);
+    else if (own === "own") {
+      await api.deleteFunction(row.function_name);
+      await api.deleteLogGroup(logGroupFor(row.function_name)).catch((e) => errors.push(`로그: ${publicError(e)}`));
+    }
+    //  이 함수가 쓰던 빌드(별칭이 가리키던 빌드)에 정리 유예를 준다 — 줄을 지우면 별칭 참조가 사라져, 빌드한 지 30일이 지난 빌드는 같은 틱의
+    //   정리가 곧바로 지운다(격리 리뷰). 유예 동안은 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다.
+    await st.keepServerBuilds(appId, [row.cur_build_key, row.pub_build_key], BUILD_KEEP_AFTER_RETIRE_DAYS);
+    await st.deleteServerRow(appId);
+    gone = true;
+    //  #4485 — 걷은 함수 판에 구운 앱 서버 토큰도 회수한다(줄과 함께 토큰 기록이 사라지면 남은 토큰을 거둘 자리가 없다 · 못 거두면 다음 배포가 거둔다).
+    await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
+    return { retired: true, errors };
+  } catch (e) {
+    logger.warn({ err: e, appId, fn: row.function_name }, "서버 선언을 뺀 앱의 함수 걷기 실패 — 다음 틱에 다시(#4791)");
+    errors.push(`함수: ${publicError(e)}`);
+    return { retired: false, skipped: "error", errors };
+  } finally {
+    if (!gone) await st.unlockServer(appId).catch(() => { /* 저절로 풀린다 */ });
+  }
+}
+
 // ── 상태 ──
 
 export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise<Record<string, unknown>> {
@@ -117,6 +161,7 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
   const decl = serverDeclOf(app.manifest);
   const row = await st.getServerRow(app.id);
   const builds = await st.listServerBuilds(app.id, 5);
+  const retireDays = row?.unused_since ? (await st.appServerPolicy()).unused_retire_days : null;
   let installed: Record<string, unknown> | null = null;
   if (env && decl) {
     try {
@@ -144,6 +189,11 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       pub: row.pub_lambda_version ? { version_no: row.pub_version_no, lambda_version: row.pub_lambda_version, build_key: row.pub_build_key, at: row.pub_at } : null,
       stopped: row.stopped_at ? { at: row.stopped_at, by: row.stopped_by, kind: row.stop_kind, reason: row.stop_reason } : null,
       last_error: row.last_error,
+      code_mb: mbOf(row.code_bytes),   // #4792 이 함수의 코드 저장(판마다의 zip 합 · 워크스페이스 상한 workspace_code_mb 에 든다)
+      //  #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다 — retire_at 에 함수를 걷는다(서버 판을 다시 올리면 표시가 걷힌다 · 멈춘 함수는 걷지 않는다).
+      retire: row.unused_since && retireDays != null
+        ? { unused_since: row.unused_since, retire_at: new Date(new Date(row.unused_since).getTime() + retireDays * 86_400_000).toISOString(), stopped_kept: !!row.stopped_at }
+        : null,
     } : null,
     builds: builds.map((b) => ({
       build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,

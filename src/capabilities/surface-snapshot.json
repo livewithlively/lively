@@ -3952,7 +3952,7 @@
   "rest": [
    "POST /api/ui/collect/claude-runs"
   ],
-  "input_hash": "67f51bbc5a1a816b"
+  "input_hash": "bdeaf820fcf3a11f"
  },
  {
   "name": "collect_claude_run_get",
@@ -4022,7 +4022,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "1785e9eab4eb665b"
+  "input_hash": "76dc1ce8ab2d12f6"
  },
  {
   "name": "collect_unit_split",
@@ -4252,7 +4252,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "727188efb867982b"
+  "input_hash": "1c7a8ba26d261e7f"
  },
  {
   "name": "me_credential_verify",
@@ -4262,7 +4262,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "3a380d23c2aeb541"
+  "input_hash": "622aa3b0790ea9e7"
  },
  {
   "name": "me_credential_delete",
@@ -4272,7 +4272,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "8daa808bfbdb2617"
+  "input_hash": "55b7bc8dbf9bc33d"
  },
  {
   "name": "org_credentials",
@@ -4292,7 +4292,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "02bdf26b17416dfa"
+  "input_hash": "60a213310cbae503"
  },
  {
   "name": "org_credential_delete",
@@ -4302,7 +4302,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "bfa7865147308910"
+  "input_hash": "76273c5cb7da0d13"
  },
  {
   "name": "me_aws_credentials",
@@ -5353,7 +5353,37 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "3d319d82be5c7445"
+  "input_hash": "e7bde85461eb3c2c"
+ },
+ {
+  "name": "app_folder_limit_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/folder-limit"
+  ],
+  "input_hash": "50522ba02070ba2e"
+ },
+ {
+  "name": "app_folder_limits",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-folder-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_folder_usage_report",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-folder-usage"
+  ],
+  "input_hash": "376d085d1da9b35c"
  },
  {
   "name": "org_app_chat_send",
@@ -5424,5 +5454,155 @@
    "GET /api/ui/files/path"
   ],
   "input_hash": "a17b1277b546d6bc"
+ },
+ {
+  "name": "app_ai_run",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-runs"
+  ],
+  "input_hash": "8143941d8f503d5f"
+ },
+ {
+  "name": "app_ai_run_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-runs/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "app_ai_runs",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-runs"
+  ],
+  "input_hash": "bb0f2ea9b3caab27"
+ },
+ {
+  "name": "app_ai_run_cancel",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-runs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "app_ai_targets",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-targets"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_ai_account",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-account"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_ai_account_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-account"
+  ],
+  "input_hash": "9d69f75d8e124182"
+ },
+ {
+  "name": "app_ai_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-run-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_ai_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-run-limits"
+  ],
+  "input_hash": "8d6eea919f231c8c"
+ },
+ {
+  "name": "agent_job_run",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-jobs"
+  ],
+  "input_hash": "362bb170315aad34"
+ },
+ {
+  "name": "agent_job_get",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-jobs/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "agent_job_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-jobs"
+  ],
+  "input_hash": "731cb0d16cd0d66b"
+ },
+ {
+  "name": "agent_job_cancel",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-jobs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "agent_job_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-job-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "agent_job_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-job-limits"
+  ],
+  "input_hash": "dcb45d30d8b1a5f8"
  }
 ]

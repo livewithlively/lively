@@ -44,11 +44,12 @@ import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan,
 import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
 import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
-import { afterPublishServer, afterRevertServer, installedBuildState, publishServerDenial } from "../apps/app-server-deploy.js";
+import { afterPublishServer, afterRevertServer, installedBuildState, newFunctionDenial, publishServerDenial } from "../apps/app-server-deploy.js";
 import { appServerPolicy } from "../apps/app-server-store.js";
 import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
 import { resyncSessionsWithApp } from "../apps/session-app-folders.js";   // #4684 — 앱 상태·공개·동의가 바뀌면 붙은 세션의 앱 폴더를 다시 맞춘다
+import { appFolderUsageForView, folderFields } from "../apps/app-folder-quota.js";   // #4785 — 앱 폴더 상한 · 사용량 칸
 import { getMember } from "../org/store/members.js";
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
@@ -142,12 +143,15 @@ const appsIndex: Capability = {
     else if (input.include_empty !== true) rows = rows.filter((a) => !isEmptyDraftApp(a));
     //  공개 판을 볼 사람의 앱만 판 머리를 한 번에 읽는다 — 초안이 없는 앱(거의 전부)은 추가 조회가 없다.
     const heads = await store.listPublishedHeads(rows.filter((a) => appViewFor(a, who) === "published").map((a) => a.id));
+    //  #4785 앱 폴더 상한 · 사용량 — 한 번에 읽는다(CP 가 재어 보낸 것. 셀프호스트엔 없다).
+    const usage = await appFolderUsageForView(rows.map((a) => a.id));
     return {
       apps: rows.map((a) => {
         const v0 = appViewFor(a, who);
         const head = v0 === "published" ? heads.get(a.id) : undefined;
         const view: AppView = v0 === "published" && !head ? "installed" : v0;
-        return appRow(a, head ? asPublished(a, head) : a, who, view, a.origin_app_id ? byId.get(a.origin_app_id) ?? null : null);
+        return { ...appRow(a, head ? asPublished(a, head) : a, who, view, a.origin_app_id ? byId.get(a.origin_app_id) ?? null : null),
+          folder: folderFields(a, usage.get(a.id), isAppOwner(a, who) || isAdminViewer(who)) };
       }),
     };
   },
@@ -534,7 +538,9 @@ const appGet: Capability = {
     const app = await requireVisibleApp(id, who);
     const { view, app: shown } = await viewApp(app, who);
     const origin = app.origin_app_id ? await store.getApp(app.origin_app_id) : null;
-    return { app: appRow(app, shown, who, view, origin), components: await store.listComponents(id) };
+    const usage = (await appFolderUsageForView([id])).get(id);   // #4785
+    return { app: { ...appRow(app, shown, who, view, origin), folder: folderFields(app, usage, isAppOwner(app, who) || isAdminViewer(who)) },
+      components: await store.listComponents(id) };
   },
 };
 
@@ -1085,8 +1091,14 @@ const appRevert: Capability = {
     if (result.published && !("pubError" in result && result.pubError)) server = await serverAfterPublish(id);
     else if (result.changed && result.app && serverDeclOf(result.app.manifest) && appServerEnv()) {
       const app1 = result.app;
-      void appServerPolicy().then((p) => afterRevertServer(app1, p)).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
-      server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
+      const p = await appServerPolicy();
+      //  #4792 함수가 없는 앱이 워크스페이스 함수 수 상한에 닿았으면 뒤에서 옮기다 조용히 멈추지 말고 지금 알린다(격리 리뷰 — 줄이 없어 last_error 를 적을 곳이 없다).
+      const capWhy = await newFunctionDenial(app1.id, p).catch(() => null);
+      if (capWhy) server = { ok: false, state: "failed", message: `서버를 되돌린 판으로 옮기지 못했습니다: ${capWhy}` };
+      else {
+        void afterRevertServer(app1, p).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
+        server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
+      }
     }
     if (result.published) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     const after = result.app;
