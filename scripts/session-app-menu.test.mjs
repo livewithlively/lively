@@ -121,6 +121,26 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
     ok(/const page = segs\[0\] \|\| '';\n[\s\S]{0,400}?if \(page !== 'full'\) dismissAppUi\(\);/.test(MAIN), "S6-1b 화면을 옮기면(full 밖) 덮개를 걷는다 — 알림 클릭이 화면을 바꾼다");
     const full = (MAIN.match(/page === 'full' && segs\[1\]\) \{[\s\S]*?\n    \} else if/) || [""])[0];
     ok(/if \(!window\.opener\) \{ back\(\); return; \}/.test(full) && full.indexOf("if (!window.opener)") >= 0 && full.indexOf("if (!window.opener)") < full.indexOf("try { window.close(); }"), "S6-1c #/full 닫기는 스크립트가 연 창(window.opener)일 때만 window.close() — 아니면 그 자리에서 되돌아간다(데스크톱 앱 본 창이 숨지 않게)");
+    //  #4480 (2026-10-16 상민님 실측) — 채팅 링크로 연 크게 보기를 닫으니 보던 세션이 아니라 첫 화면(새 세션 자리)으로 갔다 · 크게 보기를 연 채
+    //   알림이 이미 열린 세션 탭을 켜면 덮개가 남았다(renderRoute 의 걷기는 처음 그리는 탭에서만 돈다) · 남은 크게 보기 탭이 «가장 최근에 보던 창» 으로
+    //   다시 뽑혀 닫은 앱 화면이 되살아났다(격리 리뷰 재현). 줄 맨 앞의 실제 코드만 본다(주석으로 인용해도 초록이 되지 않게).
+    const back = (full.match(/\n      const back = \(\): void => \{\n[\s\S]*?\n      \};\n/) || [""])[0];
+    ok(back.length > 0 && /\n        if \(histPos > 0\) \{ history\.back\(\); return; \}\n/.test(back)
+      && /\n        location\.replace\(location\.pathname \+ location\.search \+ \(sid \? '#\/s\/' \+ encodeURIComponent\(sid\) : '#\/'\)\);\n      \};\n$/.test(back)
+      && back.indexOf("history.back()") < back.indexOf("location.replace("),
+      "S6-1d 닫기는 셸 안에서 왔으면(histPos > 0) 뒤로 가기 — 이 화면으로 처음 열었을 때만 그 세션(없으면 첫 화면)");
+    const act = (MAIN.match(/\n    onActivate: \(tab, fresh\) => \{\n[\s\S]*?\n    \},\n/) || [""])[0];
+    ok(act.length > 0 && /\n      const left = prevActiveTab; prevActiveTab = tab;\n      if \(!isFullRoute\(tab\.route\)\) dismissAppUi\(\);\n/.test(act),
+      "S6-1e 다른 탭을 켜면 크게 보기 덮개를 걷는다(알림이 이미 열린 세션 탭을 켤 때)");
+    ok(/\n      if \(left && left !== tab && isFullRoute\(left\.route\)\) \{\n        window\.setTimeout\(\(\) => \{ if \(tabsApi && tabsApi\.tabs\.includes\(left\) && tabsApi\.current\(\) !== left && isFullRoute\(left\.route\)\) tabsApi\.close\(left\); \}, 0\);\n      \}\n      if \(fresh\) void renderRoute\(tab\);\n/.test(act),
+      "S6-1e 크게 보기 탭을 떠나면(뒤로 가기 · 알림 · 다른 탭) 그 탭은 다음 틱에 닫힌다 — 남아서 착지 후보가 되지 않게");
+    const alive = (MAIN.match(/\nfunction tabTargetAlive\(route: string\): boolean \{\n[\s\S]*?\n\}\n/) || [""])[0];
+    ok(alive.length > 0 && /\n  if \(isFullRoute\(route\)\) return false;\n  return true;\n\}\n$/.test(alive) && /^const isFullRoute = \(route: string\): boolean => parseRoute\(route\)\.segs\[0\] === 'full';$/m.test(MAIN),
+      "S6-1e 크게 보기 탭은 착지 후보가 아니다(tabTargetAlive → canLand) — 닫은 앱 화면이 «가장 최근에 보던 창» 으로 되살아나지 않게");
+    const openUi = UI.slice(UI.indexOf("export async function openAppUi"), UI.indexOf("function uiKey")).split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");   // 주석은 빼고 코드만
+    ok(UI.indexOf("export async function openAppUi") >= 0 && openUi.length > 0 && /el\('span', \{ text: '닫기' \}\)\)\),/.test(openUi) && !/v2-appui-esc|\(Esc\)/.test(openUi)
+      && /^function uiKey\(e: KeyboardEvent\): void \{ if \(e\.key === 'Escape'\) closeAppUi\(\); \}$/m.test(UI),
+      "S6-1f 크게 보기 닫기 단추엔 «(Esc)» 안내가 없다(앱 화면을 누르면 Esc 가 앱으로 간다) — Esc 키 처리는 남는다");
   }
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];

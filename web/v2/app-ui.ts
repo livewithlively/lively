@@ -507,8 +507,9 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
           //  #4482 맨 앱 주소를 새 탭으로(라이블리 밖 · 폰 홈 화면) — 앱 주소가 켜진 워크스페이스에서만.
           ...(f.addressUrl() ? [el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '앱 주소를 새 탭에서 엽니다 — 라이블리 밖에서도 표 · 설정 · 앱 폴더가 그대로 돕니다',
             onclick: () => { const u = f.addressUrl(); if (u) window.open(u, '_blank', 'noopener'); } }, el('span', { text: '새 탭에서 열기' }))] : []),
-          //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
+          //  «(Esc)» 안내는 걷었다(2026-10-16 상민님) — 앱 화면을 한 번 누르면 Esc 는 앱 문서로 가서 셸이 못 받는다. 키(uiKey)는 셸에 초점이
+          //   있을 때만 먹으니 남기되 늘 되는 것처럼 적지 않는다.
+          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }))),
         f.root));
     document.body.append(uiEl as HTMLElement);
     document.addEventListener('keydown', uiKey);
