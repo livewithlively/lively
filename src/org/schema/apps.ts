@@ -439,6 +439,44 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_app_live_idx ON org_session_app(session_id) WHERE detached_at IS NULL;`);
 
+  //  #4785 — 앱 폴더 상한(GiB). NULL = 무제한(기본 — 상민님 2026-10-16). 관리자 · 앱 책임자가 앱마다 건다(app_folder_limit_set).
+  //   실제로 거는 것은 CP 의 5분 쿼터 정비다(JuiceFS `/<워크스페이스>/apps/<앱>` — lvly-cloud appfolderquota.ts). 이 열은 «원하는 상한» 이고,
+  //   지금 걸려 있는 값은 아래 사용량 행(limit_gb)이 말한다.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS folder_limit_gb INT;`);
+
+  // ── org_app_folder_usage — 앱 폴더 사용량(#4785) ──
+  //  CP 가 5분마다 JuiceFS 쿼터 목록에서 읽어 보낸다(app_folder_usage_report). limit_gb = 잰 때 걸려 있던 상한(NULL = 무제한).
+  //  warned_level = 알린 단계(0 · 80 · 100) — 같은 단계는 거듭 알리지 않는다. 붙든 단계는 10%p 아래로 내려가야 놓는다(100 은 90%,
+  //   80 은 70% 아래 — apps/app-folder-quota.heldLevel). 알림이 한 장도 저장되지 않으면 올리지 않는다. warned_at = 알림이 실제로 저장된 때.
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱을 지울 때 remove-run 이 함께 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_folder_usage(
+      app_id TEXT PRIMARY KEY,
+      used_bytes BIGINT NOT NULL,
+      limit_gb INT,
+      measured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      warned_level INT NOT NULL DEFAULT 0 CHECK (warned_level IN (0, 80, 100)),
+      warned_at TIMESTAMPTZ
+    );
+  `);
+
+  // ── org_session_app_folder — 세션의 앱 폴더를 노드 브로커가 마지막으로 어떻게 맞췄나(#4786 주기 재조정) ──
+  //  붙은 앱 기록(org_session_app)은 «무엇을 붙여야 하나» 이고 이 행은 «노드에 지금 무엇이 붙어 있다고 들었나» 다. 앱을 지우거나 뗀 뒤
+  //  맞추기가 실패하면 붙은 기록은 사라지거나 떼어진 채인데 노드엔 폴더가 남는다 — 주기 맞추기는 이 행으로 그 세션을 찾는다.
+  //  state: ok(다 맞췄다) · failed(일부 못 붙이거나 못 뗐다) · unsupported(접점 없는 옛 컨테이너) · not-running(컨테이너 없음) ·
+  //   error(브로커·DB 실패 — bound 는 모른다) · old-broker. 세션마다 한 행 — 끝났거나 이어진 세션의 행은 주기 정비가 지운다(FK 없음).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_app_folder(
+      session_id TEXT PRIMARY KEY,
+      bound JSONB NOT NULL DEFAULT '[]'::jsonb,
+      state TEXT NOT NULL CHECK (state IN ('ok','failed','unsupported','not-running','error','old-broker')),
+      detail TEXT,
+      checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      fixed_count INT NOT NULL DEFAULT 0,
+      last_fixed_at TIMESTAMPTZ
+    );
+  `);
+
   // ── org_app_snapshot — 앱 데이터 일일 내보내기(#4226) ──
   //  앱 자유 SQL 은 AI 한 줄로 행을 지울 수 있다. RDS 백업(7일)은 DB 전체 단위라 한 워크스페이스·한 앱만 되돌릴 수 없다 →
   //  (워크스페이스, 앱) 데이터를 하루 한 번 떠 둔다(7일 보관). 앱 제거·복원 직전에도 뜬다(reason). 테이블 하나의 행을

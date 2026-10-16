@@ -32,6 +32,7 @@ import { appChatSendCapabilities } from "./app-chat-send.js";
 import { appProjectFilesCapabilities } from "./app-project-files.js";
 import { appBundleCapabilities } from "./app-bundles.js";
 import { appServerCapabilities } from "./app-servers.js";
+import { appFolderCapabilities } from "./app-folders.js";
 import { appPrefsCapabilities } from "./app-prefs.js";
 import { appLaunchCapabilities } from "./app-launch.js";
 import { fileCapabilities } from "./files.js";
@@ -165,6 +166,7 @@ const all: Capability[] = [
   ...appProjectFilesCapabilities, // #4592 붙은 앱 화면이 그 세션 프로젝트의 자료에서 파일 목록 · 내용을 읽는다(org_app_project_files · org_app_project_file, REST 전용 · 읽기만).
   ...appBundleCapabilities, // #4481 앱 판 파일 상한 보기(구성원) · 고치기(관리자) — 배포 없이 바뀌는 판·파일·워크스페이스 상한.
   ...appServerCapabilities, // #4484 앱 서버 — 빌드·배포(app_server_deploy, 그 판을 저장한 사람의 세션에서 빌드 → Lambda) · 상태 · 멈춤 · 다시 켜기 · 상한.
+  ...appFolderCapabilities, // #4785 앱 폴더 상한 — 바꾸기(책임자 · 관리자) · CP 쿼터 정비가 읽는 상한 목록 · 잰 사용량 받기(80% · 100% 알림).
   ...appChatSendCapabilities, // #4594 붙은 앱 화면이 그 세션에 글을 바로 보낸다(org_app_chat_send, REST 전용) — 서버가 「(앱 「제목」에서 보냄)」 표식을 붙인다.
   ...appPrefsCapabilities, // #4601 앱 × 보는 사람 개인 설정(app_prefs_get/set, REST 전용) — 샌드박스 앱 화면은 localStorage 가 없고 SDK 에 신원이 없어 서버가 든다.
   ...appLaunchCapabilities, // #4480 v2-1 앱 주소(<앱>-<워크스페이스>.lvly.app)로 들어갈 일회용 코드(org_app_launch, REST 전용) — 사람 구성원 본인만.

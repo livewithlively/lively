@@ -162,6 +162,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 목록·장부·얼굴 줄 전부 그 워크스페이스 것이다.
   { key: "session-stop-rule", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("./session-stop-rule.js").then((m) => m.sweepSessionStopRule()) },
+  // 앱 폴더 주기 재조정(#4786) — 사건(붙이기 · 떼기 · 앱 끄기 · 동의 회수 …)으로 맞추다 실패한 세션(브로커 무응답 · 시간초과 · 노드 재기동)을
+  //  다시 맞춘다. 대상 고르기 · 동시 수 · 고친 횟수는 apps/session-app-folders.ts 의 «주기 재조정» 절. 요약(대상 · 고침 · 실패 …)이 이 로그에 찍힌다.
+  //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.
+  { key: "app-folders", intervalMs: SWEEP_MIN_INTERVAL_MS,
+    run: () => import("../apps/session-app-folders.js").then((m) => m.sweepAppFolders()) },
 ];
 
 //  ⚠ 인메모리다. 게이트웨이가 재기동하면 비는데, **그게 맞다**: 재기동이야말로 배달 루프를 죽여
