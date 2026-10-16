@@ -24,6 +24,7 @@
 //  Gemini(agy)는 비대화형 로그인이 없고 자격이 키링이라 판으로 옮길 수 없다 — 종전 세션 경로(예외).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
+import { createHash } from "node:crypto";
 import { EXIT_MARK, aiLoginStep, parseAiLogin, isAiLoginHarness, type AiLoginHarness } from "./ai-login-flow.js";
 import { headlessStateOf, isHeadlessLoginHarness, type HeadlessLoginHarness } from "./headless-login-flow.js";
 import {
@@ -590,6 +591,35 @@ export async function sweepLoginJobs(inject: Partial<LoginJobDeps> = {}): Promis
  *  · claude 는 `.claude.json` 의 oauthAccount 만 바꾼다(격리 멤버는 CLAUDE_CONFIG_DIR 없이 홈의 `.claude.json` 을 쓴다).
  *    그 파일이 링크거나 JSON 객체가 아니면 건드리지 않는다 — 사람의 설정을 망가뜨리느니 계정 표시가 늦는 편이 낫다.
  */
+export function codexAccountPolicyFromAuthText(text: string): { version: 1; account_fingerprint: string } | null {
+  let auth: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    auth = parsed as Record<string, unknown>;
+  } catch { return null; }
+  const tokens = auth.tokens && typeof auth.tokens === "object" && !Array.isArray(auth.tokens)
+    ? auth.tokens as Record<string, unknown> : {};
+  let accountId = typeof tokens.account_id === "string" ? tokens.account_id.trim() : "";
+  if (!accountId) {
+    for (const token of [tokens.id_token, tokens.access_token, auth.id_token, auth.access_token]) {
+      if (typeof token !== "string") continue;
+      const payload = token.split(".")[1];
+      if (!payload) continue;
+      try {
+        const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+        const ns = claims["https://api.openai.com/auth"];
+        const scoped = ns && typeof ns === "object" && !Array.isArray(ns) ? ns as Record<string, unknown> : {};
+        const candidate = [claims.account_id, claims.chatgpt_account_id, scoped.account_id, scoped.chatgpt_account_id]
+          .find((v) => typeof v === "string" && v.trim());
+        if (typeof candidate === "string") { accountId = candidate.trim(); break; }
+      } catch { /* 다음 토큰 후보 */ }
+    }
+  }
+  if (!accountId) return null;
+  return { version: 1, account_fingerprint: createHash("sha256").update(accountId, "utf8").digest("hex") };
+}
+
 export const INSTALL_LOGIN_JS = [
   `const fs=require("fs"),path=require("path");`,
   `let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{`,
@@ -603,11 +633,19 @@ export const INSTALL_LOGIN_JS = [
   `let st=null;try{st=noLink(dir);}catch(e){if(!(e&&e.code==="ENOENT"))throw e;}`,
   `if(!st)fs.mkdirSync(dir,{mode:0o700});else if(!st.isDirectory())throw new Error("폴더가 아닙니다: "+path.relative(home,dir));`,
   `const tmp=abs+".lvly-"+process.pid;fs.writeFileSync(tmp,f.content,{mode:0o600});fs.chmodSync(tmp,0o600);fs.renameSync(tmp,abs);}`,
+  `let codexPolicy="not-requested";`,
+  `if(i.codexPolicy){const ld=path.join(home,".lively"),cp=path.join(ld,"codex-account.json");`,
+  `let ds=null;try{ds=noLink(ld);}catch(e){if(!(e&&e.code==="ENOENT"))throw e;}`,
+  `if(!ds){fs.mkdirSync(ld,{mode:0o700});fs.chmodSync(ld,0o700);}else if(!ds.isDirectory())throw new Error(".lively가 폴더가 아닙니다");`,
+  `try{noLink(cp);codexPolicy="existing";}catch(e){if(!(e&&e.code==="ENOENT"))throw e;`,
+  `const tmp=cp+".lvly-"+process.pid;fs.writeFileSync(tmp,JSON.stringify(i.codexPolicy,null,2)+"\\n",{mode:0o600});fs.chmodSync(tmp,0o600);`,
+  `try{fs.linkSync(tmp,cp);codexPolicy="created";}catch(x){if(x&&x.code==="EEXIST")codexPolicy="existing";else throw x;}finally{try{fs.unlinkSync(tmp);}catch{}}}`,
+  `}`,
   `let merged=false;`,
   `if(i.account){const cj=path.join(home,".claude.json");let o={},mode=0o600,ok=true;`,
   `try{const st=fs.lstatSync(cj);if(st.isSymbolicLink()||!st.isFile())ok=false;else{mode=st.mode&0o777;o=JSON.parse(fs.readFileSync(cj,"utf8"));if(!o||typeof o!=="object"||Array.isArray(o))ok=false;}}catch(e){if(!(e&&e.code==="ENOENT"))ok=false;}`,
   `if(ok){o.oauthAccount=i.account;const tmp=cj+".lvly-"+process.pid;fs.writeFileSync(tmp,JSON.stringify(o,null,2),{mode});fs.chmodSync(tmp,mode);fs.renameSync(tmp,cj);merged=true;}}`,
-  `process.stdout.write(JSON.stringify({ok:true,merged}));});`,
+  `process.stdout.write(JSON.stringify({ok:true,merged,codexPolicy}));});`,
 ].join("");
 
 async function installLoginCredential(o: {
@@ -619,9 +657,14 @@ async function installLoginCredential(o: {
   //  종전 로그인 자리와 같은 규칙(profiles.userSlug = memberSlug(userId)) — 로그인 확인(aiAccountStatus)이 보는 그 홈이다.
   const osUser = await resolveMemberOsUser(memberSlug(o.memberId));
   if (!osUser) throw new Error("멤버 홈을 찾지 못했습니다");
-  const r = await memberNodeJson<{ ok?: boolean; merged?: boolean }>(osUser, INSTALL_LOGIN_JS, {
-    home: `${MEMBER_HOME_BASE}/${osUser}`, files: o.files, account: o.account,
+  const codexAuth = o.harness === "codex" ? o.files.find((f) => f.path === ".codex/auth.json")?.content : undefined;
+  const codexPolicy = codexAuth ? codexAccountPolicyFromAuthText(codexAuth) : null;
+  const r = await memberNodeJson<{ ok?: boolean; merged?: boolean; codexPolicy?: string }>(osUser, INSTALL_LOGIN_JS, {
+    home: `${MEMBER_HOME_BASE}/${osUser}`, files: o.files, account: o.account, codexPolicy,
   });
   if (!r?.ok) throw new Error("멤버 홈 쓰기가 끝나지 않았습니다");
   if (o.account && !r.merged) logger.warn({ member: o.memberId }, "login-job: .claude.json 에 계정 정보를 합치지 않음(링크·형식)");
+  if (o.harness === "codex" && r.codexPolicy === "not-requested") {
+    logger.warn({ member: o.memberId }, "login-job: Codex account id를 확인하지 못해 Lively 계정 경계를 만들지 않음");
+  }
 }

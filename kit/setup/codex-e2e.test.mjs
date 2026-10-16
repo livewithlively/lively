@@ -147,6 +147,9 @@ function setup() {
   writeFileSync(join(BUNDLE, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
   // 사용자 영역 config.toml — 스텁 프로바이더(로그인 게이트 우회). 설치기는 센티넬 블록만 덧붙이고 이 줄들을 보존한다.
   mkdirSync(CODEXHOME, { recursive: true });
+  // 계정 gate는 실제 로그인 자격을 샌드박스로 복사하지 않는다. 합성 account id로 설치 정책을 만들고
+  // 같은 합성 auth를 유지해 hook/MCP 실행 경계만 E2E로 검증한다(토큰·실 account id 무접촉).
+  writeFileSync(join(CODEXHOME, "auth.json"), JSON.stringify({ tokens: { account_id: "codex-e2e-enrolled" } }));
   writeFileSync(join(CODEXHOME, "config.toml"), [
     'model_provider = "stub"',
     'model = "stub-1"', "",
