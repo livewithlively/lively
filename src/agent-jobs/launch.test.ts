@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { jobTmuxArgv, redactSecret, killJobContainer } from "./launch.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV } from "./runner.js";
 import { outcomeToError, sessionGoneResult } from "../terminal/tmux-route.js";
+import { sessionPaneArgv } from "../terminal/session-tmux.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -47,6 +48,13 @@ await t("L2 부트 비밀은 env(-e) 한 자리에만 — 명령줄 다른 곳�
   assert.equal(a[hits[0]![1] - 1], "-e");
   assert.ok(a.includes(`${JOB_ID_ENV}=7`));
   assert.ok(a.includes("LIVELY_SESSION_KIND=task"), "훅이 사람 세션 일을 하지 않게");
+});
+
+await t("L1b 판 명령 꼬리는 사람 세션의 판 argv(sessionPaneArgv)와 같은 꼴 — 사람 세션 규약이 바뀌면 여기서 먼저 빨개진다", () => {
+  const a = jobTmuxArgv(base);
+  const tail = sessionPaneArgv(base.cwd, ["node", "-e", BOOT_SOURCE]);
+  assert.deepEqual(a.slice(-tail.length).slice(1), tail.slice(1), "box-spawn 뒤 꼴(--cwd · 작업 폴더 · 명령)이 같다");
+  assert.equal(a[a.length - tail.length], base.boxSpawn, "box-spawn 자리(시험은 경로를 바꿔 끼운다)");
 });
 
 await t("L3 비밀 가리기 — 실패 문장에 몇 번 나와도 다 가린다 · 빈 비밀이면 그대로", () => {

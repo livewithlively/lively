@@ -104,6 +104,15 @@ try {
     chk("A4 대기열 0 — 첫 건은 받고, 대기가 생기면 거절", !!a.row && !!b.full, JSON.stringify({ a: !!a.row, b }));
   }
 
+  // A4b — 대기열 0 에서 «띄우는 중» 은 실행으로 센다(자리가 없으면 대기가 비어도 거절).
+  {
+    await cleanup();
+    const a = await st.insertAgentJob(job("z3"), { max_queued: 0, max_running: 1 });
+    await claimAll();                                           // 그 작업이 자리를 받아 띄우는 중이 됐다
+    const b = await st.insertAgentJob(job("z4"), { max_queued: 0, max_running: 1 });
+    chk("A4b 대기열 0 — 띄우는 중인 작업이 자리를 차지하면 다음 접수는 거절", !!a.row && !!b.full && b.full.running === 1 && b.full.queued === 0, JSON.stringify(b));
+  }
+
   // A5 — 끝난 작업은 대기열 셈에 들지 않는다(셈이 열린 작업만 본다).
   {
     await cleanup();
@@ -188,6 +197,20 @@ try {
     const er = await row(e);
     chk("D4 고른 뒤 끝난 행은 넘기지 않는다(끝난 작업이 띄워지지 않는다)", claimedRows.length === 0 && er.status === "canceled" && er.session_id === null,
       JSON.stringify({ claimed: claimedRows.map((x) => x.row.id), status: er.status, sid: er.session_id }));
+    //  D5 — 고른 뒤 취소 요청이 걸리면(끝내기 전) 넘기지 않는다 — 취소된 작업의 컨테이너·하네스가 첫 박동까지 도는 틈을 닫는다.
+    await cleanup();
+    const f5 = await add("c6");
+    const side2 = await itemsPool.connect();
+    await side2.query("BEGIN");
+    await side2.query(`UPDATE org_agent_job SET cancel_requested=true WHERE id=$1`, [f5]);
+    let claimed5 = null;
+    const pc5 = claimAll().then((x) => { claimed5 = x; });
+    await sleep(400);
+    await side2.query("COMMIT"); side2.release();
+    await pc5;
+    const fr = await row(f5);
+    chk("D5 고른 뒤 취소 요청이 걸린 행은 넘기지 않는다", claimed5.length === 0 && fr.status === "queued" && fr.cancel_requested === true,
+      JSON.stringify({ claimed: claimed5.map((x) => x.row.id), status: fr.status }));
   }
 
   // ── E. 무응답은 쓰는 순간 다시 잰다 ────────────────────────────────────────
@@ -214,15 +237,26 @@ try {
     await cleanup();
     const id = await add("r1");
     await claimAll();
-    const back = await st.requeueAgentJob(id, "띄우기 실패 — 다시 기다립니다: x");
+    const back = await st.requeueAgentJob(id, "띄우기 실패 — 다시 기다립니다: x", 5);
     const r = await row(id);
     chk("F1 띄우는 중이면 대기열로 되돌리고 세션·부트 비밀·자리 받은 시각을 지운다",
       back === true && r.status === "queued" && r.session_id === null && r.boot_hash === null && r.claimed_at === null && /다시 기다립니다/.test(r.error),
       JSON.stringify({ back, s: r.status, sid: r.session_id }));
-    chk("F2 대기 중이면 되돌릴 것이 없다(false)", (await st.requeueAgentJob(id, "x")) === false);
+    chk("F2 대기 중이면 되돌릴 것이 없다(false)", (await st.requeueAgentJob(id, "x", 5)) === false);
     await claimAll();
     await st.requestCancelAgentJob(id);
-    chk("F3 취소 요청이 있으면 되돌리지 않는다", (await st.requeueAgentJob(id, "x")) === false && (await row(id)).status === "starting");
+    chk("F3 취소 요청이 있으면 되돌리지 않는다", (await st.requeueAgentJob(id, "x", 5)) === false && (await row(id)).status === "starting");
+    //  F4 — 다시 자리를 받으면 지난 실패 사유를 비우고 시도 횟수를 센다 · F5 — 시도 상한에 닿으면 되돌리지 않는다.
+    await cleanup();
+    const r2 = await add("r2");
+    await claimAll();
+    await st.requeueAgentJob(r2, "띄우기 실패 — 다시 기다립니다: y", 5);
+    await claimAll();
+    const again = await row(r2);
+    chk("F4 다시 자리를 받으면 지난 실패 사유를 비우고 시도 횟수가 2", again.status === "starting" && again.error === null && again.attempts === 2,
+      JSON.stringify({ s: again.status, e: again.error, a: again.attempts }));
+    chk("F5 시도 상한(2)에 닿았으면 되돌리지 않는다(부르는 쪽이 실패로 끝낸다)", (await st.requeueAgentJob(r2, "z", 2)) === false && (await row(r2)).status === "starting");
+    chk("F5 상한 밑이면 되돌린다", (await st.requeueAgentJob(r2, "z", 3)) === true && (await row(r2)).status === "queued");
   }
 
   // ── G·H. 작업 토큰 ────────────────────────────────────────────────────────
@@ -257,10 +291,55 @@ try {
     const open = (await st.openAgentJobs(50)).find((x) => x.id === id);
     chk("I3 감시가 읽는 행엔 프롬프트·결과가 없고 오류는 600자까지", open && !("prompt" in open) && !("result" in open) && open.error.length === 600, JSON.stringify(open && Object.keys(open)));
   }
+
+  // ── K. 멈춘 사유 ──────────────────────────────────────────────────────────
+  {
+    await cleanup();
+    const a = await running("k1");
+    await st.requestCancelAgentJob(a, "앱을 더 쓸 수 없게 돼 멈췄습니다");
+    const ea = await st.finishAgentJob(a, { status: "canceled", error: "취소했습니다", from: ["running"] });
+    chk("K1 사람이 아닌 쪽이 멈춘 작업은 그 사유로 끝난다", ea?.error === "앱을 더 쓸 수 없게 돼 멈췄습니다", JSON.stringify(ea?.error));
+    const b = await running("k2");
+    await st.requestCancelAgentJob(b);
+    const eb = await st.finishAgentJob(b, { status: "canceled", error: "취소했습니다", from: ["running"] });
+    chk("K2 사람이 누른 취소는 «취소했습니다»", eb?.error === "취소했습니다", JSON.stringify(eb?.error));
+    const c = await running("k3");
+    await st.requestCancelAgentJob(c, "사유");
+    const ec = await st.finishAgentJob(c, { status: "done", error: null, from: ["running"] });
+    chk("K3 취소가 걸렸어도 답을 내고 끝났으면(done) 사유를 오류로 적지 않는다", ec?.status === "done" && ec?.error === null, JSON.stringify(ec && { s: ec.status, e: ec.error }));
+  }
+
+  // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
+  {
+    const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;
+    const set = caps.find((c) => c.name === "agent_job_limits_set");
+    const admin = { userId: `${REQ}admin`, email: "", scopes: ["admin"], projects: ["*"] };
+    const ctx = { source: "pg-test" };
+    const hasRow = (await itemsPool.query(`SELECT 1 FROM org_runtime_config WHERE id=1`)).rows.length === 1;
+    if (!hasRow) throw new Error("org_runtime_config 에 id=1 행이 없다(스키마 준비가 덜 됐다)");
+    await set.handler({ reset: true }, admin, ctx);
+    const r1 = await set.handler({ max_running: 4 }, admin, ctx);
+    const r2 = await set.handler({ max_queued: 7 }, admin, ctx);
+    chk("J1 준 값만 바꾸고 이미 적힌 값은 남긴다", r1.policy.max_running === 4 && r2.workspace_setting.max_running === 4 && r2.workspace_setting.max_queued === 7,
+      JSON.stringify(r2.workspace_setting));
+    let rejected = null;
+    try { await set.handler({ max_running_per_member: 9 }, admin, ctx); } catch (e) { rejected = e; }
+    const stored = (await itemsPool.query(`SELECT agent_job_policy FROM org_runtime_config WHERE id=1`)).rows[0].agent_job_policy;
+    //  jsonb 는 키 순서를 제 식으로 저장한다 — 칸별로 견준다.
+    chk("J2 어긋난 조합(사람당 9 > 동시 4)은 400 으로 거절하고 저장값은 그대로",
+      rejected?.status === 400 && Object.keys(stored).length === 2 && stored.max_running === 4 && stored.max_queued === 7,
+      JSON.stringify({ status: rejected?.status, stored }));
+    let ranged = null;
+    try { await set.handler({ max_queued: 501 }, admin, ctx); } catch (e) { ranged = e; }
+    chk("J3 범위 밖 값은 400", ranged?.status === 400);
+    const r4 = await set.handler({ reset: true }, admin, ctx);
+    chk("J4 reset 은 워크스페이스 값을 비운다", JSON.stringify(r4.workspace_setting) === "{}" && r4.source !== "db", JSON.stringify(r4.workspace_setting));
+  }
 } catch (e) {
   bad("예외", String((e && e.stack) || e));
 } finally {
   await cleanup().catch(() => {});
+  await itemsPool.query(`UPDATE org_runtime_config SET agent_job_policy='{}'::jsonb WHERE id=1`).catch(() => {});
   await itemsPool.end().catch(() => {});
 }
 

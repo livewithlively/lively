@@ -188,7 +188,7 @@ export function finalOutcome(r: RunnerReport): { status: "done" | "failed" | "ti
 /** (순수) 보고 본문을 모양대로 고른다 — 판이 보낸 것은 컨테이너 안(작업 AI 가 닿는 자리)에서 왔으므로 칸마다 거르고 자른다. */
 export function parseRunnerReport(body: unknown): RunnerReport {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
-  const str = (v: unknown, max: number): string | null => (typeof v === "string" ? noNul(v).slice(0, max) : null);
+  const str = (v: unknown, max: number): string | null => (typeof v === "string" ? wellFormed(noNul(v).slice(0, max)) : null);
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const res = b.result && typeof b.result === "object" ? b.result as Record<string, unknown> : null;
   const usage = res?.usage && typeof res.usage === "object" && !Array.isArray(res.usage) ? res.usage as Record<string, unknown> : null;
@@ -218,6 +218,13 @@ export function parseRunnerReport(body: unknown): RunnerReport {
  */
 export function noNul(s: string): string {
   return s.includes("\u0000") ? s.split("\u0000").join("") : s;
+}
+/**
+ * (순수) 짝 없는 서로게이트를 U+FFFD 로 — jsonb 는 `\ud83d` 같은 외톨이를 받지 않는다(«invalid input syntax for type json»).
+ *  답이 상한에서 잘리며 이모지 한 쌍이 갈라지면 생긴다 — NUL 과 같은 계열(보고 한 번이 500 → 판이 지쳐 빠지면 결과 유실). 재리뷰 실측.
+ */
+export function wellFormed(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
 }
 /** 종료코드 — INT 칸에 들어가는 정수만(1.5 · 1e12 는 버린다). */
 function int32(v: unknown): number | null {

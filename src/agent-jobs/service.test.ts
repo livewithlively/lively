@@ -7,7 +7,7 @@ import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
   submitAgentJob, onBoot, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob,
-  REAP_DELAY_MS, REAP_GIVE_UP_MS, type AgentJobDeps,
+  REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, APP_REVOKED_REASON, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
 import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE } from "./runner.js";
@@ -51,6 +51,8 @@ interface World {
   beforeFinish: ((id: number) => void) | null;
   claims: number;
   listening: number;
+  /** 다음 부트를 «다른 판이 먼저 물었다» 로 만든다(한 번). */
+  bootRace: boolean;
   available: boolean;
   policy: AgentJobPolicy;
   usable: Set<string>;     // `${member}:${app}` — 그 앱을 쓸 수 있다
@@ -77,8 +79,8 @@ function world(): World {
         project_id: j.projectId, cwd: j.cwd, harness: j.harness, model: j.model, label: j.label, prompt: j.prompt,
         resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, session_id: null,
         boot_hash: null, secret_hash: null, mcp_token_hash: null, conversation_id: null, output_tail: "", result: null, exit_code: null,
-        error: null, cancel_requested: false, created_at: new Date(now), claimed_at: null, started_at: null, last_tick_at: null,
-        ended_at: null, reaped: false,
+        error: null, cancel_requested: false, cancel_reason: null, attempts: 0, created_at: new Date(now), claimed_at: null, started_at: null,
+        last_tick_at: null, ended_at: null, reaped: false,
       };
       rows.set(id, row);
       return { row: { ...row } };
@@ -91,15 +93,15 @@ function world(): World {
       return pick.map((id) => {
         const m = mint(id);
         const r = rows.get(id)!;
-        Object.assign(r, { status: "starting", claimed_at: new Date(now), session_id: m.sessionId, boot_hash: m.boot.hash });
+        Object.assign(r, { status: "starting", claimed_at: new Date(now), session_id: m.sessionId, boot_hash: m.boot.hash, error: null, attempts: r.attempts + 1 });
         return { row: { ...r }, bootSecret: m.boot.secret };
       });
     },
     async getAgentJob(id) { const r = rows.get(id); return r ? { ...r } : null; },
     async getAgentJobAuth(id) { const r = rows.get(id); return r ? { id: r.id, status: r.status, boot_hash: r.boot_hash, secret_hash: r.secret_hash } : null; },
-    async requeueAgentJob(id, why) {
+    async requeueAgentJob(id, why, maxAttempts) {
       const r = rows.get(id);
-      if (!r || r.status !== "starting" || r.cancel_requested) return false;
+      if (!r || r.status !== "starting" || r.cancel_requested || r.attempts >= maxAttempts) return false;
       Object.assign(r, { status: "queued", session_id: null, boot_hash: null, claimed_at: null, error: why });
       return true;
     },
@@ -107,6 +109,7 @@ function world(): World {
       return [...rows.values()].some((r) => (!ended(r.status) || !r.reaped) && !!r.mcp_token_hash && r.mcp_token_hash.startsWith(prefix));
     },
     async bootAgentJob(id, bootHash, secretHash) {
+      if (w.bootRace) { w.bootRace = false; return null; }   // 다른 판이 먼저 물었다(같은 비밀로 겹친 부트)
       const r = rows.get(id);
       if (!r || r.status !== "starting" || r.boot_hash !== bootHash) return null;
       Object.assign(r, { status: "running", started_at: new Date(now), last_tick_at: new Date(now), boot_hash: null, secret_hash: secretHash });
@@ -134,16 +137,18 @@ function world(): World {
         if (!(heard < now - o.silentSec * 1000)) return null;
       }
       Object.assign(r, {
-        status: o.status, error: o.error ?? null, result: o.result ?? r.result, exit_code: o.exitCode ?? r.exit_code,
+        status: o.status, error: o.status === "canceled" && r.cancel_reason ? r.cancel_reason : (o.error ?? null),
+        result: o.result ?? r.result, exit_code: o.exitCode ?? r.exit_code,
         conversation_id: o.conversationId ?? r.conversation_id, output_tail: o.tail ?? r.output_tail, ended_at: new Date(now), boot_hash: null,
         reaped: r.session_id === null && r.mcp_token_hash === null,
       });
       return { ...r };
     },
-    async requestCancelAgentJob(id) {
+    async requestCancelAgentJob(id, reason = null) {
       const r = rows.get(id);
       if (!r || ended(r.status)) return null;
       r.cancel_requested = true;
+      r.cancel_reason = reason ?? r.cancel_reason;
       return { ...r };
     },
     async openAgentJobs() { return [...rows.values()].filter((r) => !ended(r.status) || !r.reaped).sort((a, b) => a.id - b.id).map((r) => ({ ...r })); },
@@ -162,7 +167,7 @@ function world(): World {
   };
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
-    mintError: null, onMint: null, beforeFinish: null, claims: 0, listening: 0, available: true,
+    mintError: null, onMint: null, beforeFinish: null, claims: 0, listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), projects: new Set<string>(),
     setNow: (ms: number) => { now = ms; },
   });
@@ -729,8 +734,119 @@ await t("L1 목록은 요약만 — 프롬프트·결과 전문·진행 꼬리·
   for (const k of ["prompt", "result", "output_tail", "boot_hash", "secret_hash", "mcp_token_hash"]) assert.ok(!(k in row), `${k} 를 싣지 않는다`);
   assert.equal((row.result_preview as string).length, 280);
   assert.equal(row.has_result, true);
+  //  관리자 목록 — 남의 작업은 답이 있어도 앞머리를 싣지 않는다(있다는 것만).
+  const asAdmin = (await listAgentJobsFor({}, human("root", ["context", "admin"]), w.deps)).jobs as Array<Record<string, unknown>>;
+  assert.equal(asAdmin[0]!.result_preview, null);
+  assert.equal(asAdmin[0]!.has_result, true);
   const one = await getAgentJobFor(id, human("alice"), w.deps);
   assert.equal(((one.result as { text: string }).text).length, 1000, "전문은 하나 보기로");
+});
+
+await t("V4 접수 — 지시에 NUL 이 있으면 400(고쳐 담지 않는다) · 라벨의 NUL 은 뺀다", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  await assert.rejects(submitAgentJob({ prompt: "a\u0000b" }, appUser("alice", "memo"), w.deps, UI), httpErr(400, /NUL/));
+  assert.equal(w.rows.size, 0);
+  const out = await submitAgentJob({ prompt: "일", label: "이\u0000름" }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(out.id as number)!.label, "이름");
+});
+
+await t("P2 앱 주소의 `/_lively/*`(app-front)도 사람의 앱 화면이다 — 받는다", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  const out = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, { source: "app-front" });
+  assert.equal(out.status, "queued");
+  assert.equal(w.rows.get(out.id as number)!.cwd, "/work/apps/memo");
+});
+
+await t("X5 띄우기 일시 실패가 상한(MAX_LAUNCH_ATTEMPTS)까지 이어지면 «N번 시도» 로 실패한다 — 앞줄을 오래 막지 않게", async () => {
+  const w = world();
+  w.failLaunch = "transient";
+  w.usable.add("alice:memo");
+  const a = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  for (let i = 1; i < MAX_LAUNCH_ATTEMPTS; i++) {
+    assert.equal(w.rows.get(a.id as number)!.status, "queued", `${i}번째 실패 뒤엔 다시 기다린다`);
+    await sweepAgentJobs(w.deps);
+    await w.drain(0);
+  }
+  const row = w.rows.get(a.id as number)!;
+  assert.equal(row.attempts, MAX_LAUNCH_ATTEMPTS);
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", new RegExp(`${MAX_LAUNCH_ATTEMPTS}번 시도`));
+  assert.equal(w.launched.filter((x) => x.id === a.id).length, MAX_LAUNCH_ATTEMPTS);
+});
+
+await t("X1d 일시 실패인데 그 사이 취소가 걸렸으면 되돌리지 않고 끝낸다", async () => {
+  const w = world();
+  w.failLaunch = "transient";
+  w.usable.add("alice:memo");
+  const a = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
+  //  자리를 받은 뒤 · 띄우기가 실패하기 전에 취소 요청이 걸린 경합을 흉내 낸다.
+  const launch = w.deps.launch;
+  w.deps.launch = async (job, boot) => { w.rows.get(job.id)!.cancel_requested = true; return launch(job, boot); };
+  await w.drain(0);
+  const row = w.rows.get(a.id as number)!;
+  assert.equal(row.status, "failed", "취소가 걸린 작업을 대기열로 되돌리지 않는다");
+  assert.match(row.error ?? "", /확보하지 못했/);
+  assert.equal(row.reaped, true, "끝냈으면 걷는다");
+});
+
+await t("R5 도는 앱 작업 — 동의를 거두면 감시가 멈춘다(사유는 «앱을 더 쓸 수 없게 돼») · 띄우는 중이면 바로 끝내고 걷는다", async () => {
+  const w = world();
+  const run = await startedJob(w, "alice");
+  const job = await onBoot(run.id, run.boot, w.deps);
+  const st = await startedJob(w, "bob");          // 띄우는 중(부트 전)
+  w.usable.delete("alice:memo"); w.usable.delete("bob:memo");
+  await sweepAgentJobs(w.deps);
+  assert.equal(w.rows.get(run.id)!.cancel_requested, true, "도는 작업엔 취소를 건다(판의 다음 박동이 받는다)");
+  assert.equal(w.rows.get(st.id)!.status, "canceled");
+  assert.equal(w.rows.get(st.id)!.error, APP_REVOKED_REASON);
+  assert.ok(w.killed.includes(st.sid));
+  assert.deepEqual(await onTick(run.id, job.secret, {}, w.deps), { cancel: true });
+  await onResult(run.id, job.secret, { stopped: "canceled" }, w.deps);
+  assert.equal(w.rows.get(run.id)!.status, "canceled");
+  assert.equal(w.rows.get(run.id)!.error, APP_REVOKED_REASON, "사람이 누른 취소처럼 보이지 않게 사유를 남긴다");
+});
+
+await t("R6 앱 판정이 «못 쓴다» 가 아니라 실패(DB 가 잠깐 막힘)면 멈추지 않는다", async () => {
+  const w = world();
+  const run = await startedJob(w, "alice");
+  await onBoot(run.id, run.boot, w.deps);
+  w.deps.assertJobAppUsable = async () => { throw new Error("connection terminated"); };
+  await sweepAgentJobs(w.deps);
+  assert.equal(w.rows.get(run.id)!.cancel_requested, false);
+  assert.equal(w.rows.get(run.id)!.status, "running");
+});
+
+await t("V5 이어받기 — 끝났어도 done 이 아니면(failed) 409", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  const a = await submitAgentJob({ prompt: "처음" }, appUser("alice", "memo"), w.deps, UI);
+  Object.assign(w.rows.get(a.id as number)!, { status: "failed", conversation_id: "0a1b2c3d-0000-4000-8000-000000000009" });
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: a.id }, appUser("alice", "memo"), w.deps, UI), httpErr(409));
+});
+
+await t("S9 감시의 끝내기는 «읽은 상태일 때만» — 읽은 뒤 자리를 받은 작업을 대기 상한으로 끝내지 않는다", async () => {
+  const w = world();
+  const t0 = 1_000_000_000_000;
+  w.policy = { ...w.policy, max_running: 1, max_running_per_member: 1 };
+  const first = await startedJob(w, "alice");
+  await onBoot(first.id, first.boot, w.deps);
+  const q = await submitAgentJob({ prompt: "대기" }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  w.setNow(t0 + (w.policy.queue_wait_min * 60 + 1) * 1000);
+  Object.assign(w.rows.get(first.id)!, { started_at: new Date(t0 + 1), last_tick_at: new Date(t0 + (w.policy.queue_wait_min * 60) * 1000) });
+  w.beforeFinish = (jid) => { if (jid === q.id) { w.rows.get(jid)!.status = "starting"; w.beforeFinish = null; } };
+  await sweepAgentJobs(w.deps);
+  assert.equal(w.rows.get(q.id as number)!.status, "starting", "대기 상한 판정이 띄우는 중인 작업을 끝내면 안 된다");
+});
+
+await t("B5 같은 비밀로 두 판이 겹쳐 물면 늦은 쪽은 409", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  w.bootRace = true;
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(409));
 });
 
 // ── 보기 ─────────────────────────────────────────────────────────────────────
@@ -745,11 +861,15 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
   await assert.rejects(getAgentJobFor(id, appUser("alice", "crm"), w.deps), httpErr(404));
   const admin = await getAgentJobFor(id, human("root", ["context", "admin"]), w.deps);
   assert.ok(!("prompt" in admin), "관리자에게도 남의 프롬프트 원문은 안 준다");
+  assert.ok(!("result" in admin) && !("output_tail" in admin), "관리자에게도 남의 답·진행 꼬리는 안 준다(상태·오류만)");
   assert.equal(canSeeJob(w.rows.get(id)!, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser), false, "앱 화면 안의 관리자는 관리자로 안 본다");
   const list = await listAgentJobsFor({}, human("bob"), w.deps);
   assert.deepEqual(list.jobs, []);
   const listAdmin = await listAgentJobsFor({}, human("root", ["admin"]), w.deps);
   assert.equal((listAdmin.jobs as unknown[]).length, 1);
+  assert.equal((listAdmin.jobs as Array<Record<string, unknown>>)[0]!.result_preview, null, "관리자 목록엔 남의 답 앞머리가 없다");
+  const adminInApp = await listAgentJobsFor({}, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser, w.deps);
+  assert.deepEqual(adminInApp.jobs, [], "앱 화면 안의 관리자는 관리자로 안 본다 — 남의 작업이 목록에 안 뜬다");
 });
 
 console.log(`# ${pass} pass`);

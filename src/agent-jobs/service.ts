@@ -15,9 +15,12 @@
 //
 //  ── 누가 보낼 수 있나(설계 §12 ④ · 상민 2026-10-16 결정 ③ «본인 세션과 같은 신뢰») ──
 //  작업은 **보낸 사람 본인으로** 돈다 — 그 사람의 Claude 구독과 홈(로그인·git 자격·키트 토큰)을 그대로 쓴다. 앱 동의는 «그 앱 화면에서 내가 보낸
-//  지시를 나로서 실행» 이다. 그래서 받는 길을 좁힌다: 사람 본인(웹·본인 세션의 AI) · 앱 화면 다리(`app-ui`)만. 앱 서버 대리 · 앱 토큰의 직접 호출 ·
+//  지시를 나로서 실행» 이다. 그래서 받는 길을 좁힌다: 사람 본인(웹·본인 세션의 AI) · 앱 화면(라이블리 화면의 다리 `app-ui` · 앱 주소의
+//  `/_lively/*` `app-front` — 둘 다 capabilities/app-tool-call.runAppTool 의 같은 판정)만. 앱 서버 대리 · 앱 토큰의 직접 호출 ·
 //  작업 AI 자신(작업 토큰)은 거절한다. ⚠ 작업 AI 의 라이블리 도구를 앱 토큰으로 좁히는 것은 **도구 배선**이지 운영체제 경계가 아니다 —
 //  같은 uid 라 홈의 멤버 토큰을 읽을 수 있다(본인 세션과 같은 한계 · apps/principal.ts 머리말).
+//  동의를 거두거나 앱이 꺼지면: 기다리는 작업은 띄우지 않고(배차 직전 재판정) · 도는 작업은 감시가 멈춘다(다음 박동에 끊김).
+//  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
 import { HttpError } from "../http-error.js";
@@ -44,8 +47,8 @@ export interface AgentJobDeps {
   launch(job: AgentJobRow, bootSecret: string): Promise<unknown>;
   /** 걷는다 — 이미 없다는 확답이면 조용히, 그 밖의 실패는 던진다(launch.killJobContainer). */
   kill(sessionId: string): Promise<void>;
-  /** 앱 작업을 띄우기 직전 — 실행 계정 멤버가 그 앱을 아직 쓸 수 있나(보임 · 켜짐 · 동의). 안 되면 던진다. */
-  assertJobAppUsable(job: AgentJobRow): Promise<void>;
+  /** 앱 작업 — 실행 계정 멤버가 그 앱을 아직 쓸 수 있나(보임 · 켜짐 · 동의). 못 쓰면 HttpError 를 던진다(띄우기 직전 · 도는 동안 감시). */
+  assertJobAppUsable(job: Pick<AgentJobRow, "id" | "app_id" | "account_member">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
@@ -68,6 +71,12 @@ export const REAP_DELAY_MS = 8_000;
 export const REAP_GIVE_UP_MS = 10 * 60_000;
 /** 감시가 한 번에 보는 작업 수 — 대기열 상한의 범위 끝(500)과 동시 상한(20)을 넉넉히 넘는다. */
 export const SWEEP_SCAN_MAX = 1_000;
+/** 띄우기 시도 상한 — 일시 실패로 되돌리는 것은 여기까지(감시 주기 30초면 약 2분 반). 넘으면 그 작업을 실패로 끝낸다. */
+export const MAX_LAUNCH_ATTEMPTS = 5;
+/** 앱 화면에서 온 호출의 표식(ctx.source) — 라이블리 화면의 다리 · 앱 주소의 `/_lively/*`. */
+const APP_SCREEN_SOURCES: ReadonlySet<string> = new Set(["app-ui", "app-front"]);
+/** 동의를 거두거나 앱이 꺼져 감시가 멈춘 작업의 오류 문장. */
+export const APP_REVOKED_REASON = "앱을 더 쓸 수 없게 돼(사용 동의 철회 · 앱 꺼짐) 멈췄습니다";
 /** MCP 토큰 만료 여유(초) — 작업 상한 + 대기·부트·보고 시간. */
 export const MCP_TOKEN_SLACK_SEC = 15 * 60;
 
@@ -98,19 +107,20 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
   };
 }
 
-/** 앱이 보는 작업 모양 — 비밀·프롬프트 원문은 싣지 않는다(프롬프트는 요청자 본인 조회에만 — getAgentJobFor). */
-export function publicJob(r: AgentJobRow, o: { withPrompt?: boolean; position?: number | null } = {}): Record<string, unknown> {
+/**
+ * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 프롬프트·답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
+ */
+export function publicJob(r: AgentJobRow, o: { own: boolean; position?: number | null }): Record<string, unknown> {
   return {
     ...jobHead(r),
-    result: r.result, output_tail: r.output_tail,
+    ...(o.own ? { result: r.result, output_tail: r.output_tail, prompt: r.prompt } : { has_result: r.result !== null }),
     ...(o.position != null ? { queue_position: o.position } : {}),
-    ...(o.withPrompt ? { prompt: r.prompt } : {}),
   };
 }
 
-/** 목록 한 줄 — 답은 앞머리(result_preview)만, 전문은 agent_job_get 으로. */
-export function publicJobSummary(r: AgentJobSummaryRow): Record<string, unknown> {
-  return { ...jobHead(r), result_preview: r.result_preview, has_result: r.has_result };
+/** 목록 한 줄 — 답은 앞머리(result_preview)만, 전문은 agent_job_get 으로. 남의 작업(관리자 목록)은 앞머리도 없다. */
+export function publicJobSummary(r: AgentJobSummaryRow, own: boolean): Record<string, unknown> {
+  return { ...jobHead(r), result_preview: own ? r.result_preview : null, has_result: r.has_result };
 }
 
 /**
@@ -128,7 +138,10 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   if (!prompt) throw new HttpError(400, "prompt 가 비었습니다");
   if (prompt.length > PROMPT_MAX) throw new HttpError(400, `prompt 가 너무 깁니다(${PROMPT_MAX.toLocaleString()}자 이하)`);
-  const label = typeof input.label === "string" && input.label.trim() ? input.label.trim().slice(0, LABEL_MAX) : null;
+  //  NUL 은 DB 글 칸이 받지 않는다 — 지시 원문은 고쳐 담지 않고 거절한다(기록은 보낸 그대로여야 한다).
+  if (prompt.includes("\u0000")) throw new HttpError(400, "prompt 에 쓸 수 없는 문자(NUL)가 있습니다");
+  const rawLabel = typeof input.label === "string" ? noNul(input.label).trim() : "";
+  const label = rawLabel ? rawLabel.slice(0, LABEL_MAX) : null;
   const model = typeof input.model === "string" && input.model.trim() ? input.model.trim() : null;
   if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model 이름 형식이 아닙니다");
   const p = await d.policy();
@@ -177,18 +190,22 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   logger.info({ job: put.row.id, requester: me, app: appId, project: projectId }, "[agent-job] 접수");
   //  자리가 있으면 곧바로 띄운다 — 응답을 붙잡지 않게 뒤로 미룬다(같은 테넌트 맥락으로).
   d.later(() => dispatchAgentJobs(d), 0);
-  return publicJob(put.row, { position: await d.store.queuePosition(put.row.id).catch(() => null) });
+  const pub = publicJob(put.row, { own: true, position: await d.store.queuePosition(put.row.id).catch(() => null) });
+  delete pub.prompt;   // 접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게)
+  return pub;
 }
 
 /**
  * 누가 보낼 수 있나 — 머리말 «누가 보낼 수 있나». 작업은 보낸 사람의 구독으로 돌므로 «그 사람이 보낸 것» 만 받는다.
  *  · 앱 서버 대리(앱 서버 토큰 + 사람 신원 — 앱 화면 다리를 거쳐 와도 표식이 남는다): 거절 — 앱 서버의 실행은 API 키 갈래(v2-9).
- *  · 앱 주체인데 앱 화면 다리(`app-ui`)가 아닌 길(앱 세션 토큰의 MCP·REST 직접 호출): 거절.
+ *  · 앱 주체인데 앱 화면(`app-ui` · `app-front`)이 아닌 길(앱 세션 토큰의 MCP·REST 직접 호출): 거절.
  *  · 작업 AI 자신의 토큰: 거절 — 작업이 작업을 낳으면 사람 없이 구독이 끝없이 돈다.
  */
 async function assertMaySubmit(user: LivelyUser, via: { source?: string }, d: AgentJobDeps): Promise<void> {
   if (user.appServer) throw new HttpError(403, "앱 서버는 사람의 구독으로 작업을 보낼 수 없습니다 — 사람이 앱 화면에서 보낸 작업만 그 사람의 구독으로 돕니다");
-  if (user.appId && via.source !== "app-ui") throw new HttpError(403, "앱 토큰으로는 작업을 보낼 수 없습니다 — 사람이 앱 화면에서 보낸 작업만 그 사람의 구독으로 돕니다");
+  if (user.appId && !APP_SCREEN_SOURCES.has(String(via.source ?? ""))) {
+    throw new HttpError(403, "앱 토큰으로는 작업을 보낼 수 없습니다 — 사람이 앱 화면에서 보낸 작업만 그 사람의 구독으로 돕니다");
+  }
   if (user.tokenHashPrefix && (await d.store.isAgentJobToken(user.tokenHashPrefix))) throw new HttpError(403, "작업 안에서는 새 작업을 보낼 수 없습니다");
 }
 
@@ -200,7 +217,8 @@ const isTransient = (e: unknown): boolean => !!e && typeof e === "object" && (e 
  * 자리가 있는 만큼 대기 작업을 띄운다.
  *  · 앱 작업은 띄우기 직전에 앱 사용을 다시 본다 — 접수 뒤(대기 최대 30분) 동의를 거두거나 앱이 꺼졌으면 그 앱 폴더에서 돌지 않는다
  *    (세션 쪽 앱 폴더 판정 apps/session-app-folders.folderAppsFor 와 같은 자리).
- *  · 일시 실패는 대기열로 되돌리고 이번 배차를 멈춘다 · 그 밖의 실패는 그 작업을 실패로 끝내고 걷은 뒤 다음 작업을 띄운다.
+ *  · 일시 실패는 대기열로 되돌리고 이번 배차를 멈춘다(시도 MAX_LAUNCH_ATTEMPTS 번까지) · 그 밖의 실패와 시도를 다 쓴 실패는 그 작업을
+ *    실패로 끝내고 걷은 뒤 다음 작업을 띄운다.
  */
 export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
   if (!(await d.available())) return 0;
@@ -213,12 +231,13 @@ export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
         if (row.app_id) await d.assertJobAppUsable(row);
         await d.launch(row, bootSecret);
       } catch (e) {
-        const why = String((e as Error)?.message ?? e).slice(0, 600);
+        let why = String((e as Error)?.message ?? e).slice(0, 600);
         if (isTransient(e)) {
-          const back = await d.store.requeueAgentJob(row.id, `띄우기 실패 — 다시 기다립니다: ${why}`.slice(0, 600));
+          const back = await d.store.requeueAgentJob(row.id, `띄우기 실패 — 다시 기다립니다: ${why}`.slice(0, 600), MAX_LAUNCH_ATTEMPTS);
           //  반쯤 만든 자리가 있으면 걷는다(없으면 «이미 없다» 확답이라 조용하다).
           if (row.session_id) await d.kill(row.session_id).catch(() => undefined);
-          if (back) { logger.warn({ job: row.id, err: why }, "[agent-job] 띄우기 일시 실패 — 대기열로 되돌렸다(다음 감시가 다시 띄운다)"); return; }
+          if (back) { logger.warn({ job: row.id, attempt: row.attempts, err: why }, "[agent-job] 띄우기 일시 실패 — 대기열로 되돌렸다(다음 감시가 다시 띄운다)"); return; }
+          if (row.attempts >= MAX_LAUNCH_ATTEMPTS) why = `띄우기를 ${row.attempts}번 시도했지만 실패했습니다: ${why}`.slice(0, 600);
         }
         logger.warn({ job: row.id, err: why }, "[agent-job] 띄우기 실패");
         const ended = await d.store.finishAgentJob(row.id, { status: "failed", error: why, from: ["starting"] });
@@ -361,6 +380,20 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
   for (const j of jobs) {
     if (isEnded(j.status)) { if (await reapJob(j, d)) reaped++; continue; }
     if (j.status === "queued") queued = true;
+    //  앱 작업이 도는 동안 동의를 거뒀거나 앱이 꺼졌으면 멈춘다(대기 작업은 배차 직전에 따로 본다). 판정이 «못 쓴다»(HttpError)일 때만 —
+    //   DB 가 잠깐 막힌 것으로 멈추지 않는다.
+    if (j.app_id && (j.status === "starting" || j.status === "running") && !j.cancel_requested) {
+      const gone = await d.assertJobAppUsable(j).then(() => false, (e) => (e instanceof HttpError ? true : null));
+      if (gone) {
+        logger.info({ job: j.id, app: j.app_id }, "[agent-job] 앱을 더 쓸 수 없다 — 작업을 멈춘다");
+        const asked = await d.store.requestCancelAgentJob(j.id, APP_REVOKED_REASON);
+        if (asked?.status === "starting") {
+          const row = await d.store.finishAgentJob(j.id, { status: "canceled", error: APP_REVOKED_REASON, from: ["starting"] });
+          if (row) { ended++; if (await reapJob(row, d)) reaped++; }
+        }
+        continue;
+      }
+    }
     //  시계는 작업마다 읽는다 — 앞 작업의 걷기(중계 왕복)가 길어도 뒤 작업을 낡은 «지금» 으로 재지 않게.
     const act = sweepDecision({
       status: j.status, createdAt: +new Date(j.created_at), claimedAt: j.claimed_at ? +new Date(j.claimed_at) : null,
@@ -396,7 +429,7 @@ export async function getAgentJobFor(id: number, user: LivelyUser, d: AgentJobDe
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
   if (!row || !canSeeJob(row, user)) throw new HttpError(404, "없는 작업입니다");
   const position = row.status === "queued" ? await d.store.queuePosition(row.id).catch(() => null) : null;
-  return publicJob(row, { withPrompt: row.requester === memberOf(user), position });
+  return publicJob(row, { own: row.requester === memberOf(user), position });
 }
 
 export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {
@@ -405,19 +438,21 @@ export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; 
   const admin = isAdmin(user) && !user.appId;
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && APP_ID_RE.test(f.app_id) ? f.app_id : null);
   const rows = await d.store.listAgentJobs({ requester: admin ? null : memberOf(user), appId, status, limit });
-  return { jobs: rows.map((r) => publicJobSummary(r)), limit };
+  const me = memberOf(user);
+  return { jobs: rows.map((r) => publicJobSummary(r, r.requester === me)), limit };
 }
 
 /** 취소 — 대기 중이면 바로 끝내고, 띄우는 중이면 끝내고 걷고, 도는 중이면 판의 다음 박동이 받아 하네스를 끊는다. */
 export async function cancelAgentJobFor(id: number, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
   if (!row || !canSeeJob(row, user)) throw new HttpError(404, "없는 작업입니다");
-  if (isEnded(row.status)) return publicJob(row);
+  const own = row.requester === memberOf(user);
+  if (isEnded(row.status)) return publicJob(row, { own });
   const asked = await d.store.requestCancelAgentJob(id);
-  if (!asked) return publicJob((await d.store.getAgentJob(id)) ?? row);
+  if (!asked) return publicJob((await d.store.getAgentJob(id)) ?? row, { own });
   if (asked.status === "queued" || asked.status === "starting") {
     const ended = await d.store.finishAgentJob(id, { status: "canceled", error: "취소했습니다", from: [asked.status] });
-    if (ended) { await reapJob(ended, d); d.later(() => dispatchAgentJobs(d), 0); return publicJob(ended); }
+    if (ended) { await reapJob(ended, d); d.later(() => dispatchAgentJobs(d), 0); return publicJob(ended, { own }); }
   }
-  return publicJob((await d.store.getAgentJob(id)) ?? asked);
+  return publicJob((await d.store.getAgentJob(id)) ?? asked, { own });
 }

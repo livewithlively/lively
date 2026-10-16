@@ -152,6 +152,12 @@ t("P2 DB 칸이 받지 않는 값 — 글의 NUL 은 빼고 · 종료코드는 I
   assert.equal(r.tail, "ab");
   assert.equal(r.stderr_tail, "e");
   assert.equal(r.result?.text, "답");
+  //  짝 없는 서로게이트(답이 상한에서 잘리며 이모지 한 쌍이 갈라진 것) — jsonb 가 거절하므로 U+FFFD 로. 온전한 쌍은 그대로.
+  const cut = parseRunnerReport({ result: { text: "가".repeat(RESULT_TEXT_MAX - 1) + "😀", is_error: false } }).result?.text ?? "";
+  assert.equal(cut.length, RESULT_TEXT_MAX);
+  assert.equal(cut.at(-1), "\uFFFD", "잘려 남은 반쪽은 U+FFFD");
+  assert.equal(parseRunnerReport({ model: "a\uDC00b\uD83D" }).model, "a\uFFFDb\uFFFD");
+  assert.equal(parseRunnerReport({ model: "웃음😀" }).model, "웃음😀", "온전한 쌍은 그대로");
   for (const bad of [1.5, 1e12, -2147483649, 2147483648, Number.NaN]) assert.equal(parseRunnerReport({ exit_code: bad }).exit_code, null, String(bad));
   for (const ok of [0, 1, 137, -2, 2147483647, -2147483648]) assert.equal(parseRunnerReport({ exit_code: ok }).exit_code, ok, String(ok));
 });

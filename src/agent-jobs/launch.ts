@@ -14,9 +14,10 @@ import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX } from "./runner.js
 import type { AgentJobRow } from "./store.js";
 
 /**
- * 띄우기 실패. transient = 이 작업 탓이 아닌 일시 실패(컨테이너 확보가 막힘 — 노드 자리·브로커 중계) — 부르는 쪽이 작업을 대기열로
- *  되돌리고 이번 배차를 멈춘다. 그 밖(계정·폴더·판)은 그 작업을 실패로 끝낸다.
- *  ⚠ 일시 실패를 실패로 끝내면 용량이 잠깐 막힌 사이 대기열 전체가 차례로 실패한다(격리 리뷰).
+ * 띄우기 실패. transient = 다시 하면 될 수도 있는 실패(OS 계정 · 작업 폴더 · 컨테이너 확보 · 홈 준비 · 판 띄우기 — 노드 자리 · 브로커 중계 ·
+ *  저장소가 잠깐 막힘) — 부르는 쪽이 작업을 대기열로 되돌리고 이번 배차를 멈춘다(시도 상한까지 — service.MAX_LAUNCH_ATTEMPTS).
+ *  다시 해도 안 될 것(세션 id 없음 · 실행 계정 없음·비활성 · 매니지드 아님)은 그 작업을 바로 실패로 끝낸다.
+ *  ⚠ 일시 실패를 실패로 끝내면 인프라가 잠깐 막힌 사이 대기열 전체가 차례로 실패한다(격리 리뷰).
  */
 export class JobLaunchError extends Error {
   constructor(message: string, readonly transient = false) { super(message); }
@@ -37,7 +38,10 @@ async function accountUser(memberId: string): Promise<LivelyUser> {
   return { userId: m.id, email: m.email ?? undefined, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser;
 }
 
-/** (순수) 판 명령 tmux argv — 부트 비밀은 env(-e)로 한 번만 넘긴다. 부트가 브로커 인자 상한을 넘으면 던진다(판이 아예 안 뜬다). */
+/**
+ * (순수) 판 명령 tmux argv — 부트 비밀은 env(-e)로 한 번만 넘긴다. 부트가 브로커 인자 상한을 넘으면 던진다(판이 아예 안 뜬다).
+ *  판 명령 꼬리(`<box-spawn> --cwd <작업 폴더> <명령>`)는 사람 세션의 session-tmux.sessionPaneArgv 와 같은 꼴이다 — launch.test 가 둘을 맞대 본다.
+ */
 export function jobTmuxArgv(o: { sessionId: string; jobId: number; bootSecret: string; cwd: string; tz: string; slug: string; locale: string; boxSpawn: string }): string[] {
   if (BOOT_SOURCE.length > TMUX_ARG_MAX) throw new Error(`판 부트가 tmux 인자 상한(${TMUX_ARG_MAX})을 넘는다: ${BOOT_SOURCE.length}`);
   return [
@@ -72,8 +76,8 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   if (!tmuxInSessionContainer(slug) || !slug) throw new JobLaunchError("이 배포에서는 작업 컨테이너를 띄울 수 없습니다(매니지드 전용)");
   const user = await accountUser(job.account_member);
   const { ensureMemberOsUser } = await import("../terminal/profiles.js");
-  const osUser = await ensureMemberOsUser(user);
-  if (!osUser) throw new JobLaunchError(`실행 계정(${job.account_member})의 OS 계정을 준비하지 못했습니다`);
+  const osUser = await ensureMemberOsUser(user).catch((e) => { throw new JobLaunchError(`실행 계정(${job.account_member})의 OS 계정을 준비하지 못했습니다: ${(e as Error)?.message ?? e}`, true); });
+  if (!osUser) throw new JobLaunchError(`실행 계정(${job.account_member})의 OS 계정을 준비하지 못했습니다`, true);
   //  메모리 — 사람 세션과 같은 정책·같은 셈(sessions.ts createSession: max 없으면 high, 0 = 브로커 기본).
   const { effectiveSessionMemoryPolicy } = await import("../sessions/session-memory-policy.js");
   const { getRuntimeConfig } = await import("../org/store/runtime-config.js");
@@ -87,7 +91,7 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   if (job.project_id != null) {
     const { memberMkdir } = await import("../terminal/terminal-member-fs.js");
     try { await memberMkdir(osUser, job.cwd); }
-    catch (e) { throw new JobLaunchError(`작업 폴더를 만들지 못했습니다(${job.cwd}): ${(e as Error)?.message ?? e}`); }
+    catch (e) { throw new JobLaunchError(`작업 폴더를 만들지 못했습니다(${job.cwd}): ${(e as Error)?.message ?? e}`, true); }
   }
   let made: { container: string; created: boolean } & Record<string, unknown>;
   //  `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
@@ -102,7 +106,8 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   //  어느 자리(컨테이너)에 앉았나 — 브로커 저널(철거 줄은 컨테이너 이름만 싣는다)과 이 작업을 잇는 유일한 단서다.
   logger.info({ job: job.id, session: sid, container: made.container, created: made.created }, "[agent-job] 작업 컨테이너 확보");
   const { prepareMemberHome } = await import("../terminal/sessions.js");
-  await prepareMemberHome(user, { osUser, sessionId: sid });
+  try { await prepareMemberHome(user, { osUser, sessionId: sid }); }
+  catch (e) { throw new JobLaunchError(`실행 계정의 홈을 준비하지 못했습니다: ${(e as Error)?.message ?? e}`, true); }
   const { orgTimezone } = await import("../org/timezone.js");
   const { BOX_SPAWN } = await import("../terminal/terminal-isolation.js");
   const { tmux } = await import("../terminal/tmux-exec.js");
@@ -110,7 +115,7 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   try {
     await tmux(argv);
   } catch (e) {
-    throw new JobLaunchError(`작업 컨테이너에 판을 띄우지 못했습니다: ${redactSecret((e as Error)?.message ?? String(e), bootSecret).slice(0, 400)}`);
+    throw new JobLaunchError(`작업 컨테이너에 판을 띄우지 못했습니다: ${redactSecret((e as Error)?.message ?? String(e), bootSecret).slice(0, 400)}`, true);
   }
   return { container: made.container };
 }

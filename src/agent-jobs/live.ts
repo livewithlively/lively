@@ -40,6 +40,7 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     kill: (sid) => launch.killJobContainer(sid),
     assertJobAppUsable: async (job) => {
       if (!job.app_id) return;
+      //  실행 계정 멤버의 지금 권한으로 본다(관리자 보임 판정 · 동의) — 접수 때와 같은 판정(assertAppUsableFor).
       const { getMember } = await import("../org/store/members.js");
       const m = job.account_member ? await getMember(job.account_member) : null;
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${job.account_member ?? "?"})이 활성 구성원이 아닙니다`);

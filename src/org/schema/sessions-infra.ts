@@ -547,6 +547,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 비밀 **값**은 여기 없다 — boot_hash 는 판 첫 말의 일회용 비밀(쓰면 지운다), secret_hash 는 판 콜백 비밀, mcp_token_hash 는 작업 AI 에 준
   //   라이블리 토큰(끝나면 폐기)의 sha256 이다. prompt 는 보낸 사람이 쓴 지시 원문 그대로다(감사 — 상민 2026-10-16 «프롬프트 원문은 작업 기록에»).
   //  account_kind: 이번엔 'subscription'(보낸 사람 본인 구독)만 쓴다 — 'api_key'(워크스페이스 키 · LLM 프록시)는 v2-9.
+  //  attempts: 자리를 받은 횟수(띄우기 시도) — 일시 실패로 되돌릴 때 상한(service.MAX_LAUNCH_ATTEMPTS)을 본다.
+  //  cancel_reason: 사람이 아닌 쪽이 멈춘 사유(앱 동의를 거둠 등) — 취소로 끝날 때 오류 문장이 된다(없으면 «취소했습니다»).
+  //  reaped: «걷기를 마쳤다» = 종료 신호(kill-session 성공 또는 이미 없다는 확답)를 보냈고 작업 토큰을 폐기했다. 컨테이너 철거 자체는
+  //   브로커(#4696 — 안이 비면 곧바로)가 한다 — reaped 는 철거를 증명하지 않는다.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_agent_job(
       id BIGSERIAL PRIMARY KEY,
@@ -574,6 +578,8 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       exit_code INT,
       error TEXT,
       cancel_requested BOOLEAN NOT NULL DEFAULT false,
+      cancel_reason TEXT,
+      attempts INT NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       claimed_at TIMESTAMPTZ,
       started_at TIMESTAMPTZ,
