@@ -28,7 +28,9 @@
 //   O9 같은 글의 행 둘 — A failed·not-ready(치지도 않음) · B sending · 기록에 그 말이 실린다 · 큐는 계속 [A failed, B sending]
 //      → A 의 «전달 안 됨» 이 보인다 · 같은 말은 두 번(기록 + A) — 에코는 «쳤을 수 있는» B 에 잇고, 실패는 조용히 사라지지 않는다(격리 리뷰 재현)
 //   O10 «미확인» 행 X · 기록엔 X 와 앞 64자만 같은 다른 말 Y(행보다 뒤) → 경고가 보인다(Y 는 X 의 증거가 아니다 — 판정 규칙은 서버와 같다)
-//   O11 «미확인» 행 X · 기록엔 같은 말이 마감 한참 뒤에 적혔다(사람이 나중에 다시 침) → 경고가 보인다(그 줄은 이 행의 증거가 아니다)
+//   O11 «미확인» 행 X · 기록엔 **같은 글**이 마감 한참 뒤에 적혔다(입력칸에 남은 글을 사람이 늦게 Enter 로 보냄 · 또는 다시 침)
+//      → 경고 없음 · 한 번(그 말은 대화에 들어갔다 — 상민님이 겪은 «엔터 안 쳐진 채로 갔어» 의 뒷모습)
+//   O13 «미확인» 긴 말(>160) X · 기록엔 머리 160자만 같고 꼬리가 다른 말이 마감 한참 뒤에 적혔다 → 경고가 보인다(다른 지시다)
 //   O12 실패 행 하나(failed·not-ready — 치지도 않음) · 열어 둔 화면에 사람이 같은 글을 직접 쳐 기록에 실림 · 큐는 계속 [실패]
 //      → «전달 안 됨» 이 남는다(서버는 그 말을 치지 않았다고 한다 — 기록의 같은 글이 그 실패를 덮지 않는다 · O6 의 열어 둔 화면 판)
 //
@@ -69,6 +71,8 @@ async function PAGE_MAIN() {
   const row = (st, err) => ({ id: 131295, seq: 3, session_id: "", text: SAID, status: st, kind: "prompt", attempts: 0, trust_ok: false,
     last_error: err, created_at: QUEUED, updated_at: "2026-10-16T07:59:29.849Z", delivered_at: null, stalled_since: null });
   const Y = SAID.slice(0, 64) + " — 그런데 뒤는 전혀 다른 지시다(O10).";
+  const LONG = "긴 지시 — " + "자료 공개범위를 단위마다 정하게 하고 ".repeat(8) + "꼬리 원문(O13)";
+  const LONG_OTHER = LONG.slice(0, 160) + " — 꼬리가 전혀 다른 다른 지시";
   const TRANSCRIPTS = {
     "box-o1": OLD + ECHO,
     "box-o2": OLD,
@@ -82,6 +86,7 @@ async function PAGE_MAIN() {
     "box-o10": OLD + user(Y, "2026-10-16T07:59:07.361Z") + ai("Y 에 대한 답", "2026-10-16T08:01:00Z"),
     "box-o11": OLD + user(SAID, "2026-10-16T09:10:00Z") + ai("나중 답", "2026-10-16T09:11:00Z"),
     "box-o12": OLD,                                             // 장면 도중에 사람이 친 같은 말이 붙는다
+    "box-o13": OLD + user(LONG_OTHER, "2026-10-16T09:10:00Z") + ai("다른 지시에 대한 답", "2026-10-16T09:11:00Z"),
   };
   const OUTBOX = {
     "box-o1": [row("sent", "echo-unconfirmed")],
@@ -96,6 +101,7 @@ async function PAGE_MAIN() {
     "box-o10": [row("sent", "echo-unconfirmed")],
     "box-o11": [row("sent", "echo-unconfirmed")],
     "box-o12": [row("failed", "not-ready")],
+    "box-o13": [Object.assign(row("sent", "echo-unconfirmed"), { text: LONG })],
   };
   const outboxHits = {};
   //  O4 배선 — «기록이 그 말을 실어 준 뒤에 큐를 다시 물었나» 를 시각으로 잰다(그 물음이 곧 종전 결함이 다시 세우던 자리다).
@@ -141,9 +147,9 @@ async function PAGE_MAIN() {
       done: () => { try { h.destroy(); } catch (_) { /* 이미 */ } box.remove(); },
     };
   };
-  const look = (v, sid) => ({ said: v.count(SAID), warn: v.warn(), failed: v.failed(), buttons: v.buttons(), outboxHits: outboxHits[sid] || 0 });
+  const look = (v, sid) => ({ said: v.count(sid === "box-o13" ? LONG : SAID), warn: v.warn(), failed: v.failed(), buttons: v.buttons(), outboxHits: outboxHits[sid] || 0 });
   try {
-    for (const sid of ["box-o1", "box-o2", "box-o3", "box-o5", "box-o6", "box-o8", "box-o10", "box-o11"]) {
+    for (const sid of ["box-o1", "box-o2", "box-o3", "box-o5", "box-o6", "box-o8", "box-o10", "box-o11", "box-o13"]) {
       if (sid === "box-o8") {
         const now = Date.now(), iso = (ms) => new Date(now + ms).toISOString();
         OUTBOX["box-o8"] = [Object.assign(row("sending", null), { created_at: iso(-30_000), updated_at: iso(-25_000) }),
@@ -212,7 +218,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <script type="text/plain" id="src">${sc.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 const dom = await dumpDom(chrome, {
-  html: page, serve: true, prefix: "outbox-late-echo-", virtualTimeBudget: 240000, args: ["--window-size=1200,900"], copy: CSS,
+  html: page, serve: true, prefix: "outbox-late-echo-", virtualTimeBudget: 260000, args: ["--window-size=1200,900"], copy: CSS,
 });
 const res = readOut(dom);
 if (res.text === null) { console.error(`FAIL  페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)}): ${dom.slice(0, 400)}`); process.exit(1); }
@@ -272,8 +278,12 @@ check(o10.later && o10.later.warn && o10.later.said === 1,
   "O10 앞 64자만 같은 다른 말이 기록에 있어도 «미확인» 경고는 남는다(그 말은 이 행의 증거가 아니다)", o10.later);
 
 const o11 = R["box-o11"] || {};
-check(o11.later && o11.later.warn && o11.later.said === 2,
-  "O11 같은 말이 마감 한참 뒤에 적혔다(나중에 다시 침) → 경고가 남는다 · 나중 말과 대기 말풍선으로 두 번", o11.later);
+check(o11.later && !o11.later.warn && o11.later.said === 1,
+  "O11 같은 글이 마감 한참 뒤에 적혔다(남은 글을 늦게 Enter · 다시 침) → 경고 없음 · 한 번(그 말은 대화에 들어갔다)", o11.later);
+
+const o13 = R["box-o13"] || {};
+check(o13.later && o13.later.warn && o13.later.said === 1,
+  "O13 긴 말의 머리 160자만 같은 다른 말이 마감 한참 뒤에 적혔다 → 경고가 남는다(다른 지시다)", o13.later);
 
 const o12 = R["box-o12"] || {};
 check(o12.before && o12.before.failed && o12.before.said === 1, "O12 전제 — 기록에 실리기 전엔 «전달 안 됨» 말풍선 하나", o12.before);

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { localTranscriptFs } from "../terminal/harness-io/transcript-fs.js";
 import {
-  alignedSource, echoWindowOf, findPromptInTranscript, lateEchoCandidate, lateEchoDue, listOutboxReconciled, promptOfLine, reconcileLateEchoes,
+  alignedSource, echoWindowOf, exactPrompt, findPromptInTranscript, lateEchoCandidate, lateEchoDue, listOutboxReconciled, promptOfLine, reconcileLateEchoes,
   resetLateEchoMemoForTest, samePrompt, scanLinesForPrompt, LATE_ECHO_HEAD, LATE_ECHO_MIN_GAP_MS, LATE_ECHO_QUEUED_MAX_MS, LATE_ECHO_RETRY_MS,
   LATE_ECHO_ROWS_PER_CALL, LATE_ECHO_SKEW_MS, type EchoSource, type EchoWindow, type ReconcileDeps,
 } from "./outbox-late-echo.js";
@@ -136,18 +136,25 @@ t("M12 시각이 없거나 깨진 줄은 증거 아님 — 가장 이른 시각�
 });
 
 const atMs = (ms: number): string => new Date(ms).toISOString();
-t("M13 사람 말 줄 상한 — 마감+5초 정확히는 증거 · 그 1ms 뒤(사람이 나중에 다시 친 같은 말)는 아님", () => {
+const LONG = "긴 지시 — " + "자료 공개범위를 단위마다 정하게 하고 ".repeat(8) + "꼬리 원문";              // 160자 넘는 말
+const LONG_OTHER = LONG.slice(0, LATE_ECHO_HEAD) + " — 꼬리가 전혀 다른 다른 지시";                              // 머리 160자만 같은 말
+t("M13 사람 말 줄 상한 — 머리만 같은 긴 말은 마감+5초까지만 · 통째로 같은 글은 그 뒤(남은 글을 늦게 Enter · 다시 침)도 증거", () => {
+  assert.ok(LONG.length > LATE_ECHO_HEAD && samePrompt(LONG, LONG_OTHER) && !exactPrompt(LONG, LONG_OTHER), "재료 전제");
   assert.equal(WIN.userNotAfter, Date.parse(MARKED) + LATE_ECHO_SKEW_MS);
-  assert.equal(scanLinesForPrompt([one(user(SAID, atMs(WIN.userNotAfter)))], SAID, WIN).found, true);
-  assert.equal(scanLinesForPrompt([one(user(SAID, atMs(WIN.userNotAfter + 1)))], SAID, WIN).found, false);
-  assert.equal(scanLinesForPrompt([one(user("계속해", "2026-10-16T10:30:00Z"))], "계속해", WIN).found, false, "짧은 말을 한참 뒤 다시 침");
+  assert.equal(scanLinesForPrompt([one(user(LONG_OTHER, atMs(WIN.userNotAfter)))], LONG, WIN).found, true, "제때 — 머리 160자");
+  assert.equal(scanLinesForPrompt([one(user(LONG_OTHER, atMs(WIN.userNotAfter + 1)))], LONG, WIN).found, false, "늦음 — 머리만 같으면 아님");
+  assert.equal(scanLinesForPrompt([one(user(LONG, atMs(WIN.userNotAfter + 1)))], LONG, WIN).found, true, "늦음 — 통째로 같으면 증거");
+  assert.equal(scanLinesForPrompt([one(user(SAID, "2026-10-16T10:30:00Z"))], SAID, WIN).found, true, "입력칸에 남은 글을 두 시간 뒤 Enter");
+  assert.equal(scanLinesForPrompt([one(user("계속해", "2026-10-16T10:30:00Z"))], "계속해", WIN).found, true, "짧은 말을 나중에 다시 침 — 같은 글이 들어갔다");
+  assert.equal(scanLinesForPrompt([one(user("계속해줘", "2026-10-16T10:30:00Z"))], "계속해", WIN).found, false, "늦은 다른 말은 아님");
 });
-t("M14 끼워 넣은 말 상한 — 마감 뒤 10분은 증거 · 마감+30분 정확히는 증거 · 그 1ms 뒤는 아님", () => {
+t("M14 끼워 넣은 말 상한 — 머리만 같은 긴 말: 마감 뒤 10분 · 마감+30분 정확히는 증거 · 그 1ms 뒤는 아님 · 통째로 같은 글은 늦어도 증거", () => {
   assert.equal(WIN.queuedNotAfter, Date.parse(MARKED) + LATE_ECHO_QUEUED_MAX_MS);
-  assert.equal(scanLinesForPrompt([one(queued(SAID, atMs(Date.parse(MARKED) + 10 * 60_000)))], SAID, WIN).found, true);
-  assert.equal(scanLinesForPrompt([one(queued(SAID, atMs(WIN.queuedNotAfter)))], SAID, WIN).found, true);
-  assert.equal(scanLinesForPrompt([one(queued(SAID, atMs(WIN.queuedNotAfter + 1)))], SAID, WIN).found, false);
-  assert.equal(scanLinesForPrompt([one(user(SAID, atMs(Date.parse(MARKED) + 10 * 60_000)))], SAID, WIN).found, false, "같은 때의 사람 말 줄은 아님");
+  assert.equal(scanLinesForPrompt([one(queued(LONG_OTHER, atMs(Date.parse(MARKED) + 10 * 60_000)))], LONG, WIN).found, true);
+  assert.equal(scanLinesForPrompt([one(queued(LONG_OTHER, atMs(WIN.queuedNotAfter)))], LONG, WIN).found, true);
+  assert.equal(scanLinesForPrompt([one(queued(LONG_OTHER, atMs(WIN.queuedNotAfter + 1)))], LONG, WIN).found, false);
+  assert.equal(scanLinesForPrompt([one(queued(LONG, atMs(WIN.queuedNotAfter + 1)))], LONG, WIN).found, true);
+  assert.equal(scanLinesForPrompt([one(user(LONG_OTHER, atMs(Date.parse(MARKED) + 10 * 60_000)))], LONG, WIN).found, false, "같은 때의 사람 말 줄은 제때가 아니다");
 });
 t("M15 행 시각을 못 읽으면 증거 창이 없다(판정하지 않는다)", () => {
   assert.equal(echoWindowOf({ created_at: "어제", updated_at: MARKED }), null);
