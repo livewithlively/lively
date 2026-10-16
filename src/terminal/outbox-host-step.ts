@@ -35,10 +35,13 @@ const STEPS = ["peek", "keys", "type"] as const;
  *  되고, 그동안 RPC(15초)는 시간 초과로 끊겨 게이트웨이는 «눌렀는지 모른다» 만 안다. 신뢰 대화상자의 선택지는 둘~셋이라 8 이면 넉넉하다.
  */
 export const OUTBOX_KEYS_MAX_DOWN = 8;
+/** 보기 한 걸음이 싣는 화면 꼬리의 **최대 줄 수**(#4818) — 게이트웨이의 제출 확인이 긴 지시의 입력칸 윗줄까지 보려고 더 달라고 한다.
+ *  없으면 판정용 꼬리(`tailOf` 기본 14줄) 그대로다. 상한은 RPC 한 통의 크기를 묶는다. */
+export const OUTBOX_PEEK_LINES_MAX = 80;
 
 /** 게이트웨이가 시키는 걸음(검증을 지난 모양). 봉투는 노드 프로토콜의 `ReqMsg.args` 다. */
 export type OutboxStepReq =
-  | { step: "peek"; id: string }
+  | { step: "peek"; id: string; lines?: number }
   | { step: "keys"; id: string; down: number; enter: boolean }
   | { step: "type"; id: string; text: string; paste: boolean };
 
@@ -76,7 +79,13 @@ export function parseOutboxStep(args: unknown): OutboxStepReq | { unsupported: s
   if (typeof step !== "string" || !(STEPS as readonly string[]).includes(step)) return { unsupported: `모르는 걸음: ${String(step)}` };
   const id = a.id;
   if (typeof id !== "string" || !id.trim()) return { unsupported: "세션 id 가 비었다" };
-  if (step === "peek") return { step, id };
+  if (step === "peek") {
+    //  #4818 — 꼬리 줄 수(없으면 기본). 있으면 1 이상 상한 이하의 정수여야 한다 — 받아 주는 쪽이 아니라 거절하는 쪽으로 기운다(위 머리말).
+    if (a.lines === undefined) return { step, id };
+    const lines = a.lines;
+    if (typeof lines !== "number" || !Number.isSafeInteger(lines) || lines < 1 || lines > OUTBOX_PEEK_LINES_MAX) return { unsupported: `peek 의 lines 는 1~${OUTBOX_PEEK_LINES_MAX} 의 정수여야 한다` };
+    return { step, id, lines };
+  }
   if (step === "keys") {
     const down = a.down === undefined ? 0 : a.down;
     const enter = a.enter === undefined ? false : a.enter;
@@ -121,13 +130,13 @@ export async function runOutboxStep(args: unknown, deps: Partial<OutboxStepDeps>
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     bin: deps.bin ?? TMUX_BIN,
   };
-  if (req.step === "peek") return peekPane(req.id, d);
+  if (req.step === "peek") return peekPane(req.id, d, req.lines);
   if (req.step === "keys") return pressKeys(req, d);
   return typeText(req, d);
 }
 
 /** 보기 — 화면 꼬리와 포그라운드 명령. 준비 판정의 폴(`session-outbox` 의 waitReady)이 읽는 두 가지와 같다. */
-async function peekPane(id: string, d: OutboxStepDeps): Promise<PeekOutcome> {
+async function peekPane(id: string, d: OutboxStepDeps, lines?: number): Promise<PeekOutcome> {
   try {
     const [pane, paneCmd] = await Promise.all([
       d.tmux(["capture-pane", "-t", id, "-p"]),
@@ -135,7 +144,8 @@ async function peekPane(id: string, d: OutboxStepDeps): Promise<PeekOutcome> {
     ]);
     //  꼬리만 싣는다 — 판정(firstPromptStep·trustAcceptDowns)이 보는 것이 `tailOf` 이고 `tailOf` 는 두 번 걸어도 같다.
     //   위쪽 전사(과거 대화)는 판정에 안 쓰이니 실어 나를 이유가 없다.
-    return { ok: true, pane: tailOf(pane).join("\n"), paneCmd: paneCmd.trim() };
+    //  #4818 — 더 달라고 하면(제출 확인) 그만큼 — 게이트웨이의 준비 판정은 받은 꼬리를 다시 14줄로 자른다(tailOf 를 두 번 걸어도 같다).
+    return { ok: true, pane: tailOf(pane, lines).join("\n"), paneCmd: paneCmd.trim() };
   } catch (err) {
     return { ok: false, reach: d.gone(err) ? "gone" : "unknown" };
   }

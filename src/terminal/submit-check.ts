@@ -31,22 +31,31 @@ export const unseenStripped = (s: string): string => String(s ?? "").normalize("
 /** 입력칸 위쪽이 잘려 꼬리만 보일 때 «우리 글» 로 쳐 주는 최소 길이 — 짧은 꼬리는 우연히 겹칠 수 있다. */
 export const TAIL_MATCH_MIN = 24;
 
+/** Claude Code 가 접은 붙여넣기 표시(2.1.301 번들 `zZ`) — 한 번에 너무 길게 들어온 글은 입력칸에 이것만 보인다. */
+const PASTED_PLACEHOLDER = /^\[Pasted text #\d+(?: \+\d+ lines)?\]$/;
+/** 그 접힘 문턱(2.1.301 `L3`) — 이보다 긴 우리 글이면 접힌 표시만 남은 입력칸을 우리 글로 친다(붙여넣기를 모르는 옛 호스트가 친 긴 글). */
+export const PASTE_COLLAPSE_UNITS = 800;
+
 /**
  * 이 화면의 입력칸이 우리 글(`oneLine` — 실제로 친 한 줄)을 들고 있나(순수).
  *  ⚠ 맨글(-e 없는 capture-pane)을 받는다 — 빈 칸의 흐린 예시 글(«Try "…"»)도 글로 읽히지만 우리 글과 다르니 other 다(누르지 않는다).
+ *  ★ 입력칸을 **먼저** 본다(격리 리뷰): 기본 권한 모드는 입력칸에 글이 있으면 꼬리 안내(«? for shortcuts»)를 감춘다(2.1.301
+ *   `showHint = !suppressHint`). 그러면 대화상자 판정(screenAsks)이 «입력칸이 떴다» 는 근거를 못 찾아, «1. …» 로 시작하는 지시나 위에
+ *   남은 «❯ 1.» 사람 말만으로 dialog 가 된다. 가로줄 둘 사이 «❯» 줄이 우리 글 그대로면 대화상자일 수 없다(대화상자가 뜨면 입력칸이 감춰지고,
+ *   대화상자의 «❯» 줄은 선택지다). 우리 글이 아닐 때만 대화상자를 가린다.
  */
 export function inputHolds(pane: string, oneLine: string): InputHold {
   const cap = captureOf(pane);
-  if (screenAsks(cap)) return "dialog";
   const box = ruledInputText(cap);
-  if (box === null) return "unknown";
-  const seen = unseenStripped(box);
-  if (!seen) return "empty";
   const ours = unseenStripped(oneLine);
-  if (!ours) return "other";
-  if (seen === ours) return "ours";
-  if (seen.length >= TAIL_MATCH_MIN && ours.endsWith(seen)) return "ours";
-  return "other";
+  if (box !== null && ours) {
+    const seen = unseenStripped(box);
+    if (seen === ours || (seen.length >= TAIL_MATCH_MIN && ours.endsWith(seen))) return "ours";
+    if (oneLine.length > PASTE_COLLAPSE_UNITS && PASTED_PLACEHOLDER.test(box.trim())) return "ours";
+  }
+  if (screenAsks(cap)) return "dialog";
+  if (box === null) return "unknown";
+  return unseenStripped(box) ? "other" : "empty";
 }
 
 /** 화면을 보는 최소 간격 — 한 박자에 걸음 하나. */
@@ -55,6 +64,8 @@ export const SUBMIT_POLL_MS = 1_000;
 export const SUBMIT_STUCK_MS = 1_500;
 /** 한 행에 **더** 누르는 Enter 상한 — 글자 CR(1) → «검토 후 Enter»(2) → 한 번 더 여유(3). 창 끝 Enter 도 여기서 센다. */
 export const SUBMIT_PRESS_MAX = 3;
+/** 지킴이가 볼 화면 줄 수 — 세션 호스트의 보기는 기본 꼬리 14줄이라 긴 지시(≈10줄 넘게 접힘)면 입력칸 윗줄이 잘려 unknown 이 된다(격리 리뷰). */
+export const SUBMIT_PEEK_LINES = 60;
 
 export interface SubmitGuardIo {
   /** 화면 한 번 — 못 읽으면 ok:false */
@@ -69,11 +80,11 @@ export interface SubmitGuard {
   tick(): Promise<void>;
   /**
    * 에코 창 끝의 «미제출 방어 Enter» 를 누르나 — 종전엔 화면을 안 보고 눌렀다(needsSubmitRetry).
-   *  우리 글이 남았거나(ours) 입력칸을 모르면(unknown·못 읽음 — 종전 그대로) 누른다. 비었거나·다른 글·대화상자면 안 누른다.
+   *  우리 글이 남았거나(ours) 입력칸을 모르면(unknown·못 읽음 — 종전 그대로) 누른다. 비었거나·다른 글·대화상자면 안 누른다. 상한을 채웠으면 안 누른다.
    */
   shouldPressAtWindowEnd(): boolean;
-  /** Enter 하나(지킴이 몫으로 센다). */
-  press(): Promise<void>;
+  /** 위 판단대로 창 끝 Enter 를 누른다(눌렀으면 참) — 상한·판단을 지킴이가 쥔다(부르는 쪽이 따로 묻지 않아도 된다). */
+  pressAtWindowEnd(): Promise<boolean>;
   /** 이 지킴이가 더 누른 Enter 수 */
   presses(): number;
   /** 마지막으로 읽은 입력칸 — 못 읽었거나 누른 뒤 아직 안 봤으면 null */
@@ -96,21 +107,23 @@ export function submitGuard(io: SubmitGuardIo, oneLine: string): SubmitGuard {
     await io.enter().catch(() => { /* 다음 박자가 화면으로 다시 본다 */ });
     lastEnterAt = io.now();
   };
+  const shouldPressAtWindowEnd = (): boolean => presses < SUBMIT_PRESS_MAX && (last === null || last === "ours" || last === "unknown");
   return {
     async tick() {
       if (io.now() - lastActAt < SUBMIT_POLL_MS) return;
       lastActAt = io.now();
-      if (pressOwed) { await press(); return; }
+      if (pressOwed) { if (presses < SUBMIT_PRESS_MAX) await press(); else pressOwed = false; return; }
       const seen = await io.peek().catch(() => ({ ok: false as const }));
       last = seen.ok ? inputHolds(seen.pane, oneLine) : null;
       //  누르는 것은 **다음 박자**다 — 한 박자에 RPC 를 둘 쓰지 않는다(머리말).
       if (last === "ours" && io.now() - lastEnterAt >= SUBMIT_STUCK_MS && presses < SUBMIT_PRESS_MAX) pressOwed = true;
     },
-    shouldPressAtWindowEnd() {
-      if (presses >= SUBMIT_PRESS_MAX) return false;
-      return last === null || last === "ours" || last === "unknown";
+    shouldPressAtWindowEnd,
+    async pressAtWindowEnd() {
+      if (!shouldPressAtWindowEnd()) return false;
+      await press();
+      return true;
     },
-    press,
     presses: () => presses,
     last: () => last,
   };

@@ -560,6 +560,19 @@ test("★ W3 글자 CR → «검토 후 Enter» → 제출 — 우리 글이 남
   assert.ok(e.ticks() > 0 && r.sentTo("peek").length > 0, "배선 — 에코가 지킴이 박자를 안 불렀거나 화면을 안 봤다");
 });
 
+test("W13 지킴이는 호스트에 화면 꼬리를 길게(SUBMIT_PEEK_LINES) 달라고 한다 — 긴 지시도 입력칸 윗줄이 보이게(준비 판정의 보기는 종전 그대로)", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const exec = await outboxExecFor(ID, r.deps);
+  await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["confirmed"]).echo, { now: () => r.clock.t });
+  const { SUBMIT_PEEK_LINES } = await import("../terminal/submit-check.js");
+  const peeks = r.sentTo("peek");
+  assert.ok(peeks.length > 0, "배선 — 지킴이가 화면을 안 봤다");
+  for (const a of peeks) assert.equal((a as { lines?: unknown }).lines, SUBMIT_PEEK_LINES);
+  const wr = rig();
+  await waitReady(ID, "claude", false, await outboxExecFor(ID, wr.deps), wr.waitClock);
+  for (const a of wr.sentTo("peek")) assert.equal((a as { lines?: unknown }).lines, undefined, "준비 판정의 보기에 lines 를 실었다");
+});
+
 test(`W11 계속 남아 있으면 창 안에서 상한까지만 — 창 끝 «미제출 방어 Enter» 까지 합쳐도 늘지 않는다`, async () => {
   const r = rig({ host: paneHost(STUCK_PANE) });
   const exec = await outboxExecFor(ID, r.deps);

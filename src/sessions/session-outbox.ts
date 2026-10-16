@@ -49,7 +49,7 @@ import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { oneLineOf, pastesFor } from "../terminal/send-keys.js";     // #4818 — 친 한 줄의 정본 · 붙여넣기로 싣는 하네스
-import { submitGuard } from "../terminal/submit-check.js";           // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
+import { submitGuard, SUBMIT_PEEK_LINES } from "../terminal/submit-check.js";   // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
 import { logger } from "../log.js";
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
@@ -447,7 +447,7 @@ export async function sendReadyRow(
   //  claude 만 지킨다 — 다른 하네스의 입력칸 문법은 모른다(needsSubmitRetry 와 같은 경계).
   const guard = harness === "claude"
     ? submitGuard({
-      peek: async () => { const seen = await exec.peek(); return seen.ok ? { ok: true, pane: seen.pane } : { ok: false }; },
+      peek: async () => { const seen = await exec.peek(SUBMIT_PEEK_LINES); return seen.ok ? { ok: true, pane: seen.pane } : { ok: false }; },
       enter: () => exec.enter(),
       now: clock.now,
     }, oneLine)
@@ -458,7 +458,7 @@ export async function sendReadyRow(
     //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
     //  #4818 — 누르기 전에 화면을 본다(지킴이의 마지막 관측). 우리 글이 없는 입력칸에 누르면 **거기 있는 무엇이든** 제출된다.
     if (!guard) await exec.enter();
-    else if (guard.shouldPressAtWindowEnd()) await guard.press();
+    else await guard.pressAtWindowEnd();
     echoed = await echo(oneLine, guard?.tick);
   }
   //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).

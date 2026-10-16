@@ -137,8 +137,8 @@ export interface OutboxExec {
   readonly why: SessionHostTargetWhy | "no-port";
   /** 고르기까지 기다린 시간(ms) */
   readonly waitedMs: number;
-  /** 화면 한 번 */
-  peek(): Promise<PaneSeen>;
+  /** 화면 한 번 — `lines` 는 세션 호스트에 꼬리를 더 달라고 할 때(#4818 제출 확인). 게이트웨이 칸은 화면 전체를 본다. */
+  peek(lines?: number): Promise<PaneSeen>;
   /** `acceptTrustDialog` 에 줄 키 — 부를 때마다 새로 받는다 */
   trustKeys(): TrustKeys;
   /** 친다 — `opts.paste` 는 붙여넣기로 싣는다(#4818 · send-keys 규약 ⑤ — Claude Code 세션만) */
@@ -289,11 +289,12 @@ function hostExec(sessionId: string, host: string, waitedMs: number, d: OutboxEx
 
   return {
     host, why: "ok", waitedMs,
-    async peek() {
+    async peek(lines) {
       if (demoted) return d.local.peek(sessionId);
       let r: unknown;
       try {
-        r = await ask({ step: "peek" });
+        //  lines 는 있을 때만 싣는다 — 그 칸을 모르는 옛 호스트는 기본 꼬리(14줄)로 답한다(제출 확인이 긴 지시에서 unknown 으로 접힌다 = 종전 동작).
+        r = await ask({ step: "peek", ...(lines ? { lines } : {}) });
       } catch (err) {
         demote("peek", rpcCause(err), err);   // 읽기는 늘 폴백 — 오류 종류와 무관하다
         return d.local.peek(sessionId);

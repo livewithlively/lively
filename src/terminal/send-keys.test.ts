@@ -195,32 +195,43 @@ const OPEN_HEX = ["1b", "5b", "32", "30", "30", "7e"];    // ESC [ 2 0 0 ~
 const CLOSE_HEX = ["1b", "5b", "32", "30", "31", "7e"];   // ESC [ 2 0 1 ~
 const isOpen = (a: string[]): boolean => a[3] === "-H" && JSON.stringify(a.slice(4)) === JSON.stringify(OPEN_HEX);
 const isClose = (a: string[]): boolean => a[3] === "-H" && JSON.stringify(a.slice(4)) === JSON.stringify(CLOSE_HEX);
-/** 붙여넣기 계획을 조각들로 읽는다 — «여는 표지 → 글(리터럴 하나 이상) → 닫는 표지» 의 되풀이여야 한다. 아니면 단언이 터진다. */
+/** tmux 한 번(argv 하나)을 `;` 구분자로 명령들로 가른다 — 붙여넣기 조각은 «여는 표지 ; 글 ; 닫는 표지» 를 한 번에 싣는다. */
+const commandsOf = (keys: string[][]): string[][] => keys.flatMap((argv) => {
+  const cmds: string[][] = [[]];
+  for (const a of argv) { if (a === ";") cmds.push([]); else cmds[cmds.length - 1]!.push(a); }
+  return cmds;
+});
+/** 리터럴 명령들이 실제로 치는 글 — `-l` 몸 + `-H 3b`(`;`) 를 이어 붙인다. */
+const typedOf = (cmds: string[][]): string => cmds.map((c) => (c[3] === "-l" ? c[5] : c[3] === "-H" && c.slice(4).every((h) => h === "3b") ? ";".repeat(c.length - 4) : "")).join("");
+/** 붙여넣기 계획을 조각들로 읽는다 — «여는 표지 → 글(리터럴·`;` 바이트) → 닫는 표지» 의 되풀이여야 한다. 아니면 단언이 터진다. */
 const pastePieces = (keys: string[][]): string[] => {
-  assert.ok(keys.length > 0, "실은 것이 없다");
+  const cmds = commandsOf(keys);
+  assert.ok(cmds.length > 0, "실은 것이 없다");
   const pieces: string[] = [];
-  for (let i = 0; i < keys.length;) {
-    assert.ok(isOpen(keys[i]!), `조각 머리가 여는 표지가 아니다: ${JSON.stringify(keys[i])}`);
-    let piece = ""; i++;
-    while (i < keys.length && keys[i]![3] === "-l") { assert.equal(keys[i]![4], "--"); piece += keys[i]![5]; i++; }
-    assert.ok(i < keys.length && isClose(keys[i]!), "조각 꼬리에 닫는 표지가 없다");
+  for (let i = 0; i < cmds.length;) {
+    assert.ok(isOpen(cmds[i]!), `조각 머리가 여는 표지가 아니다: ${JSON.stringify(cmds[i])}`);
+    const body: string[][] = []; i++;
+    while (i < cmds.length && !isClose(cmds[i]!) && !isOpen(cmds[i]!)) { if (cmds[i]![3] === "-l") assert.equal(cmds[i]![4], "--"); body.push(cmds[i]!); i++; }
+    assert.ok(i < cmds.length && isClose(cmds[i]!), "조각 꼬리에 닫는 표지가 없다");
     i++;
-    pieces.push(piece);
+    pieces.push(typedOf(body));
   }
   return pieces;
 };
 const sk = await import("./send-keys.js") as Record<string, any>;
+const PASTE_OPEN_S = "\x1b[200~";
+const PASTE_CLOSE_S = "\x1b[201~";
 const UNITS: number = sk.PASTE_CHUNK_UNITS ?? 500;
 /** 네 번째 인자(opts)를 받는 판으로 부른다 — 옛 판(세 인자)에 대고 돌려도 컴파일된다(그 판에선 opts 가 무시돼 빨간불). */
 const planP = sendKeysPlan as (id: string, text: string, bin: string, opts?: unknown) => ReturnType<typeof sendKeysPlan>;
 
-t("[22·P1] paste — 글을 표지 둘 사이에 싣는다(표지는 바이트 그대로 -H) · 제출은 그 뒤 Enter 키", () => {
+t("[22·P1] paste — 글을 표지 둘 사이에 싣는다(표지는 바이트 그대로 -H) · 한 조각 = tmux 한 번(`;` 로 이음) · 제출은 그 뒤 Enter 키", () => {
   const p = planP("box-yoon-1", "안녕하세요", TMUX, { paste: true });
-  assert.deepEqual(p.keys, [
-    ["send-keys", "-t", "box-yoon-1", "-H", ...OPEN_HEX],
-    ["send-keys", "-t", "box-yoon-1", "-l", "--", "안녕하세요"],
-    ["send-keys", "-t", "box-yoon-1", "-H", ...CLOSE_HEX],
-  ]);
+  assert.deepEqual(p.keys, [[
+    "send-keys", "-t", "box-yoon-1", "-H", ...OPEN_HEX, ";",
+    "send-keys", "-t", "box-yoon-1", "-l", "--", "안녕하세요", ";",
+    "send-keys", "-t", "box-yoon-1", "-H", ...CLOSE_HEX,
+  ]], "표지와 글을 따로 부르면 중계 지연이 2초를 넘을 때 Claude Code 가 붙여넣기를 끊는다");
   assert.deepEqual(p.enter, ["send-keys", "-t", "box-yoon-1", "Enter"]);
   assert.equal(sk.PASTE_OPEN, "\x1b[200~"); assert.equal(sk.PASTE_CLOSE, "\x1b[201~");
 });
@@ -247,15 +258,15 @@ t("[24·P2 경계] paste — 조각 경계는 코드포인트 경계(이모지 �
 t("[25·P2] paste — 조각 하나의 인자 바이트도 tmux 상한 아래(한글 3B·이모지 4B)", () => {
   for (const ch of ["가", "😀"]) {
     const keys = planP("s", ch.repeat(3000), TMUX, { paste: true }).keys;
-    assert.ok(keys.length > 0 && isOpen(keys[0]!), `${ch}: 붙여넣기 계획이 아니다`);
+    assert.ok(keys.length > 0 && isOpen(commandsOf(keys)[0]!), `${ch}: 붙여넣기 계획이 아니다`);
     for (const argv of keys) for (const arg of argv.slice(3)) assert.ok(Buffer.byteLength(arg, "utf8") <= TMUX_LITERAL_CHUNK_BYTES);
   }
 });
 
 t("[26·P2] paste — `-` 로 시작하는 조각도 `--` 뒤에 싣는다(옵션으로 안 읽힌다)", () => {
-  const keys = planP("s", "- 이거 해 줘", TMUX, { paste: true }).keys;
-  assert.deepEqual(keys[1], ["send-keys", "-t", "s", "-l", "--", "- 이거 해 줘"]);
-  assert.ok(isOpen(keys[0]!) && isClose(keys[2]!));
+  const cmds = commandsOf(planP("s", "- 이거 해 줘", TMUX, { paste: true }).keys);
+  assert.deepEqual(cmds[1], ["send-keys", "-t", "s", "-l", "--", "- 이거 해 줘"]);
+  assert.ok(isOpen(cmds[0]!) && isClose(cmds[2]!));
 });
 
 t("[27·P3] paste 를 안 주거나 거짓이면 종전 그대로(리터럴 한 번) · psmux 는 paste 를 무시한다 · 빈 글이면 표지도 안 싣는다", () => {
@@ -294,6 +305,34 @@ t("[30·P14] 글에 키(제어 글자)가 섞이면 붙여넣지 않고 종전�
 t("[31·P14 경계] 탭은 글이다 — 붙여넣는다(붙이면 공백 넷 · 치면 자동완성을 부른다)", () => {
   const keys = planP("s", "가\t나", TMUX, { paste: true }).keys;
   assert.deepEqual(pastePieces(keys), ["가\t나"]);
+});
+
+t("[32·S1~S4] 끝이 `;` 인 글 — tmux 가 구분자로 먹으므로 끝의 `;` 들은 바이트(-H 3b)로 · 가운데 `;` 는 그대로 · `-l` 인자는 `;` 로 안 끝난다", () => {
+  const cases: Array<[string, string[][]]> = [
+    ["do it;", [["send-keys", "-t", "s", "-l", "--", "do it"], ["send-keys", "-t", "s", "-H", "3b"]]],
+    ["a;;", [["send-keys", "-t", "s", "-l", "--", "a"], ["send-keys", "-t", "s", "-H", "3b", "3b"]]],
+    [";", [["send-keys", "-t", "s", "-H", "3b"]]],
+    ["a;b", [["send-keys", "-t", "s", "-l", "--", "a;b"]]],
+  ];
+  for (const [raw, want] of cases) assert.deepEqual(sendKeysPlan("s", raw, TMUX).keys, want, JSON.stringify(raw));
+});
+
+t("[33·S5] 붙여넣기 조각 경계의 `;` — 조각 끝에 걸려도 사라지지 않는다(격리 리뷰 재현: 499자 + `;` + 10자)", () => {
+  const text = "a".repeat(UNITS - 1) + ";" + "b".repeat(10);
+  const keys = planP("s", text, TMUX, { paste: true }).keys;
+  assert.deepEqual(pastePieces(keys), ["a".repeat(UNITS - 1) + ";", "b".repeat(10)]);
+  for (const c of commandsOf(keys)) if (c[3] === "-l") assert.ok(!c[5]!.endsWith(";"), `-l 인자가 ; 로 끝난다: …${c[5]!.slice(-8)}`);
+});
+
+t("[34·S6] `;` 가 아주 많아도 한 명령의 인자는 브로커 상한(64) 안 · 묶음은 60 안 · 첫 명령이 세션을 지목한다", () => {
+  for (const [raw, paste] of [[";".repeat(40), false], ["끝" + ";".repeat(40), true], ["x".repeat(UNITS - 3) + ";;;", true]] as const) {
+    const keys = planP("box-yoon-1", raw, TMUX, { paste });
+    for (const argv of keys.keys) {
+      assert.ok(argv.length <= 60, `argv ${argv.length}개`);
+      assert.deepEqual(argv.slice(0, 3), ["send-keys", "-t", "box-yoon-1"], "묶음의 첫 명령이 세션을 지목해야 라우팅된다");
+    }
+    assert.equal(paste ? pastePieces(keys.keys).join("") : typedOf(commandsOf(keys.keys)), keys.oneLine, JSON.stringify(raw).slice(0, 30));
+  }
 });
 
 t("[29·P3] 붙여넣기는 Claude Code 만 — 다른 하네스·모름은 종전대로 친다", () => {
@@ -376,8 +415,10 @@ console.log(`\n${pass} passed`);
       await send("box-yoon-1", "첫 줄\n둘째 줄", { paste: true });
       const gateway = fs.readFileSync(log, "utf8").trim().split("\n");
       assert.deepEqual(gateway, [
-        "has-session", "send-keys -H 1b 5b 32 30 30 7e", "send-keys -l -- 첫 줄 둘째 줄", "send-keys -H 1b 5b 32 30 31 7e", "send-keys Enter",
-      ]);
+        "has-session",
+        "send-keys -H 1b 5b 32 30 30 7e ; send-keys -t box-yoon-1 -l -- 첫 줄 둘째 줄 ; send-keys -t box-yoon-1 -H 1b 5b 32 30 31 7e",
+        "send-keys Enter",
+      ], "붙여넣기 조각(표지·글·표지)은 tmux 한 번이어야 한다");
       const { runOutboxStep } = await import("./outbox-host-step.js");
       const host: string[] = [];
       await runOutboxStep({ step: "type", id: "box-yoon-1", text: "첫 줄\n둘째 줄", paste: true }, {
@@ -395,25 +436,37 @@ console.log(`\n${pass} passed`);
     const sessionPastes = (await import("./send-keys.js") as Record<string, any>).sessionPastes as
       ((id: string, harness?: string | null) => Promise<boolean>) | undefined;
     const calls = path.join(tmp, "opt-calls.log");
-    /** show-options 에 `answer` 로 답하는 가짜 tmux(answer 가 null 이면 비-0 으로 죽는다) — 불린 동사를 남긴다. */
-    const optTmux = (name: string, answer: string | null): string => {
+    /** show-options(@box_harness)엔 `harness`, display-message(포그라운드)엔 `fg` 로 답하는 가짜 tmux — null 이면 비-0 으로 죽는다. 불린 명령을 남긴다. */
+    const optTmux = (name: string, harness: string | null, fg: string | null = "claude"): string => {
       const f = path.join(tmp, `${name}.mjs`);
+      const answer = (v: string | null): string => (v === null ? "{ process.stderr.write('no server running\\n'); process.exit(1); }" : `process.stdout.write(${JSON.stringify(v + "\n")});`);
       fs.writeFileSync(f, [
         'import { appendFileSync } from "node:fs";',
         "const a = process.argv.slice(2);",
         `appendFileSync(${JSON.stringify(calls)}, a.join(" ") + "\\n");`,
-        answer === null ? "process.stderr.write('no server running\\n'); process.exit(1);" : `process.stdout.write(${JSON.stringify(answer + "\n")});`,
+        `if (a[0] === "show-options") ${answer(harness)}`,
+        `else if (a[0] === "display-message") ${answer(fg)}`,
       ].join("\n"));
       return `${process.execPath} ${f}`;
     };
     const seen = (): string[] => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) : []);
-    await at("[#4818 N1·N2] 하네스를 받으면 그것으로 정한다 — tmux 를 안 본다", async () => {
+    await at("[#4818 N1·N2] 하네스를 받으면 그것으로 정한다 — 하네스 표식은 안 읽는다 · codex 면 화면도 안 본다", async () => {
       assert.equal(typeof sessionPastes, "function", "sessionPastes 가 없다");
       fs.writeFileSync(calls, "");
       process.env.LIVELY_TMUX_EXEC = optTmux("opt-claude-1", "claude");
       assert.equal(await sessionPastes!("box-yoon-1", "claude"), true);
+      assert.ok(!seen().some((l) => l.startsWith("show-options")), "하네스를 받았는데 표식을 읽었다");
+      fs.writeFileSync(calls, "");
       assert.equal(await sessionPastes!("box-yoon-1", "codex"), false, "tmux 표식이 claude 여도 받은 하네스가 이긴다");
-      assert.deepEqual(seen(), [], "하네스를 받았는데 tmux 를 물었다");
+      assert.deepEqual(seen(), [], "붙여넣지 않을 하네스인데 tmux 를 물었다");
+    });
+    await at("[#4818 N6] 포그라운드가 셸이면(하네스가 끝난 뒤) 친다 — macOS bash 3.2 는 표지를 글자로 찍는다", async () => {
+      for (const sh of ["zsh", "bash", "-bash", "sh"]) {
+        process.env.LIVELY_TMUX_EXEC = optTmux(`opt-fg-${sh.replace(/\W/g, "")}`, "claude", sh);
+        assert.equal(await sessionPastes!("box-yoon-1", "claude"), false, sh);
+      }
+      process.env.LIVELY_TMUX_EXEC = optTmux("opt-fg-fail", "claude", null);
+      assert.equal(await sessionPastes!("box-yoon-1", "claude"), true, "포그라운드를 못 읽으면 하네스 표식대로(매니지드 gVisor 는 box-spawn 으로만 보인다)");
     });
     await at("[#4818 N3~N5] 하네스가 없으면 @box_harness — claude 면 참 · 조회 실패·빈 표식이면 거짓", async () => {
       assert.equal(typeof sessionPastes, "function", "sessionPastes 가 없다");
@@ -426,6 +479,44 @@ console.log(`\n${pass} passed`);
       process.env.LIVELY_TMUX_EXEC = optTmux("opt-empty", "");
       assert.equal(await sessionPastes!("box-yoon-1"), false, "N5");
     });
+  }
+
+  //  #4818 R1 — **진짜 tmux 가 무엇을 치나**(격리 리뷰: argv 만 재면 tmux 가 `;` 로 끝나는 인자를 먹는 것을 못 본다 — rc 0 · 경고 없음).
+  //   tmux 가 없으면 건너뛴다(윈도우 CI · login-job-script 와 같은 규약). 받는 쪽은 셸의 `read` — 붙여넣기 표지는 바이트 그대로 들어온다.
+  {
+    const { spawnSync, execFileSync } = await import("node:child_process");
+    const TMUX = spawnSync("sh", ["-c", "command -v tmux"], { encoding: "utf8" }).stdout?.trim();
+    if (!TMUX || process.platform === "win32") console.log("skip  [#4818 R1] tmux 없음");
+    else {
+      const { runSendKeysPlan } = await import("./send-keys.js");
+      const sock = `lively-sk-${process.pid}`;
+      const out = path.join(tmp, "typed.out");
+      const T = (argv: string[]): string => execFileSync(TMUX, ["-L", sock, "-f", "/dev/null", ...argv], { encoding: "utf8" });
+      const typedBy = async (raw: string, paste: boolean): Promise<{ got: string; oneLine: string }> => {
+        fs.rmSync(out, { force: true });
+        spawnSync(TMUX, ["-L", sock, "kill-server"]);
+        T(["new-session", "-d", "-s", "sk", "-x", "200", "-y", "10", `bash -c 'IFS= read -r line; printf %s "$line" > ${out}'`]);
+        const plan = planP("sk", raw, "tmux", { paste });
+        const r = await runSendKeysPlan("sk", plan, { tmux: async (argv) => T(argv), sleep: async () => {} });
+        assert.ok(r.ok, `치기 실패: ${JSON.stringify(r)}`);
+        for (let i = 0; i < 60 && !fs.existsSync(out); i++) await new Promise((res) => setTimeout(res, 50));
+        assert.ok(fs.existsSync(out), "배선 — 셸이 받은 글을 못 남겼다(관측 장치가 죽었다)");
+        return { got: fs.readFileSync(out, "utf8"), oneLine: plan.oneLine };
+      };
+      try {
+        await at("[#4818 R1] 진짜 tmux — 끝·조각 경계의 `;` 가 사라지지 않는다(치기·붙여넣기) · 붙여넣기는 표지로 감싸 들어간다", async () => {
+          const cases: Array<[string, boolean]> = [
+            ["do it;", false], ["a;;", false], [";", false], ["a;b ; c", false],
+            ["a".repeat(UNITS - 1) + ";" + "b".repeat(10), true], ["끝;;;", true], ["보통 지시", true],
+          ];
+          for (const [raw, paste] of cases) {
+            const { got, oneLine } = await typedBy(raw, paste);
+            assert.equal(got.split(PASTE_OPEN_S).join("").split(PASTE_CLOSE_S).join(""), oneLine, `${JSON.stringify(raw).slice(0, 24)} paste=${paste}`);
+            assert.equal(got.includes(PASTE_OPEN_S), paste, `${JSON.stringify(raw).slice(0, 24)}: 표지 유무`);
+          }
+        });
+      } finally { spawnSync(TMUX, ["-L", sock, "kill-server"]); }
+    }
   }
 
   if (saved === undefined) delete process.env.LIVELY_TMUX_EXEC; else process.env.LIVELY_TMUX_EXEC = saved;

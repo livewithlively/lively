@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as sc from "./submit-check.js";
 
-const { inputHolds, submitGuard, SUBMIT_POLL_MS, SUBMIT_STUCK_MS, SUBMIT_PRESS_MAX, TAIL_MATCH_MIN } = sc;
+const { inputHolds, submitGuard, SUBMIT_POLL_MS, SUBMIT_STUCK_MS, SUBMIT_PRESS_MAX, TAIL_MATCH_MIN, PASTE_COLLAPSE_UNITS } = sc;
 
 const NB = "\u{A0}";
 const RULE = "─".repeat(100);
@@ -100,6 +100,27 @@ test("H15 번호 목록 대화 위에 입력칸 안내가 보이면 대화상자
   assert.equal(inputHolds(pane, LONG), "ours");
 });
 
+//  기본 권한 모드는 입력칸에 글이 있으면 꼬리 안내(«? for shortcuts»)를 감추고, 모드 표시도 안 그린다(2.1.301 — 격리 리뷰).
+const NOFOOT = "";
+test("H16 꼬리 안내가 없는 화면(기본 모드 · 입력칸에 글) — «1. …» 로 시작하는 우리 글도 ours(대화상자로 오판하지 않는다)", () => {
+  const ours = "1. 로그를 읽고 2. 원인을 찾고 3. 고쳐 줘 — 번호로 시작하는 지시도 우리 글이다.";
+  assert.equal(inputHolds(screen([`❯${NB}${ours}`, ""], NOFOOT), ours), "ours");
+});
+
+test("H17 꼬리 안내가 없고 위 대화에 «❯ 1.» 사람 말이 남아 있어도 — 입력칸이 우리 글이면 ours", () => {
+  const pane = [...HEAD, "❯ 1. 첫째 할 일", "  2. 둘째 할 일", "⏺ 알겠습니다.", "", RULE, `❯${NB}${LONG}`, RULE, NOFOOT].join("\n");
+  assert.equal(inputHolds(pane, LONG), "ours");
+  assert.equal(inputHolds(pane, "다른 지시"), "dialog", "우리 글이 아니면 종전 판정(대화상자 보수적)으로 돌아간다");
+});
+
+test(`H18·H19 접힌 붙여넣기 표시만 남은 입력칸 — 우리 글이 ${PASTE_COLLAPSE_UNITS}자 넘을 때만 ours(경계: 정확히 ${PASTE_COLLAPSE_UNITS} → other · +1 → ours)`, () => {
+  const long = "가".repeat(PASTE_COLLAPSE_UNITS + 1);
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1]`]), long), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #2 +3 lines]`]), long), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1]`]), "가".repeat(PASTE_COLLAPSE_UNITS)), "other");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1] 그리고 사람이 덧붙인 글`]), long), "other");
+});
+
 // ── 지킴이 ──────────────────────────────────────────────────────────────────────
 
 /** 가짜 화면·시계 — 박자마다 무엇을 했는지(peek·enter) 남긴다. pane 은 지금 보여 줄 화면(함수면 부를 때마다). */
@@ -183,12 +204,24 @@ test("G8·G9·G10 화면을 못 읽음(ok:false·던짐)·입력칸을 모름·�
   assert.equal(rig(STUCK).g.shouldPressAtWindowEnd(), true, "G10 박자가 한 번도 없었다");
 });
 
-test("G12 Enter 가 던져도 삼키고 누른 수에 센다", async () => {
+test("G12 Enter 가 던져도 삼키고 누른 수에 센다 · 창 끝 Enter 도 같다", async () => {
   const r = rig(STUCK, { enterThrows: true });
   await r.step(SUBMIT_STUCK_MS); await r.step(SUBMIT_POLL_MS);
   assert.equal(r.g.presses(), 1);
-  await assert.doesNotReject(() => r.g.press());
+  assert.equal(await r.g.pressAtWindowEnd(), true, "누른 뒤 아직 안 본 화면 = 모름 → 종전대로 누른다");
   assert.equal(r.g.presses(), 2);
+});
+
+test(`G13 창 끝 Enter 는 지킴이가 상한을 쥔다 — ${SUBMIT_PRESS_MAX}번 뒤엔 눌러 달라고 해도 안 누른다 · 빈 칸이면 안 누른다`, async () => {
+  const r = rig(STUCK);
+  for (let i = 0; i < 40; i++) await r.step(SUBMIT_POLL_MS);
+  const before = r.log.filter((x) => x === "enter").length;
+  assert.equal(await r.g.pressAtWindowEnd(), false);
+  assert.equal(r.log.filter((x) => x === "enter").length, before);
+  const e = rig(screen([`❯${NB}`]));
+  await e.step(SUBMIT_POLL_MS);
+  assert.equal(await e.g.pressAtWindowEnd(), false);
+  assert.equal(e.log.filter((x) => x === "enter").length, 0);
 });
 
 test("G-흐름 글자 CR → «검토 후 Enter» → 제출: 우리 글이 사라지면 더 안 누른다", async () => {
