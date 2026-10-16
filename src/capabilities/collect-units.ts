@@ -1,0 +1,252 @@
+// 수집 단위 표 표면(#4213 T10 #4742) — 리브·화면이 «무엇을 · 누가 · 어디까지» 모으나 보고 고친다.
+//
+//  · 볼 수 있는 것만 보인다: 구성원 경로 단위는 그 단위를 볼 수 있는 구성원에게만(관리자도 남의 비공개 단위 이름·설명은 못 본다 —
+//    개수만). 수집기 경로 단위는 수집기 설정을 이미 보는 사람(워크스페이스를 굴리는 사람)에게도.
+//  · 목록 반영(collect_unit_listing)은 **부르는 사람 자신의** 목록만 받는다 — 남 대신 «이 사람이 이 채널을 본다» 를 적으면
+//    그 채널에서 모은 자료가 그 사람에게 열린다. 남의 목록은 서버 안쪽(T11 수집 실행)이 그 사람 실행 결과로만 적는다.
+//  · 담당(누가 모으나)은 저장하지 않고 늘 그 자리에서 판정한다(org/collect/unit-plan.ts) — 응답의 assignee 가 그 판정이다.
+import { z } from "zod";
+import type { Capability, CapabilityCtx } from "./types.js";
+import type { LivelyUser } from "../context.js";
+import { HttpError } from "./rest-util.js";
+import { canManageWorkspace } from "./principal.js";
+import {
+  UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
+} from "../org/collect/unit-store.js";
+import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, type CollectRoute, type UnitState } from "../org/collect/unit-plan.js";
+
+function actorOf(user: LivelyUser | undefined): Actor {
+  const member = String(user?.userId || "").trim();
+  if (!member) throw new HttpError(401, "구성원 신원이 필요합니다");
+  return { member, canManage: canManageWorkspace(user) };
+}
+
+/** 저장소의 판정 오류(UnitError)를 표면 상태코드로 — 그 밖의 오류는 그대로 올린다. */
+async function guard<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); }
+  catch (e) {
+    if (e instanceof UnitError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+}
+
+const idParam = (v: unknown): number => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, "단위 id 가 올바르지 않습니다");
+  return n;
+};
+
+// ── 조회 ──────────────────────────────────────────────────────────────────────
+
+const listInput = {
+  app: z.string().max(40).optional().describe("앱 키로 거른다(source 의 외부 시스템 키 — slack·notion·gmail·gdrive·github …)"),
+  state: z.enum(UNIT_STATES).optional().describe("candidate(찾았지만 아직 안 모음)·active(모으는 중)·excluded(안 모으기로 함)"),
+  mine: z.boolean().optional().describe("true 면 지금 내가 담당(내 Claude 커넥터로 모으는 사람)인 단위만"),
+};
+type ListInput = z.infer<z.ZodObject<typeof listInput>>;
+
+const collectUnits: Capability = {
+  name: "collect_units",
+  title: "수집 단위 표",
+  description:
+    "수집 단위(한 번에 모으는 묶음 — 채널 하나·페이지 묶음 하나·메일함 하나·저장소 하나) 목록(#4213 T10). 단위마다 " +
+    "수집 경로(lively_collector=라이블리 수집기 · member_ai=구성원 Claude 커넥터 · liv_direct=리브가 직접 연결) · 상태 · " +
+    "볼 수 있는 구성원(=담당 후보, 우선순위 순 · 각자의 로그인/커넥터 건강) · 지금 담당(assignee — 수집기가 켜져 있으면 수집기, " +
+    "아니면 건강한 첫 후보) · 읽은 위치 · 주기 · 설명/메타데이터. 내가 볼 수 있는 단위만 나온다(구성원 경로 단위는 그 단위를 볼 수 " +
+    "있는 사람만 · 수집기 단위는 워크스페이스를 굴리는 사람도). 못 보는 단위는 hidden 개수로만 알린다. " +
+    "지금 수집기 설정(채널 목록 등)은 조회할 때 단위로 풀려 들어와 있다(6시간마다 다시 맞춤 · 즉시는 collect_units_sync). " +
+    "REST 등가: GET /api/ui/collect/units?app=&state=&mine=.",
+  scope: "memory",
+  input: listInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/collect/units"], parse: (req) => {
+      const q = (req.query ?? {}) as Record<string, unknown>;
+      const state = q.state == null || q.state === "" ? undefined : String(q.state);
+      if (state && !(UNIT_STATES as readonly string[]).includes(state)) throw new HttpError(400, `state 는 ${UNIT_STATES.join("·")} 중 하나입니다`);
+      return {
+        app: q.app == null || q.app === "" ? undefined : String(q.app).slice(0, 40),
+        state, mine: q.mine === "1" || q.mine === "true" ? true : undefined,
+      };
+    } }],
+  },
+  handler: async (input: ListInput, user: LivelyUser) => guard(async () => {
+    const r = await listUnitsFor(actorOf(user), { app: input.app ?? null, state: input.state ?? null, mine: !!input.mine });
+    return { units: r.units, hidden: r.hidden, count: r.units.length };
+  }),
+};
+
+// ── 수정 ──────────────────────────────────────────────────────────────────────
+
+const updateInput = {
+  id: z.number().int().positive().describe("단위 id(collect_units 의 id)"),
+  state: z.enum(UNIT_STATES).optional().describe("active=모은다 · excluded=모으지 않는다 · candidate=보류(목록에서 찾기만 한 상태)"),
+  interval_sec: z.number().int().min(60).max(2592000).nullable().optional().describe("주기(초) — 그 단위에 글이 올라오는 빈도로 정한다. null 이면 기본값"),
+  description: z.string().max(4000).nullable().optional().describe("메타데이터: 이 단위에서 오가는 일(검색 실패 안내에서 단위를 고를 때 쓴다)"),
+  meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·activity(활동량)·knowhow(단위 노하우)"),
+  priorities: z.array(z.string().max(80)).max(200).optional().describe("담당 후보 순서(구성원 id 앞에서부터 1순위). 이 단위를 볼 수 있는 구성원만"),
+  route: z.enum(COLLECT_ROUTES).optional().describe("수집 경로 바꾸기 — 워크스페이스를 굴리는 사람만"),
+  name: z.string().max(200).nullable().optional().describe("표시 이름"),
+};
+type UpdateInput = z.infer<z.ZodObject<typeof updateInput>>;
+
+const collectUnitUpdate: Capability = {
+  name: "collect_unit_update",
+  title: "수집 단위 고치기",
+  description:
+    "수집 단위 하나를 고친다(#4213 T10) — 모을지(state)·주기(interval_sec)·설명/메타데이터(리브가 첫 수집 뒤 쓰고 수집마다 유지)·" +
+    "담당 후보 순서(priorities)·수집 경로(route). 구성원 경로 단위는 그 단위를 볼 수 있는 구성원만, 수집기 단위는 워크스페이스를 " +
+    "굴리는 사람만 고칠 수 있다. 볼 수 있는 구성원 자체는 여기서 못 바꾼다(그건 각자의 목록 반영 — collect_unit_listing). " +
+    "REST 등가: POST /api/ui/collect/units/:id {state?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
+  scope: "memory",
+  input: updateInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/collect/units/:id"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const out: Record<string, unknown> = { id: idParam(req.params?.id) };
+      if (b.state != null) {
+        if (!(UNIT_STATES as readonly string[]).includes(String(b.state))) throw new HttpError(400, `state 는 ${UNIT_STATES.join("·")} 중 하나입니다`);
+        out.state = String(b.state);
+      }
+      if (b.interval_sec !== undefined) {
+        if (b.interval_sec === null) out.interval_sec = null;
+        else {
+          const n = Number(b.interval_sec);
+          if (!Number.isInteger(n) || n < 60 || n > 2592000) throw new HttpError(400, "interval_sec 는 60~2592000 초입니다");
+          out.interval_sec = n;
+        }
+      }
+      if (b.description !== undefined) out.description = b.description === null ? null : String(b.description).slice(0, 4000);
+      if (b.meta != null) {
+        if (typeof b.meta !== "object" || Array.isArray(b.meta)) throw new HttpError(400, "meta 는 객체여야 합니다");
+        out.meta = b.meta;
+      }
+      if (b.priorities != null) {
+        if (!Array.isArray(b.priorities)) throw new HttpError(400, "priorities 는 구성원 id 배열이어야 합니다");
+        out.priorities = b.priorities.map((m) => String(m).slice(0, 80)).slice(0, 200);
+      }
+      if (b.route != null) {
+        if (!(COLLECT_ROUTES as readonly string[]).includes(String(b.route))) throw new HttpError(400, `route 는 ${COLLECT_ROUTES.join("·")} 중 하나입니다`);
+        out.route = String(b.route);
+      }
+      if (b.name !== undefined) out.name = b.name === null ? null : String(b.name).slice(0, 200);
+      return out;
+    } }],
+  },
+  handler: async (input: UpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
+    const unit = await updateUnit(input.id, {
+      state: input.state as UnitState | undefined, interval_sec: input.interval_sec, description: input.description,
+      meta: input.meta ?? null, priorities: input.priorities, route: input.route as CollectRoute | undefined, name: input.name,
+    }, actorOf(user), ctx);
+    return { ok: true, unit };
+  }),
+};
+
+// ── 쪼개기 ────────────────────────────────────────────────────────────────────
+
+const splitInput = {
+  id: z.number().int().positive().describe("쪼갤 부모 단위 id"),
+  children: z.array(z.object({
+    ref: z.string().max(512).describe("자식 단위 id(앱 안의 하위 페이지·폴더 id 등)"),
+    name: z.string().max(200).optional(),
+    kind: z.enum(UNIT_KINDS).optional(),
+    viewers: z.array(z.string().max(80)).max(200).optional().describe("이 자식을 볼 수 있는 구성원 — 부모를 볼 수 있는 구성원 안에서만(쪼개기는 좁히기만 한다)"),
+  })).min(1).max(100),
+};
+type SplitInput = z.infer<z.ZodObject<typeof splitInput>>;
+
+const collectUnitSplit: Capability = {
+  name: "collect_unit_split",
+  title: "수집 단위 쪼개기",
+  description:
+    "볼 수 있는 범위가 사람마다 다를 때(노션 하위 페이지 권한·드라이브 폴더 공유) 단위를 «같은 사람들이 같은 내용을 보는 묶음» 으로 " +
+    "나눈다(#4213 T10). 자식 단위는 부모와 같은 앱·경로·상태로 생기고, 부모를 읽을 때 자식은 건너뛴다. 자식의 볼 수 있는 구성원은 " +
+    "부모의 볼 수 있는 구성원 안에서만 고른다 — 넓히면 남의 자료가 열리므로 거절한다. 이미 목록이 찾아 둔 자식 단위면 부모만 잇는다. " +
+    "REST 등가: POST /api/ui/collect/units/:id/split {children:[{ref, name?, kind?, viewers?}]}.",
+  scope: "memory",
+  input: splitInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/collect/units/:id/split"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (!Array.isArray(b.children) || !b.children.length) throw new HttpError(400, "children 은 자식 단위 배열이어야 합니다");
+      return { id: idParam(req.params?.id), children: b.children.slice(0, 100) };
+    } }],
+  },
+  handler: async (input: SplitInput, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
+    const units = await splitUnit(input.id, input.children, actorOf(user), ctx);
+    return { ok: true, units };
+  }),
+};
+
+// ── 목록 반영(본인) ───────────────────────────────────────────────────────────
+
+const listingInput = {
+  app: z.string().max(40).describe("앱 키(source 의 외부 시스템 키 — slack·notion·gmail·gdrive …). 같은 앱이면 단위 좌표가 자료 좌표와 맞아야 중복이 합쳐진다"),
+  connector: z.string().max(80).optional().describe("claude.ai 커넥터 이름(«claude.ai » 뒤 그대로 — Slack · Notion · Gmail · Google Drive). 새 단위를 그 커넥터로 읽는다"),
+  instance: z.string().max(200).optional().describe("외부 인스턴스(슬랙 팀 id T… · 노션 워크스페이스 id 등). 자료의 external_instance 와 같은 값"),
+  items: z.array(z.object({
+    ref: z.string().max(512).describe("단위 id — 슬랙 채널 id(C…/D…/G…) · 노션 페이지 id · 메일함은 본인 메일 주소 · 저장소 owner/repo"),
+    name: z.string().max(200).optional(),
+    kind: z.enum(UNIT_KINDS).optional(),
+  })).max(5000).describe("내가 이 커넥터로 볼 수 있는 단위들"),
+  complete: z.boolean().optional().describe("true = 이 앱·인스턴스에서 내가 볼 수 있는 것 **전부**다(목록에 없는 단위에서 나를 뺀다). 일부만 훑었으면 생략"),
+};
+type ListingInputT = z.infer<z.ZodObject<typeof listingInput>>;
+
+const collectUnitListing: Capability = {
+  name: "collect_unit_listing",
+  title: "수집 단위 목록 반영(내 커넥터)",
+  description:
+    "내 Claude 커넥터로 훑은 «무엇이 있나» 를 수집 단위 표에 반영한다(#4213 T10). 처음 나온 단위는 후보(candidate)로 생기고 — 모을지는 " +
+    "리브·사람이 collect_unit_update 로 정한다 — 나는 그 단위의 볼 수 있는 구성원(담당 후보 줄 맨 뒤)이 된다. 이미 있는 단위(수집기 단위 포함)는 " +
+    "경로·상태를 바꾸지 않는다. 내가 볼 수 있게 된 단위의 이미 모인 자료는 나에게도 열린다. **내 목록만** 받는다(남 대신 적을 수 없다). " +
+    "메일함 단위는 내 메일 주소일 때만 받는다. REST 등가: POST /api/ui/collect/units/listing {app, connector?, instance?, items, complete?}.",
+  scope: "memory",
+  input: listingInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/collect/units/listing"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      if (!Array.isArray(b.items)) throw new HttpError(400, "items 는 단위 배열이어야 합니다");
+      if (b.member != null) throw new HttpError(400, "member 는 받지 않습니다 — 목록 반영은 늘 부르는 사람 자신의 것입니다");
+      return {
+        app: String(b.app ?? "").slice(0, 40),
+        connector: b.connector == null || b.connector === "" ? undefined : String(b.connector).slice(0, 80),
+        instance: b.instance == null ? undefined : String(b.instance).slice(0, 200),
+        items: b.items.slice(0, 5000), complete: b.complete === true ? true : undefined,
+      };
+    } }],
+  },
+  handler: async (input: ListingInputT, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
+    const me = actorOf(user).member;
+    const r = await recordUnitListing({
+      member: me, app: input.app, connector: input.connector ?? null, instance: input.instance ?? null,
+      items: input.items, complete: !!input.complete,
+    }, ctx);
+    return { ok: true, ...r };
+  }),
+};
+
+// ── 수집기 설정 → 단위(즉시) ──────────────────────────────────────────────────
+
+const collectUnitsSync: Capability = {
+  name: "collect_units_sync",
+  title: "수집기 설정을 수집 단위로 다시 맞추기",
+  description:
+    "지금 켜진 라이블리 수집기의 설정(채널 목록 등)과 실제로 모인 그릇(채널·저장소·팀·폴더·메일함·노션 맨 위 페이지)을 수집 단위로 " +
+    "다시 푼다(#4213 T10 이관 — 멱등). 조회 때 6시간마다 저절로 하므로 보통은 필요 없다. 구성원 경로였던 단위가 수집기 범위에 들어오면 " +
+    "수집기 경로로 바뀐다(수집기가 1순위). 워크스페이스를 굴리는 사람만. REST 등가: POST /api/ui/collect/units/sync.",
+  scope: "memory",
+  input: {},
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/collect/units/sync"], parse: () => ({}) }] },
+  handler: async (_input: unknown, user: LivelyUser) => guard(async () => {
+    if (!actorOf(user).canManage) throw new HttpError(403, "수집기 설정을 다시 맞추는 것은 워크스페이스를 관리하는 사람만 할 수 있습니다");
+    return { ok: true, ...(await syncCollectorUnits()) };
+  }),
+};
+
+//  ⚠ 순서가 계약이다 — 글자 그대로 경로(/units/listing · /units/sync)를 매개변수 경로(/units/:id)보다 **먼저** 마운트한다.
+//   거꾸로면 express 가 «listing» 을 단위 id 로 읽어 400 이 난다(rest-shadow.test 가 지킨다).
+export const collectUnitCapabilities: Capability[] = [collectUnits, collectUnitListing, collectUnitsSync, collectUnitUpdate, collectUnitSplit];

@@ -3965,6 +3965,56 @@
   "input_hash": "b87a2ff2a0e63f0d"
  },
  {
+  "name": "collect_units",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/collect/units"
+  ],
+  "input_hash": "3383857b616c6915"
+ },
+ {
+  "name": "collect_unit_listing",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/units/listing"
+  ],
+  "input_hash": "cb8fcf2f31ec2f7d"
+ },
+ {
+  "name": "collect_units_sync",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/units/sync"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "collect_unit_update",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/units/:id"
+  ],
+  "input_hash": "dd4da63f5aa29300"
+ },
+ {
+  "name": "collect_unit_split",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/units/:id/split"
+  ],
+  "input_hash": "2edc6e74a828aeb9"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,

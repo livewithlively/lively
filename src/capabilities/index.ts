@@ -56,6 +56,7 @@ import { sessionProjectCapabilities } from "./session-project.js";
 import { sessionRenameCapabilities } from "./session-rename.js";
 import { sessionTaskCapabilities } from "./session-task.js";
 import { collectRunCapabilities } from "./collect-run.js";
+import { collectUnitCapabilities } from "./collect-units.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -131,6 +132,7 @@ const all: Capability[] = [
   ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...sessionTaskCapabilities,    // #4084 세션 = 태스크 — 이 세션이 맡은 태스크 조회·완료 처리(id 없이).
   ...collectRunCapabilities,     // #4213 T11 수집 실행 — 내 Claude 커넥터를 읽는 `claude -p` 한 판(작은 세션 컨테이너) · 상태.
+  ...collectUnitCapabilities,    // #4213 T10 수집 단위 표 — 단위·볼 수 있는 구성원(담당 후보)·지금 담당·읽은 위치 · 고치기·쪼개기·내 목록 반영 · 수집기 이관.
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).

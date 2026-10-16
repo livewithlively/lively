@@ -133,6 +133,8 @@ const DENIED_TABLES = new Set([
   "member_secret", // P1(#746) per-user 자격 vault(secret_enc) — git_credential 과 동급 시크릿 테이블(db_query 자유 SELECT·self 소스 정책우회 차단)
   "member_channel_policy", // #1226 개인이 숨긴 대화 채널 — '누가 어떤 채널을 가렸는지'도 그 사람의 사생활(시크릿은 아니지만 열람 금지)
   "member_channel_meta",   // #1262 대화 종류 캐시 — '누가 어떤 대화(비공개 채널·DM)에 속해 있는지' 도 같은 급의 사생활
+  "collect_unit",          // #4742 수집 단위 — 비공개 채널·DM·메일함의 이름·설명. 조회는 볼 수 있는 구성원 기준으로 거르는 collect_units 로만
+  "collect_unit_member",   // #4742 볼 수 있는 구성원 — '누가 어떤 비공개 대화·메일함을 보는지' 는 member_channel_meta 와 같은 급의 사생활
 ]);
 
 // 게이트웨이 내부 테이블 절대 deny(B18) 여부 — 웹 정책과 무관하게 항상 차단(웹 UI·db_schema 가 정직하게 '시스템 차단'으로 표시하는 데 쓴다).
