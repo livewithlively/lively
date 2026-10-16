@@ -8,10 +8,11 @@
 //   (#688 에서 실제로 겪은 함정: 미설정이 영구화됨). store.updateRuntimeConfig 가 그 규칙을 지킨다.
 //
 // 관련: /readyz 가 이 임계치로 디스크를 판정(src/ops/health.ts) · 로그 재니터가 이 상한으로 회전(src/ops/log-janitor.ts) ·
-//  95% 도달 시 신규 세션·클론 차단은 디스크 가드(T5)의 몫.
+//  95% 이상이면서 남은 공간이 5GB 미만(#4780)일 때 신규 세션·클론 차단은 디스크 가드(T5)의 몫.
 
 import { tenantTtlCache } from "../tenant-ttl-cache.js";
 import { definePolicy } from "./knob.js";
+import type { Thresholds } from "../../ops/health.js";
 
 export interface StoragePolicy {
   /** 로그 파일 1개의 최대 크기(MB). 넘으면 회전한다. 0 = 회전 끔. */
@@ -22,6 +23,12 @@ export interface StoragePolicy {
   disk_warn_pct: number;
   /** 디스크 위험 임계(%) — 신규 세션·클론 차단 대상(T5). */
   disk_critical_pct: number;
+  /**
+   * #4780 — 위험 판정의 여유 바닥(GB). 사용률이 위험 임계를 넘어도 **이만큼 이상 남아 있으면** 막지 않고 경고로 둔다.
+   *  0 = 끔(사용률만 — 종전). 큰 디스크에서 %만으로 막으면 수십 GB 가 남아도 세션이 안 열린다(ops/health.ts
+   *  Thresholds.criticalFreeBytes 머리말). 작은 디스크에선 사용률이 먼저 걸리므로 이 값이 종전보다 일찍 막는 일은 없다.
+   */
+  disk_critical_free_gb: number;
   /** #1059 — 메모리 경고 임계(사용%). 0 = 끔(경보 안 함). box-watch 가 이 이상이면 warn 경보(디스크와 대칭). */
   mem_warn_pct: number;
   /** #1059 — 메모리 위험 임계(사용%). 0 = 끔. 이 이상이면 critical 경보(OOM 임박 — 디스크풀만큼 치명적). warn 보다 커야. */
@@ -45,6 +52,9 @@ export const DEFAULT_STORAGE_POLICY: StoragePolicy = {
   log_keep: 3,
   disk_warn_pct: 85,
   disk_critical_pct: 95,
+  // #4780 — 5GB: 세션 하나가 레포를 받아 의존성까지 까는 양(lively 기준 약 0.4GB)과 맥의 스왑 파일(1GB 단위)이
+  //  몇 번 더 늘 자리를 남긴다. 245GB 맥미니면 98% 근처, 1TB 면 99.5% 에서 막는다.
+  disk_critical_free_gb: 5,
   // #1059 — 메모리 경보는 기본 끔(0). 디스크풀과 달리 메모리 사용%는 박스마다 정상범위가 달라(캐시 등) 기본 임계가 오탐이 되기 쉽다
   //  → 운영자가 박스 상황(메모리 카드의 현재 사용%)을 보고 켠다. 관리탭이 85/95 를 제안값으로 안내(디스크와 대칭).
   mem_warn_pct: 0,
@@ -67,6 +77,8 @@ const policy = definePolicy<StoragePolicy>({
     log_keep: { env: "LOG_KEEP", min: 0, max: 50, loose: true },
     disk_warn_pct: { env: "DISK_WARN_PCT", min: 1, max: 99, loose: true },
     disk_critical_pct: { env: "DISK_CRITICAL_PCT", min: 1, max: 100, loose: true },
+    // 노드(사람 컴퓨터)엔 DB 가 없어 관리탭 값이 안 닿는다 — 그 컴퓨터에서 바꾸려면 노드 env 의 이 시드뿐이다.
+    disk_critical_free_gb: { env: "DISK_CRITICAL_FREE_GB", min: 0, max: 10_000 },
     mem_warn_pct: { env: "MEM_WARN_PCT", min: 0, max: 99, loose: true },
     mem_critical_pct: { env: "MEM_CRITICAL_PCT", min: 0, max: 100, loose: true },
     pty_warn_pct: { env: "PTY_WARN_PCT", min: 0, max: 99, loose: true },
@@ -89,19 +101,40 @@ const policy = definePolicy<StoragePolicy>({
   },
 });
 
+// #4780 — 여유 바닥 기본값(5GB)은 **위험 비율을 따로 정하지 않은 곳에만** 붙인다. 바닥이 생기기 전에 관리자가 비율을
+//  기본(95)과 다르게 정해 둔 박스(실측: 우리 매니지드 워크스페이스 99)는 그 비율이 뜻한 대로 사용률만으로 판정한다 —
+//  새 기본값이 사람이 고른 값을 조용히 뒤집지 않게. Elasticsearch 도 같은 규칙이다(watermark 를 명시하면
+//  max_headroom 기본값을 붙이지 않는다). 원본(DB·env)에 바닥이 있으면 그 값이 이긴다 — 관리탭은 저장할 때 두 칸을
+//  함께 보내므로, 한 번 저장한 뒤로는 이 규칙이 아니라 저장값이 정한다.
+function keepChosenCriticalPct(out: StoragePolicy, raw: unknown): StoragePolicy {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const floorGiven = r.disk_critical_free_gb !== undefined || policy.envSeed().disk_critical_free_gb !== undefined;
+  if (!floorGiven && out.disk_critical_pct !== DEFAULT_STORAGE_POLICY.disk_critical_pct) out.disk_critical_free_gb = 0;
+  return out;
+}
+
 /** 잡값 방어 — 관리탭 입력이든 env 든 범위를 벗어나면 시드/기본값으로. '경고 < 위험' 불변식도 여기서 강제한다. */
 export function normalizeStoragePolicy(raw: unknown): StoragePolicy {
-  return policy.normalize(raw);
+  return keepChosenCriticalPct(policy.normalize(raw), raw);
 }
 
 /** DB 원본(JSONB) → 유효 정책. DB 우선, 비면 env 시드, 그 다음 기본값. */
 export function resolveStoragePolicy(dbRaw: unknown): StoragePolicy {
-  return policy.resolve(dbRaw);
+  return keepChosenCriticalPct(policy.resolve(dbRaw), dbRaw);
 }
 
 /** 유효 정책의 출처(관리 UI 안내) — 관리탭 저장값인지, .env 시드인지, 코드 기본값인지. */
 export function storagePolicySource(dbRaw: unknown): "db" | "env" | "default" {
   return policy.source(dbRaw);
+}
+
+/**
+ * 정책 → 디스크 판정 임계(ops/health 의 Thresholds). /readyz · 관리탭 상태 · 경보 · 세션 가드가 **같은 판정**을 쓰게
+ *  여기 한 자리에서 짓는다. 종전엔 네 곳이 `{ warnPct, criticalPct }` 를 손으로 지었다 — 칸이 하나 늘면(#4780 여유 바닥)
+ *  한 곳만 빠뜨려도 그 화면은 «위험» 이라 말하는데 가드는 통과시키는(또는 그 반대) 어긋남이 생긴다.
+ */
+export function diskThresholds(p: StoragePolicy): Thresholds {
+  return { warnPct: p.disk_warn_pct, criticalPct: p.disk_critical_pct, criticalFreeBytes: p.disk_critical_free_gb * 1024 ** 3 };
 }
 
 // ── 캐시 ──

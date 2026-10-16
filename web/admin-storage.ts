@@ -8,6 +8,22 @@ import { api, busy, cardHead, el, relTime, secretInput, secretRow, toast, uiText
 import { fmtBytes, fmtElapsed, sectionHead, segTabs } from './admin-widgets.js';
 import { planReclaimBatches, wtRemovable } from './admin-storage-plan.js';
 
+// #4780 — 디스크 위험(= 새 세션·클론 차단) 판정은 사용률 **과** 남은 공간 바닥 둘 다다(서버 ops/health.ts levelFor).
+//  배너(문장)와 경보 옵션(이름표)이 같은 기준을 말하도록 값 읽기를 여기 한 곳에 둔다. 바닥 0 = 사용률만(종전).
+function diskBlockRule(p: any): { pct: number; gb: number } {
+  return { pct: p?.disk_critical_pct ?? 95, gb: p?.disk_critical_free_gb ?? 5 };
+}
+function diskBlockSentence(p: any): string {
+  const r = diskBlockRule(p);
+  return r.gb > 0
+    ? `사용률이 ${r.pct}% 이상이고 남은 공간이 ${r.gb}GB보다 적어지면 새 세션·클론·업로드가 자동으로 차단됩니다.`
+    : `${r.pct}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.`;
+}
+function diskBlockLabel(p: any): string {
+  const r = diskBlockRule(p);
+  return r.gb > 0 ? `사용 ${r.pct}% 이상이면서 남은 공간 ${r.gb}GB 미만일 때` : `위험 임계 ${r.pct}% 도달`;
+}
+
 function storageEditor(detail, data) {
   const canEdit = !!data.canEdit;
   const body = el('div');
@@ -37,7 +53,7 @@ function storageEditor(detail, data) {
       : worst && worst.level === 'warn'
         ? el('div', { class: 'storage-banner storage-banner-warn' },
           el('strong', { text: `디스크 경고 (${worst.usedPct}%) — 아직 정상 동작하지만 정리가 필요합니다.` }),
-          el('p', { text: `${p.disk_critical_pct ?? 95}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.` }))
+          el('p', { text: diskBlockSentence(p) }))
         : null;
 
     // ── ① 지금 상태 — 디스크 게이지 ──
@@ -167,6 +183,7 @@ function storageEditor(detail, data) {
     };
     const warnIn = numIn(p.disk_warn_pct ?? 85, 1, 99);
     const critIn = numIn(p.disk_critical_pct ?? 95, 1, 100);
+    const critFreeIn = numIn(p.disk_critical_free_gb ?? 5, 0, 10000);   // #4780 위험 판정 여유(GB) — 0=끔(사용률만)
 
     // ── ② 정책 — 공유 빌드 캐시(#813 T3) ──
     const cache = st.cache || { root: '', vars: [], bytes: 0, partial: false };
@@ -194,6 +211,7 @@ function storageEditor(detail, data) {
         const storage_policy = {
           disk_warn_pct: Number(warnIn.value),
           disk_critical_pct: Number(critIn.value),
+          disk_critical_free_gb: Number(critFreeIn.value),
           shared_cache_enabled: cacheChk.checked,
           shared_cache_relocate_home: homeChk.checked,
         };
@@ -489,9 +507,11 @@ function storageEditor(detail, data) {
           el('strong', { text: '디스크 경고' }),
           el('div', { class: 'storage-fields' },
             el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn),
-            el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)),
+            el('label', {}, el('span', { text: '위험 임계(%)' }), critIn),
+            el('label', {}, el('span', { text: '위험 판정 여유(GB, 0=끔)' }), critFreeIn)),
           el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }),
-          el('p', { class: 'admin-hint' }, ...uiText('경고 임계는 위험 임계보다 낮아야 합니다.'))),
+          el('p', { class: 'admin-hint' }, ...uiText('경고 임계는 위험 임계보다 낮아야 합니다.')),
+          el('p', { class: 'admin-hint' }, ...uiText('사용률이 위험 임계를 넘어도 남은 공간이 위험 판정 여유 이상이면 막지 않고 경고로 둡니다. 디스크가 클수록 비율만으로는 남는 양이 커서(1TB 의 5%는 50GB), 넉넉히 남아도 세션이 열리지 않기 때문입니다. 작은 디스크에서는 비율이 먼저 걸립니다. 0 이면 사용률만 봅니다.'))),
         el('div', { class: 'storage-block' },
           el('strong', { text: '공유 빌드 캐시' }),
           el('label', { class: 'storage-toggle' }, cacheChk,
@@ -549,7 +569,7 @@ function storageEditor(detail, data) {
 
     const minSel = el('select', { class: 'input' },
       el('option', { value: 'warn', text: `경고부터 (경고 임계 ${alertPolicy.disk_warn_pct ?? 85}% 도달 시 알림)` }),
-      el('option', { value: 'critical', text: `위험만 (위험 임계 ${alertPolicy.disk_critical_pct ?? 95}% 도달·DB 연결 불가 시 알림)` }));
+      el('option', { value: 'critical', text: `위험만 (${diskBlockLabel(alertPolicy)}·DB 연결 불가 시 알림)` }));
     minSel.value = a.min_severity || 'warn';
     minSel.disabled = !canEdit;
 

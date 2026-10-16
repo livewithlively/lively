@@ -19,7 +19,7 @@ import { listMembers } from "../org/store/members.js";
 import { getRuntimeConfig } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
-import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
+import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy } from "../org/policies/runtime-loaders.js"; // #1313 R46 — 인라인 람다 복붙 제거(로더 정의 단일화)
 // 디스크 가드(#813 T5) — 세션은 워크트리·의존성으로 디스크를 크게 먹는다. 꽉 찬 뒤엔 DB 가 죽어 복구가 수동이라,
 //  차기 **전에** 신규 세션을 막는다(기존 세션·읽기는 안 막는다).
@@ -590,13 +590,14 @@ async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   // 디스크 가드(#813 T5) — **맨 앞**에서 막는다. 세션은 워크트리 체크아웃 + 의존성 설치로 디스크를 크게 먹는데,
   //  꽉 차면 Postgres 가 죽어 전 기능이 500 이 되고 공간을 비워도 수동 재시작이 필요하다(2026-07-13 실증).
-  //  기존 세션·읽기는 막지 않는다 — 더 붓지만 못하게 할 뿐이다. 임계치는 관리탭 저장소 정책.
+  //  기존 세션·읽기는 막지 않는다 — 더 붓지만 못하게 할 뿐이다. 임계치는 관리탭 저장소 정책(사용률 + 여유 바닥 #4780).
+  //  ⚠ 노드(사람 컴퓨터)엔 DB 가 없어 관리탭 값이 안 닿는다 — 거기선 코드 기본값(95% · 5GB)과 노드 env 시드로 판정한다.
   {
     const sp = await effectiveStoragePolicy(loadStoragePolicy).catch(() => null);
     await assertDiskWritable(
       "새 세션",
       roots().map((r) => r.base),
-      sp ? { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct } : undefined,
+      sp ? diskThresholds(sp) : undefined,
     );
   }
   //  #4213 T11 — 수집 실행 세션은 **러너와 짝으로만** 연다. 종류만 collect 로 되살아나면(복원·이어받기) 러너 없는 빈 셸이
