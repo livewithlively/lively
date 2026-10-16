@@ -83,9 +83,11 @@ async function startStatic(dir) {
  *  serve — 참이면 그 임시 디렉터리를 127.0.0.1 의 작은 정적 서버로 내어 http 로 싣는다(#4794). file:// 로 실으면 크롬이
  *   문서마다 출처를 갈라(액자의 location.origin 은 "file://" · 받는 쪽 ev.origin 은 "null") 같은 출처 액자·대상 출처를 지정한
  *   postMessage 를 잴 수 없다 — 세션 화면과 터미널 액자가 주고받는 시험이 그렇다. 기본은 종전 그대로(file://).
- * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 30초 안에 안 끝나면 던진다.
+ *  timeoutMs — 크롬의 **실시간** 상한(--timeout, 기본 20초). 장면이 많고 액자(xterm)를 여럿 싣는 시험은 가상시간이 남아도 이 상한에
+ *   먼저 걸려 결과 없이 끝난다(term-warm-runtime: 이 박스 실시간 13~15초, 동시 실행 3개면 «결과를 안 냄» — #4794 격리 검토).
+ * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 실시간 상한 + 10초(최소 30초) 안에 안 끝나면 던진다.
  */
-export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [], serve = false }) {
+export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [], serve = false, timeoutMs = 20000 }) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   let closed = Promise.resolve();
   let breather = null;
@@ -113,12 +115,13 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
         //  --virtual-time-budget 만으로는 안 끝난다(ctx-rclick-runtime 실측 90초).
         //  args — 부르는 쪽이 더하는 인자(예: `--window-size=1400,900` — 넓은 폭 미디어 쿼리를 재야 하는 시험, #4443).
         ...args,
-        "--timeout=20000", `--virtual-time-budget=${virtualTimeBudget}`, "--dump-dom", pageUrl,
+        `--timeout=${timeoutMs}`, `--virtual-time-budget=${virtualTimeBudget}`, "--dump-dom", pageUrl,
       ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
       closed = new Promise((r) => child.once("close", r));
       let out = "", errOut = "", settled = false;
       const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ } fn(v); };
-      const timer = setTimeout(() => done(reject, new Error("크롬이 30초 안에 결과를 안 냈다\n" + errOut.slice(0, 800))), 30_000);
+      const limitMs = Math.max(30_000, timeoutMs + 10_000);
+      const timer = setTimeout(() => done(reject, new Error(`크롬이 ${limitMs / 1000}초 안에 결과를 안 냈다\n` + errOut.slice(0, 800))), limitMs);
       //  ⚠ 글자로 받는다(setEncoding) — 조각(Buffer)마다 따로 바꾸면 조각 경계에 걸친 한글이 깨진다
       //   (CI 실측 2026-10-09: «기타» → «���타», session-history-side-runtime H9 가 무작위로 빨갰다 · headless-chrome-decode.test.mjs).
       child.stdout.setEncoding("utf8");

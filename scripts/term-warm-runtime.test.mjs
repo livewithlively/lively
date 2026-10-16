@@ -42,12 +42,19 @@
 //       (매니지드 실측: 옛 화면이 빈 터미널로 넘어갔다가 다시 마운트되며 대화창으로 돌아가는 깜빡임)
 //   W22 되살린 화면(매니지드 행 · 기록 있음) · 하네스가 먼저 그리고 말은 2.6초에 들어간다 → 그린 뒤에도 대화창(대기 말풍선 그대로)
 //       · 말이 기록에 나타난 뒤 터미널(읽는 주기 0.7초 안) · 대기 줄은 걷힌다
-//   W23 그렸는데 말이 끝내 안 들어간다(로그인·경고 창) → 5초에도 대화창 · 그린 때부터 8초 뒤 터미널(그 창을 보게)
+//   W23 그렸는데 말이 끝내 안 들어간다(로그인·경고 창) → 그린 뒤 4초에도 대화창 · 그린 때부터 8초 뒤 터미널(그 창을 보게)
+//       · 읽는 주기: 그리기 전엔 느리게(3초) · 그린 뒤 기다리는 동안만 0.7초 · 넘긴 뒤엔 다시 느리게
 //   W24 그 컴퓨터의 세션(노드 — 대화는 중앙 기록으로만 읽힌다) → 중앙 기록은 턴이 끝나야 자라 에코를 못 본다 · 기다리지 않고 그린 때 넘긴다
 //   W25 기록 읽기가 느려 하네스가 먼저 그렸다 · 그 말은 이미 기록에 있다(들어갔다) → 읽는 동안은 대화창 · 다 읽은 그 자리에서 터미널
 //       (그린 때도 아니고 8초 뒤도 아니다)
-//   W26 읽기가 느린데(0.5초) 그 읽기 도중에 하네스가 그렸다 → 그린 순간 깨운 읽기가 도는 읽기와 같은 자리부터 겹쳐도 보낸 말은 한 번만 그려진다
-//       (겹친 읽기의 낡은 답은 버린다 — 고치기 전엔 두 번 그려졌다)
+//   W26 읽기가 느린데(0.5초) 그 읽기 도중에 하네스가 그렸다 → 그린 순간 깨운 읽기가 도는 읽기와 같은 자리부터 겹친다(겹쳤는지도 잰다)
+//       · 보낸 말은 한 번만 그려진다(겹친 읽기의 낡은 답은 버린다 — 고치기 전엔 두 번 그려졌다)
+//   W27 새로 연 세션(홈 입력창) — 기록 파일이 아직 없다(404) · 말이 들어가면서 파일이 생긴다 → 그려도 그때까지 대화창 · 생긴 뒤 터미널
+//   W28 첫 말이 빗금 명령(/compact) — 기록엔 다른 모양으로 적혀 대기 말풍선과 안 맞는다 → 기다리지 않고 그린 때 넘긴다
+//   W29 매니지드 행(노드 칸 = 세션 호스트)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 지켜볼 곳이 없어(src 없음) 에코를 못 본다
+//       → 기다리지 않고 그린 때 넘긴다(8초를 헛되이 쓰지 않는다 — 격리 검토가 찾음)
+//   G  겹친 읽기 가드(배선 — 소스 글로 본다): 오프셋·지켜보는 곳 둘 다 보고 버린 뒤 곧 다시 읽는다 · 압축 뒤 두 번째 읽기도 · 다시 여는 중엔
+//       읽지 않는다. 런타임으로 재기 어려운 갈래(지켜보는 곳 갈아타기 · 통보 중 30초 주기)는 격리 검토가 따로 재 두었다.
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
 //
 //  가짜는 «서버» 와 «하네스 출력» 뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을, 액자는 실제 터미널 모듈
@@ -55,7 +62,7 @@
 //   file:// 로는 액자·셸의 출처가 갈려 postMessage 를 잴 수 없다(headless-chrome.mjs serve 머리말).
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles · public/vendor/xterm 이 있는 곳)로 옛 코드를 물린다.
 //  크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildSync } from "esbuild";
@@ -143,13 +150,18 @@ async function PAGE_MAIN() {
   const ECHO = {};
   const echoAt = (id, ms, text) => { ECHO[id] = { at: Date.now() + ms, text }; };
   const SLOW = { "box-w25": 1500, "box-w26": 500 };                   // W25 — 기록 읽기가 느리다(그사이 하네스가 그린다) · W26 — 읽기마다 0.5초
+  const NOTYET = {};                                                   // W27 — 그 때까지 기록 파일이 없다(404)
+  const FETCHES = [];                                                  // 기록 읽기마다 { sid, start, end } — W23 주기 · W26 겹침
   window.fetch = async (url) => {
     const u = new URL(String(url), location.href);
     if (/\/transcript$/.test(u.pathname)) {
       //  진짜 서버처럼 창(from · 크기)을 머리에 싣는다 — 안 실으면 화면의 폴링이 «파일이 줄었다(교체)» 로 읽고 처음부터 다시 그린다(낙관 턴이 사라진다).
       const sid = decodeURIComponent((/\/sessions\/([^/]+)\/transcript$/.exec(u.pathname) || [])[1] || "");
       if (sid === "box-w24") return J({ error: "node", uuid: "u-w24", node: "n-w24" }, 409);   // W24 — 그 컴퓨터의 세션: 서버가 중앙 기록 좌표를 알려 준다
+      const fr = { sid, start: Date.now(), end: 0 }; FETCHES.push(fr);
       if (SLOW[sid]) await sleep(SLOW[sid]);
+      fr.end = Date.now();
+      if (NOTYET[sid] && Date.now() < NOTYET[sid]) return J({ error: "아직 없음" }, 404);
       const e = ECHO[sid];
       const all = (TRANSCRIPTS[sid] || "") + (e && Date.now() >= e.at ? said("user", e.text, new Date(e.at).toISOString()) : "");
       const from = u.searchParams.has("from") ? Math.min(Number(u.searchParams.get("from")) || 0, all.length) : 0;
@@ -476,14 +488,15 @@ async function PAGE_MAIN() {
       R.w22.after = v.snap(); R.w22.termAt = v.termAt(); R.w22.qstateAfter = v.qstate(); R.w22.focused = !!v.fx()["test-focused"];
       v.done();
     }
-    // W23 — 그렸는데 말이 끝내 안 들어간다
+    // W23 — 그렸는데 말이 끝내 안 들어간다(그리기는 3초 뒤 — 그 전의 읽는 주기도 잰다)
     {
-      const v = mount("box-w23", "ink=600", { firstPrompt: "첫 지시 W23" });
-      await sleep(5000);
-      R.w23 = { at5s: v.snap(), qstate: v.qstate() };
-      await sleep(5000);
+      const v = mount("box-w23", "ink=3000", { firstPrompt: "첫 지시 W23" });
+      await sleep(8000);
+      R.w23 = { at8s: v.snap(), qstate: v.qstate() };
+      await sleep(7000);
       const ink = v.fx()["test-ink"];
-      R.w23.at10s = v.snap(); R.w23.inkAt = ink ? ink.at - v.t0 : null; R.w23.termAt = v.termAt();
+      R.w23.at15s = v.snap(); R.w23.inkAt = ink ? ink.at - v.t0 : null; R.w23.termAt = v.termAt();
+      R.w23.reads = FETCHES.filter((f) => f.sid === "box-w23").map((f) => f.start - v.t0);
       v.done();
     }
     // W24 — 그 컴퓨터의 세션(중앙 기록으로만 읽힌다)
@@ -511,7 +524,37 @@ async function PAGE_MAIN() {
       const inp = v.input();
       inp.focus(); inp.value = "쓰는 중"; inp.dispatchEvent(new Event("input"));   // 화면을 대화창에 붙잡아 둔다(보이는 글로 센다)
       await sleep(3200);
-      R.w26 = { n: v.count("보낸 말 W26"), after: v.snap(), ink: !!v.fx()["test-ink"] };
+      const f26 = FETCHES.filter((f) => f.sid === "box-w26");
+      R.w26 = { n: v.count("보낸 말 W26"), after: v.snap(), ink: !!v.fx()["test-ink"],
+        overlapped: f26.some((a, i) => f26.some((b, j) => j > i && a.start < b.end && b.start < a.end)) };
+      v.done();
+    }
+    // W27 — 새로 연 세션 · 기록 파일이 말이 들어가면서 생긴다
+    {
+      NOTYET["box-w27"] = Date.now() + 2600;
+      echoAt("box-w27", 2600, "첫 지시 W27");
+      const v = mount("box-w27", "ink=600", { firstPrompt: "첫 지시 W27" });
+      await sleep(1800);
+      R.w27 = { during: v.snap(), n: v.count("첫 지시 W27"), echoAt: ECHO["box-w27"].at - v.t0, ink: !!v.fx()["test-ink"] };
+      await sleep(2400);
+      R.w27.after = v.snap(); R.w27.termAt = v.termAt();
+      v.done();
+    }
+    // W29 — 매니지드 행 · 대화 id 모름 · 기록 파일 없음(지켜볼 곳이 없다)
+    {
+      NOTYET["box-w29"] = Date.now() + 600000;
+      const v = mount("box-w29", "ink=600", { firstPrompt: "첫 지시 W29" }, true, null, false, { node: "sesshost-test" });
+      await sleep(2000);
+      const ink = v.fx()["test-ink"];
+      R.w29 = { after: v.snap(), n: v.count("첫 지시 W29"), inkAt: ink ? ink.at - v.t0 : null, termAt: v.termAt() };
+      v.done();
+    }
+    // W28 — 첫 말이 빗금 명령
+    {
+      const v = mount("box-w28", "ink=600", { firstPrompt: "/compact" });
+      await sleep(2000);
+      const ink = v.fx()["test-ink"];
+      R.w28 = { after: v.snap(), inkAt: ink ? ink.at - v.t0 : null, termAt: v.termAt() };
       v.done();
     }
   } catch (e) { R.err = String(e && e.stack || e); }
@@ -529,7 +572,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 let dom;
 try {
   dom = await dumpDom(chrome, {
-    html: page, serve: true, prefix: "term-warm-", virtualTimeBudget: 180000, args: ["--window-size=1200,900"],
+    html: page, serve: true, prefix: "term-warm-", virtualTimeBudget: 240000, timeoutMs: 60000, args: ["--window-size=1200,900"],
     copy: [...CSS, ...XTERM, write("frame.html", FRAME), write("tm.js", tm)],
   });
 } finally { rmSync(files, { recursive: true, force: true }); }
@@ -640,10 +683,17 @@ check(w22.inkAt != null && w22.inkAt < 1200 && (w22.during || {}).warm && !(w22.
 check((w22.after || {}).term && !(w22.after || {}).warm && w22.termAt >= w22.echoAt && w22.termAt <= w22.echoAt + 1000 && !w22.qstateAfter && w22.focused,
   "W22 말이 기록에 나타난 뒤(읽는 주기 0.7초 안)에 터미널로 · 대기 줄은 걷히고 터미널에 초점", { echoAt: w22.echoAt, termAt: w22.termAt, after: w22.after, qstateAfter: w22.qstateAfter });
 const w23 = R.w23 || {};
-check((w23.at5s || {}).warm && !(w23.at5s || {}).term && /전달 대기 중/.test(String(w23.qstate || "")),
-  "W23 그렸는데 말이 안 들어가면 — 5초에도 대화창(대기 말풍선)", w23.at5s);
-check((w23.at10s || {}).term && !(w23.at10s || {}).warm && w23.inkAt != null && w23.termAt - w23.inkAt >= 8200 && w23.termAt - w23.inkAt <= 8800,
+check((w23.at8s || {}).warm && !(w23.at8s || {}).term && /전달 대기 중/.test(String(w23.qstate || "")) && w23.inkAt != null && w23.inkAt < 3600,
+  "W23 그렸는데 말이 안 들어가면 — 그린 뒤 4초에도 대화창(대기 말풍선)", { at8s: w23.at8s, inkAt: w23.inkAt });
+check((w23.at15s || {}).term && !(w23.at15s || {}).warm && w23.inkAt != null && w23.termAt - w23.inkAt >= 8200 && w23.termAt - w23.inkAt <= 8800,
   "W23 끝내 안 들어가면 그린 때부터 8초 뒤 터미널로(로그인·경고 창을 보게)", { inkAt: w23.inkAt, termAt: w23.termAt });
+{
+  const rd = w23.reads || [], ink = w23.inkAt ?? 0, sw = w23.termAt || 0;
+  const n = (a, b) => rd.filter((t) => t >= a && t < b).length;
+  const before = n(800, ink + 250), waiting = n(ink + 1300, ink + 7300), after = n(sw + 800, sw + 3600);
+  check(before <= 1 && waiting >= 6 && after <= 1,
+    "W23 읽는 주기 — 그리기 전엔 느리게 · 그린 뒤 말을 기다리는 동안만 0.7초 · 넘긴 뒤엔 다시 느리게", { before, waiting, after, reads: rd });
+}
 const w24 = R.w24 || {};
 check((w24.after || {}).term && w24.inkAt != null && w24.termAt >= w24.inkAt && w24.termAt - w24.inkAt <= 700 && /전달 대기 중/.test(String(w24.qstate || "")),
   "W24 중앙 기록으로만 읽히는 세션은 에코를 기다리지 않고 그린 때 넘긴다(대기 말풍선은 있어도)", w24);
@@ -654,7 +704,31 @@ check((w25.after || {}).term && w25.termAt >= 1450 && w25.termAt <= 2100 && !w25
   "W25 다 읽어 보니 그 말이 이미 들어가 있으면 그 자리에서 터미널로(8초를 기다리지 않는다) · 대기 말풍선 없음", { termAt: w25.termAt, qstate: w25.qstate });
 
 const w26 = R.w26 || {};
-check(w26.ink && w26.n === 1 && (w26.after || {}).chatShown, "W26 그린 순간의 읽기가 도는 읽기와 겹치지 않는다 — 보낸 말이 한 번만 그려진다", w26);
+check(w26.ink && w26.overlapped && w26.n === 1 && (w26.after || {}).chatShown,
+  "W26 그린 순간 깨운 읽기가 도는 읽기와 겹쳐도(겹침 확인) 보낸 말은 한 번만 그려진다 — 낡은 답은 버린다", w26);
+const w27 = R.w27 || {};
+check(w27.ink && (w27.during || {}).warm && !(w27.during || {}).term && w27.n === 1,
+  "W27 새로 연 세션 — 기록 파일이 아직 없어도 보낸 말이 들어갈 때까지 대화창(그 말이 보인다)", w27);
+check((w27.after || {}).term && w27.termAt >= w27.echoAt && w27.termAt <= w27.echoAt + 1000,
+  "W27 기록 파일이 생기며 그 말이 나타난 뒤 터미널로", { echoAt: w27.echoAt, termAt: w27.termAt, after: w27.after });
+const w28 = R.w28 || {};
+check((w28.after || {}).term && w28.inkAt != null && w28.termAt >= w28.inkAt && w28.termAt - w28.inkAt <= 700,
+  "W28 빗금 명령(/compact)은 에코를 기다리지 않고 그린 때 넘긴다", w28);
+const w29 = R.w29 || {};
+check((w29.after || {}).term && w29.inkAt != null && w29.termAt >= w29.inkAt && w29.termAt - w29.inkAt <= 700,
+  "W29 지켜볼 기록이 없는 화면(매니지드 행 · 대화 id 모름 · 파일 없음)은 기다리지 않고 그린 때 넘긴다", w29);
+{
+  //  G — 겹친 읽기 가드의 배선(소스 글). 런타임으로 못 잡는 갈래를 한 글자도 안 빠뜨리게 박아 둔다.
+  const scSrc = readFileSync(path.join(ROOT, "web/session-chat.ts"), "utf8");
+  const pollBody = scSrc.slice(scSrc.indexOf("  async function poll(): Promise<void> {"), scSrc.indexOf("  function clearAll(): void {"));
+  check(pollBody.length > 500
+    && /if \(opening\) \{ schedule\(\); return; \}/.test(pollBody)
+    && /if \(src !== src0 \|\| loadedTo !== from0\) \{ pokePoll\(\); return; \}/.test(pollBody)
+    && /if \(src !== src0 \|\| loadedTo !== 0\) \{ pokePoll\(\); return; \}/.test(pollBody)
+    && /warmSwitchIfDelivered\(\);[^\n]*\n\s*schedule\(\);\s*\n\s*\}\s*$/.test(pollBody),
+    "G 겹친 읽기 가드 — 다시 여는 중엔 안 읽는다 · 오프셋·지켜보는 곳 둘 다 보고 버린 뒤 곧 다시 읽는다 · 압축 뒤 두 번째 읽기도 · 읽기 끝마다 넘길지 다시 본다",
+    pollBody.length);
+}
 
 check(!(R.pageErrors || []).length, "E 페이지 오류 없음", R.pageErrors);
 console.log(`\nterm-warm-runtime: ${pass} 통과 · ${fail} 실패`);

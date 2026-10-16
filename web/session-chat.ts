@@ -1061,7 +1061,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   첫 그림 뒤 3~4초에 들어갔다) — 사람이 그 사이 터미널에 치면 두 글이 섞이고, 말이 끝내 안 들어간 판에선 빈 입력칸만 보고 모른다.
   //   «들어갔다» = 대화 기록에 그 말이 나타났다(대기 말풍선의 에코 — 아래 pending 매칭). 그린 뒤 기다리는 동안은 0.7초마다 읽는다(schedule).
   //   그린 뒤 WARM_DELIVERY_GRACE_MS 안에 안 들어가면 그때 넘긴다 — 로그인·신뢰·경고 창처럼 입력을 못 받는 화면은 터미널에서 봐야 한다.
-  //   ⚠ 중앙 기록(노드 세션)으로만 읽히면 기다리지 않는다 — 그 기록은 턴이 끝나야 자라(#1744) 에코가 유예 안에 못 온다.
+  //   ⚠ 에코를 볼 수 있는 곳은 박스 대화 파일뿐이다 — 중앙 기록(노드 세션)은 턴이 끝나야 자라고(#1744), 지켜보는 곳이 없으면(src 없음)
+  //    아무도 안 읽는다. 둘 다 기다리면 유예를 통째로 쓴다. 빗금 명령(/compact)·셸 모드(!ls)도 기다리지 않는다 — 기록엔 다른 모양
+  //    (<command-name> 등)으로 적혀 대기 말풍선과 안 맞는다.
   const TERM_WARM_MAX_MS = 25_000;
   const WARM_DELIVERY_GRACE_MS = 8_000;
   let termWarm: { timer: number; ro: ResizeObserver | null; painted: boolean; grace: number } | null = null;
@@ -1122,8 +1124,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 대기 말풍선이 에코를 기다리는 중이거나, 기록을 아직 읽는 중이라 말풍선을 그리기 전이다.
    *  ⚠ 기록 읽기가 끝났는데도 firstPrompt 가 남는 판(못 읽는 하네스 · 그때 세션이 아직 안 떠 있었음)은 기다릴 근거가 없다 — opening 으로 가른다. */
   function deliveryPending(): boolean {
-    if (opening && firstPrompt) return true;
-    return !!warmPrompt && pending.includes(warmPrompt) && src?.kind !== 'log';
+    const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
+    if (opening && firstPrompt) return echoable(firstPrompt);
+    return !!warmPrompt && pending.includes(warmPrompt) && echoable(warmPrompt.text) && src?.kind === 'box';
   }
   /** #4794 액자가 «처음 그렸다» 를 알렸다 — 보낸 말도 들어갔으면 넘기고, 아니면 들어갈 때까지(최대 WARM_DELIVERY_GRACE_MS) 기다린다. */
   function onWarmPainted(): void {
@@ -1134,7 +1137,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     w.grace = window.setTimeout(() => endTermWarm(true), WARM_DELIVERY_GRACE_MS);
     pokePoll();   // 지금 한 번 읽고, 그 뒤로는 촘촘히(schedule) — 걸려 있던 주기가 3초일 수 있다
   }
-  /** #4794 하네스가 이미 그렸고 보낸 말도 들어갔으면 이제 넘긴다 — 에코가 왔을 때 · 기록 읽기가 끝났을 때 다시 본다(안 그렸으면 그린 때 넘긴다). */
+  /** #4794 하네스가 이미 그렸고 보낸 말도 들어갔으면 이제 넘긴다 — 읽기(poll)가 끝날 때마다 · 기록 열기(open)가 끝났을 때 다시 본다
+   *  (에코 · 지켜보는 곳이 바뀜 · 대기 말을 지움 — 무엇이 «들어갔나» 를 바꿨든). 안 그렸으면 그린 때 넘긴다. */
   function warmSwitchIfDelivered(): void {
     if (termWarm && termWarm.painted && !deliveryPending()) endTermWarm(true);
   }
@@ -1770,8 +1774,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const pi = pending.findIndex((pd) => sameSaid(pd.text, text));
       if (pi >= 0) {
         const pd = pending[pi]; pending.splice(pi, 1);
-        //  #4794 — 말을 보내 연 화면의 그 말이 들어갔다 → 하네스가 그렸으면 이제 터미널로(되그리는 중엔 이 줄이 끝난 뒤에).
-        if (pd === warmPrompt) { warmPrompt = null; window.setTimeout(warmSwitchIfDelivered, 0); }
         pd.state.remove();                                       // '전달 대기' 줄은 물러난다 — 기록에 적힌 것이 곧 전달이다
         view.setNote('');                                        // '여는 중·아직 안 나타남' 안내도 그 순간 물러난다
         const rec = recs.find((r) => r.t === pd.t);
@@ -2360,6 +2362,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
+    if (opening) { schedule(); return; }      // 기록을 다시 여는 중 — 그 읽기가 그린다(겹쳐 읽으면 같은 줄이 두 번 선다, 아래 ★)
     const src0 = src, from0 = loadedTo;
     try {
       let c = await rawGet(srcPath(src, { from: loadedTo }));
@@ -2367,8 +2370,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (destroyed) return;
       //  ★ 겹친 읽기는 버린다(#4794 시험 W26 이 드러냄). 깨운 읽기(pokePoll — 통보 · 하네스가 그린 순간)는 도는 읽기를 기다리지 않아
       //   같은 자리부터 두 번 읽을 수 있고, 둘 다 그리면 같은 줄이 두 번 선다(보낸 말이 두 번 보였다). 이 읽기가 도는 사이 다른 읽기가
-      //   그 자리를 이미 그렸으면(오프셋이 움직였다) 이 답은 낡았다 — 다음 주기는 그 읽기가 걸었다.
-      if (src !== src0 || loadedTo !== from0) return;
+      //   그 자리를 이미 그렸으면(오프셋·지켜보는 곳이 움직였다) 이 답은 낡았다. 다만 이 답에 **더 새 줄**이 실려 있었을 수 있다 —
+      //   버리되 곧 다시 읽는다(통보가 살아 있으면 다음 주기는 30초 뒤다). 지켜보는 곳까지 보는 이유: 갈아탄 뒤 옛 곳의 답을 새 곳에 그리면
+      //   새 곳의 첫 읽기가 엉뚱한 오프셋에서 시작한다.
+      if (src !== src0 || loadedTo !== from0) { pokePoll(); return; }
       if (src.kind === 'box' && c.uuid && curUuid && c.uuid !== curUuid) {
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
@@ -2376,6 +2381,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ctx = ctxNew(); view.idle(null);   // #4707 — 새 기록(압축·/clear)은 문맥을 새로 센다. 지난 파일의 «쉬는 동안의 안내» 는 걷는다.
         c = await rawGet(srcPath(src, { from: 0 }));
         if (destroyed) return;
+        if (src !== src0 || loadedTo !== 0) { pokePoll(); return; }   // 그새 다른 읽기가 새 파일을 그렸다 — 위 ★ 와 같다
       } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
         clearAll(); await open(); return;
       }
@@ -2414,6 +2420,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       else if (st === 409 && src.kind === 'box' && e?.message) { src = null; return; }   // 못 읽는 하네스 — 더 안 묻는다(#1746)
       else if (fails === 3) view.setNote('진행을 따라가지 못하고 있어요 — 다시 붙는 중…');
     }
+    warmSwitchIfDelivered();   // #4794 — 이 읽기로 «들어갔나» 가 바뀌었을 수 있다. 화면을 먼저 정해야 아래 주기가 그 화면에 맞는다
     schedule();
   }
   function clearAll(): void {
