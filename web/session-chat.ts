@@ -147,6 +147,8 @@ export interface SessAppDoor {
 const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
 //  #4032 — 리브 탭에서 첫 말로 연 리브 세션(src/org/liv/session.ts LIV_CHAT_LABEL). 대화가 본자리인 것은 같고, 첫 말은 사람이 쓴 것이라 숨기지 않는다.
 const LIV_CHAT_LABEL = '리브 — 대화';
+/** 보낸 말이 대화 기록에 사람 말로 나타나나 — 슬래시 명령(`/compact`)·셸(`!ls`)은 하네스가 그 자리에서 실행하고 사람 말 줄로 안 남는다(에코 없음). */
+const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
 
 /**
  * 이 세션 대화창을 **Claude Code 터미널 문법(tui)** 으로 그리나 (#4707, 상민님 «세션 대화창 ui를 클로드코드 tui랑 최대한 똑같이»).
@@ -1132,7 +1134,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  ⚠ 기록 읽기가 끝났는데도 firstPrompt 가 남는 판(못 읽는 하네스 · 그때 세션이 아직 안 떠 있었음)은 기다릴 근거가 없다 — opening 으로 가른다. */
   function deliveryPending(): boolean {
     if (warmTyped) return false;
-    const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
     if (opening && firstPrompt) return echoable(firstPrompt);
     return !!warmPrompt && pending.includes(warmPrompt) && echoable(warmPrompt.text) && src?.kind === 'box';
   }
@@ -1687,6 +1688,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     forceRestore?: boolean;
     /** #4819 — 서버 큐가 마지막으로 알려 준 그 행의 상태·사유. 같은 글의 말풍선이 여럿일 때 기록의 에코를 어디에 이을지 가른다. */
     status?: string; err?: string | null;
+    /** #4850 — 기록에 그 말이 나타날 때까지 맨 아래에 붙들렸나(view.turn pinned). 에코 없는 말(슬래시 명령·셸)은 안 붙든다. */
+    pinned?: boolean;
   }
   const pending: Pending[] = [];
   //  #4819 — 기록이 이미 보여 준 말의 큐 행 id(낙관 말풍선이 기록에 이어졌거나, 그려 둔 기록에 행보다 뒤에 적힌 같은 말이 있다).
@@ -1731,7 +1734,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const r = { t: view.turn(text, { ts, at, pinned }), evs: [] as any[] };
     if (at === 'start') recs.unshift(r);
     else {
-      const i = pinned ? -1 : recs.findIndex((x) => pending.some((p) => p.t === x.t));
+      const i = pinned ? -1 : recs.findIndex((x) => pending.some((p) => p.pinned && p.t === x.t));
       if (i < 0) recs.push(r); else recs.splice(i, 0, r);
     }
     return r;
@@ -1892,10 +1895,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    */
   function addPending(text: string, obId?: number): Pending {
     const behind = running && !!cur;            // 도는 턴이 있다 — 이 말은 그 턴의 다음 틈을 기다린다
-    const rec = newRec(text, new Date().toISOString(), 'end', true);
+    //  기록에 사람 말로 나타날 말만 붙든다 — 슬래시 명령·셸은 끝내 안 나타나(에코 없음) 붙들면 맨 아래에 영영 남아 그 뒤의 구분선·답보다
+    //   아래로 밀린다(`/compact` 가 압축 구분선 밑에 서는 꼴). 그런 말은 종전처럼 보낸 자리에 둔다.
+    const pinned = echoable(text);
+    const rec = newRec(text, new Date().toISOString(), 'end', pinned);
     const state = el('div', { class: 'dt-qstate' });
     rec.t.ask?.append(state);
-    const pd: Pending = { text, t: rec.t, obId, state };
+    const pd: Pending = { text, t: rec.t, obId, state, pinned };
     pending.push(pd);
     if (!behind) { cur = rec; running = true; view.running(rec.t); }
     view.busy(true);
@@ -1907,9 +1913,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const i = pending.indexOf(pd);
     if (i < 0) return;
     pending.splice(i, 1);
+    if (!pd.pinned) return;
     view.unpin(pd.t);
     const ri = recs.findIndex((r) => r.t === pd.t);
-    const fi = recs.findIndex((r) => pending.some((p) => p.t === r.t));
+    const fi = recs.findIndex((r) => pending.some((p) => p.pinned && p.t === r.t));
     if (ri >= 0 && fi >= 0 && fi < ri) { const [r] = recs.splice(ri, 1); recs.splice(fi, 0, r); }
   }
   /** #4850 — 이 말풍선이 도는 다른 턴 뒤에서 기다리는 중인가(일하는 중에 보냈고 아직 기록에 안 들어갔다). */

@@ -123,6 +123,10 @@ async function PAGE_MAIN(GROUP) {
       //  textContent 로 본다 — tui 는 도구 호출을 «Ran 1 shell command» 로 접어 명령·결과가 innerText 엔 안 보인다(접힌 것도 그 턴의 것이다).
       where: (text) => { const ts = turns(); for (let i = 0; i < ts.length; i++) { const w = ts[i].querySelector(".livc-work"); if (w && norm(w.textContent).includes(norm(text))) return { i, ask: askOf(ts[i]) }; } return null; },
       askIdx: (text) => turns().findIndex((x) => askOf(x) === norm(text)),
+      //  «작업 중» 표시(입력칸의 busy — 멈춤 단추가 서는 상태). 도는 턴이 있는 동안 꺼지면 안 된다.
+      busy: () => !!box.querySelector("form.tui-busy, form.dt-busy"),
+      //  목록의 자식 순서 — 내 말 턴은 그 말, 사람 말 없는 턴은 "turn", 구분선은 "divider".
+      order: () => [...list().children].map((n) => n.matches(".livc-divider") ? "divider" : n.matches(".livc-turn") ? (askOf(n) ?? "turn") : null).filter((x) => x !== null),
       lastAsk: () => { const ts = turns(); return ts.length ? askOf(ts[ts.length - 1]) : null; },
       stateOf: (text) => { const s = turns().find((x) => askOf(x) === norm(text)); const q = s && s.querySelector(".dt-qstate"); return q ? norm(q.textContent) : null; },
       spinIn: () => { const ts = turns(); const i = ts.findIndex((s) => s.querySelector(".tui-spin, .dt-live, .livc-live")); return i < 0 ? null : askOf(ts[i]); },
@@ -280,10 +284,10 @@ async function PAGE_MAIN(GROUP) {
       FAIL_POST["box-r11"] = true;
       const v = mount("box-r11", { working: true });
       await sleep(1500);
-      const before = v.spinIn();
+      const before = v.spinIn(), busyBefore = v.busy();
       v.send("B 못 간 말");
       await sleep(800);
-      R.r11 = { before, spin: v.spinIn(), failText: v.text().includes("보내지 못했습니다"), asks: v.asks() };
+      R.r11 = { before, busyBefore, spin: v.spinIn(), busy: v.busy(), failText: v.text().includes("보내지 못했습니다"), asks: v.asks() };
       v.done();
     }
     //  큐 행의 상태를 바꾼다(서버가 그 행을 어떻게 마감했나).
@@ -355,6 +359,22 @@ async function PAGE_MAIN(GROUP) {
       TR["box-r15"] += ai("주인 없는 답 R15", "orph-15");
       await sleep(3500);
       R.r15 = { clicked, acts: ACTS.filter((a) => a.sid === "box-r15").map((a) => a.act), asks: v.asks(), orphan: v.text().includes("주인 없는 답 R15") };
+      v.done();
+    }
+    // ── R16 슬래시 명령은 붙들지 않는다 — 기록에 사람 말로 안 남는다(하네스가 그 자리에서 실행) ─────────────
+    {
+      clock = Date.now() - 5000;
+      TR["box-r16"] = user("A 끝난 지시 R16", "u-a16") + ai("A 답 R16", "ans-a16") + end();
+      const v = mount("box-r16", { working: false });
+      await sleep(1500);
+      v.send("/compact");
+      await sleep(400);
+      dropRow("box-r16", "/compact");
+      //  Claude Code 는 명령 줄(주입 — 사람 말 아님)과 압축 구분을 적고, 압축 뒤 대화가 이어진다.
+      TR["box-r16"] += line({ type: "user", uuid: "cmd-16", timestamp: ts(), message: { role: "user", content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>" } })
+        + line({ type: "system", subtype: "compact", uuid: "cp-16", timestamp: ts(), text: "앞 대화 요약 R16" }) + ai("압축 뒤 답 R16", "ans-c16") + end();
+      await sleep(2500);
+      R.r16 = { order: v.order(), after: v.where("압축 뒤 답 R16") };
       v.done();
     }
     }

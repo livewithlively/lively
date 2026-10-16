@@ -13,11 +13,12 @@
 //   R6 라이브 · A 가 도는 중 B 를 보냄 → A 턴이 먼저 끝나고 B 는 사람 말 줄로 들어감 → 최종 화면 = 새로 연 화면(A 의 끝 줄은 A 턴)
 //   R7 라이브 · 쉬는 중 B 를 보냄 → 곧장 지금 턴(도는 표시가 B 턴에 — 종전 그대로)
 //   R8 라이브 · A 도는 중 B1 · B2 를 보냄 → 둘 다 맨 아래(보낸 순서) → 같은 틈에 둘 다 끼워 넣어짐 → B1 < B2 < 답 · = 새로 연 화면
-//   R11 A 가 도는 중 B 의 보내기가 실패(POST 500) → A 의 도는 표시는 그대로 · B 엔 실패를 남긴다
+//   R11 A 가 도는 중 B 의 보내기가 실패(POST 500) → A 의 도는 표시·«작업 중» 상태는 그대로 · B 엔 실패를 남긴다
 //   R12 B 가 붙들린 동안 A 턴이 끝나고 작업 끝 알림이 새 턴을 연다 → 그 턴은 B 위 · B 가 들어가면 알림 턴 다음 · = 새로 연 화면
 //   R13 B1 · B2 를 보냄 → B1 은 전달 실패 · B2 가 먼저 들어감 → B2 는 B1 위로 · B1 은 맨 아래에 실패로 남는다 · = 새로 연 화면
 //   R14 도는 중 보낸 말이 전달 안 됨 → [다시 보내기] 를 눌러도 하던 턴의 도는 표시를 뺏지 않는다
 //   R15 쉬는 중 보낸 말(지금 턴)이 전달 안 됨 → [지우기] → 그 뒤 온 답은 지운 턴이 아니라 화면에 선다
+//   R16 쉬는 중 슬래시 명령(`/compact`)을 보냄 → 기록에 사람 말로 안 남는다 → 붙들지 않는다: 보낸 자리에 남고 압축 구분선·답은 그 아래
 //
 //  장면·가짜 서버는 queued-say-harness.mjs 한 벌(두 시험 파일이 묶음 하나씩 돌린다). 세션 화면은 실제 모듈을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
@@ -65,8 +66,8 @@ check(r8.after && r8.after.b1 === 1 && r8.after.b2 === 1 && r8.after.ans && r8.a
   "R8 같은 틈에 둘 다 끼워 넣어지면 B1 < B2 < 답 · 라이브 화면 = 새로 연 화면", { after: r8.after, fresh: r8.fresh });
 
 const r11 = R.r11 || {};
-check(r11.before === "A 도는 지시 R11" && r11.spin === "A 도는 지시 R11" && r11.failText,
-  "R11 도는 중 보내기가 실패해도 하던 턴의 도는 표시는 그대로 · 그 말엔 실패를 남긴다", r11);
+check(r11.before === "A 도는 지시 R11" && r11.spin === "A 도는 지시 R11" && r11.busyBefore === true && r11.busy === true && r11.failText,
+  "R11 도는 중 보내기가 실패해도 하던 턴의 도는 표시·«작업 중» 상태(멈춤 단추)는 그대로 · 그 말엔 실패를 남긴다", r11);
 
 const r12 = R.r12 || {};
 check(r12.mid && r12.mid.last === "B 알림 뒤에 들어갈 말" && r12.mid.note && r12.mid.note.ask === null && r12.mid.note.i < r12.mid.bIdx && r12.mid.fin && r12.mid.fin.ask === "A 지시 R12",
@@ -87,6 +88,10 @@ check(r14.clicked && JSON.stringify(r14.acts) === JSON.stringify(["retry"]) && r
 const r15 = R.r15 || {};
 check(r15.clicked && JSON.stringify(r15.acts) === JSON.stringify(["discard"]) && JSON.stringify(r15.asks) === JSON.stringify(["A 끝난 지시 R15"]) && r15.orphan,
   "R15 지금 턴이던 말풍선을 [지우기] 한 뒤에 온 답은 지운 턴이 아니라 화면에 선다", r15);
+
+const r16 = R.r16 || {};
+check(r16.order && r16.order.indexOf("/compact") >= 0 && r16.order.indexOf("/compact") < r16.order.indexOf("divider") && r16.after && r16.after.ask === null,
+  "R16 슬래시 명령(기록에 사람 말로 안 남는다)은 붙들지 않는다 — 보낸 자리에 남고 그 뒤의 압축 구분선·답은 그 아래", r16);
 
 check(!(R.pageErrors || []).length, "페이지 오류 없음", R.pageErrors);
 console.log(`\n${pass} passed, ${fail} failed — 일하는 중 보낸 말 화면 · 라이브 보내기(#4850)`);
