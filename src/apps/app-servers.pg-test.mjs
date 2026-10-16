@@ -37,7 +37,9 @@ await su.query(`CREATE DATABASE ${DB}`);
 const dbc = new pg.Client({ connectionString: dsnFor(DB) }); await dbc.connect();
 await dbc.query("CREATE EXTENSION IF NOT EXISTS vector").catch(() => { /* pgvector 없는 로컬 PG */ });
 process.env.ITEMS_DATABASE_URL = dsnFor(DB);
-for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_APP_BUNDLE_BUCKET", "LIVELY_APP_BUNDLE_POLICY", "LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_PREFIX"]) delete process.env[k];
+//  지역 · 스위치 · 레이어 · 런타임도 지운다 — 기대값(ap-northeast-2 · 기본 레이어 · nodejs22.x)이 그 셸의 env 에 흔들리지 않게(#4790 재검토 6).
+for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_APP_BUNDLE_BUCKET", "LIVELY_APP_BUNDLE_POLICY", "LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_PREFIX",
+  "AWS_REGION", "LIVELY_APP_SERVER_REGION", "LIVELY_APP_BUNDLE_REGION", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_LAYER", "LIVELY_APP_SERVER_RUNTIME"]) delete process.env[k];
 const ROLE = "arn:aws:iam::111122223333:role/lvly-app-exec";
 process.env.LIVELY_APP_SERVER_EXEC_ROLE = ROLE;
 const D = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -153,7 +155,7 @@ const api = {
   },
   putConcurrency: async (n, k) => { log.push(["putConcurrency", n, k]); fns.get(n).conc = k; },
   deleteConcurrency: async (n) => { log.push(["deleteConcurrency", n]); const f = fns.get(n); if (f) f.conc = null; },
-  ensureLogGroup: async (g, d, tags, arn) => { log.push(["ensureLogGroup", g, d, tags, arn]); if (logFail) { const e = logFail; logFail = null; throw e; } },
+  ensureLogGroup: async (g, d, tag) => { log.push(["ensureLogGroup", g, d, tag]); if (logFail) { const e = logFail; logFail = null; throw e; } },
   deleteLogGroup: async (g) => { log.push(["deleteLogGroup", g]); },
 };
 const deletedZips = [];
@@ -196,7 +198,7 @@ chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB
 chk("D1d 로그 그룹(보관 14일) → 판 고정(코드 지문 조건) → 그 판으로 시험 호출 → 별칭 cur(나만 보는 앱이라 pub 없음)",
   calls("ensureLogGroup")[0]?.[1] === `/aws/lambda/${FN}` && calls("ensureLogGroup")[0]?.[2] === 14 && calls("publishVersion").length === 1
   //  #4790 — 실행 역할의 쓰기 조건이 보는 태그 lvly-fn = 함수 이름 · TagResource 용 그룹 ARN(실행 역할의 계정 · 끝 :* 없이)
-  && calls("ensureLogGroup")[0]?.[3]?.["lvly-fn"] === FN && calls("ensureLogGroup")[0]?.[4] === `arn:aws:logs:ap-northeast-2:111122223333:log-group:/aws/lambda/${FN}`
+  && calls("ensureLogGroup")[0]?.[3]?.tags?.["lvly-fn"] === FN && calls("ensureLogGroup")[0]?.[3]?.arn === `arn:aws:logs:ap-northeast-2:111122223333:log-group:/aws/lambda/${FN}`
   && calls("publishVersion")[0][2] === shaB64(zips.get(cf.Code.S3Key)) && calls("invoke")[0]?.[2] === "1" && calls("putAlias").length === 1 && calls("putAlias")[0][2] === "cur",
   JSON.stringify(log.map((x) => x[0])));
 chk("D1e 기록 — cur = 1판 · 함수 판 1 · 빌드 ok", r1?.cur_lambda_version === "1" && r1?.cur_version_no === s1.version_no && r1?.pub_lambda_version == null
@@ -212,7 +214,7 @@ chk("D2 이름만 바꾼 판 — 빌드 · 코드 올리기 · 판 고정 · 시
 //  #4790 T1 같은 빌드를 다시 쓰는 배포도 로그 그룹 태그를 맞춘다(태그 전에 만든 함수 · 지워진 태그 — 태그가 없으면 그 함수 기록이 안 써진다)
 {
   const lg = log.slice(before2).filter((x) => x[0] === "ensureLogGroup");
-  chk("T1 같은 빌드 재사용 배포도 로그 그룹 태그를 맞춘다", lg.length === 1 && lg[0][3]?.["lvly-fn"] === FN, JSON.stringify(lg));
+  chk("T1 같은 빌드 재사용 배포도 로그 그룹 태그를 맞춘다", lg.length === 1 && lg[0][3]?.tags?.["lvly-fn"] === FN, JSON.stringify(lg));
 }
 
 // D3 빌드 안 된 판 공개 → 409 · 빌드 뒤 공개 → pub = cur
@@ -870,6 +872,28 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   chk("W22 만들기 실패 뒤 확인도 실패 → 실패 · 줄 남김(모르는 채로 지우지 않음)", d.status === "failed" && createFail === null && !blind && !fns.has(fnOf("uk-a"))
     && !!(await rowOf("uk-a")), JSON.stringify({ status: d.status, error: d.error, blind }));
   await call("org_app_remove", { app_id: "uk-a" }, boss);
+}
+
+// #4790 T2 cur 가 이미 이 빌드인 배포(공개하기 · 다시 넣기 — 코드를 안 올리고 별칭만)는 로그 그룹을 못 맞춰도 별칭을 옮긴다 — 결과 warnings ·
+//  logs_warning · 마지막 오류에 남긴다(이 길은 #4484 까지 Logs 를 안 불렀다). 다른 빌드로 가는 배포(되돌리기 포함)는 W17 처럼 실패로 남는다.
+{
+  await call("app_save", { files: twin("lg-r") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lg-r", wait_s: 120 }, alice, aliceCtx);
+  const v0 = (await rowOf("lg-r"))?.cur_lambda_version;
+  const pa0 = calls("putAlias").length;
+  logFail = new AwsError(503, "ServiceUnavailableException", "흉내 — 로그 그룹 실패");
+  const d = await call("app_server_deploy", { app_id: "lg-r", wait_s: 120 }, alice, aliceCtx);
+  const r = await rowOf("lg-r");
+  const pa = calls("putAlias").slice(pa0);
+  chk("T2 재사용 배포 — 로그 그룹 실패여도 별칭을 옮긴다(cur → 같은 함수 판) · warnings · logs_warning · 마지막 오류", d.status === "deployed" && logFail === null && d.build?.reused === true
+    && pa.length === 1 && pa[0][1] === fnOf("lg-r") && pa[0][2] === "cur" && pa[0][3] === v0
+    && /흉내 — 로그 그룹 실패/.test(String(d.deploy?.logs_warning)) && /로그 그룹/.test(String(d.warnings?.[0])) && r?.cur_lambda_version === v0 && /로그 그룹/.test(String(r?.last_error)),
+    JSON.stringify({ status: d.status, error: d.error, deploy: d.deploy, warnings: d.warnings, putAlias: pa, last_error: r?.last_error }));
+  //  다음에 맞추면 마지막 오류가 걷힌다(별칭을 옮기며 지우고 · 다시 안 적는다).
+  const d2 = await call("app_server_deploy", { app_id: "lg-r", wait_s: 120 }, alice, aliceCtx);
+  chk("T2b 다음 재사용 배포가 로그 그룹을 맞추면 경고 · 마지막 오류가 없다", d2.status === "deployed" && d2.deploy?.logs_warning === undefined && d2.warnings === undefined && (await rowOf("lg-r"))?.last_error == null,
+    JSON.stringify({ deploy: d2.deploy, last_error: (await rowOf("lg-r"))?.last_error }));
+  await call("org_app_remove", { app_id: "lg-r" }, boss);
 }
 
 // ── #4791 서버 선언을 뺀 앱의 함수 정리(X) ──

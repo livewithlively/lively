@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 import type { AppBundle } from "./app-bundle.js";
 import { BUILDER_VERSION, ZIP_EXCLUDE, RUN_SCRIPT } from "./app-server-builder.js";
 import { currentTenant } from "../org/tenant-context.js";
+import type { LogGroupTag } from "../net/aws/lambda-lite.js";
 
 /** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
 export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
@@ -43,8 +44,8 @@ export interface AppServerEnv {
   region: string;
   /** 함수 실행 역할(lively-infra app-servers.tf lvly-app-exec) — 제 함수의 로그 그룹에만 쓰기(#4790). */
   execRoleArn: string;
-  /** AWS 계정 번호 — 실행 역할 ARN 에서 읽는다(로그 그룹 ARN 을 지을 때 · #4790 태그 달기). */
-  account: string;
+  /** AWS 계정 번호(12자리) — 실행 역할 ARN 에서 읽는다(로그 그룹 ARN 을 지을 때 · #4790 태그 달기). 구독 «계정»(v2-9)과 다른 말이다. */
+  awsAccountId: string;
   /** Lambda Web Adapter 레이어(arm64) 판 ARN. */
   layerArn: string;
   /** 함수 이름 앞자리 — IAM 정책이 lvly-app-* 만 허락한다. 한 계정을 여러 배포가 나눠 쓰면 배포마다 다르게(예 lvly-app-dev-). */
@@ -56,7 +57,7 @@ export interface AppServerEnv {
 export const DEFAULT_ADAPTER_LAYER_VERSION = 30;   // LambdaAdapterLayerArm64:30 = Lambda Web Adapter 1.1.0(2026-09-18) · 서울 실측 2026-10-15
 export const DEFAULT_RUNTIME = "nodejs22.x";        // 세션 이미지(node:22-bookworm-slim)와 같은 큰 판 — 빌드한 네이티브 모듈이 맞게
 const PREFIX_RE = /^lvly-app-([a-z0-9]{1,8}-)?$/;
-const ROLE_RE = /^arn:aws:iam::\d{12}:role\/[\w+=,.@-]{1,64}$/;
+const ROLE_RE = /^arn:aws:iam::(\d{12}):role\/[\w+=,.@-]{1,64}$/;   // 1 = 계정 번호
 const LAYER_RE = /^arn:aws:lambda:[a-z0-9-]+:\d{12}:layer:[A-Za-z0-9_-]+:\d+$/;
 
 /**
@@ -75,7 +76,8 @@ export function appServerEnabledFor(slug: string | null | undefined, env: NodeJS
 /** 이 요청(워크스페이스)의 앱 서버 설정 — 실행 역할이 없거나 · 모양이 틀렸거나 · 워크스페이스 스위치 밖이면 null(= 앱 서버 꺼짐). */
 export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string | null | undefined = currentTenant()?.slug): AppServerEnv | null {
   const execRoleArn = String(env.LIVELY_APP_SERVER_EXEC_ROLE ?? "").trim();
-  if (!execRoleArn || !ROLE_RE.test(execRoleArn)) return null;
+  const role = ROLE_RE.exec(execRoleArn);
+  if (!role) return null;
   if (!appServerEnabledFor(slug, env)) return null;
   const region = String(env.LIVELY_APP_SERVER_REGION ?? env.LIVELY_APP_BUNDLE_REGION ?? env.AWS_REGION ?? "").trim() || "ap-northeast-2";
   const layer = String(env.LIVELY_APP_SERVER_LAYER ?? "").trim();
@@ -83,8 +85,7 @@ export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string 
   const p = String(env.LIVELY_APP_SERVER_PREFIX ?? "").trim();
   const prefix = p && PREFIX_RE.test(p) ? p : "lvly-app-";
   const runtime = String(env.LIVELY_APP_SERVER_RUNTIME ?? "").trim() || DEFAULT_RUNTIME;
-  const account = /^arn:aws:iam::(\d{12}):/.exec(execRoleArn)![1]!;   // ROLE_RE 가 이미 이 꼴을 보았다
-  return { region, execRoleArn, account, layerArn, prefix, runtime, arch: "arm64" };
+  return { region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64" };
 }
 
 /**
@@ -106,7 +107,9 @@ export const logGroupFor = (fn: string): string => `/aws/lambda/${fn}`;
 export const LOG_GROUP_TAG = "lvly-fn";
 export const logGroupTagsFor = (fn: string): Record<string, string> => ({ [LOG_GROUP_TAG]: fn });
 /** 로그 그룹 ARN — TagResource 가 받는 꼴(끝 :* 없이 · AWS 문서 TagResource). */
-export const logGroupArnFor = (env: Pick<AppServerEnv, "region" | "account">, group: string): string => `arn:aws:logs:${env.region}:${env.account}:log-group:${group}`;
+export const logGroupArnFor = (env: Pick<AppServerEnv, "region" | "awsAccountId">, group: string): string => `arn:aws:logs:${env.region}:${env.awsAccountId}:log-group:${group}`;
+/** 이 함수의 로그 그룹에 달 태그 묶음(태그 + 그 그룹 ARN) — 배포가 ensureLogGroup 에 넘긴다. */
+export const logGroupTagBundleFor = (env: Pick<AppServerEnv, "region" | "awsAccountId">, fn: string): LogGroupTag => ({ tags: logGroupTagsFor(fn), arn: logGroupArnFor(env, logGroupFor(fn)) });
 
 /**
  * zip 자리 — 판 묶음 버킷의 워크스페이스 앞자리 아래(판 파일 b/ 옆 z/) · **앱마다 따로**(z/<앱>/<빌드 지문>.zip).

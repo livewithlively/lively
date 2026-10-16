@@ -14,7 +14,7 @@ import { HttpError } from "../http-error.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import {
-  LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupFor, logGroupTagsFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
+  LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupFor, logGroupTagBundleFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
 import { codeBytesAfterDeploy, codeBytesOf, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
@@ -40,8 +40,8 @@ export interface LambdaApi {
   deleteFunction(name: string, qualifier?: string): Promise<void>;
   putConcurrency(name: string, n: number): Promise<void>;
   deleteConcurrency(name: string): Promise<void>;
-  /** tags · arn — 로그 그룹 태그(#4790 · 없으면 태그 없이). */
-  ensureLogGroup(group: string, retentionDays: number, tags?: Record<string, string>, arn?: string): Promise<void>;
+  /** tag — 로그 그룹 태그 묶음(#4790 · 없으면 태그 없이). */
+  ensureLogGroup(group: string, retentionDays: number, tag?: lam.LogGroupTag | null): Promise<void>;
   deleteLogGroup(group: string): Promise<void>;
 }
 
@@ -60,7 +60,7 @@ export function realLambdaApi(region: string): LambdaApi {
     deleteFunction: (n, q) => lam.deleteFunction(c, n, q),
     putConcurrency: (n, k) => lam.putConcurrency(c, n, k),
     deleteConcurrency: (n) => lam.deleteConcurrency(c, n),
-    ensureLogGroup: (g, d, tags, arn) => lam.ensureLogGroup(c, g, d, { tags, arn }),
+    ensureLogGroup: (g, d, tag) => lam.ensureLogGroup(c, g, d, tag),
     deleteLogGroup: (g) => lam.deleteLogGroup(c, g),
   };
 }
@@ -164,6 +164,8 @@ export interface DeployResult {
   build_key: string;
   /** 시험 호출 — 앱의 GET / 응답 상태(앱이 «/» 를 안 받으면 404 여도 서버는 떠 있다). 멈춘 앱이면 건너뛴다. */
   smoke: { skipped?: string; http_status?: number; ms?: number } | null;
+  /** 같은 빌드를 다시 쓴 배포가 로그 그룹(보관 · 태그 lvly-fn)을 못 맞췄다 — 별칭은 옮겼지만 이 함수 기록이 CloudWatch 에 안 남을 수 있다(#4790). */
+  logs_warning?: string;
 }
 
 export class DeployError extends HttpError {
@@ -229,9 +231,13 @@ export async function deployBuildToAliases(i: {
     let smoke: DeployResult["smoke"] = null;
     //  로그 그룹(보관 기간 · 태그 lvly-fn — #4790 실행 역할의 쓰기 조건이 이 태그를 본다). 같은 빌드를 다시 쓸 때도 맞춘다 — 태그가 빠진 그룹
     //   (태그를 달기 전에 만든 함수 · 손으로 지운 태그)은 그 함수 기록이 CloudWatch 에 안 써진다.
-    const ensureLogs = (): Promise<void> => api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days, logGroupTagsFor(fn), logGroupArnFor(env, logGroupFor(fn)));
+    const ensureLogs = (): Promise<void> => api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days, logGroupTagBundleFor(env, fn));
+    let logsWarning: string | null = null;
     if (reuse) {
-      await ensureLogs();
+      //  cur 가 이미 이 빌드일 때(공개하기 · 다시 넣기 · 되돌린 직후의 공개)는 코드를 안 올리고 별칭만 옮긴다 — 이 길은 #4484 까지 CloudWatch Logs 를
+      //   안 불렀으니, 로그 그룹을 못 맞춰도 별칭은 옮긴다(Logs 장애 · 권한 문제로 공개가 막히지 않게). 삼키지 않고 결과 warnings · 마지막 오류로 보인다.
+      //   다른 빌드로 가는 배포(되돌리기 포함)는 코드를 다시 올리는 아래 길이라 #4484 부터 로그 그룹 맞추기가 필수다(«배포가 초록이면 로그 배선도 됐다»).
+      logsWarning = await ensureLogs().then(() => null, (err: unknown) => { logger.warn({ err, fn }, "로그 그룹 맞추기 실패 — 별칭은 옮긴다(#4790)"); return publicError(err); });
       version = reuse;
     } else {
       let got = await api.getFunction(fn);
@@ -315,8 +321,10 @@ export async function deployBuildToAliases(i: {
       await api.putAlias(fn, a, version, `v${i.versionNo ?? "?"} build ${i.buildKey.slice(0, 12)}`.slice(0, 256));
       await st.setServerAlias(i.app.id, a, { version_no: i.versionNo, build_key: i.buildKey, lambda_version: version });
     }
+    //  별칭을 옮기면 마지막 오류가 지워진다 — 로그 그룹을 못 맞춘 것은 그 뒤에 적어 상태에서도 보이게(다음에 맞추면 다시 지워진다).
+    if (logsWarning) await st.setServerError(i.app.id, `로그 그룹을 맞추지 못했습니다 — 이 함수 기록이 CloudWatch 에 안 남을 수 있습니다: ${logsWarning}`).catch(() => { /* 결과에 있다 */ });
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
-    return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke };
+    return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke, ...(logsWarning ? { logs_warning: logsWarning } : {}) };
   } catch (e) {
     //  zip 이 저장소에 없다(Lambda 가 «S3 Error Code: NoSuchKey») — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
     //   S3 권한 오류(AccessDenied 등)는 zip 탓이 아니다 — 무효로 적으면 누를 때마다 저장한 사람의 세션에서 처음부터 다시 빌드한다.
@@ -394,6 +402,8 @@ export interface DeployOutcome {
   version_no: number;
   build: { key: string; status: string; reused: boolean; stage?: string | null; error?: string | null; log_tail?: string | null; ms?: number | null; mem?: unknown; warnings?: unknown };
   deploy?: DeployResult;
+  /** 배포는 됐지만 알릴 것 — 예: 로그 그룹을 못 맞춤(이 함수 기록이 CloudWatch 에 안 남을 수 있다 · #4790). */
+  warnings?: string[];
   error?: string;
   stage?: string;
   log?: string | null;
@@ -430,7 +440,8 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   const aliases: Array<"cur" | "pub"> = installedIsPublished(t.app) ? ["cur", "pub"] : ["cur"];
   try {
     const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases, policy }, deps);
-    return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy };
+    const warnings = deploy.logs_warning ? [`로그 그룹을 맞추지 못했습니다 — 이 함수 기록이 CloudWatch 에 안 남을 수 있습니다: ${deploy.logs_warning}`] : [];
+    return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy, ...(warnings.length ? { warnings } : {}) };
   } catch (e) {
     const stage = e instanceof DeployError ? e.stage : "deploy";
     const log = e instanceof DeployError ? e.log : null;
