@@ -2,7 +2,7 @@
 // 실행: npm run build && node dist/apps/app-server-config.test.js
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
-import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
+import { LOG_GROUP_TAG, appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
 import {
   APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
   normalizeAppServerPolicy, retentionDaysFor,
@@ -90,7 +90,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
+  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, account: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");
@@ -217,6 +217,15 @@ t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1�
   assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB), null, "이미 넘었어도 이 함수가 그대로면 막지 않는다");
   assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 15 * MB), null, "줄어드는 배포도 된다");
   assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");
+});
+
+//  #4790 앱마다 로그 그룹 — 실행 역할의 쓰기 조건(lively-infra WriteOwnAppLogs)이 보는 태그와 그룹 ARN.
+t("B20 로그 그룹 태그 · ARN(#4790) — 태그 키 lvly-fn = 함수 이름 · ARN 은 끝 :* 없이 · 계정은 실행 역할 ARN 에서", () => {
+  assert.equal(LOG_GROUP_TAG, "lvly-fn", "lively-infra app-servers.tf 의 ${aws:ResourceTag/lvly-fn} 과 같은 이름");
+  assert.deepEqual(logGroupTagsFor("lvly-app-x-ws"), { "lvly-fn": "lvly-app-x-ws" });
+  const env = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: "arn:aws:iam::425515538094:role/lvly-app-exec" })!;
+  assert.equal(env.account, "425515538094");
+  assert.equal(logGroupArnFor(env, "/aws/lambda/lvly-app-x-ws"), "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws");
 });
 
 //  #4791 서버 선언을 뺀 앱의 함수 정리 — 사양 엣지 표 R10.

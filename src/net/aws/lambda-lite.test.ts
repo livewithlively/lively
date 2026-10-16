@@ -107,13 +107,36 @@ await t("C7 별칭 — 없으면 만들고 · 있으면 옮기고 · 만들다 �
 
 await t("C8 로그 그룹 — 이미 있어도 보관 기간을 건다(JSON 1.1 · 대상 머리)", async () => {
   const a = fake([{ status: 400, body: "{\"__type\":\"ResourceAlreadyExistsException\"}" }, { status: 200, body: "{}" }]);
-  await ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, a.deps);
+  await ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, {}, a.deps);
   assert.deepEqual(a.seen.map((s) => s.headers["x-amz-target"]), ["Logs_20140328.CreateLogGroup", "Logs_20140328.PutRetentionPolicy"]);
   assert.equal(a.seen[1]!.headers["content-type"], "application/x-amz-json-1.1");
   assert.deepEqual(JSON.parse(a.seen[1]!.body), { logGroupName: "/aws/lambda/lvly-app-x", retentionInDays: 14 });
   assert.equal(new URL(a.seen[0]!.url).host, "logs.ap-northeast-2.amazonaws.com");
   const b = fake([{ status: 400, body: "{\"__type\":\"AccessDeniedException\"}" }]);
-  await assert.rejects(ensureLogGroup(c, "/aws/lambda/x", 14, b.deps));
+  await assert.rejects(ensureLogGroup(c, "/aws/lambda/x", 14, {}, b.deps));
+});
+
+//  #4790 — 실행 역할의 쓰기 조건이 로그 그룹 태그 lvly-fn 을 본다. 새 그룹은 만들 때 달고 · 있던 그룹은 TagResource 로 단다.
+const ARN = "arn:aws:logs:ap-northeast-2:111122223333:log-group:/aws/lambda/lvly-app-x";
+await t("C8b 로그 그룹 태그 — 새 그룹: 만들 때 tags 를 싣고 TagResource 는 부르지 않는다", async () => {
+  const a = fake([{ status: 200, body: "{}" }, { status: 200, body: "{}" }]);
+  await ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, { tags: { "lvly-fn": "lvly-app-x" }, arn: ARN }, a.deps);
+  assert.deepEqual(a.seen.map((s) => s.headers["x-amz-target"]), ["Logs_20140328.CreateLogGroup", "Logs_20140328.PutRetentionPolicy"]);
+  assert.deepEqual(JSON.parse(a.seen[0]!.body), { logGroupName: "/aws/lambda/lvly-app-x", tags: { "lvly-fn": "lvly-app-x" } });
+});
+await t("C8c 로그 그룹 태그 — 이미 있던 그룹: TagResource(그룹 ARN · 끝 :* 없이)로 달고 보관 기간", async () => {
+  const a = fake([{ status: 400, body: "{\"__type\":\"ResourceAlreadyExistsException\"}" }, { status: 200, body: "{}" }, { status: 200, body: "{}" }]);
+  await ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, { tags: { "lvly-fn": "lvly-app-x" }, arn: ARN }, a.deps);
+  assert.deepEqual(a.seen.map((s) => s.headers["x-amz-target"]), ["Logs_20140328.CreateLogGroup", "Logs_20140328.TagResource", "Logs_20140328.PutRetentionPolicy"]);
+  assert.deepEqual(JSON.parse(a.seen[1]!.body), { resourceArn: ARN, tags: { "lvly-fn": "lvly-app-x" } });
+});
+await t("C8d 로그 그룹 태그 — 태그를 주고 ARN 이 없으면 AWS 를 부르기 전에 멈춘다 · 태그 없으면 종전 그대로", async () => {
+  const a = fake([{ status: 200, body: "{}" }]);
+  await assert.rejects(ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, { tags: { "lvly-fn": "x" } }, a.deps), /ARN/);
+  assert.equal(a.seen.length, 0);
+  const b = fake([{ status: 200, body: "{}" }, { status: 200, body: "{}" }]);
+  await ensureLogGroup(c, "/aws/lambda/lvly-app-x", 14, { tags: {} }, b.deps);
+  assert.deepEqual(JSON.parse(b.seen[0]!.body), { logGroupName: "/aws/lambda/lvly-app-x" }, "빈 태그는 싣지 않는다");
 });
 
 await t("C9 지표 — 500개씩 나눠 묻고 · 다음 쪽(NextToken)까지 합친다", async () => {

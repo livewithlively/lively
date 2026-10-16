@@ -41,8 +41,10 @@ const dirOf = (v: unknown): string | null => {
 /** 배포 설정(env) — 실행 역할이 없으면 null(= 이 배포는 앱 서버를 돌리지 않는다 · 자가호스팅은 v2-8). */
 export interface AppServerEnv {
   region: string;
-  /** 함수 실행 역할(lively-infra app-servers.tf lvly-app-exec) — 로그 쓰기만. */
+  /** 함수 실행 역할(lively-infra app-servers.tf lvly-app-exec) — 제 함수의 로그 그룹에만 쓰기(#4790). */
   execRoleArn: string;
+  /** AWS 계정 번호 — 실행 역할 ARN 에서 읽는다(로그 그룹 ARN 을 지을 때 · #4790 태그 달기). */
+  account: string;
   /** Lambda Web Adapter 레이어(arm64) 판 ARN. */
   layerArn: string;
   /** 함수 이름 앞자리 — IAM 정책이 lvly-app-* 만 허락한다. 한 계정을 여러 배포가 나눠 쓰면 배포마다 다르게(예 lvly-app-dev-). */
@@ -81,7 +83,8 @@ export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string 
   const p = String(env.LIVELY_APP_SERVER_PREFIX ?? "").trim();
   const prefix = p && PREFIX_RE.test(p) ? p : "lvly-app-";
   const runtime = String(env.LIVELY_APP_SERVER_RUNTIME ?? "").trim() || DEFAULT_RUNTIME;
-  return { region, execRoleArn, layerArn, prefix, runtime, arch: "arm64" };
+  const account = /^arn:aws:iam::(\d{12}):/.exec(execRoleArn)![1]!;   // ROLE_RE 가 이미 이 꼴을 보았다
+  return { region, execRoleArn, account, layerArn, prefix, runtime, arch: "arm64" };
 }
 
 /**
@@ -94,6 +97,16 @@ export function functionNameFor(prefix: string, appId: string, slug: string): st
   return name.length <= 64 && /^[A-Za-z0-9_-]+$/.test(name) ? name : null;
 }
 export const logGroupFor = (fn: string): string => `/aws/lambda/${fn}`;
+
+/**
+ * 로그 그룹 태그(#4790 · 결정 상민 2026-10-16) — 모든 앱 함수가 실행 역할 하나를 같이 써서, 그 역할의 쓰기 권한에 «요청한 함수
+ *  (lambda:SourceFunctionArn) = 그 로그 그룹 태그 lvly-fn 의 함수» 조건을 건다(lively-infra app-servers.tf WriteOwnAppLogs 의
+ *  ${aws:ResourceTag/lvly-fn} — 이름을 바꾸면 둘 다). 태그가 없는 그룹엔 아무도 못 쓴다 — 그래서 배포마다 그룹에 태그를 맞춘다.
+ */
+export const LOG_GROUP_TAG = "lvly-fn";
+export const logGroupTagsFor = (fn: string): Record<string, string> => ({ [LOG_GROUP_TAG]: fn });
+/** 로그 그룹 ARN — TagResource 가 받는 꼴(끝 :* 없이 · AWS 문서 TagResource). */
+export const logGroupArnFor = (env: Pick<AppServerEnv, "region" | "account">, group: string): string => `arn:aws:logs:${env.region}:${env.account}:log-group:${group}`;
 
 /**
  * zip 자리 — 판 묶음 버킷의 워크스페이스 앞자리 아래(판 파일 b/ 옆 z/) · **앱마다 따로**(z/<앱>/<빌드 지문>.zip).

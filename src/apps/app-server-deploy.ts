@@ -14,7 +14,7 @@ import { HttpError } from "../http-error.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import {
-  LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
+  LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupFor, logGroupTagsFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
 import { codeBytesAfterDeploy, codeBytesOf, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
@@ -40,7 +40,8 @@ export interface LambdaApi {
   deleteFunction(name: string, qualifier?: string): Promise<void>;
   putConcurrency(name: string, n: number): Promise<void>;
   deleteConcurrency(name: string): Promise<void>;
-  ensureLogGroup(group: string, retentionDays: number): Promise<void>;
+  /** tags · arn — 로그 그룹 태그(#4790 · 없으면 태그 없이). */
+  ensureLogGroup(group: string, retentionDays: number, tags?: Record<string, string>, arn?: string): Promise<void>;
   deleteLogGroup(group: string): Promise<void>;
 }
 
@@ -59,7 +60,7 @@ export function realLambdaApi(region: string): LambdaApi {
     deleteFunction: (n, q) => lam.deleteFunction(c, n, q),
     putConcurrency: (n, k) => lam.putConcurrency(c, n, k),
     deleteConcurrency: (n) => lam.deleteConcurrency(c, n),
-    ensureLogGroup: (g, d) => lam.ensureLogGroup(c, g, d),
+    ensureLogGroup: (g, d, tags, arn) => lam.ensureLogGroup(c, g, d, { tags, arn }),
     deleteLogGroup: (g) => lam.deleteLogGroup(c, g),
   };
 }
@@ -226,7 +227,11 @@ export async function deployBuildToAliases(i: {
     }
     let version: string;
     let smoke: DeployResult["smoke"] = null;
+    //  로그 그룹(보관 기간 · 태그 lvly-fn — #4790 실행 역할의 쓰기 조건이 이 태그를 본다). 같은 빌드를 다시 쓸 때도 맞춘다 — 태그가 빠진 그룹
+    //   (태그를 달기 전에 만든 함수 · 손으로 지운 태그)은 그 함수 기록이 CloudWatch 에 안 써진다.
+    const ensureLogs = (): Promise<void> => api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days, logGroupTagsFor(fn), logGroupArnFor(env, logGroupFor(fn)));
     if (reuse) {
+      await ensureLogs();
       version = reuse;
     } else {
       let got = await api.getFunction(fn);
@@ -248,7 +253,7 @@ export async function deployBuildToAliases(i: {
         if (!got) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
         throw new HttpError(409, full);
       }
-      await api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days);
+      await ensureLogs();
       if (!got) {
         //  실행 역할을 막 만든 직후(인프라 적용 직후)엔 Lambda 가 그 역할을 아직 못 맡는다는 오류가 잠깐 난다 — 몇 번 다시 한다.
         for (let n = 0; ; n++) {

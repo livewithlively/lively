@@ -153,7 +153,7 @@ const api = {
   },
   putConcurrency: async (n, k) => { log.push(["putConcurrency", n, k]); fns.get(n).conc = k; },
   deleteConcurrency: async (n) => { log.push(["deleteConcurrency", n]); const f = fns.get(n); if (f) f.conc = null; },
-  ensureLogGroup: async (g, d) => { log.push(["ensureLogGroup", g, d]); if (logFail) { const e = logFail; logFail = null; throw e; } },
+  ensureLogGroup: async (g, d, tags, arn) => { log.push(["ensureLogGroup", g, d, tags, arn]); if (logFail) { const e = logFail; logFail = null; throw e; } },
   deleteLogGroup: async (g) => { log.push(["deleteLogGroup", g]); },
 };
 const deletedZips = [];
@@ -195,6 +195,8 @@ chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB
   && cf.Tags["lvly:tenant"] === SINGLE_TENANT_ID && cf.Code.S3Bucket === "fake-bucket" && zips.has(cf.Code.S3Key) && cf.Code.S3Key.includes("/z/srv/"), JSON.stringify(cf));
 chk("D1d 로그 그룹(보관 14일) → 판 고정(코드 지문 조건) → 그 판으로 시험 호출 → 별칭 cur(나만 보는 앱이라 pub 없음)",
   calls("ensureLogGroup")[0]?.[1] === `/aws/lambda/${FN}` && calls("ensureLogGroup")[0]?.[2] === 14 && calls("publishVersion").length === 1
+  //  #4790 — 실행 역할의 쓰기 조건이 보는 태그 lvly-fn = 함수 이름 · TagResource 용 그룹 ARN(실행 역할의 계정 · 끝 :* 없이)
+  && calls("ensureLogGroup")[0]?.[3]?.["lvly-fn"] === FN && calls("ensureLogGroup")[0]?.[4] === `arn:aws:logs:ap-northeast-2:111122223333:log-group:/aws/lambda/${FN}`
   && calls("publishVersion")[0][2] === shaB64(zips.get(cf.Code.S3Key)) && calls("invoke")[0]?.[2] === "1" && calls("putAlias").length === 1 && calls("putAlias")[0][2] === "cur",
   JSON.stringify(log.map((x) => x[0])));
 chk("D1e 기록 — cur = 1판 · 함수 판 1 · 빌드 ok", r1?.cur_lambda_version === "1" && r1?.cur_version_no === s1.version_no && r1?.pub_lambda_version == null
@@ -207,6 +209,11 @@ const d2 = await call("app_server_deploy", { app_id: "srv", wait_s: 60 }, alice,
 const ops2 = log.slice(before2).map((x) => x[0]);
 chk("D2 이름만 바꾼 판 — 빌드 · 코드 올리기 · 판 고정 · 시험 호출 없이 별칭만", d2.status === "deployed" && d2.build.reused === true && seats.length === 1
   && !ops2.includes("updateFunctionCode") && !ops2.includes("publishVersion") && !ops2.includes("invoke"), JSON.stringify(ops2));
+//  #4790 T1 같은 빌드를 다시 쓰는 배포도 로그 그룹 태그를 맞춘다(태그 전에 만든 함수 · 지워진 태그 — 태그가 없으면 그 함수 기록이 안 써진다)
+{
+  const lg = log.slice(before2).filter((x) => x[0] === "ensureLogGroup");
+  chk("T1 같은 빌드 재사용 배포도 로그 그룹 태그를 맞춘다", lg.length === 1 && lg[0][3]?.["lvly-fn"] === FN, JSON.stringify(lg));
+}
 
 // D3 빌드 안 된 판 공개 → 409 · 빌드 뒤 공개 → pub = cur
 await call("app_save", { files: filesOf({ server: "require('http').createServer((q,s)=>s.end('v2')).listen(Number(process.env.PORT));" }) }, alice, aliceCtx);

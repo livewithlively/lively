@@ -157,10 +157,18 @@ export async function invoke(c: LambdaCfg, name: string, qualifier: string | nul
 const logsCall = (c: LambdaCfg, op: string, body: unknown, deps?: AwsDeps) =>
   awsCall({ service: "logs", region: c.region, host: `logs.${c.region}.amazonaws.com`, method: "POST", path: [""], body, target: { header: `Logs_20140328.${op}`, jsonVersion: "1.1" } }, deps);
 
-/** 로그 그룹을 만들고(이미 있으면 그대로) 보관 기간을 건다. */
-export async function ensureLogGroup(c: LambdaCfg, group: string, retentionDays: number, deps?: AwsDeps): Promise<void> {
-  try { await logsCall(c, "CreateLogGroup", { logGroupName: group }, deps); }
-  catch (e) { if (!(e instanceof AwsError && e.code === "ResourceAlreadyExistsException")) throw e; }
+/**
+ * 로그 그룹을 만들고(이미 있으면 그대로) 보관 기간을 건다. tags 를 주면 만들 때 달고, 이미 있던 그룹엔 TagResource 로 단다(#4790 — 실행 역할의
+ *  쓰기 조건이 그 태그를 본다 · 같은 키면 값을 덮는다). TagResource 는 그룹 ARN(끝 :* 없이)을 받는다 — 태그를 주면 arn 도 줘야 한다.
+ *  만들며 태그를 달려면 부르는 쪽에 logs:TagResource 권한이 있어야 한다(AWS 문서 CreateLogGroup).
+ */
+export async function ensureLogGroup(c: LambdaCfg, group: string, retentionDays: number, opts: { tags?: Record<string, string>; arn?: string } = {}, deps?: AwsDeps): Promise<void> {
+  const tags = opts.tags && Object.keys(opts.tags).length ? opts.tags : undefined;
+  if (tags && !opts.arn) throw new Error(`로그 그룹 ARN 없이 태그를 달 수 없습니다: ${group}`);
+  let existed = false;
+  try { await logsCall(c, "CreateLogGroup", { logGroupName: group, ...(tags ? { tags } : {}) }, deps); }
+  catch (e) { if (!(e instanceof AwsError && e.code === "ResourceAlreadyExistsException")) throw e; existed = true; }
+  if (existed && tags) await logsCall(c, "TagResource", { resourceArn: opts.arn, tags }, deps);
   await logsCall(c, "PutRetentionPolicy", { logGroupName: group, retentionInDays: retentionDays }, deps);
 }
 export async function deleteLogGroup(c: LambdaCfg, group: string, deps?: AwsDeps): Promise<void> {
