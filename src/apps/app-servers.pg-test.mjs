@@ -13,6 +13,9 @@
 //  #4792 워크스페이스 상한(W — 사양 엣지 표 spec-4792.md): W1 코드 크기 기록(C1 · C2 · U2) · W2 함수 수 상한(F2~F4 · F1 은 D1 이 함수 0개에서 지난다)
 //   W3 동시 첫 배포(F5) · W4 코드 저장 상한 · 같은 빌드 재사용(C3 · C7) · W5 함수 없는 앱이 코드 상한(C6) · W6 보기 · 고치기 범위(U1 · U3)
 //   W7 코드를 올린 뒤 실패해도 다시 잰다(C9) · W8 공개 길도 같은 판정(F7)
+//   격리 리뷰 뒤: W9 동시 배포도 코드 상한을 넘지 않는다(자리 잡기) · W10 하우스키핑이 크기를 모르는 줄을 잰다 · W11 만든 직후 실패도 잰다
+//   W12 zip 크기를 모르는 빌드는 저장소 크기로 채운다 · W13 첫 배포가 함수 없이 끝나면 빈 줄을 걷는다 · W14 되돌리기도 함수 수 상한을 알린다
+//   W15 잠금을 기다리는 사이 줄이 사라지면 다시 잡는다 · X2 40일 된 빌드도 걷은 뒤 유예 · X8 잠긴 함수 · X9 남의 함수 · X10 지우기 실패
 //  #4791 서버 선언을 뺀 앱의 함수 정리(X — 사양 엣지 표 R1~R9): X1 표시 · 상태 retire_at · X2 7일 경계 · 걷기(빌드는 남김) · X3 되돌리면 다시 생김
 //   X4 공개 판에 서버가 남아 있으면 표시 안 함 · X5 서버 선언이 돌아오면 표시를 걷음(X5b 다시 배포하면 곧바로) · X6 멈춘 함수는 걷지 않음 · X7 걷기 직전 다시 봄
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
@@ -42,7 +45,7 @@ const { appServerCapabilities } = await import(`${D}/capabilities/app-servers.js
 const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
-const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping, retireUnusedServers } = await import(`${D}/apps/app-server-watch.js`);
+const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping, retireUnusedServers, refreshUnknownCodeBytes } = await import(`${D}/apps/app-server-watch.js`);
 const { appServerPolicy, setServerStopped, claimServerRow } = await import(`${D}/apps/app-server-store.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -88,16 +91,21 @@ const cfgOf = (f) => JSON.parse(JSON.stringify(f.cfg));
 const zipOr = (k) => { const z = zips.get(k); if (!z) throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: NoSuchKey. S3 Error Message: The specified key does not exist."); return z; };
 const failDelete = new Set();   // R4 — 이 함수 지우기는 실패한다(AWS 오류 흉내)
 let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 오류로(zip 은 있다)
+let publishDelayMs = 0;         // W9 — 판 고정을 늦춰 «판정 뒤 · 실측 앞» 창을 넓힌다
+let createFail = null;          // W13 — 다음 함수 만들기를 이 AWS 오류로
+const readyFail = new Set();    // W11 — 이 함수는 만든 뒤 «Failed» 상태로 보인다(준비 기다리기가 실패)
 const api = {
   getFunction: async (n) => { const f = fns.get(n); return f ? { Configuration: cfgOf(f), Tags: { ...f.tags } } : null; },
   //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
   getFunctionConfiguration: async (n, qual) => {
     const f = fns.get(n); if (!f) return null;
+    if (readyFail.has(n)) return { ...cfgOf(f), State: "Failed", StateReason: "흉내 — 만든 뒤 실패" };
     if (qual && qual !== "$LATEST") { const v = f.versions.find((x) => x.Version === qual); return v ? JSON.parse(JSON.stringify(v.cfg)) : null; }
     return cfgOf(f);
   },
   createFunction: async (i) => {
     log.push(["createFunction", i]);
+    if (createFail) { const e = createFail; createFail = null; throw e; }
     if (fns.has(i.FunctionName)) throw new AwsError(409, "ResourceConflictException", "exists");
     const z = zipOr(i.Code.S3Key);
     fns.set(i.FunctionName, { cfg: { FunctionName: i.FunctionName, Role: i.Role, Handler: i.Handler, Runtime: i.Runtime, MemorySize: i.MemorySize, Timeout: i.Timeout,
@@ -113,6 +121,7 @@ const api = {
   updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
   publishVersion: async (n, i) => {
     log.push(["publishVersion", n, i.CodeSha256]);
+    if (publishDelayMs) await new Promise((r) => setTimeout(r, publishDelayMs));
     const f = fns.get(n);
     if (i.CodeSha256 !== f.cfg.CodeSha256) throw new AwsError(412, "PreconditionFailedException", "sha");
     //  실제와 같게: 코드 · 설정이 마지막 판과 같으면 새 판을 만들지 않고 그 판을 돌려준다(설정이 바뀌면 새 판).
@@ -560,13 +569,17 @@ const srvCode = (tag) => filesOf({ server: `require('http').createServer((q,s)=>
 
 // W3 함수 수 = 상한−1 에 다섯 앱이 같은 때 줄을 잡아도 하나만 생긴다(세기와 만들기를 워크스페이스 자문 락으로 묶음)
 {
+  //  락이 없으면 한 판은 약 17% 확률로 초록이라(격리 리뷰 실측) 열 판을 돈다 — 한 판이라도 둘 넘게 생기면 빨강.
   const n0 = await fnRows();
   const ids = ["race-a", "race-b", "race-c", "race-d", "race-e"];
-  const got = await Promise.all(ids.map((id) => claimServerRow(id, `lvly-app-${id}-local`, n0 + 1)));
-  const made = (await q(`SELECT app_id FROM org_app_server WHERE app_id = ANY($1)`, [ids])).length;
-  chk("W3 동시 첫 배포 다섯 → 함수 줄은 하나만 · 나머지는 줄 없이 지금 수(= 상한)를 받는다", made === 1 && got.filter((g) => g.row).length === 1
-    && got.filter((g) => !g.row).every((g) => g.count === n0 + 1), JSON.stringify({ made, got: got.map((g) => ({ row: !!g.row, count: g.count })) }));
-  await q(`DELETE FROM org_app_server WHERE app_id = ANY($1)`, [ids]);
+  const rounds = [];
+  for (let k = 0; k < 10; k++) {
+    const got = await Promise.all(ids.map((id) => claimServerRow(id, `lvly-app-${id}-local`, n0 + 1)));
+    const made = (await q(`SELECT app_id FROM org_app_server WHERE app_id = ANY($1)`, [ids])).length;
+    rounds.push({ made, ok: got.filter((g) => g.row).length === 1 && got.filter((g) => !g.row).every((g) => g.count === n0 + 1) });
+    await q(`DELETE FROM org_app_server WHERE app_id = ANY($1)`, [ids]);
+  }
+  chk("W3 동시 첫 배포 다섯(열 판) → 함수 줄은 판마다 하나만 · 나머지는 줄 없이 지금 수(= 상한)를 받는다", rounds.every((r) => r.made === 1 && r.ok), JSON.stringify(rounds));
 }
 
 // W4 코드 저장 상한 — 다른 함수 합 + 이 함수 배포 뒤 > 상한이면 코드를 안 올린다 · 같은 빌드를 다시 쓰는 배포는 판정 없이 된다
@@ -646,6 +659,111 @@ const srvCode = (tag) => filesOf({ server: `require('http').createServer((q,s)=>
     JSON.stringify({ status: d.status, stage: d.stage, b0, b1, want: codeOf(FN) }));
 }
 
+const fnOf = (id) => `lvly-app-${id}-local`;
+const verOf = async (id) => (await q(`SELECT current_version_no FROM org_app WHERE id=$1`, [id]))[0].current_version_no;
+const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async () => {}, spawnInSession,
+  presignPut: async (key) => `http://127.0.0.1:${zport}/${encodeURIComponent(key)}`, headZip: async (key) => (zips.has(key) ? { size: zips.get(key).length } : null),
+  deleteZip: async (key) => { deletedZips.push(key); zips.delete(key); } });
+
+// W9 코드 저장 상한 — 서로 다른 두 앱이 같은 때 올려도 합이 상한을 넘지 않는다(판정과 자리 잡기를 워크스페이스 락 안에서 · 격리 리뷰 재현)
+{
+  await call("app_save", { files: twin("cc-probe") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "cc-probe", wait_s: 120 }, alice, aliceCtx);
+  const z = Number((await q(`SELECT zip_bytes FROM org_app_server_build WHERE app_id='cc-probe' AND status='ok'`))[0].zip_bytes);
+  await call("org_app_remove", { app_id: "cc-probe" }, boss);
+  await call("app_server_limits_set", { workspace_code_mb: 100 }, boss);
+  const others0 = Number((await q(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server`))[0].n);
+  //  새 함수 하나는 배포 뒤 2z — 남는 칸을 3z 로 두면 하나는 들고 둘은 못 든다.
+  await q(`INSERT INTO org_app_server(app_id, function_name, code_bytes) VALUES ('ghost-cc', 'lvly-app-ghost-cc-local', $1)`, [100 * MiB - others0 - 3 * z]);
+  await call("app_save", { files: twin("cc-a") }, alice, aliceCtx);
+  await call("app_save", { files: twin("cc-b") }, alice, aliceCtx);
+  publishDelayMs = 600;
+  const res = await Promise.all(["cc-a", "cc-b"].map((id) => call("app_server_deploy", { app_id: id, wait_s: 120 }, alice, aliceCtx)));
+  publishDelayMs = 0;
+  const sum = Number((await q(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server`))[0].n);
+  chk("W9 동시 배포 둘 — 하나만 올라가고 하나는 코드 상한으로 막힌다 · 합은 상한 이하", res.filter((r) => r.status === "deployed").length === 1
+    && res.filter((r) => r.status === "failed" && /코드 저장/.test(String(r.error))).length === 1 && sum <= 100 * MiB,
+    JSON.stringify({ z, res: res.map((r) => ({ status: r.status, error: r.error })), sum, cap: 100 * MiB }));
+  await q(`DELETE FROM org_app_server WHERE app_id='ghost-cc'`);
+  for (const id of ["cc-a", "cc-b"]) await call("org_app_remove", { app_id: id }, boss);
+  await call("app_server_limits_set", { reset: true }, boss);
+}
+
+// W10 별칭이 있는데 코드 크기를 모르는 줄(0) — 하우스키핑이 AWS 에서 다시 잰다(칸을 더하기 전에 올린 함수 · 재기에 실패한 배포)
+{
+  await q(`UPDATE org_app_server SET code_bytes = 0 WHERE app_id='srv'`);
+  const n = await refreshUnknownCodeBytes({ api });
+  chk("W10 크기를 모르는 줄을 하우스키핑이 잰다 = $LATEST + 남은 판 합", n >= 1 && (await codeBytes()) === codeOf(FN) && codeOf(FN) > 0, JSON.stringify({ n, cb: await codeBytes(), want: codeOf(FN) }));
+}
+
+// W11 함수를 만든 직후 실패해도(준비 기다리기 실패) 그 함수의 코드 크기를 잰다 — 자리 잡기 값(배포 뒤 셈)이 아니라 실측으로
+{
+  readyFail.add(fnOf("own-a"));
+  await call("app_save", { files: twin("own-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "own-a", wait_s: 120 }, alice, aliceCtx);
+  readyFail.delete(fnOf("own-a"));
+  const r = await rowOf("own-a");
+  chk("W11 만든 직후 실패 → 줄은 남고(함수가 있다) code_bytes = 실측($LATEST 하나)", d.status === "failed" && !!r && fns.has(fnOf("own-a"))
+    && Number(r.code_bytes) === codeOf(fnOf("own-a")) && codeOf(fnOf("own-a")) > 0, JSON.stringify({ status: d.status, cb: r && r.code_bytes, want: codeOf(fnOf("own-a")) }));
+  await call("org_app_remove", { app_id: "own-a" }, boss);
+}
+
+// W12 zip 크기를 모르는 성공 빌드(옛 줄) — 다시 쓸 때 저장소에서 본 크기로 채운다(코드 저장 셈이 0 으로 새지 않게)
+{
+  //  배포가 쓰는 빌드는 «지금 판» 의 빌드다 — 지금 판을 먼저 올려 cur 와 같게 둔 뒤 그 빌드의 크기를 지운다.
+  await call("app_save", { files: srvCode("w12") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const cur = (await serverRow()).cur_build_key;
+  await q(`UPDATE org_app_server_build SET zip_bytes = NULL WHERE app_id='srv' AND build_key=$1`, [cur]);
+  const zk = (await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='srv' AND build_key=$1`, [cur]))[0].zip_key;
+  await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const b = (await q(`SELECT zip_bytes FROM org_app_server_build WHERE app_id='srv' AND build_key=$1`, [cur]))[0];
+  chk("W12 zip 크기 없는 빌드를 다시 쓰면 저장소 크기로 채운다", Number(b.zip_bytes) === zips.get(zk)?.length && Number(b.zip_bytes) > 0, JSON.stringify({ b, want: zips.get(zk)?.length }));
+}
+
+// W13 첫 배포가 함수를 하나도 못 만들고 끝나면(계정 한도 등) 빈 함수 줄을 걷는다 — 함수 수 한 칸을 계속 잡지 않게
+{
+  createFail = new AwsError(400, "CodeStorageExceededException", "Code storage limit exceeded");
+  await call("app_save", { files: twin("cf-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "cf-a", wait_s: 120 }, alice, aliceCtx);
+  chk("W13 함수 만들기 실패 → 실패 · 함수 없음 · 빈 줄 없음", d.status === "failed" && !fns.has(fnOf("cf-a")) && !(await rowOf("cf-a")) && createFail === null,
+    JSON.stringify({ status: d.status, error: d.error }));
+  await call("org_app_remove", { app_id: "cf-a" }, boss);
+}
+
+// W14 되돌리기가 함수 수 상한에 막히면 응답에 실패로 알린다(뒤에서 조용히 멈추지 않게 — 줄이 없어 last_error 를 적을 곳이 없다)
+{
+  await call("app_save", { files: twin("rv-cap") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "rv-cap", wait_s: 120 }, alice, aliceCtx);
+  const v1 = await verOf("rv-cap");
+  await call("app_save", { files: twin("rv-cap", "require('http').createServer((q,s)=>s.end('rv2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  fns.delete(fnOf("rv-cap"));
+  await q(`DELETE FROM org_app_server WHERE app_id='rv-cap'`);   // 걷힌 함수 흉내
+  await call("app_server_limits_set", { workspace_functions_max: await fnRows() }, boss);
+  const cf0 = calls("createFunction").length;
+  const rv = await call("app_revert", { app_id: "rv-cap", version_no: v1 }, alice, aliceCtx);
+  await new Promise((r) => setTimeout(r, 300));
+  chk("W14 되돌리기 응답 server 가 실패(함수 수 상한 · 고치는 길) · 함수 만들기 0 · 줄 없음", rv.server?.state === "failed" && /workspace_functions_max/.test(String(rv.server?.message))
+    && calls("createFunction").length === cf0 && !(await rowOf("rv-cap")), JSON.stringify(rv.server));
+  await call("app_server_limits_set", { reset: true }, boss);
+  await call("org_app_remove", { app_id: "rv-cap" }, boss);
+}
+
+// W15 잠금을 기다리는 사이 줄이 사라지면(하우스키핑이 걷음) 잠금 다툼으로 409 를 내지 않고 줄을 다시 잡아 이어 간다
+{
+  await call("app_save", { files: twin("lk-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lk-a", wait_s: 120 }, alice, aliceCtx);
+  await q(`UPDATE org_app_server SET lock_until = now() + interval '10 minutes' WHERE app_id='lk-a'`);
+  let gone = false;
+  setServerDepsForTest({ ...baseDepsW(), sleep: async () => { if (!gone) { gone = true; fns.delete(fnOf("lk-a")); await q(`DELETE FROM org_app_server WHERE app_id='lk-a'`); } } });
+  await call("app_save", { files: twin("lk-a", "require('http').createServer((q,s)=>s.end('lk2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "lk-a", wait_s: 120 }, alice, aliceCtx);
+  setServerDepsForTest(baseDepsW());
+  chk("W15 기다리는 사이 줄이 사라지면 다시 잡아 배포한다(잠금 409 아님)", gone && d.status === "deployed" && !!(await rowOf("lk-a")) && fns.has(fnOf("lk-a")),
+    JSON.stringify({ gone, status: d.status, error: d.error }));
+  await call("org_app_remove", { app_id: "lk-a" }, boss);
+}
+
 // ── #4791 서버 선언을 뺀 앱의 함수 정리(X) ──
 //  서버 선언(web)을 뺀 같은 앱 — 화면만 남은 판.
 const noServer = (id) => twin(id).map((f) => {
@@ -653,8 +771,6 @@ const noServer = (id) => twin(id).map((f) => {
   const m = JSON.parse(f.content); delete m.web; return { ...f, content: JSON.stringify(m) };
 });
 const retire = async (extra = {}) => retireUnusedServers(await appServerPolicy(), { api, ...extra });
-const fnOf = (id) => `lvly-app-${id}-local`;
-const verOf = async (id) => (await q(`SELECT current_version_no FROM org_app WHERE id=$1`, [id]))[0].current_version_no;
 const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since = now() - interval '${sql}' WHERE app_id=$1`, [id]);
 
 // X1 서버 판 → 서버 선언을 뺀 판 — 하우스키핑이 표시만 붙인다(바로 걷지 않는다) · 함수 그대로 · 상태에 retire_at(= 표시 + 7일)
@@ -675,8 +791,10 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   const h2 = await retire();
   const keptFn = fns.has(fnOf("ret-a"));
   await ageUnused("ret-a", "7 days");
+  //  빌드한 지 30일이 지난 빌드여도 걷은 뒤엔 유예 — 같은 틱의 옛 빌드 정리가 지우지 않는다(격리 리뷰: 걷은 줄이 사라지면 별칭 참조도 사라졌다).
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='ret-a'`);
   const lg0 = calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length;
-  const h3 = await retire();
+  const h3 = (await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} })).retire;
   const builds = await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='ret-a' AND status='ok'`);
   chk("X2 7일 − 1분은 그대로 · 7일이면 함수 · 로그 그룹 · 줄을 걷고 빌드 기록 · zip 은 남는다", keptFn && !h2.retired.includes("ret-a") && h3.retired.includes("ret-a")
     && !fns.has(fnOf("ret-a")) && !(await rowOf("ret-a")) && calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length === lg0 + 1
@@ -750,6 +868,52 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   chk("X7 걷기 직전 서버 판이 돌아왔으면 걷지 않는다(in-use)", !h.retired.includes("ret-e") && h.skipped.some((x) => x.app === "ret-e" && x.why === "in-use")
     && !!r && fns.has(fnOf("ret-e")), JSON.stringify(h));
   await call("org_app_remove", { app_id: "ret-e" }, boss);
+}
+
+//  걷을 준비 — 서버 판 배포 → 서버 선언을 뺀 판 → 표시 → 기한 지남
+const readyToRetire = async (id) => {
+  await call("app_save", { files: twin(id) }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: id, wait_s: 120 }, alice, aliceCtx);
+  await call("app_save", { files: noServer(id) }, alice, aliceCtx);
+  await retire();
+  await ageUnused(id, "8 days");
+};
+
+// X8 배포가 잠금을 쥔 함수는 걷지 않는다(skipped locked) — 잠금을 빼앗지 않고 다음 틱에
+{
+  await readyToRetire("ret-f");
+  await q(`UPDATE org_app_server SET lock_until = now() + interval '10 minutes' WHERE app_id='ret-f'`);
+  const h = await retire();
+  const r = await rowOf("ret-f");
+  chk("X8 잠긴 함수는 걷지 않는다 · 함수 · 줄 · 잠금 그대로", h.skipped.some((x) => x.app === "ret-f" && x.why === "locked") && fns.has(fnOf("ret-f")) && !!r && !!r.lock_until,
+    JSON.stringify(h));
+  await q(`UPDATE org_app_server SET lock_until = NULL WHERE app_id='ret-f'`);
+  await call("org_app_remove", { app_id: "ret-f" }, boss);
+}
+
+// X9 남의 워크스페이스 함수(태그)면 함수는 지우지 않고 우리 줄만 지운다
+{
+  await readyToRetire("ret-g");
+  fns.get(fnOf("ret-g")).tags["lvly:tenant"] = "11111111-2222-3333-4444-555555555555";
+  const del0 = calls("deleteFunction").filter((x) => x[1] === fnOf("ret-g") && x[2] == null).length;
+  const h = await retire();
+  chk("X9 남의 함수는 지우지 않고 줄만 지운다", h.retired.includes("ret-g") && fns.has(fnOf("ret-g")) && !(await rowOf("ret-g"))
+    && calls("deleteFunction").filter((x) => x[1] === fnOf("ret-g") && x[2] == null).length === del0, JSON.stringify(h));
+  fns.delete(fnOf("ret-g"));
+  await call("org_app_remove", { app_id: "ret-g" }, boss);
+}
+
+// X10 함수 지우기가 실패하면 줄을 남기고 잠금을 푼다 — 다음 틱에 걷는다
+{
+  await readyToRetire("ret-h");
+  failDelete.add(fnOf("ret-h"));
+  const h1 = await retire();
+  const r1 = await rowOf("ret-h");
+  failDelete.delete(fnOf("ret-h"));
+  const h2 = await retire();
+  chk("X10 지우기 실패 → 줄 남김 · 잠금 풀림 → 다음 틱에 걷는다", h1.skipped.some((x) => x.app === "ret-h" && x.why === "error") && !!r1 && !r1.lock_until
+    && h2.retired.includes("ret-h") && !fns.has(fnOf("ret-h")) && !(await rowOf("ret-h")), JSON.stringify({ h1, h2 }));
+  await call("org_app_remove", { app_id: "ret-h" }, boss);
 }
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip

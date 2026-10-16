@@ -17,7 +17,7 @@ import {
   LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
-import { codeBytesAfterDeploy, codeBytesOf, codeCapDenial, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
+import { codeBytesAfterDeploy, codeBytesOf, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
 import { buildKeyFor, ensureServerBuild, usableBuild, type BuildDeps, type BuildSeat } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
@@ -112,6 +112,12 @@ export async function functionOwnership(api: LambdaApi, fn: string): Promise<"ow
 }
 export const foreignMsg = (fn: string): string => `함수 이름 ${fn} 을 다른 워크스페이스가 쓰고 있습니다 — 운영자에게 알려 주세요`;
 
+/** 새 함수를 만들어야 하는 앱이 워크스페이스 함수 수 상한에 닿았나(#4792) — 함수 줄이 있으면 늘 null. 막히면 까닭. */
+export async function newFunctionDenial(appId: string, policy: AppServerPolicy): Promise<string | null> {
+  if (await st.getServerRow(appId)) return null;
+  return functionsCapDenial(policy, await st.countServerRows());
+}
+
 /** 이 앱의 함수 이름 — 이미 정한 이름(줄) 또는 새로 지을 이름. 64자를 넘어 못 지으면 null. */
 async function functionNameOf(appId: string, env: AppServerEnv): Promise<string | null> {
   const row = await st.getServerRow(appId);
@@ -185,13 +191,22 @@ export async function deployBuildToAliases(i: {
   const fn = await functionNameOf(i.app.id, env);
   if (!fn) throw nameTooLong(i.app.id);
   //  #4792 새 함수는 워크스페이스 함수 수 상한 안에서만 — 공개 · 되돌리기도 이 길로 와서, 함수가 없는 앱이면 여기서 막힌다(있는 함수는 늘 고친다).
-  const claim = await st.claimServerRow(i.app.id, fn, i.policy.workspace_functions_max);
-  if (!claim.row) throw new HttpError(409, functionsCapDenial(i.policy, claim.count) ?? "앱 서버 줄을 만들지 못했습니다");
+  const claimRow = async (): Promise<void> => {
+    const claim = await st.claimServerRow(i.app.id, fn, i.policy.workspace_functions_max);
+    if (!claim.row) throw new HttpError(409, functionsCapDenial(i.policy, claim.count) ?? "앱 서버 줄을 만들지 못했습니다");
+  };
+  await claimRow();
   const sleep = deps.sleep ?? sleepDefault;
   let locked = false;
-  for (let n = 0; n < 30 && !locked; n++) { locked = await st.lockServer(i.app.id, 15 * 60); if (!locked) await sleep(deps.pollMs ?? 2000); }
+  for (let n = 0; n < 30 && !locked; n++) {
+    locked = await st.lockServer(i.app.id, 15 * 60);
+    if (locked) break;
+    //  줄이 사라졌으면(그 사이 하우스키핑이 서버 선언을 뺀 앱의 함수를 걷었다 · #4791) 잠금 다툼이 아니다 — 줄을 다시 잡는다(격리 리뷰).
+    if (!(await st.getServerRow(i.app.id))) { await claimRow(); continue; }
+    await sleep(deps.pollMs ?? 2000);
+  }
   if (!locked) throw new HttpError(409, lockedMsg);
-  let owned = false;   // 이 워크스페이스의 함수로 확인했다 — 도중에 실패해도 남은 판의 코드 크기를 다시 잰다(#4792)
+  let owned = false;   // 이 워크스페이스의 함수다(확인했거나 막 만들었다) — 도중에 실패해도 남은 판의 코드 크기를 다시 잰다(#4792)
   try {
     const row = await st.getServerRow(i.app.id);
     const want = {
@@ -220,7 +235,8 @@ export async function deployBuildToAliases(i: {
       //   이번에 옮기지 않는 별칭(초안만 올릴 때의 pub)이 가리키는 판은 정리에서 빠지니 남는 쪽에 센다.
       const vers = got ? await api.listVersions(fn) : [];
       const after = codeBytesAfterDeploy(vers, i.zipBytes, i.policy.keep_versions, i.aliases.includes("pub") ? [] : [row?.pub_lambda_version]);
-      const full = codeCapDenial(i.policy, await st.sumServerCodeBytes(i.app.id), codeBytesOf(vers), after);
+      //   판정과 자리 잡기를 함수 수와 같은 워크스페이스 자문 락 안에서 — 같은 때 다른 앱을 올리는 배포가 이 몫을 센다(격리 리뷰).
+      const full = await st.reserveServerCode(i.app.id, i.policy, codeBytesOf(vers), after);
       if (full) {
         //  함수가 아직 없는 앱이면 방금 잡은 줄을 지운다 — 남으면 함수 수 상한의 한 칸을 빈 줄이 차지한다.
         if (!got) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
@@ -238,6 +254,7 @@ export async function deployBuildToAliases(i: {
               Description: `lively app ${i.app.id} (${slug})`.slice(0, 256),
               Tags: { "lvly:tenant": blobTenant(), "lvly:app": i.app.id, "lvly:workspace": slug }, Publish: false,
             });
+            owned = true;   // 우리 태그로 막 만들었다 — 이 뒤에서 실패해도 코드 크기를 다시 잰다(격리 리뷰: 만든 직후 실패가 0 으로 남았다)
             break;
           } catch (e) {
             if (e instanceof AwsError && (e.status === 409 || e.code === "ResourceConflictException")) break;   // 그 사이 만들어졌다 — 아래에서 확인
@@ -298,6 +315,12 @@ export async function deployBuildToAliases(i: {
     if (e instanceof AwsError) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 AWS 오류(#4484)");
     //  코드를 올렸거나 판을 고정한 뒤 실패했으면 그 함수의 코드 크기가 바뀌었다 — 다시 재 둔다(상한이 낡은 값으로 세지 않게).
     if (owned) await recordCodeBytes(api, fn, i.app.id).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 재기 실패(비치명)"));
+    //  함수를 하나도 못 만든 채 끝난 첫 배포(역할 전파 · 계정 한도 등)면 빈 줄을 걷는다 — 남으면 함수 수 상한의 한 칸을 계속 잡는다(격리 리뷰).
+    //   AWS 에 함수가 있으면(남이 만든 것 포함) 줄을 남긴다 — 확인을 못 했어도 남긴다.
+    else {
+      const exists = await api.getFunction(fn).then((g) => !!g).catch(() => true);
+      if (!exists) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+    }
     const msg = publicError(e);
     await st.setServerError(i.app.id, msg).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
     if (e instanceof AwsError) throw new HttpError(502, msg);
@@ -374,10 +397,8 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   if (!t.bundle) throw new HttpError(409, "판 파일 목록이 없습니다");
   //  함수 이름(64자)을 못 지으면 · 워크스페이스 함수 수가 상한에 닿았으면(#4792 · 함수가 아직 없는 앱만) 몇 분 빌드한 뒤가 아니라 지금 알린다.
   if (!(await functionNameOf(t.app.id, env))) throw nameTooLong(t.app.id);
-  if (!(await st.getServerRow(t.app.id))) {
-    const full = functionsCapDenial(policy, await st.countServerRows());
-    if (full) throw new HttpError(409, full);
-  }
+  const full = await newFunctionDenial(t.app.id, policy);
+  if (full) throw new HttpError(409, full);
   const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
   const have = await usableBuild(await st.getServerBuild(t.app.id, key), deps);
   if (!have && !seat) {

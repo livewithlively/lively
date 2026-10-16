@@ -14,12 +14,12 @@
 //     멈춘 함수는 표시도 걷기도 하지 않는다 — 지웠다 새로 만들면 자동 멈춤 · 관리자 멈춤이 풀리는 길이 된다(되살린 함수는 멈춤 기록이 없다).
 import { logger } from "../log.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
-import { appServerEnv } from "./app-server-config.js";
+import { appServerEnv, serverDeclOf } from "./app-server-config.js";
 import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { publicError, type LambdaApi } from "./app-server-deploy.js";
+import { publicError, realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import { codeBytesOf } from "./app-server-policy.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
-import { serverDeclOf } from "./app-server-config.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
 import { notifyAppInstaller } from "./notify.js";
@@ -155,6 +155,24 @@ export async function retireUnusedServers(policy: AppServerPolicy, deps: WatchDe
   return out;
 }
 
+/**
+ * ⑥ 코드 크기를 모르는 함수(#4792) — 별칭이 있는데 code_bytes 가 0 인 줄(칸을 더하기 전에 올린 함수 · 재기에 실패한 배포)을 AWS 에서 다시 잰다.
+ *  0 이면 코드 저장 상한이 그 함수를 없는 것으로 센다(격리 리뷰 «모름 → 0 → 통과»). 틱마다 몇 개씩만. 잰 수.
+ */
+export async function refreshUnknownCodeBytes(deps: WatchDeps = {}, limit = 20): Promise<number> {
+  const env = appServerEnv();
+  if (!env) return 0;
+  const api = deps.api ?? realLambdaApi(env.region);
+  let n = 0;
+  for (const r of await st.serverRowsWithoutCodeSize(limit)) {
+    try {
+      const bytes = codeBytesOf(await api.listVersions(r.function_name));
+      if (bytes > 0) { await st.setServerCodeBytes(r.app_id, bytes); n++; }
+    } catch (e) { logger.warn({ err: e, app: r.app_id }, "함수 코드 크기 다시 재기 실패 — 다음 틱(#4792)"); }
+  }
+  return n;
+}
+
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
   if (!appServerEnv()) return { skipped: "disabled" };
@@ -163,6 +181,7 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   const policy = await st.appServerPolicy();
   out.watch = await watchAppServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.retire = await retireUnusedServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.code_sizes = await refreshUnknownCodeBytes(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.pruned = await pruneServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;

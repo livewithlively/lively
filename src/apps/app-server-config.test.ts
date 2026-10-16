@@ -213,6 +213,7 @@ t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1�
   assert.equal(codeCapDenial(p, 90 * MB, 0, 10 * MB), null, "합이 꼭 상한이면 된다(경계)");
   const m = codeCapDenial(p, 90 * MB, 0, 10 * MB + 1)!;
   assert.ok(m.includes("100MB") && m.includes("workspace_code_mb") && m.includes("org_app_remove"), m);
+  assert.ok(m.includes("1KB 넘습니다"), `넘는 양을 적는다(반올림한 합만 보면 앞뒤가 안 맞아 보인다): ${m}`);
   assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB), null, "이미 넘었어도 이 함수가 그대로면 막지 않는다");
   assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 15 * MB), null, "줄어드는 배포도 된다");
   assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");

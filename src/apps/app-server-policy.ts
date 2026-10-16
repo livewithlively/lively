@@ -7,7 +7,8 @@
 //   세션 안에서 보이는 «남은 메모리»(/proc/meminfo)에는 gVisor 자체 몫(약 200~330MB)이 안 보이므로 바닥은 그 몫 + 여유로 잡는다.
 //  워크스페이스 상한(#4792 · 결정 상민 2026-10-16): 모든 워크스페이스가 AWS 계정 하나를 나눠 쓴다 — Lambda 코드 저장 300GiB(문서상 늘릴 수 없음) ·
 //   동시 실행 1,000. 함수 수(기본 20 · 천장 200)와 코드 저장(기본 5GB · 천장 20GB)을 새 함수 · 새 코드를 올릴 때 본다.
-//   코드 저장은 AWS 가 세는 그대로 함수 판마다의 CodeSize(zip 크기) 합이다(2026-10-16 계정 측정: TotalCodeSize = 함수들 $LATEST CodeSize 합).
+//   코드 저장은 AWS 가 세는 그대로 함수 판마다의 CodeSize(zip 크기) 합이다 — 2026-10-16 계정 측정: TotalCodeSize 36,599,256 = 판 없이 $LATEST 만
+//   있던 옛 함수 셋의 CodeSize 합(zip 크기로 센다는 것까지 확인). 고정 판을 $LATEST 와 따로 세는지는 재지 않았다 — 따로 더해 넉넉히(많게) 센다.
 //   동시 실행 몫은 Lambda 예약으로 걸지 않는다(예약 합 ≤ 1,000 − 100) — v2-6(#4485) 앞단이 요청을 센다.
 
 export interface AppServerPolicy {
@@ -119,8 +120,10 @@ export function codeBytesAfterDeploy(
  *  배포 뒤 합이 상한 밑이면 null. 넘어도 이 함수가 줄거나 그대로면 막지 않는다(관리자가 상한을 내린 뒤에도 있는 앱을 고칠 수 있게 — 함수 수와 같은 원칙).
  */
 export function codeCapDenial(p: AppServerPolicy, others: number, now: number, after: number): string | null {
-  if (after <= now || others + after <= p.workspace_code_mb * MIB) return null;
-  return `이 워크스페이스의 앱 서버 코드 저장이 상한을 넘습니다(다른 서버 ${mbText(others)} + 이 서버 배포 뒤 ${mbText(after)} > 상한 ${p.workspace_code_mb}MB) — ` +
+  const cap = p.workspace_code_mb * MIB;
+  if (after <= now || others + after <= cap) return null;
+  //  넘는 양을 함께 적는다 — 합이 상한 근처면 반올림 탓에 «100MB + 3KB > 100MB» 처럼 앞뒤가 안 맞아 보인다(격리 리뷰).
+  return `이 워크스페이스의 앱 서버 코드 저장이 상한 ${p.workspace_code_mb}MB 를 ${mbText(others + after - cap)} 넘습니다(다른 서버 ${mbText(others)} + 이 서버 배포 뒤 ${mbText(after)}) — ` +
     "쓰지 않는 서버 앱을 지우거나(org_app_remove), 관리자가 상한을 올리세요(app_server_limits_set workspace_code_mb)";
 }
 

@@ -3,7 +3,7 @@
 import { itemsPool, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 import { audit } from "../org/store/audit.js";
-import { resolveAppServerPolicy, type AppServerPolicy } from "./app-server-policy.js";
+import { codeCapDenial, resolveAppServerPolicy, type AppServerPolicy } from "./app-server-policy.js";
 
 // ── 상한 ──
 export async function appServerPolicyRow(): Promise<Record<string, unknown>> {
@@ -120,7 +120,11 @@ export async function failStaleServerBuilds(): Promise<number> {
   return r.rowCount ?? 0;
 }
 
-/** 지울 zip — 앱이 사라졌거나, 별칭이 안 가리키고 오래된 빌드(성공 · 실패). 실패한 빌드는 zip 이 없다(행만 지운다). */
+/**
+ * 지울 zip — 앱이 사라졌거나, 별칭이 안 가리키고 오래된 빌드(성공 · 실패). 실패한 빌드는 zip 이 없다(행만 지운다).
+ *  keep_until(#4791) 이 남은 빌드는 앱이 있는 한 지우지 않는다 — 서버 선언을 뺀 앱의 함수를 걷을 때 그 함수가 쓰던 빌드에 유예를 준다
+ *  (빌드한 지 30일이 지났어도 걷은 뒤 30일 동안은 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다 · 격리 리뷰).
+ */
 export async function serverBuildsToPrune(olderThanDays: number, limit = 50): Promise<Array<{ app_id: string; build_key: string; zip_key: string | null }>> {
   const r = await itemsPool.query(
     `SELECT b.app_id, b.build_key, b.zip_key FROM org_app_server_build b
@@ -128,9 +132,20 @@ export async function serverBuildsToPrune(olderThanDays: number, limit = 50): Pr
        LEFT JOIN org_app_server s ON s.app_id = b.app_id
       WHERE b.status <> 'building'
         AND (a.id IS NULL OR (b.started_at < now() - make_interval(days => $1)
+             AND (b.keep_until IS NULL OR b.keep_until < now())
              AND b.build_key IS DISTINCT FROM s.cur_build_key AND b.build_key IS DISTINCT FROM s.pub_build_key))
       ORDER BY b.started_at LIMIT $2`, [olderThanDays, limit]);
   return r.rows as Array<{ app_id: string; build_key: string; zip_key: string | null }>;
+}
+/** 빌드 유예(#4791) — 걷는 함수가 쓰던 빌드(별칭이 가리키던 빌드)를 days 일 동안 정리에서 뺀다. */
+export async function keepServerBuilds(appId: string, keys: Array<string | null>, days: number): Promise<void> {
+  const ks = keys.filter((k): k is string => !!k);
+  if (!ks.length) return;
+  await itemsPool.query(`UPDATE org_app_server_build SET keep_until = now() + make_interval(days => $3) WHERE app_id=$1 AND build_key = ANY($2::text[])`, [appId, ks, days]);
+}
+/** zip 크기를 모르는 성공 빌드(옛 줄)에 저장소에서 본 크기를 적는다(#4792 — 코드 저장 셈이 0 으로 새지 않게). */
+export async function setServerBuildZipBytes(appId: string, key: string, bytes: number): Promise<void> {
+  await itemsPool.query(`UPDATE org_app_server_build SET zip_bytes=$3 WHERE app_id=$1 AND build_key=$2 AND zip_bytes IS NULL`, [appId, key, bytes]);
 }
 export async function deleteServerBuild(appId: string, key: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_app_server_build WHERE app_id=$1 AND build_key=$2 AND status <> 'building'`, [appId, key]);
@@ -168,14 +183,17 @@ export async function countServerRows(): Promise<number> {
   const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_server`);
   return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
 }
-/** 이 워크스페이스 함수들의 코드 저장 합(바이트, #4792) — exceptApp 을 주면 그 앱 것은 뺀다(배포하는 함수는 AWS 에서 직접 잰다). */
-export async function sumServerCodeBytes(exceptApp: string | null = null): Promise<number> {
-  const r = await itemsPool.query(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server WHERE $1::text IS NULL OR app_id <> $1`, [exceptApp]);
+/** 이 워크스페이스 함수들의 코드 저장 합(바이트, #4792 — app_server_limits 의 usage). 배포의 판정은 reserveServerCode 가 락 안에서 따로 센다. */
+export async function sumServerCodeBytes(): Promise<number> {
+  const r = await itemsPool.query(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server`);
   return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
 }
 export async function setServerCodeBytes(appId: string, bytes: number): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET code_bytes=$2 WHERE app_id=$1`, [appId, Math.max(0, Math.round(bytes))]);
 }
+
+/** 워크스페이스 상한(#4792) 자문 락 — 함수 수 줄 잡기와 코드 저장 자리 잡기가 같은 키로 한 줄로 선다. 클러스터 전역이라 테넌트를 섞는다. */
+const QUOTA_LOCK_SQL = `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|lvly-app-server-quota'))`;
 
 /**
  * 함수 줄을 잡는다 — 없으면 만든다(함수 이름을 그때 못 박는다 — 슬러그가 나중에 바뀌어도 이 앱의 함수는 그대로).
@@ -185,7 +203,7 @@ export async function setServerCodeBytes(appId: string, bytes: number): Promise<
  */
 export async function claimServerRow(appId: string, functionName: string, max: number): Promise<{ row: ServerRow | null; count: number }> {
   const out = await withTx(async (c) => {
-    await c.query(`SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|lvly-app-server-functions'))`);
+    await c.query(QUOTA_LOCK_SQL);
     const have = await c.query(`SELECT 1 FROM org_app_server WHERE app_id=$1`, [appId]);
     const n = Number(((await c.query(`SELECT count(*)::int AS n FROM org_app_server`)).rows[0] as { n: number } | undefined)?.n ?? 0);
     if (!have.rows.length) {
@@ -196,6 +214,30 @@ export async function claimServerRow(appId: string, functionName: string, max: n
     return { created: false, count: n };
   });
   return { row: await getServerRow(appId), count: out.count };
+}
+
+/**
+ * 코드 저장 상한(#4792) — 판정과 자리 잡기를 한 번에. 함수 수 줄 잡기와 같은 자문 락 안에서 다른 함수들의 합을 읽고, 통과하면 이 함수의
+ *  code_bytes 를 max(지금 값, after) 로 올려 둔다 — 같은 때 다른 앱을 올리는 배포가 이 몫을 세게(격리 리뷰: 읽기와 쓰기 사이가 비어 동시 배포가
+ *  상한을 넘었다). 배포가 끝나면(성공 · 코드를 올린 뒤의 실패) AWS 실측으로 덮는다. 막히면 그 까닭 · 통과하면 null.
+ */
+export async function reserveServerCode(appId: string, policy: AppServerPolicy, now: number, after: number): Promise<string | null> {
+  return withTx(async (c) => {
+    await c.query(QUOTA_LOCK_SQL);
+    const r = await c.query(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server WHERE app_id <> $1`, [appId]);
+    const why = codeCapDenial(policy, Number((r.rows[0] as { n: number } | undefined)?.n ?? 0), now, after);
+    if (why) return why;
+    await c.query(`UPDATE org_app_server SET code_bytes = GREATEST(code_bytes, $2) WHERE app_id=$1`, [appId, Math.max(0, Math.round(after))]);
+    return null;
+  });
+}
+
+/** 별칭이 있는데 코드 크기를 모르는 줄(0) — 칸을 더하기 전에 올린 함수 · 재기에 실패한 함수. 하우스키핑이 AWS 에서 다시 잰다(#4792). */
+export async function serverRowsWithoutCodeSize(limit = 20): Promise<Array<{ app_id: string; function_name: string }>> {
+  const r = await itemsPool.query(
+    `SELECT app_id, function_name FROM org_app_server WHERE code_bytes = 0 AND (cur_lambda_version IS NOT NULL OR pub_lambda_version IS NOT NULL)
+      ORDER BY updated_at LIMIT $1`, [limit]);
+  return r.rows as Array<{ app_id: string; function_name: string }>;
 }
 
 /** 배포 잠금 — 한 앱의 배포를 한 줄로(별칭을 둘이 동시에 옮기면 엉뚱한 판이 남는다). 잡으면 true. 끝나면 unlockServer. */

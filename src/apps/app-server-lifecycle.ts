@@ -105,9 +105,12 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   return { removed: !!row && !pending, errors, pending };
 }
 
+/** 걷은 함수가 쓰던 빌드를 정리에서 빼 두는 날수(#4791) — 그동안 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다. */
+export const BUILD_KEEP_AFTER_RETIRE_DAYS = 30;
+
 /**
  * 서버 선언을 뺀 앱의 함수를 걷는다(#4791) — 함수 · 로그 그룹 · 함수 줄. 빌드 기록 · zip 은 남긴다: 서버 판으로 되돌리면 그 빌드로 함수를 다시
- *  만들고(빌드 없이), zip 은 별칭이 안 가리키게 됐으니 종전 30일 정리가 걷는다. 잠금은 한 번만 잡아 본다(배포 중이면 다음 틱에 다시).
+ *  만든다(빌드 없이). 별칭이 가리키던 빌드는 걷은 때부터 30일 정리 유예(keep_until)를 받는다. 잠금은 한 번만 잡아 본다(배포 중이면 다음 틱에 다시).
  *  잠근 뒤 recheck 로 «아직도 쓰지 않나» 를 다시 본다 — 고를 때 읽은 매니페스트가 낡았을 수 있다(그 사이 서버 판을 저장 · 배포하면 지우지 않는다).
  */
 export async function retireServer(appId: string, recheck: () => Promise<boolean>, deps0: ServerDeps = {}): Promise<{ retired: boolean; skipped?: string; errors: string[] }> {
@@ -128,6 +131,9 @@ export async function retireServer(appId: string, recheck: () => Promise<boolean
       await api.deleteFunction(row.function_name);
       await api.deleteLogGroup(logGroupFor(row.function_name)).catch((e) => errors.push(`로그: ${publicError(e)}`));
     }
+    //  이 함수가 쓰던 빌드(별칭이 가리키던 빌드)에 정리 유예를 준다 — 줄을 지우면 별칭 참조가 사라져, 빌드한 지 30일이 지난 빌드는 같은 틱의
+    //   정리가 곧바로 지운다(격리 리뷰). 유예 동안은 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다.
+    await st.keepServerBuilds(appId, [row.cur_build_key, row.pub_build_key], BUILD_KEEP_AFTER_RETIRE_DAYS);
     await st.deleteServerRow(appId);
     gone = true;
     return { retired: true, errors };

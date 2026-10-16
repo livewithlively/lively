@@ -241,6 +241,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  #4791 unused_since — 지금 판 · 공개 판 둘 다 서버 선언(web.server)이 없다고 하우스키핑이 처음 본 때. 정책 unused_retire_days(기본 7일)가
   //   지나면 함수 · 로그 그룹 · 이 줄을 걷는다(빌드 기록은 남긴다). 서버 판을 다시 올리면(별칭을 옮기면) 걷는다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS unused_since TIMESTAMPTZ;`);
+  //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
+  await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).
