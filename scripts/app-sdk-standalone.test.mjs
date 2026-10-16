@@ -57,6 +57,7 @@ function bootAlone(routes, opts = {}) {
     const method = (init.method || "GET").toUpperCase();
     fetched.push({ url, method, body: init.body === undefined ? undefined : JSON.parse(init.body), headers: init.headers, credentials: init.credentials });
     const r = routes(method, url, init.body === undefined ? undefined : JSON.parse(init.body)) || { status: 404, json: { error: "없음" } };
+    if (r.reject) throw r.reject;   // #4848 서버에 닿지 못함(fetch 의 TypeError)
     //  답 머리(retry-after 등 — #4848) · JSON 이 아닌 본문(HTML 413 등)도 흉내 낸다.
     const hdrs = Object.fromEntries(Object.entries(r.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
     return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: (k) => hdrs[String(k).toLowerCase()] ?? null },
@@ -131,6 +132,7 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   ]) {
     const e = await p.then(() => null, (x) => x);
     ok(e && e.code === code, `S3/S4 ${name} → ${code}`);
+    ok(e.status === null && e.reason === null, `S3/S4 ${name} 서버까지 안 간 거절은 status · reason 이 null(#4848 — 다리와 같은 모양)`);
   }
   eq(fetched.length, n, "S3/S4 서버에 묻지 않는다");
 }
@@ -383,7 +385,7 @@ const korean = (s) => typeof s === "string" && /[가-힣]/.test(s);
     const before = fetched.length;
     const e = await lively.store.sql("insert into t values ($1)", ["x"]).then(() => null, (x) => x);
     ok(e && e.reason === reason && e.status === route.status && e.code === code, `S18 ${name} → reason ${reason} · ${route.status} · ${code}`);
-    ok(korean(e.message) && e.message !== reason, `S18 ${name} 글은 사람이 읽을 말(${e.message})`);
+    ok(korean(e.message) && e.message !== reason && e.message !== (route.json && route.json.error), `S18 ${name} 글은 SDK 의 사람이 읽을 말로 바뀐다(${e.message})`);
     eq([fetched.length - before, timers.length], [1, 0], `S18 ${name} 다시 보내지 않는다`);
   }
   let n = 0;
@@ -394,6 +396,35 @@ const korean = (s) => typeof s === "string" && /[가-힣]/.test(s);
   const before = fetched.length;
   const e = await lively.store.sql("select 1").then(() => null, (x) => x);
   ok(e && e.reason === "body_too_large" && e.status === 413 && fetched.length - before === 2, "S18 C14 붐빔 뒤 둘째가 413 이면 그 실패로(다시 보내기는 한 번)");
+}
+{
+  //  (C15) 서버가 제 글을 준 413(코드 없음 — 개인 설정 16KB · 파일 읽기 8MB · 결과 상한)은 «1MB» 로 짐작하지 않는다 — reason null · 서버 글 그대로(격리 리뷰 B1)
+  for (const text of ["설정이 너무 큽니다(16KB 까지)", "파일이 너무 큽니다(9MB > 8MB)", "결과가 상한(5MB)을 넘었습니다 — LIMIT·OFFSET 으로 나눠 읽으세요. 쓰기였다면 취소했습니다"]) {
+    const { lively } = bootAlone(baseRoutes({ "POST /_lively/prefs": { status: 413, json: { error: text } } }));
+    const e = await lively.prefs.set({ big: 1 }).then(() => null, (x) => x);
+    ok(e && e.status === 413 && e.reason === null && e.message === text && e.code === -32602, `S18 C15 413 «${text.slice(0, 12)}…» → reason null · 서버 글 그대로`);
+  }
+}
+{
+  //  (C16) 코어 모양의 busy(code 를 싣는다)는 다시 보내지 않는다 — 다시 보내기는 앞단의 모양({error:"busy"})일 때만(격리 리뷰 N1)
+  for (const route of [{ status: 503, json: { error: "지금 바쁩니다", code: "busy" }, headers: { "retry-after": "1" } },
+    { status: 503, json: { error: "busy", code: "other_busy" }, headers: { "retry-after": "1" } }]) {
+    const timers = [];
+    const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": route }), { timers });
+    await lively.ready;
+    const before = fetched.length;
+    const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
+    ok(e && e.status === 503 && e.reason === route.json.code, `S18 C16 ${JSON.stringify(route.json)} → reason ${route.json.code}`);
+    eq([fetched.length - before, timers.length], [1, 0], `S18 C16 ${JSON.stringify(route.json)} 은 다시 보내지 않는다`);
+  }
+}
+{
+  //  (C17) 서버에 닿지 못함(fetch 의 TypeError) — 같은 모양의 실패: code -32000 · status · reason null · 원래 오류는 cause(격리 리뷰 N2)
+  const boom = new TypeError("Failed to fetch");
+  const { lively } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": { reject: boom } }));
+  await lively.ready;
+  const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
+  ok(e && e.code === -32000 && e.status === null && e.reason === null && e.cause === boom && korean(e.message), `S18 C17 끊김 → -32000 · null · null · cause(${e && e.message})`);
 }
 
 console.log(`\n${pass} passed`);

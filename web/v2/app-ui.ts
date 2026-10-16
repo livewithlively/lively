@@ -39,7 +39,7 @@ function rpcFailure(e: any, code: number): { code: number; message: string; data
   if (!status) return { code, message };
   const data: { status: number; error?: string; code?: string } = { status };
   if (typeof e?.body?.error === 'string') data.error = e.body.error.slice(0, 300);
-  if (typeof e?.body?.code === 'string') data.code = e.body.code.slice(0, 64);
+  if (typeof e?.body?.code === 'string' && e.body.code.length <= 64) data.code = e.body.code;   // 긴 것은 자르지 않고 버린다(잘린 글이 코드가 되지 않게)
   return { code, message, data };
 }
 
@@ -433,7 +433,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 동의를 청할 수 있습니다' } }); return; }
       void ensureAppGrant(appId, opts?.title || meta.title)
         .then((granted) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { granted } }))
-        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: (e && e.message ? e.message : String(e)) } }));
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, -32000) }));
     } else if (msg.method === 'ui/openExternal') {
       // srcdoc(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다(앱 주소 iframe 은 팝업이 되지만 열린 창도 같은 제한을 받아 이 길이 낫다). http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');

@@ -71,7 +71,8 @@ export const APP_RUNTIME_JS = `
   var alone = (function () { try { return window.parent === window; } catch (_) { return false; } })();
   // #4482 — 앱 주소 문서가 맨몸이면 같은 주소의 /_lively/* 로 돈다(standalone). srcdoc(about:) · 파일로 연 문서는 쓸 API 가 없다.
   var standalone = alone && typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || ''));
-  function mkErr(message, code, extra) { var e = new Error(message); e.code = code; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
+  // #4848 실패는 늘 같은 모양 — code(JSON-RPC) · status · reason. 서버까지 안 간 거절은 status · reason 이 null(서버의 답이면 failure 가 채운다).
+  function mkErr(message, code, extra) { var e = new Error(message); e.code = code; e.status = null; e.reason = null; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
   function post(method, params) {
     if (standalone) return local(method, params || {});
     return new Promise(function (resolve, reject) {
@@ -94,20 +95,22 @@ export const APP_RUNTIME_JS = `
       return true;
     } catch (_) { return false; }
   }
-  // #4848 서버가 거절한 까닭 — 짧은 코드(e.reason)로 앱에 보인다. 본문 거절 넷은 글(e.message)도 사람이 읽을 말로 바꾼다(앱이 그대로 보여도 되게).
+  // #4848 서버가 거절한 까닭 — 짧은 코드(e.reason)로 앱에 보인다. 본문 거절 넷은 글(e.message)도 사람이 읽을 말로 바꾼다(앱이 그대로 보여도 되게 —
+  //  읽는 사람은 앱을 쓰는 사람이라 개발 용어를 쓰지 않는다).
   //  짧은 코드: 서버 JSON 의 code(코어 — consent_required · body_too_large …), 없으면 짧은 코드 꼴의 error(앞단 — busy · login_required …),
-  //  둘 다 없고 413 이면 body_too_large(JSON 이 아닌 413). 그 밖은 null — 지어내지 않는다. 맨몸(fetch 의 답)과 라이블리 안(다리의 error.data)이 같이 쓴다.
+  //  둘 다 없고 서버 글도 없는 413(코어 전역 파서의 HTML 413)이면 body_too_large. 그 밖은 null — 지어내지 않는다(서버가 제 글을 준 413 —
+  //  개인 설정 16KB · 파일 읽기 8MB · 결과 상한 — 은 그 글이 맞는 안내다). 맨몸(fetch 의 답)과 라이블리 안(다리의 error.data)이 같이 쓴다.
   var REASON_TEXT = {
     busy: '지금 보내는 요청이 많아 받지 못했습니다 — 잠시 뒤에 다시 보내 주세요.',
     body_timeout: '보내는 데 너무 오래 걸려 끊겼습니다 — 연결을 확인하고 다시 보내 주세요.',
-    body_too_large: '보낸 내용이 너무 큽니다(한 번에 1MB 까지) — 나눠 보내거나, 큰 파일은 앱 폴더(lively.files.url)로 올려 주세요.',
-    bad_body: '보낸 내용을 JSON 으로 읽지 못했습니다.'
+    body_too_large: '보낸 내용이 너무 큽니다(한 번에 1MB 까지) — 나눠서 보내 주세요.',
+    bad_body: '보낸 내용을 읽지 못했습니다 — 다시 보내 주세요.'
   };
   var SHORT_CODE = /^[a-z][a-z0-9_]{0,63}$/;
   function reasonOf(status, j) {
     if (j && typeof j.code === 'string' && SHORT_CODE.test(j.code)) return j.code;
     if (j && typeof j.error === 'string' && SHORT_CODE.test(j.error)) return j.error;
-    return status === 413 ? 'body_too_large' : null;
+    return status === 413 && !(j && typeof j.error === 'string' && j.error) ? 'body_too_large' : null;
   }
   function failure(message, code, status, j, extra) {
     var reason = status ? reasonOf(status, j) : null;
@@ -131,6 +134,9 @@ export const APP_RUNTIME_JS = `
   // #4848 앞단이 «붐빔»(503 busy)으로 거절한 요청은 retry-after(초)만큼 쉬고 한 번만 다시 보낸다 — 앞단은 본문을 다 받기 전에 거절해
   //  코어에 닿지 않았다(다시 보내도 쓰기가 겹치지 않는다). 쉬는 시간은 30초까지(없거나 이상하면 5초), 그 위에 ¼(1초까지)을 흩뿌린다 —
   //  한꺼번에 거절된 화면들이 한꺼번에 돌아오지 않게. 다시 보낸 답이 결과다(또 붐비면 그 실패로).
+  //  ★ 앞단의 모양 그대로({error:"busy"} — code 없음)일 때만 다시 보낸다. 코어의 답은 code 를 싣는 모양이라, 코어가 언젠가 busy 를 써도
+  //   이미 실행한 쓰기를 다시 보내지 않는다(코어 src/apps/app-front-api.ts apiErrorReply 주석).
+  function frontBusy(status, j) { return status === 503 && !!j && j.error === 'busy' && j.code === undefined; }
   function retryWait(r) {
     var raw = null;
     try { raw = r.headers && typeof r.headers.get === 'function' ? r.headers.get('retry-after') : null; } catch (_) { raw = null; }
@@ -150,7 +156,7 @@ export const APP_RUNTIME_JS = `
         try { j = t ? JSON.parse(t) : null; } catch (_) { j = null; }
         if (r.ok) return j;
         //  같은 init(같은 메서드 · 경로 · 본문 글자)으로 한 번만 — 앱이 그 사이 넘긴 객체를 고쳐도 다시 보내는 본문은 첫 번째와 같다.
-        if (r.status === 503 && !again && reasonOf(r.status, j) === 'busy') {
+        if (!again && frontBusy(r.status, j)) {
           return new Promise(function (res) { setTimeout(res, retryWait(r)); }).then(function () { return send(path, init, true); });
         }
         var code = r.status === 403 ? -32001 : (r.status === 400 || r.status === 413) ? -32602 : r.status === 404 ? -32601 : -32000;
@@ -165,6 +171,9 @@ export const APP_RUNTIME_JS = `
         }
         throw e;
       });
+    }, function (err) {
+      // #4848 서버에 닿지 못했다(연결 끊김 · 오프라인 — fetch 의 TypeError) — 실패도 같은 모양으로(status · reason null · 원래 오류는 cause).
+      throw mkErr('서버에 닿지 못했습니다 — 연결을 확인하고 다시 시도해 주세요.', -32000, { cause: err });
     });
   }
   var NO_SESSION = '붙은 세션이 없습니다 — 라이블리 화면 안에서 세션에 붙은 앱으로 열었을 때만 쓸 수 있습니다';

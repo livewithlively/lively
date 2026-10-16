@@ -86,6 +86,9 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(c && c.reason === null && c.status === null && c.message === "요청 실패 (413)", "S2-2b data 가 없으면(옛 호스트) 종전 그대로 — 지어내지 않는다(C12)");
   const d = await fail({ status: 413, error: 7, code: { x: 1 } });
   ok(d && d.reason === "body_too_large", "S2-2b data 의 error · code 가 문자열이 아니면 쓰지 않는다(413 이라 body_too_large)");
+  //  서버가 제 글을 준 413(개인 설정 16KB 등 — 코드 없음)은 «1MB» 로 짐작하지 않는다 — reason null · 그 글 그대로(격리 리뷰 B1)
+  const e = await fail({ status: 413, error: "설정이 너무 큽니다(16KB 까지)" }, "설정이 너무 큽니다(16KB 까지)", -32602);
+  ok(e && e.reason === null && e.status === 413 && e.message === "설정이 너무 큽니다(16KB 까지)" && e.code === -32602, "S2-2b 서버 글이 있는 413 → reason null · 글 그대로");
 }
 
 // ══ S2-3 prefs.get / prefs.set ══
@@ -690,6 +693,11 @@ if (!existsSync(built)) {
     fire({ jsonrpc: "2.0", id: 84, method: "chat/send", params: { text: "안녕" } });
     await settle();
     eq(lastReply().error.data, { status: 429, error: "너무 잦습니다" }, "S2-20 chat/send 실패 → data");
+    //  64자 넘는 code 는 자르지 않고 버린다 — 잘린 글이 짧은 코드가 되지 않게(격리 리뷰 N4)
+    plan = { "/tool-call": { status: 409, json: { error: "x", code: "a".repeat(65) } } };
+    fire({ jsonrpc: "2.0", id: 86, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    eq(lastReply().error.data, { status: 409, error: "x" }, "S2-20 64자 넘는 code 는 싣지 않는다");
     //  서버까지 안 간 거절(붙은 세션 없음)은 data 없음 — 종전 모양 그대로
     const { fire: fire2 } = await mount({});
     fire2({ jsonrpc: "2.0", id: 85, method: "chat/send", params: { text: "x" } });

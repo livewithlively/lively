@@ -16,6 +16,8 @@ declare global {
  *  · 맨몸에서 앞단이 «붐빔»(503 `busy`)으로 거절한 요청은 SDK 가 `retry-after` 만큼 쉬고 **한 번** 다시 보낸다(본문을 다 받기 전의 거절이라
  *    쓰기가 겹치지 않는다). 그래도 붐비면 `reason: "busy"` 로 실패한다 — 잠시 뒤 사람이 다시 누르게 한다.
  *  · `body_too_large` — 한 번에 1MB 까지다. 나눠 보내거나, 큰 파일은 `lively.files.url` 의 서명 주소로 올린다.
+ *    서버가 제 글을 준 413(개인 설정 16KB · 파일 읽기 8MB · SQL 결과 상한)은 `reason` 이 null 이고 글은 서버의 것 그대로다(그 글이 맞는 안내다).
+ *  · 서버에 닿지 못하면(연결 끊김 · 오프라인) `code` -32000 · `status` · `reason` null · 원래 오류는 `cause`.
  */
 export interface LivelyError extends Error {
   /** JSON-RPC 코드(종전 그대로) — -32001 권한 밖 · -32602 인자 · -32601 못 하는 자리 · -32000 그 밖. */
