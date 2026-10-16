@@ -140,8 +140,23 @@ try {
       JSON.stringify({ res: { ...res, per_unit: undefined }, rows: rows.map((r) => r.external_id) }));
     chk("I3 요청 안 한 채널의 글은 안 들어간다(stray)", res.stray === 1 && (await sources("slack", TEAM, STRAY)).length === 0, `stray=${res.stray}`);
     const vis = await Promise.all(rows.map((r) => audienceHas(r.id, A)));
-    chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean),
-      JSON.stringify({ vis, slackRules: (await sourceVisRules()).filter((r) => r.match_system === "slack"), viewers: await viewer(u1.id, A) }));
+    let diag = null;
+    if (!vis.every(Boolean)) {
+      //  CI 에서만 보인 실패의 진단 — 자료의 공개범위 · 볼 수 있는 사람 행 · 단위 연결 · 단위 구성원 · 축 · 다시 맞춘 뒤 결과.
+      const ids = rows.map((r) => r.id);
+      const q = async (sql, args) => (await itemsPool.query(sql, args).catch((e) => ({ rows: [{ err: e.message }] }))).rows;
+      diag = {
+        src: await q(`SELECT id, visibility FROM source WHERE id = ANY($1::int[])`, [ids]),
+        sm: await q(`SELECT source_id, subject_kind, member_id FROM source_member WHERE source_id = ANY($1::int[])`, [ids]),
+        cus: await q(`SELECT unit_id, source_id, audience FROM collect_unit_source WHERE source_id = ANY($1::int[])`, [ids]),
+        members: await q(`SELECT member_id, via, priority, verified_at IS NOT NULL AS verified FROM collect_unit_member WHERE unit_id=$1`, [u1.id]),
+        axes: await q(`SELECT visibility_axes FROM org_runtime_config WHERE id=1`, []),
+        slackRules: (await sourceVisRules()).filter((r) => r.match_system === "slack").map((r) => [r.match_channel, r.visibility]),
+        resync: await store.syncUnitAudience(itemsPool, [u1.id]).catch((e) => `err ${e.message}`),
+        after: await Promise.all(rows.map((r) => audienceHas(r.id, A))),
+      };
+    }
+    chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean), JSON.stringify({ vis, diag }));
     const a1 = await unitBy(CH1), a2 = await unitBy(CH2);
     chk("I2c 끝까지 읽은 단위(끝이 «지금»)는 위치 = 계획 시각 − 60초 · 읽은 시각 = 이 판", a1.cursor?.ts === `${PLANNED - NOW_MARGIN_SEC}.000000`
       && new Date(a1.read_at).getTime() === NOW && p1?.cursor_moved === true && p1?.complete === true, JSON.stringify({ cursor: a1.cursor, read_at: a1.read_at, p1 }));
