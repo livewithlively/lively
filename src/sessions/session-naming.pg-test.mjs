@@ -6,7 +6,7 @@
 //  따라간다»(UPDATE … WHERE 순위) · «사람이 이름을 실제로 바꾸면 사람 것»(SET 의 CASE) · «사람이 고른 태스크는 사람 것».
 //  목 풀로는 조건 하나를 지워도 초록이다. 그래서 진짜 함수(발견 기록 · 노드 미러 · 이름짓기)를 순서대로 부르고 **행을 되읽어** 판정한다.
 //
-//  사양·엣지 표: 스크래치패드 spec-4418.md — A1~A10(노드 경합 · 옛 발견 행 정리) · B1(복원 출처) · C1~C12(태스크 이름 승계 · 바깥 개명 ·
+//  사양·엣지 표: 스크래치패드 spec-4418.md — A1~A10(노드 경합 · 옛 발견 행 정리) · B1(복원 출처) · C1~C12(태스크 이름 승계 · 바깥 개명과 그 대조군 C11b ·
 //   되살린 세션) · K1(사람이 고른 태스크).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -248,6 +248,33 @@ try {
     chk("C11 바깥에서 사람이 고친 이름이 미러로 들어오면 human — 이름짓기가 안 바꾼다",
       mid?.name === "클릭업에서 사람이 고친 이름" && mid?.name_source === "human" && r.applied === true && c11?.name === "클릭업에서 사람이 고친 이름",
       JSON.stringify({ mid, r: { applied: r.applied, task: r.task }, c11 }));
+  }
+
+  {
+    // C11b — 대조군: 바깥 이름이 그대로인 동기(평소의 싱크)는 개명이 아니다 → 출처 session 그대로 → 이름짓기가 따라간다.
+    //  이게 없으면 «싱크 때마다 human» 으로 바뀌어도 C11 은 초록이다 — 그러면 바깥과 이은 태스크는 첫 싱크 뒤 영영 안 따라간다.
+    await bind(S(22), P);
+    await sessionRow(S(22), "바깥과 이은 태스크의 첫 지시 이름", "rule");
+    const made = await st.ensureSessionTask({ sessionId: S(22), owner: A, name: "바깥과 이은 태스크의 첫 지시 이름" });
+    const cur = (await itemsPool.query(`SELECT name, description, status_category FROM project WHERE id=$1`, [made.id])).rows[0];
+    const ext = `__naming_pg_ext_${made.id}`;
+    await itemsPool.query(`UPDATE project SET external_system='clickup', external_instance='__naming_pg__', external_id=$2, external_base=$3::jsonb WHERE id=$1`,
+      [made.id, ext, JSON.stringify({ name: cur.name, description: cur.description, status_category: cur.status_category })]);
+    await itemsPool.query(`UPDATE external_outbox SET done_at=now() WHERE entity_id=$1 AND done_at IS NULL`, [made.id]);
+    const client = await itemsPool.connect();
+    try {
+      await mp.mirrorProjectV6(client, {
+        type: "task", level: "task", title: cur.name, body: cur.description ?? undefined,
+        provenance: { category: "collab_tool", system: "clickup", instance: "__naming_pg__", external_id: ext },
+        fields: { status_category: cur.status_category },
+      }, "clickup", ext);
+    } finally { client.release(); }
+    const mid = await taskRow(made.id);
+    const r = await relabelSession({ userId: A }, S(22), "바깥 연동 확인", "agent");
+    const c11b = await taskRow(made.id);
+    chk("C11b 대조군 — 이름이 그대로인 싱크는 출처를 안 바꾸고(session) 이름짓기가 따라간다",
+      mid?.name_source === "session" && r.applied === true && c11b?.name === "바깥 연동 확인" && c11b?.name_source === "agent",
+      JSON.stringify({ mid, r: { applied: r.applied, task: r.task }, c11b }));
   }
 
   {
