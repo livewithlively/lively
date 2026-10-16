@@ -12,9 +12,11 @@ import { logger } from "../../log.js";
 import { redactString } from "../ingest/redact.js";
 import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
 import {
-  CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, judgeProof, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit,
+  CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, judgeProof, readNoteOf, validUnitRef, type CollectPlan, type PlannedLink, type PlannedUnit,
 } from "./collect-plan.js";
 import { canonicalCoord, normalizeListing } from "./unit-plan.js";
+import { extractAppLinks, linkKey } from "./link-plan.js";
+import { recordLinks, storeLinkedReads, type LinkedStoreResult } from "./link-store.js";
 import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
 import {
   dropStaleProofs, guardsByUnitId, recordProofResult, requestProof, storedBodies, unitGuards, verifyByProof, type ProofResult,
@@ -40,7 +42,17 @@ export function toIngestPlan(mode: unknown, raw: unknown): IngestPlan | null {
     return !!x && Number.isInteger(x.id) && typeof x.app === "string" && typeof x.ref === "string" && validUnitRef(x.app, x.ref)
       && typeof x.instance === "string" && (x.since == null || typeof x.since === "string");
   }).map((u) => ({ ...u, proof: (u as { proof?: unknown }).proof === true })) : [];
-  return { mode, units, ...(typeof p.planned_at === "number" && Number.isFinite(p.planned_at) ? { planned_at: p.planned_at } : {}) };
+  //  #4744 이 판에 실은 링크 — 모양이 맞는 것만(노션 uuid · 슬랙 채널 + 스레드 ts).
+  const links = Array.isArray(p.links) ? p.links.filter((l): l is PlannedLink => {
+    const x = l as Record<string, unknown>;
+    if (!x || !Number.isInteger(x.id) || typeof x.ref !== "string") return false;
+    if (x.app === "notion") return /^[0-9a-f-]{36}$/.test(x.ref);
+    return x.app === "slack" && typeof x.channel === "string" && typeof x.thread === "string";
+  }) : [];
+  return {
+    mode, units, ...(typeof p.planned_at === "number" && Number.isFinite(p.planned_at) ? { planned_at: p.planned_at } : {}),
+    ...(links.length ? { links } : {}),
+  };
 }
 
 export interface IngestUnitResult {
@@ -69,6 +81,8 @@ export interface IngestResult {
   unread?: number; stuck?: number;
   partial?: boolean;
   per_unit?: IngestUnitResult[];
+  /** #4744 링크 따라 읽기 — 저장한 글에서 찾아 적은 링크 수 · 링크로 읽은 문서(그 문서의 단위에 넣은 결과) · 받지 않은 링크 쪽 읽기(상한 넘음 등). */
+  links?: { recorded: number; linked: LinkedStoreResult; stray: number };
 }
 
 /**
@@ -148,7 +162,7 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
   const by: UnitReadBy = { member, runId };
   const units = plan.units ?? [];
   if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
-  const { byUnit, stray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null });
+  const { byUnit, stray, linked, linkStray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null, links: plan.links ?? [] });
   const per: IngestUnitResult[] = [];
   let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0, proofPassed = 0, proofFailed = 0, proofHeld = 0;
   //  이 사람 기준 보호 단위 — 확인되지 않은 사람의 판은 저장된 글과 맞춰 봐야 넣을 수 있다(가짜 글을 남의 비공개 대화에 끼워 넣지 못하게).
@@ -235,8 +249,22 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
     }
     per.push(row);
   }
+  //  #4744 링크 따라 읽기 — ① 링크로 읽은 문서를 그 문서의 단위에 넣고 ② 이 판에 넣은 글에서 링크를 찾아 적는다(① 에서 읽은 대상은 바로 «읽음»).
+  //   링크가 있던 단위의 자료에는 넣지 않는다(공개 채널이 비공개 페이지를 링크해도 채널을 보는 사람에게 그 페이지가 열리지 않게).
+  const ls = await storeLinkedReads(member, linked);
+  let recorded = 0;
+  for (const u of units) {
+    const row = per.find((p) => p.id === u.id);
+    if (!row || row.stored <= 0) continue;
+    const links = byUnit.get(u.id)!.items.flatMap((it) => extractAppLinks(`${it.title ?? ""}\n${it.body ?? ""}`));
+    const seen = new Set<string>();
+    const uniq = links.filter((l) => !seen.has(linkKey(l)) && !!seen.add(linkKey(l)));
+    recorded += (await recordLinks(member, u, uniq, { readTargets: ls.readTargets, tried: ls.tried })).recorded;
+  }
+  const { readTargets: _rt, tried: _tr, ...linkedRes } = ls;
   const anyRead = per.some((p) => p.reads > 0);
   return {
+    links: { recorded, linked: linkedRes, stray: linkStray },
     state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete, unread, stuck,
     proof_passed: proofPassed, proof_failed: proofFailed, proof_held: proofHeld,
     //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남).
