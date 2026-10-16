@@ -8,7 +8,8 @@
 //  P4 상한 목록 — 관리자만(구성원 403) · 설치된 앱 전부 · 값
 //  P5 사용량 — 80% 를 처음 넘으면 책임자 + 관리자에게 알림 한 장씩 · 같은 단계는 다시 안 알림 · 100% 는 새로 · 내려가면 단계를 낮춰
 //     다시 넘을 때 또 알린다 · 경계에서 오르내리면 다시 안 알림 · 없는 앱 건너뜀 · 상한 없는 앱은 알리지 않는다 · 구성원 403
-//     단계 기록은 알림이 저장된 뒤에 오른다(받는 사람을 못 읽었거나 다 실패하면 다음 판에 다시) · 겹친 보고는 한 쪽만 알린다
+//     단계 기록은 알림이 저장된 뒤에 오른다(받는 사람을 못 읽었거나 다 실패하면 다음 판에 다시) · 겹친 보고는 한 쪽만 알린다 ·
+//     알리던 중에 죽으면 트랜잭션이 되돌린다 · 지운 앱의 행은 되살리지 않는다
 //  P6 앱 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false) · 이 배포가 거나
 //  P7 새 상한이 지금 쓰는 양보다 작으면 경고를 싣는다 · 단계는 정비 전까지 걸린 상한으로 낸다      P8 앱을 지우면 사용량 행도 지운다
 //  P9 롤 중 마이그레이션 전 창(표 · 열 없음) — CP 두 길은 404 · 앱 지우기는 막히지 않는다
@@ -57,8 +58,8 @@ try {
   const install = (id) => cap("org_app_install").handler({ source: { kind: "inline", files: [
     { path: "lively-app.json", content: J({ id, title: `앱 ${id}`, version: "0.1.0", ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
     { path: "ui/index.html", content: "<p>x</p>" }] } }, admin, { source: "mcp" });
-  for (const id of ["crm", "memo", "secret", "note", "race"]) await install(id);
-  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo','note','race')`);
+  for (const id of ["crm", "memo", "secret", "note", "race", "halt"]) await install(id);
+  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo','note','race','halt')`);
   await q(`UPDATE org_app SET owner_member='pgt-carol', visibility='me' WHERE id='secret'`);   // carol 의 «나만» 앱
 
   const gw = express();
@@ -150,16 +151,32 @@ try {
   const noteRow = [{ app_id: "note", used_bytes: Math.floor(1.7 * GiB), limit_gb: 2 }];   // 85%
   const sent = [];
   const okNotify = async (n) => { sent.push(n.memberId); return { ok: true }; };
+  const warnedAtOf = async (id) => (await q(`SELECT warned_at FROM org_app_folder_usage WHERE app_id=$1`, [id]))[0]?.warned_at ?? null;
   const f1 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => { throw new Error("db down"); }, notify: okNotify });
   const w1 = await warnedOf("note"); const sent1 = sent.length;
   const f2 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: async () => ({ ok: false }) });
-  const w2 = await warnedOf("note");
+  const w2 = await warnedOf("note"); const at2 = await warnedAtOf("note");
   const f3 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: okNotify });
-  const w3 = await warnedOf("note");
-  chk("P5f 단계 기록은 알림이 저장된 뒤에 오른다 — 관리자 목록을 못 읽은 판은 책임자에게도 안 보내고 기록 그대로 · 다 실패한 판도 그대로 · 다음 판에 둘 다 받는다",
-    f1.stored === 1 && f1.notified.length === 0 && w1 === 0 && sent1 === 0 && f2.notified.length === 0 && w2 === 0
-      && J(f3.notified) === J([{ app_id: "note", level: 80 }]) && w3 === 80 && J([...sent].sort()) === J(["pgt-admin", "pgt-alice"]),
-    J({ f1, w1, sent1, f2, w2, f3, w3, sent }));
+  const w3 = await warnedOf("note"); const at3 = await warnedAtOf("note");
+  chk("P5f 단계 기록은 알림이 저장된 뒤에 오른다 — 관리자 목록을 못 읽은 판은 책임자에게도 안 보내고 기록 그대로 · 다 실패한 판도 그대로(warned_at 없음) · 다음 판에 둘 다 받는다(warned_at 찍힘)",
+    f1.stored === 1 && f1.notified.length === 0 && w1 === 0 && sent1 === 0 && f2.notified.length === 0 && w2 === 0 && at2 === null
+      && J(f3.notified) === J([{ app_id: "note", level: 80 }]) && w3 === 80 && at3 !== null && J([...sent].sort()) === J(["pgt-admin", "pgt-alice"]),
+    J({ f1, w1, sent1, f2, w2, at2, f3, w3, at3, sent }));
+  //  알리던 중에 죽으면(동기 예외 — 알림 함수가 약속도 못 돌려준 판) 트랜잭션이 되돌려 단계가 오르지 않고, 다음 판이 알린다.
+  const haltRow = [{ app_id: "halt", used_bytes: Math.floor(1.7 * GiB), limit_gb: 2 }];
+  const h1 = await recordAppFolderUsage(haltRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: () => { throw new Error("알리던 중 죽음"); } })
+    .then(() => "끝까지 감", (e) => String(e?.message ?? e));
+  const wh1 = await warnedOf("halt");
+  const hSent = [];
+  const h2 = await recordAppFolderUsage(haltRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: async (n) => { hSent.push(n.memberId); return { ok: true }; } });
+  chk("P5h 알리던 중에 죽으면 트랜잭션이 되돌린다(행도 단계도 안 남음) — 다음 판이 받는 사람 모두에게 알린다",
+    h1 === "알리던 중 죽음" && wh1 === null && J(h2.notified) === J([{ app_id: "halt", level: 80 }]) && (await warnedOf("halt")) === 80
+      && J([...hSent].sort()) === J(["pgt-admin", "pgt-alice"]), J({ h1, wh1, h2, hSent }));
+  //  지우기와 겹친 보고 — 앱을 읽은 뒤 지워졌다(대역이 «있다» 고 답한다). 사용량 행을 되살리지 않는다.
+  const gone = await recordAppFolderUsage([{ app_id: "gone-4785", used_bytes: GiB, limit_gb: 2 }],
+    { apps: async () => [{ id: "gone-4785", title: "지운 앱", owner_member: null }], admins: async () => ["pgt-admin"], notify: async () => ({ ok: true }) });
+  const goneRows = (await q(`SELECT count(*)::int AS n FROM org_app_folder_usage WHERE app_id='gone-4785'`))[0].n;
+  chk("P5i 그새 지워진 앱의 보고는 적지 않는다(고아 행 없음 · 알림 없음)", gone.stored === 0 && gone.notified.length === 0 && goneRows === 0, J({ gone, goneRows }));
   //  겹친 보고(CP 리더 교대 · 수동 호출) — 단계는 비교 후 교체라 한 쪽만 이겨 알린다(알림 저장의 1분 쿨다운은 동시에 들어오면 못 막는다).
   const race = await Promise.all(Array.from({ length: 8 }, () => report([{ app_id: "race", used_bytes: Math.floor(1.7 * GiB), limit_gb: 2 }])));
   const raceNotes = (await q(`SELECT member_id FROM org_app_notification WHERE app_id='race' AND dedupe_key='app-folder-80:race' ORDER BY member_id`)).map((r) => r.member_id);
