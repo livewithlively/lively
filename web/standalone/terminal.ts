@@ -2861,6 +2861,38 @@ function cellHeightPx() {
   } catch (_) { return 17; }
 }
 
+/**
+ * 휠 한 번 → 몇 줄(normal buffer 의 로컬 스크롤) · 앱에 보낼 SGR 휠 틱 수(alt-screen + 앱 마우스모드). 순수 함수다 —
+ *  세션 대화창(web/lib/term-prefs.ts termWheelTicks)이 같은 셈을 옮겨 적어 터미널과 같은 줄 수로 굴러가고(#4797),
+ *  scripts/term-prefs-parity.test.mjs 가 이 함수와 맞댄다. acc 는 트랙패드 픽셀 잔차(px)와 그 시각(at)이다.
+ *  · 마우스(이산 노치) — 종전 공식 그대로: 픽셀 근사 × scrollSpeed 줄 · 앱에는 이벤트당 round(scrollSpeed) 틱 고정.
+ *  · 트랙패드(연속 픽셀) — 손가락 이동 × padGain 을 칸 높이로 나눈 정수 줄(잔차 이월) · 앱에는 그 줄 수만큼(최대 12).
+ */
+export function wheelStep(e: { deltaY: number; deltaMode: number; timeStamp?: number }, notch: boolean, speed: number, gain: number,
+  cellPx: number, rows: number, acc: { px: number; at: number }): { lines: number; reps: number } {
+  let lines;
+  if (e.deltaMode === 2) {                         // page 단위(드묾)
+    lines = e.deltaY * rows;
+  } else if (notch) {
+    acc.px = 0;                                    // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
+    const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
+    lines = approx * Math.max(1, Math.round(speed));
+  } else {
+    const now = e.timeStamp || 0;
+    if (acc.px && (Math.sign(acc.px) !== Math.sign(e.deltaY) || now - acc.at > 300)) acc.px = 0; // 방향전환·묵은 잔차는 리셋
+    acc.at = now;
+    acc.px += e.deltaY * Math.max(0.2, gain);
+    lines = Math.trunc(acc.px / cellPx);
+    acc.px -= lines * cellPx;                      // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
+  }
+  const n = Math.trunc(lines);
+  //  앱(Claude Code 등)에 보낼 틱. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
+  //   맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
+  //   트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
+  const reps = notch ? Math.min(Math.max(1, Math.round(speed)), 12) : Math.min(Math.abs(n), 12);
+  return { lines: n, reps };
+}
+
 // 휠 처리 — 마우스 휠(이산 노치)과 트랙패드(연속 픽셀)를 서로 다른 단위로 다룬다(#1168).
 //  종전에는 한 배수(scrollSpeed)를 두 입력에 똑같이 곱하고 픽셀 잔차를 버렸다(`trunc(dy/18) || ±1` → 최소 1줄 강제).
 //  트랙패드는 1~10px 델타가 17ms 간격으로 오므로(실측 307건: median 5px·17ms) 손가락 이동량과 무관하게 '이벤트 수'만큼
@@ -2868,6 +2900,7 @@ function cellHeightPx() {
 //  · 마우스 휠 = 종전 공식 그대로(회귀 방지): 픽셀 근사 × scrollSpeed.
 //  · 트랙패드 = 손가락 이동 픽셀을 실측 셀높이로 나눠 줄로 환산하고 소수 잔차는 다음 이벤트로 이월 × padGain(1이면 1:1).
 //  분기는 종전과 같다: normal buffer=로컬 스크롤백 / alt+앱 마우스모드=SGR 휠 전달 / alt 만=xterm 기본.
+//  줄·틱 셈은 위 wheelStep 한 자리다(대화창이 같은 셈을 옮겨 적는다).
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
   const NOTCH_MIN_PX = 100; // wheelDeltaY 를 안 주는 브라우저용 폴백 임계 — 이보다 큰 픽셀 점프는 노치로 본다
@@ -2891,7 +2924,7 @@ function setupWheel() {
     if (typeof wdy === 'number' && wdy !== 0) return Math.abs(wdy) % 120 === 0;
     return Math.abs(e.deltaY) >= NOTCH_MIN_PX;       // wheelDeltaY 없는 브라우저(파이어폭스 트랙패드 등) 폴백
   };
-  let accPx = 0, accAt = 0;                          // 연속 입력의 픽셀 잔차(그리고 그 시각)
+  const acc = { px: 0, at: 0 };                      // 연속 입력의 픽셀 잔차(그리고 그 시각)
   term.attachCustomWheelEventHandler((e) => {
     cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 직접 휠을 굴리면 즉시 중단(#967)
     let alt = false, mouseOn = false;
@@ -2899,29 +2932,10 @@ function setupWheel() {
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
     const notch = isNotch(e);
     if (alt && mouseOn && notch && scrollSpeed <= 1) return true; // 1칸=1줄이면 xterm 의 검증된 전달 그대로(회귀 없음)
-    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산.
-    let lines;
-    if (e.deltaMode === 2) {                         // page 단위(드묾)
-      lines = e.deltaY * term.rows;
-    } else if (notch) {
-      accPx = 0;                                     // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
-      const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
-      lines = approx * Math.max(1, Math.round(scrollSpeed));
-    } else {
-      const now = e.timeStamp || 0;
-      if (accPx && (Math.sign(accPx) !== Math.sign(e.deltaY) || now - accAt > 300)) accPx = 0; // 방향전환·묵은 잔차는 리셋
-      accAt = now;
-      accPx += e.deltaY * Math.max(0.2, padGain);
-      const h = cellHeightPx();
-      lines = Math.trunc(accPx / h);
-      accPx -= lines * h;                            // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
-    }
-    const n = Math.trunc(lines);
+    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산(wheelStep).
+    const { lines: n, reps } = wheelStep(e, notch, scrollSpeed, padGain, cellHeightPx(), term.rows, acc);
     if (alt && mouseOn) {
-      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
-      //  맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
-      //  트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
-      const reps = notch ? Math.min(Math.max(1, Math.round(scrollSpeed)), 12) : Math.min(Math.abs(n), 12);
+      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다(틱 수는 wheelStep 머리말).
       if (!reps) return false;                       // 아직 한 줄이 안 찼다(미세 스와이프) — 잔차만 쌓고 대기
       const c = cellFromEvent(e);
       const btn = n < 0 ? 64 : 65;                   // 64=휠↑ 65=휠↓ (SGR 1006)
