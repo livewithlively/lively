@@ -176,8 +176,8 @@ function loadFolders(body, orphansCard) {
       const size = a.missing ? '—' : a.bytes == null ? '?' : `${fmtBytes(a.bytes)}${a.truncated ? ' 이상' : ''}`;
       const files = a.missing ? '—' : a.files == null ? '?' : `${a.files}개${a.truncated ? ' 이상' : ''}`;
       const who = a.archived_by ? ` · ${a.archived_by}` : '';
-      //  되돌리기 — 같은 이름의 앱이 지금 있고 · 파일이 있고 · 보관 기간 안일 때만(기간이 지나면 정비가 지우는 중이다).
-      const restore = a.app_exists && !a.missing && !a.expired
+      //  되돌리기 — 같은 이름의 앱이 지금 있고 · 파일이 있고 · 보관 기간 안이고 · 지우다 멈춘 보관이 아닐 때만(서버도 같은 조건으로 409).
+      const restore = a.app_exists && !a.missing && !a.expired && !a.last_try_at
         ? el('button', { class: 'btn btn-ghost btn-sm aa-restore', type: 'button', text: '되돌리기', onclick: () => restoreOne(a) })
         : null;
       return [

@@ -1575,8 +1575,10 @@ const appFolderArchivesList: Capability = {
   title: "앱 폴더 보관 목록",
   description: "앱을 지울 때 보관으로 옮긴 앱 폴더(apps/<앱>/)와, 앱 없이 남은 앱 폴더(고아)를 본다. archives 항목 = name(비우기 · 되돌리기에 그대로) · app_id · "
     + "archived_at · archived_by · entry(remove 관리자 제거 · discard 나만 보는 앱 지우기 · retire 기본 앱 은퇴 · draft-drop 빈 예약 거두기 · create 같은 id 로 새로 만들 때 남아 있던 것 · "
-    + "orphan 고아를 옮김 · unknown 기록 없이 파일만 있던 것) · files · bytes · truncated(세다 멈춤) · expires_at(이때 지운다) · app_exists(같은 id 의 앱이 지금 있나 — "
-    + "되돌리기는 있을 때만) · missing(기록만 있고 파일이 없다). orphans 항목 = app_id · files · bytes — app_folder_orphans_archive 로 보관에 옮긴다. 관리자.",
+    + "orphan 고아를 옮김 · unknown 기록 없이 파일만 있던 것) · files · bytes · truncated(세다 멈춤) · expires_at(이때 지운다) · expired(보관 기간이 지나 정비가 지우는 중) · "
+    + "last_error · last_try_at(지우려다 멈춘 보관의 까닭 · 시각 — 권한 · 시간 예산, 다시 비우면 이어서 지운다) · app_exists(같은 id 의 앱이 지금 있나) · "
+    + "missing(기록만 있고 파일이 없다). 되돌리기는 app_exists 이고 expired · last_try_at 이 없을 때만. "
+    + "orphans 항목 = app_id · files · bytes — app_folder_orphans_archive 로 보관에 옮긴다. 관리자.",
   scope: "admin",
   input: {},
   expose: {
@@ -1615,7 +1617,8 @@ const appFolderRestore: Capability = {
   name: "app_folder_restore",
   title: "앱 폴더 되돌리기",
   description: "보관한 앱 폴더를 같은 id 의 앱 폴더(apps/<앱>/)로 되돌린다 — 그 앱이 지금 있고(지운 앱을 같은 id 로 다시 만든 뒤) 그 앱 폴더가 없거나 비었을 때만. "
-    + "앱 폴더에 파일이 있으면 409(새 앱의 파일을 덮지 않는다 · 아무것도 바꾸지 않는다). 앱이 없으면 409 · 보관이 이미 지워졌으면 410. 앱 데이터는 app_data_restore 로 따로. 관리자.",
+    + "앱 폴더에 파일이 있으면 409(새 앱의 파일을 덮지 않는다 · 아무것도 바꾸지 않는다). 앱이 없으면 409 · 보관 기간이 지났거나(expired) 지우다 멈춘 보관(last_try_at — "
+    + "일부가 이미 지워졌을 수 있다)이면 409 · 보관이 이미 지워졌으면 410. 앱 데이터는 app_data_restore 로 따로. 관리자.",
   scope: "admin",
   input: { name: z.string().max(200) },
   expose: {

@@ -471,7 +471,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       PRIMARY KEY (name)
     );
   `);
-  //  last_try_at · last_error — 지우려다 못 지운 보관(권한 · 시간 예산). 정비는 안 해 본 것부터 고르고 못 지운 것은 뒤로 보낸다(앞줄 막힘 없게).
+  //  last_try_at · last_error — 지우려다 못 지운 보관(권한 · 시간 예산). 정비는 안 해 본 것부터 고르고 못 지운 것은 뒤로 보낸다(앞줄 막힘 없게) ·
+  //   되돌리기는 이 칸이 찬 보관(지우다 멈춘 것)을 거절한다. 표가 먼저 생긴 DB(두 칸 없이 만든 개발 · 시험 DB)에도 칸을 붙인다.
+  await pool.query(`ALTER TABLE org_app_folder_archive ADD COLUMN IF NOT EXISTS last_try_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE org_app_folder_archive ADD COLUMN IF NOT EXISTS last_error TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_folder_archive_at_idx ON org_app_folder_archive(archived_at);`);
 
   // ── org_app_member_pref — 앱 × 보는 사람의 개인 설정(#4601) ──

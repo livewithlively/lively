@@ -263,18 +263,23 @@ export async function clearAppFolderArchives(names: string[], by: string | null 
 }
 
 /**
- * 보관을 같은 id 의 앱 폴더로 되돌린다 — 그 앱이 지금 있고(다시 만든 뒤) 그 앱 폴더가 없거나 비었을 때만. 설치 락 안에서(그 앱의 설치 ·
- *  지우기와 엇갈리지 않게). 되돌리면 기록을 지운다.
+ * 보관을 같은 id 의 앱 폴더로 되돌린다 — 그 앱이 지금 있고(다시 만든 뒤) 그 앱 폴더가 없거나 비었을 때만 · 보관 기간 안이고 지우다 멈춘
+ *  보관이 아닐 때만. 설치 락 안에서(그 앱의 설치 · 지우기와 엇갈리지 않게). 되돌리면 기록을 지운다.
  */
 export async function restoreAppFolderArchive(name: string, by: string | null = null): Promise<{ app_id: string; name: string }> {
   const parsed = parseArchiveName(name);
   if (!parsed) throw new HttpError(400, `보관 이름 꼴이 아닙니다: ${String(name).slice(0, 80)} — app_folder_archives 의 name 을 그대로 주세요`);
   const appId = parsed.app_id;
   return withAppInstallLock(appId, async () => {
-    //  보관 기간이 지났으면 되돌리지 않는다 — 정비가 지우는 중일 수 있다(지우기는 여러 번에 나눠 간다 · 반쯤 지워진 것을 새 앱에 붙이지 않게).
-    const archivedAt = (await rowsByNames([name]))[0]?.archived_at ?? parsed.archived_at;
+    //  보관 기간이 지났거나 지우다 멈춘 보관이면 되돌리지 않는다 — 지우기는 여러 번에 나눠 가므로 일부 파일이 이미 지워졌을 수 있다
+    //   (반쯤 지워진 것을 새 앱에 붙이지 않게). 지우다 멈춘 것 = 비우기 · 정비가 권한 · 시간 예산으로 멈춰 시도가 기록된 보관.
+    const row = (await rowsByNames([name]))[0];
+    const archivedAt = row?.archived_at ?? parsed.archived_at;
     if (Date.parse(expiresAt(archivedAt)) <= Date.now()) {
       throw new HttpError(409, `보관 '${name}' 은(는) 보관 기간이 지나 지우는 중이라 되돌리지 않습니다`);
+    }
+    if (row?.last_try_at) {
+      throw new HttpError(409, `보관 '${name}' 은(는) 지우다 멈춘 보관이라 되돌리지 않습니다 — 일부 파일이 이미 지워졌을 수 있습니다(다시 비우면 이어서 지웁니다)`);
     }
     if (!(await getApp(appId))) {
       const until = expiresAt(archivedAt).slice(0, 10);

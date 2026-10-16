@@ -12,7 +12,8 @@
 //  I4 고아 옮기기   I5 관리자 아님 403   I6 REST 모양 400   J1 탐색기로 보관 404   J2 서명 주소로 보관 400
 //  H1 기간 지난 것만   H2 경계(정확히 기간) 남김   H3 지울 것 없음(파일을 만지지 않음)   H4 파일 없는 기록 걷기   H5 보관 일수 0 → 전부
 //  H6 못 지우는 보관은 기록이 남는다(정비 · 비우기) · 다음 정비가 이어서   H7 한 번에 오래된 것부터 20개
-//  H8 못 지운 보관은 뒤로(까닭 · 시각) — 안 해 본 보관이 먼저   I3b 보관 기간이 지난 보관은 되돌리지 않는다
+//  H8 못 지운 보관은 뒤로(까닭 · 시각) — 안 해 본 보관이 먼저   I3b 보관 기간이 지난 보관은 되돌리지 않는다   I3c 지우다 멈춘 보관도
+//  S1 앞선 모양의 표(두 칸 없이 만든 표)에 스키마 초기화 → 칸이 붙는다
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -96,6 +97,14 @@ try {
   const req = (method, p, tok, body) => fetch(GW + p, { method, headers: { authorization: `Bearer ${tok}`, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const mintAs = (tok, address, method = "GET") => req("POST", "/api/ui/files/url", tok, { address, method });
   const grant = (id, who = { userId: "pgt-user", scopes: ["items"] }) => call("me_app_grant", { app_id: id }, who);
+
+  // ── S1 앞선 모양의 표 — last_try_at · last_error 를 더하기 전에 만든 표(개발 · 시험 DB)에 스키마 초기화를 다시 돌리면 칸이 붙고 정비가 돈다 ──
+  await q(`ALTER TABLE org_app_folder_archive DROP COLUMN IF EXISTS last_try_at, DROP COLUMN IF EXISTS last_error`);
+  await initAllSchemas({ quiet: true });
+  const s1cols = (await q(`SELECT column_name FROM information_schema.columns WHERE table_name = 'org_app_folder_archive'`)).map((r) => r.column_name);
+  const s1prune = await AF.pruneAppFolderArchives(new Date(), 7).then(() => "ok", (e) => String(e?.message ?? e));
+  chk("S1 앞선 모양의 표(두 칸 없이 만든 표)에 스키마 초기화를 다시 돌리면 칸이 붙고 정비가 돈다",
+    s1cols.includes("last_try_at") && s1cols.includes("last_error") && s1prune === "ok", JSON.stringify({ s1cols, s1prune }));
 
   // ── E1 관리자 제거 ──
   await install("ef-remove");
@@ -297,11 +306,25 @@ try {
     && (await q(`SELECT 1 FROM org_app_folder_archive WHERE name=$1`, [second])).length === 0 && i3e?.status === 400,
     JSON.stringify({ i3a: i3a?.status, i3b, i3bOk, i3c: i3c?.status, i3cSame, i3d: i3d?.status, i3e: i3e?.status }));
 
+  //  I3c 지우다 멈춘 보관(기간 안)은 되돌리지 않는다 — 비우기가 권한으로 멈춘 보관은 같은 id 의 앱이 있고 그 앱 폴더가 비었어도 409 · 보관 그대로
+  const halted = (await call("org_app_remove", { app_id: "ef-remove" }, admin)).app_folder.archived ?? ".archived-app.ef-remove.20000101T000000Z.000001";
+  put(`${halted}/keep/k.txt`, "k");
+  chmodSync(path.join(APPS, halted, "keep"), 0o555);
+  let i3h;
+  try { i3h = await call("app_folder_archive_clear", { names: [halted] }, admin); } finally { chmodSync(path.join(APPS, halted, "keep"), 0o755); }
+  await install("ef-remove");
+  const i3r = await errOf(call("app_folder_restore", { name: halted }, admin));
+  chk("I3c 지우다 멈춘 보관(기간 안)은 되돌리지 않는다(409) — 같은 id 의 앱이 있고 앱 폴더가 비었어도 · 보관 그대로",
+    !!i3h?.kept?.some((k) => k.name === halted) && i3r?.status === 409 && /지우다 멈춘/.test(i3r?.message ?? "") && has(`${halted}/keep/k.txt`) && !has("ef-remove/keep"),
+    JSON.stringify({ kept: i3h?.kept, status: i3r?.status, msg: i3r?.message }));
+
   // ── I2 비우기 ──
   const clearMe = (await archivesOf("gg-install"))[0].name;
   const goneFs = (await archivesOf("ef-discard"))[0].name;
   rmSync(path.join(APPS, goneFs), { recursive: true });
   const ghost = ".archived-app.nobody.20261002T000000Z.000000";
+  const clearAudits = async () => (await q(`SELECT 1 FROM org_content_audit WHERE entity='app_folder_archive' AND op='clear'`)).length;
+  const audit0 = await clearAudits();   // 앞선 I3c 의 비우기 감사는 빼고 센다
   const i2 = await call("app_folder_archive_clear", { names: [clearMe, "bogus", goneFs, ghost, fsOnly] }, admin);
   chk("I2 비우기 — 지움 · 꼴 아님 missing · 파일 없는 기록 was_missing · 기록도 파일도 없음 missing · 감사",
     !has(clearMe) && !has(fsOnly) && (await q(`SELECT 1 FROM org_app_folder_archive WHERE name = ANY($1::text[])`, [[clearMe, goneFs, fsOnly]])).length === 0
@@ -309,7 +332,7 @@ try {
     && i2.cleared.some((c) => c.name === fsOnly && c.app_id === "fs-only")
     && i2.cleared.some((c) => c.name === goneFs && c.was_missing === true)
     && [...i2.missing].sort().join(",") === [ghost, "bogus"].sort().join(",") && i2.kept.length === 0
-    && (await q(`SELECT 1 FROM org_content_audit WHERE entity='app_folder_archive' AND op='clear'`)).length === 1, JSON.stringify(i2));
+    && (await clearAudits()) === audit0 + 1, JSON.stringify(i2));
 
   // ── H 정비 ──
   const T0 = Date.now();
