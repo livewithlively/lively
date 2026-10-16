@@ -97,7 +97,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "",
     "## 먼저 — 1턴의 실측은 낡았다. **지금 상태를 다시 읽어라.**",
     "1턴에서 본 숫자를 믿지 마라. 아래 도구로 지금 것을 새로 읽고 시작한다:",
-    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리 = 서랍) · `org_collectors`(수집기와 마지막 실행) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
+    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리 = 서랍) · `org_collectors`(수집기와 마지막 실행) · `collect_units`(Claude 커넥터로 모으는 곳 — 수집 단위) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
     `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 서랍 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
     collectLine,
     ...(i.partial ? ["- ⚠ 일부 수집이 아직 안 끝났다. 자료가 부족해 보이면 **최대 1분** 기다렸다가 다시 읽고 시작하라. 그 뒤엔 있는 것으로 간다."] : []),
@@ -126,6 +126,9 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
     "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
     "4. **수집기 범위를 손본다** — `org_collector_upsert`. 자료를 읽어 보니 잡담 채널·알림 봇이 섞여 있으면 뺀다. 주기는 이 사람의 반복 주기에 맞춘다.",
+    //  #4213 T13 — 처음 연결 대화(liv-connect)가 Claude 커넥터로 모은 곳은 수집기가 아니라 수집 단위다. 단위의 설명·성격·활동량은
+    //   «리브가 첫 수집 자료를 질적으로 읽은 뒤 쓴다»(설계 §3) — 1에서 표본을 읽은 이 턴이 그 자리다. [외부 앱 연결] 현황판이 보여 준다.
+    "   - **Claude 커넥터로 모으는 곳(수집 단위)은 `collect_unit_update` 로 손본다** — 1에서 읽어 보니 잡음만 오가는 곳은 `state:\"excluded\"`, 글이 올라오는 빈도에 맞춰 `interval_sec`. 그리고 모은 단위마다 1에서 읽은 자료로 `description`(이 단위에서 오가는 일 한두 문장)과 `meta`(character: 결정 많음·알림 봇 위주·잡담 위주 등 성격 / activity: 하루 평균 새 글 수 / context: 연결된 프로젝트·카테고리·자주 나오는 사람)를 채운다. 사람에게 묻지 않는다.",
     "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` + `source_link_knowledge`). 자료가 모자라면 무엇이 모자란지 말한다.",
     "6. **남긴다** — 무엇을 왜 그렇게 세웠는지(카테고리를 그렇게 나눈 이유 포함) `me_liv_profile_set`(decision). 다음 세션의 리브가 오늘을 알아야 한다.",
     "",
@@ -141,7 +144,11 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
 export interface SecondTurnState {
   welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null;
     /** 세션이 사라져 **다시 연** 시각(#1631). 한 번만 다시 연다 — 무한 재생성은 비용이고 유령 세션을 만든다. */
-    distill_reopened_at?: string | null } | null;
+    distill_reopened_at?: string | null;
+    /** 1턴 갈래(#4213 T13) — connect = 설치자의 «처음 연결» 대화 · join = 합류자(2턴 없음) · 비었으면 종전. */
+    flow?: string | null;
+    /** 리브가 «처음 연결·처음 수집 끝» 을 찍은 시각(connect 갈래의 2턴 신호). */
+    collect_done_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
   /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
@@ -152,8 +159,8 @@ export interface SecondTurnState {
   now: number;
 }
 export type SecondTurnDecision =
-  | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" }
-  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" }
+  | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" | "join" }
+  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" }
   //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
   | { action: "reopen"; reason: "session-gone" }
   | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" | "stale" }
@@ -213,14 +220,25 @@ export const TURN1_DELIVERY_TTL_MS = 2 * 60 * 60_000;
  *   그 사이 세션이 살아 있는 판이면 한 달 지난 세션에 2턴이 들어간다. 정상 흐름은 수집 대기 상한(20분) 안에 쏘므로 하루는 넉넉하다.
  */
 export const SECOND_TURN_STALE_MS = 24 * 60 * 60_000;
+/**
+ * «처음 연결» 대화(connect 갈래, #4213 T13)를 기다리는 상한. 리브가 처음 수집 끝(collect_done_at)을 찍으면 그때 쏘고,
+ *  안 찍혀도 이 시간이 지나면 있는 것으로 쏜다(대화를 중간에 떠난 사람도 서랍·정리 규칙은 받는다 — 영원히 안 쏘는 것이 최악이다).
+ *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 그 사이에 세션이 사라졌으면 한 번 다시 여는 길(reopen)이 아직 열려 있다.
+ */
+export const CONNECT_FLOW_MAX_WAIT_MS = 90 * 60_000;
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
   if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  (#4213 T13) 합류자의 리브는 «빠진 앱 연결» 대화뿐이다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다.
+  if (w.flow === "join") return { action: "skip", reason: "join" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
   if (w.distill_gave_up_at) return { action: "skip", reason: "gave-up" };
   const done = Date.parse(w.done_at);
   const waited = s.now - done;
+  //  (#4213 T13) 설치자의 «처음 연결» 대화 — 리브가 커넥터 확인·목록·범위 확인·처음 수집·첫 보고를 하는 동안엔 쏘지 않는다.
+  //   사람에게 물어 놓고 답을 기다리는 사이(세션은 쉬는 중)에 증류 지시가 끼어들면 대화가 엉킨다. 신호는 리브가 찍는 collect_done_at.
+  if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
   if (!s.session) {
     //  ★ #1631 실측(2026-08-31 dev): 1턴을 성공으로 끝낸 리브 세션이 **수집 대기 20분 사이에 사라졌다.**
     //   종전엔 그 자리에서 영구 포기했고(distill_gave_up_at·멱등 가드), 그 사람의 증류기 15개가 **영원히 꺼진 채**

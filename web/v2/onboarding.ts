@@ -24,6 +24,8 @@ import { LOGIN_SERVICES, partition } from '../me-logins.js';
 import { catalogSoon } from '../lib/connect-axes.js';   // #4445 — «준비 중» 판정의 정본(외부 앱 연결과 한 벌)
 import { NOTION_PICK_TIP, notionCollectedPages, notionCollectedLine } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(외부 앱 연결과 한 벌)
 import { CRED_KINDS } from '../admin-credentials.js';
+//  #4213 T13 — Claude 로그인 뒤 «Claude 에 연결해 두신 앱» 을 말하는 한 벌([외부 앱 연결] 현황판·관리 탭과 같은 말)
+import { CLAUDE_CONNECTOR_STATUS_LABEL, NOT_WORK_APPS, appKeyOfConnector, scanErrorText } from '../lib/claude-connectors.js';
 import { ctxPath } from '../lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -1612,37 +1614,36 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderSB() { /* 사이드바는 실제 것(web/v2/side.ts)이 그린다 */ }
 
   /* ══════════════ 장면 차례 ══════════════ */
-  //  #2232 — 순서: 파일 → **AI 고르기·연결** → 외부 앱 → 내 컴퓨터(원준님 2026-08-28: "AI 골라서 연결하는 플로우가 먼저, 그 다음 외부 앱, 로컬은 그 다음").
-  //  ★ 2026-08-31(원준님) — 'read'·b1~can(리브와의 챗봇 문답)을 걷어냈다. [앱] 다음은 곧장 마무리다.
-  //  #1631(원준님 2026-09-13) — 맨 앞에 **인사(intro)** 를 둔다. 무엇을 묻기 전에 «Lively 가 무엇을 하는지»와
-  //   «이 뒤에서 기본 설정을 한다»를 먼저 말한다. 두 차례표가 모두 인사에서 시작하고, 그 다음은 nextScene 이 가른다.
-  const ORDER = ['intro', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
-  //  초대로 들어온 사람(합류자)의 차례표(#3872 → #1631 원준 결정 2026-09-13 → #3872 원준 결정 2026-09-14). 사실에 따라 칸이 붙고 빠진다(flowFor):
-  //   · team — 인사 다음에 «어느 팀에 왔는지» 를 먼저 말한다.
-  //   · stage·role — 없다. 용도·부서는 워크스페이스를 연 사람이 그 자리를 정하려고 답하는 질문이라 초대받은 사람이 다시 할 일이 아니다
-  //     (원준 2026-09-14). 용도는 먼저 정한 사람 것을 물려받기만 한다 — 아무도 안 정했어도 합류자에게는 묻지 않는다.
-  //   · sources — **읽기 전용**(팀 연결은 보여 주되 수정은 못 하게). 팀에 켜진 수집이 없으면 이 칸도 없다.
-  //   · connect — 없다(연결·해제·수집 계정 변경 불가).
-  //   · terminal·local·app — 처음 가입한 사람을 포함해 **모든 합류자**에게 붙는다(JOIN_INSTALL). 9/13 의 «초대 전부터 계정이 있던 사람만» 은 2026-09-14 결정으로 뒤집혔다.
-  //   · 끝나면 리브·묶음 심기·2턴 없이 홈으로 간다(서버 반영이 스스로 가른다 — delivery/welcome.ts).
-  const ORDER_JOIN = ['intro', 'team', 'name', 'files', 'ai', 'claude', 'sources'];
-  const JOIN_INSTALL = ['terminal', 'local', 'app'];
-  const STEP_OF = Object.fromEntries([...ORDER, 'team'].map((k, i) => [k, i]));
-  /** 장면의 전체 순서(두 차례표를 합친 것) — «이 장면 다음» 을 차례표에 없는 장면에서도 찾게 한다(goNext·fitScene). */
+  //  ★ #4213 T13(상민님 2026-10-15 To-Be — 지식 connect-collect-tobe-claude-connector-4213 §7) — 처음 설정은 «Claude 로그인 + 리브 대화» 다.
+  //   장면은 인사·이름·Claude 로그인까지만 하고, 나머지(그 사람 Claude 커넥터 읽기 · 빠진 앱 [Claude에서 연결] · 수집 범위·공개범위 ·
+  //   처음 수집 · 첫 보고 · 다음 연결 · 팀원 초대)는 리브 대화가 한다(서버 1턴 first-turn.ts · 시드 스킬 liv-connect).
+  //   그래서 차례에서 빠진 장면: 무대(stage) · 직무(role) · 파일(files) · AI 고르기(ai) · 앱 고르기(sources) · 앱 연결(connect) ·
+  //   터미널(terminal) · 내 컴퓨터(local) · 앱 받기(app). 용도·직무·자료는 리브가 일하다 필요하면 대화로 묻고, 파일은 리브가 올리는 칸을
+  //   띄우며(me_liv_ask_upload), 앱 연결은 Claude 에서 한 번이다. 데스크톱 앱·내 컴퓨터 설치는 [내 설정]·[관리]에 따로 있다.
+  //   ⚠ 빠진 장면의 코드는 지우지 않았다 — 검토 점프(?scene=)로는 그대로 열리고, «Claude 를 안 쓰시나요?» 는 AI 고르기(ai)로 간다.
+  //    차례에서 다시 넣으려면 아래 두 표만 고치면 된다.
+  //  (이전 결정의 경위 — #2232 순서 · 2026-08-31 챗 제거 · #1631 인사 맨 앞 · #3872 합류자 차례표 — 는 git 기록과 지식 #1631 에 있다.)
+  const ORDER = ['intro', 'name', 'claude'];
+  //  초대로 들어온 사람(합류자) — 인사 다음에 «어느 팀에 왔는지»(team)를 먼저 말하고 이름 · Claude 로그인. 끝나면 합류자 리브
+  //   («팀이 쓰는 앱 중 그 사람 Claude 에 빠진 것만 연결», 2턴 없음)로 간다(T13 — 종전엔 리브를 띄우지 않았다).
+  const ORDER_JOIN = ['intro', 'team', 'name', 'claude'];
+  /** 장면의 전체 순서 — «이 장면 다음» 을 차례표에 없는 장면에서도 찾게 한다(goNext·fitScene). 검토 점프·이어 열기의 주소록이기도 하다. */
   const SEQ_ALL = ['intro', 'team', 'name', 'stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];
+  //  ⚠ 주소록은 차례표가 아니라 **전체 순서**로 만든다 — 차례에서 빠진 장면(ai 등)도 주소(?scene=)·«다른 AI» 문으로는 열리고,
+  //   옛 진행(stage 에서 멈춘 탭)도 알아보고 지금 차례로 옮겨야 한다(fitScene). 차례표로 만들면 그 장면들이 «없는 장면» 이 된다.
+  const STEP_OF = Object.fromEntries(SEQ_ALL.map((k, i) => [k, i]));
   //  서버가 준 사실(GET /api/ui/me/welcome 의 joining·workspace_purpose) — 판정은 화면이 하지 않는다.
   let JOIN = null;
   const isJoin = () => !!(JOIN && JOIN.is_join);
   /** 차례표를 사실에서 만든다(순수 — 화면 상태를 읽지 않는다. invitee-onboarding.test 가 이 몸통을 그대로 돌린다). */
   function flowFor(f) {
-    if (!f.join) return ORDER;
-    return [...ORDER_JOIN.filter((k) => k !== 'sources' || f.teamSources > 0), ...JOIN_INSTALL];
+    return f.join ? ORDER_JOIN : ORDER;
   }
-  const FLOW = () => flowFor({ join: isJoin(), teamSources: teamCollectOn().length });
-  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(인사 다음·이름 다음)를 여기 한 곳으로 모은다. */
-  function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'app'; }
-  /** cur **다음** 장면으로 간다 — 차례표에 남은 장면이 없으면 마무리한다(합류자 차례표는 app 으로 끝나지 않을 수 있다).
-   *  cur 가 차례표에 없어도(건너뛴 sources·오래된 탭의 connect) 전체 순서에서 그 뒤를 찾는다. */
+  const FLOW = () => flowFor({ join: isJoin() });
+  /** 지금 차례표에서 이 장면 **다음**. 두 차례표가 갈리는 자리(인사 다음)를 여기 한 곳으로 모은다. */
+  function nextScene(cur) { const f = FLOW(); const i = f.indexOf(cur); return (i >= 0 && i + 1 < f.length) ? f[i + 1] : 'claude'; }
+  /** cur **다음** 장면으로 간다 — 차례표에 남은 장면이 없으면 마무리한다(차례표의 끝은 Claude 로그인이다).
+   *  cur 가 차례표에 없어도(«다른 AI» 로 연 ai · 오래된 탭의 장면) 전체 순서에서 그 뒤를 찾는다. */
   function goNext(cur, opts) {
     const at = SEQ_ALL.indexOf(cur);
     const next = FLOW().find((k) => SEQ_ALL.indexOf(k) > at);
@@ -1655,18 +1656,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     const at = SEQ_ALL.indexOf(key);
     return f.find((k) => SEQ_ALL.indexOf(k) > at) || f[f.length - 1];
   }
-  /** AI 두 장면(ai·claude)을 떠날 때. 합류자는 팀 수집을 **읽은 뒤에** 다음 칸을 정한다 — 안 읽고 정하면 켜진 팀 수집이 있어도 sources 를 건너뛴다. */
-  let leavingAi = false;   // #4051 — 떠나는 중(합류자는 최대 2.5초 기다린다)에는 헤드리스 칸이 장면을 다시 그리지 않는다
+  /** AI 장면(claude · 그 문으로 연 ai)을 떠난다 — 차례표의 끝이라 곧 마무리(리브)다. */
+  let leavingAi = false;   // #4051 — 떠나는 중에는 헤드리스 칸이 장면을 다시 그리지 않는다
   async function leaveAi() {
     leavingAi = true;
-    try {
-      if (isJoin() && collP) await Promise.race([collP, sleep(2500)]);
-      goNext('claude');
-    } finally { leavingAi = false; }
+    try { goNext('claude'); } finally { leavingAi = false; }
   }
 
   const QPROG_ALL = ['stage', 'role', 'files', 'ai', 'claude', 'sources', 'connect', 'terminal', 'local', 'app'];   // 막2 진행 눈금
-  const QPROG = () => QPROG_ALL.filter((k) => FLOW().includes(k));
+  //  (T13) 질문 장면이 하나뿐이면(Claude 로그인) 눈금을 그리지 않는다 — 점 하나는 진행이 아니라 장식이다.
+  const QPROG = () => { const q = QPROG_ALL.filter((k) => FLOW().includes(k)); return q.length > 1 ? q : []; };
 
   /* ── 막1·막2: 가운데 질문 기둥 ── */
   function qHead(prog, lead, title, help) {
@@ -2412,7 +2411,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //    (같은 이름 두 개가 다른 일을 하던 것이 종전 상태였다).
         const laterLink = `<button class="ob-q-skip" data-skip>${(others.length || S.aiConnected) ? '이대로 계속할게요' : '지금은 건너뛸게요'}</button>`;
         //  #2232 — 이름을 아직 안 주신 분에게 «당신님» 이라고 부르던 자리(실측). 이름이 없으면 부르지 않는다.
-        const lead = `연결해 두시면 제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
+        const sub = `제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
+        //  (T13) Claude 로그인은 «AI 연결» 만이 아니다 — 그 계정에 연결해 둔 앱(Slack·Notion·Gmail …)이 곧 리브가 일 자료를 모으는 길이다
+        //   (기본 연결 = 구성원 Claude 커넥터). 정책이 막힌 워크스페이스에는 그 약속을 하지 않는다(T6 — 막으면 실제로 안 실린다).
+        const lead = aiHarness() !== 'claude' ? `연결해 두시면 ${sub}`
+          : CCP === 'blocked'
+            ? `평소 쓰시는 Claude 계정으로 로그인해 주세요. ${sub} 이 워크스페이스는 관리자 설정으로 Claude 에 연결해 둔 앱을 쓰지 않아요 — 앱 연결은 리브가 대화에서 따로 안내해 드려요.`
+            : `평소 쓰시는 Claude 계정으로 로그인해 주세요. 그 계정에 연결해 두신 Slack·Notion·Gmail 같은 앱을 리브가 그대로 써서 일 자료를 모읍니다 — 라이블리에서 앱을 다시 연결하지 않으셔도 돼요. ${sub}`;
 
         // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
         if (!AIC) {
@@ -2429,25 +2434,21 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         //    그걸 고르면 무엇을 어떻게 연결하라는 건지 알 수 없는 막다른 카드였다(원준님 2026-08-28). 이제 하나를 연결한
         //    뒤에 나머지를 보여 준다 — 연결된 것은 체크돼 있고, 안 된 것은 눌러서 이어서 연결한다.
         if (aiOn(c.harness)) {
-          const onNow = new Set(aiOnKeys(c));
           //  #4051 — 로그인만으로는 «사람 없이 도는 작업»(증류·분류)이 안 돈다(중앙 판은 따로 허용한 자격만 쓴다).
           //   그 허용이 남았으면 이 장면의 **주된 다음 일**은 그것이다 — 제목·버튼이 그 사실을 말하고, 칸은 누르지 않아도
           //   절차를 띄운다(onboarding-headless). 실측(상민님 2026-09-17): 종전엔 «연결됐어요.» 아래 곁다리 [연결하기]라,
           //   새 워크스페이스에서 [계속]만 누르고 지나갔다. ⚠ 가두지 않는다 — 건너뛰기 문은 늘 있다.
-          //   다른 AI 카드는 허용이 끝난 뒤에 보인다(지금 할 일 하나만 보이게).
           const hlWait = HL.pending(c.harness);
-          const cards = `<p class="ob-q-help" style="margin-top:4px">다른 AI 도 쓰고 계시면 함께 연결해 둘 수 있어요. 연결된 것은 체크돼 있습니다.</p>
-               <div class="ob-opt-cards">${['Claude', 'ChatGPT', 'Gemini', 'Grok'].map((a) => { const k = AI_HARNESS[a];
-                 return onNow.has(k)
-                   ? `<button class="ob-opt-card ob-on ob-locked" data-done="1" aria-disabled="true"><span class="ob-oc-ic">${AI_LOGO[a] || ''}</span><span><span class="ob-oc-t">${esc(a)}</span><span class="ob-oc-d">연결됨</span></span><span class="ob-oc-chk">✓</span></button>`
-                   : `<button class="ob-opt-card" data-more="${esc(a)}"><span class="ob-oc-ic">${AI_LOGO[a] || ''}</span><span><span class="ob-oc-t">${esc(a)}</span><span class="ob-oc-d">눌러서 연결하기</span></span><span class="ob-oc-chk">✓</span></button>`; }).join('')}</div>`;
+          //  ★ T13(상민님 2026-10-15 To-Be) — 처음 설정의 끝은 «Claude 로그인 1번» 이다. 로그인이 확인되면 다른 AI 카드(#2232)를 늘어놓지 않고
+          //   «Claude 에 연결해 두신 앱» 을 보여 준 뒤 곧장 리브에게 넘긴다(주 버튼 하나). 다른 AI 는 [내 설정 ▸ AI 계정 연결]에서 언제든 잇는다.
+          //   허용(#4051)이 남았으면 그것이 먼저다 — 그때는 종전처럼 건너뛰기 문만 둔다.
           return qHead('claude', lead, hlWait ? '한 번만 더 허용해 주세요.' : '연결됐어요.', '')
             + `<div class="ob-tok"><p class="ob-ok">${esc(AI_LABEL[c.harness] || picked)} 로그인이 확인됐어요.</p></div>
                ${HEADLESS_INLINE[c.harness] ? `<div class="ob-tok" id="hlBox" data-wait="${hlWait ? '1' : '0'}"${hlWait ? '' : ' hidden'}>${hlWait ? '<p class="ob-note">허용 주소를 받는 중이에요…</p>' : ''}</div>` : ''}
-               ${hlWait ? '' : cards}`
+               ${hlWait ? '' : claudeAppsHtml(c.harness)}`
             + (hlWait
               ? `<button class="ob-q-skip" id="cGo">지금은 건너뛸게요</button>`
-              : `<button class="ob-btn ob-btn-pri" id="cGo">이만하면 됐어요, 계속</button>`);
+              : `<button class="ob-btn ob-btn-pri" id="cGo">리브와 시작하기</button>`);
         }
         // ── CLI 가 이 자리에 없다. 로그인 절차를 보여 줘도 첫 줄에서 command not found 가 난다 —
         //    그러니 로그인을 시키지 않고 **없다는 사실**을 말한다(사람이 해야 할 일이 아예 다르다).
@@ -2595,6 +2596,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
               ${hasDetail ? `<div class="ob-detail" id="cDetail" hidden><ol>${g.detail.map((t) => `<li>${t}</li>`).join('')}</ol></div>` : ''}
               ${c.loggedIn === null ? `<p class="ob-note">이 자리에선 ${esc(picked)} 로그인 여부를 서버가 확인하지 못해요. 로그인하셨다면 그대로 계속하셔도 됩니다.</p>` : ''}
               ${otherNote}
+              ${h === 'claude' ? `<p class="ob-note">Claude 를 쓰지 않으시나요? <button type="button" class="ob-linkbtn" data-other-ai>다른 AI 로 연결하기</button></p>` : ''}
             </div></div>
           <div class="ob-lg-right"><div class="ob-tok ob-lgs">
               ${stepper}
@@ -2671,10 +2673,16 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         };
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
+        //  (T13) 정책(구성원 Claude 커넥터를 쓰나)은 머리말 문구가 갈린다 — 처음 한 번만 묻고 답이 오면 다시 그린다.
+        if (CCP == null && aiHarness() === 'claude') void loadClaudeConnectorPolicy().then(() => { if (!destroyed && !leavingAi && S.scene === 'claude') renderScene('claude', false); });
         if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
         //  #4051 — 로그인이 확인된 자리에서만 «사람 없이 도는 작업» 허용을 받는다(칸은 html 이 연결됨 갈래에만 둔다).
         //   허용이 남았으면 칸이 누르지 않아도 절차를 띄운다(onboarding-headless 머리말).
         { const hb = $('#hlBox', el); if (hb) void HL.paint(hb, AIC.harness, AI_LABEL[AIC.harness] || S.ai || AIC.harness); }
+        //  (T13) 로그인이 확인됐으면 «Claude 에 연결해 두신 앱» 을 한 번 잰다(칸이 그려진 때만 — 허용이 남았거나 정책이 막혔으면 칸이 없다).
+        if ($('#ccBox', el) && !CCA) void refreshClaudeConnectors();
+        //  (T13) «Claude 를 쓰지 않으시나요?» — AI 고르기(차례에서 빠진 장면)로 간다. 고르면 그 AI 의 이 장면으로 돌아온다.
+        { const oa = $('[data-other-ai]', el); if (oa) oa.onclick = () => { AIC = null; goScene('ai'); }; }
         /** 연결된 것으로 기록 — 이 온보딩에서 확인한 하네스(S.aiDone)는 «다른 AI 도?» 화면의 체크 근거다. */
         const mark = (name, key) => {
           S.aiConnected = true; S.aiName = name || null;
@@ -2977,19 +2985,22 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 서버 반영이 스스로 가르고(joining) 그 판정을 돌려준다.
     //   판정이 안 온 응답(구 서버)이면 화면이 받아 둔 사실로 떨어진다.
     const joined = applied && applied.joining ? !!applied.joining.is_join : isJoin();
-    if (joined) {
+    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
+    //  (T13) 합류자도 리브로 간다 — «팀이 쓰는 앱 중 Claude 에 빠진 것만 연결» 하는 짧은 대화다(종전엔 곧장 홈이었다).
+    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
+    if (joined && !livHref) {
       say(`준비됐어요. 팀 워크스페이스로 모시겠습니다.${notesHtml}`);
       await sleep(notes.length ? 3200 : 1400);
       location.hash = '#/';
       return;
     }
-    // (#1631) 서버가 리브 세션을 열어 뒀으면 **그 세션으로** 간다. 못 열었으면 사유를 말하고 홈으로.
-    const livHref = applied && applied.liv && applied.liv.href ? String(applied.liv.href) : '';
     const noAi = !livHref && applied && applied.liv && applied.liv.reason === 'ai-not-connected';
     //  AI 로그인이 실제로 있는 자리는 [내 프로필 · 환경설정] 창의 [AI 계정 연결] 탭이다(v2/me-modal.ts — 레일·사이드바 발치의 내 이름이 그 창을 연다).
     //   종전엔 «왼쪽 [외부 앱 연결]에서 AI 를 이으면 리브가 이어서 정리해 드립니다» 였는데, 그 화면엔 AI 로그인이 없고(v2/connect.ts)
     //   리브는 처음 설정이 끝나는 순간에만 열려서(delivery/welcome.ts) 뒤 약속을 지킬 길도 없었다.
-    const where = livHref ? '리브가 지금 워크스페이스를 살펴보고 있어요. 그 자리로 모시겠습니다.'
+    const where = livHref
+      ? (joined ? '리브가 팀이 쓰는 앱 가운데 Claude 에 빠진 것이 있는지 보고 있어요. 그 자리로 모시겠습니다.'
+        : '리브가 Claude 에 연결해 두신 앱을 확인하고 있어요. 그 자리로 모시겠습니다.')
       : noAi ? 'AI 를 아직 연결하지 않으셔서 리브는 지금 열지 않았어요 — 답을 못 하는 창이 되니까요. AI 는 왼쪽 아래 내 이름을 누르면 나오는 [AI 계정 연결]에서 언제든 연결하실 수 있어요. 워크스페이스로 모시겠습니다.'
       : '워크스페이스로 모시겠습니다.';
     say(`정리했어요. ${where}${notesHtml}`);
@@ -3194,6 +3205,60 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
     await hl;
     if (AIC && AIC.harness && AIC.harness !== h) await HL.load(AIC.harness);
     return AIC;
+  }
+
+  /* ── #4213 T13 — Claude 커넥터: 처음 설정의 Claude 로그인이 «리브가 쓸 앱» 으로 이어진다는 것을 이 자리에서 보여 준다 ──────────
+   *  · 정책(CCP) — 이 워크스페이스가 구성원 Claude 커넥터를 쓰나(T6). blocked 면 «Claude 에 연결한 앱을 리브가 쓴다» 를 약속하지 않는다.
+   *  · 미리보기(CCA) — 로그인이 확인된 뒤 한 번 «새로 확인»(POST /api/ui/me/ai-connectors/refresh — 그 사람 자리에서 `claude mcp list`)을
+   *    돌려 연결된 앱 이름을 보여 준다. 몇 초 걸리므로 [리브와 시작하기]를 막지 않는다 — 리브는 대화 첫머리에서 다시 잰다(liv-connect §1).
+   *  ⚠ 판정은 서버가 한다 — 화면은 받은 상태를 말로 옮길 뿐이다. 실패는 사실대로 말하고 리브에게 넘긴다. */
+  let CCP = null;          // 'allowed' | 'blocked' | 'unknown' | null(아직 안 물음)
+  let CCA = null;          // null(아직) | { busy:true } | { ok:boolean, error, apps:[{app,status}] }
+  let ccpP = null;         // 묻는 중인 약속 — 장면이 여러 번 그려져도 한 번만 묻는다
+  async function loadClaudeConnectorPolicy() {
+    if (CCP) return CCP;
+    if (!ccpP) ccpP = (async () => {
+      const me = String((state.me && (state.me as { member_id?: string }).member_id) || '');
+      try {
+        const r = await api('/api/ui/member-ai-connectors' + (me ? `?member_id=${encodeURIComponent(me)}` : ''));
+        CCP = (r && r.policy && r.policy.state) || 'unknown';
+      } catch (_) { CCP = 'unknown'; }
+      return CCP;
+    })();
+    return ccpP;
+  }
+  async function refreshClaudeConnectors() {
+    if (CCA) return;
+    CCA = { busy: true };
+    try {
+      const r = await api('/api/ui/me/ai-connectors/refresh', { method: 'POST', body: '{}' });
+      if (r && r.skipped === 'policy-off') { CCP = 'blocked'; CCA = null; }
+      else {
+        const rec = (r && r.record) || {};
+        const scan = rec.scan || null;
+        CCA = { ok: !!(scan && scan.ok), error: scan && !scan.ok ? scan.error : null,
+          apps: (rec.connectors || []).filter((c) => c && c.status !== 'removed' && !NOT_WORK_APPS.has(appKeyOfConnector(c.app)))
+            .map((c) => ({ app: String(c.app), status: String(c.status) })) };
+      }
+    } catch (e) {
+      CCA = { ok: false, error: null, apps: [], failed: (e && e.message) ? String(e.message) : '알 수 없는 오류' };
+    }
+    if (!destroyed && !leavingAi && S.scene === 'claude') renderScene('claude', false);
+  }
+  /** 로그인 확인 뒤 «Claude 에 연결된 앱» 칸. 정책이 막혔거나 Claude 가 아니면 빈 문자열. */
+  function claudeAppsHtml(harness) {
+    if (harness !== 'claude' || CCP === 'blocked') return '';
+    if (!CCA || CCA.busy) return `<div class="ob-tok" id="ccBox"><p class="ob-note">Claude 에 연결해 두신 앱을 확인하고 있어요…</p></div>`;
+    if (CCA.failed || !CCA.ok) {
+      const why = CCA.failed ? '' : ` ${esc(scanErrorText(CCA.error))}`;
+      return `<div class="ob-tok" id="ccBox"><p class="ob-note">Claude 에 연결해 두신 앱을 지금은 확인하지 못했어요.${why} 리브가 대화를 시작하면서 다시 확인합니다.</p></div>`;
+    }
+    if (!CCA.apps.length) {
+      return `<div class="ob-tok" id="ccBox"><p class="ob-note">아직 Claude 에 연결해 두신 앱이 없어요. 리브가 대화에서 Slack·Notion·Gmail 같은 앱을 Claude 에 연결하는 방법을 한 걸음씩 안내해 드려요.</p></div>`;
+    }
+    const names = CCA.apps.map((a) => esc(a.app) + (a.status === 'connected' ? '' : `(${esc(CLAUDE_CONNECTOR_STATUS_LABEL[a.status] || a.status)})`)).join(' · ');
+    return `<div class="ob-tok" id="ccBox"><p class="ob-ok">Claude 에 연결해 두신 앱: ${names}</p>
+      <p class="ob-note">리브가 이 앱들에서 일 자료를 모아요. 빠진 앱은 다음 대화에서 리브가 연결을 도와드려요.</p></div>`;
   }
 
   /** 지금 연결돼 있다고 아는 하네스 키들 — 서버 판정(고른 것 + others) ∪ 이 온보딩에서 확인한 것(S.aiDone). */
@@ -3450,6 +3515,8 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   function renderScene(key, animate) {
     const sc = SCENES[key];
     if (!sc) return;
+    //  (T13) AI 를 고르는 장면이 차례에서 빠졌다 — 고른 것이 없으면 Claude 로 연다(기본 연결이 Claude 커넥터다). 다른 AI 는 «Claude 를 안 쓰시나요?» 문.
+    if (key === 'claude' && !S.ai) { setAi('Claude'); AIC = null; save(); }
     // 장면이 바뀌면 «내 컴퓨터» 폴링을 멈춘다 — 화면에 없는 타이머가 5초마다 도는 건 조용한 누수다.
     if (key !== 'local') { clearInterval(localTimer); localTimer = null; localBase = null; }
     //  인사(intro)도 이름처럼 민낯이다 — 셸이 뒤에 비치면 «설정을 시작하기 전» 이라는 장면이 흐려진다(#1631).

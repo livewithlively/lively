@@ -103,7 +103,9 @@ const updateInput = {
     "1개 이상 3시간 · 닷새에 하나 이상 12시간 · 그보다 조용하면 24시간 — meta.activity.per_day 가 그 빈도다). 값을 주면 그 값으로 고정되고(interval_auto=false), " +
     "null 을 주면 다시 자동이다. 워크스페이스 활동은 주기에 쓰지 않는다 — 그 단위에 글이 올라오는 빈도만 본다"),
   description: z.string().max(4000).nullable().optional().describe("메타데이터: 이 단위에서 오가는 일(검색 실패 안내에서 단위를 고를 때 쓴다)"),
-  meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·knowhow(단위 노하우). activity(활동량 — 하루 평균 새 글 · 본 기간)는 서버가 수집 판마다 재므로 여기서 주면 무시된다"),
+  meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·knowhow(단위 노하우) · " +
+    "first_days(처음 읽을 때 거슬러 갈 날 수, 1~365 정수 — 아직 한 번도 안 읽은 단위에만 쓰인다. 없으면 최근 14일. 사람과 대화로 정한다). " +
+    "activity(활동량 — 하루 평균 새 글 · 본 기간)는 서버가 수집 판마다 재므로 여기서 주면 무시된다"),
   priorities: z.array(z.string().max(80)).max(200).optional().describe("담당 후보 순서(구성원 id 앞에서부터 1순위). 이 단위를 볼 수 있는 구성원만"),
   route: z.enum(COLLECT_ROUTES).optional().describe("수집 경로 바꾸기 — 관리자만"),
   name: z.string().max(200).nullable().optional().describe("표시 이름"),

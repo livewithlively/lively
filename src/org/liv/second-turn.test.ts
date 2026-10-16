@@ -2,9 +2,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
+import { readFileSync } from "node:fs";
 import { GROUP_SETS } from "../../v6/category-groups.js";
 import * as turnNs from "./second-turn.js";
 
@@ -338,4 +339,61 @@ test("H3 앞선 판정은 그대로 — 하루가 지나도 세션이 없으면 
   assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, outboxPending: 1 })), { action: "giveup", reason: "turn1-never-delivered" });
   //  상한 상수가 사양(하루)과 같다 — 옛 판엔 없다(네임스페이스로 읽어 그 행만 빨간불).
   assert.equal((turnNs as { SECOND_TURN_STALE_MS?: number }).SECOND_TURN_STALE_MS, DAY);
+});
+
+// ── #4213 T13 — 1턴 갈래(flow)에 따른 2턴 판정. 사양 scratchpad spec.md §C 의 표(S1~S9) 행마다 한 검사. ──
+//  · 합류자(join)는 2턴이 없다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다(다른 판정보다 먼저).
+//  · 설치자 «처음 연결»(connect)은 리브가 처음 수집 끝(collect_done_at)을 찍을 때까지, 그러나 90분까지만 기다린다.
+const MIN = 60_000;
+const cw = (extra: Record<string, unknown>, at: number, over: Partial<SecondTurnState> = {}): SecondTurnState =>
+  st({ welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-1", ...extra }, now: DONE + at, ...over });
+
+test("S1 합류자 — 세션이 쉬어도 2턴을 건너뛴다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join" }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S2 합류자 — 이미 쏜 표식이 있어도 이유는 «합류자» 다(먼저 판정)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join", distill_at: new Date(DONE).toISOString() }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S3 처음 연결 — 리브가 처음 수집 끝을 안 찍었으면 세션이 쉬어도 기다린다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S4 처음 연결 — 처음 수집 끝이 찍혔으면 종전 판정으로 쏜다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE + 9 * MIN).toISOString() }, 10 * MIN));
+  assert.equal(d.action, "fire");
+});
+test("S5 처음 연결 — 정확히 상한(90분)이면 신호 없이도 기다리지 않는다(경계)", () => {
+  assert.equal(CONNECT_FLOW_MAX_WAIT_MS, 90 * MIN);
+  const d = decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS));
+  assert.deepEqual(d, { action: "fire", partial: false, waitedMin: 90 });
+});
+test("S5′ 처음 연결 — 상한 1초 전이면 아직 기다린다(경계)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS - 1000)), { action: "wait", reason: "connecting" });
+});
+test("S6 처음 연결 대기 중 세션이 사라지면 다시 열지 않고 기다린다(사람이 리브 탭으로 되살릴 수 있다)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 30 * MIN, { session: null })), { action: "wait", reason: "connecting" });
+});
+test("S6′ 상한이 지났는데 세션이 없으면 종전대로 한 번 다시 연다(1턴 배달 상한 안)", () => {
+  assert.ok(CONNECT_FLOW_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "다시 여는 길이 남도록 처음 연결 상한이 1턴 배달 상한보다 짧아야 한다");
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 95 * MIN, { session: null })), { action: "reopen", reason: "session-gone" });
+});
+test("S7 갈래 없는 옛 행은 종전과 같다 — 쉬면 쏜다", () => {
+  assert.equal(decideSecondTurn(cw({}, 10 * MIN)).action, "fire");
+});
+test("S8 처음 수집 끝이 찍혀도 리브가 일하는 중이면 기다린다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE).toISOString() }, 10 * MIN, { session: { working: true, agentState: "busy" } }));
+  assert.deepEqual(d, { action: "wait", reason: "turn1-running" });
+});
+test("S9 처음 수집 끝이 null(명시)이면 찍히지 않은 것이다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect", collect_done_at: null }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S10 후보 조회가 합류자 행을 뺀다 — 영원히 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지하지 않게", () => {
+  const SRC = readFileSync(new URL("../store/members.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const fn = SRC.slice(SRC.indexOf("export async function listLivSecondTurnCandidates"), SRC.indexOf("ORDER BY welcome->>'done_at' ASC LIMIT 200"));
+  assert.match(fn, /AND COALESCE\(welcome->>'flow', ''\) <> 'join'/);
+});
+test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시 읽고 설명·성격을 채우게 한다(설계 §3)", () => {
+  const p = buildSecondTurnPrompt({ displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 5 });
+  assert.match(p, /`collect_units`\(Claude 커넥터로 모으는 곳 — 수집 단위\)/);
+  assert.match(p, /`collect_unit_update` 로 손본다/);
+  assert.match(p, /`description`\(이 단위에서 오가는 일/);
 });

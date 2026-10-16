@@ -158,7 +158,7 @@ test("M7 CP 계약 — /api/tenant/membership 을 짧은 제한 시간으로 부
   assert.match(CODE, /workspace_purpose: /, "먼저 정한 사람의 용도를 안 싣는다");
 });
 
-test("A1 ★반영 — 합류자면 갈래·증류기·레인·묶음·리브 킥오프를 부르지 않는다 · 판정은 서버가 스스로 한다", () => {
+test("A1 ★반영 — 합류자면 갈래·증류기·레인·묶음을 부르지 않는다 · 리브는 갈래(flow)를 달아 둘 다 띄운다(T13) · 판정은 서버가 스스로 한다", () => {
   const start = CODE.indexOf('restRead("me_welcome_apply"');
   assert.ok(start >= 0, "반영 문을 못 찾았다 — 검사가 헛돈다");
   const HANDLER = CODE.slice(start, CODE.indexOf("\n];", start));
@@ -176,8 +176,10 @@ test("A1 ★반영 — 합류자면 갈래·증류기·레인·묶음·리브 �
     assert.ok(HANDLER.includes(keep), `${keep} 가 반영에서 사라졌다`);
     assert.ok(!gate.includes(keep), `${keep} 가 합류자 문 안에 들어가 합류자에게는 안 남는다`);
   }
-  assert.match(HANDLER, /const liv = joining\.is_join\s*\?\s*\{ session_id: null, href: null, reason: "join" \}\s*:\s*await kickoffLivAfterWelcome\(/,
-    "합류자에게도 리브를 띄운다(또는 건너뛴 이유를 안 싣는다)");
+  //  (#4213 T13, 상민님 2026-10-15 To-Be §7) 합류자에게도 리브를 띄운다 — 갈래는 서버 판정으로만 정한다(화면 값 아님).
+  assert.match(HANDLER, /const flow: "connect" \| "join" = joining\.is_join \? "join" : "connect";/, "리브 갈래를 서버 판정에서 정하지 않는다");
+  assert.match(HANDLER, /const liv = await kickoffLivAfterWelcome\(user, \{ priorSession, flow \}\);/, "리브 킥오프가 갈래 없이 불린다(또는 합류자만 건너뛴다)");
+  assert.match(HANDLER, /welcome: \{[^}]*\bflow\b/, "완료 표식에 갈래가 안 남는다 — 2턴 판정이 합류자를 못 가린다");
   assert.equal(HANDLER.split("kickoffLivAfterWelcome(").length, 2, "킥오프를 부르는 자리가 하나가 아니다");
   assert.match(HANDLER, /joining: \{ is_join: joining\.is_join, via: joining\.via \}/, "화면이 마무리 문구를 가를 판정을 응답에 안 싣는다");
 });
@@ -189,16 +191,27 @@ test("A3 ★반영 — 합류자의 용도(stage)는 워크스페이스 용도�
   //  workspacePurposeStage 는 구성원의 welcome.stage 를 «먼저 답한 순» 으로 읽는다 — 합류자의 답이 그 칸에 들어가면 워크스페이스 용도가 된다.
   assert.match(HANDLER, /const stage = joining\.is_join\s*\?\s*await workspacePurposeStage\(currentTenant\(\)\?\.id \?\? null\)\.catch\(\(\) => null\)\s*:\s*s\(input\.stage, 40\);/,
     "합류자가 보낸 용도가 그대로 welcome.stage 에 적힌다 — 먼저 끝낸 합류자가 워크스페이스 용도를 정한다");
-  assert.match(HANDLER, /welcome: \{[^}]*stage: stage \|\| null \}/, "완료 표식의 stage 가 판정한 값을 안 쓴다");
+  assert.match(HANDLER, /welcome: \{[^}]*stage: stage \|\| null\b/, "완료 표식의 stage 가 판정한 값을 안 쓴다");
   const gate = blockFrom(HANDLER, "if (!joining.is_join) {");
   assert.ok(gate.includes("s(input.stage, 40)"), "묶음 시드가 주인 문 안에서 화면 값을 안 읽는다(무회귀)");
   assert.equal(HANDLER.split("s(input.stage, 40)").length - 1, 2, "화면이 보낸 용도를 읽는 자리가 주인 문(묶음 시드)과 주인 갈래 둘이 아니다");
 });
 
-test("A2 리브 1턴에 합류자 갈래가 남아 있지 않다 — 이제 불리지 않는 분기다", () => {
+test("A2 (T13) 리브 1턴의 갈래는 반영이 넘긴 flow 하나로만 갈린다 — 1턴이 합류 사실을 스스로 읽지 않는다", () => {
   const FIRST = strip(read("../../org/liv/first-turn.ts"));
-  assert.doesNotMatch(FIRST, /joining|is_join/, "합류자 갈래가 죽은 분기로 남았다");
-  assert.doesNotMatch(strip(SRC.slice(SRC.indexOf("export async function kickoffLivAfterWelcome"))), /joining:/, "킥오프가 아직 합류 사실을 1턴에 싣는다");
+  assert.doesNotMatch(FIRST, /joining|is_join/, "1턴이 합류 사실(joining)을 직접 읽는다 — 갈래는 반영이 정한 flow 하나여야 한다");
+  const KICK = strip(SRC.slice(SRC.indexOf("export async function kickoffLivAfterWelcome")));
+  assert.match(KICK, /flow: o\.flow === "join" \? "join" as const : "owner" as const,/, "킥오프가 반영의 갈래를 1턴에 안 넘긴다");
+  assert.match(KICK, /planLivKickoff\(o\.priorSession, usable, "claude"\)/, "«처음 연결» 대화가 로그인된 claude 를 먼저 쓰지 않는다");
+});
+
+test("A4 (T13) 같은 리브 세션을 다시 쓰는 반영은 그 세션에 찍힌 진행 표식(처음 수집 끝·증류 지시·포기)을 지우지 않는다", () => {
+  const start = CODE.indexOf('restRead("me_welcome_apply"');
+  const HANDLER = CODE.slice(start, CODE.indexOf("\n];", start));
+  for (const k of ["collect_done_at", "distill_at", "distill_gave_up_at", "distill_note", "distill_reopened_at"]) {
+    assert.match(HANDLER, new RegExp(`${k}: priorWelcome\\.${k} \\?\\? null`), `다시 반영하면 ${k} 가 사라진다 — 2턴이 같은 세션에 또 나간다`);
+  }
+  assert.match(HANDLER, /const keep = priorSession && priorWelcome \?/, "새 세션을 여는 반영에도 옛 표식을 옮긴다(옮기는 조건이 없다)");
 });
 
 test("U1 업로드 — 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다 (#4007)", () => {

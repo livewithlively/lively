@@ -1018,6 +1018,55 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
     만들어 자리를 맞추지 않는다(빈 노드는 나중에 «왜 있지?»가 된다). */
 .cn-card-ft > :only-child { margin-left: auto; }
 
+/* ── #4213 T13 «앱 × 구성원» 현황판 — [외부 앱 연결]의 첫 자리(web/v2/connect-board.ts) ─────────────────────
+   줄 = 앱, 칸 = 구성원. 상태는 점 + 말(채운 컬러 알약 금지) — 연결됨만 민트 채움, 사람이 할 일(다시 로그인·연결 필요)은 경고색 고리,
+   모르는 것(확인 전·확인 못 함)은 흐린 고리, 안 쓰는 칸은 점 없이 흐린 글자. 구성원이 많으면 표만 가로로 밀린다(화면은 안 밀린다). */
+.cn-board { margin-top: 18px; }
+.cn-bd-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 10px; }
+.cn-bd-note { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.6; max-width: 72ch; }
+.cn-bd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-bd-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cn-bd-tbl th, .cn-bd-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line-row); text-align: left; vertical-align: middle; }
+.cn-bd-tbl thead th { font-size: 12px; font-weight: 700; color: var(--muted-head); background: var(--bg-tint); white-space: nowrap; }
+.cn-bd-tbl tbody tr:last-child > * { border-bottom: 0; }
+.cn-bd-mem { min-width: 92px; }
+.cn-bd-mem .cn-bd-face { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--on-fill); vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.cn-bd-mem .cn-bd-face img { width: 100%; height: 100%; object-fit: cover; }
+.cn-bd-mname { vertical-align: middle; }
+.cn-bd-app { min-width: 180px; }
+.cn-bd-appname { display: flex; align-items: center; gap: 9px; }
+.cn-bd-appname b { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.cn-bd-appname .svc-tile { width: 28px; height: 28px; border-radius: 8px; }
+.cn-bd-route { margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+.cn-bd-cell { white-space: nowrap; color: var(--ink-sub); font-weight: 600; }
+.cn-bd-cell > span { vertical-align: middle; }
+.cn-bd-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
+.cn-bd-connected { color: var(--mint-deep); }
+.cn-bd-connected .cn-bd-dot { background: var(--mint-deep); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+.cn-bd-need, .cn-bd-needs-auth, .cn-bd-failed { color: var(--warn-text); }
+.cn-bd-need .cn-bd-dot, .cn-bd-needs-auth .cn-bd-dot, .cn-bd-failed .cn-bd-dot { box-shadow: inset 0 0 0 1.5px var(--warn-text); }
+.cn-bd-unchecked, .cn-bd-scan-failed, .cn-bd-pending, .cn-bd-unknown { color: var(--muted); font-weight: 500; }
+.cn-bd-off, .cn-bd-blocked { color: var(--muted-2); font-weight: 500; }
+.cn-bd-units { min-width: 170px; color: var(--ink-sub); }
+.cn-bd-units .cn-bd-more { margin-left: 8px; font-size: 12px; }
+.cn-bd-detail > td { background: var(--bg-tint); }
+.cn-bd-unitlist { display: flex; flex-direction: column; gap: 8px; }
+.cn-bd-unit { padding: 10px 12px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--bg); }
+.cn-bd-u-excluded { opacity: .72; }
+.cn-bd-uhd { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cn-bd-uhd b { font-size: 13px; color: var(--ink); }
+.cn-bd-ukind, .cn-bd-ust { font-size: 11.5px; color: var(--muted); }
+.cn-bd-u-active .cn-bd-ust { color: var(--mint-deep); font-weight: 700; }
+.cn-bd-umeta { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--ink-sub); }
+.cn-bd-ulab { color: var(--muted); }
+.cn-bd-uread { color: var(--muted); }
+.cn-bd-vis { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-net); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.cn-bd-udesc { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.6; }
+.cn-bd-uact { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+/*  현황판 아래 «라이블리로 직접 연결» — 종전 카드 묶음의 머리. 현황판과 한 단계 굵은 경계로 가른다(.cn-extra 와 같은 결). */
+.cn-direct { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line-net); }
+.cn-direct .v2-desc { margin-top: 0; }
+
 /* ── #3778 [코드와 데이터] 도 같은 카드다 — 종전엔 얇은 행 두 줄이라 위 진열대와 딴 화면처럼 보였다.
    타일은 앱 로고 자리와 같은 라운드 스퀘어에 **우리 색**(브랜드가 아니므로 틴트가 아니라 punch). */
 .svc-tile.cn-asset-tile { background: var(--bg-punch); color: var(--blue); }

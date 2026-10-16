@@ -25,6 +25,7 @@ import { appAxes, collectTally, listBucket, pendingAxes, skipKey,
 import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
+import { renderConnectBoard } from './connect-board.js';   // #4213 T13 — 맨 위 «앱 × 구성원» 현황판
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
 //   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
@@ -268,10 +269,18 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
     ? assetCard('_db', 'db', '데이터베이스', 'AI가 조회할 수 있는 데이터베이스를 등록하고 어디까지 보여줄지 정합니다')
     : null;
 
+  //  ★ #4213 T13(상민님 2026-10-15 To-Be §7) — 이 화면의 첫 자리는 «앱 × 구성원» 현황판이다. 기본 연결이 각 구성원의 Claude 커넥터라
+  //   «누가 어떤 앱을 연결했고 어디를 모으나» 가 먼저 보여야 한다(connect-board.ts). 종전의 앱 카드(두 축)는 그 아래
+  //   «라이블리로 직접 연결» 로 내려간다 — Claude 로 안 되는 앱(목록에 없음 · 관리자 정책)과 AI 가 내 계정으로 직접 쓰는 연결의 자리다.
+  const boardHost = el('div', { class: 'cn-board-host' });
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
-    //  «팀에는 공유되지 않습니다»를 뺐다 — 자료 가져오기는 워크스페이스가 함께 보므로 그 문장이 틀려진다. 범위 이야기는 상세가 한다.
-    el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 카드마다 둘을 따로 표시하고, 앱을 누르면 각각 켭니다.' }),
+    el('p', { class: 'v2-desc', text: '기본 연결은 각자의 Claude 계정이에요 — Claude 에 연결해 둔 Slack·Notion·Gmail 같은 앱을 리브가 그대로 써서 일 자료를 모읍니다. 아래 표는 앱마다 누가 연결했는지와 어디를 모으는지 보여 줘요.' }),
+    boardHost,
+    el('section', { class: 'cn-group cn-direct' },
+      groupHead('라이블리로 직접 연결', null, 'Claude 로 안 되는 앱을 잇거나, AI 가 내 계정으로 직접 쓰게 하는 연결이에요'),
+      //  «팀에는 공유되지 않습니다»를 뺐다 — 자료 가져오기는 워크스페이스가 함께 보므로 그 문장이 틀려진다. 범위 이야기는 상세가 한다.
+      el('p', { class: 'v2-desc', text: '앱마다 연결이 두 가지예요 — AI가 내 계정으로 직접 쓰는 것(나만 봐요)과, 자료를 미리 가져와 자료함에 두는 것(워크스페이스가 함께 봐요). 카드마다 둘을 따로 표시하고, 앱을 누르면 각각 켭니다.' })),
     //  못 읽었으면 «꺼짐»으로 보이는 축이 생긴다 — 그 사실을 숨기지 않는다(거짓 «꺼짐»을 만들지 않는다).
     ...(collectOk ? [] : [el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: '자료 가져오기 상태를 불러오지 못했어요 — 아래 「자료 가져오기」 줄은 지금 정확하지 않을 수 있습니다.' })]),
     el('div', { class: 'cn-top' }, sum, search),
@@ -279,7 +288,9 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
     el('section', { class: 'cn-group cn-extra' },
       groupHead('코드와 데이터', null, '앱이 아니라 우리 코드 저장소와 데이터베이스를 잇습니다'),
       el('div', { class: 'cn-cards' }, gitCard.node, ...(dbCard ? [dbCard.node] : [])))));
-  window.setTimeout(() => search.focus(), 30);
+  //  (T13) 찾기 칸에 바로 커서를 두지 않는다 — 맨 위가 현황판이 됐고, 찾기는 그 아래 «라이블리로 직접 연결» 의 것이다(열자마자 아래로 끌려가지 않게).
+  //  현황판은 화면이 선 뒤에 채운다 — 네 조회(커넥터 기록·수집 단위·수집기·명부)를 기다리느라 아래 카드가 늦게 서지 않게.
+  void renderConnectBoard(boardHost);
 
   //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
   void fillGitCounts(gitCard.stat);

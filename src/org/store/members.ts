@@ -203,6 +203,15 @@ export interface LivWelcome {
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
   /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
   distill_reopened_at?: string | null;
+  /**
+   * 리브 1턴의 갈래(#4213 T13). 비었으면 종전(#1631 «보고만 하는 1턴»)이다.
+   *  · connect — 설치자의 «처음 연결» 대화(Claude 커넥터로 목록·처음 수집). 2턴은 리브가 처음 수집 끝을 찍거나(collect_done_at)
+   *    상한이 지난 뒤에 나간다 — 대화 도중에 증류 지시가 끼어들지 않게(second-turn.ts).
+   *  · join — 합류자의 «빠진 앱 연결» 대화. 2턴이 없다(팀의 서랍·정리 규칙을 합류자가 바꾸지 않는다).
+   */
+  flow?: "connect" | "join" | null;
+  /** 리브가 «처음 연결·처음 수집을 끝냈다» 를 찍은 시각(me_liv_profile_set collect_done) — connect 갈래의 2턴 신호. */
+  collect_done_at?: string | null;
 }
 
 /**
@@ -212,6 +221,8 @@ export interface LivWelcome {
  * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
  *  있으므로(승계 전) 둘을 합쳐 본다 — 한쪽만 보면 그 사람들에게 2턴이 영영 안 간다.
  *  돌려주는 `workspace_id` 는 호출부가 **그 테넌트 컨텍스트 안에서** 표식을 찍는 데 쓴다(안 그러면 멱등이 깨져 반복 발사).
+ *  (#4213 T13) 합류자의 리브 세션(welcome.flow='join')은 2턴이 없다 — 후보에서 뺀다. 판정(decideSecondTurn)도 건너뛰지만,
+ *   여기서 안 빼면 영영 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지해 뒤에 온 진짜 후보가 밀려난다.
  */
 export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
   const r = await itemsPool.query(
@@ -228,6 +239,7 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
       WHERE welcome->>'session_id' IS NOT NULL
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
+        AND COALESCE(welcome->>'flow', '') <> 'join'
       ORDER BY welcome->>'done_at' ASC LIMIT 200`);
   return r.rows.map((x) => ({
     id: String(x.id), display_name: (x.display_name as string | null) ?? null,
@@ -629,12 +641,17 @@ export async function workspacePurposeStage(workspaceId: string | null | undefin
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
   if (patch.work) next.work = { ...patch.work, at: patch.work.at ?? new Date().toISOString() };
   if (patch.welcome) next.welcome = patch.welcome;
+  // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호). 처음 설정을 끝낸 칸(welcome)이 있을 때만,
+  //  처음 찍힌 시각을 지킨다(같은 표식을 두 번 찍어도 2턴 판정의 근거가 밀리지 않게). welcome 이 없으면 찍을 자리가 없다(무시).
+  if (patch.collectDone && next.welcome && !next.welcome.collect_done_at) {
+    next.welcome = { ...next.welcome, collect_done_at: new Date().toISOString() };
+  }
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).

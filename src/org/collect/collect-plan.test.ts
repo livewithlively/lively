@@ -16,8 +16,8 @@
 //   L1 슬랙 목록 — 쪽 사슬 · 보관 채널 뺌 · «전부»   L2 마지막 쪽에 cursor · 못 푼 쪽 · 종류가 빠진 쪽 → «전부» 아님   L3 노션·지메일은 «전부» 아님
 import assert from "node:assert/strict";
 import {
-  CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
-  UNITS_PER_RUN, collectMaxTurns, collectPrompt, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
+  CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, FIRST_READ_DAYS_MAX, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
+  UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstReadDaysOf, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
   unitSince, unitWindow, type AssignedLike, type PlannedUnit,
 } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
@@ -373,6 +373,28 @@ t("L3 노션 목록은 합치되 «전부» 가 아니다 · 지메일은 메일
   assert.deepEqual([g.units, g.complete, g.calls], [[{ ref: "me@example.com", name: "me@example.com", kind: "mailbox" }], false, 1]);
   const g0 = harvestListing([cap("Gmail", "search_threads", { threads: [] })], "gmail");
   assert.deepEqual([g0.units, g0.calls], [[], 1]);
+});
+
+// ── #4213 T13 — 처음 기간(단위 meta.first_days, 리브가 대화로 정한다). 사양 spec.md §E D1~D8 · U1~U5. ──
+t("D 처음 기간 읽기 — 1~365 정수만, 그 밖은 기본값(null)", () => {
+  assert.equal(FIRST_READ_DAYS_MAX, 365);
+  const cases: Array<[unknown, number | null]> = [
+    [{ first_days: 30 }, 30], [{ first_days: 0 }, null], [{ first_days: 1 }, 1], [{ first_days: 365 }, 365],
+    [{ first_days: 366 }, null], [{ first_days: 7.5 }, null], [{ first_days: "30" }, null], [{}, null], [null, null], [undefined, null],
+  ];
+  for (const [meta, want] of cases) assert.equal(firstReadDaysOf(meta), want, JSON.stringify(meta));
+});
+t("U 처음 기간 — 위치 없는 단위만 그만큼 거슬러 읽고, 읽은 위치·수집기 마지막 글이 이긴다", () => {
+  assert.equal(unitSince(U({ first_days: 30 }), NOW), `${NOW_SEC - 30 * 86400}.000000`, "U1 슬랙 30일");
+  assert.equal(unitSince(U({ first_days: null }), NOW), `${NOW_SEC - FIRST_READ_DAYS * 86400}.000000`, "U2 없으면 기본");
+  assert.equal(unitSince(U({ first_days: 30, cursor: { ts: "1787193938.792269" } }), NOW), "1787193938.792269", "U3 위치가 이긴다");
+  assert.equal(unitSince(U({ app: "gmail", first_days: 1 }), NOW), String(NOW_SEC - 86400), "U4 지메일 1일");
+  assert.equal(unitSince(U({ first_days: 30, last_item_at: "2026-10-10T00:00:00.000Z", from_collector: true }), NOW),
+    `${Date.parse("2026-10-10T00:00:00.000Z") / 1000}.000000`, "U5 수집기 단위의 마지막 글이 이긴다");
+  assert.equal(unitSince(U({ first_days: 999 }), NOW), `${NOW_SEC - FIRST_READ_DAYS * 86400}.000000`, "범위 밖은 기본");
+  //  배선 — 한 판 계획(pickUnitsForRun)이 단위의 first_days 를 실제로 구간에 싣는다
+  const [u] = pickUnitsForRun([{ id: 1, app: "slack", instance: "T1", ref: "C0123ABCD", kind: "channel", read_at: null, cursor: null, last_item_at: null, from_collector: false, first_days: 3 }], { now: NOW });
+  assert.equal(u.since, `${NOW_SEC - 3 * 86400}.000000`);
 });
 
 console.log(`\ncollect-plan: ${pass} passed`);

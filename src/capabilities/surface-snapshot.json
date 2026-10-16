@@ -1443,7 +1443,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "d83f9aee899c74cc"
+  "input_hash": "0f2e7a5859c28a7f"
  },
  {
   "name": "me_liv_profile_get",
@@ -3962,7 +3962,7 @@
   "rest": [
    "GET /api/ui/collect/claude-runs/:id"
   ],
-  "input_hash": "b87a2ff2a0e63f0d"
+  "input_hash": "661c0f7e0ded54fd"
  },
  {
   "name": "collect_claude_run_stats",
@@ -4022,7 +4022,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "f8c47ccb97b34ff5"
+  "input_hash": "24cb9215cfcb5e07"
  },
  {
   "name": "collect_unit_split",

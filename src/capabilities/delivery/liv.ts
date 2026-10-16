@@ -143,7 +143,8 @@ export const livCapabilities: Capability[] = [
       const welcomeSeen = input.welcome_seen === true; // #2171 — 처음 설정으로 **보냈다**는 표식(끝냈다와 별개)
       // #2232 — [나중에 할게요] 미룸. **세 값**이다: true=미룸 · false=미룸 해제(화면을 다시 열었다) · 미지정=건드리지 않음.
       const welcomeDeferred = typeof input.welcome_deferred === "boolean" ? input.welcome_deferred : undefined;
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred 중 하나는 있어야 합니다");
+      const collectDone = input.collect_done === true;   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호)
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -156,6 +157,7 @@ export const livCapabilities: Capability[] = [
           onboarded,
           welcomeSeen,
           welcomeDeferred,
+          collectDone,
         }),
       };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
@@ -177,6 +179,9 @@ export const livCapabilities: Capability[] = [
       welcome_deferred: z.boolean().optional()
         .describe("사람이 [나중에 할게요] 로 처음 설정을 **미뤘다**는 표식(#2232). true 면 하다 만 자리가 있어도 자동으로 끌고 가지 않고 " +
           "홈의 «이어서 하기»로만 안내한다. false 면 미룸을 푼다(사람이 처음 설정을 다시 연 순간)."),
+      collect_done: z.boolean().optional()
+        .describe("(리브) 처음 연결·처음 수집을 끝냈다는 표식(#4213 T13 — liv-connect 마지막 걸음). 찍히면 서랍(카테고리)·정리 규칙을 세우는 " +
+          "증류 지시(2턴)가 이 대화에 이어서 온다. 첫 보고·다음 연결 제안·초대 제안까지 마친 뒤에 찍는다. 처음 찍힌 시각을 지킨다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────

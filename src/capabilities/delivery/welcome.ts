@@ -557,25 +557,33 @@ export const welcomeCapabilities: Capability[] = [
       //   welcome 만 찍으면 다음 부팅에 first_run 이 여전히 true 라 처음 설정이 또 뜬다.
       //  (#1631) 이미 열린 리브 세션이 있으면 그 좌표를 지킨다 — welcome 은 통째로 덮이는 필드라 여기서 안 실으면 사라진다.
       const { getLivProfile: readLiv } = await import("../../org/store.js");
-      const priorSession = (await readLiv(userId).catch(() => null))?.welcome?.session_id ?? null;
+      const priorWelcome = (await readLiv(userId).catch(() => null))?.welcome ?? null;
+      const priorSession = priorWelcome?.session_id ?? null;
+      //  (#4213 T13) 리브 1턴의 갈래 — 설치자는 «처음 연결»(connect), 합류자는 «빠진 앱 연결»(join, 2턴 없음). second-turn.ts 가 읽는다.
+      const flow: "connect" | "join" = joining.is_join ? "join" : "connect";
+      //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식을 지킨다 — welcome 은 통째로
+      //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기).
+      const keep = priorSession && priorWelcome ? {
+        collect_done_at: priorWelcome.collect_done_at ?? null, distill_at: priorWelcome.distill_at ?? null,
+        distill_gave_up_at: priorWelcome.distill_gave_up_at ?? null, distill_note: priorWelcome.distill_note ?? null,
+        distill_reopened_at: priorWelcome.distill_reopened_at ?? null,
+      } : {};
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null },
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, flow, ...keep },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
       //  ⚠ 비치명: 못 지워도 끝난 것은 끝난 것이다(GET 이 done 일 때 progress 를 내주지 않는다).
       const { setLivWelcomeProgress } = await import("../../org/store.js");
       await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
-      // ── 리브 킥오프(#1631) ── 처음 설정이 끝났으니 리브 세션을 열고 1턴(현황 보고)을 넣는다. 화면은 응답의 liv.href 로 간다.
+      // ── 리브 킥오프(#1631 → #4213 T13) ── 처음 설정(Claude 로그인)이 끝났으니 리브 세션을 열고 1턴을 넣는다. 화면은 응답의 liv.href 로 간다.
       //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
       //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
-      //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 세션도 1턴도 2턴도 없다
-      //   (2턴 스윕은 welcome.session_id 가 있는 사람만 본다). 건너뛴 이유는 liv.reason 으로 싣고, 화면이 마무리 문구를
-      //   가를 판정(joining)도 함께 돌려준다.
-      const liv = joining.is_join
-        ? { session_id: null, href: null, reason: "join" }
-        : await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
-          purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
+      //  (#4213 T13, 상민님 2026-10-15 To-Be §7) **합류자에게도 리브를 띄운다** — 종전(#1631 원준 결정 2026-09-13)엔 띄우지 않았다.
+      //   합류자의 리브는 «팀이 쓰는 앱 중 그 사람 Claude 에 빠진 것만 연결» 하는 짧은 대화다(flow 'join'). 그 결정이 막으려던 것 —
+      //   신입의 처음 설정이 팀의 서랍·수집·정리 규칙을 바꾸는 것 — 은 그대로 막는다: 팀 구조를 만드는 블록은 위에서 주인만 돌고,
+      //   합류자 갈래엔 2턴(증류 지시)이 없으며(second-turn.ts), 1턴이 범위·공개범위·서랍을 건드리지 말라고 못박는다(first-turn.ts).
+      const liv = await kickoffLivAfterWelcome(user, { priorSession, flow });
       const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
       return { ok: true, created, skipped, welcome, liv, joining: { is_join: joining.is_join, via: joining.via } };
     }, false, {
@@ -839,35 +847,33 @@ export async function welcomeSnapshot(userId: string) {
 export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
 
 /**
- * (#1631) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
+ * (#1631 → #4213 T13) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
  *  · (원준 2026-09-14) **진짜 세션**(createSession, kind=task)을 연다. 헤드리스 대화 턴은 매니지드 게이트웨이에서 로컬 워커를
  *    못 띄워 500 이 나므로 폐기했다 — createSession 은 세션 호스트로 떠 매니지드에서도 된다(실측 2026-09-15).
  *    화면은 그 세션을 대화 보기로 열고(session-chat livKickoff), 지시문(첫 프롬프트)은 숨긴다.
  *  · (#4032) 그 세션이 **리브 탭의 세션**이다 — 화면은 리브 탭(href «#/liv»)으로 가고 리브 탭이 그 세션 대화창을 붙인다.
  *  · 이미 띄운 세션(priorSession)이 있으면 **다시 띄우지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
- *  · 1턴 프롬프트는 welcomeSnapshot(화면과 같은 실측) + 이 반영이 남긴 결정 + 이 워크스페이스의 수집기 목록으로 조립한다.
+ *  · (T13) 1턴은 «처음 연결» 대화다 — 설치자(connect)와 합류자(join) 두 갈래. 사실은 이 자리에서 한 번 읽어 싣는다:
+ *    welcomeSnapshot(이름·인원·올린 자료) · 이 사람의 Claude 커넥터 마지막 확인과 정책(T6) · 이 사람에게 보이는 수집 단위의
+ *    앱별 개수(T10 — 이름은 안 싣는다) · 켜진 라이블리 수집기 · (합류자) 팀이 Claude 로 연결한 앱.
+ *    각 조회는 따로 실패해도 된다 — 못 읽은 칸은 «아직 모름» 으로 실리고 리브가 도구로 다시 잰다.
+ *  · 하네스는 로그인된 것 가운데 **claude 먼저**(Claude 커넥터를 읽는 대화다). claude 가 없으면 종전대로 첫 하네스로 열고,
+ *    그 대화는 «Claude 로 안 되는 앱» 길로 간다(가두지 않는다).
  *  · 어떤 실패도 던지지 않는다 — { error } 로 돌려주고 온보딩은 성공으로 끝난다(사람이 답한 것은 이미 반영됐다).
  */
 export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   priorSession: string | null;
-  drawers: string[];
-  firstOrder: string | null;
-  decisions: Array<{ what: string; why?: string }>;
-  work: { asis?: string; tobe?: string } | null;
-  /** 이 워크스페이스의 용도(1단 답의 사람 말). 1턴 프롬프트 맨 위에 실린다(#1631). */
-  purpose?: string | null;
+  /** 1턴 갈래 — connect(설치자의 처음 연결) · join(합류자의 빠진 앱 연결). me_welcome_apply 가 서버 판정(joining)으로 정한다. */
+  flow: "connect" | "join";
 }): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
   const userId = user?.userId;
   if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
   try {
-    const { listCollectors, appendLivProfile } = await import("../../org/store.js");
+    const { appendLivProfile } = await import("../../org/store.js");
     const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
     const { livKickoff, LIV_HREF } = await import("../../org/liv/kickoff.js");
     const { planLivKickoff } = await import("../../org/liv/kickoff-plan.js");
-    const [snap, collectors] = await Promise.all([
-      welcomeSnapshot(userId),
-      listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>),
-    ]);
+    const snap = await welcomeSnapshot(userId);
     //  #1631 — 화면·게이트·1턴 프롬프트가 **같은 사실**을 봐야 한다. `snap.ai_harnesses` 는 폴링용이라 자격
     //   **파일**이 있는 하네스만 센다 — 제미나이(antigravity)는 자격 파일이 없어 구조적으로 빠진다. 그대로
     //   쓰면, 화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 **안 열어 준다**(planLivKickoff
@@ -877,21 +883,8 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
     const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
     const usable = (await memberUsableHarnesses(userId).catch(() => snap.ai_harnesses))
       .filter((k) => HEADLESS_KEYS.includes(k));
-    const turnInput = {
-      displayName: snap.profile.display_name,
-      purpose: o.purpose ?? null,
-      work: o.work,
-      drawers: o.drawers,
-      firstOrder: o.firstOrder,
-      decisions: o.decisions,
-      uploads: snap.uploads,
-      categories: snap.categories.map((c) => ({ name: c.name })),
-      collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
-      aiHarnesses: usable,
-      //  합류 사실은 싣지 않는다 — 초대로 들어온 사람에게는 이 킥오프 자체가 불리지 않는다(#1631, me_welcome_apply).
-    };
-    //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
-    const plan = planLivKickoff(o.priorSession, usable);
+    //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다. 사실 조회는 생성할 때만 한다.
+    const plan = planLivKickoff(o.priorSession, usable, "claude");
     //  (#4032) 화면은 리브 탭으로 간다 — 리브 탭이 이 워크스페이스의 리브 세션(좌표·복원 이정표)을 찾아 붙인다.
     if (plan.action === "reuse") return { session_id: plan.sessionId, href: LIV_HREF, reused: true };
     if (plan.action === "skip") {
@@ -900,6 +893,21 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
       console.info(`[welcome] 리브 킥오프 보류(${userId}) — AI 미연결`);
       return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
     }
+    const facts = await connectTurnFacts(user, o.flow);
+    const turnInput = {
+      flow: o.flow === "join" ? "join" as const : "owner" as const,
+      displayName: snap.profile.display_name,
+      othersCount: snap.joining.others_count,
+      isAdmin: facts.isAdmin,
+      policy: facts.policy,
+      connectors: facts.connectors,
+      collectApps: facts.collectApps,
+      units: facts.units,
+      collectors: facts.collectors,
+      teamApps: facts.teamApps,
+      uploads: { total: snap.uploads.total, kinds: snap.uploads.kinds, names: snap.uploads.names },
+      aiHarnesses: usable,
+    };
     //  (#1631, 원준 2026-09-15) 진짜 세션(createSession, kind=task)을 연다 — 지시문은 화면(session-chat livKickoff)이 숨긴다.
     //   (#4032) 그 세션이 곧 리브 탭의 세션이다 — livKickoff 가 리브 좌표(liv_session)도 적고 화면을 리브 탭(#/liv)으로 보낸다.
     //   surface:"chat" 문안: 이 지시문은 화면에 안 보이니 리브가 «보내 주신 지시대로» 라고 말하지 않게 한다(하네스는 claude 든 아니든 같은 문안).
@@ -913,4 +921,72 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
     console.warn(`[welcome] 리브 킥오프 실패(${userId}) — 처음 설정은 끝난 것으로 둔다:`, msg);
     return { session_id: null, href: null, error: msg };
   }
+}
+
+/**
+ * (#4213 T13) «처음 연결» 1턴의 사실 — 각 칸은 따로 실패해도 된다(못 읽으면 빈 값 · 정책은 unknown).
+ *  ⚠ 남의 비공개 단위 이름은 싣지 않는다 — 단위는 이 사람에게 보이는 것(listUnitsFor 와 같은 권한)의 앱별 **개수**만.
+ *   합류자의 «팀이 쓰는 앱» 은 다른 구성원이 Claude 로 연결한 앱(구성원 Claude 커넥터 표 — 구성원이면 누구나 보는 표면과 같다)과
+ *   이 사람에게 보이는 구성원 경로 단위의 앱이다. 라이블리 수집기로 모으는 앱은 넣지 않는다 — 합류자가 Claude 에 연결하지 않아도
+ *   수집기가 모은다(넣으면 리브가 필요 없는 연결을 권한다).
+ */
+export async function connectTurnFacts(user: LivelyUser, flow: "connect" | "join"): Promise<{
+  isAdmin: boolean;
+  policy: "allowed" | "blocked" | "unknown";
+  connectors: { scan: { ok: boolean; error: string | null } | null; apps: Array<{ app: string; status: string }> };
+  collectApps: string[];
+  units: Array<{ app: string; candidate: number; active: number; excluded: number }>;
+  collectors: Array<{ label: string; preset_key: string; enabled: boolean }>;
+  teamApps: Array<{ app: string; members: number; units: number }>;
+}> {
+  const userId = String(user?.userId ?? "");
+  const { isAdmin } = await import("../principal.js");
+  const admin = isAdmin(user);
+  const { listMemberAiConnectors, memberAiConnectorsPolicy } = await import("../../org/store/member-ai-connectors.js");
+  const { listUnitsFor, connectorOfApp } = await import("../../org/collect/unit-store.js");
+  const { CLAUDE_COLLECT_APPS } = await import("../../org/collect/collect-plan.js");
+  const { listCollectors } = await import("../../org/store.js");
+  const [policy, mine, everyone, unitList, collectors] = await Promise.all([
+    memberAiConnectorsPolicy().catch(() => "unknown" as const),
+    listMemberAiConnectors({ memberId: userId }).catch(() => []),
+    flow === "join" ? listMemberAiConnectors({}).catch(() => []) : Promise.resolve([]),
+    listUnitsFor({ member: userId, isAdmin: admin }).then((r) => r.units).catch(() => []),
+    listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean }>),
+  ]);
+  const me = mine.find((m) => m.member_id === userId) ?? null;
+  const units = new Map<string, { app: string; candidate: number; active: number; excluded: number }>();
+  for (const u of unitList) {
+    const row = units.get(u.app) ?? { app: u.app, candidate: 0, active: 0, excluded: 0 };
+    row[u.state] += 1;
+    units.set(u.app, row);
+  }
+  const team = new Map<string, { app: string; members: number; units: number }>();
+  const key = (app: string): string => app.trim().toLowerCase();
+  if (flow === "join") {
+    for (const m of everyone) {
+      if (m.member_id === userId) continue;
+      for (const c of m.connectors) {
+        if (c.status !== "connected") continue;
+        const t = team.get(key(c.app)) ?? { app: c.app, members: 0, units: 0 };
+        t.members += 1;
+        team.set(key(c.app), t);
+      }
+    }
+    for (const u of unitList) {
+      if (u.route !== "member_ai" || u.state !== "active") continue;
+      const name = ("connector" in u && u.connector) ? u.connector : connectorOfApp(u.app);
+      const t = team.get(key(name)) ?? { app: name, members: 0, units: 0 };
+      t.units += 1;
+      team.set(key(name), t);
+    }
+  }
+  return {
+    isAdmin: admin,
+    policy,
+    connectors: { scan: me?.scan ? { ok: me.scan.ok, error: me.scan.error } : null, apps: (me?.connectors ?? []).map((c) => ({ app: c.app, status: c.status })) },
+    collectApps: Object.values(CLAUDE_COLLECT_APPS),
+    units: [...units.values()].sort((a, b) => a.app.localeCompare(b.app)),
+    collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled })),
+    teamApps: [...team.values()].sort((a, b) => b.members - a.members || b.units - a.units || a.app.localeCompare(b.app)),
+  };
 }
