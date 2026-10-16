@@ -13,7 +13,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { svcTile, presetSvcKey } from '../svc-icons.js';
 import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
 import {
-  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, boardPeople, buildBoard, canEditUnit, routeText, unitDisplayName, unitSummaryText, visibilityChoices, widens,
+  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, boardPeople, buildBoard, canEditUnit, routeText, unitDisplayName, unitReadText, unitSummaryText, visibilityChoices, widens,
   type Board, type BoardApp, type BoardCell, type UnitIn, type Visibility,
 } from '../lib/connect-board.js';
 
@@ -169,7 +169,7 @@ function unitNode(u: UnitIn, d: BoardData, nameOf: (id: string) => string, repai
       onchange: (e: Event) => { void setVisibility(u, (e.target as HTMLSelectElement).value as Visibility, repaint, onChanged); },
     }, ...choices.map((v) => el('option', { value: v, text: VIS_LABEL[v], ...(v === u.visibility ? { selected: 'selected' } : {}) })))
     : el('span', { text: VIS_LABEL[u.visibility] });
-  const read = u.read_at ? `${relTime(u.read_at)} 읽음` : (u.state === 'active' ? '아직 안 읽음' : '');
+  const read = unitReadText(u, relTime);
   const acts: HTMLElement[] = [];
   if (editable) {
     if (u.state !== 'active') acts.push(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: u.state === 'excluded' ? '다시 모으기' : '모으기',

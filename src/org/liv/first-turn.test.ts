@@ -16,7 +16,7 @@ import { buildFirstTurnPrompt, FIRST_TURN_DEFAULT_DAYS, FIRST_TURN_NAME_CAP, typ
 import { FIRST_READ_DAYS } from "../collect/collect-plan.js";
 
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
-  flow: "owner",
+  flow: "connect",
   displayName: "수아",
   othersCount: 0,
   isAdmin: true,
@@ -123,7 +123,7 @@ test("T7 단위는 앱별 개수만 싣는다 — 0건 앱은 빼고, 없으면 
 });
 
 test("T8 하지 말 것 — 입력과 무관하게 항상 들어간다(설치자·합류자 공통 + 갈래별)", () => {
-  for (const flow of ["owner", "join"] as const) {
+  for (const flow of ["connect", "join"] as const) {
     const p = buildFirstTurnPrompt(base({ flow }));
     assert.match(p, /커넥터 도구\(`mcp__claude_ai_\*`\)로 직접 읽어 옮겨 적지 마라/);
     assert.match(p, /외부 앱에 쓰거나 보내지 마라/);
@@ -147,4 +147,10 @@ test("T9 올린 자료 — 있을 때만 싣고, 제목은 상한까지 + «외 
   assert.match(p, /올려 둔 자료 200건 — 문서 200/);
   assert.match(p, new RegExp(`문서${FIRST_TURN_NAME_CAP - 1} … 외 ${200 - FIRST_TURN_NAME_CAP}건`));
   assert.doesNotMatch(p, new RegExp(`문서${FIRST_TURN_NAME_CAP}\\b`));
+});
+
+test("T10 워크스페이스 용도 — 알 때만 한 줄(모르면 줄이 없다 — «답하지 않음» 을 보고 첫마디에 용도부터 묻지 않게)", () => {
+  assert.doesNotMatch(buildFirstTurnPrompt(base()), /워크스페이스의 용도/);
+  assert.doesNotMatch(buildFirstTurnPrompt(base({ purpose: null })), /워크스페이스의 용도/);
+  assert.match(buildFirstTurnPrompt(base({ flow: "join", purpose: "회사·팀 업무" })), /- 이 워크스페이스의 용도: 회사·팀 업무/);
 });

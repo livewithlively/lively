@@ -4,6 +4,7 @@ import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
+import { withCollectDone } from "../liv/welcome-marks.js";   // #4213 T13 — 리브의 «처음 수집 끝» 표식(순수)
 
 // ── 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) ──────────────────────────────
 //  active → 비active(inactive·삭제) 전이는 **그 사람 이름으로 도는 것**(앱 동의·앱 세션·자격 리스)을 거둬야 한다.
@@ -649,9 +650,7 @@ export async function appendLivProfile(
   if (patch.welcome) next.welcome = patch.welcome;
   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호). 처음 설정을 끝낸 칸(welcome)이 있을 때만,
   //  처음 찍힌 시각을 지킨다(같은 표식을 두 번 찍어도 2턴 판정의 근거가 밀리지 않게). welcome 이 없으면 찍을 자리가 없다(무시).
-  if (patch.collectDone && next.welcome && !next.welcome.collect_done_at) {
-    next.welcome = { ...next.welcome, collect_done_at: new Date().toISOString() };
-  }
+  if (patch.collectDone && next.welcome) next.welcome = withCollectDone(next.welcome, new Date()) ?? next.welcome;
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).

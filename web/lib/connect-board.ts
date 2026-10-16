@@ -134,6 +134,15 @@ export function unitDisplayName(u: Pick<UnitIn, 'name' | 'kind' | 'access'>): st
   if (u.name) return u.name;
   return u.access === 'coarse' && PRIVATE_UNIT_KINDS.has(u.kind) ? hiddenUnitName(u.kind) : `이름 없는 ${KIND_LABEL[u.kind] ?? '곳'}`;
 }
+/**
+ * 마지막으로 읽은 때 — 다 보는 줄(full)만 말한다. 겉줄(coarse)에는 서버가 읽은 위치를 주지 않는다(UnitCoarseView) —
+ *  거기서 «아직 안 읽음» 이라고 하면 이미 읽은 수집기 단위를 안 읽었다고 지어낸다(격리 리뷰 2026-10-17).
+ */
+export function unitReadText(u: Pick<UnitIn, 'access' | 'read_at' | 'state'>, rel: (iso: string) => string): string {
+  if (u.access !== 'full') return '';
+  if (u.read_at) return `${rel(u.read_at)} 읽음`;
+  return u.state === 'active' ? '아직 안 읽음' : '';
+}
 /** 모으는 곳 요약 — 있는 상태만 센다(«모으는 중 0» 같은 말을 하지 않는다). 하나도 없으면 길이 있는지에 따라 말한다(있는 척하지 않는다). */
 export function unitSummaryText(a: Pick<BoardApp, 'units' | 'collectable' | 'collector'>): string {
   const u = a.units;

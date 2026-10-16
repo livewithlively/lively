@@ -128,7 +128,8 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "4. **수집기 범위를 손본다** — `org_collector_upsert`. 자료를 읽어 보니 잡담 채널·알림 봇이 섞여 있으면 뺀다. 주기는 이 사람의 반복 주기에 맞춘다.",
     //  #4213 T13 — 처음 연결 대화(liv-connect)가 Claude 커넥터로 모은 곳은 수집기가 아니라 수집 단위다. 단위의 설명·성격·활동량은
     //   «리브가 첫 수집 자료를 질적으로 읽은 뒤 쓴다»(설계 §3) — 1에서 표본을 읽은 이 턴이 그 자리다. [외부 앱 연결] 현황판이 보여 준다.
-    "   - **Claude 커넥터로 모으는 곳(수집 단위)은 `collect_unit_update` 로 손본다** — 1에서 읽어 보니 잡음만 오가는 곳은 `state:\"excluded\"`, 글이 올라오는 빈도에 맞춰 `interval_sec`. 그리고 모은 단위마다 1에서 읽은 자료로 `description`(이 단위에서 오가는 일 한두 문장)과 `meta`(character: 결정 많음·알림 봇 위주·잡담 위주 등 성격 / activity: 하루 평균 새 글 수 / context: 연결된 프로젝트·카테고리·자주 나오는 사람)를 채운다. 사람에게 묻지 않는다.",
+    "   - **Claude 커넥터로 모으는 곳(수집 단위)은 `collect_unit_update` 로 손본다** — 모은 단위마다 1에서 읽은 자료로 `description`(이 단위에서 오가는 일 한두 문장)과 `meta`(character: 결정 많음·알림 봇 위주·잡담 위주 등 성격 / activity: 하루 평균 새 글 수 / context: 연결된 프로젝트·카테고리·자주 나오는 사람)를 채우고, 글이 올라오는 빈도에 맞춰 `interval_sec` 를 맞춘다 — 이 셋은 묻지 않는다.",
+    "   - **모을지(`state`)와 공개범위(`visibility`)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다.** 읽어 보니 잡음만 오가는 곳이 있으면 빼자고 `me_liv_ask_choice` 로 묻는다.",
     "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` + `source_link_knowledge`). 자료가 모자라면 무엇이 모자란지 말한다.",
     "6. **남긴다** — 무엇을 왜 그렇게 세웠는지(카테고리를 그렇게 나눈 이유 포함) `me_liv_profile_set`(decision). 다음 세션의 리브가 오늘을 알아야 한다.",
     "",

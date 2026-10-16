@@ -18,7 +18,9 @@
 //   B15 단위 — 모으는 중 → 후보 → 뺌 순서 · 상태별 수
 //   R1~R5 연결 경로 말(routeText) — 이어 둔 사람이 지금 못 쓰면 «아무도 없다» 로 숨기지 않는다
 //   P1~P4 열(boardPeople) — 들어오는 사람(is_person)·활성만 · 미러된 사람 행은 빼고 · 보는 사람은 늘 · 명부를 못 읽으면 커넥터 기록으로
+//   T1~T4 읽은 때(unitReadText) — 겉줄엔 말하지 않는다(서버가 안 준다) · 다 보는 줄은 읽은 때 · 모으는 중인데 안 읽었으면 «아직 안 읽음»
 //   N1~N4 단위 이름(unitDisplayName) — «가려졌다» 는 서버가 가린 때(겉줄·비공개 종류)뿐 · S1~S4 모으는 곳 요약(unitSummaryText) — 있는 상태만
+//   K0~K1 계약 — 웹 판정(canEditUnit · visibilityChoices)이 서버 규칙(unit-plan canEditUnit · visibilityChangeError)과 모든 조합에서 같다
 //   E1~E3 고칠 수 있나(서버 canEditUnit 과 같은 규칙) · V1~V6 공개범위 선택지(서버 visibilityChangeError 와 같은 규칙) · W 넓히기 · A 모으는 사람 말
 import { strict as assert } from "node:assert";
 import { dirname, join } from "node:path";
@@ -164,6 +166,14 @@ eq(B.assigneeText(unit({ access: "coarse", assignee_kind: "member", state: "acti
   eq(B.boardPeople([], [], "", nameOf), [], "P4 빈 명부 · 보는 사람 모름 → 열 없음");
 }
 
+// T — 읽은 때
+{
+  const rel = (iso) => `«${iso}»`;
+  eq(B.unitReadText({ access: "coarse", state: "active", read_at: null }, rel), "", "T1 겉줄 — 읽은 위치를 안 받으니 말하지 않는다");
+  eq(B.unitReadText({ access: "full", state: "active", read_at: null }, rel), "아직 안 읽음", "T2 다 보는 줄 · 모으는 중 · 안 읽음");
+  eq(B.unitReadText({ access: "full", state: "candidate", read_at: "2026-10-17T00:00:00Z" }, rel), "«2026-10-17T00:00:00Z» 읽음", "T3 읽은 때");
+  eq(B.unitReadText({ access: "full", state: "candidate", read_at: null }, rel), "", "T4 후보 · 안 읽음 — 말할 것 없음");
+}
 // N — 단위 이름
 eq(B.unitDisplayName({ name: "#dev", kind: "channel", access: "full" }), "#dev", "N1 이름이 있으면 그 이름");
 eq(B.unitDisplayName({ name: null, kind: "private_channel", access: "coarse" }), "이름이 가려진 비공개 채널", "N2 겉줄 · 비공개 종류 → 가려졌다");
@@ -175,5 +185,33 @@ eq(sum({ candidate: 1 }), "후보 1", "S1 있는 상태만 — «모으는 중 0
 eq(sum({ active: 2, candidate: 1, excluded: 3 }), "모으는 중 2 · 후보 1 · 뺌 3", "S2 셋 다");
 eq(sum({}, { collectable: true }), "아직 찾은 곳이 없어요", "S3 길은 있는데 찾은 곳 없음");
 eq(sum({}), "이 앱은 아직 모으는 길을 준비 중이에요", "S4 길도 없음");
+
+// K — 계약: 웹 판정 ≡ 서버 규칙(경로 3 × 공개범위 3 × 주인 3 × 나·남의 상태 4×4 × 관리자 2). 격리 리뷰(2026-10-17)의 점검 스크립트를 시험으로 옮겼다.
+//  ⚠ 서버 쪽이 정본이다 — 여기서 어긋나면 웹이 서버가 거절할 선택지를 보이거나(사람이 골랐다가 403·409 를 본다) 할 수 있는 것을 숨긴다.
+{
+  const S = await import(join(root, "dist/org/collect/unit-plan.js"));
+  ok(typeof S.canEditUnit === "function" && typeof S.visibilityChangeError === "function", "K0 [배선] 서버 규칙 둘을 불러왔다");
+  const mk = (id, st) => st === "absent" ? null : ({ member_id: id, verified: st !== "reported", active: st !== "inactive" });
+  let n = 0;
+  const bad = [];
+  for (const route of ["member_ai", "lively_collector", "liv_direct"]) for (const v of ["me", "viewers", "all"]) for (const owner of [null, "me", "other"])
+    for (const meSt of ["absent", "reported", "verified", "inactive"]) for (const otSt of ["absent", "reported", "verified", "inactive"]) for (const isAdmin of [false, true]) {
+      if ((v === "me") !== !!owner) continue;          // 주인은 «나만» 일 때만 있다
+      const members = [mk("me", meSt), mk("other", otSt)].filter(Boolean);
+      const serverU = { route, members, visibility: v, owner };
+      const webU = unit({ route, visibility: v, owner_member: owner, candidates: members.map((m) => ({ member_id: m.member_id, verified: m.verified, active: m.active })) });
+      const canEdit = S.canEditUnit({ route, members }, "me", isAdmin);
+      if (B.canEditUnit(webU, "me", isAdmin) !== canEdit) bad.push({ kind: "canEdit", route, v, owner, meSt, otSt, isAdmin });
+      const choices = B.visibilityChoices(webU, "me", isAdmin);
+      for (const next of ["me", "viewers", "all"]) {
+        n++;
+        if (next === v) continue;                          // 웹은 지금 값을 늘 넣는다(칸이 비지 않게)
+        const serverOk = canEdit && S.visibilityChangeError(serverU, next, "me", isAdmin) == null;
+        if (serverOk !== choices.includes(next)) bad.push({ route, v, owner, meSt, otSt, isAdmin, next, serverOk });
+      }
+    }
+  ok(n > 300, `K0 [배선] 조합을 실제로 돌았다(${n})`);
+  eq(bad.slice(0, 5), [], `K1 웹·서버 판정 불일치 0 — ${bad.length}건`);
+}
 
 console.log(`connect-board: ${pass} passed`);

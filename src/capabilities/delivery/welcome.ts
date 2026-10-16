@@ -561,13 +561,10 @@ export const welcomeCapabilities: Capability[] = [
       const priorSession = priorWelcome?.session_id ?? null;
       //  (#4213 T13) 리브 1턴의 갈래 — 설치자는 «처음 연결»(connect), 합류자는 «빠진 앱 연결»(join, 2턴 없음). second-turn.ts 가 읽는다.
       const flow: "connect" | "join" = joining.is_join ? "join" : "connect";
-      //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식을 지킨다 — welcome 은 통째로
-      //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기).
-      const keep = priorSession && priorWelcome ? {
-        collect_done_at: priorWelcome.collect_done_at ?? null, distill_at: priorWelcome.distill_at ?? null,
-        distill_gave_up_at: priorWelcome.distill_gave_up_at ?? null, distill_note: priorWelcome.distill_note ?? null,
-        distill_reopened_at: priorWelcome.distill_reopened_at ?? null,
-      } : {};
+      //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식과 갈래를 지킨다 — welcome 은 통째로
+      //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기). 판정은 org/liv/welcome-marks.ts.
+      const { carryWelcomeProgress } = await import("../../org/liv/welcome-marks.js");
+      const keep = carryWelcomeProgress(priorWelcome);
       const profile = await appendLivProfile(userId, {
         welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, flow, ...keep },
         onboarded: true,
@@ -583,7 +580,7 @@ export const welcomeCapabilities: Capability[] = [
       //   합류자의 리브는 «팀이 쓰는 앱 중 그 사람 Claude 에 빠진 것만 연결» 하는 짧은 대화다(flow 'join'). 그 결정이 막으려던 것 —
       //   신입의 처음 설정이 팀의 서랍·수집·정리 규칙을 바꾸는 것 — 은 그대로 막는다: 팀 구조를 만드는 블록은 위에서 주인만 돌고,
       //   합류자 갈래엔 2턴(증류 지시)이 없으며(second-turn.ts), 1턴이 범위·공개범위·서랍을 건드리지 말라고 못박는다(first-turn.ts).
-      const liv = await kickoffLivAfterWelcome(user, { priorSession, flow });
+      const liv = await kickoffLivAfterWelcome(user, { priorSession, flow, purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
       const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
       return { ok: true, created, skipped, welcome, liv, joining: { is_join: joining.is_join, via: joining.via } };
     }, false, {
@@ -865,6 +862,8 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
   priorSession: string | null;
   /** 1턴 갈래 — connect(설치자의 처음 연결) · join(합류자의 빠진 앱 연결). me_welcome_apply 가 서버 판정(joining)으로 정한다. */
   flow: "connect" | "join";
+  /** 워크스페이스 용도(STAGE_PURPOSE 의 자리 이름) — 알면. 1턴 사실 한 줄. */
+  purpose?: string | null;
 }): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
   const userId = user?.userId;
   if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
@@ -895,8 +894,9 @@ export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
     }
     const facts = await connectTurnFacts(user, o.flow);
     const turnInput = {
-      flow: o.flow === "join" ? "join" as const : "owner" as const,
+      flow: o.flow,
       displayName: snap.profile.display_name,
+      purpose: o.purpose ?? null,
       othersCount: snap.joining.others_count,
       isAdmin: facts.isAdmin,
       policy: facts.policy,
@@ -953,40 +953,16 @@ export async function connectTurnFacts(user: LivelyUser, flow: "connect" | "join
     listUnitsFor({ member: userId, isAdmin: admin }).then((r) => r.units).catch(() => []),
     listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean }>),
   ]);
-  const me = mine.find((m) => m.member_id === userId) ?? null;
-  const units = new Map<string, { app: string; candidate: number; active: number; excluded: number }>();
-  for (const u of unitList) {
-    const row = units.get(u.app) ?? { app: u.app, candidate: 0, active: 0, excluded: 0 };
-    row[u.state] += 1;
-    units.set(u.app, row);
-  }
-  const team = new Map<string, { app: string; members: number; units: number }>();
-  const key = (app: string): string => app.trim().toLowerCase();
-  if (flow === "join") {
-    for (const m of everyone) {
-      if (m.member_id === userId) continue;
-      for (const c of m.connectors) {
-        if (c.status !== "connected") continue;
-        const t = team.get(key(c.app)) ?? { app: c.app, members: 0, units: 0 };
-        t.members += 1;
-        team.set(key(c.app), t);
-      }
-    }
-    for (const u of unitList) {
-      if (u.route !== "member_ai" || u.state !== "active") continue;
-      const name = ("connector" in u && u.connector) ? u.connector : connectorOfApp(u.app);
-      const t = team.get(key(name)) ?? { app: name, members: 0, units: 0 };
-      t.units += 1;
-      team.set(key(name), t);
-    }
-  }
+  //  줄이기는 순수 함수가 한다(org/liv/connect-facts.ts — 시험 있음): 단위는 앱별 개수만 · 팀 앱은 남이 연결한 것과 보이는 구성원 경로 단위 수만.
+  const { myConnectorFacts, teamAppsFor, unitCountsByApp } = await import("../../org/liv/connect-facts.js");
+  const factUnits = unitList.map((u) => ({ app: u.app, state: u.state, route: u.route, connector: "connector" in u ? u.connector ?? null : null }));
   return {
     isAdmin: admin,
     policy,
-    connectors: { scan: me?.scan ? { ok: me.scan.ok, error: me.scan.error } : null, apps: (me?.connectors ?? []).map((c) => ({ app: c.app, status: c.status })) },
+    connectors: myConnectorFacts(userId, mine),
     collectApps: Object.values(CLAUDE_COLLECT_APPS),
-    units: [...units.values()].sort((a, b) => a.app.localeCompare(b.app)),
+    units: unitCountsByApp(factUnits),
     collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled })),
-    teamApps: [...team.values()].sort((a, b) => b.members - a.members || b.units - a.units || a.app.localeCompare(b.app)),
+    teamApps: flow === "join" ? teamAppsFor(userId, everyone, factUnits, connectorOfApp) : [],
   };
 }

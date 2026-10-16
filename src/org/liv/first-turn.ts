@@ -22,12 +22,14 @@
 //  · 사람 이름을 안 알려 줬으면(이름 질문 건너뜀) 이름을 지어 부르지 않는다.
 //  · 남의 비공개 단위 이름은 싣지 않는다 — 단위는 앱별 **개수**만(합류자의 «팀이 쓰는 앱» 도 앱 이름·수만).
 
-/** 이 대화의 갈래 — 워크스페이스를 연 사람(owner)인가, 초대로 들어온 사람(join)인가. 판정은 서버(me_welcome_apply 의 joining)가 한다. */
-export type FirstTurnFlow = "owner" | "join";
+/** 이 대화의 갈래 — 워크스페이스를 연 사람의 «처음 연결»(connect)인가, 초대로 들어온 사람(join)인가. 판정은 서버(me_welcome_apply 의 joining)가 하고, 이름은 welcome.flow 와 한 벌이다. */
+export type FirstTurnFlow = "connect" | "join";
 
 export interface FirstTurnInput {
   flow: FirstTurnFlow;
   displayName: string | null;                       // 처음 설정에서 답한 이름(건너뛰었으면 null)
+  /** 이 워크스페이스의 용도(알면 — 먼저 정한 사람의 답을 합류자가 물려받는다 · T13 처음 설정은 묻지 않는다). 모을 범위를 가늠하는 단서. 모르면 null. */
+  purpose?: string | null;
   /** 이 워크스페이스에 나 말고 먼저 있는 사람 수(운영 계정 제외). 초대 제안의 근거. */
   othersCount: number;
   /** 관리자인가 — 초대·라이블리 수집기(리브가 직접 연결)는 관리자 몫이다. */
@@ -77,6 +79,8 @@ function connectorLine(i: FirstTurnInput): string {
 function factsBlock(i: FirstTurnInput): string {
   const lines: string[] = [];
   lines.push(`- 이름: ${i.displayName ? i.displayName : "(답하지 않음 — 이름을 지어 부르지 마라)"}`);
+  //  용도는 알 때만 — 모르면 줄 자체를 안 싣는다(«답하지 않음» 을 보고 리브가 첫마디에 용도부터 묻지 않게. 필요하면 일하다 묻는다).
+  if (i.purpose) lines.push(`- 이 워크스페이스의 용도: ${i.purpose}`);
   lines.push(i.flow === "join"
     ? `- 이 사람은 **초대로 들어온 사람**이다. 먼저 있는 구성원 ${n(i.othersCount)}명.`
     : `- 이 사람이 이 워크스페이스를 열었다. ${i.othersCount > 0 ? `먼저 있는 다른 구성원 ${n(i.othersCount)}명.` : "아직 혼자다."}${i.isAdmin ? " 관리자다." : " 관리자가 아니다 — 초대·라이블리 수집기는 꺼내지 마라."}`);
@@ -90,7 +94,7 @@ function factsBlock(i: FirstTurnInput): string {
     ? `- 라이블리 수집기(켜진 것) ${on.length}개: ${on.map((c) => `${c.label}(${c.preset_key})`).join(" · ")} — 이 앱들은 수집기가 1순위로 모은다. 같은 대화를 Claude 커넥터로 또 모으지 않는다(서버가 가린다).`
     : "- 라이블리 수집기: 켜진 것 없음(꺼진 빈 칸이 보여도 그건 연결이 아니다).");
 
-  if (i.flow === "owner") {
+  if (i.flow === "connect") {
     const u = i.units.filter((x) => x.candidate + x.active + x.excluded > 0);
     lines.push(u.length
       ? `- 수집 단위(이 사람에게 보이는 것): ${u.map((x) => `${x.app} 후보 ${x.candidate} · 모으는 중 ${x.active} · 뺀 것 ${x.excluded}`).join(" / ")}`
@@ -113,7 +117,7 @@ const OWNER_STEPS = [
   "1. 인사 한두 문장과 지금부터 할 일 한 줄(«Claude 에 연결해 두신 앱에서 일 자료를 모아 정리하겠습니다»). 설명은 길게 하지 않는다.",
   "2. `member_ai_connectors_refresh` 로 이 사람 Claude 에 연결된 앱을 다시 잰다. 모을 수 있는 앱 가운데 연결된 것을 «여기서 모을게요» 로 말한다.",
   "3. 일 자료가 쌓이는 앱 중 Claude 에 빠진 것이 있으면 [Claude에서 연결]을 한 걸음씩 안내하고(`liv-connect` §2), 연결했다고 하면 다시 잰다.",
-  "4. 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 를 끝날 때까지 → `collect_units {app}` 로 찾은 곳(단위)을 본다. 한 사람에 한 번에 하나라 앱을 차례로 돌린다.",
+  "4. 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 를 끝날 때까지(`state` 가 done 이고 `ingest.state` 가 done·failed — 저장까지 끝나야 단위가 보인다) → `collect_units {app}` 로 찾은 곳(단위)을 본다. 한 사람에 한 번에 하나라 앱을 차례로 돌린다.",
   `5. 무엇을 모으고 무엇을 뺄지, 누구에게 보일지(공개범위), 처음에 얼마나 거슬러 읽을지(기본 최근 ${FIRST_TURN_DEFAULT_DAYS}일)를 네가 판단해 제안하고 \`me_liv_ask_choice\` 로 확인받은 뒤 \`collect_unit_update\` 로 반영한다.`,
   "6. `collect_claude_run {mode:\"collect\"}` 로 처음 수집 → 첫 보고(찾은 것 · 모은 것 · 뺀 것) → 모은 자료 속 링크로 찾은 다른 툴의 연결 제안 → (관리자면) 팀원 초대 제안.",
   "7. 끝나면 `me_liv_profile_set {collect_done:true}` 를 찍는다 — 그러면 서랍(카테고리)과 정리 규칙을 세우는 작업이 이어서 온다고 알린다.",
@@ -122,7 +126,7 @@ const JOIN_STEPS = [
   "1. 인사 한두 문장과 지금 할 일 한 줄(«팀이 쓰는 앱 중 Claude 에 빠진 것만 연결하면 끝납니다»).",
   "2. `member_ai_connectors_refresh` 로 이 사람 Claude 에 연결된 앱을 다시 잰다.",
   "3. 위 «팀이 쓰는 앱» 가운데 이 사람 Claude 에 **없는 것만** [Claude에서 연결]을 한 걸음씩 안내하고(`liv-connect` §2), 연결했다고 하면 다시 잰다. 팀이 안 쓰는 앱은 권하지 않는다.",
-  "4. 연결된 팀 앱 가운데 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 로 끝날 때까지. 그래야 이 사람이 볼 수 있는 팀 대화·페이지가 이 사람에게도 열린다.",
+  "4. 연결된 팀 앱 가운데 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 로 끝날 때까지(`ingest.state` 까지). 그래야 이 사람이 볼 수 있는 팀 대화·페이지가 이 사람에게도 열린다.",
   "5. 무엇이 함께 보이게 됐는지 짧게 보고하고 끝낸다.",
 ];
 

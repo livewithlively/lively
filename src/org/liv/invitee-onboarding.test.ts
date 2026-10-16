@@ -199,7 +199,7 @@ test("C4 «하는 일»·용도 장면은 주인 문구뿐이고, 합류자가 �
 
 // ── 리브 1턴 — 갈래가 섞이지 않는다(T13: 주인은 «처음 연결», 합류자는 «빠진 앱 연결») ──────────────────
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
-  flow: "owner", displayName: "수아", othersCount: 0, isAdmin: true, policy: "allowed",
+  flow: "connect", displayName: "수아", othersCount: 0, isAdmin: true, policy: "allowed",
   connectors: { scan: null, apps: [] }, collectApps: ["Slack"], units: [], collectors: [], teamApps: [],
   uploads: { total: 3, kinds: [], names: ["a", "b", "c"] }, aiHarnesses: ["claude"], harness: "claude", ...over,
 });

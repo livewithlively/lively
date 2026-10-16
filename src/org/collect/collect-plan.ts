@@ -36,6 +36,18 @@ export function firstReadDaysOf(meta: unknown): number | null {
   const v = meta && typeof meta === "object" ? (meta as Record<string, unknown>).first_days : undefined;
   return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= FIRST_READ_DAYS_MAX ? v : null;
 }
+/**
+ * (순수) 쓰는 자리의 검사 — meta 에 first_days 를 넣었는데 쓸 수 없는 값이면 그 사유. 없거나 null(지우기)이면 null.
+ *  읽는 자리(firstReadDaysOf)는 못 쓰는 값을 조용히 기본값으로 읽는다 — 쓰는 쪽이 모델이라, 거절하지 않으면 리브는
+ *  «90일로 정했다» 고 믿는데 실제로는 14일을 읽는다(격리 리뷰 2026-10-17). 그래서 쓸 때 400 으로 돌려준다.
+ */
+export function firstDaysError(meta: unknown): string | null {
+  if (!meta || typeof meta !== "object" || !Object.prototype.hasOwnProperty.call(meta, "first_days")) return null;
+  const v = (meta as Record<string, unknown>).first_days;
+  if (v === null) return null;
+  if (firstReadDaysOf(meta) !== null) return null;
+  return `meta.first_days 는 1~${FIRST_READ_DAYS_MAX} 사이의 정수(일)여야 합니다 — 받은 값 ${String(JSON.stringify(v) ?? v).slice(0, 40)}`;
+}
 /** 한 판이 읽는 구간의 최대(초) — 따라잡을 때 한 번에 이만큼씩. 못 다 읽으면 반씩 줄어 MIN_WINDOW_SEC 까지. */
 export const SLACK_WINDOW_SEC = 7 * 86400;
 export const GMAIL_WINDOW_SEC = 86400;

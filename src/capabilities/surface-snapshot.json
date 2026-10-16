@@ -3962,7 +3962,7 @@
   "rest": [
    "GET /api/ui/collect/claude-runs/:id"
   ],
-  "input_hash": "661c0f7e0ded54fd"
+  "input_hash": "2c527a1ea147af10"
  },
  {
   "name": "collect_claude_run_stats",

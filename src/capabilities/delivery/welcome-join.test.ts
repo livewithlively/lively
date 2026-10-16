@@ -178,7 +178,8 @@ test("A1 ★반영 — 합류자면 갈래·증류기·레인·묶음을 부르�
   }
   //  (#4213 T13, 상민님 2026-10-15 To-Be §7) 합류자에게도 리브를 띄운다 — 갈래는 서버 판정으로만 정한다(화면 값 아님).
   assert.match(HANDLER, /const flow: "connect" \| "join" = joining\.is_join \? "join" : "connect";/, "리브 갈래를 서버 판정에서 정하지 않는다");
-  assert.match(HANDLER, /const liv = await kickoffLivAfterWelcome\(user, \{ priorSession, flow \}\);/, "리브 킥오프가 갈래 없이 불린다(또는 합류자만 건너뛴다)");
+  assert.match(HANDLER, /const liv = await kickoffLivAfterWelcome\(user, \{ priorSession, flow, purpose: stage \? STAGE_PURPOSE\[stage\] \?\? stage : null \}\);/,
+    "리브 킥오프가 갈래 없이 불린다(또는 합류자만 건너뛴다 · 용도를 안 싣는다)");
   assert.match(HANDLER, /welcome: \{[^}]*\bflow\b/, "완료 표식에 갈래가 안 남는다 — 2턴 판정이 합류자를 못 가린다");
   assert.equal(HANDLER.split("kickoffLivAfterWelcome(").length, 2, "킥오프를 부르는 자리가 하나가 아니다");
   assert.match(HANDLER, /joining: \{ is_join: joining\.is_join, via: joining\.via \}/, "화면이 마무리 문구를 가를 판정을 응답에 안 싣는다");
@@ -201,17 +202,16 @@ test("A2 (T13) 리브 1턴의 갈래는 반영이 넘긴 flow 하나로만 갈�
   const FIRST = strip(read("../../org/liv/first-turn.ts"));
   assert.doesNotMatch(FIRST, /joining|is_join/, "1턴이 합류 사실(joining)을 직접 읽는다 — 갈래는 반영이 정한 flow 하나여야 한다");
   const KICK = strip(SRC.slice(SRC.indexOf("export async function kickoffLivAfterWelcome")));
-  assert.match(KICK, /flow: o\.flow === "join" \? "join" as const : "owner" as const,/, "킥오프가 반영의 갈래를 1턴에 안 넘긴다");
+  assert.match(KICK, /flow: o\.flow,/, "킥오프가 반영의 갈래를 1턴에 안 넘긴다(갈래 이름은 welcome.flow 와 한 벌 — connect · join)");
   assert.match(KICK, /planLivKickoff\(o\.priorSession, usable, "claude"\)/, "«처음 연결» 대화가 로그인된 claude 를 먼저 쓰지 않는다");
 });
 
-test("A4 (T13) 같은 리브 세션을 다시 쓰는 반영은 그 세션에 찍힌 진행 표식(처음 수집 끝·증류 지시·포기)을 지우지 않는다", () => {
+test("A4 (T13) 같은 리브 세션을 다시 쓰는 반영은 그 세션의 진행 표식·갈래를 옮겨 싣는다(판정은 welcome-marks — 값 시험은 welcome-marks.test)", () => {
   const start = CODE.indexOf('restRead("me_welcome_apply"');
   const HANDLER = CODE.slice(start, CODE.indexOf("\n];", start));
-  for (const k of ["collect_done_at", "distill_at", "distill_gave_up_at", "distill_note", "distill_reopened_at"]) {
-    assert.match(HANDLER, new RegExp(`${k}: priorWelcome\\.${k} \\?\\? null`), `다시 반영하면 ${k} 가 사라진다 — 2턴이 같은 세션에 또 나간다`);
-  }
-  assert.match(HANDLER, /const keep = priorSession && priorWelcome \?/, "새 세션을 여는 반영에도 옛 표식을 옮긴다(옮기는 조건이 없다)");
+  assert.match(HANDLER, /const keep = carryWelcomeProgress\(priorWelcome\);/, "반영이 옛 진행 표식을 옮기는 판정을 안 거친다");
+  //  옮긴 값이 새 갈래보다 뒤에 와야 이긴다(세션을 다시 쓰면 그 세션의 갈래 그대로).
+  assert.match(HANDLER, /welcome: \{[^}]*\bflow, \.\.\.keep \}/, "옮긴 갈래·표식이 새 값에 덮인다(순서)");
 });
 
 test("U1 업로드 — 개인 루트 업로드를 «올린 사람만» 으로 잠그지 않는다 (#4007)", () => {

@@ -15,6 +15,7 @@ import {
   LISTING_CAP, UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
 } from "../org/collect/unit-store.js";
 import { currentTenant } from "../org/tenant-context.js";
+import { firstDaysError } from "../org/collect/collect-plan.js";
 import { axisOn } from "../v6/visibility-axes.js";
 import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, UNIT_VISIBILITIES, type CollectRoute, type UnitState, type UnitVisibility } from "../org/collect/unit-plan.js";
 
@@ -163,6 +164,8 @@ const collectUnitUpdate: Capability = {
     } }],
   },
   handler: async (input: UpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
+    const daysErr = firstDaysError(input.meta);
+    if (daysErr) throw new HttpError(400, daysErr);
     const unit = await updateUnit(input.id, {
       state: input.state as UnitState | undefined, visibility: input.visibility as UnitVisibility | undefined, confirm: input.confirm,
       interval_sec: input.interval_sec, description: input.description,

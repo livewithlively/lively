@@ -395,5 +395,8 @@ test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시
   const p = buildSecondTurnPrompt({ displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 5 });
   assert.match(p, /`collect_units`\(Claude 커넥터로 모으는 곳 — 수집 단위\)/);
   assert.match(p, /`collect_unit_update` 로 손본다/);
+  //  (격리 리뷰 2026-10-17) 사람이 처음 연결 대화에서 정한 모을지·공개범위를 2턴이 묻지 않고 뒤집지 않는다 — 설명·메타·주기만 묻지 않는다.
+  assert.match(p, /모을지\(`state`\)와 공개범위\(`visibility`\)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다/);
+  assert.doesNotMatch(p, /`state:\"excluded\"`/, "2턴이 묻지 않고 단위를 빼라는 지시가 남았다");
   assert.match(p, /`description`\(이 단위에서 오가는 일/);
 });

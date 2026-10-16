@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import {
   CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, FIRST_READ_DAYS_MAX, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
-  UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstReadDaysOf, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
+  UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstDaysError, firstReadDaysOf, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
   unitSince, unitWindow, type AssignedLike, type PlannedUnit,
 } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
@@ -383,6 +383,14 @@ t("D 처음 기간 읽기 — 1~365 정수만, 그 밖은 기본값(null)", () =
     [{ first_days: 366 }, null], [{ first_days: 7.5 }, null], [{ first_days: "30" }, null], [{}, null], [null, null], [undefined, null],
   ];
   for (const [meta, want] of cases) assert.equal(firstReadDaysOf(meta), want, JSON.stringify(meta));
+});
+t("D′ 처음 기간 쓰기 검사 — 쓸 수 없는 값은 거절(조용히 기본값으로 읽히지 않게) · 없음·null(지우기)·범위 안은 통과", () => {
+  for (const ok of [undefined, null, {}, { context: "x" }, { first_days: null }, { first_days: 1 }, { first_days: 90 }, { first_days: 365 }]) {
+    assert.equal(firstDaysError(ok), null, `통과해야 한다: ${JSON.stringify(ok)}`);
+  }
+  for (const bad of [{ first_days: 0 }, { first_days: 366 }, { first_days: 7.5 }, { first_days: "30" }, { first_days: -1 }, { first_days: true }]) {
+    assert.match(String(firstDaysError(bad)), /1~365 사이의 정수/, `거절해야 한다: ${JSON.stringify(bad)}`);
+  }
 });
 t("U 처음 기간 — 위치 없는 단위만 그만큼 거슬러 읽고, 읽은 위치·수집기 마지막 글이 이긴다", () => {
   assert.equal(unitSince(U({ first_days: 30 }), NOW), `${NOW_SEC - 30 * 86400}.000000`, "U1 슬랙 30일");
