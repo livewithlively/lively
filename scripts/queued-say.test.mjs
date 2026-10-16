@@ -23,7 +23,13 @@ try {
   execFileSync(path.join(distRoot, "node_modules/.bin/tsc"),
     [path.join(root, "web/lib/queued-say.ts"), "--outDir", tmp, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
     { stdio: "inherit" });
-  const { queuedSay, sayIdOf } = await import(path.join(tmp, "queued-say.js"));
+  const { queuedSay, sayIdOf, sayOrderTs } = await import(path.join(tmp, "queued-say.js"));
+  //  Q19 계약용 — 서버 얇은 판(src/terminal/harness-io/chat-line.ts thinLine)도 같은 tmp 로(그 파일은 import 가 없다).
+  const tmpSrv = path.join(tmp, "srv");
+  execFileSync(path.join(distRoot, "node_modules/.bin/tsc"),
+    [path.join(root, "src/terminal/harness-io/chat-line.ts"), "--outDir", tmpSrv, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
+    { stdio: "inherit" });
+  const { thinLine } = await import(path.join(tmpSrv, "chat-line.js"));
 
   //  실측 모양(2.1.301 — 이 맥미니 기록): 줄 timestamp = attachment.timestamp = 친 때. source_uuid 는 그 말의 정체성.
   const QC = (att, extra = {}) => ({ type: "attachment", uuid: "line-u1", timestamp: "2026-10-16T14:30:00.740Z", isSidechain: false,
@@ -94,6 +100,37 @@ try {
   // ── Q17 — 출처가 객체가 아니다 ─────────────────────────────────────────────────
   ok(queuedSay(QC({ prompt: "이상한 출처", commandMode: "prompt", origin: "human" })) === null, "Q17 origin 이 문자열(모르는 꼴) → 아니다(사람 말로 단정하지 않는다)");
   ok(said(QC({ prompt: "출처가 null", commandMode: "prompt", origin: null })) === "출처가 null", "Q17b origin null 은 «없음» 과 같다 → 사람 말");
+  // ── Q18 — 정렬 시각(sayOrderTs): 줄 시각은 «친 때» 라 앞선 줄보다 이를 수 있다 ─────────────
+  const T = (iso) => Date.parse(iso);
+  ok(sayOrderTs("2026-10-16T14:30:00.740Z", T("2026-10-16T14:30:04.261Z")) === "2026-10-16T14:30:04.261Z",
+    "Q18a 앞선 줄이 더 늦으면(실측 모양 — 친 뒤 도구 결과가 먼저 적힘) 앞선 줄의 시각");
+  ok(sayOrderTs("2026-10-16T14:30:05.000Z", T("2026-10-16T14:30:04.261Z")) === "2026-10-16T14:30:05.000Z", "Q18b 제 시각이 더 늦으면 제 시각 그대로(같은 글자)");
+  ok(sayOrderTs("2026-10-16T14:30:04.261Z", T("2026-10-16T14:30:04.261Z")) === "2026-10-16T14:30:04.261Z", "Q18c 같으면 제 시각(경계)");
+  ok(sayOrderTs("2026-10-16T14:30:00.740Z", -Infinity) === "2026-10-16T14:30:00.740Z" && sayOrderTs("2026-10-16T14:30:00.740Z", NaN) === "2026-10-16T14:30:00.740Z",
+    "Q18d 앞선 시각을 모르면(-Infinity · NaN — 창의 첫 줄) 제 시각");
+  ok(sayOrderTs("깨진 시각", T("2026-10-16T14:30:04.261Z")) === "2026-10-16T14:30:04.261Z" && sayOrderTs(undefined, T("2026-10-16T14:30:04.261Z")) === "2026-10-16T14:30:04.261Z",
+    "Q18e 제 시각을 못 읽으면 앞선 시각");
+  ok(sayOrderTs(undefined, -Infinity) === undefined && sayOrderTs("깨진 시각", NaN) === "깨진 시각", "Q18f 둘 다 못 읽으면 원래 값(지어내지 않는다)");
+  // ── Q19 — 계약: 서버 얇은 판(thinLine)을 거쳐도 화면 판정이 같다(타임라인 되감기가 그 판을 읽는다) ─────────
+  const CONTRACT = [
+    ["사람 · 문자열", QC(HUMAN)],
+    ["사람 · 블록 배열", QC({ ...HUMAN, prompt: [{ type: "text", text: "이 화면" }, { type: "image", source: { data: "AAAA" } }, { type: "text", text: "봐 줘" }] })],
+    ["출처 없는 옛 줄", QC({ prompt: "옛 판에서 친 말", commandMode: "prompt" })],
+    ["모드 없는 옛 줄", QC({ prompt: "모드도 없는 옛 줄" })],
+    ["auto-continuation", QC({ prompt: "Implement the following plan: …", commandMode: "prompt", origin: { kind: "auto-continuation" } })],
+    ["auto-continuation · 메타", QC({ prompt: "Your usage limit has reset", commandMode: "prompt", origin: { kind: "auto-continuation" }, isMeta: true })],
+    ["작업 알림", QC({ prompt: NOTE, commandMode: "task-notification", origin: { kind: "task-notification" } })],
+    ["하위 에이전트 보고", QC({ prompt: "<agent-message>보고</agent-message>", commandMode: "prompt", origin: { kind: "peer" }, isMeta: true })],
+    ["코디네이터", QC({ prompt: "코디네이터 지시", commandMode: "prompt", origin: { kind: "coordinator" } })],
+    ["셸 모드", QC({ prompt: "ls", commandMode: "bash", origin: { kind: "human" } })],
+    ["빈 글", QC({ ...HUMAN, prompt: "  " })],
+  ];
+  for (const [name, raw] of CONTRACT) {
+    const before = queuedSay(raw);
+    const thin = thinLine(raw);
+    const after = thin ? queuedSay(thin) : null;
+    ok(JSON.stringify(after) === JSON.stringify(before), `Q19 계약 · ${name} — 얇은 판을 거쳐도 같은 판정·같은 글·같은 정체성`, JSON.stringify({ before, after }));
+  }
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

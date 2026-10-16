@@ -18,7 +18,9 @@
 //   R13 B1 · B2 를 보냄 → B1 은 전달 실패 · B2 가 먼저 들어감 → B2 는 B1 위로 · B1 은 맨 아래에 실패로 남는다 · = 새로 연 화면
 //   R14 도는 중 보낸 말이 전달 안 됨 → [다시 보내기] 를 눌러도 하던 턴의 도는 표시를 뺏지 않는다
 //   R15 쉬는 중 보낸 말(지금 턴)이 전달 안 됨 → [지우기] → 그 뒤 온 답은 지운 턴이 아니라 화면에 선다
-//   R16 쉬는 중 슬래시 명령(`/compact`)을 보냄 → 기록에 사람 말로 안 남는다 → 붙들지 않는다: 보낸 자리에 남고 압축 구분선·답은 그 아래
+//   R16 쉬는 중 슬래시 명령(`/compact`)을 보냄 → 기록에 사람 말로 안 남는다 → 붙들지 않는다: 보낸 자리에 남고 압축 구분선·답은 그 아래 ·
+//       그 뒤 다른 턴이 돌아도 그 말풍선에 «다음 틈» 을 달지 않는다
+//   R17 처음 열 때 마지막 줄이 몇 분 전에 친 끼워 넣기 줄(줄 시각 = 친 때) · 하네스 상태 보고 없음 → «오래 조용함» 으로 마감하지 않는다(도는 표시가 그 말 아래)
 //
 //  장면·가짜 서버는 queued-say-harness.mjs 한 벌(두 시험 파일이 묶음 하나씩 돌린다). 세션 화면은 실제 모듈을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
@@ -92,6 +94,12 @@ check(r15.clicked && JSON.stringify(r15.acts) === JSON.stringify(["discard"]) &&
 const r16 = R.r16 || {};
 check(r16.order && r16.order.indexOf("/compact") >= 0 && r16.order.indexOf("/compact") < r16.order.indexOf("divider") && r16.after && r16.after.ask === null,
   "R16 슬래시 명령(기록에 사람 말로 안 남는다)은 붙들지 않는다 — 보낸 자리에 남고 그 뒤의 압축 구분선·답은 그 아래", r16);
+check(r16.later && r16.later.running === "C 터미널에서 친 지시 R16" && !r16.later.state,
+  "R16 그 뒤 다른 턴이 돌아도 기록에 안 나타나는 `/compact` 말풍선은 «다음 틈에 들어갑니다» 를 말하지 않는다", r16.later);
+
+const r17 = R.r17 || {};
+check(JSON.stringify(r17.asks) === JSON.stringify(["A 긴 작업 R17", "B 3분 전에 친 말 R17"]) && r17.spin === "B 3분 전에 친 말 R17",
+  "R17 마지막 줄이 3분 전에 친 끼워 넣기 줄이어도(하네스 상태 보고 없음) «오래 조용함» 으로 마감하지 않는다 — 방금 끼워 넣어져 그 말 아래에서 돈다", r17);
 
 check(!(R.pageErrors || []).length, "페이지 오류 없음", R.pageErrors);
 console.log(`\n${pass} passed, ${fail} failed — 일하는 중 보낸 말 화면 · 라이브 보내기(#4850)`);

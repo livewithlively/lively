@@ -48,6 +48,18 @@ export function queuedSay(line: unknown): QueuedSay | null {
   return { text, id: String(at.source_uuid || o.uuid || '') };
 }
 
+/**
+ * (순수) 끼워 넣은 말을 **시간순으로 세울 때** 쓰는 시각. 그 줄의 timestamp 는 친 때라(줄은 끼워 넣은 뒤 다음 요청 때 적힌다) 파일에서 앞선
+ *  줄들보다 이르다(이 맥미니 기록 사람 끼워 넣기 68줄 중 67줄 — 중앙값 15초 · 최대 401초 앞). 발자취가 시간순으로 다시 세우면(sortByTime) 앞
+ *  턴의 도구 사용이 이 말 아래로 넘어온다 — 그래서 파일에서 앞선 줄들의 가장 늦은 시각(prevMaxMs)과 견줘 늦은 쪽을 쓴다(파일 순서와 같은 자리).
+ *  앞선 시각을 모르면(-Infinity · NaN) 제 시각 그대로. 제 시각을 못 읽으면 앞선 시각.
+ */
+export function sayOrderTs(ts: unknown, prevMaxMs: number): string | undefined {
+  const own = Date.parse(String(ts ?? ''));
+  if (Number.isFinite(prevMaxMs) && (!Number.isFinite(own) || prevMaxMs > own)) return new Date(prevMaxMs).toISOString();
+  return typeof ts === 'string' ? ts : undefined;
+}
+
 /** (순수) 사람 말 줄(type:user)의 정체성 — 그 줄의 uuid(없으면 빈 글). 끼워 넣기 줄의 source_uuid 와 같은 열쇠 공간이다. */
 export function sayIdOf(line: unknown): string {
   if (!line || typeof line !== 'object') return '';

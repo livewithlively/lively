@@ -14,7 +14,7 @@
 //   R4 같은 정체성(사람 말 줄 uuid X 와 끼워 넣기 source_uuid X)이 두 번 → 한 번 · 사람이 같은 글을 다시 보냄(정체성 다름) → 두 번(터미널과 같다)
 //   R9 위로 더 불러오기 · 끼워 넣은 말이 이전 창에 있다 → 그 자리에 한 번 · 발자취의 장 열쇠 = 그 줄의 uuid(얇은 판과 같은 열쇠)
 //   R10 발자취 · 얇은 판 되감기(replayTrail)가 끼워 넣은 사람 말을 장 머리로 세운다(열쇠 = 그 줄 uuid) · 사람이 아닌 끼워 넣기는 아니다 ·
-//       라이브(대화창)도 같은 열쇠로 세운다
+//       라이브(대화창)도 같은 열쇠로 세운다 · 그 말의 줄 시각은 «친 때» 라 앞선 줄보다 이르다 — 시간순으로 다시 세워도 앞 턴의 일이 그 장으로 안 넘어온다
 //
 //  장면·가짜 서버는 queued-say-harness.mjs 한 벌(두 시험 파일이 묶음 하나씩 돌린다). 세션 화면은 실제 모듈을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
@@ -42,6 +42,11 @@ for (const k of ["r1t", "r1d"]) {
     `R1 ${look} — 순서가 터미널과 같다: 도구 결과는 A 턴, 그 말 뒤의 답은 B 턴`, { tool: r.tool, ans: r.ans });
 }
 check((R.r1t || {}).trail && R.r1t.trail.includes("turn:q-b"), "R1/R10 라이브 발자취 — 끼워 넣은 말도 장 머리로 선다(열쇠 = 그 줄 uuid · 얇은 판과 같다)", (R.r1t || {}).trail);
+{
+  const tt = (R.r1t || {}).trailTs || {};
+  check(Date.parse(tt["turn:q-b"] || "") >= Date.parse(tt["w1"] || "x"),
+    "R1/R10 라이브 발자취 — 끼워 넣은 말 장의 정렬 시각이 앞 턴이 남긴 것(파일 쓰기)보다 앞서지 않는다(줄 시각은 «친 때» 라 더 이르다 — 시간순으로 다시 세워도 A 의 일이 B 장으로 안 넘어온다)", tt);
+}
 
 const r2 = R.r2 || {};
 check(JSON.stringify(r2.asks) === JSON.stringify(["A 지시"]) && (r2.notices || []).some((n) => /기록: 정리" finished/.test(n)) && !r2.raw,
@@ -60,10 +65,14 @@ check(r9.b === 1 && r9.tool && r9.ans && r9.tool.ask === "A 오래전 지시" &&
   "R9 위로 더 불러온 창의 끼워 넣은 말이 그 자리에 한 번 선다", r9);
 check(r9.trail && r9.trail.includes("turn:q-b9") && r9.trail.includes("turn:u-a9"),
   "R9 위로 더 불러온 장 머리의 열쇠 = 그 말 줄의 uuid(라이브·얇은 판과 같은 열쇠)", r9.trail);
+check(r9.trailTs && Date.parse(r9.trailTs["turn:q-b9"] || "") >= Date.parse(r9.trailTs["w9"] || "x"),
+  "R9 위로 더 불러온 끼워 넣은 말 장의 정렬 시각도 앞 턴이 남긴 것보다 앞서지 않는다(라이브·얇은 판과 같은 규칙)", r9.trailTs);
 
 const r10 = R.r10 || {};
 check(r10.says && JSON.stringify(r10.says) === JSON.stringify(["turn:u-a10", "turn:q-b10"]) && (r10.labels || []).some((l) => String(l).includes("B 끼워 넣은 말 R10")),
   "R10 얇은 판 되감기가 끼워 넣은 사람 말을 장 머리로 세운다(열쇠 = 그 줄 uuid) · 사람이 아닌 끼워 넣기는 아니다", r10);
+check(r10.sorted && r10.sorted.indexOf("t10") >= 0 && r10.sorted.indexOf("t10") < r10.sorted.indexOf("turn:q-b10"),
+  "R10 시간순으로 다시 세워도(sortByTime) A 가 남긴 것(파일 쓰기)은 B 장 앞 — 끼워 넣은 말의 정렬 시각은 앞선 줄들의 가장 늦은 시각과 견준 늦은 쪽", r10.sorted);
 
 check(!(R.pageErrors || []).length, "페이지 오류 없음", R.pageErrors);
 console.log(`\n${pass} passed, ${fail} failed — 일하는 중 보낸 말 화면 · 다시 열기 · 위로 더 · 발자취(#4850)`);

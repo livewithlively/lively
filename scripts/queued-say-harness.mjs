@@ -44,13 +44,19 @@ async function PAGE_MAIN(GROUP) {
   const line = (o) => JSON.stringify(o) + "\n";
   const user = (text, uuid) => line({ type: "user", uuid, timestamp: ts(), message: { role: "user", content: text } });
   const toolUse = (id, cmd) => line({ type: "assistant", uuid: "a-" + id, timestamp: ts(), message: { id: "m-" + id, role: "assistant", model: "claude-opus-4-1", content: [{ type: "tool_use", id, name: "Bash", input: { command: cmd } }] } });
+  //  파일 쓰기 — 발자취가 «남긴 것» 으로 세우는 도구(명령 실행은 발자취 항목이 아니다).
+  const writeUse = (id, file) => line({ type: "assistant", uuid: "a-" + id, timestamp: ts(), message: { id: "m-" + id, role: "assistant", model: "claude-opus-4-1", content: [{ type: "tool_use", id, name: "Write", input: { file_path: file, content: "x" } }] } });
   const toolRes = (id, out) => line({ type: "user", uuid: "r-" + id, timestamp: ts(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: out }] } });
   const ai = (text, uuid) => line({ type: "assistant", uuid: uuid || ("t-" + seq), timestamp: ts(), message: { id: "m-" + (uuid || seq), role: "assistant", model: "claude-opus-4-1", content: [{ type: "text", text }] } });
   const end = () => line({ type: "system", subtype: "turn_duration", uuid: "e-" + seq, timestamp: ts(), durationMs: 11000 });
   //  일하는 중에 친 말 — 줄 timestamp = 친 때, 파일엔 끼워 넣은 뒤 적힌다.
-  const queued = (text, src, lineUuid, att = {}) => line({ type: "attachment", uuid: lineUuid, timestamp: ts(), isSidechain: false,
-    attachment: { type: "queued_command", prompt: text, source_uuid: src, delivery_id: "d-" + src, commandMode: "prompt", origin: { kind: "human" }, timestamp: ts(), humanTurn: true, ...att },
-    renderedRole: "system" });
+  //  backMs — 그 줄의 시각을 앞선 줄보다 이르게(실측: 줄 시각은 «친 때» 라 끼워 넣기 전에 적힌 도구 결과보다 이르다 — 중앙값 15초).
+  const queued = (text, src, lineUuid, att = {}, backMs = 0) => {
+    const at = backMs ? new Date(clock - backMs).toISOString() : ts();
+    return line({ type: "attachment", uuid: lineUuid, timestamp: at, isSidechain: false,
+      attachment: { type: "queued_command", prompt: text, source_uuid: src, delivery_id: "d-" + src, commandMode: "prompt", origin: { kind: "human" }, timestamp: at, humanTurn: true, ...att },
+      renderedRole: "system" });
+  };
   const enqueue = (text) => line({ type: "queue-operation", operation: "enqueue", timestamp: ts(), content: text });
   const NOTE = (id) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "기록: 정리" finished</summary>\n<usage><duration_ms>61000</duration_ms></usage>\n</task-notification>`;
 
@@ -109,7 +115,7 @@ async function PAGE_MAIN(GROUP) {
     box.style.cssText = "position:fixed;left:0;top:0;width:1000px;height:700px;display:flex;flex-direction:column;background:#fff";
     document.body.append(box);
     const TRAIL = [];
-    const trail = { add: (it, at) => TRAIL.push({ id: it.id, kind: it.kind, label: it.label, at }), result: () => {}, clear: () => { TRAIL.length = 0; } };
+    const trail = { add: (it, at) => TRAIL.push({ id: it.id, kind: it.kind, label: it.label, at, ts: it.ts }), result: () => {}, clear: () => { TRAIL.length = 0; } };
     const h = SC.mountSessionChat(box, target(id, o), { terminalSrc: () => null, onResumed: () => {}, chatHome: !!o.desktop, trail });
     const list = () => box.querySelector(".livc-list") || box;
     const turns = () => [...list().querySelectorAll(":scope > .livc-turn")];
@@ -146,11 +152,12 @@ async function PAGE_MAIN(GROUP) {
     if (GROUP === "reopen") {
     // ── R1 다시 열기 — tui · desktop ───────────────────────────────────────────
     TR["box-r1"] = user("A 첫 지시 — 로그 정리해 줘", "u-a") + toolUse("t1", "sleep 30") + toolRes("t1", "Running in the background")
-      + queued("B 일하는 중에 보낸 말 — 이것도 같이 봐 줘", "src-b", "q-b") + ai("B 에 대한 답이에요.", "ans-b") + end();
+      + writeUse("w1", "/repo/docs/log-summary.md") + toolRes("w1", "File created")
+      + queued("B 일하는 중에 보낸 말 — 이것도 같이 봐 줘", "src-b", "q-b", {}, 2500) + ai("B 에 대한 답이에요.", "ans-b") + end();
     for (const desktop of [false, true]) {
       const v = mount("box-r1", { alive: false, desktop });
       await sleep(1500);
-      R["r1" + (desktop ? "d" : "t")] = { asks: v.asks(), b: v.askCount("B 일하는 중에 보낸 말 — 이것도 같이 봐 줘"), tool: v.where("sleep 30"), ans: v.where("B 에 대한 답이에요."), trail: v.TRAIL.filter((x) => x.kind === "say").map((x) => x.id) };
+      R["r1" + (desktop ? "d" : "t")] = { asks: v.asks(), b: v.askCount("B 일하는 중에 보낸 말 — 이것도 같이 봐 줘"), tool: v.where("sleep 30"), ans: v.where("B 에 대한 답이에요."), trail: v.TRAIL.filter((x) => x.kind === "say").map((x) => x.id), trailTs: Object.fromEntries(v.TRAIL.map((x) => [x.id, x.ts])) };
       v.done();
     }
     // ── R2 작업 끝 알림 끼워 넣기 ──────────────────────────────────────────────
@@ -192,25 +199,29 @@ async function PAGE_MAIN(GROUP) {
       //  창(1.5MB)보다 긴 기록 — 앞쪽에 A · B(끼워 넣기)가 있고, 뒤는 화면이 안 그리는 큰 줄(파일 기록 사진)로 채운다.
       const filler = Array.from({ length: 34 }, (_, i) => line({ type: "file-history-snapshot", messageId: "f" + i, snapshot: { pad: "x".repeat(50_000) } })).join("");
       TR["box-r9"] = user("A 오래전 지시", "u-a9") + toolUse("t9", "sleep 60") + toolRes("t9", "done 60")
-        + queued("B 오래전에 끼워 넣은 말", "src-b9", "q-b9") + ai("B 오래전 답", "ans-b9") + end()
+        + writeUse("w9", "/repo/notes/old.md") + toolRes("w9", "File created")
+        + queued("B 오래전에 끼워 넣은 말", "src-b9", "q-b9", {}, 2500) + ai("B 오래전 답", "ans-b9") + end()
         + filler + user("C 최근 지시", "u-c9") + ai("C 답", "ans-c9") + end();
       const v = mount("box-r9", { alive: false });
       await sleep(3000);
-      R.r9 = { asks: v.asks(), b: v.askCount("B 오래전에 끼워 넣은 말"), ans: v.where("B 오래전 답"), tool: v.where("sleep 60"), trail: v.TRAIL.filter((x) => x.kind === "say").map((x) => x.id), size: TR["box-r9"].length };
+      R.r9 = { asks: v.asks(), b: v.askCount("B 오래전에 끼워 넣은 말"), ans: v.where("B 오래전 답"), tool: v.where("sleep 60"), trail: v.TRAIL.filter((x) => x.kind === "say").map((x) => x.id), trailTs: Object.fromEntries(v.TRAIL.map((x) => [x.id, x.ts])), size: TR["box-r9"].length };
       v.done();
     }
     // ── R10 발자취 — 얇은 판 되감기 ───────────────────────────────────────────
     {
       const thin = [
         { type: "user", uuid: "u-a10", timestamp: "2026-10-16T14:00:00Z", message: { role: "user", content: [{ type: "text", text: "A 지시 R10" }] } },
-        { type: "assistant", uuid: "a-10", timestamp: "2026-10-16T14:00:01Z", message: { role: "assistant", content: [{ type: "tool_use", id: "t10", name: "Bash", input: { command: "ls" } }] } },
-        { type: "attachment", uuid: "q-b10", timestamp: "2026-10-16T14:00:02Z", attachment: { type: "queued_command", prompt: "B 끼워 넣은 말 R10", commandMode: "prompt", origin: { kind: "human" }, source_uuid: "src-b10" } },
+        { type: "assistant", uuid: "a-10", timestamp: "2026-10-16T14:00:01Z", message: { role: "assistant", content: [{ type: "tool_use", id: "t10", name: "Write", input: { file_path: "/repo/web/r10.ts" } }] } },
+        //  친 때(14:00:00.5)는 앞 줄(도구 호출 14:00:01)보다 이르다 — 줄은 끼워 넣은 뒤에 적혔다(실측 모양).
+        { type: "attachment", uuid: "q-b10", timestamp: "2026-10-16T14:00:00.500Z", attachment: { type: "queued_command", prompt: "B 끼워 넣은 말 R10", commandMode: "prompt", origin: { kind: "human" }, source_uuid: "src-b10" } },
         { type: "attachment", uuid: "q-p10", timestamp: "2026-10-16T14:00:03Z", attachment: { type: "queued_command", prompt: "peer 말 R10", commandMode: "prompt", origin: { kind: "peer" } } },
         { type: "assistant", uuid: "a-11", timestamp: "2026-10-16T14:00:04Z", message: { role: "assistant", content: [{ type: "text", text: "B 답 R10" }] } },
       ].map((o) => JSON.stringify(o)).join("\n") + "\n";
       const W = [];
-      SC.replayTrail({ add: (it) => W.push({ id: it.id, kind: it.kind, label: it.label }), result: () => {} }, thin);
-      R.r10 = { says: W.filter((x) => x.kind === "say").map((x) => x.id), labels: W.filter((x) => x.kind === "say").map((x) => x.label) };
+      SC.replayTrail({ add: (it) => W.push({ id: it.id, kind: it.kind, label: it.label, ts: it.ts }), result: () => {} }, thin);
+      //  loadThinTrail 은 붓고 나서 시간순으로 다시 세운다(sortByTime — 안정 정렬) — 그 순서에서 A 의 도구 호출이 B 장보다 앞이어야 A 장에 남는다.
+      const sorted = W.map((x, i) => ({ ...x, i })).sort((a, b) => (Date.parse(a.ts || "") || 0) - (Date.parse(b.ts || "") || 0) || a.i - b.i).map((x) => x.id);
+      R.r10 = { says: W.filter((x) => x.kind === "say").map((x) => x.id), labels: W.filter((x) => x.kind === "say").map((x) => x.label), sorted };
     }
     } else {
     // ── R5 라이브 · 도는 중에 보냄 → 끼워 넣어짐 ───────────────────────────────
@@ -375,6 +386,22 @@ async function PAGE_MAIN(GROUP) {
         + line({ type: "system", subtype: "compact", uuid: "cp-16", timestamp: ts(), text: "앞 대화 요약 R16" }) + ai("압축 뒤 답 R16", "ans-c16") + end();
       await sleep(2500);
       R.r16 = { order: v.order(), after: v.where("압축 뒤 답 R16") };
+      //  그 뒤 터미널에서 친 지시가 돈다 — 기록에 안 나타나는 `/compact` 말풍선은 대기 목록에 남아 있지만 «다음 틈» 을 말하면 거짓이다.
+      TR["box-r16"] += user("C 터미널에서 친 지시 R16", "u-c16") + toolUse("t16", "sleep 120");
+      await sleep(6500);                                          // 쉬는 세션의 기록 폴(3초) + 그 뒤 큐 폴(3초)
+      R.r16.later = { running: v.spinIn(), state: v.stateOf("/compact") };
+      v.done();
+    }
+    // ── R17 처음 열 때 마지막 줄이 오래전에 친 끼워 넣기 줄 — «오래 조용함» 으로 도는 턴을 마감하지 않는다 ─────────────
+    {
+      //  하네스 상태 보고가 없는 세션(working 거짓)에서 화면은 마지막 줄 시각으로 «도는 중» 을 가른다(120초). 끼워 넣기 줄의 시각은 친 때라 앞 줄보다
+      //   몇 분 이를 수 있다 — 그 줄이 마지막이면 그 시각으로 재지 말아야 한다(방금 끼워 넣어져 이제 답할 차례다).
+      clock = Date.now() - 20_000;
+      TR["box-r17"] = user("A 긴 작업 R17", "u-a17") + toolUse("t17", "make release") + toolRes("t17", "release ok")
+        + queued("B 3분 전에 친 말 R17", "src-b17", "q-b17", {}, 200_000);
+      const v = mount("box-r17", { working: false });
+      await sleep(1500);
+      R.r17 = { asks: v.asks(), spin: v.spinIn() };
       v.done();
     }
     }
