@@ -156,10 +156,12 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
       member_id TEXT NOT NULL,
       requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       attempts INT NOT NULL DEFAULT 0,
+      misses INT NOT NULL DEFAULT 0,
       last_at TIMESTAMPTZ,
       last_result TEXT,
       PRIMARY KEY (unit_id, member_id)
     );
+    ALTER TABLE collect_proof ADD COLUMN IF NOT EXISTS misses INT NOT NULL DEFAULT 0;
     CREATE INDEX IF NOT EXISTS collect_proof_member_idx ON collect_proof(member_id, requested_at);
   `);
 }

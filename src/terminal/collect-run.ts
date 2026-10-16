@@ -234,6 +234,13 @@ export async function planCollectUnits(member: string, opts: { app?: string | nu
   const slots = planned.length ? PROOF_PER_RUN : PROOF_ONLY_PER_RUN;
   const proofs = planProofUnits(await pendingProofs(member, slots + planned.length, { app }), planned, { app, max: slots });
   const r = collectPrompt([...planned, ...proofs]);
+  //  #4744 맡은 보호 단위 가운데 이 판에 확인 읽기로도 못 실은 것(시도 상한 · 간격 안 · 확인 창 없음)은 «막힘» 으로 물러서게 한다 —
+  //   안 그러면 그 단위가 계속 때가 된 단위로 남아 주기 틱이 이 사람을 매번 골라 409 로 자리만 차지한다.
+  const unplannedHeld = held.filter((id) => !r.units.some((u) => u.id === id));
+  if (unplannedHeld.length) {
+    const { noteUnitRead } = await import("../org/collect/unit-schedule.js");
+    for (const id of unplannedHeld) await noteUnitRead(id, { outcome: "blocked", now }, { member });
+  }
   if (!r.units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
   //  #4744 주기 판은 때가 된 단위(또는 확인 읽기)가 하나라도 있어야 띄운다 — 곧 때가 될 단위만으로 판을 띄우면 «함께 싣기» 가 판을 오히려 늘린다.
   if (scheduled && !r.units.some((u) => u.proof || assigned.find((a) => a.id === u.id)?.due)) {

@@ -16,7 +16,12 @@
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import { syncUnitAudience } from "./unit-store.js";
-import { PROOF_MAX_ATTEMPTS, PROOF_RECENT, PROOF_RECHECK_SEC, PROOF_RETRY_SEC, type ProofOutcome } from "./collect-plan.js";
+import {
+  PROOF_MAX_ATTEMPTS, PROOF_MISS_AS_ATTEMPT, PROOF_RECENT, PROOF_RECHECK_SEC, PROOF_RETRY_SEC, PROOF_TTL_SEC, type ProofOutcome,
+} from "./collect-plan.js";
+
+/** 확인 읽기 한 판의 결과 — 판정(ProofOutcome) + 구성원 행이 없음(not_member) · 결과를 못 풂(unreadable). */
+export type ProofResult = ProofOutcome | "not_member" | "unreadable";
 
 /** 이 사람($member) 기준 «보호 단위이고 아직 확인 안 됨» — 목록 판정(unitGuards)과 수집 판정(guardsByUnitId)이 같은 한 벌을 쓴다. */
 const guardedSql = (member: string) => `(
@@ -47,20 +52,21 @@ export async function guardsByUnitId(member: string, unitIds: readonly number[])
   return out;
 }
 
-/** 확인 대기를 건다(이미 있으면 그대로 — 시도 수를 지우지 않는다). */
+/** 확인 대기를 건다 — 이미 있으면 시도 수는 그대로 두고, 주기 판이 띄우는 기간(PROOF_TTL_SEC)이 지났으면 그 기간만 다시 시작한다. */
 export async function requestProof(member: string, unitIds: readonly number[]): Promise<number> {
   if (!unitIds.length) return 0;
   const r = await itemsPool.query(
     `INSERT INTO collect_proof(unit_id, member_id) SELECT u, $2 FROM unnest($1::int[]) AS u
-     ON CONFLICT (unit_id, member_id) DO NOTHING`, [[...new Set(unitIds)], member]);
+     ON CONFLICT (unit_id, member_id) DO UPDATE SET requested_at = now()
+       WHERE collect_proof.requested_at < now() - make_interval(secs => ${PROOF_TTL_SEC})`, [[...new Set(unitIds)], member]);
   return r.rowCount ?? 0;
 }
 
-/** 이 사람이 더는 볼 수 있는 구성원이 아닌 단위의 대기 행을 지운다(목록에서 빠짐 · 단위 지워짐은 FK 가 지운다). */
+/** 쓸모가 없어진 대기 행을 지운다 — 이 사람이 더는 그 단위의 구성원이 아님(목록에서 빠짐) · 이미 확인됨(다른 길로). 단위가 지워지면 FK 가 지운다. */
 export async function dropStaleProofs(member: string): Promise<number> {
   const r = await itemsPool.query(
     `DELETE FROM collect_proof p WHERE p.member_id = $1
-       AND NOT EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = p.unit_id AND m.member_id = p.member_id)`, [member]);
+       AND NOT EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = p.unit_id AND m.member_id = p.member_id AND m.verified_at IS NULL)`, [member]);
   return r.rowCount ?? 0;
 }
 
@@ -69,12 +75,14 @@ export interface PendingProof { unit_id: number; app: string; instance: string; 
 const SLACK_TS_SQL = `s.fields->>'ts' ~ '^[0-9]{9,11}\\.[0-9]{1,6}$'`;
 /**
  * 지금 실을 수 있는 대기(p = collect_proof · u = collect_unit) — 계획(pendingProofs)과 주기 판 고르기(proofDueMembers)가 같은 한 벌을 쓴다.
- *  · 그 단위의 볼 수 있는 구성원(행)이어야 한다 · 시도가 상한에 닿았으면 마지막 시도에서 PROOF_RETRY_SEC 가 지나야(영영 잠기지 않게).
+ *  · 그 단위의 아직 확인 안 된 구성원(행)이어야 한다 · 마지막 시도에서 PROOF_RECHECK_SEC 가 지나야(시도를 몇 분 사이에 다 쓰지 않게) ·
+ *    시도가 상한에 닿았으면 PROOF_RETRY_SEC 가 지나야(영영 잠기지 않게).
  *  · 슬랙은 확인 창을 만들 최상위 글(답글이 아닌 것)이 저장돼 있어야 한다 — 채널 읽기는 최상위 글만 준다. 노션은 페이지 하나.
  */
 const ACTIONABLE_SQL = `
         (p.attempts < ${PROOF_MAX_ATTEMPTS} OR p.last_at < now() - make_interval(secs => ${PROOF_RETRY_SEC}))
-        AND EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = p.unit_id AND m.member_id = p.member_id)
+        AND (p.last_at IS NULL OR p.last_at < now() - make_interval(secs => ${PROOF_RECHECK_SEC}))
+        AND EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = p.unit_id AND m.member_id = p.member_id AND m.verified_at IS NULL)
         AND (u.app = 'notion' OR (u.app = 'slack' AND EXISTS (
               SELECT 1 FROM collect_unit_source us JOIN source s ON s.id = us.source_id
                WHERE us.unit_id = p.unit_id AND s.parent_external_id IS NULL AND ${SLACK_TS_SQL})))`;
@@ -97,13 +105,14 @@ export async function pendingProofs(member: string, limit: number, opts: { app?:
 
 /**
  * #4744 주기 판에 올릴 «확인 대기가 있는» 구성원 — 확인 읽기는 담당이 아닌 사람의 일이라 «때가 된 단위» 로는 안 잡힌다. 새로 들어온
- *  정당한 구성원이 손으로 띄우지 않아도 확인되게 주기 판이 띄운다. 같은 대기를 틱마다 읽지 않게 마지막 시도에서 PROOF_RECHECK_SEC 가 지난 것만.
+ *  정당한 구성원이 손으로 띄우지 않아도 확인되게 주기 판이 띄운다(같은 대기는 PROOF_RECHECK_SEC 간격 — ACTIONABLE_SQL).
+ *  대기를 건 지 PROOF_TTL_SEC 가 지나면 스스로 띄우지 않는다 — 끝내 못 읽는 사람의 대기로 헛판이 영영 뜨지 않게(다시 목록을 올리면 다시 센다).
  */
 export async function proofDueMembers(limit = 500): Promise<Array<{ member: string; units: number; oldest_ms: number }>> {
   const r = await itemsPool.query(
     `SELECT p.member_id, count(*)::int AS units, (extract(epoch FROM min(p.requested_at)) * 1000)::bigint AS oldest_ms
        FROM collect_proof p JOIN collect_unit u ON u.id = p.unit_id
-      WHERE ${ACTIONABLE_SQL} AND (p.last_at IS NULL OR p.last_at < now() - make_interval(secs => ${PROOF_RECHECK_SEC}))
+      WHERE ${ACTIONABLE_SQL} AND p.requested_at > now() - make_interval(secs => ${PROOF_TTL_SEC})
       GROUP BY p.member_id ORDER BY min(p.requested_at), p.member_id LIMIT $1`, [Math.max(0, limit)]);
   return (r.rows as any[]).map((x) => ({ member: String(x.member_id), units: Number(x.units), oldest_ms: Number(x.oldest_ms) }));
 }
@@ -152,19 +161,23 @@ export async function verifyByProof(member: string, unitId: number): Promise<"ve
  * 확인 읽기 결과를 남긴다.
  *  · pass · not_member → 대기 행을 지운다.
  *  · no_match(창 안 글이 있는데 안 맞음) · empty(창 안 글 없음) · unprovable(노션 본문이 너무 짧아 증거가 안 됨) → 시도 +1.
- *  · unreadable(결과를 못 풂 — 속도 제한 같은 일시 오류) → 시도는 그대로, 시각·사유만.
+ *  · unreadable(결과를 못 풂 — 속도 제한 같은 일시 오류) → 시도는 그대로 두되 이어진 수(misses)를 센다. PROOF_MISS_AS_ATTEMPT 번
+ *    이어지면 시도 한 번으로 센다 — 그 대화를 못 읽는 사람(빠진 사람 · 가짜 목록)도 같은 오류 결과를 받으므로 영영 되풀이되지 않게.
  */
-export async function recordProofResult(member: string, unitId: number, outcome: ProofOutcome | "not_member" | "unreadable"): Promise<void> {
+export async function recordProofResult(member: string, unitId: number, outcome: ProofResult): Promise<void> {
   try {
     if (outcome === "pass" || outcome === "not_member") {
       await itemsPool.query(`DELETE FROM collect_proof WHERE unit_id=$1 AND member_id=$2`, [unitId, member]);
       return;
     }
-    const inc = outcome === "unreadable" ? 0 : 1;
+    const miss = outcome === "unreadable";
     await itemsPool.query(
-      `INSERT INTO collect_proof(unit_id, member_id, attempts, last_at, last_result) VALUES($1,$2,$3,now(),$4)
-       ON CONFLICT (unit_id, member_id) DO UPDATE SET attempts = collect_proof.attempts + $3, last_at = now(), last_result = $4`,
-      [unitId, member, inc, outcome]);
+      `INSERT INTO collect_proof(unit_id, member_id, attempts, misses, last_at, last_result) VALUES($1,$2,$3,$4,now(),$5)
+       ON CONFLICT (unit_id, member_id) DO UPDATE SET
+         attempts = collect_proof.attempts + CASE WHEN NOT $6::boolean THEN 1 WHEN collect_proof.misses + 1 >= ${PROOF_MISS_AS_ATTEMPT} THEN 1 ELSE 0 END,
+         misses   = CASE WHEN NOT $6::boolean THEN 0 WHEN collect_proof.misses + 1 >= ${PROOF_MISS_AS_ATTEMPT} THEN 0 ELSE collect_proof.misses + 1 END,
+         last_at = now(), last_result = $5`,
+      [unitId, member, miss ? 0 : 1, miss ? 1 : 0, outcome, miss]);
   } catch (e) {
     logger.warn({ unitId, member, err: (e as Error)?.message }, "[collect-proof] 확인 결과를 못 적었다 — 다음 판이 다시 확인한다");
   }

@@ -12,7 +12,7 @@ const { itemsPool } = await import(`${DIST}/db/client.js`);
 const store = await import(`${DIST}/org/collect/unit-store.js`);
 const { ingestRun, resolveInstance, toIngestPlan } = await import(`${DIST}/org/collect/run-ingest.js`);
 const { NOW_MARGIN_SEC, proofUnit } = await import(`${DIST}/org/collect/collect-plan.js`);
-const { pendingProofs, proofDueMembers } = await import(`${DIST}/org/collect/unit-proof.js`);
+const { pendingProofs, proofDueMembers, requestProof } = await import(`${DIST}/org/collect/unit-proof.js`);
 const { collectScheduleTick } = await import(`${DIST}/org/collect/collect-schedule.js`);
 const { planCollectUnits } = await import(`${DIST}/terminal/collect-run.js`);
 const log = await import(`${DIST}/org/collect/run-log.js`);
@@ -25,12 +25,13 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const statusOf = async (fn) => { try { await fn(); return 200; } catch (e) { return e?.status ?? 500; } };
 
-const A = "__ci_pg_a__", B = "__ci_pg_b__", C = "__ci_pg_c__", D = "__ci_pg_d__", E = "__ci_pg_e__", NOBODY = "__ci_pg_none__";
-const MEMBERS = [A, B, C, D, E, NOBODY];
+const A = "__ci_pg_a__", B = "__ci_pg_b__", C = "__ci_pg_c__", D = "__ci_pg_d__", E = "__ci_pg_e__", Y = "__ci_pg_y__", NOBODY = "__ci_pg_none__";
+const MEMBERS = [A, B, C, D, E, Y, NOBODY];
 const TEAM = "T_CIPG";                       // 이 시험만 쓰는 슬랙 팀(인스턴스)
 const TEAM2 = "T_CIPG_OTHER";                // 다른 팀 하나 더 — «팀이 하나뿐이면 그것»(②)이 답을 대신 내지 못하게
 const NOTION_INST = "cipg-notion";
 const CH1 = "C0CIPG0001", CH2 = "C0CIPG0002", CH3 = "C0CIPG0003", CH4 = "C0CIPG0004", CH6 = "C0CIPG0006", STRAY = "C0CIPG0009";
+const CH10 = "C0CIPG0010", CH11 = "C0CIPG0011";
 const BOX_A = "a@cipg.test";
 const PAGE = "abcdef01-2345-6789-abcd-ef01cafe0001";
 const POLICY_NOTE = "pgtest-ci";
@@ -85,7 +86,7 @@ async function cleanup() {
 
 try {
   await cleanup();
-  for (const m of [A, B, C, D, E]) await itemsPool.query(`INSERT INTO org_member(id, email, display_name) VALUES($1,$2,$1) ON CONFLICT DO NOTHING`, [m, m === A ? BOX_A : `${m}@cipg.test`]);
+  for (const m of [A, B, C, D, E, Y]) await itemsPool.query(`INSERT INTO org_member(id, email, display_name) VALUES($1,$2,$1) ON CONFLICT DO NOTHING`, [m, m === A ? BOX_A : `${m}@cipg.test`]);
   //  볼 수 있는 사람 = «확인된 단위 구성원 ∩ 조직 정책». 같은 DB 를 쓰는 앞 시험이 슬랙 전체에 정책을 남겼어도 이 시험의 채널은
   //   «열림» 이 되게 채널 규칙(가장 좁은 규칙이 이긴다)을 둔다 — 그래야 I2b 가 정책이 아니라 단위 구성원을 본다(CI 실측 2026-10-16).
   for (const ch of [CH1, CH2]) {
@@ -250,7 +251,11 @@ try {
       good.proof_passed === 1 && (await viewer(priv.id, B))?.verified_at != null && await audienceHas(privSrc.id, B) && !(await proofRow(B))
         && (await sources("slack", TEAM, `${CH2}:`)).length === 1 && JSON.stringify((await unitBy(CH2)).cursor) === JSON.stringify(beforeCursor),
       JSON.stringify({ ...good }));
-    const proofRowOf = async (m, uid = priv.id) => (await itemsPool.query(`SELECT attempts, last_result FROM collect_proof WHERE unit_id=$1 AND member_id=$2`, [uid, m])).rows[0];
+    await itemsPool.query(`INSERT INTO collect_proof(unit_id, member_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [priv.id, B]);
+    const leftoverB = (await pendingProofs(B, 5)).some((p) => p.unit_id === priv.id);
+    await ingestRun({ member: B, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH1, "c1", "Public Channel"], [CH2, "c2", "Private Channel"], [CH4, "c4", "Private Channel"]])] });
+    chk("N3b 이미 확인된 사람에게 남은 대기 행은 싣지 않고 다음 목록에서 지운다", !leftoverB && !(await proofRow(B)), JSON.stringify({ leftoverB, row: await proofRow(B) }));
+    const proofRowOf = async (m, uid = priv.id) => (await itemsPool.query(`SELECT attempts, misses, last_result FROM collect_proof WHERE unit_id=$1 AND member_id=$2`, [uid, m])).rows[0];
     //  확인 안 된 사람(D)이 보호 단위를 맡은 판 — 판정하지 않는다(수집 창엔 맞춰 볼 글이 없다) · 넣지도 확인하지도 않고 대기만.
     await ingestRun({ member: D, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH2, "c2", "Private Channel"]])] });
     const forged = await ingestRun({ member: D, plan: { mode: "collect", units: [planned(priv)], planned_at: PLANNED }, now: NOW,
@@ -265,6 +270,9 @@ try {
     chk("B2 창 밖의 옛 글은 같아도 증거가 아니다 — 확인 안 됨 · 시도 1(empty) · 자료 안 보임",
       stale.per_unit?.[0]?.proof === "empty" && (await viewer(priv.id, D))?.verified_at == null && (await proofRowOf(D))?.attempts === 1
         && !(await audienceHas(privSrc.id, D)), JSON.stringify(stale.per_unit?.[0]));
+    chk("B2b 방금 시도한 대기는 한 시간 안에는 계획에도 다시 싣지 않는다(시도를 몇 분 사이에 다 쓰지 않게)",
+      (await statusOf(() => planCollectUnits(D, { now: NOW }))) === 409);
+    await itemsPool.query(`UPDATE collect_proof SET last_at = now() - interval '2 hours' WHERE unit_id=$1 AND member_id=$2`, [priv.id, D]);
     const planD = await planCollectUnits(D, { now: NOW });
     const pD = planD.units.find((u) => u.id === priv.id);
     const okD = await ingestRun({ member: D, plan: { mode: "collect", units: planD.units, planned_at: PLANNED }, now: NOW,
@@ -290,7 +298,14 @@ try {
     const flaky = await ingestRun({ member: C, plan: { mode: "collect", units: [cu], planned_at: PLANNED }, now: NOW,
       files: [file("Slack", "slack_read_channel", "Error: ratelimited", { channel_id: CH2, oldest: cu.since, latest: cu.until, limit: 20 })] });
     chk("B3b 못 푼 결과(속도 제한 같은 일시 오류)는 시도로 세지 않는다 — 사유만", flaky.per_unit?.[0]?.proof === "unreadable"
-      && (await proofRowOf(C))?.attempts === 0 && (await proofRowOf(C))?.last_result === "unreadable", JSON.stringify({ per: flaky.per_unit?.[0], row: await proofRowOf(C) }));
+      && (await proofRowOf(C))?.attempts === 0 && (await proofRowOf(C))?.misses === 1 && (await proofRowOf(C))?.last_result === "unreadable",
+      JSON.stringify({ per: flaky.per_unit?.[0], row: await proofRowOf(C) }));
+    for (let i = 0; i < 2; i++) {
+      await ingestRun({ member: C, plan: { mode: "collect", units: [cu], planned_at: PLANNED }, now: NOW,
+        files: [file("Slack", "slack_read_channel", "Error: ratelimited", { channel_id: CH2, oldest: cu.since, latest: cu.until, limit: 20 })] });
+    }
+    chk("B3c 못 푼 결과가 세 번 이어지면 시도 한 번으로 센다(그 대화를 못 읽는 사람도 같은 결과를 받는다)",
+      (await proofRowOf(C))?.attempts === 1 && (await proofRowOf(C))?.misses === 0, JSON.stringify(await proofRowOf(C)));
     await itemsPool.query(`UPDATE collect_proof SET attempts=3, last_at=now() WHERE unit_id=$1 AND member_id=$2`, [priv.id, C]);
     chk("G6b 시도 상한에 닿은 대기만 있으면 409(빈 판을 띄우지 않는다)", (await statusOf(() => planCollectUnits(C, { now: NOW }))) === 409);
     //  확인된 사람이 모두 끊겨 확인 안 된 후보가 담당이 된 보호 단위 — 수집 창(읽은 위치 뒤)엔 맞춰 볼 저장된 글이 없으니 확인 읽기로 싣는다.
@@ -307,12 +322,37 @@ try {
     chk("G6c 확인 안 된 담당의 보호 단위는 수집이 아니라 확인 읽기로 · 대기 행 · (B3a) 창은 최상위 글로만(더 새 답글은 빼고)",
       c6.length === 3 && held.units.length === 1 && h6?.proof === true && h6.since === "1787399999.000000" && h6.until === "1787400001.000000"
         && (await proofRowOf(C, u6.id))?.attempts === 0, JSON.stringify({ c6: c6.length, units: held.units }));
+    //  확인 안 된 담당(C)의 보호 단위 — 확인 읽기가 통과 못 하거나 실을 수 없으면 그 단위를 물러서게 한다(때가 된 단위로 남아 틱마다 같은 판이 뜨지 않게).
+    //  때가 된 단위로 만든다(다음 확인 · 마지막으로 읽은 시각을 비움).
+    const makeDue = (id) => itemsPool.query(`UPDATE collect_unit SET next_at = NULL, read_at = NULL WHERE id=$1`, [id]);
+    await makeDue(u6.id);
+    const due0 = (await store.dueAssignments(NOW)).some((d) => d.unit_id === u6.id && d.member === C);
+    const miss6 = await ingestRun({ member: C, plan: { mode: "collect", units: [h6], planned_at: PLANNED }, now: NOW,
+      files: [chFile(CH6, [["1787400000.000001", "가짜 본문"]], { channel_id: CH6, oldest: h6.since, latest: h6.until, limit: 20 })] });
+    const n6 = (await unitBy(CH6)).next_at;
+    chk("A1 확인 안 된 담당의 확인 읽기가 통과 못 하면 그 단위를 물러서게 한다 — 때가 된 단위에서 빠진다",
+      due0 && miss6.per_unit?.[0]?.proof === "no_match" && !!n6 && n6.getTime() > NOW && !(await store.dueAssignments(NOW)).some((d) => d.unit_id === u6.id),
+      JSON.stringify({ due0, per: miss6.per_unit?.[0], n6 }));
+    await makeDue(u6.id);
+    const st6 = await statusOf(() => planCollectUnits(C, { scheduled: true, now: NOW }));
+    const n6b = (await unitBy(CH6)).next_at;
+    chk("A2 맡은 보호 단위를 확인 읽기로도 못 실으면(방금 시도함) 409 앞에 그 단위를 물러서게 한다 — 틱마다 409 로 자리만 차지하지 않게",
+      st6 === 409 && !!n6b && n6b.getTime() > NOW, JSON.stringify({ st6, n6b }));
     //  목록 상한(5,000) 너머의 단위는 판정도 기록도 하지 않는다 — 앞에 미끼 보호 단위를 두고 상한 너머에 노리는 보호 단위를 둬도 열리지 않는다.
     const junk = Array.from({ length: 4999 }, (_, i) => [`C0JK${String(i).padStart(6, "0")}`, `j${i}`, "Public Channel"]);
     const big = await ingestRun({ member: E, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH2, "c2", "Private Channel"], ...junk, [CH6, "c6", "Private Channel"]])] });
     chk("B1 목록 상한 너머(5,001번째)의 보호 단위는 열리지 않는다 — 미끼는 확인 대기",
       big.proof_pending === 1 && !(await viewer(u6.id, E)) && (await viewer(priv.id, E))?.verified_at == null && !(await audienceHas(c6[0].id, E)),
       JSON.stringify({ big, v6: await viewer(u6.id, E) }));
+    const c2before = await unitBy(CH2);
+    const pe = proofUnit({ id: priv.id, app: "slack", instance: TEAM, ref: CH2, kind: "private_channel" }, ["1787300000.000001"]);
+    const eMiss = await ingestRun({ member: E, plan: { mode: "collect", units: [pe], planned_at: PLANNED }, now: NOW,
+      files: [chFile(CH2, [["1787300000.000001", "E 의 가짜"]], { channel_id: CH2, oldest: pe.since, latest: pe.until, limit: 20 })] });
+    const c2after = await unitBy(CH2);
+    chk("A1b 대기자(담당 아님)의 확인 읽기는 그 단위의 다음 확인·임대를 건드리지 않는다",
+      eMiss.per_unit?.[0]?.proof === "no_match" && String(c2after.next_at) === String(c2before.next_at)
+        && JSON.stringify(c2after.sched?.lease ?? null) === JSON.stringify(c2before.sched?.lease ?? null), JSON.stringify({ b: c2before.next_at, a: c2after.next_at }));
+    await itemsPool.query(`UPDATE collect_proof SET attempts = 0, last_at = NULL WHERE unit_id=$1 AND member_id=$2`, [priv.id, E]);
     //  목록에서 빠진 사람은 옛 대기 행으로 되살아나지 않는다.
     await itemsPool.query(`UPDATE collect_proof SET attempts=0, last_at=NULL WHERE unit_id=$1 AND member_id=$2`, [priv.id, C]);
     const leave = await ingestRun({ member: C, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH6, "c6", "Private Channel"]])] });
@@ -322,12 +362,38 @@ try {
     chk("N4 목록에서 빠지면 대기 행도 지운다 · 빠진 사람은 확인 읽기를 통과해도 구성원으로 되살아나지 않는다",
       leave.complete === true && left && back.per_unit?.[0]?.proof === "not_member" && !(await viewer(priv.id, C)), JSON.stringify({ leave, back: back.per_unit?.[0] }));
     //  다른 길로(관리자 정리 · 신고 목록의 «전부» 등) 구성원 행이 없어진 단위 — 대기 행이 남아 있어도 싣지 않는다.
+    await itemsPool.query(`UPDATE collect_proof SET attempts = 0, last_at = NULL WHERE unit_id=$1 AND member_id=$2`, [u6.id, C]);
     const hadU6 = (await pendingProofs(C, 5)).some((p) => p.unit_id === u6.id);
     await itemsPool.query(`DELETE FROM collect_unit_member WHERE unit_id=$1 AND member_id=$2`, [u6.id, C]);
     const hasU6 = (await pendingProofs(C, 5)).some((p) => p.unit_id === u6.id);
     chk("N4b 구성원 행이 없는 단위의 대기는 싣지 않는다(대기 행이 남아 있어도)", hadU6 && !hasU6 && !!(await proofRowOf(C, u6.id)), JSON.stringify({ hadU6, hasU6 }));
     const tp = toIngestPlan("collect", { units: [cu, planned(u1)], planned_at: PLANNED });
     chk("P1 실행 기록에서 읽은 계획이 확인 읽기 표시를 잃지 않는다", JSON.stringify(tp?.units.map((u) => u.proof)) === "[true,false]", JSON.stringify(tp?.units));
+  }
+
+  // ── 확인 판정 오류는 그 단위만 실패 — 같은 판의 다른 단위는 그대로 저장 ──
+  {
+    await store.recordUnitListing({ member: A, app: "slack", connector: "Slack", instance: TEAM, verified: true,
+      items: [{ ref: CH10, kind: "private_channel", name: "c10" }, { ref: CH11, kind: "private_channel", name: "c11" }] });
+    const u10 = await unitBy(CH10), u11 = await unitBy(CH11);
+    await activate(u10.id); await activate(u11.id);
+    await ingestRun({ member: A, plan: { mode: "collect", units: [planned(u10)], planned_at: PLANNED }, now: NOW, files: [chFile(CH10, [["1787500000.000001", "c10 글"]])] });
+    const yl = await ingestRun({ member: Y, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH10, "c10", "Private Channel"], [CH11, "c11", "Private Channel"]])] });
+    await itemsPool.query(`CREATE OR REPLACE FUNCTION ci_pg_proof_boom() RETURNS trigger AS $$ BEGIN
+      IF NEW.member_id = '${Y}' AND NEW.verified_at IS NOT NULL AND OLD.verified_at IS NULL THEN RAISE EXCEPTION 'ci boom'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+    await itemsPool.query(`CREATE TRIGGER ci_pg_proof_boom_t BEFORE UPDATE ON collect_unit_member FOR EACH ROW EXECUTE FUNCTION ci_pg_proof_boom()`);
+    try {
+      const p10 = proofUnit({ id: u10.id, app: "slack", instance: TEAM, ref: CH10, kind: "private_channel" }, ["1787500000.000001"]);
+      const iso = await ingestRun({ member: Y, plan: { mode: "collect", units: [p10, planned(u11)], planned_at: PLANNED }, now: NOW, files: [
+        chFile(CH10, [["1787500000.000001", "c10 글"]], { channel_id: CH10, oldest: p10.since, latest: p10.until, limit: 20 }), chFile(CH11, [["1787500100.000001", "c11 새 글"]])] });
+      const r10 = iso.per_unit?.find((x) => x.id === u10.id), r11 = iso.per_unit?.find((x) => x.id === u11.id);
+      chk("N5 확인 판정 중 오류는 그 단위만 실패로 — 같은 판의 다른 단위는 저장된다 · 확인되지 않는다",
+        yl.proof_pending === 1 && iso.state === "done" && r10?.failed === 1 && /확인 읽기 오류/.test(r10?.reason ?? "") && r11?.stored === 1
+          && (await sources("slack", TEAM, `${CH11}:`)).length === 1 && (await viewer(u10.id, Y))?.verified_at == null, JSON.stringify({ yl: yl.proof_pending, per: iso.per_unit }));
+    } finally {
+      await itemsPool.query(`DROP TRIGGER IF EXISTS ci_pg_proof_boom_t ON collect_unit_member`);
+      await itemsPool.query(`DROP FUNCTION IF EXISTS ci_pg_proof_boom()`);
+    }
   }
 
   // ── 지메일 · 노션 ──
@@ -389,6 +455,12 @@ try {
     await itemsPool.query(`UPDATE collect_proof SET last_at = now() - interval '2 hours' WHERE member_id = $1`, [E]);
     const later = (await proofDueMembers()).find((x) => x.member === E);
     chk("S3 같은 대기를 틱마다 읽지 않는다 — 마지막 시도에서 1시간이 지나야 다시 고른다", !soon && later?.units === 2, JSON.stringify({ soon, later }));
+    await itemsPool.query(`UPDATE collect_proof SET requested_at = now() - interval '15 days' WHERE member_id = $1`, [E]);
+    const expired = !(await proofDueMembers()).some((x) => x.member === E);
+    await requestProof(E, [pu.id]);
+    const again = (await proofDueMembers()).find((x) => x.member === E);
+    chk("S4 대기를 건 지 14일이 지나면 주기 판이 스스로 띄우지 않는다 · 대기를 다시 걸면(다시 목록) 그 단위만 다시 센다",
+      expired && again?.units === 1, JSON.stringify({ expired, again }));
     chk("I2h 노션 오류 결과는 있던 페이지를 빈 페이지로 덮지 않는다", err.per_unit?.[0]?.unparsed === 1 && err.per_unit?.[0]?.stored === 0 && n2.rows[0]?.title === "회의록" && /본문/.test(n2.rows[0]?.body_md ?? ""),
       JSON.stringify({ err: err.per_unit?.[0], row: n2.rows[0] }));
   }

@@ -394,6 +394,9 @@ t("Q3b 확인 판정(노션) — 꾸밈 줄을 뺀 서로 다른 증거 줄 3개
   assert.equal(judgeProof(u, [it("가나다라 1\n가나다라 2")], st(["가나다라 1", "가나다라 2", "---", "<empty-block/>", "가나다라 1"]), (s) => s).outcome, "unprovable",
     "증거 줄이 2개뿐인 페이지는 본문을 몰라도 맞힐 수 있어 증명 불가");
   assert.equal(judgeProof(u, [it("아무 글")], new Map(), (s) => s).outcome, "empty");
+  const heads = ["# 회의록 양식", "## 참석자 목록", "## 결정 사항"], secret = ["가나다라 비밀 1", "가나다라 비밀 2", "가나다라 비밀 3"];
+  assert.equal(judgeProof(u, [it(heads.join("\n"))], st([...heads, ...secret]), (s) => s).outcome, "no_match", "템플릿 머리글만 알아서는 통과하지 않는다");
+  assert.equal(judgeProof(u, [it([...heads, ...secret].join("\n"))], st([...heads, ...secret]), (s) => s).outcome, "pass");
 });
 t("Q4 확인 단위 고르기 — 이미 맡은 단위로 실린 것은 빼고 · 정한 앱만 · 한 판 max 개(맡은 단위가 있으면 PROOF_PER_RUN)", () => {
   const P = (unit_id: number, o: Record<string, unknown> = {}) => ({ unit_id, app: "slack", instance: "T0", ref: `C0AAAAAA${String(unit_id).padStart(2, "0")}`, kind: "private_channel",

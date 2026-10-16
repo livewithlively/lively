@@ -12,11 +12,13 @@ import { logger } from "../../log.js";
 import { redactString } from "../ingest/redact.js";
 import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
 import {
-  CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, judgeProof, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit, type ProofOutcome,
+  CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, judgeProof, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit,
 } from "./collect-plan.js";
 import { canonicalCoord, normalizeListing } from "./unit-plan.js";
 import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
-import { dropStaleProofs, guardsByUnitId, recordProofResult, requestProof, storedBodies, unitGuards, verifyByProof } from "./unit-proof.js";
+import {
+  dropStaleProofs, guardsByUnitId, recordProofResult, requestProof, storedBodies, unitGuards, verifyByProof, type ProofResult,
+} from "./unit-proof.js";
 import { noteUnitRead, type UnitReadBy } from "./unit-schedule.js";
 import type { ReadNote } from "./schedule-plan.js";
 
@@ -48,7 +50,7 @@ export interface IngestUnitResult {
   /** #4744 다음 확인 — 언제 · 왜(interval 주기 뒤 · catchup 곧바로 · retry 물러섬) · 그때의 주기. 못 적었으면 없다. */
   next?: { at: string; why: string; interval_sec: number } | null;
   /** 확인 읽기 결과(확인 읽기 단위) · held = 확인 안 된 사람이 맡은 보호 단위라 넣지 않고 확인 대기만 걸었다. */
-  proof?: ProofOutcome | "not_member" | "unreadable" | "held";
+  proof?: ProofResult | "held";
 }
 
 export interface IngestResult {
@@ -118,7 +120,7 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
   const held = await unitGuards(member, app, coordInst, items.map((i) => i.ref));
   if (!held.size) {
     const r = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: true }, ctx);
-    if (complete && !r.complete_ignored) await dropStaleProofs(member).catch(() => 0);
+    await dropStaleProofs(member).catch(() => 0);
     return { state: "done", mode: "listing", listed: h.units.length, created: r.created, refused: r.refused.length, complete: complete && !r.complete_ignored, instance, proof_pending: 0 };
   }
   //  열린 단위만 확인으로 올리고(새 단위는 여기서 종류별 기본 공개범위로 선다), 전체를 확인 표시 없이 한 번 더 — «전부» 정리는 이 한 번으로만
@@ -127,7 +129,7 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
   const r1 = open.length ? await recordUnitListing({ member, app, connector, instance, items: open, complete: false, verified: true }, ctx) : null;
   const r2 = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: false }, ctx);
   await requestProof(member, [...held.values()]);
-  if (complete && !r2.complete_ignored) await dropStaleProofs(member).catch(() => 0);
+  await dropStaleProofs(member).catch(() => 0);
   const refused = new Set([...(r1?.refused ?? []), ...r2.refused]);
   return {
     state: "done", mode: "listing", listed: h.units.length, created: (r1?.created ?? 0) + r2.created, refused: refused.size,
@@ -135,7 +137,7 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
   };
 }
 
-const PROOF_REASON: Record<ProofOutcome | "not_member" | "unreadable", string> = {
+const PROOF_REASON: Record<ProofResult, string> = {
   pass: "확인 읽기 통과", no_match: "확인 읽기 실패 — 저장된 글과 다름", empty: "확인 읽기 실패 — 맞춰 볼 글이 창 안에 없음",
   unprovable: "확인 읽기 불가 — 본문이 너무 짧음", not_member: "확인 읽기 — 이미 볼 수 있는 구성원이 아님(대기 지움)",
   unreadable: "확인 읽기 보류 — 결과를 못 풂(시도로 안 셈)",
@@ -172,17 +174,21 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       try {
         const j = judgeProof(u, h.items, await storedBodies(u.id, u.app, u.instance, h.items.map((i) => i.provenance.external_id)), redactString);
         //  못 푼 결과가 섞인 실패는 일시 오류일 수 있다 — 시도로 세지 않는다(정당한 구성원이 속도 제한으로 잠기지 않게).
-        let outcome: ProofOutcome | "not_member" | "unreadable" = j.outcome !== "pass" && h.unparsed > 0 ? "unreadable" : j.outcome;
+        let outcome: ProofResult = j.outcome !== "pass" && h.unparsed > 0 ? "unreadable" : j.outcome;
         if (outcome === "pass" && (await verifyByProof(member, u.id)) === "not_member") outcome = "not_member";
         await recordProofResult(member, u.id, outcome);
         row.proof = outcome;
         row.reason = PROOF_REASON[outcome];
         if (outcome === "pass") proofPassed++;
         else if (outcome !== "unreadable" && outcome !== "not_member") proofFailed++;
+        //  #4744 확인 안 된 사람이 그 단위의 담당이면 단위를 «막힘» 으로 물러서게 한다 — 안 그러면 그 단위가 계속 때가 된 단위로 남아
+        //   틱마다 같은 판이 뜬다. 담당이 아니면(대기자) noteUnitRead 가 아무것도 쓰지 않는다 — 담당의 수집은 늦어지지 않는다.
+        if (outcome !== "pass") row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
       } catch (e) {
         failed++;
         row.failed = 1;
         row.reason = `확인 읽기 오류 — ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+        row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
       }
       per.push(row);
       continue;

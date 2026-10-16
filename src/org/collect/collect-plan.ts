@@ -71,8 +71,12 @@ export const PROOF_MAX_ATTEMPTS = 3;
 export const PROOF_RECENT = 5;
 /** 시도가 상한에 닿은 대기도 마지막 시도에서 이만큼 지나면 다시 싣는다 — 정당한 구성원이 영영 잠기지 않게. */
 export const PROOF_RETRY_SEC = 86_400;
-/** #4744 주기 판이 확인 대기만 있는 구성원을 다시 띄우는 간격 — 같은 대기를 틱마다 읽지 않게(마지막 시도에서 이만큼 지난 것만). */
+/** 같은 대기를 다시 싣는 간격 — 계획·주기 판 모두(마지막 시도에서 이만큼 지난 것만). 시도를 몇 분 사이에 다 쓰지 않게. */
 export const PROOF_RECHECK_SEC = 3_600;
+/** #4744 주기 판이 확인 대기만 있는 구성원을 스스로 띄우는 기간 — 대기를 건(또는 다시 건) 때부터. 그 뒤는 다시 목록을 올릴 때까지 안 띄운다. */
+export const PROOF_TTL_SEC = 14 * 86_400;
+/** 못 푼 결과(unreadable)가 이만큼 이어지면 시도 한 번으로 센다 — 읽을 수 없는 사람의 대기가 시도 없이 영영 되풀이되지 않게. */
+export const PROOF_MISS_AS_ATTEMPT = 3;
 /** 노션 본문의 증거 줄 하한 — 이보다 짧은(꾸밈 줄을 뺀) 페이지는 본문을 몰라도 맞힐 수 있어 증거가 안 된다(«증명 불가»). */
 export const PROOF_NOTION_MIN_LINES = 3;
 
@@ -306,12 +310,15 @@ export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0): 
 
 // ── 확인 읽기의 판정(순수) ───────────────────────────────────────────────────
 
-/** 노션 본문의 증거 줄 — 빈 줄 · 네 글자 미만 · 꾸밈 줄(구분선 · 빈 블록 같은 태그 한 개)을 빼고 같은 줄은 한 번. */
+/**
+ * 노션 본문의 증거 줄 — 빈 줄 · 네 글자 미만 · 꾸밈 줄(구분선 · 빈 블록 같은 태그 한 개) · 머리글(템플릿이 같아 본문을 몰라도 맞힌다)을
+ *  빼고 같은 줄은 한 번.
+ */
 export function notionProofLines(body: string): Set<string> {
   const out = new Set<string>();
   for (const raw of body.split("\n")) {
     const l = raw.trim();
-    if (l.length < 4 || /^[-–—=*_#>|`~.·•\s]+$/.test(l) || /^<\/?[a-z][a-z0-9-]*\s*\/?>$/i.test(l)) continue;
+    if (l.length < 4 || /^[-–—=*_#>|`~.·•\s]+$/.test(l) || /^<\/?[a-z][a-z0-9-]*\s*\/?>$/i.test(l) || /^#{1,6}\s/.test(l)) continue;
     out.add(l);
   }
   return out;

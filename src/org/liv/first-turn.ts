@@ -126,8 +126,8 @@ const JOIN_STEPS = [
   "1. 인사 한두 문장과 지금 할 일 한 줄(«팀이 쓰는 앱 중 Claude 에 빠진 것만 연결하면 끝납니다»).",
   "2. `member_ai_connectors_refresh` 로 이 사람 Claude 에 연결된 앱을 다시 잰다.",
   "3. 위 «팀이 쓰는 앱» 가운데 이 사람 Claude 에 **없는 것만** [Claude에서 연결]을 한 걸음씩 안내하고(`liv-connect` §2), 연결했다고 하면 다시 잰다. 팀이 안 쓰는 앱은 권하지 않는다.",
-  "4. 연결된 팀 앱 가운데 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 로 끝날 때까지(`ingest.state` 까지). 그래야 이 사람이 볼 수 있는 팀 대화·페이지가 이 사람에게도 열린다.",
-  "5. 무엇이 함께 보이게 됐는지 짧게 보고하고 끝낸다.",
+  "4. 연결된 팀 앱 가운데 모을 수 있는 앱마다 `collect_claude_run {mode:\"listing\", app}` → `collect_claude_run_get {run_id, wait_sec:25}` 로 끝날 때까지(`ingest.state` 까지). 그래야 이 사람이 볼 수 있는 팀 대화·페이지가 이 사람에게도 열린다. 단 이미 자료가 모인 비공개 대화·페이지는 목록만으로는 안 열린다(`ingest.proof_pending`) — 주기 수집이 곧(보통 몇 분 안) 이 사람 커넥터로 확인 읽기를 돌려 연다. 따로 띄우지 마라.",
+  "5. 무엇이 함께 보이게 됐는지 짧게 보고하고 끝낸다. `proof_pending` 이 있으면 그 수만큼 «확인 중 — 곧 자동으로 열린다» 고 말한다.",
 ];
 
 export function buildFirstTurnPrompt(i: FirstTurnInput): string {
