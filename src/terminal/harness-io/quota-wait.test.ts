@@ -281,6 +281,22 @@ test("D10 자동 걸림 → 사람이 접음 → 대화상자로 다시 걸면 �
   assert.equal(quotaWaitOf([ARMED(T0 - 120_000), human(T0 - 60_000), dialogOut(T0)], at())?.atMs, T0);
 });
 
+/** 명령 결과의 system 줄 모양 — 같은 2.1.301 에서 /model 실패가 이렇게 남았다(관리형 실측: type system · subtype local_command · level info). */
+const localCommand = (ms: number, text: string, o: Record<string, unknown> = {}) =>
+  ({ type: "system", subtype: "local_command", level: "info", isMeta: false, isSidechain: false, timestamp: iso(ms), content: `<local-command-stdout>${text}</local-command-stdout>`, ...o });
+test("D11 대화상자 결과가 system 줄(local_command)로 남아도 대기 — 명령 결과의 두 모양을 다 읽는다(#4821 후속 실측)", () => {
+  const w = quotaWaitOf([...turnEnd(T0 - 10), localCommand(T0, DIALOG_TEXT)], at());
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, T0);
+  assert.equal(w?.text, DIALOG_TEXT);
+});
+test("D12 system 줄의 다른 명령 결과 · 사이드체인 · informational 줄의 같은 문구는 걸림이 아니다", () => {
+  assert.equal(quotaWaitOf([localCommand(T0, "Model 'claude-nonexistent-4821' not found")], at()), null);
+  assert.equal(quotaWaitOf([localCommand(T0, DIALOG_TEXT, { isSidechain: true })], at()), null);
+  assert.equal(quotaWaitOf([info(`<local-command-stdout>${DIALOG_TEXT}</local-command-stdout>`, T0)], at()), null);
+  assert.equal(quotaWaitOf([localCommand(T0, DIALOG_TEXT), human(T0 + 60_000)], at()), null, "그 뒤 사람 말이면 접힌다");
+});
+
 // ── #4821 ① — 끝 창보다 긴 «이어 간 턴». 창이 그 턴 중간에서 열리면 이어 감 줄·이어감 메시지가 창 앞이라 정리 안내만 보인다.
 //  정리 안내 줄엔 promptId 만 있다(실측 4건: isMeta · usageLimitNote · promptId · isSidechain — origin·turnOrigin 없음). 읽는 쪽이 그 턴의 첫 줄을
 //  거슬러 찾아 «이어 간 턴» 인지 확인한다(quotaScanWithOpenTurn — Z 행). O 행은 «이어 간 턴이다» 를 받았을 때의 판정(quotaScan 의 둘째 인자).

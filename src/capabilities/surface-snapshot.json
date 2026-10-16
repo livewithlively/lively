@@ -3952,7 +3952,7 @@
   "rest": [
    "POST /api/ui/collect/claude-runs"
   ],
-  "input_hash": "67f51bbc5a1a816b"
+  "input_hash": "bdeaf820fcf3a11f"
  },
  {
   "name": "collect_claude_run_get",

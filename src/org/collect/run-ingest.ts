@@ -1,0 +1,161 @@
+// 수집 실행의 저장 단계(#4213 T11) — 끝난 목록·수집 실행의 원문을 T10 수집 단위 표로 넣는다. 셈(풀기·나누기·위치)은 collect-plan ·
+//  connector-parse 가 하고, 여기는 T10 함수만 부른다(recordUnitListing · storeUnitItems · advanceUnitCursor).
+//
+//  · 목록 — 그 사람 커넥터가 돌려준 목록이라 verified:true(볼 수 있는 구성원이 된다). 새 단위는 «후보» 로 선다(모을지는 리브·사람이 정한다).
+//    «전부» 는 그 사람의 via-listing 자리를 정리하므로 팀(인스턴스)을 확실히 알 때만 넘긴다.
+//  · 수집 — 단위마다 그 그릇의 항목만 넣고(요청 안 한 채널의 글은 버린다), 위치는 collect-plan 이 정한 대로 옮긴다(«다 읽었다» 의 증거가
+//    다 있을 때만 앞으로 · 못 다 읽었으면 시작점 그대로 + 구간 줄이기). 원문이 잘렸거나 항목 저장이 실패한 판은 위치를 아예 건드리지 않는다.
+//    이 판이 아예 안 읽은 단위는 읽은 시각도 옮기지 않는다(다음 판이 다시 맡는다).
+//  · 던지지 않는다 — 결과(무엇을 넣었나 · 왜 못 넣었나)를 돌려주고, 호출부가 실행 기록(collect_run.ingest)에 남긴다.
+import { itemsPool } from "../../db/client.js";
+import { logger } from "../../log.js";
+import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
+import { CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
+import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
+
+export type IngestPlan = CollectPlan;
+
+/** 실행 기록에서 읽은 계획 → 저장 단계의 계획(모양이 틀리면 null — 남의 칸을 믿지 않는다). */
+export function toIngestPlan(mode: unknown, raw: unknown): IngestPlan | null {
+  if (mode !== "listing" && mode !== "collect") return null;
+  const p = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  if (mode === "listing") return typeof p.app === "string" && CLAUDE_COLLECT_APPS[p.app] ? { mode, app: p.app } : null;
+  const units = Array.isArray(p.units) ? p.units.filter((u): u is PlannedUnit => {
+    const x = u as Record<string, unknown>;
+    return !!x && Number.isInteger(x.id) && typeof x.app === "string" && typeof x.ref === "string" && validUnitRef(x.app, x.ref)
+      && typeof x.instance === "string" && (x.since == null || typeof x.since === "string");
+  }) : [];
+  return { mode, units, ...(typeof p.planned_at === "number" && Number.isFinite(p.planned_at) ? { planned_at: p.planned_at } : {}) };
+}
+
+export interface IngestUnitResult {
+  id: number; app: string; ref: string; reads: number; items: number;
+  stored: number; inserted: number; conflicts: number; failed: number; unparsed: number;
+  complete: boolean; cursor_moved: boolean; window_shrunk: boolean; stuck: boolean; reason?: string;
+}
+
+export interface IngestResult {
+  state: "done" | "failed";
+  mode: "listing" | "collect";
+  error?: string;
+  /** 원문 파일 중 읽은 것 · 앞에서 잘렸나(읽기 상한). */
+  captures: number; truncated: boolean;
+  /** 목록: 올린 단위 수 · 새로 생긴 단위 수 · 받지 않은 수(남의 메일함 등) · 전부였나 · 인스턴스. */
+  listed?: number; created?: number; refused?: number; complete?: boolean; instance?: string;
+  /** 수집: 단위별 결과와 합계. partial — 못 다 읽은 단위 · 못 푼 결과 · 저장 실패가 하나라도 있다(화면이 «확인 필요» 로 보인다). */
+  units?: number; stored?: number; inserted?: number; stray?: number; unparsed?: number; failed?: number; incomplete?: number;
+  /** 맡겼는데 이 판이 안 읽은 단위 · 구간을 더 줄일 수 없는데 못 다 읽은 단위(같은 자리에 머문다). */
+  unread?: number; stuck?: number;
+  partial?: boolean;
+  per_unit?: IngestUnitResult[];
+}
+
+/**
+ * 슬랙·노션 단위의 인스턴스(팀·워크스페이스) — claude.ai 커넥터 결과에는 팀 id 가 없다(맥 실측: 목록·채널·프로필 어디에도).
+ *  기존 수집기·단위가 쓰는 값과 같아야 같은 글이 합쳐지므로, 이 워크스페이스가 이미 아는 값에서 고른다:
+ *  ① ref — 같은 ref 를 가진 기존 단위의 인스턴스(가장 많은 쪽) ② single — 그 앱의 인스턴스가 하나뿐이면 그것(추정) ③ none — 빈 값.
+ *  via 가 single 이면 추정이라 목록의 «전부» 를 믿지 않는다(틀린 팀이면 그 팀의 via-listing 자리를 지우게 된다).
+ */
+export async function resolveInstance(app: string, refs: readonly string[]): Promise<{ instance: string; via: "fixed" | "ref" | "single" | "none" }> {
+  if (app === "gmail") return { instance: "default", via: "fixed" };
+  try {
+    if (refs.length) {
+      const r = await itemsPool.query(
+        `SELECT instance, count(*)::int AS n FROM collect_unit WHERE app = $1 AND ref = ANY($2::text[]) AND instance <> ''
+          GROUP BY instance ORDER BY n DESC LIMIT 1`, [app, [...refs].slice(0, 5000)]);
+      if (r.rows[0]?.instance) return { instance: String(r.rows[0].instance), via: "ref" };
+    }
+    const r2 = await itemsPool.query(
+      `SELECT DISTINCT instance FROM (
+         SELECT instance FROM collect_unit WHERE app = $1 AND instance <> ''
+         UNION SELECT external_instance AS instance FROM source WHERE external_system = $1 AND COALESCE(external_instance, '') <> ''
+       ) x LIMIT 3`, [app]);
+    if (r2.rows.length === 1) return { instance: String(r2.rows[0].instance), via: "single" };
+  } catch (e) {
+    logger.warn({ app, err: (e as Error)?.message }, "[collect-ingest] 인스턴스를 못 정했다 — 빈 값으로");
+  }
+  return { instance: "", via: "none" };
+}
+
+const capturesOf = (files: readonly CaptureFile[]): Capture[] =>
+  files.map((f) => readCapture(f)).filter((c): c is Capture => !!c);
+
+/** 목록 실행 → recordUnitListing(verified:true). */
+async function ingestListing(member: string, app: string, caps: Capture[], truncated: boolean): Promise<Omit<IngestResult, "captures" | "truncated">> {
+  const connector = CLAUDE_COLLECT_APPS[app];
+  if (!connector) return { state: "failed", mode: "listing", error: `목록을 모르는 앱: ${app}` };
+  const h = harvestListing(caps, app);
+  if (!h.calls) return { state: "failed", mode: "listing", error: "목록 도구를 부르지 않았다" };
+  if (!h.units.length) return { state: h.unparsed ? "failed" : "done", mode: "listing", listed: 0, created: 0, complete: false, ...(h.unparsed ? { error: "목록 결과를 풀지 못했다(형식이 바뀌었을 수 있다)" } : {}) };
+  const { instance, via } = await resolveInstance(app, h.units.map((u) => u.ref));
+  //  원문이 잘렸으면 뒤쪽 목록을 못 봤다 — «전부» 가 아니다.
+  const complete = h.complete && via !== "single" && !truncated;
+  const r = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: true }, { actor: member, source: "collect-run" });
+  return { state: "done", mode: "listing", listed: h.units.length, created: r.created, refused: r.refused.length, complete: complete && !r.complete_ignored, instance };
+}
+
+/** 수집 실행 → 단위마다 storeUnitItems · advanceUnitCursor. */
+async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean): Promise<Omit<IngestResult, "captures" | "truncated">> {
+  const units = plan.units ?? [];
+  if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
+  const { byUnit, stray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null });
+  const per: IngestUnitResult[] = [];
+  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0;
+  for (const u of units) {
+    const h = byUnit.get(u.id)!;
+    const row: IngestUnitResult = {
+      id: u.id, app: u.app, ref: u.ref, reads: h.reads, items: h.items.length,
+      stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false, stuck: false,
+    };
+    unparsed += h.unparsed;
+    if (!h.reads) { row.reason = "이 판이 읽지 않음"; unread++; per.push(row); continue; }
+    if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
+    try {
+      if (h.items.length) {
+        const r = await storeUnitItems(u.id, h.items, { member });
+        row.stored = r.stored; row.inserted = r.inserted; row.conflicts = r.conflicts; row.failed = r.failed;
+        stored += r.stored; inserted += r.inserted; failed += r.failed;
+      }
+      //  원문이 잘렸거나(뒤쪽 결과를 못 봤다) 저장이 하나라도 실패했으면 위치도 구간도 그대로 둔다 — 다음 판이 같은 자리부터 다시 읽는다.
+      //   «마지막 글 시각» 도 그대로 둔다 — 수집기에서 넘어온 단위(위치 칸이 빔)는 그 시각이 곧 다음 시작점이다.
+      const blocked = truncated ? "원문이 잘림" : row.failed ? `저장 실패 ${row.failed}건` : null;
+      const a = await advanceUnitCursor(u.id, { member }, { cursor: blocked ? null : h.nextCursor, readAt: new Date(now), lastItemAt: blocked ? null : h.lastItemAt });
+      if (!a.ok) row.reason = a.reason;
+      else if (blocked) row.reason = blocked;
+      row.cursor_moved = a.ok && !blocked && h.advanced;
+      row.window_shrunk = a.ok && !blocked && !h.complete && h.nextCursor != null;
+      row.stuck = row.window_shrunk && h.stuck;
+      if (row.stuck) stuck++;
+    } catch (e) {
+      row.reason = String((e as Error)?.message ?? e).slice(0, 200);
+      row.failed = Math.max(row.failed, 1);
+      failed += 1;
+      logger.warn({ unitId: u.id, member, err: row.reason }, "[collect-ingest] 단위 저장 실패 — 다음 판이 같은 위치부터 다시 읽는다");
+    }
+    per.push(row);
+  }
+  const anyRead = per.some((p) => p.reads > 0);
+  return {
+    state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete, unread, stuck,
+    //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남).
+    partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated || unread > 0 || stray > 0, per_unit: per,
+    ...(anyRead ? {} : { error: "맡긴 단위를 하나도 읽지 않았다" }),
+  };
+}
+
+/** 끝난 실행 하나의 저장 단계. 던지지 않는다. */
+export async function ingestRun(input: {
+  member: string; plan: IngestPlan; files: readonly CaptureFile[]; truncated?: boolean; now?: number;
+}): Promise<IngestResult> {
+  const caps = capturesOf(input.files);
+  const truncated = input.truncated === true;
+  const base = { captures: caps.length, truncated };
+  try {
+    if (input.plan.mode === "listing") return { ...base, ...(await ingestListing(input.member, String(input.plan.app ?? ""), caps, truncated)) };
+    return { ...base, ...(await ingestCollect(input.member, input.plan, caps, input.now ?? Date.now(), truncated)) };
+  } catch (e) {
+    const error = String((e as Error)?.message ?? e).slice(0, 300);
+    logger.warn({ member: input.member, mode: input.plan.mode, err: error }, "[collect-ingest] 저장 단계 실패");
+    return { ...base, state: "failed", mode: input.plan.mode, error };
+  }
+}

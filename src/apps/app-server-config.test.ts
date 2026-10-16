@@ -2,13 +2,13 @@
 // 실행: npm run build && node dist/apps/app-server-config.test.js
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
-import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
+import { LOG_GROUP_TAG, appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor, logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
 import {
   APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
   normalizeAppServerPolicy, retentionDaysFor,
 } from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
-import { publicError } from "./app-server-deploy.js";
+import { publicError, realLambdaApi } from "./app-server-deploy.js";
 import { appServerEnabledFor } from "./app-server-config.js";
 import { withTenant } from "../org/tenant-context.js";
 import { AwsError } from "../net/aws/aws-json.js";
@@ -90,7 +90,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
+  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");
@@ -219,6 +219,16 @@ t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1�
   assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");
 });
 
+//  #4790 앱마다 로그 그룹 — 실행 역할의 쓰기 조건(lively-infra WriteOwnAppLogs)이 보는 태그와 그룹 ARN.
+t("B20 로그 그룹 태그 · ARN(#4790) — 태그 키 lvly-fn = 함수 이름 · ARN 은 끝 :* 없이 · 계정은 실행 역할 ARN 에서", () => {
+  assert.equal(LOG_GROUP_TAG, "lvly-fn", "lively-infra app-servers.tf 의 ${aws:ResourceTag/lvly-fn} 과 같은 이름");
+  assert.deepEqual(logGroupTagsFor("lvly-app-x-ws"), { "lvly-fn": "lvly-app-x-ws" });
+  const env = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: "arn:aws:iam::425515538094:role/lvly-app-exec" })!;
+  assert.equal(env.awsAccountId, "425515538094");
+  assert.equal(logGroupArnFor(env, "/aws/lambda/lvly-app-x-ws"), "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws");
+  assert.deepEqual(logGroupTagBundleFor(env, "lvly-app-x-ws"), { tags: { "lvly-fn": "lvly-app-x-ws" }, arn: "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws" }, "배포가 넘기는 묶음");
+});
+
 //  #4791 서버 선언을 뺀 앱의 함수 정리 — 사양 엣지 표 R10.
 t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 기본 · 바닥 1 · 천장 365", () => {
   assert.equal(APP_SERVER_POLICY_DEFAULT.unused_retire_days, 7);
@@ -228,5 +238,35 @@ t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 �
   assert.equal(normalizeAppServerPolicy({ unused_retire_days: 9999 }).unused_retire_days, 365, "천장");
   assert.equal(normalizeAppServerPolicy({ unused_retire_days: 30 }).unused_retire_days, 30);
 });
+
+//  #4790 재검토 4 — 실제 어댑터(realLambdaApi)가 태그 묶음을 그대로 넘기는가. 다른 시험은 가짜 api 를 끼워 이 이음매를 지나지 않는다 —
+//   여기서 태그가 빠지면 배포는 초록인데 운영에서 그 함수 기록만 사라진다. 전역 fetch 와 env 자격을 잠깐 바꿔 AWS 를 부르지 않는다.
+{
+  const seen: Array<{ op: string; body: unknown }> = [];
+  const realFetch = globalThis.fetch;
+  const keep = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY, token: process.env.AWS_SESSION_TOKEN };
+  process.env.AWS_ACCESS_KEY_ID = "AKIDEXAMPLE"; process.env.AWS_SECRET_ACCESS_KEY = "example-secret"; delete process.env.AWS_SESSION_TOKEN;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const h: Record<string, string> = {};
+    for (const [k, v] of Object.entries((init?.headers ?? {}) as Record<string, string>)) h[k.toLowerCase()] = String(v);
+    const op = String(h["x-amz-target"] ?? "").split(".")[1] ?? "";
+    seen.push({ op, body: JSON.parse(String(init?.body ?? "{}")) });
+    return op === "CreateLogGroup" ? new Response("{\"__type\":\"ResourceAlreadyExistsException\"}", { status: 400 }) : new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const tag = { tags: { "lvly-fn": "lvly-app-x-ws" }, arn: "arn:aws:logs:ap-northeast-2:425515538094:log-group:/aws/lambda/lvly-app-x-ws" };
+  try {
+    await realLambdaApi("ap-northeast-2").ensureLogGroup("/aws/lambda/lvly-app-x-ws", 14, tag);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of [["AWS_ACCESS_KEY_ID", keep.id], ["AWS_SECRET_ACCESS_KEY", keep.secret], ["AWS_SESSION_TOKEN", keep.token]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  t("B21 실제 어댑터가 로그 그룹 태그 묶음을 넘긴다 — 만들기에 tags · 있던 그룹은 TagResource(그룹 ARN)", () => {
+    assert.deepEqual(seen.map((x) => x.op), ["CreateLogGroup", "TagResource", "PutRetentionPolicy"]);
+    assert.deepEqual(seen[0]!.body, { logGroupName: "/aws/lambda/lvly-app-x-ws", tags: tag.tags });
+    assert.deepEqual(seen[1]!.body, { resourceArn: tag.arn, tags: tag.tags });
+  });
+}
 
 console.log(`\n${pass} passed`);

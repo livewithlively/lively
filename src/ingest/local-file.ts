@@ -342,6 +342,16 @@ export async function stampTrashedLocalPath(root: LocalRoot, rel: string, stamp:
   return r.rowCount ?? 0;
 }
 
+/** 그 좌표의 살아 있는 자료 번호 — 없으면 null. 자료 보기 화면(#4672)의 «올린 사람 · 여기서 나온 지식» 줄이 이 번호로 자료를 연다.
+ *  좌표 하나라 고유 색인(source_external_uidx)을 탄다. 공개범위는 부르는 쪽이 그 번호로 다시 본다(getSource). */
+export async function activeLocalSourceIdAt(root: LocalRoot, rel: string): Promise<number | null> {
+  const r = await itemsPool.query(
+    `SELECT id FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND lifecycle='active' LIMIT 1`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), localExternalId(root, rel)]);
+  const id = (r.rows[0] as { id?: number } | undefined)?.id;
+  return id ? Number(id) : null;
+}
+
 export interface TrashedFileRow { id: number; title: string | null; path: string; stamp: FileTrashStamp }
 /** 휴지통의 파일 자료 한 건 — 도장이 없으면(이미 되살렸거나 옛 방식으로 지운 것) undefined. */
 export async function getTrashedFile(sourceId: number): Promise<TrashedFileRow | undefined> {

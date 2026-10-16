@@ -73,7 +73,8 @@ const appServerDeploy: Capability = {
     "start 'HOSTNAME=0.0.0.0 node server.js'). 앱 폴더(/var/task)는 읽기 전용이고 /tmp 만 쓸 수 있다 — /tmp 아래를 가리키는 링크는 시작 전에 그 자리를 만든다. " +
     "올린 뒤 GET / 로 한 번 불러 서버가 뜨는지 본다(안 뜨면 기록과 함께 실패 · 앱 주소는 그대로). 그 판을 **저장한 사람**의 세션에서만 빌드한다 — 남이 저장한 판은 이미 빌드됐을 때만 올라간다. " +
     "빌드는 몇 분 걸릴 수 있어 wait_s(기본 50초) 안에 안 끝나면 status 'running' 으로 돌아오고 뒤에서 이어 간다 — app_server_status 로 본다(실패하면 이 세션에 기록이 들어온다). " +
-    "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소 → 서버 연결은 v2-6 에서 열린다(지금은 함수만 생긴다).",
+    "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소 → 서버 연결은 v2-6 에서 열린다(지금은 함수만 생긴다). " +
+    "status 'deployed' 여도 warnings 가 있으면 읽는다(예: 로그 그룹을 못 맞춤 — 그 함수 기록이 CloudWatch 에 안 남을 수 있다 · 다시 넣으면 다시 맞춘다).",
   scope: null,
   input: {
     app_id: z.string(),
