@@ -9,7 +9,7 @@
 //  G1 app_save 새 id · 남은 폴더 → 보관(create) · 새 앱 폴더 빔   G2 관리자 설치 새 id → 보관(create)   G4 갱신은 폴더 그대로
 //  G5 남은 폴더를 못 옮기면 503 · 앱 행 없음   G7 지운 뒤 같은 id 로 다시 → 옛 파일 서명 주소 GET 404 · 탐색기 빈 목록
 //  I1 목록(보관 · 고아 · 파일만 있던 보관은 기록으로)   I2 비우기(missing · was_missing · 감사)   I3 되돌리기(앱 없음 409 · 되돌림 · 파일 있음 409 · 보관 없음 410)
-//  I4 고아 옮기기   I5 관리자 아님 403   I6 REST 모양 400   J1 탐색기로 보관 404   J2 서명 주소로 보관 400
+//  I4 고아 옮기기   I5 관리자 아님 403   I6 REST 모양 400   J1 탐색기로 보관 — 없는 앱 폴더의 빈 목록(#4847)   J2 서명 주소로 보관 400
 //  H1 기간 지난 것만   H2 경계(정확히 기간) 남김   H3 지울 것 없음(파일을 만지지 않음)   H4 파일 없는 기록 걷기   H5 보관 일수 0 → 전부
 //  H6 못 지우는 보관은 기록이 남는다(정비 · 비우기) · 다음 정비가 이어서   H7 한 번에 오래된 것부터 20개
 //  H8 못 지운 보관은 뒤로(까닭 · 시각) — 안 해 본 보관이 먼저   I3b 보관 기간이 지난 보관은 되돌리지 않는다   I3c 지우다 멈춘 보관도
@@ -254,11 +254,17 @@ try {
 
   // ── J 보관은 apps 주소 · 탐색기로 닿지 않는다 ──
   await grant("gg-install");
+  //  보관 자리로 들어가면 없는 앱 폴더와 같은 빈 목록이다(#4847 — 못 봄 · 없음은 같은 답) — 보관 안의 이름이 하나도 안 나온다.
   const j1 = await req("GET", `/api/ui/terminal/browse?root=apps&path=${encodeURIComponent(e1name)}`, userTok);
+  const j1body = await j1.json();
+  const j1none = await (await req("GET", `/api/ui/terminal/browse?root=apps&path=${encodeURIComponent("no-such-app-4847")}`, userTok)).json();
   const j1top = await (await req("GET", "/api/ui/terminal/browse?root=apps&path=", userTok)).json();
   const j2 = await mintAs(userTok, `apps/${e1name}/out/data.bin`);
   const j2admin = await mintAs(adminTok, `apps/${e1name}/out/data.bin`);
-  chk("J1 탐색기 root=apps 로 보관 404 · 맨 위 목록에 보관 이름 없음", j1.status === 404 && !(j1top.dirs ?? []).some((d) => d.startsWith(".")), JSON.stringify({ j1: j1.status, top: j1top.dirs }));
+  const sansPath = (b) => JSON.stringify({ ...b, path: undefined, parent: undefined });
+  chk("J1 탐색기 root=apps 로 보관 — 없는 앱 폴더와 같은 빈 목록 · 맨 위 목록에 보관 이름 없음",
+    j1.status === 200 && (j1body.items ?? [null]).length === 0 && sansPath(j1body) === sansPath(j1none) && !(j1top.dirs ?? []).some((d) => d.startsWith(".")),
+    JSON.stringify({ j1: j1.status, j1body, j1none, top: j1top.dirs }));
   chk("J2 서명 주소 apps/<보관 이름>/… → 400(관리자도)", j2.status === 400 && j2admin.status === 400, JSON.stringify([j2.status, j2admin.status]));
 
   // ── I5 · I6 관리자 아님 · 모양 ──

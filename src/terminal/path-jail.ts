@@ -52,6 +52,15 @@ export function confined(probe: PathProbe | null | undefined): boolean {
   return resolved === base || resolved.startsWith(base + path.sep);
 }
 
+/**
+ * (순수) 해소가 «그 이름은 이 자리에 있을 수 없다» 로 끝났나(#4847) — 이름이나 경로가 이 파일 시스템에 너무 길다(ENAMETOOLONG),
+ *  파일 아래를 가리킨다(ENOTDIR). 판정(confined)은 그대로 거부다 — 이 값은 부르는 쪽이 그 거부를 «없는 자리» 와 같은 답으로
+ *  돌릴지 고르는 재료일 뿐이다. 그 밖의 실패(바깥을 가리키는 링크 · 끊어진 링크 · 권한 등 해소 실패)는 여기 들지 않는다.
+ */
+export function probeSaysAbsent(probe: PathProbe | null | undefined): boolean {
+  return !!probe && (probe.error === "ENAMETOOLONG" || probe.error === "ENOTDIR");
+}
+
 /** 멤버 경계에서 도는 한 줄(argv[1]=base, argv[2]=target → PathProbe JSON). 로컬 probeLocal 과 **같은 사양**이다. */
 export const PROBE_JS =
   "const fs=require('fs'),path=require('path'),b=path.resolve(process.argv[1]),t=path.resolve(process.argv[2]);" +
