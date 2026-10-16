@@ -15,6 +15,7 @@
 //   (span — 바쁜 대화는 작은 구간으로 따라잡는다, 1시간까지). 다 읽은 판은 구간을 다시 두 배로 늘린다.
 //   구간 끝이 «지금» 인 판은 위치를 계획 시각 − 60초로 옮긴다 — 글의 시각(특히 메일의 Date 머리)은 보낸 쪽이 정하므로 위치로 쓰지 않는다.
 import type { RawItem } from "../../items/store.js";
+import { ACTIVITY_WINDOW_SEC, type ActivitySample } from "./schedule-plan.js";
 import {
   type Capture, type ListedUnit, type SlackMsg, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem,
   parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem,
@@ -78,10 +79,17 @@ export interface PlannedUnit {
   until?: string | null;
   /** 저장돼 있던 구간 길이(초) — 못 다 읽어 줄여 둔 값. 없으면 앱의 최대. */
   span?: number | null;
+  /** #4744 빈도 표본 재료 — 계획 때 이 단위를 마지막으로 읽은 시각 · 노션은 그때까지 본 마지막 고친 시각(이번 판에 새로 고쳐졌나). */
+  read_at?: string | null;
+  edited_at?: string | null;
 }
 
 /** 실행 계획(collect_run.plan 에 남는다) — 수집 실행은 단위들과 계획 시각을 싣는다. */
-export interface CollectPlan { mode: "listing" | "collect"; app?: string; units?: PlannedUnit[]; planned_at?: number }
+export interface CollectPlan {
+  mode: "listing" | "collect"; app?: string; units?: PlannedUnit[]; planned_at?: number;
+  /** #4744 누가 띄웠나 — schedule = 기본 주기(collect-schedule 틱) · 없으면 사람·리브가 직접(collect_claude_run). */
+  trigger?: "schedule";
+}
 
 const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -164,20 +172,28 @@ export function unitInstruction(u: PlannedUnit): string | null {
 export interface AssignedLike {
   id: number; app: string; instance: string; ref: string; kind: string; read_at: string | null;
   cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean;
+  /** #4744 지금 읽을 때가 됐나 — 때가 된 단위가 먼저 실린다(주기 판에 곧 때가 될 단위를 함께 실어도 때가 된 것이 밀려나지 않게). 없으면 때가 된 것으로 본다. */
+  due?: boolean;
 }
 
 /**
  * 한 판에 실을 단위 — 아는 앱 · ref 가 앱 모양(본인 신고로 들어온 임의의 글이 지시에 섞이지 않게) · 앱을 정했으면 그 앱만 ·
- *  오래 안 읽은 것부터(처음 읽는 단위가 맨 앞, 같으면 id 순 — 맡은 단위가 한 판보다 많아도 돌아가며 다 읽힌다) · UNITS_PER_RUN 개.
+ *  때가 된 단위 먼저(#4744 — 주기 판은 곧 때가 될 단위도 함께 싣는다) · 그 안에서 오래 안 읽은 것부터(처음 읽는 단위가 맨 앞, 같으면 id 순 —
+ *  맡은 단위가 한 판보다 많아도 돌아가며 다 읽힌다) · UNITS_PER_RUN 개.
  *  커넥터 이름은 앱 키에서 고정한다(저장된 칸을 믿지 않는다 — 비면 러너가 «연결된 것 전부» 를 허락한다).
  */
 export function pickUnitsForRun(assigned: readonly AssignedLike[], opts: { now: number; app?: string | null }): PlannedUnit[] {
   return assigned
     .filter((u) => !!CLAUDE_COLLECT_APPS[u.app] && (!opts.app || u.app === opts.app) && validUnitRef(u.app, u.ref))
     .slice()
-    .sort((a, b) => (a.read_at ? Date.parse(a.read_at) : 0) - (b.read_at ? Date.parse(b.read_at) : 0) || a.id - b.id)
+    .sort((a, b) => Number(a.due === false) - Number(b.due === false)
+      || (a.read_at ? Date.parse(a.read_at) : 0) - (b.read_at ? Date.parse(b.read_at) : 0) || a.id - b.id)
     .slice(0, UNITS_PER_RUN)
-    .map((u) => ({ id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app], ...unitWindow(u, opts.now) }));
+    .map((u) => ({
+      id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app], ...unitWindow(u, opts.now),
+      read_at: u.read_at ?? null,
+      ...(u.app === "notion" ? { edited_at: typeof u.cursor?.edited_at === "string" ? u.cursor.edited_at : null } : {}),
+    }));
 }
 
 /** 수집 실행 지시 — 단위마다 한 줄. 지시를 못 만드는 단위는 빼고 돌려준다. */
@@ -220,6 +236,11 @@ export interface UnitHarvest {
   unparsed: number;
   /** 못 다 읽었는데 구간을 더 줄일 수 없다(이미 1시간) — 같은 자리에 머문다. 화면·기록이 사람에게 보이게 센다. */
   stuck: boolean;
+  /**
+   * #4744 글 빈도 표본 — 다 읽은 판에서 «계획 구간(시작 ~ 끝)에 올라온 글 수 · 구간 길이 · 구간 끝»(epoch 초). 못 다 읽었으면 null
+   *  (모자란 판의 글 수는 빈도를 낮춰 잡는다). 노션은 구간 대신 «지난번 읽은 뒤 새로 고쳐졌나»(0 · 1)를 지난번 읽은 시각부터 계획 시각까지로 센다.
+   */
+  sample: ActivitySample | null;
 }
 
 export interface HarvestOpts {
@@ -258,7 +279,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
   //  같은 좌표가 여러 번 나오면 rank 가 큰 쪽(같으면 먼저 본 것)이 남는다.
   const seen = new Map<number, Map<string, { it: RawItem; rank: number }>>();
   for (const u of units) {
-    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0, stuck: false });
+    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0, stuck: false, sample: null });
     seen.set(u.id, new Map());
   }
   let stray = 0;
@@ -397,6 +418,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       h.why = "모르는 앱";
     }
     h.complete = h.why == null;
+    h.sample = harvestSample(u, h, plannedAt);
 
     //  위치 — 다 읽었으면 앞으로, 못 다 읽었으면 그 자리에 구간만 줄여서.
     if (u.app === "notion") {
@@ -423,6 +445,44 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     }
   }
   return { byUnit, stray };
+}
+
+const secOf = (v: string | null | undefined): number | null => {
+  const t = v ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+};
+
+/** (#4744) 다 읽은 판의 글 빈도 표본 — UnitHarvest.sample 머리말. 계획 시각을 모르면(옛 계획) 만들지 않는다. */
+function harvestSample(u: PlannedUnit, h: UnitHarvest, plannedAt: number | null): ActivitySample | null {
+  if (!h.complete || plannedAt == null) return null;
+  if (u.app === "notion") {
+    const start = secOf(u.read_at) ?? plannedAt - ACTIVITY_WINDOW_SEC;
+    if (!(plannedAt > start)) return null;
+    const edited = h.items.map((i) => secOf(i.updated_at)).find((t) => t != null) ?? null;
+    const before = secOf(u.edited_at);
+    const changed = edited != null && edited > start && (before == null || edited > before);
+    return { e: plannedAt, s: plannedAt - start, n: changed ? 1 : 0 };
+  }
+  if (u.since == null || (u.app !== "slack" && u.app !== "gmail")) return null;
+  const start = Math.floor(Number(u.since));
+  const end = u.until != null ? Math.floor(Number(u.until)) : plannedAt - NOW_MARGIN_SEC;
+  if (!(end > start)) return null;
+  const n = h.items.filter((i) => {
+    const t = secOf(i.occurred_at ?? i.updated_at);
+    return t != null && t >= start && t <= end;
+  }).length;
+  return { e: end, s: end - start, n };
+}
+
+/**
+ * (#4744) 다 읽은 뒤에도 «지금» 까지 못 왔나 — 새 위치에서 시작하는 다음 구간의 끝이 지금보다 앞이면 밀린 것이다(처음 수집 14일을
+ *  7일·1일 구간으로 따라잡는 중). 주기 판정이 «곧바로 다음 판» 을 고르는 근거다. 노션·모르는 위치는 밀리지 않은 것으로 본다.
+ */
+export function behindAfter(app: string, nextCursor: Record<string, unknown> | null, nowMs: number): boolean {
+  if (!nextCursor || (app !== "slack" && app !== "gmail")) return false;
+  const key = app === "slack" ? "ts" : "after";
+  if (nextCursor[key] == null) return false;
+  return unitWindow({ app, cursor: nextCursor, last_item_at: null, from_collector: false }, nowMs).until != null;
 }
 
 /** 목록 실행의 원문 → 단위 목록 · 전부인가. «전부» 는 그 사람의 via-listing 자리를 정리하는 판정이라 증거가 다 있을 때만. */

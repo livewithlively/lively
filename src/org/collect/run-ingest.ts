@@ -10,8 +10,15 @@
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
-import { CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
+import { CLAUDE_COLLECT_APPS, behindAfter, harvestListing, harvestUnits, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
 import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
+import { noteUnitRead, type UnitReadNote } from "./collect-schedule.js";
+
+/** #4744 단위 하나의 다음 확인을 적고 실행 기록에 남길 모양으로 — 못 적었으면 null(던지지 않는다). */
+async function scheduleNote(unitId: number, note: UnitReadNote): Promise<IngestUnitResult["next"]> {
+  const r = await noteUnitRead(unitId, note);
+  return r ? { at: r.next_at, why: r.why, interval_sec: r.interval_sec } : null;
+}
 
 export type IngestPlan = CollectPlan;
 
@@ -32,6 +39,8 @@ export interface IngestUnitResult {
   id: number; app: string; ref: string; reads: number; items: number;
   stored: number; inserted: number; conflicts: number; failed: number; unparsed: number;
   complete: boolean; cursor_moved: boolean; window_shrunk: boolean; stuck: boolean; reason?: string;
+  /** #4744 다음 확인 — 언제 · 왜(interval 주기 뒤 · catchup 곧바로 · retry 물러섬) · 그때의 주기. 못 적었으면 없다. */
+  next?: { at: string; why: string; interval_sec: number } | null;
 }
 
 export interface IngestResult {
@@ -108,7 +117,12 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false, stuck: false,
     };
     unparsed += h.unparsed;
-    if (!h.reads) { row.reason = "이 판이 읽지 않음"; unread++; per.push(row); continue; }
+    if (!h.reads) {
+      row.reason = "이 판이 읽지 않음"; unread++; per.push(row);
+      //  #4744 맡겼는데 안 읽었다(턴이 모자람 등) — 물러섰다가 다시(곧바로 다시 띄우면 같은 판이 되풀이된다).
+      row.next = await scheduleNote(u.id, { outcome: "unread", now });
+      continue;
+    }
     if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
     try {
       if (h.items.length) {
@@ -126,11 +140,20 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       row.window_shrunk = a.ok && !blocked && !h.complete && h.nextCursor != null;
       row.stuck = row.window_shrunk && h.stuck;
       if (row.stuck) stuck++;
+      //  #4744 다음 확인 시각 — 지금 담당일 때만(담당이 바뀌었으면 새 담당의 판이 정한다).
+      if (a.ok) {
+        row.next = await scheduleNote(u.id, blocked
+          ? { outcome: "blocked", now }
+          : h.complete
+            ? { outcome: "complete", behind: behindAfter(u.app, h.nextCursor, now), sample: h.sample, now }
+            : { outcome: "incomplete", stuck: h.stuck, now });
+      }
     } catch (e) {
       row.reason = String((e as Error)?.message ?? e).slice(0, 200);
       row.failed = Math.max(row.failed, 1);
       failed += 1;
       logger.warn({ unitId: u.id, member, err: row.reason }, "[collect-ingest] 단위 저장 실패 — 다음 판이 같은 위치부터 다시 읽는다");
+      row.next = await scheduleNote(u.id, { outcome: "blocked", now });
     }
     per.push(row);
   }

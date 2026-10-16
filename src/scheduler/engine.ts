@@ -145,6 +145,9 @@ async function tick(): Promise<void> {
   //  #4742 수집 단위 표 — 지금 수집기 설정을 단위로 다시 맞춘다(워크스페이스마다 6시간에 한 번 · 이 컨텍스트가 그 워크스페이스).
   //   읽기 도구가 쓰기를 하지 않게 조회 경로가 아니라 여기서 한다. 안에서 시각을 보고 대부분의 틱은 바로 돌아온다. 기다리지 않는다.
   void import("../org/collect/unit-store.js").then((m) => m.ensureCollectorUnitsFresh()).catch(() => undefined);
+  //  #4744 지속 수집 트리거(기본 주기 하나) — 때가 된 수집 단위의 담당자별로 Claude 커넥터 수집 실행을 띄우고, 저장 단계를 못 탄 실행을 마저
+  //   처리한다. 안에서 워크스페이스마다 1분에 한 번만 일하고(대부분의 틱은 바로 돌아온다) 던지지 않는다. 기다리지 않는다.
+  void import("../org/collect/collect-schedule.js").then((m) => m.collectScheduleTick()).catch(() => undefined);
 
   const tz = await orgTimezone(); // 틱당 1회(캐시) — cron_expr 벽시계 기준.
   const now = Date.now();

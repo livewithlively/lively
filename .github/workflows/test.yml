@@ -571,6 +571,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/collect/collect-ingest.pg-test.mjs
+      # ⑤-t 지속 수집 트리거(#4213 T12) — 목으로는 못 보는 것: 저장 단계가 단위마다 **다음 확인 시각을 표에 적나**(주기 뒤 · 곧바로 ·
+      #    물러섬 — 실패 수가 판을 넘어 이어지나) · 사람이 정한 주기는 빈도가 안 덮나 · 모으기로 켠 단위는 곧바로인가 · 틱이 때가 된 단위의
+      #    담당자만, 도는 사람(실행 기록)·실패가 이어진 사람은 빼고 상한 안에서 띄우나 · 저장 단계를 못 탄 끝난 실행을 마저 처리하고 못 읽는 판은 닫나.
+      - name: 지속 수집 트리거 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-schedule.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

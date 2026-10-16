@@ -112,6 +112,8 @@ export interface CollectRunListRow {
   duration_ms: number | null; cost_usd: number | null; turns: number | null;
   tool_calls: number | null; tool_errors: number | null; captures: number | null;
   mode: string | null; attempts: number | null;
+  /** #4744 누가 띄웠나 — schedule = 기본 주기 틱 · null = 사람·리브가 직접. */
+  trigger: string | null;
   /** 저장 단계 결과의 요약(목록·수집 실행만) — 화면은 수만 쓴다. */
   ingest: {
     state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
@@ -149,7 +151,7 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
   const r = await itemsPool.query(
     `SELECT run_id, member_id, started_at, ended_at, apps, model, cap_mb, request_mb, outcome, error, ended_by,
             mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures,
-            mode, attempts, ingest
+            mode, attempts, ingest, plan->>'trigger' AS trigger
        FROM collect_run
       WHERE started_at >= $1 AND started_at < $2
       ORDER BY started_at DESC
@@ -167,6 +169,7 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
     duration_ms: num(x.duration_ms), cost_usd: num(x.cost_usd), turns: num(x.turns),
     tool_calls: num(x.tool_calls), tool_errors: num(x.tool_errors), captures: num(x.captures),
     mode: (x.mode as string | null) ?? null, attempts: num(x.attempts), ingest: ingestBrief(x.ingest),
+    trigger: typeof x.trigger === "string" ? x.trigger : null,
   }));
   const statRows: RunStatRow[] = rows.map((x) => ({
     started_at: x.started_at, outcome: x.outcome, cap_mb: x.cap_mb, mem_limit_mb: x.mem_limit_mb, mem_peak_mb: x.mem_peak_mb,

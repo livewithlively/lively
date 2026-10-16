@@ -48,6 +48,11 @@ export interface CollectRunStart {
   app?: string | null;
   /** collect — 주기가 된 단위만(기본 아니오: 맡은 단위 전부). */
   dueOnly?: boolean | null;
+  /**
+   * #4744 누가 띄웠나 — schedule = 기본 주기 틱(org/collect/collect-schedule). 그때는 때가 된 단위에 곧 때가 될 단위를 함께 싣고(판 수를 줄인다),
+   *  실을 단위 가운데 때가 된 것이 하나도 없으면 띄우지 않는다(409 — 틱이 본 뒤 그새 다른 판이 읽었다). 실행 기록의 계획에 남는다.
+   */
+  trigger?: "schedule" | null;
   /** 지시. 없으면 점검 지시(COLLECT_PROBE_PROMPT). probe 에서만 쓴다. */
   prompt?: string | null;
   /** claude.ai 커넥터 앱 이름(Slack · Notion · Gmail …). 비면 연결된 것 전부. */
@@ -166,15 +171,21 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
   const { listAssignedUnits } = await import("../org/collect/unit-store.js");
   const member = memberOf(user);
   const now = Date.now();
-  const planned = pickUnitsForRun(await listAssignedUnits(member, { dueOnly: input.dueOnly === true, now }), { now, app });
+  const scheduled = input.trigger === "schedule";
+  const assigned = await listAssignedUnits(member, { dueOnly: scheduled || input.dueOnly === true, soon: scheduled, now });
+  const planned = pickUnitsForRun(assigned, { now, app });
   const { prompt, units } = collectPrompt(planned);
   if (!units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
+  //  주기 판은 때가 된 단위가 하나라도 있어야 띄운다 — 곧 때가 될 단위만으로 판을 띄우면 «함께 싣기» 가 판을 오히려 늘린다.
+  if (scheduled && !units.some((u) => assigned.find((a) => a.id === u.id)?.due)) {
+    throw new HttpError(409, "지금 때가 된 수집 단위가 없습니다 — 그새 다른 판이 읽었습니다");
+  }
   //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
   const apps = [...new Set(units.map((u) => CLAUDE_COLLECT_APPS[u.app]))];
   if (!apps.length) throw new HttpError(500, "수집 실행의 허락할 앱을 정하지 못했습니다");
   return {
     mode, prompt, apps, maxTurns: collectMaxTurns(units.length, units.filter((u) => u.app === "gmail").length),
-    plan: { mode: "collect", units, planned_at: Math.floor(now / 1000) },
+    plan: { mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}) },
   };
 }
 
@@ -378,6 +389,17 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
     captures: st.captures,
     ingest: await import("../org/collect/run-log.js").then((m) => m.getRunIngest(runId)).catch(() => null),
   };
+}
+
+/**
+ * #4744 이 게이트웨이 안에서 지금 도는 수집 실행의 주인(구성원 id) — 기본 주기 틱이 «이미 도는 사람» 을 뺄 때 실행 기록보다 먼저 아는 몫
+ *  (시작 기록은 기다리지 않고 적으므로 막 띄운 판은 표에 아직 없을 수 있다). 지금 워크스페이스의 실행만 센다.
+ */
+export function runningCollectOwners(): Set<string> {
+  const t = currentTenant()?.id ?? null;
+  const out = new Set<string>();
+  for (const r of runs.values()) if (!r.done && (r.tenant?.id ?? null) === t) out.add(memberOf(r.user));
+  return out;
 }
 
 /** (시험용) 지켜보던 실행 표를 비운다. */
