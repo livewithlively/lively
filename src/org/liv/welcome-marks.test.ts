@@ -9,7 +9,8 @@
 //   D3 처음 수집 끝 — 이미 찍힘                → 처음 시각을 지킨다(밀리지 않는다)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { carryWelcomeProgress, withCollectDone } from "./welcome-marks.js";
+import { carryWelcomeProgress } from "./welcome-marks.js";
+import { withCollectDone } from "../store/members.js";
 
 const W = (o: Record<string, unknown> = {}) => ({ done_at: "2026-10-17T00:00:00.000Z", ...o }) as never;
 

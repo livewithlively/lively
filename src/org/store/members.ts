@@ -4,7 +4,6 @@ import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
-import { withCollectDone } from "../liv/welcome-marks.js";   // #4213 T13 — 리브의 «처음 수집 끝» 표식(순수)
 
 // ── 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) ──────────────────────────────
 //  active → 비active(inactive·삭제) 전이는 **그 사람 이름으로 도는 것**(앱 동의·앱 세션·자격 리스)을 거둬야 한다.
@@ -641,6 +640,17 @@ export async function workspacePurposeStage(workspaceId: string | null | undefin
  * - `decision`·`declined` 는 **뒤에 쌓는다**. 같은 key 의 거절이 이미 있으면 갱신한다 —
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
+/**
+ * (순수, #4213 T13) 리브의 «처음 수집 끝» 표식(me_liv_profile_set {collect_done:true}) — 처음 찍힌 시각을 지킨다(두 번 찍어도 2턴 판정의
+ *  근거가 밀리지 않게). 처음 설정을 끝낸 칸이 없으면 찍을 자리가 없다(그대로).
+ *  ⚠ 이 파일 안에 둔다 — 이 모듈은 노드 에이전트 번들에 딸려 들어가 있어(부채), 새 모듈을 import 하면 번들 경계 가드가 막는다(CI 실측 2026-10-17).
+ */
+export function withCollectDone(welcome: LivWelcome | null | undefined, at: Date): LivWelcome | null {
+  if (!welcome) return welcome ?? null;
+  if (welcome.collect_done_at) return welcome;
+  return { ...welcome, collect_done_at: at.toISOString() };
+}
+
 export async function appendLivProfile(
   id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean },
 ): Promise<LivProfile> {

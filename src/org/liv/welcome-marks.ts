@@ -1,4 +1,5 @@
-// 처음 설정 완료 표식(welcome)의 진행 표식 다루기(#4213 T13) — 순수. 쓰는 자리는 delivery/welcome.ts(반영) · store/members.ts(리브의 표식).
+// 처음 설정 완료 표식(welcome)의 진행 표식 옮기기(#4213 T13) — 순수. 쓰는 자리는 delivery/welcome.ts(반영).
+//  (리브의 «처음 수집 끝» 표식 withCollectDone 은 store/members.ts 안에 있다 — 그 모듈은 노드 에이전트 번들에 딸려 있어 새 import 를 못 단다.)
 //
 //  welcome 은 처음 설정을 반영할 때마다 **통째로 덮이는** 칸이다. 그 안에 리브 세션의 진행 표식(처음 수집 끝 · 증류 지시 · 포기)이
 //   함께 산다 — 같은 세션을 다시 쓰는 반영이 그것을 안 옮기면 표식이 사라지고, 2턴이 같은 세션에 또 나간다.
@@ -23,12 +24,3 @@ export function carryWelcomeProgress(prior: LivWelcome | null | undefined): Part
   };
 }
 
-/**
- * 리브의 «처음 수집 끝» 표식(me_liv_profile_set {collect_done:true}) — 처음 찍힌 시각을 지킨다(두 번 찍어도 2턴 판정의 근거가 밀리지 않게).
- *  처음 설정을 끝낸 칸이 없으면 찍을 자리가 없다(그대로 null).
- */
-export function withCollectDone(welcome: LivWelcome | null | undefined, at: Date): LivWelcome | null {
-  if (!welcome) return welcome ?? null;
-  if (welcome.collect_done_at) return welcome;
-  return { ...welcome, collect_done_at: at.toISOString() };
-}
