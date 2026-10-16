@@ -478,6 +478,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-folder-archive.pg-test.mjs
+      # ⑤-m3 앱 폴더 판정 · 승계 DB 함수(#4788 · #4684 후속) — 판정 · 맞추기 유닛은 DB 함수를 가짜로 끼워, 뗀 행 거르기 · 붙인 사람 거르기 ·
+      #    승계의 충돌 키 · 앱 제거가 돌려주는 세션 · 주인 조회 오류를 던지는가는 실제 SQL 에서만 보인다. 행 격리 정책을 실제로 켜고 앱 역할로 붙어
+      #    같은 세션 id 를 쓰는 다른 워크스페이스 행이 섞이지 않는지도 본다(격리는 함수가 아니라 정책이 한다).
+      - name: 앱 폴더 판정 · 승계 DB 함수(행 격리 포함) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/session-apps.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트
