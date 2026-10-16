@@ -1615,6 +1615,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item--new:hover .v2-pad-ico--new { background: var(--blue); color: #fff; border-style: solid; }
 .v2-pad-item--new b { color: var(--blue); }
 .v2-studio { position: fixed; inset: 0; z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
+/* 앱빌더 글은 낱말 단위로 줄을 바꾼다(「확인해주세\n요.」 처럼 끊기지 않게 · 원준 2026-10-16) — 긴 영문 · 주소만 어디서든 끊는다 */
+.v2-studio, .v2-review-bar, .v2-wb { word-break: keep-all; overflow-wrap: break-word; }
 .v2-studio--in { position: absolute; z-index: 5; }   /* 앱빌더 안의 자리(#4632) — 창을 덮지 않고 가운데 칸을 채운다 */
 .v2-studio-crumb { font-size: 12.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); white-space: nowrap; }
 .v2-studio-top--build .v2-studio-crumb { color: rgba(255, 255, 255, .85); }
@@ -1693,7 +1695,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-stage--side > .v2-appui-frame, .v2-studio-stage--side > .v2-studio-wait { flex: none; width: 360px; }
 .v2-studio-wait { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px; padding: 30px; color: var(--ink-sub); }
 .v2-studio-wait b { color: var(--ink); font-size: 16px; }
-.v2-studio-wait p { margin: 0; max-width: 300px; font-size: 13.5px; line-height: 1.6; }
+.v2-studio-wait p { margin: 0; max-width: 340px; font-size: 13.5px; line-height: 1.6; }
 .v2-studio-wait p + p { margin-top: -6px; }
 .v2-studio-spin { display: block; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(123, 97, 224, .2); border-top-color: var(--purple, #7B61E0); animation: v2-studio-spin .9s linear infinite; }
 @keyframes v2-studio-spin { to { transform: rotate(360deg); } }
