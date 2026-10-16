@@ -60,7 +60,7 @@ test("F2 점 — 고장은 오류(7일) · 시스템이 끈 것은 끄기 직전
   assert.equal(d({}), "");
 });
 
-test("F3 지난 세션(흐림·접힘)은 사람이 끝냈거나 사유를 모를 때(종전 그대로) — 시스템이 끈 것·고장은 보통 줄", () => {
+test("F3 지난 세션(흐림·접힘)은 사람이 끝냈을 때만 — 시스템이 끈 것·고장·사유 모름은 보통 줄", () => {
   const p = (o) => S.stoppedIsPast(stopped(o));
   assert.equal(p({ exitedByUser: true }), true);
   assert.equal(p({ endNote: { why: "stop", at: sec } }), true);
@@ -68,8 +68,13 @@ test("F3 지난 세션(흐림·접힘)은 사람이 끝냈거나 사유를 모�
   assert.equal(p({ endNote: { why: "reclaim", at: sec } }), false);
   assert.equal(p({ stopNote: { why: "asking", at: sec } }), false);
   assert.equal(p({ endNote: { why: "lost", at: sec } }), false);
-  assert.equal(p({}), true, "사유를 모르면 종전 그대로 지난 세션(옛 판 · 끝을 보고하지 않는 판의 정상 종료가 여기 든다)");
-  assert.equal(p({ stopNote: { why: "exited", at: sec } }), true);
+  //  상민님 2026-10-16 «점없는 보통줄로» — 사유를 모르는 판(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판의 종료)은 접지 않는다.
+  assert.equal(p({}), false, "사유를 모르면 보통 줄(지난 세션으로 접지 않는다)");
+  assert.equal(p({ stopNote: { why: "exited", at: sec } }), false);
+  assert.equal(p({ endNote: { why: "nope", at: sec } }), false, "모르는 사유 낱말도 사유 모름");
+  //  보통 줄이어도 점은 없다 — 무엇이 벌어졌는지 모르는 줄에 상태를 지어 붙이지 않는다.
+  assert.equal(S.stoppedDotKey(stopped({}), sec * 1000), "");
+  assert.equal(S.stoppedDotKey(stopped({ stopNote: { why: "exited", at: sec } }), sec * 1000), "");
 });
 
 test("F4 오류 점은 확인 필요와 다른 모양 · 점 상태에 든다 · 생사·필터 어휘는 안 바뀐다", () => {

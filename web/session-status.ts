@@ -204,9 +204,10 @@ export function rowDotCls(stateKey: string): string {
 //   · user    — 사람이 끝냈다(/exit · 멈춤 · 휴지통). → 지금처럼 «지난 세션»(흐림·접힘).
 //   · system  — 시스템이 껐다(하네스 종료 규칙 · 옛 회수 시계). → 끄기 직전 모습 그대로(답을 기다리던 것은 «확인 필요», 안 본 결과는 «작업 완료»).
 //   · error   — 고장으로 끝났다(크래시 · 기동 실패 · 노드·컨테이너 고장 · 메모리 부족). → «오류» 점.
-//   · unknown — 사유를 모른다(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판(셸·grok·opencode)의 정상 종료 · 멤버 PC). → 종전 그대로 «지난 세션».
-//     ⚠ 처음 안(«점 없는 보통 줄»)에서 바꿨다(격리 리뷰): 이 칸엔 사람이 직접 끝냈지만 적을 자리가 없는 판이 섞이고, 보통 줄로 두면 롤아웃
-//      순간 지금까지의 꺼진 세션 전부가 흐림·접힘을 잃는다. 종전 그대로가 맞다 — 바뀌는 것은 사유를 아는 판(시스템·고장)뿐이다.
+//   · unknown — 사유를 모른다(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판(셸·grok·opencode)의 종료 · 멤버 PC). → 점 없는 보통 줄.
+//     상민님 결정(2026-10-16 «점없는 보통줄로»): 이 칸엔 사람이 직접 끝냈지만 적을 자리가 없는 판도 섞이고, 롤아웃 순간 지금까지의
+//      꺼진 세션도 흐림·접힘을 잃는다는 것을 알고 정했다 — «지난 세션» 으로 접는 것은 사람이 끝냈다고 **아는** 판뿐이다.
+//      점은 붙이지 않는다(무엇이 벌어졌는지 모르는 줄에 상태를 지어 붙이지 않는다).
 //  ⚠ 이건 **표시**다. 생사(sessIsDead)·필터 어휘(sessStateKey)는 안 바뀐다 — 그 값으로 터미널을 붙일지 정하는 자리가 있다(views.ts alive).
 export type SessEndKind = 'user' | 'system' | 'error' | 'unknown';
 
@@ -228,7 +229,7 @@ export function sessEndKind(s: SessLike): SessEndKind {
  * 꺼진 세션이 목록 줄에 **어떤 점**으로 서나(순수). '' = 점 없음.
  *  · error  → 'error'
  *  · system → 답을 기다리다 꺼졌으면 'waiting' · 안 본 결과가 남은 채 꺼졌으면(서버가 끌 때 잰 seen=false) 24시간 동안 'done'
- *  · user·unknown → '' (지난 세션 — 점은 «지금 벌어지는 일» 의 자리다, #1954 §4)
+ *  · user·unknown → '' (사람이 끝낸 것은 지난 세션, 사유 모름은 보통 줄 — 점은 «지금 벌어지는 일» 의 자리다, #1954 §4)
  */
 export function stoppedDotKey(s: SessLike, nowMs: number = Date.now()): '' | 'waiting' | 'done' | 'error' {
   const k = sessEndKind(s);
@@ -242,8 +243,7 @@ export function stoppedDotKey(s: SessLike, nowMs: number = Date.now()): '' | 'wa
   return '';
 }
 
-/** 꺼진 세션을 «지난 세션» 으로 접나(순수) — 사람이 끝냈거나 사유를 모를 때(종전 그대로). 시스템이 끈 것·고장은 끄기 직전 줄처럼 선다. */
+/** 꺼진 세션을 «지난 세션» 으로 접나(순수) — 사람이 끝냈다고 아는 판만. 시스템이 끈 것·고장은 끄기 직전 줄처럼, 사유 모름은 점 없는 보통 줄로 선다. */
 export function stoppedIsPast(s: SessLike): boolean {
-  const k = sessEndKind(s);
-  return k === 'user' || k === 'unknown';
+  return sessEndKind(s) === 'user';
 }
