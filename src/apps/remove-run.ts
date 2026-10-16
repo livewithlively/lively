@@ -20,7 +20,7 @@ import { removeAppArchives, type ClearArchivesOutcome } from "./app-archive.js";
 import { archiveAppFolder, type AppFolderArchiveEntry } from "./app-folder-archive.js";
 
 /** 앱 폴더 보관(#4778)의 결과 — 응답에 그대로 싣는다(못 옮겼으면 그 까닭 · 앱 폴더가 없었으면 archived=null). */
-export interface AppFolderOutcome {
+export interface RemovedAppFolder {
   /** 보관 이름(app_folder_archives 의 name) — 앱 폴더가 없었으면 null */
   archived: string | null;
   files?: number | null;
@@ -30,7 +30,7 @@ export interface AppFolderOutcome {
 }
 
 /** 앱 폴더를 보관으로 — 실패는 던지지 않고 까닭으로 돌려준다(지우기는 명시로 요청한 것이라 막지 않는다). */
-async function archiveFolderOf(appId: string, by: string | null, entry: AppFolderArchiveEntry): Promise<AppFolderOutcome> {
+async function archiveFolderOf(appId: string, by: string | null, entry: AppFolderArchiveEntry): Promise<RemovedAppFolder> {
   try {
     const r = await archiveAppFolder(appId, { by, entry });
     return r.archived ? { archived: r.archived.name, files: r.archived.files, bytes: r.archived.bytes } : { archived: null };
@@ -53,7 +53,7 @@ export interface RemoveAppOutcome {
   /** #4733 그 앱의 보관 표 — 지운 것(백업 묶음은 위 snapshot 과 같은 시각) · 못 지워 남긴 것과 까닭. 기본 앱은 없음(공유 보관 자리). */
   archives?: Pick<ClearArchivesOutcome, "taken_at" | "cleared" | "kept"> & { error?: string };
   /** #4778 그 앱의 앱 폴더 — 보관으로 옮긴 이름(보관 기간 뒤 정비가 지운다 · 관리자는 같은 id 로 다시 만든 앱에 되돌릴 수 있다). */
-  app_folder: AppFolderOutcome;
+  app_folder: RemovedAppFolder;
 }
 
 /**
@@ -102,7 +102,7 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
   }
   //  #4778 앱 폴더(<apps 자리>/<앱>/)도 — 보관으로 옮긴다(같은 id 로 새로 만든 앱은 빈 앱 폴더로 시작한다). 기본 앱의 앱 폴더도 워크스페이스마다
   //   따로라 똑같이 옮긴다(보관 표와 다르다). 못 옮겨도 제거는 계속한다 — 그 폴더는 같은 id 로 새로 만들 때 다시 옮긴다(app-folder-archive 머리말).
-  //   세션에 붙어 있던 앱이면 그 세션은 옮긴 폴더를 잠시 더 본다(붙이기는 폴더 자체를 잡는다) — 떼기는 세션 붙이기 쪽(#4684)이 한다.
+  //   세션에서 앱 폴더를 떼는 것은 아래 세션 붙이기 쪽(#4684 resyncSessions)이 한다.
   const appFolder = await archiveFolderOf(id, ctx.actor ?? null, entry);
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
   const wasAttached = await pruneSessionApps(id);   // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).

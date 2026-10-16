@@ -7,6 +7,7 @@
 //  E2 묶음 — 둘째가 실패하면 첫째도 취소(전부 아니면 전무) · 몇 번째인지
 //  E3 신원 — 없으면 401 · 다른 앱의 신원이면 401 · 동의 안 한 사람이면 403 · 앱 서버 토큰은 /mcp·터미널에서 403
 //  E4 앱 서버 빈도 — 사람마다 따로 센다
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import http from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";

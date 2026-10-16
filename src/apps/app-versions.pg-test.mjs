@@ -11,6 +11,7 @@
 //  P9 셸 렌더러 빌트인 덮어쓰기 403   P10 덮어쓰기에서 새로 선언한 표는 이름 검증을 지난다(63자 초과 400)
 //  P11 #4724 기본 앱 공유 표 — 칸 지우기 · 형 바꾸기 저장 · 깨는 판으로 되돌리기 409 · 새 칸은 된다 · 검사 · 기본값도 409(걸어 보고 되돌린 판정 · 흔적 없음)
 //  P12 릴리스가 남긴 미룸이 있어도 화면만 고친 저장은 된다 · 새로 깨는 변경만 409
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

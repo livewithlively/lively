@@ -17,13 +17,14 @@ delete process.env.LIVELY_TENANCY_MODE;
 process.env.TERMINAL_ROOT_APPS = APPS;
 
 const M = await import("./app-folder-archive.js");
+const O = await import("./app-folder-ops.js");
 const { APP_ID_RE } = await import("./manifest.js");
 const { unfreezeExecTopology } = await import("../exec-topology.js");
-type Area = import("./app-folder-archive.js").AppsArea;
-type RemoveResult = import("./app-folder-archive.js").RemoveResult;
+type Area = import("./app-folder-ops.js").AppsArea;
+type RemoveResult = import("./app-folder-ops.js").RemoveResult;
 
 const NOW = new Date(Date.UTC(2026, 9, 16, 3, 15, 2));   // 2026-10-16T03:15:02Z
-const area = (): Area => { const a = M.appsAreaFor(null); assert.ok(a, "비격리 셀프호스트에서 apps 자리가 있다"); return a!; };
+const area = (): Area => { const a = O.appsAreaFor(null); assert.ok(a, "비격리 셀프호스트에서 apps 자리가 있다"); return a!; };
 const reset = (): void => { fs.rmSync(APPS, { recursive: true, force: true }); fs.mkdirSync(APPS, { recursive: true }); };
 const put = (rel: string, body: string | Buffer): void => { const f = path.join(APPS, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); };
 const exists = (p: string): boolean => { try { fs.lstatSync(p); return true; } catch { return false; } };
@@ -32,27 +33,27 @@ const run = <T>(q: Record<string, unknown>): Promise<T> => area().run<T>({ base:
 // ── A. 보관 이름 ────────────────────────────────────────────────────────────────────────────
 
 test("A1 이름 = .archived-app.<앱>.<UTC 초>.<16진6> · 해석하면 같은 앱 · 같은 초", () => {
-  const n = M.archiveNameFor("file-url-check", NOW, "0a1b2c");
+  const n = O.archiveNameFor("file-url-check", NOW, "0a1b2c");
   assert.equal(n, ".archived-app.file-url-check.20261016T031502Z.0a1b2c");
-  const p = M.parseArchiveName(n);
+  const p = O.parseArchiveName(n);
   assert.equal(p?.app_id, "file-url-check");
   assert.equal(p?.archived_at.toISOString(), "2026-10-16T03:15:02.000Z");
-  const r = M.archiveNameFor("crm", NOW);   // 기본 nonce 는 무작위 16진 6자
+  const r = O.archiveNameFor("crm", NOW);   // 기본 nonce 는 무작위 16진 6자
   assert.match(r, /^\.archived-app\.crm\.20261016T031502Z\.[0-9a-f]{6}$/);
-  assert.notEqual(M.archiveNameFor("crm", NOW), M.archiveNameFor("crm", NOW), "같은 초에 두 번 옮겨도 이름이 겹치지 않는다");
+  assert.notEqual(O.archiveNameFor("crm", NOW), O.archiveNameFor("crm", NOW), "같은 초에 두 번 옮겨도 이름이 겹치지 않는다");
 });
 
 test("A2 앱 id 꼴이 아니면 이름을 만들지 않는다", () => {
   for (const bad of ["CRM", "../x", "-crm", ".lively", "a", "a".repeat(33), "crm/x", "crm.x", ""]) {
-    assert.throws(() => M.archiveNameFor(bad, NOW, "000000"), `'${bad}'`);
+    assert.throws(() => O.archiveNameFor(bad, NOW, "000000"), `'${bad}'`);
   }
-  assert.throws(() => M.archiveNameFor("crm", NOW, "ZZZZZZ"), "nonce 도 16진 6자만");
+  assert.throws(() => O.archiveNameFor("crm", NOW, "ZZZZZZ"), "nonce 도 16진 6자만");
 });
 
 test("A3 경계 — 앱 id 정확히 2자 · 32자는 된다", () => {
   for (const ok of ["ab", "a".repeat(32), "0-", "a-b-c"]) {
-    const n = M.archiveNameFor(ok, NOW, "abcdef");
-    assert.equal(M.parseArchiveName(n)?.app_id, ok);
+    const n = O.archiveNameFor(ok, NOW, "abcdef");
+    assert.equal(O.parseArchiveName(n)?.app_id, ok);
   }
 });
 
@@ -64,13 +65,13 @@ test("A4 꼴이 아닌 이름은 해석하지 않는다(null)", () => {
     ".archived-app.crm.20261016T031502Z.abcdef0", "",
     ".archived-app.crm.20261316T031502Z.abcdef",   // 13월 — 숫자 꼴은 맞지만 날짜가 아니다(Date 가 다음 해로 넘기지 않게)
     ".archived-app.crm.20261032T031502Z.abcdef", ".archived-app.crm.20261016T246002Z.abcdef",
-  ]) assert.equal(M.parseArchiveName(bad), null, `'${bad}'`);
+  ]) assert.equal(O.parseArchiveName(bad), null, `'${bad}'`);
 });
 
 test("A5 스크립트 안의 이름 규칙 글자가 TS 쪽 규칙과 같다", () => {
-  assert.equal(M.APP_ID_PART, "[a-z0-9][a-z0-9-]{1,31}", "앱 id 규칙에서 끝 표시만 뗐다");
-  assert.ok(M.APP_FOLDER_OPS_JS.includes(`const APP=${APP_ID_RE.toString()};`), "스크립트의 APP 이 manifest APP_ID_RE 와 같은 글자");
-  assert.ok(M.APP_FOLDER_OPS_JS.includes(`const ARC=/^\\.archived-app\\.${M.APP_ID_PART}\\.\\d{8}T\\d{6}Z\\.[0-9a-f]{6}$/;`), "스크립트의 ARC 가 이름 규칙과 같은 글자");
+  assert.equal(O.APP_ID_PART, "[a-z0-9][a-z0-9-]{1,31}", "앱 id 규칙에서 끝 표시만 뗐다");
+  assert.ok(O.APP_FOLDER_OPS_JS.includes(`const APP=${APP_ID_RE.toString()};`), "스크립트의 APP 이 manifest APP_ID_RE 와 같은 글자");
+  assert.ok(O.APP_FOLDER_OPS_JS.includes(`const ARC=/^\\.archived-app\\.${O.APP_ID_PART}\\.\\d{8}T\\d{6}Z\\.[0-9a-f]{6}$/;`), "스크립트의 ARC 가 이름 규칙과 같은 글자");
 });
 
 // ── B. 파일 op ─────────────────────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ test("B1 앱 폴더 → 보관 이름 — 원래 자리 없음 · 같은 내용 
   put("crm/out/a.bin", Buffer.alloc(300, 1));
   put("crm/b.txt", "hello");
   put("crm/deep/x/y/z.txt", "z");
-  const name = M.archiveNameFor("crm", NOW, "000001");
+  const name = O.archiveNameFor("crm", NOW, "000001");
   const r = await run<{ moved: boolean; kind: string; files: number; bytes: number; truncated: boolean }>({ op: "archive", app: "crm", name });
   assert.deepEqual(r, { moved: true, kind: "dir", files: 3, bytes: 306, truncated: false });
   assert.equal(exists(path.join(APPS, "crm")), false, "원래 자리가 비었다");
@@ -90,14 +91,14 @@ test("B1 앱 폴더 → 보관 이름 — 원래 자리 없음 · 같은 내용 
 
 test("B2 앱 폴더 없음 → moved=false · 아무것도 안 생김", async () => {
   reset();
-  const r = await run<{ moved: boolean }>({ op: "archive", app: "crm", name: M.archiveNameFor("crm", NOW, "000002") });
+  const r = await run<{ moved: boolean }>({ op: "archive", app: "crm", name: O.archiveNameFor("crm", NOW, "000002") });
   assert.deepEqual(r, { moved: false });
   assert.deepEqual(fs.readdirSync(APPS), []);
 });
 
 test("B3 apps 자리 자체가 없음 → moved=false(던지지 않는다)", async () => {
   fs.rmSync(APPS, { recursive: true, force: true });
-  const r = await run<{ moved: boolean }>({ op: "archive", app: "crm", name: M.archiveNameFor("crm", NOW, "000003") });
+  const r = await run<{ moved: boolean }>({ op: "archive", app: "crm", name: O.archiveNameFor("crm", NOW, "000003") });
   assert.deepEqual(r, { moved: false });
   assert.equal(exists(APPS), false, "apps 자리를 만들지도 않는다");
 });
@@ -108,7 +109,7 @@ test("B4 앱 폴더가 밖을 가리키는 링크 → 링크 자체가 옮겨지
   fs.mkdirSync(outside, { recursive: true });
   fs.writeFileSync(path.join(outside, "secret.txt"), "s".repeat(50));
   fs.symlinkSync(outside, path.join(APPS, "crm"));
-  const name = M.archiveNameFor("crm", NOW, "000004");
+  const name = O.archiveNameFor("crm", NOW, "000004");
   const r = await run<{ moved: boolean; kind: string; files: number; bytes: number }>({ op: "archive", app: "crm", name });
   assert.equal(r.moved, true);
   assert.equal(r.kind, "link");
@@ -121,7 +122,7 @@ test("B4 앱 폴더가 밖을 가리키는 링크 → 링크 자체가 옮겨지
 test("B5 보관 이름 자리가 이미 있으면 던지고 원래 앱 폴더는 그대로", async () => {
   reset();
   put("crm/a.txt", "a");
-  const name = M.archiveNameFor("crm", NOW, "000005");
+  const name = O.archiveNameFor("crm", NOW, "000005");
   fs.mkdirSync(path.join(APPS, name));
   await assert.rejects(run({ op: "archive", app: "crm", name }), /이미 있습니다/);
   assert.equal(fs.readFileSync(path.join(APPS, "crm/a.txt"), "utf8"), "a");
@@ -131,7 +132,7 @@ test("B6 앱 · 이름에 ../ 나 보관 꼴이 아닌 이름 → 던지고 아�
   reset();
   put("crm/a.txt", "a");
   fs.mkdirSync(path.join(ROOT, "victim"), { recursive: true });
-  const name = M.archiveNameFor("crm", NOW, "000006");
+  const name = O.archiveNameFor("crm", NOW, "000006");
   await assert.rejects(run({ op: "archive", app: "../victim", name }), /이름 꼴/);
   await assert.rejects(run({ op: "archive", app: "crm", name: "../escaped" }), /이름 꼴/);
   await assert.rejects(run({ op: "archive", app: "crm", name: "not-an-archive" }), /이름 꼴/);
@@ -144,7 +145,7 @@ test("B6 앱 · 이름에 ../ 나 보관 꼴이 아닌 이름 → 던지고 아�
 test("B7 세기 상한에 닿으면 truncated · 센 값은 상한 이하", async () => {
   reset();
   for (let i = 0; i < 30; i++) put(`crm/f${i}.txt`, "x");
-  const name = M.archiveNameFor("crm", NOW, "000007");
+  const name = O.archiveNameFor("crm", NOW, "000007");
   const r = await run<{ moved: boolean; files: number; truncated: boolean }>({ op: "archive", app: "crm", name, cap_n: 10, cap_ms: 60_000 });
   assert.equal(r.moved, true, "세기를 멈춰도 옮기기는 끝났다");
   assert.equal(r.truncated, true);
@@ -154,7 +155,7 @@ test("B7 세기 상한에 닿으면 truncated · 센 값은 상한 이하", asyn
 
 test("B8 scan — 보관(기록 있음/없음) · 고아 · 살아 있는 앱 · 앱 꼴 아닌 이름 · 다른 점 이름", async () => {
   reset();
-  const known = M.archiveNameFor("old", NOW, "00000a"), unknown = M.archiveNameFor("gone", NOW, "00000b");
+  const known = O.archiveNameFor("old", NOW, "00000a"), unknown = O.archiveNameFor("gone", NOW, "00000b");
   put(`${known}/k.txt`, "kk");
   put(`${unknown}/u.txt`, "uuu");
   put("live-app/l.txt", "l");
@@ -183,7 +184,7 @@ test("B10 remove — 있는 것은 removed · 없는 이름은 absent · 안의 
   const outside = path.join(ROOT, "outside2");
   fs.mkdirSync(outside, { recursive: true });
   fs.writeFileSync(path.join(outside, "keep.txt"), "keep");
-  const a = M.archiveNameFor("crm", NOW, "000010"), b = M.archiveNameFor("crm", NOW, "000011");
+  const a = O.archiveNameFor("crm", NOW, "000010"), b = O.archiveNameFor("crm", NOW, "000011");
   put(`${a}/x/y.txt`, "y");
   fs.symlinkSync(outside, path.join(APPS, a, "link-out"));
   const r = await run<RemoveResult>({ op: "remove", names: [a, b] });
@@ -195,7 +196,7 @@ test("B10 remove — 있는 것은 removed · 없는 이름은 absent · 안의 
 test("B11 remove — 보관 꼴이 아닌 이름은 던지고 아무것도 안 지운다", async () => {
   reset();
   put("crm/a.txt", "a");
-  const ok = M.archiveNameFor("crm", NOW, "000012");
+  const ok = O.archiveNameFor("crm", NOW, "000012");
   put(`${ok}/a.txt`, "a");
   for (const bad of ["crm", "../apps", ".lively", `${ok}/..`]) {
     await assert.rejects(run({ op: "remove", names: [ok, bad] }), /이름 꼴/, bad);
@@ -206,7 +207,7 @@ test("B11 remove — 보관 꼴이 아닌 이름은 던지고 아무것도 안 �
 
 test("B12 remove — 못 지우는 하위가 있으면 left(까닭 · 주인 uid)", { skip: process.getuid?.() === 0 ? "root 는 권한을 무시한다" : false }, async () => {
   reset();
-  const a = M.archiveNameFor("crm", NOW, "000013");
+  const a = O.archiveNameFor("crm", NOW, "000013");
   put(`${a}/locked/inner.txt`, "i");
   put(`${a}/free.txt`, "f");
   fs.chmodSync(path.join(APPS, a, "locked"), 0o555);   // 그 폴더 안의 항목을 지울 수 없다(셀프호스트 격리의 «남의 폴더» 와 같은 꼴)
@@ -223,7 +224,7 @@ test("B12 remove — 못 지우는 하위가 있으면 left(까닭 · 주인 uid
 
 test("B13 restore — 대상 없음 · 빈 폴더 · 파일 든 폴더 · 파일 · 보관 없음", async () => {
   reset();
-  const mk = (n: string): string => { const name = M.archiveNameFor("crm", NOW, n); put(`${name}/r.txt`, "restored"); return name; };
+  const mk = (n: string): string => { const name = O.archiveNameFor("crm", NOW, n); put(`${name}/r.txt`, "restored"); return name; };
   //  대상 없음 → 되돌림
   let name = mk("000020");
   assert.deepEqual(await run({ op: "restore", name, app: "crm" }), { ok: true });
@@ -245,7 +246,7 @@ test("B13 restore — 대상 없음 · 빈 폴더 · 파일 든 폴더 · 파일
   assert.deepEqual(await run({ op: "restore", name, app: "crm" }), { ok: false, why: "occupied" });
   //  보관 없음 → missing
   fs.rmSync(path.join(APPS, "crm"));
-  assert.deepEqual(await run({ op: "restore", name: M.archiveNameFor("crm", NOW, "000099"), app: "crm" }), { ok: false, why: "missing" });
+  assert.deepEqual(await run({ op: "restore", name: O.archiveNameFor("crm", NOW, "000099"), app: "crm" }), { ok: false, why: "missing" });
 });
 
 test("B14 apps 자리가 상대경로 · 정규화 안 됨 → 던진다", async () => {
@@ -274,7 +275,7 @@ const left = (name: string, owners: number[]) => ({ name, error: "EACCES", owner
 
 test("C1 주인 계정 경로가 없으면(매니지드 · 비격리) 한 번만 — 남은 것 보고", async () => {
   const { a, calls } = fakeArea([{ who: "gw", out: { removed: ["x1"], absent: [], left: [left("x2", [1001])] } }], false);
-  const r = await M.removeArchives(a, ["x1", "x2"], async () => { throw new Error("불리면 안 된다"); });
+  const r = await O.removeArchives(a, ["x1", "x2"], async () => { throw new Error("불리면 안 된다"); });
   assert.deepEqual(r, { removed: ["x1"], absent: [], left: [{ name: "x2", error: "EACCES" }] });
   assert.equal(calls.length, 1);
 });
@@ -287,7 +288,7 @@ test("C2 남은 것 → 주인 계정으로 지우고 게이트웨이로 다시 
     { who: "gw", out: { removed: ["x"], absent: [], left: [] } },
   ]);
   const seen: number[][] = [];
-  const r = await M.removeArchives(a, ["x"], async (uids) => { seen.push(uids); return ["box_alice", "box_bob"]; });
+  const r = await O.removeArchives(a, ["x"], async (uids) => { seen.push(uids); return ["box_alice", "box_bob"]; });
   assert.deepEqual(r, { removed: ["x"], absent: [], left: [] });
   assert.deepEqual(seen, [[1001, 1002]], "남은 폴더의 주인 uid 로 계정을 찾는다");
   assert.deepEqual(calls.map((c) => c.who), ["gw", "box_alice", "box_bob", "gw"]);
@@ -296,7 +297,7 @@ test("C2 남은 것 → 주인 계정으로 지우고 게이트웨이로 다시 
 
 test("C3 주인 uid 를 계정으로 못 바꾸면 더 안 돌고 남은 것 보고", async () => {
   const { a, calls } = fakeArea([{ who: "gw", out: { removed: [], absent: [], left: [left("x", [0])] } }]);
-  const r = await M.removeArchives(a, ["x"], async () => []);
+  const r = await O.removeArchives(a, ["x"], async () => []);
   assert.deepEqual(r.left, [{ name: "x", error: "EACCES" }]);
   assert.equal(calls.length, 1);
 });
@@ -307,7 +308,7 @@ test("C4 주인 계정이 통째로 지웠으면(다시 볼 땐 없음) 지운 �
     { who: "box_alice", out: { removed: ["x"], absent: [], left: [left("y", [1001])] } },
     { who: "gw", out: { removed: [], absent: ["y"], left: [] } },
   ]);
-  const r = await M.removeArchives(a, ["x", "y"], async () => ["box_alice"]);
+  const r = await O.removeArchives(a, ["x", "y"], async () => ["box_alice"]);
   assert.deepEqual(r, { removed: ["x", "y"], absent: [], left: [] });
 });
 
@@ -316,7 +317,7 @@ test("C5 계속 남으면 세 바퀴에서 멈춘다", async () => {
   const script = [{ who: "gw", out: stuck }];
   for (let i = 0; i < 5; i++) script.push({ who: "box_alice", out: stuck }, { who: "gw", out: stuck });
   const { a, calls } = fakeArea(script);
-  const r = await M.removeArchives(a, ["x"], async () => ["box_alice"]);
+  const r = await O.removeArchives(a, ["x"], async () => ["box_alice"]);
   assert.deepEqual(r.left, [{ name: "x", error: "EACCES" }]);
   assert.equal(calls.filter((c) => c.who === "box_alice").length, 3, "주인 계정 차례는 세 번");
   assert.equal(calls.length, 7, "처음 1 + (주인 1 + 게이트웨이 1) × 3");
@@ -325,14 +326,14 @@ test("C5 계속 남으면 세 바퀴에서 멈춘다", async () => {
 // ── D. 목록 합치기(순수) ───────────────────────────────────────────────────────────────────
 
 const rowFor = (app: string, at: Date, over: Record<string, unknown> = {}) => ({
-  name: M.archiveNameFor(app, at, "abcdef"), app_id: app, archived_at: at, archived_by: "admin", entry: "remove" as const,
+  name: O.archiveNameFor(app, at, "abcdef"), app_id: app, archived_at: at, archived_by: "admin", entry: "remove" as const,
   kind: "dir" as const, files: 2, bytes: 10, truncated: false, ...over,
 });
 
 test("D1~D7 기록 · 파일 훑기 → 목록", () => {
   const t1 = new Date(Date.UTC(2026, 9, 10)), t2 = new Date(Date.UTC(2026, 9, 12)), t3 = new Date(Date.UTC(2026, 9, 14));
   const present = rowFor("crm", t1), missing = rowFor("memo", t2);
-  const fsOnly = M.archiveNameFor("gone", t3, "123456");
+  const fsOnly = O.archiveNameFor("gone", t3, "123456");
   const scan = {
     exists: true,
     archives: [{ name: present.name, kind: "dir" as const }, { name: fsOnly, kind: "dir" as const, files: 4, bytes: 40, truncated: true }],
@@ -411,11 +412,11 @@ test("매니지드 갈래 — 중계로 돈다 · 감옥 안 자리(isolatedBase
   process.env.LIVELY_APPS_DIR = jail;
   unfreezeExecTopology();
   try {
-    const a = M.appsAreaFor(null)!;
+    const a = O.appsAreaFor(null)!;
     assert.equal(a.base, jail, "매니지드는 감옥 안 자리(isolatedBase)를 본다");
     assert.equal(a.runAs, null, "매니지드는 테넌트 uid 하나 — 주인 계정으로 다시 지우지 않는다");
-    const byMember = M.appsAreaFor("Sangmin Yoon")!;
-    const name = M.archiveNameFor("crm", NOW, "0000aa");
+    const byMember = O.appsAreaFor("Sangmin Yoon")!;
+    const name = O.archiveNameFor("crm", NOW, "0000aa");
     assert.deepEqual(await byMember.run({ op: "archive", base: byMember.base, app: "crm", name }), { moved: true, kind: "dir", files: 1, bytes: 4, truncated: false });
     assert.equal(fs.readFileSync(path.join(jail, name, "a.txt"), "utf8"), "jail");
     await a.run({ op: "scan", base: jail, live: [], known: [] });
@@ -504,6 +505,97 @@ test("제거 입구 셋이 제 이름을 넘긴다(remove · discard · retire)"
   assert.match(caps, /removeInstalledApp\(app, wctx\(user, ctx\), "remove"\)/);
   assert.equal(caps.split("removeInstalledApp(app,").length - 1, 2);
   assert.match(code("src/apps/seed.ts"), /deps\.removeInstalledApp\(existing, ctx, "retire"\)/);
+});
+
+// ── 리뷰 반영 — 시간 · 주인 계정 · 격리 갈래 · 고아 하나 실패 · 통합 시험의 앱 자리 ────────────────────────────────
+
+test("T1 op 상한 — 끝나지 않는 기다림은 상한에서 던진다 · 끝나면 그 값", async () => {
+  //  늦게 끝나는 일(500ms — 붙잡는 타이머라 이벤트 루프가 먼저 끝나지 않는다) 에 상한 30ms. 상한 타이머는 프로세스를 붙잡지 않는다(unref).
+  await assert.rejects(O.withTimeout(new Promise((r) => setTimeout(r, 500)), 30), /초 안에 끝나지 않았습니다/);
+  assert.equal(await O.withTimeout(Promise.resolve(7), 1000), 7);
+});
+
+test("T2 로컬 op 가 상한을 넘으면 자식을 죽이고 던진다(락을 쥔 쪽이 오래 붙잡히지 않게)", async () => {
+  reset();
+  await assert.rejects(area().run({ op: "scan", live: [], known: [] }, 1), /초 안에 끝나지 않았습니다/);
+  assert.deepEqual(await area().run({ op: "scan", live: [], known: [] }), { exists: true, archives: [], orphans: [] }, "상한 안이면 그대로");
+});
+
+test("T3 지우기 시간 예산 — 다 못 지우면 «다음에 이어서» 로 남기고 지운 만큼은 지운다 · 다음 부름이 마저 지운다", async () => {
+  reset();
+  const a = O.archiveNameFor("big-app", NOW, "0000b1");
+  for (let i = 0; i < 3000; i++) put(`${a}/d${i % 30}/f${i}.txt`, "x");
+  const r1 = await run<RemoveResult>({ op: "remove", names: [a], rm_ms: 1 });
+  assert.deepEqual(r1.removed, []);
+  assert.equal(r1.left.length, 1);
+  assert.match(r1.left[0]!.error, /시간이 모자라/);
+  assert.deepEqual(r1.left[0]!.owners, [], "시간이 모자란 것은 주인 계정 차례가 아니다(권한 문제가 아니다)");
+  assert.ok(exists(path.join(APPS, a)), "보관은 아직 있다");
+  const r2 = await run<RemoveResult>({ op: "remove", names: [a] });
+  assert.deepEqual(r2, { removed: [a], absent: [], left: [] }, "다음 부름이 이어서 다 지운다");
+});
+
+test("U1 주인 uid → 구성원 OS 계정 — 접두 box_ 만 · uid 가 맞는 줄만 · root(0)·음수·소수는 묻지 않음 · 겹치면 한 번", async () => {
+  const asked: number[] = [];
+  const passwd: Record<number, string> = {
+    1001: "box_alice:x:1001:1001::/home/box_alice:/bin/bash\n",
+    1002: "lively:x:1002:1002::/home/lively:/bin/bash",
+    1003: "",
+    1004: "box_eve:x:9999:9999::/home/box_eve:/bin/bash",   // 다른 uid 의 줄 — 쓰지 않는다
+    1005: "box_bob:x:1005:1005::/home/box_bob:/bin/bash",
+  };
+  const users = await O.memberOsUsersOf([1001, 1001, 0, -3, 1.5, 1002, 1003, 1004, 1005], async (uid) => { asked.push(uid); return passwd[uid] ?? ""; });
+  assert.deepEqual(users, ["box_alice", "box_bob"]);
+  assert.deepEqual(asked, [1001, 1002, 1003, 1004, 1005]);
+});
+
+test("U2 자리 고르기 — 격리 박스는 LIVELY_APPS_DIR · 주인 계정 경로 있음 / 비격리는 TERMINAL_ROOT_APPS · 없음", () => {
+  const iso = path.join(ROOT, "iso-apps");
+  process.env.LIVELY_APPS_DIR = iso;
+  try {
+    assert.equal(O.appsAreaMode(), "plain", "이 시험 프로세스(중계 없음 · box-spawn 없음)는 비격리");
+    const i = O.appsAreaFor(null, "isolated")!;
+    assert.equal(i.base, iso);
+    assert.ok(i.runAs, "격리면 주인 계정으로 다시 지울 길이 있다");
+    const p = O.appsAreaFor(null, "plain")!;
+    assert.equal(p.base, APPS);
+    assert.equal(p.runAs, null);
+  } finally { delete process.env.LIVELY_APPS_DIR; }
+});
+
+test("C6 지울 이름이 없으면 아무것도 부르지 않는다(정비가 보관 없는 워크스페이스에서 헬퍼를 깨우지 않는 둘째 겹)", async () => {
+  let calls = 0;
+  const a: Area = { base: "/x", run: async () => { calls++; return { removed: [], absent: [], left: [] } as never; }, runAs: null };
+  assert.deepEqual(await O.removeArchives(a, []), { removed: [], absent: [], left: [] });
+  assert.equal(calls, 0);
+});
+
+test("O1 고아 옮기기 — 하나가 실패해도(락 대기 초과) 까닭을 적고 나머지를 이어 간다 · 같은 id 의 앱이 있으면 건너뜀", async () => {
+  const locked: string[] = [];
+  const out = await M.archiveOrphanAppFolders(["aa-one", "bb-two", "cc-live", "dd-three", "BAD"], "admin", {
+    lock: async (id, fn) => { locked.push(id); if (id === "bb-two") throw new Error("앱 설치 락 대기 시간 초과(bb-two)"); return fn(); },
+    getApp: async (id) => (id === "cc-live" ? { id } : null),
+    archive: async (id, o) => ({ archived: { name: `.archived-app.${id}.20261016T000000Z.000000`, app_id: id, archived_at: "", archived_by: o.by, entry: o.entry, kind: "dir", files: 1, bytes: 1, truncated: false } }),
+  });
+  assert.deepEqual(out.archived.map((a) => a.app_id), ["aa-one", "dd-three"], "실패 뒤의 것도 옮겼다");
+  assert.ok(out.archived.every((a) => a.entry === "orphan" && a.archived_by === "admin"));
+  const why = Object.fromEntries(out.skipped.map((s) => [s.app_id, s.why]));
+  assert.match(why["bb-two"]!, /옮기지 못했습니다 — 앱 설치 락 대기 시간 초과/);
+  assert.match(why["cc-live"]!, /같은 id 의 앱이 있습니다/);
+  assert.match(why.BAD!, /앱 id 꼴이 아닙니다/);
+  assert.deepEqual(locked, ["aa-one", "bb-two", "cc-live", "dd-three"], "꼴이 틀린 id 는 락도 잡지 않는다");
+});
+
+test("L4 앱을 만들고 지우는 통합 시험은 앱 폴더 자리를 임시 폴더로 고정한다(실제 ~/apps 를 옮기지 않게)", () => {
+  const MAKES_OR_REMOVES = /org_app_install|"app_save"|org_app_remove|app_draft_remove|app_build_start|installLoadedApp|removeInstalledApp|seedBuiltinApps|archiveAppFolder|archiveOrphanAppFolders/;
+  const all = (dir: string, re: RegExp): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? (e.name === "node_modules" || e.name === "dist" ? [] : all(path.join(dir, e.name), re)) : re.test(e.name) ? [path.join(dir, e.name)] : []);
+  const files = [...all("src", /\.pg-test\.mjs$/), ...all("scripts", /\.itest\.mjs$/)].filter((f) => MAKES_OR_REMOVES.test(src(f)));
+  assert.ok(files.length >= 15, `(배선) 대상 시험을 실제로 찾았다: ${files.length}`);
+  const bare = files.filter((f) => { const c = src(f); return !c.includes("test-apps-root.mjs") && !/process\.env\.TERMINAL_ROOT_APPS\s*=/.test(c); });
+  assert.deepEqual(bare, [], "앱 자리를 고정하지 않은 통합 시험");
+  //  모듈 자신 — 불러오면 두 값이 같은 임시 폴더를 가리킨다
+  assert.match(src("scripts/test-apps-root.mjs"), /process\.env\.TERMINAL_ROOT_APPS = TEST_APPS_ROOT;[\s\S]*process\.env\.LIVELY_APPS_DIR = TEST_APPS_ROOT;/);
 });
 
 test.after(() => { fs.rmSync(ROOT, { recursive: true, force: true }); });

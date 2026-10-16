@@ -10,7 +10,8 @@
 //  G5 남은 폴더를 못 옮기면 503 · 앱 행 없음   G7 지운 뒤 같은 id 로 다시 → 옛 파일 서명 주소 GET 404 · 탐색기 빈 목록
 //  I1 목록(보관 · 고아 · 파일만 있던 보관은 기록으로)   I2 비우기(missing · was_missing · 감사)   I3 되돌리기(앱 없음 409 · 되돌림 · 파일 있음 409 · 보관 없음 410)
 //  I4 고아 옮기기   I5 관리자 아님 403   I6 REST 모양 400   J1 탐색기로 보관 404   J2 서명 주소로 보관 400
-//  H1 기간 지난 것만   H2 경계(정확히 기간) 남김   H3 지울 것 없음   H4 파일 없는 기록 걷기   H5 보관 일수 0 → 전부
+//  H1 기간 지난 것만   H2 경계(정확히 기간) 남김   H3 지울 것 없음(파일을 만지지 않음)   H4 파일 없는 기록 걷기   H5 보관 일수 0 → 전부
+//  H6 못 지우는 보관은 기록이 남는다(정비 · 비우기) · 다음 정비가 이어서   H7 한 번에 오래된 것부터 20개
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -331,15 +332,55 @@ try {
   chk("H2 경계 — 정확히 보관 기간만큼 지난 것은 남긴다", has(hEdge.name) && (await rowsLeft([hEdge.name])).length === 1);
   const h2b = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
   chk("H2 경계 — 1ms 더 지나면 지운다", JSON.stringify(h2b.pruned) === JSON.stringify([hEdge.name]) && !has(hEdge.name), JSON.stringify(h2b));
-  const h3 = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
-  chk("H3 지울 것이 없으면 due 0 · 아무것도 안 지움", h3.due === 0 && h3.pruned.length === 0 && has(hNew.name), JSON.stringify(h3));
-  //  매니지드 틱 단계(REST)가 같은 함수를 부른다 — 결과가 단계 이름 아래 그대로 온다.
-  const tick = await (await req("POST", "/api/ops/housekeeping/tick", adminTok)).json();
-  chk("H 정비 틱 단계 app-folder-archive 가 돈다(지울 것 없음)", tick?.steps?.["app-folder-archive"]?.due === 0, JSON.stringify(tick?.steps?.["app-folder-archive"]));
+  //  H3 — 지울 것이 없으면 파일을 만지지 않는다: apps 자리를 아무도 못 읽게(000) 해 두고 부른다. 파일 op 를 하나라도 부르면 EACCES 로 던진다.
+  chmodSync(APPS, 0o000);
+  const unreadable = (() => { try { readdirSync(APPS); return false; } catch { return true; } })();   // (전제) root 로 돌면 막히지 않는다
+  let h3, tick;
+  try {
+    h3 = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7).catch((e) => ({ thrown: String(e?.message ?? e) }));
+    //  매니지드 틱 단계(REST)가 같은 함수를 부른다 — 결과가 단계 이름 아래 그대로 온다.
+    tick = await (await req("POST", "/api/ops/housekeeping/tick", adminTok)).json();
+  } finally { chmodSync(APPS, 0o755); }
+  chk("H3 지울 것이 없으면 파일을 만지지 않는다(apps 자리를 못 읽게 해도 정상 · due 0) · 아무것도 안 지움",
+    unreadable && h3?.due === 0 && h3.pruned.length === 0 && !h3.thrown && has(hNew.name), JSON.stringify({ unreadable, h3 }));
+  chk("H 정비 틱 단계 app-folder-archive 가 돈다(지울 것 없음 · 파일 안 만짐)", tick?.steps?.["app-folder-archive"]?.due === 0 && !tick.steps["app-folder-archive"].error,
+    JSON.stringify(tick?.steps?.["app-folder-archive"]));
+  //  H6 — 못 지우는 보관(하위 폴더에 쓰기 권한 없음)은 기록이 남는다: 정비 · 비우기 둘 다 kept · 다음 정비가 이어서 지운다.
+  put("h-stuck/locked/inner.txt", "i");
+  const hStuck = (await AF.archiveAppFolder("h-stuck", { by: null, entry: "remove", now: new Date(T0 - 10 * DAY) })).archived;
+  chmodSync(path.join(APPS, hStuck.name, "locked"), 0o555);
+  let h6p, h6c;
+  try {
+    h6p = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
+    h6c = await call("app_folder_archive_clear", { names: [hStuck.name] }, admin);
+  } finally { chmodSync(path.join(APPS, hStuck.name, "locked"), 0o755); }
+  const stuckRow = async () => (await q(`SELECT 1 FROM org_app_folder_archive WHERE name=$1`, [hStuck.name])).length;
+  chk("H6 못 지운 보관 — 정비 · 비우기 모두 kept(까닭) · 기록과 파일이 남는다", h6p.kept.some((k) => k.name === hStuck.name && k.why) && !h6p.pruned.includes(hStuck.name)
+    && h6c.kept.some((k) => k.name === hStuck.name && /지우지 못했습니다/.test(k.why)) && !h6c.cleared.some((c) => c.name === hStuck.name)
+    && (await stuckRow()) === 1 && has(`${hStuck.name}/locked/inner.txt`), JSON.stringify({ h6p, h6c }));
+  const h6n = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
+  chk("H6 권한이 풀리면 다음 정비가 마저 지운다(기록까지)", h6n.pruned.includes(hStuck.name) && !has(hStuck.name) && (await stuckRow()) === 0, JSON.stringify(h6n));
+  //  H7 — 한 번에 오래된 것부터 PRUNE_BATCH(20)개까지 · 남은 것은 다음 정비가.
+  const h7 = [];
+  for (let i = 0; i < 25; i++) {
+    const id = `h7-${String(i).padStart(2, "0")}`;
+    put(`${id}/a.txt`, "a");
+    h7.push((await AF.archiveAppFolder(id, { by: null, entry: "remove", now: new Date(T0 - (30 + i) * DAY) })).archived.name);
+  }
+  const h7a = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
+  const h7b = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7);
+  const oldest20 = h7.slice(5).sort();   // i 가 클수록 오래됐다
+  chk("H7 한 번에 오래된 것부터 20개 · 다음 정비가 나머지 5개", AF.PRUNE_BATCH === 20 && h7a.due === 25 && [...h7a.pruned].sort().join() === oldest20.join()
+    && h7b.due === 5 && [...h7b.pruned].sort().join() === h7.slice(0, 5).sort().join() && h7.every((n) => !has(n)), JSON.stringify({ a: h7a.pruned.length, b: h7b.pruned.length, due: [h7a.due, h7b.due] }));
   const totalBefore = (await q(`SELECT count(*)::int AS n FROM org_app_folder_archive`))[0].n;
-  const h5 = await AF.pruneAppFolderArchives(new Date(Date.now() + 1000), 0);
+  const h5 = { pruned: [] };
+  for (let i = 0; i < 10; i++) {   // 한 번에 20개까지라 여러 번
+    const r = await AF.pruneAppFolderArchives(new Date(Date.now() + 1000), 0);
+    h5.pruned.push(...r.pruned);
+    if (r.due <= r.pruned.length) break;
+  }
   const leftDot = readdirSync(APPS).filter((n) => n.startsWith(".archived-app."));
-  chk("H5 보관 일수 0 → 지금보다 앞선 보관 전부(파일 · 기록)", totalBefore > 0 && h5.pruned.length === totalBefore && leftDot.length === 0
+  chk("H5 보관 일수 0 → 지금보다 앞선 보관 전부(파일 · 기록 · 여러 번에 나눠)", totalBefore > 0 && h5.pruned.length === totalBefore && leftDot.length === 0
     && (await q(`SELECT count(*)::int AS n FROM org_app_folder_archive`))[0].n === 0, JSON.stringify({ totalBefore, h5: h5.pruned.length, leftDot }));
 } catch (e) {
   fail++;

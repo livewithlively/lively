@@ -2,6 +2,7 @@
 //  allowlist 로 축소되는지 본다. 순수 유닛(principal.test.ts)은 decideAppTool 표만 잡고, 이 스모크는
 //  mintAppToken→verifyDbToken→appToolAllowed 왕복이 실제 auth_token.app_id·org_app_grant 를 타는지 본다.
 //  ⚠ 수동 실행(docker):  node scripts/app-principal.itest.mjs  (*.itest.mjs 라 run-tests 제외)
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import assert from "node:assert/strict";
 
