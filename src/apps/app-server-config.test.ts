@@ -218,4 +218,14 @@ t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1�
   assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");
 });
 
+//  #4791 서버 선언을 뺀 앱의 함수 정리 — 사양 엣지 표 R10.
+t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 기본 · 바닥 1 · 천장 365", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0 }).unused_retire_days, 7, "0 은 «그 값 없음»");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: "x" }).unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0.5 }).unused_retire_days, 1, "바닥");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 9999 }).unused_retire_days, 365, "천장");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 30 }).unused_retire_days, 30);
+});
+
 console.log(`\n${pass} passed`);

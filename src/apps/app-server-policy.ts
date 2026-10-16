@@ -22,20 +22,21 @@ export interface AppServerPolicy {
   keep_versions: number;        // 별칭이 가리키지 않는 옛 함수 판을 몇 개 남기나
   workspace_functions_max: number;  // #4792 이 워크스페이스의 서버 함수 수(앱마다 하나) — 새 함수를 만들 때만 본다(있는 함수는 늘 고친다)
   workspace_code_mb: number;        // #4792 이 워크스페이스 함수들의 코드 저장 합(MiB · AWS 가 세는 판마다의 zip 크기) — 새 코드를 올릴 때 본다
+  unused_retire_days: number;       // #4791 지금 판 · 공개 판 둘 다 서버 선언이 없는 채로 이 날수가 지나면 그 함수를 걷는다
 }
 export type AppServerPolicyPatch = Partial<AppServerPolicy>;
 
 export const APP_SERVER_POLICY_DEFAULT: AppServerPolicy = {
   memory_mb: 512, timeout_s: 30, build_timeout_s: 600, build_mem_floor_mb: 500, build_heap_mb: 1024,
   stop_invocations_5m: 30_000, stop_duration_s_5m: 3_000, log_retention_days: 14, keep_versions: 3,
-  workspace_functions_max: 20, workspace_code_mb: 5 * 1024,
+  workspace_functions_max: 20, workspace_code_mb: 5 * 1024, unused_retire_days: 7,
 };
 
 /** 바닥 — 설정이 이 밑으로 못 간다(0 · 음수 · 잡값은 바닥이 아니라 «그 값 없음» = 기본값으로 읽는다). */
 export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
   memory_mb: 128, timeout_s: 3, build_timeout_s: 60, build_mem_floor_mb: 300, build_heap_mb: 0,
   stop_invocations_5m: 100, stop_duration_s_5m: 60, log_retention_days: 1, keep_versions: 1,
-  workspace_functions_max: 1, workspace_code_mb: 100,
+  workspace_functions_max: 1, workspace_code_mb: 100, unused_retire_days: 1,
 };
 /**
  * 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 4GB.
@@ -45,7 +46,7 @@ export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
 export const APP_SERVER_POLICY_MAX: AppServerPolicy = {
   memory_mb: 4096, timeout_s: 60, build_timeout_s: 1800, build_mem_floor_mb: 1500, build_heap_mb: 4096,
   stop_invocations_5m: 3_000_000, stop_duration_s_5m: 300_000, log_retention_days: 365, keep_versions: 20,
-  workspace_functions_max: 200, workspace_code_mb: 20 * 1024,
+  workspace_functions_max: 200, workspace_code_mb: 20 * 1024, unused_retire_days: 365,
 };
 
 export const APP_SERVER_POLICY_KEYS = Object.keys(APP_SERVER_POLICY_DEFAULT) as Array<keyof AppServerPolicy>;

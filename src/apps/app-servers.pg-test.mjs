@@ -13,6 +13,8 @@
 //  #4792 워크스페이스 상한(W — 사양 엣지 표 spec-4792.md): W1 코드 크기 기록(C1 · C2 · U2) · W2 함수 수 상한(F2~F4 · F1 은 D1 이 함수 0개에서 지난다)
 //   W3 동시 첫 배포(F5) · W4 코드 저장 상한 · 같은 빌드 재사용(C3 · C7) · W5 함수 없는 앱이 코드 상한(C6) · W6 보기 · 고치기 범위(U1 · U3)
 //   W7 코드를 올린 뒤 실패해도 다시 잰다(C9) · W8 공개 길도 같은 판정(F7)
+//  #4791 서버 선언을 뺀 앱의 함수 정리(X — 사양 엣지 표 R1~R9): X1 표시 · 상태 retire_at · X2 7일 경계 · 걷기(빌드는 남김) · X3 되돌리면 다시 생김
+//   X4 공개 판에 서버가 남아 있으면 표시 안 함 · X5 서버 선언이 돌아오면 표시를 걷음(X5b 다시 배포하면 곧바로) · X6 멈춘 함수는 걷지 않음 · X7 걷기 직전 다시 봄
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import crypto from "node:crypto";
@@ -40,7 +42,7 @@ const { appServerCapabilities } = await import(`${D}/capabilities/app-servers.js
 const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
-const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping } = await import(`${D}/apps/app-server-watch.js`);
+const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping, retireUnusedServers } = await import(`${D}/apps/app-server-watch.js`);
 const { appServerPolicy, setServerStopped, claimServerRow } = await import(`${D}/apps/app-server-store.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -642,6 +644,112 @@ const srvCode = (tag) => filesOf({ server: `require('http').createServer((q,s)=>
   const b1 = await codeBytes();
   chk("W7 시험 호출 실패(코드는 올라감) → code_bytes 를 다시 잰 값 = 가짜 Lambda 합 · 이전 값과 다르다", d.status === "failed" && d.stage === "smoke" && b1 === codeOf(FN) && b1 !== b0,
     JSON.stringify({ status: d.status, stage: d.stage, b0, b1, want: codeOf(FN) }));
+}
+
+// ── #4791 서버 선언을 뺀 앱의 함수 정리(X) ──
+//  서버 선언(web)을 뺀 같은 앱 — 화면만 남은 판.
+const noServer = (id) => twin(id).map((f) => {
+  if (f.path !== "lively-app.json") return f;
+  const m = JSON.parse(f.content); delete m.web; return { ...f, content: JSON.stringify(m) };
+});
+const retire = async (extra = {}) => retireUnusedServers(await appServerPolicy(), { api, ...extra });
+const fnOf = (id) => `lvly-app-${id}-local`;
+const verOf = async (id) => (await q(`SELECT current_version_no FROM org_app WHERE id=$1`, [id]))[0].current_version_no;
+const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since = now() - interval '${sql}' WHERE app_id=$1`, [id]);
+
+// X1 서버 판 → 서버 선언을 뺀 판 — 하우스키핑이 표시만 붙인다(바로 걷지 않는다) · 함수 그대로 · 상태에 retire_at(= 표시 + 7일)
+{
+  await call("app_save", { files: twin("ret-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "ret-a", wait_s: 120 }, alice, aliceCtx);
+  const v1 = await verOf("ret-a");
+  await call("app_save", { files: noServer("ret-a") }, alice, aliceCtx);
+  const h = await retire();
+  const r = await rowOf("ret-a");
+  const st = await call("app_server_status", { app_id: "ret-a" }, alice, aliceCtx);
+  const want = new Date(new Date(r.unused_since).getTime() + 7 * 86_400_000).toISOString();
+  chk("X1 서버 선언을 뺀 판 → 표시만(unused_since) · 함수 그대로 · 상태 retire_at = 표시 + 7일", h.marked >= 1 && !!r.unused_since && fns.has(fnOf("ret-a"))
+    && st.server_declared === false && st.function?.retire?.retire_at === want, JSON.stringify({ h, unused_since: r.unused_since, retire: st.function?.retire }));
+
+  // X2 7일 − 1분이면 그대로 · 7일이면 함수 · 로그 그룹 · 함수 줄을 걷고 빌드 기록 · zip 은 남긴다
+  await ageUnused("ret-a", "7 days - 1 minute");
+  const h2 = await retire();
+  const keptFn = fns.has(fnOf("ret-a"));
+  await ageUnused("ret-a", "7 days");
+  const lg0 = calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length;
+  const h3 = await retire();
+  const builds = await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='ret-a' AND status='ok'`);
+  chk("X2 7일 − 1분은 그대로 · 7일이면 함수 · 로그 그룹 · 줄을 걷고 빌드 기록 · zip 은 남는다", keptFn && !h2.retired.includes("ret-a") && h3.retired.includes("ret-a")
+    && !fns.has(fnOf("ret-a")) && !(await rowOf("ret-a")) && calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length === lg0 + 1
+    && builds.length >= 1 && builds.every((b) => zips.has(b.zip_key)), JSON.stringify({ keptFn, h2, h3, builds: builds.length }));
+
+  // X3 걷은 뒤 서버 판으로 되돌리면 — 남은 빌드로 함수를 다시 만든다(빌드 없이)
+  const seats0 = seats.length;
+  await call("app_revert", { app_id: "ret-a", version_no: v1 }, alice, aliceCtx);
+  const back = await waitFor(async () => { const x = await rowOf("ret-a"); return x?.cur_lambda_version ? x : null; });
+  chk("X3 되돌리면 남은 빌드로 함수를 다시 만든다 · 빌드 0 · 표시 없음", !!back && fns.has(fnOf("ret-a")) && seats.length === seats0 && !back.unused_since,
+    JSON.stringify({ back, seats: [seats0, seats.length] }));
+  await call("org_app_remove", { app_id: "ret-a" }, boss);
+}
+
+// X4 지금 판은 서버를 뺐지만 공개 판에 서버 선언이 남아 있으면 — 쓰는 중(표시 안 함)
+{
+  await call("app_save", { files: twin("ret-b") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "ret-b", wait_s: 120 }, alice, aliceCtx);
+  await call("app_visibility_set", { app_id: "ret-b", visibility: "all" }, alice, aliceCtx);
+  await call("app_save", { files: noServer("ret-b") }, alice, aliceCtx);   // 공개 앱의 초안 — 공개 판은 서버 판 그대로
+  await retire();
+  const r = await rowOf("ret-b");
+  chk("X4 공개 판에 서버 선언이 남아 있으면 표시하지 않는다", !!r && !r.unused_since && fns.has(fnOf("ret-b")), JSON.stringify(r));
+  await call("org_app_remove", { app_id: "ret-b" }, boss);
+}
+
+// X5 표시가 붙은 뒤 서버 선언이 돌아오면 표시를 걷는다
+{
+  await call("app_save", { files: twin("ret-c") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "ret-c", wait_s: 120 }, alice, aliceCtx);
+  await call("app_save", { files: noServer("ret-c") }, alice, aliceCtx);
+  await retire();
+  const marked = !!(await rowOf("ret-c")).unused_since;
+  await call("app_save", { files: twin("ret-c") }, alice, aliceCtx);
+  const h = await retire();
+  const r = await rowOf("ret-c");
+  chk("X5 서버 선언이 돌아오면 표시를 걷는다 · 함수 그대로", marked && h.cleared >= 1 && !r.unused_since && fns.has(fnOf("ret-c")), JSON.stringify({ marked, h, r: r.unused_since }));
+  //  X5b 서버 판을 다시 올리면(별칭을 옮기면) 하우스키핑을 기다리지 않고 표시를 걷는다
+  await call("app_save", { files: noServer("ret-c") }, alice, aliceCtx);
+  await retire();
+  const marked2 = !!(await rowOf("ret-c")).unused_since;
+  await call("app_save", { files: twin("ret-c") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "ret-c", wait_s: 120 }, alice, aliceCtx);
+  chk("X5b 표시가 붙은 함수에 서버 판을 다시 올리면 곧바로 표시를 걷는다", marked2 && d.status === "deployed" && !(await rowOf("ret-c")).unused_since, JSON.stringify({ marked2, status: d.status }));
+  await call("org_app_remove", { app_id: "ret-c" }, boss);
+}
+
+// X6 멈춘 함수는 표시하지 않고 걷지도 않는다(붙어 있던 표시도 걷는다) — 지웠다 새로 만들어 멈춤을 피하지 않게
+{
+  await call("app_save", { files: twin("ret-d") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "ret-d", wait_s: 120 }, alice, aliceCtx);
+  await call("app_server_stop", { app_id: "ret-d", reason: "시험" }, boss);
+  await call("app_save", { files: noServer("ret-d") }, alice, aliceCtx);
+  await ageUnused("ret-d", "30 days");
+  const h = await retire();
+  const r = await rowOf("ret-d");
+  chk("X6 멈춘 함수 — 오래된 표시도 걷고 함수 · 줄 · 멈춤은 그대로", !h.retired.includes("ret-d") && !!r && !r.unused_since && !!r.stopped_at && fns.has(fnOf("ret-d")),
+    JSON.stringify({ h, r: r && { unused_since: r.unused_since, stopped_at: r.stopped_at } }));
+  await call("org_app_remove", { app_id: "ret-d" }, boss);
+}
+
+// X7 고른 뒤 · 잠그기 전에 서버 판이 돌아오면(경합) — 잠근 뒤 다시 보고 걷지 않는다
+{
+  await call("app_save", { files: twin("ret-e") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "ret-e", wait_s: 120 }, alice, aliceCtx);
+  await call("app_save", { files: noServer("ret-e") }, alice, aliceCtx);
+  await retire();
+  await ageUnused("ret-e", "8 days");
+  const h = await retire({ beforeRetire: async (id) => { if (id === "ret-e") await call("app_save", { files: twin("ret-e") }, alice, aliceCtx); } });
+  const r = await rowOf("ret-e");
+  chk("X7 걷기 직전 서버 판이 돌아왔으면 걷지 않는다(in-use)", !h.retired.includes("ret-e") && h.skipped.some((x) => x.app === "ret-e" && x.why === "in-use")
+    && !!r && fns.has(fnOf("ret-e")), JSON.stringify(h));
+  await call("org_app_remove", { app_id: "ret-e" }, boss);
 }
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip

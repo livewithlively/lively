@@ -105,6 +105,41 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   return { removed: !!row && !pending, errors, pending };
 }
 
+/**
+ * 서버 선언을 뺀 앱의 함수를 걷는다(#4791) — 함수 · 로그 그룹 · 함수 줄. 빌드 기록 · zip 은 남긴다: 서버 판으로 되돌리면 그 빌드로 함수를 다시
+ *  만들고(빌드 없이), zip 은 별칭이 안 가리키게 됐으니 종전 30일 정리가 걷는다. 잠금은 한 번만 잡아 본다(배포 중이면 다음 틱에 다시).
+ *  잠근 뒤 recheck 로 «아직도 쓰지 않나» 를 다시 본다 — 고를 때 읽은 매니페스트가 낡았을 수 있다(그 사이 서버 판을 저장 · 배포하면 지우지 않는다).
+ */
+export async function retireServer(appId: string, recheck: () => Promise<boolean>, deps0: ServerDeps = {}): Promise<{ retired: boolean; skipped?: string; errors: string[] }> {
+  const deps = withDeps(deps0);
+  const env = deps.env ?? appServerEnv();
+  if (!env) return { retired: false, skipped: "disabled", errors: [] };
+  const row = await st.getServerRow(appId);
+  if (!row) return { retired: false, skipped: "no-row", errors: [] };
+  if (!(await st.lockServer(appId, 5 * 60))) return { retired: false, skipped: "locked", errors: [] };
+  let gone = false;
+  const errors: string[] = [];
+  try {
+    if (!(await recheck())) return { retired: false, skipped: "in-use", errors };
+    const api = deps.api ?? realLambdaApi(env.region);
+    const own = await functionOwnership(api, row.function_name);
+    if (own === "foreign") errors.push(`함수: ${foreignMsg(row.function_name)} — 지우지 않았습니다`);
+    else if (own === "own") {
+      await api.deleteFunction(row.function_name);
+      await api.deleteLogGroup(logGroupFor(row.function_name)).catch((e) => errors.push(`로그: ${publicError(e)}`));
+    }
+    await st.deleteServerRow(appId);
+    gone = true;
+    return { retired: true, errors };
+  } catch (e) {
+    logger.warn({ err: e, appId, fn: row.function_name }, "서버 선언을 뺀 앱의 함수 걷기 실패 — 다음 틱에 다시(#4791)");
+    errors.push(`함수: ${publicError(e)}`);
+    return { retired: false, skipped: "error", errors };
+  } finally {
+    if (!gone) await st.unlockServer(appId).catch(() => { /* 저절로 풀린다 */ });
+  }
+}
+
 // ── 상태 ──
 
 export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise<Record<string, unknown>> {
@@ -113,6 +148,7 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
   const decl = serverDeclOf(app.manifest);
   const row = await st.getServerRow(app.id);
   const builds = await st.listServerBuilds(app.id, 5);
+  const retireDays = row?.unused_since ? (await st.appServerPolicy()).unused_retire_days : null;
   let installed: Record<string, unknown> | null = null;
   if (env && decl) {
     try {
@@ -141,6 +177,10 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       stopped: row.stopped_at ? { at: row.stopped_at, by: row.stopped_by, kind: row.stop_kind, reason: row.stop_reason } : null,
       last_error: row.last_error,
       code_mb: mbOf(row.code_bytes),   // #4792 이 함수의 코드 저장(판마다의 zip 합 · 워크스페이스 상한 workspace_code_mb 에 든다)
+      //  #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다 — retire_at 에 함수를 걷는다(서버 판을 다시 올리면 표시가 걷힌다 · 멈춘 함수는 걷지 않는다).
+      retire: row.unused_since && retireDays != null
+        ? { unused_since: row.unused_since, retire_at: new Date(new Date(row.unused_since).getTime() + retireDays * 86_400_000).toISOString(), stopped_kept: !!row.stopped_at }
+        : null,
     } : null,
     builds: builds.map((b) => ({
       build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,

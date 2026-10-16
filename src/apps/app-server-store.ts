@@ -147,6 +147,8 @@ export interface ServerRow {
   lock_until: string | null; last_error: string | null;
   /** #4792 이 함수의 코드 저장(바이트) — 마지막 배포 · 옛 판 정리 때 AWS 가 알려 준 판마다의 CodeSize 합($LATEST 포함). */
   code_bytes: number;
+  /** #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다고 하우스키핑이 처음 본 때(null = 쓰는 중). unused_retire_days 가 지나면 함수를 걷는다. */
+  unused_since: string | null;
   created_at: string; updated_at: string;
 }
 //  code_bytes 는 BIGINT 라 드라이버가 글자로 준다 — 숫자로 읽는다(빌드 기록의 ::float8 과 같은 까닭).
@@ -208,8 +210,9 @@ export async function unlockServer(appId: string): Promise<void> {
 
 export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string }): Promise<void> {
   const c = alias === "cur" ? "cur" : "pub";
+  //  별칭을 옮겼다 = 서버 선언이 있는 판을 올렸다 — «쓰지 않음» 표시(#4791)를 걷는다(다음 하우스키핑을 기다리지 않게).
   await itemsPool.query(
-    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_at=now(), last_error=NULL, updated_at=now() WHERE app_id=$1`,
+    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_at=now(), last_error=NULL, unused_since=NULL, updated_at=now() WHERE app_id=$1`,
     [appId, v.version_no, v.build_key, v.lambda_version]);
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
@@ -241,6 +244,37 @@ export async function deleteServerRow(appId: string): Promise<void> {
 export async function deleteServerRowIfUnused(appId: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_app_server WHERE app_id=$1 AND cur_lambda_version IS NULL AND pub_lambda_version IS NULL`, [appId]);
 }
+// ── #4791 서버 선언을 뺀 앱의 함수 ──
+/** 함수 줄과 그 앱의 서버 선언(설치된 상태 · 지금 판 · 공개 판의 web.server 원문) — 앱이 있는 줄만(앱이 없으면 고아 쓸기가 맡는다). */
+export interface ServerUseRow {
+  app_id: string; unused_since: string | null; stopped: boolean;
+  /** unused_since 가 days 일 넘게 지났나(DB 시계로 — 표시도 DB 시계로 붙인다). */
+  due: boolean;
+  srv_app: unknown; srv_cur: unknown; srv_pub: unknown;
+}
+export async function serverUseRows(days: number, appId: string | null = null): Promise<ServerUseRow[]> {
+  const r = await itemsPool.query(
+    `SELECT s.app_id, s.unused_since, (s.stopped_at IS NOT NULL) AS stopped,
+            (s.unused_since IS NOT NULL AND s.unused_since <= now() - make_interval(days => $1)) AS due,
+            a.manifest->'web'->'server' AS srv_app, cv.manifest->'web'->'server' AS srv_cur, pv.manifest->'web'->'server' AS srv_pub
+       FROM org_app_server s
+       JOIN org_app a ON a.id = s.app_id
+       LEFT JOIN org_app_version cv ON cv.app_id = a.id AND cv.version_no = a.current_version_no
+       LEFT JOIN org_app_version pv ON pv.app_id = a.id AND pv.version_no = a.published_version_no
+      WHERE $2::text IS NULL OR s.app_id = $2
+      ORDER BY s.app_id`, [days, appId]);
+  return r.rows as ServerUseRow[];
+}
+/** «쓰지 않음» 표시 — 이미 붙어 있으면 그대로(처음 본 때를 지킨다). 붙였으면 true. */
+export async function markServerUnused(appId: string): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_server SET unused_since=now(), updated_at=now() WHERE app_id=$1 AND unused_since IS NULL`, [appId]);
+  return (r.rowCount ?? 0) > 0;
+}
+export async function clearServerUnused(appId: string): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_server SET unused_since=NULL, updated_at=now() WHERE app_id=$1 AND unused_since IS NOT NULL`, [appId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** 앱이 사라졌는데 남은 함수 줄 — 앱을 지울 때 함수를 못 지운 것(하우스키핑이 다시 지운다). */
 export async function orphanServerRows(limit = 20): Promise<string[]> {
   const r = await itemsPool.query(

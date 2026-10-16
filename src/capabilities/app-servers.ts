@@ -130,7 +130,8 @@ const appServerStatus: Capability = {
   name: "app_server_status",
   title: "앱 서버 상태",
   description: "앱 서버의 상태 — 서버 선언(web.server) · 지금 판의 빌드(빌드 중이면 지금 하는 일 · 실패면 단계와 까닭) · 함수(cur = 고친 사람이 보는 판 · pub = 공개 판이 가리키는 판) · " +
-    "멈춤 여부 · 최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
+    "멈춤 여부 · code_mb(이 함수의 코드 저장) · retire(지금 판 · 공개 판 둘 다 web.server 를 뺐으면 함수를 걷는 날 retire_at — 서버 판을 다시 올리면 걷힌다) · " +
+    "최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
   scope: null,
   input: { app_id: z.string() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/apps/:id/server"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }] },
@@ -194,7 +195,8 @@ const appServerLimits: Capability = {
   description: "앱 서버 상한 — policy(지금 값: memory_mb 함수 메모리 · timeout_s 요청 시간 · build_timeout_s 빌드 시간 · build_mem_floor_mb 빌드를 멈추는 세션 남은 메모리 · " +
     "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions · " +
     "workspace_functions_max 이 워크스페이스의 서버 함수 수(앱마다 하나 · 새 함수만 막는다) · workspace_code_mb 이 워크스페이스 함수들의 코드 저장 합(MiB · AWS 가 세는 판마다의 zip 크기 · " +
-    "늘리는 배포만 막는다)) · workspace_setting · platform_default · min · ceiling · usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
+    "늘리는 배포만 막는다) · unused_retire_days 지금 판 · 공개 판 둘 다 web.server 가 없는 앱의 함수를 걷기까지의 날수) · workspace_setting · platform_default · min · ceiling · " +
+    "usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
   scope: null,
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/app-server-limits"], parse: () => ({}) }] },
