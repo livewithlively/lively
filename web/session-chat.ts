@@ -52,7 +52,7 @@ import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, provide
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
-import { echoedInTurns, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
+import { echoedInTurns, promptHead, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
@@ -1126,7 +1126,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const a = document.activeElement;
     if (!a || a === document.body || wrap.contains(a)) termSend('focus');
   }
-  /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 대기 말풍선이 에코를 기다리는 중이거나, 기록을 아직 읽는 중이라 말풍선을 그리기 전이다.
+  /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 서버가 «다 쳤다»(outbox.typed)를 알려 왔으면 들어갔다. 아니면 대기 말풍선이 에코를
+   *  기다리는 중이거나, 기록을 아직 읽는 중이라 말풍선을 그리기 전이다.
    *  ⚠ 기록 읽기가 끝났는데도 firstPrompt 가 남는 판(못 읽는 하네스 · 그때 세션이 아직 안 떠 있었음)은 기다릴 근거가 없다 — opening 으로 가른다. */
   function deliveryPending(): boolean {
     if (warmTyped) return false;
@@ -1143,13 +1144,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     w.grace = window.setTimeout(() => endTermWarm(true), WARM_DELIVERY_GRACE_MS);
     pokePoll();   // 지금 한 번 읽고, 그 뒤로는 촘촘히(schedule) — 걸려 있던 주기가 3초일 수 있다
   }
-  /** #4794 서버가 말을 다 치고 Enter 까지 눌렀다(outbox.typed) — 기다리던 그 말이면 «보냈다». 머리(공백을 뺀 앞 40자)로 맞춰 본다 —
-   *  서버는 줄바꿈을 공백으로 편 한 줄을 친다(flatOneLine). 다른 말(다른 탭에서 보낸 것 등)이면 넘어간다. */
+  /** #4794 서버가 말을 다 치고 Enter 까지 눌렀다(outbox.typed) — 기다리던 그 말이면 «보냈다». 같은 말 판정의 머리(promptHead — 서버
+   *  typedHead 와 같은 글자)를 그대로 견준다. 다른 말(다른 탭에서 보낸 것 등)이면 넘어간다 — 그땐 에코·유예가 넘긴다. */
   function onOutboxTyped(head: string): void {
     const want = warmPrompt?.text ?? firstPrompt;
-    if (warmTyped || !want) return;
-    const key = (t: string): string => t.replace(/\s+/g, '').slice(0, 40);
-    if (!key(head) || key(head) !== key(want)) return;
+    if (warmTyped || !want || !head || promptHead(want) !== head) return;
     warmTyped = true;
     warmSwitchIfDelivered();
   }

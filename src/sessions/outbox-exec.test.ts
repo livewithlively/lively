@@ -19,6 +19,7 @@ import {
   type OutboxExecDeps, type PaneSeen, type TypeResult,
 } from "./outbox-exec.js";
 import * as outbox from "./session-outbox.js";
+import { onSessionEvent } from "../terminal/harness-io/runtime-bus.js";   // #4794 T7 — «다 쳤다» 알림을 실제 통로에서 받는다
 
 //  배달자·registry 는 **네임스페이스로** 받는다 — 이름을 정적으로 묶으면 배선이 옛 모양(내보내기 없음)일 때 파일 전체가 링크 오류로 죽어
 //   어느 행이 배선에 걸렸는지 안 보인다. 이렇게 두면 옛 배선에서는 그 배선을 쓰는 행만 빨간불이다(fail-first).
@@ -564,8 +565,15 @@ test("T1~T6 onTyped — 사람의 말을 다 치고 Enter 까지 누른 뒤 **�
   assert.deepEqual(r.out, { kind: "mark", status: "delivered" }, "알림 실패가 배달 결말을 바꿨다");
 });
 
-test("T7 배달 루프가 «다 쳤다» 를 세션 상태 통로로 낸다(outbox.typed · 행 id · 한 줄 머리) — 배선", () => {
-  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
-  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine\) => waitEcho\(sessionId, st, oneLine\),\s*\n\s*\(\) => emitSessionEvent\(sessionId, \{ t: "outbox\.typed", id: row\.id, head: flatOneLine\(row\.text\)\.slice\(0, 160\) \}\)\);/,
-    "배달 루프가 onTyped 로 outbox.typed 를 안 낸다 — 화면이 «보냈다» 를 에코(몇 초 늦음)로만 안다");
+test("T7 «다 쳤다» 알림 — 세션 상태 통로에 { t: outbox.typed, id, head } 한 번(머리 = 공백을 접은 앞 160자) · 배달 루프가 그것을 onTyped 로 건다", () => {
+  const { emitTypedNotice, typedHead } = outbox;
+  const seen: unknown[] = [];
+  const off = onSessionEvent(ID, (e) => { seen.push(e); });
+  try { emitTypedNotice(ID, { id: 77, text: "  첫 줄\n   둘째\t\t줄  " }); } finally { off(); }
+  assert.deepEqual(seen, [{ t: "outbox.typed", id: 77, head: "첫 줄 둘째 줄" }], "알림의 모양이 화면이 기대하는 것과 다르다(web/session-chat.ts onOutboxTyped)");
+  assert.equal(typedHead("가".repeat(500)).length, 160, "머리 길이가 같은 말 판정(ECHO_HEAD_CHARS)과 다르다");
+  //  배선 — 배달 루프가 이 알림을 onTyped 로 넘긴다(넘기지 않으면 화면은 에코 — 제출 훅 뒤 몇 초 — 로만 안다)
+  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
+  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine\) => waitEcho\(sessionId, st, oneLine\), \(\) => emitTypedNotice\(sessionId, row\)\);/,
+    "배달 루프가 onTyped 로 emitTypedNotice 를 안 건다");
 });

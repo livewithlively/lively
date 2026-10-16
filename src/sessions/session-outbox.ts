@@ -49,7 +49,7 @@ import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { logger } from "../log.js";
-import { emitSessionEvent } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
+import { emitSessionEvent, sessionListenerCount } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 
@@ -169,6 +169,19 @@ export function echoNeedle(oneLine: string): string {
 }
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 개행은 공백으로). 에코도 이 형태로 찾아야 한다. */
 export const flatOneLine = (text: string): string => String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
+
+/** #4794 «다 쳤다» 알림의 머리 — 공백을 하나로 접고 앞뒤를 다듬은 뒤 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
+ *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 접기·같은 길이다.
+ *  ⚠ 두 함수가 갈리면 긴 말이 안 맞아 넘김이 유예(8초)로 밀린다 — 계약 시험 scripts/outbox-typed-contract.test.mjs 가 맞춘다. */
+export const typedHead = (text: string): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, ECHO_HEAD_CHARS);
+
+/** #4794 아웃박스가 사람의 말을 다 치고 Enter 까지 눌렀다 — 세션 상태 통로로 알린다(화면이 터미널로 넘기는 신호).
+ *  듣는 쪽 수를 남긴다 — 그 신호가 운영에서 실제로 닿았는지(아무도 안 들었으면 화면은 에코·유예로 넘겼다)를 여기서 읽는다. */
+export function emitTypedNotice(sessionId: string, row: Pick<OutboxRow, "id" | "text">): void {
+  const listeners = sessionListenerCount(sessionId);
+  emitSessionEvent(sessionId, { t: "outbox.typed", id: row.id, head: typedHead(row.text) });
+  logger.info({ sessionId, outboxId: row.id, listeners }, "outbox: 다 쳤다 알림");
+}
 
 // ── 저장 ────────────────────────────────────────────────────────────────────────
 export async function enqueuePrompt(sessionId: string, text: string, opts?: { trustOk?: boolean; kind?: OutboxKind }): Promise<{ id: number; seq: number }> {
@@ -402,8 +415,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine),
-      () => emitSessionEvent(sessionId, { t: "outbox.typed", id: row.id, head: flatOneLine(row.text).slice(0, 160) }));
+    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine), () => emitTypedNotice(sessionId, row));
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
