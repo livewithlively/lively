@@ -128,7 +128,7 @@ const accountInput = {
 const appAiAccountSet: Capability = {
   name: "app_ai_account_set",
   title: "앱 AI 실행 계정 정하기",
-  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 기본 모델은 관리자. 배포 없이 바로 먹는다.",
+  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자 · 책임자는 제 앱을 워크스페이스 API 키로 돌리게도 할 수 있다 — 앱당 하루 토큰 상한이 울타리). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 기본 모델은 관리자. 배포 없이 바로 먹는다.",
   scope: null,
   input: accountInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/ai-account"], parse: (req) => pickBody((req.body ?? {}) as Record<string, unknown>, Object.keys(accountInput)) }] },

@@ -190,6 +190,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const p = await d.policy();
   const tenant = d.tenant();
   if (!d.rate.take(`${tenant}\0${appId}`, d.now())) throw new HttpError(429, `이 앱이 AI 실행을 너무 자주 보내고 있습니다(분당 ${p.app_per_minute}회) — 요청을 모아 한 번에 보내세요`);
+  //  세고 → 넣는 두 단계라 같은 사람이 동시에 여럿 보내면 상한을 조금 넘길 수 있다 — 소프트 상한이다(앱당 분당 상한이 먼저 걸려 폭이 작다 · 격리 리뷰 note).
   if ((await d.store.openRunCountOf(who.member)) >= p.max_running_per_member) {
     throw new HttpError(429, `${who.member}님의 AI 실행이 이미 ${p.max_running_per_member}개 돌고 있습니다 — 끝난 뒤 다시 보내세요`);
   }

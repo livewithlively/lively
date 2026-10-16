@@ -21,7 +21,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // ── 가짜 위쪽(Anthropic) — 받은 헤더를 기록하고, 모드대로 답한다. 끊김을 본다. ──
 interface Seen { headers: http.IncomingHttpHeaders; body: string; aborted: boolean }
 const seen: Seen[] = [];
-let mode: "json" | "stream-slow" | "stream-break" | "stall" = "json";
+let mode: "json" | "stream-short" | "stream-slow" | "stream-break" | "stall" = "json";
 const upstream = http.createServer((req, res) => {
   let body = "";
   req.on("data", (d) => { body += d; });
@@ -42,6 +42,7 @@ const upstream = http.createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({ type: "message_start", message: { model: "m", usage: { input_tokens: 9 } } })}\n\n`);
+    if (mode === "stream-short") { res.end(`data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 3 } })}\n\ndata: {"type":"message_stop"}\n\n`); return; }
     if (mode === "stream-break") { setTimeout(() => res.destroy(), 50); return; }
     //  느린 스트림 — 끊기지 않으면 60초 뒤에나 끝난다(시험은 그 전에 끊는다).
     const t = setInterval(() => { if (!res.writableEnded) res.write(`data: {"type":"ping"}\n\n`); }, 20);
@@ -104,19 +105,29 @@ try {
   assert.equal(inflightN, 0, "슬롯 반환");
   ok("X5 키 교체(앱 자격 · 쿠키 버림 · 베타 통과) · 계측(run_token · 토큰 · 상태)");
 
-  // X6 스트리밍 바이트 그대로(짧게 끝나는 위쪽) — json 모드 대신 break 전에 끊기지 않는 짧은 스트림으로 본다
-  mode = "stream-break";
+  // X6 스트리밍 — 끝까지 오는 짧은 스트림이 바이트 그대로 지나가고 사용량(입력 9 · 출력 3)이 셈된다
+  mode = "stream-short";
   const r6 = await post("/v1/messages", { authorization: "Bearer lvk_app" }, { stream: true });
   assert.equal(r6.status, 200);
   assert.equal(r6.headers.get("content-type"), "text/event-stream");
-  const text6 = await r6.text().catch(() => "(끊김)");
-  assert.ok(text6.includes("message_start") || text6 === "(끊김)", text6);
-  await sleep(50);
-  assert.equal(inflightN, 0, "X8 위쪽이 중간에 끊겨도 슬롯 반환");
+  const text6 = await r6.text();
+  assert.equal(text6, `data: ${JSON.stringify({ type: "message_start", message: { model: "m", usage: { input_tokens: 9 } } })}\n\ndata: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 3 } })}\n\ndata: {"type":"message_stop"}\n\n`, "바이트 그대로");
+  await sleep(30);
+  assert.equal(inflightN, 0);
   const c6 = calls.at(-1)!;
-  assert.equal(c6.caller, "app_server"); assert.equal(c6.stream, true); assert.equal(c6.inputTokens, 9, "끊기기 전까지 셈한 사용량");
-  assert.ok(c6.error, "위쪽이 끊긴 것을 계측에 남긴다");
-  ok("X6·X8 스트리밍 바이트 그대로 · 위쪽이 중간에 끊기면 응답이 닫히고 슬롯이 돌아온다");
+  assert.equal(c6.caller, "app_server"); assert.equal(c6.stream, true); assert.equal(c6.inputTokens, 9); assert.equal(c6.outputTokens, 3); assert.equal(c6.error, null);
+  ok("X6 스트리밍 바이트 그대로 · 사용량 셈(app_server)");
+
+  // X8 위쪽이 중간에 끊김 → 응답 닫힘 · 슬롯 반환 · 계측에 오류
+  mode = "stream-break";
+  const r8 = await post("/v1/messages", { authorization: "Bearer lvk_app" }, { stream: true });
+  const text8 = await r8.text().catch(() => "(끊김)");
+  assert.ok(text8.includes("message_start") || text8 === "(끊김)", "끊기기 전 조각 또는 끊김 — 응답이 열린 채 남지 않는다");
+  await sleep(50);
+  assert.equal(inflightN, 0, "위쪽이 중간에 끊겨도 슬롯 반환");
+  const c8 = calls.at(-1)!;
+  assert.equal(c8.inputTokens, 9, "끊기기 전까지 셈한 사용량"); assert.ok(c8.error, "위쪽이 끊긴 것을 계측에 남긴다");
+  ok("X8 위쪽이 중간에 끊기면 응답이 닫히고 슬롯이 돌아온다");
 
   // X7 클라이언트가 중간에 끊음 → 위쪽 abort · 슬롯 반환
   mode = "stream-slow";
