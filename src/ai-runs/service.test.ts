@@ -79,6 +79,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     attachedSessions: async () => [],
     subscriptionLoggedIn: async () => true,
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
+    isJobToken: async (prefix) => prefix === "jobtok",
   };
   return { w, d };
 }
@@ -156,6 +157,16 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S5~S7 남의 구독 403 · 도구 직접 호출 403 · 계정 없음 409 · 앱 서버 에이전트 501 · 앱 서버 단발은 됨");
 }
 
+// ── S25 작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳지 않는다(#4490 규칙) ──
+{
+  const { w, d } = world();
+  await fails(submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), tokenHashPrefix: "jobtok" }, { source: "mcp" }, d), 403, /작업 안에서는/);
+  assert.equal(w.runs.size, 0);
+  const r = await submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), tokenHashPrefix: "other" }, { source: "app-ui" }, d);
+  assert.equal(r.status, "running");
+  ok("S25 작업 토큰은 403 · 다른 토큰은 됨");
+}
+
 // ── S8~S11 상한 — 앱 분당 · 사람당 동시 · 하루 토큰(키만) · 워크스페이스 동시 ──
 {
   const rate = world({ policy: { ...DEFAULT_AI_RUN_POLICY, app_per_minute: 2 } });
@@ -165,7 +176,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await fails(submitRun({ prompt: "3" }, appUser("carol", "crm"), { source: "app-ui" }, rate.d), 429, /너무 자주/);
   ok("S8 앱당 분당 상한 — 사람이 달라도 앱 하나로 센다");
 
-  const per = world({ policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 1 }, llmReply: () => okText("x") });
+  const per = world({ policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 1, single_timeout_sec: 1 }, llmReply: () => okText("x") });
   per.d.singleShot = () => new Promise(() => undefined);   // 끝나지 않는 실행 하나
   await submitRun({ prompt: "1" }, appUser("alice", "crm"), { source: "app-ui" }, per.d);
   await fails(submitRun({ prompt: "2" }, appUser("alice", "talk"), { source: "app-ui" }, per.d), 429, /이미 1개/);
@@ -288,7 +299,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-ui" }, d);
   await cancelRunFor(1, appUser("alice", "crm"), d);
   assert.deepEqual(w.canceled, [101]);
-  const px = world();
+  const px = world({ policy: { ...DEFAULT_AI_RUN_POLICY, single_timeout_sec: 1 } });
   px.d.singleShot = () => new Promise(() => undefined);
   await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-ui" }, px.d);
   const c = await cancelRunFor(1, appUser("alice", "crm"), px.d);

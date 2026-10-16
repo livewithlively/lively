@@ -387,8 +387,8 @@ export type ReapRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id
  */
 export async function reapJob(row: ReapRow, d: AgentJobDeps): Promise<boolean> {
   if (!isEnded(row.status) || row.reaped) return false;
-  //  #4488 — 이 작업에 붙은 AI 실행 행을 먼저 맞춘다(몇 번 불러도 같다 · 던지지 않는다).
-  if (d.onJobEnded) await d.onJobEnded(row).catch(() => undefined);
+  //  #4488 — 이 작업에 붙은 AI 실행 행을 맞춘다(몇 번 불러도 같다 · 던지지 않는다). 걷기를 붙잡지 않게 뒤로 미룬다 — 형식 재시도 작업 접수까지 달릴 수 있다(격리 리뷰).
+  if (d.onJobEnded) { const hook = d.onJobEnded; d.later(() => hook(row).catch(() => undefined), 0); }
   let ok = true;
   if (row.session_id && !JOB_SESSION_ID_RE.test(row.session_id)) {
     logger.error({ job: row.id, session: row.session_id }, "[agent-job] 작업 세션 id 꼴이 아니다 — 컨테이너는 걷지 않는다");

@@ -95,7 +95,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     later: (fn, ms) => {
       const t = currentTenant();
       const run = (): void => {
-        void Promise.resolve(t ? withTenant(t, fn) : fn())
+        //  동기로 던져도 uncaught 가 되지 않게 then 안에서 부른다(격리 리뷰 nit).
+        void Promise.resolve().then(() => (t ? withTenant(t, fn) : fn()))
           .catch((e) => logger.warn({ err: (e as Error)?.message ?? String(e) }, "[ai-run] 뒤로 미룬 일 실패(정비가 다시 본다)"));
       };
       if (ms <= 0) setImmediate(run); else setTimeout(run, ms).unref?.();
@@ -121,6 +122,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       return r.loggedIn;
     }),
     isAdmin,
+    isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
   };
   return cached;
 }

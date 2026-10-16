@@ -27,7 +27,6 @@ export const PROMPT_MAX = 100_000;
 export const SYSTEM_MAX = 20_000;
 export const LABEL_MAX = 120;
 export const SCHEMA_MAX_BYTES = 32_768;
-export const RESULT_TEXT_MAX = 200_000;
 export const JOB_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const MODEL_RE = /^[a-z0-9][a-z0-9.\-[\]]{1,63}$/i;
 /** 단발 실행 기본 모델 — 설정(app_ai_account.default_model)이 없을 때. 워크스페이스가 바꿀 수 있다. */
@@ -109,15 +108,18 @@ export function subscriptionRefusal(account: AiAccount, requester: { member: str
 }
 
 /**
- * (순수) 실행 계정 설정을 바꿀 수 있나 — 바꿀 수 없으면 거절 문장.
- *  API 키 · 기본값 해제는 관리자 · 구독은 **그 사람 본인만** 자기 구독을 건다(설계 §12 ④ 조건 ① — 관리자도 남의 구독을 고르지 못한다).
+ * (순수) 실행 계정 설정을 바꿀 수 있나 — 바꿀 수 없으면 거절 문장. 두 축이다: **누구의 구독인가**(본인만 — 설계 §12 ④ 조건 ①, 관리자도 남의 구독을
+ *  고르지 못한다) 와 **어느 자리를 바꾸나**(워크스페이스 기본값은 관리자만 · 앱별·작업별은 관리자 또는 그 앱의 책임자). 자리 규칙이 없으면 구성원 누구나
+ *  워크스페이스 기본값이나 아무 앱의 실행 계정을 자기 구독으로 덮어 다른 모두의 AI 실행을 막을 수 있다(격리 리뷰 blocking 2).
+ *  API 키 · 해제도 같은 자리 규칙을 탄다(워크스페이스 = 관리자 · 앱 = 관리자 또는 책임자).
  */
-export function accountSetRefusal(next: AiAccount | null, actor: { member: string; admin: boolean }): string | null {
-  if (next?.kind === "subscription") {
-    if (next.member !== actor.member) return `구독 실행 계정은 그 사람 본인만 걸 수 있습니다 — ${next.member}님이 직접 설정해야 해요`;
+export function accountSetRefusal(next: AiAccount | null, actor: { member: string; admin: boolean }, scope: { appId: string | null; appOwner: boolean }): string | null {
+  if (next?.kind === "subscription" && next.member !== actor.member) return `구독 실행 계정은 그 사람 본인만 걸 수 있습니다 — ${next.member}님이 직접 설정해야 해요`;
+  if (!scope.appId) {
+    if (!actor.admin) return "워크스페이스 기본 실행 계정은 관리자만 바꿀 수 있습니다 — 구성원은 자기가 책임자인 앱에만 자기 구독을 걸 수 있어요";
     return null;
   }
-  if (!actor.admin) return "워크스페이스 API 키 실행 계정 · 설정 해제는 관리자만 할 수 있습니다";
+  if (!actor.admin && !scope.appOwner) return `앱 '${scope.appId}' 의 실행 계정은 관리자나 그 앱의 책임자만 바꿀 수 있습니다`;
   return null;
 }
 

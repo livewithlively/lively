@@ -15,6 +15,7 @@ import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow } from "../agent-jobs/store.js";
+import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
@@ -60,17 +61,16 @@ export interface AiRunDeps {
   /** 구독 실행 계정의 로그인 판정(aiLoginCheck · 짧게 기억) — 모르면 null. */
   subscriptionLoggedIn(member: string): Promise<boolean | null>;
   isAdmin(user: LivelyUser): boolean;
+  /** 이 토큰이 작업 컨테이너의 작업 토큰인가(agent-jobs store.isAgentJobToken) — 작업이 작업을 낳지 않게(#4490 규칙과 같다). */
+  isJobToken(tokenHashPrefix: string): Promise<boolean>;
 }
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
 export const PROXY_TOKEN_PREFIX = "lvai_";
-/** 작업 컨테이너 안에서 우리 프록시로 가는 주소(세션 루프백 → 게이트웨이) — Claude Code 의 ANTHROPIC_BASE_URL. */
-export const PROXY_BASE_IN_CONTAINER = "http://127.0.0.1:8080/api/llm/anthropic";
+/** 작업 컨테이너 안에서 우리 프록시로 가는 주소(세션 루프백 → 게이트웨이 · runner.RUNNER_GATEWAY 와 한 자리) — Claude Code 의 ANTHROPIC_BASE_URL. */
+export const PROXY_BASE_IN_CONTAINER = `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}/api/llm/anthropic`;
 /** 판이 빈 설정 폴더를 만들어 바꿔 넣는 자리표(agent-jobs/runner.ts) — 멤버 홈의 Claude 로그인을 읽지 않게. */
 export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
-/** 프록시 토큰 수명 여유 — 작업 상한 뒤에도 결과 보고가 끝날 때까지. */
-export const PROXY_TOKEN_SLACK_SEC = 15 * 60;
-
 const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
 
 export interface SubmitInput {
@@ -131,6 +131,8 @@ export function appDeclaresAiRuns(app: OrgApp | null): boolean {
  */
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
   const who = requesterOf(user);
+  //  작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳으면 사람 없이 끝없이 돈다(agent-jobs/service.assertMaySubmit 과 같은 규칙 · 격리 리뷰).
+  if (user.tokenHashPrefix && (await d.isJobToken(user.tokenHashPrefix))) throw new HttpError(403, "작업 안에서는 새 AI 실행을 보낼 수 없습니다");
   const appId = typeof user.appId === "string" && user.appId ? user.appId : (typeof input.app_id === "string" ? input.app_id.trim() : "");
   if (!appId) throw new HttpError(400, "app_id 가 필요합니다 — 앱 화면 · 앱 서버에서 부르면 생략합니다");
   if (!user.appId) await d.assertAppUsable(user, appId);
@@ -269,6 +271,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
   const started = d.now();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), p.single_timeout_sec * 1000);
+  timer.unref?.();   // 상한 시계가 프로세스를 붙잡지 않게(시험 · 종료)
   const total: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
   const add = (u: Usage): void => { total.input_tokens += u.input_tokens; total.output_tokens += u.output_tokens; total.cache_read_tokens += u.cache_read_tokens; total.cache_write_tokens += u.cache_write_tokens; };
   const model = row.model ?? DEFAULT_MODEL;

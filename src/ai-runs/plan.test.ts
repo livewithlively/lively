@@ -59,15 +59,22 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("P7 구독 선 — 본인 · 앱 화면(app-ui/app-front) · 사람만");
 }
 
-// ── P8 실행 계정 설정 권한 — 구독은 본인만 · API 키·해제는 관리자 ──
+// ── P8 실행 계정 설정 권한 — 누구의 구독(본인만) × 어느 자리(워크스페이스 = 관리자 · 앱 = 관리자/책임자) ──
 {
-  assert.equal(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "alice", admin: false }), null);
-  assert.match(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "root", admin: true })!, /본인만/);
-  assert.equal(accountSetRefusal({ kind: "api_key" }, { member: "root", admin: true }), null);
-  assert.match(accountSetRefusal({ kind: "api_key" }, { member: "alice", admin: false })!, /관리자만/);
-  assert.match(accountSetRefusal(null, { member: "alice", admin: false })!, /관리자만/);
-  assert.equal(accountSetRefusal(null, { member: "root", admin: true }), null);
-  ok("P8 설정 권한 — 관리자도 남의 구독을 못 건다");
+  const ws = { appId: null, appOwner: false };
+  const mine = { appId: "crm", appOwner: true };
+  const theirs = { appId: "crm", appOwner: false };
+  assert.match(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "root", admin: true }, ws)!, /본인만/, "관리자도 남의 구독은 못 건다");
+  assert.equal(accountSetRefusal({ kind: "subscription", member: "root" }, { member: "root", admin: true }, ws), null, "관리자가 자기 구독을 워크스페이스 기본값으로");
+  assert.match(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "alice", admin: false }, ws)!, /관리자만/, "구성원은 워크스페이스 기본값을 못 바꾼다(남의 AI 실행을 막는 길)");
+  assert.equal(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "alice", admin: false }, mine), null, "자기가 책임자인 앱에는 자기 구독을 건다");
+  assert.match(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "alice", admin: false }, theirs)!, /책임자만/, "남의 앱은 못 건다");
+  assert.equal(accountSetRefusal({ kind: "api_key" }, { member: "root", admin: true }, ws), null);
+  assert.equal(accountSetRefusal({ kind: "api_key" }, { member: "alice", admin: false }, mine), null, "책임자는 제 앱을 API 키로 돌린다");
+  assert.match(accountSetRefusal({ kind: "api_key" }, { member: "alice", admin: false }, ws)!, /관리자만/);
+  assert.match(accountSetRefusal(null, { member: "alice", admin: false }, theirs)!, /책임자만/);
+  assert.equal(accountSetRefusal(null, { member: "root", admin: true }, theirs), null);
+  ok("P8 설정 권한 — 남의 구독 금지 · 워크스페이스 기본값은 관리자 · 앱은 관리자/책임자");
 }
 
 // ── P9~P11 JSON 꺼내기 · 스키마 검사 · 판정 · 스키마 입력 ──

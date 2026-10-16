@@ -132,11 +132,13 @@ export async function claimAgentJobs(
   const gap = Math.max(0, Math.floor(o.retryGapSec ?? 0));
   return withTx(async (c) => {
     await lockTenantQueue(c);
-    const live = await q(c, `SELECT id, account_member FROM org_agent_job WHERE status IN ('starting','running')`);
+    //  사람당 상한의 축 = 자리의 구성원(plan.jobSeatMember 와 같은 식) — API 키 작업(account_member NULL)도 보낸 사람 자리에 앉으니 그 사람으로 센다(격리 리뷰).
+    const SEAT = `CASE WHEN account_kind='api_key' THEN requester ELSE account_member END AS account_member`;
+    const live = await q(c, `SELECT id, ${SEAT} FROM org_agent_job WHERE status IN ('starting','running')`);
     //  대기열 전부를 본다(상한 = max_queued 의 범위 끝) — 앞줄이 사람당 상한에 걸려 있어도 그 뒤의 남의 작업이 굶지 않게.
     //   일시 실패로 되돌린 작업(attempts > 0)은 되돌린 뒤 gap 초가 지나야 다시 받는다 — 쉬는 동안엔 뒤의 작업이 그 자리를 쓴다.
     const queued = await q(c,
-      `SELECT id, account_member FROM org_agent_job
+      `SELECT id, ${SEAT} FROM org_agent_job
         WHERE status='queued' AND NOT cancel_requested AND (attempts = 0 OR updated_at < now() - make_interval(secs => $2))
         ORDER BY id LIMIT $1`,
       [QUEUE_SCAN_MAX, gap]);

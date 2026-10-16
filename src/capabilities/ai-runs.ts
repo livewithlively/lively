@@ -10,6 +10,7 @@ import { isAdmin } from "./principal.js";
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { AI_RUN_POLICY_RANGE, DEFAULT_AI_RUN_POLICY, aiRunPolicySource, invalidateAiRunPolicyCache, resolveAiRunPolicy, type AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import { JOB_NAME_RE, MODEL_RE, PROMPT_MAX, WAIT_MAX_SEC, accountSetRefusal, parseAccountSettings, type AiAccount, type AiAccountSettings } from "../ai-runs/plan.js";
+import { APP_ID_RE } from "../agent-jobs/plan.js";
 
 const deps = async () => (await import("../ai-runs/live.js")).liveAiRunDeps();
 const svc = () => import("../ai-runs/service.js");
@@ -127,7 +128,7 @@ const accountInput = {
 const appAiAccountSet: Capability = {
   name: "app_ai_account_set",
   title: "앱 AI 실행 계정 정하기",
-  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음) · 앱별(app_id) · 작업별(app_id + job). API 키 · 해제 · 기본 모델은 관리자, 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 배포 없이 바로 먹는다.",
+  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 기본 모델은 관리자. 배포 없이 바로 먹는다.",
   scope: null,
   input: accountInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/ai-account"], parse: (req) => pickBody((req.body ?? {}) as Record<string, unknown>, Object.keys(accountInput)) }] },
@@ -142,11 +143,21 @@ const appAiAccountSet: Capability = {
       const m = typeof input.member === "string" && input.member.trim() ? input.member.trim() : user.userId;
       next = { kind: "subscription", member: m };
     } else if (kind !== "none") throw new HttpError(400, "kind 는 api_key · subscription · none 중 하나");
-    const refusal = accountSetRefusal(next, { member: user.userId, admin });
-    if (refusal) throw new HttpError(403, refusal);
     const appId = typeof input.app_id === "string" && input.app_id.trim() ? input.app_id.trim() : null;
     const job = typeof input.job === "string" && input.job.trim() ? input.job.trim() : null;
     if (job && !appId) throw new HttpError(400, "job 은 app_id 와 함께 줍니다");
+    //  자리 검증 — 앱은 실제로 있어야 하고(임의 글자가 설정 JSON 에 쌓이지 않게), 책임자 여부는 그 앱 행으로 판정한다.
+    let appOwner = false;
+    if (appId) {
+      if (!APP_ID_RE.test(appId)) throw new HttpError(400, "app_id 형식이 아닙니다");
+      const { getApp } = await import("../org/store/apps.js");
+      const { canSeeApp, isAppOwner } = await import("../apps/visibility.js");
+      const a = await getApp(appId);
+      if (!a || !canSeeApp(a, { userId: user.userId, scopes: user.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${appId}`);
+      appOwner = isAppOwner(a, { userId: user.userId, scopes: user.scopes ?? [] });
+    }
+    const refusal = accountSetRefusal(next, { member: user.userId, admin }, { appId, appOwner });
+    if (refusal) throw new HttpError(403, refusal);
     if (input.default_model !== undefined && !admin) throw new HttpError(403, "기본 모델은 관리자만 바꿀 수 있습니다");
     const store = await import("../ai-runs/store.js");
     const s: AiAccountSettings = parseAccountSettings(await store.aiAccountRow());

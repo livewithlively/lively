@@ -3,8 +3,8 @@
 //  SDK 를 쓰지 않고 fetch 로 보낸다 — 프록시는 바이트를 그대로 흘려야 하고(스트리밍 · 베타 헤더 · 앱이 보낸 본문 그대로), 코어에 Anthropic SDK 의존성이 없다.
 import { Readable } from "node:stream";
 
-/** Anthropic 주소 — 자가호스팅이 자기 LLM 게이트웨이를 앞에 둘 때 · 끝단 시험이 가짜 서버를 둘 때 바꾼다(LIVELY_ANTHROPIC_BASE_URL). */
-export const ANTHROPIC_BASE = (process.env.LIVELY_ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/+$/, "");
+/** Anthropic 주소 — 자가호스팅이 자기 LLM 게이트웨이를 앞에 둘 때 · 시험이 가짜 서버를 둘 때 바꾼다(LIVELY_ANTHROPIC_BASE_URL). 부를 때마다 읽는다. */
+export function anthropicBase(): string { return (process.env.LIVELY_ANTHROPIC_BASE_URL ?? "https://api.anthropic.com").replace(/\/+$/, ""); }
 export const ANTHROPIC_VERSION = "2023-06-01";
 /** 프록시가 흘려 보내는 경로 — 이 둘만(Claude Code 가 쓰는 것 · SDK 의 기본). 그 밖은 404. */
 export const PROXY_PATHS: ReadonlySet<string> = new Set(["/v1/messages", "/v1/messages/count_tokens"]);
@@ -81,7 +81,7 @@ export async function forwardToAnthropic(
 ): Promise<ForwardResult> {
   //  Buffer 는 fetch 의 BodyInit 타입에 없다(값은 받는다) — ArrayBuffer 사본으로 넘긴다.
   const body: BodyInit = typeof o.body === "string" ? o.body : o.body.buffer.slice(o.body.byteOffset, o.body.byteOffset + o.body.byteLength) as ArrayBuffer;
-  const res = await f(ANTHROPIC_BASE + o.path, { method: "POST", headers: o.headers, body, signal: o.signal });
+  const res = await f(anthropicBase() + o.path, { method: "POST", headers: o.headers, body, signal: o.signal });
   const headers: Record<string, string> = {};
   for (const k of ["content-type", "request-id", "x-request-id", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining", "retry-after"]) {
     const v = res.headers.get(k); if (v) headers[k] = v;
