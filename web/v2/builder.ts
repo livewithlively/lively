@@ -33,6 +33,8 @@ interface BApp {
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
   view: 'installed' | 'published'; draft: { by: string; versionNo: number } | null; buildSession: string; isOwner: boolean; canPublish: boolean; canUnpublish: boolean;
   empty: boolean;   // 「만들기 시작」 이 예약만 하고 아직 첫 판이 없는 앱
+  //  #4785 앱 폴더 — 원하는 상한(GiB, null = 없음) · 매니지드 쿼터 정비가 잰 쓰는 양과 그때 걸려 있던 상한 · 단계(0 · 80 · 100) · 내가 바꿀 수 있나.
+  folder: { limitGb: number | null; usedBytes: number | null; appliedGb: number | null; level: number; canSet: boolean };
 }
 async function listAllApps(): Promise<BApp[]> {
   try {
@@ -47,9 +49,17 @@ async function listAllApps(): Promise<BApp[]> {
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
       ...appStateOf(a), empty: a.empty === true,
+      folder: folderOf(a.folder),
     }));
   } catch (_) { return []; }
 }
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const folderOf = (f: any): BApp['folder'] => ({
+  limitGb: numOrNull(f && f.limit_gb), usedBytes: numOrNull(f && f.used_bytes), appliedGb: numOrNull(f && f.applied_limit_gb),
+  level: Number(f && f.level) || 0, canSet: !!(f && f.can_set),
+});
+/** 1024 단위 크기 — JuiceFS 쿼터와 같은 자(GiB). */
+const gib = (b: number): string => (b >= 1024 ** 3 ? (b / 1024 ** 3).toFixed(1) + 'GiB' : b >= 1024 ** 2 ? (b / 1024 ** 2).toFixed(1) + 'MiB' : Math.round(b / 1024) + 'KiB');
 const placeOf = (s: BApp['studio']): StudioPlace | '' => (s && (s.place === 'side' || s.place === 'full' || s.place === 'both') ? s.place : '');
 const when = (ms: number): string => {
   if (!ms) return ''; const d = new Date(ms); const now = new Date();
@@ -297,6 +307,36 @@ function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<void>): v
     el('div', { class: 'v2-bld-acts' }, el('span', { class: 'v2-studio-sp' }), delBtn));
 }
 
+// ── 앱 폴더 상한 · 쓰는 양(#4785) ──
+//  상한은 앱 책임자 · 관리자가 바꾼다(서버가 folder.can_set 으로 말한다). 거는 것은 매니지드의 5분 쿼터 정비라 바꾼 값은 5분 안에 적용된다.
+function folderRow(a: BApp, refresh: () => void): HTMLElement {
+  const f = a.folder;
+  const used = f.usedBytes == null
+    ? '쓰는 양은 아직 재지 않았어요. 매니지드 워크스페이스는 5분 안에 보여요.' + (f.limitGb ? ' 상한은 ' + f.limitGb + 'GiB로 정해 두었어요.' : '')
+    : '지금 ' + gib(f.usedBytes) + '를 쓰고 있어요. ' + (f.appliedGb ? '상한은 ' + f.appliedGb + 'GiB예요.'
+      + (f.level >= 100 ? ' 가득 차서 이 앱 폴더에 더 쓸 수 없어요.' : f.level >= 80 ? ' 상한의 80%를 넘었어요.' : '') : '상한은 없어요.');
+  //  정한 상한과 지금 걸린 상한이 다르면 아직 쿼터 정비가 돌지 않은 것이다.
+  const pending = f.usedBytes != null && (f.limitGb ?? null) !== (f.appliedGb ?? null);
+  const want = !pending ? '' : f.limitGb == null ? ' 상한을 없앤 것은 5분 안에 적용돼요.' : ' 새 상한 ' + f.limitGb + 'GiB는 5분 안에 적용돼요.';
+  const row = el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '앱 폴더' }), el('small', { text: used + want }));
+  if (!f.canSet) return row;
+  const inp = el('input', { class: 'v2-bld-num', type: 'number', min: '1', max: '10240', step: '1', placeholder: '없음', 'aria-label': '앱 폴더 상한(GiB)' }) as HTMLInputElement;
+  inp.value = f.limitGb == null ? '' : String(f.limitGb);
+  const save = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '상한 저장', onclick: async () => {
+    const raw = inp.value.trim();
+    const gb = raw === '' ? null : Number(raw);
+    if (gb !== null && !(Number.isInteger(gb) && gb >= 1 && gb <= 10240)) { toast('상한은 1에서 10240 사이의 정수(GiB)로 적어 주세요. 비워 두면 상한이 없어요.', true); return; }
+    try {
+      const r: any = await api('/api/ui/apps/' + encodeURIComponent(a.id) + '/folder-limit', { method: 'POST', body: JSON.stringify({ limit_gb: gb }) });
+      toast(r && r.warning ? r.warning + '.' : gb === null ? '앱 폴더 상한을 없앴어요.' : '앱 폴더 상한을 ' + gb + 'GiB 로 바꿨어요. 5분 안에 적용돼요.', !!(r && r.warning));
+      refresh();
+    } catch (e: any) { toast('바꾸지 못했어요. ' + (e && e.message ? e.message : e), true); }
+  } });
+  row.append(el('span', { class: 'v2-bld-folder' }, inp, el('span', { text: 'GiB' }), save),
+    el('small', { text: '상한을 넘으면 이 앱 폴더에 쓸 수 없어요. 80%에 닿으면 책임자와 관리자에게 알려요. 비워 두면 상한이 없어요.' }));
+  return row;
+}
+
 // ── 배포 설정 — 고른 앱 하나 ──
 function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hidden: Set<string>, refresh: () => void): void {
   if (!a) { v.panel.replaceChildren(el('h3', { text: '배포 설정' }), el('p', { class: 'v2-bld-mini', text: '왼쪽에서 앱 카드를 누르면 여기서 공개 범위, 쓰는 자리, 켜기/끄기, 버전 되돌리기를 바꿀 수 있어요. 만들던 앱 카드를 누르면 이어서 만들기와 지우기가 나와요.' })); return; }
@@ -364,6 +404,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '만든 사람 · 세션' }), el('small', {}, el('span', { text: (by === m.id ? '나' : by || '모름') + (sid ? ' · 앱빌딩 세션 ' : '') }),
       sid ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '세션 보기', onclick: () => { location.hash = builderRoute('resume', sid); } }) : null)),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '책임자' }), el('small', { text: a.ownerMember ? (a.ownerMember === m.id ? '나' : a.ownerMember) : '관리자' + (a.madeBy ? ' (만든 사람이 워크스페이스를 떠났어요)' : '') })),
+    folderRow(a, refresh),
     el('div', { class: 'v2-bld-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '사본 뜨기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
       el('span', { class: 'v2-studio-sp' }), a.builtin || (a.visibility === 'me' && !a.isOwner) ? null : del));
