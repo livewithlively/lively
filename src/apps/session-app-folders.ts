@@ -18,7 +18,10 @@
 //  «만들지 않는» 확보(noCreate)를 모르는 옛 브로커는 그 표시를 무시하고 컨테이너를 만든다. 그래서 ① 끝났거나 다른 id 로 이어진 세션엔
 //   브로커를 부르지 않고 ② 응답이 옛 브로커의 것(새로 만들었다 · apps 를 모른다)이면 다시 맞추기 묶음을 그 자리에서 멈춘다.
 //   배포는 브로커(lvly-cloud)가 전 노드에 퍼진 뒤에 이 코어를 롤한다.
-import { listAttachedApps, sessionsWithApp, sessionsAttachedBy, sessionOwnerStrict, sessionCanEnter, type SessionAppRow } from "./session-apps.js";
+import {
+  listAttachedApps, sessionsWithApp, sessionsAttachedBy, sessionOwnerStrict, sessionCanEnter, recordAppFolderSync, markAppFolderFixed,
+  appFolderSyncTargets, pruneAppFolderSyncRecords, type SessionAppRow, type AppFolderRecord, type AppFolderState,
+} from "./session-apps.js";
 import { getApp, getActiveGrant, type OrgApp, type AppGrantRow } from "../org/store/apps.js";
 import { canSeeApp } from "./visibility.js";
 import { APP_ID_RE } from "./manifest.js";
@@ -80,6 +83,8 @@ export interface SyncDeps {
   osUser: (sessionId: string) => Promise<string | null>;
   apps: (sessionId: string) => Promise<string[]>;
   ensure: (argv: readonly string[], req: SessionEnsureRequest) => Promise<Record<string, unknown>>;
+  /** 맞춘 결과를 남긴다(#4786 — 주기 맞추기의 재료). 없으면 안 남긴다. 실패해도 맞추기 결과는 그대로다. */
+  record?: (sessionId: string, r: AppFolderNote) => Promise<unknown>;
 }
 const liveSyncDeps: SyncDeps = {
   slug: tenantSlug,
@@ -89,6 +94,7 @@ const liveSyncDeps: SyncDeps = {
   apps: (id) => folderAppsFor(id),
   //  붙이기·떼기 응답이 이걸 기다린다 — 길게 잡지 않는다(브로커가 늦어도 맞추기는 그쪽에서 끝까지 간다).
   ensure: (argv, req) => ensureSessionContainerViaRelay(argv, req, { timeoutMs: 8_000 }),
+  record: recordAppFolderSync,
 };
 
 //  같은 세션의 맞추기는 한 줄로 — 먼저 계산한 목록이 늦게 도착해 나중 것을 덮지 않게.
@@ -153,7 +159,27 @@ export function appFolderSyncStats(): { lanes: number; resync: { active: number;
   return { lanes: lanes.size, resync: resyncSlots.stats() };
 }
 
+/** 맞춘 결과 기록 한 줄(#4786) — bound null = 모른다(지난 기록 그대로). */
+export interface AppFolderNote { bound: readonly string[] | null; state: AppFolderState; detail?: string | null }
+
+/** 브로커가 답한 앱 폴더 결과를 기록 한 줄로. */
+function noteOfApplied(r: { supported: boolean; bound: string[]; failed: Array<{ app: string; why: string }> }): AppFolderNote {
+  if (!r.supported) return { bound: [], state: "unsupported", detail: "접점 없는 컨테이너 — 다시 떠야 붙는다" };
+  if (r.failed.length) return { bound: r.bound, state: "failed", detail: r.failed.map((f) => `${f.app}: ${f.why}`).join(" · ") };
+  return { bound: r.bound, state: "ok" };
+}
+
 async function syncOnce(sessionId: string, deps: SyncDeps): Promise<FolderSync> {
+  //  브로커에 물었거나(답 · 컨테이너 없음 · 실패) 판정이 실패했을 때만 기록한다 — 매니지드가 아니거나 끝났거나 이어진 세션은 남길 것이 없다.
+  const out: { note: AppFolderNote | null } = { note: null };
+  const result = await syncDecide(sessionId, deps, out);
+  if (out.note && deps.record) {
+    await deps.record(sessionId, out.note).catch((e) => logger.warn({ err: e, session: sessionId }, "앱 폴더 맞춘 기록 실패(#4786) — 맞추기 결과는 그대로"));
+  }
+  return result;
+}
+
+async function syncDecide(sessionId: string, deps: SyncDeps, out: { note: AppFolderNote | null }): Promise<FolderSync> {
   try {
     const slug = deps.slug();
     if (!slug || !deps.managed()) return { applied: false, reason: "not-managed" };
@@ -171,23 +197,30 @@ async function syncOnce(sessionId: string, deps: SyncDeps): Promise<FolderSync> 
       });
     } catch (e) {
       const msg = (e as Error)?.message ?? String(e);
-      if (msg.includes(NO_SESSION_CONTAINER)) return { applied: false, reason: "not-running" };
+      if (msg.includes(NO_SESSION_CONTAINER)) { out.note = { bound: [], state: "not-running" }; return { applied: false, reason: "not-running" }; }
+      out.note = { bound: null, state: "error", detail: msg.slice(0, 300) };
       return { applied: false, reason: "error", detail: msg.slice(0, 300) };
     }
     //  옛 브로커 — 앱 폴더를 모르면 응답에 apps 가 없다(새 브로커는 noCreate 에 늘 apps 를 싣는다). 그 브로커는 «만들지 않는다» 도
     //   몰라, 도는 컨테이너가 없었으면 새로 만들었다(created) — 사유에 그 사실을 적는다.
     if (!r.apps || typeof r.apps !== "object") {
-      return { applied: false, reason: "old-broker", detail: r.created === true ? "브로커가 noCreate 를 모른다 — 컨테이너를 새로 만들었다" : "브로커가 앱 폴더를 모른다(이 기능 전 판)" };
+      const detail = r.created === true ? "브로커가 noCreate 를 모른다 — 컨테이너를 새로 만들었다" : "브로커가 앱 폴더를 모른다(이 기능 전 판)";
+      out.note = { bound: null, state: "old-broker", detail };
+      return { applied: false, reason: "old-broker", detail };
     }
     const a = r.apps as { supported?: unknown; bound?: unknown; failed?: unknown };
-    return {
-      applied: true,
+    const applied = {
+      applied: true as const,
       supported: a.supported === true,
       bound: Array.isArray(a.bound) ? a.bound.map(String) : [],
       failed: Array.isArray(a.failed) ? (a.failed as Array<{ app?: unknown; why?: unknown }>).map((f) => ({ app: String(f?.app ?? ""), why: String(f?.why ?? "") })) : [],
     };
+    out.note = noteOfApplied(applied);
+    return applied;
   } catch (e) {
-    return { applied: false, reason: "error", detail: String((e as Error)?.message ?? e).slice(0, 300) };
+    const detail = String((e as Error)?.message ?? e).slice(0, 300);
+    out.note = { bound: null, state: "error", detail };   // 목록 · 주인 조회 실패 — 노드는 그대로다(모른다)
+    return { applied: false, reason: "error", detail };
   }
 }
 
@@ -233,4 +266,117 @@ export function resyncSessionsAttachedBy(memberId: string, why: string): void {
   void sessionsAttachedBy(memberId)
     .then((ids) => resyncSessions(ids, why))
     .catch((e) => logger.warn({ err: e, member: memberId, why }, "앱 폴더 다시 맞추기 대상 조회 실패(#4684)"));
+}
+
+// ── 세션을 만든 직후의 기록(#4786) ───────────────────────────────────────────
+/**
+ * 세션 컨테이너를 만든 확보 응답의 앱 폴더 결과를 남기고(주기 맞추기의 출발점), 만드는 사이 붙은 앱이 바뀌었으면 한 번 더 맞춘다.
+ *  sent = 확보에 실은 목록(못 읽었으면 undefined) · madeApps = 응답의 apps(없으면 브로커가 앱 폴더를 건드리지 않았다).
+ *  기록 → 맞추기 순서다(맞추기의 기록이 만들 때 기록보다 늦게 남아야 최신이 이긴다). 기다리지 않는다 — 던지지 않는다.
+ */
+export async function afterSessionCreate(
+  sessionId: string, sent: readonly string[] | undefined, madeApps: unknown,
+  deps: { record: (id: string, r: AppFolderNote) => Promise<unknown>; resync: (id: string, sent: readonly string[]) => Promise<void> } = { record: recordAppFolderSync, resync: (id, s) => resyncIfChangedAfterCreate(id, s) },
+): Promise<void> {
+  const m = madeApps && typeof madeApps === "object" ? madeApps as { supported?: unknown; bound?: unknown; failed?: unknown } : null;
+  const reported = m ? noteOfApplied({
+    supported: m.supported === true,
+    bound: Array.isArray(m.bound) ? m.bound.map(String) : [],
+    failed: Array.isArray(m.failed) ? (m.failed as Array<{ app?: unknown; why?: unknown }>).map((f) => ({ app: String(f?.app ?? ""), why: String(f?.why ?? "") })) : [],
+  }) : null;
+  //  목록을 못 읽었으면 무엇이 붙어야 하는지 모른다 — 다음 주기 맞추기가 보게 실패로 남긴다(새 컨테이너엔 아무것도 안 붙었다).
+  const note: AppFolderNote = !sent ? { bound: reported?.bound ?? [], state: "error", detail: "만들 때 붙은 앱 목록을 못 읽었다" }
+    : reported ?? (sent.length ? { bound: [], state: "old-broker", detail: "브로커가 앱 폴더를 모른다(이 기능 전 판)" } : { bound: [], state: "ok" });
+  await deps.record(sessionId, note).catch((e) => logger.warn({ err: e, session: sessionId }, "앱 폴더 만든 뒤 기록 실패(#4786)"));
+  if (sent) await deps.resync(sessionId, sent).catch(() => undefined);
+}
+
+// ── 주기 재조정(#4786) ───────────────────────────────────────────────────────
+//  사건(만들기 · 붙이기 · 떼기 · 앱 끄기 · 동의 · 공개 · 제거 · 멤버 비활성)으로 맞추다 실패하면(브로커 무응답 · 8초 시간초과 · 노드
+//  재기동 중) 경고만 남고 다음 사건까지 세션 안 폴더가 기록과 어긋난 채였다 — 동의를 거둔 뒤 떼기가 실패하면 그동안 폴더가 계속 보인다.
+//  매니지드 정비 표(sessions/outbox-request-sweep.ts SWEEP_JOBS · key app-folders — 요청에 얹어 워크스페이스마다 5분)가 이 판을 부른다.
+//  · 대상: 살아 있는 세션 가운데 붙은 앱 기록이 있거나 · 노드에 붙어 있다고 들었거나 · 지난 맞추기가 실패한 것(appFolderSyncTargets).
+//  · 맞추기는 사건과 같은 길(syncSessionAppFolders — «만들지 않는» 확보 · 세션 줄 합치기)이고, 묶음 상한(resyncSlots)을 함께 쓴다.
+//  · 동시 수: 워크스페이스 안에서는 하나씩 · 게이트웨이 전체로는 묶음 상한(기본 4). 워크스페이스 세션은 그 워크스페이스 노드에 있으므로
+//    한 노드가 이 판에서 받는 동시 맞추기는 많아야 묶음 상한이다. 앞 판이 아직 돌면 이번 판은 건너뛴다.
+//  · 옛 브로커를 만나면 그 판을 멈추고(resyncSessions 규칙) 그 워크스페이스는 한 시간 쉰다 — 옛 브로커는 «만들지 않는다» 를 몰라
+//    컨테이너를 만든다.
+//  · 고친 횟수: 지난 기록과 다른 상태로 맞췄거나 지난 맞추기가 실패였는데 이번에 맞췄으면 «사건 경로가 놓친 것» 으로 센다 —
+//    행의 fixed_count 를 올리고 판 요약에 담는다(정비 로그에 찍힌다). 지난 기록이 없으면 «처음» 이다(기준이 없다).
+
+/** 한 판에 맞출 세션 수. */
+export const PERIODIC_MAX_SESSIONS = 50;
+/** 컨테이너 없음 · 접점 없는 옛 컨테이너 · 옛 브로커로 기록한 세션을 다시 보는 간격. */
+export const PERIODIC_RECHECK_ABSENT_MS = 30 * 60_000;
+/** 옛 브로커를 만난 워크스페이스가 주기 맞추기를 쉬는 시간. */
+export const PERIODIC_OLD_BROKER_PAUSE_MS = 60 * 60_000;
+
+export interface PeriodicSummary {
+  skipped?: "not-managed" | "running" | "old-broker";
+  targets: number; ok: number; fixed: number; first: number; failed: number; gone: number; pruned: number;
+  stopped?: boolean;
+}
+
+export interface PeriodicDeps {
+  slug: () => string | null;
+  managed: () => boolean;
+  now: () => number;
+  prune: () => Promise<number>;
+  targets: (limit: number, recheckMs: number) => Promise<Array<{ session_id: string; prev: AppFolderRecord | null }>>;
+  sync: (sessionId: string) => Promise<FolderSync>;
+  markFixed: (sessionId: string) => Promise<unknown>;
+  slots?: Slots;
+}
+const livePeriodicDeps: PeriodicDeps = {
+  slug: tenantSlug,
+  managed: () => sessionEnsureConfigured(),
+  now: () => Date.now(),
+  prune: pruneAppFolderSyncRecords,
+  targets: appFolderSyncTargets,
+  sync: (id) => syncSessionAppFolders(id),
+  markFixed: markAppFolderFixed,
+};
+
+/** 한 세션의 주기 맞추기 결과를 지난 기록과 견준다(순수). */
+export function periodicOutcome(prev: AppFolderRecord | null, r: FolderSync): "ok" | "fixed" | "first" | "failed" | "gone" | "old-broker" {
+  if (!r.applied) return r.reason === "old-broker" ? "old-broker" : r.reason === "error" ? "failed" : "gone";
+  if (!r.supported) return "gone";            // 접점 없는 옛 컨테이너 — 이 판으로는 못 고친다(다시 떠야 붙는다)
+  if (r.failed.length) return "failed";
+  //  견줄 기준이 없다 — 기록이 없거나, 지난번엔 컨테이너가 없었다 · 옛 컨테이너였다 · 옛 브로커였다.
+  if (!prev || prev.state === "not-running" || prev.state === "unsupported" || prev.state === "old-broker") return "first";
+  const same = prev.bound.length === r.bound.length && [...prev.bound].sort().join("\n") === [...r.bound].sort().join("\n");
+  return prev.state === "ok" && same ? "ok" : "fixed";
+}
+
+const sweeping = new Set<string>();
+const oldBrokerPause = new Map<string, number>();
+
+/** 이 워크스페이스의 앱 폴더를 한 판 다시 맞춘다 — 요약을 돌려준다(던지지 않는다 · 정비 로그에 찍힌다). */
+export async function sweepAppFolders(d: PeriodicDeps = livePeriodicDeps): Promise<PeriodicSummary> {
+  const sum: PeriodicSummary = { targets: 0, ok: 0, fixed: 0, first: 0, failed: 0, gone: 0, pruned: 0 };
+  const slug = d.slug();
+  if (!slug || !d.managed()) return { ...sum, skipped: "not-managed" };
+  if (sweeping.has(slug)) return { ...sum, skipped: "running" };
+  if ((oldBrokerPause.get(slug) ?? 0) > d.now()) return { ...sum, skipped: "old-broker" };
+  sweeping.add(slug);
+  try {
+    sum.pruned = await d.prune().catch((e) => { logger.warn({ err: e }, "앱 폴더 맞춘 기록 정리 실패(#4786)"); return 0; });
+    const targets = await d.targets(PERIODIC_MAX_SESSIONS, PERIODIC_RECHECK_ABSENT_MS);
+    sum.targets = targets.length;
+    const prev = new Map(targets.map((t) => [t.session_id, t.prev]));
+    await resyncSessions(targets.map((t) => t.session_id), "주기", async (id) => {
+      const r = await d.sync(id);
+      const o = periodicOutcome(prev.get(id) ?? null, r);
+      if (o === "old-broker") { sum.stopped = true; oldBrokerPause.set(slug, d.now() + PERIODIC_OLD_BROKER_PAUSE_MS); }
+      else sum[o]++;
+      if (o === "fixed") await d.markFixed(id).catch((e) => logger.warn({ err: e, session: id }, "앱 폴더 고친 횟수 기록 실패(#4786)"));
+      return r;
+    }, d.slots);
+    return sum;
+  } catch (e) {
+    logger.warn({ err: e, tenant: slug }, "앱 폴더 주기 맞추기 실패(#4786) — 다음 판이 다시 본다");
+    return sum;
+  } finally {
+    sweeping.delete(slug);
+  }
 }

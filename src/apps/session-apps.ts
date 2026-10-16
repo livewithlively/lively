@@ -120,6 +120,64 @@ export async function sessionsWithApp(appId: string, attachedBy?: string): Promi
   return r.rows.map((x) => String(x.session_id));
 }
 
+// ── 앱 폴더 맞춘 기록(#4786) ──────────────────────────────────────────────────
+//  노드 브로커가 마지막으로 말한 «붙어 있는 앱» — 주기 맞추기가 대상을 고르고 어긋남을 고친 횟수를 세는 재료(org_session_app_folder 머리말).
+
+export type AppFolderState = "ok" | "failed" | "unsupported" | "not-running" | "error" | "old-broker";
+export interface AppFolderRecord { session_id: string; bound: string[]; state: AppFolderState; checked_at: string }
+
+/** 맞춘 결과를 남긴다. bound 가 null 이면(브로커 · DB 실패라 모른다) 지난 bound 를 그대로 둔다. */
+export async function recordAppFolderSync(sessionId: string, r: { bound: readonly string[] | null; state: AppFolderState; detail?: string | null }): Promise<void> {
+  // ON CONFLICT 타깃에 tenant_id — attachAppRow 와 같은 규약(ensureTenantColumn 이 PK 를 (tenant_id, session_id)로 재작성한다).
+  await itemsPool.query(
+    `INSERT INTO org_session_app_folder(session_id, bound, state, detail, checked_at)
+       VALUES($1, COALESCE($2::jsonb, '[]'::jsonb), $3, $4, now())
+     ON CONFLICT (tenant_id, session_id) DO UPDATE SET
+       bound=COALESCE($2::jsonb, org_session_app_folder.bound), state=EXCLUDED.state, detail=EXCLUDED.detail, checked_at=now()`,
+    [sessionId, r.bound ? JSON.stringify([...r.bound]) : null, r.state, r.detail ? String(r.detail).slice(0, 300) : null]);
+}
+
+/** 주기 맞추기가 어긋남을 고쳤다 — 그 세션 행의 고친 횟수를 올린다(사건 경로가 놓친 것을 재는 자). */
+export async function markAppFolderFixed(sessionId: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_session_app_folder SET fixed_count=fixed_count+1, last_fixed_at=now() WHERE session_id=$1`, [sessionId]);
+}
+
+/**
+ * 주기 맞추기 대상 — 살아 있는 세션(끝남 · 이어짐 · 노드 세션 아님) 가운데 ① 지금 붙은 앱 기록이 있거나 ② 지난 기록의 붙은 앱이 비어 있지
+ *  않거나 ③ 지난 맞추기가 실패한 것. 컨테이너가 없다(not-running) · 접점 없는 옛 컨테이너(unsupported) · 옛 브로커(old-broker — «만들지
+ *  않는다» 를 몰라 컨테이너를 만들 수 있다)로 기록한 세션은 recheckMs 가 지나야 다시 본다(그 사이 복원되면 세션 만들기가 기록을 새로 쓴다).
+ *  실패한 것 먼저, 그다음 한 번도 안 본 것 · 오래 안 본 것부터 limit 개. 지난 기록(없으면 null)을 같이 준다 — 고쳤나를 가르는 재료다.
+ */
+export async function appFolderSyncTargets(limit: number, recheckMs: number): Promise<Array<{ session_id: string; prev: AppFolderRecord | null }>> {
+  const r = await itemsPool.query(
+    `SELECT s.id AS session_id, f.bound, f.state, f.checked_at
+       FROM org_session_state s
+       LEFT JOIN org_session_app_folder f ON f.session_id = s.id
+      WHERE s.exited_at IS NULL AND s.superseded_by IS NULL AND s.node_id IS NULL
+        AND (f.state IS NULL OR f.state NOT IN ('not-running','unsupported','old-broker')
+             OR f.checked_at < now() - ($2::bigint * interval '1 millisecond'))
+        AND (EXISTS (SELECT 1 FROM org_session_app a WHERE a.session_id = s.id AND a.detached_at IS NULL)
+             OR jsonb_array_length(COALESCE(f.bound, '[]'::jsonb)) > 0
+             OR f.state IN ('failed','error','old-broker'))
+      ORDER BY COALESCE(f.state IN ('failed','error'), false) DESC, f.checked_at ASC NULLS FIRST, s.id
+      LIMIT $1`, [Math.max(1, Math.floor(limit)), Math.max(0, Math.floor(recheckMs))]);
+  return r.rows.map((x) => ({
+    session_id: String(x.session_id),
+    prev: x.state == null ? null : {
+      session_id: String(x.session_id), bound: Array.isArray(x.bound) ? x.bound.map(String) : [], state: x.state as AppFolderState,
+      checked_at: x.checked_at instanceof Date ? x.checked_at.toISOString() : String(x.checked_at),
+    },
+  }));
+}
+
+/** 끝났거나 이어졌거나 세션 행이 없는 세션의 맞춘 기록을 지운다(그 컨테이너는 이미 없다). 지운 수. */
+export async function pruneAppFolderSyncRecords(): Promise<number> {
+  const r = await itemsPool.query(
+    `DELETE FROM org_session_app_folder f WHERE NOT EXISTS (
+       SELECT 1 FROM org_session_state s WHERE s.id = f.session_id AND s.exited_at IS NULL AND s.superseded_by IS NULL)`);
+  return r.rowCount ?? 0;
+}
+
 // ── 세션 주인 ────────────────────────────────────────────────────────────────
 
 /** 세션을 연 사람. desired-state(DB)가 정본이고, 없으면 중앙 tmux 의 @box_owner(자가호스팅 단일 박스). 모르면 null. */

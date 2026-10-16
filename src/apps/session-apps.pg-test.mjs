@@ -24,6 +24,8 @@
 //  O1~O6 세션 주인(엄격) — 행 · 행 없으면 tmux 표식 · 둘 다 없으면 null · DB 오류는 던짐(느슨한 쪽은 폴백) · B 의 주인 안 줌 · 컨텍스트 없음은 던짐
 //  E1~E5 세션에 들어갈 수 있나 — 주인 · 초대 · 초대 없음 · 없는 세션 · B 의 초대 안 셈
 //  F1~F5 앱 폴더 판정(folderAppsFor, 실제 의존) — 켜짐·공개·동의 거르기 · 초대받은 사람이 붙인 것 · B 의 앱·동의 안 셈 · 주인 조회 오류는 던짐 · 모르는 세션 []
+//  S1~S4 앱 폴더 맞춘 기록(#4786) — 넣기 · 모르는 bound 는 그대로 · 고친 횟수 · B 그대로
+//  T1~T8 주기 맞추기 대상 — 붙은 기록 · 노드에 붙었다고 들은 것 · 지난 실패 · 30분 재확인 · 순서 · 한도 · B 제외   Q1 끝난 세션의 기록 정리
 //  G1 배선 — 앱 역할이 슈퍼유저 · BYPASSRLS 가 아니고 org_session_app 에 FORCE RLS 와 tenant_isolation 이 있다 · 가짜 tmux 가 실제로 불렸다
 import pg from "pg";
 import crypto from "node:crypto";
@@ -320,6 +322,91 @@ try {
   chk("F2 초대받은 사람이 붙인 앱은 그 사람이 세션 밖이 되면 빠진다", same(f2, ["f-ok"]), J(f2));
   const f5 = await folderAppsFor("box-pgt-unknown-00003305");
   chk("F5 세션 행도 tmux 표식도 없으면 []", J(f5) === "[]", J(f5));
+
+  // ── S — 앱 폴더 맞춘 기록 · 고친 횟수 · 주기 대상 · 정리(#4786) — 앞 절의 행과 섞이지 않게 워크스페이스 C 에서 ──
+  const TC = crypto.randomUUID();
+  const inC = async (fn) => { const prev = CUR; CUR = TC; try { return await fn(); } finally { CUR = prev; } };
+  const seedFolder = (t, sid, bound, state, agoMin) => dbc.query(
+    `INSERT INTO org_session_app_folder(tenant_id, session_id, bound, state, checked_at) VALUES($1,$2,$3::jsonb,$4, now() - ($5::int * interval '1 minute'))`,
+    [t, sid, J(bound), state, agoMin]);
+  const folderRows = async (sid) => (await dbc.query(
+    `SELECT tenant_id::text AS t, bound, state, detail, fixed_count, last_fixed_at FROM org_session_app_folder WHERE session_id=$1 ORDER BY tenant_id`, [sid])).rows
+    .map((r) => ({ t: r.t === TC ? "C" : r.t === TB ? "B" : r.t === TA ? "A" : r.t, bound: r.bound, state: r.state, detail: r.detail, fixed: r.fixed_count, fixedAt: r.last_fixed_at }));
+  const S = (n) => `box-pgt-s-${n}-4786`.replace(/-4786$/, "-00004786");
+
+  //  S1~S3 기록 — 넣기 · bound 모름(null)은 지난 bound 그대로 · 사유 300자 · B 의 같은 세션 행은 그대로
+  const SR = S("rec");
+  await seedSession(TC, SR, "pgt-alice");
+  await seedFolder(TB, SR, ["b-app"], "ok", 0);
+  await inC(() => SA.recordAppFolderSync(SR, { bound: ["crm"], state: "ok" }));
+  const s1 = await folderRows(SR);
+  await inC(() => SA.recordAppFolderSync(SR, { bound: null, state: "error", detail: "허브 503 ".repeat(100) }));
+  const s2 = await folderRows(SR);
+  await inC(() => SA.recordAppFolderSync(SR, { bound: [], state: "not-running" }));
+  const s3 = await folderRows(SR);
+  const cOf = (rows) => rows.find((r) => r.t === "C"), bOf = (rows) => rows.find((r) => r.t === "B");
+  chk("S1 기록을 넣는다(워크스페이스 C) — B 의 같은 세션 행은 그대로", J([cOf(s1)?.bound, cOf(s1)?.state]) === J([["crm"], "ok"]) && J(bOf(s1)?.bound) === J(["b-app"]), J(s1));
+  chk("S2 bound 를 모르면(null) 지난 bound 그대로 · 상태 · 사유(300자)만 바뀐다",
+    J(cOf(s2)?.bound) === J(["crm"]) && cOf(s2)?.state === "error" && String(cOf(s2)?.detail).length === 300, J(cOf(s2)));
+  chk("S3 컨테이너 없음이면 bound [] · B 그대로", J(cOf(s3)?.bound) === "[]" && cOf(s3)?.state === "not-running" && bOf(s3)?.state === "ok", J(s3));
+
+  //  S4 고친 횟수 — C 의 행만 · 기록 없는 세션은 행을 만들지 않는다
+  await inC(() => SA.markAppFolderFixed(SR));
+  await inC(() => SA.markAppFolderFixed(SR));
+  await inC(() => SA.markAppFolderFixed(S("norec")));
+  const s4 = await folderRows(SR);
+  const s4none = await folderRows(S("norec"));
+  chk("S4 고친 횟수는 C 의 그 행만 올린다(2 · 시각) · 기록 없는 세션엔 행을 만들지 않는다",
+    cOf(s4)?.fixed === 2 && cOf(s4)?.fixedAt != null && bOf(s4)?.fixed === 0 && s4none.length === 0, J({ s4, s4none }));
+
+  //  T1~T8 주기 대상
+  const T = {
+    live: S("t1"), bound: S("t2"), err: S("t3e"), failed: S("t3f"), oldLong: S("t3ol"), oldNew: S("t3on"), okEmpty: S("t4"), detached: S("t4d"),
+    exited: S("t5x"), superseded: S("t5s"), node: S("t5n"), nrNew: S("t6a"), nrOld: S("t6b"), unsNew: S("t6c"),
+  };
+  for (const id of Object.values(T)) await seedSession(TC, id, "pgt-alice");
+  await dbc.query(`UPDATE org_session_state SET exited_at=now() WHERE tenant_id=$1 AND id=$2`, [TC, T.exited]);
+  await dbc.query(`UPDATE org_session_state SET superseded_by='box-pgt-next-00004786' WHERE tenant_id=$1 AND id=$2`, [TC, T.superseded]);
+  await dbc.query(`UPDATE org_session_state SET node_id='node-1' WHERE tenant_id=$1 AND id=$2`, [TC, T.node]);
+  for (const id of [T.live, T.exited, T.superseded, T.node, T.nrNew, T.nrOld, T.unsNew]) await seedApp(TC, id, "crm", "pgt-alice");
+  await seedApp(TC, T.detached, "crm", "pgt-alice", T0, T1);            // 뗀 기록만
+  await seedFolder(TC, T.bound, ["memo"], "ok", 10);                    // 붙은 기록은 없는데 노드엔 붙어 있다고 들었다(앱 제거 · 떼기 실패)
+  await seedFolder(TC, T.err, [], "error", 5);
+  await seedFolder(TC, T.failed, ["crm"], "failed", 1);
+  await seedFolder(TC, T.oldLong, [], "old-broker", 70);
+  await seedFolder(TC, T.oldNew, [], "old-broker", 1);
+  await seedFolder(TC, T.okEmpty, [], "ok", 2);
+  await seedFolder(TC, T.nrNew, [], "not-running", 5);
+  await seedFolder(TC, T.nrOld, [], "not-running", 65);
+  await seedFolder(TC, T.unsNew, [], "unsupported", 5);
+  //  B — C 에서 대상이 아닌 세션 id 에 붙은 기록 · 비어 있지 않은 기록을 깐다(섞이면 C 의 대상에 끼어든다).
+  await seedSession(TB, T.okEmpty, "pgt-bob");
+  await seedApp(TB, T.okEmpty, "crm", "pgt-bob");
+  await seedSession(TB, T.detached, "pgt-bob");
+  await seedFolder(TB, T.detached, ["crm"], "ok", 0);
+  const RECHECK = 30 * 60_000;
+  const tg = await inC(() => SA.appFolderSyncTargets(50, RECHECK));
+  const ids = tg.map((x) => x.session_id);
+  chk("T1~T6 대상 — 붙은 기록 · 노드에 붙었다고 들은 것 · 지난 실패 · 30분 지난 컨테이너 없음/옛 브로커만(끝난 · 이어진 · 노드 세션 · 뗀 기록만 · ok [] · 30분 안의 not-running/unsupported/old-broker 제외)",
+    same(ids, [T.live, T.bound, T.err, T.failed, T.oldLong, T.nrOld]), J(ids));
+  chk("T7 순서 — 실패(error · failed, 오래된 것부터) → 한 번도 안 본 것 → 오래 안 본 것", J(ids) === J([T.err, T.failed, T.live, T.oldLong, T.nrOld, T.bound]), J(ids));
+  const tPrev = Object.fromEntries(tg.map((x) => [x.session_id, x.prev]));
+  chk("T7b 지난 기록을 같이 준다(없으면 null)", tPrev[T.live] === null && J(tPrev[T.bound]?.bound) === J(["memo"]) && tPrev[T.bound]?.state === "ok", J(tPrev));
+  const tg2 = await inC(() => SA.appFolderSyncTargets(2, RECHECK));
+  chk("T7c 한도", J(tg2.map((x) => x.session_id)) === J([T.err, T.failed]), J(tg2));
+  chk("T8 B 의 붙은 기록 · 맞춘 기록이 C 의 대상에 끼어들지 않는다", !ids.includes(T.okEmpty) && !ids.includes(T.detached), J(ids));
+
+  //  Q1 정리 — 끝났거나 이어졌거나 세션 행이 없는 세션의 기록만(C) · B 그대로
+  await seedFolder(TC, T.exited, ["crm"], "ok", 0);
+  await seedFolder(TC, T.superseded, ["crm"], "ok", 0);
+  await seedFolder(TC, S("p-norow"), ["crm"], "ok", 0);
+  await seedFolder(TB, S("p-norow"), ["crm"], "ok", 0);
+  const p1n = await inC(() => SA.pruneAppFolderSyncRecords());
+  const leftC = (await dbc.query(`SELECT session_id FROM org_session_app_folder WHERE tenant_id=$1 ORDER BY session_id`, [TC])).rows.map((r) => r.session_id);
+  const leftB = (await dbc.query(`SELECT session_id FROM org_session_app_folder WHERE tenant_id=$1 AND session_id=$2`, [TB, S("p-norow")])).rows.length;
+  chk("Q1 끝난 · 이어진 · 세션 행 없는 세션의 기록만 지운다(3) · 산 세션의 기록 · B 의 기록은 그대로",
+    p1n === 3 && !leftC.includes(T.exited) && !leftC.includes(T.superseded) && !leftC.includes(S("p-norow")) && leftC.includes(T.bound) && leftC.includes(SR) && leftB === 1,
+    J({ p1n, leftC, leftB }));
 
   // ── G1b — 가짜 tmux 가 실제로 불렸다(O2 · O4 · F5 의 폴백이 장식이 아니다) ──
   const tmuxLog = existsSync(TMUX_LOG) ? readFileSync(TMUX_LOG, "utf8") : "";

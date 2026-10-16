@@ -4,9 +4,10 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   folderAppsFor, resyncIfChangedAfterCreate, resyncSessions, syncSessionAppFolders, createSlots, resyncConcurrencyFromEnv, appFolderSyncStats,
-  RESYNC_CONCURRENCY_DEFAULT, type FolderDeps, type FolderSync, type SyncDeps,
+  afterSessionCreate, periodicOutcome, sweepAppFolders, PERIODIC_MAX_SESSIONS, PERIODIC_RECHECK_ABSENT_MS, PERIODIC_OLD_BROKER_PAUSE_MS,
+  RESYNC_CONCURRENCY_DEFAULT, type FolderDeps, type FolderSync, type SyncDeps, type AppFolderNote, type PeriodicDeps,
 } from "./session-app-folders.js";
-import type { SessionAppRow } from "./session-apps.js";
+import type { SessionAppRow, AppFolderRecord } from "./session-apps.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import type { SessionEnsureRequest } from "../terminal/session-tmux.js";
 
@@ -395,4 +396,191 @@ test("K12 다 끝난 뒤엔 줄 기록이 남지 않는다(세션마다 쌓이�
   await tick(); await tick();
   assert.equal(appFolderSyncStats().lanes, 0);
   assert.deepEqual(appFolderSyncStats().resync, { active: 0, waiting: 0 });
+});
+
+// ── 주기 재조정(#4786) — 행 번호는 #4786 사양 표(R · C · S) ─────────────────────────────────────
+
+/** 맞춘 기록을 받아 적는 맞추기 의존. */
+function recordingDeps(over: Partial<SyncDeps> = {}) {
+  const notes: Array<{ id: string; note: AppFolderNote }> = [];
+  const d = syncDeps({ record: async (id, note) => { notes.push({ id, note }); }, ...over });
+  return { d, notes };
+}
+
+test("R1~R3 브로커가 답하면 그대로 남긴다 — 다 맞춤 ok · 일부 실패 failed(사유) · 접점 없는 옛 컨테이너 unsupported(bound [])", async () => {
+  const ok = recordingDeps();
+  await syncSessionAppFolders("box-r1", ok.d);
+  assert.deepEqual(ok.notes, [{ id: "box-r1", note: { bound: ["crm"], state: "ok" } }]);
+  const part = recordingDeps({ ensure: async () => ({ container: "c", created: false, apps: { supported: true, bound: ["memo"], failed: [{ app: "crm", why: "링크다" }] } }) });
+  await syncSessionAppFolders("box-r2", part.d);
+  assert.equal(part.notes[0].note.state, "failed");
+  assert.deepEqual(part.notes[0].note.bound, ["memo"]);
+  assert.match(String(part.notes[0].note.detail), /crm: 링크다/);
+  const old = recordingDeps({ ensure: async () => ({ container: "c", created: false, apps: { supported: false, bound: [], failed: [] } }) });
+  await syncSessionAppFolders("box-r3", old.d);
+  assert.deepEqual([old.notes[0].note.state, old.notes[0].note.bound], ["unsupported", []]);
+});
+
+test("R4 컨테이너가 없다고 답하면 not-running(bound []) · 끝났거나 이어졌거나 주인을 모르면 브로커를 안 불렀으니 남기지 않는다", async () => {
+  const gone = recordingDeps({ ensure: async () => { throw new Error(`브로커가 거절했다(404): ${"LVLY_NO_SESSION_CONTAINER"}`); } });
+  await syncSessionAppFolders("box-r4", gone.d);
+  assert.deepEqual(gone.notes, [{ id: "box-r4", note: { bound: [], state: "not-running" } }]);
+  for (const over of [{ state: async () => ({ dir: "/x", exited_at: "2026-10-16T00:00:00Z" }) }, { state: async () => ({ dir: "/x", superseded_by: "box-n" }) }, { osUser: async () => null }] as Array<Partial<SyncDeps>>) {
+    const skip = recordingDeps(over);
+    await syncSessionAppFolders("box-r4b", skip.d);
+    assert.equal(skip.notes.length, 0, "브로커에 묻지 않은 결과를 남겼다");
+  }
+});
+
+test("R5·R6 실패 · 옛 브로커는 bound 를 모른다(null — 지난 기록 그대로) · 목록 판정이 던져도 error 로 남긴다", async () => {
+  const err = recordingDeps({ ensure: async () => { throw new Error("허브 503"); } });
+  await syncSessionAppFolders("box-r5", err.d);
+  assert.deepEqual([err.notes[0].note.state, err.notes[0].note.bound], ["error", null]);
+  assert.match(String(err.notes[0].note.detail), /허브 503/);
+  const owner = recordingDeps({ apps: async () => { throw new Error("db down"); } });
+  await syncSessionAppFolders("box-r5b", owner.d);
+  assert.deepEqual([owner.notes[0].note.state, owner.notes[0].note.bound], ["error", null]);
+  const old = recordingDeps({ ensure: async () => ({ container: "c", created: true }) });
+  await syncSessionAppFolders("box-r6", old.d);
+  assert.deepEqual([old.notes[0].note.state, old.notes[0].note.bound], ["old-broker", null]);
+});
+
+test("R7·R8 매니지드가 아니면 남기지 않고 · 기록이 던져도 맞추기 결과는 그대로다", async () => {
+  const self = recordingDeps({ managed: () => false });
+  assert.deepEqual(await syncSessionAppFolders("box-r7", self.d), { applied: false, reason: "not-managed" });
+  assert.equal(self.notes.length, 0);
+  const boom = syncDeps({ record: async () => { throw new Error("db down"); } });
+  assert.deepEqual(await syncSessionAppFolders("box-r8", boom), { applied: true, supported: true, bound: ["crm"], failed: [] });
+});
+
+test("C1~C4 세션을 만든 직후의 기록 — 응답대로 · 빈 목록이면 ok [] · 목록을 못 읽었으면 error(맞추기 안 함) · 실었는데 응답에 apps 가 없으면 옛 브로커", async () => {
+  const run = async (sent: readonly string[] | undefined, made: unknown) => {
+    const calls: string[] = [];
+    const notes: AppFolderNote[] = [];
+    await afterSessionCreate("box-c", sent, made, {
+      record: async (_id, n) => { calls.push("record"); notes.push(n); },
+      resync: async (_id, s) => { calls.push(`resync:${s.join(",")}`); },
+    });
+    return { calls, note: notes[0] };
+  };
+  const c1 = await run(["crm"], { supported: true, bound: ["crm"], failed: [] });
+  assert.deepEqual(c1.note, { bound: ["crm"], state: "ok" });
+  assert.deepEqual(c1.calls, ["record", "resync:crm"], "기록 → 맞추기 순서여야 맞추기의 기록이 이긴다");
+  assert.equal((await run(["crm"], { supported: true, bound: [], failed: [{ app: "crm", why: "x" }] })).note.state, "failed");
+  assert.equal((await run(["crm"], { supported: false, bound: [], failed: [] })).note.state, "unsupported");
+  const c2 = await run([], undefined);
+  assert.deepEqual(c2.note, { bound: [], state: "ok" });
+  const c3 = await run(undefined, undefined);
+  assert.deepEqual([c3.note.state, c3.note.bound], ["error", []]);
+  assert.deepEqual(c3.calls, ["record"], "목록을 못 읽었으면 견줄 것이 없다 — 맞추기는 주기 판이 한다");
+  const c4 = await run(["crm"], undefined);
+  assert.deepEqual([c4.note.state, c4.note.bound], ["old-broker", []]);
+  //  기록이 던져도 맞추기는 간다 · 던지지 않는다.
+  const calls: string[] = [];
+  await afterSessionCreate("box-c", ["crm"], undefined, { record: async () => { throw new Error("db down"); }, resync: async () => { calls.push("resync"); } });
+  assert.deepEqual(calls, ["resync"]);
+});
+
+const rec = (state: AppFolderRecord["state"], bound: string[]): AppFolderRecord => ({ session_id: "box-s", bound, state, checked_at: "2026-10-16T00:00:00Z" });
+const okSync = (bound: string[]): FolderSync => ({ applied: true, supported: true, bound, failed: [] });
+
+test("S4 주기 맞추기 결과 가르기(순수) — 처음 · 그대로 · 고침 · 실패 · 컨테이너 없음 · 옛 브로커", () => {
+  const cases: Array<[AppFolderRecord | null, FolderSync, string]> = [
+    [null, okSync(["crm"]), "first"],
+    [rec("not-running", []), okSync(["crm"]), "first"],
+    [rec("unsupported", []), okSync(["crm"]), "first"],
+    [rec("old-broker", ["crm"]), okSync(["crm"]), "first"],
+    [rec("ok", ["crm"]), okSync(["crm"]), "ok"],
+    [rec("ok", ["crm", "memo"]), okSync(["memo", "crm"]), "ok"],
+    [rec("ok", ["crm"]), okSync([]), "fixed"],
+    [rec("ok", []), okSync(["crm"]), "fixed"],
+    [rec("ok", ["crm"]), okSync(["memo"]), "fixed"],
+    [rec("error", ["crm"]), okSync(["crm"]), "fixed"],
+    [rec("failed", ["crm"]), okSync(["crm"]), "fixed"],
+    [rec("ok", ["crm"]), { applied: true, supported: true, bound: [], failed: [{ app: "crm", why: "x" }] }, "failed"],
+    [rec("ok", ["crm"]), { applied: true, supported: false, bound: [], failed: [] }, "gone"],
+    [rec("ok", ["crm"]), { applied: false, reason: "not-running" }, "gone"],
+    [rec("ok", ["crm"]), { applied: false, reason: "not-managed" }, "gone"],
+    [rec("ok", ["crm"]), { applied: false, reason: "error", detail: "x" }, "failed"],
+    [null, { applied: false, reason: "old-broker", detail: "x" }, "old-broker"],
+  ];
+  for (const [prev, r, want] of cases) assert.equal(periodicOutcome(prev, r), want, JSON.stringify({ prev, r }));
+});
+
+/** 주기 판 의존 — 대상과 결과를 표로 준다. */
+function periodicDeps(slug: string, rows: Array<{ id: string; prev: AppFolderRecord | null; r: FolderSync }>, over: Partial<PeriodicDeps> = {}) {
+  const seen = { prune: 0, targets: [] as Array<[number, number]>, synced: [] as string[], fixed: [] as string[] };
+  let clock = 1_000_000;
+  const d: PeriodicDeps & { advance: (ms: number) => void } = {
+    advance: (ms) => { clock += ms; },
+    slug: () => slug,
+    managed: () => true,
+    now: () => clock,
+    prune: async () => { seen.prune++; return 2; },
+    targets: async (limit, recheck) => { seen.targets.push([limit, recheck]); return rows.map((x) => ({ session_id: x.id, prev: x.prev })); },
+    sync: async (id) => { seen.synced.push(id); return rows.find((x) => x.id === id)!.r; },
+    markFixed: async (id) => { seen.fixed.push(id); },
+    slots: createSlots(4),
+    ...over,
+  };
+  return { d, seen };
+}
+
+test("S4b 한 판 — 대상 수 · 결과별 수 · 지운 기록 수를 돌려주고 고친 세션만 고친 횟수를 올린다 · 한도와 다시 보는 간격을 넘긴다", async () => {
+  const { d, seen } = periodicDeps("acme-s4", [
+    { id: "box-a", prev: null, r: okSync(["crm"]) },
+    { id: "box-b", prev: rec("ok", ["crm"]), r: okSync(["crm"]) },
+    { id: "box-c", prev: rec("error", ["crm"]), r: okSync([]) },
+    { id: "box-d", prev: rec("ok", ["crm"]), r: { applied: false, reason: "error", detail: "허브 503" } },
+    { id: "box-e", prev: rec("ok", ["crm"]), r: { applied: false, reason: "not-running" } },
+  ]);
+  const s = await sweepAppFolders(d);
+  assert.deepEqual(s, { targets: 5, ok: 1, fixed: 1, first: 1, failed: 1, gone: 1, pruned: 2 });
+  assert.deepEqual(seen.fixed, ["box-c"]);
+  assert.deepEqual(seen.targets, [[PERIODIC_MAX_SESSIONS, PERIODIC_RECHECK_ABSENT_MS]]);
+  assert.equal(PERIODIC_MAX_SESSIONS, 50);
+  assert.equal(PERIODIC_RECHECK_ABSENT_MS, 30 * 60_000);
+  //  기록 정리가 던져도 판은 간다.
+  const { d: d2, seen: s2 } = periodicDeps("acme-s4b", [{ id: "box-a", prev: null, r: okSync([]) }], { prune: async () => { throw new Error("db down"); } });
+  assert.deepEqual(await sweepAppFolders(d2), { targets: 1, ok: 0, fixed: 0, first: 1, failed: 0, gone: 0, pruned: 0 });
+  assert.deepEqual(s2.synced, ["box-a"]);
+});
+
+test("S1 매니지드가 아니거나 워크스페이스가 없으면 아무것도 안 한다(정리 · 대상 조회도 안 함)", async () => {
+  for (const over of [{ slug: () => null }, { managed: () => false }] as Array<Partial<PeriodicDeps>>) {
+    const { d, seen } = periodicDeps("acme-s1", [{ id: "box-a", prev: null, r: okSync([]) }], over);
+    assert.equal((await sweepAppFolders(d)).skipped, "not-managed");
+    assert.deepEqual([seen.prune, seen.targets.length, seen.synced.length], [0, 0, 0]);
+  }
+});
+
+test("S2 같은 워크스페이스의 앞 판이 아직 돌면 이번 판은 건너뛴다 · 다른 워크스페이스는 돈다 · 끝나면 다시 돈다", async () => {
+  const g = gates();
+  const { d } = periodicDeps("acme-s2", [{ id: "box-a", prev: null, r: okSync([]) }], { sync: async () => { await g.wait(); return okSync([]); } });
+  const first = sweepAppFolders(d);
+  await g.arrivals(1);
+  assert.equal((await sweepAppFolders(d)).skipped, "running");
+  const other = periodicDeps("acme-s2-other", [{ id: "box-b", prev: null, r: okSync([]) }]);
+  assert.equal((await sweepAppFolders(other.d)).skipped, undefined);
+  g.release();
+  await first;
+  const again = periodicDeps("acme-s2", [{ id: "box-a", prev: null, r: okSync([]) }]);
+  assert.equal((await sweepAppFolders(again.d)).skipped, undefined, "판이 끝났는데 다음 판이 막혔다");
+});
+
+test("S3 ★ 옛 브로커를 만나면 그 판을 멈추고(남은 세션 안 부름) 그 워크스페이스는 한 시간 쉰다 · 지나면 다시 돈다", async () => {
+  const rows = [
+    { id: "box-a", prev: null, r: { applied: false, reason: "old-broker", detail: "x" } as FolderSync },
+    { id: "box-b", prev: null, r: okSync([]) },
+  ];
+  const { d, seen } = periodicDeps("acme-s3", rows);
+  const s = await sweepAppFolders(d);
+  assert.equal(s.stopped, true);
+  assert.deepEqual(seen.synced, ["box-a"], "옛 브로커 뒤 세션을 불렀다 — 그 세션마다 컨테이너를 만들 수 있다");
+  d.advance(PERIODIC_OLD_BROKER_PAUSE_MS - 1);
+  assert.equal((await sweepAppFolders(d)).skipped, "old-broker");
+  d.advance(1);
+  const after = await sweepAppFolders(d);
+  assert.equal(after.skipped, undefined);
+  assert.equal(PERIODIC_OLD_BROKER_PAUSE_MS, 60 * 60_000);
 });

@@ -431,6 +431,23 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_app_live_idx ON org_session_app(session_id) WHERE detached_at IS NULL;`);
 
+  // ── org_session_app_folder — 세션의 앱 폴더를 노드 브로커가 마지막으로 어떻게 맞췄나(#4786 주기 재조정) ──
+  //  붙은 앱 기록(org_session_app)은 «무엇을 붙여야 하나» 이고 이 행은 «노드에 지금 무엇이 붙어 있다고 들었나» 다. 앱을 지우거나 뗀 뒤
+  //  맞추기가 실패하면 붙은 기록은 사라지거나 떼어진 채인데 노드엔 폴더가 남는다 — 주기 맞추기는 이 행으로 그 세션을 찾는다.
+  //  state: ok(다 맞췄다) · failed(일부 못 붙이거나 못 뗐다) · unsupported(접점 없는 옛 컨테이너) · not-running(컨테이너 없음) ·
+  //   error(브로커·DB 실패 — bound 는 모른다) · old-broker. 세션마다 한 행 — 끝났거나 이어진 세션의 행은 주기 정비가 지운다(FK 없음).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_app_folder(
+      session_id TEXT PRIMARY KEY,
+      bound JSONB NOT NULL DEFAULT '[]'::jsonb,
+      state TEXT NOT NULL CHECK (state IN ('ok','failed','unsupported','not-running','error','old-broker')),
+      detail TEXT,
+      checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      fixed_count INT NOT NULL DEFAULT 0,
+      last_fixed_at TIMESTAMPTZ
+    );
+  `);
+
   // ── org_app_snapshot — 앱 데이터 일일 내보내기(#4226) ──
   //  앱 자유 SQL 은 AI 한 줄로 행을 지울 수 있다. RDS 백업(7일)은 DB 전체 단위라 한 워크스페이스·한 앱만 되돌릴 수 없다 →
   //  (워크스페이스, 앱) 데이터를 하루 한 번 떠 둔다(7일 보관). 앱 제거·복원 직전에도 뜬다(reason). 테이블 하나의 행을

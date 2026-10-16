@@ -970,7 +970,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         if (folderApps?.length && (!ma || ma.supported !== true || (Array.isArray(ma.failed) && ma.failed.length))) {
           console.warn(`[terminal] 앱 폴더를 다 못 붙였다(${id}) — 세션은 계속:`, ma ? JSON.stringify(ma).slice(0, 300) : "브로커가 앱 폴더를 모른다(이 기능 전 판)");
         }
-        if (appFolders && folderApps) appFolders.afterCreate(id, folderApps);
+        if (appFolders) appFolders.afterCreate(id, folderApps, made.apps);
       } catch (e) {
         await dropOwnRow();
         await dropCarried();
