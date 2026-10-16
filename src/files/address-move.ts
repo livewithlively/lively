@@ -6,9 +6,15 @@
 //   · 옛 자리에 지금 실제로 무엇이 있으면 그것이 이긴다(null — 옛 자리에 새 파일이 생긴 경우).
 //   · 닿은 자리는 이 사람 기준으로 **다시** 판정한다 — 안 보이면 null(옮긴 곳이 잠긴 폴더면 그 이름도 새지 않는다).
 //   · 따라가기 상한 · 도착 시각 규칙 · 글자 꼴 너그러움은 files/file-move-core(followMovedPath) 그대로다.
-//  순수(deps 주입) — 판정 · 디스크 · 기록 조회는 부르는 쪽(capabilities/files.ts)이 꽂는다. 시험은 같은 함수에 가짜를 꽂는다.
+//   · 닿은 자리는 주소가 될 수 있어야 한다 — 점으로 시작하는 마디(숨김 자리)로 옮겨졌으면 따라가지 않는다(주소로 건넬 수 없는 자리다).
+//  ★ 순서 — 판정 → 기록 → 디스크. 이 함수는 받기 주소 · 세션 경로 변환마다 불린다(화면은 그림마다 받기 주소를 받는다). 대부분은 «파일이 그대로
+//   있고 기록도 없는» 경우라 디스크(매니지드면 멤버 경계 중계 — 한 번에 수백 ms)부터 보면 그 비용을 매번 치른다. 기록(DB 한 번)을 먼저 보고
+//   기록이 있을 때만 옛 자리를 본다 — 결과는 같다(옛 자리에 파일이 있으면 기록을 따라가도 버린다). 판정이 맨 앞인 것은 그대로다 — 못 보는
+//   옛 주소는 기록도 디스크도 보지 않는다(기록이 있는지 새지 않게).
+//  순수(deps 주입) — 판정 · 디스크 · 기록 조회는 부르는 쪽(capabilities/files.ts)이 꽂는다. 시험은 같은 함수에 가짜를 꽂는다. 배관이 던지면
+//   그대로 던진다 — 따라가기를 최선 노력으로 감싸는 것(실패하면 종전대로 답하기)은 부르는 쪽의 몫이다.
 import { followMovedPath, type MoveRecord } from "./file-move-core.js";
-import type { FileAddress } from "./address.js";
+import { parseAddress, formatAddress, type FileAddress } from "./address.js";
 
 export interface AddressMoveDeps {
   /** 이 사람이 이 주소를 읽을 수 있나(권한표 — files/file-access authorizeFileAccess read 가 통과하나). */
@@ -26,14 +32,21 @@ export interface AddressMoveDeps {
 export async function movedAddress(a: FileAddress, d: AddressMoveDeps, alsoVisible?: (to: FileAddress) => boolean): Promise<FileAddress | null> {
   if (a.root !== "shared" || !a.rel) return null;
   if (!(await d.canRead(a))) return null;
-  if ((await d.exists(a)) !== false) return null;
   const hit = await followMovedPath(a.rel, {
     lookup: (rel, since) => d.lookup(rel, since),
     exists: async (rel) => (await d.exists({ root: "shared", rel })) === true,
     visible: async (rel) => {
       const to: FileAddress = { root: "shared", rel };
-      return (await d.canRead(to)) && (alsoVisible ? alsoVisible(to) : true);
+      return addressable(to) && (await d.canRead(to)) && (alsoVisible ? alsoVisible(to) : true);
     },
   });
-  return hit ? { root: "shared", rel: hit.path } : null;
+  if (!hit) return null;
+  //  옛 자리에 지금 무엇이 있으면 그것이 이긴다 — 판정 불가(null)여도 따라가지 않는다.
+  if ((await d.exists(a)) !== false) return null;
+  return { root: "shared", rel: hit.path };
+}
+
+/** 주소로 건넬 수 있는 자리인가 — 주소 규칙(files/address parseAddress)을 그대로 지나는가. */
+function addressable(a: FileAddress): boolean {
+  try { parseAddress(formatAddress(a)); return true; } catch { return false; }
 }

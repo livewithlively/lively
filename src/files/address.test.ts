@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   parseAddress, formatAddress, parseAddressInput, addressLinkHash, appOfAddress, AddressError, ADDRESS_MAX, ADDRESS_APP_ID_RE,
-  sessionPathToAddress, addressToSessionPath, type SessionView,
+  sessionPathToAddress, addressToSessionPath, sessionCanSeeAddress, type SessionView,
 } from "./address.js";
 import { APP_ID_RE } from "../apps/manifest.js";
 
@@ -209,4 +209,24 @@ test("D10 사람 컴퓨터 — 앱 폴더는 붙지 않는다", () => {
 });
 test("D11 컨테이너 — 공유 기준이 없으면 없음", () => {
   assert.equal(path({ place: "container", dir: "/home/box_me/box", bases: { personal: "/home/box_me/box" } }, "shared/x"), null);
+});
+
+// ── E. 이 세션이 그 주소를 열 수 있는 경로로 보나(#4822 — 옛 주소 따라가기가 닿은 자리에 거는 판정) ─────────────────
+const sees = (v: SessionView, a: string): boolean => sessionCanSeeAddress(v, parseAddress(a));
+test("E1 사람 컴퓨터 — 작업 폴더 아래만(그 컴퓨터엔 작업 폴더만 동기화돼 있다) · 형제 폴더(-x)는 밖", () => {
+  const v: SessionView = { place: "node", dir: "/Users/a/ws/project/4670", projectId: 4670 };
+  assert.equal(sees(v, "shared/project/4670/docs/x.md"), true);
+  assert.equal(sees(v, "shared/project/4671/x.md"), false, "다른 프로젝트 폴더는 그 컴퓨터에 없다");
+  assert.equal(sees(v, "shared/docs/y.md"), false, "공유 자리의 다른 폴더도 없다");
+  assert.equal(sees({ place: "node", dir: "/Users/a/ws/project/46", projectId: 46 }, "shared/project/4670/x.md"), false, "글자 접두(46 → 4670)를 안으로 오검출하지 않는다");
+  assert.equal(sees({ place: "node", dir: "C:\\u\\ws\\project\\4670", projectId: 4670 }, "shared/project/4670/x.md"), true, "윈도우 구분자");
+});
+test("E2 컨테이너 — 변환이 작업 폴더 밖을 이미 거절한다", () => {
+  assert.equal(sees(C, "shared/project/4670/a.md"), true);
+  assert.equal(sees(C, "shared/project/4671/a.md"), false);
+});
+test("E3 셀프호스트 — 같은 파일 시스템이라 공유 자리 전체", () => {
+  const v: SessionView = { place: "host", dir: "/srv/ws/project/1", bases: { shared: "/srv/ws" } };
+  assert.equal(sees(v, "shared/project/2/a.md"), true);
+  assert.equal(sees(v, "shared/docs/a.md"), true);
 });

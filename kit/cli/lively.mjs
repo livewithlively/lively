@@ -2960,12 +2960,16 @@ async function cmdFile(args) {
     if (j.link) say(dim(j.link));
     return;
   }
+  //  #4822 — 옛 주소였으면(웹에서 이름을 바꾸거나 옮긴 파일) 지금 자리로 답했다는 것을 stderr 로 알린다(stdout 은 경로 · url 한 줄 그대로).
+  const movedNote = () => { if (j.moved_from) say(dim(`옮겨진 파일 — 옛 주소 ${j.moved_from} → 지금 ${j.address}`)); };
   if (sub === "path") {
     if (!j.path) { say(red(j.reason || "이 세션엔 없는 자리입니다")); process.exit(1); }
     process.stdout.write(j.path + "\n");
+    movedNote();
     return;
   }
   process.stdout.write(j.url + "\n");
+  movedNote();
   say(dim(`${j.method === "PUT" ? "올리기" : "받기"} · ${j.expires_at} 까지 — ${j.method === "PUT" ? "curl -fsS -T <파일> '<url>'" : "curl -fsSL -o <파일> '<url>'"}`));
 }
 

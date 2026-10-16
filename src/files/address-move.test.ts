@@ -1,6 +1,7 @@
-// 옛 주소 → 지금 자리(#4822)의 판정 순서 — 사양 표(스크래치패드 spec-4822.md) U·P 행 중 순수로 가를 수 있는 것. DB·FS 불요.
+// 옛 주소 → 지금 자리(#4822)의 판정 순서 — moved-address.pg-test 의 U·P 행 중 순수로 가를 수 있는 것. DB·FS 불요.
 //  규칙: 공유 자리만 · 옛 주소를 지금 볼 수 있어야 · 옛 자리에 무엇이 있으면 그것이 이긴다 · 판정 불가면 따라가지 않는다 ·
-//  닿은 자리는 다시 판정(그 사람 · 그리고 부르는 쪽이 더 건 판정 — file_path 의 «그 세션에서 보이나»).
+//  닿은 자리는 다시 판정(그 사람 · 주소가 될 수 있는 자리 · 그리고 부르는 쪽이 더 건 판정 — file_path 의 «그 세션에서 보이나»).
+//  순서: 판정 → 기록 → 디스크 — 기록이 없으면 디스크를 보지 않는다(A11 · 받기 주소마다 불리는 자리라서).
 //  실제 판정 · 디스크 · 기록으로 끝까지 도는 것은 src/files/moved-address.pg-test.mjs 가 잰다.
 //   실행: npm run build && node --test dist/files/address-move.test.js
 import { strict as assert } from "node:assert";
@@ -46,10 +47,10 @@ test("A2 담은 폴더를 옮겼다(접두 · U2)", async () => {
   assert.deepEqual(await movedAddress(S("project/7/docs/a.md"), d), S("project/7/문서/a.md"));
 });
 
-test("A3 옛 자리에 지금 파일이 있으면 그것이 이긴다 — 기록을 묻지 않는다(U3 · P2)", async () => {
+test("A3 옛 자리에 지금 파일이 있으면 그것이 이긴다 — 기록이 있어도(U3 · P2)", async () => {
   const { d, calls } = deps({ records: [["a.md", "b.md"]], present: ["a.md", "b.md"] });
   assert.equal(await movedAddress(S("a.md"), d), null);
-  assert.equal(calls.lookup.length, 0, "옛 자리에 있으면 기록을 보지 않는다");
+  assert.ok(calls.exists.includes("a.md"), "기록이 있으면 옛 자리를 봐야 한다(배선)");
 });
 
 test("A4 옛 주소를 이 사람이 못 보면 null — 디스크도 기록도 보지 않는다(U5 · P5)", async () => {
@@ -84,8 +85,7 @@ test("A8 앱 폴더 · 자리 자신은 따라가지 않는다 — 판정도 묻
 
 test("A9 옛 자리를 판정할 수 없으면(자리 밖 링크 등) 따라가지 않는다 · 닿은 자리의 판정 불가는 없는 것과 같다", async () => {
   const a = deps({ records: [["a.md", "b.md"]], present: ["b.md"], unknown: ["a.md"] });
-  assert.equal(await movedAddress(S("a.md"), a.d), null);
-  assert.equal(a.calls.lookup.length, 0, "옛 자리가 판정 불가면 기록을 보지 않는다");
+  assert.equal(await movedAddress(S("a.md"), a.d), null, "옛 자리가 판정 불가면 따라가지 않는다");
   const b = deps({ records: [["a.md", "b.md"]], unknown: ["b.md"] });
   assert.equal(await movedAddress(S("a.md"), b.d), null, "닿은 자리가 판정 불가면 거기 없는 것");
 });
@@ -94,4 +94,18 @@ test("A10 기록은 디스크 이름(NFD), 주소는 NFC 로 적어도 따라간
   const nfc = "회의록".normalize("NFC"), nfd = "회의록".normalize("NFD");
   const { d } = deps({ records: [[`d/${nfd}.md`, "d/b.md"]], present: ["d/b.md"] });
   assert.deepEqual(await movedAddress(S(`d/${nfc}.md`), d), S("d/b.md"));
+});
+
+test("A11 ★기록이 없으면 디스크를 보지 않는다 — 받기 주소마다 불리는 자리의 비용(판정 1 · 기록 조회 · 디스크 0)", async () => {
+  const { d, calls } = deps({ present: ["docs/a.md"] });
+  assert.equal(await movedAddress(S("docs/a.md"), d), null);
+  assert.deepEqual([calls.canRead.length, calls.exists.length], [1, 0], JSON.stringify(calls));
+  assert.ok(calls.lookup.length >= 1, "기록은 물어야 한다(배선)");
+});
+
+test("A12 주소가 될 수 없는 자리(점으로 시작하는 마디)로 옮겨졌으면 따라가지 않는다 · 대조군은 따라간다", async () => {
+  const hidden = deps({ records: [["x/a.md", "x/.hidden/a.md"]], present: ["x/.hidden/a.md"] });
+  assert.equal(await movedAddress(S("x/a.md"), hidden.d), null);
+  const shown = deps({ records: [["x/a.md", "x/shown/a.md"]], present: ["x/shown/a.md"] });
+  assert.deepEqual(await movedAddress(S("x/a.md"), shown.d), S("x/shown/a.md"));
 });

@@ -260,6 +260,20 @@ export function addressToSessionPath(view: SessionView, a: FileAddress): Address
   return { path: p };
 }
 
+/**
+ * 이 세션이 이 주소를 **실제로 열 수 있는 경로**로 보나(#4822 — 옛 주소 따라가기가 닿은 자리에 거는 판정). addressToSessionPath 가
+ *  경로를 주는 것에 더해, 노드 세션은 **작업 폴더 아래**여야 한다 — 노드는 공유 자리 전체를 경로로 바꿔 주지만 그 컴퓨터엔 작업 폴더(프로젝트
+ *  폴더)만 동기화돼 있어 그 밖 경로는 그 컴퓨터에 없다. 컨테이너는 변환이 이미 작업 폴더 밖을 거절하고, 셀프호스트는 같은 파일 시스템이라 그대로다.
+ */
+export function sessionCanSeeAddress(view: SessionView, a: FileAddress): boolean {
+  const r = addressToSessionPath(view, a);
+  if (r.path === null) return false;
+  if (view.place !== "node") return true;
+  const dir = normAbs(view.dir);
+  const p = normAbs(r.path);
+  return !!dir && !!p && relUnder(dir, p) !== null;
+}
+
 const joinSep = (base: string, rel: string): string => (rel ? `${base === "/" ? "" : base}/${rel}` : base);
 /** 노드 작업 폴더가 윈도우 꼴이면 그 구분자로 되돌린다(그 컴퓨터에서 바로 쓰는 경로). */
 const nodeSep = (dir: string, p: string): string => (/\\/.test(dir) && !/\//.test(dir) ? p.replace(/\//g, "\\") : p);

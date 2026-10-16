@@ -3,10 +3,10 @@
 //
 // 한 프로세스에 게이트웨이를 띄운다 — 진짜 인증(구성원 토큰) · 파일 주소 도구 REST(file_url · file_path) · 서명 주소 받는 곳 ·
 //  프로젝트 자료 라우트(올리기 · 이름 바꾸기 · 옮기기 · 읽기). 파일은 임시 폴더. 판정은 응답 · 받은 바이트 · 디스크로 한다.
-//  사양 표(스크래치패드 spec-4822.md):
+//  사양 표:
 //   U1 옛 주소 받기 → 새 주소 · moved_from · 새 바이트   U1b 다른 폴더로 옮기기   U2 폴더 이름 바꾸기(접두)   U3 옛 자리에 새 파일이 이긴다   U4 올리기는 안 따라감
 //   U5 옛 주소를 못 보는 사람 404   U5b 잠긴 자리에서 옮겨 나간 것도 옛 자리를 못 보면 안 따라감   U6 새 자리가 잠겼으면 안 따라감(대조군: 볼 수 있는 사람은 따라감)   U7 기록 없음   U9 NFD 기록 · NFC 주소
-//   U10 자료 좌표(project:<번호>/…)로 넣어도   P1 file_path 새 경로   P2 옛 자리 파일이 이긴다   P3 새 자리가 잠긴 참가자는 옛 경로   P5 옛 자리가 잠긴 참가자   P5b 잠긴 자리에서 옮겨 나간 것
+//   U10 자료 좌표(project:<번호>/…)로 넣어도   U11 기록 조회가 실패해도 종전대로(최선 노력)   P1 file_path 새 경로   P2 옛 자리 파일이 이긴다   P3 새 자리가 잠긴 참가자는 옛 경로   P5 옛 자리가 잠긴 참가자   P5b 잠긴 자리에서 옮겨 나간 것
 //   G1 프로젝트 파일 읽기 → 새 파일 · X-File-Moved-To   G2 HEAD   G3 옛 자리 파일이 이긴다   G4 다른 프로젝트로 간 것은 404
 //   G5 폴더 이름 바꾸기   G6 쓰기(PUT · DELETE)는 안 따라감(옮긴 파일은 그대로)   G7 내려받는 이름 = 새 이름   G8 기록 없음 404
 import pg from "pg";
@@ -175,6 +175,14 @@ try {
   chk("U9 기록은 디스크 이름(NFD) · 주소는 NFC 로 적어도 따라간다", u9.status === 200 && u9.address === A("nfd/새 이름.md"), u9);
   const u10 = await mint(tokA, { address: `project:${PID}/docs/a.md` });
   chk("U10 자료 좌표(project:<번호>/옛 경로)로 넣어도 따라간다", u10.status === 200 && u10.address === A("docs/b.md") && u10.moved_from === A("docs/a.md"), u10);
+  //  U11 최선 노력 — 기록 조회가 실패해도(기록 표를 잠시 못 쓰게 한다) 받기 주소는 종전대로 답한다(500 이 아니라 받은 주소 그대로).
+  await itemsPool.query("ALTER TABLE file_move RENAME TO file_move_off_4822");
+  let u11;
+  try { u11 = await mint(tokA, { address: A("docs/a.md") }); }
+  finally { await itemsPool.query("ALTER TABLE file_move_off_4822 RENAME TO file_move"); }
+  const u11back = await mint(tokA, { address: A("docs/a.md") });
+  chk("U11 기록 조회가 실패해도 종전대로 답한다(500 아님 · 옛 주소 그대로 · moved_from 없음) · 되살리면 다시 따라간다(대조군)",
+    u11.status === 200 && u11.address === A("docs/a.md") && !("moved_from" in u11) && u11back.address === A("docs/b.md"), { u11, back: u11back.address });
 
   // ── ② file_path — 셀프호스트 세션(같은 파일 시스템 — 공유 자리 전체가 경로로 보인다) · B 는 초대받은 참가자 ──
   const SID = "box-pgt-moved-4822abcd";

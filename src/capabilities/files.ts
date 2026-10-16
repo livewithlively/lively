@@ -12,15 +12,16 @@ import { RateWindow } from "../apps/app-chat-send.js";
 import { gatewayUrl } from "../gateway-url.js";
 import {
   parseAddress, parseAddressInput, formatAddress, addressLinkHash, AddressError,
-  sessionPathToAddress, addressToSessionPath, type FileAddress, type SessionView,
+  sessionPathToAddress, addressToSessionPath, sessionCanSeeAddress, type FileAddress, type SessionView,
 } from "../files/address.js";
 import { clampTtl, type FileUrlMethod } from "../files/file-url-token.js";
-import { authorizeFileAccess, type FilePrincipal } from "../files/file-access.js";
+import { authorizeFileAccess, type FileAccessDeps, type FilePrincipal } from "../files/file-access.js";
 import { mintFileUrl } from "../files/file-url.js";
 import { liveMintDeps, liveFileAccessDeps, fileUrlTenantId } from "../files/files-live.js";
 import { movedAddress } from "../files/address-move.js";
-import { locateAddress, statAt } from "../files/signed-routes.js";
+import { locateAddress, statAt } from "../files/address-fs.js";
 import { findFileMove, SHARED_MOVE_SCOPE } from "../v6/file-move-store.js";
+import { logger } from "../log.js";
 
 /** 서명 주소 발급 빈도 — (구성원, 앱) 마다 분당. 화면이 그림 수십 장을 한꺼번에 받는 일을 막지 않을 만큼 넉넉하게. */
 export const FILE_URL_PER_MINUTE = 300;
@@ -29,21 +30,34 @@ const rate = new RateWindow(FILE_URL_PER_MINUTE);
 const principalOf = (user: LivelyUser): FilePrincipal => ({ member: user.userId, scopes: user.scopes ?? [], app: user.appId ?? null });
 
 /**
- * 옛 주소면 지금 자리(#4822 — 규칙은 files/address-move). 판정은 받기 주소와 같은 권한표(authorizeFileAccess read),
- *  «지금 거기 있나» 는 받기 주소를 쓸 때와 같은 봉쇄 · 같은 멤버 경계(signed-routes locateAddress)로 본다.
- *  자리 밖을 가리키는 링크 등으로 못 본 것은 «판정 불가»(null) — 옛 주소면 따라가지 않고, 닿은 자리면 없는 것과 같다.
+ * 한 요청 안에서 공유 자리 판정기(sharedFolderGate — DB 를 본다)를 한 번만 만든다. 따라가기의 판정과 발급(mintFileUrl)의 판정이
+ *  같은 사람 · 같은 순간이라 같은 판정기를 쓴다(따라가기를 더해도 판정 비용이 두 배가 되지 않게).
  */
-function movedAddressFor(a: FileAddress, user: LivelyUser, alsoVisible?: (to: FileAddress) => boolean): Promise<FileAddress | null> {
+function accessOnce(member: string): FileAccessDeps {
+  let gate: ReturnType<FileAccessDeps["sharedGate"]> | null = null;
+  return { ...liveFileAccessDeps, sharedGate: (m) => (m === member ? (gate ??= liveFileAccessDeps.sharedGate(m)) : liveFileAccessDeps.sharedGate(m)) };
+}
+
+/**
+ * 옛 주소면 지금 자리(#4822 — 규칙 · 순서는 files/address-move). 판정은 받기 주소와 같은 권한표(authorizeFileAccess read),
+ *  «지금 거기 있나» 는 받기 주소를 쓸 때와 같은 봉쇄 · 같은 멤버 경계(files/address-fs locateAddress)로 본다 — 기록이 있을 때만이다.
+ *  자리 밖을 가리키는 링크 등으로 못 본 것은 «판정 불가»(null) — 옛 주소면 따라가지 않고, 닿은 자리면 없는 것과 같다.
+ *  ★ 최선 노력 — 기록 조회 · 디스크가 실패하면 따라가지 않고(null) 남기기만 한다. 따라가기 때문에 종전에 되던 호출이 실패하면 안 된다.
+ */
+function movedAddressFor(a: FileAddress, user: LivelyUser, access: FileAccessDeps, alsoVisible?: (to: FileAddress) => boolean): Promise<FileAddress | null> {
   const p = principalOf(user);
   return movedAddress(a, {
-    canRead: (x) => authorizeFileAccess(p, x, "read", liveFileAccessDeps).then(() => true, () => false),
+    canRead: (x) => authorizeFileAccess(p, x, "read", access).then(() => true, () => false),
     exists: async (x) => {
       let at: Awaited<ReturnType<typeof locateAddress>>;
       try { at = await locateAddress(user, x, "read"); } catch { return null; }
       return (await statAt(at.abs, at.osUser)) !== null;
     },
     lookup: (rel, since) => findFileMove(SHARED_MOVE_SCOPE, rel, since),
-  }, alsoVisible);
+  }, alsoVisible).catch((e) => {
+    logger.warn({ err: e, address: formatAddress(a) }, "[files] 옛 주소 따라가기 실패(비치명 — 받은 주소 그대로 답한다)");
+    return null;
+  });
 }
 
 /** 사람에게 줄 링크(#1436 · 웹 «자료 보기» 화면은 #4672). base 를 못 정하면 해시만. */
@@ -153,10 +167,12 @@ const fileUrl: Capability = {
     }
     //  #4822 — 받기 주소는 옛 주소를 따라간다(웹에서 이름을 바꾸거나 옮긴 파일 — 지식 · 대화에 남은 옛 주소를 AI 가 다시 써도 끊기지 않게).
     //   올리기는 따라가지 않는다 — 옛 자리에 새로 쓰는 것이 그 주소의 뜻이다. 판정은 아래 발급이 받은 주소 그대로 다시 탄다.
-    const movedTo = method === "GET" ? await movedAddressFor(address, user) : null;
+    const access = accessOnce(p.member);
+    const movedTo = method === "GET" ? await movedAddressFor(address, user, access) : null;
     //  readOnly 는 «읽기전용 세션이라고 적혀 온 때만» 참 — 앱 화면 다리(app-tool-call)는 이 칸을 싣지 않는다(앱 화면의 올리기가 막히지 않게).
     //   읽기전용 머리글이 실린 REST · MCP 는 어댑터가 ctx.readOnly 를 채운다.
-    const minted = await mintFileUrl({ address: movedTo ?? address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true }, liveMintDeps);
+    const minted = await mintFileUrl({ address: movedTo ?? address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true },
+      { ...liveMintDeps, access });
     return {
       ...minted,
       link: await humanLink(parseAddress(minted.address)),   // 서명한 주소(올리기는 NFC 이름)로 — 저장되는 그 파일의 링크
@@ -209,8 +225,8 @@ const filePath: Capability = {
   name: "file_path",
   title: "파일 주소 → 이 세션 안 경로",
   description: "파일 주소를 이 세션에서 열 수 있는 경로로 바꾼다. 매니지드 세션엔 작업 폴더만 붙어 있어 그 밖의 주소는 «이 세션엔 없다»(까닭과 함께 — 그때는 file_url 로 받는다). "
-    + "앱 폴더(apps/<앱>/…)는 그 앱이 이 세션에 붙어 있으면 `<작업 폴더>/.lively/apps/<앱>/…` 다. 파일을 열지 않고 글자만 바꾼다(세션 셸이 보는 범위 그대로). "
-    + "단 웹에서 이름을 바꾸거나 옮긴 파일의 옛 주소면 지금 자리의 경로로 주고 moved_from 에 옛 주소를 싣는다(옮긴 자리도 이 세션과 그 사람에게 보일 때만).",
+    + "앱 폴더(apps/<앱>/…)는 그 앱이 이 세션에 붙어 있으면 `<작업 폴더>/.lively/apps/<앱>/…` 다. 글자를 바꿀 뿐 파일이 있는지 답하지 않는다(세션 셸이 보는 범위 그대로). "
+    + "단 웹에서 이름을 바꾸거나 옮긴 기록이 있는 옛 주소면 지금 자리의 경로로 주고 moved_from 에 옛 주소를 싣는다(옮긴 자리도 이 세션과 그 사람에게 보일 때만).",
   scope: null,
   input: filePathInput,
   expose: {
@@ -231,8 +247,9 @@ const filePath: Capability = {
     //  #4822 — 이 세션에서 보이는 옛 주소면 옮긴 자리를 따라간다. 따라가기는 파일을 본다(«옛 자리에 지금 있나») — 그래서 위 판정에 더해
     //   옛 자리 · 닿은 자리 둘 다 **그 사람이 볼 수 있어야**(웹 줄) 하고, 닿은 자리는 **이 세션에서도 보여야**(셸 줄) 한다.
     //   옮긴 곳이 잠긴 폴더이거나 작업 폴더 밖이면 따라가지 않는다(그 이름이 새지 않게) — 종전대로 글자만 바꾼 옛 경로다.
+    //   노드 세션(사람 컴퓨터)은 작업 폴더 아래로 닿은 것만 — 그 컴퓨터엔 작업 폴더만 동기화돼 있다(files/address sessionCanSeeAddress).
     if (r.path !== null) {
-      const to = await movedAddressFor(address, user, (x) => addressToSessionPath(view, x).path !== null);
+      const to = await movedAddressFor(address, user, accessOnce(user.userId), (x) => sessionCanSeeAddress(view, x));
       const toPath = to ? addressToSessionPath(view, to).path : null;
       if (to && toPath) return { address: formatAddress(to), session, path: toPath, moved_from: formatAddress(address) };
     }
