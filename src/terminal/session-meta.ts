@@ -26,6 +26,8 @@ export interface DeadSessionStateLike {
   end_note?: SessionEndNote | null;
   /** #4695 T5 — 끄기 전에 남긴 쪽지. 메타엔 **사유(why)만** 싣는다(쓰다 만 글·질문은 대화창 몫). */
   stop_note?: { why?: string } | null;
+  /** #4783 후속 — 마지막 관측 실행 상태(session-state.ts last_run_state). */
+  last_run_state?: { at: number; run: "working" | "done" | "asking" | "bg" | "scheduled" } | null;
 }
 
 /** 죽은 세션의 메타 응답 본문. `restorable: true` 가 곧 "박스에 없다 = 되살릴 수 있다". */
@@ -46,6 +48,8 @@ export interface DeadSessionMeta {
   endNote?: SessionEndForRow;
   /** #4695 T5 — 하네스 종료 규칙이 끄며 남긴 쪽지의 사유(done·asking·exited). 쪽지 본문은 싣지 않는다. */
   stopWhy?: string;
+  /** #4783 후속 — 마지막 관측 실행 상태(session-state.ts last_run_state). endNote 가 빌 때 화면이 «꺼질 때 무슨 상태였나» 를 그린다. */
+  lastRun?: { at: number; run: "working" | "done" | "asking" | "bg" | "scheduled" };
 }
 
 /**
@@ -122,6 +126,7 @@ export function deadSessionMeta(
       //  #4783 — 왜 끝났나(끝낸 자리가 적은 것). 없으면 모름 — 화면은 사람이 끝냈다고 **단정하지 않는다**.
       ...(endNoteForRow(st.end_note) ? { endNote: endNoteForRow(st.end_note) } : {}),
       ...(st.stop_note && typeof st.stop_note.why === "string" ? { stopWhy: st.stop_note.why } : {}),
+      ...(st.last_run_state ? { lastRun: { at: st.last_run_state.at, run: st.last_run_state.run } } : {}),
     },
   };
 }

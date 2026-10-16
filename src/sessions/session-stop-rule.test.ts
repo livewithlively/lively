@@ -8,7 +8,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, QUOTA_UNKNOWN_RETRY_MS, launchedAtMsOf, defaultQuotaWait, type StopFacts } from "./session-stop-rule.js";
+import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, runStateFromFacts, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, QUOTA_UNKNOWN_RETRY_MS, launchedAtMsOf, defaultQuotaWait, type StopFacts } from "./session-stop-rule.js";
 import type { QuotaWait } from "../terminal/harness-io/quota-wait.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { SessionState } from "./session-state.js";
@@ -198,6 +198,7 @@ function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Re
   const reaped: string[] = [];
   const notes: Array<[string, unknown]> = [];
   const keys: Array<[string, string]> = [];
+  const lastRuns: Array<[string, string]> = [];
   const armed: number[] = [];
   /** 대화 기록(한도 대기) 판정을 부른 세션 id 와 넘긴 지금(ms) — 읽으면 안 되는 세션에서 읽었나를 본다. */
   const quotaCalls: Array<[string, number]> = [];
@@ -213,12 +214,13 @@ function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Re
     quotaWait: async (s, nowMs) => { quotaCalls.push([s.id, nowMs]); return o.quota ? o.quota(s.id) : null; },
     keys: async (id, k) => { keys.push([id, k]); },
     saveNote: async (id, n) => { notes.push([id, n]); },
+    markLastRun: async (id, s) => { lastRuns.push([id, s.run]); },
     reap: async (id) => { reaped.push(id); },
     sleep: async () => {},
     now: () => o.nowMs ?? NOW * 1000,
     arm: (at) => { armed.push(at); },
   });
-  return run.then((r) => ({ r, reaped, notes, keys, armed, quotaCalls }));
+  return run.then((r) => ({ r, reaped, notes, keys, armed, quotaCalls, lastRuns }));
 }
 const liveDone = (id: string, o: Partial<SessionInfo> = {}): SessionInfo => row({
   id, agentState: "idle", lastActive: NOW - 600, lastReport: { phase: "idle", at: NOW - 600, bg: 0, wake: 0, cron: 0 }, ...o,
@@ -751,4 +753,38 @@ test("F3b 기본 «한도 대기» 재료는 읽는 함수에 띄운 시각(ms)�
   const w = await defaultQuotaWait(read as never)(liveDone("box-l-f3", { created: NOW - 3600 }), NOW * 1000 + 7);
   assert.deepEqual(calls, [["box-l-f3", { launchedAtMs: (NOW - 3600) * 1000, nowMs: NOW * 1000 + 7 }]]);
   assert.equal(w, WAITING);
+});
+// ── #4783 후속 — 마지막 관측 실행 상태(last_run_state). 세션이 끝낸 자리를 안 거치고 꺼져도 «꺼질 때 무슨 상태였나» 를 남긴다.
+test("W1 runStateFromFacts — 관측한 실행 상태(화면이 꺼진 뒤 그린다) · 가릴 수 없으면 null", () => {
+  const F = runStateFromFacts;
+  // 작업 중 — 세 신호 어느 하나라도
+  assert.equal(F(done({ working: true }), NOW), "working");
+  assert.equal(F(done({ harnessWorking: true }), NOW), "working");
+  assert.equal(F(done({ agentState: "busy" }), NOW), "working");
+  // 질의 대기(승인·선택) — 유저 행동이 필요한 상태. 숨기면 안 된다.
+  assert.equal(F(done({ awaiting: true }), NOW), "asking");
+  assert.equal(F(done({ agentState: "waiting" }), NOW), "asking");
+  // 백그라운드 작업
+  assert.equal(F(done({ background: true }), NOW), "bg");
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 2, wake: 0, cron: 0 } }), NOW), "bg");
+  // 예약 깨움 대기
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 0, wake: NOW + 100, cron: 0 } }), NOW), "scheduled");
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 0, wake: 0, cron: 3 } }), NOW), "scheduled");
+  // 완료 — claude 는 예약 셈이 턴 끝 보고에 실렸을 때만 완료를 확신(done() 기본)
+  assert.equal(F(done(), NOW), "done");
+  // 가릴 수 없음 → null
+  assert.equal(F(done({ agentState: "exited" }), NOW), null, "하네스가 끝나 셸만 남음 — end_note harness_exit 의 몫");
+  assert.equal(F(done({ observed: false }), NOW), null, "관측 못 한 행 — 지어낸 값을 적지 않는다");
+  // claude 인데 예약 셈이 보고에 없으면 완료를 확신 못 함 → null(거짓 완료를 안 만든다)
+  assert.equal(F(done({ harness: "claude", lastReport: { phase: "idle", at: NOW } as never }), NOW), null);
+  // codex 는 예약 도구가 없다 — idle 이면 완료
+  assert.equal(F(done({ harness: "codex", lastReport: { phase: "idle", at: NOW } as never }), NOW), "done");
+});
+
+test("W2 sweep 은 관측한 run 이 바뀐 세션만 적는다(그대로면 안 적는다 · 끄는 것과 무관하게 매 틱)", async () => {
+  const a = liveDone("box-a-1", { agentState: "busy", working: true });   // working — 이전 기록 없음 → 적는다
+  const b = liveDone("box-b-1");                                          // done — 이미 done 기록 → 안 적는다
+  const states = [stOf("box-a-1"), { ...stOf("box-b-1"), last_run_state: { at: NOW - 100, run: "done" } } as SessionState];
+  const { lastRuns } = await sweepWith([a, b], states, {});
+  assert.deepEqual(lastRuns, [["box-a-1", "working"]], "🔴 run 이 바뀐 것만, 그대로인 것은 안 적는다");
 });
