@@ -6,7 +6,8 @@
 //   훅이 끝난 뒤에야 기록에 적는다(그날 22.5초 — 창이 28ms 먼저 닫혔다). 서버는 이제 목록을 줄 때 기록과 다시 대조해 바로잡는다
 //   (src/sessions/outbox-late-echo.ts). 그 대조는 못 읽으면(중계 실패·아직 배포 전) «미확인» 을 그대로 두는데, 화면은 이미 그
 //   기록을 읽어 그렸다 — 눈앞에 있는 말을 «안 들어갔을 수 있어요» 로 또 그리지 않는다.
-//  판정 규칙은 서버(outbox-late-echo.ts)와 **같다** — 같은 말(samePrompt)도, 증거 창(행이 생긴 때 − 5초 ~ 마감한 때 + 5초)도.
+//  판정 규칙은 서버(outbox-late-echo.ts)와 **같다** — 하한(행이 생긴 때 − 5초) · 제때 창(마감한 때 + 5초까지는 같은 말 samePrompt) ·
+//   그 뒤는 글이 통째로 같을 때만(exactPrompt — 입력칸에 남은 글을 사람이 나중에 Enter 로 보낸 경우).
 //   화면이 더 느슨하면 서버가 «미확인» 이라 한 말을 화면만 «들어갔다» 로 지우게 된다(거짓 «전달됨» — 격리 리뷰 재현: 앞 64자만 같은
 //   다른 말에 가려졌다). 계약 시험(scripts/outbox-echo.test.mjs E3)이 두 판을 같은 표로 맞춘다.
 
@@ -31,10 +32,17 @@ export function samePrompt(said: string, line: string): boolean {
   return a.slice(0, PROMPT_HEAD) === b.slice(0, PROMPT_HEAD);
 }
 
+/** (순수) 글이 통째로 같은가 — 공백만 하나로 접는다(서버 exactPrompt 와 같다). */
+export function exactPrompt(said: string, line: string): boolean {
+  const a = norm(said);
+  return !!a && a === norm(line);
+}
+
 /**
  * (순수) 이 행의 말이 이미 그린 기록의 사람 말 턴에 있나.
- *  증거 창 = [행이 생긴 때 − 5초, «미확인» 으로 마감한 때 + 5초] — 사람 말 줄의 시각은 **제출한 때**이고, 아웃박스는 치고 Enter 를 누른
- *  뒤에 마감한다. 행보다 먼저 적힌 같은 말(같은 지시를 두 번 보낸 앞 것)도, 마감 뒤에 사람이 다시 친 같은 말도 이 행의 증거가 아니다.
+ *  하한 = 행이 생긴 때 − 5초(그 앞의 같은 말은 같은 지시를 두 번 보낸 앞 것). 사람 말 줄의 시각은 **제출한 때**이고 아웃박스는 치고
+ *  Enter 를 누른 뒤에 마감하므로, 마감 + 5초까지는 «같은 말»(samePrompt — 긴 글은 머리 160자)로 대조한다. 그 뒤에 적힌 줄은 글이 통째로
+ *  같을 때만 증거다 — 입력칸에 남은 글을 사람이 나중에 Enter 로 보냈거나 같은 글을 다시 쳤다(어느 쪽이든 그 말은 대화에 들어갔다).
  *  turns 는 기록에서 온 사람 말 턴만 넘긴다(아직 기록에 안 이어진 낙관 말풍선은 증거가 아니다).
  */
 export function echoedInTurns(
@@ -47,8 +55,9 @@ export function echoedInTurns(
   const said = String(row.text ?? '');   // 빈 글은 samePrompt 가 거른다
   const lo = created - skewMs, hi = marked + skewMs;
   return turns.some((t) => {
-    if (!t.text || !samePrompt(said, t.text)) return false;
+    if (!t.text) return false;
     const at = Date.parse(String(t.ts ?? ''));
-    return at >= lo && at <= hi;
+    if (!(at >= lo)) return false;
+    return at <= hi ? samePrompt(said, t.text) : exactPrompt(said, t.text);
   });
 }

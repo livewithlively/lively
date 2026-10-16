@@ -18,13 +18,16 @@
 //  · 파일 찾기는 대화창과 **같은 한 벌**(transcript-locate.resolveTranscript) — 화면이 보여 주는 바로 그 기록으로 판정한다.
 //
 //  ── 증거 창 — 거짓 «전달됨» 을 만들지 않는다 ──
-//  · 사람 말 줄(user 의 text): 그 줄의 시각은 **제출한 때**다(c3d46537: 줄 07:59:07 · 적힌 때 07:59:31 이후). 아웃박스는 치고 Enter 를
-//    누른 뒤에 마감하므로 진짜 짝은 [행이 생긴 때 − 5초, 마감한 때 + 5초] 안에 있다. 그 뒤에 적힌 같은 글은 사람이 나중에 다시 친
-//    것이지 이 행의 증거가 아니다(«계속해» 처럼 짧은 말이 옛 진짜 유실 행을 소급해 «전달됨» 으로 만들던 구멍 — 격리 리뷰).
-//  · 끼워 넣은 말(queued_command): 시각이 **끼워 넣은 때**다(실측: 사람이 친 끼워 넣은 말 64줄 모두 attachment.timestamp = 줄
-//    시각 — 친 때는 안 남는다). 그래서 상한을 마감 뒤 30분으로 넉넉히 둔다(도는 턴이 그보다 길면 «미확인» 으로 남는다 — 안전한 쪽).
-//    그 30분 안에 사람이 같은 글을 일하는 중인 터미널에 다시 치면 이 행이 «전달됨» 이 될 수 있다 — 같은 글이 대화에 들어간 것은
-//    사실이라 받아들인다.
+//  · 하한: 행이 생긴 때 − 5초. 그 앞에 적힌 같은 글은 같은 지시를 두 번 보낸 앞 것이다.
+//  · «제때» 창: 사람 말 줄(user 의 text)은 시각이 **제출한 때**다(c3d46537: 줄 07:59:07 · 적힌 때 07:59:31 이후) — 아웃박스는 치고
+//    Enter 를 누른 뒤에 마감하므로 그 행의 짝은 마감 + 5초 안에 제출된다. 끼워 넣은 말(queued_command)은 시각이 **끼워 넣은 때**라
+//    (실측: 사람이 친 끼워 넣은 말 64줄 모두 attachment.timestamp = 줄 시각) 마감 뒤 30분까지를 제때로 본다.
+//    제때 적힌 줄은 «같은 말» 규칙(긴 글은 머리 160자)으로 대조한다.
+//  · 그 뒤(늦게) 적힌 줄은 **글이 통째로 같을 때만** 증거다. 아웃박스가 친 글이 입력칸에 남은 채(Enter 가 안 먹음) «미확인» 으로
+//    마감되고, 사람이 나중에 터미널에서 Enter 를 누르면 그 말은 마감 **뒤** 시각으로 적힌다 — 상민님이 다른 세션에서 겪은 일이다
+//    («프롬프트가 입력된 상태로 엔터 안 쳐진 상태로 갔어»). 그 말은 들어갔다. 사람이 같은 글을 나중에 다시 쳐도 같은 글이 대화에
+//    들어간 것은 사실이라 그 행을 «전달됨» 으로 본다(다시 보내면 같은 지시가 두 번 간다) — 격리 리뷰가 물은 «소급» 은 글이 통째로
+//    같을 때만 받아들인다. 머리 160자만 같은 늦은 줄(서식이 같고 꼬리가 다른 다른 지시)은 증거가 아니다.
 //  · 도구 결과·AI 의 글·주입(isMeta)·서브에이전트 가지·시각 없는 줄(요청 사본 api-request-blob · last-prompt — Claude Code 는 매 턴
 //    지난 말을 last-prompt 줄에 되풀이해 적는다, 실측)은 사람 말 줄이 아니라 안 센다.
 //  · 같은 말 = 공백을 하나로 접은 뒤 160자 이하는 전체가, 그보다 길면 머리 160자가 같다(에코 바늘 ECHO_HEAD_CHARS 와 같은 기준 —
@@ -70,7 +73,8 @@ export function lateEchoCandidate(row: Pick<OutboxRow, "status" | "last_error" |
     || (row.status === "failed" && row.last_error === "send: host-unknown");
 }
 
-/** 증거로 받는 시각 창(ms) — 행이 생긴 때(created_at)와 «미확인» 으로 마감한 때(updated_at) 기준. 둘 다 DB 시계다. */
+/** 증거 시각 창(ms) — 행이 생긴 때(created_at)와 «미확인» 으로 마감한 때(updated_at) 기준(둘 다 DB 시계). notBefore 앞은 증거가 아니고,
+ *  …NotAfter 는 «제때» 의 끝이다 — 그 뒤는 글이 통째로 같을 때만 증거다(머리말 «증거 창»). */
 export interface EchoWindow { notBefore: number; userNotAfter: number; queuedNotAfter: number }
 /** (순수) 행 → 증거 창. 시각을 못 읽으면 null — 판정하지 않는다(하한이 NaN 이면 모든 옛 같은 말이 증거가 되는 fail-open 이다). */
 export function echoWindowOf(row: Pick<OutboxRow, "created_at" | "updated_at">): EchoWindow | null {
@@ -113,8 +117,14 @@ export function samePrompt(said: string, line: string): boolean {
   return a.slice(0, LATE_ECHO_HEAD) === b.slice(0, LATE_ECHO_HEAD);
 }
 
+/** (순수) 글이 통째로 같은가 — 공백만 하나로 접는다. 늦게(제때 창 뒤에) 적힌 줄은 이 규칙으로만 증거가 된다. */
+export function exactPrompt(said: string, line: string): boolean {
+  const a = norm(said);
+  return !!a && a === norm(line);
+}
+
 /**
- * (순수) 줄 묶음에서 그 말을 찾는다 — 증거 창(EchoWindow) 안에 적힌 사람 말 줄만 본다.
+ * (순수) 줄 묶음에서 그 말을 찾는다 — 하한 뒤에 적힌 사람 말 줄만 본다. 제때 창 안이면 같은 말(samePrompt), 그 뒤면 통째로 같은 글(exactPrompt).
  *  earliestMs = 이 묶음에서 가장 이른 시각 — 거슬러 읽기가 «행이 생기기 전» 까지 왔는지 판단하는 근거다(시각 없는 줄은 안 센다).
  */
 export function scanLinesForPrompt(lines: readonly unknown[], said: string, win: EchoWindow):
@@ -127,8 +137,9 @@ export function scanLinesForPrompt(lines: readonly unknown[], said: string, win:
     if (earliest === null || ts < earliest) earliest = ts;
     if (ts < win.notBefore) continue;
     const p = promptOfLine(l);
-    if (!p || ts > (p.queued ? win.queuedNotAfter : win.userNotAfter)) continue;
-    if (samePrompt(said, p.text)) return { found: true, at: new Date(ts).toISOString(), earliestMs: earliest };
+    if (!p) continue;
+    const timely = ts <= (p.queued ? win.queuedNotAfter : win.userNotAfter);
+    if (timely ? samePrompt(said, p.text) : exactPrompt(said, p.text)) return { found: true, at: new Date(ts).toISOString(), earliestMs: earliest };
   }
   return { found: false, at: null, earliestMs: earliest };
 }
