@@ -147,11 +147,11 @@ export async function ensureAppServer(appId: string, onProgress?: (text: string)
   let st: ServerStatusView | null;
   try { st = await api(path); } catch (_) { return true; }   // 상태를 못 읽으면(옛 서버) 종전대로 넣는다
   if (!st || !st.server_declared) return true;
-  if (st.available) { toast('이 워크스페이스는 앱 서버가 아직 켜져 있지 않아 화면만 넣어요 — ' + st.available, true); return true; }
+  if (st.available) { toast('이 워크스페이스는 앱 서버가 아직 켜져 있지 않아 화면만 넣어요. ' + st.available, true); return true; }
   if (st.installed && st.installed.deployed_to_cur) return true;
   try { await api(path + '/deploy', { method: 'POST', body: JSON.stringify({ wait_s: 3 }) }); }
-  catch (e: unknown) { toast('서버를 빌드하지 못했어요 — ' + (e instanceof Error ? e.message : String(e)), true); return false; }
-  toast('서버를 빌드하고 있어요 — 몇 분 걸릴 수 있어요');
+  catch (e: unknown) { toast('서버를 빌드하지 못했어요. ' + (e instanceof Error ? e.message : String(e)), true); return false; }
+  toast('서버를 빌드하고 있어요. 몇 분 걸릴 수 있어요.');
   const t0 = Date.now();
   let told = t0;
   for (;;) {
@@ -161,16 +161,16 @@ export async function ensureAppServer(appId: string, onProgress?: (text: string)
     if (st && st.installed && st.installed.deployed_to_cur && !st.deploying) { toast('서버를 올렸어요'); return true; }
     if (st && !st.deploying) {
       //  일이 끝났는데 올라가지 않았다 — 빌드 실패 · 올리기 실패(시험 호출 등) · 그 밖. 기록은 서버가 만들기 세션에 넣었다.
-      const why = b && b.status === 'failed' ? '서버 빌드가 실패했어요(' + (b.stage || '?') + ') — ' + (b.error || '')
-        : st.function && st.function.last_error ? '서버를 올리지 못했어요 — ' + st.function.last_error
-          : '서버를 올리지 못했어요 — 앱빌더의 상태에서 까닭을 볼 수 있어요';
-      toast(why + ' · 기록은 만들기 세션의 AI 에게 보냈어요', true);
+      const why = b && b.status === 'failed' ? '서버 빌드가 실패했어요(' + (b.stage || '?') + '). ' + (b.error || '')
+        : st.function && st.function.last_error ? '서버를 올리지 못했어요. ' + st.function.last_error
+          : '서버를 올리지 못했어요. 앱빌더의 상태에서 까닭을 볼 수 있어요.';
+      toast(why + ' 기록은 만들기 세션의 AI에게 보냈어요.', true);
       return false;
     }
     const line = '서버 빌드 중 · ' + Math.round((Date.now() - t0) / 1000) + '초' + (b && b.now ? ' · ' + String(b.now).slice(0, 80) : '');
     if (onProgress) onProgress(line);
     else if (Date.now() - told >= 30_000) { told = Date.now(); toast(line); }
-    if (Date.now() - t0 > 12 * 60_000) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요 — 상태는 앱빌더에서 다시 볼 수 있어요', true); return false; }
+    if (Date.now() - t0 > 12 * 60_000) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요. 상태는 앱빌더에서 다시 볼 수 있어요.', true); return false; }
   }
 }
 /** 매니페스트 studio 칸에서 서버가 기록하는 것(만든 사람 · 만들기 세션 · 원본)을 걷는다 — #4667 그건 앱 코드가 아니라 서버 칸이 정본이다. 자리 · 기획 카드는 남긴다. */
