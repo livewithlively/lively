@@ -276,12 +276,19 @@ function dashFolderBrowser(root, startPath) {
     upDropZone(ov || container, hi || container, (items, emptyDirs) => uploadItems(items, emptyDirs));
   }, 0);
 
+  //  지우거나 이름을 바꾸려던 항목이 그새 사라졌으면 서버는 404(#4847 — 없는 대상 = 못 보는 자리와 같은 답)다. 낡은 줄을 남기지 않게 목록을 다시 읽는다.
+  const goneReload = async (e: any): Promise<boolean> => {
+    if (!e || e.status !== 404) return false;
+    toast('이미 없는 항목이에요 — 목록을 새로 읽었어요');
+    await load();
+    return true;
+  };
   const renameItem = async (name) => {
     const to = (prompt('새 이름', name) || '').trim();
     if (!to || to === name) return;
     setBusy(true);
     try { await api('/api/ui/terminal/browse/rename?' + qp(relOf(name)) + '&to=' + encodeURIComponent(to), { method: 'POST' }); await load(); }
-    catch (e) { toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
+    catch (e) { if (await goneReload(e)) return; toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
   };
   const deleteItem = async (name, isDir) => {
     //  #3778 — 서버가 자료로 등록된 파일을 숨김 자리에 보관한다(휴지통 ▸ 자료 탭에서 되살린다). 그 밖(압축·영상·빈 폴더)은 종전대로
@@ -295,7 +302,7 @@ function dashFolderBrowser(root, startPath) {
       toast(kept ? '휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요' + (isDir ? ` (자료 ${kept}건)` : '') : '삭제했어요');
       await load();
     }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); setBusy(false); }
+    catch (e) { if (await goneReload(e)) return; toast('삭제 실패 — ' + e.message, true); setBusy(false); }
   };
   const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
 

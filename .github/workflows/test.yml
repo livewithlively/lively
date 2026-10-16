@@ -412,6 +412,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/files/file-view.pg-test.mjs
+      # ⑤-i7 홈 탐색기 같은 답(#4847) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 공개범위 · 공유 폴더 공개범위 · 홈 탐색기 라우트 열 개).
+      #    볼 수 없는 자리(숨은 프로젝트 · 잠긴 폴더)와 없는 자리가 라우트마다 같은 답(상태 · 몸 · 머리) · 이상한 이름은 어느 자리든 같은 400 ·
+      #    루트 밖 링크의 400 은 판정 뒤에만 · 휴지통 되살리기의 같은 404.
+      - name: 홈 탐색기 — 볼 수 없는 자리와 없는 자리의 같은 답 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/terminal/browse-answers.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.

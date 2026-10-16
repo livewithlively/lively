@@ -262,10 +262,12 @@ test("F8 정보 404 — 이 게이트웨이의 404(code file_not_found)는 그�
   const fp = read("web/filepage.ts");
   assert.match(fp, /entry = e\.body && e\.body\.code === 'file_not_found' \? null : await listedEntry\(root, rel\);/, "모든 404 에 부모 목록을 한 번 더 부른다");
   const tf = read("src/terminal/terminal-files.ts");
+  //  #4847 — 그 404 는 홈 탐색기 라우트 전부의 공용 몸이다(정보 라우트만의 것이 아니다).
+  assert.match(tf, /class BrowseNotFound extends HttpError \{\n {2}constructor\(readonly rel: string = ""\) \{ super\(404, "경로를 찾을 수 없습니다", \{ body: \{ code: "file_not_found" \} \}\); \}\n\}/,
+    "홈 탐색기의 공용 404 가 code file_not_found 몸이 아니다");
   const info = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/info"'), tf.indexOf('app.get("/api/ui/terminal/browse/similar"'));
-  assert.match(info, /const notFound = \(\): HttpError => new HttpError\(404, "경로를 찾을 수 없습니다", \{ body: \{ code: "file_not_found" \} \}\);/);
-  assert.equal((info.match(/throw notFound\(\);/g) || []).length, 2, "못 봄 · 없음 두 자리가 같은 404 를 던지지 않는다");
-  assert.doesNotMatch(info, /throw new HttpError\(404/, "같은 몸이 아닌 404 가 남아 있다");
+  assert.equal((info.match(/throw browseNotFound\(\);/g) || []).length, 2, "못 봄 · 없음 두 자리가 같은 404 를 던지지 않는다");
+  assert.doesNotMatch(info, /throw new HttpError\(404|const notFound\b/, "같은 몸이 아닌 404 가 남아 있다");
 });
 
 test("F9 같은 이름 후보 라우트 — 못 보는 링크도 빈 목록(같은 몸) · 못 보는 하위 자리는 건너뛴다 · 답은 items 하나 · 시간 상한", () => {

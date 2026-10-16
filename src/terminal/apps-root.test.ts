@@ -112,7 +112,11 @@ test("G8 탐색기 root=apps — 웹 쓰기(폴더 만들기 · 이름 바꾸기
 
 test("G9 탐색기 root=apps — 봉쇄는 그 앱 폴더로(files/app-jail — 서명 주소와 같은 판정)", () => {
   const r = TF.slice(TF.indexOf("async function resolveBrowse("), TF.indexOf("// 생성폼 폴더 탐색 + 공유 폴더 브라우저"));
-  assert.match(r, /assertJailed\(base, abs, osUser, appSeg \|\| undefined\)/, "★ 앱 폴더 주소를 그 앱 폴더로 봉쇄하지 않는다");
-  const j = TF.slice(TF.indexOf("async function assertJailed("), TF.indexOf("// 파일 한 개를 응답으로"));
+  //  #4847 — 봉쇄는 jailVerdict 한 번(같은 판정에서 까닭만 하나 더 본다) · 루트 밖(그 앱 폴더 밖)이면 400 그대로.
+  assert.match(r, /const jail = await jailVerdict\(base, abs, osUser, appSeg \|\| undefined\);/, "★ 앱 폴더 주소를 그 앱 폴더로 봉쇄하지 않는다");
+  assert.match(r, /if \(jail === "outside"\) throw new HttpError\(400, "허용 경로를 벗어났습니다"\);/, "★ 그 앱 폴더 밖을 거부하지 않는다");
+  const j = TF.slice(TF.indexOf("async function jailVerdict("), TF.indexOf("// 못 봄 · 없음의 한 답"));
   assert.match(j, /app \? await isInAppFolder\(base, app, abs, probe\) : await isConfined\(base, abs, probe\)/);
+  const a = TF.slice(TF.indexOf("async function assertJailed("), TF.indexOf("async function jailVerdict("));
+  assert.match(a, /if \(\(await jailVerdict\(base, abs, osUser, app\)\) !== "ok"\) throw new HttpError\(400, "허용 경로를 벗어났습니다"\);/, "다른 자리(휴지통 · 후보 범위)의 봉쇄가 같은 판정을 지나지 않는다");
 });
