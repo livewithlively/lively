@@ -19,6 +19,14 @@
 //   W8 그린 뒤 스피너처럼 쉬지 않고 다시 그린다 → 멎기를 끝없이 기다리지 않는다(처음 그린 때부터 1.5초 상한)
 //   W9 말을 보내 열었는데 터미널이 없다(멈춘 행) → 숨겨 붙이기 없음 · 대화창(종전)
 //   W10 말을 보내 열 때 목록 행이 한 틱 늦어 터미널이 없었다 → 갱신으로 터미널이 생기면 곧바로 넘기지 않고 숨겨 붙인다 · 그린 뒤 넘긴다
+//   W11 대화가 본자리인 화면(chatHome — 리브 탭도 첫 지시를 들고 온다) · 첫 지시 → 숨겨 붙이기 없음(대화창 · 액자 없음)
+//   W12 못 간 글을 들고 온 화면(draft) · 첫 지시 → 숨겨 붙이기 없음 · 글은 입력칸에
+//   W13 관측 못 한 행(observed:false) · 첫 지시 → 숨겨 붙이기 없음
+//   W14 숨겨 붙이는 중 화면이 부서진다(destroy) → 상한이 지나도 아무 일 없음(오류 없음)
+//   W15 숨은 탭(display:none)에서 열렸다가 보인다 → 숨은 액자가 그때 대화창 자리·크기로 맞춰진다 · 그린 뒤 넘긴다
+//   W16 숨겨 붙이는 중 액자가 «끝났다»(status end) → 기다리지 않고 곧바로 터미널(그 배너를 봐야 한다)
+//   W17 사람이 이 화면 밖(다른 입력칸)에 초점을 두고 있다 → 그려서 넘기되 초점은 빼앗지 않는다
+//   W18 숨겨 붙이는 중 연결 오류(status err) → 넘기지 않되 머리줄 칩으로는 보인다
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
 //
 //  가짜는 «서버» 와 «하네스 출력» 뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을, 액자는 실제 터미널 모듈
@@ -50,7 +58,7 @@ const tm = buildSync({
 
 //  가짜 터미널 페이지 — 실제 모듈의 두 함수를 terminal.ts boot() 가 거는 자리 그대로 건다(나머지 boot 는 소켓·서버가 필요해 뺀다).
 //   주소: frame.html?session=<id>&embed=1 [&ink=<ms> 그 뒤 하네스가 그린다] [&spin=1 그린 뒤 쉬지 않고 다시 그림]
-//         [&blank=1 공백만 계속] [&gone=<ms> 그 뒤 «박스 없음»]
+//         [&blank=1 공백만 계속] [&gone=<ms> 그 뒤 «박스 없음»] [&end=<ms> 그 뒤 «끝났다»(status end)] [&err=<ms> 그 뒤 연결 오류(status err)]
 //   test-* 메시지는 이 시험이 재는 관측(때 · 크기 · 초점)이다 — 세션 화면은 모르는 종류라 버린다.
 const FRAME = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="xterm.min.css">
 <style>html,body{margin:0;height:100%;overflow:hidden}#h{position:absolute;inset:0}</style><div id="h"></div>
@@ -81,6 +89,10 @@ const FRAME = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href=
     term.write('\\x1b[?1049h\\x1b[H\\u256d\\u2500\\u2500\\u2500\\u256e\\r\\n\\u2502 Welcome to Claude Code \\u2502\\r\\n\\u2570\\u2500\\u2500\\u2500\\u256f\\r\\n> ');
     if (q.get('spin')) { var i = 0; setInterval(function () { term.write('\\x1b[6;1H' + '|/-\\\\'.charAt(i++ % 4)); }, 100); }
   }, ink);
+  var end = Number(q.get('end') || -1);
+  if (end >= 0) setTimeout(function () { say({ type: 'lively-term-status', text: '세션 종료됨', cls: 'end' }); }, end);
+  var err = Number(q.get('err') || -1);
+  if (err >= 0) setTimeout(function () { say({ type: 'lively-term-status', text: '연결 끊김 — 재연결 중…', cls: 'err' }); }, err);
   var gone = Number(q.get('gone') || -1);
   if (gone >= 0) setTimeout(function () { parent.postMessage({ type: 'lively-term-gone', id: id, restorable: true, canRestore: true }, location.origin); }, gone);
 })();
@@ -110,12 +122,14 @@ async function PAGE_MAIN() {
   });
   const row = (id, alive) => ({ id, label: "세션", live: true, alive, node: null, owned: true, stateKey: alive ? "idle" : "restorable", stateLabel: alive ? "대기" : "중단됨",
     projectId: null, projectName: "", raw: alive ? { harness: "claude", chatMode: "tmux", agentState: "idle" } : { harness: "claude", chatMode: "tmux", restorable: true } });
-  const mount = (id, frameQ, opts, alive = true) => {
+  const mount = (id, frameQ, opts, alive = true, rawExtra = null, hidden = false) => {
     const box = document.createElement("div");
-    box.style.cssText = "position:fixed;left:0;top:0;width:1000px;height:700px;display:flex;flex-direction:column;background:#fff";
+    box.style.cssText = "position:fixed;left:0;top:0;width:1000px;height:700px;flex-direction:column;background:#fff;display:" + (hidden ? "none" : "flex");
     document.body.append(box);
     const t0 = Date.now();
-    const h = SC.mountSessionChat(box, row(id, alive), Object.assign({
+    const r0 = row(id, alive);
+    if (rawExtra) Object.assign(r0.raw, rawExtra);
+    const h = SC.mountSessionChat(box, r0, Object.assign({
       terminalSrc: (t) => (t.live && t.alive ? `frame.html?session=${encodeURIComponent(t.id)}&embed=1&${frameQ}` : null),
       onResumed: () => {},
     }, opts || {}));
@@ -132,12 +146,13 @@ async function PAGE_MAIN() {
         term: wrap.classList.contains("sc-mode-term"), warm: wrap.classList.contains("sc-term-warm"),
         chatShown: !chat.hidden, termHidden: th.hidden, inert: th.hasAttribute("inert"), vis: getComputedStyle(th).visibility,
         inlineBox: !!(th.style.top || th.style.height), frame: !!fr,
+        chip: (() => { const c = box.querySelector(".sc-termstat"); return c && !c.hidden ? c.textContent : null; })(),
         focus: a && fr && a === fr ? "frame" : a && a.classList && a.classList.contains("livc-input") ? "input" : a ? a.tagName.toLowerCase() : "",
       };
     };
     const geo = () => { const c = chat.getBoundingClientRect(), t = th.getBoundingClientRect(); return { chat: [Math.round(c.top), Math.round(c.height), Math.round(c.width)], term: [Math.round(t.top), Math.round(t.height), Math.round(t.width)] }; };
     return {
-      h, snap, geo, t0, termAt: () => (termAt ? termAt - t0 : 0), fx: () => fx[id] || {},
+      box, h, snap, geo, t0, termAt: () => (termAt ? termAt - t0 : 0), fx: () => fx[id] || {},
       input: () => box.querySelector("textarea.livc-input"),
       done: () => { clearInterval(iv); try { h.destroy(); } catch (_) { /* 이미 */ } box.remove(); },
     };
@@ -252,6 +267,78 @@ async function PAGE_MAIN() {
       R.w10.termAt = v.termAt();
       v.done();
     }
+    // W11 — 대화가 본자리인 화면
+    {
+      const v = mount("box-w11", "ink=300", { firstPrompt: "첫 지시", chatHome: true });
+      await sleep(1200);
+      R.w11 = { after: v.snap(), termAt: v.termAt() };
+      v.done();
+    }
+    // W12 — 못 간 글을 들고 온 화면
+    {
+      const v = mount("box-w12", "ink=300", { firstPrompt: "첫 지시", draft: "못 간 글" });
+      await sleep(1200);
+      R.w12 = { after: v.snap(), termAt: v.termAt(), value: v.input() ? v.input().value : null };
+      v.done();
+    }
+    // W13 — 관측 못 한 행
+    {
+      const v = mount("box-w13", "ink=300", { firstPrompt: "첫 지시" }, true, { observed: false });
+      await sleep(1200);
+      R.w13 = { after: v.snap(), termAt: v.termAt() };
+      v.done();
+    }
+    // W14 — 숨겨 붙이는 중 부서진다
+    {
+      const v = mount("box-w14", "ink=2000", { firstPrompt: "첫 지시" });
+      await sleep(400);
+      R.w14 = { before: v.snap() };
+      const errs0 = pageErrors.length;
+      const wrapEl = v.box.querySelector(".sc-wrap");
+      v.done();
+      R.w14.warmAfterDestroy = wrapEl.classList.contains("sc-term-warm");   // 부서질 때 곧바로 걷혔나(상한 타이머를 남기지 않았나)
+      await sleep(13000);
+      R.w14.newErrors = pageErrors.slice(errs0);
+    }
+    // W15 — 숨은 탭에서 열렸다가 보인다
+    {
+      const v = mount("box-w15", "ink=1500", { firstPrompt: "첫 지시" }, true, null, true);
+      await sleep(400);
+      R.w15 = { hiddenSnap: v.snap() };
+      v.box.style.display = "flex";
+      await sleep(400);
+      R.w15.shownSnap = v.snap(); R.w15.geo = v.geo();
+      await sleep(2500);
+      R.w15.after = v.snap();
+      v.done();
+    }
+    // W16 — 숨겨 붙이는 중 «끝났다»
+    {
+      const v = mount("box-w16", "end=500", { firstPrompt: "첫 지시" });
+      await sleep(2200);
+      const boot = v.fx()["test-boot"];
+      R.w16 = { after: v.snap(), termAt: v.termAt(), endAt: boot ? boot.at - v.t0 + 500 : null };
+      v.done();
+    }
+    // W17 — 이 화면 밖에 초점
+    {
+      const outside = document.createElement("input");
+      outside.id = "outside-input"; outside.style.cssText = "position:fixed;right:0;bottom:0;width:120px";
+      document.body.append(outside);
+      const v = mount("box-w17", "ink=900", { firstPrompt: "첫 지시" });
+      await sleep(300);
+      outside.focus();
+      await sleep(1800);
+      R.w17 = { after: v.snap(), focusedFrame: !!v.fx()["test-focused"], active: document.activeElement === outside ? "outside" : (document.activeElement ? document.activeElement.tagName : "") };
+      v.done(); outside.remove();
+    }
+    // W18 — 숨겨 붙이는 중 연결 오류
+    {
+      const v = mount("box-w18", "err=500", { firstPrompt: "첫 지시" });
+      await sleep(2200);
+      R.w18 = { after: v.snap() };
+      v.done();
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -338,6 +425,25 @@ const w10 = R.w10 || {};
 check(!(w10.atOpen || {}).frame && !(w10.atOpen || {}).term && (w10.afterUpdate || {}).warm && (w10.afterUpdate || {}).frame && !(w10.afterUpdate || {}).term,
   "W10 열 때 터미널이 없었으면 — 갱신으로 생길 때 곧바로 넘기지 않고 숨겨 붙인다", w10);
 check((w10.after || {}).term && w10.inkAt != null && w10.termAt >= w10.inkAt, "W10 그린 뒤에 넘긴다", { inkAt: w10.inkAt, termAt: w10.termAt, after: w10.after });
+
+const noWarm = (x) => !!x && !x.term && !x.warm && !x.frame && x.chatShown;
+check(noWarm((R.w11 || {}).after) && !(R.w11 || {}).termAt, "W11 대화가 본자리인 화면(chatHome)은 첫 지시가 있어도 숨겨 붙이지 않는다", R.w11);
+check(noWarm((R.w12 || {}).after) && !(R.w12 || {}).termAt && (R.w12 || {}).value === "못 간 글", "W12 못 간 글을 들고 온 화면은 숨겨 붙이지 않는다 · 글은 입력칸에", R.w12);
+check(noWarm((R.w13 || {}).after) && !(R.w13 || {}).termAt, "W13 관측 못 한 행(observed:false)은 숨겨 붙이지 않는다", R.w13);
+const w14 = R.w14 || {};
+check((w14.before || {}).warm && w14.warmAfterDestroy === false && Array.isArray(w14.newErrors) && !w14.newErrors.length, "W14 숨겨 붙이는 중 부서지면 그 자리에서 걷힌다(상한 타이머를 남기지 않는다) · 오류 0", w14);
+const w15 = R.w15 || {};
+const g15 = w15.geo || { chat: [], term: [] };
+check((w15.hiddenSnap || {}).warm && (w15.shownSnap || {}).warm && !(w15.shownSnap || {}).term && g15.chat.length === 3 && g15.chat[1] > 100 && g15.chat.every((x, i) => near(x, g15.term[i])),
+  "W15 숨은 탭에서 열렸다 보이면 숨은 액자가 그때 대화창 자리·크기로 맞춰진다", { shown: w15.shownSnap, geo: g15 });
+check((w15.after || {}).term && !(w15.after || {}).warm, "W15 그린 뒤 넘긴다", w15.after);
+const w16 = R.w16 || {};
+check((w16.after || {}).term && !(w16.after || {}).warm && w16.endAt != null && w16.termAt >= w16.endAt - 50 && w16.termAt <= w16.endAt + 400,
+  "W16 액자가 «끝났다» 고 하면 기다리지 않고 그 자리에서 터미널로(배너를 보게)", w16);
+const w17 = R.w17 || {};
+check((w17.after || {}).term && !w17.focusedFrame && w17.active === "outside", "W17 이 화면 밖에 초점이 있으면 넘기되 초점은 빼앗지 않는다", w17);
+const w18 = R.w18 || {};
+check((w18.after || {}).warm && !(w18.after || {}).term && /재연결/.test(String((w18.after || {}).chip || "")), "W18 연결 오류는 넘기지 않되 머리줄 칩으로 보인다", w18.after);
 
 check(!(R.pageErrors || []).length, "E 페이지 오류 없음", R.pageErrors);
 console.log(`\nterm-warm-runtime: ${pass} 통과 · ${fail} 실패`);

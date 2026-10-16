@@ -760,7 +760,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   selectorsUp 만 봐서 알약이 하네스·모델·강도를 한 벌 더 썼다 — 넓은 화면에선 같은 말이 두 번, 좁은
     //   화면에선 알약이 20px 원(패딩+테두리만 남은 껍데기)으로 눌려 칩 글자 위에 겹쳤다(그 '이상한 도형').
     const said = (span: HTMLElement, sel: HTMLSelectElement): boolean => !span.hidden || !sel.hidden;
-    const onTerm = !termHost.hidden;
+    //  #4794 — «터미널을 보고 있나» 는 모드로 본다(sc-mode-term). termHost.hidden 은 숨겨 붙이는 동안(sc-term-warm)에도 거짓이다.
+    //   ⚠ `mode` 변수를 쓰지 않는다 — 그건 아래(setMode 근처)에 선언돼 마운트 중 이른 호출에서 TDZ 가 된다(wrap 은 위에 있다).
+    const onTerm = wrap.classList.contains('sc-mode-term');
     //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
     const vals: Array<{ v: string; cls?: string }> = [
       { v: said(chipProv, selHarness) ? '' : String(target.raw?.harness || '') },
@@ -1045,7 +1047,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ★ #4794 — **말을 보낸 직후엔 하네스가 화면을 그릴 때까지 대화창에 머문다**(상민님 2026-10-16: «대화창에서 프롬프트를
   //   보내면 터미널로 넘어가는데, 하네스 내용이 보이기까지 2~3초 빈 터미널이 보인다 — 내용이 보이는 순간 넘기는 게 낫다»).
   //   말을 보내 되살린 세션(reviveWithPrompt)·홈 입력창이 연 세션은 firstPrompt 를 들고 이 화면에 온다. 그때 액자를
-  //   **숨긴 채 대화창 자리에 같은 크기로** 먼저 붙여 두고(warmTerm), 액자가 «하네스가 처음 그렸다»(lively-term-painted)를
+  //   **숨긴 채 대화창 자리에 같은 크기로** 먼저 붙여 두고(startTermWarm), 액자가 «하네스가 처음 그렸다»(lively-term-painted)를
   //   알리면 그때 터미널로 넘긴다. 크기를 미리 맞추는 이유: display:none 인 액자는 fit 이 안 돼 크기를 못 알리고
   //   (terminal.ts canReportSize), 넘기는 순간 크기가 바뀌면 하네스가 화면을 다시 그린다.
   //   신호가 끝내 안 오면(옛 액자 · 하네스가 안 뜸) 상한 뒤 종전처럼 넘긴다 — 터미널에서 무슨 일인지 보이게.
@@ -1083,7 +1085,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termHost.style.height = chatHost.offsetHeight + 'px';
   }
   /** #4794 터미널 액자를 숨긴 채 먼저 붙인다(termWarm 머리말). 대화창은 그대로 보인다. */
-  function warmTerm(): void {
+  function startTermWarm(): void {
     if (termWarm || destroyed || !hasTerm()) return;
     ensureTermFrame();
     if (!termFrame) return;
@@ -1098,7 +1100,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     placeWarmTerm();
     termHost.hidden = false;
   }
-  /** #4794 숨겨 붙이던 판을 끝낸다. show = 터미널로 넘길 때가 됐다(하네스가 그렸다 · 상한). */
+  /** #4794 터미널에 초점을 준다 — 단 사람이 **이 화면 밖**(사이드바 검색 · [⋯] 설정 창 등)에 초점을 두고 있으면 빼앗지 않는다.
+   *  넘기는 때가 마운트 직후가 아니라 하네스가 그린 때(몇 초 뒤)라, 그사이 사람은 다른 데서 무언가를 치고 있을 수 있다. */
+  function focusTermIfHere(): void {
+    const a = document.activeElement;
+    if (!a || a === document.body || wrap.contains(a)) termSend('focus');
+  }
+  /** #4794 숨겨 붙이던 판을 끝낸다. show = 터미널로 넘길 때가 됐다(하네스가 그렸다 · 상한 · 액자가 끝났다고 함). */
   function endTermWarm(show: boolean): void {
     const w = termWarm;
     if (!w) return;
@@ -1112,9 +1120,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   자동 되돌리기(update)가 쓰던 화면을 터미널로 가져간다. 터미널은 붙은 채 [보기]로 언제든 열린다.
     const composing = document.activeElement === view.input && !!view.input.value.trim();
     if (show && composing) modeChosen = true;
-    if (show && !destroyed && !modeChosen && mode === 'chat' && hasTerm()) {
+    //  대화가 본자리인 세션(chatHome)이면 넘기지 않는다 — 열 때는 행이 얇아 몰랐다가 그새 알게 됐을 수 있다(update 의 되돌리기와 같은 축).
+    if (show && !destroyed && !modeChosen && mode === 'chat' && hasTerm() && !chatHome()) {
       setMode('term');
-      termSend('focus');   // 처음부터 터미널로 연 화면처럼 바로 칠 수 있게 — 숨은 동안엔 액자가 스스로 초점을 안 잡았다(frameHiddenNow)
+      focusTermIfHere();   // 처음부터 터미널로 연 화면처럼 바로 칠 수 있게 — 숨은 동안엔 액자가 스스로 초점을 안 잡았다(frameHiddenNow)
       return;
     }
     termHost.hidden = mode !== 'term';
@@ -1164,7 +1173,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
     //  #4794 — 숨어서 붙은 액자는 붙을 때 제 터미널에 초점을 안 줬다(terminal.ts frameHiddenNow). 보이게 되는 지금 준다 —
     //   처음부터 터미널로 연 화면과 같게(그때는 액자가 붙자마자 스스로 잡는다).
-    if (m === 'term' && wasWarm) termSend('focus');
+    if (m === 'term' && wasWarm) focusTermIfHere();
   }
 
   /**
@@ -1319,8 +1328,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c.cmd, c.text); }
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
-    termStatusEl.hidden = termHost.hidden || !!termWarm || !termStatusEl.textContent;   // #4794 숨겨 붙이는 동안은 대화창 화면이다
-    head.dataset.term = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : 'wait';
+    const stCls = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : '';
+    //  #4794 — 숨겨 붙이는 동안 액자가 «끝났다»(end — 종료 배너)를 말하면 기다리지 않고 터미널로 넘긴다(그 배너를 봐야 한다 · 종전 화면).
+    //   연결 오류(err — 재연결 중 · 연결할 수 없음)는 넘기지 않되 머리줄 칩으로는 보인다 — 숨긴 채 12초를 침묵하지 않게.
+    //   (재연결은 시도마다 err 를 다시 붙이므로 err 로 넘기면 한 번의 끊김에도 빈 터미널이 뜬다.)
+    if (termWarm && stCls === 'end') endTermWarm(true);
+    termStatusEl.hidden = termHost.hidden || (!!termWarm && stCls !== 'err') || !termStatusEl.textContent;
+    head.dataset.term = stCls || 'wait';
     //  #4135 — 프레임이 «이 pane 에서 지금 무엇이 도는가» 를 함께 보낸다(tmux 가 말한 포그라운드 명령).
     //   목록 행의 모드 값은 낡을 수 있어서(노드 스냅샷이 옛 번들이면 app-server 라고 말한다) 셸 안내줄이
     //   멀쩡히 코덱스가 도는 터미널 위에 거짓 경고를 띄웠다(원준님 실측 2026-09-25). 이 값이 그걸 이긴다.
@@ -2766,7 +2780,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chatFirstView = chatHome() || target.raw?.observed === false || draftBack;
   const warmFirst = !chatFirstView && !!firstPrompt;
   setMode(chatFirstView || warmFirst ? 'chat' : 'term');
-  if (warmFirst) { warmOwed = true; warmTerm(); }   // 터미널이 아직 없으면 warmTerm 은 그냥 돌아온다 — update() 가 생길 때 건다
+  if (warmFirst) { warmOwed = true; startTermWarm(); }   // 터미널이 아직 없으면 그냥 돌아온다 — update() 가 생길 때 건다
 
   void open();
   //  open() 은 시작하자마자 안내를 비운다 — 그 뒤에 적어야 남는다.
@@ -2812,7 +2826,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  ⚠ #3847 — 다만 프레임이 «박스 없음» 을 **두 번** 말한 뒤에는 자동으로 되돌리지 않는다(termGoneN 머리말).
       //  ⚠ #4794 — 숨겨 붙이는 동안(termWarm)은 여기서 넘기지 않는다 — 넘기는 때는 액자가 «그렸다» 고 알릴 때다.
       //   말을 보내 연 화면인데 열 때 터미널이 없었으면(목록 한 틱 지연) 곧바로 넘기지 않고 지금 숨겨 붙인다(warmOwed).
-      if (warmOwed && !modeChosen && mode === 'chat' && hasTerm()) warmTerm();
+      if (termWarm && chatHome()) endTermWarm(false);
+      if (warmOwed && !modeChosen && mode === 'chat' && !chatHome() && hasTerm()) startTermWarm();
       if (!termWarm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.

@@ -7,7 +7,7 @@
 //  그래서 한 자리로 모으고, 치우기를 셋으로 나눈다:
 //   ① 파이프를 쥔 프로세스가 전부 끝나기를 잠깐 기다린다(`close` — 보조 프로세스도 파이프를 물려받아 쥔다)
 //   ② 재시도하며 지운다   ③ 그래도 못 지우면 알리기만 한다(임시 디렉터리다 — 테스트를 실패시킬 이유가 없다).
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -62,9 +62,12 @@ async function startStatic(dir) {
     let name = "";
     try { name = path.basename(decodeURIComponent(new URL(q.url || "/", "http://x").pathname)); } catch (_) { name = ""; }
     const f = name ? path.join(dir, name) : "";
-    if (!f || !existsSync(f)) { r.writeHead(404); r.end(); return; }
+    //  파일만 내준다 — 같은 디렉터리에 크롬 프로필(profile/)이 있어 그 이름을 물으면 readFileSync 가 EISDIR 로 던진다(요청 콜백 안이라 시험 프로세스가 죽는다).
+    let body = null;
+    try { if (f && statSync(f).isFile()) body = readFileSync(f); } catch (_) { body = null; }
+    if (!body) { r.writeHead(404); r.end(); return; }
     r.writeHead(200, { "content-type": TYPES[path.extname(f)] || "application/octet-stream", "cache-control": "no-store" });
-    r.end(readFileSync(f));
+    r.end(body);
   });
   await new Promise((res, rej) => { srv.once("error", rej); srv.listen(0, "127.0.0.1", res); });
   return {

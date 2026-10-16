@@ -5,6 +5,7 @@
 //   U1 빈 글 · 공백·줄바꿈만 · NBSP 만 → «안 그렸다»      U2 글자 하나라도 → «그렸다»(상자 선 글자도)
 //   U3 처음 그린 직후 → 멎기를 기다린다(0.3초)              U4 상한까지 0.3초 미만 남음 → 남은 만큼만
 //   U5 정확히 상한 · 상한 지남 → 0(음수 아님)              U6 액자 밖(액자 요소를 못 읽음) → «숨지 않았다»(종전처럼 초점)
+//   U7 액자 요소가 inert 조상 아래 · visibility:hidden → «숨었다» · 둘 다 아니면 «보인다»
 //  배선(무엇이 무엇을 부르는가)은 소스 텍스트로 본다 — 순수 함수 시험으로는 못 잡는 자리(terminal-restore-gate 와 같은 규율).
 // 실행: npm run build && node scripts/term-first-paint.test.mjs
 import assert from "node:assert/strict";
@@ -61,11 +62,31 @@ assert.equal(frameHiddenNow(), false, "frameElement 를 읽다 던진다");
 delete globalThis.frameElement;
 ok("U6 액자 밖·못 읽는 액자 → 숨지 않았다(종전 동작)");
 
+// U7 — 숨겨 붙인 액자(세션 화면의 .sc-term-warm: inert · visibility:hidden)는 «숨었다»
+const fakeFrame = (inertAncestor, vis) => ({ closest: (sel) => (sel === "[inert]" && inertAncestor ? {} : null), __vis: vis });
+globalThis.getComputedStyle = (el) => ({ visibility: el.__vis });
+try {
+  globalThis.frameElement = fakeFrame(true, "visible");
+  assert.equal(frameHiddenNow(), true, "inert 조상 아래 → 숨었다");
+  globalThis.frameElement = fakeFrame(false, "hidden");
+  assert.equal(frameHiddenNow(), true, "visibility:hidden → 숨었다");
+  globalThis.frameElement = fakeFrame(false, "visible");
+  assert.equal(frameHiddenNow(), false, "둘 다 아니면 → 보인다");
+} finally { delete globalThis.frameElement; delete globalThis.getComputedStyle; }
+ok("U7 inert 조상 · visibility:hidden 이면 숨었다 · 아니면 보인다");
+
 // 배선 — boot() 가 터미널을 만든 뒤 신호를 걸고, onopen 의 초점은 숨은 액자에서 멈춘다
 const boot = src.slice(src.indexOf("export async function boot()"));
 const at = (s) => boot.indexOf(s);
 assert.ok(at("term = new Terminal(") > 0 && at("watchFirstPaint();") > at("term = new Terminal("), "boot() 가 터미널을 만든 뒤 watchFirstPaint() 를 건다");
 assert.match(src, /if \(!glassIdle && !frameHiddenNow\(\)\) term\.focus\(\);/, "onopen 의 첫 초점이 숨은 액자에서 멈춘다");
+//  onopen 안의 **모든** 초점 호출이 그 가드를 거친다 — 나중에 한 줄 더 붙어도 숨은 액자가 초점을 가져가면 안 된다.
+{
+  const open = src.slice(src.indexOf("sock.onopen = () => {"), src.indexOf("sock.onmessage = (e) => {"));
+  const focusLines = open.split("\n").filter((l) => /term\.focus\(\)/.test(l) && !/^\s*\/\//.test(l));
+  assert.ok(open.length > 200 && focusLines.length >= 1, "onopen 본문을 못 찾았다(배선 시험이 헛돈다)");
+  assert.ok(focusLines.every((l) => /!frameHiddenNow\(\)/.test(l)), "onopen 에 숨은 액자 가드 없는 term.focus() 가 있다: " + focusLines.join(" | "));
+}
 assert.match(src, /postMessage\(\{ type: 'lively-term-painted', id: SESSION_ID \}, location\.origin\)/, "신호는 같은 출처의 부모에게 세션 id 를 실어 간다");
 assert.match(src, /if \(!\(EMBED && window\.parent !== window\)\) return;\s*\n\s*let inkAt = 0;/, "신호는 액자 안(embed=1)에서만");
 ok("배선 — boot 순서 · onopen 초점 가드 · 신호 모양(같은 출처 · 세션 id) · 액자 안에서만");
