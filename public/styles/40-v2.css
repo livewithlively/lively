@@ -1620,10 +1620,12 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-ico--new { width: 60px; height: 60px; border-radius: 16px; border: 2px dashed var(--blue); color: var(--blue); background: rgba(var(--tint-ink), .06); }
 .v2-pad-item--new:hover .v2-pad-ico--new { background: var(--blue); color: #fff; border-style: solid; }
 .v2-pad-item--new b { color: var(--blue); }
-.v2-studio { position: fixed; inset: 0; z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
+/* body 에 붙어 창 맨 윗줄을 덮는 층은 안쪽 위를 --v2-desk-tb 만큼 비운다 — 데스크톱 앱의 창 끌기 · 창 단추 자리(web/v2/titlebar.ts announceDeskTitlebar · #4480).
+   층은 그대로 창 전체를 덮고(열린 동안 그 줄의 탭 · 검색칸은 눌리지 않는다) 머리줄 단추만 그 줄 아래로 내려온다. 브라우저에선 값이 없어 0 이다. */
+.v2-studio { position: fixed; inset: 0; padding-top: var(--v2-desk-tb, 0px); z-index: 86; background: var(--gray-bg-2, #F6F8FB); display: flex; flex-direction: column; min-width: 0; }
 /* 앱빌더 글은 낱말 단위로 줄을 바꾼다(「확인해주세\n요.」 처럼 끊기지 않게 · 원준 2026-10-16) — 긴 영문 · 주소만 어디서든 끊는다 */
 .v2-studio, .v2-review-bar, .v2-wb { word-break: keep-all; overflow-wrap: break-word; }
-.v2-studio--in { position: absolute; z-index: 5; }   /* 앱빌더 안의 자리(#4632) — 창을 덮지 않고 가운데 칸을 채운다 */
+.v2-studio--in { position: absolute; z-index: 5; padding-top: 0; }   /* 앱빌더 안의 자리(#4632) — 창을 덮지 않고 가운데 칸을 채운다(창 맨 윗줄에 닿지 않으니 비우지 않는다) */
 .v2-studio-crumb { font-size: 12.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); white-space: nowrap; }
 .v2-studio-top--build .v2-studio-crumb { color: rgba(255, 255, 255, .85); }
 .v2-studio-top { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -2029,7 +2031,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 }
 
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
-.v2-appui-ov { position: fixed; inset: 0; z-index: 88; background: var(--bg); }
+.v2-appui-ov { position: fixed; inset: 0; padding-top: var(--v2-desk-tb, 0px); z-index: 88; background: var(--bg); }   /* 창 맨 윗줄 비우기 — .v2-studio 위 설명(#4480) */
 /* 크게 보기 = 화면 가득 — 사이드바도 여백도 없이 앱만(#4592 · 원준 2026-10-12 «완전 전체화면으로»). 머리줄은 한 줄 얇게(이름 · 닫기) */
 .v2-appui { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg); }
 .v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--line); flex: none; }
@@ -3142,7 +3144,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 
 /* ── ③ 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 클로드 아티팩트처럼 · 피그마 보드처럼 · 선택 · 핀 · 영역») ── */
 .v2-wb:focus { outline: none; }
-.v2-wb { position: fixed; inset: 0; z-index: 140; display: flex; flex-direction: column; background: var(--bg); color: var(--ink); }
+.v2-wb { position: fixed; inset: 0; padding-top: var(--v2-desk-tb, 0px); z-index: 140; display: flex; flex-direction: column; background: var(--bg); color: var(--ink); }   /* 창 맨 윗줄 비우기 — .v2-studio 위 설명(#4480) */
 .v2-wb-head { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--line); background: var(--bg); flex-wrap: wrap; }
 .v2-wb-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .v2-wb-name b { font-size: 15px; font-weight: 800; white-space: nowrap; }

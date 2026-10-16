@@ -67,7 +67,7 @@ import { projectPageHref, projectPageId } from '../lib/proj-page.js';   // #3870
 import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 배선(표 data-ctx 를 읽는다)
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
-import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
+import { announceDeskTitlebar, mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { dismissAppUi, mountAppUiFrame, openAppUi } from './app-ui.js';
 import { ensureAppGrant } from './app-session.js';
 import { appGrantReturn } from '../lib/app-address.js';   // #4482 동의 경유에서 돌아갈 앱 주소(열린 리다이렉트 방지)
@@ -377,6 +377,9 @@ export async function bootV2(): Promise<void> {
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
     asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
+  //  #4480 데스크톱 창 맨 윗줄 높이를 알린다 — body 에 붙는 창 전체 층이 그만큼 안쪽 위를 비운다(titlebar.ts announceDeskTitlebar).
+  //   팝아웃(SOLO)이나 줄을 못 가져간 창은 그 자리에 preload 띠가 남지만 높이는 같다. 가져가면 mountTitlebar 가 한 번 더 부른다(같은 값).
+  announceDeskTitlebar();
   // 모바일 크롬(#1777) — 바는 그리드 맨 앞, 배경막은 맨 뒤. 데스크톱에선 둘 다 display:none 이라 그리드 열 순서에 안 낀다.
   if (!SOLO) {
     mobile = mountMobileChrome(root, sideEl!, asideEl!);

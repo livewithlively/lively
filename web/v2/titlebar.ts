@@ -36,6 +36,22 @@ interface DesktopBridge {
   claimTitlebar?: (opts?: { selector?: string }) => boolean;
 }
 const desk = (): DesktopBridge | null => ((window as any).livelyDesktop as DesktopBridge) || null;
+/** 줄 높이 — preload 가 알려 준 값(web-shell TITLEBAR_HEIGHT). 셸 줄(--v2-tb-h)과 창 전체 층(--v2-desk-tb)이 같은 값을 쓴다. */
+const barHeight = (tb: { height?: number }): number => Math.max(24, Math.round(Number(tb.height) || 36));
+
+/**
+ * 데스크톱 frameless 창의 맨 윗줄 높이를 `:root` 의 `--v2-desk-tb` 로 알린다(#4480). 규칙: body 에 붙어 창 맨 윗줄을 덮는 층은
+ *  안쪽 위를 이 값만큼 비운다(`padding-top: var(--v2-desk-tb, 0px)` — 크게 보기 · 그림 크게 보기 · 화면 흐름 보드 · 오른쪽 시트 · 앱 만들기 창).
+ *  그 줄은 창 끌기 자리이고 윈도우는 오른쪽에 네이티브 창 단추를 얹는다. 끌기 영역은 덮개를 보지 않으므로 층의 머리줄 단추가 그 줄 안에
+ *  있으면 눌리지 않는다(2026-10-16 상민님 실측 — scripts/desk-titlebar-overlays-runtime.test.mjs).
+ *  `--v2-tb-h` 를 쓰지 않는 까닭: 그 값은 #v2-root 안에서만 정해지고(body 층은 그 밖이다) 브라우저 줄(42px)에도 붙는다.
+ *  셸이 줄을 가져갔든(mountTitlebar) 팝아웃처럼 preload 띠가 남았든 높이는 같다 — 브라우저 · 리눅스(frameless 아님)에선 아무것도 안 한다.
+ */
+export function announceDeskTitlebar(): void {
+  const tb = desk()?.titlebar;
+  if (!tb) return;
+  document.documentElement.style.setProperty('--v2-desk-tb', barHeight(tb) + 'px');
+}
 
 /**
  * 창 맨 윗줄을 셸이 가져간다. 데스크톱 frameless 창이 아니면 **null** — 웹(브라우저)에서는 아무 일도 일어나지 않고
@@ -49,11 +65,12 @@ export function mountTitlebar(root: HTMLElement): Titlebar | null {
   //  색 보고(Windows WCO 버튼 색)는 preload 가 계속 맡되, 이제 **이 줄의 배경색**을 읽게 선택자를 넘긴다.
   if (!d.claimTitlebar({ selector: '.v2-topbar' })) return null;
 
-  const h = Math.max(24, Math.round(Number(tb.height) || 36));
+  const h = barHeight(tb);
   const host = el('div', { class: 'v2-topbar' },
     el('div', { class: 'v2-tb-grip', 'aria-hidden': 'true' })) as HTMLElement;
   root.classList.add('has-topbar');
   root.style.setProperty('--v2-tb-h', h + 'px');
+  announceDeskTitlebar();
   root.prepend(host);
 
   // ── 창 버튼이 먹는 좌·우 폭 ──
