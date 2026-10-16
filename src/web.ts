@@ -39,7 +39,7 @@ import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
-import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트
+import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트(redeem · me · page · #4482 lively)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 

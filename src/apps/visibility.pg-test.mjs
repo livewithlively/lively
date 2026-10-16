@@ -25,6 +25,8 @@
 //      그 밖의 구성원 403 · 못 보는 앱 404 · 빈 앱 409 · 빈 행이면 막힘 · 다른 연결이 표를 쥐면 짧게 기다리고 «다 못 봄» · 미리 보기 == 실제 공개 ·
 //      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404 · 전체 시간 상한(E9c) · 설치 락이 바쁘면 짧게(E17) ·
 //      정리할 표 세기도 짧게(E18) · 선언에서만 뺀 칸은 «알아 둘 것» 만(E15b) · 되돌려 공개의 실제 결과 == 미리 본 것(E16)
+//  B24 #4482 /_lively/* 는 주소의 판 — 초안 주인도 공개 주소면 공개 판의 표 · 초안 주소면 초안의 표 · 다리는 사람의 판 · 남의 초안 주소 404 ·
+//      동의 없음 code consent_required · 빈도는 사람마다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -75,7 +77,7 @@ for (const [sid, owner] of [["box-alice-1", "pgt-alice"], ["box-alice-2", "pgt-a
 }
 const manifest = (id, o = {}) => JSON.stringify({
   id, title: o.title ?? "회의 안건", version: o.version ?? "0.1.0",
-  permissions: { scopes: [], tools: ["store_insert", "store_query"] },
+  permissions: { scopes: [], tools: o.tools ?? ["store_insert", "store_query"] },
   data: { tables: (o.tables ?? ["notes"]).map((name) => ({ name, columns: [{ name: "text", type: "text" }] })) },
   ui: { pages: [{ key: "main", title: o.title ?? "회의 안건", entry: "ui/index.html" }] },
   ...(o.studio ? { studio: o.studio } : {}),
@@ -813,6 +815,57 @@ try {
     chk("B23 E12 기본 앱 — 깨는 초안(logs.msg 지우기)이 걸려 있어도 할 일 0 · 막힘 0(같은 초안이 일반 앱일 땐 할 일이 있었다)",
       e12before.changes.some((l) => l.startsWith("logs 표: msg 칸 지우기")) && e12.changes.length === 0 && e12.blocked.length === 0 && e12.tables === null && (await row(PV)).draft_by === "pgt-alice",
       JSON.stringify({ e12before: e12before.changes, e12 }));
+  }
+
+  // B24 #4482 앱 주소의 같은 주소 API(/_lively/*) — 선언(표 · 도구)은 사람이 아니라 **주소의 판** · 동의 없음은 code consent_required ·
+  //  빈도는 사람마다(격리 리뷰 3 — 순수 판정 V1~V5 가 실제 표 · 도구 응답에 착지하는지).
+  {
+    const { runAppTool } = await import(`${D}/capabilities/app-tool-call.js`);
+    const { memberPrincipal } = await import(`${D}/apps/app-front-api.js`);
+    const AID = "addr-view-4482";
+    const T24 = ["store_insert", "store_query", "store_tables", "store_sql"];
+    await call("app_save", { files: files(AID, "<p>a1 공개</p>", { tables: ["pubt"], tools: T24 }), note: "a1" }, alice);
+    await call("app_visibility_set", { app_id: AID, visibility: "all" }, alice);
+    const sd = await call("app_save", { files: files(AID, "<p>a2 초안</p>", { tables: ["draftt"], tools: T24 }), note: "a2 — pubt 뺌 · draftt 더함" }, alice);
+    await call("me_app_grant", { app_id: AID }, alice);
+    const memA = (await q(`SELECT * FROM org_member WHERE id='pgt-alice'`))[0];
+    const memB = (await q(`SELECT * FROM org_member WHERE id='pgt-bob'`))[0];
+    const viaAddr = (m, v, name, args) => runAppTool(memberPrincipal(m, v), AID, name, args, { source: "app-front", address: v });
+    const viaBridge = (u, name, args) => runAppTool(u, AID, name, args, { source: "app-ui" });
+    const got = {
+      pubPubT: await status(viaAddr(memA, "pub", "store_query", { table: "pubt" })),
+      pubDraftT: await status(viaAddr(memA, "pub", "store_query", { table: "draftt" })),
+      draftDraftT: await status(viaAddr(memA, "draft", "store_query", { table: "draftt" })),
+      draftPubT: await status(viaAddr(memA, "draft", "store_query", { table: "pubt" })),
+      bridgeDraftT: await status(viaBridge(alice, "store_query", { table: "draftt" })),
+      bridgePubT: await status(viaBridge(alice, "store_query", { table: "pubt" })),
+      tablesPub: (await viaAddr(memA, "pub", "store_tables", {})).tables.map((t) => t.name).join(),
+      tablesDraft: (await viaAddr(memA, "draft", "store_tables", {})).tables.map((t) => t.name).join(),
+      sqlPub: await status(viaAddr(memA, "pub", "store_sql", { sql: "SELECT count(*)::int AS n FROM pubt" })),
+      sqlPubDraftT: await status(viaAddr(memA, "pub", "store_sql", { sql: "SELECT count(*)::int AS n FROM draftt" })),
+      bobDraftAddr: await status(viaAddr(memB, "draft", "store_query", { table: "draftt" })),
+    };
+    const noGrant = await errOf(viaAddr(memB, "pub", "store_query", { table: "pubt" }));
+    chk("B24 /_lively/* — 초안 주인도 공개 주소면 공개 판의 표(pubt 됨 · draftt 404) · 초안 주소면 초안의 표 · 다리(주소 없음)는 사람의 판(초안) · 남의 초안 주소 404 · 동의 없음 403 code consent_required",
+      sd.state === "draft" && got.pubPubT === 200 && got.pubDraftT === 404 && got.draftDraftT === 200 && got.draftPubT === 404
+        && got.bridgeDraftT === 200 && got.bridgePubT === 404 && got.tablesPub === "pubt" && got.tablesDraft === "draftt"
+        && got.sqlPub === 200 && got.sqlPubDraftT !== 200 && got.bobDraftAddr === 404
+        && noGrant?.status === 403 && noGrant?.body?.code === "consent_required",
+      JSON.stringify({ sd: sd.state, got, noGrant: { status: noGrant?.status, body: noGrant?.body, msg: noGrant?.message } }));
+    //  빈도 — 주소로 들어온 호출은 사람마다 센다: 앨리스가 제 몫을 다 써도 밥은 된다(앱 하나에 한 통이면 한 사람이 모두를 막는다).
+    //   시계는 시험이 쥔다 — 실제 시계면 호출이 느린 CI 에서 버킷이 그새 다시 차 429 가 안 날 수 있다(격리 리뷰). 사람 순간 3 · 거의 안 참.
+    await call("me_app_grant", { app_id: AID }, bob);
+    const { resetAppSqlLimits } = await import(`${D}/apps/app-sql-exec.js`);
+    const clock = 5_000_000;
+    resetAppSqlLimits({ LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "1000" }, () => clock);
+    let rate;
+    try {
+      const a = [];
+      for (let i = 0; i < 4; i++) a.push(await status(viaAddr(memA, "pub", "store_query", { table: "pubt" })));
+      rate = { a, bob: await status(viaAddr(memB, "pub", "store_query", { table: "pubt" })) };
+    } finally { resetAppSqlLimits(process.env); }
+    chk("B24 빈도 — /_lively/* 는 사람마다: 앨리스가 순간 3 을 다 쓰면 넷째는 429 · 그 뒤에도 밥은 200",
+      JSON.stringify(rate.a) === JSON.stringify([200, 200, 200, 429]) && rate.bob === 200, JSON.stringify(rate));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

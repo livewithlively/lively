@@ -19,7 +19,7 @@ import { onAppEvent, type LiveAppEvent } from './live-sync.js';
 import { ctxMenu, pnIcon } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versions.js';
-import { bandText, draftTextFor, sessAppMenuRows } from '../lib/app-menu.js';
+import { bandText, draftTextFor, isOwnWriteSource, sessAppMenuRows } from '../lib/app-menu.js';
 import { builtinAppIcon } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { verName } from '../lib/studio-flow.js';
@@ -312,6 +312,8 @@ export function sessAppPart(ctx: PartCtx): Part {
       versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }, afterRevert); },
       original: () => { void revertToOrigin(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); },
       big: () => { openAppBig(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },   // 새 탭에서 화면 가득(폰은 그 자리에서)
+      //  #4482 맨 앱 주소를 새 탭으로 — 감싸는 라이블리 화면이 없어 세션 기능(chat.send · ui.*)은 빠지고, 표 · 설정 · 앱 폴더는 /_lively/* 로 돈다.
+      ...(frame?.addressUrl() ? { tab: () => { const u = frame.addressUrl(); if (u) window.open(u, '_blank', 'noopener'); } } : {}),
       detach: () => { void detachAppFromSession(s, cur.app_id).then((ok) => { if (ok) toast(`「${cur.title}」을(를) 이 세션에서 뗐어요 — 앱의 데이터는 그대로 남아요.`); }); },
     });
     //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.
@@ -405,7 +407,10 @@ export function sessAppPart(ctx: PartCtx): Part {
       m.frame.notify('ui/notifications/data-changed', { table: ev.table ?? null, op: ev.op ?? null, source: ev.source ?? null, session: ev.session ?? null });
       return;
     }
-    if (ev.source === 'app-ui') return;          // 앱 화면이 제 손으로 쓴 것 — 다시 불러오면 쓰던 화면이 처음으로 돌아간다
+    //  앱 화면이 제 손으로 쓴 것 — 다시 불러오면 쓰던 화면이 처음으로 돌아간다. #4482 앱 주소의 같은 주소 API(/_lively/*)로 쓴 것('app-front')도
+    //   그렇다: SDK 없이 fetch 만 쓰는 앱이 쓸 때마다(시작 때 쓰는 앱이면 계속) 다시 불러와졌다(격리 리뷰). 다른 자리(새 탭)에서 쓴 것까지 따라오게
+    //   하려면 앱이 lively.store.onChange 를 건다 — 그때는 위에서 사건을 그대로 받는다.
+    if (isOwnWriteSource(ev.source)) return;
     if (reloadTimer) window.clearTimeout(reloadTimer);
     reloadTimer = window.setTimeout(() => { reloadTimer = 0; mounted?.frame?.reload(); }, RELOAD_DEBOUNCE_MS);
   });

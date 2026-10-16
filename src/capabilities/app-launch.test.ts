@@ -2,7 +2,8 @@
 //  이게 틀리면: 앱 토큰(앱 코드)이 다른 앱의 주소 코드를 받아 앱이 앱을 열거나, 정적·에이전트 신원이 사람 자리로 앱에 들어가거나,
 //   「나만」 앱 · 꺼진 앱 · 초안이 앱 주소로 새거나, 주소 안 경로 검사가 빠져 로그인 뒤 다른 사이트로 보내게 된다.
 import assert from "node:assert/strict";
-import { launchAppFor, type LaunchDeps } from "./app-launch.js";
+import { appAddressUrlFor, launchAppFor, type LaunchDeps } from "./app-launch.js";
+import { withTenant } from "../org/tenant-context.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { MintLaunchInput } from "../apps/app-launch-store.js";
@@ -158,6 +159,41 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   assert.equal(mints.length, 0, "코드를 만들지 않는다");
   assert.ok(!String(err?.message).includes("ECONNREFUSED") && !String(err?.message).includes("lively_app_x"), "DB 오류 글(주소 · 역할)을 내보이지 않는다");
   ok("F7 공개 판 화면을 못 읽으면 503 · 발급 0 · 까닭은 로그로만");
+}
+
+// ── F8 #4482 장치 권한 — 그 판이 선언한 것(web.devices)만 · 모르는 값은 버린다 · 공개 판을 보는 사람은 공개 판의 선언 ──
+//  이게 틀리면: 선언하지 않은 앱의 iframe 에 마이크 · 카메라가 위임되거나(한 앱에 준 권한을 다른 앱이 몰래 씀), 공개 판을 보는 사람의 iframe 에
+//   남의 초안이 새로 선언한 장치가 위임된다.
+{
+  const { d } = deps({
+    getApp: async (id) => (id === "dev" ? app("dev", { manifest: { web: { devices: ["microphone", "usb", "camera"] } } })
+      : id === "plain" ? app("plain") : id === "drafted" ? app("drafted", { visibility: "all", draft_by: "carol", published_version_no: 3, manifest: { web: { devices: ["camera"] } } }) : null),
+    getMember: async (id) => ({ id, kind: "human", state: "active" }),
+    getAppVersion: async () => ({ manifest: { ui: { pages: [{ key: "main", title: "m", entry: "ui/index.html" }] }, web: { devices: ["geolocation"] } }, files: [{ path: "ui/index.html", content: "<p>" }] }),
+  });
+  assert.deepEqual((await launchAppFor({ app_id: "dev" }, user(), d)).devices, ["microphone", "camera"], "선언한 것만 · 모르는 값(usb) 버림 · 순서는 정해진 표");
+  assert.deepEqual((await launchAppFor({ app_id: "plain" }, user(), d)).devices, [], "선언 없음 → 없음");
+  assert.deepEqual((await launchAppFor({ app_id: "drafted" }, user({ userId: "alice" }), d)).devices, ["geolocation"], "공개 판을 보는 사람 — 공개 판의 선언");
+  assert.deepEqual((await launchAppFor({ app_id: "drafted" }, user({ userId: "carol" }), d)).devices, ["camera"], "초안 주인(초안 주소) — 초안의 선언");
+  ok("F8 장치 권한 — 그 판의 선언만");
+}
+
+// ── F9 #4482 맨 앱 주소(새 탭에서 열기) — 꺼짐이면 null · 보는 판의 주소 · 화면 키 ──
+{
+  const t = { id: "t-1", slug: "lively-46e3" } as never;
+  const a = app("deck-edit", { visibility: "all", owner_member: "alice", draft_by: null, published_version_no: null });
+  assert.equal(appAddressUrlFor(a, { userId: "alice" }, null, ENV), null, "테넌트 컨텍스트 없음 → null");
+  withTenant(t, () => {
+    assert.equal(appAddressUrlFor(a, { userId: "alice" }, null, ENV), "https://deck-edit-lively-46e3.lvly.app/");
+    assert.equal(appAddressUrlFor(a, { userId: "alice" }, "settings", ENV), "https://deck-edit-lively-46e3.lvly.app/?page=settings");
+    const dr = app("deck-edit", { visibility: "all", owner_member: "alice", draft_by: "carol", published_version_no: 2 });
+    assert.equal(appAddressUrlFor(dr, { userId: "carol" }, null, ENV), "https://deck-edit-lively-46e3-draft.lvly.app/", "초안 주인 — 보는 판(초안)의 주소");
+    assert.equal(appAddressUrlFor(dr, { userId: "alice" }, null, ENV), "https://deck-edit-lively-46e3.lvly.app/", "나머지 — 공개 주소");
+    assert.equal(appAddressUrlFor(a, { userId: "alice" }, null, { LIVELY_APP_DOMAIN: "lvly.app" } as NodeJS.ProcessEnv), null, "매니지드 아님 → null");
+    assert.equal(appAddressUrlFor(a, { userId: "alice" }, null, { ...ENV, LIVELY_APP_DOMAIN_TENANTS: "other-1a2b" } as NodeJS.ProcessEnv), null, "스위치 밖 → null");
+    assert.equal(appAddressUrlFor(app(`a${"b".repeat(40)}`), { userId: "alice" }, null, ENV), null, "주소를 못 만드는 이름 → null");
+  });
+  ok("F9 맨 앱 주소 — 꺼짐 null · 보는 판 · 화면 키");
 }
 
 console.log(`\n${pass} passed`);

@@ -13,8 +13,10 @@
 //        → 200 text/html(v1 화면 + SDK 런타임 [+ 탐침]) · CSP 는 헤더 · 경로는 `/` 뿐(?page=<키>), 나머지는 404
 //        → #4481 여러 파일 앱(보는 판의 매니페스트에 web.root): 그 판 묶음의 파일을 그 경로로(규칙은 app-front-files.ts) · HTML 문서엔 SDK 런타임 ·
 //          ETag(내용 지문) · 304 · gzip · 지문 이름은 1년 캐시
+//   *    /api/app-front/lively?path=<경로+쿼리>                     (op=act · #4482 v2-3)
+//        → 앱 주소의 같은 주소 API `/_lively/<경로>`(store · tools · prefs) — 경로 · 판정 · 답은 app-front-api.ts
 //  ⓘ 매번 구성원(활성 · 사람)과 앱(있음 · 이 사람에게 보임)을 다시 본다 — 앱 주소 쿠키가 살아 있는 동안 빠진 사람·닫힌 앱을 바로 막는다.
-import type express from "express";
+import express from "express";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import { Readable, pipeline } from "node:stream";
@@ -35,6 +37,11 @@ import { redeemAppLaunchCode, type RedeemedLaunch, type RedeemLaunchInput } from
 import { appErrorHtml, appPageCsp, appPageCspMulti, buildAppPageHtml, loadAppScripts, type AppCsp, type AppScripts } from "./app-front-page.js";
 import { filesCspSource } from "../files/app-screen-csp.js";   // #4673 앱 폴더 서명 주소 자리
 import { webRootOf } from "./manifest.js";
+import { APP_FRONT_API_BODY_LIMIT, consentUrlFor, handleAppFrontApi, type AppFrontApiDeps } from "./app-front-api.js";
+import { runAppTool } from "../capabilities/app-tool-call.js";
+import { appPrefsCapabilities } from "../capabilities/app-prefs.js";
+import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
+import { gatewayUrl } from "../gateway-url.js";
 import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
 import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
 import {
@@ -64,7 +71,22 @@ export interface AppFrontDeps {
   versionHash?: (appId: string, versionNo: number) => Promise<{ content_hash: string | null; has_bundle: boolean } | null>;
   versionBundle?: (appId: string, versionNo: number) => Promise<{ manifest: unknown; content_hash: string | null; bundle: unknown | null; bundle_store: string | null } | null>;
   readBlob?: (kind: BlobStoreKind, h: string, size: number) => Promise<Buffer | Readable | null>;
+  /** #4482 같은 주소 API(/_lively/*)의 실행 배관. 없으면(시험 등) 그 길은 503. */
+  api?: AppFrontApiDeps;
 }
+/** 앱 개인 설정 능력(capabilities/app-prefs.ts) — 같은 규칙(보이는 앱만 · 16KB · 분당 60)을 한 벌로. */
+const prefsCap = (name: string) => {
+  const c = appPrefsCapabilities.find((x) => x.name === name);
+  if (!c) throw new Error(`앱 개인 설정 능력이 없다: ${name}`);
+  return c;
+};
+const liveApiDeps: AppFrontApiDeps = {
+  workspaceAccess: (id) => workspaceAccessAllowed(id),
+  runTool: (member, appId, name, args, address) => runAppTool(member, appId, name, args, { source: "app-front", address }),
+  prefsGet: (member, appId) => prefsCap("app_prefs_get").handler({ app_id: appId }, member, { source: "app-front", actor: member.userId }),
+  prefsSet: (member, appId, patch) => prefsCap("app_prefs_set").handler({ app_id: appId, patch }, member, { source: "app-front", actor: member.userId }),
+  gatewayBase: () => gatewayUrl(),
+};
 const liveDeps = (): AppFrontDeps => ({
   env: process.env,
   tenant: currentTenant,
@@ -79,6 +101,7 @@ const liveDeps = (): AppFrontDeps => ({
   versionHash: (id, no) => appStore.getAppVersionHash(id, no),
   versionBundle: (id, no) => appStore.getAppVersionBundle(id, no),
   readBlob: (kind, h, size) => (size <= BLOB_CACHE_ENTRY_MAX ? getBlob(kind, h) : streamBlob(kind, h, size)),
+  api: liveApiDeps,
 });
 
 /** 시험용 — 살아 있는 의존(실제 DB · 저장소)을 그대로(시험이 env · 워크스페이스만 바꿔 쓴다 — app-bundles.pg-test D10). */
@@ -137,12 +160,32 @@ export async function appFrontMe(headers: Record<string, string | string[] | und
   const act = g.act as AppFrontAct;
   const w = await whoAndApp(act, d, false);
   if ("reply" in w) return w.reply;
+  //  #4482 동의 자리 — 맨몸(새 탭 · 폰)의 SDK 가 lively.requestConsent() 로 이리 보낸다(라이블리 화면 안이면 그 자리 동의 창을 쓴다).
+  const base = d.api ? await d.api.gatewayBase().catch(() => null) : null;
   return { status: 200, json: {
     member: { id: w.member.id, name: memberDisplayName(w.member), email: w.member.email ?? null },
     workspace: { slug: g.tenant.slug },
     app: { id: w.app.id, variant: act.var },
-    session: null,   // 붙은 세션 — 라이블리 화면이 감싸는 iframe 에서만 있다(v2-3 이 채운다). 새 탭 · 직접 접속은 늘 null.
+    //  붙은 세션은 늘 null — 앱 주소 쿠키는 그 앱의 모든 iframe 이 같이 써서(같은 파티션) 어느 세션 칸에서 왔는지 모른다(#4482).
+    //   세션 칸에서 연 화면은 SDK(lively.me() · lively.session)가 감싸는 라이블리 화면에게서 받는다.
+    session: null,
+    consent_url: consentUrlFor(base, g.tenant.slug, w.app.id, act.var, d.env),
   } };
+}
+
+/**
+ * #4482 같은 주소 API — `/_lively/<경로>`(앞단이 `?path=` 로 넘김). 문 · 사람 · 앱은 화면과 같은 판정, 그 뒤는 app-front-api.ts.
+ *  답은 늘 JSON(앱 코드가 fetch 로 받는다) — 문이 닫혀도 화면용 HTML 이 아니라 JSON.
+ */
+export async function appFrontLively(headers: Record<string, string | string[] | undefined>, method: string, rawPath: unknown, body: unknown, d: AppFrontDeps): Promise<FrontReply> {
+  const g = appFrontGate(headers, "act", d);
+  if (!g.ok) return g.reply;
+  const act = g.act as AppFrontAct;
+  const w = await whoAndApp(act, d, false);
+  if ("reply" in w) return w.reply;
+  if (!d.api) return { status: 503, json: { error: "이 게이트웨이에서는 앱 API 가 준비되지 않았습니다" } };
+  const r = await handleAppFrontApi({ act, tenant: g.tenant, member: w.member, app: w.app, method, rawPath, body, env: d.env }, d.api);
+  return { status: r.status, json: r.json };
 }
 
 export async function appFrontPage(headers: Record<string, string | string[] | undefined>, rawPath: unknown, d: AppFrontDeps): Promise<FrontReply> {
@@ -373,4 +416,17 @@ export function registerAppFrontRoutes(app: express.Express, deps: () => AppFron
   app.post("/api/app-front/redeem", wrap(async (req, res) => { send(res, await appFrontRedeem(H(req), req.body, deps())); }));
   app.get("/api/app-front/me", wrap(async (req, res) => { send(res, await appFrontMe(H(req), deps())); }));
   app.get("/api/app-front/page", wrap(async (req, res) => { send(res, await appFrontPage(H(req), (req.query as Record<string, unknown>)?.path, deps())); }));
+  //  #4482 같은 주소 API — 본문은 JSON(앱이 Content-Type 을 빠뜨려도 JSON 으로 읽는다 · 쓰기의 출처 검사는 앞단이 이미 했다). 상한은 게이트웨이 REST 와 같다.
+  //   전역 express.json(1mb · application/json 만)은 이 라우터보다 먼저 돌아 이미 읽은 본문은 건너뛴다 — 여기 파서는 그 밖의 종류만 읽는다.
+  app.all("/api/app-front/lively", express.json({ limit: APP_FRONT_API_BODY_LIMIT, type: () => true }),
+    wrap(async (req, res) => { send(res, await appFrontLively(H(req), req.method, (req.query as Record<string, unknown>)?.path, req.body, deps())); }));
+  //  본문을 못 읽었다(깨진 JSON · 큼) — 파서의 오류는 wrap 밖이라 Express 기본 HTML 400 이 나갔다(격리 리뷰). 이 길의 답은 늘 JSON 이다.
+  //   본문 파서의 오류(type 이 붙은 4xx)만 여기서 답한다 — 그 밖의 오류는 감추지 않고 다음(전역 처리 · 로그)으로 넘긴다.
+  app.use("/api/app-front/lively", (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const e = err as { status?: unknown; type?: unknown };
+    const parserErr = typeof e?.type === "string" && typeof e?.status === "number" && e.status >= 400 && e.status < 500;
+    if (res.headersSent || !parserErr) { next(err); return; }
+    const big = e.status === 413 || e.type === "entity.too.large";
+    send(res, { status: big ? 413 : 400, json: { error: big ? "본문이 너무 큽니다(1MB 까지)" : "본문을 JSON 으로 읽지 못했습니다", code: big ? "body_too_large" : "bad_body" } });
+  });
 }

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf } from "./manifest.js";
+import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf, webDevicesOf, APP_DEVICES } from "./manifest.js";
 import { assertAssetId } from "../org/asset-id.js";
 
 // 최소 유효 매니페스트(각 케이스가 이걸 얕게 변형).
@@ -284,4 +284,18 @@ test("#4481 web 안의 모르는 칸은 통과(다음 단계가 더한 칸 — �
   assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", server: { entry: "server.js" } } }));
   assert.throws(() => parseAppManifest({ ...base(), ui: { root: "dist", pages: [] } }), /매니페스트/);
   assert.throws(() => parseAppManifest({ ...base(), web: { root: "" } }), /매니페스트/, "빈 값");
+});
+
+// ── #4482 앱 주소 iframe 의 장치 권한 선언(web.devices) — 선언한 앱의 iframe 에만 위임된다(상민님 2026-10-16 «선언한 앱만») ─────────────
+//  이게 틀리면: 모르는 장치 이름이 저장돼 화면이 엉뚱한 권한을 위임하거나(allow 속성), 선언이 저장은 되는데 읽는 쪽이 못 읽어 위임이 안 된다.
+test("#4482 web.devices — 아는 장치만 저장 · 모르는 값 · 꼴 밖은 거절 · 읽을 땐 정해진 순서로 거른다", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { devices: ["microphone", "camera"] } }));
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", devices: [] } }), "빈 목록 · root 와 함께");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["usb"] } }), /매니페스트/, "모르는 장치");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: "microphone" } }), /매니페스트/, "배열이 아님");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["microphone; camera *"] } }), /매니페스트/, "지시문을 끼워 넣는 값");
+  assert.deepEqual(webDevicesOf({ web: { devices: ["camera", "usb", "microphone", "camera"] } }), ["microphone", "camera"], "읽을 땐 아는 것만 · 정해진 순서 · 한 번씩");
+  assert.deepEqual(webDevicesOf({ web: { devices: "microphone" } }), [], "배열 아님 → 없음");
+  assert.deepEqual(webDevicesOf(null), []);
+  assert.deepEqual([...APP_DEVICES], ["microphone", "camera", "clipboard-read", "geolocation"]);
 });

@@ -30,6 +30,8 @@ export interface MenuHandlers {
   original(): void;      // 「원본으로 되돌리기」
   big(): void;           // 「크게 보기」
   detach(): void;        // 「이 세션에서 떼기」
+  /** #4482 「새 탭에서 열기」 — 맨 앱 주소(라이블리 밖 · 폰 홈 화면). 앱 주소가 꺼진 워크스페이스면 없다(줄을 그리지 않는다). */
+  tab?(): void;
 }
 
 /**
@@ -47,9 +49,16 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
     { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 버전으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
     { label: '크게 보기', icon: 'expand', hint: '새 탭 · 화면 가득', run: h.big },
+    ...(h.tab ? [{ label: '새 탭에서 열기', icon: 'ext', hint: '앱 주소 · 폰 홈 화면', run: h.tab }] : []),
     { label: '이 세션에서 떼기', icon: 'x', danger: true, hint: '데이터는 남음', run: h.detach },
   ];
 }
+
+/**
+ * 이 «데이터가 바뀌었다» 사건이 앱 화면이 제 손으로 쓴 것인가 — 그렇다면 onChange 를 안 건 앱을 다시 불러오지 않는다(쓰던 화면이 처음으로 돌아간다).
+ *  'app-ui' = 라이블리 화면의 다리로 쓴 것 · 'app-front' = 앱 주소의 같은 주소 API(/_lively/*, #4482)로 쓴 것. 그 밖(세션의 AI · 다른 사람)은 바깥 변경이다.
+ */
+export function isOwnWriteSource(source: unknown): boolean { return source === 'app-ui' || source === 'app-front'; }
 
 /** 「AI에게 고치기」가 세션 입력칸에 채우는 글 — 뒤를 사람이 잇는다. 보내지 않는다(그건 앱의 chat.send 몫). */
 export function draftTextFor(title: string): string { return `「${title}」 앱을 이렇게 고쳐 줘: `; }

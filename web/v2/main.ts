@@ -69,6 +69,8 @@ import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(�
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { dismissAppUi, mountAppUiFrame, openAppUi } from './app-ui.js';
+import { ensureAppGrant } from './app-session.js';
+import { appGrantReturn } from '../lib/app-address.js';   // #4482 동의 경유에서 돌아갈 앱 주소(열린 리다이렉트 방지)
 import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
@@ -1129,6 +1131,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'full') return { title: parseRoute(route).params.get('t') || '앱', noAside: true };   // 새 탭으로 연 앱(크게 보기)
   if (p === 'app-open') return { title: '앱 여는 중', noAside: true };   // #4480 앱 주소로 직접 들어온 사람을 앱 주소로 돌려보내는 자리
+  if (p === 'app-grant') return { title: '앱 사용 동의', noAside: true };   // #4482 앱 주소(새 탭 · 폰)에서 동의를 받으러 왔다 돌아가는 자리
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
@@ -1654,6 +1657,24 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('b', { text: '앱을 열지 못했어요.' }),
           el('p', { class: 'pn-fine', text: String(e && e.message ? e.message : e) })));
       }
+    } else if (page === 'app-grant' && segs[1]) {
+      //  #/app-grant/<앱>?v=<판>&next=<앱 안 경로> — #4482 앱 주소를 맨몸(새 탭 · 폰 홈 화면)으로 연 사람이 그 앱의 도구를
+      //   처음 쓸 때 «동의 필요»(/_lively/* 403 consent_required)를 받으면 SDK 가 이리 보낸다(라이블리 화면 안이면 그 자리 동의 창을 쓴다).
+      //   동의 창을 띄우고, 끝나면 그 앱 주소의 그 자리로 돌려보낸다. 돌아갈 곳은 지금 워크스페이스의 그 앱 주소를 여기서 만든다(appGrantReturn —
+      //   링크가 주는 주소는 받지 않는다 · 열린 리다이렉트 방지).
+      //   이 탭은 저장하지 않는다(tabs.ts routeSticky) — 되살아나면 라이블리를 열었는데 동의 창이 뜨고 앱 주소로 넘어간다.
+      const appId = decodeURIComponent(segs[1]);
+      const me0 = (state.me || {}) as { app_domain?: string | null; workspace_registry?: { current?: string | null } };
+      const back = appGrantReturn(appId, params.get('v') === 'draft' ? 'draft' : 'pub', params.get('next'), me0.workspace_registry?.current, me0.app_domain);
+      tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱 사용 동의를 확인하는 중이에요…' })));
+      tab.aside.replaceChildren();
+      const granted = await ensureAppGrant(appId).catch(() => false);
+      if (seq !== tab.seq) return;
+      if (granted && back) { location.replace(back); return; }
+      tab.center.replaceChildren(el('div', { class: 'pn-empty' },
+        el('b', { text: granted ? '동의했어요.' : '동의하지 않았어요.' }),
+        el('p', { class: 'pn-fine', text: granted ? '앱으로 돌아가 다시 해 보세요.' : '동의하지 않으면 이 앱이 표 · 앱 폴더를 읽고 쓸 수 없어요. 앱으로 돌아가면 다시 물어요.' }),
+        ...(back ? [el('p', {}, el('a', { class: 'btn btn-sm', href: back, text: '앱으로 돌아가기' }))] : [])));
     } else if (isWikiListRoute(tab.route)) {
       //  #4233 [위키] 본문 목록을 셸이 직접 그린다(원준 2026-09-26 «A를 뼈대로 · 새로 들어온 지식 카드 줄»). 종전엔 클래식 위키를 액자에 실었다.
       //   사이드바의 전체 문서 · 인덱스 · 분류 행은 주소만 바꾸고(#/knowledge?…) 여기로 온다. 레일 착지 #/app/knowledge 도 같은 화면.

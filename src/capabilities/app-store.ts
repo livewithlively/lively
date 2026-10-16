@@ -26,8 +26,10 @@ import { ensureAppSqlRole } from "../apps/store-schema.js";
 import { physicalAppPrefix } from "../apps/store-ddl.js";
 import { mintAppServerToken } from "../apps/app-server-auth.js";
 
-/** 빈도 게이트 — 앱 서버가 사람 신원을 싣고 부른 호출은 사람마다 세고 앱 전체는 따로 묶는다(app-sql-exec.takeAppCall). */
-const callGate = (user: LivelyUser | undefined, appId: string, n = 1): void => takeAppCall(appId, appSqlTenantId(), n, user?.appServer ? user.userId : undefined);
+/** 빈도 게이트 — 앱 서버가 사람 신원을 싣고 부른 호출과 앱 주소(/_lively/*, #4482)로 들어온 호출은 사람마다 세고 앱 전체는 따로 묶는다
+ *  (app-sql-exec.takeAppCall). 둘 다 그 앱을 쓰는 사람마다 따로 오는 길이라, 앱 하나에 한 통을 같이 쓰면 한 사람이 모두를 막는다. */
+const callGate = (user: LivelyUser | undefined, appId: string, n = 1): void =>
+  takeAppCall(appId, appSqlTenantId(), n, user?.appServer || user?.appAddress ? user.userId : undefined);
 
 /** match 한 칸의 값 — `id` 는 정수만(아니면 400), 그 밖은 준 그대로(파라미터로 넘어간다). */
 const matchValue = (key: string, value: unknown): unknown => (key === "id" ? assertMatchId(value) : value);
@@ -74,7 +76,8 @@ function unionSpecs(manifests: unknown[]): AppTableSpec[] {
 async function liveSpecs(app: OrgApp): Promise<{ specs: AppTableSpec[]; protect: ProtectColumns }> {
   return { specs: unionSpecs(await liveManifests(app)), protect: "existing" };
 }
-const viewerOf = (user: LivelyUser | undefined): Viewer => ({ userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [] });
+//  #4482 앱 주소(/_lively/*)로 들어온 호출은 그 주소의 판이 선언한 표 — 공개 주소의 화면은 초안을 고친 사람에게도 공개 판이다(Viewer.address).
+const viewerOf = (user: LivelyUser | undefined): Viewer => ({ userId: String(user?.userId ?? ""), scopes: user?.scopes ?? [], ...(user?.appAddress ? { address: user.appAddress } : {}) });
 /** #4667 이 사람이 쓰는 판의 표 명세 — 공개 판을 보는 사람은 공개 판이 선언한 표, 초안을 만든 사람은 초안의 표(격리 리뷰 B3). */
 async function viewSpecs(app: OrgApp, who: Viewer): Promise<AppTableSpec[]> {
   return tableSpecsOf((await viewAppFor(app, who)).app.manifest);
