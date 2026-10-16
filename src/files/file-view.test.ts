@@ -187,7 +187,9 @@ test("D11 앱 폴더 링크의 앱 — 접은 경로의 첫 마디가 앱 id 꼴
   assert.equal(appIdOfLink("crmx/../crm/a"), "crm", "접히는 링크는 접힌 경로(판정받은 자리)의 앱");
   assert.equal(appIdOfLink("./crm/a"), "crm");
   assert.equal(appIdOfLink("/crm/a"), "crm");
-  assert.equal(appIdOfLink("crm\\x"), "crm", "역슬래시는 탐색기 게이트처럼 구분자");
+  assert.equal(appIdOfLink("crm\\x"), "crm", "첫 마디는 앱 폴더 게이트처럼 역슬래시에서도 자른다");
+  assert.equal(appIdOfLink("crm\\x/../crm2/a"), "crm2", "접기는 자리 찾기(path.resolve)처럼 / 로만 — 역슬래시는 마디 안의 글자");
+  assert.equal(appIdOfLink("\\crm/a"), "crm", "앞의 역슬래시는 자리 찾기처럼 뗀다");
   assert.equal(appIdOfLink("crm\u0000/x"), "", "NUL 이 든 이름");
   assert.equal(appIdOfLink("\u0000"), "");
   assert.equal(appIdOfLink("../crm/a"), "", "자리 밖으로 나가는 링크");
@@ -273,7 +275,8 @@ test("F9 같은 이름 후보 라우트 — 못 보는 링크도 빈 목록(같�
   assert.match(sim, /const none = \(\): void => \{ res\.json\(\{ items: \[\] \}\); \};/);
   assert.match(sim, /res\.json\(\{ items: rankSameName\(seen, rel\) \}\);/, "답에 items 말고 덧말이 실린다");
   assert.doesNotMatch(sim, /truncated: found\.truncated|scope, truncated|scope: /, "잘림 · 범위를 답에 싣는다");
-  assert.match(sim, /const skip = \(gate\?\.hiddenWithin\?\.\(scope\) \?\? \[\]\)\.map\(\(h\) => \(scope \? h\.slice\(scope\.length \+ 1\) : h\)\);/, "못 보는 하위 자리를 건너뛰지 않는다");
+  assert.match(sim, /const skip = \(gate\?\.hiddenWithin\(scope\) \?\? \[\]\)\.map\(\(h\) => \(scope \? h\.slice\(scope\.length \+ 1\) : h\)\);/, "못 보는 하위 자리를 건너뛰지 않는다");
+  assert.match(sim, /if \(found\.truncated\) logger\.info\(/, "상한에 닿아 멈춘 것을 운영 쪽에서도 못 본다");
   assert.match(sim, /\{ base: scopeAbs, name, skip, \.\.\.SAME_NAME_LIMITS \}/, "격리 멤버 판에 skip 을 넘기지 않는다");
   assert.match(sim, /findSameNameLocal\(scopeAbs, name, SAME_NAME_LIMITS, skip\)/, "로컬 판에 skip 을 넘기지 않는다");
   assert.match(sim, /\{ timeoutMs: SAME_NAME_LIMITS\.maxMs \+ 5000 \}/, "멤버 왕복에 기다리는 상한이 없다");

@@ -6,6 +6,7 @@
 import { strict as assert } from "node:assert";
 import test, { after } from "node:test";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -196,4 +197,44 @@ test("C10 시간 상한 — 0 이면 첫 폴더도 열지 않고 truncated · �
   const roomy = await both(base, "x.md", { ...SAME_NAME_LIMITS, maxMs: 60_000 });
   assert.deepEqual({ hits: paths(roomy), truncated: roomy.truncated }, { hits: ["a/x.md", "x.md"], truncated: false });
   assert.equal(SAME_NAME_LIMITS.maxMs, 3000, "사람이 기다리는 조회의 시간 상한");
+});
+
+test("C11 폴더 하나를 읽다가 오류가 나도 걷기를 멈추지 않는다 — 다른 폴더의 후보는 남는다(두 판 모두)", async () => {
+  const base = tree({ "bad/a.md": "1", "bad/b.txt": "1", "bad/c.txt": "1", "good/a.md": "1" });
+  const badDir = path.join(base, "bad");
+  //  로컬 판 — 그 폴더에서만 두 번째 읽기가 EIO 로 실패한다(디스크 오류 흉내).
+  const orig = fsp.opendir;
+  let injected = 0;
+  (fsp as unknown as { opendir: unknown }).opendir = async (p: fs.PathLike, ...rest: unknown[]) => {
+    const d = await (orig as (...a: unknown[]) => Promise<fs.Dir>).call(fsp, p, ...rest);
+    if (path.resolve(String(p)) !== badDir) return d;
+    let n = 0;
+    return {
+      read: async () => { if (++n >= 2) { injected++; throw Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }); } return d.read(); },
+      close: () => d.close(),
+    };
+  };
+  let local: SameNameFound;
+  try { local = await findSameNameLocal(base, "a.md"); } finally { (fsp as unknown as { opendir: unknown }).opendir = orig; }
+  assert.equal(injected, 1, "배선: 읽기 오류가 실제로 났다");
+  assert.ok(paths(local).includes("good/a.md"), "한 폴더의 읽기 오류로 다른 폴더의 후보를 잃었다(로컬 판)");
+  //  멤버 한 줄 — 같은 오류를 미리 싣는 모듈(--require)로 낸다.
+  const pre = path.join(base, "..", path.basename(base) + "-eio.cjs");
+  made.push(pre);
+  fs.writeFileSync(pre, [
+    "const fs = require('fs'), path = require('path');",
+    "const orig = fs.opendirSync;",
+    "fs.opendirSync = function (p, ...a) {",
+    "  const d = orig.call(fs, p, ...a);",
+    "  if (path.resolve(String(p)) !== process.env.SAME_NAME_BAD_DIR) return d;",
+    "  let n = 0;",
+    "  return { readSync() { if (++n >= 2) { process.stderr.write('injected\\n'); throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' }); } return d.readSync(); }, closeSync() { return d.closeSync(); } };",
+    "};",
+  ].join("\n"));
+  const r = spawnSync(process.execPath, ["--require", pre, "-e", SAME_NAME_JS],
+    { input: JSON.stringify({ base, name: "a.md", ...SAME_NAME_LIMITS }), encoding: "utf8", env: { ...process.env, SAME_NAME_BAD_DIR: badDir } });
+  assert.match(r.stderr, /injected/, "배선: 멤버 한 줄에서도 읽기 오류가 실제로 났다");
+  assert.equal(r.status, 0, `멤버 한 줄이 죽었다: ${r.stderr}`);
+  const member = JSON.parse(r.stdout) as SameNameFound;
+  assert.ok(paths(member).includes("good/a.md"), "한 폴더의 읽기 오류로 다른 폴더의 후보를 잃었다(멤버 한 줄)");
 });

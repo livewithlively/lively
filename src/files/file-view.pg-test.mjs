@@ -3,7 +3,7 @@
 //
 // 한 프로세스에 게이트웨이를 띄운다 — 진짜 인증(구성원 토큰) · 프로젝트 자료 올리기(자료 행이 생긴다) · 홈 탐색기의 정보(browse/info) ·
 //  같은 이름 후보(browse/similar). 파일은 임시 폴더. 판정은 응답과 실제 행·디스크로 한다. 사양 표(태스크 #4672 — 아래 줄이 그 표다):
-//   E1 프로젝트 파일 — 정보 · 속한 프로젝트 · 주소 · 자료(올린 사람 · 올린 때 밀리초까지)
+//   E1 프로젝트 파일 — 정보 · 속한 프로젝트 · 주소 · 자료(올린 사람 · 올린 때 밀리초까지 · 여기서 나온 지식은 볼 수 있는 것만)
 //   E2 그 프로젝트를 못 보는 사람 — 정보 404 · 후보는 «볼 수 있는데 근처에 없는 자리» 와 같은 빈 답
 //   E3 폴더 · 자리 자신 — 폴더 · 자료 없음                                  E4 없는 경로 404
 //   E5 잠긴 공유 폴더 — 대상은 locked · 아닌 사람은 404                     E6 앱 폴더 — 동의한 사람 · 그 앱 이름 · 자료 없음
@@ -129,6 +129,17 @@ try {
     && e1.source.knowledge.length === 1 && e1.source.knowledge[0].name === "pgt-k-4672" && e1.source.knowledge[0].title === "설계 정리", e1.source);
   const createdAt = (await itemsPool.query(`SELECT created_at FROM source WHERE id=$1`, [SRC])).rows[0].created_at;
   chk("E1d 올린 때 — DB 값 그대로(밀리초까지)", e1.source?.createdAt === new Date(createdAt).toISOString(), { got: e1.source?.createdAt, db: new Date(createdAt).toISOString() });
+  //  E1e — 같은 자료에서 나온 지식이라도 이 사람이 못 보는 지식(공개범위 members · 대상 가)은 나에게만 빠진다(자료 상세와 같은 술어).
+  await itemsPool.query(`INSERT INTO knowledge(name, title, body_md, visibility) VALUES('pgt-k-4672-hidden', '숨은 정리', '본문', 'members')`);
+  await itemsPool.query(`INSERT INTO knowledge_member(name, subject_kind, member_id) VALUES('pgt-k-4672-hidden', 'member', 'pgt-a')`);
+  await itemsPool.query(`INSERT INTO knowledge_source(name, source_id, relation) VALUES('pgt-k-4672-hidden', $1, 'derived_from')`, [SRC]);
+  invalidateVisibilityCache();
+  const knNames = (r) => (r.source?.knowledge || []).map((k) => k.name).sort();
+  const e1eA = await info("pgt-a", "shared", `${FOLDER}/docs/설계.md`);
+  const e1eB = await info("pgt-b", "shared", `${FOLDER}/docs/설계.md`);
+  chk("E1e 여기서 나온 지식 — 숨은 지식은 그 대상에게만(못 보는 사람에겐 제목도 없다)",
+    JSON.stringify(knNames(e1eA)) === JSON.stringify(["pgt-k-4672", "pgt-k-4672-hidden"]) && JSON.stringify(knNames(e1eB)) === JSON.stringify(["pgt-k-4672"])
+    && !JSON.stringify(e1eB).includes("숨은 정리"), { a: knNames(e1eA), b: knNames(e1eB) });
 
   // ── E2 ──
   const e2a = await info("pgt-a", "shared", `${HF}/숨은.md`);

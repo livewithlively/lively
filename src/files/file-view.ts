@@ -73,18 +73,20 @@ export function addressOfLink(root: string, rel: string): string | null {
 }
 
 /**
- * 앱 폴더 링크(root apps)가 가리키는 앱 — 경로를 접은 뒤(. · ..) 첫 마디가 앱 id 꼴(files/address ADDRESS_APP_ID_RE)일 때만 그 id, 아니면 "". 순수.
+ * 앱 폴더 링크(root apps)가 가리키는 앱 — 판정이 본 자리 그대로 읽어, 첫 마디가 앱 id 꼴(files/address ADDRESS_APP_ID_RE)일 때만 그 id, 아니면 "". 순수.
  *  동의 안내(browse/info)는 판정에서 떨어진 링크를 이 값으로만 묻는다 — 날 글자(NUL · 꼴이 아닌 이름)를 DB 에 넘기지 않고,
- *  `crmx/../crm/a` 처럼 접히는 링크는 접힌 경로(실제로 판정받은 자리)의 앱으로 안내한다. 역슬래시는 탐색기 게이트와 같이 구분자로 본다.
+ *  `crmx/../crm/a` 처럼 접히는 링크는 접힌 경로(실제로 판정받은 자리)의 앱으로 안내한다.
+ *  읽는 법은 판정과 같아야 한다: 경로는 자리 찾기(terminal/profiles resolveRootPath)처럼 앞의 `/` · `\` 만 떼고 `/` 로만 접고,
+ *  첫 마디는 앱 폴더 게이트(terminal-files browseGate)처럼 `/` · `\` 어느 쪽에서든 자른다.
  */
 export function appIdOfLink(rel: string): string {
   const segs: string[] = [];
-  for (const s of String(rel ?? "").replace(/\\/g, "/").split("/")) {
+  for (const s of String(rel ?? "").replace(/^[/\\]+/, "").split("/")) {
     if (!s || s === ".") continue;
     if (s === "..") { if (!segs.length) return ""; segs.pop(); continue; }
     segs.push(s);
   }
-  const first = segs[0] ?? "";
+  const first = (segs[0] ?? "").split("\\")[0] ?? "";
   return ADDRESS_APP_ID_RE.test(first) ? first : "";
 }
 

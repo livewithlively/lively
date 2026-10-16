@@ -240,7 +240,8 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const appId = userOf(req).appId;
     if (appId) for (const id of [...readable]) if (id !== appId) readable.delete(id);
     const ok = (rel: string): boolean => { const first = String(rel ?? "").split(/[\\/]/)[0] ?? ""; return first === "" || readable.has(first); };
-    return { ok, restricted: () => false, subtreeOk: ok };
+    //  앱 폴더는 통째로 보이거나 안 보인다 — 그 안에 따로 못 보는 하위 자리가 없다(hiddenWithin 은 빈 목록).
+    return { ok, restricted: () => false, subtreeOk: ok, hiddenWithin: () => [] };
   };
   // 앱 폴더는 웹에서 쓰지 않는다(#4671 ③ — 앱 폴더는 그 앱이 쓴다. 세션 셸은 앱을 붙여 `.lively/apps/<앱>/` 에서 고친다).
   //  올리기 · 폴더 만들기 · 이름 바꾸기 · 지우기 전부 이 한 줄을 먼저 지난다.
@@ -605,7 +606,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       scopeAbs = inBase(base, scope);
       await assertJailed(base, scopeAbs, osUser, rootKey === APPS_ROOT_KEY && scope ? scope.split("/")[0] : undefined);
     } catch { none(); return; }   // 범위가 링크로 바깥을 가리키면 찾지 않는다
-    const skip = (gate?.hiddenWithin?.(scope) ?? []).map((h) => (scope ? h.slice(scope.length + 1) : h));
+    const skip = (gate?.hiddenWithin(scope) ?? []).map((h) => (scope ? h.slice(scope.length + 1) : h));
     const name = path.basename(abs);
     let found: SameNameFound = { hits: [], truncated: false };
     try {
@@ -614,6 +615,8 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
           { timeoutMs: SAME_NAME_LIMITS.maxMs + 5000 })) ?? found
         : await findSameNameLocal(scopeAbs, name, SAME_NAME_LIMITS, skip);
     } catch (err) { logger.warn({ err, root: rootKey }, "같은 이름 후보를 찾지 못했다(후보 없이 보인다)"); }
+    //  답에는 싣지 않는 «상한에 닿아 멈춤» 을 운영 쪽에서는 본다 — 시간 · 양 상한이 실제로 얼마나 닿는지(JuiceFS 위에서) 재는 자리.
+    if (found.truncated) logger.info({ root: rootKey, scope, hits: found.hits.length, skipped: skip.length }, "같은 이름 후보 — 상한에 닿아 멈췄다");
     const seen = found.hits.map((h) => ({ ...h, path: scope ? `${scope}/${h.path}` : h.path })).filter((h) => !gate || gate.ok(h.path));
     res.json({ items: rankSameName(seen, rel) });
   }));

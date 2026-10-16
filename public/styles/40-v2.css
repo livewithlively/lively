@@ -1301,7 +1301,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .fx-act { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; background: none; border-radius: 5px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
 .fx-act:hover { background: var(--bg-punch); color: var(--ink); }
 .fx-act svg { width: 13px; height: 13px; }
-/* 미리보기 — 목록 자리에 제자리 전환(대시보드 폴더 위젯과 같은 문법). 정독·공유는 [⛶] 전체페이지가 맡는다. */
+/* 미리보기 — 목록 자리에 제자리 전환(대시보드 폴더 위젯과 같은 문법). 정독·공유는 [↗] 자료 보기 화면(#4672 — 새 탭)이 맡는다. */
 .fx-pbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--line-row); }
 .fx-pname { font-size: 12px; font-weight: 700; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-pstage { padding: 10px 2px 0; }

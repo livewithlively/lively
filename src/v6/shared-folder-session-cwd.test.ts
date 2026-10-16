@@ -121,7 +121,7 @@ test("E16 판정기의 «아래까지» 는 자기가 보일 때만 참이다 �
 function countingGate(): { gate: SharedFolderGate; calls: () => number } {
   let n = 0;
   return {
-    gate: { ok: () => { n++; return false; }, restricted: () => { n++; return false; }, subtreeOk: () => { n++; return false; } },
+    gate: { ok: () => { n++; return false; }, restricted: () => { n++; return false; }, subtreeOk: () => { n++; return false; }, hiddenWithin: () => { n++; return []; } },
     calls: () => n,
   };
 }

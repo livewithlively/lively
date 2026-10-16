@@ -54,6 +54,7 @@ export function rankSameName(hits: readonly SameNameHit[], missingRel: string, l
  * 격리 멤버 uid 로 도는 한 줄(고정 리터럴 — 값은 전부 stdin JSON: memberNodeJson 계약). findSameNameLocal 과 같은 사양:
  *  넓이 우선 · 이름 비교는 NFC 로 맞춰 · 점으로 시작하는 이름 · 링크 · node_modules · git 저장소(.git 을 가진 폴더) 안으로는 안 들어간다 ·
  *  skip(범위 기준 경로 — 이 사람이 못 보는 자리)은 그 자리도 그 안도 보지 않는다. 입력 { base, name, skip, maxSeen, maxDepth, maxHits, maxMs }.
+ *  폴더 하나를 끝까지 못 읽으면(읽다가 오류) 그 폴더에서 읽은 데까지만 쓰고 다음 폴더로 간다 — 한 폴더 때문에 찾은 것을 다 버리지 않는다.
  */
 export const SAME_NAME_JS =
   "const fs=require('fs'),p=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);" +
@@ -65,7 +66,7 @@ export const SAME_NAME_JS =
   "if(e.name.normalize('NFC')===t){let s=0,m=0;try{const st=fs.statSync(full);m=Math.floor(st.mtimeMs);if(!isDir)s=st.size}catch(x){}" +
   "hits.push({path:r,type:isDir?'dir':'file',size:s,mtime:m});if(hits.length>=q.maxHits){trunc=true;break outer}}" +
   "if(isDir&&cur.depth+1<=q.maxDepth&&e.name!=='node_modules'&&!fs.existsSync(p.join(full,'.git')))Q.push({dir:full,rel:r,depth:cur.depth+1})}}" +
-  "finally{try{dh.closeSync()}catch(x){}}}" +
+  "catch(x){}finally{try{dh.closeSync()}catch(x){}}}" +
   "process.stdout.write(JSON.stringify({hits,truncated:trunc}))});";
 
 /** `.git` 이 있나(파일이든 폴더든 — 워크트리 · 서브모듈은 파일이다). 게이트웨이 스레드를 막지 않게 비동기로. */
@@ -105,7 +106,8 @@ export async function findSameNameLocal(base: string, name: string, lim: SameNam
           queue.push({ dir: full, rel, depth: cur.depth + 1 });
         }
       }
-    } finally { await dh.close().catch(() => { /* 이미 닫힘 */ }); }
+    } catch { /* 이 폴더를 끝까지 못 읽었다 — 읽은 데까지만 쓰고 다음 폴더로(SAME_NAME_JS 와 같다) */ }
+    finally { await dh.close().catch(() => { /* 이미 닫힘 */ }); }
   }
   return { hits, truncated: false };
 }
