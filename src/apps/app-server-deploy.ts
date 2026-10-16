@@ -148,20 +148,22 @@ const nameTooLong = (appId: string): HttpError => new HttpError(400, `앱 id 와
 
 /**
  * 함수가 준비될 때까지(만들기 · 코드/설정 고치기 뒤 Pending · InProgress) — 큰 zip(파일 수만 개)은 몇 분 걸린다(2026-10-15 실측).
- *  inactiveOk — 코드를 올리기 바로 앞의 기다림. Inactive(오래 쉼 · #4801 원본 zip 을 잃음)는 코드를 다시 올려야 살아나므로(AWS 문서 «restore access to the
- *  source artifact and update the function») 기다리지 않고 통과시킨다 — 기다리면 6분 뒤 504 로 끝나 스스로 못 고친다(격리 리뷰).
+ *  beforeUpdate — 코드를 올리기 바로 앞의 기다림: 다른 고치기가 도는 중(InProgress) · 만드는 중(Pending)만 기다린다.
+ *   Inactive(오래 쉼 · #4801 원본 zip 을 잃음)는 코드를 다시 올려야 살아나고(AWS 문서 «restore access to the source artifact and update the function»),
+ *   지난 고치기가 실패한 채(LastUpdateStatus Failed)도 다음 고치기가 덮어야 풀린다 — 여기서 막으면 6분 뒤 504 · 곧바로 502 로 끝나 스스로 못 고친다
+ *   (격리 리뷰 · 재검토). 올린 뒤의 기다림은 Active 를 요구한다.
  */
-async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { inactiveOk?: boolean; maxMs?: number } = {}): Promise<lam.FnConfiguration> {
+async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { beforeUpdate?: boolean; maxMs?: number } = {}): Promise<lam.FnConfiguration> {
   const until = Date.now() + (opts.maxMs ?? 6 * 60_000);
   const sleep = deps.sleep ?? sleepDefault;
   for (;;) {
     const c = await api.getFunctionConfiguration(fn);
     if (!c) throw new HttpError(500, `함수가 사라졌습니다: ${fn}`);
+    if (opts.beforeUpdate && (c.State === "Active" || c.State === "Inactive") && c.LastUpdateStatus !== "InProgress") return c;
     //  상태 설명은 AWS 원문이다 — 판 묶음 버킷 주소 · 계정 번호가 실릴 수 있어 걷는다(#4801 격리 리뷰).
     if (c.State === "Failed") throw new HttpError(502, `함수를 만들지 못했습니다: ${scrubAws(c.StateReason ?? c.StateReasonCode ?? "까닭 모름")}`);
     if (c.LastUpdateStatus === "Failed") throw new HttpError(502, `함수를 고치지 못했습니다: ${scrubAws(c.LastUpdateStatusReason ?? "까닭 모름")}`);
     if (c.State === "Active" && c.LastUpdateStatus !== "InProgress") return c;
-    if (opts.inactiveOk && c.State === "Inactive" && c.LastUpdateStatus !== "InProgress") return c;
     if (Date.now() > until) throw new HttpError(504, `함수가 준비되지 않았습니다(${c.State}/${c.LastUpdateStatus}) — 잠시 뒤 다시 하세요`);
     await sleep(deps.pollMs ?? 2000);
   }
@@ -171,7 +173,7 @@ async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { i
  * zip 이 아직 그 판으로 저장소에 있나(#4801) — 없거나(지움 표시) 지금 판이 기록과 다르면 까닭 글, 그대로면 null. 저장소를 못 봤으면(일시 오류) null —
  *  usableBuild 와 같은 쪽이다(못 본 채 막으면 S3 가 흔들릴 때 모든 배포가 멈춘다 · 그 길은 Lambda 가 다시 드러낸다).
  */
-async function zipChanged(zipKey: string, zipVersion: string | null, deps: ServerDeps): Promise<string | null> {
+async function zipProblem(zipKey: string, zipVersion: string | null, deps: ServerDeps): Promise<string | null> {
   const s3 = appBundleS3Config();
   if (!deps.headZip && !s3) return null;
   let head: { size: number; versionId?: string | null } | null;
@@ -298,11 +300,11 @@ export async function deployBuildToAliases(i: {
       //   Lambda 는 옛 판도 읽어 배포는 초록인데, 그 판은 버킷 수명 규칙으로 30일 뒤 사라져 함수가 그때 멈춘다(조용한 성공 · 격리 리뷰). 정리는 이 잠금을
       //   잡아야 지우므로(app-server-watch pruneServerBuilds) 여기서 본 판은 이 배포가 끝날 때까지 지금 판으로 남는다.
       if (code.S3ObjectStorageMode === "REFERENCE") {
-        const gone = await zipChanged(i.zipKey, i.zipVersion, deps);
-        if (gone) {
-          await st.invalidateServerBuild(i.app.id, i.buildKey, gone).catch(() => { /* 다음에 */ });
+        const problem = await zipProblem(i.zipKey, i.zipVersion, deps);
+        if (problem) {
+          await st.invalidateServerBuild(i.app.id, i.buildKey, problem).catch(() => { /* 다음에 */ });
           if (!got) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
-          throw new HttpError(409, gone);
+          throw new HttpError(409, problem);
         }
       }
       //  zip 크기를 모르면(저장소를 못 본 옛 빌드) 상한이 이번 코드를 0 으로 센다 — 드물지만 보이게 남긴다(재검토).
@@ -351,11 +353,14 @@ export async function deployBuildToAliases(i: {
       owned = true;
       //  같은 코드 지문이어도 저장 방식 · 읽는 판이 다르면 다시 올린다(#4801 — COPY 로 만든 옛 함수를 REFERENCE 로 옮긴다 · 그 반대도).
       //   Inactive(오래 쉼 · 원본을 잃음)면 같은 코드라도 다시 올린다 — 코드 고치기가 되살리는 길이다(AWS 문서 · 격리 리뷰).
-      if (got.Configuration.CodeSha256 !== i.zipSha256 || !codeAt(got.Code, code) || got.Configuration.State === "Inactive") {
-        await waitReady(api, fn, deps, { inactiveOk: true });
+      const upload = got.Configuration.CodeSha256 !== i.zipSha256 || !codeAt(got.Code, code) || got.Configuration.State === "Inactive";
+      if (upload) {
+        await waitReady(api, fn, deps, { beforeUpdate: true });
         await api.updateFunctionCode(fn, code);
       }
-      const cfg = await waitReady(api, fn, deps);
+      //  코드를 안 올렸으면 남은 «고치기 실패»(LastUpdateStatus Failed)는 지난 시도의 것이다 — AWS 는 실패한 고치기를 걷고 그 전 코드 · 설정을 둔다.
+      //   여기서 막으면 그 전 판으로 되돌리기 · 설정만 고치기가 영영 502 다(재검토). 이번에 올렸으면 그 결과를 기다린다(실패면 502).
+      const cfg = await waitReady(api, fn, deps, { beforeUpdate: !upload });
       if (cfg.CodeSha256 !== i.zipSha256) {
         //  zip 의 바이트가 빌드 기록과 다르다 — 그 빌드를 못 쓰게 적어 두면 다음 배포가 다시 빌드한다(같은 줄을 «재사용» 하며 영영 실패하지 않게).
         await st.invalidateServerBuild(i.app.id, i.buildKey, "함수에 올라간 코드가 빌드 기록의 지문과 다릅니다").catch(() => { /* 다음에 */ });
