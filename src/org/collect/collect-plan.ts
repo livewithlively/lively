@@ -17,8 +17,13 @@
 import type { RawItem } from "../../items/store.js";
 import { ACTIVITY_WINDOW_SEC, type ActivitySample, type ReadNote } from "./schedule-plan.js";
 import {
+  PLANNED_LINKS_PER_RUN, SAME_APP_LINKS_PER_UNIT, extractAppLinks, matchLinkedRead, plannedLinkInstruction, sameAppLinkInstruction,
+  type AppLink, type LinkLike, type LinkedTarget,
+} from "./link-plan.js";
+import {
   type Capture, type ListedUnit, type SlackMsg, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem,
   parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem,
+  type NotionPage,
 } from "./connector-parse.js";
 
 export type CollectMode = "probe" | "listing" | "collect";
@@ -134,6 +139,13 @@ export interface CollectPlan {
   mode: "listing" | "collect"; app?: string; units?: PlannedUnit[]; planned_at?: number;
   /** #4744 누가 띄웠나 — schedule = 기본 주기(collect-schedule 틱) · 없으면 사람·리브가 직접(collect_claude_run). */
   trigger?: "schedule";
+  /** #4744 링크 따라 읽기 — 지난 판들이 기록해 둔 «다른 앱 링크» 가운데 이 판에 실은 것(collect_link 행). */
+  links?: PlannedLink[];
+}
+
+/** 다음 판에 실은 링크 한 줄 — collect_link 행 id(읽음 표시) + 대상. */
+export interface PlannedLink extends Pick<AppLink, "app" | "ref" | "kind" | "channel" | "ts" | "thread"> {
+  id: number;
 }
 
 const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -290,22 +302,42 @@ export function pickUnitsForRun(assigned: readonly AssignedLike[], opts: { now: 
 }
 
 /** 수집 실행 지시 — 단위마다 한 줄. 지시를 못 만드는 단위는 빼고 돌려준다. */
-export function collectPrompt(units: readonly PlannedUnit[]): { prompt: string; units: PlannedUnit[] } {
+export function collectPrompt(units: readonly PlannedUnit[], links: readonly PlannedLink[] = []): { prompt: string; units: PlannedUnit[]; links: PlannedLink[] } {
   const kept: PlannedUnit[] = [];
   const lines: string[] = [];
   for (const u of units) {
     const l = unitInstruction(u);
     if (l) { kept.push(u); lines.push(l); }
   }
+  //  #4744 링크 따라 읽기 — 지난 판들이 기록해 둔 링크(이 판에 실은 앱만 · 상한) 다음에, 이번 판 글 속 같은 앱 링크(마지막에).
+  //   모으는 단위가 하나도 없으면 링크도 안 싣는다(링크만으로 · 확인 읽기만으로 된 판에 링크 읽기를 얹지 않는다).
+  const collecting = kept.filter((u) => !u.proof);
+  const apps = [...new Set(collecting.map((u) => u.app))];
+  const keptLinks: PlannedLink[] = [];
+  if (collecting.length) {
+    for (const l of links) {
+      if (keptLinks.length >= PLANNED_LINKS_PER_RUN || !apps.includes(l.app)) continue;
+      const line = plannedLinkInstruction(l);
+      if (line) { keptLinks.push(l); lines.push(line); }
+    }
+    //  같은 판 링크 따라 읽기는 «이번 판에 처음 보는 글» 이 있는 단위만 — 슬랙(읽은 위치 뒤 새 글) · 처음 읽는 노션 단위. 다시 읽는 노션 페이지는
+    //   판마다 전체가 다시 오므로 같은 링크를 판마다 다시 열게 된다 — 그 링크는 저장 단계가 적어 계획 길(이미 읽은 것 · 쉬는 것을 거른다)로 넘긴다.
+    const tail = sameAppLinkInstruction(sameRunLinkApps(kept), {
+      notionPages: kept.filter((u) => u.app === "notion" && sameRunLinkUnit(u)).map((u) => u.ref),
+    });
+    if (tail) lines.push(tail);
+  }
   return {
     prompt: ["수집 실행이다. 아래 대화·메일함·페이지를 차례로 읽는다. 적힌 도구와 인자 그대로 부른다.", ...lines, FOOT].join("\n"),
     units: kept,
+    links: keptLinks,
   };
 }
 
 /** 턴 상한 — 단위가 많을수록 넉넉히(쪽 넘김 · 스레드 펼침). 지메일은 스레드마다 한 번씩 펼쳐야 해서 더 준다. 확인 읽기는 한 번씩이라 둘. */
-export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0): number {
-  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40 + proofUnits * 2));
+export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0, linkReads = 0): number {
+  //  #4744 링크 읽기 몫(최대 12턴)을 더하되 러너의 상한 60 안에서 — 넘는 몫은 없다. 지시에서 링크 읽기가 맨 끝이라 턴이 모자라면 링크가 먼저 빠진다.
+  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40 + proofUnits * 2) + Math.min(12, Math.max(0, Math.floor(linkReads))));
 }
 
 // ── 확인 읽기의 판정(순수) ───────────────────────────────────────────────────
@@ -364,6 +396,24 @@ export function judgeProof(
   return { outcome, hits, compared };
 }
 
+/**
+ * (#4744) 같은 판 링크 따라 읽기를 하는 단위 — 이번 판에 처음 보는 글이 있는 단위: 슬랙(읽은 위치 뒤 새 글) · 처음 읽는(읽은 시각이 없는) 노션.
+ *  지시(collectPrompt) · 거두기(harvestLinkedReads) · 턴 몫(collect-run) 이 같은 거름을 쓴다.
+ */
+export function sameRunLinkUnit(u: Pick<PlannedUnit, "app" | "read_at" | "proof">): boolean {
+  //  확인 읽기 단위는 모으는 판이 아니다(이미 저장된 글과 맞춰 볼 뿐) — 그 글 속 링크는 따라가지 않는다.
+  if (u.proof === true) return false;
+  return u.app === "slack" || (u.app === "notion" && !u.read_at);
+}
+
+/** (#4744) 같은 판 링크 따라 읽기를 할 앱 — sameRunLinkUnit 인 단위의 앱. */
+export function sameRunLinkApps(units: readonly Pick<PlannedUnit, "app" | "read_at" | "proof">[]): string[] {
+  const apps: string[] = [];
+  if (units.some((u) => u.app === "slack" && sameRunLinkUnit(u))) apps.push("slack");
+  if (units.some((u) => u.app === "notion" && sameRunLinkUnit(u))) apps.push("notion");
+  return apps;
+}
+
 // ── 끝난 뒤: 원문 → 단위별 자료 ──────────────────────────────────────────────
 
 export interface UnitHarvest {
@@ -395,6 +445,33 @@ export interface UnitHarvest {
 export interface HarvestOpts {
   /** 계획 시각(epoch 초) — 구간 끝이 «지금» 인 판의 위치 · 마지막 글 시각의 상한. 없으면 그런 판의 위치는 안 옮긴다. */
   plannedAt?: number | null;
+  /** #4744 이 판에 실은 링크 — 그 대상을 읽은 결과는 «링크 읽기» 로 받는다. */
+  links?: readonly PlannedLink[];
+}
+
+/**
+ * #4744 링크로 읽은 문서 하나 — 계획 밖 읽기 가운데 «이번 판 글 속 같은 앱 링크» 또는 «계획에 실은 링크» 가 가리키는 것. 저장 단계가
+ *  링크가 있던 단위가 아니라 **그 문서의 단위**에 넣는다(노션 페이지는 없으면 만든다 · 슬랙은 그 채널이 단위일 때만).
+ */
+export interface LinkedRead {
+  app: "notion" | "slack";
+  /** 노션 페이지 uuid · 슬랙 채널 id. */
+  ref: string;
+  /** 노션 page · database. 슬랙은 채널 종류를 모른다(null). */
+  kind: string | null;
+  name: string | null;
+  /** 링크가 나온 단위의 instance(같은 앱 · 같은 워크스페이스) — 계획에 실은 링크면 같은 앱 단위의 것(저장 단계가 다시 맞춘다). */
+  instance: string;
+  /** 슬랙 — 읽은 스레드(부모) ts. */
+  thread?: string;
+  items: RawItem[];
+  via: "planned" | "same-run";
+  /** 맞은 링크(planned 면 collect_link 행 id 가 있다). */
+  link: LinkLike & { id?: number };
+  /** same-run 이면 그 링크가 나온 단위. */
+  from_unit_id: number | null;
+  /** 결과가 제 모양인가 — 아니면 저장하지 않는다. */
+  ok: boolean;
 }
 
 interface Page { inCursor: string | null; outCursor: string | null; end: boolean }
@@ -422,7 +499,8 @@ const sameNum = (got: unknown, want: string | null | undefined): boolean => {
 const sameText = (got: unknown, want: string): boolean => typeof got === "string" && got.replace(/\s+/g, " ").trim() === want;
 
 /** 수집 실행의 원문 → 단위별 자료와 위치. 요청하지 않은 그릇(채널·메일함·페이지)의 항목은 버린다(stray). */
-export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUnit[], opts: HarvestOpts = {}): { byUnit: Map<number, UnitHarvest>; stray: number } {
+export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUnit[], opts: HarvestOpts = {}):
+  { byUnit: Map<number, UnitHarvest>; stray: number; linked: LinkedRead[]; linkStray: number } {
   const plannedAt = typeof opts.plannedAt === "number" && Number.isFinite(opts.plannedAt) ? Math.floor(opts.plannedAt) : null;
   const byUnit = new Map<number, UnitHarvest>();
   //  같은 좌표가 여러 번 나오면 rank 가 큰 쪽(같으면 먼저 본 것)이 남는다.
@@ -432,6 +510,8 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     seen.set(u.id, new Map());
   }
   let stray = 0;
+  //  #4744 계획 밖 노션 페이지 · 슬랙 스레드 읽기 — 단위 자료를 다 모은 뒤 링크로 읽은 것인지 가린다(아니면 stray).
+  const strayCaps: Capture[] = [];
   const put = (u: PlannedUnit, it: RawItem, rank = 0) => {
     const m = seen.get(u.id)!;
     const k = it.provenance.external_id;
@@ -471,7 +551,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     } else if (c.tool === "slack_read_thread") {
       const r = parseSlackThread(c);
       const u = slackUnit(r.channelId);
-      if (!u) { stray++; continue; }
+      if (!u) { strayCaps.push(c); continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
       const asked = typeof c.input.message_ts === "string" && SLACK_TS.test(c.input.message_ts) ? c.input.message_ts : null;
@@ -522,7 +602,7 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       const p = parseNotionFetch(c);
       const id = p?.id ?? notionId(str(c.input.id));
       const u = id ? units.find((x) => x.app === "notion" && x.ref === id) ?? null : null;
-      if (!u) { stray++; continue; }
+      if (!u) { strayCaps.push(c); continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
       if (!p) { bad(u, c); continue; }
@@ -593,7 +673,95 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       h.stuck = cur <= MIN_WINDOW_SEC;
     }
   }
-  return { byUnit, stray };
+  const lk = harvestLinkedReads(strayCaps, units, byUnit, opts.links ?? [], plannedAt);
+  //  링크와 맞았지만 상한을 넘어 버린 읽기는 따로 센다(«지시를 벗어남» 이 아니다) — 링크 근거가 없는 계획 밖 읽기는 그대로 stray.
+  return { byUnit, stray: stray + lk.stray, linked: lk.linked, linkStray: lk.overQuota };
+}
+
+/**
+ * #4744 계획 밖 읽기 → 링크 읽기 — 이번 판 글 속 같은 앱 링크(단위마다 SAME_APP_LINKS_PER_UNIT 개까지) · 계획에 실은 링크가 가리키는 것만.
+ *  같은 문서의 여러 쪽(스레드 이어 읽기)은 한 줄로 합친다. 나머지는 stray.
+ */
+function harvestLinkedReads(caps: readonly Capture[], units: readonly PlannedUnit[], byUnit: Map<number, UnitHarvest>,
+  planned: readonly PlannedLink[], plannedAt: number | null): { linked: LinkedRead[]; stray: number; overQuota: number } {
+  const sameRun: Array<AppLink & { from: number; instance: string }> = [];
+  //  따라가지 않는 단위(다시 읽는 노션 페이지)의 같은 앱 링크 — 모델이 그래도 열었으면 받지 않되 «지시를 벗어남» 이 아니라 링크 쪽으로 센다.
+  const notFollowed: AppLink[] = [];
+  for (const u of units) {
+    //  지시와 같은 거름(sameRunLinkUnit) — 슬랙 · 처음 읽는 노션 단위의 글 속 링크만.
+    const follow = sameRunLinkUnit(u);
+    for (const it of byUnit.get(u.id)?.items ?? []) {
+      for (const l of extractAppLinks(`${it.title ?? ""}\n${it.body ?? ""}`)) {
+        if (l.app !== u.app) continue;
+        if (follow) sameRun.push({ ...l, from: u.id, instance: u.instance });
+        else notFollowed.push(l);
+      }
+    }
+  }
+  let stray = 0, overQuota = 0;
+  const quota = new Map<number, number>();
+  const got = new Map<string, LinkedRead & { keys: Set<string> }>();
+  for (const c of caps) {
+    let target: LinkedTarget | null = null;
+    let page: NotionPage | null = null;
+    let th: ReturnType<typeof parseSlackThread> | null = null;
+    if (c.tool === "notion-fetch") {
+      page = parseNotionFetch(c);
+      const ref = page?.id ?? notionId(str(c.input.id));
+      if (ref) target = { app: "notion", ref };
+    } else if (c.tool === "slack_read_thread") {
+      th = parseSlackThread(c);
+      const channel = th.channelId ?? str(c.input.channel_id);
+      const asked = typeof c.input.message_ts === "string" && SLACK_TS.test(c.input.message_ts) ? c.input.message_ts : null;
+      const ts = th.parent?.ts ?? asked;
+      const tss = [...(th.parent ? [th.parent.ts] : []), ...th.replies.map((m) => m.ts)];
+      if (channel && SLACK_REF.test(channel) && ts) target = { app: "slack", channel, thread: ts, tss };
+    }
+    const m = target ? matchLinkedRead(target, { sameRun, planned }) : null;
+    if (!target || !m) {
+      if (target && notFollowed.length && matchLinkedRead(target, { sameRun: notFollowed, planned: [] })) overQuota++;
+      else stray++;
+      continue;
+    }
+    const key = target.app === "notion" ? `n\u0001${target.ref}` : `s\u0001${target.channel}\u0001${target.thread}`;
+    let r = got.get(key);
+    if (!r) {
+      const from = m.via === "same-run" ? (m.link as AppLink & { from?: number }).from ?? null : null;
+      if (from != null) {
+        const q = quota.get(from) ?? 0;
+        if (q >= SAME_APP_LINKS_PER_UNIT) { overQuota++; continue; }
+        quota.set(from, q + 1);
+      }
+      const instance = (m.link as { instance?: string }).instance ?? units.find((u) => u.app === target!.app)?.instance ?? "";
+      r = {
+        app: target.app, ref: target.app === "notion" ? target.ref : target.channel, kind: null, name: null, instance,
+        ...(target.app === "slack" ? { thread: target.thread } : {}),
+        items: [], via: m.via, link: m.link, from_unit_id: from, ok: false, keys: new Set<string>(),
+      };
+      got.set(key, r);
+    }
+    const add = (it: RawItem) => {
+      const k = it.provenance.external_id;
+      if (!r!.keys.has(k)) { r!.keys.add(k); r!.items.push(it); }
+    };
+    if (target.app === "notion") {
+      if (!page) continue;
+      r.ok = true; r.kind = page.kind; r.name = page.title;
+      add(notionItem(page, { instance: r.instance }));
+    } else if (th) {
+      const shaped = th.wellFormed || (!!str(c.input.cursor) && (th.end || !!th.cursor));
+      if (!shaped) continue;
+      r.ok = true;
+      const parentTs = target.thread;
+      if (th.parent) add(slackItem({ ...th.parent, reply_count: th.parent.reply_count ?? (th.replies.length || null) }, { instance: r.instance, channel: target.channel }));
+      for (const msg of th.replies) {
+        const t = Number(msg.ts);
+        if (!(t > Number(parentTs)) || (plannedAt != null && t > plannedAt + 300)) continue;
+        add(slackItem(msg, { instance: r.instance, channel: target.channel, threadParentTs: parentTs }));
+      }
+    }
+  }
+  return { linked: [...got.values()].map(({ keys: _k, ...x }) => x), stray, overQuota };
 }
 
 const secOf = (v: string | null | undefined): number | null => {

@@ -29,6 +29,31 @@ export async function initV6CollectTrigger(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS collect_unit_due_idx ON collect_unit(next_at) WHERE state = 'active';
     ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
   `);
+  //  #4744 링크 따라 읽기 — 수집한 글 속 앱 링크(org/collect/link-store.ts 머리말). (앱 · 대상 · 링크가 나온 단위) 한 줄.
+  //   주소는 비공개 채널·DM 의 글에서 나온다 — 조회 방화벽(db/firewall.ts) 대상이고, 밖으로는 앱별 개수만 낸다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collect_link(
+      id BIGSERIAL PRIMARY KEY,
+      app TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'other',
+      url TEXT NOT NULL,
+      channel TEXT,
+      thread TEXT,
+      from_unit_id INT NOT NULL REFERENCES collect_unit(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      seen_count INT NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      read_at TIMESTAMPTZ,
+      target_unit_id INT REFERENCES collect_unit(id) ON DELETE SET NULL,
+      UNIQUE (app, ref, from_unit_id),
+      CONSTRAINT collect_link_state_chk CHECK (state IN ('pending','read','unsupported')));
+    ALTER TABLE collect_link ADD COLUMN IF NOT EXISTS tries INT NOT NULL DEFAULT 0;
+    ALTER TABLE collect_link ADD COLUMN IF NOT EXISTS tried_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS collect_link_pending_idx ON collect_link(member_id, app) WHERE state = 'pending';
+  `);
   try {
     const r = await pool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
     const ec = resolveEmbeddingConfig((r.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config);

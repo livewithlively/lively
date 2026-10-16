@@ -64,6 +64,10 @@ const collectUnits: Capability = {
     "지속 수집(#4744): 수집 중(active)이고 구성원이 담당인 단위는 스케줄러가 때가 되면 담당자 계정으로 수집 실행을 띄운다 — 줄의 next_at 이 " +
     "다음에 새 글을 볼 시각, interval_sec·interval_auto 가 주기와 자동 여부(최근 14일 글 빈도 — meta.activity), schedule.why 가 마지막 판정" +
     "(interval=주기 뒤 · catchup=밀려서 곧바로 · retry=못 읽어 물러섬)이다. 모으기로 켠(active) 단위는 다음 틱에 곧바로 처음 수집이 돈다. " +
+    "링크 따라 읽기(#4744): 수집 실행은 모은 글 속 같은 앱 문서 링크를 그 판에서 따라 읽고(그 문서의 단위에 넣는다 — 노션 페이지는 후보 단위로 생긴다), " +
+    "다른 연결된 앱 링크는 그 앱 판에 싣는다. link_suggestions 는 부르는 사람의 판에서 본 링크 가운데 그 사람이 아직 연결하지 않은 앱의 링크 수" +
+    "({app, links=서로 다른 대상, units=링크가 나온 단위 수}) — " +
+    "«노션 링크 412번 — 연결할까요?» 처럼 다음 연결 제안의 근거로 쓴다. " +
     "REST 등가: GET /api/ui/collect/units?app=&state=&mine=.",
   scope: "memory",
   input: listInput,
@@ -80,8 +84,10 @@ const collectUnits: Capability = {
     } }],
   },
   handler: async (input: ListInput, user: LivelyUser) => guard(async () => {
-    const r = await listUnitsFor(actorOf(user), { app: input.app ?? null, state: input.state ?? null, mine: !!input.mine });
-    return { units: r.units, hidden: r.hidden, count: r.units.length, visibility_enforced: r.visibility_enforced };
+    const actor = actorOf(user);
+    const r = await listUnitsFor(actor, { app: input.app ?? null, state: input.state ?? null, mine: !!input.mine });
+    const { linkSuggestionsFor } = await import("../org/collect/link-store.js");
+    return { units: r.units, hidden: r.hidden, count: r.units.length, visibility_enforced: r.visibility_enforced, link_suggestions: await linkSuggestionsFor(actor.member) };
   }),
 };
 

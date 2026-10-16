@@ -28,10 +28,11 @@ import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
 import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
 import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
-  CLAUDE_COLLECT_APPS, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, planProofUnits, unitsToLease,
-  type CollectMode, type CollectPlan,
-  type PlannedUnit,
+  CLAUDE_COLLECT_APPS, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, planProofUnits, sameRunLinkUnit,
+  unitsToLease, type CollectMode, type CollectPlan,
+  type PlannedLink, type PlannedUnit,
 } from "../org/collect/collect-plan.js";
+import { PLANNED_LINKS_PER_RUN, SAME_APP_LINKS_PER_UNIT } from "../org/collect/link-plan.js";   // #4744 링크 따라 읽기(순수 상수)
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
   collectCapsReadSh, collectJob, collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, newCollectRunId,
@@ -200,14 +201,19 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
   }
   const now = Date.now();
   const scheduled = input.trigger === "schedule";
-  const { prompt, units } = await planCollectUnits(memberOf(user), { app, dueOnly: input.dueOnly === true, scheduled, now });
+  const { prompt, units, links } = await planCollectUnits(memberOf(user), { app, dueOnly: input.dueOnly === true, scheduled, now });
   //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
   const apps = [...new Set(units.map((u) => CLAUDE_COLLECT_APPS[u.app]))];
   if (!apps.length) throw new HttpError(500, "수집 실행의 허락할 앱을 정하지 못했습니다");
   return {
     mode, prompt, apps,
-    maxTurns: collectMaxTurns(units.filter((u) => !u.proof).length, units.filter((u) => u.app === "gmail" && !u.proof).length, units.filter((u) => u.proof).length),
-    plan: { mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}) },
+    //  #4744 링크 읽기 몫 — 실은 링크마다 둘(스레드 이어 읽기) · 같은 판 링크를 따라가는 단위(sameRunLinkUnit — 확인 읽기 단위는 아니다)마다 상한만큼.
+    maxTurns: collectMaxTurns(units.filter((u) => !u.proof).length, units.filter((u) => u.app === "gmail" && !u.proof).length, units.filter((u) => u.proof).length,
+      links.length * 2 + units.filter(sameRunLinkUnit).length * SAME_APP_LINKS_PER_UNIT),
+    plan: {
+      mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}),
+      ...(links.length ? { links } : {}),
+    },
   };
 }
 
@@ -217,7 +223,7 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
  *   그 단위는 수집이 아니라 확인 읽기로 싣는다 — 수집 창(읽은 위치 뒤)에는 맞춰 볼 저장된 글이 없어, 수집으로 실으면 확인이 영영 안 된다.
  */
 export async function planCollectUnits(member: string, opts: { app?: string | null; dueOnly?: boolean; scheduled?: boolean; now?: number } = {}): Promise<{
-  prompt: string; units: PlannedUnit[];
+  prompt: string; units: PlannedUnit[]; links: PlannedLink[];
 }> {
   const now = opts.now ?? Date.now();
   const app = opts.app ?? null;
@@ -233,7 +239,10 @@ export async function planCollectUnits(member: string, opts: { app?: string | nu
   const planned = pickUnitsForRun(assigned.filter((u) => guard.get(u.id) !== true), { now, app });
   const slots = planned.length ? PROOF_PER_RUN : PROOF_ONLY_PER_RUN;
   const proofs = planProofUnits(await pendingProofs(member, slots + planned.length, { app }), planned, { app, max: slots });
-  const r = collectPrompt([...planned, ...proofs]);
+  //  #4744 링크 따라 읽기 — 지난 판들이 적어 둔 이 사람의 «다른 앱 링크» 가운데 이 판에 모을(확인 읽기 아닌) 앱의 것(상한은 collectPrompt 가 자른다).
+  const { pendingLinksFor } = await import("../org/collect/link-store.js");
+  const pending = await pendingLinksFor(member, [...new Set(planned.map((u) => u.app))], PLANNED_LINKS_PER_RUN);
+  const r = collectPrompt([...planned, ...proofs], pending);
   //  #4744 이 판이 맡아야 했던(때가 된 · 정한 앱의) 보호 단위 가운데 확인 읽기로도 못 실은 것(시도 상한 · 간격 안 · 확인 창 없음)은
   //   «막힘» 으로 물러서게 한다 — 안 그러면 그 단위가 계속 때가 된 단위로 남아 주기 틱이 이 사람을 매번 골라 409 로 자리만 차지한다.
   //   때가 안 된 단위 · 다른 앱의 단위는 건드리지 않는다(그 일정은 그대로).

@@ -23,8 +23,11 @@ import {
 /** 확인 읽기 한 판의 결과 — 판정(ProofOutcome) + 구성원 행이 없음(not_member) · 결과를 못 풂(unreadable). */
 export type ProofResult = ProofOutcome | "not_member" | "unreadable";
 
-/** 이 사람($member) 기준 «보호 단위이고 아직 확인 안 됨» — 목록 판정(unitGuards)과 수집 판정(guardsByUnitId)이 같은 한 벌을 쓴다. */
-const guardedSql = (member: string) => `(
+/**
+ * 이 사람($member) 기준 «보호 단위이고 아직 확인 안 됨» — 목록 판정(unitGuards) · 수집 판정(guardsByUnitId) · 링크 따라 읽기의 계획(link-store
+ *  pendingLinksFor, #4744)이 같은 한 벌을 쓴다. `u` 는 collect_unit 의 별칭.
+ */
+export const guardedSql = (member: string) => `(
   COALESCE(u.visibility, 'viewers') <> 'all' AND u.kind <> 'mailbox'
   AND EXISTS (SELECT 1 FROM collect_unit_source us WHERE us.unit_id = u.id)
   AND NOT EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = u.id AND m.member_id = ${member} AND m.verified_at IS NOT NULL))`;
