@@ -364,6 +364,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/files/file-url.pg-test.mjs
+      # ⑤-i5 이름 바꾸기·옮기기 기록 + 자료 좌표 이동(#4688) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 자료 라우트 · 홈 탐색기).
+      #    같은 자료 번호가 새 좌표로(updated_at · 지식 근거 그대로) · 옛 링크 풀기(연쇄 접기 · 되돌리기 · 가장 긴 접두 · 실제 파일 먼저) ·
+      #    도착 좌표의 휴지통·닫힌 기록은 비켜 두고 되살리면 되찾기 · 잠긴 자리는 새 자리 기준 재판정 · 개인 폴더는 주인별 ·
+      #    프로젝트 폴더 자리 자체 이름 바꾸기 400.
+      - name: 이름 바꾸기·옮기기 기록 · 자료 좌표 이동 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/file-move.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.

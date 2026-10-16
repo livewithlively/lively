@@ -38,6 +38,9 @@ import { deleteSource, canSeeSource } from "../v6/source-store.js";
 import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { finishUpload } from "../ingest/upload-finish.js";
+import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기·옮기기 뒤 자료 좌표 + «옛 경로 → 새 경로»
+import { SHARED_MOVE_SCOPE } from "../v6/file-move-store.js";
+import { isProjectFolderOrAncestor } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
@@ -185,6 +188,28 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     return { project, store, base: store.base };
   };
 
+  // 다른 프로젝트의 폴더 자리(#4688) — DB 에 이 프로젝트 폴더 안쪽으로 적힌 프로젝트 폴더(또는 그 조상)는 이름을 바꾸거나 옮기지 않는다.
+  //  그 프로젝트의 폴더 · 자료 좌표 · 공개범위 판정이 그 경로를 기준으로 한다(홈 탐색기와 같은 판정 — shared-folder-store).
+  const assertNotProjectFolder = async (project: { folder: string }, ...rels: string[]): Promise<void> => {
+    for (const rel of rels) {
+      if (await isProjectFolderOrAncestor(path.join(project.folder, rel))) throw new HttpError(400, "다른 프로젝트의 폴더라 이름을 바꾸거나 옮길 수 없어요");
+    }
+  };
+
+  // 이름 바꾸기·옮기기 뒷일(#4688) — 파일을 옮긴 **뒤에** 그 자리에서: 자료 좌표(`project:<id>/…`)를 같은 행 그대로 옮기고,
+  //  링크 좌표(공유 루트의 `<folder>/…` — localFileUrl 과 같은 꼴)로 «옛 경로 → 새 경로» 를 남긴다. 실패는 남기고 삼킨다(files/file-move).
+  const settleProjectMove = (project: { id: number; name: string; folder: string }, base: string, fromAbs: string, toAbs: string, req: express.Request): Promise<void> => {
+    const fromRel = path.relative(base, fromAbs);
+    const toRel = path.relative(base, toAbs);
+    return settleFileMove({
+      scope: SHARED_MOVE_SCOPE,
+      fromPath: path.join(project.folder, fromRel),
+      toPath: path.join(project.folder, toRel),
+      local: { root: { kind: "project", id: project.id }, fromRel, toRel, folder: project.folder, channelFallback: project.name },
+      by: viewerOf(userOf(req)),
+    });
+  };
+
   // ── ① 공유 폴더 — 목록 / 검색(q) ──
   app.get(`${prefix}/:id/files`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
@@ -294,7 +319,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //   **프로젝트 이름이 조용히 바뀐다**. 파일 이름은 파일 이름의 자리(`/file/…`)에서 바꾼다.
   //   같은 종류의 충돌을 다시 만들지 않게 scripts/route-collision.test.mjs 가 전 경로를 훑는다.
   app.post(`${prefix}/:id/file/rename`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);
     const newName = nfcPath(b.name).trim();   // 새 이름도 NFC 정본(#1278b)
@@ -308,7 +333,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     await jailIfMember(store, toAbs);
     if (!(await store.stat(fromAbs))) throw new HttpError(404, "대상이 없습니다");
     if (await store.stat(toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+    await assertNotProjectFolder(project, path.relative(base, fromAbs), path.relative(base, toAbs));
     await store.move(fromAbs, toAbs);
+    await settleProjectMove(project, base, fromAbs, toAbs, req);   // #4688 — 자료가 새 이름으로 이어지고 옛 링크가 새 자리로 열린다
     res.json({ ok: true });
   }));
 
@@ -317,7 +344,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  왜 여러 개를 한 번에 받나: 사각형 선택으로 고른 여러 자료를 한 번에 끌어다 놓는 게 이 기능의 본래 쓰임이라,
   //  건별 왕복이면 중간에 실패했을 때 사용자가 '어디까지 갔는지' 알 길이 없다. 건별 결과를 모아 돌려준다.
   app.post(`${prefix}/:id/move`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const list = Array.isArray(b.paths) ? b.paths : (b.path != null ? [b.path] : []);
     if (!list.length) throw new HttpError(400, "옮길 대상이 필요합니다");
@@ -338,7 +365,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
         if (toAbs.startsWith(fromAbs + path.sep)) throw new HttpError(400, "폴더를 자기 안으로 옮길 수 없습니다");
         await jailIfMember(store, fromAbs);
         if (await store.stat(toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+        await assertNotProjectFolder(project, path.relative(base, fromAbs), path.relative(base, toAbs));
         await store.move(fromAbs, toAbs);
+        //  #4688 — 옮긴 바로 뒤, 항목마다(일부만 성공이 보통이라). 뒷일은 던지지 않는다 — 아래 권한 비트가 실패해도 파일은 이미 옮겨졌다.
+        await settleProjectMove(project, base, fromAbs, toAbs, req);
         //  그룹 rw 는 로컬 저장소 계약이다 — 멤버 저장소는 권한 비트를 안 건드리므로 종류를 묻는 왕복도 하지 않는다.
         if (!store.osUser) await store.grantGroup(toAbs, (await store.stat(toAbs))?.dir ? "dir" : "file");
         moved.push(path.relative(base, toAbs));

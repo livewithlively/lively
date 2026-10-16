@@ -73,6 +73,35 @@ export function projectFolderOf(rel: string): string | null {
   return `${segs[0]}/${segs[1]}`;
 }
 
+/**
+ * 프로젝트 폴더를 **담는 자리 자체**인가 — `project` · `legacy-project` 와 그 바로 아래 한 칸(`project/<id>`). (#4688)
+ *  홈 탐색기는 이 이름을 바꾸지 않는다 — 프로젝트의 폴더 자리다(DB project.folder · 자료 좌표 `project:<id>/…` · 공개범위 판정이 이 경로를
+ *  기준으로 한다. 프로젝트 이름 바꾸기는 폴더를 옮기지 않는다). 그 안의 파일·폴더(`project/<id>/…`)는 바꿀 수 있다.
+ *  모양만 본다 — 더 깊게 적힌 프로젝트 폴더는 isProjectFolderOrAncestor 가 DB 로 본다. 이상한 경로는 false(부르는 쪽 경로 해소가 이미 걸었다).
+ */
+export function isProjectContainerPath(rel: string): boolean {
+  let segs: string[];
+  try { segs = normalizeSharedPath(rel).split("/").filter(Boolean); } catch { return false; }
+  return (segs.length === 1 || segs.length === 2) && (segs[0] === PROJECT_SUBDIR || segs[0] === LEGACY_SUBDIR);
+}
+
+/**
+ * 이 경로가 어느 프로젝트의 폴더(DB project.folder)이거나 그 조상인가(#4688) — 모양 판정이 못 덮는 자리(project/ 아래 더 깊게 적힌
+ *  폴더 `project/a/b` 와 그 조상)를 덮는다. project/ ↔ legacy-project/ 양형으로 본다(게이트와 같은 이유 — DB 값이 옛 접두일 수 있다).
+ *  판정을 못 하면(DB 장애) 던진다 — 이름 바꾸기를 하지 않는 쪽이다.
+ */
+export async function isProjectFolderOrAncestor(rel: string): Promise<boolean> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return false; }
+  if (!norm) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND p.folder <> ''
+        AND (trim(both '/' from p.folder) = v.x OR starts_with(trim(both '/' from p.folder), v.x || '/'))
+      LIMIT 1`, [folderVariants(norm)]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** 프로젝트 상속 구간이라 여기서 ACL 을 설정하면 안 되는 경로인가(설정 UI·API 가 이걸로 거절한다). */
 export function isProjectManagedPath(rel: string): boolean {
   const segs = normalizeSharedPath(rel).split("/").filter(Boolean);

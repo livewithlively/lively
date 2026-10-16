@@ -176,6 +176,96 @@ export function looksLikeText(buf: Buffer): boolean {
   return countReplacement(s) / Math.max(1, s.length) < 0.01;
 }
 
+// ── 이름 바꾸기·옮기기의 순수 부분(#4688) — 옮긴 파일의 자료 행을 새 좌표로. DB 는 local-file.ts moveLocalPath. ──
+//  같은 행을 **제자리에서** 고친다 — 지식 근거(knowledge_source)·공개 대상(source_member)·증류 기록이 자료 번호(source.id)에 걸려 있어,
+//   새로 만들고 옛 것을 닫으면(첨부 옮기기 방식) 그 연결이 전부 끊긴다. updated_at 은 올리지 않는다(증류기가 «내용이 바뀌었다» 로 읽어 다시 판단한다).
+//  고치는 칸은 좌표가 담긴 곳뿐: 좌표 · 링크 · 이름(제목이 파일 이름이었으면) · fields 의 path · container_name(채널 = 맨 위 폴더) · ext ·
+//   바이너리 안내문 머리 줄(이름 · 종류 · 주소)과 «본문이 길어 …» 꼬리의 주소.
+
+/** 도착 좌표를 비울 때 그 자리에 남아 있던 다른 행(지운 파일의 닫힌 기록·휴지통 기록)을 비켜 두는 좌표 머리 — 뒤에 자료 번호가 붙는다.
+ *  어느 자리 키(personal:·project:·shared)와도 안 겹치고 '/' 가 없어 parseLocalExternalId 가 null 을 준다(원본 열기·접두 판정에 안 걸린다).
+ *  원래 좌표는 fields.aside_from 에 남는다 — 휴지통에서 되살리면 그 좌표를 되찾는다(reviveTrashedFile). */
+export const LOCAL_ASIDE_PREFIX = "aside:";
+
+export interface LocalMove {
+  root: LocalRoot;
+  /** 그 루트 기준 옛·새 상대경로(폴더면 하위 전부가 따라간다) */
+  fromRel: string;
+  toRel: string;
+  /** 프로젝트 폴더(project/<id>) — 링크 구성용(localFileUrl). 개인·shared 는 생략 */
+  folder?: string | null;
+  /** 맨 위에 놓인 파일의 채널(localChannelOf 의 fallback) — 업로드 때와 같은 값(프로젝트명·'uploads'·'shared') */
+  channelFallback: string;
+}
+/**
+ * 옮길 행 — 본문은 통째로 받지 않는다(폴더 하나에 큰 글이 수천 건이면 그만큼을 게이트웨이로 끌어오게 된다).
+ *  body_head = 첫 줄(바이너리 안내문 머리 줄 자리 — 안내문일 때만, 길이 상한) · body_tail = 끝 몇천 자(긴 본문 꼬리 자리 — 그 꼴일 때만).
+ */
+export interface LocalRowForMove {
+  external_id: string; external_url?: string | null; title?: string | null; fields?: Record<string, unknown> | null;
+  body_head?: string | null; body_tail?: string | null;
+}
+/** 본문 고치기 한 군데 — from 이 그 자리(첫 줄 전체 · 끝)와 글자 그대로 같을 때만 to 로 바꾼다(그새 본문이 바뀌었으면 손대지 않는다). */
+export interface BodyEdit { from: string; to: string }
+export interface MovedLocalRow {
+  external_id: string; external_url: string; title: string | null; fields: Record<string, unknown>;
+  /** 첫 줄(안내문 머리 줄) 고치기 */ head: BodyEdit | null;
+  /** 끝(긴 본문 꼬리) 고치기 */ tail: BodyEdit | null;
+}
+
+//  안내문 머리 줄(buildLocalBinaryStub) · 긴 본문 꼬리(ingest 의 buildBody) 꼴. ⚠ 본문의 **다른 자리**는 손대지 않는다 —
+//   텍스트 자료의 본문은 파일 내용 그 자체라, 사람이 쓴 글 속 옛 주소까지 바꾸면 자료가 파일과 달라진다.
+const STUB_HEAD = /^\[BINARY\] filename=(.*) mime=(\S+) size=(\d+) url=(\S+)( modified=\S+)?$/;
+const LONG_TAIL = /( — 전문은 )(\S+)\]$/;
+
+/** 옮긴 자리(자신·하위)의 자료 행 → 새 좌표의 값. 그 행이 옮긴 자리 밖이면 null. */
+export function movedLocalRow(row: LocalRowForMove, m: LocalMove): MovedLocalRow | null {
+  const rootKey = localRootKey(m.root);
+  const fromKey = localExternalId(m.root, m.fromRel);
+  const toKey = localExternalId(m.root, m.toRel);
+  const old = String(row.external_id ?? "");
+  if (old !== fromKey && !old.startsWith(fromKey + "/")) return null;
+  const nextId = toKey + old.slice(fromKey.length);
+  const oldRel = old.slice(rootKey.length + 1);
+  const newRel = nextId.slice(rootKey.length + 1);
+  const oldName = path.posix.basename(oldRel);
+  const newName = path.posix.basename(newRel);
+  const newUrl = localFileUrl(m.root, newRel, m.folder);
+  const oldUrls = new Set([String(row.external_url ?? ""), localFileUrl(m.root, oldRel, m.folder)].filter(Boolean));
+
+  let head: BodyEdit | null = null;
+  let tail: BodyEdit | null = null;
+  const firstLine = row.body_head ?? "";
+  const hm = STUB_HEAD.exec(firstLine);
+  if (hm) {
+    //  이름은 그 파일 이름일 때만(가려 적힌 이름은 그대로) · 종류는 확장자에서 나온 값일 때만 새 확장자로.
+    const name = hm[1] === oldName ? newName : hm[1];
+    const mime = hm[2] === localMimeOf(oldName) ? localMimeOf(newName) : hm[2];
+    const to = `[BINARY] filename=${name} mime=${mime} size=${hm[3]} url=${newUrl}${hm[5] ?? ""}`;
+    if (to !== firstLine) head = { from: firstLine, to };
+  } else {
+    const tm = LONG_TAIL.exec(row.body_tail ?? "");
+    if (tm && oldUrls.has(tm[2]) && tm[2] !== newUrl) tail = { from: tm[0], to: tm[1] + newUrl + "]" };
+  }
+
+  const fields: Record<string, unknown> = { ...(row.fields ?? {}), path: newRel, container_name: localChannelOf(m.root, newRel, m.channelFallback), ext: extOf(newName) };
+  const title = row.title == null ? null : row.title === oldName ? newName : row.title;
+  return { external_id: nextId, external_url: newUrl, title, fields, head, tail };
+}
+
+/** 고치기를 본문에 적용(순수) — DB 쪽(moveLocalPath 의 SQL)과 **같은 규칙**: 첫 줄이 글자 그대로 같으면 첫 줄을, 아니면 끝이 같으면 끝을. */
+export function applyBodyEdits(body: string, e: Pick<MovedLocalRow, "head" | "tail">): string {
+  const nl = body.indexOf("\n");
+  const first = nl < 0 ? body : body.slice(0, nl);
+  if (e.head && first === e.head.from) return e.head.to + (nl < 0 ? "" : body.slice(nl));
+  if (e.tail && body.endsWith(e.tail.from)) return body.slice(0, body.length - e.tail.from.length) + e.tail.to;
+  return body;
+}
+
+/** 옮길 행을 읽을 때 본문에서 가져올 두 자리(SQL 식) — 안내문 머리 줄(상한 8000자) · 긴 본문 꼬리(끝 4000자). 그 꼴이 아니면 NULL. */
+export const BODY_HEAD_SQL = `CASE WHEN left(body_md, 9) = '[BINARY] ' THEN split_part(left(body_md, 8000), E'\\n', 1) END`;
+export const BODY_TAIL_SQL = `CASE WHEN right(body_md, 1) = ']' AND position(' — 전문은 ' in right(body_md, 4000)) > 0 THEN right(body_md, 4000) END`;
+
 // ── 파일 휴지통의 순수 부분(#3778) — 보관 자리 계산. DB·FS 없음(도장 찍기·옮기기는 local-file.ts · project-routes.ts). ──
 //  root = 어느 루트의 보관인가(localRootKey — 'personal:<member>' · 'shared' · 'project:<id>'). 개인·공유 폴더 삭제도 휴지통을 거치면서 생겼다.
 //   옛 도장(프로젝트 파일 전용)에는 없다 — 그때는 project_id 가 곧 루트다(trashStampRoot 가 둘을 한 답으로 접는다). 경로는 전부 **그 루트 기준** posix 상대경로.
