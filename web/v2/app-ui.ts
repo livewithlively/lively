@@ -28,6 +28,21 @@ import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 �
 import { OMNI_MSG } from '../lib/omni-chord.js';
 let lastOmniAsk = 0;   // 앱이 보낸 «통합검색 열기» 의 마지막 때(1초에 한 번)
 
+/**
+ * 다리로 앱에 넘기는 실패(#4848) — 서버가 답한 실패(e.status 가 있음)면 error.data 에 상태와 서버의 짧은 글(error · code — 문자열만)을 싣는다.
+ *  앱의 SDK(app-ui-runtime.ts)가 그걸로 e.status · e.reason(body_too_large · consent_required …)을 만든다 — 맨몸(새 탭 · 폰)과 같은 규칙.
+ *  서버 밖의 거절(붙은 세션 없음 · 사람이 누른 동작 아님 …)은 data 없이 종전 그대로.
+ */
+function rpcFailure(e: any, code: number): { code: number; message: string; data?: { status: number; error?: string; code?: string } } {
+  const message = e && e.message ? String(e.message) : String(e);
+  const status = typeof e?.status === 'number' ? e.status : 0;
+  if (!status) return { code, message };
+  const data: { status: number; error?: string; code?: string } = { status };
+  if (typeof e?.body?.error === 'string') data.error = e.body.error.slice(0, 300);
+  if (typeof e?.body?.code === 'string' && e.body.code.length <= 64) data.code = e.body.code;   // 긴 것은 자르지 않고 버린다(잘린 글이 코드가 되지 않게)
+  return { code, message, data };
+}
+
 export interface AppCsp {
   connect_domains?: string[]; resource_domains?: string[]; frame_domains?: string[];
   /** #4673 — 앱 폴더를 선언한 앱의 서명 주소 자리(`<게이트웨이>/api/files/s/`). 서버가 채운다(src/files/app-screen-csp.ts). */
@@ -304,7 +319,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
           return send();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out?.result ?? out }))
-        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, e?.status === 403 ? -32001 : -32000) }));
     } else if (msg.method === 'chat/send') {
       // #4594 — 앱 화면이 **붙은 세션**에 글을 바로 보낸다(원준: 채우기가 아니라 보내기). 세션에 붙어 열린 화면에만 세션이 있다.
       //  서버가 세 겹(동의·주인·붙음)을 다시 보고 표식 한 줄을 붙여 /prompt 와 같은 통로로 넣는다. 멈춘 세션(409 draft)은 실패로
@@ -335,7 +350,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
             reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { sent: false, session: sid, draft: put } });
             return;
           }
-          reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } });
+          reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, e?.status === 403 ? -32001 : -32000) });
         });
     } else if (msg.method === 'ui/chrome') {
       // #4592 — 제 머리줄이 있는 앱이 호스트의 앱 머리줄(이름 · 판 · ⋯)을 접어 달라고 한다. 그 줄을 그리는 쪽(세션의 앱 칸)만 받는다.
@@ -390,7 +405,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
           return read();
         })
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out }))
-        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, e?.status === 403 ? -32001 : -32000) }));
     } else if (msg.method === 'prefs/get' || msg.method === 'prefs/set') {
       // #4601 — 앱 × 보는 사람의 개인 설정. 샌드박스 화면은 localStorage 가 없고(불투명 오리진) SDK 에 신원이 없어 서버가 든다.
       //  동의와 무관하다(설정은 라이블리 데이터가 아니라 그 사람이 앱을 보는 방식) — 그래서 tools/call 이 아니라 별도 경로.
@@ -400,7 +415,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
         : api(path, { method: 'POST', body: JSON.stringify({ patch: (msg.params as { patch?: unknown } | undefined)?.patch ?? {} }) });
       void req
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { prefs: (out && out.prefs) || {} } }))
-        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 413 ? -32602 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, e?.status === 413 ? -32602 : -32000) }));
     } else if (msg.method === 'ui/me') {
       // #4482 — 보는 사람 · 워크스페이스 · 이 앱 · 붙은 세션(lively.me). 앱 주소의 /_lively/me 와 같은 꼴 — srcdoc 길에는 같은 주소 API 가 없어
       //  호스트가 답한다. 세션은 이 프레임을 띄운 쪽이 안다(앱 주소의 /_lively/me 는 쿠키가 여러 프레임에 같아 세션을 모른다).
@@ -418,7 +433,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 동의를 청할 수 있습니다' } }); return; }
       void ensureAppGrant(appId, opts?.title || meta.title)
         .then((granted) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { granted } }))
-        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: (e && e.message ? e.message : String(e)) } }));
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: rpcFailure(e, -32000) }));
     } else if (msg.method === 'ui/openExternal') {
       // srcdoc(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다(앱 주소 iframe 은 팝업이 되지만 열린 창도 같은 제한을 받아 이 길이 낫다). http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');

@@ -53,6 +53,10 @@
 //                                                바깥 변경 알림(store.onChange)은 화면이 다시 보일 때 { source:'visibility' } 로 한 번 온다.
 //                                                동의가 없으면 처음 한 번 라이블리의 동의 화면으로 갔다 오고, 앱 주소 로그인이 끝났으면 화면을 다시 연다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
+//   #4848 서버가 거절한 것이면 e.status 에 HTTP 상태, e.reason 에 짧은 코드(busy · body_timeout · body_too_large · bad_body · consent_required ·
+//   login_required …, 없으면 null)를 싣는다 — 라이블리 안 · 맨몸 어디서든 같다. 앱은 글이 아니라 e.reason 으로 가른다.
+//   본문 거절(busy · body_timeout · body_too_large · bad_body)의 글은 사람이 읽을 말이다. 맨몸에서 앞단이 «붐빔»(503 busy)으로 거절한 요청은
+//   SDK 가 retry-after 만큼 쉬고 한 번 다시 보낸다(본문을 다 받기 전의 거절이라 쓰기가 겹치지 않는다) — 또 붐비면 그때 e.reason 'busy' 로 실패한다.
 //  ⚠ onChange 를 안 쓰는 앱은 바깥(세션의 AI · 다른 사람)에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
 //   앱 화면이 쓴 것(source app-ui · app-front — 다른 창 · 새 탭 · 폰에서 쓴 것도)으로는 다시 불러오지 않는다.
 //   그것까지 따라오게 하려면, 또 화면 상태(입력 중인 글·스크롤)를 지키려면 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
@@ -67,7 +71,8 @@ export const APP_RUNTIME_JS = `
   var alone = (function () { try { return window.parent === window; } catch (_) { return false; } })();
   // #4482 — 앱 주소 문서가 맨몸이면 같은 주소의 /_lively/* 로 돈다(standalone). srcdoc(about:) · 파일로 연 문서는 쓸 API 가 없다.
   var standalone = alone && typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || ''));
-  function mkErr(message, code, extra) { var e = new Error(message); e.code = code; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
+  // #4848 실패는 늘 같은 모양 — code(JSON-RPC) · status · reason. 서버까지 안 간 거절은 status · reason 이 null(서버의 답이면 failure 가 채운다).
+  function mkErr(message, code, extra) { var e = new Error(message); e.code = code; e.status = null; e.reason = null; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
   function post(method, params) {
     if (standalone) return local(method, params || {});
     return new Promise(function (resolve, reject) {
@@ -90,6 +95,30 @@ export const APP_RUNTIME_JS = `
       return true;
     } catch (_) { return false; }
   }
+  // #4848 서버가 거절한 까닭 — 짧은 코드(e.reason)로 앱에 보인다. 본문 거절 넷은 글(e.message)도 사람이 읽을 말로 바꾼다(앱이 그대로 보여도 되게 —
+  //  읽는 사람은 앱을 쓰는 사람이라 개발 용어를 쓰지 않는다).
+  //  짧은 코드: 서버 JSON 의 code(코어 — consent_required · body_too_large …), 없으면 짧은 코드 꼴의 error(앞단 — busy · login_required …),
+  //  둘 다 없고 서버 글도 없는 413(코어 전역 파서의 HTML 413)이면 body_too_large. 그 밖은 null — 지어내지 않는다(서버가 제 글을 준 413 —
+  //  개인 설정 16KB · 파일 읽기 8MB · 결과 상한 — 은 그 글이 맞는 안내다). 맨몸(fetch 의 답)과 라이블리 안(다리의 error.data)이 같이 쓴다.
+  var REASON_TEXT = {
+    busy: '지금 보내는 요청이 많아 받지 못했습니다 — 잠시 뒤에 다시 보내 주세요.',
+    body_timeout: '보내는 데 너무 오래 걸려 끊겼습니다 — 연결을 확인하고 다시 보내 주세요.',
+    body_too_large: '보낸 내용이 너무 큽니다(한 번에 1MB 까지) — 나눠서 보내 주세요.',
+    bad_body: '보낸 내용을 읽지 못했습니다 — 다시 보내 주세요.'
+  };
+  var SHORT_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+  function reasonOf(status, j) {
+    if (j && typeof j.code === 'string' && SHORT_CODE.test(j.code)) return j.code;
+    if (j && typeof j.error === 'string' && SHORT_CODE.test(j.error)) return j.error;
+    return status === 413 && !(j && typeof j.error === 'string' && j.error) ? 'body_too_large' : null;
+  }
+  function failure(message, code, status, j, extra) {
+    var reason = status ? reasonOf(status, j) : null;
+    var e = mkErr(reason && Object.prototype.hasOwnProperty.call(REASON_TEXT, reason) ? REASON_TEXT[reason] : message, code, extra);
+    e.status = status || null;
+    e.reason = reason;
+    return e;
+  }
   function here() { return String(location.pathname || '/') + String(location.search || '') + String(location.hash || ''); }
   // 돌아올 자리(next)는 CP 로그인 왕복을 지나도 살아남게 — 그 왕복은 해시를 글자 집합(영숫자 · /_-.?=&%+~:@,)과 512자로 거른다.
   //  encodeURIComponent 가 남기는 !'()* 까지 인코딩하고, 길면 첫 화면(/)으로(앞단 appOpenUrl 과 같은 규칙).
@@ -102,16 +131,39 @@ export const APP_RUNTIME_JS = `
     location.assign(url + (url.indexOf('?') >= 0 ? '&' : '?') + 'next=' + n);
     return true;
   }
+  // #4848 앞단이 «붐빔»(503 busy)으로 거절한 요청은 retry-after(초)만큼 쉬고 한 번만 다시 보낸다 — 앞단은 본문을 다 받기 전에 거절해
+  //  코어에 닿지 않았다(다시 보내도 쓰기가 겹치지 않는다). 쉬는 시간은 30초까지(없거나 이상하면 5초), 그 위에 ¼(1초까지)을 흩뿌린다 —
+  //  한꺼번에 거절된 화면들이 한꺼번에 돌아오지 않게. 다시 보낸 답이 결과다(또 붐비면 그 실패로).
+  //  ★ 앞단의 모양 그대로({error:"busy"} — code 없음)일 때만 다시 보낸다(code 를 실은 busy 는 다시 보내지 않는다). 코어는 그 모양을 내지 않는다는
+  //   약속에 기댄다 — 코어 src/apps/app-front-api.ts apiErrorReply 주석(지금 코어엔 busy 를 쓰는 자리가 없다).
+  function frontBusy(status, j) { return status === 503 && !!j && j.error === 'busy' && j.code === undefined; }
+  function retryWait(r) {
+    var raw = null;
+    try { raw = r.headers && typeof r.headers.get === 'function' ? r.headers.get('retry-after') : null; } catch (_) { raw = null; }
+    var s = raw == null || String(raw).trim() === '' ? NaN : Number(raw);
+    var base = isFinite(s) && s >= 0 ? Math.min(s, 30) * 1000 : 5000;
+    return base + Math.floor(Math.random() * Math.min(1000, base / 4));
+  }
   function http(method, path, body) {
     var init = { method: method, credentials: 'same-origin', headers: { accept: 'application/json' } };
     if (body !== undefined) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
+    return send(path, init, false);
+  }
+  // #4848 서버의 답을 받지 못했다(연결 끊김 · 오프라인 — fetch · 본문 읽기의 TypeError) — 같은 모양으로(status · reason null · 원래 오류는 cause).
+  //  서버가 쓰기를 마친 뒤 답만 잃었을 수도 있어 «안 갔다» 고 단정하지 않는다.
+  function lost(err) { return mkErr('서버의 답을 받지 못했습니다 — 연결을 확인하고 다시 시도해 주세요.', -32000, { cause: err }); }
+  function send(path, init, again) {
     return fetch('/_lively' + path, init).then(function (r) {
-      return r.text().then(function (t) {
+      return r.text().then(null, function (err) { throw lost(err); }).then(function (t) {
         var j = null;
         try { j = t ? JSON.parse(t) : null; } catch (_) { j = null; }
         if (r.ok) return j;
+        //  같은 init(같은 메서드 · 경로 · 본문 글자)으로 한 번만 — 앱이 그 사이 넘긴 객체를 고쳐도 다시 보내는 본문은 첫 번째와 같다.
+        if (!again && frontBusy(r.status, j)) {
+          return new Promise(function (res) { setTimeout(res, retryWait(r)); }).then(function () { return send(path, init, true); });
+        }
         var code = r.status === 403 ? -32001 : (r.status === 400 || r.status === 413) ? -32602 : r.status === 404 ? -32601 : -32000;
-        var e = mkErr((j && j.error) || ('요청이 실패했습니다(' + r.status + ')'), code, { status: r.status, body: j });
+        var e = failure((j && j.error) || ('요청이 실패했습니다(' + r.status + ')'), code, r.status, j, { body: j });
         // 앱 주소 로그인(12시간)이 끝났다 — 화면을 다시 열면 앞단이 라이블리 로그인을 거쳐 돌려보낸다(1분에 한 번만).
         if (r.status === 401 && j && j.error === 'login_required' && onceIn('lively.relogin', 60000)) { location.reload(); return new Promise(function () {}); }
         // 이 앱 사용 동의가 없다 — 라이블리의 동의 화면으로 한 번 갔다 온다(10분에 한 번만 — 거절하면 앱이 실패를 받는다).
@@ -122,7 +174,7 @@ export const APP_RUNTIME_JS = `
         }
         throw e;
       });
-    });
+    }, function (err) { throw lost(err); });
   }
   var NO_SESSION = '붙은 세션이 없습니다 — 라이블리 화면 안에서 세션에 붙은 앱으로 열었을 때만 쓸 수 있습니다';
   var NO_HOST = '라이블리 화면 밖(새 탭 · 폰 홈 화면)에서는 쓸 수 없습니다';
@@ -182,9 +234,9 @@ export const APP_RUNTIME_JS = `
     if (!p) return;
     delete pend[m.id];
     if (m.error) {
-      var err = new Error((m.error && m.error.message) || '호출에 실패했습니다.');
-      err.code = m.error.code;
-      p.reject(err);
+      // #4848 호스트가 서버의 실패를 넘기면 error.data 에 {status, error, code} 가 온다 — 맨몸과 같은 규칙으로 e.status · e.reason 을 만든다.
+      var d = m.error.data && typeof m.error.data === 'object' ? m.error.data : null;
+      p.reject(failure(m.error.message || '호출에 실패했습니다.', m.error.code, d && typeof d.status === 'number' ? d.status : 0, d));
     } else p.resolve(m.result);
   });
   // #4530 — 앱 화면 안을 누른 뒤에도 통합검색 키(⌘K · Ctrl+K · Alt+K)가 바깥 셸의 통합검색을 연다. 키는 이 프레임에서 멈추고
