@@ -4,7 +4,9 @@
 // 신고 · 실측: 세션 화면에서 크게 보기를 열고 Esc 를 치면 닫히지 않았다. 세션 화면의 초점은 터미널 액자(iframe.sc-term-frame —
 //  xterm 의 숨은 textarea)에 있는데, 덮개(body 의 층)를 열어도 초점은 그대로 뒤에 숨은 액자에 남았다. 키는 초점이 있는 문서로 가므로
 //  Esc 는 셸(document 의 keydown → uiKey)에 닿지 않고 터미널 문서로 갔다(운영: 덮개를 연 뒤 activeElement 가 IFRAME.sc-term-frame).
-//  덮개가 보이는 터미널 위에 서면(폰 · 팝업이 막혀 그 탭 위에 가득 띄울 때) 친 글자도 뒤의 터미널 입력줄로 들어간다.
+//  초점이 터미널에 남은 채 크게 보기가 서는 길: 터미널 안의 셸 링크(#/full/…)를 누르면 터미널 문서가 부모 주소만 바꾼다
+//   (web/standalone/terminal.ts openLinkFromTerminal → window.parent.location.hash). 셸의 단추 · 링크를 마우스로 눌러 열면
+//   누르는 순간 초점이 셸로 와서 생기지 않는다(격리 리뷰 실측). 그 길에서 덮개가 보이는 터미널 위에 서면 친 글자도 뒤의 터미널 입력칸으로 간다.
 // 고친 것: openAppUi 가 덮개를 붙인 뒤 초점을 덮개로 옮긴다(tabIndex -1 · focus) — 테두리는 그리지 않는다(40-v2.css .v2-appui-ov:focus).
 //
 // 왜 진짜 크롬 · CDP 키인가: 합성 이벤트(dispatchEvent)는 보낸 자리로만 간다 — «키가 어느 문서로 가는가» 는 브라우저의 초점 경로가 정한다.
@@ -13,13 +15,15 @@
 // 장면(터미널 흉내 = 같은 출처 iframe 안의 textarea · 그 문서가 받은 키를 적는다):
 //  T0 (관측 장치) 터미널 textarea 를 마우스로 누르면 초점이 그 액자 안 textarea 에 선다
 //  F1 덮개를 열면 document.activeElement 가 덮개다 · 덮개에 테두리가 없다
-//  F2 덮개가 열린 동안 친 글자가 뒤의 터미널로 가지 않는다
-//  F3 Esc 로 닫힌다 — 닫기 뒷일(onClose)이 한 번 돌고, 터미널 문서는 Esc 를 받지 않는다
+//  F2 Esc 로 닫힌다 — 닫기 뒷일(onClose)이 한 번 돌고, 터미널 문서는 Esc 를 받지 않는다
+//  F3 덮개가 열린 동안 친 글자가 뒤의 터미널로 가지 않는다
 //  F4 터미널이 든 칸을 숨긴 뒤 열어도(셸이 크게 보기 탭을 켜며 세션 탭을 숨기는 꼴 — 운영에서 본 모양) Esc 로 닫힌다
 //  F5 다시 열면 또 덮개에 초점 · 닫기 단추를 마우스로 눌러도 닫힌다(onClose 두 번째)
-// fail-first(2026-10-16): 고치기 전 트리(SRC_ROOT)로 돌리면 F1 · F2 · F4 · F5 가 빨갛다 — 초점이 터미널에 남고 친 글자가 터미널 입력칸에 들어가며,
-//  칸을 숨긴 뒤에는 Esc 가 터미널 문서로 가서 덮개가 남는다(운영에서 본 모양). T0 · F3 은 종전에도 초록이다 — 보이는 액자에 초점이 있을 때
-//  이 크롬은 Esc 를 셸 문서로 보냈다(실측 · 까닭은 확인하지 않았다).
+//  ⚠ 키는 덮개를 열고 **처음 치는 키**로 잰다 — 덮개 안에 앱 액자(sandbox iframe)가 붙으면 크롬은 그 뒤 첫 키만 종전 초점(터미널)으로 보내고
+//   곧이어 키보드 초점을 셸 문서로 옮긴다(격리 리뷰 실측 · 까닭은 확인하지 않았다). 다른 키 뒤에 친 Esc 는 고치기 전에도 셸로 가서 거짓 초록이 난다.
+//   그래서 F2 · F3 은 저마다 새로 열고 첫 키를 친다.
+// fail-first(2026-10-16): 고치기 전 트리(SRC_ROOT)로 돌리면 F1 의 초점 · F2 · F3 · F4 · F5 가 빨갛다 — 초점이 터미널에 남아 Esc 와 친 글자가
+//  터미널 문서로 가고 덮개가 남는다. T0 와 F1 의 테두리 단언은 종전에도 초록이다(테두리 단언은 CSS 한 줄을 지킨다 — 그 줄만 빼면 빨갛다).
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -31,6 +35,8 @@ import { build } from "esbuild";
 import { findChrome } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+//  SRC_ROOT — 다른 트리로 묶어 본다(fail-first). 그 폴더엔 web/ 와 public/styles/ 만 있으면 된다(node_modules 불필요 —
+//   예: git archive <커밋> web public/styles | tar -x -C <폴더>).
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
 const chrome = findChrome();
 if (!chrome || typeof WebSocket === "undefined") {
@@ -135,19 +141,24 @@ try {
   };
   await cdp("Page.enable");
 
-  // T0 · F1 · F2 · F3 — 보이는 터미널에 초점이 있는 채 연다
+  // T0 · F1 · F2 — 보이는 터미널에 초점이 있는 채 열고, 첫 키로 Esc
   await load();
   const s0 = await focusTerm();
   ok(s0.active === "term" && s0.inner === "t", "T0 터미널을 누르면 초점이 그 액자 안 입력칸에 선다(관측 장치)", s0);
   const s1 = await open();
   ok(s1.active === "overlay", "F1 덮개를 열면 초점이 덮개로 온다", { active: s1.active, inner: s1.inner });
   ok(s1.outline === "none", "F1 초점이 간 덮개에 테두리가 없다", { outline: s1.outline });
-  await key("x");
-  const s2 = await st();
-  ok(s2.termText === "" && s2.termKeys.length === 0, "F2 덮개가 열린 동안 친 글자가 뒤의 터미널로 가지 않는다", { termText: s2.termText, termKeys: s2.termKeys });
   await key("Escape");
-  const s3 = await until(st, (s) => !s.overlay, 1500);
-  ok(!s3.overlay && s3.closed === 1 && !s3.termKeys.includes("Escape"), "F3 Esc 로 닫힌다 · 닫기 뒷일 한 번 · 터미널은 Esc 를 받지 않는다", { overlay: s3.overlay, closed: s3.closed, termKeys: s3.termKeys });
+  const s2 = await until(st, (s) => !s.overlay, 1500);
+  ok(!s2.overlay && s2.closed === 1 && !s2.termKeys.includes("Escape"), "F2 Esc 로 닫힌다 · 닫기 뒷일 한 번 · 터미널은 Esc 를 받지 않는다", { overlay: s2.overlay, closed: s2.closed, termKeys: s2.termKeys });
+
+  // F3 — 새로 열고 첫 키로 글자
+  await load();
+  await focusTerm();
+  await open();
+  await key("x");
+  const s3 = await st();
+  ok(s3.termText === "" && s3.termKeys.length === 0, "F3 덮개가 열린 동안 친 글자가 뒤의 터미널로 가지 않는다", { termText: s3.termText, termKeys: s3.termKeys });
 
   // F4 — 터미널이 든 칸을 숨긴 뒤 연다(셸이 크게 보기 탭을 켜며 세션 탭을 숨기는 꼴)
   await load();
@@ -173,6 +184,8 @@ try {
   child.kill("SIGKILL");
   srv.close();
   await new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r() : child.once("close", r)));
+  //  크롬 본체만 죽이면 남은 보조 프로세스가 지운 프로필 폴더를 다시 만드는 판이 있었다(빈 폴더 · 격리 리뷰 실측 5회 중 2회) — 잠깐 쉬고 지운다.
+  await sleep(300);
   for (let i = 0; i < 5; i++) { try { rmSync(dir, { recursive: true, force: true }); break; } catch (_) { await sleep(200); } }
 }
 console.log(`\n${pass} passed, ${fail} failed`);
