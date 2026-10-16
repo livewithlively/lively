@@ -255,7 +255,7 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 /* 에디터 미리보기 — 틀린 코드를 고치는 동안 직전 그림을 흐리게 남긴다(사라졌다 나타나는 깜빡임 대신) */
 .md-mermaid.is-edit.is-err .md-mermaid-img { opacity: .4; }
 /* 크게 보기 — 화면 가득. 띠: 모달(1400~1550)·메뉴(1600) 위, 토스트(2000) 아래 */
-.md-mmv { position: fixed; inset: 0; z-index: 1700; display: flex; flex-direction: column; background: var(--bg); }
+.md-mmv { position: fixed; inset: 0; padding-top: var(--v2-desk-tb, 0px); z-index: 1700; display: flex; flex-direction: column; background: var(--bg); }   /* 데스크톱 앱 창 맨 윗줄(창 끌기 · 창 단추 자리) 비우기 — 40-v2.css .v2-studio 설명(#4480) */
 .md-mmv-bar { display: flex; align-items: center; gap: 2px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
 /* 액자(v2 셸이 클래식 화면을 품은 것 — body.embed) 안에서는 셸의 ↗ 단추(.v2-frame-pop · 위 6 · 오른쪽 10 · 24×24)가 액자 오른쪽 위
    구석을 덮는다. 그 단추는 부모 문서에 있어 z-index 로는 못 이긴다 — 그 자리를 비워 [닫기]가 가리지 않게 한다(2026-10-14 매니지드 실측). */
