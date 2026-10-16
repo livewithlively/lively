@@ -398,5 +398,7 @@ test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시
   //  (격리 리뷰 2026-10-17) 사람이 처음 연결 대화에서 정한 모을지·공개범위를 2턴이 묻지 않고 뒤집지 않는다 — 설명·메타·주기만 묻지 않는다.
   assert.match(p, /모을지\(`state`\)와 공개범위\(`visibility`\)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다/);
   assert.doesNotMatch(p, /`state:\"excluded\"`/, "2턴이 묻지 않고 단위를 빼라는 지시가 남았다");
+  //  (T12 #4744 와 맞물림) 활동량·주기는 서버가 글 빈도로 잰다 — 2턴이 interval_sec·activity 를 쓰라고 하면 자동 주기가 멈춘다.
+  assert.doesNotMatch(p, /`interval_sec` 를 맞춘다|activity: 하루 평균/, "2턴이 서버가 재는 주기·활동량을 손으로 쓰게 한다");
   assert.match(p, /`description`\(이 단위에서 오가는 일/);
 });
