@@ -65,7 +65,7 @@ function spying(answer?: (file: string, promptId: string, before: number, maxByt
   const tfs: TranscriptFs = {
     ...localTranscriptFs,
     read: (f, s, fn) => { n++; return localTranscriptFs.read(f, s, fn); },
-    turnOrigin: (file, promptId, before, maxBytes) => { calls.push({ file, promptId, before, maxBytes }); return (answer ?? localTranscriptFs.turnOrigin)(file, promptId, before, maxBytes); },
+    turnOpenerOrigin: (file, promptId, before, maxBytes) => { calls.push({ file, promptId, before, maxBytes }); return (answer ?? localTranscriptFs.turnOpenerOrigin)(file, promptId, before, maxBytes); },
   };
   return { tfs, calls, reads: () => n };
 }
@@ -166,10 +166,11 @@ test("R12 거슬러 찾은 첫 줄의 출처가 사람이면 — 대기 없음(�
   assert.equal(await readQuotaWait("box-r12", AT_LONG, found(p, { tfs: c.tfs })), null);
   assert.equal(c.calls.length, 1);
 });
-test("R13 창 판정이 이미 대기면 거슬러 찾지 않는다", async () => {
-  const lines = [...Array.from({ length: 2100 }, () => filler(1000)), ARMED, ...Array.from({ length: 40 }, () => filler(1000))];
+test("R13 창 판정이 이미 대기면 거슬러 찾지 않는다 — 창 맨 앞이 긴 턴 중간이고 그 턴에 정리 안내가 있어도(격리 리뷰: 게이트를 실제로 지나게)", async () => {
+  const ARMED_LATE = JSON.stringify({ ...JSON.parse(ARMED), timestamp: new Date(T0 + 4_300_000).toISOString() });
+  const p = file("r13.jsonl", [CONT_L(), ...fills(1200), WRAP_L(), END_L, ARMED_LATE]);
   const c = spying();
-  assert.equal((await readQuotaWait("box-r13", AT, found(file("r13.jsonl", lines), { tfs: c.tfs })))?.atMs, T0);
+  assert.equal((await readQuotaWait("box-r13", AT_LONG, found(p, { tfs: c.tfs })))?.atMs, T0 + 4_300_000, "걸림 줄로 읽는다");
   assert.equal(c.calls.length, 0);
 });
 test("R14 이어 간 턴으로 가정해도 대기가 아니면(정리 안내 없음) · 창 맨 앞 턴을 모르면 거슬러 찾지 않는다", async () => {
@@ -205,7 +206,7 @@ test("R16 같은 세션·파일·턴은 다시 찾지 않는다 — 대기 중 �
 });
 test("R17 거슬러 찾다 실패하면(중계) 던진다 — 기억하지 않아 다음 판엔 다시 찾는다", async () => {
   const p = file("r17.jsonl", [ARMED, FIRED_L, CONT_L(), ...fills(1200), WRAP_L(), END_L]);
-  const broken: TranscriptFs = { ...localTranscriptFs, turnOrigin: async () => { throw new Error("relay: 503"); } };
+  const broken: TranscriptFs = { ...localTranscriptFs, turnOpenerOrigin: async () => { throw new Error("relay: 503"); } };
   await assert.rejects(readQuotaWait("box-r17", AT_LONG, found(p, { tfs: broken })), /relay/);
   const c = spying();
   assert.equal((await readQuotaWait("box-r17", AT_LONG, found(p, { tfs: c.tfs })))?.kind, "armed");
@@ -225,4 +226,13 @@ test("R19 promptId 가 없는 옛 형식의 긴 이어 간 턴은 — 거슬러 
   const c = spying();
   assert.equal(await readQuotaWait("box-r19", AT_LONG, found(p, { tfs: c.tfs })), null);
   assert.equal(c.calls.length, 0);
+});
+test("R20 기억의 열쇠엔 그 턴의 promptId 가 든다 — 같은 세션·파일이라도 다른 턴이면 다시 찾는다", async () => {
+  const P2 = "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918";
+  const p = file("r20.jsonl", [HUMAN_OPENER, ...fills(1200), WRAP_L(), END_L]);
+  const c = spying();
+  assert.equal(await readQuotaWait("box-r20", AT_LONG, found(p, { tfs: c.tfs })), null, "첫 턴은 사람 턴 — 대기 아님");
+  appendFileSync(p, [FIRED_L, CONT_L(P2), ...fills(1200, P2), WRAP_L(P2), END_L].map((l) => l + "\n").join(""));
+  assert.equal((await readQuotaWait("box-r20", AT_LONG, found(p, { tfs: c.tfs })))?.kind, "armed", "다음 턴(이어 간 턴)은 그 턴의 첫 줄로 판정");
+  assert.deepEqual(c.calls.map((x) => x.promptId), [PID, P2]);
 });

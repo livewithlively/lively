@@ -5,7 +5,8 @@
 import { resolveTranscript, type TranscriptTarget } from "../terminal/transcript-locate.js";
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import type { TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
-import { quotaScan, quotaBound, openTurnOf, type QuotaScan, type QuotaWait } from "../terminal/harness-io/quota-wait.js";
+import { quotaScanWithOpenTurn, quotaBound, type QuotaScan, type QuotaWait } from "../terminal/harness-io/quota-wait.js";
+import { logger } from "../log.js";
 
 /**
  * 대화 기록 끝에서 읽는 양. 실측(2026-10-16, 꺼진 5세션): 걸림 줄은 끈 시각 기준 파일 끝에서 3~40KB 안이었다(그 뒤엔 턴 끝 표식·비용 줄·
@@ -57,13 +58,10 @@ export async function readQuotaWait(
     if (size > 0 && raw === 0) throw new Error(`대화 기록을 못 읽음(빈 읽기 · ${size}바이트 파일)`);
     let scan: QuotaScan | null = null;
     if (win.data.length) {
+      //  #4821 ① — 창 판정이 «없음» 이고 창 맨 앞 턴(첫 줄이 창 앞)을 «이어 간 턴» 으로 보면 다시 걸림일 때만 그 턴의 첫 줄을 창 앞으로 거슬러
+      //   찾는다(판정 규칙은 quotaScanWithOpenTurn 한 곳). 첫 걸림·대화상자 대기는 걸림 줄이 창 끝에 있어 묻지 않는다 — 드물고, 찾은 답은 기억한다.
       const lines = t.io.parse(win.data.toString("utf8"), {}).lines;
-      scan = quotaScan(lines);
-      //  #4821 ① — 창 판정이 «없음» 인데 창 맨 앞 턴(첫 줄이 창 앞)을 «이어 간 턴» 으로 보면 다시 걸림이 나올 때만 그 턴의 첫 줄을 거슬러 찾는다.
-      //   첫 걸림·대화상자 대기는 걸림 줄이 창 끝에 있어 여기 안 온다 — 이 찾기는 드물고, 찾은 답은 기억한다.
-      const open = scan ? null : openTurnOf(lines);
-      const hypo = open ? quotaScan(lines, "auto-continuation") : null;
-      if (open && hypo?.kind === "armed" && (await turnOriginOf(id, t.tfs, file, open, win.from)) === "auto-continuation") scan = hypo;
+      scan = await quotaScanWithOpenTurn(lines, (promptId) => openerOriginOf(id, t.tfs, file, promptId, win.from));
     }
     hit = { size, scan };
   }
@@ -73,12 +71,20 @@ export async function readQuotaWait(
   return quotaBound(hit.scan, at);
 }
 
-/** 그 턴의 첫 줄 출처 — 기억이 있으면 그것, 없으면 거슬러 찾아 기억한다(못 찾음도). 찾다 실패하면 던지고 기억하지 않는다. */
-async function turnOriginOf(id: string, tfs: TranscriptFs, file: string, promptId: string, before: number): Promise<string | null> {
+/**
+ * 그 턴의 첫 줄 출처 — 기억이 있으면 그것, 없으면 창 시작(before)에서 거슬러 찾아 기억한다(못 찾음도). 찾다 실패하면 던지고 기억하지 않는다.
+ *  실제로 찾은 판은 소요(ms)와 답을 info 로 남긴다 — 드문 일이고, 중계 한 번의 상한(허브 20초)에 얼마나 다가가는지 보는 유일한 자리다.
+ */
+async function openerOriginOf(id: string, tfs: TranscriptFs, file: string, promptId: string, before: number): Promise<string | null> {
   const key = id + "\u0000" + file + "\u0000" + promptId;
   let v: string | null;
   if (openerCache.has(key)) v = openerCache.get(key) ?? null;
-  else v = await tfs.turnOrigin(file, promptId, before, QUOTA_OPENER_SCAN_BYTES);
+  else {
+    const t0 = Date.now();
+    v = await tfs.turnOpenerOrigin(file, promptId, before, QUOTA_OPENER_SCAN_BYTES);
+    logger.info({ id, promptId, origin: v === null ? null : v.slice(0, 64), before, ms: Date.now() - t0 },
+      "한도 대기 판정: 끝 창보다 긴 이어 간 턴 — 그 턴의 첫 줄을 거슬러 찾았다(#4821)");
+  }
   openerCache.delete(key);
   openerCache.set(key, v);   // 최근에 쓴 것을 뒤로(scanCache 와 같은 규칙)
   if (openerCache.size > QUOTA_SCAN_CACHE_MAX) openerCache.delete(openerCache.keys().next().value as string);

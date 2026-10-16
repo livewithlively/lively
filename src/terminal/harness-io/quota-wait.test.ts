@@ -7,7 +7,7 @@
 //   🔴 «이어 감» 직후를 대기 끝으로 읽으면 — 한도가 풀린 바로 그 순간 이어 가기 시작한 하네스를 끈다(격리 리뷰).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { quotaWaitOf, quotaScan, openTurnOf, QUOTA_WAIT_MAX_MS, QUOTA_RESUME_GRACE_MS, QUOTA_CLOCK_SKEW_MS } from "./quota-wait.js";
+import { quotaWaitOf, quotaScan, quotaBound, quotaScanWithOpenTurn, openTurnOf, QUOTA_WAIT_MAX_MS, QUOTA_RESUME_GRACE_MS, QUOTA_CLOCK_SKEW_MS } from "./quota-wait.js";
 
 const T0 = Date.parse("2026-10-16T06:59:09.533Z");   // 걸림 줄 시각(실측 d9e9c882)
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -264,6 +264,7 @@ test("D5 대화상자 대기를 Esc 로 거두면(«Automatic continue cancelled
 test("D6 다른 명령 결과는 걸림이 아니다 — «esc to cancel» 이 없으면 «continue automatically» 가 있어도", () => {
   assert.equal(quotaWaitOf([stdout(T0, "Set model to `Sonnet 5.5` and saved as your default for new sessions")], at()), null);
   assert.equal(quotaWaitOf([stdout(T0, "Claude Code will continue automatically at 4:10pm.")], at()), null);
+  assert.equal(quotaWaitOf([stdout(T0, "Press esc to cancel the wait.")], at()), null, "«esc to cancel» 만 있어도 걸림이 아니다(격리 리뷰)");
 });
 test("D7 같은 문구라도 명령 결과 줄이 아니면 걸림이 아니다 — 사람 말 본문(그건 앞선 대기를 접는다) · 모델 답 · 다른 사용자 줄", () => {
   assert.equal(quotaWaitOf([human(T0, DIALOG_TEXT)], at()), null);
@@ -282,55 +283,56 @@ test("D10 자동 걸림 → 사람이 접음 → 대화상자로 다시 걸면 �
 
 // ── #4821 ① — 끝 창보다 긴 «이어 간 턴». 창이 그 턴 중간에서 열리면 이어 감 줄·이어감 메시지가 창 앞이라 정리 안내만 보인다.
 //  정리 안내 줄엔 promptId 만 있다(실측 4건: isMeta · usageLimitNote · promptId · isSidechain — origin·turnOrigin 없음). 읽는 쪽이 그 턴의 첫 줄을
-//  거슬러 찾아 출처를 넘긴다(quotaScan 의 둘째 인자) — 여기는 그 출처를 받았을 때의 판정.
+//  거슬러 찾아 «이어 간 턴» 인지 확인한다(quotaScanWithOpenTurn — Z 행). O 행은 «이어 간 턴이다» 를 받았을 때의 판정(quotaScan 의 둘째 인자).
 //   🔴 출처를 받고도 못 읽으면 — 긴 이어 간 턴이 다시 걸린 대기(연달아 두 번까지)를 끈다.
 //   🔴 출처 없이 정리 안내만으로 읽으면 — 사람 턴의 첫 걸림(걸림 줄이 따로 온다)·자동 이어감이 꺼진 세션까지 대기로 붙잡는다.
 const P = "f7c15b7e-9fd9-41a7-9e0b-c85f433e9ca9";   // 실측 5c30e17b 의 이어 간 턴 promptId
 const toolResult = (ms: number, pid = P) => ({ type: "user", promptId: pid, timestamp: iso(ms), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_x", content: "ok" }] } });
 const wrapUpP = (ms: number, pid = P) => ({ ...wrapUp(ms), promptId: pid, isSidechain: false });
 const openTail = (f: number) => [toolResult(f), assistant(f + 1_000, "작업 계속"), toolResult(f + 2_000)];
+/** 창 앞에서 시작한 턴을 «이어 간 턴» 으로 받았을 때의 지금 대기(시각 조건까지). */
+const continuedWait = (lines: unknown[], a = at()) => quotaBound(quotaScan(lines, true), a);
 
 test("O1 창 앞에서 시작한 이어 간 턴이 정리 안내로 끝나면 → 다시 걸림(정리 안내 시각)", () => {
   const f = T0 - 60_000;
-  const w = quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), assistant(f + 55_000, "여기서 멈춥니다"), ...turnEnd(f + 56_000)], at(), "auto-continuation");
+  const w = continuedWait([...openTail(f), wrapUpP(f + 50_000), assistant(f + 55_000, "여기서 멈춥니다"), ...turnEnd(f + 56_000)]);
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, f + 50_000);
   assert.match(w?.text ?? "", /정리 안내/);
 });
-test("O2 출처를 모르면(안 넘김) 종전처럼 대기 아님", () => {
+test("O2 «이어 간 턴» 을 모르면(안 넘김) 종전처럼 대기 아님", () => {
   const f = T0 - 60_000;
   assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)], at()), null);
 });
-test("O3 그 턴의 출처가 사람이면 대기 아님(첫 걸림은 턴 뒤 걸림 줄로 읽는다)", () => {
+test("O3 «이어 간 턴» 을 받아도 그 턴이 다시 걸리지 않았으면(정리 안내·한도 오류 없음) quotaScan 은 fired 에 머문다 — 대기 아님", () => {
   const f = T0 - 60_000;
-  assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)], at(), "human"), null);
+  assert.equal(continuedWait([...openTail(f), human(f + 50_000)]), null, "사람 말이 오면 접힌다");
 });
 test("O4 창 앞에서 시작한 이어 간 턴이 한도 오류로 끝나면 → 다시 걸림(오류 줄 시각)", () => {
   const f = T0 - 60_000;
-  const w = quotaWaitOf([...openTail(f), limitError(f + 50_000), ...turnEnd(f + 50_100)], at(), "auto-continuation");
+  const w = continuedWait([...openTail(f), limitError(f + 50_000), ...turnEnd(f + 50_100)]);
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, f + 50_000);
   assert.match(w?.text ?? "", /한도 오류/);
 });
 test("O5 이어 간 턴이 다시 걸리지 않고 끝났으면 대기 아님(평범한 완료)", () => {
   const f = T0 - 60_000;
-  assert.equal(quotaWaitOf([...openTail(f), assistant(f + 50_000, "끝났습니다"), ...turnEnd(f + 51_000)], at(), "auto-continuation"), null);
+  assert.equal(continuedWait([...openTail(f), assistant(f + 50_000, "끝났습니다"), ...turnEnd(f + 51_000)]), null);
 });
 test("O6 다시 걸린 뒤 사람이 말을 보내면 대기 아님", () => {
   const f = T0 - 60_000;
-  assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), human(f + 58_000)], at(), "auto-continuation"), null);
+  assert.equal(continuedWait([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), human(f + 58_000)]), null);
 });
 test("O7 다시 걸린 뒤 작업 알림 한 턴이 돌고 끝나도 대기", () => {
   const f = T0 - 60_000;
-  const w = quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), taskNote(f + 57_000), assistant(f + 58_000, "알림 처리"), ...turnEnd(f + 59_000)],
-    at(), "auto-continuation");
+  const w = continuedWait([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), taskNote(f + 57_000), assistant(f + 58_000, "알림 처리"), ...turnEnd(f + 59_000)]);
   assert.equal(w?.atMs, f + 50_000);
 });
 test("O8 창 앞에서 시작한 이어 간 턴이 아직 도는 중이면 대기 아님 — 이어 감 시각을 몰라 «막 이어 가는 중» 유예를 주지 않는다", () => {
   const f = T0 - 60_000;
-  assert.deepEqual(quotaScan(openTail(f), "auto-continuation"), { kind: "fired", atMs: 0, text: "창 앞에서 시작한 이어 간 턴", continued: true });
-  assert.equal(quotaWaitOf(openTail(f), at(), "auto-continuation"), null);
-  assert.equal(quotaWaitOf(openTail(f), { launchedAtMs: 0, nowMs: T0 }, "auto-continuation"), null, "띄운 시각을 몰라도");
+  assert.deepEqual(quotaScan(openTail(f), true), { kind: "fired", atMs: 0, text: "창 앞에서 시작한 이어 간 턴", continued: true });
+  assert.equal(continuedWait(openTail(f)), null);
+  assert.equal(continuedWait(openTail(f), { launchedAtMs: 0, nowMs: T0 }), null, "띄운 시각을 몰라도");
 });
 
 test("T1 창 맨 앞 턴 = promptId 가 있는 첫 줄의 것(도구 결과 · 정리 안내)", () => {
@@ -349,4 +351,52 @@ test("T3 promptId 줄이 없으면 · 빈 입력 · 사이드체인뿐이면 없
 });
 test("T4 사이드체인 줄의 promptId 는 건너뛴다", () => {
   assert.equal(openTurnOf([{ ...toolResult(T0, "sidechain-prompt-0001"), isSidechain: true }, toolResult(T0 + 1)]), P);
+});
+test("T5 압축 요약 줄(promptId·turnOrigin 만 — 턴 중간 줄)은 턴의 첫 줄이 아니다 — 거기서 열린 창도 그 턴을 연 턴으로 본다(격리 리뷰)", () => {
+  const summary = { type: "user", isCompactSummary: true, isMeta: false, promptId: P, turnOrigin: "auto_continuation", timestamp: iso(T0), message: { role: "user", content: "요약…" } };
+  assert.equal(openTurnOf([summary, toolResult(T0 + 1)]), P);
+});
+
+// ── #4821 ① 판정 규칙 한 곳(quotaScanWithOpenTurn) — «언제 묻나 · 무엇을 채택하나». 첫 줄을 어디서 어떻게 찾는지는 묻는 쪽이 준다.
+//   🔴 늘 묻으면 — 판마다 수십 MB 를 거슬러 읽는다 · 🔴 출처를 안 보고 채택하면 — 사람 턴의 정리 안내까지 대기로 붙잡는다.
+const asking = (answer: string | null | Error) => {
+  const calls: string[] = [];
+  return { calls, originOf: async (pid: string) => { calls.push(pid); if (answer instanceof Error) throw answer; return answer; } };
+};
+const longTail = (f: number) => [...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)];
+
+test("Z1 창 판정이 이미 대기면 그대로 — 묻지 않는다", async () => {
+  const a = asking("auto-continuation");
+  assert.equal((await quotaScanWithOpenTurn([...longTail(T0 - 60_000), ARMED()], a.originOf))?.atMs, T0);
+  assert.deepEqual(a.calls, []);
+});
+test("Z2 창 맨 앞 턴을 모르면(첫 promptId 줄이 턴의 첫 줄 · promptId 줄 없음) 묻지 않는다 — 대기 아님", async () => {
+  const a = asking("auto-continuation");
+  assert.equal(await quotaScanWithOpenTurn([{ ...human(T0 - 60_000), promptId: P }, wrapUpP(T0 - 10_000), ...turnEnd(T0 - 5_000)], a.originOf), null);
+  assert.equal(await quotaScanWithOpenTurn([assistant(T0, "…"), ...turnEnd(T0 + 1)], a.originOf), null);
+  //  promptId 가 없는 옛 형식 — 가정하면 다시 걸림이지만 물을 promptId 가 없다(묻지 않고 대기 아님)
+  const noPid = (l: Record<string, unknown>) => { const { promptId: _drop, ...rest } = l; return rest; };
+  assert.equal(await quotaScanWithOpenTurn([noPid(toolResult(T0 - 60_000)), wrapUp(T0 - 10_000), ...turnEnd(T0 - 5_000)], a.originOf), null, "옛 형식");
+  assert.deepEqual(a.calls, []);
+});
+test("Z3 «이어 간 턴» 으로 가정해도 다시 걸림이 아니면 묻지 않는다", async () => {
+  const a = asking("auto-continuation");
+  assert.equal(await quotaScanWithOpenTurn([...openTail(T0 - 60_000), ...turnEnd(T0 - 5_000)], a.originOf), null, "그 턴이 다시 걸리지 않고 끝났다");
+  assert.equal(await quotaScanWithOpenTurn(openTail(T0 - 60_000), a.originOf), null, "그 턴이 아직 도는 중(가정 판정 fired)");
+  assert.deepEqual(a.calls, []);
+});
+test("Z4 가정하면 다시 걸림이고 그 턴의 첫 줄이 자동 이어감이면 — 다시 걸림(그 턴의 promptId 로 한 번 묻는다)", async () => {
+  const a = asking("auto-continuation");
+  const w = await quotaScanWithOpenTurn(longTail(T0 - 60_000), a.originOf);
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, T0 - 60_000 + 50_000);
+  assert.deepEqual(a.calls, [P]);
+});
+test("Z5 그 턴의 첫 줄이 사람·작업 알림이거나 못 찾으면 — 대기 아님", async () => {
+  for (const ans of ["human", "task-notification", null]) {
+    assert.equal(await quotaScanWithOpenTurn(longTail(T0 - 60_000), asking(ans).originOf), null, String(ans));
+  }
+});
+test("Z6 묻다 실패하면 던진다(«대기 없음» 으로 뭉개지 않는다)", async () => {
+  await assert.rejects(quotaScanWithOpenTurn(longTail(T0 - 60_000), asking(new Error("relay: 503")).originOf), /relay/);
 });

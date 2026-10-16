@@ -37,17 +37,17 @@ export interface TranscriptFs {
    *  그 밖의 읽기 실패(중계·입출력)는 던진다. (#4821 — 한도 대기 판정이 끝 창보다 긴 «이어 간 턴» 의 출처를 알아야 한다: session-quota-wait.ts)
    *  ⚠ 중계 배포에선 노드 쪽 node 한 줄로 **한 번에** 찾는다 — 덩어리마다 중계를 왕복하면 수십 MB 에 수십 번이다(prevTranscript 와 같은 이유).
    */
-  turnOrigin(file: string, promptId: string, before: number, maxBytes: number): Promise<string | null>;
+  turnOpenerOrigin(file: string, promptId: string, before: number, maxBytes: number): Promise<string | null>;
 }
 
-/** turnOrigin 이 한 번에 읽는 덩어리 — 중계 구현(TURN_ORIGIN_JS)과 같은 값. */
+/** turnOpenerOrigin 이 한 번에 읽는 덩어리 — 중계 구현(TURN_OPENER_JS)과 같은 값. */
 const TURN_SCAN_CHUNK = 1024 * 1024;
-/** turnOrigin 이 받는 promptId 모양(본체는 uuid) — 아니면 찾지 않는다(찾을 문자열을 만드는 값이다). */
+/** turnOpenerOrigin 이 받는 promptId 모양(본체는 uuid) — 아니면 찾지 않는다(찾을 문자열을 만드는 값이다). */
 const PROMPT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 const NL = 0x0a;
 
-/** 그 줄이 promptId 턴의 첫 줄이면 출처, 아니면 null — TURN_ORIGIN_JS 의 kindOf 와 같은 규칙. */
-function turnOpenerKind(line: Buffer, needle: Buffer, promptId: string): string | null {
+/** 그 줄이 promptId 턴의 첫 줄(출처가 있는 사용자 줄)이면 그 출처, 아니면 null — TURN_OPENER_JS 의 kindOf 와 같은 규칙. */
+function openerOriginOfLine(line: Buffer, needle: Buffer, promptId: string): string | null {
   if (line.indexOf(needle) < 0) return null;
   let o: unknown;
   try { o = JSON.parse(line.toString("utf8")); } catch { return null; }
@@ -78,7 +78,7 @@ export const localTranscriptFs: TranscriptFs = {
     }
     return out;
   },
-  async turnOrigin(file, promptId, before, maxBytes) {
+  async turnOpenerOrigin(file, promptId, before, maxBytes) {
     if (!PROMPT_ID_RE.test(promptId)) return null;
     let fh: Awaited<ReturnType<typeof fsp.open>>;
     try { fh = await fsp.open(file, "r"); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return null; throw e; }
@@ -97,7 +97,7 @@ export const localTranscriptFs: TranscriptFs = {
         while (e > 0) {
           const nl = data.lastIndexOf(NL, e - 1);
           if (nl < 0) break;
-          const k = turnOpenerKind(data.subarray(nl + 1, e), needle, promptId);
+          const k = openerOriginOfLine(data.subarray(nl + 1, e), needle, promptId);
           if (k) return k;
           e = nl;
         }
@@ -108,16 +108,20 @@ export const localTranscriptFs: TranscriptFs = {
       if (!carry.length) return null;
       let whole = lo === 0;
       if (!whole) { const b = Buffer.alloc(1); whole = (await fh.read(b, 0, 1, lo - 1)).bytesRead === 1 && b[0] === NL; }
-      return whole ? turnOpenerKind(carry, needle, promptId) : null;
+      return whole ? openerOriginOfLine(carry, needle, promptId) : null;
     } finally { await fh.close(); }
   },
 };
 
-// localTranscriptFs.turnOrigin 과 같은 규칙을 **멤버 실행환경에서** 돌리는 node 한 줄(고정 리터럴 · 값은 stdin JSON). 없는 파일 = null,
+// localTranscriptFs.turnOpenerOrigin 과 같은 규칙을 **멤버 실행환경에서** 돌리는 node 한 줄(고정 리터럴 · 값은 stdin JSON). 없는 파일 = null,
 //  그 밖의 입출력 실패는 종료코드 1 → memberNodeJson 이 던진다(«못 찾음» 으로 기억하지 않게 — session-quota-wait 가 못 찾음을 기억한다).
-const TURN_ORIGIN_JS =
+//  답은 `{"v":…}` 표지로 싼다 — 중계가 실패를 삼켜 종료코드 0 · 빈 출력이 되면 memberNodeJson 이 null 로 풀어 «못 찾음» 으로 영구 기억되므로
+//   (격리 리뷰 — #4810 R10 의 빈 읽기와 같은 부류), 표지가 없으면 실패로 던진다.
+//  ⚠ 한 번의 중계엔 허브 상한(20초)이 있다. 식은 JuiceFS 에서 128MB 를 다 읽다 넘으면 던져 «모름» 이 되고 1분 뒤 다시 찾는다 — 그새 읽은 만큼
+//   캐시가 데워져 대개 다음 판에 끝난다(소요는 session-quota-wait 의 info 로그 ms 로 본다).
+const TURN_OPENER_JS =
   "const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{let out=null;try{" +
-  "const {file,promptId,before,max}=JSON.parse(d);let fd;try{fd=fs.openSync(file,'r')}catch(e){if(e&&e.code==='ENOENT'){process.stdout.write('null');return}throw e}" +
+  "const {file,promptId,before,max}=JSON.parse(d);let fd;try{fd=fs.openSync(file,'r')}catch(e){if(e&&e.code==='ENOENT'){process.stdout.write('{\"v\":null}');return}throw e}" +
   "try{const needle=Buffer.from('\"promptId\":\"'+promptId+'\"');const C=1048576;" +
   "const kindOf=(b)=>{if(b.indexOf(needle)<0)return null;let o;try{o=JSON.parse(b.toString('utf8'))}catch{return null}" +
   "if(!o||typeof o!=='object'||o.type!=='user'||o.isSidechain===true||o.promptId!==promptId)return null;" +
@@ -130,7 +134,7 @@ const TURN_ORIGIN_JS =
   "carry=data.subarray(0,e);pos=s}" +
   "if(out===null&&carry.length){let whole=lo===0;if(!whole){const b=Buffer.alloc(1);whole=fs.readSync(fd,b,0,1,lo-1)===1&&b[0]===10}if(whole)out=kindOf(carry)}" +
   "}finally{fs.closeSync(fd)}" +
-  "}catch(e){process.stderr.write(String(e&&e.message||e));process.exit(1)}process.stdout.write(JSON.stringify(out))});";
+  "}catch(e){process.stderr.write(String(e&&e.message||e));process.exit(1)}process.stdout.write(JSON.stringify({v:out}))});";
 
 /**
  * 중계가 답하지 않을 때의 문장 — «파일이 없다»가 아니라 «지금 못 읽는다» (#2257 후속).
@@ -200,11 +204,13 @@ export function memberTranscriptFs(osUser: string): TranscriptFs {
       try { return (await memberLs(osUser, dir)).filter((e) => e.type === "file").map((e) => ({ name: e.name, mtimeMs: e.mtime })); }
       catch { return []; }
     },
-    async turnOrigin(file, promptId, before, maxBytes) {
+    async turnOpenerOrigin(file, promptId, before, maxBytes) {
       if (!PROMPT_ID_RE.test(promptId)) return null;
       let r: unknown;
-      try { r = await memberNodeJson<unknown>(osUser, TURN_ORIGIN_JS, { file, promptId, before, max: maxBytes }); } catch (e) { relayFailed(e); }
-      return typeof r === "string" && /^[\w-]{1,64}$/.test(r) ? r : null;   // 우리 한 줄의 답 모양 — 로컬 구현이 주는 값과 같은 범위
+      try { r = await memberNodeJson<unknown>(osUser, TURN_OPENER_JS, { file, promptId, before, max: maxBytes }); } catch (e) { relayFailed(e); }
+      if (!r || typeof r !== "object" || !("v" in r)) relayFailed(new Error("중계가 답 표지 없이 끝났다(빈 출력)"));
+      const v = (r as { v: unknown }).v;
+      return typeof v === "string" && v ? v : null;
     },
   };
 }

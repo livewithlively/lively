@@ -35,7 +35,7 @@
 //   ① **이어 간 턴이 읽는 창(대화 기록 끝 1MB · session-quota-wait.ts)보다 길 때** — 근거(이어 감 줄·이어감 메시지)는 그 턴의 맨 앞에, 증거
 //     (정리 안내·한도 오류)는 맨 끝에 있다(실측 대화 기록은 시간당 2~35MB — 1MB ≈ 8분 작업). 정리 안내 줄엔 그 턴의 promptId 만 있고 출처
 //     (origin·turnOrigin)는 그 턴의 첫 줄에만 있다. 그래서 창 맨 앞 턴(openTurnOf)을 «이어 간 턴» 으로 가정하면 다시 걸림이 나올 때만, 읽는 쪽이
-//     그 턴의 첫 줄을 창 앞쪽으로 거슬러 찾아 출처를 넘긴다(quotaScan 의 openTurnKind). 거슬러 찾는 상한(128MB) 밖이면 종전처럼 못 본다.
+//     그 턴의 첫 줄을 창 앞쪽으로 거슬러 찾아 출처를 넘긴다(quotaScanWithOpenTurn). 거슬러 찾는 상한(128MB) 밖이면 종전처럼 못 본다.
 //   ② **턴 시작에서 막힌 대기** — 걸림 줄은 남는다(실측: 한도 오류 줄 → 걸림 줄 → 턴 끝). 막힌 턴엔 Stop 대신 StopFailure 훅이 떠서 «작업 중»
 //     보고만 남아 종료 규칙이 이 판정까지 오지 않던 것이 문제였다 — 작업 표시 훅이 StopFailure 도 «쉼» 으로 보고한다(kit/hooks/work-flag.mjs).
 //     그 배선이 아직 없는 옛 키트의 세션은 종전대로다(«작업 중» 10분 → «예약 모름» → 옛 회수 시계).
@@ -114,8 +114,10 @@ function dialogArmText(l: Record<string, unknown>): string | null {
 
 /**
  * (순수) 창이 열릴 때 이미 돌던 턴의 promptId — 창 안에서 promptId 가 있는 첫 줄(사이드체인 제외)의 것. 그 줄이 턴의 첫 줄(출처 origin 이
- *  있다)이면 null: 창은 턴 경계에서 열렸거나, 그 앞 턴의 줄엔 promptId 가 없어(모델 답·시스템 줄뿐) 어느 턴인지 모른다. (#4821 ① — 읽는 쪽이
- *  이 턴의 첫 줄을 창 앞쪽으로 거슬러 찾아 출처를 quotaScan 에 넘긴다.)
+ *  있다)이면 null: 창은 턴 경계에서 열렸거나, 그 앞 턴의 줄엔 promptId 가 없어(모델 답·시스템 줄뿐) 어느 턴인지 모른다. (#4821 ①)
+ *  ⚠ «첫 줄» 은 **origin 이 있는 줄** 이다 — turnOrigin 만 있는 줄은 첫 줄이 아니다. 맥락 압축 요약 줄(isCompactSummary)이 promptId·turnOrigin 만
+ *   가진 턴 중간 줄이라(격리 리뷰 실측), turnOrigin 으로도 첫 줄을 치면 요약 줄에서 열린 창이 «턴 시작» 으로 읽혀 이 길이 조용히 죽는다.
+ *   거꾸로 거슬러 찾는 쪽(TranscriptFs.turnOpenerOrigin)은 turnOrigin 만 있는 줄도 답으로 받는다 — 그 값은 그 턴의 출처와 같다(실측 59건).
  */
 export function openTurnOf(lines: ReadonlyArray<unknown>): string | null {
   for (const raw of lines) {
@@ -129,12 +131,12 @@ export function openTurnOf(lines: ReadonlyArray<unknown>): string | null {
 
 /**
  * (순수) 대화 기록 줄(오래된 순)에서 마지막 대기 사건을 읽는다 — 없으면 null. 시각 조건(상한·띄운 시각)은 quotaBound 가 건다.
- *  @param openTurnKind  창이 열릴 때 이미 돌던 턴(openTurnOf)의 첫 줄 출처 — 그 첫 줄은 창 앞이라 읽는 쪽이 찾아 넘긴다. "auto-continuation" 이면
- *                       그 턴은 «이어 감 + 이어감 메시지» 뒤에서 시작한다(#4821 ①). 시각 0: 그 턴이 안 끝난 채 창이 끝나도 «막 이어 가는 중»
- *                       유예를 주지 않는다(이어 감 줄의 진짜 시각을 모른다 — 다시 걸림만 본다).
+ *  @param openTurnContinued  창이 열릴 때 이미 돌던 턴(openTurnOf)이 «이어 간 턴» 이다 — 그 턴은 «이어 감 + 이어감 메시지» 뒤에서 시작한다
+ *                            (#4821 ① — quotaScanWithOpenTurn 이 그 턴의 첫 줄 출처를 확인하고 쓴다). 시각 0: 그 턴이 안 끝난 채 창이 끝나도
+ *                            «막 이어 가는 중» 유예를 주지 않는다(이어 감 줄의 진짜 시각을 모른다 — 다시 걸림만 본다).
  */
-export function quotaScan(lines: ReadonlyArray<unknown>, openTurnKind?: string): QuotaScan | null {
-  let st: QuotaScan | null = openTurnKind === "auto-continuation" ? { kind: "fired", atMs: 0, text: OPEN_CONTINUED, continued: true } : null;
+export function quotaScan(lines: ReadonlyArray<unknown>, openTurnContinued = false): QuotaScan | null {
+  let st: QuotaScan | null = openTurnContinued ? { kind: "fired", atMs: 0, text: OPEN_CONTINUED, continued: true } : null;
   //  시각이 없는 사건 줄은 상한을 잴 수 없다 — 대기로 보지 않는다(세션을 영영 붙잡는 쪽보다 종전처럼 끄는 쪽).
   const event = (kind: "armed" | "fired", l: Record<string, unknown>, text: string): QuotaScan | null => {
     const t = Date.parse(String(l.timestamp ?? ""));
@@ -174,6 +176,22 @@ export function quotaScan(lines: ReadonlyArray<unknown>, openTurnKind?: string):
 }
 
 /**
+ * 마지막 대기 사건 — 끝 창보다 긴 «이어 간 턴» 까지 본다(#4821 ①). 판정 규칙은 여기 한 곳이고, 첫 줄을 어디서 어떻게 찾는지는 묻는 쪽이 준다.
+ *  창 판정(quotaScan)이 «없음» 이고, 창 맨 앞 턴(openTurnOf)을 «이어 간 턴» 으로 가정한 판정이 «걸림(다시 걸림)» 일 때만 그 턴의 첫 줄 출처를
+ *  originOf 로 묻는다 — auto-continuation 이면 가정한 판정을, 아니면(사람·작업 알림·못 찾음) «없음» 을 준다. 대부분의 판은 묻지 않는다.
+ *  originOf 가 던지면 그대로 던진다(못 읽음 — 부르는 쪽이 «모름» 으로 다룬다).
+ */
+export async function quotaScanWithOpenTurn(lines: ReadonlyArray<unknown>, originOf: (promptId: string) => Promise<string | null>): Promise<QuotaScan | null> {
+  const plain = quotaScan(lines);
+  if (plain) return plain;
+  const open = openTurnOf(lines);
+  if (!open) return null;
+  const hypo = quotaScan(lines, true);
+  if (hypo?.kind !== "armed") return null;
+  return (await originOf(open)) === "auto-continuation" ? hypo : null;
+}
+
+/**
  * (순수) 마지막 대기 사건에 시각 조건을 건다.
  *  @param launchedAtMs  하네스(tmux 세션)를 띄운 시각 — 이보다 앞선 사건은 그 전 프로세스의 것이다. 0 이면 보지 않는다.
  *  @param nowMs         지금
@@ -187,7 +205,7 @@ export function quotaBound(s: QuotaScan | null, at: { launchedAtMs: number; nowM
   return at.nowMs > untilMs ? null : { kind: "resuming", atMs: s.atMs, text: s.text, untilMs };
 }
 
-/** (순수) 대화 기록 줄에서 지금 지켜야 하는 대기 — quotaScan 다음 quotaBound. openTurnKind 는 quotaScan 과 같다. */
-export function quotaWaitOf(lines: ReadonlyArray<unknown>, at: { launchedAtMs: number; nowMs: number }, openTurnKind?: string): QuotaWait | null {
-  return quotaBound(quotaScan(lines, openTurnKind), at);
+/** (순수) 대화 기록 줄에서 지금 지켜야 하는 대기 — quotaScan 다음 quotaBound. */
+export function quotaWaitOf(lines: ReadonlyArray<unknown>, at: { launchedAtMs: number; nowMs: number }): QuotaWait | null {
+  return quotaBound(quotaScan(lines), at);
 }

@@ -246,6 +246,14 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   got.length === 1 ? ok("⑭ 두 번 병합해도 StopFailure work-flag 는 한 벌") : bad("⑭ StopFailure 병합", `실제=${JSON.stringify(got)}`);
 }
 
+// ⑮ #4821 — 프로젝트 배선(kit/hooks/settings-hooks.json)에도 같은 StopFailure 배선이 있다. 설치기 정본과 이 템플릿은 두 벌이라
+//  (격리 리뷰) 한쪽만 고치면 프로젝트 배선으로 도는 세션만 조용히 «작업 중» 으로 남는다.
+{
+  const tmpl = JSON.parse(readFileSync(new URL("../hooks/settings-hooks.json", import.meta.url), "utf8"));
+  const sf = (tmpl.hooks?.StopFailure || []).flatMap((e) => e.hooks || []).filter((h) => (h.command || "").includes("work-flag.mjs"));
+  sf.length === 1 ? ok("⑮ settings-hooks.json 에도 StopFailure work-flag 배선 하나") : bad("⑮ settings-hooks.json", `실제=${JSON.stringify(tmpl.hooks?.StopFailure)}`);
+}
+
 // ⑬ ★ 2026-08-19 실측 — LIVELY_HOME(샌드박스) 밖의 CLAUDE_CONFIG_DIR 는 상속된 **실 프로필**이다. 설치기가 그걸 존중하면
 //   실 프로필 settings.json 에 곧 지워질 샌드박스 훅 경로가 써져(harness-registry.test D 가 실제로 냈던 사고) 이후 모든 세션 훅이
 //   Cannot find module 로 죽는다. 설치기는 밖의 값을 무시하고 <LIVELY_HOME>/.claude 에 써야 한다(harness-registry.claudeConfigDir 계약).

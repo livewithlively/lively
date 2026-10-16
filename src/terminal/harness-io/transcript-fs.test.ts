@@ -158,7 +158,7 @@ await t("[E3] 정상 중계에서 **없는 파일**은 여전히 null — 이 �
   assert.equal(await m.stat(hello), 12, "있는 파일은 크기 그대로");
 });
 
-// ── #4821 ① turnOrigin — 끝 창보다 긴 «이어 간 턴» 의 첫 줄(출처)을 거슬러 찾는다. 로컬 구현과 중계 구현(노드 쪽 node 한 줄)이 **같은 답**을
+// ── #4821 ① turnOpenerOrigin — 끝 창보다 긴 «이어 간 턴» 의 첫 줄(출처)을 거슬러 찾는다. 로컬 구현과 중계 구현(노드 쪽 node 한 줄)이 **같은 답**을
 //  내야 한다(prevTranscript 와 같은 이유 — 둘이 갈리면 관리형에서만 대기를 놓친다). 사양 F5a~F5j: 작업 스크래치 spec-4821.md.
 //   🔴 덩어리(1MB) 경계에 걸친 첫 줄을 못 이으면 — 그 자리에 떨어진 턴만 조용히 못 찾는다.
 //   🔴 중계를 덩어리마다 부르면 — 128MB 를 거슬러 읽는 데 왕복 128번이다(한 번에 끝내야 한다).
@@ -171,8 +171,8 @@ const opener = (pid: string, kind: string, pad = 0): string => jl({ type: "user"
 const toolLine = (pid: string, pad = 0): string => jl({ type: "user", promptId: pid, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "x".repeat(pad) }] } });
 const asstLine = (pad = 0): string => jl({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y".repeat(pad) }] } });
 const both = async (file: string, pid: string, before: number, max: number): Promise<string | null> => {
-  const want = await localTranscriptFs.turnOrigin(file, pid, before, max);
-  assert.equal(await memberTranscriptFs(OS).turnOrigin(file, pid, before, max), want, `로컬과 중계가 갈렸다 — ${pid}@${before}/${max}`);
+  const want = await localTranscriptFs.turnOpenerOrigin(file, pid, before, max);
+  assert.equal(await memberTranscriptFs(OS).turnOpenerOrigin(file, pid, before, max), want, `로컬과 중계가 갈렸다 — ${pid}@${before}/${max}`);
   return want;
 };
 const MB = 1024 * 1024;
@@ -203,6 +203,14 @@ await t("[F5d] 첫 줄이 before 뒤에만 있으면 못 찾음 · before 가 �
 });
 await t("[F5e] 상한(maxBytes) 밖의 첫 줄은 못 찾음 — 상한에서 잘린 반 줄도 안 본다", async () => {
   assert.equal(await both(turns, PA, F5.before, 1 * MB), null);
+  //  반 줄의 꼬리가 그 자체로 온전한 JSON 이어도 안 본다(격리 리뷰 — 잘린 반 줄이 우연히 JSON 이면 «온전한 줄» 검사 없이는 답이 된다)
+  const half = path.join(tmp, "halfline.jsonl");
+  const tailOpener = opener(PB, "auto-continuation");
+  fs.writeFileSync(half, asstLine(5) + "ABC" + tailOpener + toolLine(PB) + toolLine(PB));
+  const hb = fs.statSync(half).size;
+  const tailStart = Buffer.byteLength(asstLine(5)) + 3;
+  assert.equal(await both(half, PB, hb, hb - tailStart), null, "꼬리 JSON 에서 멈추면 못 찾음(앞 바이트가 개행이 아니다)");
+  assert.equal(await both(half, PB, hb, hb - tailStart + 3), null, "줄 시작까지 닿아도 그 줄은 ABC{… 라 깨진 줄");
   assert.equal(await both(turns, PA, F5.before, F5.before - F5.paStart - 10), null, "첫 줄 끝 10바이트 앞에서 멈추면(반 줄) 못 찾음");
   assert.equal(await both(turns, PA, F5.before, F5.before - F5.paStart), "auto-continuation", "첫 줄 시작까지 닿으면 찾는다(경계값)");
 });
@@ -225,7 +233,7 @@ await t("[F5g] 첫 줄이 1MB 덩어리 경계에 걸쳐도 이어 붙여 찾는
 });
 await t("[F5h] 중계 구현은 한 번 찾는 데 중계를 **한 번**만 부른다(덩어리마다 왕복하지 않는다)", async () => {
   const before = relayCalls().length;
-  assert.equal(await memberTranscriptFs(OS).turnOrigin(turns, PA, F5.before, 128 * MB), "auto-continuation");
+  assert.equal(await memberTranscriptFs(OS).turnOpenerOrigin(turns, PA, F5.before, 128 * MB), "auto-continuation");
   assert.equal(relayCalls().length - before, 1);
 });
 await t("[F5i] before 0 · 빈 파일 · 없는 파일은 못 찾음(던지지 않는다) · 이상한 promptId 는 중계 없이 못 찾음", async () => {
@@ -237,9 +245,32 @@ await t("[F5i] before 0 · 빈 파일 · 없는 파일은 못 찾음(던지지 �
   assert.equal(await both(turns, `${PA}","x":"`, F5.before, 128 * MB), null);
   assert.equal(relayCalls().length, before, "찾는 문자열을 만드는 값이 이상하면 중계를 부르지 않는다");
 });
-await t("[F5j] ★ 중계가 죽으면 turnOrigin 도 503 을 던진다 — «못 찾음(null)» 으로 둔갑하면 읽는 쪽이 그걸 기억해 영영 다시 안 찾는다", async () => {
+await t("[F5k] 사이드체인 줄은 첫 줄이 아니다 — 같은 promptId · 출처를 달고 있어도 건너뛴다(로컬·중계 둘 다)", async () => {
+  const f = path.join(tmp, "sidechain.jsonl");
+  const side = jl({ type: "user", isSidechain: true, origin: { kind: "auto-continuation" }, promptId: PB, message: { role: "user", content: "sub" } });
+  fs.writeFileSync(f, opener(PB, "human") + toolLine(PB) + side + toolLine(PB));
+  assert.equal(await both(f, PB, fs.statSync(f).size, 128 * MB), "human");
+});
+await t("[F5l] 맥락 압축 요약 줄(promptId·turnOrigin 만)이 턴 중간에 껴 있어도 그 턴의 출처를 준다 — 요약 줄의 turnOrigin 은 그 턴의 출처와 같다", async () => {
+  const f = path.join(tmp, "compact.jsonl");
+  const summary = jl({ type: "user", isCompactSummary: true, promptId: PB, turnOrigin: "auto_continuation", message: { role: "user", content: "요약…" } });
+  fs.writeFileSync(f, opener(PB, "auto-continuation") + toolLine(PB, 2000) + summary + toolLine(PB, 2000));
+  assert.equal(await both(f, PB, fs.statSync(f).size, 128 * MB), "auto-continuation");
+});
+await t("[F5m] ★ 중계가 실패를 삼켜 종료코드 0 · 빈 출력이면 던진다 — «못 찾음(null)» 으로 풀면 읽는 쪽이 그걸 영구히 기억한다(격리 리뷰)", async () => {
+  const silent = path.join(tmp, "silent-relay.mjs");
+  fs.writeFileSync(silent, "process.exit(0);\n");
+  const saved = process.env.LIVELY_MEMBER_EXEC;
+  process.env.LIVELY_MEMBER_EXEC = `${process.execPath} ${silent}`;
+  try {
+    const e: unknown = await memberTranscriptFs(OS).turnOpenerOrigin(turns, PA, F5.before, 128 * MB).then(() => null, (x: unknown) => x);
+    assert.ok(e instanceof HttpError, `던진 것이 HttpError 가 아니다: ${String(e)}`);
+    assert.equal(e.status, 503);
+  } finally { process.env.LIVELY_MEMBER_EXEC = saved; }
+});
+await t("[F5j] ★ 중계가 죽으면 turnOpenerOrigin 도 503 을 던진다 — «못 찾음(null)» 으로 둔갑하면 읽는 쪽이 그걸 기억해 영영 다시 안 찾는다", async () => {
   await withBadRelay(async () => {
-    const e: unknown = await memberTranscriptFs(OS).turnOrigin(turns, PA, F5.before, 128 * MB).then(() => null, (x: unknown) => x);
+    const e: unknown = await memberTranscriptFs(OS).turnOpenerOrigin(turns, PA, F5.before, 128 * MB).then(() => null, (x: unknown) => x);
     assert.ok(e instanceof HttpError, `던진 것이 HttpError 가 아니다: ${String(e)}`);
     assert.equal(e.status, 503);
   });
