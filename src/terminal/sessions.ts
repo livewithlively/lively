@@ -31,7 +31,8 @@ import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessi
 import { collectPaneArgv, isCollectRunDir, collectMemLimits } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, markSessionEnded, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원 · #4783 끝난 사유
+import { endNoteForRow, lastResultSeenFrom, LAST_RESULT_SEEN_FMT, type SessionEndInput } from "../sessions/session-end.js";   // #4783 — 이 판이 왜 끝났나
 import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -196,6 +197,9 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       //   **주인에게만** 싣는다 — 보내지 않은 글은 주인만의 것이다. 초대받은 사람·프로젝트 동료도 이 행을 받지만(가시성), 화면이 되돌리는 것도
       //   주인뿐이라(canRevive) 그 사람들에게 실을 까닭이 없다(격리 리뷰 — 목록 응답만 열어도 남이 쓰다 만 글이 보였다).
       ...(s.stop_note && !starting && s.owner === me ? { stopNote: s.stop_note } : {}),
+      //  #4783 — 이 판이 왜 끝났나. 시작 중인 행엔 싣지 않는다(끝난 판이 아니다). 남에게도 싣는다 — 사유는 사적인 글이 아니고,
+      //   초대받은 사람·프로젝트 동료의 화면도 «지난 세션 / 끄기 직전 모습 / 오류» 를 같은 규칙으로 그려야 한다.
+      ...(!starting && endNoteForRow(s.end_note) ? { endNote: endNoteForRow(s.end_note) } : {}),
       // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
       //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
       ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),
@@ -1316,9 +1320,19 @@ async function tmuxKill(id: string): Promise<void> {
   try { await tmux(["kill-session", "-t", id]); }
   catch (err) { if (!isSessionGoneError(err)) throw err; }
 }
+async function lastResultSeen(id: string): Promise<boolean | undefined> {
+  try { return lastResultSeenFrom(await tmux(["display-message", "-p", "-t", id, LAST_RESULT_SEEN_FMT])); }
+  catch { return undefined; }
+}
 // #1059 F — reaper 전용 중앙 세션 회수: tmux 만 죽이고 **desired-state 는 보존**(org_session_state 유지 → restorable
 //  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
-export async function reapCentralSession(id: string): Promise<void> {
+//  ★ #4783 — **끄기 전에 사유를 적는다**(기본 reclaim = 시스템이 껐다). 이 함수가 시스템 끄기의 공용 문이다 — 하네스 종료 규칙(T5)·
+//   옛 회수 시계·압박 회수·멤버 비활성화·상시 세션 정리가 전부 여기로 온다(호출자 감사 #2258: 그 다섯 곳 외엔 없다).
+//   안 본 결과가 남은 채 끄는지(seen)도 함께 남긴다 — 화면이 꺼진 세션을 «작업 완료» 로 그리는 재료다. 적기 실패는 끄기를 막지 않는다.
+export async function reapCentralSession(id: string, end: SessionEndInput = { why: "reclaim" }): Promise<void> {
+  const seen = end.seen ?? (end.why === "reclaim" ? await lastResultSeen(id) : undefined);
+  await markSessionEnded(id, { ...end, ...(seen !== undefined ? { seen } : {}) })
+    .catch((e) => console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e));
   await tmuxKill(id);
 }
 /**
@@ -1336,8 +1350,14 @@ export async function stampManagedMarker(id: string, managedId: string): Promise
 // opts.admin: 소유자 확인을 건너뛴다(호출 라우트가 admin scope 를 이미 검증 — F4 관리자 수동 회수).
 // opts.preserveState: desired-state(org_session_state)를 지운다 vs 보존한다. 기본(미지정)=지움(사용자 명시 kill=복원 안 함).
 //  관리자 '회수'는 preserveState:true 로 불러 restorable 로 남긴다(reaper 와 동일 의미 — 메모리만 회수, 복원 가능).
-export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
+// opts.end(#4783): 행을 남기는 끄기(preserveState)의 **끝난 사유** — 사람이 멈춘 자리(DELETE ?reclaim=1 · 프로젝트 휴지통)만 넘긴다.
+//  안 넘기는 자리(복원 실패 뒷정리 등)는 적지 않는다 — 뒷정리를 «사람이 멈췄다» 로 적으면 그 세션이 지난 세션으로 접힌다.
+export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean; end?: SessionEndInput }): Promise<void> {
   if (!opts?.admin) await assertManage(user, id);
+  //  끄기 **전에** 적는다 — 끈 뒤 하네스가 신호를 받고 끝나며 런처가 보내는 보고보다 먼저여야 «먼저 적은 쪽이 이긴다» 가 맞게 선다.
+  if (opts?.preserveState && opts.end) {
+    await markSessionEnded(id, opts.end).catch((e) => console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e));
+  }
   await tmuxKill(id);
   // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
   await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));

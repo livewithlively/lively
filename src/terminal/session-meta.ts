@@ -8,6 +8,7 @@
 //  그래서 판정을 순수 함수로 꺼내 표로 고정한다(session-meta.test.ts).
 //
 // ⚠ DB·tmux·express 를 부르지 않는다(순수) — 그래야 표가 테스트로 고정된다.
+import { endNoteForRow, type SessionEndNote, type SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 순수 모듈
 
 /** 복원 판정에 필요한 desired-state 필드만(= org_session_state 의 부분집합). */
 export interface DeadSessionStateLike {
@@ -21,6 +22,10 @@ export interface DeadSessionStateLike {
   exit_reason?: string | null;
   /** #2231 — 이 세션이 이어진 새 id. 있으면 '되살릴 세션'이 아니라 **이정표**다(아래 kind:"moved"). */
   superseded_by?: string | null;
+  /** #4783 — 이 판이 왜 끝났나(sessions/session-end.ts). 터미널 화면이 끝 배너의 말을 사실대로 고르는 재료다. */
+  end_note?: SessionEndNote | null;
+  /** #4695 T5 — 끄기 전에 남긴 쪽지. 메타엔 **사유(why)만** 싣는다(쓰다 만 글·질문은 대화창 몫). */
+  stop_note?: { why?: string } | null;
 }
 
 /** 죽은 세션의 메타 응답 본문. `restorable: true` 가 곧 "박스에 없다 = 되살릴 수 있다". */
@@ -37,6 +42,10 @@ export interface DeadSessionMeta {
   oomKilled: boolean;
   /** 하네스(claude·codex·shell…) — 이어받기 문구와 복원 인자를 가른다. */
   harness: string;
+  /** #4783 — 왜 끝났나(끝낸 자리가 적은 것 — sessions/session-end.ts). 없음 = 모름. 화면은 끝 배너의 말을 이것으로 고른다. */
+  endNote?: SessionEndForRow;
+  /** #4695 T5 — 하네스 종료 규칙이 끄며 남긴 쪽지의 사유(done·asking·exited). 쪽지 본문은 싣지 않는다. */
+  stopWhy?: string;
 }
 
 /**
@@ -110,6 +119,9 @@ export function deadSessionMeta(
       exitedByUser: !!st.exited_at,
       oomKilled: !st.exited_at && st.exit_reason === "oom",
       harness: st.harness || "shell",
+      //  #4783 — 왜 끝났나(끝낸 자리가 적은 것). 없으면 모름 — 화면은 사람이 끝냈다고 **단정하지 않는다**.
+      ...(endNoteForRow(st.end_note) ? { endNote: endNoteForRow(st.end_note) } : {}),
+      ...(st.stop_note && typeof st.stop_note.why === "string" ? { stopWhy: st.stop_note.why } : {}),
     },
   };
 }

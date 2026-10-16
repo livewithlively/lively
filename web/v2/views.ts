@@ -10,7 +10,7 @@ import { isCreatingQuickSession, openQuickSession, takeFirstPrompt, takeUnsentDr
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessAppDoor, type SessionChatHandle, type SessionChatTarget } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
-import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
+import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen, stoppedDotKey, stoppedIsPast } from '../session-status.js';
 import { appGlassIcon, appHref, openLaunchpad, recentApps, soloSessionUrl, terminalUrl } from './apps.js';
 import { askNotificationPermission, loadNotifications, markNotificationsRead, notificationPermission, notificationRow, onUnread, type NotificationFeed } from './notifications.js';   // #1891 받은 알림 이력 · #4180 종의 시계
 import { notifyBell } from './notify-bell.js';   // #4180 — 「확인할 것」의 입구는 홈 머리줄의 종
@@ -52,6 +52,13 @@ export interface Sess {
   task?: TaskMark | null;
   /** 위탁 워커가 사이드바에서 **설** 프로젝트(#4551, lib/liv-work placeLivWork). ⚠ 소속(projectId)이 아니다 — 자리만 정한다. */
   standId?: number | null;
+  /**
+   * #4783 — 꺼진 세션의 **목록 줄 겉모습**(session-status.ts stoppedDotKey · stoppedIsPast). 도는 세션엔 없다.
+   *  stopDot: 점('' · waiting · done · error) — 시스템이 끈 세션은 끄기 직전 모습, 고장은 «오류».
+   *  stopPast: «지난 세션» 으로 접나 — 사람이 끝냈을 때만 참. ⚠ 생사(live·alive)와 다른 축이다 — 터미널을 붙일지는 alive 가 정한다.
+   */
+  stopDot?: '' | 'waiting' | 'done' | 'error';
+  stopPast?: boolean;
 }
 export interface V2Data {
   projects: Proj[];
@@ -583,6 +590,8 @@ export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
       trashedAt: r.trashedAt ? String(r.trashedAt) : null,   // #1851 — 서버가 내 휴지통 표식을 행에 얹는다
       trashedWith: r.trashedWith != null ? Number(r.trashedWith) : null,
     };
+    //  #4783 — 꺼진 박스면 **누가 끝냈나** 로 겉모습을 정한다. 관측 못 한 행(«모름»)은 정하지 않는다 — 꺼졌다는 사실부터 모른다.
+    if (!s.alive && r.observed !== false) { s.stopDot = stoppedDotKey(r, now); s.stopPast = stoppedIsPast(r); }
     out.set(s.id, s);
     if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId))) byUuid.set(String(r.claudeSessionId), s);
   }

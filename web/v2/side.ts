@@ -767,6 +767,7 @@ function grpSums(g: ProjGrp): HTMLElement | null {
   const part = (k: string, cls: string) => (counts[k] ? el('span', { class: 'v2-sum ' + cls, title: `${SESS_STATES[k] ? SESS_STATES[k].label : k} ${counts[k]}` },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), counts[k] > 1 ? String(counts[k]) : null) : null);
   const w = part('waiting', 'wait'), d = part('done', 'done'), b = part('busy', 'busy');
+  const x = part('error', 'err');   // #4783 — 비정상적으로 끝난 세션(꺼진 세션만 — views.ts stopDot)
   //  ★ 도는 게 하나도 없는 카드는 **속 빈 고리 하나**로 그 사실을 말한다(#3778) — 트리의 sumEl 이 같은 경우
   //   「지난 세션 n」을 그 자리에 세우는 그 규칙이다(#1808). 종전엔 이 머리글이 확인 필요·완료·작업 중만 세어서,
   //   **오늘 한 일이 전부 끝난 카드는 접혀 있는 동안 아무 말도 안 했다**(원준 2026-09-09: "구분이 안 된다").
@@ -775,8 +776,8 @@ function grpSums(g: ProjGrp): HTMLElement | null {
   const p = (!g.live && g.past)
     ? el('span', { class: 'v2-sum past', title: `지난 세션 ${g.past}` }, el('span', { class: 'v2-dot past', 'aria-hidden': 'true' }))
     : null;
-  if (!w && !d && !b && !p) return null;
-  return el('span', { class: 'v2-sums' }, w, d, b, p);
+  if (!w && !x && !d && !b && !p) return null;
+  return el('span', { class: 'v2-sums' }, w, x, d, b, p);
 }
 
 /**
@@ -1602,7 +1603,8 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
   const bld = !mark && isBuilderSession(s.label, p ? p.name : '');
   //  ★ 홈과 같은 자(#3778 2판) — 셋만 점이 된다. 종전엔 아홉 가지를 전부 넘겨, 색 규칙이 없는 상태가
   //   `currentColor` 로 떨어져 **대기 중과 오프라인이 같은 글자색 점**이 됐다(의도한 회색이 아니었다).
-  const st = !pastRow && isDotState(s.stateKey) ? s.stateKey : '';
+  //  #4783 — 꺼진 세션도 시스템이 껐거나 고장 났으면 그 점이 선다(views.ts stopDot — 홈 ① 과 같은 규칙).
+  const st = !pastRow ? (isDotState(s.stateKey) ? s.stateKey : '') : (s.stopDot || '');
   const ownerId = String((s.raw && s.raw.owner) || '');
   return {
     id: 'sess:' + s.id,
@@ -1620,7 +1622,7 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     //   × 의 뜻과 상태 점을 끄는 데만 쓰고 넘기지 않아서, 홈에는 있는 두 가지가 이 구역엔 없었다:
     //   흐린 톤(.v2-app-inst--past)과 카드 안 「지난 세션 n」 접힘. 같은 목록이 어디서 보느냐에 따라
     //   다른 말을 하면 사람은 그걸 «없어졌다» 로 겪는다(이름 수정이 트리에만 있던 것과 같은 종류).
-    past: pastRow,
+    past: pastRow && s.stopPast !== false,   // #4783 — «지난 세션» 은 사람이 끝냈을 때만(홈 ① 과 같다)
     //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
@@ -3373,7 +3375,9 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const st = SESS_STATES[s.stateKey];
   //  ★ 점은 «나를 기다리는 것» 셋만 그린다(#3778 2판) — 종전엔 오프라인이 지난 세션과 **같은 빈 고리**였다.
   //   「몸이 있나」는 아래 .past 톤과 오른쪽 시각이 말한다. 어휘 전체는 [필터] 팝오버가 그대로 들고 있다.
-  const cls = rowDotCls(s.stateKey);
+  //  #4783 — 꺼진 세션은 **누가 끝냈나** 로 그린다(views.ts stopDot·stopPast): 시스템이 껐거나 고장이면 그 점이 서고 흐리지 않는다.
+  const cls = rowDotCls(pastRow && s.stopDot ? s.stopDot : s.stateKey);
+  const dimRow = pastRow && s.stopPast !== false;
   const raw = s.raw || {};
   const owner = ownerName(s);
   // 프로젝트명 반복을 걷어낸 뒤의 이름·'지금 하는 일'(하네스 pane 제목 = 클래식 카드의 💬 줄).
@@ -3384,7 +3388,7 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   // 이름 자리 — 더블클릭하면 그 자리에서 고친다(원준 2026-08-20). 고친 이름은 서버로 가고 탭·대화창까지 따라온다.
   const nameEl = el('span', { class: 't', text: main });
   //  #3784 — 우클릭 메뉴는 표(data-ctx)로 붙는다(셸 배선 ctx-registry 가 위로 올라가며 찾는다). 행마다 리스너를 달지 않는다.
-  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, 'data-ctx': 'session', 'data-sid': s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
+  const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (dimRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, 'data-ctx': 'session', 'data-sid': s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, nameEl),
     isMine(s) ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),

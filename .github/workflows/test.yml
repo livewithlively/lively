@@ -159,6 +159,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/sessions/session-revive.pg-test.mjs
+      # ④-d2c 이 판이 왜 끝났나(#4783) — 목으로는 못 보는 것: **그 판의 첫 사실이 이기나**(뒤늦은 런처 보고가 끄기 사유를 못 덮는다) ·
+      #    주인 행만 · 그 판보다 먼저 뜬 하네스의 보고는 버리나 · 판이 새로 서면 지난 사유가 지워지나 · 열어 보면 «안 본 결과» 가 걷히나 —
+      #    전부 UPDATE 의 WHERE 와 upsert 의 ON CONFLICT 라 행을 되읽어 판정한다.
+      - name: 끝난 사유 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-end.pg-test.mjs
       # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
       #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
       - name: 위탁 running 기록 PG 통합 테스트

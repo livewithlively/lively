@@ -30,7 +30,8 @@ import { locateTranscript } from "./harness-io/locate.js";              // #1437
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, clearSessionStopNote, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionEnded, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, clearSessionStopNote, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { harnessEndVerdict } from "../sessions/session-end.js";   // #4783 — 하네스가 스스로 끝났다는 런처 보고의 판정(순수)
 import { adoptVerdict, createKeyedSerializer, type AdoptProbe } from "./restore-adopt.js";   // #3891 — 복원을 다시(또는 동시에) 불러도 같은 대화를 둘로 만들지 않는다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
@@ -1731,6 +1732,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         if (!killed && !nodeOnline(nodeId)) {
           throw new HttpError(503, "그 컴퓨터(" + nodeId + ")가 지금 연결돼 있지 않아 이 세션을 멈출 수 없어요 — 켜지면 다시 시도해 주세요");
         }
+        //  #4783 — 사람이 멈췄다(끝난 사유). 노드에 끄기를 **보낸 뒤** 적는다 — 노드 세션은 그 컴퓨터의 런처가 보고하지 않아 앞설 쪽이 없고,
+        //   못 끈 채 적으면 그 판의 다음 끝이 이 기록에 막힌다(첫 사실이 이긴다 — markSessionEnded).
+        if (st) await markSessionEnded(id, { why: "stop", by: me }).catch((e) => logger.warn({ err: e, id }, "끝난 사유 기록 실패(비치명)"));
         res.json({ ok: true, reclaimed: true, killed });
         return;
       }
@@ -1763,7 +1767,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  #1059 OOM 위기처럼 박스가 위태로우면 관리자가 작업 중·접속 중 세션도 즉시 회수해 메모리를 되찾아야 한다.
     //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
     const admin = reclaim && !!u.scopes?.includes("admin");
-    await killSession(u, req.params.id, { admin, preserveState: reclaim });
+    //  #4783 — 보관(회수)은 **사람이 멈춘 것**이다(세션 [종료]·보관 · 프로젝트 아카이브·정리 · 관리 화면 [회수]). 끝난 사유로 남긴다 —
+    //   화면이 이 세션을 «지난 세션» 으로 접는 근거다(시스템이 끈 세션은 끄기 직전 모습 그대로 둔다). 완전 삭제는 행이 사라지니 안 적는다.
+    await killSession(u, req.params.id, { admin, preserveState: reclaim, ...(reclaim ? { end: { why: "stop" as const, by: idOf(u) } } : {}) });
     if (!reclaim) forgetTenantMap(); // 회수(복원 가능)는 소속을 남긴다 — 복원 세션이 제 워크스페이스로 돌아가야 한다
     res.json({ ok: true });
   }));
@@ -2292,5 +2298,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const reason = String(((req.body ?? {}) as Record<string, unknown>).reason ?? "").trim().slice(0, 64);
     const ok = await markSessionExited(req.params.id, idOf(userOf(req)), reason);
     res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+  }));
+
+  // #4783 — 하네스가 **스스로** 끝났다(세션 런처 LAUNCH_STOP_SH 의 보고 — catalog.ts). 종료코드 0 = 사람이 끝냈다(/exit·Ctrl-D·/quit —
+  //  claude 뿐 아니라 종료 훅이 없는 agy·사유를 다르게 싣는 codex 도 같은 길로 잡힌다) · 0 이 아님 = 고장(기동 직후면 기동 실패).
+  //  owner-gated(위 /exited 와 같다 — 그 세션 자격으로 온 요청만 그 세션의 행을 고친다) · 그 판보다 먼저 뜬 하네스의 보고는 버린다(t0).
+  //  «먼저 적은 쪽이 이긴다» — tmux 를 닫은 자리(끄기·멈춤)가 이미 적었으면 이 보고는 아무것도 안 바꾼다(markSessionEnded 머리말).
+  app.post("/api/ui/terminal/sessions/:id/ended", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const v = harnessEndVerdict(req.body);
+    if (!v) { res.json({ ok: false }); return; }   // 모양이 틀리거나 신호로 닫힌 판(129) — 보고를 사유로 읽지 않는다(실패가 아니다)
+    const ok = await markSessionEnded(req.params.id, { why: v.why, code: v.code }, { owner: idOf(userOf(req)), t0: v.t0 });
+    res.json({ ok });   // ok=false: 남의 세션 · 행 없음 · 이미 적힘 · 옛 판의 보고(전부 무해)
   }));
 }
