@@ -97,6 +97,13 @@ const hexKeys = (id: string, s: string): string[] => ["send-keys", "-t", id, "-H
 /** 이 하네스에 글을 붙여넣기로 싣나(규약 ⑤) — Claude Code 만. */
 export const pastesFor = (harness: string | null | undefined): boolean => String(harness ?? "").trim() === "claude";
 
+//  붙여넣기는 **글**만 싣는다 — 제어 글자(탭 빼고 C0 · DEL)는 키다. 붙여넣기 안에 들어가면 키가 아니라 글자가 되고, Claude Code 는
+//   제출할 때 그 글자를 «보이지 않는 글자» 로 지우며 멈춘다(«… review and press Enter to send»). 실제로 그런 글이 있다: 모델·추론강도
+//   명령은 사람이 치던 글을 치워 두는 키(Ctrl+S, catalog runtimeDraftStash)를 앞에 붙여 보낸다 — 붙여넣으면 치워 두기도 안 되고
+//   명령도 안 나간다. 그런 글은 종전대로 친다(키는 키로). 탭은 붙여넣기에서 공백 넷이 된다(친 탭은 자동완성을 부른다 — 붙이는 편이 낫다).
+// eslint-disable-next-line no-control-regex
+const KEYS_IN_TEXT = /[\x00-\x08\x0a-\x1f\x7f]/;
+
 /**
  * 그 세션이 붙여넣기를 받나 — 부른 쪽이 하네스를 알면 그것으로, 모르면 이 호스트 tmux 의 `@box_harness` 로(규약 ⑤).
  *  ⚠ 표식이 비었거나 못 읽으면 **종전대로 친다**(붙여넣기를 모르는 앱에 표지를 흘리지 않는다).
@@ -107,7 +114,8 @@ export async function sessionPastes(id: string, harness?: string | null): Promis
 }
 
 export interface SendKeysOpts {
-  /** 글을 붙여넣기 조각으로 싣는다(규약 ⑤ — Claude Code 세션만 참). psmux 는 무시한다(입력 표면이 다르다 — 규약 ③). */
+  /** 글을 붙여넣기 조각으로 싣는다(규약 ⑤ — Claude Code 세션만 참). psmux 는 무시한다(입력 표면이 다르다 — 규약 ③).
+   *  글에 키(제어 글자)가 섞여 있으면 무시한다(KEYS_IN_TEXT 머리말). */
   paste?: boolean;
 }
 
@@ -140,7 +148,7 @@ export function sendKeysPlan(id: string, text: string, bin: string, opts: SendKe
   //   옵션 구간 끝으로 읽으므로 `-t` 지목은 그대로다.
   const literal = (s: string): string[][] => splitUtf8(s, TMUX_LITERAL_CHUNK_BYTES).map((part) => ["send-keys", "-t", id, "-l", "--", part]);
   const keys = !oneLine ? []
-    : opts.paste ? splitUnits(oneLine, PASTE_CHUNK_UNITS).flatMap((piece) => [hexKeys(id, PASTE_OPEN), ...literal(piece), hexKeys(id, PASTE_CLOSE)])
+    : opts.paste && !KEYS_IN_TEXT.test(oneLine) ? splitUnits(oneLine, PASTE_CHUNK_UNITS).flatMap((piece) => [hexKeys(id, PASTE_OPEN), ...literal(piece), hexKeys(id, PASTE_CLOSE)])
     : literal(oneLine);
   return { oneLine, keys, enter: ["send-keys", "-t", id, "Enter"] };
 }

@@ -430,8 +430,9 @@ export async function sendReadyRow(
   clock: { now: () => number } = { now: Date.now },
 ): Promise<SendOutcome> {
   const oneLine = flatOneLine(row.text);
-  //  설정 명령(/model …)도 붙여넣는다 — 슬래시 명령은 붙여넣어도 친 것과 같이 돈다(2.1.301 실측: «Set model to …» 동일).
-  const typed = await exec.type(row.text, pastesFor(harness) ? { paste: true } : undefined);
+  //  붙여넣는 것은 **사람이 보낸 말**뿐이다. 설정 명령(control)은 앞에 «치던 글 치워 두기» 키(Ctrl+S)가 붙어 있어 키로 쳐야 한다
+  //   (send-keys KEYS_IN_TEXT 머리말) — #4772 가 실측으로 맞춘 그대로 둔다. 짧아서(64자 미만) 한 덩어리로 읽혀도 Enter 가 키로 남는다.
+  const typed = await exec.type(row.text, pastesFor(harness) && row.kind === "prompt" ? { paste: true } : undefined);
   if (typed.next === "stall") return { kind: "stall", verdict: typed.verdict };
   if (typed.next === "fail") return { kind: "mark", status: "failed", error: typed.error };
   if (typed.next === "echo-only") {

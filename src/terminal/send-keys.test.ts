@@ -281,6 +281,21 @@ t("[28·P4 L1~L6] 한 줄로 펴기 — CR(치면 그 자리 제출)·CRLF·U+20
   }
 });
 
+t("[30·P14] 글에 키(제어 글자)가 섞이면 붙여넣지 않고 종전대로 친다 — 설정 명령의 «치던 글 치워 두기»(Ctrl+S)가 키로 가야 한다", () => {
+  const claude = HARNESSES.find((h) => h.key === "claude")!;
+  const cmd = claude.runtimeDraftStash + claude.runtimeCmd!.model!("opus");
+  assert.deepEqual(planP("s", cmd, TMUX, { paste: true }).keys, [["send-keys", "-t", "s", "-l", "--", "\x13/model opus"]],
+    "붙여넣기 안의 Ctrl+S 는 키가 아니라 글자다 — 치워 두기가 안 되고 제출이 «보이지 않는 글자» 로 멈춘다");
+  for (const k of ["\x1b", "\x03", "\x7f", "\x00", "\x1f"]) {
+    assert.deepEqual(planP("s", `앞${k}뒤`, TMUX, { paste: true }).keys, [["send-keys", "-t", "s", "-l", "--", `앞${k}뒤`]], JSON.stringify(k));
+  }
+});
+
+t("[31·P14 경계] 탭은 글이다 — 붙여넣는다(붙이면 공백 넷 · 치면 자동완성을 부른다)", () => {
+  const keys = planP("s", "가\t나", TMUX, { paste: true }).keys;
+  assert.deepEqual(pastePieces(keys), ["가\t나"]);
+});
+
 t("[29·P3] 붙여넣기는 Claude Code 만 — 다른 하네스·모름은 종전대로 친다", () => {
   assert.equal(typeof sk.pastesFor, "function", "pastesFor 가 없다");
   assert.equal(sk.pastesFor("claude"), true);

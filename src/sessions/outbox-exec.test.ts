@@ -603,11 +603,13 @@ test("W9·W10 쳤는지 모름(echo-only)·설정 명령(control) — 화면도 
   assert.equal(enters(unknownType), 0);
   const control = rig({ host: paneHost(STUCK_PANE) });
   const ce = await outboxExecFor(ID, control.deps);
-  const out = await send({ text: "/model opus", kind: "control" }, "claude", ce, tickingEchoes(control.clock, ["timeout"]).echo, { now: () => control.clock.t });
+  //  실제 설정 명령 모양 — 앞에 «치던 글 치워 두기» 키(Ctrl+S, catalog runtimeDraftStash)가 붙는다.
+  const out = await send({ text: "\x13/model opus", kind: "control" }, "claude", ce, tickingEchoes(control.clock, ["timeout"]).echo, { now: () => control.clock.t });
   assert.deepEqual(out, { kind: "mark", status: "sent", error: "control-no-echo" });
   assert.equal(control.sentTo("peek").length, 0);
   assert.equal(enters(control), 0);
-  assert.deepEqual(control.sentTo("type"), [{ step: "type", id: ID, text: "/model opus", paste: true }], "설정 명령도 붙여넣는다(슬래시 명령은 붙여넣어도 그대로 돈다)");
+  assert.deepEqual(control.sentTo("type"), [{ step: "type", id: ID, text: "\x13/model opus" }],
+    "설정 명령을 붙여넣으면 치워 두기 키가 글자가 되고 Claude Code 가 «보이지 않는 글자» 로 제출을 멈춘다 — 종전대로 친다");
 });
 
 test("W12 waitEcho 배선 — 창 안에서만 박자를 부른다(마감 확인 뒤 · 폴 대기 앞) · 배달 루프가 그 박자를 넘긴다", () => {
