@@ -51,6 +51,8 @@ interface RunRec {
   done: boolean;
   tenant: TenantContext | null;
   timer?: ReturnType<typeof setInterval>;
+  /** 끝 신호 없이 세션이 «없다» 로 확답된 연속 횟수 — 러너가 죽었다(메모리 상한에 걸린 경우 등). */
+  goneStrikes: number;
 }
 
 /** 이 게이트웨이가 띄우고 지켜보는 실행. 재기동하면 비지만, 상태 읽기가 폴더에서 다시 판정한다. */
@@ -81,7 +83,7 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
   if (!/written/.test(wrote)) throw new HttpError(500, `수집 실행 파일을 쓰지 못했습니다 — ${wrote.slice(0, 160)}`);
   const rec: RunRec = {
     runId, owner, user, osUser, dir, deadline: Date.now() + job.timeoutSec * 1000 + GRACE_MS,
-    sessionId: null, done: false, tenant: currentTenant(),
+    sessionId: null, done: false, tenant: currentTenant(), goneStrikes: 0,
   };
   runs.set(runId, rec);
   try {
@@ -108,18 +110,27 @@ async function pollOnce(rec: RunRec): Promise<void> {
   try {
     const st = parseCollectRead(await runAtLoginSeatSh(rec.osUser, collectReadSh(rec.dir)));
     if (st.state === "done" || st.state === "missing") return void (await finalize(rec, null));
+    //  끝 신호 없이 판이 사라졌다 = 러너가 죽었다(메모리 상한 OOM · node 가 파일을 못 읽음 등). 상한까지 기다리지 않는다.
+    //   러너는 끝 신호를 쓴 **뒤에** 끝나므로, 이 순서(읽기 → 세션 확인)에서 «없음» 이 두 번 연속이면 끝 신호가 올 일은 없다.
+    //   «모른다»(중계 불통)는 세지 않는다 — 살아 있는 실행을 잃음으로 적지 않게.
+    if (rec.sessionId) {
+      const { sessionGoneVerdict } = await import("./tmux-exec.js");
+      const gone = await sessionGoneVerdict(rec.sessionId).catch(() => null);
+      rec.goneStrikes = gone === true ? rec.goneStrikes + 1 : 0;
+      if (rec.goneStrikes >= 2) return void (await finalize(rec, "runner-gone"));
+    }
   } catch (e) {
     logger.warn({ runId: rec.runId, err: (e as Error)?.message }, "수집 실행 상태 읽기 실패 — 다음 차례에 다시 본다");
   }
   if (Date.now() > rec.deadline) await finalize(rec, "lost");
 }
 
-/** 끝난 실행의 뒷정리 — 세션(판·행·훅 토큰)을 지운다. «잃음» 이면 폴더에 그 사실을 남긴다(러너가 못 남겼을 때만). */
-async function finalize(rec: RunRec, lost: "lost" | null): Promise<void> {
+/** 끝난 실행의 뒷정리 — 세션(판·행·훅 토큰)을 지운다. 잃었으면 폴더에 그 사유를 남긴다(러너가 못 남겼을 때만). */
+async function finalize(rec: RunRec, lost: LostReason | null): Promise<void> {
   if (rec.done) return;
   rec.done = true;
   if (rec.timer) clearInterval(rec.timer);
-  if (lost) await markLost(rec.osUser, rec.dir).catch(() => undefined);
+  if (lost) await markLost(rec.osUser, rec.dir, lost).catch(() => undefined);
   if (rec.sessionId) await dropSession(rec.user, rec.sessionId);
   //  끝난 기록은 잠시 남긴다 — 그동안 같은 사람의 새 실행을 막지는 않는다(done=true).
   setTimeout(() => runs.delete(rec.runId), 10 * 60_000).unref?.();
@@ -134,9 +145,12 @@ async function dropSession(user: LivelyUser, sessionId: string): Promise<void> {
   }
 }
 
-/** exit.json 이 없을 때만 «잃음» 을 적는다(러너가 늦게라도 쓴 것을 덮지 않는다). */
-function markLost(osUser: string | null, dir: string): Promise<string> {
-  const body = JSON.stringify({ code: null, error: "lost", endedAt: new Date().toISOString() });
+/** 잃은 사유 — lost: 상한을 넘도록 끝 신호가 없다 · runner-gone: 끝 신호 없이 판이 사라졌다(러너가 죽었다). */
+type LostReason = "lost" | "runner-gone";
+
+/** exit.json 이 없을 때만 잃음을 적는다(러너가 늦게라도 쓴 것을 덮지 않는다). */
+function markLost(osUser: string | null, dir: string, why: LostReason): Promise<string> {
+  const body = JSON.stringify({ code: null, error: why, endedAt: new Date().toISOString() });
   const f = loginShQuote(`${dir}/exit.json`);
   return runAtLoginSeatSh(osUser, `[ -d ${loginShQuote(dir)} ] && [ ! -f ${f} ] && printf '%s' ${loginShQuote(body)} > ${f}; echo ok`);
 }
@@ -168,7 +182,7 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
     else if (!rec && st.sessionId) await dropSession(user, st.sessionId);
   } else if (!rec && started && Date.now() > started + 3600_000 + GRACE_MS) {
     //  지켜보던 게이트웨이가 사라졌고, 가장 긴 상한(1시간)보다 오래 끝나지 않았다.
-    await markLost(osUser, dir).catch(() => undefined);
+    await markLost(osUser, dir, "lost").catch(() => undefined);
     if (st.sessionId) await dropSession(user, st.sessionId);
     return readCollectRun(user, runId);
   }
