@@ -14,7 +14,7 @@ import { HttpError } from "../http-error.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import {
-  LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupFor, logGroupTagBundleFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
+  LAMBDA_HANDLER, appServerEnv, codeAt, functionCodeFor, functionNameFor, lambdaEnvFor, logGroupFor, logGroupTagBundleFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
 import { codeBytesAfterDeploy, codeBytesOf, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
@@ -23,15 +23,17 @@ import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
 import * as lam from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
+import { s3Head } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { getApp, getAppVersionBundle } from "../org/store/apps.js";
 
 /** 시험이 갈아 끼우는 AWS 면(기본 = lambda-lite 를 그 지역으로). */
 export interface LambdaApi {
-  getFunction(name: string): Promise<lam.FnGet | null>;
+  /** qualifier — 그 판의 설정 · 코드 자리(#4801 재사용 판정). 없으면 $LATEST. */
+  getFunction(name: string, qualifier?: string): Promise<lam.FnGet | null>;
   getFunctionConfiguration(name: string, qualifier?: string): Promise<lam.FnConfiguration | null>;
   createFunction(input: lam.CreateFunctionInput): Promise<lam.FnConfiguration>;
-  updateFunctionCode(name: string, code: { S3Bucket: string; S3Key: string }): Promise<lam.FnConfiguration>;
+  updateFunctionCode(name: string, code: lam.FnCode): Promise<lam.FnConfiguration>;
   updateFunctionConfiguration(name: string, input: lam.UpdateConfigInput): Promise<lam.FnConfiguration>;
   publishVersion(name: string, input: { CodeSha256?: string; Description?: string }): Promise<lam.FnConfiguration>;
   listVersions(name: string): Promise<lam.FnConfiguration[]>;
@@ -48,7 +50,7 @@ export interface LambdaApi {
 export function realLambdaApi(region: string): LambdaApi {
   const c = { region };
   return {
-    getFunction: (n) => lam.getFunction(c, n),
+    getFunction: (n, q) => lam.getFunction(c, n, q),
     getFunctionConfiguration: (n, q) => lam.getFunctionConfiguration(c, n, q),
     createFunction: (i) => lam.createFunction(c, i),
     updateFunctionCode: (n, code) => lam.updateFunctionCode(c, n, code),
@@ -97,13 +99,31 @@ const lockedMsg = "이 앱의 서버를 다른 요청이 지금 올리고 있습
 export function publicError(e: unknown): string {
   if (e instanceof AwsError) {
     const rid = e.requestId ? ` · 요청 ${e.requestId}` : "";
-    if (/AccessDenied|NotAuthorized|UnrecognizedClient|InvalidClientTokenId|ExpiredToken|NoCredentials|SignatureDoesNotMatch|InvalidSignature/i.test(e.code)) {
+    //  #4801 코드를 우리 S3 에서 바로 읽는 길(REFERENCE)의 권한 거절도 플랫폼 설정 문제다 — 버킷 정책(Lambda 서비스) · 박스 역할(GetObjectVersion).
+    //   Lambda 는 이 둘을 InvalidParameterValueException(400) 글로도 준다(2026-10-16 시험 원문).
+    if (/AccessDenied|NotAuthorized|UnrecognizedClient|InvalidClientTokenId|ExpiredToken|NoCredentials|SignatureDoesNotMatch|InvalidSignature/i.test(e.code)
+      || REFERENCE_PERMISSION_RE.test(e.message)) {
       return `플랫폼 쪽 AWS 권한 · 자격 문제로 실패했습니다(${e.code}${rid}) — 계속되면 운영자에게 알려 주세요`;
     }
-    return e.message.replace(/arn:aws[^\s"',)]*/g, "(AWS 자원)").replace(/\b\d{12}\b/g, "(계정)") + (rid ? ` (${rid.slice(3)})` : "");
+    //  #4801 zip 없음 — 원문에 «s3://<판 묶음 버킷>/t/<워크스페이스>/z/…» 가 그대로 실린다(REFERENCE). 정해 둔 글로 바꾼다(그 빌드는 부르는 쪽이 무효로 적는다).
+    if (ZIP_MISSING_RE.test(e.message)) return `빌드 결과(zip)를 저장소에서 찾지 못했습니다 — 다시 하면 새로 빌드합니다${rid ? ` (${rid.slice(3)})` : ""}`;
+    return scrubAws(e.message) + (rid ? ` (${rid.slice(3)})` : "");
   }
   return (e as Error)?.message ?? String(e);
 }
+
+/** AWS 원문에서 플랫폼 자원 이름을 걷는다 — ARN · S3 주소(판 묶음 버킷 이름 · 워크스페이스 키 · #4801) · 12자리 계정 번호. */
+export const scrubAws = (s: string): string =>
+  s.replace(/arn:aws[^\s"',)]*/g, "(AWS 자원)").replace(/s3:\/\/[^\s"',)]*/g, "(저장소 객체)").replace(/\b\d{12}\b/g, "(계정)");
+
+/**
+ * Lambda 가 zip 을 못 찾았다는 글 — 그 빌드를 무효로 적고 다음 배포가 다시 빌드한다. COPY 는 «S3 Error Code: NoSuchKey», REFERENCE 는
+ *  «The specified S3 object does not exist» · 판 번호 없이 줬는데 지금 판이 지움 표시면 «latest version of the S3 object is a delete marker»
+ *  (2026-10-16 시험 원문 · #4801). 권한 거절(아래)은 zip 탓이 아니라 무효로 적지 않는다.
+ */
+export const ZIP_MISSING_RE = /S3 Error Code: NoSuchKey|The specified S3 object does not exist|latest version of the S3 object is a delete marker/i;
+/** REFERENCE 의 권한 거절 — 버킷 정책이 Lambda 서비스에 GetObject · GetObjectVersion 을 안 줌 · 부르는 쪽(박스 역할)에 그 둘이 없음(2026-10-16 시험 원문). */
+export const REFERENCE_PERMISSION_RE = /lambda\.amazonaws\.com does not have s3:GetObject|caller cannot access the referenced S3 object/i;
 
 /** 이 함수가 이 워크스페이스의 것인가(태그 lvly:tenant) — 지우기 · 멈추기 · 감시 같은 파괴적인 길이 남의 함수에 닿지 않게(이름이 겹쳐도). */
 export async function functionOwnership(api: LambdaApi, fn: string): Promise<"own" | "missing" | "foreign"> {
@@ -126,19 +146,42 @@ async function functionNameOf(appId: string, env: AppServerEnv): Promise<string 
 }
 const nameTooLong = (appId: string): HttpError => new HttpError(400, `앱 id 와 워크스페이스 이름이 길어 함수 이름(64자)을 만들 수 없습니다 — 더 짧은 앱 id 로 만드세요: ${appId}`);
 
-/** 함수가 준비될 때까지(만들기 · 코드/설정 고치기 뒤 Pending · InProgress) — 큰 zip(파일 수만 개)은 몇 분 걸린다(2026-10-15 실측). */
-async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, maxMs = 6 * 60_000): Promise<lam.FnConfiguration> {
-  const until = Date.now() + maxMs;
+/**
+ * 함수가 준비될 때까지(만들기 · 코드/설정 고치기 뒤 Pending · InProgress) — 큰 zip(파일 수만 개)은 몇 분 걸린다(2026-10-15 실측).
+ *  beforeUpdate — 코드를 올리기 바로 앞의 기다림: 다른 고치기가 도는 중(InProgress) · 만드는 중(Pending)만 기다린다.
+ *   Inactive(오래 쉼 · #4801 원본 zip 을 잃음)는 코드를 다시 올려야 살아나고(AWS 문서 «restore access to the source artifact and update the function»),
+ *   지난 고치기가 실패한 채(LastUpdateStatus Failed)도 다음 고치기가 덮어야 풀린다 — 여기서 막으면 6분 뒤 504 · 곧바로 502 로 끝나 스스로 못 고친다
+ *   (격리 리뷰 · 재검토). 올린 뒤의 기다림은 Active 를 요구한다.
+ */
+async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { beforeUpdate?: boolean; maxMs?: number } = {}): Promise<lam.FnConfiguration> {
+  const until = Date.now() + (opts.maxMs ?? 6 * 60_000);
   const sleep = deps.sleep ?? sleepDefault;
   for (;;) {
     const c = await api.getFunctionConfiguration(fn);
     if (!c) throw new HttpError(500, `함수가 사라졌습니다: ${fn}`);
-    if (c.State === "Failed") throw new HttpError(502, `함수를 만들지 못했습니다: ${c.StateReason ?? c.StateReasonCode ?? "까닭 모름"}`);
-    if (c.LastUpdateStatus === "Failed") throw new HttpError(502, `함수를 고치지 못했습니다: ${c.LastUpdateStatusReason ?? "까닭 모름"}`);
+    if (opts.beforeUpdate && (c.State === "Active" || c.State === "Inactive") && c.LastUpdateStatus !== "InProgress") return c;
+    //  상태 설명은 AWS 원문이다 — 판 묶음 버킷 주소 · 계정 번호가 실릴 수 있어 걷는다(#4801 격리 리뷰).
+    if (c.State === "Failed") throw new HttpError(502, `함수를 만들지 못했습니다: ${scrubAws(c.StateReason ?? c.StateReasonCode ?? "까닭 모름")}`);
+    if (c.LastUpdateStatus === "Failed") throw new HttpError(502, `함수를 고치지 못했습니다: ${scrubAws(c.LastUpdateStatusReason ?? "까닭 모름")}`);
     if (c.State === "Active" && c.LastUpdateStatus !== "InProgress") return c;
     if (Date.now() > until) throw new HttpError(504, `함수가 준비되지 않았습니다(${c.State}/${c.LastUpdateStatus}) — 잠시 뒤 다시 하세요`);
     await sleep(deps.pollMs ?? 2000);
   }
+}
+
+/**
+ * zip 이 아직 그 판으로 저장소에 있나(#4801) — 없거나(지움 표시) 지금 판이 기록과 다르면 까닭 글, 그대로면 null. 저장소를 못 봤으면(일시 오류) null —
+ *  usableBuild 와 같은 쪽이다(못 본 채 막으면 S3 가 흔들릴 때 모든 배포가 멈춘다 · 그 길은 Lambda 가 다시 드러낸다).
+ */
+async function zipProblem(zipKey: string, zipVersion: string | null, deps: ServerDeps): Promise<string | null> {
+  const s3 = appBundleS3Config();
+  if (!deps.headZip && !s3) return null;
+  let head: { size: number; versionId?: string | null } | null;
+  try { head = deps.headZip ? await deps.headZip(zipKey) : await s3Head(s3!, zipKey, { attempts: 1, timeoutMs: 5_000 }); }
+  catch (e) { logger.warn({ err: e, zipKey }, "잠금 안에서 zip 을 다시 보지 못했다 — 있다고 보고 진행(#4801)"); return null; }
+  if (!head) return "빌드 결과(zip)가 방금 저장소에서 지워졌습니다 — 다시 하면 새로 빌드합니다";
+  if (zipVersion && head.versionId && head.versionId !== zipVersion) return "빌드 결과(zip)가 다른 판으로 바뀌었습니다 — 다시 하면 새로 빌드합니다";
+  return null;
 }
 
 /** 함수 설정이 바라는 값과 다른가(고칠 칸만 돌려준다 — 빈 객체면 그대로). */
@@ -182,6 +225,8 @@ export async function deployBuildToAliases(i: {
   app: Pick<OrgApp, "id" | "title">; versionNo: number | null; buildKey: string; zipKey: string; zipSha256: string;
   /** zip 크기(바이트) — 워크스페이스 코드 저장 상한(#4792)이 이번 배포가 더할 크기를 셈한다. */
   zipBytes: number;
+  /** zip 의 S3 판 번호(#4801) — REFERENCE 면 함수가 이 판을 바로 읽는다. 모르면(옛 빌드 · 판 번호 없는 저장소) null — Lambda 가 지금 판으로 푼다. */
+  zipVersion: string | null;
   aliases: Array<"cur" | "pub">; policy: AppServerPolicy;
 }, deps0: ServerDeps = {}): Promise<DeployResult> {
   const deps = withDeps(deps0);
@@ -220,12 +265,17 @@ export async function deployBuildToAliases(i: {
       role: env.execRoleArn, handler: LAMBDA_HANDLER, runtime: env.runtime, memory: i.policy.memory_mb, timeout: i.policy.timeout_s,
       layer: env.layerArn, vars: lambdaEnvFor(i.app.id),
     };
+    //  #4801 코드 자리 — REFERENCE(기본)면 Lambda 가 복사하지 않고 이 zip 의 이 판을 바로 읽는다(계정 코드 저장을 안 쓴다).
+    const code = functionCodeFor(env, bucket, i.zipKey, i.zipVersion);
     //  cur 가 이미 같은 빌드의 함수 판을 가리키면 그 판을 그대로 쓴다(공개하기 · 되돌리기 직후) — 단 그 판의 설정(메모리 · 시간 · 레이어 · 역할 · 환경)이
     //   지금 바라는 값과 같을 때만. 다르면(관리자가 상한을 바꿈 · 어댑터 판을 올림) 아래에서 설정을 고쳐 새 판을 고정한다(«다음 배포부터» — 격리 리뷰).
+    //   #4801 그 판이 읽는 코드 자리도 지금 빌드의 것(저장 방식 · 판 번호)이어야 한다 — 같은 지문을 다시 빌드해 zip 판이 바뀌었으면 옛 판을 읽는 함수 판은
+    //   그 옛 판이 버킷 수명 규칙으로 사라질 때 멈춘다. COPY 로 만든 옛 함수 판도 여기서 REFERENCE 판으로 갈아탄다.
+    //   Inactive 인 판도 재사용하지 않는다 — 별칭만 옮기면 멈춘 판에 그대로 묶인다. 아래 길이 코드를 다시 올려 되살린다(격리 리뷰).
     let reuse = row && row.cur_build_key === i.buildKey && row.cur_lambda_version ? row.cur_lambda_version : null;
     if (reuse) {
-      const vc = await api.getFunctionConfiguration(fn, reuse);
-      if (!vc || Object.keys(configDrift(vc, want)).length) reuse = null;
+      const vg = await api.getFunction(fn, reuse);
+      if (!vg || Object.keys(configDrift(vg.Configuration, want)).length || !codeAt(vg.Code, code) || vg.Configuration.State === "Inactive") reuse = null;
     }
     let version: string;
     let smoke: DeployResult["smoke"] = null;
@@ -245,6 +295,17 @@ export async function deployBuildToAliases(i: {
       if (got && got.Tags?.["lvly:tenant"] !== blobTenant()) {
         await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
         throw new HttpError(409, foreignMsg(fn));
+      }
+      //  #4801 잠금 안에서 zip 을 한 번 더 본다 — 잠금 밖에서 본 뒤(usableBuild) 옛 빌드 정리가 그 zip 을 지웠으면(지움 표시) 못 박을 판이 «옛 판» 이 된다.
+      //   Lambda 는 옛 판도 읽어 배포는 초록인데, 그 판은 버킷 수명 규칙으로 30일 뒤 사라져 함수가 그때 멈춘다(조용한 성공 · 격리 리뷰). 정리는 이 잠금을
+      //   잡아야 지우므로(app-server-watch pruneServerBuilds) 여기서 본 판은 이 배포가 끝날 때까지 지금 판으로 남는다.
+      if (code.S3ObjectStorageMode === "REFERENCE") {
+        const problem = await zipProblem(i.zipKey, i.zipVersion, deps);
+        if (problem) {
+          await st.invalidateServerBuild(i.app.id, i.buildKey, problem).catch(() => { /* 다음에 */ });
+          if (!got) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+          throw new HttpError(409, problem);
+        }
       }
       //  zip 크기를 모르면(저장소를 못 본 옛 빌드) 상한이 이번 코드를 0 으로 센다 — 드물지만 보이게 남긴다(재검토).
       if (!(i.zipBytes > 0)) logger.warn({ app: i.app.id, build: i.buildKey }, "빌드 zip 크기를 모른다 — 코드 저장 상한이 이번 코드를 0 으로 센다(#4792)");
@@ -266,7 +327,7 @@ export async function deployBuildToAliases(i: {
           try {
             await api.createFunction({
               FunctionName: fn, Runtime: env.runtime, Role: env.execRoleArn, Handler: LAMBDA_HANDLER,
-              Code: { S3Bucket: bucket, S3Key: i.zipKey }, Architectures: [env.arch], MemorySize: want.memory, Timeout: want.timeout,
+              Code: code, Architectures: [env.arch], MemorySize: want.memory, Timeout: want.timeout,
               Layers: [env.layerArn], Environment: { Variables: want.vars },
               Description: `lively app ${i.app.id} (${slug})`.slice(0, 256),
               Tags: { "lvly:tenant": blobTenant(), "lvly:app": i.app.id, "lvly:workspace": slug }, Publish: false,
@@ -290,11 +351,16 @@ export async function deployBuildToAliases(i: {
         throw new HttpError(409, foreignMsg(fn));
       }
       owned = true;
-      if (got.Configuration.CodeSha256 !== i.zipSha256) {
-        await waitReady(api, fn, deps);
-        await api.updateFunctionCode(fn, { S3Bucket: bucket, S3Key: i.zipKey });
+      //  같은 코드 지문이어도 저장 방식 · 읽는 판이 다르면 다시 올린다(#4801 — COPY 로 만든 옛 함수를 REFERENCE 로 옮긴다 · 그 반대도).
+      //   Inactive(오래 쉼 · 원본을 잃음)면 같은 코드라도 다시 올린다 — 코드 고치기가 되살리는 길이다(AWS 문서 · 격리 리뷰).
+      const upload = got.Configuration.CodeSha256 !== i.zipSha256 || !codeAt(got.Code, code) || got.Configuration.State === "Inactive";
+      if (upload) {
+        await waitReady(api, fn, deps, { beforeUpdate: true });
+        await api.updateFunctionCode(fn, code);
       }
-      const cfg = await waitReady(api, fn, deps);
+      //  코드를 안 올렸으면 남은 «고치기 실패»(LastUpdateStatus Failed)는 지난 시도의 것이다 — AWS 는 실패한 고치기를 걷고 그 전 코드 · 설정을 둔다.
+      //   여기서 막으면 그 전 판으로 되돌리기 · 설정만 고치기가 영영 502 다(재검토). 이번에 올렸으면 그 결과를 기다린다(실패면 502).
+      const cfg = await waitReady(api, fn, deps, { beforeUpdate: !upload });
       if (cfg.CodeSha256 !== i.zipSha256) {
         //  zip 의 바이트가 빌드 기록과 다르다 — 그 빌드를 못 쓰게 적어 두면 다음 배포가 다시 빌드한다(같은 줄을 «재사용» 하며 영영 실패하지 않게).
         await st.invalidateServerBuild(i.app.id, i.buildKey, "함수에 올라간 코드가 빌드 기록의 지문과 다릅니다").catch(() => { /* 다음에 */ });
@@ -326,9 +392,9 @@ export async function deployBuildToAliases(i: {
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
     return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke, ...(logsWarning ? { logs_warning: logsWarning } : {}) };
   } catch (e) {
-    //  zip 이 저장소에 없다(Lambda 가 «S3 Error Code: NoSuchKey») — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
-    //   S3 권한 오류(AccessDenied 등)는 zip 탓이 아니다 — 무효로 적으면 누를 때마다 저장한 사람의 세션에서 처음부터 다시 빌드한다.
-    if (e instanceof AwsError && /S3 Error Code: NoSuchKey/i.test(e.message)) {
+    //  zip 이 저장소에 없다(ZIP_MISSING_RE — COPY · REFERENCE 의 두 글) — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
+    //   S3 권한 오류(AccessDenied · REFERENCE 권한 거절)는 zip 탓이 아니다 — 무효로 적으면 누를 때마다 저장한 사람의 세션에서 처음부터 다시 빌드한다.
+    if (e instanceof AwsError && ZIP_MISSING_RE.test(e.message)) {
       await st.invalidateServerBuild(i.app.id, i.buildKey, "빌드 결과(zip)를 함수에 올리지 못했습니다(저장소에 없음)").catch(() => { /* 다음에 */ });
     }
     if (e instanceof AwsError) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 AWS 오류(#4484)");
@@ -352,8 +418,9 @@ export async function deployBuildToAliases(i: {
 }
 
 /**
- * 별칭이 가리키지 않는 옛 함수 판 — 최근 keep 개만 남긴다(코드 저장 합 300GiB 를 아껴 쓴다). 남은 판의 코드 크기 합을 적는다(#4792 —
- *  지우다 실패해도 지운 것까지만 빼서 적는다). 이 규칙을 바꾸면 codeBytesAfterDeploy(상한 셈)도 같이 바꾼다.
+ * 별칭이 가리키지 않는 옛 함수 판 — 최근 keep 개만 남긴다(COPY 판은 계정 코드 저장 300GiB 를 쓰고 · REFERENCE 판은 우리 zip 을 붙잡는다 — 남은 판이 읽는 zip 은
+ *  옛 빌드 정리가 지우지 않는다 · #4801). 남은 판의 코드 크기 합을 적는다(#4792 — 지우다 실패해도 지운 것까지만 빼서 적는다).
+ *  이 규칙을 바꾸면 codeBytesAfterDeploy(상한 셈)도 같이 바꾼다.
  */
 async function pruneVersions(api: LambdaApi, fn: string, appId: string, keep: number): Promise<number> {
   const row = await st.getServerRow(appId);
@@ -439,7 +506,7 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   }
   const aliases: Array<"cur" | "pub"> = installedIsPublished(t.app) ? ["cur", "pub"] : ["cur"];
   try {
-    const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases, policy }, deps);
+    const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), zipVersion: b.zip_version ?? null, aliases, policy }, deps);
     return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy, ...deployWarnings(deploy) };
   } catch (e) {
     const stage = e instanceof DeployError ? e.stage : "deploy";
@@ -495,7 +562,7 @@ export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, d
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: "공개한 판의 서버 빌드가 없어 서버를 옮기지 못했습니다 — app_server_deploy" };
-    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: ["cur", "pub"], policy }, deps);
+    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), zipVersion: b.zip_version ?? null, aliases: ["cur", "pub"], policy }, deps);
     return { ok: true, state: "deployed", deploy, ...deployWarnings(deploy) };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "공개 뒤 앱 서버 옮기기 실패(#4484)");
@@ -514,7 +581,7 @@ export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, de
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: `${t.versionNo}판은 서버가 빌드된 적이 없어(또는 빌드 결과가 없어져) 서버는 그대로입니다 — 「이대로 넣기」 또는 app_server_deploy` };
-    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
+    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), zipVersion: b.zip_version ?? null, aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
     return { ok: true, state: "deployed", deploy, ...deployWarnings(deploy) };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "되돌린 뒤 앱 서버 옮기기 실패(#4484)");
