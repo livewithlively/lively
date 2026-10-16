@@ -7,6 +7,16 @@
 //   같은 말 · Claude Code 가 매 턴 되풀이해 적는 last-prompt 줄 · AI 답 속 같은 글에 곧바로 걸렸고, 첫 확인에서 «전달됨» 으로 끝나
 //   #4818 제출 지킴이(입력칸에 글이 남았으면 Enter)가 돌 틈도 없었다(«진행해»·«1» 같은 짧은 말은 거의 늘 걸린다).
 //  ⇒ 이제 셋 다 «보낸 뒤에 적힌 사람 말 줄» 만 증거로 본다.
+//  ⓘ 화면은 이미 그린 사람 말 턴(user 글)만 대조하므로 «같은 말» 규칙(samePrompt · exactPrompt · 증거 창)만 서버와 같다(E3). 빗금 명령 줄 ·
+//   system local_command 줄 · «대기열에 넣었다» 줄은 화면이 말풍선으로 그리지 않는 줄이라 서버 쪽에서만 증거가 된다 — 서버 판정이 더 넓다.
+//
+//  ── 알려진 한계(#4851 격리 리뷰 · 후속 후보) ──
+//  · 시각 하한은 게이트웨이 시계(친 때)와 하네스 시계(줄 시각)를 견준다 — 하네스 쪽이 5초 넘게 느리면 그 세션의 말이 «미확인» 이 된다.
+//    종전 판정(글자 포함)은 시계와 무관했다. 같은 기계(자체호스팅)·같은 인프라(매니지드 세션 호스트)라 드물다. 근본 해법은 치기 전 기록 크기를
+//    워터마크로 잡아 그 뒤에 붙은 줄을 시각 없이 받는 것(치기 전에 원격 stat 한 번이 는다).
+//  · «대기열에 넣었다» 줄 뒤에 사람이 중단해 Claude Code 가 대기 말을 입력칸으로 되돌리면(queue-operation popAll) 그 행은 «전달됨» 으로 남는다
+//    (종전 판정도 같았다).
+//  · 같은 말을 5초 안에 두 번 보내면 앞 행의 줄이 뒤 행의 증거가 될 수 있다(종전보다 좁다 — 종전은 기록 꼬리 어디든이었다).
 //
 //  ── 이 모듈의 경계 ──
 //  · 순수 판정(promptOfLine · samePrompt · exactPrompt · scanLinesForPrompt)과 줄 맞춤 훑기(findPromptInTranscript)뿐이다 — DB·로그·
@@ -37,14 +47,23 @@ const norm = (s: string): string => String(s ?? "").replace(/\s+/g, " ").trim();
 //  태그 묶음을 친 꼴 «/이름 인자» 로 되돌려 같은 말 판정에 넣는다. 사람 글이 태그로 **시작**할 때만 읽는다(글 속에 태그를 인용한 말은 그대로).
 const CMD_LEAD = /^\s*<command-(?:name|message)>/;
 const CMD_NAME = /<command-name>\s*(\/[^<\s]+)\s*<\/command-name>/;
-const CMD_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+const ARGS_OPEN = "<command-args>", ARGS_CLOSE = "</command-args>";
+/**
+ * 명령 줄로 읽는 글의 상한 — 사람이 친 명령의 태그 묶음은 짧다. 이보다 긴 글은 명령 줄로 보지 않는다.
+ *  ⚠ 대화 파일은 멤버가 아무 줄이나 쓸 수 있는 자리다(매니지드는 게이트웨이 한 프로세스가 모든 워크스페이스를 서빙한다). 인자를 지연 정규식
+ *   (`<command-args>([\s\S]*?)</command-args>`)으로 뽑으면 닫는 태그 없이 여는 태그만 되풀이한 줄에서 제곱 시간이 들었다(격리 리뷰 실측:
+ *   1MB 줄 13.5초 — 이벤트 루프가 서 다른 워크스페이스 요청도 선다). 그래서 상한 + indexOf(선형)로 읽는다.
+ */
+export const CMD_LINE_MAX = 64 * 1024;
 
-/** (순수) 빗금 명령 줄의 글(태그 묶음) → 친 꼴 «/이름 인자». 그 꼴이 아니면 null. */
+/** (순수) 빗금 명령 줄의 글(태그 묶음) → 친 꼴 «/이름 인자». 그 꼴이 아니면 null. 선형 시간(위 CMD_LINE_MAX 머리말). */
 export function typedCommandOf(text: string): string | null {
-  if (!CMD_LEAD.test(text)) return null;
+  if (text.length > CMD_LINE_MAX || !CMD_LEAD.test(text)) return null;
   const name = CMD_NAME.exec(text)?.[1];
   if (!name) return null;
-  const args = (CMD_ARGS.exec(text)?.[1] ?? "").trim();
+  const open = text.indexOf(ARGS_OPEN);
+  const close = open < 0 ? -1 : text.indexOf(ARGS_CLOSE, open + ARGS_OPEN.length);
+  const args = open >= 0 && close >= 0 ? text.slice(open + ARGS_OPEN.length, close).trim() : "";
   return args ? `${name} ${args}` : name;
 }
 

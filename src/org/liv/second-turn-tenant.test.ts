@@ -8,8 +8,8 @@ import * as turn from "./second-turn.js";
 
 //  네임스페이스로 받는다 — 옛 판(이 이름 없음)에서 파일이 링크 오류로 죽지 않고 그 행만 빨간불이 되게(fail-first).
 type Ref = { id: string; slug: string };
-const pick = (i: { mapped: Ref | null; welcomeWs: string | null; registry: Ref[]; current: Ref | null; managed: boolean }): Ref => {
-  const f = (turn as unknown as { secondTurnTenant?: (x: typeof i & { primary: Ref }) => Ref }).secondTurnTenant;
+const pick = (i: { mapped: Ref | null; welcomeWs: string | null; registry: Ref[]; current: Ref | null; managed: boolean }): Ref | null => {
+  const f = (turn as unknown as { secondTurnTenant?: (x: typeof i & { primary: Ref }) => Ref | null }).secondTurnTenant;
   assert.equal(typeof f, "function", "secondTurnTenant 가 없다");
   return f!({ ...i, primary: PRIMARY });
 };
@@ -37,12 +37,22 @@ test("G5 자체호스팅 · 등록부가 모름 · 칸 없음 — primary(종전
   assert.deepEqual(pick({ mapped: null, welcomeWs: null, registry: [], current: null, managed: false }), PRIMARY);
   assert.deepEqual(pick({ mapped: null, welcomeWs: null, registry: [WS_A], current: WS_A, managed: false }), PRIMARY);
 });
-test("G6 welcome 칸이 등록부에도 없다 — 배포 규칙의 기본값(매니지드 = 지금 · 자체호스팅 = primary)", () => {
-  assert.deepEqual(pick({ mapped: null, welcomeWs: WS_B.id, registry: [WS_A], current: WS_A, managed: true }), WS_A);
+test("★ G6 welcome 칸이 지금 워크스페이스도 등록부도 아니다 — 매니지드는 덮어쓰지 않고 건너뛴다(null) · 자체호스팅은 primary(종전과 같음)", () => {
+  //  매니지드에서 지금 것으로 덮으면 표식이 다른 칸에 찍혀 후보가 안 빠지고 매 틱 다시 판정된다(격리 리뷰).
+  assert.equal(pick({ mapped: null, welcomeWs: WS_B.id, registry: [WS_A], current: WS_A, managed: true }), null);
   assert.deepEqual(pick({ mapped: null, welcomeWs: WS_B.id, registry: [WS_A], current: null, managed: false }), PRIMARY);
 });
 test("G7 매니지드인데 지금 워크스페이스가 없다(요청 밖) — primary(만들어 내지 않는다)", () => {
   assert.deepEqual(pick({ mapped: null, welcomeWs: null, registry: [], current: null, managed: true }), PRIMARY);
+});
+
+test("G9 스윕 동시 실행 칸 — 매니지드는 워크스페이스마다 · 자체호스팅은 하나(타이머와 틱이 같은 후보를 함께 볼 수 있다) · 지금 워크스페이스가 없으면 하나", () => {
+  const slot = (turn as unknown as { sweepSlot?: (managed: boolean, id: string | null | undefined) => string }).sweepSlot;
+  assert.equal(typeof slot, "function", "sweepSlot 이 없다");
+  assert.notEqual(slot!(true, WS_A.id), slot!(true, WS_B.id));
+  assert.equal(slot!(true, WS_A.id), slot!(true, WS_A.id));
+  assert.equal(slot!(false, WS_A.id), slot!(false, WS_B.id));
+  assert.equal(slot!(false, WS_A.id), slot!(true, null));
 });
 
 //  dist 에서 도는 시험이라 소스는 cwd 기준으로 읽는다(이 레포 관용구).
@@ -52,4 +62,6 @@ test("★ G8 스윕 배선 — 워크스페이스는 secondTurnTenant 로 고르
   assert.match(src, /withTenant\(tenant, \(\) => listOutboxReconciled\(sid\)\)/, "재대조 목록을 그 워크스페이스 안에서 안 센다");
   assert.doesNotMatch(src, /\blistOutbox\(/, "재대조 없는 목록을 센다 — 기록에 들어간 «미확인» 1턴이 대기로 세어진다");
   assert.doesNotMatch(src, /: \{ id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG \};/, "등록부가 모르면 곧장 primary 로 떨어지는 종전 갈래가 남았다");
+  assert.match(src, /if \(!tenant\) \{[\s\S]{0,800}?continue;\s*\}/, "워크스페이스를 못 고른 후보(null)를 건너뛰지 않는다");
+  assert.match(src, /onceAtATime\([\s\S]{0,200}?\(\) => sweepSlot\(managedMode\(\), currentTenant\(\)\?\.id\),\s*\)/, "스윕 가드가 워크스페이스 칸을 안 쓴다");
 });

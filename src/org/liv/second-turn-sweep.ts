@@ -9,17 +9,20 @@
 //  · 배달은 라우트와 같은 함수(deliverPrompt) — 박스면 아웃박스(입력창 확인·에코), codex app-server 면 프로토콜, 노드면 릴레이.
 //  · 실패는 삼키지 않는다: 쏘지 못한 이유는 로그에, 포기는 distill_gave_up_at + distill_note 로 프로필에 남는다.
 import { logger } from "../../log.js";
-import { buildSecondTurnPrompt, decideSecondTurn, secondTurnTenant, turnGroupInputs, type TenantRef } from "./second-turn.js";
+import { buildSecondTurnPrompt, decideSecondTurn, secondTurnTenant, sweepSlot, turnGroupInputs, type TenantRef } from "./second-turn.js";
 import { onceAtATime } from "../../util/once-at-a-time.js";
+import { managedMode } from "../tenancy/state.js";
+import { currentTenant } from "../tenant-context.js";
 
 // 동시 호출 가드(#1631) — 매니지드는 **테넌트마다** 틱이 들어오는데 후보 목록은 신원 전역(org_member)이라
 //  같은 후보를 여러 틱이 동시에 본다. `distill_at` 은 배달 **뒤에** 찍히므로 그 사이가 겹치면 같은 세션에
 //  2턴이 두 번 들어간다. 근거·한계는 util/once-at-a-time.ts 머리말.
 //  ⓘ #4851 실측: 매니지드의 org_member 는 워크스페이스마다 갈려 있어(행 수준 격리) 실제로는 틱마다 그 워크스페이스의 후보만 본다 —
-//   가드는 자체호스팅의 타이머·틱 겹침과 같은 틱의 재진입을 막는 몫으로 남는다.
+//   그래서 매니지드는 워크스페이스마다 한 칸으로 나눈다(second-turn sweepSlot). 칸이 하나면 앞 스윕과 겹친 워크스페이스의 틱이 매 주기 건너뛰어진다.
 export const sweepLivSecondTurn = onceAtATime(
   () => runSweep(),
   () => ({ fired: 0, waited: 0, gaveUp: 0, failed: 0 }),
+  () => sweepSlot(managedMode(), currentTenant()?.id),
 );
 
 async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
@@ -27,8 +30,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");
   const { listOutboxReconciled } = await import("../../sessions/outbox-late-echo.js");
   const { workspaceForSession, listWorkspaces, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
-  const { managedMode } = await import("../tenancy/state.js");
-  const { withTenant, currentTenant } = await import("../tenant-context.js");
+  const { withTenant } = await import("../tenant-context.js");
   const { listCronJobs } = await import("../cron-store.js");
   const { collectorJobId } = await import("../store/collectors.js");
   const { deliverPrompt } = await import("../../terminal/deliver-prompt.js");
@@ -60,8 +62,8 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
   };
 
   //  지금 이 스윕을 부른 요청의 워크스페이스(매니지드 = 하우스키핑 틱의 워크스페이스 · 자체호스팅 타이머 = 없음).
-  const cur = currentTenant();
-  const current: TenantRef | null = cur ? { id: cur.id, slug: cur.slug } : null;
+  const reqTenant = currentTenant();
+  const current: TenantRef | null = reqTenant ? { id: reqTenant.id, slug: reqTenant.slug } : null;
   const managed = managedMode();
   //  등록부(자체호스팅 다중 워크스페이스)는 그 칸이 지금 워크스페이스가 아닐 때만 한 번 읽는다(매니지드엔 등록부가 없다 — 빈 목록).
   let registry: TenantRef[] | null = null;
@@ -80,6 +82,11 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       current, managed,
       primary: { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG },
     });
+    if (!tenant) {
+      //  매니지드인데 welcome 칸이 이 틱의 워크스페이스가 아니다 — 덮어 쓰면 표식이 다른 칸에 찍혀 후보가 안 빠진다. 건너뛰고 남긴다(secondTurnTenant 머리말).
+      logger.warn({ member: c.id, session: kickSid, welcomeWs, ws: current?.slug ?? null }, "리브 2턴 — welcome 칸이 이 워크스페이스가 아니다(건너뜀)");
+      out.failed++; continue;
+    }
     //  (#4032) 2턴은 **지금의 리브 세션**에 넣는다 — 리브 탭이 킥오프 세션을 되살렸으면 새 id 다(복원 이정표).
     //   옛 id 만 보면 «사라졌다» 로 읽고 새 세션을 또 열어, 사람이 이어 가던 대화를 두고 2턴이 딴 세션에 간다.
     //   좌표를 못 읽으면 킥오프 id 그대로 — 종전 판정(사라졌으면 reopen)으로 떨어진다.

@@ -554,10 +554,12 @@ export async function sendReadyRow(
   const tick = guard ? async (): Promise<void> => { await guard.tick(); if (guard.last() === "empty") tell(); } : undefined;
   //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).
   const extra = (): { extraEnters?: number } => (guard?.presses() ? { extraEnters: guard.presses() } : {});
+  //  #4851 — 빗금 명령이 기록 없이 입력칸을 떠났다: 경고 대신 따로 마감한다(그 명령은 제출됐다 — «보냈다» 도 알린다).
+  const commandSettled = (): SendOutcome => { tell(); return { kind: "mark", status: "sent", error: "command-no-echo", ...extra() }; };
   let echoed = await echo(oneLine, tick, ECHO_WINDOW_MS);
   if (needsSubmitRetry(echoed, harness)) {
     //  #4851 — 빗금 명령이 이미 입력칸을 떠났다(기록에 안 남는 명령 — /exit 등). 더 누를 것도 더 기다릴 것도 없다.
-    if (echoed === "timeout" && slashCommandLeftInput(row.text, guard?.last() ?? null) === true) { tell(); return { kind: "mark", status: "sent", error: "command-no-echo", ...extra() }; }
+    if (echoed === "timeout" && slashCommandLeftInput(row.text, guard?.last() ?? null) === true) return commandSettled();
     // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
     //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
     //  #4818 — 누르기 전에 화면을 본다(지킴이의 마지막 관측). 우리 글이 없는 입력칸에 누르면 **거기 있는 무엇이든** 제출된다.
@@ -567,7 +569,7 @@ export async function sendReadyRow(
   }
   if (echoed === "confirmed") { tell(); return { kind: "mark", status: "delivered", ...extra() }; }
   //  #4851 — 늦은 창도 지났다. 빗금 명령이 입력칸에 그대로 남은 게 아니면(모름 포함) 경고하지 않는다 — 기록에 안 남는 명령이 있다.
-  if (echoed === "timeout" && guard && slashCommandLeftInput(row.text, guard.last()) !== false) { tell(); return { kind: "mark", status: "sent", error: "command-no-echo", ...extra() }; }
+  if (echoed === "timeout" && guard && slashCommandLeftInput(row.text, guard.last()) !== false) return commandSettled();
   return { kind: "mark", status: "sent", error: echoed === "unreadable" ? "echo-unreadable" : "echo-unconfirmed", ...extra() };
 }
 

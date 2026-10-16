@@ -168,6 +168,30 @@ t("★ K15 바쁠 때 — 친 뒤 «대기열에 넣었다» 줄이면 «전달�
   const glued = BEFORE + enqueue("/context끝나면 알려줘", at(300)) + dequeue(at(2_000));
   for (const said of ["/context", "끝나면 알려줘"]) assert.equal(await check(memFs({ "c.jsonl": glued }), "c.jsonl", said, echoWatch(T0)), false, `이어 붙은 원문 · ${said}`);
 });
+//  다른 하네스 — 어댑터가 공통 ChatLine(user 줄의 글 = 사람 말)으로 올린다. 줄 모양은 각 어댑터 시험(codex · grok · antigravity .test)의 실측 fixture 와 같다.
+const codexUser = (text: string, ts: string): string =>
+  L({ timestamp: ts, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
+const codexAi = (text: string, ts: string): string =>
+  L({ timestamp: ts, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
+const grokUser = (text: string, ms: number): string =>
+  L({ timestamp: Math.floor((T0 + ms) / 1000), method: "session/update", params: { sessionId: "g1", update: { sessionUpdate: "user_message_chunk", content: { type: "text", text } }, _meta: { eventId: "g1-1", agentTimestampMs: T0 + ms } } });
+const agUser = (text: string, ts: string): string =>
+  L({ step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", status: "DONE", created_at: ts, content: `<USER_REQUEST>\n${text}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: …\n</ADDITIONAL_METADATA>` });
+t("★ K16 다른 하네스(codex · grok · antigravity)의 사람 말 줄 — 친 뒤면 «전달됨» · 친 전의 같은 말뿐이면 아님 (거짓 «미확인» 회귀 없음)", async () => {
+  const cases: Array<[string, (text: string, offsetMs: number) => string]> = [
+    ["codex", (x, ms) => codexUser(x, at(ms))],
+    ["grok", (x, ms) => grokUser(x, ms)],
+    ["antigravity", (x, ms) => agUser(x, at(ms))],
+  ];
+  for (const [key, mk] of cases) {
+    const parse = (text: string): unknown[] => harnessIo(key)!.parse!(text, {}).lines;
+    const before = mk("진행해", -10 * 60_000) + (key === "codex" ? codexAi("진행해 라고 하셨죠", at(-9 * 60_000)) : "");
+    const fs1 = memFs({ "c.jsonl": before });
+    assert.equal(await echoInTranscript(fs1, "c.jsonl", fs1.size("c.jsonl"), "진행해", echoWatch(T0), parse), false, `${key} — 친 전의 같은 말뿐`);
+    const fs2 = memFs({ "c.jsonl": before + mk("진행해", 2_000) });
+    assert.equal(await echoInTranscript(fs2, "c.jsonl", fs2.size("c.jsonl"), "진행해", echoWatch(T0), parse), true, `${key} — 친 뒤 사람 말 줄`);
+  }
+});
 t("K14 읽기가 실패하면 던진다(부른 쪽이 «못 읽음» 으로 — 재전송 금지 신호)", async () => {
   const broken = { read: async () => { throw new Error("중계 503"); } };
   await assert.rejects(echoInTranscript(broken, "c.jsonl", 100, "진행해", echoWatch(T0), claudeParse), /중계 503/);
@@ -223,6 +247,23 @@ t("★ C6 system local_command 명령 줄 → 친 꼴 · 그 출력 줄 · «Unk
   assert.equal(promptOfLine(one(L({ type: "system", subtype: "informational", content: "Unknown command: /foo. Did you mean /loop?", level: "warning", timestamp: at(700) }))), null);
   assert.equal(promptOfLine(one(sysCmd("<command-name>/context</command-name>", at(700), { isSidechain: true }))), null);
   assert.equal(await check(memFs({ "c.jsonl": BEFORE + cmdLine }), "c.jsonl", "/context", echoWatch(T0)), true);
+});
+
+t("★ C7 조작된 거대한 명령 줄(여는 인자 태그만 되풀이) — 해석이 선형이라 곧 끝난다 · 상한(64KB)을 넘는 글은 명령 줄로 보지 않는다", () => {
+  const { CMD_LINE_MAX } = scan as unknown as { CMD_LINE_MAX?: number };
+  assert.equal(CMD_LINE_MAX, 64 * 1024, "명령 줄 상한이 사양(64KB)과 다르다");
+  const head = "<command-name>/x</command-name>";
+  const crafted = head + "<command-args>".repeat(Math.floor((60 * 1024 - head.length) / 14));   // 상한 안 · 닫는 태그 없음
+  assert.ok(crafted.length < 64 * 1024 && crafted.length > 50 * 1024, "재료 전제");
+  let t0 = performance.now();
+  assert.equal(typedCommandOf(crafted), "/x", "닫는 태그가 없으면 인자 없음");
+  const ms = performance.now() - t0;
+  assert.ok(ms < 20, `상한 안의 조작 줄 해석이 ${ms.toFixed(1)}ms — 선형이 아니다(지연 정규식이면 수십 ms)`);
+  const huge = head + "<command-args>".repeat(300_000);                                              // 약 4MB
+  t0 = performance.now();
+  assert.equal(typedCommandOf(huge), null, "상한을 넘는 글은 명령 줄이 아니다");
+  assert.ok(performance.now() - t0 < 20, "상한을 넘는 글을 훑었다");
+  assert.equal(typedCommandOf(`<command-name>/hello</command-name><command-args>${"사".repeat(70_000)}</command-args>`), null, "상한을 넘는 정상 꼴도 명령 줄로 보지 않는다");
 });
 
 // ── S — 빗금 명령 꼴 · 입력칸을 떠났나 ────────────────────────────────────────────────

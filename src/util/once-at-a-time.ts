@@ -6,11 +6,16 @@
 //   프로세스 안 가드로 그 창이 닫힌다.
 //
 //  ⚠ 이건 **분산 락이 아니다.** 프로세스가 여럿이면 각자 하나씩 돈다 — 그땐 DB 쪽 표식이 정본이어야 한다.
-export function onceAtATime<T>(fn: () => Promise<T>, whenBusy: () => T): () => Promise<T> {
-  let running = false;
+//
+//  slotOf(#4851) — 칸을 나눌 수 있다. 같은 칸끼리만 하나씩 돌고, 다른 칸은 함께 돈다. 안 주면 칸 하나(종전 그대로).
+//   매니지드 리브 2턴 스윕이 쓴다: 그 틱이 보는 후보가 그 워크스페이스 사람뿐이라(행 수준 격리) 워크스페이스끼리 겹쳐도 같은 후보를 두 번 보지
+//   않는데, 칸이 하나면 CP 의 테넌트 틱(5분 주기 · 해시 지터 · 동시 4)이 앞 스윕과 겹친 워크스페이스를 **매 주기** 건너뛴다(주기가 같아 겹침이 되풀이된다).
+export function onceAtATime<T>(fn: () => Promise<T>, whenBusy: () => T, slotOf: () => string = () => ""): () => Promise<T> {
+  const running = new Set<string>();
   return async () => {
-    if (running) return whenBusy();
-    running = true;
-    try { return await fn(); } finally { running = false; }
+    const slot = slotOf();
+    if (running.has(slot)) return whenBusy();
+    running.add(slot);
+    try { return await fn(); } finally { running.delete(slot); }
   };
 }
