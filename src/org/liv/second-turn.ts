@@ -144,7 +144,9 @@ export interface SecondTurnState {
     distill_reopened_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
-  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거. */
+  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
+   *  ⚠ #4851 — 기록과 다시 대조한 목록(outbox-late-echo.listOutboxReconciled)으로 센다. 15초 창의 «미확인» 을 그대로 세면 기록에 이미 들어간
+   *   1턴을 «안 들어갔다» 로 읽어 2시간 뒤 turn1-never-delivered 로 포기한다(매니지드 실측 2026-09-19: 사람 턴 4개가 다 적힌 세션). */
   outboxPending: number;
   collectors: Array<{ enabled: boolean; lastRunAt: string | null }>;
   now: number;
@@ -154,13 +156,63 @@ export type SecondTurnDecision =
   | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" }
   //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
   | { action: "reopen"; reason: "session-gone" }
-  | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" }
+  | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" | "stale" }
   | { action: "fire"; partial: boolean; waitedMin: number };
+
+// ── 어느 워크스페이스 안에서 하나(#4851) ──────────────────────────────────────────
+export interface TenantRef { id: string; slug: string }
+/**
+ * (순수) 후보 한 사람의 2턴 일 — 세션 보기 · 아웃박스 세기 · 2턴 넣기 · 표식(distill_at·distill_gave_up_at) — 을 **어느 워크스페이스 안에서** 하나.
+ *  ① 세션 등록부가 아는 워크스페이스(mapped — workspaceForSession: 자체호스팅 다중 워크스페이스).
+ *  ② 그 사람 welcome 이 사는 칸(welcomeWs — 후보 목록이 주는 by_workspace 키): 지금 요청의 워크스페이스면 그것, 아니면 등록부에서 이름을 찾는다.
+ *  ③ 배포 규칙의 기본값(registry.defaultWorkspaceId 와 같은 규칙) — 매니지드는 **지금 요청의 워크스페이스**, 자체호스팅은 primary.
+ *  ⚠ 종전엔 ① 이 없으면 곧바로 primary 였다. 매니지드는 등록부(gw_workspace)가 비어 있어 ① 이 **늘** 없다 — 그래서 늘 primary 로 떨어져
+ *   (실측 2026-10-17, 매니지드 로그 09-03~10-16): 포기·발사 표식이 «구성원 정보를 찾을 수 없습니다» 로 9,049번 실패해 같은 후보를 틱마다
+ *   다시 판정했고, 2턴 지시(«증류 지시 주입» 39줄)는 그 사람 워크스페이스가 아니라 primary 의 아웃박스에 쌓였다(배달 0). 매니지드의 구성원 표는
+ *   워크스페이스마다 갈려 있어(행 수준 격리) 틱이 보는 후보는 곧 그 틱 워크스페이스의 사람이다 — ③ 이 맞는 까닭이다.
+ *   slug 도 맞아야 한다 — 매니지드에선 세션 경로·컨테이너 이름에 들어간다(terminal/catalog tenantSlug).
+ */
+export function secondTurnTenant(i: {
+  mapped: TenantRef | null;
+  welcomeWs: string | null;
+  registry: readonly TenantRef[];
+  current: TenantRef | null;
+  managed: boolean;
+  primary: TenantRef;
+}): TenantRef | null {
+  if (i.mapped) return i.mapped;
+  if (i.welcomeWs) {
+    if (i.current && i.current.id === i.welcomeWs) return i.current;
+    const r = i.registry.find((w) => w.id === i.welcomeWs);
+    if (r) return r;
+    //  매니지드인데 welcome 칸이 지금 워크스페이스가 아니다 — 지금 것으로 덮으면 표식이 다른 칸에 찍혀 후보가 안 빠지고 매 틱 다시 판정된다
+    //   (고치려던 증상의 다른 입구 — 격리 리뷰). 행 수준 격리로 일어나지 않아야 하는 판이라, 건너뛰고 부른 쪽이 경고를 남긴다(null).
+    if (i.managed && i.current) return null;
+  }
+  if (i.managed && i.current) return i.current;
+  return i.primary;
+}
+
+/**
+ * (순수) 스윕 동시 실행 칸(#4851 — util/once-at-a-time slotOf). 매니지드는 워크스페이스마다 한 칸, 자체호스팅은 칸 하나.
+ *  자체호스팅을 나누지 않는 까닭: 타이머(컨텍스트 없음 — 모든 후보)와 틱(요청 컨텍스트)이 같은 후보를 함께 볼 수 있고, distill_at 은 배달 뒤에
+ *  찍혀 그 사이 겹치면 같은 세션에 2턴이 두 번 간다(그 가드가 생긴 이유 #1631).
+ */
+export function sweepSlot(managed: boolean, currentId: string | null | undefined): string {
+  return managed && currentId ? `ws:${currentId}` : "";
+}
 
 /** 수집 대기 상한 — 이 안에 첫 배치가 안 끝나면 있는 것으로 시작한다(영원히 안 쏘는 것이 최악이다). */
 export const SECOND_TURN_MAX_WAIT_MS = 20 * 60_000;
 /** 1턴 배달 상한 — 아웃박스 NOT_READY_TTL(2h)과 같다. 이 뒤에도 안 들어갔으면 사람이 세션을 안 연 것이다. */
 export const TURN1_DELIVERY_TTL_MS = 2 * 60 * 60_000;
+/**
+ * 2턴을 쏘는 상한(#4851) — 처음 설정이 끝난 지 이보다 오래면 쏘지 않고 포기한다(stale).
+ *  다시 열기(reopen)가 1턴 배달 상한 뒤엔 열지 않는 것과 같은 판단이다 — 한참 뒤에 증류 지시가 불쑥 들어오는 편이 더 나쁘다.
+ *  ⚠ 이 상한이 필요해진 까닭: 매니지드에서 스윕이 워크스페이스를 못 찾아 표식을 한 번도 못 찍던 후보(9월 온보딩 6명)가 #4851 로 풀린다.
+ *   그 사이 세션이 살아 있는 판이면 한 달 지난 세션에 2턴이 들어간다. 정상 흐름은 수집 대기 상한(20분) 안에 쏘므로 하루는 넉넉하다.
+ */
+export const SECOND_TURN_STALE_MS = 24 * 60 * 60_000;
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
@@ -183,6 +235,8 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   if (s.outboxPending > 0) {
     return waited > TURN1_DELIVERY_TTL_MS ? { action: "giveup", reason: "turn1-never-delivered" } : { action: "wait", reason: "turn1-undelivered" };
   }
+  //  #4851 — 하루가 지난 2턴은 쏘지 않는다(SECOND_TURN_STALE_MS 머리말). 세션이 살아 있어도(쉬는 중·일하는 중) 같다.
+  if (waited > SECOND_TURN_STALE_MS) return { action: "giveup", reason: "stale" };
   if (s.session.working || s.session.agentState === "busy") return { action: "wait", reason: "turn1-running" };
   // ★ 세션이 살아 있지 않으면 1턴은 **아직 한 글자도 안 나왔다.** 'busy 가 아님' 을 '끝났음' 으로 읽으면
   //  안 된다 — 실측(2026-08-30 dev): 세션이 안 뜬 채로 온보딩 31초 만에 2턴이 발사되고 distill_at 이

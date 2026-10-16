@@ -429,8 +429,8 @@ function startBackgroundSweeps(): void {
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
   //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
   //  부팅 직후엔 돌리지 않는다(세션 목록·아웃박스 재개가 먼저).
-  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `workspaceForSession`
-  //   으로 그 세션의 테넌트를 찾아 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
+  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `secondTurnTenant`(#4851)
+  //   로 그 사람의 워크스페이스를 골라 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
   //   워크스페이스 수만큼 돈다.
   setInterval(() => {
     void import("../org/liv/second-turn-sweep.js")

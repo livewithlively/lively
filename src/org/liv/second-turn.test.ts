@@ -6,6 +6,7 @@ import {
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
 import { GROUP_SETS } from "../../v6/category-groups.js";
+import * as turnNs from "./second-turn.js";
 
 const DONE = Date.parse("2026-08-29T05:00:00Z");
 const st = (over: Partial<SecondTurnState> = {}): SecondTurnState => ({
@@ -321,4 +322,20 @@ test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건
   assert.equal(gi2.job, "디자인");
   assert.deepEqual(gi2.intended.map((g) => g.name), GROUP_SETS["디자인"].map((g) => g.name));
   assert.equal(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length, 3);   // 재료가 없어도 빈손 없음
+});
+
+// ── #4851 — 하루가 지난 2턴은 쏘지 않는다(stale). 사양·엣지 표: 지식 outbox-echo-typed-window-4851 §사양 의 H 행. ──
+const DAY = 24 * 60 * 60_000;
+test("★ H1 세션이 살아 쉬는 중 · 수집 끝 — 처음 설정 뒤 정확히 하루면 쏘고, 그 1ms 뒤는 쏘지 않고 포기(stale)", () => {
+  assert.equal(decideSecondTurn(st({ now: DONE + DAY })).action, "fire");
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1 })), { action: "giveup", reason: "stale" });
+});
+test("H2 하루가 지났는데 세션이 일하는 중 — 기다리지 않고 포기(stale)", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: { working: true, agentState: "busy" } })), { action: "giveup", reason: "stale" });
+});
+test("H3 앞선 판정은 그대로 — 하루가 지나도 세션이 없으면 session-gone · 1턴이 안 들어갔으면 turn1-never-delivered", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: null })), { action: "giveup", reason: "session-gone" });
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, outboxPending: 1 })), { action: "giveup", reason: "turn1-never-delivered" });
+  //  상한 상수가 사양(하루)과 같다 — 옛 판엔 없다(네임스페이스로 읽어 그 행만 빨간불).
+  assert.equal((turnNs as { SECOND_TURN_STALE_MS?: number }).SECOND_TURN_STALE_MS, DAY);
 });
