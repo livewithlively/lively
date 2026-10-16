@@ -8,7 +8,7 @@
 //  P4 상한 목록 — 관리자만(구성원 403) · 설치된 앱 전부 · 값
 //  P5 사용량 — 80% 를 처음 넘으면 책임자 + 관리자에게 알림 한 장씩 · 같은 단계는 다시 안 알림 · 100% 는 새로 · 내려가면 단계를 낮춰
 //     다시 넘을 때 또 알린다 · 경계에서 오르내리면 다시 안 알림 · 없는 앱 건너뜀 · 상한 없는 앱은 알리지 않는다 · 구성원 403
-//     단계 기록은 알림이 저장된 뒤에 오른다(받는 사람을 못 읽었거나 다 실패하면 다음 판에 다시)
+//     단계 기록은 알림이 저장된 뒤에 오른다(받는 사람을 못 읽었거나 다 실패하면 다음 판에 다시) · 겹친 보고는 한 쪽만 알린다
 //  P6 앱 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false) · 이 배포가 거나
 //  P7 새 상한이 지금 쓰는 양보다 작으면 경고를 싣는다 · 단계는 정비 전까지 걸린 상한으로 낸다      P8 앱을 지우면 사용량 행도 지운다
 //  P9 롤 중 마이그레이션 전 창(표 · 열 없음) — CP 두 길은 404 · 앱 지우기는 막히지 않는다
@@ -57,8 +57,8 @@ try {
   const install = (id) => cap("org_app_install").handler({ source: { kind: "inline", files: [
     { path: "lively-app.json", content: J({ id, title: `앱 ${id}`, version: "0.1.0", ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
     { path: "ui/index.html", content: "<p>x</p>" }] } }, admin, { source: "mcp" });
-  for (const id of ["crm", "memo", "secret", "note"]) await install(id);
-  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo','note')`);
+  for (const id of ["crm", "memo", "secret", "note", "race"]) await install(id);
+  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo','note','race')`);
   await q(`UPDATE org_app SET owner_member='pgt-carol', visibility='me' WHERE id='secret'`);   // carol 의 «나만» 앱
 
   const gw = express();
@@ -160,6 +160,13 @@ try {
     f1.stored === 1 && f1.notified.length === 0 && w1 === 0 && sent1 === 0 && f2.notified.length === 0 && w2 === 0
       && J(f3.notified) === J([{ app_id: "note", level: 80 }]) && w3 === 80 && J([...sent].sort()) === J(["pgt-admin", "pgt-alice"]),
     J({ f1, w1, sent1, f2, w2, f3, w3, sent }));
+  //  겹친 보고(CP 리더 교대 · 수동 호출) — 단계는 비교 후 교체라 한 쪽만 이겨 알린다(알림 저장의 1분 쿨다운은 동시에 들어오면 못 막는다).
+  const race = await Promise.all(Array.from({ length: 8 }, () => report([{ app_id: "race", used_bytes: Math.floor(1.7 * GiB), limit_gb: 2 }])));
+  const raceNotes = (await q(`SELECT member_id FROM org_app_notification WHERE app_id='race' AND dedupe_key='app-folder-80:race' ORDER BY member_id`)).map((r) => r.member_id);
+  const winners = race.filter((r) => (r.json?.notified ?? []).length > 0).length;
+  chk("P5g 같은 앱 보고 8개가 겹쳐도 알림은 한 번 — 이긴 보고 하나만 notified · 받는 사람마다 한 장 · 단계 80",
+    race.every((r) => r.status === 200) && winners === 1 && J(raceNotes) === J(["pgt-admin", "pgt-alice"]) && (await warnedOf("race")) === 80,
+    J({ statuses: race.map((r) => r.status), winners, raceNotes, w: await warnedOf("race") }));
 
   // ── P6 ──
   const listA = await call("pgt-alice", "GET", "/api/ui/apps");
@@ -169,7 +176,7 @@ try {
   const fB = (listB.json?.apps ?? []).find((a) => a.id === "crm")?.folder;
   chk("P6 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false) · 이 배포가 거나(셀프호스트 false)",
     fA?.used_bytes === Math.floor(4.5 * GiB) && fA?.applied_limit_gb === 5 && fA?.limit_gb === 5 && fA?.level === 80 && fA?.can_set === true
-      && fA?.enforced === false && fB?.can_set === false && fB?.used_bytes === fA?.used_bytes && getA.json?.app?.folder?.level === 80
+      && fA?.enforced === false && fA?.stale === false && fB?.can_set === false && fB?.used_bytes === fA?.used_bytes && getA.json?.app?.folder?.level === 80
       && getA.json?.app?.folder?.can_set === true,
     J({ fA, fB, get: getA.json?.app?.folder }));
 

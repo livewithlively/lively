@@ -2,7 +2,7 @@
 //  저장 · 권한 · 알림 행 · 앱 지우기는 app-folder-quota.pg-test.mjs(실제 게이트웨이 · Postgres).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { APP_FOLDER_LIMIT_MAX_GB, folderFields, folderLevel, folderNotice, fmtBytes, heldLevel, parseFolderLimit } from "./app-folder-quota.js";
+import { APP_FOLDER_LIMIT_MAX_GB, FOLDER_USAGE_STALE_MS, folderFields, folderLevel, folderNotice, fmtBytes, heldLevel, parseFolderLimit } from "./app-folder-quota.js";
 
 const GiB = 1024 ** 3;
 const J = (v: unknown) => JSON.stringify(v) ?? String(v);
@@ -43,11 +43,17 @@ test("F3 알림 글 — 80% 는 «넘었다» · 100% 는 «가득 · 더 쓸 �
   assert.equal(fmtBytes(2048), "2KiB");
 });
 
-test("F4 응답 칸 — 재지 않았으면 쓰는 양 · 걸린 상한 null · 단계 0 · 잰 것이 있으면 그 값과 단계 · 이 배포가 상한을 거나", () => {
+test("F4 응답 칸 — 재지 않았으면 쓰는 양 · 걸린 상한 null · 단계 0 · 잰 것이 있으면 그 값과 단계 · 낡았나 · 이 배포가 상한을 거나", () => {
   assert.deepEqual(folderFields({ folder_limit_gb: 5 }, undefined, false, false),
-    { limit_gb: 5, used_bytes: null, applied_limit_gb: null, measured_at: null, level: 0, can_set: false, enforced: false });
+    { limit_gb: 5, used_bytes: null, applied_limit_gb: null, measured_at: null, level: 0, stale: false, can_set: false, enforced: false });
   assert.deepEqual(folderFields({}, { app_id: "crm", used_bytes: 5 * GiB, limit_gb: 5, measured_at: "t", warned_level: 100 }, true, true),
-    { limit_gb: null, used_bytes: 5 * GiB, applied_limit_gb: 5, measured_at: "t", level: 100, can_set: true, enforced: true });
+    { limit_gb: null, used_bytes: 5 * GiB, applied_limit_gb: 5, measured_at: "t", level: 100, stale: false, can_set: true, enforced: true });
+  //  낡았나 — 서버 시계로 30분이 넘었나(브라우저 시계와 무관).
+  const now = Date.parse("2026-10-16T12:00:00.000Z");
+  const at = (min: number) => ({ app_id: "crm", used_bytes: GiB, limit_gb: 5, measured_at: new Date(now - min * 60_000).toISOString(), warned_level: 0 as const });
+  assert.equal(FOLDER_USAGE_STALE_MS, 30 * 60_000);
+  assert.equal(folderFields({}, at(29), true, true, now).stale, false);
+  assert.equal(folderFields({}, at(31), true, true, now).stale, true);
   //  단계는 «지금 걸린 상한» 으로 — 원하는 상한(4)을 낮춘 직후 정비 전엔 걸린 상한(5)에 4.5GiB 는 80 이다(쓸 수 있다).
   assert.equal(folderFields({ folder_limit_gb: 4 }, { app_id: "crm", used_bytes: 4.5 * GiB, limit_gb: 5, measured_at: "t", warned_level: 80 }, true, true).level, 80);
   //  기본값은 배포를 따른다 — 테넌트 헤더 비밀이 없는 이 시험 프로세스는 셀프호스트다.

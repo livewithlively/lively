@@ -438,7 +438,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
 
   // ── org_app_folder_usage — 앱 폴더 사용량(#4785) ──
   //  CP 가 5분마다 JuiceFS 쿼터 목록에서 읽어 보낸다(app_folder_usage_report). limit_gb = 잰 때 걸려 있던 상한(NULL = 무제한).
-  //  warned_level = 마지막으로 알린 단계(0 · 80 · 100) — 같은 단계는 거듭 알리지 않고, 내려가면 되돌려 다시 넘을 때 또 알린다.
+  //  warned_level = 알린 단계(0 · 80 · 100) — 같은 단계는 거듭 알리지 않는다. 붙든 단계는 10%p 아래로 내려가야 놓는다(100 은 90%,
+  //   80 은 70% 아래 — apps/app-folder-quota.heldLevel). 알림이 한 장도 저장되지 않으면 되돌린다. warned_at = 알림이 실제로 저장된 때.
   //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱을 지울 때 remove-run 이 함께 지운다.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_app_folder_usage(

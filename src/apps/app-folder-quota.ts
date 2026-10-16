@@ -10,7 +10,8 @@
 //    CP 는 상한 있는 앱의 사용량을 JuiceFS 의 Use%(정확한 바이트로 낸 백분율)로 좁혀 보낸다 — 여기서 내는 80% · 100% 판정이 JuiceFS 와 같다.
 //    여기서 저장하고, 80% · 100% 단계를 처음 넘을 때 앱 책임자와 관리자에게 알린다.
 //    · 같은 단계는 한 번 — 그 단계보다 10%p 아래로 내려가야 기록을 낮춘다(heldLevel). 경계에서 오르내릴 때마다 다시 알리지 않는다.
-//    · 단계 기록은 알림이 한 장이라도 저장된 뒤에 올린다 — 받는 사람을 못 읽었거나 다 실패하면 다음 판(5분)에 다시 알린다.
+//    · 단계는 «읽은 값이 그대로일 때만» 바꾼다(비교 후 교체) — 보고가 겹쳐도 한 쪽만 알린다. 알림이 한 장도 저장되지 않으면
+//      (받는 사람을 못 읽었거나 다 실패) 단계를 되돌려 다음 판(5분)에 다시 알린다.
 //  · 셀프호스트(CP 없음)에선 상한을 걸 자리가 없다 — 값은 남지만 걸리지도 재지도 않는다. 화면은 그렇다고 말한다(folder.enforced).
 import { itemsPool } from "../db/client.js";
 import { HttpError } from "../http-error.js";
@@ -103,18 +104,25 @@ export async function pruneAppFolderUsage(appId: string): Promise<void> {
   catch (e) { if (!isSchemaNotReady(e)) throw e; }
 }
 
+/** 사용량이 이보다 오래되면 낡았다(stale) — CP 는 5분마다 잰다. 화면은 단계 문장 대신 «마지막으로 잰 때» 를 말한다. */
+export const FOLDER_USAGE_STALE_MS = 30 * 60_000;
+
 /**
- * 화면 · 응답에 싣는 앱 폴더 칸 — 원하는 상한 · 지금 걸린 상한 · 사용량 · 단계 · 이 사람이 상한을 바꿀 수 있나 · 이 배포가 상한을 거나.
+ * 화면 · 응답에 싣는 앱 폴더 칸 — 원하는 상한 · 지금 걸린 상한 · 사용량 · 단계 · 낡았나 · 이 사람이 상한을 바꿀 수 있나 · 이 배포가 상한을 거나.
  *  단계는 «지금 걸린 상한» 으로 낸다 — 상한을 낮춘 직후(정비 전)엔 아직 옛 상한이 걸려 있어 쓸 수 있다.
+ *  stale 은 서버 시계로 낸다(브라우저 시계가 어긋나도 같은 답).
  *  enforced = 매니지드(CP 의 쿼터 정비가 건다). 셀프호스트는 false — 화면이 «이 워크스페이스에서는 걸리지 않는다» 를 말한다.
  */
-export function folderFields(app: Pick<OrgApp, "folder_limit_gb">, usage: FolderUsageRow | undefined, canSet: boolean, enforced: boolean = managedMode()): Record<string, unknown> {
+export function folderFields(app: Pick<OrgApp, "folder_limit_gb">, usage: FolderUsageRow | undefined, canSet: boolean,
+  enforced: boolean = managedMode(), now: number = Date.now()): Record<string, unknown> {
+  const at = usage ? Date.parse(usage.measured_at) : Number.NaN;
   return {
     limit_gb: app.folder_limit_gb ?? null,
     used_bytes: usage ? usage.used_bytes : null,
     applied_limit_gb: usage ? usage.limit_gb : null,
     measured_at: usage ? usage.measured_at : null,
     level: usage ? folderLevel(usage.used_bytes, usage.limit_gb) : 0,
+    stale: Number.isFinite(at) && now - at > FOLDER_USAGE_STALE_MS,
     can_set: canSet,
     enforced,
   };
@@ -149,12 +157,20 @@ export function folderNotice(title: string, usedBytes: number, limitGb: number, 
     : { title: `「${title}」 앱 폴더가 상한의 80% 를 넘었습니다`, body: `${used} — 상한에 닿으면 이 앱 폴더에 쓸 수 없게 됩니다. 파일을 지우거나 앱빌더 «배포 설정» 에서 상한을 올리세요.` };
 }
 
+/** 알린 단계를 «읽은 값(from)이 그대로일 때만» 바꾼다 — 겹친 보고 가운데 하나만 이긴다(같은 행의 UPDATE 는 앞 것이 끝난 뒤 조건을 다시 본다). */
+async function swapWarnedLevel(appId: string, from: FolderLevel, to: FolderLevel): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_folder_usage SET warned_level=$3 WHERE app_id=$1 AND warned_level=$2`, [appId, from, to]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 /**
  * CP 가 잰 사용량을 받아 둔다 — 없는 앱은 건너뛴다. 단계(80 · 100)를 처음 넘으면 앱 책임자와 관리자에게 알린다(머리말).
- *  · 단계 기록(warned_level)은 알림이 한 장이라도 저장된 뒤에 올린다. 관리자 목록을 못 읽었으면 이번 판엔 아무에게도 보내지 않고
- *    기록도 그대로 둔다 — 다음 판에 다시 알린다(책임자만 받고 관리자가 놓치는 일이 없게).
- *  · 한 번 알린 단계는 10%p 아래로 내려가야 놓는다(heldLevel).
- *  notified = 이번에 실제로 알림이 저장된 앱 · 단계.
+ *  ① 사용량 숫자를 적는다(알린 단계는 건드리지 않는다 — 새 행은 0).
+ *  ② 단계를 바꿀 때는 읽은 값에서 비교 후 교체한다 — 보고가 겹치면(CP 리더 교대 · 수동 호출) 이긴 쪽만 알린다.
+ *  ③ 알림이 한 장이라도 저장되면 그 단계를 지킨다(warned_at 도 그때). 관리자 목록을 못 읽었거나 다 실패하면 단계를 되돌려
+ *    다음 판에 다시 알린다 — 책임자만 받고 관리자가 놓치는 일이 없게, 이번 판엔 아무에게도 보내지 않는다.
+ *    일부만 실패하면(한 장 이상 저장) 단계를 지킨다 — 실패한 사람 몫은 다시 가지 않는다(«한 장이라도» 를 고른 값).
+ *  한 번 알린 단계는 10%p 아래로 내려가야 놓는다(heldLevel). notified = 이번에 실제로 알림이 저장된 앱 · 단계.
  */
 export async function recordAppFolderUsage(rows: readonly UsageReport[], deps: UsageDeps = liveUsageDeps): Promise<{ stored: number; notified: Array<{ app_id: string; level: FolderLevel }> }> {
   const valid = rows.filter((r) => r && typeof r.app_id === "string" && Number.isFinite(r.used_bytes) && r.used_bytes >= 0);
@@ -169,33 +185,38 @@ export async function recordAppFolderUsage(rows: readonly UsageReport[], deps: U
     if (!app) continue;
     const limit = r.limit_gb != null && Number.isInteger(r.limit_gb) && r.limit_gb > 0 ? r.limit_gb : null;
     const level = folderLevel(r.used_bytes, limit);
-    const hold = heldLevel(prev.get(r.app_id)?.warned_level ?? 0, r.used_bytes, limit);
-    let delivered = 0;
-    if (level > hold) {
-      if (admins === undefined) {
-        admins = await deps.admins().catch((e) => { logger.warn({ err: e }, "앱 폴더 용량 알림 — 관리자 목록을 못 읽어 다음 판에 다시 알린다(#4785)"); return null; });
-      }
-      if (admins !== null) {
-        const to = new Set(admins);
-        if (app.owner_member) to.add(app.owner_member);
-        const n = folderNotice(app.title || app.id, r.used_bytes, limit!, level as 80 | 100);
-        for (const m of to) {
-          const res = await deps.notify({ appId: app.id, memberId: m, title: n.title, body: n.body, dedupe_key: `app-folder-${level}:${app.id}` })
-            .catch((e) => { logger.warn({ err: e, app: app.id, member: m }, "앱 폴더 용량 알림 실패(#4785)"); return null; });
-          if (res?.ok) delivered++;
-        }
-      }
-    }
-    const warned: FolderLevel = delivered > 0 ? level : hold;
+    const was = prev.get(r.app_id)?.warned_level ?? 0;
+    const hold = heldLevel(was, r.used_bytes, limit);
     //  ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, app_id)로 재작성한다(attachAppRow 와 같은 규약).
     await itemsPool.query(
-      `INSERT INTO org_app_folder_usage(app_id, used_bytes, limit_gb, measured_at, warned_level, warned_at)
-         VALUES($1,$2,$3,now(),$4, CASE WHEN $5 THEN now() END)
-       ON CONFLICT (tenant_id, app_id) DO UPDATE SET used_bytes=EXCLUDED.used_bytes, limit_gb=EXCLUDED.limit_gb, measured_at=now(),
-         warned_level=EXCLUDED.warned_level, warned_at=CASE WHEN $5 THEN now() ELSE org_app_folder_usage.warned_at END`,
-      [r.app_id, Math.round(r.used_bytes), limit, warned, delivered > 0]);
+      `INSERT INTO org_app_folder_usage(app_id, used_bytes, limit_gb, measured_at) VALUES($1,$2,$3,now())
+       ON CONFLICT (tenant_id, app_id) DO UPDATE SET used_bytes=EXCLUDED.used_bytes, limit_gb=EXCLUDED.limit_gb, measured_at=now()`,
+      [r.app_id, Math.round(r.used_bytes), limit]);
     stored++;
-    if (delivered > 0) notified.push({ app_id: app.id, level });
+    //  level > hold 면 새 단계에 닿았다(heldLevel 이 지금 사용량으로 붙들기 때문에 이때 level > was 다). 아니면 붙든 단계로 맞춘다.
+    const target: FolderLevel = level > hold ? level : hold;
+    if (target === was || !(await swapWarnedLevel(r.app_id, was, target)) || level <= hold) continue;
+    //  여기서 limit 은 있다 — level > hold ≥ 0 이면 folderLevel 이 상한 없이 0 을 넘지 않는다.
+    let delivered = 0;
+    if (admins === undefined) {
+      admins = await deps.admins().catch((e) => { logger.warn({ err: e }, "앱 폴더 용량 알림 — 관리자 목록을 못 읽어 다음 판에 다시 알린다(#4785)"); return null; });
+    }
+    if (admins !== null) {
+      const to = new Set(admins);
+      if (app.owner_member) to.add(app.owner_member);
+      const n = folderNotice(app.title || app.id, r.used_bytes, limit!, level as 80 | 100);
+      for (const m of to) {
+        const res = await deps.notify({ appId: app.id, memberId: m, title: n.title, body: n.body, dedupe_key: `app-folder-${level}:${app.id}` })
+          .catch((e) => { logger.warn({ err: e, app: app.id, member: m }, "앱 폴더 용량 알림 실패(#4785)"); return null; });
+        if (res?.ok) delivered++;
+      }
+    }
+    if (delivered > 0) {
+      await itemsPool.query(`UPDATE org_app_folder_usage SET warned_at=now() WHERE app_id=$1`, [r.app_id]);
+      notified.push({ app_id: app.id, level });
+    } else {
+      await swapWarnedLevel(r.app_id, level, hold);   // 차지한 단계를 내려놓는다 — 다음 판에 다시
+    }
   }
   return { stored, notified };
 }
