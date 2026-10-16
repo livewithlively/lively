@@ -336,7 +336,9 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   const help = (await run(["--help"], 30000)).out;
   const has = (s) => help.includes(s);
   info.flags = { tools: has("--tools <"), dontAsk: has("dontAsk"), noPersist: has("--no-session-persistence"), noSkills: has("--disable-slash-commands"), sources: has("--setting-sources") };
-  const list = await run(["mcp", "list"], 90000);
+  //  서버 목록도 사용자 설정을 빼고 센다 — 사용자 MCP(로컬 프로세스)를 건강 검사하느라 띄우지 않는다(맥 실측: CPU 1.68s → 0.37s).
+  //   그 서버들은 아래 claude -p 에서도 안 뜨므로 deny 할 것도 없다. 옛 claude 는 종전대로 다 센다.
+  const list = await run(info.flags.sources ? ["--setting-sources", "project,local", "mcp", "list"] : ["mcp", "list"], 90000);
   info.servers = parseMcpList(list.out);
   info.connectors = info.servers.filter((s) => s.name.startsWith("claude.ai ")).map((s) => ({ app: s.name.slice(10), status: s.status, key: key(s.name) }));
   const want = (job.apps || []).map((a) => String(a).toLowerCase());

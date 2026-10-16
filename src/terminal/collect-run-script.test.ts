@@ -168,8 +168,12 @@ if (a[0] === "--help") {
     : "  --tools <tools...>  built-ins\n  --permission-mode <mode> (choices: \"dontAsk\")\n  --no-session-persistence\n  --disable-slash-commands\n  --setting-sources <sources>");
   process.exit(0);
 }
-if (a[0] === "mcp" && a[1] === "list") {
-  if (mode !== "empty") console.log("Checking MCP server health…\n\nclaude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\nclaude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\nclaude.ai Microsoft 365: https://m365.example/mcp - ! Needs authentication\nlively: /x/bin/lively mcp - ✔ Connected\nplugin:playwright:playwright: npx @playwright/mcp@latest - ✘ Failed to connect");
+if (a.includes("mcp") && a[a.indexOf("mcp") + 1] === "list") {
+  //  진짜 claude 처럼 — 사용자 설정을 빼면(--setting-sources project,local) 사용자 MCP(lively · 플러그인)는 목록에 없다.
+  const noUser = a[0] === "--setting-sources";
+  fs.writeFileSync(log + ".mcplist", JSON.stringify(a));
+  if (mode !== "empty") console.log("Checking MCP server health…\n\nclaude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\nclaude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\nclaude.ai Microsoft 365: https://m365.example/mcp - ! Needs authentication"
+    + (noUser ? "" : "\nlively: /x/bin/lively mcp - ✔ Connected\nplugin:playwright:playwright: npx @playwright/mcp@latest - ✘ Failed to connect"));
   process.exit(0);
 }
 if (a[0] === "-p") {
@@ -245,8 +249,10 @@ t("R1 허락 앱만 allow · 그 밖의 서버는 전부 deny · 내장 도구�
   const argv = R1.fake!.argv as string[];
   assert.deepEqual(flagArgs(argv, "--allowedTools"), ["mcp__claude_ai_Slack"]);
   const deny = flagArgs(argv, "--disallowedTools");
-  for (const d of ["mcp__claude_ai_Notion", "mcp__claude_ai_Microsoft_365", "mcp__lively", "mcp__plugin_playwright_playwright", "Bash", "WebFetch"]) assert.ok(deny.includes(d), `deny 에 ${d}`);
+  for (const d of ["mcp__claude_ai_Notion", "mcp__claude_ai_Microsoft_365", "Bash", "WebFetch"]) assert.ok(deny.includes(d), `deny 에 ${d}`);
   assert.ok(!deny.includes("mcp__claude_ai_Slack"), "허락한 앱은 deny 에 없다");
+  //  서버 목록도 사용자 설정을 빼고 셌다 — 사용자 MCP 를 건강 검사하느라 띄우지 않는다.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tmp, "fake-r1.json.mcplist"), "utf8")), ["--setting-sources", "project,local", "mcp", "list"]);
 });
 t("R1 지원하는 플래그를 붙인다 · 지시는 stdin · 모델 고정", () => {
   const argv = R1.fake!.argv as string[];
@@ -270,7 +276,7 @@ t("R1 요약·끝 신호 — 커넥터·허락·호출·원문 목록·결과", 
   assert.equal(s.claude.version, "2.1.301");
   assert.deepEqual(s.allowed, ["Slack"]);
   assert.deepEqual(s.missing, []);
-  assert.equal(s.denied, 4, "Notion · Microsoft 365 · lively · playwright");
+  assert.equal(s.denied, 2, "Notion · Microsoft 365 (사용자 MCP 는 목록에 없다)");
   assert.equal(s.captures, 1, "막힌 쓰기 호출은 원문이 없다");
   assert.deepEqual(s.calls.map((c: any) => [c.tool, c.error]), [["mcp__claude_ai_Slack__slack_read_channel", false], ["mcp__claude_ai_Slack__slack_send_message", true]]);
   assert.equal(s.result.subtype, "success");
@@ -298,6 +304,9 @@ t("R4 옛 claude 에는 모르는 플래그를 안 붙인다", () => {
   for (const f of ["--tools", "--no-session-persistence", "--disable-slash-commands", "--setting-sources"]) assert.ok(!argv.includes(f), f);
   assert.ok(!argv.includes("dontAsk"));
   assert.deepEqual(flagArgs(argv, "--allowedTools"), ["mcp__claude_ai_Slack"], "allow/deny 는 그대로");
+  //  옛 claude 는 사용자 설정을 못 빼므로 사용자 MCP 까지 세어 전부 deny 한다.
+  for (const d of ["mcp__lively", "mcp__plugin_playwright_playwright", "mcp__claude_ai_Notion"]) assert.ok(flagArgs(argv, "--disallowedTools").includes(d), `deny 에 ${d}`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tmp, "fake-r4.json.mcplist"), "utf8")), ["mcp", "list"]);
   assert.equal(R4.exit.code, 0);
 });
 const R5 = runOnce("r5", { apps: ["Slack"], mode: "empty" });
