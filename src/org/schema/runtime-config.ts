@@ -227,4 +227,9 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_bundle_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── org_runtime_config 확장(#4484 앱 v2-5): 앱 서버 상한 — 함수 메모리·시간 · 빌드 시간·메모리 바닥 · 자동 멈춤 기준 · 로그 보관.
+  //  비면 '{}' = env LIVELY_APP_SERVER_POLICY → 코드 기본값(apps/app-server-policy.ts). 관리자 도구 app_server_limits_set 이 이 칸만 쓴다.
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_server_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
 }

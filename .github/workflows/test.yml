@@ -430,6 +430,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-archive.pg-test.mjs
+      # ⑤-m2 앱 서버(#4484 앱 v2-5) — 진짜 빌더(세션 컨테이너 대신 이 러너의 node)로 판을 빌드해 zip 을 받고, 메모리 속 가짜 Lambda 에 올린다.
+      #    첫 배포(함수 만들기 · 판 고정 · 시험 호출 · cur) · 이름만 바꾼 판 재빌드 없음 · 빌드 안 된 판 공개 409 · 저장한 사람의 세션에서만 빌드 ·
+      #    시험 호출 실패 · 빌드 실패 · 다른 워크스페이스 태그 · 멈춤/다시 켜기 권한 · 자동 멈춤 감시 · 되돌리기 · 앱 지우기 · 죽은 빌드 · 꺼진 배포.
+      - name: 앱 서버(빌드 · Lambda 배포 · 공개 · 멈춤) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-servers.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

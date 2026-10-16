@@ -128,6 +128,51 @@ export async function patchManifest(appId: string, patch: (man: any) => void, no
   const man = JSON.parse(String(mf.content)); patch(man); mf.content = JSON.stringify(man, null, 2);
   await api('/api/ui/apps/save', { method: 'POST', body: JSON.stringify({ files, note, ...(opts && opts.publish ? { publish: true } : {}) }) });
 }
+/** GET /api/ui/apps/:id/server 응답에서 이 화면이 읽는 칸(src/apps/app-server-lifecycle.ts serverStatus). */
+interface ServerStatusView {
+  server_declared?: boolean;
+  available?: string | null;
+  deploying?: boolean;
+  installed?: { deployed_to_cur?: boolean; build?: { status?: string; stage?: string | null; error?: string | null; now?: string } | null } | null;
+  function?: { last_error?: string | null } | null;
+}
+/**
+ * #4484 서버가 있는 앱(매니페스트 web.server)이면 「이대로 넣기」·「공개하기」 전에 서버를 빌드해 올린다(결정 상민 2026-10-15 — 저장만으로는 빌드하지 않는다).
+ *  같은 코드가 이미 올라가 있으면 바로 지나간다. 빌드는 몇 분 걸릴 수 있어 시작만 하고 상태를 3초마다 본다(최대 12분).
+ *  돌려주는 값: true = 넣기 · 공개를 이어서 해도 된다(서버 앱이 아니거나 · 이 워크스페이스에 앱 서버가 없거나 · 올라갔다) · false = 멈춘다(실패 · 시간 초과).
+ *  실패하면 그 기록은 서버가 이 앱의 만들기 세션에도 넣는다 — 그 세션의 AI 가 보고 고친다.
+ */
+export async function ensureAppServer(appId: string, onProgress?: (text: string) => void): Promise<boolean> {
+  const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/server';
+  let st: ServerStatusView | null;
+  try { st = await api(path); } catch (_) { return true; }   // 상태를 못 읽으면(옛 서버) 종전대로 넣는다
+  if (!st || !st.server_declared) return true;
+  if (st.available) { toast('이 워크스페이스는 앱 서버가 아직 켜져 있지 않아 화면만 넣어요. ' + st.available, true); return true; }
+  if (st.installed && st.installed.deployed_to_cur) return true;
+  try { await api(path + '/deploy', { method: 'POST', body: JSON.stringify({ wait_s: 3 }) }); }
+  catch (e: unknown) { toast('서버를 빌드하지 못했어요. ' + (e instanceof Error ? e.message : String(e)), true); return false; }
+  toast('서버를 빌드하고 있어요. 몇 분 걸릴 수 있어요.');
+  const t0 = Date.now();
+  let told = t0;
+  for (;;) {
+    await new Promise((r) => window.setTimeout(r, 3000));
+    try { st = await api(path); } catch (_) { continue; }
+    const b = st && st.installed && st.installed.build;
+    if (st && st.installed && st.installed.deployed_to_cur && !st.deploying) { toast('서버를 올렸어요'); return true; }
+    if (st && !st.deploying) {
+      //  일이 끝났는데 올라가지 않았다 — 빌드 실패 · 올리기 실패(시험 호출 등) · 그 밖. 기록은 서버가 만들기 세션에 넣었다.
+      const why = b && b.status === 'failed' ? '서버 빌드가 실패했어요(' + (b.stage || '?') + '). ' + (b.error || '')
+        : st.function && st.function.last_error ? '서버를 올리지 못했어요. ' + st.function.last_error
+          : '서버를 올리지 못했어요. 앱빌더의 상태에서 까닭을 볼 수 있어요.';
+      toast(why + ' 기록은 만들기 세션의 AI에게 보냈어요.', true);
+      return false;
+    }
+    const line = '서버 빌드 중 · ' + Math.round((Date.now() - t0) / 1000) + '초' + (b && b.now ? ' · ' + String(b.now).slice(0, 80) : '');
+    if (onProgress) onProgress(line);
+    else if (Date.now() - told >= 30_000) { told = Date.now(); toast(line); }
+    if (Date.now() - t0 > 12 * 60_000) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요. 상태는 앱빌더에서 다시 볼 수 있어요.', true); return false; }
+  }
+}
 /** 매니페스트 studio 칸에서 서버가 기록하는 것(만든 사람 · 만들기 세션 · 원본)을 걷는다 — #4667 그건 앱 코드가 아니라 서버 칸이 정본이다. 자리 · 기획 카드는 남긴다. */
 export function studioUiOnly(studio: any): Record<string, unknown> {
   const { made_by: _m, build_session: _b, origin: _o, ...keep } = (studio && typeof studio === 'object' ? studio : {}) as Record<string, unknown>;
@@ -943,6 +988,8 @@ async function build(rec: StudioRec): Promise<void> {
   const putAppOnce = async (): Promise<void> => {
     const newName = nameIn.value.trim() || S.title;
     const share = rec.vis || 'me';
+    //  #4484 서버가 있는 앱이면 넣기 전에 서버부터(실패하면 넣지 않는다 — 기록은 만들기 세션으로 간다).
+    if (!(await ensureAppServer(rec.appId))) return;
     //  #4732 「워크스페이스 모두」 면 이 저장이 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다(새 앱은 할 일이 없어 묻지 않는다).
     if (share === 'all' && !(await confirmPublish(rec.appId, { title: newName }))) return;
     try {
@@ -959,6 +1006,7 @@ async function build(rec: StudioRec): Promise<void> {
   //  공개 범위(#4632 app_visibility_set) — 'all' 이면 「공개하기」(나만 보는 앱을 처음 공개 · 공개한 앱의 내 초안을 공개 판으로, #4667). 못 해도 앱은 그대로.
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
     try {
+      if (v === 'all' && !(await ensureAppServer(rec.appId))) return false;   // #4484 공개할 판의 서버가 빌드돼 있어야 한다
       if (v === 'all' && !(await confirmPublish(rec.appId, { title: S.title }))) return false;   // #4732
       await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
       S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
