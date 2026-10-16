@@ -56,6 +56,50 @@ const NOPE = "/nonexistent-path-for-disk-guard-test";
   assert.ok(true, "경고 상태에선 통과해야 한다(막으면 자해)");
 }
 
+// ── #4780 여유 바닥 — 비율이 위험이어도 바닥 이상 남았으면 **통과**(경고). 바닥 아래면 차단하고 기준을 말한다 ──
+{
+  // 1바이트 바닥: 어떤 디스크든 그보다는 남아 있다 → 위험 비율(2%)을 넘었어도 막지 않아야 한다(큰 디스크 회귀).
+  invalidateDiskState();
+  const st = await diskState([os.tmpdir()], { warnPct: 1, criticalPct: 2, criticalFreeBytes: 1 });
+  assert.ok(st);
+  assert.equal(st.level, "warn", "비율은 위험이지만 바닥보다 넉넉하면 경고");
+  invalidateDiskState();
+  await assertDiskWritable("새 세션", [os.tmpdir()], { warnPct: 1, criticalPct: 2, criticalFreeBytes: 1 });
+  assert.ok(true, "바닥보다 많이 남았으면 통과해야 한다");
+
+  invalidateDiskState();
+  await assert.rejects(
+    () => assertDiskWritable("새 세션", [os.tmpdir()], { warnPct: 1, criticalPct: 2, criticalFreeBytes: Number.MAX_SAFE_INTEGER }),
+    (err: unknown) => {
+      assert.ok(err instanceof HttpError);
+      assert.equal(err.status, 507);
+      assert.match(err.message, /사용률이 2% 이상이고 남은 공간이 .+보다 적으면 새 작업을 막습니다/, "막는 기준을 말해야 얼마나 비울지 셈한다");
+      return true;
+    },
+  );
+  invalidateDiskState();
+}
+
+// ── 문구: 노드(사람 컴퓨터)에선 그 컴퓨터를 이름으로 가리킨다 — 관리 ▸ 저장소·로그 는 서버 디스크라 헛걸음이다 ──
+{
+  const G = 1024 ** 3;
+  const st = { usedPct: 97.9, level: "critical" as const, path: "/Users/me/workspace", availBytes: 4.2 * G };
+  const t = { warnPct: 85, criticalPct: 95, criticalFreeBytes: 5 * G };
+  const gw = diskFullError("새 세션", st, t);
+  assert.match(gw.message, /4\.2GB 남음/);
+  assert.match(gw.message, /남은 공간이 5GB보다 적으면/, "바닥은 5GB 로 읽혀야 한다(5.0GB 아님)");
+  assert.match(gw.message, /저장소·로그/, "게이트웨이에선 관리탭 정리로 안내");
+  const prev = process.env.LIVELY_NODE_TOKEN;
+  process.env.LIVELY_NODE_TOKEN = "test-node";
+  try {
+    const onNodeMsg = diskFullError("새 세션", st, t).message;
+    assert.ok(onNodeMsg.includes(`노드 컴퓨터(${os.hostname()})의 디스크에서 공간을 비우세요`), `노드에선 그 컴퓨터를 이름으로: ${onNodeMsg}`);
+    assert.doesNotMatch(onNodeMsg, /저장소·로그/, "노드에서 서버 관리 화면으로 보내면 헛걸음이다");
+  } finally {
+    if (prev === undefined) delete process.env.LIVELY_NODE_TOKEN; else process.env.LIVELY_NODE_TOKEN = prev;
+  }
+}
+
 // ── 여유로우면 당연히 통과 ──
 {
   invalidateDiskState();
@@ -86,4 +130,4 @@ const NOPE = "/nonexistent-path-for-disk-guard-test";
   assert.match(e.message, /레포 클론/, "무엇이 막혔는지");
 }
 
-console.log("disk-guard.test.ts ok — 위험이면 507 차단 · 경고/측정실패면 통과(과잉차단 금지) · ENOSPC 인식(errno + git stderr)");
+console.log("disk-guard.test.ts ok — 위험이면 507 차단 · 경고/측정실패면 통과(과잉차단 금지) · 여유 바닥 이상이면 통과(#4780) · 노드는 그 컴퓨터를 가리킴 · ENOSPC 인식(errno + git stderr)");

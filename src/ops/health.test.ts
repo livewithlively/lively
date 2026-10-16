@@ -27,6 +27,21 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
   assert.equal(levelFor(75, strict), "critical");
 }
 
+// ── #4780 여유 바닥 — 위험은 «사용률 ≥ 위험 임계» **그리고** «남은 공간 < 바닥» 일 때만 ──
+//  회귀 대상: 큰 디스크에서 사용률만으로 막던 것. 2026-10-16 맥미니 노드(245GB)가 96.7% · 7.6GB 남음에서 새 세션을 막았다.
+//  반대 방향도 못 박는다: 작은 디스크(테넌트 쿼터 10GB 등)에선 종전과 똑같이 막아야 한다 — 바닥이 종전보다 일찍 막으면 안 된다.
+{
+  const G = 1024 ** 3;
+  const t = { warnPct: 85, criticalPct: 95, criticalFreeBytes: 5 * G };
+  assert.equal(levelFor(96.7, t, 7.6 * G), "warn", "맥미니 실측(96.7% · 7.6GB) — 위험 비율은 넘었어도 바닥보다 넉넉하면 경고");
+  assert.equal(levelFor(97.9, t, 4.9 * G), "critical", "비율도 넘고 바닥 아래면 위험");
+  assert.equal(levelFor(97.9, t, 5 * G), "warn", "바닥과 같으면 아직 막지 않는다(바닥 «미만» 에서만)");
+  assert.equal(levelFor(96, t, 0.4 * G), "critical", "작은 디스크는 종전처럼 95% 에서 막는다(5% 가 바닥보다 작다)");
+  assert.equal(levelFor(80, t, 2 * G), "ok", "바닥 아래라도 비율이 안 찼으면 막지 않는다 — 종전보다 일찍 막지 않는다");
+  assert.equal(levelFor(96.7, t), "critical", "남은 양을 모르면 봐주지 않는다(사용률만 — 종전 판정)");
+  assert.equal(levelFor(96.7, { ...t, criticalFreeBytes: 0 }, 100 * G), "critical", "바닥 0(끔)이면 사용률만 본다");
+}
+
 // ── 시크릿 유출 방지: 미인증 /readyz 응답에 접속 자격이 실리면 안 된다 ──
 {
   const leaky = 'connection to server at "db" failed: postgres://items:itemspw@localhost:55433/items';
@@ -44,7 +59,7 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
   assert.ok(d.totalBytes > 0, "총 용량 > 0");
   assert.ok(d.availBytes >= 0);
   assert.ok(d.usedPct >= 0 && d.usedPct <= 100, `사용률이 0~100 범위여야: ${d.usedPct}`);
-  assert.equal(d.level, levelFor(d.usedPct));
+  assert.equal(d.level, levelFor(d.usedPct, undefined, d.availBytes), "판정은 남은 양까지 넣어 한다(#4780 바닥)");
 
   // 임계치를 0 에 가깝게 주면 무조건 critical — 주입한 임계치가 실제 판정에 쓰인다는 증거.
   const strict = await checkDisk(os.tmpdir(), { warnPct: 1, criticalPct: 2 });

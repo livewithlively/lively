@@ -36,7 +36,7 @@ import { ensureStateDirs, stateRoot } from "../ops/state-dir.js";
 import { roots, sharedRoot } from "../terminal/terminal-sessions.js";
 import { startLogJanitor } from "../ops/log-janitor.js";
 import { startCallLogPrune } from "../org/policies/call-log-prune.js";
-import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
+import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-loaders.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "../v6/session-log-store.js";
@@ -295,8 +295,7 @@ function startBoxWatchStep(): void {
     pool: itemsPool,
     paths: () => [stateRoot(), ...roots().map((r) => r.base)],
     loadThresholds: async () => {
-      const sp = await effectiveStoragePolicy(loadStoragePolicy);
-      return { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct };
+      return diskThresholds(await effectiveStoragePolicy(loadStoragePolicy));
     },
     // #1059 — 메모리 경보 임계(사용%, 0=끔). box-watch 가 디스크와 같은 채널로 push.
     loadMemThresholds: async () => {
