@@ -16,7 +16,8 @@
 //   (GET /me 는 앞단이 /api/app-front/me 로 따로 넘긴다 — app-front-routes.ts appFrontMe)
 //  답: 성공은 그 도구의 결과 JSON 그대로. 실패는 `{error, code?, consent_url?}` + 상태 코드.
 //   · 403 + code "consent_required" — 이 사람이 이 앱에 아직 동의하지 않았거나 예전 범위다. consent_url(라이블리 화면의 동의 자리)로
-//     보내면 동의 뒤 back(이 앱 주소)으로 돌아온다 — SDK 는 `&next=<지금 경로>` 를 붙여 보낸다(web/v2/app-ui-runtime.ts).
+//     보내면 동의 뒤 이 앱 주소로 돌아온다 — SDK 는 `&next=<지금 경로>` 를 붙여 보낸다(web/v2/app-ui-runtime.ts). 돌아갈 주소는 라이블리 화면이
+//     앱 id · 판 · 지금 워크스페이스로 스스로 만든다(web/lib/app-address.ts appGrantReturn — 링크가 주는 주소를 믿지 않는다).
 //  ⓘ 쓰기의 출처 검사(같은 주소에서 온 것만)는 앞단이 한다(Origin · Sec-Fetch-Site). 여기 오는 요청은 그 검사를 지났다.
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
@@ -26,13 +27,14 @@ import type { OrgApp } from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { TenantContext } from "../org/tenant-context.js";
 import { addressViewFor } from "./visibility.js";
-import { appDomain, appHost, appOrigin, type AppVariant } from "./app-address.js";
+import { appDomain, appHost, type AppVariant } from "./app-address.js";
 import type { AppFrontAct } from "./app-front-auth.js";
+import { CONSENT_REQUIRED } from "./app-consent.js";
 
 /** 앞단이 넘기는 본문 상한과 같다(게이트웨이 REST 전역 상한 1MB — 앱 서버가 /api/ui/store/* 로 보낼 수 있는 만큼). */
 export const APP_FRONT_API_BODY_LIMIT = "1mb";
-/** 동의가 필요하다는 표지 — capabilities/app-tool-call.ts CONSENT_REQUIRED 와 같은 값(웹 런타임도 이 글자로 가른다). */
-export const CONSENT_CODE = "consent_required";
+/** 동의가 필요하다는 표지 — apps/app-consent.ts 한 벌(웹 런타임도 이 글자로 가른다). */
+export const CONSENT_CODE = CONSENT_REQUIRED;
 
 export interface AppFrontApiDeps {
   /** 그 사람이 이 워크스페이스에 들어올 수 있나(셀프호스트 다중 워크스페이스의 등록부 — tenancy/gate). */
@@ -104,25 +106,32 @@ export function apiPathOf(raw: unknown): string | null {
   return u.pathname.replace(/\/+$/, "") || "/";
 }
 
-/** 동의 자리 — 라이블리 화면 `#/app-grant/<앱>?v=<판>&back=<이 앱 주소>` (web/v2/main.ts). SDK 가 `&next=<경로>` 를 붙인다. */
+/**
+ * 동의 자리 — 라이블리 화면 `#/app-grant/<앱>?v=<판>` (web/v2/main.ts). SDK 가 `&next=<경로>` 를 붙인다. 돌아갈 앱 주소는 싣지 않는다 —
+ *  라이블리 화면이 앱 id · 판 · 지금 워크스페이스로 만든다(격리 리뷰: 링크가 준 주소를 믿으면 같은 앱 id 의 남의 워크스페이스 주소로 보낼 수 있었다).
+ *  앱 주소를 못 만드는 워크스페이스(꺼짐 · 이름)면 null — 돌아올 곳이 없는 동의 자리는 주지 않는다.
+ */
 export function consentUrlFor(base: string | null, tenantSlug: string, appId: string, variant: AppVariant, env: NodeJS.ProcessEnv): string | null {
   if (!base) return null;
-  const host = appHost(tenantSlug, appId, variant, appDomain(env));
-  if (!host) return null;
-  const q = new URLSearchParams({ v: variant, back: appOrigin(host) });
-  return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${q.toString()}`;
+  if (!appHost(tenantSlug, appId, variant, appDomain(env))) return null;
+  return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${new URLSearchParams({ v: variant }).toString()}`;
 }
 
 /** 실행 중 던진 것 → 상태 코드 · 글. HttpError 는 그대로, 스코프 판정(requireScope 의 «Forbidden:»)은 403, 그 밖은 500(글은 감춘다). */
 export function apiErrorReply(e: unknown, consentUrl: () => string | null): ApiReply {
   if (e instanceof HttpError) {
+    //  5xx 는 로그에 남긴다(rest-util wrap 과 같은 규칙 #1278 — 도구 앞 단계의 실패는 mcp_call_log 에도 안 남는다).
+    if (e.status >= 500) {
+      const c = (e as { cause?: unknown }).cause;
+      logger.error({ status: e.status, msg_out: e.message, cause: c instanceof Error ? { message: c.message, code: (c as NodeJS.ErrnoException).code } : c }, "[app-front] /_lively API 5xx");
+    }
     const body = { ...(e.body ?? {}), error: e.message } as Record<string, unknown>;
     if (body.code === CONSENT_CODE) { const u = consentUrl(); if (u) body.consent_url = u; }
     return { status: e.status, json: body };
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (/^Forbidden:/.test(msg)) return { status: 403, json: { error: "이 앱의 권한 밖입니다 — " + msg.replace(/^Forbidden:\s*/, "") } };
-  logger.error({ err: msg }, "[app-front] /_lively API 처리 실패");
+  logger.error({ err: msg, stack: e instanceof Error ? e.stack : undefined }, "[app-front] /_lively API 처리 실패");
   return { status: 500, json: { error: "처리하지 못했습니다 — 잠시 뒤 다시 하세요" } };
 }
 

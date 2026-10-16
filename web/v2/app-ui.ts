@@ -420,7 +420,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
         .then((granted) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { granted } }))
         .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: (e && e.message ? e.message : String(e)) } }));
     } else if (msg.method === 'ui/openExternal') {
-      // 샌드박스(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다. http(s)만, noopener.
+      // srcdoc(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다(앱 주소 iframe 은 팝업이 되지만 열린 창도 같은 제한을 받아 이 길이 낫다). http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');
       let ok = false;
       try { const u = new URL(raw); ok = u.protocol === 'https:' || u.protocol === 'http:'; } catch { ok = false; }

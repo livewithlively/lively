@@ -65,12 +65,12 @@ export const APP_RUNTIME_JS = `
   var alone = (function () { try { return window.parent === window; } catch (_) { return false; } })();
   // #4482 — 앱 주소 문서가 맨몸이면 같은 주소의 /_lively/* 로 돈다(standalone). srcdoc(about:) · 파일로 연 문서는 쓸 API 가 없다.
   var standalone = alone && typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || ''));
-  function err(message, code, extra) { var e = new Error(message); e.code = code; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
+  function mkErr(message, code, extra) { var e = new Error(message); e.code = code; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
   function post(method, params) {
     if (standalone) return local(method, params || {});
     return new Promise(function (resolve, reject) {
       if (alone) {
-        reject(err('이 기능은 라이블리 화면 안에서 연 앱에서만 쓸 수 있습니다 — 라이블리에서 이 앱을 열어 주세요.', -32601));
+        reject(mkErr('이 기능은 라이블리 화면 안에서 연 앱에서만 쓸 수 있습니다 — 라이블리에서 이 앱을 열어 주세요.', -32601));
         return;
       }
       var id = seq++;
@@ -92,8 +92,9 @@ export const APP_RUNTIME_JS = `
   // 돌아올 자리(next)는 CP 로그인 왕복을 지나도 살아남게 — 그 왕복은 해시를 글자 집합(영숫자 · /_-.?=&%+~:@,)과 512자로 거른다.
   //  encodeURIComponent 가 남기는 !'()* 까지 인코딩하고, 길면 첫 화면(/)으로(앞단 appOpenUrl 과 같은 규칙).
   function strictEnc(v) { return encodeURIComponent(v).replace(/[!'()*]/g, function (c) { return '%' + c.charCodeAt(0).toString(16).toUpperCase(); }); }
+  function consentOk(url) { return !!url && /^https:[/][/]/.test(url); }
   function goConsent(url) {
-    if (!url || !/^https:[/][/]/.test(url)) return false;
+    if (!consentOk(url)) return false;
     var n = strictEnc(here());
     if (n.length > 300) n = strictEnc('/');
     location.assign(url + (url.indexOf('?') >= 0 ? '&' : '?') + 'next=' + n);
@@ -108,13 +109,14 @@ export const APP_RUNTIME_JS = `
         try { j = t ? JSON.parse(t) : null; } catch (_) { j = null; }
         if (r.ok) return j;
         var code = r.status === 403 ? -32001 : (r.status === 400 || r.status === 413) ? -32602 : r.status === 404 ? -32601 : -32000;
-        var e = err((j && j.error) || ('요청이 실패했습니다(' + r.status + ')'), code, { status: r.status, body: j });
+        var e = mkErr((j && j.error) || ('요청이 실패했습니다(' + r.status + ')'), code, { status: r.status, body: j });
         // 앱 주소 로그인(12시간)이 끝났다 — 화면을 다시 열면 앞단이 라이블리 로그인을 거쳐 돌려보낸다(1분에 한 번만).
         if (r.status === 401 && j && j.error === 'login_required' && onceIn('lively.relogin', 60000)) { location.reload(); return new Promise(function () {}); }
         // 이 앱 사용 동의가 없다 — 라이블리의 동의 화면으로 한 번 갔다 온다(10분에 한 번만 — 거절하면 앱이 실패를 받는다).
         if (r.status === 403 && j && j.code === 'consent_required') {
           e.consentUrl = j.consent_url || null;
-          if (onceIn('lively.consent', 600000) && goConsent(j.consent_url)) return new Promise(function () {});
+          //  주소가 쓸 만할 때만 «한 번» 몫을 쓴다 — 못 가는 주소로 10분 몫을 날리지 않게.
+          if (consentOk(j.consent_url) && onceIn('lively.consent', 600000) && goConsent(j.consent_url)) return new Promise(function () {});
         }
         throw e;
       });
@@ -138,18 +140,18 @@ export const APP_RUNTIME_JS = `
     if (method === 'ui/grant') {
       return http('GET', '/me').then(function (me) {
         if (goConsent(me && me.consent_url)) return new Promise(function () {});
-        throw err('동의 화면 주소를 받지 못했습니다', -32000);
+        throw mkErr('동의 화면 주소를 받지 못했습니다', -32000);
       });
     }
     if (method === 'ui/openExternal') {
       var u = String(p.url || '');
-      if (!/^https?:[/][/]/i.test(u)) return Promise.reject(err('http(s) 주소가 아닙니다', -32602));
+      if (!/^https?:[/][/]/i.test(u)) return Promise.reject(mkErr('http(s) 주소가 아닙니다', -32602));
       var w = null;
       try { w = window.open(u, '_blank', 'noopener'); } catch (_) { w = null; }
       return Promise.resolve({ opened: !!w });
     }
-    if (method === 'chat/send' || method === 'files/list' || method === 'files/read') return Promise.reject(err(NO_SESSION, -32602));
-    return Promise.reject(err(NO_HOST, -32601));
+    if (method === 'chat/send' || method === 'files/list' || method === 'files/read') return Promise.reject(mkErr(NO_SESSION, -32602));
+    return Promise.reject(mkErr(NO_HOST, -32601));
   }
   var subs = {};
   function subscribe(topic, cb) {

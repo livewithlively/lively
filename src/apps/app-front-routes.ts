@@ -165,7 +165,7 @@ export async function appFrontMe(headers: Record<string, string | string[] | und
   return { status: 200, json: {
     member: { id: w.member.id, name: memberDisplayName(w.member), email: w.member.email ?? null },
     workspace: { slug: g.tenant.slug },
-    app: { id: w.app.id, variant: act.var, title: w.app.title || w.app.id },
+    app: { id: w.app.id, variant: act.var },
     //  붙은 세션은 늘 null — 앱 주소 쿠키는 그 앱의 모든 iframe 이 같이 써서(같은 파티션) 어느 세션 칸에서 왔는지 모른다(#4482).
     //   세션 칸에서 연 화면은 SDK(lively.me() · lively.session)가 감싸는 라이블리 화면에게서 받는다.
     session: null,
@@ -420,4 +420,11 @@ export function registerAppFrontRoutes(app: express.Express, deps: () => AppFron
   //   전역 express.json(1mb · application/json 만)은 이 라우터보다 먼저 돌아 이미 읽은 본문은 건너뛴다 — 여기 파서는 그 밖의 종류만 읽는다.
   app.all("/api/app-front/lively", express.json({ limit: APP_FRONT_API_BODY_LIMIT, type: () => true }),
     wrap(async (req, res) => { send(res, await appFrontLively(H(req), req.method, (req.query as Record<string, unknown>)?.path, req.body, deps())); }));
+  //  본문을 못 읽었다(깨진 JSON · 큼) — 파서의 오류는 wrap 밖이라 Express 기본 HTML 400 이 나갔다(격리 리뷰). 이 길의 답은 늘 JSON 이다.
+  app.use("/api/app-front/lively", (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) { next(err); return; }
+    const e = err as { status?: unknown; type?: unknown };
+    const big = e?.status === 413 || e?.type === "entity.too.large";
+    send(res, { status: big ? 413 : 400, json: { error: big ? "본문이 너무 큽니다(1MB 까지)" : "본문을 JSON 으로 읽지 못했습니다", code: big ? "body_too_large" : "bad_body" } });
+  });
 }

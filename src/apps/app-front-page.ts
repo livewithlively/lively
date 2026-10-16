@@ -89,7 +89,9 @@ export function multiFileFallbackHtml(title: string, appUrl?: string | null): st
   //  주소는 서버가 만든 앱 주소다 — 그래도 HTML 속성 · 스크립트를 깰 글자(따옴표 · 꺾쇠 · 역슬래시 · 공백 · 백틱)가 있으면 단추를 달지 않는다.
   if (!appUrl || !/^https:\/\/[a-z0-9.-]+\/[^"'`<>\\\s]*$/.test(appUrl)) return base;
   const js = "window.lively&&window.lively.ui.openExternal(" + JSON.stringify(appUrl).replace(/</g, "\\u003c") + ")";
-  return base.replace("</body>", "<p><button type=\"button\" onclick='" + js.replace(/&/g, "&amp;").replace(/'/g, "&#39;") + "' style=\"font:inherit;padding:6px 14px;border-radius:8px;border:1px solid #ccd;background:#fff;cursor:pointer\">새 탭에서 열기</button></p></body>");
+  const button = "<p><button type=\"button\" onclick='" + js.replace(/&/g, "&amp;").replace(/'/g, "&#39;") + "' style=\"font:inherit;padding:6px 14px;border-radius:8px;border:1px solid #ccd;background:#fff;cursor:pointer\">새 탭에서 열기</button></p></body>";
+  //  함수 치환 — 문자열 치환이면 주소의 `$&` · `$'` 같은 글자가 치환 패턴으로 읽혀 문서가 깨진다(격리 리뷰 9).
+  return base.replace("</body>", () => button);
 }
 
 /** HTML 안에 넣는 스크립트가 문서를 깨지 않게 — `</script` 를 끊는다(원본 둘 다 우리 코드지만 한 번 더 막는다). */

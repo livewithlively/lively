@@ -71,7 +71,7 @@ function bootAlone(routes, opts = {}) {
 }
 
 const ME = { member: { id: "alice", name: "앨리스", email: "a@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "talk", variant: "pub", title: "톡" }, session: null,
-  consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/talk?v=pub&back=https%3A%2F%2Ftalk-lively-46e3.lvly.app" };
+  consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/talk?v=pub" };
 const NEXT = encodeURIComponent("/c/42?page=main#t");
 const baseRoutes = (over = {}) => (method, url, body) => {
   const k = `${method} ${url}`;
@@ -155,6 +155,20 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   const e = await lively.store.query("notes", {}).then(() => null, (x) => x);
   ok(e && e.code === -32001 && e.status === 403 && e.consentUrl === ME.consent_url, "S7 10분 안 두 번째는 실패(-32001 · consentUrl 실음)");
   eq(nav.assigned.length, 1, "S7 다시 이동하지 않는다(끝없는 왕복 금지)");
+}
+
+// ══ S7b 못 가는 동의 주소(https 아님 · 없음)는 «한 번» 몫을 쓰지 않는다 — 다음의 맞는 주소는 간다(격리 리뷰 11) ══
+{
+  let n = 0;
+  const { lively, nav } = bootAlone(baseRoutes({ "POST /_lively/tools/store_query": () => (++n === 1
+    ? { status: 403, json: { error: "동의 없음", code: "consent_required", consent_url: "javascript:alert(1)" } }
+    : { status: 403, json: { error: "동의 없음", code: "consent_required", consent_url: ME.consent_url } }) }));
+  await lively.ready;
+  const e = await lively.store.query("notes", {}).then(() => null, (x) => x);
+  ok(e && e.code === -32001 && nav.assigned.length === 0, "S7b https 아닌 동의 주소로는 가지 않고 실패");
+  lively.store.query("notes", {}).catch(() => null);
+  await settle();
+  eq(nav.assigned.length, 1, "S7b 다음의 맞는 동의 주소로는 간다(앞의 실패가 10분 몫을 쓰지 않았다)");
 }
 
 // ══ S8 · S9 앱 주소 로그인이 끝났다(401 login_required) — 한 번 다시 연다 · 1분 안 두 번째는 실패 ══

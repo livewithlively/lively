@@ -19,7 +19,7 @@ import { onAppEvent, type LiveAppEvent } from './live-sync.js';
 import { ctxMenu, pnIcon } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versions.js';
-import { bandText, draftTextFor, sessAppMenuRows } from '../lib/app-menu.js';
+import { bandText, draftTextFor, isOwnWriteSource, sessAppMenuRows } from '../lib/app-menu.js';
 import { builtinAppIcon } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { verName } from '../lib/studio-flow.js';
@@ -407,7 +407,10 @@ export function sessAppPart(ctx: PartCtx): Part {
       m.frame.notify('ui/notifications/data-changed', { table: ev.table ?? null, op: ev.op ?? null, source: ev.source ?? null, session: ev.session ?? null });
       return;
     }
-    if (ev.source === 'app-ui') return;          // 앱 화면이 제 손으로 쓴 것 — 다시 불러오면 쓰던 화면이 처음으로 돌아간다
+    //  앱 화면이 제 손으로 쓴 것 — 다시 불러오면 쓰던 화면이 처음으로 돌아간다. #4482 앱 주소의 같은 주소 API(/_lively/*)로 쓴 것('app-front')도
+    //   그렇다: SDK 없이 fetch 만 쓰는 앱이 쓸 때마다(시작 때 쓰는 앱이면 계속) 다시 불러와졌다(격리 리뷰). 다른 자리(새 탭)에서 쓴 것까지 따라오게
+    //   하려면 앱이 lively.store.onChange 를 건다 — 그때는 위에서 사건을 그대로 받는다.
+    if (isOwnWriteSource(ev.source)) return;
     if (reloadTimer) window.clearTimeout(reloadTimer);
     reloadTimer = window.setTimeout(() => { reloadTimer = 0; mounted?.frame?.reload(); }, RELOAD_DEBOUNCE_MS);
   });

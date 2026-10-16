@@ -42,6 +42,15 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(!rows.some((r) => r.label === "새 탭에서 열기"), "S6-1b 손잡이가 없으면(앱 주소 꺼짐) 줄도 없다");
 }
 
+// ══ S6-1c 제 손으로 쓴 것인가(#4482) — onChange 를 안 건 앱을 다시 불러오지 않는 출처 ══
+{
+  eq([menu.isOwnWriteSource("app-ui"), menu.isOwnWriteSource("app-front")], [true, true], "S6-1c 다리 · 같은 주소 API(/_lively/*)로 쓴 것은 제 손");
+  eq(["mcp", "web", null, undefined, "", "APP-UI"].map((s) => menu.isOwnWriteSource(s)), [false, false, false, false, false, false], "S6-1c 세션의 AI · 다른 사람 · 모르는 출처는 바깥 변경");
+  //  배선 — 세션 앱 칸의 «다시 불러오기» 거름이 이 판정을 쓴다(격리 리뷰: 'app-front' 를 몰라 /_lively/* 로 쓸 때마다 다시 불러왔다)
+  const pane = (await import("node:fs")).readFileSync(new URL("../web/v2/session-app-pane.ts", import.meta.url), "utf8");
+  ok(/if \(isOwnWriteSource\(ev\.source\)\) return;/.test(pane) && !/ev\.source === 'app-ui'/.test(pane), "S6-1c 앱 칸의 다시 불러오기 거름이 isOwnWriteSource 를 쓴다");
+}
+
 // ══ S6-2 「AI에게 고치기」 글 ═══════════════════════════════════════════════════
 {
   eq(menu.draftTextFor("장표 수정"), "「장표 수정」 앱을 이렇게 고쳐 줘: ", "S6-2 입력칸에 채우는 글 — 뒤를 사람이 잇는 열린 문장");

@@ -1658,12 +1658,14 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           el('p', { class: 'pn-fine', text: String(e && e.message ? e.message : e) })));
       }
     } else if (page === 'app-grant' && segs[1]) {
-      //  #/app-grant/<앱>?v=<판>&back=<앱 주소 출처>&next=<앱 안 경로> — #4482 앱 주소를 맨몸(새 탭 · 폰 홈 화면)으로 연 사람이 그 앱의 도구를
+      //  #/app-grant/<앱>?v=<판>&next=<앱 안 경로> — #4482 앱 주소를 맨몸(새 탭 · 폰 홈 화면)으로 연 사람이 그 앱의 도구를
       //   처음 쓸 때 «동의 필요»(/_lively/* 403 consent_required)를 받으면 SDK 가 이리 보낸다(라이블리 화면 안이면 그 자리 동의 창을 쓴다).
-      //   동의 창을 띄우고, 끝나면 그 앱 주소의 그 자리로 돌려보낸다. 돌아갈 곳은 그 앱의 앱 주소만(appGrantReturn — 열린 리다이렉트 방지).
+      //   동의 창을 띄우고, 끝나면 그 앱 주소의 그 자리로 돌려보낸다. 돌아갈 곳은 지금 워크스페이스의 그 앱 주소를 여기서 만든다(appGrantReturn —
+      //   링크가 주는 주소는 받지 않는다 · 열린 리다이렉트 방지).
       //   이 탭은 저장하지 않는다(tabs.ts routeSticky) — 되살아나면 라이블리를 열었는데 동의 창이 뜨고 앱 주소로 넘어간다.
       const appId = decodeURIComponent(segs[1]);
-      const back = appGrantReturn(appId, params.get('back'), params.get('next'), state.me && state.me.app_domain);
+      const me0 = (state.me || {}) as { app_domain?: string | null; workspace_registry?: { current?: string | null } };
+      const back = appGrantReturn(appId, params.get('v') === 'draft' ? 'draft' : 'pub', params.get('next'), me0.workspace_registry?.current, me0.app_domain);
       tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱 사용 동의를 확인하는 중이에요…' })));
       tab.aside.replaceChildren();
       const granted = await ensureAppGrant(appId).catch(() => false);

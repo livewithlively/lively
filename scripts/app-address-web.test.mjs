@@ -41,22 +41,36 @@ assert.equal(F.addrBlockValid(rec(UA, NOW + DAY), UA, NOW), false, "미래 시�
 for (const bad of [null, "", "{", "null", rec(UA, "x")]) assert.equal(F.addrBlockValid(bad, UA, NOW), false, String(bad));
 ok("W3 addrBlockValid — UA · 7일 경계 · 깨진 값");
 
-// W4 appGrantReturn(#4482) — 동의 경유에서 돌아갈 곳은 그 앱의 앱 주소만(열린 리다이렉트 방지)
+// W4 appGrantReturn(#4482) — 동의 경유에서 돌아갈 곳은 «지금 워크스페이스의 그 앱 주소» 를 여기서 만든다(링크가 주는 주소를 받지 않는다)
+//  격리 리뷰 1: 종전엔 링크의 back 을 «앱 id 로 시작하나» 만 봐서 `<같은 앱 id>-<남의 워크스페이스>.lvly.app` 으로 보낼 수 있었다.
 {
-  const D = "lvly.app", B = "https://talk-lively-46e3.lvly.app";
-  assert.equal(F.appGrantReturn("talk", B, "/c/1?x=2#t", D), B + "/c/1?x=2#t");
-  assert.equal(F.appGrantReturn("talk", B + "/", null, D), B + "/", "끝 / 는 같은 출처 · next 없으면 /");
-  assert.equal(F.appGrantReturn("talk", "https://talk-lively-46e3-draft.lvly.app", "/", D), "https://talk-lively-46e3-draft.lvly.app/", "초안 주소");
-  for (const [back, why] of [
-    ["https://evil.example", "다른 도메인"], ["https://talk-x.lvly.app.evil.io", "앱 도메인 뒤에 붙인 것"], ["http://talk-lively-46e3.lvly.app", "https 아님"],
-    ["https://deck-lively-46e3.lvly.app", "다른 앱"], ["https://a.talk-lively-46e3.lvly.app", "칸이 둘"], ["https://talk-lively-46e3.lvly.app:8443", "포트"],
-    ["https://talk-lively-46e3.lvly.app/x", "출처가 아니라 경로까지"], ["javascript:alert(1)", "스킴"], ["", "빈 값"], ["not a url", "주소 아님"],
-  ]) assert.equal(F.appGrantReturn("talk", back, "/", D), null, why);
+  const D = "lvly.app", S = "lively-46e3";
+  assert.equal(F.appGrantReturn("talk", "pub", "/c/1?x=2#t", S, D), "https://talk-lively-46e3.lvly.app/c/1?x=2#t");
+  assert.equal(F.appGrantReturn("talk", "pub", null, S, D), "https://talk-lively-46e3.lvly.app/", "next 없으면 /");
+  assert.equal(F.appGrantReturn("talk", "draft", "/", S, D), "https://talk-lively-46e3-draft.lvly.app/", "초안 주소");
+  assert.equal(F.appGrantReturn("Talk", "pub", "/", "Lively-46E3", "LVLY.app"), "https://talk-lively-46e3.lvly.app/", "소문자로");
+  //  워크스페이스는 늘 지금 것 — 남의 슬러그는 인자로만 들어올 수 있고(셸이 state.me 에서 준다), 그 슬러그 그대로 쓴다
+  assert.equal(F.appGrantReturn("talk", "pub", "/", "evilws-9f0a", D), "https://talk-evilws-9f0a.lvly.app/", "받은 슬러그 그대로(셸이 지금 워크스페이스를 준다)");
+  for (const [args, why] of [
+    [["talk", "pub", "/", "", D], "슬러그 없음(앱 주소 꺼짐 · 셀프호스트)"], [["talk", "pub", "/", S, ""], "앱 도메인 없음"],
+    [["t", "pub", "/", S, D], "앱 id 꼴(2자 미만)"], [["ta lk", "pub", "/", S, D], "앱 id 꼴(공백)"], [["talk", "pub", "/", "a.b", D], "슬러그 꼴(점)"],
+    [["talk", "pub", "/", S, "lvly.app/x"], "도메인 꼴"], [["a".repeat(32), "draft", "/", "s".repeat(31), D], "63자 넘는 칸"],
+    [["xn--abc", "pub", "/", S, D], "IDNA 자리(xn--)"],
+  ]) assert.equal(F.appGrantReturn(...args), null, why);
   for (const [next, why] of [["//evil.example/", "// 로 시작"], ["evil", "/ 로 시작 안 함"], ["/a b", "공백"], ["/a\\b", "역슬래시"], ["/" + "a".repeat(2048), "2,048자 넘음"]]) {
-    assert.equal(F.appGrantReturn("talk", B, next, D), null, why);
+    assert.equal(F.appGrantReturn("talk", "pub", next, S, D), null, why);
   }
-  assert.equal(F.appGrantReturn("talk", B, "/", null), null, "앱 주소가 꺼진 워크스페이스");
-  ok("W4 appGrantReturn — 그 앱의 앱 주소 · 안전한 상대 경로만");
+  ok("W4 appGrantReturn — 지금 워크스페이스의 그 앱 주소 · 꼴 · 안전한 상대 경로만");
+}
+//  배선 — 셸의 동의 경유가 링크의 back 을 읽지 않고, 슬러그를 지금 워크스페이스(state.me.workspace_registry.current)에서 받는다
+{
+  const { readFileSync } = await import("node:fs");
+  const main = readFileSync(join(root, "web/v2/main.ts"), "utf8");
+  const grant = main.slice(main.indexOf("page === 'app-grant'"), main.indexOf("isWikiListRoute(tab.route)"));
+  assert.ok(grant.length > 0 && !/params\.get\('back'\)/.test(grant), "동의 경유가 링크의 back 을 읽지 않는다");
+  const callLine = grant.split("\n").find((l) => l.includes("appGrantReturn(appId")) || "";
+  assert.ok(callLine.includes("workspace_registry?.current") && callLine.includes("app_domain"), "슬러그는 지금 워크스페이스(state.me.workspace_registry.current)에서");
+  ok("W4b 배선 — back 을 안 읽고 지금 워크스페이스로 만든다");
 }
 
 console.log(`\n${pass} passed`);

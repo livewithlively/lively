@@ -19,6 +19,7 @@ import { getApp } from "../org/store/apps.js";
 import { canSeeApp } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { logToolCall } from "../org/policies/tool-log.js";
+import { CONSENT_REQUIRED } from "../apps/app-consent.js";
 
 // 방어심화: grant 에 있어도 UI 브리지가 절대 호출하지 않는 도구(신원·자격·grant·앱관리 mutator). 관리자 도구는
 //  이미 scope 게이트로 막히므로(앱은 admin/runtime 불가), 여기선 scope-null 이면서 보안상태를 바꾸는 것들을 겨냥한다.
@@ -48,8 +49,8 @@ const appToolCall: Capability = {
   },
 };
 
-/** 동의가 없거나 예전 범위라 막혔다 — 화면(web/v2/app-ui.ts)은 글의 «동의» 로, 앱 주소의 /_lively/* 는 이 code 로 가른다. */
-export const CONSENT_REQUIRED = "consent_required";
+/** 동의가 없거나 예전 범위라 막혔다 — 화면(web/v2/app-ui.ts)은 글의 «동의» 로, 앱 주소의 /_lively/* 는 이 code 로 가른다(apps/app-consent.ts). */
+export { CONSENT_REQUIRED };
 
 /**
  * 앱 화면이 부른 도구 하나를 그 앱 주체(그 사람 ∩ 그 사람의 앱 동의)로 실행한다 — 라이블리 화면의 다리(org_app_tool_call)와

@@ -115,9 +115,9 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
   const r = await run(d, "POST", "/store/notes/query", {});
   assert.equal(r.status, 403);
   assert.deepEqual(r.json, { code: "consent_required", error: "앱 'talk' 사용 동의(grant)가 없습니다",
-    consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/talk?v=pub&back=https%3A%2F%2Ftalk-lively-46e3.lvly.app" }, "C15 동의 자리 — 라이블리 동의 화면 · 이 앱 주소로 돌아온다");
+    consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/talk?v=pub" }, "C15 동의 자리 — 라이블리 동의 화면(돌아갈 앱 주소는 싣지 않는다 — 화면이 지금 워크스페이스로 만든다)");
   const rd = await run(d, "POST", "/store/notes/query", {}, { a: act({ var: "draft", mid: "alice" }), app: app({ draft_by: "alice", published_version_no: 2 }) });
-  assert.match(String((rd.json as { consent_url?: string }).consent_url), /v=draft&back=https%3A%2F%2Ftalk-lively-46e3-draft\.lvly\.app$/, "C15 초안 주소면 초안 주소로 돌아온다");
+  assert.equal((rd.json as { consent_url?: string }).consent_url, "https://lively-46e3.app.lvly.io/ui/#/app-grant/talk?v=draft", "C15 초안 주소면 v=draft");
   const { d: d2 } = deps({ tool: consent, gatewayBase: async () => null });
   const r2 = await run(d2, "POST", "/store/notes/query", {});
   assert.equal(r2.status, 403);
@@ -165,8 +165,23 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
   assert.equal(consentUrlFor(null, T.slug, "talk", "pub", ENV), null);
   assert.equal(consentUrlFor("https://w.example/", T.slug, "talk", "pub", {} as NodeJS.ProcessEnv), null, "앱 도메인이 없으면 돌아올 주소가 없다");
   assert.equal(consentUrlFor("https://w.example/", T.slug, "x".repeat(40), "pub", ENV), null, "주소를 못 만드는 이름");
+  assert.ok(!/back=/.test(String(consentUrlFor("https://w.example/", T.slug, "talk", "pub", ENV))), "돌아갈 주소(back)를 싣지 않는다");
   assert.equal(routeAppFrontApi("GET", "/store/tables", null) !== null, true);
   ok("순수 — apiPathOf · consentUrlFor");
+}
+
+// ── 세 자리가 같은 글자 — 서버 표지(apps/app-consent.ts) · 그 표지로 consent_url 을 다는 판정 · 웹 SDK 런타임(주입 문자열) ──
+//  이게 틀리면: 한쪽 글자만 바뀌어 동의 자리 첨부와 SDK 의 동의 이동이 조용히 사라진다(시험은 리터럴로 짜여 초록 — 격리 리뷰 7).
+{
+  const { CONSENT_REQUIRED } = await import("./app-consent.js");
+  const { readFileSync } = await import("node:fs");
+  const rt = readFileSync(new URL("../../web/v2/app-ui-runtime.ts", import.meta.url), "utf8");
+  const tc = readFileSync(new URL("../../src/capabilities/app-tool-call.ts", import.meta.url), "utf8");
+  assert.ok(rt.includes(`j.code === '${CONSENT_REQUIRED}'`), "SDK 런타임이 같은 글자로 가른다");
+  assert.ok(/body: \{ code: CONSENT_REQUIRED \}/.test(tc) && (tc.match(/code: CONSENT_REQUIRED/g) || []).length === 2, "도구 판정의 두 403(동의 없음 · 예전 범위)이 표지를 단다");
+  const { d } = deps({ tool: () => { throw new HttpError(403, "x", { body: { code: CONSENT_REQUIRED } }); } });
+  assert.ok("consent_url" in ((await run(d, "POST", "/store/sql", {})).json as object), "그 표지면 동의 자리가 붙는다");
+  ok("세 자리 consent_required 일치");
 }
 
 console.log(`\n${pass} passed`);

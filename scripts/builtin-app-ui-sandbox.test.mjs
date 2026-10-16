@@ -11,7 +11,7 @@
 //   · srcdoc 은 팝업도 없다 — 불투명 출처라 열린 창이 쿠키 · 저장소 없는 깨진 창이 된다(새 창은 lively.ui.openExternal).
 //  이게 틀리면: 폼 앱이 라이블리 안에서 조용히 안 돌거나(allow-forms 빠짐), 앱이 라이블리 탭을 피싱 주소로 옮기거나, srcdoc 앱이 라이블리 토큰을 읽는다.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -26,12 +26,12 @@ ok(/sandbox:\s*frameSandbox\('address'\)/.test(HOST), "앱 주소 iframe 은 fra
 ok(/allow:\s*frameAllow\(launch\?\.devices\)/.test(HOST), "앱 주소 iframe 의 장치 권한은 frameAllow(서버가 준 선언)");
 ok(!/sandbox:\s*'allow-/.test(HOST), "sandbox 값을 글자로 따로 적은 iframe 이 없다");
 
-// ② 정책 값 — 컴파일된 순수 모듈(public/app/lib/app-address.js). 빌드가 없으면 건너뛴다(CI 의 run-tests --build 가 돈다).
-const mod = join(root, "public/app/lib/app-address.js");
-if (!existsSync(mod)) {
-  console.log("builtin-app-ui-sandbox: 빌드 없음(public/app/lib/app-address.js) — 정책 값 시험 건너뜀");
-} else {
-  const F = await import(mod);
+// ② 정책 값 — 소스(web/lib/app-address.ts — 가져오는 것 없는 순수 모듈)를 esbuild 로 그 자리에서 옮겨 돌린다.
+//  빌드 산출물에 기대면 부분 실행(빌드 없음)에서 가장 중요한 값 단언이 조용히 건너뛰어졌다(격리 리뷰 10).
+{
+  const { transformSync } = await import("esbuild");
+  const js = transformSync(readFileSync(join(root, "web/lib/app-address.ts"), "utf8"), { loader: "ts", format: "esm" }).code;
+  const F = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
   const flags = (s) => new Set(String(s).split(/\s+/).filter(Boolean));
   const src = flags(F.frameSandbox("srcdoc"));
   const addr = flags(F.frameSandbox("address"));
@@ -55,5 +55,10 @@ if (!existsSync(mod)) {
   const decl = allow(["microphone", "camera", "usb", "microphone; camera *", 7]);
   ok(decl.has("microphone") && decl.has("camera") && !decl.has("usb") && decl.size === 5, "선언한 것만 · 모르는 값(usb) · 꼴 밖 값은 버린다");
   ok(allow("microphone").size === 3, "배열이 아니면 선언 없음");
+  //  서버 선언 목록(src/apps/manifest.ts APP_DEVICES)과 화면의 위임 목록이 같다 — 한쪽만 늘면 선언이 저장은 되는데 위임이 안 되거나 그 반대다
+  const man = readFileSync(join(root, "src/apps/manifest.ts"), "utf8");
+  const m = /export const APP_DEVICES = \[([^\]]*)\] as const;/.exec(man);
+  const serverList = m ? m[1].split(",").map((x) => x.trim().replace(/^"|"$/g, "")).filter(Boolean) : [];
+  ok(serverList.length > 0 && JSON.stringify(serverList) === JSON.stringify(F.FRAME_DEVICES), `서버 APP_DEVICES == 화면 FRAME_DEVICES (${serverList.join(",")} / ${F.FRAME_DEVICES.join(",")})`);
 }
 console.log(`\n${pass} passed`);

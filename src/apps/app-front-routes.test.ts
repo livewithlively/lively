@@ -105,8 +105,9 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   assert.equal((await appFrontMe(actH({ app: "mine" }), d)).status, 404, "남의 「나만」 앱 — 없는 앱과 같다(#4667)");
   const r = await appFrontMe(actH({ var: "draft" }), d);
   assert.equal(r.status, 200);
-  //  #4482 — app.title 과 동의 자리(consent_url)가 더해졌다. 이 배관(deps)엔 동의 자리를 만들 게이트웨이 주소가 없어 null.
-  assert.deepEqual(r.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "draft", title: "장표" }, session: null, consent_url: null });
+  //  #4482 — 동의 자리(consent_url)가 더해졌다. 이 배관(deps)엔 동의 자리를 만들 게이트웨이 주소가 없어 null.
+  //   앱 제목은 싣지 않는다 — 설치된 행의 제목은 남의 초안일 수 있다(격리 리뷰 6).
+  assert.deepEqual(r.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "draft" }, session: null, consent_url: null });
   ok("E4 me — 403·404·404 · 성공 모양(판 그대로 · 세션 null)");
 }
 
@@ -191,8 +192,8 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   //  C24 /_lively/me — 동의 자리 · 제목 · 세션은 늘 null
   const me = await appFrontMe(actH(), d);
   assert.equal(me.status, 200);
-  assert.deepEqual(me.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "pub", title: "장표" },
-    session: null, consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/deck-edit?v=pub&back=https%3A%2F%2Fdeck-edit-lively-46e3.lvly.app" });
+  assert.deepEqual(me.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "pub" },
+    session: null, consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/deck-edit?v=pub" });
   const meNoApi = await appFrontMe(actH(), deps().d);
   assert.equal((meNoApi.json as { consent_url?: unknown }).consent_url, null, "배관이 없으면 동의 자리 없음");
   ok("E7 같은 주소 API — 문 · 사람 · 앱 판정 · JSON · 503 · me 의 동의 자리");

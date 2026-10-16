@@ -98,6 +98,10 @@ const directives = (csp: string): Map<string, string> => new Map(csp.split(";").
   assert.ok(withBtn.includes("<button") && withBtn.includes("새 탭에서 열기"), "주소가 있으면 단추");
   assert.ok(withBtn.includes(`onclick='window.lively&amp;&amp;window.lively.ui.openExternal("https://talk-lively-46e3.lvly.app/?page=main&amp;x=1")'`),
     "홑따옴표 속성 · & 는 &amp; · 주소는 JSON 문자열");
+  //  주소의 $& · $' 가 치환 패턴으로 읽히지 않는다(격리 리뷰 9 — 문자열 치환이면 «</body>» 가 끼어든다)
+  const dollar = multiFileFallbackHtml("톡", "https://talk-lively-46e3.lvly.app/?x=$&y=$$z=$1");
+  assert.equal((dollar.match(/<\/body>/g) || []).length, 1, "</body> 는 하나(치환 패턴이 끼어들지 않았다)");
+  assert.ok(dollar.includes("x=$&amp;y=$$z=$1"), "$& · $$ · $1 은 글자 그대로(& 만 &amp;)");
   for (const bad of ["javascript:alert(1)", "https://x.lvly.app/'onmouseover='alert(1)", "https://x.lvly.app/\"><script>", "http://x.lvly.app/", "https://x.lvly.app/a b", "https://x.lvly.app/`x`", "https://x.lvly.app"]) {
     assert.ok(!multiFileFallbackHtml("톡", bad).includes("<button"), `꼴 밖 주소엔 단추 없음 — ${bad}`);
   }
