@@ -25,6 +25,11 @@ export interface SessLike {
   endNote?: { why?: string; at?: number; code?: number; seen?: boolean } | null;
   /** #4695 T5 — 하네스 종료 규칙이 끄며 남긴 쪽지(사유만 읽는다 — 본문은 대화창 몫). 복원 가능 행에만 실린다. */
   stopNote?: { why?: string; at?: number } | null;
+  /**
+   * #4783 후속 — 종료 규칙이 **마지막으로 관측한 실행 상태**(서버 SessionInfo.lastRun — src/sessions/session-state.ts last_run_state).
+   *  endNote·stopNote 가 비어도(세션이 끝낸 자리를 안 거치고 꺼짐) 이 값이 «꺼질 때 무슨 상태였나» 를 말한다. 복원 가능 행에만 실린다.
+   */
+  lastRun?: { at?: number; run?: string } | null;
 }
 
 // 표시 문구 · CSS 클래스 · 정렬 우선순위(작을수록 먼저) · 필터 설명.
@@ -222,6 +227,12 @@ export function sessEndKind(s: SessLike): SessEndKind {
   if (why === 'reclaim') return 'system';
   const sw = s.stopNote && typeof s.stopNote.why === 'string' ? s.stopNote.why : '';
   if (sw === 'done' || sw === 'asking') return 'system';
+  //  #4783 후속(상민님 2026-10-16 «사유 모름이 유저 행동 필요한 세션을 숨기는 꼴») — 끝낸 자리가 사유를 안 남기고 꺼졌어도,
+  //   종료 규칙이 마지막으로 본 실행 상태가 있으면 그걸로 가른다(세션이 노드 죽음·재시작·PC 꺼짐으로 꺼져도 남는 값).
+  //   working 중 꺼짐 = 작업 도중 끊김(사람이 안 끝냈고 봐야 한다) → 고장. asking·완료·백그라운드·예약 중 꺼짐 = 끄기 직전 상태 보존(시스템).
+  const run = s.lastRun && typeof s.lastRun.run === 'string' ? s.lastRun.run : '';
+  if (run === 'working') return 'error';
+  if (run === 'asking' || run === 'done' || run === 'bg' || run === 'scheduled') return 'system';
   return 'unknown';
 }
 
@@ -233,12 +244,15 @@ export function sessEndKind(s: SessLike): SessEndKind {
  */
 export function stoppedDotKey(s: SessLike, nowMs: number = Date.now()): '' | 'waiting' | 'done' | 'error' {
   const k = sessEndKind(s);
+  const run = s.lastRun && typeof s.lastRun.run === 'string' ? s.lastRun.run : '';
   //  끝난 지 오래된 것은 «지금 볼 것» 이 아니라 이력이다 — 안 본 결과는 하루(isUnreadDone 과 같은 자), 답할 질문·고장은 이레.
-  const at = Number((s.endNote && s.endNote.at) || (s.stopNote && s.stopNote.at) || 0);
+  const at = Number((s.endNote && s.endNote.at) || (s.stopNote && s.stopNote.at) || (s.lastRun && s.lastRun.at) || 0);
   const age = at ? nowMs / 1000 - at : 0;
   if (k === 'error') return !at || age <= 7 * 24 * 3600 ? 'error' : '';
   if (k !== 'system') return '';
-  if (s.stopNote && s.stopNote.why === 'asking') return !at || age <= 7 * 24 * 3600 ? 'waiting' : '';
+  //  답을 기다리다 꺼졌으면 «확인 필요»(이레) — 끄기 쪽지가 asking 이거나, 마지막 관측이 질의 대기였거나(유저 행동이 필요한 세션 — 숨기지 않는다).
+  if ((s.stopNote && s.stopNote.why === 'asking') || run === 'asking') return !at || age <= 7 * 24 * 3600 ? 'waiting' : '';
+  //  안 본 결과가 남은 채 꺼졌으면 «작업 완료»(하루) — 서버가 끌 때 잰 seen=false. 마지막 관측만 «완료» 인 경우는 봤는지 모르니 점을 안 준다(보통 줄).
   if (s.endNote && s.endNote.seen === false && at && age <= 24 * 3600) return 'done';
   return '';
 }

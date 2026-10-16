@@ -78,6 +78,20 @@ export interface SessionState {
   // #4783 — 이 판이 **왜 끝났나**(session-end.ts). 판이 태어날 때 {v:1} 이 찍히고, 끝낸 자리가 why 를 적는다. 조회 결과에만 실린다
   //  (쓰는 자리는 markSessionEnded·markSessionEndSeen 과 판 시작 upsert 뿐이다). null = 옛 판(사유를 모른다).
   end_note?: SessionEndNote | null;
+  // #4783 후속 — **마지막으로 관측한 실행 상태**(종료 규칙 sweep 이 매 틱 관측할 때마다 적는다). end_note 가 빌 때의 폴백 —
+  //  세션이 끝낸 자리를 안 거치고 꺼져도(노드 죽음·재시작·PC 꺼짐·고장) 꺼질 때 상태를 안다. 조회 결과에만 실린다.
+  last_run_state?: SessionLastRunState | null;
+}
+
+/**
+ * #4783 후속 — 종료 규칙이 마지막으로 관측한 이 세션의 실행 상태. 세션이 어떤 길로 꺼지든 이 값이 남아
+ *  화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 도중 끊김=고장 · asking=확인 필요 · done=완료).
+ */
+export interface SessionLastRunState {
+  /** 관측 시각(epoch초) */
+  at: number;
+  /** working(턴·백그라운드 작업 전 작업 중) · done(턴 끝·기다리는 일 없음) · asking(승인·선택 대기) · bg(백그라운드 작업) · scheduled(예약 깨움 대기) */
+  run: "working" | "done" | "asking" | "bg" | "scheduled";
 }
 
 /**
@@ -144,7 +158,17 @@ export function rowToState(r: Record<string, any>): SessionState {
     superseded_by: (r.superseded_by as string | null) ?? null,   // #2231 — 이어진 새 세션 id(이정표)
     stop_note: stopNoteOf(r.stop_note),                            // #4695 T5 — 끄기 전에 남긴 쪽지(모양이 틀리면 없음)
     end_note: endNoteOf(r.end_note),                               // #4783 — 이 판이 왜 끝났나(모양이 틀리면 없음 = 모름)
+    last_run_state: lastRunStateOf(r.last_run_state),              // #4783 후속 — 마지막 관측 실행 상태(end_note 가 빌 때의 폴백)
   };
+}
+
+/** #4783 후속 — DB 의 last_run_state 를 읽는다. 시각·run 이 없거나 모르는 값이면 없음(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
+export function lastRunStateOf(v: unknown): SessionLastRunState | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const n = v as Record<string, unknown>;
+  if (typeof n.at !== "number" || !Number.isFinite(n.at)) return null;
+  if (n.run !== "working" && n.run !== "done" && n.run !== "asking" && n.run !== "bg" && n.run !== "scheduled") return null;
+  return { at: n.at, run: n.run };
 }
 
 /** #4695 T5 — DB 의 쪽지를 읽는다. 끈 시각·사유가 없는 값은 쪽지가 아니다(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
@@ -439,6 +463,19 @@ export async function markSessionEndSeen(id: string): Promise<boolean> {
 }
 
 /**
+ * #4783 후속 — 종료 규칙 sweep 이 관측한 세션의 **마지막 실행 상태**를 적는다(덮어쓴다). 행이 없으면 아무 일도 없다.
+ *  sweep 은 run 이 바뀌었을 때만 부른다(매 틱 전수 UPDATE 를 피한다). best-effort — 반환은 «적었나».
+ */
+export async function markSessionLastRunState(id: string, s: SessionLastRunState): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET last_run_state=$2::jsonb, updated_at=now() WHERE id=$1",
+    [id, JSON.stringify({ at: Math.floor(s.at), run: s.run })],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
  * #4694 — **같은 id 로 다시 띄운 세션**의 «끝났다» 표식을 지운다(createSession reuseId 가 행을 다시 쓴 직후 부른다).
  *
  *  upsertSessionState 는 이 칸들을 일부러 안 건드린다(생성 시점엔 미상 — 훅이 사후에 채운다). 새 id 로 복원하던 때는
@@ -622,6 +659,8 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  안 지우면 «그 판의 첫 사실이 이긴다» 규칙(markSessionEnded)이 새 판의 끝을 지난 판의 사유로 막는다. 되살리기가 실패하면
        --  createSession 이 지난 판의 사유를 되돌린다(restoreSessionEndNote — 실패한 시도는 판이 아니다).
        end_note=EXCLUDED.end_note,
+       -- #4783 후속 — 판이 새로 서면 지난 판의 «마지막 관측 상태» 도 지운다(새 판은 아직 관측 전이다). 다음 sweep 이 다시 채운다.
+       last_run_state=NULL,
        last_busy=EXCLUDED.last_busy, app_id=EXCLUDED.app_id, last_seen=now(), updated_at=now()`,
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,

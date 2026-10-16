@@ -41,7 +41,7 @@ import {
   type ScreenCapture,
 } from "../terminal/harness-io/stop-capture.js";
 import type { ReportedState } from "../terminal/phase.js";
-import { listAllSessionStates, setSessionStopNote, type SessionState, type SessionStopNote, type StopQuestion } from "./session-state.js";
+import { listAllSessionStates, setSessionStopNote, markSessionLastRunState, type SessionState, type SessionStopNote, type StopQuestion, type SessionLastRunState } from "./session-state.js";
 import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
@@ -212,6 +212,29 @@ export function stopFactsOf(s: SessionInfo, st: Partial<Pick<SessionState, "kind
   };
 }
 
+/**
+ * (순수) 지금 관측한 facts 로 본 이 세션의 **실행 상태** — last_run_state 에 적는다(세션이 끝낸 자리를 안 거치고 꺼져도 이 값이 남아
+ *  화면이 «꺼질 때 무슨 상태였나» 를 그린다). stopVerdict ③과 **같은 판별**이되 «보는 중/시계» 와 무관하다 — run 은 «끄느냐» 가 아니라
+ *  «무슨 상태냐» 다. null = 가릴 수 없음(관측 못 함 · 하네스가 끝나 셸만 남음 — 그건 end_note harness_exit 의 몫).
+ */
+export function runStateFromFacts(f: StopFacts, nowSec: number): SessionLastRunState["run"] | null {
+  if (!f.observed) return null;
+  if (f.agentState === "exited") return null;
+  if (f.working || f.harnessWorking || f.agentState === "busy") return "working";
+  if (f.awaiting || f.agentState === "waiting") return "asking";
+  const r = f.lastReport;
+  if (f.background) return "bg";
+  if (r?.phase === "idle" && (r.bg ?? 0) > 0) return "bg";
+  if (r?.phase === "idle" && r.wake !== undefined) {
+    if (r.wake > 0 && r.wake > nowSec - WAKE_GRACE_SEC) return "scheduled";
+    if ((r.cron ?? 0) > 0) return "scheduled";
+  }
+  //  claude 는 예약 셈이 턴 끝 보고에 실렸을 때만 «완료» 를 확신한다(옛 훅·옛 호스트 보고엔 wake 칸이 없다) — 그 전엔 예약을 모를 수 있으니
+  //   «완료» 로 적지 않는다(working 도 asking 도 아니면 상태를 비워 둔다 → 화면은 종전처럼 사유 모름으로, 거짓 완료를 안 만든다).
+  if (f.harness === "claude" && !(r?.phase === "idle" && r.wake !== undefined)) return null;
+  return "done";
+}
+
 /** 끄는 시각(분)을 정책에서 읽는다 — 정책이 모르는 칸이면 기본값. */
 export function stopMinutesOf(p: Partial<SessionReclaimPolicy>): StopMinutes {
   const n = Number(p.stop_done_minutes), m = Number(p.stop_asking_minutes);
@@ -236,6 +259,8 @@ export interface StopRuleDeps {
   quotaWait: (s: SessionInfo, nowMs: number) => Promise<QuotaWait | null>;
   keys: (id: string, key: string) => Promise<void>;
   saveNote: (id: string, note: SessionStopNote) => Promise<unknown>;
+  /** #4783 후속 — 관측한 실행 상태를 적는다(run 이 바뀌었을 때만 부른다). 선택 — 안 주면 실행 상태를 안 적는다(옛 시험 무회귀). */
+  markLastRun?: (id: string, s: SessionLastRunState) => Promise<unknown>;
   reap: (id: string) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
@@ -324,6 +349,7 @@ function defaultDeps(): StopRuleDeps {
     quotaWait: defaultQuotaWait(),
     keys: async (id, key) => { await tmuxQuiet(["send-keys", "-t", id, key]); },
     saveNote: (id, note) => setSessionStopNote(id, note),
+    markLastRun: (id, s) => markSessionLastRunState(id, s),
     reap: (id) => reapCentralSession(id),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     now: () => Date.now(),
@@ -361,8 +387,13 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const nowSec = Math.floor(d.now() / 1000);
     const due: Array<{ s: SessionInfo; state: StopState; since: number }> = [];
     let nextDue = Infinity;
+    //  #4783 후속 — 관측한 실행 상태가 바뀌었으면 적는다(세션이 어떤 길로 꺼져도 이 값이 남는다). run 이 그대로면 안 쓴다(매 틱 전수 UPDATE 를 피한다).
+    const runWrites: Array<Promise<unknown>> = [];
     for (const s of live) {
       const f = stopFactsOf(s, byId.get(s.id), managedIds);
+      const run = runStateFromFacts(f, nowSec);
+      const prevRun = byId.get(s.id)?.last_run_state?.run ?? null;
+      if (run && run !== prevRun && d.markLastRun) runWrites.push(d.markLastRun(s.id, { at: nowSec, run }).catch(() => undefined));
       const v = stopVerdict(f, d.view(s.id), mins, nowSec);
       if (v.act === "keep") {
         count(v.why);
@@ -372,6 +403,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       }
       due.push({ s, state: v.state, since: v.since });
     }
+    if (runWrites.length) await Promise.allSettled(runWrites);   // best-effort — 실행 상태 기록이 집행을 막지 않는다
     //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정 자체가 실패하면 **이번 판은 아무것도 안 끈다**
     //   (회수기는 «방어를 멈추지 않으려고» 종전대로 진행하지만, 이 규칙은 메모리 압박 방어가 아니라 «끝난 것을 치우는» 일이라 한 판 미뤄도 된다).
     //   세션 하나를 판정하지 못했으면(프로브 실패·타임아웃·빈 표) **그 세션만** 이번 판에 안 끈다(jobs-unknown — 격리 리뷰: 회수기처럼 «작업 없음» 으로

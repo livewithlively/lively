@@ -201,6 +201,8 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       //  #4783 — 이 판이 왜 끝났나. 시작 중인 행엔 싣지 않는다(끝난 판이 아니다). 남에게도 싣는다 — 사유는 사적인 글이 아니고,
       //   초대받은 사람·프로젝트 동료의 화면도 «지난 세션 / 끄기 직전 모습 / 오류» 를 같은 규칙으로 그려야 한다.
       ...(!starting && endNoteForRow(s.end_note) ? { endNote: endNoteForRow(s.end_note) } : {}),
+      //  #4783 후속 — 마지막 관측 실행 상태. endNote 가 비어도 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 끊김=고장 · asking=확인 필요).
+      ...(!starting && s.last_run_state ? { lastRun: { at: s.last_run_state.at, run: s.last_run_state.run } } : {}),
       // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
       //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
       ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),

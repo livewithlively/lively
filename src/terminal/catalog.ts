@@ -490,6 +490,9 @@ export interface SessionInfo {
   // #4783 — 이 판이 **왜 끝났나**(sessions/session-end.ts). **복원 가능 행에만** 실린다 — 화면이 «사람이 끝냄(지난 세션) · 시스템이 끔
   //  (끄기 직전 모습) · 고장(오류)» 을 가르는 재료다. 없음 = 모름(옛 판이거나 아직 확인 전) — 화면은 종전처럼 지난 세션으로 그린다.
   endNote?: SessionEndForRow;
+  // #4783 후속 — 종료 규칙이 **마지막으로 관측한 실행 상태**(session-state.ts last_run_state). **복원 가능 행에만** 실린다 — endNote 가 비어도
+  //  (세션이 끝낸 자리를 안 거치고 꺼짐) 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 끊김=고장 · asking=확인 필요). 없음 = 아직 관측 전.
+  lastRun?: { at: number; run: "working" | "done" | "asking" | "bg" | "scheduled" };
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
