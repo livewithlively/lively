@@ -17,6 +17,8 @@
 // ## 권한
 //  이 화면은 특권이 없다 — 파일을 읽는 API 가 기존 게이트(공유폴더 ACL + 프로젝트 가시성)를 그대로 집행한다.
 //  안 보이는 경로는 목록에서 빠지므로 여기선 '찾을 수 없음'으로 보인다(존재 은닉 정책과 같은 결).
+//  옮긴 파일의 옛 링크(#4688)도 같다 — 서버가 옛 경로와 닿은 자리를 둘 다 이 사람 기준으로 판정한 뒤에만 새 자리를 답한다.
+//  셸 `mv` 로 옮긴 것은 서버가 모른다(기록 없음) — '옮겨졌거나 지워졌을 수 있어요' 그대로다(같은 이름 후보는 #4672 자료 보기 화면).
 import { TOKEN_KEY, api, apiUrl, el, errorNote, toast } from './core.js';
 import { copyFileLink, fileLinkHash, joinRel, shareLinkIcon, shareRootLabel } from './lib/sharelink.js';
 import { buildFilePreview } from './lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(세 화면 공용)
@@ -34,11 +36,30 @@ function fileFetch(url: string): Promise<Response> {
 const browseQs = (root: string, rel: string): string =>
   'root=' + encodeURIComponent(root) + '&path=' + encodeURIComponent(rel || '');
 
+// ── 옮긴 파일의 옛 링크(#4688) ──────────────────────────────────────────────
+//  웹·API 로 이름을 바꾸거나 옮기면 서버가 «옛 경로 → 새 경로» 를 남긴다. 여기서 대상을 못 찾으면 그 기록을 물어(GET browse/moved)
+//  지금 자리로 넘긴다 — 서버가 닿은 자리를 **이 사람 기준으로 다시 판정**한 뒤에만 답하므로 이 화면은 특권이 없다(아래 «권한»).
+//  주소창에는 새 주소만 남긴다(replace — 뒤로가기가 옛 주소로 돌아와 다시 넘기는 고리가 없다 · 링크 복사도 새 주소).
+//  «옮겨진 파일이에요» 한 줄은 넘어온 직후 한 번만 — 넘어간 자리에서 또 못 찾으면 더 따라가지 않는다(서버가 단계 상한을 진다).
+let movedNotice: { root: string; from: string; to: string } | null = null;
+
+/** 옛 경로의 지금 자리 — 기록이 없거나 · 지금 그 자리를 볼 수 없거나 · 옛 자리에 무엇이 있으면 null(종전 안내 그대로). */
+async function movedTo(root: string, rel: string): Promise<string | null> {
+  try {
+    const d = await api('/api/ui/terminal/browse/moved?' + browseQs(root, rel));
+    const to = d && d.moved && typeof d.path === 'string' ? d.path : '';
+    return to && to !== rel ? to : null;
+  } catch (_) { return null; }
+}
+
 /** 라우터 진입점 — #/f?root=&path= 를 그린다. */
 async function renderFilePage(view, params): Promise<void> {
   const root = String(params.get('root') || 'shared');
   const rel = String(params.get('path') || '').replace(/^\/+|\/+$/g, '');
   const name = rel ? rel.split('/').pop()! : shareRootLabel(root);
+  const arrived = movedNotice && movedNotice.root === root && movedNotice.to === rel ? movedNotice : null;
+  movedNotice = null;
+  const startHash = location.hash;   // 기다리는 사이 사람이 다른 화면으로 갔으면 끌고 오지 않는다(아래 옛 링크 넘기기)
 
   const stage = el('div', { class: 'fpg-stage' }, el('div', { class: 'fpg-msg', text: '불러오는 중…' }));
   const acts = el('div', { class: 'fpg-acts' });
@@ -47,7 +68,12 @@ async function renderFilePage(view, params): Promise<void> {
       el('div', { class: 'fpg-name', title: name, text: name }),
       crumb(root, rel)),
     acts);
-  view.replaceChildren(el('div', { class: 'fpg' }, head, stage));
+  const note = arrived
+    ? el('div', { class: 'fpg-moved', role: 'status' },
+      el('b', { text: '옮겨진 자리로 열었어요' }),
+      el('span', { class: 'fpg-moved-from', text: '받은 링크의 예전 자리: ' + shareRootLabel(root) + ' / ' + arrived.from }))
+    : null;
+  view.replaceChildren(el('div', { class: 'fpg' }, ...(note ? [head, note, stage] : [head, stage])));
 
   // 루트 자신은 언제나 폴더 — 부모가 없어 아래 '부모 목록에서 나를 찾기'가 성립하지 않는다.
   if (!rel) { await showDir(root, '', stage, acts); return; }
@@ -65,9 +91,17 @@ async function renderFilePage(view, params): Promise<void> {
     return;
   }
   if (!entry) {
+    //  웹·API 로 옮긴 것이면 지금 자리로 넘긴다(#4688) — 넘어온 자리에서 또 못 찾았으면(arrived) 더 따라가지 않는다.
+    const to = arrived ? null : await movedTo(root, rel);
+    if (location.hash !== startHash) return;
+    if (to) {
+      movedNotice = { root, from: rel, to };
+      location.replace(fileLinkHash(root, to));
+      return;
+    }
     stage.replaceChildren(el('div', { class: 'fpg-msg fpg-msg-empty' },
       el('b', { text: '이 링크의 대상을 찾을 수 없어요' }),
-      el('span', { text: '파일이 옮겨졌거나 이름이 바뀌었을 수 있어요. 볼 권한이 없을 때도 같게 보입니다 — 공유한 사람에게 확인해 주세요.' }),
+      el('span', { text: '파일이 옮겨졌거나 지워졌을 수 있어요. 볼 권한이 없을 때도 같게 보입니다 — 공유한 사람에게 확인해 주세요.' }),
       el('div', { class: 'fpg-msg-path', text: shareRootLabel(root) + ' / ' + rel })));
     acts.replaceChildren(...tailActions(root, rel, 'file'));
     return;

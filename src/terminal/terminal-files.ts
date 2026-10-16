@@ -44,9 +44,12 @@ import { relayNodeId, sameTmuxCoordinate, isBoxSessionRow } from "../node/self-n
 import { getSessionState } from "../sessions/session-state.js";
 import { folderVariants, grantSharedGroupWrite } from "../project/project-fs.js";
 import {
-  sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf,
+  sharedFolderGate, renameSharedFolderAclPrefix, restrictedProjectFolders, projectFolderOf, isProjectContainerPath, isProjectFolderOrAncestor,
   type SharedFolderGate,
 } from "../v6/shared-folder-store.js";
+import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기 뒤 자료 좌표 + «옛 경로 → 새 경로»
+import { followMoves, normalizeMovePath } from "../files/file-move-core.js";
+import { SHARED_MOVE_SCOPE, personalMoveScope, findFileMove } from "../v6/file-move-store.js";
 import { APPS_ROOT_KEY } from "./catalog.js";
 import { readableAppFoldersFor } from "../files/files-live.js";   // #4673 — 앱 폴더는 그 앱에 동의한 구성원만
 
@@ -329,6 +332,18 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const toAbs = path.resolve(path.dirname(abs), toName);
     if (toAbs !== base && !toAbs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
     assertNotAppFolderMount(path.relative(base, abs), path.relative(base, toAbs));
+    const rootKey = String(req.query.root ?? "");
+    //  #4688 — 프로젝트의 폴더 자리(`project` · `legacy-project` · 그 아래 `<id>` · DB 에 적힌 프로젝트 폴더와 그 조상)는 여기서 이름을
+    //   바꾸지 않는다 — 프로젝트 폴더 · 자료 좌표 · 공개범위 판정이 그 경로를 기준으로 한다(isProjectContainerPath 머리말). 그 안의 파일·폴더는 된다.
+    if (rootKey === SHARED_ROOT_KEY) {
+      const fromRel = path.relative(base, abs), toRel = path.relative(base, toAbs);
+      if (isProjectContainerPath(fromRel) || isProjectContainerPath(toRel) || await isProjectFolderOrAncestor(fromRel) || await isProjectFolderOrAncestor(toRel)) {
+        throw new HttpError(400, "프로젝트 폴더는 여기서 이름을 바꿀 수 없어요");
+      }
+    }
+    //  자료 좌표는 옮기기 **전에** 푼다(지우기와 같은 순서) — 공유 루트 아래 project/<id>/… 는 프로젝트 좌표로 접힌다(같은 파일 = 같은 자료).
+    //   새 이름은 같은 폴더 안이라 같은 좌표 루트다(프로젝트 폴더 자리는 위에서 막았다) — 새 자리도 이 좌표의 기준으로 푼다.
+    const loc = await localRootForBrowse(rootKey, userOf(req), base, abs).catch(() => null);
     if (osUser) {
       if (await memberStat(osUser, toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
       await memberMv(osUser, abs, toAbs);
@@ -340,10 +355,17 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     //  되고 새 경로는 규칙이 없어 open). fail-open 방향이라 절대 놓치면 안 되는 동기화다. 파일 rename 이어도
     //  경로 prefix 규칙은 같아서 그냥 호출한다(해당 행이 없으면 0건 no-op).
     //  ⚠ 셸에서 `mv` 로 옮기면 여기 안 걸린다 — 그 구멍은 §4.7 OS 강제와 함께 닫는다. best-effort(실패해도 rename 은 이미 끝났다).
-    if (String(req.query.root ?? "") === SHARED_ROOT_KEY) {
+    if (rootKey === SHARED_ROOT_KEY) {
       await renameSharedFolderAclPrefix(path.relative(base, abs), path.relative(base, toAbs))
         .catch((e) => console.warn("[browse] 공개범위 경로 동기화 실패:", (e as Error)?.message ?? e));
     }
+    //  #4688 — 같은 자리에서 자료가 새 이름으로 이어지고 «옛 경로 → 새 경로» 가 남는다(옛 링크가 새 자리로 열린다 — 아래 browse/moved).
+    //   기록의 자리: 공유 루트는 하나 · 개인 폴더는 주인별(root=personal 링크는 여는 사람 자신의 폴더로 풀린다). 실패는 남기고 삼킨다.
+    const scope = rootKey === SHARED_ROOT_KEY ? SHARED_MOVE_SCOPE : loc?.root.kind === "personal" ? personalMoveScope(loc.root.member) : null;
+    const local = loc
+      ? { root: loc.root, fromRel: path.relative(loc.base, abs), toRel: path.relative(loc.base, toAbs), folder: loc.folder, channelFallback: loc.channelFallback }
+      : null;
+    await settleFileMove({ scope, fromPath: path.relative(base, abs), toPath: path.relative(base, toAbs), local, by: viewerFor(req) });
     res.json({ ok: true });
   }));
   // ── 파일 휴지통(#3778 후속 — 개인·공유 폴더) ──────────────────────────────────────────────────────────
@@ -455,6 +477,37 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       await fsRemove(osUser, inBase(base, path.posix.join(FILE_TRASH_DIR, row.stamp.batch))).catch(() => { /* 비치명 */ });
     }
     res.json({ ok: true, purged: true, id: row.id });
+  }));
+
+  // ── 옛 링크 풀기(#4688) — 웹·API 로 이름을 바꾸거나 옮긴 파일·폴더의 옛 경로 → 지금 자리 ─────────────────────────
+  //  링크 착지 화면(web/filepage)이 «찾을 수 없음» 을 그리기 전에 부른다. 답은 {root, path, moved} 하나 — 화면은 그 자리 링크로 넘긴다.
+  //  · 옛 경로부터 지금 판정을 지난다(resolveBrowse) — 안 보이는 경로는 404 이고, 기록이 있는지도 말하지 않는다.
+  //  · 옛 경로에 지금 실제로 무엇이 있으면 그것이 이긴다(moved:false — 따라가지 않는다. 옛 자리에 새 파일이 생긴 경우).
+  //  · 기록을 따라 닿은 자리를 **이 사람 기준으로 다시 판정**한다 — 안 보이면 없는 것과 같은 404. 단계 상한은 file-move-core.
+  //  · 개인 폴더 기록은 주인별이라 root=personal 은 여는 사람 자신의 기록만 따라간다(링크가 그 사람 폴더로 풀리는 것과 같다).
+  //  · 셸 `mv` 로 옮긴 것은 기록이 없어 404 그대로다 — 같은 이름 후보를 보여 주는 화면은 #4672(자료 보기).
+  app.get("/api/ui/terminal/browse/moved", auth, wrap(async (req, res) => {
+    const rootKey = String(req.query.root ?? "");
+    if (rootKey !== SHARED_ROOT_KEY && rootKey !== "personal") throw new HttpError(404, "옮긴 기록이 없습니다");
+    const { base, abs, osUser, gate } = await resolveBrowse(req, true);
+    const rel = normalizeMovePath(path.relative(base, abs));
+    if (!rel) throw new HttpError(404, "옮긴 기록이 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    if (await fsExists(osUser, abs)) { res.json({ root: rootKey, path: rel, moved: false }); return; }
+    const mine = rootKey === SHARED_ROOT_KEY ? null : await localRootForBrowse(rootKey, userOf(req), base, base);
+    const scope = rootKey === SHARED_ROOT_KEY ? SHARED_MOVE_SCOPE : mine?.root.kind === "personal" ? personalMoveScope(mine.root.member) : null;
+    if (!scope) throw new HttpError(404, "옮긴 기록이 없습니다");
+    const hit = await followMoves(rel, {
+      lookup: (p, since) => findFileMove(scope, p, since),
+      exists: async (p) => {
+        let at: string;
+        try { at = inBase(base, p); await assertJailed(base, at, osUser); } catch { return false; }   // 링크로 바깥을 가리키면 없는 것
+        return fsExists(osUser, at);
+      },
+      visible: (p) => !gate || gate.ok(p),
+    });
+    if (!hit) throw new HttpError(404, "옮긴 기록이 없습니다");
+    res.json({ root: rootKey, path: hit.path, moved: true, from: rel, hops: hit.hops });
   }));
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
   app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {

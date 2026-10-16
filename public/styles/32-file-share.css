@@ -44,6 +44,12 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .fpg-msg-empty span { max-width: 460px; }
 .fpg-msg-path { margin-top: 4px; font-size: 12px; color: var(--muted-2); word-break: break-all; max-width: 520px; }
 
+/* 옮긴 파일의 옛 링크로 왔을 때(#4688) — 새 자리로 열었다는 한 줄과 받은 링크의 예전 자리. 넘어온 직후 한 번만 선다. */
+.fpg-moved { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 20px; flex: 0 0 auto;
+  font-size: 12.5px; color: var(--ink-sub); background: var(--bg-tint); border-bottom: 1px solid var(--line); }
+.fpg-moved b { color: var(--ink); font-weight: 600; }
+.fpg-moved-from { color: var(--muted-2); word-break: break-all; }
+
 /* 타입별 표시면 */
 .fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(var(--shadow-ink), .14); }
 .fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
@@ -84,6 +90,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 @media (max-width: 720px) {
   .fpg-head { flex-wrap: wrap; gap: 10px; padding: 10px 14px; }
   .fpg-acts { width: 100%; }
+  .fpg-moved { padding: 8px 14px; }
   .fpg-stage { padding: 12px 12px 18px; }
   .fpg-row-dt { display: none; }
 }
