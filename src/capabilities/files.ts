@@ -15,15 +15,36 @@ import {
   sessionPathToAddress, addressToSessionPath, type FileAddress, type SessionView,
 } from "../files/address.js";
 import { clampTtl, type FileUrlMethod } from "../files/file-url-token.js";
-import type { FilePrincipal } from "../files/file-access.js";
+import { authorizeFileAccess, type FilePrincipal } from "../files/file-access.js";
 import { mintFileUrl } from "../files/file-url.js";
-import { liveMintDeps, fileUrlTenantId } from "../files/files-live.js";
+import { liveMintDeps, liveFileAccessDeps, fileUrlTenantId } from "../files/files-live.js";
+import { movedAddress } from "../files/address-move.js";
+import { locateAddress, statAt } from "../files/signed-routes.js";
+import { findFileMove, SHARED_MOVE_SCOPE } from "../v6/file-move-store.js";
 
 /** 서명 주소 발급 빈도 — (구성원, 앱) 마다 분당. 화면이 그림 수십 장을 한꺼번에 받는 일을 막지 않을 만큼 넉넉하게. */
 export const FILE_URL_PER_MINUTE = 300;
 const rate = new RateWindow(FILE_URL_PER_MINUTE);
 
 const principalOf = (user: LivelyUser): FilePrincipal => ({ member: user.userId, scopes: user.scopes ?? [], app: user.appId ?? null });
+
+/**
+ * 옛 주소면 지금 자리(#4822 — 규칙은 files/address-move). 판정은 받기 주소와 같은 권한표(authorizeFileAccess read),
+ *  «지금 거기 있나» 는 받기 주소를 쓸 때와 같은 봉쇄 · 같은 멤버 경계(signed-routes locateAddress)로 본다.
+ *  자리 밖을 가리키는 링크 등으로 못 본 것은 «판정 불가»(null) — 옛 주소면 따라가지 않고, 닿은 자리면 없는 것과 같다.
+ */
+function movedAddressFor(a: FileAddress, user: LivelyUser, alsoVisible?: (to: FileAddress) => boolean): Promise<FileAddress | null> {
+  const p = principalOf(user);
+  return movedAddress(a, {
+    canRead: (x) => authorizeFileAccess(p, x, "read", liveFileAccessDeps).then(() => true, () => false),
+    exists: async (x) => {
+      let at: Awaited<ReturnType<typeof locateAddress>>;
+      try { at = await locateAddress(user, x, "read"); } catch { return null; }
+      return (await statAt(at.abs, at.osUser)) !== null;
+    },
+    lookup: (rel, since) => findFileMove(SHARED_MOVE_SCOPE, rel, since),
+  }, alsoVisible);
+}
 
 /** 사람에게 줄 링크(#1436 · 웹 «자료 보기» 화면은 #4672). base 를 못 정하면 해시만. */
 async function humanLink(a: FileAddress): Promise<string> {
@@ -107,7 +128,9 @@ const fileUrl: Capability = {
   description: "주소 하나로 파일을 받고(GET) 올리는(PUT) 짧은 수명 서명 주소(기본 15분)를 준다 — 돌려준 url 에 쿠키 · 토큰 없이 그 method 로 요청하면 된다(curl -o / curl -T). "
     + "판정: 사람과 그 사람의 AI 는 공유 폴더(shared/…)를 탐색기와 같은 공개범위로 받고 올린다 · 앱 폴더(apps/<앱>/…)는 그 앱에 동의한 사람이 받기만 한다 · "
     + "앱(앱 화면 · 앱 서버 · 앱 세션)은 제 앱 폴더만 받고 올린다(매니페스트 permissions.app_folder + 그 사람의 동의). 주소는 그 사이에 권한이 바뀌면 바로 막힌다. "
-    + "올린 공유 폴더 파일은 다른 업로드처럼 자료로 등록된다(앱 폴더 파일은 자료가 되지 않는다). 세션 안 경로 ↔ 주소는 file_address · file_path.",
+    + "올린 공유 폴더 파일은 다른 업로드처럼 자료로 등록된다(앱 폴더 파일은 자료가 되지 않는다). "
+    + "웹에서 이름을 바꾸거나 옮긴 파일의 옛 주소로 받기(GET)를 청하면 지금 자리의 주소로 주고 moved_from 에 옛 주소를 싣는다(올리기는 옛 주소 그대로). "
+    + "세션 안 경로 ↔ 주소는 file_address · file_path.",
   scope: null,
   //  주소를 «주는» 것만으로는 스토어가 안 바뀐다 — 받기 주소는 읽기전용 세션에서도 준다. 올리기 주소는 핸들러가 읽기전용이면 막는다.
   mutates: false,
@@ -128,10 +151,17 @@ const fileUrl: Capability = {
     if (!rate.take(`${fileUrlTenantId()}\0${p.member}\0${p.app ?? "-"}`, Date.now())) {
       throw new HttpError(429, `서명 주소를 너무 자주 받고 있습니다(분당 ${FILE_URL_PER_MINUTE}개)`);
     }
+    //  #4822 — 받기 주소는 옛 주소를 따라간다(웹에서 이름을 바꾸거나 옮긴 파일 — 지식 · 대화에 남은 옛 주소를 AI 가 다시 써도 끊기지 않게).
+    //   올리기는 따라가지 않는다 — 옛 자리에 새로 쓰는 것이 그 주소의 뜻이다. 판정은 아래 발급이 받은 주소 그대로 다시 탄다.
+    const movedTo = method === "GET" ? await movedAddressFor(address, user) : null;
     //  readOnly 는 «읽기전용 세션이라고 적혀 온 때만» 참 — 앱 화면 다리(app-tool-call)는 이 칸을 싣지 않는다(앱 화면의 올리기가 막히지 않게).
     //   읽기전용 머리글이 실린 REST · MCP 는 어댑터가 ctx.readOnly 를 채운다.
-    const minted = await mintFileUrl({ address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true }, liveMintDeps);
-    return { ...minted, link: await humanLink(parseAddress(minted.address)) };   // 서명한 주소(올리기는 NFC 이름)로 — 저장되는 그 파일의 링크
+    const minted = await mintFileUrl({ address: movedTo ?? address, method, ttlSec: clampTtl(input.expires_in), principal: p, readOnly: ctx?.readOnly === true }, liveMintDeps);
+    return {
+      ...minted,
+      link: await humanLink(parseAddress(minted.address)),   // 서명한 주소(올리기는 NFC 이름)로 — 저장되는 그 파일의 링크
+      ...(movedTo ? { moved_from: formatAddress(address) } : {}),
+    };
   },
 };
 
@@ -179,7 +209,8 @@ const filePath: Capability = {
   name: "file_path",
   title: "파일 주소 → 이 세션 안 경로",
   description: "파일 주소를 이 세션에서 열 수 있는 경로로 바꾼다. 매니지드 세션엔 작업 폴더만 붙어 있어 그 밖의 주소는 «이 세션엔 없다»(까닭과 함께 — 그때는 file_url 로 받는다). "
-    + "앱 폴더(apps/<앱>/…)는 그 앱이 이 세션에 붙어 있으면 `<작업 폴더>/.lively/apps/<앱>/…` 다. 파일을 열지 않고 글자만 바꾼다(세션 셸이 보는 범위 그대로).",
+    + "앱 폴더(apps/<앱>/…)는 그 앱이 이 세션에 붙어 있으면 `<작업 폴더>/.lively/apps/<앱>/…` 다. 파일을 열지 않고 글자만 바꾼다(세션 셸이 보는 범위 그대로). "
+    + "단 웹에서 이름을 바꾸거나 옮긴 파일의 옛 주소면 지금 자리의 경로로 주고 moved_from 에 옛 주소를 싣는다(옮긴 자리도 이 세션과 그 사람에게 보일 때만).",
   scope: null,
   input: filePathInput,
   expose: {
@@ -192,10 +223,19 @@ const filePath: Capability = {
     const address = await resolveAddressInput(input.address, user);
     //  판정은 권한표의 «세션 셸» 줄이다(#4671 ③) — 셸은 작업 폴더 아래(세션을 열 때 #4687 이 판정)와 그 세션에 붙은 앱 폴더(붙이기 = 주인 + 동의 ·
     //   초대받은 사람도 본다)를 본다. 그 규칙은 변환(addressToSessionPath)이 그대로 진다 — 웹 · MCP 줄(그 사람의 동의)을 여기 걸면 붙은 앱 폴더를
-    //   보는 초대받은 사람에게 «없다» 고 답하게 된다. 파일은 열지 않는다(존재 여부를 알려 주지 않는다).
+    //   보는 초대받은 사람에게 «없다» 고 답하게 된다. 파일은 열지 않는다(존재 여부를 알려 주지 않는다) — 아래 옛 주소 따라가기만 예외로,
+    //   그 사람이 웹 줄로도 볼 수 있는 자리에 한해 «지금 거기 있나» 를 본다(그 사람이 탐색기로 이미 볼 수 있는 사실이다).
     const session = needSession(ctx);
     const view = await sessionViewOf(session, user);
     const r = addressToSessionPath(view, address);
+    //  #4822 — 이 세션에서 보이는 옛 주소면 옮긴 자리를 따라간다. 따라가기는 파일을 본다(«옛 자리에 지금 있나») — 그래서 위 판정에 더해
+    //   옛 자리 · 닿은 자리 둘 다 **그 사람이 볼 수 있어야**(웹 줄) 하고, 닿은 자리는 **이 세션에서도 보여야**(셸 줄) 한다.
+    //   옮긴 곳이 잠긴 폴더이거나 작업 폴더 밖이면 따라가지 않는다(그 이름이 새지 않게) — 종전대로 글자만 바꾼 옛 경로다.
+    if (r.path !== null) {
+      const to = await movedAddressFor(address, user, (x) => addressToSessionPath(view, x).path !== null);
+      const toPath = to ? addressToSessionPath(view, to).path : null;
+      if (to && toPath) return { address: formatAddress(to), session, path: toPath, moved_from: formatAddress(address) };
+    }
     return r.path !== null
       ? { address: formatAddress(address), session, path: r.path }
       : { address: formatAddress(address), session, path: null, reason: r.reason };

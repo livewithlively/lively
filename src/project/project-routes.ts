@@ -39,7 +39,8 @@ import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { finishUpload } from "../ingest/upload-finish.js";
 import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기·옮기기 뒤 자료 좌표 + «옛 경로 → 새 경로»
-import { SHARED_MOVE_SCOPE } from "../v6/file-move-store.js";
+import { SHARED_MOVE_SCOPE, findFileMove } from "../v6/file-move-store.js";
+import { followMovedPath, normalizeMovePath } from "../files/file-move-core.js";   // #4822 — 읽기 라우트가 옛 경로를 따라간다
 import { projectFoldersUnder, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
@@ -212,6 +213,33 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     });
   };
 
+  // 옛 경로 → 이 프로젝트 안의 지금 자리(#4822) — 읽기 라우트(미리보기 · 내려받기 · HEAD)가 파일을 못 찾으면 «옛 경로 → 새 경로» 기록을
+  //  따라간다. 본문에 박힌 그림 주소(`…/file?path=<옛 경로>`)가 웹에서 이름을 바꾸거나 옮긴 뒤에도 그대로 보이게 하는 것이 목적이다.
+  //  규칙은 옛 링크 풀기(terminal-files browse/moved)와 같고, 판정은 이 프로젝트의 projStore 그대로다 — 그래서 **같은 프로젝트 안에서만**
+  //  닿는다(다른 프로젝트 · 공유 폴더로 옮겨졌으면 없는 것과 같다). 기록은 공유 루트 기준 경로라 `<프로젝트 폴더>/<상대경로>` 로 묻는다.
+  //  쓰기 라우트(올리기 · 지우기 · 이름 바꾸기)는 부르지 않는다 — 옛 자리에 새로 쓰는 것이 그 경로의 뜻이다.
+  const movedInProject = async (project: { folder: string }, store: ProjectStorage, base: string, abs: string)
+    : Promise<{ abs: string; rel: string; st: NonNullable<Awaited<ReturnType<ProjectStorage["stat"]>>> } | null> => {
+    const root = normalizeMovePath(project.folder);
+    if (!root) return null;
+    const inProject = (p: string): string | null => (p.startsWith(root + "/") ? p.slice(root.length + 1) : null);
+    //  이 프로젝트 안의 그 자리 — 글자 판정 · 멤버 봉쇄를 지난 절대경로와 stat. 밖이거나 봉쇄에 걸리면 null.
+    const at = async (rel: string): Promise<{ abs: string; st: Awaited<ReturnType<ProjectStorage["stat"]>> } | null> => {
+      let a: string;
+      try { a = resolveIn(base, rel, true); await jailIfMember(store, a); } catch { return null; }
+      return { abs: a, st: await store.stat(a).catch(() => null) };
+    };
+    const hit = await followMovedPath(path.join(project.folder, path.relative(base, abs)), {
+      lookup: (p, since) => findFileMove(SHARED_MOVE_SCOPE, p, since),
+      //  이 프로젝트 밖은 «여기엔 없다» — 이 라우트가 열 자리가 아니다(따라가기는 그 너머의 기록을 더 볼 수 있다).
+      exists: async (p) => { const rel = inProject(p); return rel !== null && !!(await at(rel))?.st; },
+      visible: (p) => inProject(p) !== null,
+    });
+    const rel = hit ? inProject(hit.path) : null;
+    const got = rel !== null ? await at(rel) : null;
+    return rel !== null && got?.st ? { abs: got.abs, rel, st: got.st } : null;
+  };
+
   // ── ① 공유 폴더 — 목록 / 검색(q) ──
   app.get(`${prefix}/:id/files`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
@@ -245,10 +273,16 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 다운로드 / 미리보기
   app.get(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
-    const abs = resolveIn(base, req.query.path, true);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
+    let abs = resolveIn(base, req.query.path, true);
     await jailIfMember(store, abs);
-    const st = await store.stat(abs);
+    let st = await store.stat(abs);
+    //  #4822 — 없으면 옮긴 기록을 따라 이 프로젝트 안의 지금 자리를 연다(본문 그림 주소가 이름 바꾸기에 안 깨지게). 옛 자리에 무엇이 있으면 그것이 이긴다.
+    //   어디로 갔는지는 머리(X-File-Moved-To — 프로젝트 폴더 기준 경로, URI 인코딩)로 알린다. 화면이 주소를 고쳐 쓸 때 쓴다.
+    if (!st) {
+      const moved = await movedInProject(project, store, base, abs);
+      if (moved) { abs = moved.abs; st = moved.st; res.setHeader("X-File-Moved-To", encodeURIComponent(moved.rel)); }
+    }
     if (!st) throw new HttpError(404, "파일 없음");
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
     const download = req.query.download === "1";

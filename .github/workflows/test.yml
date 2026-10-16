@@ -389,6 +389,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/file-move.pg-test.mjs
+      # ⑤-i2 옛 주소 따라가기 넓히기(#4822) — 목으로는 못 보는 것: **웹에서 옮긴 파일의 옛 주소가 다른 입구로 와도 지금 자리로 가나**.
+      #    파일 주소 도구(file_url 받기 · file_path) · 프로젝트 파일 읽기(본문 그림 주소)가 «옛 경로 → 새 경로» 기록을 따라가되, 옛 자리 판정 먼저 ·
+      #    실제 파일이 이긴다 · 닿은 자리 재판정 · 같은 프로젝트 안에서만 · 쓰기는 안 따라감 — 진짜 라우트로 옮기고 받은 바이트로 판정한다.
+      - name: 옛 주소 따라가기(파일 주소 도구 · 프로젝트 파일 읽기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/files/moved-address.pg-test.mjs
       # ⑤-i6 자료 보기(#4672) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 자료 올리기 · 홈 탐색기 정보 · 같은 이름 후보).
       #    정보(속한 프로젝트 · 앱 · 주소 · 잠김 · 자료와 거기서 나온 지식) · 안 보이는 자리 404 · 앱 폴더 동의 안내(403 app_consent_required) ·
       #    같은 이름 후보는 범위(프로젝트 · 앱 · 맨 위 폴더) 안에서 · 하나하나 다시 판정.
