@@ -11,7 +11,7 @@
 //  6 목록을 못 읽으면 까닭을 보여 준다(화면이 죽지 않는다)
 //  ② 보관한 앱 폴더 카드(#4778)
 //  F1 목록 — 요약 줄(수 · 크기 · 보관 일수) · 행마다 앱(파일 없으면 «(파일 없음)») · 크기 · 파일(세다 멈췄으면 «이상») · 어디서(입구 · 누가) · 지울 때(«N일 뒤»)
-//  F2 «되돌리기» 단추는 같은 이름의 앱이 지금 있고 파일이 있는 보관에만
+//  F2 «되돌리기» 단추는 같은 이름의 앱이 지금 있고 파일이 있고 보관 기간 안인 보관에만 · 못 지운 보관의 지울 때 칸은 «못 지웠습니다»(까닭 말풍선)
 //  F3 비우기 → 확인 창(앱 이름이 보인다 · 되살릴 수 없다) → POST /api/ui/app-folder-archives/clear {names} → 알림 · 다시 읽는다
 //  F4 되돌리기 → 확인 창 → 취소면 아무것도 안 보냄 · 확인이면 POST …/restore {name} → 알림 · 다시 읽는다
 //  F5 보관이 없으면 «보관한 앱 폴더가 없습니다» · 앱 폴더 자리를 못 훑었으면 그 까닭 한 줄 · 고아가 없으면 고아 카드를 숨긴다
@@ -53,13 +53,17 @@ const LIST = {
 };
 
 //  보관한 앱 폴더 — 되돌릴 수 있는 것(crm) · 같은 이름의 앱이 없는 것(memo · 세다 멈춤) · 파일이 사라진 것(gone).
-const FN = { crm: ".archived-app.crm.20261015000000Z.aaaaaa", memo: ".archived-app.memo.20261014000000Z.bbbbbb", gone: ".archived-app.gone.20261013000000Z.cccccc" };
+const FN = { crm: ".archived-app.crm.20261015000000Z.aaaaaa", memo: ".archived-app.memo.20261014000000Z.bbbbbb", gone: ".archived-app.gone.20261013000000Z.cccccc",
+  stale: ".archived-app.stale.20261001000000Z.dddddd" };
 const FLIST = (expiresAt) => ({
-  keep_days: 7, count: 3, bytes: 5000, orphan_count: 1, orphan_bytes: 7,
+  keep_days: 7, count: 4, bytes: 5010, orphan_count: 1, orphan_bytes: 7,
   archives: [
     { name: FN.crm, app_id: "crm", archived_at: "2026-10-15T00:00:00.000Z", archived_by: "pgt-admin", entry: "remove", kind: "dir", files: 3, bytes: 4096, truncated: false, expires_at: expiresAt, app_exists: true },
     { name: FN.memo, app_id: "memo", archived_at: "2026-10-14T00:00:00.000Z", archived_by: "pgt-maker", entry: "create", kind: "dir", files: 50000, bytes: 904, truncated: true, expires_at: expiresAt, app_exists: false },
     { name: FN.gone, app_id: "gone", archived_at: "2026-10-13T00:00:00.000Z", archived_by: null, entry: "unknown", kind: "dir", files: 1, bytes: 0, truncated: false, expires_at: expiresAt, app_exists: true, missing: true },
+    //  기한이 지났고 못 지운 보관 — 같은 이름의 앱 · 파일이 있어도 되돌리기를 안 보이고, 지울 때 칸은 «못 지웠습니다»(까닭은 말풍선)
+    { name: FN.stale, app_id: "stale", archived_at: "2026-10-01T00:00:00.000Z", archived_by: "pgt-admin", entry: "remove", kind: "dir", files: 2, bytes: 10, truncated: false,
+      expires_at: "2026-10-08T00:00:00.000Z", expired: true, last_error: "지우지 못했습니다 — EACCES", app_exists: true },
   ],
   orphans: [{ app_id: "lost-app", kind: "dir", files: 1, bytes: 7, truncated: false }],
 });
@@ -150,18 +154,19 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 
     // ── ② 보관한 앱 폴더 ──
     const folders = d1.querySelector('.aa-folders');
-    const frows = await until(() => { const r = folders.querySelectorAll('tbody tr'); return r.length === 3 ? r : null; });
+    const frows = await until(() => { const r = folders.querySelectorAll('tbody tr'); return r.length === 4 ? r : null; });
     const fcells = frows ? Array.from(frows).map((tr) => Array.from(tr.children).slice(1).map((td) => td.textContent.trim())) : [];
     const fsum = (folders.querySelector('.storage-calc') || {}).textContent || '';
     R.f_fetch_used = gets('/api/ui/app-folder-archives') >= 1;
-    R.f1_summary = /보관한 앱 폴더 3개/.test(fsum) && /보관 기간 7일/.test(fsum);
-    R.f1_cells = fcells.length === 3
+    R.f1_summary = /보관한 앱 폴더 4개/.test(fsum) && /보관 기간 7일/.test(fsum);
+    R.f1_cells = fcells.length === 4
       && fcells[0][0] === 'crm' && /KB/.test(fcells[0][1]) && fcells[0][2] === '3개' && fcells[0][4] === '관리자가 앱을 지움 · pgt-admin' && fcells[0][5] === '3일 뒤'
       && / 이상$/.test(fcells[1][1]) && fcells[1][2] === '50000개 이상' && fcells[1][4] === '같은 이름으로 새로 만듦 · pgt-maker'
-      && fcells[2][0] === 'gone (파일 없음)' && fcells[2][1] === '—' && fcells[2][2] === '—' && fcells[2][4] === '기록 없음';
+      && fcells[2][0] === 'gone (파일 없음)' && fcells[2][1] === '—' && fcells[2][2] === '—' && fcells[2][4] === '기록 없음'
+      && fcells[3][5] === '못 지웠습니다' && (frows[3].children[6].getAttribute('title') || '') === '지우지 못했습니다 — EACCES';
     R.fcells = fcells;
     const restoreBtns = frows ? Array.from(frows).map((tr) => !!tr.querySelector('.aa-restore')) : [];
-    R.f2_restore_only_restorable = restoreBtns.join(',') === 'true,false,false';
+    R.f2_restore_only_restorable = restoreBtns.join(',') === 'true,false,false,false';
     //  F4 되돌리기 — 취소 먼저
     const fposts0 = posts().length;
     frows[0].querySelector('.aa-restore').click();
@@ -178,7 +183,7 @@ const PAGE = `<!doctype html><meta charset="utf-8">
     R.f4_post = !!rpost && JSON.stringify(JSON.parse(rpost.body)) === JSON.stringify({ name: '${FN.crm}' });
     R.f4_toast_reload = !!(await until(() => /crm.{0,3}앱 폴더를 되돌렸어요/.test(toasts()))) && !!(await until(() => gets('/api/ui/app-folder-archives') > fbefore));
     //  F3 비우기
-    const frows2 = await until(() => { const r = d1.querySelectorAll('.aa-folders tbody tr'); return r.length === 3 ? r : null; });
+    const frows2 = await until(() => { const r = d1.querySelectorAll('.aa-folders tbody tr'); return r.length === 4 ? r : null; });
     const fbtn = d1.querySelector('.aa-folders .admin-actions button');
     R.f3_disabled_when_none = !!fbtn && fbtn.disabled === true;
     frows2[1].querySelector('input[type=checkbox]').click();
@@ -249,8 +254,8 @@ check("r3_reloaded", "3 비운 뒤 목록을 다시 읽는다");
 check("r3_toast", "3 비운 결과를 알린다(«2개 비웠어요»)");
 check("f_fetch_used", "(배선) 앱 폴더 카드가 /api/ui/app-folder-archives 를 실제로 불렀다");
 check("f1_summary", "F1 요약 줄 — 보관한 앱 폴더 수 · 보관 기간");
-check("f1_cells", "F1 칸 — 앱(파일 없으면 «(파일 없음)») · 크기 · 파일(세다 멈췄으면 «이상») · 어디서(입구 · 누가) · 지울 때(«3일 뒤»)");
-check("f2_restore_only_restorable", "F2 «되돌리기» 는 같은 이름의 앱이 있고 파일이 있는 보관에만");
+check("f1_cells", "F1 칸 — 앱(파일 없으면 «(파일 없음)») · 크기 · 파일(세다 멈췄으면 «이상») · 어디서(입구 · 누가) · 지울 때(«3일 뒤» · 못 지웠으면 «못 지웠습니다» + 까닭 말풍선)");
+check("f2_restore_only_restorable", "F2 «되돌리기» 는 같은 이름의 앱이 있고 · 파일이 있고 · 보관 기간 안인 보관에만");
 check("f4_dialog", "F4 되돌리기 확인 창에 앱 이름");
 check("f4_cancel_sends_nothing", "F4 취소하면 아무것도 보내지 않는다");
 check("f4_post", "F4 확인하면 POST /api/ui/app-folder-archives/restore {name}");

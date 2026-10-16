@@ -176,7 +176,8 @@ function loadFolders(body, orphansCard) {
       const size = a.missing ? '—' : a.bytes == null ? '?' : `${fmtBytes(a.bytes)}${a.truncated ? ' 이상' : ''}`;
       const files = a.missing ? '—' : a.files == null ? '?' : `${a.files}개${a.truncated ? ' 이상' : ''}`;
       const who = a.archived_by ? ` · ${a.archived_by}` : '';
-      const restore = a.app_exists && !a.missing
+      //  되돌리기 — 같은 이름의 앱이 지금 있고 · 파일이 있고 · 보관 기간 안일 때만(기간이 지나면 정비가 지우는 중이다).
+      const restore = a.app_exists && !a.missing && !a.expired
         ? el('button', { class: 'btn btn-ghost btn-sm aa-restore', type: 'button', text: '되돌리기', onclick: () => restoreOne(a) })
         : null;
       return [
@@ -185,7 +186,8 @@ function loadFolders(body, orphansCard) {
         el('td', { text: files }),
         el('td', { text: relTime(a.archived_at), title: a.archived_at || '' }),
         el('td', { text: `${ENTRY_TEXT[a.entry] ?? a.entry}${who}` }),
-        el('td', { text: untilText(a.expires_at), title: a.expires_at || '' }),
+        //  못 지운 보관(권한 · 시간 예산)은 까닭을 말풍선으로 — «다음 정비 때» 만 보이면 왜 안 지워지는지 알 수 없다.
+        el('td', a.last_error ? { text: '못 지웠습니다', title: a.last_error } : { text: untilText(a.expires_at), title: a.expires_at || '' }),
         el('td', {}, restore),
       ];
     }, picked, clearBtn, (n) => (n ? `고른 ${n}개 비우기` : '비울 보관을 고르세요'));

@@ -12,6 +12,7 @@
 //  I4 고아 옮기기   I5 관리자 아님 403   I6 REST 모양 400   J1 탐색기로 보관 404   J2 서명 주소로 보관 400
 //  H1 기간 지난 것만   H2 경계(정확히 기간) 남김   H3 지울 것 없음(파일을 만지지 않음)   H4 파일 없는 기록 걷기   H5 보관 일수 0 → 전부
 //  H6 못 지우는 보관은 기록이 남는다(정비 · 비우기) · 다음 정비가 이어서   H7 한 번에 오래된 것부터 20개
+//  H8 못 지운 보관은 뒤로(까닭 · 시각) — 안 해 본 보관이 먼저   I3b 보관 기간이 지난 보관은 되돌리지 않는다
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -372,6 +373,31 @@ try {
   const oldest20 = h7.slice(5).sort();   // i 가 클수록 오래됐다
   chk("H7 한 번에 오래된 것부터 20개 · 다음 정비가 나머지 5개", AF.PRUNE_BATCH === 20 && h7a.due === 25 && [...h7a.pruned].sort().join() === oldest20.join()
     && h7b.due === 5 && [...h7b.pruned].sort().join() === h7.slice(0, 5).sort().join() && h7.every((n) => !has(n)), JSON.stringify({ a: h7a.pruned.length, b: h7b.pruned.length, due: [h7a.due, h7b.due] }));
+  //  H8 — 못 지운 보관이 차례를 막지 않는다: 둘(오래된 것)은 못 지우고 하나는 지울 수 있을 때, 한 번에 2개씩이면
+  //   첫 정비는 못 지우는 둘을 해 보고(까닭 · 시각을 남김) 둘째 정비는 안 해 본 셋째를 먼저 지운다.
+  const hb = [];
+  for (const [i, id] of ["hb-one", "hb-two", "hb-three"].entries()) {
+    put(`${id}/sub/a.txt`, "a");
+    hb.push((await AF.archiveAppFolder(id, { by: null, entry: "remove", now: new Date(T0 - (20 - i) * DAY) })).archived.name);
+  }
+  for (const n of hb.slice(0, 2)) chmodSync(path.join(APPS, n, "sub"), 0o555);
+  let h8a, h8b, h8rows;
+  try {
+    h8a = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7, 2);
+    h8b = await AF.pruneAppFolderArchives(new Date(T0 + 1), 7, 2);
+    h8rows = await q(`SELECT name, last_error, last_try_at FROM org_app_folder_archive WHERE name = ANY($1::text[]) ORDER BY name`, [hb.slice(0, 2)]);
+  } finally { for (const n of hb.slice(0, 2)) chmodSync(path.join(APPS, n, "sub"), 0o755); }
+  chk("H8 못 지운 보관은 까닭 · 시각을 남기고 뒤로 — 다음 정비가 안 해 본 보관을 먼저 지운다(앞줄 막힘 없음)",
+    h8a.kept.map((k) => k.name).sort().join() === hb.slice(0, 2).sort().join() && h8a.pruned.length === 0
+    && h8b.pruned.includes(hb[2]) && !has(hb[2]) && h8rows.length === 2 && h8rows.every((r) => /지우지 못했습니다/.test(r.last_error ?? "") && r.last_try_at),
+    JSON.stringify({ h8a, h8b, h8rows }));
+  const l8 = await call("app_folder_archives", {}, admin);
+  const it8 = l8.archives.find((a) => a.name === hb[0]);
+  chk("H8 목록에 못 지운 까닭 · 기한 지남(expired) · 되돌리기 거절(기한 지남)", it8?.expired === true && /지우지 못했습니다/.test(it8?.last_error ?? ""),
+    JSON.stringify(it8));
+  const i3x = await errOf(call("app_folder_restore", { name: hb[0] }, admin));
+  chk("I3b 보관 기간이 지난 보관은 되돌리지 않는다(409 · 지우는 중)", i3x?.status === 409 && /보관 기간이 지나/.test(i3x?.message ?? "") && has(hb[0]),
+    JSON.stringify({ status: i3x?.status, msg: i3x?.message }));
   const totalBefore = (await q(`SELECT count(*)::int AS n FROM org_app_folder_archive`))[0].n;
   const h5 = { pruned: [] };
   for (let i = 0; i < 10; i++) {   // 한 번에 20개까지라 여러 번

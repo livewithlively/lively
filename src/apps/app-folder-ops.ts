@@ -112,14 +112,17 @@ function main(q){
     const removed=[],absent=[],left=[];
     const names=Array.isArray(q.names)?q.names:[];names.forEach(n=>at(n,ARC));   // 이름을 전부 먼저 본다 — 하나라도 틀리면 아무것도 안 지운다
     const until=Date.now()+(Number(q.rm_ms)>0?Number(q.rm_ms):20000);
-    const rmTree=f=>{const st=fs.lstatSync(f);
-      if(st.isDirectory()){for(const n of fs.readdirSync(f)){if(Date.now()>until)return false;if(!rmTree(p.join(f,n)))return false}fs.rmdirSync(f);return true}
-      fs.unlinkSync(f);return true};
+    const gone=e=>e&&(e.code==='ENOENT'||e.code==='ENOTDIR');   // 그새 누가 지웠다(두 곳이 함께 지울 때) — 지운 것으로 본다
+    const rmTree=f=>{let st;try{st=fs.lstatSync(f)}catch(e){if(gone(e))return true;throw e}
+      if(st.isDirectory()){let es;try{es=fs.readdirSync(f)}catch(e){if(gone(e))return true;throw e}
+        for(const n of es){if(Date.now()>until)return false;if(!rmTree(p.join(f,n)))return false}
+        try{fs.rmdirSync(f)}catch(e){if(!gone(e))throw e}return true}
+      try{fs.unlinkSync(f)}catch(e){if(!gone(e))throw e}return true};
     for(const n of names){const f=at(n,ARC);if(!lst(f)){absent.push(n);continue}
       let err=null,done=false;
       try{done=rmTree(f)}catch(e){err=String(e&&e.message||e)}
       if(!lst(f)){removed.push(n);continue}
-      if(!err&&!done){left.push({name:n,error:'시간이 모자라 다 지우지 못했습니다 — 다음에 이어서 지웁니다',owners:[]});continue}
+      if(!err&&!done){left.push({name:n,error:'시간이 모자라 다 지우지 못했습니다',budget:true,owners:[]});continue}
       const owners=new Set();
       const own=(x,st)=>{if(!st.isDirectory()||owners.size>=20||budget.left--<=0)return;owners.add(st.uid);let es;try{es=fs.readdirSync(x)}catch(e){return}
         for(const c of es){let cs;try{cs=fs.lstatSync(p.join(x,c))}catch(e){continue}own(p.join(x,c),cs)}};
@@ -208,8 +211,9 @@ export function appsAreaMode(): AppsAreaMode {
  *  · detached: 감옥 안 경로(isolatedBase) · osUser 는 중계가 쓰지 않지만 인자 꼴은 지킨다(시킨 사람 · 없으면 system).
  *  · isolated: 구성원 격리 기준(isolatedBase = LIVELY_APPS_DIR) · 게이트웨이 로컬 + 주인 계정으로 다시 지우기.
  *  · plain: TERMINAL_ROOT_APPS(기본 ~/apps) · 게이트웨이 로컬.
- *  ⚠ 셀프호스트 격리 박스에서 OS 계정이 없는 구성원의 파일 op 는 TERMINAL_ROOT_APPS 를 본다(profiles.resolveRootPath) — 설치 스크립트가
- *   두 값을 같은 자리로 맞춘다(deploy/lib/common.sh). 다르게 둔 배포에선 이 모듈은 격리 기준 자리만 본다.
+ *  ⚠ 셀프호스트 격리 박스에서 OS 계정이 없는 구성원의 파일 op 는 TERMINAL_ROOT_APPS 를 본다(profiles.resolveRootPath). 설치 스크립트는
+ *   그 값을 서비스 유저가 쓸 수 없을 때만 LIVELY_APPS_DIR 로 맞추고(deploy/lib/common.sh) 쓸 수 있으면 관리자 값을 둔다 — 그래서 두 값이
+ *   다를 수 있고, 그런 배포에서 이 모듈은 격리 기준 자리(LIVELY_APPS_DIR)만 본다.
  */
 export function appsAreaFor(by: string | null, mode: AppsAreaMode = appsAreaMode()): AppsArea | null {
   const root = roots().find((r) => r.key === APPS_ROOT_KEY);
@@ -234,7 +238,7 @@ export function appsAreaFor(by: string | null, mode: AppsAreaMode = appsAreaMode
 // ── 지우기(셀프호스트 격리는 주인 계정으로 다시) ────────────────────────────────────────────────
 
 /** removed = 있던 것을 지웠다 · absent = 처음부터 없었다 · left = 못 지웠다(owners = 남은 폴더들의 주인 uid — 셀프호스트 격리용). */
-export interface RemoveResult { removed: string[]; absent: string[]; left: Array<{ name: string; error: string; owners?: number[] }> }
+export interface RemoveResult { removed: string[]; absent: string[]; left: Array<{ name: string; error: string; budget?: true; owners?: number[] }> }
 
 /** uid → `getent passwd <uid>` 의 한 줄(없거나 못 물으면 ""). 시험이 갈아 끼운다. */
 export type PasswdLookup = (uid: number) => Promise<string>;
@@ -281,6 +285,6 @@ export async function removeArchives(area: AppsArea, names: string[], osUsersOf:
     left = again.left;
   }
   out.removed = [...new Set(out.removed)];
-  out.left = left.filter((x) => !out.removed.includes(x.name)).map(({ name, error }) => ({ name, error }));
+  out.left = left.filter((x) => !out.removed.includes(x.name)).map(({ name, error, budget }) => ({ name, error, ...(budget ? { budget } : {}) }));
   return out;
 }

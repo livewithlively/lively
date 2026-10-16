@@ -5,13 +5,12 @@
 //   그래서 앱을 만들고 지우는 통합 시험이 이 자리를 고정하지 않으면 시험을 돌린 컴퓨터의 실제 폴더를 옮긴다.
 //  앱을 만들고 지우는 시험(*.pg-test.mjs · *.itest.mjs)은 이 모듈을 불러오거나 TERMINAL_ROOT_APPS 를 직접 고정한다 — 시험이 잰다
 //   (src/apps/app-folder-archive.test.ts L4).
-//  이미 정해 둔 값(시험이 먼저 TERMINAL_ROOT_APPS 를 줬다)은 그대로 둔다. 끝나면 임시 폴더를 지운다.
+//  ⚠ 미리 정해 둔 값(.env · 셸 export)이 있어도 **늘 새 임시 폴더로 덮는다** — 그 값이 바로 지켜야 할 실제 자리일 수 있다. 끝나면 지운다.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const mine = !process.env.TERMINAL_ROOT_APPS;
-export const TEST_APPS_ROOT = process.env.TERMINAL_ROOT_APPS || mkdtempSync(path.join(os.tmpdir(), "lively-test-apps-"));
+export const TEST_APPS_ROOT = mkdtempSync(path.join(os.tmpdir(), "lively-test-apps-"));
 process.env.TERMINAL_ROOT_APPS = TEST_APPS_ROOT;
 process.env.LIVELY_APPS_DIR = TEST_APPS_ROOT;   // 격리 박스(box-spawn 이 깔린 리눅스)에서 돌려도 /srv/lively/apps 를 안 건드리게
-if (mine) process.on("exit", () => { try { rmSync(TEST_APPS_ROOT, { recursive: true, force: true }); } catch { /* 지우지 못해도 시험 결과와 무관 */ } });
+process.on("exit", () => { try { rmSync(TEST_APPS_ROOT, { recursive: true, force: true }); } catch { /* 지우지 못해도 시험 결과와 무관 */ } });

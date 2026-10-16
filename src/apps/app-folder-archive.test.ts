@@ -7,6 +7,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "lively-app-folder-archive-"));
 const APPS = path.join(ROOT, "apps");
@@ -327,7 +328,7 @@ test("C5 계속 남으면 세 바퀴에서 멈춘다", async () => {
 
 const rowFor = (app: string, at: Date, over: Record<string, unknown> = {}) => ({
   name: O.archiveNameFor(app, at, "abcdef"), app_id: app, archived_at: at, archived_by: "admin", entry: "remove" as const,
-  kind: "dir" as const, files: 2, bytes: 10, truncated: false, ...over,
+  kind: "dir" as const, files: 2, bytes: 10, truncated: false, last_error: null, last_try_at: null, ...over,
 });
 
 test("D1~D7 기록 · 파일 훑기 → 목록", () => {
@@ -351,7 +352,8 @@ test("D1~D7 기록 · 파일 훑기 → 목록", () => {
   //  D4 파일만 → 채울 기록(unknown · 이름의 시각 · 훑기 크기)
   assert.equal(out.fill.length, 1);
   assert.deepEqual({ ...out.fill[0]!, archived_at: out.fill[0]!.archived_at.toISOString() },
-    { name: fsOnly, app_id: "gone", archived_at: t3.toISOString(), archived_by: null, entry: "unknown", kind: "dir", files: 4, bytes: 40, truncated: true });
+    { name: fsOnly, app_id: "gone", archived_at: t3.toISOString(), archived_by: null, entry: "unknown", kind: "dir", files: 4, bytes: 40, truncated: true,
+      last_error: null, last_try_at: null });
   //  D5 같은 id 의 앱
   assert.equal(byApp.crm!.app_exists, true);
   assert.equal(byApp.memo!.app_exists, false);
@@ -362,6 +364,19 @@ test("D1~D7 기록 · 파일 훑기 → 목록", () => {
   assert.ok(blind.items.every((i) => i.missing === undefined));
   assert.deepEqual(blind.fill, []);
   assert.deepEqual(blind.orphans, []);
+});
+
+test("D8 기한이 지났나(expired) — 지금 시각 기준 · 경계(딱 기한)는 지난 것", () => {
+  const now = new Date(Date.UTC(2026, 9, 16, 0, 0, 0));
+  const fresh = rowFor("fresh", new Date(now.getTime() - 6 * 864e5));
+  const edge = rowFor("edge", new Date(now.getTime() - 7 * 864e5));
+  const old = rowFor("old", new Date(now.getTime() - 8 * 864e5), { last_error: "지우지 못했습니다 — EACCES", last_try_at: new Date(now.getTime() - 3600e3) });
+  const items = Object.fromEntries(M.mergeListing([fresh, edge, old], null, new Set(), 7, now).items.map((i) => [i.app_id, i]));
+  assert.equal(items.fresh!.expired, false);
+  assert.equal(items.edge!.expired, true, "기한과 같은 시각이면 지났다(정비는 엄격히 더 오래된 것만 지우지만 되돌리기는 막는다)");
+  assert.equal(items.old!.expired, true);
+  assert.equal(items.old!.last_error, "지우지 못했습니다 — EACCES");
+  assert.equal(items.old!.last_try_at, new Date(now.getTime() - 3600e3).toISOString());
 });
 
 test("D 경계 — 보관 일수 0 이면 기한 = 옮긴 시각", () => {
@@ -515,7 +530,7 @@ test("T1 op 상한 — 끝나지 않는 기다림은 상한에서 던진다 · �
   assert.equal(await O.withTimeout(Promise.resolve(7), 1000), 7);
 });
 
-test("T2 로컬 op 가 상한을 넘으면 자식을 죽이고 던진다(락을 쥔 쪽이 오래 붙잡히지 않게)", async () => {
+test("T2 로컬 op 가 상한을 넘으면 던진다(락을 쥔 쪽이 오래 붙잡히지 않게) · 상한 안이면 그대로", async () => {
   reset();
   await assert.rejects(area().run({ op: "scan", live: [], known: [] }, 1), /초 안에 끝나지 않았습니다/);
   assert.deepEqual(await area().run({ op: "scan", live: [], known: [] }), { exists: true, archives: [], orphans: [] }, "상한 안이면 그대로");
@@ -533,6 +548,31 @@ test("T3 지우기 시간 예산 — 다 못 지우면 «다음에 이어서» �
   assert.ok(exists(path.join(APPS, a)), "보관은 아직 있다");
   const r2 = await run<RemoveResult>({ op: "remove", names: [a] });
   assert.deepEqual(r2, { removed: [a], absent: [], left: [] }, "다음 부름이 이어서 다 지운다");
+});
+
+test("T4 두 곳이 함께 지워도(정비 · 비우기가 겹침) 둘 다 «지움 · 없음» 으로 끝난다 — 지우는 중 사라진 항목은 지운 것", async () => {
+  for (let round = 0; round < 3; round++) {
+    reset();
+    const a = O.archiveNameFor("race-app", NOW, `0000c${round}`);
+    for (let i = 0; i < 2000; i++) put(`${a}/d${i % 40}/f${i}.txt`, "x");
+    const [r1, r2] = await Promise.all([run<RemoveResult>({ op: "remove", names: [a] }), run<RemoveResult>({ op: "remove", names: [a] })]);
+    assert.deepEqual([...r1.left, ...r2.left], [], `겹친 지우기에서 남은 것(round ${round}): ${JSON.stringify([r1.left, r2.left])}`);
+    assert.ok(r1.removed.includes(a) || r2.removed.includes(a), "적어도 한쪽은 지웠다고 말한다");
+    assert.equal(exists(path.join(APPS, a)), false);
+  }
+});
+
+test("K5 못 지운 까닭 — 시간 예산은 정비면 «다음 정비가 이어서», 비우기면 «다시 비우면 이어서» · 그 밖은 «지우지 못했습니다 — 까닭»", () => {
+  assert.match(M.keptWhy({ error: "시간이 모자라 다 지우지 못했습니다", budget: true }, "prune"), /다음 정비가 이어서 지웁니다$/);
+  assert.match(M.keptWhy({ error: "시간이 모자라 다 지우지 못했습니다", budget: true }, "clear"), /다시 비우면 이어서 지웁니다$/);
+  assert.equal(M.keptWhy({ error: "EACCES: permission denied" }, "clear"), "지우지 못했습니다 — EACCES: permission denied");
+  assert.ok(!/지우지 못했습니다 — 시간이/.test(M.keptWhy({ error: "시간이 모자라 다 지우지 못했습니다", budget: true }, "clear")), "문구가 겹치지 않는다");
+});
+
+test("C7 시간 예산 표식(budget)은 남은 것에 그대로 실려 나간다(부르는 쪽이 문구를 고른다)", async () => {
+  const { a } = fakeArea([{ who: "gw", out: { removed: [], absent: [], left: [{ name: "x", error: "시간이 모자라 다 지우지 못했습니다", budget: true, owners: [] }] } }]);
+  const r = await O.removeArchives(a, ["x"], async () => []);
+  assert.deepEqual(r.left, [{ name: "x", error: "시간이 모자라 다 지우지 못했습니다", budget: true }]);
 });
 
 test("U1 주인 uid → 구성원 OS 계정 — 접두 box_ 만 · uid 가 맞는 줄만 · root(0)·음수·소수는 묻지 않음 · 겹치면 한 번", async () => {
@@ -575,7 +615,7 @@ test("O1 고아 옮기기 — 하나가 실패해도(락 대기 초과) 까닭�
   const out = await M.archiveOrphanAppFolders(["aa-one", "bb-two", "cc-live", "dd-three", "BAD"], "admin", {
     lock: async (id, fn) => { locked.push(id); if (id === "bb-two") throw new Error("앱 설치 락 대기 시간 초과(bb-two)"); return fn(); },
     getApp: async (id) => (id === "cc-live" ? { id } : null),
-    archive: async (id, o) => ({ archived: { name: `.archived-app.${id}.20261016T000000Z.000000`, app_id: id, archived_at: "", archived_by: o.by, entry: o.entry, kind: "dir", files: 1, bytes: 1, truncated: false } }),
+    archive: async (id, o) => ({ archived: { name: `.archived-app.${id}.20261016T000000Z.000000`, app_id: id, archived_at: "", archived_by: o.by, entry: o.entry, kind: "dir", files: 1, bytes: 1, truncated: false, last_error: null, last_try_at: null } }),
   });
   assert.deepEqual(out.archived.map((a) => a.app_id), ["aa-one", "dd-three"], "실패 뒤의 것도 옮겼다");
   assert.ok(out.archived.every((a) => a.entry === "orphan" && a.archived_by === "admin"));
@@ -594,8 +634,13 @@ test("L4 앱을 만들고 지우는 통합 시험은 앱 폴더 자리를 임시
   assert.ok(files.length >= 15, `(배선) 대상 시험을 실제로 찾았다: ${files.length}`);
   const bare = files.filter((f) => { const c = src(f); return !c.includes("test-apps-root.mjs") && !/process\.env\.TERMINAL_ROOT_APPS\s*=/.test(c); });
   assert.deepEqual(bare, [], "앱 자리를 고정하지 않은 통합 시험");
-  //  모듈 자신 — 불러오면 두 값이 같은 임시 폴더를 가리킨다
-  assert.match(src("scripts/test-apps-root.mjs"), /process\.env\.TERMINAL_ROOT_APPS = TEST_APPS_ROOT;[\s\S]*process\.env\.LIVELY_APPS_DIR = TEST_APPS_ROOT;/);
+  //  모듈 자신 — 미리 정해 둔 값(.env · 셸)이 있어도 새 임시 폴더로 덮고, 두 값이 같은 그 폴더를 가리킨다(실제로 불러 본다)
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e",
+    `process.env.TERMINAL_ROOT_APPS = "/preset/apps"; process.env.LIVELY_APPS_DIR = "/preset/iso"; await import(${JSON.stringify(path.resolve("scripts/test-apps-root.mjs"))}); `
+    + "console.log(JSON.stringify([process.env.TERMINAL_ROOT_APPS, process.env.LIVELY_APPS_DIR]))"], { encoding: "utf8" });
+  const [apps, iso] = JSON.parse(probe.stdout.trim() || "[]") as string[];
+  assert.ok(apps && apps !== "/preset/apps" && apps.startsWith(os.tmpdir()), `미리 정한 값을 덮지 않았다: ${probe.stdout}${probe.stderr}`);
+  assert.equal(iso, apps);
 });
 
 test.after(() => { fs.rmSync(ROOT, { recursive: true, force: true }); });

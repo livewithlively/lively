@@ -36,7 +36,7 @@ export type AppFolderArchiveEntry =
   | "create"      // 같은 id 로 새로 만들 때 그 자리에 남아 있던 폴더
   | "orphan";     // 관리자가 고아 폴더를 보관으로
 
-/** 정비 한 번에 지우는 보관 수 상한 — 오래된 것부터(남은 것은 다음 정비가). */
+/** 정비 한 번에 지우는 보관 수 상한 — 안 해 본 · 오래된 것부터(남은 것은 다음 정비가). */
 export const PRUNE_BATCH = 20;
 
 // ── 기록(org_app_folder_archive) ────────────────────────────────────────────────────────────
@@ -51,9 +51,12 @@ export interface AppFolderArchive {
   files: number | null;
   bytes: number | null;
   truncated: boolean;
+  /** 지우려다 못 지웠으면 그 까닭과 시각(권한 · 시간 예산) — 정비는 이것을 뒤로 보낸다. */
+  last_error: string | null;
+  last_try_at: string | null;
 }
 
-type Row = Omit<AppFolderArchive, "archived_at"> & { archived_at: Date };
+type Row = Omit<AppFolderArchive, "archived_at" | "last_try_at"> & { archived_at: Date; last_try_at: Date | null };
 
 const rowOf = (r: Record<string, unknown>): Row => ({
   name: String(r.name), app_id: String(r.app_id),
@@ -61,8 +64,10 @@ const rowOf = (r: Record<string, unknown>): Row => ({
   archived_by: r.archived_by == null ? null : String(r.archived_by),
   entry: String(r.entry) as Row["entry"], kind: (String(r.kind || "dir")) as Row["kind"],
   files: r.files == null ? null : Number(r.files), bytes: r.bytes == null ? null : Number(r.bytes), truncated: r.truncated === true,
+  last_error: r.last_error == null ? null : String(r.last_error),
+  last_try_at: r.last_try_at == null ? null : r.last_try_at instanceof Date ? r.last_try_at : new Date(String(r.last_try_at)),
 });
-const publicOf = (r: Row): AppFolderArchive => ({ ...r, archived_at: r.archived_at.toISOString() });
+const publicOf = (r: Row): AppFolderArchive => ({ ...r, archived_at: r.archived_at.toISOString(), last_try_at: r.last_try_at ? r.last_try_at.toISOString() : null });
 
 async function insertRow(r: Row): Promise<void> {
   // ON CONFLICT 타깃에 tenant_id — ensureTenantColumn 이 PK 를 (tenant_id, name) 으로 다시 쓴다(attachAppRow 와 같은 규약).
@@ -80,6 +85,20 @@ async function rowsByNames(names: string[]): Promise<Row[]> {
 }
 async function deleteRows(names: string[]): Promise<void> {
   if (names.length) await itemsPool.query(`DELETE FROM org_app_folder_archive WHERE name = ANY($1::text[])`, [names]);
+}
+/** 못 지운 보관 — 마지막 시도 시각과 까닭을 남긴다(정비 차례에서 뒤로 · 목록에 까닭). */
+async function markTried(left: Array<{ name: string; why: string }>): Promise<void> {
+  if (!left.length) return;
+  await itemsPool.query(
+    `UPDATE org_app_folder_archive a SET last_try_at = now(), last_error = l.why
+       FROM unnest($1::text[], $2::text[]) AS l(name, why) WHERE a.name = l.name`,
+    [left.map((x) => x.name), left.map((x) => x.why)]).catch((err) => logger.warn({ err }, "[app-folder] 못 지운 보관의 시도를 기록하지 못했다"));
+}
+
+/** 못 지운 까닭(사람이 읽는 말) — 시간 예산이면 정비는 «다음 정비가 이어서», 비우기는 «다시 비우면 이어서». */
+export function keptWhy(k: { error: string; budget?: true }, by: "prune" | "clear"): string {
+  if (k.budget) return by === "prune" ? "시간이 모자라 다 지우지 못했습니다 — 다음 정비가 이어서 지웁니다" : "시간이 모자라 다 지우지 못했습니다 — 다시 비우면 이어서 지웁니다";
+  return `지우지 못했습니다 — ${k.error}`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -112,7 +131,7 @@ export async function archiveAppFolder(appId: string, opts: { by: string | null;
   if (!r?.moved) return { archived: null };
   const row: Row = {
     name, app_id: appId, archived_at: now, archived_by: opts.by, entry: opts.entry,
-    kind: r.kind ?? "dir", files: r.files ?? null, bytes: r.bytes ?? null, truncated: r.truncated === true,
+    kind: r.kind ?? "dir", files: r.files ?? null, bytes: r.bytes ?? null, truncated: r.truncated === true, last_error: null, last_try_at: null,
   };
   await insertRow(row).catch((err) => logger.warn({ err, name, app: appId }, "[app-folder] 보관으로 옮겼는데 기록을 못 남겼다 — 관리자 목록이 파일에서 다시 채운다"));
   logger.info({ app: appId, name, entry: opts.entry, files: row.files, bytes: row.bytes, truncated: row.truncated }, "[app-folder] 앱 폴더를 보관으로 옮김");
@@ -136,6 +155,8 @@ export async function archiveLeftoverAppFolder(appId: string, by: string | null)
 
 export interface AppFolderArchiveItem extends AppFolderArchive {
   expires_at: string;
+  /** 보관 기간이 지났다 — 정비가 지우는 중이라 되돌리지 않는다. */
+  expired: boolean;
   /** 지금 같은 id 의 앱이 있나 — 되돌리기는 있을 때만 된다. */
   app_exists: boolean;
   /** 기록은 있는데 파일이 없다(누가 셸에서 지웠다 · 옮기기가 실패한 기록) — 다음 정비가 기록을 걷는다. */
@@ -159,7 +180,7 @@ interface ScanResult {
 }
 
 /** 기록 + 파일 훑기 → 목록(순수). 파일에만 있는 보관은 채울 행(fill)으로 돌려준다. */
-export function mergeListing(rows: Row[], scan: ScanResult | null, liveIds: ReadonlySet<string>, keepDays: number): { items: AppFolderArchiveItem[]; fill: Row[]; orphans: AppFolderOrphan[] } {
+export function mergeListing(rows: Row[], scan: ScanResult | null, liveIds: ReadonlySet<string>, keepDays: number, now: Date = new Date()): { items: AppFolderArchiveItem[]; fill: Row[]; orphans: AppFolderOrphan[] } {
   const present = scan ? new Set(scan.archives.map((a) => a.name)) : null;
   const known = new Set(rows.map((r) => r.name));
   const fill: Row[] = [];
@@ -168,12 +189,13 @@ export function mergeListing(rows: Row[], scan: ScanResult | null, liveIds: Read
     const parsed = parseArchiveName(a.name);
     if (!parsed) continue;
     fill.push({ name: a.name, app_id: parsed.app_id, archived_at: parsed.archived_at, archived_by: null, entry: "unknown",
-      kind: a.kind, files: a.files ?? null, bytes: a.bytes ?? null, truncated: a.truncated === true });
+      kind: a.kind, files: a.files ?? null, bytes: a.bytes ?? null, truncated: a.truncated === true, last_error: null, last_try_at: null });
   }
   const items = [...rows, ...fill]
     .sort((a, b) => b.archived_at.getTime() - a.archived_at.getTime() || a.name.localeCompare(b.name))
     .map((r): AppFolderArchiveItem => ({
-      ...publicOf(r), expires_at: expiresAt(r.archived_at, keepDays), app_exists: liveIds.has(r.app_id),
+      ...publicOf(r), expires_at: expiresAt(r.archived_at, keepDays), expired: Date.parse(expiresAt(r.archived_at, keepDays)) <= now.getTime(),
+      app_exists: liveIds.has(r.app_id),
       ...(present && !present.has(r.name) ? { missing: true as const } : {}),
     }));
   const orphans = (scan?.orphans ?? []).map((o) => ({ app_id: o.name, kind: o.kind, files: o.files, bytes: o.bytes, truncated: o.truncated }));
@@ -234,8 +256,9 @@ export async function clearAppFolderArchives(names: string[], by: string | null 
     if (rows.has(n)) out.cleared.push({ name: n, app_id: appOf(n), was_missing: true });
     else out.missing.push(n);
   }
-  for (const k of r.left) out.kept.push({ name: k.name, why: `지우지 못했습니다 — ${k.error}` });
+  for (const k of r.left) out.kept.push({ name: k.name, why: keptWhy(k, "clear") });
   await deleteRows([...r.removed, ...r.absent.filter((n) => rows.has(n))]);
+  await markTried(out.kept);
   return out;
 }
 
@@ -248,8 +271,13 @@ export async function restoreAppFolderArchive(name: string, by: string | null = 
   if (!parsed) throw new HttpError(400, `보관 이름 꼴이 아닙니다: ${String(name).slice(0, 80)} — app_folder_archives 의 name 을 그대로 주세요`);
   const appId = parsed.app_id;
   return withAppInstallLock(appId, async () => {
+    //  보관 기간이 지났으면 되돌리지 않는다 — 정비가 지우는 중일 수 있다(지우기는 여러 번에 나눠 간다 · 반쯤 지워진 것을 새 앱에 붙이지 않게).
+    const archivedAt = (await rowsByNames([name]))[0]?.archived_at ?? parsed.archived_at;
+    if (Date.parse(expiresAt(archivedAt)) <= Date.now()) {
+      throw new HttpError(409, `보관 '${name}' 은(는) 보관 기간이 지나 지우는 중이라 되돌리지 않습니다`);
+    }
     if (!(await getApp(appId))) {
-      const until = expiresAt(parsed.archived_at).slice(0, 10);
+      const until = expiresAt(archivedAt).slice(0, 10);
       throw new HttpError(409, `앱 '${appId}' 이(가) 지금 없습니다 — 같은 id 로 앱을 다시 만든 뒤 되돌리세요(보관은 ${until} 무렵까지 남습니다)`);
     }
     const area = appsAreaFor(by);
@@ -311,16 +339,21 @@ export interface PruneFolderArchivesOutcome { pruned: string[]; kept: Array<{ na
  *  한 번에 오래된 것부터 PRUNE_BATCH 개까지(남은 것은 다음 정비가). 파일이 이미 없으면 기록만 걷는다. 못 지운 것은 기록을 남긴다
  *  (다음 정비가 다시 · 관리자 목록에 보인다). due = 기간이 지난 보관 전부의 수(이번에 다룬 것이 아니라).
  */
-export async function pruneAppFolderArchives(now: Date = new Date(), keepDays: number = snapshotKeepDays()): Promise<PruneFolderArchivesOutcome> {
+export async function pruneAppFolderArchives(now: Date = new Date(), keepDays: number = snapshotKeepDays(), batch: number = PRUNE_BATCH): Promise<PruneFolderArchivesOutcome> {
   const cutoff = new Date(now.getTime() - Math.floor(keepDays) * DAY_MS);
-  const due = (await itemsPool.query(`SELECT * FROM org_app_folder_archive WHERE archived_at < $1 ORDER BY archived_at, name`, [cutoff])).rows.map(rowOf);
+  //  차례: 아직 안 해 본 것(오래된 보관부터) → 못 지웠던 것(오래전에 해 본 것부터) — 못 지우는 보관이 쌓여도 뒤의 보관이 막히지 않게.
+  const due = (await itemsPool.query(
+    `SELECT * FROM org_app_folder_archive WHERE archived_at < $1
+      ORDER BY (last_try_at IS NOT NULL), COALESCE(last_try_at, archived_at), name`, [cutoff])).rows.map(rowOf);
   if (!due.length) return { pruned: [], kept: [], due: 0 };
   const area = appsAreaFor(null);
   if (!area) return { pruned: [], kept: due.map((r) => ({ name: r.name, why: "앱 폴더 자리가 없습니다" })), due: due.length };
-  const r = await removeArchives(area, due.slice(0, PRUNE_BATCH).map((x) => x.name));
+  const r = await removeArchives(area, due.slice(0, Math.max(1, Math.floor(batch))).map((x) => x.name));
   const pruned = [...r.removed, ...r.absent];   // 파일이 이미 없던 것은 기록만 걷는다
   await deleteRows(pruned);
+  const kept = r.left.map((k) => ({ name: k.name, why: keptWhy(k, "prune") }));
+  await markTried(kept);
   if (pruned.length) logger.info({ pruned: pruned.length, keepDays }, "[app-folder] 보관 기간이 지난 앱 폴더 보관을 지움");
-  for (const k of r.left) logger.warn({ name: k.name, err: k.error }, "[app-folder] 보관 기간이 지난 보관을 지우지 못했다 — 다음 정비가 다시");
-  return { pruned, kept: r.left.map((k) => ({ name: k.name, why: k.error })), due: due.length };
+  for (const k of kept) logger.warn({ name: k.name, why: k.why }, "[app-folder] 보관 기간이 지난 보관을 지우지 못했다 — 다음 정비가 다시");
+  return { pruned, kept, due: due.length };
 }
