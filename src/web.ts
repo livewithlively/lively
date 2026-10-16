@@ -146,6 +146,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
       return await runDailyAppSnapshots();
     });
+    // #4778 — 앱을 지울 때 보관으로 옮긴 앱 폴더 중 보관 기간(앱 데이터와 같은 7일)이 지난 것을 지운다. 기록 표만 먼저 보고 지울 것이
+    //  있을 때만 파일을 만진다 — 보관이 없는 워크스페이스는 파일 작업 헬퍼를 깨우지 않는다. 자가호스팅은 부팅 정비 타이머가 같은 함수를 부른다.
+    await step("app-folder-archive", async () => {
+      const { pruneAppFolderArchives } = await import("./apps/app-folder-archive.js");
+      return await pruneAppFolderArchives();
+    });
     // #4481 — 앱 판 묶음: 옛 판을 파일 목록 + 저장소로 옮기고 · 30일 지난 옛 코어 호환 사본을 비우고 · 안 쓰는 파일을 정리한다(6시간에 한 번).
     //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
     await step("app-bundles", async () => {

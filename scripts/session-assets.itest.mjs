@@ -5,6 +5,7 @@
 //   *.itest.mjs 라 run-tests(자동)에서 제외된다(apps-install.itest.mjs 와 동일 규약).
 //  왜 실-DB 인가: materializeAppAssets 는 listComponents+getOrgHarnessAsset(실제 컬럼·조인)을 태운다 —
 //   순수 유닛(session-assets.test.ts)은 디스패치·경로안전·조립만, 이 스모크는 설치→물질화 전 사슬이 디스크에 착지하는지.
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

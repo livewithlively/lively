@@ -5086,6 +5086,46 @@
   "input_hash": "f4ff2ba3f33fd5ef"
  },
  {
+  "name": "app_folder_archives",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-folder-archives"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_folder_archive_clear",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-folder-archives/clear"
+  ],
+  "input_hash": "9fce150dfa147cf1"
+ },
+ {
+  "name": "app_folder_restore",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-folder-archives/restore"
+  ],
+  "input_hash": "95c097ab71137260"
+ },
+ {
+  "name": "app_folder_orphans_archive",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-folder-archives/orphans"
+  ],
+  "input_hash": "b06a377b72e668d1"
+ },
+ {
   "name": "org_app_tool_call",
   "scope": null,
   "mcp": false,

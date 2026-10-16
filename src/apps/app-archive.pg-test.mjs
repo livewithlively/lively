@@ -20,6 +20,7 @@
 //  E9 비우기는 감사에 남는다
 //  ── 재검토 반영 ──
 //  E10 id 가 겹치거나 빈 표(손으로 옮긴 것) — 조각으로 나누지 않고 한 묶음으로 다 담는다  E11 서로 가리키는 보관 표 둘(순환) — 함께 지운다
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -181,7 +182,7 @@ try {
   await legacy("crm_y__gone__20250101000000");
   await q(`UPDATE org_app SET source = '{"kind":"builtin"}'::jsonb WHERE id = 'crm-y'`);
   const appY = (await q(`SELECT * FROM org_app WHERE id = 'crm-y'`))[0];
-  const r7 = await removeInstalledApp(appY, { actor: "pgt-boss", source: "seed" });
+  const r7 = await removeInstalledApp(appY, { actor: "pgt-boss", source: "seed" }, "retire");   // #4778 입구 이름(시더의 은퇴 회수)
   chk("R7 기본 앱 지우기 — 보관 표 그대로 · 응답에 archives 없음", await exists("app_archive", "crm_y__gone__20250101000000") && r7.archives === undefined, JSON.stringify(r7));
 
   // ── R5 백업 상한 초과 — 지우지 않고 남긴다 · 앱은 지워진다 ──

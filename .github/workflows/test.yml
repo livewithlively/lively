@@ -453,6 +453,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-servers.pg-test.mjs
+      # ⑤-n3 앱 폴더 보관(#4778) — 앱을 지우는 모든 입구(관리자 제거 · 나만 보는 앱 지우기 · 기본 앱 은퇴 · 빈 예약 거두기)가 앱 폴더를
+      #    보관으로 옮기는지, 같은 id 로 새로 만들 때 남은 폴더를 먼저 옮겨 새 앱이 빈 폴더로 시작하는지(옛 파일 서명 주소 404 · 탐색기 빈 목록),
+      #    보관 기간이 지나면 지우는지, 관리자 목록 · 비우기 · 되돌리기 · 고아 옮기기가 기록 표와 실제 폴더를 같이 맞추는지는 진짜 DB · 폴더에서만 보인다.
+      - name: 앱 폴더 보관(지우기 입구 · 새로 만들기 · 정비 · 관리자 도구) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-folder-archive.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

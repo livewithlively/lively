@@ -11,7 +11,10 @@ import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
-import { removeInstalledApp } from "../apps/remove-run.js";
+import { removeInstalledApp, dropEmptyDraft, dropStaleDrafts } from "../apps/remove-run.js";
+import {
+  archiveLeftoverAppFolder, listAppFolderArchives, clearAppFolderArchives, restoreAppFolderArchive, archiveOrphanAppFolders,
+} from "../apps/app-folder-archive.js";   // #4778 앱 폴더 보관
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
@@ -782,6 +785,8 @@ const appSave: Capability = {
           //  #4667 새 앱 — 나만 보는 앱으로 먼저 예약한다. 만든 사람 · 책임자 · 만들기 세션 · 원본이 여기서 한 번 찍히고, 설치(upsertApp)는
           //   내용 칸만 채운다. 그래서 설치되는 순간에도 이 앱은 만든 사람에게만 보인다(공개로 생겼다가 닫히는 틈이 없다).
           const origin = input.origin_app_id ? await validOrigin(String(input.origin_app_id), id, who) : null;
+          //  #4778 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 먼저 보관으로 옮긴다. 새 앱은 빈 앱 폴더로 시작한다(못 보면 503).
+          await archiveLeftoverAppFolder(id, who.userId);
           if (!(await store.reserveDraftApp({ id, title: loaded.manifest.title, made_by: who.userId, build_session: sessionId, origin_app_id: origin }, wctx(user, ctx)))) {
             throw new HttpError(409, `앱 id '${id}' 를 다른 저장이 막 만들었습니다 — 잠시 뒤 다시 저장하세요`);
           }
@@ -820,7 +825,7 @@ const appSave: Capability = {
           });
         } catch (e) {
           await store.deleteAppVersions(id, [versionNo]).catch((err) => logger.warn({ err, id, versionNo }, "설치 실패 뒤 판 행 회수 실패(비치명)"));
-          if (reservedHere) await store.dropEmptyDraftApp(id).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 예약 행 회수 실패(비치명)"));
+          if (reservedHere) await dropEmptyDraft(id, who.userId).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 예약 행 회수 실패(비치명)"));
           if (claim && claim.before !== who.userId) await store.setAppDraftBy(id, claim.before).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 초안 표식 되돌리기 실패(비치명 — 공개 판 쪽으로 틀린다)"));
           throw e;
         }
@@ -1246,11 +1251,17 @@ const appBuildStart: Capability = {
     const mine = (await store.findAppsByBuildSession(sid)).find((a) => isAppOwner(a, who));
     if (mine) return { app_id: mine.id, created: false, bound: true, build_session: sid, visibility: mine.visibility, empty: isEmptyDraftApp(mine) };
     //  그만둔 만들기가 남긴 빈 예약(첫 판 없이 사흘 지난 내 것)은 새로 시작할 때 거둔다 — 따로 도는 청소 잡을 두지 않는다.
-    await store.dropStaleEmptyDrafts(who.userId).catch((err) => logger.warn({ err, member: who.userId }, "오래된 빈 예약 앱 정리 실패(비치명)"));
+    await dropStaleDrafts(who.userId).catch((err) => logger.warn({ err, member: who.userId }, "오래된 빈 예약 앱 정리 실패(비치명)"));
     const title = String(input.title ?? "").trim().slice(0, 200) || "새 앱";
     for (let i = 0; i < 6; i++) {
       const id = draftAppIdFrom(title, rand6());
-      if (await store.reserveDraftApp({ id, title, made_by: who.userId, build_session: sid, origin_app_id: null }, wctx(user, ctx))) {
+      //  #4778 — 새 id 라도 같은 이름의 앱 폴더가 남아 있으면 먼저 보관으로 옮긴다(app_save 의 새 id 와 같은 규칙 · 설치 락 안에서 «없음» 을 본다).
+      const reserved = await store.withAppInstallLock(id, async () => {
+        if (await store.getApp(id)) return false;
+        await archiveLeftoverAppFolder(id, who.userId);
+        return store.reserveDraftApp({ id, title, made_by: who.userId, build_session: sid, origin_app_id: null }, wctx(user, ctx));
+      });
+      if (reserved) {
         return { app_id: id, created: true, bound: true, build_session: sid, visibility: "me", empty: true };
       }
     }
@@ -1289,7 +1300,7 @@ const appDraftRemove: Capability = {
   name: "app_draft_remove",
   title: "나만 보는 앱 지우기",
   description: "아직 공개하지 않은(나만 보는) 앱을 지운다 — 그만둔 앱 만들기의 초안 정리. 데이터가 있으면 지우기 직전에 떠 둔다(7일, app_data_snapshots). " +
-    "책임자·관리자. 공개한 앱은 관리자가 org_app_remove 로 지운다.",
+    "앱 폴더(apps/<앱>/)는 보관으로 옮긴다(응답 app_folder · 7일 뒤 지움). 책임자·관리자. 공개한 앱은 관리자가 org_app_remove 로 지운다.",
   scope: null,
   input: { app_id: z.string() },
   expose: {
@@ -1304,7 +1315,7 @@ const appDraftRemove: Capability = {
       if (app.visibility !== "me") throw new HttpError(409, `「${app.title || id}」 은(는) 공개한 앱이라 관리자가 지웁니다(org_app_remove) — 먼저 「나만」 으로 되돌리면(app_visibility_set visibility:'me') 여기서 지울 수 있습니다`);
       if (isBuiltinSource(app.source)) throw new HttpError(409, `기본 앱(빌트인) '${id}' 은 지울 수 없습니다`);
       if (!isAppOwner(app, who) && !isAdminViewer(who)) throw new HttpError(403, `「${app.title || id}」 은(는) 책임자와 관리자만 지울 수 있습니다`);
-      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx))) };
+      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx), "discard")) };
     });
   },
 };
@@ -1346,6 +1357,7 @@ const appRemove: Capability = {
   name: "org_app_remove",
   title: "앱 제거",
   description: "앱과 그 전개물(하네스 자산·크론·툴·호스트)을 회수하고 레지스트리에서 삭제한다. 데이터 표와 그 앱의 보관 표(archives)는 지우기 직전 떠 둔다(7일, app_data_snapshots). "
+    + "앱 폴더(apps/<앱>/)는 보관으로 옮긴다(응답 app_folder — 같은 id 로 새로 만든 앱은 빈 앱 폴더로 시작 · 7일 뒤 지움 · app_folder_archives · 되돌리기 app_folder_restore). "
     + "builtin(코드 소유) 앱은 제거 대신 org_app_set_enabled 로 끈다(부팅 재시드). 관리자.",
   scope: "admin",
   input: { app_id: z.string() },
@@ -1359,8 +1371,8 @@ const appRemove: Capability = {
       const app = await requireVisibleApp(id, viewerOf(user));
       const src = (app.source ?? {}) as { kind?: string };
       if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
-      //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
-      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx))) };
+      //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 앱 폴더 보관 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
+      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx), "remove")) };
     });
   },
 };
@@ -1554,6 +1566,97 @@ const appArchiveClear: Capability = {
   },
 };
 
+// ── 앱 폴더 보관 보기 · 비우기 · 되돌리기 · 고아 옮기기(#4778, 관리자) ──
+//  앱을 지우면 그 앱 폴더(apps/<앱>/)는 apps 주소로 닿지 않는 보관 자리로 옮겨지고(remove-run), 보관 기간(앱 데이터 떠 두기와 같은 7일)이 지나면
+//  정비가 지운다. 관리자는 목록을 보고 비우거나, 같은 id 로 다시 만든 앱에 되돌린다(명시로만 — app_data_restore 와 같은 자세). 앱 행 없이 폴더만
+//  남은 것(고아)은 정비가 훑지 않는다 — 여기서 보고 보관으로 옮긴다(상민 2026-10-16). 실행 · 규칙은 apps/app-folder-archive.ts.
+const appFolderArchivesList: Capability = {
+  name: "app_folder_archives",
+  title: "앱 폴더 보관 목록",
+  description: "앱을 지울 때 보관으로 옮긴 앱 폴더(apps/<앱>/)와, 앱 없이 남은 앱 폴더(고아)를 본다. archives 항목 = name(비우기 · 되돌리기에 그대로) · app_id · "
+    + "archived_at · archived_by · entry(remove 관리자 제거 · discard 나만 보는 앱 지우기 · retire 기본 앱 은퇴 · draft-drop 빈 예약 거두기 · create 같은 id 로 새로 만들 때 남아 있던 것 · "
+    + "orphan 고아를 옮김 · unknown 기록 없이 파일만 있던 것) · files · bytes · truncated(세다 멈춤) · expires_at(이때 지운다) · expired(보관 기간이 지나 정비가 지우는 중) · "
+    + "last_error · last_try_at(지우려다 멈춘 보관의 까닭 · 시각 — 권한 · 시간 예산, 다시 비우면 이어서 지운다) · app_exists(같은 id 의 앱이 지금 있나) · "
+    + "missing(기록만 있고 파일이 없다). 되돌리기는 app_exists 이고 expired · last_try_at 이 없을 때만. "
+    + "orphans 항목 = app_id · files · bytes — app_folder_orphans_archive 로 보관에 옮긴다. 관리자.",
+  scope: "admin",
+  input: {},
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/app-folder-archives"], parse: () => ({}) }],
+  },
+  handler: async (_input: Record<string, unknown>, user: LivelyUser) => listAppFolderArchives(actorOf(user)),
+};
+
+const appFolderArchiveClear: Capability = {
+  name: "app_folder_archive_clear",
+  title: "앱 폴더 보관 비우기",
+  description: "보관한 앱 폴더를 지운다(app_folder_archives 의 name 그대로) — 되살릴 길이 없다(그 보관이 마지막 사본이다). 보관 이름 꼴이 아니거나 없는 이름은 "
+    + "건드리지 않고 missing 으로 알린다 · 못 지운 것은 kept(까닭). 보관 기간이 지난 것은 정비가 스스로 지운다. 관리자.",
+  scope: "admin",
+  input: { names: z.array(z.string()).min(1).max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/clear"], parse: (req) => ({ names: (req.body as Record<string, unknown> | undefined)?.names }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    //  REST 는 zod 를 거치지 않는다 — 모양이 틀린 names 를 조용히 [] 로 읽지 않게 거절한다(app_archive_clear 와 같은 까닭).
+    if (!Array.isArray(input.names) || !input.names.length) throw new HttpError(400, "names(보관 이름들)가 필요합니다 — app_folder_archives 로 목록을 보세요");
+    const names = input.names.map((n) => String(n ?? ""));
+    const out = await clearAppFolderArchives(names, actorOf(user));
+    //  파일을 지우는 관리자 동작 — 누가 무엇을 지웠고 무엇이 남았나를 감사에 남긴다.
+    if (out.cleared.length || out.kept.length) {
+      await audit("app_folder_archive", null, "clear", { names }, { cleared: out.cleared, kept: out.kept }, user?.userId, ctx?.source)
+        .catch((err) => logger.warn({ err }, "앱 폴더 보관 비우기 감사 기록 실패(비치명)"));
+    }
+    return { ok: true, ...out };
+  },
+};
+
+const appFolderRestore: Capability = {
+  name: "app_folder_restore",
+  title: "앱 폴더 되돌리기",
+  description: "보관한 앱 폴더를 같은 id 의 앱 폴더(apps/<앱>/)로 되돌린다 — 그 앱이 지금 있고(지운 앱을 같은 id 로 다시 만든 뒤) 그 앱 폴더가 없거나 비었을 때만. "
+    + "앱 폴더에 파일이 있으면 409(새 앱의 파일을 덮지 않는다 · 아무것도 바꾸지 않는다). 앱이 없으면 409 · 보관 기간이 지났거나(expired) 지우다 멈춘 보관(last_try_at — "
+    + "일부가 이미 지워졌을 수 있다)이면 409 · 보관이 이미 지워졌으면 410. 앱 데이터는 app_data_restore 로 따로. 관리자.",
+  scope: "admin",
+  input: { name: z.string().max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/restore"], parse: (req) => ({ name: (req.body as Record<string, unknown> | undefined)?.name }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const name = String(input.name ?? "").trim();
+    const out = await restoreAppFolderArchive(name, actorOf(user));
+    await audit("app_folder_archive", out.app_id, "restore", { name }, out, user?.userId, ctx?.source)
+      .catch((err) => logger.warn({ err }, "앱 폴더 되돌리기 감사 기록 실패(비치명)"));
+    return { ok: true, restored: out.name, app_id: out.app_id };
+  },
+};
+
+const appFolderOrphansArchive: Capability = {
+  name: "app_folder_orphans_archive",
+  title: "고아 앱 폴더 보관으로",
+  description: "앱 행 없이 남은 앱 폴더(app_folder_archives 의 orphans)를 보관으로 옮긴다 — 앱 id 마다 설치 락 안에서 «그 앱이 없음» 을 다시 본 뒤. "
+    + "같은 id 의 앱이 있으면 건너뛴다(skipped — 그 앱의 폴더다). 옮긴 것은 다른 보관처럼 보관 기간 뒤 지운다. 관리자.",
+  scope: "admin",
+  input: { app_ids: z.array(z.string().max(64)).min(1).max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/orphans"], parse: (req) => ({ app_ids: (req.body as Record<string, unknown> | undefined)?.app_ids }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    if (!Array.isArray(input.app_ids) || !input.app_ids.length) throw new HttpError(400, "app_ids(고아 앱 폴더의 앱 id 들)가 필요합니다 — app_folder_archives 의 orphans 를 보세요");
+    const ids = input.app_ids.map((n) => String(n ?? ""));
+    const out = await archiveOrphanAppFolders(ids, actorOf(user));
+    if (out.archived.length) {
+      await audit("app_folder_archive", null, "archive_orphans", { app_ids: ids }, { archived: out.archived.map((a) => a.name), skipped: out.skipped }, user?.userId, ctx?.source)
+        .catch((err) => logger.warn({ err }, "고아 앱 폴더 보관 감사 기록 실패(비치명)"));
+    }
+    return { ok: true, ...out };
+  },
+};
+
 export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
   appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
-  appArchivesList, appArchiveClear];
+  appArchivesList, appArchiveClear, appFolderArchivesList, appFolderArchiveClear, appFolderRestore, appFolderOrphansArchive];

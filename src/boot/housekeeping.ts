@@ -451,6 +451,12 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void appSnapshot(); }, 180_000).unref();
   setInterval(() => { void appSnapshot(); }, 60 * 60_000).unref();
 
+  // #4778 — 보관으로 옮긴 앱 폴더 중 보관 기간이 지난 것 지우기. 기록 표만 보고 지울 것이 있을 때만 파일을 만진다(앱 데이터 떠 두기와 같은 1시간 주기).
+  const appFolderArchive = () => perTenant("app-folder-archive",
+    () => import("../apps/app-folder-archive.js").then((m) => m.pruneAppFolderArchives()));
+  setTimeout(() => { void appFolderArchive(); }, 200_000).unref();
+  setInterval(() => { void appFolderArchive(); }, 60 * 60_000).unref();
+
   // #4481 — 앱 판 묶음(옛 판 옮기기 · 30일 지난 호환 사본 비우기 · 안 쓰는 파일 정리). 워크스페이스 스코프라 순회한다.
   //  옮기기는 한 번에 조금씩이라 10분 주기 · 정리는 함수가 워크스페이스마다 6시간에 한 번으로 스스로 잠근다. 부팅 4분 뒤 1회.
   const appBundles = () => perTenant("app-bundles",

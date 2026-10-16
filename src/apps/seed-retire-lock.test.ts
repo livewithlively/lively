@@ -18,7 +18,7 @@ const row = (over: Partial<OrgApp> = {}): OrgApp => ({
 
 /** 가짜 세계 — getApp 은 부를 때마다 `answers` 를 차례로 답한다(Error 면 던진다). 락·회수 호출을 적는다. */
 function fake(answers: Array<OrgApp | null | Error>) {
-  const calls = { locks: [] as string[], removes: [] as string[], gets: 0 };
+  const calls = { locks: [] as string[], removes: [] as string[], entries: [] as string[], gets: 0 };
   const deps: SeedDeps = {
     getApp: async (id) => {
       calls.gets++;
@@ -31,7 +31,7 @@ function fake(answers: Array<OrgApp | null | Error>) {
     persistUiAssets: async () => undefined,
     persistRuntimeAsset: async () => undefined,
     withAppInstallLock: async (id, fn) => { calls.locks.push(id); return fn(); },
-    removeInstalledApp: async (existing) => { calls.removes.push(existing.id); return { components: 0, snapshot: null }; },
+    removeInstalledApp: async (existing, _ctx, entry) => { calls.removes.push(existing.id); calls.entries.push(entry); return { components: 0, snapshot: null, app_folder: { archived: null } }; },
   } as SeedDeps;
   return { deps, calls };
 }
@@ -62,6 +62,8 @@ test("[B2] 빌트인으로 설치돼 있으면 — 락을 잡고 · 회수하고
     const r = await seedBuiltinApps(root, f.deps);
     assert.deepEqual(f.calls.locks, ["hello"]);
     assert.deepEqual(f.calls.removes, ["hello"]);
+    //  #4778 E3 — 은퇴 회수도 앱 폴더 보관 기록에 «retire» 입구로 남는다(공용 코어에 입구를 넘긴다).
+    assert.deepEqual(f.calls.entries, ["retire"]);
     assert.deepEqual(r.retired, ["hello"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

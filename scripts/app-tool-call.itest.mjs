@@ -3,6 +3,7 @@
 //  (4) 스코프 캡: 멤버가 admin 이어도 grant 스코프에 없으면 admin 도구 403 (5) grant 없으면 403
 //  (6) 실행은 앱 principal(mcp_call_log.app=앱). fail-first: 이 브리지(org_app_tool_call)는 이 PR 이전 없었다.
 //  ⚠ 수동 실행(docker):  node scripts/app-tool-call.itest.mjs
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import assert from "node:assert/strict";
 

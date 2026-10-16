@@ -14,6 +14,7 @@ import { runInstall, type InstallAppMeta } from "./install.js";
 import { makeDeployDeps } from "./deploy.js";
 import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
+import { archiveLeftoverAppFolder } from "./app-folder-archive.js";   // #4778 새 앱은 빈 앱 폴더로 시작
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
@@ -57,6 +58,10 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
   const builtin = isBuiltinSource(source);
   const schema = appSchemaFor(builtin);
+  //  #4778 새 앱 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 아무것도 만들기 전에 보관으로 옮긴다(못 보면 503 — 새 앱은 늘 빈 앱 폴더로 시작한다).
+  //   부르는 쪽(org_app_install · app_save)이 설치 락 안에서 부른다. 기본 앱(시더)은 건너뛴다 — 코드가 주인인 정해진 id 라 남의 폴더가 없고,
+  //   부팅 시딩이 파일 작업 헬퍼에 묶이지 않게.
+  if (!existing && !builtin) await archiveLeftoverAppFolder(id, String(ctx.actor ?? "").trim() || null);
   const tableSpecs = loaded.manifest.data.tables.map((t) => ({ table: t.name, columns: t.columns, indexes: t.indexes, checks: t.checks, drop_columns: t.drop_columns }));
   let tables: InstallTablesOutcome | undefined;
   if (!builtin) {
@@ -139,7 +144,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
         await notifyAppInstaller({
           appId: id, memberId: who,
           title: `앱 '${loaded.manifest.title}' 에서 빠진 테이블에 데이터가 있어 보관했습니다`,
-          body: `매니페스트에서 빠진 테이블을 지우지 않고 옮겨 두었습니다: ${parts.join(" · ")}. 앱 화면과 세션에서는 더 보이지 않지만 데이터는 DB 의 보관 스키마에 그대로 남아 있습니다(관리자가 관리탭 ▸ 앱 보관 표에서 보고 비울 수 있습니다).`,
+          body: `매니페스트에서 빠진 테이블을 지우지 않고 옮겨 두었습니다: ${parts.join(" · ")}. 앱 화면과 세션에서는 더 보이지 않지만 데이터는 DB 의 보관 스키마에 그대로 남아 있습니다(관리자가 관리탭 ▸ 앱 보관에서 보고 비울 수 있습니다).`,
         }).catch((err) => logger.warn({ err, id }, "보관 알림 발송 실패(비치명)"));
       }
     }

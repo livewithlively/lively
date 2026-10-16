@@ -4,6 +4,7 @@
 //  stageAppSource→loadAppPackage→installLoadedApp→makeDeployDeps.reclaim 왕복이 실제 스토어를 타는지 본다.
 //  ⚠ 수동 실행(docker):  node scripts/apps-install-verb.itest.mjs  (*.itest.mjs 라 run-tests 제외)
 //  fail-first: 이 verb(org_app_install/remove)는 이 PR 이전엔 없었다 → import 자체가 red 였다.
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import os from "node:os";

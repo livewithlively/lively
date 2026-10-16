@@ -1199,6 +1199,6 @@ export async function checkAppTableFuse(appId: string, tables: string[], schema:
 /** #4733 표 개수 한도 안내의 꼬리 — 보관 표도 한도에 세지만 앱을 고쳐서는 줄지 않는다. 관리자가 비울 수 있고, 앱을 지우면 그 앱 것은 함께 지워진다. */
 export function archivedFuseHint(archived: number): string {
   return archived > 0
-    ? ` 보관 표 ${archived}개는 관리자가 비울 수 있습니다(관리탭 ▸ 앱 보관 표 · app_archive_clear) — 앱을 지우면 그 앱의 보관 표도 함께 지워집니다.`
+    ? ` 보관 표 ${archived}개는 관리자가 비울 수 있습니다(관리탭 ▸ 앱 보관 · app_archive_clear) — 앱을 지우면 그 앱의 보관 표도 함께 지워집니다.`
     : "";
 }

@@ -27,6 +27,7 @@
 //      정리할 표 세기도 짧게(E18) · 선언에서만 뺀 칸은 «알아 둘 것» 만(E15b) · 되돌려 공개의 실제 결과 == 미리 본 것(E16)
 //  B24 #4482 /_lively/* 는 주소의 판 — 초안 주인도 공개 주소면 공개 판의 표 · 초안 주소면 초안의 표 · 다리는 사람의 판 · 남의 초안 주소 404 ·
 //      동의 없음 code consent_required · 빈도는 사람마다
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
