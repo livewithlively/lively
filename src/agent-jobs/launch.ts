@@ -1,7 +1,7 @@
 // 작업 컨테이너를 띄우고 걷는 자리 — 부수효과만(브로커 확보 · 멤버 홈 준비 · tmux) (#4490 앱 v2-11)
 //
 //  사람 세션(createSession)과 **같은 길**을 쓰되 세션이 아니다: desired 행·@box_* 표식·아웃박스·이름짓기가 없고, 세션 id 가 `job-` 다.
-//   ① 브로커 확보(`/lvly/session/ensure`, tmux:"inside", fresh) — 같은 이미지·번들·gVisor, 사람 세션과 같은 메모리 캡·예약
+//   ① 브로커 확보(`/lvly/session/ensure`, tmux:"inside") — 같은 이미지·번들·gVisor, 사람 세션과 같은 메모리 캡·예약
 //   ② 멤버 홈 준비(prepareMemberHome — 키트·safe.directory·git 자격) — 구독 실행은 그 멤버 홈이 붙는다(설계 §12 ④)
 //   ③ 컨테이너 안 tmux 에 판(부트) — `box-spawn --cwd <작업 폴더> node -e <부트>`. 판이 빠지면 tmux 가 끝나고 브로커가 걷는다(#4696).
 //  걷기는 tmux kill-session 한 번이다 — 브로커가 그 결과를 «끝났다» 신호로 받아 안이 비면 곧바로 철거한다(신호 +1초, 실측 p50 2.2초).
@@ -9,10 +9,18 @@
 //  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 작업 컨테이너는 매니지드 전용이다(자가호스팅 실행은 v2-8).
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
+import { JOB_SESSION_ID_RE } from "./plan.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX } from "./runner.js";
 import type { AgentJobRow } from "./store.js";
 
-export class JobLaunchError extends Error {}
+/**
+ * 띄우기 실패. transient = 이 작업 탓이 아닌 일시 실패(컨테이너 확보가 막힘 — 노드 자리·브로커 중계) — 부르는 쪽이 작업을 대기열로
+ *  되돌리고 이번 배차를 멈춘다. 그 밖(계정·폴더·판)은 그 작업을 실패로 끝낸다.
+ *  ⚠ 일시 실패를 실패로 끝내면 용량이 잠깐 막힌 사이 대기열 전체가 차례로 실패한다(격리 리뷰).
+ */
+export class JobLaunchError extends Error {
+  constructor(message: string, readonly transient = false) { super(message); }
+}
 
 /** 이 배포에서 작업 컨테이너를 띄울 수 있나(매니지드 — 세션 컨테이너 확보 훅이 있고 테넌트 컨텍스트가 있다). */
 export async function jobContainersAvailable(): Promise<boolean> {
@@ -82,13 +90,14 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
     catch (e) { throw new JobLaunchError(`작업 폴더를 만들지 못했습니다(${job.cwd}): ${(e as Error)?.message ?? e}`); }
   }
   let made: { container: string; created: boolean } & Record<string, unknown>;
+  //  `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
   try {
     made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
-      sessionId: sid, osUser, cwd: job.cwd, memMb, memRequestMb, tmux: "inside", fresh: true,
+      sessionId: sid, osUser, cwd: job.cwd, memMb, memRequestMb, tmux: "inside",
       ...(apps ? { apps } : {}),
     });
   } catch (e) {
-    throw new JobLaunchError(`작업 컨테이너를 확보하지 못했습니다: ${(e as Error)?.message ?? e}`);
+    throw new JobLaunchError(`작업 컨테이너를 확보하지 못했습니다: ${(e as Error)?.message ?? e}`, true);
   }
   //  어느 자리(컨테이너)에 앉았나 — 브로커 저널(철거 줄은 컨테이너 이름만 싣는다)과 이 작업을 잇는 유일한 단서다.
   logger.info({ job: job.id, session: sid, container: made.container, created: made.created }, "[agent-job] 작업 컨테이너 확보");
@@ -106,15 +115,27 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   return { container: made.container };
 }
 
+type TmuxRun = (args: string[]) => Promise<unknown>;
+type GoneCheck = (err: unknown) => boolean;
+
 /**
  * 작업 컨테이너를 걷는다 — kill-session 한 번(브로커 #4696 이 그 결과를 «끝났다» 신호로 받아 안이 비면 곧바로 철거한다).
- *  이미 없으면(판이 먼저 빠져 tmux 가 끝났다) tmux 가 실패를 돌려준다 — 그것도 같은 신호라 삼킨다. 던지지 않는다.
+ *  · `job-<id>-<8hex>` 꼴이 아니면 **보내지 않고 던진다** — 사람 세션(`box-`)을 끄는 길이 여기로 열리지 않게 하는 마지막 자리다.
+ *  · 이미 없다는 **확답**(`can't find session` — 판이 먼저 빠져 tmux 가 끝났다)만 «걷힘» 으로 삼킨다.
+ *  · 그 밖(중계 시간 초과 · 브로커 오류 · 목록을 못 봄)은 던진다 — 못 걷은 것을 «걷었다» 로 적으면 하네스가 구독으로 계속 돌고
+ *    아무도 다시 걷지 않는다(격리 리뷰 blocking). 부르는 쪽(service.reapJob)이 다음 감시에 다시 걷는다.
+ *  run·gone 은 시험이 바꿔 끼우는 자리다(기본은 tmux 중계와 그 확답 판정).
  */
-export async function killJobContainer(sessionId: string): Promise<void> {
+export async function killJobContainer(sessionId: string, run?: TmuxRun, gone?: GoneCheck): Promise<void> {
+  if (!JOB_SESSION_ID_RE.test(sessionId)) throw new Error(`작업 세션 id 꼴이 아니다 — 걷지 않는다: ${JSON.stringify(String(sessionId).slice(0, 80))}`);
+  const t = run && gone ? null : await import("../terminal/tmux-exec.js");
   try {
-    const { tmux } = await import("../terminal/tmux-exec.js");
-    await tmux(["kill-session", "-t", sessionId]);
+    await (run ?? t!.tmux)(["kill-session", "-t", sessionId]);
   } catch (e) {
-    logger.debug?.({ session: sessionId, err: (e as Error)?.message }, "작업 컨테이너 kill-session — 이미 끝났다(무해)");
+    if ((gone ?? ((err: unknown) => t!.isSessionGoneError(err)))(e)) {
+      logger.debug?.({ session: sessionId }, "작업 컨테이너 kill-session — 이미 끝났다(확답)");
+      return;
+    }
+    throw e;
   }
 }

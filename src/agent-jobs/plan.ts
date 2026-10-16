@@ -95,6 +95,14 @@ export interface SweepFacts {
   lastTickAt: number | null;
   timeoutSec: number;
   cancelRequested: boolean;
+  /**
+   * 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작). 무응답은 «판이 조용했던 시간» 이지 «게이트웨이가 못 들은 시간» 이
+   *  아니다 — 게이트웨이가 내려가 있던 동안 판의 박동은 갈 곳이 없었다. 그래서 침묵은 이 시각 이후부터만 센다(재기동 직후 살아 있는
+   *  판을 한꺼번에 끊지 않게). 모르면(null) 접지 않는다.
+   */
+  listeningSince?: number | null;
+  /** 대기 중인 작업의 마지막 띄우기 실패 사유(일시 실패로 대기열에 되돌린 것) — 대기 상한으로 끝낼 때 문장에 붙인다. */
+  lastError?: string | null;
 }
 export type SweepAction =
   | { act: "none" }
@@ -114,7 +122,8 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
   if (f.status === "queued") {
     if (f.cancelRequested) return { act: "end", status: "canceled", error: "대기 중에 취소했습니다", kill: false };
     if (nowMs - f.createdAt > p.queue_wait_min * 60_000) {
-      return { act: "end", status: "failed", error: `자리가 ${p.queue_wait_min}분 안에 나지 않았습니다(워크스페이스 동시 상한) — 다시 보내 주세요`, kill: false };
+      const last = f.lastError ? ` — 마지막 띄우기 실패: ${f.lastError.slice(0, 300)}` : "";
+      return { act: "end", status: "failed", error: `자리가 ${p.queue_wait_min}분 안에 나지 않았습니다(워크스페이스 동시 상한) — 다시 보내 주세요${last}`, kill: false };
     }
     return { act: "none" };
   }
@@ -130,7 +139,7 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
     if (nowMs - started > (f.timeoutSec + TIMEOUT_GRACE_SEC) * 1000) {
       return { act: "end", status: "timeout", error: `실행 시간 상한(${Math.round(f.timeoutSec / 60)}분)을 넘겼습니다`, kill: true };
     }
-    const heard = f.lastTickAt ?? started;
+    const heard = Math.max(f.lastTickAt ?? started, f.listeningSince ?? Number.NEGATIVE_INFINITY);
     if (nowMs - heard > p.silent_sec * 1000) {
       return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.silent_sec}초 동안 응답하지 않았습니다(노드·컨테이너가 사라졌을 수 있습니다)`, kill: true };
     }
@@ -153,8 +162,11 @@ export interface RunnerReport {
   tail: string;
 }
 
-/** 로그인이 안 된(자격이 없는) 하네스가 남기는 말 — 사람에게 «AI 연결 필요» 로 바꿔 말한다(설계 §12 ④ «파일 존재 ≠ 유효»). */
-const AUTH_FAIL_RE = /(not logged in|please run \/login|invalid api key|authentication_error|oauth token (has )?expired|credit balance is too low|\/login)/i;
+/**
+ * 로그인이 안 된(자격이 없는) 하네스가 남기는 말 — 사람에게 «AI 연결 필요» 로 바꿔 말한다(설계 §12 ④ «파일 존재 ≠ 유효»).
+ *  ⚠ 맨 `/login` 은 넣지 않는다 — 작업이 고치던 파일 경로(`src/pages/login.tsx`)가 오류문에 실리면 «AI 연결 필요» 로 잘못 읽힌다(격리 리뷰 실측).
+ */
+export const AUTH_FAIL_RE = /(not logged in|please run \/login|invalid api key|authentication_error|oauth token (has )?expired|credit balance is too low)/i;
 
 /**
  * (순수) 판의 마지막 보고 → 작업 상태·오류 문장.
@@ -176,12 +188,12 @@ export function finalOutcome(r: RunnerReport): { status: "done" | "failed" | "ti
 /** (순수) 보고 본문을 모양대로 고른다 — 판이 보낸 것은 컨테이너 안(작업 AI 가 닿는 자리)에서 왔으므로 칸마다 거르고 자른다. */
 export function parseRunnerReport(body: unknown): RunnerReport {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
-  const str = (v: unknown, max: number): string | null => (typeof v === "string" ? v.slice(0, max) : null);
+  const str = (v: unknown, max: number): string | null => (typeof v === "string" ? noNul(v).slice(0, max) : null);
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const res = b.result && typeof b.result === "object" ? b.result as Record<string, unknown> : null;
   const usage = res?.usage && typeof res.usage === "object" && !Array.isArray(res.usage) ? res.usage as Record<string, unknown> : null;
   return {
-    exit_code: num(b.exit_code),
+    exit_code: int32(b.exit_code),
     signal: str(b.signal, 32),
     stopped: b.stopped === "timeout" || b.stopped === "canceled" ? b.stopped : null,
     conversation_id: convIdOf(b.conversation_id),
@@ -198,6 +210,18 @@ export function parseRunnerReport(body: unknown): RunnerReport {
     stderr_tail: str(b.stderr_tail, STDERR_TAIL_MAX) ?? "",
     tail: str(b.tail, TAIL_MAX) ?? "",
   };
+}
+
+/**
+ * (순수) 글에서 NUL 을 뺀다 — Postgres text·jsonb 는 `\u0000` 을 받지 않는다. 그대로 두면 보고 한 번이 500 이 되고, 판이 다시 보내다
+ *  지쳐 빠지면 작업이 «응답 없음» 으로 끝나 결과가 사라진다.
+ */
+export function noNul(s: string): string {
+  return s.includes("\u0000") ? s.split("\u0000").join("") : s;
+}
+/** 종료코드 — INT 칸에 들어가는 정수만(1.5 · 1e12 는 버린다). */
+function int32(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v >= -2147483648 && v <= 2147483647 ? v : null;
 }
 
 /** 사용량은 숫자 칸만 남긴다(토큰 수 등) — 이름은 짧은 영숫자, 칸은 많아야 24개. 중첩·문자열은 버린다. */

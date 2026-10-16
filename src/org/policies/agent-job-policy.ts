@@ -82,7 +82,7 @@ const policy = definePolicy<AgentJobPolicy>({
   },
 });
 
-/** 잡값 방어 — 관리 설정 입력이든 env 든 범위를 벗어나면 시드/기본값으로. */
+/** 잡값 방어 — 관리 설정 입력이든 env 든 범위를 벗어나면 경계로 접고, 숫자가 아니면 시드/기본값으로(노브 clampInt). */
 export function normalizeAgentJobPolicy(raw: unknown): AgentJobPolicy {
   return policy.normalize(raw);
 }
@@ -90,6 +90,23 @@ export function normalizeAgentJobPolicy(raw: unknown): AgentJobPolicy {
 /** DB 원본(JSONB) → 유효 정책. DB 우선, 비면 env 시드, 그 다음 기본값. */
 export function resolveAgentJobPolicy(dbRaw: unknown): AgentJobPolicy {
   return policy.resolve(dbRaw);
+}
+
+/**
+ * (순수) 관리자가 적으려는 값이 축 사이 관계를 지키나 — 어기면 거절 문장, 지키면 null.
+ *  next = 이번에 적을 값(이미 저장된 값 + 이번 입력). 안 적은 칸은 지금 쓰는 값(env 시드 · 기본값)으로 견준다.
+ *  ⚠ 조용히 접지 않는다 — 접으면(사람당 5 → 2) 그 값이 저장돼, 나중에 동시 상한을 올려도 되살아나지 않는다(격리 리뷰).
+ *   읽을 때의 불변식(invariant)은 env 시드가 바뀌는 경우의 안전망으로 남는다.
+ */
+export function agentJobPolicyPatchError(next: Partial<AgentJobPolicy>): string | null {
+  const want = { ...resolveAgentJobPolicy({}), ...next };
+  if (want.max_running_per_member > want.max_running) {
+    return `max_running_per_member(${want.max_running_per_member})는 max_running(${want.max_running}) 이하여야 합니다 — 둘을 함께 주세요`;
+  }
+  if (want.default_timeout_min > want.max_timeout_min) {
+    return `default_timeout_min(${want.default_timeout_min})은 max_timeout_min(${want.max_timeout_min}) 이하여야 합니다 — 둘을 함께 주세요`;
+  }
+  return null;
 }
 
 /** 유효 정책의 출처 — 관리 설정 저장값인지, .env 시드인지, 코드 기본값인지. */

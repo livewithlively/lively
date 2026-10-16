@@ -1,6 +1,6 @@
 // 작업 컨테이너 판(부트 + 본체) — **진짜 노드 프로세스**로 돌려 부작용을 본다 (#4490).
 //  가짜 게이트웨이(HTTP)가 boot·tick·result 를 받고, 가짜 하네스(노드 스크립트)가 stream-json 을 낸다. 판이 실제로 무엇을 불렀고
-//  무엇을 하네스에 넘겼는지(stdin·argv·env·MCP 파일)를 그쪽 기록으로 단언한다. 행 번호(R1~R5)는 spec-4490-core.md 엣지 표.
+//  무엇을 하네스에 넘겼는지(stdin·argv·env·MCP 파일)를 그쪽 기록으로 단언한다. 행 번호(R1~R6)는 지식 agent-job-container-research-4490 엣지 표.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -46,12 +46,12 @@ process.stdin.on("end", () => {
 });
 `);
 
-interface Seen { boot: number; ticks: Array<Record<string, unknown>>; results: Array<Record<string, unknown>>; auth: string[] }
+interface Seen { boot: number; ticks: Array<Record<string, unknown>>; results: Array<Record<string, unknown>>; auth: string[]; tickAt: number[]; resultAt: number[] }
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
-async function gateway(o: { mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; record: string }):
+async function gateway(o: { mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string }):
   Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
-  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [] };
+  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [] };
   let resultCalls = 0;
   const srv = http.createServer((req, res) => {
     let body = "";
@@ -73,12 +73,15 @@ async function gateway(o: { mode: "ok" | "hang"; timeoutMs: number; cancelAfterT
       }
       if (req.url === "/api/agent-jobs/1/tick") {
         seen.ticks.push(JSON.parse(body || "{}"));
+        seen.tickAt.push(Date.now());
         return json(200, { cancel: o.cancelAfterTicks !== undefined && seen.ticks.length >= o.cancelAfterTicks });
       }
       if (req.url === "/api/agent-jobs/1/result") {
         resultCalls++;
         seen.results.push(JSON.parse(body || "{}"));
+        seen.resultAt.push(Date.now());
         if (o.resultFailFirst && resultCalls === 1) return json(503, { error: "busy" });
+        if (o.resultDelayMs) { setTimeout(() => json(200, { ok: true }), o.resultDelayMs); return; }
         return json(200, { ok: true });
       }
       json(404, {});
@@ -205,6 +208,18 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
   const b = claudeJobArgv({ mcp: false });
   assert.ok(b.includes("--strict-mcp-config") && !b.includes("--mcp-config") && !b.includes("--model") && !b.includes("--resume"));
   for (const bad of ["--dangerously-x", "-p", "a b", "x;rm"]) assert.throws(() => claudeJobArgv({ model: bad, mcp: false }), bad);
+});
+
+await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가 결과를 늦게 받아도 «응답 없음» 으로 끊기지 않게", async () => {
+  const record = path.join(tmp, "r6.json");
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, resultDelayMs: 1_200, record });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.seen.results.length, 1);
+    const sent = g.seen.resultAt[0]!;
+    const during = g.seen.tickAt.filter((at) => at > sent && at < sent + 1_200).length;
+    assert.ok(during >= 3, `결과를 기다리는 1.2초 동안 박동 ${during}번(박동 간격 150ms)`);
+  } finally { await g.close(); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

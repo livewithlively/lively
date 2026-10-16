@@ -1,5 +1,5 @@
 // 작업 컨테이너 판정(순수) — 자리 주기 · 감시 · 시간 상한 · 판 보고 → 상태 · 보고 거르기 · 이름 (#4490)
-//  행 번호(C·S·T·F·P·ID)는 스크래치패드 spec-4490-core.md 의 엣지 표다. 표의 행마다 시나리오가 최소 하나다.
+//  행 번호(C·S·T·F·P·ID)는 지식 agent-job-container-research-4490 의 엣지 표다. 표의 행마다 시나리오가 최소 하나다.
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
@@ -77,6 +77,23 @@ t("S8 시작 + 상한 + 여유를 넘으면 timeout + 걷기 — 박동이 최�
   assert.ok(a.act === "end" && a.status === "timeout" && a.kill === true, JSON.stringify(a));
   assert.equal(sweepDecision(base({ status: "running", startedAt: startedAt + 2, lastTickAt: NOW - 1000, timeoutSec: 900 }), NOW, P).act, "none");
 });
+t("S10 재기동 직후 — 듣기 시작한 지 silent 정확히는 그대로, 넘으면 끊김(그 전의 침묵은 세지 않는다)", () => {
+  //  실행 상한은 넉넉히(4시간) — 여기선 무응답 판정만 본다.
+  const run = { status: "running" as const, startedAt: NOW - 3_600_000, lastTickAt: NOW - 600_000, timeoutSec: 4 * 3600 };
+  assert.deepEqual(sweepDecision(base({ ...run, listeningSince: NOW - P.silent_sec * 1000 }), NOW, P), { act: "none" });
+  assert.equal(sweepDecision(base({ ...run, listeningSince: NOW - P.silent_sec * 1000 - 1 }), NOW, P).act, "end");
+  //  모르면(null) 접지 않는다 — 종전대로 마지막 박동으로 잰다.
+  assert.equal(sweepDecision(base({ ...run, listeningSince: null }), NOW, P).act, "end");
+  //  듣기 시작이 마지막 박동보다 앞이면 박동이 기준이다.
+  assert.deepEqual(sweepDecision(base({ ...run, lastTickAt: NOW - 1000, listeningSince: NOW - 3_000_000 }), NOW, P), { act: "none" });
+});
+t("S11 대기 상한 — 마지막 띄우기 실패 사유가 있으면 문장에 붙인다(없으면 그대로)", () => {
+  const a = sweepDecision(base({ createdAt: NOW - P.queue_wait_min * MIN - 1, lastError: "띄우기 실패 — 노드 자리 없음" }), NOW, P);
+  assert.equal(a.act, "end");
+  assert.match((a as { error: string }).error, /마지막 띄우기 실패: 띄우기 실패 — 노드 자리 없음$/);
+  const b = sweepDecision(base({ createdAt: NOW - P.queue_wait_min * MIN - 1 }), NOW, P);
+  assert.doesNotMatch((b as { error: string }).error, /마지막 띄우기 실패/);
+});
 t("S9 끝난 작업은 아무것도 안 한다", () => {
   for (const status of ["done", "failed", "timeout", "canceled"] as const) {
     assert.deepEqual(sweepDecision(base({ status, createdAt: 0, cancelRequested: true }), NOW, P), { act: "none" });
@@ -114,6 +131,13 @@ t("F5 result 가 오류면 failed(subtype 과 문장)", () => {
   assert.equal(o.status, "failed");
   assert.match(o.error ?? "", /error_max_turns/);
 });
+t("F4b 고치던 파일 경로에 login 이 있어도 «AI 연결 필요» 로 읽지 않는다(맨 /login 은 자격 신호가 아니다)", () => {
+  const o = finalOutcome(rep({ exit_code: 1, stderr_tail: "Error: cannot edit src/pages/login.tsx — permission denied" }));
+  assert.equal(o.status, "failed");
+  assert.doesNotMatch(o.error ?? "", /AI 연결 필요/);
+  assert.match(o.error ?? "", /login\.tsx/);
+  assert.match(finalOutcome(rep({ exit_code: 1, stderr_tail: "Please run /login" })).error ?? "", /AI 연결 필요/);
+});
 t("F6 result 없음 · 자격과 무관한 stderr → failed(종료코드 · stderr 꼬리)", () => {
   const o = finalOutcome(rep({ exit_code: 137, signal: "SIGKILL", stderr_tail: "a\nb\nsegfault" }));
   assert.equal(o.status, "failed");
@@ -122,6 +146,15 @@ t("F6 result 없음 · 자격과 무관한 stderr → failed(종료코드 · std
 });
 
 // ── 보고 거르기 ──────────────────────────────────────────────────────────────
+t("P2 DB 칸이 받지 않는 값 — 글의 NUL 은 빼고 · 종료코드는 INT 범위 정수만", () => {
+  const r = parseRunnerReport({ model: "m\u0000x", tail: "a\u0000b", stderr_tail: "\u0000e", result: { text: "답\u0000", is_error: false } });
+  assert.equal(r.model, "mx");
+  assert.equal(r.tail, "ab");
+  assert.equal(r.stderr_tail, "e");
+  assert.equal(r.result?.text, "답");
+  for (const bad of [1.5, 1e12, -2147483649, 2147483648, Number.NaN]) assert.equal(parseRunnerReport({ exit_code: bad }).exit_code, null, String(bad));
+  for (const ok of [0, 1, 137, -2, 2147483647, -2147483648]) assert.equal(parseRunnerReport({ exit_code: ok }).exit_code, ok, String(ok));
+});
 t("P1 판 보고는 칸마다 거르고 자른다 — 대화 id 모양 · 긴 글 · usage 의 문자열·중첩 · 모르는 stopped", () => {
   const r = parseRunnerReport({
     exit_code: "0", signal: 9, stopped: "exploded", conversation_id: "../../etc/passwd", model: "m".repeat(500),

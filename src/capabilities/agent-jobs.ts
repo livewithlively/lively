@@ -7,7 +7,10 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
-import { AGENT_JOB_POLICY_RANGE, DEFAULT_AGENT_JOB_POLICY, agentJobPolicySource, invalidateAgentJobPolicyCache, normalizeAgentJobPolicy, resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
+import {
+  AGENT_JOB_POLICY_RANGE, DEFAULT_AGENT_JOB_POLICY, agentJobPolicyPatchError, agentJobPolicySource, invalidateAgentJobPolicyCache, resolveAgentJobPolicy,
+  type AgentJobPolicy,
+} from "../org/policies/agent-job-policy.js";
 import { PROMPT_MAX } from "../agent-jobs/plan.js";
 
 const deps = async () => (await import("../agent-jobs/live.js")).liveAgentJobDeps();
@@ -27,11 +30,11 @@ const agentJobRunInput = {
 const agentJobRun: Capability = {
   name: "agent_job_run",
   title: "에이전트 작업 보내기",
+  //  ⚠ 설명은 모든 세션의 MCP 맥락에 실린다 — 핵심 세 줄만(격리 리뷰). 누가 보낼 수 있나 · 신뢰의 뜻은 agent-jobs/service.ts 머리말.
   description:
-    "에이전트 작업을 **작업 컨테이너**(사람 세션과 같은 환경의 별도 컨테이너)에서 돌린다 — 사람 세션이 하나도 없어도 돈다. 실행 계정은 **보낸 사람 본인의 Claude 구독**이다" +
-    "(본인 홈의 로그인으로 · 그 사람 세션과 같은 신뢰). 작업 폴더는 project_id(그 프로젝트 폴더) 또는 앱 폴더(app_id, 앱 화면에서 부르면 그 앱). " +
-    "곧바로 {id, status:queued|starting…}를 돌려주고 끝까지 기다리지 않는다 — agent_job_get 으로 status·result.text 를 본다(done · failed · timeout · canceled). " +
-    "워크스페이스 동시 상한을 넘으면 대기열에서 기다리고, 대기열이 차면 429. 결과를 적은 뒤 컨테이너는 곧바로 걷힌다. 매니지드 전용(아니면 501).",
+    "에이전트 작업을 별도 작업 컨테이너에서 돌린다(사람 세션이 없어도 돈다) — **보낸 사람 본인으로**(본인 Claude 구독·홈) 돈다. 작업 폴더는 project_id 또는 app_id(앱 화면이면 그 앱 폴더). " +
+    "곧바로 {id,status} 를 돌려준다 — 결과는 agent_job_get. 동시 상한을 넘으면 기다리고 대기열이 차면 429. " +
+    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드 전용(501).",
   scope: "context",
   input: agentJobRunInput,
   expose: {
@@ -43,10 +46,11 @@ const agentJobRun: Capability = {
       return out;
     } }],
   },
-  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     //  #1442 짧은 메타 필드 조정 — 큰 프롬프트를 실은 호출이 이름표 길이 하나로 통째로 튕기지 않게. 보고는 응답 capped 로.
     const capped = applySoftCaps("agent_job_run", input, SOFT_CAPS.agent_job_run!);
-    return { ...(await (await svc()).submitAgentJob(input, user, await deps())), ...capped };
+    //  ctx.source 'app-ui' = 앱 화면 다리(app-tool-call.ts)를 지나 왔다 — 앱 주체는 이 길로만 받는다(service.assertMaySubmit).
+    return { ...(await (await svc()).submitAgentJob(input, user, await deps(), { source: ctx?.source })), ...capped };
   },
 };
 
@@ -64,7 +68,7 @@ const agentJobGet: Capability = {
 const agentJobList: Capability = {
   name: "agent_job_list",
   title: "에이전트 작업 목록",
-  description: "내 에이전트 작업 목록(최근 것부터). 앱 화면에서 부르면 그 앱의 내 작업만, 관리자는 워크스페이스 전체. status·app_id 로 좁힌다.",
+  description: "내 에이전트 작업 목록(최근 것부터) — 한 줄은 요약이다(답은 result_preview 앞머리 · 전문은 agent_job_get). 앱 화면에서 부르면 그 앱의 내 작업만, 관리자는 워크스페이스 전체. status·app_id 로 좁힌다.",
   scope: "context",
   input: {
     app_id: z.string().optional(),
@@ -145,9 +149,9 @@ const agentJobLimitsSet: Capability = {
         if (!Number.isInteger(n) || n < lo || n > hi) throw new HttpError(400, `${k} 는 ${lo}~${hi} 정수여야 합니다`);
         next[k] = n;
       }
-      //  정규화(범위 · 축 사이 불변식)를 거친 값만 적는다 — 적은 칸만 남긴다(안 적은 칸은 env·기본을 따라가게).
-      const norm = normalizeAgentJobPolicy(next);
-      next = Object.fromEntries(Object.keys(next).map((k) => [k, norm[k as keyof AgentJobPolicy]]));
+      //  축 사이 관계를 어기면 거절한다(조용히 접지 않는다 — agentJobPolicyPatchError 머리말).
+      const bad = agentJobPolicyPatchError(next);
+      if (bad) throw new HttpError(400, bad);
     }
     await writeAgentJobPolicyRow(next);
     invalidateAgentJobPolicyCache();

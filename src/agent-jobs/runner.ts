@@ -56,7 +56,7 @@ export interface RunnerJob {
   prompt: string;
   /** 하네스에 줄 MCP 설정({mcpServers}) — 없으면 MCP 없이 돈다(--strict-mcp-config). */
   mcp: Record<string, unknown> | null;
-  /** 하네스에 더 줄 env(허용 목록은 service.ts) — API 키 갈래(v2-9)의 프록시 주소·실행 토큰 자리. */
+  /** 하네스에 더 줄 env — 지금은 늘 비어 있다(service.onBoot). API 키 갈래(v2-9)의 프록시 주소·실행 토큰이 들어올 자리다. */
   env: Record<string, string>;
   /** 작업 폴더(컨테이너 경로). */
   cwd: string;
@@ -71,7 +71,9 @@ export interface RunnerJob {
  * ② 본체 — `new Function("job","require", RUNNER_SOURCE)(job, require)` 로 돈다(ES2020 · 노드 내장만).
  *  하는 일: 프롬프트·MCP 설정을 컨테이너 /tmp 의 0700 폴더에 쓰고 → 하네스를 stdin=프롬프트로 띄우고 → stream-json 을 줄마다 읽어
  *  대화 id·마지막 result·진행 꼬리를 모으고 → tickMs 마다 박동(게이트웨이가 cancel 이면 끊는다) → 시간 상한이면 끊고 →
- *  끝나면 결과를 올리고(못 올리면 2분까지 다시) → 폴더를 지우고 빠진다.
+ *  끝나면 결과를 올리고(못 올리면 다시 — 24번) → 폴더를 지우고 빠진다.
+ *  ★ 결과를 올리는 동안에도 박동한다 — 박동을 먼저 멈추면 결과를 다시 보내는 동안 게이트웨이가 침묵(silent_sec)을 듣고, 일을 마친
+ *   작업을 «응답 없음» 으로 끊어 결과가 사라진다(격리 리뷰). 결과가 받아들여진 뒤의 박동은 410 이라 해가 없다.
  *  끊기: SIGTERM, 10초 뒤 SIGKILL.
  */
 export const RUNNER_SOURCE = String.raw`
@@ -137,7 +139,7 @@ const kill = (why) => {
   setTimeout(() => { try { child.kill("SIGKILL"); } catch (e) {} }, 10000).unref();
 };
 const finish = async (code, signal) => {
-  clearTimeout(deadline); clearInterval(ticker);
+  clearTimeout(deadline);
   if (buf.trim()) { onLine(buf); buf = ""; }
   const r = last ? {
     text: typeof last.result === "string" ? last.result.slice(0, J.resultMax) : null,
@@ -148,6 +150,7 @@ const finish = async (code, signal) => {
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
   await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n") }, 24);
+  clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);
 };
