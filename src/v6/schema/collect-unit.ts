@@ -4,6 +4,8 @@
 //
 //  표 다섯:
 //   · collect_unit          — 단위 1행. 좌표 = 앱(source.external_system 과 같은 키) + 외부 인스턴스 + 단위 id.
+//                             공개범위(visibility) = 나만(me — owner_member 한 명) · 볼 수 있는 사람만(viewers) · 모두(all).
+//                             수집 전 검토에서 사람이 단위마다 정한다(리브가 종류별로 먼저 제안 — 상민님 2026-10-16).
 //                             경로(라이블리 수집기 / 구성원 Claude 커넥터 / 리브 직접 연결) · 상태 · 읽은 위치 · 주기 · 메타데이터.
 //   · collect_unit_member   — 볼 수 있는 구성원 = 담당 후보. priority 가 작을수록 먼저 모은다(1순위가 끊기면 다음).
 //                             verified_at 이 비면 «본인 신고만» — 후보(확인된 사람 뒤)일 뿐 자료는 열리지 않는다. 그 사람 커넥터로
@@ -57,6 +59,12 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS collect_unit_coord_uq ON collect_unit(app, instance, ref);
     CREATE INDEX IF NOT EXISTS collect_unit_collector_idx ON collect_unit(collector_id) WHERE collector_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS collect_unit_parent_idx ON collect_unit(parent_id) WHERE parent_id IS NOT NULL;
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'viewers';
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS owner_member TEXT;
+    ${ensureCheck("collect_unit", {
+      collect_unit_visibility_chk: "visibility IN ('me','viewers','all')",
+      collect_unit_owner_chk: "visibility <> 'me' OR owner_member IS NOT NULL",
+    })}
   `);
 
   await pool.query(`

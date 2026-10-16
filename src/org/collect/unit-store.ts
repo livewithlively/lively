@@ -23,12 +23,13 @@ import { failReason } from "../store/run-fail-reason.js";
 import { currentTenant } from "../tenant-context.js";
 import { HEADLESS_NOTICE_APP, HEADLESS_NOTICE_HREF } from "../credentials/headless-connect.js";
 import {
-  ANY_CONNECTOR, COLLECT_ROUTES, MAIL_APPS, UNIT_STATES,
+  ANY_CONNECTOR, COLLECT_ROUTES, MAIL_APPS, UNIT_STATES, UNIT_VISIBILITIES,
   canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
-  healthIndex, isCollectorRoute, listingClaimAllowed, noticeTargets, normalizeListing, planUnit, retryDelayMs, splitOverreach,
-  unitAccess,
-  type AssigneeState, type AudiencePolicy, type CollectRoute, type CollectRunExit, type CollectRunSummary, type HealthChange,
-  type HealthIndex, type NoticeTarget, type PlanCollector, type PlanHealth, type PlanUnit, type UnitKind, type UnitPlan, type UnitState,
+  defaultVisibilityForKind, healthIndex, isCollectorRoute, listingClaimAllowed, noticeTargets, normalizeListing, planUnit,
+  retryDelayMs, splitOverreach, unitAccess, visibilityChangeError,
+  type AssigneeState, type AudiencePolicy, type AudienceUnit, type CollectRoute, type CollectRunExit, type CollectRunSummary,
+  type HealthChange, type HealthIndex, type NoticeTarget, type PlanCollector, type PlanHealth, type PlanUnit, type UnitKind,
+  type UnitPlan, type UnitState, type UnitVisibility,
 } from "./unit-plan.js";
 
 type Q = Pick<pg.PoolClient, "query">;
@@ -70,12 +71,15 @@ export interface UnitRow {
   parent_id: number | null; route: CollectRoute; collector_id: number | null; connector: string | null;
   state: UnitState; cursor: Record<string, unknown>; read_at: string | null; read_by: string | null;
   last_item_at: string | null; interval_sec: number | null; description: string | null; meta: Record<string, unknown>;
+  /** 공개범위 — 나만(me)·볼 수 있는 사람만(viewers)·모두(all). owner_member = «나만» 으로 정한 사람. */
+  visibility: UnitVisibility; owner_member: string | null;
   created_at: string; updated_at: string; updated_by: string | null;
   members: UnitMember[];
 }
 
 const UNIT_COLS = `u.id, u.app, u.instance, u.ref, u.kind, u.name, u.parent_id, u.route, u.collector_id, u.connector, u.state,
-  u.cursor, u.read_at, u.read_by, u.last_item_at, u.interval_sec, u.description, u.meta, u.created_at, u.updated_at, u.updated_by`;
+  u.cursor, u.read_at, u.read_by, u.last_item_at, u.interval_sec, u.description, u.meta, u.visibility, u.owner_member,
+  u.created_at, u.updated_at, u.updated_by`;
 
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
 const ms = (v: unknown): number | null => (v == null ? null : new Date(v as string).getTime());
@@ -91,6 +95,8 @@ function mapUnit(r: Record<string, any>): UnitRow {
     read_at: iso(r.read_at), read_by: r.read_by ?? null, last_item_at: iso(r.last_item_at),
     interval_sec: r.interval_sec == null ? null : Number(r.interval_sec), description: r.description ?? null,
     meta: (r.meta && typeof r.meta === "object") ? r.meta : {},
+    visibility: ((UNIT_VISIBILITIES as readonly string[]).includes(String(r.visibility)) ? String(r.visibility) : "viewers") as UnitVisibility,
+    owner_member: r.owner_member ?? null,
     created_at: iso(r.created_at)!, updated_at: iso(r.updated_at)!, updated_by: r.updated_by ?? null,
     members: members.map((m) => ({
       member_id: String(m.member_id), priority: Number(m.priority), via: String(m.via ?? "listing"),
@@ -119,7 +125,7 @@ export async function getUnit(id: number, q: Q = itemsPool): Promise<UnitRow | n
   return (await loadUnits(q, "u.id = $1", [id]))[0] ?? null;
 }
 
-const accessInput = (u: UnitRow) => ({ route: u.route, members: u.members.map((m) => ({ member_id: m.member_id, verified: m.verified })) });
+const accessInput = (u: UnitRow) => ({ route: u.route, members: u.members.map((m) => ({ member_id: m.member_id, verified: m.verified, active: m.active })) });
 
 // ── 담당 건강 · 수집기 상태 ──────────────────────────────────────────────────
 
@@ -225,6 +231,7 @@ function toPlanUnit(u: UnitRow, collectors: readonly CollectorInfo[]): PlanUnit 
     collector: isCollectorRoute(u.route) ? unitCollector(u, collectors) : null,
     candidates: u.members.filter((m) => m.active)
       .map((m) => ({ member_id: m.member_id, priority: m.priority, added_at: ms(m.added_at) ?? 0, verified: m.verified })),
+    visibility: u.visibility, owner: u.owner_member,
   };
 }
 
@@ -233,14 +240,13 @@ export interface PlannedUnits { units: UnitRow[]; plans: Map<number, UnitPlan>; 
 /** 단위들의 담당을 지금 기준으로 정한다(저장하지 않는다 — 담당은 늘 그 자리에서 다시 판정한다: 건강·수집기·구성원이 바뀌면 바로 따라간다). */
 export async function planUnits(units: UnitRow[], q: Q = itemsPool, now = Date.now()): Promise<PlannedUnits> {
   const members = [...new Set(units.flatMap((u) => u.members.map((m) => m.member_id)))];
-  const [health, collectors, sourceAxisOn] = await Promise.all([
+  const [health, collectors] = await Promise.all([
     loadHealth(q, members),
     units.some((u) => isCollectorRoute(u.route)) ? loadCollectors(q) : Promise.resolve([] as CollectorInfo[]),
-    axisOn("source"),
   ]);
   const idx = healthIndex(health);
   const plans = new Map<number, UnitPlan>();
-  for (const u of units) plans.set(u.id, planUnit(toPlanUnit(u, collectors), idx, { now, sourceAxisOn }));
+  for (const u of units) plans.set(u.id, planUnit(toPlanUnit(u, collectors), idx, { now }));
   return { units, plans, idx };
 }
 
@@ -360,19 +366,20 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
     groups.set(k, g);
   }
   if (!groups.size) return 0;
-  //  ② 묶음에 나오는 단위들의 확인된 구성원 · 좌표(정책 매칭용).
+  //  ② 묶음에 나오는 단위들의 공개범위 · 확인된 구성원 · 좌표(정책 매칭용).
   const allUnits = [...new Set([...groups.values()].flatMap((g) => g.unitIds))];
   const uRows = await q.query(
-    `SELECT u.id, u.app, u.ref, u.name,
+    `SELECT u.id, u.app, u.ref, u.name, u.visibility, u.owner_member,
             COALESCE(array_agg(m.member_id) FILTER (WHERE m.member_id IS NOT NULL AND m.verified_at IS NOT NULL), '{}') AS viewers
        FROM collect_unit u LEFT JOIN collect_unit_member m ON m.unit_id = u.id
       WHERE u.id = ANY($1::int[]) GROUP BY u.id`, [allUnits]);
-  const unitInfo = new Map<number, { viewers: string[]; policy: AudiencePolicy }>();
+  const unitInfo = new Map<number, AudienceUnit>();
   const teamIds = new Set<string>();
   for (const r of uRows.rows as any[]) {
     const policy = rules ? policyFor(rules, String(r.app), String(r.ref), r.name ?? null) : { visibility: "members" as const, members: [] };
     for (const s of policy.members) if (s.subject_kind === "team") teamIds.add(s.member_id);
-    unitInfo.set(Number(r.id), { viewers: (r.viewers ?? []).map(String), policy });
+    const visibility = ((UNIT_VISIBILITIES as readonly string[]).includes(String(r.visibility)) ? String(r.visibility) : "viewers") as UnitVisibility;
+    unitInfo.set(Number(r.id), { visibility, owner: r.owner_member ?? null, viewers: (r.viewers ?? []).map(String), policy });
   }
   const teamMembers = new Map<string, Set<string>>();
   if (teamIds.size) {
@@ -381,9 +388,9 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
   }
   let changed = 0;
   for (const g of groups.values()) {
-    const units = g.unitIds.map((id) => unitInfo.get(id)).filter((x): x is { viewers: string[]; policy: AudiencePolicy } => !!x);
+    const units = g.unitIds.map((id) => unitInfo.get(id)).filter((x): x is AudienceUnit => !!x);
     const want = computeAudience({ units, teamMembers });
-    const wantKey = want.map((m) => `member:${m}`).join("\u0001");
+    const wantKey = want.members.map((m) => `member:${m}`).join("\u0001");
     for (let i = 0; i < g.sources.length; i += AUDIENCE_BATCH) {
       const chunk = g.sources.slice(i, i + AUDIENCE_BATCH);
       //  ③ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
@@ -393,15 +400,19 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
                          FILTER (WHERE sm.member_id IS NOT NULL), '') AS aud
            FROM source s LEFT JOIN source_member sm ON sm.source_id = s.id
           WHERE s.id = ANY($1::int[]) GROUP BY s.id`, [chunk]);
-      const todo = (cur.rows as any[]).filter((r) => !(r.visibility === "members" && String(r.aud) === wantKey)).map((r) => Number(r.id));
+      const same = (r: any): boolean => want.open
+        ? r.visibility === "open" && String(r.aud) === ""
+        : r.visibility === "members" && String(r.aud) === wantKey;
+      const todo = (cur.rows as any[]).filter((r) => !same(r)).map((r) => Number(r.id));
       if (!todo.length) continue;
-      await q.query(`UPDATE source SET visibility='members' WHERE id = ANY($1::int[])`, [todo]);
+      //  모두(open) — 잠금을 풀고 대상을 지운다. 그 밖 — 잠그고 대상을 갈아 끼운다.
+      await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [todo, want.open ? "open" : "members"]);
       await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [todo]);
-      if (want.length) {
+      if (!want.open && want.members.length) {
         await q.query(
           `INSERT INTO source_member(source_id, subject_kind, member_id)
            SELECT s, 'member', m FROM unnest($1::int[]) AS s CROSS JOIN unnest($2::text[]) AS m
-           ON CONFLICT DO NOTHING`, [todo, want]);
+           ON CONFLICT DO NOTHING`, [todo, want.members]);
       }
       changed += todo.length;
     }
@@ -582,15 +593,17 @@ export async function recordUnitListing(input: ListingInput, ctx?: WriteCtx): Pr
       await client.query("BEGIN");
       for (const it of allowed) {
         const kind = MAIL_APPS.has(app) ? "mailbox" : it.kind;
+        //  공개범위는 처음 생길 때만 리브의 첫 제안(종류별)으로 — 사람이 수집 전 검토에서 고친다. 이미 있는 단위는 건드리지 않는다.
+        const vis = defaultVisibilityForKind(kind);
         const up = await client.query(
-          `INSERT INTO collect_unit(app, instance, ref, kind, name, connector, route, state, updated_by)
-           VALUES($1,$2,$3,$4,$5,$6,'member_ai','candidate',$7)
+          `INSERT INTO collect_unit(app, instance, ref, kind, name, connector, route, state, visibility, owner_member, updated_by)
+           VALUES($1,$2,$3,$4,$5,$6,'member_ai','candidate',$8,$9,$7)
            ON CONFLICT (tenant_id, app, instance, ref) DO UPDATE SET
               name = COALESCE(collect_unit.name, EXCLUDED.name),
               kind = CASE WHEN collect_unit.kind = 'other' THEN EXCLUDED.kind ELSE collect_unit.kind END,
               connector = COALESCE(collect_unit.connector, EXCLUDED.connector)
            RETURNING id, (xmax = 0) AS created`,
-          [app, instance, it.ref, kind, it.name, connector, member]);
+          [app, instance, it.ref, kind, it.name, connector, member, vis, vis === "me" ? member : null]);
         const id = Number(up.rows[0].id);
         if (up.rows[0].created) res.created++;
         const m = await client.query(
@@ -799,7 +812,7 @@ export interface UnitView extends Omit<UnitRow, "members"> {
  */
 export interface UnitCoarseView {
   access: "coarse";
-  id: number; app: string; kind: UnitKind; name: string | null; route: CollectRoute; state: UnitState;
+  id: number; app: string; kind: UnitKind; name: string | null; route: CollectRoute; state: UnitState; visibility: UnitVisibility;
   assignee_kind: "collector" | "member" | null; assignee_reason: UnitPlan["reason"]; candidate_count: number;
   /** 신고만 한 본인이면 그 자리(확인되면 다 보인다). */
   mine: { verified: false; priority: number } | null;
@@ -828,7 +841,7 @@ function coarseOf(u: UnitRow, plan: UnitPlan, member: string): UnitCoarseView {
   const me = u.members.find((m) => m.member_id === member && !m.verified);
   return {
     access: "coarse", id: u.id, app: u.app, kind: u.kind, name: PRIVATE_KINDS.has(u.kind) && !me ? null : u.name,
-    route: u.route, state: u.state, assignee_kind: plan.assignee?.kind ?? null, assignee_reason: plan.reason,
+    route: u.route, state: u.state, visibility: u.visibility, assignee_kind: plan.assignee?.kind ?? null, assignee_reason: plan.reason,
     candidate_count: u.members.length, mine: me ? { verified: false, priority: me.priority } : null,
   };
 }
@@ -839,7 +852,11 @@ export interface Actor { member: string; isAdmin: boolean }
  * 이 사람에게 보이는 단위 — unit-plan.unitAccess: 다 보이는 것(full)과 일부만 보이는 것(coarse). 못 보는 단위는 관리자에게 개수만.
  *  SQL 에서 먼저 거른다(수집기 경로이거나 이 사람이 후보인 단위) — 워크스페이스 전체를 읽어 JS 로 거르지 않는다.
  */
-export async function listUnitsFor(actor: Actor, f: { app?: string | null; state?: string | null; mine?: boolean } = {}): Promise<{ units: Array<UnitView | UnitCoarseView>; hidden: number }> {
+export async function listUnitsFor(actor: Actor, f: { app?: string | null; state?: string | null; mine?: boolean } = {}): Promise<{
+  units: Array<UnitView | UnitCoarseView>; hidden: number;
+  /** 이 워크스페이스가 자료 공개범위를 적용하나 — false 면 단위에 무엇을 골라도 모은 자료가 모두에게 보인다(수집 전 검토에서 리브가 알린다). */
+  visibility_enforced: boolean;
+}> {
   const params: unknown[] = [actor.member];
   const where: string[] = [`(u.route IN ('lively_collector','liv_direct') OR EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = u.id AND x.member_id = $1))`];
   if (f.app) { params.push(normalizeAppKey(f.app)); where.push(`u.app = $${params.length}`); }
@@ -863,15 +880,18 @@ export async function listUnitsFor(actor: Actor, f: { app?: string | null; state
         WHERE u.route = 'member_ai' AND NOT EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = u.id AND x.member_id = $1)`, [actor.member]);
     hidden = Number(h.rows[0]?.n ?? 0);
   }
-  return { units: views, hidden };
+  return { units: views, hidden, visibility_enforced: await axisOn("source") };
 }
 
 export interface UnitPatch {
   state?: UnitState; interval_sec?: number | null; description?: string | null;
   meta?: Record<string, unknown> | null; priorities?: string[]; route?: CollectRoute; name?: string | null;
+  /** 공개범위 — 나만(me: 바꾸는 사람이 주인)·볼 수 있는 사람만(viewers)·모두(all). 바꾸면 이미 모은 자료도 다시 맞춘다. */
+  visibility?: UnitVisibility;
 }
 
-/** 리브·사람이 단위를 고친다 — 상태(모을지)·주기·설명·메타데이터·후보 순서·경로. 권한은 unit-plan.canEditUnit · 경로는 관리자만. */
+/** 리브·사람이 단위를 고친다 — 상태(모을지)·공개범위·주기·설명·메타데이터·후보 순서·경로. 권한은 unit-plan.canEditUnit · 경로는 관리자만 ·
+ *  «나만» 단위의 공개범위는 정한 사람만(unit-plan.visibilityChangeError). */
 export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx?: WriteCtx): Promise<UnitView> {
   const u = await getUnit(id);
   if (!u || unitAccess(accessInput(u), actor.member, actor.isAdmin) !== "full") throw new UnitError(404, `수집 단위 #${id} 가 없습니다`);
@@ -885,6 +905,14 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     if (!actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");
   }
   if (patch.state != null && !(UNIT_STATES as readonly string[]).includes(patch.state)) throw new UnitError(400, `state 는 ${UNIT_STATES.join("·")} 중 하나입니다`);
+  const visChanged = patch.visibility != null && (patch.visibility !== u.visibility || (patch.visibility === "me" && u.owner_member !== actor.member));
+  if (patch.visibility != null) {
+    if (!(UNIT_VISIBILITIES as readonly string[]).includes(patch.visibility)) throw new UnitError(400, `visibility 는 ${UNIT_VISIBILITIES.join("·")} 중 하나입니다`);
+    const err = visChanged
+      ? visibilityChangeError({ ...accessInput(u), visibility: u.visibility, owner: u.owner_member }, patch.visibility, actor.member, actor.isAdmin)
+      : null;
+    if (err) throw new UnitError(403, err);
+  }
   if (patch.interval_sec != null && !(Number.isInteger(patch.interval_sec) && patch.interval_sec >= 60 && patch.interval_sec <= 30 * 86400)) {
     throw new UnitError(400, "interval_sec 는 60~2592000 초입니다");
   }
@@ -892,7 +920,7 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     const extra = patch.priorities.filter((m) => !viewers.includes(m));
     if (extra.length) throw new UnitError(400, `후보 순서에 이 단위를 볼 수 없는 구성원이 있습니다: ${extra.join(", ")}`);
   }
-  const before = { state: u.state, interval_sec: u.interval_sec, description: u.description, route: u.route, priorities: viewers };
+  const before = { state: u.state, visibility: u.visibility, owner_member: u.owner_member, interval_sec: u.interval_sec, description: u.description, route: u.route, priorities: viewers };
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
@@ -921,6 +949,12 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
         await client.query(`UPDATE collect_unit_member SET priority=$3 WHERE unit_id=$1 AND member_id=$2`, [id, order[i], (i + 1) * 10]);
       }
     }
+    if (visChanged) {
+      await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`,
+        [id, patch.visibility, patch.visibility === "me" ? actor.member : null]);
+      //  이미 모은 자료도 새 공개범위로 — 같은 트랜잭션이라 좁힌 순간 빠진 사람이 계속 보는 틈이 없다.
+      await syncUnitAudience(client, [id]);
+    }
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -930,7 +964,8 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
   }
   const after = (await getUnit(id))!;
   await auditOrgContent("collect_unit", String(id), "update", before,
-    { state: after.state, interval_sec: after.interval_sec, description: after.description, route: after.route, priorities: after.members.map((m) => m.member_id) },
+    { state: after.state, visibility: after.visibility, owner_member: after.owner_member, interval_sec: after.interval_sec,
+      description: after.description, route: after.route, priorities: after.members.map((m) => m.member_id) },
     ctx).catch(() => undefined);
   const { plans, idx } = await planUnits([after]);
   return viewOf(after, plans.get(id)!, idx);
@@ -980,12 +1015,16 @@ export async function splitUnit(
   try {
     await client.query("BEGIN");
     for (const it of items) {
+      //  공개범위는 부모를 따른다. 다만 부모가 «나만» 인데 그 사람이 자식을 볼 수 없으면 «볼 수 있는 사람만» 으로(못 보는 사람의 것이 되지 않게).
+      const kidViewers = want.get(it.ref) ?? [];
+      const vis: UnitVisibility = p.visibility === "me" && (!p.owner_member || !kidViewers.includes(p.owner_member)) ? "viewers" : p.visibility;
       const r = await client.query(
-        `INSERT INTO collect_unit(app, instance, ref, kind, name, parent_id, route, collector_id, connector, state, updated_by)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        `INSERT INTO collect_unit(app, instance, ref, kind, name, parent_id, route, collector_id, connector, state, visibility, owner_member, updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (tenant_id, app, instance, ref) DO UPDATE SET parent_id = EXCLUDED.parent_id, updated_at = now(), updated_by = EXCLUDED.updated_by
          RETURNING id, (xmax = 0) AS created`,
-        [p.app, p.instance, it.ref, it.kind === "other" ? p.kind : it.kind, it.name, p.id, p.route, p.collector_id, p.connector, p.state, actor.member]);
+        [p.app, p.instance, it.ref, it.kind === "other" ? p.kind : it.kind, it.name, p.id, p.route, p.collector_id, p.connector, p.state,
+          vis, vis === "me" ? p.owner_member : null, actor.member]);
       const cid = Number(r.rows[0].id);
       ids.push(cid);
       //  이미 있던 단위는 그 구성원(목록이 확인한 사실)을 건드리지 않는다 — 부모만 잇는다.
@@ -1060,11 +1099,15 @@ export async function syncCollectorUnits(): Promise<ReconcileResult> {
   const res: ReconcileResult = { created: 0, updated: 0, rerouted: 0, mailboxes: 0, notion_roots: 0, skipped_presets: [] };
   const collectors = (await loadCollectors(itemsPool)).filter((c) => c.enabled);
   const presets = [...new Set(collectors.map((c) => c.preset))];
-  const upsert = async (u: { app: string; instance: string; ref: string; kind: UnitKind; name: string | null; collector_id: number; last_at: unknown }): Promise<number> => {
+  const upsert = async (u: { app: string; instance: string; ref: string; kind: UnitKind; name: string | null; collector_id: number; last_at: unknown; owner?: string | null }): Promise<number> => {
     const c = canonicalCoord(u.app, u.instance, u.ref);
+    //  공개범위는 처음 생길 때만 종류별 첫 제안으로(메일함 = 나만, 주인 = 수집기 자격 주인). 주인을 모르는 «나만» 은 «볼 수 있는 사람만» 으로.
+    //   수집기가 모은 자료 자체는 수집기 쪽 정책을 따른다 — 이 칸은 수집기가 끊겨 구성원이 이어 모은 자료에만 쓰인다.
+    const first = defaultVisibilityForKind(u.kind);
+    const vis = first === "me" && !u.owner ? "viewers" : first;
     const r = await itemsPool.query(
-      `INSERT INTO collect_unit(app, instance, ref, kind, name, route, collector_id, state, last_item_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,'lively_collector',$6,'active',$7,'system:collect-unit-migrate')
+      `INSERT INTO collect_unit(app, instance, ref, kind, name, route, collector_id, state, last_item_at, visibility, owner_member, updated_by)
+       VALUES($1,$2,$3,$4,$5,'lively_collector',$6,'active',$7,$8,$9,'system:collect-unit-migrate')
        ON CONFLICT (tenant_id, app, instance, ref) DO UPDATE SET
           route = CASE WHEN collect_unit.route = 'member_ai' THEN 'lively_collector' ELSE collect_unit.route END,
           collector_id = CASE WHEN collect_unit.route = 'liv_direct' THEN collect_unit.collector_id ELSE EXCLUDED.collector_id END,
@@ -1075,7 +1118,7 @@ export async function syncCollectorUnits(): Promise<ReconcileResult> {
           updated_at = CASE WHEN collect_unit.route = 'member_ai' OR collect_unit.collector_id IS DISTINCT FROM EXCLUDED.collector_id
                             THEN now() ELSE collect_unit.updated_at END
        RETURNING id, (xmax = 0) AS created`,
-      [u.app, c.instance, c.ref, u.kind, u.name, u.collector_id, u.last_at ?? null]);
+      [u.app, c.instance, c.ref, u.kind, u.name, u.collector_id, u.last_at ?? null, vis, vis === "me" ? (u.owner ?? null) : null]);
     const row = r.rows[0] as { id: number; created: boolean };
     if (row.created) res.created++; else res.updated++;
     return Number(row.id);
@@ -1109,7 +1152,7 @@ export async function syncCollectorUnits(): Promise<ReconcileResult> {
         const email = String(em.rows[0]?.email ?? "").trim().toLowerCase();
         if (!email) continue;
         const last = await itemsPool.query(`SELECT max(occurred_at) AS at FROM source WHERE external_system=$1`, [preset]);
-        const id = await upsert({ app: preset, instance: "default", ref: email, kind: "mailbox", name: email, collector_id: c.id, last_at: last.rows[0]?.at });
+        const id = await upsert({ app: preset, instance: "default", ref: email, kind: "mailbox", name: email, collector_id: c.id, last_at: last.rows[0]?.at, owner });
         //  메일함 주인은 서버가 아는 사실(수집기 자격 주인)이라 처음부터 확인된 구성원이다.
         await itemsPool.query(
           `INSERT INTO collect_unit_member(unit_id, member_id, priority, via, verified_at) VALUES($1,$2,10,'migrate',now())

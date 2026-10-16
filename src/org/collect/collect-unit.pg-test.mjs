@@ -32,7 +32,7 @@ const APP = "cupg";                 // 이 시험만 쓰는 앱 키 — 남의 �
 const BULK_APP = "cupg-bulk";
 const TEAM_SLACK = "T_CUPG";       // 이관 시험용 슬랙 팀(인스턴스)
 const NOTION_INST = "cupg-notion";
-const COLLECTOR_KEYS = ["pgtest-cu-slack", "pgtest-cu-gmail", "pgtest-cu-notion"];
+const COLLECTOR_KEYS = ["pgtest-cu-slack", "pgtest-cu-gmail", "pgtest-cu-gmail-c", "pgtest-cu-notion"];
 const POLICY_NOTE = "pgtest-cu";
 const notices = [];
 let notifyOk = true;
@@ -53,9 +53,11 @@ const unitBy = async (ref, app = APP, inst = "") => (await itemsPool.query(
 const viewersOf = async (unitId) => (await itemsPool.query(
   `SELECT member_id, priority, via, verified_at FROM collect_unit_member WHERE unit_id=$1 ORDER BY priority, member_id`, [unitId])).rows;
 //  서버가 연 목록 실행(그 사람 커넥터로 읽은 목록) — verified=true. 본인 신고는 표면(capability)으로 따로 시험한다.
+//  글자로 준 단위는 비공개 채널 — 리브의 첫 제안이 «볼 수 있는 사람만» 이라 E·A·L 행이 확인된 구성원 규칙을 그대로 본다
+//  (공개 채널=모두 · DM=나만 은 W 행이 따로 본다).
 const listing = (member, refs, o = {}) => store.recordUnitListing({
   member, app: o.app ?? APP, connector: o.connector ?? "Cupg", instance: o.instance ?? "",
-  items: refs.map((r) => (typeof r === "string" ? { ref: r, kind: "channel", name: `#${r}` } : r)), complete: o.complete,
+  items: refs.map((r) => (typeof r === "string" ? { ref: r, kind: "private_channel", name: `#${r}` } : r)), complete: o.complete,
   verified: o.verified ?? true,
 });
 const activate = (ref, app = APP, inst = "") =>
@@ -364,18 +366,21 @@ try {
       (await statusOf(() => capOf("collect_units_sync").handler({}, userOf(A)))) === 403);
   }
 
-  // ── A8 자료 축이 꺼져 있으면 구성원 경로로 모으지 않는다 · 잠금은 그래도 적힌다 ──
+  // ── A8 자료 축이 꺼져 있어도 구성원 경로로 모은다(상민님 2026-10-16) · 단위 공개범위의 잠금은 그대로 적힌다(축을 다시 켜면 바로 선다) ──
   {
     await itemsPool.query(`UPDATE org_runtime_config SET visibility_axes = visibility_axes || '{"source": false}'::jsonb WHERE id=1`);
     invalidateVisAxes();
-    const la = await assigned(A);
+    const lc = await assigned(C);   // V3b 가 ch1 후보 순서를 C·A 로 바꿨다
     const u = await unitBy("ch1");
-    await store.storeUnitItems(u.id, [item("axis-off-1")], { member: A });
+    await store.storeUnitItems(u.id, [item("axis-off-1")], { member: C });
     const r = (await srcRows("axis-off-1"))[0];
-    chk("A8 축이 꺼지면 맡는 단위가 없다 · 저장된 자료는 잠금·대상이 그대로 적힌다", la.length === 0 && r.visibility === "members" && (await audience(r.id)).length > 0,
-      JSON.stringify({ la, vis: r.visibility }));
+    const off = await capOf("collect_units").handler({ app: APP }, userOf(A));
+    chk("A8 축이 꺼져도 담당이 맡는다 · 저장된 자료는 단위 공개범위대로 잠금·대상이 적힌다 · 목록이 «적용 안 함» 을 알린다",
+      lc.includes("ch1") && r.visibility === "members" && (await audience(r.id)).length > 0 && off.visibility_enforced === false,
+      JSON.stringify({ lc, vis: r.visibility, enforced: off.visibility_enforced }));
     await itemsPool.query(`UPDATE org_runtime_config SET visibility_axes = visibility_axes - 'source' WHERE id=1`);
     invalidateVisAxes();
+    chk("A8b 축을 다시 켜면 목록이 «적용함» 으로 돌아온다", (await capOf("collect_units").handler({ app: APP }, userOf(A))).visibility_enforced === true);
   }
 
   // ── X 많은 자료 — 구성원 한 명이 들어오면 묶음으로 한 번에 맞춘다 ──
@@ -401,6 +406,115 @@ try {
     const t1 = Date.now();
     const again = await listing(B, ["bulk"], { app: BULK_APP });
     chk(`X2 대상이 그대로면 아무 자료도 다시 쓰지 않는다(${Date.now() - t1}ms)`, again.audience_changed === 0, JSON.stringify(again));
+  }
+
+  // ── W 단위 공개범위 — 나만·볼 수 있는 사람만·모두(상민님 2026-10-16). 수집 전 검토에서 사람이 정하고 리브가 종류별로 먼저 제안한다 ──
+  {
+    const upd = (id, visibility, who) => capOf("collect_unit_update").handler({ id, visibility }, userOf(who), {});
+    await listing(A, [{ ref: "w-pub", kind: "channel", name: "#공개" }, { ref: "w-priv", kind: "private_channel", name: "#비공개" },
+      { ref: "w-dm", kind: "dm", name: "B 와 DM" }, { ref: "w-gdm", kind: "group_dm", name: "여럿 DM" }]);
+    await listing(B, [{ ref: "w-pub", kind: "channel" }, { ref: "w-priv", kind: "private_channel" }, { ref: "w-dm", kind: "dm" }]);
+    const pub = await unitBy("w-pub"), priv = await unitBy("w-priv"), dm = await unitBy("w-dm"), gdm = await unitBy("w-gdm");
+    const box = await unitBy(`${A}@cupg.test`, "gmail", "default");
+    chk("W1 첫 제안 — 공개 채널=모두 · 비공개 채널=볼 수 있는 사람만 · DM·여러 사람 DM·메일함=나만(처음 본 사람 · 메일함 주인) · 두 번째 사람이 훑어도 그대로",
+      pub.visibility === "all" && pub.owner_member == null && priv.visibility === "viewers" && priv.owner_member == null
+        && dm.visibility === "me" && dm.owner_member === A && gdm.visibility === "me" && gdm.owner_member === A
+        && box.visibility === "me" && box.owner_member === A,
+      JSON.stringify({ pub: [pub.visibility, pub.owner_member], priv: [priv.visibility, priv.owner_member], dm: [dm.visibility, dm.owner_member],
+        gdm: [gdm.visibility, gdm.owner_member], box: [box.visibility, box.owner_member] }));
+    for (const r of ["w-pub", "w-priv", "w-dm"]) await activate(r);
+
+    await store.storeUnitItems(pub.id, [item("w-pub-1")], { member: A });
+    const p1 = (await srcRows("w-pub-1"))[0];
+    chk("W2 «모두» 단위의 자료는 잠그지 않는다 — 단위 밖 사람(C·D)도 본다",
+      p1.visibility === "open" && (await audience(p1.id)).length === 0 && (await canSeeSource(p1.id, C)) && (await canSeeSource(p1.id, D)),
+      JSON.stringify({ vis: p1.visibility, aud: await audience(p1.id) }));
+    const toViewers = await upd(pub.id, "viewers", A);
+    const p1v = (await srcRows("w-pub-1"))[0];
+    chk("W3 «모두» → «볼 수 있는 사람만» 으로 바꾸면 이미 모은 자료도 바로 확인된 구성원(A·B)만 — C 는 못 본다",
+      toViewers.unit?.visibility === "viewers" && p1v.visibility === "members"
+        && JSON.stringify(await audience(p1v.id)) === JSON.stringify([`member:${A}`, `member:${B}`]) && !(await canSeeSource(p1v.id, C)),
+      JSON.stringify({ v: toViewers.unit?.visibility, vis: p1v.visibility, aud: await audience(p1v.id) }));
+    await upd(pub.id, "all", B);
+    const p1a = (await srcRows("w-pub-1"))[0];
+    chk("W3b 다시 «모두» 로 — 잠금이 풀리고 대상이 비워진다(C 도 본다)",
+      p1a.visibility === "open" && (await audience(p1a.id)).length === 0 && (await canSeeSource(p1a.id, C)), JSON.stringify({ vis: p1a.visibility }));
+    const reopen = await store.syncUnitAudience(itemsPool, [pub.id]);
+    chk("W3c «모두» 그대로면 다시 맞춰도 아무 자료도 다시 쓰지 않는다", reopen === 0, String(reopen));
+    //  아무도 못 보던 자료(잠김 · 대상 0 — A5 의 nobody 단위)도 «모두» 가 되면 열린다(대상이 비어 있다고 «이미 열림» 으로 보지 않는다).
+    const nobody = await unitBy("nobody");
+    await itemsPool.query(`UPDATE collect_unit SET visibility='all' WHERE id=$1`, [nobody.id]);
+    const opened = await store.syncUnitAudience(itemsPool, [nobody.id]);
+    const nb = (await srcRows("nobody-1"))[0];
+    chk("W3d 잠긴 채 대상이 0 이던 자료도 «모두» 가 되면 열린다", opened === 1 && nb.visibility === "open" && (await canSeeSource(nb.id, D)),
+      JSON.stringify({ opened, vis: nb.visibility }));
+
+    //  «나만» — 정한 사람(A)만 보고, A 의 계정으로만 모은다(B 를 1순위로 올려도 B 는 맡지 않는다).
+    await store.updateUnit(dm.id, { priorities: [B, A] }, { member: A, isAdmin: false });
+    const la = await assigned(A), lb = await assigned(B);
+    chk("W4 «나만» 단위는 정한 사람(A)만 맡는다 — 1순위가 B 여도", la.includes("w-dm") && !lb.includes("w-dm"), JSON.stringify({ la, lb }));
+    await store.storeUnitItems(dm.id, [item("w-dm-1")], { member: A });
+    const d1 = (await srcRows("w-dm-1"))[0];
+    chk("W4b «나만» 단위의 자료는 정한 사람만 — 확인된 다른 구성원(B)도 못 본다",
+      d1.visibility === "members" && JSON.stringify(await audience(d1.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(d1.id, B)),
+      JSON.stringify(await audience(d1.id)));
+    chk("W5 «나만» 단위는 정한 사람만 바꾼다 — 확인된 B 는 403 · 단위를 못 보는 관리자는 404",
+      (await statusOf(() => upd(dm.id, "viewers", B))) === 403 && (await statusOf(() => upd(dm.id, "me", B))) === 403
+        && (await statusOf(() => capOf("collect_unit_update").handler({ id: dm.id, visibility: "all" }, userOf("__admin__", ["items", "context", "memory", "admin"]), {}))) === 404
+        && (await unitBy("w-dm")).owner_member === A);
+    await upd(dm.id, "viewers", A);
+    chk("W5b 정한 사람이 «볼 수 있는 사람만» 으로 넓히면 B 도 본다 · 주인 칸이 비워진다",
+      (await canSeeSource(d1.id, B)) && (await unitBy("w-dm")).owner_member == null, JSON.stringify(await audience(d1.id)));
+
+    await store.storeUnitItems(priv.id, [item("w-priv-1")], { member: A });
+    const v1 = (await srcRows("w-priv-1"))[0];
+    await upd(priv.id, "me", B);
+    chk("W6 확인된 구성원(B)이 «나만» 을 고르면 B 가 주인 — 이미 모은 자료도 B 만", (await unitBy("w-priv")).owner_member === B
+      && JSON.stringify(await audience(v1.id)) === JSON.stringify([`member:${B}`]) && !(await canSeeSource(v1.id, A)), JSON.stringify(await audience(v1.id)));
+    chk("W6b 단위를 못 보는 사람(C)은 «나만» 을 못 고른다(404) · 바뀐 것이 없다",
+      (await statusOf(() => upd(priv.id, "me", C))) === 404 && (await unitBy("w-priv")).owner_member === B);
+    await upd(priv.id, "viewers", B);
+
+    //  넘겨받기 — 신고만 한 D 가 DM 을 먼저 «나만» 으로 잡아도, 그 DM 을 실제로 보는 것이 확인된 B 가 넘겨받는다.
+    await capOf("collect_unit_listing").handler({ app: APP, items: [{ ref: "w-claim", kind: "dm" }] }, userOf(D), { actor: D });
+    const claimed = await unitBy("w-claim");
+    await listing(B, [{ ref: "w-claim", kind: "dm" }]);
+    const dTry = await statusOf(() => upd(claimed.id, "viewers", D));
+    const take = await upd(claimed.id, "me", B);
+    chk("W7 신고만 한 주인(D)은 바꾸지 못하고(겉만 보는 사람이라 404) · 확인된 B 가 «나만» 을 넘겨받는다",
+      claimed.visibility === "me" && claimed.owner_member === D && dTry === 404 && take.unit?.visibility === "me" && (await unitBy("w-claim")).owner_member === B,
+      JSON.stringify({ claimed: [claimed.visibility, claimed.owner_member], dTry, owner: (await unitBy("w-claim")).owner_member }));
+
+    //  쪼개기 — 자식은 부모의 공개범위를 따른다. 부모가 «나만» 인데 주인이 자식을 못 보면 자식은 «볼 수 있는 사람만».
+    await listing(A, ["w-split"]); await listing(B, ["w-split"]);
+    const sp = await unitBy("w-split");
+    await upd(sp.id, "me", A);
+    await store.splitUnit(sp.id, [{ ref: "w-split-a", viewers: [A, B] }, { ref: "w-split-b", viewers: [B] }], { member: A, isAdmin: false });
+    const ka = await unitBy("w-split-a"), kb = await unitBy("w-split-b");
+    chk("W8 쪼갠 자식 — 주인이 보는 자식은 «나만»(같은 주인) · 주인이 못 보는 자식은 «볼 수 있는 사람만»",
+      ka.visibility === "me" && ka.owner_member === A && kb.visibility === "viewers" && kb.owner_member == null,
+      JSON.stringify({ ka: [ka.visibility, ka.owner_member], kb: [kb.visibility, kb.owner_member] }));
+
+    //  조직 정책이 묶은 채널은 «모두» 여도 정책 대상까지만.
+    const pol = (await itemsPool.query(
+      `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, note) VALUES($1,'w-pub','members',$2) RETURNING id`, [APP, POLICY_NOTE])).rows[0].id;
+    await itemsPool.query(`INSERT INTO org_source_vis_policy_member(policy_id, subject_kind, member_id) VALUES($1,'member',$2)`, [pol, C]);
+    invalidateSourceVisRules();
+    await store.storeUnitItems(pub.id, [item("w-pub-2")], { member: A });
+    const p2 = (await srcRows("w-pub-2"))[0];
+    chk("W9 «모두» + 조직 정책(C 만) → 정책 대상(C)만 — 모은 A 도 정책 밖이면 못 본다",
+      p2.visibility === "members" && JSON.stringify(await audience(p2.id)) === JSON.stringify([`member:${C}`]) && !(await canSeeSource(p2.id, A)),
+      JSON.stringify(await audience(p2.id)));
+    await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE id=$1`, [pol]);
+    invalidateSourceVisRules();
+
+    const la2 = await capOf("collect_units").handler({ app: APP }, userOf(A));
+    const full = la2.units.find((x) => x.id === pub.id);
+    const ld = await capOf("collect_units").handler({ app: APP }, userOf(D));
+    const coarse = ld.units.find((x) => x.id === claimed.id);
+    chk("W10 목록이 공개범위를 싣는다 — 다 보는 사람(full)·겉만 보는 사람(coarse) 모두 · 적용 여부(visibility_enforced=true)",
+      full?.visibility === "all" && coarse?.access === "coarse" && coarse.visibility === "me" && la2.visibility_enforced === true,
+      JSON.stringify({ full: full?.visibility, coarse: coarse && [coarse.access, coarse.visibility], enforced: la2.visibility_enforced }));
   }
 
   // ── M 지금 수집기 설정 → 단위(이관) · 수집기 1순위 · 꺼짐/끊김 ──
@@ -462,6 +576,13 @@ try {
     chk("M7 메일 수집기 → 자격 주인의 메일함 단위 · 주인이 확인된 볼 수 있는 구성원",
       box && box.kind === "mailbox" && Number(box.collector_id) === Number(gm) && bv && bv.verified_at != null,
       JSON.stringify({ box, bv }));
+    await itemsPool.query(
+      `INSERT INTO org_collector(key, preset_key, instance_key, enabled, config) VALUES('pgtest-cu-gmail-c','gmail','pgtest-cu-c',true,$1::jsonb)`,
+      [JSON.stringify({ token_source: `member:${C}` })]);
+    await store.syncCollectorUnits();
+    const boxC = await unitBy(`${C}@cupg.test`, "gmail", "default");
+    chk("M7b 이관으로 새로 생긴 메일함 단위는 «나만» — 주인은 자격 주인(C)",
+      boxC && boxC.visibility === "me" && boxC.owner_member === C, JSON.stringify(boxC && [boxC.visibility, boxC.owner_member]));
 
     await itemsPool.query(
       `INSERT INTO org_collector(key, preset_key, instance_key, enabled, config) VALUES('pgtest-cu-notion','notion','pgtest-cu',true,$1::jsonb)`,

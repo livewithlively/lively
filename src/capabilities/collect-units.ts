@@ -15,7 +15,7 @@ import {
   LISTING_CAP, UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
 } from "../org/collect/unit-store.js";
 import { currentTenant } from "../org/tenant-context.js";
-import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, type CollectRoute, type UnitState } from "../org/collect/unit-plan.js";
+import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, UNIT_VISIBILITIES, type CollectRoute, type UnitState, type UnitVisibility } from "../org/collect/unit-plan.js";
 
 function actorOf(user: LivelyUser | undefined): Actor {
   const member = String(user?.userId || "").trim();
@@ -56,6 +56,8 @@ const collectUnits: Capability = {
     "볼 수 있는 구성원(=담당 후보, 확인된 사람 먼저·우선순위 순 · 각자의 로그인/커넥터 건강) · 지금 담당(assignee — 수집기가 켜져 있으면 " +
     "수집기, 아니면 건강한 첫 후보) · 읽은 위치 · 주기 · 설명/메타데이터를 싣는다. access=coarse 인 줄(수집기 단위의 다른 구성원 · 신고만 한 " +
     "본인)은 이름·상태·담당 종류·후보 수만. 구성원 경로 단위는 그 단위의 구성원에게만 나오고 관리자에게는 hidden 개수로만. " +
+    "각 단위의 공개범위(visibility — me=나만 · viewers=볼 수 있는 사람만 · all=모두)도 싣는다. visibility_enforced=false 면 이 워크스페이스는 " +
+    "자료 공개범위를 적용하지 않아 무엇을 골라도 모은 자료가 모두에게 보인다 — 수집 전 검토에서 그 사실을 사람에게 알려라. " +
     "지금 수집기 설정(채널 목록 등)은 스케줄러가 6시간마다 단위로 풀어 둔다(즉시는 collect_units_sync). " +
     "REST 등가: GET /api/ui/collect/units?app=&state=&mine=.",
   scope: "memory",
@@ -74,7 +76,7 @@ const collectUnits: Capability = {
   },
   handler: async (input: ListInput, user: LivelyUser) => guard(async () => {
     const r = await listUnitsFor(actorOf(user), { app: input.app ?? null, state: input.state ?? null, mine: !!input.mine });
-    return { units: r.units, hidden: r.hidden, count: r.units.length };
+    return { units: r.units, hidden: r.hidden, count: r.units.length, visibility_enforced: r.visibility_enforced };
   }),
 };
 
@@ -83,6 +85,10 @@ const collectUnits: Capability = {
 const updateInput = {
   id: z.number().int().positive().describe("단위 id(collect_units 의 id)"),
   state: z.enum(UNIT_STATES).optional().describe("active=모은다 · excluded=모으지 않는다 · candidate=보류(목록에서 찾기만 한 상태)"),
+  visibility: z.enum(UNIT_VISIBILITIES).optional().describe(
+    "공개범위 — me=나만(바꾸는 사람이 주인이 된다 · 그 단위를 볼 수 있는 것이 확인된 사람만 고를 수 있다) · viewers=볼 수 있는 사람만(확인된 구성원) · " +
+    "all=모두. 수집을 시작하기 전 검토에서 사람에게 묻고 정한다(리브의 첫 제안: 공개 채널=all · 메일함=me · 그 밖=viewers). " +
+    "바꾸면 이미 모은 자료도 그 범위로 다시 맞춘다. «나만» 단위는 정한 사람만 바꿀 수 있다"),
   interval_sec: z.number().int().min(60).max(2592000).nullable().optional().describe("주기(초) — 그 단위에 글이 올라오는 빈도로 정한다. null 이면 기본값"),
   description: z.string().max(4000).nullable().optional().describe("메타데이터: 이 단위에서 오가는 일(검색 실패 안내에서 단위를 고를 때 쓴다)"),
   meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·activity(활동량)·knowhow(단위 노하우)"),
@@ -96,10 +102,10 @@ const collectUnitUpdate: Capability = {
   name: "collect_unit_update",
   title: "수집 단위 고치기",
   description:
-    "수집 단위 하나를 고친다(#4213 T10) — 모을지(state)·주기(interval_sec)·설명/메타데이터(리브가 첫 수집 뒤 쓰고 수집마다 유지)·" +
+    "수집 단위 하나를 고친다(#4213 T10) — 모을지(state)·공개범위(visibility)·주기(interval_sec)·설명/메타데이터(리브가 첫 수집 뒤 쓰고 수집마다 유지)·" +
     "담당 후보 순서(priorities)·수집 경로(route). 구성원 경로 단위는 그 단위의 확인된 볼 수 있는 구성원만, 수집기 단위는 관리자 또는 " +
     "확인된 볼 수 있는 구성원만 고칠 수 있고, 경로 바꾸기는 관리자만. 볼 수 있는 구성원 자체는 여기서 못 바꾼다(각자의 목록 반영). " +
-    "REST 등가: POST /api/ui/collect/units/:id {state?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
+    "REST 등가: POST /api/ui/collect/units/:id {state?, visibility?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
   scope: "memory",
   input: updateInput,
   expose: {
@@ -110,6 +116,10 @@ const collectUnitUpdate: Capability = {
       if (b.state != null) {
         if (!(UNIT_STATES as readonly string[]).includes(String(b.state))) throw new HttpError(400, `state 는 ${UNIT_STATES.join("·")} 중 하나입니다`);
         out.state = String(b.state);
+      }
+      if (b.visibility != null) {
+        if (!(UNIT_VISIBILITIES as readonly string[]).includes(String(b.visibility))) throw new HttpError(400, `visibility 는 ${UNIT_VISIBILITIES.join("·")} 중 하나입니다`);
+        out.visibility = String(b.visibility);
       }
       if (b.interval_sec !== undefined) {
         if (b.interval_sec === null) out.interval_sec = null;
@@ -138,7 +148,8 @@ const collectUnitUpdate: Capability = {
   },
   handler: async (input: UpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
     const unit = await updateUnit(input.id, {
-      state: input.state as UnitState | undefined, interval_sec: input.interval_sec, description: input.description,
+      state: input.state as UnitState | undefined, visibility: input.visibility as UnitVisibility | undefined,
+      interval_sec: input.interval_sec, description: input.description,
       meta: input.meta ?? null, priorities: input.priorities, route: input.route as CollectRoute | undefined, name: input.name,
     }, actorOf(user), ctx);
     return { ok: true, unit };
