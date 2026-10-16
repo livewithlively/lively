@@ -11,8 +11,8 @@
 //  대기의 시작·끝은 `type:"system" · subtype:"informational"` 줄로 남는다(본체 문자열 — 2.1.301):
 //   걸림   «Usage limit reached · continuing automatically at 4:10pm · esc to cancel»         (턴이 한도에 닿아 자동으로 걸림)
 //          «Usage limit reached again · continuing automatically at 4:10pm · esc to cancel»   (대기 중 사람이 보낸 말이 다시 막힘)
-//          + 사용자 줄 `<local-command-stdout>Claude Code will continue automatically at 4:10pm. … Press esc to cancel the wait.</…>`
-//            (사람이 한도 대화상자에서 «기다리기» 를 골랐다 — 아래 #4821 ③)
+//          + 명령 결과 줄 `<local-command-stdout>Claude Code will continue automatically at 4:10pm. … Press esc to cancel the wait.</…>`
+//            (사람이 한도 대화상자에서 «기다리기» 를 골랐다 — 아래 #4821 ③ · 사용자 줄 또는 system local_command 줄)
 //   이어 감 «Usage limit reset · continuing automatically» · «Usage limit available again · continuing now»
 //          — 그 뒤 자동 이어감 메시지(origin auto-continuation)가 큐에 서서 새 턴이 돈다. **그 메시지 뒤의** 턴이 끝나면(turn_duration)
 //            대기는 끝난 것이다(이어 감 메시지는 큐 뒤쪽에 서므로, 그 사이 끝난 작업 알림 턴의 끝은 세지 않는다 — 격리 리뷰).
@@ -101,15 +101,24 @@ function humanPrompt(l: Record<string, unknown>): boolean {
 }
 const originKind = (l: Record<string, unknown>): unknown => (l.origin && typeof l.origin === "object" ? (l.origin as { kind?: unknown }).kind : undefined);
 
-/** 대화상자 «기다리기» 의 결과 줄이면 그 문구(태그를 뗀 것), 아니면 null — 사용자 줄 본문이 `<local-command-stdout>` 로 시작하고 두 조각을 함께 담을 때만. */
+/** 명령 결과 본문이 대화상자 «기다리기» 의 결과면 그 문구(태그를 뗀 것), 아니면 null — `<local-command-stdout>` 로 시작하고 두 조각을 함께 담을 때만. */
+function dialogArmTextOf(body: string): string | null {
+  const t = body.trimStart();
+  if (!t.startsWith(STDOUT_OPEN) || !DIALOG.test(t)) return null;
+  return t.slice(STDOUT_OPEN.length).replace(/<\/local-command-stdout>\s*$/, "").trim().slice(0, 200);
+}
+/**
+ * 대화상자 «기다리기» 의 결과 줄이면 그 문구, 아니면 null. 명령 결과는 **두 모양**으로 남는다(같은 2.1.301 · local-jsx 의 onDone 표시 옵션에 따라):
+ *  옵션 없음 = 사용자 줄(message.content) · display "system" = `type:"system" · subtype:"local_command"` 줄(content). «기다리기» 는 지금 옵션 없이
+ *  부르지만(사용자 줄), 같은 판의 /model 은 성공은 사용자 줄 · 실패는 system 줄로 남았다(#4821 실측) — 한쪽만 읽으면 표시 옵션 하나 바뀐 판에서 조용히 놓친다.
+ */
 function dialogArmText(l: Record<string, unknown>): string | null {
+  if (l.type === "system") return l.subtype === "local_command" && typeof l.content === "string" ? dialogArmTextOf(l.content) : null;
   const c = (l.message && typeof l.message === "object" ? (l.message as { content?: unknown }).content : undefined);
   const body = typeof c === "string" ? c
     : Array.isArray(c) ? c.map((b) => (b && typeof b === "object" && typeof (b as { text?: unknown }).text === "string" ? (b as { text: string }).text : "")).join("")
     : "";
-  const t = body.trimStart();
-  if (!t.startsWith(STDOUT_OPEN) || !DIALOG.test(t)) return null;
-  return t.slice(STDOUT_OPEN.length).replace(/<\/local-command-stdout>\s*$/, "").trim().slice(0, 200);
+  return dialogArmTextOf(body);
 }
 
 /**
@@ -153,6 +162,9 @@ export function quotaScan(lines: ReadonlyArray<unknown>, openTurnContinued = fal
         else if (ARMED.test(l.content)) st = event("armed", l, l.content);
       } else if (l.subtype === "turn_duration" && st?.kind === "fired" && st.continued) {
         st = null;   // 이어 간 턴이 끝났다 — 대기는 끝났고 이제 평범한 완료다
+      } else if (l.subtype === "local_command") {
+        const dialog = dialogArmText(l);
+        if (dialog !== null) st = event("armed", l, dialog);   // #4821 ③ — 대화상자 «기다리기» 결과가 system 줄로 남은 모양
       }
       continue;
     }
