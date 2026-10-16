@@ -4450,7 +4450,7 @@ function handOffToShell(meta) {
   const restorable = !!(meta && meta.restorable);
   const canRestore = !!(meta && meta.canRestore);
   try {
-    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable, canRestore, end: endFactsOf(meta), typed: userTyped }, location.origin);
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable, canRestore, end: endFactsOf(meta) }, location.origin);
   } catch (_) { /* 부모가 없거나 닫혔다 */ }
   sessionEnded = true;
   try { term.options.disableStdin = true; } catch (_) { /* noop */ }
@@ -4805,6 +4805,11 @@ export function canForceRestore(e) {
   return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
 }
 
+/** 서버가 «사람이 끝냈다» 고 적었나(순수, #4783) — 멈춤·/exit·하네스 정상 종료. 단독 창이 그 세션을 저절로 되살리지 않는 근거. */
+export function userEndedFacts(f) {
+  const x = f || {};
+  return !!x.exitedByUser || x.endWhy === 'stop' || x.endWhy === 'harness_exit';
+}
 /**
  * 단독 창의 «방금 끝남»(ask) 배너 문구 — 서버가 적은 끝난 사유로 고른다(순수, #4783). 사유를 모르면 «누가» 를 말하지 않는다.
  *  f = endFactsOf(meta). 사유 이름은 src/sessions/session-end.ts 의 SessionEndWhy 와 같다.
@@ -4815,10 +4820,11 @@ export function askBannerCopy(f) {
   if (x.exitedByUser || x.endWhy === 'harness_exit' || x.endWhy === 'stop') return { title: '이 세션은 끝났습니다.', body: '직접 끝낸 세션이에요 —' + tail };
   if (x.endWhy === 'harness_crash') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 오류로 끝났어요' + (typeof x.endCode === 'number' ? '(종료 코드 ' + x.endCode + ')' : '') + ' —' + tail };
   if (x.endWhy === 'launch_fail') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 뜨자마자 끝났어요 —' + tail };
-  if (x.endWhy === 'lost') return { title: '이 세션이 비정상적으로 끝났습니다.', body: '세션이 돌던 컴퓨터에 문제가 생겨 끊겼어요 —' + tail };
+  if (x.endWhy === 'lost') return { title: '이 세션이 비정상적으로 끝났습니다.', body: '끝난 이유를 알 수 없어요 —' + tail };
   if (x.oomKilled) return { title: '이 세션이 비정상적으로 끝났습니다.', body: '메모리가 모자라 멈췄어요 —' + tail };
   if (x.stopWhy === 'asking') return { title: '이 세션은 꺼져 있습니다.', body: '답을 기다리다 자동으로 껐어요 —' + tail };
-  if (x.endWhy === 'reclaim' || x.stopWhy === 'done') return { title: '이 세션은 꺼져 있습니다.', body: '작업이 끝나 자동으로 껐어요 —' + tail };
+  if (x.stopWhy === 'done') return { title: '이 세션은 꺼져 있습니다.', body: '작업이 끝나 자동으로 껐어요 —' + tail };
+  if (x.endWhy === 'reclaim') return { title: '이 세션은 꺼져 있습니다.', body: '시스템이 자동으로 껐어요 —' + tail };
   return { title: '이 세션이 방금 끝났습니다.', body: tail.trim() };
 }
 export function goneMode(meta, isNode, alreadyRestored, typed) {
@@ -4866,7 +4872,10 @@ async function onSessionGone() {
   let meta = null;
   // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
   try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
-  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
+  //  #4783 — «되살리지 않음» 의 근거는 이 탭의 입력(typed)만이 아니다: 서버가 **사람이 끝냈다**(멈춤·/exit·하네스 정상 종료)고 적었으면
+  //   그것도 같은 뜻이다. 종전엔 마우스만 지나가도 typed 가 켜져 이 자리가 늘 ask 였는데, 이제 typed 가 키 입력만 세므로 사이드바 [종료]
+  //   같은 바깥 멈춤 뒤엔 auto(자동 복원)로 새어 사람이 끝낸 세션을 되살릴 수 있었다(격리 리뷰).
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped || userEndedFacts(endFactsOf(meta)));
   if (mode === 'moved') { goToMoved(meta.movedTo); return; }   // #2231 — 붙어 있다 끊겼는데 그새 이어져 있었다
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {

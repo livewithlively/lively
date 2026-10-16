@@ -2226,7 +2226,7 @@ function sideInstances(): SideInstance[] {
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     //  ★ #4783 — 다만 «지난 세션» 은 **사람이 끝낸 것**이다(상민님 2026-10-16). 시스템이 끈 세션(하네스 종료 규칙 — 일이 끝나고 안 보면
     //   3분 뒤 끈다)은 끄기 직전 모습 그대로 서고(답을 기다리던 것은 확인 필요, 안 본 결과는 작업 완료), 고장으로 끝난 것은 «오류» 점이 선다.
-    //   그 둘은 흐리지도 접지도 않는다. 사유를 모르는 판(이 기록 전에 끝난 옛 판)도 사람이 끝냈다고 단정하지 않는다 — 점 없는 보통 줄(views.ts stopDot·stopPast).
+    //   그 둘은 흐리지도 접지도 않는다. 사유를 모르는 판(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판)은 종전 그대로 지난 세션이다(views.ts stopDot·stopPast).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)
       liveNow ? s.stateKey : (s.stopDot || ''), false, undefined, !liveNow && s.stopPast !== false);
   }

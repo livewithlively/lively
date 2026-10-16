@@ -1622,7 +1622,7 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     //   × 의 뜻과 상태 점을 끄는 데만 쓰고 넘기지 않아서, 홈에는 있는 두 가지가 이 구역엔 없었다:
     //   흐린 톤(.v2-app-inst--past)과 카드 안 「지난 세션 n」 접힘. 같은 목록이 어디서 보느냐에 따라
     //   다른 말을 하면 사람은 그걸 «없어졌다» 로 겪는다(이름 수정이 트리에만 있던 것과 같은 종류).
-    past: pastRow && s.stopPast !== false,   // #4783 — «지난 세션» 은 사람이 끝냈을 때만(홈 ① 과 같다)
+    past: pastRow && s.stopPast !== false,   // #4783 — 시스템이 끈 것·고장은 «지난 세션» 이 아니다(홈 ① 과 같다)
     //  남의 세션이면 주인 얼굴 — 홈이 이미 하는 일이다(#2026). 이 구역은 남의 세션이 **더 많이** 서는 곳이라
     //   여기 없던 게 더 이상했다.
     owner: isMine(s) ? null : { id: ownerId, name: ownerName(s) },
@@ -3363,11 +3363,17 @@ function sumEl(sess: Sess[], past: Sess[] = []): HTMLElement | null {
   const part = (n: number, cls: string, label: string) => (n ? el('span', { class: 'v2-sum ' + cls, title: `${label} ${n}` }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), String(n)) : null);
   // 도는 게 하나도 없는 프로젝트 — 오른쪽 자리를 '지난 세션 n'이 받는다(#1808). 종전엔 시각만 떠서 **이어서 할 게
   //  있다는 사실 자체가 화면에 없었다**. 도는 세션이 있으면 종전 그대로(급한 것만) — 숫자를 늘어놓지 않는다.
-  if (!sess.length) return past.length ? el('span', { class: 'v2-sums', 'aria-label': `지난 세션 ${past.length}` }, part(past.length, 'past', '지난 세션')) : null;
-  const c = { wait: 0, busy: 0, rest: 0 };
+  //  #4783 — 꺼진 세션도 시스템이 끄며 답할 질문을 남겼거나 고장으로 끝났으면(views.ts stopDot) 접힌 프로젝트 줄에서 그 사실을 말한다.
+  const att = { wait: 0, err: 0 };
+  for (const s of past) { if (s.stopDot === 'waiting') att.wait++; else if (s.stopDot === 'error') att.err++; }
+  if (!sess.length) {
+    if (att.wait || att.err) return el('span', { class: 'v2-sums', 'aria-label': `확인할 세션 ${att.wait + att.err}` }, part(att.wait, 'wait', '확인 필요'), part(att.err, 'err', '오류'));
+    return past.length ? el('span', { class: 'v2-sums', 'aria-label': `지난 세션 ${past.length}` }, part(past.length, 'past', '지난 세션')) : null;
+  }
+  const c = { wait: att.wait, busy: 0, rest: 0 };
   for (const s of sess) { if (s.stateKey === 'waiting') c.wait++; else if (s.stateKey === 'busy') c.busy++; else c.rest++; }
-  return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.busy, 'busy', '작업 중'),
-    (!c.wait && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
+  return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(att.err, 'err', '오류'), part(c.busy, 'busy', '작업 중'),
+    (!c.wait && !att.err && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
 }
 
 // 세션 행 — 상태점 · 세션을 실제로 구분해 주는 글(sessText) · 남의 세션이면 소유자 얼굴 · 상태어.

@@ -51,10 +51,11 @@ test("H 혼자 연 창의 «방금 끝남» 배너 — 서버가 적은 사유�
   assert.match(c({ endWhy: "harness_exit" }).body, /직접 끝낸 세션/);
   assert.match(c({ endWhy: "harness_crash", endCode: 137 }).body, /오류로 끝났어요\(종료 코드 137\)/);
   assert.match(c({ endWhy: "launch_fail" }).body, /뜨자마자/);
-  assert.match(c({ endWhy: "lost" }).body, /문제가 생겨 끊겼어요/);
+  assert.match(c({ endWhy: "lost" }).body, /끝난 이유를 알 수 없어요/, "사라짐은 원인을 단정하지 않는다");
   assert.match(c({ oomKilled: true }).body, /메모리가 모자라/);
   assert.match(c({ stopWhy: "asking" }).body, /답을 기다리다 자동으로 껐어요/);
-  assert.match(c({ endWhy: "reclaim" }).body, /작업이 끝나 자동으로 껐어요/);
+  assert.match(c({ endWhy: "reclaim" }).body, /시스템이 자동으로 껐어요/, "회수만으로는 «작업이 끝나» 를 단정하지 않는다");
+  assert.match(c({ endWhy: "reclaim", stopWhy: "done" }).body, /작업이 끝나 자동으로 껐어요/);
   assert.match(c({ stopWhy: "done" }).body, /작업이 끝나 자동으로 껐어요/);
   for (const f of [{}, null, { endWhy: "nope" }]) {
     const x = c(f);
@@ -90,7 +91,7 @@ test("I2 열 때 이미 끝남 — 세션 화면 안이면 판정 없이 넘긴�
 
 test("I3 넘길 때 끝난 사실을 싣는다 · 되살릴 수 있다는 약속은 메타가 한 만큼만", () => {
   const b = body("handOffToShell");
-  assert.match(b, /end: endFactsOf\(meta\)/, "끝난 사실(endFactsOf)을 싣는다");
+  assert.match(b, /end: endFactsOf\(meta\) \}/, "끝난 사실(endFactsOf)을 싣는다 — 셸이 안 읽는 칸(typed)은 싣지 않는다");
   assert.doesNotMatch(b, /restorable: true/, "🔴 메타가 아니라고 해도 «되살릴 수 있다» 를 박아 보낸다");
   assert.match(b, /restorable = !!\(meta && meta\.restorable\)/);
 });
@@ -105,4 +106,16 @@ test("I5 혼자 연 창의 ask 배너는 사유로 고른 말 — «이 탭에�
   const b = body("onSessionGone");
   assert.match(b, /askBannerCopy\(endFactsOf\(meta\)\)/);
   assert.doesNotMatch(src, /이 탭에서 조작한 뒤 끝났어요/);
+});
+
+test("I6 혼자 연 창 — 서버가 «사람이 끝냈다» 고 적었으면 이 탭에서 안 쳤어도 저절로 되살리지 않는다(ask)", () => {
+  assert.equal(T.userEndedFacts({ exitedByUser: true }), true);
+  assert.equal(T.userEndedFacts({ endWhy: "stop" }), true);
+  assert.equal(T.userEndedFacts({ endWhy: "harness_exit" }), true);
+  for (const f of [{ endWhy: "reclaim" }, { endWhy: "lost" }, { endWhy: "harness_crash" }, {}, null]) assert.equal(T.userEndedFacts(f), false, JSON.stringify(f));
+  //  판정표 쪽 — 그 값이 typed 자리로 들어가면 ask 다(종전 표 ㉜ 와 같은 칸).
+  assert.equal(T.goneMode({ restorable: true, canRestore: true }, false, false, T.userEndedFacts({ endWhy: "stop" })), "ask");
+  assert.equal(T.goneMode({ restorable: true, canRestore: true }, false, false, T.userEndedFacts({ endWhy: "reclaim" })), "auto");
+  const b = body("onSessionGone");
+  assert.match(b, /goneMode\(meta, !!NODE_ID, RESTORED, userTyped \|\| userEndedFacts\(endFactsOf\(meta\)\)\)/, "🔴 4410 판정에 서버의 «사람이 끝냈다» 를 안 싣는다");
 });

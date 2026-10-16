@@ -1,5 +1,5 @@
 // #4783 — 꺼진 세션의 겉모습(누가 끝냈나)과 그 이름을 고정한다. 사양: 스크래치패드 spec.md 표 F.
-//  컴파일 결과(public/app/session-status.js · public/app/lib/session-end-copy.js)를 그대로 import 한다(DOM 무의존 순수 모듈).
+//  컴파일 결과(public/app/session-status.js · public/app/session-end-copy.js)를 그대로 import 한다(DOM 무의존 순수 모듈).
 //  틀리면 티가 크다:
 //   🔴 시스템이 끈 세션을 «지난 세션» 으로 접으면 — 답을 기다리던 질문·안 본 결과가 사이드바에서 사라진다(이번 신고 그 자체).
 //   🔴 사람이 끝낸 세션을 끄기 직전 모습으로 두면 — /exit 한 세션이 «작업 완료» 로 다시 뜬다.
@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const S = await import(pathToFileURL(path.join(ROOT, "public/app/session-status.js")).href);
-const C = await import(pathToFileURL(path.join(ROOT, "public/app/lib/session-end-copy.js")).href);
+const C = await import(pathToFileURL(path.join(ROOT, "public/app/session-end-copy.js")).href);
 
 const NOW = 1_800_000_000_000;
 const sec = NOW / 1000;
@@ -60,7 +60,7 @@ test("F2 점 — 고장은 오류(7일) · 시스템이 끈 것은 끄기 직전
   assert.equal(d({}), "");
 });
 
-test("F3 지난 세션(흐림·접힘)은 사람이 끝낸 것뿐 — 시스템·고장·모름은 보통 줄", () => {
+test("F3 지난 세션(흐림·접힘)은 사람이 끝냈거나 사유를 모를 때(종전 그대로) — 시스템이 끈 것·고장은 보통 줄", () => {
   const p = (o) => S.stoppedIsPast(stopped(o));
   assert.equal(p({ exitedByUser: true }), true);
   assert.equal(p({ endNote: { why: "stop", at: sec } }), true);
@@ -68,7 +68,8 @@ test("F3 지난 세션(흐림·접힘)은 사람이 끝낸 것뿐 — 시스템�
   assert.equal(p({ endNote: { why: "reclaim", at: sec } }), false);
   assert.equal(p({ stopNote: { why: "asking", at: sec } }), false);
   assert.equal(p({ endNote: { why: "lost", at: sec } }), false);
-  assert.equal(p({}), false, "사유를 모르면 사람이 끝냈다고 단정하지 않는다");
+  assert.equal(p({}), true, "사유를 모르면 종전 그대로 지난 세션(옛 판 · 끝을 보고하지 않는 판의 정상 종료가 여기 든다)");
+  assert.equal(p({ stopNote: { why: "exited", at: sec } }), true);
 });
 
 test("F4 오류 점은 확인 필요와 다른 모양 · 점 상태에 든다 · 생사·필터 어휘는 안 바뀐다", () => {
@@ -89,9 +90,10 @@ test("F5 꺼진 세션의 이름 — 누가 끝냈나로 부르고, 모르면 �
   assert.equal(n({ endNote: { why: "stop", at: sec } }), "직접 끝낸 세션");
   assert.equal(n({ endNote: { why: "harness_crash", at: sec } }), "AI 가 오류로 끝난 세션");
   assert.equal(n({ endNote: { why: "launch_fail", at: sec } }), "AI 가 뜨자마자 끝난 세션");
-  assert.equal(n({ endNote: { why: "lost", at: sec } }), "돌던 곳에 문제가 생겨 끊긴 세션");
+  assert.equal(n({ endNote: { why: "lost", at: sec } }), "끝난 이유를 알 수 없는 세션", "사라짐은 원인을 단정하지 않는다");
   assert.equal(n({ oomKilled: true }), "메모리가 모자라 멈춘 세션");
-  assert.equal(n({ endNote: { why: "reclaim", at: sec } }), "작업이 끝나 잠시 꺼 둔 세션");
+  assert.equal(n({ endNote: { why: "reclaim", at: sec } }), "시스템이 잠시 꺼 둔 세션", "회수만으로는 «작업이 끝나» 를 단정하지 않는다");
+  assert.equal(n({ endNote: { why: "reclaim", at: sec }, stopNote: { why: "done", at: sec } }), "작업이 끝나 잠시 꺼 둔 세션");
   assert.equal(n({ stopNote: { why: "asking", at: sec } }), "답을 기다리다 잠시 꺼 둔 세션");
   assert.equal(n({}), "");
   assert.equal(C.endedSessPhrase(null), "");

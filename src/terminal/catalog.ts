@@ -780,6 +780,14 @@ const LAUNCH_STOP_SH = [
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
 
+/**
+ * #4783 — 이 pane argv 가 **끝을 보고하는 런처**(LAUNCH_STOP_SH)인가. createSession 이 이 값으로 그 판에 «사유를 적는 판» 표식을 찍는다
+ *  (session-state upsert end_mark). 런처를 문자열로 대조한다 — 하네스·모드·플랫폼 조건을 다시 쓰지 않는다(조건이 두 벌이 되면 갈린다).
+ */
+export function launchReportsEnd(argv: readonly string[]): boolean {
+  return argv.length > 3 && argv[0] === "sh" && argv[1] === "-c" && argv[2] === LAUNCH_STOP_SH;
+}
+
 /** 하네스 종료 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 sessions/session-stop-rule.ts 가 같은 표를 본다. */
 export const STOP_RULE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);
 

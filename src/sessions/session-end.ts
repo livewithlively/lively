@@ -45,6 +45,12 @@ export interface SessionEndNote {
    *  나중에 그 세션을 열어 보면 true 로 바뀐다(markSessionEndSeen). 없음 = 모름(점을 안 그린다).
    */
   seen?: boolean;
+  /**
+   * **임시 사유**다 — 판이 아직 살아 있는 채 적힌 사유(기동 실패: 런처가 안내와 셸을 남긴다). 사람이 그 셸에서 하네스를 다시 띄워
+   *  일을 하면 이 판은 실패한 판이 아니다. 그래서 그 뒤의 사실이 덮을 수 있다 — 사람의 멈춤(stop)은 언제나, 시스템 끄기(reclaim)는
+   *  **기록 뒤에 작업이 있었을 때만**(last_busy > at). 아무도 다시 안 띄우고 꺼지면 기동 실패가 그 판의 끝이다(markSessionEnded).
+   */
+  prov?: boolean;
 }
 
 /** 판 시작 표식 — createSession 의 장부 upsert 가 찍는다. */
@@ -56,6 +62,7 @@ export interface SessionEndInput {
   code?: number;
   by?: string;
   seen?: boolean;
+  prov?: boolean;
 }
 
 /** DB 값을 읽는다 — 모양이 틀리면 null(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
@@ -73,6 +80,7 @@ export function endNoteOf(v: unknown): SessionEndNote | null {
   if (typeof n.code === "number" && Number.isInteger(n.code)) out.code = n.code;
   if (typeof n.by === "string" && n.by) out.by = n.by;
   if (typeof n.seen === "boolean") out.seen = n.seen;
+  if (n.prov === true) out.prov = true;
   return out;
 }
 
@@ -82,20 +90,23 @@ export function buildEndNote(e: SessionEndInput, nowSec: number): SessionEndNote
   if (typeof e.code === "number" && Number.isInteger(e.code)) out.code = e.code;
   if (e.by) out.by = e.by;
   if (typeof e.seen === "boolean") out.seen = e.seen;
+  if (e.prov === true) out.prov = true;
   return out;
 }
 
 /** SIGHUP(129) — tmux 가 판을 죽일 때 하네스가 받는 신호. 그 끝은 **죽인 쪽이** 이미 적었다(보고를 사유로 읽지 않는다). */
 export const HANGUP_EXIT_CODE = 129;
+/** SIGINT(130) — Ctrl-C 로 끝냈다. 사람의 손짓이라 고장이 아니라 사람이 끝낸 것으로 읽는다. */
+export const INTERRUPT_EXIT_CODE = 130;
 
 /**
  * 런처 보고(POST …/sessions/:id/ended) → 적을 사유. 순수.
  *  body = { code: 0~255 정수, quick: 기동 직후였나(0|1|bool), t0: 하네스를 띄운 시각(epoch초) }.
  *  null = 받지 않는다(모양이 틀림 · 신호로 죽음 — 아래).
- *  · code 0 → harness_exit(정상 종료 — 사람이 끝냈다) · 0 이 아님: 기동 직후면 launch_fail, 아니면 harness_crash.
+ *  · code 0·130(Ctrl-C) → harness_exit(사람이 끝냈다) · 그 밖: 기동 직후면 launch_fail(**임시** — 셸이 남아 판이 이어질 수 있다), 아니면 harness_crash.
  *  · code 129(SIGHUP) 는 받지 않는다 — tmux 가 판을 닫을 때 생기는 코드다. 그 판을 닫은 자리(끄기·멈춤)가 이미 사유를 적었다.
  */
-export function harnessEndVerdict(body: unknown): { why: SessionEndWhy; code: number; t0: number } | null {
+export function harnessEndVerdict(body: unknown): { why: SessionEndWhy; code: number; t0: number; prov: boolean } | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   const code = typeof b.code === "number" ? b.code : typeof b.code === "string" && /^\d{1,3}$/.test(b.code) ? Number(b.code) : NaN;
@@ -104,8 +115,8 @@ export function harnessEndVerdict(body: unknown): { why: SessionEndWhy; code: nu
   const t0 = typeof b.t0 === "number" ? b.t0 : typeof b.t0 === "string" && /^\d{1,12}$/.test(b.t0) ? Number(b.t0) : NaN;
   if (!Number.isInteger(t0) || t0 <= 0) return null;
   const quick = b.quick === true || b.quick === 1 || b.quick === "1";
-  const why: SessionEndWhy = code === 0 ? "harness_exit" : quick ? "launch_fail" : "harness_crash";
-  return { why, code, t0 };
+  const why: SessionEndWhy = code === 0 || code === INTERRUPT_EXIT_CODE ? "harness_exit" : quick ? "launch_fail" : "harness_crash";
+  return { why, code, t0, prov: why === "launch_fail" };
 }
 
 /** 판 경계 여유(초) — 런처 시계(컨테이너)와 장부 시계(게이트웨이)가 다른 기계라 조금 어긋날 수 있다. */

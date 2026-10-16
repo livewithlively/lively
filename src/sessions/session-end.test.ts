@@ -15,6 +15,8 @@ test("E1 endNoteOf — 모양이 틀리면 null(지어내지 않는다) · 판 �
   assert.deepEqual(endNoteOf({ v: 1, at: 10, why: "reclaim", seen: false, junk: "x" }), { v: 1, at: 10, why: "reclaim", seen: false });
   assert.deepEqual(endNoteOf({ v: 1, at: 10, why: "harness_crash", code: 137, by: "" }), { v: 1, at: 10, why: "harness_crash", code: 137 });
   assert.deepEqual(endNoteOf({ v: 1, at: 10, why: "stop", by: "me", code: 1.5 }), { v: 1, at: 10, why: "stop", by: "me" });
+  assert.deepEqual(endNoteOf({ v: 1, at: 10, why: "launch_fail", code: 1, prov: true }), { v: 1, at: 10, why: "launch_fail", code: 1, prov: true });
+  assert.deepEqual(endNoteOf({ v: 1, at: 10, why: "launch_fail", prov: "true" }), { v: 1, at: 10, why: "launch_fail" }, "참값 흉내는 임시로 안 읽는다");
 });
 
 test("E2 buildEndNote — 시각은 초 정수 · 준 칸만 싣는다", () => {
@@ -22,19 +24,21 @@ test("E2 buildEndNote — 시각은 초 정수 · 준 칸만 싣는다", () => {
   assert.deepEqual(buildEndNote({ why: "stop", by: "u1" }, 5), { v: 1, at: 5, why: "stop", by: "u1" });
   assert.deepEqual(buildEndNote({ why: "reclaim", seen: false }, 5), { v: 1, at: 5, why: "reclaim", seen: false });
   assert.deepEqual(buildEndNote({ why: "harness_crash", code: 2 }, 5), { v: 1, at: 5, why: "harness_crash", code: 2 });
+  assert.deepEqual(buildEndNote({ why: "launch_fail", code: 1, prov: true }, 5), { v: 1, at: 5, why: "launch_fail", code: 1, prov: true });
 });
 
 test("E3 harnessEndVerdict(표 A) — 종료코드 0 = 사람이 끝냄 · 0 아님 = 고장(기동 직후면 기동 실패) · 129 는 사유로 안 읽는다", () => {
   const T0 = 1_790_000_000;
   const cases: Array<[unknown, ReturnType<typeof harnessEndVerdict>]> = [
-    [{ code: 0, quick: 0, t0: T0 }, { why: "harness_exit", code: 0, t0: T0 }],
-    [{ code: 0, quick: 1, t0: T0 }, { why: "harness_exit", code: 0, t0: T0 }],        // 뜨자마자 /exit 해도 사람이 끝낸 것이다
-    [{ code: 1, quick: 1, t0: T0 }, { why: "launch_fail", code: 1, t0: T0 }],
-    [{ code: 1, quick: true, t0: T0 }, { why: "launch_fail", code: 1, t0: T0 }],
-    [{ code: 1, quick: 0, t0: T0 }, { why: "harness_crash", code: 1, t0: T0 }],
-    [{ code: 137, quick: 0, t0: T0 }, { why: "harness_crash", code: 137, t0: T0 }],  // 메모리 상한 초과(SIGKILL)
-    [{ code: "3", quick: "1", t0: String(T0) }, { why: "launch_fail", code: 3, t0: T0 }],
-    [{ code: 255, quick: 0, t0: T0 }, { why: "harness_crash", code: 255, t0: T0 }],  // 경계 — 가장 큰 코드
+    [{ code: 0, quick: 0, t0: T0 }, { why: "harness_exit", code: 0, t0: T0, prov: false }],
+    [{ code: 0, quick: 1, t0: T0 }, { why: "harness_exit", code: 0, t0: T0, prov: false }],        // 뜨자마자 /exit 해도 사람이 끝낸 것이다
+    [{ code: 130, quick: 0, t0: T0 }, { why: "harness_exit", code: 130, t0: T0, prov: false }],    // Ctrl-C 로 끝냄 — 사람의 손짓
+    [{ code: 1, quick: 1, t0: T0 }, { why: "launch_fail", code: 1, t0: T0, prov: true }],         // 기동 실패는 임시 — 셸이 남아 판이 이어질 수 있다
+    [{ code: 1, quick: true, t0: T0 }, { why: "launch_fail", code: 1, t0: T0, prov: true }],
+    [{ code: 1, quick: 0, t0: T0 }, { why: "harness_crash", code: 1, t0: T0, prov: false }],
+    [{ code: 137, quick: 0, t0: T0 }, { why: "harness_crash", code: 137, t0: T0, prov: false }],  // 메모리 상한 초과(SIGKILL)
+    [{ code: "3", quick: "1", t0: String(T0) }, { why: "launch_fail", code: 3, t0: T0, prov: true }],
+    [{ code: 255, quick: 0, t0: T0 }, { why: "harness_crash", code: 255, t0: T0, prov: false }],  // 경계 — 가장 큰 코드
     [{ code: 129, quick: 0, t0: T0 }, null],                                           // tmux 가 판을 닫았다 — 닫은 자리가 적었다
     [{ code: 256, quick: 0, t0: T0 }, null],
     [{ code: -1, quick: 0, t0: T0 }, null],

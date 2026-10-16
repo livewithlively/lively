@@ -21,12 +21,12 @@ const S = (x) => `box-__pgtest-end-${x}`;
 const row0 = (id, over = {}) => ({
   id, owner: A, label: "끝난 사유 시험", harness: "claude", dir: "/work/personal/__end_pg_a__", root_key: "personal", subpath: "",
   flags: {}, auto_approve: false, invites: [], project_id: null, project_src: null, read_only: false, incognito: false,
-  created: 10_000, last_busy: null, label_source: "human", kind: "human", ...over,
+  created: 10_000, last_busy: null, label_source: "human", kind: "human", end_mark: true, ...over,
 });
 const note = async (id) => (await itemsPool.query("SELECT end_note FROM org_session_state WHERE id=$1", [id])).rows[0]?.end_note ?? null;
 
 async function cleanup() {
-  const ids = Array.from({ length: 12 }, (_, i) => S(i));
+  const ids = Array.from({ length: 30 }, (_, i) => S(i));
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ids]);
 }
 
@@ -104,6 +104,79 @@ try {
     chk("P6a seen=false → true · 나머지 칸은 그대로", r1 === true && n1?.seen === true && n1?.why === "reclaim" && n1?.at === 50_000, JSON.stringify({ r1, n1 }));
     chk("P6b 두 번째 열람은 아무것도 안 바꾼다(멱등)", r1b === false, String(r1b));
     chk("P6c seen 칸이 없는 행 · 사유 없는 행은 안 건드린다", r2 === false && r3 === false && (await note(noFlag))?.seen === undefined && JSON.stringify(await note(noWhy)) === JSON.stringify({ v: 1 }), JSON.stringify({ r2, r3 }));
+  }
+
+  // ── P8 끝을 보고하지 않는 판(셸·grok·opencode·대화 런타임)은 표식이 없다 — 사유 없이 사라져도 고장으로 확인할 근거가 아니다 ──
+  {
+    const id = S(11);
+    await st.upsertSessionState(row0(id, { end_mark: false }));
+    chk("P8a 표식 없는 판은 end_note 가 비어 있다", (await note(id)) === null, JSON.stringify(await note(id)));
+    await st.markSessionEnded(id, { why: "stop", by: A }, {}, 70_000);
+    await st.upsertSessionState(row0(id, { end_mark: false, created: 80_000 }));
+    chk("P8b 같은 id 다시 쓰기 — 지난 사유를 지우고 표식도 없다", (await note(id)) === null, JSON.stringify(await note(id)));
+    await st.upsertSessionState(row0(id, { end_mark: true, created: 90_000 }));
+    chk("P8c 보고 런처로 다시 뜨면 표식이 선다", JSON.stringify(await note(id)) === JSON.stringify({ v: 1 }), JSON.stringify(await note(id)));
+  }
+
+  // ── P9 임시 사유(기동 실패 뒤 셸이 남은 판) — 그 뒤 작업이 있었으면 시스템 끄기가 덮고, 없으면 기동 실패가 끝으로 남는다 · 사람의 멈춤은 언제나 덮는다 ──
+  {
+    const keep = S(12), redo = S(13), stopped = S(14), real = S(15);
+    for (const id of [keep, redo, stopped, real]) await st.upsertSessionState(row0(id));
+    for (const id of [keep, redo, stopped]) await st.markSessionEnded(id, { why: "launch_fail", code: 1, prov: true }, { owner: A, t0: 10_001 }, 10_050);
+    await st.markSessionEnded(real, { why: "harness_crash", code: 1 }, { owner: A, t0: 10_001 }, 10_050);
+    await st.touchSessionBusy(redo, 10_500);   // 사람이 셸에서 하네스를 다시 띄워 일했다
+    await st.touchSessionBusy(real, 10_500);
+    const wk = await st.markSessionEnded(keep, { why: "reclaim" }, {}, 11_000);
+    const wr = await st.markSessionEnded(redo, { why: "reclaim", seen: true }, {}, 11_000);
+    const ws = await st.markSessionEnded(stopped, { why: "stop", by: A }, {}, 11_000);
+    const wx = await st.markSessionEnded(real, { why: "reclaim" }, {}, 11_000);
+    chk("P9a 다시 안 띄우고 꺼짐 → 기동 실패가 그 판의 끝", wk === false && (await note(keep))?.why === "launch_fail", JSON.stringify(await note(keep)));
+    chk("P9b 다시 띄워 일한 뒤 꺼짐 → 시스템 끄기가 덮는다", wr === true && (await note(redo))?.why === "reclaim" && (await note(redo))?.prov === undefined, JSON.stringify(await note(redo)));
+    chk("P9c 사람의 멈춤은 임시 사유를 언제나 덮는다", ws === true && (await note(stopped))?.why === "stop", JSON.stringify(await note(stopped)));
+    chk("P9d 임시가 아닌 사유는 작업이 있었어도 안 덮인다(첫 사실)", wx === false && (await note(real))?.why === "harness_crash", JSON.stringify(await note(real)));
+  }
+
+  // ── P10 확인한 그 판에만(created) — 확인하는 사이 같은 id 로 되살아났으면 안 적는다 ──
+  {
+    const id = S(16);
+    await st.upsertSessionState(row0(id, { created: 20_000 }));
+    await st.upsertSessionState(row0(id, { created: 20_500 }));   // 되살아남(새 판)
+    const wOld = await st.markSessionEnded(id, { why: "lost" }, { created: 20_000 }, 21_000);
+    chk("P10a 옛 판(created 20000)의 확답 → 새 판엔 안 적힌다", wOld === false && !(await note(id))?.why, JSON.stringify(await note(id)));
+    const wNew = await st.markSessionEnded(id, { why: "lost" }, { created: 20_500 }, 21_000);
+    chk("P10b 그 판(created 20500)이면 적힌다", wNew === true && (await note(id))?.why === "lost", JSON.stringify(await note(id)));
+  }
+
+  // ── P11 끄기가 실패하면 방금 적은 사유를 되돌린다(내가 적은 그대로일 때만) ──
+  {
+    const id = S(17), other = S(18);
+    await st.upsertSessionState(row0(id)); await st.upsertSessionState(row0(other));
+    await st.markSessionEnded(id, { why: "reclaim" }, {}, 30_000);
+    await st.markSessionEnded(other, { why: "reclaim" }, {}, 30_000);
+    const r1 = await st.revertSessionEnded(id, "reclaim", 30_000);
+    const r2 = await st.revertSessionEnded(other, "reclaim", 30_001);
+    chk("P11a 같은 사유·같은 시각 → 표식만 남긴다", r1 === true && JSON.stringify(await note(id)) === JSON.stringify({ v: 1 }), JSON.stringify(await note(id)));
+    chk("P11b 시각이 다르면(남이 적은 것) 안 건드린다", r2 === false && (await note(other))?.why === "reclaim", JSON.stringify(await note(other)));
+  }
+
+  // ── P12 같은 id 되살리기가 실패하면 지난 판의 사유를 되돌린다 — 새 판이 무언가 적었으면 안 건드린다 ──
+  {
+    const id = S(19), id2 = S(20);
+    for (const x of [id, id2]) { await st.upsertSessionState(row0(x)); await st.markSessionEnded(x, { why: "stop", by: A }, {}, 40_000); }
+    const prev = (await st.getSessionState(id)).end_note;
+    const prev2 = (await st.getSessionState(id2)).end_note;
+    await st.upsertSessionState(row0(id, { created: 41_000 }));
+    await st.upsertSessionState(row0(id2, { created: 41_000 }));
+    await st.markSessionEnded(id2, { why: "harness_crash", code: 1 }, {}, 41_100);   // 새 판이 이미 끝을 적었다
+    const r1 = await st.restoreSessionEndNote(id, prev);
+    const r2 = await st.restoreSessionEndNote(id2, prev2);
+    chk("P12a 되살리기 실패 → 지난 판의 «사람이 멈춤» 이 돌아온다", r1 === true && (await note(id))?.why === "stop" && (await note(id))?.at === 40_000, JSON.stringify(await note(id)));
+    chk("P12b 새 판이 적은 사유는 안 덮는다", r2 === false && (await note(id2))?.why === "harness_crash", JSON.stringify(await note(id2)));
+    const id3 = S(21);
+    await st.upsertSessionState(row0(id3, { end_mark: false }));
+    await st.upsertSessionState(row0(id3, { created: 42_000 }));
+    const r3 = await st.restoreSessionEndNote(id3, null);
+    chk("P12c 지난 판에 사유가 없었으면(null) 그대로 비운다", r3 === true && (await note(id3)) === null, JSON.stringify(await note(id3)));
   }
 
   // ── P7 복원 가능 목록 행이 끝난 사유를 싣는다(멈춘 사람은 안 싣는다) ──

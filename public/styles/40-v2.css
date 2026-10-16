@@ -621,6 +621,8 @@ input.v2-ss-edit { font: inherit; border: 0; border-radius: 5px; padding: 0 5px;
 .v2-app-inst-st[data-st="busy"] { color: var(--blue); animation: v2-app-pulse 1.4s ease-in-out infinite; }
 .v2-app-inst-st[data-st="waiting"] { color: var(--warn); }
 .v2-app-inst-st[data-st="done"] { color: var(--mint); }
+/* #4783 오류 — 꺼진 세션이 비정상적으로 끝났다. «확인 필요»(앰버 원)와 색도 모양도 다르게 마름모(.v2-dot.err 와 같은 말). */
+.v2-app-inst-st[data-st="error"] { color: var(--danger-fill); border-radius: 1px; transform: rotate(45deg) scale(.86); }
 @keyframes v2-app-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .v2-app-inst-st[data-st="busy"] { animation: none; } }
 /*  호버로 닫기 × 가 뜨면 점은 자리를 내준다 — 그 순간 사람이 보는 건 '닫을까'지 상태가 아니다. */

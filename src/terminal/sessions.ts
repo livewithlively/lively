@@ -31,8 +31,8 @@ import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessi
 import { collectPaneArgv, isCollectRunDir, collectMemLimits } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
-import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, markSessionEnded, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원 · #4783 끝난 사유
-import { endNoteForRow, lastResultSeenFrom, LAST_RESULT_SEEN_FMT, type SessionEndInput } from "../sessions/session-end.js";   // #4783 — 이 판이 왜 끝났나
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, markSessionEnded, revertSessionEnded, restoreSessionEndNote, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원 · #4783 끝난 사유
+import { endNoteForRow, lastResultSeenFrom, LAST_RESULT_SEEN_FMT, type SessionEndInput, type SessionEndNote } from "../sessions/session-end.js";   // #4783 — 이 판이 왜 끝났나
 import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -48,7 +48,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
@@ -793,11 +793,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     kind: input.kind,               // #2162 — 종류는 태어날 때 정해진다(복원이 되살린다)
     label_source: labelSource,     // #1979 — 이름 걸쇠. INSERT 때만 정해진다(복원은 저장된 출처를 유지)
     created: createdSec, last_busy: null,
+    //  #4783 — 이 판이 끝을 보고하는 런처로 뜨나(그래야 «사유 없이 사라짐» 을 고장으로 읽을 수 있다 — SessionStateInput.end_mark 머리말).
+    end_mark: launchReportsEnd(launch),
   });
   let mirrored = false;   // #2545 — 새 경로가 행을 먼저 썼나(뒤쪽 미러를 건너뛰고, 실패하면 지운다)
   //  #4694 — 실패 되돌림이 행을 지워도 되나. 같은 id 복원(reuseId)의 행은 **이 호출 전부터 있던** 복원 좌표다 — 지우면
   //   되살리기 한 번 실패가 그 세션을 목록에서 영영 지운다(대화 매핑·이름·소속까지). 그때는 행을 남기고 판만 되돌린다.
-  const dropOwnRow = (): Promise<void> => (mirrored && !reuseId ? deleteSessionState(id).catch(() => undefined) : Promise.resolve());
+  //  #4783 — 같은 id 되살리기가 실패하면 지난 판의 끝난 사유도 되돌린다(판 시작 upsert 가 지웠다 — restoreSessionEndNote 머리말).
+  let prevEnd: SessionEndNote | null | undefined;   // undefined = 읽지 않았다(새 id · 행 쓰기 전) — 되돌릴 것이 없다
+  const dropOwnRow = (): Promise<void> => (mirrored && !reuseId ? deleteSessionState(id).catch(() => undefined)
+    : mirrored && reuseId && prevEnd !== undefined ? restoreSessionEndNote(id, prevEnd).then(() => undefined, () => undefined)
+    : Promise.resolve());
   //  #3891 — 복원이 이어받는 대화를 **desired 행이 선 그 자리에서** 함께 적는다(CreateInput.carryConv 머리말).
   //   왜 여기서: 복원 요청은 판이 뜬 뒤 뒷정리 전에 끊길 수 있다(실측 2026-09-11 — 롤 SIGTERM 15ms 뒤 메타 relay 사망).
   //   그러면 떠 있는 세션이 대화로 찾아지지 않아, 다시 부른 복원이 같은 대화로 세션을 **하나 더** 만든다.
@@ -924,6 +930,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       //  ① 행을 먼저 쓴다 — 브로커 장부(#2544)가 이 세션을 처음부터 «원한다» 로 보게(회수 ② 가 새 컨테이너를 고아로 오판하지 않게).
       //   best-effort 는 종전과 같다(DB 가 죽어도 세션은 뜬다). 상시세션(managed)은 종전대로 행이 없다(#1059 E).
       if (input.kind !== "managed") {
+        //  #4783 — 같은 id 되살리기면 지난 판의 끝난 사유를 먼저 쥐어 둔다(실패하면 dropOwnRow 가 되돌린다). 못 읽으면 되돌릴 것도 없다.
+        if (reuseId) { const cur = await getSessionState(id).catch(() => undefined); if (cur) prevEnd = cur.end_note ?? null; }
         try { await upsertSessionState(desiredRow()); mirrored = true; }
         catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
         if (mirrored) await carryConvNow();   // #3891 — 판을 띄우기 **전에** 대화까지 적어 둔다
@@ -1329,11 +1337,27 @@ async function lastResultSeen(id: string): Promise<boolean | undefined> {
 //  ★ #4783 — **끄기 전에 사유를 적는다**(기본 reclaim = 시스템이 껐다). 이 함수가 시스템 끄기의 공용 문이다 — 하네스 종료 규칙(T5)·
 //   옛 회수 시계·압박 회수·멤버 비활성화·상시 세션 정리가 전부 여기로 온다(호출자 감사 #2258: 그 다섯 곳 외엔 없다).
 //   안 본 결과가 남은 채 끄는지(seen)도 함께 남긴다 — 화면이 꺼진 세션을 «작업 완료» 로 그리는 재료다. 적기 실패는 끄기를 막지 않는다.
+//   ⚠ 앞의 두 일(«봤나» 재기 · 사유 기록)은 **시간 상한**(END_PREP_MS) 안에서만 기다린다 — 압박 회수처럼 급한 끄기를 붙들지 않는다.
+//   ⚠ 끄기가 실패하면(세션이 산다) 방금 적은 사유를 되돌린다(revertSessionEnded) — 살아 있는 판의 진짜 끝이 그 사유에 막히지 않게.
 export async function reapCentralSession(id: string, end: SessionEndInput = { why: "reclaim" }): Promise<void> {
-  const seen = end.seen ?? (end.why === "reclaim" ? await lastResultSeen(id) : undefined);
-  await markSessionEnded(id, { ...end, ...(seen !== undefined ? { seen } : {}) })
-    .catch((e) => console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e));
-  await tmuxKill(id);
+  const seen = end.seen ?? (end.why === "reclaim" ? await within(lastResultSeen(id), END_PREP_MS, undefined) : undefined);
+  const at = Math.floor(Date.now() / 1000);
+  const wrote = await within(markSessionEnded(id, { ...end, ...(seen !== undefined ? { seen } : {}) }, {}, at)
+    .catch((e) => { console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e); return false; }), END_PREP_MS, false);
+  try { await tmuxKill(id); }
+  catch (err) {
+    if (wrote) await revertSessionEnded(id, end.why, at).catch(() => false);
+    throw err;
+  }
+}
+/** #4783 — 끄기 앞의 보조 작업이 끄기 자체를 붙들지 않게 하는 상한(ms). 넘으면 «없는 셈» 이다(사유 없이 꺼지면 사라짐 확인이 뒤에서 본다). */
+const END_PREP_MS = 3_000;
+/** 약속을 상한 시간까지만 기다린다 — 넘거나 실패하면 fallback(던지지 않는다). */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(fallback); });
+  });
 }
 /**
  * 이미 떠 있는 세션에 상시세션 표식(@box_managed)을 뒤늦게 박는다 — **이행 전용**(#2170).
@@ -1355,10 +1379,16 @@ export async function stampManagedMarker(id: string, managedId: string): Promise
 export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean; end?: SessionEndInput }): Promise<void> {
   if (!opts?.admin) await assertManage(user, id);
   //  끄기 **전에** 적는다 — 끈 뒤 하네스가 신호를 받고 끝나며 런처가 보내는 보고보다 먼저여야 «먼저 적은 쪽이 이긴다» 가 맞게 선다.
-  if (opts?.preserveState && opts.end) {
-    await markSessionEnded(id, opts.end).catch((e) => console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e));
+  const endAt = Math.floor(Date.now() / 1000);
+  const wrote = opts?.preserveState && opts.end
+    ? await within(markSessionEnded(id, opts.end, {}, endAt)
+      .catch((e) => { console.warn(`[terminal] 끝난 사유 기록 실패(${id}) — 끄기는 계속:`, (e as Error)?.message ?? e); return false; }), END_PREP_MS, false)
+    : false;
+  try { await tmuxKill(id); }
+  catch (err) {
+    if (wrote && opts?.end) await revertSessionEnded(id, opts.end.why, endAt).catch(() => false);   // 못 껐다 — 사유를 되돌린다
+    throw err;
   }
-  await tmuxKill(id);
   // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
   await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
   if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — desired-state 를 남긴다

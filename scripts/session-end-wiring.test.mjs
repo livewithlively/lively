@@ -61,11 +61,16 @@ test("B5 열람 도장이 꺼진 세션의 «안 본 결과» 를 걷는다 · �
   assert.match(read("src/web.ts"), /step\("session-end-lost", async \(\) => \(await import\("\.\/sessions\/session-end-lost\.js"\)\)\.sweepLostSessions\(\)\)/);
 });
 
-test("B6 판 시작 upsert 가 지난 사유를 지운다(INSERT · ON CONFLICT 둘 다)", () => {
-  const s = read("src/sessions/session-state.ts");
-  const b = fn(s, "upsertSessionState");
-  assert.equal((b.match(/END_NOTE_LIFE_MARK\}'::jsonb/g) || []).length, 2, "INSERT 값과 DO UPDATE 둘 다");
-  assert.match(b, /end_note='\$\{END_NOTE_LIFE_MARK\}'::jsonb,/);
+test("B6 판 시작 upsert — 보고 런처로 뜬 판에만 표식을 찍고(INSERT) · 같은 id 다시 쓰기는 지난 사유를 지운다(ON CONFLICT) · 표식 여부는 런처 대조로 정한다", () => {
+  const b = fn(read("src/sessions/session-state.ts"), "upsertSessionState");
+  assert.match(b, /CASE WHEN \$23::boolean THEN '\$\{END_NOTE_LIFE_MARK\}'::jsonb ELSE NULL END/, "🔴 보고하지 않는 판(셸·grok·opencode)에도 표식을 찍으면 그 정상 종료가 «오류» 가 된다");
+  assert.match(b, /end_note=EXCLUDED\.end_note,/);
+  assert.match(b, /!!s\.end_mark\]/);
+  const ss = read("src/terminal/sessions.ts");
+  assert.match(ss, /end_mark: launchReportsEnd\(launch\),/);
+  assert.match(read("src/terminal/catalog.ts"), /return argv\.length > 3 && argv\[0\] === "sh" && argv\[1\] === "-c" && argv\[2\] === LAUNCH_STOP_SH;/);
+  //  되살리기가 실패하면 지난 판의 사유를 되돌린다 — 실패한 시도는 판이 아니다.
+  assert.match(ss, /mirrored && reuseId && prevEnd !== undefined \? restoreSessionEndNote\(id, prevEnd\)/);
 });
 
 test("J1 액자가 넘긴 끝난 사실로 대화창 안내를 고른다 · 목록이 사유를 실어 오면 액자를 걷는다(살아 있는 행은 안 걷는다)", () => {
@@ -114,8 +119,18 @@ test("K4 트리 폴더 — 점이 선 꺼진 세션은 하루가 지나도 «지
   assert.deepEqual(cold.map((x) => x.id), ["b"]);
 });
 
-test("K5 오류 점 모양(CSS) — 마름모 · 카드 요약 색", () => {
+test("K5 오류 점 모양(CSS) — 트리 점·카드 요약·**홈·카드 줄 점**(주 화면) 모두 · 점 상태마다 홈 줄 규칙이 있다", async () => {
   const css = read("public/styles/40-v2.css");
   assert.match(css, /\.v2-dot\.err \{[^}]*rotate\(45deg\)/);
   assert.match(css, /\.v2-sum\.err \{ color: var\(--danger\); \}/);
+  assert.match(css, /\.v2-app-inst-st\[data-st="error"\] \{[^}]*rotate\(45deg\)/, "🔴 홈·카드 줄(appRowEl)의 오류 점에 규칙이 없으면 글자색 원이 된다(격리 리뷰)");
+  //  드리프트 가드 — 목록 줄에 점으로 서는 상태(DOT_STATES)마다 홈 줄 규칙이 있어야 한다. 새 점 상태가 생기면 여기서 걸린다.
+  const S = await import(pathToFileURL(path.join(ROOT, "public/app/session-status.js")).href);
+  for (const k of S.DOT_STATES) assert.match(css, new RegExp(`\\.v2-app-inst-st\\[data-st="${k}"\\]`), `홈 줄 점 규칙 없음: ${k}`);
+});
+
+test("K6 트리 프로젝트 줄 요약 — 접힌 프로젝트도 꺼진 세션의 «확인 필요»·«오류» 를 센다", () => {
+  const b = fn(read("web/v2/side.ts"), "sumEl");
+  assert.match(b, /if \(s\.stopDot === 'waiting'\) att\.wait\+\+; else if \(s\.stopDot === 'error'\) att\.err\+\+;/);
+  assert.match(b, /part\(att\.err, 'err', '오류'\)/);
 });

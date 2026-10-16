@@ -2308,7 +2308,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     const v = harnessEndVerdict(req.body);
     if (!v) { res.json({ ok: false }); return; }   // 모양이 틀리거나 신호로 닫힌 판(129) — 보고를 사유로 읽지 않는다(실패가 아니다)
-    const ok = await markSessionEnded(req.params.id, { why: v.why, code: v.code }, { owner: idOf(userOf(req)), t0: v.t0 });
+    //  보고한 판이 자기를 밝혔으면(x-lively-session — 런처·훅이 싣는다) 그 판의 행만 고친다. 같은 주인의 다른 세션 안에서 돈 무언가가
+    //   형제 세션을 «고장» 으로 먼저 적지 못하게(격리 리뷰 — 위험은 낮다).
+    const claimed = String(req.headers["x-lively-session"] ?? "").trim();
+    if (claimed && claimed !== req.params.id) { res.json({ ok: false }); return; }
+    //  기동 실패(launch_fail)는 **임시 사유**다 — 셸이 남아 사람이 하네스를 다시 띄우면 판이 이어진다(SessionEndNote.prov 머리말).
+    const ok = await markSessionEnded(req.params.id, { why: v.why, code: v.code, ...(v.prov ? { prov: true } : {}) }, { owner: idOf(userOf(req)), t0: v.t0 });
     res.json({ ok });   // ok=false: 남의 세션 · 행 없음 · 이미 적힘 · 옛 판의 보고(전부 무해)
   }));
 }
