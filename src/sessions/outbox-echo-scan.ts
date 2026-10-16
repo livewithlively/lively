@@ -21,8 +21,10 @@
 //  ── 이 모듈의 경계 ──
 //  · 순수 판정(promptOfLine · samePrompt · exactPrompt · scanLinesForPrompt)과 줄 맞춤 훑기(findPromptInTranscript)뿐이다 — DB·로그·
 //    기록 찾기(transcript-locate)를 들이지 않는다. session-outbox.ts 가 이걸 쓰는데 그 모듈은 노드 번들의 알려진 부채라
-//    (scripts/node-agent-known-debt.json) 여기 들인 것은 멤버 PC 로 나간다 — 그래서 줄 맞춤(harness-io/window — 이미 승인 목록)만 들인다.
+//    (scripts/node-agent-known-debt.json) 여기 들인 것은 멤버 PC 로 나간다 — 그래서 줄 맞춤(harness-io/window)과 숨은 글자 집합(terminal/submit-check
+//    stripUnseen — 제출 지킴이의 화면 대조와 같은 집합)만 들인다. 둘 다 이미 노드 번들 승인 목록에 있다.
 import { readAlignedWindow, type ByteReader } from "../terminal/harness-io/window.js";
+import { stripUnseen } from "../terminal/submit-check.js";   // #4852 — Claude Code 가 지워 적는 글자 집합(화면 대조와 한 벌 · 노드 번들 승인 모듈)
 
 /** 같은 말 판정의 머리 길이 — 아주 긴 글은 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트) 머리만 견준다.
  *  화면(web/lib/outbox-echo.ts PROMPT_HEAD)·«다 쳤다» 알림 머리(session-outbox typedHead)도 같은 값이다(계약 시험이 맞춘다). */
@@ -34,7 +36,14 @@ export const SCAN_WINDOW_BYTES = 1024 * 1024;
 /** 한 번의 훑기에서 읽는 상한 기본값(실제로 읽은 바이트) — 넘으면 그 앞은 못 본 채로 둔다(«못 찾음» — 안전한 쪽). */
 export const SCAN_BYTES = 8 * 1024 * 1024;
 
-const norm = (s: string): string => String(s ?? "").replace(/\s+/g, " ").trim();
+//  #4852 — 대조용 펴기: 제어열·보이지 않는 글자를 지우고 공백을 접는다. Claude Code 는 붙여넣은 글의 터미널 제어열(색 코드 …)을 통째로 지우고
+//   제출하며 보이지 않는 글자(ZWSP·BOM·방향 표시·한글 채움 문자 …)를 지워 적는다(submit-check ANSI_SEQ·HIDDEN_CHARS 머리말). 공백만 접던 때는 그런
+//   글자가 든 말이 영영 «같은 말» 이 안 돼, 들어갔는데 «보냈지만 확인되지 않았어요 [다시 보내기]» 였다(매니지드 실측 2026-10-16 — U+200B 두 개 든
+//   지시가 17초 뒤 기록에 들어갔는데 행 131374 는 sent·echo-unconfirmed — 중복 전송을 부른다). 화면 사본(web/lib/outbox-echo)·«다 쳤다» 머리
+//   (session-outbox typedHead)도 이 펴기다 — 계약 시험(scripts/outbox-echo.test E3e·E3f · outbox-typed-contract C1)이 맞춘다.
+/** (순수) 대조용으로 편다 — 사람 눈에 같은 글이면 같아진다. */
+export const echoComparable = (s: string): string => stripUnseen(String(s ?? "")).replace(/[\s\x85]+/g, " ").trim();   // NEL 은 `\s` 밖이다 — Claude Code 는 줄바꿈으로 바꾼다
+const norm = echoComparable;
 
 //  사람이 친 빗금 명령은 기록에 **친 글 그대로가 아니라 태그 묶음으로** 남는다(Claude Code — 이 맥 기록 · 2.1.301 실측 · #4851):
 //   · 로컬 명령 — `<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>sonnet</command-args>`.
@@ -109,7 +118,7 @@ export function promptOfLine(line: unknown): { text: string; queued: boolean } |
   return null;
 }
 
-/** (순수) 같은 말인가 — 공백을 하나로 접은 뒤, 160자 이하면 전체가, 그보다 길면 머리 160자가 같아야 한다. */
+/** (순수) 같은 말인가 — 편 뒤(echoComparable), 160자 이하면 전체가, 그보다 길면 머리 160자가 같아야 한다. */
 export function samePrompt(said: string, line: string): boolean {
   const a = norm(said), b = norm(line);
   if (!a || !b) return false;
@@ -117,7 +126,7 @@ export function samePrompt(said: string, line: string): boolean {
   return a.slice(0, ECHO_HEAD_CHARS) === b.slice(0, ECHO_HEAD_CHARS);
 }
 
-/** (순수) 글이 통째로 같은가 — 공백만 하나로 접는다. 늦게(제때 창 뒤에) 적힌 줄은 이 규칙으로만 증거가 된다. */
+/** (순수) 글이 통째로 같은가 — 편 글(echoComparable)이 같다. 늦게(제때 창 뒤에) 적힌 줄은 이 규칙으로만 증거가 된다. */
 export function exactPrompt(said: string, line: string): boolean {
   const a = norm(said);
   return !!a && a === norm(line);

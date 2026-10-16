@@ -23,7 +23,7 @@ try {
   execFileSync(path.join(distRoot, "node_modules/.bin/tsc"),
     [path.join(root, "web/lib/outbox-echo.ts"), "--outDir", tmp, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
     { stdio: "inherit" });
-  const { unconfirmedRow, echoedInTurns, samePrompt, exactPrompt, ECHO_SKEW_MS, PROMPT_HEAD } = await import(path.join(tmp, "outbox-echo.js"));
+  const { unconfirmedRow, echoedInTurns, samePrompt, exactPrompt, sameSaid, echoComparable, ECHO_SKEW_MS, PROMPT_HEAD } = await import(path.join(tmp, "outbox-echo.js"));
 
   const QUEUED = "2026-10-16T07:58:32.321Z";
   const MARKED = "2026-10-16T07:59:29.849Z";                // 서버가 «미확인» 으로 마감한 때(행의 updated_at)
@@ -72,6 +72,22 @@ try {
     [SAID, head64], [h, h + " 덧붙임"], [h + "나", h + "다 덧붙임"], ["나" + h, "다" + h], ["", ""], [" ", "  "], ["a", "a"],
     ["/exit", "<command-name>/exit</command-name>"],
   ];
+  //  #4852 — Claude Code 가 지워 적는 글자(보이지 않는 글자·제어 글자·ANSI 색 코드)가 한쪽에만 있다. 기대값까지 잰다(같은 규칙인 것만으론
+  //   «둘 다 틀림» 을 못 잡는다). 지워지는 글자를 빼도 다른 말은 다른 말이다.
+  const unseenPairs = [
+    ["복사해 온\u200b글\u200b입니다", "복사해 온글입니다", true], ["\ufeff진행해", "진행해", true], ["로그: \x1b[31mERROR\x1b[0m 끝 \x07벨", "로그: ERROR 끝 벨", true],
+    ["가족 👨\u200d👩\u200d👧 사진", "가족 👨👩👧 사진", true], ["하트 ❤\ufe0f", "하트 ❤", true], ["a\tb", "a    b", true], ["방향\u200f표시", "방향표시", true],
+    ["복사해 온\u200b글", "복사해 온 다른 글", false], ["\x1b[31mERROR\x1b[0m", "WARN", false], ["진행\u200b해", "진행해줘", false],
+    //  격리 리뷰 — Claude Code 가 지우는데 우리가 안 지우던 것(한글 채움 문자 · CGJ · 문자집합 고르기 · 8비트 CSI · ESC+글자 · VT/FF/NEL)
+    ["안녕\u{3164}하세요", "안녕하세요", true], ["a\u{34F}b \u{FFA0}끝", "ab 끝", true], ["ok \x1b(B\x1b[m done", "ok done", true],
+    ["a\u{9B}31mERR b", "aERR b", true], ["저장\x1b7 끝", "저장 끝", true], ["세로\x0b탭 \u{85}끝", "세로\n탭 \n끝", true], ["세로\x0b탭", "세로탭", false],
+  ];
+  for (const [a, b, want] of unseenPairs) {
+    ok(samePrompt(a, b) === want && server.samePrompt(a, b) === want && exactPrompt(a, b) === want && server.exactPrompt(a, b) === want,
+      `E3e 지워 적히는 글자 — ${JSON.stringify(a).slice(0, 28)} vs ${JSON.stringify(b).slice(0, 24)} → ${want}`,
+      `화면 ${samePrompt(a, b)}/${exactPrompt(a, b)} · 서버 ${server.samePrompt(a, b)}/${server.exactPrompt(a, b)}`);
+    pairs.push([a, b]);
+  }
   for (const [a, b] of pairs) {
     ok(samePrompt(a, b) === server.samePrompt(a, b), `E3b 같은 말 판정이 서버와 같다 — ${JSON.stringify(a).slice(0, 24)} vs ${JSON.stringify(b).slice(0, 24)}`,
       `화면 ${samePrompt(a, b)} · 서버 ${server.samePrompt(a, b)}`);
@@ -86,6 +102,39 @@ try {
     }
   }
   for (const [a, b] of pairs) ok(exactPrompt(a, b) === server.exactPrompt(a, b), `E3d 통째로 같은 글 판정이 서버와 같다 — ${JSON.stringify(a).slice(0, 24)} vs ${JSON.stringify(b).slice(0, 24)}`);
+
+  // ── E3f — 펴기 사본: 화면 번들의 사본(web/lib/outbox-echo echoComparable) ≡ 서버 정본(outbox-echo-scan echoComparable — submit-check 의 집합) ──
+  //  모든 코드 포인트와 제어열 표로 잰다(#4852 — 사본을 손으로 맞추니 한 글자만 갈려도 «미확인»·두 번 보임이 화면에서만 난다).
+  const outboxJs = path.join(distRoot, "dist/sessions/outbox-echo-scan.js");   // 판정 한 벌(#4851) — 친 직후·늦은 에코가 함께 쓴다
+  ok(existsSync(outboxJs), "E3f 전제 — 서버 판정 모듈이 빌드돼 있다", outboxJs);
+  const outbox = await import(pathToFileURL(outboxJs).href);
+  ok(typeof echoComparable === "function" && typeof outbox.echoComparable === "function", "E3f 두 펴기가 있다(화면 사본 · 서버 정본)");
+  let differ = 0; const firstDiffs = [];
+  for (let c = 0; c <= 0x10ffff; c++) {
+    if (c >= 0xd800 && c <= 0xdfff) continue;
+    const x = "a" + String.fromCodePoint(c) + " b";
+    if (echoComparable(x) !== outbox.echoComparable(x)) { differ++; if (firstDiffs.length < 5) firstDiffs.push("U+" + c.toString(16)); }
+  }
+  ok(differ === 0, "E3f 모든 코드 포인트에서 화면 사본 = 서버 정본", `${differ}개 · ${firstDiffs.join(" ")}`);
+  for (const raw of ["a\x1b[31mb\x1b[0m", "a\u{9B}1;2mb", "a\x1b]0;t\x07b", "a\x1b]8;;u\x1b\\b", "a\x1b]0;t", "a\x1bP1$r\x1b\\b", "a\x1b(Bb", "a\x1b7b", "a\x1b", "a\x1b[200~b"]) {
+    ok(echoComparable(raw) === outbox.echoComparable(raw), `E3f 제어열 ${JSON.stringify(raw)} — 화면 사본 = 서버 정본`, `${JSON.stringify(echoComparable(raw))} · ${JSON.stringify(outbox.echoComparable(raw))}`);
+  }
+
+  // ── E5 — 낙관 말풍선 ↔ 기록의 사람 말 잇기(sameSaid — web/session-chat 이 부른다) ──
+  //  #4852 격리 리뷰 재현: 공백만 접던 때는 보이지 않는 글자·색 코드가 든 말이 기록과 안 이어져 같은 말이 **두 번** 보였다.
+  ok(typeof sameSaid === "function", "E5 전제 — sameSaid 가 화면 판정 모듈에 있다");
+  const SAY = [
+    ["진행\u200b해", "진행해", true, "짧은 말(24자 미만) · ZWSP"],
+    ["복사해 온\u200b글 — 앞 64자 안에 보이지 않는 글자가 있는 긴 지시입니다. 이어서 다른 내용이 한참 붙습니다.", "복사해 온글 — 앞 64자 안에 보이지 않는 글자가 있는 긴 지시입니다. 이어서 다른 내용이 한참 붙습니다.", true, "머리 64자 안의 ZWSP"],
+    ["\x1b[31mERROR\x1b[0m 디스크 가득", "ERROR 디스크 가득", true, "맨 앞 색 코드"],
+    ["안녕\u{3164}하세요", "안녕하세요", true, "한글 채움 문자"],
+    ["진행해", "진행해줘", false, "다른 말"],
+    ["가".repeat(70) + " 꼬리 A", "가".repeat(70) + " 꼬리가 섞임", true, "24자 이상 · 머리 64자가 같다(종전 규칙 그대로 — 긴 글의 꼬리 뒤섞임)"],
+    ["가".repeat(30) + " 꼬리 A", "가".repeat(30) + " 꼬리가 섞임", false, "64자가 안 되는 글은 통째로 같아야"],
+    ["가".repeat(10) + " A", "가".repeat(10) + " B", false, "24자 미만은 통째로 같아야"],
+    ["", "", false, "빈 말"],
+  ];
+  for (const [a, b, want, why] of SAY) ok(sameSaid(a, b) === want, `E5 ${why} → ${want}`, String(sameSaid(a, b)));
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 console.log(`\n${pass} passed — 대화창 «이미 기록에 있는 말» 판정(#4819)`);

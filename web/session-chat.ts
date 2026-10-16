@@ -52,7 +52,7 @@ import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, provide
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
-import { echoedInTurns, promptHead, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
+import { echoedInTurns, promptHead, sameSaid, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
 import { queuedSay, sayIdOf, sayOrderTs } from './lib/queued-say.js';   // #4850 — 일하는 중에 친 사람 말(끼워 넣기 줄)도 사람 말 줄처럼 그린다
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
@@ -1712,16 +1712,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //    통보는 안 오는데 되묻지도 않아 대화가 그냥 30초씩 밀린다 — 자원을 아끼려다 화면을 망가뜨리는 교환이다.
   let watchLive = false;
 
-  // 낙관 말풍선(원본) ↔ 트랜스크립트 에코(주입본) 매칭 — **정확일치만 믿지 않는다.** 주입은 개행을 공백으로 평탄화하고,
-  //  아주 긴 텍스트는 TUI 를 지나며 일부가 뒤섞이기도 한다(실측 2026-08-18: 3천자 프롬프트 꼬리 토막이 자리 이동 →
-  //  정확일치 실패 → 같은 말이 두 번 보임 — 상민님 신고). 전 공백 정규화 후 정확일치, 아니면 **접두 64자**로 잇는다.
-  const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
-  const sameSaid = (a: string, b: string): boolean => {
-    const na = norm(a), nb = norm(b);
-    if (!na || !nb) return false;
-    if (na === nb) return true;
-    return na.length >= 24 && nb.length >= 24 && na.slice(0, 64) === nb.slice(0, 64);
-  };
+  // 낙관 말풍선(원본) ↔ 트랜스크립트 에코(주입본) 매칭은 sameSaid(web/lib/outbox-echo — 정확일치만 믿지 않는 까닭·펴기 규칙은 그 머리말).
   // 장 제목·붙여넣기 가리기·답 뽑기의 정본은 session-trail.ts(sayParts·trailSay·trailMsg) — 라이브와 되감기가 같은 규칙을 쓴다.
   function userText(o: any): { text: string; results: any[] } {
     const c = o?.message?.content;

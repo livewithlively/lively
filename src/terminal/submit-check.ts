@@ -22,11 +22,28 @@ import { captureOf, ruledInputText, screenAsks } from "./harness-io/stop-capture
 /** 입력칸이 지금 무엇을 들고 있나 — ours(우리 글 그대로) · empty(비었다 — 제출됐다) · other(다른 글) · dialog(대화상자) · unknown(입력칸을 못 찾음). */
 export type InputHold = "ours" | "empty" | "other" | "dialog" | "unknown";
 
-//  화면에 안 그려지거나 다르게 그려지는 글자 — 공백(줄 접힘·NBSP 포함)·제어·서식(U+200B·U+FEFF·방향 제어 …)·이체 선택자·한글 채움 문자.
-//   Claude Code 가 붙여넣기에서 탭을 공백 넷으로 바꾸는 것도 공백을 다 지우면 같아진다.
-const UNSEEN = /[\s\p{Cc}\p{Cf}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u115F\u1160\u3164\uFFA0]/gu;
-/** 화면 대조용으로 편다 — 둘 다 같은 함수를 지나야 같다고 말할 수 있다. */
-export const unseenStripped = (s: string): string => String(s ?? "").normalize("NFC").replace(UNSEEN, "");
+//  ── 사람 눈에 안 보이는 것 — 화면 대조(여기 unseenStripped)·기록 대조(outbox-echo-scan echoComparable · web/lib/outbox-echo)가 **같은 집합**을 쓴다 ──
+//  Claude Code 2.1.301 은 붙여넣은 글에서 터미널 제어열을 통째로 지우고(Bun.stripANSI) 제출하며 보이지 않는 글자를 지운다(번들의 숨은 글자
+//   판정 — «Removed N invisible characters»). 우리 글엔 그대로 있으니 대조할 땐 **양쪽에서** 같은 것을 지운다. 하나라도 빠지면 그 글자가 든
+//   지시는 화면이 «다른 글» 이 되고(지킴이가 안 눌러 입력칸에 남는다) 기록이 «미확인» 이 된다(#4852 격리 리뷰 — 한글 채움 문자 U+3164 · CGJ ·
+//   ESC ( B · 8비트 CSI 가 빠져 있었고, 화면 대조는 ANSI 색 코드를 몰랐다).
+//  ANSI_SEQ — 제어열: CSI(ESC [ · 8비트 9B) · 끈(OSC·DCS·SOS·PM·APC — BEL·ST 로 닫히거나, 안 닫혀 끝까지) · nF(ESC ( B 처럼 ESC + 중간 바이트
+//   + 끝) · ESC + 한 글자. Bun.stripANSI 와 같게 지운다(색 코드·제목 바꾸기·문자집합 고르기·8비트 CSI 를 대조함).
+//  HIDDEN_CHARS — Claude Code 의 숨은 글자 판정 ∪ 서식 글자(Unicode 17 Cf) ∪ 제어 글자 ∪ 이체 선택자(VS1~256) ∪ 한글 채움 문자. 대조는 양쪽에서
+//   지우므로 Claude Code 가 남기는 글자를 더 지워도 맞는다 — 빠뜨리면 안 맞는다. 공백류는 뺀다(접기가 맡는다): 탭은 붙여넣기에서 공백 넷이 되고,
+//   VT·FF·CR·NEL·U+2028·U+2029 는 Claude Code 가 **지우지 않고 줄바꿈으로 바꾼다**(그 번들의 숨은 글자 처리 nEe 실측 — 지우면 «세로 탭» 이 «세로탭» 이
+//   돼 안 맞는다 · 격리 리뷰). NEL 은 `\s` 에 안 들어 접기 쪽에 따로 적는다. 집합은 모든 코드 포인트로 시험한다(submit-check.test U1~U4).
+//  ⚠ u 플래그·`\p{…}` 없이 적는다(아스트랄 글자는 서로게이트 쌍): 브라우저 사본이 같은 글자를 쓰는데, `\p{…}` 는 크롬이 첫 사용에 ICU 자료를
+//   불러 대화창이 크게 느려졌다(화면 런타임 시험 12초 → 55초 · 30초 상한에 걸림). 서버·브라우저의 ICU 판 차이로 두 판이 갈리지도 않는다.
+// eslint-disable-next-line no-control-regex
+export const ANSI_SEQ = /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b[\]PX^_]|[\x90\x98\x9d-\x9f])[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?|\x1b[ -/]+[0-~]|\x1b[0-~]/g;
+// eslint-disable-next-line no-control-regex
+export const HIDDEN_CHARS = /[\x00-\x08\x0e-\x1f\x7f-\u0084\u0086-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u115f-\u1160\u17b4-\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]|\ud804[\udc7f\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud81b\udfe4|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]/g;
+/** (순수) 제어열과 보이지 않는 글자를 지운다 — 공백은 그대로 둔다(접을지 다 지울지는 부르는 쪽이 고른다). */
+export const stripUnseen = (s: string): string => String(s ?? "").replace(ANSI_SEQ, "").replace(HIDDEN_CHARS, "");
+/** 화면 대조용으로 편다 — 둘 다 같은 함수를 지나야 같다고 말할 수 있다. 공백(줄 접힘·NBSP 포함)도 다 지운다 — Claude Code 가 붙여넣기에서
+ *  탭을 공백 넷으로 바꾸는 것도, 입력칸이 긴 글을 줄 끝에서 꺾어 그리는 것도 그러면 같아진다. */
+export const unseenStripped = (s: string): string => stripUnseen(String(s ?? "").normalize("NFC")).replace(/[\s\x85]+/g, "");
 
 /** 입력칸 위쪽이 잘려 꼬리만 보일 때 «우리 글» 로 쳐 주는 최소 길이 — 짧은 꼬리는 우연히 겹칠 수 있다. */
 export const TAIL_MATCH_MIN = 24;
@@ -116,10 +133,16 @@ export interface SubmitGuard {
   last(): InputHold | null;
 }
 
+export interface SubmitGuardOpts {
+  /** 누를 차례에 **한 번 더 보고** 아직 우리 글일 때만 누른다(#4852) — 본 때와 누를 때 사이(한 박자 ≈ 1초)에 사람이 Enter 를 누르고 제 글을
+   *  치기 시작했으면 그 글을 제출하지 않는다. 한 박자에 걸음이 둘이 되므로 RPC 상한을 세는 아웃박스는 쓰지 않는다(뒤에서 지키는 자리만 — watchSubmit). */
+  confirmBeforePress?: boolean;
+}
+
 /**
  * 제출 지킴이 — 치기(글 + Enter)가 끝난 **직후** 만든다. 부른 쪽이 박자(`tick`)를 준다(아웃박스는 에코 폴마다, 첫 지시는 제 폴마다).
  */
-export function submitGuard(io: SubmitGuardIo, oneLine: string): SubmitGuard {
+export function submitGuard(io: SubmitGuardIo, oneLine: string, opts: SubmitGuardOpts = {}): SubmitGuard {
   let presses = 0;
   let last: InputHold | null = null;
   let lastEnterAt = io.now();   // 치기가 방금 Enter 를 눌렀다
@@ -137,7 +160,16 @@ export function submitGuard(io: SubmitGuardIo, oneLine: string): SubmitGuard {
     async tick() {
       if (io.now() - lastActAt < SUBMIT_POLL_MS) return;
       lastActAt = io.now();
-      if (pressOwed) { if (presses < SUBMIT_PRESS_MAX) await press(); else pressOwed = false; return; }
+      if (pressOwed) {
+        if (presses >= SUBMIT_PRESS_MAX) { pressOwed = false; return; }
+        if (opts.confirmBeforePress) {
+          const again = await io.peek().catch(() => ({ ok: false as const }));
+          last = again.ok ? inputHolds(again.pane, oneLine) : null;
+          if (last !== "ours") { pressOwed = false; return; }   // 그새 비었거나(제출됐다) 사람이 바꿨다 — 다음 박자가 다시 본다
+        }
+        await press();
+        return;
+      }
       const seen = await io.peek().catch(() => ({ ok: false as const }));
       last = seen.ok ? inputHolds(seen.pane, oneLine) : null;
       //  누르는 것은 **다음 박자**다 — 한 박자에 RPC 를 둘 쓰지 않는다(머리말).

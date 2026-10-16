@@ -726,6 +726,18 @@ test("Z9 빗금 명령 · 기록을 못 읽는다 — «못 읽음» 은 그대�
   assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unreadable" });
 });
 
+//  #4852 — waitEcho 는 파일·DB 를 타는 실행부라(이 파일의 경계) 배선은 소스로 잰다(W12 와 같은 방식).
+test("W15 waitEcho — 대화 id 가 없으면 폴마다 세션 행을 다시 읽고(첫 폴은 넘겨받은 행) · 찾기·폴백은 다시 읽은 행으로 한다", () => {
+  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
+  const body = /async function waitEcho\([^)]*tick\?: \(\) => Promise<void>\)[^{]*\{([\s\S]*?)\n\}\n/.exec(src)?.[1] ?? "";
+  assert.ok(body, "waitEcho 를 못 찾았다");
+  const reread = body.indexOf("if (poll > 0 && cur && !cur.claude_session_id) cur = (await getSessionState(sessionId)");
+  const locate = body.indexOf("locateTranscript(io, { cwd, convId: cur.claude_session_id");
+  assert.ok(reread > 0 && locate > reread, "id 를 다시 읽지 않거나, 읽기 전에 찾는다 — 그사이 온 id 로 제 대화 파일을 못 찾는다");
+  assert.match(body, /newestGrownFile\(tfs, io, cwd, cur\.owner/, "폴백이 처음 넘겨받은 행(st)을 쓴다");
+  assert.ok(!/\bst\.(?:claude_session_id|transcript_path|owner)\b/.test(body), "루프가 아직 처음 행(st)을 읽는다");
+});
+
 // ── 시간·registry ─────────────────────────────────────────────────────────────────
 
 test("E15 시간 불변식 — 한 행이 sending 에 머무는 상한의 합이 잔재 판정(STALE_SENDING)보다 짧고, 좌표 대기는 상태 push 한 주기보다 길다", () => {
