@@ -1062,17 +1062,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (nodeId) {
       // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
       const { injectPrompt } = await import("../node/session-inject.js");
-      //  #4772 — 그 컴퓨터의 화면을 읽고(outboxStep peek) 확인창이면 Enter(outboxStep keys)를 눌러 준다. 노드 op 라
-      //   옛 번들은 지원하지 않을 수 있어 **best-effort** 다(못 읽으면 "unknown" 으로 조용히 포기 — 명령은 이미 나갔다).
-      const { nodeRpc } = await import("../node/registry.js");
+      //  #4772 — main 에선 그 컴퓨터의 화면을 읽고(outboxStep peek) 확인창이면 Enter(outboxStep keys)를 눌러 준다.
+      //   ⚠ stage 에는 outboxStep op 가 없다(main 의 세션 호스트 아웃박스 427f80ea 계열이 안 들어옴 — protocol.ts NODE_OPS).
+      //   그래서 stage 노드는 그 op 를 선언하지 않고, nodeRpc 는 node-unsupported-op 로 던져 결국 "unknown" 으로 포기한다.
+      //   그 결말을 그대로 적는다 — 화면을 못 읽는 옛 번들과 같은 길이다(명령은 이미 나갔다). (#4780 — stage tsc 복구)
       const { confirmRuntimeSwitch } = await import("./runtime-switch-confirm.js");
       const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
       const nodeSwitchExec = {
-        peek: async (): Promise<{ ok: boolean; pane?: string }> => {
-          const r = await nodeRpc<{ ok?: boolean; pane?: string }>(nodeId, "outboxStep", { step: "peek", id: req.params.id }).catch(() => null);
-          return r && r.ok ? { ok: true, pane: String(r.pane ?? "") } : { ok: false };
-        },
-        enter: async (): Promise<void> => { await nodeRpc(nodeId, "outboxStep", { step: "keys", id: req.params.id, down: 0, enter: true }).catch(() => undefined); },
+        peek: (): Promise<{ ok: boolean; pane?: string }> => Promise.resolve({ ok: false }),
+        enter: (): Promise<void> => Promise.resolve(),
       };
       for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
