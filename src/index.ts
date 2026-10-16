@@ -121,7 +121,7 @@ console.log(`[boot] ${installTenantBinding()}`);
     assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
     sessionAppFolders: {
       listFor: (id) => folderAppsFor(id), carry: (from, to) => carrySessionApps(from, to), drop: (id) => dropSessionApps(id),
-      afterCreate: (id, sent, made) => { void afterSessionCreate(id, sent, made); },
+      afterCreate: (id, sent, made, at) => { void afterSessionCreate(id, sent, made, at); },
     },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }

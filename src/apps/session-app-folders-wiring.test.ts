@@ -38,11 +38,13 @@ test("W1 세션을 만들 때 — 새 id 복원이면 (어느 경로든) 검증 
   assert.match(src("apps/session-app-folders.ts"), /sessionOwner: sessionOwnerStrict, canEnter: sessionCanEnter,/);
   assert.match(fn, /\.\.\.\(folderApps && folderApps\.length \? \{ apps: folderApps \} : \{\}\)/);
   //  #4786 — 만든 뒤에는 목록을 못 읽었어도(undefined) 부른다: 확보 응답의 앱 폴더 결과를 남겨야 주기 맞추기가 그 세션을 본다.
-  const after = fn.indexOf("if (appFolders) appFolders.afterCreate(id, folderApps, made.apps);");
+  const after = fn.indexOf("if (appFolders) appFolders.afterCreate(id, folderApps, made.apps, ensureStartedAt);");
+  //  확보를 청하기 **전** 시각이어야 그사이의 맞추기 기록을 덮지 않는다(#4786 검토).
+  assert.ok(fn.indexOf("const ensureStartedAt = Date.now();") > 0 && fn.indexOf("const ensureStartedAt = Date.now();") < ensure, "확보 시작 시각을 확보 뒤에 잰다");
   assert.ok(after > ensure, "만든 뒤 확인은 확보가 끝난 다음이어야 한다(만드는 사이 바뀐 붙이기를 새 컨테이너에 맞춘다)");
   assert.ok(GATEWAY_CAPABILITY_NAMES.includes("sessionAppFolders"), "선언이 빠지면 배선 가드가 index.ts 등록을 요구하지 않는다");
   const idx = src("index.ts");
-  assert.match(idx, /sessionAppFolders: \{\s*listFor: \(id\) => folderAppsFor\(id\), carry: \(from, to\) => carrySessionApps\(from, to\), drop: \(id\) => dropSessionApps\(id\),\s*afterCreate: \(id, sent, made\) => \{ void afterSessionCreate\(id, sent, made\); \},\s*\}/);
+  assert.match(idx, /sessionAppFolders: \{\s*listFor: \(id\) => folderAppsFor\(id\), carry: \(from, to\) => carrySessionApps\(from, to\), drop: \(id\) => dropSessionApps\(id\),\s*afterCreate: \(id, sent, made, at\) => \{ void afterSessionCreate\(id, sent, made, at\); \},\s*\}/);
 });
 
 

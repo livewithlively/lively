@@ -954,6 +954,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       }
       //  ② 컨테이너 — ensure 훅(매니지드: 브로커 /lvly/session/ensure). 실패는 **실패다**: 방금 쓴 행을 지우고 503.
       //   옛 경로로 조용히 접지 않는다(옛 판/새 판이 섞인 반쪽 상태가 가장 나쁘다 — tmux-relocation-plan 규율 1).
+      const ensureStartedAt = Date.now();   // #4786 — 만든 뒤 기록이 그사이의 맞추기 기록을 덮지 않게(afterSessionCreate)
       try {
         const made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
           sessionId: id, osUser, cwd: target,
@@ -970,7 +971,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         if (folderApps?.length && (!ma || ma.supported !== true || (Array.isArray(ma.failed) && ma.failed.length))) {
           console.warn(`[terminal] 앱 폴더를 다 못 붙였다(${id}) — 세션은 계속:`, ma ? JSON.stringify(ma).slice(0, 300) : "브로커가 앱 폴더를 모른다(이 기능 전 판)");
         }
-        if (appFolders) appFolders.afterCreate(id, folderApps, made.apps);
+        if (appFolders) appFolders.afterCreate(id, folderApps, made.apps, ensureStartedAt);
       } catch (e) {
         await dropOwnRow();
         await dropCarried();

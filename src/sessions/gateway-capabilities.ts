@@ -87,7 +87,7 @@ export interface GatewayCapabilities {
     /** 승계한 뒤 만들기가 실패했을 때 — 한 번도 안 뜬 그 id 의 붙은 앱 기록을 지운다. */
     drop: (sessionId: string) => Promise<number>;
     /** 만든 직후 — 확보 응답의 앱 폴더 결과를 남기고(#4786 — 못 읽은 목록은 undefined), 실은 목록과 지금 목록이 다르면 한 번 더 맞춘다(기다리지 않는다). */
-    afterCreate: (sessionId: string, sent: readonly string[] | undefined, madeApps?: unknown) => void;
+    afterCreate: (sessionId: string, sent: readonly string[] | undefined, madeApps?: unknown, ensureStartedAt?: number) => void;
   };
   /**
    * 이 워크스페이스가 구성원 AI 계정(Claude) 커넥터를 쓰나(#4213 T6 #4427 — org_runtime_config.allow_member_ai_connectors).

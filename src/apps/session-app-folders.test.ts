@@ -4,7 +4,8 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   folderAppsFor, resyncIfChangedAfterCreate, resyncSessions, syncSessionAppFolders, createSlots, resyncConcurrencyFromEnv, appFolderSyncStats,
-  afterSessionCreate, periodicOutcome, sweepAppFolders, PERIODIC_MAX_SESSIONS, PERIODIC_RECHECK_ABSENT_MS, PERIODIC_OLD_BROKER_PAUSE_MS,
+  afterSessionCreate, periodicOutcome, sweepAppFolders, syncRunInfo, PERIODIC_MAX_SESSIONS, PERIODIC_RECHECK_ABSENT_MS, PERIODIC_OLD_BROKER_PAUSE_MS,
+  PERIODIC_CONCURRENCY,
   RESYNC_CONCURRENCY_DEFAULT, type FolderDeps, type FolderSync, type SyncDeps, type AppFolderNote, type PeriodicDeps,
 } from "./session-app-folders.js";
 import type { SessionAppRow, AppFolderRecord } from "./session-apps.js";
@@ -457,7 +458,7 @@ test("C1~C4 세션을 만든 직후의 기록 — 응답대로 · 빈 목록이�
   const run = async (sent: readonly string[] | undefined, made: unknown) => {
     const calls: string[] = [];
     const notes: AppFolderNote[] = [];
-    await afterSessionCreate("box-c", sent, made, {
+    await afterSessionCreate("box-c", sent, made, undefined, {
       record: async (_id, n) => { calls.push("record"); notes.push(n); },
       resync: async (_id, s) => { calls.push(`resync:${s.join(",")}`); },
     });
@@ -477,7 +478,7 @@ test("C1~C4 세션을 만든 직후의 기록 — 응답대로 · 빈 목록이�
   assert.deepEqual([c4.note.state, c4.note.bound], ["old-broker", []]);
   //  기록이 던져도 맞추기는 간다 · 던지지 않는다.
   const calls: string[] = [];
-  await afterSessionCreate("box-c", ["crm"], undefined, { record: async () => { throw new Error("db down"); }, resync: async () => { calls.push("resync"); } });
+  await afterSessionCreate("box-c", ["crm"], undefined, undefined, { record: async () => { throw new Error("db down"); }, resync: async () => { calls.push("resync"); } });
   assert.deepEqual(calls, ["resync"]);
 });
 
@@ -583,4 +584,80 @@ test("S3 ★ 옛 브로커를 만나면 그 판을 멈추고(남은 세션 안 �
   const after = await sweepAppFolders(d);
   assert.equal(after.skipped, undefined);
   assert.equal(PERIODIC_OLD_BROKER_PAUSE_MS, 60 * 60_000);
+});
+
+// ── #4786 격리 리뷰 반영 ─────────────────────────────────────────────────────────
+
+test("R9 ★ 기록을 기다린다 — 같은 세션의 다음 맞추기는 앞 판의 기록이 끝난 뒤에 브로커에 간다(기록 순서 = 맞추기 순서)", async () => {
+  const order: string[] = [];
+  let releaseFirst: () => void = () => undefined;
+  const firstGate = new Promise<void>((r) => { releaseFirst = r; });
+  let n = 0;
+  const d = syncDeps({
+    ensure: async (_a, req) => { order.push(`ensure:${req.apps?.join(",")}`); return { container: "c", created: false, apps: { supported: true, bound: req.apps ?? [], failed: [] } }; },
+    record: async (_id, note) => { const k = ++n; order.push(`record${k}:start`); if (k === 1) await firstGate; order.push(`record${k}:end:${note.bound?.join(",")}`); return { written: true, prev: null }; },
+  });
+  let ver = 1;
+  const dd = { ...d, apps: async () => [`v${ver}`] };
+  const p1 = syncSessionAppFolders("box-r9", dd);
+  await new Promise((r) => setTimeout(r, 10));            // 첫 판이 기록에서 붙잡혔다
+  ver = 2;
+  const p2 = syncSessionAppFolders("box-r9", dd);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(order, ["ensure:v1", "record1:start"], "앞 판의 기록이 끝나기 전에 다음 판이 브로커에 갔다");
+  releaseFirst();
+  await Promise.all([p1, p2]);
+  assert.deepEqual(order, ["ensure:v1", "record1:start", "record1:end:v1", "ensure:v2", "record2:start", "record2:end:v2"]);
+});
+
+test("K13 판의 뒷이야기 — 합쳐진 까닭(사건 · 주기)과 기록이 돌려준 직전 값을 그 판의 결과에 묶는다", async () => {
+  const g = gates();
+  const d = syncDeps({
+    ensure: async (_a, req) => { await g.wait(); return { container: "c", created: false, apps: { supported: true, bound: req.apps ?? [], failed: [] } }; },
+    record: async () => ({ written: true, prev: { bound: ["old"], state: "ok" } }),
+  });
+  const first = syncSessionAppFolders("box-k13", d, "event");
+  await g.arrivals(1);
+  const p = syncSessionAppFolders("box-k13", d, "periodic");   // 기다리는 판 — 주기가 세웠다
+  const e = syncSessionAppFolders("box-k13", d, "event");      // 사건이 거기 합쳤다
+  g.release(); await g.arrivals(2); g.release();
+  const [r1, rp, re] = await Promise.all([first, p, e]);
+  assert.equal(rp, re, "합쳐진 호출은 같은 결과");
+  assert.deepEqual(syncRunInfo(r1)?.causes, ["event"]);
+  assert.deepEqual([...(syncRunInfo(rp)?.causes ?? [])].sort(), ["event", "periodic"]);
+  assert.deepEqual(syncRunInfo(rp)?.prev, { bound: ["old"], state: "ok" });
+  assert.equal(syncRunInfo(rp)?.recorded, true);
+});
+
+test("S4c 판의 뒷이야기로 가른다 — 사건과 합쳐진 판은 «그대로» · 기준은 기록할 때 읽은 직전 값(판을 고를 때의 값이 아니라)", () => {
+  const ok = okSync(["crm"]);
+  //  판을 고를 때는 bound [] 였는데, 그 뒤 사건 경로가 crm 을 붙이고 기록했다 — 기록할 때 읽은 직전 값은 crm 이다.
+  assert.equal(periodicOutcome(rec("ok", []), ok, { causes: ["periodic"], recorded: true, prev: { bound: ["crm"], state: "ok" } }), "ok");
+  assert.equal(periodicOutcome(rec("ok", ["crm"]), ok, { causes: ["periodic"], recorded: true, prev: { bound: [], state: "ok" } }), "fixed");
+  assert.equal(periodicOutcome(rec("ok", []), ok, { causes: ["periodic", "event"], recorded: true, prev: { bound: [], state: "ok" } }), "ok", "사건이 바꾼 것을 «고침» 으로 셌다");
+  assert.equal(periodicOutcome(rec("ok", ["crm"]), ok, { causes: ["periodic"], recorded: true, prev: null }), "first", "처음 쓴 기록인데 기준이 있다고 봤다");
+  //  기록을 못 썼으면(실패를 삼켰다) 판을 고를 때의 값으로 본다.
+  assert.equal(periodicOutcome(rec("ok", []), ok, { causes: ["periodic"], recorded: false, prev: null }), "fixed");
+});
+
+test("S5 주기 판은 사건 묶음과 따로인 자리(2개)를 쓴다 — 주기 판이 돌아도 사건 묶음 자리는 비어 있다", async () => {
+  const g = gates();
+  const { d } = periodicDeps("acme-s5", [{ id: "box-a", prev: null, r: okSync([]) }], { sync: async () => { await g.wait(); return okSync([]); }, slots: undefined });
+  const run = sweepAppFolders(d);
+  await g.arrivals(1);
+  assert.equal(appFolderSyncStats().periodic.active, 1, "주기 판이 제 자리를 쓰지 않았다");
+  assert.equal(appFolderSyncStats().resync.active, 0, "주기 판이 사건 묶음 자리를 차지했다");
+  assert.equal(PERIODIC_CONCURRENCY, 2);
+  g.release();
+  await run;
+  assert.deepEqual(appFolderSyncStats().periodic, { active: 0, waiting: 0 });
+});
+
+test("C5 만든 뒤 기록은 확보를 청한 시각(ensureStartedAt)보다 새 기록을 덮지 않게 그 시각을 넘긴다", async () => {
+  const seen: Array<{ ifOlderThan?: number }> = [];
+  await afterSessionCreate("box-c5", ["crm"], { supported: true, bound: ["crm"], failed: [] }, 1_234, {
+    record: async (_id, _n, opts) => { seen.push(opts); },
+    resync: async () => undefined,
+  });
+  assert.deepEqual(seen, [{ ifOlderThan: 1_234 }]);
 });

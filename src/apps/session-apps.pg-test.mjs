@@ -25,7 +25,8 @@
 //  E1~E5 세션에 들어갈 수 있나 — 주인 · 초대 · 초대 없음 · 없는 세션 · B 의 초대 안 셈
 //  F1~F5 앱 폴더 판정(folderAppsFor, 실제 의존) — 켜짐·공개·동의 거르기 · 초대받은 사람이 붙인 것 · B 의 앱·동의 안 셈 · 주인 조회 오류는 던짐 · 모르는 세션 []
 //  S1~S4 앱 폴더 맞춘 기록(#4786) — 넣기 · 모르는 bound 는 그대로 · 고친 횟수 · B 그대로
-//  T1~T8 주기 맞추기 대상 — 붙은 기록 · 노드에 붙었다고 들은 것 · 지난 실패 · 30분 재확인 · 순서 · 한도 · B 제외   Q1 끝난 세션의 기록 정리
+//  T1~T9 주기 맞추기 대상 — 붙은 기록 · 노드에 붙었다고 들은 것 · 지난 실패(한 판의 절반까지) · 30분 재확인 · 순서 · 한도 · B 제외 · 굶김 막기
+//  S5 · S6 기록이 직전 값을 돌려주고 · 더 새 기록은 덮지 않는다   Q1 끝난 세션의 기록 정리
 //  G1 배선 — 앱 역할이 슈퍼유저 · BYPASSRLS 가 아니고 이 시험이 쓰는 다섯 표에 FORCE RLS 와 tenant_isolation 이 있다 · 가짜 tmux 가 실제로 불렸다
 import pg from "pg";
 import crypto from "node:crypto";
@@ -405,8 +406,35 @@ try {
   const tPrev = Object.fromEntries(tg.map((x) => [x.session_id, x.prev]));
   chk("T7b 지난 기록을 같이 준다(없으면 null)", tPrev[T.live] === null && J(tPrev[T.bound]?.bound) === J(["memo"]) && tPrev[T.bound]?.state === "ok", J(tPrev));
   const tg2 = await inC(() => SA.appFolderSyncTargets(2, RECHECK));
-  chk("T7c 한도", J(tg2.map((x) => x.session_id)) === J([T.err, T.failed]), J(tg2));
+  chk("T7c 한도 2 — 실패는 절반(1)까지 · 나머지는 안 본 것", J(tg2.map((x) => x.session_id)) === J([T.err, T.live]), J(tg2));
   chk("T8 B 의 붙은 기록 · 맞춘 기록이 C 의 대상에 끼어들지 않는다", !ids.includes(T.okEmpty) && !ids.includes(T.detached), J(ids));
+
+  //  T9 굶김 막기(#4786 검토) — 계속 실패하는 세션 60개 + 아직 안 본 산 세션 5개(워크스페이스 D — 앞 절과 섞이지 않게).
+  const TD = crypto.randomUUID();
+  const inD = async (fn) => { const prev = CUR; CUR = TD; try { return await fn(); } finally { CUR = prev; } };
+  const bads = Array.from({ length: 60 }, (_, i) => `box-pgt-bad${String(i).padStart(2, "0")}-00009${String(i).padStart(3, "0")}`);
+  const goods = Array.from({ length: 5 }, (_, i) => `box-pgt-good${i}-0000a00${i}`);
+  for (const [i, id] of bads.entries()) { await seedSession(TD, id, "pgt-alice"); await seedFolder(TD, id, [], "error", 100 - i); }
+  for (const id of goods) { await seedSession(TD, id, "pgt-alice"); await seedApp(TD, id, "crm", "pgt-alice"); }
+  const t9 = (await inD(() => SA.appFolderSyncTargets(50, RECHECK))).map((x) => x.session_id);
+  chk("T9 계속 실패하는 세션이 한도를 다 차지하지 않는다 — 실패는 앞 25개(오래된 것부터) · 산 세션 5개는 모두 · 남는 자리를 실패가 채운다",
+    t9.length === 50 && goods.every((g) => t9.includes(g)) && J(t9.slice(0, 25)) === J(bads.slice(0, 25)) && J(t9.slice(25, 30)) === J([...goods].sort()),
+    J({ n: t9.length, head: t9.slice(0, 3), mid: t9.slice(24, 31) }));
+
+  //  S5 · S6 — 기록은 쓰기 직전의 값을 같은 문장에서 돌려주고(«고침» 의 기준), «이 시각보다 새 기록» 은 덮지 않는다(만든 뒤 기록).
+  const SX = S("rx");
+  await seedSession(TC, SX, "pgt-alice");
+  const rw1 = await inC(() => SA.recordAppFolderSync(SX, { bound: ["crm"], state: "ok" }, { at: 2_000_000_000_000 }));
+  const rw2 = await inC(() => SA.recordAppFolderSync(SX, { bound: [], state: "failed", detail: "x" }, { at: 2_000_000_001_000 }));
+  chk("S5 기록이 쓰기 직전의 값을 돌려준다 — 처음은 null · 다음은 앞 기록(bound · state)",
+    rw1.written === true && rw1.prev === null && rw2.written === true && J(rw2.prev) === J({ bound: ["crm"], state: "ok" }), J({ rw1, rw2 }));
+  const rw3 = await inC(() => SA.recordAppFolderSync(SX, { bound: ["stale"], state: "ok" }, { at: 2_000_000_002_000, ifOlderThan: 2_000_000_000_500 }));
+  const afterRw3 = cOf(await folderRows(SX));
+  const rw4 = await inC(() => SA.recordAppFolderSync(SX, { bound: ["fresh"], state: "ok" }, { at: 2_000_000_003_000, ifOlderThan: 2_000_000_002_500 }));
+  const afterRw4 = cOf(await folderRows(SX));
+  chk("S6 «이 시각보다 새 기록» 은 덮지 않는다(쓰지 않았다고 말한다) · 그보다 오래된 기록이면 덮는다",
+    rw3.written === false && afterRw3?.state === "failed" && J(afterRw3?.bound) === "[]" && rw4.written === true && J(afterRw4?.bound) === J(["fresh"]),
+    J({ rw3, afterRw3, rw4, afterRw4 }));
 
   //  Q1 정리 — 끝났거나 이어졌거나 세션 행이 없는 세션의 기록만(C) · B 그대로
   await seedFolder(TC, T.exited, ["crm"], "ok", 0);
