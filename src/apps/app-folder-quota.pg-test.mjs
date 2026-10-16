@@ -4,11 +4,13 @@
 // 한 프로세스에 게이트웨이를 띄운다 — 진짜 인증(구성원 토큰) · 능력 REST(권한 범위 검사 포함). CP 의 쿼터 정비가 부르는 두 길
 //  (상한 목록 · 사용량 보내기)은 운영 토큰과 같은 관리자 토큰으로 부른다.
 //  P1 책임자가 상한을 건다 — 저장 · 응답 칸(can_set) · 감사      P2 관리자도 된다 · 남(책임자도 관리자도 아님) 403 · 못 보는 «나만» 앱 404
-//  P3 상한 값 — 0 · 최댓값 + 1 · 소수 400 · null 은 없앰           P4 상한 목록 — 관리자만(구성원 403) · 설치된 앱 전부 · 값
+//  P3 상한 값 — 0 · 최댓값 + 1 · 소수 · 빠뜨린 값 · 틀린 키 · 빈 글 400(걸어 둔 상한 그대로) · null 은 없앰
+//  P4 상한 목록 — 관리자만(구성원 403) · 설치된 앱 전부 · 값
 //  P5 사용량 — 80% 를 처음 넘으면 책임자 + 관리자에게 알림 한 장씩 · 같은 단계는 다시 안 알림 · 100% 는 새로 · 내려가면 단계를 낮춰
-//     다시 넘을 때 또 알린다 · 없는 앱 건너뜀 · 상한 없는 앱은 알리지 않는다 · 구성원 403
-//  P6 앱 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false)
-//  P7 새 상한이 지금 쓰는 양보다 작으면 경고를 싣는다      P8 앱을 지우면 사용량 행도 지운다
+//     다시 넘을 때 또 알린다 · 경계에서 오르내리면 다시 안 알림 · 없는 앱 건너뜀 · 상한 없는 앱은 알리지 않는다 · 구성원 403
+//     단계 기록은 알림이 저장된 뒤에 오른다(받는 사람을 못 읽었거나 다 실패하면 다음 판에 다시)
+//  P6 앱 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false) · 이 배포가 거나
+//  P7 새 상한이 지금 쓰는 양보다 작으면 경고를 싣는다 · 단계는 정비 전까지 걸린 상한으로 낸다      P8 앱을 지우면 사용량 행도 지운다
 //  P9 롤 중 마이그레이션 전 창(표 · 열 없음) — CP 두 길은 404 · 앱 지우기는 막히지 않는다
 import pg from "pg";
 import http from "node:http";
@@ -55,8 +57,8 @@ try {
   const install = (id) => cap("org_app_install").handler({ source: { kind: "inline", files: [
     { path: "lively-app.json", content: J({ id, title: `앱 ${id}`, version: "0.1.0", ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
     { path: "ui/index.html", content: "<p>x</p>" }] } }, admin, { source: "mcp" });
-  for (const id of ["crm", "memo", "secret"]) await install(id);
-  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo')`);
+  for (const id of ["crm", "memo", "secret", "note"]) await install(id);
+  await q(`UPDATE org_app SET owner_member='pgt-alice' WHERE id IN ('crm','memo','note')`);
   await q(`UPDATE org_app SET owner_member='pgt-carol', visibility='me' WHERE id='secret'`);   // carol 의 «나만» 앱
 
   const gw = express();
@@ -94,10 +96,12 @@ try {
     J([p2a.status, p2b.status, p2c.status]));
 
   // ── P3 ──
-  const bad = await Promise.all([0, 10241, 1.5].map((v) => call("pgt-alice", "POST", "/api/ui/apps/crm/folder-limit", { limit_gb: v })));
+  const bad = await Promise.all([{ limit_gb: 0 }, { limit_gb: 1001 }, { limit_gb: 1.5 }, {}, { limitGb: 7 }, { limit_gb: "" }]
+    .map((b) => call("pgt-alice", "POST", "/api/ui/apps/crm/folder-limit", b)));
   const clear = await call("pgt-alice", "POST", "/api/ui/apps/memo/folder-limit", { limit_gb: null });
-  chk("P3 0 · 최댓값 + 1 · 소수는 400(값 그대로) · null 은 상한을 없앤다", bad.every((r) => r.status === 400) && (await limitOf("crm")) === 5
-    && clear.status === 200 && (await limitOf("memo")) === null, J({ bad: bad.map((r) => r.status), clear: clear.status }));
+  chk("P3 0 · 최댓값 + 1(1001) · 소수 · 빠뜨린 값 · 틀린 키 · 빈 글은 400(걸어 둔 5 그대로) · null 만 상한을 없앤다",
+    bad.every((r) => r.status === 400) && (await limitOf("crm")) === 5 && clear.status === 200 && (await limitOf("memo")) === null,
+    J({ bad: bad.map((r) => r.status), crm: await limitOf("crm"), clear: clear.status }));
 
   // ── P4 ──
   const p4 = await call("pgt-admin", "GET", "/api/ui/app-folder-limits");
@@ -132,6 +136,30 @@ try {
     J(down.json?.notified) === "[]" && lvl === 0 && J(again.json?.notified) === J([{ app_id: "crm", level: 80 }]), J({ down: down.json, lvl, again: again.json }));
   const p5m = await call("pgt-bob", "POST", "/api/ui/app-folder-usage", { apps: [{ app_id: "crm", used_bytes: 0, limit_gb: 5 }] });
   chk("P5d 사용량 보내기는 관리자만(구성원 403)", p5m.status === 403, String(p5m.status));
+  const warnedOf = async (id) => (await q(`SELECT warned_level FROM org_app_folder_usage WHERE app_id=$1`, [id]))[0]?.warned_level ?? null;
+  const r75 = await report([{ app_id: "crm", used_bytes: Math.floor(3.75 * GiB), limit_gb: 5 }]);
+  const w75 = await warnedOf("crm");
+  const r81 = await report([{ app_id: "crm", used_bytes: Math.floor(4.05 * GiB), limit_gb: 5 }]);
+  const r90 = await report([{ app_id: "crm", used_bytes: Math.floor(4.5 * GiB), limit_gb: 5 }]);
+  chk("P5e 경계에서 오르내려도(90% → 75% → 81% → 90%) 다시 알리지 않는다 — 80 단계는 70% 아래로 내려가야 놓는다",
+    J(r75.json?.notified) === "[]" && w75 === 80 && J(r81.json?.notified) === "[]" && J(r90.json?.notified) === "[]",
+    J({ r75: r75.json, w75, r81: r81.json, r90: r90.json }));
+  //  받는 사람을 못 읽은 판 · 알림이 다 실패한 판 — 단계 기록을 올리지 않아 다음 판에 다시 알린다(능력 함수를 대역 의존으로 직접 부른다).
+  const { recordAppFolderUsage } = await import(`${D}/apps/app-folder-quota.js`);
+  const { getAppsByIds } = await import(`${D}/org/store/apps.js`);
+  const noteRow = [{ app_id: "note", used_bytes: Math.floor(1.7 * GiB), limit_gb: 2 }];   // 85%
+  const sent = [];
+  const okNotify = async (n) => { sent.push(n.memberId); return { ok: true }; };
+  const f1 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => { throw new Error("db down"); }, notify: okNotify });
+  const w1 = await warnedOf("note"); const sent1 = sent.length;
+  const f2 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: async () => ({ ok: false }) });
+  const w2 = await warnedOf("note");
+  const f3 = await recordAppFolderUsage(noteRow, { apps: getAppsByIds, admins: async () => ["pgt-admin"], notify: okNotify });
+  const w3 = await warnedOf("note");
+  chk("P5f 단계 기록은 알림이 저장된 뒤에 오른다 — 관리자 목록을 못 읽은 판은 책임자에게도 안 보내고 기록 그대로 · 다 실패한 판도 그대로 · 다음 판에 둘 다 받는다",
+    f1.stored === 1 && f1.notified.length === 0 && w1 === 0 && sent1 === 0 && f2.notified.length === 0 && w2 === 0
+      && J(f3.notified) === J([{ app_id: "note", level: 80 }]) && w3 === 80 && J([...sent].sort()) === J(["pgt-admin", "pgt-alice"]),
+    J({ f1, w1, sent1, f2, w2, f3, w3, sent }));
 
   // ── P6 ──
   const listA = await call("pgt-alice", "GET", "/api/ui/apps");
@@ -139,15 +167,19 @@ try {
   const getA = await call("pgt-alice", "GET", "/api/ui/apps/crm");
   const fA = (listA.json?.apps ?? []).find((a) => a.id === "crm")?.folder;
   const fB = (listB.json?.apps ?? []).find((a) => a.id === "crm")?.folder;
-  chk("P6 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false)",
+  chk("P6 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false) · 이 배포가 거나(셀프호스트 false)",
     fA?.used_bytes === Math.floor(4.5 * GiB) && fA?.applied_limit_gb === 5 && fA?.limit_gb === 5 && fA?.level === 80 && fA?.can_set === true
-      && fB?.can_set === false && fB?.used_bytes === fA?.used_bytes && getA.json?.app?.folder?.level === 80 && getA.json?.app?.folder?.can_set === true,
+      && fA?.enforced === false && fB?.can_set === false && fB?.used_bytes === fA?.used_bytes && getA.json?.app?.folder?.level === 80
+      && getA.json?.app?.folder?.can_set === true,
     J({ fA, fB, get: getA.json?.app?.folder }));
 
   // ── P7 ──
   const p7 = await call("pgt-alice", "POST", "/api/ui/apps/crm/folder-limit", { limit_gb: 4 });
   chk("P7 새 상한(4GiB)이 지금 쓰는 양(4.5GiB)보다 작으면 경고를 싣는다(값은 저장)", p7.status === 200 && /더 쓸 수 없습니다/.test(String(p7.json?.warning)) && (await limitOf("crm")) === 4,
     J(p7.json));
+  const p7b = (await call("pgt-alice", "GET", "/api/ui/apps/crm")).json?.app?.folder;
+  chk("P7b 정비 전(원하는 4 · 걸린 5 · 4.5GiB) 단계는 걸린 상한으로 낸다 — 80 이지 «가득»(100)이 아니다(아직 쓸 수 있다)",
+    p7b?.limit_gb === 4 && p7b?.applied_limit_gb === 5 && p7b?.level === 80, J(p7b));
 
   // ── P8 ──
   await cap("org_app_remove").handler({ app_id: "crm" }, admin, { source: "mcp" });

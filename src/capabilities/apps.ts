@@ -48,8 +48,8 @@ import { afterPublishServer, afterRevertServer, installedBuildState, publishServ
 import { appServerPolicy } from "../apps/app-server-store.js";
 import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
-import { resyncSessionsWithApp } from "../apps/session-app-folders.js";
-import { appFolderUsageOf, folderFields } from "../apps/app-folder-quota.js";   // #4785 — 앱 폴더 상한 · 사용량 칸   // #4684 — 앱 상태·공개·동의가 바뀌면 붙은 세션의 앱 폴더를 다시 맞춘다
+import { resyncSessionsWithApp } from "../apps/session-app-folders.js";   // #4684 — 앱 상태·공개·동의가 바뀌면 붙은 세션의 앱 폴더를 다시 맞춘다
+import { appFolderUsageForView, folderFields } from "../apps/app-folder-quota.js";   // #4785 — 앱 폴더 상한 · 사용량 칸
 import { getMember } from "../org/store/members.js";
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
@@ -144,7 +144,7 @@ const appsIndex: Capability = {
     //  공개 판을 볼 사람의 앱만 판 머리를 한 번에 읽는다 — 초안이 없는 앱(거의 전부)은 추가 조회가 없다.
     const heads = await store.listPublishedHeads(rows.filter((a) => appViewFor(a, who) === "published").map((a) => a.id));
     //  #4785 앱 폴더 상한 · 사용량 — 한 번에 읽는다(CP 가 재어 보낸 것. 셀프호스트엔 없다).
-    const usage = await appFolderUsageOf(rows.map((a) => a.id)).catch(() => new Map<string, never>());
+    const usage = await appFolderUsageForView(rows.map((a) => a.id));
     return {
       apps: rows.map((a) => {
         const v0 = appViewFor(a, who);
@@ -538,7 +538,7 @@ const appGet: Capability = {
     const app = await requireVisibleApp(id, who);
     const { view, app: shown } = await viewApp(app, who);
     const origin = app.origin_app_id ? await store.getApp(app.origin_app_id) : null;
-    const usage = (await appFolderUsageOf([id]).catch(() => new Map<string, never>())).get(id);   // #4785
+    const usage = (await appFolderUsageForView([id])).get(id);   // #4785
     return { app: { ...appRow(app, shown, who, view, origin), folder: folderFields(app, usage, isAppOwner(app, who) || isAdminViewer(who)) },
       components: await store.listComponents(id) };
   },

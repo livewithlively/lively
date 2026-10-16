@@ -8,7 +8,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import * as store from "../org/store/apps.js";
 import { canSeeApp, isAdminViewer, isAppOwner, type Viewer } from "../apps/visibility.js";
-import { appFolderUsageOf, folderFields, fmtGiB, isSchemaNotReady, parseFolderLimit, recordAppFolderUsage, APP_FOLDER_LIMIT_MAX_GB } from "../apps/app-folder-quota.js";
+import { appFolderUsageOf, folderFields, fmtBytes, isSchemaNotReady, parseFolderLimit, recordAppFolderUsage, APP_FOLDER_LIMIT_MAX_GB } from "../apps/app-folder-quota.js";
 
 /** CP 전용 두 길 — 표 · 열이 아직 없으면(롤 중 마이그레이션 전 창) 이 기능 전 코어와 같은 404 를 준다(CP 가 경보 없이 건너뛴다). */
 async function orNotReady<T>(fn: () => Promise<T>): Promise<T> {
@@ -29,9 +29,10 @@ const appFolderLimitSet: Capability = {
   input: { app_id: z.string(), limit_gb: z.number().int().nullable() },
   expose: {
     mcp: true,
+    //  limit_gb 를 빠뜨린 본문은 parseFolderLimit 이 400 으로 돌려보낸다 — «없앰» 은 null 을 보낸 때만(걸어 둔 상한을 조용히 풀지 않게).
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/folder-limit"], parse: (req) => {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      return { app_id: (req.params as Record<string, string>)?.id, limit_gb: b.limit_gb ?? null };
+      return { app_id: (req.params as Record<string, string>)?.id, limit_gb: b.limit_gb };
     } }],
   },
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
@@ -51,7 +52,7 @@ const appFolderLimitSet: Capability = {
       app_id: id,
       folder: folderFields(after, usage, true),
       note: "매니지드에서는 다음 쿼터 정비(최대 5분)에 적용됩니다",
-      ...(over ? { warning: `지금 사용량(${fmtGiB(usage!.used_bytes)})이 새 상한 이상이라, 적용되면 이 앱 폴더에 더 쓸 수 없습니다` } : {}),
+      ...(over ? { warning: `지금 사용량(${fmtBytes(usage!.used_bytes)})이 새 상한 이상이라, 적용되면 이 앱 폴더에 더 쓸 수 없습니다` } : {}),
     };
   },
 };
