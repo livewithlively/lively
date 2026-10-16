@@ -142,6 +142,10 @@ async function tick(): Promise<void> {
   try { jobs = await q(itemsPool, `SELECT * FROM org_cron WHERE enabled=true`); }
   catch { return; } // 테이블 부재/DB 미연결 → 조용히 패스(다음 틱 재시도).
 
+  //  #4742 수집 단위 표 — 지금 수집기 설정을 단위로 다시 맞춘다(워크스페이스마다 6시간에 한 번 · 이 컨텍스트가 그 워크스페이스).
+  //   읽기 도구가 쓰기를 하지 않게 조회 경로가 아니라 여기서 한다. 안에서 시각을 보고 대부분의 틱은 바로 돌아온다. 기다리지 않는다.
+  void import("../org/collect/unit-store.js").then((m) => m.ensureCollectorUnitsFresh()).catch(() => undefined);
+
   const tz = await orgTimezone(); // 틱당 1회(캐시) — cron_expr 벽시계 기준.
   const now = Date.now();
   for (const job of jobs) {

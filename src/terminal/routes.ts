@@ -651,6 +651,11 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
           .filter((k) => HEADLESS_KEYS.includes(k));
       })(),
     ]);
+    //  #4742 — Claude 에 다시 로그인했으면 수집 단위의 «로그인 끊김» 을 지운다(그 사람이 다시 담당 후보 줄에 선다).
+    //   다음 실행이 또 실패하면 다시 끊김으로 돌아간다. 기다리지 않는다.
+    if (harness === "claude" && check.loggedIn === true && user.userId) {
+      void import("../org/collect/unit-store.js").then((m) => m.markAssigneeHealthy(user.userId)).catch(() => undefined);
+    }
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...check, others: loggedIn.filter((k) => k !== harness) });
   }));

@@ -109,6 +109,7 @@ async function pollOnce(rec: RunRec): Promise<void> {
   if (rec.done) return;
   try {
     const st = parseCollectRead(await runAtLoginSeatSh(rec.osUser, collectReadSh(rec.dir)));
+    if (st.state === "done") noteOutcome(rec.user, rec.runId, st.exit, st.summary);
     if (st.state === "done" || st.state === "missing") return void (await finalize(rec, null));
     //  끝 신호 없이 판이 사라졌다 = 러너가 죽었다(메모리 상한 OOM · node 가 파일을 못 읽음 등). 상한까지 기다리지 않는다.
     //   러너는 끝 신호를 쓴 **뒤에** 끝나므로, 이 순서(읽기 → 세션 확인)에서 «없음» 이 두 번 연속이면 끝 신호가 올 일은 없다.
@@ -145,6 +146,37 @@ async function dropSession(user: LivelyUser, sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * 끝난 실행의 결과를 수집 단위 표(T10 #4742)에 넘긴다 — 로그인·커넥터가 끊겼으면 그 사람을 담당에서 건너뛰고(다음 후보가 이어받는다)
+ *  아무도 못 메우는 단위가 생기면 볼 사람에게 알린다. 정상이면 끊김 기록을 지운다. 실행 한 판에 한 번(같은 판을 다시 읽어도
+ *  표가 run id 로 거른다). **기다리지 않고 던지지 않는다** — 실행 정리(세션 지우기)를 늦추지 않는다.
+ */
+const notedRuns = new Set<string>();
+const strOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+function noteOutcome(user: LivelyUser, runId: string, exit: Record<string, unknown> | null, summary: Record<string, unknown> | null): void {
+  const member = String(user.userId || "").trim();
+  if (!member || !exit || notedRuns.has(runId)) return;
+  notedRuns.add(runId);
+  if (notedRuns.size > 500) notedRuns.delete(notedRuns.values().next().value as string);
+  //  실행 폴더의 JSON 은 그 사람 홈에서 온다 — 판정에 쓰는 칸만 모양을 확인해 넘긴다(모르는 모양은 비운다).
+  const res = (summary?.result && typeof summary.result === "object") ? summary.result as Record<string, unknown> : null;
+  const sum = summary ? {
+    stderrTail: strOrNull(summary.stderrTail), apps: strList(summary.apps),
+    allowed: strList(summary.allowed), missing: strList(summary.missing),
+    result: res ? { subtype: strOrNull(res.subtype), error: res.error, text: strOrNull(res.text) } : null,
+  } : null;
+  const at = strOrNull(exit.endedAt) ?? collectRunEndedAtFallback(runId);
+  void import("../org/collect/unit-store.js")
+    .then((m) => m.recordCollectOutcome({ member, runId, exit: { error: strOrNull(exit.error), code: typeof exit.code === "number" ? exit.code : null }, summary: sum, at }))
+    .catch((e) => logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 결과를 단위 표에 넘기지 못했다 — 담당 건강은 그대로"));
+}
+/** 끝난 시각을 못 읽으면 시작 시각(실행 id 에 박혀 있다)으로 — 그래야 재기동 뒤 옛 실행이 나중 결과를 덮지 않는다. */
+function collectRunEndedAtFallback(runId: string): string | null {
+  const started = collectRunStartedAt(runId);
+  return started ? new Date(started).toISOString() : null;
+}
+
 /** 잃은 사유 — lost: 상한을 넘도록 끝 신호가 없다 · runner-gone: 끝 신호 없이 판이 사라졌다(러너가 죽었다). */
 type LostReason = "lost" | "runner-gone";
 
@@ -178,6 +210,7 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
   const rec = runs.get(runId);
   const started = collectRunStartedAt(runId);
   if (st.state === "done") {
+    noteOutcome(user, runId, st.exit, st.summary);
     if (rec && !rec.done) await finalize(rec, null);
     else if (!rec && st.sessionId) await dropSession(user, st.sessionId);
   } else if (!rec && started && Date.now() > started + 3600_000 + GRACE_MS) {

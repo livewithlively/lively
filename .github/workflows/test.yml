@@ -452,6 +452,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/canary/run-canary.pg-test.mjs
+      # ⑤-p 수집 단위 표(#4742) — 목으로는 못 보는 것: **같은 외부 좌표가 한 행으로 합쳐지고 그 행의 source_member 가 단위
+      #    구성원의 합집합(∩ 조직 정책)이 되나**, 담당이 아닌 실행이 읽은 위치를 못 옮기나, 수집기 설정이 단위로 풀리나.
+      #    전부 ON CONFLICT·조인·RLS 술어라 자료·단위 행을 되읽어 판정한다(완료 조건 두 줄을 E1·E2 로 재현).
+      - name: 수집 단위 표 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-unit.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
