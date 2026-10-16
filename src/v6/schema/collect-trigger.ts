@@ -9,7 +9,10 @@
 //   · sched         — 판정 재료(서버만 쓴다): hist(다 읽은 판의 표본 — 끝 시각·구간 길이·그 구간의 글 수) · fails(연달아 진척 없는 판 수) ·
 //                     why(마지막 판정 — interval·catchup·retry) · at(판정 시각). 사람이 고치는 칸이 아니다 — 리브는 meta.activity 를 본다.
 //  ⚠ 번호 없는 ADD COLUMN IF NOT EXISTS — 병렬 브랜치 사이 순서 충돌이 없다. collect_unit 이 있어야 하므로 오케스트레이터에서 collect-unit 뒤에 둔다.
+//  · embedding_vector·model·updated_at — 단위의 «설명 벡터»(설계 §3). 검색 실패 보조 안내 · 단위 찾기가 질문과 뜻으로 맞춘다.
+//                     임베딩 칸은 다른 대상(knowledge·session_card)과 같은 방식으로 provider 와 무관하게 늘 만든다(뜻 검색 SQL 이 칸을 가정한다).
 import type { Pool } from "pg";
+import { ensureEmbeddingSchema, resolveEmbeddingConfig } from "../embedding-provider.js";
 
 export async function initV6CollectTrigger(pool: Pool): Promise<void> {
   //  interval_auto 를 처음 만들 때만, 이미 주기가 적힌 단위는 «고정» 으로 둔다 — T10(10/16) 도구 설명대로 리브·사람이 정해 둔 주기를 첫 판정이
@@ -26,4 +29,12 @@ export async function initV6CollectTrigger(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS collect_unit_due_idx ON collect_unit(next_at) WHERE state = 'active';
     ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
   `);
+  try {
+    const r = await pool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
+    const ec = resolveEmbeddingConfig((r.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config);
+    const ok = await ensureEmbeddingSchema(pool, ec.dimensions, "collect_unit");
+    console.log(`[v6 schema] 수집 단위 설명 벡터 스키마 ${ok ? "준비됨" : "건너뜀(낱말로만 맞춤)"} (dim=${ec.dimensions})`);
+  } catch (e) {
+    console.warn(`[v6 schema] 수집 단위 설명 벡터 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
+  }
 }

@@ -37,6 +37,7 @@ import {
   type HealthChange, type HealthIndex, type NoticeTarget, type PlanCollector, type PlanHealth, type PlanUnit, type UnitKind,
   type UnitPlan, type UnitState, type UnitVisibility,
 } from "./unit-plan.js";
+import { unitEmbeddingText } from "./unit-find-plan.js";   // #4744 설명 벡터의 글(순수) — 바뀌었을 때만 다시 임베딩
 
 type Q = Pick<pg.PoolClient, "query">;
 
@@ -1058,11 +1059,13 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
   //   진행 중인 저장을 막거나 연결을 붙들지 못하게 · 재검토 N-a). 통과한 호출만 잠근 뒤 최신 행으로 같은 판정을 다시 한다.
   assertCanEdit(await getUnit(id), id, actor);
   let before: Record<string, unknown> = {};
+  let textBefore: string | null = null;   // #4744 설명 벡터의 글(고치기 전)
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
     const got = await client.query(`SELECT id FROM collect_unit WHERE id=$1 FOR UPDATE`, [id]);
     const u = assertCanEdit(got.rows.length ? await getUnit(id, client) : null, id, actor);
+    textBefore = unitEmbeddingText(u);
     const viewers = u.members.map((m) => m.member_id);
     //  경로를 바꾸면 누가 모으나가 바뀐다(수집기는 제 설정대로 따로 돈다 — 구성원 경로로 돌리면 둘이 겹쳐 모은다).
     if (patch.route != null && patch.route !== u.route && !actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");
@@ -1135,6 +1138,11 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     client.release();
   }
   const after = (await getUnit(id))!;
+  //  #4744 설명 벡터 — 임베딩할 글(앱·종류 · 이름 · 설명 · 연결된 맥락)이 **실제로 바뀌었을 때만** 벡터를 비워 임베딩 대기로 돌린다
+  //   (embedding-backfill 의 «입력 글이 바뀐 경우에만» 계약 · 리브가 판마다 같은 값을 다시 써도 벡터가 비지 않게). 기다리지 않는다.
+  if (textBefore != null && unitEmbeddingText(after) !== textBefore) {
+    void import("../../v6/embedding-backfill.js").then((m) => m.markEmbeddingPending(m.COLLECT_UNIT_TARGET, id)).catch(() => undefined);
+  }
   await auditOrgContent("collect_unit", String(id), "update", before,
     { state: after.state, visibility: after.visibility, owner_member: after.owner_member, interval_sec: after.interval_sec, interval_auto: after.interval_auto,
       description: after.description, route: after.route, priorities: after.members.map((m) => m.member_id) },

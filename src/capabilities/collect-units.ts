@@ -291,6 +291,47 @@ const collectUnitsSync: Capability = {
   }),
 };
 
-//  ⚠ 순서가 계약이다 — 글자 그대로 경로(/units/listing · /units/sync)를 매개변수 경로(/units/:id)보다 **먼저** 마운트한다.
+// ── 단위 찾기(#4744 검색 실패 보조 안내) ──────────────────────────────────────
+
+const findInput = {
+  q: z.string().min(1).max(500).describe("주제 — 자연어나 낱말(예: «결제 기능 출시 일정»). 단위의 이름·설명·연결된 맥락과 설명 벡터로 맞춘다"),
+  limit: z.number().int().min(1).max(10).optional().describe("최대 몇 개(기본 5)"),
+};
+type FindInput = z.infer<z.ZodObject<typeof findInput>>;
+
+const collectUnitFind: Capability = {
+  name: "collect_unit_find",
+  title: "단위 찾기",
+  description:
+    "이 주제가 오갈 만한 수집 단위(채널·메일함·페이지)를 찾는다(#4213 T12) — **부르는 사람이 그 단위의 확인된 볼 수 있는 구성원인 것만**(관리자도 " +
+    "자기가 속하지 않은 단위는 안 나온다 — 전체는 collect_units). 모으지 않기로 한 단위는 빼고, 맞는 것이 없으면 빈 목록이다. 줄마다 커넥터 이름(connector — 세션은 " +
+    "mcp__claude_ai_<connector>__* 로, 조직 연결 ext__* 가 있으면 그것으로 찾는다) · 마지막 수집 시각(last_collected_at) · 그 사람의 그 커넥터 상태" +
+    "(my_connector) · 맞은 까닭(match.by — vector 설명의 뜻 · text 낱말) · 안내(hint — «N시간 전 수집했습니다 — 그 뒤 새 글이 필요하면 …»)를 싣는다. " +
+    "지식(knowledge_search)·원문 자료(source_list)에서 못 찾았을 때 «어디서 직접 찾아볼까» 를 정하는 데 쓴다 — 정상 주기로 모으는 단위라면 새로 얻을 것은 " +
+    "마지막 수집 이후의 새 글 정도다(약한 권유). 직접 찾아 가져온 원문은 남긴다. REST 등가: GET /api/ui/collect/units/find?q=&limit=.",
+  scope: "memory",
+  input: findInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/collect/units/find"], parse: (req) => {
+      const q = (req.query ?? {}) as Record<string, unknown>;
+      const text = String(q.q ?? "").trim();
+      if (!text) throw new HttpError(400, "q(주제)가 필요합니다");
+      const n = q.limit == null || q.limit === "" ? undefined : Number(q.limit);
+      if (n !== undefined && !(Number.isInteger(n) && n >= 1 && n <= 10)) throw new HttpError(400, "limit 는 1~10 입니다");
+      return { q: text.slice(0, 500), limit: n };
+    } }],
+  },
+  handler: async (input: FindInput, user: LivelyUser) => guard(async () => {
+    const { findUnitsFor } = await import("../org/collect/unit-find.js");
+    const { memberAiConnectorsPolicy } = await import("../org/store/member-ai-connectors.js");
+    //  구성원 Claude 커넥터를 막은 워크스페이스면 알리고, 줄마다의 안내도 «그 커넥터로 직접» 이 아니라 조직 연결(ext__*)로 바꾼다.
+    const policy = await memberAiConnectorsPolicy();
+    const units = await findUnitsFor(actorOf(user), input.q, { limit: input.limit ?? 5, blocked: policy !== "allowed" });
+    return { units, count: units.length, member_ai_connectors: policy };
+  }),
+};
+
+//  ⚠ 순서가 계약이다 — 글자 그대로 경로(/units/listing · /units/sync · /units/find)를 매개변수 경로(/units/:id)보다 **먼저** 마운트한다.
 //   거꾸로면 express 가 «listing» 을 단위 id 로 읽어 400 이 난다(rest-shadow.test 가 지킨다).
-export const collectUnitCapabilities: Capability[] = [collectUnits, collectUnitListing, collectUnitsSync, collectUnitUpdate, collectUnitSplit];
+export const collectUnitCapabilities: Capability[] = [collectUnits, collectUnitFind, collectUnitListing, collectUnitsSync, collectUnitUpdate, collectUnitSplit];

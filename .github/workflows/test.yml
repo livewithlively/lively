@@ -589,6 +589,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/collect/collect-schedule.pg-test.mjs
+      # ⑤-u 검색 실패 보조 안내(#4213 T12) — 목으로는 못 보는 것: «가져올 곳» 이 질문한 사람이 다 보는 단위만인가(신고만 한 사람·남의 비공개·
+      #    모으지 않기로 한 단위는 이름도 안 나온다) · 지식이 강하면 안 붙고 원문 자료가 있으면 그것이 먼저인가 · 원문 자료도 그 사람의 공개범위대로인가 ·
+      #    구성원 Claude 커넥터를 막은 워크스페이스는 단위를 안 싣나 · 단위 설명 벡터 백필과 뜻으로 맞추기(pgvector).
+      - name: 검색 실패 보조 안내 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/unit-find.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
