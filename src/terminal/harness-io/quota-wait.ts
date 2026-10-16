@@ -7,71 +7,120 @@
 //  읽고 3분 뒤 껐다 — 끄면 그 대기도 함께 사라진다(Claude Code 문구: «Automatic continue cancelled · Claude Code exited during the wait …»).
 //  실측 2026-10-16: 상민님 세션 5개가 «4:10pm 에 이어감» 을 띄운 채 16:02~16:04 에 꺼졌고, 다시 연 세션도 사람이 말을 보내야 움직였다.
 //
-// ── 무엇으로 읽나 ─────────────────────────────────────────────────────────────────────────────────
-//  대기의 시작과 끝은 대화 기록에 `type:"system" · subtype:"informational"` 줄로 남는다(본체 문자열 — 2.1.301):
-//   걸림  «Usage limit reached · continuing automatically at 4:10pm · esc to cancel»         (턴이 한도에 닿아 자동으로 걸림)
-//         «Usage limit reached again · continuing automatically at 4:10pm · esc to cancel»   (대기 중 사람이 보낸 말이 다시 막힘)
-//   풀림  «Usage limit reset · continuing automatically» · «Usage limit available again · continuing now» (이어 감)
-//         «Usage limit has reset · press enter to continue» (늦게 깸 — 사람이 Enter 를 쳐야 이어진다)
-//         «Automatic continue cancelled …» · «… was turned off …» · «… stopped …» · «… did not run …» (접힘)
-//  줄 없이 풀리는 경우가 둘 있다:
+// ── 무엇으로 읽나 — 대화 기록 줄의 흐름(오래된 순) ────────────────────────────────────────────────────
+//  대기의 시작·끝은 `type:"system" · subtype:"informational"` 줄로 남는다(본체 문자열 — 2.1.301):
+//   걸림   «Usage limit reached · continuing automatically at 4:10pm · esc to cancel»         (턴이 한도에 닿아 자동으로 걸림)
+//          «Usage limit reached again · continuing automatically at 4:10pm · esc to cancel»   (대기 중 사람이 보낸 말이 다시 막힘)
+//   이어 감 «Usage limit reset · continuing automatically» · «Usage limit available again · continuing now»
+//          — 그 뒤 자동 이어감 메시지(origin auto-continuation)로 새 턴이 돈다. 그 턴이 끝나면(turn_duration 줄) 대기는 끝난 것이다.
+//   접힘   «Usage limit has reset · press enter to continue» (늦게 깸 — 사람이 Enter 를 쳐야 이어진다)
+//          «Automatic continue cancelled …» · «… was turned off …» · «… stopped …» · «… did not run …»
+//  줄 없이 바뀌는 경우가 셋 있다:
 //   · 대기 중 **사람이 말을 보내면** Claude Code 가 대기를 조용히 접는다(manual_submit) — 그 말이 다시 막히면 위 «again» 줄이 새로 붙는다.
-//     사람의 말은 `origin.kind:"human"` 으로 남는다. 작업 알림(task-notification)·자동 이어감(auto-continuation) 턴은 대기를 접지 않는다
+//     사람의 말은 `origin.kind:"human"` 으로 남는다(메타·사이드체인 줄은 아니다). 작업 알림(task-notification) 턴은 대기를 접지 않는다
 //     (실측: 걸린 뒤 백그라운드 작업 알림이 와서 한 턴 돌고 끝나도 대기는 그대로였다).
-//   · 한도가 풀린 뒤 다시 띄운 하네스가 «앞선 한도 안내는 이제 무효» 쪽지(isMeta · usageLimitNote "release")를 넣는다.
-//  ⚠ 줄 없이 **다시 걸리는** 경우(이어 간 턴이 또 막힘 · 사람이 대화상자로 «기다리기» 를 고름)는 여기서 못 읽는다 — 그 턴은 API 거절로
-//   끝나 Stop 훅이 안 뜨고 «작업 중» 보고가 남아, 종료 규칙이 이미 «작업 중» 으로 지킨다.
+//   · 한도가 풀린 뒤 다시 띄운 하네스가 «앞선 한도 안내는 이제 무효» 쪽지(isMeta · usageLimitNote "release")를 넣는다 — 접힘.
+//   · **이어 간 턴이 또 한도에 막히면** 줄 없이 다시 걸린다(본체: 연달아 두 번까지 — 그 너머는 «Automatic continue stopped …» 줄).
+//     그 턴은 한도 오류 줄(assistant · isApiErrorMessage · apiError "usage_limit_reached")로 끝나므로, «이어 감» 뒤의 그 줄을 다시 걸림으로 읽는다.
+//     ⚠ 다만 그 턴에서 훅이 «작업 중» 을 보고했다면 종료 규칙은 이 판정까지 오지 않는다: 보고가 신선한 10분(PHASE_TTL_SEC) 동안은 «작업 중» 으로
+//      지키고, 그 뒤엔 «예약 모름» 이 되어 옛 회수 시계(유휴 120분)로 넘어간다 — 남은 틈이다(후속).
+//  «이어 감» 줄 뒤 그 턴이 끝나기 전은 «막 이어 가는 중»(resuming)이다 — 한도가 풀린 순간과 종료 규칙의 판이 겹치면 이어 가기 시작한 하네스를
+//   끌 수 있어서(격리 리뷰), 풀림 줄에서 `QUOTA_RESUME_GRACE_MS` 동안은 지킨다(예약 깨움의 WAKE_GRACE_SEC 와 같은 뜻).
 //  ⚠ 걸림 문구는 Claude Code 가 원격 설정으로 바꿀 수 있다(본체: 문구 안에 «{when}» 만 있으면 받는다). 그러면 여기서 못 알아보고 종전처럼
 //   끈다 — 지금보다 나빠지지는 않는다. 그래서 문구 전체가 아니라 «continuing automatically … esc to cancel» 두 조각만 본다.
 //
 // ── 상한 ────────────────────────────────────────────────────────────────────────────────────────
 //  · 자동으로 걸리는 대기는 풀리는 시각이 24시간 안일 때뿐이다(그 너머는 Claude Code 가 «Automatic continue stopped · … more than 24 hours
 //    out» 으로 접는다). 그래서 걸린 줄에서 `QUOTA_WAIT_MAX_MS` 가 지나면 대기로 보지 않는다 — 풀림 줄을 놓친 대기가 세션을 영영 붙잡지 않게.
+//  · 줄 시각이 지금보다 `QUOTA_CLOCK_SKEW_MS` 넘게 앞서면(깨진 시계) 대기로 보지 않는다 — 미래 시각이면 상한이 영영 안 선다(phase.ts 의 같은 함정).
 //  · 하네스를 다시 띄우면 그 전 프로세스의 대기는 사라진다(Claude Code 가 relaunch 로 접는다) — 하네스를 띄운 시각보다 앞선 줄은 안 본다.
 
-/** 대화 기록이 말하는 «지금 걸려 있는 자동 이어감». */
-export interface QuotaWait {
-  /** 걸림 줄의 시각(ms) */
-  armedAtMs: number;
-  /** 걸림 줄 문구 그대로(로그·진단용 — «at 4:10pm» 이 들어 있다) */
+/** 대화 기록 줄에서 읽은 마지막 대기 사건 — 시각과 무관한 부분(같은 파일이면 다시 읽지 않고 이것만 다시 잰다). */
+export interface QuotaScan {
+  /** armed = 걸려서 기다리는 중 · fired = 풀려서 이어 가는 턴이 아직 안 끝남 */
+  kind: "armed" | "fired";
+  /** 그 사건 줄의 시각(ms) */
+  atMs: number;
+  /** 그 줄 문구(로그·진단용 — «at 4:10pm» 이 들어 있다) */
   text: string;
+}
+
+/** 지금 지켜야 하는 대기. */
+export interface QuotaWait {
+  /** armed = 자동 이어감이 걸려 기다리는 중 · resuming = 막 풀려 이어 가는 중(풀림 줄 뒤 유예 안) */
+  kind: "armed" | "resuming";
+  atMs: number;
+  text: string;
+  /** 이 대기가 스스로 끝나는 시각(ms) — resuming 만(풀림 줄 + 유예). 걸림 줄은 풀리는 시각을 글(«at 4:10pm»)로만 준다. */
+  untilMs?: number;
 }
 
 /** 걸린 줄에서 이만큼 지나면 대기로 보지 않는다 — Claude Code 의 자동 대기 한도(24시간) + 풀리는 시각 뒤 이어 가기까지의 여유(30분). */
 export const QUOTA_WAIT_MAX_MS = (24 * 60 + 30) * 60_000;
+/** 풀림(이어 감) 줄 뒤 이만큼은 «막 이어 가는 중» 으로 지킨다 — 이어 간 턴은 보통 수 초 안에 «작업 중» 보고를 낸다. */
+export const QUOTA_RESUME_GRACE_MS = 5 * 60_000;
+/** 줄 시각이 지금보다 이만큼 넘게 앞서면 깨진 시계로 본다 — 세션 컨테이너와 게이트웨이의 시계 차이를 넉넉히 흡수한다. */
+export const QUOTA_CLOCK_SKEW_MS = 5 * 60_000;
 
 const ARMED = /\bcontinuing automatically\b.*\besc to cancel\b/i;
-const RELEASED = /^\s*(?:usage limit (?:reset|available again|has reset)\b|automatic continue\b)/i;
+const FIRED = /^\s*usage limit (?:reset|available again)\b/i;
+const RELEASED = /^\s*(?:usage limit has reset\b|automatic continue\b)/i;
+const REARMED_TEXT = "이어 간 턴이 다시 한도에 막혔다(줄 없이 다시 걸림)";
 
-/** 사람이 친 말인가 — 2.1.301 은 `origin.kind`(·`turnOrigin`)를 남긴다. 표식이 없으면 사람의 말로 보지 않는다(대기를 접지 않는 쪽). */
+/** 사람이 친 말인가 — 2.1.301 은 `origin.kind`(·`turnOrigin`)를 남긴다. 표식이 없거나 메타 줄이면 사람의 말로 보지 않는다(대기를 접지 않는 쪽). */
 function humanPrompt(l: Record<string, unknown>): boolean {
+  if (l.isMeta === true) return false;
   const o = l.origin;
   return (!!o && typeof o === "object" && (o as { kind?: unknown }).kind === "human") || l.turnOrigin === "human";
 }
 
-/**
- * (순수) 대화 기록 줄(오래된 순)에서 지금 걸려 있는 자동 이어감을 찾는다 — 없으면 null.
- *  @param sinceMs  하네스(tmux 세션)를 띄운 시각 — 이보다 앞선 걸림 줄은 그 전 프로세스의 것이다. 0 이면 보지 않는다.
- *  @param nowMs    지금
- */
-export function quotaWaitOf(lines: ReadonlyArray<unknown>, at: { sinceMs: number; nowMs: number }): QuotaWait | null {
-  let w: QuotaWait | null = null;
+/** (순수) 대화 기록 줄(오래된 순)에서 마지막 대기 사건을 읽는다 — 없으면 null. 시각 조건(상한·띄운 시각)은 quotaBound 가 건다. */
+export function quotaScan(lines: ReadonlyArray<unknown>): QuotaScan | null {
+  let st: QuotaScan | null = null;
+  const at = (l: Record<string, unknown>): number => Date.parse(String(l.timestamp ?? ""));
   for (const raw of lines) {
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
-    if (l.type === "system" && l.subtype === "informational" && typeof l.content === "string") {
-      if (RELEASED.test(l.content)) w = null;
-      else if (ARMED.test(l.content)) {
-        //  시각이 없는 걸림 줄은 상한을 잴 수 없다 — 대기로 보지 않는다(세션을 영영 붙잡는 쪽보다 종전처럼 끄는 쪽).
-        const t = Date.parse(String(l.timestamp ?? ""));
-        w = Number.isFinite(t) ? { armedAtMs: t, text: l.content } : null;
+    if (l.isSidechain === true) continue;   // 서브에이전트의 대화 — 본 대화의 대기와 무관하다
+    if (l.type === "system") {
+      if (l.subtype === "informational" && typeof l.content === "string") {
+        //  시각이 없는 사건 줄은 상한을 잴 수 없다 — 대기로 보지 않는다(세션을 영영 붙잡는 쪽보다 종전처럼 끄는 쪽).
+        const t = at(l);
+        if (FIRED.test(l.content)) st = Number.isFinite(t) ? { kind: "fired", atMs: t, text: l.content } : null;
+        else if (RELEASED.test(l.content)) st = null;
+        else if (ARMED.test(l.content)) st = Number.isFinite(t) ? { kind: "armed", atMs: t, text: l.content } : null;
+      } else if (l.subtype === "turn_duration" && st?.kind === "fired") {
+        st = null;   // 이어 간 턴이 끝났다 — 대기는 끝났고 이제 평범한 완료다
       }
       continue;
     }
-    if (l.type === "user" && (humanPrompt(l) || l.usageLimitNote === "release")) w = null;
+    if (l.type === "user") {
+      if (humanPrompt(l) || l.usageLimitNote === "release") st = null;
+      continue;
+    }
+    if (l.type === "assistant" && st?.kind === "fired" && l.isApiErrorMessage === true && l.apiError === "usage_limit_reached") {
+      const t = at(l);
+      st = Number.isFinite(t) ? { kind: "armed", atMs: t, text: REARMED_TEXT } : null;
+    }
   }
-  if (!w) return null;
-  if (at.sinceMs > 0 && w.armedAtMs < at.sinceMs) return null;
-  if (at.nowMs - w.armedAtMs > QUOTA_WAIT_MAX_MS) return null;
-  return w;
+  return st;
+}
+
+/**
+ * (순수) 마지막 대기 사건에 시각 조건을 건다.
+ *  @param launchedAtMs  하네스(tmux 세션)를 띄운 시각 — 이보다 앞선 사건은 그 전 프로세스의 것이다. 0 이면 보지 않는다.
+ *  @param nowMs         지금
+ */
+export function quotaBound(s: QuotaScan | null, at: { launchedAtMs: number; nowMs: number }): QuotaWait | null {
+  if (!s) return null;
+  if (s.atMs > at.nowMs + QUOTA_CLOCK_SKEW_MS) return null;
+  if (at.launchedAtMs > 0 && s.atMs < at.launchedAtMs) return null;
+  if (s.kind === "armed") return at.nowMs - s.atMs > QUOTA_WAIT_MAX_MS ? null : { kind: "armed", atMs: s.atMs, text: s.text };
+  const untilMs = s.atMs + QUOTA_RESUME_GRACE_MS;
+  return at.nowMs > untilMs ? null : { kind: "resuming", atMs: s.atMs, text: s.text, untilMs };
+}
+
+/** (순수) 대화 기록 줄에서 지금 지켜야 하는 대기 — quotaScan 다음 quotaBound. */
+export function quotaWaitOf(lines: ReadonlyArray<unknown>, at: { launchedAtMs: number; nowMs: number }): QuotaWait | null {
+  return quotaBound(quotaScan(lines), at);
 }

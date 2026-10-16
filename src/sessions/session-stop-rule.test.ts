@@ -8,7 +8,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, type StopFacts } from "./session-stop-rule.js";
+import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, launchedAtMsOf, type StopFacts } from "./session-stop-rule.js";
 import type { QuotaWait } from "../terminal/harness-io/quota-wait.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { SessionState } from "./session-state.js";
@@ -578,24 +578,26 @@ test("L6 상한에 걸려 남긴 세션도 가장 오래 논 것을 남긴다(ca
   assert.ok((r.keptOldest?.capped?.idleSec ?? 0) >= 600);
 });
 
-// ── #4810 한도 자동 이어감 대기 — 사양·엣지 표 SQ1~SQ8: 작업 스크래치 spec-4810.md ────────────────────────────────────────
+// ── #4810 한도 자동 이어감 대기 — 사양·엣지 표 SQ1~SQ11 · F3: 작업 스크래치 spec-4810.md ──────────────────────────────────────
 //  Claude Code 는 턴 도중 한도에 닿으면 턴을 정리해 끝내고(Stop 훅 → «쉼» 보고 → 판정은 완료) 하네스 안에서 풀리는 시각을 기다린다.
 //  🔴 그 세션을 «완료» 로 끄면 — 대기가 사라져 일이 스스로 이어지지 않는다(2026-10-16 상민님 세션 5개).
 //  🔴 대기 판정을 못 하는 판(중계 장애)에 끄면 — 같은 사고가 장애 때마다 난다 · 영영 못 판정하는 세션을 영영 남기면 — 예약 1GB 를 잡는다.
-const WAITING: QuotaWait = { armedAtMs: NOW * 1000 - 300_000, text: "Usage limit reached · continuing automatically at 4:10pm · esc to cancel" };
+//  🔴 한도가 풀린 순간(이어 가기 시작한 하네스)을 «끝남» 으로 끄면 — 이어 간 일이 첫 몇 초에 죽는다(격리 리뷰).
+const WAITING: QuotaWait = { kind: "armed", atMs: NOW * 1000 - 300_000, text: "Usage limit reached · continuing automatically at 4:10pm · esc to cancel" };
 /** 판마다 무엇을 쟀나(화면·작업 판정·대화 기록)와 무엇을 껐나를 센다 — 보호 중인 세션은 셋 다 0 이어야 한다. */
-function quotaRun(rows: SessionInfo[], quota: (id: string) => QuotaWait | null) {
+function quotaRun(rows: SessionInfo[], quota: (id: string) => QuotaWait | null, screens: (id: string, n: number) => string = () => CLAUDE_DRAFT_SCREEN) {
   const n = { captures: 0, probes: 0, quota: 0 };
+  const per: Record<string, { captures: number; quota: number }> = {};
   const reaped: string[] = [];
   const run = (nowMs: number) => sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => rows, listStates: async () => rows.map((r) => stOf(r.id)),
     listManaged: async () => [], view: () => NOT_VIEWING,
     jobVerdicts: async (ids) => { n.probes++; return verdictsOf()(ids); },
-    capture: async () => { n.captures++; return CLAUDE_DRAFT_SCREEN; },
-    quotaWait: async (s) => { n.quota++; return quota(s.id); },
+    capture: async (id) => { n.captures++; const p = (per[id] ??= { captures: 0, quota: 0 }); p.captures++; return screens(id, p.captures); },
+    quotaWait: async (s) => { n.quota++; (per[s.id] ??= { captures: 0, quota: 0 }).quota++; return quota(s.id); },
     keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => nowMs, arm: () => {},
   });
-  return { n, reaped, run };
+  return { n, per, reaped, run };
 }
 
 test("SQ1 완료+안 봄 3분이 지난 claude 세션이라도 한도 자동 이어감을 기다리는 중이면 끄지 않는다(쪽지도 안 남긴다)", async () => {
@@ -633,27 +635,42 @@ test("SQ3c 기다림이 끝난 것을 다시 재서 알면(접힘·늦게 깸) �
   await q.run(NOW * 1000 + QUOTA_RECHECK_MS);
   assert.deepEqual(q.reaped, ["box-l-4"]);
 });
-test("SQ4 대화 기록을 못 읽으면 그 판엔 안 끈다(limit-unknown) — 연달아 세 번째면 대기 없음으로 보고 끈다", async () => {
-  const rows = [liveDone("box-l-5")];
-  const q = quotaRun(rows, () => { throw new Error("relay: 503"); });
-  for (let i = 1; i < QUOTA_UNKNOWN_MAX; i++) {
-    const r = await q.run(NOW * 1000 + i * 30_000);
-    assert.equal(r.kept["limit-unknown"], 1, `${i}번째`);
-    assert.deepEqual(q.reaped, [], `${i}번째엔 안 끈다`);
-  }
+test("SQ4 대화 기록을 못 읽으면 안 끈다(limit-unknown) — 세 번을 넘겨도 첫 실패에서 10분 전엔 안 끄고, 10분이 되면 대기 없음으로 보고 끈다", async () => {
+  const q = quotaRun([liveDone("box-l-5")], () => { throw new Error("relay: 503"); });
+  const t0 = NOW * 1000;
   assert.equal(QUOTA_UNKNOWN_MAX, 3);
-  await q.run(NOW * 1000 + QUOTA_UNKNOWN_MAX * 30_000);
-  assert.deepEqual(q.reaped, ["box-l-5"], "세 번째엔 끈다");
+  assert.equal(QUOTA_UNKNOWN_FOLD_MS, 10 * 60_000);
+  for (const d of [0, 30_000, 60_000, 90_000, QUOTA_UNKNOWN_FOLD_MS - 1]) {
+    const r = await q.run(t0 + d);
+    assert.equal(r.kept["limit-unknown"], 1, `+${d}ms`);
+    assert.deepEqual(q.reaped, [], `+${d}ms 엔 안 끈다(1~2분짜리 중계 장애에 대기 세션을 끄지 않는다)`);
+  }
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS);
+  assert.deepEqual(q.reaped, ["box-l-5"], "첫 실패에서 10분이면 끈다");
+});
+test("SQ4a 10분이 지났어도 못 읽은 횟수가 셋이 안 되면 안 끈다", async () => {
+  const q = quotaRun([liveDone("box-l-5a")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000;
+  await q.run(t0);
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + 60_000);
+  assert.deepEqual(q.reaped, [], "두 번째(10분 뒤)엔 안 끈다");
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + 90_000);
+  assert.deepEqual(q.reaped, ["box-l-5a"], "세 번째에 끈다");
 });
 test("SQ4b 못 읽은 횟수는 사이에 한 번이라도 읽히면 처음부터 센다", async () => {
-  const seq: Array<"throw" | "wait"> = ["throw", "throw", "wait", "throw", "throw", "throw"];
+  const seq: Array<"throw" | "wait"> = ["throw", "throw", "wait", "throw", "throw", "throw", "throw"];
   let i = 0;
   const q = quotaRun([liveDone("box-l-6")], () => { const k = seq[i++]; if (k === "throw") throw new Error("relay"); return WAITING; });
-  const t = [0, 30_000, 60_000, 60_000 + QUOTA_RECHECK_MS, 90_000 + QUOTA_RECHECK_MS, 120_000 + QUOTA_RECHECK_MS].map((d) => NOW * 1000 + d);
-  for (let k = 0; k < 5; k++) { await q.run(t[k]); assert.deepEqual(q.reaped, [], `${k + 1}번째 판`); }
-  await q.run(t[5]);
-  assert.deepEqual(q.reaped, ["box-l-6"], "읽힌 뒤 다시 세어 세 번째에 끈다");
-  assert.equal(q.n.quota, 6);
+  const t0 = NOW * 1000, t1 = t0 + 16 * 60_000;   // t0+11분에 한 번 읽힌다(대기) → 보호 5분 → t1 부터 다시 못 읽음
+  for (const t of [t0, t0 + 30_000, t0 + 11 * 60_000, t1, t1 + 30_000, t1 + 60_000]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${t - t0}ms`); }
+  await q.run(t1 + QUOTA_UNKNOWN_FOLD_MS);
+  assert.deepEqual(q.reaped, ["box-l-6"], "다시 센 첫 실패(t1)에서 10분에 끈다");
+  assert.equal(q.n.quota, 7);
+});
+test("SQ4c 한 시간 넘게 실패가 없으면 셈은 처음부터다(오래전 실패로 곧바로 접지 않는다)", async () => {
+  const q = quotaRun([liveDone("box-l-6c")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000, t1 = t0 + 61 * 60_000;
+  for (const t of [t0, t0 + 30_000, t1, t1 + 30_000, t1 + 60_000]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${t - t0}ms`); }
 });
 test("SQ5 질의 · 셸만 남음 · codex · agy 는 대화 기록을 보지 않고 종전대로 끈다", async () => {
   const asking = liveDone("box-l-ask", { awaiting: true, agentState: "waiting", lastActive: NOW - 3700, lastReport: { phase: "waiting", at: NOW - 3700 } });
@@ -682,4 +699,37 @@ test("SQ7 끄라는 판정이 안 난 세션(보는 중 · 작업 중 · 시계 
   });
   assert.deepEqual(quotaCalls, []);
   assert.deepEqual([r.kept.working, r.kept.clock, r.kept.viewing], [1, 1, 1]);
+});
+test("SQ9 대화 기록을 읽는 사이 턴이 시작됐으면(두 번째 화면) 끄지 않는다 — 한도가 풀린 순간 이어 가기 시작한 하네스", async () => {
+  const q = quotaRun([liveDone("box-l-9")], () => null, (_id, n) => (n === 1 ? CLAUDE_DRAFT_SCREEN : CLAUDE_TURN_SCREEN));
+  const r = await q.run(NOW * 1000);
+  assert.equal(r.kept["turn-now"], 1);
+  assert.deepEqual(q.reaped, []);
+  assert.deepEqual(q.per["box-l-9"], { captures: 2, quota: 1 }, "화면 → 대화 기록 → 화면 순서로 두 번 봤다");
+});
+test("SQ10 한 판에 대기 A · 대기 없음 B · 못 읽음 C — 세션마다 따로 판정하고, 보호도 세션마다다", async () => {
+  const rows = ["box-l-a", "box-l-b", "box-l-c"].map((id) => liveDone(id));
+  const q = quotaRun(rows, (id) => { if (id === "box-l-c") throw new Error("relay"); return id === "box-l-a" ? WAITING : null; });
+  const r = await q.run(NOW * 1000);
+  assert.deepEqual(q.reaped, ["box-l-b"]);
+  assert.deepEqual([r.kept["limit-wait"], r.kept["limit-unknown"]], [1, 1]);
+  const before = { a: q.per["box-l-a"].quota, c: q.per["box-l-c"].quota };
+  await q.run(NOW * 1000 + 60_000);
+  assert.equal(q.per["box-l-a"].quota, before.a, "A 는 보호 중이라 다시 안 읽는다");
+  assert.equal(q.per["box-l-c"].quota, before.c + 1, "C 는 보호가 없어 다음 판에 다시 읽는다");
+});
+test("SQ11 막 이어 가는 중이면 그 유예가 끝날 때까지만 보호한다(걸려서 기다리는 중은 5분)", async () => {
+  const t0 = NOW * 1000;
+  const resuming: QuotaWait = { kind: "resuming", atMs: t0 - 240_000, text: "Usage limit reset · continuing automatically", untilMs: t0 + 60_000 };
+  const q = quotaRun([liveDone("box-l-11")], () => resuming);
+  await q.run(t0);
+  await q.run(t0 + 60_000 - 1);
+  assert.equal(q.n.quota, 1, "유예 끝 전엔 다시 안 읽는다");
+  await q.run(t0 + 60_000);
+  assert.equal(q.n.quota, 2, "유예가 끝나는 때 다시 잰다(5분을 다 기다리지 않는다)");
+});
+test("F3 하네스를 띄운 시각 = tmux 세션을 만든 시각(초) × 1000 — 모르면 0(그 조건을 안 본다)", () => {
+  assert.equal(launchedAtMsOf({ created: 1_800_000_000 }), 1_800_000_000_000);
+  assert.equal(launchedAtMsOf({ created: 0 }), 0);
+  assert.equal(launchedAtMsOf({} as { created: number }), 0);
 });
