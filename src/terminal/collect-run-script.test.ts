@@ -19,7 +19,7 @@
 //   R11~R15 커넥터가 안 뜬 판 다시 띄우기 · R16 claude 가 지시를 안 읽고 끝나도 러너는 죽지 않는다(EPIPE)
 //   R10 컨테이너 메모리(/proc/meminfo) — 상한(MemTotal) · 시작 · 최고 / 파일이 없으면 null(맥)
 //   S1 쓰기 셸 0600 · S2 끝난 폴더(done·세션 id·목록) · S3 없음/도는 중(반쯤 쓰인 줄 버림)
-//   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절
+//   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절 · P7 쓰기 셸 크기 상한(경계)
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -27,7 +27,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, collectJob, collectPaneArgv,
+  COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_WRITE_MAX_B64, collectJob, collectPaneArgv,
   collectCapsReadSh, collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, isCollectRunDir, newCollectRunId, parseCollectCaps, parseCollectRead,
 } from "./collect-run-script.js";
 
@@ -235,15 +235,22 @@ fs.writeFileSync(fakeBin, FAKE, { mode: 0o755 });
 
 type Run = { dir: string; exit: Record<string, unknown>; summary: Record<string, any>; fake: Record<string, any> | null };
 /** 실행 폴더를 쓰기 셸(collectWriteSh)로 만들고 러너를 돌린다 — 게이트웨이가 하는 일과 같은 순서. */
-function runOnce(label: string, o: { apps: string[]; mode?: string; timeoutSec?: number; job?: string; meminfo?: string; env?: Record<string, string>; prompt?: string }): Run {
+function runOnce(label: string, o: { apps: string[]; mode?: string; timeoutSec?: number; job?: string; meminfo?: string; env?: Record<string, string>; prompt?: string; direct?: boolean }): Run {
   const home = path.join(tmp, `home-${label}`);
   fs.mkdirSync(home, { recursive: true });
   const runId = newCollectRunId(new Date(), crypto.randomBytes(6).toString("hex"));
   const dir = collectRunDir(home, runId);
   const job = { ...collectJob({ runId, home, prompt: o.prompt ?? "점검 지시", apps: o.apps }), bin: fakeBin, ...(o.timeoutSec ? { timeoutSec: o.timeoutSec } : {}) };
-  const w = spawnSync("sh", ["-c", collectWriteSh(dir, { "job.json": o.job ?? JSON.stringify(job), "run.cjs": COLLECT_RUNNER_JS, "gate.cjs": COLLECT_GATE_JS, "cap.cjs": COLLECT_CAPTURE_JS })], { encoding: "utf8" });
-  assert.equal(w.status, 0, w.stderr);
-  assert.match(w.stdout, /written/);
+  const files = { "job.json": o.job ?? JSON.stringify(job), "run.cjs": COLLECT_RUNNER_JS, "gate.cjs": COLLECT_GATE_JS, "cap.cjs": COLLECT_CAPTURE_JS };
+  if (o.direct) {
+    //  쓰기 셸을 거치지 않는다 — 셸 인자 상한(P7)보다 큰 지시로 러너만 시험할 때.
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const [n, v] of Object.entries(files)) fs.writeFileSync(path.join(dir, n), v, { mode: 0o600 });
+  } else {
+    const w = spawnSync("sh", ["-c", collectWriteSh(dir, files)], { encoding: "utf8" });
+    assert.equal(w.status, 0, w.stderr);
+    assert.match(w.stdout, /written/);
+  }
   const logFile = path.join(tmp, `fake-${label}.json`);
   const r = spawnSync(NODE, [path.join(dir, "run.cjs"), dir], {
     encoding: "utf8", timeout: 90_000,
@@ -441,8 +448,8 @@ t("R15 커넥터가 붙은 뒤에 시작하게 한다(MCP_CONNECTION_NONBLOCKING
 });
 
 t("R16 claude 가 지시를 읽기 전에 끝나도(stdin 닫힘) 러너는 죽지 않고 claude 의 종료 코드로 끝낸다", () => {
-  //  지시를 파이프 버퍼(64KB)보다 크게(약 280KB) — 쓰는 도중에 읽는 쪽이 닫혀 EPIPE 가 반드시 난다. 쓰기 셸이 argv 로 넘기므로 1MB 밑으로.
-  const r = runOnce("r16", { apps: ["Slack"], mode: "nostdin", prompt: "지시 ".repeat(40_000), env: fast });
+  //  지시를 파이프 버퍼(64KB)보다 크게(약 1MB) — 쓰는 도중에 읽는 쪽이 닫혀 EPIPE 가 반드시 난다. 쓰기 셸의 인자 상한(P7)을 넘으므로 파일을 바로 쓴다.
+  const r = runOnce("r16", { apps: ["Slack"], mode: "nostdin", prompt: "지시 ".repeat(150_000), env: fast, direct: true });
   assert.ok(r.fake?.nostdin, "배선 — 가짜 claude 의 -p 가 실제로 떴다");
   assert.equal(r.exit.error, "claude exit 7", "«runner: write EPIPE» 가 아니다");
   assert.equal(r.exit.code, 7);
@@ -527,6 +534,19 @@ t("P6 쓰기 셸은 이상한 파일 이름·폴더·세션 id 를 거절한다"
   assert.throws(() => collectWriteSh(d, { "../x": "1" }));
   assert.throws(() => collectWriteSh("/tmp/x", { "a.json": "1" }));
   assert.throws(() => collectSessionNoteSh(d, "box;rm"));
+});
+
+t("P7 쓰기 셸 크기 상한 — 덩이(base64)가 상한이면 쓰고, 한 글자라도 넘으면 분명한 오류(리눅스 인자 128KB 에서 말 없이 죽지 않게)", () => {
+  const d = "/home/box_yoon/.cache/lvly-collect/cr-20261016030405-abc9xy";
+  //  JSON.stringify({"job.json": x}) = x + 15 바이트 → base64 = 4·⌈(x+15)/3⌉. 상한 120KB = 122,880 → x = 92,145 가 정확히 상한.
+  const at = (k: number) => collectWriteSh(d, { "job.json": "a".repeat(k) });
+  assert.equal(COLLECT_WRITE_MAX_B64, 122_880);
+  assert.ok(at(92_145).length < 131_072, "정확히 상한 — 셸 전체도 리눅스 인자 상한(128KB) 밑");
+  assert.throws(() => at(92_146), /너무 큽니다/);
+  //  지금 실리는 실제 파일(러너·훅 + 사람 지시 상한 8,000자 한글)은 넉넉히 밑이다
+  const real = { "job.json": JSON.stringify(collectJob({ runId: "cr-20261016030405-abc9xy", home: "/h", prompt: "가".repeat(8000) })),
+    "run.cjs": COLLECT_RUNNER_JS, "gate.cjs": COLLECT_GATE_JS, "cap.cjs": COLLECT_CAPTURE_JS };
+  assert.ok(collectWriteSh(d, real).length < 100_000);
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

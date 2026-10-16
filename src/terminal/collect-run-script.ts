@@ -438,6 +438,13 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
 const q = (s: string): string => `'${String(s).replace(/'/g, "'\\''")}'`;
 
 /**
+ * 쓰기 셸이 싣는 파일 덩이(base64)의 상한. 셸 스크립트 전체가 `sh -c` 의 인자 **하나**로, 덩이가 `node -e` 의 인자 하나로 간다 —
+ *  리눅스는 인자 하나를 128KB(MAX_ARG_STRLEN)까지만 받아 넘으면 E2BIG 로 아무 말 없이 실패한다(맥은 이 상한이 없다 —
+ *  2026-10-16 CI 실측). 지금 실리는 것은 러너·훅 약 22KB + 지시(사람 지시 8,000자 · 서버 지시 수 KB)라 덩이가 60KB 밑이다.
+ */
+export const COLLECT_WRITE_MAX_B64 = 120 * 1024;
+
+/**
  * (순수) 실행 폴더를 만들고 파일 넷을 쓰는 셸. 멤버 경계(그 사람 uid · 그 사람 홈)에서 돈다.
  *  · 파일 내용은 base64 JSON 한 덩이로 넘겨 node 가 쓴다 — 셸이 내용을 해석할 자리를 없앤다(따옴표·$·줄바꿈).
  *  · ⚠ `node -e <script> a b` 는 a 가 argv[1] 이다(ai-login-run.ts 머리말에서 실측으로 밟은 자리).
@@ -448,6 +455,7 @@ export function collectWriteSh(dir: string, files: Record<string, string>): stri
   for (const n of Object.keys(files)) if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(n)) throw new Error(`파일 이름 형식 오류: ${n}`);
   const parent = dir.slice(0, dir.lastIndexOf("/"));
   const b64 = Buffer.from(JSON.stringify(files), "utf8").toString("base64");
+  if (b64.length > COLLECT_WRITE_MAX_B64) throw new Error(`수집 실행 파일이 너무 큽니다(${Math.ceil(b64.length / 1024)}KB > ${COLLECT_WRITE_MAX_B64 / 1024}KB) — 지시를 줄여 주세요`);
   const writer = `const fs=require("fs"),path=require("path");const d=process.argv[1];const f=JSON.parse(Buffer.from(process.argv[2],"base64").toString("utf8"));for(const n of Object.keys(f))fs.writeFileSync(path.join(d,n),f[n],{mode:0o600});`;
   return [
     `command -v node >/dev/null 2>&1 || { echo "node 없음" >&2; exit 127; }`,
