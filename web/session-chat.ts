@@ -1050,9 +1050,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   **숨긴 채 대화창 자리에 같은 크기로** 먼저 붙여 두고(startTermWarm), 액자가 «하네스가 처음 그렸다»(lively-term-painted)를
   //   알리면 그때 터미널로 넘긴다. 크기를 미리 맞추는 이유: display:none 인 액자는 fit 이 안 돼 크기를 못 알리고
   //   (terminal.ts canReportSize), 넘기는 순간 크기가 바뀌면 하네스가 화면을 다시 그린다.
-  //   신호가 끝내 안 오면(옛 액자 · 하네스가 안 뜸) 상한 뒤 종전처럼 넘긴다 — 터미널에서 무슨 일인지 보이게.
+  //   신호가 끝내 안 오면(하네스가 안 뜸) 상한 뒤 종전처럼 넘긴다 — 터미널에서 무슨 일인지 보이게. 상한은 넉넉히 둔다:
+  //   하네스 기동이 느린 날은 15~20초도 걸렸다(매니지드 실측 2026-10-16) — 상한이 짧으면 그날 종전의 빈 터미널이 그대로 돌아온다.
+  //   막힌 경우는 따로 빨리 드러난다 — 세션이 없어지면 액자가 알려 대화창으로(#3847) · 끝남(status end)은 곧바로 터미널 · 연결 오류는 머리줄 칩.
   //   ⚠ 사람이나 다른 갈래가 화면을 정하면(setMode) 숨겨 붙이던 판은 거기서 끝난다 — 신호가 와도 화면을 뺏지 않는다.
-  const TERM_WARM_MAX_MS = 12_000;
+  const TERM_WARM_MAX_MS = 25_000;
   let termWarm: { timer: number; ro: ResizeObserver | null } | null = null;
   //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
   let warmOwed = false;
@@ -1330,7 +1332,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     const stCls = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : '';
     //  #4794 — 숨겨 붙이는 동안 액자가 «끝났다»(end — 종료 배너)를 말하면 기다리지 않고 터미널로 넘긴다(그 배너를 봐야 한다 · 종전 화면).
-    //   연결 오류(err — 재연결 중 · 연결할 수 없음)는 넘기지 않되 머리줄 칩으로는 보인다 — 숨긴 채 12초를 침묵하지 않게.
+    //   연결 오류(err — 재연결 중 · 연결할 수 없음)는 넘기지 않되 머리줄 칩으로는 보인다 — 숨긴 채 상한까지 침묵하지 않게.
     //   (재연결은 시도마다 err 를 다시 붙이므로 err 로 넘기면 한 번의 끊김에도 빈 터미널이 뜬다.)
     if (termWarm && stCls === 'end') endTermWarm(true);
     termStatusEl.hidden = termHost.hidden || (!!termWarm && stCls !== 'err') || !termStatusEl.textContent;
@@ -2075,6 +2077,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     applyText(chunk.text);
     olderBar();
     finishReplay();
+    //  #4794 — 말을 보내 되살린 화면(firstPrompt + 이미 있는 기록): 그 말은 아직 기록에 없다(되살아난 하네스가 뜨면 들어간다).
+    //   옮겨 오기 전 화면이 그리던 대기 말풍선을 여기서도 그린다 — 안 그리면 하네스가 그릴 때까지 대화창에 머무는 동안(termWarm)
+    //   방금 보낸 말이 사라져 보인다(매니지드 실측 2026-10-16: 되살린 뒤 6초 동안 그 말이 대화창에 없었다).
+    //   아래 syncOutbox 는 노드 칸이 있는 행을 건너뛰는데, 매니지드 행은 세션 호스트가 노드 칸에 실려 온다 — 그래서 이 자리를 못 메운다.
+    //   기록의 마지막 사람 말이 이미 그것이면(그새 들어갔다) 그리지 않는다. 나중에 기록에 나타나면 이 턴을 그대로 쓴다(pendingSent 규약).
+    if (firstPrompt && canType()) {
+      const lastAsk = [...recs].reverse().find((r) => r.t.text);
+      if (!lastAsk || !sameSaid(String(lastAsk.t.text), firstPrompt)) addPending(firstPrompt).state.textContent = QSTATE_TEXT.queued;
+      firstPrompt = null;
+    }
     view.scrollToBottom();
     paintState();
     void syncOutbox();   // 큐에 남은 내 말(다른 탭·홈 첫 지시·재시작 전) — 새로고침에도 대기 말풍선으로 되살아난다
@@ -2828,7 +2840,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   말을 보내 연 화면인데 열 때 터미널이 없었으면(목록 한 틱 지연) 곧바로 넘기지 않고 지금 숨겨 붙인다(warmOwed).
       if (termWarm && chatHome()) endTermWarm(false);
       if (warmOwed && !modeChosen && mode === 'chat' && !chatHome() && hasTerm()) startTermWarm();
-      if (!termWarm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
+      //   말로 되살리는 중(reviving)에도 넘기지 않는다 — 곧 새 화면(같은 id 로 다시 마운트)이 숨겨 붙였다가 그린 순간 넘긴다. 그 사이 목록이 «살아 있다» 를
+      //   먼저 실어 오면 종전엔 이 줄이 옛 화면을 빈 터미널로 넘겼고, 다시 마운트되며 대화창으로 돌아갔다가 또 터미널로 갔다(매니지드 실측 2026-10-16).
+      if (!termWarm && !reviving && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
