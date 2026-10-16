@@ -504,13 +504,16 @@ try {
       JSON.stringify(await audience(d1.id)));
     chk("W4c «나만» 단위에는 주인이 아닌 구성원(B)의 실행이 자료를 넣지 못한다(403) — 남의 로그인으로 모은 것이 주인 한 명에게만 열리지 않게",
       (await statusOf(() => store.storeUnitItems(dm.id, [item("w-dm-b")], { member: B }))) === 403 && (await srcRows("w-dm-b")).length === 0);
-    chk("W5 «나만» 단위는 정한 사람만 바꾼다 — 확인된 B 는 403 · 단위를 못 보는 관리자는 404",
-      (await statusOf(() => upd(dm.id, "viewers", B, { confirm: true }))) === 403 && (await statusOf(() => upd(dm.id, "me", B))) === 403
+    chk("W5 남이 정한 «나만» — 확인된 B 도 «모두» 로 넓히기·주인 바꾸기는 403 · 단위를 못 보는 관리자는 404 · 그대로 A 의 «나만»",
+      (await statusOf(() => upd(dm.id, "all", B, { confirm: true }))) === 403 && (await statusOf(() => upd(dm.id, "me", B))) === 403
         && (await statusOf(() => capOf("collect_unit_update").handler({ id: dm.id, visibility: "all", confirm: true }, ADMIN, {}))) === 404
-        && (await unitBy("w-dm")).owner_member === A);
-    await upd(dm.id, "viewers", A, { confirm: true });
-    chk("W5b 정한 사람이 «볼 수 있는 사람만» 으로 넓히면(확인) B 도 본다 · 주인 칸이 비워진다",
-      (await canSeeSource(d1.id, B)) && (await unitBy("w-dm")).owner_member == null, JSON.stringify(await audience(d1.id)));
+        && (await unitBy("w-dm")).visibility === "me" && (await unitBy("w-dm")).owner_member === A);
+    const bNoConfirm = await statusOf(() => upd(dm.id, "viewers", B));
+    const bWiden = await upd(dm.id, "viewers", B, { confirm: true });
+    chk("W5b 다른 확인된 구성원(B)은 남의 «나만» 을 «볼 수 있는 사람만» 으로 바꿀 수 있다(상민님 2026-10-16) — 이미 모은 자료가 있으면 확인 뒤 · B 도 본다 · 주인 칸이 비워진다",
+      bNoConfirm === 409 && bWiden.unit?.visibility === "viewers" && (await canSeeSource(d1.id, B)) && (await unitBy("w-dm")).owner_member == null
+        && !(await canSeeSource(d1.id, C)),
+      JSON.stringify({ bNoConfirm, vis: bWiden.unit?.visibility, aud: await audience(d1.id) }));
 
     await store.storeUnitItems(priv.id, [item("w-priv-1")], { member: A });
     const v1 = (await srcRows("w-priv-1"))[0];

@@ -294,7 +294,7 @@ test("V3 고치기: 구성원 경로 = 확인된 구성원만(신고만 한 사�
   assert.equal(canEditUnit(c, "z", false), false);
 });
 
-test("V4 공개범위 바꾸기 — 고칠 수 있는 사람만 · «나만» 은 확인된 사람만 고른다 · «나만» 단위는 정한 사람만 바꾼다", () => {
+test("V4 공개범위 바꾸기 — 고칠 수 있는 사람만 · «나만» 은 확인된 사람만 고른다 · 남의 «나만» 은 «볼 수 있는 사람만» 으로만", () => {
   const vis = (visibility: "me" | "viewers" | "all", owner: string | null, members: Array<{ member_id: string; verified: boolean; active?: boolean }>,
     route: "member_ai" | "lively_collector" = "member_ai") => ({ route, members, visibility, owner });
   const m = vis("viewers", null, [{ member_id: "a", verified: true }, { member_id: "c", verified: false }]);
@@ -305,13 +305,19 @@ test("V4 공개범위 바꾸기 — 고칠 수 있는 사람만 · «나만» �
   //  수집기 단위 — 관리자는 고칠 수 있어도 확인되지 않았으면 «나만» 을 못 고른다.
   assert.equal(visibilityChangeError(vis("viewers", null, [], "lively_collector"), "all", "z", true), null);
   assert.match(String(visibilityChangeError(vis("viewers", null, [], "lively_collector"), "me", "z", true)), /확인된 사람만/);
-  //  «나만» 단위: 주인만 · 다른 확인된 구성원은 넓히지도 넘겨받지도 못한다 · 관리자도.
-  const mine = vis("me", "a", [{ member_id: "a", verified: true }, { member_id: "b", verified: true }]);
+  //  «나만» 단위: 정한 사람은 무엇으로든 · 다른 확인된 구성원은 «볼 수 있는 사람만» 으로만(상민님 2026-10-16) —
+  //   «모두» 로 넓히기·주인 바꾸기는 못 한다 · 확인되지 않은 사람(신고만 · 관리자)은 아무것도 못 한다.
+  const mine = vis("me", "a", [{ member_id: "a", verified: true }, { member_id: "b", verified: true }, { member_id: "c", verified: false }]);
   assert.equal(visibilityChangeError(mine, "viewers", "a", false), null);
   assert.equal(visibilityChangeError(mine, "all", "a", false), null);
-  assert.match(String(visibilityChangeError(mine, "viewers", "b", false)), /정한 사람만/);
-  assert.match(String(visibilityChangeError(mine, "me", "b", false)), /정한 사람만/);
-  assert.match(String(visibilityChangeError({ ...mine, route: "lively_collector" }, "all", "z", true)), /정한 사람만/);
+  assert.equal(visibilityChangeError(mine, "viewers", "b", false), null);
+  assert.match(String(visibilityChangeError(mine, "all", "b", false)), /볼 수 있는 사람만» 으로만/);
+  assert.match(String(visibilityChangeError(mine, "me", "b", false)), /볼 수 있는 사람만» 으로만/);
+  assert.match(String(visibilityChangeError(mine, "viewers", "c", false)), /권한/);
+  //  수집기 메일함처럼 주인 한 명만 확인된 «나만» — 확인 안 된 관리자는 고칠 수는 있어도(수집기 단위) 남의 «나만» 은 못 바꾼다.
+  const box = vis("me", "a", [{ member_id: "a", verified: true }], "lively_collector");
+  assert.match(String(visibilityChangeError(box, "viewers", "z", true)), /정한 사람만/);
+  assert.match(String(visibilityChangeError(box, "all", "z", true)), /정한 사람만/);
 });
 test("V5 «나만» 넘겨받기 — 주인이 확인되지 않았거나(신고만) 내보낸 사람이면 확인된 구성원이 넘겨받는다 · 확인 안 된 관리자는 못 한다", () => {
   const claimed = { route: "member_ai" as const, visibility: "me" as const, owner: "c", members: [{ member_id: "c", verified: false }, { member_id: "b", verified: true }] };
