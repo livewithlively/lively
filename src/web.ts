@@ -35,6 +35,7 @@ import {
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword, hasCredential } from "./auth/local-accounts.js";
 import { activeProviders } from "./auth/providers.js";
+import { ssoLogoutRedirect } from "./auth/logout-redirect.js";
 import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO)은 Enterprise — 미탑재면 local 만 남는다
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
@@ -239,12 +240,15 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
   registerAppFrontRoutes(app);
 
+  // IdP 로 로그인한 세션이면 redirect(IdP 로그아웃 문)를 함께 준다 — 브라우저가 그리로 가야 IdP 세션까지 끝난다.
+  //  그 외 로그인은 종전 응답 {ok:true} 그대로다(auth/logout-redirect.ts).
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);
-    if (sid) await revokeSession(sid);
+    const ended = sid ? await revokeSession(sid) : null;
     res.setHeader("Set-Cookie", clearSessionCookie());
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true });
+    const redirect = await ssoLogoutRedirect(ended, () => gatewayUrlForRequest(req), ee().sso);
+    res.json(redirect ? { ok: true, redirect } : { ok: true });
   }));
 
   // 본인 비번 변경 — 세션/토큰 인증 필요. 현재 비번 확인 후 교체(8자+).

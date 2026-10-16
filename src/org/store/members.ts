@@ -839,7 +839,9 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   //   ⚠ 로그인 판정(auth/local-accounts.ts verifyLogin)도 사람만 찾는다 — 두 겹이다.
   if (after && after.kind !== "human") {
     await itemsPool.query(`DELETE FROM member_credential WHERE member_id=$1`, [m.id]);
-    await itemsPool.query(`UPDATE web_session SET revoked_at=now() WHERE member_id=$1 AND revoked_at IS NULL`, [m.id]);
+    // 보관한 IdP 토큰도 회수와 같이 지운다 — 끝난 세션에 남길 이유가 없다(auth/sessions.ts revokeSession 과 같은 원칙).
+    await itemsPool.query(
+      `UPDATE web_session SET revoked_at=now(), sso_id_token_enc=NULL WHERE member_id=$1 AND revoked_at IS NULL`, [m.id]);
   }
   // person/person_identity 동기화 — UI 편집이 즉시 게이트웨이 신원 매칭에 반영(load-bindings 와 동일 계약).
   if (after) await syncMemberToPerson(after);
