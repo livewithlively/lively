@@ -668,35 +668,77 @@ test("H1 registry 형제 함수 — 사유를 함께 준다 · sessionHostFor �
   assert.ok(lines.some((l) => /return sessionHostTargetFor\(sessionId, op, now\)\.host;/.test(l)), "sessionHostFor 가 형제 함수를 안 지난다 — 판정이 두 벌이 된다");
 });
 
-// ── #4794 «다 쳤다» 알림(onTyped) — 사람에게 «보냈다» 는 Enter 를 누른 순간이다(에코는 제출 훅 뒤에 적혀 몇 초 늦다) ──
-test("T1~T6 onTyped — 사람의 말을 다 치고 Enter 까지 누른 뒤 **에코를 보기 전에 한 번만** · 쳤는지 모르거나 못 쳤거나 설정 명령이면 안 부른다", async () => {
+// ── #4794 «보냈다» 알림(onTyped) — 사람에게 «보냈다» 는 실제로 제출된 때다(에코는 제출 훅 뒤에 적혀 몇 초 늦다) ──
+test("T1~T6 onTyped — 한 번만 · 입력칸을 못 보는 하네스는 다 친 때 · claude 는 입력칸이 빈 것을 본 박자(에코가 먼저면 그때) · 쳤는지 모르거나 못 쳤거나 설정 명령이면 안 부른다", async () => {
   type Typed = Awaited<ReturnType<Parameters<typeof sendReadyRow>[2]["type"]>>;
-  const run = async (typed: Typed, kind: "prompt" | "control", answers: Array<"confirmed" | "timeout" | "unreadable">, onTypedThrows = false) => {
+  type Echoed = "confirmed" | "timeout" | "unreadable";
+  //  Claude Code 입력칸(submit-check.test 와 같은 문법) — 가로줄 둘 사이 «❯» 줄.
+  const NB = "\u00A0", RULE = "─".repeat(60), TEXT = "첫 줄\n둘째 줄";
+  const screen = (box: string): string => [" ▐▛███▛█   Claude Code v2.1.301", "", RULE, box, RULE, "  ⏵⏵ auto mode on (shift+tab to cycle)"].join("\n");
+  const EMPTY = screen(`❯${NB}`), OURS = screen(`❯${NB}첫 줄 둘째 줄`);
+  const run = async (o: { typed?: Typed; kind?: "prompt" | "control"; harness?: string; answers?: Echoed[]; panes?: Array<string | null>; ticks?: number; throws?: boolean }) => {
     const log: string[] = [];
-    //  peek — #4818 의 입력칸 지킴이가 창 끝에 본다. «모른다» 로 답해 종전대로 누르게 둔다(이 시험은 알림의 자리만 잰다).
-    const exec = { type: async () => { log.push("type"); return typed; }, enter: async () => { log.push("enter"); }, peek: async () => ({ ok: false as const, verdict: "unknown" as const }) };
-    let i = 0;
-    const echo = async () => { log.push("echo"); return answers[Math.min(i++, answers.length - 1)]; };
-    const out = await sendReadyRow({ text: "첫 줄\n둘째 줄", kind }, "claude", exec, echo, undefined, () => { log.push("typed"); if (onTypedThrows) throw new Error("알림 실패"); });
-    return { out, log };
+    let now = 0;
+    const panes = o.panes ?? [null];
+    let pi = 0;
+    const exec = {
+      type: async () => { log.push("type"); return o.typed ?? ({ next: "echo" } as Typed); },
+      enter: async () => { log.push("enter"); },
+      peek: async () => {
+        const p = panes[Math.min(pi++, panes.length - 1)];
+        log.push(p === EMPTY ? "peek:empty" : p === OURS ? "peek:ours" : "peek:?");
+        const seen: PaneSeen = p ? { ok: true, pane: p, paneCmd: "claude" } : { ok: false, verdict: "unknown" };
+        return seen;
+      },
+    };
+    const answers = o.answers ?? ["confirmed"];
+    let ai = 0;
+    //  waitEcho 처럼 폴마다 박자를 부른다 — 시계를 1.1초씩(지킴이는 1초에 한 걸음).
+    const echo = async (_line: string, tick?: () => Promise<void>): Promise<Echoed> => {
+      for (let k = 0; k < (o.ticks ?? 4); k++) { now += 1_100; await tick?.(); }
+      log.push("echo");
+      return answers[Math.min(ai++, answers.length - 1)];
+    };
+    const out = await sendReadyRow({ text: TEXT, kind: o.kind ?? "prompt" }, o.harness ?? "claude", exec, echo, { now: () => now },
+      () => { log.push("typed"); if (o.throws) throw new Error("알림 실패"); });
+    return { out, log, typedAt: log.indexOf("typed"), count: log.filter((x) => x === "typed").length };
   };
-  //  T1 다 쳤다 · 에코 확인 → 친 뒤 · 에코 전에 한 번
-  let r = await run({ next: "echo" }, "prompt", ["confirmed"]);
+  //  T1 입력칸을 못 보는 하네스(지킴이 없음) — 다 친 때(친 직후 · 에코 전)
+  let r = await run({ harness: "codex" });
+  assert.deepEqual(r.log.slice(0, 2), ["type", "typed"], "지킴이 없는 하네스에서 친 직후에 알리지 않았다");
+  assert.ok(r.typedAt < r.log.indexOf("echo"));
+  //  T2 claude · 첫 박자에 입력칸이 비었다(곧바로 제출됐다) → 그 박자 바로 뒤 · 에코 전
+  r = await run({ panes: [EMPTY] });
+  assert.equal(r.log[r.typedAt - 1], "peek:empty", "입력칸이 빈 것을 본 박자 뒤가 아니다");
+  assert.ok(r.typedAt > 0 && r.typedAt < r.log.indexOf("echo"), "에코를 기다린 뒤에야 알렸다");
+  assert.equal(r.log[1], "peek:empty", "다 친 때(입력칸을 보기 전)에 알렸다 — 붙여넣기 뒤 제출까지 1~2초 이르다");
+  //  T3 claude · 우리 글이 남아 있다 → 지킴이가 Enter 를 더 누른 뒤 빈 것을 본 박자에(그 전엔 안 알린다)
+  r = await run({ panes: [OURS, OURS, EMPTY] });
+  assert.ok(r.log.indexOf("enter") >= 0 && r.typedAt > r.log.indexOf("enter"), "입력칸에 우리 글이 남은 채로 알렸다");
+  assert.equal(r.log[r.typedAt - 1], "peek:empty");
+  //  T4 claude · 입력칸을 못 읽는다 → 에코가 확인된 때
+  r = await run({ panes: [null] });
+  assert.ok(r.typedAt > r.log.indexOf("echo") && r.log.indexOf("echo") >= 0, "입력칸을 못 보는데 에코 전에 알렸다");
   assert.deepEqual(r.out, { kind: "mark", status: "delivered" });
-  assert.deepEqual(r.log, ["type", "typed", "echo"], "알림이 친 뒤 · 에코 전이 아니다");
-  //  T2 미제출 방어 Enter 를 한 번 더 눌러도 알림은 한 번
-  r = await run({ next: "echo" }, "prompt", ["timeout", "confirmed"]);
-  assert.deepEqual(r.log, ["type", "typed", "echo", "enter", "echo"], "다시 누를 때 알림을 또 보냈다");
-  //  T3 설정 명령(control) — 사람의 말이 아니다(대화창 말풍선 없음)
-  r = await run({ next: "echo" }, "control", ["confirmed"]);
-  assert.ok(!r.log.includes("typed"), "설정 명령에 «보냈다» 를 알렸다");
-  //  T4 쳤는지 모른다(echo-only) · T5 치다 멈췄다(fail) · 한 글자도 안 갔다(stall) — «보냈다» 가 아니다
+  //  T5 claude · 끝내 우리 글이 남고 에코도 없다 → 알리지 않는다(화면은 유예로 넘긴다)
+  r = await run({ panes: [OURS], answers: ["timeout", "timeout"] });
+  assert.equal(r.count, 0, "제출됐다는 근거 없이 «보냈다» 를 알렸다");
+  //  T6 한 번만 — 빈 입력칸을 여러 번 보고 에코도 확인돼도
+  r = await run({ panes: [EMPTY], ticks: 6, answers: ["confirmed"] });
+  assert.equal(r.count, 1, "알림이 두 번 이상 나갔다");
+  //  T6b 미제출 방어 Enter 를 다시 눌러도 한 번(지킴이 없는 하네스 — 친 때 한 번)
+  r = await run({ harness: "codex", answers: ["timeout", "confirmed"] });
+  assert.equal(r.count, 1);
+  //  T6c 설정 명령(control) — 사람의 말이 아니다(대화창 말풍선 없음)
+  r = await run({ kind: "control", panes: [EMPTY] });
+  assert.equal(r.count, 0, "설정 명령에 «보냈다» 를 알렸다");
+  //  T6d 쳤는지 모른다(echo-only) · 치다 멈췄다(fail) · 한 글자도 안 갔다(stall)
   for (const typed of [{ next: "echo-only" }, { next: "fail", error: "send: x" }, { next: "stall", verdict: "unknown" }] as Typed[]) {
-    r = await run(typed, "prompt", ["confirmed"]);
-    assert.ok(!r.log.includes("typed"), `${JSON.stringify(typed)} 에서 «보냈다» 를 알렸다`);
+    r = await run({ typed, panes: [EMPTY] });
+    assert.equal(r.count, 0, `${JSON.stringify(typed)} 에서 «보냈다» 를 알렸다`);
   }
-  //  T6 알림이 던져도 배달은 그대로(비치명)
-  r = await run({ next: "echo" }, "prompt", ["confirmed"], true);
+  //  T6e 알림이 던져도 배달은 그대로(비치명)
+  r = await run({ panes: [EMPTY], throws: true });
   assert.deepEqual(r.out, { kind: "mark", status: "delivered" }, "알림 실패가 배달 결말을 바꿨다");
 });
 

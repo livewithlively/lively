@@ -456,9 +456,12 @@ export type SendOutcome =
  *   ③ 창 끝의 «미제출 방어 Enter» 도 화면으로 거른다(비었거나·다른 글·대화상자면 안 누른다 · 입력칸을 모르면 종전대로 누른다).
  *   `echo` 는 폴마다 `tick` 을 불러 준다(waitEcho). 시험은 가짜 시계(`clock`)를 넘긴다.
  *
- *  onTyped(#4794) — 사람의 말(prompt)을 **다 치고 Enter 까지 누른 순간** 한 번 부른다(에코를 기다리기 전). 사람에게 «보냈다» 는 이때다:
- *   Claude Code 는 제출 훅을 다 돈 뒤에야 그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16:
- *   제출 10.57초 · 기록에 적힘 14.51초). 쳤는지 모르는 갈래(echo-only)·설정 명령(control)·못 친 갈래에선 부르지 않는다.
+ *  onTyped(#4794) — 사람의 말(prompt)이 **실제로 제출된 때** 한 번 부른다. 사람에게 «보냈다» 는 이때다: Claude Code 는 제출 훅을 다 돈 뒤에야
+ *   그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16: 제출 10.57초 · 기록에 적힘 14.51초).
+ *   «제출됐다» 를 어떻게 아나: 입력칸을 볼 수 있으면(claude — 지킴이) **입력칸이 빈 것을 본 때**, 못 보면 다 치고 Enter 를 누른 때,
+ *   그보다 에코가 먼저 확인되면 그때. 다 친 때로만 알리면 이르다 — 붙여넣기 뒤 Claude Code 가 실제로 제출하기까지 1.4~2.3초가 걸려,
+ *   그동안 화면은 입력칸에 그 말이 그대로 남은 터미널을 보였다(매니지드 실측 2026-10-16 · 1b1b093e).
+ *   쳤는지 모르는 갈래(echo-only)·설정 명령(control)·못 친 갈래에선 부르지 않는다.
  *   ⚠ 배달의 확정은 여전히 에코다 — 이 알림으로 delivered 를 매기지 않는다(Enter 가 줄바꿈으로 먹힌 판이 있다).
  *   시계(clock) 뒤 마지막 인자다 — #4818 의 시험이 넷째·다섯째 자리를 쓴다.
  */
@@ -485,7 +488,6 @@ export async function sendReadyRow(
   //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
   //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
   if (row.kind === "control") return { kind: "mark", status: "sent", error: "control-no-echo" };
-  try { onTyped?.(); } catch (e) { logger.warn({ err: e }, "outbox: «다 쳤다» 알림 실패(비치명)"); }
   //  claude 만 지킨다 — 다른 하네스의 입력칸 문법은 모른다(needsSubmitRetry 와 같은 경계).
   const guard = harness === "claude"
     ? submitGuard({
@@ -494,15 +496,25 @@ export async function sendReadyRow(
       now: clock.now,
     }, oneLine)
     : null;
-  let echoed = await echo(oneLine, guard?.tick);
+  //  #4794 «보냈다» 알림(onTyped 머리말) — 한 번만. 지킴이가 없으면 지금(다 쳤다), 있으면 입력칸이 빈 것을 본 박자에, 에코가 먼저면 그때.
+  let told = false;
+  const tell = (): void => {
+    if (told) return;
+    told = true;
+    try { onTyped?.(); } catch (e) { logger.warn({ err: e }, "outbox: «보냈다» 알림 실패(비치명)"); }
+  };
+  if (!guard) tell();
+  const tick = guard ? async (): Promise<void> => { await guard.tick(); if (guard.last() === "empty") tell(); } : undefined;
+  let echoed = await echo(oneLine, tick);
   if (needsSubmitRetry(echoed, harness)) {
     // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).
     //  판정 근거는 needsSubmitRetry 머리말 — **에코를 못 읽은 경우(unreadable)도 포함**한다(#1867). 실패는 삼킨다(다음 에코 창에서 판정).
     //  #4818 — 누르기 전에 화면을 본다(지킴이의 마지막 관측). 우리 글이 없는 입력칸에 누르면 **거기 있는 무엇이든** 제출된다.
     if (!guard) await exec.enter();
     else await guard.pressAtWindowEnd();
-    echoed = await echo(oneLine, guard?.tick);
+    echoed = await echo(oneLine, tick);
   }
+  if (echoed === "confirmed") tell();
   //  #4818 — 지킴이가 더 누른 Enter 수(있을 때만) — 배달 루프가 한 줄 남긴다(«입력칸에 남아 다시 눌렀다» 가 얼마나 나나).
   const extra = guard?.presses() ? { extraEnters: guard.presses() } : {};
   if (echoed === "confirmed") return { kind: "mark", status: "delivered", ...extra };
