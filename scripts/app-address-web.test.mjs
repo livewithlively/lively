@@ -41,4 +41,22 @@ assert.equal(F.addrBlockValid(rec(UA, NOW + DAY), UA, NOW), false, "미래 시�
 for (const bad of [null, "", "{", "null", rec(UA, "x")]) assert.equal(F.addrBlockValid(bad, UA, NOW), false, String(bad));
 ok("W3 addrBlockValid — UA · 7일 경계 · 깨진 값");
 
+// W4 appGrantReturn(#4482) — 동의 경유에서 돌아갈 곳은 그 앱의 앱 주소만(열린 리다이렉트 방지)
+{
+  const D = "lvly.app", B = "https://talk-lively-46e3.lvly.app";
+  assert.equal(F.appGrantReturn("talk", B, "/c/1?x=2#t", D), B + "/c/1?x=2#t");
+  assert.equal(F.appGrantReturn("talk", B + "/", null, D), B + "/", "끝 / 는 같은 출처 · next 없으면 /");
+  assert.equal(F.appGrantReturn("talk", "https://talk-lively-46e3-draft.lvly.app", "/", D), "https://talk-lively-46e3-draft.lvly.app/", "초안 주소");
+  for (const [back, why] of [
+    ["https://evil.example", "다른 도메인"], ["https://talk-x.lvly.app.evil.io", "앱 도메인 뒤에 붙인 것"], ["http://talk-lively-46e3.lvly.app", "https 아님"],
+    ["https://deck-lively-46e3.lvly.app", "다른 앱"], ["https://a.talk-lively-46e3.lvly.app", "칸이 둘"], ["https://talk-lively-46e3.lvly.app:8443", "포트"],
+    ["https://talk-lively-46e3.lvly.app/x", "출처가 아니라 경로까지"], ["javascript:alert(1)", "스킴"], ["", "빈 값"], ["not a url", "주소 아님"],
+  ]) assert.equal(F.appGrantReturn("talk", back, "/", D), null, why);
+  for (const [next, why] of [["//evil.example/", "// 로 시작"], ["evil", "/ 로 시작 안 함"], ["/a b", "공백"], ["/a\\b", "역슬래시"], ["/" + "a".repeat(2048), "2,048자 넘음"]]) {
+    assert.equal(F.appGrantReturn("talk", B, next, D), null, why);
+  }
+  assert.equal(F.appGrantReturn("talk", B, "/", null), null, "앱 주소가 꺼진 워크스페이스");
+  ok("W4 appGrantReturn — 그 앱의 앱 주소 · 안전한 상대 경로만");
+}
+
 console.log(`\n${pass} passed`);

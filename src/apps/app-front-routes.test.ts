@@ -3,7 +3,8 @@
 //   계속 열리거나, 탐침이 아무 앱에나 들어가거나, 교환이 앱 도메인 밖 주소에 대해 코드를 소비한다.
 import assert from "node:assert/strict";
 import { signAppFront } from "./app-front-auth.js";
-import { appFrontMe, appFrontPage, appFrontRedeem, memberDisplayName, type AppFrontDeps } from "./app-front-routes.js";
+import { appFrontLively, appFrontMe, appFrontPage, appFrontRedeem, memberDisplayName, type AppFrontDeps } from "./app-front-routes.js";
+import type { AppFrontApiDeps } from "./app-front-api.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { OrgApp } from "../org/store/apps.js";
 
@@ -104,7 +105,8 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   assert.equal((await appFrontMe(actH({ app: "mine" }), d)).status, 404, "남의 「나만」 앱 — 없는 앱과 같다(#4667)");
   const r = await appFrontMe(actH({ var: "draft" }), d);
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "draft" }, session: null });
+  //  #4482 — app.title 과 동의 자리(consent_url)가 더해졌다. 이 배관(deps)엔 동의 자리를 만들 게이트웨이 주소가 없어 null.
+  assert.deepEqual(r.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "draft", title: "장표" }, session: null, consent_url: null });
   ok("E4 me — 403·404·404 · 성공 모양(판 그대로 · 세션 null)");
 }
 
@@ -155,6 +157,45 @@ function deps(over: Partial<AppFrontDeps> = {}) {
   assert.ok(ownDraft.status === 200 && ownDraft.html!.includes("<p>main</p>") && /draft\.example\.com/.test(ownDraft.headers!["Content-Security-Policy"]), "초안 주인은 초안 주소에서 설치된 화면 · 초안의 CSP");
   assert.equal((await appFrontPage(actH({ mid: "alice", var: "draft" }), "/", d)).status, 404, "남의 초안 주소는 없는 판");
   ok("E6 page — 남의 초안이 걸린 공개 앱: 공개 주소는 모두에게 공개 판의 화면 · CSP(초안 주인 포함) · 초안 주소는 초안 주인만(#4667)");
+}
+
+// ── E7 #4482 같은 주소 API(/_lively/*) — 문 · 사람 · 앱은 화면과 같은 판정, 답은 늘 JSON · 배관이 없으면 503 · me 의 동의 자리 ──
+//  사양 표 A-코어 C21~C24. 이게 틀리면: 서명 없는 요청 · 빠진 사람 · 「나만」 앱이 같은 주소 API 로는 도구를 부르거나, 새 탭의 앱이 동의 자리를 모른다.
+{
+  const ran: Array<{ name: string; who: string; address: string }> = [];
+  const api: AppFrontApiDeps = {
+    workspaceAccess: async () => true,
+    runTool: async (who, _app, name, _args, address) => { ran.push({ name, who: who.userId, address }); return { ok: name }; },
+    prefsGet: async () => ({ prefs: {} }), prefsSet: async () => ({ prefs: {} }),
+    gatewayBase: async () => "https://lively-46e3.app.lvly.io",
+  };
+  const { d } = deps({ api });
+  const r = await appFrontLively(actH(), "POST", "/store/notes/query", { match: {} }, d);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { ok: "store_query" });
+  assert.deepEqual(ran, [{ name: "store_query", who: "alice", address: "pub" }], "서명 안의 사람 · 주소의 판으로");
+  //  C21 문 — 꺼짐(스위치 밖) 404 · 서명 틀림 401 · op 가 redeem 이면 401 — 전부 JSON
+  const off = await appFrontLively(actH(), "GET", "/store/tables", undefined, deps({ api, env: { ...ENV, LIVELY_APP_DOMAIN_TENANTS: "maruru-9f0a" } }).d);
+  assert.ok(off.status === 404 && off.json && off.html === undefined, "꺼짐 404 JSON");
+  assert.equal((await appFrontLively({ "x-lvly-app-front": "v1.x.y" }, "GET", "/store/tables", undefined, d)).status, 401);
+  assert.equal((await appFrontLively(redeemH(), "GET", "/store/tables", undefined, d)).status, 401, "교환용 서명으로는 못 쓴다");
+  //  C22 사람 · 앱 — 비활성 403 · 에이전트 403 · 없는 앱 404 · 남의 「나만」 앱 404 — 도구는 안 부른다
+  const n = ran.length;
+  assert.equal((await appFrontLively(actH({ mid: "bob" }), "GET", "/store/tables", undefined, d)).status, 403);
+  assert.equal((await appFrontLively(actH({ mid: "robo" }), "GET", "/store/tables", undefined, d)).status, 403);
+  assert.equal((await appFrontLively(actH({ app: "nope" }), "GET", "/store/tables", undefined, d)).status, 404);
+  assert.equal((await appFrontLively(actH({ app: "mine" }), "GET", "/store/tables", undefined, d)).status, 404);
+  assert.equal(ran.length, n, "막힌 요청은 도구를 부르지 않는다");
+  //  C23 배관이 없으면 503(시험 · 옛 배선)
+  assert.equal((await appFrontLively(actH(), "GET", "/store/tables", undefined, deps().d)).status, 503);
+  //  C24 /_lively/me — 동의 자리 · 제목 · 세션은 늘 null
+  const me = await appFrontMe(actH(), d);
+  assert.equal(me.status, 200);
+  assert.deepEqual(me.json, { member: { id: "alice", name: "ALICE", email: "alice@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: "pub", title: "장표" },
+    session: null, consent_url: "https://lively-46e3.app.lvly.io/ui/#/app-grant/deck-edit?v=pub&back=https%3A%2F%2Fdeck-edit-lively-46e3.lvly.app" });
+  const meNoApi = await appFrontMe(actH(), deps().d);
+  assert.equal((meNoApi.json as { consent_url?: unknown }).consent_url, null, "배관이 없으면 동의 자리 없음");
+  ok("E7 같은 주소 API — 문 · 사람 · 앱 판정 · JSON · 503 · me 의 동의 자리");
 }
 
 console.log(`\n${pass} passed`);

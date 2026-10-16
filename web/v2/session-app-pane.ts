@@ -312,6 +312,8 @@ export function sessAppPart(ctx: PartCtx): Part {
       versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }, afterRevert); },
       original: () => { void revertToOrigin(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); },
       big: () => { openAppBig(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },   // 새 탭에서 화면 가득(폰은 그 자리에서)
+      //  #4482 맨 앱 주소를 새 탭으로 — 감싸는 라이블리 화면이 없어 세션 기능(chat.send · ui.*)은 빠지고, 표 · 설정 · 앱 폴더는 /_lively/* 로 돈다.
+      ...(frame?.addressUrl() ? { tab: () => { const u = frame.addressUrl(); if (u) window.open(u, '_blank', 'noopener'); } } : {}),
       detach: () => { void detachAppFromSession(s, cur.app_id).then((ok) => { if (ok) toast(`「${cur.title}」을(를) 이 세션에서 뗐어요 — 앱의 데이터는 그대로 남아요.`); }); },
     });
     //  앱이 연 메뉴면 앱의 항목이 맨 위에 선다 — 고르면 그 id 를 앱에 돌려주고(일은 앱이 한다), 그 밖은 null.

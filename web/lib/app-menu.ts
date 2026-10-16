@@ -30,6 +30,8 @@ export interface MenuHandlers {
   original(): void;      // 「원본으로 되돌리기」
   big(): void;           // 「크게 보기」
   detach(): void;        // 「이 세션에서 떼기」
+  /** #4482 「새 탭에서 열기」 — 맨 앱 주소(라이블리 밖 · 폰 홈 화면). 앱 주소가 꺼진 워크스페이스면 없다(줄을 그리지 않는다). */
+  tab?(): void;
 }
 
 /**
@@ -47,6 +49,7 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
     { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 버전으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
     { label: '크게 보기', icon: 'expand', hint: '새 탭 · 화면 가득', run: h.big },
+    ...(h.tab ? [{ label: '새 탭에서 열기', icon: 'ext', hint: '앱 주소 · 폰 홈 화면', run: h.tab }] : []),
     { label: '이 세션에서 떼기', icon: 'x', danger: true, hint: '데이터는 남음', run: h.detach },
   ];
 }

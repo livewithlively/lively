@@ -13,10 +13,13 @@
 //   다른 사이트라 allow-same-origin 을 줘도 라이블리에 못 닿는다(그 출처는 앱 주소 자신). 다리는 그대로 — 이 프레임 + 그 출처에서 온 것만 받고,
 //   답도 그 출처로만 보낸다. 브라우저가 앱 주소 쿠키를 막으면(사파리 26.2 전 등) 그 자리에서 종전 srcdoc 으로 바꿔 띄우고 이 브라우저는 다음부터
 //   바로 srcdoc 으로 연다 — 앱은 어느 길로 떠도 같은 SDK 로 돈다. 못 쓰는 경우(꺼짐·주소를 못 만드는 이름·권한)도 전부 종전 길로 간다.
+//  ★ #4482 v2-3 iframe 완화 — 평범한 웹 방식이 그대로 돌게: 두 길 모두 폼 제출 · alert/confirm/print · 내려받기를 연다(frameSandbox).
+//   앱 주소 길은 다른 사이트라 출처(allow-same-origin)와 팝업까지 — 쿠키 · localStorage · 새 창이 앱 주소의 것으로 돈다. 최상위 창 이동
+//   (allow-top-navigation)은 어느 길도 주지 않는다(설계 §2 ④). 장치 권한은 앱이 선언한 것만(frameAllow — 상민님 2026-10-16 «선언한 앱만»).
 import { api, el, state, toast } from '../core.js';
 import { PROBE_JS } from '../lib/studio-flow.js';   // #4632 검토 중인 앱의 문서에 넣는 탐침(찍은 자리의 요소 · 테두리)
 import { APP_RUNTIME_JS } from './app-ui-runtime.js';
-import { addrBlockValid, appAuthSignal, embedNext } from '../lib/app-address.js';   // #4480 앱 주소 — 순수 조각(시험: scripts/app-address-web.test.mjs)
+import { addrBlockValid, appAuthSignal, embedNext, frameAllow, frameSandbox } from '../lib/app-address.js';   // #4480 앱 주소 — 순수 조각(시험: scripts/app-address-web.test.mjs)
 import { ensureAppGrant } from './app-session.js';
 import { putIntoSession } from './sess-input.js';   // #4594 멈춘 세션에 보내려던 글을 그 세션 화면의 입력칸에 넣어 둔다(잎 모듈)
 //  #4530 앱 화면 안의 ⌘K → 셸 통합검색. omni.ts 를 직접 들이지 않는다 — 셸 화면 모듈 묶음(사이드바·자료 …)이 통째로 딸려 와
@@ -82,12 +85,15 @@ function addrBlockedHere(): boolean { try { return addrBlockValid(localStorage.g
 function markAddrBlocked(): void { try { localStorage.setItem(ADDR_BLOCK_KEY, JSON.stringify({ ua: navigator.userAgent, at: Date.now() })); } catch (_) { /* 저장소가 막혀도 이번 화면은 srcdoc 으로 바뀐다 */ } }
 /** 이 워크스페이스·이 브라우저에서 앱을 앱 주소로 띄우나. */
 export function appAddressOn(): boolean { return !!(state.me && state.me.app_domain) && !addrBlockedHere(); }
-interface AppLaunch { url: string; origin: string; page_key?: string; title?: string }
+interface AppLaunch { url: string; origin: string; page_key?: string; title?: string; variant?: 'pub' | 'draft'; devices?: string[] }
+
 function launchEmbed(appId: string, next: string): Promise<AppLaunch> {
   return api('/api/ui/apps/' + encodeURIComponent(appId) + '/launch', { method: 'POST', body: JSON.stringify({ mode: 'embed', next }) }) as Promise<AppLaunch>;
 }
 
-interface AppUiData { html: string; title?: string; page_key?: string; app_id?: string; pages?: Array<{ key: string; title: string }>; csp?: AppCsp }
+interface AppUiData { html: string; title?: string; page_key?: string; app_id?: string; pages?: Array<{ key: string; title: string }>; csp?: AppCsp;
+  /** #4482 이 사람이 보는 판의 앱 주소(새 탭에서 열기) — 앱 주소가 꺼졌거나 못 만드는 이름이면 없다. */
+  app_url?: string | null }
 export interface AppUiFrame {
   root: HTMLElement;
   destroy(): void;
@@ -99,6 +105,8 @@ export interface AppUiFrame {
   reload(): void;
   /** 이 프레임의 가장자리를 호스트가 가리는 폭(px)을 앱에 알린다(#4592 — 곁칸의 독). 다시 불러온 새 문서에도 처음에 한 번 다시 알린다. */
   setInsets(i: AppInsets): void;
+  /** #4482 이 앱을 새 탭(맨 앱 주소)으로 열 주소 — 앱 주소가 꺼진 워크스페이스면 null(그 자리에선 «새 탭에서 열기» 를 그리지 않는다). */
+  addressUrl(): string | null;
 }
 export interface AppInsets { top: number; right: number; bottom: number; left: number }
 
@@ -154,17 +162,23 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   };
   const first = launch ? null : await loadData();
   const meta = { title: launch?.title || first?.title, page_key: launch?.page_key ?? first?.page_key ?? null };
+  //  #4482 새 탭으로 열 맨 앱 주소 — 앱 주소로 띄웠으면 그 출처, srcdoc 이면 서버가 알려 준 주소(쿠키가 막힌 브라우저도 새 탭은 된다).
+  const pagePath = embedNext(opts?.page, false);
+  const addrUrl: string | null = launch ? launch.origin + pagePath : (first?.app_url ? String(first.app_url) : null);
+  const appVariant: 'pub' | 'draft' | null = launch?.variant ?? null;
   const docFor = (d: AppUiData): string => wrapAppHtml(d.html, d.csp, [opts?.extraScript || '', reviewProbe.has(appId) ? PROBE_JS : ''].filter(Boolean).join('\n') || undefined);
   let doc = first ? docFor(first) : '';
   const srcdocFrame = (d: string): HTMLIFrameElement => el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(reviewProbe.has(appId) ? { 'data-probe': '1' } : {}),
-    sandbox: 'allow-scripts',        // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼·팝업·top 이동 불허.
+    sandbox: frameSandbox('srcdoc'),   // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼 · 대화창 · 내려받기만(#4482), 팝업 · top 이동 불허.
     srcdoc: d,
   }) as HTMLIFrameElement;
-  //  앱 주소 프레임 — 다른 사이트(lvly.app)라 allow-same-origin 을 줘도 라이블리에 못 닿는다(그 출처는 앱 주소 자신). 폼·팝업 등 나머지 완화는 v2-3.
+  //  앱 주소 프레임 — 다른 사이트(lvly.app)라 allow-same-origin 을 줘도 라이블리에 못 닿는다(그 출처는 앱 주소 자신).
+  //   #4482 폼 · 팝업 · 내려받기 · 대화창 + 장치 권한(선언한 것만). allow 는 src 보다 먼저 서야 첫 문서부터 걸린다(붙이기 전이라 순서는 무관).
   const addrFrame = (url: string): HTMLIFrameElement => el('iframe', {
     class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(wantProbe() ? { 'data-probe': '1' } : {}),
-    sandbox: 'allow-scripts allow-same-origin',
+    sandbox: frameSandbox('address'),
+    allow: frameAllow(launch?.devices),
     src: url,
   }) as HTMLIFrameElement;
   //  appOrigin — 앱 주소로 떠 있을 때 그 출처(다리가 받고 보내는 상대). null = srcdoc(불투명 오리진 — '*' 로만 보낼 수 있다).
@@ -271,7 +285,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     if (msg.method === 'ui/initialize') {
       relaunches = 0;   // 앱 문서가 제대로 떴다 — 다음에 쿠키가 만료돼 로그인 신호가 오면 다시 한 번 새 코드로 띄울 수 있다
       greeted = true; clearHello();   // 인사 감시 끝 — 이 문서는 살아 있다
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId, chat: !!opts?.sessionId, me: true, grant: true, standalone: false } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).
@@ -387,6 +401,24 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       void req
         .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { prefs: (out && out.prefs) || {} } }))
         .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 413 ? -32602 : -32000, message: (e && e.message ? e.message : String(e)) } }));
+    } else if (msg.method === 'ui/me') {
+      // #4482 — 보는 사람 · 워크스페이스 · 이 앱 · 붙은 세션(lively.me). 앱 주소의 /_lively/me 와 같은 꼴 — srcdoc 길에는 같은 주소 API 가 없어
+      //  호스트가 답한다. 세션은 이 프레임을 띄운 쪽이 안다(앱 주소의 /_lively/me 는 쿠키가 여러 프레임에 같아 세션을 모른다).
+      const me = (state.me || {}) as { userId?: string; email?: string; display_name?: string; workspace_registry?: { current?: string } };
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: {
+        member: { id: me.userId || '', name: me.display_name || me.userId || '', email: me.email || null },
+        workspace: { slug: me.workspace_registry?.current || null },
+        app: { id: appId, variant: appVariant },
+        session: opts?.sessionId ?? null,
+      } });
+    } else if (msg.method === 'ui/grant') {
+      // #4482 — 앱이 동의를 청한다(lively.requestConsent — 앱이 /_lively/* 를 fetch 로 직접 부르다 403 consent_required 를 받았을 때).
+      //  사람이 누른 동작 안에서만 창을 띄운다(앱 혼자 창을 거듭 띄워 사람을 괴롭히지 못하게 — chat/send 와 같은 판정).
+      const ua = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation;
+      if (ua && !ua.isActive) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32001, message: '사람이 누른 동작에서만 동의를 청할 수 있습니다' } }); return; }
+      void ensureAppGrant(appId, opts?.title || meta.title)
+        .then((granted) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { granted } }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32000, message: (e && e.message ? e.message : String(e)) } }));
     } else if (msg.method === 'ui/openExternal') {
       // 샌드박스(allow-popups 없음)에선 앱이 새 탭을 못 연다 — 호스트가 대신 연다. http(s)만, noopener.
       const raw = String((msg.params as { url?: unknown } | undefined)?.url ?? '');
@@ -416,6 +448,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       if (d) doc = docFor(d);
       frame.srcdoc = doc + '<!-- lively:reload ' + (++loads) + ' -->';
     },
+    addressUrl: () => addrUrl,
     setInsets: (i) => {
       const n = (v: number): number => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
       const next = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };
@@ -471,6 +504,9 @@ export async function openAppUi(appId: string, opts?: { page?: string; title?: s
           el('b', { class: 'v2-appui-t', text: opts?.title || appId }),
           el('span', { class: 'v2-appui-badge', text: '앱 UI' }),
           el('span', { class: 'v2-appui-spacer' }),
+          //  #4482 맨 앱 주소를 새 탭으로(라이블리 밖 · 폰 홈 화면) — 앱 주소가 켜진 워크스페이스에서만.
+          ...(f.addressUrl() ? [el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '앱 주소를 새 탭에서 엽니다 — 라이블리 밖에서도 표 · 설정 · 앱 폴더가 그대로 돕니다',
+            onclick: () => { const u = f.addressUrl(); if (u) window.open(u, '_blank', 'noopener'); } }, el('span', { text: '새 탭에서 열기' }))] : []),
           //  «(Esc)» 는 키보드가 있는 화면의 안내다. 폰(50-mobile.css)은 걷는다(#4443).
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => closeAppUi() }, el('span', { text: '닫기' }), el('span', { class: 'v2-appui-esc', text: '(Esc)' }))),
         f.root));

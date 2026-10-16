@@ -25,6 +25,7 @@ import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunc
 import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
+import { webDevicesOf } from "../apps/manifest.js";
 import { logger } from "../log.js";
 
 const launchInput = {
@@ -63,6 +64,20 @@ const liveDeps: LaunchDeps = {
   mint: (i) => mintAppLaunchCode(i),
   now: () => Date.now(),
 };
+
+/**
+ * #4482 이 사람이 보는 판의 맨 앱 주소(「새 탭에서 열기」 · 여러 파일 앱의 srcdoc 안내) — 코드 없이 주소만. 그 주소로 가면 앞단이 로그인시킨다(직접 접속).
+ *  앱 주소가 꺼졌거나(매니지드 아님 · 스위치 밖) 이름으로 주소를 못 만들면 null.
+ */
+export function appAddressUrlFor(app: Pick<store.OrgApp, "id" | "visibility" | "owner_member" | "draft_by" | "published_version_no">, who: { userId: string; scopes?: readonly string[] },
+  page?: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  const tenant = currentTenant();
+  const domain = managedMode(env) && tenant ? appDomainFor(tenant.slug, env) : null;
+  if (!domain || !tenant) return null;
+  const host = appHost(tenant.slug, app.id, addressVariantFor(app, who), domain);
+  if (!host) return null;
+  return appOrigin(host) + (page ? "/?" + new URLSearchParams({ page }).toString() : "/");
+}
 
 export async function launchAppFor(input: Record<string, unknown>, user: LivelyUser | undefined, d: LaunchDeps = liveDeps): Promise<Record<string, unknown>> {
   const memberId = user?.userId || "";
@@ -128,6 +143,8 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
     url: `${origin}/_lively/auth?code=${encodeURIComponent(code)}&next=${encodeURIComponent(next)}`,
     origin, expires_in: Math.round(APP_LAUNCH_TTL_MS / 1000),
     app_id: appId, title: app.title || appId, page_key: pageKey, variant, mode,
+    //  #4482 그 판이 선언한 장치 권한 — 화면이 iframe 의 allow 에 이것만 위임한다(manifest.ts web.devices).
+    devices: webDevicesOf(pub ? pub.manifest : app.manifest),
   };
 }
 

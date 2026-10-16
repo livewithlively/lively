@@ -6,7 +6,9 @@
 //   · SDK 런타임(window.lively) — 원본은 web/v2/app-ui-runtime.ts **한 벌**. 서버는 웹 빌드 산출물(public/app/…)을 읽는다.
 //   · 앱 만들기 탐침(PROBE_JS, 「찍어서 의견」) — 원본은 web/lib/studio-flow.ts 한 벌. 앱 주소 쿼리 `__lively_probe=1` 일 때만.
 //   · CSP — srcdoc 은 meta 로만 실을 수 있었다. 여기서는 HTTP 헤더로 싣는다. 규칙은 app-ui.ts buildCsp 와 같고
-//     connect-src 에 'self' 하나만 더한다(같은 주소의 /_lively/me 를 부를 수 있게 — 바깥 연결은 여전히 매니페스트 선언만).
+//     connect-src 에 'self' 하나만 더한다(같은 주소의 /_lively/* 를 부를 수 있게 — 바깥 연결은 여전히 매니페스트 선언만).
+//     #4482 v2-3 — 폼은 **제 주소로만** 보낸다(form-action 'self'): 앱 화면 iframe 이 allow-forms 를 받아 평범한 <form> 이 돈다.
+//     바깥 주소로 보내는 폼(피싱 · 데이터 반출)은 여전히 막힌다. srcdoc(옛 길)은 제 주소가 없어 'none' 그대로(제출 이벤트는 돈다).
 //  frame-ancestors(그 워크스페이스 라이블리 주소 안에서만 iframe)는 앞단(CP 라우터)이 모든 응답에 붙인다.
 
 export interface AppCsp {
@@ -46,7 +48,7 @@ export function appPageCsp(csp?: AppCsp | null): string {
     "media-src " + withFiles(srcList(c.resource_domains), c.files),
     "connect-src " + withFiles(srcList(c.connect_domains, "'self'"), c.files),
     "frame-src " + srcList(c.frame_domains),
-    "form-action 'none'",
+    "form-action 'self'",
     "base-uri 'none'",
   ].join("; ");
 }
@@ -55,7 +57,7 @@ export function appPageCsp(csp?: AppCsp | null): string {
  * #4481 여러 파일 앱(web.root)의 문서 CSP — 위(v1)와 같은 선언(connect · resource · frame)을 따르되 **제 주소('self')의 파일**을 연다:
  *  빌드 도구가 만든 `<script type="module" src="/assets/…">` · 스타일 · 그림 · 폰트 · 워커 · 매니페스트. 외부 스크립트는 여전히 어떤 선언으로도 못 연다.
  *  'wasm-unsafe-eval' 은 WebAssembly 컴파일만 허락한다(JS eval 은 아니다 — 같은 샌드박스 안이라 새 권한이 아니다).
- *  form-action 은 v2-3(#4482 — iframe 제한 완화)까지 'none' 그대로.
+ *  form-action 'self' — #4482 v2-3: 폼은 제 주소로만(서버 없는 앱의 POST 는 앞단이 405, v2-6 부터 앱 서버로).
  */
 export function appPageCspMulti(csp?: AppCsp | null): string {
   const c = csp ?? {};
@@ -70,16 +72,24 @@ export function appPageCspMulti(csp?: AppCsp | null): string {
     "frame-src " + srcList(c.frame_domains),
     "worker-src 'self' blob:",
     "manifest-src 'self'",
-    "form-action 'none'",
+    "form-action 'self'",
     "base-uri 'self'",
   ].join("; ");
 }
 
-/** #4481 여러 파일 앱을 srcdoc(종전 길)으로 열게 됐을 때 — 이 브라우저가 앱 주소 로그인 쿠키를 막은 경우. 까닭과 할 일을 보인다. */
-export function multiFileFallbackHtml(title: string): string {
-  return appErrorHtml(`「${title}」 은(는) 이 브라우저에서 열 수 없습니다`,
-    "이 앱은 여러 파일로 된 앱이라 앱 주소(lvly.app)에서만 열립니다. 이 브라우저가 앱 주소의 로그인 쿠키를 막고 있어요 — "
-    + "크롬 · 파이어폭스 · 최신 사파리(26.2 이상) · 라이블리 데스크톱 앱에서 열어 주세요.");
+/**
+ * #4481 여러 파일 앱을 srcdoc(종전 길)으로 열게 됐을 때 — 이 브라우저가 앱 주소 로그인 쿠키를 막은 경우. 까닭과 할 일을 보인다.
+ *  #4482 — 앱 주소를 알면 «새 탭에서 열기» 단추를 단다: 새 탭은 맨 위 페이지라 쿠키가 막히지 않고, 앱은 /_lively/* 로 그대로 돈다.
+ *   srcdoc 은 팝업이 막혀 있어 호스트가 대신 연다(SDK lively.ui.openExternal — 이 문서에도 런타임이 들어간다).
+ */
+export function multiFileFallbackHtml(title: string, appUrl?: string | null): string {
+  const base = appErrorHtml(`「${title}」 은(는) 이 브라우저의 라이블리 화면 안에서 열 수 없습니다`,
+    "이 앱은 여러 파일로 된 앱이라 앱 주소(lvly.app)에서만 열립니다. 이 브라우저가 라이블리 화면 안에서는 앱 주소의 로그인 쿠키를 막고 있어요 — "
+    + (appUrl ? "새 탭에서 열면 그대로 쓸 수 있어요." : "크롬 · 파이어폭스 · 최신 사파리(26.2 이상) · 라이블리 데스크톱 앱에서 열어 주세요."));
+  //  주소는 서버가 만든 앱 주소다 — 그래도 HTML 속성 · 스크립트를 깰 글자(따옴표 · 꺾쇠 · 역슬래시 · 공백 · 백틱)가 있으면 단추를 달지 않는다.
+  if (!appUrl || !/^https:\/\/[a-z0-9.-]+\/[^"'`<>\\\s]*$/.test(appUrl)) return base;
+  const js = "window.lively&&window.lively.ui.openExternal(" + JSON.stringify(appUrl).replace(/</g, "\\u003c") + ")";
+  return base.replace("</body>", "<p><button type=\"button\" onclick='" + js.replace(/&/g, "&amp;").replace(/'/g, "&#39;") + "' style=\"font:inherit;padding:6px 14px;border-radius:8px;border:1px solid #ccd;background:#fff;cursor:pointer\">새 탭에서 열기</button></p></body>");
 }
 
 /** HTML 안에 넣는 스크립트가 문서를 깨지 않게 — `</script` 를 끊는다(원본 둘 다 우리 코드지만 한 번 더 막는다). */

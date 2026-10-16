@@ -491,6 +491,34 @@ if (!existsSync(built)) {
   }
 
 
+  // S2-20 (#4482) 호스트 다리의 새 메서드 — ui/me(보는 사람 · 붙은 세션) · ui/grant(사람이 누른 동작만) · 인사의 capabilities(사양 표 F H1~H3)
+  {
+    state.me = { userId: "alice", email: "a@x.io", display_name: "앨리스", workspace_registry: { current: "lively-46e3" } };
+    const { fire } = await mount({ sessionId: "box-mine" });
+    fire({ jsonrpc: "2.0", id: 71, method: "ui/initialize", params: {} });
+    fire({ jsonrpc: "2.0", id: 72, method: "ui/me", params: { session: "box-evil" } });
+    await settle();
+    const caps = replies.find((m) => m && m.id === 71).result.capabilities;
+    eq([caps.chat, caps.me, caps.grant, caps.standalone], [true, true, true, false], "S2-20 H3 세션이 붙은 자리 — chat · me · grant · standalone false");
+    eq(replies.find((m) => m && m.id === 72).result, { member: { id: "alice", name: "앨리스", email: "a@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: null }, session: "box-mine" },
+      "S2-20 H1 ui/me — 보는 사람 · 워크스페이스 · 이 앱 · 띄운 쪽 세션(앱이 말한 세션은 무시)");
+    const { fire: fire2 } = await mount({});
+    fire2({ jsonrpc: "2.0", id: 73, method: "ui/initialize", params: {} });
+    await settle();
+    eq(replies.find((m) => m && m.id === 73).result.capabilities.chat, false, "S2-20 H3 세션 없는 자리 — chat false");
+    globalThis.navigator.userActivation.isActive = false;
+    const before = document.body.children ? document.body.children.length : 0;
+    fire2({ jsonrpc: "2.0", id: 74, method: "ui/grant", params: {} });
+    await settle();
+    const r74 = replies.find((m) => m && m.id === 74);
+    ok(r74 && r74.error && r74.error.code === -32001, "S2-20 H2 사람이 누른 동작이 아니면 -32001");
+    eq(document.body.children ? document.body.children.length : 0, before, "S2-20 H2 동의 창을 띄우지 않는다");
+    globalThis.navigator.userActivation.isActive = true;
+  }
+
+  //  #4482 iframe 완화 — 두 길의 sandbox 값(web/lib/app-address.ts frameSandbox). 앱 주소는 출처 · 팝업까지, srcdoc 은 폼 · 대화창 · 내려받기만.
+  const ADDR_SB = "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads";
+  const SRC_SB = "allow-scripts allow-forms allow-modals allow-downloads";
   // S2-18 (#4480) 앱 주소 — 켜진 워크스페이스면 코드를 받아 앱 주소로 · 그 출처하고만 말한다 · 로그인 신호 · 쿠키 막힘 → srcdoc
   {
     const ORIGIN = "https://deck-edit-lively-46e3.lvly.app";
@@ -511,7 +539,8 @@ if (!existsSync(built)) {
     const launch = fetches.find((x) => x.url.includes("/launch"));
     eq(launch && launch.body, { mode: "embed", next: "/?page=settings" }, "S2-18 코드를 embed 로 받는다(화면 키는 앱 안 경로로)");
     ok(!fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 앱 주소로 띄우면 HTML 을 따로 받지 않는다");
-    eq([f.root.attrs.src, f.root.attrs.sandbox, f.root.attrs.srcdoc], [URL0, "allow-scripts allow-same-origin", undefined], "S2-18 src = 코드 붙은 앱 주소 · sandbox 에 allow-same-origin(다른 사이트) · srcdoc 없음");
+    eq([f.root.attrs.src, f.root.attrs.sandbox, f.root.attrs.srcdoc], [URL0, ADDR_SB, undefined], "S2-18 src = 코드 붙은 앱 주소 · sandbox 에 allow-same-origin(다른 사이트) · srcdoc 없음");
+    eq([f.root.attrs.allow, f.addressUrl()], ["clipboard-write; fullscreen; web-share", ORIGIN + "/?page=settings"], "S2-18 #4482 선언 없는 앱 — 장치 위임 없음 · 새 탭 주소는 그 화면");
     fire({ jsonrpc: "2.0", id: 61, method: "ui/initialize", params: {} }, "https://evil.lvly.app");
     await settle();
     eq(replies.length, 0, "S2-18 같은 프레임이어도 출처가 다르면 답하지 않는다");
@@ -525,32 +554,32 @@ if (!existsSync(built)) {
     fire({ type: "lively:app-auth", status: "code-invalid" });
     await settle();
     const swapped = f.root;
-    eq([swapped.attrs.sandbox, typeof swapped.attrs.srcdoc, swapped.attrs.src], ["allow-scripts", "string", undefined], "S2-18 두 번째 신호면 srcdoc 으로 — 새 프레임 · allow-same-origin 없음");
+    eq([swapped.attrs.sandbox, typeof swapped.attrs.srcdoc, swapped.attrs.src], [SRC_SB, "string", undefined], "S2-18 두 번째 신호면 srcdoc 으로 — 새 프레임 · allow-same-origin 없음");
     ok(fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 srcdoc 으로 바꿀 때 HTML 을 받는다");
     // 쿠키 막힘 → 이 브라우저는 다음부터 바로 srcdoc
     const m2 = await mountAddr({});
     m2.fire({ type: "lively:app-auth", status: "cookie-blocked" });
     await settle();
-    eq(m2.f.root.attrs.sandbox, "allow-scripts", "S2-18 cookie-blocked → 그 자리에서 srcdoc");
+    eq(m2.f.root.attrs.sandbox, SRC_SB, "S2-18 cookie-blocked → 그 자리에서 srcdoc");
     ok(localStorage.getItem("lively.appAddr.blocked"), "S2-18 쿠키 막힘을 기억한다");
     const m3 = await mountAddr({});
-    ok(!fetches.some((x) => x.url.includes("/launch")) && m3.f.root.attrs.sandbox === "allow-scripts", "S2-18 기억된 브라우저는 코드를 받지 않고 바로 srcdoc");
+    ok(!fetches.some((x) => x.url.includes("/launch")) && m3.f.root.attrs.sandbox === SRC_SB, "S2-18 기억된 브라우저는 코드를 받지 않고 바로 srcdoc");
     localStorage.removeItem("lively.appAddr.blocked");
     // 다른 출처의 신호는 무시
     const m4 = await mountAddr({});
     m4.fire({ type: "lively:app-auth", status: "cookie-blocked" }, "https://evil.lvly.app");
     await settle();
-    eq([m4.f.root.attrs.sandbox, localStorage.getItem("lively.appAddr.blocked")], ["allow-scripts allow-same-origin", null], "S2-18 다른 출처가 보낸 신호로는 바꾸지 않는다");
+    eq([m4.f.root.attrs.sandbox, localStorage.getItem("lively.appAddr.blocked")], [ADDR_SB, null], "S2-18 다른 출처가 보낸 신호로는 바꾸지 않는다");
     // 코드를 못 받으면(꺼짐 · 주소 없음 · 권한) 종전 길
     fetches.length = 0;
     plan = { "/launch": { status: 409, json: { code: "no_address", error: "x" } }, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
     const f5 = await mountAppUiFrame("deck-edit", {});
-    eq([f5.root.attrs.sandbox, typeof f5.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-18 코드를 못 받으면 종전 srcdoc");
+    eq([f5.root.attrs.sandbox, typeof f5.root.attrs.srcdoc], [SRC_SB, "string"], "S2-18 코드를 못 받으면 종전 srcdoc");
     // 그 밖의 덧붙임 스크립트(탐침이 아닌 것)는 앱 주소로 못 넣는다 → srcdoc
     fetches.length = 0;
     plan = { "/launch": launchPlan, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
     const f6 = await mountAppUiFrame("deck-edit", { extraScript: "console.log(1)" });
-    ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === "allow-scripts", "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
+    ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === SRC_SB, "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
     state.me = null;
   }
 
@@ -572,11 +601,11 @@ if (!existsSync(built)) {
     };
     // ① load 뒤 8초 안에 인사가 없으면 srcdoc
     const a = await mountAddr();
-    eq(a.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 앱 주소로 뜬다");
+    eq(a.g.root.attrs.sandbox, ADDR_SB, "S2-19 앱 주소로 뜬다");
     a.g.root.fireLoad();
     fireLong(8000);
     await settle();
-    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
+    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], [SRC_SB, "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
     eq(localStorage.getItem("lively.appAddr.blocked"), null, "S2-19 막힘으로 적지 않는다(다음엔 다시 앱 주소로)");
     // ② 인사한 문서는 감시가 멈춘다 — 이후 load·시간이 지나도 그대로
     longTimers.clear();
@@ -586,7 +615,7 @@ if (!existsSync(built)) {
     b.g.root.fireLoad();
     fireLong(8000); fireLong(20000);
     await settle();
-    eq(b.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 인사한 문서는 그대로 둔다");
+    eq(b.g.root.attrs.sandbox, ADDR_SB, "S2-19 인사한 문서는 그대로 둔다");
     eq(longTimers.size, 0, "S2-19 인사하면 감시 타이머를 거둔다");
     // ③ 다른 출처가 보낸 인사로는 감시가 안 멈춘다 · load 가 아예 안 와도 20초 받침
     longTimers.clear();
@@ -595,7 +624,7 @@ if (!existsSync(built)) {
     await settle();
     fireLong(20000);
     await settle();
-    eq(c.g.root.attrs.sandbox, "allow-scripts", "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
+    eq(c.g.root.attrs.sandbox, SRC_SB, "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
     // ④ 새 코드로 다시 띄우면(로그인 신호) 감시를 다시 건다 — 새 문서도 인사해야 한다
     longTimers.clear();
     const d = await mountAddr();
@@ -607,7 +636,7 @@ if (!existsSync(built)) {
     d.g.root.fireLoad();
     fireLong(8000);
     await settle();
-    eq(d.g.root.attrs.sandbox, "allow-scripts", "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
+    eq(d.g.root.attrs.sandbox, SRC_SB, "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
     longTimers.clear();
     state.me = null;
   }

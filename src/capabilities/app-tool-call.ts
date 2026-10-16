@@ -38,67 +38,87 @@ const appToolCall: Capability = {
         return { app_id: (req.params as Record<string, string>)?.id, name: b.name, arguments: b.arguments };
       } }],
   },
-  handler: async (input: Record<string, unknown>, member: LivelyUser | undefined, ctx) => {
+  handler: async (input: Record<string, unknown>, member: LivelyUser | undefined) => {
     if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
     const appId = String(input.app_id ?? "").trim();
     const name = String(input.name ?? "").trim();
     if (!appId || !name) throw new HttpError(400, "app_id 와 name 이 필요합니다");
-    if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
-
-    // 앱 존재·활성 확인. #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404).
-    const installed = await getApp(appId);
-    if (!installed || !canSeeApp(installed, { userId: member.userId, scopes: member.scopes ?? [] })) throw new HttpError(404, `앱 없음: ${appId}`);
-    if (installed.status !== "active" || !installed.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
-    //  선언은 **이 사람이 보는 판**의 것 — 공개 판을 보는 사람의 화면이 남의 초안이 새로 선언한 도구를 쓰지 않게.
-    const app = (await viewAppFor(installed, { userId: member.userId, scopes: member.scopes ?? [] })).app;
-
-    // 호출자(멤버)가 이 앱에 동의(grant)했나 — 없으면 이 UI 는 도구를 못 쓴다.
-    const grant = await getActiveGrant(appId, member.userId);
-    if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다`);
-
-    // #4225 — 동의가 **옛 범위**다: 앱이 갱신돼 새로 선언한 도구인데 예전 동의엔 없다(빌트인 「안녕 앱」 0.2 가 store_* 를 얻은 경우).
-    //  종전엔 아래 requireAppTool 의 «앱 권한 밖» 403 으로 끝나 화면이 막다른 길이었다. «동의» 로 말하면 호스트가 그 자리에서
-    //  동의 창을 띄우고(web/v2/app-ui.ts — /동의|grant/) 새 범위로 다시 동의한 뒤 한 번 재시도한다. 선언 밖 도구는 종전 그대로 막힌다.
-    const declared = (() => {
-      const p = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
-      return [...(Array.isArray(p?.tools) ? p.tools : []), ...(Array.isArray(p?.ext_tools) ? p.ext_tools : [])].map(String);
-    })();
-    if (needsRegrant(grant.tools, declared, name)) {
-      throw new HttpError(403, `앱 '${appId}' 의 사용 동의가 예전 범위라 '${name}' 을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`);
-    }
-
-    // 앱-principal 유저 — 스코프는 멤버 ∩ grant 로 축소, appId 를 실어 requireAppTool 이 grant 도구로 판정하게 한다.
-    const appUser: LivelyUser = {
-      ...member,
-      appId,
-      scopes: (member.scopes ?? []).filter((s) => grant.scopes.includes(s)),
-    };
-
-    // 대상 능력 조회(registry) — 동적 import 로 순환 회피(index → 이 파일 → index).
-    const { registry } = await import("./index.js");
-    const cap = registry.get(name);
-    if (!cap) throw new HttpError(404, `도구 없음: ${name}`);
-    if (cap.expose.mcp === false) throw new HttpError(403, `호출할 수 없는 도구입니다: ${name}`); // REST 전용 내부 능력은 브리지 대상 아님
-
-    // 집행 — 앱 세션 MCP 경로와 동일: 스코프 → 앱 도구 allowlist.
-    if (cap.scope) requireScope(appUser, cap.scope);
-    await requireAppTool(appUser, name);
-
-    // 입력 검증(MCP 표면과 동일 zod 셰이프). 실패 = 400.
-    let args: unknown;
-    try { args = z.object(cap.input as z.ZodRawShape).parse(input.arguments ?? {}); }
-    catch (e) { throw new HttpError(400, `인자 검증 실패: ${(e as Error)?.message ?? e}`); }
-
-    const started = Date.now();
-    try {
-      const result = await cap.handler(args as Record<string, unknown>, appUser, { source: "app-ui", actor: member.userId });
-      logToolCall({ tool: name, harness: "app-ui", actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
-      return { app_id: appId, name, result };
-    } catch (e) {
-      logToolCall({ tool: name, harness: "app-ui", actor: member.userId, app: appId, args, ok: false, error: (e as Error)?.message ?? String(e), durationMs: Date.now() - started });
-      throw e;
-    }
+    const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui" });
+    return { app_id: appId, name, result };
   },
 };
+
+/** 동의가 없거나 예전 범위라 막혔다 — 화면(web/v2/app-ui.ts)은 글의 «동의» 로, 앱 주소의 /_lively/* 는 이 code 로 가른다. */
+export const CONSENT_REQUIRED = "consent_required";
+
+/**
+ * 앱 화면이 부른 도구 하나를 그 앱 주체(그 사람 ∩ 그 사람의 앱 동의)로 실행한다 — 라이블리 화면의 다리(org_app_tool_call)와
+ *  앱 주소의 `/_lively/*`(apps/app-front-api.ts, #4482)가 **같은 판정**을 탄다. 결과는 그 도구의 결과 그대로.
+ *  opts.address — 앱 주소로 들어온 호출이면 그 주소의 판(pub|draft): 선언(도구 · 표)을 사람이 아니라 주소의 판에서 읽는다(Viewer.address).
+ */
+export async function runAppTool(member: LivelyUser, appId: string, name: string, rawArgs: unknown,
+  opts: { source: "app-ui" | "app-front"; address?: "pub" | "draft" }): Promise<unknown> {
+  if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
+  if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
+  const viewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
+
+  // 앱 존재·활성 확인. #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404).
+  const installed = await getApp(appId);
+  if (!installed || !canSeeApp(installed, viewer)) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (installed.status !== "active" || !installed.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
+  //  선언은 **이 사람이 보는 판**의 것 — 공개 판을 보는 사람의 화면이 남의 초안이 새로 선언한 도구를 쓰지 않게.
+  //   앱 주소로 들어온 호출이면 그 주소의 판(#4482 — 공개 주소는 초안을 고친 사람에게도 공개 판).
+  const seen = await viewAppFor(installed, viewer);
+  if (seen.view === "none") throw new HttpError(404, `앱 없음: ${appId}`);
+  const app = seen.app;
+
+  // 호출자(멤버)가 이 앱에 동의(grant)했나 — 없으면 이 UI 는 도구를 못 쓴다.
+  const grant = await getActiveGrant(appId, member.userId);
+  if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다`, { body: { code: CONSENT_REQUIRED } });
+
+  // #4225 — 동의가 **옛 범위**다: 앱이 갱신돼 새로 선언한 도구인데 예전 동의엔 없다(빌트인 「안녕 앱」 0.2 가 store_* 를 얻은 경우).
+  //  종전엔 아래 requireAppTool 의 «앱 권한 밖» 403 으로 끝나 화면이 막다른 길이었다. «동의» 로 말하면 호스트가 그 자리에서
+  //  동의 창을 띄우고(web/v2/app-ui.ts — /동의|grant/) 새 범위로 다시 동의한 뒤 한 번 재시도한다. 선언 밖 도구는 종전 그대로 막힌다.
+  const declared = (() => {
+    const p = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
+    return [...(Array.isArray(p?.tools) ? p.tools : []), ...(Array.isArray(p?.ext_tools) ? p.ext_tools : [])].map(String);
+  })();
+  if (needsRegrant(grant.tools, declared, name)) {
+    throw new HttpError(403, `앱 '${appId}' 의 사용 동의가 예전 범위라 '${name}' 을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`, { body: { code: CONSENT_REQUIRED } });
+  }
+
+  // 앱-principal 유저 — 스코프는 멤버 ∩ grant 로 축소, appId 를 실어 requireAppTool 이 grant 도구로 판정하게 한다.
+  const appUser: LivelyUser = {
+    ...member,
+    appId,
+    scopes: (member.scopes ?? []).filter((s) => grant.scopes.includes(s)),
+    ...(opts.address ? { appAddress: opts.address } : {}),
+  };
+
+  // 대상 능력 조회(registry) — 동적 import 로 순환 회피(index → 이 파일 → index).
+  const { registry } = await import("./index.js");
+  const cap = registry.get(name);
+  if (!cap) throw new HttpError(404, `도구 없음: ${name}`);
+  if (cap.expose.mcp === false) throw new HttpError(403, `호출할 수 없는 도구입니다: ${name}`); // REST 전용 내부 능력은 브리지 대상 아님
+
+  // 집행 — 앱 세션 MCP 경로와 동일: 스코프 → 앱 도구 allowlist.
+  if (cap.scope) requireScope(appUser, cap.scope);
+  await requireAppTool(appUser, name);
+
+  // 입력 검증(MCP 표면과 동일 zod 셰이프). 실패 = 400.
+  let args: unknown;
+  try { args = z.object(cap.input as z.ZodRawShape).parse(rawArgs ?? {}); }
+  catch (e) { throw new HttpError(400, `인자 검증 실패: ${(e as Error)?.message ?? e}`); }
+
+  const started = Date.now();
+  try {
+    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId });
+    logToolCall({ tool: name, harness: opts.source, actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
+    return result;
+  } catch (e) {
+    logToolCall({ tool: name, harness: opts.source, actor: member.userId, app: appId, args, ok: false, error: (e as Error)?.message ?? String(e), durationMs: Date.now() - started });
+    throw e;
+  }
+}
 
 export const appToolCallCapabilities: Capability[] = [appToolCall];

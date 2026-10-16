@@ -33,6 +33,13 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   const bare = menu.sessAppMenuRows({ title: "x", hasPrefs: false, overridesBuiltin: false, versionNo: null }, h);
   eq([bare[1].off, bare[3].off, bare[2].hint], [true, true, undefined], "S6-1 표시 설정을 구독 안 했으면 그 줄이, 원본 그대로면 「원본으로」가 흐려진다 · 판을 모르면(옛 게이트웨이) 힌트 없음");
   ok(bare[1].hint === "이 앱은 표시 설정이 없어요" && /지금이 원본/.test(bare[3].hint), "S6-1 흐린 줄은 힌트가 까닭을 말한다(격리 리뷰 (1)·(3))");
+  //  #4482 「새 탭에서 열기」 — 앱 주소가 켜진 자리(손잡이 tab 이 있음)에서만, 「크게 보기」 다음 · 떼기 위에
+  const tabbed = [];
+  const withTab = menu.sessAppMenuRows({ title: "x", hasPrefs: true, overridesBuiltin: false, versionNo: 1 }, { ...h, tab: () => tabbed.push("tab") });
+  eq(withTab.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "버전 이력…", "원본으로 되돌리기", "—", "크게 보기", "새 탭에서 열기", "이 세션에서 떼기"], "S6-1b 새 탭에서 열기는 크게 보기 다음");
+  withTab.find((r) => r.label === "새 탭에서 열기").run();
+  eq(tabbed, ["tab"], "S6-1b 그 줄이 tab 손잡이를 부른다");
+  ok(!rows.some((r) => r.label === "새 탭에서 열기"), "S6-1b 손잡이가 없으면(앱 주소 꺼짐) 줄도 없다");
 }
 
 // ══ S6-2 「AI에게 고치기」 글 ═══════════════════════════════════════════════════

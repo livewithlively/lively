@@ -46,6 +46,9 @@ export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "
 export const NOTIFY_TOOL = "app_notify";
 /** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
 export const CHAT_SEND_TOOL = "app_chat_send";
+/** #4482 앱 주소 iframe 에 선언으로만 위임하는 장치 권한(권한 정책 이름 그대로). */
+export const APP_DEVICES = ["microphone", "camera", "clipboard-read", "geolocation"] as const;
+export type AppDevice = (typeof APP_DEVICES)[number];
 /** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
 export const PROJECT_FILES_TOOL = "app_project_files";
 /** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
@@ -258,7 +261,14 @@ export const appManifestSchema = z.object({
   //   ★ 최상위 칸에 둔다(ui 안이 아니라) — ui 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 여러 파일 앱의 매니페스트를 아예 못 읽는다.
   //    최상위는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다(그 앱을 화면 한 장 앱으로 본다 — 격리 리뷰 롤백 메모).
   //    web 안도 같은 까닭으로 passthrough — 다음 단계(v2-5 서버 등)가 web 에 칸을 더한 뒤 이 코어로 되돌려도 읽힌다.
-  web: z.object({ root: z.string().min(1).max(512).optional() }).passthrough().optional(),
+  //  #4482 앱 v2-3 — 앱 주소 iframe 에 넘길 장치 권한(web.devices). 선언한 앱의 iframe 에만 `allow` 로 위임한다(상민님 2026-10-16 «선언한 앱만»):
+  //   크롬 · 파이어폭스는 iframe 의 권한을 **맨 위 사이트(워크스페이스 주소) 이름**으로 받고 한 번 허용하면 같은 워크스페이스의 다른 앱 iframe 도
+  //   다시 묻지 않고 쓴다 — 늘 위임하면 한 앱에 준 마이크를 다른 앱이 몰래 쓴다. 클립보드 쓰기 · 전체 화면 · 공유는 늘 위임한다(사람이 누를 때만 돈다).
+  //   permissions(strict)가 아니라 web(passthrough)에 두는 까닭은 web.root 와 같다 — 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  web: z.object({
+    root: z.string().min(1).max(512).optional(),
+    devices: z.array(z.enum(APP_DEVICES)).max(APP_DEVICES.length).optional(),
+  }).passthrough().optional(),
   // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
   instances: instancesSchema,
   // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
@@ -272,6 +282,13 @@ export const appManifestSchema = z.object({
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/** 선언한 장치 권한(중복 · 모르는 값은 버린다). 저장된 매니페스트를 읽는 자리라 던지지 않는다. */
+export function webDevicesOf(manifest: unknown): AppDevice[] {
+  const raw = (manifest as { web?: { devices?: unknown } } | null)?.web?.devices;
+  if (!Array.isArray(raw)) return [];
+  return APP_DEVICES.filter((d) => raw.includes(d));
+}
 
 /**
  * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(web.root 없음)이면 null. 모양이 틀리면 null(설치 관문은

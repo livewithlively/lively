@@ -216,3 +216,18 @@ test("E33 앱 주소의 두 판(#4480 · 설계 §13-5) — 공개 주소는 모
   assert.equal(addressVariantFor(app({ draft_by: "other", published_version_no: null }), other), "pub", "포인터 없는 초안 표식");
   for (const who of [other, third, maker, admin]) assert.equal(addressViewFor(d, who, addressVariantFor(d, who)), appViewFor(d, who), `주소를 안 정하고 열면 라이블리 화면과 같은 판 — ${who.userId}`);
 });
+
+// ── #4482 앱 v2-3 — 앱 주소(/_lively/*)로 들어온 호출은 **주소의 판**(Viewer.address) — 사양 표 B(V1~V5) ──────────
+//  이게 틀리면: 초안을 고친 사람이 공개 주소(새 탭)를 열었을 때 공개 판의 화면이 초안의 도구 · 표 선언으로 돌아(초안이 뺀 표 · 도구는 404)
+//   그 사람에게만 공개 판이 깨지거나, 반대로 남의 초안 주소의 선언이 새거나, 주소가 없는 종전 호출의 판정이 바뀐다.
+test("V1~V5 Viewer.address — 주소의 판이 사람의 판을 대신한다(addressViewFor 그대로) · 없으면 종전", () => {
+  const d = app({ draft_by: "other", published_version_no: 3 });
+  assert.equal(appViewFor(d, other), "installed", "V4 주소 없음 — 초안 주인은 설치된 판(종전)");
+  assert.equal(appViewFor(d, { ...other, address: "pub" }), "published", "V1 초안 주인도 공개 주소면 공개 판");
+  assert.equal(appViewFor(d, { ...other, address: "draft" }), "installed", "V2 초안 주인 · 초안 주소면 설치된 판");
+  assert.equal(appViewFor(d, { ...maker, address: "draft" }), "none", "V3 남의 초안 주소는 없는 판");
+  assert.equal(appViewFor(d, { ...maker, address: "pub" }), "published");
+  const p = app({ visibility: "me" });
+  assert.equal(appViewFor(p, { userId: "third", scopes: [], address: "pub" }), "none", "V5 못 보는 앱은 주소가 있어도 none");
+  assert.equal(appViewFor(p, { ...maker, address: "draft" }), "installed", "나만 보는 앱 — 판이 하나");
+});

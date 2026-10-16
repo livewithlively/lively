@@ -41,6 +41,16 @@
 //    lively.ui.insets / lively.ui.onInsets(cb) → 호스트가 이 화면의 가장자리를 가리는 폭(px) { top, right, bottom, left } (#4592 — 곁칸의 독).
 //                                                같은 값이 CSS 변수 --lively-inset-top/right/bottom/left 로도 심긴다(없으면 0px 로 쓰면 된다) —
 //                                                바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면 가려지지 않는다.
+//    await lively.me()                       → { member:{ id, name, email }, workspace:{ slug }, app:{ id, variant }, session } — 보는 사람(#4482).
+//                                                도구 선언 없이 쓴다. session 은 세션에 붙은 앱 칸에서 연 화면만(새 탭 · 폰은 늘 null).
+//    await lively.requestConsent()           → 이 앱 사용 동의를 청한다(#4482 — 앱이 /_lively/* 를 fetch 로 직접 부르다 403 consent_required 를
+//                                                받았을 때). 라이블리 안이면 그 자리 동의 창(사람이 누른 동작 안에서만) → { granted }, 새 탭이면 라이블리의
+//                                                동의 화면으로 갔다가 이 화면으로 돌아온다.
+//    lively.standalone                       → 라이블리 화면 밖(앱 주소를 새 탭 · 폰 홈 화면으로 연 맨몸)이면 true(#4482). 그때 SDK 는 같은 주소의
+//                                                /_lively/* 로 돈다 — 표(store) · 도구 · 개인 설정 · 앱 폴더(files.url) · me 는 그대로 되고,
+//                                                세션에 붙는 기능(chat.send · files.list/read · ui.chrome/openMenu/expand)은 «붙은 세션 없음» 으로 실패한다.
+//                                                바깥 변경 알림(store.onChange)은 화면이 다시 보일 때 { source:'visibility' } 로 한 번 온다.
+//                                                동의가 없으면 처음 한 번 라이블리의 동의 화면으로 갔다 오고, 앱 주소 로그인이 끝났으면 화면을 다시 연다.
 //  오류는 Error(message) 로 reject 하고 e.code 에 JSON-RPC 코드를 싣는다(-32001 = 권한 밖).
 //  ⚠ onChange 를 안 쓰는 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(최신을 보이는 가장 단순한 길).
 //   화면 상태(입력 중인 글·스크롤)를 지키고 싶은 앱은 onChange 를 걸고 스스로 다시 읽는다 — 걸면 다시 불러오기는 멈춘다.
@@ -53,12 +63,14 @@ export const APP_RUNTIME_JS = `
   // #4480 — 앱 주소(<앱>-<워크스페이스>.lvly.app)를 새 탭에 맨몸으로 열면 감싸는 라이블리 화면이 없다(parent === window).
   //  그때 부르면 제 창에 보낸 요청을 제가 받아 «빈 답» 으로 풀어 버린다 — 조용히 틀린 값을 주느니 분명히 실패한다.
   var alone = (function () { try { return window.parent === window; } catch (_) { return false; } })();
+  // #4482 — 앱 주소 문서가 맨몸이면 같은 주소의 /_lively/* 로 돈다(standalone). srcdoc(about:) · 파일로 연 문서는 쓸 API 가 없다.
+  var standalone = alone && typeof location !== 'undefined' && /^https?:$/.test(String(location.protocol || ''));
+  function err(message, code, extra) { var e = new Error(message); e.code = code; if (extra) { for (var k in extra) e[k] = extra[k]; } return e; }
   function post(method, params) {
+    if (standalone) return local(method, params || {});
     return new Promise(function (resolve, reject) {
       if (alone) {
-        var e0 = new Error('이 기능은 라이블리 화면 안에서 연 앱에서만 쓸 수 있습니다 — 라이블리에서 이 앱을 열어 주세요.');
-        e0.code = -32601;
-        reject(e0);
+        reject(err('이 기능은 라이블리 화면 안에서 연 앱에서만 쓸 수 있습니다 — 라이블리에서 이 앱을 열어 주세요.', -32601));
         return;
       }
       var id = seq++;
@@ -66,12 +78,85 @@ export const APP_RUNTIME_JS = `
       parent.postMessage({ jsonrpc: '2.0', id: id, method: method, params: params || {} }, '*');
     });
   }
+  // ── #4482 맨몸(standalone) — 다리 대신 같은 주소의 /_lively/* ─────────────────────────────────────────
+  //  한 번만 하는 일(동의 화면 · 로그인 다시 하기)은 이 탭에서 잠깐 기억한다(sessionStorage) — 거절했거나 막힌 브라우저에서 같은 왕복이 끝없이 돌지 않게.
+  function onceIn(key, ms) {
+    try {
+      var now = Date.now(), last = Number(sessionStorage.getItem(key) || 0);
+      if (last && now - last < ms) return false;
+      sessionStorage.setItem(key, String(now));
+      return true;
+    } catch (_) { return false; }
+  }
+  function here() { return String(location.pathname || '/') + String(location.search || '') + String(location.hash || ''); }
+  // 돌아올 자리(next)는 CP 로그인 왕복을 지나도 살아남게 — 그 왕복은 해시를 글자 집합(영숫자 · /_-.?=&%+~:@,)과 512자로 거른다.
+  //  encodeURIComponent 가 남기는 !'()* 까지 인코딩하고, 길면 첫 화면(/)으로(앞단 appOpenUrl 과 같은 규칙).
+  function strictEnc(v) { return encodeURIComponent(v).replace(/[!'()*]/g, function (c) { return '%' + c.charCodeAt(0).toString(16).toUpperCase(); }); }
+  function goConsent(url) {
+    if (!url || !/^https:[/][/]/.test(url)) return false;
+    var n = strictEnc(here());
+    if (n.length > 300) n = strictEnc('/');
+    location.assign(url + (url.indexOf('?') >= 0 ? '&' : '?') + 'next=' + n);
+    return true;
+  }
+  function http(method, path, body) {
+    var init = { method: method, credentials: 'same-origin', headers: { accept: 'application/json' } };
+    if (body !== undefined) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
+    return fetch('/_lively' + path, init).then(function (r) {
+      return r.text().then(function (t) {
+        var j = null;
+        try { j = t ? JSON.parse(t) : null; } catch (_) { j = null; }
+        if (r.ok) return j;
+        var code = r.status === 403 ? -32001 : (r.status === 400 || r.status === 413) ? -32602 : r.status === 404 ? -32601 : -32000;
+        var e = err((j && j.error) || ('요청이 실패했습니다(' + r.status + ')'), code, { status: r.status, body: j });
+        // 앱 주소 로그인(12시간)이 끝났다 — 화면을 다시 열면 앞단이 라이블리 로그인을 거쳐 돌려보낸다(1분에 한 번만).
+        if (r.status === 401 && j && j.error === 'login_required' && onceIn('lively.relogin', 60000)) { location.reload(); return new Promise(function () {}); }
+        // 이 앱 사용 동의가 없다 — 라이블리의 동의 화면으로 한 번 갔다 온다(10분에 한 번만 — 거절하면 앱이 실패를 받는다).
+        if (r.status === 403 && j && j.code === 'consent_required') {
+          e.consentUrl = j.consent_url || null;
+          if (onceIn('lively.consent', 600000) && goConsent(j.consent_url)) return new Promise(function () {});
+        }
+        throw e;
+      });
+    });
+  }
+  var NO_SESSION = '붙은 세션이 없습니다 — 라이블리 화면 안에서 세션에 붙은 앱으로 열었을 때만 쓸 수 있습니다';
+  var NO_HOST = '라이블리 화면 밖(새 탭 · 폰 홈 화면)에서는 쓸 수 없습니다';
+  function local(method, p) {
+    if (method === 'ui/initialize') {
+      return http('GET', '/me').then(function (me) {
+        var page = null;
+        try { page = new URLSearchParams(location.search).get('page'); } catch (_) { page = null; }
+        return { host: null, app: (me && me.app && me.app.id) || null, instance: null, page: page, session: null, standalone: true,
+          capabilities: { tools: true, menu: false, chrome: false, expand: false, files_all: false, chat: false, me: true, grant: true, standalone: true } };
+      });
+    }
+    if (method === 'ui/me') return http('GET', '/me').then(function (me) { if (me) me.session = null; return me; });
+    if (method === 'tools/call') return http('POST', '/tools/' + encodeURIComponent(String(p.name || '')), p.arguments || {});
+    if (method === 'prefs/get') return http('GET', '/prefs');
+    if (method === 'prefs/set') return http('POST', '/prefs', { patch: p.patch || {} });
+    if (method === 'ui/grant') {
+      return http('GET', '/me').then(function (me) {
+        if (goConsent(me && me.consent_url)) return new Promise(function () {});
+        throw err('동의 화면 주소를 받지 못했습니다', -32000);
+      });
+    }
+    if (method === 'ui/openExternal') {
+      var u = String(p.url || '');
+      if (!/^https?:[/][/]/i.test(u)) return Promise.reject(err('http(s) 주소가 아닙니다', -32602));
+      var w = null;
+      try { w = window.open(u, '_blank', 'noopener'); } catch (_) { w = null; }
+      return Promise.resolve({ opened: !!w });
+    }
+    if (method === 'chat/send' || method === 'files/list' || method === 'files/read') return Promise.reject(err(NO_SESSION, -32602));
+    return Promise.reject(err(NO_HOST, -32601));
+  }
   var subs = {};
   function subscribe(topic, cb) {
     if (typeof cb !== 'function') return function () {};
     var list = subs[topic] || (subs[topic] = []);
     list.push(cb);
-    if (list.length === 1) parent.postMessage({ jsonrpc: '2.0', method: 'ui/subscribe', params: { topic: topic } }, '*');
+    if (list.length === 1 && !alone) parent.postMessage({ jsonrpc: '2.0', method: 'ui/subscribe', params: { topic: topic } }, '*');
     return function () { var i = list.indexOf(cb); if (i >= 0) list.splice(i, 1); };
   }
   function fire(topic, payload) {
@@ -101,7 +186,7 @@ export const APP_RUNTIME_JS = `
   // #4530 — 앱 화면 안을 누른 뒤에도 통합검색 키(⌘K · Ctrl+K · Alt+K)가 바깥 셸의 통합검색을 연다. 키는 이 프레임에서 멈추고
   //  셸 문서에 닿지 않기 때문이다. 판정은 web/lib/omni-chord.ts 와 같다(글자가 라틴이면 글자로, 아니면 자판 위치 KeyK 로 —
   //  한글 입력기가 켜져 있으면 K 가 'ㅏ' 로 온다). 받는 쪽은 app-ui.ts 의 ui/omniOpen(이 프레임에서 온 것만).
-  window.addEventListener('keydown', function (e) {
+  if (!alone) window.addEventListener('keydown', function (e) {
     var k = String(e.key || '');
     var isK = /^[a-z]$/i.test(k) ? k.toLowerCase() === 'k' : e.code === 'KeyK';
     if (!isK) return;
@@ -133,10 +218,18 @@ export const APP_RUNTIME_JS = `
     parent.postMessage({ jsonrpc: '2.0', method: 'ui/typing', params: { on: on } }, '*');
   }
   function laterTyping() { if (!typingT) typingT = setTimeout(judgeTyping, 0); }
-  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  if (!alone && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('focusin', laterTyping, true);
     document.addEventListener('focusout', laterTyping, true);
     window.addEventListener('blur', laterTyping);
+  }
+  // #4482 맨몸에는 호스트가 «바깥에서 바뀌었다» 를 밀어 주지 않는다 — 화면이 숨었다가 다시 보이면 한 번 알린다(다른 자리에서 고친 것을 그때 읽게).
+  if (standalone && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    var wasHidden = false;
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') { wasHidden = true; return; }
+      if (wasHidden && document.visibilityState === 'visible') { wasHidden = false; fire('data', { source: 'visibility' }); }
+    });
   }
   // #4592 — 호스트가 가리는 가장자리. 값은 api.ui.insets 와 CSS 변수 둘 다로(앱은 CSS 만으로 비킬 수 있다).
   function applyInsets(p) {
@@ -153,6 +246,11 @@ export const APP_RUNTIME_JS = `
     instance: null,
     page: null,
     session: null,
+    standalone: standalone,
+    me: function () {
+      return post('ui/me', {}).then(function (m) { if (m && !standalone && api.session && !m.session) m.session = api.session; return m; });
+    },
+    requestConsent: function () { return post('ui/grant', {}); },
     tools: {
       call: function (name, args) { return post('tools/call', { name: String(name), arguments: args || {} }); }
     },

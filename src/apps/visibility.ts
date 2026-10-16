@@ -35,8 +35,13 @@ export function appVisibilityOf(app: { visibility?: unknown }): AppVisibility {
   return app.visibility === "me" ? "me" : "all";
 }
 
-/** 판정에 쓰는 사람 — 토큰의 구성원 id 와 scope. */
-export interface Viewer { userId: string; scopes?: readonly string[] }
+/**
+ * 판정에 쓰는 사람 — 토큰의 구성원 id 와 scope.
+ *  address — 앱 주소(<앱>-<워크스페이스>[-draft].lvly.app)의 `/_lively/*` 로 들어온 호출이면 그 주소의 판(#4482 v2-3). 그때는 보는 판을
+ *   사람이 아니라 **주소**가 정한다(addressViewFor) — 공개 주소의 화면은 초안을 고친 사람에게도 공개 판이라, 그 화면이 부르는 도구 · 표도
+ *   공개 판의 선언이어야 한다(설계 §14 덧붙임 «남은 확인 2»). 앞단이 서명한 값에서만 채운다(apps/app-front-api.ts).
+ */
+export interface Viewer { userId: string; scopes?: readonly string[]; address?: "pub" | "draft" }
 
 /** 판정에 쓰는 앱의 칸들(org_app 의 부분). */
 export interface AppVisState {
@@ -84,6 +89,7 @@ export function isEmptyDraftApp(app: { content_hash?: string | null; current_ver
  */
 export type AppView = "none" | "installed" | "published";
 export function appViewFor(app: AppVisState, who: Viewer): AppView {
+  if (who.address) return addressViewFor(app, who, who.address);   // #4482 앱 주소로 들어온 호출 — 주소의 판
   if (!canSeeApp(app, who)) return "none";
   if (appVisibilityOf(app) === "me") return "installed";
   if (!app.draft_by || app.published_version_no == null) return "installed";

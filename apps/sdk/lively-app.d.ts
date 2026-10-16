@@ -1,8 +1,10 @@
 // 라이블리 앱 SDK 타입 — 앱 UI 안에서 쓰는 `window.lively` (#1780).
 //  런타임은 **호스트가 iframe 에 자동 주입**한다(설치·번들 불요 — 앱 UI 는 CSP 로 외부 스크립트가 막혀 있다).
 //  이 파일은 타입만 준다: 앱을 TypeScript 로 쓸 때 `/// <reference path="./lively-app.d.ts" />` 하거나 tsconfig include.
-//  ⚠ 앱 화면은 `sandbox="allow-scripts"` 라 **폼 제출이 막힌다** — submit 이벤트조차 안 온다(onsubmit 핸들러가 안 불린다).
-//   입력은 버튼 click · 입력칸 keydown(Enter — 한글 조합 중 e.isComposing 이면 넘긴다)으로 받는다(#4225 실측).
+//  #4482 앱 v2-3 — 앱 화면은 평범한 웹처럼 돈다: 폼 제출(onsubmit) · alert/confirm/print · 내려받기가 되고(종전 «폼 금지 · click/keydown 으로» 규칙은
+//   없어졌다), 앱 주소(<앱>-<워크스페이스>.lvly.app)를 새 탭 · 폰 홈 화면으로 열어도 같은 SDK 가 같은 주소의 /_lively/* 로 돈다(standalone).
+//   한글 입력은 여전히 조합 중 Enter(e.isComposing)를 넘긴다 — 브라우저 규칙이다(플랫폼 규칙이 아니다).
+//   마이크 · 카메라 · 클립보드 읽기 · 위치는 매니페스트 `web.devices: ["microphone", …]` 에 선언한 앱의 iframe 에만 위임된다.
 declare global {
   interface Window { lively: LivelyApp }
 }
@@ -18,8 +20,27 @@ export interface LivelyApp {
   readonly page: string | null;
   /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
   readonly session: string | null;
-  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; expand?: boolean; files_all?: boolean } }>;
+  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. 맨몸(standalone)이면 host 는 null · session 은 늘 null. */
+  readonly ready: Promise<{ host: string | null; app: string; instance: string | null; page: string | null; session: string | null; standalone?: boolean;
+    capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; expand?: boolean; files_all?: boolean; chat?: boolean; me?: boolean; grant?: boolean; standalone?: boolean } }>;
+  /**
+   * #4482 라이블리 화면 밖(앱 주소를 새 탭 · 폰 홈 화면으로 연 맨몸)인가. 맨몸이면 SDK 가 같은 주소의 `/_lively/*` 로 돈다 —
+   *  표(store) · 도구(tools) · 개인 설정(prefs) · 앱 폴더(files.url) · me 는 그대로 되고, 세션에 붙는 기능(chat.send · files.list/read ·
+   *  ui.chrome/openMenu/expand)은 reject 한다(-32602 · -32601). 바깥 변경 알림(store.onChange)은 화면이 다시 보일 때 `{source:'visibility'}` 로 온다.
+   *  브라우저 저장소(localStorage · 쿠키)는 자리마다 따로다(라이블리 안 iframe 과 새 탭은 서로 못 본다) — 자리 사이에 이어야 할 것은 표 · prefs 에.
+   */
+  readonly standalone: boolean;
+  /**
+   * #4482 보는 사람 · 워크스페이스 · 이 앱 · 붙은 세션. 도구 선언 없이 쓴다. 세션은 세션에 붙은 앱 칸에서 연 화면만(새 탭 · 폰은 늘 null).
+   *  같은 내용을 SDK 없이 받으려면 `fetch('/_lively/me')`(앱 주소에서만 — 이때 session 은 늘 null).
+   */
+  me(): Promise<{ member: { id: string; name: string; email: string | null }; workspace: { slug: string | null }; app: { id: string; variant: "pub" | "draft" | null; title?: string }; session: string | null }>;
+  /**
+   * #4482 이 앱 사용 동의를 청한다 — SDK 의 도구 호출은 동의가 없으면 저절로 묻지만, `/_lively/*` 를 fetch 로 직접 부르다 403 `consent_required` 를
+   *  받았을 때 쓴다. 라이블리 안이면 그 자리 동의 창(사람이 누른 동작 안에서만 — 아니면 -32001) → `{ granted }`. 맨몸이면 라이블리의 동의 화면으로
+   *  갔다가 이 화면으로 돌아온다(약속은 풀리지 않는다).
+   */
+  requestConsent(): Promise<{ granted: boolean }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -139,7 +160,8 @@ export interface LivelyApp {
 
   /**
    * 이 앱 × **보는 사람**의 작은 설정(#4601 — 배치 2열/2행 · 글자 크기 · 접기 · 마지막으로 보던 장). 다른 사람은 자기 설정을 본다.
-   *  왜 여기인가: 앱 화면은 불투명 오리진이라 localStorage 가 SecurityError 로 막히고, 앱 표에 두자니 SDK 에 보는 사람 신원이 없다.
+   *  왜 여기인가: 자리(라이블리 안 · 새 탭 · 폰)마다 브라우저 저장소가 따로라 localStorage 로는 이어지지 않고(종전 srcdoc 화면에선 아예 막힌다),
+   *   앱 표에 두면 사람마다 가르는 칸을 앱이 만들어야 한다. 이건 그 사람의 설정이 어디서 열든 그대로다.
    *  16KB 상한 — 설정이지 데이터가 아니다(문서·행은 store_* 에).
    */
   prefs: {

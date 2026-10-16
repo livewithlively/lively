@@ -22,6 +22,9 @@ export interface LivelyUser {
   // 앱 서버가 사람 신원(X-Lively-Identity)을 싣고 부른 요청이면 true(#4483) — 그때 userId 는 그 **구성원**이고 권한은
   //  그 사람 ∩ 그 사람의 앱 동의다(apps/app-server-auth). 빈도 한도를 사람마다 따로 센다.
   appServer?: boolean;
+  // 앱 주소의 `/_lively/*` 로 들어온 호출이면 그 주소의 판(#4482) — 보는 판(선언한 도구 · 표)을 사람이 아니라 주소가 정한다
+  //  (apps/visibility.ts Viewer.address). 앞단이 서명한 기계 헤더에서만 채운다(apps/app-front-api.ts).
+  appAddress?: "pub" | "draft";
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

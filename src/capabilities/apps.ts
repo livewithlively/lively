@@ -34,6 +34,7 @@ import {
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
 import { multiFileFallbackHtml } from "../apps/app-front-page.js";
+import { appAddressUrlFor } from "./app-launch.js";   // #4482 맨 앱 주소(새 탭에서 열기)
 import { filesCspSource } from "../files/app-screen-csp.js";   // #4673 앱 폴더 서명 주소 자리(앱 화면 CSP)
 import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, appTableCounts, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
 import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan, type PublishPreview } from "../apps/publish-preview.js";
@@ -717,7 +718,7 @@ const appSave: Capability = {
     "있는 앱은 그 앱의 고치기 설정(기본 전원 · 관리자가 지정한 사람만으로 좁힐 수 있음 · 책임자는 늘)을 따른다. " +
     "기본 앱(빌트인)도 화면·데이터만으로 된 앱이면 고칠 수 있다 — 그러면 이 워크스페이스의 판이 릴리스 원본을 덮고(데이터 표는 그대로), " +
     "원본으로 되돌리려면 app_revert(원본 판). 저장마다 판이 남는다(app_versions · note 에 요지 한 줄). " +
-    "앱 화면은 샌드박스라 폼 제출이 막힌다 — 입력은 버튼 click · Enter keydown 으로. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관(공개 판이 아직 쓰는 표는 공개할 때까지 그대로). " +
+    "앱 화면은 평범한 웹처럼 돈다(#4482) — 폼 제출(onsubmit) · confirm · print · 내려받기가 되고, 앱 주소를 새 탭 · 폰에서 열어도 같은 SDK(window.lively)가 같은 주소의 /_lively/* 로 표 · 설정 · 앱 폴더를 쓴다(세션에 붙는 chat.send 등은 라이블리 화면 안에서만). 마이크 · 카메라는 web.devices 에 선언한 앱만. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관(공개 판이 아직 쓰는 표는 공개할 때까지 그대로). " +
     "★ 표 구조(#4724): 공개 앱의 초안에서 새 표 · 새 칸 · 풀기(not_null · 검사 빼기)는 저장 때 바로 되고, 공개 판이 쓰는 표를 깨는 변경은 공개할 때 적용된다 — " +
     "공개 판의 칸을 지우기(drop_columns) · 이름 · 종류 바꾸기 · not_null · unique · 외래키 조이기 · 기본값 더하기/바꾸기/빼기, 그 표의 새 검사 전부(새 칸 것까지), " +
     "기본값 없는 not_null 새 칸, 같은 값 기본값이 있는 칸의 unique · 외래키(옛 코드의 INSERT 는 모르는 칸을 빼고 넣는다). 목록은 응답 tables.deferred · hint — " +
@@ -1417,7 +1418,8 @@ const appUi: Capability = {
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
         const csp = { ...(((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(pub.manifest) };
         const multi = webRootOf(pub.manifest) !== null;
-        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", ...(multi ? { multi_file: true } : {}) };
+        const appUrl = appAddressUrlFor(app, who, input.page ? pick.page_key : null);
+        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title, appUrl) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", app_url: appUrl, ...(multi ? { multi_file: true } : {}) };
       }
       logger.warn({ app: id, published: app.published_version_no }, "공개 판 행이 없어 설치된 화면을 준다(#4667 불변식)");
     }
@@ -1432,7 +1434,9 @@ const appUi: Capability = {
     const csp = { ...(((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(app.manifest) };
     //  #4481 여러 파일 앱(web.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
     const multi = webRootOf(app.manifest) !== null;
-    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title) : a.html, pages, csp, view: "installed", ...(multi ? { multi_file: true } : {}) };
+    //  #4482 맨 앱 주소 — 화면이 「새 탭에서 열기」 를 그린다(쿠키가 막힌 브라우저도 새 탭은 맨 위 페이지라 된다).
+    const appUrl = appAddressUrlFor(app, who, input.page ? a.page_key : null);
+    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title, appUrl) : a.html, pages, csp, view: "installed", app_url: appUrl, ...(multi ? { multi_file: true } : {}) };
   },
 };
 

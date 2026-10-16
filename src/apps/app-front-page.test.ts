@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { appErrorHtml, appPageCsp, buildAppPageHtml, loadAppScripts } from "./app-front-page.js";
+import { appErrorHtml, appPageCsp, appPageCspMulti, buildAppPageHtml, loadAppScripts, multiFileFallbackHtml } from "./app-front-page.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -22,9 +22,9 @@ const directives = (csp: string): Map<string, string> => new Map(csp.split(";").
   assert.equal(d.get("font-src"), "data:");
   assert.equal(d.get("media-src"), "'none'");
   assert.equal(d.get("frame-src"), "'none'");
-  assert.equal(d.get("form-action"), "'none'");
+  assert.equal(d.get("form-action"), "'self'", "#4482 폼은 제 주소로만(바깥 주소로 보내는 폼은 막는다)");
   assert.equal(d.get("base-uri"), "'none'");
-  ok("D1 선언 없음 — connect 'self' · data: · 나머지 none");
+  ok("D1 선언 없음 — connect 'self' · data: · form-action 'self' · 나머지 none");
 }
 
 // ── D2 선언 도메인 · * · 이상한 값 버림 ──
@@ -83,6 +83,25 @@ const directives = (csp: string): Map<string, string> => new Map(csp.split(";").
     assert.ok(s.runtime.includes("window.lively"));
     ok("D5 준비물 — 틀리면 실패 · 다음 호출에 다시 읽어 성공");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+// ── D6 #4482 여러 파일 앱 CSP 의 폼 · srcdoc 안내의 «새 탭에서 열기» ──
+//  이게 틀리면: 여러 파일 앱의 폼이 제 주소로도 못 가거나(옛 'none') 바깥 주소로 새거나, 쿠키 막힌 브라우저의 안내에 단추가 없어 막다른 길이 되거나,
+//   단추에 넣은 주소가 HTML · 스크립트를 깨서 아무 스크립트나 돈다.
+{
+  const m = directives(appPageCspMulti(null));
+  assert.equal(m.get("form-action"), "'self'");
+  const none = multiFileFallbackHtml("톡");
+  assert.ok(!none.includes("<button"), "주소가 없으면 단추 없음");
+  const url = "https://talk-lively-46e3.lvly.app/?page=main&x=1";
+  const withBtn = multiFileFallbackHtml("톡", url);
+  assert.ok(withBtn.includes("<button") && withBtn.includes("새 탭에서 열기"), "주소가 있으면 단추");
+  assert.ok(withBtn.includes(`onclick='window.lively&amp;&amp;window.lively.ui.openExternal("https://talk-lively-46e3.lvly.app/?page=main&amp;x=1")'`),
+    "홑따옴표 속성 · & 는 &amp; · 주소는 JSON 문자열");
+  for (const bad of ["javascript:alert(1)", "https://x.lvly.app/'onmouseover='alert(1)", "https://x.lvly.app/\"><script>", "http://x.lvly.app/", "https://x.lvly.app/a b", "https://x.lvly.app/`x`", "https://x.lvly.app"]) {
+    assert.ok(!multiFileFallbackHtml("톡", bad).includes("<button"), `꼴 밖 주소엔 단추 없음 — ${bad}`);
+  }
+  ok("D6 여러 파일 CSP form-action 'self' · 안내 단추는 꼴이 맞는 https 주소만 · 속성 이스케이프");
 }
 
 console.log(`\n${pass} passed`);
