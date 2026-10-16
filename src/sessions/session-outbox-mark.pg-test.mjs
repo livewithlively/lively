@@ -10,7 +10,7 @@
 //  사양·엣지 표: 작업 스크래치 spec.md E10.
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
-const { markOutboxRowForTest: mark } = await import(`${DIST}/sessions/session-outbox.js`);
+const { markOutboxRowForTest: mark, settleLateEcho } = await import(`${DIST}/sessions/session-outbox.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -74,6 +74,33 @@ try {
     let threw = null, m;
     try { m = await mark(-12345, "delivered"); } catch (e) { threw = e; }
     chk("E10e 없는 행 — 던지지 않고 측정 줄도 없다", threw === null && m === null, String(threw));
+  }
+
+  // ── #4819 늦은 에코 — «쳤는데 15초 안에 못 봤다» 행을, 기록에서 그 말을 찾은 뒤 바로잡는 UPDATE(settleLateEcho) ──
+  //  목 풀로는 조건(상태·사유·종류의 OR 묶음)·timestamptz 변환·COALESCE 가 무엇이든 초록이다 — 실제 표에서 되읽어 판정한다.
+  //  사양·엣지 표: 작업 스크래치 spec-4819.md P7(바로잡기 · 그새 사람이 고른 것은 안 건드림).
+  {
+    const at = "2026-10-16T07:59:07.361Z";
+    const settled = async (seq, status, lastError, { kind = "prompt", sid = SID, when = at } = {}) => {
+      const id = await put(seq, `늦은 에코 ${seq}`, { kind });
+      await itemsPool.query(`UPDATE org_session_outbox SET status=$2, last_error=$3 WHERE id=$1`, [id, status, lastError]);
+      return { id, ok: await settleLateEcho(sid, id, when), r: await read(id) };
+    };
+    const a = await settled(11, "sent", "echo-unconfirmed");
+    chk("L1 sent·echo-unconfirmed → 전달됨·echo-late · delivered_at = 기록 줄의 시각",
+      a.ok === true && a.r.status === "delivered" && a.r.last_error === "echo-late" && new Date(a.r.delivered_at).toISOString() === at, JSON.stringify(a));
+    const b = await settled(12, "failed", "send: host-unknown");
+    chk("L2 failed·send: host-unknown → 전달됨·echo-late", b.ok === true && b.r.status === "delivered" && b.r.last_error === "echo-late", JSON.stringify(b));
+    for (const [seq, st, err, kind] of [[13, "queued", null, "prompt"], [14, "failed", "not-ready", "prompt"], [15, "sent", "echo-unreadable", "prompt"], [16, "sent", "echo-unconfirmed", "control"]]) {
+      const c = await settled(seq, st, err, { kind });
+      chk(`L3 ${st}·${err}·${kind} 는 건드리지 않는다(사람이 다시 보내기를 골랐거나 · 치지도 않았거나 · 설정 명령)`,
+        c.ok === false && c.r.status === st && c.r.last_error === err && !c.r.delivered_at, JSON.stringify(c));
+    }
+    const d = await settled(17, "sent", "echo-unconfirmed", { when: null });
+    chk("L4 기록 줄 시각을 모르면 delivered_at 은 지금",
+      d.ok === true && d.r.status === "delivered" && Math.abs(Date.now() - new Date(d.r.delivered_at).getTime()) < 60_000, JSON.stringify(d));
+    const e = await settled(18, "sent", "echo-unconfirmed", { sid: SID + "-다른" });
+    chk("L5 다른 세션 id 로는 바뀌지 않는다", e.ok === false && e.r.status === "sent" && e.r.last_error === "echo-unconfirmed", JSON.stringify(e));
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));
