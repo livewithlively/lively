@@ -11,7 +11,7 @@
 //   W1 말을 보내 연 화면 · 하네스가 0.8초 뒤 그린다 → 그리기 전엔 대화창(액자는 숨어 붙어 있음 · 대화창과 같은 크기 · 초점은 입력칸)
 //      · 그린 뒤 터미널(숨김 걷힘 · 터미널에 초점) · 넘긴 때는 그린 때 뒤, 0.3초 남짓 안
 //   W2 그냥 연 화면(firstPrompt 없음) → 종전처럼 처음부터 터미널(숨겨 붙이기 없음)
-//   W3 하네스가 끝내 안 그린다(공백만 계속 온다) → 5초에도 대화창 · 상한(12초) 뒤 터미널(종전 화면으로 물러남)
+//   W3 하네스가 끝내 안 그린다(공백만 계속 온다) → 5초에도 · 20초에도 대화창 · 상한(25초) 뒤 터미널(종전 화면으로 물러남)
 //   W4 숨겨 붙이는 중 사람이 [⋯ ▸ 보기 ▸ 터미널로] → 곧바로 터미널(초점도) · 그 뒤 신호가 와도 그대로
 //   W5 숨겨 붙이는 중 입력칸에 글을 쓰고 있다 → 그려도 화면을 뺏지 않는다(대화창 · 글 그대로 · 초점 그대로) · 다음 목록 갱신도 안 뺏는다
 //   W6 숨겨 붙이는 중 액자가 «박스 없음» → 액자를 걷고 대화창(터미널로 안 넘어감)
@@ -31,6 +31,12 @@
 //   W17 사람이 이 화면 밖(다른 입력칸)에 초점을 두고 있다 → 그려서 넘기되 초점은 빼앗지 않는다
 //   W18 숨겨 붙이는 중 연결 오류(status err) → 넘기지 않되 머리줄 칩으로는 보인다
 //   W19 숨겨 붙이는 중 목록 갱신이 «대화가 본자리»(대화 런타임 — chatHome)를 알려 온다 → 숨겨 붙이기를 접고 그려도 넘기지 않는다
+//   W20 되살린 화면(기록이 이미 있다) · 매니지드 행(노드 칸 = 세션 호스트 — 큐 되살리기가 건너뛴다) → 기다리는 동안 방금 보낸 말이
+//       대화창에 대기 말풍선으로 **한 번** 보인다(매니지드 실측: 되살린 뒤 6초 동안 그 말이 없었다)
+//   W20b 같은데 기록의 마지막 사람 말이 이미 그 말이다 → 두 번 그리지 않는다(대기 말풍선 없음)
+//   W21 멈춘 세션 대화창에서 말을 보내 되살리는 중(복원 요청이 느리다) 목록 갱신이 «살아 있다» 를 먼저 실어 온다
+//       → 옛 화면은 터미널로 넘기지 않는다(곧 다시 마운트돼 숨겨 붙인다) · 복원이 끝나면 같은 id 로 옮겨 간다
+//       (매니지드 실측: 옛 화면이 빈 터미널로 넘어갔다가 다시 마운트되며 대화창으로 돌아가는 깜빡임)
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
 //
 //  가짜는 «서버» 와 «하네스 출력» 뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을, 액자는 실제 터미널 모듈
@@ -109,10 +115,33 @@ async function PAGE_MAIN() {
   window.addEventListener("unhandledrejection", (e) => pageErrors.push("rej: " + String(e.reason && e.reason.message || e.reason)));
   const sleep = (ms) => new Promise((z) => setTimeout(z, ms));
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
+  //  W20 의 기록 — 이미 오간 말이 있는 세션(되살리기는 늘 이 모양이다). 그 밖의 세션은 빈 기록.
+  const line = (o) => JSON.stringify(o) + "\n";
+  const said = (role, text, ts) => role === "user"
+    ? line({ type: "user", timestamp: ts, message: { role: "user", content: text } })
+    : line({ type: "assistant", timestamp: ts, message: { role: "assistant", model: "claude-opus-4-1", content: [{ type: "text", text }] } });
+  const TRANSCRIPTS = {
+    "box-w20": said("user", "이전에 물어본 말", "2026-10-16T01:00:00Z") + said("assistant", "이전 답", "2026-10-16T01:00:05Z"),
+    "box-w20b": said("user", "이전에 물어본 말", "2026-10-16T01:00:00Z") + said("assistant", "이전 답", "2026-10-16T01:00:05Z")
+      + said("user", "되살리며 보낸 말 W20", "2026-10-16T01:01:00Z"),
+  };
   window.fetch = async (url) => {
     const u = new URL(String(url), location.href);
-    if (/\/transcript$/.test(u.pathname)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
+    if (/\/transcript$/.test(u.pathname)) {
+      //  진짜 서버처럼 창(from · 크기)을 머리에 싣는다 — 안 실으면 화면의 폴링이 «파일이 줄었다(교체)» 로 읽고 처음부터 다시 그린다(낙관 턴이 사라진다).
+      const sid = decodeURIComponent((/\/sessions\/([^/]+)\/transcript$/.exec(u.pathname) || [])[1] || "");
+      const all = TRANSCRIPTS[sid] || "";
+      const from = u.searchParams.has("from") ? Math.min(Number(u.searchParams.get("from")) || 0, all.length) : 0;
+      return new Response(all.slice(from), { status: 200, headers: { "content-type": "text/plain",
+        "X-Log-Bytes": String(all.length), "X-Log-From": String(from), "X-Log-To": String(all.length) } });
+    }
     if (/\/outbox$/.test(u.pathname)) return J({ items: [] });
+    if (/\/restore$/.test(u.pathname)) {                              // W21 — 느린 복원(같은 id 로 다시 띄웠다)
+      const sid = decodeURIComponent((/\/sessions\/([^/]+)\/restore$/.exec(u.pathname) || [])[1] || "");
+      await sleep(900);
+      return J({ session: { id: sid } });
+    }
+    if (/\/prompt$/.test(u.pathname)) return J({ outbox_id: 7 });
     return J({ error: "no" }, 404);
   };
   localStorage.setItem("lively_ui_token", "t");
@@ -126,13 +155,14 @@ async function PAGE_MAIN() {
   });
   const row = (id, alive) => ({ id, label: "세션", live: true, alive, node: null, owned: true, stateKey: alive ? "idle" : "restorable", stateLabel: alive ? "대기" : "중단됨",
     projectId: null, projectName: "", raw: alive ? { harness: "claude", chatMode: "tmux", agentState: "idle" } : { harness: "claude", chatMode: "tmux", restorable: true } });
-  const mount = (id, frameQ, opts, alive = true, rawExtra = null, hidden = false) => {
+  const mount = (id, frameQ, opts, alive = true, rawExtra = null, hidden = false, topExtra = null) => {
     const box = document.createElement("div");
     box.style.cssText = "position:fixed;left:0;top:0;width:1000px;height:700px;flex-direction:column;background:#fff;display:" + (hidden ? "none" : "flex");
     document.body.append(box);
     const t0 = Date.now();
     const r0 = row(id, alive);
     if (rawExtra) Object.assign(r0.raw, rawExtra);
+    if (topExtra) Object.assign(r0, topExtra);
     const h = SC.mountSessionChat(box, r0, Object.assign({
       terminalSrc: (t) => (t.live && t.alive ? `frame.html?session=${encodeURIComponent(t.id)}&embed=1&${frameQ}` : null),
       onResumed: () => {},
@@ -159,6 +189,9 @@ async function PAGE_MAIN() {
       box, h, snap, geo, t0, termAt: () => (termAt ? termAt - t0 : 0), fx: () => fx[id] || {},
       input: () => box.querySelector("textarea.livc-input"),
       done: () => { clearInterval(iv); try { h.destroy(); } catch (_) { /* 이미 */ } box.remove(); },
+      //  대화창 안에서 그 글이 몇 번 보이나(글 마디 단위) · 대기 줄 글
+      count: (text) => chat.innerText.split(text).length - 1,   // tui 모양은 글을 여러 마디로 쪼개 그린다 — 보이는 글(innerText)로 센다
+      qstate: () => [...chat.querySelectorAll(".dt-qstate")].map((e) => e.textContent).join(" | "),
     };
   };
   try {
@@ -187,8 +220,10 @@ async function PAGE_MAIN() {
       const v = mount("box-w3", "blank=1", { firstPrompt: "첫 지시" });
       await sleep(5000);
       R.w3 = { at5s: v.snap() };
-      await sleep(8000);
-      R.w3.at13s = v.snap();
+      await sleep(15000);
+      R.w3.at20s = v.snap();
+      await sleep(6000);
+      R.w3.at26s = v.snap();
       R.w3.termAt = v.termAt();
       v.done();
     }
@@ -301,7 +336,7 @@ async function PAGE_MAIN() {
       const wrapEl = v.box.querySelector(".sc-wrap");
       v.done();
       R.w14.warmAfterDestroy = wrapEl.classList.contains("sc-term-warm");   // 부서질 때 곧바로 걷혔나(상한 타이머를 남기지 않았나)
-      await sleep(13000);
+      await sleep(2000);
       R.w14.newErrors = pageErrors.slice(errs0);
     }
     // W15 — 숨은 탭에서 열렸다가 보인다(가짜 RO — 머리말 ⚠)
@@ -366,6 +401,39 @@ async function PAGE_MAIN() {
       R.w19.after = v.snap(); R.w19.ink = !!v.fx()["test-ink"]; R.w19.termAt = v.termAt();
       v.done();
     }
+    // W20 — 되살린 화면 · 매니지드 행 · 이미 있는 기록
+    {
+      const v = mount("box-w20", "ink=1500", { firstPrompt: "되살리며 보낸 말 W20" }, true, null, false, { node: "sesshost-test" });
+      await sleep(800);
+      R.w20 = { during: v.snap(), n: v.count("되살리며 보낸 말 W20"), prev: v.count("이전에 물어본 말"), qstate: v.qstate() };
+      v.done();
+    }
+    // W20b — 기록의 마지막 사람 말이 이미 그 말
+    {
+      const v = mount("box-w20b", "ink=1500", { firstPrompt: "되살리며 보낸 말 W20" }, true, null, false, { node: "sesshost-test" });
+      await sleep(800);
+      R.w20b = { during: v.snap(), n: v.count("되살리며 보낸 말 W20"), qstate: v.qstate() };
+      v.done();
+    }
+    // W21 — 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 온다
+    {
+      let routed = null;
+      const v = mount("box-w21", "ink=300", { onResumed: (id) => { routed = id; } }, false);
+      await sleep(400);
+      const inp = v.input();
+      R.w21 = { before: v.snap(), hasInput: !!inp };
+      inp.value = "되살리며 보낸 말 W21"; inp.dispatchEvent(new Event("input"));
+      const form = inp.closest("form");
+      if (form && form.requestSubmit) form.requestSubmit(); else inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await sleep(300);
+      v.h.update(row("box-w21", true));                                 // 복원 응답보다 먼저 온 목록 갱신
+      await sleep(200);
+      R.w21.duringRevive = v.snap();
+      await sleep(1200);
+      R.w21.routed = routed;
+      R.w21.after = v.snap();
+      v.done();
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -381,7 +449,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 let dom;
 try {
   dom = await dumpDom(chrome, {
-    html: page, serve: true, prefix: "term-warm-", virtualTimeBudget: 120000, args: ["--window-size=1200,900"],
+    html: page, serve: true, prefix: "term-warm-", virtualTimeBudget: 180000, args: ["--window-size=1200,900"],
     copy: [...CSS, ...XTERM, write("frame.html", FRAME), write("tm.js", tm)],
   });
 } finally { rmSync(files, { recursive: true, force: true }); }
@@ -416,9 +484,9 @@ const w2 = (R.w2 || {}).at200 || {};
 check(w2.term && !w2.warm && w2.frame && !w2.inert, "W2 그냥 연 화면은 종전처럼 처음부터 터미널(숨겨 붙이기 없음)", w2);
 
 const w3 = R.w3 || {};
-check((w3.at5s || {}).warm && !(w3.at5s || {}).term, "W3 공백만 오면 «그렸다» 가 아니다 — 5초에도 대화창", w3.at5s);
-check((w3.at13s || {}).term && !(w3.at13s || {}).warm && w3.termAt >= 11500 && w3.termAt <= 13000,
-  "W3 끝내 안 그리면 상한(12초) 뒤 종전처럼 터미널로", { at13s: w3.at13s, termAt: w3.termAt });
+check((w3.at5s || {}).warm && !(w3.at5s || {}).term && (w3.at20s || {}).warm && !(w3.at20s || {}).term, "W3 공백만 오면 «그렸다» 가 아니다 — 5초에도 · 20초에도 대화창(느린 하네스를 기다린다)", { at5s: w3.at5s, at20s: w3.at20s });
+check((w3.at26s || {}).term && !(w3.at26s || {}).warm && w3.termAt >= 24500 && w3.termAt <= 26000,
+  "W3 끝내 안 그리면 상한(25초) 뒤 종전처럼 터미널로", { at26s: w3.at26s, termAt: w3.termAt });
 
 const w4 = R.w4 || {};
 check(w4.menu && w4.btn && (w4.afterPick || {}).term && !(w4.afterPick || {}).warm && w4.focused && (w4.afterPick || {}).focus === "frame",
@@ -458,7 +526,7 @@ check(noWarm((R.w11 || {}).after) && !(R.w11 || {}).termAt, "W11 대화가 본�
 check(noWarm((R.w12 || {}).after) && !(R.w12 || {}).termAt && (R.w12 || {}).value === "못 간 글", "W12 못 간 글을 들고 온 화면은 숨겨 붙이지 않는다 · 글은 입력칸에", R.w12);
 check(noWarm((R.w13 || {}).after) && !(R.w13 || {}).termAt, "W13 관측 못 한 행(observed:false)은 숨겨 붙이지 않는다", R.w13);
 const w14 = R.w14 || {};
-check((w14.before || {}).warm && w14.warmAfterDestroy === false && Array.isArray(w14.newErrors) && !w14.newErrors.length, "W14 숨겨 붙이는 중 부서지면 그 자리에서 걷힌다(상한 타이머를 남기지 않는다) · 오류 0", w14);
+check((w14.before || {}).warm && w14.warmAfterDestroy === false && Array.isArray(w14.newErrors) && !w14.newErrors.length, "W14 숨겨 붙이는 중 부서지면 그 자리에서 걷힌다(상한 타이머도 함께 거둔다) · 오류 0", w14);
 const w15 = R.w15 || {};
 const g15 = w15.geo || { chat: [], term: [] };
 check((w15.hiddenSnap || {}).warm && w15.watchesChat && (w15.shownSnap || {}).warm && !(w15.shownSnap || {}).term && g15.chat.length === 3 && g15.chat[1] > 100 && g15.chat.every((x, i) => near(x, g15.term[i])),
@@ -475,6 +543,16 @@ check((w18.after || {}).warm && !(w18.after || {}).term && /재연결/.test(Stri
 const w19 = R.w19 || {};
 check(!(w19.afterUpdate || {}).warm && !(w19.afterUpdate || {}).term && w19.ink && !(w19.after || {}).term && !w19.termAt,
   "W19 숨겨 붙이는 중 «대화가 본자리» 를 알게 되면 접고 · 그려도 터미널로 안 넘긴다", w19);
+
+const w20 = R.w20 || {};
+check((w20.during || {}).warm && !(w20.during || {}).term && w20.prev === 1 && w20.n === 1 && /전달 대기 중/.test(String(w20.qstate || "")),
+  "W20 되살린 화면(매니지드 행 · 기록 있음) — 기다리는 동안 방금 보낸 말이 대화창에 대기 말풍선으로 한 번 보인다", w20);
+const w20b = R.w20b || {};
+check((w20b.during || {}).warm && w20b.n === 1 && !w20b.qstate, "W20b 기록에 이미 그 말이 있으면 두 번 그리지 않는다(대기 말풍선 없음)", w20b);
+
+const w21 = R.w21 || {};
+check(w21.hasInput && !(w21.duringRevive || {}).term && !(w21.after || {}).term && w21.routed === "box-w21",
+  "W21 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 와도 옛 화면을 빈 터미널로 넘기지 않는다 · 복원 뒤 같은 id 로 옮겨 간다", w21);
 
 check(!(R.pageErrors || []).length, "E 페이지 오류 없음", R.pageErrors);
 console.log(`\nterm-warm-runtime: ${pass} 통과 · ${fail} 실패`);

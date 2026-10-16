@@ -37,7 +37,7 @@ for (const [s, want, why] of [
 ]) assert.equal(screenHasInk(s), want, `screenHasInk(${JSON.stringify(s)}) — ${why}`);
 ok("U1·U2 «그렸나» — 공백·줄바꿈·NBSP 만은 아니다 · 글자 하나라도(상자 선·한글 포함) 그렇다");
 
-// 상수 자체 — 이 값이 바뀌면 런타임 시험의 시간 창과 세션 화면 상한(12초)도 함께 봐야 한다
+// 상수 자체 — 이 값이 바뀌면 런타임 시험의 시간 창과 세션 화면 상한(25초)도 함께 봐야 한다
 assert.equal(QUIET, 300); assert.equal(MAX, 1500);
 ok("상수 — 멎기 0.3초 · 처음 그린 때부터 상한 1.5초");
 
