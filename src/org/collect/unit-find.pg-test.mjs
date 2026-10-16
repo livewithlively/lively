@@ -280,9 +280,12 @@ try {
         __resetQueryEmbedCache(); embedded = 0;
         const weakQ = await handler("knowledge_search")({ q: "recruit pipeline?" }, userOf(A), { source: "mcp", viewer: A });
         const weakCalls = embedded;
-        chk("V4 «?» 로 끝나는 세션 검색도 질의 임베딩은 한 번 — 강하면(낱말 맞음) 의미 거리를 안 재고, 약하면 검색이 계산한 벡터를 다시 쓴다(단위 뜻 맞춤까지)",
-          strongCalls === 1 && !strongQ.collect_hint && weakCalls === 1 && !!weakQ.collect_hint?.units?.length,
-          JSON.stringify({ strongCalls, weakCalls, strongHint: !!strongQ.collect_hint, weakHint: weakQ.collect_hint && { reason: weakQ.collect_hint.reason, units: weakQ.collect_hint.units?.map((x) => x.name) } }));
+        __resetQueryEmbedCache(); embedded = 0;
+        const spaced = await handler("knowledge_search")({ q: "recruit pipeline? " }, userOf(A), { source: "mcp", viewer: A });
+        const spacedCalls = embedded;
+        chk("V4 «?» 로 끝나는 세션 검색도 질의 임베딩은 한 번 — 강하면(낱말 맞음) 의미 거리를 안 재고, 약하면 검색이 계산한 벡터를 다시 쓴다(단위 뜻 맞춤까지 · 끝 공백이 있어도)",
+          strongCalls === 1 && !strongQ.collect_hint && weakCalls === 1 && !!weakQ.collect_hint?.units?.length && spacedCalls === 1 && !!spaced.collect_hint,
+          JSON.stringify({ strongCalls, weakCalls, spacedCalls, strongHint: !!strongQ.collect_hint, weakHint: weakQ.collect_hint && { reason: weakQ.collect_hint.reason, units: weakQ.collect_hint.units?.map((x) => x.name) } }));
         //  고치기 — 임베딩할 글이 그대로면 벡터를 안 비운다 · 바뀌면 비워 다시 임베딩한다(시각이 바뀐다).
         const stamp = async () => (await itemsPool.query(`SELECT embedding_updated_at AS t FROM collect_unit WHERE id=$1`, [u2.id])).rows[0].t?.toISOString?.() ?? null;
         const t0 = await stamp();

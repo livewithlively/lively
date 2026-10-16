@@ -115,8 +115,8 @@ async function myConnectors(member: string): Promise<Map<string, string>> {
  */
 export async function findUnitsFor(actor: { member: string; isAdmin: boolean }, query: string,
   opts: { limit?: number; now?: number; blocked?: boolean; deadline?: number } = {}): Promise<UnitPointer[]> {
-  //  낱말 맞춤은 문장부호를 뗀 글로 · 설명 벡터와 잴 질의 벡터는 원문으로(검색이 기억해 둔 벡터를 다시 쓴다 — cleanQuery 머리말).
-  const raw = String(query ?? "").trim();
+  //  낱말 맞춤은 문장부호를 뗀 글로 · 설명 벡터와 잴 질의 벡터는 원문 그대로(앞뒤 공백도 — 검색이 기억해 둔 벡터를 다시 쓴다 · cleanQuery 머리말).
+  const raw = String(query ?? "");
   const q = cleanQuery(raw);
   if (!q || !actor.member) return [];
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 5), 1), 10);
@@ -248,8 +248,9 @@ export async function collectHintFor(input: {
   /** 이 시각(ms)이 지나면 더 묻지 않는다 — 부르는 쪽(knowledge_search)이 기다리는 상한. 지나서 끝난 일은 버려지므로 미리 멈춘다. */
   deadline?: number;
 }): Promise<CollectHint | null> {
-  //  raw = 검색과 같은 원문(질의 임베딩 기억을 다시 쓴다) · q = 문장부호를 뗀 글(낱말 판정 · 원문 자료 찾기).
-  const raw = String(input.q ?? "").trim();
+  //  raw = 검색과 **글자 하나 다르지 않은** 원문(질의 임베딩 기억의 열쇠가 글 그대로다 — 앞뒤 공백도 지우지 않는다) · q = 문장부호를 뗀 글(낱말 판정 ·
+  //   원문 자료 찾기).
+  const raw = String(input.q ?? "");
   const q = cleanQuery(raw);
   const late = () => input.deadline != null && Date.now() > input.deadline;
   //  안내는 질문한 사람의 것이다 — 사람이 없으면(내부 호출) 만들지 않는다. 자료·단위 모두 그 사람 자신의 공개범위로만 찾는다.
