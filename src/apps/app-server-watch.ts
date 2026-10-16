@@ -1,49 +1,40 @@
 // 앱 서버 감시 · 정리(#4484 앱 v2-5) — 하우스키핑(매니지드 테넌트 틱 5분 · 자가호스팅은 쓰지 않는다)이 부른다.
 //
-//  ① 자동 멈춤(상민 2026-10-15): 앱별 5분 호출 수 · 실행 시간 합을 CloudWatch 지표로 보고 상한(app_server_policy)을 넘으면 그 함수의
+//  ① 자동 멈춤(상민 2026-10-15): 앱별 5분 호출 수 · 실행 시간 합을 보고 상한(app_server_policy)을 넘으면 그 함수의
 //     동시 실행을 0 으로(멈춤) + 책임자 · 관리자 알림. 다시 켜기는 관리자(app_server_resume).
-//     ⚠ 원가: GetMetricData 는 «지표 1,000개당 $0.01» 이다. 함수마다 5분마다 두 지표를 보면 앱 1,500개 규모에서 월 수백 달러가 된다.
-//      그래서 지난번에 호출이 0 이던 함수는 30분에 한 번만 보고(조용한 앱이 갑자기 폭주해도 30분 안에 잡는다), 실행 시간은 호출이 있던 함수만 본다.
-//      v2-6 이 앱 주소 앞단에서 요청을 세면(무료) 이 조회는 더 줄일 수 있다.
-//     실행 시간은 «호출 수 × 요청 시간 천장(60초)» 이 기준을 넘을 수 있는 함수만 본다(그 밑이면 넘을 수가 없다 — 격리 리뷰).
+//     #4485(v2-6) — 수는 **게이트웨이가 센 것**(app-server-usage · org_app_server_usage)을 본다. 함수를 부르는 길이 게이트웨이뿐이라(함수 주소 없음 ·
+//      설계 §19) 그 수가 전부다. v2-5 는 CloudWatch 지표(GetMetricData — «지표 1,000개당 $0.01», 앱 1,500개 규모 월 약 $45 추정)를 봤다 — 그 조회는 없앴다.
+//      실행 시간은 Lambda 가 흘려 받기 끝에 준 REPORT 의 Billed Duration 합이다.
 //  ② 죽은 빌드 걷기 — 게이트웨이가 빌드 도중 다시 시작되면 'building' 줄이 남는다(lease 지남 → failed).
 //  ③ 옛 빌드 정리 — 앱이 사라졌거나, 별칭이 안 가리키고 30일 지난 빌드의 zip 을 지운다(판 묶음이 남아 있어 다시 빌드할 수 있다).
 //  ④ 고아 함수 — 앱을 지울 때 함수를 못 지워 남긴 줄(org_app_server)을 다시 지운다.
 import { logger } from "../log.js";
-import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
+import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv } from "./app-server-config.js";
-import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
+import { autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
 import { publicError, type LambdaApi } from "./app-server-deploy.js";
 import { removeServer, stopServer } from "./app-server-lifecycle.js";
-import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
+import { appServerUsage5m, pruneAppServerUsage } from "./app-server-usage.js";
 import { notifyAppInstaller } from "./notify.js";
 import { listActiveAdminIds } from "../org/store/members.js";
 import { getApp } from "../org/store/apps.js";
 
-export const IDLE_RECHECK_MS = 30 * 60_000;
 export const BUILD_PRUNE_DAYS = 30;
-
-/** 함수마다 «마지막으로 본 때 · 그때 호출이 있었나»(이 게이트웨이 프로세스 안 — 재기동하면 한 번 전부 본다). */
-const seen = new Map<string, { at: number; active: boolean }>();
-export function resetWatchStateForTest(): void { seen.clear(); }
+/** 호출 수 칸(org_app_server_usage) 보관 — 감시는 마지막 10분만 본다. */
+export const USAGE_KEEP_DAYS = 7;
+export function resetWatchStateForTest(): void { /* v2-6 부터 프로세스 안 상태가 없다(호출 수는 DB 칸) */ }
 
 export interface WatchDeps {
   api?: LambdaApi;
-  metrics?: (queries: MetricQuery[], range: { start: Date; end: Date; periodSec: number }) => Promise<MetricResult[]>;
+  /** 시험 — 앱마다 5분 호출 수 · 실행 시간(초). 기본 = 게이트웨이가 센 수(app-server-usage). */
+  usage?: () => Promise<Map<string, { calls: number; billedSec: number }>>;
   /** kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함). 같은 앱 · 같은 종류는 읽기 전까지 한 장. */
   notify?: (appId: string, title: string, body: string, kind: "stopped" | "stop-failed") => Promise<void>;
   now?: () => number;
 }
 
-/** 이번 틱에 볼 함수 — 지난번에 바빴거나 · 처음 보거나 · 조용했어도 30분이 지났으면. */
-export function dueForCheck(fn: string, now: number): boolean {
-  const s = seen.get(`${blobTenant()}:${fn}`);
-  return !s || s.active || now - s.at >= IDLE_RECHECK_MS;
-}
-
-const maxOf = (r: MetricResult | undefined): number | null => (r && r.values.length ? Math.max(...r.values) : null);
 
 async function defaultNotify(appId: string, title: string, body: string, kind: "stopped" | "stop-failed"): Promise<void> {
   const app = await getApp(appId).catch(() => null);
@@ -58,23 +49,13 @@ async function defaultNotify(appId: string, title: string, body: string, kind: "
 export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps = {}): Promise<{ checked: number; stopped: string[] }> {
   const env = appServerEnv();
   if (!env) return { checked: 0, stopped: [] };
-  const now = (deps.now ?? Date.now)();
   const rows = (await st.listServerRows()).filter((r) => !r.stopped_at && (r.cur_lambda_version || r.pub_lambda_version));
-  const due = rows.filter((r) => dueForCheck(r.function_name, now));
-  if (!due.length) return { checked: 0, stopped: [] };
-  const range = { start: new Date(now - 10 * 60_000), end: new Date(now), periodSec: 300 };
-  const metrics = deps.metrics ?? ((q, r) => getMetricData({ region: env.region }, q, r));
-  const inv = await metrics(due.map((r, i) => ({ id: `i${i}`, fn: r.function_name, metric: "Invocations", stat: "Sum" })), range);
-  //  실행 시간 합은 «호출 수 × 요청 하나의 최대 시간» 을 넘을 수 없다 — 그게 기준 밑이면 물을 필요가 없다(지표 비용).
-  const busy = due.map((r, i) => ({ r, i, n: maxOf(inv.find((x) => x.id === `i${i}`)) }))
-    .filter((x) => (x.n ?? 0) > 0 && (x.n ?? 0) * APP_SERVER_POLICY_MAX.timeout_s > policy.stop_duration_s_5m);
-  const dur = busy.length ? await metrics(busy.map((x) => ({ id: `d${x.i}`, fn: x.r.function_name, metric: "Duration", stat: "Sum" })), range) : [];
+  if (!rows.length) return { checked: 0, stopped: [] };
+  const usage = await (deps.usage ?? (() => appServerUsage5m((deps.now ?? Date.now)())))();
   const stopped: string[] = [];
-  for (const [i, r] of due.entries()) {
-    const n = maxOf(inv.find((x) => x.id === `i${i}`));
-    const ms = maxOf(dur.find((x) => x.id === `d${i}`));
-    seen.set(`${blobTenant()}:${r.function_name}`, { at: now, active: (n ?? 0) > 0 });
-    const why = autoStopReason(policy, { invocations5m: n, durationSec5m: ms == null ? null : ms / 1000 });
+  for (const r of rows) {
+    const u = usage.get(r.app_id);
+    const why = autoStopReason(policy, { invocations5m: u ? u.calls : null, durationSec5m: u ? u.billedSec : null });
     if (!why) continue;
     try {
       //  멈춤은 손으로 멈추기와 같은 길 — 남의 워크스페이스 함수(태그)면 409 로 건너뛰고, 이미 멈춘 함수의 기록은 덮지 않는다.
@@ -94,7 +75,7 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
       await (deps.notify ?? defaultNotify)(r.app_id, title, body, "stop-failed").catch(() => { /* 알림 실패 — 로그는 남았다 */ });
     }
   }
-  return { checked: due.length, stopped };
+  return { checked: rows.length, stopped };
 }
 
 /** ③ 옛 빌드 정리 — zip 을 지우고 줄을 지운다. 지운 수. */
@@ -131,5 +112,6 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.watch = await watchAppServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.pruned = await pruneServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.usage_pruned = await pruneAppServerUsage(USAGE_KEEP_DAYS).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;
 }

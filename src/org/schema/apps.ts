@@ -235,6 +235,24 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   //  stop_kind 는 표를 만든 뒤에 더한 칸이라 ALTER 로(이미 만들어진 표에도 붙게 — 관례).
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS stop_kind TEXT CHECK (stop_kind IN ('auto','manual'));`);
+  //  #4485(v2-6) — 별칭이 가리키는 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 판마다 새로 발급하고, 어느 별칭도 안 가리키게 된 판의 토큰은 회수한다.
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_token_hash TEXT;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_token_hash TEXT;`);
+  //  org_app_server_usage(#4485) — 앱 주소 → 함수 호출 수 · 실행 시간(5분 칸). 함수를 부르는 길이 게이트웨이뿐이라 이 수가 전부다 —
+  //   자동 멈춤 감시가 CloudWatch 지표 대신 본다(app-server-usage.ts). rejected = 동시 처리 상한으로 함수를 부르지 않고 거절한 수. 7일 뒤 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_server_usage(
+      app_id TEXT NOT NULL,
+      bucket TIMESTAMPTZ NOT NULL,
+      calls INT NOT NULL DEFAULT 0,
+      billed_ms BIGINT NOT NULL DEFAULT 0,
+      errors INT NOT NULL DEFAULT 0,
+      rejected INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, bucket)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_server_usage_bucket_idx ON org_app_server_usage(bucket);`);
   //  org_app.builtin_version — 패키지 폴더(apps/builtin)에 지금 실린 릴리스 판 번호. 시더가 적는다. 워크스페이스가 빌트인을
   //   덮어쓴 뒤(source.overrides_builtin) 릴리스가 올라가도 덮지 않으므로, 화면이 「원본에 새 판이 있다」 를 이 값으로 안다.
   //  org_app.current_version_no — 지금 서빙 중인 상태가 org_app_version 의 어느 판인가(없으면 NULL — 판 이력 도입 전 설치).

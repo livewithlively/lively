@@ -145,6 +145,8 @@ export interface ServerRow {
   pub_version_no: number | null; pub_build_key: string | null; pub_lambda_version: string | null; pub_at: string | null;
   stopped_at: string | null; stopped_by: string | null; stop_kind: "auto" | "manual" | null; stop_reason: string | null;
   lock_until: string | null; last_error: string | null;
+  /** #4485 — 그 별칭의 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 옛 줄(v2-5)은 없다. */
+  cur_token_hash?: string | null; pub_token_hash?: string | null;
   created_at: string; updated_at: string;
 }
 
@@ -175,11 +177,11 @@ export async function unlockServer(appId: string): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET lock_until = NULL WHERE app_id=$1`, [appId]);
 }
 
-export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string }): Promise<void> {
+export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string; token_hash?: string | null }): Promise<void> {
   const c = alias === "cur" ? "cur" : "pub";
   await itemsPool.query(
-    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_at=now(), last_error=NULL, updated_at=now() WHERE app_id=$1`,
-    [appId, v.version_no, v.build_key, v.lambda_version]);
+    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_at=now(), last_error=NULL, updated_at=now() WHERE app_id=$1`,
+    [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null]);
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);

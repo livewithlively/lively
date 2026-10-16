@@ -14,7 +14,8 @@
 //  앱 화면에서 사람이 누른 요청과 같은 권한(설계 §6 «사람 대리»). 그 뒤는 기존 앱 도구 게이트(requireAppTool)가 그대로 돈다.
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
-import { mintToken } from "../org/store/tokens.js";
+import { mintToken, revokeToken } from "../org/store/tokens.js";
+import { itemsPool } from "../db/client.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
 import { canSeeApp } from "./visibility.js";
 import { getMember } from "../org/store/members.js";
@@ -44,6 +45,40 @@ export async function mintAppServerToken(appId: string, actor: string): Promise<
   const userId = appServerUserId(appSqlTenantId(), appId);
   const { token, expiresAt } = await mintToken({ userId, scopes: [], label: `app-server:${appId}`, memberId: null, appId }, actor, "app-server");
   return { token, expiresAt, userId };
+}
+
+/** 함수 판에 굽는 토큰의 표지(#4485) — 관리자가 app_server_token_mint 로 받는 토큰(`app-server:<앱>` · 바깥 서버용)과 가른다. 회수는 이 표지만. */
+export const FUNCTION_TOKEN_LABEL = (appId: string): string => `app-server-fn:${appId}`;
+
+/**
+ * 함수 판 하나에 구울 앱 서버 토큰(#4485 앱 v2-6) — 판을 새로 고정할 때마다 새로 발급한다. 평문은 그 판의 환경변수(LIVELY_APP_TOKEN)에만 남는다.
+ *  권한은 mintAppServerToken 과 같다(scope 없음 — 사람 신원과 함께일 때만 그 사람 ∩ 동의).
+ */
+export async function mintAppServerFunctionToken(appId: string, actor: string): Promise<{ token: string; tokenHash: string }> {
+  const app = await getApp(appId);
+  if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (isBuiltinSource(app.source)) throw new HttpError(400, `「${app.title || appId}」 은(는) 라이블리가 싣는 기본 앱이라 앱 서버 토큰을 만들지 않습니다`);
+  if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다(${app.status})`);
+  const { token, tokenHash } = await mintToken({ userId: appServerUserId(appSqlTenantId(), appId), scopes: [], label: FUNCTION_TOKEN_LABEL(appId), memberId: null, appId }, actor, "app-server");
+  return { token, tokenHash };
+}
+
+/**
+ * 어느 별칭도 안 가리키게 된 함수 판의 토큰을 회수한다(#4485) — keep = 지금 cur · pub 판의 토큰. 회수한 수.
+ *  이 앱의 함수 판 토큰(FUNCTION_TOKEN_LABEL)만 본다 — 관리자가 바깥 서버용으로 받은 토큰은 건드리지 않는다.
+ *  ⚠ 판에서 토큰을 읽어 오지 않는다(AWS 를 다시 부르지 않게) — 별칭을 옮길 때 그 판의 토큰 지문을 org_app_server 에 함께 적는다.
+ */
+export async function revokeStaleFunctionTokens(appId: string, keep: Array<string | null | undefined>, actor = "app-server-deploy"): Promise<number> {
+  const keepSet = new Set(keep.filter((x): x is string => !!x));
+  const r = await itemsPool.query(
+    `SELECT token_hash FROM auth_token WHERE user_id=$1 AND label=$2 AND app_id=$3 AND revoked_at IS NULL`,
+    [appServerUserId(appSqlTenantId(), appId), FUNCTION_TOKEN_LABEL(appId), appId]);
+  let n = 0;
+  for (const row of r.rows as Array<{ token_hash: string }>) {
+    if (keepSet.has(row.token_hash)) continue;
+    if ((await revokeToken(row.token_hash, actor, "app-server")) === "revoked") n++;
+  }
+  return n;
 }
 
 export interface ResolveAppServerDeps {

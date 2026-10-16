@@ -1,5 +1,6 @@
 // 앱 서버 상한(#4484 앱 v2-5) — 함수 사양 · 빌드 시간·메모리 · 자동 멈춤 기준. 값과 판정만(순수).
 //
+//  #4485(v2-6): 동시 처리 상한 둘(워크스페이스 50 · 앱 20 — #4792 결정)을 같은 자리에 둔다(배포 없이 고친다 · 앱 상한이 워크스페이스 상한을 넘으면 워크스페이스 값까지만 쓴다).
 //  결정(상민 2026-10-15): 함수 기본 512MB · 30초(앱 주소 앞단이 30초에 끊는다) · 자동 멈춤 = 앱별 5분 호출 3만 회 또는 실행 시간 합 3,000초
 //   (평균 동시 10개를 5분 내내) → 그 함수 동시 실행 0 + 책임자·관리자 알림, 관리자가 다시 켠다. 상한은 배포 없이 고친다.
 //  읽는 순서(앱 판 묶음 상한 #4481 과 같다): org_runtime_config.app_server_policy(관리자 app_server_limits_set) → env LIVELY_APP_SERVER_POLICY → 코드 기본값.
@@ -16,23 +17,30 @@ export interface AppServerPolicy {
   stop_duration_s_5m: number;   // 5분 실행 시간 합(초)이 이걸 넘으면 멈춘다
   log_retention_days: number;   // 함수 로그 보관(일) — CloudWatch 가 받는 값으로 내린다
   keep_versions: number;        // 별칭이 가리키지 않는 옛 함수 판을 몇 개 남기나
+  //  #4485 v2-6 · #4792 결정(상민 2026-10-16) — 앱 주소 → 함수를 부르는 자리(게이트웨이)가 지금 처리 중인 요청 수를 세고, 넘으면 함수를 부르지 않고 429.
+  //   Lambda 예약 동시 실행으로 걸지 않는 까닭: 예약 합이 «계정 1,000 − 남겨야 하는 100» 을 못 넘어 함수마다 걸면 서버 앱 수가 그만큼으로 막힌다.
+  max_inflight_workspace: number; // 워크스페이스 하나가 동시에 처리하는 앱 서버 요청 수
+  max_inflight_app: number;       // 앱 하나가 동시에 처리하는 요청 수
 }
 export type AppServerPolicyPatch = Partial<AppServerPolicy>;
 
 export const APP_SERVER_POLICY_DEFAULT: AppServerPolicy = {
   memory_mb: 512, timeout_s: 30, build_timeout_s: 600, build_mem_floor_mb: 500, build_heap_mb: 1024,
   stop_invocations_5m: 30_000, stop_duration_s_5m: 3_000, log_retention_days: 14, keep_versions: 3,
+  max_inflight_workspace: 50, max_inflight_app: 20,
 };
 
 /** 바닥 — 설정이 이 밑으로 못 간다(0 · 음수 · 잡값은 바닥이 아니라 «그 값 없음» = 기본값으로 읽는다). */
 export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
   memory_mb: 128, timeout_s: 3, build_timeout_s: 60, build_mem_floor_mb: 300, build_heap_mb: 0,
   stop_invocations_5m: 100, stop_duration_s_5m: 60, log_retention_days: 1, keep_versions: 1,
+  max_inflight_workspace: 1, max_inflight_app: 1,
 };
 /** 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 4GB. */
 export const APP_SERVER_POLICY_MAX: AppServerPolicy = {
   memory_mb: 4096, timeout_s: 60, build_timeout_s: 1800, build_mem_floor_mb: 1500, build_heap_mb: 4096,
   stop_invocations_5m: 3_000_000, stop_duration_s_5m: 300_000, log_retention_days: 365, keep_versions: 20,
+  max_inflight_workspace: 1000, max_inflight_app: 500,
 };
 
 export const APP_SERVER_POLICY_KEYS = Object.keys(APP_SERVER_POLICY_DEFAULT) as Array<keyof AppServerPolicy>;
@@ -53,6 +61,7 @@ export function normalizeAppServerPolicy(patch: unknown, base: AppServerPolicy =
   const out = { ...base };
   for (const k of APP_SERVER_POLICY_KEYS) out[k] = clamp(p[k], base[k], APP_SERVER_POLICY_MIN[k], APP_SERVER_POLICY_MAX[k]);
   out.log_retention_days = retentionDaysFor(out.log_retention_days);
+  out.max_inflight_app = Math.min(out.max_inflight_app, out.max_inflight_workspace);
   return out;
 }
 

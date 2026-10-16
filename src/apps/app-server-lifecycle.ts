@@ -7,6 +7,7 @@ import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, logGroupFor, serverDeclOf } from "./app-server-config.js";
 import { buildKeyFor, liveBuildProgress } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
+import { revokeStaleFunctionTokens } from "./app-server-auth.js";
 import {
   appServerUnavailable, foreignMsg, functionOwnership, installedTarget, publicError, realLambdaApi, sleepDefault, withDeps, type ServerDeps,
 } from "./app-server-deploy.js";
@@ -96,7 +97,11 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   }
   const s3 = appBundleS3Config();
   const { zipKeys } = await st.deleteServerBuildRows(appId).catch((e) => { errors.push(`기록: ${publicError(e)}`); return { zipKeys: [] as string[] }; });
-  if (row && !pending) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
+  if (row && !pending) {
+    await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
+    //  #4485 — 함수 판에 구운 앱 서버 토큰을 모두 회수한다(같은 id 로 앱을 다시 만들어도 옛 토큰이 살아나지 않게).
+    await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
+  }
   for (const k of zipKeys) {
     if (deps.deleteZip) await deps.deleteZip(k).catch((e) => errors.push(`zip: ${publicError(e)}`));
     else if (s3) await s3Delete(s3, k, { attempts: 1, timeoutMs: 10_000 }).catch((e) => errors.push(`zip: ${publicError(e)}`));
