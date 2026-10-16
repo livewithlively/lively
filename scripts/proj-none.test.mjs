@@ -41,7 +41,7 @@ try {
 ok(!!lib, "V0 잣대가 잎 모듈(lib/proj-none)에 있다");
 
 if (lib) {
-  const { NO_PROJECT_NAME, isLoginSessRow, isSpentLoginSess } = lib;
+  const { NO_PROJECT_NAME, isLoginSessRow, isSpentLoginSess, isCollectSessRow } = lib;
   ok(NO_PROJECT_NAME === "기타 (미분류)", "N1 묶음 이름 = 「기타 (미분류)」", String(NO_PROJECT_NAME));
   ok(isLoginSessRow({ kind: "login", label: "아무 이름" }) === true, "L1 종류가 login 이면 로그인 세션");
   ok(isLoginSessRow({ label: "AI 로그인 (codex)" }) === true && isLoginSessRow({ label: "AI 로그인 (claude)" }) === true, "L2 종류가 없어도 «AI 로그인 (…)» 은 로그인 세션(옛 서버 · 옛 노드)");
@@ -57,6 +57,12 @@ if (lib) {
   const login = { label: "AI 로그인 (codex)" }, plain = { label: "결제 백오프", kind: "human" };
   ok(isSpentLoginSess(login, false) === true && isSpentLoginSess(login, true) === false && isSpentLoginSess(plain, false) === false && isSpentLoginSess(plain, true) === false,
     "S1 ★★ 끝난 로그인만 숨긴다 — 도는 로그인(지금 로그인 중인 창)과 보통 세션은 그대로 선다");
+  //  #4213 T11 — 수집 실행 세션은 도는 중이든 끝났든 세우지 않는다(서버가 러너 한 판을 돌리는 자리 — 들어가 볼 화면이 없다).
+  ok(typeof isCollectSessRow === "function" && isCollectSessRow({ kind: "collect", label: "수집 실행" }) === true && isCollectSessRow({ kind: " COLLECT " }) === true,
+    "K1 종류가 collect 면 수집 실행 세션(대소문자 · 앞뒤 공백 무관)");
+  ok(typeof isCollectSessRow === "function" && ["human", "task", "managed", "app", "login", ""].every((kind) => isCollectSessRow({ kind, label: "수집 실행" }) === false)
+    && [null, undefined, {}].every((r) => isCollectSessRow(r) === false),
+    "K2 ★ 이름이 «수집 실행» 이어도 종류가 collect 가 아니면 숨기지 않는다(사람이 그 이름을 지을 수 있다) · 빈 값은 아니다");
 }
 
 // ───────────────────────── W. 배선 ─────────────────────────
@@ -65,6 +71,7 @@ const MAIN = code(read("web/v2/main.ts"));
 ok(/const merged = mergeSessions\(lastLive, lastLogs\);\s*const sessions = merged\.filter\(\(s\) => !isSpentLoginSess\(s\.raw, s\.live && s\.alive\)(?: && [^;]*)?\);/.test(MAIN) && /data = \{ projects, sessions, lists,/.test(MAIN),
   "W1 ★ 셸이 세션 목록을 짤 때 끝난 로그인 세션을 걷는다(사이드바 · 세션 목록 · 카드 접힘이 전부 이 목록을 쓴다)");
 ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isTrySessionRow\(s\)\);/.test(MAIN), "W1b #4632 같은 목록에서 앱빌더 시험 세션(«\"이름\" 앱 시험»)도 걷는다");
+ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isCollectSessRow\(s\.raw\)[^;]*\);/.test(MAIN), "W1c #4213 같은 목록에서 수집 실행 세션도 걷는다");
 ok(/if \(!id\) return NO_PROJECT_NAME;/.test(code(read("web/v2/views.ts"))), "W2 이름 풀이(projName)가 그 이름을 쓴다");
 ok(/name: c\.id \? \(first\.project as \{ name: string \}\)\.name : c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME,/.test(code(read("web/v2/side.ts")))
   && /text: NO_PROJECT_NAME \}\), cnt\(plan\.noneN\)/.test(code(read("web/v2/side.ts"))),
