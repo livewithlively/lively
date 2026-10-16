@@ -12,20 +12,26 @@
 //   걸림   «Usage limit reached · continuing automatically at 4:10pm · esc to cancel»         (턴이 한도에 닿아 자동으로 걸림)
 //          «Usage limit reached again · continuing automatically at 4:10pm · esc to cancel»   (대기 중 사람이 보낸 말이 다시 막힘)
 //   이어 감 «Usage limit reset · continuing automatically» · «Usage limit available again · continuing now»
-//          — 그 뒤 자동 이어감 메시지(origin auto-continuation)로 새 턴이 돈다. 그 턴이 끝나면(turn_duration 줄) 대기는 끝난 것이다.
+//          — 그 뒤 자동 이어감 메시지(origin auto-continuation)가 큐에 서서 새 턴이 돈다. **그 메시지 뒤의** 턴이 끝나면(turn_duration)
+//            대기는 끝난 것이다(이어 감 메시지는 큐 뒤쪽에 서므로, 그 사이 끝난 작업 알림 턴의 끝은 세지 않는다 — 격리 리뷰).
 //   접힘   «Usage limit has reset · press enter to continue» (늦게 깸 — 사람이 Enter 를 쳐야 이어진다)
 //          «Automatic continue cancelled …» · «… was turned off …» · «… stopped …» · «… did not run …»
-//  줄 없이 바뀌는 경우가 셋 있다:
+//  줄 없이 바뀌는 경우:
 //   · 대기 중 **사람이 말을 보내면** Claude Code 가 대기를 조용히 접는다(manual_submit) — 그 말이 다시 막히면 위 «again» 줄이 새로 붙는다.
 //     사람의 말은 `origin.kind:"human"` 으로 남는다(메타·사이드체인 줄은 아니다). 작업 알림(task-notification) 턴은 대기를 접지 않는다
 //     (실측: 걸린 뒤 백그라운드 작업 알림이 와서 한 턴 돌고 끝나도 대기는 그대로였다).
-//   · 한도가 풀린 뒤 다시 띄운 하네스가 «앞선 한도 안내는 이제 무효» 쪽지(isMeta · usageLimitNote "release")를 넣는다 — 접힘.
-//   · **이어 간 턴이 또 한도에 막히면** 줄 없이 다시 걸린다(본체: 연달아 두 번까지 — 그 너머는 «Automatic continue stopped …» 줄).
-//     그 턴은 한도 오류 줄(assistant · isApiErrorMessage · apiError "usage_limit_reached")로 끝나므로, «이어 감» 뒤의 그 줄을 다시 걸림으로 읽는다.
-//     ⚠ 다만 그 턴에서 훅이 «작업 중» 을 보고했다면 종료 규칙은 이 판정까지 오지 않는다: 보고가 신선한 10분(PHASE_TTL_SEC) 동안은 «작업 중» 으로
-//      지키고, 그 뒤엔 «예약 모름» 이 되어 옛 회수 시계(유휴 120분)로 넘어간다 — 남은 틈이다(후속).
-//  «이어 감» 줄 뒤 그 턴이 끝나기 전은 «막 이어 가는 중»(resuming)이다 — 한도가 풀린 순간과 종료 규칙의 판이 겹치면 이어 가기 시작한 하네스를
-//   끌 수 있어서(격리 리뷰), 풀림 줄에서 `QUOTA_RESUME_GRACE_MS` 동안은 지킨다(예약 깨움의 WAKE_GRACE_SEC 와 같은 뜻).
+//   · **이어 간 턴이 또 한도에 닿으면** 줄 없이 다시 걸린다(본체: 턴 끝 처리가 이어 가는 중이면 걸림 줄 없이 다시 건다 — 연달아 두 번까지,
+//     그 너머는 «Automatic continue stopped …» 줄). 그 턴은 처음과 같은 정리 안내(wrap_up)로 끝나거나, 첫 요청부터 막혀 한도 오류 줄
+//     (assistant · isApiErrorMessage · apiError "usage_limit_reached")로 끝난다 — «이어 감» 뒤의 둘 다 다시 걸림으로 읽는다.
+//     apiError 가 없는 오류(서버 스로틀 등 error "rate_limit" 만)는 계정 한도가 아니다 — 다시 걸림이 아니다.
+//   · «앞선 한도 안내는 이제 무효» 쪽지(isMeta · usageLimitNote "release")는 대기를 바꾸지 않는다 — 정리 안내 뒤 한도가 풀린 다음 턴의 첫 요청에
+//     붙는데, 자동 이어 간 턴에도 붙는다(실측: 사람 말 4.7초 뒤). 다시 띄운 하네스의 대기는 아래 «띄운 시각» 조건과 relaunch 접힘 줄이 맡는다.
+//  ⚠ 못 읽는 경우(남은 틈 — 종전보다 나빠지지는 않는다):
+//   · 사람이 한도 대화상자에서 «기다리기» 를 고른 대기 — 본체가 걸림 줄을 안 남긴다(자동 걸림만 남긴다).
+//   · 턴 **시작**에서 막혀 Stop 훅이 안 뜬 대기(첫 걸림이든 다시 걸림이든) — 종료 규칙은 이 판정까지 오지 않는다: 훅의 «작업 중» 보고가
+//     신선한 10분(PHASE_TTL_SEC) 동안은 «작업 중» 으로 지키고, 그 뒤엔 «예약 모름» 이 되어 옛 회수 시계(유휴 120분)로 넘어간다(후속).
+//  «이어 감» 줄 뒤 이어 간 턴이 끝나기 전은 «막 이어 가는 중»(resuming)이다 — 한도가 풀린 순간과 종료 규칙의 판이 겹치면 이어 가기 시작한
+//   하네스를 끌 수 있어서(격리 리뷰), 그 줄에서 `QUOTA_RESUME_GRACE_MS` 동안은 지킨다(예약 깨움의 WAKE_GRACE_SEC 와 같은 뜻).
 //  ⚠ 걸림 문구는 Claude Code 가 원격 설정으로 바꿀 수 있다(본체: 문구 안에 «{when}» 만 있으면 받는다). 그러면 여기서 못 알아보고 종전처럼
 //   끈다 — 지금보다 나빠지지는 않는다. 그래서 문구 전체가 아니라 «continuing automatically … esc to cancel» 두 조각만 본다.
 //
@@ -43,6 +49,8 @@ export interface QuotaScan {
   atMs: number;
   /** 그 줄 문구(로그·진단용 — «at 4:10pm» 이 들어 있다) */
   text: string;
+  /** fired 만 — 자동 이어감 메시지가 이미 왔나(그 뒤의 턴 끝이 «이어 간 턴의 끝» 이다) */
+  continued?: boolean;
 }
 
 /** 지금 지켜야 하는 대기. */
@@ -65,7 +73,7 @@ export const QUOTA_CLOCK_SKEW_MS = 5 * 60_000;
 const ARMED = /\bcontinuing automatically\b.*\besc to cancel\b/i;
 const FIRED = /^\s*usage limit (?:reset|available again)\b/i;
 const RELEASED = /^\s*(?:usage limit has reset\b|automatic continue\b)/i;
-const REARMED_TEXT = "이어 간 턴이 다시 한도에 막혔다(줄 없이 다시 걸림)";
+const REARMED_TEXT = "이어 간 턴이 다시 한도에 닿았다(줄 없이 다시 걸림)";
 
 /** 사람이 친 말인가 — 2.1.301 은 `origin.kind`(·`turnOrigin`)를 남긴다. 표식이 없거나 메타 줄이면 사람의 말로 보지 않는다(대기를 접지 않는 쪽). */
 function humanPrompt(l: Record<string, unknown>): boolean {
@@ -73,34 +81,40 @@ function humanPrompt(l: Record<string, unknown>): boolean {
   const o = l.origin;
   return (!!o && typeof o === "object" && (o as { kind?: unknown }).kind === "human") || l.turnOrigin === "human";
 }
+const originKind = (l: Record<string, unknown>): unknown => (l.origin && typeof l.origin === "object" ? (l.origin as { kind?: unknown }).kind : undefined);
 
 /** (순수) 대화 기록 줄(오래된 순)에서 마지막 대기 사건을 읽는다 — 없으면 null. 시각 조건(상한·띄운 시각)은 quotaBound 가 건다. */
 export function quotaScan(lines: ReadonlyArray<unknown>): QuotaScan | null {
   let st: QuotaScan | null = null;
-  const at = (l: Record<string, unknown>): number => Date.parse(String(l.timestamp ?? ""));
+  //  시각이 없는 사건 줄은 상한을 잴 수 없다 — 대기로 보지 않는다(세션을 영영 붙잡는 쪽보다 종전처럼 끄는 쪽).
+  const event = (kind: "armed" | "fired", l: Record<string, unknown>, text: string): QuotaScan | null => {
+    const t = Date.parse(String(l.timestamp ?? ""));
+    return Number.isFinite(t) ? (kind === "fired" ? { kind, atMs: t, text, continued: false } : { kind, atMs: t, text }) : null;
+  };
   for (const raw of lines) {
     if (!raw || typeof raw !== "object") continue;
     const l = raw as Record<string, unknown>;
     if (l.isSidechain === true) continue;   // 서브에이전트의 대화 — 본 대화의 대기와 무관하다
     if (l.type === "system") {
       if (l.subtype === "informational" && typeof l.content === "string") {
-        //  시각이 없는 사건 줄은 상한을 잴 수 없다 — 대기로 보지 않는다(세션을 영영 붙잡는 쪽보다 종전처럼 끄는 쪽).
-        const t = at(l);
-        if (FIRED.test(l.content)) st = Number.isFinite(t) ? { kind: "fired", atMs: t, text: l.content } : null;
+        if (FIRED.test(l.content)) st = event("fired", l, l.content);
         else if (RELEASED.test(l.content)) st = null;
-        else if (ARMED.test(l.content)) st = Number.isFinite(t) ? { kind: "armed", atMs: t, text: l.content } : null;
-      } else if (l.subtype === "turn_duration" && st?.kind === "fired") {
+        else if (ARMED.test(l.content)) st = event("armed", l, l.content);
+      } else if (l.subtype === "turn_duration" && st?.kind === "fired" && st.continued) {
         st = null;   // 이어 간 턴이 끝났다 — 대기는 끝났고 이제 평범한 완료다
       }
       continue;
     }
     if (l.type === "user") {
-      if (humanPrompt(l) || l.usageLimitNote === "release") st = null;
+      if (humanPrompt(l)) st = null;
+      else if (st?.kind === "fired") {
+        if (originKind(l) === "auto-continuation") st = { ...st, continued: true };
+        else if (l.usageLimitNote === "wrap_up") st = event("armed", l, REARMED_TEXT);   // 이어 간 턴이 정리 안내로 끝난다 → 조용히 다시 걸림
+      }
       continue;
     }
     if (l.type === "assistant" && st?.kind === "fired" && l.isApiErrorMessage === true && l.apiError === "usage_limit_reached") {
-      const t = at(l);
-      st = Number.isFinite(t) ? { kind: "armed", atMs: t, text: REARMED_TEXT } : null;
+      st = event("armed", l, REARMED_TEXT);   // 이어 간 턴이 첫 요청부터 막혔다 → 조용히 다시 걸림
     }
   }
   return st;

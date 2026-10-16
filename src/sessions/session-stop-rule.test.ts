@@ -8,7 +8,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, launchedAtMsOf, type StopFacts } from "./session-stop-rule.js";
+import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, QUOTA_UNKNOWN_RETRY_MS, launchedAtMsOf, defaultQuotaWait, type StopFacts } from "./session-stop-rule.js";
 import type { QuotaWait } from "../terminal/harness-io/quota-wait.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { SessionState } from "./session-state.js";
@@ -640,37 +640,49 @@ test("SQ4 대화 기록을 못 읽으면 안 끈다(limit-unknown) — 세 번�
   const t0 = NOW * 1000;
   assert.equal(QUOTA_UNKNOWN_MAX, 3);
   assert.equal(QUOTA_UNKNOWN_FOLD_MS, 10 * 60_000);
-  for (const d of [0, 30_000, 60_000, 90_000, QUOTA_UNKNOWN_FOLD_MS - 1]) {
-    const r = await q.run(t0 + d);
-    assert.equal(r.kept["limit-unknown"], 1, `+${d}ms`);
-    assert.deepEqual(q.reaped, [], `+${d}ms 엔 안 끈다(1~2분짜리 중계 장애에 대기 세션을 끄지 않는다)`);
+  assert.equal(QUOTA_UNKNOWN_RETRY_MS, 60_000);
+  for (let k = 0; k < 10; k++) {   // 1분마다(재시도 간격) — 10번째(9분)까지 안 끈다(1~2분짜리 중계 장애에 대기 세션을 끄지 않는다)
+    const r = await q.run(t0 + k * QUOTA_UNKNOWN_RETRY_MS);
+    assert.equal(r.kept["limit-unknown"], 1, `+${k}분`);
+    assert.deepEqual(q.reaped, [], `+${k}분엔 안 끈다`);
   }
+  assert.equal(q.n.quota, 10);
   await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS);
   assert.deepEqual(q.reaped, ["box-l-5"], "첫 실패에서 10분이면 끈다");
+});
+test("SQ4d 못 읽은 세션은 1분 동안 다시 읽지 않는다(화면·작업 판정·대화 기록 0회) — 그동안도 limit-unknown 으로 센다", async () => {
+  const q = quotaRun([liveDone("box-l-5d")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000;
+  await q.run(t0);
+  const held = await q.run(t0 + QUOTA_UNKNOWN_RETRY_MS - 1);
+  assert.equal(held.kept["limit-unknown"], 1);
+  assert.deepEqual(q.n, { captures: 1, probes: 1, quota: 1 });
+  await q.run(t0 + QUOTA_UNKNOWN_RETRY_MS);
+  assert.equal(q.n.quota, 2, "1분이 되면 다시 읽는다");
 });
 test("SQ4a 10분이 지났어도 못 읽은 횟수가 셋이 안 되면 안 끈다", async () => {
   const q = quotaRun([liveDone("box-l-5a")], () => { throw new Error("relay"); });
   const t0 = NOW * 1000;
   await q.run(t0);
-  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + 60_000);
-  assert.deepEqual(q.reaped, [], "두 번째(10분 뒤)엔 안 끈다");
-  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + 90_000);
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS);   // 두 번째 — 실패 사이가 10분(연달아)이고 첫 실패에서 10분이지만 둘뿐
+  assert.deepEqual(q.reaped, [], "두 번째엔 안 끈다");
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + QUOTA_UNKNOWN_RETRY_MS);
   assert.deepEqual(q.reaped, ["box-l-5a"], "세 번째에 끈다");
 });
 test("SQ4b 못 읽은 횟수는 사이에 한 번이라도 읽히면 처음부터 센다", async () => {
-  const seq: Array<"throw" | "wait"> = ["throw", "throw", "wait", "throw", "throw", "throw", "throw"];
+  const seq: Array<"throw" | "wait"> = ["throw", "throw", "wait", "throw", "throw", "throw"];
   let i = 0;
   const q = quotaRun([liveDone("box-l-6")], () => { const k = seq[i++]; if (k === "throw") throw new Error("relay"); return WAITING; });
-  const t0 = NOW * 1000, t1 = t0 + 16 * 60_000;   // t0+11분에 한 번 읽힌다(대기) → 보호 5분 → t1 부터 다시 못 읽음
-  for (const t of [t0, t0 + 30_000, t0 + 11 * 60_000, t1, t1 + 30_000, t1 + 60_000]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${t - t0}ms`); }
-  await q.run(t1 + QUOTA_UNKNOWN_FOLD_MS);
-  assert.deepEqual(q.reaped, ["box-l-6"], "다시 센 첫 실패(t1)에서 10분에 끈다");
-  assert.equal(q.n.quota, 7);
+  const t0 = NOW * 1000, m = 60_000;
+  //  0·1분 실패 → 5분 읽힘(대기 · 보호 5분) → 10·11·12분 실패. 셈이 안 지워졌다면 다섯째 실패(12분)가 «첫 실패에서 12분» 이라 접힌다.
+  for (const t of [t0, t0 + m, t0 + 5 * m, t0 + 10 * m, t0 + 11 * m, t0 + 12 * m]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${(t - t0) / m}분`); }
+  assert.equal(q.n.quota, 6);
 });
-test("SQ4c 한 시간 넘게 실패가 없으면 셈은 처음부터다(오래전 실패로 곧바로 접지 않는다)", async () => {
+test("SQ4c 실패 사이가 10분을 넘으면 새로 센다(띄엄띄엄 난 실패를 이어 붙여 곧바로 접지 않는다)", async () => {
   const q = quotaRun([liveDone("box-l-6c")], () => { throw new Error("relay"); });
-  const t0 = NOW * 1000, t1 = t0 + 61 * 60_000;
-  for (const t of [t0, t0 + 30_000, t1, t1 + 30_000, t1 + 60_000]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${t - t0}ms`); }
+  const t0 = NOW * 1000, m = 60_000;
+  for (const t of [t0, t0 + m, t0 + 12 * m, t0 + 13 * m, t0 + 14 * m]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${(t - t0) / m}분`); }
+  assert.equal(q.n.quota, 5);
 });
 test("SQ5 질의 · 셸만 남음 · codex · agy 는 대화 기록을 보지 않고 종전대로 끈다", async () => {
   const asking = liveDone("box-l-ask", { awaiting: true, agentState: "waiting", lastActive: NOW - 3700, lastReport: { phase: "waiting", at: NOW - 3700 } });
@@ -732,4 +744,11 @@ test("F3 하네스를 띄운 시각 = tmux 세션을 만든 시각(초) × 1000 
   assert.equal(launchedAtMsOf({ created: 1_800_000_000 }), 1_800_000_000_000);
   assert.equal(launchedAtMsOf({ created: 0 }), 0);
   assert.equal(launchedAtMsOf({} as { created: number }), 0);
+});
+test("F3b 기본 «한도 대기» 재료는 읽는 함수에 띄운 시각(ms)·판의 지금을 넘긴다(배선)", async () => {
+  const calls: Array<[string, { launchedAtMs: number; nowMs: number }]> = [];
+  const read = async (id: string, at: { launchedAtMs: number; nowMs: number }) => { calls.push([id, at]); return WAITING; };
+  const w = await defaultQuotaWait(read as never)(liveDone("box-l-f3", { created: NOW - 3600 }), NOW * 1000 + 7);
+  assert.deepEqual(calls, [["box-l-f3", { launchedAtMs: (NOW - 3600) * 1000, nowMs: NOW * 1000 + 7 }]]);
+  assert.equal(w, WAITING);
 });

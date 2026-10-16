@@ -288,13 +288,16 @@ export const QUOTA_RECHECK_MS = 5 * 60_000;
 /**
  * 대화 기록을 연달아 이만큼 못 읽고 **그리고** 첫 실패에서 QUOTA_UNKNOWN_FOLD_MS 가 지나면(중계 장애가 길다) 대기 없음으로 보고 종전대로 끈다 —
  *  못 읽는 세션이 영영 남지 않게. 횟수만 세면 판이 30초마다 돌아 1분 만에 접힌다(격리 리뷰) — 그 1~2분짜리 중계 장애가 바로 이번 사고를 다시 낸다.
- *  시간 조건은 T7 판정 불가 보류(유휴 틱 5분 × 3 ≈ 10분)와 같은 크기로 맞췄다.
+ *  시간 조건은 T7 판정 불가 보류(유휴 틱 5분 × 3 ≈ 10분)와 같은 크기로 맞췄다. «연달아» 는 실패 사이가 FOLD 안이라는 뜻이다 — 그보다 오래
+ *  조용했다가 난 실패는 새로 센다(띄엄띄엄 난 실패 셋을 이어 붙여 곧바로 접지 않게 — 격리 리뷰 2차).
  */
 export const QUOTA_UNKNOWN_MAX = 3;
 export const QUOTA_UNKNOWN_FOLD_MS = 10 * 60_000;
-/** 테넌트·세션 → 한도 대기 보호가 풀리는 시각(ms). */
-const limitHold = new Map<string, number>();
-/** 테넌트·세션 → 대화 기록을 연달아 못 읽은 횟수·첫 실패·마지막 실패 시각(ms). 판정되면 지우고, 한 시간 넘게 안 갱신되면 버린다(셈을 처음부터). */
+/** 못 읽은 세션은 이만큼 뒤에 다시 읽는다 — 30초 판마다 DB·중계·작업 판정을 다시 치지 않게(접기 전 약 10번). */
+export const QUOTA_UNKNOWN_RETRY_MS = 60_000;
+/** 테넌트·세션 → 한도 대기 보호가 풀리는 시각(ms)과 그동안 셀 이유(대기 · 못 읽음). */
+const limitHold = new Map<string, { until: number; why: "limit-wait" | "limit-unknown" }>();
+/** 테넌트·세션 → 대화 기록을 연달아 못 읽은 횟수·첫 실패·마지막 실패 시각(ms). 판정되면 지운다 · 한 시간 넘게 안 갱신된 것은 판마다 버린다(메모리). */
 const quotaUnknown = new Map<string, { n: number; first: number; at: number }>();
 /** 테넌트·세션 → 마지막으로 로그에 남긴 대기 사건의 시각(ms) — 같은 대기를 5분마다 다시 찍지 않게. 상한이 지나면 버린다. */
 const limitSeen = new Map<string, number>();
@@ -302,6 +305,10 @@ const limitSeen = new Map<string, number>();
 /** 하네스를 띄운 시각(ms) = tmux 세션을 만든 시각(#{session_created}, 초) — 그보다 앞선 대기 줄은 그 전 프로세스의 것이다(다시 띄우면 대기가 사라진다). */
 export function launchedAtMsOf(s: Pick<SessionInfo, "created">): number {
   return (Number(s.created) || 0) * 1000;
+}
+/** 기본 «한도 대기» 재료 — 대화 기록 끝을 읽는 함수에 띄운 시각·지금을 넘긴다(읽는 함수는 시험 seam). */
+export function defaultQuotaWait(read: typeof readQuotaWait = readQuotaWait): StopRuleDeps["quotaWait"] {
+  return (s, nowMs) => read(s.id, { launchedAtMs: launchedAtMsOf(s), nowMs });
 }
 
 function defaultDeps(): StopRuleDeps {
@@ -314,7 +321,7 @@ function defaultDeps(): StopRuleDeps {
     view: (id) => viewState(id),
     jobVerdicts: (ids) => liveJobVerdicts(ids),
     capture: (id) => tmux(["capture-pane", "-t", id, "-p", "-e"]),
-    quotaWait: (s, nowMs) => readQuotaWait(s.id, { launchedAtMs: launchedAtMsOf(s), nowMs }),
+    quotaWait: defaultQuotaWait(),
     keys: async (id, key) => { await tmuxQuiet(["send-keys", "-t", id, key]); },
     saveNote: (id, note) => setSessionStopNote(id, note),
     reap: (id) => reapCentralSession(id),
@@ -372,12 +379,12 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const nowMs = d.now();
     const holdKey = (id: string): string => key + "\u0000" + id;
     for (const [k, until] of jobHold) if (until <= nowMs) jobHold.delete(k);
-    for (const [k, until] of limitHold) if (until <= nowMs) limitHold.delete(k);
-    for (const [k, u] of quotaUnknown) if (nowMs - u.at > 3_600_000) quotaUnknown.delete(k);
+    for (const [k, h] of limitHold) if (h.until <= nowMs) limitHold.delete(k);
+    for (const [k, u] of quotaUnknown) if (nowMs - u.at > 3_600_000) quotaUnknown.delete(k);   // 메모리 정리 — 셈 규칙(공백 재시작)은 judgeQuotaWait 가 맡는다
     for (const [k, atMs] of limitSeen) if (nowMs - atMs > QUOTA_WAIT_MAX_MS) limitSeen.delete(k);
-    //  보호 중인 세션은 프로브·화면·대화 기록 어느 것도 다시 재지 않는다 — 작업 보호(3분)가 한도 대기 보호(5분)보다 앞선다(둘 다면 작업으로 센다).
-    const heldWhy = (id: string): "jobs" | "limit-wait" | null =>
-      jobHold.has(holdKey(id)) ? "jobs" : limitHold.has(holdKey(id)) ? "limit-wait" : null;
+    //  보호 중인 세션은 프로브·화면·대화 기록 어느 것도 다시 재지 않는다 — 작업 보호(3분)가 한도 대기 보호보다 앞선다(둘 다면 작업으로 센다).
+    const heldWhy = (id: string): "jobs" | "limit-wait" | "limit-unknown" | null =>
+      jobHold.has(holdKey(id)) ? "jobs" : limitHold.get(holdKey(id))?.why ?? null;
     for (const x of due) { const w = heldWhy(x.s.id); if (w) { count(w); noteOldest(w, x.s.id, nowSec - x.since); } }
     const toJudge = due.filter((x) => !heldWhy(x.s.id));
     //  상한은 프로브 **앞**에서도 건다 — 롤 직후처럼 후보가 많을 때 전부를 동시에 컨테이너 프로브하지 않게(격리 리뷰). 오래 논 것부터 본다.
@@ -404,6 +411,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
         if (out.skip) {
           count(out.skip); noteOldest(out.skip, s.id, nowSec - since);
           if (out.skip === "limit-wait" && out.wait) holdQuotaWait(holdKey(s.id), s.id, out.wait, nowMs);
+          if (out.skip === "limit-unknown") limitHold.set(holdKey(s.id), { until: nowMs + QUOTA_UNKNOWN_RETRY_MS, why: "limit-unknown" });
           continue;
         }
         stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null });
@@ -490,9 +498,9 @@ async function stopOne(
 }
 
 /**
- * #4810 — 이 세션이 한도 자동 이어감을 기다리는(또는 막 이어 가는) 중인가. 대화 기록을 못 읽으면 «unknown»(이번 판엔 안 끈다 — 모르면 안 끈다) ·
- *  연달아 QUOTA_UNKNOWN_MAX 번 넘게 못 읽고 첫 실패에서 QUOTA_UNKNOWN_FOLD_MS 가 지났으면 null(대기 없음으로 보고 종전대로 끈다 — 중계가 망가진
- *  세션이 영영 남지 않게. 접는 판은 warn).
+ * #4810 — 이 세션이 한도 자동 이어감을 기다리는(또는 막 이어 가는) 중인가. 대화 기록을 못 읽으면 «unknown»(이번 판엔 안 끈다 — 모르면 안 끈다 ·
+ *  QUOTA_UNKNOWN_RETRY_MS 뒤에 다시 읽는다) · 연달아 QUOTA_UNKNOWN_MAX 번 넘게 못 읽고 첫 실패에서 QUOTA_UNKNOWN_FOLD_MS 가 지났으면 null(대기
+ *  없음으로 보고 종전대로 끈다 — 중계가 망가진 세션이 영영 남지 않게). 로그는 첫 실패와 접는 판만 warn(사이는 debug — 세션당 수십 줄이 되지 않게).
  */
 async function judgeQuotaWait(d: StopRuleDeps, s: SessionInfo, hk: string): Promise<QuotaWait | null | "unknown"> {
   try {
@@ -502,14 +510,15 @@ async function judgeQuotaWait(d: StopRuleDeps, s: SessionInfo, hk: string): Prom
   } catch (e) {
     const now = d.now();
     const prev = quotaUnknown.get(hk);
-    const u = { n: (prev?.n ?? 0) + 1, first: prev?.first ?? now, at: now };
+    const fresh = !prev || now - prev.at > QUOTA_UNKNOWN_FOLD_MS;   // 오래 조용했다가 난 실패는 새로 센다
+    const u = fresh ? { n: 1, first: now, at: now } : { n: prev.n + 1, first: prev.first, at: now };
     if (u.n >= QUOTA_UNKNOWN_MAX && now - u.first >= QUOTA_UNKNOWN_FOLD_MS) {
       quotaUnknown.delete(hk);
       logger.warn({ err: e, id: s.id, n: u.n, sinceFirstSec: Math.round((now - u.first) / 1000) }, "하네스 종료 규칙: 한도 대기 판정이 연달아 실패 — 대기 없음으로 보고 종전대로 판정");
       return null;
     }
     quotaUnknown.set(hk, u);
-    logger.warn({ err: e, id: s.id, n: u.n }, "하네스 종료 규칙: 한도 대기 판정 실패(대화 기록을 못 읽음) — 이번 판엔 안 끈다");
+    (u.n === 1 ? logger.warn : logger.debug).call(logger, { err: e, id: s.id, n: u.n }, "하네스 종료 규칙: 한도 대기 판정 실패(대화 기록을 못 읽음) — 이번 판엔 안 끈다");
     return "unknown";
   }
 }
@@ -520,7 +529,7 @@ async function judgeQuotaWait(d: StopRuleDeps, s: SessionInfo, hk: string): Prom
  */
 function holdQuotaWait(hk: string, id: string, w: QuotaWait, nowMs: number): void {
   const ms = w.untilMs !== undefined ? Math.max(5_000, Math.min(QUOTA_RECHECK_MS, w.untilMs - nowMs)) : QUOTA_RECHECK_MS;
-  limitHold.set(hk, nowMs + ms);
+  limitHold.set(hk, { until: nowMs + ms, why: "limit-wait" });
   if (limitSeen.get(hk) === w.atMs) return;
   limitSeen.set(hk, w.atMs);
   logger.info({ tenant: currentTenant()?.slug ?? null, id, kind: w.kind, at: new Date(w.atMs).toISOString(), text: w.text },

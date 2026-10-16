@@ -33,6 +33,12 @@ const continuation = (ms: number) => ({ type: "user", isMeta: true, timestamp: i
 /** 한도에 막힌 요청의 오류 줄(실측 a7fd46ae · 5c30e17b). */
 const limitError = (ms: number) => ({ type: "assistant", isApiErrorMessage: true, error: "rate_limit", apiError: "usage_limit_reached", timestamp: iso(ms),
   message: { role: "assistant", content: [{ type: "text", text: "You've hit your session limit · resets 4:10pm (Asia/Seoul)" }] } });
+/** 한도 안내 무효 쪽지 — 정리 안내 뒤 한도가 풀린 다음 턴의 첫 요청에 붙는다(자동 이어 간 턴 포함 · 실측 395485ac). */
+const release = (ms: number) => ({ type: "user", isMeta: true, turnCompanion: true, usageLimitNote: "release", timestamp: iso(ms),
+  message: { role: "user", content: "[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]" } });
+/** 한도 정리 안내 — 턴 도중 한도에 닿으면 모델에게 넣는다(실측 ca4a92f9 · d9e9c882). */
+const wrapUp = (ms: number) => ({ type: "user", isMeta: true, turnCompanion: true, usageLimitNote: "wrap_up", timestamp: iso(ms),
+  message: { role: "user", content: "[Usage limit reached; a short grace allowance remains, then this turn is cut off without warning. …]" } });
 const assistant = (ms: number, text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, timestamp: iso(ms) });
 const turnEnd = (ms: number) => [
   { type: "system", subtype: "stop_hook_summary", hookCount: 3, timestamp: iso(ms), level: "suggestion" },
@@ -44,14 +50,14 @@ test("Q1 걸림 줄 하나 → 대기(종류·시각·문구 그대로)", () => 
   const w = quotaWaitOf([...turnEnd(T0 - 10), ARMED()], at());
   assert.deepEqual(w, { kind: "armed", atMs: T0, text: "Usage limit reached · continuing automatically at 4:10pm · esc to cancel" });
 });
-test("Q2r 걸린 뒤 «Usage limit reset · continuing automatically»(이어 감) → 5분 동안은 «막 이어 가는 중»", () => {
+test("Q2r 걸린 뒤 «Usage limit reset · continuing automatically»(이어 감) → 5분 동안은 «막 이어 가는 중» — 이어 간 턴 첫 요청의 무효 쪽지로 풀리지 않는다", () => {
   const f = T0 + 600_000;
-  assert.deepEqual(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200)], at({ nowMs: f + 3_000 })),
+  assert.deepEqual(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), release(f + 3_000)], at({ nowMs: f + 3_100 })),
     { kind: "resuming", atMs: f, text: "Usage limit reset · continuing automatically", untilMs: f + QUOTA_RESUME_GRACE_MS });
 });
 test("Q2t 이어 간 턴이 끝났으면(turn_duration) → 대기 아님(이제 평범한 완료)", () => {
   const f = T0 + 600_000;
-  assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), assistant(f + 9_000, "OK"), ...turnEnd(f + 10_000)], at({ nowMs: f + 60_000 })), null);
+  assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), release(f + 3_000), assistant(f + 9_000, "OK"), ...turnEnd(f + 10_000)], at({ nowMs: f + 60_000 })), null);
 });
 test("Q2g «막 이어 가는 중» 유예 — 이어 감에서 정확히 5분은 지킨다 · 1ms 넘으면 아님", () => {
   const f = T0 + 600_000;
@@ -86,20 +92,18 @@ test("Q7 걸린 뒤 백그라운드 작업 알림이 와서 한 턴 돌고 끝�
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, T0);
 });
-test("Q7b 한도 정리 안내(wrap_up)는 사람의 말이 아니다 — 대기를 접지 않는다", () => {
-  const wrapUp = { type: "user", isMeta: true, turnCompanion: true, usageLimitNote: "wrap_up", timestamp: iso(T0 + 1_000),
-    message: { role: "user", content: "[Usage limit reached; a short grace allowance remains, then this turn is cut off without warning. …]" } };
-  assert.equal(quotaWaitOf([ARMED(), wrapUp], at())?.atMs, T0);
+test("Q7b 한도 정리 안내(wrap_up)는 사람의 말이 아니다 — 걸린 대기를 접지 않는다", () => {
+  assert.equal(quotaWaitOf([ARMED(), wrapUp(T0 + 1_000)], at())?.atMs, T0);
 });
 test("Q8 사람이 끼어든 말이 다시 막혀 «again» 줄이 붙으면 → 대기(새 줄 시각)", () => {
   const w = quotaWaitOf([ARMED(), human(T0 + 60_000), AGAIN(T0 + 65_000)], at());
   assert.equal(w?.atMs, T0 + 65_000);
   assert.match(w?.text ?? "", /again/);
 });
-test("Q9 한도 안내 무효 쪽지(usageLimitNote release) → 대기 아님", () => {
-  const release = { type: "user", isMeta: true, turnCompanion: true, usageLimitNote: "release", timestamp: iso(T0 + 900_000),
-    message: { role: "user", content: "[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]" } };
-  assert.equal(quotaWaitOf([ARMED(), release], at({ nowMs: T0 + 950_000 })), null);
+test("Q9 한도 안내 무효 쪽지(release)는 대기를 바꾸지 않는다 — 걸림·이어 감 어느 쪽이든(다시 띄운 하네스는 띄운 시각 조건이 맡는다)", () => {
+  assert.equal(quotaWaitOf([ARMED(), release(T0 + 900_000)], at({ nowMs: T0 + 950_000 }))?.kind, "armed");
+  const f = T0 + 600_000;
+  assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 100), release(f + 3_000)], at({ nowMs: f + 4_000 }))?.kind, "resuming");
 });
 test("Q10 하네스를 띄운 시각보다 앞선 사건은 그 전 프로세스의 것 — 1ms 앞이면 아님 · 같은 시각이면 대기", () => {
   assert.equal(quotaWaitOf([ARMED()], at({ launchedAtMs: T0 + 1 })), null);
@@ -150,7 +154,7 @@ test("Q21 다시 막힌 것이 연달아 넘쳐 Claude Code 가 «Automatic cont
   const stopped = info("Automatic continue stopped after repeated usage-limit hits · this task will not resume on its own (/rate-limit-options to try again)", f + 4_050, { level: "warning" });
   assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), limitError(f + 4_000), stopped], at({ nowMs: f + 600_000 })), null);
 });
-test("Q22 이어 감 없이 한도 오류 줄만 있으면 걸림이 아니다(자동 걸림이 안 된 경우 — 걸리면 Claude Code 가 걸림 줄을 따로 남긴다)", () => {
+test("Q22 이어 감 없이 한도 오류 줄만 있으면 걸림이 아니다(자동으로 걸리면 Claude Code 가 걸림 줄을 따로 남긴다 · 대화상자로 건 대기는 못 읽는 틈)", () => {
   assert.equal(quotaWaitOf([human(T0 - 2_000), limitError(T0)], at()), null);
   assert.equal(quotaWaitOf([ARMED(T0 - 60_000), limitError(T0)], at())?.atMs, T0 - 60_000, "이미 걸린 대기는 오류 줄로 바뀌지 않는다");
 });
@@ -167,5 +171,40 @@ test("Q25 사건 줄 시각이 지금보다 5분 넘게 앞서면(깨진 시계)
 });
 test("Q26 시각과 무관한 판독(quotaScan)은 시각 조건 없이 마지막 사건을 그대로 준다 — 같은 파일을 다시 안 읽고 다시 잴 수 있게", () => {
   assert.deepEqual(quotaScan([ARMED()]), { kind: "armed", atMs: T0, text: "Usage limit reached · continuing automatically at 4:10pm · esc to cancel" });
-  assert.deepEqual(quotaScan([ARMED(), FIRED(T0 + 1)]), { kind: "fired", atMs: T0 + 1, text: "Usage limit reset · continuing automatically" });
+  assert.deepEqual(quotaScan([ARMED(), FIRED(T0 + 1)]), { kind: "fired", atMs: T0 + 1, text: "Usage limit reset · continuing automatically", continued: false });
+  assert.equal(quotaScan([ARMED(), FIRED(T0 + 1), continuation(T0 + 2)])?.continued, true, "자동 이어감 메시지가 오면 그 뒤의 턴 끝을 센다");
+});
+test("Q20b 이어 간 턴이 정리 안내(wrap_up)로 끝나면 — 줄 없이 다시 걸린 것으로 본다(안내 줄 시각 · 본체 턴 끝 처리)", () => {
+  const f = T0 + 600_000;
+  const lines = [ARMED(), FIRED(f), continuation(f + 200), release(f + 3_000), assistant(f + 60_000, "작업 계속"),
+    wrapUp(f + 3_600_000), assistant(f + 3_610_000, "사용 한도에 닿아 여기서 멈춥니다."), ...turnEnd(f + 3_612_000)];
+  const w = quotaWaitOf(lines, at({ nowMs: f + 3_800_000 }));
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, f + 3_600_000);
+});
+test("Q20c 이어 간 턴의 첫 요청에 무효 쪽지가 붙은 직후(3초)는 «막 이어 가는 중» 이다", () => {
+  const f = T0 + 600_000;
+  assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), release(f + 3_000)], at({ nowMs: f + 3_000 }))?.kind, "resuming");
+});
+test("Q21b 정리 안내로 다시 걸린 뒤 «Automatic continue stopped after repeated usage-limit hits» 가 오면 → 대기 아님", () => {
+  const f = T0 + 600_000;
+  const stopped = info("Automatic continue stopped after repeated usage-limit hits · this task will not resume on its own (/rate-limit-options to try again)", f + 3_612_100, { level: "warning" });
+  assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), wrapUp(f + 3_600_000), ...turnEnd(f + 3_612_000), stopped], at({ nowMs: f + 3_700_000 })), null);
+});
+test("Q22b 이어 간 턴의 오류 줄이라도 계정 한도(apiError usage_limit_reached)가 아니면 다시 걸림이 아니다(서버 스로틀 등)", () => {
+  const f = T0 + 600_000;
+  const throttle = { ...limitError(f + 4_000), apiError: undefined };
+  const overloaded = { ...limitError(f + 4_000), error: "overloaded_error", apiError: "server_overloaded" };
+  for (const e of [throttle, overloaded]) {
+    assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), e, ...turnEnd(f + 4_100)], at({ nowMs: f + 60_000 })), null, JSON.stringify(e.apiError));
+  }
+});
+test("Q27 이어 감 메시지가 오기 전에 끝난 다른 턴(작업 알림)의 끝은 이어 간 턴의 끝이 아니다 — 계속 «막 이어 가는 중»", () => {
+  const f = T0 + 600_000;
+  const w = quotaWaitOf([ARMED(), taskNote(f - 2_000), FIRED(f), assistant(f + 1_000, "알림 처리"), ...turnEnd(f + 1_500)], at({ nowMs: f + 2_000 }));
+  assert.equal(w?.kind, "resuming");
+});
+test("Q28 이어 감 없이 온 정리 안내는 걸림이 아니다 — 첫 걸림은 턴이 끝난 뒤 남는 걸림 줄로 읽는다", () => {
+  assert.equal(quotaWaitOf([human(T0 - 9_000), wrapUp(T0 - 5_000), assistant(T0 - 1_000, "멈춥니다"), ...turnEnd(T0 - 500)], at()), null);
+  assert.equal(quotaWaitOf([human(T0 - 9_000), wrapUp(T0 - 5_000), ...turnEnd(T0 - 500), ARMED()], at())?.atMs, T0, "그 뒤 걸림 줄이 오면 그때 걸림");
 });

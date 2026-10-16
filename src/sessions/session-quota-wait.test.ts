@@ -1,5 +1,5 @@
 // #4810 — 한도 자동 이어감 대기의 재료를 대화 기록 **끝**에서 읽는 계약(readQuotaWait). 파일 찾기만 가짜로 갈아 끼우고, 읽기는 진짜
-//  파일·진짜 claude 파서·진짜 창 정렬(readAlignedWindow)로 한다. 사양·엣지 표 R1~R7: 작업 스크래치 spec-4810.md.
+//  파일·진짜 claude 파서·진짜 창 정렬(readAlignedWindow)로 한다. 사양·엣지 표 R1~R10: 작업 스크래치 spec-4810.md.
 //  틀리면 티가 크다:
 //   🔴 창을 파일 앞에서 읽으면 — 몇 MB 짜리 대화(실측 25~67MB)에서 걸림 줄을 영영 못 본다.
 //   🔴 읽기 실패를 «대기 없음» 으로 뭉개면 — 중계가 잠깐 막힌 판에 대기 중인 세션을 끈다(모르면 안 끈다).
@@ -9,7 +9,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync, appendFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { readQuotaWait, resetQuotaScanCache, QUOTA_TAIL_BYTES } from "./session-quota-wait.js";
+import { readQuotaWait, resetQuotaScanCache, QUOTA_TAIL_BYTES, QUOTA_SCAN_CACHE_MAX } from "./session-quota-wait.js";
 import { QUOTA_WAIT_MAX_MS } from "../terminal/harness-io/quota-wait.js";
 import { claudeIo } from "../terminal/harness-io/claude.js";
 import { localTranscriptFs, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
@@ -88,4 +88,34 @@ test("R7 크기가 바뀌면 다시 읽는다 — 그사이 사람이 말을 보
   appendFileSync(p, HUMAN + "\n");
   assert.equal(await readQuotaWait("box-a-1", AT, found(p, { tfs: c.tfs })), null);
   assert.equal(c.reads(), 2);
+});
+test("R8 같은 세션이라도 파일이 바뀌면(맥락 압축 — 새 대화 파일) 크기가 같아도 다시 읽는다", async () => {
+  const a = file("r8a.jsonl", [ARMED]);
+  const b = file("r8b.jsonl", [ARMED.replace("4:10pm", "9:99pm")]);   // 같은 길이 · 다른 파일
+  assert.equal(statSync(a).size, statSync(b).size, "크기가 같다(전제)");
+  const c = counting();
+  await readQuotaWait("box-a-1", AT, found(a, { tfs: c.tfs }));
+  const w = await readQuotaWait("box-a-1", AT, found(b, { tfs: c.tfs }));
+  assert.equal(c.reads(), 2);
+  assert.match(w?.text ?? "", /9:99pm/);
+});
+test("R9 기억은 상한(500)까지 — 넘치면 가장 오래 안 쓴 것부터 버린다(쓴 것은 뒤로 간다)", async () => {
+  const p = file("r9.jsonl", [ARMED]);
+  const c = counting();
+  const ask = (i: number) => readQuotaWait(`box-r9-${i}`, AT, found(p, { tfs: c.tfs }));
+  for (let i = 0; i < QUOTA_SCAN_CACHE_MAX; i++) await ask(i);
+  assert.equal(c.reads(), QUOTA_SCAN_CACHE_MAX);
+  await ask(0);                       // 0 을 다시 써서 뒤로 보낸다(읽지 않는다)
+  assert.equal(c.reads(), QUOTA_SCAN_CACHE_MAX);
+  await ask(QUOTA_SCAN_CACHE_MAX);    // 501번째 — 가장 오래 안 쓴 1 이 밀려난다
+  await ask(0);
+  assert.equal(c.reads(), QUOTA_SCAN_CACHE_MAX + 1, "0 은 남아 있다");
+  await ask(1);
+  assert.equal(c.reads(), QUOTA_SCAN_CACHE_MAX + 2, "1 은 밀려나 다시 읽었다");
+});
+test("R10 크기가 있는 파일에서 한 바이트도 못 받으면(중계가 실패를 삼킴) 못 읽은 것이다 — 던지고 기억하지 않는다", async () => {
+  const p = file("r10.jsonl", [ARMED]);
+  const empty: TranscriptFs = { ...localTranscriptFs, read: (_f, _s, fn) => fn({ read: async () => Buffer.alloc(0) }) };
+  await assert.rejects(readQuotaWait("box-a-1", AT, found(p, { tfs: empty })), /못 읽음/);
+  assert.equal((await readQuotaWait("box-a-1", AT, found(p)))?.atMs, T0, "다음엔 제대로 읽는다(빈 결과를 기억하지 않았다)");
 });

@@ -16,7 +16,7 @@ export const QUOTA_TAIL_BYTES = 1024 * 1024;
  */
 const scanCache = new Map<string, { size: number; scan: QuotaScan | null }>();
 /** 기억하는 파일 수 상한 — 넘치면 가장 오래 안 쓴 것부터 버린다. */
-const SCAN_CACHE_MAX = 500;
+export const QUOTA_SCAN_CACHE_MAX = 500;
 
 /**
  * 이 세션의 하네스가 지금 한도 자동 이어감을 걸어 두고 기다리는(또는 막 이어 가는) 중인가. claude 만 본다(다른 하네스엔 이 기능이 없다).
@@ -33,12 +33,19 @@ export async function readQuotaWait(
   const key = id + "\u0000" + file;
   let hit = scanCache.get(key);
   if (!hit || hit.size !== size) {
-    const win = await t.tfs.read(file, size, (r) => readAlignedWindow(r, size, Math.max(0, size - QUOTA_TAIL_BYTES), size, false));
+    //  중계 읽기(memberReadRange)는 `tail … | head -c N` 이라 tail 이 실패해도 종료코드 0 에 빈 출력이다(격리 리뷰) — 크기가 있는 파일에서
+    //   한 바이트도 못 받았으면 «대기 없음» 이 아니라 못 읽은 것이다(던진다 · 기억하지 않는다). 온전한 줄이 없는 창(한 줄이 1MB 넘음)은 읽은 것이다.
+    let raw = 0;
+    const win = await t.tfs.read(file, size, (r) => readAlignedWindow(
+      { read: async (s, e) => { const b = await r.read(s, e); raw += b.length; return b; } },
+      size, Math.max(0, size - QUOTA_TAIL_BYTES), size, false,
+    ));
+    if (size > 0 && raw === 0) throw new Error(`대화 기록을 못 읽음(빈 읽기 · ${size}바이트 파일)`);
     hit = { size, scan: win.data.length ? quotaScan(t.io.parse(win.data.toString("utf8"), {}).lines) : null };
   }
   scanCache.delete(key);
   scanCache.set(key, hit);   // 최근에 쓴 것을 뒤로 — 넘치면 앞(가장 오래 안 쓴 것)에서 버린다
-  if (scanCache.size > SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value as string);
+  if (scanCache.size > QUOTA_SCAN_CACHE_MAX) scanCache.delete(scanCache.keys().next().value as string);
   return quotaBound(hit.scan, at);
 }
 
