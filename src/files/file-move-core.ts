@@ -75,3 +75,19 @@ export async function followMoves(start: string, deps: FollowDeps, max = MOVE_FO
   }
   return null;
 }
+
+/**
+ * 바깥에서 받은 옛 경로(주소 · 링크 · 본문 그림 주소)로 기록을 따라간다(#4822) — followMoves 에 **글자 꼴** 너그러움을 더한 것.
+ *  기록의 옛 경로는 디스크 이름 그대로인데(맥에서 올린 한글은 NFD 일 수 있다) AI 가 적은 주소는 대개 NFC 다. 그래서 적힌 꼴 먼저,
+ *  없으면 NFC · NFD 꼴로 한 번씩 더 찾는다(같은 꼴은 한 번만). '..' 이 섞였거나 비면 null(조회하지 않는다).
+ *  옛 자리에 지금 실제로 무엇이 있는지는 부르는 쪽이 먼저 본다(followMoves 와 같은 계약).
+ */
+export async function followMovedPath(rel: unknown, deps: FollowDeps, max = MOVE_FOLLOW_MAX): Promise<{ path: string; hops: number } | null> {
+  const start = normalizeMovePath(rel);
+  if (!start) return null;
+  for (const form of new Set([start, start.normalize("NFC"), start.normalize("NFD")])) {
+    const hit = await followMoves(form, deps, max);
+    if (hit) return hit;
+  }
+  return null;
+}

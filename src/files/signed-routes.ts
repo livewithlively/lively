@@ -19,21 +19,18 @@
 //  · Referrer-Policy: no-referrer · no-store — 주소(=자격)가 다른 곳으로 새거나 캐시에 남지 않게.
 import express from "express";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
-import { resolveRootPath, userOsUser } from "../terminal/profiles.js";
-import { memberStat, memberReadTo, memberPathProbe } from "../terminal/terminal-member-fs.js";
-import { isConfined, probeLocal } from "../terminal/path-jail.js";
-import { isInAppFolder } from "./app-jail.js";
-import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
+import { memberReadTo } from "../terminal/terminal-member-fs.js";
+import { receiveUpload, uploadError } from "../terminal/upload-file.js";
 import { uploadEntryOf, type UploadEntry } from "../ingest/upload-entry.js";
 import { grantSharedGroupWrite } from "../project/project-fs.js";
-import { parseAddress, formatAddress, appOfAddress, AddressError, type FileAddress } from "./address.js";
+import { parseAddress, formatAddress, AddressError, type FileAddress } from "./address.js";
 import { verifyFileUrlToken, FileUrlTokenError, FILE_URL_MAX_UPLOAD, type FileUrlClaims } from "./file-url-token.js";
-import { authorizeFileAccess, assertWritableTarget, type FileAccessDeps, type FileOp } from "./file-access.js";
+import { authorizeFileAccess, assertWritableTarget, type FileAccessDeps } from "./file-access.js";
+import { locateAddress, statAt } from "./address-fs.js";
 
 /** 받는 곳이 기대는 살아 있는 것 — 시험은 DB 없이 같은 라우트를 돌린다(files/signed-routes-live 가 운영 배선). */
 export interface SignedRouteDeps {
@@ -98,26 +95,10 @@ async function principalUser(claims: FileUrlClaims, d: SignedRouteDeps): Promise
   return { userId: m.id, email: m.email, scopes: m.scopes, projects: [] } as LivelyUser;
 }
 
-/** 주소 → 절대경로 + 파일 op 를 내릴 uid. 앱 폴더 주소는 그 앱 폴더 안에서만 연다(app-jail) · 그 밖은 자리 안에서만(path-jail). */
-async function locate(user: LivelyUser, a: FileAddress, op: FileOp): Promise<{ abs: string; base: string; osUser: string | null }> {
-  const rel = op === "write" ? nfcPath(a.rel) : a.rel;   // 새로 만드는 이름은 NFC 정본(#1278b) · 읽기는 그대로(옛 NFD 파일)
-  const osUser = await userOsUser(user);
-  const { base, abs } = await resolveRootPath(user, a.root, rel, osUser);
-  const probe = osUser ? (b: string, t: string) => memberPathProbe(osUser, b, t) : probeLocal;
-  const app = appOfAddress(a);
-  const ok = app ? await isInAppFolder(base, app.app, abs, probe) : await isConfined(base, abs, probe);
-  if (!ok) throw new HttpError(400, "허용 경로를 벗어났습니다");
-  return { abs, base, osUser };
-}
 
 // 이 라우트의 경로는 곧 자격(토큰)이다 — 실패 로그에는 고정 이름만 남긴다.
 const LOG_PATH = { logPath: "/api/files/s/:token" };
 
-async function statOf(abs: string, osUser: string | null): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
-  if (osUser) return memberStat(osUser, abs);
-  try { const st = await fsp.stat(abs); return { size: st.size, file: st.isFile(), dir: st.isDirectory(), mtime: Math.floor(st.mtimeMs) }; }
-  catch { return null; }
-}
 
 export function fileUrlRouter(d: SignedRouteDeps): express.Router {
   const router = express.Router();
@@ -129,8 +110,8 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
     const { claims, address } = claimsOf(String(req.params.token ?? ""), "GET", d);
     const user = await principalUser(claims, d);
     await authorizeFileAccess({ member: user.userId, scopes: user.scopes ?? [], app: claims.a ?? null }, address, "read", d.access);
-    const { abs, osUser } = await locate(user, address, "read");
-    const st = await statOf(abs, osUser);
+    const { abs, osUser } = await locateAddress(user, address, "read");
+    const st = await statAt(abs, osUser);
     if (!st) throw new HttpError(404, "경로를 찾을 수 없습니다");
     if (!st.file) throw new HttpError(400, "파일이 아닙니다 — 폴더는 받을 수 없습니다");
     const name = path.basename(abs);
@@ -157,8 +138,8 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
     //  판정은 이름의 유니코드 꼴 전부에 걸린다(file-access) — 아래 locate 가 NFC 로 쓰는 이름도 그 안에 있다.
     await authorizeFileAccess({ member: user.userId, scopes: user.scopes ?? [], app: claims.a ?? null }, address, "write", d.access);
     assertWritableTarget(address);
-    const { abs, base, osUser } = await locate(user, address, "write");
-    const existing = await statOf(abs, osUser);
+    const { abs, base, osUser } = await locateAddress(user, address, "write");
+    const existing = await statAt(abs, osUser);
     if (existing && !existing.file) throw new HttpError(409, "같은 이름의 폴더가 있어 파일을 올릴 수 없습니다");
     try { await receiveUpload(req, abs, FILE_URL_MAX_UPLOAD, osUser); }
     catch (e) { const he = uploadError(e, FILE_URL_MAX_UPLOAD); if (!he) return; throw he; }   // he=null → 보내는 쪽이 끊었다(응답할 상대가 없다)
@@ -171,7 +152,7 @@ export function fileUrlRouter(d: SignedRouteDeps): express.Router {
       return;
     }
     await grantSharedGroupWrite(abs, base, "file").catch((e) => logger.warn({ err: e, abs }, "[file-url] 그룹 rw 부여 실패"));
-    const st = await statOf(abs, osUser);
+    const st = await statAt(abs, osUser);
     res.json({ ok: true, address: stored, ...(st ? { size: st.size, ...(st.mtime ? { mtime: st.mtime } : {}) } : {}) });
   }, LOG_PATH));
 
