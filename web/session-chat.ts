@@ -2360,10 +2360,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
+    const src0 = src, from0 = loadedTo;
     try {
       let c = await rawGet(srcPath(src, { from: loadedTo }));
       fails = 0;
       if (destroyed) return;
+      //  ★ 겹친 읽기는 버린다(#4794 시험 W26 이 드러냄). 깨운 읽기(pokePoll — 통보 · 하네스가 그린 순간)는 도는 읽기를 기다리지 않아
+      //   같은 자리부터 두 번 읽을 수 있고, 둘 다 그리면 같은 줄이 두 번 선다(보낸 말이 두 번 보였다). 이 읽기가 도는 사이 다른 읽기가
+      //   그 자리를 이미 그렸으면(오프셋이 움직였다) 이 답은 낡았다 — 다음 주기는 그 읽기가 걸었다.
+      if (src !== src0 || loadedTo !== from0) return;
       if (src.kind === 'box' && c.uuid && curUuid && c.uuid !== curUuid) {
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.

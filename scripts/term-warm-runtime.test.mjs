@@ -46,6 +46,8 @@
 //   W24 그 컴퓨터의 세션(노드 — 대화는 중앙 기록으로만 읽힌다) → 중앙 기록은 턴이 끝나야 자라 에코를 못 본다 · 기다리지 않고 그린 때 넘긴다
 //   W25 기록 읽기가 느려 하네스가 먼저 그렸다 · 그 말은 이미 기록에 있다(들어갔다) → 읽는 동안은 대화창 · 다 읽은 그 자리에서 터미널
 //       (그린 때도 아니고 8초 뒤도 아니다)
+//   W26 읽기가 느린데(0.5초) 그 읽기 도중에 하네스가 그렸다 → 그린 순간 깨운 읽기가 도는 읽기와 같은 자리부터 겹쳐도 보낸 말은 한 번만 그려진다
+//       (겹친 읽기의 낡은 답은 버린다 — 고치기 전엔 두 번 그려졌다)
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
 //
 //  가짜는 «서버» 와 «하네스 출력» 뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을, 액자는 실제 터미널 모듈
@@ -140,7 +142,7 @@ async function PAGE_MAIN() {
   //  보낸 말이 «들어갔다» — 서버(아웃박스)가 하네스 입력창에 넣고 Enter 를 친 뒤 그 말이 대화 기록에 나타나는 때. 장면마다 건다.
   const ECHO = {};
   const echoAt = (id, ms, text) => { ECHO[id] = { at: Date.now() + ms, text }; };
-  const SLOW = { "box-w25": 1500 };                                    // W25 — 기록 읽기가 느리다(그사이 하네스가 그린다)
+  const SLOW = { "box-w25": 1500, "box-w26": 500 };                   // W25 — 기록 읽기가 느리다(그사이 하네스가 그린다) · W26 — 읽기마다 0.5초
   window.fetch = async (url) => {
     const u = new URL(String(url), location.href);
     if (/\/transcript$/.test(u.pathname)) {
@@ -501,6 +503,17 @@ async function PAGE_MAIN() {
       R.w25.after = v.snap(); R.w25.termAt = v.termAt(); R.w25.qstate = v.qstate();
       v.done();
     }
+    // W26 — 읽기가 느린데(0.5초) 하네스가 그 읽기 도중에 그렸다 → 그린 순간의 읽기가 도는 읽기와 겹치면 같은 줄을 두 번 그린다
+    {
+      echoAt("box-w26", 700, "보낸 말 W26");
+      const v = mount("box-w26", "ink=1000", { firstPrompt: "보낸 말 W26" });
+      await sleep(300);
+      const inp = v.input();
+      inp.focus(); inp.value = "쓰는 중"; inp.dispatchEvent(new Event("input"));   // 화면을 대화창에 붙잡아 둔다(보이는 글로 센다)
+      await sleep(3200);
+      R.w26 = { n: v.count("보낸 말 W26"), after: v.snap(), ink: !!v.fx()["test-ink"] };
+      v.done();
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -639,6 +652,9 @@ check(w25.painted && (w25.during || {}).warm && !(w25.during || {}).term,
   "W25 기록을 아직 읽는 중에 하네스가 그렸으면 — 다 읽을 때까지 대화창", w25.during);
 check((w25.after || {}).term && w25.termAt >= 1450 && w25.termAt <= 2100 && !w25.qstate,
   "W25 다 읽어 보니 그 말이 이미 들어가 있으면 그 자리에서 터미널로(8초를 기다리지 않는다) · 대기 말풍선 없음", { termAt: w25.termAt, qstate: w25.qstate });
+
+const w26 = R.w26 || {};
+check(w26.ink && w26.n === 1 && (w26.after || {}).chatShown, "W26 그린 순간의 읽기가 도는 읽기와 겹치지 않는다 — 보낸 말이 한 번만 그려진다", w26);
 
 check(!(R.pageErrors || []).length, "E 페이지 오류 없음", R.pageErrors);
 console.log(`\nterm-warm-runtime: ${pass} 통과 · ${fail} 실패`);
