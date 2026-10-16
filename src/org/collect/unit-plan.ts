@@ -312,9 +312,12 @@ export function isWidening(from: UnitVisibility, to: UnitVisibility): boolean {
 }
 
 /**
- * 공개범위를 바꿀 수 있나 — 고칠 수 있는 사람(canEditUnit)이어야 하고, «나만» 단위는 그렇게 정한 사람만 바꾼다(남이 넓히지 못하게).
- *  예외 하나: 정한 사람이 그 단위를 볼 수 있는 것이 확인되지 않았으면(신고만 · 내보낸 사람) 확인된 구성원이 넘겨받을 수 있다 —
- *   신고만으로 남의 DM 을 먼저 «나만» 으로 잡아 진짜 참여자가 못 모으게 막는 일을 풀려고.
+ * 공개범위를 바꿀 수 있나 — 고칠 수 있는 사람(canEditUnit)이어야 한다. 남이 정한 «나만» 단위는:
+ *  · 정한 사람이 그 단위의 확인된 구성원이면 — 다른 확인된 구성원은 «볼 수 있는 사람만» 으로만 바꿀 수 있다(상민님 2026-10-16).
+ *    그 구성원들은 원래 앱에서 같은 내용을 이미 본다 — 새로 열리는 사람이 없다. 한 사람의 «나만» 이 공유 채널을 막고, 그 사람
+ *    로그인이 끊기면 아무도 못 모으는 일을 풀려고. «모두» 로 넓히기·주인 바꾸기(«나만» 다시 고르기)는 정한 사람만.
+ *  · 정한 사람이 확인되지 않았으면(그 단위에서 빠짐 · 신고만 · 내보낸 사람) — 확인된 구성원이 넘겨받는다(무엇으로든).
+ *  확인되지 않은 사람(관리자 포함)은 남의 «나만» 을 바꾸지 못한다 — 메일함처럼 주인 한 명만 볼 수 있는 단위는 주인만 바꾼다.
  *  «나만» 으로 정하는 사람은 그 단위의 확인된 볼 수 있는 구성원이어야 한다(못 보는 사람이 자기 것으로 가져가지 못하게).
  */
 export function visibilityChangeError(
@@ -322,8 +325,11 @@ export function visibilityChangeError(
 ): string | null {
   if (!canEditUnit(u, member, isAdmin)) return "이 단위를 고칠 권한이 없습니다";
   const confirmed = (m: string | null): boolean => !!m && u.members.some((x) => x.member_id === m && x.verified && x.active !== false);
-  if (u.visibility === "me" && u.owner && u.owner !== member && (confirmed(u.owner) || !confirmed(member))) {
-    return "«나만» 으로 정한 사람만 이 단위의 공개범위를 바꿀 수 있습니다";
+  if (u.visibility === "me" && u.owner && u.owner !== member) {
+    if (!confirmed(member)) return "«나만» 으로 정한 사람만 이 단위의 공개범위를 바꿀 수 있습니다";
+    if (confirmed(u.owner) && next !== "viewers") {
+      return "남이 정한 «나만» 단위는 «볼 수 있는 사람만» 으로만 바꿀 수 있습니다 — «모두» 로 넓히거나 «나만» 을 다시 고르는 것은 정한 사람만";
+    }
   }
   if (next === "me" && !confirmed(member)) return "«나만» 은 이 단위를 볼 수 있는 것이 확인된 사람만 고를 수 있습니다";
   return null;

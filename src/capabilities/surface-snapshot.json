@@ -4022,7 +4022,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "1c85144b18880ab6"
+  "input_hash": "76dc1ce8ab2d12f6"
  },
  {
   "name": "collect_unit_split",
@@ -5353,7 +5353,7 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "6f6a754a2173b081"
+  "input_hash": "c5c2331807e4d7c4"
  },
  {
   "name": "org_app_chat_send",

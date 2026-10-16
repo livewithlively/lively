@@ -9,13 +9,17 @@
 //  ② 죽은 빌드 걷기 — 게이트웨이가 빌드 도중 다시 시작되면 'building' 줄이 남는다(lease 지남 → failed).
 //  ③ 옛 빌드 정리 — 앱이 사라졌거나, 별칭이 안 가리키고 30일 지난 빌드의 zip 을 지운다(판 묶음이 남아 있어 다시 빌드할 수 있다).
 //  ④ 고아 함수 — 앱을 지울 때 함수를 못 지워 남긴 줄(org_app_server)을 다시 지운다.
+//  ⑤ 서버 선언을 뺀 앱의 함수(#4791 · 결정 상민 2026-10-16) — 설치된 상태 · 지금 판 · 공개 판 모두 web.server 가 없으면 표시(unused_since)를 붙이고,
+//     unused_retire_days(기본 7일)가 지나면 함수 · 로그 그룹 · 함수 줄을 걷는다(빌드 기록은 남긴다). 알림은 보내지 않는다(상태에 retire_at).
+//     멈춘 함수는 표시도 걷기도 하지 않는다 — 지웠다 새로 만들면 자동 멈춤 · 관리자 멈춤이 풀리는 길이 된다(되살린 함수는 멈춤 기록이 없다).
+//  ⑥ 코드 크기를 모르는 함수(#4792) — 별칭이 있는데 code_bytes 가 0 인 줄을 AWS 에서 다시 잰다(틱마다 20개 · 못 잰 줄은 뒤로 보낸다).
 import { logger } from "../log.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
-import { appServerEnv } from "./app-server-config.js";
-import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
+import { appServerEnv, serverDeclOf } from "./app-server-config.js";
+import { APP_SERVER_POLICY_MAX, autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { publicError, type LambdaApi } from "./app-server-deploy.js";
-import { removeServer, stopServer } from "./app-server-lifecycle.js";
+import { publicError, realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
 import { notifyAppInstaller } from "./notify.js";
@@ -32,6 +36,8 @@ export function resetWatchStateForTest(): void { seen.clear(); }
 export interface WatchDeps {
   api?: LambdaApi;
   metrics?: (queries: MetricQuery[], range: { start: Date; end: Date; periodSec: number }) => Promise<MetricResult[]>;
+  /** 시험 — ⑤ 걷기 직전(후보를 고른 뒤 · 잠그기 전). 그 사이 서버 판이 돌아오는 경합을 흉내 낸다. */
+  beforeRetire?: (appId: string) => Promise<void>;
   /** kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함). 같은 앱 · 같은 종류는 읽기 전까지 한 장. */
   notify?: (appId: string, title: string, body: string, kind: "stopped" | "stop-failed") => Promise<void>;
   now?: () => number;
@@ -122,6 +128,56 @@ export async function sweepOrphanServers(deps: WatchDeps = {}): Promise<number> 
   return n;
 }
 
+/** 이 줄의 앱이 서버를 쓰나 — 설치된 상태 · 지금 판 · 공개 판 중 하나라도 web.server 를 선언했으면 쓴다(넉넉히: 셋 다 없을 때만 «안 씀»). */
+const serverInUse = (r: st.ServerUseRow): boolean => [r.srv_app, r.srv_cur, r.srv_pub].some((x) => x != null && serverDeclOf({ web: { server: x } }) != null);
+
+/** ⑤ 서버 선언을 뺀 앱의 함수 — 표시 · 표시 걷기 · 기한이 지난 함수 걷기. */
+export async function retireUnusedServers(policy: AppServerPolicy, deps: WatchDeps = {}): Promise<{ marked: number; cleared: number; retired: string[]; skipped: Array<{ app: string; why: string }> }> {
+  const out = { marked: 0, cleared: 0, retired: [] as string[], skipped: [] as Array<{ app: string; why: string }> };
+  for (const r of await st.serverUseRows(policy.unused_retire_days)) {
+    if (serverInUse(r) || r.stopped) {
+      if (r.unused_since && (await st.clearServerUnused(r.app_id))) out.cleared++;
+      continue;
+    }
+    if (!r.unused_since) { if (await st.markServerUnused(r.app_id)) out.marked++; continue; }
+    if (!r.due) continue;
+    await deps.beforeRetire?.(r.app_id);
+    const recheck = async (): Promise<boolean> => {
+      const now = (await st.serverUseRows(policy.unused_retire_days, r.app_id))[0];
+      return !!now && !serverInUse(now) && !now.stopped && now.due;
+    };
+    const res = await retireServer(r.app_id, recheck, deps.api ? { api: deps.api } : {});
+    if (res.retired) {
+      out.retired.push(r.app_id);
+      logger.info({ app: r.app_id, errors: res.errors }, "서버 선언을 뺀 앱의 함수를 걷었다(#4791)");
+    } else out.skipped.push({ app: r.app_id, why: res.skipped ?? "?" });
+  }
+  return out;
+}
+
+/**
+ * ⑥ 코드 크기를 모르는 함수(#4792) — 별칭이 있는데 code_bytes 가 0 인 줄(칸을 더하기 전에 올린 함수 · 재기에 실패한 배포)을 AWS 에서 다시 잰다.
+ *  0 이면 코드 저장 상한이 그 함수를 없는 것으로 센다(격리 리뷰 «모름 → 0 → 통과»). 틱마다 몇 개씩만. 잰 수.
+ */
+export async function refreshUnknownCodeBytes(deps: WatchDeps = {}, limit = 20): Promise<number> {
+  const env = appServerEnv();
+  if (!env) return 0;
+  const api = deps.api ?? realLambdaApi(env.region);
+  let n = 0;
+  for (const r of await st.serverRowsWithoutCodeSize(limit)) {
+    let done = false;
+    try {
+      const bytes = codeBytesOf(await api.listVersions(r.function_name));
+      //  아직 0 일 때만 적는다 — 고른 뒤 같은 앱의 배포가 자리를 잡았거나 실측을 적었으면 늦게 온 이 값이 덮지 않게(재검토).
+      done = bytes > 0 && await st.fillServerCodeBytes(r.app_id, bytes);
+    } catch (e) { logger.warn({ err: e, app: r.app_id }, "함수 코드 크기 다시 재기 실패 — 다음 차례(#4792)"); }
+    if (done) n++;
+    //  못 잰 줄(함수가 AWS 에서 사라짐 등)은 뒤로 보낸다 — 앞자리에 남으면 틱마다 같은 줄만 보고 다른 줄이 굶는다(재검토).
+    else await st.touchServerRow(r.app_id).catch(() => { /* 다음 틱 */ });
+  }
+  return n;
+}
+
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
   if (!appServerEnv()) return { skipped: "disabled" };
@@ -129,6 +185,8 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.stale_builds = await st.failStaleServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   const policy = await st.appServerPolicy();
   out.watch = await watchAppServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.retire = await retireUnusedServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.code_sizes = await refreshUnknownCodeBytes(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.pruned = await pruneServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;

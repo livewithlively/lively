@@ -44,7 +44,7 @@ import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan,
 import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
 import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
-import { afterPublishServer, afterRevertServer, installedBuildState, publishServerDenial } from "../apps/app-server-deploy.js";
+import { afterPublishServer, afterRevertServer, installedBuildState, newFunctionDenial, publishServerDenial } from "../apps/app-server-deploy.js";
 import { appServerPolicy } from "../apps/app-server-store.js";
 import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
@@ -1085,8 +1085,14 @@ const appRevert: Capability = {
     if (result.published && !("pubError" in result && result.pubError)) server = await serverAfterPublish(id);
     else if (result.changed && result.app && serverDeclOf(result.app.manifest) && appServerEnv()) {
       const app1 = result.app;
-      void appServerPolicy().then((p) => afterRevertServer(app1, p)).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
-      server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
+      const p = await appServerPolicy();
+      //  #4792 함수가 없는 앱이 워크스페이스 함수 수 상한에 닿았으면 뒤에서 옮기다 조용히 멈추지 말고 지금 알린다(격리 리뷰 — 줄이 없어 last_error 를 적을 곳이 없다).
+      const capWhy = await newFunctionDenial(app1.id, p).catch(() => null);
+      if (capWhy) server = { ok: false, state: "failed", message: `서버를 되돌린 판으로 옮기지 못했습니다: ${capWhy}` };
+      else {
+        void afterRevertServer(app1, p).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
+        server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
+      }
     }
     if (result.published) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     const after = result.app;

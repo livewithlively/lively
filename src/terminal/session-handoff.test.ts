@@ -45,3 +45,17 @@ test("새 하네스는 원 세션의 작업 자리·프로젝트·권한을 그�
   });
   assert.match(input.initialPrompt || "", /claude → codex/);
 });
+
+test("#4418 전환은 이름의 출처도 잇는다 — 받아 온 이름이라 사람 이름으로 굳지 않게(출처 없는 옛 행은 안 싣는다 · 모르는 값은 rule)", () => {
+  const base: SessionState = {
+    id: "box-yoon-old", owner: "yoon", label: "결제 백오프", harness: "claude",
+    dir: "/work/project/1870", root_key: "shared", subpath: "project/1870", flags: {},
+    auto_approve: false, invites: [], project_id: 1870, project_src: "v6", app_id: null,
+    read_only: false, incognito: false, write_vis: null, restrict_read: false,
+    created: 1, last_busy: null, last_seen: null, claude_session_id: null, transcript_path: null,
+    exited_at: null, exit_reason: null, node_id: null,
+  };
+  for (const [stored, want] of [["agent", "agent"], ["human", "human"], ["rule", "rule"], ["id", "id"], [null, undefined], ["", undefined], ["???", "rule"]] as const) {
+    assert.equal(sessionHandoffInput({ ...base, label_source: stored }, "codex", {}, "").labelSource, want, `출처 ${stored}`);
+  }
+});

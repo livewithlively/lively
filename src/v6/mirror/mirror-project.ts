@@ -227,9 +227,13 @@ export async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system
       status_raw: statusRaw, assignee: theirsAssigneeCol, list_ext: listExt,
       tags: theirsTags.map((t) => String(t.name).trim().toLowerCase()),
     });
+    //  #4418 — 머지 결과로 이름이 **실제로 바뀌면** 그건 바깥(ClickUp 등)에서 사람이 고친 이름이다 → 출처 human. 안 올리면 세션이
+    //   만든 태스크(session)·자동 생성 프로젝트(rule·session)를 바깥에서 고친 이름을 세션의 이름 승계가 다시 덮고, 아웃박스가 그걸
+    //   바깥으로 되민다. 출처가 비어 있는 행(바깥에서 온 것 · 이 칸 이전)은 이미 사람 이름으로 읽히므로 그대로 둔다.
     await client.query(
       `UPDATE project SET
           level=$2, parent_id=COALESCE($3, parent_id),
+          name_source=CASE WHEN name IS DISTINCT FROM $4 AND name_source IS NOT NULL THEN 'human' ELSE name_source END,
           name=$4, description=$5, status=$6, status_raw=$7, status_category=$8,
           priority=$9, start_date=$10, due_date=$11, assignee=$12, list_id=$13,
           external_url=$14, external_base=$15::jsonb,

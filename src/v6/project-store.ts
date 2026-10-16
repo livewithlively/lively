@@ -720,17 +720,48 @@ export async function claimProjectName(
   const before: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) return { applied: false, project: null };
-  const RANK = "CASE $3 WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
-  const CUR = "CASE COALESCE(name_source,'human') WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
   const after: ProjectRow | undefined = await one(itemsPool,
     `UPDATE project SET name=$2, name_source=$3, updated_at=now()
-      WHERE id=$1 AND level='project' AND ($3='human' OR ${RANK} > ${CUR})
+      WHERE id=$1 AND level='project' AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
       RETURNING ${PROJECT_COLS}`, [id, name, source]);
   if (!after) return { applied: false, project: before };
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
   if (after.name !== before.name) await markProjectEmbeddingPending(id);
   return { applied: true, project: after };
+}
+
+/** 이름 출처의 순위(SQL 식) — v6/project-name.ts 의 RANK 와 같은 값이어야 한다. 프로젝트·태스크 걸쇠가 같은 표를 쓴다. */
+const nameRankSql = (expr: string): string =>
+  `CASE ${expr} WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END`;
+
+// 태스크 이름 **걸쇠**(#4418) — claimProjectName 의 태스크 판. 같은 순위표, 같은 «한 문장 판정».
+//
+//  왜: 세션이 맡은 태스크의 이름을 세션 이름으로 따라 바꾸던 판정이 «태스크 이름 == 직전 세션 이름» 이었다. 그런데
+//   ⓐ **태스크에서 연 세션**은 세션 이름이 태스크 이름에서 오므로 두 값이 늘 같아, 사람이 지은 태스크 이름을 세션이 지은
+//     이름으로 오인해 덮었다(#4418 관측: 「앱 붙였다 떼기」).
+//   ⓑ 세션이 **스스로 만든** 태스크는 반대로 규칙 이름 끝의 말줄임(…)을 떼고 만들어 두 값이 늘 달라, 따라가야 할 때 못 갔다
+//     (보드에 첫 지시를 자른 이름이 그대로 남았다).
+//   이름 글자로 «누가 지었나» 를 추측해서 생긴 일이다 — 세션 이름 걸쇠(#1979)가 고친 것과 같은 병이라 같은 처방을 쓴다:
+//   출처를 칸(name_source)에 남기고 순위로 판정한다. 세션이 만든 태스크는 'session' 으로 태어나고(createTask), 사람이
+//   이름을 실제로 바꾸면 'human' 이 된다(updateTask). **출처가 비어 있으면 사람 이름으로 본다** — 이 칸 이전의 태스크와
+//   사람이 만든 태스크가 여기 온다(따라가지 않는 쪽이 안전하다).
+//  반환 applied=false 는 실패가 아니다(졌거나 없는 태스크) — 호출자는 그대로 두면 된다.
+export async function claimTaskName(
+  id: number, name: string, source: ProjectNameSource, ctx?: WriteCtx,
+): Promise<{ applied: boolean; task: ProjectRow | null }> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+  if (!before) return { applied: false, task: null };
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET name=$2, name_source=$3, updated_at=now()
+      WHERE id=$1 AND level IN ('task','subtask') AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
+      RETURNING ${PROJECT_COLS}`, [id, name, source]);
+  if (!after) return { applied: false, task: before };
+  await auditProject(String(id), "update", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
+  if (after.name !== before.name) await markProjectEmbeddingPending(id);
+  return { applied: true, task: after };
 }
 
 // ── 보드(프로젝트 목록) 커스텀 컬럼 ───────────────────────────────────────────
@@ -799,7 +830,10 @@ export async function listProjectMemberIds(projectId: number): Promise<string[]>
 
 // ── 작업(task/subtask) 쓰기 ───────────────────────────────────────────────
 export async function createTask(
-  input: { projectId: number; parentTaskId?: number; name: string; description?: string },
+  input: { projectId: number; parentTaskId?: number; name: string; description?: string;
+    /** #4418 이름의 출처 — 세션이 스스로 만든 태스크만 'session' 을 준다(세션이 처음 지은 이름으로 한 번 따라간다).
+     *  생략 = 비어 있음 = 사람이 지은 이름으로 본다(claimTaskName). */
+    name_source?: ProjectNameSource },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // 부모 해석 — parentTaskId 있으면 그 작업(level='task' → 신규 subtask), 없으면 projectId(level='project' → 신규 task).
@@ -823,10 +857,10 @@ export async function createTask(
   // 네이티브 태스크 기본 상태 = 'todo'(다단계 상태 모델). project 의 active|done 와 구분 — 리스트뷰가 상태로 그룹.
   //  (클릭업 미러 태스크는 connector-mirror 가 'active' 로 적재 — 합집합 CHECK 가 둘 다 허용, schema.ts:5b 참조.)
   const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, created_at, updated_at)
-     VALUES($1,$2,$3,$4,$5,'todo','unstarted',now(),now())
+    `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, name_source, created_at, updated_at)
+     VALUES($1,$2,$3,$4,$5,'todo','unstarted',$6,now(),now())
      RETURNING ${PROJECT_COLS}`,
-    [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
+    [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null, input.name_source ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
   await markProjectEmbeddingPending(row.id); // #631/#1053 검색 임베딩 — pending 마킹(백그라운드 스윕이 채움)
@@ -893,7 +927,14 @@ export async function updateTask(
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
-  if (patch.name !== undefined) set("name", patch.name);
+  if (patch.name !== undefined) {
+    set("name", patch.name);
+    // #4418 — 이름을 **실제로 바꾸는** 패치는 사람의 개명이다(웹 인라인 편집 · 사람이 시켜 부르는 task_update_v6 · 되돌리기) —
+    //  출처를 human 으로 올려, 세션의 이름 승계(claimTaskName)가 그 이름을 덮지 못하게 한다(updateProject #2031 과 같은 뜻).
+    //  같은 이름을 다시 싣는 저장(폼 재전송)은 출처를 그대로 둔다 — 개명이 아닌데 승계를 막지 않게. SET 의 오른쪽은 바뀌기
+    //  전 값을 보므로 판정과 쓰기가 한 문장이다.
+    sets.push(`name_source = CASE WHEN name IS DISTINCT FROM $${vals.length} THEN 'human' ELSE name_source END`);
+  }
   if (patch.description !== undefined) set("description", patch.description);
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다(전체 교체 아님). SQL 원자적 concat: 빈/NULL 본문이면 구분자 없이,
   //  아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트). project 본문과 동형(#357).
