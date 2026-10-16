@@ -25,6 +25,9 @@
 //   V3 복사로 만든 함수를 다음 배포가 바로 읽기로 옮긴다 · V4 이미 그 판을 읽으면 코드를 다시 안 올린다 · V5 같은 키에 다시 올라간 zip(판 바뀜) → 다시 빌드 · 새 판
 //   V6 판 번호 없는 옛 빌드는 지금 판을 채워 쓴다 · V7 저장소가 판 번호를 안 주면 무효로 하지 않는다 · V8 남은 함수 판이 읽는 zip 은 30일 정리에서 뺀다(V8b 안 읽으면 지움)
 //   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
+//   격리 리뷰 · 재검토: V12 판 목록 404 면 지운다 · V13 잠긴 앱은 건너뛴다 · V14 잠금 안 재확인(V14b 저장소 오류면 막지 않는다) · V15 Inactive 되살리기
+//   (V15b Inactive + 지난 고치기 실패 · V15c 지난 고치기 실패 뒤 새 코드 · V15d 지난 고치기 실패 뒤 설정만) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
+//   V18 고른 뒤 별칭이 옮겨 온 빌드는 남긴다 · V19 고를 때 함수 줄 없던 앱에 줄이 생기면 남긴다 · V20 «아직 읽힘» 은 판 목록 한 번으로 거른다 · W11 실패 글 걷기
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import crypto from "node:crypto";
@@ -116,7 +119,9 @@ const readCode = (code) => {
   if (!z) throw new AwsError(400, "InvalidParameterValueException", `The specified S3 object does not exist: s3://${code.S3Bucket}/${code.S3Key}${code.S3ObjectVersion ? ` (versionId=${code.S3ObjectVersion})` : ""}. Verify the object exists and the versionId is correct.`);
   return { z, ref: { S3Bucket: code.S3Bucket, S3Key: code.S3Key, S3ObjectVersion: v } };
 };
-const listFail = new Set();     // #4801 V6 — 이 함수의 판 목록 읽기는 실패한다
+//  고치기가 되면 LastUpdateStatus 가 Successful 로(실제 AWS — 지난 고치기의 실패 표시는 다음 고치기가 덮는다 · V15b~d).
+const updated = (f) => { f.cfg.LastUpdateStatus = "Successful"; delete f.cfg.LastUpdateStatusReason; };
+const listFail = new Set();     // #4801 V9 — 이 함수의 판 목록 읽기는 실패한다
 const failDelete = new Set();   // R4 — 이 함수 지우기는 실패한다(AWS 오류 흉내)
 let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 오류로(zip 은 있다) · "reference" 면 바로 읽기 권한 거절 글(#4801 R1h)
 let publishDelayMs = 0;         // W9 — 판 고정을 늦춰 «판정 뒤 · 실측 앞» 창을 넓힌다
@@ -135,7 +140,8 @@ const api = {
   //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
   getFunctionConfiguration: async (n, qual) => {
     const f = fns.get(n); if (!f) return null;
-    if (readyFail.has(n)) return { ...cfgOf(f), State: "Failed", StateReason: "흉내 — 만든 뒤 실패" };
+    //   실패 까닭엔 AWS 원문처럼 저장소 주소 · 계정 번호를 싣는다 — 사람에게 보이는 글에선 걷혀야 한다(W11 · #4801).
+    if (readyFail.has(n)) return { ...cfgOf(f), State: "Failed", StateReason: "흉내 — 만든 뒤 실패: s3://fake-bucket/t/x/z/y.zip (acct 425515538094)" };
     if (qual && qual !== "$LATEST") { const v = f.versions.find((x) => x.Version === qual); return v ? JSON.parse(JSON.stringify(v.cfg)) : null; }
     return cfgOf(f);
   },
@@ -157,10 +163,10 @@ const api = {
       throw new AwsError(400, "InvalidParameterValueException", `Lambda service principal lambda.amazonaws.com does not have s3:GetObject and s3:GetObjectVersion permission on s3://${code.S3Bucket}/${code.S3Key}. Update the bucket policy to grant the Lambda service principal access and retry.`);
     }
     if (s3Denied) { s3Denied = false; throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: AccessDenied. S3 Error Message: Access Denied"); }
-    //  코드를 고치면 Inactive 함수도 되살아난다(AWS 문서 «restore access … and update the function» · #4801 V15).
-    const f = fns.get(n); const { z, ref } = readCode(code); f.cfg.CodeSha256 = shaB64(z); f.cfg.CodeSize = z.length; f.ref = ref; f.cfg.State = "Active"; return cfgOf(f);
+    //  코드를 고치면 Inactive 함수도 되살아난다(AWS 문서 «restore access … and update the function» · #4801 V15). 고치기가 되면 지난 고치기의 실패도 걷힌다.
+    const f = fns.get(n); const { z, ref } = readCode(code); f.cfg.CodeSha256 = shaB64(z); f.cfg.CodeSize = z.length; f.ref = ref; f.cfg.State = "Active"; updated(f); return cfgOf(f);
   },
-  updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
+  updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); updated(f); return cfgOf(f); },
   publishVersion: async (n, i) => {
     log.push(["publishVersion", n, i.CodeSha256]);
     if (publishDelayMs) await new Promise((r) => setTimeout(r, publishDelayMs));
@@ -783,6 +789,9 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   const r = await rowOf("own-a");
   chk("W11 만든 직후 실패 → 줄은 남고(함수가 있다) code_bytes = 실측($LATEST 하나)", d.status === "failed" && !!r && fns.has(fnOf("own-a"))
     && Number(r.code_bytes) === codeOf(fnOf("own-a")) && codeOf(fnOf("own-a")) > 0, JSON.stringify({ status: d.status, cb: r && r.code_bytes, want: codeOf(fnOf("own-a")) }));
+  //  W11b 실패 까닭(AWS 원문)의 판 묶음 버킷 주소 · 계정 번호는 사람에게 보이는 글에서 걷는다(#4801 격리 리뷰).
+  chk("W11b 함수 상태 실패 글 — 저장소 주소 · 계정 번호를 걷는다(실패 글 · 마지막 오류)", /저장소 객체/.test(String(d.error))
+    && !/fake-bucket|425515538094|s3:\/\//.test(String(d.error) + String(r?.last_error)), JSON.stringify({ error: d.error, last_error: r?.last_error }));
   await call("org_app_remove", { app_id: "own-a" }, boss);
 }
 
@@ -1350,6 +1359,26 @@ const hasBuild = async (id, key) => (await okBuilds(id)).some((x) => x.build_key
   await call("org_app_remove", { app_id: "rh-a" }, boss);
 }
 
+// V14b 잠금 안 재확인이 저장소 오류(HEAD 실패)면 막지 않는다 — 잠금 밖 판정(usableBuild)과 같은 쪽(못 본 채 막으면 S3 가 흔들릴 때 모든 배포가 멈춘다)
+{
+  await call("app_save", { files: twin("rh-b", "require('http').createServer((q,s)=>s.end('b1')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "rh-b", wait_s: 120 }, alice, aliceCtx);
+  const v1 = await verOf("rh-b");
+  const [bA] = await okBuilds("rh-b");
+  await call("app_save", { files: twin("rh-b", "require('http').createServer((q,s)=>s.end('b2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "rh-b", wait_s: 120 }, alice, aliceCtx);
+  let seenA = 0;
+  //  A 의 zip 을 처음 볼 때(잠금 밖)는 있고, 그다음(잠금 안)은 저장소가 답하지 않는다.
+  setServerDepsForTest({ ...baseDepsV(), headZip: async (key) => { if (key === bA.zip_key && seenA++ > 0) throw new AwsError(503, "SlowDown", "흉내 — 저장소 흔들림"); return headV(key); } });
+  const u0 = codeUps(fnOf("rh-b")).length;
+  await call("app_revert", { app_id: "rh-b", version_no: v1 }, alice, aliceCtx);
+  const r = await waitFor(async () => { const x = await rowOf("rh-b"); return x?.cur_build_key === bA.build_key ? x : null; });
+  setServerDepsForTest(baseDepsV());
+  chk("V14b 잠금 안 재확인이 저장소 오류 → 막지 않고 코드를 올려 cur 를 옮긴다 · 빌드는 무효로 안 적는다", seenA >= 2 && !!r && codeUps(fnOf("rh-b")).length === u0 + 1
+    && (await okBuilds("rh-b")).some((b) => b.build_key === bA.build_key), JSON.stringify({ seenA, cur: r?.cur_build_key === bA.build_key, ups: codeUps(fnOf("rh-b")).length - u0 }));
+  await call("org_app_remove", { app_id: "rh-b" }, boss);
+}
+
 // V15 Inactive(원본을 잃음 · 오래 쉼) 함수 — 같은 코드여도 다시 올려 되살린다(별칭만 옮기는 재사용 · 6분 기다리다 504 가 아니라)
 {
   await call("app_save", { files: twin("in-a") }, alice, aliceCtx);
@@ -1367,6 +1396,51 @@ const hasBuild = async (id, key) => (await okBuilds(id)).some((x) => x.build_key
   await call("org_app_remove", { app_id: "in-a" }, boss);
 }
 
+//  V15b~d 지난 고치기가 실패한 채(LastUpdateStatus Failed — AWS 는 실패한 고치기를 걷고 그 전 코드 · 설정을 둔다)인 함수 — 그 표시가 다음 배포를 막지 않는다(재검토).
+const staleFail = (f) => Object.assign(f.cfg, { LastUpdateStatus: "Failed", LastUpdateStatusReason: "흉내 — 지난 고치기 실패" });
+// V15b Inactive 이면서 지난 고치기도 실패 — 실패 표시에 먼저 걸려 502 가 아니라 코드를 다시 올려 되살린다
+{
+  await call("app_save", { files: twin("in-b") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "in-b", wait_s: 120 }, alice, aliceCtx);
+  const f = fns.get(fnOf("in-b"));
+  staleFail(f); f.cfg.State = "Inactive";
+  for (const v of f.versions) v.cfg.State = "Inactive";
+  const u0 = codeUps(fnOf("in-b")).length;
+  const d = await call("app_server_deploy", { app_id: "in-b", wait_s: 120 }, alice, aliceCtx);
+  chk("V15b Inactive + 지난 고치기 실패 → 코드를 다시 올려 되살림(Active · 고치기 성공)", d.status === "deployed" && codeUps(fnOf("in-b")).length === u0 + 1
+    && f.cfg.State === "Active" && f.cfg.LastUpdateStatus === "Successful", JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("in-b")).length - u0, cfg: [f.cfg.State, f.cfg.LastUpdateStatus] }));
+  await call("org_app_remove", { app_id: "in-b" }, boss);
+}
+// V15c 지난 고치기 실패 뒤 새 코드 — 올리기 앞 기다림이 그 표시에 막히지 않는다
+{
+  await call("app_save", { files: twin("lf-a", "require('http').createServer((q,s)=>s.end('c1')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lf-a", wait_s: 120 }, alice, aliceCtx);
+  const f = fns.get(fnOf("lf-a"));
+  staleFail(f);
+  await call("app_save", { files: twin("lf-a", "require('http').createServer((q,s)=>s.end('c2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  const u0 = codeUps(fnOf("lf-a")).length;
+  const d = await call("app_server_deploy", { app_id: "lf-a", wait_s: 120 }, alice, aliceCtx);
+  chk("V15c 지난 고치기 실패 · 새 코드 → 코드를 올려 배포", d.status === "deployed" && codeUps(fnOf("lf-a")).length === u0 + 1 && f.cfg.LastUpdateStatus === "Successful",
+    JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("lf-a")).length - u0 }));
+  await call("org_app_remove", { app_id: "lf-a" }, boss);
+}
+// V15d 지난 고치기 실패 뒤 같은 코드 · 설정만 다름 — 코드를 안 올리는 길의 기다림도 그 표시에 막히지 않고 설정을 고친다
+{
+  await call("app_save", { files: twin("lf-b") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lf-b", wait_s: 120 }, alice, aliceCtx);
+  const f = fns.get(fnOf("lf-b"));
+  //  누가 밖에서 메모리를 바꿔 두고(그 판도) 지난 고치기는 실패한 채 — 같은 빌드로 다시 배포하면 별칭만 옮기기는 못 하고(설정이 다르다) 설정을 고친다.
+  staleFail(f); f.cfg.MemorySize = 1;
+  for (const v of f.versions) v.cfg.MemorySize = 1;
+  const u0 = codeUps(fnOf("lf-b")).length;
+  const uc0 = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-b")).length;
+  const d = await call("app_server_deploy", { app_id: "lf-b", wait_s: 120 }, alice, aliceCtx);
+  const uc = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-b")).length - uc0;
+  chk("V15d 지난 고치기 실패 · 같은 코드 · 설정만 다름 → 코드 올리기 0 · 설정 고치기 1 · 배포", d.status === "deployed" && codeUps(fnOf("lf-b")).length === u0 && uc === 1
+    && f.cfg.MemorySize !== 1 && f.cfg.LastUpdateStatus === "Successful", JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("lf-b")).length - u0, uc, mem: f.cfg.MemorySize }));
+  await call("org_app_remove", { app_id: "lf-b" }, boss);
+}
+
 // V16 건너뛴 후보(아직 읽히는 zip)가 앞자리에 있어도 뒤의 후보를 지운다 — 넘겨 가며 훑는다(쪽 크기 1 · 지울 수 1 로 좁혀 본다)
 {
   const p = await twoBuilds("pg-a", false);   // P = 판 1 이 읽는다(남김)
@@ -1378,6 +1452,86 @@ const hasBuild = async (id, key) => (await okBuilds(id)).some((x) => x.build_key
     && !(await hasBuild("pg-b", dd.bA.build_key)) && deletedZips.includes(dd.bA.zip_key) && !deletedZips.includes(p.bA.zip_key), JSON.stringify({ n, p: p.reads, d: dd.reads }));
   await call("org_app_remove", { app_id: "pg-a" }, boss);
   await call("org_app_remove", { app_id: "pg-b" }, boss);
+}
+
+// V17 같은 시각의 후보 둘 — 쪽 크기 1 로 넘겨도 둘째를 놓치지 않는다(키셋 = 시각 · 앱 · 빌드 키 · 시각은 마이크로초까지 · 재검토)
+{
+  const p = await twoBuilds("pt-a", false);   // 판 1 이 읽는다(남김)
+  const dd = await twoBuilds("pt-b", true);   // 아무도 안 읽는다(지움)
+  //  둘을 같은 시각(마이크로초 포함)으로 — 다른 후보보다 앞서게 오래전. 앱 id 순(pt-a < pt-b)이라 남길 후보가 먼저 온다.
+  await q(`UPDATE org_app_server_build SET started_at = timestamptz '2020-01-01 00:00:00.123456+00' WHERE (app_id='pt-a' AND build_key=$1) OR (app_id='pt-b' AND build_key=$2)`,
+    [p.bA.build_key, dd.bA.build_key]);
+  const n = await pruneServerBuilds({ api }, 1, 10, 1);
+  chk("V17 같은 시각 후보 둘(앞은 읽힘) — 쪽 1 로 넘겨 뒤 후보를 지운다", p.reads && !dd.reads && n === 1 && await hasBuild("pt-a", p.bA.build_key)
+    && !(await hasBuild("pt-b", dd.bA.build_key)) && deletedZips.includes(dd.bA.zip_key), JSON.stringify({ n, p: p.reads, d: dd.reads }));
+  await call("org_app_remove", { app_id: "pt-a" }, boss);
+  await call("org_app_remove", { app_id: "pt-b" }, boss);
+}
+
+// V18 고른 뒤 · 잠그기 전에 별칭이 그 빌드로 옮겨 오면(되돌리기 · 공개) 지우지 않는다 — 잠금 안에서 별칭을 다시 본다
+{
+  const dd = await twoBuilds("pm-a", true);   // A = 아무 판도 안 읽는다(고를 땐 지울 후보)
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='pm-a' AND build_key=$1`, [dd.bA.build_key]);
+  const cur0 = (await rowOf("pm-a")).cur_build_key;
+  let moved = false;
+  //  잠그기 전 거르기(판 목록 읽기) 때 다른 배포가 cur 를 A 로 옮긴 것처럼 — 줄만 바꾼다(흉내).
+  const racing = { ...api, listVersions: async (n) => {
+    if (n === fnOf("pm-a") && !moved) { moved = true; await q(`UPDATE org_app_server SET cur_build_key=$1 WHERE app_id='pm-a'`, [dd.bA.build_key]); }
+    return api.listVersions(n);
+  } };
+  await pruneServerBuilds({ api: racing });
+  const kept = await hasBuild("pm-a", dd.bA.build_key) && zips.has(dd.bA.zip_key);
+  await q(`UPDATE org_app_server SET cur_build_key=$1 WHERE app_id='pm-a'`, [cur0]);
+  await pruneServerBuilds({ api });
+  const gone = !(await hasBuild("pm-a", dd.bA.build_key)) && deletedZips.includes(dd.bA.zip_key);
+  chk("V18 고른 뒤 별칭이 옮겨 온 빌드 → 남김 → 별칭이 떠나면 지움", moved && !dd.reads && kept && gone, JSON.stringify({ moved, reads: dd.reads, kept, gone }));
+  await call("org_app_remove", { app_id: "pm-a" }, boss);
+}
+
+// V19 고를 때 함수 줄이 없던 앱(앱이 사라짐)의 빌드 — 지우기 직전 그 앱 id 에 함수 줄이 생겼으면(같은 id 로 다시 만든 앱의 배포) 지우지 않는다
+{
+  //  사라진 앱의 빌드: 함수를 못 지운 채 앱을 지우고(R4a — 줄 · 빌드 · zip 이 남는다) 고아 쓸기가 함수 · 줄만 지우고 멈춘 것처럼 줄을 지운다.
+  await call("app_save", { files: twin("gx-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "gx-a", wait_s: 120 }, alice, aliceCtx);
+  const [bG] = await okBuilds("gx-a");
+  failDelete.add(fnOf("gx-a"));
+  await call("org_app_remove", { app_id: "gx-a" }, boss);
+  failDelete.delete(fnOf("gx-a"));
+  fns.delete(fnOf("gx-a"));
+  await q(`DELETE FROM org_app_server WHERE app_id='gx-a'`);
+  //  앞 후보(함수가 있는 다른 앱의 옛 빌드) — 그 판 목록을 읽을 때 «같은 id 로 다시 만든 앱의 배포가 줄을 잡았다» 를 흉내 낸다.
+  const dd = await twoBuilds("gx-b", true);
+  await q(`UPDATE org_app_server_build SET started_at = timestamptz '2019-01-01 00:00:00+00' WHERE app_id='gx-b' AND build_key=$1`, [dd.bA.build_key]);
+  let claimed = false;
+  const racing = { ...api, listVersions: async (n) => {
+    if (n === fnOf("gx-b") && !claimed) { claimed = true; await q(`INSERT INTO org_app_server (app_id, function_name) VALUES ('gx-a', $1)`, [fnOf("gx-a")]); }
+    return api.listVersions(n);
+  } };
+  await pruneServerBuilds({ api: racing });
+  const kept = await hasBuild("gx-a", bG.build_key) && zips.has(bG.zip_key);
+  const tookB = !(await hasBuild("gx-b", dd.bA.build_key));
+  await q(`DELETE FROM org_app_server WHERE app_id='gx-a'`);
+  await pruneServerBuilds({ api });
+  const gone = !(await hasBuild("gx-a", bG.build_key)) && deletedZips.includes(bG.zip_key);
+  chk("V19 고를 때 줄 없던 앱에 줄이 생김 → 그 앱의 빌드 · zip 남김 → 줄이 없어지면 지움", claimed && tookB && kept && gone, JSON.stringify({ claimed, tookB, kept, gone }));
+  await call("org_app_remove", { app_id: "gx-b" }, boss);
+}
+
+// V20 «아직 읽힘» 은 이 틱의 판 목록 한 번으로 먼저 거른다 — 같은 함수의 후보마다 잠그고 다시 읽지 않는다(재검토 · 앱이 많아지면 Lambda 제어면 몫)
+{
+  for (const tag of ["l1", "l2", "l3"]) {
+    await call("app_save", { files: twin("lv-a", `require('http').createServer((q,s)=>s.end('${tag}')).listen(Number(process.env.PORT));`) }, alice, aliceCtx);
+    await call("app_server_deploy", { app_id: "lv-a", wait_s: 120 }, alice, aliceCtx);
+  }
+  const old = (await okBuilds("lv-a")).slice(0, 2);   // 앞의 둘 — 셋째가 cur, 둘은 남긴 함수 판이 읽는다
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='lv-a' AND build_key = ANY($1::text[])`, [old.map((b) => b.build_key)]);
+  const f = fns.get(fnOf("lv-a"));
+  const reads = old.length === 2 && old.every((b) => f.versions.some((v) => v.CodeSha256 === b.zip_sha256));
+  let lists = 0;
+  const counting = { ...api, listVersions: async (n) => { if (n === fnOf("lv-a")) lists++; return api.listVersions(n); } };
+  await pruneServerBuilds({ api: counting });
+  chk("V20 같은 함수의 «아직 읽힘» 후보 둘 → 판 목록 한 번 · 둘 다 남김", reads && lists === 1 && (await okBuilds("lv-a")).length === 3, JSON.stringify({ reads, lists }));
+  await call("org_app_remove", { app_id: "lv-a" }, boss);
 }
 await call("org_app_remove", { app_id: "ref-a" }, boss);
 
