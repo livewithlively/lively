@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const mod = await import(join(root, "public/app/session-status.js"));
-const { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone, lastViewedAt, DOT_STATES, isDotState, rowDotCls } = mod;
+const { SESS_STATES, SESS_STATE_KEYS, ROW_ONLY_STATES, sessStateKey, sessLabel, sessRank, sessIsDead, isUnreadDone, lastViewedAt, DOT_STATES, isDotState, rowDotCls } = mod;
 
 let pass = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -108,9 +108,13 @@ ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
   const filterLabels = SESS_STATE_KEYS.map((k) => SESS_STATES[k].label);
   assert.equal(new Set(filterLabels).size, filterLabels.length, "필터 라벨에 중복이 있으면 사용자가 구분할 수 없다");
   for (const k of SESS_STATE_KEYS) assert.ok(SESS_STATES[k], `필터 key ${k} 의 정의가 없다`);
-  assert.deepEqual(SESS_STATE_KEYS.slice().sort(), Object.keys(SESS_STATES).sort(),
-    "정의된 상태와 필터 항목이 1:1 이어야 한다(빠진 칸이 곧 '고를 수 없는 상태')");
-  ok("⑳필터 항목 = 정의된 상태 전부, 라벨 중복 없음");
+  //  #4783 — 정의 = 필터 항목 + **줄 전용 상태**(ROW_ONLY_STATES — 꺼진 세션의 «오류» 점). 줄 전용은 sessStateKey 가 내지 않으므로
+  //   필터에 넣으면 죽은 칸이 된다. 그래서 둘을 겹치지 않게 나누고 합이 정의 전부여야 한다.
+  assert.deepEqual([...SESS_STATE_KEYS, ...ROW_ONLY_STATES].sort(), Object.keys(SESS_STATES).sort(),
+    "정의된 상태 = 필터 항목 + 줄 전용 상태(빠진 칸이 곧 '고를 수 없는 상태')");
+  for (const k of ROW_ONLY_STATES) assert.ok(!SESS_STATE_KEYS.includes(k), `줄 전용 ${k} 가 필터에도 있다`);
+  assert.equal(sessStateKey({ restorable: true, endNote: { why: "harness_crash", at: 1 } }), "restorable", "줄 전용 상태는 sessStateKey 가 내지 않는다");
+  ok("⑳필터 항목 + 줄 전용 = 정의된 상태 전부, 라벨 중복 없음");
 }
 
 // ── 정렬 우선순위 ──
@@ -191,8 +195,10 @@ ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
   const dotted = SESS_STATE_KEYS.filter((k) => isDotState(k));
   assert.deepEqual(dotted, ["waiting", "done", "busy"].filter((k) => SESS_STATE_KEYS.includes(k)));
   assert.equal(dotted.length, 3);
-  assert.deepEqual([...DOT_STATES].sort(), ["busy", "done", "waiting"]);
-  ok("㉜ 상태 아홉 가지 중 점이 붙는 건 정확히 셋이다(새 상태가 생기면 이 줄이 먼저 걸린다)");
+  //  #4783 — 줄 전용 «오류»(꺼진 세션만 — sessStateKey 는 내지 않는다)도 점이 선다. 필터 어휘 아홉 가지 중엔 여전히 셋이다(위 dotted).
+  assert.deepEqual([...DOT_STATES].sort(), ["busy", "done", "error", "waiting"]);
+  assert.ok(ROW_ONLY_STATES.every((k) => isDotState(k)), "줄 전용 상태는 점을 위해 있다");
+  ok("㉜ 상태 아홉 가지 중 점이 붙는 건 정확히 셋 + 줄 전용 «오류»(새 상태가 생기면 이 줄이 먼저 걸린다)");
 }
 
 console.log(`\n${pass} passed`);

@@ -257,6 +257,12 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   그 AI 메시지가 파일에 없다). 다음에 열 때 대화창이 이 쪽지로 입력칸을 채우고 답을 기다리던 질문을 다시 보여 준다.
   //  수명: 끌 때 쓰고(덮어쓴다) · 다음 턴이 돌기 시작하면(훅 busy 보고) 지운다. NULL = 쪽지 없음.
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS stop_note JSONB;`);
+  // #4783 — **이 판이 왜 끝났나**(sessions/session-end.ts). JSON 하나: { v:1(판 시작 표식) · at · why(reclaim|stop|harness_exit|
+  //  harness_crash|launch_fail|lost) · code?(하네스 종료코드) · by?(멈춘 사람) · seen?(끌 때 안 본 결과가 남았나) }.
+  //  왜: 사유를 남기는 자리가 셋뿐이라(T5 쪽지 · /exit 의 exited_at · 셀프호스트 OOM) 나머지는 전부 사유 없는 «중단됨» 이 됐고,
+  //   화면은 «사람이 끝냄 / 시스템이 끔 / 고장» 을 가를 수 없었다. 수명: 판이 설 때(생성·같은 id 복원) {v:1} · 끝낸 자리가 why 를 적는다(첫 사실이 이긴다).
+  //  NULL = 이 칸 이전에 태어난 판(사유를 모른다 — 화면은 종전처럼 그린다).
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS end_note JSONB;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)

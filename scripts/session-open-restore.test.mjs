@@ -130,7 +130,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //   메타(has-session 확답)로 «중단됨» 을 받아 배너를 띄운다 — 사람이 보는 것은 그 배너 한 줄뿐이었다
   //   (대화도, 말 걸 입력창도, 이 화면의 안내 setNote 도 액자에 가린다).
   //  ⚠ 그러면서 **얼지는 않아야 한다**(2026-09-08 교훈) — 아래 세 줄이 그 균형을 지킨다.
-  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore\)/.test(chat),
+  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore[,)]/.test(chat),   // #4783 — 둘째 인자(끝난 사실)가 붙었다
     "③-l ★ 프레임이 '박스 없음'을 알리면 액자를 걷는다(대화·입력창이 배너에 가리지 않게)");
   ok(/goneByFrame = true;[\s\S]{0,500}setMode\('chat'\)/.test(chat),
     "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");

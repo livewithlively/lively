@@ -172,6 +172,9 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
     //  결과의 `throttled` 가 "이번 호출은 남이 이미 돌렸다"를 말한다(안 돈 것과 구분돼야 한다).
     await step("session-pressure-reaper", () => reapPressureSessions());
+    // #4783 — 사유 없이 사라진 판을 확답으로 확인해 «고장(lost)» 으로 적는다(세션 노드·컨테이너 고장). 매니지드만 돈다 —
+    //  셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다. 근거는 세션마다의 tmux 확답뿐이다(session-end-lost 머리말).
+    await step("session-end-lost", async () => (await import("./sessions/session-end-lost.js")).sweepLostSessions());
     res.json({ ok: true, steps: out });
   }));
 

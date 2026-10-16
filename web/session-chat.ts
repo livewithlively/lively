@@ -54,6 +54,7 @@ import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
+import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
@@ -1000,7 +1001,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let deadFooterOn = false;
   const paintDeadFooter = (): void => {
     if (deadFooterOn) return; deadFooterOn = true;
-    const why = target.stateKey === 'exited_user' ? '내가 종료한 세션' : target.stateKey === 'oom_killed' ? '메모리 부족으로 끝난 세션' : target.stateKey === 'restorable' ? '중단된 세션' : '기록만 남은 세션';
+    //  #4783 — 서버가 끝낸 자리에서 적은 사유가 있으면 그 말이 먼저다(사람이 끝냄 · 시스템이 꺼 둠 · 고장). 없으면 종전 말.
+    const why = endedSessPhrase(target.raw) || (target.stateKey === 'exited_user' ? '내가 종료한 세션' : target.stateKey === 'oom_killed' ? '메모리 부족으로 끝난 세션' : target.stateKey === 'restorable' ? '중단된 세션' : '기록만 남은 세션');
     //  ★ #2439 ②③ — **되살릴 수 있으면 입력창을 덮지 않는다.**
     //   setFooter 는 입력 폼을 통째로 숨긴다(chat-view.ts). 그래서 멈춘 세션은 «읽기만 되는 화면» 이었고,
     //   도는 세션과 화면이 갈렸다. 이제 그 자리에 말을 걸 수 있다 — 보내면 되살아나고 그 말이 첫 지시가 된다.
@@ -1136,7 +1138,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  왜 지우나(숨기지 않고): 되살아나면 새 세션 id 로 화면이 새로 뜨고, 사람이 다시 터미널을 고르면 그때
    *   지금의 주소로 새로 만든다(termUrl 은 «값이 아니라 물음» 이다) — 낡은 액자를 들고 있을 이유가 없다.
    */
-  function dropTermFrame(canRestore: boolean): void {
+  function dropTermFrame(canRestore: boolean, end?: EndFactsMsg | null): void {
     goneCanRestore = goneCanRestore || canRestore;
     if (goneByFrame && !termFrame) return;       // 이미 걷었다(부팅 게이트와 4410 이 둘 다 알릴 수 있다)
     termGoneN += 1;                              // ⚠ **실제로 걷은 횟수**만 센다 — 한 프레임의 중복 신고로 상한을 태우지 않는다
@@ -1148,7 +1150,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintState();                                // 상태점·끝난 세션 안내를 지금 사실로 다시 그린다
     //  ⚠ paintDeadFooter 는 화면당 한 번만 그린다 — 두 번째로 걷힌 경우(사람이 수기로 열었다가 또 죽은 경우)에도
     //   무슨 일이 났는지는 말해야 한다.
-    view.setNote(canRevive() ? '멈춰 있는 세션이에요 — 아래에 말을 걸면 이어서 열립니다.' : '멈춰 있는 세션이에요 — 대화 기록만 남아 있어요.');
+    //  #4783 — 액자가 서버에게 들은 끝난 사유(end)로 부른다 — 없으면 목록 행의 것, 그것도 없으면 종전 말(«멈춰 있는»).
+    const phrase = endedSessPhrase(end ? sessLikeOfFacts(end) : null) || endedSessPhrase(target.raw);
+    const name = phrase || '멈춰 있는 세션';
+    view.setNote(canRevive() ? `${name}이에요 — 아래에 말을 걸면 이어서 열립니다.` : `${name}이에요 — 대화 기록만 남아 있어요.`);
   }
 
   // ── 곁칸 → 이 세션 입력칸(#4135 «프로젝트» 앱의 [본문 넣기]) — **넣기만 하고 보내지 않는다**(사람이 읽고 보낸다).
@@ -1242,7 +1247,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  ★ #3847 — **액자를 걷고 대화로 내려앉는다**(자세한 이유는 dropTermFrame). 자동복원을 걸든 안 걸든
       //   **먼저** 내린다 — 복원이 막히는 경우(연쇄 상한 · 이미 restorable 을 알아 «보기만 해서는 안 되살린다»
       //   로 기다리는 경우)가 정확히 사람이 배너 한 줄에 갇히던 자리다.
-      dropTermFrame(!!m.canRestore);
+      dropTermFrame(!!m.canRestore, m.end && typeof m.end === 'object' ? (m.end as EndFactsMsg) : null);
       //  ⚠ 여기도 «보기만 해서는 안 되살린다»(위 주석) — 되살릴 수 있으면 말을 걸 때까지 기다린다.
       if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
@@ -2719,6 +2724,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       paintState();
       paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+      //  #4783 — 목록이 **끝난 사유**까지 실어 오면(서버가 끝낸 자리에서 적은 확정 사실 — 흔들리는 관측이 아니다) 액자의 신호를
+      //   기다리지 않고 걷는다. 액자는 이제 어떤 끝이든 알려 오지만(handOffToShell), 그 신호가 늦거나 빠진 판에도 조작 못 하는 터미널이 남지 않게.
+      //   ⚠ 사유는 판이 설 때 지워지고 끄기 직전에만 적히므로 살아 있는 행엔 없다 — 이 줄이 도는 세션의 터미널을 걷는 일은 없다.
+      if (mode === 'term' && termFrame && !t.alive && t.raw?.endNote?.why) dropTermFrame(!!t.raw?.restorable && !!t.owned, null);
       //  ↔ 반대 방향(#1631) — 죽은 줄 알았는데 살아 있었다(#2108: 3초 스냅샷 지연을 죽음으로 읽는다).
       //   schedule() 이 죽은 세션에서 멈추므로 **여기서** 다시 켜 준다. 이 한 줄이 없으면 그 화면은 영영
       //   멈춘 채로 남는다 — 404 를 줄이려다 화면을 얼리는 것은 더 나쁜 교환이다.

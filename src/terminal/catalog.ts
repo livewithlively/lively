@@ -2,6 +2,7 @@
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
 import type { SessionStopNote } from "../sessions/session-state.js";   // #4695 — 타입만(이 모듈은 노드 번들에도 들어간다)
+import type { SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 타입만(같은 이유)
 import type { ReportedState } from "./phase.js";
 import path from "node:path";
 import os from "node:os";
@@ -485,6 +486,9 @@ export interface SessionInfo {
   // #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). **복원 가능 행에만** 실린다 — 대화창이 입력칸을 채우고
   //  질문을 다시 보여 주는 재료다(web/session-chat.ts). 살아 있는 행엔 없다(그때 쪽지는 지난 일이다).
   stopNote?: SessionStopNote;
+  // #4783 — 이 판이 **왜 끝났나**(sessions/session-end.ts). **복원 가능 행에만** 실린다 — 화면이 «사람이 끝냄(지난 세션) · 시스템이 끔
+  //  (끄기 직전 모습) · 고장(오류)» 을 가르는 재료다. 없음 = 모름(옛 판이거나 아직 확인 전) — 화면은 종전처럼 지난 세션으로 그린다.
+  endNote?: SessionEndForRow;
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
@@ -712,6 +716,14 @@ const LAUNCH_SH = [
 //  ⚠ 인젝션 안전은 위와 같다 — 고정 문자열이고 값은 위치인자로만 들어간다. 이어 열기 인자 수(nres)도 위치인자다(숫자가 아니면 0 으로 본다).
 //  ⓘ 이어 열기 인자는 실행 파일 **바로 뒤**에 붙는다(createSession — codex 는 서브커맨드라 그 자리가 계약이다). 그래서 빼는 자리는 [2, 1+nres] 다.
 //  ⓘ «20초» 는 LIVELY_LAUNCH_QUICK_SEC 로 바꿀 수 있다(시험·진단용 — 운영에선 안 둔다).
+//  ★ #4783 — 하네스가 **스스로** 끝나면 종료코드를 게이트웨이에 알린다(report → POST …/sessions/:id/ended). 이 판이 왜 끝났나의 마지막 조각이다:
+//   끄는 자리(하네스 종료 규칙·옛 회수·사람의 멈춤)는 게이트웨이가 스스로 적지만, 하네스가 제 발로 끝난 것은 이 런처만 안다 — 종료 훅은 claude 에만
+//   확실하고(agy 는 훅 자체가 없다) 크래시·기동 실패는 훅이 안 뜬다. 0 = 사람이 끝냈다(/exit·Ctrl-D) · 0 이 아님 = 고장(③ 은 기동 실패).
+//   · 129(SIGHUP)는 안 알린다 — tmux 가 판을 닫을 때 생기는 코드이고, 판을 닫은 자리가 이미 사유를 적었다(게이트웨이도 한 번 더 거른다).
+//   · ⚠ 토큰은 **argv 에 안 싣는다**(ps 로 보인다) — curl 설정을 표준입력(-K -)으로 넘긴다. 값은 안전한 글자만 받는다(설정 문법을 못 깨게).
+//   · 세션 토큰 파일(게이트웨이가 나중에 심은 정본 — harness-registry sessionTokenFile)이 있으면 그쪽, 없으면 env LIVELY_TOKEN.
+//   · 실패해도 아무것도 막지 않는다(최대 두 번 · 3초) — 못 알리면 게이트웨이가 «사유 없이 사라짐» 을 확답으로 확인해 적는다(session-end-lost).
+//   · 게이트웨이 주소·워크스페이스 머리글은 훅과 같은 출처다(kit/hooks/work-flag.mjs SCOPE_HDRS).
 const LAUNCH_STOP_SH = [
   'set -m',
   'notice=$1; notfound=$2; nres=$3; shift 3',
@@ -721,10 +733,28 @@ const LAUNCH_STOP_SH = [
   'clock() { date +%s 2>/dev/null || echo 0; }',
   //  기동 직후에 끝났나 — 시계가 없으면 «모른다»(2) 를 돌려 종전 동작으로 떨어진다.
   'early() { t1=$(clock); case "$t0$t1" in *[!0-9]*) return 2;; esac; [ "$t0" -gt 0 ] && [ "$t1" -ge "$t0" ] || return 2; [ $((t1 - t0)) -le "$quick_sec" ]; }',
+  'report() {',
+  '  [ "$1" -eq 129 ] && return 0',
+  '  sid=${LIVELY_SESSION_ID:-}; case "$sid" in box-*) ;; *) return 0;; esac; case "$sid" in *[!A-Za-z0-9._-]*) return 0;; esac',
+  '  command -v curl >/dev/null 2>&1 || return 0',
+  '  tok=$(sed -n \'s/.*"hook"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p\' "$HOME/.lively/session-tokens/$sid.json" 2>/dev/null | head -n 1)',
+  '  [ -n "$tok" ] || tok=${LIVELY_TOKEN:-}',
+  '  case "$tok" in ""|*[!A-Za-z0-9._~+/=-]*) return 0;; esac',
+  '  gw=${LIVELY_GATEWAY_URL:-}; [ -n "$gw" ] || gw=$(head -n 1 "$HOME/.lively/gateway-url" 2>/dev/null); [ -n "$gw" ] || gw=http://localhost:8080',
+  '  case "$gw" in http://*|https://*) ;; *) return 0;; esac; case "$gw" in *[!A-Za-z0-9._:/-]*) return 0;; esac',
+  '  ws=${LVLY_TENANT_SLUG:-}; case "$ws" in *[!A-Za-z0-9._-]*) ws=;; esac',
+  '  st=${t0:-0}; case "$st" in ""|*[!0-9]*) st=0;; esac',
+  '  for _try in 1 2; do',
+  '    { printf \'header = "authorization: Bearer %s"\\n\' "$tok"; printf \'header = "x-lively-session: %s"\\n\' "$sid"; [ -n "$ws" ] && printf \'header = "x-lively-workspace: %s"\\n\' "$ws"; } \\',
+  '      | curl -fsS -m 3 -o /dev/null -K - -X POST -H \'content-type: application/json\' --data "{\\"code\\":$1,\\"quick\\":$2,\\"t0\\":$st}" "${gw%/}/api/ui/terminal/sessions/$sid/ended" >/dev/null 2>&1 && return 0',
+  '    sleep 1',
+  '  done',
+  '  return 0',
+  '}',
   't0=$(clock)',
   '"$@"',
   'rc=$?',
-  '[ "$rc" -eq 0 ] && exit 0',
+  '[ "$rc" -eq 0 ] && { report 0 0; exit 0; }',
   'early; e=$?',
   //  ② 이어 열기가 곧바로 죽었다 → 이어 열기 인자를 빼고 새 대화로 한 번 더. 갈래는 **종료코드 1** 뿐이다 — 없는 대화 id 로 열면 claude·codex 가
   //   1 로 끝난다(T2 실측). 그 밖(127 실행 파일 없음 · 137 메모리 부족 강제 종료 · 143 신호)은 «대화를 못 찾았다» 가 아니다 — 새 대화로 열면
@@ -738,15 +768,25 @@ const LAUNCH_STOP_SH = [
   '  t0=$(clock)',
   '  "$@"',
   '  rc=$?',
-  '  [ "$rc" -eq 0 ] && exit 0',
+  '  [ "$rc" -eq 0 ] && { report 0 0; exit 0; }',
   '  early; e=$?',
   'fi',
   //  ① 한동안 돌던 하네스가 죽었다 → 셸 없이 끝낸다(tmux 가 끝나면 컨테이너도 걷힌다 — 다시 열면 이어진다).
-  '[ "$e" -eq 1 ] && exit "$rc"',
+  '[ "$e" -eq 1 ] && { report "$rc" 0; exit "$rc"; }',
   //  ③ 기동하자마자 죽었다(또는 시계를 못 읽었다) → 원인을 읽고 고칠 수 있게 안내와 셸을 남긴다(종전 런처와 같다).
   'if [ "$rc" -eq 127 ]; then printf \'\\n%s\\n\' "$notfound"; else printf \'\\n%s\\n\' "$notice"; fi',
+  //  #4783 — 기동 직후에 죽었으면 «기동 실패», 시계를 못 읽어 모르면 «비정상 종료» 로 알린다(어느 쪽이든 오류다). 안내를 먼저 찍고 알린다.
+  'if [ "$e" -eq 0 ]; then report "$rc" 1; else report "$rc" 0; fi',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
+
+/**
+ * #4783 — 이 pane argv 가 **끝을 보고하는 런처**(LAUNCH_STOP_SH)인가. createSession 이 이 값으로 그 판에 «사유를 적는 판» 표식을 찍는다
+ *  (session-state upsert end_mark). 런처를 문자열로 대조한다 — 하네스·모드·플랫폼 조건을 다시 쓰지 않는다(조건이 두 벌이 되면 갈린다).
+ */
+export function launchReportsEnd(argv: readonly string[]): boolean {
+  return argv.length > 3 && argv[0] === "sh" && argv[1] === "-c" && argv[2] === LAUNCH_STOP_SH;
+}
 
 /** 하네스 종료 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 sessions/session-stop-rule.ts 가 같은 표를 본다. */
 export const STOP_RULE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);

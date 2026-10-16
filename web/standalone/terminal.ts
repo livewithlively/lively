@@ -1188,6 +1188,28 @@ export function paneMouseKnown(st) {
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
 //  순수 함수(전역 의존 없음). 드리프트 가드에서만 쓴다.
 export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.test(String(d || '')); }
+/**
+ * #4783 — 이 입력이 **사람이 친 것이 아니라** 터미널이 저절로 내보낸 것인가(순수).
+ *  xterm(5.5.0)은 키 입력뿐 아니라 ① 마우스 위치 보고(앱이 마우스 추적을 켜면 — Claude Code 는 any-motion 을 켠다, 실측
+ *  `mouse_any_flag=1`) ② 초점 보고(ESC[I · ESC[O — 앱이 1004 를 켜면) ③ 앱의 질의에 대한 자동 응답(장치 속성·커서 위치·모드·색 보고)을
+ *  **같은 onData 로** 낸다(CoreService.triggerDataEvent 는 wasUserInput 과 무관하게 onData 를 쏜다). 그래서 «이 탭에서 조작했다»
+ *  (userTyped)를 onData 로 세면 **마우스가 터미널 위를 지나가기만 해도** «조작함» 이 됐다 — 그 탭에서 세션이 꺼지면
+ *  «직접 종료한 것이면 그대로 두시면 됩니다» 라는 거짓 배너가 떴다(상민님 2026-10-16 신고, #4783).
+ *  ⚠ 수정자 F3(ESC[1;2R)이 커서 위치 보고와 모양이 같다 — 그 키 하나를 «조작» 으로 못 세는 쪽으로 틀린다(안전한 쪽).
+ */
+export function isAutoReply(d) {
+  const x = String(d || '');
+  if (!x) return false;
+  if (isMouseReport(x)) return true;
+  if (x === '\x1b[I' || x === '\x1b[O') return true;                                   // 초점 보고
+  if (/^\x1b\[[?>=]?[0-9;]*c$/.test(x)) return true;                                  // 장치 속성(DA1·DA2·DA3)
+  if (/^\x1b\[\??[0-9;]*[nR]$/.test(x)) return true;                                  // 상태·커서 위치 보고(DSR·CPR·DECXCPR)
+  if (/^\x1b\[\??[0-9;]*\$y$/.test(x)) return true;                                  // 모드 보고(DECRPM)
+  if (/^\x1b\[[0-9;]*t$/.test(x)) return true;                                        // 창 보고(크기·위치)
+  if (/^\x1b\][0-9]+;[^\x07\x1b]*(\x07|\x1b\\)$/.test(x)) return true;                 // OSC 응답(색·제목 질의)
+  if (/^\x1bP[\s\S]*\x1b\\$/.test(x)) return true;                                   // DCS 응답(DECRQSS·XTGETTCAP)
+  return false;
+}
 // 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
 export function applyPaneState(st) {
   if (!term || !st) return;
@@ -1675,7 +1697,9 @@ export function flushMouseReports(): void {
   }
 }
 export function handleTermData(d) {
-  userTyped = true;       // #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지)
+  //  #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지).
+  //  ⚠ #4783 — 터미널이 저절로 내보낸 것(마우스·초점·자동 응답)은 세지 않는다(isAutoReply 머리말 — 마우스만 지나가도 «조작함» 이었다).
+  if (!isAutoReply(d)) userTyped = true;
   // 사파리 IME 어댑터의 삼킴(#1300) — beforeinput 이 예약한 '그 이벤트의 xterm 유출' 1회만 걸러낸다.
   if (imeSwallow !== null && d === imeSwallow) { imeSwallow = null; dlog('ime', 'swallow ' + diagPreview(d, 8)); return; }
   // 실제 전송 바이트 트레이스(IME 트레이스와 짝) — 마우스 리포트는 제외(링버퍼 오염 방지).
@@ -4372,6 +4396,8 @@ export async function boot() {
 async function maybeRestoreOnOpen(meta) {
   if (!meta || !meta.restorable) return false;          // 살아 있다(또는 판정 근거 없음) — 종전대로 붙는다
   restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
+  //  #4783 — 세션 화면 안의 액자는 끝난 세션에 대해 **정하지 않는다** — 이어졌으면 옮기고, 아니면 사실만 셸에 넘긴다(handOffToShell 머리말).
+  if (embeddedInShell()) { if (meta.movedTo) goToMoved(meta.movedTo); else handOffToShell(meta); return true; }
   // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
   const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
   if (mode === 'moved') { goToMoved(meta.movedTo); return true; }   // #2231 — 이어진 세션으로 옮긴다
@@ -4391,24 +4417,50 @@ async function maybeRestoreOnOpen(meta) {
   startRestore(meta);
   return true;
 }
+/** 세션 화면(v2) 안에 실린 액자인가 — 끝난 세션의 처리를 부모(셸)에게 넘기는 조건(#1820 · #4783). */
+function embeddedInShell() { return EMBED && window.parent !== window; }
 /**
- * 세션 화면(v2) 안의 프레임이면 **복원을 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
+ * 끝난 판의 **사실**만 추린다(순수, #4783) — 셸이 대화창의 안내 문구를 고르고, 단독 창이 끝 배너의 말을 고르는 재료.
+ *  메타(GET …/sessions/:id)가 실어 온 것만 옮긴다 — 여기서 «누가 끝냈다» 를 단정하지 않는다(판정은 받는 쪽 한 곳).
+ */
+export function endFactsOf(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const n = m.endNote && typeof m.endNote === 'object' ? m.endNote : null;
+  return {
+    exitedByUser: !!m.exitedByUser,
+    oomKilled: !!m.oomKilled,
+    endWhy: n && typeof n.why === 'string' ? n.why : '',
+    endCode: n && typeof n.code === 'number' ? n.code : null,
+    stopWhy: typeof m.stopWhy === 'string' ? m.stopWhy : '',
+  };
+}
+/**
+ * 세션 화면(v2) 안의 프레임이면 **끝난 세션의 처리를 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
  *
  * 여기서 되살려 location 을 갈아타면 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 **프레임만
  *  새 세션**인 어긋난 화면이 된다 — #1808 에서 실제로 났던 사고다. 셸이 받으면 주소까지 함께 옮긴다.
  *  부모가 없거나(직접 embed URL로 열었거나) 안 듣더라도 사용자는 배너의 버튼으로 직접 되살릴 수 있다.
+ * ★ #4783 — **되살릴 때만이 아니라 언제나** 넘긴다. 종전엔 «되살릴 세션»(auto)만 넘기고 나머지(방금 끝남 · 남의 세션 · 곧 다시 끝남 ·
+ *  그냥 끝남)는 이 액자가 제 배너를 띄우고 입력을 막은 채 머물렀다 — 셸은 신호를 못 받아 액자를 못 걷었고(셸은 액자가 알려 와야
+ *  걷는다 — #3847), 사람은 그 세션에 돌아올 때마다 **조작할 수 없는 터미널**을 봤다(상민님 2026-10-16 신고). 무엇을 보여 줄지는 셸이
+ *  정한다 — 셸은 내 세션을 보기만 해서는 안 되살리고(#2439) 말을 걸면 이어 연다. «직접 끝낸 세션을 멋대로 안 살린다» 는 그대로다.
  */
 function handOffToShell(meta) {
-  if (!(EMBED && window.parent !== window)) return false;
+  if (!embeddedInShell()) return false;
+  const restorable = !!(meta && meta.restorable);
+  const canRestore = !!(meta && meta.canRestore);
   try {
-    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable, canRestore, end: endFactsOf(meta) }, location.origin);
   } catch (_) { /* 부모가 없거나 닫혔다 */ }
   sessionEnded = true;
+  try { term.options.disableStdin = true; } catch (_) { /* noop */ }
   //  ⚠ #3847 — «이어서 열고 있습니다» 라고 단정하지 않는다. 셸은 **일부러 기다리기도** 한다(#2439 «보기만
   //   해서는 안 되살린다» · 자동복원 연쇄 상한). 그때 이 배너만 남으면 사람은 오지 않을 «잠시만요» 를 계속 본다.
   //   지금 셸은 이 신호를 받으면 액자를 걷고 대화 화면으로 내려앉으므로(session-chat dropTermFrame) 이 배너는
   //   그 사이 잠깐이거나, 신호를 못 받는 옛 셸에서만 남는다 — 그 경우에도 읽고 누를 수 있는 정확한 말이어야 한다.
-  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  if (restorable && canRestore) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  else if (restorable) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요.' });
+  else showEndedBar({});
   return true;
 }
 /**
@@ -4753,6 +4805,28 @@ export function canForceRestore(e) {
   return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
 }
 
+/** 서버가 «사람이 끝냈다» 고 적었나(순수, #4783) — 멈춤·/exit·하네스 정상 종료. 단독 창이 그 세션을 저절로 되살리지 않는 근거. */
+export function userEndedFacts(f) {
+  const x = f || {};
+  return !!x.exitedByUser || x.endWhy === 'stop' || x.endWhy === 'harness_exit';
+}
+/**
+ * 단독 창의 «방금 끝남»(ask) 배너 문구 — 서버가 적은 끝난 사유로 고른다(순수, #4783). 사유를 모르면 «누가» 를 말하지 않는다.
+ *  f = endFactsOf(meta). 사유 이름은 src/sessions/session-end.ts 의 SessionEndWhy 와 같다.
+ */
+export function askBannerCopy(f) {
+  const x = f || {};
+  const tail = ' 대화를 이어서 다시 열 수 있습니다.';
+  if (x.exitedByUser || x.endWhy === 'harness_exit' || x.endWhy === 'stop') return { title: '이 세션은 끝났습니다.', body: '직접 끝낸 세션이에요 —' + tail };
+  if (x.endWhy === 'harness_crash') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 오류로 끝났어요' + (typeof x.endCode === 'number' ? '(종료 코드 ' + x.endCode + ')' : '') + ' —' + tail };
+  if (x.endWhy === 'launch_fail') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 뜨자마자 끝났어요 —' + tail };
+  if (x.endWhy === 'lost') return { title: '이 세션이 비정상적으로 끝났습니다.', body: '끝난 이유를 알 수 없어요 —' + tail };
+  if (x.oomKilled) return { title: '이 세션이 비정상적으로 끝났습니다.', body: '메모리가 모자라 멈췄어요 —' + tail };
+  if (x.stopWhy === 'asking') return { title: '이 세션은 꺼져 있습니다.', body: '답을 기다리다 자동으로 껐어요 —' + tail };
+  if (x.stopWhy === 'done') return { title: '이 세션은 꺼져 있습니다.', body: '작업이 끝나 자동으로 껐어요 —' + tail };
+  if (x.endWhy === 'reclaim') return { title: '이 세션은 꺼져 있습니다.', body: '시스템이 자동으로 껐어요 —' + tail };
+  return { title: '이 세션이 방금 끝났습니다.', body: tail.trim() };
+}
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
@@ -4780,13 +4854,28 @@ let restoreTried = false;
 //  거의 정확히 갈린다 — exit·Ctrl-D·kill 은 전부 입력을 수반한다.
 let userTyped = false;
 async function onSessionGone() {
+  //  #4783 — 세션 화면 안의 액자는 **어떤 끝이든** 셸에 넘긴다(handOffToShell 머리말). 이미 넘겼으면(sessionEnded) 아무것도 안 한다.
+  //   종전엔 아래 첫 줄(복원 시도를 이미 썼으면 그냥 끝 배너)이 먼저라, 한 번 되살린 화면에서 또 끝나면 셸이 아무것도 못 들었다.
+  if (embeddedInShell()) {
+    if (sessionEnded) return;
+    restoreTried = true;
+    clearTimeout(reconnectTimer);
+    let em = null;
+    try { em = await api(sUrl('')); } catch (_) { /* 403·기록 없음 — 셸은 «기록만» 으로 그린다 */ }
+    if (em && em.movedTo) { goToMoved(em.movedTo); return; }
+    handOffToShell(em);
+    return;
+  }
   if (sessionEnded || restoreTried) { endSession(); return; }
   restoreTried = true;
   clearTimeout(reconnectTimer);
   let meta = null;
   // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
   try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
-  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
+  //  #4783 — «되살리지 않음» 의 근거는 이 탭의 입력(typed)만이 아니다: 서버가 **사람이 끝냈다**(멈춤·/exit·하네스 정상 종료)고 적었으면
+  //   그것도 같은 뜻이다. 종전엔 마우스만 지나가도 typed 가 켜져 이 자리가 늘 ask 였는데, 이제 typed 가 키 입력만 세므로 사이드바 [종료]
+  //   같은 바깥 멈춤 뒤엔 auto(자동 복원)로 새어 사람이 끝낸 세션을 되살릴 수 있었다(격리 리뷰).
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped || userEndedFacts(endFactsOf(meta)));
   if (mode === 'moved') { goToMoved(meta.movedTo); return; }   // #2231 — 붙어 있다 끊겼는데 그새 이어져 있었다
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
@@ -4806,9 +4895,10 @@ async function onSessionGone() {
     // #1820 — ask 는 이제 **한 가지 상황**뿐이다: 이 탭에서 조작한 뒤 끝났다(typed). 종전엔 '과거에 exit 했음'과
     //  '셸·코덱스 하네스'도 여기로 왔는데, 그건 '여는 것'이지 '끝낸 것'이 아니라 auto 로 넘겼다(위 goneMode).
     //  직접 exit 한 것까지 되살리면 exit 가 안 먹히는 UX 가 되므로 이 자리만 남긴다.
-    endSession({ info: true, title: '이 세션이 방금 끝났습니다.',
-      body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
-      restoreBtn: true });
+    //  ⚠ #4783 — 말은 **서버가 적은 끝난 사유**로 고른다. 종전 문구는 «사람이 직접 끝냈다» 를 전제로 했는데,
+    //   하네스 종료 규칙(완료+안 봄 3분)이 끈 세션에도 그 말이 떴다 — 이 탭에서 키를 친 적이 있으면 무조건이었다.
+    const c = askBannerCopy(endFactsOf(meta));
+    endSession({ info: true, title: c.title, body: c.body, restoreBtn: true });
     return;
   }
   // 자동 복원 — 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).

@@ -1924,6 +1924,7 @@ const dismissBasis = new Map<string, string>();         // 행 키 → 치움 �
 /** 지금 사람이 볼 일이 있는 상태 — 이 셋만 위 묶음으로 올라간다(#1954). */
 const PRIORITY_ST: Record<string, { label: string; rank: number }> = {
   waiting: { label: '확인 필요', rank: 0 },   // 내 승인·선택을 기다린다
+  error:   { label: '오류',      rank: 0 },   // #4783 — 비정상적으로 끝났다(꺼진 세션만) — 들여다봐야 한다
   done:    { label: '작업 완료', rank: 1 },   // 끝났는데 아직 안 봤다 — 들어가 보면 사라진다
   busy:    { label: '작업 중',   rank: 2 },   // 지금 돌고 있다
 };
@@ -2015,6 +2016,9 @@ function viewedSessionId(): string {
   //  주소의 id 는 박스 id 일 수도, 중앙 기록 uuid 일 수도 있다(findSess 가 둘 다 받는다). 도장은 **살아 있는
   //  박스**에만 찍힌다 — 기록 화면을 읽는 건 tmux 옵션을 건드릴 일이 아니고, 애초에 초록점도 안 뜬다.
   const s = findSess(k.slice(2));
+  //  #4783 — 꺼진 세션이라도 **안 본 결과가 남은 채 꺼졌으면**(작업 완료 점) 보고 있다는 도장을 찍는다 — 서버가 그 표시를 걷는다(/seen).
+  //   안 찍으면 그 세션을 열어 봐도 초록점이 영영 안 꺼진다. 그 밖의 꺼진 세션은 종전대로 안 찍는다(tmux 옵션을 건드릴 일이 없다).
+  if (s && s.live && !s.alive && s.stopDot === 'done') return s.id;
   return s && s.live && s.alive ? s.id : '';
 }
 //  #3870 — 얼굴 줄에 **내 자리를 둔 세션**. 다른 화면으로 옮기면 그 자리를 곧바로 걷는다(아래 leaveViewed).
@@ -2220,8 +2224,11 @@ function sideInstances(): SideInstance[] {
     if (!verdictStands(homeRowVerdict(s, facts))) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
+    //  ★ #4783 — 다만 «지난 세션» 은 **사람이 끝낸 것**이다(상민님 2026-10-16). 시스템이 끈 세션(하네스 종료 규칙 — 일이 끝나고 안 보면
+    //   3분 뒤 끈다)은 끄기 직전 모습 그대로 서고(답을 기다리던 것은 확인 필요, 안 본 결과는 작업 완료), 고장으로 끝난 것은 «오류» 점이 선다.
+    //   그 둘은 흐리지도 접지도 않는다. 사유를 모르는 판(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판)은 종전 그대로 지난 세션이다(views.ts stopDot·stopPast).
     put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0,   // lastSeen 은 ms(views.ts)
-      liveNow ? s.stateKey : '', false, undefined, !liveNow);
+      liveNow ? s.stateKey : (s.stopDot || ''), false, undefined, !liveNow && s.stopPast !== false);
   }
   //  ①′ **고정한 세션은 끝나도 남는다**(원준 2026-08-27 "지난 세션 되면 핀까지 날려버리는 거야?"). 머리말의 "끝난 세션은
   //   세우지 않는다"는 지난 세션이 목록을 덮지 않게 하려는 규칙이고, 압정은 사람이 "이건 계속 여기 두라"고 고른 자리다 —
@@ -2235,7 +2242,7 @@ function sideInstances(): SideInstance[] {
       const liveNow = s.live && s.alive;
       const dismissedNow = sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: false, lastSeen: 0, dayStart: 0, kept, dismissed: gone }) === 'dismissed';
       if (!invitedRowStands({ live: liveNow, lastSeen: s.lastSeen || 0, now, dismissed: dismissedNow })) continue;
-      put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, liveNow ? s.stateKey : '', false, undefined, !liveNow, true);
+      put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, liveNow ? s.stateKey : (s.stopDot || ''), false, undefined, !liveNow && s.stopPast !== false, true);   // #4783 — ① 과 같은 규칙
     }
   }
   for (const key of appPinnedKeys()) {

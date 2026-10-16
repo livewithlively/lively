@@ -221,3 +221,20 @@ test("#3626 유예는 'ask' 갈래에만 — dead/alive 는 종전대로 복원 
   assert.equal(nodeMetaRestorable({ mode: "dead", nodeGone: null, ageMs: 1_000 }), true);
   assert.equal(nodeMetaRestorable({ mode: "alive", nodeGone: null, ageMs: 1_000 }), true);
 });
+
+test("#4783 죽은 세션 메타가 끝난 사유(endNote — 화면 모양)와 T5 쪽지의 사유만(stopWhy) 싣는다 — 없으면 안 싣는다", () => {
+  const plain = okBody(deadSessionMeta(ID, st(), "yoon", false, shared));
+  assert.equal("endNote" in plain, false, "사유가 없으면 칸도 없다(지어내지 않는다)");
+  assert.equal("stopWhy" in plain, false);
+  const marked = okBody(deadSessionMeta(ID, st({ end_note: { v: 1 } }), "yoon", false, shared));
+  assert.equal("endNote" in marked, false, "판 표식만 있으면(아직 사유 없음) 안 싣는다");
+  const b = okBody(deadSessionMeta(ID, st({ end_note: { v: 1, at: 9, why: "stop", by: "secret" }, stop_note: { why: "done" } }), "yoon", false, shared));
+  assert.deepEqual(b.endNote, { why: "stop", at: 9 }, "멈춘 사람(by)은 화면에 안 싣는다");
+  assert.equal(b.stopWhy, "done");
+  const c = okBody(deadSessionMeta(ID, st({ end_note: { v: 1, at: 9, why: "harness_crash", code: 137 } }), "yoon", false, shared));
+  assert.deepEqual(c.endNote, { why: "harness_crash", at: 9, code: 137 });
+  //  남의 프로젝트 세션(보이되 복원은 못 함)에도 같은 사실을 싣는다 — 사유는 사적인 글이 아니다.
+  const other = okBody(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, end_note: { v: 1, at: 9, why: "reclaim" } }), "yoon", false, shared));
+  assert.equal(other.canRestore, false);
+  assert.deepEqual(other.endNote, { why: "reclaim", at: 9 });
+});

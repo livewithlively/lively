@@ -263,6 +263,10 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const faces = await viewerFaces(id);
     pushViewers(id, faces);
     await markSessionSeen(id);
+    //  #4783 — 꺼진 세션이면 tmux 도장은 갈 곳이 없다(위 줄은 조용히 넘어간다). 대신 장부의 «안 본 결과가 남은 채 꺼졌다» 표시를 걷는다 —
+    //   화면이 꺼진 세션을 «작업 완료» 로 그리는 근거라, 열어 본 뒤에도 남으면 초록점이 영영 안 꺼진다. 살아 있는 세션엔 해당 행이 없어 아무 일도 없다.
+    const { markSessionEndSeen } = await import("../sessions/session-state.js");
+    await markSessionEndSeen(id).catch(() => false);
     res.json({ ok: true, applied: true, viewers: faces });
   }));
 
