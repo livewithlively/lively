@@ -6,7 +6,8 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { isValidTimezone, DEFAULT_TZ } from "../../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext } from "../../org/delivery/publish.js";
-import { GUIDE_SECTION_DEFAULTS } from "../../org/delivery/knowledge-index.js";
+import { GUIDE_SECTION_DEFAULTS, fillMemberAiConnectorsLine } from "../../org/delivery/knowledge-index.js";
+import { memberAiConnectorsAllowed } from "../../org/store/member-ai-connectors.js";   // #4427 — 안내문 정책 줄
 import { DEFAULT_WRITEBACK_NOTICE } from "../../org/delivery/hook-defaults.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
 import {
@@ -23,7 +24,10 @@ export async function sectionsPayload(): Promise<{ sections: Record<string, Sect
   for (const s of sections) sectionMap[s.section] = { body_md: s.body_md, version: s.version, sort: s.sort, updated_at: s.updated_at, updated_by: s.updated_by };
   // (#1245) 잠금(제품 소유) 섹션 — 행이 없으면 코드 기본값으로 패딩(version:0)하고, 행이 **있어도 본문은 코드 기본값으로
   //  덮어 보여준다**(주입이 그렇게 되므로 화면=실주입 일치 — 구 행 본문은 dead). lockedSections 가 웹 read-only 판정의 소스.
-  for (const [k, def] of Object.entries(GUIDE_SECTION_DEFAULTS)) {
+  //  #4427 — 외부 서비스 MCP 줄은 정책으로 채워 보여 준다(화면 = 실제 주입). ${categories}·${wiki} 는 종전대로 자리 그대로다(데이터라서).
+  const connectorsAllowed = await memberAiConnectorsAllowed();
+  for (const [k, raw] of Object.entries(GUIDE_SECTION_DEFAULTS)) {
+    const def = fillMemberAiConnectorsLine(raw, connectorsAllowed);
     if (!sectionMap[k]) sectionMap[k] = { body_md: def, version: 0, sort: 99, updated_at: null, updated_by: null };
     else sectionMap[k] = { ...sectionMap[k], body_md: def };
   }
@@ -110,8 +114,8 @@ export const orgContentCapabilities: Capability[] = [
       // 핀 전량(#1247) — 미리보기가 실제 주입(previewMemberContext)과 같은 소스를 봐야 WYSIWYG 이 성립한다.
       //  #1291 — 그 '같은 소스'에는 공개범위도 포함된다(요청자 시야로 렌더).
       const viewer = ctx?.viewer ?? null;
-      const [wikiPins, categoryMap, wikiCats] = await Promise.all([listWikiPins(viewer), categoryMapForIndex(viewer), wikiCategoryMap()]);
-      return { context: buildKnowledgeIndex(wikiPins, categoryMap, bodyMd, wikiCats) };
+      const [wikiPins, categoryMap, wikiCats, connectorsAllowed] = await Promise.all([listWikiPins(viewer), categoryMapForIndex(viewer), wikiCategoryMap(), memberAiConnectorsAllowed()]);
+      return { context: buildKnowledgeIndex(wikiPins, categoryMap, bodyMd, wikiCats, { memberAiConnectorsAllowed: connectorsAllowed }) };
     },
   },
 

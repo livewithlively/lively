@@ -198,6 +198,35 @@ test("harnessSettingsArgv: 비claude(codex)는 statusLine 무시하고 theme arg
   assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", managed: true }), harnessThemeArgv("codex", "dark"));
 });
 
+// ── #4427(#4213 T6) — 구성원 AI 계정(Claude) 커넥터를 막은 워크스페이스: claude.ai 커넥터를 싣지 않는 env 가 같은 --settings 에 든다. ──
+//  H1 claude+block → --settings 하나 · env 값 "false"   H2 theme+managed+block → 한 객체에 셋
+//  H3 block 없음(새 인자 부재) → env 키 없음(종전과 같다)   H4 codex+block → env 없음(claude.ai 커넥터는 claude 만의 것)
+test("harnessSettingsArgv H1: claude + 막음 → --settings 하나에 env.ENABLE_CLAUDEAI_MCP_SERVERS=\"false\"", () => {
+  const argv = harnessSettingsArgv("claude", { blockClaudeAiConnectors: true });
+  assert.equal(argv.filter((a) => a === "--settings").length, 1);
+  assert.deepEqual(JSON.parse(argv[1]).env, { ENABLE_CLAUDEAI_MCP_SERVERS: "false" });
+});
+
+test("harnessSettingsArgv H2: claude theme+managed+막음 → 한 --settings 에 theme·statusLine·env 셋(플래그 1회)", () => {
+  const argv = harnessSettingsArgv("claude", { theme: "dark", managed: true, blockClaudeAiConnectors: true });
+  assert.equal(argv.filter((a) => a === "--settings").length, 1);
+  const s = JSON.parse(argv[1]);
+  assert.equal(s.theme, "dark");
+  assert.equal(s.statusLine.type, "command");
+  assert.equal(s.env.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+});
+
+test("harnessSettingsArgv H3: 막음 인자가 없거나 false 면 env 키가 없다(종전과 같다)", () => {
+  assert.deepEqual(harnessSettingsArgv("claude", {}), []);
+  assert.deepEqual(harnessSettingsArgv("claude", { blockClaudeAiConnectors: false }), []);
+  assert.equal("env" in JSON.parse(harnessSettingsArgv("claude", { theme: "dark", managed: true, blockClaudeAiConnectors: false })[1]), false);
+});
+
+test("harnessSettingsArgv H4: codex 는 막음이어도 env 를 안 싣는다(claude.ai 커넥터는 claude 만의 것)", () => {
+  assert.deepEqual(harnessSettingsArgv("codex", { theme: "dark", blockClaudeAiConnectors: true }), harnessThemeArgv("codex", "dark"));
+  assert.deepEqual(harnessSettingsArgv("codex", { blockClaudeAiConnectors: true }), []);
+});
+
 // ── #3982 — `--` 직접 실행 경계가 pane의 JSON/공백 인자를 보존한다. Windows도 테마 인자를 잃지 않는다. ──
 test("harnessSettingsArgv: win32도 pane argv 테마를 싣되 POSIX statusLine은 제외한다(#3982)", () => {
   assert.deepEqual(harnessSettingsArgv("claude", { theme: "dark", platform: "win32" }), harnessThemeArgv("claude", "dark"));

@@ -19,6 +19,7 @@ import { installBundleTarArgs } from "./bundle-tar.js";
 //  (generator .mjs 경로 해석·v6 등).
 import { getOrgProfile, getRuntimeConfig, listMcpServers, listSections, getMember, getLivProfile } from "../store.js";
 import { listAutoApproveToolIds } from "./auto-approve.js";
+import { memberAiConnectorsAllowed } from "../store/member-ai-connectors.js";   // #4427 — 안내문 정책 줄
 import { logger } from "../../log.js";
 
 // generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
@@ -248,13 +249,15 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
   //  조회 실패는 켜짐(fail-open — 가이드는 시스템 사용법의 골격이라 빠지는 쪽이 더 큰 사고).
   let guideOn = true;
   try { guideOn = (await getRuntimeConfig()).inject_ontology_guide; } catch { /* fail-open */ }
+  //  #4427 — 외부 서비스 MCP 줄(${member_ai_connectors})은 워크스페이스 정책으로 두 벌 중 하나다. 조회 실패는 허용(그 함수 머리말).
+  const connectorsAllowed = await memberAiConnectorsAllowed();
   const consumedTeam = { v: false };
   const out: string[] = [];
   for (const s of sections) {
     const tpl = effectiveSectionTemplate(s.section, s.body_md, guideOn);
     const raw = tpl === null ? "" : strip(tpl);
     if (!raw.trim()) continue;
-    const filled = substituteBlocks(raw, { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam });
+    const filled = substituteBlocks(raw, { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam, memberAiConnectorsAllowed: connectorsAllowed });
     if (filled.trim()) out.push(filled);
   }
   // context-ontology-guide(시스템 사용법 골격)는 행이 없어도 렌더(토글 on 일 때) — 신규 조직의 ${categories}/${wiki}/가이드 보존.
@@ -263,7 +266,7 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
   if (guideOn && !sections.some((s) => s.section === GUIDE_KEY)) {
     const def = GUIDE_SECTION_DEFAULTS[GUIDE_KEY];
     if (def) {
-      const filled = substituteBlocks(strip(def), { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam });
+      const filled = substituteBlocks(strip(def), { team: opts.team, categoryMap: opts.categoryMap, wikiUnits: opts.wikiUnits, wikiCats: opts.wikiCats, consumedTeam, memberAiConnectorsAllowed: connectorsAllowed });
       if (filled.trim()) out.push(filled);
     }
   }

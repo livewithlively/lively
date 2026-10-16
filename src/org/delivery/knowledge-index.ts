@@ -126,8 +126,9 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "- 라이브 데이터(코드·DB): `db_query`(admin이면 별도 등록 없이 내장 `self` 소스로 이 라이블리 DB=지식·프로젝트·카테고리·도메인맵을 읽기전용 SQL 조회) · `context_overview`.",
   "- **외부 자료 미러**: 슬랙·메일·드라이브 등에서 커넥터가 끌어온 **원문**은 지식이 아니라 자료로 있다 — `source_list` · `source_get` · `source_undistilled`(아직 지식이 안 된 것). 노션·클릭업은 지식·프로젝트로 바로 들어와 있어 위 경로로 잡힌다.",
   "- **⚠ 사람의 초기 맥락은 라이블리 밖에 있을 수 있다** — 노션·클릭업·슬랙·메일에 먼저 쓰고 여기로 흘러온다. 그러니 \"라이블리에 없다 = 조직에 없다\"가 아니다. 커넥터가 덮는 범위는 위 경로로 이미 들어와 있으니 **먼저 라이블리에서 찾고**, 거기 없을 때만 외부를 직접 본다(`ext__*` 프록시 툴 — 개인·미공유 페이지, 커넥터 없는 툴, 방금 쓴 것). **끌어온 건 반드시 남긴다 → 아래 기록.**",
-  // #1242(고객사 A: claude.ai 슬랙 커넥터 사용) — 코드 폴백만 고치면 섹션을 편집한 org 엔 안 닿는다(#537). 라이블리 org DB 행에도 같은 불릿을 반영해 양쪽을 같게 유지할 것.
-  "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 가 기본이다(조직 통제)** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다**. `ext__*` 는 조직이 관리하는 커넥터·자격·감사 경로로 나가고, 개인 커넥터는 개인 자격으로 그 통제를 우회한다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스 커넥터가 라이블리에 없거나 실패할 때만 개인 커넥터로 폴백하고, 폴백했음을 답변에 밝힌다.",
+  // #1242(고객사 A: claude.ai 슬랙 커넥터 사용) → #4427(#4213 T6): 이 줄은 워크스페이스 정책(allow_member_ai_connectors)에 따라
+  //  두 벌 중 하나로 채워진다(아래 MEMBER_AI_CONNECTORS_GUIDE). 같은 서비스가 양쪽에 있으면 ext__ 우선은 두 벌 모두 같다.
+  "${member_ai_connectors}",
   "",
   // #4220·#4219(2026-09-30, 윤상민 확정) — «생기면 즉시 knowledge_save» 가 기록을 한 건씩 흩어 메인을 멈추게 했다(knowledge_save 1건
   //  메인 멈춤 p50 46초 · 세션당 쓰기 에피소드 p50 4개). 그래서 «그 턴 안, 보고 직전에» 로 바꾸고, Claude Code 대화형은 대화 전체를 물려받는
@@ -156,6 +157,22 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "${wiki}",
 ].join("\n");
+
+// ── 외부 서비스 MCP 줄 — 구성원 AI 계정(Claude) 커넥터 정책(#4213 T6 #4427)에 따라 두 벌 중 하나 ──
+//  허용(기본 — 상민 2026-10-16): 조직 연결이 있으면 그것, 없으면 그 구성원 본인의 Claude 커넥터가 1순위다(연결·수집 To-Be 의
+//   기본 연결이 구성원 Claude 커넥터다). 종전 #1242 문구의 «폴백 + 폴백했음을 밝힌다» 는 이 경로가 허용된 경로가 되면서 걷었다.
+//  막음(관리자가 끔): ext__ 만 쓴다. 라이블리가 띄우는 claude 세션에는 claude.ai 커넥터 자체가 안 실린다
+//   (terminal/catalog.ts harnessSettingsArgv 의 ENABLE_CLAUDEAI_MCP_SERVERS) — 이 줄은 그게 닿지 않는 자리(구성원 PC 의 CLI 등)를 위한 것이다.
+//  ⚠ 두 벌 모두 «같은 서비스가 양쪽에 보이면 반드시 ext__» 는 같다(#1242 의 조직 통제 — 금융 고객이 계기였다).
+export const MEMBER_AI_CONNECTORS_GUIDE = {
+  allowed: "- **⚠ 외부 서비스 MCP — 조직 연결(`ext__*`)이 먼저, 없으면 구성원 본인의 Claude 커넥터** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동 `mcp__claude_ai_*`·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다** — 조직이 관리하는 커넥터·자격·감사 경로다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스가 라이블리에 연결돼 있지 않거나 실패하면 **이 구성원 본인의 Claude 커넥터(`mcp__claude_ai_*`)를 1순위로 쓴다** — 이 워크스페이스가 허용한 경로라 따로 양해를 구하지 않는다. 그렇게 읽은 것도 아래 «외부에서 끌어온 건 남긴다» 를 따른다.",
+  blocked: "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 만 쓴다(관리자 정책)** — 이 워크스페이스는 구성원 개인 커넥터(claude.ai 연동 `mcp__claude_ai_*`·자체 설치 MCP)로 슬랙·노션·드라이브·메일 같은 외부 서비스를 읽지 않는다. 라이블리가 띄운 세션에는 claude.ai 커넥터가 실리지 않으며, 다른 자리에서 개인 커넥터 도구가 보여도 쓰지 않는다. 그 서비스가 `ext__*` 에 없거나 실패하면 개인 커넥터로 대신하지 말고, 사람에게 [외부 앱 연결]에서 라이블리에 연결해 달라고 하거나 관리자에게 알린다.",
+} as const;
+
+/** (순수) 템플릿의 `${member_ai_connectors}` 자리를 정책에 맞는 줄로 채운다. 관리 화면(sectionsPayload)이 원본 대신 이걸 보여 준다 — 화면 = 실제 주입. */
+export function fillMemberAiConnectorsLine(template: string, allowed: boolean): string {
+  return String(template ?? "").replace(/\$\{member_ai_connectors\}/g, () => (allowed ? MEMBER_AI_CONNECTORS_GUIDE.allowed : MEMBER_AI_CONNECTORS_GUIDE.blocked));
+}
 
 // 가이드 섹션 키(단일) — 웹 관리 '세션 주입' 탭에 보이는 제품 소유 문서. (#1245) 편집 불가 — 코드가 단일 출처.
 export const CONTEXT_ONTOLOGY_GUIDE_SECTION = "context-ontology-guide";
@@ -249,7 +266,7 @@ function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): s
   return out.join("\n").trimEnd() + "\n\n";
 }
 
-// 동적 블록 치환 — ${team}/${categories}/${wiki}. (#335 ${rules} 폐기: 항상-주입은 섹션 문서뿐.)
+// 동적 블록 치환 — ${team}/${categories}/${wiki} + ${member_ai_connectors}(#4427 정책 한 줄). (#335 ${rules} 폐기: 항상-주입은 섹션 문서뿐.)
 //  단일 소스: 섹션 조립(publish.buildSectionBlocks)·가이드 미리보기(org_guide_preview) 공용. 함수형 replacement($ 특수해석 회피).
 //  consumedTeam.v 는 ${team} 가 실제 치환됐는지 호출자에 알린다(어느 섹션도 안 쓰면 팀블록 말미 폴백 부착용).
 export function substituteBlocks(
@@ -257,9 +274,11 @@ export function substituteBlocks(
   opts: {
     team?: string; categoryMap?: CategoryMapEntry[]; wikiUnits?: KnowledgeRow[];
     wikiCats?: Map<string, string>; consumedTeam?: { v: boolean };
+    /** #4427 — 구성원 AI 계정 커넥터 정책(org_runtime_config.allow_member_ai_connectors). 생략 = 허용(기본값과 같은 쪽). */
+    memberAiConnectorsAllowed?: boolean;
   } = {},
 ): string {
-  const assembled = (typeof template === "string" ? template : "")
+  const assembled = fillMemberAiConnectorsLine(typeof template === "string" ? template : "", opts.memberAiConnectorsAllowed !== false)
     .replace(/\$\{team\}/g, () => { if (opts.consumedTeam) opts.consumedTeam.v = true; return (opts.team ?? "").trim(); })
     .replace(/\$\{categories\}/g, () => buildCategoryBlock(opts.categoryMap ?? []))
     .replace(/\$\{wiki\}/g, () => buildWikiBlock(opts.wikiUnits ?? [], opts.wikiCats ?? new Map()))
@@ -275,9 +294,10 @@ export function buildKnowledgeIndex(
   categoryMap: CategoryMapEntry[] = [],
   guideTemplate?: string,
   wikiCats: Map<string, string> = new Map(),
+  opts: { memberAiConnectorsAllowed?: boolean } = {},   // #4427 — 생략 = 허용(substituteBlocks 와 같은 기본)
 ): string {
   const tpl = (typeof guideTemplate === "string" && guideTemplate.trim()) ? guideTemplate : DEFAULT_CONTEXT_ONTOLOGY_GUIDE;
-  return substituteBlocks(tpl, { categoryMap, wikiUnits: units, wikiCats }) + "\n";
+  return substituteBlocks(tpl, { categoryMap, wikiUnits: units, wikiCats, memberAiConnectorsAllowed: opts.memberAiConnectorsAllowed }) + "\n";
 }
 
 // YAML 스칼라 안전화 — load-bindings 미니 파서는 "..."/'...' 인용 스칼라를 받지만 \" 언이스케이프는 안 한다.
@@ -344,7 +364,10 @@ export async function materializeOrgContent(): Promise<Materialized> {
   // R 전문이 있거나(규칙) 카테고리 지도가 있으면 인덱스 발행(쓰기 가이드는 템플릿에 항상 동반). 둘 다 없어도 가이드는
   //  의미가 있으나, 완전 빈 DB 에선 인덱스를 생략한다(기존 관례 — knowledge.length 가드).
   if (guideOn && (activeKnowledgeCount || categoryMap.length)) {
-    await writeFile(join(dir, "memory", "knowledge-index.md"), buildKnowledgeIndex(wikiPins, categoryMap, undefined, await wikiCategoryMap()));
+    //  #4427 — 발행물도 라이브 주입과 같은 정책 줄을 싣는다(조회 실패는 허용 — memberAiConnectorsAllowed 머리말).
+    const { memberAiConnectorsAllowed } = await import("../store/member-ai-connectors.js");
+    await writeFile(join(dir, "memory", "knowledge-index.md"), buildKnowledgeIndex(wikiPins, categoryMap, undefined, await wikiCategoryMap(),
+      { memberAiConnectorsAllowed: await memberAiConnectorsAllowed() }));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)

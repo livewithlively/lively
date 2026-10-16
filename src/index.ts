@@ -112,7 +112,9 @@ console.log(`[boot] ${installTenantBinding()}`);
   //  #4684 — 세션에 붙인 앱 폴더(확보에 실을 목록 · 새 id 복원 때 넘기기).
   const { folderAppsFor, resyncIfChangedAfterCreate } = await import("./apps/session-app-folders.js");
   const { carrySessionApps, dropSessionApps } = await import("./apps/session-apps.js");
-  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
+  //  #4427 — 구성원 AI 계정(Claude) 커넥터 정책(allowed 가 아니면 claude 세션에 claude.ai 커넥터를 싣지 않는다 — fail-closed).
+  const { memberAiConnectorsPolicy } = await import("./org/store/member-ai-connectors.js");
+  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode, memberAiConnectorsPolicy,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
     outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
