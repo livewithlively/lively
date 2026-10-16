@@ -1025,6 +1025,7 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-bd-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 10px; }
 .cn-bd-note { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.6; max-width: 72ch; }
 .cn-bd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-bd-scroll + .cn-bd-note { margin-top: 8px; }
 .cn-bd-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .cn-bd-tbl th, .cn-bd-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line-row); text-align: left; vertical-align: middle; }
 .cn-bd-tbl thead th { font-size: 12px; font-weight: 700; color: var(--muted-head); background: var(--bg-tint); white-space: nowrap; }

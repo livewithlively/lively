@@ -13,7 +13,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { svcTile, presetSvcKey } from '../svc-icons.js';
 import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
 import {
-  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, buildBoard, canEditUnit, hiddenUnitName, visibilityChoices, widens,
+  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, buildBoard, canEditUnit, hiddenUnitName, routeText, visibilityChoices, widens,
   type Board, type BoardApp, type BoardCell, type UnitIn, type Visibility,
 } from '../lib/connect-board.js';
 
@@ -72,13 +72,9 @@ function cellNode(c: BoardCell): HTMLElement {
     el('span', { text: c.label }));
 }
 
-/** 연결 경로 — 이 앱이 어떤 길로 이어져 있나. 없으면 «아직 연결한 사람이 없어요». */
+/** 연결 경로 — 이 앱이 어떤 길로 이어져 있나(말은 lib routeText — 시험 있음). */
 function routeLine(a: BoardApp): HTMLElement {
-  const parts: string[] = [];
-  if (a.claudeMembers) parts.push(`Claude 커넥터 ${a.claudeMembers}명`);
-  if (a.collector) parts.push('라이블리 수집기');
-  if (a.livDirect) parts.push('리브가 연결함');
-  return el('div', { class: 'cn-bd-route', text: parts.length ? parts.join(' · ') : '아직 연결한 사람이 없어요' });
+  return el('div', { class: 'cn-bd-route', text: routeText(a) });
 }
 
 /** 모으는 곳 요약 — 모으는 중 · 후보 · 뺌. 수집 실행이 아직 모르는 앱이면 그 사실을 말한다(있는 척하지 않는다). */
@@ -92,9 +88,10 @@ function unitSummary(a: BoardApp): string {
 
 export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: () => void } = {}): Promise<void> {
   const open = new Set<string>();     // 펼친 앱 줄 — 다시 그려도 펼친 채로
-  const paint = async (): Promise<void> => {
+  let last: BoardData | null = null;  // 마지막으로 읽은 값 — 펼치기·접기는 이것으로 다시 그린다(서버를 다시 읽지 않는다)
+  const paint = async (reload = true): Promise<void> => {
     let d: BoardData;
-    try { d = await loadBoard(); }
+    try { d = reload || !last ? await loadBoard() : last; last = d; }
     catch (e) {
       host.replaceChildren(el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: `현황판을 불러오지 못했어요 — ${(e as Error)?.message || e}` }));
       return;
@@ -147,7 +144,7 @@ export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: 
       const toggle = hasUnits ? el('button', {
         class: 'btn-text cn-bd-more', type: 'button', 'aria-expanded': String(isOpen),
         text: isOpen ? '접기 ▴' : '자세히 ▾',
-        onclick: () => { if (open.has(a.key)) open.delete(a.key); else open.add(a.key); void paint(); },
+        onclick: () => { if (open.has(a.key)) open.delete(a.key); else open.add(a.key); void paint(false); },
       }) : null;
       body.push(el('tr', { class: 'cn-bd-row' },
         el('th', { class: 'cn-bd-app', scope: 'row' },

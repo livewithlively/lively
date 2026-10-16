@@ -79,6 +79,22 @@ export const CELL_LABEL: Readonly<Record<Exclude<CellState, 'need'>, string>> = 
 };
 export const needLabel = (name: string): string => `${name}님 연결 필요`;
 
+/** 커넥터는 있는데 지금 못 쓰는 칸(다시 로그인 · 실패 · 연결 중 · 모름). */
+const BROKEN_CELLS: ReadonlySet<CellState> = new Set<CellState>(['needs-auth', 'failed', 'pending', 'unknown']);
+/**
+ * 연결 경로 말 — 이 앱이 어떤 길로 이어져 있나(Claude 커넥터 n명 · 라이블리 수집기 · 리브가 연결함).
+ *  길이 하나도 없는데 Claude 로 이어 둔 사람이 있으면(지금 못 쓰는 상태) «아직 연결한 사람이 없어요» 로 숨기지 않고 그 사실을 말한다
+ *  (화면 실측 2026-10-17 — 칸은 «다시 로그인 필요» 인데 줄은 «아직 연결한 사람이 없어요» 라 서로 어긋났다).
+ */
+export function routeText(a: Pick<BoardApp, 'claudeMembers' | 'collector' | 'livDirect' | 'cells'>): string {
+  const parts: string[] = [];
+  if (a.claudeMembers) parts.push(`Claude 커넥터 ${a.claudeMembers}명`);
+  if (a.collector) parts.push('라이블리 수집기');
+  if (a.livDirect) parts.push('리브가 연결함');
+  if (parts.length) return parts.join(' · ');
+  return a.cells.some((c) => BROKEN_CELLS.has(c.state)) ? 'Claude 로 이어 두었지만 지금은 쓸 수 없어요' : '아직 연결한 사람이 없어요';
+}
+
 export const VIS_LABEL: Readonly<Record<Visibility, string>> = { me: '나만', viewers: '볼 수 있는 사람만', all: '모두' };
 export const STATE_LABEL: Readonly<Record<UnitStateName, string>> = { active: '모으는 중', candidate: '후보', excluded: '뺌' };
 export const KIND_LABEL: Readonly<Record<string, string>> = {

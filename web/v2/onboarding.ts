@@ -2414,10 +2414,13 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         const sub = `제(리브)가 일할 때도 ${nick() ? `${esc(nick())}님의` : '쓰시던'} 구독을 씁니다. 라이블리가 따로 요금을 매기지 않습니다.`;
         //  (T13) Claude 로그인은 «AI 연결» 만이 아니다 — 그 계정에 연결해 둔 앱(Slack·Notion·Gmail …)이 곧 리브가 일 자료를 모으는 길이다
         //   (기본 연결 = 구성원 Claude 커넥터). 정책이 막힌 워크스페이스에는 그 약속을 하지 않는다(T6 — 막으면 실제로 안 실린다).
+        //   정책을 못 읽었으면(unknown) 약속도 «막혔다» 도 하지 않는다 — 서버는 못 읽으면 막는다(T6). 아직 안 물었으면(null) 기본값(허용)대로 말한다.
         const lead = aiHarness() !== 'claude' ? `연결해 두시면 ${sub}`
           : CCP === 'blocked'
             ? `평소 쓰시는 Claude 계정으로 로그인해 주세요. ${sub} 이 워크스페이스는 관리자 설정으로 Claude 에 연결해 둔 앱을 쓰지 않아요 — 앱 연결은 리브가 대화에서 따로 안내해 드려요.`
-            : `평소 쓰시는 Claude 계정으로 로그인해 주세요. 그 계정에 연결해 두신 Slack·Notion·Gmail 같은 앱을 리브가 그대로 써서 일 자료를 모읍니다 — 라이블리에서 앱을 다시 연결하지 않으셔도 돼요. ${sub}`;
+            : CCP === 'unknown'
+              ? `평소 쓰시는 Claude 계정으로 로그인해 주세요. ${sub}`
+              : `평소 쓰시는 Claude 계정으로 로그인해 주세요. 그 계정에 연결해 두신 Slack·Notion·Gmail 같은 앱을 리브가 그대로 써서 일 자료를 모읍니다 — 라이블리에서 앱을 다시 연결하지 않으셔도 돼요. ${sub}`;
 
         // ── 아직 안 물어봤다 — 없는 답을 지어내지 않고 묻는 중이라고 말한다(bind 가 곧 채운다).
         if (!AIC) {
@@ -2674,7 +2677,9 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
         // 장면에 들어오자마자 **한 번** 묻는다 — 사람이 버튼을 누르기 전에 '없는 CLI 를 치라는 안내'를 보지 않게.
         //  판정은 그때그때 다시 재므로 캐시를 믿지 않는다(AIC 는 그림용 최신값일 뿐이다).
         //  (T13) 정책(구성원 Claude 커넥터를 쓰나)은 머리말 문구가 갈린다 — 처음 한 번만 묻고 답이 오면 다시 그린다.
-        if (CCP == null && aiHarness() === 'claude') void loadClaudeConnectorPolicy().then(() => { if (!destroyed && !leavingAi && S.scene === 'claude') renderScene('claude', false); });
+        //   ⚠ 첫 판정(AIC)이 아직 도는 중이면 다시 그리지 않는다 — 다시 그리면 이 bind 가 판정(프로브, 수 초)을 한 번 더 띄운다
+        //    (화면 실측 2026-10-17: ai-accounts/check 가 두 번 나갔다). 그때는 판정이 끝나며 다시 그릴 때 정책이 함께 실린다.
+        if (CCP == null && aiHarness() === 'claude') void loadClaudeConnectorPolicy().then(() => { if (!destroyed && !leavingAi && S.scene === 'claude' && AIC) renderScene('claude', false); });
         if (!AIC) { checkAi().then(() => renderScene('claude', false)); return; }
         //  #4051 — 로그인이 확인된 자리에서만 «사람 없이 도는 작업» 허용을 받는다(칸은 html 이 연결됨 갈래에만 둔다).
         //   허용이 남았으면 칸이 누르지 않아도 절차를 띄운다(onboarding-headless 머리말).
