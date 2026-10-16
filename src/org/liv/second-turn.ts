@@ -12,7 +12,7 @@
 //  ── 낡은 실측 문제 ──
 //  1턴이 실은 숫자는 그 순간의 것이다. 2턴은 **다시 읽고** 시작하라고 못박는다(세션 관성 실측: classify-knowledge-stale-session-inertia).
 
-import { GROUP_SETS, groupSetFor, groupSetPromptLines } from "../../v6/category-groups.js";
+import { groupSetFor, groupSetPromptLines } from "../../v6/category-groups.js";
 
 export interface SecondTurnCollector { label: string; preset_key: string; enabled: boolean; ran: boolean }
 export interface SecondTurnInput {
@@ -26,7 +26,7 @@ export interface SecondTurnInput {
    */
   groups: Array<{ key: string; name: string; hint?: string | null }>;
   /**
-   * 묶음이 **없을 때** 리브가 먼저 만들 세 칸 — 이 사람의 무대·직무로 룰 테이블에서 고른 집합(groupSetFor). 묶음이 있으면 안 쓴다.
+   * 묶음이 **없을 때** 리브가 먼저 만들 칸(3~5) — 이 사람의 무대·직무로 룰 테이블에서 고른 집합(groupSetFor). 묶음이 있으면 안 쓴다.
    *  비었으면(판정 재료가 없었다) 기본 집합으로 간다 — 어느 경로로도 «묶음 없이 카테고리를 만들라» 는 지시가 나가지 않는다.
    */
   intended: Array<{ key: string; name: string; hint?: string | null }>;
@@ -40,7 +40,7 @@ export interface SecondTurnInput {
 }
 
 /**
- * 2턴이 묶음에 쓸 재료(순수, #1631) — 무대(welcome.stage)와 «무대 · 직무» 한 줄(work.asis)에서 직무를 되갈라 룰 테이블의 세 칸을 고른다.
+ * 2턴이 묶음에 쓸 재료(순수, #1631) — 무대(welcome.stage)와 «무대 · 직무» 한 줄(work.asis)에서 직무를 되갈라 룰 테이블의 칸을 고른다.
  *  ⚠ 무대를 넘긴다(2026-09-14) — 종전 받침은 무대를 null 로 넘겨, 직무를 건너뛴 학업 사용자가 회사 기본 이름을 받았다.
  *  ⚠ 구분자는 주입받는다(`WORK_ASIS_SEP`, org/store/members.ts) — 이 파일은 DB 모듈을 끌어오지 않는 순수 모듈이다.
  */
@@ -56,23 +56,23 @@ export function turnGroupInputs(input: { stage?: string | null; workAsis?: strin
 //  2026-09-14 실측(lively-agent-2-6a84): 묶음이 0개인 워크스페이스에서 이 단락이 통째로 빠졌고, 리브는 묶음 없는
 //   카테고리 4개를 에러 없이 만들었다 — 서버의 하드 규칙은 묶음이 **있어야** 켜지기 때문이다. 그래서:
 //  · 묶음이 있으면: 그 안에서 고른다(새로 만들지 않는다) — 종전 문구 그대로.
-//  · 없으면: 이 사람 직무의 세 칸(intended)을 **먼저** 만들게 한다 — 만드는 순간부터 하드 규칙이 켜진다.
+//  · 없으면: 이 사람 자리의 칸(intended)을 **먼저** 만들게 한다 — 만드는 순간부터 하드 규칙이 켜진다.
 //  · 묶음 밖 카테고리가 남아 있으면 이름을 싣고 0개로 끝내게 한다.
 function groupStepLines(i: SecondTurnInput): string[] {
   const has = i.groups.length > 0;
-  const set = has ? i.groups : (i.intended.length ? i.intended : GROUP_SETS.default);
+  const set = has ? i.groups : (i.intended.length ? i.intended : groupSetFor(null, null));
   const lines: string[] = has
     ? [
-      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). **새 묶음을 만들지 마라.** 「기타」 같은 자리로 미루지도 마라 — 그런 묶음은 없다.",
+      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). **새 묶음을 만들지 마라.** 「기타」 같은 칸을 새로 만들거나 그리로 미루지 마라 — 맞는 칸이 있으면 그 칸이 먼저다.",
       "     **이미 있는 카테고리를 쓰는데 묶음이 비어 있으면** 그 자리에서 `category_update` 로 묶음만 채운다(내용은 건드리지 않는다). 안 채우면 그 카테고리는 화면에서 «묶음을 정해 주세요» 에 남는다.",
     ]
     : [
-      "   - **묶음부터 만든다 — 이 워크스페이스엔 아직 묶음이 없다.** 카테고리를 만들기 **전에** 아래 세 칸을 `category_group_upsert` 로 **key·이름·뜻을 그대로** 만든다(이름을 새로 짓지 않는다 — 이 사람의 직무에서 나온 룰베이스 집합이다). 만든 뒤 `category_group_list` 로 셋이 다 생겼는지 확인한다.",
-      "     그다음부터 카테고리는 **묶음도 함께 정한다.** `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). 「기타」 같은 자리로 미루지 마라 — 그런 묶음은 없다.",
+      "   - **묶음부터 만든다 — 이 워크스페이스엔 아직 묶음이 없다.** 카테고리를 만들기 **전에** 아래 칸들을 `category_group_upsert` 로 **key·이름·뜻을 그대로** 만든다(이름을 새로 짓지 않는다 — 이 사람의 직무에서 나온 룰베이스 집합이다). 만든 뒤 `category_group_list` 로 다 생겼는지 확인한다.",
+      "     그다음부터 카테고리는 **묶음도 함께 정한다.** `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). 「기타」 같은 칸을 새로 만들거나 그리로 미루지 마라 — 맞는 칸이 있으면 그 칸이 먼저다.",
     ];
   lines.push(...groupSetPromptLines(set).map((l) => `  ${l}`));
   if (i.ungrouped.length) {
-    lines.push(`   - **묶음 밖 카테고리 ${i.ungrouped.length}개: ${i.ungrouped.map((c) => c.name).join(" · ")}** — 이 턴을 끝내기 전에 각각 \`category_update\` 로 위 세 칸 중 하나에 넣는다(내용은 건드리지 않는다). 묶음 밖 카테고리가 **0개**여야 이 단계가 끝난다.`);
+    lines.push(`   - **묶음 밖 카테고리 ${i.ungrouped.length}개: ${i.ungrouped.map((c) => c.name).join(" · ")}** — 이 턴을 끝내기 전에 각각 \`category_update\` 로 위 칸 중 하나에 넣는다(내용은 건드리지 않는다). 묶음 밖 카테고리가 **0개**여야 이 단계가 끝난다.`);
   }
   lines.push("     이미 묶음에 든 카테고리도 자료를 읽어 보니 칸이 안 맞으면 `category_update` 로 옮긴다 — 서버가 이름만 보고 넣어 둔 것일 수 있다.");
   return lines;
@@ -113,6 +113,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "## 먼저 `liv-distill` 스킬을 열어 그 절차대로 한다",
     "이 스킬이 두뇌다 — 레인은 서랍 기준(자료 종류로 가르지 않는다), 표본 읽기 예산(자료 수의 2배), catch-all, 증류기 key `liv-<서랍 key>` 멱등, 물어도 되는 것 3종, 첫 지시 = 인수 시험, 첫 문장부터 한국어. 스킬이 없으면 아래 절차만으로 간다.",
     "⚠ 아래 **절차 2(카테고리 만들기)는 스킬에 이 단계가 없어도 반드시 한다** — 워크스페이스에 따라 스킬이 이 단계가 생기기 전 판일 수 있다.",
+    "⚠ **묶음은 이 지시문이 정한다 — 칸 수·이름·«가르는 기준:» 줄이 스킬보다 우선한다**(자리마다 칸이 다르다). 스킬에 «누가 만들었나 · 첫째/둘째/셋째 칸»·«세 칸» 이 보이면 **그 문장들만** 옛 판이다 — 그 문장만 아래 칸 목록과 «가르는 기준:» 줄로 바꿔 읽고, **스킬의 나머지 절차(미리보기·증류 잡 확인·catch-all·첫 지시 규칙)는 그대로 따른다.** (자리를 모르거나 묶음이 예전에 심겼으면 «가르는 기준:» 줄 자체가 «누가 만들었나» 축일 수 있다 — 그때도 그 줄을 따른다.)",
     "",
     "## 절차",
     "1. **자료 표본을 실제로 읽는다** — 종류마다 3~5건 `source_get`. 결정이 오가는 곳인가, 반복 양식인가, 숫자인가, 남의 글을 모아 둔 것인가.",
@@ -126,7 +127,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
     "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
     "4. **수집기 범위를 손본다** — `org_collector_upsert`. 자료를 읽어 보니 잡담 채널·알림 봇이 섞여 있으면 뺀다. 주기는 이 사람의 반복 주기에 맞춘다.",
-    "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` + `source_link_knowledge`). 자료가 모자라면 무엇이 모자란지 말한다.",
+    "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` 1건 — `source_link_knowledge` 는 **걸지 않는다**: 걸면 그 자료가 모든 레인에서 빠진다. 근거는 본문 출처 줄로 밝힌다). 자료가 모자라면 무엇이 모자란지 말한다.",
     "6. **남긴다** — 무엇을 왜 그렇게 세웠는지(카테고리를 그렇게 나눈 이유 포함) `me_liv_profile_set`(decision). 다음 세션의 리브가 오늘을 알아야 한다.",
     "",
     "## 규율",
