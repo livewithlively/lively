@@ -9,10 +9,13 @@
 //   G4 내장 도구·라이블리 MCP → 2            G5 읽기 동사 없음 → 2                     G6 깨진/빈 입력 → 2
 //   G7 허락 목록 파일 없음 → 2               G8 접두가 같은 다른 서버 → 2
 //   C1 원문 그대로 · 목록 한 줄(글자 수·sha256)   C2 깨진 입력 → 0 · 목록에 error 줄
+//   C3 상한을 넘은 결과(안내문 문자열) → 그 파일을 읽어 원문으로 · C4 안내문이 엉뚱한 파일을 가리키면 읽지 않는다
+//   C5 커넥터 글(배열) 속의 같은 문구는 안내문이 아니다
 //   R1 apps=[Slack] → allow 하나 · 나머지 서버·내장 deny · 플래그 · stdin · 토큰 env 없음 · 요약/끝 신호
 //   R2 요청 앱이 없음 → claude -p 안 뜸 · no-connector · missing      R3 apps=[] → 연결된 것 전부(needs-auth 제외)
 //   R4 옛 claude(플래그 없음) → 그 플래그를 안 붙인다                   R5 서버 목록이 빔 → no-connector
 //   R6 시간 상한 초과 → 끊고 timeout · 끝 신호                        R7 일감 깨짐 → job.json 실패 · 끝 신호
+//   R8 사용자 설정을 뺀다(--setting-sources project,local — 지원할 때만)  R9 큰 결과가 러너 한 판을 지나 원문으로 남고, Claude 프로젝트 폴더는 치운다
 //   S1 쓰기 셸 0600 · S2 끝난 폴더(done·세션 id·목록) · S3 없음/도는 중(반쯤 쓰인 줄 버림)
 //   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절
 import assert from "node:assert/strict";
@@ -115,6 +118,44 @@ t("C2 깨진 입력이어도 수집을 막지 않는다(0) — 목록에 error �
   assert.equal(lines.length, 2);
   assert.ok(JSON.parse(lines[1]).error, "error 줄");
 });
+//  상한을 넘은 결과 — Claude Code 가 HOME/.claude/projects/<폴더>/<세션>/tool-results/*.txt 에 저장하고 안내문만 넘긴다.
+const capHome = path.join(tmp, "cap-home");
+const savedDir = path.join(capHome, ".claude", "projects", "-x-work", "8e00739b-3022-4e23-8439-8dab9fb2a13b", "tool-results");
+fs.mkdirSync(savedDir, { recursive: true });
+const bigText = "# topic.index\n" + "가".repeat(120_000);
+fs.writeFileSync(path.join(savedDir, "mcp-claude_ai_Slack-read-1.txt"), bigText);
+fs.writeFileSync(path.join(capHome, "secret.txt"), "SECRET");
+const notice = (p: string): string => `Error: result (120,014 characters across 2 lines) exceeds maximum allowed tokens. Output has been saved to ${p}.\nFormat: Plain text\n- For targeted searches: use grep.`;
+const capRun = (resp: unknown): Record<string, any> => {
+  const before = fs.readFileSync(path.join(capDir, "caps.jsonl"), "utf8").trim().split("\n").length;
+  const r = spawnSync(NODE, [path.join(capDir, "cap.cjs"), capDir], {
+    input: JSON.stringify({ tool_name: "mcp__claude_ai_Slack__slack_read_channel", tool_input: {}, tool_use_id: "toolu_big", tool_response: resp }),
+    encoding: "utf8", env: { ...process.env, HOME: capHome },
+  });
+  assert.equal(r.status, 0);
+  const lines = fs.readFileSync(path.join(capDir, "caps.jsonl"), "utf8").trim().split("\n");
+  assert.equal(lines.length, before + 1, "목록 한 줄이 늘었다");
+  const row = JSON.parse(lines[lines.length - 1]);
+  return { row, saved: JSON.parse(fs.readFileSync(path.join(capDir, "cap", row.file), "utf8")) };
+};
+t("C3 상한을 넘은 결과는 안내문이 가리키는 파일을 읽어 원문으로 남긴다", () => {
+  const { row, saved } = capRun(notice(path.join(savedDir, "mcp-claude_ai_Slack-read-1.txt")));
+  assert.equal(saved.saved_text, bigText, "원문 전체");
+  assert.equal(row.saved, true);
+  assert.equal(row.chars, bigText.length, "글자 수는 원문 기준");
+  assert.equal(row.sha256, crypto.createHash("sha256").update(bigText).digest("hex"));
+});
+t("C4 ★ 안내문이 그 자리 밖(홈의 다른 파일)을 가리키면 읽지 않는다", () => {
+  const { row, saved } = capRun(notice(path.join(capHome, "secret.txt")));
+  assert.equal(saved.saved_text, undefined);
+  assert.ok(!row.saved);
+  assert.ok(!JSON.stringify(saved).includes("SECRET"), "그 파일 내용이 어디에도 없다");
+});
+t("C5 ★ 커넥터 글(배열) 속의 같은 문구는 안내문이 아니다 — 파일을 읽지 않는다", () => {
+  const { row, saved } = capRun([{ type: "text", text: notice(path.join(savedDir, "mcp-claude_ai_Slack-read-1.txt")) }]);
+  assert.equal(saved.saved_text, undefined);
+  assert.ok(!row.saved);
+});
 
 // ── 러너(가짜 claude) ──
 //  FAKE_MODE: old = 플래그 없는 옛 claude · empty = 서버 목록이 빔 · hang = -p 가 안 끝남
@@ -124,11 +165,15 @@ const a = process.argv.slice(2), log = process.env.FAKE_CLAUDE_LOG, mode = proce
 if (a[0] === "--version") { console.log("2.1.301 (Claude Code)"); process.exit(0); }
 if (a[0] === "--help") {
   console.log(mode === "old" ? "  -p, --print\n  --permission-mode <mode> (choices: \"acceptEdits\", \"default\")"
-    : "  --tools <tools...>  built-ins\n  --permission-mode <mode> (choices: \"dontAsk\")\n  --no-session-persistence\n  --disable-slash-commands");
+    : "  --tools <tools...>  built-ins\n  --permission-mode <mode> (choices: \"dontAsk\")\n  --no-session-persistence\n  --disable-slash-commands\n  --setting-sources <sources>");
   process.exit(0);
 }
-if (a[0] === "mcp" && a[1] === "list") {
-  if (mode !== "empty") console.log("Checking MCP server health…\n\nclaude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\nclaude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\nclaude.ai Microsoft 365: https://m365.example/mcp - ! Needs authentication\nlively: /x/bin/lively mcp - ✔ Connected\nplugin:playwright:playwright: npx @playwright/mcp@latest - ✘ Failed to connect");
+if (a.includes("mcp") && a[a.indexOf("mcp") + 1] === "list") {
+  //  진짜 claude 처럼 — 사용자 설정을 빼면(--setting-sources project,local) 사용자 MCP(lively · 플러그인)는 목록에 없다.
+  const noUser = a[0] === "--setting-sources";
+  fs.writeFileSync(log + ".mcplist", JSON.stringify(a));
+  if (mode !== "empty") console.log("Checking MCP server health…\n\nclaude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\nclaude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\nclaude.ai Microsoft 365: https://m365.example/mcp - ! Needs authentication"
+    + (noUser ? "" : "\nlively: /x/bin/lively mcp - ✔ Connected\nplugin:playwright:playwright: npx @playwright/mcp@latest - ✘ Failed to connect"));
   process.exit(0);
 }
 if (a[0] === "-p") {
@@ -138,13 +183,25 @@ if (a[0] === "-p") {
     if (mode === "hang") { setInterval(() => {}, 1000); return; }
     const s = JSON.parse(fs.readFileSync(a[a.indexOf("--settings") + 1], "utf8"));
     const pre = s.hooks.PreToolUse[0].hooks[0].command, post = s.hooks.PostToolUse[0].hooks[0].command;
+    //  진짜 claude 처럼 HOME/.claude/projects/<작업 폴더 슬러그>/ 에 대화·큰 결과를 둔다.
+    const proj = require("path").join(process.env.HOME, ".claude", "projects", fs.realpathSync(process.cwd()).replace(/[^A-Za-z0-9]/g, "-"));
+    const sess = "8e00739b-3022-4e23-8439-8dab9fb2a13b";
+    fs.mkdirSync(proj + "/" + sess + "/tool-results", { recursive: true });
+    fs.writeFileSync(proj + "/" + sess + ".jsonl", "{}\n");
+    const transcript = proj + "/" + sess + ".jsonl";
     const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
     out({ type: "system", subtype: "init", claude_code_version: "2.1.301", model: "claude-haiku-5-5", permissionMode: "dontAsk", tools: ["mcp__claude_ai_Slack__slack_read_channel"], mcp_servers: [{ name: "claude.ai Slack", status: "connected" }] });
     const call = (id, name, resp) => {
       out({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: {} }] } });
       const g = cp.spawnSync("sh", ["-c", pre], { input: JSON.stringify({ tool_name: name, tool_input: {}, tool_use_id: id }), encoding: "utf8" });
       if (g.status !== 0) { out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: g.stderr }] } }); return; }
-      cp.spawnSync("sh", ["-c", post], { input: JSON.stringify({ tool_name: name, tool_input: {}, tool_use_id: id, tool_response: resp }), encoding: "utf8" });
+      let hookResp = resp;
+      if (mode === "big") {
+        const f = proj + "/" + sess + "/tool-results/mcp-claude_ai_Slack-read-" + id + ".txt";
+        fs.writeFileSync(f, "큰 원문 " + "나".repeat(150000));
+        hookResp = "Error: result (150,005 characters across 1 lines) exceeds maximum allowed tokens. Output has been saved to " + f + ".\nFormat: Plain text";
+      }
+      cp.spawnSync("sh", ["-c", post], { input: JSON.stringify({ tool_name: name, tool_input: {}, tool_use_id: id, tool_response: hookResp, transcript_path: transcript }), encoding: "utf8" });
       out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: resp }] } });
     };
     call("t1", "mcp__claude_ai_Slack__slack_read_channel", [{ type: "text", text: "원문 하나" }]);
@@ -192,14 +249,17 @@ t("R1 허락 앱만 allow · 그 밖의 서버는 전부 deny · 내장 도구�
   const argv = R1.fake!.argv as string[];
   assert.deepEqual(flagArgs(argv, "--allowedTools"), ["mcp__claude_ai_Slack"]);
   const deny = flagArgs(argv, "--disallowedTools");
-  for (const d of ["mcp__claude_ai_Notion", "mcp__claude_ai_Microsoft_365", "mcp__lively", "mcp__plugin_playwright_playwright", "Bash", "WebFetch"]) assert.ok(deny.includes(d), `deny 에 ${d}`);
+  for (const d of ["mcp__claude_ai_Notion", "mcp__claude_ai_Microsoft_365", "Bash", "WebFetch"]) assert.ok(deny.includes(d), `deny 에 ${d}`);
   assert.ok(!deny.includes("mcp__claude_ai_Slack"), "허락한 앱은 deny 에 없다");
+  //  서버 목록도 사용자 설정을 빼고 셌다 — 사용자 MCP 를 건강 검사하느라 띄우지 않는다.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tmp, "fake-r1.json.mcplist"), "utf8")), ["--setting-sources", "project,local", "mcp", "list"]);
 });
 t("R1 지원하는 플래그를 붙인다 · 지시는 stdin · 모델 고정", () => {
   const argv = R1.fake!.argv as string[];
   assert.deepEqual(flagArgs(argv, "--tools"), [""], "--tools \"\" — 내장 도구를 아예 싣지 않는다");
   assert.deepEqual(flagArgs(argv, "--permission-mode"), ["dontAsk"]);
   assert.ok(argv.includes("--no-session-persistence") && argv.includes("--disable-slash-commands"));
+  assert.deepEqual(flagArgs(argv, "--setting-sources"), ["project,local"], "R8 사용자 설정(사용자 훅·사용자 MCP)을 뺀다");
   assert.deepEqual(flagArgs(argv, "--model"), ["haiku"]);
   assert.ok(!argv.includes("점검 지시"), "지시는 argv 가 아니라 stdin 으로 간다");
   assert.equal(R1.fake!.prompt, "점검 지시");
@@ -216,7 +276,7 @@ t("R1 요약·끝 신호 — 커넥터·허락·호출·원문 목록·결과", 
   assert.equal(s.claude.version, "2.1.301");
   assert.deepEqual(s.allowed, ["Slack"]);
   assert.deepEqual(s.missing, []);
-  assert.equal(s.denied, 4, "Notion · Microsoft 365 · lively · playwright");
+  assert.equal(s.denied, 2, "Notion · Microsoft 365 (사용자 MCP 는 목록에 없다)");
   assert.equal(s.captures, 1, "막힌 쓰기 호출은 원문이 없다");
   assert.deepEqual(s.calls.map((c: any) => [c.tool, c.error]), [["mcp__claude_ai_Slack__slack_read_channel", false], ["mcp__claude_ai_Slack__slack_send_message", true]]);
   assert.equal(s.result.subtype, "success");
@@ -241,9 +301,12 @@ t("R3 apps 가 비면 연결된 커넥터 전부 — needs-auth 는 뺀다", () 
 const R4 = runOnce("r4", { apps: ["Slack"], mode: "old" });
 t("R4 옛 claude 에는 모르는 플래그를 안 붙인다", () => {
   const argv = R4.fake!.argv as string[];
-  for (const f of ["--tools", "--no-session-persistence", "--disable-slash-commands"]) assert.ok(!argv.includes(f), f);
+  for (const f of ["--tools", "--no-session-persistence", "--disable-slash-commands", "--setting-sources"]) assert.ok(!argv.includes(f), f);
   assert.ok(!argv.includes("dontAsk"));
   assert.deepEqual(flagArgs(argv, "--allowedTools"), ["mcp__claude_ai_Slack"], "allow/deny 는 그대로");
+  //  옛 claude 는 사용자 설정을 못 빼므로 사용자 MCP 까지 세어 전부 deny 한다.
+  for (const d of ["mcp__lively", "mcp__plugin_playwright_playwright", "mcp__claude_ai_Notion"]) assert.ok(flagArgs(argv, "--disallowedTools").includes(d), `deny 에 ${d}`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tmp, "fake-r4.json.mcplist"), "utf8")), ["mcp", "list"]);
   assert.equal(R4.exit.code, 0);
 });
 const R5 = runOnce("r5", { apps: ["Slack"], mode: "empty" });
@@ -256,6 +319,26 @@ t("R6 시간 상한을 넘기면 끊고 timeout 으로 끝낸다 — 끝 신호�
   assert.ok(R6.fake, "claude -p 는 떴다");
   assert.equal(R6.exit.timedOut, true);
   assert.equal(R6.exit.error, "timeout");
+});
+const R9 = runOnce("r9", { apps: ["Slack"], mode: "big" });
+t("R9 큰 결과가 러너 한 판을 지나 원문으로 남는다 · Claude 프로젝트 폴더는 치운다", () => {
+  const rows = fs.readFileSync(path.join(R9.dir, "caps.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].saved, true);
+  const cap = JSON.parse(fs.readFileSync(path.join(R9.dir, "cap", rows[0].file), "utf8"));
+  assert.equal(cap.saved_text, "큰 원문 " + "나".repeat(150000), "원문 전체");
+  assert.equal(rows[0].chars, cap.saved_text.length);
+  const projects = path.join(tmp, "home-r9", ".claude", "projects");
+  assert.ok(fs.existsSync(projects), "배선 — 가짜 claude 가 프로젝트 폴더를 실제로 만들었다");
+  assert.deepEqual(fs.readdirSync(projects), [], "이 실행의 프로젝트 폴더를 치웠다");
+});
+t("R9b ★ 남의 프로젝트 폴더는 건드리지 않는다", () => {
+  const other = path.join(tmp, "home-r9b", ".claude", "projects", "-home-me-work-project-1");
+  fs.mkdirSync(other, { recursive: true });
+  const r = runOnce("r9b", { apps: ["Slack"] });
+  assert.equal(r.exit.code, 0);
+  assert.ok(fs.existsSync(other), "다른 폴더는 남는다");
+  assert.deepEqual(fs.readdirSync(path.dirname(other)), ["-home-me-work-project-1"]);
 });
 const R7 = runOnce("r7", { apps: ["Slack"], job: "{not json" });
 t("R7 일감이 깨지면 실패로 끝 신호를 남긴다", () => {
@@ -329,13 +412,13 @@ t("P4 일감 경계 — 턴 1·60 · 시간 60·3600 · 빈 지시 거절 · 이
   assert.equal(J({ model: "claude-sonnet-5-5" }).model, "claude-sonnet-5-5");
   assert.deepEqual(J({ apps: ["Slack", "Google Drive", "bad;app", "", "Slack"] }).apps, ["Slack", "Google Drive"]);
 });
-t("P5 메모리 env 경계 — 128·8192 그대로 · 범위 밖은 기본 · 예약은 캡 이하", () => {
-  assert.deepEqual(collectMemLimits({}), { maxMb: 768, requestMb: 384 });
+t("P5 메모리 env 경계 — 기본 768/512 · 128·8192 그대로 · 범위 밖은 기본 · 예약은 캡 이하", () => {
+  assert.deepEqual(collectMemLimits({}), { maxMb: 768, requestMb: 512 }, "예약은 잠정 512(최소 실행 +389~450MB 실측)");
   assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "128", LIVELY_COLLECT_MEM_REQUEST_MB: "128" }), { maxMb: 128, requestMb: 128 });
   assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "8192", LIVELY_COLLECT_MEM_REQUEST_MB: "8192" }), { maxMb: 8192, requestMb: 8192 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "127", LIVELY_COLLECT_MEM_REQUEST_MB: "8193" }), { maxMb: 768, requestMb: 384 });
+  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "127", LIVELY_COLLECT_MEM_REQUEST_MB: "8193" }), { maxMb: 768, requestMb: 512 });
   assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "512", LIVELY_COLLECT_MEM_REQUEST_MB: "900" }), { maxMb: 512, requestMb: 512 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "abc" }), { maxMb: 768, requestMb: 384 });
+  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "abc" }), { maxMb: 768, requestMb: 512 });
 });
 t("P6 쓰기 셸은 이상한 파일 이름·폴더·세션 id 를 거절한다", () => {
   const d = "/home/box_yoon/.cache/lvly-collect/cr-20261016030405-abc9xy";

@@ -4,8 +4,10 @@
 /** 실행 폴더의 부모(멤버 홈 기준). */
 export const COLLECT_PARENT = ".cache/lvly-collect";
 /**
- * 수집 세션 크기(MB) — 일반 세션(캡 1,536 · 예약 768)의 절반에서 시작한다(확정판 §5). 실측 뒤 조정한다.
- *  env 로 덮을 수 있다(LIVELY_COLLECT_MEM_MB · LIVELY_COLLECT_MEM_REQUEST_MB). 예약은 캡을 넘지 않는다.
+ * 수집 세션 크기(MB) — 캡 768 · 예약 512(잠정). 캡은 일반 세션(1,536)의 절반이다(확정판 §5).
+ *  예약은 처음에 384 였는데, 매니지드 실측(2026-10-16)에서 최소 실행만으로 컨테이너 사용이 +389~450MB 늘어 512 로 올렸다.
+ *  실제 수집(여러 턴·큰 결과)을 재서 다시 정한다. env 로 덮을 수 있다(LIVELY_COLLECT_MEM_MB · LIVELY_COLLECT_MEM_REQUEST_MB).
+ *  예약은 캡을 넘지 않는다.
  */
 export function collectMemLimits(env: NodeJS.ProcessEnv = process.env): { maxMb: number; requestMb: number } {
   const num = (v: string | undefined, d: number): number => {
@@ -13,7 +15,7 @@ export function collectMemLimits(env: NodeJS.ProcessEnv = process.env): { maxMb:
     return Number.isInteger(n) && n >= 128 && n <= 8192 ? n : d;
   };
   const maxMb = num(env.LIVELY_COLLECT_MEM_MB, 768);
-  return { maxMb, requestMb: Math.min(num(env.LIVELY_COLLECT_MEM_REQUEST_MB, 384), maxMb) };
+  return { maxMb, requestMb: Math.min(num(env.LIVELY_COLLECT_MEM_REQUEST_MB, 512), maxMb) };
 }
 
 /**
