@@ -32,7 +32,7 @@ export interface WireBoardOpts {
 export interface WireBoard { close(): void }
 
 const TOOLS: Array<{ k: Tool; t: string; help: string; svg: string }> = [
-  { k: 'move', t: '이동', help: '끌어서 보드를 옮겨요(스페이스를 누른 채 끌어도 돼요)', svg: '<path d="M10 2.5v15M2.5 10h15"/><path d="M7.6 4.9 10 2.5l2.4 2.4M7.6 15.1 10 17.5l2.4-2.4M4.9 7.6 2.5 10l2.4 2.4M15.1 7.6 17.5 10l-2.4 2.4"/>' },
+  { k: 'move', t: '이동', help: '끌어서 보드를 옮겨요. 스페이스를 누른 채 끌어도 돼요.', svg: '<path d="M10 2.5v15M2.5 10h15"/><path d="M7.6 4.9 10 2.5l2.4 2.4M7.6 15.1 10 17.5l2.4-2.4M4.9 7.6 2.5 10l2.4 2.4M15.1 7.6 17.5 10l-2.4 2.4"/>' },
   { k: 'pick', t: '선택', help: '그림 안의 단추 · 칸 · 글을 선택해요', svg: '<path d="M7.5 6.5 16.5 11l-4.2 1.1-2 4.2z"/><path d="M3.6 8.2a4.6 4.6 0 0 1 3.1-4.3"/><path d="M3.2 4.6 4.6 5.8"/>' },
   { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.', svg: '<path d="M10 17.5s-5-5-5-8.8a5 5 0 0 1 10 0c0 3.8-5 8.8-5 8.8z"/><circle cx="10" cy="8.6" r="1.8"/>' },
   { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.', svg: '<rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2" stroke-dasharray="3 2.2"/>' },
@@ -80,8 +80,8 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const ghost = el('div', { class: 'v2-wb-ghost', hidden: true });
   const catcher = el('div', { class: 'v2-wb-catch' });
   const stage = el('div', { class: 'v2-wb-stage' }, world, catcher);
-  const hint = el('div', { class: 'v2-wb-hint', text: '⌘/Ctrl + 스크롤 · 핀치로 확대축소 · 스크롤로 이동 · 스페이스를 누른 채 끌어도 이동' });
-  const note = fallback ? el('div', { class: 'v2-wb-note', text: '이 앱엔 아직 AI 가 그린 화면 흐름 그림이 없어 앱 화면을 그대로 한 장으로 놓았어요 — 다음 「수정하기」 때 화면 흐름 그림을 함께 그려요.' }) : null;
+  const hint = el('div', { class: 'v2-wb-hint', text: '⌘/Ctrl+스크롤이나 핀치로 확대·축소하고, 스크롤이나 스페이스+끌기로 이동해요' });
+  const note = fallback ? el('div', { class: 'v2-wb-note', text: '아직 와이어프레임이 없어 앱 화면을 그대로 보여드려요. 다음에 「수정하기」를 누르면 와이어프레임도 함께 그려요.' }) : null;
   const list = el('div', { class: 'v2-wb-list', hidden: true });
   const root = el('div', { class: 'v2-wb', role: 'dialog', 'aria-modal': 'true', 'aria-label': '「' + o.title + '」 와이어프레임' }, head, el('div', { class: 'v2-wb-body' }, stage, list), hint, note);
   document.body.append(root);
@@ -102,7 +102,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
       const slot = el('div', { class: 'v2-wb-slot' });
       const card = el('div', { class: 'v2-wb-card', style: `left:${x}px;top:${TOP}px;width:${w}px;height:${h}px` }, el('span', { class: 'v2-wb-card-l', text: label + ' · 지금 화면' }), slot);
       world.append(card);
-      void mountAppUiFrame(o.appId, { title: o.title }).then((f) => { if (S.dead) { f.destroy(); return; } frames.push(f); slot.append(f.root); }).catch((e: any) => { slot.append(el('p', { class: 'v2-wb-err', text: '앱 화면을 열지 못했어요 — ' + (e && e.message ? e.message : e) })); });
+      void mountAppUiFrame(o.appId, { title: o.title }).then((f) => { if (S.dead) { f.destroy(); return; } frames.push(f); slot.append(f.root); }).catch((e: any) => { slot.append(el('p', { class: 'v2-wb-err', text: '앱 화면을 열지 못했어요. ' + (e && e.message ? e.message : e) })); });
       x += w + GAP;
     }
     S.cw = Math.max(400, x - GAP); S.ch = TOP + Math.max(...wants.map((w) => w[2]));
@@ -173,7 +173,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const changed = (): void => { o.onPins(all()); paintCount(); paintMarks(); if (!list.hidden) paintList(); };
   const paintCount = (): void => {
     const mine = all().filter((p) => p.on === 'wire'); const n = mine.filter((p) => p.note.trim()).length;
-    count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 짚음 ' + mine.length : '');
+    count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 빈 코멘트 ' + (mine.length - n) : '');
   };
   const paintMarks = (): void => {
     marks.replaceChildren();
@@ -220,7 +220,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const addPin = (p: StudioPin): void => { const ps = all(); ps.push({ ...p, on: 'wire' }); o.onPins(ps); paintCount(); openPop(ps.length - 1); };
   const paintList = (): void => {
     const rows = all().map((p, i) => [p, i] as const).filter(([p]) => p.on === 'wire');
-    list.replaceChildren(el('div', { class: 'v2-wb-list-h' }, el('b', { text: '이 그림에 단 코멘트' }), el('small', { text: '허브의 「코멘트」 칸에도 같이 모여요' })),
+    list.replaceChildren(el('div', { class: 'v2-wb-list-h' }, el('b', { text: '이 그림에 단 코멘트' }), el('small', { text: '앱빌더의 「코멘트」 칸에도 함께 모여요' })),
       ...(rows.length ? rows.map(([p, i]) => el('button', { type: 'button', class: 'v2-wb-list-row', onclick: () => { focusPin(i); } },
         el('span', { class: 'n', text: String(i + 1) }), el('span', { class: 'w', text: p.note.trim() || '(아직 안 적음) ' + (p.where || '') })))
         : [el('p', { class: 'v2-wb-list-empty', text: '선택 · 핀 · 영역으로 그림 위에 코멘트를 남기면 여기 모여요.' })]));
@@ -235,7 +235,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   // ── 도구 · 누르기 ──
   const setTool = (k: Tool): void => { S.tool = k; closePop(); clearProbe(); paintTools(); };
   const paintTools = (): void => {
-    tools.replaceChildren(...TOOLS.map((x) => el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.help, onclick: () => setTool(x.k) }, svgIcon(x.svg), el('span', { text: x.t }))));
+    tools.replaceChildren(...TOOLS.map((x) => el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, svgIcon(x.svg), el('span', { text: x.t }))));
     root.dataset.tool = S.space ? 'move' : S.tool;
   };
   const panning = (): boolean => S.tool === 'move' || S.space;
@@ -341,6 +341,6 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
     },
   };
   cur = api;
-  if (!fallback && !o.html.includes('<')) toast('와이어프레임 그림을 읽지 못했어요 — ' + WIREFRAME_PATH);
+  if (!fallback && !o.html.includes('<')) toast('와이어프레임을 읽지 못했어요. (' + WIREFRAME_PATH + ')');
   return api;
 }

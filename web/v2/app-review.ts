@@ -85,9 +85,9 @@ export function openReview(host: ReviewHost): ReviewApi {
   });
   gen.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); gen.blur(); } });
   const note = el('span', { class: 'v2-review-note', hidden: true });
-  const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위로 · 아래로', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
+  const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
   bar.append(
-    el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요 — 적은 코멘트는 그대로예요', onclick: () => host.onBack() }),
+    el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요. 적은 코멘트는 그대로 남아요.', onclick: () => host.onBack() }),
     el('span', { class: 'v2-review-name' }, name, ver), mode, el('i', { class: 'v2-review-sep' }),
     tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
     hint);
@@ -103,16 +103,17 @@ export function openReview(host: ReviewHost): ReviewApi {
   const changed = (): void => { host.onChange({ pins: host.pins, general: host.general }); paintBar(); };
   const paintBar = (): void => {
     const n = cmCount();
-    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + ' — ' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
-    count.textContent = '코멘트 ' + n + '건' + (host.pins.length > n ? ' · 짚음 ' + host.pins.length : '');
+    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
+    const blank = host.pins.filter((p) => !p.note.trim()).length;
+    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
-    send.textContent = host.waiting ? 'AI 고치는 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
+    send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
     if (document.activeElement !== gen) gen.value = host.general;   // 허브 · 코멘트 칸에서 고친 것도 막대 칸에 · 치는 중엔 건드리지 않는다
     gen.disabled = host.waiting;
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI 가 고치는 중이에요 · 다음 버전이 오면 이 화면의 앱이 바뀌어요' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요 — 앱 화면이 뜨면 여기서 코멘트를 남길 수 있어요') : t.t + ' — ' + t.help;
+    hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 다음 버전이 나오면 앱이 바뀌어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
     layer.hidden = !S.frame || host.waiting;
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
   };
@@ -241,14 +242,14 @@ export function openReview(host: ReviewHost): ReviewApi {
       const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; changed(); });
       const wire = p.on === 'wire';
-      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에서 짚은 곳 — 앱빌더의 「와이어프레임(화면 흐름) 보기」 에서 보여요' : '그 자리 보기', disabled: wire, onclick: () => { closeTray(); openPop(i); } }),
+      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '그 자리 보기', disabled: wire, onclick: () => { closeTray(); openPop(i); } }),
         el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '취소 — 이 자리 코멘트를 지워요', onclick: () => { removePin(i); closeTray(); openTray(); } }));
+        el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(i); closeTray(); openTray(); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = host.general;
     g.addEventListener('input', () => { host.general = g.value; changed(); });
     const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' },
-      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 코멘트 칸이 열려요' : '막대의 선택 · 핀 · 영역으로 고칠 곳을 짚어 보세요' })),
+      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 코멘트 칸이 열려요' : '막대의 선택 · 핀 · 영역으로 고칠 곳에 코멘트를 남겨주세요' })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));
     tray = t;
@@ -266,7 +267,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const tickWait = (): void => {
     if (!host.waiting || S.dead) return;
     const s = Math.floor((Date.now() - S.waitT0) / 1000);
-    send.textContent = 'AI 고치는 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    send.textContent = 'AI 수정 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
     S.waitTick = window.setTimeout(tickWait, 1000);
   };
 

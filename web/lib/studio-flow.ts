@@ -19,9 +19,9 @@ export function stageIndex(s: 'what' | StudioStage): number { return STAGES.find
 
 // 사람에게 보이는 이름은 둘로 통일한다(원준 2026-10-14) — 세션 오른쪽에 붙는 것 = 「세션 위젯」, 화면 전체로 여는 것 = 「앱 화면」.
 export const PLACE: Record<StudioPlace, { title: string; sub: string; say: string; width: string }> = {
-  side: { title: '세션 위젯', sub: 'AI 세션 오른쪽에 붙여 같이 써요. 세션에 말로 시키면 AI 가 위젯 내용도 읽고 바꿔요', say: '세션 위젯(세션 오른쪽 사이드바, 폭 340px 안팎)으로 붙여 쓰는 앱이야. 좁은 폭에서 잘 보이게 만들어 줘.', width: '세션 위젯 폭(360px)' },
-  full: { title: '앱 화면', sub: '앱 찾기에서 열어 화면 전체로 넓게 써요', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. 넓은 화면에 맞게 만들어 줘.', width: '앱 화면 폭' },
-  both: { title: '둘 다', sub: '세션 위젯으로도, 앱 화면으로도 써요', say: '세션 위젯(세션 오른쪽 좁은 사이드바)으로도 붙이고 화면 전체로도 여는 앱이야. 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 위젯 폭과 앱 화면 폭 둘 다' },
+  side: { title: '세션 위젯', sub: 'AI 세션 오른쪽에 붙여 써요. AI에게 말하면 위젯 내용을 읽고 바꿔줘요.', say: '세션 위젯(세션 오른쪽 사이드바, 폭 340px 안팎)으로 붙여 쓰는 앱이야. 좁은 폭에서 잘 보이게 만들어 줘.', width: '세션 위젯 폭(360px)' },
+  full: { title: '앱 화면', sub: '앱 찾기에서 열어 전체 화면으로 써요.', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. 넓은 화면에 맞게 만들어 줘.', width: '앱 화면 폭' },
+  both: { title: '둘 다', sub: '세션 위젯으로도, 앱 화면으로도 써요.', say: '세션 위젯(세션 오른쪽 좁은 사이드바)으로도 붙이고 화면 전체로도 여는 앱이야. 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 위젯 폭과 앱 화면 폭 둘 다' },
 };
 
 //  ref(참고한 것) — 원준 2026-10-15 «초안 만들 때 비슷한 다른 앱이나 서비스 있으면 구조나 기능 같은 거 벤치마크해서 참고해서». 옛 카드엔 없다(빈 글로 읽는다).
@@ -29,11 +29,11 @@ export interface StudioCard { name: string; who: string; items: string; can: str
 export const CARD_ROWS: Array<{ k: keyof StudioCard; label: string; hint: string }> = [
   { k: 'name', label: '이름', hint: '짧은 한글 이름' },
   { k: 'who', label: '누가 쓰나', hint: '예: 회의를 준비하는 사람과 참석자' },
-  { k: 'items', label: '무엇을 적나', hint: '칸 이름들 · 예: 안건 제목 · 날짜 · 끝남 표시' },
-  { k: 'can', label: '할 수 있는 것', hint: '셋 · 예: 더하기 · 회의별 보기 · 끝난 것 접기' },
-  { k: 'not', label: '안 하는 것', hint: '예: 회의록 쓰기 · 알림 보내기' },
+  { k: 'items', label: '무엇을 적나', hint: '예: 안건 제목, 날짜, 끝남 표시' },
+  { k: 'can', label: '할 수 있는 것', hint: '세 가지. 예: 더하기, 회의별 보기, 끝난 것 접기' },
+  { k: 'not', label: '안 하는 것', hint: '예: 회의록 쓰기, 알림 보내기' },
   { k: 'first', label: '첫 화면', hint: '예: 이번 회의 안건 목록(안 끝난 것 먼저)' },
-  { k: 'ref', label: '참고한 것', hint: '비슷한 앱 · 서비스에서 가져온 구조 · 기능 · 예: Otter 의 회의 목록 + 정리본 탭' },
+  { k: 'ref', label: '참고한 것', hint: '비슷한 서비스에서 가져온 구조나 기능. 예: Otter의 회의 목록과 정리본 탭' },
 ];
 const KEY_OF: Array<[RegExp, keyof StudioCard]> = [
   [/^이름$/, 'name'], [/^누가/, 'who'], [/^(무엇을적나|적는것|무엇을|적는칸|칸)$/, 'items'],
