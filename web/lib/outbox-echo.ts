@@ -38,6 +38,13 @@ export function exactPrompt(said: string, line: string): boolean {
   return !!a && a === norm(line);
 }
 
+/** (순수) #4794 «다 쳤다» 알림(outbox.typed)의 머리 — 서버 session-outbox typedHead 와 **같은 글자**를 만든다(공백을 하나로 접고 다듬은 뒤
+ *  앞 PROMPT_HEAD 자). 화면은 기다리던 말의 머리를 이것으로 만들어 알림의 head 와 그대로 견준다. 같은 말 판정(samePrompt)과 같은 접기·길이다 —
+ *  잘린 머리를 samePrompt 에 넣지 않는 이유: 160번째 글자가 공백이면 다듬기에 잘려 긴 말이 안 맞는다. 계약: scripts/outbox-typed-contract.test.mjs. */
+export function promptHead(text: string): string {
+  return norm(text).slice(0, PROMPT_HEAD);
+}
+
 /**
  * (순수) 이 행의 말이 이미 그린 기록의 사람 말 턴에 있나.
  *  하한 = 행이 생긴 때 − 5초(그 앞의 같은 말은 같은 지시를 두 번 보낸 앞 것). 사람 말 줄의 시각은 **제출한 때**이고 아웃박스는 치고

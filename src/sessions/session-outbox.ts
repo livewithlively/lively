@@ -51,6 +51,7 @@ import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 �
 import { oneLineOf, pastesFor } from "../terminal/send-keys.js";     // #4818 — 친 한 줄의 정본 · 붙여넣기로 싣는 하네스
 import { submitGuard, SUBMIT_PEEK_LINES } from "../terminal/submit-check.js";   // #4818 — Enter 뒤 입력칸에 우리 글이 남았나(화면)
 import { logger } from "../log.js";
+import { emitSessionEvent, sessionListenerCount } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 
@@ -170,6 +171,19 @@ export function echoNeedle(oneLine: string): string {
 }
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 줄을 가르는 글자는 공백으로). 에코도 이 형태로 찾아야 한다 — 그래서 같은 함수다. */
 export const flatOneLine = (text: string): string => oneLineOf(text);
+
+/** #4794 «다 쳤다» 알림의 머리 — 공백을 하나로 접고 앞뒤를 다듬은 뒤 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
+ *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 접기·같은 길이다.
+ *  ⚠ 두 함수가 갈리면 긴 말이 안 맞아 넘김이 유예(8초)로 밀린다 — 계약 시험 scripts/outbox-typed-contract.test.mjs 가 맞춘다. */
+export const typedHead = (text: string): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, ECHO_HEAD_CHARS);
+
+/** #4794 아웃박스가 사람의 말을 다 치고 Enter 까지 눌렀다 — 세션 상태 통로로 알린다(화면이 터미널로 넘기는 신호).
+ *  듣는 쪽 수를 남긴다 — 그 신호가 운영에서 실제로 닿았는지(아무도 안 들었으면 화면은 에코·유예로 넘겼다)를 여기서 읽는다. */
+export function emitTypedNotice(sessionId: string, row: Pick<OutboxRow, "id" | "text">): void {
+  const listeners = sessionListenerCount(sessionId);
+  emitSessionEvent(sessionId, { t: "outbox.typed", id: row.id, head: typedHead(row.text) });
+  logger.info({ sessionId, outboxId: row.id, listeners }, "outbox: 다 쳤다 알림");
+}
 
 // ── 저장 ────────────────────────────────────────────────────────────────────────
 export async function enqueuePrompt(sessionId: string, text: string, opts?: { trustOk?: boolean; kind?: OutboxKind }): Promise<{ id: number; seq: number }> {
@@ -403,7 +417,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const sent = await sendReadyRow(row, harness, exec, (oneLine, tick) => waitEcho(sessionId, st, oneLine, tick));
+    const sent = await sendReadyRow(row, harness, exec, (oneLine, tick) => waitEcho(sessionId, st, oneLine, tick), undefined, () => emitTypedNotice(sessionId, row));
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
@@ -441,6 +455,12 @@ export type SendOutcome =
  *   ② 에코를 기다리는 동안 **입력칸을 본다**(submit-check — 우리 글이 그대로 남아 있으면 Enter 를 더 누른다, 행당 SUBMIT_PRESS_MAX)
  *   ③ 창 끝의 «미제출 방어 Enter» 도 화면으로 거른다(비었거나·다른 글·대화상자면 안 누른다 · 입력칸을 모르면 종전대로 누른다).
  *   `echo` 는 폴마다 `tick` 을 불러 준다(waitEcho). 시험은 가짜 시계(`clock`)를 넘긴다.
+ *
+ *  onTyped(#4794) — 사람의 말(prompt)을 **다 치고 Enter 까지 누른 순간** 한 번 부른다(에코를 기다리기 전). 사람에게 «보냈다» 는 이때다:
+ *   Claude Code 는 제출 훅을 다 돈 뒤에야 그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16:
+ *   제출 10.57초 · 기록에 적힘 14.51초). 쳤는지 모르는 갈래(echo-only)·설정 명령(control)·못 친 갈래에선 부르지 않는다.
+ *   ⚠ 배달의 확정은 여전히 에코다 — 이 알림으로 delivered 를 매기지 않는다(Enter 가 줄바꿈으로 먹힌 판이 있다).
+ *   시계(clock) 뒤 마지막 인자다 — #4818 의 시험이 넷째·다섯째 자리를 쓴다.
  */
 export async function sendReadyRow(
   row: Pick<OutboxRow, "text" | "kind">,
@@ -448,6 +468,7 @@ export async function sendReadyRow(
   exec: Pick<OutboxExec, "type" | "enter" | "peek">,
   echo: (oneLine: string, tick?: () => Promise<void>) => Promise<"confirmed" | "timeout" | "unreadable">,
   clock: { now: () => number } = { now: Date.now },
+  onTyped?: () => void,
 ): Promise<SendOutcome> {
   const oneLine = flatOneLine(row.text);
   //  붙여넣는 것은 **사람이 보낸 말**뿐이다. 설정 명령(control)은 앞에 «치던 글 치워 두기» 키(Ctrl+S)가 붙어 있어 키로 쳐야 한다
@@ -464,6 +485,7 @@ export async function sendReadyRow(
   //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
   //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
   if (row.kind === "control") return { kind: "mark", status: "sent", error: "control-no-echo" };
+  try { onTyped?.(); } catch (e) { logger.warn({ err: e }, "outbox: «다 쳤다» 알림 실패(비치명)"); }
   //  claude 만 지킨다 — 다른 하네스의 입력칸 문법은 모른다(needsSubmitRetry 와 같은 경계).
   const guard = harness === "claude"
     ? submitGuard({
