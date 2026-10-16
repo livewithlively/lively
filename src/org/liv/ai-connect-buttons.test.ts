@@ -47,15 +47,21 @@ test("② 그래도 빠져나갈 문은 **하나** 남아 있다 — 사람을 �
   assert.deepEqual(subs, [], `로그인 화면 아래에 곁다리 버튼이 다시 늘었다(${subs.length}개)`);
 });
 
-test("③ 성공하면 목록 화면으로 간다 — 이 흐름을 지운 적 없다(무회귀)", () => {
+//  ★ #4213 T13(상민님 2026-10-15 To-Be) — 처음 설정의 끝은 «Claude 로그인 1번» 이다. 로그인이 확인되면 종전의 «다른 AI 4장»(#2232)을
+//   늘어놓지 않고 «Claude 에 연결해 두신 앱» 을 보여 준 뒤 [리브와 시작하기] 하나로 넘긴다. 다른 AI 는 [내 설정 ▸ AI 계정 연결]에서 잇는다.
+test("③ (T13) 성공하면 이 장면을 다시 그려 «연결됐어요 + Claude 에 연결해 두신 앱 + [리브와 시작하기]» 로 넘긴다", () => {
   const BIND = SRC.slice(SRC.indexOf("      bind: (el) => {", SRC.indexOf("    claude: {")));
   //  #4051 — 알림 문구는 «사람 없이 도는 작업» 허용이 남았는지에 따라 갈린다(scripts/onboarding-headless.test.mjs W9 가 잠근다).
-  //   여기서 지키는 것은 «성공하면 이 장면을 다시 그린다» 하나다.
   assert.match(BIND, /const pass = \(name, key\) => \{ mark\(name, key\); toast\([^;]*\); renderScene\('claude', false\); \};/,
-    "성공 뒤 이 장면을 다시 그리지 않는다 — «연결됨 체크» 목록 화면에 못 닿는다");
-  assert.match(SCENE, /연결됨<\/span><\/span><span class="ob-oc-chk">/,
-    "연결된 AI 를 체크로 보여 주는 카드가 사라졌다");
-  assert.match(SCENE, /data-more=/, "목록에서 다른 AI 를 눌러 추가 연결하는 길이 사라졌다");
+    "성공 뒤 이 장면을 다시 그리지 않는다 — «연결됐어요» 화면에 못 닿는다");
+  const OK = SCENE.slice(SCENE.indexOf("if (aiOn(c.harness)) {"), SCENE.indexOf("if (c.installed === false) {"));
+  assert.ok(OK.length > 100, "연결됨 갈래를 못 잘랐다 — 검사가 헛돈다");
+  assert.match(OK, /claudeAppsHtml\(c\.harness\)/, "«Claude 에 연결해 두신 앱» 칸이 없다");
+  assert.match(OK, /id="cGo">리브와 시작하기</, "주 버튼이 리브로 넘기는 한 문이 아니다");
+  assert.doesNotMatch(OK, /data-more=/, "다른 AI 카드가 다시 섰다 — 처음 설정의 끝은 Claude 로그인 한 번이다");
+  //  «Claude 를 쓰지 않으시나요?» 는 로그인 화면의 안내 글 속 링크다(아래 문을 늘리지 않는다 — ①②).
+  assert.match(SCENE, /data-other-ai/, "Claude 를 안 쓰는 사람의 길(AI 고르기)이 사라졌다");
+  assert.match(BIND, /oa\.onclick = \(\) => \{ AIC = null; goScene\('ai'\); \}/, "«다른 AI 로 연결하기» 가 AI 고르기로 안 간다");
 });
 
 test("④ 합쳐진 문이 «이미 이어진 AI» 를 잃지 않는다(옛 [이대로 계속]의 뜻)", () => {

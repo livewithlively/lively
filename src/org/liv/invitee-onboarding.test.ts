@@ -13,11 +13,16 @@
 //   · «터미널 → 내 컴퓨터 연결 / 앱 받기» 는 처음 가입한 사람을 포함해 **모든 합류자에게** — *"이거는 필요하겠다"*.
 //  ⚠ 9/13 의 «설치 장면은 초대 전부터 계정이 있던 사람에게만»·«아무도 안 정했으면 용도를 묻는다» 는 이 결정으로 **뒤집혔다**.
 //
-//  엣지 표(합류 · 켜진 팀 수집) → 차례표:
-//   F1 주인(합류 아님)  → ORDER 그대로
-//   F2 합류 · 수집 2     → intro team name files ai claude sources terminal local app
-//   F3 합류 · 수집 0     → intro team name files ai claude terminal local app
-//   F4 어느 합류 갈래에도 stage·role·connect 가 없고, 끝은 앱 받기다
+//  ★ #4213 T13(상민님 2026-10-15 To-Be — 지식 connect-collect-tobe-claude-connector-4213 §7) — 처음 설정은 «Claude 로그인 + 리브 대화» 다.
+//   두 차례표가 Claude 로그인으로 끝나고, 합류자도 리브(«팀이 쓰는 앱 중 Claude 에 빠진 것만 연결», 2턴 없음)로 간다.
+//   위 9/13·9/14 결정 중 «합류자에게 리브를 띄우지 않는다» 와 «합류자 차례표의 파일·AI 고르기·팀 수집 보기·설치 장면» 은 이 결정으로 뒤집혔다.
+//   그대로 지키는 것: 합류자는 용도·부서를 정하지 않는다 · 팀 구조(서랍·정리 규칙)를 합류자가 만들지 않는다(서버 welcome-join · second-turn).
+//   차례에서 빠진 장면(sources·connect·stage·role·files)의 합류자 가드는 검토 점프(?scene=)로 열릴 때를 위해 그대로 지킨다(R1~R2·C4).
+//
+//  엣지 표(합류 여부) → 차례표:
+//   F1 주인(합류 아님)  → intro name claude
+//   F2 합류             → intro team name claude
+//   F4 어느 갈래에도 빠진 장면 9개가 없고, 끝은 Claude 로그인이다
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -49,43 +54,44 @@ type Fn = (...args: unknown[]) => unknown;
 const compile = (params: string[], body: string): Fn => new Function(...params, body) as unknown as Fn;
 
 /** 소스의 flowFor 를 그대로 돌린다 — 글자가 아니라 계산 결과로 단언한다. */
-type Facts = { join: boolean; teamSources: number };
-const flowOf = (f: Facts): string[] => compile(["ORDER", "ORDER_JOIN", "JOIN_INSTALL", "f"],
-  `${blockFrom(code, "function flowFor(f) {")}\nreturn flowFor(f);`)(list("ORDER"), list("ORDER_JOIN"), list("JOIN_INSTALL"), f) as string[];
+type Facts = { join: boolean };
+const flowOf = (f: Facts): string[] => compile(["ORDER", "ORDER_JOIN", "f"],
+  `${blockFrom(code, "function flowFor(f) {")}\nreturn flowFor(f);`)(list("ORDER"), list("ORDER_JOIN"), f) as string[];
+const RETIRED = ["stage", "role", "files", "ai", "sources", "connect", "terminal", "local", "app"];
 
-test("F1 주인의 차례표는 종전 그대로다 (무회귀)", () => {
-  const solo = list("ORDER");
-  assert.deepEqual(flowOf({ join: false, teamSources: 3 }), solo);
-  assert.ok(solo.includes("stage") && solo.includes("role") && solo.includes("connect") && !solo.includes("team"), "주인 차례표가 바뀌었다");
+test("F1 ★주인 — 인사 · 이름 · Claude 로그인 (T13)", () => {
+  assert.deepEqual(flowOf({ join: false }), ["intro", "name", "claude"]);
 });
 
-test("F2·F3 ★합류자 — 용도·부서를 묻지 않고, 터미널·내 컴퓨터·앱 받기는 처음 가입한 사람에게도 붙는다 (원준 2026-09-14)", () => {
-  assert.deepEqual(flowOf({ join: true, teamSources: 2 }),
-    ["intro", "team", "name", "files", "ai", "claude", "sources", "terminal", "local", "app"]);
-  assert.deepEqual(flowOf({ join: true, teamSources: 0 }),
-    ["intro", "team", "name", "files", "ai", "claude", "terminal", "local", "app"]);
+test("F2 ★합류자 — 인사 · 팀 소개 · 이름 · Claude 로그인 (T13)", () => {
+  assert.deepEqual(flowOf({ join: true }), ["intro", "team", "name", "claude"]);
 });
 
-test("F4 어느 합류 갈래에도 stage·role·connect 가 없고, 끝은 앱 받기다", () => {
-  for (const teamSources of [0, 1, 3]) {
-    const f = flowOf({ join: true, teamSources });
-    for (const k of ["stage", "role", "connect"]) assert.ok(!f.includes(k), `합류자 차례표에 ${k} 가 있다: ${f.join(",")}`);
-    assert.equal(f[0], "intro"); assert.equal(f[1], "team");
-    assert.equal(f[f.length - 1], "app", `합류자 차례표가 앱 받기로 끝나지 않는다: ${f.join(",")}`);
+test("F4 어느 갈래에도 차례에서 빠진 장면 9개가 없고, 끝은 Claude 로그인이다", () => {
+  for (const join of [false, true]) {
+    const f = flowOf({ join });
+    for (const k of RETIRED) assert.ok(!f.includes(k), `차례표에 빠진 장면 ${k} 가 있다: ${f.join(",")}`);
+    assert.equal(f[0], "intro");
+    assert.equal(f[f.length - 1], "claude", `차례표가 Claude 로그인으로 끝나지 않는다: ${f.join(",")}`);
   }
+});
+
+test("F5 빠진 장면도 주소록엔 있다 — 검토 점프(?scene=)·«다른 AI» 문·옛 진행 이어 열기가 그 장면을 알아본다", () => {
+  assert.match(code, /const STEP_OF = Object\.fromEntries\(SEQ_ALL\.map\(\(k, i\) => \[k, i\]\)\);/, "주소록이 전체 순서가 아니라 차례표로 만들어진다 — 빠진 장면이 «없는 장면» 이 된다");
+  for (const k of RETIRED) assert.ok(list("SEQ_ALL").includes(k), `전체 순서에 ${k} 가 없다`);
 });
 
 test("F7 차례표는 서버 사실 둘(합류 여부 · 켜진 팀 수집)로만 갈린다 — 초대 전 계정 여부·용도 유무로 갈리지 않는다", () => {
   assert.match(code, /if \(WS && WS\.joining\) JOIN = WS\.joining;/, "서버의 joining 을 안 싣는다");
   assert.match(code, /const isJoin = \(\) => !!\(JOIN && JOIN\.is_join\);/, "판정이 서버 사실에서 파생되지 않는다");
-  assert.match(code, /const FLOW = \(\) => flowFor\(\{ join: isJoin\(\), teamSources: teamCollectOn\(\)\.length \}\);/,
+  assert.match(code, /const FLOW = \(\) => flowFor\(\{ join: isJoin\(\) \}\);/,
     "화면이 쓰는 차례표가 flowFor 를 안 거친다(또는 다른 사실로 갈린다)");
   //  물려받기 — 합류자만, 지금 이 화면에서 고른 값은 덮지 않는다.
   assert.match(code, /if \(isJoin\(\) && WS && WS\.workspace_purpose && !S\.stage\) \{ S\.stage = String\(WS\.workspace_purpose\); save\(\); \}/,
     "먼저 정한 사람의 용도를 물려받지 않는다");
-  //  진행 눈금은 실제 차례표를 따른다.
-  assert.match(code, /const QPROG = \(\) => QPROG_ALL\.filter\(\(k\) => FLOW\(\)\.includes\(k\)\);/, "진행 눈금이 실제 차례표와 어긋난다");
-  for (const k of new Set([...list("ORDER"), ...list("ORDER_JOIN"), ...list("JOIN_INSTALL")])) {
+  //  진행 눈금은 실제 차례표를 따른다(T13 — 질문 장면이 하나뿐이면 그리지 않는다).
+  assert.match(code, /const QPROG = \(\) => \{ const q = QPROG_ALL\.filter\(\(k\) => FLOW\(\)\.includes\(k\)\); return q\.length > 1 \? q : \[\]; \};/, "진행 눈금이 실제 차례표와 어긋난다");
+  for (const k of new Set([...list("ORDER"), ...list("ORDER_JOIN")])) {
     if (["intro", "team", "name"].includes(k)) continue;
     assert.ok(list("QPROG_ALL").includes(k), `진행 눈금 표에 ${k} 가 없다`);
   }
@@ -105,14 +111,20 @@ test("F8 이름 다음·AI 다음은 차례표가 정한다 — 차례표의 끝
   const run = (flow: string[], cur: string) => { const hit = { to: "", fin: false }; goNext(SEQ, () => flow, (k: string) => { hit.to = k; }, () => { hit.fin = true; }, cur); return hit; };
   assert.deepEqual(run(["intro", "team", "name", "files", "ai", "claude"], "claude"), { to: "", fin: true }, "차례표 끝(claude)에서 마무리로 안 간다");
   assert.deepEqual(run(["intro", "team", "name", "files", "ai", "claude", "terminal", "local", "app"], "claude"), { to: "terminal", fin: false }, "건너뛴 sources 뒤를 못 찾는다");
-  assert.deepEqual(run(list("ORDER"), "claude"), { to: "sources", fin: false }, "주인의 AI 다음이 sources 가 아니다(무회귀)");
+  assert.deepEqual(run(list("ORDER"), "claude"), { to: "", fin: true }, "(T13) 주인의 Claude 로그인 다음은 마무리(리브)다");
+  assert.deepEqual(run(list("ORDER_JOIN"), "claude"), { to: "", fin: true }, "(T13) 합류자의 Claude 로그인 다음도 마무리(리브)다");
+  //  «다른 AI» 로 연 AI 고르기(차례 밖)에서 나가도 차례표 끝이라 마무리로 간다
+  assert.deepEqual(run(list("ORDER"), "ai"), { to: "claude", fin: false }, "차례 밖 AI 고르기 다음이 Claude 로그인이 아니다");
 });
 
-test("F9 옛 판에서 용도·부서·외부 앱 장면에 멈춰 있던 합류자는 다음 남은 장면부터 이어 간다 (배포 직후 진행 중이던 사람)", () => {
+test("F9 (T13) 옛 판에서 빠진 장면에 멈춰 있던 사람은 지금 차례의 다음 장면(없으면 Claude 로그인)부터 이어 간다 (배포 직후 진행 중이던 사람)", () => {
   const fit = compile(["SEQ_ALL", "FLOW", "key"], `${blockFrom(code, "function fitScene(key) {")}\nreturn fitScene(key);`);
-  const flow = flowOf({ join: true, teamSources: 0 });
-  for (const saved of ["stage", "role"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "files", `저장본 ${saved} 가 자료 올리기로 안 이어진다`);
-  for (const saved of ["sources", "connect"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "terminal", `저장본 ${saved} 가 터미널로 안 이어진다`);
+  for (const join of [false, true]) {
+    const flow = flowOf({ join });
+    for (const saved of ["stage", "role", "files", "ai"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "claude", `저장본 ${saved} 가 Claude 로그인으로 안 이어진다`);
+    for (const saved of ["sources", "connect", "terminal", "local", "app"]) assert.equal(fit(list("SEQ_ALL"), () => flow, saved), "claude", `저장본 ${saved} 가 마지막 장면으로 안 간다`);
+  }
+  assert.equal(fit(list("SEQ_ALL"), () => flowOf({ join: false }), "team"), "name", "주인 탭에 남은 팀 소개는 이름으로");
 });
 
 // ── 팀 연결은 보여 주되 고치지 못한다 ────────────────────────────────────────────
@@ -154,13 +166,15 @@ test("C1 합류자 파일 — «팀원 모두가 봅니다» 이고, 업로드�
   assert.match(files, /root=personal&path=' \+ encodeURIComponent\(rel\)\), it\.file,/, "업로드가 옛 share=team 갈래를 아직 태운다");
 });
 
-test("C2 마무리 — 합류자면 리브 없이 홈으로, 판정은 서버 응답을 따른다", () => {
+test("C2 (T13) 마무리 — 합류자도 서버가 연 리브로 간다 · 못 열었을 때만 홈 · 판정은 서버 응답을 따른다", () => {
   const fin = blockFrom(code, "async function finishOnboarding() {");
   assert.match(fin, /const joined = applied && applied\.joining \? !!applied\.joining\.is_join : isJoin\(\);/, "마무리가 서버 판정을 안 본다");
-  const joinBranch = blockFrom(fin, "if (joined) {");
-  assert.match(joinBranch, /준비됐어요\. 팀 워크스페이스로 모시겠습니다\./);
-  assert.match(joinBranch, /location\.hash = '#\/';/, "합류자를 홈으로 안 보낸다");
-  assert.doesNotMatch(joinBranch, /리브|livHref/, "합류자 마무리에 리브 이야기가 남았다");
+  const homeBranch = blockFrom(fin, "if (joined && !livHref) {");
+  assert.match(homeBranch, /준비됐어요\. 팀 워크스페이스로 모시겠습니다\./);
+  assert.match(homeBranch, /location\.hash = '#\/';/, "리브가 안 열린 합류자를 홈으로 안 보낸다");
+  //  리브가 열렸으면 합류자에게 맞는 말로 그 자리로 간다
+  assert.match(fin, /joined \? '리브가 팀이 쓰는 앱 가운데 Claude 에 빠진 것이 있는지 보고 있어요\./, "합류자 리브 안내가 없다");
+  assert.match(fin, /location\.hash = livHref \|\| '#\/';/, "열린 리브로 안 보낸다");
 });
 
 test("C3 주인 — AI 를 안 이었을 때 없는 자리를 가리키거나 못 지킬 약속을 하지 않는다", () => {
@@ -183,18 +197,21 @@ test("C4 «하는 일»·용도 장면은 주인 문구뿐이고, 합류자가 �
   }
 });
 
-// ── 리브 1턴 — 주인만 받는다 ─────────────────────────────────────────────────
+// ── 리브 1턴 — 갈래가 섞이지 않는다(T13: 주인은 «처음 연결», 합류자는 «빠진 앱 연결») ──────────────────
 const base = (over: Partial<FirstTurnInput> = {}): FirstTurnInput => ({
-  displayName: "수아", purpose: null, work: null, drawers: [], firstOrder: null, decisions: [],
-  uploads: { total: 3, kinds: [], names: ["a", "b", "c"], forms: [] },
-  categories: [{ name: "산출물" }], collectors: [], aiHarnesses: ["claude"], harness: "claude", ...over,
+  flow: "connect", displayName: "수아", othersCount: 0, isAdmin: true, policy: "allowed",
+  connectors: { scan: null, apps: [] }, collectApps: ["Slack"], units: [], collectors: [], teamApps: [],
+  uploads: { total: 3, kinds: [], names: ["a", "b", "c"] }, aiHarnesses: ["claude"], harness: "claude", ...over,
 });
 
-test("⑥ 혼자 여는 사람의 1턴은 종전 그대로다 (무회귀)", () => {
+test("⑥ 주인의 1턴엔 합류자 절차가 없고, 합류자의 1턴엔 처음 수집·초대가 없다", () => {
   const p = buildFirstTurnPrompt(base());
-  assert.match(p, /- 올린 자료 3건/);
-  assert.doesNotMatch(p, /합류/);
-  assert.doesNotMatch(p, /팀에 이미 쌓인 지식/);
+  assert.match(p, /- 올려 둔 자료 3건/);
+  assert.doesNotMatch(p, /합류자/);
+  const j = buildFirstTurnPrompt(base({ flow: "join" }));
+  assert.match(j, /«합류자» 절차/);
+  assert.doesNotMatch(j, /mode:"collect"/);
+  assert.doesNotMatch(j, /팀원 초대 제안/);
 });
 
 // ── #3872 후속(2026-09-13) — 개인 워크스페이스가 «구성원 2명 팀» 이 되던 것 ──

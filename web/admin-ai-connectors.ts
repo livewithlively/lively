@@ -6,30 +6,11 @@
 //  ⚠ 자리를 [AI 도구]가 아니라 여기 둔 이유: [AI 도구]는 개인형 워크스페이스(ui_profile=personal)에서 숨겨진다
 //   (admin-shell PERSONAL_HIDDEN). 이 정책은 «구성원의 AI 계정» 에 관한 것이라 [AI 실행 계정] 옆이 맞고, 여기는 숨겨지지 않는다.
 import { api, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
+import { CLAUDE_CONNECTOR_STATUS_LABEL, scanErrorText } from './lib/claude-connectors.js';
 
-/** 상태 이름 — 이름이라 명사로 둔다(설명문이 아니다). 서버 상태 표(org/store/member-ai-connectors.ts)와 한 벌. */
-const STATUS_LABEL: Record<string, string> = {
-  connected: '연결됨',
-  'needs-auth': '다시 로그인 필요',
-  failed: '연결 실패',
-  pending: '승인 대기',
-  unknown: '상태 모름',
-  removed: '끊음',
-};
-
-/** 확인 실패 사유 → 사람 말. 모르는 사유는 뭉뚱그려 «확인하지 못했어요» — 내부 코드를 그대로 보이지 않는다. */
-export function scanErrorText(error: string | null | undefined): string {
-  switch (String(error || '')) {
-    case 'not-logged-in': return 'Claude 에 로그인돼 있지 않아요.';
-    case 'not-claude-ai-login': return 'Claude 계정이 아니라 API 키로 로그인돼 있어 커넥터가 보이지 않아요.';
-    case 'no-cli': return '이 자리에 Claude Code 가 없어요.';
-    case 'timeout': return '확인하는 데 시간이 너무 오래 걸렸어요.';
-    case 'no-capacity': return '지금 자리가 모자라 확인하지 못했어요. 잠시 뒤 다시 해 주세요.';
-    case 'no-claude-ai-connectors': return '수집 실행에서 Claude 커넥터가 하나도 보이지 않았어요.';
-    case 'unconfirmed-empty': return '연결해 둔 앱이 한 번에 모두 보이지 않았어요. 로그인이 풀렸을 수도 있어 한 번 더 확인하면 반영합니다.';
-    default: return '확인하지 못했어요.';
-  }
-}
+//  상태 이름·확인 실패 사유는 처음 설정·[외부 앱 연결] 현황판과 한 벌이다(#4213 T13 — lib/claude-connectors.ts).
+const STATUS_LABEL = CLAUDE_CONNECTOR_STATUS_LABEL;
+export { scanErrorText };
 
 export async function memberAiConnectorsPanel(host: HTMLElement, data: any): Promise<void> {
   const canEdit = !!data?.canEdit;

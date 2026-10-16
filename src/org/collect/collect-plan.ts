@@ -26,8 +26,28 @@ export type CollectMode = "probe" | "listing" | "collect";
 /** 목록·수집을 아는 앱 — 앱 키(source.external_system) → claude.ai 커넥터 이름. */
 export const CLAUDE_COLLECT_APPS: Readonly<Record<string, string>> = { slack: "Slack", gmail: "Gmail", notion: "Notion" };
 
-/** 처음 읽는 단위(읽은 위치 없음)는 최근 이만큼만 — 처음 수집 기간은 나중에 리브가 대화로 정한다(확정판 §5). */
+/** 처음 읽는 단위(읽은 위치 없음)는 최근 이만큼만 — 단위의 `meta.first_days` 가 있으면 그 값(리브가 대화로 정한다, 확정판 §5 · T13). */
 export const FIRST_READ_DAYS = 14;
+/** 단위가 정할 수 있는 처음 기간의 상한(일). 넘는 값·정수가 아닌 값은 무시하고 기본값으로 읽는다. */
+export const FIRST_READ_DAYS_MAX = 365;
+
+/** (순수) 단위 메타데이터의 처음 기간 — 1~FIRST_READ_DAYS_MAX 의 정수만, 아니면 null(기본값을 쓴다). */
+export function firstReadDaysOf(meta: unknown): number | null {
+  const v = meta && typeof meta === "object" ? (meta as Record<string, unknown>).first_days : undefined;
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= FIRST_READ_DAYS_MAX ? v : null;
+}
+/**
+ * (순수) 쓰는 자리의 검사 — meta 에 first_days 를 넣었는데 쓸 수 없는 값이면 그 사유. 없거나 null(지우기)이면 null.
+ *  읽는 자리(firstReadDaysOf)는 못 쓰는 값을 조용히 기본값으로 읽는다 — 쓰는 쪽이 모델이라, 거절하지 않으면 리브는
+ *  «90일로 정했다» 고 믿는데 실제로는 14일을 읽는다(격리 리뷰 2026-10-17). 그래서 쓸 때 400 으로 돌려준다.
+ */
+export function firstDaysError(meta: unknown): string | null {
+  if (!meta || typeof meta !== "object" || !Object.prototype.hasOwnProperty.call(meta, "first_days")) return null;
+  const v = (meta as Record<string, unknown>).first_days;
+  if (v === null) return null;
+  if (firstReadDaysOf(meta) !== null) return null;
+  return `meta.first_days 는 1~${FIRST_READ_DAYS_MAX} 사이의 정수(일)여야 합니다 — 받은 값 ${String(JSON.stringify(v) ?? v).slice(0, 40)}`;
+}
 /** 한 판이 읽는 구간의 최대(초) — 따라잡을 때 한 번에 이만큼씩. 못 다 읽으면 반씩 줄어 MIN_WINDOW_SEC 까지. */
 export const SLACK_WINDOW_SEC = 7 * 86400;
 export const GMAIL_WINDOW_SEC = 86400;
@@ -119,10 +139,11 @@ const epochSec = (iso: string | null | undefined): number | null => {
   return Number.isFinite(t) ? Math.floor(t / 1000) : null;
 };
 
-/** 단위의 읽기 시작점 — 읽은 위치(cursor) → 수집기에서 넘어온 단위면 last_item_at → 처음이면 최근 FIRST_READ_DAYS 일. */
-export function unitSince(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean }, now: number): string | null {
+/** 단위의 읽기 시작점 — 읽은 위치(cursor) → 수집기에서 넘어온 단위면 last_item_at → 처음이면 최근 first_days(없으면 FIRST_READ_DAYS) 일. */
+export function unitSince(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean; first_days?: number | null }, now: number): string | null {
   const c = u.cursor ?? {};
-  const first = Math.floor(now / 1000) - FIRST_READ_DAYS * 86400;
+  const days = firstReadDaysOf({ first_days: u.first_days }) ?? FIRST_READ_DAYS;
+  const first = Math.floor(now / 1000) - days * 86400;
   if (u.app === "slack") {
     if (typeof c.ts === "string" && SLACK_TS.test(c.ts)) return c.ts;
     const lia = u.from_collector ? epochSec(u.last_item_at) : null;
@@ -136,7 +157,7 @@ export function unitSince(u: { app: string; cursor: Record<string, unknown> | nu
 }
 
 /** 이번 판의 구간 — 시작에서 구간 길이(저장된 span 또는 앱의 최대)만큼, 그 끝이 지금 이후면 끝 없음(null). 노션은 구간이 없다. */
-export function unitWindow(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean }, now: number): { since: string | null; until: string | null; span: number | null } {
+export function unitWindow(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean; first_days?: number | null }, now: number): { since: string | null; until: string | null; span: number | null } {
   const since = unitSince(u, now);
   if (since == null) return { since, until: null, span: null };
   const nowSec = Math.floor(now / 1000);
@@ -174,6 +195,8 @@ export interface AssignedLike {
   cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean;
   /** #4744 지금 읽을 때가 됐나 — 때가 된 단위가 먼저 실린다(주기 판에 곧 때가 될 단위를 함께 실어도 때가 된 것이 밀려나지 않게). 없으면 때가 된 것으로 본다. */
   due?: boolean;
+  /** 처음 기간(일) — 단위 meta.first_days(T13). 없으면 FIRST_READ_DAYS. */
+  first_days?: number | null;
 }
 
 /**

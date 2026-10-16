@@ -26,6 +26,7 @@ import { failReason } from "../store/run-fail-reason.js";
 import { dueSinceMs, effectiveIntervalSec, isUnitDue, isUnitSoon } from "./schedule-plan.js";
 import { currentTenant } from "../tenant-context.js";
 import { HEADLESS_NOTICE_APP, HEADLESS_NOTICE_HREF } from "../credentials/headless-connect.js";
+import { firstReadDaysOf } from "./collect-plan.js";   // T13 — 단위 meta.first_days(처음 기간)를 읽는 한 벌(collect-plan 은 이 파일을 import 하지 않는다)
 import {
   ANY_CONNECTOR, COLLECT_ROUTES, MAIL_APPS, UNIT_STATES, UNIT_VISIBILITIES,
   canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
@@ -43,13 +44,9 @@ export const DEFAULT_UNIT_INTERVAL_SEC = 3600;
 /** 목록 한 번에 받는 단위 수 상한 — 넘는 목록은 «전부(complete)» 일 수 없다(잘린 꼬리를 «빠졌다» 로 읽으면 볼 수 있는 사람이 지워진다). */
 export const LISTING_CAP = 5000;
 
-/** 측정한 claude.ai 커넥터 이름(«claude.ai » 뒤) — 단위에 connector 가 비었을 때만 쓴다. 목록 반영이 정확한 이름을 남긴다. */
-const CONNECTOR_OF_APP: Record<string, string> = {
-  slack: "Slack", notion: "Notion", gmail: "Gmail", gdrive: "Google Drive", outlook: "Microsoft 365",
-};
-export function connectorOfApp(app: string): string {
-  return CONNECTOR_OF_APP[app] ?? app;
-}
+//  앱 키 → claude.ai 커넥터 이름 표는 순수 모듈(connector-names.ts)에 있다 — 화면 역매핑과의 계약 시험이 DB 없이 불러오게(T13).
+import { connectorOfApp } from "./connector-names.js";
+export { connectorOfApp };
 
 /** 앱 키 — source.external_system 과 같은 공간(slack·notion·gmail·gdrive·github …). */
 export function normalizeAppKey(v: unknown): string {
@@ -272,6 +269,8 @@ export interface AssignedUnit {
   exclude_refs: string[];
   /** 수집기가 끊겨 넘어온 단위 — 읽은 위치가 수집기 쪽에 있어 last_item_at 부터 읽는다. */
   from_collector: boolean;
+  /** 처음 읽을 때 거슬러 갈 날 수 — meta.first_days(리브가 대화로 정한다, T13). 없거나 범위 밖이면 null(기본 FIRST_READ_DAYS). */
+  first_days: number | null;
 }
 
 /**
@@ -312,6 +311,7 @@ export async function listAssignedUnits(memberId: string, opts: {
       cursor: u.cursor, read_at: u.read_at, last_item_at: u.last_item_at, interval_sec: interval, due, next_at: u.next_at,
       description: u.description, knowhow: (u.meta as Record<string, unknown>).knowhow ?? null,
       exclude_refs: kids.get(u.id) ?? [], from_collector: isCollectorRoute(u.route),
+      first_days: firstReadDaysOf(u.meta),
     });
   }
   return out;

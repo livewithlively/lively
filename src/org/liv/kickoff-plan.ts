@@ -19,11 +19,14 @@ export type KickoffPlan =
  * 킥오프 판정(순수).
  * @param priorSession 이미 열어 둔 리브 세션(멱등 — 처음 설정을 다시 눌러도 세션을 또 열지 않는다)
  * @param aiHarnesses 이 사람의 **로그인 확인된** 하네스(welcome 의 ai_harnesses 와 같은 값)
+ * @param prefer 로그인돼 있으면 이 하네스로 연다(#4213 T13 — «처음 연결» 대화는 Claude 커넥터를 읽으므로 claude 가 먼저다).
+ *  로그인돼 있지 않으면 종전대로 첫 하네스다(가두지 않는다 — 그 대화는 «Claude 로 안 되는 앱» 길로 간다).
  */
-export function planLivKickoff(priorSession: string | null | undefined, aiHarnesses: readonly string[]): KickoffPlan {
+export function planLivKickoff(priorSession: string | null | undefined, aiHarnesses: readonly string[], prefer?: string | null): KickoffPlan {
   const prior = String(priorSession ?? "").trim();
   if (prior) return { action: "reuse", sessionId: prior };
   const usable = aiHarnesses.map((h) => String(h ?? "").trim()).filter(Boolean);
   if (!usable.length) return { action: "skip", reason: "ai-not-connected" };
-  return { action: "create", harness: usable[0] };
+  const want = String(prefer ?? "").trim();
+  return { action: "create", harness: want && usable.includes(want) ? want : usable[0] };
 }

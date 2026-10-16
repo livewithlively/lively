@@ -11,6 +11,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { readCollectRun, startCollectRun } from "../terminal/collect-run.js";
 import { collectRunStats } from "../org/collect/run-log.js";
+import { waitForCollectRun } from "../org/collect/run-wait.js";
 import { getCollectSessionPolicyView, setCollectSessionPolicy } from "../org/store/runtime-config.js";
 import {
   DEFAULT_COLLECT_SESSION_POLICY, COLLECT_MEM_MAX_MB_MIN, COLLECT_MEM_REQUEST_MB_MIN, COLLECT_MEM_MB_MAX,
@@ -82,8 +83,17 @@ const collectRunStart: Capability = {
   },
 };
 
+/** 끝나기를 기다려 주는 상한(초) — MCP 호출은 하네스에서 인라인으로 막혀 있어 길게 잡으면 전송이 끊겨 답을 잃는다(delegate_run 의 교훈). */
+export const COLLECT_RUN_WAIT_MAX_SEC = 25;
+/** 기다리는 동안 상태를 다시 읽는 간격(ms) — 읽기 한 번이 그 사람 자리에서 셸 한 번이다. */
+const COLLECT_RUN_WAIT_POLL_MS = 3000;
+
 const getInput = {
   run_id: z.string().max(64).describe("collect_claude_run 이 돌려준 run_id"),
+  wait_sec: z.number().int().min(0).max(COLLECT_RUN_WAIT_MAX_SEC).optional().describe(
+    `실행이 끝나기를 이만큼 기다렸다 답한다(0~${COLLECT_RUN_WAIT_MAX_SEC}초, 기본 0 = 바로). 목록·수집 실행은 저장 단계(ingest)까지 끝나야 «끝» 이다. ` +
+    "끝나면 그 자리에서 답한다. 리브처럼 끝나기를 기다리는 쪽이 같은 호출을 빠르게 되풀이하지 않게 쓴다 — " +
+    "아직 안 끝났으면(state 가 running 이거나 ingest.state 가 done·failed 가 아니면) 다시 부른다"),
 };
 type GetInput = z.infer<z.ZodObject<typeof getInput>>;
 
@@ -93,16 +103,29 @@ const collectRunGet: Capability = {
   description:
     "내 수집 실행 하나의 상태 — running/done · 끝난 사유(exit) · 요약(claude 버전·뜬 커넥터·허락한 앱·없는 앱·도구 호출·토큰·메모리) · " +
     "훅이 받은 원문 목록(도구·글자 수·sha256 — 원문 자체는 싣지 않는다) · 목록·수집 실행이면 저장 단계 결과(ingest — 올린 단위·넣은 자료·옮긴 위치). 남의 실행은 볼 수 없다. " +
-    "REST 등가: GET /api/ui/collect/claude-runs/:id.",
+    `wait_sec(최대 ${COLLECT_RUN_WAIT_MAX_SEC}초)를 주면 끝나기(목록·수집 실행은 저장 단계까지)를 그만큼 기다렸다 답한다. ` +
+    "REST 등가: GET /api/ui/collect/claude-runs/:id?wait_sec=.",
   scope: "memory",
   input: getInput,
   mutates: false,
   expose: {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/collect/claude-runs/:id"],
-      parse: (req) => ({ run_id: String(req.params?.id ?? "") }) }],
+      parse: (req) => {
+        const q = (req.query ?? {}) as Record<string, unknown>;
+        const w = optInt(q.wait_sec);
+        if (w != null && (w < 0 || w > COLLECT_RUN_WAIT_MAX_SEC)) throw new HttpError(400, `wait_sec 는 0~${COLLECT_RUN_WAIT_MAX_SEC} 입니다`);
+        return { run_id: String(req.params?.id ?? ""), ...(w != null ? { wait_sec: w } : {}) };
+      } }],
   },
-  handler: async (input: GetInput, user: LivelyUser) => readCollectRun(user, String(input.run_id || "").trim()),
+  handler: async (input: GetInput, user: LivelyUser) => {
+    const id = String(input.run_id || "").trim();
+    //  #4213 T13 — 리브(처음 연결 대화)가 목록·수집 실행을 기다린다. 같은 호출을 쉬지 않고 되풀이하면 대화창에 도구 줄이 수십 개 쌓이고
+    //   그 사람 자리에서 셸이 그만큼 돈다 — 서버가 짧게 기다려 준다. 읽기가 곧 저장 단계를 굴리는 자리라(readCollectRun) 간격마다 다시 읽는다.
+    //   «끝» 은 저장 단계까지다(목록·수집 실행 — org/collect/run-wait.ts): 실행만 끝난 값을 주면 리브가 저장 전의 단위 수로 첫 보고를 한다.
+    return waitForCollectRun(() => readCollectRun(user, id), input.wait_sec,
+      { pollMs: COLLECT_RUN_WAIT_POLL_MS, maxSec: COLLECT_RUN_WAIT_MAX_SEC });
+  },
 };
 
 /** 날짜 묶기의 시간대 — 보는 사람의 IANA 이름(예 Asia/Seoul). 모르는 값이면 UTC(auto-runs 와 같은 규칙). */
