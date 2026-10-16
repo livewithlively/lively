@@ -166,6 +166,8 @@ t("C5 ★ 커넥터 글(배열) 속의 같은 문구는 안내문이 아니다 �
 const FAKE = String.raw`#!__NODE__
 const fs = require("fs"), cp = require("child_process");
 const a = process.argv.slice(2), log = process.env.FAKE_CLAUDE_LOG, mode = process.env.FAKE_MODE || "";
+//  기록은 통째로 바꿔 쓴다(임시 파일 → 이름 바꾸기) — 러너가 이 가짜를 쓰는 도중에 끊어도 반쯤 쓰인 파일이 남지 않게(CI 부하에서 실측).
+const put = (f, v) => { fs.writeFileSync(f + ".tmp", v); fs.renameSync(f + ".tmp", f); };
 if (a[0] === "--version") { console.log("2.1.301 (Claude Code)"); process.exit(0); }
 if (a[0] === "--help") {
   console.log(mode === "old" ? "  -p, --print\n  --permission-mode <mode> (choices: \"acceptEdits\", \"default\")"
@@ -181,14 +183,14 @@ if (a.includes("mcp") && a[a.indexOf("mcp") + 1] === "list") {
   process.exit(0);
 }
 if (a[0] === "-p") {
-  if (mode === "nostdin") { fs.writeFileSync(log, JSON.stringify({ argv: a, nostdin: true })); fs.closeSync(0); process.exit(7); }
+  //  몇 번째 -p 인가 — 커넥터가 안 뜬 판을 러너가 다시 띄우는지 본다. 뜨자마자 센다(지시를 읽기 전에 끊겨도 센다).
+  const nth = (fs.existsSync(log + ".attempts") ? Number(fs.readFileSync(log + ".attempts", "utf8")) : 0) + 1;
+  put(log + ".attempts", String(nth));
+  if (mode === "nostdin") { put(log, JSON.stringify({ argv: a, nostdin: true })); fs.closeSync(0); process.exit(7); }
   let prompt = "";
   process.stdin.on("data", (c) => { prompt += c; }).on("end", () => {
-    fs.writeFileSync(log, JSON.stringify({ argv: a, prompt, home: process.env.HOME, off: process.env.LIVELY_OFF, token: process.env.CLAUDE_CODE_OAUTH_TOKEN || null, nonblocking: process.env.MCP_CONNECTION_NONBLOCKING ?? null }));
+    put(log, JSON.stringify({ argv: a, prompt, home: process.env.HOME, off: process.env.LIVELY_OFF, token: process.env.CLAUDE_CODE_OAUTH_TOKEN || null, nonblocking: process.env.MCP_CONNECTION_NONBLOCKING ?? null }));
     if (mode === "hang") { setInterval(() => {}, 1000); return; }
-    //  몇 번째 -p 인가 — 커넥터가 안 뜬 판을 러너가 다시 띄우는지 본다.
-    const nth = (fs.existsSync(log + ".attempts") ? Number(fs.readFileSync(log + ".attempts", "utf8")) : 0) + 1;
-    fs.writeFileSync(log + ".attempts", String(nth));
     if (mode === "noinit") { setInterval(() => {}, 1000); return; }
     //  진짜 claude 처럼 시작 알림의 mcp_servers 에 허락된 커넥터를 싣는다(안 뜬 판은 빈 목록).
     const allow = (() => { const i = a.indexOf("--allowedTools"); if (i < 0) return []; const end = a.findIndex((x, k) => k > i && x.startsWith("--")); return a.slice(i + 1, end < 0 ? a.length : end); })();
@@ -406,7 +408,8 @@ t("S4 원문 읽기 — 받은 순서대로 · 이름 모양이 맞는 파일만
 });
 
 // ── 커넥터가 안 뜬 판 — 다시 띄우기(R11~R13) ──
-const fast = { LVLY_COLLECT_INIT_WAIT_MS: "800", LVLY_COLLECT_RETRY_GAP_MS: "50" };
+//  시작 알림 기다림 — 가짜 claude(node)가 뜨는 데 CI 부하에서 수백 ms 가 걸린다. 그보다 넉넉히(4초) 잡아 «안 옴» 을 오판하지 않게.
+const fast = { LVLY_COLLECT_INIT_WAIT_MS: "4000", LVLY_COLLECT_RETRY_GAP_MS: "50" };
 const attemptsOf = (label: string): number => Number(fs.readFileSync(path.join(tmp, `fake-${label}.json.attempts`), "utf8"));
 t("R11 첫 판에 커넥터가 안 뜨면 다시 띄워 둘째 판으로 끝낸다 — 첫 판의 출력은 버린다", () => {
   const r = runOnce("r11", { apps: ["Slack"], mode: "noload1", env: fast });
