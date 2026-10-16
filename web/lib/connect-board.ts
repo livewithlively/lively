@@ -31,6 +31,27 @@ export interface UnitIn {
   candidate_count?: number;
 }
 export interface CollectorIn { preset_key: string; enabled: boolean; label?: string | null }
+/** 구성원 명부(GET /api/ui/org/members)의 한 줄 — 비관리자에게도 오는 칸만. */
+export interface RosterIn { id: string; display_name?: string | null; is_person?: boolean; state?: string | null }
+
+/**
+ * 열(구성원) — 명부에서 «자기 계정으로 들어오는 사람»(is_person)이면서 활성인 사람. 보는 사람은 늘 넣는다.
+ *  ⚠ kind='human' 으로 고르지 않는다 — 매니지드 실측(2026-10-17): 사람 행 90개 중 들어오는 사람은 3명이었다(나머지는 연결 앱이
+ *   미러한 사람 행 · 리브 페르소나). 그 90개를 열로 세우면 표가 쓸 수 없게 된다.
+ *  명부를 못 읽었으면(null) 커넥터 기록이 있는 구성원으로 세운다 — 그 사람들은 실제로 들어와 Claude 를 쓴 사람이다.
+ *  이름은 nameOf(아바타 명부) → 명부의 이름 → id 순.
+ */
+export function boardPeople(roster: RosterIn[] | null, recordIds: readonly string[], me: string, nameOf: (id: string) => string | null): BoardMemberIn[] {
+  const out = new Map<string, string>();
+  const name = (id: string, fallback?: string | null): string => nameOf(id) || (fallback ? String(fallback) : '') || id;
+  if (roster) {
+    for (const m of roster) if (m && m.is_person === true && m.state === 'active') out.set(String(m.id), name(String(m.id), m.display_name));
+  } else {
+    for (const id of recordIds) if (id) out.set(String(id), name(String(id)));
+  }
+  if (me && !out.has(me)) out.set(me, name(me));
+  return [...out].map(([id, nm]) => ({ id, name: nm }));
+}
 
 export interface BoardInput {
   me: string;
@@ -103,6 +124,24 @@ export const KIND_LABEL: Readonly<Record<string, string>> = {
 };
 /** 이름이 숨은 겉줄(남의 비공개 대화) — 이름 대신 종류만 말한다. */
 export const hiddenUnitName = (kind: string): string => `이름이 가려진 ${KIND_LABEL[kind] ?? '곳'}`;
+/** 서버가 겉줄에서 이름을 빼는 종류(unit-store PRIVATE_KINDS 와 같은 목록). */
+const PRIVATE_UNIT_KINDS: ReadonlySet<string> = new Set(['private_channel', 'group_dm', 'dm', 'mailbox']);
+/**
+ * 단위 이름 — 이름이 없을 때 «가려졌다» 고 말하는 것은 서버가 정말 가린 경우(겉줄 · 비공개 종류)뿐이다.
+ *  그 밖에 이름이 비었으면 «이름 없는 …» 이다(매니지드 실측 2026-10-17: 이름 없이 만든 공개 채널 단위가 «이름이 가려진 공개 채널» 로 보였다).
+ */
+export function unitDisplayName(u: Pick<UnitIn, 'name' | 'kind' | 'access'>): string {
+  if (u.name) return u.name;
+  return u.access === 'coarse' && PRIVATE_UNIT_KINDS.has(u.kind) ? hiddenUnitName(u.kind) : `이름 없는 ${KIND_LABEL[u.kind] ?? '곳'}`;
+}
+/** 모으는 곳 요약 — 있는 상태만 센다(«모으는 중 0» 같은 말을 하지 않는다). 하나도 없으면 길이 있는지에 따라 말한다(있는 척하지 않는다). */
+export function unitSummaryText(a: Pick<BoardApp, 'units' | 'collectable' | 'collector'>): string {
+  const u = a.units;
+  const parts = ([['active', u.active], ['candidate', u.candidate], ['excluded', u.excluded]] as Array<[UnitStateName, number]>)
+    .filter(([, n]) => n > 0).map(([k, n]) => `${STATE_LABEL[k]} ${n}`);
+  if (parts.length) return parts.join(' · ');
+  return a.collectable || a.collector ? '아직 찾은 곳이 없어요' : '이 앱은 아직 모으는 길을 준비 중이에요';
+}
 
 const UNIT_ORDER: Record<UnitStateName, number> = { active: 0, candidate: 1, excluded: 2 };
 

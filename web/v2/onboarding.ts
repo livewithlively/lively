@@ -3223,7 +3223,7 @@ export function renderOnboarding(host: HTMLElement, ctx: { onBare?: (bare: boole
   async function loadClaudeConnectorPolicy() {
     if (CCP) return CCP;
     if (!ccpP) ccpP = (async () => {
-      const me = String((state.me && (state.me as { member_id?: string }).member_id) || '');
+      const me = String((state.me && (state.me as { userId?: string }).userId) || '');   // /api/ui/me 의 키는 userId 다
       try {
         const r = await api('/api/ui/member-ai-connectors' + (me ? `?member_id=${encodeURIComponent(me)}` : ''));
         CCP = (r && r.policy && r.policy.state) || 'unknown';

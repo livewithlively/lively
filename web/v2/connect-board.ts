@@ -13,7 +13,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { svcTile, presetSvcKey } from '../svc-icons.js';
 import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
 import {
-  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, buildBoard, canEditUnit, hiddenUnitName, routeText, visibilityChoices, widens,
+  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, boardPeople, buildBoard, canEditUnit, routeText, unitDisplayName, unitSummaryText, visibilityChoices, widens,
   type Board, type BoardApp, type BoardCell, type UnitIn, type Visibility,
 } from '../lib/connect-board.js';
 
@@ -29,28 +29,24 @@ interface BoardData {
 }
 
 async function loadBoard(): Promise<BoardData> {
-  const me = String((state.me && (state.me as { member_id?: string }).member_id) || '');
+  //  ⚠ 보는 사람은 state.me.userId 다(/api/ui/me 의 키 — member_id 가 아니다. 매니지드 실측 2026-10-17).
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
   const isAdmin = hasScope('admin');
   const errors: string[] = [];
-  //  넷을 따로 읽는다 — 하나가 실패해도 나머지로 그린다(못 읽은 것은 머리에 한 줄로 밝힌다 — 거짓 «안 씀» 을 만들지 않게).
-  const [people, conn, units, cols] = await Promise.all([
+  //  따로 읽는다 — 하나가 실패해도 나머지로 그린다(못 읽은 것은 머리에 한 줄로 밝힌다 — 거짓 «안 씀» 을 만들지 않게).
+  const [avatars, roster, conn, units, cols] = await Promise.all([
     loadPeopleAvatars().catch(() => ({})),
+    api('/api/ui/org/members').then((r: any) => (Array.isArray(r?.members) ? r.members : null)).catch(() => { errors.push('구성원 명부'); return null; }),
     api('/api/ui/member-ai-connectors').catch(() => { errors.push('구성원 Claude 커넥터'); return null; }),
     api('/api/ui/collect/units').catch(() => { errors.push('수집 단위'); return null; }),
     api('/api/ui/org/collectors').catch(() => { errors.push('라이블리 수집기'); return null; }),
   ]);
-  const names = new Map<string, string>();
-  const members: Array<{ id: string; name: string }> = [];
-  for (const [id, m] of Object.entries((people || {}) as Record<string, any>)) {
-    const name = String((m && m.display_name) || id);
-    names.set(id, name);
-    members.push({ id, name });
-  }
-  //  명부를 못 읽었으면 커넥터 기록의 구성원으로라도 열을 세운다(나 하나라도 보이게).
-  if (!members.length) {
-    for (const m of (conn?.members || [])) { const id = String(m.member_id); members.push({ id, name: id }); names.set(id, id); }
-    if (me && !members.some((m) => m.id === me)) { members.push({ id: me, name: '나' }); names.set(me, '나'); }
-  }
+  const av = (avatars || {}) as Record<string, any>;
+  const members = boardPeople(roster, (conn?.members || []).map((m: any) => String(m.member_id)), me,
+    (id) => (av[id] && av[id].display_name ? String(av[id].display_name) : null));
+  const names = new Map<string, string>(members.map((m) => [m.id, m.name]));
+  //  모으는 사람이 열 밖의 사람이어도(예: 나간 사람) 이름은 아바타 명부에서 찾는다.
+  for (const [id, m] of Object.entries(av)) if (!names.has(id)) names.set(id, String((m && m.display_name) || id));
   const policy = (conn?.policy?.state as Board['policy']) || 'unknown';
   const connectorMembers = (conn?.members || []).map((m: any) => ({
     member_id: String(m.member_id), scan: m.scan || null,
@@ -77,14 +73,6 @@ function routeLine(a: BoardApp): HTMLElement {
   return el('div', { class: 'cn-bd-route', text: routeText(a) });
 }
 
-/** 모으는 곳 요약 — 모으는 중 · 후보 · 뺌. 수집 실행이 아직 모르는 앱이면 그 사실을 말한다(있는 척하지 않는다). */
-function unitSummary(a: BoardApp): string {
-  const u = a.units;
-  const n = u.active + u.candidate + u.excluded;
-  if (!n) return a.collectable || a.collector ? '아직 찾은 곳이 없어요' : '이 앱은 아직 모으는 길을 준비 중이에요';
-  return [`${STATE_LABEL.active} ${u.active}`, u.candidate ? `${STATE_LABEL.candidate} ${u.candidate}` : '', u.excluded ? `${STATE_LABEL.excluded} ${u.excluded}` : '']
-    .filter(Boolean).join(' · ');
-}
 
 export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: () => void } = {}): Promise<void> {
   const open = new Set<string>();     // 펼친 앱 줄 — 다시 그려도 펼친 채로
@@ -151,7 +139,7 @@ export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: 
           el('div', { class: 'cn-bd-appname' }, svcTile(presetSvcKey(a.key), a.label, a.claudeMembers > 0 || a.collector || a.livDirect), el('b', { text: a.label })),
           routeLine(a)),
         ...a.cells.map(cellNode),
-        el('td', { class: 'cn-bd-units' }, el('span', { text: unitSummary(a) }), toggle)));
+        el('td', { class: 'cn-bd-units' }, el('span', { text: unitSummaryText(a) }), toggle)));
       if (isOpen && hasUnits) {
         body.push(el('tr', { class: 'cn-bd-detail' },
           el('td', { colspan: String(cols) }, el('div', { class: 'cn-bd-unitlist' },
@@ -172,7 +160,7 @@ export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: 
 /** 단위 한 줄 — 이름 · 종류 · 상태 · 공개범위(고를 수 있으면 고르는 칸) · 모으는 사람 · 마지막으로 읽은 때 · 설명. */
 function unitNode(u: UnitIn, d: BoardData, nameOf: (id: string) => string, repaint: () => Promise<void>, onChanged?: () => void): HTMLElement {
   const full = u.access === 'full';
-  const name = u.name || hiddenUnitName(u.kind);
+  const name = unitDisplayName(u);
   const editable = canEditUnit(u, d.me, d.isAdmin);
   const choices = visibilityChoices(u, d.me, d.isAdmin);
   const visNode = editable && choices.length > 1
@@ -213,7 +201,7 @@ async function setVisibility(u: UnitIn, next: Visibility, repaint: () => Promise
       const n = Number(/자료 (\d+)건/.exec(String(e.message || ''))?.[1] || 0);
       const ok = await confirmDialog({
         title: '이미 모은 자료가 더 넓게 열려요',
-        message: `«${u.name || hiddenUnitName(u.kind)}» 에서 이미 모은 자료${n ? ` ${n}건` : ''}이 «${VIS_LABEL[next]}» 에게 보이게 됩니다.`,
+        message: `«${unitDisplayName(u)}» 에서 이미 모은 자료${n ? ` ${n}건` : ''}이 «${VIS_LABEL[next]}» 에게 보이게 됩니다.`,
         note: '되돌리려면 공개범위를 다시 좁히면 돼요. 다만 이미 정리된 지식은 따라 좁혀지지 않아요.',
         confirmText: '넓히기',
       });

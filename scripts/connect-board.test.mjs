@@ -17,6 +17,8 @@
 //   B14 줄 순서 — 팀이 쓰는 앱 먼저 · 구성원 열은 나 먼저
 //   B15 단위 — 모으는 중 → 후보 → 뺌 순서 · 상태별 수
 //   R1~R5 연결 경로 말(routeText) — 이어 둔 사람이 지금 못 쓰면 «아무도 없다» 로 숨기지 않는다
+//   P1~P4 열(boardPeople) — 들어오는 사람(is_person)·활성만 · 미러된 사람 행은 빼고 · 보는 사람은 늘 · 명부를 못 읽으면 커넥터 기록으로
+//   N1~N4 단위 이름(unitDisplayName) — «가려졌다» 는 서버가 가린 때(겉줄·비공개 종류)뿐 · S1~S4 모으는 곳 요약(unitSummaryText) — 있는 상태만
 //   E1~E3 고칠 수 있나(서버 canEditUnit 과 같은 규칙) · V1~V6 공개범위 선택지(서버 visibilityChangeError 와 같은 규칙) · W 넓히기 · A 모으는 사람 말
 import { strict as assert } from "node:assert";
 import { dirname, join } from "node:path";
@@ -144,5 +146,34 @@ eq(B.assigneeText(unit({ access: "coarse", assignee_kind: "member", state: "acti
   eq(t("notion"), "리브가 연결함", "R4 다른 길이 있으면 그 길(끊긴 커넥터보다 먼저)");
   eq(B.routeText({ claudeMembers: 0, collector: false, livDirect: false, cells: [{ member: "me", state: "off", label: "안 씀" }] }), "아직 연결한 사람이 없어요", "R5 아무도 없음");
 }
+
+// P — 열(boardPeople)
+{
+  const roster = [
+    { id: "me", display_name: "상민", is_person: true, state: "active" },
+    { id: "wj", display_name: "원준", is_person: true, state: "active" },
+    { id: "liv-arin", display_name: "아린", is_person: false, state: "active" },
+    { id: "gone", display_name: "나간 사람", is_person: true, state: "inactive" },
+  ];
+  const av = { me: "상민(아바타)" };
+  const nameOf = (id) => av[id] ?? null;
+  eq(B.boardPeople(roster, [], "me", nameOf), [{ id: "me", name: "상민(아바타)" }, { id: "wj", name: "원준" }],
+    "P1 들어오는 사람·활성만 — 미러된 사람 행(is_person 아님)·비활성은 열이 아니다 · 이름은 아바타 명부 먼저");
+  eq(B.boardPeople(roster, [], "ops", nameOf).map((m) => m.id), ["me", "wj", "ops"], "P2 보는 사람은 사람 표식이 없어도 늘 넣는다");
+  eq(B.boardPeople(null, ["wj", "me"], "me", nameOf), [{ id: "wj", name: "wj" }, { id: "me", name: "상민(아바타)" }], "P3 명부를 못 읽으면 커넥터 기록이 있는 구성원으로");
+  eq(B.boardPeople([], [], "", nameOf), [], "P4 빈 명부 · 보는 사람 모름 → 열 없음");
+}
+
+// N — 단위 이름
+eq(B.unitDisplayName({ name: "#dev", kind: "channel", access: "full" }), "#dev", "N1 이름이 있으면 그 이름");
+eq(B.unitDisplayName({ name: null, kind: "private_channel", access: "coarse" }), "이름이 가려진 비공개 채널", "N2 겉줄 · 비공개 종류 → 가려졌다");
+eq(B.unitDisplayName({ name: null, kind: "channel", access: "coarse" }), "이름 없는 공개 채널", "N3 공개 채널은 서버가 가리지 않는다 — 이름이 빈 것");
+eq(B.unitDisplayName({ name: null, kind: "mailbox", access: "full" }), "이름 없는 메일함", "N4 다 보는 줄의 빈 이름은 가려진 것이 아니다");
+// S — 모으는 곳 요약
+const sum = (units, o = {}) => B.unitSummaryText({ units: { active: 0, candidate: 0, excluded: 0, list: [], ...units }, collectable: false, collector: false, ...o });
+eq(sum({ candidate: 1 }), "후보 1", "S1 있는 상태만 — «모으는 중 0» 을 말하지 않는다");
+eq(sum({ active: 2, candidate: 1, excluded: 3 }), "모으는 중 2 · 후보 1 · 뺌 3", "S2 셋 다");
+eq(sum({}, { collectable: true }), "아직 찾은 곳이 없어요", "S3 길은 있는데 찾은 곳 없음");
+eq(sum({}), "이 앱은 아직 모으는 길을 준비 중이에요", "S4 길도 없음");
 
 console.log(`connect-board: ${pass} passed`);
