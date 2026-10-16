@@ -78,7 +78,7 @@ try {
 
   // ── #4819 늦은 에코 — «쳤는데 15초 안에 못 봤다» 행을, 기록에서 그 말을 찾은 뒤 바로잡는 UPDATE(settleLateEcho) ──
   //  목 풀로는 조건(상태·사유·종류의 OR 묶음)·timestamptz 변환·COALESCE 가 무엇이든 초록이다 — 실제 표에서 되읽어 판정한다.
-  //  사양·엣지 표: 작업 스크래치 spec-4819.md P7(바로잡기 · 그새 사람이 고른 것은 안 건드림).
+  //  사양·엣지 표: 지식 outbox-late-echo-false-unconfirmed-4819 §사양 P7(바로잡기 · 그새 사람이 고른 것은 안 건드림).
   {
     const at = "2026-10-16T07:59:07.361Z";
     const settled = async (seq, status, lastError, { kind = "prompt", sid = SID, when = at } = {}) => {

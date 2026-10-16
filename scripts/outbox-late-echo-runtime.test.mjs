@@ -10,7 +10,7 @@
 //  서버는 이제 목록을 줄 때 기록과 다시 대조해 바로잡는다(src/sessions/outbox-late-echo.ts · 시험 outbox-late-echo.test).
 //   이 시험은 **서버가 여전히 «미확인» 을 줄 때**(대조가 못 읽음·배포 전 서버) 화면이 스스로 지키는 몫을 잰다.
 //
-//  엣지 표(행마다 장면 하나 — 스크래치패드 spec-4819.md 의 O 행):
+//  엣지 표(행마다 장면 하나 — 지식 outbox-late-echo-false-unconfirmed-4819 §사양 의 O 행):
 //   O1 회수된 세션 · 기록에 그 말(행보다 뒤)과 답이 있다 · 큐는 sent·echo-unconfirmed → 경고 없음 · 그 말은 한 번만 보인다(신고 장면)
 //   O2 같은데 기록에 그 말이 없다(정말 안 들어갔다) → 경고가 보인다([다시 보내기]·[지우기]) · 그 말은 대기 말풍선으로 한 번
 //   O3 기록에 같은 말이 있지만 행보다 **앞**에 적혔다(같은 지시를 두 번 보냄) → 경고가 보인다(두 번째가 안 들어갔을 수 있다)
@@ -23,6 +23,14 @@
 //      (종전: 기록에 이어진 말풍선이 대기 목록에서 빠진 뒤 «전달하는 중…» 짝이 맨 아래에 다시 서고, 큐에서 빠지면 빈 줄로 남았다)
 //   O8 같은 글의 행 둘 — 하나는 sending(낙관 말풍선이 있다) · 하나는 «미확인» · 기록엔 둘 다 없다 → 둘 다 보인다
 //      (아직 기록에 안 이어진 낙관 말풍선은 «들어갔다» 의 증거가 아니다)
+//      ⚠ 이 장면의 행 시각은 화면 시계 기준이다 — 낙관 말풍선의 시각(지금)이 미확인 행의 증거 창 안에 들어와야 «말풍선은 증거가 아니다» 를 잰다
+//       (고정 시각이면 증거 창의 상한이 먼저 걸러 이 규칙을 안 잰다 — 변이 실측).
+//   O9 같은 글의 행 둘 — A failed·not-ready(치지도 않음) · B sending · 기록에 그 말이 실린다 · 큐는 계속 [A failed, B sending]
+//      → A 의 «전달 안 됨» 이 보인다 · 같은 말은 두 번(기록 + A) — 에코는 «쳤을 수 있는» B 에 잇고, 실패는 조용히 사라지지 않는다(격리 리뷰 재현)
+//   O10 «미확인» 행 X · 기록엔 X 와 앞 64자만 같은 다른 말 Y(행보다 뒤) → 경고가 보인다(Y 는 X 의 증거가 아니다 — 판정 규칙은 서버와 같다)
+//   O11 «미확인» 행 X · 기록엔 같은 말이 마감 한참 뒤에 적혔다(사람이 나중에 다시 침) → 경고가 보인다(그 줄은 이 행의 증거가 아니다)
+//   O12 실패 행 하나(failed·not-ready — 치지도 않음) · 열어 둔 화면에 사람이 같은 글을 직접 쳐 기록에 실림 · 큐는 계속 [실패]
+//      → «전달 안 됨» 이 남는다(서버는 그 말을 치지 않았다고 한다 — 기록의 같은 글이 그 실패를 덮지 않는다 · O6 의 열어 둔 화면 판)
 //
 //  가짜는 «서버»(기록·큐 응답)뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다.
@@ -60,6 +68,7 @@ async function PAGE_MAIN() {
   const ECHO = user(SAID, "2026-10-16T07:59:07.361Z") + ai("반영했습니다 — 공개범위를 전체로 바꿨어요.", "2026-10-16T08:05:02Z");
   const row = (st, err) => ({ id: 131295, seq: 3, session_id: "", text: SAID, status: st, kind: "prompt", attempts: 0, trust_ok: false,
     last_error: err, created_at: QUEUED, updated_at: "2026-10-16T07:59:29.849Z", delivered_at: null, stalled_since: null });
+  const Y = SAID.slice(0, 64) + " — 그런데 뒤는 전혀 다른 지시다(O10).";
   const TRANSCRIPTS = {
     "box-o1": OLD + ECHO,
     "box-o2": OLD,
@@ -69,6 +78,10 @@ async function PAGE_MAIN() {
     "box-o6": OLD + ECHO,
     "box-o7": OLD,                                              // 장면 도중에 ECHO 가 붙는다
     "box-o8": OLD,
+    "box-o9": OLD,                                              // 장면 도중에 같은 말이 붙는다(B 의 에코)
+    "box-o10": OLD + user(Y, "2026-10-16T07:59:07.361Z") + ai("Y 에 대한 답", "2026-10-16T08:01:00Z"),
+    "box-o11": OLD + user(SAID, "2026-10-16T09:10:00Z") + ai("나중 답", "2026-10-16T09:11:00Z"),
+    "box-o12": OLD,                                             // 장면 도중에 사람이 친 같은 말이 붙는다
   };
   const OUTBOX = {
     "box-o1": [row("sent", "echo-unconfirmed")],
@@ -78,7 +91,11 @@ async function PAGE_MAIN() {
     "box-o5": [row("failed", "send: host-unknown")],
     "box-o6": [row("failed", "not-ready")],
     "box-o7": [row("sending", null)],
-    "box-o8": [row("sending", null), Object.assign(row("sent", "echo-unconfirmed"), { id: 131296, seq: 4, created_at: "2026-10-16T07:58:40.000Z" })],
+    "box-o8": [],                                               // 화면 시계 기준으로 마운트 직전에 채운다(머리말 O8)
+    "box-o9": [row("failed", "not-ready"), Object.assign(row("sending", null), { id: 131296, seq: 4, created_at: "2026-10-16T07:58:40.000Z" })],
+    "box-o10": [row("sent", "echo-unconfirmed")],
+    "box-o11": [row("sent", "echo-unconfirmed")],
+    "box-o12": [row("failed", "not-ready")],
   };
   const outboxHits = {};
   //  O4 배선 — «기록이 그 말을 실어 준 뒤에 큐를 다시 물었나» 를 시각으로 잰다(그 물음이 곧 종전 결함이 다시 세우던 자리다).
@@ -100,7 +117,7 @@ async function PAGE_MAIN() {
       outboxHits[sid] = (outboxHits[sid] || 0) + 1;
       //  기록 폴과 큐 폴이 같은 가상 시각에 돈다(둘 다 3초) — 큐 응답을 조금 늦게 줘 «기록이 실은 뒤 큐 응답» 순서를 확정하고,
       //   그 응답 시각을 잰다(종전 결함이 다시 세우던 바로 그 순서다).
-      if (sid === "box-o4" || sid === "box-o7") { await sleep(50); if (sid === "box-o4") o4.outboxAt.push(performance.now()); }
+      if (sid === "box-o4" || sid === "box-o7" || sid === "box-o9") { await sleep(50); if (sid === "box-o4") o4.outboxAt.push(performance.now()); }
       return J({ items: OUTBOX[sid] || [] });
     }
     return J({ error: "no" }, 404);
@@ -126,7 +143,12 @@ async function PAGE_MAIN() {
   };
   const look = (v, sid) => ({ said: v.count(SAID), warn: v.warn(), failed: v.failed(), buttons: v.buttons(), outboxHits: outboxHits[sid] || 0 });
   try {
-    for (const sid of ["box-o1", "box-o2", "box-o3", "box-o5", "box-o6", "box-o8"]) {
+    for (const sid of ["box-o1", "box-o2", "box-o3", "box-o5", "box-o6", "box-o8", "box-o10", "box-o11"]) {
+      if (sid === "box-o8") {
+        const now = Date.now(), iso = (ms) => new Date(now + ms).toISOString();
+        OUTBOX["box-o8"] = [Object.assign(row("sending", null), { created_at: iso(-30_000), updated_at: iso(-25_000) }),
+          Object.assign(row("sent", "echo-unconfirmed"), { id: 131296, seq: 4, created_at: iso(-20_000), updated_at: iso(-1_000) })];
+      }
       const v = mount(sid);
       await sleep(1500);                                         // 기록 그리기 → 큐 맞추기
       R[sid] = { first: look(v, sid) };
@@ -157,6 +179,28 @@ async function PAGE_MAIN() {
       R["box-o7"].after = look(v, "box-o7");
       v.done();
     }
+    {
+      const v = mount("box-o9");
+      await sleep(1500);
+      R["box-o9"] = { before: look(v, "box-o9") };
+      TRANSCRIPTS["box-o9"] = OLD + user(SAID, "2026-10-16T07:59:07.361Z") + ai("받았어요", "2026-10-16T08:00:00Z");   // B 가 쳐서 들어갔다
+      await sleep(4000);
+      R["box-o9"].echoed = look(v, "box-o9");
+      await sleep(7000);
+      R["box-o9"].after = look(v, "box-o9");
+      v.done();
+    }
+    {
+      const v = mount("box-o12");
+      await sleep(1500);
+      R["box-o12"] = { before: look(v, "box-o12") };
+      TRANSCRIPTS["box-o12"] = OLD + user(SAID, "2026-10-16T08:00:00Z") + ai("받았어요", "2026-10-16T08:00:05Z");   // 사람이 터미널에 직접 쳤다
+      await sleep(4000);
+      R["box-o12"].echoed = look(v, "box-o12");
+      await sleep(7000);
+      R["box-o12"].after = look(v, "box-o12");
+      v.done();
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -168,7 +212,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <script type="text/plain" id="src">${sc.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 const dom = await dumpDom(chrome, {
-  html: page, serve: true, prefix: "outbox-late-echo-", virtualTimeBudget: 90000, args: ["--window-size=1200,900"], copy: CSS,
+  html: page, serve: true, prefix: "outbox-late-echo-", virtualTimeBudget: 240000, args: ["--window-size=1200,900"], copy: CSS,
 });
 const res = readOut(dom);
 if (res.text === null) { console.error(`FAIL  페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)}): ${dom.slice(0, 400)}`); process.exit(1); }
@@ -217,6 +261,24 @@ check(o7.echoed && o7.echoed.said === 1 && o7.after && o7.after.said === 1 && o7
 const o8 = R["box-o8"] || {};
 check(o8.later && o8.later.said === 2 && o8.later.warn,
   "O8 같은 글의 행 둘(sending · 미확인) · 기록엔 없음 → 둘 다 보인다(낙관 말풍선은 증거가 아니다)", o8.later);
+
+const o9 = R["box-o9"] || {};
+check(o9.before && o9.before.said === 2 && o9.before.failed, "O9 전제 — 같은 글 두 행(A 실패 · B 전달하는 중)이 각각 보인다", o9.before);
+check(o9.after && o9.after.failed && o9.after.said === 2 && o9.after.outboxHits > (o9.echoed || {}).outboxHits,
+  "O9 기록에 B 의 에코가 실려도 A 의 «전달 안 됨» 은 남는다 · 같은 말은 두 번(기록 + A) — 고아 말풍선 없음", o9);
+
+const o10 = R["box-o10"] || {};
+check(o10.later && o10.later.warn && o10.later.said === 1,
+  "O10 앞 64자만 같은 다른 말이 기록에 있어도 «미확인» 경고는 남는다(그 말은 이 행의 증거가 아니다)", o10.later);
+
+const o11 = R["box-o11"] || {};
+check(o11.later && o11.later.warn && o11.later.said === 2,
+  "O11 같은 말이 마감 한참 뒤에 적혔다(나중에 다시 침) → 경고가 남는다 · 나중 말과 대기 말풍선으로 두 번", o11.later);
+
+const o12 = R["box-o12"] || {};
+check(o12.before && o12.before.failed && o12.before.said === 1, "O12 전제 — 기록에 실리기 전엔 «전달 안 됨» 말풍선 하나", o12.before);
+check(o12.after && o12.after.failed && o12.after.said === 2 && o12.after.outboxHits > (o12.echoed || {}).outboxHits,
+  "O12 사람이 같은 글을 직접 쳐 기록에 실려도 치지도 않은 실패는 남는다(큐를 다시 물은 뒤에도) · 같은 말은 두 번", o12);
 
 check(!(R.pageErrors || []).length, "페이지 오류 없음", R.pageErrors);
 console.log(`\n${pass} passed, ${fail} failed — 늦은 에코 화면(#4819)`);

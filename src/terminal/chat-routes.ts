@@ -293,6 +293,8 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     await gateRead(id, req);
     //  #4819 — 15초 창이 «미확인» 이라고만 한 말은 기록과 다시 대조해, 이미 들어가 있으면 빼고 준다. 안 그러면 답까지 끝난 말이
     //   회수 뒤 다시 열 때 «보냈지만 세션 기록에서 확인되지 않았어요» 로 맨 아래에 또 그려진다(outbox-late-echo.ts 머리말).
+    //   ⚠ 그래서 이 GET 은 행을 고쳐 쓴다('delivered·echo-late') — 기록에서 도출되고 멱등이며, 읽는 사람도 같은 기록을 볼 수 있다.
+    //   대조는 2초까지만 기다리고 나머지는 뒤에서 마저 한다(3초 폴링이 중계 정체에 묶이지 않게).
     const { listOutboxReconciled } = await import("../sessions/outbox-late-echo.js");
     res.setHeader("Cache-Control", "no-store");
     res.json({ items: await listOutboxReconciled(id) });
