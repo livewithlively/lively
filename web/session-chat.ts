@@ -1042,6 +1042,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let termFrame: HTMLIFrameElement | null = null;
   let mode: 'term' | 'chat' = 'chat';
   let modeChosen = false;              // 사람이 [보기] 메뉴에서 직접 골랐나 — 그 뒤엔 화면이 스스로 안 바꾼다
+  //  ★ #4794 — **말을 보낸 직후엔 하네스가 화면을 그릴 때까지 대화창에 머문다**(상민님 2026-10-16: «대화창에서 프롬프트를
+  //   보내면 터미널로 넘어가는데, 하네스 내용이 보이기까지 2~3초 빈 터미널이 보인다 — 내용이 보이는 순간 넘기는 게 낫다»).
+  //   말을 보내 되살린 세션(reviveWithPrompt)·홈 입력창이 연 세션은 firstPrompt 를 들고 이 화면에 온다. 그때 액자를
+  //   **숨긴 채 대화창 자리에 같은 크기로** 먼저 붙여 두고(warmTerm), 액자가 «하네스가 처음 그렸다»(lively-term-painted)를
+  //   알리면 그때 터미널로 넘긴다. 크기를 미리 맞추는 이유: display:none 인 액자는 fit 이 안 돼 크기를 못 알리고
+  //   (terminal.ts canReportSize), 넘기는 순간 크기가 바뀌면 하네스가 화면을 다시 그린다.
+  //   신호가 끝내 안 오면(옛 액자 · 하네스가 안 뜸) 상한 뒤 종전처럼 넘긴다 — 터미널에서 무슨 일인지 보이게.
+  //   ⚠ 사람이나 다른 갈래가 화면을 정하면(setMode) 숨겨 붙이던 판은 거기서 끝난다 — 신호가 와도 화면을 뺏지 않는다.
+  const TERM_WARM_MAX_MS = 12_000;
+  let termWarm: { timer: number; ro: ResizeObserver | null } | null = null;
+  //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
+  let warmOwed = false;
   /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
   function paintShellBar(): void {
     //  pane 이 셸인 두 갈래: codex app-server(chatFirst) · 하네스 무관 대화 런타임(runtimeMode='chat').
@@ -1059,8 +1071,61 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     shellBarBtn.hidden = !(codex && isBox() && target.owned && target.live);
   }
 
+  function ensureTermFrame(): void {
+    const src0 = termUrl();
+    if (termFrame || !src0) return;
+    termFrame = el('iframe', { class: 'sc-term-frame', src: src0, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+    termHost.append(termFrame);
+  }
+  /** #4794 숨은 액자의 자리를 대화창 자리에 맞춘다 — 넘길 때 액자 크기가 그대로여야 하네스가 다시 그리지 않는다. */
+  function placeWarmTerm(): void {
+    termHost.style.top = chatHost.offsetTop + 'px';
+    termHost.style.height = chatHost.offsetHeight + 'px';
+  }
+  /** #4794 터미널 액자를 숨긴 채 먼저 붙인다(termWarm 머리말). 대화창은 그대로 보인다. */
+  function warmTerm(): void {
+    if (termWarm || destroyed || !hasTerm()) return;
+    ensureTermFrame();
+    if (!termFrame) return;
+    warmOwed = false;
+    let ro: ResizeObserver | null = null;
+    try { ro = new ResizeObserver(placeWarmTerm); ro.observe(chatHost); } catch { ro = null; }
+    termWarm = { timer: window.setTimeout(() => endTermWarm(true), TERM_WARM_MAX_MS), ro };
+    wrap.classList.add('sc-term-warm');
+    //  숨은 액자로 클릭·Tab 이 들어가지 않게(inert). ⚠ 액자 스스로 거는 초점(붙자마자 term.focus — terminal.ts onopen)은 inert 로
+    //   못 막는다(실측 2026-10-16 Chromium 151) — 액자가 이 표식·visibility 를 읽고 참는다(terminal.ts frameHiddenNow).
+    termHost.toggleAttribute('inert', true);
+    placeWarmTerm();
+    termHost.hidden = false;
+  }
+  /** #4794 숨겨 붙이던 판을 끝낸다. show = 터미널로 넘길 때가 됐다(하네스가 그렸다 · 상한). */
+  function endTermWarm(show: boolean): void {
+    const w = termWarm;
+    if (!w) return;
+    termWarm = null;
+    clearTimeout(w.timer);
+    w.ro?.disconnect();
+    wrap.classList.remove('sc-term-warm');
+    termHost.toggleAttribute('inert', false);
+    termHost.style.top = ''; termHost.style.height = '';
+    //  입력칸에 무언가 쓰는 중이면 화면을 뺏지 않는다 — **대화창을 고른 것으로 친다**(modeChosen). 안 그러면 다음 목록 갱신의
+    //   자동 되돌리기(update)가 쓰던 화면을 터미널로 가져간다. 터미널은 붙은 채 [보기]로 언제든 열린다.
+    const composing = document.activeElement === view.input && !!view.input.value.trim();
+    if (show && composing) modeChosen = true;
+    if (show && !destroyed && !modeChosen && mode === 'chat' && hasTerm()) {
+      setMode('term');
+      termSend('focus');   // 처음부터 터미널로 연 화면처럼 바로 칠 수 있게 — 숨은 동안엔 액자가 스스로 초점을 안 잡았다(frameHiddenNow)
+      return;
+    }
+    termHost.hidden = mode !== 'term';
+  }
+
   function setMode(m: 'term' | 'chat'): void {
+    //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
+    const wasWarm = !!termWarm;
+    if (wasWarm) endTermWarm(false);
     if (m === 'term' && !hasTerm()) m = 'chat';
+    if (m === 'term') warmOwed = false;
     //  #3847 — 터미널을 **여는 쪽으로** 갈 때는 프레임 걸쇠를 푼다. 여기까지 온 것은 «지금 이 세션의 터미널을
     //   보겠다» 는 뜻이고(자동 되돌리기는 아래 termGoneOnce 가 따로 막는다), 그 뒤에도 박스가 없으면 프레임이
     //   다시 알려 와 같은 자리로 내려앉는다 — 사람을 대화창에 가두지 않는 것이 2026-09-08 의 교훈이다.
@@ -1080,11 +1145,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (m === 'chat') { if (waitBar.parentElement !== liveDock) liveDock.prepend(waitBar); }
       else if (waitBar.parentElement !== wrap) wrap.insertBefore(waitBar, chatHost);
     }
-    const src0 = termUrl();
-    if (m === 'term' && !termFrame && src0) {
-      termFrame = el('iframe', { class: 'sc-term-frame', src: src0, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
-      termHost.append(termFrame);
-    }
+    if (m === 'term') ensureTermFrame();
     wrap.classList.toggle('sc-mode-term', m === 'term');
     paintShellBar();
     termHost.hidden = m !== 'term';
@@ -1101,6 +1162,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     fixPair.hidden = fixBtn.hidden && termStatusEl.hidden;
     paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); pokePoll(); }   // 가려진 동안 느슨했던 폴을 그 자리에서 따라잡는다
+    //  #4794 — 숨어서 붙은 액자는 붙을 때 제 터미널에 초점을 안 줬다(terminal.ts frameHiddenNow). 보이게 되는 지금 준다 —
+    //   처음부터 터미널로 연 화면과 같게(그때는 액자가 붙자마자 스스로 잡는다).
+    if (m === 'term' && wasWarm) termSend('focus');
   }
 
   /**
@@ -1247,13 +1311,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (m.canRestore && !canRevive() && !resumeAuto && visibleNow() && autoResumeAllowed()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(null, { canRestore: true }); }
       return;
     }
+    //  #4794 — 숨겨 붙여 둔 액자가 «하네스가 처음 그렸다» 를 알렸다 → 이제 터미널로 넘긴다(termWarm 머리말).
+    if (m && m.type === 'lively-term-painted') { if (termWarm && String(m.id || '') === target.id) endTermWarm(true); return; }
     //  폰 — 터미널의 글 상자에 쓰는 중이면 아래 탭 바를 걷는다(50-mobile.css .sc-kb). 이 화면이 사라지면 표시도 같이 사라진다.
     if (m && m.type === 'lively-term-composer') { wrap.classList.toggle('sc-kb', !!m.focus); return; }
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c.cmd, c.text); }
     termStatusEl.textContent = String(m.text || '');
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
-    termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
+    termStatusEl.hidden = termHost.hidden || !!termWarm || !termStatusEl.textContent;   // #4794 숨겨 붙이는 동안은 대화창 화면이다
     head.dataset.term = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : 'wait';
     //  #4135 — 프레임이 «이 pane 에서 지금 무엇이 도는가» 를 함께 보낸다(tmux 가 말한 포그라운드 명령).
     //   목록 행의 모드 값은 낡을 수 있어서(노드 스냅샷이 옛 번들이면 app-server 라고 말한다) 셸 안내줄이
@@ -2695,7 +2761,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   화면이 스스로 터미널로 되돌려 글을 다시 가리지 않게. 터미널로 가는 문은 그대로다.
   const draftBack = !!opts.draft && view.input.value === opts.draft;
   if (draftBack) modeChosen = true;
-  setMode(chatHome() || target.raw?.observed === false || draftBack ? 'chat' : 'term');
+  //  ★ #4794 — 말을 보내 연 화면(firstPrompt — 되살린 세션 · 홈 입력창이 연 세션)은 하네스가 그릴 때까지 대화창에 두고,
+  //   터미널은 숨긴 채 먼저 붙인다(termWarm 머리말). 그 밖은 종전 그대로다.
+  const chatFirstView = chatHome() || target.raw?.observed === false || draftBack;
+  const warmFirst = !chatFirstView && !!firstPrompt;
+  setMode(chatFirstView || warmFirst ? 'chat' : 'term');
+  if (warmFirst) { warmOwed = true; warmTerm(); }   // 터미널이 아직 없으면 warmTerm 은 그냥 돌아온다 — update() 가 생길 때 건다
 
   void open();
   //  open() 은 시작하자마자 안내를 비운다 — 그 뒤에 적어야 남는다.
@@ -2739,7 +2810,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   (2026-09-08): 마운트 순간 행이 잠깐 «중단됨»이면 위 setMode 가 조용히 대화로 내렸는데, hasTerm() 이
       //   얼어 있던 종전엔 여기도 함께 막혀 그 탭이 영영 갇혔다. 이제 행이 건강해지는 다음 폴링에 돌아온다.
       //  ⚠ #3847 — 다만 프레임이 «박스 없음» 을 **두 번** 말한 뒤에는 자동으로 되돌리지 않는다(termGoneN 머리말).
-      if (!modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
+      //  ⚠ #4794 — 숨겨 붙이는 동안(termWarm)은 여기서 넘기지 않는다 — 넘기는 때는 액자가 «그렸다» 고 알릴 때다.
+      //   말을 보내 연 화면인데 열 때 터미널이 없었으면(목록 한 틱 지연) 곧바로 넘기지 않고 지금 숨겨 붙인다(warmOwed).
+      if (warmOwed && !modeChosen && mode === 'chat' && hasTerm()) warmTerm();
+      if (!termWarm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
@@ -2748,7 +2822,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; endTermWarm(false); offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

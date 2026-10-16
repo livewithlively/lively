@@ -4150,6 +4150,61 @@ function startSeenStamp(): void {
   window.addEventListener('pagehide', () => { void post('/leave', true).catch(() => { /* 비치명 — TTL 이 늦게라도 걷는다 */ }); });
 }
 
+/**
+ * #4794 — 하네스가 **처음 화면을 그렸다**고 세션 화면에 한 번 알린다(lively-term-painted).
+ *  세션 화면(web/session-chat.ts termWarm)은 말을 보내 되살린 세션을 열 때 이 액자를 숨긴 채 먼저 붙여 두고,
+ *  이 신호가 오면 그때 터미널로 넘긴다. 종전엔 넘긴 뒤 하네스가 뜰 때까지 2~3초 빈 터미널이 보였다(상민님 2026-10-16).
+ *  «그렸다» = 보이는 줄에 공백 아닌 글자가 생겼다. 하네스가 뜨기 전 pane 은 비어 있다 — 런처(catalog.ts LAUNCH_STOP_SH)는
+ *  정상 길에선 아무것도 안 찍는다. 그 뒤 출력이 멎을 때까지 조금 더 기다린다(firstPaintDelay) — 첫 조각만 그린 화면으로 넘기지 않게.
+ *  액자 안(embed=1)에서만 보낸다. 신호를 못 보내도(구 xterm) 세션 화면은 상한 뒤 넘긴다 — 종전보다 나빠지지 않는다.
+ */
+export const FIRST_PAINT_QUIET_MS = 300;
+export const FIRST_PAINT_MAX_MS = 1500;
+/** 화면에 무언가 그려졌나 — 공백·빈 줄뿐이면 아직 아무것도 안 그린 화면이다. 순수. */
+export function screenHasInk(screen: string): boolean {
+  return /\S/.test(String(screen || ''));
+}
+/** 첫 글자를 본 뒤 알리기까지 기다릴 ms — 출력이 quiet 만큼 멎으면, 늦어도 첫 글자부터 max 뒤(스피너처럼 쉬지 않고 다시 그리는 화면). 순수. */
+export function firstPaintDelay(firstInkAt: number, now: number, quietMs = FIRST_PAINT_QUIET_MS, maxMs = FIRST_PAINT_MAX_MS): number {
+  return Math.max(0, Math.min(quietMs, firstInkAt + maxMs - now));
+}
+export function watchFirstPaint(): void {
+  if (!(EMBED && window.parent !== window)) return;
+  let inkAt = 0;
+  let sent = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const send = (): void => {
+    if (sent) return;
+    sent = true;
+    try { window.parent.postMessage({ type: 'lively-term-painted', id: SESSION_ID }, location.origin); } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  };
+  //  출력 한 묶음을 다 풀 때마다(onWriteParsed) 본다 — 그리기(onRender)는 숨은 액자에서 미뤄질 수 있지만 버퍼는 늘 지금이다.
+  const onParsed = (): void => {
+    if (sent) return;
+    if (!inkAt) {
+      if (!screenHasInk(autosendReadScreen())) return;
+      inkAt = Date.now();
+    }
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(send, firstPaintDelay(inkAt, Date.now()));
+  };
+  try { if (term.onWriteParsed) term.onWriteParsed(onParsed); } catch (_) { /* 구 xterm — 세션 화면이 상한 뒤 넘긴다 */ }
+}
+/**
+ * #4794 — 이 액자가 지금 사람 눈에 안 보이나. 세션 화면이 숨긴 채 먼저 붙여 둔 액자(36-chat.css .sc-term-warm — visibility:hidden · inert)다.
+ *  그런 액자는 붙자마자 제 터미널에 초점을 주면 안 된다 — 사람은 대화창 입력칸에 쓰는 중일 수 있다.
+ *  ⚠ inert 만으로는 못 막는다: 액자 안 스크립트의 focus() 는 inert 조상·visibility:hidden 아래에서도 초점을 가져간다
+ *   (실측 2026-10-16 Chromium 151, 같은 출처 — 부모의 activeElement 가 액자로 옮겨 갔다). 그래서 여기서 스스로 묻는다.
+ *  같은 출처라 frameElement 를 읽을 수 있다. 못 읽으면(다른 출처·단독 창) «보인다» 로 본다 — 종전 동작.
+ */
+export function frameHiddenNow(): boolean {
+  try {
+    const fe = window.frameElement as HTMLElement | null;
+    if (!fe) return false;
+    return !!fe.closest('[inert]') || getComputedStyle(fe).visibility === 'hidden';
+  } catch (_) { return false; }
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -4347,6 +4402,7 @@ export async function boot() {
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 본체는 handleTermData(최상위) —
   //  회귀 테스트가 실제 배선 그대로 직접 호출할 수 있게 분리(#1117). userTyped(#1059)·드리프트 가드(#1302)도 본체에.
   term.onData(handleTermData);
+  watchFirstPaint();   // #4794 — 액자 안이면 하네스가 처음 그린 순간을 세션 화면에 알린다(그때 터미널로 넘긴다)
   // 탭이 백그라운드→포그라운드로 돌아올 때: 끊겨 있으면 재연결, 연결돼 있으면 '이 탭'으로 창 크기를 다시 요구한다.
   //  서버는 window-size latest 라, 지금 보는 탭이 refresh-client 를 보내 '최근 활동'이 되면 pane 이 이 탭 크기로
   //  맞춰져 깨짐이 풀린다(다른 탭·잔존 연결이 더 큰 pane 을 잡고 있던 경우의 #252 증상 회복). forceRedraw =
@@ -4968,7 +5024,7 @@ async function connectNow() {
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
-    if (!glassIdle) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle
+    if (!glassIdle && !frameHiddenNow()) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle · #4794 숨겨 붙인 액자도(보이게 되면 세션 화면이 focus 를 보낸다)
     if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {
