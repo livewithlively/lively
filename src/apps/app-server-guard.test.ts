@@ -1,7 +1,7 @@
 // 앱 서버 신원 검사 층(#4485 앱 v2-6) 시험 — 진짜 검사 층 글(GUARD_JS)을 이 기계의 node 로 띄우고 그 뒤에 가짜 앱을 둔다(Lambda 안과 같은 모양:
 //  웹 어댑터 → 검사 층 → 앱). 사양 표 A(spec-4485.md): A1~A9 판정(게이트웨이 verifyAppIdentity 와 같은 토큰 표로 대조 · 경계 포함) ·
 //  A10 · A11 새로 도입한 env 가 없을 때 · A12 머리글 · A13 준비 판정 · A14 흘려 보내기 · A15 앱에 못 닿음 · A16 그대로 넘기는 것 · 레이어 zip · bootstrap ·
-//  A17 · A18 ASCII 밖 id · 이름 · A19 문 안의 오류 · A20 맞대기 표 더함(격리 리뷰 2026-10-16).
+//  A17 · A18 ASCII 밖 id · 이름 · A19 문 안의 오류 · A20 맞대기 표 더함 · A21 앱의 잘못된 응답(격리 리뷰 · 재검토 2026-10-16).
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -260,6 +260,37 @@ test("A19 ★ 검사 층 안의 예기치 못한 오류(앱으로 갈 요청을 
     //  다음 요청도 받는다(프로세스가 살아 있다)
     assert.equal((await req(g.port, "/x", { "x-lively-identity": tok() })).status, 500);
   } finally { g.stop(); }
+});
+
+test("A21 ★ 앱이 잘못된 응답을 낸다(상태 099 · 상태 문구에 제어문자 · 101 전환) — 매달리지 않고 502 JSON(app-bad-response) · 다음 요청도 받는다", async () => {
+  const appPort = await freePort();
+  let mode = "099";
+  //  날것 TCP 가짜 앱 — http 서버로는 이런 답을 만들 수 없다.
+  const raw = net.createServer((sock) => {
+    sock.on("error", () => undefined);
+    sock.once("data", () => {
+      if (mode === "099") sock.end("HTTP/1.1 099 x\r\ncontent-length: 0\r\n\r\n");
+      else if (mode === "ctl") sock.end("HTTP/1.1 200 o\x01k\r\ncontent-length: 0\r\n\r\n");
+      else sock.write("HTTP/1.1 101 Switching Protocols\r\nupgrade: x\r\nconnection: upgrade\r\n\r\n");
+    });
+  });
+  await new Promise<void>((r) => raw.listen(appPort, "127.0.0.1", () => r()));
+  const g = await startGuard(appPort);
+  try {
+    for (const m of ["099", "ctl", "101", "099"]) {
+      mode = m;
+      const r = await Promise.race([
+        req(g.port, "/x", { "x-lively-identity": tok() }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${m}: 2초 안에 답이 없다(매달림)`)), 2000)),
+      ]);
+      assert.equal(r.status, 502, m);
+      assert.equal(r.headers["x-lively-guard"], "app-bad-response", m);
+      assert.equal(JSON.parse(r.body).error, "app_bad_response", m);
+    }
+  } finally {
+    g.stop();
+    raw.close();
+  }
 });
 
 test("A13 준비 판정 — 앱 포트 닫힘 503 · 열림 200 · 신원 없이 · 그 경로는 앱에 안 간다", async () => {

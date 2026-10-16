@@ -13,6 +13,8 @@
 //  2026-10-16 실측(시험 함수 lvly-app-proto-4485-a, 지움): 차가운 시작 Init 226~298ms(문 없이 157~203ms) · 따뜻한 요청 함수 안 시간 +0.8ms ·
 //   흘려 보내기 · 쿠키 · 4.5MB 본문 · 7MB 응답 · 위조 · 만료 · 다른 앱 신원 거부 · 앱이 $PORT 를 안 열면 20초 뒤 «did not become ready».
 //
+//  앱이 받는 머리글(계약): x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(한글 id 도 실리게 · SDK livelyMember 가 푼다) ·
+//   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다). 들어온 그 밖의 x-lively-* 는 지운다.
 //  ⚠ guardMain 은 `.toString()` 으로 글이 되어 Lambda 안 node 에서 돈다 — **바깥 이름(import · 이 파일의 상수)을 쓰면 안 된다**(빌더와 같은 규율).
 //   검사 규칙은 src/apps/app-identity.ts verifyAppIdentity 와 같아야 한다 — 시험(app-server-guard.test)이 같은 토큰 표로 둘을 대조한다.
 import crypto from "node:crypto";
@@ -21,14 +23,14 @@ import { crc32 } from "../util/crc32.js";
 declare const require: (id: string) => unknown;   // guardMain 이 Lambda 안에서 CommonJS 로 돌 때의 require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 문 판 — 레이어 설명에 들어간다(사람이 보는 표지 · 실제 같고 다름은 내용 지문으로 가른다). */
-export const GUARD_VERSION = 2;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다(#4485 격리 리뷰)
+export const GUARD_VERSION = 3;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토)
 /** 문이 받는 포트(웹 어댑터 AWS_LWA_PORT) — 앱은 $PORT(8080)에서 받는다. */
 export const GUARD_PORT = 8099;
 export const APP_PORT = 8080;
 /** 준비 판정 경로 — 앱 포트가 열렸을 때만 200. 앱 주소 앞단은 `/_lively/*` 를 앱으로 보내지 않는다. */
 export const GUARD_READY_PATH = "/_lively/guard/ready";
-/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음) · error(문 안의 오류). 시험 호출이 «문이 있다» 를 이것으로 본다.
- *  앱이 받는 머리글: x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(decodeURIComponent 로 푼다) · x-lively-variant(pub | draft). */
+/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음) · app-bad-response(앱이 읽을 수 없는 답) · error(문 안의 오류).
+ *  시험 호출이 «문이 있다» 를 이것으로 본다. */
 export const GUARD_HEADER = "x-lively-guard";
 /** 레이어 안 경로(/opt 아래). */
 export const GUARD_BOOTSTRAP_PATH = "/opt/lively/bootstrap";
@@ -107,7 +109,8 @@ function guardMain(): void {
 
   const sendJson = (res: import("node:http").ServerResponse, status: number, mark: string, o: unknown): void => {
     const body = Buffer.from(JSON.stringify(o), "utf8");
-    res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": body.length, "cache-control": "no-store", [GUARD]: mark });
+    //  상태 문구를 늘 적는다 — 앞서 실패한 writeHead 가 남긴 잘못된 문구(앱이 보낸 제어문자)를 그대로 쓰면 또 던진다(재검토 A21).
+    res.writeHead(status, http.STATUS_CODES[status] ?? "", { "content-type": "application/json; charset=utf-8", "content-length": body.length, "cache-control": "no-store", [GUARD]: mark });
     res.end(body);
   };
 
@@ -163,17 +166,34 @@ function guardMain(): void {
     headers["x-lively-member"] = enc(v.claims.sub);
     headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
+    //  앱이 잘못된 응답을 내면(상태 099 · 상태 문구에 제어문자 · 101 전환) 넘기다 던지거나 응답 콜백이 안 온다 — 그때도 매달리지 않고 502 로 답한다(재검토).
+    const badApp = (why: string): void => {
+      console.error(`[lively-guard] 앱 응답을 넘기지 못했다(${why})`);
+      try {
+        if (!res.headersSent) {
+          for (const h of res.getHeaderNames()) res.removeHeader(h);   // 실패한 writeHead 가 남긴 앱 머리글을 걷는다
+          sendJson(res, 502, "app-bad-response", { error: "app_bad_response", message: "앱 서버가 HTTP 응답으로 읽을 수 없는 답을 보냈습니다." });
+        } else res.destroy();
+      } catch { res.destroy(); }   // 그래도 못 쓰면 끊는다 — 매달리지는 않는다
+    };
     const preq = http.request({ host: APP_HOST, port: APP_PORT, method: req.method, path: url, headers, agent }, (pres) => {
-      const out: string[] = [];
-      for (let i = 0; i + 1 < pres.rawHeaders.length; i += 2) {
-        const k = pres.rawHeaders[i]!;
-        if (HOP.has(k.toLowerCase())) continue;
-        out.push(k, pres.rawHeaders[i + 1]!);
+      try {
+        const out: string[] = [];
+        for (let i = 0; i + 1 < pres.rawHeaders.length; i += 2) {
+          const k = pres.rawHeaders[i]!;
+          if (HOP.has(k.toLowerCase())) continue;
+          out.push(k, pres.rawHeaders[i + 1]!);
+        }
+        res.writeHead(pres.statusCode || 502, pres.statusMessage, out);
+      } catch (e) {
+        pres.destroy();
+        badApp((e as Error)?.message ?? String(e));
+        return;
       }
-      res.writeHead(pres.statusCode || 502, pres.statusMessage, out);
       pres.on("error", () => res.destroy());
       pres.pipe(res);
     });
+    preq.on("upgrade", (_pres, socket) => { socket.destroy(); badApp("101 프로토콜 전환 — Lambda 는 연결을 넘겨받지 못한다"); });
     preq.on("error", () => {
       if (!res.headersSent) sendJson(res, 502, "app-unreachable", { error: "app_unreachable", message: "앱 서버에 닿지 못했습니다." });
       else res.destroy();

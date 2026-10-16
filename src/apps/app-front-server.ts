@@ -239,7 +239,8 @@ export async function serveAppServer(req: express.Request, res: express.Response
   //  ★ 브라우저가 떠나도 함수 흐름을 끊지 않는다 — Lambda 는 부른 쪽이 끊어도 함수가 끝날 때(또는 시간)까지 돈다. 끊고 자리를 돌려주면
   //   «부르고 곧 끊기» 를 되풀이해 동시 처리 상한을 넘기고, 실행 시간도 끊은 때까지만 세어 자동 멈춤이 덜 본다(격리 리뷰).
   //   그래서 남은 흐름은 끝까지 읽어 버리고(브라우저로는 안 보낸다) 그동안 자리를 쥐며, 끝나면 REPORT 의 청구 시간으로 센다.
-  //   흐름은 invokeStream 의 시한(요청 상한 + 5초)이 끊는다.
+  //   흐름은 invokeStream 의 시한(요청 상한 + 5초)이 끊는다. 브라우저 연결은 살아 있는데 읽지 않아 쓰기가 막힌 경우(drain 대기)는 그 시한이 닿지 않는다 —
+  //   앞단(CP 라우터)의 위 침묵 시한(75초)이 연결을 걷어 풀린다(게이트웨이의 이 길은 앞단을 거쳐서만 닿는다).
   let counted = false;
   const count = (r: { billedMs?: number | null; error?: boolean }): void => { if (!counted) { counted = true; (deps.record ?? recordAppServerCall)(t.app.id, r); } };
   try {

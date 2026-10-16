@@ -26,14 +26,22 @@ const key = ed25519FromSeed(crypto.createHash("sha256").update("front-server-wir
 const ROLE = "arn:aws:iam::111122223333:role/lvly-app-exec";
 const BASE_ENV = { LIVELY_TENANT_HEADER_SECRET: SECRET, LIVELY_APP_DOMAIN: "lvly.app", LIVELY_APP_IDENTITY_PUBKEYS: JSON.stringify({ k1: key.publicKeyB64 }) };
 const now = (): number => Math.floor(Date.now() / 1000);
-const front = (app: string): string => signAppFront(SECRET, { op: "act", t: T.id, ws: T.slug, app, var: "pub", mid: "alice", iat: now() } as never);
-const ident = (app: string): string => signAppIdentity({ ws: T.id, app, var: "pub", sub: "alice", name: "앨리스", iat: now() - 2, exp: now() + 500 }, key.privateKey, "k1");
+type Who = { v?: "pub" | "draft"; mid?: string };
+const front = (app: string, o: Who = {}): string => signAppFront(SECRET, { op: "act", t: T.id, ws: T.slug, app, var: o.v ?? "pub", mid: o.mid ?? "alice", iat: now() } as never);
+const ident = (app: string, o: Who = {}): string =>
+  signAppIdentity({ ws: T.id, app, var: o.v ?? "pub", sub: o.mid ?? "alice", name: "앨리스", iat: now() - 2, exp: now() + 500 }, key.privateKey, "k1");
 
 const member = { id: "alice", kind: "human", display_name: "앨리스", nickname: null, use_nickname: false, email: "a@x.io", identities: [], body_md: "",
   avatar: null, avatar_char: null, avatar_color: null, state: "active", scopes: ["memory"], sort: 0, version: 1, updated_at: null, updated_by: null } as unknown as OrgMember;
 const mkApp = (id: string, manifest: unknown): OrgApp => ({ id, title: id, version: "1", manifest, source: {}, content_hash: "h", status: "active", enabled: true,
   visibility: "all", owner_member: "alice", draft_by: null, published_version_no: null }) as unknown as OrgApp;
-const APPS: Record<string, OrgApp> = { srv: mkApp("srv", { web: { server: true } }), plain: mkApp("plain", {}) };
+const APPS: Record<string, OrgApp> = {
+  srv: mkApp("srv", { web: { server: true } }), plain: mkApp("plain", {}),
+  //  SW10 — 꺼진 앱 · 남(밥)의 초안이 걸린 공개 앱(앨리스의 초안 주소는 없는 판)
+  off: { ...mkApp("off", { web: { server: true } }), enabled: false } as OrgApp,
+  drafty: { ...mkApp("drafty", { web: { server: true } }), draft_by: "bob", published_version_no: 1 } as unknown as OrgApp,
+};
+const gone = { ...member, id: "carol", state: "inactive" } as unknown as OrgMember;
 const row: ServerRow = {
   app_id: "srv", function_name: "lvly-app-srv-lively-46e3", cur_version_no: 1, cur_build_key: "b", cur_lambda_version: "3", cur_at: null,
   pub_version_no: null, pub_build_key: null, pub_lambda_version: null, pub_at: null, stopped_at: null, stopped_by: null, stop_kind: null, stop_reason: null,
@@ -67,7 +75,7 @@ async function start(o: { serverOn?: boolean } = {}): Promise<{ port: number; se
     env, api: echoApi(seen), getServerRow: async (id) => (id === "srv" ? row : null), policy: async () => APP_SERVER_POLICY_DEFAULT, record: () => undefined,
   });
   const deps: AppFrontDeps = {
-    env, tenant: () => T as never, getMember: async (id) => (id === "alice" ? member : null), getApp: async (id) => APPS[id] ?? null,
+    env, tenant: () => T as never, getMember: async (id) => (id === "alice" ? member : id === "carol" ? gone : null), getApp: async (id) => APPS[id] ?? null,
     listUiAssets: async () => [], getUiAsset: async () => null, redeem: async () => null, scripts: async () => ({ runtime: "window.lively={}", probe: "" }), server,
   };
   const app = express();
@@ -80,12 +88,12 @@ async function start(o: { serverOn?: boolean } = {}): Promise<{ port: number; se
   return { port: (srv.address() as AddressInfo).port, seen, close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }) };
 }
 
-function call(port: number, method: string, path: string, o: { app?: string; body?: Buffer | string; headers?: Record<string, string>; noFront?: boolean; badFront?: boolean } = {}):
+function call(port: number, method: string, path: string, o: { app?: string; body?: Buffer | string; headers?: Record<string, string>; noFront?: boolean; badFront?: boolean; who?: Who } = {}):
   Promise<{ status: number; type: string; allow: string; text: string; json: any }> {
   return new Promise((resolve, reject) => {
     const app = o.app ?? "srv";
-    const h: Record<string, string> = { "x-lively-identity": ident(app), ...(o.headers ?? {}) };
-    if (!o.noFront) h["x-lvly-app-front"] = o.badFront ? front(app).slice(0, -2) + "xx" : front(app);
+    const h: Record<string, string> = { "x-lively-identity": ident(app, o.who), ...(o.headers ?? {}) };
+    if (!o.noFront) h["x-lvly-app-front"] = o.badFront ? front(app, o.who).slice(0, -2) + "xx" : front(app, o.who);
     if (o.body !== undefined) h["content-length"] = String(Buffer.byteLength(o.body));
     const r = http.request({ host: "127.0.0.1", port, method, path, headers: h, agent: false }, (res) => {
       let t = "";
@@ -195,6 +203,24 @@ test("SW5 앞단 기계 헤더 없음 · 틀림 → 401 JSON · 함수 0", async
       assert.match(r.type, /application\/json/);
     }
     assert.equal(h.seen.length, 0);
+  } finally { await h.close(); }
+});
+
+test("SW10 쓰기 길의 문 — 꺼진 앱 409 · 남의 초안이 걸린 앱의 초안 주소 404 · 비활성 구성원 403 — 모두 JSON(화면 HTML 이 아님) · 함수 0", async () => {
+  const h = await start();
+  try {
+    const cases: Array<[string, Parameters<typeof call>[3], number]> = [
+      ["꺼진 앱", { app: "off" }, 409],
+      ["남의 초안 · 초안 주소", { app: "drafty", who: { v: "draft" } }, 404],
+      ["비활성 구성원", { who: { mid: "carol" } }, 403],
+    ];
+    for (const [why, o, status] of cases) {
+      const r = await call(h.port, "POST", W("/x"), { ...o, body: "{}", headers: { "content-type": "application/json" } });
+      assert.equal(r.status, status, why);
+      assert.match(r.type, /application\/json/, `${why}: 쓰기 길이 화면(HTML)으로 답했다`);
+      assert.ok(r.json && typeof r.json.error === "string", `${why}: JSON 오류가 아니다`);
+    }
+    assert.equal(h.seen.length, 0, "막힌 쓰기가 함수에 닿았다");
   } finally { await h.close(); }
 });
 

@@ -216,3 +216,10 @@ test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 �
   assert.equal(livelyMember(h({ "x-lively-member": "" })), null);
   assert.equal(livelyMember(undefined), null);
 });
+
+test("S12 livelyMember — Fetch API 의 Headers(Next 앱 라우터 · Hono)도 같은 결과", () => {
+  const headers = new Headers({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" });
+  assert.deepEqual(livelyMember({ headers }), { id: "윤상민", name: "윤 상민", variant: "draft" });
+  assert.equal(livelyMember({ headers: new Headers() }), null);
+  assert.deepEqual(livelyMember(new Request("https://a.example/", { headers: { "x-lively-member": "m-1" } })), { id: "m-1", name: "", variant: "pub" }, "Request 그대로");
+});

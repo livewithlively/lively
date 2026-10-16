@@ -29,7 +29,7 @@ export class AwsError extends Error {
 }
 
 export interface AwsCall {
-  service: string;           // SigV4 서비스 이름 — lambda · logs · monitoring
+  service: string;           // SigV4 서비스 이름 — lambda · logs
   region: string;
   host: string;
   method: "GET" | "POST" | "PUT" | "DELETE";
@@ -109,7 +109,8 @@ async function once(c: AwsCall, deps: AwsDeps): Promise<AwsResponse> {
 /**
  * 한 번만 보내고 응답 본문을 **흘려 읽을 수 있게** 돌려준다(#4485 흘려 받기 — InvokeWithResponseStream). 다시 하지 않는다:
  *  함수 호출은 앱 코드가 도는 일이라 같은 요청을 두 번 보내면 안 된다. rawBody = 이미 만든 JSON 글(큰 이벤트를 두 번 직렬화하지 않게).
- *  timeoutMs 는 응답을 다 받을 때까지의 시한이다(흘려 받는 동안에도 걸린다). signal 로 부르는 쪽이 끊을 수 있다(브라우저가 떠남).
+ *  timeoutMs 는 응답을 다 받을 때까지의 시한이다(흘려 받는 동안에도 걸린다). signal 로 부르는 쪽이 끊을 수 있다 — 앱 주소 길(app-front-server)은
+ *  쓰지 않는다: 브라우저가 떠나도 함수는 돌므로 흐름을 끝까지 읽어 상한 자리 · 실행 시간을 센다(#4485 격리 리뷰).
  */
 export async function awsOpen(c: AwsCall & { rawBody?: string; signal?: AbortSignal }, deps: AwsDeps = {}): Promise<Response> {
   return send(c, deps);

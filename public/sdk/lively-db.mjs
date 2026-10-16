@@ -56,7 +56,10 @@ export function livelyIdentity() {
  */
 export function livelyMember(req) {
   const h = req?.headers ?? {};
-  const one = (k) => { const v = Array.isArray(h[k]) ? h[k][0] : h[k]; return typeof v === "string" ? v : null; };
+  //  Node(Express) 는 머리글 객체 · Fetch API(Next 앱 라우터 · Hono · Lambda 핸들러의 Request)는 Headers(get) — 둘 다 읽는다.
+  const one = typeof h.get === "function"
+    ? (k) => { const v = h.get(k); return typeof v === "string" ? v.split(",")[0].trim() : null; }
+    : (k) => { const v = Array.isArray(h[k]) ? h[k][0] : h[k]; return typeof v === "string" ? v : null; };
   const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   const id = one("x-lively-member");
   if (!id) return null;

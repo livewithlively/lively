@@ -124,7 +124,12 @@ export interface AppServerRuntime {
   apiUrl: string;
   /** 앱 서버 토큰(app-server-auth) — 혼자서는 아무것도 못 한다(사람 신원과 함께일 때만). */
   token: string;
-  /** 신원 공개 키(JSON {kid: base64url}) — 검사 층이 서명을 본다. 비밀이 아니다. */
+  /**
+   * 신원 공개 키(JSON {kid: base64url}) — 검사 층이 서명을 본다. 비밀이 아니다.
+   *  ⚠ 함수 판의 환경에 **구워진다**(다음 배포 때만 바뀐다). 서명 키를 바꿀 때는 ① 새 kid 를 공개 키 목록에 더해(옛 kid 와 함께) 게이트웨이를 롤하고
+   *   ② 모든 서버 앱을 다시 올려(app_server_deploy — 설정이 달라진 함수는 새 판이 된다) ③ 그 뒤에 앞단의 서명 kid 를 바꾸고 ④ 옛 kid 를 맨 마지막에 뺀다.
+   *   ③ 을 먼저 하면 다시 올리지 않은 함수의 검사 층이 새 kid 를 몰라 모두 401 이다(게이트웨이 쪽 판정은 env 를 바로 따른다).
+   */
   identityPubkeys: string;
 }
 
