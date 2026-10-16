@@ -270,7 +270,8 @@ function recentCard(rows: any[], truncated: boolean): HTMLElement {
     tbody.append(el('tr', { class: fail || ing.fail ? 'is-fail' : '' },
       el('td', { title: new Date(r.started_at).toLocaleString('ko-KR'), text: relTime(r.started_at) }),
       el('td', { text: r.member_name || r.member_id }),
-      el('td', { text: MODE_LABEL[r.mode] || '점검' }),
+      //  #4744 기본 주기 틱이 띄운 판은 «· 주기» 를 붙인다(사람·리브가 직접 띄운 판과 가른다).
+      el('td', { text: (MODE_LABEL[r.mode] || '점검') + (r.trigger === 'schedule' ? ' · 주기' : '') }),
       el('td', { text: (r.apps || []).join(', ') || '전부' }),
       el('td', { title: r.error || '', text: labelOf(r.outcome) + retried }),
       el('td', { title: ing.title, text: ing.text }),

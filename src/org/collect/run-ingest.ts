@@ -10,8 +10,16 @@
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
-import { CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
+import { CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
 import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
+import { noteUnitRead, type UnitReadBy } from "./unit-schedule.js";
+import type { ReadNote } from "./schedule-plan.js";
+
+/** #4744 단위 하나의 다음 확인을 적고 실행 기록에 남길 모양으로 — 지금 담당의 판만 쓴다 · 못 적었으면 null(던지지 않는다). */
+async function scheduleNote(unitId: number, note: ReadNote, now: number, by: UnitReadBy): Promise<IngestUnitResult["next"]> {
+  const r = await noteUnitRead(unitId, { ...note, now }, by);
+  return r ? { at: r.next_at, why: r.why, interval_sec: r.interval_sec } : null;
+}
 
 export type IngestPlan = CollectPlan;
 
@@ -32,6 +40,8 @@ export interface IngestUnitResult {
   id: number; app: string; ref: string; reads: number; items: number;
   stored: number; inserted: number; conflicts: number; failed: number; unparsed: number;
   complete: boolean; cursor_moved: boolean; window_shrunk: boolean; stuck: boolean; reason?: string;
+  /** #4744 다음 확인 — 언제 · 왜(interval 주기 뒤 · catchup 곧바로 · retry 물러섬) · 그때의 주기. 못 적었으면 없다. */
+  next?: { at: string; why: string; interval_sec: number } | null;
 }
 
 export interface IngestResult {
@@ -95,7 +105,8 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
 }
 
 /** 수집 실행 → 단위마다 storeUnitItems · advanceUnitCursor. */
-async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean): Promise<Omit<IngestResult, "captures" | "truncated">> {
+async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean, runId: string | null): Promise<Omit<IngestResult, "captures" | "truncated">> {
+  const by: UnitReadBy = { member, runId };
   const units = plan.units ?? [];
   if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
   const { byUnit, stray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null });
@@ -108,7 +119,12 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false, stuck: false,
     };
     unparsed += h.unparsed;
-    if (!h.reads) { row.reason = "이 판이 읽지 않음"; unread++; per.push(row); continue; }
+    if (!h.reads) {
+      row.reason = "이 판이 읽지 않음"; unread++; per.push(row);
+      //  #4744 맡겼는데 안 읽었다(턴이 모자람 등) — 물러섰다가 다시(곧바로 다시 띄우면 같은 판이 되풀이된다). 지금 담당이 아니면 임대만 푼다.
+      row.next = await scheduleNote(u.id, readNoteOf(u, h, { blocked: false, nowMs: now }), now, by);
+      continue;
+    }
     if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
     try {
       if (h.items.length) {
@@ -126,11 +142,14 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       row.window_shrunk = a.ok && !blocked && !h.complete && h.nextCursor != null;
       row.stuck = row.window_shrunk && h.stuck;
       if (row.stuck) stuck++;
+      //  #4744 다음 확인 시각 — 지금 담당의 판만 쓴다(noteUnitRead 가 다시 판정한다 — 담당이 바뀌었으면 이 판이 건 임대만 푼다).
+      row.next = await scheduleNote(u.id, readNoteOf(u, h, { blocked: !!blocked, nowMs: now }), now, by);
     } catch (e) {
       row.reason = String((e as Error)?.message ?? e).slice(0, 200);
       row.failed = Math.max(row.failed, 1);
       failed += 1;
       logger.warn({ unitId: u.id, member, err: row.reason }, "[collect-ingest] 단위 저장 실패 — 다음 판이 같은 위치부터 다시 읽는다");
+      row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
     }
     per.push(row);
   }
@@ -146,13 +165,15 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
 /** 끝난 실행 하나의 저장 단계. 던지지 않는다. */
 export async function ingestRun(input: {
   member: string; plan: IngestPlan; files: readonly CaptureFile[]; truncated?: boolean; now?: number;
+  /** #4744 그 실행의 id — 이 판이 건 단위 임대를 알아본다(담당이 바뀐 뒤 늦게 끝난 판이 임대만 푼다). */
+  runId?: string | null;
 }): Promise<IngestResult> {
   const caps = capturesOf(input.files);
   const truncated = input.truncated === true;
   const base = { captures: caps.length, truncated };
   try {
     if (input.plan.mode === "listing") return { ...base, ...(await ingestListing(input.member, String(input.plan.app ?? ""), caps, truncated)) };
-    return { ...base, ...(await ingestCollect(input.member, input.plan, caps, input.now ?? Date.now(), truncated)) };
+    return { ...base, ...(await ingestCollect(input.member, input.plan, caps, input.now ?? Date.now(), truncated, input.runId ?? null)) };
   } catch (e) {
     const error = String((e as Error)?.message ?? e).slice(0, 300);
     logger.warn({ member: input.member, mode: input.plan.mode, err: error }, "[collect-ingest] 저장 단계 실패");
