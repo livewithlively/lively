@@ -162,8 +162,10 @@ export { readyVerdictOnError } from "./outbox-exec.js";
 /** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
  *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
  *  전문 일치는 실제로 전달됐는데 'echo-unconfirmed' 로 오판한다. 접두 160자는 충분히 특정적이고 머리는 안 섞인다. */
+/** 에코 바늘의 접두 길이 — 늦은 에코 대조(outbox-late-echo.ts samePrompt)와 화면 판정(web/lib/outbox-echo.ts)도 같은 값을 쓴다. */
+export const ECHO_HEAD_CHARS = 160;
 export function echoNeedle(oneLine: string): string {
-  return JSON.stringify(oneLine.slice(0, 160)).slice(1, -1);
+  return JSON.stringify(oneLine.slice(0, ECHO_HEAD_CHARS)).slice(1, -1);
 }
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 개행은 공백으로). 에코도 이 형태로 찾아야 한다. */
 export const flatOneLine = (text: string): string => String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
@@ -185,6 +187,8 @@ export async function enqueuePrompt(sessionId: string, text: string, opts?: { tr
 // 화면용 — 미완(queued·sending·failed) + **에코 미확인**(sent·echo-unconfirmed). 후자를 숨기면 "보낸 걸로 떠서 영영
 //  대답을 못 받는" 거짓 화면이 된다(antigravity 인증 거부 실측 2026-08-18) — 재시도·지우기를 사람 손에 준다.
 //  (echo-unreadable 은 파일을 못 읽는 자리의 정상적 '모름' — 표시하지 않는다.)
+//  ⚠ #4819 — 그 «미확인» 은 15초 창의 판정일 뿐이다(Claude Code 는 UserPromptSubmit 훅이 끝난 뒤에야 사람 말을 적는다). 화면은 이 함수가
+//   아니라 outbox-late-echo.listOutboxReconciled 로 읽는다 — 기록에 이미 있는 말은 거기서 'delivered·echo-late' 로 바로잡혀 빠진다.
 export async function listOutbox(sessionId: string): Promise<OutboxRow[]> {
   const r = await itemsPool.query(
     `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND
@@ -257,6 +261,22 @@ export async function carryOutbox(oldId: string, newId: string): Promise<number>
   const moved = r.rowCount ?? 0;
   if (moved) kickOutbox(newId);
   return moved;
+}
+
+/**
+ * 늦은 에코(#4819) — 15초 창이 «못 봤다» 고 마감한 행을, 기록에서 그 말을 찾은 뒤 'delivered·echo-late' 로 바로잡는다.
+ *  찾는 일은 outbox-late-echo.ts 가 한다(대화 파일 찾기가 그쪽에 있다 — 이 모듈은 노드 번들의 알려진 부채라 그 무게를 들이지 않는다).
+ *  조건부 UPDATE — 그새 사람이 [다시 보내기](queued)·[지우기]를 골랐으면 건드리지 않는다.
+ *  delivered_at 은 기록에 적힌 그 줄의 시각(하네스가 받은 때)이고, 못 읽으면 지금이다.
+ */
+export async function settleLateEcho(sessionId: string, id: number, echoedAt: string | null): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_session_outbox SET status='delivered', last_error='echo-late', updated_at=now(),
+       delivered_at=COALESCE($3::timestamptz, now())
+     WHERE session_id=$1 AND id=$2 AND kind='prompt'
+       AND ((status='sent' AND last_error='echo-unconfirmed') OR (status='failed' AND last_error='send: host-unknown'))`,
+    [sessionId, id, echoedAt]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function discardOutbox(sessionId: string, id: number): Promise<boolean> {

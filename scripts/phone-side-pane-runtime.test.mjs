@@ -19,10 +19,10 @@
 //   B8 서랍이 닫혀 있으면 «쓰는 중» 표시가 남아도 탭 바 그대로 · B9 붙은 앱 부품이 숨으면(다른 탭) 표시가 남아도 그대로
 //   B10 숨은 셸 탭(.v2-tabpane[hidden])에 남은 표시는 지금 탭의 탭 바를 숨기지 않는다
 //   F1 폰 곁칸의 태스크 추가 입력칸 16px(칸 안 규칙 12.5 · 13px 를 이긴다)
-//   C1 «크게 보기» = 화면 전체 · «(Esc)» 숨음 · «앱 UI» 배지는 남는다 · 단추 «닫기»
+//   C1 «크게 보기» = 화면 전체 · «앱 UI» 배지는 남는다 · 단추 «닫기»(«(Esc)» 안내는 모든 폭에서 없다 — 2026-10-16 상민님)
 //  눕힌 폰(폭 641~900 · 높이 ≤500): A4 서랍에 독이 없다 · C2 «크게 보기» 화면 전체
 //  태블릿(폭 641~900 · 높이 >500): A3 서랍에 독이 선다(가림 폭 > 0) · C 크게 보기는 종전 창(여백 24px)
-//  데스크톱: A7 독이 선다 · H7 머리줄 [붙은 앱] 숨음(곁칸에 그 탭이 보인다) · C3 크게 보기 종전 창 · «닫기 (Esc)»
+//  데스크톱: A7 독이 선다 · H7 머리줄 [붙은 앱] 숨음(곁칸에 그 탭이 보인다) · C3 크게 보기 화면 가득 · «닫기»
 //  E 페이지 오류 없음
 //
 //  fail-first(2026-10-08 PR #1284): 바꾸기 전 판(SRC_ROOT = origin/main ac51ab1b)에서 D1 · D2 · D3 · D1b · A1 · B1 · B6 · F1 · C1 · A4 · C2 빨강
@@ -106,7 +106,7 @@ async function PAGE_MAIN() {
     const o = $(".v2-appui"); const r = o ? o.getBoundingClientRect() : null;
     const out = { open: okOpen, box: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
       esc: o && o.querySelector(".v2-appui-esc") ? getComputedStyle(o.querySelector(".v2-appui-esc")).display : "absent", badge: o ? getComputedStyle(o.querySelector(".v2-appui-badge")).display : null,
-      btn: o ? o.querySelector(".v2-appui-h .v2-appui-esc").parentElement.innerText.replace(/\s+/g, " ").trim() : null };   // 닫기 단추((Esc) 를 품은 단추) — 크게 보기는 늘 화면 가득이라 토글 단추가 없다(2026-10-12)
+      btn: o ? [...o.querySelectorAll(".v2-appui-h button")].pop().innerText.replace(/\s+/g, " ").trim() : null };   // 닫기 단추(머리줄 맨 끝) — 크게 보기는 늘 화면 가득이라 토글 단추가 없다(2026-10-12)
     PN.closeAppUi();
     return out;
   };
@@ -303,19 +303,19 @@ check(!!p.b8 && p.b8.staleKb && p.b8.mtabs !== "none", "B8 서랍이 닫혀 있�
 check(!!p.b9 && p.b9.partHidden && p.b9.staleKb && p.b9.mtabs !== "none" && p.b9.bottom === p.b9.tabsTop, "B9 붙은 앱 부품이 숨으면(다른 탭) 남은 표시를 안 본다", p.b9);
 check(!!p.b10 && p.b10.mtabs !== "none" && p.b10.bottom === p.b10.tabsTop, "B10 숨은 셸 탭에 남은 표시는 지금 탭의 탭 바를 숨기지 않는다", p.b10);
 check(p.f1 === "16px", "F1 폰 곁칸 태스크 추가 입력칸 16px", p.f1);
-check(pw <= 640 && !!p.big && Js(p.big.box) === Js([0, 0, pw, ph]) && p.big.esc === "none" && p.big.badge !== "none" && p.big.btn === "닫기", "C1 폰 «크게 보기» = 화면 전체 · «(Esc)» 숨음 · «앱 UI» 배지는 남는다", { ...p.big, vp: P.vp });
+check(pw <= 640 && !!p.big && Js(p.big.box) === Js([0, 0, pw, ph]) && p.big.esc === "absent" && p.big.badge !== "none" && p.big.btn === "닫기", "C1 폰 «크게 보기» = 화면 전체 · «(Esc)» 안내 없음 · «앱 UI» 배지는 남는다", { ...p.big, vp: P.vp });
 const f = F.q || {};
 check(!!f.dock && f.mAside && !f.dock.shown && f.dock.inset === "0px", "A4 눕힌 폰 서랍엔 독이 없다", f.dock);
 const [fw, fh] = F.vp || [0, 0];
 check(fw > 640 && fh <= 500 && !!f.big && Js(f.big.box) === Js([0, 0, fw, fh]), "C2 눕힌 폰 «크게 보기» = 화면 전체", { ...f.big, vp: F.vp });
 const t = T.q || {};
 check(!!t.dock && t.mAside && t.dock.shown && t.dock.inset !== "0px", "A3 태블릿 서랍엔 독이 선다", t.dock);
-check(!!t.big && !!t.big.box && t.big.box[0] === 0 && t.big.box[1] === 0 && t.big.box[2] === 768 && t.big.esc !== "none", "C 태블릿 «크게 보기» 도 화면 가득(여백 없이 · «(Esc)» 는 남는다 — 2026-10-12 «완전 전체화면으로»)", t.big);
+check(!!t.big && !!t.big.box && t.big.box[0] === 0 && t.big.box[1] === 0 && t.big.box[2] === 768 && t.big.esc === "absent" && t.big.btn === "닫기", "C 태블릿 «크게 보기» 도 화면 가득(여백 없이 — 2026-10-12 «완전 전체화면으로») · 단추 «닫기»", t.big);
 const d = D.q || {};
 check(!!d.dock && d.dock.shown, "A7 데스크톱 독 그대로", d.dock);
 check(!!d.head && d.head.wide === "none", "H7 데스크톱 머리줄 [붙은 앱] 숨음(곁칸에 그 탭이 보인다)", d.head && d.head.wide);
 const dh = (D.vp || [0, 0])[1];
-check(!!d.big && Js(d.big.box) === Js([0, 0, D.vp[0], D.vp[1]]) && d.big.esc !== "none" && d.big.btn === "닫기 (Esc)", "C3 ★ 데스크톱 «크게 보기» 는 화면 가득(창이 아니라 뷰포트 전체 · 토글 없음) · «닫기 (Esc)»", { ...d.big, vp: D.vp });
+check(!!d.big && Js(d.big.box) === Js([0, 0, D.vp[0], D.vp[1]]) && d.big.esc === "absent" && d.big.btn === "닫기", "C3 ★ 데스크톱 «크게 보기» 는 화면 가득(창이 아니라 뷰포트 전체 · 토글 없음) · 단추 «닫기»(«(Esc)» 안내 없음 — 앱 화면을 누르면 Esc 가 앱으로 간다)", { ...d.big, vp: D.vp });
 const tabUrl = (v) => !!v && typeof v.url === "string" && /#\/full\/deck\?s=s1&page=main&t=/.test(v.url) && !v.inPlace;
 check(!!p.bigTab && p.bigTab.url === null && p.bigTab.inPlace, "C4 폰 «크게 보기» 는 새 탭이 아니라 그 자리에서 화면 전체(되돌아오기 쉽게)", p.bigTab);
 check(tabUrl(t.bigTab), "C5 태블릿 «크게 보기» 는 새 탭(#/full/<앱>?s=<세션>&page=…) — 모달을 띄우지 않는다", t.bigTab);

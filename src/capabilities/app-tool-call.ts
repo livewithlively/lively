@@ -19,6 +19,7 @@ import { getApp } from "../org/store/apps.js";
 import { canSeeApp } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { logToolCall } from "../org/policies/tool-log.js";
+import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
 
 // 방어심화: grant 에 있어도 UI 브리지가 절대 호출하지 않는 도구(신원·자격·grant·앱관리 mutator). 관리자 도구는
@@ -58,7 +59,7 @@ export { CONSENT_REQUIRED };
  *  opts.address — 앱 주소로 들어온 호출이면 그 주소의 판(pub|draft): 선언(도구 · 표)을 사람이 아니라 주소의 판에서 읽는다(Viewer.address).
  */
 export async function runAppTool(member: LivelyUser, appId: string, name: string, rawArgs: unknown,
-  opts: { source: "app-ui" | "app-front"; address?: "pub" | "draft" }): Promise<unknown> {
+  opts: { source: AppScreenSource; address?: "pub" | "draft" }): Promise<unknown> {
   if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
   if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
   const viewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };

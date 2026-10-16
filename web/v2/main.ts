@@ -108,6 +108,9 @@ setLaunchpadContext(() => ({ sessions: data.sessions, projects: data.projects })
 let projLoadedAt = 0;
 const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
 let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 라우터가 다시 그리지 않게
+let prevActiveTab: ShellTab | null = null;   // #4480 바로 전에 켜져 있던 탭 — 크게 보기 탭을 떠나면 닫는다(onActivate)
+/** 크게 보기(#/full/<앱>) 주소인가 — 셸을 덮는 지나가는 탭(#4480). */
+const isFullRoute = (route: string): boolean => parseRoute(route).segs[0] === 'full';
 // 프로젝트 화면(#1757) 핸들 — **탭마다 하나**. 탭이 다른 화면으로 가거나 닫힐 때 destroy(리브 턴 폴링 정지).
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
@@ -460,6 +463,15 @@ export async function bootV2(): Promise<void> {
       // 활성 탭의 라우트가 곧 주소다 — 다르면 맞춘다(이 hashchange 는 라우터가 무시).
       if (location.hash !== tab.route && '#' + location.hash !== tab.route) { suppressHash++; location.hash = tab.route; }
       applyTabChrome(tab);
+      //  #4480 크게 보기(#/full) 탭은 지나가는 자리다 — 다른 탭을 켜면 덮개(body 의 층)를 걷고 그 탭은 닫는다. 앞으로 가기로 그 주소에 오면 새로 선다.
+      //   · 알림이 이미 열린 세션 탭을 켤 때 덮개가 남아 화면이 안 바뀌던 것(renderRoute 의 걷기는 처음 그리는 탭에서만 돈다).
+      //   · 남겨 두면 «가장 최근에 보던 창» 으로 다시 뽑혀 닫은 앱 화면이 되살아났다(격리 리뷰 재현 — tabTargetAlive 도 착지 후보에서 뺀다).
+      //   닫기는 다음 틱에 — 활성화(tabs.ts activate) 도중에 탭 배열을 바꾸지 않는다.
+      const left = prevActiveTab; prevActiveTab = tab;
+      if (!isFullRoute(tab.route)) dismissAppUi();
+      if (left && left !== tab && isFullRoute(left.route)) {
+        window.setTimeout(() => { if (tabsApi && tabsApi.tabs.includes(left) && tabsApi.current() !== left && isFullRoute(left.route)) tabsApi.close(left); }, 0);
+      }
       if (fresh) void renderRoute(tab);
       else markActive(routeKey(tab.route));
       drawSide();
@@ -1618,8 +1630,14 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       tab.center.replaceChildren(); tab.aside.replaceChildren();
       //  #4480 — 닫기: 스크립트가 연 창(크게 보기 새 탭 · 데스크톱 앱의 새 창 — window.opener 가 있다)만 닫는다. 그 밖(데스크톱 앱 **본 창**,
       //   주소를 직접 연 탭)에서 window.close() 를 부르면 데스크톱 앱 본 창은 «트레이로 숨기기» 가 되어 창이 통째로 사라졌다
-      //   (2026-10-14 상민님 실측 — 채팅의 #/full 링크를 본 창에서 눌렀다). 그런 자리에서는 닫지 않고 그 세션(없으면 첫 화면)으로 돌아간다.
-      const back = (): void => { location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/')); };
+      //   (2026-10-14 상민님 실측 — 채팅의 #/full 링크를 본 창에서 눌렀다). 그런 자리에서는 닫지 않고 **들어오기 전 화면**으로 돌아간다 —
+      //   셸 안에서 왔으면(histPos > 0) 뒤로 가기, 이 화면으로 처음 열었으면 그 세션(없으면 첫 화면). 종전엔 늘 그 세션(없으면 첫 화면)으로
+      //   바꿔서, 채팅 링크로 연 크게 보기를 닫으면 보던 세션이 아니라 첫 화면(새 세션 자리)이 떴다(2026-10-16 상민님 실측).
+      const back = (): void => {
+        //  세션 탭에서 열면 크게 보기는 새 탭에 선다(onHash) — 뒤로 가서 그 세션 탭이 켜지면 이 탭은 onActivate 가 닫는다.
+        if (histPos > 0) { history.back(); return; }
+        location.replace(location.pathname + location.search + (sid ? '#/s/' + encodeURIComponent(sid) : '#/'));
+      };
       void openAppUi(appId, { title: params.get('t') || appId, sessionId: sid, page: params.get('page') || undefined,
         onClose: () => {
           if (!window.opener) { back(); return; }
@@ -2133,6 +2151,8 @@ function tabTargetAlive(route: string): boolean {
   //   기록만 남은 세션을 열었다 홈으로 돌아와 휴지통으로 보냄 → 30초 뒤에도 줄이 있음). 착지 후보(canLand)에서도 빠진다.
   if (k.startsWith('s:')) { const s = findSess(k.slice(2)); return !sessTruthSeen || (!!s && !isTrashedSess(s)); }
   if (k.startsWith('i:')) { const id = k.slice(2); return !instTruthSeen || appInstances.some((x) => x.id === id); }
+  //  #4480 크게 보기 탭은 지나가는 자리 — 착지 후보가 아니다(남은 탭이 «가장 최근에 보던 창» 으로 뽑혀 닫은 앱 화면이 되살아나지 않게).
+  if (isFullRoute(route)) return false;
   return true;
 }
 

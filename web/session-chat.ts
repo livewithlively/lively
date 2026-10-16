@@ -52,6 +52,7 @@ import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, provide
 import { rememberCreated } from './v2/created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/quick-session.js';   // #2439 — 되살린 세션의 첫 지시 낙관 렌더   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게 · #3891 못 간 말은 옮겨 간 화면 입력칸으로
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
+import { echoedInTurns, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
@@ -1684,8 +1685,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     restoreMsg?: HTMLElement; restoreBtn?: HTMLButtonElement; restoring?: boolean;
     /** #3752 ④ — 서버가 «상태를 확인하지 못했다»(409)고 답한 뒤, 사람이 한 번 더 눌러 강제 복원을 고른 상태. */
     forceRestore?: boolean;
+    /** #4819 — 서버 큐가 마지막으로 알려 준 그 행의 상태·사유. 같은 글의 말풍선이 여럿일 때 기록의 에코를 어디에 이을지 가른다. */
+    status?: string; err?: string | null;
   }
   const pending: Pending[] = [];
+  //  #4819 — 기록이 이미 보여 준 말의 큐 행 id(낙관 말풍선이 기록에 이어졌거나, 그려 둔 기록에 행보다 뒤에 적힌 같은 말이 있다).
+  //   서버가 아직 «쳤다» 쪽 상태(전달하는 중 · 미확인)로 줘도 다시 대기 말풍선으로 올리지 않는다 — 종전엔 기록에 이어진 말풍선이
+  //   pending 에서 빠지고 나면 3초 폴링이 그 행을 «처음 보는 행» 으로 읽어 맨 아래에 같은 말을 또 그렸다(회수 뒤 다시 열 때도 같은 길).
+  const echoedOb = new Set<number>();
   let outboxTimer: number | null = null;
   let firstPrompt: string | null = opts.firstPrompt && !isHiddenBrief(String(opts.firstPrompt)) ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다 · 시험 세션의 첫 지시는 안 그린다)
   //  #1631 (원준 2026-09-15) — 리브 킥오프 세션은 서버가 첫 지시를 넣는다. 그 지시는 사람이 쓴 게 아니라 화면에 안 보이게 하고(사람 말풍선·발자취 모두), 답만 보인다.
@@ -1786,9 +1793,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (trail) trailSay(trail, o, text, 'end');
 
       // 내가 보낸(또는 큐에 있던) 말이 파일에 나타났다 → 낙관적으로 그린 그 턴을 그대로 쓴다(두 번 그리지 않는다)
-      const pi = pending.findIndex((pd) => sameSaid(pd.text, text));
+      //  #4819 — 같은 글의 말풍선이 여럿이면 «쳤을 수 있는» 쪽(상태 모름 · 전달하는 중 · 미확인)에 먼저 잇는다. 치지도 않은 실패(not-ready 등)·
+      //   대기 중(queued) 말풍선에 이으면 그 실패가 가려지고 진짜 짝은 상태 없는 고아로 남는다(격리 리뷰 재현 — 같은 글 두 행).
+      const typedMaybe = (pd: Pending): boolean => !pd.status || pd.status === 'sending' || unconfirmedRow({ status: pd.status, last_error: pd.err });
+      let pi = pending.findIndex((pd) => typedMaybe(pd) && sameSaid(pd.text, text));
+      if (pi < 0) pi = pending.findIndex((pd) => sameSaid(pd.text, text));
       if (pi >= 0) {
         const pd = pending[pi]; pending.splice(pi, 1);
+        if (pd.obId) echoedOb.add(pd.obId);                      // #4819 — 기록에 나타난 행 — 큐가 «쳤다» 쪽 상태면 다시 올리지 않는다(syncOutbox)
         pd.state.remove();                                       // '전달 대기' 줄은 물러난다 — 기록에 적힌 것이 곧 전달이다
         view.setNote('');                                        // '여는 중·아직 안 나타남' 안내도 그 순간 물러난다
         const rec = recs.find((r) => r.t === pd.t);
@@ -2007,9 +2019,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     try { items = ((await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/outbox`)) as any).items || []; }
     catch { return; }
     for (const row of items) {
+      //  #4819 — 기록에 이어진 말풍선의 행은, 서버 상태가 «쳤다» 쪽(전달하는 중 · 미확인)일 때만 건너뛴다. 대기(queued)·치지도 않은
+      //   실패는 기록의 같은 글과 모순이다 — 그땐 서버를 믿고 그린다(실패가 조용히 사라지지 않게 — 격리 리뷰 재현).
+      if (echoedOb.has(Number(row.id)) && (row.status === 'sending' || unconfirmedRow(row))) continue;
       let pd = pending.find((x) => x.obId === row.id) || pending.find((x) => !x.obId && sameSaid(x.text, String(row.text)));
+      //  #4819 — 말풍선이 아직 없는 «미확인» 행인데 그 말이 이미 그린 기록에 있다 — 서버의 «미확인» 은 친 뒤 15초 창의 판정일 뿐이다
+      //   (Claude Code 는 UserPromptSubmit 훅이 끝난 뒤에야 적는다). 맨 아래에 또 그리지 않는다. 판정 규칙(같은 말 · 증거 창)은 서버와 같다
+      //   (web/lib/outbox-echo.ts). 낙관 말풍선(아직 기록에 안 이어진 턴)은 기록이 아니라 세지 않는다.
+      if (!pd && unconfirmedRow(row) && echoedInTurns(row, recs.filter((r) => !pending.some((p) => p.t === r.t)).map((r) => r.t))) {
+        echoedOb.add(Number(row.id));
+        continue;
+      }
       if (!pd) pd = addPending(String(row.text), Number(row.id));
       pd.obId = Number(row.id);
+      pd.status = String(row.status ?? ''); pd.err = row.last_error ?? null;
       paintQState(pd, row);
     }
     for (const pd of pending) if (pd.obId && !items.some((r) => Number(r.id) === pd.obId)) paintQState(pd, null);

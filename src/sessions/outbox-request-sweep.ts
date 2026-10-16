@@ -136,6 +136,13 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보인다.
   { key: "login-job-reap", intervalMs: META_HEAL_SWEEP_MS,
     run: () => import("../terminal/login-job.js").then((m) => m.sweepLoginJobs()) },
+  // 작업 컨테이너 감시(#4490 앱 v2-11) — 대기 초과 · 시작 못 함 · 판 무응답 · 시간 초과를 끝내고, 끝났는데 안 걷은 작업을 걷고, 자리가 나면 띄운다.
+  //  ⚠ 컨테이너를 걷는 정비다(하네스 종료 규칙 다음 두 번째 예외 · [G4c]) — 그러나 걷는 것은 이 흐름이 띄운 `job-` 컨테이너뿐이고
+  //   (service.reapJob 의 JOB_SESSION_ID_RE), 사람 세션(`box-`)엔 닿지 않는다. 작업 컨테이너의 수명 주인은 이 흐름이다(#4490).
+  //  사람이 아무도 없어도 돈다: CP 가 60초마다 테넌트를 부르고, 도는 작업의 판은 5초마다 박동한다(둘 다 요청이라 이 정비를 깨운다).
+  //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
+  { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,

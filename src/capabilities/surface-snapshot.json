@@ -4022,7 +4022,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "1785e9eab4eb665b"
+  "input_hash": "1c85144b18880ab6"
  },
  {
   "name": "collect_unit_split",
@@ -5424,5 +5424,65 @@
    "GET /api/ui/files/path"
   ],
   "input_hash": "a17b1277b546d6bc"
+ },
+ {
+  "name": "agent_job_run",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-jobs"
+  ],
+  "input_hash": "362bb170315aad34"
+ },
+ {
+  "name": "agent_job_get",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-jobs/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "agent_job_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-jobs"
+  ],
+  "input_hash": "731cb0d16cd0d66b"
+ },
+ {
+  "name": "agent_job_cancel",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-jobs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "agent_job_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/agent-job-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "agent_job_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/agent-job-limits"
+  ],
+  "input_hash": "dcb45d30d8b1a5f8"
  }
 ]

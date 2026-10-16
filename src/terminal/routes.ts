@@ -39,6 +39,7 @@ import { restoreMeasureMiddleware } from "./restore-measure.js";   // #4697 T7 �
 import { PRIMARY_TENANT_ID, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { registerSessionLedgerRoute } from "./session-ledger.js";   // #2544 — 브로커용 세션 장부(사용자 auth 대신 테넌트 비밀로 연다)
+import { registerAgentJobRoutes } from "../agent-jobs/routes.js";   // #4490 — 작업 컨테이너 판의 콜백(작업별 비밀로 연다)
 import { registerSessionHostRoute } from "../node/session-host-route.js";   // #2600 T2 d5 — 브로커용 세션 호스트 자격 창구(같은 문)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { recordUsage } from "./usage-store.js"; // 세션 사용량(rate-limit 소진율) — statusLine 훅이 계정 단위로 보고
@@ -263,6 +264,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   registerSessionLedgerRoute(app);        // #2544 — /session-ledger (브로커 회수 판정의 desired 입력 — 경로가 겹치지 않는다)
   registerSessionHostRoute(app);          // #2600 T2 d5 — /node/session-host/ensure (브로커가 세션 호스트 자격을 받아 가는 창구. 장부와 같은 «테넌트 비밀 + 서명» 문)
+  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,tick,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
