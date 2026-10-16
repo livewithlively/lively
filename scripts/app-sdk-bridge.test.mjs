@@ -65,6 +65,27 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   let caught = null;
   try { await p; } catch (e) { caught = e; }
   ok(caught instanceof Error && caught.code === -32602 && /붙은 세션/.test(caught.message), "S2-2 붙은 세션이 없으면 -32602 로 reject");
+  ok(caught.reason === null && caught.status === null, "S2-2 서버까지 안 간 거절(data 없음)은 reason · status 가 null(#4848 C12)");
+}
+
+// ══ S2-2b #4848 호스트가 실어 준 서버의 실패(error.data) — 맨몸과 같은 규칙으로 e.status · e.reason · 사람이 읽을 글 ══
+{
+  const { lively, posted, deliver } = boot();
+  const fail = async (data, message = "요청 실패 (413)", code = -32000) => {
+    const p = lively.store.insert("notes", { text: "x".repeat(10) });
+    const req = posted.filter((m) => m.method === "tools/call").pop();
+    deliver({ jsonrpc: "2.0", id: req.id, error: { code, message, ...(data === undefined ? {} : { data }) } });
+    return p.then(() => null, (e) => e);
+  };
+  const a = await fail({ status: 413 });
+  ok(a && a.reason === "body_too_large" && a.status === 413 && a.code === -32000, "S2-2b data {status:413}(JSON 아닌 413) → reason body_too_large · status 413 · code 는 호스트가 준 그대로(C11)");
+  ok(a.message !== "요청 실패 (413)" && /[가-힣]/.test(a.message) && /1MB/.test(a.message), `S2-2b 글은 사람이 읽을 말(${a.message})`);
+  const b = await fail({ status: 403, error: "권한 밖", code: "consent_required" }, "권한 밖", -32001);
+  ok(b && b.reason === "consent_required" && b.status === 403 && b.code === -32001 && b.message === "권한 밖", "S2-2b 서버의 code → reason · 본문 거절이 아니면 글은 그대로");
+  const c = await fail(undefined, "요청 실패 (413)");
+  ok(c && c.reason === null && c.status === null && c.message === "요청 실패 (413)", "S2-2b data 가 없으면(옛 호스트) 종전 그대로 — 지어내지 않는다(C12)");
+  const d = await fail({ status: 413, error: 7, code: { x: 1 } });
+  ok(d && d.reason === "body_too_large", "S2-2b data 의 error · code 가 문자열이 아니면 쓰지 않는다(413 이라 body_too_large)");
 }
 
 // ══ S2-3 prefs.get / prefs.set ══
@@ -639,6 +660,41 @@ if (!existsSync(built)) {
     eq(d.g.root.attrs.sandbox, SRC_SB, "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
     longTimers.clear();
     state.me = null;
+  }
+  // S2-20 #4848 호스트는 서버의 실패를 넘길 때 error.data 에 {status, error?, code?}(문자열만)를 싣는다 — 서버까지 안 간 거절은 data 없음
+  {
+    const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
+    //  서버가 JSON 아닌 413(코어 전역 파서의 HTML)으로 답한 도구 호출
+    plan = { "/tool-call": { status: 413, json: undefined } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 80, method: "tools/call", params: { name: "store_insert", arguments: { table: "notes", row: { text: "x" } } } });
+    await settle();
+    ok(fetches.some((x) => x.url.includes("/api/ui/apps/deck-edit/tool-call")), "S2-20 배선 — 호스트가 서버를 불렀다");
+    eq(lastReply(), { jsonrpc: "2.0", id: 80, error: { code: -32000, message: "요청 실패 (413)", data: { status: 413 } } }, "S2-20 JSON 아닌 413 → data {status:413}");
+    //  서버가 짧은 코드를 준 실패(동의 문구가 아니라 그 자리 동의 창은 안 뜬다)
+    plan = { "/tool-call": { status: 403, json: { error: "이 도구는 선언되지 않았습니다", code: "tool_not_declared", extra: { secret: 1 } } } };
+    fire({ jsonrpc: "2.0", id: 81, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    eq(lastReply(), { jsonrpc: "2.0", id: 81, error: { code: -32001, message: "이 도구는 선언되지 않았습니다",
+      data: { status: 403, error: "이 도구는 선언되지 않았습니다", code: "tool_not_declared" } } }, "S2-20 403 → data {status, error, code} · 그 밖의 칸은 싣지 않는다");
+    //  개인 설정 413(16KB 넘음) — code 는 종전대로 -32602, data 도 싣는다
+    plan = { "/prefs": { status: 413, json: { error: "설정이 너무 큽니다(16KB 까지)" } } };
+    fire({ jsonrpc: "2.0", id: 82, method: "prefs/set", params: { patch: { big: "x" } } });
+    await settle();
+    eq(lastReply(), { jsonrpc: "2.0", id: 82, error: { code: -32602, message: "설정이 너무 큽니다(16KB 까지)", data: { status: 413, error: "설정이 너무 큽니다(16KB 까지)" } } }, "S2-20 prefs 413 → -32602 · data");
+    //  파일 읽기 · 세션에 글 보내기의 서버 실패도 같은 모양
+    plan = { "/file?": { status: 404, json: { error: "파일이 없습니다", code: "not_found" } }, "/chat-send": { status: 429, json: { error: "너무 잦습니다" } } };
+    fire({ jsonrpc: "2.0", id: 83, method: "files/read", params: { path: "a.html" } });
+    await settle();
+    eq(lastReply().error.data, { status: 404, error: "파일이 없습니다", code: "not_found" }, "S2-20 files/read 실패 → data");
+    fire({ jsonrpc: "2.0", id: 84, method: "chat/send", params: { text: "안녕" } });
+    await settle();
+    eq(lastReply().error.data, { status: 429, error: "너무 잦습니다" }, "S2-20 chat/send 실패 → data");
+    //  서버까지 안 간 거절(붙은 세션 없음)은 data 없음 — 종전 모양 그대로
+    const { fire: fire2 } = await mount({});
+    fire2({ jsonrpc: "2.0", id: 85, method: "chat/send", params: { text: "x" } });
+    await settle();
+    ok(lastReply().error && lastReply().error.code === -32602 && !("data" in lastReply().error), "S2-20 서버 밖 거절은 data 를 싣지 않는다");
   }
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;

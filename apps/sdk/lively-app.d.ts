@@ -9,7 +9,27 @@ declare global {
   interface Window { lively: LivelyApp }
 }
 
-/** 앱 UI ↔ 라이블리 호스트 다리. 모든 호출은 **그 앱의 grant 범위 안에서만** 서버가 재판정해 실행한다. */
+/**
+ * SDK 가 reject 하는 실패(모든 호출 공통). 앱은 글(message)이 아니라 `reason` 으로 가른다.
+ *  #4848 — 라이블리 안(다리) · 맨몸(새 탭 · 폰 — 같은 주소 `/_lively/*`) 어디서든 같은 모양이다.
+ *  · 본문 거절 넷(`busy` · `body_timeout` · `body_too_large` · `bad_body`)의 message 는 사람이 읽을 말이라 그대로 보여도 된다.
+ *  · 맨몸에서 앞단이 «붐빔»(503 `busy`)으로 거절한 요청은 SDK 가 `retry-after` 만큼 쉬고 **한 번** 다시 보낸다(본문을 다 받기 전의 거절이라
+ *    쓰기가 겹치지 않는다). 그래도 붐비면 `reason: "busy"` 로 실패한다 — 잠시 뒤 사람이 다시 누르게 한다.
+ *  · `body_too_large` — 한 번에 1MB 까지다. 나눠 보내거나, 큰 파일은 `lively.files.url` 의 서명 주소로 올린다.
+ */
+export interface LivelyError extends Error {
+  /** JSON-RPC 코드(종전 그대로) — -32001 권한 밖 · -32602 인자 · -32601 못 하는 자리 · -32000 그 밖. */
+  code: number;
+  /** 서버가 거절했으면 그 HTTP 상태(413 · 503 …). 서버까지 가지 않은 거절(붙은 세션 없음 등)은 null. */
+  status: number | null;
+  /**
+   * 서버가 준 짧은 코드 — 없으면 null. 본문: `busy`(입구가 붐빔) · `body_timeout`(보내는 데 너무 오래) · `body_too_large`(1MB 넘음) ·
+   *  `bad_body`(JSON 이 아님). 그 밖: `consent_required`(이 앱 사용 동의 없음) · `login_required`(앱 주소 로그인이 끝남) 등.
+   */
+  reason: string | null;
+}
+
+/** 앱 UI ↔ 라이블리 호스트 다리. 모든 호출은 **그 앱의 grant 범위 안에서만** 서버가 재판정해 실행한다. 실패는 {@link LivelyError} 로 reject 한다. */
 export interface LivelyApp {
   readonly version: 1;
   /** 이 UI 를 띄운 앱 id (ready 이후 채워진다). */
