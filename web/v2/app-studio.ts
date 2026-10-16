@@ -690,7 +690,7 @@ async function build(rec: StudioRec): Promise<void> {
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = S.general;
     g.addEventListener('input', () => { S.general = g.value; paintNow(); if (S.review) S.review.update({ general: S.general }); });
-    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '번호를 누르면 실제 화면에서 그 자리를 보여줘요' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
+    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
       el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
   };
   // ③ 허브 — 판 · 가운데 단추(실제 화면으로) · 보낼 의견
