@@ -237,7 +237,7 @@ test("L10 만든 직후 — 실은 목록과 지금 목록이 같으면 브로�
 });
 
 
-// ── 겹친 요청 합치기 · 묶음 전체 동시 수(#4787) — 행 번호는 #4787 사양 표(K1~K13) ────────────────
+// ── 겹친 요청 합치기 · 묶음 전체 동시 수(#4787) — 행 번호는 #4787 사양 표(K1~K12 · 옛 브로커 멈춤은 L9b) ────────────────
 
 /** 다음 매크로태스크까지 — 줄 기록 정리(finally)가 돈 뒤를 본다. */
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
@@ -366,9 +366,9 @@ test("K9 ★ 같은 세션들을 두 묶음이 함께 돈다(앱 끄기 + 공개
 });
 
 test("K10 붙이기 · 떼기(묶음 밖 호출)는 게이트웨이의 묶음 자리가 다 차 있어도 기다리지 않는다", async () => {
-  //  운영과 같은 자리(기본 slots — 게이트웨이 하나에 하나)를 묶음 넷으로 다 채운다(이 시험엔 env 가 없어 기본 4).
+  //  운영과 같은 자리(기본 slots — 게이트웨이 하나에 하나)를 묶음으로 다 채운다. 자리 수는 그 자리를 만든 것과 같은 자(env)로 읽는다.
   const g = gates();
-  const full = RESYNC_CONCURRENCY_DEFAULT;
+  const full = resyncConcurrencyFromEnv();
   const blocked = Array.from({ length: full }, (_, i) =>
     resyncSessions([`box-k10-batch${i}`], "묶음", async () => { await g.wait(); return { applied: false, reason: "not-running" }; }));
   await g.arrivals(full);

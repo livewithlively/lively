@@ -26,7 +26,7 @@
 //  F1~F5 앱 폴더 판정(folderAppsFor, 실제 의존) — 켜짐·공개·동의 거르기 · 초대받은 사람이 붙인 것 · B 의 앱·동의 안 셈 · 주인 조회 오류는 던짐 · 모르는 세션 []
 //  S1~S4 앱 폴더 맞춘 기록(#4786) — 넣기 · 모르는 bound 는 그대로 · 고친 횟수 · B 그대로
 //  T1~T8 주기 맞추기 대상 — 붙은 기록 · 노드에 붙었다고 들은 것 · 지난 실패 · 30분 재확인 · 순서 · 한도 · B 제외   Q1 끝난 세션의 기록 정리
-//  G1 배선 — 앱 역할이 슈퍼유저 · BYPASSRLS 가 아니고 org_session_app 에 FORCE RLS 와 tenant_isolation 이 있다 · 가짜 tmux 가 실제로 불렸다
+//  G1 배선 — 앱 역할이 슈퍼유저 · BYPASSRLS 가 아니고 이 시험이 쓰는 다섯 표에 FORCE RLS 와 tenant_isolation 이 있다 · 가짜 tmux 가 실제로 불렸다
 import pg from "pg";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -43,58 +43,11 @@ const dsnFor = (db, user) => { const u = new URL(BASE); u.pathname = "/" + db; i
 const su = new pg.Client({ connectionString: BASE }); await su.connect();
 await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
 await su.query(`DROP ROLE IF EXISTS ${ROLE}`);
-await su.query(`CREATE DATABASE ${DB}`);
-await su.query(`CREATE ROLE ${ROLE} LOGIN PASSWORD '${ROLE_PW}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`);
 const OWNER_DSN = dsnFor(DB);
-const dbc = new pg.Client({ connectionString: OWNER_DSN }); await dbc.connect();     // 소유자(슈퍼유저) — 행 깔기 · 결과 대조(모든 워크스페이스를 본다)
-await dbc.query("CREATE EXTENSION IF NOT EXISTS vector").catch(() => { /* pgvector 없는 로컬 PG — 렉시컬 폴백 */ });
-
 const D = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const ROOT = mkdtempSync(path.join(os.tmpdir(), "lively-session-apps-pg-"));
-
-// ── 스키마 + 행 격리 정책 — 소유자 자식 프로세스(이 프로세스의 풀은 앱 역할로 붙어야 한다) ──
-const childEnv = { ...process.env, ITEMS_DATABASE_URL: OWNER_DSN };
-for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_TENANT_BINDING", "LIVELY_TENANT_ID"]) delete childEnv[k];
-const policyOut = execFileSync(process.execPath, ["--input-type=module", "-e", `
-  const { initAllSchemas } = await import(${JSON.stringify(`${D}/boot/schemas.js`)});
-  await initAllSchemas({ quiet: true });
-  const { ensureTenantPolicies } = await import(${JSON.stringify(`${D}/org/tenancy/activate.js`)});
-  const r = await ensureTenantPolicies();
-  const { itemsPool } = await import(${JSON.stringify(`${D}/db/client.js`)});
-  await itemsPool.end();
-  process.stdout.write("\\n@@policies " + JSON.stringify(r) + "\\n");
-  process.exit(0);`], { env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 300_000 });
-//  스키마 초기화가 표준출력에 로그를 남긴다 — 표식 줄만 읽는다.
-const policies = (() => { try { return JSON.parse(/^@@policies (.+)$/m.exec(policyOut)?.[1] ?? "null"); } catch { return null; } })();
-await dbc.query(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
-await dbc.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ROLE}`);
-await dbc.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ROLE}`);
-
-// ── 가짜 tmux — «DB 에 행이 없으면 tmux 의 @box_owner» 폴백을 실제로 태운다(불린 argv 를 적는다) ──
-const TMUX_LOG = path.join(ROOT, "tmux.log");
-const TMUX_SID = "box-pgt-tmux-0000abcd";
-const FAKE_TMUX = path.join(ROOT, "fake-tmux.sh");
-writeFileSync(FAKE_TMUX, `#!/bin/sh
-echo "$*" >> "${TMUX_LOG}"
-case "$*" in
-  *"-t ${TMUX_SID} "*"@box_owner"*) echo "pgt-tmux-owner"; exit 0 ;;
-esac
-echo "can't find session: fake" >&2
-exit 1
-`);
-chmodSync(FAKE_TMUX, 0o755);
-process.env.TMUX_BIN = FAKE_TMUX;
-
-// 이 프로세스는 앱 역할로 — 정책이 걸리는 자리(매니지드 게이트웨이와 같은 조건). 테넌트는 아래 CUR 이 정한다.
-process.env.ITEMS_DATABASE_URL = dsnFor(DB, { name: ROLE, pw: ROLE_PW });
-const { installTenantResolver } = await import(`${D}/db/client.js`);
-const { itemsPool } = await import(`${D}/db/client.js`);
-const SA = await import(`${D}/apps/session-apps.js`);
-const { folderAppsFor } = await import(`${D}/apps/session-app-folders.js`);
-const TA = crypto.randomUUID(), TB = crypto.randomUUID();
-let CUR = TA;
-installTenantResolver(() => CUR);
-const inB = async (fn) => { const prev = CUR; CUR = TB; try { return await fn(); } finally { CUR = prev; } };
+//  아래 finally 가 만들기부터 덮는다 — 스키마 · 정책 자식 프로세스가 실패해도 DB · 역할(클러스터 전역 LOGIN) · 임시 폴더가 남지 않게.
+let dbc = null, itemsPool = null;
 
 let pass = 0, fail = 0;
 const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL ${n} — ${why}`); } };
@@ -103,6 +56,9 @@ const J = (x) => JSON.stringify(x);
 const sorted = (a) => [...a].sort();
 const same = (a, b) => J(sorted(a)) === J(sorted(b));
 const iso = (d) => (d instanceof Date ? d.toISOString() : d == null ? null : String(d));
+const TA = crypto.randomUUID(), TB = crypto.randomUUID();
+let CUR = TA;
+const inB = async (fn) => { const prev = CUR; CUR = TB; try { return await fn(); } finally { CUR = prev; } };
 
 //  행은 소유자 접속으로 tenant_id 를 박아 깐다(정책 밖) — 시험할 함수로 시험할 행을 깔지 않는다.
 const T0 = "2026-10-01T00:00:00.000Z", T1 = "2026-10-01T00:01:00.000Z", T2 = "2026-10-01T00:02:00.000Z";
@@ -119,15 +75,66 @@ const seedOrgApp = (t, id, o = {}) => dbc.query(
 const seedGrant = (t, app, member, revoked = false) => dbc.query(
   `INSERT INTO org_app_grant(tenant_id, app_id, member_id, revoked_at) VALUES($1,$2,$3,$4)`, [t, app, member, revoked ? T1 : null]);
 
+// ── 가짜 tmux — «DB 에 행이 없으면 tmux 의 @box_owner» 폴백을 실제로 태운다(불린 argv 를 적는다) ──
+const TMUX_LOG = path.join(ROOT, "tmux.log");
+const TMUX_SID = "box-pgt-tmux-0000abcd";
+const FAKE_TMUX = path.join(ROOT, "fake-tmux.sh");
+writeFileSync(FAKE_TMUX, `#!/bin/sh
+echo "$*" >> "${TMUX_LOG}"
+case "$*" in
+  *"-t ${TMUX_SID} "*"@box_owner"*) echo "pgt-tmux-owner"; exit 0 ;;
+esac
+echo "can't find session: fake" >&2
+exit 1
+`);
+chmodSync(FAKE_TMUX, 0o755);
+
 try {
+  await su.query(`CREATE DATABASE ${DB}`);
+  await su.query(`CREATE ROLE ${ROLE} LOGIN PASSWORD '${ROLE_PW}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`);
+  dbc = new pg.Client({ connectionString: OWNER_DSN }); await dbc.connect();     // 소유자(슈퍼유저) — 행 깔기 · 결과 대조(모든 워크스페이스를 본다)
+  await dbc.query("CREATE EXTENSION IF NOT EXISTS vector").catch(() => { /* pgvector 없는 로컬 PG — 렉시컬 폴백 */ });
+
+  // ── 스키마 + 행 격리 정책 — 소유자 자식 프로세스(이 프로세스의 풀은 앱 역할로 붙어야 한다) ──
+  const childEnv = { ...process.env, ITEMS_DATABASE_URL: OWNER_DSN };
+  for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_TENANT_BINDING", "LIVELY_TENANT_ID"]) delete childEnv[k];
+  const policyOut = execFileSync(process.execPath, ["--input-type=module", "-e", `
+    const { initAllSchemas } = await import(${JSON.stringify(`${D}/boot/schemas.js`)});
+    await initAllSchemas({ quiet: true });
+    const { ensureTenantPolicies } = await import(${JSON.stringify(`${D}/org/tenancy/activate.js`)});
+    const r = await ensureTenantPolicies();
+    const { itemsPool } = await import(${JSON.stringify(`${D}/db/client.js`)});
+    await itemsPool.end();
+    process.stdout.write("\\n@@policies " + JSON.stringify(r) + "\\n");
+    process.exit(0);`], { env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], timeout: 300_000 });
+  //  스키마 초기화가 표준출력에 로그를 남긴다 — 표식 줄만 읽는다.
+  const policies = (() => { try { return JSON.parse(/^@@policies (.+)$/m.exec(policyOut)?.[1] ?? "null"); } catch { return null; } })();
+  await dbc.query(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
+  await dbc.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ROLE}`);
+  await dbc.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ROLE}`);
+
+  // 이 프로세스는 앱 역할로 — 정책이 걸리는 자리(매니지드 게이트웨이와 같은 조건). 테넌트는 위 CUR 이 정한다.
+  process.env.TMUX_BIN = FAKE_TMUX;
+  process.env.ITEMS_DATABASE_URL = dsnFor(DB, { name: ROLE, pw: ROLE_PW });
+  const client = await import(`${D}/db/client.js`);
+  itemsPool = client.itemsPool;
+  client.installTenantResolver(() => CUR);
+  const SA = await import(`${D}/apps/session-apps.js`);
+  const { folderAppsFor } = await import(`${D}/apps/session-app-folders.js`);
+  const { getApp } = await import(`${D}/org/store/apps.js`);
+
   chk("G0 스키마 · 정책 자식 프로세스가 콘텐츠 표에 정책을 걸었다", Number(policies?.tables) > 0, policyOut.slice(-300));
 
   // ── G1 배선 — 아래 격리 시험들이 장식이 아니려면 ──
   const role = (await itemsPool.query(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)).rows[0];
-  const rel = (await dbc.query(`SELECT relrowsecurity AS on, relforcerowsecurity AS forced FROM pg_class WHERE relname='org_session_app' AND relkind='r'`)).rows[0];
-  const pols = (await dbc.query(`SELECT polname FROM pg_policy WHERE polrelid='org_session_app'::regclass`)).rows.map((r) => r.polname);
-  chk("G1 앱 역할은 슈퍼유저 · BYPASSRLS 가 아니고 org_session_app 에 FORCE RLS · tenant_isolation 정책",
-    role && role.rolsuper === false && role.rolbypassrls === false && rel?.on === true && rel?.forced === true && pols.includes("tenant_isolation"), J({ role, rel, pols }));
+  const ISOLATED = ["org_session_app", "org_session_state", "org_app", "org_app_grant", "org_session_app_folder"];
+  const relOf = async (t) => ({
+    t, ...(await dbc.query(`SELECT relrowsecurity AS on, relforcerowsecurity AS forced FROM pg_class WHERE relname=$1 AND relkind='r'`, [t])).rows[0],
+    pols: (await dbc.query(`SELECT polname FROM pg_policy WHERE polrelid=$1::regclass`, [t])).rows.map((r) => r.polname),
+  });
+  const rels = await Promise.all(ISOLATED.map(relOf));
+  chk("G1 앱 역할은 슈퍼유저 · BYPASSRLS 가 아니고, 이 시험이 쓰는 다섯 표 모두 FORCE RLS · tenant_isolation 정책",
+    role && role.rolsuper === false && role.rolbypassrls === false && rels.every((r) => r.on === true && r.forced === true && r.pols.includes("tenant_isolation")), J({ role, rels }));
 
   // ── L1 ──
   const L = "box-pgt-l1-0000aa01";
@@ -277,11 +284,11 @@ try {
   await dbc.query(`GRANT SELECT ON org_session_state TO ${ROLE}`);
   chk("O4 DB 조회 오류는 던진다(«주인 없음» 으로 접지 않는다) · 느슨한 sessionOwnerOf 는 던지지 않고 tmux 로 폴백",
     o4 !== null && /permission denied/i.test(String(o4?.message)) && o4loose === null && o4looseVal === "pgt-tmux-owner", J({ o4: o4?.message, o4loose: o4loose?.message, o4looseVal }));
-  chk("F4 앱 폴더 판정 — 주인 조회 오류면 던진다([] 를 돌려 «모두 떼기» 를 보내지 않게)", f4 !== null, String(f4));
+  chk("F4 앱 폴더 판정 — 주인 조회 오류면 던진다([] 를 돌려 «모두 떼기» 를 보내지 않게)", f4 !== null && /permission denied/i.test(String(f4?.message)), String(f4));
   CUR = null;
   const o6 = await errOf(SA.sessionOwnerStrict(O1));
   CUR = TA;
-  chk("O6 테넌트 컨텍스트가 빠진 경로면 던진다(정책이 막는다 — 남의 행도 «없음» 도 아니다)", o6 !== null, String(o6));
+  chk("O6 테넌트 컨텍스트가 빠진 경로면 던진다(정책이 막는다 — 남의 행도 «없음» 도 아니다)", o6 !== null && /uuid|app\.tenant_id/i.test(String(o6?.message)), String(o6));
 
   // ── E1~E5 ──
   const E = "box-pgt-e1-00002201", E5 = "box-pgt-e5-00002205";
@@ -296,6 +303,10 @@ try {
   // ── F1~F5 — folderAppsFor 실제 의존(listAttachedApps · getApp · getActiveGrant · sessionOwnerStrict · sessionCanEnter) ──
   const F = "box-pgt-f1-00003301";
   await seedSession(TA, F, "pgt-alice", ["pgt-guest"]);
+  //  B 의 같은 id 앱을 A 보다 **먼저** 깐다 — 정책이 새면 `SELECT … WHERE id=$1` 의 첫 행이 B 의 것이 되어 아래 F1 · F3 이 바뀐다.
+  await seedOrgApp(TB, "f-off");
+  await seedOrgApp(TB, "f-revoked");
+  await seedOrgApp(TB, "f-b-only");
   await seedOrgApp(TA, "f-ok");
   await seedOrgApp(TA, "f-off", { enabled: false });
   await seedOrgApp(TA, "f-mine", { visibility: "me", owner: "pgt-bob" });     // 남(bob)의 «나만» — 주인 alice 가 못 본다
@@ -308,15 +319,16 @@ try {
   await seedApp(TA, F, "f-guest", "pgt-guest");
   //  B — 같은 세션 id · 같은 앱 id 를 «섞이면 결과가 바뀌게» 깐다: A 에서 꺼진 f-off 가 B 에선 켜짐 · A 에서 거둔 동의가 B 에선 살아 있음 · B 에만 붙은 앱.
   await seedSession(TB, F, "pgt-alice");
-  await seedOrgApp(TB, "f-off");
-  await seedOrgApp(TB, "f-revoked");
-  await seedOrgApp(TB, "f-b-only");
   for (const a of ["f-off", "f-revoked", "f-b-only"]) await seedGrant(TB, a, "pgt-alice");
   await seedApp(TB, F, "f-b-only", "pgt-alice");
   const f1 = await folderAppsFor(F);
   chk("F1 켜짐 · 주인이 볼 수 있음 · 붙인 사람 동의 — 꺼진 앱 · 남의 «나만» 앱 · 동의 거둔 앱은 빠진다", same(f1, ["f-ok", "f-guest"]), J(f1));
   chk("F3 B 의 앱 · 동의 · 붙은 기록을 A 의 판정에 쓰지 않는다(B 에선 f-off 켜짐 · f-revoked 동의 · f-b-only 붙음)",
     !f1.includes("f-off") && !f1.includes("f-revoked") && !f1.includes("f-b-only") && same(await inB(() => folderAppsFor(F)), ["f-b-only"]), J(f1));
+  const onlyB = await getApp("f-b-only"), offA = await getApp("f-off"), offB = await inB(() => getApp("f-off"));
+  chk("F3b 앱 표의 격리(쌓인 순서와 무관) — B 에만 있는 앱은 A 에서 없고 B 에서 보인다 · 같은 id 는 각자 제 행(A 꺼짐 · B 켜짐)",
+    onlyB === null && (await inB(() => getApp("f-b-only")))?.id === "f-b-only" && offA?.enabled === false && offB?.enabled === true,
+    J({ onlyB, offA: offA?.enabled, offB: offB?.enabled }));
   await dbc.query(`UPDATE org_session_state SET invites='[]'::jsonb WHERE tenant_id=$1 AND id=$2`, [TA, F]);
   const f2 = await folderAppsFor(F);
   chk("F2 초대받은 사람이 붙인 앱은 그 사람이 세션 밖이 되면 빠진다", same(f2, ["f-ok"]), J(f2));
@@ -414,8 +426,8 @@ try {
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {
-  await itemsPool.end().catch(() => {});
-  await dbc.end().catch(() => {});
+  if (itemsPool) await itemsPool.end().catch(() => {});
+  if (dbc) await dbc.end().catch(() => {});
   await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch(() => {});
   await su.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => {});
   await su.end();
