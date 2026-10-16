@@ -144,6 +144,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
         if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
         if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
+        if (s.disk_critical_free_gb !== undefined) patchIn.disk_critical_free_gb = num(s.disk_critical_free_gb, "disk_critical_free_gb", 0, 10_000); // #4780 0=끔
         if (s.mem_warn_pct !== undefined) patchIn.mem_warn_pct = num(s.mem_warn_pct, "mem_warn_pct", 0, 99);       // #1059 0=끔
         if (s.mem_critical_pct !== undefined) patchIn.mem_critical_pct = num(s.mem_critical_pct, "mem_critical_pct", 0, 100); // #1059 0=끔
         if (s.pty_warn_pct !== undefined) patchIn.pty_warn_pct = num(s.pty_warn_pct, "pty_warn_pct", 0, 99);                 // #687 후속 0=끔
@@ -651,6 +652,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         log_keep: z.number().int().min(0).max(50).optional().describe("보관할 로그 파일 수"),
         disk_warn_pct: z.number().int().min(1).max(99).optional().describe("디스크 경고 임계치(%) — 위험 임계치보다 낮아야 한다"),
         disk_critical_pct: z.number().int().min(1).max(100).optional().describe("디스크 위험 임계치(%)"),
+        disk_critical_free_gb: z.number().int().min(0).max(10_000).optional().describe("#4780 디스크 위험 판정 여유(GB, 0=끔) — 사용률이 위험 임계를 넘어도 이만큼 이상 남아 있으면 막지 않고 경고로 둔다. 기본 5"),
         mem_warn_pct: z.number().int().min(0).max(99).optional().describe("#1059 메모리 경고 임계(사용%, 0=끔) — box-watch 가 경보 웹훅 발송(디스크와 대칭)"),
         mem_critical_pct: z.number().int().min(0).max(100).optional().describe("#1059 메모리 위험 임계(사용%, 0=끔) — OOM 임박 경보. warn 보다 커야"),
         pty_warn_pct: z.number().int().min(0).max(99).optional().describe("#687후속 PTY 슬롯 경고 임계(사용%, 0=끔) — 기본 70. 고갈되면 ssh 접속까지 막혀 원격 복구 불가"),

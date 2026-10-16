@@ -33,7 +33,7 @@ import { roots } from "./terminal/terminal-sessions.js";
 import { readyReport, gateBySchema } from "./ops/health.js";
 import { readStageSync } from "./ops/stage-sync-status.js";   // #2116 — dev 동기가 막혔는지 밖에서 보이게
 import { buildInfo } from "./build-info.js";
-import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
+import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
@@ -160,7 +160,7 @@ app.get("/readyz", async (_req, res) => {
     const report = await readyReport({
       pool: itemsPool,
       paths: [stateRoot(), ...roots().map((r) => r.base)],
-      thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
+      thresholds: diskThresholds(policy),
     });
     // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.
     //  비밀이 아닌 것만 싣는다(버전·커밋·빌드시각). 경로·env 는 싣지 않는다 — 이 응답은 미인증이다.

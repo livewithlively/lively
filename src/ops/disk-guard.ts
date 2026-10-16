@@ -10,7 +10,10 @@
 //   (그래서 /readyz 도 디스크 때문에 503 을 내지 않는다 — 멀쩡한 게이트웨이를 LB 에서 빼는 건 자해다.)
 //
 // 임계치는 관리탭 저장소 정책이 단일 출처(src/org/policies/storage-policy.ts) — 고객 박스는 .env 를 못 고친다.
+//  #4780 — 사용률만이 아니라 **남은 공간도** 본다(위험 = 95% 이상 **이면서** 5GB 미만). 근거는 health.ts Thresholds 머리말.
+import os from "node:os";
 import { checkDisks, type Thresholds, type Level, FALLBACK_THRESHOLDS } from "./health.js";
+import { onNode } from "../exec-topology.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 
@@ -47,33 +50,44 @@ export function invalidateDiskState(): void {
   cache = null;
 }
 
-/** 507 Insufficient Storage — 정체불명 500 대신 **무엇을 해야 하는지** 말해준다. */
-export function diskFullError(what: string, st: DiskState): HttpError {
+/**
+ * 507 Insufficient Storage — 정체불명 500 대신 **무엇을 해야 하는지** 말해준다.
+ *  t 를 주면 막는 기준을 한 문장으로 싣는다 — 얼마나 비워야 다시 열리는지 사람이 셈할 수 있게(#4780).
+ *  ⚠ 노드(사람 컴퓨터)에서 찬 건 **그 컴퓨터의 디스크**다. 관리 ▸ 저장소·로그 는 서버 디스크를 보여 주므로 그리로 보내면
+ *   헛걸음이다(2026-10-16 맥미니 노드 실측 문구가 그랬다). 화면에선 다른 컴퓨터로 볼 수 있어 «이 컴퓨터» 대신 이름을 댄다.
+ */
+export function diskFullError(what: string, st: DiskState, t?: Thresholds): HttpError {
+  const rule = !t ? ""
+    : t.criticalFreeBytes
+      ? `사용률이 ${t.criticalPct}% 이상이고 남은 공간이 ${fmtMb(t.criticalFreeBytes)}보다 적으면 새 작업을 막습니다. `
+      : `사용률이 ${t.criticalPct}% 이상이면 새 작업을 막습니다. `;
+  const hint = onNode()
+    ? `노드 컴퓨터(${os.hostname()})의 디스크에서 공간을 비우세요.`
+    : `관리 ▸ 저장소·로그 에서 프로젝트 워크스페이스를 정리하거나 디스크를 늘리세요.`;
   return new HttpError(
     507,
-    `디스크 공간이 부족해 ${what}을(를) 시작할 수 없습니다 (${st.usedPct}% 사용, ${fmtMb(st.availBytes)} 남음). ` +
-    `관리 ▸ 저장소·로그 에서 프로젝트 워크스페이스를 정리하거나 디스크를 늘리세요.`,
+    `디스크 공간이 부족해 ${what}을(를) 시작할 수 없습니다 (${st.usedPct}% 사용, ${fmtMb(st.availBytes)} 남음). ${rule}${hint}`,
   );
 }
 
 function fmtMb(bytes: number): string {
-  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)}GB` : `${Math.round(bytes / 1024 ** 2)}MB`;
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1).replace(/\.0$/, "")}GB` : `${Math.round(bytes / 1024 ** 2)}MB`;
 }
 
 /**
- * 디스크를 크게 쓰는 작업 **직전**에 부른다. 위험 임계(기본 95%)를 넘었으면 507 로 거부한다.
- * 경고 임계(85%)에선 막지 않고 로그만 — 아직은 쓸 수 있다.
+ * 디스크를 크게 쓰는 작업 **직전**에 부른다. 위험(기본: 95% 이상이면서 5GB 미만)이면 507 로 거부한다.
+ * 경고(85%, 또는 95% 를 넘었어도 5GB 넘게 남음)에선 막지 않고 로그만 — 아직은 쓸 수 있다.
  * 상태를 못 재면 **통과**시킨다(가드가 못 재는 이유로 서비스를 막는 건 과잉).
  */
 export async function assertDiskWritable(what: string, paths: string[], thresholds: Thresholds = FALLBACK_THRESHOLDS): Promise<void> {
   const st = await diskState(paths, thresholds);
   if (!st) return;
   if (st.level === "critical") {
-    logger.error({ what, usedPct: st.usedPct, path: st.path }, "디스크 위험 — 신규 작업 차단");
-    throw diskFullError(what, st);
+    logger.error({ what, usedPct: st.usedPct, availBytes: st.availBytes, path: st.path }, "디스크 위험 — 신규 작업 차단");
+    throw diskFullError(what, st, thresholds);
   }
   if (st.level === "warn") {
-    logger.warn({ what, usedPct: st.usedPct, path: st.path }, "디스크 경고 — 아직 허용하지만 정리가 필요하다");
+    logger.warn({ what, usedPct: st.usedPct, availBytes: st.availBytes, path: st.path }, "디스크 경고 — 아직 허용하지만 정리가 필요하다");
   }
 }
 
