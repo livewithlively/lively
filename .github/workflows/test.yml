@@ -190,6 +190,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/agent-jobs/store.pg-test.mjs
+      # ④-c2 앱 AI 실행 행(#4488 앱 v2-9) — 목으로는 못 보는 것: «한 번만 끝남» · «프록시 토큰은 열린 실행에만» · «사람당 동시 셈은 열린 실행만» ·
+      #    «하루 토큰은 오늘 · 그 앱 · 네 종류 합» · «재시도는 열린 실행만» · «만든 대화는 끝난 실행 + 대화 id 있는 작업 join» 이 전부 SQL 조건이다.
+      - name: 앱 AI 실행 행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/ai-runs/store.pg-test.mjs
       # ④-d1b ⌘K 대화 검색 색인(#4517) — 목으로는 못 보는 것: **이어 읽기와 권한이 SQL 조건이다**. «사람 말·AI 말만 행이 된다» ·
       #    «쓰는 중인 반 줄은 다음에 · 같은 창을 두 번 담지 않는다(커서 CAS)» · «주인 + 초대받은 사람만 찾는다» · «완전 삭제·보존
       #    정리 뒤엔 색인도 없다». session_msg 행 · 커서 · 검색 결과 id 를 되읽어 판정한다.

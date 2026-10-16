@@ -299,3 +299,19 @@ test("#4482 web.devices — 아는 장치만 저장 · 모르는 값 · 꼴 밖�
   assert.deepEqual(webDevicesOf(null), []);
   assert.deepEqual([...APP_DEVICES], ["microphone", "camera", "clipboard-read", "geolocation"]);
 });
+
+// ── #4488 AI 실행 선언(permissions.ai_runs · ai.jobs) — M1~M2 ─────────────────────────────────────────────────────────────────────────
+//  이게 틀리면: 선언만 하고 도구가 grant 에 안 들어가 앱 주소 /_lively/ai/* 가 «권한 밖» 으로 막히거나, 작업 이름 꼴 밖 선언이 저장돼 설정 칸과 어긋난다.
+test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음) · 기본 false 면 없음 · ai.jobs 이름 꼴", () => {
+  const m = parseAppManifest({ ...base(), permissions: { ai_runs: true, tools: ["app_ai_run"] } });
+  const tools = m.permissions.tools;
+  for (const t of ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"]) assert.ok(tools.includes(t), t);
+  assert.equal(tools.filter((t) => t === "app_ai_run").length, 1, "이미 적은 도구는 한 번만");
+  const off = parseAppManifest(base());
+  assert.equal(off.permissions.ai_runs, false);
+  assert.ok(!off.permissions.tools.some((t) => t.startsWith("app_ai_")), "선언 없으면 도구 없음(fail-closed)");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "summarize", title: "요약", description: "d" }] } }));
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "Bad Name" }] } }), /매니페스트/, "이름 꼴 밖");
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "x", prompt: "y" }] } }), /매니페스트/, "jobs 안 미지 키는 거부");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [], later: 1 } }), "ai 의 미지 키는 통과(전방호환)");
+});

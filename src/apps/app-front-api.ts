@@ -13,6 +13,9 @@
 //   POST   /store/sql          {sql, params}     → store_sql             POST /store/sql/batch {statements} → store_sql_batch
 //   POST   /tools/<도구>        {…인자}           → 선언한 그 도구(file_url · whoami · …) — lively.tools.call 과 같다
 //   GET    /prefs                                → 이 앱 × 나의 개인 설정     POST|PATCH /prefs {patch} → 얕은 병합 저장
+//   GET    /ai/targets                           → app_ai_targets        (#4488 앱 v2-9 — 고를 수 있는 실행 계정 · 작업 · 붙은 세션 · 만든 대화)
+//   POST   /ai/runs            {prompt, schema, …} → app_ai_run           AI 실행 입구 하나(단발+API 키=프록시 · 그 밖=작업 컨테이너)
+//   GET    /ai/runs?status&limit                 → app_ai_runs           GET /ai/runs/<id> → app_ai_run_get · POST /ai/runs/<id>/cancel → app_ai_run_cancel
 //   (GET /me 는 앞단이 /api/app-front/me 로 따로 넘긴다 — app-front-routes.ts appFrontMe)
 //  답: 성공은 그 도구의 결과 JSON 그대로. 실패는 `{error, code?, consent_url?}` + 상태 코드.
 //   · 403 + code "consent_required" — 이 사람이 이 앱에 아직 동의하지 않았거나 예전 범위다. consent_url(라이블리 화면의 동의 자리)로
@@ -58,6 +61,7 @@ export function memberPrincipal(m: Pick<OrgMember, "id" | "email" | "scopes">, a
 }
 
 const STORE_OP_RE = /^\/store\/([A-Za-z0-9_]{1,63})\/(query|insert|update|delete)$/;
+const AI_RUN_RE = /^\/ai\/runs\/([1-9][0-9]{0,15})(\/cancel)?$/;
 const TOOL_RE = /^\/tools\/([a-z][a-z0-9_]{0,79})$/;
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -67,9 +71,22 @@ export type ApiRoute =
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "prefs-get" }
   | { kind: "prefs-set"; patch: unknown };
-export function routeAppFrontApi(method: string, path: string, body: unknown): ApiRoute | "method" | null {
+export function routeAppFrontApi(method: string, path: string, body: unknown, query: Record<string, string> = {}): ApiRoute | "method" | null {
   const m = method.toUpperCase();
   const b = obj(body);
+  // #4488 AI 실행 — 입구 하나와 그 둘레(보기 · 목록 · 취소 · 대상). app_id 는 주소가 정한다(본문의 app_id 는 받지 않는다).
+  if (path === "/ai/targets") return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_ai_targets", args: {} } : "method";
+  if (path === "/ai/runs") {
+    if (m === "POST") return { kind: "tool", name: "app_ai_run", args: pick(b, ["prompt", "system", "schema", "job", "model", "label", "files", "project_id", "agent", "timeout_min", "wait"]) };
+    if (m === "GET" || m === "HEAD") return { kind: "tool", name: "app_ai_runs", args: { ...(query.status ? { status: query.status } : {}), ...(query.limit ? { limit: Number(query.limit) } : {}) } };
+    return "method";
+  }
+  const ar = AI_RUN_RE.exec(path);
+  if (ar) {
+    const id = Number(ar[1]);
+    if (ar[2]) return m === "POST" ? { kind: "tool", name: "app_ai_run_cancel", args: { id } } : "method";
+    return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_ai_run_get", args: { id } } : "method";
+  }
   if (path === "/store/tables") return m === "GET" || m === "HEAD" ? { kind: "tool", name: "store_tables", args: {} } : "method";
   if (path === "/store/sql") return m === "POST" ? { kind: "tool", name: "store_sql", args: pick(b, ["sql", "params", "format", "strict"]) } : "method";
   if (path === "/store/sql/batch") return m === "POST" ? { kind: "tool", name: "store_sql_batch", args: pick(b, ["statements", "format", "strict"]) } : "method";
@@ -98,12 +115,23 @@ function pick(b: Record<string, unknown>, keys: string[]): Record<string, unknow
 
 /** 앱 주소 안 경로(앞단이 `?path=` 로 넘긴 `<경로>[?쿼리]`)에서 경로만. `/_lively` 는 앞단이 떼어 넘긴다. 꼴이 틀리면 null. */
 export function apiPathOf(raw: unknown): string | null {
+  return apiUrlOf(raw)?.pathname.replace(/\/+$/, "") || (apiUrlOf(raw) ? "/" : null);
+}
+/** 경로의 쿼리(짧은 값만 — 목록 좁히기용). 꼴이 틀리면 빈 객체. */
+export function apiQueryOf(raw: unknown): Record<string, string> {
+  const u = apiUrlOf(raw);
+  const out: Record<string, string> = {};
+  if (!u) return out;
+  for (const [k, v] of u.searchParams) if (/^[a-z_]{1,32}$/.test(k) && v.length <= 64) out[k] = v;
+  return out;
+}
+function apiUrlOf(raw: unknown): URL | null {
   const s = typeof raw === "string" ? raw : "";
   if (!s.startsWith("/") || s.startsWith("//") || s.length > 512 || /[\s\\\u0000-\u001f\u007f]/.test(s)) return null;
   let u: URL;
   try { u = new URL(s, "https://api.invalid"); } catch { return null; }
   if (u.origin !== "https://api.invalid") return null;
-  return u.pathname.replace(/\/+$/, "") || "/";
+  return u;
 }
 
 /**
@@ -146,8 +174,8 @@ export async function handleAppFrontApi(
   const { act, tenant, member, app } = input;
   const path = apiPathOf(input.rawPath);
   if (!path) return { status: 400, json: { error: "앱 주소 안 경로를 읽지 못했습니다" } };
-  const route = routeAppFrontApi(input.method, path, input.body);
-  if (route === null) return { status: 404, json: { error: `'/_lively${path}' 은(는) 없는 API 입니다 — store · tools · prefs · me 를 쓰세요`, code: "not_found" } };
+  const route = routeAppFrontApi(input.method, path, input.body, apiQueryOf(input.rawPath));
+  if (route === null) return { status: 404, json: { error: `'/_lively${path}' 은(는) 없는 API 입니다 — store · tools · prefs · ai · me 를 쓰세요`, code: "not_found" } };
   if (route === "method") return { status: 405, json: { error: `'/_lively${path}' 은(는) ${input.method.toUpperCase()} 로 부를 수 없습니다`, code: "method_not_allowed" } };
   if (!(await d.workspaceAccess(member.id).catch(() => false))) return { status: 403, json: { error: "이 워크스페이스의 구성원만 앱을 쓸 수 있습니다" } };
   if (app.status !== "active" || !app.enabled) return { status: 409, json: { error: `앱 '${app.id}' 이(가) 지금 활성 상태가 아닙니다` } };

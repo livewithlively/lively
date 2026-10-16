@@ -9,7 +9,7 @@
 //  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 작업 컨테이너는 매니지드 전용이다(자가호스팅 실행은 v2-8).
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
-import { JOB_SESSION_ID_RE } from "./plan.js";
+import { JOB_SESSION_ID_RE, jobSeatMember } from "./plan.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX } from "./runner.js";
 import type { AgentJobRow } from "./store.js";
 
@@ -84,15 +84,17 @@ export function redactSecret(msg: string, secret: string): string {
 export async function launchJobContainer(job: AgentJobRow, bootSecret: string): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid) throw new JobLaunchError("세션 id 가 없는 작업입니다");
-  if (!job.account_member) throw new JobLaunchError("실행 계정이 없는 작업입니다(API 키 실행은 아직 없다 — v2-9)");
+  //  자리의 구성원 — 구독이면 실행 계정, API 키(#4488)면 보낸 사람(plan.jobSeatMember). 키는 자리에 들어가지 않는다(판 env 가 프록시를 가리킨다).
+  const seat = jobSeatMember(job);
+  if (!seat) throw new JobLaunchError("실행 계정이 없는 작업입니다");
   const { tenantSlug, PANE_LOCALE } = await import("../terminal/catalog.js");
   const { ensureSessionContainerViaRelay, sessionEnsureArgv, tmuxInSessionContainer } = await import("../terminal/session-tmux.js");
   const slug = tenantSlug();
   if (!tmuxInSessionContainer(slug) || !slug) throw new JobLaunchError("이 배포에서는 작업 컨테이너를 띄울 수 없습니다(매니지드 전용)");
-  const user = await accountUser(job.account_member);
+  const user = await accountUser(seat);
   const { ensureMemberOsUser } = await import("../terminal/profiles.js");
   const osUser = await ensureMemberOsUser(user).catch((e) => { throw stepFailure("os-user", e); });
-  if (!osUser) throw stepFailure("os-user", `실행 계정 ${job.account_member}`);
+  if (!osUser) throw stepFailure("os-user", `실행 계정 ${seat}`);
   //  메모리 — 사람 세션과 같은 정책·같은 셈(sessions.ts createSession: max 없으면 high, 0 = 브로커 기본).
   const { effectiveSessionMemoryPolicy } = await import("../sessions/session-memory-policy.js");
   const { getRuntimeConfig } = await import("../org/store/runtime-config.js");

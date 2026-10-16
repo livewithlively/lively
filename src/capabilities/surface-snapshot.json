@@ -4252,7 +4252,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "727188efb867982b"
+  "input_hash": "1c7a8ba26d261e7f"
  },
  {
   "name": "me_credential_verify",
@@ -4262,7 +4262,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "3a380d23c2aeb541"
+  "input_hash": "622aa3b0790ea9e7"
  },
  {
   "name": "me_credential_delete",
@@ -4272,7 +4272,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "8daa808bfbdb2617"
+  "input_hash": "55b7bc8dbf9bc33d"
  },
  {
   "name": "org_credentials",
@@ -4292,7 +4292,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "02bdf26b17416dfa"
+  "input_hash": "60a213310cbae503"
  },
  {
   "name": "org_credential_delete",
@@ -4302,7 +4302,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "bfa7865147308910"
+  "input_hash": "76273c5cb7da0d13"
  },
  {
   "name": "me_aws_credentials",
@@ -5454,6 +5454,96 @@
    "GET /api/ui/files/path"
   ],
   "input_hash": "a17b1277b546d6bc"
+ },
+ {
+  "name": "app_ai_run",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-runs"
+  ],
+  "input_hash": "8143941d8f503d5f"
+ },
+ {
+  "name": "app_ai_run_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-runs/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "app_ai_runs",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-runs"
+  ],
+  "input_hash": "bb0f2ea9b3caab27"
+ },
+ {
+  "name": "app_ai_run_cancel",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-runs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "app_ai_targets",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-targets"
+  ],
+  "input_hash": "bc9bbb24b7a66ec4"
+ },
+ {
+  "name": "app_ai_account",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-account"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_ai_account_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-account"
+  ],
+  "input_hash": "9d69f75d8e124182"
+ },
+ {
+  "name": "app_ai_limits",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/ai-run-limits"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "app_ai_limits_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-run-limits"
+  ],
+  "input_hash": "8d6eea919f231c8c"
  },
  {
   "name": "agent_job_run",

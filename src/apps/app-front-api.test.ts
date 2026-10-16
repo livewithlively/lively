@@ -57,6 +57,13 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
     ["POST", "/tools/whoami", undefined, "whoami", {}],
     ["POST", "/store/notes/query?x=1", { limit: 1 }, "store_query", { table: "notes", limit: 1 }],
     ["POST", "/store/notes/query/", {}, "store_query", { table: "notes" }],
+    //  #4488 AI 실행(F1) — 입구 하나 + 둘레. 본문의 app_id 는 버리고 목록은 쿼리(status · limit)로 좁힌다.
+    ["GET", "/ai/targets", undefined, "app_ai_targets", {}],
+    ["POST", "/ai/runs", { prompt: "요약", schema: { type: "object" }, job: "summarize", wait: 5, app_id: "남의앱", bogus: 1 }, "app_ai_run", { prompt: "요약", schema: { type: "object" }, job: "summarize", wait: 5 }],
+    ["GET", "/ai/runs?status=done&limit=5&app_id=x", undefined, "app_ai_runs", { status: "done", limit: 5 }],
+    ["GET", "/ai/runs", undefined, "app_ai_runs", {}],
+    ["GET", "/ai/runs/42", undefined, "app_ai_run_get", { id: 42 }],
+    ["POST", "/ai/runs/42/cancel", {}, "app_ai_run_cancel", { id: 42 }],
   ];
   for (const [m, p, b, name, args] of cases) {
     const r = await run(d, m, p, b);
@@ -76,12 +83,13 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
 {
   const { d, calls } = deps();
   for (const [m, p] of [["GET", "/nope"], ["POST", "/store/notes/drop"], ["POST", "/store/a-b/query"], ["POST", `/store/${"a".repeat(64)}/query`],
-    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"]] as const) {
+    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"], ["GET", "/ai/runs/0"], ["GET", "/ai/runs/abc"], ["GET", "/ai"]] as const) {
     const r = await run(d, m, p, {});
     assert.equal(r.status, 404, `${m} ${p}`);
     assert.equal((r.json as { code?: string }).code, "not_found");
   }
-  for (const [m, p] of [["GET", "/store/sql"], ["POST", "/store/tables"], ["GET", "/tools/whoami"], ["DELETE", "/prefs"], ["PUT", "/store/notes/query"], ["GET", "/store/sql/batch"]] as const) {
+  for (const [m, p] of [["GET", "/store/sql"], ["POST", "/store/tables"], ["GET", "/tools/whoami"], ["DELETE", "/prefs"], ["PUT", "/store/notes/query"], ["GET", "/store/sql/batch"],
+    ["PUT", "/ai/runs"], ["POST", "/ai/targets"], ["POST", "/ai/runs/42"], ["GET", "/ai/runs/42/cancel"]] as const) {
     assert.equal((await run(d, m, p, {})).status, 405, `${m} ${p}`);
   }
   for (const p of ["//evil", "/a b", "/a\\b", `/${"a".repeat(512)}`, "store/tables", 5, null, undefined]) {

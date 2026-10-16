@@ -16,6 +16,7 @@
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
+//    await lively.ai.run({prompt, schema?, job?, files?, wait?}) → AI 실행 하나(#4488 — {id,status,result}; wait 초를 주면 끝날 때까지). get(id) · list() · cancel(id) · targets()
 //    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
 //                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·
 //                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
@@ -273,6 +274,14 @@ export const APP_RUNTIME_JS = `
     },
     chat: {
       send: function (text) { return post('chat/send', { text: String(text) }); }
+    },
+    // AI 실행(#4488 앱 v2-9) — 입구 하나. 앱은 실행 계정을 고르지 않는다(워크스페이스 설정). 어디서 떠도(라이블리 안 · 새 탭 · 폰) 같은 도구다.
+    ai: {
+      run: function (opts) { return api.tools.call('app_ai_run', opts || {}); },
+      get: function (id) { return api.tools.call('app_ai_run_get', { id: Number(id) }); },
+      list: function (opts) { return api.tools.call('app_ai_runs', opts || {}).then(function (r) { return (r && r.runs) || []; }); },
+      cancel: function (id) { return api.tools.call('app_ai_run_cancel', { id: Number(id) }); },
+      targets: function () { return api.tools.call('app_ai_targets', {}); }
     },
     prefs: {
       get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },
