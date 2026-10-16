@@ -285,7 +285,10 @@ t("S2 slashCommandLeftInput — 빗금 명령이 아니면 늘 거짓 · 우리 
 const src = (rel: string): string => readFileSync(rel, "utf8");
 t("B1 판정 한 벌(outbox-echo-scan)은 줄 맞춤(harness-io/window)만 들인다 — 노드 번들에 실리므로 DB·로그·기록 찾기·아웃박스를 안 들인다", () => {
   const specs = [...src("src/sessions/outbox-echo-scan.ts").matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)"([^"]+)"/gm)].map((m) => m[1]);
-  assert.deepEqual(specs, ["../terminal/harness-io/window.js"]);
+  //  #4852 — 숨은 글자 집합(terminal/submit-check stripUnseen)을 함께 들인다: 제출 지킴이의 화면 대조와 한 벌이어야 «같은 말» 이 화면·기록에서 같다.
+  //   그 모듈도 노드 번들 승인 목록에 있고(B2 와 같은 목록) DB·로그·기록 찾기를 안 들인다(런타임 import 는 harness-io/stop-capture 뿐).
+  assert.deepEqual(specs, ["../terminal/harness-io/window.js", "../terminal/submit-check.js"]);
+  assert.ok((JSON.parse(src("scripts/node-agent-allowed-modules.json")) as string[]).includes("dist/terminal/submit-check.js"), "숨은 글자 집합 모듈이 승인 목록 밖이다");
 });
 t("B2 노드 번들 승인 목록에 판정 한 벌이 올라 있다(빌드 가드가 «새 유입» 으로 막지 않게)", () => {
   assert.ok((JSON.parse(src("scripts/node-agent-allowed-modules.json")) as string[]).includes("dist/sessions/outbox-echo-scan.js"));
@@ -297,6 +300,42 @@ t("B3 친 직후 판정 · 늦은 에코가 한 벌을 쓴다 — 아웃박스�
   const code = ob.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
   assert.doesNotMatch(code, /tailContains|echoNeedle|\.includes\(needle\)/, "종전 바늘 판정이 남았다");
   assert.match(src("src/sessions/outbox-late-echo.ts"), /from "\.\/outbox-echo-scan\.js"/);
+});
+
+// ── #4852 — Claude Code 가 지워 적는 글자(보이지 않는 글자·제어 글자·제어열)가 든 말 ─────────────────────────────────
+//  매니지드 실측(2026-10-16 · 행 131374): U+200B 두 개 든 지시가 17초 뒤 기록에 들어갔는데(77자 — 둘이 빠진 꼴) «미확인»(중복 전송을 부른다).
+//  기대값은 Bun.stripANSI(Claude Code 2.1.301 이 붙여넣을 때 부른다)와 그 번들의 숨은 글자 판정으로 낸 값이다.
+const echoComparable = (scan as unknown as { echoComparable?: (s: string) => string }).echoComparable;
+t("U·#4852 echoComparable — 보이지 않는 글자·제어 글자·제어열을 지우고 공백을 접는다(Claude Code 가 적는 꼴과 같아진다)", () => {
+  assert.equal(typeof echoComparable, "function", "echoComparable 가 없다");
+  const rows: Array<[string, string]> = [
+    ["복사해\u{200B} 온\u{FEFF} 글\u{200F}", "복사해 온 글"], ["가족 👨\u{200D}👩\u{200D}👧 · 하트 ❤\u{FE0F}", "가족 👨👩👧 · 하트 ❤"],
+    ["로그: \x1b[31mERROR\x1b[0m \x1b]0;제목\x07끝 \x07벨 \x01키", "로그: ERROR 끝 벨 키"], ["a\tb\n c", "a b c"],
+    ["안녕\u{3164}하세요 \u{115F}\u{1160}\u{FFA0}끝", "안녕하세요 끝"], ["e\u{301} a\u{34F}b", "e\u{301} ab"], ["ok \x1b(B\x1b[m done", "ok done"],
+    ["a\u{9B}31mERR b", "aERR b"], ["a\x1bbc d \x1b7저장", "ac d 저장"], ["a\x1b]0;title and more words", "a"],
+    ["링크 \x1b]8;;https://x.test/y\x1b\\여기\x1b]8;;\x1b\\ 끝", "링크 여기 끝"], ["세로\x0b탭\x0c넘김 \u{85}다음", "세로 탭 넘김 다음"],   // Claude Code 는 VT·FF·NEL 을 줄바꿈으로 적는다 — 지우지 않고 접는다
+    ["", ""], [" \u{200B}\u{FEFF}\x1b[0m ", ""],
+  ];
+  for (const [raw, want] of rows) assert.equal(echoComparable!(raw), want, JSON.stringify(raw));
+});
+t("U·#4852 samePrompt·exactPrompt — 지워 적히는 글자만 다르면 같은 말 · 그 글자를 빼도 다르면 다른 말", () => {
+  for (const [a, b] of [["복사해 온\u{200B}글", "복사해 온글"], ["\u{FEFF}진행해", "진행해"], ["로그 \x1b[31mERR\x1b[0m", "로그 ERR"], ["안녕\u{3164}하세요", "안녕하세요"]]) {
+    assert.ok(samePrompt(a, b) && scan.exactPrompt(a, b), `같은 말이 아니라고 했다: ${JSON.stringify(a)}`);
+  }
+  for (const [a, b] of [["복사해 온\u{200B}글", "복사해 온 다른 글"], ["진행\u{200B}해", "진행해줘"], ["\x1b[31mERROR\x1b[0m", "WARN"]]) {
+    assert.ok(!samePrompt(a, b) && !scan.exactPrompt(a, b), `다른 말을 같다고 했다: ${JSON.stringify(a)}`);
+  }
+});
+t("★ K·#4852 보이지 않는 글자 든 지시 — 기록엔 지워진 꼴로 적힌다 → 친 뒤의 그 줄로 «전달됨» (공백만 접던 판정은 끝까지 «미확인»)", async () => {
+  const SAID = "도구를 쓰지 말고 OK 라고만 답해 주세요. 복사해 온 글에는\u{200B}보이지 않는\u{200B}글자가 섞여 있을 수 있습니다.";
+  const STORED = SAID.replace(/\u{200B}/gu, "");
+  const fs = memFs({ "z.jsonl": BEFORE + user(STORED, at(4_000)) });
+  assert.equal(await check(fs, "z.jsonl", SAID, echoWatch(T0)), true);
+  //  다른 말이면(지워 적히는 글자를 빼도 다르다) 아니다 · 보내기 전에 적힌 같은 꼴도 아니다(친 때 하한)
+  const other = memFs({ "o.jsonl": BEFORE + user(STORED.replace("OK", "NO"), at(4_000)) });
+  assert.equal(await check(other, "o.jsonl", SAID, echoWatch(T0)), false);
+  const old = memFs({ "p.jsonl": user(STORED, at(-60_000)) + BEFORE });
+  assert.equal(await check(old, "p.jsonl", SAID, echoWatch(T0)), false);
 });
 
 //  행마다 끝까지 돈다 — 한 행이 빨개도 나머지가 무엇을 말하는지 보여야 fail-first(변이·옛 판) 때 어느 행이 잡았는지 읽힌다.

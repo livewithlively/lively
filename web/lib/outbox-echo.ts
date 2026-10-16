@@ -22,9 +22,30 @@ export const ECHO_SKEW_MS = 5_000;
 /** 같은 말 판정의 머리 길이 — 서버 session-outbox ECHO_HEAD_CHARS 와 같다. */
 export const PROMPT_HEAD = 160;
 
-const norm = (s: string): string => String(s ?? '').replace(/\s+/g, ' ').trim();
+//  대조용 펴기 — 서버 outbox-echo-scan echoComparable 과 **같은 규칙**(#4852): Claude Code 는 붙여넣은 글의 터미널 제어열을 통째로 지우고 제출하며
+//   보이지 않는 글자를 지운다. 정본은 src/terminal/submit-check.ts(ANSI_SEQ · HIDDEN_CHARS 머리말 — 무엇을 왜 지우나)이고 이것은 화면 번들의 사본이다
+//   (화면은 서버 모듈을 들이지 않는다). 계약 시험(scripts/outbox-echo.test.mjs E3e·E3f)이 두 판을 모든 코드 포인트·제어열 표로 맞춘다.
+// eslint-disable-next-line no-control-regex
+const ECHO_ANSI = /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b[\]PX^_]|[\x90\x98\x9d-\x9f])[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?|\x1b[ -/]+[0-~]|\x1b[0-~]/g;
+// eslint-disable-next-line no-control-regex
+const ECHO_UNSEEN = /[\x00-\x08\x0e-\x1f\x7f-\u0084\u0086-\u009f\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890-\u0891\u08e2\u115f-\u1160\u17b4-\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]|\ud804[\udc7f\udcbd\udccd]|\ud80d[\udc30-\udc3f]|\ud81b\udfe4|\ud82f[\udca0-\udca3]|\ud834[\udd73-\udd7a]|[\udb40-\udb43][\udc00-\udfff]/g;
+/** (순수) 대조용으로 편다 — 제어열·보이지 않는 글자를 지우고 공백을 접는다(서버 outbox-echo-scan echoComparable 과 같은 글자). */
+export const echoComparable = (s: string): string => String(s ?? '').replace(ECHO_ANSI, '').replace(ECHO_UNSEEN, '').replace(/[\s\x85]+/g, ' ').trim();
+const norm = echoComparable;
 
-/** (순수) 같은 말인가 — 공백을 하나로 접은 뒤, 160자 이하면 전체가, 그보다 길면 머리 160자가 같아야 한다(서버 samePrompt 와 같다). */
+/** (순수) 낙관 말풍선(보낸 원문) ↔ 기록의 사람 말(Claude Code 가 적은 글)이 같은 말인가 — 대화창이 둘을 잇는다(web/session-chat).
+ *  정확일치만 믿지 않는다: 주입은 줄바꿈을 공백으로 펴고, 아주 긴 글은 TUI 를 지나며 꼬리 토막이 자리를 옮기기도 했다(실측 2026-08-18 —
+ *  3천 자 지시의 꼬리가 뒤섞여 같은 말이 두 번 보였다 · 상민님 신고). 그래서 편 글이 같거나, 둘 다 24자 이상이면 머리 64자가 같으면 같은 말이다.
+ *  펴기는 echoComparable 이다(#4852): 공백만 접던 때는 보이지 않는 글자·색 코드가 든 말이 기록과 안 이어져 **같은 말이 두 번** 보였다(격리 리뷰 재현).
+ */
+export function sameSaid(a: string, b: string): boolean {
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  return na.length >= 24 && nb.length >= 24 && na.slice(0, 64) === nb.slice(0, 64);
+}
+
+/** (순수) 같은 말인가 — 편 뒤(echoComparable), 160자 이하면 전체가, 그보다 길면 머리 160자가 같아야 한다(서버 samePrompt 와 같다). */
 export function samePrompt(said: string, line: string): boolean {
   const a = norm(said), b = norm(line);
   if (!a || !b) return false;
@@ -32,13 +53,13 @@ export function samePrompt(said: string, line: string): boolean {
   return a.slice(0, PROMPT_HEAD) === b.slice(0, PROMPT_HEAD);
 }
 
-/** (순수) 글이 통째로 같은가 — 공백만 하나로 접는다(서버 exactPrompt 와 같다). */
+/** (순수) 글이 통째로 같은가 — 편 글이 같다(서버 exactPrompt 와 같다). */
 export function exactPrompt(said: string, line: string): boolean {
   const a = norm(said);
   return !!a && a === norm(line);
 }
 
-/** (순수) #4794 «다 쳤다» 알림(outbox.typed)의 머리 — 서버 session-outbox typedHead 와 **같은 글자**를 만든다(공백을 하나로 접고 다듬은 뒤
+/** (순수) #4794 «다 쳤다» 알림(outbox.typed)의 머리 — 서버 session-outbox typedHead 와 **같은 글자**를 만든다(편 뒤(echoComparable)
  *  앞 PROMPT_HEAD 자). 화면은 기다리던 말의 머리를 이것으로 만들어 알림의 head 와 그대로 견준다. 같은 말 판정(samePrompt)과 같은 접기·길이다 —
  *  잘린 머리를 samePrompt 에 넣지 않는 이유: 160번째 글자가 공백이면 다듬기에 잘려 긴 말이 안 맞는다. 계약: scripts/outbox-typed-contract.test.mjs. */
 export function promptHead(text: string): string {

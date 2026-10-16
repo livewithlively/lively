@@ -292,13 +292,32 @@ t("[28·P4 L1~L6] 한 줄로 펴기 — CR(치면 그 자리 제출)·CRLF·U+20
   }
 });
 
-t("[30·P14] 글에 키(제어 글자)가 섞이면 붙여넣지 않고 종전대로 친다 — 설정 명령의 «치던 글 치워 두기»(Ctrl+S)가 키로 가야 한다", () => {
+t("[30·P14] 글이 키(제어 글자)로 **시작하면** 붙여넣지 않고 친다 — 설정 명령의 «치던 글 치워 두기»(Ctrl+S)가 키로 가야 한다", () => {
   const claude = HARNESSES.find((h) => h.key === "claude")!;
   const cmd = claude.runtimeDraftStash + claude.runtimeCmd!.model!("opus");
   assert.deepEqual(planP("s", cmd, TMUX, { paste: true }).keys, [["send-keys", "-t", "s", "-l", "--", "\x13/model opus"]],
     "붙여넣기 안의 Ctrl+S 는 키가 아니라 글자다 — 치워 두기가 안 되고 제출이 «보이지 않는 글자» 로 멈춘다");
-  for (const k of ["\x1b", "\x03", "\x7f", "\x00", "\x1f"]) {
-    assert.deepEqual(planP("s", `앞${k}뒤`, TMUX, { paste: true }).keys, [["send-keys", "-t", "s", "-l", "--", `앞${k}뒤`]], JSON.stringify(k));
+  for (const k of ["\x03", "\x7f", "\x00", "\x1f", "\x01", "\x1a", "\x1c"]) {
+    assert.deepEqual(planP("s", `${k}뒤`, TMUX, { paste: true }).keys, [["send-keys", "-t", "s", "-l", "--", `${k}뒤`]], JSON.stringify(k));
+  }
+});
+
+t("[30c·#4852] ESC 로 **시작하는** 글(색 입힌 로그)은 붙여넣는다 — 치면 ESC 가 Esc 키가 되고 긴 글은 앞 약 4KB 를 잃는다 · 키로서의 Esc 는 글로 싣지 않는다", () => {
+  const log = "\x1b[31mERROR\x1b[0m 디스크 가득 — 로그를 그대로 붙였다";
+  assert.deepEqual(pastePieces(planP("s", log, TMUX, { paste: true }).keys), [log]);
+  assert.equal(sk.startsWithKey(log), false);
+  assert.equal(sk.startsWithKey("\x1b"), false, "ESC 하나도 키로 치지 않는다");
+});
+
+t("[30b·L2·#4852] 글 **가운데**의 제어 글자(색 입힌 로그의 ESC · 벨 · Ctrl+A)는 붙여넣는다 — 치면 키가 돼 글이 뒤섞이고 긴 친 글은 앞이 잘린다", () => {
+  for (const k of ["\x1b", "\x03", "\x7f", "\x00", "\x1f", "\x01", "\x07"]) {
+    assert.deepEqual(pastePieces(planP("s", `앞${k}뒤`, TMUX, { paste: true }).keys), [`앞${k}뒤`], JSON.stringify(k));
+  }
+  const log = "로그: \x1b[31mERROR\x1b[0m 디스크 가득 \x07 끝";
+  assert.deepEqual(pastePieces(planP("s", log, TMUX, { paste: true }).keys), [log]);
+  assert.equal(typeof sk.startsWithKey, "function", "startsWithKey 가 없다");
+  for (const [text, want] of [["\x13/model opus", true], ["\x01앞", true], ["/model opus", false], ["a\x13", false], ["로그 \x1b[31m", false], ["\x1b[31m로그", false], ["", false]] as const) {
+    assert.equal(sk.startsWithKey(text), want, JSON.stringify(text));
   }
 });
 
@@ -430,6 +449,92 @@ t("[39·I5] 무작위 글 300개 — 이어 붙이면 원문 · 조각마다 상
       assert.deepEqual(ccImageSegments(pc), [], `#${k} ${JSON.stringify(pc).slice(0, 80)}`);
       assert.ok(!ccDropsTail(pc) && !ccEmpty(pc), `#${k} 포커스 꼬리 ${JSON.stringify(pc).slice(-12)}`);
     }
+  }
+});
+
+t("[42·K1~K4·#4852] 치는 인자 하나는 UTF-16 4,000 단위 이하 — 매니지드 브로커 중계는 4,096자 넘는 인자를 거절한다 · 이어붙이면 원문", () => {
+  const units = Number(sk.TMUX_LITERAL_CHUNK_UNITS ?? 4000);
+  assert.ok(units <= 4096, `상한 ${units} — 브로커 상한(4,096) 안이어야 한다`);
+  const argOf = (k: string[][]): string[] => k.map((a) => { assert.deepEqual(a.slice(0, 5), ["send-keys", "-t", "s", "-l", "--"]); return a[5]!; });
+  //  K1 — 영문 9,000자(바이트 상한 8KiB 로는 8,192자 한 덩어리가 된다)
+  const ascii = "lorem ipsum dolor sit amet ".repeat(400).slice(0, 9000);
+  const a = argOf(sendKeysPlan("s", ascii, TMUX).keys);
+  for (const arg of a) assert.ok(arg.length <= 4000 && bytes(arg) <= TMUX_LITERAL_CHUNK_BYTES, `${arg.length}자 · ${bytes(arg)}B`);
+  assert.equal(a.join(""), ascii);
+  //  K2 — 경계
+  assert.equal(sendKeysPlan("s", "x".repeat(units), TMUX).keys.length, 1, "정확히 상한이면 한 덩어리");
+  assert.equal(sendKeysPlan("s", "x".repeat(units + 1), TMUX).keys.length, 2, "+1 이면 두 덩어리");
+  //  K3 — 한글은 바이트 상한이 먼저(2,730자) · 단위 상한도 지킨다
+  const ko = "가".repeat(3000);
+  const k = argOf(sendKeysPlan("s", ko, TMUX).keys);
+  for (const arg of k) assert.ok(arg.length <= units && bytes(arg) <= TMUX_LITERAL_CHUNK_BYTES);
+  assert.equal(k.join(""), ko);
+  //  K4 — 이모지(서로게이트 쌍)가 단위 경계에 걸쳐도 안 가른다
+  assert.deepEqual(argOf(sendKeysPlan("s", "x".repeat(units - 1) + "😀y", TMUX).keys), ["x".repeat(units - 1), "😀y"]);
+});
+
+//  #4852 N7 — 첫 지시가 아닌 지시도 넣은 뒤 지킨다. 실행부(노드 RPC·tmux)는 이 파일 밖이라 배선은 소스로 잰다(outbox-exec W12 와 같은 방식).
+const srcOf = async (rel: string): Promise<string> => (await import("node:fs")).readFileSync(new URL(rel, import.meta.url), "utf8");
+const OPS_SRC = await srcOf("../../src/terminal/session-ops.ts");
+const INJECT_SRC = await srcOf("../../src/node/session-inject.ts");
+t("[43·N7·#4852] 노드 sendKeys · 로컬 주입 — 넣은 **뒤에** 지킴이(guardAfterSend)를 띄운다 · 기다리지 않는다(void) · 붙였는지를 넘긴다", () => {
+  //  무엇을 지키나(붙인 글만 · 설정 명령 빼고 · 던져도 안 던짐)는 session-first-prompt.test F4~F6 이 함수로 잰다. 여기는 두 실행부의 배선만.
+  const caseBody = /case "sendKeys": \{([\s\S]*?)\n {4}\}/.exec(OPS_SRC)?.[1] ?? "";
+  assert.ok(caseBody, "session-ops 의 sendKeys 갈래를 못 찾았다");
+  assert.match(caseBody, /await sendKeysToSession\(id, text, \{ paste \}\);\s*(?:\/\/[^\n]*\n\s*)*void guardAfterSend\(id, text, paste\);/, "노드 sendKeys 가 넣은 뒤 지키지 않는다(또는 기다린다)");
+  assert.match(INJECT_SRC, /await sendKeysToSession\(sessionId, text, \{ paste \}\);\s*(?:\/\/[^\n]*\n\s*)*void guardAfterSend\(sessionId, text, paste\);/, "로컬 주입이 넣은 뒤 지키지 않는다(또는 기다린다)");
+});
+
+//  #4852 격리 리뷰 — 글 속의 붙여넣기 표지 · 조각 경계의 제어열. 제어열을 지우는 규칙은 Claude Code 와 같게 둔 ANSI_SEQ(submit-check)로 잰다.
+const { ANSI_SEQ } = await import("./submit-check.js") as { ANSI_SEQ: RegExp };
+const stripAnsi = (x: string): string => x.replace(ANSI_SEQ, "");
+const literalArgs = (keys: string[][]): string[] => keys.flatMap((cmd) => {
+  const out: string[] = [];
+  for (let i = 0; i < cmd.length; i++) if (cmd[i] === "-l" && cmd[i + 1] === "--") out.push(cmd[i + 2] ?? "");
+  return out;
+});
+t("[44·#4852] 글 속의 붙여넣기 표지는 지운다 — 남기면 붙여넣기가 그 자리에서 닫히고 나머지가 키로 읽힌다 · 지운 자리에 새로 생긴 표지도", () => {
+  assert.equal(typeof sk.withoutPasteMarks, "function", "withoutPasteMarks 가 없다");
+  const evil = "앞 \x1b[201~\x03\x04 뒤";
+  const keys = planP("s", evil, TMUX, { paste: true }).keys;
+  assert.deepEqual(pastePieces(keys), ["앞 \x03\x04 뒤"]);
+  for (const a of literalArgs(keys)) assert.ok(!a.includes("\x1b[201~") && !a.includes("\x1b[200~"), `글 인자에 표지: ${JSON.stringify(a)}`);
+  assert.equal(sk.withoutPasteMarks("\x1b[20\x1b[201~1~끝"), "끝", "지운 자리에서 표지가 다시 생겼다");
+  assert.equal(sk.withoutPasteMarks("\x1b[200~가\x1b[201~나"), "가나");
+  assert.equal(sk.withoutPasteMarks("표지 없음"), "표지 없음");
+  //  겹겹이 쌓은 표지(«ESC[20» × k + 표지 + «1~» × k — 지울 때마다 새 표지가 생긴다)도 한 번 훑기로 — 종전 «다 지울 때까지 다시» 는 제곱 시간이었다
+  //   (격리 리뷰 실측 94KB 4초 · 본문 상한 1MB). 200KB 를 넉넉히 1.5초 안에(한 번 훑기는 수 ms · 제곱이면 십수 초).
+  const k = 200_000 / 7 | 0;
+  const nested = "\x1b[20".repeat(k) + "\x1b[201~" + "1~".repeat(k) + "끝";
+  const t0 = Date.now();
+  assert.equal(sk.withoutPasteMarks(nested), "끝");
+  assert.ok(Date.now() - t0 < 1_500, `겹친 표지 ${nested.length}자에 ${Date.now() - t0}ms`);
+});
+t("[45·#4852] 제어열이 붙여넣기 조각 경계(500)에 걸리면 통째로 다음 조각으로 — 갈린 반쪽은 Claude Code 가 글자로 남긴다(«1m») · 이어 붙이면 원문", () => {
+  for (const intro of ["\x1b[", "\u{9B}"]) {
+    const text = "x".repeat(498) + intro + "31mERR" + "\x1b[0m 끝";
+    const pieces = sk.piecesToPaste(text);
+    assert.equal(pieces.join(""), text);
+    assert.equal(pieces[0], "x".repeat(498), JSON.stringify(intro));
+    assert.equal(pieces.map(stripAnsi).join(""), stripAnsi(text), "조각마다 지운 것이 통째로 지운 것과 다르다");
+  }
+  //  닫힌 OSC 가 경계에 걸려도 · 한 조각보다 긴 제어열(맨 앞이라 못 넘긴다)도 멈추지 않고 원문을 잇는다
+  const osc = "y".repeat(480) + "\x1b]8;;https://example.test/path\x1b\\링크\x1b]8;;\x1b\\ 끝";
+  assert.equal(sk.piecesToPaste(osc).map(stripAnsi).join(""), stripAnsi(osc));
+  const huge = "\x1b]0;" + "z".repeat(1200) + "\x07 뒤";
+  assert.equal(sk.piecesToPaste(huge).join(""), huge);
+});
+t("[46·#4852] 무작위 글 300개(색 코드·8비트 CSI·OSC·한글·이모지) — 이어 붙이면 원문 · 조각마다 상한 이하 · 조각마다 지운 것이 통째로 지운 것과 같다", () => {
+  let seed = 4852;
+  const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) >>> 0; return seed % n; };
+  const parts = ["가나다", "abc ", "😀", "\x1b[31m", "\x1b[0m", "\x1b[1;2m", "\u{9B}32m", "\x1b]0;제목\x07", "\x1b(B", " ", "x".repeat(37)];
+  for (let n = 0; n < 300; n++) {
+    let text = "";
+    while (text.length < 400 + rnd(1600)) text += parts[rnd(parts.length)];
+    const pieces = sk.piecesToPaste(text);
+    assert.equal(pieces.join(""), text, `#${n}`);
+    for (const p of pieces) assert.ok(p.length > 0 && p.length <= sk.PASTE_CHUNK_UNITS, `#${n} 조각 ${p.length}`);
+    assert.equal(pieces.map(stripAnsi).join(""), stripAnsi(text), `#${n} 제어열이 갈렸다`);
   }
 });
 

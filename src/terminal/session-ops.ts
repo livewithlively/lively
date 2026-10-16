@@ -24,7 +24,7 @@ import {
   type CreateInput,
 } from "./terminal-sessions.js";
 import { sendKeysToSession, sessionPastes } from "./send-keys.js";
-import { injectFirstPrompt } from "./session-first-prompt.js";
+import { injectFirstPrompt, guardAfterSend } from "./session-first-prompt.js";
 import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
 import { writeSessionTokens, removeSessionTokens } from "./session-token-file.js";   // #4135 — 살아 있는 세션에 자격을 나중에 심는 길
@@ -83,8 +83,11 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
     //   이 노드 tmux 의 @box_harness 를 본다(못 읽으면 종전대로 친다).
     case "sendKeys": {
       const id = String(args.id);
+      const text = String(args.text ?? "");
       const paste = await sessionPastes(id, typeof args.harness === "string" ? args.harness : null);
-      await sendKeysToSession(id, String(args.text ?? ""), { paste });
+      await sendKeysToSession(id, text, { paste });
+      //  #4852 — 넣은 뒤 입력칸을 지킨다(뒤에서 — RPC 응답을 막지 않는다 · 무엇을 지키나는 guardAfterSend 머리말).
+      void guardAfterSend(id, text, paste);
       return { ok: true };
     }
 

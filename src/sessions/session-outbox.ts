@@ -55,7 +55,7 @@ import { emitSessionEvent, sessionListenerCount } from "../terminal/harness-io/r
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 //  #4851 — 에코 판정 한 벌(늦은 에코·화면과 같은 규칙). 순수 판정 + 줄 맞춤 훑기뿐이라 노드 번들 승인 목록에 올렸다(기록 찾기는 안 들인다).
-import { alignedSource, findPromptInTranscript, looksLikeSlashCommand, ECHO_HEAD_CHARS, ECHO_SKEW_MS, type EchoMemo, type EchoWindow } from "./outbox-echo-scan.js";
+import { alignedSource, echoComparable, findPromptInTranscript, looksLikeSlashCommand, ECHO_HEAD_CHARS, ECHO_SKEW_MS, type EchoMemo, type EchoWindow } from "./outbox-echo-scan.js";
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
 /** prompt=사람이 보낸 말(대화창 말풍선) · control=설정 슬래시 명령(모델·추론강도 바꾸기, #1758 — 말풍선 아님·에코 없음). */
@@ -193,10 +193,11 @@ export function typedEchoWindow(watch: Pick<EchoWatch, "typedAt">): EchoWindow {
   return { notBefore: watch.typedAt - ECHO_SKEW_MS, userNotAfter: Infinity, queuedNotAfter: Infinity };
 }
 
-/** #4794 «다 쳤다» 알림의 머리 — 공백을 하나로 접고 앞뒤를 다듬은 뒤 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
- *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 접기·같은 길이다.
- *  ⚠ 두 함수가 갈리면 긴 말이 안 맞아 넘김이 유예(8초)로 밀린다 — 계약 시험 scripts/outbox-typed-contract.test.mjs 가 맞춘다. */
-export const typedHead = (text: string): string => String(text ?? "").replace(/\s+/g, " ").trim().slice(0, ECHO_HEAD_CHARS);
+/** #4794 «다 쳤다» 알림의 머리 — 편 뒤(echoComparable) 앞 ECHO_HEAD_CHARS 자. 화면은 기다리던 말의 머리를 **같은 함수**
+ *  (web/lib/outbox-echo.ts promptHead)로 만들어 글자 그대로 견준다 — 같은 말 판정(samePrompt)과 같은 펴기·같은 길이다.
+ *  ⚠ 두 함수가 갈리면 긴 말이 안 맞아 넘김이 유예(8초)로 밀린다 — 계약 시험 scripts/outbox-typed-contract.test.mjs 가 맞춘다.
+ *   #4852 — 공백만 접던 서버와 보이지 않는 글자까지 지우는 화면이 그렇게 갈렸다(격리 리뷰 — 계약 시험 C1 «보이지 않는 글자»). */
+export const typedHead = (text: string): string => echoComparable(text).slice(0, ECHO_HEAD_CHARS);
 
 /** #4794 아웃박스가 사람의 말을 다 치고 Enter 까지 눌렀다 — 세션 상태 통로로 알린다(화면이 터미널로 넘기는 신호).
  *  듣는 쪽 수를 남긴다 — 그 신호가 운영에서 실제로 닿았는지(아무도 안 들었으면 화면은 에코·유예로 넘겼다)를 여기서 읽는다. */
@@ -520,7 +521,7 @@ export async function sendReadyRow(
 ): Promise<SendOutcome> {
   const oneLine = flatOneLine(row.text);
   //  붙여넣는 것은 **사람이 보낸 말**뿐이다. 설정 명령(control)은 앞에 «치던 글 치워 두기» 키(Ctrl+S)가 붙어 있어 키로 쳐야 한다
-  //   (send-keys KEYS_IN_TEXT 머리말) — #4772 가 실측으로 맞춘 그대로 둔다. 짧아서(64자 미만) 한 덩어리로 읽혀도 Enter 가 키로 남는다.
+  //   (send-keys LEADING_KEY 머리말) — #4772 가 실측으로 맞춘 그대로 둔다. 짧아서(64자 미만) 한 덩어리로 읽혀도 Enter 가 키로 남는다.
   const typed = await exec.type(row.text, pastesFor(harness) && row.kind === "prompt" ? { paste: true } : undefined);
   if (typed.next === "stall") return { kind: "stall", verdict: typed.verdict };
   if (typed.next === "fail") return { kind: "mark", status: "failed", error: typed.error };
@@ -728,13 +729,18 @@ async function waitEcho(sessionId: string, st: SessionState | undefined, oneLine
   const cwd = st?.dir || "";
   //  같은 바이트를 다시 읽지 않는다 — 파일이 **자랐을 때만** 본다(중계에선 이 읽기가 네트워크를 탄다). 어디까지 읽었나(watch.memo)는 창을 넘어 잇는다.
   let seenFile = ""; let seenSize = -1;
-  for (;;) {
+  let cur = st;
+  for (let poll = 0; ; poll++) {
+    //  #4852 — 대화 id 가 아직 없으면(방금 뜬 세션 — SessionStart 훅의 /claude-uuid 가 치기보다 늦었다) 폴마다 행을 다시 읽는다. 종전엔 보내기 전에
+    //   읽은 행을 창 끝까지 써서, 그사이 id 가 와도 «폴더에서 가장 최근 자란 파일» 만 봤다 — 한 프로젝트 폴더에 세션이 여럿이면(라이블리에선 흔하다)
+    //   더 바쁜 **다른 세션의 대화**일 수 있고, 거기엔 이 말이 없어 들어간 말이 «미확인» 이 된다.
+    if (poll > 0 && cur && !cur.claude_session_id) cur = (await getSessionState(sessionId).catch(() => undefined)) ?? cur;
     let file: string | null = null; let size = -1;
-    if (st) {
-      const found = await locateTranscript(io, { cwd, convId: st.claude_session_id || "", owner: st.owner || "", reportedPath: st.transcript_path }, tfs.stat).catch(() => null);
+    if (cur) {
+      const found = await locateTranscript(io, { cwd, convId: cur.claude_session_id || "", owner: cur.owner || "", reportedPath: cur.transcript_path }, tfs.stat).catch(() => null);
       if (found) { file = found.file; size = found.size; }        // locate 가 이미 stat 했다 — 다시 묻지 않는다
     }
-    if (!file && cwd && st) file = await newestGrownFile(tfs, io, cwd, st.owner || "", watch.typedAt - 10_000);
+    if (!file && cwd && cur) file = await newestGrownFile(tfs, io, cwd, cur.owner || "", watch.typedAt - 10_000);
     if (file) {
       if (size < 0) size = (await tfs.stat(file).catch(() => null)) ?? -1;
       if (size < 0) return "unreadable";

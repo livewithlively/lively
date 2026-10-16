@@ -41,6 +41,10 @@ try {
     ["161번째 글자가 공백", long(300, 160)],
     ["긴 말 · 줄바꿈 섞임", "첫 줄\n\n" + long(400)],
     ["빈 말", ""],
+    //  #4852 — Claude Code 가 지워 적는 글자가 든 말(같은 말 판정이 그 글자를 지운다 — 머리도 같은 규칙이어야 «다 쳤다» 알림이 맞는다)
+    ["보이지 않는 글자", "복사해 온\u{200B}글\u{FEFF} 끝"],
+    ["ANSI 색 코드 · 벨", "로그 \x1b[31mERR\x1b[0m 끝 \x07"],
+    ["VT·FF·NEL(Claude Code 는 줄바꿈으로 적는다 — 접는다)", "세로\x0b탭\x0c넘김 \x85끝"],
   ];
   for (const [name, text] of SAME) {
     const s = typedHead(text), w = promptHead(text);
