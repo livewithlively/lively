@@ -142,7 +142,7 @@ const SRC = "src/sessions/session-outbox.ts";
 //  같은 배포에서 하루 넘은 delivered/sent 30건이 안 지워진 것이 "그 경로가 아예 안 돈다"의 대조 증거였다.
 t("[#2244] 잔재 판정 시간은 resumeOutbox 와 recoverStaleSending 이 **같은 자**를 쓴다", () => {
   // 두 회수가 다른 자를 쓰면 한쪽만 고쳐지는 날이 온다 — 상수 하나로 묶어 둔 이유.
-  assert.equal(STALE_SENDING, "2 minutes");
+  assert.equal(STALE_SENDING, "3 minutes");   // #4818 — 제출 지킴이의 걸음이 늘어 2 → 3분(상한의 합은 outbox-exec.test E15)
   const src = readFileSync(SRC, "utf8");
   const hardcoded = src.match(/interval '(\d+ minutes?)'/g) ?? [];
   assert.deepEqual(hardcoded, [], `SQL 에 시간을 직접 적은 자리가 남아 있다: ${hardcoded.join(", ")}`);

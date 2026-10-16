@@ -14,9 +14,11 @@
 //     terminal-pty 의 인코더를 그대로 재사용한다. Enter 도 키 이름이 아니라 `0x0d` 로 보낸다.
 //     (자세한 근거는 terminal-pty.ts 의 'psmux 입력 경로' 절.)
 //  ④ **tmux 도 청크** — 인자 하나가 16KiB 를 넘으면 tmux 가 명령을 통째로 거절한다(TMUX_LITERAL_CHUNK_BYTES).
+//  ⑤ **Claude Code 에는 글을 «붙여넣기»로 싣는다**(#4818 — PASTE_OPEN 머리말). 친 글과 Enter 가 한 번에 읽히면
+//     Enter 가 글자로 박혀 제출이 안 된다. ②의 지연은 Claude Code 가 그 사이 입력을 읽어 줄 때만 성립한다.
 import { TMUX_BIN, harnessLiveThemeSteps, harnessLiveThemeSupported, type LiveThemeStep } from "./catalog.js";
 import { detectAwaiting, isSpinning } from "./phase.js";   // #1683 후속2 — 바쁜/모달 세션엔 키를 넣지 않는다
-import { tmux } from "./tmux-exec.js";
+import { tmux, getOpt } from "./tmux-exec.js";
 import { isPsmuxBin, inputToSendKeysArgv } from "./terminal-pty.js";
 
 // 텍스트가 pane 에 닿은 뒤 Enter 가 가도록 두는 창(규약 ②). 길이 비례이되 상·하한을 둔다 —
@@ -45,6 +47,70 @@ export function splitUtf8(text: string, maxBytes: number): string[] {
   return out;
 }
 
+/**
+ * 실제로 넣는 한 줄(규약 ①) — 줄을 가르는 글자를 공백으로 편다(순수). 에코 바늘(session-outbox `flatOneLine`)도 이 함수다.
+ *  LF 만이 아니다(#4818): **CR** 은 치면 그 자리에서 제출되고(Enter 와 같은 바이트), U+2028·U+2029 는 Claude Code 가
+ *  «보이지 않는 글자» 로 지우며 제출을 멈춘다(«Removed 1 invisible character · review and press Enter to send», 2.1.301 실측).
+ */
+export function oneLineOf(text: string): string {
+  return String(text ?? "").replace(/\s*[\n\r\u2028\u2029]\s*/g, " ").trim();
+}
+
+// ── 붙여넣기(bracketed paste) — 규약 ⑤ (#4818) ─────────────────────────────────────────────────────
+//  실측(2026-10-16, Claude Code 2.1.301 · tmux 3.6a · 별도 tmux 서버): Claude Code 의 키 분해기는 **한 번에 읽은 입력이 64자
+//   이상이면 그 안의 제어 글자(CR 포함)를 키로 떼어 내지 않고 글자로 둔다.** 아웃박스는 «글 → 0.5초 → Enter» 로 치는데,
+//   그 0.5초 동안 Claude Code 가 입력을 안 읽으면(기동·되살리기 직후의 바쁜 이벤트 루프) 글과 Enter 가 한 덩어리로 읽힌다.
+//   그러면 ① Enter 가 입력칸에 **글자 CR** 로 박히고(빈 줄 하나로 보인다) ② 다음 Enter 는 그 CR 을 «보이지 않는 글자» 로
+//   지우며 «Removed 1 invisible character · review and press Enter to send» 를 띄우고 **제출하지 않는다** ③ 세 번째 Enter 에서야
+//   들어간다. 아웃박스는 Enter 를 두 번만 눌러 «입력칸에 글 + 빈 줄, 미제출» 로 멈췄다(상민님 신고 화면과 같다).
+//   64자 미만 글은 같은 조건에서도 첫 Enter 에 들어간다.
+//  붙여넣기 표지(ESC[200~ … ESC[201~)로 감싸면 글은 붙여넣기 하나로 읽히고 뒤따르는 Enter 는 제 토큰이 된다 — 같은 조건에서
+//   첫 Enter 에 제출됐다(표지 직접 싣기·tmux paste-buffer -p 둘 다). Claude Code 스스로 백그라운드 세션에 답을 넣을 때도
+//   «붙여넣기 + CR» 이다(2.1.301 번들의 reply 경로).
+//  ⚠ 붙여넣기 **한 번이 800자를 넘으면** Claude Code 가 입력칸에 «[Pasted text #1]» 로 접고 대화 기록에
+//   `<pasted_content id=…>` 로 감싸 적는다 — 모델이 «사람이 다른 데서 붙여넣은 자료» 로 읽는다(실측). 그래서 PASTE_CHUNK_UNITS
+//   조각으로 나눠 붙인다: 1,121자를 넷으로 붙이면 입력칸에 펼쳐진 그대로·기록도 평문 그대로였다(친 글과 같다).
+//  ⚠ 표지는 **앱이 붙여넣기 모드를 켰을 때만** 뜻이 있다(안 켠 앱엔 «[200~» 가 글자로 찍힌다). tmux 엔 그 모드를 묻는 형식
+//   변수가 없고, 모드를 보고 표지를 붙여 주는 `paste-buffer -p` 는 세션 지목 없는 `set-buffer` 가 앞서야 해서 매니지드의 tmux
+//   해석기(tmux-route — `-t` 로 세션 컨테이너를 고른다)를 못 지난다. 그래서 **Claude Code 세션만**(입력칸이 살아 있는 동안 늘
+//   켠다 — 2.1.301 번들 handleSetRawMode) 부른 쪽이 `paste` 로 고른다. 다른 하네스·셸은 종전 그대로 친다.
+export const PASTE_OPEN = "\x1b[200~";
+export const PASTE_CLOSE = "\x1b[201~";
+/** 붙여넣기 한 번에 싣는 상한(UTF-16 단위 — Claude Code 가 재는 단위) — 접힘 문턱(800)보다 넉넉히 아래. */
+export const PASTE_CHUNK_UNITS = 500;
+
+/** 문자열을 UTF-16 길이 상한으로 자른다(순수) — 코드포인트 경계에서만(서로게이트 쌍을 안 가른다). */
+export function splitUnits(text: string, maxUnits: number): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const ch of text) {
+    if (cur && cur.length + ch.length > maxUnits) { out.push(cur); cur = ""; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** 바이트 그대로 싣는 argv(`send-keys -H`) — 키 이름 해석·확장 키 인코딩을 안 탄다. */
+const hexKeys = (id: string, s: string): string[] => ["send-keys", "-t", id, "-H", ...[...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"))];
+
+/** 이 하네스에 글을 붙여넣기로 싣나(규약 ⑤) — Claude Code 만. */
+export const pastesFor = (harness: string | null | undefined): boolean => String(harness ?? "").trim() === "claude";
+
+/**
+ * 그 세션이 붙여넣기를 받나 — 부른 쪽이 하네스를 알면 그것으로, 모르면 이 호스트 tmux 의 `@box_harness` 로(규약 ⑤).
+ *  ⚠ 표식이 비었거나 못 읽으면 **종전대로 친다**(붙여넣기를 모르는 앱에 표지를 흘리지 않는다).
+ */
+export async function sessionPastes(id: string, harness?: string | null): Promise<boolean> {
+  if (harness) return pastesFor(harness);
+  return pastesFor(await getOpt(id, "@box_harness"));   // getOpt 은 못 읽으면 "" 를 준다(던지지 않는다)
+}
+
+export interface SendKeysOpts {
+  /** 글을 붙여넣기 조각으로 싣는다(규약 ⑤ — Claude Code 세션만 참). psmux 는 무시한다(입력 표면이 다르다 — 규약 ③). */
+  paste?: boolean;
+}
+
 export interface SendKeysPlan {
   /** 평탄화된 실제 주입 문자열(규약 ①). 빈 문자열이면 보낼 것이 없다. */
   oneLine: string;
@@ -61,10 +127,10 @@ export interface SendKeysPlan {
  * CI 에서 못 띄운다. 순수 함수면 mac 에서도 psmux 규칙을 표로 못박을 수 있다.
  *
  * 인젝션 안전: 두 경로 다 execFile argv(셸 미경유)이고 psmux 경로는 값이 전부 `0x…` 토큰이라
- * `;kill-server;` 를 넣어도 화면에 리터럴로만 도달한다(terminal-pty 실측).
+ * `;kill-server;` 를 넣어도 화면에 리터럴로만 도달한다(terminal-pty 실측). 붙여넣기 표지는 고정 상수라 글이 표지를 못 바꾼다.
  */
-export function sendKeysPlan(id: string, text: string, bin: string): SendKeysPlan {
-  const oneLine = String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
+export function sendKeysPlan(id: string, text: string, bin: string, opts: SendKeysOpts = {}): SendKeysPlan {
+  const oneLine = oneLineOf(text);
   if (isPsmuxBin(bin)) {
     return { oneLine, keys: oneLine ? inputToSendKeysArgv(id, oneLine) : [], enter: ["send-keys", "-t", id, "0x0d"] };
   }
@@ -72,7 +138,10 @@ export function sendKeysPlan(id: string, text: string, bin: string): SendKeysPla
   //   `-R` 은 조용히 삼켜져 한 글자도 안 간다). 마크다운 목록(«- 이거 해 줘») 으로 시작하는 지시가 그렇게 사라지고,
   //   청크로 자르면 경계마다 같은 일이 생길 수 있다. 매니지드 중계의 세션 해석(lvly-cloud sessionbroker)도 `--` 를
   //   옵션 구간 끝으로 읽으므로 `-t` 지목은 그대로다.
-  const keys = oneLine ? splitUtf8(oneLine, TMUX_LITERAL_CHUNK_BYTES).map((part) => ["send-keys", "-t", id, "-l", "--", part]) : [];
+  const literal = (s: string): string[][] => splitUtf8(s, TMUX_LITERAL_CHUNK_BYTES).map((part) => ["send-keys", "-t", id, "-l", "--", part]);
+  const keys = !oneLine ? []
+    : opts.paste ? splitUnits(oneLine, PASTE_CHUNK_UNITS).flatMap((piece) => [hexKeys(id, PASTE_OPEN), ...literal(piece), hexKeys(id, PASTE_CLOSE)])
+    : literal(oneLine);
   return { oneLine, keys, enter: ["send-keys", "-t", id, "Enter"] };
 }
 
@@ -126,12 +195,13 @@ export async function runSendKeysPlan(
 
 /**
  * 이 호스트의 mux 세션에 텍스트를 넣고 제출한다. 세션이 없으면 throw(호출자가 error 로 보고한다).
+ *  `opts.paste` 는 부른 쪽이 고른다(규약 ⑤ — Claude Code 세션이면 `sessionPastes`). 안 주면 종전대로 친다(셸에 치는 자리가 있다).
  *
  * ⚠ 인가는 하지 않는다 — 게이트웨이 로컬 호출은 크론/관리세션 해소를 거쳐 오고, 노드 호출은
  *  게이트웨이가 소유·초대를 검증한 뒤 릴레이한다(정책=게이트웨이, 실행=노드 F7).
  */
-export async function sendKeysToSession(id: string, text: string): Promise<void> {
-  const plan = sendKeysPlan(id, text, TMUX_BIN);
+export async function sendKeysToSession(id: string, text: string, opts: SendKeysOpts = {}): Promise<void> {
+  const plan = sendKeysPlan(id, text, TMUX_BIN, opts);
   if (!plan.oneLine) throw new Error("주입할 텍스트가 비어 있습니다");
   const r = await runSendKeysPlan(id, plan, { tmux, sleep: (ms) => new Promise((res) => setTimeout(res, ms)) });
   // 세션 확인에서 죽었으면 **한 글자도 안 갔다**(SendKeysNotStarted). 그 뒤의 실패는 원래 오류 그대로 — 입력칸에 반쪽이 남았을 수 있다.

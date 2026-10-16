@@ -40,7 +40,7 @@ export const OUTBOX_KEYS_MAX_DOWN = 8;
 export type OutboxStepReq =
   | { step: "peek"; id: string }
   | { step: "keys"; id: string; down: number; enter: boolean }
-  | { step: "type"; id: string; text: string };
+  | { step: "type"; id: string; text: string; paste: boolean };
 
 /** 세션에 닿았나 — `gone` 은 tmux 가 **답해서** 없다고 했을 때뿐이고, 무응답·중계 끊김은 `unknown` 이다(#835·#2154). */
 export type Reach = "gone" | "unknown";
@@ -66,6 +66,8 @@ export type OutboxStepOutcome = PeekOutcome | KeysOutcome | TypeOutcome | StepRe
  *  · keys 의 `down`·`enter` 는 **없으면** 0·false(누를 것이 없다)이고, 있으면 음이 아닌 정수·불리언이어야 한다 —
  *    `"1"` 을 1 로, `"true"` 를 참으로 읽지 않는다. `down` 은 `OUTBOX_KEYS_MAX_DOWN` 을 넘으면 거절한다(상한과 같으면 받는다).
  *  · type 의 글이 공백뿐이면 거절한다 — `sendKeysToSession` 이 개행을 편 뒤 비면 «주입할 텍스트가 비어 있습니다» 로 던지는 것과 같은 뜻이다.
+ *  · type 의 `paste`(#4818 — 붙여넣기로 싣나)는 **없으면** 거짓(종전 치기)이고, 있으면 불리언이어야 한다. 이 칸을 모르는 옛 호스트는
+ *    그냥 친다 — 게이트웨이의 제출 확인(submit-check)이 그 판의 «글자 CR» 을 화면으로 보고 Enter 를 더 눌러 받친다.
  */
 export function parseOutboxStep(args: unknown): OutboxStepReq | { unsupported: string } {
   if (!args || typeof args !== "object") return { unsupported: "걸음 인자가 객체가 아니다" };
@@ -85,7 +87,9 @@ export function parseOutboxStep(args: unknown): OutboxStepReq | { unsupported: s
   }
   const text = a.text;
   if (typeof text !== "string" || !text.trim()) return { unsupported: "칠 글이 비었다" };
-  return { step: "type", id, text };
+  const paste = a.paste === undefined ? false : a.paste;
+  if (typeof paste !== "boolean") return { unsupported: "type 의 paste 는 참·거짓이어야 한다" };
+  return { step: "type", id, text, paste };
 }
 
 /**
@@ -162,6 +166,6 @@ async function pressKeys(r: Extract<OutboxStepReq, { step: "keys" }>, d: OutboxS
  *  정하고, 다른 점은 **어디서 멈췄나를 값으로 남긴다**는 것 하나다(`typedOutcomeOf`).
  */
 async function typeText(r: Extract<OutboxStepReq, { step: "type" }>, d: OutboxStepDeps): Promise<TypeOutcome> {
-  const out = await runSendKeysPlan(r.id, sendKeysPlan(r.id, r.text, d.bin), d);
+  const out = await runSendKeysPlan(r.id, sendKeysPlan(r.id, r.text, d.bin, { paste: r.paste }), d);
   return out.ok ? { ok: true, typed: "full" } : typedOutcomeOf(out.stage, out.err, d.gone);
 }

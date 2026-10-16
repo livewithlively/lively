@@ -106,6 +106,29 @@ test("P5b 치기 — 한 글자(경계)도 full 이고 flush 는 send-keys 규�
   assert.deepEqual(h.events, ["has-session", "send-keys -l -- x", `sleep ${injectFlushMs(1)}`, "send-keys Enter"]);
 });
 
+// ── #4818 붙여넣기(paste) — spec.md X1~X4 (X2 순서 일치는 send-keys.test 의 [#4818 X2]) ─────────────────────────
+const PASTE_OPEN_EV = "send-keys -H 1b 5b 32 30 30 7e";
+const PASTE_CLOSE_EV = "send-keys -H 1b 5b 32 30 31 7e";
+
+test("★ X2 치기 paste:true — 확인 → 여는 표지 → 글 → 닫는 표지 → flush 대기 → Enter", async () => {
+  const h = fakeHost();
+  assert.deepEqual(await runOutboxStep({ step: "type", id: ID, text: "첫 줄\n  둘째 줄", paste: true }, h.deps), { ok: true, typed: "full" });
+  const oneLine = "첫 줄 둘째 줄";
+  assert.deepEqual(h.events, ["has-session", PASTE_OPEN_EV, `send-keys -l -- ${oneLine}`, PASTE_CLOSE_EV, `sleep ${injectFlushMs(oneLine.length)}`, "send-keys Enter"]);
+});
+
+test("X1·X4 치기 paste 가 없거나 거짓이면 종전 그대로(표지 없음) — 그 칸을 모르는 옛 게이트웨이도 같은 답", async () => {
+  for (const args of [{ step: "type", id: ID, text: "안녕" }, { step: "type", id: ID, text: "안녕", paste: false }]) {
+    const h = fakeHost();
+    assert.deepEqual(await runOutboxStep(args, h.deps), { ok: true, typed: "full" });
+    assert.deepEqual(h.events, ["has-session", "send-keys -l -- 안녕", `sleep ${injectFlushMs(2)}`, "send-keys Enter"], JSON.stringify(args));
+  }
+});
+
+test("★ X3 치기 paste 가 불리언이 아니면 거절, tmux 0회 — «true»·1 을 참으로 읽지 않는다", async () => {
+  for (const paste of ["true", 1, null, {}]) await rejectedWithoutTmux({ step: "type", id: ID, text: "안녕", paste }, `paste ${JSON.stringify(paste)}`);
+});
+
 // ── 공통 거절 ───────────────────────────────────────────────────────────────
 
 test("★ P6 모르는 걸음·걸음 없음·객체가 아닌 인자는 거절, tmux 0회 — 다른 칸이 멀쩡해도 짐작해 실행하지 않는다", async () => {

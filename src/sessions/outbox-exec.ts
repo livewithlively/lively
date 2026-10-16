@@ -33,7 +33,7 @@ import { rpcMaybeSent } from "../node/rpc-error.js";
 import type { NodeOp } from "../node/protocol.js";
 import type { SessionHostTargetWhy } from "../node/self-node.js";
 import { tmux, isSessionGoneError } from "../terminal/tmux-exec.js";
-import { sendKeysToSession, SendKeysNotStarted } from "../terminal/send-keys.js";
+import { sendKeysToSession, SendKeysNotStarted, type SendKeysOpts } from "../terminal/send-keys.js";
 import { TMUX_TRUST_KEYS, type TrustKeys } from "../terminal/session-first-prompt.js";
 import { OUTBOX_KEYS_MAX_DOWN, type PeekOutcome, type KeysOutcome, type TypeOutcome, type Reach } from "../terminal/outbox-host-step.js";
 import { gatewayCapability } from "./gateway-capabilities.js";
@@ -141,8 +141,8 @@ export interface OutboxExec {
   peek(): Promise<PaneSeen>;
   /** `acceptTrustDialog` 에 줄 키 — 부를 때마다 새로 받는다 */
   trustKeys(): TrustKeys;
-  /** 친다 */
-  type(text: string): Promise<TypeResult>;
+  /** 친다 — `opts.paste` 는 붙여넣기로 싣는다(#4818 · send-keys 규약 ⑤ — Claude Code 세션만) */
+  type(text: string, opts?: SendKeysOpts): Promise<TypeResult>;
   /** 미제출 방어 Enter — 실패는 삼킨다(다음 에코 창이 판정한다) */
   enter(): Promise<void>;
 }
@@ -151,7 +151,7 @@ export interface OutboxExec {
 export interface LocalSteps {
   peek: (id: string) => Promise<PaneSeen>;
   keys: TrustKeys;
-  type: (id: string, text: string) => Promise<TypeResult>;
+  type: (id: string, text: string, opts?: SendKeysOpts) => Promise<TypeResult>;
 }
 
 /** 시험 seam — 기본값은 전부 프로덕션 경로다(게이트웨이 능력 · 게이트웨이 tmux · 실제 대기·시계). */
@@ -181,9 +181,9 @@ async function localPeek(id: string): Promise<PaneSeen> {
 }
 
 /** 게이트웨이 tmux 로 친다(종전 배달 루프의 send-keys). */
-async function localType(id: string, text: string): Promise<TypeResult> {
+async function localType(id: string, text: string, opts?: SendKeysOpts): Promise<TypeResult> {
   try {
-    await sendKeysToSession(id, text);
+    await sendKeysToSession(id, text, opts);
     return { next: "echo" };
   } catch (e) {
     // ⚠ **글자를 싣기 전에** 죽은 경우(SendKeysNotStarted = has-session 실패)만 되돌릴 수 있다 — 한 글자도
@@ -236,7 +236,7 @@ function localExec(sessionId: string, why: SessionHostTargetWhy | "no-port", wai
     host: null, why, waitedMs,
     peek: () => d.local.peek(sessionId),
     trustKeys: () => d.local.keys,
-    type: (text) => d.local.type(sessionId, text),
+    type: (text, opts) => d.local.type(sessionId, text, opts),
     enter: () => d.local.keys.enter(sessionId).catch(() => { /* 다음 에코 창에서 판정 */ }),
   };
 }
@@ -314,11 +314,12 @@ function hostExec(sessionId: string, host: string, waitedMs: number, d: OutboxEx
         enter: async () => press(downs, true),
       };
     },
-    async type(text) {
-      if (demoted) return d.local.type(sessionId, text);
+    async type(text, opts) {
+      if (demoted) return d.local.type(sessionId, text, opts);
       let next: TypeNext;
       try {
-        const out = decodeStep("type", await ask({ step: "type", text }));
+        //  paste 는 참일 때만 싣는다 — 그 칸을 모르는 옛 호스트도 같은 인자 모양을 받는다(outbox-host-step parseOutboxStep).
+        const out = decodeStep("type", await ask({ step: "type", text, ...(opts?.paste ? { paste: true } : {}) }));
         next = typeNext(out);
         if ("fault" in out) demote("type", out.fault);
       } catch (err) {
@@ -328,7 +329,7 @@ function hostExec(sessionId: string, host: string, waitedMs: number, d: OutboxEx
       switch (next) {
         case "echo": return { next: "echo" };
         case "echo-only": return { next: "echo-only" };          // 쳤을 수 있다 — **다시 치지 않는다**
-        case "local": return d.local.type(sessionId, text);      // 안 보냈다·거절(tmux 0) — 같은 시도를 게이트웨이가
+        case "local": return d.local.type(sessionId, text, opts); // 안 보냈다·거절(tmux 0) — 같은 시도를 게이트웨이가
         case "stall:gone": return { next: "stall", verdict: "gone" };
         case "stall:unknown": return { next: "stall", verdict: "unknown" };
         case "fail:text": return { next: "fail", error: "send: text" };
