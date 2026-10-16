@@ -262,4 +262,12 @@ t("G6 아주 큰 본문이 와도 던지지 않는다", () => {
   assert.doesNotThrow(() => errorForLog("ext__x__y", "본문".repeat(200_000)));
 });
 
+t("A9 작업 컨테이너 지시(#4490) — agent_job_run 의 prompt 값은 남기지 않고 길이만 · 다른 칸은 그대로", () => {
+  const out = stored("agent_job_run", { prompt: "비밀 지시 내용 — 고객 명단 정리", project_id: 42, label: "정리" });
+  assert.ok(!out.includes("비밀 지시"), out);
+  assert.ok(out.includes("지시 ") && out.includes("기록하지 않음"), out);
+  assert.ok(out.includes("42") && out.includes("정리"), "다른 칸은 남는다");
+  assert.ok(stored("agent_job_get", { id: 3 }).includes("3"), "다른 작업 도구는 그대로");
+});
+
 console.log(`\n${pass} passed`);
