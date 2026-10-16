@@ -1,7 +1,7 @@
 // 옛 경로 → 새 경로 기록(#4688) — file_move 표의 저장·조회. 순수 규칙은 files/file-move-core.ts, 배선은 files/file-move.ts.
 //
-//  moved_at = 그 줄이 옮겨 놓은 것이 **to_path 에 도착한 때**다. 따라가기는 이 시각 이후의 기록만 다음 걸음으로 본다
-//   (findFileMove since) — 그 전 기록은 그 경로를 앞서 쓰던 다른 것의 일이다(같은 이름 폴더를 다시 쓰는 경우).
+//  arrived_at = 그 줄이 옮겨 놓은 것이 **to_path 에 도착한 때**다(옮긴 때가 아니다 — 접으면 지금으로 바뀐다). 따라가기는 이 시각
+//   이후의 기록만 다음 걸음으로 본다(findFileMove since) — 그 전 기록은 그 경로를 앞서 쓰던 다른 것의 일이다(같은 이름 폴더를 다시 쓰는 경우).
 //
 //  기록 한 번에 세 일을 한 트랜잭션으로 한다:
 //   ① 연쇄 접기 — 옮긴 것(자신·하위)을 가리키던 기록이 이제 새 자리를 가리킨다(A→B 뒤 B→C 면 A→C, 도착 시각은 지금).
@@ -10,6 +10,8 @@
 //       따라가기가 한두 걸음 더 간다 — 대개 한두 번에 닿는다.
 //   ② 되돌리기 — 접은 결과가 제자리(A→B 뒤 B→A 면 A→A)인 줄은 지운다. 그 자리엔 지금 실제 파일이 있다.
 //   ③ 이번 이동 — 같은 옛 경로는 한 줄, 나중 이동이 이긴다(그 경로에 마지막으로 있던 것이 간 곳).
+//  알려진 한계: 옛 경로 하나에 줄이 하나라, 한 폴더가 같은 자리를 두 번 떠났다 돌아오면 앞선 다리 기록을 잃어 그 사이에 나간 파일의
+//   옛 링크가 404 가 될 수 있다(잘못된 파일로 가지는 않는다). 링크를 만든 때를 모르는 경로 주소의 한계다.
 //  오프셋은 PG 에서 센다 — JS 의 length 는 UTF-16 코드 단위라 이모지가 든 이름에서 어긋난다(renameSharedFolderAclPrefix 와 같은 이유).
 import { itemsPool, withTx } from "../db/client.js";
 import { movePrefixes, normalizeMovePath, type MoveRecord } from "../files/file-move-core.js";
@@ -25,15 +27,16 @@ export async function recordFileMove(scope: string, fromRel: string, toRel: stri
   const to = normalizeMovePath(toRel);
   if (!scope || !from || !to || from === to) return false;
   await withTx(async (c) => {
+    //  아래 기록은 늘 $2 아래에 있다(접을 줄의 to_path 가 $2 이거나 그 아래라서) — 그 조건을 먼저 걸어 비교할 줄을 좁힌다(결과는 같다).
     const foldable = `scope = $1 AND (to_path = $2 OR starts_with(to_path, $2 || '/'))
-      AND NOT EXISTS (SELECT 1 FROM file_move d WHERE d.scope = file_move.scope
-                        AND starts_with(d.from_path, file_move.to_path || '/') AND d.moved_at >= file_move.moved_at)`;
+      AND NOT EXISTS (SELECT 1 FROM file_move d WHERE d.scope = file_move.scope AND starts_with(d.from_path, $2 || '/')
+                        AND starts_with(d.from_path, file_move.to_path || '/') AND d.arrived_at >= file_move.arrived_at)`;
     const folded = `$3 || substring(to_path from length($2) + 1)`;
     await c.query(`DELETE FROM file_move WHERE ${foldable} AND from_path = ${folded}`, [scope, from, to]);              // ② 먼저 — 제자리 줄은 CHECK 에 걸린다
-    await c.query(`UPDATE file_move SET to_path = ${folded}, moved_at = now() WHERE ${foldable}`, [scope, from, to]);   // ①
+    await c.query(`UPDATE file_move SET to_path = ${folded}, arrived_at = now() WHERE ${foldable}`, [scope, from, to]);   // ①
     await c.query(
       `INSERT INTO file_move(scope, from_path, to_path, moved_by) VALUES($1, $2, $3, $4)
-       ON CONFLICT (tenant_id, scope, from_path) DO UPDATE SET to_path = EXCLUDED.to_path, moved_by = EXCLUDED.moved_by, moved_at = now()`,
+       ON CONFLICT (tenant_id, scope, from_path) DO UPDATE SET to_path = EXCLUDED.to_path, moved_by = EXCLUDED.moved_by, arrived_at = now()`,
       [scope, from, to, by]);                                                                                            // ③
   });
   return true;
@@ -47,8 +50,8 @@ export async function findFileMove(scope: string, rel: string, since: string | n
   const p = normalizeMovePath(rel);
   if (!scope || !p) return null;
   const r = await itemsPool.query(
-    `SELECT from_path, to_path, moved_at::text AS at FROM file_move
-      WHERE scope = $1 AND from_path = ANY($2::text[]) AND ($3::timestamptz IS NULL OR moved_at >= $3::timestamptz)
+    `SELECT from_path, to_path, arrived_at::text AS at FROM file_move
+      WHERE scope = $1 AND from_path = ANY($2::text[]) AND ($3::timestamptz IS NULL OR arrived_at >= $3::timestamptz)
       ORDER BY length(from_path) DESC LIMIT 1`, [scope, movePrefixes(p), since]);
   const row = r.rows[0] as { from_path: string; to_path: string; at: string } | undefined;
   return row ? { from: String(row.from_path), to: String(row.to_path), at: String(row.at) } : null;

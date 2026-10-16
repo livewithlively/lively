@@ -196,6 +196,8 @@ export interface LocalMove {
   folder?: string | null;
   /** 맨 위에 놓인 파일의 채널(localChannelOf 의 fallback) — 업로드 때와 같은 값(프로젝트명·'uploads'·'shared') */
   channelFallback: string;
+  /** 옮긴 것이 폴더인가(옮기기 전에 잰 값) — false 면 자료를 좌표 하나로 찾는다(색인). 모르면 생략(하위까지 훑는다) */
+  isDir?: boolean;
 }
 /**
  * 옮길 행 — 본문은 통째로 받지 않는다(폴더 하나에 큰 글이 수천 건이면 그만큼을 게이트웨이로 끌어오게 된다).

@@ -102,6 +102,28 @@ export async function isProjectFolderOrAncestor(rel: string): Promise<boolean> {
   return (r.rowCount ?? 0) > 0;
 }
 
+/** 순수 — p 가 folders 중 하나이거나 그 조상인가('/' 경계 — `project/1` 이 `project/12` 를 잡지 않는다). */
+export function isFolderOrAncestorOf(p: string, folders: readonly string[]): boolean {
+  let norm: string;
+  try { norm = normalizeSharedPath(p); } catch { return false; }
+  if (!norm) return false;
+  return folders.some((f) => f === norm || f.startsWith(norm + "/"));
+}
+
+/**
+ * 이 폴더 **아래**(자기 제외)에 DB 로 적힌 프로젝트 폴더들 — 이 폴더의 꼴(project/ · legacy-project/)로 맞춰 돌려준다(#4688).
+ *  프로젝트 자료 화면의 이름 바꾸기·묶음 옮기기가 항목마다 DB 를 묻지 않게 요청마다 한 번 읽는다(대개 빈 목록 — 프로젝트 폴더는 평평하다).
+ */
+export async function projectFoldersUnder(rel: string): Promise<string[]> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return []; }
+  if (!norm) return [];
+  const r = await itemsPool.query(
+    `SELECT DISTINCT trim(both '/' from p.folder) AS f, v.x AS under FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND starts_with(trim(both '/' from p.folder), v.x || '/')`, [folderVariants(norm)]);
+  return (r.rows as Array<{ f: string; under: string }>).map((row) => norm + String(row.f).slice(String(row.under).length));
+}
+
 /** 프로젝트 상속 구간이라 여기서 ACL 을 설정하면 안 되는 경로인가(설정 UI·API 가 이걸로 거절한다). */
 export function isProjectManagedPath(rel: string): boolean {
   const segs = normalizeSharedPath(rel).split("/").filter(Boolean);

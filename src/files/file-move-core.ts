@@ -36,7 +36,7 @@ export function applyMovePrefix(p: string, from: string, to: string): string | n
   return null;
 }
 
-/** 기록 한 줄. at = 그 기록이 옮겨 놓은 것이 **to 에 도착한 때**(DB 시각 글자 — 그대로 다시 넘긴다, v6/file-move-store). */
+/** 기록 한 줄. at = 그 기록이 옮겨 놓은 것이 **to 에 도착한 때**(file_move.arrived_at — DB 시각 글자 그대로 다시 넘긴다, v6/file-move-store). */
 export interface MoveRecord { from: string; to: string; at?: string | null }
 export interface FollowDeps {
   /**

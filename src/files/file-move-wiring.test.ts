@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
-import { isProjectContainerPath } from "../v6/shared-folder-store.js";
+import { isProjectContainerPath, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { isSystemDeniedTable } from "../db/firewall.js";
 
 const ROOT = path.resolve(new URL("../../", import.meta.url).pathname.replace("/dist/", "/"));
@@ -41,16 +41,24 @@ test("C3 이상한 경로(..)는 거짓 — 판정은 부르는 쪽의 경로 �
   assert.equal(isProjectContainerPath("project/../x"), false);
 });
 
+test("C4 프로젝트 폴더이거나 그 조상인가(순수) — 자기 · 조상은 참, 형제 · 하위 · 이름이 겹치는 것은 거짓('/' 경계)", () => {
+  const folders = ["project/12/nested", "project/team/alpha"];
+  for (const p of ["project/12/nested", "project/12", "project/team", "project/team/alpha", "/project/12/nested/"]) assert.equal(isFolderOrAncestorOf(p, folders), true, p);
+  for (const p of ["project/12/nested/x.md", "project/12/nest", "project/1", "project/team/alph", "", "project/../x"]) assert.equal(isFolderOrAncestorOf(p, folders), false, p);
+  assert.equal(isFolderOrAncestorOf("project/12", []), false, "안쪽 프로젝트 폴더가 없으면 막을 것이 없다");
+});
+
 test("W1 프로젝트 자료 이름 바꾸기 — 파일을 옮긴 **뒤에** 그 프로젝트 좌표로 뒷일(자료 좌표 + 기록)을 한다", () => {
   const body = routeBody(read("src/project/project-routes.ts"), "app.post(`${prefix}/:id/file/rename`");
-  before(body, "await store.move(fromAbs, toAbs);", "await settleProjectMove(project, base, fromAbs, toAbs, req);", "뒷일이 옮기기보다 먼저다");
+  before(body, "await store.move(fromAbs, toAbs);", "await settleProjectMove(project, base, fromAbs, toAbs, fromStat.dir, req);", "뒷일이 옮기기보다 먼저다");
   before(body, "await settleProjectMove(", "res.json(", "응답 뒤에 뒷일을 하면 화면이 옛 자료를 본다");
 });
 
 test("W2 프로젝트 자료 옮기기 — 항목마다 옮긴 바로 뒤(권한 비트 실패가 뒷일을 건너뛰게 하지 않는다)", () => {
   const body = routeBody(read("src/project/project-routes.ts"), "app.post(`${prefix}/:id/move`");
-  before(body, "await store.move(fromAbs, toAbs);", "await settleProjectMove(project, base, fromAbs, toAbs, req);", "뒷일이 옮기기보다 먼저다");
+  before(body, "await store.move(fromAbs, toAbs);", "await settleProjectMove(project, base, fromAbs, toAbs, fromStat.dir, req);", "뒷일이 옮기기보다 먼저다");
   before(body, "await settleProjectMove(", "store.grantGroup(", "권한 비트가 실패하면 뒷일이 빠진다");
+  before(body, "await projectFoldersUnder(project.folder)", "for (const raw of list)", "안쪽 프로젝트 폴더를 항목마다 읽는다");
   const helper = read("src/project/project-routes.ts");
   const h = helper.slice(helper.indexOf("const settleProjectMove ="), helper.indexOf("// ── ① 공유 폴더"));
   assert.match(h, /scope: SHARED_MOVE_SCOPE/, "프로젝트 폴더의 기록은 공유 루트 자리다(링크 root=shared)");
@@ -73,7 +81,7 @@ test("W3 홈 탐색기 이름 바꾸기 — 프로젝트 폴더 자리 막기와
 test("W7 프로젝트 자료 이름 바꾸기·옮기기 — 다른 프로젝트의 폴더 자리 막기는 옮기기 **전**", () => {
   for (const head of ["app.post(`${prefix}/:id/file/rename`", "app.post(`${prefix}/:id/move`"]) {
     const body = routeBody(read("src/project/project-routes.ts"), head);
-    before(body, "await assertNotProjectFolder(project, ", "await store.move(fromAbs, toAbs);", `${head}: 옮긴 뒤에 막는다`);
+    before(body, "assertNotProjectFolder(project, ", "await store.move(fromAbs, toAbs);", `${head}: 옮긴 뒤에 막는다`);
   }
 });
 

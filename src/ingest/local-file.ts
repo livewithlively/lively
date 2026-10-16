@@ -245,10 +245,11 @@ export async function moveLocalPath(m: LocalMove): Promise<{ moved: number; asid
   if (!normalizeLocalRel(m.fromRel) || !normalizeLocalRel(m.toRel) || fromKey === toKey) return { moved: 0, aside: 0 };
   const inst = normalizeExternalInstance(LOCAL_INSTANCE);
   return await withTx(async (client) => {
+    //  파일이면 좌표 하나(색인으로 바로) · 폴더거나 모르면 하위까지(접두 — 훑는다).
+    const which = m.isDir === false ? `external_id=$3` : `(external_id=$3 OR starts_with(external_id, $3 || '/'))`;
     const r = await client.query(
       `SELECT id, external_id, external_url, title, fields, ${BODY_HEAD_SQL} AS body_head, ${BODY_TAIL_SQL} AS body_tail FROM source
-        WHERE external_system=$1 AND external_instance=$2 AND lifecycle='active'
-          AND (external_id=$3 OR starts_with(external_id, $3 || '/'))
+        WHERE external_system=$1 AND external_instance=$2 AND lifecycle='active' AND ${which}
         ORDER BY id FOR UPDATE`,
       [LOCAL_SYSTEM, inst, fromKey]);
     const plans = (r.rows as Array<LocalRowForMove & { id: number }>)
