@@ -141,5 +141,10 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
       collect_run_ended_by_chk: "ended_by IS NULL OR ended_by IN ('runner','gateway')",
     })}
     CREATE INDEX IF NOT EXISTS collect_run_started_idx ON collect_run(started_at DESC);
+    -- 저장 단계(#4213 T11): 실행 종류(probe · listing · collect) · 계획(단위·앱) · 저장 결과 · claude 를 띄운 수(커넥터가 안 떠 다시 띄운 것 포함)
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS mode TEXT;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS plan JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS ingest JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS attempts INT;
   `);
 }

@@ -211,7 +211,11 @@ const rd = (f) => { try { return fs.readFileSync(f, "utf8").trim(); } catch (_) 
 const W = (f, v) => fs.writeFileSync(P(f), typeof v === "string" ? v : JSON.stringify(v), { mode: 0o600 });
 const t0 = Date.now();
 let job = null, child = null, timedOut = false, finished = false;
-const info = { version: null, flags: {}, servers: [], connectors: [], allowed: [], missing: [], denied: [] };
+const info = { version: null, flags: {}, servers: [], connectors: [], allowed: [], missing: [], denied: [], attempts: 0, loadMisses: [] };
+//  커넥터가 안 뜬 판을 몇 번까지 다시 띄우나 · 시작 알림(init)을 얼마나 기다리나.
+//   (시험이 기다림을 줄이는 env — 운영에서는 안 건드린다.)
+const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
+const LOAD_TRIES = 3, INIT_WAIT_MS = envMs("LVLY_COLLECT_INIT_WAIT_MS", 90000), RETRY_GAP_MS = envMs("LVLY_COLLECT_RETRY_GAP_MS", 3000);
 // ── 메모리 ──
 const num = (v) => (v != null && /^\d+$/.test(v) ? Number(v) : null);
 const cgNow = () => num(rd("/sys/fs/cgroup/memory.current")) ?? num(rd("/sys/fs/cgroup/memory/memory.usage_in_bytes"));
@@ -256,6 +260,11 @@ function env() {
   //  정식 로그인으로만 돈다 — 토큰 env 가 있으면 claude 가 그쪽을 쓰고, setup-token 으로는 claude.ai 커넥터가 안 뜬다.
   for (const k of ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "LIVELY_SESSION_ID", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "ENABLE_CLAUDEAI_MCP_SERVERS"]) delete e[k];
   if (job && job.home) e.HOME = job.home;
+  //  -p 는 claude.ai 커넥터를 **기다리지 않고** 붙인다(디버그 로그: «claude.ai connectors running fully async (nonblocking)»).
+  //   목록은 받았는데(«Fetched 6 servers») 붙기 전에 첫 턴이 시작되면 그 판에는 도구가 없다 — 맥 실측 2026-10-16: 연달아 띄우면
+  //   절반꼴로 init 의 mcp_servers 가 비었다. MCP_CONNECTION_NONBLOCKING=0 이면 붙은 뒤 시작한다(같은 날 6/6 · 한 판 7~9초).
+  //   그래도 빠지면 아래 «다시 띄우기» 가 받는다. 이미 정해 둔 값이 있으면 그대로 둔다.
+  if (e.MCP_CONNECTION_NONBLOCKING == null || e.MCP_CONNECTION_NONBLOCKING === "") e.MCP_CONNECTION_NONBLOCKING = "0";
   return e;
 }
 function run(args, ms, input) {
@@ -269,6 +278,9 @@ function run(args, ms, input) {
     c.stdout.on("data", (d) => { out += d; }); c.stderr.on("data", (d) => { err = (err + d).slice(-4000); });
     c.on("error", (e) => { err += String(e && e.message || e); });
     c.on("close", (code) => { clearTimeout(t); child = null; resolve({ code, out, err }); });
+    //  claude 가 stdin 을 읽기 전에 끝나면(--version 처럼 빠른 것) 쓰기가 EPIPE 로 떨어진다 — 러너를 죽이지 않고 종료 코드로 판정한다
+    //   (맥 실측 2026-10-16: 처리 안 하면 «runner: write EPIPE» 로 실행 전체가 47ms 만에 끝났다).
+    c.stdin.on("error", () => {});
     c.stdin.end(input || "");
   });
 }
@@ -318,7 +330,7 @@ function finish(o) {
   let sum = {};
   try { sum = summarize(); } catch (e) { sum = { summarizeError: String(e && e.message || e) }; }
   const caps = (rd(P("caps.jsonl")) || "").split("\n").filter(Boolean).length;
-  try { W("summary.json", Object.assign({ runId: job && job.runId, apps: job ? job.apps : [], claude: { version: info.version, flags: info.flags }, servers: info.servers, connectors: info.connectors, allowed: info.allowed, missing: info.missing, denied: info.denied.length, captures: caps, mem: memOut, stderrTail: (rd(P("err.log")) || "").slice(-1500) }, sum)); } catch (_) {}
+  try { W("summary.json", Object.assign({ runId: job && job.runId, apps: job ? job.apps : [], claude: { version: info.version, flags: info.flags }, servers: info.servers, connectors: info.connectors, allowed: info.allowed, missing: info.missing, denied: info.denied.length, attempts: info.attempts, loadMisses: info.loadMisses, captures: caps, mem: memOut, stderrTail: (rd(P("err.log")) || "").slice(-1500) }, sum)); } catch (_) {}
   const ex = Object.assign({ startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), durationMs: Date.now() - t0, timedOut }, o);
   try { W("exit.json.tmp", ex); fs.renameSync(P("exit.json.tmp"), P("exit.json")); } catch (_) {}
   try { fs.unlinkSync(P("runner.pid")); } catch (_) {}
@@ -376,14 +388,49 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   //  사용자 설정을 뺀다 — 사용자 훅·사용자 MCP(라이블리 MCP 등 로컬 프로세스)가 안 뜬다. claude.ai 커넥터는 그대로 뜬다
   //   (매니지드 실측 2026-10-16: 컨테이너 사용 +450MB → +389MB). 문지기·원문 받기 훅은 --settings 라 그대로 걸린다.
   if (info.flags.sources) args.push("--setting-sources", "project,local");
-  const out = fs.openSync(P("out.jsonl"), "a", 0o600), err = fs.openSync(P("err.log"), "a", 0o600);
-  let c;
-  try { c = cp.spawn(job.bin || "claude", args, { cwd: P("work"), env: env(), stdio: ["pipe", out, err] }); }
-  catch (e) { clearTimeout(deadline); finish({ code: null, error: "spawn: " + String(e && e.message || e) }); return; }
-  child = c;
-  c.on("error", (e) => { clearTimeout(deadline); finish({ code: null, error: "spawn: " + String(e && e.message || e) }); });
-  c.on("close", (code, signal) => { clearTimeout(deadline); child = null; finish({ code, signal: signal || null, error: timedOut ? "timeout" : (code === 0 ? null : "claude exit " + code) }); });
-  c.stdin.end(job.prompt);
+  //  기다릴 커넥터 — 앱을 정해 준 실행은 그 앱 전부, 아니면 하나라도.
+  const need = (job.apps || []).length ? allowed.map((c) => "claude.ai " + c.app) : [];
+  const attempt = () => {
+    info.attempts++;
+    //  지난 시도의 출력은 버린다 — 요약(summarize)은 마지막 시도만 본다. 훅이 남긴 원문(cap/)은 지울 일이 없다(커넥터가 없으면 부를 도구도 없다).
+    try { fs.writeFileSync(P("out.jsonl"), "", { mode: 0o600 }); } catch (_) {}
+    const out = fs.openSync(P("out.jsonl"), "a", 0o600), err = fs.openSync(P("err.log"), "a", 0o600);
+    let c;
+    try { c = cp.spawn(job.bin || "claude", args, { cwd: P("work"), env: env(), stdio: ["pipe", out, err] }); }
+    catch (e) { clearTimeout(deadline); finish({ code: null, error: "spawn: " + String(e && e.message || e) }); return; }
+    child = c;
+    let checked = false, notLoaded = false;
+    //  시작 알림(init)의 mcp_servers 에 기다리는 커넥터가 다 있나 — 없으면 이 판은 도구가 없는 판이다. 바로 끊고 다시 띄운다.
+    const miss = (loaded, why) => {
+      checked = true; notLoaded = true;
+      info.loadMisses.push({ attempt: info.attempts, why, loaded: loaded.slice(0, 20) });
+      try { c.kill("SIGTERM"); } catch (_) {}
+    };
+    const check = () => {
+      if (checked || finished) return;
+      const line = (rd(P("out.jsonl")) || "").split("\n").find((l) => l.indexOf('"subtype":"init"') >= 0);
+      if (!line) return;
+      let init = null;
+      try { init = JSON.parse(line); } catch (_) { return; }
+      const loaded = ((init && init.mcp_servers) || []).filter((x) => x && x.status === "connected").map((x) => String(x.name));
+      const ok = need.length ? need.every((w) => loaded.indexOf(w) >= 0) : loaded.some((n) => n.indexOf("claude.ai ") === 0);
+      if (ok) { checked = true; clearInterval(iv); return; }
+      clearInterval(iv); miss(loaded, "init");
+    };
+    const iv = setInterval(check, 250);
+    const initWait = setTimeout(() => { if (!checked) { clearInterval(iv); miss([], "no-init"); } }, INIT_WAIT_MS);
+    c.on("error", (e) => { clearInterval(iv); clearTimeout(initWait); clearTimeout(deadline); finish({ code: null, error: "spawn: " + String(e && e.message || e) }); });
+    c.on("close", (code, signal) => {
+      clearInterval(iv); clearTimeout(initWait); child = null;
+      if (finished) return;
+      if (notLoaded && !timedOut && info.attempts < LOAD_TRIES) { setTimeout(attempt, RETRY_GAP_MS); return; }
+      clearTimeout(deadline);
+      finish({ code, signal: signal || null, error: timedOut ? "timeout" : notLoaded ? "connector-not-loaded" : (code === 0 ? null : "claude exit " + code) });
+    });
+    c.stdin.on("error", () => {});
+    c.stdin.end(job.prompt);
+  };
+  attempt();
 })();
 `;
 
@@ -482,6 +529,39 @@ export function parseCollectRead(out: string): CollectRunRead {
     captures,
     sessionId: /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(sid) ? sid : null,
   };
+}
+
+/** 원문 읽기 한 번의 상한(바이트) — 한 판의 원문이 이보다 크면 앞에서부터 이만큼만 저장 단계로 넘긴다(truncated). */
+export const COLLECT_CAPS_MAX_BYTES = 48 * 1024 * 1024;
+
+/**
+ * (순수) 원문(cap/*.json)을 한 덩이로 읽는 셸 — 저장 단계(run-ingest)가 쓴다. 멤버 경계(그 사람 uid)에서 돈다.
+ *  이름순(= 받은 순서 — 이름이 Date.now() 로 시작한다)으로 읽고, 상한을 넘으면 거기서 멈춘다. 이름 모양이 다른 파일은 읽지 않는다.
+ */
+export function collectCapsReadSh(dir: string, maxBytes = COLLECT_CAPS_MAX_BYTES): string {
+  if (!isCollectRunDir(dir)) throw new Error(`수집 실행 폴더 형식 오류: ${dir}`);
+  const max = Math.max(1024, Math.floor(Number(maxBytes) || COLLECT_CAPS_MAX_BYTES));
+  const js = `const fs=require("fs"),path=require("path");const d=path.join(process.argv[1],"cap");const max=Number(process.argv[2]);`
+    + `let names=[];try{names=fs.readdirSync(d).filter((n)=>/^\\d+-[0-9a-f]{6}\\.json$/.test(n)).sort();}catch(e){}`
+    + `const files=[];let n=0,trunc=false;for(const f of names){let s;try{s=fs.readFileSync(path.join(d,f),"utf8");}catch(e){continue;}`
+    + `if(n+s.length>max){trunc=true;break;}n+=s.length;try{files.push(JSON.parse(s));}catch(e){}}`
+    + `process.stdout.write("@@capsjson\\n"+JSON.stringify({files,truncated:trunc,total:names.length})+"\\n@@end\\n");`;
+  return [
+    `command -v node >/dev/null 2>&1 || { echo "node 없음" >&2; exit 127; }`,
+    `node -e ${q(js)} ${q(dir)} ${q(String(max))}`,
+  ].join("\n");
+}
+
+/** (순수) 원문 읽기 셸 출력 → 캡처 파일들. 모양이 틀리면 null(저장 단계가 «못 읽음» 으로 적는다). */
+export function parseCollectCaps(out: string): { files: Array<Record<string, unknown>>; truncated: boolean; total: number } | null {
+  const s = String(out ?? "");
+  const a = s.indexOf("@@capsjson\n"), b = s.lastIndexOf("\n@@end");
+  if (a < 0 || b < a) return null;
+  try {
+    const j = JSON.parse(s.slice(a + "@@capsjson\n".length, b)) as { files?: unknown; truncated?: unknown; total?: unknown };
+    const files = Array.isArray(j.files) ? j.files.filter((f): f is Record<string, unknown> => !!f && typeof f === "object" && !Array.isArray(f)) : [];
+    return { files, truncated: j.truncated === true, total: typeof j.total === "number" ? j.total : files.length };
+  } catch { return null; }
 }
 
 /** (순수) 실행 id 에 박힌 시작 시각(ms). 모양이 틀리면 null. */

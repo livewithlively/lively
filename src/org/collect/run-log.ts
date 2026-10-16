@@ -32,33 +32,38 @@ const appsOf = (v: unknown): string[] =>
 export async function recordRunStart(input: {
   runId: string; member: string; apps: readonly string[]; model: string | null;
   capMb: number | null; requestMb: number | null; startedAt: Date; now?: number;
+  /** 실행 종류와 계획(저장 단계가 다시 읽는다 — 게이트웨이가 재기동해도). */
+  mode?: string | null; plan?: unknown;
 }): Promise<void> {
   try {
     await itemsPool.query(
       //  끝 기록이 먼저 행을 만들었으면(시작 기록이 늦은 판) 비어 있는 칸만 채운다 — 끝이 적은 결과·지표는 건드리지 않는다.
-      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb)
-       VALUES($1,$2,$3,$4::text[],$5,$6,$7)
+      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb, mode, plan)
+       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9::jsonb)
        ON CONFLICT (tenant_id, run_id) DO UPDATE SET
          model = COALESCE(collect_run.model, EXCLUDED.model),
          cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb),
+         mode = COALESCE(collect_run.mode, EXCLUDED.mode), plan = COALESCE(collect_run.plan, EXCLUDED.plan),
          apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END`,
-      [input.runId, input.member, input.startedAt, appsOf(input.apps), input.model, input.capMb, input.requestMb]);
+      [input.runId, input.member, input.startedAt, appsOf(input.apps), input.model, input.capMb, input.requestMb,
+       input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan)]);
     await purgeOld(input.now ?? Date.now());
   } catch (e) {
     logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 시작 기록 실패 — 실행은 그대로");
   }
 }
 
-const END_SQL = `INSERT INTO collect_run(run_id, member_id, started_at, apps, cap_mb, request_mb, outcome, error, ended_by, ended_at,
-                               mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures, updated_at)
-       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now())
+const END_SQL = `INSERT INTO collect_run(run_id, member_id, started_at, apps, cap_mb, request_mb, mode, plan, outcome, error, ended_by, ended_at,
+                               mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures, attempts, updated_at)
+       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now())
        ON CONFLICT (tenant_id, run_id) DO UPDATE SET
          outcome=EXCLUDED.outcome, error=EXCLUDED.error, ended_by=EXCLUDED.ended_by, ended_at=EXCLUDED.ended_at,
          mem_limit_mb=EXCLUDED.mem_limit_mb, mem_start_mb=EXCLUDED.mem_start_mb, mem_peak_mb=EXCLUDED.mem_peak_mb,
          duration_ms=EXCLUDED.duration_ms, cost_usd=EXCLUDED.cost_usd, turns=EXCLUDED.turns,
-         tool_calls=EXCLUDED.tool_calls, tool_errors=EXCLUDED.tool_errors, captures=EXCLUDED.captures, updated_at=now(),
+         tool_calls=EXCLUDED.tool_calls, tool_errors=EXCLUDED.tool_errors, captures=EXCLUDED.captures, attempts=EXCLUDED.attempts, updated_at=now(),
          apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END,
-         cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb)
+         cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb),
+         mode = COALESCE(collect_run.mode, EXCLUDED.mode), plan = COALESCE(collect_run.plan, EXCLUDED.plan)
        WHERE collect_run.outcome IS NULL OR (collect_run.ended_by = 'gateway' AND EXCLUDED.ended_by = 'runner')
        RETURNING outcome`;
 
@@ -71,6 +76,8 @@ const END_SQL = `INSERT INTO collect_run(run_id, member_id, started_at, apps, ca
 export async function recordRunEnd(input: {
   runId: string; member: string; exit: Record<string, unknown> | null; summary: Record<string, unknown> | null;
   by: "runner" | "gateway"; startedAt: Date | null; capMb?: number | null; requestMb?: number | null; now?: number;
+  /** 시작 기록이 빠졌을 때를 위해 끝에도 싣는다(빈 칸만 채운다). */
+  mode?: string | null; plan?: unknown;
 }): Promise<{ outcome: RunOutcome } | null | "error"> {
   const v = classifyRunOutcome(input.exit, input.summary);
   if (!v) return null;
@@ -79,8 +86,9 @@ export async function recordRunEnd(input: {
   const endRaw = typeof input.exit?.endedAt === "string" ? new Date(input.exit.endedAt) : null;
   const endedAt = endRaw && Number.isFinite(endRaw.getTime()) ? endRaw : new Date(nowMs);
   const head = [input.runId, input.member, input.startedAt ?? endedAt, appsOf(input.summary?.apps), input.capMb ?? null, input.requestMb ?? null,
+    input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan),
     v.outcome, v.error == null ? null : v.error.slice(0, 300), input.by, endedAt];
-  const metrics = [m.mem_limit_mb, m.mem_start_mb, m.mem_peak_mb, m.duration_ms, m.cost_usd, m.turns, m.tool_calls, m.tool_errors, m.captures];
+  const metrics = [m.mem_limit_mb, m.mem_start_mb, m.mem_peak_mb, m.duration_ms, m.cost_usd, m.turns, m.tool_calls, m.tool_errors, m.captures, m.attempts];
   try {
     const r = await itemsPool.query(END_SQL, [...head, ...metrics]);
     return r.rowCount ? { outcome: v.outcome } : null;
@@ -103,6 +111,9 @@ export interface CollectRunListRow {
   mem_limit_mb: number | null; mem_start_mb: number | null; mem_peak_mb: number | null;
   duration_ms: number | null; cost_usd: number | null; turns: number | null;
   tool_calls: number | null; tool_errors: number | null; captures: number | null;
+  mode: string | null; attempts: number | null;
+  /** 저장 단계 결과의 요약(목록·수집 실행만) — 화면은 수만 쓴다. */
+  ingest: { state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; error?: string } | null;
 }
 
 const num = (v: unknown): number | null => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
@@ -134,7 +145,8 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
 }> {
   const r = await itemsPool.query(
     `SELECT run_id, member_id, started_at, ended_at, apps, model, cap_mb, request_mb, outcome, error, ended_by,
-            mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures
+            mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures,
+            mode, attempts, ingest
        FROM collect_run
       WHERE started_at >= $1 AND started_at < $2
       ORDER BY started_at DESC
@@ -151,13 +163,59 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
     mem_limit_mb: num(x.mem_limit_mb), mem_start_mb: num(x.mem_start_mb), mem_peak_mb: num(x.mem_peak_mb),
     duration_ms: num(x.duration_ms), cost_usd: num(x.cost_usd), turns: num(x.turns),
     tool_calls: num(x.tool_calls), tool_errors: num(x.tool_errors), captures: num(x.captures),
+    mode: (x.mode as string | null) ?? null, attempts: num(x.attempts), ingest: ingestBrief(x.ingest),
   }));
   const statRows: RunStatRow[] = rows.map((x) => ({
     started_at: x.started_at, outcome: x.outcome, cap_mb: x.cap_mb, mem_limit_mb: x.mem_limit_mb, mem_peak_mb: x.mem_peak_mb,
-    duration_ms: x.duration_ms, cost_usd: x.cost_usd, tool_calls: x.tool_calls, tool_errors: x.tool_errors,
+    duration_ms: x.duration_ms, cost_usd: x.cost_usd, tool_calls: x.tool_calls, tool_errors: x.tool_errors, attempts: x.attempts,
   }));
   const recent = rows.slice(0, Math.max(0, input.recent ?? 50));
   const names = await memberNames([...new Set(recent.map((x) => x.member_id))]);
   for (const x of recent) x.member_name = names.get(x.member_id) ?? null;
   return { stats: summarizeRuns(statRows, { tz: input.tz, now: input.now }), recent, truncated };
+}
+
+/** 저장 결과 → 목록 한 줄의 요약(수만). */
+function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
+  if (!v || typeof v !== "object") return null;
+  const j = v as Record<string, unknown>;
+  const n = (x: unknown): number | undefined => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
+  return {
+    state: typeof j.state === "string" ? j.state : undefined,
+    stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created),
+    error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
+  };
+}
+
+// ── 저장 단계의 차례(#4213 T11) — 한 실행의 원문은 **한 번만** 자료로 넣는다 ─────────────────────────────
+
+/** 저장 단계가 붙잡고 있다가 죽었으면(게이트웨이 재기동) 이만큼 뒤에 다시 잡을 수 있다. */
+const INGEST_STALE_MIN = 15;
+
+/**
+ * 이 실행의 저장 차례를 잡는다 — 목록·수집 실행이고 아직 안 했거나(붙잡은 채 오래됐으면) 잡고, 계획을 돌려준다. 이미 했으면 null.
+ *  여러 게이트웨이·여러 읽기가 같은 실행을 동시에 봐도 한 곳만 넣는다(UPDATE … WHERE 한 문장).
+ */
+export async function claimIngest(runId: string): Promise<{ member: string; mode: string; plan: unknown } | null> {
+  const r = await itemsPool.query(
+    `UPDATE collect_run SET ingest = jsonb_build_object('state','running','at',now()), updated_at = now()
+      WHERE run_id = $1 AND mode IN ('listing','collect')
+        AND (ingest IS NULL OR (ingest->>'state' = 'running' AND (ingest->>'at')::timestamptz < now() - interval '${INGEST_STALE_MIN} minutes'))
+      RETURNING member_id, mode, plan`, [runId]);
+  const row = r.rows[0] as { member_id: string; mode: string; plan: unknown } | undefined;
+  return row ? { member: row.member_id, mode: row.mode, plan: row.plan } : null;
+}
+
+/** 저장 결과를 남긴다(state: done · failed). 실패도 남긴다 — 같은 원문을 끝없이 다시 넣지 않게(다시 하려면 다음 판이 읽는다). */
+export async function finishIngest(runId: string, result: Record<string, unknown>): Promise<void> {
+  await itemsPool.query(
+    `UPDATE collect_run SET ingest = $2::jsonb || jsonb_build_object('at', now()), updated_at = now() WHERE run_id = $1`,
+    [runId, JSON.stringify(result)]);
+}
+
+/** 한 실행의 저장 결과(상태 조회가 싣는다). 없으면 null. */
+export async function getRunIngest(runId: string): Promise<Record<string, unknown> | null> {
+  const r = await itemsPool.query(`SELECT mode, ingest FROM collect_run WHERE run_id = $1`, [runId]);
+  const row = r.rows[0] as { mode: string | null; ingest: Record<string, unknown> | null } | undefined;
+  return row ? { mode: row.mode, ...(row.ingest ?? {}) } : null;
 }

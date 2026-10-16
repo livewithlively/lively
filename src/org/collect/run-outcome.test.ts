@@ -82,6 +82,10 @@ t("O19 결과 오류 사유는 300자까지(그 사람 홈의 요약에서 온�
   const e = classifyRunOutcome(exitOf(), sumOf({}, { subtype: "x".repeat(5000), error: true }));
   assert.equal(e?.outcome, "error"); assert.equal(e?.error?.length, 300);
 });
+t("O20 커넥터가 세 번 다 안 떴다(connector-not-loaded) → connector_load — «연결 안 됨»(no_connector)과 가른다", () => {
+  assert.deepEqual(classifyRunOutcome(exitOf({ code: null, error: "connector-not-loaded" }), sumOf({ attempts: 3 }, null)), { outcome: "connector_load", error: "connector-not-loaded" });
+  assert.equal(outcome(exitOf({ code: null, error: "no-connector" }), sumOf({ allowed: [] }, null)), "no_connector");
+});
 t("G1 게이트웨이가 적는 끝 — 표식이 있고 분류가 맞다 · 러너 끝에는 표식이 없다", () => {
   const at = new Date("2026-10-16T05:00:00.000Z");
   assert.deepEqual(gatewayExit("runner-gone", at), { code: null, error: "runner-gone", endedAt: "2026-10-16T05:00:00.000Z", by: "gateway" });
@@ -94,7 +98,7 @@ t("G1 게이트웨이가 적는 끝 — 표식이 있고 분류가 맞다 · 러
   assert.equal(outcome(gatewayExit("lost"), null), "lost");
 });
 t("O17 라벨 · 메모리 의심 묶음", () => {
-  for (const o of ["ok", "login", "quota", "no_connector", "oom", "gone", "timeout", "lost", "max_turns", "canceled", "error"] as const) assert.ok(RUN_OUTCOME_LABEL[o]);
+  for (const o of ["ok", "login", "quota", "no_connector", "connector_load", "oom", "gone", "timeout", "lost", "max_turns", "canceled", "error"] as const) assert.ok(RUN_OUTCOME_LABEL[o]);
   assert.deepEqual([...MEMORY_SUSPECT].sort(), ["gone", "oom"]);
 });
 
@@ -113,7 +117,7 @@ t("M3 cgroup 상한이 max 면 컨테이너 짝", () => {
 });
 t("M4 요약이 없으면(러너가 죽었다) 숫자는 비고 시간만 exit 에서", () => {
   const m = runMetricsOf({ code: null, error: "runner-gone" }, null);
-  assert.deepEqual(m, { mem_limit_mb: null, mem_start_mb: null, mem_peak_mb: null, duration_ms: null, cost_usd: null, turns: null, tool_calls: null, tool_errors: null, captures: null });
+  assert.deepEqual(m, { mem_limit_mb: null, mem_start_mb: null, mem_peak_mb: null, duration_ms: null, cost_usd: null, turns: null, tool_calls: null, tool_errors: null, captures: null, attempts: null });
   assert.equal(runMetricsOf(exitOf({ durationMs: 4200 }), null).duration_ms, 4200);
 });
 t("M5 시간은 러너 벽시계(exit) 가 먼저", () => {
@@ -136,6 +140,11 @@ t("M9 INT 칸을 넘는 값은 모르는 값 — cgroup v1 «무제한» · 거�
   assert.equal(runMetricsOf(exitOf({ durationMs: 3_000_000_000 }), sumOf({}, { durationMs: undefined })).duration_ms, null, "둘 다 없으면 모름");
   assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 2_147_483_648 })).captures, null);
   assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 2_147_483_647 })).captures, 2_147_483_647, "경계 — INT 최대는 그대로");
+});
+t("M10 claude -p 를 띄운 횟수(attempts) — 정수만 · 없으면 null", () => {
+  assert.equal(runMetricsOf(exitOf(), sumOf({ attempts: 2 })).attempts, 2);
+  assert.equal(runMetricsOf(exitOf(), sumOf({ attempts: "2" })).attempts, null);
+  assert.equal(runMetricsOf(exitOf(), sumOf()).attempts, null, "옛 러너(칸 없음)");
 });
 t("M8 원문 수 — 음수·실수는 null", () => {
   assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 11 })).captures, 11);
@@ -251,6 +260,12 @@ t("A12 메모리 의심 실패가 있으면 추천 상한은 그 실패들이 �
   //  메모리와 무관한 실패는 바닥을 올리지 않는다
   const t2 = summarizeRuns([...ok10, row({ outcome: "timeout", cap_mb: 2048 })]);
   assert.equal(t2.suggestion?.max_mb, 640);
+});
+t("A13 다시 띄운 실행 수 — attempts 가 1 보다 큰 판만(경계: 1 은 안 센다 · 칸 없음도 안 센다)", () => {
+  const s = summarizeRuns([row({ attempts: 1 }), row({ attempts: 2 }), row({ attempts: 3, outcome: "connector_load" }), row({ attempts: null }), row()]);
+  assert.equal(s.load_retried, 2);
+  assert.equal(s.outcomes.find((o) => o.outcome === "connector_load")?.label, RUN_OUTCOME_LABEL.connector_load);
+  assert.equal(s.outcomes.find((o) => o.outcome === "connector_load")?.memory_suspect, false, "메모리 의심이 아니다");
 });
 t("A9 메모리 의심 실패 = oom + gone", () => {
   const s = summarizeRuns([row({ outcome: "oom" }), row({ outcome: "gone" }), row({ outcome: "gone" }), row({ outcome: "timeout" })]);

@@ -17,6 +17,12 @@ import {
 } from "../sessions/session-memory-policy.js";
 
 const startInput = {
+  mode: z.enum(["probe", "listing", "collect"]).optional().describe(
+    "실행 종류 — probe(기본, 점검: 앱마다 읽기 도구를 작게 한 번) · listing(그 사람 커넥터로 볼 수 있는 대화·페이지·메일함 목록을 훑어 " +
+    "수집 단위 표에 «볼 수 있는 구성원» 으로 올린다 — 새 단위는 후보) · collect(그 사람이 지금 담당인 수집 중 단위를 읽어 자료로 넣고 읽은 위치를 옮긴다). " +
+    "listing·collect 는 지시를 서버가 만들고, 끝나면 원문을 서버가 풀어 저장한다(collect_claude_run_get 의 ingest)"),
+  app: z.string().max(32).optional().describe("listing 의 앱(slack · gmail · notion — 필수) · collect 에서 주면 그 앱 단위만"),
+  due_only: z.boolean().optional().describe("collect — 주기가 된 단위만(기본 false: 맡은 단위 전부, 한 판에 최대 12개)"),
   apps: z.array(z.string().max(64)).max(12).optional().describe(
     "읽을 claude.ai 커넥터 앱 이름(«claude.ai » 뒤 이름 — 예 Slack · Notion · Gmail · Google Drive). 생략하면 연결된 것 전부. " +
     "앱이 많을수록 도구 정의가 문맥을 크게 먹는다(맥 실측: 다섯 개 15만 토큰 · 하나 8천 토큰) — 필요한 앱만 준다"),
@@ -42,7 +48,8 @@ const collectRunStart: Capability = {
     "매니지드에서는 내 홈이 붙은 작은 세션 컨테이너에서 `claude -p` 가 돌고, 끝나면 그 세션이 내려간다. " +
     "도구는 허락한 커넥터의 **읽기 도구만** 부를 수 있고(쓰기·보내기는 훅이 막는다), 결과 원문은 훅이 내 홈의 실행 폴더에 그대로 남긴다. " +
     "바로 run_id 를 돌려준다 — 상태는 collect_claude_run_get. 한 사람에 한 번에 하나. " +
-    "REST 등가: POST /api/ui/collect/claude-runs {apps?, prompt?, model?, max_turns?, timeout_sec?}.",
+    "mode listing(app 필수)은 볼 수 있는 대화·페이지·메일함 목록을 수집 단위 표에 올리고, mode collect 는 지금 담당인 단위를 읽어 자료로 넣는다. " +
+    "REST 등가: POST /api/ui/collect/claude-runs {mode?, app?, due_only?, apps?, prompt?, model?, max_turns?, timeout_sec?}.",
   scope: "memory",
   input: startInput,
   mutates: true,
@@ -52,7 +59,11 @@ const collectRunStart: Capability = {
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
         if (b.apps != null && !Array.isArray(b.apps)) throw new HttpError(400, "apps 는 앱 이름 배열이어야 합니다");
+        if (b.mode != null && !["probe", "listing", "collect"].includes(String(b.mode))) throw new HttpError(400, "mode 는 probe · listing · collect 가운데 하나입니다");
         return {
+          mode: b.mode == null || b.mode === "" ? undefined : String(b.mode) as "probe" | "listing" | "collect",
+          app: b.app == null || b.app === "" ? undefined : String(b.app).slice(0, 32),
+          due_only: b.due_only == null ? undefined : b.due_only === true || b.due_only === "true",
           apps: Array.isArray(b.apps) ? b.apps.map((a) => String(a).slice(0, 64)).slice(0, 12) : undefined,
           prompt: b.prompt == null || b.prompt === "" ? undefined : String(b.prompt).slice(0, 8000),
           model: b.model == null || b.model === "" ? undefined : String(b.model).slice(0, 64),
@@ -63,9 +74,10 @@ const collectRunStart: Capability = {
   },
   handler: async (input: StartInput, user: LivelyUser) => {
     const r = await startCollectRun(user, {
+      mode: input.mode, app: input.app, dueOnly: input.due_only,
       apps: input.apps, prompt: input.prompt, model: input.model, maxTurns: input.max_turns, timeoutSec: input.timeout_sec,
     });
-    return { ok: true, run_id: r.runId, session_id: r.sessionId, model: r.model, apps: r.apps, timeout_sec: r.timeoutSec };
+    return { ok: true, run_id: r.runId, session_id: r.sessionId, mode: r.mode, model: r.model, apps: r.apps, timeout_sec: r.timeoutSec, ...(r.units != null ? { units: r.units } : {}) };
   },
 };
 
@@ -79,7 +91,7 @@ const collectRunGet: Capability = {
   title: "수집 실행 상태",
   description:
     "내 수집 실행 하나의 상태 — running/done · 끝난 사유(exit) · 요약(claude 버전·뜬 커넥터·허락한 앱·없는 앱·도구 호출·토큰·메모리) · " +
-    "훅이 받은 원문 목록(도구·글자 수·sha256 — 원문 자체는 싣지 않는다). 남의 실행은 볼 수 없다. " +
+    "훅이 받은 원문 목록(도구·글자 수·sha256 — 원문 자체는 싣지 않는다) · 목록·수집 실행이면 저장 단계 결과(ingest — 올린 단위·넣은 자료·옮긴 위치). 남의 실행은 볼 수 없다. " +
     "REST 등가: GET /api/ui/collect/claude-runs/:id.",
   scope: "memory",
   input: getInput,

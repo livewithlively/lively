@@ -12,9 +12,9 @@
 import { api, el, fmtNum, hasScope, relTime, replaceKids, toast } from './core.js';
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';
 
-type Outcome = 'ok' | 'login' | 'quota' | 'no_connector' | 'oom' | 'gone' | 'timeout' | 'lost' | 'max_turns' | 'canceled' | 'error';
+type Outcome = 'ok' | 'login' | 'quota' | 'no_connector' | 'connector_load' | 'oom' | 'gone' | 'timeout' | 'lost' | 'max_turns' | 'canceled' | 'error';
 const OUTCOME_LABEL: Record<Outcome, string> = {
-  ok: '성공', login: 'Claude 로그인 끊김', quota: '사용 한도 초과', no_connector: '연결된 커넥터 없음',
+  ok: '성공', login: 'Claude 로그인 끊김', quota: '사용 한도 초과', no_connector: '연결된 커넥터 없음', connector_load: '커넥터를 불러오지 못함',
   oom: '강제 종료(메모리 초과 추정)', gone: '끝 신호 없이 세션이 사라짐', timeout: '시간 상한 초과', lost: '끝 신호를 못 받음',
   max_turns: '턴 상한 도달', canceled: '취소됨', error: '실행 오류',
 };
@@ -28,6 +28,17 @@ const mb = (n: number | null | undefined): string => (n == null ? '—' : fmtNum
 const sec = (s: number | null | undefined): string => (s == null ? '—' : s < 60 ? s + '초' : Math.round(s / 6) / 10 + '분');
 const usd = (n: number | null | undefined): string => (n == null ? '—' : n === 0 ? '$0' : '$' + (n < 0.1 ? n.toFixed(4) : n.toFixed(2)));
 const labelOf = (o: string | null): string => (o ? OUTCOME_LABEL[o as Outcome] || o : '도는 중');
+//  실행 종류(#4213 T11 저장 단계) — 점검(커넥터·메모리만 잰다) · 목록(무엇이 있나 → 수집 단위) · 수집(맡은 단위를 읽어 자료로).
+const MODE_LABEL: Record<string, string> = { probe: '점검', listing: '목록', collect: '수집' };
+/** 저장 단계 한 줄 — 목록은 단위, 수집은 자료. 점검·옛 실행(기록 없음)은 «—». */
+function ingestText(r: any): { text: string; title: string; fail: boolean } {
+  const g = r.ingest;
+  if (!g || !r.mode || r.mode === 'probe') return { text: '—', title: '', fail: false };
+  if (g.state === 'running') return { text: '저장 중', title: '', fail: false };
+  if (g.state === 'failed') return { text: '저장 못 함', title: g.error || '', fail: true };
+  if (r.mode === 'listing') return { text: '단위 ' + fmtNum(g.listed ?? 0) + (g.created ? ' (새 ' + fmtNum(g.created) + ')' : ''), title: '', fail: false };
+  return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : ''), title: g.error || '', fail: false };
+}
 
 async function fetchStats(d: number, recent: number): Promise<any> {
   const q = new URLSearchParams({ days: String(d), tz: tz(), recent: String(recent) });
@@ -130,6 +141,7 @@ function outcomesCard(s: any): HTMLElement {
       el('span', { class: 'cxcr-bar-p num', text: s.finished ? pct(o.count / s.finished) : '' })));
   }
   if (s.tools?.calls) card.append(el('p', { class: 'admin-hint', text: '도구 호출 ' + fmtNum(s.tools.calls) + '번 중 오류 ' + fmtNum(s.tools.errors || 0) + '번(실행은 성공했어도 앱이 오류를 돌려준 호출).' }));
+  if (s.load_retried) card.append(el('p', { class: 'admin-hint', text: '커넥터가 늦게 붙어 Claude 를 다시 띄운 실행 ' + fmtNum(s.load_retried) + '회(세 번 다 안 붙으면 «커넥터를 불러오지 못함» 으로 셉니다).' }));
   return card;
 }
 
@@ -240,15 +252,19 @@ function recentCard(rows: any[], truncated: boolean): HTMLElement {
   if (!rows.length) { card.append(el('p', { class: 'admin-hint', text: '이 기간에 실행이 없습니다.' })); return card; }
   const wrap = el('div', { class: 'cxcr-tablewrap' });
   const table = el('table', { class: 'cxcr-table' },
-    el('thead', {}, el('tr', {}, ...['시작', '구성원', '앱', '결과', '메모리(최고 / 한도)', '시간', '비용'].map((h) => el('th', { text: h })))));
+    el('thead', {}, el('tr', {}, ...['시작', '구성원', '종류', '앱', '결과', '저장', '메모리(최고 / 한도)', '시간', '비용'].map((h) => el('th', { text: h })))));
   const tbody = el('tbody', {});
   for (const r of rows) {
     const fail = r.outcome && r.outcome !== 'ok';
-    tbody.append(el('tr', { class: fail ? 'is-fail' : '' },
+    const ing = ingestText(r);
+    const retried = (r.attempts || 0) > 1 ? ' · 다시 띄움 ' + fmtNum(r.attempts - 1) + '번' : '';
+    tbody.append(el('tr', { class: fail || ing.fail ? 'is-fail' : '' },
       el('td', { title: new Date(r.started_at).toLocaleString('ko-KR'), text: relTime(r.started_at) }),
       el('td', { text: r.member_name || r.member_id }),
+      el('td', { text: MODE_LABEL[r.mode] || '점검' }),
       el('td', { text: (r.apps || []).join(', ') || '전부' }),
-      el('td', { title: r.error || '', text: labelOf(r.outcome) }),
+      el('td', { title: r.error || '', text: labelOf(r.outcome) + retried }),
+      el('td', { title: ing.title, text: ing.text }),
       el('td', { class: 'num', text: r.mem_peak_mb != null ? mb(r.mem_peak_mb) + ' / ' + mb(r.mem_limit_mb ?? r.cap_mb) : '— / ' + mb(r.cap_mb) }),
       el('td', { class: 'num', text: r.duration_ms != null ? sec(Math.round(r.duration_ms / 1000)) : '—' }),
       el('td', { class: 'num', text: usd(r.cost_usd) })));
