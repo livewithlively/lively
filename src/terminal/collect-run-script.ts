@@ -391,6 +391,9 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   //  기다릴 커넥터 — 앱을 정해 준 실행은 그 앱 전부, 아니면 하나라도.
   const need = (job.apps || []).length ? allowed.map((c) => "claude.ai " + c.app) : [];
   const attempt = () => {
+    //  다시 띄우기를 기다리는 사이 시간 상한이 왔으면 새 claude 를 띄우지 않는다(띄웠다가 5초 뒤 강제로 끊기는 판을 만들지 않게).
+    if (finished) return;
+    if (timedOut) { clearTimeout(deadline); finish({ code: null, error: "timeout" }); return; }
     info.attempts++;
     //  지난 시도의 출력은 버린다 — 요약(summarize)은 마지막 시도만 본다. 훅이 남긴 원문(cap/)은 지울 일이 없다(커넥터가 없으면 부를 도구도 없다).
     try { fs.writeFileSync(P("out.jsonl"), "", { mode: 0o600 }); } catch (_) {}
@@ -539,8 +542,11 @@ export function parseCollectRead(out: string): CollectRunRead {
   };
 }
 
-/** 원문 읽기 한 번의 상한(바이트) — 한 판의 원문이 이보다 크면 앞에서부터 이만큼만 저장 단계로 넘긴다(truncated). */
-export const COLLECT_CAPS_MAX_BYTES = 48 * 1024 * 1024;
+/**
+ * 원문 읽기 한 번의 상한(바이트) — 한 판의 원문이 이보다 크면 앞에서부터 이만큼만 저장 단계로 넘긴다(truncated — 그 판은 위치를 안 옮긴다).
+ *  게이트웨이가 한 번에 들고 푸는 양이라 넉넉하되 작게(맥·매니지드 실측의 가장 큰 결과 한 건이 115KB).
+ */
+export const COLLECT_CAPS_MAX_BYTES = 24 * 1024 * 1024;
 
 /**
  * (순수) 원문(cap/*.json)을 한 덩이로 읽는 셸 — 저장 단계(run-ingest)가 쓴다. 멤버 경계(그 사람 uid)에서 돈다.
@@ -552,7 +558,7 @@ export function collectCapsReadSh(dir: string, maxBytes = COLLECT_CAPS_MAX_BYTES
   const js = `const fs=require("fs"),path=require("path");const d=path.join(process.argv[1],"cap");const max=Number(process.argv[2]);`
     + `let names=[];try{names=fs.readdirSync(d).filter((n)=>/^\\d+-[0-9a-f]{6}\\.json$/.test(n)).sort();}catch(e){}`
     + `const files=[];let n=0,trunc=false;for(const f of names){let s;try{s=fs.readFileSync(path.join(d,f),"utf8");}catch(e){continue;}`
-    + `if(n+s.length>max){trunc=true;break;}n+=s.length;try{files.push(JSON.parse(s));}catch(e){}}`
+    + `const b=Buffer.byteLength(s,"utf8");if(n+b>max){trunc=true;break;}n+=b;try{files.push(JSON.parse(s));}catch(e){}}`
     + `process.stdout.write("@@capsjson\\n"+JSON.stringify({files,truncated:trunc,total:names.length})+"\\n@@end\\n");`;
   return [
     `command -v node >/dev/null 2>&1 || { echo "node 없음" >&2; exit 127; }`,

@@ -16,7 +16,8 @@
 //     get_message {id, …}. 메시지: id · threadId · subject · sender · date · plaintextBody · snippet · labelIds · viewUrl(authuser=메일함).
 //   · 노션 — 결과는 [{type:"text", text:"<JSON>"}]. notion-fetch {metadata:{type}, title, url, text(<content>…</content>), page_last_edited_at} ·
 //     list-recent/shared/private · search {results:[{type, url, title}]}.
-//  형식이 바뀌면 빈 결과가 된다(던지지 않는다) — 호출부가 «도구는 결과를 줬는데 풀린 게 없다» 를 실패로 적는다.
+//  형식이 바뀌면 빈 결과가 된다(던지지 않는다). 호출부(collect-plan)는 **제 모양 표시**(wellFormed · end · isGmailSearch …)가 있는
+//   결과만 «다 읽었다» 의 증거로 쓴다 — 표시가 없는 결과는 «풀지 못함» 으로 세고 읽은 위치를 옮기지 않는다.
 import type { RawItem } from "../../items/store.js";
 
 // ── 캡처 한 건 ───────────────────────────────────────────────────────────────
@@ -109,9 +110,9 @@ export function parseSlackChannelList(cap: Capture): { units: ListedUnit[]; more
     units.push({ ref: id, name, kind: slackKind(type) });
     if (isArchived) archived.push(id);
   }
+  //  다음 쪽은 cursor 가 있으면 있다고 본다(문구가 바뀌어도) — «전부» 판정은 볼 수 있는 구성원을 지우므로 의심스러우면 «더 있음» 쪽이다.
   const cursor = /Use cursor:\s*"([^"]+)"/i.exec(text)?.[1] ?? null;
-  const more = /more results available/i.test(text) && !!cursor;
-  return { units, more, cursor, archived };
+  return { units, more: !!cursor, cursor, archived };
 }
 
 export interface SlackMsg {
@@ -157,28 +158,53 @@ function slackBlock(head: { user_id: string | null; user_name: string | null; em
   return { ts, ...head, body, reply_count };
 }
 
-/** slack_read_channel 결과 → 채널 · 메시지들 · 다음 쪽. */
-export function parseSlackChannelMessages(cap: Capture): { channel: { id: string; name: string | null } | null; messages: SlackMsg[]; more: boolean; cursor: string | null } {
+/** 슬랙 ts·epoch 를 숫자로(빈 값·모양 밖은 null). */
+const tsNum = (v: unknown): number | null => {
+  const s = typeof v === "number" ? String(v) : str(v);
+  if (!s || !/^\d{9,11}(\.\d{1,6})?$/.test(s.trim())) return null;
+  return Number(s);
+};
+
+/**
+ * slack_read_channel 결과 → 채널 · 메시지들 · 다음 쪽.
+ *  · 채널은 **첫 줄** 머리(`Channel: #이름 (C…)`)에서만 읽는다 — 본문 속 같은 모양의 줄이 채널을 정하지 못하게. 머리가 없으면 null.
+ *  · wellFormed — 머리가 있고 쪽 안내(pagination_info)가 «더 있음» 이나 «더 없음» 둘 중 하나다. 아니면 이 결과는 증거가 못 된다
+ *    (오류 문구 · 형식이 바뀐 글). end — «더 없음» 이 분명히 적혀 있고 cursor 가 없다.
+ *  · 요청한 구간(입력 oldest~latest) 밖의 ts 는 버린다(dropped) — 커넥터는 구간 안만 돌려준다. 밖의 것은 본문이 머리 모양을
+ *    흉내 낸 것이거나 잘못 푼 것이다. ⚠ 구간 **안**의 가짜 머리는 글 모양만으로는 못 가린다 — 이 경로의 작성자(actor)는 확인된 신원이 아니다.
+ */
+export function parseSlackChannelMessages(cap: Capture): {
+  channel: { id: string; name: string | null } | null; messages: SlackMsg[]; more: boolean; end: boolean; cursor: string | null;
+  wellFormed: boolean; dropped: number;
+} {
   const text = innerText(cap, ["messages"]);
-  const ch = /^Channel:\s*#?(.*?)\s*\(([CDG][A-Z0-9]{6,})\)\s*$/m.exec(text);
-  const inputId = str(cap.input.channel_id);
-  const channel = ch ? { id: ch[2], name: ch[1].trim() || null } : (inputId && /^[CDG][A-Z0-9]{6,}$/.test(inputId) ? { id: inputId, name: null } : null);
+  const first = text.split("\n").find((l) => l.trim()) ?? "";
+  const ch = /^Channel:\s*#?(.*?)\s*\(([CDG][A-Z0-9]{6,})\)\s*$/.exec(first.trim());
+  const channel = ch ? { id: ch[2], name: ch[1].trim() || null } : null;
+  const lo = tsNum(cap.input.oldest), hi = tsNum(cap.input.latest);
   const messages: SlackMsg[] = [];
+  let dropped = 0;
   const parts = text.split(/^=== Message from (.+?) ===[ \t]*$/m);
   //  split 이 잡은 머리글이 홀수 칸에 온다: [앞, 머리1, 몸1, 머리2, 몸2, …]
   for (let k = 1; k + 1 < parts.length; k += 2) {
     const h = /^(.*) at (.+)$/.exec(parts[k].trim());
     const author = slackAuthor(h ? h[1] : parts[k]);
     const msg = slackBlock({ ...author, at: h ? h[2].trim() : null }, parts[k + 1].split("\n"));
-    if (msg) messages.push(msg);
+    if (!msg) continue;
+    const t = Number(msg.ts);
+    if ((lo != null && t < lo) || (hi != null && t > hi)) { dropped++; continue; }
+    messages.push(msg);
   }
-  const pag = isRec(cap.json) ? String(cap.json.pagination_info ?? "") : text;
+  const pag = isRec(cap.json) && typeof cap.json.pagination_info === "string" ? cap.json.pagination_info : "";
   const cursor = /use cursor:\s*`([^`]+)`/i.exec(pag)?.[1] ?? null;
-  return { channel, messages, more: /more messages available/i.test(pag) && !!cursor, cursor };
+  const end = !cursor && /no more messages/i.test(pag);
+  return { channel, messages, more: !!cursor, end, cursor, wellFormed: !!channel && (end || !!cursor), dropped };
 }
 
 /** slack_read_thread 결과 → 부모 · 답글들. 채널 id 는 결과 글에 없어 도구 입력에서 읽는다. */
-export function parseSlackThread(cap: Capture): { channelId: string | null; parent: SlackMsg | null; replies: SlackMsg[]; more: boolean; cursor: string | null } {
+export function parseSlackThread(cap: Capture): {
+  channelId: string | null; parent: SlackMsg | null; replies: SlackMsg[]; more: boolean; end: boolean; cursor: string | null; wellFormed: boolean;
+} {
   const text = innerText(cap, ["messages"]);
   const channelId = str(cap.input.channel_id);
   const blockOf = (chunk: string): SlackMsg | null => {
@@ -192,14 +218,20 @@ export function parseSlackThread(cap: Capture): { channelId: string | null; pare
   const parentChunk = beforeReplies.split(/^=== THREAD PARENT MESSAGE ===[ \t]*$/m)[1] ?? "";
   const parent = parentChunk ? blockOf(parentChunk) : null;
   const replies: SlackMsg[] = [];
-  const replyText = afterSplit.join("\n");
+  //  이어 읽은 쪽(cursor)은 부모·«THREAD REPLIES» 머리 없이 답글만 올 수 있다 — 그때는 글 전체에서 답글을 찾는다.
+  const replyText = afterSplit.length ? afterSplit.join("\n") : parent ? "" : text;
   for (const chunk of replyText.split(/^--- Reply \d+ of \d+ ---[ \t]*$/m).slice(1)) {
     const m = blockOf(chunk);
     if (m) replies.push(m);
   }
-  const pag = isRec(cap.json) ? String(cap.json.pagination_info ?? "") : text;
+  const pag = isRec(cap.json) && typeof cap.json.pagination_info === "string" ? cap.json.pagination_info : "";
   const cursor = /use cursor:\s*`([^`]+)`/i.exec(pag)?.[1] ?? null;
-  return { channelId: channelId && /^[CDG][A-Z0-9]{6,}$/.test(channelId) ? channelId : null, parent, replies, more: /more (messages|replies) available/i.test(pag) && !!cursor, cursor };
+  const end = !cursor && /no more (messages|replies)/i.test(pag);
+  return {
+    channelId: channelId && /^[CDG][A-Z0-9]{6,}$/.test(channelId) ? channelId : null, parent, replies, more: !!cursor, end, cursor,
+    //  부모 머리가 있고 쪽 안내가 분명할 때만 증거가 된다(«스레드를 끝까지 읽었다»).
+    wellFormed: !!parent && (end || !!cursor),
+  };
 }
 
 /** 슬랙 ts → ISO(초.마이크로초 — 밀리초까지). */
@@ -236,7 +268,8 @@ export function slackItem(m: SlackMsg, ctx: { instance: string; channel: string;
 // ── 지메일 ───────────────────────────────────────────────────────────────────
 
 export interface GmailMsg {
-  id: string; threadId: string | null; subject: string | null; sender: string | null; date: string | null;
+  /** 시각 — 구글이 받은 시각(internalDate)이 먼저, 없으면 보낸 쪽이 적은 Date 머리. 머리는 보낸 쪽 마음대로라 위치·정렬에 쓰지 않는다. */
+  id: string; threadId: string | null; subject: string | null; sender: string | null; date: string | null; dateHeader: string | null;
   body: string | null; snippet: string | null; labelIds: string[]; viewUrl: string | null;
   /** 본문(plaintextBody)을 받은 결과인가 — 목록(search)의 한 줄 요약과 가른다(같은 id 면 본문 쪽이 이긴다). */
   full: boolean;
@@ -250,9 +283,11 @@ function gmailMsg(v: unknown): GmailMsg | null {
   if (!id || !GMAIL_ID.test(id)) return null;
   const body = str(v.plaintextBody);
   const internal = str(v.internalDate) ?? (typeof v.internalDate === "number" ? String(v.internalDate) : null);
-  const date = str(v.date) ?? (internal && /^\d{12,14}$/.test(internal) ? new Date(Number(internal)).toISOString() : null);
+  const header = str(v.date);
+  const headerIso = header && Number.isFinite(Date.parse(header)) ? new Date(header).toISOString() : null;
+  const date = internal && /^\d{12,14}$/.test(internal) ? new Date(Number(internal)).toISOString() : headerIso;
   return {
-    id, threadId: str(v.threadId), subject: str(v.subject), sender: str(v.sender), date,
+    id, threadId: str(v.threadId), subject: str(v.subject), sender: str(v.sender), date, dateHeader: header,
     body, snippet: str(v.snippet), labelIds: Array.isArray(v.labelIds) ? v.labelIds.filter((x): x is string => typeof x === "string") : [],
     viewUrl: str(v.viewUrl), full: body != null,
   };
@@ -277,6 +312,18 @@ export function parseGmailMessages(cap: Capture): GmailMsg[] {
   return [...out.values()];
 }
 
+/** search_threads 결과가 제 모양인가 — {threads:[…]}. 오류 문구 · 형식이 바뀐 글은 «검색했다» 의 증거가 못 된다. */
+export function isGmailSearch(cap: Capture): boolean {
+  return isRec(cap.json) && Array.isArray(cap.json.threads);
+}
+
+/** get_thread · get_message 결과가 제 모양인가 — {id, messages:[…]} · {id, …메시지 칸}. */
+export function isGmailFetch(cap: Capture): boolean {
+  const j = cap.json;
+  if (!isRec(j) || typeof j.id !== "string") return false;
+  return cap.tool === "get_thread" ? Array.isArray(j.messages) : (j.plaintextBody !== undefined || j.threadId !== undefined);
+}
+
 /** 메일함 주소 — viewUrl 의 authuser=… (그 사람 커넥터가 붙은 구글 계정). 없으면 null. */
 export function gmailMailbox(msgs: readonly GmailMsg[]): string | null {
   for (const m of msgs) {
@@ -297,7 +344,7 @@ function parseSender(s: string | null): { email: string | null; name: string | n
 /** 메시지 → RawItem(connectors/gmail.ts toRawItem 과 같은 좌표). */
 export function gmailItem(m: GmailMsg, ctx: { instance: string; mailbox: string }): RawItem {
   const who = parseSender(m.sender);
-  const iso = m.date && Number.isFinite(Date.parse(m.date)) ? new Date(m.date).toISOString() : undefined;
+  const iso = m.date ?? undefined;
   return {
     type: "message",
     provenance: { category: "messenger", system: "gmail", instance: ctx.instance, external_id: m.id, external_url: `https://mail.google.com/mail/u/0/#all/${m.id}` },
@@ -308,7 +355,7 @@ export function gmailItem(m: GmailMsg, ctx: { instance: string; mailbox: string 
     body: (m.body ?? m.snippet) || undefined,
     occurred_at: iso,
     updated_at: iso,
-    fields: { threadId: m.threadId ?? undefined, labelIds: m.labelIds, snippet: m.snippet ?? undefined, via: "claude_connector" },
+    fields: { threadId: m.threadId ?? undefined, labelIds: m.labelIds, snippet: m.snippet ?? undefined, date_header: m.dateHeader ?? undefined, via: "claude_connector" },
   };
 }
 
@@ -326,7 +373,8 @@ export interface NotionPage { id: string; title: string | null; url: string | nu
 /** notion-fetch 결과 → 페이지. 본문은 <content> 안(없으면 머리말 줄을 뺀 글 전체). */
 export function parseNotionFetch(cap: Capture): NotionPage | null {
   const j = cap.json;
-  if (!isRec(j)) return null;
+  //  제 모양(본문 글이 있다)이 아니면 페이지가 아니다 — 오류 결과로 빈 페이지를 만들면 저장 단계가 있던 제목·본문을 지운다.
+  if (!isRec(j) || j.error != null || typeof j.text !== "string" || (typeof j.url !== "string" && typeof j.title !== "string")) return null;
   const url = str(j.url);
   const id = notionId(url) ?? notionId(str(cap.input.id));
   if (!id) return null;

@@ -36,8 +36,16 @@ function ingestText(r: any): { text: string; title: string; fail: boolean } {
   if (!g || !r.mode || r.mode === 'probe') return { text: '—', title: '', fail: false };
   if (g.state === 'running') return { text: '저장 중', title: '', fail: false };
   if (g.state === 'failed') return { text: '저장 못 함', title: g.error || '', fail: true };
-  if (r.mode === 'listing') return { text: '단위 ' + fmtNum(g.listed ?? 0) + (g.created ? ' (새 ' + fmtNum(g.created) + ')' : ''), title: '', fail: false };
-  return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : ''), title: g.error || '', fail: false };
+  if (r.mode === 'listing') {
+    return {
+      text: '단위 ' + fmtNum(g.listed ?? 0) + (g.created ? ' (새 ' + fmtNum(g.created) + ')' : '') + (g.refused ? ' · 받지 않음 ' + fmtNum(g.refused) : ''),
+      title: g.refused ? '그 사람 것으로 확인되지 않아 받지 않은 단위(예: 라이블리 이메일과 다른 메일함)' : '', fail: false,
+    };
+  }
+  //  다 못 읽은 단위 · 못 푼 결과 · 저장 실패가 있으면 «확인 필요» — 위치는 그대로라 다음 판이 다시 읽지만, 계속되면 형식이 바뀌었을 수 있다.
+  const why = [g.incomplete ? '다 못 읽은 단위 ' + fmtNum(g.incomplete) : '', g.unparsed ? '풀지 못한 결과 ' + fmtNum(g.unparsed) : '',
+    g.failed ? '저장 실패 ' + fmtNum(g.failed) : ''].filter(Boolean).join(' · ');
+  return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : '') + (g.partial ? ' · 확인 필요' : ''), title: why || g.error || '', fail: false };
 }
 
 async function fetchStats(d: number, recent: number): Promise<any> {

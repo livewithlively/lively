@@ -1,6 +1,7 @@
 // 수집 실행 결과 분류 · 지표 · 묶음 통계(#4213 T11) — 사양 S2(O)·S3(M)·S4(A) 행(스크래치 사양 spec-t11-metrics.md).
 //  입력 모양은 러너(collect-run-script.ts)가 쓰는 exit.json · summary.json 그대로다 — 그 모양을 여기 손으로 만든다.
 import assert from "node:assert/strict";
+import { isSystemDeniedTable } from "../../db/firewall.js";
 import {
   classifyRunOutcome, runMetricsOf, summarizeRuns, suggestSize, percentile, dayKey, RUN_OUTCOME_LABEL, MEMORY_SUSPECT,
   gatewayExit, endedByOf, comparableMemory, STALE_RUN_MS, type RunStatRow,
@@ -270,6 +271,10 @@ t("A13 다시 띄운 실행 수 — attempts 가 1 보다 큰 판만(경계: 1 �
 t("A9 메모리 의심 실패 = oom + gone", () => {
   const s = summarizeRuns([row({ outcome: "oom" }), row({ outcome: "gone" }), row({ outcome: "gone" }), row({ outcome: "timeout" })]);
   assert.equal(s.memory.suspect_failures, 3);
+});
+
+t("D10 실행 기록(collect_run)은 자유 조회 금지 표 — 계획에 구성원별로 읽은 비공개 대화·메일함 ref 가 남는다", () => {
+  for (const tbl of ["collect_run", "collect_unit", "collect_unit_member"]) assert.equal(isSystemDeniedTable(tbl), true, tbl);
 });
 
 console.log(`run-outcome: ${pass} passed`);

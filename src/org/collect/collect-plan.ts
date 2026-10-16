@@ -6,16 +6,18 @@
 //   · collect — 그 사람이 지금 담당인 단위(T10 listAssignedUnits)를 읽는다 → storeUnitItems + advanceUnitCursor.
 //  지시는 서버가 고정해서 준다(모델은 도구를 부르기만 한다). 무엇이 자료가 되는지는 원문을 서버가 풀어 정한다(connector-parse).
 //
-//  ── 읽은 위치 규칙 ──
-//   슬랙·지메일은 새 것부터 거꾸로 쪽을 넘긴다. 그래서 한 판이 맡은 구간을 끝까지 읽었을 때만(마지막 쪽에 다음 cursor 가 없고 ·
-//   지메일은 찾은 스레드를 다 펼쳤을 때만) 위치를 옮긴다. 못 다 읽었으면 위치는 그대로 두고 읽은 것만 저장한다 — 다음 판이 같은
-//   위치부터 다시 읽고, 같은 좌표라 행이 늘지 않는다(T10 mirrorSourceV6). 빠뜨리는 것보다 다시 읽는 게 낫다.
-//   ⚠ 바쁜 채널·메일함은 «위치부터 지금까지» 가 한 판에 안 끝나 위치가 영영 못 움직인다. 그래서 구간을 자른다 — 슬랙 7일 ·
-//    지메일 1일. 구간 끝이 지금보다 앞이면 그 구간만 읽고, 다 읽으면 위치를 구간 끝으로 옮긴다(조용한 구간도 넘어간다).
+//  ── 읽은 위치 규칙 — «다 읽었다» 는 증거가 다 있을 때만 옮긴다 ──
+//   위치가 한 번 넘어가면 그 구간은 다시 안 읽는다(조용한 영구 누락). 그래서 «반증이 없으면 옮긴다» 가 아니라 아래가 **다** 있을 때만 옮긴다:
+//    ① 그 단위의 결과가 전부 제 모양이다 — 오류 문구 · 형식이 바뀐 글이 하나라도 있으면 아니다
+//    ② 계획한 구간 그대로(입력 oldest·latest · query 가 계획과 같다) 첫 쪽부터 «더 없음» 까지 쪽 사슬이 이어진다(cursor · pageToken)
+//    ③ 슬랙: 그 사슬에서 답글이 있는 부모마다 스레드를 끝까지 읽었다 · 지메일: 찾은 스레드를 하나도 빼지 않고 펼쳤다
+//   하나라도 모자라면 읽은 항목은 저장하되(같은 좌표라 다시 읽어도 행이 안 는다) 시작점은 그대로 두고 다음 판의 구간을 반으로 줄인다
+//   (span — 바쁜 대화는 작은 구간으로 따라잡는다, 1시간까지). 다 읽은 판은 구간을 다시 두 배로 늘린다.
+//   구간 끝이 «지금» 인 판은 위치를 계획 시각 − 60초로 옮긴다 — 글의 시각(특히 메일의 Date 머리)은 보낸 쪽이 정하므로 위치로 쓰지 않는다.
 import type { RawItem } from "../../items/store.js";
 import {
-  type Capture, type ListedUnit, gmailItem, gmailMailbox, notionItem, parseGmailMessages, parseNotionFetch, parseNotionList,
-  parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem, slackTsIso,
+  type Capture, type ListedUnit, type SlackMsg, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem,
+  parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem,
 } from "./connector-parse.js";
 
 export type CollectMode = "probe" | "listing" | "collect";
@@ -25,23 +27,28 @@ export const CLAUDE_COLLECT_APPS: Readonly<Record<string, string>> = { slack: "S
 
 /** 처음 읽는 단위(읽은 위치 없음)는 최근 이만큼만 — 처음 수집 기간은 나중에 리브가 대화로 정한다(확정판 §5). */
 export const FIRST_READ_DAYS = 14;
-/** 한 판이 읽는 구간 — 따라잡을 때 한 번에 이만큼씩(초). */
+/** 한 판이 읽는 구간의 최대(초) — 따라잡을 때 한 번에 이만큼씩. 못 다 읽으면 반씩 줄어 MIN_WINDOW_SEC 까지. */
 export const SLACK_WINDOW_SEC = 7 * 86400;
 export const GMAIL_WINDOW_SEC = 86400;
-/** 한 판에 단위 하나에서 넘길 쪽 · 펼칠 스레드 상한. */
+export const MIN_WINDOW_SEC = 3600;
+/** 구간 끝이 «지금» 인 판은 계획 시각보다 이만큼 앞에서 멈춘다 — 늦게 색인된 글을 다음 판이 다시 본다(같은 좌표라 행은 안 는다). */
+export const NOW_MARGIN_SEC = 60;
+/** 한 판에 단위 하나에서 넘길 쪽 · 펼칠 스레드 상한(지시에 적는다 — 넘는 단위는 못 다 읽은 것으로 보고 구간을 줄인다). */
 export const PAGES_PER_UNIT = 10;
 export const THREADS_PER_UNIT = 20;
-/** 한 판에 담는 단위 상한 — 넘는 단위는 다음 판(주기, T12)이 읽는다. */
-export const UNITS_PER_RUN = 12;
+/** 한 판에 담는 단위 상한 — 오래 안 읽은 단위부터. 넘는 단위는 다음 판(주기, T12)이 읽는다. */
+export const UNITS_PER_RUN = 6;
 
 const FOOT = "보내기·만들기·고치기·지우기 도구는 부르지 않는다. 도구 결과를 고쳐 쓰거나 요약하지 않는다. 다 끝나면 «끝» 이라고만 답한다.";
+/** 목록 실행의 슬랙 대화 종류 — 하나라도 빠진 목록은 «전부» 가 아니다(볼 수 있는 구성원을 지우는 판정이라 엄격하게). */
+export const SLACK_LIST_TYPES = ["public_channel", "private_channel", "mpim", "im"] as const;
 
 /** 목록 실행 지시 — 목록 도구만 부르고 다음 쪽이 없을 때까지 넘긴다. */
 export function listingPrompt(app: string): string {
   if (app === "slack") return [
     "목록 실행이다. 이 사람이 볼 수 있는 슬랙 대화의 목록을 빠짐없이 모은다.",
-    '1. slack_list_user_channels 를 types="public_channel,private_channel,mpim,im", limit=200, exclude_archived=true 로 부른다.',
-    "2. 결과 끝에 다음 쪽 cursor 가 있으면 그 cursor 를 넣어 같은 도구를 다시 부른다. cursor 가 없을 때까지 되풀이한다(최대 20번).",
+    `1. slack_list_user_channels 를 types="${SLACK_LIST_TYPES.join(",")}", limit=200, exclude_archived=true 로 부른다.`,
+    "2. 결과 끝에 다음 쪽 cursor 가 있으면 같은 types·limit·exclude_archived 에 그 cursor 를 더해 같은 도구를 다시 부른다. cursor 가 없을 때까지 되풀이한다(최대 20번).",
     "3. 다른 도구는 부르지 않는다.", FOOT,
   ].join("\n");
   if (app === "notion") return [
@@ -59,13 +66,44 @@ export function listingPrompt(app: string): string {
   throw new Error(`목록 실행을 모르는 앱: ${app}`);
 }
 
-/** 수집 실행에 싣는 단위 한 줄(T10 AssignedUnit 에서 필요한 칸만). */
+/**
+ * 수집 실행에 싣는 단위 한 줄(T10 AssignedUnit 에서 필요한 칸만). 실행 기록(collect_run.plan)에 그대로 남으므로 **이름은 싣지 않는다** —
+ *  비공개 채널·DM 의 이름은 collect_unit(열람 금지 표)에만 둔다. 자료의 그릇 이름은 저장 단계가 단위에서 채운다.
+ */
 export interface PlannedUnit {
-  id: number; app: string; instance: string; ref: string; kind: string; name: string | null; connector: string;
+  id: number; app: string; instance: string; ref: string; kind: string; connector: string;
   /** 이번에 읽기 시작할 곳 — 슬랙 ts(«1786345368.603919») · 지메일 epoch 초 · 노션은 null. */
   since: string | null;
   /** 이번 구간의 끝(같은 꼴) — 지금까지면 null. 다 읽으면 위치가 여기로 간다. */
   until?: string | null;
+  /** 저장돼 있던 구간 길이(초) — 못 다 읽어 줄여 둔 값. 없으면 앱의 최대. */
+  span?: number | null;
+}
+
+/** 실행 계획(collect_run.plan 에 남는다) — 수집 실행은 단위들과 계획 시각을 싣는다. */
+export interface CollectPlan { mode: "listing" | "collect"; app?: string; units?: PlannedUnit[]; planned_at?: number }
+
+const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+const SLACK_TS = /^\d{9,11}\.\d{1,6}$/;
+const SLACK_REF = /^[CDG][A-Z0-9]{6,}$/;
+const NOTION_REF = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MAIL_REF = /^[^@\s"]+@[^@\s"]+$/;
+
+/** 단위 ref 가 그 앱의 모양인가 — 지시에 그대로 들어가므로(모양 밖의 글은 싣지 않는다). */
+export function validUnitRef(app: string, ref: string): boolean {
+  if (app === "slack") return SLACK_REF.test(ref);
+  if (app === "notion") return NOTION_REF.test(ref);
+  if (app === "gmail") return MAIL_REF.test(ref) && ref.length <= 254;
+  return false;
+}
+
+const windowMax = (app: string): number => (app === "slack" ? SLACK_WINDOW_SEC : app === "gmail" ? GMAIL_WINDOW_SEC : 0);
+
+/** 저장된 구간 길이 — 1시간 이상 · 앱의 최대 미만의 정수만(최대면 칸을 안 쓴다). 아니면 null. */
+export function storedSpan(app: string, cursor: Record<string, unknown> | null): number | null {
+  const s = cursor?.span;
+  return typeof s === "number" && Number.isInteger(s) && s >= MIN_WINDOW_SEC && s < windowMax(app) ? s : null;
 }
 
 const epochSec = (iso: string | null | undefined): number | null => {
@@ -78,7 +116,7 @@ export function unitSince(u: { app: string; cursor: Record<string, unknown> | nu
   const c = u.cursor ?? {};
   const first = Math.floor(now / 1000) - FIRST_READ_DAYS * 86400;
   if (u.app === "slack") {
-    if (typeof c.ts === "string" && /^\d{9,11}\.\d{1,6}$/.test(c.ts)) return c.ts;
+    if (typeof c.ts === "string" && SLACK_TS.test(c.ts)) return c.ts;
     const lia = u.from_collector ? epochSec(u.last_item_at) : null;
     return `${lia ?? first}.000000`;
   }
@@ -89,35 +127,36 @@ export function unitSince(u: { app: string; cursor: Record<string, unknown> | nu
   return null;
 }
 
-/** 이번 판의 구간 — 시작에서 구간 길이만큼, 그 끝이 지금 이후면 끝 없음(null). 노션은 구간이 없다. */
-export function unitWindow(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean }, now: number): { since: string | null; until: string | null } {
+/** 이번 판의 구간 — 시작에서 구간 길이(저장된 span 또는 앱의 최대)만큼, 그 끝이 지금 이후면 끝 없음(null). 노션은 구간이 없다. */
+export function unitWindow(u: { app: string; cursor: Record<string, unknown> | null; last_item_at: string | null; from_collector: boolean }, now: number): { since: string | null; until: string | null; span: number | null } {
   const since = unitSince(u, now);
-  if (since == null) return { since, until: null };
+  if (since == null) return { since, until: null, span: null };
   const nowSec = Math.floor(now / 1000);
-  if (u.app === "slack") {
-    const end = Math.floor(Number(since)) + SLACK_WINDOW_SEC;
-    return { since, until: end < nowSec ? `${end}.000000` : null };
-  }
-  if (u.app === "gmail") {
-    const end = Number(since) + GMAIL_WINDOW_SEC;
-    return { since, until: end < nowSec ? String(end) : null };
-  }
-  return { since, until: null };
+  const span = storedSpan(u.app, u.cursor);
+  const end = Math.floor(Number(since)) + (span ?? windowMax(u.app));
+  if (u.app === "slack") return { since, until: end < nowSec ? `${end}.000000` : null, span };
+  if (u.app === "gmail") return { since, until: end < nowSec ? String(end) : null, span };
+  return { since, until: null, span: null };
 }
 
-/** 한 단위의 지시 줄 — 앱마다 정확한 도구·인자를 적는다(모델이 고르지 않게). 모르는 앱은 null(싣지 않는다). */
+/** 지메일 검색어 — 지시에 쓰고, 끝난 뒤 입력과 맞춰 본다(같아야 «계획한 구간을 읽었다»). */
+export function gmailQuery(u: Pick<PlannedUnit, "since" | "until">): string {
+  return `after:${u.since}${u.until ? ` before:${u.until}` : ""}`;
+}
+
+/** 한 단위의 지시 줄 — 앱마다 정확한 도구·인자를 적는다(모델이 고르지 않게). 모르는 앱 · 모양 밖의 ref 는 null(싣지 않는다). */
 export function unitInstruction(u: PlannedUnit): string | null {
-  const label = u.name ? `${u.ref}(${u.name.replace(/[\n\r"]/g, " ").slice(0, 60)})` : u.ref;
+  if (!validUnitRef(u.app, u.ref)) return null;
   if (u.app === "slack") return [
-    `· 슬랙 대화 ${label}: slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}"${u.until ? `, latest="${u.until}"` : ""}, limit=100 으로 부른다.`,
-    `  결과에 다음 쪽 cursor 가 있으면 cursor 를 넣어 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
-    `  읽은 메시지 가운데 «Thread: N replies» 가 붙은 것마다 slack_read_thread 를 channel_id="${u.ref}", message_ts=<그 메시지의 Message TS>, limit=200 으로 부른다(최대 ${THREADS_PER_UNIT}개).`,
+    `· 슬랙 대화 ${u.ref}: slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}"${u.until ? `, latest="${u.until}"` : ""}, limit=100 으로 부른다.`,
+    `  결과 끝에 다음 쪽 cursor 가 있으면 같은 channel_id·oldest${u.until ? "·latest" : ""} 에 cursor 를 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
+    `  읽은 메시지 가운데 «Thread: N replies» 가 붙은 것마다 slack_read_thread 를 channel_id="${u.ref}", message_ts=<그 메시지의 Message TS>, limit=200 으로 부른다(최대 ${THREADS_PER_UNIT}개). 스레드 결과에 다음 쪽 cursor 가 있으면 cursor 를 더해 이어서 부른다.`,
   ].join("\n");
   if (u.app === "gmail") return [
-    `· 지메일 메일함: search_threads 를 query="after:${u.since}${u.until ? ` before:${u.until}` : ""}", pageSize=50 으로 부른다. 결과에 nextPageToken 이 있으면 pageToken 으로 이어서 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
+    `· 지메일 메일함: search_threads 를 query="${gmailQuery(u)}", pageSize=50 으로 부른다. 결과에 nextPageToken 이 있으면 같은 query 에 pageToken 을 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
     `  찾은 스레드마다 하나도 빼지 말고 get_thread 를 threadId=<그 id>, messageFormat="PLAIN_TEXT" 로 부른다.`,
   ].join("\n");
-  if (u.app === "notion") return `· 노션 ${u.kind === "database" ? "데이터베이스" : "페이지"} ${label}: notion-fetch 를 id="${u.ref}" 로 한 번 부른다.`;
+  if (u.app === "notion") return `· 노션 ${u.kind === "database" ? "데이터베이스" : "페이지"} ${u.ref}: notion-fetch 를 id="${u.ref}" 로 한 번 부른다.`;
   return null;
 }
 
@@ -143,130 +182,221 @@ export function collectMaxTurns(units: number, gmailUnits = 0): number {
 // ── 끝난 뒤: 원문 → 단위별 자료 ──────────────────────────────────────────────
 
 export interface UnitHarvest {
-  /** 이 단위의 자료(같은 좌표는 한 번 — 본문이 있는 쪽). */
+  /** 이 단위의 자료(같은 좌표는 한 번). */
   items: RawItem[];
-  /** 이 단위를 실제로 읽은 도구 호출 수(0 이면 이 판은 이 단위를 안 읽었다 — 위치·읽은 시각을 옮기지 않는다). */
+  /** 이 단위의 결과(도구 호출) 수 — 0 이면 이 판은 이 단위를 안 읽었다(위치·읽은 시각을 옮기지 않는다). */
   reads: number;
-  /** oldest 이후를 끝까지 읽었나(마지막 쪽에 다음이 없었나). */
+  /** 계획한 구간을 끝까지 읽었다는 증거가 다 있나(머리말 ①~③). */
   complete: boolean;
-  /** 옮길 읽은 위치 — 끝까지 읽었고 새 것이 있을 때만. */
+  /** 끝까지가 아니면 첫 이유(기록·지표용). */
+  why: string | null;
+  /** 저장할 위치 — 다 읽었으면 옮긴 위치(+ 늘린 구간) · 못 다 읽었으면 그대로인 시작점 + 줄인 구간 · 안 읽었으면 null. */
   nextCursor: Record<string, unknown> | null;
-  /** 이 판에 본 가장 새 항목의 시각. */
+  /** 위치가 실제로 앞으로 갔나. */
+  advanced: boolean;
+  /** 이 판에 본 가장 새 항목의 시각(계획 시각을 넘지 않는다). */
   lastItemAt: string | null;
-  /** 이 단위의 도구 결과인데 풀린 항목이 없던 호출 수(형식이 바뀌었을 수 있다 — 실패로 본다). */
+  /** 제 모양이 아닌 결과 수(오류 문구 · 형식이 바뀐 글) — 하나라도 있으면 끝까지 읽은 것이 아니다. */
   unparsed: number;
 }
 
-/** 수집 실행의 원문 → 단위별 자료. 요청하지 않은 그릇(채널·메일함·페이지)의 항목은 버린다. */
-export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUnit[]): { byUnit: Map<number, UnitHarvest>; stray: number } {
+export interface HarvestOpts {
+  /** 계획 시각(epoch 초) — 구간 끝이 «지금» 인 판의 위치 · 마지막 글 시각의 상한. 없으면 그런 판의 위치는 안 옮긴다. */
+  plannedAt?: number | null;
+}
+
+interface Page { inCursor: string | null; outCursor: string | null; end: boolean }
+
+/** 쪽 사슬 — 첫 쪽(입력 cursor 없음)부터 «출력 cursor = 다음 쪽의 입력 cursor» 로 이어 «더 없음» 에 닿나. 순서와 무관하게 잇는다. */
+function walkChain<T extends Page>(pages: readonly T[]): { done: boolean; used: T[] } {
+  const used: T[] = [];
+  let cur = pages.find((p) => !p.inCursor);
+  while (cur && !used.includes(cur)) {
+    used.push(cur);
+    if (cur.end) return { done: true, used };
+    const next = cur.outCursor;
+    if (!next) return { done: false, used };
+    cur = pages.find((p) => p.inCursor === next && !used.includes(p));
+  }
+  return { done: false, used };
+}
+
+/** 입력 값이 계획과 같은가 — 둘 다 비었거나, 같은 수(«1787000000» = «1787000000.000000»). */
+const sameNum = (got: unknown, want: string | null | undefined): boolean => {
+  const empty = got == null || got === "";
+  if (want == null || want === "") return empty;
+  return !empty && Number(got) === Number(want);
+};
+const sameText = (got: unknown, want: string): boolean => typeof got === "string" && got.replace(/\s+/g, " ").trim() === want;
+
+/** 수집 실행의 원문 → 단위별 자료와 위치. 요청하지 않은 그릇(채널·메일함·페이지)의 항목은 버린다(stray). */
+export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUnit[], opts: HarvestOpts = {}): { byUnit: Map<number, UnitHarvest>; stray: number } {
+  const plannedAt = typeof opts.plannedAt === "number" && Number.isFinite(opts.plannedAt) ? Math.floor(opts.plannedAt) : null;
   const byUnit = new Map<number, UnitHarvest>();
-  //  같은 좌표가 여러 번 나오면 «더 온전한 쪽» 이 남는다(rank 가 큰 쪽 · 같으면 먼저 본 것).
-  //   지메일은 search_threads 의 한 줄 요약(rank 1)보다 get_thread 의 본문 전체(rank 2)가 이긴다 — 요약도 본문 칸에 들어가므로
-  //   «본문이 있나» 로 가르면 요약이 먼저 와서 본문을 막는다(맥 실측 2026-10-16: 4건 모두 요약만 저장됐다).
+  //  같은 좌표가 여러 번 나오면 rank 가 큰 쪽(같으면 먼저 본 것)이 남는다.
   const seen = new Map<number, Map<string, { it: RawItem; rank: number }>>();
-  const fresh = (): UnitHarvest => ({ items: [], reads: 0, complete: true, nextCursor: null, lastItemAt: null, unparsed: 0 });
-  for (const u of units) { byUnit.set(u.id, fresh()); seen.set(u.id, new Map()); }
+  for (const u of units) {
+    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0 });
+    seen.set(u.id, new Map());
+  }
   let stray = 0;
-  const slackUnit = (ch: string | null) => (ch ? units.find((u) => u.app === "slack" && u.ref === ch) ?? null : null);
-  const gmailUnits = units.filter((u) => u.app === "gmail");
   const put = (u: PlannedUnit, it: RawItem, rank = 0) => {
     const m = seen.get(u.id)!;
     const k = it.provenance.external_id;
     const prev = m.get(k);
     if (!prev || rank > prev.rank) m.set(k, { it, rank });
   };
-  const slackMax = new Map<number, string>();
-  //  지메일 — 찾은 스레드 · 펼친 스레드(구간을 다 읽었나 = 찾은 것을 다 펼쳤나).
-  const searched = new Map<number, Set<string>>(), fetched = new Map<number, Set<string>>();
-  const addTo = (m: Map<number, Set<string>>, id: number, v: string | null) => { if (!v) return; if (!m.has(id)) m.set(id, new Set()); m.get(id)!.add(v); };
+  const slackUnit = (ch: string | null) => (ch ? units.find((u) => u.app === "slack" && u.ref === ch) ?? null : null);
+  const gmailUnits = units.filter((u) => u.app === "gmail");
+  const chanPages = new Map<number, Array<Page & { inWindow: boolean; msgs: SlackMsg[] }>>();
+  const threadPages = new Map<number, Array<Page & { ts: string }>>();
+  const searchPages = new Map<number, Array<Page & { inPlan: boolean; threads: string[] }>>();
+  const fetched = new Map<number, Set<string>>();
+  const notionOk = new Set<number>();
+  const push = <T>(m: Map<number, T[]>, id: number, v: T) => { if (!m.has(id)) m.set(id, []); m.get(id)!.push(v); };
+
   for (const c of caps) {
     if (c.tool === "slack_read_channel") {
       const r = parseSlackChannelMessages(c);
-      const u = slackUnit(r.channel?.id ?? null);
+      const u = slackUnit(r.channel?.id ?? str(c.input.channel_id));
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      if (r.more) h.complete = false;
-      if (!r.messages.length && c.text.length > 400 && !/no (more )?messages/i.test(c.text)) h.unparsed++;
-      for (const m of r.messages) {
-        put(u, slackItem(m, { instance: u.instance, channel: u.ref, channelName: r.channel?.name ?? u.name }));
-        const cur = slackMax.get(u.id);
-        if (!cur || Number(m.ts) > Number(cur)) slackMax.set(u.id, m.ts);
-      }
+      if (!r.wellFormed) { h.unparsed++; continue; }
+      for (const m of r.messages) put(u, slackItem(m, { instance: u.instance, channel: u.ref, channelName: r.channel?.name }), 1);
+      push(chanPages, u.id, {
+        inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end, msgs: r.messages,
+        inWindow: sameNum(c.input.oldest, u.since) && sameNum(c.input.latest, u.until ?? null),
+      });
     } else if (c.tool === "slack_read_thread") {
       const r = parseSlackThread(c);
       const u = slackUnit(r.channelId);
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      if (!r.parent && !r.replies.length) { h.unparsed++; continue; }
-      const parentTs = r.parent?.ts ?? (typeof c.input.message_ts === "string" ? c.input.message_ts : null);
-      if (r.parent) put(u, slackItem({ ...r.parent, reply_count: r.parent.reply_count ?? (r.replies.length || null) }, { instance: u.instance, channel: u.ref, channelName: u.name }));
-      for (const m of r.replies) put(u, slackItem(m, { instance: u.instance, channel: u.ref, channelName: u.name, threadParentTs: parentTs }));
+      const asked = typeof c.input.message_ts === "string" && SLACK_TS.test(c.input.message_ts) ? c.input.message_ts : null;
+      //  이어 읽은 쪽(입력 cursor 있음)은 부모 머리가 다시 안 올 수 있다 — 쪽 안내만 분명하면 제 모양으로 본다.
+      const shaped = r.wellFormed || (!!str(c.input.cursor) && (r.end || !!r.cursor));
+      const parentTs = asked ?? r.parent?.ts ?? null;
+      if (!shaped || !parentTs) { h.unparsed++; continue; }
+      if (r.parent) put(u, slackItem({ ...r.parent, reply_count: r.parent.reply_count ?? (r.replies.length || null) }, { instance: u.instance, channel: u.ref }), 1);
+      for (const m of r.replies) put(u, slackItem(m, { instance: u.instance, channel: u.ref, threadParentTs: parentTs }), 1);
+      push(threadPages, u.id, { ts: parentTs, inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end });
     } else if (c.tool === "search_threads" || c.tool === "get_thread" || c.tool === "get_message") {
       const msgs = parseGmailMessages(c);
       const box = gmailMailbox(msgs);
-      //  메일함이 둘 이상이면 주소로 맞춘다. 하나뿐이면 주소를 못 읽은 결과도 그 메일함 것이다(그 사람 커넥터는 메일함 하나).
+      //  메일함이 둘 이상이면 주소로 맞춘다. 하나뿐이면 주소를 못 읽은 결과(빈 검색 · 오류)도 그 메일함 것이다.
       const u = box ? gmailUnits.find((x) => x.ref === box) ?? null : (gmailUnits.length === 1 ? gmailUnits[0] : null);
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      if (c.tool === "search_threads" && typeof (c.json as Record<string, unknown> | null)?.nextPageToken === "string") h.complete = false;
-      if (!msgs.length && c.text.length > 400) h.unparsed++;
-      for (const m of msgs) {
-        put(u, gmailItem(m, { instance: u.instance || "default", mailbox: u.ref }), m.full ? 2 : 1);
-        addTo(c.tool === "search_threads" ? searched : fetched, u.id, m.threadId ?? m.id);
+      if (c.tool === "search_threads") {
+        if (!isGmailSearch(c)) { h.unparsed++; continue; }
+        const j = c.json as Record<string, unknown>;
+        const threads = (j.threads as unknown[]).map((t) => (isRec(t) ? str(t.id) : null)).filter((t): t is string => !!t);
+        const next = str(j.nextPageToken);
+        //  검색 결과의 메시지는 한 줄 요약이라 자료로 넣지 않는다(본문 전체가 있던 자료를 요약으로 덮지 않게) — 펼친 스레드에서만 넣는다.
+        push(searchPages, u.id, { inCursor: str(c.input.pageToken), outCursor: next, end: !next, inPlan: sameText(c.input.query, gmailQuery(u)), threads });
+      } else {
+        if (!isGmailFetch(c)) { h.unparsed++; continue; }
+        const j = c.json as Record<string, unknown>;
+        const tid = c.tool === "get_thread" ? String(j.id) : (str(j.threadId) ?? String(j.id));
+        if (!fetched.has(u.id)) fetched.set(u.id, new Set());
+        fetched.get(u.id)!.add(tid);
+        for (const m of msgs) put(u, gmailItem(m, { instance: u.instance || "default", mailbox: u.ref }), m.full ? 2 : 1);
       }
     } else if (c.tool === "notion-fetch") {
       const p = parseNotionFetch(c);
-      const u = p ? units.find((x) => x.app === "notion" && x.ref === p.id) ?? null : null;
+      const id = p?.id ?? notionId(str(c.input.id));
+      const u = id ? units.find((x) => x.app === "notion" && x.ref === id) ?? null : null;
       if (!u) { stray++; continue; }
       const h = byUnit.get(u.id)!;
       h.reads++;
-      put(u, notionItem(p!, { instance: u.instance }));
+      if (!p) { h.unparsed++; continue; }
+      put(u, notionItem(p, { instance: u.instance }), 1);
+      notionOk.add(u.id);
     }
   }
+
+  const capIso = plannedAt != null ? new Date(plannedAt * 1000).toISOString() : null;
   for (const u of units) {
     const h = byUnit.get(u.id)!;
     h.items = [...seen.get(u.id)!.values()].map((v) => v.it);
     const times = h.items.map((i) => i.updated_at ?? i.occurred_at).filter((t): t is string => !!t).sort();
-    h.lastItemAt = times.length ? times[times.length - 1] : null;
-    if (u.app === "gmail" && h.complete) {
-      const done = fetched.get(u.id) ?? new Set<string>();
-      if ([...(searched.get(u.id) ?? [])].some((t) => !done.has(t))) h.complete = false;
-    }
-    if (!h.reads || !h.complete) { h.nextCursor = null; continue; }
+    const newest = times.length ? times[times.length - 1] : null;
+    //  마지막 글 시각도 계획 시각을 넘지 않는다(시계가 앞선 발신자 한 명이 단위의 «마지막 글» 을 미래로 밀지 못하게).
+    h.lastItemAt = newest && capIso && newest > capIso ? capIso : newest;
+    if (!h.reads) continue;
+
+    //  ① ~ ③ — 앱마다 «다 읽었다» 의 증거를 모은다.
     if (u.app === "slack") {
-      //  구간을 끝까지 읽었으면 구간 끝으로(조용한 구간도 넘어간다), 지금까지 읽었으면 가장 새 메시지로.
-      const ts = u.until ?? slackMax.get(u.id);
-      h.nextCursor = ts ? { ts } : null;
+      const pages = chanPages.get(u.id) ?? [];
+      const ch = walkChain(pages.filter((p) => p.inWindow));
+      const parents = [...new Set(ch.used.flatMap((p) => p.msgs.filter((m) => (m.reply_count ?? 0) > 0).map((m) => m.ts)))];
+      const tp = threadPages.get(u.id) ?? [];
+      const missing = parents.filter((ts) => !walkChain(tp.filter((p) => p.ts === ts)).done);
+      h.why = h.unparsed ? "풀지 못한 결과" : !pages.some((p) => p.inWindow) ? (pages.length ? "계획과 다른 구간을 읽음" : "채널을 안 읽음")
+        : !ch.done ? "쪽을 끝까지 못 읽음" : missing.length ? `스레드 ${missing.length}개를 못 읽음` : null;
     } else if (u.app === "gmail") {
-      const ep = u.until != null ? Number(u.until) : epochSec(h.lastItemAt);
-      h.nextCursor = ep ? { after: ep } : null;
+      const pages = searchPages.get(u.id) ?? [];
+      const ch = walkChain(pages.filter((p) => p.inPlan));
+      const found = new Set(ch.used.flatMap((p) => p.threads));
+      const done = fetched.get(u.id) ?? new Set<string>();
+      const missing = [...found].filter((t) => !done.has(t));
+      h.why = h.unparsed ? "풀지 못한 결과" : !pages.some((p) => p.inPlan) ? (pages.length ? "계획과 다른 검색어" : "검색을 안 함")
+        : !ch.done ? "쪽을 끝까지 못 읽음" : missing.length ? `스레드 ${missing.length}개를 못 펼침` : null;
     } else if (u.app === "notion") {
-      h.nextCursor = h.lastItemAt ? { edited_at: h.lastItemAt } : null;
+      h.why = h.unparsed ? "풀지 못한 결과" : !notionOk.has(u.id) ? "페이지를 못 읽음" : null;
+    } else {
+      h.why = "모르는 앱";
+    }
+    h.complete = h.why == null;
+
+    //  위치 — 다 읽었으면 앞으로, 못 다 읽었으면 그 자리에 구간만 줄여서.
+    if (u.app === "notion") {
+      h.nextCursor = h.complete && h.lastItemAt ? { edited_at: h.lastItemAt } : null;
+      h.advanced = !!h.nextCursor;
+      continue;
+    }
+    if (u.since == null || (u.app !== "slack" && u.app !== "gmail")) continue;
+    const key = u.app === "slack" ? "ts" : "after";
+    const start = Math.floor(Number(u.since));
+    const here = u.app === "slack" ? u.since : start;
+    const max = windowMax(u.app);
+    if (h.complete) {
+      const end = u.until != null ? Math.floor(Number(u.until)) : plannedAt != null ? plannedAt - NOW_MARGIN_SEC : null;
+      const grown = u.span ? (u.span * 2 >= max ? null : u.span * 2) : null;
+      const pos = end != null && end > start ? (u.app === "slack" ? `${end}.000000` : end) : here;
+      h.nextCursor = { [key]: pos, ...(grown ? { span: grown } : {}) };
+      h.advanced = pos !== here;
+    } else {
+      const cur = (u.until != null ? Math.floor(Number(u.until)) : plannedAt ?? start + max) - start;
+      h.nextCursor = { [key]: here, span: Math.max(MIN_WINDOW_SEC, Math.floor(Math.min(cur, max) / 2)) };
+      h.advanced = false;
     }
   }
   return { byUnit, stray };
 }
 
-/** 목록 실행의 원문 → 단위 목록 · 전부인가 · (지메일) 메일함. */
+/** 목록 실행의 원문 → 단위 목록 · 전부인가. «전부» 는 그 사람의 via-listing 자리를 정리하는 판정이라 증거가 다 있을 때만. */
 export function harvestListing(caps: readonly Capture[], app: string): { units: ListedUnit[]; complete: boolean; calls: number; unparsed: number } {
   const units = new Map<string, ListedUnit>();
   let calls = 0, unparsed = 0;
-  let lastMore: boolean | null = null;
+  const pages: Array<Page & { allTypes: boolean }> = [];
   for (const c of caps) {
     if (app === "slack" && c.tool === "slack_list_user_channels") {
       calls++;
       const r = parseSlackChannelList(c);
-      if (!r.units.length && c.text.length > 200) unparsed++;
+      //  대화가 하나도 없는 목록은 제 모양이 아니다(오류 문구 · 형식이 바뀐 글) — 이 판을 «전부» 로 보면 그 사람이 다 빠진다.
+      if (!r.units.length) { unparsed++; continue; }
       const archived = new Set(r.archived);
       for (const u of r.units) if (!archived.has(u.ref) && !units.has(u.ref)) units.set(u.ref, u);
-      lastMore = r.more;
+      const types = String(c.input.types ?? "").split(",").map((t) => t.trim());
+      pages.push({ inCursor: str(c.input.cursor), outCursor: r.cursor, end: !r.cursor, allTypes: SLACK_LIST_TYPES.every((t) => types.includes(t)) });
     } else if (app === "notion" && /^notion-(list-(shared|private|recent)-pages|search)$/.test(c.tool)) {
       calls++;
       const r = parseNotionList(c);
-      if (!r.units.length && c.text.length > 200) unparsed++;
+      if (!isRec(c.json) || !Array.isArray(c.json.results)) unparsed++;
       for (const u of r.units) if (!units.has(u.ref)) units.set(u.ref, u);
     } else if (app === "gmail" && c.tool === "search_threads") {
       calls++;
@@ -274,11 +404,8 @@ export function harvestListing(caps: readonly Capture[], app: string): { units: 
       if (box && !units.has(box)) units.set(box, { ref: box, name: box, kind: "mailbox" });
     }
   }
-  //  «전부» 는 슬랙만, 마지막 목록 쪽에 다음이 없었을 때만 — 노션 목록 도구는 볼 수 있는 페이지 전부를 주지 않고,
-  //   지메일은 메일함 하나다(전부라고 하면 이 사람이 다른 메일함에서 빠진다).
-  const complete = app === "slack" && calls > 0 && lastMore === false && unparsed === 0;
+  //  «전부» 는 슬랙만 — 모든 종류(공개·비공개·그룹 DM·DM)를 청한 쪽들이 첫 쪽부터 «더 없음» 까지 이어지고 못 푼 쪽이 없을 때.
+  //   노션 목록 도구는 볼 수 있는 페이지 전부를 주지 않고, 지메일은 메일함 하나다(전부라고 하면 이 사람이 다른 메일함에서 빠진다).
+  const complete = app === "slack" && unparsed === 0 && walkChain(pages.filter((p) => p.allTypes)).done;
   return { units: [...units.values()], complete, calls, unparsed };
 }
-
-/** 슬랙 ts 를 ISO 로(화면·기록용 재수출). */
-export { slackTsIso };

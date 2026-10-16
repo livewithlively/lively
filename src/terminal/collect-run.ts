@@ -14,8 +14,7 @@
 //     넘긴다 — 한 실행에 한 번(collect_run.ingest 로 차례를 잡는다). 지시는 서버가 고정한다(collect-plan) — 모델은 도구만 부른다.
 //     [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 의 실패율·메모리 지표가 여기서 나오고, 수집 세션 크기는 그 옆에서 고친다.
 //
-//  ⚠ 이번 판(B)은 **실행기와 실측**까지다 — 원문을 자료로 넣는 저장 단계(외부 좌표·볼 수 있는 사람)는 다음 판이다.
-//   그래서 상태 응답은 원문을 싣지 않고 목록(도구·크기·해시)만 준다. 원문은 그 사람 홈의 실행 폴더에만 있다.
+//  상태 응답은 원문을 싣지 않고 목록(도구·크기·해시)과 저장 결과(수)만 준다. 원문은 그 사람 홈의 실행 폴더에만 있다.
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
@@ -29,7 +28,8 @@ import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
 import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
 import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
-  CLAUDE_COLLECT_APPS, UNITS_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, unitWindow, type CollectMode, type PlannedUnit,
+  CLAUDE_COLLECT_APPS, UNITS_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, unitWindow, validUnitRef,
+  type CollectMode, type CollectPlan, type PlannedUnit,
 } from "../org/collect/collect-plan.js";
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
@@ -75,7 +75,7 @@ interface RunRec {
   size?: { capMb: number; requestMb: number };
   /** 실행 종류와 계획(목록·수집) — 실행 기록에도 남겨 게이트웨이가 재기동해도 저장 단계가 읽는다. */
   mode: CollectMode;
-  plan: { mode: "listing" | "collect"; app?: string; units?: PlannedUnit[] } | null;
+  plan: CollectPlan | null;
 }
 
 /** 이 게이트웨이가 띄우고 지켜보는 실행. 재기동하면 비지만, 상태 읽기가 폴더에서 다시 판정한다. */
@@ -167,16 +167,24 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
   const { listAssignedUnits } = await import("../org/collect/unit-store.js");
   const member = memberOf(user);
   const now = Date.now();
+  //  오래 안 읽은 단위부터(처음 읽는 단위가 맨 앞) — 맡은 단위가 한 판보다 많아도 돌아가며 다 읽힌다. ref 가 앱 모양이 아닌 단위는
+  //   지시에 싣지 않는다(본인 신고로 들어온 임의의 글이 지시에 섞이지 않게).
   const assigned = (await listAssignedUnits(member, { dueOnly: input.dueOnly === true, now }))
-    .filter((u) => !!CLAUDE_COLLECT_APPS[u.app] && (!app || u.app === app));
+    .filter((u) => !!CLAUDE_COLLECT_APPS[u.app] && (!app || u.app === app) && validUnitRef(u.app, u.ref))
+    .sort((a, b) => (a.read_at ? Date.parse(a.read_at) : 0) - (b.read_at ? Date.parse(b.read_at) : 0) || a.id - b.id);
   const planned: PlannedUnit[] = assigned.slice(0, UNITS_PER_RUN).map((u) => ({
-    id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, name: u.name, connector: u.connector,
+    id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app],
     ...unitWindow(u, now),
   }));
   const { prompt, units } = collectPrompt(planned);
   if (!units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
-  const apps = [...new Set(units.map((u) => u.connector || CLAUDE_COLLECT_APPS[u.app]))];
-  return { mode, prompt, apps, maxTurns: collectMaxTurns(units.length, units.filter((u) => u.app === "gmail").length), plan: { mode: "collect", units } };
+  //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
+  const apps = [...new Set(units.map((u) => CLAUDE_COLLECT_APPS[u.app]))];
+  if (!apps.length) throw new HttpError(500, "수집 실행의 허락할 앱을 정하지 못했습니다");
+  return {
+    mode, prompt, apps, maxTurns: collectMaxTurns(units.length, units.filter((u) => u.app === "gmail").length),
+    plan: { mode: "collect", units, planned_at: Math.floor(now / 1000) },
+  };
 }
 
 async function pollOnce(rec: RunRec): Promise<void> {
@@ -186,7 +194,7 @@ async function pollOnce(rec: RunRec): Promise<void> {
     if (st.state === "done") {
       noteOutcome(rec.user, rec.runId, st.exit, st.summary);
       noteRunEnd(rec.user, rec.runId, st.exit, st.summary, rec.size, rec.mode, rec.plan);
-      if (rec.mode !== "probe") noteIngest(rec.osUser, rec.dir, rec.runId);
+      if (rec.mode !== "probe") noteIngest(rec.osUser, rec.dir, rec.runId, memberOf(rec.user));
     }
     //  #4427 — 러너가 시작 때 잰 커넥터 목록을 그 사람 기록에 남긴다(던지지 않는다 — 뒷정리를 막지 않게). 관측 시각 = 실행 id 의 시작 시각.
     if (st.state === "done") await recordFromCollectSummary(rec.owner, st.summary, st.exit, collectRunStartedAt(rec.runId));
@@ -288,24 +296,24 @@ function noteRunEnd(
  *  **기다리지 않고 던지지 않는다** — 결과(무엇을 넣었나 · 왜 못 넣었나)는 collect_run.ingest 에 남는다.
  */
 const ingesting = new Set<string>();
-function noteIngest(osUser: string | null, dir: string, runId: string): void {
+function noteIngest(osUser: string | null, dir: string, runId: string, member: string): void {
   if (ingesting.has(runId)) return;
   ingesting.add(runId);
   if (ingesting.size > 500) ingesting.delete(ingesting.values().next().value as string);
   void (async () => {
     const log = await import("../org/collect/run-log.js");
-    const claim = await log.claimIngest(runId);
+    const claim = await log.claimIngest(runId, member);
     //  못 잡았다 = 이미 누가 처리했거나(끝) · 실행 기록이 아직 없다(시작·끝 기록이 늦다). 거름 표식을 풀어 다음 상태 읽기가 다시 잡아 보게 한다
     //   (차례 잡기는 한 UPDATE 라 몇 번 불러도 한 번만 이긴다).
     if (!claim) { ingesting.delete(runId); return; }
     let result: Record<string, unknown>;
     try {
-      const caps = parseCollectCaps(await runAtLoginSeatSh(osUser, collectCapsReadSh(dir)));
-      if (!caps) result = { state: "failed", mode: claim.mode, error: "원문을 읽지 못했다" };
-      else {
-        const { ingestRun } = await import("../org/collect/run-ingest.js");
-        result = { ...(await ingestRun({ member: claim.member, plan: claim.plan as never, files: caps.files, truncated: caps.truncated })) };
-      }
+      const { ingestRun, toIngestPlan } = await import("../org/collect/run-ingest.js");
+      const plan = toIngestPlan(claim.mode, claim.plan);
+      const caps = plan ? parseCollectCaps(await runAtLoginSeatSh(osUser, collectCapsReadSh(dir))) : null;
+      if (!plan) result = { state: "failed", mode: claim.mode, error: "실행 기록의 계획을 읽지 못했다" };
+      else if (!caps) result = { state: "failed", mode: claim.mode, error: "원문을 읽지 못했다" };
+      else result = { ...(await ingestRun({ member: claim.member, plan, files: caps.files, truncated: caps.truncated })) };
     } catch (e) {
       result = { state: "failed", mode: claim.mode, error: String((e as Error)?.message ?? e).slice(0, 300) };
     }
@@ -357,7 +365,7 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
   if (st.state === "done") {
     noteOutcome(user, runId, st.exit, st.summary);
     noteRunEnd(user, runId, st.exit, st.summary, rec?.size, rec?.mode, rec?.plan);
-    noteIngest(osUser, dir, runId);
+    noteIngest(osUser, dir, runId, memberOf(user));
     //  #4427 — 지켜보기가 놓친 끝(게이트웨이 재기동)도 여기서 남긴다. 관측 시각이 실행 id 의 시작 시각이라 몇 번 읽어도 같은 값이고,
     //   그 뒤에 더 새 확인이 있었으면 옛 관측으로 버려진다(잃은 실행 — 요약이 없는 끝 — 은 아예 적지 않는다: collectSummaryScan).
     await recordFromCollectSummary(ownerOf(user), st.summary, st.exit, started);

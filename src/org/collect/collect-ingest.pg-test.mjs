@@ -4,13 +4,14 @@
 //
 // 왜 이 계층인가: 저장 단계의 약속은 원문을 푼 뒤 **T10 표가 지키는 사실**이다 — «목록으로 본 사람은 확인된 구성원» ·
 //  «같은 좌표는 한 행(두 번 넣어도 새 행 없음)» · «요청 안 한 채널의 글은 안 들어간다» · «안 읽은 단위는 위치를 안 옮긴다» ·
-//  «담당이 아니면 위치를 못 옮긴다» · «한 실행은 한 번만 처리». 풀기 셈(순수)은 collect-plan.test.ts · connector-parse.test.ts.
-//  여기는 run-ingest(ingestRun) 를 실제 표에 대고 부른 뒤 **행을 되읽어** 판정한다(사양 I1~I5 · J2).
-//  원문은 커넥터 결과의 모양만 옮긴 합성 글이다.
+//  «원문이 잘렸거나 저장이 실패한 판은 위치를 안 옮긴다» · «담당이 아니면 위치를 못 옮긴다» · «한 실행은 그 주인이 한 번만 처리».
+//  풀기·위치 셈(순수)은 collect-plan.test.ts · connector-parse.test.ts. 여기는 run-ingest(ingestRun)를 실제 표에 대고 부른 뒤
+//  **행을 되읽어** 판정한다(사양 I1~I6 · J2). 원문은 커넥터 결과의 모양(맥 실측)만 옮긴 합성 글이다.
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const store = await import(`${DIST}/org/collect/unit-store.js`);
-const { ingestRun, resolveInstance } = await import(`${DIST}/org/collect/run-ingest.js`);
+const { ingestRun, resolveInstance, toIngestPlan } = await import(`${DIST}/org/collect/run-ingest.js`);
+const { NOW_MARGIN_SEC } = await import(`${DIST}/org/collect/collect-plan.js`);
 const log = await import(`${DIST}/org/collect/run-log.js`);
 const { collectRunCapabilities } = await import(`${DIST}/capabilities/collect-run.js`);
 
@@ -28,25 +29,29 @@ const NOTION_INST = "cipg-notion";
 const CH1 = "C0CIPG0001", CH2 = "C0CIPG0002", CH3 = "C0CIPG0003", STRAY = "C0CIPG0009";
 const BOX_A = "a@cipg.test";
 const PAGE = "abcdef01-2345-6789-abcd-ef01cafe0001";
+const NOW = Date.parse("2026-10-16T10:00:00.000Z");
+const PLANNED = Math.floor(NOW / 1000);
+const SINCE = "1787000000.000000";
 
 const file = (connector, tool, inner, input = {}) => ({
   tool_name: `mcp__claude_ai_${connector}__${tool}`, tool_input: input,
   tool_response: [{ type: "text", text: typeof inner === "string" ? inner : JSON.stringify(inner) }],
 });
-const listFile = (rows, cursor) => file("Slack", "slack_list_user_channels", {
+const listFile = (rows, o = {}) => file("Slack", "slack_list_user_channels", {
   result: [...rows.flatMap(([id, name, type, archived]) => [`### #${name}`, `- **ID:** ${id}`, `- **Type:** ${type}`, ...(archived ? ["- **Archived:** Yes"] : []), ""]),
-    ...(cursor ? [`There are more results available. Use cursor: "${cursor}"`] : [])].join("\n"),
-});
-const chFile = (ch, msgs) => file("Slack", "slack_read_channel", {
+    ...(o.cursor ? [`---\nPagination: More results available. Use cursor: "${o.cursor}"`] : [])].join("\n"),
+}, { types: "public_channel,private_channel,mpim,im", limit: 200, exclude_archived: true, ...(o.inCursor ? { cursor: o.inCursor } : {}) });
+const chFile = (ch, msgs, input = { channel_id: ch, oldest: SINCE, limit: 100 }) => file("Slack", "slack_read_channel", {
   messages: [`Channel: #c (${ch})`, "", ...msgs.flatMap(([ts, body, tail]) => [`=== Message from Kim <kim@cipg.test> (U0CIPG0001) at x ===`, `Message TS: ${ts}`, body, ...(tail ? [tail] : []), ""])].join("\n"),
-  pagination_info: "",
-}, { channel_id: ch });
+  pagination_info: "There are no more messages available.\n",
+}, input);
 const thFile = (ch, parent, replies) => file("Slack", "slack_read_thread", {
   messages: ["=== THREAD PARENT MESSAGE ===", "From: Kim <kim@cipg.test> (U0CIPG0001)", "Time: x", `Message TS: ${parent}`, "부모", "",
     "=== THREAD REPLIES (n) ===", "", ...replies.flatMap((ts, i) => [`--- Reply ${i + 1} of ${replies.length} ---`, "From: Lee (U0CIPG0002)", "Time: y", `Message TS: ${ts}`, `답글 ${i + 1}`, ""])].join("\n"),
-}, { channel_id: ch, message_ts: parent });
-const GM = (id, threadId, o = {}) => ({ id, threadId, subject: "견적", sender: "Kim <kim@cipg.test>", date: "2026-10-02T23:49:36Z", snippet: "요약",
-  labelIds: [], viewUrl: `https://mail.google.com/mail/?authuser=${encodeURIComponent(BOX_A)}#all/${id}`, ...o });
+  pagination_info: "There are no more messages in this thread.\n",
+}, { channel_id: ch, message_ts: parent, limit: 200 });
+const GM = (id, threadId, o = {}) => ({ id, threadId, subject: "견적", sender: "Kim <kim@cipg.test>", date: "Thu, 2 Oct 2026 23:49:36 +0000", internalDate: "1790984976000",
+  snippet: "요약", labelIds: [], viewUrl: `https://mail.google.com/mail/?authuser=${encodeURIComponent(BOX_A)}#all/${id}`, ...o });
 
 const unitBy = async (ref, app = "slack", inst = TEAM) => (await itemsPool.query(
   `SELECT * FROM collect_unit WHERE app=$1 AND instance=$2 AND ref=$3`, [app, inst, ref])).rows[0];
@@ -58,13 +63,14 @@ const sources = async (app, inst, prefix) => (await itemsPool.query(
 const audienceHas = async (sid, member) => (await itemsPool.query(
   `SELECT 1 FROM source_member WHERE source_id=$1 AND member_id=$2`, [sid, member])).rowCount > 0;
 const activate = (id) => itemsPool.query(`UPDATE collect_unit SET state='active' WHERE id=$1`, [id]);
-const planned = (u, o = {}) => ({ id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, name: u.name, connector: u.connector || "Slack",
-  since: "1787000000.000000", until: null, ...o });
+const planned = (u, o = {}) => ({ id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: u.connector || "Slack",
+  since: SINCE, until: null, ...o });
 
 async function cleanup() {
-  await itemsPool.query(`DELETE FROM collect_unit WHERE (app='slack' AND instance = ANY($1::text[])) OR (app='notion' AND instance=$2) OR (app='gmail' AND lower(ref)=$3)`, [[TEAM, TEAM2], NOTION_INST, BOX_A]);
-  await itemsPool.query(`DELETE FROM source WHERE (external_system='slack' AND external_instance=$1) OR (external_system='notion' AND external_instance=$2)
-                           OR (external_system='gmail' AND external_id LIKE '18c1a9%')`, [TEAM, NOTION_INST]);
+  //  ref 로도 지운다 — 인스턴스를 못 정한 판(빈 값)으로 생긴 시험 단위가 남지 않게.
+  await itemsPool.query(`DELETE FROM collect_unit WHERE (app='slack' AND (instance = ANY($1::text[]) OR ref LIKE 'C0CIPG%')) OR (app='notion' AND instance=$2) OR (app='gmail' AND lower(ref)=$3)`, [[TEAM, TEAM2], NOTION_INST, BOX_A]);
+  await itemsPool.query(`DELETE FROM source WHERE (external_system='slack' AND external_instance = ANY($1::text[])) OR (external_system='notion' AND external_instance=$2)
+                           OR (external_system='gmail' AND external_id LIKE '18c1a9%')`, [[TEAM, TEAM2], NOTION_INST]);
   await itemsPool.query(`DELETE FROM collect_assignee_state WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM org_member WHERE id = ANY($1::text[])`, [MEMBERS]);
@@ -80,21 +86,24 @@ try {
   // ── I1 목록 실행 ──
   {
     const res = await ingestRun({ member: A, plan: { mode: "listing", app: "slack" }, files: [
-      listFile([[CH1, "c1", "Public Channel"], [CH3, "old", "Public Channel", true]], "next"),
-      listFile([[CH2, "c2", "Private Channel"]]),
+      listFile([[CH1, "c1", "Public Channel"], [CH3, "old", "Public Channel", true]], { cursor: "next" }),
+      listFile([[CH2, "c2", "Private Channel"]], { inCursor: "next" }),
     ] });
-    const u1 = await unitBy(CH1), u2 = await unitBy(CH2), u3 = await unitBy(CH3);
+    const u2 = await unitBy(CH2), u3 = await unitBy(CH3);
     const v2 = u2 ? await viewer(u2.id, A) : null;
-    chk("I1 목록 — 이미 아는 팀으로 단위를 세우고(①) 새 단위는 «후보» · 그 사람은 확인된 볼 수 있는 구성원 · 보관 채널은 안 세운다",
+    chk("I1 목록 — 이미 아는 팀으로 단위를 세우고(①) 새 단위는 «후보» · 그 사람은 확인된 볼 수 있는 구성원 · 보관 채널은 안 세운다 · 쪽 사슬이 끝나 «전부»",
       res.state === "done" && res.listed === 2 && res.created === 1 && res.instance === TEAM && res.complete === true
-        && u1 && u2 && u2.state === "candidate" && u2.kind === "private_channel" && v2?.verified_at != null && !u3,
+        && u2 && u2.state === "candidate" && u2.kind === "private_channel" && v2?.verified_at != null && !u3,
       JSON.stringify({ res, u2: u2 && { state: u2.state, kind: u2.kind }, v2, u3: !!u3 }));
     const again = await ingestRun({ member: A, plan: { mode: "listing", app: "slack" }, files: [listFile([[CH1, "c1", "Public Channel"], [CH2, "c2", "Private Channel"]])] });
     chk("I1b 같은 목록을 또 넣어도 새 단위 없음", again.state === "done" && again.created === 0, JSON.stringify(again));
     const none = await ingestRun({ member: A, plan: { mode: "listing", app: "slack" }, files: [chFile(CH1, [])] });
     chk("I1c 목록 도구를 안 부른 실행은 실패로 남긴다(단위를 지우지도 세우지도 않는다)", none.state === "failed" && /목록 도구/.test(none.error ?? ""), JSON.stringify(none));
-    chk("I1d 인스턴스 — 같은 ref 를 가진 기존 단위의 팀(팀이 둘이어도) · 모르는 ref 이고 팀이 둘이면 빈 값 · 지메일은 default",
-      (await resolveInstance("slack", [CH2])) === TEAM && (await resolveInstance("slack", ["C0CIPG0007"])) === "" && (await resolveInstance("gmail", [])) === "default");
+    const r1 = await resolveInstance("slack", [CH2]), r2 = await resolveInstance("slack", ["C0CIPG0007"]), r3 = await resolveInstance("gmail", []);
+    chk("I1d 인스턴스 — 같은 ref 의 기존 단위 팀(ref) · 모르는 ref 이고 팀이 둘이면 빈 값(none) · 지메일은 default",
+      r1.instance === TEAM && r1.via === "ref" && r2.instance === "" && r2.via === "none" && r3.instance === "default", JSON.stringify({ r1, r2, r3 }));
+    const trunc = await ingestRun({ member: A, plan: { mode: "listing", app: "slack" }, truncated: true, files: [listFile([[CH1, "c1", "Public Channel"]])] });
+    chk("I1e 원문이 잘린 목록은 «전부» 가 아니다", trunc.state === "done" && trunc.complete === false, JSON.stringify(trunc));
   }
 
   // ── I2·I3·I5 수집 실행 ──
@@ -109,8 +118,7 @@ try {
     thFile(CH1, "1787193938.792269", ["1787194200.111111"]),
     chFile(STRAY, [["1787195401.000000", "남의 채널 글"]]),
   ];
-  const plan = { mode: "collect", units: [planned(u1), planned(u2)] };
-  const NOW = Date.parse("2026-10-16T10:00:00.000Z");
+  const plan = { mode: "collect", units: [planned(u1), planned(u2)], planned_at: PLANNED };
   {
     const res = await ingestRun({ member: A, plan, files, now: NOW });
     const rows = await sources("slack", TEAM, "C0CIPG");
@@ -124,8 +132,8 @@ try {
     const vis = await Promise.all(rows.map((r) => audienceHas(r.id, A)));
     chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean), JSON.stringify(vis));
     const a1 = await unitBy(CH1), a2 = await unitBy(CH2);
-    chk("I2c 끝까지 읽은 단위는 위치 = 채널에서 본 가장 새 ts · 읽은 시각 = 이 판", a1.cursor?.ts === "1787195400.000200" && new Date(a1.read_at).getTime() === NOW && p1?.cursor_moved === true,
-      JSON.stringify({ cursor: a1.cursor, read_at: a1.read_at }));
+    chk("I2c 끝까지 읽은 단위(끝이 «지금»)는 위치 = 계획 시각 − 60초 · 읽은 시각 = 이 판", a1.cursor?.ts === `${PLANNED - NOW_MARGIN_SEC}.000000`
+      && new Date(a1.read_at).getTime() === NOW && p1?.cursor_moved === true && p1?.complete === true, JSON.stringify({ cursor: a1.cursor, read_at: a1.read_at, p1 }));
     chk("I2d 이 판이 안 읽은 단위는 위치·읽은 시각을 안 옮긴다(다음 판이 다시 맡는다)", p2?.reads === 0 && p2?.reason === "이 판이 읽지 않음" && a2.read_at == null
       && JSON.stringify(a2.cursor ?? {}) === "{}", JSON.stringify({ p2, read_at: a2.read_at, cursor: a2.cursor }));
     const again = await ingestRun({ member: A, plan, files, now: NOW + 60_000 });
@@ -133,32 +141,59 @@ try {
     chk("I5 같은 원문을 다시 넣어도 새 행이 없다(inserted 0) — 같은 좌표", again.inserted === 0 && again.stored === 3 && rows2.length === 3, JSON.stringify({ ...again, per_unit: undefined }));
   }
   {
+    //  못 다 읽은 판 — 시작점은 그대로(못 다 읽은 구간을 넘기지 않는다) · 구간만 줄인다 · 읽은 항목은 저장한다.
+    const res = await ingestRun({ member: A, plan: { ...plan, units: [planned(u2)] }, now: NOW,
+      files: [chFile(CH2, [["1787300000.000001", "글", "Thread: 2 replies (latest: z)"]])] });
+    const a2 = await unitBy(CH2), p = res.per_unit?.[0];
+    chk("I2e 답글 있는 부모의 스레드를 안 읽은 판 — 위치 그대로 + 구간 반 · 항목은 저장 · «확인 필요»",
+      p?.complete === false && p?.cursor_moved === false && p?.window_shrunk === true && p?.inserted === 1 && a2.cursor?.ts === SINCE
+        && a2.cursor?.span === 7 * 86400 / 2 && res.partial === true && res.incomplete === 1,
+      JSON.stringify({ p, cursor: a2.cursor, partial: res.partial }));
+  }
+  {
+    //  저장이 하나라도 실패한 판(NUL 글자 — Postgres 가 받지 않는다) · 원문이 잘린 판은 위치·구간을 아예 건드리지 않는다.
+    const before = (await unitBy(CH1)).cursor;
+    const nul = await ingestRun({ member: A, plan: { ...plan, planned_at: PLANNED + 3600 }, now: NOW + 3_600_000,
+      files: [chFile(CH1, [["1787199000.000001", "깨진\u0000글"], ["1787199100.000001", "멀쩡한 글"]])] });
+    const afterNul = (await unitBy(CH1)).cursor, pn = nul.per_unit?.find((p) => p.id === u1.id);
+    chk("I6a 저장 실패가 있으면 위치를 안 옮긴다(다음 판이 다시 읽어 합친다) · 실패 수를 남긴다",
+      pn?.failed === 1 && pn?.stored === 1 && JSON.stringify(afterNul) === JSON.stringify(before) && /저장 실패/.test(pn?.reason ?? "") && nul.partial === true,
+      JSON.stringify({ pn, before, afterNul }));
+    const cut = await ingestRun({ member: A, plan: { ...plan, planned_at: PLANNED + 7200 }, now: NOW + 7_200_000, truncated: true,
+      files: [chFile(CH1, [["1787199200.000001", "잘린 판의 글"]])] });
+    const afterCut = (await unitBy(CH1)).cursor, pc = cut.per_unit?.find((p) => p.id === u1.id);
+    chk("I6b 원문이 잘린 판(뒤쪽 결과를 못 봤다)은 위치를 안 옮긴다 · 읽은 항목은 저장한다",
+      pc?.inserted === 1 && JSON.stringify(afterCut) === JSON.stringify(before) && pc?.reason === "원문이 잘림", JSON.stringify({ pc, afterCut }));
+  }
+  {
     //  B 는 이 단위를 볼 수 있는 구성원이 아니다 — 원문을 B 의 실행 결과로 넣으면 저장도 위치도 거절된다.
-    const res = await ingestRun({ member: B, plan: { mode: "collect", units: [planned(u1)] }, files: [chFile(CH1, [["1787199999.000001", "B 가 넣으려는 글"]])], now: NOW });
+    const before = (await unitBy(CH1)).cursor;
+    const res = await ingestRun({ member: B, plan: { ...plan, units: [planned(u1)] }, files: [chFile(CH1, [["1787199999.000001", "B 가 넣으려는 글"]])], now: NOW });
     const p = res.per_unit?.[0];
     const row = (await sources("slack", TEAM, `${CH1}:1787199999`))[0];
-    const a1 = await unitBy(CH1);
-    chk("I6 볼 수 있는 구성원이 아닌 실행은 저장·위치 이동 둘 다 못 한다", p?.stored === 0 && !row && a1.cursor?.ts === "1787195400.000200" && /볼 수 있는 구성원/.test(p?.reason ?? ""),
-      JSON.stringify({ p, row: !!row, cursor: a1.cursor }));
+    chk("I6c 볼 수 있는 구성원이 아닌 실행은 저장·위치 이동 둘 다 못 한다", p?.stored === 0 && !row && JSON.stringify((await unitBy(CH1)).cursor) === JSON.stringify(before)
+      && /볼 수 있는 구성원/.test(p?.reason ?? ""), JSON.stringify({ p, row: !!row }));
   }
 
   // ── 지메일 · 노션 ──
   {
     const lres = await ingestRun({ member: A, plan: { mode: "listing", app: "gmail" }, files: [file("Gmail", "search_threads", { threads: [{ id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001")] }] })] });
     const box = await unitBy(BOX_A, "gmail", "default");
-    chk("I1e 지메일 목록 — 그 사람 이메일과 같은 메일함만 단위(T10 규칙) · 볼 수 있는 구성원", lres.created === 1 && box?.kind === "mailbox" && (await viewer(box.id, A))?.verified_at != null,
+    chk("I1f 지메일 목록 — 그 사람 이메일과 같은 메일함만 단위(T10 규칙) · 볼 수 있는 구성원", lres.created === 1 && box?.kind === "mailbox" && (await viewer(box.id, A))?.verified_at != null,
       JSON.stringify({ lres, box: box && box.kind }));
     const other = await ingestRun({ member: B, plan: { mode: "listing", app: "gmail" }, files: [file("Gmail", "search_threads", { threads: [{ id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001")] }] })] });
-    chk("I1f 남의 메일함 주소로는 단위를 못 세운다(B 의 이메일 ≠ 메일함)", other.created === 0 && !(await viewer(box.id, B)), JSON.stringify(other));
+    chk("I1g 남의 메일함 주소로는 단위를 못 세운다(B 의 이메일 ≠ 메일함) · 받지 않은 수를 남긴다", other.created === 0 && other.refused === 1 && !(await viewer(box.id, B)), JSON.stringify(other));
     await activate(box.id);
+    const gu = { ...planned(box, { connector: "Gmail" }), since: "1790900000", until: "1790986400" };
     const gfiles = [
-      file("Gmail", "search_threads", { threads: [{ id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001")] }] }),
-      file("Gmail", "get_thread", { id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001", { plaintextBody: "본문 전체 — 요약보다 길다" }), GM("18c1a90000000002", "18c1a90000000001", { plaintextBody: "답장" })] }),
+      file("Gmail", "search_threads", { threads: [{ id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001")] }] }, { query: "after:1790900000 before:1790986400", pageSize: 50 }),
+      file("Gmail", "get_thread", { id: "18c1a90000000001", messages: [GM("18c1a90000000001", "18c1a90000000001", { plaintextBody: "본문 전체 — 요약보다 길다" }), GM("18c1a90000000002", "18c1a90000000001", { plaintextBody: "답장" })] },
+        { threadId: "18c1a90000000001", messageFormat: "PLAIN_TEXT" }),
     ];
-    const gres = await ingestRun({ member: A, plan: { mode: "collect", units: [{ ...planned(box, { connector: "Gmail" }), since: "1790900000", until: "1790986400" }] }, files: gfiles, now: NOW });
+    const gres = await ingestRun({ member: A, plan: { mode: "collect", units: [gu], planned_at: PLANNED }, files: gfiles, now: NOW });
     const g = await sources("gmail", "default", "18c1a9");
     const gb = await unitBy(BOX_A, "gmail", "default");
-    chk("I2e 지메일 — 좌표 = 메시지 id · parent = 스레드 · 본문 전체(요약이 아니다) · 위치 = 구간 끝",
+    chk("I2f 지메일 — 좌표 = 메시지 id · parent = 스레드 · 본문 전체(요약이 아니다) · 위치 = 구간 끝",
       gres.per_unit?.[0]?.inserted === 2 && g.length === 2 && g[0].body_md === "본문 전체 — 요약보다 길다" && g[1].parent_external_id === "18c1a90000000001" && gb.cursor?.after === 1790986400,
       JSON.stringify({ g: g.map((r) => [r.external_id, r.parent_external_id, r.body_md]), cursor: gb.cursor }));
   }
@@ -166,33 +201,51 @@ try {
     await store.recordUnitListing({ member: A, app: "notion", connector: "Notion", instance: NOTION_INST, items: [{ ref: PAGE, kind: "page", name: "회의록" }], verified: true });
     const pu = await unitBy(PAGE, "notion", NOTION_INST);
     await activate(pu.id);
-    const nres = await ingestRun({ member: A, plan: { mode: "collect", units: [planned(pu, { connector: "Notion", since: null })] }, now: NOW, files: [
-      file("Notion", "notion-fetch", { metadata: { type: "page" }, title: "회의록", url: `https://www.notion.so/x-${PAGE.replace(/-/g, "")}`, text: "<content>\n본문\n</content>", page_last_edited_at: "2026-08-25T10:37:30.618Z" }),
+    const nplan = { mode: "collect", units: [planned(pu, { connector: "Notion", since: null })], planned_at: PLANNED };
+    const nres = await ingestRun({ member: A, plan: nplan, now: NOW, files: [
+      file("Notion", "notion-fetch", { metadata: { type: "page" }, title: "회의록", url: `https://www.notion.so/x-${PAGE.replace(/-/g, "")}`, text: "<content>\n본문\n</content>", page_last_edited_at: "2026-08-25T10:37:30.618Z" }, { id: PAGE }),
     ] });
     const n = await sources("notion", NOTION_INST, PAGE);
-    chk("I2f 노션 — 좌표 = 하이픈 UUID · 위치 = 수정 시각", nres.per_unit?.[0]?.inserted === 1 && n.length === 1 && (await unitBy(PAGE, "notion", NOTION_INST)).cursor?.edited_at === "2026-08-25T10:37:30.618Z",
+    chk("I2g 노션 — 좌표 = 하이픈 UUID · 위치 = 수정 시각", nres.per_unit?.[0]?.inserted === 1 && n.length === 1 && (await unitBy(PAGE, "notion", NOTION_INST)).cursor?.edited_at === "2026-08-25T10:37:30.618Z",
       JSON.stringify({ nres: { ...nres, per_unit: undefined }, n: n.length }));
+    const err = await ingestRun({ member: A, plan: nplan, now: NOW, files: [file("Notion", "notion-fetch", { error: "object_not_found" }, { id: PAGE })] });
+    const n2 = await itemsPool.query(`SELECT title, body_md FROM source WHERE external_system='notion' AND external_instance=$1 AND external_id=$2`, [NOTION_INST, PAGE]);
+    chk("I2h 노션 오류 결과는 있던 페이지를 빈 페이지로 덮지 않는다", err.per_unit?.[0]?.unparsed === 1 && err.per_unit?.[0]?.stored === 0 && n2.rows[0]?.title === "회의록" && /본문/.test(n2.rows[0]?.body_md ?? ""),
+      JSON.stringify({ err: err.per_unit?.[0], row: n2.rows[0] }));
+  }
+  {
+    //  팀이 하나뿐이라 «그 팀» 으로 추정한 목록은 «전부» 로 넘기지 않는다(틀린 팀이면 그 팀의 via-listing 자리를 지운다).
+    await itemsPool.query(`DELETE FROM collect_unit WHERE app='slack' AND instance=$1`, [TEAM2]);
+    const res = await ingestRun({ member: A, plan: { mode: "listing", app: "slack" }, files: [listFile([["C0CIPG0005", "fresh", "Public Channel"]])] });
+    chk("I1h 추정한 팀(single)의 목록은 «전부» 가 아니다 — A 의 다른 단위에서 A 를 빼지 않는다",
+      res.instance === TEAM && res.complete === false && !!(await viewer(u1.id, A)), JSON.stringify(res));
   }
 
-  // ── I4 한 실행은 한 번만 ──
+  // ── I4 한 실행은 그 주인이 한 번만 ──
   {
     const runId = "cr-20261016100000-cipg01";
     await log.recordRunStart({ runId, member: A, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(NOW), mode: "collect", plan });
-    const c1 = await log.claimIngest(runId), c2 = await log.claimIngest(runId);
-    chk("I4 차례 잡기 — 처음 한 번만 · 계획·구성원은 실행 기록에서", c1 && c1.member === A && c1.mode === "collect" && c1.plan?.units?.length === 2 && c2 === null, JSON.stringify({ c1: !!c1, c2 }));
+    chk("I4 남의 실행은 못 잡는다(주인 확인)", (await log.claimIngest(runId, B)) === null);
+    const claims = await Promise.all([1, 2, 3, 4, 5].map(() => log.claimIngest(runId, A)));
+    const won = claims.filter(Boolean);
+    chk("I4b 동시에 다섯이 잡아도 하나만 · 계획·구성원은 실행 기록에서", won.length === 1 && won[0].member === A && won[0].mode === "collect" && won[0].plan?.units?.length === 2,
+      JSON.stringify({ won: won.length }));
+    const tp = toIngestPlan(won[0]?.mode, won[0]?.plan);
+    chk("I4c 실행 기록의 계획 → 저장 단계 계획(계획 시각 포함 · 모양이 틀린 단위는 뺀다 · 점검은 없음)", tp?.units?.length === 2 && tp?.planned_at === PLANNED
+      && toIngestPlan("collect", { units: [{ id: 1, app: "slack", ref: "bad ref", instance: "" }] })?.units?.length === 0 && toIngestPlan("probe", {}) === null, JSON.stringify(tp));
     await log.finishIngest(runId, { state: "done", stored: 3 });
     const v = await log.getRunIngest(runId);
-    chk("I4b 끝낸 실행은 다시 안 잡히고 결과가 남는다", v?.state === "done" && v?.stored === 3 && v?.mode === "collect" && (await log.claimIngest(runId)) === null, JSON.stringify(v));
-    const stuck = "cr-20261016100000-cipg02";
-    await log.recordRunStart({ runId: stuck, member: A, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(NOW), mode: "collect", plan });
+    chk("I4d 끝낸 실행은 다시 안 잡히고 결과가 남는다", v?.state === "done" && v?.stored === 3 && v?.mode === "collect" && (await log.claimIngest(runId, A)) === null, JSON.stringify(v));
+    const stuck = "cr-20261016100000-cipg02", fresh = "cr-20261016100000-cipg03";
+    for (const id of [stuck, fresh]) await log.recordRunStart({ runId: id, member: A, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(NOW), mode: "collect", plan });
     await itemsPool.query(`UPDATE collect_run SET ingest = jsonb_build_object('state','running','at', now() - interval '16 minutes') WHERE run_id=$1`, [stuck]);
-    const fresh = "cr-20261016100000-cipg03";
-    await log.recordRunStart({ runId: fresh, member: A, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(NOW), mode: "collect", plan });
     await itemsPool.query(`UPDATE collect_run SET ingest = jsonb_build_object('state','running','at', now() - interval '14 minutes') WHERE run_id=$1`, [fresh]);
-    chk("I4c 처리 중에 멈춘 지 15분이 지나면 다시 잡힌다(14분은 아니다)", !!(await log.claimIngest(stuck)) && (await log.claimIngest(fresh)) === null);
+    chk("I4e 처리 중에 멈춘 지 15분이 지나면 다시 잡힌다(14분은 아니다)", !!(await log.claimIngest(stuck, A)) && (await log.claimIngest(fresh, A)) === null);
     const probe = "cr-20261016100000-cipg04";
     await log.recordRunStart({ runId: probe, member: A, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(NOW) });
-    chk("I4d 점검 실행(종류 없음)은 저장 차례가 안 잡힌다", (await log.claimIngest(probe)) === null);
+    chk("I4f 점검 실행(종류 없음)은 저장 차례가 안 잡힌다", (await log.claimIngest(probe, A)) === null);
+    const plans = (await itemsPool.query(`SELECT plan::text AS p FROM collect_run WHERE member_id=$1 AND plan IS NOT NULL`, [A])).rows.map((r) => r.p);
+    chk("I4g 실행 기록의 계획에 단위 이름이 없다(비공개 채널·DM 이름은 collect_unit 에만)", plans.length > 0 && plans.every((p) => !p.includes("#c1") && !/"name"/.test(p)), plans[0]);
   }
 
   // ── J2 실행 종류 — 띄우기 전에 거절 ──

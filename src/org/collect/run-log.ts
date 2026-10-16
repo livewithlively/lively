@@ -113,7 +113,10 @@ export interface CollectRunListRow {
   tool_calls: number | null; tool_errors: number | null; captures: number | null;
   mode: string | null; attempts: number | null;
   /** 저장 단계 결과의 요약(목록·수집 실행만) — 화면은 수만 쓴다. */
-  ingest: { state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; error?: string } | null;
+  ingest: {
+    state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
+    unparsed?: number; failed?: number; incomplete?: number; partial?: boolean; error?: string;
+  } | null;
 }
 
 const num = (v: unknown): number | null => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
@@ -182,7 +185,8 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
   const n = (x: unknown): number | undefined => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
   return {
     state: typeof j.state === "string" ? j.state : undefined,
-    stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created),
+    stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created), refused: n(j.refused),
+    unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), partial: j.partial === true ? true : undefined,
     error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
   };
 }
@@ -196,12 +200,13 @@ const INGEST_STALE_MIN = 15;
  * 이 실행의 저장 차례를 잡는다 — 목록·수집 실행이고 아직 안 했거나(붙잡은 채 오래됐으면) 잡고, 계획을 돌려준다. 이미 했으면 null.
  *  여러 게이트웨이·여러 읽기가 같은 실행을 동시에 봐도 한 곳만 넣는다(UPDATE … WHERE 한 문장).
  */
-export async function claimIngest(runId: string): Promise<{ member: string; mode: string; plan: unknown } | null> {
+export async function claimIngest(runId: string, member: string): Promise<{ member: string; mode: string; plan: unknown } | null> {
+  //  그 실행의 주인만 잡는다 — 원문은 부르는 사람의 홈에서 읽으므로, 남의 실행 id 로 내 홈의 원문을 그 사람 실행으로 넣지 못하게.
   const r = await itemsPool.query(
     `UPDATE collect_run SET ingest = jsonb_build_object('state','running','at',now()), updated_at = now()
-      WHERE run_id = $1 AND mode IN ('listing','collect')
+      WHERE run_id = $1 AND member_id = $2 AND mode IN ('listing','collect')
         AND (ingest IS NULL OR (ingest->>'state' = 'running' AND (ingest->>'at')::timestamptz < now() - interval '${INGEST_STALE_MIN} minutes'))
-      RETURNING member_id, mode, plan`, [runId]);
+      RETURNING member_id, mode, plan`, [runId, member]);
   const row = r.rows[0] as { member_id: string; mode: string; plan: unknown } | undefined;
   return row ? { member: row.member_id, mode: row.mode, plan: row.plan } : null;
 }

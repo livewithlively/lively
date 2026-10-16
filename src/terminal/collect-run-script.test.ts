@@ -16,7 +16,7 @@
 //   R4 옛 claude(플래그 없음) → 그 플래그를 안 붙인다                   R5 서버 목록이 빔 → no-connector
 //   R6 시간 상한 초과 → 끊고 timeout · 끝 신호                        R7 일감 깨짐 → job.json 실패 · 끝 신호
 //   R8 사용자 설정을 뺀다(--setting-sources project,local — 지원할 때만)  R9 큰 결과가 러너 한 판을 지나 원문으로 남고, Claude 프로젝트 폴더는 치운다
-//   R11~R15 커넥터가 안 뜬 판 다시 띄우기 · R16 claude 가 지시를 안 읽고 끝나도 러너는 죽지 않는다(EPIPE)
+//   R11~R15 커넥터가 안 뜬 판 다시 띄우기 · R16 claude 가 지시를 안 읽고 끝나도 러너는 죽지 않는다(EPIPE) · R17 다시 띄우기 전에 상한이 오면 끝
 //   R10 컨테이너 메모리(/proc/meminfo) — 상한(MemTotal) · 시작 · 최고 / 파일이 없으면 null(맥)
 //   S1 쓰기 셸 0600 · S2 끝난 폴더(done·세션 id·목록) · S3 없음/도는 중(반쯤 쓰인 줄 버림)
 //   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절 · P7 쓰기 셸 크기 상한(경계)
@@ -393,13 +393,13 @@ t("S4 원문 읽기 — 받은 순서대로 · 이름 모양이 맞는 파일만
   assert.deepEqual(c.files.map((f) => f.n), [1, 2], "이름순(받은 순서) · 깨진 것·모양 밖은 빠진다");
   assert.equal(c.total, 3);
   assert.equal(c.truncated, false);
-  //  상한 — 첫 파일만 들어갈 크기
-  const small = spawnSync("sh", ["-c", collectCapsReadSh(dir, 1024)], { encoding: "utf8" });
+  //  상한 — 바이트로 센다. 작은 파일 셋은 1KB(바닥) 안에 들고, 한글 2,000자 파일(약 6,000바이트 · 2,000글자)은 4KB 상한에서 넘친다
+  //   (글자 수로 세면 앞 파일들까지 약 2,150 이라 들어간다 — 그래서 4KB 가 «바이트로 센다» 를 가른다).
+  const small = parseCollectCaps(spawnSync("sh", ["-c", collectCapsReadSh(dir, 1024)], { encoding: "utf8" }).stdout)!;
+  assert.deepEqual([small.files.length, small.truncated], [2, false], "상한 안이면 다 읽는다");
   put("1792143533000-000001.json", { big: "가".repeat(2000) });
-  const big = parseCollectCaps(spawnSync("sh", ["-c", collectCapsReadSh(dir, 1100)], { encoding: "utf8" }).stdout)!;
-  assert.ok(parseCollectCaps(small.stdout));
-  assert.equal(big.truncated, true);
-  assert.ok(big.files.length >= 1 && big.files.length < 4);
+  const big = parseCollectCaps(spawnSync("sh", ["-c", collectCapsReadSh(dir, 4096)], { encoding: "utf8" }).stdout)!;
+  assert.deepEqual([big.files.length, big.truncated], [2, true], "넘는 파일에서 멈춘다(그 뒤는 안 읽는다)");
   //  폴더가 없으면 빈 결과 · 셸 출력이 깨지면 null
   const none = parseCollectCaps(spawnSync("sh", ["-c", collectCapsReadSh(collectRunDir(home, newCollectRunId(new Date(), "nocaps")))], { encoding: "utf8" }).stdout)!;
   assert.deepEqual([none.files.length, none.total], [0, 0]);
@@ -457,6 +457,14 @@ t("R16 claude 가 지시를 읽기 전에 끝나도(stdin 닫힘) 러너는 죽�
   assert.equal(r.exit.error, "claude exit 7", "«runner: write EPIPE» 가 아니다");
   assert.equal(r.exit.code, 7);
   assert.equal(r.summary.claude.version, "2.1.301", "요약도 남는다");
+});
+
+t("R17 다시 띄우기를 기다리는 사이 시간 상한이 오면 새 claude 를 띄우지 않고 timeout 으로 끝낸다", () => {
+  //  첫 판은 커넥터가 없어 바로 끊긴다 → 3초 뒤 다시 띄우기로 한다 → 그 사이 1초 상한이 온다.
+  const r = runOnce("r17", { apps: ["Slack"], mode: "noload", timeoutSec: 1, env: { LVLY_COLLECT_INIT_WAIT_MS: "4000", LVLY_COLLECT_RETRY_GAP_MS: "3000" } });
+  assert.equal(attemptsOf("r17"), 1, "두 번째 claude 를 띄우지 않았다");
+  assert.equal(r.exit.error, "timeout");
+  assert.equal(r.summary.attempts, 1);
 });
 
 const R7 = runOnce("r7", { apps: ["Slack"], job: "{not json" });
