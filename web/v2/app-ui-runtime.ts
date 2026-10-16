@@ -134,8 +134,8 @@ export const APP_RUNTIME_JS = `
   // #4848 앞단이 «붐빔»(503 busy)으로 거절한 요청은 retry-after(초)만큼 쉬고 한 번만 다시 보낸다 — 앞단은 본문을 다 받기 전에 거절해
   //  코어에 닿지 않았다(다시 보내도 쓰기가 겹치지 않는다). 쉬는 시간은 30초까지(없거나 이상하면 5초), 그 위에 ¼(1초까지)을 흩뿌린다 —
   //  한꺼번에 거절된 화면들이 한꺼번에 돌아오지 않게. 다시 보낸 답이 결과다(또 붐비면 그 실패로).
-  //  ★ 앞단의 모양 그대로({error:"busy"} — code 없음)일 때만 다시 보낸다. 코어의 답은 code 를 싣는 모양이라, 코어가 언젠가 busy 를 써도
-  //   이미 실행한 쓰기를 다시 보내지 않는다(코어 src/apps/app-front-api.ts apiErrorReply 주석).
+  //  ★ 앞단의 모양 그대로({error:"busy"} — code 없음)일 때만 다시 보낸다(code 를 실은 busy 는 다시 보내지 않는다). 코어는 그 모양을 내지 않는다는
+  //   약속에 기댄다 — 코어 src/apps/app-front-api.ts apiErrorReply 주석(지금 코어엔 busy 를 쓰는 자리가 없다).
   function frontBusy(status, j) { return status === 503 && !!j && j.error === 'busy' && j.code === undefined; }
   function retryWait(r) {
     var raw = null;
@@ -149,9 +149,12 @@ export const APP_RUNTIME_JS = `
     if (body !== undefined) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
     return send(path, init, false);
   }
+  // #4848 서버의 답을 받지 못했다(연결 끊김 · 오프라인 — fetch · 본문 읽기의 TypeError) — 같은 모양으로(status · reason null · 원래 오류는 cause).
+  //  서버가 쓰기를 마친 뒤 답만 잃었을 수도 있어 «안 갔다» 고 단정하지 않는다.
+  function lost(err) { return mkErr('서버의 답을 받지 못했습니다 — 연결을 확인하고 다시 시도해 주세요.', -32000, { cause: err }); }
   function send(path, init, again) {
     return fetch('/_lively' + path, init).then(function (r) {
-      return r.text().then(function (t) {
+      return r.text().then(null, function (err) { throw lost(err); }).then(function (t) {
         var j = null;
         try { j = t ? JSON.parse(t) : null; } catch (_) { j = null; }
         if (r.ok) return j;
@@ -171,10 +174,7 @@ export const APP_RUNTIME_JS = `
         }
         throw e;
       });
-    }, function (err) {
-      // #4848 서버에 닿지 못했다(연결 끊김 · 오프라인 — fetch 의 TypeError) — 실패도 같은 모양으로(status · reason null · 원래 오류는 cause).
-      throw mkErr('서버에 닿지 못했습니다 — 연결을 확인하고 다시 시도해 주세요.', -32000, { cause: err });
-    });
+    }, function (err) { throw lost(err); });
   }
   var NO_SESSION = '붙은 세션이 없습니다 — 라이블리 화면 안에서 세션에 붙은 앱으로 열었을 때만 쓸 수 있습니다';
   var NO_HOST = '라이블리 화면 밖(새 탭 · 폰 홈 화면)에서는 쓸 수 없습니다';

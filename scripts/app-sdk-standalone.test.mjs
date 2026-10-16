@@ -57,11 +57,11 @@ function bootAlone(routes, opts = {}) {
     const method = (init.method || "GET").toUpperCase();
     fetched.push({ url, method, body: init.body === undefined ? undefined : JSON.parse(init.body), headers: init.headers, credentials: init.credentials });
     const r = routes(method, url, init.body === undefined ? undefined : JSON.parse(init.body)) || { status: 404, json: { error: "없음" } };
-    if (r.reject) throw r.reject;   // #4848 서버에 닿지 못함(fetch 의 TypeError)
+    if (r.reject) throw r.reject;   // #4848 서버의 답을 받지 못함(fetch 의 TypeError)
     //  답 머리(retry-after 등 — #4848) · JSON 이 아닌 본문(HTML 413 등)도 흉내 낸다.
     const hdrs = Object.fromEntries(Object.entries(r.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
     return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: (k) => hdrs[String(k).toLowerCase()] ?? null },
-      text: async () => (r.text !== undefined ? r.text : r.json === undefined ? "" : JSON.stringify(r.json)) };
+      text: async () => { if (r.textReject) throw r.textReject; return r.text !== undefined ? r.text : r.json === undefined ? "" : JSON.stringify(r.json); } };
   };
   //  #4848 쉬는 시간 — opts.timers 를 주면 SDK 의 setTimeout 이 기다리지 않고 곧바로 돌며 쉰 시간(ms)을 적는다(관측 = 적힌 값).
   const timerFn = opts.timers ? (fn, ms) => { opts.timers.push(ms); setImmediate(fn); return 0; } : setTimeout;
@@ -385,7 +385,8 @@ const korean = (s) => typeof s === "string" && /[가-힣]/.test(s);
     const before = fetched.length;
     const e = await lively.store.sql("insert into t values ($1)", ["x"]).then(() => null, (x) => x);
     ok(e && e.reason === reason && e.status === route.status && e.code === code, `S18 ${name} → reason ${reason} · ${route.status} · ${code}`);
-    ok(korean(e.message) && e.message !== reason && e.message !== (route.json && route.json.error), `S18 ${name} 글은 SDK 의 사람이 읽을 말로 바뀐다(${e.message})`);
+    ok(korean(e.message) && e.message !== reason && e.message !== (route.json && route.json.error) && e.message !== `요청이 실패했습니다(${route.status})`,
+      `S18 ${name} 글은 SDK 의 사람이 읽을 말로 바뀐다(${e.message})`);
     eq([fetched.length - before, timers.length], [1, 0], `S18 ${name} 다시 보내지 않는다`);
   }
   let n = 0;
@@ -425,6 +426,12 @@ const korean = (s) => typeof s === "string" && /[가-힣]/.test(s);
   await lively.ready;
   const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
   ok(e && e.code === -32000 && e.status === null && e.reason === null && e.cause === boom && korean(e.message), `S18 C17 끊김 → -32000 · null · null · cause(${e && e.message})`);
+  //  (C18) 답 머리 뒤 본문을 읽다 끊김 — 같은 모양(격리 리뷰 재검토 1)
+  const cut = new TypeError("network error");
+  const { lively: L2 } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": { status: 200, textReject: cut } }));
+  await L2.ready;
+  const e2 = await L2.store.insert("notes", {}).then(() => null, (x) => x);
+  ok(e2 && e2.code === -32000 && e2.status === null && e2.reason === null && e2.cause === cut, `S18 C18 본문 읽다 끊김 → -32000 · null · null · cause`);
 }
 
 console.log(`\n${pass} passed`);

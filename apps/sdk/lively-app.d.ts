@@ -17,7 +17,8 @@ declare global {
  *    쓰기가 겹치지 않는다). 그래도 붐비면 `reason: "busy"` 로 실패한다 — 잠시 뒤 사람이 다시 누르게 한다.
  *  · `body_too_large` — 한 번에 1MB 까지다. 나눠 보내거나, 큰 파일은 `lively.files.url` 의 서명 주소로 올린다.
  *    서버가 제 글을 준 413(개인 설정 16KB · 파일 읽기 8MB · SQL 결과 상한)은 `reason` 이 null 이고 글은 서버의 것 그대로다(그 글이 맞는 안내다).
- *  · 서버에 닿지 못하면(연결 끊김 · 오프라인) `code` -32000 · `status` · `reason` null · 원래 오류는 `cause`.
+ *  · 서버의 답을 받지 못하면(연결 끊김 · 오프라인) `code` -32000 · `status` · `reason` null — 새 탭 · 폰(맨몸)에선 원래 오류가 `cause` 에 있다
+ *    (라이블리 안에선 호스트가 받은 브라우저 글 그대로). 서버가 쓰기를 마친 뒤 답만 잃었을 수도 있다 — 다시 보내기 전에 표를 다시 읽어 본다.
  */
 export interface LivelyError extends Error {
   /** JSON-RPC 코드(종전 그대로) — -32001 권한 밖 · -32602 인자 · -32601 못 하는 자리 · -32000 그 밖. */
