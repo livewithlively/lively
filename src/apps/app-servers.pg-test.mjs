@@ -64,6 +64,7 @@ const { watchAppServers, runAppServerHousekeeping, retireUnusedServers, refreshU
 const { recordAppServerCall, flushAppServerUsage, resetUsageForTest, USAGE_BUCKET_SEC } = await import(`${D}/apps/app-server-usage.js`);
 const { resetGuardLayerCacheForTest } = await import(`${D}/apps/app-server-layer.js`);
 const { appServerPolicy, setServerStopped, claimServerRow } = await import(`${D}/apps/app-server-store.js`);
+const { mintAppServerFunctionToken, revokeStaleFunctionTokens } = await import(`${D}/apps/app-server-auth.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
 
@@ -312,6 +313,22 @@ const adminTok = await call("app_server_token_mint", { app_id: "srv" }, boss);
   const touched = log.slice(n0).filter((x) => ["createFunction", "updateFunctionCode", "updateFunctionConfiguration", "publishVersion", "invoke", "putAlias"].includes(x[0]));
   chk("G2 ★ 공개 키 없음 · 깨진 키 · 라이블리 주소 못 정함 → 실패 · AWS 함수에 손대지 않음", g2.status === "failed" && /공개 키/.test(String(g2.error)) && g2b.status === "failed"
     && g2c.status === "failed" && /LIVELY_API_URL/.test(String(g2c.error)) && touched.length === 0, JSON.stringify({ g2: g2.error, g2b: g2b.error, g2c: g2c.error, touched }));
+}
+
+// G2d ★ 신원 공개 키가 없을 때 «새 앱» 의 첫 배포가 503 이면 함수 줄이 남지 않는다 — 줄을 잡기 전에 본다(#4792 함수 수 칸을 빈 줄이 차지하지 않게 ·
+//  main 의 #4792 와 합치며 정한 순서 · 합치기 격리 리뷰가 «이 순서를 지키는 시험이 없다» 고 짚었다)
+{
+  const keepKeys = process.env.LIVELY_APP_IDENTITY_PUBKEYS;
+  await call("app_save", { files: filesOf().map((f) => (f.path === "lively-app.json" ? { ...f, content: f.content.replace('"id":"srv"', '"id":"g2new"') } : f)) }, alice, aliceCtx);
+  const before = Number((await q(`SELECT count(*)::int AS n FROM org_app_server`))[0].n);
+  delete process.env.LIVELY_APP_IDENTITY_PUBKEYS;
+  let r;
+  try { r = await call("app_server_deploy", { app_id: "g2new", wait_s: 120 }, alice, aliceCtx); } finally { process.env.LIVELY_APP_IDENTITY_PUBKEYS = keepKeys; }
+  const after = Number((await q(`SELECT count(*)::int AS n FROM org_app_server`))[0].n);
+  const left = (await q(`SELECT 1 FROM org_app_server WHERE app_id='g2new'`))[0];
+  chk("G2d ★ 공개 키 없음 → 새 앱의 첫 배포 실패 · 함수 줄이 남지 않는다(함수 수 칸을 안 차지한다)", r.status === "failed" && /공개 키/.test(String(r.error)) && !left && after === before,
+    JSON.stringify({ status: r.status, error: r.error, row: !!left, before, after }));
+  await call("org_app_remove", { app_id: "g2new" }, boss);
 }
 
 // D4 남이 저장한 판 — 내 세션에서 빌드하지 않는다
@@ -1062,7 +1079,11 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   //  빌드한 지 30일이 지난 빌드여도 걷은 뒤엔 유예 — 같은 틱의 옛 빌드 정리가 지우지 않는다(격리 리뷰: 걷은 줄이 사라지면 별칭 참조도 사라졌다).
   await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='ret-a'`);
   const lg0 = calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length;
-  const h3 = (await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} })).retire;
+  //  X2c 회수는 줄을 지우기 «전»(잠금을 쥔 채)에 — 줄이 있는 때 불렸는지 본다(합치기 격리 리뷰: 기다리던 배포의 새 토큰과 겹치지 않게)
+  const seenRevoke = [];
+  setServerDepsForTest({ ...baseDepsW(), revokeFunctionTokens: async (app, keep) => { seenRevoke.push({ app, row: !!(await rowOf(app)) }); return revokeStaleFunctionTokens(app, keep); } });
+  const h3 = (await runAppServerHousekeeping({ api, usage: async () => new Map(), notify: async () => {} })).retire;
+  setServerDepsForTest(baseDepsW());
   const builds = await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='ret-a' AND status='ok'`);
   chk("X2 7일 − 1분은 그대로 · 7일이면 함수 · 로그 그룹 · 줄을 걷고 빌드 기록 · zip 은 남는다", keptFn && !h2.retired.includes("ret-a") && h3.retired.includes("ret-a")
     && !fns.has(fnOf("ret-a")) && !(await rowOf("ret-a")) && calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length === lg0 + 1
@@ -1071,6 +1092,8 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   //   (main 의 #4791 걷기와 #4485 함수 토큰을 합칠 때 찾은 틈).
   const retTok = await fnTokens("ret-a");
   chk("X2b ★ 걷으면 그 함수의 앱 서버 토큰도 전부 회수", retTok.length > 0 && retTok.every((t) => !!t.revoked_at), JSON.stringify(retTok));
+  const retRevokes = seenRevoke.filter((x) => x.app === "ret-a");
+  chk("X2c 걷기의 토큰 회수는 함수 줄을 지우기 전(줄이 있는 때 · 잠금을 쥔 채)", retRevokes.length >= 1 && retRevokes[0].row === true, JSON.stringify(seenRevoke));
 
   // X3 걷은 뒤 서버 판으로 되돌리면 — 남은 빌드로 함수를 다시 만든다(빌드 없이)
   const seats0 = seats.length;
@@ -1200,6 +1223,17 @@ const readyToRetire = async (id) => {
     && zipKeys.length > 0 && zipKeys.every((k) => deletedZips.includes(k)), JSON.stringify({ left, zipKeys: zipKeys.length, deleted: deletedZips.length }));
   const toks = await fnTokens("srv");
   chk("G6b ★ 앱 지우기 → 이 앱의 함수 토큰 전부 회수(같은 id 로 다시 만들어도 옛 토큰이 살아나지 않게)", toks.length > 0 && toks.every((t) => !!t.revoked_at), JSON.stringify(toks));
+}
+
+// G6c ★ 함수 줄 없이 남은 함수 토큰(걷기가 회수를 못 한 채 줄을 지운 경우)도 앱을 지우면 거둔다(합치기 격리 리뷰)
+{
+  await call("app_save", { files: filesOf().map((f) => (f.path === "lively-app.json" ? { ...f, content: f.content.replace('"id":"srv"', '"id":"tok-left"') } : f)) }, alice, aliceCtx);
+  await mintAppServerFunctionToken("tok-left", "pg-test");
+  const live0 = (await fnTokens("tok-left")).filter((t) => !t.revoked_at).length;
+  const noRow = !(await rowOf("tok-left"));
+  await call("org_app_remove", { app_id: "tok-left" }, boss);
+  const toks = await fnTokens("tok-left");
+  chk("G6c ★ 함수 줄 없이 남은 함수 토큰도 앱을 지우면 회수", noRow && live0 === 1 && toks.length === 1 && toks.every((t) => !!t.revoked_at), JSON.stringify({ noRow, live0, toks }));
 }
 
 // D14 앱 서버 꺼짐 — 배포 503 · 공개는 그대로 된다

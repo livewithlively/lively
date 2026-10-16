@@ -129,7 +129,8 @@ export async function retireUnusedServers(policy: AppServerPolicy, deps: WatchDe
     const res = await retireServer(r.app_id, recheck, deps.api ? { api: deps.api } : {});
     if (res.retired) {
       out.retired.push(r.app_id);
-      logger.info({ app: r.app_id, errors: res.errors }, "서버 선언을 뺀 앱의 함수를 걷었다(#4791)");
+      if (res.errors.length) logger.warn({ app: r.app_id, errors: res.errors }, "서버 선언을 뺀 앱의 함수를 걷었지만 못 치운 것이 있다(#4791 · 로그 그룹 · 토큰)");
+      else logger.info({ app: r.app_id }, "서버 선언을 뺀 앱의 함수를 걷었다(#4791)");
     } else out.skipped.push({ app: r.app_id, why: res.skipped ?? "?" });
   }
   return out;
