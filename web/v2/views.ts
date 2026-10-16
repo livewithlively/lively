@@ -55,7 +55,7 @@ export interface Sess {
   /**
    * #4783 — 꺼진 세션의 **목록 줄 겉모습**(session-status.ts stoppedDotKey · stoppedIsPast). 도는 세션엔 없다.
    *  stopDot: 점('' · waiting · done · error) — 시스템이 끈 세션은 끄기 직전 모습, 고장은 «오류».
-   *  stopPast: «지난 세션» 으로 접나 — 사람이 끝냈거나 사유를 모를 때 참(시스템이 끈 것·고장은 거짓). ⚠ 생사(live·alive)와 다른 축이다 — 터미널을 붙일지는 alive 가 정한다.
+   *  stopPast: «지난 세션» 으로 접나 — 사람이 끝냈다고 아는 판만 참(시스템이 끈 것·고장·사유 모름은 거짓). ⚠ 생사(live·alive)와 다른 축이다 — 터미널을 붙일지는 alive 가 정한다.
    */
   stopDot?: '' | 'waiting' | 'done' | 'error';
   stopPast?: boolean;
