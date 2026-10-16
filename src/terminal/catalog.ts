@@ -616,6 +616,10 @@ export interface CreateInput {
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
   loginFor?: string;
+  // #4213 T11 — 수집 실행 세션(kind "collect"): 판이 하네스 대신 **그 실행의 러너**(`node <dir>/run.cjs <dir>`)를 돌린다.
+  //  러너가 끝나면 판이 닫히고, 브로커가 컨테이너를 거둔다(하네스 종료 철거 #4696). 파일은 부르는 쪽이 먼저 써 둔다(collect-run.ts).
+  //  kind "collect" 와 짝이다 — 둘 중 하나만 오면 createSession 이 거절한다(복원이 러너 없이 빈 셸을 띄우지 않게).
+  collectRun?: { dir: string };
   // #1683 다크모드 — 이 세션을 만든 **브라우저 화면의 테마**(해석된 값: dark|light). pane env 로 내려보내
   //  안에서 도는 하네스·TUI 가 배경에 맞는 색을 고르게 한다(COLORFGBG·LIVELY_THEME — sessions.ts 참조).
   //  ⚠ 하네스 설정 파일(~/.claude/settings.json 의 theme 등)은 **건드리지 않는다** — 그건 사람의 설정이고

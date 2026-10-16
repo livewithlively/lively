@@ -28,6 +28,7 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
+import { collectPaneArgv, isCollectRunDir, collectMemLimits } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원
@@ -598,6 +599,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       sp ? { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct } : undefined,
     );
   }
+  //  #4213 T11 — 수집 실행 세션은 **러너와 짝으로만** 연다. 종류만 collect 로 되살아나면(복원·이어받기) 러너 없는 빈 셸이
+  //   사람 목록 밖에서 컨테이너를 붙든 채 남는다. 폴더 모양도 여기서 좁힌다 — 그 값이 판 명령이 된다.
+  if ((input.kind === "collect") !== !!input.collectRun) throw new HttpError(409, "수집 실행 세션은 수집 러너와 함께만 열 수 있습니다");
+  if (input.collectRun && !isCollectRunDir(input.collectRun.dir)) throw new HttpError(400, "수집 실행 폴더 형식이 올바르지 않습니다");
   // 격리 게이트(#524) — spawn·cwd·mkdir 전부 이 값으로 분기(한 번만). 프로젝트 세션도 개인 세션과 '동일하게'
   //  생성자 box_<멤버> 로 격리 실행한다(#524 인증 프로필 단위화): claude 자격증명이 각 box_ 홈(700)에 커널 격리
   //  → 공유 lively 로 띄우면 멤버 간 인증이 안 갈리고 재로그인을 요구했다. 공유 프로젝트 폴더는 lively-shared 그룹으로
@@ -753,15 +758,18 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 이 판정은 codexChatMode 와 **따로** 둔다: 저건 codex 전용 축이고 이건 하네스 무관이다.
   //   둘을 한 값으로 접으면 codex 의 안내 문구가 다른 하네스에도 나간다.
   const chatRuntime = !input.loginFor && !input.fork && sessionRuntimeMode({ harness: harness.key, loginFor: input.loginFor, choice: input.runtime }) === "chat";
-  const launch = input.loginFor
-    ? (harnessLoginArgv(input.loginFor) ?? cmd)
-    : chatMode === "app-server"
-      ? codexAppServerPaneArgv()
-      : chatRuntime
-        ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
-        //  #4695 T5 — 하네스 종료 규칙을 따르는 세션(매니지드 ∧ 사람 세션 ∧ claude·codex·agy)은 런처 ①②③(비정상 종료 처리)을 쓴다.
-        //   그 밖(셀프호스트·위탁·앱·grok·opencode)은 종전 런처 그대로 — 셸로 떨어진다.
-        : harnessLaunchArgv(harness.key, cmd, process.platform, { stopRule: input.kind === "human" && tmuxInSessionContainer(tenantSlug()), resumeArgc });
+  //  #4213 T11 — 수집 실행 세션은 판이 러너 하나다(셸로 감싸지 않는다 — 셸이 남으면 판이 안 닫혀 컨테이너가 안 걷힌다).
+  const launch = input.collectRun
+    ? collectPaneArgv(input.collectRun.dir)
+    : input.loginFor
+      ? (harnessLoginArgv(input.loginFor) ?? cmd)
+      : chatMode === "app-server"
+        ? codexAppServerPaneArgv()
+        : chatRuntime
+          ? chatRuntimePaneArgv({ label: harness.label, bin: harness.bin || harness.key })
+          //  #4695 T5 — 하네스 종료 규칙을 따르는 세션(매니지드 ∧ 사람 세션 ∧ claude·codex·agy)은 런처 ①②③(비정상 종료 처리)을 쓴다.
+          //   그 밖(셀프호스트·위탁·앱·grok·opencode)은 종전 런처 그대로 — 셸로 떨어진다.
+          : harnessLaunchArgv(harness.key, cmd, process.platform, { stopRule: input.kind === "human" && tmuxInSessionContainer(tenantSlug()), resumeArgc });
   const invites = await validInvites(input.invites, ownerId(user));
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
   //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
@@ -886,6 +894,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       }
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    //  #4213 T11 — 수집 실행은 워크스페이스 정책 대신 **작은 고정 크기**다(확정판 §5: 일반 세션의 절반에서 시작, 실측 뒤 조정).
+    //   한 사람의 대화 세션과 나눠 쓰지 않으려고 따로 띄우는 자리라, 크기도 따로 정한다.
+    if (input.kind === "collect") {
+      const lim = collectMemLimits();
+      cg = { highMb: 0, maxMb: lim.maxMb, requestMb: lim.requestMb };
     }
     if (inside) {
       // ── #2545 (3단계) 새 경로 — 생성 순서 역전: ① DB desired 행 → ② 브로커에 세션 컨테이너 → ③ 멤버 홈 준비 → ④ 그 안에서 tmux ──

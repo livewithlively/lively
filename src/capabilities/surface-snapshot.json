@@ -3945,6 +3945,26 @@
   "input_hash": "27ed2a5e56e475a4"
  },
  {
+  "name": "collect_claude_run",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/claude-runs"
+  ],
+  "input_hash": "67f51bbc5a1a816b"
+ },
+ {
+  "name": "collect_claude_run_get",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/collect/claude-runs/:id"
+  ],
+  "input_hash": "b87a2ff2a0e63f0d"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,
