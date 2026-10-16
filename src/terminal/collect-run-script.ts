@@ -211,7 +211,21 @@ const rd = (f) => { try { return fs.readFileSync(f, "utf8").trim(); } catch (_) 
 const W = (f, v) => fs.writeFileSync(P(f), typeof v === "string" ? v : JSON.stringify(v), { mode: 0o600 });
 const t0 = Date.now();
 let job = null, child = null, timedOut = false, finished = false;
-const info = { version: null, flags: {}, servers: [], connectors: [], allowed: [], missing: [], denied: [], attempts: 0, loadMisses: [] };
+const info = { version: null, flags: {}, servers: [], connectors: [], allowed: [], missing: [], denied: [], attempts: 0, loadMisses: [], account: null };
+//  이 홈의 Claude 로그인이 어느 계정인가 — 커넥터는 계정에 붙으므로(웹에서 연결한 계정과 다르면 여기서는 안 보인다) 그 계정을 남긴다.
+//   메일은 앞 두 글자와 도메인만 · 조직 이름 · 계정 종류(개인 구독/팀). 자격(토큰)은 다른 파일이라 읽지 않는다.
+function readAccount() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join((job && job.home) || process.env.HOME || "", ".claude.json"), "utf8"));
+    const a = cfg && cfg.oauthAccount;
+    if (!a || typeof a !== "object") return null;
+    const e = typeof a.emailAddress === "string" ? a.emailAddress : "";
+    const at = e.indexOf("@");
+    const s = (v, n) => (typeof v === "string" && v ? v.slice(0, n) : null);
+    return { email: e ? (at > 0 ? e.slice(0, Math.min(2, at)) + "***" + e.slice(at) : "***") : null,
+      org: s(a.organizationName, 80), orgType: s(a.organizationType, 40), billing: s(a.billingType, 40), role: s(a.organizationRole, 40) };
+  } catch (_) { return null; }
+}
 //  커넥터가 안 뜬 판을 몇 번까지 다시 띄우나 · 시작 알림(init)을 얼마나 기다리나.
 //   (시험이 기다림을 줄이는 env — 운영에서는 안 건드린다.)
 const envMs = (k, d) => { const n = Number(process.env[k]); return Number.isFinite(n) && n > 0 ? n : d; };
@@ -330,7 +344,7 @@ function finish(o) {
   let sum = {};
   try { sum = summarize(); } catch (e) { sum = { summarizeError: String(e && e.message || e) }; }
   const caps = (rd(P("caps.jsonl")) || "").split("\n").filter(Boolean).length;
-  try { W("summary.json", Object.assign({ runId: job && job.runId, apps: job ? job.apps : [], claude: { version: info.version, flags: info.flags }, servers: info.servers, connectors: info.connectors, allowed: info.allowed, missing: info.missing, denied: info.denied.length, attempts: info.attempts, loadMisses: info.loadMisses, captures: caps, mem: memOut, stderrTail: (rd(P("err.log")) || "").slice(-1500) }, sum)); } catch (_) {}
+  try { W("summary.json", Object.assign({ runId: job && job.runId, apps: job ? job.apps : [], claude: { version: info.version, flags: info.flags, account: info.account }, servers: info.servers, connectors: info.connectors, allowed: info.allowed, missing: info.missing, denied: info.denied.length, attempts: info.attempts, loadMisses: info.loadMisses, captures: caps, mem: memOut, stderrTail: (rd(P("err.log")) || "").slice(-1500) }, sum)); } catch (_) {}
   const ex = Object.assign({ startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), durationMs: Date.now() - t0, timedOut }, o);
   try { W("exit.json.tmp", ex); fs.renameSync(P("exit.json.tmp"), P("exit.json")); } catch (_) {}
   try { fs.unlinkSync(P("runner.pid")); } catch (_) {}
@@ -358,6 +372,7 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   const v = await run(["--version"], 30000);
   if (v.code !== 0) { clearTimeout(deadline); finish({ code: v.code, error: "claude --version 실패: " + (v.err || v.out).slice(0, 300) }); return; }
   info.version = v.out.trim().split(/\s+/)[0] || null;
+  info.account = readAccount();
   const help = (await run(["--help"], 30000)).out;
   const has = (s) => help.includes(s);
   info.flags = { tools: has("--tools <"), dontAsk: has("dontAsk"), noPersist: has("--no-session-persistence"), noSkills: has("--disable-slash-commands"), sources: has("--setting-sources") };
