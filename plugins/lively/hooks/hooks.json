@@ -38,6 +38,9 @@
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]},
       {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" Stop"}]}
     ],
+    "StopFailure": [
+      {"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\""}]}
+    ],
     "PreToolUse": [
       {"matcher":".*","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreToolUse"}]}
     ],

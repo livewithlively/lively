@@ -270,7 +270,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(nodeId, sessionId) }, {
     chatSend: () => nodeRpc(nodeId, "chatSend", { id: sessionId, text, harness: harnessKey }),
     inject: opts?.firstPromptTrustOk === undefined
-      ? () => injectPrompt(sessionId, text)
+      ? () => injectPrompt(sessionId, text, { harness: harnessKey })
       : async () => {
         await nodeRpc(nodeId, "injectFirstPrompt", {
           id: sessionId, harness: harnessKey, text, trustOk: opts.firstPromptTrustOk,

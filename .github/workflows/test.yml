@@ -486,6 +486,22 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-folder-archive.pg-test.mjs
+      # ⑤-m3 앱 폴더 판정 · 승계 DB 함수(#4788 · #4684 후속) — 판정 · 맞추기 유닛은 DB 함수를 가짜로 끼워, 뗀 행 거르기 · 붙인 사람 거르기 ·
+      #    승계의 충돌 키 · 앱 제거가 돌려주는 세션 · 주인 조회 오류를 던지는가는 실제 SQL 에서만 보인다. 행 격리 정책을 실제로 켜고 앱 역할로 붙어
+      #    같은 세션 id 를 쓰는 다른 워크스페이스 행이 섞이지 않는지도 본다(격리는 함수가 아니라 정책이 한다).
+      - name: 앱 폴더 판정 · 승계 DB 함수(행 격리 포함) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/session-apps.pg-test.mjs
+      # ⑤-m4 앱 폴더 상한 · 사용량(#4785) — 진짜 게이트웨이(구성원 토큰 · 권한 범위). 책임자 · 관리자만 상한을 바꾸고(남 403 · 못 보는 앱 404),
+      #    CP 쿼터 정비가 부르는 상한 목록 · 사용량 보내기는 관리자만 · 80% · 100% 를 처음 넘을 때만 책임자 + 관리자 알림 · 내려가면 다시 ·
+      #    목록 · 상세의 folder 칸 · 앱을 지우면 사용량 행도. 판정이 SQL(upsert · 단계 기록)과 REST 범위 검사에 있어 목으로는 못 본다.
+      - name: 앱 폴더 상한 · 사용량 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-folder-quota.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

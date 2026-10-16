@@ -23,7 +23,7 @@ try {
   execFileSync(path.join(distRoot, "node_modules/.bin/tsc"),
     [path.join(root, "web/lib/outbox-echo.ts"), "--outDir", tmp, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
     { stdio: "inherit" });
-  const { unconfirmedRow, echoedInTurns, samePrompt, ECHO_SKEW_MS, PROMPT_HEAD } = await import(path.join(tmp, "outbox-echo.js"));
+  const { unconfirmedRow, echoedInTurns, samePrompt, exactPrompt, ECHO_SKEW_MS, PROMPT_HEAD } = await import(path.join(tmp, "outbox-echo.js"));
 
   const QUEUED = "2026-10-16T07:58:32.321Z";
   const MARKED = "2026-10-16T07:59:29.849Z";                // 서버가 «미확인» 으로 마감한 때(행의 updated_at)
@@ -43,8 +43,13 @@ try {
   ok(echoedInTurns(row(), [{ text: SAID, ts: "2026-10-16T07:59:07.361Z" }]) === true, "E2a 행이 생긴 뒤·마감 전 제출된 같은 말(실측 07:59:07) → 기록에 있다");
   ok(echoedInTurns(row(), [{ text: SAID, ts: at(QUEUED, -ECHO_SKEW_MS) }]) === true, "E2b 하한 경계 — 정확히 큐−5초는 있다");
   ok(echoedInTurns(row(), [{ text: SAID, ts: at(QUEUED, -ECHO_SKEW_MS - 1) }]) === false, "E2c 하한 경계 — 그 1ms 앞은 없다(같은 지시를 두 번 보낸 앞 것)");
-  ok(echoedInTurns(row(), [{ text: SAID, ts: at(MARKED, ECHO_SKEW_MS) }]) === true, "E2d 상한 경계 — 정확히 마감+5초는 있다");
-  ok(echoedInTurns(row(), [{ text: SAID, ts: at(MARKED, ECHO_SKEW_MS + 1) }]) === false, "E2e 상한 경계 — 그 1ms 뒤(사람이 나중에 다시 친 같은 말)는 없다");
+  const LONG = "긴 지시 — " + "자료 공개범위를 단위마다 정하게 하고 ".repeat(8) + "꼬리 원문";
+  const LONG_OTHER = LONG.slice(0, PROMPT_HEAD) + " — 꼬리가 전혀 다른 다른 지시";
+  const longRow = (o = {}) => row({ text: LONG, ...o });
+  ok(echoedInTurns(longRow(), [{ text: LONG_OTHER, ts: at(MARKED, ECHO_SKEW_MS) }]) === true, "E2d 제때 끝 경계 — 정확히 마감+5초엔 머리 160자만 같아도 있다(긴 글 꼬리 뒤섞임)");
+  ok(echoedInTurns(longRow(), [{ text: LONG_OTHER, ts: at(MARKED, ECHO_SKEW_MS + 1) }]) === false, "E2e 그 1ms 뒤엔 머리만 같은 말은 없다(꼬리가 다른 다른 지시)");
+  ok(echoedInTurns(longRow(), [{ text: LONG, ts: at(MARKED, ECHO_SKEW_MS + 1) }]) === true, "E2e' 그 1ms 뒤라도 글이 통째로 같으면 있다");
+  ok(echoedInTurns(row(), [{ text: SAID, ts: "2026-10-16T10:30:00Z" }]) === true, "E2e'' 입력칸에 남은 글을 두 시간 뒤 Enter 로 보냈다 — 있다");
   ok(echoedInTurns(row(), [{ text: SAID }]) === false, "E2f 시각 없는 턴은 증거가 아니다");
   ok(echoedInTurns(row(), [{ text: "다른 말", ts: at(QUEUED, 30_000) }, { text: null, ts: at(QUEUED, 30_000) }, { text: "", ts: at(QUEUED, 30_000) }]) === false,
     "E2g 다른 말·글 없는 턴(AI 만 한 턴)은 증거가 아니다");
@@ -72,11 +77,15 @@ try {
       `화면 ${samePrompt(a, b)} · 서버 ${server.samePrompt(a, b)}`);
   }
   const win = server.echoWindowOf({ created_at: QUEUED, updated_at: MARKED });
-  for (const ms of [win.notBefore - 1, win.notBefore, Date.parse(QUEUED) + 30_000, win.userNotAfter, win.userNotAfter + 1]) {
+  for (const ms of [win.notBefore - 1, win.notBefore, Date.parse(QUEUED) + 30_000, win.userNotAfter, win.userNotAfter + 1, win.userNotAfter + 3_600_000]) {
     const ts = new Date(ms).toISOString();
-    const srv = server.scanLinesForPrompt([{ type: "user", timestamp: ts, message: { role: "user", content: SAID } }], SAID, win).found;
-    ok(echoedInTurns(row(), [{ text: SAID, ts }]) === srv, `E3c 사람 말 줄의 증거 창이 서버와 같다 — ${ts}`, `화면 ${echoedInTurns(row(), [{ text: SAID, ts }])} · 서버 ${srv}`);
+    for (const [said, line] of [[SAID, SAID], [LONG, LONG], [LONG, LONG_OTHER]]) {
+      const srv = server.scanLinesForPrompt([{ type: "user", timestamp: ts, message: { role: "user", content: line } }], said, win).found;
+      const cli = echoedInTurns(row({ text: said }), [{ text: line, ts }]);
+      ok(cli === srv, `E3c 사람 말 줄의 증거 판정이 서버와 같다 — ${ts} · ${said === line ? "같은 글" : "머리만 같음"}`, `화면 ${cli} · 서버 ${srv}`);
+    }
   }
+  for (const [a, b] of pairs) ok(exactPrompt(a, b) === server.exactPrompt(a, b), `E3d 통째로 같은 글 판정이 서버와 같다 — ${JSON.stringify(a).slice(0, 24)} vs ${JSON.stringify(b).slice(0, 24)}`);
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 console.log(`\n${pass} passed — 대화창 «이미 기록에 있는 말» 판정(#4819)`);

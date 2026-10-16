@@ -132,15 +132,24 @@ export function draftFromScreen(harness: string, cap: ScreenCapture): string | n
   if (harness === "codex") return codexDraft(cap);
   //  대화상자(질문·승인)가 떠 있으면 입력칸이 없다 — 대화상자의 가로줄 사이를 입력칸으로 읽지 않는다(격리 리뷰 — 지금 실측 화면에선 재현 안 되는 보험).
   if (screenAsks(cap)) return null;
+  return ruledInputText(cap) || null;
+}
+
+/**
+ * claude·agy 입력칸(가로줄 둘 사이 «❯ …»)의 글 — 빈 칸(예시 글 포함)이면 "", **입력칸을 못 찾으면 null**.
+ *  `draftFromScreen` 은 둘을 다 null 로 접는다(쪽지엔 «없음» 하나면 된다). 아웃박스의 제출 확인(submit-check, #4818)은
+ *  «비었다(제출됐다)» 와 «모르는 화면» 을 갈라야 해서 이 함수를 따로 둔다. ⚠ 대화상자 판정(screenAsks)은 부른 쪽이 먼저 한다.
+ *  ⚠ 흐린 예시 글은 원문(-e 캡처)이 있어야 가린다 — 맨글만 받으면 예시 글도 글로 돌아온다.
+ */
+export function ruledInputText(cap: ScreenCapture): string | null {
   const box = ruledInputBox(cap);
   if (!box) return null;
   const marks = /^\s*(?:│\s*)?(?:❯|>)\s?/u;
   const ap = afterPrompt(cap.raw[box.from], cap.plain[box.from], marks);
   if (!ap) return null;
-  if (startsDim(ap.rawRest)) return null;                            // 예시 글(흐린 글씨) = 빈 칸
+  if (startsDim(ap.rawRest)) return "";                              // 예시 글(흐린 글씨) = 빈 칸
   const rest = cap.plain.slice(box.from + 1, box.to).map((l) => l.replace(/\s*│\s*$/u, ""));
-  const text = joinWrapped(ap.text.replace(/\s*│\s*$/u, ""), rest, " ").trim();
-  return text || null;
+  return joinWrapped(ap.text.replace(/\s*│\s*$/u, ""), rest, " ").trim();
 }
 
 /** 줄머리 «›» 앞의 SGR 인자들(굵게 1 · 흐림 2 · 반전 7 …). «›» 로 시작하지 않으면 null. */

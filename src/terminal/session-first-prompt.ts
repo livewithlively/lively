@@ -15,7 +15,8 @@
 import { SHELL_CMDS } from "./phase.js";
 import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
+import { sendKeysToSession, sendKeyToSession, sendDownToSession, pastesFor, oneLineOf, type SendKeysOpts } from "./send-keys.js";
+import { submitGuard, SUBMIT_POLL_MS } from "./submit-check.js";   // #4818 — 넣은 뒤 입력칸에 우리 글이 남았나
 
 export type FirstPromptStep = "wait" | "accept-trust" | "dismiss-update" | "send" | "give-up";
 
@@ -184,7 +185,8 @@ export interface FirstPromptRuntime {
   peek: (id: string) => Promise<{ pane: string; paneCmd: string }>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
-  send: (id: string, text: string) => Promise<void>;
+  /** `opts.paste` — 붙여넣기로 싣는다(#4818 · send-keys 규약 ⑤ — Claude Code 만) */
+  send: (id: string, text: string, opts?: SendKeysOpts) => Promise<void>;
   trustKeys: TrustKeys;
 }
 
@@ -321,9 +323,32 @@ export async function injectFirstPromptWithRuntime(
       continue;
     }
     if (step === "send") {
-      await runtime.send(id, text);
+      await runtime.send(id, text, pastesFor(harness) ? { paste: true } : undefined);
+      if (harness === "claude") await watchSubmit(id, text, runtime);
       return true;
     }
     await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
   }
+}
+
+/** 첫 지시를 넣은 뒤 입력칸을 지켜보는 시간(#4818) — 아웃박스의 에코 창 하나와 같다. 응답을 막지 않는다(createSession 이 `void` 로 띄운다). */
+export const FIRST_SUBMIT_WATCH_MS = 15_000;
+
+/**
+ * 넣은 뒤 FIRST_SUBMIT_WATCH_MS 동안 입력칸을 본다(#4818 — submit-check 머리말): 우리 글이 그대로 남아 있으면 Enter 를 더 누른다.
+ *  아웃박스와 달리 에코 확인이 없어 «창 끝 Enter» 는 없다 — 화면이 우리 글을 보여 줄 때만 누른다.
+ *  ⚠ 일찍 끝내지 않는다: 바쁜 Claude Code 는 글을 읽기 전까지 빈 입력칸을 그대로 보여 준다(«비었다» 가 «제출됐다» 가 아닌 구간).
+ */
+async function watchSubmit(id: string, text: string, runtime: FirstPromptRuntime): Promise<void> {
+  const guard = submitGuard({
+    peek: async () => { try { return { ok: true, pane: (await runtime.peek(id)).pane }; } catch { return { ok: false }; } },
+    enter: () => runtime.trustKeys.enter(id),
+    now: runtime.now,
+  }, oneLineOf(text));
+  const until = runtime.now() + FIRST_SUBMIT_WATCH_MS;
+  while (runtime.now() < until) {
+    await runtime.sleep(SUBMIT_POLL_MS);
+    await guard.tick();
+  }
+  if (guard.presses()) console.warn(`[terminal] 첫 지시가 입력칸에 남아 Enter 를 ${guard.presses()}번 더 눌렀다(${id}) — 제출 확인 #4818`);
 }

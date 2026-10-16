@@ -488,7 +488,7 @@ t("[S19] 아웃박스는 tmux·send-keys 를 직접 부르지 않고 실행 자�
   for (const [what, re] of [
     ["준비 판정의 보기", /await\s+exec\.peek\s*\(\s*\)/],
     ["신뢰 대화상자 키", /acceptTrustDialog\s*\(\s*sessionId\s*,\s*seen\.pane\s*,\s*exec\.trustKeys\s*\(\s*\)\s*\)/],
-    ["치기", /await\s+exec\.type\s*\(\s*row\.text\s*\)/],
+    ["치기", /await\s+exec\.type\s*\(\s*row\.text\s*[,)]/],   // #4818 — 둘째 인자로 붙여넣기 선택을 싣는다(send-keys 규약 ⑤)
     ["미제출 방어 Enter", /await\s+exec\.enter\s*\(\s*\)/],
   ]) assert.ok(outbox.some((l) => re.test(l)), `${OUTBOX} 의 ${what} 가 실행 자리를 안 지난다`);
 

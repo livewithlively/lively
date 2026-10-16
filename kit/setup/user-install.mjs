@@ -148,6 +148,12 @@ function userLevelHooksBlock() {
       { hooks: [{ type: "command", command: hookCmd("stop-writeback-gate.mjs") }] },
       { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
+    // #4821 — API 오류(사용 한도 등)로 끝난 턴엔 Claude Code 가 Stop 대신 StopFailure 만 띄운다. 여기 없으면 턴 시작의 «작업 중» 만 남아,
+    //  한도로 막힌 턴이 하네스 안에서 자동 이어감을 기다리는 동안 하네스 종료 규칙이 그 대기를 못 본다. work-flag 가 Stop 과 같이 «쉼» 으로 보고한다.
+    //  기록 게이트(stop-writeback-gate)는 걸지 않는다 — StopFailure 는 출력·종료코드를 무시하는 이벤트라 막을 수도 없다.
+    StopFailure: [
+      { hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+    ],
   };
 }
 

@@ -68,6 +68,10 @@ t("B5 #4217 배선이 플러그인에도 있다 — Bash 편집 매처 · Agent|
   assert.ok(has("PostToolUse", (e) => e.matcher === "Agent|Task"), "PostToolUse Agent|Task work-flag 가 없다");
   assert.ok(has("SubagentStop", () => true), "SubagentStop work-flag 가 없다");
 });
+t("B5b #4821 StopFailure work-flag 가 플러그인에도 있다 — API 오류로 끝난 턴의 «턴 종료» 보고", () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(PLUGIN, "hooks", "hooks.json"), "utf8")).hooks;
+  assert.ok((hooks.StopFailure ?? []).some((e) => e.hooks.some((h) => /work-flag\.mjs"$/.test(h.command))), "StopFailure work-flag 가 없다");
+});
 
 // B6 — 플러그인 트리 안에서 import 가 전부 풀린다. 정적 상대 import 는 전부, 동적 import(try/catch 폴백 묶음)는
 //  파일마다 후보 중 하나 이상이 있어야 한다. 트리 밖(설치 홈·kit)을 가리키면 마켓플레이스 설치본에선 없다.

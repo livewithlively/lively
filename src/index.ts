@@ -110,7 +110,7 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { assertSessionCwdVisibleTo } = await import("./v6/shared-folder-store.js");
   const { viewerOf } = await import("./capabilities/principal.js");
   //  #4684 — 세션에 붙인 앱 폴더(확보에 실을 목록 · 새 id 복원 때 넘기기).
-  const { folderAppsFor, resyncIfChangedAfterCreate } = await import("./apps/session-app-folders.js");
+  const { folderAppsFor, afterSessionCreate } = await import("./apps/session-app-folders.js");
   const { carrySessionApps, dropSessionApps } = await import("./apps/session-apps.js");
   //  #4427 — 구성원 AI 계정(Claude) 커넥터 정책(allowed 가 아니면 claude 세션에 claude.ai 커넥터를 싣지 않는다 — fail-closed).
   const { memberAiConnectorsPolicy } = await import("./org/store/member-ai-connectors.js");
@@ -121,7 +121,7 @@ console.log(`[boot] ${installTenantBinding()}`);
     assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
     sessionAppFolders: {
       listFor: (id) => folderAppsFor(id), carry: (from, to) => carrySessionApps(from, to), drop: (id) => dropSessionApps(id),
-      afterCreate: (id, sent) => { void resyncIfChangedAfterCreate(id, sent); },
+      afterCreate: (id, sent, made, at) => { void afterSessionCreate(id, sent, made, at); },
     },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
