@@ -69,7 +69,7 @@ await t("C4 4xx(조절 아님) · 자격 없음은 다시 하지 않는다", asy
 
 await t("C5 함수 조회 404 → null · 함수 지우기 404 → 성공", async () => {
   const nf = { status: 404, headers: { "x-amzn-errortype": "ResourceNotFoundException" }, body: "{\"Message\":\"Function not found\"}" };
-  assert.equal(await getFunction(c, "lvly-app-x", fake([nf]).deps), null);
+  assert.equal(await getFunction(c, "lvly-app-x", undefined, fake([nf]).deps), null);
   const d = fake([nf]);
   await deleteFunction(c, "lvly-app-x", "3", d.deps);
   assert.equal(new URL(d.seen[0]!.url).searchParams.get("Qualifier"), "3");

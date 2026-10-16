@@ -2,13 +2,15 @@
 // 실행: npm run build && node dist/apps/app-server-config.test.js
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
-import { LOG_GROUP_TAG, appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor, logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
+import {
+  LOG_GROUP_TAG, appServerEnv, buildKeyOf, codeAt, functionCodeFor, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor, logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor,
+} from "./app-server-config.js";
 import {
   APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
   normalizeAppServerPolicy, retentionDaysFor,
 } from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
-import { publicError, realLambdaApi } from "./app-server-deploy.js";
+import { REFERENCE_PERMISSION_RE, ZIP_MISSING_RE, publicError, realLambdaApi, scrubAws } from "./app-server-deploy.js";
 import { appServerEnabledFor } from "./app-server-config.js";
 import { withTenant } from "../org/tenant-context.js";
 import { AwsError } from "../net/aws/aws-json.js";
@@ -90,7 +92,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64" });
+  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");
@@ -266,6 +268,137 @@ t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 �
     assert.deepEqual(seen.map((x) => x.op), ["CreateLogGroup", "TagResource", "PutRetentionPolicy"]);
     assert.deepEqual(seen[0]!.body, { logGroupName: "/aws/lambda/lvly-app-x-ws", tags: tag.tags });
     assert.deepEqual(seen[1]!.body, { resourceArn: tag.arn, tags: tag.tags });
+  });
+}
+
+//  ── #4801 코드를 우리 S3 에서 바로 읽기(S3ObjectStorageMode REFERENCE) — 사양 엣지 표 S1~S6(spec-4801.md) ──
+t("S1 코드 저장 방식 — 기본 바로 읽기 · 'copy'(대소문자 · 빈칸 무시)만 복사 · 그 밖의 값은 기본", () => {
+  const base = { LIVELY_APP_SERVER_EXEC_ROLE: ROLE };
+  assert.equal(appServerEnv(base)!.codeStorage, "REFERENCE");
+  assert.equal(appServerEnv({ ...base, LIVELY_APP_SERVER_CODE_STORAGE: " COPY " })!.codeStorage, "COPY");
+  assert.equal(appServerEnv({ ...base, LIVELY_APP_SERVER_CODE_STORAGE: "copy" })!.codeStorage, "COPY");
+  assert.equal(appServerEnv({ ...base, LIVELY_APP_SERVER_CODE_STORAGE: "reference" })!.codeStorage, "REFERENCE");
+  assert.equal(appServerEnv({ ...base, LIVELY_APP_SERVER_CODE_STORAGE: "copyx" })!.codeStorage, "REFERENCE", "모르는 값은 기본");
+});
+
+t("S2 함수에 줄 코드 자리 — 바로 읽기는 판 번호까지(모르면 칸째 빼고 Lambda 가 지금 판으로) · 복사는 #4484 그대로(판 번호 · 모드 없음)", () => {
+  assert.deepEqual(functionCodeFor({ codeStorage: "REFERENCE" }, "b", "t/w/z/a/k.zip", "v1"), { S3Bucket: "b", S3Key: "t/w/z/a/k.zip", S3ObjectVersion: "v1", S3ObjectStorageMode: "REFERENCE" });
+  const noVer = functionCodeFor({ codeStorage: "REFERENCE" }, "b", "k", null);
+  assert.deepEqual(noVer, { S3Bucket: "b", S3Key: "k", S3ObjectStorageMode: "REFERENCE" });
+  assert.ok(!("S3ObjectVersion" in noVer), "빈 판 번호 칸을 싣지 않는다(빈 글은 Lambda 가 거절)");
+  assert.deepEqual(functionCodeFor({ codeStorage: "COPY" }, "b", "k", "v1"), { S3Bucket: "b", S3Key: "k" }, "복사에 판 번호를 주면 부르는 쪽에 GetObjectVersion 이 따로 든다");
+});
+
+t("S3 지금 코드가 바라는 자리에 있나 — 저장 방식 · 버킷 · 키 · 판(바라는 쪽에 판 번호가 없으면 키까지만)", () => {
+  const want = functionCodeFor({ codeStorage: "REFERENCE" }, "b", "k", "v1");
+  const ref = (o: Record<string, string>) => ({ RepositoryType: "S3", ResolvedS3Object: { S3Bucket: "b", S3Key: "k", S3ObjectVersion: "v1", ...o } });
+  assert.equal(codeAt(ref({}), want), true, "S3a");
+  assert.equal(codeAt(ref({ S3ObjectVersion: "v2" }), want), false, "S3b 다른 판");
+  assert.equal(codeAt(ref({ S3Key: "k2" }), want), false, "S3b 다른 키");
+  assert.equal(codeAt(ref({ S3Bucket: "b2" }), want), false, "S3b 다른 버킷");
+  assert.equal(codeAt({ RepositoryType: "S3", ResolvedS3Object: null }, want), false, "S3c 복사로 만든 옛 함수 → 바로 읽기로 옮긴다");
+  assert.equal(codeAt(undefined, want), false, "S3d 코드 자리를 못 받았으면 다시 올린다(넉넉한 쪽)");
+  assert.equal(codeAt(ref({ S3ObjectVersion: "v9" }), functionCodeFor({ codeStorage: "REFERENCE" }, "b", "k", null)), true, "S3e 판 번호 모르는 옛 빌드 — 키가 같으면 그대로");
+  const copy = functionCodeFor({ codeStorage: "COPY" }, "b", "k", "v1");
+  assert.equal(codeAt({ RepositoryType: "S3", ResolvedS3Object: null }, copy), true, "S3f 복사 → 복사");
+  assert.equal(codeAt(undefined, copy), true, "S3f 코드 자리 없음 = 복사로 본다");
+  assert.equal(codeAt(ref({}), copy), false, "S3f 바로 읽기 함수를 복사로 되돌린다(env 로 끈 뒤)");
+});
+
+t("S4 zip 없음 판독 — 복사 · 바로 읽기 · 지움 표시 글(2026-10-16 실제 원문)은 무효로 · 권한 거절 글은 아니다", () => {
+  const missing = [
+    "Error occurred while GetObject. S3 Error Code: NoSuchKey. S3 Error Message: The specified key does not exist.",
+    "The specified S3 object does not exist: s3://lvly-cloud-appbundles-(계정)/t/w/z/a/k.zip (versionId=GphB). Verify the object exists and the versionId is correct.",
+    "The specified S3 object does not exist: s3://b/t/w/z/a/none.zip. Verify the object exists in the bucket.",
+    "The latest version of the S3 object is a delete marker. Upload a new object version or pass an explicit S3ObjectVersion.",
+  ];
+  const denied = [
+    "Lambda service principal lambda.amazonaws.com does not have s3:GetObject and s3:GetObjectVersion permission on s3://b/t/w/z/a/k.zip. Update the bucket policy to grant the Lambda service principal access and retry.",
+    "The caller cannot access the referenced S3 object. Be sure to grant the caller s3:GetObject and s3:GetObjectVersion permission for the referenced object.",
+    "Error occurred while GetObject. S3 Error Code: AccessDenied. S3 Error Message: Access Denied",
+  ];
+  for (const m of missing) assert.ok(ZIP_MISSING_RE.test(m), m);
+  for (const m of denied) assert.ok(!ZIP_MISSING_RE.test(m), m);
+  assert.ok(REFERENCE_PERMISSION_RE.test(denied[0]!) && REFERENCE_PERMISSION_RE.test(denied[1]!));
+  assert.ok(!missing.some((m) => REFERENCE_PERMISSION_RE.test(m)) && !REFERENCE_PERMISSION_RE.test(denied[2]!));
+});
+
+t("S5 바로 읽기 권한 거절은 플랫폼 문제로 보인다 — 400 InvalidParameterValueException 이어도 코드 · 요청 번호만(버킷 · 계정 번호를 싣지 않음)", () => {
+  const e = new AwsError(400, "InvalidParameterValueException",
+    "lambda POST /x 실패: 400 InvalidParameterValueException — Lambda service principal lambda.amazonaws.com does not have s3:GetObject and s3:GetObjectVersion permission on s3://lvly-cloud-appbundles-425515538094/t/w/z/a/k.zip.", "req-9");
+  const m = publicError(e);
+  assert.ok(m.includes("플랫폼 쪽 AWS 권한") && m.includes("req-9"), m);
+  assert.ok(!m.includes("425515538094") && !m.includes("appbundles"), m);
+  const caller = new AwsError(403, "AccessDeniedException", "The caller cannot access the referenced S3 object. Be sure to grant the caller s3:GetObject and s3:GetObjectVersion permission for the referenced object.", "req-10");
+  assert.ok(publicError(caller).includes("플랫폼 쪽 AWS 권한"));
+});
+
+t("S5b zip 없음 원문도 버킷 · 키를 싣지 않는다 — 정해 둔 글 + 요청 번호(격리 리뷰 막을 것 1) · 그 밖의 AWS 글은 s3:// 주소를 걷는다", () => {
+  const missing = new AwsError(400, "InvalidParameterValueException",
+    "lambda PUT /x 실패: 400 InvalidParameterValueException — The specified S3 object does not exist: s3://lvly-cloud-appbundles-425515538094/t/a4b6/z/app/abc.zip (versionId=GphB). Verify the object exists and the versionId is correct.", "req-11");
+  const m = publicError(missing);
+  assert.ok(m.includes("빌드 결과(zip)를 저장소에서 찾지 못했습니다") && m.includes("req-11"), m);
+  assert.ok(!/appbundles|425515538094|s3:\/\/|\/z\//.test(m), m);
+  const other = new AwsError(400, "InvalidParameterValueException", "Something about s3://lvly-cloud-appbundles-425515538094/t/x/z/y.zip went wrong", "req-12");
+  const o = publicError(other);
+  assert.ok(!/appbundles|425515538094|s3:\/\//.test(o) && o.includes("(저장소 객체)") && o.includes("req-12"), o);
+  assert.equal(scrubAws("arn:aws:lambda:ap-northeast-2:425515538094:function:x · s3://b/k · 425515538094"), "(AWS 자원) · (저장소 객체) · (계정)");
+});
+
+//  S6 실제 어댑터(realLambdaApi)가 코드 자리 칸(판 번호 · 모드)을 떨어뜨리지 않고 보내는가 — 가짜 api 를 쓰는 다른 시험은 이 이음매를 지나지 않는다.
+{
+  const seen: Array<{ method: string; url: string; body: Record<string, unknown> }> = [];
+  const realFetch = globalThis.fetch;
+  const keep = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY, token: process.env.AWS_SESSION_TOKEN };
+  process.env.AWS_ACCESS_KEY_ID = "AKIDEXAMPLE"; process.env.AWS_SECRET_ACCESS_KEY = "example-secret"; delete process.env.AWS_SESSION_TOKEN;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    seen.push({ method: String(init?.method), url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+    return new Response(JSON.stringify({ FunctionName: "f", FunctionArn: "arn" }), { status: 200 });
+  }) as typeof fetch;
+  const code = functionCodeFor({ codeStorage: "REFERENCE" }, "b", "t/w/z/a/k.zip", "v1");
+  try {
+    const api = realLambdaApi("ap-northeast-2");
+    await api.createFunction({ FunctionName: "lvly-app-a-ws", Runtime: "nodejs22.x", Role: ROLE, Handler: "h", Code: code, Architectures: ["arm64"], MemorySize: 512, Timeout: 30, Layers: [], Environment: { Variables: {} } });
+    await api.updateFunctionCode("lvly-app-a-ws", code);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of [["AWS_ACCESS_KEY_ID", keep.id], ["AWS_SECRET_ACCESS_KEY", keep.secret], ["AWS_SESSION_TOKEN", keep.token]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  t("S6 실제 어댑터가 판 번호 · 저장 방식을 그대로 보낸다 — 만들기 Code · 코드 고치기 본문(+ Publish false)", () => {
+    assert.equal(seen.length, 2, "두 번 불렸다(배선)");
+    assert.deepEqual(seen[0]!.body.Code, code);
+    assert.ok(seen[1]!.method === "PUT" && seen[1]!.url.endsWith("/functions/lvly-app-a-ws/code"), seen[1]!.url);
+    assert.deepEqual(seen[1]!.body, { ...code, Publish: false });
+  });
+}
+
+//  S7 재사용 판정이 기대는 이음매 — 실제 어댑터의 getFunction 이 판(Qualifier)을 실어 보내고 Code(코드 자리)를 그대로 돌려주는가(격리 리뷰).
+{
+  const urls: string[] = [];
+  const realFetch = globalThis.fetch;
+  const keep = { id: process.env.AWS_ACCESS_KEY_ID, secret: process.env.AWS_SECRET_ACCESS_KEY, token: process.env.AWS_SESSION_TOKEN };
+  process.env.AWS_ACCESS_KEY_ID = "AKIDEXAMPLE"; process.env.AWS_SECRET_ACCESS_KEY = "example-secret"; delete process.env.AWS_SESSION_TOKEN;
+  const body = { Configuration: { FunctionName: "f", FunctionArn: "arn", State: "Active" }, Code: { RepositoryType: "S3", ResolvedS3Object: { S3Bucket: "b", S3Key: "k", S3ObjectVersion: "v3" } }, Tags: { "lvly:tenant": "t" } };
+  globalThis.fetch = (async (url: string | URL | Request) => { urls.push(String(url)); return new Response(JSON.stringify(body), { status: 200 }); }) as typeof fetch;
+  let atVer: unknown = null; let atLatest: unknown = null;
+  try {
+    const api = realLambdaApi("ap-northeast-2");
+    atVer = await api.getFunction("lvly-app-a-ws", "3");
+    atLatest = await api.getFunction("lvly-app-a-ws");
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of [["AWS_ACCESS_KEY_ID", keep.id], ["AWS_SECRET_ACCESS_KEY", keep.secret], ["AWS_SESSION_TOKEN", keep.token]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  t("S7 실제 어댑터 getFunction — 판을 주면 ?Qualifier=판 · 안 주면 없음 · Code.ResolvedS3Object 를 그대로 돌려준다", () => {
+    assert.equal(urls.length, 2);
+    assert.ok(urls[0]!.endsWith("/2015-03-31/functions/lvly-app-a-ws?Qualifier=3"), urls[0]);
+    assert.ok(urls[1]!.endsWith("/2015-03-31/functions/lvly-app-a-ws") && !urls[1]!.includes("Qualifier"), urls[1]);
+    assert.deepEqual((atVer as { Code?: unknown })?.Code, body.Code);
+    assert.deepEqual((atLatest as { Code?: unknown })?.Code, body.Code);
   });
 }
 

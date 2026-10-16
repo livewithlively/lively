@@ -21,6 +21,10 @@
 //   W21 남의 함수 크기는 우리 줄에 적지 않는다 · W22 함수가 있는지 확인 못 하면 줄을 지우지 않는다
 //  #4791 서버 선언을 뺀 앱의 함수 정리(X — 사양 엣지 표 R1~R9): X1 표시 · 상태 retire_at · X2 7일 경계 · 걷기(빌드는 남김) · X3 되돌리면 다시 생김
 //   X4 공개 판에 서버가 남아 있으면 표시 안 함 · X5 서버 선언이 돌아오면 표시를 걷음(X5b 다시 배포하면 곧바로) · X6 멈춘 함수는 걷지 않음 · X7 걷기 직전 다시 봄
+//  #4801 코드를 우리 S3 에서 바로 읽기(V — 사양 엣지 표 spec-4801.md): V1 첫 배포가 빌드 기록의 판 번호로 바로 읽기 · V2 env 복사는 #4484 그대로
+//   V3 복사로 만든 함수를 다음 배포가 바로 읽기로 옮긴다 · V4 이미 그 판을 읽으면 코드를 다시 안 올린다 · V5 같은 키에 다시 올라간 zip(판 바뀜) → 다시 빌드 · 새 판
+//   V6 판 번호 없는 옛 빌드는 지금 판을 채워 쓴다 · V7 저장소가 판 번호를 안 주면 무효로 하지 않는다 · V8 남은 함수 판이 읽는 zip 은 30일 정리에서 뺀다(V8b 안 읽으면 지움)
+//   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import crypto from "node:crypto";
@@ -39,7 +43,8 @@ await dbc.query("CREATE EXTENSION IF NOT EXISTS vector").catch(() => { /* pgvect
 process.env.ITEMS_DATABASE_URL = dsnFor(DB);
 //  지역 · 스위치 · 레이어 · 런타임도 지운다 — 기대값(ap-northeast-2 · 기본 레이어 · nodejs22.x)이 그 셸의 env 에 흔들리지 않게(#4790 재검토 6).
 for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_APP_BUNDLE_BUCKET", "LIVELY_APP_BUNDLE_POLICY", "LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_PREFIX",
-  "AWS_REGION", "LIVELY_APP_SERVER_REGION", "LIVELY_APP_BUNDLE_REGION", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_LAYER", "LIVELY_APP_SERVER_RUNTIME"]) delete process.env[k];
+  "AWS_REGION", "LIVELY_APP_SERVER_REGION", "LIVELY_APP_BUNDLE_REGION", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_LAYER", "LIVELY_APP_SERVER_RUNTIME",
+  "LIVELY_APP_SERVER_CODE_STORAGE"]) delete process.env[k];
 const ROLE = "arn:aws:iam::111122223333:role/lvly-app-exec";
 process.env.LIVELY_APP_SERVER_EXEC_ROLE = ROLE;
 const D = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -50,7 +55,7 @@ const { appServerCapabilities } = await import(`${D}/capabilities/app-servers.js
 const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
-const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping, retireUnusedServers, refreshUnknownCodeBytes } = await import(`${D}/apps/app-server-watch.js`);
+const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping, retireUnusedServers, refreshUnknownCodeBytes, pruneServerBuilds } = await import(`${D}/apps/app-server-watch.js`);
 const { appServerPolicy, setServerStopped, claimServerRow } = await import(`${D}/apps/app-server-store.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -74,10 +79,19 @@ const aliceCtx = { source: "mcp", session: "box-pgt-alice-1" };
 const bobCtx = { source: "mcp", session: "box-pgt-bob-1" };
 
 // ── zip 저장소(빌더가 PUT 하는 작은 서버) ──
+//  #4801 판 번호를 켠 버킷 흉내 — 올릴 때마다 새 판 번호(zipVer = 키의 지금 판 · zipByVer = 판마다 바이트). zips 는 «지금 객체» 그대로다(시험이 zips.delete 로
+//   «zip 을 잃음» 을 흉내 낸다 — 그때는 판도 못 읽는 것으로 본다: 실제 S3 의 지움 표시보다 엄한 쪽).
 const zips = new Map();
+const zipVer = new Map();
+const zipByVer = new Map();
+let zseq = 0;
 const zsrv = http.createServer((req, res) => {
   const parts = []; req.on("data", (d) => parts.push(d));
-  req.on("end", () => { zips.set(decodeURIComponent(new URL(req.url, "http://x").pathname.slice(1)), Buffer.concat(parts)); res.writeHead(200); res.end(); });
+  req.on("end", () => {
+    const k = decodeURIComponent(new URL(req.url, "http://x").pathname.slice(1)); const b = Buffer.concat(parts); const v = `zv${++zseq}`;
+    zips.set(k, b); zipVer.set(k, v); zipByVer.set(`${k}#${v}`, b);
+    res.writeHead(200, { "x-amz-version-id": v }); res.end();
+  });
 });
 await new Promise((r) => zsrv.listen(0, "127.0.0.1", r));
 const zport = zsrv.address().port;
@@ -94,15 +108,30 @@ let invokeMode = "ok";
 const cfgOf = (f) => JSON.parse(JSON.stringify(f.cfg));
 //  Lambda 는 만들기 · 코드 고치기 때 S3 에서 zip 을 읽는다 — 없으면 실제와 같은 오류(InvalidParameterValueException · NoSuchKey).
 const zipOr = (k) => { const z = zips.get(k); if (!z) throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: NoSuchKey. S3 Error Message: The specified key does not exist."); return z; };
+//  #4801 Lambda 가 코드를 읽는 자리 — REFERENCE 면 그 판(판 번호가 없으면 지금 판으로 풀어 적는다) · COPY 면 지금 객체(ref 없음). 글은 2026-10-16 실제 AWS 원문.
+const readCode = (code) => {
+  if (code.S3ObjectStorageMode !== "REFERENCE") return { z: zipOr(code.S3Key), ref: null };
+  const v = code.S3ObjectVersion ?? zipVer.get(code.S3Key);
+  const z = zips.has(code.S3Key) ? zipByVer.get(`${code.S3Key}#${v}`) : null;
+  if (!z) throw new AwsError(400, "InvalidParameterValueException", `The specified S3 object does not exist: s3://${code.S3Bucket}/${code.S3Key}${code.S3ObjectVersion ? ` (versionId=${code.S3ObjectVersion})` : ""}. Verify the object exists and the versionId is correct.`);
+  return { z, ref: { S3Bucket: code.S3Bucket, S3Key: code.S3Key, S3ObjectVersion: v } };
+};
+const listFail = new Set();     // #4801 V6 — 이 함수의 판 목록 읽기는 실패한다
 const failDelete = new Set();   // R4 — 이 함수 지우기는 실패한다(AWS 오류 흉내)
-let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 오류로(zip 은 있다)
+let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 오류로(zip 은 있다) · "reference" 면 바로 읽기 권한 거절 글(#4801 R1h)
 let publishDelayMs = 0;         // W9 — 판 고정을 늦춰 «판정 뒤 · 실측 앞» 창을 넓힌다
 let createFail = null;          // W13 — 다음 함수 만들기를 이 AWS 오류로
 const readyFail = new Set();    // W11 — 이 함수는 만든 뒤 «Failed» 상태로 보인다(준비 기다리기가 실패)
 let createThenFail = null;      // W18 — 다음 함수 만들기는 AWS 에선 되지만 응답은 이 오류로(시간 넘김 흉내)
 let logFail = null;             // W17 — 다음 로그 그룹 맞추기를 이 AWS 오류로
 const api = {
-  getFunction: async (n) => { const f = fns.get(n); return f ? { Configuration: cfgOf(f), Tags: { ...f.tags } } : null; },
+  //  Code — REFERENCE 면 ResolvedS3Object(읽는 객체 · 판) · COPY 면 비어 있다(실제 GetFunction 과 같은 꼴 · #4801).
+  //   판(qualifier)을 주면 그 판의 설정과 그 판이 읽는 코드 자리 — 재사용 판정이 본다(#4801).
+  getFunction: async (n, qual) => {
+    const f = fns.get(n); if (!f) return null;
+    const at = qual && qual !== "$LATEST" ? f.versions.find((x) => x.Version === qual) : { cfg: f.cfg, ref: f.ref };
+    return at ? { Configuration: JSON.parse(JSON.stringify(at.cfg)), Code: { RepositoryType: "S3", ResolvedS3Object: at.ref ? { ...at.ref } : null }, Tags: { ...f.tags } } : null;
+  },
   //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
   getFunctionConfiguration: async (n, qual) => {
     const f = fns.get(n); if (!f) return null;
@@ -114,17 +143,22 @@ const api = {
     log.push(["createFunction", i]);
     if (createFail) { const e = createFail; createFail = null; throw e; }
     if (fns.has(i.FunctionName)) throw new AwsError(409, "ResourceConflictException", "exists");
-    const z = zipOr(i.Code.S3Key);
+    const { z, ref } = readCode(i.Code);
     fns.set(i.FunctionName, { cfg: { FunctionName: i.FunctionName, Role: i.Role, Handler: i.Handler, Runtime: i.Runtime, MemorySize: i.MemorySize, Timeout: i.Timeout,
       Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: shaB64(z), CodeSize: z.length, State: "Active", LastUpdateStatus: "Successful" },
-      tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
+      ref, tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
     if (createThenFail) { const e = createThenFail; createThenFail = null; throw e; }
     return cfgOf(fns.get(i.FunctionName));
   },
   updateFunctionCode: async (n, code) => {
-    log.push(["updateFunctionCode", n, code.S3Key]);
+    log.push(["updateFunctionCode", n, code.S3Key, code]);
+    if (s3Denied === "reference") {
+      s3Denied = false;
+      throw new AwsError(400, "InvalidParameterValueException", `Lambda service principal lambda.amazonaws.com does not have s3:GetObject and s3:GetObjectVersion permission on s3://${code.S3Bucket}/${code.S3Key}. Update the bucket policy to grant the Lambda service principal access and retry.`);
+    }
     if (s3Denied) { s3Denied = false; throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: AccessDenied. S3 Error Message: Access Denied"); }
-    const f = fns.get(n); const z = zipOr(code.S3Key); f.cfg.CodeSha256 = shaB64(z); f.cfg.CodeSize = z.length; return cfgOf(f);
+    //  코드를 고치면 Inactive 함수도 되살아난다(AWS 문서 «restore access … and update the function» · #4801 V15).
+    const f = fns.get(n); const { z, ref } = readCode(code); f.cfg.CodeSha256 = shaB64(z); f.cfg.CodeSize = z.length; f.ref = ref; f.cfg.State = "Active"; return cfgOf(f);
   },
   updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
   publishVersion: async (n, i) => {
@@ -132,16 +166,22 @@ const api = {
     if (publishDelayMs) await new Promise((r) => setTimeout(r, publishDelayMs));
     const f = fns.get(n);
     if (i.CodeSha256 !== f.cfg.CodeSha256) throw new AwsError(412, "PreconditionFailedException", "sha");
-    //  실제와 같게: 코드 · 설정이 마지막 판과 같으면 새 판을 만들지 않고 그 판을 돌려준다(설정이 바뀌면 새 판).
+    //  실제와 같게: 코드 · 설정이 마지막 판과 같으면 새 판을 만들지 않고 그 판을 돌려준다(설정이 바뀌면 새 판). 저장 방식 · 읽는 판만 바뀌어도
+    //   새 판이다(#4801 — 2026-10-16 실측: 같은 zip 을 COPY 판 6 → REFERENCE 로 고치고 고정하면 판 7).
     const snap = cfgOf(f);
     const last = f.versions[f.versions.length - 1];
-    if (last && JSON.stringify(last.cfg) === JSON.stringify(snap)) return { ...snap, Version: last.Version };
-    const v = { Version: String(++f.seq), CodeSha256: f.cfg.CodeSha256, cfg: snap };
+    if (last && JSON.stringify(last.cfg) === JSON.stringify(snap) && JSON.stringify(last.ref) === JSON.stringify(f.ref)) return { ...snap, Version: last.Version };
+    const v = { Version: String(++f.seq), CodeSha256: f.cfg.CodeSha256, cfg: snap, ref: f.ref ? { ...f.ref } : null };
     f.versions.push(v);
     return { ...snap, Version: v.Version };
   },
   //  실제(ListVersionsByFunction)처럼 $LATEST 와 판마다 CodeSize — #4792 코드 저장 셈이 이 값을 더한다.
-  listVersions: async (n) => { const f = fns.get(n); return f ? [{ Version: "$LATEST", CodeSize: f.cfg.CodeSize }, ...f.versions.map((v) => ({ Version: v.Version, CodeSize: v.cfg.CodeSize }))] : []; },
+  //  #4801 판마다 CodeSha256 도(실제 ListVersionsByFunction 이 준다) — 옛 빌드 정리가 «남은 판이 아직 읽는 zip» 을 이 지문으로 가린다.
+  listVersions: async (n) => {
+    if (listFail.has(n)) throw new AwsError(500, "ServiceException", "흉내 — 판 목록 실패");
+    const f = fns.get(n);
+    return f ? [{ Version: "$LATEST", CodeSize: f.cfg.CodeSize, CodeSha256: f.cfg.CodeSha256 }, ...f.versions.map((v) => ({ Version: v.Version, CodeSize: v.cfg.CodeSize, CodeSha256: v.cfg.CodeSha256 }))] : [];
+  },
   putAlias: async (n, a, v) => { log.push(["putAlias", n, a, v]); fns.get(n).aliases.set(a, v); return { Name: a, FunctionVersion: v, AliasArn: `${n}:${a}` }; },
   invoke: async (n, qual) => {
     log.push(["invoke", n, qual]);
@@ -162,7 +202,7 @@ const deletedZips = [];
 setServerDepsForTest({
   api, bucket: "fake-bucket", pollMs: 1, sleep: async () => {}, spawnInSession,
   presignPut: async (key) => `http://127.0.0.1:${zport}/${encodeURIComponent(key)}`,
-  headZip: async (key) => (zips.has(key) ? { size: zips.get(key).length } : null),
+  headZip: async (key) => (zips.has(key) ? { size: zips.get(key).length, versionId: zipVer.get(key) } : null),
   deleteZip: async (key) => { deletedZips.push(key); zips.delete(key); },
 });
 const calls = (op) => log.filter((x) => x[0] === op);
@@ -386,7 +426,8 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   const kA = (await q(`SELECT zip_key, build_key FROM org_app_server_build WHERE app_id='twin-a' AND status='ok'`))[0];
   const kB = (await q(`SELECT zip_key, build_key FROM org_app_server_build WHERE app_id='twin-b' AND status='ok'`))[0];
   chk("R1a 같은 파일의 두 앱 — 빌드 지문은 같아도 zip 은 앱마다 따로", ta1.status === "deployed" && tb1.status === "deployed" && kA.build_key === kB.build_key
-    && kA.zip_key !== kB.zip_key && zips.has(kA.zip_key) && zips.has(kB.zip_key), JSON.stringify({ kA, kB }));
+    && kA.zip_key !== kB.zip_key && zips.has(kA.zip_key) && zips.has(kB.zip_key),
+    JSON.stringify({ a: { status: ta1.status, stage: ta1.stage, error: ta1.error, zip: zips.has(kA?.zip_key) }, b: { status: tb1.status, stage: tb1.stage, error: tb1.error, zip: zips.has(kB?.zip_key) }, kA, kB }));
   await call("app_save", { files: twin("twin-a", "require('http').createServer((q,s)=>s.end('a2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
   await call("app_server_deploy", { app_id: "twin-a", wait_s: 120 }, alice, aliceCtx);
   const v2a = (await q(`SELECT current_version_no FROM org_app WHERE id='twin-a'`))[0].current_version_no;
@@ -448,13 +489,23 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   await call("app_server_deploy", { app_id: "orph", wait_s: 120 }, alice, aliceCtx);
   const fnO = (await rowOf("orph")).function_name;
   failDelete.add(fnO);
+  const zk = (await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='orph' AND zip_key IS NOT NULL`)).map((x) => x.zip_key);
   await call("org_app_remove", { app_id: "orph" }, boss);
   const kept = await rowOf("orph");
-  chk("R4a 함수를 못 지우면 함수 줄을 남긴다(빌드 기록은 지움)", fns.has(fnO) && !!kept && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`)).length === 0, JSON.stringify(kept));
+  const keptBuilds = await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`);
+  //  #4801 함수가 남은 동안은 그 함수가 읽는 zip · 빌드 기록도 남는다(함수가 우리 S3 를 바로 읽는다 — 지우면 나중에 그 함수가 멈춘다).
+  chk("R4a 함수를 못 지우면 함수 줄 · 빌드 기록 · zip 을 남긴다(#4801 — 함수가 그 zip 을 읽는다)", fns.has(fnO) && !!kept && keptBuilds.length > 0
+    && zk.length > 0 && zk.every((k) => zips.has(k) && !deletedZips.includes(k)), JSON.stringify({ kept: !!kept, builds: keptBuilds.length, zk }));
+  //  그 사이 하우스키핑이 돌아도(함수 지우기는 또 실패) 옛 빌드 정리가 그 zip 을 고르지 않는다(앱은 없지만 함수 줄이 남았다).
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='orph'`);
+  const hk0 = await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} });
+  chk("R4c 함수가 남은 동안의 하우스키핑 — 정리가 그 앱의 zip · 기록을 지우지 않는다", fns.has(fnO) && hk0.orphans === 0
+    && zk.every((k) => zips.has(k)) && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`)).length === keptBuilds.length, JSON.stringify(hk0));
   failDelete.delete(fnO);
   const hk = await runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} });
-  chk("R4b 하우스키핑이 앱 없는 함수 줄을 다시 지운다(함수 · 로그 그룹 · 줄)", !fns.has(fnO) && !(await rowOf("orph")) && hk.orphans === 1
-    && calls("deleteLogGroup").some((x) => x[1] === `/aws/lambda/${fnO}`), JSON.stringify(hk));
+  chk("R4b 하우스키핑이 앱 없는 함수 줄을 다시 지운다(함수 · 로그 그룹 · 줄) — 그 뒤에 빌드 기록 · zip 도 걷는다", !fns.has(fnO) && !(await rowOf("orph")) && hk.orphans === 1
+    && calls("deleteLogGroup").some((x) => x[1] === `/aws/lambda/${fnO}`)
+    && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`)).length === 0 && zk.every((k) => deletedZips.includes(k)), JSON.stringify(hk));
 }
 
 // R5 상한을 바꾸면 같은 코드도 새 설정의 함수 판으로(«다음 배포부터»)
@@ -513,6 +564,18 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   const errSet = await waitFor(async () => { const r = await rowOf("lost"); return r.last_error ? r : null; });
   const b1 = (await q(`SELECT status FROM org_app_server_build WHERE app_id='lost' AND build_key=$1`, [kL.build_key]))[0];
   chk("R1g S3 권한 오류(AccessDenied)면 빌드는 그대로 ok · 오류만 남긴다", !!errSet && b1?.status === "ok" && !s3Denied, JSON.stringify({ b1, last_error: errSet?.last_error }));
+  //  R1h(#4801) 바로 읽기의 권한 거절 글(버킷 정책 · 박스 역할이 빠짐)도 zip 탓이 아니다 — 빌드 그대로 ok · 마지막 오류는 플랫폼 문구(버킷 이름 · 키 없음)
+  //   (앱은 이미 vL1 이라 되돌리기는 아무것도 안 한다 — 지금 판(vL1)을 배포해 cur(l2 빌드)에서 코드를 올리게 한다)
+  await q(`UPDATE org_app_server SET last_error=NULL WHERE app_id='lost'`);
+  s3Denied = "reference";
+  const dh = await call("app_server_deploy", { app_id: "lost", wait_s: 120 }, alice, aliceCtx);
+  const fired = s3Denied === false;
+  s3Denied = false;   // 흉내가 다음 시험으로 새지 않게
+  const errRef = await rowOf("lost");
+  const b2 = (await q(`SELECT status FROM org_app_server_build WHERE app_id='lost' AND build_key=$1`, [kL.build_key]))[0];
+  chk("R1h 바로 읽기 권한 거절 → 빌드 그대로 ok · 실패 글 · 마지막 오류는 플랫폼 권한 문구 · 버킷 · 키가 안 보인다", fired && dh.status === "failed" && b2?.status === "ok"
+    && /플랫폼 쪽 AWS 권한/.test(String(dh.error)) && /플랫폼 쪽 AWS 권한/.test(String(errRef?.last_error))
+    && !/fake-bucket|\/z\//.test(String(dh.error) + String(errRef?.last_error)), JSON.stringify({ fired, status: dh.status, error: dh.error, b2, last_error: errRef?.last_error }));
   await call("org_app_remove", { app_id: "lost" }, boss);
 }
 
@@ -864,7 +927,7 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   let blind = false;
   const blindApi = { ...api,
     createFunction: async (i) => { try { return await api.createFunction(i); } catch (e) { blind = true; throw e; } },
-    getFunction: async (n) => { if (blind) { blind = false; throw new AwsError(503, "ServiceUnavailableException", "흉내 — 조회 실패"); } return api.getFunction(n); } };
+    getFunction: async (n, qual) => { if (blind) { blind = false; throw new AwsError(503, "ServiceUnavailableException", "흉내 — 조회 실패"); } return api.getFunction(n, qual); } };
   setServerDepsForTest({ ...baseDepsW(), api: blindApi });
   await call("app_save", { files: twin("uk-a") }, alice, aliceCtx);
   const d = await call("app_server_deploy", { app_id: "uk-a", wait_s: 120 }, alice, aliceCtx);
@@ -1052,6 +1115,271 @@ const readyToRetire = async (id) => {
     && h2.retired.includes("ret-h") && !fns.has(fnOf("ret-h")) && !(await rowOf("ret-h")), JSON.stringify({ h1, h2 }));
   await call("org_app_remove", { app_id: "ret-h" }, boss);
 }
+
+// ── #4801 코드를 우리 S3 에서 바로 읽기(V — 사양 엣지 표 spec-4801.md V1~V11) ──
+//  저장소가 판 번호를 주는 길(실제 S3 · 판 번호 켠 버킷)로 바꿔 끼운다 — W · X 는 판 번호를 안 주는 저장소(baseDepsW)로 돌았다(V7 이 그 길을 따로 본다).
+const headV = async (key) => (zips.has(key) ? { size: zips.get(key).length, versionId: zipVer.get(key) } : null);
+const baseDepsV = () => ({ ...baseDepsW(), headZip: headV });
+const putZip = (k, b) => { const v = `zv${++zseq}`; zips.set(k, b); zipVer.set(k, v); zipByVer.set(`${k}#${v}`, b); return v; };
+const okBuilds = async (id) => q(`SELECT build_key, zip_key, zip_version, zip_sha256 FROM org_app_server_build WHERE app_id=$1 AND status='ok' ORDER BY started_at`, [id]);
+const createOf = (fn) => calls("createFunction").filter((x) => x[1].FunctionName === fn).pop()?.[1];
+const codeUps = (fn) => calls("updateFunctionCode").filter((x) => x[1] === fn);
+const hkV = () => runAppServerHousekeeping({ api, metrics: async () => [], notify: async () => {} });
+setServerDepsForTest(baseDepsV());
+
+// V1 기본 env 첫 배포 — 함수가 빌드 기록의 판 번호(= 그때 저장소의 지금 판)로 zip 을 바로 읽는다
+{
+  await call("app_save", { files: twin("ref-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "ref-a", wait_s: 120 }, alice, aliceCtx);
+  const [b] = await okBuilds("ref-a");
+  const cf = createOf(fnOf("ref-a"));
+  const f = fns.get(fnOf("ref-a"));
+  chk("V1 첫 배포 — 만들기 Code = 바로 읽기 · 판 번호 = 빌드 기록 = 저장소의 지금 판 · 고정한 함수 판도 그 판을 읽는다",
+    d.status === "deployed" && !!b?.zip_version && b.zip_version === zipVer.get(b.zip_key)
+    && cf?.Code?.S3ObjectStorageMode === "REFERENCE" && cf.Code.S3ObjectVersion === b.zip_version && cf.Code.S3Key === b.zip_key && cf.Code.S3Bucket === "fake-bucket"
+    && f?.ref?.S3ObjectVersion === b.zip_version && f.versions.at(-1)?.ref?.S3ObjectVersion === b.zip_version,
+    JSON.stringify({ status: d.status, error: d.error, b, code: cf?.Code, ref: f?.ref }));
+}
+
+// V2 env 복사 — #4484 그대로 · V3 복사로 만든 함수를 다음 배포가 바로 읽기로 옮긴다 · V4 이미 그 판을 바로 읽으면 코드를 다시 안 올린다
+{
+  process.env.LIVELY_APP_SERVER_CODE_STORAGE = "copy";
+  await call("app_save", { files: twin("cp-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "cp-a", wait_s: 120 }, alice, aliceCtx);
+  delete process.env.LIVELY_APP_SERVER_CODE_STORAGE;
+  const cf = createOf(fnOf("cp-a"));
+  chk("V2 env 복사 — 만들기 Code 에 판 번호 · 모드 칸이 없고 함수가 복사로 읽는다", d.status === "deployed" && !!cf
+    && !("S3ObjectVersion" in cf.Code) && !("S3ObjectStorageMode" in cf.Code) && fns.get(fnOf("cp-a")).ref === null && fns.get(fnOf("cp-a")).versions.at(-1)?.ref === null,
+    JSON.stringify({ status: d.status, code: cf?.Code }));
+
+  //  설정을 바꿔 «별칭만 옮기기» 가 아닌 배포를 만든다 — 같은 빌드 · 같은 코드 지문인데 $LATEST 는 복사다.
+  await call("app_server_limits_set", { memory_mb: 1024 }, boss);
+  const u0 = codeUps(fnOf("cp-a")).length;
+  const d3 = await call("app_server_deploy", { app_id: "cp-a", wait_s: 120 }, alice, aliceCtx);
+  const [b] = await okBuilds("cp-a");
+  const ups = codeUps(fnOf("cp-a")).slice(u0);
+  const r3 = await rowOf("cp-a");
+  const v3 = fns.get(fnOf("cp-a")).versions.find((x) => x.Version === r3.cur_lambda_version);
+  chk("V3 복사로 만든 함수 · 같은 코드 · 설정이 바뀐 배포 → 코드를 바로 읽기(판 번호)로 다시 올리고 새 함수 판이 그 판을 읽는다",
+    d3.status === "deployed" && d3.build.reused === true && ups.length === 1 && ups[0][3].S3ObjectStorageMode === "REFERENCE" && ups[0][3].S3ObjectVersion === b.zip_version
+    && v3?.ref?.S3ObjectVersion === b.zip_version && v3?.cfg.MemorySize === 1024,
+    JSON.stringify({ status: d3.status, ups: ups.map((x) => x[3]), v3 }));
+
+  await call("app_server_limits_set", { reset: true }, boss);
+  const u1 = codeUps(fnOf("cp-a")).length;
+  const d4 = await call("app_server_deploy", { app_id: "cp-a", wait_s: 120 }, alice, aliceCtx);
+  const r4 = await rowOf("cp-a");
+  const v4 = fns.get(fnOf("cp-a")).versions.find((x) => x.Version === r4.cur_lambda_version);
+  chk("V4 이미 그 판을 바로 읽는 $LATEST · 같은 코드 · 설정이 바뀐 배포 → 코드 올리기 0 · 설정만 고친 새 함수 판",
+    d4.status === "deployed" && codeUps(fnOf("cp-a")).length === u1 && r4.cur_lambda_version !== r3.cur_lambda_version && v4?.cfg.MemorySize === 512 && v4?.ref?.S3ObjectVersion === b.zip_version,
+    JSON.stringify({ status: d4.status, ups: codeUps(fnOf("cp-a")).length - u1, before: r3.cur_lambda_version, after: r4.cur_lambda_version }));
+  await call("org_app_remove", { app_id: "cp-a" }, boss);
+}
+
+// V5 zip 키의 지금 판이 기록과 다르면(누가 같은 키에 다시 올림) — Lambda 에 손대기 전에 그 빌드를 무효로 · 다시 빌드 · 새 판 번호로 cur 를 옮긴다
+//  (별칭만 옮기는 재사용 길도 «그 함수 판이 지금 빌드의 판을 읽나» 를 본다 — 안 보면 30일 뒤 사라질 옛 판을 읽는 함수 판이 cur 로 남는다)
+{
+  const [b0] = await okBuilds("ref-a");
+  const seats0 = seats.length;
+  const uOther = putZip(b0.zip_key, zips.get(b0.zip_key));   // 같은 바이트를 같은 키에 다시 — 지금 판만 바뀐다
+  const u0 = codeUps(fnOf("ref-a")).length;
+  const d = await call("app_server_deploy", { app_id: "ref-a", wait_s: 120 }, alice, aliceCtx);
+  const [b1] = await okBuilds("ref-a");
+  const r = await rowOf("ref-a");
+  const vcur = fns.get(fnOf("ref-a")).versions.find((x) => x.Version === r.cur_lambda_version);
+  const ups = codeUps(fnOf("ref-a")).slice(u0);
+  chk("V5 지금 판 ≠ 기록 → 다시 빌드(새 판 번호) · 코드를 그 판으로 다시 올림 · cur 함수 판이 새 판을 읽는다",
+    d.status === "deployed" && d.build.reused === false && seats.length === seats0 + 1 && b1.build_key === b0.build_key
+    && b1.zip_version === zipVer.get(b1.zip_key) && b1.zip_version !== b0.zip_version && b1.zip_version !== uOther
+    && ups.length === 1 && ups[0][3].S3ObjectVersion === b1.zip_version && vcur?.ref?.S3ObjectVersion === b1.zip_version,
+    JSON.stringify({ status: d.status, build: d.build, b0: b0.zip_version, b1: b1.zip_version, uOther, ups: ups.map((x) => x[3]), vcur: vcur?.ref }));
+}
+
+// V6 판 번호를 모르는 옛 빌드 기록(칸이 생기기 전) — 다시 쓸 때 저장소의 지금 판으로 채우고 함수에 그 판을 못 박는다
+{
+  const [b] = await okBuilds("ref-a");
+  await q(`UPDATE org_app_server_build SET zip_version = NULL WHERE app_id='ref-a' AND build_key=$1`, [b.build_key]);
+  const seats0 = seats.length;
+  await call("app_server_limits_set", { memory_mb: 1024 }, boss);   // 별칭만 옮기기가 아닌 배포(새 함수 판)
+  const d = await call("app_server_deploy", { app_id: "ref-a", wait_s: 120 }, alice, aliceCtx);
+  await call("app_server_limits_set", { reset: true }, boss);
+  const [b2] = await okBuilds("ref-a");
+  const r = await rowOf("ref-a");
+  const vcur = fns.get(fnOf("ref-a")).versions.find((x) => x.Version === r.cur_lambda_version);
+  chk("V6 판 번호 없는 옛 빌드 → 다시 빌드하지 않고 기록에 지금 판을 채움 · 새 함수 판이 그 판을 읽는다",
+    d.status === "deployed" && d.build.reused === true && seats.length === seats0 && b2.zip_version === zipVer.get(b2.zip_key) && vcur?.ref?.S3ObjectVersion === b2.zip_version,
+    JSON.stringify({ status: d.status, error: d.error, b2, vcur: vcur?.ref }));
+}
+
+// V7 저장소가 판 번호를 안 준다(판 번호 끈 버킷) — 기록에 판 번호가 있어도 무효로 하지 않고 그대로 쓴다
+{
+  setServerDepsForTest(baseDepsW());
+  const seats0 = seats.length;
+  const [b] = await okBuilds("ref-a");
+  const d = await call("app_server_deploy", { app_id: "ref-a", wait_s: 120 }, alice, aliceCtx);
+  const [b2] = await okBuilds("ref-a");
+  chk("V7 저장소가 판 번호를 안 줌 → 빌드 그대로 다시 씀(무효 · 다시 빌드 없음) · 기록 판 번호 그대로", d.status === "deployed" && d.build.reused === true && seats.length === seats0
+    && b2?.build_key === b.build_key && b2.zip_version === b.zip_version, JSON.stringify({ status: d.status, build: d.build, b, b2 }));
+  setServerDepsForTest(baseDepsV());
+}
+
+// V8 30일 지난 빌드라도 함수의 남은 판(별칭 밖)이 그 zip 을 읽으면 정리하지 않는다 → 그 판이 정리돼 아무도 안 읽으면 다음 정리에서 지운다(V8b)
+{
+  await call("app_save", { files: twin("pr-a", "require('http').createServer((q,s)=>s.end('p1')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "pr-a", wait_s: 120 }, alice, aliceCtx);
+  const [bA] = await okBuilds("pr-a");
+  await call("app_save", { files: twin("pr-a", "require('http').createServer((q,s)=>s.end('p2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "pr-a", wait_s: 120 }, alice, aliceCtx);
+  const r = await rowOf("pr-a");
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='pr-a' AND build_key=$1`, [bA.build_key]);
+  const readsA = fns.get(fnOf("pr-a")).versions.some((v) => v.CodeSha256 === bA.zip_sha256);
+  const hk1 = await hkV();
+  const keptA = (await okBuilds("pr-a")).some((x) => x.build_key === bA.build_key);
+  chk("V8 30일 지남 · 별칭 밖 · 남은 함수 판(판 1)이 읽는 zip → 지우지 않는다", r.cur_build_key !== bA.build_key && readsA && keptA && zips.has(bA.zip_key) && !deletedZips.includes(bA.zip_key),
+    JSON.stringify({ pruned: hk1.pruned, readsA, keptA }));
+  //  옛 함수 판을 정리해(남길 판 1개) A 를 읽는 판이 없어지게 한다 — 새 빌드 C 를 올리면 판 1 · 2 가 정리된다.
+  await call("app_server_limits_set", { keep_versions: 1 }, boss);
+  await call("app_save", { files: twin("pr-a", "require('http').createServer((q,s)=>s.end('p3')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "pr-a", wait_s: 120 }, alice, aliceCtx);
+  await call("app_server_limits_set", { reset: true }, boss);
+  const f = fns.get(fnOf("pr-a"));
+  const stillReads = f.cfg.CodeSha256 === bA.zip_sha256 || f.versions.some((v) => v.CodeSha256 === bA.zip_sha256);
+  const hk2 = await hkV();
+  chk("V8b 아무 판도 그 zip 을 안 읽게 되면 다음 정리가 zip 과 기록을 지운다", !stillReads && !(await okBuilds("pr-a")).some((x) => x.build_key === bA.build_key)
+    && deletedZips.includes(bA.zip_key) && Number(hk2.pruned) >= 1, JSON.stringify({ stillReads, pruned: hk2.pruned }));
+  await call("org_app_remove", { app_id: "pr-a" }, boss);
+}
+
+// V9 함수의 판 목록을 못 읽으면 이번 정리에선 그 함수의 빌드를 지우지 않는다 → 읽히면 지운다
+{
+  await call("app_save", { files: twin("pr-b", "require('http').createServer((q,s)=>s.end('q1')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "pr-b", wait_s: 120 }, alice, aliceCtx);
+  const [bA] = await okBuilds("pr-b");
+  await call("app_server_limits_set", { keep_versions: 1 }, boss);   // 두 번째 배포가 판 1(A)을 곧바로 정리 — A 는 아무도 안 읽는다
+  await call("app_save", { files: twin("pr-b", "require('http').createServer((q,s)=>s.end('q2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "pr-b", wait_s: 120 }, alice, aliceCtx);
+  await call("app_server_limits_set", { reset: true }, boss);
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='pr-b' AND build_key=$1`, [bA.build_key]);
+  const f = fns.get(fnOf("pr-b"));
+  const nobody = f.cfg.CodeSha256 !== bA.zip_sha256 && !f.versions.some((v) => v.CodeSha256 === bA.zip_sha256);
+  listFail.add(fnOf("pr-b"));
+  await hkV();
+  const kept = (await okBuilds("pr-b")).some((x) => x.build_key === bA.build_key) && zips.has(bA.zip_key);
+  listFail.delete(fnOf("pr-b"));
+  await hkV();
+  const gone = !(await okBuilds("pr-b")).some((x) => x.build_key === bA.build_key) && deletedZips.includes(bA.zip_key);
+  chk("V9 판 목록 실패 → 이번엔 남김 · 읽히면 지움", nobody && kept && gone, JSON.stringify({ nobody, kept, gone }));
+  await call("org_app_remove", { app_id: "pr-b" }, boss);
+}
+
+// V11 이 배포가 앱 서버를 끈 채 앱을 지우면(함수 줄 있음) — 함수 · 기록 · zip 을 남기고, 켜진 하우스키핑이 함수를 지운 뒤 함께 걷는다
+{
+  await call("app_save", { files: twin("off-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "off-a", wait_s: 120 }, alice, aliceCtx);
+  const zk = (await okBuilds("off-a")).map((x) => x.zip_key);
+  delete process.env.LIVELY_APP_SERVER_EXEC_ROLE;
+  await call("org_app_remove", { app_id: "off-a" }, boss);
+  process.env.LIVELY_APP_SERVER_EXEC_ROLE = ROLE;
+  const kept = fns.has(fnOf("off-a")) && !!(await rowOf("off-a")) && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='off-a'`)).length > 0 && zk.every((k) => zips.has(k));
+  const hk = await hkV();
+  const gone = !fns.has(fnOf("off-a")) && !(await rowOf("off-a")) && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='off-a'`)).length === 0 && zk.every((k) => deletedZips.includes(k));
+  chk("V11 앱 서버를 끈 배포에서 앱 지우기 → 함수 · 기록 · zip 남김 → 켜진 하우스키핑이 함께 걷는다", zk.length > 0 && kept && gone && hk.orphans >= 1, JSON.stringify({ kept, gone, orphans: hk.orphans }));
+}
+
+//  옛 빌드(A)를 만든다 — 첫 배포가 A, 둘째 배포가 B(cur). unref 면 둘째 배포 때 남길 판을 1개로 해 A 를 읽는 판(판 1)을 바로 정리한다.
+const twoBuilds = async (id, unref) => {
+  await call("app_save", { files: twin(id, `require('http').createServer((q,s)=>s.end('${id}-1')).listen(Number(process.env.PORT));`) }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: id, wait_s: 120 }, alice, aliceCtx);
+  const [bA] = await okBuilds(id);
+  if (unref) await call("app_server_limits_set", { keep_versions: 1 }, boss);
+  await call("app_save", { files: twin(id, `require('http').createServer((q,s)=>s.end('${id}-2')).listen(Number(process.env.PORT));`) }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: id, wait_s: 120 }, alice, aliceCtx);
+  if (unref) await call("app_server_limits_set", { reset: true }, boss);
+  const f = fns.get(fnOf(id));
+  const reads = f.cfg.CodeSha256 === bA.zip_sha256 || f.versions.some((v) => v.CodeSha256 === bA.zip_sha256);
+  return { bA, reads };
+};
+const hasBuild = async (id, key) => (await okBuilds(id)).some((x) => x.build_key === key);
+
+// V12 함수의 판 목록이 «함수 없음(404)» 이면 읽는 판도 없다 — 남은 판이 읽던 zip 이어도 지운다(V9 의 «못 읽음» 과 가른다)
+{
+  const { bA, reads } = await twoBuilds("pr-c", false);
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='pr-c' AND build_key=$1`, [bA.build_key]);
+  const gone404 = { ...api, listVersions: async (n) => { if (n === fnOf("pr-c")) throw new AwsError(404, "ResourceNotFoundException", "Function not found"); return api.listVersions(n); } };
+  await runAppServerHousekeeping({ api: gone404, metrics: async () => [], notify: async () => {} });
+  chk("V12 판 목록이 404(함수 없음) → 읽는 판이 없다고 보고 지운다", reads && !(await hasBuild("pr-c", bA.build_key)) && deletedZips.includes(bA.zip_key), JSON.stringify({ reads }));
+  await call("org_app_remove", { app_id: "pr-c" }, boss);
+}
+
+// V13 정리는 그 앱의 배포 잠금을 잡고 지운다 — 배포 · 걷기가 잠금을 쥐고 있으면 이번 틱엔 건너뛰고 · 풀리면 지운다
+{
+  const { bA, reads } = await twoBuilds("pr-d", true);
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='pr-d' AND build_key=$1`, [bA.build_key]);
+  await q(`UPDATE org_app_server SET lock_until = now() + interval '5 minutes' WHERE app_id='pr-d'`);
+  await hkV();
+  const keptLocked = await hasBuild("pr-d", bA.build_key) && zips.has(bA.zip_key);
+  const stillLocked = !!(await rowOf("pr-d")).lock_until;
+  await q(`UPDATE org_app_server SET lock_until = NULL WHERE app_id='pr-d'`);
+  await hkV();
+  const gone = !(await hasBuild("pr-d", bA.build_key)) && deletedZips.includes(bA.zip_key);
+  chk("V13 잠긴 앱의 옛 빌드는 건너뛴다(남의 잠금을 풀지 않는다) → 풀리면 지운다", !reads && keptLocked && stillLocked && gone && !(await rowOf("pr-d")).lock_until,
+    JSON.stringify({ reads, keptLocked, stillLocked, gone }));
+  await call("org_app_remove", { app_id: "pr-d" }, boss);
+}
+
+// V14 배포는 잠금 안에서 zip 을 한 번 더 본다 — 잠금 밖에서 본 뒤 지워졌으면(정리와 겹침) 그 판을 못 박지 않고 빌드를 무효로 · 함수는 그대로
+{
+  await call("app_save", { files: twin("rh-a", "require('http').createServer((q,s)=>s.end('r1')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "rh-a", wait_s: 120 }, alice, aliceCtx);
+  const v1 = await verOf("rh-a");
+  const [bA] = await okBuilds("rh-a");
+  await call("app_save", { files: twin("rh-a", "require('http').createServer((q,s)=>s.end('r2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "rh-a", wait_s: 120 }, alice, aliceCtx);
+  const cur0 = (await rowOf("rh-a")).cur_build_key;
+  let seenA = 0;
+  //  A 의 zip 을 처음 볼 때(잠금 밖 usableBuild)는 있고, 그다음(잠금 안)은 없다 — 그 사이 정리가 지운 것을 흉내 낸다.
+  setServerDepsForTest({ ...baseDepsV(), headZip: async (key) => (key === bA.zip_key ? (seenA++ === 0 ? headV(key) : null) : headV(key)) });
+  const u0 = calls("updateFunctionCode").length;
+  const c0 = calls("createFunction").length;
+  await call("app_revert", { app_id: "rh-a", version_no: v1 }, alice, aliceCtx);
+  const bad = await waitFor(async () => { const b = (await q(`SELECT status, error FROM org_app_server_build WHERE app_id='rh-a' AND build_key=$1`, [bA.build_key]))[0]; return b?.status === "failed" ? b : null; });
+  setServerDepsForTest(baseDepsV());
+  const r = await rowOf("rh-a");
+  chk("V14 잠금 안 재확인에서 zip 이 없어짐 → 코드 올리기 · 만들기 0 · 빌드 무효(다시 빌드하게) · cur 그대로", seenA >= 2 && !!bad && /방금 저장소에서 지워졌습니다/.test(String(bad.error))
+    && calls("updateFunctionCode").length === u0 && calls("createFunction").length === c0 && r.cur_build_key === cur0, JSON.stringify({ seenA, bad, cur: r.cur_build_key === cur0 }));
+  await call("org_app_remove", { app_id: "rh-a" }, boss);
+}
+
+// V15 Inactive(원본을 잃음 · 오래 쉼) 함수 — 같은 코드여도 다시 올려 되살린다(별칭만 옮기는 재사용 · 6분 기다리다 504 가 아니라)
+{
+  await call("app_save", { files: twin("in-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "in-a", wait_s: 120 }, alice, aliceCtx);
+  const f = fns.get(fnOf("in-a"));
+  f.cfg.State = "Inactive";
+  for (const v of f.versions) v.cfg.State = "Inactive";
+  const cur0 = (await rowOf("in-a")).cur_lambda_version;
+  const u0 = codeUps(fnOf("in-a")).length;
+  const d = await call("app_server_deploy", { app_id: "in-a", wait_s: 120 }, alice, aliceCtx);
+  const r = await rowOf("in-a");
+  chk("V15 Inactive 함수 · 같은 코드 → 코드를 다시 올려 되살림 · 새 함수 판으로 cur", d.status === "deployed" && d.build.reused === true && codeUps(fnOf("in-a")).length === u0 + 1
+    && f.cfg.State === "Active" && r.cur_lambda_version !== cur0 && f.versions.find((v) => v.Version === r.cur_lambda_version)?.cfg.State === "Active",
+    JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("in-a")).length - u0, state: f.cfg.State, cur0, cur: r.cur_lambda_version }));
+  await call("org_app_remove", { app_id: "in-a" }, boss);
+}
+
+// V16 건너뛴 후보(아직 읽히는 zip)가 앞자리에 있어도 뒤의 후보를 지운다 — 넘겨 가며 훑는다(쪽 크기 1 · 지울 수 1 로 좁혀 본다)
+{
+  const p = await twoBuilds("pg-a", false);   // P = 판 1 이 읽는다(남김)
+  const dd = await twoBuilds("pg-b", true);   // D = 아무도 안 읽는다(지움)
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '90 days' WHERE app_id='pg-a' AND build_key=$1`, [p.bA.build_key]);
+  await q(`UPDATE org_app_server_build SET started_at = now() - interval '89 days' WHERE app_id='pg-b' AND build_key=$1`, [dd.bA.build_key]);
+  const n = await pruneServerBuilds({ api }, 1, 10, 1);
+  chk("V16 앞자리의 «아직 읽힘» 후보를 건너 뒤의 후보를 지운다(쪽 1 · 지울 수 1)", p.reads && !dd.reads && n === 1 && await hasBuild("pg-a", p.bA.build_key)
+    && !(await hasBuild("pg-b", dd.bA.build_key)) && deletedZips.includes(dd.bA.zip_key) && !deletedZips.includes(p.bA.zip_key), JSON.stringify({ n, p: p.reads, d: dd.reads }));
+  await call("org_app_remove", { app_id: "pg-a" }, boss);
+  await call("org_app_remove", { app_id: "pg-b" }, boss);
+}
+await call("org_app_remove", { app_id: "ref-a" }, boss);
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip
 {

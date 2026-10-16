@@ -14,7 +14,9 @@ import { appBundleS3Config, blobTenant, getBlob, type BlobStoreKind } from "./ap
 import { SERVER_BUILDER_JS, ZIP_EXCLUDE, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 import { buildKeyOf, tailText, zipKeyFor, type AppServerDecl, type AppServerEnv } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
-import { claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, setServerBuildZipBytes, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
+import {
+  claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, setServerBuildZipBytes, setServerBuildZipVersion, touchServerBuild, type ServerBuildRow,
+} from "./app-server-store.js";
 import { s3Delete, s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
 import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 
@@ -37,8 +39,8 @@ export interface BuildDeps {
   spawnInSession?: (seat: BuildSeat, argv: string[]) => Promise<ChildProcess>;
   /** zip 서명 주소(시험이 로컬 주소로). */
   presignPut?: (key: string, expiresSec: number) => Promise<string>;
-  /** S3 에 zip 이 실제로 있나(크기). */
-  headZip?: (key: string) => Promise<{ size: number } | null>;
+  /** S3 에 zip 이 실제로 있나(크기 · 지금 판 번호 — #4801). */
+  headZip?: (key: string) => Promise<{ size: number; versionId?: string | null } | null>;
   /** 시험 — zip 지우기(빌드 도중 앱이 지워진 경우 · 앱 지우기). 기본 = S3. */
   deleteZip?: (key: string) => Promise<void>;
   readBlob?: (kind: BlobStoreKind, h: string) => Promise<Buffer | null>;
@@ -149,10 +151,12 @@ export async function ensureServerBuild(input: BuildInput, deps: BuildDeps = {})
  * 성공한 빌드를 쓸 수 있나 — zip 이 저장소에 그 크기로 있나 직접 본다(기록만 믿고 함수에 올리면 NoSuchKey 로 실패하고, 다시 해도 같은 줄을
  *  «재사용» 해서 스스로 못 고친다 — 격리 리뷰). 없거나 크기가 다르면 그 줄을 실패로 돌리고(다음 배포가 다시 빌드) null.
  *  저장소를 못 봤으면(일시 오류) 쓸 수 있다고 본다 — 올리기에서 다시 드러난다.
+ *  #4801 판 번호 — 지금 판이 기록한 판과 다르면(누가 같은 키에 다시 올렸다) 그 빌드를 다시 만든다: 함수가 읽는 판이 «옛 판» 이 되면 버킷 수명 규칙이
+ *   30일 뒤 지우고, 그러면 그 판을 읽던 함수가 멈춘다(Inactive). 판 번호를 모르는 옛 줄은 지금 판을 적어 둔다.
  */
 export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = {}): Promise<ServerBuildRow | null> {
   if (!row || row.status !== "ok" || !row.zip_key || !row.zip_sha256) return null;
-  let head: { size: number } | null;
+  let head: { size: number; versionId?: string | null } | null;
   try {
     const s3 = appBundleS3Config();
     if (!deps.headZip && !s3) return row;
@@ -162,14 +166,22 @@ export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = 
     logger.warn({ err: e, appId: row.app_id, key: row.build_key }, "빌드 zip 을 확인하지 못했다 — 있다고 보고 진행(#4484)");
     return row;
   }
-  if (head && row.zip_bytes == null) {
+  if (!head) { await invalidateServerBuild(row.app_id, row.build_key, "빌드 결과(zip)가 저장소에 없습니다 — 다시 빌드합니다"); return null; }
+  const why = row.zip_bytes != null && head.size !== Number(row.zip_bytes) ? `빌드 결과(zip) 크기가 기록과 다릅니다(${head.size} ≠ ${row.zip_bytes}) — 다시 빌드합니다`
+    : row.zip_version && head.versionId && head.versionId !== row.zip_version ? "빌드 결과(zip)가 다른 판으로 바뀌었습니다 — 다시 빌드합니다"
+    : null;
+  if (why) { await invalidateServerBuild(row.app_id, row.build_key, why); return null; }
+  let out = row;
+  if (row.zip_bytes == null) {
     //  크기를 모르는 옛 줄 — 본 크기를 적는다(#4792 코드 저장 셈이 «모름 → 0 → 통과» 로 새지 않게 · 격리 리뷰).
     await setServerBuildZipBytes(row.app_id, row.build_key, head.size).catch(() => { /* 다음에 */ });
-    return { ...row, zip_bytes: head.size };
+    out = { ...out, zip_bytes: head.size };
   }
-  if (head && head.size === Number(row.zip_bytes)) return row;
-  await invalidateServerBuild(row.app_id, row.build_key, head ? `빌드 결과(zip) 크기가 기록과 다릅니다(${head.size} ≠ ${row.zip_bytes}) — 다시 빌드합니다` : "빌드 결과(zip)가 저장소에 없습니다 — 다시 빌드합니다");
-  return null;
+  if (!row.zip_version && head.versionId) {
+    await setServerBuildZipVersion(row.app_id, row.build_key, head.versionId).catch(() => { /* 다음에 */ });
+    out = { ...out, zip_version: head.versionId };
+  }
+  return out;
 }
 
 /** 남이 잡은 빌드를 기다린다(같은 지문을 두 곳에서 동시에 넣은 경우). */
@@ -245,8 +257,9 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     if (!head || head.size !== res.zip.bytes) {
       return await fail("upload", `빌드 결과(zip)가 저장소에 ${head ? `다른 크기(${head.size} ≠ ${res.zip.bytes})로` : "없이"} 남았습니다 — 다시 빌드하세요`, log, detail);
     }
+    //  #4801 지금 판 번호를 함께 적는다 — 함수가 이 판을 바로 읽는다(REFERENCE). 빌더가 말한 판이 아니라 우리가 본 판이다.
     const row = await finishServerBuild(input.appId, key, {
-      ok: true, zip: { key: zipKey, bytes: res.zip.bytes, sha256_b64: res.zip.sha256_b64, unzipped: res.zip.unzipped, entries: res.zip.entries },
+      ok: true, zip: { key: zipKey, bytes: res.zip.bytes, sha256_b64: res.zip.sha256_b64, unzipped: res.zip.unzipped, entries: res.zip.entries, version: head.versionId ?? null },
       log_tail: tailText(log, 16 * 1024), detail,
     });
     if (!row) {
