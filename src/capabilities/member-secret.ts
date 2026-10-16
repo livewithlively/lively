@@ -17,6 +17,7 @@ import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 
 const KNOWN_KINDS = [
   "gitlab_pat", "github_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
   "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token", "claude_setup_token", CODEX_AUTH_KIND,
+  "anthropic_api_key",   // #4488 워크스페이스 LLM 키(owner=gateway · org_credential_set) — 앱 AI 실행의 기본 실행 계정 · LLM 프록시
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;
 

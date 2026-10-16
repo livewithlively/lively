@@ -10,6 +10,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
+import { jobSeatMember } from "./plan.js";
 
 let cached: AgentJobDeps | null = null;
 /** 이 프로세스가 판의 말을 듣기 시작한 시각 — 재기동 직후의 무응답 판정 보류 기준(plan.sweepDecision listeningSince). */
@@ -41,24 +42,29 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     assertJobAllowed: async (job) => {
       //  실행 계정 멤버가 아직 활성인가(모든 작업) · 앱 작업이면 그 사람의 지금 권한으로 그 앱을 쓸 수 있나(접수 때와 같은 판정).
       const { getMember } = await import("../org/store/members.js");
-      const m = job.account_member ? await getMember(job.account_member) : null;
-      if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${job.account_member ?? "?"})이 활성 구성원이 아닙니다`);
+      const seat = jobSeatMember(job);
+      const m = seat ? await getMember(seat) : null;
+      if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${seat ?? "?"})이 활성 구성원이 아닙니다`);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
     },
+    //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체.
+    jobEnv: async (job) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps()); },
+    onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {
       const ttlSec = job.timeout_sec + MCP_TOKEN_SLACK_SEC;
-      if (job.app_id && job.account_member) {
+      const seat = jobSeatMember(job);
+      if (job.app_id && seat) {
         //  앱 작업 — 앱 토큰(구성원 권한 ∩ 앱 동의 · 도구도 그 앱 동의 목록으로 좁혀진다 — principal.requireAppTool). 배선이지 경계가 아니다(머리말).
         //   동의를 거뒀거나 앱이 꺼졌으면 던진다 → 그 작업은 돌지 않는다(service.onBoot).
         const { mintAppToken } = await import("../apps/principal.js");
-        const t = await mintAppToken(job.account_member, job.app_id, "agent-job", { ttlSec });
+        const t = await mintAppToken(seat, job.app_id, "agent-job", { ttlSec });
         return { token: t.token, tokenHash: t.tokenHash };
       }
-      if (!job.account_member) return null;
+      if (!seat) return null;
       //  사람이 직접 시킨 작업 — 그 사람의 세션 토큰과 같은 급(멤버 권한을 따라간다 · 작업 상한만큼만 산다).
       const { getMember } = await import("../org/store/members.js");
-      const m = await getMember(job.account_member);
+      const m = await getMember(seat);
       if (!m || m.state !== "active") return null;
       const { mintToken } = await import("../org/store/tokens.js");
       const t = await mintToken({

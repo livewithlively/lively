@@ -17,6 +17,7 @@ import { initMcpServerRegistry, initToolAndAssetRegistry, initOrgHookHealthColum
 import { initConnectorRegistry, initCollectorRegistry, initCollectorPresets, initClassifierRegistry, initManagerRegistry, initIngestPolicyAndDistillers, initSourceVisPolicy } from "./schema/connectors-ingest.js";
 import { initDbAccessPolicies } from "./schema/db-access.js";
 import { initSessionsInfra } from "./schema/sessions-infra.js";
+import { initAiRuns } from "./schema/ai-runs.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
 import { initOAuthServer } from "./schema/oauth.js";
@@ -40,6 +41,7 @@ export async function initOrgSchema(): Promise<void> {
   await initOrgHookHealthColumn(itemsPool);        // org_hook.health(훅 실행 실패 관측)
   await initDbAccessPolicies(itemsPool);           // org_db_*(소스·정책·마스킹·grant) + db_access_log
   await initSessionsInfra(itemsPool);              // org_cron·managed_session·session_state·preview_env·stack_profile·node·task
+  await initAiRuns(itemsPool);                     // #4488 org_app_ai_run · org_app_llm_call(앱 AI 실행 기록 · 프록시 계측)
   await initIngestPolicyAndDistillers(itemsPool);  // org_ingest_policy·org_distiller(+seen·prefilter)
   await initSourceVisPolicy(itemsPool);           // #1291 v4: 커넥터별 자료 공개범위 정책
   await initOrgCoreLateAdditions(itemsPool);       // org_member.status_message·project_member·org_content_audit 확장

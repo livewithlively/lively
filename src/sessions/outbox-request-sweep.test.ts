@@ -216,8 +216,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   그 컨텍스트 안에서만 돌 수 있고, 사람이 아무도 없을 때 끊긴 작업을 끝내는 길이 요청(CP 60초 · 판의 박동)에 얹는 것뿐이다.
   //  #4786 — 앱 폴더 주기 재조정(app-folders)이 테넌트 정비로 하나 늘었다. 세션 · 붙은 앱 · 맞춘 기록이 그 워크스페이스 것이고(RLS)
   //   브로커 중계도 그 워크스페이스로 가므로 그 컨텍스트 안에서만 돌 수 있다 — 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다.
-  assert.equal(perTenant.length, 17, "테넌트 정비 열일곱(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정)");
-  assert.equal(SWEEP_JOBS.length, 18, "전역 하나(task-dispatch)가 더 있다");
+  //  #4488 — 앱 AI 실행 정비(ai-run-sweep)가 테넌트 정비로 하나 늘었다. 실행 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만 돌고,
+  //   작업 컨테이너에 붙은 실행을 작업 상태에 맞추는 안전망 · 게이트웨이가 죽어 끝맺지 못한 단발을 끝내는 길이 요청에 얹는 것뿐이다. DB 행만 바꾼다(파괴적 동작 없음).
+  assert.equal(perTenant.length, 18, "테넌트 정비 열여덟(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비)");
+  assert.equal(SWEEP_JOBS.length, 19, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -243,6 +245,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "session-stop-rule": STOP_RULE_SWEEP_MS,         // #4695 T5 — 새 정비. 대기 알림과 같은 30초(시계가 분 단위 — «N분 ± 이 주기»)
     "agent-job-sweep": STOP_RULE_SWEEP_MS,           // #4490 — 새 정비. 판 무응답 상한(90초)보다 짧아야 끊긴 작업이 제때 끝난다
     "app-folders": SWEEP_MIN_INTERVAL_MS,            // #4786 — 새 정비. 사건 경로가 놓친 앱 폴더 맞추기를 아웃박스 회수와 같은 5분마다 다시 본다
+    "ai-run-sweep": STOP_RULE_SWEEP_MS,              // #4488 — 새 정비. 작업 감시와 같은 박자로 그 뒤를 따라간다(작업이 끝난 뒤 실행 행을 맞춘다)
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");

@@ -37,6 +37,7 @@ import { appPrefsCapabilities } from "./app-prefs.js";
 import { appLaunchCapabilities } from "./app-launch.js";
 import { fileCapabilities } from "./files.js";
 import { agentJobCapabilities } from "./agent-jobs.js";
+import { aiRunCapabilities } from "./ai-runs.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { shellPrefsCapabilities } from "./shell-prefs.js";
@@ -171,6 +172,7 @@ const all: Capability[] = [
   ...appPrefsCapabilities, // #4601 앱 × 보는 사람 개인 설정(app_prefs_get/set, REST 전용) — 샌드박스 앱 화면은 localStorage 가 없고 SDK 에 신원이 없어 서버가 든다.
   ...appLaunchCapabilities, // #4480 v2-1 앱 주소(<앱>-<워크스페이스>.lvly.app)로 들어갈 일회용 코드(org_app_launch, REST 전용) — 사람 구성원 본인만.
   ...fileCapabilities, // #4673 파일 주소 — file_url(짧은 수명 서명 주소 GET·PUT, 받는 곳 /api/files/s/<토큰>) · file_address(세션 안 경로 → 주소) · file_path(주소 → 이 세션 안 경로). MCP+REST(/api/ui/files/*).
+  ...aiRunCapabilities, // #4488 앱 AI 실행 — app_ai_run(입구 하나 · 단발+API 키=프록시 · 그 밖=작업 컨테이너) · get/runs/cancel/targets(scope null · 앱 동의) · app_ai_account(_set) · app_ai_limits(_set admin). MCP+REST(/api/ui/ai-runs* · /api/ui/ai-targets · /api/ui/ai-account · /api/ui/ai-run-limits).
   ...agentJobCapabilities, // #4490 작업 컨테이너 — agent_job_run/get/list/cancel(scope=context, 보낸 사람 본인 구독 · 앱 화면은 다리로) · agent_job_limits(보기)/_set(admin). MCP+REST(/api/ui/agent-jobs*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).

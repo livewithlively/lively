@@ -563,7 +563,8 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 비밀 **값**은 여기 없다 — boot_hash 는 판 첫 말의 일회용 비밀(쓰면 지운다), secret_hash 는 판 콜백 비밀, mcp_token_hash 는 작업 AI 에 준
   //   라이블리 토큰(끝나면 폐기)의 sha256 이다. prompt 는 보낸 사람이 쓴 지시 원문 그대로다(기록 — 상민 2026-10-16 «프롬프트 원문은 작업 기록에»).
   //   API 로는 보낸 사람 본인만 본다(관리자는 상태·오류만) · 도구 호출 기록(mcp_call_log)에도 지시 값은 남기지 않는다(길이만).
-  //  account_kind: 이번엔 'subscription'(보낸 사람 본인 구독)만 쓴다 — 'api_key'(워크스페이스 키 · LLM 프록시)는 v2-9.
+  //  account_kind: 'subscription'(보낸 사람 본인 구독) · 'api_key'(워크스페이스 키 — #4488 v2-9: 보낸 사람 자리에서 돌되 하네스는 빈 설정 폴더 + 우리 프록시 토큰).
+  //  bare(#4488): 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다.
   //  attempts: 자리를 받은 횟수(띄우기 시도) — 일시 실패로 되돌릴 때 상한(service.MAX_LAUNCH_ATTEMPTS)을 본다.
   //  cancel_reason: 사람이 아닌 쪽이 멈춘 사유(앱 동의를 거둠 등) — 취소로 끝날 때 오류 문장이 된다(없으면 «취소했습니다»).
   //  reaped: «걷기를 마쳤다» = 종료 신호(kill-session 성공 또는 이미 없다는 확답)를 보냈고 작업 토큰을 폐기했다. 컨테이너 철거 자체는
@@ -608,6 +609,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  새 칸이 CREATE 뒤에 생긴 것이라 이미 만든 표에도 붙인다(같은 표 정의를 두 번 적는 것은 다른 표들과 같은 규약).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS cancel_reason TEXT`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS bare BOOLEAN NOT NULL DEFAULT false`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).

@@ -143,6 +143,10 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
   { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
+  // 앱 AI 실행 정비(#4488 앱 v2-9) — 작업 컨테이너에 붙은 열린 실행을 작업 상태에 맞추고(결과 형식 판정 · 재시도), 게이트웨이가 죽어 끝맺지 못한 단발(프록시)
+  //  실행을 끝낸다. 파괴적 동작 없음(DB 행만). ⚠ 테넌트 스코프 — 실행 행은 RLS 로 그 워크스페이스 것만 보인다.
+  { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("../ai-runs/live.js").then(async (m) => (await import("../ai-runs/service.js")).sweepAiRuns(await m.liveAiRunDeps())) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,

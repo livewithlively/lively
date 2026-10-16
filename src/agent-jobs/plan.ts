@@ -53,6 +53,15 @@ export function jobSessionId(jobId: number, hex8: string): string {
 }
 export const JOB_SESSION_ID_RE = /^job-[1-9][0-9]{0,15}-[0-9a-f]{8}$/;
 
+/**
+ * (순수) 작업이 앉는 자리(OS 계정 · 홈)의 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람.
+ *  API 키 실행도 사람의 자리에서 돈다(이 코어의 작업 컨테이너는 구성원 홈을 붙인다 — launch.ts 머리말). 키는 그 자리에 들어가지 않고 하네스는
+ *  빈 설정 폴더 + 프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob). «홈 없는 작업 컨테이너» 는 후속이다.
+ */
+export function jobSeatMember(job: { account_kind: string; account_member: string | null; requester: string }): string | null {
+  return job.account_kind === "api_key" ? job.requester : job.account_member;
+}
+
 /** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */
 export function timeoutSecOf(requestedMin: unknown, p: Pick<AgentJobPolicy, "default_timeout_min" | "max_timeout_min">): number {
   const n = typeof requestedMin === "number" && Number.isFinite(requestedMin) ? Math.floor(requestedMin) : NaN;

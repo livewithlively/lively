@@ -22,6 +22,8 @@ export interface AgentJobRow {
   resume_conversation: string | null;
   resume_job_id: number | null;
   timeout_sec: number;
+  /** #4488 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다. */
+  bare: boolean;
   session_id: string | null;
   boot_hash: string | null;
   secret_hash: string | null;
@@ -45,7 +47,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, session_id, boot_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, session_id, boot_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -85,6 +87,8 @@ export interface NewAgentJob {
   resumeConversation: string | null;
   resumeJobId: number | null;
   timeoutSec: number;
+  /** 단발(도구 없음) — 없으면 false. */
+  bare?: boolean;
 }
 
 /**
@@ -103,10 +107,10 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true]);
     return { row: norm(rows[0])! };
   });
 }
@@ -128,11 +132,13 @@ export async function claimAgentJobs(
   const gap = Math.max(0, Math.floor(o.retryGapSec ?? 0));
   return withTx(async (c) => {
     await lockTenantQueue(c);
-    const live = await q(c, `SELECT id, account_member FROM org_agent_job WHERE status IN ('starting','running')`);
+    //  사람당 상한의 축 = 자리의 구성원(plan.jobSeatMember 와 같은 식) — API 키 작업(account_member NULL)도 보낸 사람 자리에 앉으니 그 사람으로 센다(격리 리뷰).
+    const SEAT = `CASE WHEN account_kind='api_key' THEN requester ELSE account_member END AS account_member`;
+    const live = await q(c, `SELECT id, ${SEAT} FROM org_agent_job WHERE status IN ('starting','running')`);
     //  대기열 전부를 본다(상한 = max_queued 의 범위 끝) — 앞줄이 사람당 상한에 걸려 있어도 그 뒤의 남의 작업이 굶지 않게.
     //   일시 실패로 되돌린 작업(attempts > 0)은 되돌린 뒤 gap 초가 지나야 다시 받는다 — 쉬는 동안엔 뒤의 작업이 그 자리를 쓴다.
     const queued = await q(c,
-      `SELECT id, account_member FROM org_agent_job
+      `SELECT id, ${SEAT} FROM org_agent_job
         WHERE status='queued' AND NOT cancel_requested AND (attempts = 0 OR updated_at < now() - make_interval(secs => $2))
         ORDER BY id LIMIT $1`,
       [QUEUE_SCAN_MAX, gap]);
@@ -266,9 +272,9 @@ export async function requestCancelAgentJob(id: number, reason: string | null = 
 }
 
 /** 감시가 보는 칸 — 판단(시각·상한·취소)과 걷기(세션·토큰)에 필요한 것만. 프롬프트·결과(행당 수백 KB)는 읽지 않는다. */
-export type AgentJobSweepRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id" | "mcp_token_hash" | "timeout_sec" | "cancel_requested"
+export type AgentJobSweepRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id" | "mcp_token_hash" | "timeout_sec" | "cancel_requested" | "account_kind" | "requester"
   | "created_at" | "claimed_at" | "started_at" | "last_tick_at" | "ended_at" | "error" | "app_id" | "account_member">;
-const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, app_id, account_member,
+const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, account_kind, requester, app_id, account_member,
   created_at, claimed_at, started_at, last_tick_at, ended_at, left(error, 600) AS error`;
 
 /** 감시 대상 — 열린 작업과, 끝났지만 아직 걷지 않은 작업(열린 작업 인덱스의 조건과 같은 꼴). */

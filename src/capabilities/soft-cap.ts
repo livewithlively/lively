@@ -51,6 +51,10 @@ export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapS
   agent_job_run: {
     label: { limit: 120, policy: "clamp", effect: "작업 이름이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(작업은 그대로 보냈습니다)." },
   },
+  //  #4488 — 앱 AI 실행(prompt 최대 10만 자)의 이름표. 작업 컨테이너와 같은 규칙.
+  app_ai_run: {
+    label: { limit: 120, policy: "clamp", effect: "실행 이름이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(실행은 그대로 보냈습니다)." },
+  },
   knowledge_save: {
     // ⚠ 안내는 **실제로 존재하는 싼 경로**를 가리켜야 한다: knowledge_save 는 body_md 가 필수라 "title 만 다시
     //  보내라"가 성립하지 않는다(전문 재전송 = 이 정책이 없애려던 바로 그 낭비). 그래서 knowledge_set_title 을 뒀다.
@@ -105,6 +109,7 @@ export const HARD_CAP_OK: Readonly<Record<string, readonly string[]>> = {
   delegate_run: ["subpath", "repo", "ref", "node", "harness"],             // 실행 좌표 — 잘린 경로·브랜치·하네스 키로 돌면 안 된다
   store_sql: ["app_id"],                                                  // #4226 앱 id — 잘리면 다른 앱(또는 없는 앱)을 가리킨다
   agent_job_run: ["model"],                                               // #4490 모델 이름 — 잘린 이름으로 돌면 엉뚱한 모델이거나 하네스가 즉사한다
+  app_ai_run: ["model", "job"],                                           // #4488 모델 이름 · 작업 이름(설정 칸의 열쇠) — 잘리면 다른 모델 · 다른 작업의 실행 계정을 가리킨다
 };
 
 /**

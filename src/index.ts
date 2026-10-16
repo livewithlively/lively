@@ -4,6 +4,7 @@
 import "./boot/tenancy-env.js";
 import express from "express";
 import { BearerVerifier } from "./auth/bearer.js";
+import { registerLlmProxyRoutes } from "./ai-runs/routes.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
@@ -158,9 +159,13 @@ app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
 app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
 //  #4225 app_save(구성원 저장) — 화면 + 데이터 앱뿐이라(스킬·worker 번들 없음) 4MB 로 충분하다(화면 한 장 상한 2MB).
 app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
+//  #4488 LLM 프록시(/api/llm/anthropic/*) — 본문을 바이트 그대로 위로 흘린다(앱 · Claude Code 가 보낸 JSON 을 다시 직렬화하지 않는다 · 1MB 를 넘는다).
+app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
+//  #4488 LLM 프록시 — 실행 토큰 · 앱 서버 토큰(고급 길)으로 Anthropic Messages API 를 흘려 보낸다(ai-runs/routes.ts).
+registerLlmProxyRoutes(app, verifier);
 // /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
 //  로그인 지점을 못 찾는다). 공개 주소가 미설정이면 종전 401 그대로.
 const auth = bearerWithResourceMetadata(verifier);

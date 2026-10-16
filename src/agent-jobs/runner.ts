@@ -22,6 +22,8 @@
 export const RUNNER_GATEWAY = { host: "127.0.0.1", port: 8080 } as const;
 /** 하네스 인자 안에서 «판이 만든 MCP 설정 파일 경로» 로 바꿔 넣을 자리표. */
 export const MCP_CONFIG_PLACEHOLDER = "{{LVLY_MCP_CONFIG}}";
+/** env 값 자리표 — 판이 이 작업만의 빈 설정 폴더를 만들어 바꿔 넣는다(#4488 API 키 실행 · ai-runs/service.CONFIG_DIR_PLACEHOLDER 와 같은 글자). */
+export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 /** 판(부트)이 받는 env 이름 — 작업 id 와 일회용 부트 비밀. 부트가 읽자마자 지운다(하네스에 안 물려준다). */
 export const JOB_ID_ENV = "LVLY_JOB_ID";
 export const JOB_BOOT_ENV = "LVLY_JOB_BOOT";
@@ -110,6 +112,11 @@ if (J.mcp) { mcpPath = path.join(dir, "mcp.json"); fs.writeFileSync(mcpPath, JSO
 const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a)).filter((a) => a !== null);
 const env = Object.assign({}, process.env, J.env || {});
 delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV};
+// 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
+for (const k of Object.keys(env)) {
+  if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; }
+  else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
+}
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null;
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
@@ -182,12 +189,14 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-[\]]{1,63}$/i;
  *  · `--strict-mcp-config` — 멤버가 등록한 MCP 서버를 싣지 않는다. 라이블리 MCP 는 작업용 토큰(앱 작업이면 앱 토큰)으로만 붙인다.
  *  · 대화를 남긴다(--no-session-persistence 를 쓰지 않는다) — 같은 대화를 이어받는 작업(--resume)이 그 기록을 읽는다.
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
     "--settings", JSON.stringify({ disableAllHooks: true }),
     "--strict-mcp-config",
+    //  #4488 단발 — 도구 없이 글만(`--tools ""` = 내장 도구 전부 끔 · 실측 2026-10-16 claude 2.1.301: init 이벤트 tools []). 파일 · 셸에 닿지 않는다.
+    ...(o.bare ? ["--tools", ""] : []),
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
     ...(o.model ? ["--model", o.model] : []),
     ...(o.resume ? ["--resume", o.resume] : []),

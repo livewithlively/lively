@@ -207,6 +207,11 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
   assert.ok(!a.includes("--no-session-persistence"), "이어받기를 위해 대화를 남긴다");
   const b = claudeJobArgv({ mcp: false });
   assert.ok(b.includes("--strict-mcp-config") && !b.includes("--mcp-config") && !b.includes("--model") && !b.includes("--resume"));
+  assert.ok(!a.includes("--tools") && !b.includes("--tools"), "단발이 아니면 도구를 끄지 않는다");
+  //  #4488 단발(bare) — 내장 도구 전부 끔(`--tools ""`) · MCP 없음.
+  const c = claudeJobArgv({ mcp: false, bare: true });
+  assert.equal(c[c.indexOf("--tools") + 1], "", "빈 문자열 인자 하나로 도구를 끈다");
+  assert.ok(!c.includes("--mcp-config"));
   for (const bad of ["--dangerously-x", "-p", "a b", "x;rm"]) assert.throws(() => claudeJobArgv({ model: bad, mcp: false }), bad);
 });
 

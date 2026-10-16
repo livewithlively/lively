@@ -54,11 +54,15 @@ export interface AgentJobDeps {
    * 이 작업을 아직 돌려도 되나 — 실행 계정이 활성 구성원이고, 앱 작업이면 그 사람이 그 앱을 쓸 수 있나(보임 · 켜짐 · 동의).
    *  «안 된다» 는 HttpError 로 던진다(띄우기 직전 · 도는 동안 감시). 그 밖의 던짐은 «판정을 못 했다»(DB 가 잠깐 막힘)다.
    */
-  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member">): Promise<void>;
+  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
   mintMcpToken(job: AgentJobRow): Promise<{ token: string; tokenHash: string } | null>;
+  /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다. */
+  jobEnv?(job: AgentJobRow): Promise<Record<string, string>>;
+  /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
+  onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   revokeToken(tokenHash: string): Promise<void>;
   /** 그 프로젝트 폴더에서 이 사람이 셸을 띄울 수 있나(사람 세션과 같은 판정 — 안 되면 던진다). */
   assertProjectCwd(user: LivelyUser, projectId: number): Promise<void>;
@@ -190,21 +194,29 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   if (projectId != null) await d.assertProjectCwd(user, projectId);
   const cwd = projectId != null ? projectFolderCwd(projectId) : appFolderCwd(appId!);
 
-  const job: NewAgentJob = {
+  const row = await enqueueAgentJob({
     requester: me, accountKind: "subscription", accountMember: me,
     appId, projectId, cwd, harness: "claude", model, label, prompt,
     resumeConversation: resumeConv, resumeJobId,
     timeoutSec: timeoutSecOf(input.timeout_min, p),
-  };
+  }, p, d);
+  //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
+  return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
+}
+
+/**
+ * 접수의 공통 꼬리 — 행을 넣고(대기열이 차면 429) 자리가 있으면 곧바로 띄운다. 입력 검증 · 누가 보낼 수 있나는 부르는 쪽이 끝냈다.
+ *  #4488 앱 AI 실행(ai-runs/service)이 실행 계정을 정해 여기로 온다 — API 키 실행(account_kind 'api_key')은 이 길로만 생긴다(사람 도구 agent_job_run 은 구독만).
+ */
+export async function enqueueAgentJob(job: NewAgentJob, p: AgentJobPolicy, d: AgentJobDeps): Promise<AgentJobRow> {
   const put = await d.store.insertAgentJob(job, p);
   if ("full" in put) {
     throw new HttpError(429, `작업 대기열이 찼습니다(대기 ${put.full.queued}건 · 실행 ${put.full.running}건) — 잠시 뒤 다시 보내 주세요`);
   }
-  logger.info({ job: put.row.id, requester: me, app: appId, project: projectId }, "[agent-job] 접수");
+  logger.info({ job: put.row.id, requester: job.requester, app: job.appId, project: job.projectId, account: job.accountKind }, "[agent-job] 접수");
   //  자리가 있으면 곧바로 띄운다 — 응답을 붙잡지 않게 뒤로 미룬다(같은 테넌트 맥락으로).
   d.later(() => dispatchAgentJobs(d), 0);
-  //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
-  return publicJob(put.row, { own: true, position: await d.store.queuePosition(put.row.id).catch(() => null) });
+  return put.row;
 }
 
 /**
@@ -308,14 +320,25 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     await d.revokeToken(t.tokenHash).catch(() => undefined);
     throw new HttpError(410, "끝난 작업입니다");
   }
+  //  #4488 — 하네스에 더 줄 env(API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
+  let env: Record<string, string> = {};
+  try { env = d.jobEnv ? await d.jobEnv(booted) : {}; } catch (e) {
+    const why = String((e as Error)?.message ?? e);
+    logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
+    await d.revokeToken(t.tokenHash).catch(() => undefined);
+    const ended = await d.store.finishAgentJob(booted.id, { status: "failed", error: `실행 환경을 만들지 못했습니다: ${why}`.slice(0, 600), from: ["running"] });
+    if (ended) { d.later(() => reapJob(ended, d), 0); d.later(() => dispatchAgentJobs(d), 0); }
+    throw new HttpError(410, "작업을 시작하지 못했습니다");
+  }
   const slug = d.workspaceSlug();
-  const mcp: Record<string, unknown> = { mcpServers: { lively: { type: "http", url: "http://127.0.0.1:8080/mcp",
+  //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
+  const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: "http://127.0.0.1:8080/mcp",
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
-  logger.info({ job: booted.id, session: booted.session_id }, "[agent-job] 판이 섰다");
+  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
-    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: true }),
-    prompt: booted.prompt, mcp, env: {}, cwd: booted.cwd,
+    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare }),
+    prompt: booted.prompt, mcp, env, cwd: booted.cwd,
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
   };
 }
@@ -364,6 +387,8 @@ export type ReapRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id
  */
 export async function reapJob(row: ReapRow, d: AgentJobDeps): Promise<boolean> {
   if (!isEnded(row.status) || row.reaped) return false;
+  //  #4488 — 이 작업에 붙은 AI 실행 행을 맞춘다(몇 번 불러도 같다 · 던지지 않는다). 걷기를 붙잡지 않게 뒤로 미룬다 — 형식 재시도 작업 접수까지 달릴 수 있다(격리 리뷰).
+  if (d.onJobEnded) { const hook = d.onJobEnded; d.later(() => hook(row).catch(() => undefined), 0); }
   let ok = true;
   if (row.session_id && !JOB_SESSION_ID_RE.test(row.session_id)) {
     logger.error({ job: row.id, session: row.session_id }, "[agent-job] 작업 세션 id 꼴이 아니다 — 컨테이너는 걷지 않는다");
