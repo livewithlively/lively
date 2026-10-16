@@ -25,8 +25,8 @@ export interface StageSyncRaw {
 
 export interface StageSyncHealth {
   ok: boolean;
-  state: "synced" | "skipped" | "stale";
-  /** skipped 일 때의 거친 사유(unpushed·dirty·merging…). synced·stale 이면 null. */
+  state: "synced" | "skipped" | "failed" | "stale";
+  /** skipped·failed 일 때의 거친 사유(unpushed·dirty·merging… / web·standalone·restart·deps·ff·healthz). synced·stale 이면 null. */
   code: string | null;
   /** 막혀 있은 시간(초). synced 면 0. */
   stuckSec: number;
@@ -53,7 +53,7 @@ export function stageSyncHealth(
   if (!raw || typeof raw !== "object") return null;
   const at = ms(str(raw.at));
   const state = str(raw.state);
-  if (at === null || (state !== "synced" && state !== "skipped")) return null;
+  if (at === null || (state !== "synced" && state !== "skipped" && state !== "failed")) return null;
 
   const ageSec = Math.round((nowMs - at) / 1000);   // 미래 시각이면 음수 = '아주 신선함' — stale 판정만 하므로 그대로 안전하다
   // 잡이 아무 말도 안 한 지 오래다 — 건너뛴 것보다 나쁘다(건너뛰는 중이면 매 주기 갱신되기 때문이다).
@@ -63,6 +63,9 @@ export function stageSyncHealth(
   const sinceIso = str(raw.since) || str(raw.at);
   const since = ms(sinceIso) ?? at;
   const stuck = Math.max(0, Math.round((nowMs - since) / 1000));
+  //  #4814 — failed = 당긴 커밋은 들어왔는데 빌드·재시작이 못 따라갔다(게이트웨이는 옛 판으로 돈다).
+  //   건너뜀과 달리 기다린다고 풀리지 않으니 유예 없이 곧바로 드러낸다.
+  if (state === "failed") return { ok: false, state: "failed", code: str(raw.code) || "unknown", stuckSec: stuck };
   return { ok: stuck <= stuckSec, state: "skipped", code: str(raw.code) || "unknown", stuckSec: stuck };
 }
 
