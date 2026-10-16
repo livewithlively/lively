@@ -3,6 +3,8 @@
 // ── 무엇을 하나 ───────────────────────────────────────────────────────────────────────────────────
 //  매니지드 세션의 하네스를 **사람이 안 보는 채로** 아래 시간이 지나면 끈다(tmux kill-session — 장부 행은 남아 «복원 가능»).
 //   · 작업 중 · 백그라운드 작업 · 예약 깨움(ScheduleWakeup·반복 예약) 대기 → **끄지 않는다(상한 없음)**
+//   · claude 가 한도 자동 이어감을 걸어 두고 기다리는 중(«Usage limit reached · continuing automatically at …») · 막 풀려 이어 가는 중
+//     → 끄지 않는다(#4810 — 끄면 그 대기가 사라져 일이 스스로 이어지지 않는다. 걸린 줄에서 24시간 30분까지 — harness-io/quota-wait.ts)
 //   · 완료(턴 끝 ∧ 질의 아님 ∧ 기다리는 일 없음) → N분 뒤(기본 3)
 //   · 사람에게 질의 중(승인·선택 대기) → M분 뒤(기본 60 — T2 «승인 대기 상한 1시간» 결정을 잇는다)
 //   · 하네스가 끝나 셸만 남음(기동 실패 안내 — 런처 ③) → 완료와 같이 N분 뒤
@@ -44,6 +46,8 @@ import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import { liveJobVerdicts, type JobVerdicts } from "./session-reaper.js";
+import { readQuotaWait } from "./session-quota-wait.js";
+import { QUOTA_WAIT_MAX_MS, type QuotaWait } from "../terminal/harness-io/quota-wait.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 
 /** 이 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 한 표다(catalog.ts). 그 밖은 옛 회수 방식(유휴·붙음·작업 시계)이 맡는다. */
@@ -85,8 +89,10 @@ export type StopState = "done" | "asking" | "exited";
 export type KeepWhy =
   | "unobserved" | "managed" | "no-state" | "kind" | "harness" | "runtime" | "no-conv"
   | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock";
-/** 판정은 끄라는데 집행이 멈춘 이유(stopOne · 집행 상한 · 작업 판별). */
-export type HoldWhy = "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep";
+/** 판정은 끄라는데 집행이 멈춘 이유(stopOne · 집행 상한 · 작업 판별 · 한도 자동 이어감 대기). */
+export type HoldWhy =
+  | "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep"
+  | "limit-wait" | "limit-unknown";
 export type StopVerdict =
   | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
   | { act: "stop"; state: StopState; since: number; dueAt: number };
@@ -226,6 +232,8 @@ export interface StopRuleDeps {
   /** ⑥ 하네스가 띄운 작업 — 있음(jobs) · 판정 불가(unknown). 둘 다 이번 판엔 끄지 않는다. */
   jobVerdicts: (ids: ReadonlySet<string>) => Promise<JobVerdicts>;
   capture: (id: string) => Promise<string>;
+  /** #4810 — claude 가 한도 자동 이어감을 걸어 두고 기다리는 중인가(대화 기록 끝). 없으면 null · 못 읽으면 던진다(이번 판엔 안 끈다). */
+  quotaWait: (s: SessionInfo, nowMs: number) => Promise<QuotaWait | null>;
   keys: (id: string, key: string) => Promise<void>;
   saveNote: (id: string, note: SessionStopNote) => Promise<unknown>;
   reap: (id: string) => Promise<void>;
@@ -271,6 +279,37 @@ export const MAX_STOPS_PER_SWEEP = 10;
 export const JOB_HOLD_MS = 3 * 60_000;
 /** 테넌트·세션 → 작업 보호가 풀리는 시각(ms). */
 const jobHold = new Map<string, number>();
+/**
+ * #4810 — 한도 자동 이어감을 기다리던 세션은 이만큼 다시 재지 않는다(대화 기록 끝 1MB 를 30초마다 읽지 않게). 대기는 보통 몇 시간이고
+ *  끝나는 길은 셋이다: 풀려서 이어 감(새 턴이 «작업 중» 보고를 낸다 — 다시 잴 일이 없다) · 사람이 접음(Esc) · 늦게 깸(Enter 대기).
+ *  뒤의 둘은 이 간격만큼 늦게 알아챈다 — 몇 시간 기다린 세션에서 5분은 작다.
+ */
+export const QUOTA_RECHECK_MS = 5 * 60_000;
+/**
+ * 대화 기록을 연달아 이만큼 못 읽고 **그리고** 첫 실패에서 QUOTA_UNKNOWN_FOLD_MS 가 지나면(중계 장애가 길다) 대기 없음으로 보고 종전대로 끈다 —
+ *  못 읽는 세션이 영영 남지 않게. 횟수만 세면 판이 30초마다 돌아 1분 만에 접힌다(격리 리뷰) — 그 1~2분짜리 중계 장애가 바로 이번 사고를 다시 낸다.
+ *  시간 조건은 T7 판정 불가 보류(유휴 틱 5분 × 3 ≈ 10분)와 같은 크기로 맞췄다. «연달아» 는 실패 사이가 FOLD 안이라는 뜻이다 — 그보다 오래
+ *  조용했다가 난 실패는 새로 센다(띄엄띄엄 난 실패 셋을 이어 붙여 곧바로 접지 않게 — 격리 리뷰 2차).
+ */
+export const QUOTA_UNKNOWN_MAX = 3;
+export const QUOTA_UNKNOWN_FOLD_MS = 10 * 60_000;
+/** 못 읽은 세션은 이만큼 뒤에 다시 읽는다 — 30초 판마다 DB·중계·작업 판정을 다시 치지 않게(접기 전 약 10번). */
+export const QUOTA_UNKNOWN_RETRY_MS = 60_000;
+/** 테넌트·세션 → 한도 대기 보호가 풀리는 시각(ms)과 그동안 셀 이유(대기 · 못 읽음). */
+const limitHold = new Map<string, { until: number; why: "limit-wait" | "limit-unknown" }>();
+/** 테넌트·세션 → 대화 기록을 연달아 못 읽은 횟수·첫 실패·마지막 실패 시각(ms). 판정되면 지운다 · 한 시간 넘게 안 갱신된 것은 판마다 버린다(메모리). */
+const quotaUnknown = new Map<string, { n: number; first: number; at: number }>();
+/** 테넌트·세션 → 마지막으로 로그에 남긴 대기 사건의 시각(ms) — 같은 대기를 5분마다 다시 찍지 않게. 상한이 지나면 버린다. */
+const limitSeen = new Map<string, number>();
+
+/** 하네스를 띄운 시각(ms) = tmux 세션을 만든 시각(#{session_created}, 초) — 그보다 앞선 대기 줄은 그 전 프로세스의 것이다(다시 띄우면 대기가 사라진다). */
+export function launchedAtMsOf(s: Pick<SessionInfo, "created">): number {
+  return (Number(s.created) || 0) * 1000;
+}
+/** 기본 «한도 대기» 재료 — 대화 기록 끝을 읽는 함수에 띄운 시각·지금을 넘긴다(읽는 함수는 시험 seam). */
+export function defaultQuotaWait(read: typeof readQuotaWait = readQuotaWait): StopRuleDeps["quotaWait"] {
+  return (s, nowMs) => read(s.id, { launchedAtMs: launchedAtMsOf(s), nowMs });
+}
 
 function defaultDeps(): StopRuleDeps {
   return {
@@ -282,6 +321,7 @@ function defaultDeps(): StopRuleDeps {
     view: (id) => viewState(id),
     jobVerdicts: (ids) => liveJobVerdicts(ids),
     capture: (id) => tmux(["capture-pane", "-t", id, "-p", "-e"]),
+    quotaWait: defaultQuotaWait(),
     keys: async (id, key) => { await tmuxQuiet(["send-keys", "-t", id, key]); },
     saveNote: (id, note) => setSessionStopNote(id, note),
     reap: (id) => reapCentralSession(id),
@@ -339,9 +379,14 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const nowMs = d.now();
     const holdKey = (id: string): string => key + "\u0000" + id;
     for (const [k, until] of jobHold) if (until <= nowMs) jobHold.delete(k);
-    const held = due.filter((x) => jobHold.has(holdKey(x.s.id)));
-    for (const x of held) { count("jobs"); noteOldest("jobs", x.s.id, nowSec - x.since); }
-    const toJudge = due.filter((x) => !jobHold.has(holdKey(x.s.id)));
+    for (const [k, h] of limitHold) if (h.until <= nowMs) limitHold.delete(k);
+    for (const [k, u] of quotaUnknown) if (nowMs - u.at > 3_600_000) quotaUnknown.delete(k);   // 메모리 정리 — 셈 규칙(공백 재시작)은 judgeQuotaWait 가 맡는다
+    for (const [k, atMs] of limitSeen) if (nowMs - atMs > QUOTA_WAIT_MAX_MS) limitSeen.delete(k);
+    //  보호 중인 세션은 프로브·화면·대화 기록 어느 것도 다시 재지 않는다 — 작업 보호(3분)가 한도 대기 보호보다 앞선다(둘 다면 작업으로 센다).
+    const heldWhy = (id: string): "jobs" | "limit-wait" | "limit-unknown" | null =>
+      jobHold.has(holdKey(id)) ? "jobs" : limitHold.get(holdKey(id))?.why ?? null;
+    for (const x of due) { const w = heldWhy(x.s.id); if (w) { count(w); noteOldest(w, x.s.id, nowSec - x.since); } }
+    const toJudge = due.filter((x) => !heldWhy(x.s.id));
     //  상한은 프로브 **앞**에서도 건다 — 롤 직후처럼 후보가 많을 때 전부를 동시에 컨테이너 프로브하지 않게(격리 리뷰). 오래 논 것부터 본다.
     let capped = false;
     toJudge.sort((a, b) => a.since - b.since);
@@ -361,9 +406,14 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); noteOldest("jobs-unknown", s.id, nowSec - since); continue; }
       if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; continue; }
       try {
-        const out = await stopOne(d, s, state);
+        const out = await stopOne(d, s, state, holdKey(s.id));
         //  낡은 질의 표식으로 «답이 났다(answered)» 에 영영 걸리는 세션도 여기서 보인다(재검토 C).
-        if (out.skip) { count(out.skip); noteOldest(out.skip, s.id, nowSec - since); continue; }
+        if (out.skip) {
+          count(out.skip); noteOldest(out.skip, s.id, nowSec - since);
+          if (out.skip === "limit-wait" && out.wait) holdQuotaWait(holdKey(s.id), s.id, out.wait, nowMs);
+          if (out.skip === "limit-unknown") limitHold.set(holdKey(s.id), { until: nowMs + QUOTA_UNKNOWN_RETRY_MS, why: "limit-unknown" });
+          continue;
+        }
         stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null });
       } catch (e) {
         count("failed");
@@ -406,11 +456,25 @@ export function logStopRuleTick(
  * 한 세션을 끈다 — 저장 → 종료. 끄기 직전 화면을 다시 읽어 그새 바뀌었으면 끄지 않는다.
  *  @returns skip = 안 끈 이유 · note = 남긴 쪽지
  */
-async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promise<{ skip?: "turn-now" | "answered" | "asking-now" | "viewing-now"; note: SessionStopNote }> {
+async function stopOne(
+  d: StopRuleDeps, s: SessionInfo, state: StopState, hk: string,
+): Promise<{ skip?: "turn-now" | "answered" | "asking-now" | "viewing-now" | "limit-wait" | "limit-unknown"; note: SessionStopNote; wait?: QuotaWait }> {
   const harness = s.harness;
-  const cap = captureOf(await d.capture(s.id));
+  const run = harnessIo(harness)?.run ?? null;
+  let cap = captureOf(await d.capture(s.id));
   //  마지막 확인 — 목록을 본 뒤 그새 턴이 시작됐거나(깨움·알림이 연 턴) 질문에 답이 났으면 이번엔 안 끈다. 다음 판이 새 사실로 다시 판정한다.
-  if (screenRunning(cap, harnessIo(harness)?.run ?? null)) return { skip: "turn-now", note: { at: 0, why: state, harness } };
+  if (screenRunning(cap, run)) return { skip: "turn-now", note: { at: 0, why: state, harness } };
+  //  #4810 — 한도 자동 이어감 대기. Claude Code 는 턴 도중 한도에 닿으면 턴을 정리해 **정상 종료**하고(Stop 훅 → «쉼» 보고 → 여기선 완료)
+  //   하네스 안에서 풀리는 시각을 기다렸다가 스스로 이어 간다. 그 대기는 화면의 «esc to cancel» 이라 위 «도는 턴» 판정에 안 걸린다.
+  //   끄면 대기가 사라져 일이 영영 안 이어진다 — 예약 깨움처럼 지킨다. 판정 재료는 대화 기록의 걸림·이어 감·접힘 줄(harness-io/quota-wait.ts).
+  if (state === "done" && harness === "claude") {
+    const w = await judgeQuotaWait(d, s, hk);
+    if (w === "unknown") return { skip: "limit-unknown", note: { at: 0, why: state, harness } };
+    if (w) return { skip: "limit-wait", note: { at: 0, why: state, harness }, wait: w };
+    //  대화 기록은 중계로 읽어 수 초가 걸린다 — 그사이 턴이 시작됐을 수 있다(한도가 풀린 순간이면 이어 가기 시작한 하네스). 화면을 한 번 더 본다.
+    cap = captureOf(await d.capture(s.id));
+    if (screenRunning(cap, run)) return { skip: "turn-now", note: { at: 0, why: state, harness } };
+  }
   const asking = screenAsks(cap);
   if (state === "asking" && !asking) return { skip: "answered", note: { at: 0, why: state, harness } };
   if (state === "done" && asking) return { skip: "asking-now", note: { at: 0, why: state, harness } };
@@ -431,6 +495,45 @@ async function stopOne(d: StopRuleDeps, s: SessionInfo, state: StopState): Promi
   await Promise.resolve(d.saveNote(s.id, note)).catch((e) => logger.warn({ err: e, id: s.id }, "하네스 종료 규칙: 쪽지 저장 실패(끄기는 계속)"));
   await d.reap(s.id);
   return { note };
+}
+
+/**
+ * #4810 — 이 세션이 한도 자동 이어감을 기다리는(또는 막 이어 가는) 중인가. 대화 기록을 못 읽으면 «unknown»(이번 판엔 안 끈다 — 모르면 안 끈다 ·
+ *  QUOTA_UNKNOWN_RETRY_MS 뒤에 다시 읽는다) · 연달아 QUOTA_UNKNOWN_MAX 번 넘게 못 읽고 첫 실패에서 QUOTA_UNKNOWN_FOLD_MS 가 지났으면 null(대기
+ *  없음으로 보고 종전대로 끈다 — 중계가 망가진 세션이 영영 남지 않게). 로그는 첫 실패와 접는 판만 warn(사이는 debug — 세션당 수십 줄이 되지 않게).
+ */
+async function judgeQuotaWait(d: StopRuleDeps, s: SessionInfo, hk: string): Promise<QuotaWait | null | "unknown"> {
+  try {
+    const w = await d.quotaWait(s, d.now());
+    quotaUnknown.delete(hk);
+    return w;
+  } catch (e) {
+    const now = d.now();
+    const prev = quotaUnknown.get(hk);
+    const fresh = !prev || now - prev.at > QUOTA_UNKNOWN_FOLD_MS;   // 오래 조용했다가 난 실패는 새로 센다
+    const u = fresh ? { n: 1, first: now, at: now } : { n: prev.n + 1, first: prev.first, at: now };
+    if (u.n >= QUOTA_UNKNOWN_MAX && now - u.first >= QUOTA_UNKNOWN_FOLD_MS) {
+      quotaUnknown.delete(hk);
+      logger.warn({ err: e, id: s.id, n: u.n, sinceFirstSec: Math.round((now - u.first) / 1000) }, "하네스 종료 규칙: 한도 대기 판정이 연달아 실패 — 대기 없음으로 보고 종전대로 판정");
+      return null;
+    }
+    quotaUnknown.set(hk, u);
+    (u.n === 1 ? logger.warn : logger.debug).call(logger, { err: e, id: s.id, n: u.n }, "하네스 종료 규칙: 한도 대기 판정 실패(대화 기록을 못 읽음) — 이번 판엔 안 끈다");
+    return "unknown";
+  }
+}
+
+/**
+ * #4810 — 대기로 남긴 세션을 다시 재기까지 보호한다. 걸려서 기다리는 중이면 QUOTA_RECHECK_MS, 막 이어 가는 중이면 그 유예가 끝날 때까지만
+ *  (이어 간 턴이 끝난 세션을 5분 더 붙잡지 않게 — 최소 5초). 같은 대기 사건은 처음 지킬 때 한 번만 로그에 남긴다(7일 측정 · «왜 안 꺼졌나»).
+ */
+function holdQuotaWait(hk: string, id: string, w: QuotaWait, nowMs: number): void {
+  const ms = w.untilMs !== undefined ? Math.max(5_000, Math.min(QUOTA_RECHECK_MS, w.untilMs - nowMs)) : QUOTA_RECHECK_MS;
+  limitHold.set(hk, { until: nowMs + ms, why: "limit-wait" });
+  if (limitSeen.get(hk) === w.atMs) return;
+  limitSeen.set(hk, w.atMs);
+  logger.info({ tenant: currentTenant()?.slug ?? null, id, kind: w.kind, at: new Date(w.atMs).toISOString(), text: w.text },
+    "하네스 종료 규칙: 한도 자동 이어감 대기 — 끄지 않는다(#4810)");
 }
 
 /** 질의 중인 화면의 질문을 읽는다 — claude 의 여러 질문(탭)은 → 키로 넘기며 하나씩 읽는다(Enter 는 안 누른다 — 제출되지 않는다, 실측). */
@@ -490,9 +593,12 @@ export function clearStopTimers(): void {
   timers.clear();
 }
 
-/** 시험용 — 모듈 상태(깨움 · 작업 보호 · 진행 중 표시)를 비운다. 시나리오끼리 새지 않게. */
+/** 시험용 — 모듈 상태(깨움 · 작업 보호 · 한도 대기 보호 · 판정 실패 횟수 · 진행 중 표시)를 비운다. 시나리오끼리 새지 않게. */
 export function resetStopRule(): void {
   clearStopTimers();
   jobHold.clear();
+  limitHold.clear();
+  quotaUnknown.clear();
+  limitSeen.clear();
   inFlight.clear();
 }
