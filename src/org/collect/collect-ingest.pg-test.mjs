@@ -14,6 +14,7 @@ const { ingestRun, resolveInstance, toIngestPlan } = await import(`${DIST}/org/c
 const { NOW_MARGIN_SEC } = await import(`${DIST}/org/collect/collect-plan.js`);
 const log = await import(`${DIST}/org/collect/run-log.js`);
 const { collectRunCapabilities } = await import(`${DIST}/capabilities/collect-run.js`);
+const { invalidateSourceVisRules, sourceVisRules } = await import(`${DIST}/v6/source-vis-policy.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -29,6 +30,7 @@ const NOTION_INST = "cipg-notion";
 const CH1 = "C0CIPG0001", CH2 = "C0CIPG0002", CH3 = "C0CIPG0003", STRAY = "C0CIPG0009";
 const BOX_A = "a@cipg.test";
 const PAGE = "abcdef01-2345-6789-abcd-ef01cafe0001";
+const POLICY_NOTE = "pgtest-ci";
 const NOW = Date.parse("2026-10-16T10:00:00.000Z");
 const PLANNED = Math.floor(NOW / 1000);
 const SINCE = "1787000000.000000";
@@ -74,11 +76,19 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM collect_assignee_state WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM org_member WHERE id = ANY($1::text[])`, [MEMBERS]);
+  await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE note=$1`, [POLICY_NOTE]);
+  invalidateSourceVisRules();
 }
 
 try {
   await cleanup();
   for (const m of [A, B]) await itemsPool.query(`INSERT INTO org_member(id, email, display_name) VALUES($1,$2,$1) ON CONFLICT DO NOTHING`, [m, m === A ? BOX_A : "b@cipg.test"]);
+  //  볼 수 있는 사람 = «확인된 단위 구성원 ∩ 조직 정책». 같은 DB 를 쓰는 앞 시험이 슬랙 전체에 정책을 남겼어도 이 시험의 채널은
+  //   «열림» 이 되게 채널 규칙(가장 좁은 규칙이 이긴다)을 둔다 — 그래야 I2b 가 정책이 아니라 단위 구성원을 본다(CI 실측 2026-10-16).
+  for (const ch of [CH1, CH2]) {
+    await itemsPool.query(`INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, note) VALUES('slack',$1,'open',1000,$2)`, [ch, POLICY_NOTE]);
+  }
+  invalidateSourceVisRules();
   //  이 워크스페이스가 이미 아는 슬랙 팀 — CH1 은 예전에 수집기·목록으로 생긴 단위다(인스턴스 TEAM).
   await store.recordUnitListing({ member: A, app: "slack", connector: "Slack", instance: TEAM, items: [{ ref: CH1, kind: "channel", name: "#c1" }], verified: true });
   await store.recordUnitListing({ member: B, app: "slack", connector: "Slack", instance: TEAM2, items: [{ ref: "C0CIPG0008", kind: "channel", name: "#other" }], verified: true });
@@ -130,7 +140,8 @@ try {
       JSON.stringify({ res: { ...res, per_unit: undefined }, rows: rows.map((r) => r.external_id) }));
     chk("I3 요청 안 한 채널의 글은 안 들어간다(stray)", res.stray === 1 && (await sources("slack", TEAM, STRAY)).length === 0, `stray=${res.stray}`);
     const vis = await Promise.all(rows.map((r) => audienceHas(r.id, A)));
-    chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean), JSON.stringify(vis));
+    chk("I2b 저장한 자료는 그 단위의 확인된 구성원에게 보인다", vis.every(Boolean),
+      JSON.stringify({ vis, slackRules: (await sourceVisRules()).filter((r) => r.match_system === "slack"), viewers: await viewer(u1.id, A) }));
     const a1 = await unitBy(CH1), a2 = await unitBy(CH2);
     chk("I2c 끝까지 읽은 단위(끝이 «지금»)는 위치 = 계획 시각 − 60초 · 읽은 시각 = 이 판", a1.cursor?.ts === `${PLANNED - NOW_MARGIN_SEC}.000000`
       && new Date(a1.read_at).getTime() === NOW && p1?.cursor_moved === true && p1?.complete === true, JSON.stringify({ cursor: a1.cursor, read_at: a1.read_at, p1 }));
