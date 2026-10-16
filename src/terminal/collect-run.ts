@@ -234,9 +234,12 @@ export async function planCollectUnits(member: string, opts: { app?: string | nu
   const slots = planned.length ? PROOF_PER_RUN : PROOF_ONLY_PER_RUN;
   const proofs = planProofUnits(await pendingProofs(member, slots + planned.length, { app }), planned, { app, max: slots });
   const r = collectPrompt([...planned, ...proofs]);
-  //  #4744 맡은 보호 단위 가운데 이 판에 확인 읽기로도 못 실은 것(시도 상한 · 간격 안 · 확인 창 없음)은 «막힘» 으로 물러서게 한다 —
-  //   안 그러면 그 단위가 계속 때가 된 단위로 남아 주기 틱이 이 사람을 매번 골라 409 로 자리만 차지한다.
-  const unplannedHeld = held.filter((id) => !r.units.some((u) => u.id === id));
+  //  #4744 이 판이 맡아야 했던(때가 된 · 정한 앱의) 보호 단위 가운데 확인 읽기로도 못 실은 것(시도 상한 · 간격 안 · 확인 창 없음)은
+  //   «막힘» 으로 물러서게 한다 — 안 그러면 그 단위가 계속 때가 된 단위로 남아 주기 틱이 이 사람을 매번 골라 409 로 자리만 차지한다.
+  //   때가 안 된 단위 · 다른 앱의 단위는 건드리지 않는다(그 일정은 그대로).
+  const unplannedHeld = assigned
+    .filter((a) => guard.get(a.id) === true && a.due && (!app || a.app === app) && !r.units.some((u) => u.id === a.id))
+    .map((a) => a.id);
   if (unplannedHeld.length) {
     const { noteUnitRead } = await import("../org/collect/unit-schedule.js");
     for (const id of unplannedHeld) await noteUnitRead(id, { outcome: "blocked", now }, { member });

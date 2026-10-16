@@ -140,7 +140,7 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
 const PROOF_REASON: Record<ProofResult, string> = {
   pass: "확인 읽기 통과", no_match: "확인 읽기 실패 — 저장된 글과 다름", empty: "확인 읽기 실패 — 맞춰 볼 글이 창 안에 없음",
   unprovable: "확인 읽기 불가 — 본문이 너무 짧음", not_member: "확인 읽기 — 이미 볼 수 있는 구성원이 아님(대기 지움)",
-  unreadable: "확인 읽기 보류 — 결과를 못 풂(시도로 안 셈)",
+  unreadable: "확인 읽기 보류 — 결과를 못 풂(세 번 이어지면 시도 한 번으로 셈)",
 };
 
 /** 수집 실행 → 단위마다 storeUnitItems · advanceUnitCursor. */
@@ -173,7 +173,7 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       //  확인 읽기 — 저장·위치 이동 없이 판정만. 단위별로 감싼다(한 단위의 오류가 같은 판의 다른 단위를 막지 않게).
       try {
         const j = judgeProof(u, h.items, await storedBodies(u.id, u.app, u.instance, h.items.map((i) => i.provenance.external_id)), redactString);
-        //  못 푼 결과가 섞인 실패는 일시 오류일 수 있다 — 시도로 세지 않는다(정당한 구성원이 속도 제한으로 잠기지 않게).
+        //  못 푼 결과가 섞인 실패는 일시 오류일 수 있다 — 바로 시도로 세지 않는다(세 번 이어지면 한 번 — recordProofResult).
         let outcome: ProofResult = j.outcome !== "pass" && h.unparsed > 0 ? "unreadable" : j.outcome;
         if (outcome === "pass" && (await verifyByProof(member, u.id)) === "not_member") outcome = "not_member";
         await recordProofResult(member, u.id, outcome);
@@ -188,6 +188,8 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
         failed++;
         row.failed = 1;
         row.reason = `확인 읽기 오류 — ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+        //  오류도 못 푼 결과로 남긴다 — 시도 시각이 남아야 1시간 간격이 걸린다(안 남기면 주기 판이 틱마다 같은 대기로 판을 띄운다).
+        await recordProofResult(member, u.id, "unreadable");
         row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
       }
       per.push(row);
