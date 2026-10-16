@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // lively file (#4673) — 세션 안 경로 ↔ 파일 주소 · 서명 주소. 가짜 게이트웨이 + 진짜 CLI 서브프로세스.
 //  실행: node kit/cli/file-address.test.mjs   (npm test 체인)
-//  계약(사양 표 L1~L9): 판정 · 변환은 게이트웨이가 하고 CLI 는 그 REST 를 부르는 겉이다 — 그래서 단언은 «무엇을 보냈나»(경로 · 본문 · 머리글)
+//  계약(사양 표 L1~L11): 판정 · 변환은 게이트웨이가 하고 CLI 는 그 REST 를 부르는 겉이다 — 그래서 단언은 «무엇을 보냈나»(경로 · 본문 · 머리글)
 //   와 «무엇을 stdout 에 냈나»(스크립트가 `$(lively file path …)` 로 받는 한 줄) · 종료코드다.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -147,6 +147,25 @@ try {
     await run(["address", "shared/x"]);
     assert.equal(seen[0].headers["x-lively-mode"], undefined, "모드가 없으면 머리글도 없다");
     ok("L10 LIVELY_MODE 를 x-lively-mode 로 싣는다(읽기전용 세션이면 게이트웨이가 올리기 주소를 막는다)");
+  }
+  {
+    //  #4822 — 옛 주소로 답했으면(moved_from) stderr 에 «옛 주소 → 지금» 한 줄. stdout 은 스크립트가 받는 한 줄 그대로다.
+    const moved = /옛 주소 shared\/project\/4670\/a\.md → 지금 shared\/project\/4670\/b\.md/;
+    reset(() => ({ status: 200, body: { address: "shared/project/4670/b.md", path: "/work/shared/project/4670/b.md", moved_from: "shared/project/4670/a.md" } }));
+    const p = await run(["path", "shared/project/4670/a.md"]);
+    assert.equal(p.status, 0, p.stderr);
+    assert.equal(p.stdout, "/work/shared/project/4670/b.md\n", "stdout 은 지금 자리 경로 한 줄");
+    assert.match(p.stderr, moved);
+    reset(() => ({ status: 200, body: { url: `${BASE}/api/files/s/v1.b`, method: "GET", expires_at: "t", address: "shared/project/4670/b.md", moved_from: "shared/project/4670/a.md" } }));
+    const u = await run(["url", "shared/project/4670/a.md"]);
+    assert.equal(u.status, 0, u.stderr);
+    assert.equal(u.stdout, `${BASE}/api/files/s/v1.b\n`, "stdout 은 서명 주소 한 줄");
+    assert.match(u.stderr, moved);
+    reset(() => ({ status: 200, body: { address: "shared/project/4670/b.md", path: "/work/shared/project/4670/b.md" } }));
+    const plain = await run(["path", "shared/project/4670/b.md"]);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.doesNotMatch(plain.stderr, /옛 주소/, "옮겨지지 않았으면 안내도 없다(대조군)");
+    ok("L11 옛 주소로 답했으면(moved_from) stderr 에 «옛 주소 → 지금» 한 줄 · stdout 은 한 줄 그대로 (#4822)");
   }
   console.error(`\n${pass} passed`);
 } finally {

@@ -9,6 +9,7 @@
 //   U10 자료 좌표(project:<번호>/…)로 넣어도   U11 기록 조회가 실패해도 종전대로(최선 노력)   P1 file_path 새 경로   P2 옛 자리 파일이 이긴다   P3 새 자리가 잠긴 참가자는 옛 경로   P5 옛 자리가 잠긴 참가자   P5b 잠긴 자리에서 옮겨 나간 것
 //   G1 프로젝트 파일 읽기 → 새 파일 · X-File-Moved-To   G2 HEAD   G3 옛 자리 파일이 이긴다   G4 다른 프로젝트로 간 것은 404
 //   G5 폴더 이름 바꾸기   G6 쓰기(PUT · DELETE)는 안 따라감(옮긴 파일은 그대로)   G7 내려받는 이름 = 새 이름   G8 기록 없음 404
+//   G9 닿은 곳이 폴더면 400 · 머리 없음(머리는 성공에만)   G10 기록 조회가 실패해도 종전처럼 404(최선 노력)
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -241,6 +242,18 @@ try {
     { del: g6del.status, put: g6put.status });
   const g6get = await pget(tokA, "docs/a.md");
   chk("G6b 옛 자리에 새로 올린 뒤에는 그 파일이 이긴다", g6get.status === 200 && (await g6get.text()) === "NEW" && g6get.headers.get("x-file-moved-to") === null, g6get.status);
+  //  G9 머리(X-File-Moved-To)는 성공 응답에만 — 따라가 닿은 곳이 폴더면 400(파일이 아님)이고 어디로 갔는지 싣지 않는다.
+  const g9 = await pget(tokA, "img");
+  chk("G9 따라가 닿은 곳이 파일이 아니면 400 · 머리는 싣지 않는다(성공 응답에만)", g9.status === 400 && g9.headers.get("x-file-moved-to") === null,
+    { status: g9.status, movedTo: g9.headers.get("x-file-moved-to") });
+  //  G10 최선 노력 — 기록 조회가 실패해도(기록 표를 잠시 못 쓰게 한다) 없는 파일은 종전처럼 404(500 아님) · 되살리면 다시 따라간다(대조군).
+  await itemsPool.query("ALTER TABLE file_move RENAME TO file_move_off_4822");
+  let g10;
+  try { g10 = await pget(tokA, "img/p.md"); }
+  finally { await itemsPool.query("ALTER TABLE file_move_off_4822 RENAME TO file_move"); }
+  const g10back = await pget(tokA, "img/p.md");
+  chk("G10 기록 조회가 실패해도 종전처럼 404(500 아님) · 되살리면 다시 따라간다(대조군)", g10.status === 404 && g10back.status === 200,
+    { g10: g10.status, back: g10back.status });
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {

@@ -41,6 +41,7 @@ import { finishUpload } from "../ingest/upload-finish.js";
 import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기·옮기기 뒤 자료 좌표 + «옛 경로 → 새 경로»
 import { SHARED_MOVE_SCOPE, findFileMove } from "../v6/file-move-store.js";
 import { followMovedPath, normalizeMovePath } from "../files/file-move-core.js";   // #4822 — 읽기 라우트가 옛 경로를 따라간다
+import { logger } from "../log.js";
 import { projectFoldersUnder, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
@@ -291,7 +292,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  #4822 — 없으면 옮긴 기록을 따라 이 프로젝트 안의 지금 자리를 연다(본문 그림 주소가 이름 바꾸기에 안 깨지게). 옛 자리에 무엇이 있으면 그것이 이긴다.
     let movedTo: string | null = null;
     if (!st) {
-      const moved = await movedInProject(project, store, base, abs);
+      //  최선 노력 — 기록 조회가 실패하면 따라가지 않고 남기기만 한다(없는 파일은 종전처럼 404 — 따라가기 때문에 500 이 되면 안 된다).
+      const moved = await movedInProject(project, store, base, abs).catch((e) => {
+        logger.warn({ err: e, project: Number(req.params.id) }, "[project] 옛 경로 따라가기 실패(비치명 — 종전대로 답한다)");
+        return null;
+      });
       if (moved) { abs = moved.abs; st = moved.st; movedTo = moved.rel; }
     }
     if (!st) throw new HttpError(404, "파일 없음");
