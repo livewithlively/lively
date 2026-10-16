@@ -15,6 +15,7 @@ import {
   LISTING_CAP, UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
 } from "../org/collect/unit-store.js";
 import { currentTenant } from "../org/tenant-context.js";
+import { axisOn } from "../v6/visibility-axes.js";
 import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, UNIT_VISIBILITIES, type CollectRoute, type UnitState, type UnitVisibility } from "../org/collect/unit-plan.js";
 
 function actorOf(user: LivelyUser | undefined): Actor {
@@ -86,9 +87,13 @@ const updateInput = {
   id: z.number().int().positive().describe("단위 id(collect_units 의 id)"),
   state: z.enum(UNIT_STATES).optional().describe("active=모은다 · excluded=모으지 않는다 · candidate=보류(목록에서 찾기만 한 상태)"),
   visibility: z.enum(UNIT_VISIBILITIES).optional().describe(
-    "공개범위 — me=나만(바꾸는 사람이 주인이 된다 · 그 단위를 볼 수 있는 것이 확인된 사람만 고를 수 있다) · viewers=볼 수 있는 사람만(확인된 구성원) · " +
-    "all=모두. 수집을 시작하기 전 검토에서 사람에게 묻고 정한다(리브의 첫 제안: 공개 채널=all · 메일함=me · 그 밖=viewers). " +
-    "바꾸면 이미 모은 자료도 그 범위로 다시 맞춘다. «나만» 단위는 정한 사람만 바꿀 수 있다"),
+    "공개범위 — me=나만(바꾸는 사람이 주인이 된다 · 그 단위를 볼 수 있는 것이 확인된 사람만 고를 수 있다 · 주인 계정으로만 모은다) · " +
+    "viewers=볼 수 있는 사람만(확인된 구성원) · all=모두. 수집을 시작하기 전 검토에서 사람에게 묻고 정한다(리브의 첫 제안은 서버가 연 목록의 " +
+    "종류로: 공개 채널=all · DM·메일함=me · 그 밖=viewers — 본인 신고로 생긴 단위는 viewers 로 시작한다). 바꾸면 이미 모은 자료도 그 범위로 " +
+    "다시 맞춘다(이미 증류한 지식은 따라 좁혀지지 않는다). «나만» 단위는 정한 사람만 바꿀 수 있다(정한 사람이 그 단위에서 빠졌으면 남은 확인된 구성원이 넘겨받는다)"),
+  confirm: z.boolean().optional().describe(
+    "넓히기(me → viewers → all)로 이미 모은 자료가 더 많은 사람에게 열릴 때만 — 몇 건이 누구에게 열리는지 사람에게 말하고 확인받은 뒤 true. " +
+    "없이 보내면 409 와 건수를 돌려준다"),
   interval_sec: z.number().int().min(60).max(2592000).nullable().optional().describe("주기(초) — 그 단위에 글이 올라오는 빈도로 정한다. null 이면 기본값"),
   description: z.string().max(4000).nullable().optional().describe("메타데이터: 이 단위에서 오가는 일(검색 실패 안내에서 단위를 고를 때 쓴다)"),
   meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·activity(활동량)·knowhow(단위 노하우)"),
@@ -105,7 +110,8 @@ const collectUnitUpdate: Capability = {
     "수집 단위 하나를 고친다(#4213 T10) — 모을지(state)·공개범위(visibility)·주기(interval_sec)·설명/메타데이터(리브가 첫 수집 뒤 쓰고 수집마다 유지)·" +
     "담당 후보 순서(priorities)·수집 경로(route). 구성원 경로 단위는 그 단위의 확인된 볼 수 있는 구성원만, 수집기 단위는 관리자 또는 " +
     "확인된 볼 수 있는 구성원만 고칠 수 있고, 경로 바꾸기는 관리자만. 볼 수 있는 구성원 자체는 여기서 못 바꾼다(각자의 목록 반영). " +
-    "REST 등가: POST /api/ui/collect/units/:id {state?, visibility?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
+    "응답의 visibility_enforced=false 면 이 워크스페이스는 자료 공개범위를 적용하지 않아 무엇을 골라도 모두에게 보인다 — 사람에게 알려라. " +
+    "REST 등가: POST /api/ui/collect/units/:id {state?, visibility?, confirm?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
   scope: "memory",
   input: updateInput,
   expose: {
@@ -121,6 +127,7 @@ const collectUnitUpdate: Capability = {
         if (!(UNIT_VISIBILITIES as readonly string[]).includes(String(b.visibility))) throw new HttpError(400, `visibility 는 ${UNIT_VISIBILITIES.join("·")} 중 하나입니다`);
         out.visibility = String(b.visibility);
       }
+      if (b.confirm != null) out.confirm = b.confirm === true || b.confirm === "true";
       if (b.interval_sec !== undefined) {
         if (b.interval_sec === null) out.interval_sec = null;
         else {
@@ -148,11 +155,11 @@ const collectUnitUpdate: Capability = {
   },
   handler: async (input: UpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => guard(async () => {
     const unit = await updateUnit(input.id, {
-      state: input.state as UnitState | undefined, visibility: input.visibility as UnitVisibility | undefined,
+      state: input.state as UnitState | undefined, visibility: input.visibility as UnitVisibility | undefined, confirm: input.confirm,
       interval_sec: input.interval_sec, description: input.description,
       meta: input.meta ?? null, priorities: input.priorities, route: input.route as CollectRoute | undefined, name: input.name,
     }, actorOf(user), ctx);
-    return { ok: true, unit };
+    return { ok: true, unit, visibility_enforced: await axisOn("source") };
   }),
 };
 
@@ -215,6 +222,7 @@ const collectUnitListing: Capability = {
     "내 Claude 커넥터로 훑은 «무엇이 있나» 를 수집 단위 표에 **본인 신고**로 반영한다(#4213 T10). 처음 나온 단위는 후보(candidate)로 생기고 — " +
     "모을지는 리브·사람이 collect_unit_update 로 정한다 — 나는 그 단위의 담당 후보(확인된 사람 뒤)가 된다. 신고만으로는 이미 모인 자료가 " +
     "열리지 않는다 — 내 커넥터로 그 단위를 실제로 읽은 것이 확인되면(서버가 연 목록 실행 · 내 실행의 저장) 그때부터 볼 수 있는 구성원이다. " +
+    "신고로 생긴 단위의 공개범위는 종류와 상관없이 «볼 수 있는 사람만» 으로 시작한다(종류별 첫 제안은 서버가 연 목록만). " +
     "이미 있는 단위(수집기 단위 포함)는 경로·상태를 바꾸지 않는다. **내 목록만** 받는다(남 대신 적을 수 없다). 메일(gmail·outlook)은 내 " +
     "메일 주소인 메일함만 받는다. complete 는 빈 목록·상한(5000) 초과면 무시된다. " +
     "REST 등가: POST /api/ui/collect/units/listing {app, connector?, instance?, items, complete?}.",

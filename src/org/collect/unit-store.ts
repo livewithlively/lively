@@ -10,13 +10,16 @@
 //
 //  ⚠ 원문 저장은 upsertSource 가 아니라 mirrorSourceV6 다 — upsertSource 는 id 가 없으면 그냥 INSERT 해 같은 외부 좌표가
 //   두 행이 된다. 외부 좌표 합치기(source_external_uidx ON CONFLICT)의 정본은 mirrorSourceV6 다(태스크 #4742 댓글 #408).
-//  ⚠ 볼 수 있는 사람은 **확인된** 구성원뿐이다(unit-plan 머리말 ★) — 본인 신고는 후보로만 선다.
+//  ⚠ 볼 수 있는 사람은 단위의 공개범위가 정한다 — 나만(정한 사람 · 그 사람이 확인된 구성원일 때) · 볼 수 있는 사람만(**확인된**
+//   구성원 — unit-plan 머리말 ★) · 모두(잠그지 않음). 어느 쪽이든 조직 정책 안으로만. 본인 신고는 후보로만 선다.
+//  ⚠ 잠금 순서는 단위 → 자료다. 저장·대상 맞추기는 단위 행을 FOR SHARE 로, 공개범위 바꾸기·구성원 빠짐은 FOR UPDATE 로 잡아
+//   «옛 공개범위로 계산한 대상이 새 공개범위 뒤에 커밋되는» 일을 막는다(리뷰 2026-10-16 B1).
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import type { RawItem } from "../../items/store.js";
 import { mirrorSourceV6 } from "../../v6/mirror/mirror-source.js";
-import { pickRule, sourceVisRules, type SourceVisRule } from "../../v6/source-vis-policy.js";
+import { pickRule, sourceVisRules, type ResolvedSourceVis, type SourceVisRule } from "../../v6/source-vis-policy.js";
 import { axisOn } from "../../v6/visibility-axes.js";
 import { auditOrgContent, type WriteCtx } from "../../v6/content-audit.js";
 import { failReason } from "../store/run-fail-reason.js";
@@ -25,9 +28,9 @@ import { HEADLESS_NOTICE_APP, HEADLESS_NOTICE_HREF } from "../credentials/headle
 import {
   ANY_CONNECTOR, COLLECT_ROUTES, MAIL_APPS, UNIT_STATES, UNIT_VISIBILITIES,
   canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
-  defaultVisibilityForKind, healthIndex, isCollectorRoute, listingClaimAllowed, noticeTargets, normalizeListing, planUnit,
+  defaultVisibilityForKind, healthIndex, isCollectorRoute, isWidening, listingClaimAllowed, noticeTargets, normalizeListing, planUnit,
   retryDelayMs, splitOverreach, unitAccess, visibilityChangeError,
-  type AssigneeState, type AudiencePolicy, type AudienceUnit, type CollectRoute, type CollectRunExit, type CollectRunSummary,
+  type AssigneeState, type AudienceUnit, type CollectRoute, type CollectRunExit, type CollectRunSummary,
   type HealthChange, type HealthIndex, type NoticeTarget, type PlanCollector, type PlanHealth, type PlanUnit, type UnitKind,
   type UnitPlan, type UnitState, type UnitVisibility,
 } from "./unit-plan.js";
@@ -334,17 +337,21 @@ export async function advanceUnitCursor(
 
 const AUDIENCE_BATCH = 500;
 
-/** 정책 하나를 «단위 몫» 으로 — 조직 공개범위 정책(#1291 v4)이 그 앱·채널을 묶었으면 그 대상. */
-function policyFor(rules: SourceVisRule[], app: string, ref: string, name: string | null): AudiencePolicy {
-  const p = pickRule(rules, app, [ref, name]);
-  return { visibility: p.visibility, members: p.members };
-}
+/** 정책을 못 읽었을 때의 몫 — 닫는다(대상 0). stampSourceVisibility 와 같은 규칙. */
+const POLICY_CLOSED: ResolvedSourceVis = { visibility: "members", members: [], ruleId: null };
 
 /**
  * 자료들의 볼 수 있는 사람을 다시 맞춘다 — 단위가 공개범위를 정하는 연결(audience=true)만 본다.
- *  그 자료를 들여온 단위마다 «확인된 단위 구성원 ∩ 조직 정책» 의 합집합. 지금 대상과 같은 자료는 건드리지 않는다.
+ *  그 자료를 들여온 단위마다 «그 단위의 공개범위 몫(나만 · 볼 수 있는 사람만 · 모두) ∩ 조직 정책» 의 합집합(unit-plan.computeAudience).
+ *  지금 대상과 같은 자료는 건드리지 않는다.
+ *  · 조직 정책은 자료가 태어날 때의 도장(stampSourceVisibility)과 **같은 키**로 찾는다 — 단위의 ref·이름에 그 자료의 그릇 좌표·이름을
+ *    더한다. 키가 다르면 «모두» 단위에서 정책을 못 찾아, 도장이 건 정책 잠금을 풀어 버린다(리뷰 2026-10-16 B4 — 정책 «finance» ·
+ *    단위 이름 «#finance»). 그래서 묶음은 «같은 단위들 · 같은 정책» 이다(대개 하나).
+ *  · 줄 세우기(리뷰 B1)는 부르는 쪽이 한다 — 저장은 제 단위를 FOR SHARE, 공개범위 바꾸기·구성원 변경은 FOR UPDATE 로 먼저 잡는다.
+ *    여기서 «함께 묶인 다른 단위» 까지 잡지 않는다: 저장은 자료 행을 이미 쥐고(mirror) 있고 공개범위 바꾸기는 단위 행을 쥔 채 그 자료를
+ *    쓰려 하므로 서로 기다리는 교착이 된다. 잡지 않아도 자료 행 잠금이 쓰기 순서를 정해, 결과는 맞거나 더 좁다(닫히는 쪽).
  *  ⚠ 자료마다 문장을 돌리지 않는다 — 한 채널 5만 건이면 구성원 한 명이 들어올 때마다 15만 문장이 된다(리뷰 2026-10-16).
- *   «같은 단위 묶음» 으로 자료를 묶고(대개 단위 하나), 묶음마다 대상을 한 번 계산해 500건씩 세 문장(UPDATE·DELETE·INSERT)으로 쓴다.
+ *   묶음마다 대상을 한 번 계산해 500건씩 세 문장(UPDATE·DELETE·INSERT)으로 쓴다. 정책 고르기는 자료마다지만 메모리 안 계산이다.
  *  정책을 못 읽으면 닫는 쪽(대상 0)으로 — 열어 두면 정책 위반이 유출로 굳는다(stampSourceVisibility 와 같은 규칙).
  */
 export async function applySourceAudience(q: Q, sourceIds: readonly number[]): Promise<number> {
@@ -353,33 +360,46 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
   let rules: SourceVisRule[] | null = null;
   try { rules = await sourceVisRules(); }
   catch { logger.warn({ n: ids.length }, "[collect-unit] 공개범위 정책을 못 읽었다 — 단위 자료를 닫힌 채로 둔다(정책 복구 뒤 다시 맞춘다)"); }
-  //  ① 자료 → 공개범위를 정하는 단위들(정렬된 id 묶음).
+  //  ① 자료 → 공개범위를 정하는 단위들 · 정책 키(그릇 좌표·이름 — 도장과 같은 칸).
   const links = await q.query(
-    `SELECT source_id, array_agg(unit_id ORDER BY unit_id) AS units
-       FROM collect_unit_source WHERE source_id = ANY($1::int[]) AND audience GROUP BY source_id`, [ids]);
-  const groups = new Map<string, { unitIds: number[]; sources: number[] }>();
-  for (const r of links.rows as any[]) {
-    const unitIds: number[] = ((r.units ?? []) as unknown[]).map(Number);
-    const k = unitIds.join(",");
-    const g = groups.get(k) ?? { unitIds, sources: [] as number[] };
-    g.sources.push(Number(r.source_id));
-    groups.set(k, g);
-  }
-  if (!groups.size) return 0;
-  //  ② 묶음에 나오는 단위들의 공개범위 · 확인된 구성원 · 좌표(정책 매칭용).
-  const allUnits = [...new Set([...groups.values()].flatMap((g) => g.unitIds))];
+    `SELECT us.source_id, array_agg(us.unit_id ORDER BY us.unit_id) AS units, min(s.external_system) AS system,
+            min(s.fields->>'container_ref') AS cref, min(s.fields->>'container_name') AS cname
+       FROM collect_unit_source us JOIN source s ON s.id = us.source_id
+      WHERE us.source_id = ANY($1::int[]) AND us.audience GROUP BY us.source_id`, [ids]);
+  if (!links.rows.length) return 0;
+  //  ② 단위들의 공개범위 · 확인된 구성원 · 좌표.
+  const allUnits = [...new Set((links.rows as any[]).flatMap((r) => ((r.units ?? []) as unknown[]).map(Number)))];
   const uRows = await q.query(
     `SELECT u.id, u.app, u.ref, u.name, u.visibility, u.owner_member,
             COALESCE(array_agg(m.member_id) FILTER (WHERE m.member_id IS NOT NULL AND m.verified_at IS NOT NULL), '{}') AS viewers
        FROM collect_unit u LEFT JOIN collect_unit_member m ON m.unit_id = u.id
       WHERE u.id = ANY($1::int[]) GROUP BY u.id`, [allUnits]);
-  const unitInfo = new Map<number, AudienceUnit>();
-  const teamIds = new Set<string>();
+  const unitInfo = new Map<number, { app: string; ref: string; name: string | null; visibility: UnitVisibility; owner: string | null; viewers: string[] }>();
   for (const r of uRows.rows as any[]) {
-    const policy = rules ? policyFor(rules, String(r.app), String(r.ref), r.name ?? null) : { visibility: "members" as const, members: [] };
-    for (const s of policy.members) if (s.subject_kind === "team") teamIds.add(s.member_id);
     const visibility = ((UNIT_VISIBILITIES as readonly string[]).includes(String(r.visibility)) ? String(r.visibility) : "viewers") as UnitVisibility;
-    unitInfo.set(Number(r.id), { visibility, owner: r.owner_member ?? null, viewers: (r.viewers ?? []).map(String), policy });
+    unitInfo.set(Number(r.id), {
+      app: String(r.app), ref: String(r.ref), name: r.name ?? null, visibility, owner: r.owner_member ?? null,
+      viewers: (r.viewers ?? []).map(String),
+    });
+  }
+  //  ③ 자료마다 단위별 정책을 고르고, «같은 단위들 · 같은 정책» 인 자료끼리 묶는다.
+  const groups = new Map<string, { units: AudienceUnit[]; sources: number[] }>();
+  const teamIds = new Set<string>();
+  for (const r of links.rows as any[]) {
+    const parts: string[] = [];
+    const units: AudienceUnit[] = [];
+    for (const uid of ((r.units ?? []) as unknown[]).map(Number)) {
+      const u = unitInfo.get(uid);
+      if (!u) continue;
+      const pol = rules ? pickRule(rules, r.system ? String(r.system) : u.app, [u.ref, u.name, r.cref, r.cname]) : POLICY_CLOSED;
+      for (const m of pol.members) if (m.subject_kind === "team") teamIds.add(m.member_id);
+      parts.push(`${uid}:${pol.ruleId ?? pol.visibility}`);
+      units.push({ visibility: u.visibility, owner: u.owner, viewers: u.viewers, policy: { visibility: pol.visibility, members: pol.members } });
+    }
+    const k = parts.join(",");
+    const g = groups.get(k) ?? { units, sources: [] as number[] };
+    g.sources.push(Number(r.source_id));
+    groups.set(k, g);
   }
   const teamMembers = new Map<string, Set<string>>();
   if (teamIds.size) {
@@ -388,12 +408,11 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
   }
   let changed = 0;
   for (const g of groups.values()) {
-    const units = g.unitIds.map((id) => unitInfo.get(id)).filter((x): x is AudienceUnit => !!x);
-    const want = computeAudience({ units, teamMembers });
+    const want = computeAudience({ units: g.units, teamMembers });
     const wantKey = want.members.map((m) => `member:${m}`).join("\u0001");
     for (let i = 0; i < g.sources.length; i += AUDIENCE_BATCH) {
       const chunk = g.sources.slice(i, i + AUDIENCE_BATCH);
-      //  ③ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
+      //  ④ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
       const cur = await q.query(
         `SELECT s.id, s.visibility,
                 COALESCE(string_agg(sm.subject_kind || ':' || sm.member_id, E'\\u0001' ORDER BY sm.subject_kind || ':' || sm.member_id)
@@ -437,7 +456,10 @@ async function verifyMember(q: Q, unitId: number, member: string): Promise<boole
 }
 
 export interface StoreResult {
-  stored: number; inserted: number; skipped: number; conflicts: number; failed: number; source_ids: number[];
+  stored: number; inserted: number; skipped: number; conflicts: number; failed: number;
+  /** 저장 도중 단위가 «나만» 으로 바뀌어(주인이 아닌 실행) 버린 항목 · 그새 지워진 단위. */
+  refused: number;
+  source_ids: number[];
 }
 
 /**
@@ -446,7 +468,9 @@ export interface StoreResult {
  *    좌표 공간은 단위의 것으로 맞춘다(system = 단위 앱 · instance = 단위 인스턴스 · 그릇 = 단위 ref).
  *  · 그릇이 이 단위가 아닌 항목은 버린다(conflicts) — 쪼갠 자식 단위의 글이 부모의 넓은 대상으로 들어가거나, 다른 단위의 좌표를
  *    빌린 항목이 그 자료를 덮어쓰고 대상을 넓히지 못하게. 메일만은 같은 메일이 여러 메일함에 있는 게 정상이라 합친다.
- *  · 새로 들어온 자료는 그 단위의 확인된 볼 수 있는 구성원에게만 보인다. 같은 자료가 여러 단위로 들어오면 합집합이다.
+ *  · 새로 들어온 자료는 그 단위의 공개범위대로 보인다(나만 · 볼 수 있는 사람만 = 확인된 구성원 · 모두). 같은 자료가 여러 단위로
+ *    들어오면 합집합이다. «나만» 단위는 정한 사람의 실행만 받는다(남의 로그인으로 모은 자료가 주인 한 명에게만 열리지 않게 — 리뷰 N1).
+ *  · 항목마다 단위 행을 먼저 잡는다(FOR SHARE) — 공개범위 바꾸기와 줄을 세워 옛 공개범위로 계산한 대상이 남지 않게(리뷰 B1).
  *  · 단위 체계 밖에서 먼저 들어와 있던 자료(봇 수집기가 모은 것)는 연결만 하고 공개범위를 건드리지 않는다(조용히 좁히지 않는다).
  *  · 한 건이라도 저장되면 by 를 «확인됨» 으로 올린다 — 그 사람 커넥터가 이 단위를 실제로 읽었다는 증거다.
  *  항목마다 트랜잭션이다(ingestItems 와 같은 결) — 하나가 실패해도 나머지는 들어가고, 실패 수를 돌려준다.
@@ -461,9 +485,12 @@ export async function storeUnitItems(
   if (member ? !u.members.some((m) => m.member_id === member) : by.collector_id == null) {
     throw new UnitError(403, "이 단위를 볼 수 있는 구성원(또는 그 수집기)의 실행만 자료를 넣을 수 있습니다");
   }
+  if (member && u.visibility === "me" && u.owner_member !== member) {
+    throw new UnitError(403, "«나만» 단위는 정한 사람의 실행만 자료를 넣을 수 있습니다");
+  }
   const kids = new Set((await itemsPool.query(`SELECT ref FROM collect_unit WHERE parent_id = $1`, [unitId])).rows.map((r: any) => String(r.ref)));
   const shareable = MAIL_APPS.has(u.app);
-  const res: StoreResult = { stored: 0, inserted: 0, skipped: 0, conflicts: 0, failed: 0, source_ids: [] };
+  const res: StoreResult = { stored: 0, inserted: 0, skipped: 0, conflicts: 0, failed: 0, refused: 0, source_ids: [] };
   const client = await itemsPool.connect();
   try {
     for (const raw of items) {
@@ -479,6 +506,13 @@ export async function storeUnitItems(
       };
       await client.query("BEGIN");
       try {
+        //  단위 행을 먼저 잡고(FOR SHARE) 잡은 뒤의 값으로 «나만» 을 다시 본다 — 저장 도중 공개범위가 바뀌었을 수 있다.
+        const now = (await client.query(`SELECT visibility, owner_member FROM collect_unit WHERE id=$1 FOR SHARE`, [unitId])).rows[0];
+        if (!now || (member && now.visibility === "me" && now.owner_member !== member)) {
+          await client.query("ROLLBACK");
+          res.refused++;
+          continue;
+        }
         const coord = [u.app, u.instance, ext];
         const before = await client.query(
           `SELECT id, fields->>'container_ref' AS container FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`, coord);
@@ -510,9 +544,11 @@ export async function storeUnitItems(
       }
     }
     //  그 사람 커넥터가 이 단위를 실제로 읽었다 → 확인됨. 새로 확인되면 이 단위의 자료가 그 사람에게도 열린다.
-    if (member && res.stored > 0) {
+    //   이미 확인된 사람이면 건너뛴다(단위 행을 괜히 FOR UPDATE 로 잡지 않게).
+    if (member && res.stored > 0 && !u.members.some((m) => m.member_id === member && m.verified)) {
       await client.query("BEGIN");
       try {
+        await client.query(`SELECT 1 FROM collect_unit WHERE id=$1 FOR UPDATE`, [unitId]);   // 구성원이 바뀐다 — 진행 중인 저장과 줄을 세운다
         if (await verifyMember(client, unitId, member)) await syncUnitAudience(client, [unitId]);
         await client.query("COMMIT");
       } catch (e) {
@@ -548,6 +584,10 @@ export interface ListingResult {
   created: number; joined: number; seen: number; verified: number; left: number; refused: string[]; audience_changed: number;
   complete_ignored: boolean;
 }
+
+/** 신고로만 생긴 채 아직 검토 전인 단위 — 서버 목록($10 = verified)이 처음 오면 종류·첫 제안·주인을 다시 정한다(ON CONFLICT 의 옛 행 기준). */
+const PROVISIONAL = `($10::boolean AND collect_unit.route = 'member_ai' AND collect_unit.state = 'candidate'
+  AND NOT EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = collect_unit.id AND x.verified_at IS NOT NULL))`;
 
 /**
  * 구성원 한 명이 커넥터로 훑은 «무엇이 있나» 를 표에 반영한다.
@@ -593,17 +633,22 @@ export async function recordUnitListing(input: ListingInput, ctx?: WriteCtx): Pr
       await client.query("BEGIN");
       for (const it of allowed) {
         const kind = MAIL_APPS.has(app) ? "mailbox" : it.kind;
-        //  공개범위는 처음 생길 때만 리브의 첫 제안(종류별)으로 — 사람이 수집 전 검토에서 고친다. 이미 있는 단위는 건드리지 않는다.
-        const vis = defaultVisibilityForKind(kind);
+        //  공개범위의 첫 제안(종류별 — 공개 채널=모두 · DM·메일함=나만)은 **서버가 연 목록(verified)만** 쓴다. 본인 신고는 종류를 믿지
+        //   않고 늘 «볼 수 있는 사람만»(주인 없음)이다 — 신고 한 번으로 비공개 채널을 «모두» 로, 남의 DM 을 «나만» 으로 잡는 길을 막는다(리뷰 B2).
+        //  신고로만 생긴 채 아직 검토 전(candidate)인 구성원 경로 단위는 처음 오는 서버 목록이 종류·첫 제안·주인을 다시 정한다(PROVISIONAL).
+        //  그 밖의 이미 있는 단위는 건드리지 않는다 — 사람이 수집 전 검토에서 정한 값이다.
+        const vis = verified ? defaultVisibilityForKind(kind) : "viewers";
         const up = await client.query(
           `INSERT INTO collect_unit(app, instance, ref, kind, name, connector, route, state, visibility, owner_member, updated_by)
            VALUES($1,$2,$3,$4,$5,$6,'member_ai','candidate',$8,$9,$7)
            ON CONFLICT (tenant_id, app, instance, ref) DO UPDATE SET
               name = COALESCE(collect_unit.name, EXCLUDED.name),
-              kind = CASE WHEN collect_unit.kind = 'other' THEN EXCLUDED.kind ELSE collect_unit.kind END,
+              kind = CASE WHEN collect_unit.kind = 'other' OR ${PROVISIONAL} THEN EXCLUDED.kind ELSE collect_unit.kind END,
+              visibility = CASE WHEN ${PROVISIONAL} THEN EXCLUDED.visibility ELSE collect_unit.visibility END,
+              owner_member = CASE WHEN ${PROVISIONAL} THEN EXCLUDED.owner_member ELSE collect_unit.owner_member END,
               connector = COALESCE(collect_unit.connector, EXCLUDED.connector)
            RETURNING id, (xmax = 0) AS created`,
-          [app, instance, it.ref, kind, it.name, connector, member, vis, vis === "me" ? member : null]);
+          [app, instance, it.ref, kind, it.name, connector, member, vis, vis === "me" ? member : null, verified]);
         const id = Number(up.rows[0].id);
         if (up.rows[0].created) res.created++;
         const m = await client.query(
@@ -618,6 +663,12 @@ export async function recordUnitListing(input: ListingInput, ctx?: WriteCtx): Pr
         if (verified) { touched.add(id); res.verified++; }
       }
       if (input.complete && !res.complete_ignored) {
+        //  빠질 단위의 행을 먼저 잡는다(FOR UPDATE · id 순) — 진행 중인 저장(FOR SHARE)이 옛 구성원으로 계산한 대상이 뒤에 커밋되지 않게(B1).
+        await client.query(
+          `SELECT u.id FROM collect_unit u JOIN collect_unit_member m ON m.unit_id = u.id
+            WHERE m.member_id = $1 AND u.app = $2 AND u.instance = $3 AND m.via IN ('listing', 'split')
+              AND NOT (u.ref = ANY($4::text[]))
+            ORDER BY u.id FOR UPDATE OF u`, [member, app, instance, allowed.map((i) => i.ref)]);
         const left = await client.query(
           `DELETE FROM collect_unit_member m USING collect_unit u
             WHERE m.unit_id = u.id AND m.member_id = $1 AND u.app = $2 AND u.instance = $3
@@ -888,42 +939,59 @@ export interface UnitPatch {
   meta?: Record<string, unknown> | null; priorities?: string[]; route?: CollectRoute; name?: string | null;
   /** 공개범위 — 나만(me: 바꾸는 사람이 주인)·볼 수 있는 사람만(viewers)·모두(all). 바꾸면 이미 모은 자료도 다시 맞춘다. */
   visibility?: UnitVisibility;
+  /** 넓히기(나만 → 볼 수 있는 사람만 → 모두)로 이미 모은 자료가 더 많은 사람에게 열릴 때 — 사람에게 확인받았다는 표시. 없으면 409. */
+  confirm?: boolean;
 }
 
+const VIS_AUDIENCE_LABEL: Record<UnitVisibility, string> = {
+  me: "정한 사람 한 명", viewers: "이 단위를 볼 수 있는 것이 확인된 구성원", all: "워크스페이스 전원",
+};
+
 /** 리브·사람이 단위를 고친다 — 상태(모을지)·공개범위·주기·설명·메타데이터·후보 순서·경로. 권한은 unit-plan.canEditUnit · 경로는 관리자만 ·
- *  «나만» 단위의 공개범위는 정한 사람만(unit-plan.visibilityChangeError). */
+ *  «나만» 단위의 공개범위는 정한 사람만(unit-plan.visibilityChangeError) · 이미 모은 자료를 넓히면 confirm 이 있어야 한다.
+ *  단위 행을 먼저 잡고(FOR UPDATE) **잡은 뒤의 최신 행으로** 권한·공개범위를 판정한다 — 판정과 쓰기 사이에 남이 공개범위·주인을 바꿔
+ *  «나만» 단위를 주인 아닌 사람이 넓히는 틈을 막고(리뷰 2026-10-16 B3), 진행 중인 저장(FOR SHARE)과 줄을 세운다(B1). */
 export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx?: WriteCtx): Promise<UnitView> {
-  const u = await getUnit(id);
-  if (!u || unitAccess(accessInput(u), actor.member, actor.isAdmin) !== "full") throw new UnitError(404, `수집 단위 #${id} 가 없습니다`);
-  if (!canEditUnit(accessInput(u), actor.member, actor.isAdmin)) {
-    throw new UnitError(403, "이 단위를 고칠 권한이 없습니다 — 수집기 단위는 관리자 또는 확인된 볼 수 있는 구성원, 그 밖은 확인된 볼 수 있는 구성원만");
-  }
-  const viewers = u.members.map((m) => m.member_id);
-  if (patch.route != null && patch.route !== u.route) {
-    if (!(COLLECT_ROUTES as readonly string[]).includes(patch.route)) throw new UnitError(400, `route 는 ${COLLECT_ROUTES.join("·")} 중 하나입니다`);
-    //  경로를 바꾸면 누가 모으나가 바뀐다(수집기는 제 설정대로 따로 돈다 — 구성원 경로로 돌리면 둘이 겹쳐 모은다).
-    if (!actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");
-  }
+  //  값 모양은 잠그기 전에 본다.
+  if (patch.route != null && !(COLLECT_ROUTES as readonly string[]).includes(patch.route)) throw new UnitError(400, `route 는 ${COLLECT_ROUTES.join("·")} 중 하나입니다`);
   if (patch.state != null && !(UNIT_STATES as readonly string[]).includes(patch.state)) throw new UnitError(400, `state 는 ${UNIT_STATES.join("·")} 중 하나입니다`);
-  const visChanged = patch.visibility != null && (patch.visibility !== u.visibility || (patch.visibility === "me" && u.owner_member !== actor.member));
-  if (patch.visibility != null) {
-    if (!(UNIT_VISIBILITIES as readonly string[]).includes(patch.visibility)) throw new UnitError(400, `visibility 는 ${UNIT_VISIBILITIES.join("·")} 중 하나입니다`);
-    const err = visChanged
-      ? visibilityChangeError({ ...accessInput(u), visibility: u.visibility, owner: u.owner_member }, patch.visibility, actor.member, actor.isAdmin)
-      : null;
-    if (err) throw new UnitError(403, err);
+  if (patch.visibility != null && !(UNIT_VISIBILITIES as readonly string[]).includes(patch.visibility)) {
+    throw new UnitError(400, `visibility 는 ${UNIT_VISIBILITIES.join("·")} 중 하나입니다`);
   }
   if (patch.interval_sec != null && !(Number.isInteger(patch.interval_sec) && patch.interval_sec >= 60 && patch.interval_sec <= 30 * 86400)) {
     throw new UnitError(400, "interval_sec 는 60~2592000 초입니다");
   }
-  if (patch.priorities) {
-    const extra = patch.priorities.filter((m) => !viewers.includes(m));
-    if (extra.length) throw new UnitError(400, `후보 순서에 이 단위를 볼 수 없는 구성원이 있습니다: ${extra.join(", ")}`);
-  }
-  const before = { state: u.state, visibility: u.visibility, owner_member: u.owner_member, interval_sec: u.interval_sec, description: u.description, route: u.route, priorities: viewers };
+  let before: Record<string, unknown> = {};
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
+    const got = await client.query(`SELECT id FROM collect_unit WHERE id=$1 FOR UPDATE`, [id]);
+    const u = got.rows.length ? await getUnit(id, client) : null;
+    if (!u || unitAccess(accessInput(u), actor.member, actor.isAdmin) !== "full") throw new UnitError(404, `수집 단위 #${id} 가 없습니다`);
+    if (!canEditUnit(accessInput(u), actor.member, actor.isAdmin)) {
+      throw new UnitError(403, "이 단위를 고칠 권한이 없습니다 — 수집기 단위는 관리자 또는 확인된 볼 수 있는 구성원, 그 밖은 확인된 볼 수 있는 구성원만");
+    }
+    const viewers = u.members.map((m) => m.member_id);
+    //  경로를 바꾸면 누가 모으나가 바뀐다(수집기는 제 설정대로 따로 돈다 — 구성원 경로로 돌리면 둘이 겹쳐 모은다).
+    if (patch.route != null && patch.route !== u.route && !actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");
+    if (patch.priorities) {
+      const extra = patch.priorities.filter((m) => !viewers.includes(m));
+      if (extra.length) throw new UnitError(400, `후보 순서에 이 단위를 볼 수 없는 구성원이 있습니다: ${extra.join(", ")}`);
+    }
+    const next = patch.visibility;
+    const visChanged = next != null && (next !== u.visibility || (next === "me" && u.owner_member !== actor.member));
+    if (visChanged) {
+      const err = visibilityChangeError({ ...accessInput(u), visibility: u.visibility, owner: u.owner_member }, next, actor.member, actor.isAdmin);
+      if (err) throw new UnitError(403, err);
+      //  넓히기는 이미 모은 자료를 소급해 연다 — 도구 호출 한 번으로 일어나지 않게 사람의 확인을 받는다(축 끄기와 같은 결 · 리뷰 N5).
+      if (isWidening(u.visibility, next) && patch.confirm !== true) {
+        const n = Number((await client.query(`SELECT count(*)::int AS n FROM collect_unit_source WHERE unit_id=$1 AND audience`, [id])).rows[0].n);
+        if (n > 0) {
+          throw new UnitError(409, `이미 모은 자료 ${n}건이 ${VIS_AUDIENCE_LABEL[next]}에게 열립니다 — 사람에게 확인받은 뒤 confirm:true 로 다시 보내세요`);
+        }
+      }
+    }
+    before = { state: u.state, visibility: u.visibility, owner_member: u.owner_member, interval_sec: u.interval_sec, description: u.description, route: u.route, priorities: viewers };
     await client.query(
       `UPDATE collect_unit SET
           state = COALESCE($2, state),
@@ -950,9 +1018,9 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
       }
     }
     if (visChanged) {
-      await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`,
-        [id, patch.visibility, patch.visibility === "me" ? actor.member : null]);
+      await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`, [id, next, next === "me" ? actor.member : null]);
       //  이미 모은 자료도 새 공개범위로 — 같은 트랜잭션이라 좁힌 순간 빠진 사람이 계속 보는 틈이 없다.
+      //  ⚠ 이미 증류한 지식은 따라 좁혀지지 않는다(상속은 원본 연결 때 한 번 — T14 #4824).
       await syncUnitAudience(client, [id]);
     }
     await client.query("COMMIT");

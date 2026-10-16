@@ -6,13 +6,15 @@
 //      **건강한 첫 사람**이 모은다 — 1순위가 끊기면 2순위가 이어받고, 1순위가 회복되면 다시 1순위다.
 //   ② «다시 로그인» 알림 대상 — 아무도 메우지 못해 멈춘 단위만, 사람이 고칠 수 있는 끊김인 첫 사람에게 한 번.
 //   ③ 수집 실행(T11 collect-run) 결과 분류 — 로그인 끊김 · 한도 초과 · 커넥터 끊김 · 정상 · 모름.
-//   ④ 자료의 볼 수 있는 사람 — 단위 구성원의 합집합, 조직 공개범위 정책이 있으면 그 안으로.
+//   ④ 자료의 볼 수 있는 사람 — 단위마다 공개범위(나만 · 볼 수 있는 사람만 · 모두) 몫의 합집합, 조직 공개범위 정책이 있으면 그 안으로.
 //   ⑤ 목록 정규화 · 좌표 정규화 · 쪼개기 검사 · 조회/수정 권한 · 수집기 자격 실패 판정.
 //
 //  ★ 볼 수 있는 구성원은 두 층이다 — **본인 신고(claim)** 와 **확인됨(verified)**. 목록 반영 표면(MCP·REST)으로 «나도 이 채널을
 //   본다» 고 적은 것만으로는 후보(뒤 순번)일 뿐이고, 이미 모인 자료는 열리지 않는다. 그 사람 커넥터로 그 단위를 **실제로 읽은 것**
 //   (서버가 연 목록 실행 · 그 사람 실행의 저장)이 확인돼야 볼 수 있는 사람이 된다. 아니면 채널 id 하나 아는 구성원이나, 외부 글에 심긴
 //   지시를 읽은 그 사람의 AI 가 신고 한 번으로 남의 비공개 채널 자료를 열 수 있다(리뷰 2026-10-16).
+//   같은 이유로 신고가 적은 «종류» 도 믿지 않는다 — 신고로 생긴 단위의 공개범위는 늘 «볼 수 있는 사람만» 이고, 종류별 첫 제안
+//   (공개 채널=모두 · DM=나만)은 서버가 연 목록만 쓴다(리뷰 2026-10-16 B2).
 //
 //  설계 정본: 지식 connect-collect-tobe-claude-connector-4213 §2. 사양·엣지 표: as-built 지식 «수집 단위 표».
 import { detectAuthFailure } from "../../node/task-failure.js";
@@ -274,6 +276,8 @@ export interface AudienceUnit {
  * 자료 1건의 볼 수 있는 사람 = 그 자료를 들여온 단위마다 «그 단위의 공개범위 몫(∩ 그 단위에 걸린 조직 정책)» 의 합집합.
  *  · 모두(all) 단위가 하나라도 있고 그 단위에 조직 정책이 없으면 → 잠그지 않는다(open).
  *  · 모두 + 조직 정책(members) → 정책 대상 전원 · 볼 수 있는 사람만 → 확인된 구성원 · 나만 → 정한 사람.
+ *  «나만» 의 주인도 그 단위의 확인된 구성원일 때만이다 — 그 채널·DM 에서 빠지면(목록에서 사라지면) 이미 모은 자료도 못 본다
+ *   («볼 수 있는 사람만» 에서 빠진 사람과 같다 · 리뷰 N6). 그때는 남은 확인된 구성원이 넘겨받을 수 있다(visibilityChangeError).
  *  조직 정책을 넘지 않는다. 다 모아 비면 잠긴 채 아무도 못 본다(fail-closed).
  */
 export function computeAudience(input: {
@@ -295,10 +299,16 @@ export function computeAudience(input: {
       for (const m of allowed) out.add(m);
       continue;
     }
-    const mine = u.visibility === "me" ? (u.owner ? [u.owner] : []) : u.viewers;
+    const mine = u.visibility === "me" ? (u.owner && u.viewers.includes(u.owner) ? [u.owner] : []) : u.viewers;
     for (const v of mine) if (v && (!allowed || allowed.has(v))) out.add(v);
   }
   return { open: false, members: [...out].sort() };
+}
+
+const VIS_RANK: Record<UnitVisibility, number> = { me: 0, viewers: 1, all: 2 };
+/** 넓히기인가 — 나만 → 볼 수 있는 사람만 → 모두 쪽으로. 이미 모은 자료가 있으면 사람의 확인(confirm)을 받는다(축 끄기와 같은 결). */
+export function isWidening(from: UnitVisibility, to: UnitVisibility): boolean {
+  return VIS_RANK[to] > VIS_RANK[from];
 }
 
 /**

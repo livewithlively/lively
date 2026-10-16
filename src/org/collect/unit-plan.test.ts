@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ANY_CONNECTOR, canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
-  defaultVisibilityForKind, healthIndex, listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs,
+  defaultVisibilityForKind, healthIndex, isWidening, listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs,
   splitOverreach, unitAccess, visibilityChangeError,
   type AudienceUnit, type PlanCandidate, type PlanHealth, type PlanUnit,
 } from "./unit-plan.js";
@@ -212,15 +212,24 @@ test("A6 «모두» 단위 — 정책이 없거나 open 이면 잠그지 않는�
   assert.deepEqual(aud([au({ visibility: "all", policy: { visibility: "members", members: [{ subject_kind: "team", member_id: "T1" }] } })]), locked("b"));
   assert.deepEqual(aud([au({ visibility: "all", viewers: ["a"], policy: only() })]), locked());
 });
-test("A7 «나만» 단위 — 정한 사람 한 명(볼 수 있는 구성원이 더 있어도) · 주인이 비면 0 · 정책 밖 주인이면 0", () => {
+test("A7 «나만» 단위 — 정한 사람 한 명(볼 수 있는 구성원이 더 있어도) · 주인이 비면 0 · 정책 밖 주인이면 0 · 주인이 그 단위에서 빠졌으면 0", () => {
   assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a", "b"] })]), locked("a"));
   assert.deepEqual(aud([au({ visibility: "me", owner: null, viewers: ["a"] })]), locked());
-  assert.deepEqual(aud([au({ visibility: "me", owner: "a", policy: only("b") })]), locked());
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"], policy: only("b") })]), locked());
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["b"] })]), locked());
 });
 test("A9 섞이면 합집합 — 나만+볼 수 있는 사람만 · 모두(정책 없음)가 하나라도 있으면 열림 · 모두(정책)+볼 수 있는 사람만", () => {
-  assert.deepEqual(aud([au({ visibility: "me", owner: "a" }), au({ viewers: ["c", "b"] })]), locked("a", "b", "c"));
-  assert.deepEqual(aud([au({ visibility: "me", owner: "a" }), au({ visibility: "all" })]), { open: true, members: [] });
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"] }), au({ viewers: ["c", "b"] })]), locked("a", "b", "c"));
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"] }), au({ visibility: "all" })]), { open: true, members: [] });
   assert.deepEqual(aud([au({ visibility: "all", policy: only("x") }), au({ viewers: ["b"] })]), locked("b", "x"));
+});
+test("A11 넓히기 — 나만 → 볼 수 있는 사람만 → 모두 쪽만(같거나 좁히기는 아니다)", () => {
+  assert.equal(isWidening("me", "viewers"), true);
+  assert.equal(isWidening("viewers", "all"), true);
+  assert.equal(isWidening("me", "all"), true);
+  for (const [a, b] of [["all", "viewers"], ["viewers", "me"], ["all", "me"], ["me", "me"], ["viewers", "viewers"], ["all", "all"]] as const) {
+    assert.equal(isWidening(a, b), false, `${a}→${b}`);
+  }
 });
 test("A10 리브의 첫 제안 — 공개 채널=모두 · DM·여러 사람 DM·메일함·라벨=나만 · 그 밖=볼 수 있는 사람만", () => {
   assert.equal(defaultVisibilityForKind("channel"), "all");

@@ -30,6 +30,7 @@ const A = "__cu_pg_a__", B = "__cu_pg_b__", C = "__cu_pg_c__", D = "__cu_pg_d__"
 const MEMBERS = [A, B, C, D];
 const APP = "cupg";                 // 이 시험만 쓰는 앱 키 — 남의 자료·수집기와 섞이지 않는다
 const BULK_APP = "cupg-bulk";
+const LEFT_APP = "cupg-left";       // «완전한 목록» 으로 빠지는 시험 — 다른 시험의 단위를 건드리지 않게 앱을 따로 쓴다
 const TEAM_SLACK = "T_CUPG";       // 이관 시험용 슬랙 팀(인스턴스)
 const NOTION_INST = "cupg-notion";
 const COLLECTOR_KEYS = ["pgtest-cu-slack", "pgtest-cu-gmail", "pgtest-cu-gmail-c", "pgtest-cu-notion"];
@@ -75,8 +76,8 @@ const healthRow = async (member, connector = "*") => (await itemsPool.query(
 
 async function cleanup() {
   await itemsPool.query(`DELETE FROM collect_unit WHERE app = ANY($1::text[]) OR (app='slack' AND instance=$2) OR (app='notion' AND instance=$3)
-                           OR (app='gmail' AND lower(ref) = ANY($4::text[]))`, [[APP, BULK_APP], TEAM_SLACK, NOTION_INST, MEMBERS.map((m) => `${m}@cupg.test`)]);
-  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[]) OR (external_system='slack' AND external_instance=$2)`, [[APP, BULK_APP], TEAM_SLACK]);
+                           OR (app='gmail' AND lower(ref) = ANY($4::text[]))`, [[APP, BULK_APP, LEFT_APP], TEAM_SLACK, NOTION_INST, MEMBERS.map((m) => `${m}@cupg.test`)]);
+  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[]) OR (external_system='slack' AND external_instance=$2)`, [[APP, BULK_APP, LEFT_APP], TEAM_SLACK]);
   await itemsPool.query(`DELETE FROM knowledge WHERE external_system='notion' AND external_instance=$1`, [NOTION_INST]);
   await itemsPool.query(`DELETE FROM collect_assignee_state WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM connector_run WHERE collector_id IN (SELECT id FROM org_collector WHERE key = ANY($1::text[]))`, [COLLECTOR_KEYS]).catch(() => {});
@@ -370,8 +371,9 @@ try {
   {
     await itemsPool.query(`UPDATE org_runtime_config SET visibility_axes = visibility_axes || '{"source": false}'::jsonb WHERE id=1`);
     invalidateVisAxes();
-    const lc = await assigned(C);   // V3b 가 ch1 후보 순서를 C·A 로 바꿨다
     const u = await unitBy("ch1");
+    await store.updateUnit(u.id, { priorities: [C, A] }, { member: A, isAdmin: false });   // 담당을 C 로 못박는다(앞 행의 순서에 기대지 않는다)
+    const lc = await assigned(C);
     await store.storeUnitItems(u.id, [item("axis-off-1")], { member: C });
     const r = (await srcRows("axis-off-1"))[0];
     const off = await capOf("collect_units").handler({ app: APP }, userOf(A));
@@ -410,18 +412,41 @@ try {
 
   // ── W 단위 공개범위 — 나만·볼 수 있는 사람만·모두(상민님 2026-10-16). 수집 전 검토에서 사람이 정하고 리브가 종류별로 먼저 제안한다 ──
   {
-    const upd = (id, visibility, who) => capOf("collect_unit_update").handler({ id, visibility }, userOf(who), {});
+    const upd = (id, visibility, who, o = {}) => capOf("collect_unit_update").handler({ id, visibility, ...o }, userOf(who), {});
+    const ADMIN = userOf("__admin__", ["items", "context", "memory", "admin"]);
     await listing(A, [{ ref: "w-pub", kind: "channel", name: "#공개" }, { ref: "w-priv", kind: "private_channel", name: "#비공개" },
       { ref: "w-dm", kind: "dm", name: "B 와 DM" }, { ref: "w-gdm", kind: "group_dm", name: "여럿 DM" }]);
     await listing(B, [{ ref: "w-pub", kind: "channel" }, { ref: "w-priv", kind: "private_channel" }, { ref: "w-dm", kind: "dm" }]);
     const pub = await unitBy("w-pub"), priv = await unitBy("w-priv"), dm = await unitBy("w-dm"), gdm = await unitBy("w-gdm");
     const box = await unitBy(`${A}@cupg.test`, "gmail", "default");
-    chk("W1 첫 제안 — 공개 채널=모두 · 비공개 채널=볼 수 있는 사람만 · DM·여러 사람 DM·메일함=나만(처음 본 사람 · 메일함 주인) · 두 번째 사람이 훑어도 그대로",
+    chk("W1 서버 목록의 첫 제안 — 공개 채널=모두 · 비공개 채널=볼 수 있는 사람만 · DM·여러 사람 DM·메일함=나만(처음 본 사람 · 메일함 주인) · 두 번째 사람이 훑어도 그대로",
       pub.visibility === "all" && pub.owner_member == null && priv.visibility === "viewers" && priv.owner_member == null
         && dm.visibility === "me" && dm.owner_member === A && gdm.visibility === "me" && gdm.owner_member === A
         && box.visibility === "me" && box.owner_member === A,
       JSON.stringify({ pub: [pub.visibility, pub.owner_member], priv: [priv.visibility, priv.owner_member], dm: [dm.visibility, dm.owner_member],
         gdm: [gdm.visibility, gdm.owner_member], box: [box.visibility, box.owner_member] }));
+
+    //  본인 신고는 종류를 믿지 않는다(리뷰 B2) — 비공개 채널을 «channel» 로 신고해도 «모두» 가 아니고, DM 을 신고해도 주인이 되지 않는다.
+    await capOf("collect_unit_listing").handler({ app: APP, items: [{ ref: "w-sc-pub", kind: "channel" }, { ref: "w-sc-dm", kind: "dm" }] }, userOf(D), { actor: D });
+    const scPub = await unitBy("w-sc-pub"), scDm = await unitBy("w-sc-dm");
+    chk("W1c 본인 신고로 생긴 단위는 종류와 상관없이 «볼 수 있는 사람만» · 주인 없음",
+      scPub.visibility === "viewers" && scPub.owner_member == null && scDm.visibility === "viewers" && scDm.owner_member == null,
+      JSON.stringify({ scPub: [scPub.kind, scPub.visibility, scPub.owner_member], scDm: [scDm.kind, scDm.visibility, scDm.owner_member] }));
+    await listing(A, [{ ref: "w-sc-pub", kind: "private_channel" }]);
+    await listing(B, [{ ref: "w-sc-dm", kind: "dm" }]);
+    const rsPub = await unitBy("w-sc-pub"), rsDm = await unitBy("w-sc-dm");
+    chk("W1d 신고로만 생긴 검토 전 단위는 처음 오는 서버 목록이 종류·첫 제안·주인을 다시 정한다(비공개 채널 · DM=나만 B)",
+      rsPub.kind === "private_channel" && rsPub.visibility === "viewers" && rsDm.kind === "dm" && rsDm.visibility === "me" && rsDm.owner_member === B,
+      JSON.stringify({ rsPub: [rsPub.kind, rsPub.visibility], rsDm: [rsDm.kind, rsDm.visibility, rsDm.owner_member] }));
+    await listing(D, [{ ref: "w-sc-dm", kind: "channel" }]);
+    const rsDm2 = await unitBy("w-sc-dm");
+    chk("W1e 확인된 구성원이 생긴 뒤의 서버 목록은 종류·공개범위·주인을 바꾸지 않는다",
+      rsDm2.kind === "dm" && rsDm2.visibility === "me" && rsDm2.owner_member === B, JSON.stringify([rsDm2.kind, rsDm2.visibility, rsDm2.owner_member]));
+    //  이미 수집 중인 단위는 확인된 구성원이 없어도(모두 빠짐) 다시 정하지 않는다 — 사람이 검토에서 정한 값이다(A5 의 nobody: 수집 중 · 신고만 한 D).
+    await listing(D, [{ ref: "nobody", kind: "dm" }]);
+    const nbU = await unitBy("nobody");
+    chk("W1f 수집 중(active) 단위는 서버 목록이 와도 종류·공개범위·주인을 다시 정하지 않는다",
+      nbU.kind === "channel" && nbU.visibility === "viewers" && nbU.owner_member == null, JSON.stringify([nbU.kind, nbU.visibility, nbU.owner_member]));
     for (const r of ["w-pub", "w-priv", "w-dm"]) await activate(r);
 
     await store.storeUnitItems(pub.id, [item("w-pub-1")], { member: A });
@@ -431,14 +456,18 @@ try {
       JSON.stringify({ vis: p1.visibility, aud: await audience(p1.id) }));
     const toViewers = await upd(pub.id, "viewers", A);
     const p1v = (await srcRows("w-pub-1"))[0];
-    chk("W3 «모두» → «볼 수 있는 사람만» 으로 바꾸면 이미 모은 자료도 바로 확인된 구성원(A·B)만 — C 는 못 본다",
+    chk("W3 «모두» → «볼 수 있는 사람만»(좁히기 — 확인 없이) 으로 바꾸면 이미 모은 자료도 바로 확인된 구성원(A·B)만 — C 는 못 본다",
       toViewers.unit?.visibility === "viewers" && p1v.visibility === "members"
         && JSON.stringify(await audience(p1v.id)) === JSON.stringify([`member:${A}`, `member:${B}`]) && !(await canSeeSource(p1v.id, C)),
       JSON.stringify({ v: toViewers.unit?.visibility, vis: p1v.visibility, aud: await audience(p1v.id) }));
-    await upd(pub.id, "all", B);
+    const noConfirm = await statusOf(() => upd(pub.id, "all", B));
+    const stillLocked = (await srcRows("w-pub-1"))[0].visibility === "members" && (await unitBy("w-pub")).visibility === "viewers";
+    const widened = await upd(pub.id, "all", B, { confirm: true });
     const p1a = (await srcRows("w-pub-1"))[0];
-    chk("W3b 다시 «모두» 로 — 잠금이 풀리고 대상이 비워진다(C 도 본다)",
-      p1a.visibility === "open" && (await audience(p1a.id)).length === 0 && (await canSeeSource(p1a.id, C)), JSON.stringify({ vis: p1a.visibility }));
+    chk("W3b 넓히기는 이미 모은 자료가 있으면 확인(confirm) 없이 409 · 아무것도 안 바뀜 · 확인하면 잠금이 풀리고 대상이 비워진다(C 도 본다) · 응답이 적용 여부를 싣는다",
+      noConfirm === 409 && stillLocked && p1a.visibility === "open" && (await audience(p1a.id)).length === 0 && (await canSeeSource(p1a.id, C))
+        && widened.visibility_enforced === true,
+      JSON.stringify({ noConfirm, stillLocked, vis: p1a.visibility, enforced: widened.visibility_enforced }));
     const reopen = await store.syncUnitAudience(itemsPool, [pub.id]);
     chk("W3c «모두» 그대로면 다시 맞춰도 아무 자료도 다시 쓰지 않는다", reopen === 0, String(reopen));
     //  아무도 못 보던 자료(잠김 · 대상 0 — A5 의 nobody 단위)도 «모두» 가 되면 열린다(대상이 비어 있다고 «이미 열림» 으로 보지 않는다).
@@ -458,12 +487,14 @@ try {
     chk("W4b «나만» 단위의 자료는 정한 사람만 — 확인된 다른 구성원(B)도 못 본다",
       d1.visibility === "members" && JSON.stringify(await audience(d1.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(d1.id, B)),
       JSON.stringify(await audience(d1.id)));
+    chk("W4c «나만» 단위에는 주인이 아닌 구성원(B)의 실행이 자료를 넣지 못한다(403) — 남의 로그인으로 모은 것이 주인 한 명에게만 열리지 않게",
+      (await statusOf(() => store.storeUnitItems(dm.id, [item("w-dm-b")], { member: B }))) === 403 && (await srcRows("w-dm-b")).length === 0);
     chk("W5 «나만» 단위는 정한 사람만 바꾼다 — 확인된 B 는 403 · 단위를 못 보는 관리자는 404",
-      (await statusOf(() => upd(dm.id, "viewers", B))) === 403 && (await statusOf(() => upd(dm.id, "me", B))) === 403
-        && (await statusOf(() => capOf("collect_unit_update").handler({ id: dm.id, visibility: "all" }, userOf("__admin__", ["items", "context", "memory", "admin"]), {}))) === 404
+      (await statusOf(() => upd(dm.id, "viewers", B, { confirm: true }))) === 403 && (await statusOf(() => upd(dm.id, "me", B))) === 403
+        && (await statusOf(() => capOf("collect_unit_update").handler({ id: dm.id, visibility: "all", confirm: true }, ADMIN, {}))) === 404
         && (await unitBy("w-dm")).owner_member === A);
-    await upd(dm.id, "viewers", A);
-    chk("W5b 정한 사람이 «볼 수 있는 사람만» 으로 넓히면 B 도 본다 · 주인 칸이 비워진다",
+    await upd(dm.id, "viewers", A, { confirm: true });
+    chk("W5b 정한 사람이 «볼 수 있는 사람만» 으로 넓히면(확인) B 도 본다 · 주인 칸이 비워진다",
       (await canSeeSource(d1.id, B)) && (await unitBy("w-dm")).owner_member == null, JSON.stringify(await audience(d1.id)));
 
     await store.storeUnitItems(priv.id, [item("w-priv-1")], { member: A });
@@ -473,17 +504,23 @@ try {
       && JSON.stringify(await audience(v1.id)) === JSON.stringify([`member:${B}`]) && !(await canSeeSource(v1.id, A)), JSON.stringify(await audience(v1.id)));
     chk("W6b 단위를 못 보는 사람(C)은 «나만» 을 못 고른다(404) · 바뀐 것이 없다",
       (await statusOf(() => upd(priv.id, "me", C))) === 404 && (await unitBy("w-priv")).owner_member === B);
-    await upd(priv.id, "viewers", B);
+    await upd(priv.id, "viewers", B, { confirm: true });
 
-    //  넘겨받기 — 신고만 한 D 가 DM 을 먼저 «나만» 으로 잡아도, 그 DM 을 실제로 보는 것이 확인된 B 가 넘겨받는다.
-    await capOf("collect_unit_listing").handler({ app: APP, items: [{ ref: "w-claim", kind: "dm" }] }, userOf(D), { actor: D });
-    const claimed = await unitBy("w-claim");
-    await listing(B, [{ ref: "w-claim", kind: "dm" }]);
-    const dTry = await statusOf(() => upd(claimed.id, "viewers", D));
-    const take = await upd(claimed.id, "me", B);
-    chk("W7 신고만 한 주인(D)은 바꾸지 못하고(겉만 보는 사람이라 404) · 확인된 B 가 «나만» 을 넘겨받는다",
-      claimed.visibility === "me" && claimed.owner_member === D && dTry === 404 && take.unit?.visibility === "me" && (await unitBy("w-claim")).owner_member === B,
-      JSON.stringify({ claimed: [claimed.visibility, claimed.owner_member], dTry, owner: (await unitBy("w-claim")).owner_member }));
+    //  «나만» 주인이 그 단위에서 빠지면(완전한 목록에 없음) 이미 모은 자료도 못 보고, 남은 확인된 구성원이 넘겨받는다(리뷰 N6).
+    await listing(A, ["w-left", "w-stay"], { app: LEFT_APP }); await listing(B, ["w-left"], { app: LEFT_APP });
+    const wl = await unitBy("w-left", LEFT_APP);
+    await activate("w-left", LEFT_APP);
+    await upd(wl.id, "me", A);
+    await store.storeUnitItems(wl.id, [item("w-left-1")], { member: A });
+    const l1 = (await srcRows("w-left-1", LEFT_APP))[0];
+    const own = JSON.stringify(await audience(l1.id));
+    await listing(A, ["w-stay"], { app: LEFT_APP, complete: true });
+    const gone = await audience(l1.id);
+    const take = await upd(wl.id, "me", B);
+    chk("W7 «나만» 주인(A)이 빠지면 이미 모은 자료도 아무도 못 본다 · 남은 확인된 구성원(B)이 넘겨받으면 B 만 본다",
+      own === JSON.stringify([`member:${A}`]) && gone.length === 0 && !(await canSeeSource(l1.id, A)) && take.unit?.owner_member === B
+        && JSON.stringify(await audience(l1.id)) === JSON.stringify([`member:${B}`]),
+      JSON.stringify({ own, gone, owner: take.unit?.owner_member, now: await audience(l1.id) }));
 
     //  쪼개기 — 자식은 부모의 공개범위를 따른다. 부모가 «나만» 인데 주인이 자식을 못 보면 자식은 «볼 수 있는 사람만».
     await listing(A, ["w-split"]); await listing(B, ["w-split"]);
@@ -507,14 +544,178 @@ try {
       JSON.stringify(await audience(p2.id)));
     await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE id=$1`, [pol]);
     invalidateSourceVisRules();
+    //  정책이 채널 «이름» 으로 걸려 있어도(관리 화면이 이름으로 보여 준다) 도장과 같은 키로 찾는다 — 단위 이름(#finance)과 달라도(리뷰 B4).
+    await listing(A, [{ ref: "C0FIN", kind: "channel", name: "#finance" }]);
+    const fin = await unitBy("C0FIN");
+    await activate("C0FIN");
+    const polN = (await itemsPool.query(
+      `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, note) VALUES($1,'finance','members',$2) RETURNING id`, [APP, POLICY_NOTE])).rows[0].id;
+    await itemsPool.query(`INSERT INTO org_source_vis_policy_member(policy_id, subject_kind, member_id) VALUES($1,'member',$2)`, [polN, C]);
+    invalidateSourceVisRules();
+    await store.storeUnitItems(fin.id, [item("fin-1", "재무", { extra: { container_name: "finance" } })], { member: A });
+    const f1 = (await srcRows("fin-1"))[0];
+    chk("W9b «모두» 단위라도 정책이 채널 이름(그릇 이름 finance)으로 걸려 있으면 그 정책 대상(C)만",
+      fin.visibility === "all" && f1.visibility === "members" && JSON.stringify(await audience(f1.id)) === JSON.stringify([`member:${C}`]) && !(await canSeeSource(f1.id, A)),
+      JSON.stringify({ unit: fin.visibility, vis: f1.visibility, aud: await audience(f1.id) }));
+    await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE id=$1`, [polN]);
+    invalidateSourceVisRules();
 
     const la2 = await capOf("collect_units").handler({ app: APP }, userOf(A));
     const full = la2.units.find((x) => x.id === pub.id);
+    await capOf("collect_unit_listing").handler({ app: APP, items: [{ ref: "w-dm", kind: "dm" }] }, userOf(D), { actor: D });
     const ld = await capOf("collect_units").handler({ app: APP }, userOf(D));
-    const coarse = ld.units.find((x) => x.id === claimed.id);
+    const coarse = ld.units.find((x) => x.id === dm.id);
     chk("W10 목록이 공개범위를 싣는다 — 다 보는 사람(full)·겉만 보는 사람(coarse) 모두 · 적용 여부(visibility_enforced=true)",
-      full?.visibility === "all" && coarse?.access === "coarse" && coarse.visibility === "me" && la2.visibility_enforced === true,
+      full?.visibility === "all" && coarse?.access === "coarse" && coarse.visibility === "viewers" && la2.visibility_enforced === true,
       JSON.stringify({ full: full?.visibility, coarse: coarse && [coarse.access, coarse.visibility], enforced: la2.visibility_enforced }));
+
+    //  정책을 못 읽으면 닫는다 — 정책 표를 잠깐 치워 읽기를 실패시키고 «모두» 단위의 자료를 다시 맞춘다(리뷰 N7).
+    await itemsPool.query(`ALTER TABLE org_source_vis_policy RENAME TO org_source_vis_policy__cupg`);
+    invalidateSourceVisRules();
+    let closed;
+    try {
+      await store.syncUnitAudience(itemsPool, [pub.id]);
+      closed = (await srcRows("w-pub-1"))[0];
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_source_vis_policy__cupg RENAME TO org_source_vis_policy`);
+      invalidateSourceVisRules();
+    }
+    const closedAud = await audience(closed.id);
+    await store.syncUnitAudience(itemsPool, [pub.id]);
+    chk("W11 정책을 못 읽으면 «모두» 단위의 자료도 잠근 채 아무에게도 안 연다(fail-closed) · 정책이 돌아오면 다시 맞춰 열린다",
+      closed.visibility === "members" && closedAud.length === 0 && (await srcRows("w-pub-1"))[0].visibility === "open",
+      JSON.stringify({ closed: closed.visibility, closedAud }));
+  }
+
+  // ── R 경합 — 공개범위 바꾸기와 저장이 겹쳐도 옛 공개범위로 계산한 대상이 남지 않는다(리뷰 B1) · 판정과 쓰기 사이에 남이 못 끼어든다(B3) ──
+  {
+    //  다음에 빌리는 풀 연결 하나에서 n 번째 `sqlText` 문장 직전에 멈춘다 — COMMIT 이면 그 트랜잭션은 계산을 다 마치고 커밋 직전이다.
+    const holdNth = (sqlText, nth) => {
+      let release, reached;
+      const gate = new Promise((r) => { release = r; });
+      const at = new Promise((r) => { reached = r; });
+      const orig = itemsPool.connect.bind(itemsPool);
+      itemsPool.connect = (...a) => {
+        if (a.length) return orig(...a);            // 콜백 모양(pool.query 내부)은 그대로
+        itemsPool.connect = orig;                   // 한 번만
+        return (async () => {
+          const c = await orig();
+          const oq = c.query.bind(c);
+          let seen = 0;
+          c.query = async (sql, ...rest) => {
+            if (typeof sql === "string" && sql.trim() === sqlText && ++seen === nth) { reached(); await gate; c.query = oq; }
+            return oq(sql, ...rest);
+          };
+          return c;
+        })();
+      };
+      return { reached: at, release: () => release() };
+    };
+    const holdNextCommit = () => holdNth("COMMIT", 1);
+    //  다른 쪽이 끝났는지, 아니면 잠금을 기다리는 중인지 — 시간에 기대지 않고 pg_stat_activity 로 본다.
+    const settle = async (done) => {
+      for (let i = 0; i < 200; i++) {
+        if (done()) return "done";
+        const w = Number((await itemsPool.query(
+          `SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`)).rows[0].n);
+        if (w > 0) return "waiting";
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return "timeout";
+    };
+
+    await listing(A, ["r-1"]); await listing(B, ["r-1"]);
+    const r1 = await unitBy("r-1");
+    await activate("r-1");
+    await store.updateUnit(r1.id, { visibility: "all" }, { member: A, isAdmin: false });
+    const h1 = holdNextCommit();
+    const storing = store.storeUnitItems(r1.id, [item("r-1-a")], { member: A });
+    await h1.reached;                                   // 저장은 «모두» 로 계산을 마치고 커밋 직전
+    let narrowed = false;
+    const narrowing = store.updateUnit(r1.id, { visibility: "me" }, { member: A, isAdmin: false }).then((v) => { narrowed = true; return v; });
+    const st1 = await settle(() => narrowed);
+    h1.release();
+    await storing; await narrowing;
+    const s1 = (await srcRows("r-1-a"))[0];
+    chk("R1 좁히기(나만)는 진행 중인 저장이 끝나기를 기다리고, 그 자료까지 새 공개범위(A 만)로 맞춘다 — 단위 밖 C 는 못 본다",
+      st1 === "waiting" && s1.visibility === "members" && JSON.stringify(await audience(s1.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(s1.id, C)),
+      JSON.stringify({ st1, vis: s1.visibility, aud: await audience(s1.id) }));
+
+    await listing(A, ["r-2"]); await listing(B, ["r-2"]);
+    const r2 = await unitBy("r-2");
+    await activate("r-2");
+    await store.storeUnitItems(r2.id, [item("r-2-a")], { member: A });
+    const h2 = holdNextCommit();
+    const narrowing2 = store.updateUnit(r2.id, { visibility: "me" }, { member: A, isAdmin: false });
+    await h2.reached;                                   // A 의 «나만» 이 커밋 직전(단위 행을 잡고 있음)
+    let bDone = false;
+    const widening = statusOf(() => store.updateUnit(r2.id, { visibility: "all", confirm: true }, { member: B, isAdmin: false })).then((x) => { bDone = true; return x; });
+    const st2 = await settle(() => bDone);
+    h2.release();
+    await narrowing2;
+    const code = await widening;
+    const u2 = await unitBy("r-2"), s2 = (await srcRows("r-2-a"))[0];
+    chk("R2 «나만» 으로 바뀌는 중에 들어온 B 의 넓히기는 바뀐 뒤의 행으로 판정돼 403 — 단위는 «나만»(A) · 자료는 A 만",
+      st2 === "waiting" && code === 403 && u2.visibility === "me" && u2.owner_member === A
+        && s2.visibility === "members" && JSON.stringify(await audience(s2.id)) === JSON.stringify([`member:${A}`]),
+      JSON.stringify({ st2, code, unit: [u2.visibility, u2.owner_member], vis: s2.visibility, aud: await audience(s2.id) }));
+
+    //  구성원이 빠지는 목록 반영도 진행 중인 저장을 기다린다 — 옛 구성원(B 포함)으로 계산한 대상이 뒤에 커밋되어 B 에게 남지 않게.
+    await listing(A, ["r-3"], { app: LEFT_APP }); await listing(B, ["r-3", "r-3-other"], { app: LEFT_APP });
+    const r3 = await unitBy("r-3", LEFT_APP);
+    await activate("r-3", LEFT_APP);
+    const h3 = holdNextCommit();
+    const storing3 = store.storeUnitItems(r3.id, [item("r-3-a")], { member: A });
+    await h3.reached;
+    let leftDone = false;
+    const leaving = listing(B, ["r-3-other"], { app: LEFT_APP, complete: true }).then((x) => { leftDone = true; return x; });
+    const st3 = await settle(() => leftDone);
+    h3.release();
+    await storing3; await leaving;
+    const s3 = (await srcRows("r-3-a", LEFT_APP))[0];
+    chk("R3 빠지는 목록 반영은 진행 중인 저장을 기다리고, 그 자료에서도 빠진 사람(B)을 뺀다",
+      st3 === "waiting" && s3.visibility === "members" && JSON.stringify(await audience(s3.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(s3.id, B)),
+      JSON.stringify({ st3, aud: await audience(s3.id) }));
+
+    //  저장 도중 단위가 «나만»(주인 A)으로 바뀌면, 그 뒤 항목은 주인이 아닌 B 의 실행에서 버린다(잡은 뒤의 값으로 다시 본다).
+    await listing(A, ["r-4"]); await listing(B, ["r-4"]);
+    const r4 = await unitBy("r-4");
+    await activate("r-4");
+    const h4 = holdNextCommit();
+    const narrowing4 = store.updateUnit(r4.id, { visibility: "me" }, { member: A, isAdmin: false });
+    await h4.reached;
+    let bStored = false;
+    const bStore = store.storeUnitItems(r4.id, [item("r-4-b")], { member: B }).then((x) => { bStored = true; return x; });
+    const st4 = await settle(() => bStored);
+    h4.release();
+    await narrowing4;
+    const bRes = await bStore;
+    chk("R4 저장이 시작된 뒤 «나만»(A)이 되면 B 의 항목은 버린다(refused) — 자료가 생기지 않는다",
+      st4 === "waiting" && bRes.refused === 1 && bRes.stored === 0 && (await srcRows("r-4-b")).length === 0,
+      JSON.stringify({ st4, bRes }));
+
+    //  처음 저장한 사람을 «확인됨» 으로 올리는 트랜잭션도 단위 행을 먼저 잡는다 — 그 사이 «나만» 으로 좁혀졌으면 좁힌 뒤의 값으로 계산한다.
+    //   (안 잡으면 옛 «볼 수 있는 사람만» 으로 계산한 대상[A·D]이 «나만»(A) 뒤에 커밋되어 D 에게 남는다.)
+    await listing(A, ["r-5"]);
+    const r5 = await unitBy("r-5");
+    await activate("r-5");
+    await store.storeUnitItems(r5.id, [item("r-5-a")], { member: A });
+    await capOf("collect_unit_listing").handler({ app: APP, items: [{ ref: "r-5", kind: "private_channel" }] }, userOf(D), { actor: D });
+    const hv = holdNth("BEGIN", 2);                     // D 의 저장 — 항목 트랜잭션은 끝내고 «확인됨» 트랜잭션 직전에 멈춘다
+    let dDone = false;
+    const dStore = store.storeUnitItems(r5.id, [item("r-5-d")], { member: D }).then((x) => { dDone = true; return x; });
+    await hv.reached;
+    const hu = holdNextCommit();
+    const narrowing5 = store.updateUnit(r5.id, { visibility: "me" }, { member: A, isAdmin: false });
+    await hu.reached;                                   // A 의 «나만» 이 커밋 직전(단위 행·자료 행을 잡고 있음)
+    hv.release();
+    const st5 = await settle(() => dDone);
+    hu.release();
+    await narrowing5; await dStore;
+    const s5 = (await srcRows("r-5-a"))[0];
+    chk("R5 «확인됨» 으로 올리는 중에 «나만»(A)이 되면, 이미 모은 자료는 A 만 — 새로 확인된 D 에게 남지 않는다",
+      st5 === "waiting" && JSON.stringify(await audience(s5.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(s5.id, D)),
+      JSON.stringify({ st5, aud: await audience(s5.id) }));
   }
 
   // ── M 지금 수집기 설정 → 단위(이관) · 수집기 1순위 · 꺼짐/끊김 ──
@@ -583,6 +784,11 @@ try {
     const boxC = await unitBy(`${C}@cupg.test`, "gmail", "default");
     chk("M7b 이관으로 새로 생긴 메일함 단위는 «나만» — 주인은 자격 주인(C)",
       boxC && boxC.visibility === "me" && boxC.owner_member === C, JSON.stringify(boxC && [boxC.visibility, boxC.owner_member]));
+    const adminTry = await statusOf(() => capOf("collect_unit_update").handler(
+      { id: box.id, visibility: "all", confirm: true }, userOf("__admin__", ["items", "context", "memory", "admin"]), {}));
+    chk("M7c 수집기 메일함 단위도 «나만» 은 주인만 — 관리자도 넓히지 못한다(403)",
+      box.route === "lively_collector" && box.visibility === "me" && adminTry === 403 && (await unitBy(`${B}@cupg.test`, "gmail", "default")).visibility === "me",
+      JSON.stringify({ route: box.route, vis: box.visibility, adminTry }));
 
     await itemsPool.query(
       `INSERT INTO org_collector(key, preset_key, instance_key, enabled, config) VALUES('pgtest-cu-notion','notion','pgtest-cu',true,$1::jsonb)`,
@@ -595,6 +801,13 @@ try {
     await store.syncCollectorUnits();
     const root = await unitBy("pg-root", "notion", NOTION_INST), kid = await unitBy("pg-child", "notion", NOTION_INST);
     chk("M8 노션은 맨 위 페이지만 단위(아래 페이지는 그 안)", root && root.kind === "page" && !kid, JSON.stringify({ root, kid: !!kid }));
+    //  수집기 단위는 검토 전(candidate)이고 확인된 구성원이 없어도 서버 목록이 다시 정하지 않는다 — 수집기 쪽 좌표·관리자가 정한 값이다.
+    await itemsPool.query(`UPDATE collect_unit SET state='candidate' WHERE id=$1`, [root.id]);
+    await store.recordUnitListing({ member: D, app: "notion", instance: NOTION_INST, connector: "Notion", items: [{ ref: "pg-root", kind: "dm" }], verified: true });
+    const root2 = await unitBy("pg-root", "notion", NOTION_INST);
+    chk("M8b 수집기 단위는 (검토 전 · 확인된 구성원 없음이어도) 서버 목록이 종류·공개범위·주인을 다시 정하지 않는다",
+      root2.route === "lively_collector" && root2.kind === "page" && root2.visibility === "viewers" && root2.owner_member == null,
+      JSON.stringify([root2.route, root2.kind, root2.visibility, root2.owner_member]));
     await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE 'pgtest-cu-%'`);
   }
 } catch (e) {
