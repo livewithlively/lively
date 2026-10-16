@@ -7,20 +7,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ANY_CONNECTOR, canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
-  healthIndex, listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs, splitOverreach, unitAccess,
-  type PlanCandidate, type PlanHealth, type PlanUnit,
+  defaultVisibilityForKind, healthIndex, isWidening, listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs,
+  splitOverreach, unitAccess, visibilityChangeError,
+  type AudienceUnit, type PlanCandidate, type PlanHealth, type PlanUnit,
 } from "./unit-plan.js";
 
 const NOW = 1_800_000_000_000;
 const H = 3600_000;
 const cand = (member_id: string, priority = 10, added_at = 1, verified = true): PlanCandidate => ({ member_id, priority, added_at, verified });
 const unit = (o: Partial<PlanUnit> = {}): PlanUnit => ({
-  id: 1, route: "member_ai", state: "active", connector: "Slack", collector: null, candidates: [cand("a", 10), cand("b", 20)], ...o,
+  id: 1, route: "member_ai", state: "active", connector: "Slack", collector: null, candidates: [cand("a", 10), cand("b", 20)],
+  visibility: "viewers", owner: null, ...o,
 });
 const health = (member_id: string, state: PlanHealth["state"], o: Partial<PlanHealth> = {}): PlanHealth => ({
   member_id, connector: ANY_CONNECTOR, state, since: NOW - H, retry_at: null, notified_at: null, ...o,
 });
-const plan = (u: PlanUnit, rows: PlanHealth[] = [], axis = true) => planUnit(u, healthIndex(rows), { now: NOW, sourceAxisOn: axis });
+const plan = (u: PlanUnit, rows: PlanHealth[] = []) => planUnit(u, healthIndex(rows), { now: NOW });
 const who = (p: ReturnType<typeof plan>): string | null =>
   p.assignee == null ? null : p.assignee.kind === "member" ? p.assignee.member_id : `collector:${p.assignee.collector_id}`;
 
@@ -84,12 +86,19 @@ test("P9 후보가 모두 끊기면 «모두 끊김»", () => {
   assert.equal(p.assignee, null); assert.equal(p.reason, "all_unhealthy");
   assert.deepEqual(p.skipped.map((s) => s.member_id), ["a", "b"]);
 });
-test("P10 자료 축이 꺼지면 구성원 경로로는 모으지 않는다 — 수집기 경로는 그대로, 끊긴 수집기의 넘김도 막힌다", () => {
-  const m = plan(unit(), [], false);
-  assert.equal(m.assignee, null); assert.equal(m.reason, "source_axis_off");
-  assert.equal(who(plan(unit({ route: "lively_collector", collector: { id: 7, enabled: true, broken: false } }), [], false)), "collector:7");
-  const fb = plan(unit({ route: "lively_collector", collector: { id: 7, enabled: true, broken: true } }), [], false);
-  assert.equal(fb.assignee, null); assert.equal(fb.reason, "source_axis_off");
+test("P10 «나만» 단위는 정한 사람의 계정으로만 모은다 — 1순위가 따로 있어도 · 주인이 끊기면 아무도 안 맡고 · 주인이 후보에 없으면 no_viewer", () => {
+  assert.equal(who(plan(unit({ visibility: "me", owner: "b" }))), "b");
+  const broken = plan(unit({ visibility: "me", owner: "b" }), [health("b", "login_broken")]);
+  assert.equal(broken.assignee, null); assert.equal(broken.reason, "all_unhealthy");
+  assert.deepEqual(broken.skipped.map((s) => s.member_id), ["b"]);
+  const gone = plan(unit({ visibility: "me", owner: "z" }));
+  assert.equal(gone.assignee, null); assert.equal(gone.reason, "no_viewer");
+  //  끊긴 수집기에서 넘어올 때도 주인만.
+  assert.equal(who(plan(unit({ visibility: "me", owner: "b", route: "lively_collector", collector: { id: 7, enabled: true, broken: true } }))), "b");
+});
+test("P10b «볼 수 있는 사람만»·«모두» 는 주인 칸이 남아 있어도 보통 순서대로", () => {
+  assert.equal(who(plan(unit({ visibility: "viewers", owner: "b" }))), "a");
+  assert.equal(who(plan(unit({ visibility: "all", owner: "b" }))), "a");
 });
 test("P11 회복(ok 행) · P12 건강 행이 없는 후보는 건강", () => {
   assert.equal(who(plan(unit(), [health("a", "ok")])), "a");
@@ -97,9 +106,9 @@ test("P11 회복(ok 행) · P12 건강 행이 없는 후보는 건강", () => {
 });
 
 // ── N «다시 로그인» 알림 대상 ──
-const targets = (units: PlanUnit[], rows: PlanHealth[], axis = true) => {
+const targets = (units: PlanUnit[], rows: PlanHealth[]) => {
   const idx = healthIndex(rows);
-  return noticeTargets(units.map((u) => planUnit(u, idx, { now: NOW, sourceAxisOn: axis })), idx);
+  return noticeTargets(units.map((u) => planUnit(u, idx, { now: NOW })), idx);
 };
 test("N1 다른 사람이 메우는 단위는 아무도 부르지 않는다", () => {
   assert.deepEqual(targets([unit()], [health("a", "login_broken")]), []);
@@ -129,9 +138,10 @@ test("N5 같은 사람이 여러 단위로 걸리면 한 건(단위 묶음) · �
   assert.equal(two.length, 2);
   assert.deepEqual(two.map((t) => t.kind), ["connector", "connector"]);
 });
-test("N6 수집 중이 아닌 단위 · 자료 축이 꺼진 단위는 알림 대상이 아니다", () => {
+test("N6 수집 중이 아닌 단위는 알림 대상이 아니다 · N6b «나만» 단위가 주인 끊김으로 멈추면 주인에게만 알린다", () => {
   assert.deepEqual(targets([unit({ state: "candidate", candidates: [cand("a")] })], [health("a", "login_broken")]), []);
-  assert.deepEqual(targets([unit({ candidates: [cand("a")] })], [health("a", "login_broken")], false), []);
+  assert.deepEqual(targets([unit({ visibility: "me", owner: "b" })], [health("a", "login_broken"), health("b", "login_broken")]),
+    [{ member_id: "b", kind: "login", connector: ANY_CONNECTOR, unit_ids: [1] }]);
 });
 
 // ── O 실행 결과 분류 ──
@@ -184,13 +194,49 @@ test("B1 끊김은 연속 횟수로 1h·4h·12h·24h(상한) · B2 한도 초과
 });
 
 // ── A 볼 수 있는 사람 ──
-test("A3 여러 단위로 들어온 자료는 합집합 · A4 정책이 묶었으면 그 안으로 · A4b 팀 대상은 팀원 · A5 비면 0", () => {
-  const teams = new Map([["T1", new Set(["b"])]]);
-  assert.deepEqual(computeAudience({ units: [{ viewers: ["a"], policy: null }, { viewers: ["b"], policy: null }], teamMembers: teams }), ["a", "b"]);
-  assert.deepEqual(computeAudience({ units: [{ viewers: ["a", "b"], policy: { visibility: "members", members: [{ subject_kind: "member", member_id: "a" }, { subject_kind: "member", member_id: "c" }] } }], teamMembers: teams }), ["a"]);
-  assert.deepEqual(computeAudience({ units: [{ viewers: ["a", "b"], policy: { visibility: "members", members: [{ subject_kind: "team", member_id: "T1" }] } }], teamMembers: teams }), ["b"]);
-  assert.deepEqual(computeAudience({ units: [{ viewers: ["a", "b"], policy: { visibility: "open", members: [] } }], teamMembers: teams }), ["a", "b"]);
-  assert.deepEqual(computeAudience({ units: [{ viewers: [], policy: null }], teamMembers: teams }), []);
+const au = (o: Partial<AudienceUnit> = {}): AudienceUnit => ({ visibility: "viewers", viewers: [], owner: null, policy: null, ...o });
+const only = (...ids: string[]) => ({ visibility: "members" as const, members: ids.map((member_id) => ({ subject_kind: "member" as const, member_id })) });
+const aud = (units: AudienceUnit[]) => computeAudience({ units, teamMembers: new Map([["T1", new Set(["b"])]]) });
+const locked = (...members: string[]) => ({ open: false, members });
+test("A3 여러 단위로 들어온 자료는 합집합 · A4 정책이 묶었으면 그 안으로 · A4b 팀 대상은 팀원 · A5 비면 0(잠긴 채)", () => {
+  assert.deepEqual(aud([au({ viewers: ["a"] }), au({ viewers: ["b"] })]), locked("a", "b"));
+  assert.deepEqual(aud([au({ viewers: ["a", "b"], policy: only("a", "c") })]), locked("a"));
+  assert.deepEqual(aud([au({ viewers: ["a", "b"], policy: { visibility: "members", members: [{ subject_kind: "team", member_id: "T1" }] } })]), locked("b"));
+  assert.deepEqual(aud([au({ viewers: ["a", "b"], policy: { visibility: "open", members: [] } })]), locked("a", "b"));
+  assert.deepEqual(aud([au()]), locked());
+});
+test("A6 «모두» 단위 — 정책이 없거나 open 이면 잠그지 않는다 · 정책이 묶었으면 정책 대상 전원(팀은 팀원) · 정책이 못 읽혀 비면 0", () => {
+  assert.deepEqual(aud([au({ visibility: "all", viewers: ["a"] })]), { open: true, members: [] });
+  assert.deepEqual(aud([au({ visibility: "all", policy: { visibility: "open", members: [] } })]), { open: true, members: [] });
+  assert.deepEqual(aud([au({ visibility: "all", viewers: ["a"], policy: only("c", "d") })]), locked("c", "d"));
+  assert.deepEqual(aud([au({ visibility: "all", policy: { visibility: "members", members: [{ subject_kind: "team", member_id: "T1" }] } })]), locked("b"));
+  assert.deepEqual(aud([au({ visibility: "all", viewers: ["a"], policy: only() })]), locked());
+});
+test("A7 «나만» 단위 — 정한 사람 한 명(볼 수 있는 구성원이 더 있어도) · 주인이 비면 0 · 정책 밖 주인이면 0 · 주인이 그 단위에서 빠졌으면 0", () => {
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a", "b"] })]), locked("a"));
+  assert.deepEqual(aud([au({ visibility: "me", owner: null, viewers: ["a"] })]), locked());
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"], policy: only("b") })]), locked());
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["b"] })]), locked());
+});
+test("A9 섞이면 합집합 — 나만+볼 수 있는 사람만 · 모두(정책 없음)가 하나라도 있으면 열림 · 모두(정책)+볼 수 있는 사람만", () => {
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"] }), au({ viewers: ["c", "b"] })]), locked("a", "b", "c"));
+  assert.deepEqual(aud([au({ visibility: "me", owner: "a", viewers: ["a"] }), au({ visibility: "all" })]), { open: true, members: [] });
+  assert.deepEqual(aud([au({ visibility: "all", policy: only("x") }), au({ viewers: ["b"] })]), locked("b", "x"));
+});
+test("A11 넓히기 — 나만 → 볼 수 있는 사람만 → 모두 쪽만(같거나 좁히기는 아니다)", () => {
+  assert.equal(isWidening("me", "viewers"), true);
+  assert.equal(isWidening("viewers", "all"), true);
+  assert.equal(isWidening("me", "all"), true);
+  for (const [a, b] of [["all", "viewers"], ["viewers", "me"], ["all", "me"], ["me", "me"], ["viewers", "viewers"], ["all", "all"]] as const) {
+    assert.equal(isWidening(a, b), false, `${a}→${b}`);
+  }
+});
+test("A10 리브의 첫 제안 — 공개 채널=모두 · DM·여러 사람 DM·메일함·라벨=나만 · 그 밖=볼 수 있는 사람만", () => {
+  assert.equal(defaultVisibilityForKind("channel"), "all");
+  for (const k of ["dm", "group_dm", "mailbox", "label"]) assert.equal(defaultVisibilityForKind(k), "me", k);
+  for (const k of ["private_channel", "page", "database", "folder", "repo", "project", "team", "file", "other", "weird"]) {
+    assert.equal(defaultVisibilityForKind(k), "viewers", k);
+  }
 });
 
 // ── L 목록 정규화 · 메일함 ──
@@ -246,6 +292,35 @@ test("V3 고치기: 구성원 경로 = 확인된 구성원만(신고만 한 사�
   assert.equal(canEditUnit(c, "z", true), true);
   assert.equal(canEditUnit(c, "a", false), true);
   assert.equal(canEditUnit(c, "z", false), false);
+});
+
+test("V4 공개범위 바꾸기 — 고칠 수 있는 사람만 · «나만» 은 확인된 사람만 고른다 · «나만» 단위는 정한 사람만 바꾼다", () => {
+  const vis = (visibility: "me" | "viewers" | "all", owner: string | null, members: Array<{ member_id: string; verified: boolean; active?: boolean }>,
+    route: "member_ai" | "lively_collector" = "member_ai") => ({ route, members, visibility, owner });
+  const m = vis("viewers", null, [{ member_id: "a", verified: true }, { member_id: "c", verified: false }]);
+  assert.equal(visibilityChangeError(m, "all", "a", false), null);
+  assert.equal(visibilityChangeError(m, "me", "a", false), null);
+  assert.match(String(visibilityChangeError(m, "all", "c", false)), /권한/);
+  assert.match(String(visibilityChangeError(m, "all", "z", true)), /권한/);
+  //  수집기 단위 — 관리자는 고칠 수 있어도 확인되지 않았으면 «나만» 을 못 고른다.
+  assert.equal(visibilityChangeError(vis("viewers", null, [], "lively_collector"), "all", "z", true), null);
+  assert.match(String(visibilityChangeError(vis("viewers", null, [], "lively_collector"), "me", "z", true)), /확인된 사람만/);
+  //  «나만» 단위: 주인만 · 다른 확인된 구성원은 넓히지도 넘겨받지도 못한다 · 관리자도.
+  const mine = vis("me", "a", [{ member_id: "a", verified: true }, { member_id: "b", verified: true }]);
+  assert.equal(visibilityChangeError(mine, "viewers", "a", false), null);
+  assert.equal(visibilityChangeError(mine, "all", "a", false), null);
+  assert.match(String(visibilityChangeError(mine, "viewers", "b", false)), /정한 사람만/);
+  assert.match(String(visibilityChangeError(mine, "me", "b", false)), /정한 사람만/);
+  assert.match(String(visibilityChangeError({ ...mine, route: "lively_collector" }, "all", "z", true)), /정한 사람만/);
+});
+test("V5 «나만» 넘겨받기 — 주인이 확인되지 않았거나(신고만) 내보낸 사람이면 확인된 구성원이 넘겨받는다 · 확인 안 된 관리자는 못 한다", () => {
+  const claimed = { route: "member_ai" as const, visibility: "me" as const, owner: "c", members: [{ member_id: "c", verified: false }, { member_id: "b", verified: true }] };
+  assert.equal(visibilityChangeError(claimed, "me", "b", false), null);
+  assert.equal(visibilityChangeError(claimed, "viewers", "b", false), null);
+  const left = { ...claimed, owner: "a", members: [{ member_id: "a", verified: true, active: false }, { member_id: "b", verified: true }] };
+  assert.equal(visibilityChangeError(left, "me", "b", false), null);
+  const coll = { route: "lively_collector" as const, visibility: "me" as const, owner: "c", members: [{ member_id: "c", verified: false }] };
+  assert.match(String(visibilityChangeError(coll, "all", "z", true)), /정한 사람만/);
 });
 
 // ── C 읽은 위치 ──
