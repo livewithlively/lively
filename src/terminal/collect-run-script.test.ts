@@ -16,6 +16,7 @@
 //   R4 옛 claude(플래그 없음) → 그 플래그를 안 붙인다                   R5 서버 목록이 빔 → no-connector
 //   R6 시간 상한 초과 → 끊고 timeout · 끝 신호                        R7 일감 깨짐 → job.json 실패 · 끝 신호
 //   R8 사용자 설정을 뺀다(--setting-sources project,local — 지원할 때만)  R9 큰 결과가 러너 한 판을 지나 원문으로 남고, Claude 프로젝트 폴더는 치운다
+//   R10 컨테이너 메모리(/proc/meminfo) — 상한(MemTotal) · 시작 · 최고 / 파일이 없으면 null(맥)
 //   S1 쓰기 셸 0600 · S2 끝난 폴더(done·세션 id·목록) · S3 없음/도는 중(반쯤 쓰인 줄 버림)
 //   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절
 import assert from "node:assert/strict";
@@ -218,7 +219,7 @@ fs.writeFileSync(fakeBin, FAKE, { mode: 0o755 });
 
 type Run = { dir: string; exit: Record<string, unknown>; summary: Record<string, any>; fake: Record<string, any> | null };
 /** 실행 폴더를 쓰기 셸(collectWriteSh)로 만들고 러너를 돌린다 — 게이트웨이가 하는 일과 같은 순서. */
-function runOnce(label: string, o: { apps: string[]; mode?: string; timeoutSec?: number; job?: string }): Run {
+function runOnce(label: string, o: { apps: string[]; mode?: string; timeoutSec?: number; job?: string; meminfo?: string }): Run {
   const home = path.join(tmp, `home-${label}`);
   fs.mkdirSync(home, { recursive: true });
   const runId = newCollectRunId(new Date(), crypto.randomBytes(6).toString("hex"));
@@ -230,7 +231,7 @@ function runOnce(label: string, o: { apps: string[]; mode?: string; timeoutSec?:
   const logFile = path.join(tmp, `fake-${label}.json`);
   const r = spawnSync(NODE, [path.join(dir, "run.cjs"), dir], {
     encoding: "utf8", timeout: 90_000,
-    env: { ...process.env, FAKE_CLAUDE_LOG: logFile, FAKE_MODE: o.mode ?? "", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-SHOULD-NOT-LEAK" },
+    env: { ...process.env, FAKE_CLAUDE_LOG: logFile, FAKE_MODE: o.mode ?? "", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-SHOULD-NOT-LEAK", ...(o.meminfo ? { LVLY_COLLECT_MEMINFO: o.meminfo } : {}) },
   });
   assert.equal(r.status, 0, `러너 종료 코드 — ${r.stderr}`);
   const read = (f: string): Record<string, any> => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
@@ -339,6 +340,17 @@ t("R9b ★ 남의 프로젝트 폴더는 건드리지 않는다", () => {
   assert.equal(r.exit.code, 0);
   assert.ok(fs.existsSync(other), "다른 폴더는 남는다");
   assert.deepEqual(fs.readdirSync(path.dirname(other)), ["-home-me-work-project-1"]);
+});
+const meminfo = path.join(tmp, "meminfo");
+fs.writeFileSync(meminfo, "MemTotal:         786432 kB\nMemFree:          100000 kB\nMemAvailable:     524288 kB\n");
+const R10 = runOnce("r10", { apps: ["Slack"], meminfo });
+t("R10 컨테이너 메모리 — 상한(MemTotal)·시작·최고를 MB 로 남긴다", () => {
+  assert.deepEqual(R10.summary.mem.container, { totalMb: 768, startMb: 256, peakMb: 256 });
+});
+t("R10b 메모리 파일이 없으면 null(맥 · 다른 OS) — 실패하지 않는다", () => {
+  const r = runOnce("r10b", { apps: ["Slack"], meminfo: path.join(tmp, "no-such-meminfo") });
+  assert.equal(r.exit.code, 0);
+  assert.equal(r.summary.mem.container, null);
 });
 const R7 = runOnce("r7", { apps: ["Slack"], job: "{not json" });
 t("R7 일감이 깨지면 실패로 끝 신호를 남긴다", () => {

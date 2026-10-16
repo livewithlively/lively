@@ -230,10 +230,22 @@ function tree(root) {
   while (q.length) { const p = q.shift(); all.push(p); for (const k of kids.get(p) || []) q.push(k); }
   return all;
 }
-const mem = { cgPeak: 0, treePeakKb: 0, treePeakProcs: 0, samples: 0 };
+//  컨테이너 전체 사용 — MemTotal − MemAvailable. gVisor 세션 컨테이너는 cgroup 파일을 안 보여 주지만 /proc/meminfo 의
+//   MemTotal 이 그 컨테이너의 메모리 상한이다(매니지드 실측: 보통 세션 2,560MB). 수집 세션은 이 컨테이너를 혼자 쓰므로
+//   이 값이 상한(캡)과 바로 견줄 수치다. 프로세스 나무 RSS 합은 공유 페이지를 겹쳐 세서 크게 나온다(참고용).
+const memInfo = () => {
+  const s = rd(process.env.LVLY_COLLECT_MEMINFO || "/proc/meminfo");
+  if (!s) return null;
+  const g = (k) => { const m = s.match(new RegExp("^" + k + ":\\s+(\\d+)", "m")); return m ? Number(m[1]) : null; };
+  const total = g("MemTotal"), avail = g("MemAvailable");
+  return total != null && avail != null ? { totalKb: total, usedKb: total - avail } : null;
+};
+const mi0 = memInfo();
+const mem = { cgPeak: 0, treePeakKb: 0, treePeakProcs: 0, samples: 0, miPeakKb: mi0 ? mi0.usedKb : 0 };
 const sampler = setInterval(() => {
   mem.samples++;
   const v = cgNow(); if (v != null && v > mem.cgPeak) mem.cgPeak = v;
+  const mi = memInfo(); if (mi && mi.usedKb > mem.miPeakKb) mem.miPeakKb = mi.usedKb;
   if (hasProc && child && child.pid) {
     try { const ps = tree(child.pid); let kb = 0; for (const p of ps) kb += rssKb(p); if (kb > mem.treePeakKb) { mem.treePeakKb = kb; mem.treePeakProcs = ps.length; } } catch (_) {}
   }
@@ -301,7 +313,8 @@ function finish(o) {
   clearInterval(sampler);
   const mb = (b) => (b ? Math.round(b / 1048576) : null);
   const memOut = { cgroupPeakMb: mb(mem.cgPeak), cgroupPeakFileMb: mb(num(rd("/sys/fs/cgroup/memory.peak"))), cgroupMax: rd("/sys/fs/cgroup/memory.max") ?? rd("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
-    treePeakMb: mem.treePeakKb ? Math.round(mem.treePeakKb / 1024) : null, treePeakProcs: mem.treePeakProcs || null, samples: mem.samples };
+    treePeakMb: mem.treePeakKb ? Math.round(mem.treePeakKb / 1024) : null, treePeakProcs: mem.treePeakProcs || null, samples: mem.samples,
+    container: mi0 ? { totalMb: Math.round(mi0.totalKb / 1024), startMb: Math.round(mi0.usedKb / 1024), peakMb: Math.round(mem.miPeakKb / 1024) } : null };
   let sum = {};
   try { sum = summarize(); } catch (e) { sum = { summarizeError: String(e && e.message || e) }; }
   const caps = (rd(P("caps.jsonl")) || "").split("\n").filter(Boolean).length;
