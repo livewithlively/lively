@@ -403,10 +403,12 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
 }
 
 /** 아무 켜진 증류기도 안 가져가는 미증류 자료. 켜진 게 없으면 전부(= 종전 폴백과 같은 집합). */
-export async function listStrandedSources(enabled: DistillerRow[], limit = 50, requester?: string | null): Promise<Record<string, unknown>[]> {
+/**  opts.oneGroup(#4824) — 배치로 낼 때: 볼 수 있는 사람이 같은 자료(첫 행의 묶음)만 돌려준다(oneAudienceGroup). 나머지는 다음 배치로. */
+export async function listStrandedSources(enabled: DistillerRow[], limit = 50, requester?: string | null, opts: { oneGroup?: boolean } = {}): Promise<Record<string, unknown>[]> {
   const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
   const { sql, values } = buildStrandedQuery(enabled, viewer, limit);
-  return q(itemsPool, sql, values);
+  const rows = await q(itemsPool, sql, values);
+  return opts.oneGroup ? oneAudienceGroup(rows) : rows;
 }
 
 /** 지금 이 워크스페이스에 남아 있는 미증류 자료 수 — «없다» 고 말하기 전에 실제로 세려고 쓴다. */

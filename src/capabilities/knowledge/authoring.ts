@@ -37,11 +37,12 @@ const CAPS = SOFT_CAPS.knowledge_save;
 /** derived_from 한 번에 실을 수 있는 자료 수 — 스레드 하나(대개 수십 건)를 넉넉히 덮는다. */
 const DERIVED_FROM_MAX = 500;
 
-/** REST 의 derived_from — zod 를 안 타므로 여기서 모양을 본다(양의 정수 배열 · 상한). 없으면 undefined. */
+/** REST 의 derived_from — zod 를 안 타므로 여기서 모양을 본다(양의 정수 배열 · 상한). 없으면 undefined.
+ *  자료 id 하나(숫자·숫자 문자열)는 [id] 로 받는다 — 폼·쿼리에서 한 건만 보내는 호출을 굳이 튕기지 않는다(잘못된 값은 400). */
 function parseDerivedFrom(raw: unknown): number[] | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (!Array.isArray(raw)) throw new HttpError(400, "derived_from 은 자료 id(양의 정수) 배열입니다");
-  const ids = raw.map((x) => Number(x));
+  const list = Array.isArray(raw) ? raw : [raw];
+  const ids = list.map((x) => (typeof x === "number" || (typeof x === "string" && /^\d+$/.test(x.trim())) ? Number(x) : NaN));
   if (ids.some((n) => !Number.isInteger(n) || n <= 0)) throw new HttpError(400, "derived_from 은 자료 id(양의 정수) 배열입니다");
   if (ids.length > DERIVED_FROM_MAX) throw new HttpError(400, `derived_from 은 한 번에 ${DERIVED_FROM_MAX}건까지입니다`);
   return ids;

@@ -209,7 +209,8 @@ export async function linkKnowledgeSource(
   //  거절한다(#4824) — derived_from 거절을 relation 만 바꿔 빠져나가는 길이 되기 때문이다.
   if (relation !== "derived_from") {
     await withDerivedTx(async (c) => {
-      await assertCitesAllowed(c, name, sourceId, enforced);
+      //  되돌리기(allowNarrow)가 옛 cites 를 되살리는 것은 막지 않는다(원래 있던 연결이다).
+      if (!opts.allowNarrow) await assertCitesAllowed(c, name, sourceId, enforced);
       await c.query(
         `INSERT INTO knowledge_source(name, source_id, relation, created_at)
          VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,

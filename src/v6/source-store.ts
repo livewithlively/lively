@@ -333,11 +333,13 @@ export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUpload
 //  다음 조회에서 빠진다(멱등 수렴). 본문 미포함(source_get 으로 전문). #541.
 //  viewer(#1291): 증류 크론은 특권(null)으로 부른다 — 못 보면 그 자료는 영영 지식이 안 된다. 사람·에이전트가
 //   목록을 열 때는 자기 뷰어로 걸러 제목이 새지 않게 한다(listUnmappedKnowledge 와 같은 갈래).
-export async function listUndistilledSources(limit = 50, viewer?: Viewer): Promise<Record<string, unknown>[]> {
+//  withAudienceKey(#4824) — 증류 스케줄러만 켠다(배치를 같은 대상끼리 묶는 열쇠). 도구 응답(source_undistilled)에는 싣지 않는다 —
+//   열쇠가 «그 잠긴 자료를 누가 보나» 의 사람 id 목록이라, 비공개 채널 구성원 명단과 같은 급의 사생활이다.
+export async function listUndistilledSources(limit = 50, viewer?: Viewer, withAudienceKey = false): Promise<Record<string, unknown>[]> {
   const params: unknown[] = [Math.min(limit, 500)];
   const vis = await sourceVisWhere(viewer, params);
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL}, ${AUD_KEY_SQL} AS aud_key FROM source s
+    `SELECT ${S_LIST_SEL}${withAudienceKey ? `, ${AUD_KEY_SQL} AS aud_key` : ""} FROM source s
      WHERE s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
        AND ${vis}
