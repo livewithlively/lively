@@ -803,6 +803,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   //  바뀌면 그 자리에서 따라간다: 다른 문서(터미널 액자·다른 탭)가 바꾸면 storage 신호, 이 문서가 바꾸면 TERM_PREFS_EVENT,
   //  앱 테마가 바뀌면 lv:theme-change(web/theme.ts)·OS 다크 전환.
   let termPrefs: TermPrefs = readTermPrefs();
+  /** 입력칸 높이를 다시 재는 손잡이 — 그 함수(fitInput)는 아래에서 만들어진 뒤 여기에 걸린다(마운트 중 applyCell 이 먼저 불리므로). */
+  let refitInput: (() => void) | null = null;
   //  칸 크기 — 글꼴이 늦게 도착하면(구글 글꼴) 그때 다시 잰다. 재는 값은 터미널 격자와 같은 셈(measureCell).
   const applyCell = (): void => {
     const cell = measureCell(termPrefs.fontFamily, termPrefs.fontSize);
@@ -811,6 +813,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     root.style.setProperty('--tui-ls', `${(cell.w - cell.natW).toFixed(3)}px`);
     root.style.setProperty('--tui-wgap', `${(2 * cell.w - cell.wide).toFixed(3)}px`);
     root.style.setProperty('--tui-bgap', `${(cell.w - cell.box).toFixed(3)}px`);
+    //  줄 높이가 바뀌었다(대체 글꼴 16px → 도착한 글꼴 18px 등) — 글에 맞춰 둔 입력칸 높이도 다시 잰다. 안 그러면 한 줄 글에도 스크롤 막대가 선다.
+    refitInput?.();
   };
   let fontGen = 0;
   const applyTermLook = (): void => {
@@ -1482,6 +1486,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   input.addEventListener('input', fitInput);
   const fitRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (fitLater) fitInput(); }) : null;
   fitRo?.observe(input);
+  refitInput = (): void => { if (input.style.height) fitInput(); };   // 글에 맞춰 둔 높이가 있을 때만(비어 있으면 rows=1 기본 높이가 줄 높이를 따른다)
 
   // ── tui — 터미널처럼: 이 화면이 보이는 동안 친 글자는 입력칸으로 간다(#4797) ──────────────────────────────
   //  상민님(2026-10-16): «그부분 눌렀을때만 거기에 입력되는게 아니라 그냥 항상 실제 터미널처럼 그 화면 활성화돼있을때 입력되게».
