@@ -2,7 +2,10 @@
 //  행 번호는 태스크 #4684 의 lively 사양 표(L1~L9)와 같다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { folderAppsFor, resyncIfChangedAfterCreate, resyncSessions, syncSessionAppFolders, type FolderDeps, type FolderSync, type SyncDeps } from "./session-app-folders.js";
+import {
+  folderAppsFor, resyncIfChangedAfterCreate, resyncSessions, syncSessionAppFolders, createSlots, resyncConcurrencyFromEnv, appFolderSyncStats,
+  RESYNC_CONCURRENCY_DEFAULT, type FolderDeps, type FolderSync, type SyncDeps,
+} from "./session-app-folders.js";
 import type { SessionAppRow } from "./session-apps.js";
 import type { OrgApp, AppGrantRow } from "../org/store/apps.js";
 import type { SessionEnsureRequest } from "../terminal/session-tmux.js";
@@ -184,6 +187,8 @@ test("L7d 같은 세션의 맞추기는 한 줄로 — 먼저 시작한 것이 �
   let lists = 0;
   const d1 = { ...d, apps: async () => (++lists === 1 ? ["old"] : ["new"]) };
   const p1 = syncSessionAppFolders("box-e", d1);
+  //  두 번째는 첫 번째가 브로커에 간 **뒤에** 부른다 — 그 전에 부르면 아직 목록을 안 계산한 첫 번째에 합쳐진다(#4787 K1).
+  await new Promise((r) => setTimeout(r, 10));
   const p2 = syncSessionAppFolders("box-e", d1);
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(order, ["start1:old"], "두 번째가 첫 번째를 기다리지 않았다");
@@ -230,3 +235,164 @@ test("L10 만든 직후 — 실은 목록과 지금 목록이 같으면 브로�
   assert.deepEqual(synced, ["box-a"]);
 });
 
+
+// ── 겹친 요청 합치기 · 묶음 전체 동시 수(#4787) — 행 번호는 #4787 사양 표(K1~K13) ────────────────
+
+/** 다음 매크로태스크까지 — 줄 기록 정리(finally)가 돈 뒤를 본다. */
+const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
+/** 하나씩 풀 수 있는 문 — 브로커 왕복을 붙잡아 «도는 동안» 을 만든다. arrivals(n) = 누적 n 번째가 문 앞에 올 때까지. */
+function gates() {
+  const open: Array<() => void> = [];
+  const watchers: Array<{ n: number; r: () => void }> = [];
+  let arrived = 0;
+  return {
+    wait: (): Promise<void> => new Promise<void>((r) => {
+      open.push(r); arrived++;
+      for (let i = watchers.length - 1; i >= 0; i--) if (arrived >= watchers[i].n) watchers.splice(i, 1)[0].r();
+    }),
+    arrivals: (n: number): Promise<void> => (arrived >= n ? Promise.resolve() : new Promise<void>((r) => { watchers.push({ n, r }); })),
+    release: (): void => { const f = open.shift(); if (f) f(); },
+  };
+}
+/** 목록이 «사건 번호» 를 따라가는 맞추기 의존 — 브로커가 받은 목록을 차례로 적고, 지정한 왕복은 문에서 붙잡는다. */
+function laneDeps(g: ReturnType<typeof gates>, hold: (k: number) => boolean) {
+  const state = { ver: 1, sent: [] as string[][] };
+  const d = syncDeps({
+    apps: async () => [`v${state.ver}`],
+    ensure: async (_argv, req) => {
+      state.sent.push([...(req.apps ?? [])]);
+      if (hold(state.sent.length)) await g.wait();
+      return { container: "c", created: false, apps: { supported: true, bound: req.apps ?? [], failed: [] } };
+    },
+  });
+  return { d, state };
+}
+
+test("K1·K2 ★ 같은 세션 — 첫 왕복이 도는 동안 사건 10번이 와도 브로커 왕복은 2번 · 둘째 목록이 최신 · 합쳐진 호출은 같은 결과", async () => {
+  const g = gates();
+  const { d, state } = laneDeps(g, (k) => k === 1);
+  const first = syncSessionAppFolders("box-k1", d);
+  await g.arrivals(1);                                   // 첫 왕복이 브로커에서 붙잡혔다(목록 v1 은 이미 계산됨)
+  const later: Array<Promise<FolderSync>> = [];
+  for (let v = 2; v <= 11; v++) { state.ver = v; later.push(syncSessionAppFolders("box-k1", d)); }
+  g.release();
+  const [r0, ...rs] = await Promise.all([first, ...later]);
+  assert.deepEqual(state.sent, [["v1"], ["v11"]], "사건 수만큼 왕복했거나 마지막 목록이 최신이 아니다");
+  assert.deepEqual(r0, { applied: true, supported: true, bound: ["v1"], failed: [] });
+  for (const r of rs) assert.equal(r, rs[0], "합쳐진 호출이 같은 맞추기의 결과를 받지 않았다");
+  assert.deepEqual(rs[0], { applied: true, supported: true, bound: ["v11"], failed: [] });
+});
+
+test("K3 기다리던 맞추기가 시작한 뒤에 온 사건은 한 번 더 줄을 선다(놓치지 않는다) — 그 목록이 최신", async () => {
+  const g = gates();
+  const { d, state } = laneDeps(g, (k) => k <= 2);
+  const p1 = syncSessionAppFolders("box-k3", d);
+  await g.arrivals(1);
+  state.ver = 2;
+  const p2 = syncSessionAppFolders("box-k3", d);
+  g.release();
+  await g.arrivals(2);                                   // 둘째 왕복(v2)이 붙잡혔다 — 이제 «도는 것» 이다
+  state.ver = 3;
+  const p3 = syncSessionAppFolders("box-k3", d);
+  g.release();
+  await Promise.all([p1, p2, p3]);
+  assert.deepEqual(state.sent, [["v1"], ["v2"], ["v3"]]);
+  assert.notEqual(p3, p2, "시작한 맞추기에 합치면 그 뒤의 변경을 잃는다");
+});
+
+test("K4·K5 서로 다른 세션은 합치지 않고 · 겹치지 않은 연속 사건은 각자 왕복한다", async () => {
+  const g = gates();
+  const { d, state } = laneDeps(g, () => true);
+  const a = syncSessionAppFolders("box-k4a", d);
+  const b = syncSessionAppFolders("box-k4b", d);
+  await g.arrivals(2);
+  assert.equal(state.sent.length, 2, "다른 세션의 맞추기가 합쳐졌거나 줄을 섰다");
+  g.release(); g.release();
+  await Promise.all([a, b]);
+  const { d: d2, state: s2 } = laneDeps(g, () => false);
+  await syncSessionAppFolders("box-k5", d2);
+  await syncSessionAppFolders("box-k5", d2);
+  assert.equal(s2.sent.length, 2, "끝난 맞추기에 합쳐 뒤 사건을 버렸다");
+});
+
+test("K6·K7 묶음 전체의 동시 브로커 왕복은 상한까지 — 상한 2 면 최대 2 · 상한 1(경계)이면 묶음끼리도 하나씩 · 모두 끝까지 간다", async () => {
+  for (const max of [2, 1]) {
+    let now = 0, peak = 0;
+    const d = syncDeps({ ensure: async (_a, req) => {
+      now++; peak = Math.max(peak, now);
+      await new Promise((r) => setTimeout(r, 5));
+      now--;
+      return { container: "c", created: false, apps: { supported: true, bound: req.apps ?? [], failed: [] } };
+    } });
+    const slots = createSlots(max);
+    const seen: string[] = [];
+    const sync = (id: string): Promise<FolderSync> => { seen.push(id); return syncSessionAppFolders(id, d); };
+    await Promise.all([1, 2, 3, 4].map((b) => resyncSessions([`box-k6-${max}-${b}a`, `box-k6-${max}-${b}b`], `묶음 ${b}`, sync, slots)));
+    assert.equal(peak, max, `상한 ${max} 인데 동시 ${peak}`);
+    assert.equal(seen.length, 8, "묶음 일부가 끝까지 가지 않았다");
+    assert.deepEqual(slots.stats(), { active: 0, waiting: 0 });
+  }
+});
+
+test("K8 묶음 안의 맞추기가 던지거나 error 여도 자리가 풀린다 — 상한 1 에서 뒤 묶음이 끝까지 간다", async () => {
+  const slots = createSlots(1);
+  const seen: string[] = [];
+  const sync = async (id: string): Promise<FolderSync> => {
+    seen.push(id);
+    if (id === "box-k8-throw") throw new Error("boom");
+    return { applied: false, reason: "error", detail: "허브 503" };
+  };
+  await Promise.all([resyncSessions(["box-k8-throw", "box-k8-err"], "앞", sync, slots), resyncSessions(["box-k8-next"], "뒤", sync, slots)]);
+  assert.deepEqual([...seen].sort(), ["box-k8-err", "box-k8-next", "box-k8-throw"]);
+  assert.deepEqual(slots.stats(), { active: 0, waiting: 0 });
+});
+
+test("K9 ★ 같은 세션들을 두 묶음이 함께 돈다(앱 끄기 + 공개 바꾸기) — 세션마다 브로커 왕복은 2번 이하", async () => {
+  const perSession = new Map<string, number>();
+  const d = syncDeps({ ensure: async (_a, req) => {
+    perSession.set(req.sessionId, (perSession.get(req.sessionId) ?? 0) + 1);
+    await new Promise((r) => setTimeout(r, 5));
+    return { container: "c", created: false, apps: { supported: true, bound: req.apps ?? [], failed: [] } };
+  } });
+  const ids = ["box-k9a", "box-k9b", "box-k9c"];
+  const sync = (id: string): Promise<FolderSync> => syncSessionAppFolders(id, d);
+  const slots = createSlots(4);
+  await Promise.all([resyncSessions(ids, "앱 끔", sync, slots), resyncSessions(ids, "공개", sync, slots), resyncSessions(ids, "동의 회수", sync, slots)]);
+  for (const id of ids) {
+    const n = perSession.get(id) ?? 0;
+    assert.ok(n >= 1 && n <= 2, `${id} 왕복 ${n}번`);
+  }
+});
+
+test("K10 붙이기 · 떼기(묶음 밖 호출)는 게이트웨이의 묶음 자리가 다 차 있어도 기다리지 않는다", async () => {
+  //  운영과 같은 자리(기본 slots — 게이트웨이 하나에 하나)를 묶음 넷으로 다 채운다(이 시험엔 env 가 없어 기본 4).
+  const g = gates();
+  const full = RESYNC_CONCURRENCY_DEFAULT;
+  const blocked = Array.from({ length: full }, (_, i) =>
+    resyncSessions([`box-k10-batch${i}`], "묶음", async () => { await g.wait(); return { applied: false, reason: "not-running" }; }));
+  await g.arrivals(full);
+  assert.deepEqual(appFolderSyncStats().resync, { active: full, waiting: 0 }, "묶음이 기본 자리를 다 채우지 못했다 — 시험 전제가 깨졌다");
+  const d = syncDeps();
+  const r = await Promise.race([syncSessionAppFolders("box-k10-attach", d), new Promise<string>((res) => setTimeout(() => res("기다렸다"), 200))]);
+  assert.notEqual(r, "기다렸다", "붙이기 응답이 묶음 줄 뒤에 섰다");
+  assert.equal(d.sent.length, 1);
+  for (let i = 0; i < full; i++) g.release();
+  await Promise.all(blocked);
+});
+
+test("K11 LIVELY_APP_FOLDER_RESYNC_CONCURRENCY — 없음 · 이상함 · 0 · 음수는 기본 4 · 1 · 16 · 17→16 · 소수는 내림", () => {
+  const cases: Array<[string | undefined, number]> = [[undefined, 4], ["", 4], ["abc", 4], ["0", 4], ["-3", 4], ["1", 1], ["16", 16], ["17", 16], ["2.7", 2], [" 3 ", 3]];
+  for (const [v, want] of cases) {
+    const env = v === undefined ? {} : { LIVELY_APP_FOLDER_RESYNC_CONCURRENCY: v };
+    assert.equal(resyncConcurrencyFromEnv(env as NodeJS.ProcessEnv), want, `값 ${JSON.stringify(v)}`);
+  }
+  assert.equal(RESYNC_CONCURRENCY_DEFAULT, 4);
+});
+
+test("K12 다 끝난 뒤엔 줄 기록이 남지 않는다(세션마다 쌓이면 누수다)", async () => {
+  const d = syncDeps();
+  await Promise.all(["box-k12a", "box-k12b", "box-k12a", "box-k12a"].map((id) => syncSessionAppFolders(id, d)));
+  await tick(); await tick();
+  assert.equal(appFolderSyncStats().lanes, 0);
+  assert.deepEqual(appFolderSyncStats().resync, { active: 0, waiting: 0 });
+});

@@ -91,8 +91,13 @@ const liveSyncDeps: SyncDeps = {
   ensure: (argv, req) => ensureSessionContainerViaRelay(argv, req, { timeoutMs: 8_000 }),
 };
 
-//  같은 세션의 맞추기는 한 줄로 — 먼저 계산한 목록이 늦게 도착해 나중 것을 덮지 않게(세션 id → 그 세션의 마지막 맞추기).
-const inflight = new Map<string, Promise<unknown>>();
+//  같은 세션의 맞추기는 한 줄로 — 먼저 계산한 목록이 늦게 도착해 나중 것을 덮지 않게.
+//  #4787 — 줄에는 «도는 것» 하나와 «기다리는 것» 하나만 선다. 기다리는 것이 있으면 새 요청은 그것에 합친다: 기다리는 맞추기는
+//   차례가 오면 그때 목록을 계산하므로 뒤에 온 요청의 변경까지 담는다(결과가 같다). 그래서 사건이 몰려도 한 세션의 브로커 왕복은
+//   겹친 동안 두 번을 넘지 않는다. 기다리던 것이 시작한 뒤에 온 요청은 한 번 더 선다(그 목록은 이미 계산됐을 수 있다).
+//   ⚠ 합쳐진 요청은 먼저 선 요청의 의존(deps)으로 돈다 — 운영에선 늘 liveSyncDeps 하나다.
+interface SyncLane { tail: Promise<unknown>; waiting: Promise<FolderSync> | null }
+const lanes = new Map<string, SyncLane>();
 
 /**
  * 이 세션의 앱 폴더를 지금 붙은 앱에 맞추라고 노드 브로커에 알린다(만들지는 않는다 — noCreate).
@@ -100,11 +105,52 @@ const inflight = new Map<string, Promise<unknown>>();
  *  이미 기록했다 — 폴더는 그 결과의 일부일 뿐이다).
  */
 export function syncSessionAppFolders(sessionId: string, deps: SyncDeps = liveSyncDeps): Promise<FolderSync> {
-  const prev = inflight.get(sessionId) ?? Promise.resolve();
-  const next = prev.then(() => syncOnce(sessionId, deps));
-  const tail = next.catch(() => undefined).finally(() => { if (inflight.get(sessionId) === tail) inflight.delete(sessionId); });
-  inflight.set(sessionId, tail);
-  return next;
+  const lane = lanes.get(sessionId) ?? { tail: Promise.resolve(), waiting: null };
+  if (lane.waiting) return lane.waiting;
+  const run = lane.tail.then(() => { lane.waiting = null; return syncOnce(sessionId, deps); });
+  lane.waiting = run;
+  const tail = run.catch(() => undefined).finally(() => { if (lane.tail === tail && lanes.get(sessionId) === lane) lanes.delete(sessionId); });
+  lane.tail = tail;
+  lanes.set(sessionId, lane);
+  return run;
+}
+
+// ── 다시 맞추기 묶음 전체의 동시 수(#4787) ─────────────────────────────────────
+//  묶음은 안에서 하나씩 돌지만 묶음끼리는 따로 돈다 — 앱 끄기 · 공개 바꾸기 · 동의 회수가 겹치거나 주기 맞추기가 돌면 묶음이 여럿 선다.
+//  맞추기 하나 = 노드 브로커 왕복 하나 = 게이트웨이의 중계 자식 프로세스 하나(ensureSessionContainerViaRelay)라, 묶음 전체에서
+//  동시에 도는 수를 센다. 상한은 묶음 쪽에만 건다 — 붙이기 · 떼기 응답(사람이 기다린다)은 묶음 줄 뒤에 서지 않는다.
+
+/** 묶음 전체 동시 맞추기 수의 기본값 · 최댓값. */
+export const RESYNC_CONCURRENCY_DEFAULT = 4;
+export const RESYNC_CONCURRENCY_MAX = 16;
+
+/** LIVELY_APP_FOLDER_RESYNC_CONCURRENCY — 1 이상의 정수(내림, 최대 16). 없거나 이상하면 기본값. */
+export function resyncConcurrencyFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Math.floor(Number(String(env.LIVELY_APP_FOLDER_RESYNC_CONCURRENCY ?? "").trim() || NaN));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, RESYNC_CONCURRENCY_MAX) : RESYNC_CONCURRENCY_DEFAULT;
+}
+
+/** 동시에 max 개까지만 돌리는 자리(먼저 온 차례). 던져도 자리는 풀린다. */
+export interface Slots { run<T>(fn: () => Promise<T>): Promise<T>; stats(): { active: number; waiting: number } }
+export function createSlots(max: number): Slots {
+  const limit = Math.max(1, Math.floor(max) || 1);
+  const waiting: Array<() => void> = [];
+  let active = 0;
+  return {
+    async run(fn) {
+      if (active < limit) active++;
+      else await new Promise<void>((r) => waiting.push(r));   // 풀리는 자리를 그대로 넘겨받는다(active 는 그대로)
+      try { return await fn(); }
+      finally { const next = waiting.shift(); if (next) next(); else active--; }
+    },
+    stats: () => ({ active, waiting: waiting.length }),
+  };
+}
+const resyncSlots = createSlots(resyncConcurrencyFromEnv());
+
+/** 진단 · 시험용 — 줄이 선 세션 수 · 묶음 자리. */
+export function appFolderSyncStats(): { lanes: number; resync: { active: number; waiting: number } } {
+  return { lanes: lanes.size, resync: resyncSlots.stats() };
 }
 
 async function syncOnce(sessionId: string, deps: SyncDeps): Promise<FolderSync> {
@@ -147,11 +193,12 @@ async function syncOnce(sessionId: string, deps: SyncDeps): Promise<FolderSync> 
 
 /**
  * 여러 세션을 다시 맞춘다 — 앱 상태·공개·동의가 바뀐 뒤(부르는 쪽은 기다리지 않는다). 하나씩(브로커 왕복 하나씩) · 실패는 남기기만.
+ *  묶음 전체의 동시 수는 slots 가 센다(#4787 — 기본은 게이트웨이 하나에 하나인 resyncSlots).
  */
-export async function resyncSessions(sessionIds: readonly string[], why: string, sync: (id: string) => Promise<FolderSync> = syncSessionAppFolders): Promise<void> {
+export async function resyncSessions(sessionIds: readonly string[], why: string, sync: (id: string) => Promise<FolderSync> = syncSessionAppFolders, slots: Slots = resyncSlots): Promise<void> {
   const ids = [...new Set(sessionIds)];
   for (const [i, id] of ids.entries()) {
-    const r: FolderSync = await sync(id).catch((e) => ({ applied: false as const, reason: "error" as const, detail: String((e as Error)?.message ?? e) }));
+    const r: FolderSync = await slots.run(() => sync(id)).catch((e) => ({ applied: false as const, reason: "error" as const, detail: String((e as Error)?.message ?? e) }));
     //  옛 브로커 — 묶음을 여기서 멈춘다(남은 세션마다 컨테이너를 만들 수 있다). 브로커가 다 퍼지면 다음 맞추기가 이어 간다.
     if (!r.applied && r.reason === "old-broker") { logger.error({ session: id, why, detail: r.detail, skipped: ids.length - i - 1 }, "앱 폴더 다시 맞추기 멈춤 — 옛 브로커(#4684)"); return; }
     if (!r.applied && r.reason === "error") logger.warn({ session: id, why, detail: r.detail }, "앱 폴더 다시 맞추기 실패(#4684)");
