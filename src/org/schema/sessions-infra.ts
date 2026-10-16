@@ -540,4 +540,51 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_member_idx ON org_login_job(member_id, purpose, harness, id DESC)`);
   //  정리 감시가 보는 것 — 아직 도는 작업과 판 폴더를 안 치운 작업만(끝나고 치운 행은 안 본다).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_open_idx ON org_login_job(id) WHERE status IN ('starting','running') OR reaped = false`);
+
+  // ── org_agent_job — 작업 컨테이너의 작업(#4490 앱 v2-11 · #3994 1단계 공동). 작업 1건 = 세션 노드 gVisor 컨테이너 1개(세션 id `job-…`).
+  //  청/녹 교대·다른 슬롯이 받아도 같은 작업을 보게 DB 에 둔다. 대기열 = status 'queued' 행 — 워크스페이스 동시 상한은 배차가
+  //  테넌트 잠금 안에서 센다(agent-jobs/store.claimAgentJobs).
+  //  ⚠ 비밀 **값**은 여기 없다 — boot_hash 는 판 첫 말의 일회용 비밀(쓰면 지운다), secret_hash 는 판 콜백 비밀, mcp_token_hash 는 작업 AI 에 준
+  //   라이블리 토큰(끝나면 폐기)의 sha256 이다. prompt 는 보낸 사람이 쓴 지시 원문 그대로다(감사 — 상민 2026-10-16 «프롬프트 원문은 작업 기록에»).
+  //  account_kind: 이번엔 'subscription'(보낸 사람 본인 구독)만 쓴다 — 'api_key'(워크스페이스 키 · LLM 프록시)는 v2-9.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_agent_job(
+      id BIGSERIAL PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','starting','running','done','failed','timeout','canceled')),
+      requester TEXT NOT NULL,
+      account_kind TEXT NOT NULL DEFAULT 'subscription' CHECK (account_kind IN ('subscription','api_key')),
+      account_member TEXT,
+      app_id TEXT,
+      project_id BIGINT,
+      cwd TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      model TEXT,
+      label TEXT,
+      prompt TEXT NOT NULL,
+      resume_conversation TEXT,
+      resume_job_id BIGINT,
+      timeout_sec INT NOT NULL,
+      session_id TEXT,
+      boot_hash TEXT,
+      secret_hash TEXT,
+      mcp_token_hash TEXT,
+      conversation_id TEXT,
+      output_tail TEXT NOT NULL DEFAULT '',
+      result JSONB,
+      exit_code INT,
+      error TEXT,
+      cancel_requested BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      claimed_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      last_tick_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      reaped BOOLEAN NOT NULL DEFAULT false,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+  //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
+  //  내 작업 · 그 앱의 작업 목록(최근 것부터).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_requester_idx ON org_agent_job(requester, id DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_app_idx ON org_agent_job(app_id, id DESC) WHERE app_id IS NOT NULL`);
 }

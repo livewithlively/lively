@@ -575,7 +575,7 @@ async function desiredFallbackSessions(me: string | null, cause: unknown): Promi
  * ⚠ 넘기는 자리(at)는 «세션 컨테이너 안 tmux» 인 배포에서만 세션 id 를 싣는다. 셀프호스트 격리는 문자열
  *  osUser 그대로 = 종전과 한 글자도 다르지 않다.
  */
-async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {
+export async function prepareMemberHome(user: LivelyUser, at: ExecAt): Promise<void> {   // #4490 — 작업 컨테이너(agent-jobs/launch.ts)도 같은 준비를 쓴다
   const { osUser } = execAt(at);
   // 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서 심는다
   //  (멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.

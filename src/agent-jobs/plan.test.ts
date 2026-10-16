@@ -1,0 +1,166 @@
+// 작업 컨테이너 판정(순수) — 자리 주기 · 감시 · 시간 상한 · 판 보고 → 상태 · 보고 거르기 · 이름 (#4490)
+//  행 번호(C·S·T·F·P·ID)는 스크래치패드 spec-4490-core.md 의 엣지 표다. 표의 행마다 시나리오가 최소 하나다.
+import assert from "node:assert/strict";
+import {
+  planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
+  convIdOf, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SweepFacts,
+} from "./plan.js";
+import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
+
+let pass = 0;
+const t = (name: string, fn: () => void): void => {
+  try { fn(); } catch (e) { console.log(`not ok  ${name}`); throw e; }
+  pass++;
+  console.log(`ok  ${name}`);
+};
+
+const q = (id: number, who: string | null) => ({ id, account_member: who });
+
+// ── 자리 주기 ────────────────────────────────────────────────────────────────
+t("C1 상한 2 · 도는 것 0 · 대기 A·A·B → 먼저 온 둘(A, A)", () => {
+  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 2 }), [1, 2]);
+});
+t("C2 사람당 1 · 대기 A·A·B → A 하나 건너뛰고 B", () => {
+  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 1 }), [1, 3]);
+});
+t("C3 도는 것 = 상한 → 0건 · 넘은 경우도 0건", () => {
+  assert.deepEqual(planClaims([q(9, "x"), q(8, "y")], [q(1, "a")], { max_running: 2, max_running_per_member: 2 }), []);
+  assert.deepEqual(planClaims([q(9, "x"), q(8, "y"), q(7, "z")], [q(1, "a")], { max_running: 2, max_running_per_member: 2 }), []);
+});
+t("C4 도는 것 1(A) · 사람당 1 · 대기 A·B → B", () => {
+  assert.deepEqual(planClaims([q(9, "a")], [q(1, "a"), q(2, "b")], { max_running: 3, max_running_per_member: 1 }), [2]);
+});
+t("C5 대기 0 → 0건", () => {
+  assert.deepEqual(planClaims([], [], { max_running: 2, max_running_per_member: 2 }), []);
+});
+t("C6 실행 계정 없음(null) 은 사람당 상한과 무관 — 워크스페이스 상한만", () => {
+  assert.deepEqual(planClaims([q(9, null)], [q(1, null), q(2, null), q(3, null)], { max_running: 3, max_running_per_member: 1 }), [1, 2]);
+});
+
+// ── 감시 ─────────────────────────────────────────────────────────────────────
+const NOW = 10_000_000_000;
+const base = (o: Partial<SweepFacts>): SweepFacts => ({
+  status: "queued", createdAt: NOW, claimedAt: null, startedAt: null, lastTickAt: null, timeoutSec: 900, cancelRequested: false, ...o,
+});
+const MIN = 60_000;
+t("S1 대기 중 취소 요청 → canceled · 걷기 없음", () => {
+  assert.deepEqual(sweepDecision(base({ cancelRequested: true }), NOW, P), { act: "end", status: "canceled", error: "대기 중에 취소했습니다", kill: false });
+});
+t("S2·S3 대기 시간 — 상한 정확히는 그대로, 넘으면 failed(걷기 없음)", () => {
+  assert.deepEqual(sweepDecision(base({ createdAt: NOW - P.queue_wait_min * MIN }), NOW, P), { act: "none" });
+  const a = sweepDecision(base({ createdAt: NOW - P.queue_wait_min * MIN - 1 }), NOW, P);
+  assert.equal(a.act, "end");
+  assert.ok(a.act === "end" && a.status === "failed" && a.kill === false && /30분/.test(a.error));
+});
+t("S4 띄우는 중 — 시작 상한 정확히는 그대로, 넘으면 failed + 걷기", () => {
+  assert.deepEqual(sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 }), NOW, P), { act: "none" });
+  const a = sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P);
+  assert.ok(a.act === "end" && a.status === "failed" && a.kill === true, JSON.stringify(a));
+});
+t("S5 띄우는 중인데 자리 받은 시각이 없으면 접수 시각으로 잰다", () => {
+  assert.equal(sweepDecision(base({ status: "starting", claimedAt: null, createdAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P).act, "end");
+  assert.equal(sweepDecision(base({ status: "starting", claimedAt: null, createdAt: NOW - 1000 }), NOW, P).act, "none");
+});
+t("S6 도는 중 — 마지막 박동이 silent 정확히는 그대로, 넘으면 failed + 걷기", () => {
+  const run = { status: "running" as const, startedAt: NOW - 5 * MIN, claimedAt: NOW - 6 * MIN };
+  assert.deepEqual(sweepDecision(base({ ...run, lastTickAt: NOW - P.silent_sec * 1000 }), NOW, P), { act: "none" });
+  const a = sweepDecision(base({ ...run, lastTickAt: NOW - P.silent_sec * 1000 - 1 }), NOW, P);
+  assert.ok(a.act === "end" && a.status === "failed" && a.kill === true && /응답하지 않/.test(a.error), JSON.stringify(a));
+});
+t("S7 도는 중인데 박동이 한 번도 없으면 시작 시각으로 잰다", () => {
+  assert.equal(sweepDecision(base({ status: "running", startedAt: NOW - P.silent_sec * 1000 - 1, lastTickAt: null }), NOW, P).act, "end");
+  assert.equal(sweepDecision(base({ status: "running", startedAt: NOW - 1000, lastTickAt: null }), NOW, P).act, "none");
+});
+t("S8 시작 + 상한 + 여유를 넘으면 timeout + 걷기 — 박동이 최근이어도", () => {
+  const startedAt = NOW - (900 + TIMEOUT_GRACE_SEC) * 1000 - 1;
+  const a = sweepDecision(base({ status: "running", startedAt, lastTickAt: NOW - 1000, timeoutSec: 900 }), NOW, P);
+  assert.ok(a.act === "end" && a.status === "timeout" && a.kill === true, JSON.stringify(a));
+  assert.equal(sweepDecision(base({ status: "running", startedAt: startedAt + 2, lastTickAt: NOW - 1000, timeoutSec: 900 }), NOW, P).act, "none");
+});
+t("S9 끝난 작업은 아무것도 안 한다", () => {
+  for (const status of ["done", "failed", "timeout", "canceled"] as const) {
+    assert.deepEqual(sweepDecision(base({ status, createdAt: 0, cancelRequested: true }), NOW, P), { act: "none" });
+  }
+});
+
+// ── 실행 시간 ────────────────────────────────────────────────────────────────
+t("T1·T2·T3 실행 시간 — 없으면 기본 · 최대보다 크면 최대 · 0·음수·문자는 기본", () => {
+  assert.equal(timeoutSecOf(undefined, P), P.default_timeout_min * 60);
+  assert.equal(timeoutSecOf(P.max_timeout_min + 1, P), P.max_timeout_min * 60);
+  assert.equal(timeoutSecOf(P.max_timeout_min, P), P.max_timeout_min * 60);
+  assert.equal(timeoutSecOf(1, P), 60);
+  for (const bad of [0, -5, "30", NaN, null]) assert.equal(timeoutSecOf(bad, P), P.default_timeout_min * 60, String(bad));
+});
+
+// ── 판 보고 → 상태 ──────────────────────────────────────────────────────────
+const rep = (o: Partial<RunnerReport>): RunnerReport => ({
+  exit_code: 0, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "", ...o,
+});
+const res = (o: Partial<NonNullable<RunnerReport["result"]>>) => ({ text: "답", is_error: false, subtype: "success", num_turns: 1, duration_ms: 1, cost_usd: 0, usage: null, ...o });
+t("F1·F2 판이 끊었으면 그 사유가 이긴다(답이 있어도)", () => {
+  assert.equal(finalOutcome(rep({ stopped: "canceled", result: res({}) })).status, "canceled");
+  assert.equal(finalOutcome(rep({ stopped: "timeout", result: res({}) })).status, "timeout");
+});
+t("F3 result 가 오류 아니면 done — 종료코드가 1 이어도", () => {
+  assert.deepEqual(finalOutcome(rep({ exit_code: 1, result: res({}) })), { status: "done", error: null });
+});
+t("F4 result 없음 + stderr «Not logged in» → AI 연결 필요", () => {
+  const o = finalOutcome(rep({ exit_code: 1, stderr_tail: "Invalid API key · Please run /login" }));
+  assert.equal(o.status, "failed");
+  assert.match(o.error ?? "", /AI 연결 필요/);
+});
+t("F5 result 가 오류면 failed(subtype 과 문장)", () => {
+  const o = finalOutcome(rep({ result: res({ is_error: true, subtype: "error_max_turns", text: "max turns" }) }));
+  assert.equal(o.status, "failed");
+  assert.match(o.error ?? "", /error_max_turns/);
+});
+t("F6 result 없음 · 자격과 무관한 stderr → failed(종료코드 · stderr 꼬리)", () => {
+  const o = finalOutcome(rep({ exit_code: 137, signal: "SIGKILL", stderr_tail: "a\nb\nsegfault" }));
+  assert.equal(o.status, "failed");
+  assert.match(o.error ?? "", /137/);
+  assert.match(o.error ?? "", /segfault/);
+});
+
+// ── 보고 거르기 ──────────────────────────────────────────────────────────────
+t("P1 판 보고는 칸마다 거르고 자른다 — 대화 id 모양 · 긴 글 · usage 의 문자열·중첩 · 모르는 stopped", () => {
+  const r = parseRunnerReport({
+    exit_code: "0", signal: 9, stopped: "exploded", conversation_id: "../../etc/passwd", model: "m".repeat(500),
+    result: { text: "x".repeat(RESULT_TEXT_MAX + 50), is_error: "yes", subtype: 1, num_turns: "3", usage: { input_tokens: 5, note: "hi", nested: { a: 1 }, ["bad key!"]: 2 } },
+    stderr_tail: 7, tail: "t".repeat(TAIL_MAX + 10),
+  });
+  assert.equal(r.exit_code, null);
+  assert.equal(r.signal, null);
+  assert.equal(r.stopped, null);
+  assert.equal(r.conversation_id, null);
+  assert.equal(r.model?.length, 120);
+  assert.equal(r.result?.text?.length, RESULT_TEXT_MAX);
+  assert.equal(r.result?.is_error, false);
+  assert.equal(r.result?.subtype, null);
+  assert.equal(r.result?.num_turns, null);
+  assert.deepEqual(r.result?.usage, { input_tokens: 5 });
+  assert.equal(r.stderr_tail, "");
+  assert.equal(r.tail.length, TAIL_MAX);
+  assert.deepEqual(parseRunnerReport(null), { exit_code: null, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "" });
+  const uuid = "0A1B2C3D-0000-4000-8000-000000000000";
+  assert.equal(convIdOf(uuid), uuid.toLowerCase());
+});
+
+// ── 이름 · 자리 ──────────────────────────────────────────────────────────────
+t("ID1 작업 세션 id 는 job-<id>-<8hex> — box- 로 시작하지 않는다(사람 목록·MCP 세션 신원 밖)", () => {
+  const sid = jobSessionId(17, "0a1b2c3d");
+  assert.equal(sid, "job-17-0a1b2c3d");
+  assert.ok(JOB_SESSION_ID_RE.test(sid));
+  assert.ok(!sid.startsWith("box-"));
+  assert.ok(/^[a-z0-9][a-z0-9_-]{0,62}$/.test(sid), "브로커 세션 id 규칙 안");
+  for (const [id, hex] of [[0, "0a1b2c3d"], [1.5, "0a1b2c3d"], [17, "0A1B2C3D"], [17, "0a1b2c3"], [17, "../x"]] as const) {
+    assert.throws(() => jobSessionId(id as number, hex as string), `${id} ${hex}`);
+  }
+});
+t("ID2 앱 폴더·프로젝트 폴더 경로 — 규칙 밖 id 면 경로를 만들지 않는다", () => {
+  assert.equal(appFolderCwd("memo"), "/work/apps/memo");
+  assert.equal(projectFolderCwd(4478), "/work/shared/project/4478");
+  for (const bad of ["", "a", "Memo", "../x", "a/b", "-x", "x".repeat(33)]) assert.throws(() => appFolderCwd(bad), bad);
+  for (const bad of [0, -1, 1.5, NaN]) assert.throws(() => projectFolderCwd(bad), String(bad));
+});
+
+console.log(`# ${pass} pass`);

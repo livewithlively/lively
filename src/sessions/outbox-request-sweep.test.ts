@@ -211,8 +211,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   돌 수 있고, 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다(세션을 뜻으로 찾는 재료가 여기서만 만들어진다).
   //  #4695 T5 — 하네스 종료 규칙(session-stop-rule)이 테넌트 정비로 하나 늘었다. 세션 목록·장부·얼굴 줄이 그 워크스페이스 것이고,
   //   시계가 분 단위라(N 기본 3) CP 틱(5분)만으로는 모자란다 — 파괴적 정비의 예외다([G4b]).
-  assert.equal(perTenant.length, 15, "테넌트 정비 열다섯(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙)");
-  assert.equal(SWEEP_JOBS.length, 16, "전역 하나(task-dispatch)가 더 있다");
+  //  #4490 — 작업 컨테이너 감시(agent-job-sweep)가 테넌트 정비로 하나 늘었다. 작업 행·동시 상한이 그 워크스페이스 것이라(RLS)
+  //   그 컨텍스트 안에서만 돌 수 있고, 사람이 아무도 없을 때 끊긴 작업을 끝내는 길이 요청(CP 60초 · 판의 박동)에 얹는 것뿐이다.
+  assert.equal(perTenant.length, 16, "테넌트 정비 열여섯(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시)");
+  assert.equal(SWEEP_JOBS.length, 17, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -236,6 +238,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "conv-index": CONV_INDEX_SWEEP_MS,               // #4517 — 새 정비. 밀린 대화 색인을 1분마다 한 판(판마다 상한)
     "session-card": CONV_INDEX_SWEEP_MS,             // #4530 — 새 정비. 대화 색인과 같은 박자로 그 뒤를 따라간다(판마다 30개 · 6초)
     "session-stop-rule": STOP_RULE_SWEEP_MS,         // #4695 T5 — 새 정비. 대기 알림과 같은 30초(시계가 분 단위 — «N분 ± 이 주기»)
+    "agent-job-sweep": STOP_RULE_SWEEP_MS,           // #4490 — 새 정비. 판 무응답 상한(90초)보다 짧아야 끊긴 작업이 제때 끝난다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -269,6 +272,18 @@ t("[G4b] 파괴적 정비의 예외는 하네스 종료 규칙 하나다 — 그
   assert.match(table, /#4690/, "예외의 근거(그 판단의 주인)를 표 주석에 남긴다");
   //  죽이는 정비가 둘이 되면 그건 새 판단이다 — 이 시험이 먼저 빨개져야 한다.
   assert.equal(SWEEP_JOBS.filter((j) => /stop|reap-idle|idle-reap|kill/.test(j.key)).length, 1);
+});
+t("[G4c] 작업 컨테이너 감시(#4490)가 걷는 것은 자기가 띄운 `job-` 컨테이너뿐이다 — 사람 세션(`box-`)엔 닿지 않는다", () => {
+  const src = readFileSync(SRC, "utf8");
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "agent-job-sweep" && (j.scope ?? "tenant") === "tenant"), "테넌트 정비로 올라가 있어야 한다");
+  assert.match(table, /#4490/, "그 판단의 주인을 표 주석에 남긴다");
+  //  걷기 자리는 하나(service.reapJob)이고, 거기서 세션 id 가 `job-<id>-<8hex>` 꼴일 때만 kill 을 보낸다.
+  const svc = readFileSync(new URL("../../src/agent-jobs/service.ts", import.meta.url), "utf8");
+  assert.equal((svc.match(/await d\.kill\(/g) ?? []).length, 1, "작업 컨테이너를 걷는 자리는 하나여야 한다");
+  assert.match(svc, /if \(row\.session_id && JOB_SESSION_ID_RE\.test\(row\.session_id\)\) await d\.kill\(row\.session_id\);/);
+  const plan = readFileSync(new URL("../../src/agent-jobs/plan.ts", import.meta.url), "utf8");
+  assert.match(plan, /export const JOB_SESSION_ID_RE = \/\^job-/, "작업 세션 id 꼴은 job- 로 시작한다(box- 와 겹치지 않는다)");
 });
 t("[G5] 정비 키가 겹치지 않는다 — 겹치면 디바운스가 공유돼 하나가 굶는다", () => {
   const keys = SWEEP_JOBS.map((j) => j.key);
