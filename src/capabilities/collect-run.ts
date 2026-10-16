@@ -51,6 +51,8 @@ const collectRunStart: Capability = {
     "도구는 허락한 커넥터의 **읽기 도구만** 부를 수 있고(쓰기·보내기는 훅이 막는다), 결과 원문은 훅이 내 홈의 실행 폴더에 그대로 남긴다. " +
     "바로 run_id 를 돌려준다 — 상태는 collect_claude_run_get. 한 사람에 한 번에 하나. " +
     "mode listing(app 필수)은 볼 수 있는 대화·페이지·메일함 목록을 수집 단위 표에 올리고, mode collect 는 지금 담당인 단위를 읽어 자료로 넣는다. " +
+    "이미 자료가 모인 비공개 단위(공개범위가 «모두» 가 아닌 단위 · 메일함 제외)는 목록만으로 열리지 않고 «확인 대기» 로 남는다 — 다음 mode collect " +
+    "판이 작은 확인 읽기(가장 새로 저장된 글과 같은 글을 내 커넥터로 읽어 오는지)로 확인한다. 맡은 단위가 없어도 확인할 것이 있으면 판을 띄운다. " +
     "REST 등가: POST /api/ui/collect/claude-runs {mode?, app?, due_only?, apps?, prompt?, model?, max_turns?, timeout_sec?}.",
   scope: "memory",
   input: startInput,

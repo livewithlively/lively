@@ -109,6 +109,8 @@ export interface ScheduleTickResult {
   running: number;
   /** 하루 상한에 닿아 이번엔 안 띄운 사람 수. */
   capped: number;
+  /** #4213 T11 확인 대기가 있어 고르기에 올린 구성원 수(때가 된 단위와 겹칠 수 있다). */
+  proof_members?: number;
   started: Array<{ member: string; run_id: string }>;
   failed: Array<{ member: string; status: number | null; error: string }>;
 }
@@ -171,6 +173,17 @@ export async function collectScheduleTick(opts: { force?: boolean } & ScheduleDe
       g.oldestDueMs = Math.min(g.oldestDueMs, d.due_since_ms);
       groups.set(d.member, g);
     }
+    //  #4213 T11 확인 대기만 있는 구성원도 판을 띄운다 — 확인 읽기는 담당이 아닌 사람의 일이라 위 «때가 된 단위» 로 안 잡힌다.
+    //   (확인 읽기만 실린 판은 계획이 그대로 받는다 — collect-run planCollectUnits.) 못 읽으면 이번 틱은 때가 된 단위만.
+    const { proofDueMembers } = await import("./unit-proof.js");
+    const proofs = await proofDueMembers().catch(() => []);
+    for (const p of proofs) {
+      const g = groups.get(p.member) ?? { member: p.member, units: 0, oldestDueMs: Number.POSITIVE_INFINITY };
+      g.units += p.units;
+      g.oldestDueMs = Math.min(g.oldestDueMs, p.oldest_ms);
+      groups.set(p.member, g);
+    }
+    res.proof_members = proofs.length;
     res.due_members = groups.size;
     if (!groups.size) return res;
     const alive = await runningFromLog(now);

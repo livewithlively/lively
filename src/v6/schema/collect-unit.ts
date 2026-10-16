@@ -20,6 +20,7 @@
 //                             원문·결과 문장은 싣지 않는다(그 사람 홈의 실행 폴더에만 있다). 90일 지난 행은 지운다(run-log.ts).
 //                             목록·수집 실행은 계획(plan — 단위 id·ref·구간, 이름은 뺀다)과 저장 결과(ingest — 수)를 싣는다. ref 만으로도
 //                             «누가 어떤 비공개 대화를 읽었나» 가 보이므로 이 표도 DENIED_TABLES 에 올렸다(조회는 관리자 지표 표면으로만).
+//   · collect_proof        — 확인 대기(#4213 T11). 보호 단위에서 목록으로만 본 사람 → 확인 읽기가 저장된 글과 맞으면 지워진다. 열람 금지.
 //
 //  ⚠ tenant_id 는 boot/schemas.ts 의 ensureTenantColumn 이 붙인다. 자연키(collect_unit 좌표 · collect_assignee_state PK)는
 //   (tenant_id, …) 로 다시 쓰이므로 store 의 ON CONFLICT 는 tenant_id 를 명시한다. 대리키를 가리키는 PK(unit_id, …)는 그대로다.
@@ -148,5 +149,19 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
     ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS plan JSONB;
     ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS ingest JSONB;
     ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS attempts INT;
+    -- 확인 대기(#4213 T11) — 보호 단위(공개범위가 «모두» 가 아니고 저장된 자료가 있는 단위)에서 목록으로만 본 사람. 그 사람 커넥터로 읽은 글이
+    --  저장된 글과 같을 때(확인 읽기) 확인된 구성원이 되고 이 행이 지워진다. «누가 어떤 비공개 대화에 들어가려 하나» 라 열람 금지 표다.
+    CREATE TABLE IF NOT EXISTS collect_proof(
+      unit_id INT NOT NULL REFERENCES collect_unit(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      attempts INT NOT NULL DEFAULT 0,
+      misses INT NOT NULL DEFAULT 0,
+      last_at TIMESTAMPTZ,
+      last_result TEXT,
+      PRIMARY KEY (unit_id, member_id)
+    );
+    ALTER TABLE collect_proof ADD COLUMN IF NOT EXISTS misses INT NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS collect_proof_member_idx ON collect_proof(member_id, requested_at);
   `);
 }

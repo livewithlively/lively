@@ -59,6 +59,29 @@ export const PAGES_PER_UNIT = 10;
 export const THREADS_PER_UNIT = 20;
 /** 한 판에 담는 단위 상한 — 오래 안 읽은 단위부터. 넘는 단위는 다음 판(주기, T12)이 읽는다. */
 export const UNITS_PER_RUN = 6;
+/**
+ * 확인 읽기(보호 단위의 «확인 대기» 를 푸는 작은 읽기) — 한 판에 몇 개 · 몇 번까지 · 몇 개의 가장 새 글로 확인하나.
+ *  보호 단위 = 공개범위가 «모두» 가 아니고 이미 저장된 자료가 있는 단위(unit-proof.ts). 거기서 아직 확인되지 않은 사람은 그 사람 커넥터로
+ *  읽은 글이 저장된 글과 좌표·본문이 같을 때만 확인된다 — 접근 못 하는 사람은 비공개 대화의 본문을 만들어 낼 수 없다.
+ */
+export const PROOF_PER_RUN = 4;
+/** 맡은 단위 없이 확인 읽기만 싣는 판 — 한 번에 더 많이(읽기 한 번씩이라 가볍다). */
+export const PROOF_ONLY_PER_RUN = 12;
+export const PROOF_MAX_ATTEMPTS = 3;
+export const PROOF_RECENT = 5;
+/** 시도가 상한에 닿은 대기도 마지막 시도에서 이만큼 지나면 다시 싣는다 — 정당한 구성원이 영영 잠기지 않게. */
+export const PROOF_RETRY_SEC = 86_400;
+/** 같은 대기를 다시 싣는 간격 — 계획·주기 판 모두(마지막 시도에서 이만큼 지난 것만). 시도를 몇 분 사이에 다 쓰지 않게. */
+export const PROOF_RECHECK_SEC = 3_600;
+/** #4744 주기 판이 확인 대기만 있는 구성원을 스스로 띄우는 기간 — 대기를 건(또는 다시 건) 때부터. 그 뒤는 다시 목록을 올릴 때까지 안 띄운다. */
+export const PROOF_TTL_SEC = 14 * 86_400;
+/** 못 푼 결과(unreadable)가 이만큼 이어지면 시도 한 번으로 센다 — 읽을 수 없는 사람의 대기가 시도 없이 영영 되풀이되지 않게. */
+export const PROOF_MISS_AS_ATTEMPT = 3;
+/** 노션 본문의 증거 줄 하한 — 이보다 짧은(꾸밈 줄을 뺀) 페이지는 본문을 몰라도 맞힐 수 있어 증거가 안 된다(«증명 불가»). */
+export const PROOF_NOTION_MIN_LINES = 3;
+
+/** 확인 읽기 판정 — pass · no_match(창 안 글이 있는데 안 맞음) · empty(맞춰 볼 창 안 글 없음) · unprovable(노션 본문이 너무 짧음). */
+export type ProofOutcome = "pass" | "no_match" | "empty" | "unprovable";
 
 const FOOT = "보내기·만들기·고치기·지우기 도구는 부르지 않는다. 도구 결과를 고쳐 쓰거나 요약하지 않는다. 다 끝나면 «끝» 이라고만 답한다.";
 /** 목록 실행의 슬랙 대화 종류 — 하나라도 빠진 목록은 «전부» 가 아니다(볼 수 있는 구성원을 지우는 판정이라 엄격하게). */
@@ -102,6 +125,8 @@ export interface PlannedUnit {
   /** #4744 빈도 표본 재료 — 계획 때 이 단위를 마지막으로 읽은 시각 · 노션은 그때까지 본 마지막 고친 시각(이번 판에 새로 고쳐졌나). */
   read_at?: string | null;
   edited_at?: string | null;
+  /** 확인 읽기 단위 — 저장된 글과 맞춰 보기만 한다(저장·위치 이동 없음). */
+  proof?: boolean;
 }
 
 /** 실행 계획(collect_run.plan 에 남는다) — 수집 실행은 단위들과 계획 시각을 싣는다. */
@@ -173,9 +198,54 @@ export function gmailQuery(u: Pick<PlannedUnit, "since" | "until">): string {
   return `after:${u.since}${u.until ? ` before:${u.until}` : ""}`;
 }
 
+/**
+ * (순수) 확인 읽기 단위 — 가장 새로 저장된 글 몇 개를 덮는 작은 구간(첫 ts − 1초 ~ 마지막 ts + 1초). 노션은 페이지 하나.
+ *  저장된 글의 ts 를 모르면(슬랙) 확인할 것이 없으니 null.
+ */
+export function proofUnit(u: { id: number; app: string; instance: string; ref: string; kind: string }, newestTs: readonly string[]): PlannedUnit | null {
+  if (!validUnitRef(u.app, u.ref)) return null;
+  const base = { id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app], proof: true as const };
+  if (u.app === "notion") return { ...base, since: null, until: null };
+  if (u.app !== "slack") return null;
+  const ts = newestTs.filter((t) => SLACK_TS.test(t)).map(Number).sort((a, b) => a - b).slice(-PROOF_RECENT);
+  if (!ts.length) return null;
+  return { ...base, since: `${Math.floor(ts[0]) - 1}.000000`, until: `${Math.floor(ts[ts.length - 1]) + 1}.000000` };
+}
+
+/** (순수) 이 판에 실을 확인 읽기 — 이미 맡은 단위로 실린 것은 빼고 · 앱을 정했으면 그 앱만 · max 개(기본 PROOF_PER_RUN). */
+export function planProofUnits(
+  pending: ReadonlyArray<{ unit_id: number; app: string; instance: string; ref: string; kind: string; newest_ts: readonly string[] }>,
+  planned: readonly PlannedUnit[], opts: { app?: string | null; max?: number } = {},
+): PlannedUnit[] {
+  const out: PlannedUnit[] = [];
+  const max = opts.max ?? PROOF_PER_RUN;
+  for (const p of pending) {
+    if (out.length >= max) break;
+    if (planned.some((u) => u.id === p.unit_id) || (opts.app && p.app !== opts.app)) continue;
+    const u = proofUnit({ id: p.unit_id, app: p.app, instance: p.instance, ref: p.ref, kind: p.kind }, p.newest_ts);
+    if (u) out.push(u);
+  }
+  return out;
+}
+
+/**
+ * (순수) #4744 수집 실행이 붙잡을(임대) 단위 — 수집 판의 맡은 단위만. 확인 읽기 단위는 뺀다: 그 단위의 담당은 다른 사람이고 이 판은
+ *  그 단위의 다음 확인을 적지 않으므로, 붙잡으면 담당의 수집만 판 마감까지 늦어진다.
+ */
+export function unitsToLease(plan: Pick<CollectPlan, "mode" | "units"> | null | undefined): number[] {
+  if (plan?.mode !== "collect") return [];
+  return (plan.units ?? []).filter((u) => !u.proof).map((u) => u.id);
+}
+
 /** 한 단위의 지시 줄 — 앱마다 정확한 도구·인자를 적는다(모델이 고르지 않게). 모르는 앱 · 모양 밖의 ref 는 null(싣지 않는다). */
 export function unitInstruction(u: PlannedUnit): string | null {
   if (!validUnitRef(u.app, u.ref)) return null;
+  if (u.proof) {
+    //  확인 읽기는 한 번만 작게 — 쪽 넘김·스레드 없이.
+    if (u.app === "slack") return `· 슬랙 대화 ${u.ref}(확인 읽기): slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}", latest="${u.until}", limit=20 으로 한 번 부른다.`;
+    if (u.app === "notion") return `· 노션 ${u.kind === "database" ? "데이터베이스" : "페이지"} ${u.ref}(확인 읽기): notion-fetch 를 id="${u.ref}" 로 한 번 부른다.`;
+    return null;
+  }
   if (u.app === "slack") return [
     `· 슬랙 대화 ${u.ref}: slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}"${u.until ? `, latest="${u.until}"` : ""}, limit=100 으로 부른다.`,
     `  결과 끝에 다음 쪽 cursor 가 있으면 같은 channel_id·oldest${u.until ? "·latest" : ""} 에 cursor 를 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
@@ -233,9 +303,65 @@ export function collectPrompt(units: readonly PlannedUnit[]): { prompt: string; 
   };
 }
 
-/** 턴 상한 — 단위가 많을수록 넉넉히(쪽 넘김 · 스레드 펼침). 지메일은 스레드마다 한 번씩 펼쳐야 해서 더 준다. */
-export function collectMaxTurns(units: number, gmailUnits = 0): number {
-  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40));
+/** 턴 상한 — 단위가 많을수록 넉넉히(쪽 넘김 · 스레드 펼침). 지메일은 스레드마다 한 번씩 펼쳐야 해서 더 준다. 확인 읽기는 한 번씩이라 둘. */
+export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0): number {
+  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40 + proofUnits * 2));
+}
+
+// ── 확인 읽기의 판정(순수) ───────────────────────────────────────────────────
+
+/**
+ * 노션 본문의 증거 줄 — 빈 줄 · 네 글자 미만 · 꾸밈 줄(구분선 · 빈 블록 같은 태그 한 개) · 머리글(템플릿이 같아 본문을 몰라도 맞힌다)을
+ *  빼고 같은 줄은 한 번.
+ */
+export function notionProofLines(body: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of body.split("\n")) {
+    const l = raw.trim();
+    if (l.length < 4 || /^[-–—=*_#>|`~.·•\s]+$/.test(l) || /^<\/?[a-z][a-z0-9-]*\s*\/?>$/i.test(l) || /^#{1,6}\s/.test(l)) continue;
+    out.add(l);
+  }
+  return out;
+}
+
+/**
+ * (순수) 확인 읽기 판정 — 읽은 항목 가운데 «이미 저장된 글과 좌표가 같고 본문이 같은 것» 이 있나. 저장 본문은 저장 단계가 가린 뒤의
+ *  글이라 같은 함수(redact)를 거쳐 맞춘다.
+ *  · 슬랙: **계획한 창 안**(가장 새로 저장된 최상위 글을 덮는 구간)의 글만 센다 — 원문의 구간 표시(tool_input)는 그 사람 홈에서 오니 믿지
+ *    않는다. 창 밖의 옛 글은 예전에 본 사람이면 알 수 있어 증거가 못 된다. 저장 본문이 빈 글(파일만 등)도 증거가 아니다.
+ *  · 노션: 저장 본문의 증거 줄 가운데 서로 다른 줄 PROOF_NOTION_MIN_LINES 개 이상 · 절반 이상(경계: 정확히 절반 = 통과)이 읽은 본문에 있나.
+ *    증거 줄이 하한보다 적은 페이지는 unprovable.
+ */
+export function judgeProof(
+  u: Pick<PlannedUnit, "app" | "since" | "until">, items: readonly RawItem[], stored: ReadonlyMap<string, string>, redact: (s: string) => string,
+): { outcome: ProofOutcome; hits: number; compared: number } {
+  let hits = 0, compared = 0, unprovable = 0;
+  if (u.app === "slack") {
+    const lo = Number(u.since), hi = Number(u.until);
+    if (!u.since || !u.until || !Number.isFinite(lo) || !Number.isFinite(hi)) return { outcome: "empty", hits: 0, compared: 0 };
+    for (const it of items) {
+      const ts = Number((it.fields as Record<string, unknown> | undefined)?.ts);
+      if (!Number.isFinite(ts) || ts < lo || ts > hi) continue;
+      const prev = stored.get(it.provenance.external_id);
+      if (prev == null || !prev.trim()) continue;
+      compared++;
+      if (prev === redact(String(it.body ?? ""))) hits++;
+    }
+  } else if (u.app === "notion") {
+    for (const it of items) {
+      const prev = stored.get(it.provenance.external_id);
+      if (prev == null) continue;
+      compared++;
+      const want = notionProofLines(prev);
+      if (want.size < PROOF_NOTION_MIN_LINES) { unprovable++; continue; }
+      const have = notionProofLines(redact(String(it.body ?? "")));
+      let hit = 0;
+      for (const l of want) if (have.has(l)) hit++;
+      if (hit >= PROOF_NOTION_MIN_LINES && hit * 2 >= want.size) hits++;
+    }
+  }
+  const outcome: ProofOutcome = hits > 0 ? "pass" : compared === 0 ? "empty" : unprovable === compared ? "unprovable" : "no_match";
+  return { outcome, hits, compared };
 }
 
 // ── 끝난 뒤: 원문 → 단위별 자료 ──────────────────────────────────────────────

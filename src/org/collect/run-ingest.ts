@@ -9,9 +9,16 @@
 //  · 던지지 않는다 — 결과(무엇을 넣었나 · 왜 못 넣었나)를 돌려주고, 호출부가 실행 기록(collect_run.ingest)에 남긴다.
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
+import { redactString } from "../ingest/redact.js";
 import { readCapture, type Capture, type CaptureFile } from "./connector-parse.js";
-import { CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit } from "./collect-plan.js";
+import {
+  CLAUDE_COLLECT_APPS, harvestListing, harvestUnits, judgeProof, readNoteOf, validUnitRef, type CollectPlan, type PlannedUnit,
+} from "./collect-plan.js";
+import { canonicalCoord, normalizeListing } from "./unit-plan.js";
 import { advanceUnitCursor, recordUnitListing, storeUnitItems } from "./unit-store.js";
+import {
+  dropStaleProofs, guardsByUnitId, recordProofResult, requestProof, storedBodies, unitGuards, verifyByProof, type ProofResult,
+} from "./unit-proof.js";
 import { noteUnitRead, type UnitReadBy } from "./unit-schedule.js";
 import type { ReadNote } from "./schedule-plan.js";
 
@@ -32,7 +39,7 @@ export function toIngestPlan(mode: unknown, raw: unknown): IngestPlan | null {
     const x = u as Record<string, unknown>;
     return !!x && Number.isInteger(x.id) && typeof x.app === "string" && typeof x.ref === "string" && validUnitRef(x.app, x.ref)
       && typeof x.instance === "string" && (x.since == null || typeof x.since === "string");
-  }) : [];
+  }).map((u) => ({ ...u, proof: (u as { proof?: unknown }).proof === true })) : [];
   return { mode, units, ...(typeof p.planned_at === "number" && Number.isFinite(p.planned_at) ? { planned_at: p.planned_at } : {}) };
 }
 
@@ -42,6 +49,8 @@ export interface IngestUnitResult {
   complete: boolean; cursor_moved: boolean; window_shrunk: boolean; stuck: boolean; reason?: string;
   /** #4744 다음 확인 — 언제 · 왜(interval 주기 뒤 · catchup 곧바로 · retry 물러섬) · 그때의 주기. 못 적었으면 없다. */
   next?: { at: string; why: string; interval_sec: number } | null;
+  /** 확인 읽기 결과(확인 읽기 단위) · held = 확인 안 된 사람이 맡은 보호 단위라 넣지 않고 확인 대기만 걸었다. */
+  proof?: ProofResult | "held";
 }
 
 export interface IngestResult {
@@ -52,6 +61,8 @@ export interface IngestResult {
   captures: number; truncated: boolean;
   /** 목록: 올린 단위 수 · 새로 생긴 단위 수 · 받지 않은 수(남의 메일함 등) · 전부였나 · 인스턴스. */
   listed?: number; created?: number; refused?: number; complete?: boolean; instance?: string;
+  /** 목록: 보호 단위라 확인 대기로 둔 수 · 수집: 확인 읽기 통과·실패 수 · 확인 대기로 미룬 맡은 단위 수. */
+  proof_pending?: number; proof_passed?: number; proof_failed?: number; proof_held?: number;
   /** 수집: 단위별 결과와 합계. partial — 못 다 읽은 단위 · 못 푼 결과 · 저장 실패가 하나라도 있다(화면이 «확인 필요» 로 보인다). */
   units?: number; stored?: number; inserted?: number; stray?: number; unparsed?: number; failed?: number; incomplete?: number;
   /** 맡겼는데 이 판이 안 읽은 단위 · 구간을 더 줄일 수 없는데 못 다 읽은 단위(같은 자리에 머문다). */
@@ -100,9 +111,37 @@ async function ingestListing(member: string, app: string, caps: Capture[], trunc
   const { instance, via } = await resolveInstance(app, h.units.map((u) => u.ref));
   //  원문이 잘렸으면 뒤쪽 목록을 못 봤다 — «전부» 가 아니다.
   const complete = h.complete && via !== "single" && !truncated;
-  const r = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: true }, { actor: member, source: "collect-run" });
-  return { state: "done", mode: "listing", listed: h.units.length, created: r.created, refused: r.refused.length, complete: complete && !r.complete_ignored, instance };
+  const ctx = { actor: member, source: "collect-run" };
+  //  보호 단위(이미 저장된 자료가 있고 «모두» 가 아닌 단위)에서 이 사람이 아직 확인되지 않았으면 목록으로는 확인 대기까지만 — 자료가 안 열린다.
+  //   판정은 T10 이 실제로 받을 목록(정규화 · 상한 · 좌표 모양)으로 한다 — 판정하지 않은 ref(상한 너머 · 하이픈 없는 노션 id 등)가
+  //   «열린 단위» 로 기록되는 우회로를 남기지 않게.
+  const coordInst = canonicalCoord(app, instance, "x").instance;
+  const items = normalizeListing(h.units).map((it) => ({ ...it, ref: canonicalCoord(app, coordInst, it.ref).ref }));
+  const held = await unitGuards(member, app, coordInst, items.map((i) => i.ref));
+  if (!held.size) {
+    const r = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: true }, ctx);
+    await dropStaleProofs(member).catch(() => 0);
+    return { state: "done", mode: "listing", listed: h.units.length, created: r.created, refused: r.refused.length, complete: complete && !r.complete_ignored, instance, proof_pending: 0 };
+  }
+  //  열린 단위만 확인으로 올리고(새 단위는 여기서 종류별 기본 공개범위로 선다), 전체를 확인 표시 없이 한 번 더 — «전부» 정리는 이 한 번으로만
+  //   (상한·빈 목록 판정이 원래 목록 길이로 되게 원래 목록을 넘긴다).
+  const open = items.filter((i) => !held.has(i.ref));
+  const r1 = open.length ? await recordUnitListing({ member, app, connector, instance, items: open, complete: false, verified: true }, ctx) : null;
+  const r2 = await recordUnitListing({ member, app, connector, instance, items: h.units, complete, verified: false }, ctx);
+  await requestProof(member, [...held.values()]);
+  await dropStaleProofs(member).catch(() => 0);
+  const refused = new Set([...(r1?.refused ?? []), ...r2.refused]);
+  return {
+    state: "done", mode: "listing", listed: h.units.length, created: (r1?.created ?? 0) + r2.created, refused: refused.size,
+    complete: complete && !r2.complete_ignored, instance, proof_pending: held.size,
+  };
 }
+
+const PROOF_REASON: Record<ProofResult, string> = {
+  pass: "확인 읽기 통과", no_match: "확인 읽기 실패 — 저장된 글과 다름", empty: "확인 읽기 실패 — 맞춰 볼 글이 창 안에 없음",
+  unprovable: "확인 읽기 불가 — 본문이 너무 짧음", not_member: "확인 읽기 — 이미 볼 수 있는 구성원이 아님(대기 지움)",
+  unreadable: "확인 읽기 보류 — 결과를 못 풂(세 번 이어지면 시도 한 번으로 셈)",
+};
 
 /** 수집 실행 → 단위마다 storeUnitItems · advanceUnitCursor. */
 async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean, runId: string | null): Promise<Omit<IngestResult, "captures" | "truncated">> {
@@ -111,7 +150,9 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
   if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
   const { byUnit, stray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null });
   const per: IngestUnitResult[] = [];
-  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0;
+  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0, proofPassed = 0, proofFailed = 0, proofHeld = 0;
+  //  이 사람 기준 보호 단위 — 확인되지 않은 사람의 판은 저장된 글과 맞춰 봐야 넣을 수 있다(가짜 글을 남의 비공개 대화에 끼워 넣지 못하게).
+  const guard = await guardsByUnitId(member, units.map((u) => u.id));
   for (const u of units) {
     const h = byUnit.get(u.id)!;
     const row: IngestUnitResult = {
@@ -120,9 +161,50 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
     };
     unparsed += h.unparsed;
     if (!h.reads) {
-      row.reason = "이 판이 읽지 않음"; unread++; per.push(row);
+      row.reason = "이 판이 읽지 않음"; per.push(row);
+      //  확인 읽기 단위는 주기 단위가 아니다 — 다음 확인 시각·임대를 건드리지 않는다(안 읽었으면 다음 판이 다시 싣는다).
+      if (u.proof) continue;
+      unread++;
       //  #4744 맡겼는데 안 읽었다(턴이 모자람 등) — 물러섰다가 다시(곧바로 다시 띄우면 같은 판이 되풀이된다). 지금 담당이 아니면 임대만 푼다.
       row.next = await scheduleNote(u.id, readNoteOf(u, h, { blocked: false, nowMs: now }), now, by);
+      continue;
+    }
+    if (u.proof) {
+      //  확인 읽기 — 저장·위치 이동 없이 판정만. 단위별로 감싼다(한 단위의 오류가 같은 판의 다른 단위를 막지 않게).
+      try {
+        const j = judgeProof(u, h.items, await storedBodies(u.id, u.app, u.instance, h.items.map((i) => i.provenance.external_id)), redactString);
+        //  못 푼 결과가 섞인 실패는 일시 오류일 수 있다 — 바로 시도로 세지 않는다(세 번 이어지면 한 번 — recordProofResult).
+        let outcome: ProofResult = j.outcome !== "pass" && h.unparsed > 0 ? "unreadable" : j.outcome;
+        if (outcome === "pass" && (await verifyByProof(member, u.id)) === "not_member") outcome = "not_member";
+        await recordProofResult(member, u.id, outcome);
+        row.proof = outcome;
+        row.reason = PROOF_REASON[outcome];
+        if (outcome === "pass") proofPassed++;
+        else if (outcome !== "unreadable" && outcome !== "not_member") proofFailed++;
+        //  #4744 확인 안 된 사람이 그 단위의 담당이면 단위를 «막힘» 으로 물러서게 한다 — 안 그러면 그 단위가 계속 때가 된 단위로 남아
+        //   틱마다 같은 판이 뜬다. 담당이 아니면(대기자) noteUnitRead 가 아무것도 쓰지 않는다 — 담당의 수집은 늦어지지 않는다.
+        if (outcome !== "pass") row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
+      } catch (e) {
+        failed++;
+        row.failed = 1;
+        row.reason = `확인 읽기 오류 — ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+        //  오류도 못 푼 결과로 남긴다 — 시도 시각이 남아야 1시간 간격이 걸린다(안 남기면 주기 판이 틱마다 같은 대기로 판을 띄운다).
+        await recordProofResult(member, u.id, "unreadable");
+        row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
+      }
+      per.push(row);
+      continue;
+    }
+    if (guard.get(u.id) === true) {
+      //  확인 안 된 사람이 보호 단위를 맡은 판(계획 뒤에 첫 자료가 생긴 경우 등) — 수집 창(읽은 위치 뒤)에는 맞춰 볼 저장된 글이 없어
+      //   여기서는 판정하지 않는다. 넣지도 옮기지도 않고 확인 대기만 건다(다음 판의 확인 읽기가 판정한다).
+      await requestProof(member, [u.id]).catch(() => 0);
+      proofHeld++;
+      row.proof = "held";
+      row.reason = "확인 대기 — 저장하지 않음(먼저 확인 읽기)";
+      per.push(row);
+      //  #4744 이 단위는 확인 뒤에야 모은다 — 막힌 판처럼 물러서게 적는다(곧바로 다시 띄우면 같은 판이 되풀이된다).
+      row.next = await scheduleNote(u.id, { outcome: "blocked" }, now, by);
       continue;
     }
     if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
@@ -156,6 +238,7 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
   const anyRead = per.some((p) => p.reads > 0);
   return {
     state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete, unread, stuck,
+    proof_passed: proofPassed, proof_failed: proofFailed, proof_held: proofHeld,
     //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남).
     partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated || unread > 0 || stray > 0, per_unit: per,
     ...(anyRead ? {} : { error: "맡긴 단위를 하나도 읽지 않았다" }),

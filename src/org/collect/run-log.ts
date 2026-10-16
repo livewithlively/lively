@@ -121,6 +121,7 @@ export interface CollectRunListRow {
   ingest: {
     state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
     unparsed?: number; failed?: number; incomplete?: number; unread?: number; stuck?: number; partial?: boolean; error?: string;
+    proof_pending?: number; proof_passed?: number; proof_failed?: number; proof_held?: number;
   } | null;
 }
 
@@ -193,6 +194,7 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
     state: typeof j.state === "string" ? j.state : undefined,
     stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created), refused: n(j.refused),
     unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), unread: n(j.unread), stuck: n(j.stuck),
+    proof_pending: n(j.proof_pending), proof_passed: n(j.proof_passed), proof_failed: n(j.proof_failed), proof_held: n(j.proof_held),
     partial: j.partial === true ? true : undefined,
     error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
   };
