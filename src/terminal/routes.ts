@@ -34,6 +34,7 @@ import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExi
 import { adoptVerdict, createKeyedSerializer, type AdoptProbe } from "./restore-adopt.js";   // #3891 — 복원을 다시(또는 동시에) 불러도 같은 대화를 둘로 만들지 않는다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
+import { restoreMeasureMiddleware } from "./restore-measure.js";   // #4697 T7 — 복원 측정 한 줄
 import { PRIMARY_TENANT_ID, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { registerSessionLedgerRoute } from "./session-ledger.js";   // #2544 — 브로커용 세션 장부(사용자 auth 대신 테넌트 비밀로 연다)
@@ -1797,7 +1798,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //   그 밖(강제 복원·스위치 꺼짐·노드 갈래)은 종전대로 새 id 를 만들고 옛 행에 이정표(superseded_by, #2231)를 적는다.
   //  ★ #3891 — 같은 세션의 복원은 **한 줄로** 돈다(restoreSerial — createKeyedSerializer 머리말). 뒤 요청은 앞 요청이
   //   끝난 뒤 아래 판정을 처음부터(행을 다시 읽어) 한다 — 그래서 동시에 두 번 불려도 세션이 둘로 서지 않는다.
-  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
+  //  #4697 T7 — 복원 한 번마다 측정 한 줄(결말·걸린 시간·끄기 전 쪽지 — restore-measure.ts 머리말). 갈래 코드는 안 건드리고 라우트 앞에서 잰다.
+  app.post("/api/ui/terminal/sessions/:id/restore", auth, restoreMeasureMiddleware(async (id) => (await getSessionState(id))?.stop_note ?? null), wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
     const st = await getSessionState(id);

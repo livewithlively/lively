@@ -44,6 +44,13 @@
 //  중앙 desired-state 가 없어 복원도 안 된다(node 자체 영속). 멤버 PC 의 idle 세션을 중앙이 죽일 이유가 없다 → 제외.
 //  (노드 수명관리가 필요해지면 relayNodeOp{op:'kill'} 로 별도 확장 — 이 과업 범위 밖.)
 //
+// ⚠ **하네스 종료 규칙과의 경계(#4697 T7).** 매니지드(세션 컨테이너)에선 두 축 모두 **하네스 종료 규칙(session-stop-rule.ts — 완료+안 봄 N분 ·
+//  질의+안 봄 M분)이 맡는 세션에서 손을 뗀다**(skipReasons.stopRule). 그 규칙은 보는 중 · 작업 중 · 백그라운드 작업 · 예약 깨움 대기를 상한 없이
+//  지키는데, 이 시계들이 함께 보면 그 세션을 240·480·120분에 죽인다. 이 시계들에 남는 대상은 그 규칙이 판정하지 않는 세션이다 — grok·opencode·셸 ·
+//  대화 id 없음 · 위탁·앱·로그인 · 대화창 런타임 · 옛 훅으로 떠 예약을 모르는 claude · 관리자가 그 상태의 분을 0 으로 둔 세션(경계의 정본은
+//  sessionsUnderStopRule 머리말). 셀프호스트는 그 규칙이 안 돌아 종전 그대로다. 정책값(유휴 120 · 붙음 240 · 작업 480분)은 그대로 두고 대상만 좁혔다
+//  — CP 의 회수 건강 점검(reclaimhealth)이 «정책이 심겼나 · 틱이 도나» 를 이 결과로 보기 때문이다.
+//
 // ── 압박 축(#1220 · #1675 ⑤ · #2509) ──
 //  위 TTL 회수가 **평시 baseline 관리**라면, 이건 **급성 압박 대응**이다. 메모리 사용률이 임계를 넘으면 평시 TTL 을
 //  기다리지 않고(완화 TTL 로) 회수한다. 왜 게이트웨이가 해야 하나: 그 자리를 종전엔 earlyoom 이 맡았는데
@@ -87,7 +94,8 @@ import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type Sess
 import { memAvailableMb, memTotalMb, swapUsageMb } from "../ops/host-mem.js";
 import { readProcTable, parsePsTable, sessionRssMb, sessionJobDetails, type ProcEntry } from "./session-rss.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "../terminal/session-exec.js";
-import { withTenant, type TenantContext } from "../org/tenant-context.js";
+import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
+import type { SessionState } from "./session-state.js";
 import { schedulerTargets } from "../scheduler/tenant-fanout.js";
 
 const execFileAsync = promisify(execFile);
@@ -108,9 +116,19 @@ export interface ReapSkipReasons {
    *  전부 기본값(false)이라 판정 재료가 없다 — 모르면 안 죽인다. 이 수가 크면 그 tick 에 중계(브로커 재접속 창 등)가 안 닿았다.
    */
   unobserved: number;
+  /**
+   * #4697 T7 — **하네스 종료 규칙이 맡는 세션**이라 옛 시계가 손을 뗀 수(매니지드만 — 셀프호스트는 늘 0). 그 세션은 완료+안 봄 N분 ·
+   *  질의+안 봄 M분 규칙(session-stop-rule.ts)이 끈다. 옛 시계가 함께 보면 그 규칙이 지키는 세션(보는 중 · 예약 깨움 대기)을 죽인다.
+   */
+  stopRule: number;
+  /**
+   * #4697 — ⑥ 이 그 세션의 작업을 **판정하지 못해** 이번 틱 보류한 수(유휴 축 · 매니지드). 같은 세션이 연달아 UNKNOWN_HOLD_TICKS 번째면
+   *  보류하지 않고 «작업 없음» 으로 접는다(containerLiveJobs 머리말). jobs(작업이 있다고 판정)와 뜻이 달라 따로 센다.
+   */
+  jobsUnknown: number;
 }
 
-const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0 });
+const emptyReasons = (): ReapSkipReasons => ({ managed: 0, noState: 0, attached: 0, working: 0, recent: 0, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0, stopRule: 0, jobsUnknown: 0 });
 
 /** 유휴 축의 tick 결과. **CP(reclaimhealth·tenanttick)가 이 모양을 읽는다** — 필드를 지우지 마라. */
 export interface ReapResult {
@@ -154,6 +172,7 @@ export interface ReapCandidate { id: string; idleSince: number }
  * @param cutoffSec       이 시각 **이하**로 유휴면 회수 대상(축마다 TTL 이 다르다 — 평시 TTL vs 완화 TTL).
  * @param attachTtlMin    0 = attach 를 무기한 존중(종전 동작). >0 이면 그 시간 넘게 조용한 attach 는 안 존중.
  * @param busyTtlMin      0 = ③ 을 무기한 존중(종전 동작). >0 이면 스스로 증명 못 하는 ③ 은 사람이 그 시간 넘게 안 봤을 때 안 존중.
+ * @param stopRuleIds     #4697 T7 — 하네스 종료 규칙이 맡는 세션(옛 시계는 손을 뗀다). 없으면(셀프호스트·시험) 종전 그대로.
  */
 export function pickReapCandidates(o: {
   live: ReadonlyArray<SessionInfo>;
@@ -164,8 +183,9 @@ export function pickReapCandidates(o: {
   attachTtlMin: number;
   busyTtlMin: number;
   reasons: ReapSkipReasons;
+  stopRuleIds?: ReadonlySet<string>;
 }): ReapCandidate[] {
-  const { live, restorable, managedIds, nowSec, cutoffSec, attachTtlMin, busyTtlMin, reasons } = o;
+  const { live, restorable, managedIds, nowSec, cutoffSec, attachTtlMin, busyTtlMin, reasons, stopRuleIds } = o;
   const candidates: ReapCandidate[] = [];
   for (const s of live) {
     //  #3894 — **관측 못 한 행은 판정하지 않는다.** 매니지드 중계가 tmux 를 «못 본» tick 엔 목록이 DB desired 행을
@@ -175,8 +195,12 @@ export function pickReapCandidates(o: {
     if (s.observed === false) { reasons.unobserved++; continue; }
     if (managedIds.has(s.id)) { reasons.managed++; continue; }                 // ① managed
     if (!restorable.has(s.id)) { reasons.noState++; continue; }                // ④ 복원 불가면 손대지 않음
+    //  #4697 T7 — 하네스 종료 규칙이 맡는 세션은 옛 시계(유휴·붙음·작업 상한·압박)가 손을 뗀다(판정은 session-stop-rule.ts sessionsUnderStopRule).
+    if (stopRuleIds?.has(s.id)) { reasons.stopRule++; continue; }
     // ⑤ 유휴 판정에 쓸 마지막 활동 시각 — ② 의 attach TTL 판정도 이 값을 쓰므로 **먼저** 구한다.
-    const lastSeen = Math.max(s.lastActive || 0, s.lastAttached || 0);  // 마지막 활동 = 작업 또는 열람
+    //  #4697 — 화면 도장(lastViewed — 대화창·터미널 창이 열려 있으면 약 16초마다 tmux 에 새긴다)도 «방금까지 보고 있었다» 다. 매니지드의 대화창은
+    //   tmux 에 붙지 않아 attach 로는 안 보인다 — 종전엔 ⑥ 실명이 그 사각을 가렸고, 옛 시계가 다시 도는 지금은 보던 세션을 걷는다(격리 리뷰 재현).
+    const lastSeen = Math.max(s.lastActive || 0, s.lastAttached || 0, s.lastViewed || 0);  // 마지막 활동 = 작업 또는 열람(붙음 · 화면 도장)
     const idleSince = lastSeen || s.created || 0;
     // #3894 — **③ 에도 끝을 둔다. 단 스스로 증명하지 못하는 보호에만.** (③ 설명은 아래, 여기는 판정 재료)
     //  ③ 은 무기한이었다. 실측 2026-09-11 lively-46e3: 승인 대기로 159~218분 방치된 세션 둘, 26시간째 `working` 인
@@ -248,7 +272,8 @@ export function pickReapCandidates(o: {
 interface ReapSources {
   loadPolicy?: () => Promise<Partial<SessionReclaimPolicy>>;
   listLive?: () => Promise<Awaited<ReturnType<typeof listSessionsRaw>>>;
-  listStates?: () => Promise<Array<{ id: string }>>;
+  /** 장부 행 — 회수 불변식 ④ 는 id 만 보고, 하네스 종료 규칙의 범위 판정(#4697)이 종류·대화 id 를 본다(없으면 «대화 id 없음»). */
+  listStates?: () => Promise<Array<{ id: string } & Partial<Pick<SessionState, "kind" | "claude_session_id">>>>;
   listManaged?: () => Promise<Array<{ session_id: string | null }>>;
   reap?: (id: string) => Promise<void>;
   now?: () => number;
@@ -256,7 +281,39 @@ interface ReapSources {
    * ⑥ 이 세션들 중 **하네스가 띄운 작업이 살아 있는** 것(#2652). 두 축이 같은 seam 을 쓴다.
    *  `table` 은 이미 뜬 프로세스 표(압박 축은 RSS 때문에 어차피 뜬다) — 주면 다시 뜨지 않는다.
    */
-  liveJobs?: (ids: ReadonlySet<string>, table?: Map<number, ProcEntry>) => Promise<ReadonlySet<string>>;
+  liveJobs?: (ids: ReadonlySet<string>, table?: Map<number, ProcEntry>, opts?: LiveJobOpts) => Promise<ReadonlySet<string>>;
+  /**
+   * #4697 T7 — 하네스 종료 규칙이 맡는 세션(옛 시계가 손을 뗀다). 두 축이 같은 seam 을 쓴다. 기본은 session-stop-rule.ts 의
+   *  sessionsUnderStopRule(셀프호스트면 늘 빈 집합). 정책은 회수기가 읽은 그 워크스페이스의 것을 그대로 넘긴다.
+   */
+  stopRuleIds?: (
+    live: ReadonlyArray<SessionInfo>,
+    states: ReadonlyArray<{ id: string } & Partial<Pick<SessionState, "kind" | "claude_session_id">>>,
+    managedIds: ReadonlySet<string>,
+    policy: SessionReclaimPolicy,
+  ) => Promise<ReadonlySet<string>> | ReadonlySet<string>;
+}
+
+/**
+ * #4697 T7 — 이 판에 옛 시계가 손을 뗄 세션. 판정이 던지면 **그 판의 세션 전부**를 뗀다 — 모르면 안 죽인다: 하네스 종료 규칙이 지키는
+ *  세션(보는 중 · 예약 깨움 대기 — 상한 없음)을 옛 시계가 죽이는 쪽이 한 판(5분) 미루는 쪽보다 나쁘다. 실패는 크게 남긴다.
+ *  ⚠ 규칙 모듈은 import 를 늦춘다 — 그 모듈이 이 모듈(⑥ 판정)을 부르므로 정적으로 맞물리면 순환이 된다(web.ts 가 부르는 방식과 같다).
+ */
+async function stopRuleOwned(
+  live: ReadonlyArray<SessionInfo>,
+  states: ReadonlyArray<{ id: string } & Partial<Pick<SessionState, "kind" | "claude_session_id">>>,
+  managedIds: ReadonlySet<string>,
+  policy: SessionReclaimPolicy,
+  deps?: ReapSources,
+): Promise<ReadonlySet<string>> {
+  if (!live.length) return new Set();
+  const judge = deps?.stopRuleIds
+    ?? (async (l, st, m, p) => (await import("./session-stop-rule.js")).sessionsUnderStopRule(l, st, m, p));
+  try { return await judge(live, states, managedIds, policy); }
+  catch (e) {
+    logger.warn({ err: e, scanned: live.length }, "session-reaper: 하네스 종료 규칙 범위 판정 실패 — 이 판은 옛 시계가 한 세션도 걷지 않는다");
+    return new Set(live.map((s) => s.id));
+  }
 }
 
 /**
@@ -266,12 +323,84 @@ interface ReapSources {
  *  하필 tmux 가 느려지는 때(=메모리 압박·스래싱, 즉 이 회수가 도는 바로 그 순간)에 보호가 통째로 사라진다.
  *  판정 못 함의 대가가 «회수 한 tick 밀림» 대 «작업 중인 세션 사망»이라 방향이 자명하다(#1251 과 같은 교리).
  */
-export async function liveJobSessions(ids: ReadonlySet<string>, table?: Map<number, ProcEntry>): Promise<ReadonlySet<string>> {
+export async function liveJobSessions(
+  ids: ReadonlySet<string>, table?: Map<number, ProcEntry>, opts?: LiveJobOpts,
+): Promise<ReadonlySet<string>> {
   if (!ids.size) return new Set();
+  //  #4697 T7 — 매니지드(세션 컨테이너)는 세션마다 그 세션을 **지목해** 묻는다(종료 규칙과 같은 판별 — resolveContainerJobVerdicts 머리말).
+  //   지목 없는 아래 `list-panes -a` 는 세션당 컨테이너에서 늘 실패한다(ok:false) — 그러면 아래 줄이 후보 **전부**를 보호해, 후보가
+  //   10개 미만인 판(퇴화 가드 하한)은 옛 회수기가 한 세션도 못 걷었다. 실측(게이트웨이 로그 2026-09-11~10-16): 매니지드 유휴 틱마다
+  //   ⑥ 보호 2~6건 · 걷힌 것은 후보가 10개를 넘어 가드가 ⑥ 을 끈 판뿐 · 옛 훅 세션 둘이 39시간째 남음.
+  //   유휴 축(opts.holdUnknown)은 «판정 불가» 를 몇 틱 보류한다(containerLiveJobs 머리말).
+  if (sessionExecConfigured()) {
+    const r = await containerLiveJobs(ids, sessionPanePids, probeSessionProcTable, opts?.holdUnknown ? tenantUnknownHold() : undefined);
+    if (!r.held.size) return r.jobs;
+    if (opts?.held) { for (const id of r.held) opts.held.add(id); return r.jobs; }
+    return new Set([...r.jobs, ...r.held]);   // 보류를 받을 자리가 없으면 «작업 중» 으로 지킨다(모르면 안 죽인다)
+  }
   const panes = await listSessionPanePids();
   if (!panes.ok) return new Set(ids);                                   // 못 봤다 ≠ 작업 없다 → 전부 보호
   return resolveLiveJobs(ids, panes, table ?? await readProcTable(), probeSessionProcTable);
 }
+
+/**
+ * #4697 T7 — 세션 컨테이너(매니지드)에서 옛 회수기의 ⑥. 판별은 종료 규칙과 **같다**(resolveContainerJobVerdicts). «판정 불가» 의 처분만 축마다 다르다:
+ *  · 압박 축(hold 없음) — 회수기 규율(S5)대로 «작업 없음» 으로 접는다(급성 방어를 판정 실패로 멈추지 않는다).
+ *  · 유휴 축(hold) — **이번 틱은 보류**한다. 프로브(지목한 list-panes + 컨테이너 안 ps, 8초)는 부하가 큰 컨테이너일수록 시간 초과가 나기 쉬워,
+ *    접으면 «모름» 이 하필 일하는 세션 쪽에서 파괴로 빠진다(격리 리뷰 · 종료 규칙이 판정 불가를 안 끄는 것과 같은 이유). 120분 시계라 한 틱(5분)
+ *    미루는 값은 작다. 다만 영영 판정이 안 되는 세션이 영영 남지 않게 **같은 세션이 연달아 hold.limit 번** 판정 불가면 그때 접는다.
+ */
+export async function containerLiveJobs(
+  ids: ReadonlySet<string>,
+  panePidsOf: (sid: string) => Promise<number[] | null>,
+  probe: (sid: string) => Promise<Map<number, ProcEntry>>,
+  hold?: UnknownHold,
+): Promise<{ jobs: ReadonlySet<string>; held: ReadonlySet<string> }> {
+  const v = await resolveContainerJobVerdicts(ids, panePidsOf, probe);
+  const heldIds = new Set<string>();
+  //  ⚠ 보류분은 «작업 있음(jobs)» 에 섞지 않고 따로 돌려준다 — 섞으면 퇴화 가드(후보 10개 이상이 전부 «작업 중» 이면 ⑥ 무시)가 그것까지 세어,
+  //   보류가 가장 필요한 대량 판정 불가 때 보류분과 작업이 확인된 세션을 함께 걷는다(재검토 차단 — dropLiveJobs 머리말).
+  if (!hold || !v.unknown.size && !hold.streak.size) return { jobs: v.jobs, held: heldIds };
+  const now = hold.now();
+  for (const [k, e] of hold.streak) if (now - e.at > UNKNOWN_STREAK_TTL_MS) hold.streak.delete(k);
+  const held: string[] = [], folded: string[] = [];
+  for (const sid of ids) {
+    const k = hold.key(sid);
+    if (!v.unknown.has(sid)) { hold.streak.delete(k); continue; }   // 판정됐다(작업 있음·없음) — 연속이 끊긴다
+    const n = (hold.streak.get(k)?.n ?? 0) + 1;
+    hold.streak.set(k, { n, at: now });
+    if (n < hold.limit) { heldIds.add(sid); held.push(sid); } else folded.push(sid);
+  }
+  //  접는 판은 경고로 — 작업 판정이 한도 넘게 통째로 실패하면(중계 장애) 그 틱에 후보가 한꺼번에 «작업 없음» 으로 걷힌다(재검토 note 4).
+  if (folded.length) {
+    logger.warn({ held, folded, limit: hold.limit }, "session-reaper: ⑥ 판정 불가가 연달아 한도에 닿아 «작업 없음» 으로 접는다(유휴 축)");
+  } else if (held.length) {
+    logger.info({ held, limit: hold.limit }, "session-reaper: ⑥ 판정 불가 — 유휴 축은 이번 틱 보류(연달아 한도에 닿으면 «작업 없음» 으로 접는다)");
+  }
+  return { jobs: v.jobs, held: heldIds };
+}
+
+/** ⑥ 판정에 넘기는 축별 처분. held — 보류한 세션 id 를 여기에 넣는다(부르는 쪽이 «작업 있음» 과 따로 다룬다). */
+export interface LiveJobOpts { holdUnknown?: boolean; held?: Set<string> }
+
+/** 유휴 축의 «판정 불가» 보류 — 세션마다 연달아 판정 불가였던 횟수. 시험이 끼워 넣는다(기본은 모듈 상태 + 테넌트별 열쇠). */
+export interface UnknownHold {
+  key: (sid: string) => string;
+  now: () => number;
+  /** 연달아 이 횟수째 판정 불가면 접는다 */
+  limit: number;
+  streak: Map<string, { n: number; at: number }>;
+}
+/** #4697 — 같은 세션이 연달아 이만큼 판정 불가면 «작업 없음» 으로 접는다(유휴 틱 5분 → 약 10분 보류). */
+export const UNKNOWN_HOLD_TICKS = 3;
+/** 연속 기록이 이만큼 안 갱신되면 버린다(세션이 사라졌거나 판정이 끊겼다). */
+const UNKNOWN_STREAK_TTL_MS = 60 * 60_000;
+const unknownStreak = new Map<string, { n: number; at: number }>();
+const tenantUnknownHold = (): UnknownHold => ({
+  key: (sid) => `${currentTenant()?.id ?? ""}\u0000${sid}`, now: Date.now, limit: UNKNOWN_HOLD_TICKS, streak: unknownStreak,
+});
+/** 시험용 — 모듈의 연속 기록을 비운다. */
+export function resetUnknownHold(): void { unknownStreak.clear(); }
 
 /** ⑥ 판정의 세 갈래 — 작업이 있다(jobs) · **판정하지 못했다**(unknown) · 그 밖은 «없음 확정». */
 export interface JobVerdicts { jobs: ReadonlySet<string>; unknown: ReadonlySet<string> }
@@ -316,7 +445,7 @@ export async function resolveContainerJobVerdicts(
 ): Promise<JobVerdicts> {
   const jobs = new Map<string, string[]>();
   const unknown = new Set<string>();
-  await Promise.all([...ids].map(async (sid) => {
+  const judge = async (sid: string): Promise<void> => {
     const pids = await panePidsOf(sid).catch(() => null);
     if (!pids?.length) { unknown.add(sid); return; }
     let t: Map<number, ProcEntry>;
@@ -328,7 +457,12 @@ export async function resolveContainerJobVerdicts(
     if (!t.size) { unknown.add(sid); return; }
     const d = sessionJobDetails(t, new Map([[sid, pids]])).get(sid);
     if (d) jobs.set(sid, d);
-  }));
+  };
+  //  #4697 — 동시에 묻는 세션 수에 상한을 둔다(세션마다 중계 왕복 둘 — 후보가 수백이면 프로세스가 수백 뜬다, 2026-09-04 후보 453 실측).
+  //   종료 규칙은 앞에서 20개로 자르지만 옛 회수기는 자르지 않는다.
+  const queue = [...ids];
+  const worker = async (): Promise<void> => { for (let sid = queue.shift(); sid !== undefined; sid = queue.shift()) await judge(sid); };
+  await Promise.all(Array.from({ length: Math.min(CONTAINER_PROBE_CONCURRENCY, queue.length) }, worker));
   if (jobs.size) {
     logger.info({ count: jobs.size, evidence: Object.fromEntries([...jobs].slice(0, JOB_EVIDENCE_SESSIONS)) },
       "session-reaper: ⑥ 하네스가 띄운 작업이 살아 있어 보호한 세션(세션 컨테이너)");
@@ -406,6 +540,9 @@ export async function resolveJobVerdicts(
   return { jobs: new Set(detail.keys()), unknown };
 }
 
+/** 세션 컨테이너 작업 프로브를 동시에 몇 개까지 — 세션마다 list-panes·ps 두 왕복(각 8초 상한)이라 후보가 많으면 줄을 세운다. */
+export const CONTAINER_PROBE_CONCURRENCY = 8;
+
 /** 로그 한 줄에 실을 세션 수(각 세션당 증거는 session-rss 가 3건으로 자른다). */
 const JOB_EVIDENCE_SESSIONS = 3;
 
@@ -446,15 +583,21 @@ const JOBS_SIGNAL_DEGENERATE_MIN = 10;
 
 /** ⑥ 적용 — 후보에서 «작업이 도는 세션»을 뺀다. 판정 자체가 실패하면 종전대로 진행한다(방어를 멈추지 않는다). */
 async function dropLiveJobs(
-  candidates: ReapCandidate[], reasons: ReapSkipReasons, deps?: ReapSources, table?: Map<number, ProcEntry>,
+  candidates: ReapCandidate[], reasons: ReapSkipReasons, axis: "idle" | "pressure", deps?: ReapSources, table?: Map<number, ProcEntry>,
 ): Promise<ReapCandidate[]> {
   if (candidates.length === 0) return candidates;
   const probe = deps?.liveJobs ?? liveJobSessions;
   let busy: ReadonlySet<string>;
-  try { busy = await probe(new Set(candidates.map((c) => c.id)), table); }
+  //  #4697 — 유휴 축만 «판정 불가» 를 보류한다(containerLiveJobs 머리말). 압박 축은 종전대로 접는다. 보류분은 held 로 따로 받는다.
+  const held = new Set<string>();
+  try { busy = await probe(new Set(candidates.map((c) => c.id)), table, { holdUnknown: axis === "idle", held }); }
   catch (e) { logger.warn({ err: e }, "session-reaper: 작업 판정 실패 — ⑥ 없이 진행"); return candidates; }
-  if (!busy.size) return candidates;
-  const flagged = candidates.filter((c) => busy.has(c.id));
+  //  보류분은 이번 틱엔 무엇이든 걷지 않는다 — 아래 퇴화 가드도 **보류분을 뺀 후보로만** 센다. 섞어 세면 대량 판정 불가(중계 장애)에서 가드가
+  //   «후보 전부가 작업 중» 으로 읽어 보류분과 작업이 확인된 세션을 함께 걷는다(재검토 차단 — 작업 6 + 판정 불가 6 이 12 모두 걷혔다).
+  const rest = held.size ? candidates.filter((c) => !held.has(c.id)) : candidates;
+  reasons.jobsUnknown += candidates.length - rest.length;
+  if (!busy.size) return rest;
+  const flagged = rest.filter((c) => busy.has(c.id));
   // ⚠ **후보가 전부 걸리면 그건 보호가 아니라 신호가 깨진 것이다**(#2652 후속). 100% 를 보호하는 신호는
   //  정보량이 0이고, 그 상태를 방치하면 회수가 통째로 멈춘다 — baseline 이 자라 결국 earlyoom 이
   //  **desired-state 보존 없이** 죽인다(#1220 이 고치려던 바로 그 상황). 그래서 그 tick 은 ⑥ 없이 진행하고
@@ -462,14 +605,14 @@ async function dropLiveJobs(
   //  ⓘ 실측 2026-09-04: 매니지드 게이트웨이에서 `scanned=453 · reaped=0 · jobs=453` 이 2시간 이어졌다.
   //  ⓘ 하한(JOBS_SIGNAL_DEGENERATE_MIN)이 있는 이유: 후보가 한둘일 땐 «둘 다 작업 중»이 흔히 참이다.
   //   그걸 «퇴화»로 읽으면 정상 보호를 깨뜨린다. 열 개가 **전부**인 것은 그렇게 흔하지 않다.
-  if (flagged.length === candidates.length && candidates.length >= JOBS_SIGNAL_DEGENERATE_MIN) {
-    logger.warn({ candidates: candidates.length, sample: flagged.slice(0, 5).map((c) => c.id) },
-      "session-reaper: ⑥ 신호 퇴화(후보 전부가 '작업 중') — 이 tick 은 ⑥ 없이 진행한다");
-    return candidates;
+  if (flagged.length === rest.length && rest.length >= JOBS_SIGNAL_DEGENERATE_MIN) {
+    logger.warn({ candidates: rest.length, held: held.size, sample: flagged.slice(0, 5).map((c) => c.id) },
+      "session-reaper: ⑥ 신호 퇴화(후보 전부가 '작업 중') — 이 tick 은 ⑥ 없이 진행한다(판정 불가로 보류한 세션은 그대로 둔다)");
+    return rest;
   }
   reasons.jobs += flagged.length;
   const skip = new Set(flagged.map((c) => c.id));
-  return candidates.filter((c) => !skip.has(c.id));
+  return rest.filter((c) => !skip.has(c.id));
 }
 
 const policyOf = (deps?: ReapSources): Promise<SessionReclaimPolicy> => {
@@ -503,6 +646,8 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
   const restorable = new Set(states.map((s) => s.id));                 // 불변식 ④ — 복원 가능한 세션만 회수
   const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x)); // 불변식 ①
   const nowSec = Math.floor(now() / 1000);
+  //  #4697 T7 — 하네스 종료 규칙이 맡는 세션에서는 손을 뗀다(매니지드만 — 셀프호스트는 빈 집합).
+  const stopRuleIds = await stopRuleOwned(live, states, managedIds, policy, deps);
 
   // 이유별 카운트 — **왜 안 죽였나**가 없으면 진단이 불가능하다. 실측(2026-07-28): 고객사 A에서 F 를 켰는데 회수가
   //  0건이었고, 로그가 침묵해서(종전엔 reaped>0 일 때만 로그) 운영자도 우리도 tick 이 돌았는지조차 몰랐다.
@@ -513,10 +658,11 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
     attachTtlMin: policy.attach_idle_minutes ?? 0,
     busyTtlMin: policy.busy_idle_minutes ?? 0,
     reasons,
+    stopRuleIds,
   });
   // ⑥ 하네스가 띄운 작업이 도는 세션은 뺀다(#2652). **후보가 나온 뒤에만** 프로세스를 본다 — 평시엔 후보가
   //  0건이라(실측: dev 박스 며칠간 유휴 회수 0건) 이 경로의 평시 비용도 0 이다. 점유(RSS)는 여전히 안 잰다.
-  const candidates = await dropLiveJobs(picked, reasons, deps);
+  const candidates = await dropLiveJobs(picked, reasons, "idle", deps);
   // 평시 순서 = **오래 idle 인 것부터**(사용자 피해가 가장 적은 순). 점유는 재지 않는다 — 불필요한 /proc 스캔 금지.
   candidates.sort((a, b) => a.idleSince - b.idleSince);
 
@@ -531,12 +677,13 @@ export async function reapIdleSessions(deps?: ReapSources): Promise<ReapResult> 
     }
   }
   const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.failed + reasons.jobs
-    + reasons.unobserved;
+    + reasons.unobserved + reasons.stopRule + reasons.jobsUnknown;
   // 정책이 켜져 있으면 **매 tick** 남긴다(회수 0건도) — 5분에 한 줄이고, 이 한 줄이 없으면 "왜 아무것도 안 죽었나"를
   //  박스에서 추측으로 파야 한다. noState 가 크면 백필(session-state-backfill)이 필요하다는 신호다.
   //  ⚠ **무엇을 걷었는지(id)도 남긴다**(#2652) — 종전엔 개수뿐이라, 사라진 세션의 주인이 «왜 회수됐나»를 물으면
   //   대화기록 파일의 mtime 을 tick 시각과 대조하는 수밖에 없었다(실측 2026-09-04 조사가 정확히 그랬다).
-  logger.info({ ttlMin, scanned: live.length, reaped: reaped.length, reapedIds: reaped.slice(0, 20), skipped, skipReasons: reasons },
+  //  #4697 — 어느 워크스페이스의 판인지 싣는다(7일 측정이 워크스페이스별로 센다 — 종전엔 이 줄에 테넌트가 없었다).
+  logger.info({ tenant: currentTenant()?.slug ?? null, ttlMin, scanned: live.length, reaped: reaped.length, reapedIds: reaped.slice(0, 20), skipped, skipReasons: reasons },
     "session-reaper tick(idle 세션 회수 — desired-state 보존 → restorable)");
   return { enabled: true, ttlMin, scanned: live.length, reaped, skipped, skipReasons: reasons };
 }
@@ -753,6 +900,8 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
         const [live, states, managed] = await Promise.all([listLive(), listStates(), listManaged()]);
         const restorable = new Set(states.map((s) => s.id));
         const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
+        //  #4697 T7 — 압박 회수도 하네스 종료 규칙이 맡는 세션에서는 손을 뗀다(그 워크스페이스의 정책으로 판정).
+        const stopRuleIds = await stopRuleOwned(live, states, managedIds, policy, deps);
         const pickedRaw = pickReapCandidates({
           live, restorable, managedIds, nowSec,
           //  압박이면 **완화 TTL**로 갈아탄다 — 다만 "방금까지 쓰던 세션"은 그래도 안 건드린다(그 하한선이 이 값이다).
@@ -760,6 +909,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
           attachTtlMin: policy.attach_idle_minutes ?? 0,
           busyTtlMin: policy.busy_idle_minutes ?? 0,
           reasons,
+          stopRuleIds,
         });
         scanned += live.length;
 
@@ -774,7 +924,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
         }
         // ⑥ 작업이 도는 세션은 압박 중에도 안 걷는다(#2652). 급성 압박이라도 «사람이 시켜 놓은 작업»을 죽여
         //  얻는 메모리는 그 작업을 처음부터 다시 시키는 비용보다 싸지 않다. 표는 위에서 이미 떴으니 재사용한다.
-        const picked = await dropLiveJobs(pickedRaw, reasons, deps, procTable ?? undefined);
+        const picked = await dropLiveJobs(pickedRaw, reasons, "pressure", deps, procTable ?? undefined);
         const priority = policy.pressure_priority ?? 100;
         const maxReap = policy.pressure_max_reap ?? 0;
         //  '쟀다'의 기준 = 후보 중 **하나라도 양수 RSS 를 얻었나**. 맵이 비어 있지 않아도 값이 전부 0 이면 못 잰 것이다
@@ -797,7 +947,8 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
 
   const participating = perWorkspace.filter((w) => w.participated).length;
   if (all.length === 0) {
-    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.jobs + reasons.unobserved;
+    const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent + reasons.jobs + reasons.unobserved
+      + reasons.stopRule + reasons.jobsUnknown;
     logger.info({ usedPct, swapPct, workspaces: workspaces.length, participating, scanned, skipped, skipReasons: reasons, perWorkspace },
       "session-reaper tick(압박 회수 — 걷을 후보 없음)");
     //  ⚠ `perWorkspace` 를 반드시 함께 돌려준다 — «왜 한 건도 안 걷었나»의 답이 전부 여기 있다.
@@ -845,7 +996,7 @@ export async function reapPressureSessions(deps?: PressureReapDeps): Promise<Pre
   //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
   const rssMeasured = all.some((c) => c.rssMb > 0);
   const skipped = reasons.managed + reasons.noState + reasons.attached + reasons.working + reasons.recent
-    + reasons.failed + reasons.target + reasons.cap + reasons.jobs + reasons.unobserved;
+    + reasons.failed + reasons.target + reasons.cap + reasons.jobs + reasons.unobserved + reasons.stopRule + reasons.jobsUnknown;
   //  ⚠ 압박 회수는 **사후 추적이 특히 중요하다** — 사용자에겐 "세션이 사라졌다"로 보이므로, 무엇을 왜 걷었는지가
   //   로그에 없으면 #1220 이 고치려던 그 상황(earlyoom 이 죽였는데 아무도 몰라 '회수'로 오인)을 우리가 재현한다.
   //   ⓘ 그 주석을 적어 놓고 **정작 id 는 안 남기고 있었다**(#2652 실측: 사라진 세션의 주인이 물었을 때, 답을

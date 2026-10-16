@@ -55,6 +55,7 @@
   "dist/project/project-provision.js",
   "dist/sessions/gateway-capabilities.js",
   "dist/sessions/outbox-exec.js",
+  "dist/sessions/outbox-measure.js",
   "dist/sessions/session-desired.js",
   "dist/sessions/session-kind.js",
   "dist/sessions/session-label-source.js",

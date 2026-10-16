@@ -170,3 +170,21 @@ t("[#2244] 배달자는 돌기 전에 자기 잔재를 회수하고, 대화창 �
   assert.match(body, /if \(rows\.some\([\s\S]*?\) kickOutbox\(sessionId\)/,
     "깨우기는 **덜 끝난 행이 보일 때만** — 무조건 kick 은 3초 폴링에 얹혀 헛돈다");
 });
+
+// ── #4697 T7 — 결말 측정은 배달을 죽이지 않는다(측정부가 던져도 mark 는 null 을 돌려준다 — 던지면 codex 경로 catch 가 «못 보냄» 으로 읽어
+//  이미 간 말을 다시 큐에 넣는다, 격리 리뷰 C3). DB 는 목(얇은 페이크 — client.ts 가 허용하는 자리)이다.
+{
+  const { itemsPool } = await import("../db/client.js");
+  const { markOutboxRowForTest } = await import("./session-outbox.js");
+  const pool = itemsPool as unknown as { query?: unknown };
+  const hadOwn = Object.hasOwn(pool, "query");
+  const boom = new Proxy({}, { get() { throw new Error("측정 읽기 실패"); } });
+  pool.query = async () => ({ rows: [boom] });
+  try {
+    let threw: unknown = null, m: unknown = "unset";
+    try { m = await markOutboxRowForTest(1, "delivered"); } catch (e) { threw = e; }
+    assert.equal(threw, null, "측정이 던져도 결말 새기기는 던지지 않는다");
+    assert.equal(m, null);
+  } finally { if (!hadOwn) delete pool.query; }
+  pass++; console.log("ok  [T7-C3] 결말 측정이 던져도 mark 는 던지지 않는다");
+}
