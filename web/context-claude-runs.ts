@@ -7,8 +7,8 @@
 //  두 조각:
 //   · claudeRunsEntry — 수집기 설정 화면 맨 위의 한 줄 요약(관리자만). 누르면 아래 화면으로.
 //   · renderClaudeRunsScreen — 기간(24시간·7일·30일) · 숫자 타일 · 실패 사유 · 메모리 · 크기 설정 · 날짜별 · 최근 실행.
-//  데이터: GET /api/ui/collect/claude-run-stats(collect_claude_run_stats — 관리자만) 하나. 저장: POST /api/ui/org/runtime-config
-//   {collect_session_policy:{max_mb, request_mb}} — 범위·예약 ≤ 상한은 서버가 400 으로 알린다(여기서 다시 판정하지 않는다).
+//  데이터: GET /api/ui/collect/claude-run-stats(collect_claude_run_stats — 관리자만) 하나. 저장: POST /api/ui/collect/session-policy
+//   {max_mb, request_mb} · 되돌리기 {reset:true}(collect_session_policy_set) — 범위·예약 ≤ 상한은 서버가 400 으로 알린다(여기서 다시 판정하지 않는다).
 import { api, el, fmtNum, hasScope, relTime, replaceKids, toast } from './core.js';
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';
 
@@ -87,6 +87,7 @@ export async function renderClaudeRunsScreen(host: HTMLElement): Promise<void> {
   const s = v.stats || {}, p = v.policy || {};
   const reload = () => { void renderClaudeRunsScreen(host); };
   replaceKids(body, 
+    v.truncated ? el('p', { class: 'cxcr-warn', text: '실행이 많아 최근 2만 회만 세었습니다 — 아래 숫자는 그 안의 값입니다. 기간을 줄이면 전부 셉니다.' }) : null,
     tiles(s, p),
     el('div', { class: 'cxcr-grid' }, outcomesCard(s), memoryCard(s, p)),
     sizeCard(p, s.suggestion, reload),
@@ -162,6 +163,7 @@ function memoryCard(s: any, p: any): HTMLElement {
     el('dt', { text: '한도의 90% 넘은 실행' }), el('dd', { class: 'num' + (m.near_cap ? ' is-fail' : ''), text: fmtNum(m.near_cap || 0) + '회' }),
     el('dt', { text: '표본' }), el('dd', { class: 'num', text: fmtNum(m.samples) + '회' })));
   card.append(el('p', { class: 'admin-hint', text: '메모리는 수집 세션 컨테이너 전체 사용량입니다(시작할 때 이미 약 120MB). 예약은 보통 쓰는 양, 상한은 가장 무거운 실행보다 여유 있게 둡니다.' }));
+  if (m.excluded) card.append(el('p', { class: 'admin-hint', text: '잰 값이 그 실행의 상한과 맞지 않는 실행 ' + fmtNum(m.excluded) + '회(서버 전체 메모리를 잰 경우 등)는 위 숫자에서 뺐습니다.' }));
   return card;
 }
 
@@ -170,26 +172,28 @@ function sizeCard(p: any, sug: any, reload: () => void): HTMLElement {
   const maxIn = el('input', { type: 'number', class: 'cxcr-in num', min: String(b.max_mb_min), max: String(b.max), step: '64', value: String(p.max_mb ?? ''), 'aria-label': '상한(MB)' }) as HTMLInputElement;
   const reqIn = el('input', { type: 'number', class: 'cxcr-in num', min: String(b.request_mb_min), max: String(b.max), step: '64', value: String(p.request_mb ?? ''), 'aria-label': '예약(MB)' }) as HTMLInputElement;
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' }) as HTMLButtonElement;
-  //  되돌리기 = 저장값을 비운다(null) — 기본값을 손으로 넣어 저장하면 그 숫자가 굳어 나중에 기본값이 바뀌어도 따라가지 않는다.
+  //  되돌리기 = 저장값을 비운다(reset) — 기본값을 손으로 넣어 저장하면 그 숫자가 굳어 나중에 기본값이 바뀌어도 따라가지 않는다.
+  //   되돌린 뒤의 값은 서버가 알려 준다(reset_to — 서버 설정 파일에 값이 있으면 그 값, 없으면 기본값).
+  const back = p.reset_to || p.defaults || { max_mb: 1024, request_mb: 640 };
   const resetBtn = p.source === 'db'
-    ? el('button', { type: 'button', class: 'btn btn-ghost', text: '기본값(' + fmtNum(p.defaults?.max_mb ?? 1024) + ' / ' + fmtNum(p.defaults?.request_mb ?? 640) + ')으로 되돌리기' })
+    ? el('button', { type: 'button', class: 'btn btn-ghost', text: '저장값 지우기(' + fmtNum(back.max_mb) + ' / ' + fmtNum(back.request_mb) + 'MB 로)' })
     : null;
   const dirty = (): boolean => Number(maxIn.value) !== p.max_mb || Number(reqIn.value) !== p.request_mb;
   const sync = (): void => { saveBtn.disabled = !dirty(); };
   maxIn.addEventListener('input', sync); reqIn.addEventListener('input', sync);
   //  저장 요청만 try 로 감싼다 — 뒤따르는 알림·다시 그리기가 실패해도 «저장하지 못했습니다» 로 읽히지 않게.
-  const post = async (policy: unknown, done: string): Promise<void> => {
+  const post = async (body: unknown, done: string): Promise<void> => {
     saveBtn.disabled = true;
     let err: Error | null = null;
     try {
-      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ collect_session_policy: policy }) });
+      await api('/api/ui/collect/session-policy', { method: 'POST', body: JSON.stringify(body) });
     } catch (e) { err = e as Error; }
     if (err) { toast('저장하지 못했습니다 — ' + err.message, true); sync(); return; }
     toast(done);
     reload();
   };
   saveBtn.addEventListener('click', () => { void post({ max_mb: Number(maxIn.value), request_mb: Number(reqIn.value) }, '수집 세션 크기를 저장했습니다 — 다음 수집 실행부터 씁니다'); });
-  resetBtn?.addEventListener('click', () => { void post(null, '수집 세션 크기를 기본값으로 되돌렸습니다 — 다음 수집 실행부터 씁니다'); });
+  resetBtn?.addEventListener('click', () => { void post({ reset: true }, '저장값을 지웠습니다 — 다음 수집 실행부터 ' + fmtNum(back.max_mb) + ' / ' + fmtNum(back.request_mb) + 'MB 로 뜹니다'); });
   sync();
   const card = el('section', { class: 'card cxcr-card cxcr-size' },
     el('h4', { class: 'cxcr-h', text: '수집 세션 크기' }),

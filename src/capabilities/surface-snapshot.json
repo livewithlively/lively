@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "8b84c4047013c7b3"
+  "input_hash": "93871e9106df96e6"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -3973,6 +3973,16 @@
    "GET /api/ui/collect/claude-run-stats"
   ],
   "input_hash": "91ee4b627c8cb429"
+ },
+ {
+  "name": "collect_session_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/session-policy"
+  ],
+  "input_hash": "f020a566b9d44618"
  },
  {
   "name": "collect_units",

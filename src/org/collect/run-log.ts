@@ -25,56 +25,74 @@ async function purgeOld(now: number): Promise<void> {
   await itemsPool.query(`DELETE FROM collect_run WHERE started_at < $1`, [new Date(now - COLLECT_RUN_KEEP_DAYS * 86400_000)]);
 }
 
+/** 앱 이름 목록 — 12개 · 64자까지(표면 입력과 같은 상한). 끝 기록의 앱은 그 사람 홈의 요약에서 온다. */
+const appsOf = (v: unknown): string[] =>
+  (Array.isArray(v) ? v.filter((a): a is string => typeof a === "string").slice(0, 12).map((a) => a.slice(0, 64)) : []);
+
 export async function recordRunStart(input: {
   runId: string; member: string; apps: readonly string[]; model: string | null;
   capMb: number | null; requestMb: number | null; startedAt: Date; now?: number;
 }): Promise<void> {
   try {
     await itemsPool.query(
+      //  끝 기록이 먼저 행을 만들었으면(시작 기록이 늦은 판) 비어 있는 칸만 채운다 — 끝이 적은 결과·지표는 건드리지 않는다.
       `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb)
        VALUES($1,$2,$3,$4::text[],$5,$6,$7)
-       ON CONFLICT (tenant_id, run_id) DO NOTHING`,
-      [input.runId, input.member, input.startedAt, [...input.apps], input.model, input.capMb, input.requestMb]);
+       ON CONFLICT (tenant_id, run_id) DO UPDATE SET
+         model = COALESCE(collect_run.model, EXCLUDED.model),
+         cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb),
+         apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END`,
+      [input.runId, input.member, input.startedAt, appsOf(input.apps), input.model, input.capMb, input.requestMb]);
     await purgeOld(input.now ?? Date.now());
   } catch (e) {
     logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 시작 기록 실패 — 실행은 그대로");
   }
 }
 
-/**
- * 끝 기록. by = 누가 끝을 적었나 — runner(러너의 exit.json) · gateway(게이트웨이가 추정해 적은 exit: 끝 신호 없음 · 판이 사라짐).
- *  시작 행이 없으면(시작 기록이 실패했거나 기록 전 판) 여기서 만든다 — 시작 시각은 호출부가 실행 id 에서 읽어 준다.
- */
-export async function recordRunEnd(input: {
-  runId: string; member: string; exit: Record<string, unknown> | null; summary: Record<string, unknown> | null;
-  by: "runner" | "gateway"; startedAt: Date | null; now?: number;
-}): Promise<{ outcome: RunOutcome } | null> {
-  const v = classifyRunOutcome(input.exit, input.summary);
-  if (!v) return null;
-  try {
-    const m = runMetricsOf(input.exit, input.summary);
-    const nowMs = input.now ?? Date.now();
-    const endRaw = typeof input.exit?.endedAt === "string" ? new Date(input.exit.endedAt) : null;
-    const endedAt = endRaw && Number.isFinite(endRaw.getTime()) ? endRaw : new Date(nowMs);
-    const apps = Array.isArray(input.summary?.apps) ? (input.summary!.apps as unknown[]).filter((a): a is string => typeof a === "string") : [];
-    const r = await itemsPool.query(
-      `INSERT INTO collect_run(run_id, member_id, started_at, apps, outcome, error, ended_by, ended_at,
+const END_SQL = `INSERT INTO collect_run(run_id, member_id, started_at, apps, cap_mb, request_mb, outcome, error, ended_by, ended_at,
                                mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures, updated_at)
-       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
+       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now())
        ON CONFLICT (tenant_id, run_id) DO UPDATE SET
          outcome=EXCLUDED.outcome, error=EXCLUDED.error, ended_by=EXCLUDED.ended_by, ended_at=EXCLUDED.ended_at,
          mem_limit_mb=EXCLUDED.mem_limit_mb, mem_start_mb=EXCLUDED.mem_start_mb, mem_peak_mb=EXCLUDED.mem_peak_mb,
          duration_ms=EXCLUDED.duration_ms, cost_usd=EXCLUDED.cost_usd, turns=EXCLUDED.turns,
          tool_calls=EXCLUDED.tool_calls, tool_errors=EXCLUDED.tool_errors, captures=EXCLUDED.captures, updated_at=now(),
-         apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END
+         apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END,
+         cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb)
        WHERE collect_run.outcome IS NULL OR (collect_run.ended_by = 'gateway' AND EXCLUDED.ended_by = 'runner')
-       RETURNING outcome`,
-      [input.runId, input.member, input.startedAt ?? endedAt, apps, v.outcome, v.error, input.by, endedAt,
-       m.mem_limit_mb, m.mem_start_mb, m.mem_peak_mb, m.duration_ms, m.cost_usd, m.turns, m.tool_calls, m.tool_errors, m.captures]);
+       RETURNING outcome`;
+
+/**
+ * 끝 기록. by = 누가 끝을 적었나 — runner(러너의 exit.json) · gateway(게이트웨이가 추정해 적은 exit: 끝 신호 없음 · 판이 사라짐).
+ *  시작 행이 없으면(시작 기록이 늦었거나 실패한 판) 여기서 만든다 — 시작 시각은 호출부가 실행 id 에서 읽어 주고, 크기도 같이 싣는다.
+ *  돌려주는 값: 적었으면 {outcome} · 이미 끝이 적혀 있어 안 바꿨으면 null · 못 적었으면(DB 오류) "error"(호출부가 다시 시도할 수 있게).
+ *  지표 칸 하나가 이상해 쓰기가 실패하면 지표를 비우고 한 번 더 쓴다 — 결과(성공·실패)만이라도 남아야 실패율이 맞는다.
+ */
+export async function recordRunEnd(input: {
+  runId: string; member: string; exit: Record<string, unknown> | null; summary: Record<string, unknown> | null;
+  by: "runner" | "gateway"; startedAt: Date | null; capMb?: number | null; requestMb?: number | null; now?: number;
+}): Promise<{ outcome: RunOutcome } | null | "error"> {
+  const v = classifyRunOutcome(input.exit, input.summary);
+  if (!v) return null;
+  const m = runMetricsOf(input.exit, input.summary);
+  const nowMs = input.now ?? Date.now();
+  const endRaw = typeof input.exit?.endedAt === "string" ? new Date(input.exit.endedAt) : null;
+  const endedAt = endRaw && Number.isFinite(endRaw.getTime()) ? endRaw : new Date(nowMs);
+  const head = [input.runId, input.member, input.startedAt ?? endedAt, appsOf(input.summary?.apps), input.capMb ?? null, input.requestMb ?? null,
+    v.outcome, v.error == null ? null : v.error.slice(0, 300), input.by, endedAt];
+  const metrics = [m.mem_limit_mb, m.mem_start_mb, m.mem_peak_mb, m.duration_ms, m.cost_usd, m.turns, m.tool_calls, m.tool_errors, m.captures];
+  try {
+    const r = await itemsPool.query(END_SQL, [...head, ...metrics]);
     return r.rowCount ? { outcome: v.outcome } : null;
   } catch (e) {
-    logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 끝 기록 실패 — 실행 정리는 그대로");
-    return null;
+    logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 끝 기록 실패 — 지표를 비우고 한 번 더");
+    try {
+      const r = await itemsPool.query(END_SQL, [...head, ...metrics.map(() => null)]);
+      return r.rowCount ? { outcome: v.outcome } : null;
+    } catch (e2) {
+      logger.warn({ runId: input.runId, err: (e2 as Error)?.message }, "[collect-run] 끝 기록 실패 — 실행 정리는 그대로(다음 읽기가 다시 적는다)");
+      return "error";
+    }
   }
 }
 
@@ -89,22 +107,42 @@ export interface CollectRunListRow {
 
 const num = (v: unknown): number | null => (v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
-/** 기간 안 실행들의 통계 + 최근 실행 목록. 창은 since ~ until(호출부가 31일 안으로 자른다). */
-export async function collectRunStats(input: { since: Date; until: Date; tz: string; recent?: number }): Promise<{
+/** 구성원 이름 — 화면 규칙과 같다(닉네임을 쓰기로 켠 사람만 닉네임). 같은 id 가 여러 줄이면 첫 줄. 못 읽으면 빈 표(이름 대신 id). */
+async function memberNames(ids: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  try {
+    const r = await itemsPool.query(`SELECT id, display_name, nickname, use_nickname FROM org_member WHERE id = ANY($1::text[])`, [[...ids]]);
+    for (const x of r.rows as Array<{ id: string; display_name: string | null; nickname: string | null; use_nickname: boolean | null }>) {
+      if (out.has(x.id)) continue;
+      const nick = String(x.nickname ?? "").trim();
+      const name = x.use_nickname && nick ? nick : String(x.display_name ?? "").trim();
+      if (name) out.set(x.id, name);
+    }
+  } catch (e) {
+    logger.warn({ err: (e as Error)?.message }, "[collect-run] 구성원 이름을 못 읽었다 — id 로 보인다");
+  }
+  return out;
+}
+
+/**
+ * 기간 안 실행들의 통계 + 최근 실행 목록. 창은 since ~ until(호출부가 31일 안으로 자른다).
+ *  통계는 collect_run 만으로 센다(이름을 붙이려고 조인하면 한 사람이 여러 줄인 신원 표에서 실행이 겹쳐 셀 수 있다). 이름은 목록 몫만 따로 읽는다.
+ */
+export async function collectRunStats(input: { since: Date; until: Date; tz: string; recent?: number; now?: number }): Promise<{
   stats: RunStats; recent: CollectRunListRow[]; truncated: boolean;
 }> {
   const r = await itemsPool.query(
-    `SELECT r.run_id, r.member_id, CASE WHEN m.use_nickname AND COALESCE(m.nickname, '') <> '' THEN m.nickname ELSE m.display_name END AS member_name,
-            r.started_at, r.ended_at, r.apps, r.model, r.cap_mb, r.request_mb, r.outcome, r.error, r.ended_by,
-            r.mem_limit_mb, r.mem_start_mb, r.mem_peak_mb, r.duration_ms, r.cost_usd, r.turns, r.tool_calls, r.tool_errors, r.captures
-       FROM collect_run r LEFT JOIN org_member m ON m.id = r.member_id AND m.tenant_id = r.tenant_id
-      WHERE r.started_at >= $1 AND r.started_at < $2
-      ORDER BY r.started_at DESC
+    `SELECT run_id, member_id, started_at, ended_at, apps, model, cap_mb, request_mb, outcome, error, ended_by,
+            mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures
+       FROM collect_run
+      WHERE started_at >= $1 AND started_at < $2
+      ORDER BY started_at DESC
       LIMIT ${MAX_STAT_ROWS + 1}`, [input.since, input.until]);
   const all = r.rows as Array<Record<string, unknown>>;
   const truncated = all.length > MAX_STAT_ROWS;
   const rows: CollectRunListRow[] = all.slice(0, MAX_STAT_ROWS).map((x) => ({
-    run_id: String(x.run_id), member_id: String(x.member_id), member_name: (x.member_name as string | null) ?? null,
+    run_id: String(x.run_id), member_id: String(x.member_id), member_name: null,
     started_at: new Date(x.started_at as string).toISOString(),
     ended_at: x.ended_at ? new Date(x.ended_at as string).toISOString() : null,
     apps: Array.isArray(x.apps) ? (x.apps as string[]) : [], model: (x.model as string | null) ?? null,
@@ -118,5 +156,8 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
     started_at: x.started_at, outcome: x.outcome, cap_mb: x.cap_mb, mem_limit_mb: x.mem_limit_mb, mem_peak_mb: x.mem_peak_mb,
     duration_ms: x.duration_ms, cost_usd: x.cost_usd, tool_calls: x.tool_calls, tool_errors: x.tool_errors,
   }));
-  return { stats: summarizeRuns(statRows, { tz: input.tz }), recent: rows.slice(0, Math.max(0, input.recent ?? 50)), truncated };
+  const recent = rows.slice(0, Math.max(0, input.recent ?? 50));
+  const names = await memberNames([...new Set(recent.map((x) => x.member_id))]);
+  for (const x of recent) x.member_name = names.get(x.member_id) ?? null;
+  return { stats: summarizeRuns(statRows, { tz: input.tz, now: input.now }), recent, truncated };
 }

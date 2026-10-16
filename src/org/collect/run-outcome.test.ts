@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   classifyRunOutcome, runMetricsOf, summarizeRuns, suggestSize, percentile, dayKey, RUN_OUTCOME_LABEL, MEMORY_SUSPECT,
-  type RunStatRow,
+  gatewayExit, endedByOf, comparableMemory, STALE_RUN_MS, type RunStatRow,
 } from "./run-outcome.js";
 
 let pass = 0;
@@ -78,6 +78,21 @@ t("O16 끝 사유가 문자열이 아니면(그 사람 홈의 잡값) → error"
 t("O18 사유는 없는데 0 이 아닌 코드(모순 — 손댄 exit) → error", () => {
   assert.equal(outcome(exitOf({ code: 1, error: null }), sumOf()), "error");
 });
+t("O19 결과 오류 사유는 300자까지(그 사람 홈의 요약에서 온다)", () => {
+  const e = classifyRunOutcome(exitOf(), sumOf({}, { subtype: "x".repeat(5000), error: true }));
+  assert.equal(e?.outcome, "error"); assert.equal(e?.error?.length, 300);
+});
+t("G1 게이트웨이가 적는 끝 — 표식이 있고 분류가 맞다 · 러너 끝에는 표식이 없다", () => {
+  const at = new Date("2026-10-16T05:00:00.000Z");
+  assert.deepEqual(gatewayExit("runner-gone", at), { code: null, error: "runner-gone", endedAt: "2026-10-16T05:00:00.000Z", by: "gateway" });
+  assert.equal(endedByOf(gatewayExit("lost")), "gateway");
+  assert.equal(endedByOf(gatewayExit("runner-gone")), "gateway");
+  assert.equal(endedByOf(exitOf()), "runner");
+  assert.equal(endedByOf(null), "runner");
+  assert.equal(endedByOf({ by: "runner" }), "runner");
+  assert.equal(outcome(gatewayExit("runner-gone"), null), "gone");
+  assert.equal(outcome(gatewayExit("lost"), null), "lost");
+});
 t("O17 라벨 · 메모리 의심 묶음", () => {
   for (const o of ["ok", "login", "quota", "no_connector", "oom", "gone", "timeout", "lost", "max_turns", "canceled", "error"] as const) assert.ok(RUN_OUTCOME_LABEL[o]);
   assert.deepEqual([...MEMORY_SUSPECT].sort(), ["gone", "oom"]);
@@ -113,6 +128,15 @@ t("M7 도구 호출 · 오류 수", () => {
   const m = runMetricsOf(exitOf(), sumOf({ calls: [{ error: true }, {}, { error: false }] }));
   assert.equal(m.tool_calls, 3); assert.equal(m.tool_errors, 1);
 });
+t("M9 INT 칸을 넘는 값은 모르는 값 — cgroup v1 «무제한» · 거대한 시간", () => {
+  //  cgroup v1 은 무제한을 9223372036854771712 로 적는다 — 상한이 아니므로 컨테이너 짝으로 간다(그 값을 넣으면 INT 칸이 터진다)
+  const m = runMetricsOf(exitOf({ durationMs: 3_000_000_000 }), sumOf({ mem: { cgroupMax: "9223372036854771712", cgroupPeakMb: 500, container: { totalMb: 1024, startMb: 120, peakMb: 600 } } }));
+  assert.equal(m.mem_limit_mb, 1024); assert.equal(m.mem_peak_mb, 600);
+  assert.equal(m.duration_ms, 15000, "INT 상한을 넘는 벽시계는 버리고 결과 줄의 시간으로");
+  assert.equal(runMetricsOf(exitOf({ durationMs: 3_000_000_000 }), sumOf({}, { durationMs: undefined })).duration_ms, null, "둘 다 없으면 모름");
+  assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 2_147_483_648 })).captures, null);
+  assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 2_147_483_647 })).captures, 2_147_483_647, "경계 — INT 최대는 그대로");
+});
 t("M8 원문 수 — 음수·실수는 null", () => {
   assert.equal(runMetricsOf(exitOf(), sumOf({ captures: 11 })).captures, 11);
   assert.equal(runMetricsOf(exitOf(), sumOf({ captures: -1 })).captures, null);
@@ -131,27 +155,29 @@ t("A1 실행 0 — 실패율은 0% 가 아니라 모름(null)", () => {
   assert.equal(s.memory.max_mb, null); assert.equal(s.suggestion, null); assert.deepEqual(s.daily, []);
 });
 t("A2 실패율은 끝난 것만 센다 — 도는 중은 빼고", () => {
-  const s = summarizeRuns([row(), row(), row(), row({ outcome: "oom", mem_peak_mb: null }), row({ outcome: null, mem_peak_mb: null })]);
+  const s = summarizeRuns([row(), row(), row(), row({ outcome: "oom", mem_peak_mb: null }), row({ outcome: null, mem_peak_mb: null })],
+    { now: Date.parse("2026-10-16T03:10:00.000Z") });
   assert.equal(s.runs, 5); assert.equal(s.running, 1); assert.equal(s.finished, 4);
   assert.equal(s.ok, 3); assert.equal(s.failed, 1); assert.equal(s.failure_rate, 0.25);
 });
 t("A3 메모리 백분위(최근접 순위) · 최고값 없는 실행은 표본에서 뺀다", () => {
-  const rows = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000].map((p) => row({ mem_peak_mb: p, mem_limit_mb: 2048 }));
+  const rows = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000].map((p) => row({ mem_peak_mb: p, mem_limit_mb: 2048, cap_mb: 2048 }));
   rows.push(row({ mem_peak_mb: null }));
   const s = summarizeRuns(rows);
   assert.equal(s.memory.samples, 10);
   assert.equal(s.memory.p50_mb, 500); assert.equal(s.memory.p75_mb, 800); assert.equal(s.memory.p95_mb, 1000); assert.equal(s.memory.max_mb, 1000);
   assert.equal(percentile([], 50), null); assert.equal(percentile([7], 95), 7);
 });
-t("A4 상한 90% 이상 — 한도를 모르면 시작 때 상한으로", () => {
+t("A4 상한 90% 이상 — 그 실행이 잰 한도 기준 · 한도를 못 잰 판은 표본 밖", () => {
   const s = summarizeRuns([
     row({ mem_peak_mb: 921, mem_limit_mb: 1024 }),          // 0.899… → 아님
     row({ mem_peak_mb: 922, mem_limit_mb: 1024 }),          // 0.9004 → 맞음
     row({ mem_peak_mb: 900, mem_limit_mb: 1000 }),          // 정확히 0.9 → 맞음(경계 — 이상)
-    row({ mem_peak_mb: 700, mem_limit_mb: null, cap_mb: 768 }),   // 0.911 → 맞음(상한으로)
-    row({ mem_peak_mb: 700, mem_limit_mb: null, cap_mb: null }),  // 기준 없음 → 안 셈
+    row({ mem_peak_mb: 700, mem_limit_mb: 768, cap_mb: 768 }),    // 0.911 → 맞음(크기를 바꾸기 전 판은 그때 한도로)
+    row({ mem_peak_mb: 700, mem_limit_mb: null, cap_mb: 768 }),   // 한도를 못 잰 판 → 표본 밖
   ]);
   assert.equal(s.memory.near_cap, 3);
+  assert.equal(s.memory.excluded, 1);
   assert.ok(Math.abs((s.memory.max_ratio ?? 0) - 700 / 768) < 1e-9);
 });
 t("A5 사유별 — 많은 순 · 같으면 이름순 · 성공은 빼고 · 라벨", () => {
@@ -191,6 +217,40 @@ t("A8 추천 — 표본 10 미만 null · 상한 최고×1.25(128 올림) · 예
   //  지금 매니지드 실측(530·657) 근처 — 상한 896(657×1.25=821.25 → 896), 통계에도 실린다
   const s = summarizeRuns([530, 657, 540, 560, 580, 600, 610, 620, 630, 640].map((p) => row({ mem_peak_mb: p })));
   assert.deepEqual([s.suggestion?.max_mb, s.suggestion?.request_mb], [896, 640]);
+});
+t("A10 끝 기록 없이 상한을 넘긴 판은 «끝 신호를 못 받음» 으로 센다 — 도는 중으로 남겨 실패율에서 빼지 않는다", () => {
+  const start = Date.parse("2026-10-16T03:00:00.000Z");
+  const r = row({ outcome: null, mem_peak_mb: null });
+  const fresh = summarizeRuns([r], { now: start + STALE_RUN_MS });         // 경계 — 정확히 그 나이는 아직 도는 중
+  assert.deepEqual([fresh.running, fresh.finished], [1, 0]);
+  const stale = summarizeRuns([r, row()], { now: start + STALE_RUN_MS + 1 });
+  assert.deepEqual([stale.running, stale.finished, stale.failed], [0, 2, 1]);
+  assert.deepEqual(stale.outcomes.map((o) => o.outcome), ["lost"]);
+  assert.equal(stale.daily[0].failed, 1);
+});
+t("A11 상한과 견줄 수 없는 메모리(호스트 전체)는 표본에서 뺀다", () => {
+  assert.equal(comparableMemory({ cap_mb: 1024, mem_limit_mb: 1024, mem_peak_mb: 600 }), true);
+  assert.equal(comparableMemory({ cap_mb: 1024, mem_limit_mb: 1126, mem_peak_mb: 600 }), true, "10% 안");
+  assert.equal(comparableMemory({ cap_mb: 1024, mem_limit_mb: 1127, mem_peak_mb: 600 }), false, "10% 밖");
+  assert.equal(comparableMemory({ cap_mb: 512, mem_limit_mb: 576, mem_peak_mb: 300 }), true, "작은 상한은 64MB 까지 봐 준다");
+  assert.equal(comparableMemory({ cap_mb: 1024, mem_limit_mb: 16000, mem_peak_mb: 9000 }), false);
+  assert.equal(comparableMemory({ cap_mb: null, mem_limit_mb: 900, mem_peak_mb: 600 }), true);
+  assert.equal(comparableMemory({ cap_mb: null, mem_limit_mb: 32000, mem_peak_mb: 600 }), false);
+  assert.equal(comparableMemory({ cap_mb: 1024, mem_limit_mb: null, mem_peak_mb: 600 }), false);
+  const s = summarizeRuns([row({ mem_peak_mb: 600 }), row({ mem_peak_mb: 9000, mem_limit_mb: 16000 })]);
+  assert.deepEqual([s.memory.samples, s.memory.excluded, s.memory.max_mb], [1, 1, 600]);
+  assert.equal(s.daily[0].peak_max_mb, 600, "날짜별 최고에도 안 들어간다");
+});
+t("A12 메모리 의심 실패가 있으면 추천 상한은 그 실패들이 돈 상한 × 1.25 아래로 가지 않는다", () => {
+  const ok10 = Array.from({ length: 10 }, () => row({ mem_peak_mb: 500 }));
+  const base = summarizeRuns(ok10);
+  assert.equal(base.suggestion?.max_mb, 640, "살아남은 판만 보면 640");
+  const s = summarizeRuns([...ok10, row({ outcome: "gone", mem_peak_mb: null, mem_limit_mb: null, cap_mb: 1024 }), row({ outcome: "oom", mem_peak_mb: null, cap_mb: 768 })]);
+  assert.equal(s.suggestion?.max_mb, 1280, "1024 × 1.25");
+  assert.match(s.suggestion?.rule ?? "", /메모리 의심 실패 2회/);
+  //  메모리와 무관한 실패는 바닥을 올리지 않는다
+  const t2 = summarizeRuns([...ok10, row({ outcome: "timeout", cap_mb: 2048 })]);
+  assert.equal(t2.suggestion?.max_mb, 640);
 });
 t("A9 메모리 의심 실패 = oom + gone", () => {
   const s = summarizeRuns([row({ outcome: "oom" }), row({ outcome: "gone" }), row({ outcome: "gone" }), row({ outcome: "timeout" })]);

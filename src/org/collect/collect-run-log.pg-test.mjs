@@ -26,8 +26,10 @@ const ADMIN = { userId: "__crl_pg_admin__", email: "", scopes: ["items", "contex
 const A = "__crl_pg_a__", B = "__crl_pg_b__";
 const update = runtimeConfigCapabilities.find((c) => c.name === "org_runtime_update");
 const stats = collectRunCapabilities.find((c) => c.name === "collect_claude_run_stats");
-if (!update || !stats) throw new Error("capability 를 못 찾았다(배선)");
-const save = (body) => update.handler(body, ADMIN, { source: "pg-test" });
+const policySet = collectRunCapabilities.find((c) => c.name === "collect_session_policy_set");
+if (!update || !stats || !policySet) throw new Error("capability 를 못 찾았다(배선)");
+const saveRuntime = (body) => update.handler(body, ADMIN, { source: "pg-test" });
+const setSize = (body) => policySet.handler(body, ADMIN, { source: "pg-test" });
 const rawPolicy = async (col) => (await itemsPool.query(`SELECT ${col} AS v FROM org_runtime_config WHERE id=1`)).rows[0]?.v ?? null;
 const runRow = async (id) => (await itemsPool.query(`SELECT * FROM collect_run WHERE run_id=$1`, [id])).rows[0];
 
@@ -41,62 +43,71 @@ const cleanup = async () => {
 await cleanup();
 
 try {
-  // ── 크기 정책 ──────────────────────────────────────────────────────────────
-  await save({ writeback_notice: null });   // 행을 만든다(빈 DB) — 크기 칸은 안 건드린 저장
+  // ── 크기 정책(«한 칸 전용 입구» — collect_session_policy_set · getCollectSessionPolicy) ─────────
+  await saveRuntime({ writeback_notice: null });   // 행을 만든다(빈 DB)
   await resetCollect();
   {
-    const c = (await rc.getRuntimeConfig()).collect_session_policy;
-    chk("R1 기본 1024/640 · 출처 default", c.max_mb === 1024 && c.request_mb === 640 && (await rc.getCollectSessionPolicySource()) === "default", JSON.stringify(c));
+    const c = await rc.getCollectSessionPolicy();
+    const v = await rc.getCollectSessionPolicyView();
+    chk("R1 기본 1024/640 · 출처 default · 되돌리면 1024/640", c.max_mb === 1024 && c.request_mb === 640 && v.source === "default"
+      && v.reset_to.max_mb === 1024 && v.reset_to.request_mb === 640, JSON.stringify(v));
   }
   {
-    const r = await save({ collect_session_policy: { max_mb: 1536 } });
-    const c = r.runtimeConfig.collect_session_policy;
+    const r = await setSize({ max_mb: 1536 });
     const raw = await rawPolicy("collect_session_policy");
-    chk("R2 상한만 저장 → 1536/640 · DB 에 그 값 · 출처 db", c.max_mb === 1536 && c.request_mb === 640 && raw?.max_mb === 1536 && (await rc.getCollectSessionPolicySource()) === "db",
-      JSON.stringify({ c, raw }));
+    chk("R2 상한만 저장 → 1536/640 · DB 에 그 값 · 출처 db", r.policy.max_mb === 1536 && r.policy.request_mb === 640 && raw?.max_mb === 1536 && r.policy.source === "db",
+      JSON.stringify({ p: r.policy, raw }));
   }
   {
-    const s1 = await statusOf(() => save({ collect_session_policy: { request_mb: 2000 } }));
+    const s1 = await statusOf(() => setSize({ request_mb: 2000 }));
     const raw = await rawPolicy("collect_session_policy");
     chk("P9 예약 > 상한 저장 → 400 · DB 그대로", s1 === 400 && raw?.max_mb === 1536 && raw?.request_mb === 640, `${s1} ${JSON.stringify(raw)}`);
   }
   {
     const codes = [];
-    for (const body of [{ max_mb: 255 }, { max_mb: 8193 }, { max_mb: "x" }, { max_mb: 1.5 }, { request_mb: 127 }]) codes.push(await statusOf(() => save({ collect_session_policy: body })));
-    codes.push(await statusOf(() => save({ collect_session_policy: [1] })));
-    codes.push(await statusOf(() => save({ collect_session_policy: "1024" })));
-    const okEdge = await statusOf(() => save({ collect_session_policy: { max_mb: 256, request_mb: 128 } }));
+    for (const body of [{ max_mb: 255 }, { max_mb: 8193 }, { max_mb: "x" }, { max_mb: 1.5 }, { request_mb: 127 }, {}, { reset: true, max_mb: 1024 }]) {
+      codes.push(await statusOf(() => setSize(body)));
+    }
+    const okEdge = await statusOf(() => setSize({ max_mb: 256, request_mb: 128 }));
     const raw = await rawPolicy("collect_session_policy");
-    chk("P10 범위 밖·숫자 아님·객체 아님 → 400 · 경계(256/128)는 저장", codes.every((c) => c === 400) && okEdge === 200 && raw?.max_mb === 256 && raw?.request_mb === 128,
+    chk("P10 범위 밖·숫자 아님·빈 요청·되돌리기+값 → 400 · 경계(256/128)는 저장", codes.every((c) => c === 400) && okEdge === 200 && raw?.max_mb === 256 && raw?.request_mb === 128,
       `${codes} ${okEdge} ${JSON.stringify(raw)}`);
-    await save({ collect_session_policy: { max_mb: 1536, request_mb: 640 } });
+    await setSize({ max_mb: 1536, request_mb: 640 });
   }
   {
-    await save({ session_memory_policy: { per_session_max_mb: 1536 } });
-    const c = (await rc.getRuntimeConfig()).collect_session_policy;
+    await saveRuntime({ session_memory_policy: { per_session_max_mb: 1536 } });
+    const c = await rc.getCollectSessionPolicy();
     chk("R3 일반 세션 메모리 저장은 수집 크기를 안 건드린다", c.max_mb === 1536 && c.request_mb === 640, JSON.stringify(c));
   }
   {
     await resetCollect();
-    await save({ writeback_notice: null });
+    await saveRuntime({ writeback_notice: null });
     const raw = await rawPolicy("collect_session_policy");
-    chk("R4 크기를 안 건드린 저장 → 그 칸은 비어 있는 그대로(기본값이 DB 로 굳지 않는다)", raw && Object.keys(raw).length === 0, JSON.stringify(raw));
+    const cfg = await rc.getRuntimeConfig();
+    chk("R4 다른 런타임 설정 저장은 이 칸을 그대로 둔다 · 큰 설정 읽기에 이 칸이 섞이지 않는다", raw && Object.keys(raw).length === 0 && !("collect_session_policy" in cfg),
+      JSON.stringify(raw));
   }
   {
-    await save({ collect_session_policy: { max_mb: 1536, request_mb: 700 } });
-    const r = await save({ collect_session_policy: null });
+    await setSize({ max_mb: 1536, request_mb: 700 });
+    const r = await setSize({ reset: true });
     const raw = await rawPolicy("collect_session_policy");
-    const c = r.runtimeConfig.collect_session_policy;
-    chk("R6 null 저장 = 기본값으로 되돌리기 — 저장값을 비우고 1024/640 · 출처 default", raw && Object.keys(raw).length === 0 && c.max_mb === 1024 && c.request_mb === 640
-      && (await rc.getCollectSessionPolicySource()) === "default", JSON.stringify({ raw, c }));
+    chk("R6 되돌리기 — 저장값을 비우고 1024/640 · 출처 default", raw && Object.keys(raw).length === 0 && r.policy.max_mb === 1024 && r.policy.request_mb === 640
+      && r.policy.source === "default", JSON.stringify({ raw, p: r.policy }));
   }
   {
     //  P11 의 서버 쪽 반 — 세션 생성이 읽는 그 함수가 저장 직후 새 값을 낸다(브로커 인자는 매니지드 실측으로 본다)
-    const load = () => rc.getRuntimeConfig().then((c) => c.collect_session_policy);
-    const a = await effectiveCollectSessionPolicy(load);
-    await save({ collect_session_policy: { max_mb: 2048, request_mb: 700 } });
-    const b = await effectiveCollectSessionPolicy(load);
+    const a = await effectiveCollectSessionPolicy(rc.getCollectSessionPolicy);
+    await setSize({ max_mb: 2048, request_mb: 700 });
+    const b = await effectiveCollectSessionPolicy(rc.getCollectSessionPolicy);
     chk("R5 저장 즉시 다음 수집 세션이 새 크기를 본다(캐시 무효화)", a.max_mb === 1024 && b.max_mb === 2048 && b.request_mb === 700, JSON.stringify({ a, b }));
+  }
+  {
+    const count = async () => Number((await itemsPool.query(`SELECT count(*)::int AS n FROM org_content_audit WHERE entity='org_runtime_config' AND op='collect_session_policy'`)).rows[0]?.n ?? 0);
+    const n0 = await count();
+    await setSize({ max_mb: 2048, request_mb: 704 });
+    await setSize({ max_mb: 2048, request_mb: 700 });
+    const n1 = await count();
+    chk("R7 크기 저장은 저장마다 감사에 남는다", n1 - n0 === 2, `${n0} → ${n1}`);
   }
 
   // ── 실행 기록 ──────────────────────────────────────────────────────────────
@@ -164,6 +175,34 @@ try {
     await log.recordRunStart({ runId: id(5), member: B, apps: [], model: "haiku", capMb: 1024, requestMb: 640, startedAt: startedOf(5), now: now + 2 * 3600_000 });
     const gone = await runRow(old), kept = await runRow(keep);
     chk("D7 90일 지난 행은 지운다(89일은 남긴다)", !gone && !!kept, JSON.stringify({ gone: !!gone, kept: !!kept }));
+  }
+  {
+    //  cgroup v1 의 «무제한»(9223372036854771712) · 거대한 시간 — 지표는 비워도 끝(결과)은 남는다
+    const r8 = id(8);
+    const weird = { ...okSum, mem: { cgroupMax: "9223372036854771712", cgroupPeakMb: 500, container: null } };
+    const res = await log.recordRunEnd({ runId: r8, member: B, exit: { ...okExit, durationMs: 9_000_000_000_000 }, summary: weird, by: "runner", startedAt: startedOf(8) });
+    const row = await runRow(r8);
+    chk("D8 INT 칸을 넘는 지표가 와도 끝은 남는다(그 지표만 비운다)", res?.outcome === "ok" && row?.outcome === "ok" && row.mem_limit_mb === null && row.duration_ms === "15000",
+      JSON.stringify({ res, lim: row?.mem_limit_mb, dur: row?.duration_ms }));
+  }
+  {
+    //  끝 기록이 먼저 행을 만들고(크기 실음) 시작 기록이 늦게 와도 — 끝이 적은 결과는 그대로, 빈 칸(모델)만 채운다
+    const r9 = id(9);
+    await log.recordRunEnd({ runId: r9, member: B, exit: okExit, summary: okSum, by: "runner", startedAt: startedOf(9), capMb: 1024, requestMb: 640 });
+    await log.recordRunStart({ runId: r9, member: B, apps: ["Slack"], model: "haiku", capMb: 2048, requestMb: 900, startedAt: startedOf(9) });
+    const row = await runRow(r9);
+    chk("D9 끝 뒤에 온 시작 기록 — 결과·크기는 끝 것 그대로 · 모델만 채운다", row.outcome === "ok" && row.cap_mb === 1024 && row.request_mb === 640 && row.model === "haiku",
+      JSON.stringify({ o: row.outcome, cap: row.cap_mb, req: row.request_mb, model: row.model }));
+  }
+  {
+    //  끝 기록 없이 상한(1시간 + 3분)을 넘긴 판 — 지표가 «끝 신호를 못 받음» 으로 센다(도는 중으로 남아 실패율에서 빠지지 않게)
+    const stale = "cr-" + new Date(now - 2 * 3600_000).toISOString().replace(/[-:T]/g, "").slice(0, 14) + "-pgtstl";
+    await log.recordRunStart({ runId: stale, member: B, apps: ["Slack"], model: "haiku", capMb: 1024, requestMb: 640, startedAt: new Date(now - 2 * 3600_000) });
+    const v = await stats.handler({ days: 1, tz: "Asia/Seoul", recent: 200 }, ADMIN);
+    const lost = v.stats.outcomes.find((o) => o.outcome === "lost")?.count ?? 0;
+    const fresh = v.recent.find((x) => x.run_id === id(5));   // 방금 시작만 적은 판 — 아직 도는 중
+    chk("D10 오래된 «도는 중» 은 끝 신호 못 받음으로 센다 · 방금 시작한 판은 도는 중", lost >= 1 && v.stats.running >= 1 && fresh && fresh.outcome === null,
+      JSON.stringify({ lost, running: v.stats.running }));
   }
   {
     const v = await stats.handler({ days: 1, tz: "Asia/Seoul", recent: 200 }, ADMIN);

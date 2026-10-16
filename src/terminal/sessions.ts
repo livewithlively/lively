@@ -16,7 +16,7 @@ import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { listMembers } from "../org/store/members.js";
-import { getRuntimeConfig } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
+import { getRuntimeConfig, getCollectSessionPolicy } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
 import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
@@ -925,7 +925,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  #4213 T11 — 수집 실행은 일반 세션 정책 대신 **수집 세션 크기 정책**을 쓴다(기본 상한 1,024 · 예약 640, 관리 화면에서 바꾼다).
     //   한 사람의 대화 세션과 나눠 쓰지 않으려고 따로 띄우는 자리라, 크기도 따로 정한다. 조회가 실패해도 던지지 않는다(캐시 → 기본값).
     if (input.kind === "collect") {
-      const lim = await effectiveCollectSessionPolicy(() => getRuntimeConfig().then((c) => c.collect_session_policy));
+      const lim = await effectiveCollectSessionPolicy(getCollectSessionPolicy);
       cg = { highMb: 0, maxMb: lim.max_mb, requestMb: lim.request_mb };
     }
     if (inside) {

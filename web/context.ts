@@ -126,7 +126,8 @@ async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<vo
  *  화면에서 개발자용 입구를 상시 카드로 세우지 않는다). */
 async function sourcesScreen(b: HTMLElement): Promise<void> {
   //  #4213 T11 — 맨 위 한 줄: Claude 커넥터 수집의 최근 7일(관리자만 — 아니면 빈 자리). 누르면 지표·크기 화면.
-  await stack(b, [(h) => claudeRunsEntry(h), (h) => renderCollectors(h)]);
+  //   기다리지 않는다 — 통계 읽기가 수집기 목록을 늦추지 않게(그 줄은 다 읽히면 제자리에 선다).
+  await stack(b, [(h) => { void claudeRunsEntry(h); }, (h) => renderCollectors(h)]);
 }
 
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */
