@@ -191,7 +191,10 @@ export async function setAppEditPolicy(id: string, mode: AppEditMode, members: s
   return after;
 }
 
-/** 앱 행 + 조인(component·grant)을 CASCADE 로 제거. 대상 행(harness_asset 등) 회수는 호출부가 component 를 읽어 먼저 수행. */
+/**
+ * 앱 행 + 조인(component·grant)을 CASCADE 로 제거. 대상 행(harness_asset 등) 회수는 호출부가 component 를 읽어 먼저 수행.
+ *  ⚠ 직접 부르지 말고 apps/remove-run.removeInstalledApp 을 부른다 — 데이터 떠 두기 · 보관 표 · 앱 폴더 보관(#4778)이 거기 한 벌로 있다.
+ */
 export async function deleteApp(id: string, ctx: WriteCtx = {}, client?: pg.PoolClient): Promise<void> {
   const exec: Q = client ?? itemsPool;
   const before = await getApp(id, client);
@@ -518,17 +521,25 @@ export async function reserveDraftApp(
   return true;
 }
 
-/** 예약만 하고 첫 판을 못 채운 앱 행을 거둔다(그 호출 안에서 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다. */
-export async function dropEmptyDraftApp(appId: string): Promise<void> {
-  await itemsPool.query(`DELETE FROM org_app WHERE id=$1 AND content_hash IS NULL AND current_version_no IS NULL`, [appId]);
+/**
+ * 예약만 하고 첫 판을 못 채운 앱 행을 거둔다(그 호출 안에서 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다. 거뒀으면 true.
+ *  ⚠ 앱 행을 지우는 입구다 — 앱 폴더도 같이 옮겨야 하므로 직접 부르지 말고 apps/remove-run.dropEmptyDraft 를 부른다(#4778).
+ */
+export async function dropEmptyDraftApp(appId: string): Promise<boolean> {
+  const r = await itemsPool.query(`DELETE FROM org_app WHERE id=$1 AND content_hash IS NULL AND current_version_no IS NULL`, [appId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
-/** 그만둔 만들기가 남긴 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 새로 「만들기 시작」 할 때. 거둔 수. */
-export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<number> {
+/**
+ * 그만둔 만들기가 남긴 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 새로 「만들기 시작」 할 때. 거둔 앱 id.
+ *  ⚠ 앱 행을 지우는 입구다 — 직접 부르지 말고 apps/remove-run.dropStaleDrafts 를 부른다(#4778 — 앱 폴더도 같이 옮긴다).
+ */
+export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<string[]> {
   const r = await itemsPool.query(
     `DELETE FROM org_app WHERE owner_member=$1 AND visibility='me' AND content_hash IS NULL AND current_version_no IS NULL
-        AND installed_at < now() - make_interval(days => $2::int)`, [owner, days]);
-  return r.rowCount ?? 0;
+        AND installed_at < now() - make_interval(days => $2::int)
+     RETURNING id`, [owner, days]);
+  return r.rows.map((x) => String(x.id));
 }
 
 /** 이 세션이 만드는 앱들(최근 것 먼저) — 세션 → 앱 역조회. 판정(볼 수 있나)은 호출부. */

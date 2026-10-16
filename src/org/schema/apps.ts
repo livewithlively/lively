@@ -450,6 +450,27 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_snapshot_taken_idx ON org_app_snapshot(taken_at);`);
 
+  // ── org_app_folder_archive — 보관으로 옮긴 앱 폴더(#4778) ──
+  //  앱을 지우면 그 앱 폴더(<apps 자리>/<앱>/)를 apps 자리 안의 점 이름(name)으로 옮긴다 — 같은 id 로 새로 만든 앱은 빈 앱 폴더로 시작한다.
+  //  보관 하나 = 행 하나(언제 · 누가 · 어느 입구 · 크기 · 파일 수). 정비는 이 표만 보고 기간이 지난 보관이 있을 때만 파일을 만진다.
+  //  파일 쪽이 진짜다 — 목록이 파일을 훑어 행 없는 보관은 채우고 파일 없는 행은 «사라짐» 으로 보인다(apps/app-folder-archive.ts).
+  //  v2.1 K 규칙대로 org_app 에 FK 를 걸지 않는다 — 앱이 지워진 뒤에 남는 기록이다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_folder_archive(
+      name TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      archived_by TEXT,
+      entry TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'dir',
+      files BIGINT,
+      bytes BIGINT,
+      truncated BOOLEAN NOT NULL DEFAULT false,
+      PRIMARY KEY (name)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_folder_archive_at_idx ON org_app_folder_archive(archived_at);`);
+
   // ── org_app_member_pref — 앱 × 보는 사람의 개인 설정(#4601) ──
   //  앱 화면은 불투명 오리진이라 localStorage 가 막히고(#4593 실측), SDK 에 보는 사람 신원이 없어 앱 표에 둘 수도 없다. 그래서
   //  (앱, 구성원) 키의 작은 JSON 한 칸을 서버가 든다(apps/app-prefs.ts 머리말 — 16KB 상한). PK(app_id, member_id) — 사람마다 한 행,

@@ -230,9 +230,10 @@ const ADMIN_SECTIONS = [
   { key: 'storage', label: '컴퓨팅 리소스', meaning: null, group: 'ops' },
   // #1059 — 로그(회전·보관)는 별도 메뉴. 컴퓨팅 리소스(메모리·저장소)와 성격이 달라 분리(사용자 피드백).
   { key: 'logs', label: '로그', meaning: null, group: 'ops' },
-  // #4733 앱 보관 표 — 앱이 표를 빼거나 칸을 지울 때 데이터를 잃지 않으려고 옮겨 둔 표. 워크스페이스 표 개수 한도에 세어지는데
-  //  앱을 고쳐서는 줄지 않아 관리자가 보고 비운다(지우기 직전 백업 7일). 서버 scope 가 admin 이라 ADMIN_ONLY.
-  { key: 'app-archives', label: '앱 보관 표', meaning: null, group: 'ops' },
+  // #4733 앱 보관 — 앱이 표를 빼거나 칸을 지울 때 데이터를 잃지 않으려고 옮겨 둔 표. 워크스페이스 표 개수 한도에 세어지는데
+  //  앱을 고쳐서는 줄지 않아 관리자가 보고 비운다(지우기 직전 백업 7일). #4778 앱을 지울 때 옮겨 둔 앱 폴더 · 앱 없는 앱 폴더도 여기서
+  //  보고 비우거나 되돌린다. 서버 scope 가 admin 이라 ADMIN_ONLY.
+  { key: 'app-archives', label: '앱 보관', meaning: null, group: 'ops' },
   // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
   { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
   // 컴퓨터(노드) — 조직에 연결된 컴퓨터 **전체**와 공유 지정(#1540). 개인이 자기 컴퓨터를 관리하는 화면은

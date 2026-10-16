@@ -1,7 +1,9 @@
 // 앱 제거 실행 — 전개물 회수 + 레지스트리 삭제.
-//  제거 verb(capabilities/apps.ts org_app_remove)와 빌트인 시더의 은퇴 앱 회수(seed.ts)가 쓰는 **공용 코어**다.
+//  제거 verb(capabilities/apps.ts org_app_remove · app_draft_remove)와 빌트인 시더의 은퇴 앱 회수(seed.ts)가 쓰는 **공용 코어**다.
 //   두 경로가 같은 순서로 지워야 한 곳에서만 잔재가 남는 일이 없다(설치의 install-run.ts 와 같은 이유).
 //  ⚠ 호출부가 앱 설치 락(withAppInstallLock)을 잡고 부른다. «이 앱을 지워도 되나»(builtin 차단 등)도 호출부의 몫이다.
+//  #4778 앱 행을 지우는 입구는 **이 파일에만** 있다 — 제거(removeInstalledApp) · 빈 예약 거두기(dropEmptyDraft · dropStaleDrafts).
+//   셋 다 그 앱 폴더를 보관으로 옮긴다(apps/app-folder-archive.ts). store 의 지우기 함수를 다른 곳에서 부르지 않는다(시험이 잰다).
 import * as store from "../org/store/apps.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import { makeDeployDeps } from "./deploy.js";
@@ -15,6 +17,31 @@ import { snapshotAppData } from "./app-snapshot.js";
 import { logger } from "../log.js";
 import { liveTableNames } from "./app-view.js";
 import { removeAppArchives, type ClearArchivesOutcome } from "./app-archive.js";
+import { archiveAppFolder, type AppFolderArchiveEntry } from "./app-folder-archive.js";
+
+/** 앱 폴더 보관(#4778)의 결과 — 응답에 그대로 싣는다(못 옮겼으면 그 까닭 · 앱 폴더가 없었으면 archived=null). */
+export interface AppFolderOutcome {
+  /** 보관 이름(app_folder_archives 의 name) — 앱 폴더가 없었으면 null */
+  archived: string | null;
+  files?: number | null;
+  bytes?: number | null;
+  /** 옮기지 못한 까닭 — 앱 폴더는 그 자리에 남는다(같은 id 로 새로 만들 때 다시 옮긴다 · 관리자 목록에 고아로 보인다) */
+  error?: string;
+}
+
+/** 앱 폴더를 보관으로 — 실패는 던지지 않고 까닭으로 돌려준다(지우기는 명시로 요청한 것이라 막지 않는다). */
+async function archiveFolderOf(appId: string, by: string | null, entry: AppFolderArchiveEntry): Promise<AppFolderOutcome> {
+  try {
+    const r = await archiveAppFolder(appId, { by, entry });
+    return r.archived ? { archived: r.archived.name, files: r.archived.files, bytes: r.archived.bytes } : { archived: null };
+  } catch (err) {
+    logger.warn({ err, id: appId, entry }, "[app-folder] 지우는 앱의 앱 폴더를 보관으로 옮기지 못했다 — 그 자리에 둔다");
+    return { archived: null, error: (err as Error)?.message ?? String(err) };
+  }
+}
+
+/** 어느 입구의 제거인가 — 앱 폴더 보관 기록에 남는다. */
+export type RemoveEntry = Extract<AppFolderArchiveEntry, "remove" | "discard" | "retire">;
 
 export interface RemoveAppOutcome {
   components: number;
@@ -25,13 +52,15 @@ export interface RemoveAppOutcome {
   snapshot_error?: string;
   /** #4733 그 앱의 보관 표 — 지운 것(백업 묶음은 위 snapshot 과 같은 시각) · 못 지워 남긴 것과 까닭. 기본 앱은 없음(공유 보관 자리). */
   archives?: Pick<ClearArchivesOutcome, "taken_at" | "cleared" | "kept"> & { error?: string };
+  /** #4778 그 앱의 앱 폴더 — 보관으로 옮긴 이름(보관 기간 뒤 정비가 지운다 · 관리자는 같은 id 로 다시 만든 앱에 되돌릴 수 있다). */
+  app_folder: AppFolderOutcome;
 }
 
 /**
  * 전개된 대상(하네스 자산·크론·툴·호스트 병합)은 CASCADE 밖(별도 스토어)이라 **먼저 reclaim** 한 뒤 앱 행을 지운다
  * (조인 component/grant 는 deleteApp 이 CASCADE).
  */
-export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typeof store.getApp>>>, ctx: WriteCtx): Promise<RemoveAppOutcome> {
+export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typeof store.getApp>>>, ctx: WriteCtx, entry: RemoveEntry): Promise<RemoveAppOutcome> {
   const id = app.id;
   await stopWorkersForApp(id, "app_removed");
   //  #4484 앱 서버 — 함수 · 로그 그룹 · zip · 기록을 걷는다(best-effort · 앱이 없으면 함수만 남아 돈을 쓰고 이름을 막는다).
@@ -71,6 +100,10 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
         return { taken_at: null, cleared: [], kept: [], error: (err as Error)?.message ?? String(err) };
       });
   }
+  //  #4778 앱 폴더(<apps 자리>/<앱>/)도 — 보관으로 옮긴다(같은 id 로 새로 만든 앱은 빈 앱 폴더로 시작한다). 기본 앱의 앱 폴더도 워크스페이스마다
+  //   따로라 똑같이 옮긴다(보관 표와 다르다). 못 옮겨도 제거는 계속한다 — 그 폴더는 같은 id 로 새로 만들 때 다시 옮긴다(app-folder-archive 머리말).
+  //   세션에 붙어 있던 앱이면 그 세션은 옮긴 폴더를 잠시 더 본다(붙이기는 폴더 자체를 잡는다) — 떼기는 세션 붙이기 쪽(#4684)이 한다.
+  const appFolder = await archiveFolderOf(id, ctx.actor ?? null, entry);
   await pruneAppInstances(id);             // FK 없는 v2.1 신규 표 — 앱 제거 전에 명시 회수.
   const wasAttached = await pruneSessionApps(id);   // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
   await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
@@ -83,5 +116,23 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
     ...(snap && !snap.taken_at ? { snapshot_skipped: snap.skipped ?? null } : {}),
     ...(snapError ? { snapshot_error: snapError } : {}),
     ...(archives ? { archives } : {}),
+    app_folder: appFolder,
   };
+}
+
+/**
+ * 빈 예약 하나를 거둔다(그 호출 안에서 첫 판 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다(store.dropEmptyDraftApp).
+ *  #4778 앱 행을 지우는 입구라 앱 폴더도 같은 규칙으로 옮긴다(빈 예약엔 보통 폴더가 없다 — 있으면 옮긴다). 거뒀으면 true.
+ */
+export async function dropEmptyDraft(appId: string, by: string | null): Promise<boolean> {
+  const dropped = await store.dropEmptyDraftApp(appId);
+  if (dropped) await archiveFolderOf(appId, by, "draft-drop");
+  return dropped;
+}
+
+/** 그만둔 만들기의 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 거둔 앱마다 앱 폴더도 같은 규칙. 거둔 앱 id. */
+export async function dropStaleDrafts(owner: string, days?: number): Promise<string[]> {
+  const ids = await store.dropStaleEmptyDrafts(owner, days);
+  for (const id of ids) await archiveFolderOf(id, owner, "draft-drop");
+  return ids;
 }

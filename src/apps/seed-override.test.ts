@@ -26,7 +26,7 @@ function fake(existing: OrgApp | null): SeedDeps & { calls: string[] } {
     persistUiAssets: async () => { calls.push("persistUi"); },
     persistRuntimeAsset: async () => { calls.push("persistRuntime"); },
     withAppInstallLock: async (_id, fn) => fn(),
-    removeInstalledApp: async () => { calls.push("remove"); return { components: 0, snapshot: null }; },
+    removeInstalledApp: async () => { calls.push("remove"); return { components: 0, snapshot: null, app_folder: { archived: null } }; },
   } as SeedDeps & { calls: string[] };
 }
 
