@@ -1056,8 +1056,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   하네스 기동이 느린 날은 15~20초도 걸렸다(매니지드 실측 2026-10-16) — 상한이 짧으면 그날 종전의 빈 터미널이 그대로 돌아온다.
   //   막힌 경우는 따로 빨리 드러난다 — 세션이 없어지면 액자가 알려 대화창으로(#3847) · 끝남(status end)은 곧바로 터미널 · 연결 오류는 머리줄 칩.
   //   ⚠ 사람이나 다른 갈래가 화면을 정하면(setMode) 숨겨 붙이던 판은 거기서 끝난다 — 신호가 와도 화면을 뺏지 않는다.
+  //  ★ 넘기는 때는 «그렸다» 하나가 아니라 **«그렸다» + «보낸 말이 실제로 들어갔다»** 다(상민님 2026-10-16: «프롬프트가 실제로
+  //   전송된 시점에 전환하는 게 좋지 않을지»). 그린 순간 넘기면 그때 서버(아웃박스)는 아직 그 말을 입력창에 치는 중이다(매니지드 실측:
+  //   첫 그림 뒤 3~4초에 들어갔다) — 사람이 그 사이 터미널에 치면 두 글이 섞이고, 말이 끝내 안 들어간 판에선 빈 입력칸만 보고 모른다.
+  //   «들어갔다» = 대화 기록에 그 말이 나타났다(대기 말풍선의 에코 — 아래 pending 매칭). 그린 뒤 기다리는 동안은 0.7초마다 읽는다(schedule).
+  //   그린 뒤 WARM_DELIVERY_GRACE_MS 안에 안 들어가면 그때 넘긴다 — 로그인·신뢰·경고 창처럼 입력을 못 받는 화면은 터미널에서 봐야 한다.
+  //   ⚠ 에코를 볼 수 있는 곳은 박스 대화 파일뿐이다 — 중앙 기록(노드 세션)은 턴이 끝나야 자라고(#1744), 지켜보는 곳이 없으면(src 없음)
+  //    아무도 안 읽는다. 둘 다 기다리면 유예를 통째로 쓴다. 빗금 명령(/compact)·셸 모드(!ls)도 기다리지 않는다 — 기록엔 다른 모양
+  //    (<command-name> 등)으로 적혀 대기 말풍선과 안 맞는다.
   const TERM_WARM_MAX_MS = 25_000;
-  let termWarm: { timer: number; ro: ResizeObserver | null } | null = null;
+  const WARM_DELIVERY_GRACE_MS = 8_000;
+  let termWarm: { timer: number; ro: ResizeObserver | null; painted: boolean; grace: number } | null = null;
+  //  말을 보내 연 화면의 그 말(대기 말풍선) — 기록에 나타나면(에코) 들어간 것이다. 기록을 아직 읽는 중이면(opening) 말풍선 전이라 firstPrompt 로 본다.
+  let warmPrompt: Pending | null = null;
   //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
   let warmOwed = false;
   /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
@@ -1096,7 +1107,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     warmOwed = false;
     let ro: ResizeObserver | null = null;
     try { ro = new ResizeObserver(placeWarmTerm); ro.observe(chatHost); } catch { ro = null; }
-    termWarm = { timer: window.setTimeout(() => endTermWarm(true), TERM_WARM_MAX_MS), ro };
+    termWarm = { timer: window.setTimeout(() => endTermWarm(true), TERM_WARM_MAX_MS), ro, painted: false, grace: 0 };
     wrap.classList.add('sc-term-warm');
     //  숨은 액자로 클릭·Tab 이 들어가지 않게(inert). ⚠ 액자 스스로 거는 초점(붙자마자 term.focus — terminal.ts onopen)은 inert 로
     //   못 막는다(실측 2026-10-16 Chromium 151) — 액자가 이 표식·visibility 를 읽고 참는다(terminal.ts frameHiddenNow).
@@ -1110,12 +1121,34 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const a = document.activeElement;
     if (!a || a === document.body || wrap.contains(a)) termSend('focus');
   }
-  /** #4794 숨겨 붙이던 판을 끝낸다. show = 터미널로 넘길 때가 됐다(하네스가 그렸다 · 상한 · 액자가 끝났다고 함). */
+  /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 대기 말풍선이 에코를 기다리는 중이거나, 기록을 아직 읽는 중이라 말풍선을 그리기 전이다.
+   *  ⚠ 기록 읽기가 끝났는데도 firstPrompt 가 남는 판(못 읽는 하네스 · 그때 세션이 아직 안 떠 있었음)은 기다릴 근거가 없다 — opening 으로 가른다. */
+  function deliveryPending(): boolean {
+    const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
+    if (opening && firstPrompt) return echoable(firstPrompt);
+    return !!warmPrompt && pending.includes(warmPrompt) && echoable(warmPrompt.text) && src?.kind === 'box';
+  }
+  /** #4794 액자가 «처음 그렸다» 를 알렸다 — 보낸 말도 들어갔으면 넘기고, 아니면 들어갈 때까지(최대 WARM_DELIVERY_GRACE_MS) 기다린다. */
+  function onWarmPainted(): void {
+    const w = termWarm;
+    if (!w || w.painted) return;
+    w.painted = true;
+    if (!deliveryPending()) { endTermWarm(true); return; }
+    w.grace = window.setTimeout(() => endTermWarm(true), WARM_DELIVERY_GRACE_MS);
+    pokePoll();   // 지금 한 번 읽고, 그 뒤로는 촘촘히(schedule) — 걸려 있던 주기가 3초일 수 있다
+  }
+  /** #4794 하네스가 이미 그렸고 보낸 말도 들어갔으면 이제 넘긴다 — 읽기(poll)가 끝날 때마다 · 기록 열기(open)가 끝났을 때 다시 본다
+   *  (에코 · 지켜보는 곳이 바뀜 · 대기 말을 지움 — 무엇이 «들어갔나» 를 바꿨든). 안 그렸으면 그린 때 넘긴다. */
+  function warmSwitchIfDelivered(): void {
+    if (termWarm && termWarm.painted && !deliveryPending()) endTermWarm(true);
+  }
+  /** #4794 숨겨 붙이던 판을 끝낸다. show = 터미널로 넘길 때가 됐다(그렸고 보낸 말이 들어갔다 · 그린 뒤 유예 · 상한 · 액자가 끝났다고 함). */
   function endTermWarm(show: boolean): void {
     const w = termWarm;
     if (!w) return;
     termWarm = null;
     clearTimeout(w.timer);
+    clearTimeout(w.grace);
     w.ro?.disconnect();
     wrap.classList.remove('sc-term-warm');
     termHost.toggleAttribute('inert', false);
@@ -1328,7 +1361,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     //  #4794 — 숨겨 붙여 둔 액자가 «하네스가 처음 그렸다» 를 알렸다 → 이제 터미널로 넘긴다(termWarm 머리말).
-    if (m && m.type === 'lively-term-painted') { if (termWarm && String(m.id || '') === target.id) endTermWarm(true); return; }
+    if (m && m.type === 'lively-term-painted') { if (termWarm && String(m.id || '') === target.id) onWarmPainted(); return; }
     //  폰 — 터미널의 글 상자에 쓰는 중이면 아래 탭 바를 걷는다(50-mobile.css .sc-kb). 이 화면이 사라지면 표시도 같이 사라진다.
     if (m && m.type === 'lively-term-composer') { wrap.classList.toggle('sc-kb', !!m.focus); return; }
     if (!m || m.type !== 'lively-term-status') return;
@@ -1990,7 +2023,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let opening = false;
   async function open(): Promise<void> {
     if (opening) return; opening = true;
-    try { await openInner(); } finally { opening = false; }
+    //  #4794 — 읽는 동안 하네스가 그렸으면 «들어갔나» 를 미뤄 뒀다(deliveryPending) — 다 읽었으니 다시 본다.
+    try { await openInner(); } finally { opening = false; warmSwitchIfDelivered(); }
   }
   async function openInner(): Promise<void> {
     view.setNote('');
@@ -2034,6 +2068,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 홈 입력창이 방금 연 세션 — 첫 지시는 서버(또는 노드)가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
       if (notYet && firstPrompt && canType()) {
         const pd = addPending(firstPrompt); firstPrompt = null;   // 박스면 서버 큐가 obId 를 붙인다(syncOutbox); 노드면 큐 없이 로컬 주입
+        warmPrompt = pd;                                           // #4794 — 이 말이 들어가야 터미널로 넘긴다(termWarm 머리말)
         if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';
         view.scrollToBottom();
         view.setNote('세션을 여는 중이에요 — AI 가 뜨면 첫 지시가 들어갑니다.');
@@ -2089,7 +2124,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   기록의 마지막 사람 말이 이미 그것이면(그새 들어갔다) 그리지 않는다. 나중에 기록에 나타나면 이 턴을 그대로 쓴다(pendingSent 규약).
     if (firstPrompt && canType()) {
       const lastAsk = [...recs].reverse().find((r) => r.t.text);
-      if (!lastAsk || !sameSaid(String(lastAsk.t.text), firstPrompt)) addPending(firstPrompt).state.textContent = QSTATE_TEXT.queued;
+      if (!lastAsk || !sameSaid(String(lastAsk.t.text), firstPrompt)) {
+        const pd = addPending(firstPrompt);
+        pd.state.textContent = QSTATE_TEXT.queued;
+        warmPrompt = pd;                                           // #4794 — 이 말이 들어가야 터미널로 넘긴다(termWarm 머리말)
+      }
       firstPrompt = null;
     }
     view.scrollToBottom();
@@ -2294,6 +2333,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   통보가 오면 그 자리에서 pokePoll 이 읽으므로 체감은 오히려 빨라진다. 안 늦추고 통보만 더하면
     //   왕복이 늘 뿐이고, 통보 없이 늦추기만 하면 대화가 느려진다 — 둘은 같이 가야 뜻이 있다.
     if (watchLive && src.kind === 'box') ms = Math.max(ms, POLL_SAFETY_MS);
+    //  #4794 — 하네스가 그렸고 보낸 말이 «들어갔나»(에코)만 남았으면 촘촘히 읽는다 — 터미널로 넘기는 때가 이 읽기에 걸려 있다.
+    //   되살린 세션은 기록의 마지막 줄이 오래돼 «도는 중» 이 첫 폴에서 접히고(poll 의 120초 유예) 3초 주기로 물러나며,
+    //   통보(watchLive)는 새 컨테이너의 감시자가 서기 전엔 안 온다. 길어야 유예(8초)라 위 두 절감의 범위 밖이다.
+    if (termWarm?.painted && deliveryPending() && src.kind === 'box') ms = Math.min(ms, POLL_RUN_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
@@ -2319,10 +2362,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
+    if (opening) { schedule(); return; }      // 기록을 다시 여는 중 — 그 읽기가 그린다(겹쳐 읽으면 같은 줄이 두 번 선다, 아래 ★)
+    const src0 = src, from0 = loadedTo;
     try {
       let c = await rawGet(srcPath(src, { from: loadedTo }));
       fails = 0;
       if (destroyed) return;
+      //  ★ 겹친 읽기는 버린다(#4794 시험 W26 이 드러냄). 깨운 읽기(pokePoll — 통보 · 하네스가 그린 순간)는 도는 읽기를 기다리지 않아
+      //   같은 자리부터 두 번 읽을 수 있고, 둘 다 그리면 같은 줄이 두 번 선다(보낸 말이 두 번 보였다). 이 읽기가 도는 사이 다른 읽기가
+      //   그 자리를 이미 그렸으면(오프셋·지켜보는 곳이 움직였다) 이 답은 낡았다. 다만 이 답에 **더 새 줄**이 실려 있었을 수 있다 —
+      //   버리되 곧 다시 읽는다(통보가 살아 있으면 다음 주기는 30초 뒤다). 지켜보는 곳까지 보는 이유: 갈아탄 뒤 옛 곳의 답을 새 곳에 그리면
+      //   새 곳의 첫 읽기가 엉뚱한 오프셋에서 시작한다.
+      if (src !== src0 || loadedTo !== from0) { pokePoll(); return; }
       if (src.kind === 'box' && c.uuid && curUuid && c.uuid !== curUuid) {
         // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
         //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
@@ -2330,6 +2381,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ctx = ctxNew(); view.idle(null);   // #4707 — 새 기록(압축·/clear)은 문맥을 새로 센다. 지난 파일의 «쉬는 동안의 안내» 는 걷는다.
         c = await rawGet(srcPath(src, { from: 0 }));
         if (destroyed) return;
+        if (src !== src0 || loadedTo !== 0) { pokePoll(); return; }   // 그새 다른 읽기가 새 파일을 그렸다 — 위 ★ 와 같다
       } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
         clearAll(); await open(); return;
       }
@@ -2368,6 +2420,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       else if (st === 409 && src.kind === 'box' && e?.message) { src = null; return; }   // 못 읽는 하네스 — 더 안 묻는다(#1746)
       else if (fails === 3) view.setNote('진행을 따라가지 못하고 있어요 — 다시 붙는 중…');
     }
+    warmSwitchIfDelivered();   // #4794 — 이 읽기로 «들어갔나» 가 바뀌었을 수 있다. 화면을 먼저 정해야 아래 주기가 그 화면에 맞는다
     schedule();
   }
   function clearAll(): void {
