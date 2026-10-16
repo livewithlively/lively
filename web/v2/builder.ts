@@ -325,7 +325,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   const del = el('button', { class: 'btn btn-ghost btn-sm v2-bld-danger', type: 'button', text: '앱 지우기' }) as HTMLButtonElement;
   del.onclick = () => {
     //  #4667 나만 보는 앱은 책임자가 지운다(/discard) · 공개한 앱은 관리자가(/remove — 아니면 서버가 403 을 말한다).
-    if (del.dataset.arm) { void post(a.visibility === 'me' ? '/discard' : '/remove', {}, '「' + a.title + '」 을 지웠어요'); v.sel = ''; return; }
+    if (del.dataset.arm) { void post(a.visibility === 'me' ? '/discard' : '/remove', {}, '「' + a.title + '」 앱을 지웠어요'); v.sel = ''; return; }
     del.dataset.arm = '1'; del.textContent = '한 번 더 누르면 지워져요'; window.setTimeout(() => { delete del.dataset.arm; del.textContent = '앱 지우기'; }, 4000);
   };
   //  #4667 만든 사람 · 만들기 세션 · 책임자 · 공개 상태는 서버 기록이다(매니페스트 studio 칸이 아니라).
