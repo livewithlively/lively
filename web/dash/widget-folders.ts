@@ -304,7 +304,7 @@ function dashFolderBrowser(root, startPath) {
   //   종전엔 이 함수와 프로젝트 파일 뷰어(projects/files-cards.openFileViewer)가 각자 판정을 갖고 있어 같은 파일이
   //   화면마다 다르게 열렸다 — .csv 는 여기선 표·저기선 원문, .mp4 는 여기선 재생·저기선 '미지원', .md 편집은
   //   저기만 가능. 여기는 이제 '어디에 놓을지(제자리 전환)'와 '버튼 모양'만 정한다.
-  //  이 화면이 새로 얻은 것: **md·텍스트 편집·저장**(프로젝트 모달의 장점) + [⛶ 전체화면].
+  //  이 화면이 새로 얻은 것: **md·텍스트 편집·저장**(프로젝트 모달의 장점) + [↗ 자료 보기](#4672 — 자료 보기 화면을 새 탭으로).
   // 편집 저장 — browse 업로드(PUT)와 같은 라우트(파일 바이트라 JSON api() 를 쓰지 않는다).
   //  이 루트는 셸(터미널)로 이미 rw 라 UI 편집이 새 권한경계를 열지 않는다 — browse CRUD 를 연 것과 같은 근거.
   const browsePutFile = (url: string, text: string): Promise<Response> => {
@@ -323,10 +323,10 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fb-spacer' }));
     const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
     container.replaceChildren(bar, stage);
-    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
-    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 전체페이지가 맡는다.
+    // ↗ 자료 보기 — 같은 파일을 자료 보기 화면(#/f, #4672)으로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
+    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 자료 보기 화면이 맡는다.
     const fullBtn = el('a', { class: 'dash-fb-btn', href: fileLinkUrl(root, rel), target: '_blank', rel: 'noopener',
-      title: '전체화면(새 탭)으로 열기', text: '⛶ 전체화면' });
+      title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' });
     let out;
     try {
       out = await buildFilePreview({

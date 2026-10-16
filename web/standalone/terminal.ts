@@ -3598,31 +3598,31 @@ const isTextLike = (name) => MD_RE.test(name) || TEXT_RE.test(name) || TEXT_NAME
 //   web/standalone 이고, 산출물 경로를 바꾸면 dist/standalone 을 직접 import 하는 테스트가 깨진다). 그래서 공용
 //   렌더러(lib/file-preview)를 **복제하지 않고 위임**한다:
 //    · 여기서 인라인으로 보여주는 것 = 터미널 문맥에 맞는 것뿐(이미지 · md 렌더 · 텍스트/코드).
-//    · pdf·표·음성·영상 등 나머지 = [⛶ 전체화면]으로 공용 렌더러(#/f)에 넘긴다.
+//    · pdf·표·음성·영상 등 나머지 = [↗ 자료 보기]로 자료 보기 화면(#/f — 공용 렌더러 · #4672)에 넘긴다.
 //   종전엔 그 자리에 '그래도 미리보기'가 있어 **바이너리를 텍스트로 뿌렸다**(깨진 글자 화면) — 선택지처럼 보이지만
 //   쓸 수 있는 답이 아니었다. 이제 실제로 볼 수 있는 곳으로 보낸다.
-//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 전체화면 버튼을 안 만든다.
+//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 자료 보기 버튼을 안 만든다.
 async function openPreview(p, name, shareRel?) {
   const id = 'file:' + p;
   const body = el('div', { class: 'preview-body' }, el('div', { class: 'gate-msg', text: '불러오는 중…' }));
-  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(전체화면·링크·다운로드).
+  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(자료 보기·링크·다운로드).
   const bar = el('div', { class: 'preview-bar' },
     el('span', { class: 'preview-bar-nm', title: name, text: name }),
     el('span', { class: 'preview-bar-sp' }),
-    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '전체화면(새 탭)', text: '⛶ 전체화면' }) : null,
+    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' }) : null,
     shareRel ? el('button', { class: 'tbtn', text: '🔗 링크', title: '링크 복사', onclick: () => copyShareLink(shareRel, false) }) : null,
     el('button', { class: 'tbtn', text: '⬇ 다운로드', onclick: () => downloadFile(p, name) }));
   const pane = el('div', { class: 'preview-pane' }, bar, body);
   addPane(id, name, true, pane);
   if (IMG_RE.test(name)) { renderImage(body, p, name); return; }
   if (isTextLike(name)) { renderTextPreview(body, p, MD_RE.test(name)); return; }
-  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(전체화면)으로 보낸다.
+  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(자료 보기 화면)으로 보낸다.
   body.replaceChildren(el('div', { class: 'unsupported' },
     el('div', { class: 'unsupported-card' },
-      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 전체화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
-      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 전체화면 미리보기가 렌더합니다.' : name }),
+      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 자료 보기 화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
+      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 자료 보기 화면(새 탭)이 보여 줍니다.' : name }),
       el('div', { class: 'unsupported-actions' },
-        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면으로 열기' }) : null,
+        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '↗ 자료 보기로 열기' }) : null,
         el('button', { class: 'tbtn', text: '다운로드', onclick: () => downloadFile(p, name) })))));
 }
 async function renderImage(body, p, name) {
