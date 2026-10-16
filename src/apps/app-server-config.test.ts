@@ -163,6 +163,11 @@ t("I4 동시 처리 상한 — 기본 워크스페이스 50 · 앱 20 · 앱 상
   assert.equal(normalizeAppServerPolicy({ max_inflight_workspace: 10, max_inflight_app: 10 }).max_inflight_app, 10, "경계 — 같으면 그대로");
   assert.equal(normalizeAppServerPolicy({ max_inflight_app: 0 }).max_inflight_app, 20, "0 은 «그 값 없음» = 기본");
   assert.equal(normalizeAppServerPolicy({ max_inflight_workspace: 999_999 }).max_inflight_workspace, APP_SERVER_POLICY_MAX.max_inflight_workspace);
+  //  Q1 저장할 값은 칸끼리 맞추지 않는다 — 앱 500 · 워크스페이스 50 을 저장해 두면 지금은 50 을 쓰고, 워크스페이스를 600 으로 올리면 500 이 살아난다.
+  const stored = normalizeAppServerPolicy({ max_inflight_workspace: 50, max_inflight_app: 500 }, APP_SERVER_POLICY_DEFAULT, { effective: false });
+  assert.equal(stored.max_inflight_app, 500, "저장할 값을 깎았다");
+  assert.equal(normalizeAppServerPolicy(stored).max_inflight_app, 50, "쓰는 값은 워크스페이스 값까지");
+  assert.equal(normalizeAppServerPolicy({ ...stored, max_inflight_workspace: 600 }).max_inflight_app, 500, "워크스페이스를 올리면 저장한 앱 값이 살아난다");
 });
 
 t("B9 상한 정규화 — 모르는 키 버림 · 잡값 기본 · 바닥 · 천장 · 힙 0 허용 · 다른 칸 0 은 기본 · 보관 일수 맞춤", () => {

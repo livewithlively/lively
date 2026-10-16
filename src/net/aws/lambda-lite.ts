@@ -1,6 +1,7 @@
-// 작은 Lambda · CloudWatch Logs · CloudWatch 지표 클라이언트(#4484 앱 v2-5) — 앱 서버 함수를 만들고·고치고·판을 고정하고·별칭을 옮기고·
-//  부르고·멈추고·지운다. SDK 무의존(aws-json.ts). 권한은 CP 박스 역할의 app-servers-lambda 정책(lively-infra app-servers.tf):
-//  lvly-app-* 함수만 · 역할 넘기기는 실행 역할 하나 · 레이어는 웹 어댑터만 · VPC 거부 · 함수 주소(URL)는 없음.
+// 작은 Lambda · CloudWatch Logs 클라이언트(#4484 앱 v2-5 · #4485 v2-6) — 앱 서버 함수를 만들고·고치고·판을 고정하고·별칭을 옮기고·
+//  흘려 받으며 부르고·멈추고·지운다 · 검사 층 레이어를 올린다. SDK 무의존(aws-json.ts). 권한은 CP 박스 역할의 app-servers-lambda 정책(lively-infra app-servers.tf):
+//  lvly-app-* 함수 · 레이어만 · 역할 넘기기는 실행 역할 하나 · 레이어는 웹 어댑터 + lvly-app-* · VPC 거부 · 함수 주소(URL)는 없음.
+//  CloudWatch 지표는 v2-6 부터 읽지 않는다 — 호출 셈은 게이트웨이가 적는다(app-server-usage).
 //  API 모양: https://docs.aws.amazon.com/lambda/latest/api/API_Operations.html (2015-03-31 · 동시 실행 2017-10-31/2019-09-30 · 계정 2016-08-19)
 import { awsCall, awsOpen, AwsError, jsonOf, type AwsDeps } from "./aws-json.js";
 import { decodeEventStream } from "./event-stream.js";
@@ -31,7 +32,6 @@ export interface FnConfiguration {
 }
 export interface FnGet { Configuration: FnConfiguration; Tags?: Record<string, string>; Concurrency?: { ReservedConcurrentExecutions?: number } }
 export interface FnAlias { AliasArn: string; Name: string; FunctionVersion: string; RevisionId?: string; Description?: string }
-export interface InvokeOut { status: number; functionError: string | null; log: string; payload: string; executedVersion: string | null }
 
 const host = (c: LambdaCfg): string => `lambda.${c.region}.amazonaws.com`;
 const isNotFound = (e: unknown): boolean => e instanceof AwsError && (e.status === 404 || e.code === "ResourceNotFoundException");
@@ -134,24 +134,6 @@ export async function putConcurrency(c: LambdaCfg, name: string, n: number, deps
 export async function deleteConcurrency(c: LambdaCfg, name: string, deps?: AwsDeps): Promise<void> {
   try { await awsCall({ service: "lambda", region: c.region, host: host(c), method: "DELETE", path: ["2017-10-31", "functions", name, "concurrency"] }, deps); }
   catch (e) { if (!isNotFound(e)) throw e; }
-}
-
-/** 부르기(동기) — 기록 끝 4KB(LogType Tail)도 받는다. 함수 오류는 던지지 않고 functionError 로 돌려준다(부르는 쪽이 기록과 함께 사람에게 보인다). */
-export async function invoke(c: LambdaCfg, name: string, qualifier: string | null, payload: unknown, opts: { timeoutMs?: number } = {}, deps?: AwsDeps): Promise<InvokeOut> {
-  const r = await awsCall({
-    service: "lambda", region: c.region, host: host(c), method: "POST", path: ["2015-03-31", "functions", name, "invocations"],
-    query: qualifier ? { Qualifier: qualifier } : undefined, body: payload,
-    headers: { "x-amz-invocation-type": "RequestResponse", "x-amz-log-type": "Tail" },
-    timeoutMs: opts.timeoutMs ?? 60_000,
-  }, { ...(deps ?? {}), attempts: 1 });
-  const log = r.headers.get("x-amz-log-result");
-  return {
-    status: r.status,
-    functionError: r.headers.get("x-amz-function-error"),
-    log: log ? Buffer.from(log, "base64").toString("utf8") : "",
-    payload: r.text,
-    executedVersion: r.headers.get("x-amz-executed-version"),
-  };
 }
 
 // ── 흘려 받기(#4485 앱 v2-6) — 앱 주소의 요청을 함수에 넘기고 응답을 조각째 받는다(InvokeWithResponseStream · 권한은 lambda:InvokeFunction) ──
@@ -272,33 +254,3 @@ export async function deleteLogGroup(c: LambdaCfg, group: string, deps?: AwsDeps
   catch (e) { if (!(e instanceof AwsError && e.code === "ResourceNotFoundException")) throw e; }
 }
 
-// ── CloudWatch 지표(JSON 1.0) — 앱별 호출 수 · 실행 시간(자동 멈춤 감시) ──
-export interface MetricQuery { id: string; fn: string; metric: "Invocations" | "Duration" | "Throttles" | "Errors"; stat: "Sum" | "Maximum" }
-export interface MetricResult { id: string; values: number[]; timestamps: number[] }
-
-/** 최근 구간의 지표 — 한 번에 500개까지(GetMetricData 상한). 값은 period 마다 하나. */
-export async function getMetricData(c: LambdaCfg, queries: MetricQuery[], range: { start: Date; end: Date; periodSec: number }, deps?: AwsDeps): Promise<MetricResult[]> {
-  const out: MetricResult[] = [];
-  for (let i = 0; i < queries.length; i += 500) {
-    const chunk = queries.slice(i, i + 500);
-    let next: string | null = null;
-    for (let page = 0; page < 20; page++) {
-      const body: Record<string, unknown> = {
-        MetricDataQueries: chunk.map((q) => ({ Id: q.id, MetricStat: { Metric: { Namespace: "AWS/Lambda", MetricName: q.metric, Dimensions: [{ Name: "FunctionName", Value: q.fn }] }, Period: range.periodSec, Stat: q.stat } })),
-        StartTime: Math.floor(range.start.getTime() / 1000), EndTime: Math.floor(range.end.getTime() / 1000),
-      };
-      if (next) body.NextToken = next;
-      const r = jsonOf<{ MetricDataResults?: Array<{ Id: string; Values?: number[]; Timestamps?: number[] }>; NextToken?: string }>(
-        await awsCall({ service: "monitoring", region: c.region, host: `monitoring.${c.region}.amazonaws.com`, method: "POST", path: [""], body,
-          target: { header: "GraniteServiceVersion20100801.GetMetricData", jsonVersion: "1.0" } }, deps));
-      for (const m of r.MetricDataResults ?? []) {
-        const got = out.find((x) => x.id === m.Id);
-        if (got) { got.values.push(...(m.Values ?? [])); got.timestamps.push(...(m.Timestamps ?? [])); }
-        else out.push({ id: m.Id, values: [...(m.Values ?? [])], timestamps: [...(m.Timestamps ?? [])] });
-      }
-      next = r.NextToken ?? null;
-      if (!next) break;
-    }
-  }
-  return out;
-}

@@ -47,7 +47,7 @@ const { appStoreCapabilities } = await import(`${D}/capabilities/app-store.js`);
 const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
-const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping } = await import(`${D}/apps/app-server-watch.js`);
+const { watchAppServers, runAppServerHousekeeping } = await import(`${D}/apps/app-server-watch.js`);
 const { recordAppServerCall, flushAppServerUsage, resetUsageForTest, USAGE_BUCKET_SEC } = await import(`${D}/apps/app-server-usage.js`);
 const { resetGuardLayerCacheForTest } = await import(`${D}/apps/app-server-layer.js`);
 const { appServerPolicy, setServerStopped } = await import(`${D}/apps/app-server-store.js`);
@@ -133,7 +133,6 @@ const api = {
   },
   listVersions: async (n) => [{ Version: "$LATEST" }, ...(fns.get(n)?.versions ?? [])],
   putAlias: async (n, a, v) => { log.push(["putAlias", n, a, v]); fns.get(n).aliases.set(a, v); return { Name: a, FunctionVersion: v, AliasArn: `${n}:${a}` }; },
-  invoke: async () => { throw new Error("v2-6 부터 시험 호출은 흘려 받기(invokeStream)여야 한다"); },
   //  #4485 흘려 받기 — 함수는 응답 흘려 보내기 모드라 본문이 «HTTP 통합 틀»(앞머리 + NUL 8 + 본문)이다(2026-10-16 실측).
   invokeStream: async (n, qual, payloadJson) => {
     const ev = JSON.parse(payloadJson);
@@ -371,7 +370,6 @@ await call("app_save", { files: filesOf({ server: "require('http').createServer(
 
 // D9 · H 감시(#4485) — 자동 멈춤은 게이트웨이가 센 수(org_app_server_usage · 아직 안 적은 수 포함)를 본다
 {
-  resetWatchStateForTest();
   resetUsageForTest();
   const notes = [];
   const notify = async (a, title) => { notes.push(title); };
@@ -562,6 +560,16 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   chk("R5 상한을 바꾸면 빌드 없이 설정을 고쳐 새 함수 판 · 시험 호출 · cur", d.status === "deployed" && d.build.reused === true && seats.length === seats0
     && uc.some((x) => x[2].MemorySize === 1024) && r1.cur_lambda_version !== r0.cur_lambda_version && fns.get(FN).versions.find((v) => v.Version === r1.cur_lambda_version)?.cfg.MemorySize === 1024,
     JSON.stringify({ status: d.status, uc: uc.map((x) => x[2]), before: r0.cur_lambda_version, after: r1.cur_lambda_version }));
+  await call("app_server_limits_set", { reset: true }, boss);
+}
+
+// R5b(#4485 Q1) 동시 처리 상한 — 저장은 준 값 그대로 · 쓰는 값은 앱 ≤ 워크스페이스 · 워크스페이스를 올리면 저장한 앱 값이 살아난다
+{
+  const a = await call("app_server_limits_set", { max_inflight_workspace: 50, max_inflight_app: 500 }, boss);
+  const b = await call("app_server_limits_set", { max_inflight_workspace: 600 }, boss);
+  chk("R5b 동시 처리 상한 — 저장은 500 그대로 · 쓰는 값 50 · 워크스페이스 600 이면 500",
+    a.workspace_setting?.max_inflight_app === 500 && a.policy?.max_inflight_app === 50 && b.workspace_setting?.max_inflight_app === 500 && b.policy?.max_inflight_app === 500,
+    JSON.stringify({ a: { set: a.workspace_setting, use: a.policy?.max_inflight_app }, b: { set: b.workspace_setting, use: b.policy?.max_inflight_app } }));
   await call("app_server_limits_set", { reset: true }, boss);
 }
 

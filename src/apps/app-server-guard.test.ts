@@ -1,6 +1,7 @@
 // 앱 서버 신원 검사 층(#4485 앱 v2-6) 시험 — 진짜 검사 층 글(GUARD_JS)을 이 기계의 node 로 띄우고 그 뒤에 가짜 앱을 둔다(Lambda 안과 같은 모양:
 //  웹 어댑터 → 검사 층 → 앱). 사양 표 A(spec-4485.md): A1~A9 판정(게이트웨이 verifyAppIdentity 와 같은 토큰 표로 대조 · 경계 포함) ·
-//  A10 · A11 새로 도입한 env 가 없을 때 · A12 머리글 · A13 준비 판정 · A14 흘려 보내기 · A15 앱에 못 닿음 · A16 그대로 넘기는 것 · 레이어 zip · bootstrap.
+//  A10 · A11 새로 도입한 env 가 없을 때 · A12 머리글 · A13 준비 판정 · A14 흘려 보내기 · A15 앱에 못 닿음 · A16 그대로 넘기는 것 · 레이어 zip · bootstrap ·
+//  A17 · A18 ASCII 밖 id · 이름 · A19 문 안의 오류 · A20 맞대기 표 더함(격리 리뷰 2026-10-16).
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -77,10 +78,11 @@ type C = Partial<{ ws: string; app: string; var: "pub" | "draft"; sub: string; n
 const tok = (o: C = {}, priv = key.privateKey, kid = "k1"): string =>
   signAppIdentity({ ws: WS, app: APP, var: "pub", sub: "sangmin-yoon", name: "윤상민", iat: now() - 5, exp: now() + 595, ...o }, priv, kid);
 /** 칸을 마음대로(형 · 값) — signAppIdentity 가 막는 모양도 서명해 만든다. */
-const rawTok = (claims: Record<string, unknown>, priv = key.privateKey, kid = "k1"): string => {
-  const input = `v1.${kid}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}`;
+const rawJson = (payload: unknown, priv = key.privateKey, kid = "k1"): string => {
+  const input = `v1.${kid}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   return `${input}.${crypto.sign(null, Buffer.from(input), priv).toString("base64url")}`;
 };
+const rawTok = (claims: Record<string, unknown>, priv = key.privateKey, kid = "k1"): string => rawJson(claims, priv, kid);
 
 test("A1~A9 ★ 판정 = 게이트웨이 검증(verifyAppIdentity) — 같은 토큰 표 · 경계 포함 · 거부한 요청은 앱에 닿지 않는다", async () => {
   const appPort = await freePort();
@@ -111,6 +113,14 @@ test("A1~A9 ★ 판정 = 게이트웨이 검증(verifyAppIdentity) — 같은 �
       ["A9 name 201자 거부", tok({ name: "가".repeat(201) }), false],
       ["A9 iat 정수 아님", rawTok({ ws: WS, app: APP, var: "pub", sub: "m", iat: n + 0.5, exp: n + 60 }), false],
       ["A9 4,097자", "v1.k1." + "a".repeat(4085) + ".b", false],
+      //  A20 맞대기 표 더함(격리 리뷰) — 칸 길이 · 본문 꼴 · kid · base64 모양
+      ["A20 sub 200자 받음", rawTok({ ws: WS, app: APP, var: "pub", sub: "a".repeat(200), iat: n, exp: n + 60 }), true],
+      ["A20 sub 201자 거부", rawTok({ ws: WS, app: APP, var: "pub", sub: "a".repeat(201), iat: n, exp: n + 60 }), false],
+      ["A20 본문 [] 거부", rawJson([]), false],
+      ["A20 본문 null 거부", rawJson(null), false],
+      ["A20 kid 33자 거부", rawTok({ ws: WS, app: APP, var: "pub", sub: "m", iat: n, exp: n + 60 }, key.privateKey, "k".repeat(33)), false],
+      ["A20 kid 에 «.» 거부", rawTok({ ws: WS, app: APP, var: "pub", sub: "m", iat: n, exp: n + 60 }, key.privateKey, "k.1"), false],
+      ["A20 base64 끝에 «=» 거부", `${v}.${kid}.${p}=.${s}`, false],
     ];
     let accepted = 0;
     for (const [name, t, want] of rows) {
@@ -201,6 +211,55 @@ test("A12 · A16 앱이 받는 것 — 검사한 구성원 · 이름 · 판으�
     g.stop();
     await app.close();
   }
+});
+
+test("A17 · A18 ★ ASCII 밖 구성원 id · 이름(한글 · 이모지 · 짝 없는 대리 문자) — 매달리지 않고 앱에 닿는다 · 머리글은 퍼센트 인코딩(풀면 그 값)", async () => {
+  const appPort = await freePort();
+  const app = await startApp(appPort);
+  const g = await startGuard(appPort);
+  try {
+    const n = now();
+    const cases: Array<[string, string, string]> = [
+      ["ASCII id 는 그대로", "sangmin-yoon", "sangmin-yoon"],
+      ["한글 id(이메일 없는 구성원)", "윤상민", encodeURIComponent("윤상민")],
+      ["이모지", "emoji😀", encodeURIComponent("emoji😀")],
+      ["짝 없는 대리 문자 — U+FFFD 로 바로잡음", "a\ud800b", "a%EF%BF%BDb"],
+    ];
+    for (const [why, sub, wantHeader] of cases) {
+      const t = rawTok({ ws: WS, app: APP, var: "pub", sub, name: sub, iat: n, exp: n + 60 });
+      let gw = true;
+      try { verifyAppIdentity(t, { ws: WS, app: APP }, { keys: KEYS }); } catch { gw = false; }
+      assert.equal(gw, true, `${why}: 게이트웨이는 받는 토큰이다(그래서 검사 층도 답해야 한다)`);
+      const r = await Promise.race([
+        req(g.port, "/x", { "x-lively-identity": t }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${why}: 2초 안에 답이 없다(매달림)`)), 2000)),
+      ]);
+      assert.equal(r.status, 207, why);
+      const seen = app.seen.at(-1)!;
+      assert.equal(seen.headers["x-lively-member"], wantHeader, why);
+      assert.equal(seen.headers["x-lively-member-name"], wantHeader, `${why}(이름)`);
+      assert.equal(decodeURIComponent(String(seen.headers["x-lively-member"])), sub.replace("\ud800", "\ufffd"), `${why}: 풀면 그 값`);
+    }
+  } finally {
+    g.stop();
+    await app.close();
+  }
+});
+
+test("A19 ★ 검사 층 안의 예기치 못한 오류(앱으로 갈 요청을 못 만듦) — 매달리지 않고 500 JSON · x-lively-guard: error", async () => {
+  //  앱 포트가 틀리면(70000) 앱으로 가는 요청을 만드는 순간 동기로 던진다 — 감싸지 않으면 답이 안 나가 함수 시간까지 매달린다.
+  const g = await startGuard(70000);
+  try {
+    const r = await Promise.race([
+      req(g.port, "/x", { "x-lively-identity": tok() }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("2초 안에 답이 없다(매달림)")), 2000)),
+    ]);
+    assert.equal(r.status, 500);
+    assert.equal(r.headers["x-lively-guard"], "error");
+    assert.equal(JSON.parse(r.body).error, "guard_error");
+    //  다음 요청도 받는다(프로세스가 살아 있다)
+    assert.equal((await req(g.port, "/x", { "x-lively-identity": tok() })).status, 500);
+  } finally { g.stop(); }
 });
 
 test("A13 준비 판정 — 앱 포트 닫힘 503 · 열림 200 · 신원 없이 · 그 경로는 앱에 안 간다", async () => {

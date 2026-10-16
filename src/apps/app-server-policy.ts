@@ -1,6 +1,7 @@
 // 앱 서버 상한(#4484 앱 v2-5) — 함수 사양 · 빌드 시간·메모리 · 자동 멈춤 기준. 값과 판정만(순수).
 //
-//  #4485(v2-6): 동시 처리 상한 둘(워크스페이스 50 · 앱 20 — #4792 결정)을 같은 자리에 둔다(배포 없이 고친다 · 앱 상한이 워크스페이스 상한을 넘으면 워크스페이스 값까지만 쓴다).
+//  #4485(v2-6): 동시 처리 상한 둘(워크스페이스 50 · 앱 20 — #4792 결정)을 같은 자리에 둔다(배포 없이 고친다 · 앱 상한이 워크스페이스 상한을 넘으면
+//   워크스페이스 값까지만 쓴다 — 저장은 준 값 그대로).
 //  결정(상민 2026-10-15): 함수 기본 512MB · 30초(앱 주소 앞단이 30초에 끊는다) · 자동 멈춤 = 앱별 5분 호출 3만 회 또는 실행 시간 합 3,000초
 //   (평균 동시 10개를 5분 내내) → 그 함수 동시 실행 0 + 책임자·관리자 알림, 관리자가 다시 켠다. 상한은 배포 없이 고친다.
 //  읽는 순서(앱 판 묶음 상한 #4481 과 같다): org_runtime_config.app_server_policy(관리자 app_server_limits_set) → env LIVELY_APP_SERVER_POLICY → 코드 기본값.
@@ -55,13 +56,17 @@ function clamp(v: unknown, fallback: number, min: number, max: number): number {
   return Math.max(min, Math.min(Math.floor(n), max));
 }
 
-/** 바닥(base) 위에 patch 를 얹어 정규화한다 — 모르는 키는 버리고, 잡값은 base 값으로, 넘치는 값은 천장 · 모자란 값은 바닥으로. */
-export function normalizeAppServerPolicy(patch: unknown, base: AppServerPolicy = APP_SERVER_POLICY_DEFAULT): AppServerPolicy {
+/**
+ * 바닥(base) 위에 patch 를 얹어 정규화한다 — 모르는 키는 버리고, 잡값은 base 값으로, 넘치는 값은 천장 · 모자란 값은 바닥으로.
+ *  effective(기본): 쓰는 값 — 앱 동시 처리 상한은 워크스페이스 상한까지만. false: 저장할 값 — 칸끼리 맞추지 않는다
+ *  (앱 500 · 워크스페이스 50 을 저장하면 지금은 50 을 쓰고, 나중에 워크스페이스를 올리면 500 이 살아난다 · 격리 리뷰).
+ */
+export function normalizeAppServerPolicy(patch: unknown, base: AppServerPolicy = APP_SERVER_POLICY_DEFAULT, o: { effective?: boolean } = {}): AppServerPolicy {
   const p = (patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {}) as Record<string, unknown>;
   const out = { ...base };
   for (const k of APP_SERVER_POLICY_KEYS) out[k] = clamp(p[k], base[k], APP_SERVER_POLICY_MIN[k], APP_SERVER_POLICY_MAX[k]);
   out.log_retention_days = retentionDaysFor(out.log_retention_days);
-  out.max_inflight_app = Math.min(out.max_inflight_app, out.max_inflight_workspace);
+  if (o.effective !== false) out.max_inflight_app = Math.min(out.max_inflight_app, out.max_inflight_workspace);
   return out;
 }
 

@@ -37,7 +37,7 @@ const APPS: Record<string, OrgApp> = { srv: mkApp("srv", { web: { server: true }
 const row: ServerRow = {
   app_id: "srv", function_name: "lvly-app-srv-lively-46e3", cur_version_no: 1, cur_build_key: "b", cur_lambda_version: "3", cur_at: null,
   pub_version_no: null, pub_build_key: null, pub_lambda_version: null, pub_at: null, stopped_at: null, stopped_by: null, stop_kind: null, stop_reason: null,
-  lock_until: null, last_error: null, created_at: "", updated_at: "",
+  lock_until: null, last_error: null, created_at: "", updated_at: "", cur_token_hash: "th-cur", pub_token_hash: null,
 } as ServerRow;
 
 interface Seen { method: string; rawPath: string; rawQueryString: string; body: Buffer; qual: string }
@@ -141,6 +141,24 @@ test("SW2 경계 — 본문 정확히 4MiB 는 통과 · 4MiB+1 은 413 JSON(bod
     assert.match(b.type, /application\/json/, "오류도 JSON 이어야 한다(Express 기본 HTML 이 아니라)");
     assert.equal(b.json.error, "body_too_large");
     assert.equal(h.seen.length, 1, "넘친 요청은 함수를 부르지 않는다");
+  } finally { await h.close(); }
+});
+
+test("SW9 압축 본문(Content-Encoding gzip · br) → 415 JSON(unsupported_encoding) · 함수 0 — 풀면 «보낸 바이트 그대로» 가 아니다 · identity 는 그대로", async () => {
+  const h = await start();
+  try {
+    const zlib = await import("node:zlib");
+    const raw = Buffer.from(JSON.stringify({ hello: "세계" }));
+    for (const [enc, body] of [["gzip", zlib.gzipSync(raw)], ["br", zlib.brotliCompressSync(raw)], ["deflate", zlib.deflateSync(raw)]] as const) {
+      const r = await call(h.port, "POST", W("/api/x"), { body, headers: { "content-type": "application/json", "content-encoding": enc } });
+      assert.equal(r.status, 415, enc);
+      assert.match(r.type, /application\/json/, `${enc}: 오류가 JSON 이 아니다`);
+      assert.equal(r.json.error, "unsupported_encoding", enc);
+    }
+    assert.equal(h.seen.length, 0, "압축 본문을 함수로 넘겼다");
+    const ok = await call(h.port, "POST", W("/api/x"), { body: raw, headers: { "content-type": "application/json", "content-encoding": "identity" } });
+    assert.equal(ok.status, 200);
+    assert.equal(h.seen[0]!.body.toString(), raw.toString(), "identity 본문이 바뀌었다");
   } finally { await h.close(); }
 });
 

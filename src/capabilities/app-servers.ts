@@ -189,7 +189,9 @@ const appServerLimits: Capability = {
   name: "app_server_limits",
   title: "앱 서버 상한 보기",
   description: "앱 서버 상한 — policy(지금 값: memory_mb 함수 메모리 · timeout_s 요청 시간 · build_timeout_s 빌드 시간 · build_mem_floor_mb 빌드를 멈추는 세션 남은 메모리 · " +
-    "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions) · workspace_setting · platform_default · min · ceiling. 구성원 누구나.",
+    "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions · " +
+    "max_inflight_workspace · max_inflight_app 동시 처리 상한 — 워크스페이스 · 앱마다 지금 처리 중인 요청 수, 넘으면 함수를 부르지 않고 429 · 앱 값은 워크스페이스 값까지만 쓴다) · " +
+    "workspace_setting(저장한 값) · platform_default · min · ceiling. 구성원 누구나.",
   scope: null,
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/app-server-limits"], parse: () => ({}) }] },
@@ -199,8 +201,9 @@ const appServerLimits: Capability = {
 const appServerLimitsSet: Capability = {
   name: "app_server_limits_set",
   title: "앱 서버 상한 고치기",
-  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터). 준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
-    `천장: 메모리 ${APP_SERVER_POLICY_MAX.memory_mb}MB · 요청 ${APP_SERVER_POLICY_MAX.timeout_s}초 · 빌드 ${APP_SERVER_POLICY_MAX.build_timeout_s}초. 관리자.`,
+  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터 · 동시 처리 상한은 10초 안에). 준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
+    `천장: 메모리 ${APP_SERVER_POLICY_MAX.memory_mb}MB · 요청 ${APP_SERVER_POLICY_MAX.timeout_s}초 · 빌드 ${APP_SERVER_POLICY_MAX.build_timeout_s}초 · ` +
+    `동시 처리 워크스페이스 ${APP_SERVER_POLICY_MAX.max_inflight_workspace} · 앱 ${APP_SERVER_POLICY_MAX.max_inflight_app}(앱 값은 워크스페이스 값까지만 쓴다). 관리자.`,
   scope: "admin",
   input: {
     ...Object.fromEntries(APP_SERVER_POLICY_KEYS.map((k) => [k, z.number().int().min(APP_SERVER_POLICY_MIN[k]).max(APP_SERVER_POLICY_MAX[k]).optional()])),
@@ -226,7 +229,8 @@ const appServerLimitsSet: Capability = {
         if (!Number.isInteger(n) || n < APP_SERVER_POLICY_MIN[k] || n > APP_SERVER_POLICY_MAX[k]) throw new HttpError(400, `${k} 는 ${APP_SERVER_POLICY_MIN[k]}~${APP_SERVER_POLICY_MAX[k]} 정수여야 합니다`);
         next[k] = n;
       }
-      const norm: AppServerPolicy = normalizeAppServerPolicy(next, envAppServerPolicy());
+      //  저장은 준 값 그대로(칸끼리 맞추지 않는다) — 앱 동시 처리 상한이 워크스페이스 값보다 커도 쓸 때만 깎는다(normalizeAppServerPolicy effective).
+      const norm: AppServerPolicy = normalizeAppServerPolicy(next, envAppServerPolicy(), { effective: false });
       next = Object.fromEntries(Object.keys(next).map((k) => [k, norm[k as keyof AppServerPolicy]]));
     }
     await setAppServerPolicy(next, { actor: actorOf(user), source: ctx?.source ?? "web" });

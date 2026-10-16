@@ -43,7 +43,6 @@ export interface LambdaApi {
   publishVersion(name: string, input: { CodeSha256?: string; Description?: string }): Promise<lam.FnConfiguration>;
   listVersions(name: string): Promise<lam.FnConfiguration[]>;
   putAlias(name: string, alias: string, version: string, description: string): Promise<lam.FnAlias>;
-  invoke(name: string, qualifier: string, payload: unknown, timeoutMs: number): Promise<lam.InvokeOut>;
   /** #4485 흘려 받기 — 시험 호출 · 앱 주소 요청이 쓴다(함수가 응답 흘려 보내기 모드라 보통 부르기로는 틀이 섞여 온다). */
   invokeStream(name: string, qualifier: string, payloadJson: string, opts: { timeoutMs: number; logTail?: boolean; signal?: AbortSignal }): Promise<lam.StreamInvokeOut>;
   listLayerVersions(layer: string): Promise<lam.LayerVersion[]>;
@@ -66,7 +65,6 @@ export function realLambdaApi(region: string): LambdaApi {
     publishVersion: (n, i) => lam.publishVersion(c, n, i),
     listVersions: (n) => lam.listVersions(c, n),
     putAlias: (n, a, v, d) => lam.putAlias(c, n, a, v, d),
-    invoke: (n, q, p, t) => lam.invoke(c, n, q, p, { timeoutMs: t }),
     invokeStream: (n, q, p, o) => lam.invokeStream(c, n, q, p, o),
     listLayerVersions: (l) => lam.listLayerVersions(c, l),
     publishLayerVersion: (l, i) => lam.publishLayerVersion(c, l, i),

@@ -1,4 +1,4 @@
-// AWS JSON 서비스 호출(#4484 앱 v2-5) — Lambda(REST JSON) · CloudWatch Logs(JSON 1.1) · CloudWatch 지표(JSON 1.0). SDK 무의존(s3-lite 와 같은 관례).
+// AWS JSON 서비스 호출(#4484 앱 v2-5) — Lambda(REST JSON) · CloudWatch Logs(JSON 1.1) · JSON 1.0 서비스. SDK 무의존(s3-lite 와 같은 관례).
 //
 //  서명은 signRequestV4(AWS 공개 벡터로 못 박음) · 자격은 게이트웨이 base 자격(env → EC2 인스턴스 프로파일 = 매니지드 CP 박스 역할).
 //  canonical URI 규칙(S3 와 다르다): 경로 조각을 **두 번** 인코딩한다 — https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html.

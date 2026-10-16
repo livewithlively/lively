@@ -24,7 +24,6 @@ import { getApp } from "../org/store/apps.js";
 export const BUILD_PRUNE_DAYS = 30;
 /** 호출 수 칸(org_app_server_usage) 보관 — 감시는 마지막 10분만 본다. */
 export const USAGE_KEEP_DAYS = 7;
-export function resetWatchStateForTest(): void { /* v2-6 부터 프로세스 안 상태가 없다(호출 수는 DB 칸) */ }
 
 export interface WatchDeps {
   api?: LambdaApi;

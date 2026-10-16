@@ -181,6 +181,7 @@ try {
     const idOf = (sub, v) => IDK.signAppIdentity({ ws, app: ID, var: v, sub, name: sub, iat: nowS, exp: nowS + 600 }, key.privateKey, "k1");
     const tokenUser = { userId: appServerUserId(ws, ID), email: "", scopes: [], projects: ["*"], appId: ID };
     await call("me_app_grant", { app_id: ID }, alice);
+    await call("me_app_grant", { app_id: ID }, bob);   // B8 이 이미 했지만 이 행만 떼어 돌려도 서게(순서에 기대지 않는다 · 격리 리뷰)
     const aPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "pub"), opts);
     const aDraft = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "draft"), opts);
     const bPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-bob", "pub"), opts);

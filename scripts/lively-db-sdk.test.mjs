@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { pgTable, bigint, numeric, timestamp, text, integer } from "drizzle-orm/pg-core";
 import { eq, sql } from "drizzle-orm";
 import {
-  createLivelyDb, livelyIdentity, withIdentity, livelyErrorOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
+  createLivelyDb, livelyIdentity, livelyMember, withIdentity, livelyErrorOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
 } from "../public/sdk/lively-db.mjs";
 
 /** 게이트웨이 흉내 — 부른 것(경로·헤더·본문)을 남기고 정해 둔 응답을 돌려준다. */
@@ -203,4 +203,16 @@ test("S10 generateDrizzleSchema — 매니페스트의 타입·제약·외래키
     assert.match(src, /\.references\(\(\) => contacts\.id, \{ onDelete: "cascade" \}\)/);
     assert.match(src, /\.default\(sql`CURRENT_DATE`\)/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 머리글을 풀어 준다(한글 id · 이름) · 판 · 없으면 null · 깨진 인코딩은 그대로", () => {
+  const h = (o) => ({ headers: o });
+  assert.deepEqual(livelyMember(h({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" })),
+    { id: "윤상민", name: "윤 상민", variant: "draft" });
+  assert.deepEqual(livelyMember(h({ "x-lively-member": "sangmin-yoon" })), { id: "sangmin-yoon", name: "", variant: "pub" }, "ASCII id · 이름 없음 · 판 기본 pub");
+  assert.deepEqual(livelyMember(h({ "x-lively-member": ["a%20b", "x"], "x-lively-variant": "weird" })), { id: "a b", name: "", variant: "pub" }, "배열은 첫 값 · 모르는 판은 pub");
+  assert.equal(livelyMember(h({ "x-lively-member": "%E0%A4%A" })).id, "%E0%A4%A", "깨진 인코딩은 던지지 않고 그대로");
+  assert.equal(livelyMember(h({})), null);
+  assert.equal(livelyMember(h({ "x-lively-member": "" })), null);
+  assert.equal(livelyMember(undefined), null);
 });

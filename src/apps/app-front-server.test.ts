@@ -10,7 +10,7 @@ import { buildFunctionUrlEvent, responseHeadersOf, serveAppServer, splitAppPath,
 import { ed25519FromSeed, signAppIdentity } from "./app-identity.js";
 import { HTTP_INTEGRATION_CT } from "./app-server-stream.js";
 import { APP_SERVER_POLICY_DEFAULT, type AppServerPolicy } from "./app-server-policy.js";
-import { resetInflightForTest } from "./app-server-usage.js";
+import { inflightNow, resetInflightForTest } from "./app-server-usage.js";
 import type { LambdaApi } from "./app-server-deploy.js";
 import type { ServerRow } from "./app-server-store.js";
 import type { StreamEvent } from "../net/aws/lambda-lite.js";
@@ -29,13 +29,13 @@ const ident = (o: Partial<{ sub: string; var: "pub" | "draft"; app: string }> = 
 const row = (o: Partial<ServerRow> = {}): ServerRow => ({
   app_id: "notes", function_name: "lvly-app-notes-lively-46e3", cur_version_no: 3, cur_build_key: "b", cur_lambda_version: "7", cur_at: null,
   pub_version_no: 2, pub_build_key: "a", pub_lambda_version: "5", pub_at: null, stopped_at: null, stopped_by: null, stop_kind: null, stop_reason: null,
-  lock_until: null, last_error: null, created_at: "", updated_at: "", ...o,
+  lock_until: null, last_error: null, created_at: "", updated_at: "", cur_token_hash: "th-cur", pub_token_hash: "th-pub", ...o,
 });
 
-type Script = { kind: "ok"; prelude: unknown; body: Array<string | { wait: number }>; report?: string } | { kind: "err"; payload: string; report?: string } | { kind: "throw"; e: unknown };
+type Script = { kind: "ok"; prelude: unknown; body: Array<string | { wait: number }>; report?: string; errorCode?: string } | { kind: "err"; payload: string; report?: string } | { kind: "throw"; e: unknown };
 interface Call { fn: string; qual: string; event: Record<string, unknown>; timeoutMs: number; signal?: AbortSignal }
 
-function fakeApi(script: Script, calls: Call[]): LambdaApi {
+function fakeApi(script: Script, calls: Call[], state: { consumed: boolean } = { consumed: false }): LambdaApi {
   return {
     invokeStream: async (fn: string, qual: string, payloadJson: string, o: { timeoutMs: number; signal?: AbortSignal }) => {
       calls.push({ fn, qual, event: JSON.parse(payloadJson), timeoutMs: o.timeoutMs, signal: o.signal });
@@ -48,19 +48,21 @@ function fakeApi(script: Script, calls: Call[]): LambdaApi {
           if (typeof b === "string") yield { type: "chunk", data: Buffer.from(b) };
           else await new Promise((r) => setTimeout(r, b.wait));
         }
-        yield { type: "complete", errorCode: null, errorDetails: null, log: script.report ?? "REPORT RequestId: r\tDuration: 3.00 ms\tBilled Duration: 4 ms\tMemory Size: 512 MB\t" };
+        state.consumed = true;
+        yield { type: "complete", errorCode: script.errorCode ?? null, errorDetails: null, log: script.report ?? "REPORT RequestId: r\tDuration: 3.00 ms\tBilled Duration: 4 ms\tMemory Size: 512 MB\t" };
       }
       return { status: 200, executedVersion: qual, contentType: script.kind === "ok" ? HTTP_INTEGRATION_CT : "application/octet-stream", events: events() };
     },
   } as unknown as LambdaApi;
 }
 
-interface Harness { port: number; calls: Call[]; recorded: Array<{ app: string; r: unknown }>; close: () => Promise<void> }
+interface Harness { port: number; calls: Call[]; recorded: Array<{ app: string; r: unknown }>; consumed: () => boolean; close: () => Promise<void> }
 async function start(script: Script, o: { row?: ServerRow | null; view?: "installed" | "published"; act?: Partial<{ var: "pub" | "draft"; mid: string }>; policy?: Partial<AppServerPolicy>; env?: NodeJS.ProcessEnv } = {}): Promise<Harness> {
   const calls: Call[] = [];
   const recorded: Array<{ app: string; r: unknown }> = [];
+  const state = { consumed: false };
   const deps: AppServerFrontDeps = {
-    env: o.env ?? ENV, api: fakeApi(script, calls), getServerRow: async () => (o.row === undefined ? row() : o.row),
+    env: o.env ?? ENV, api: fakeApi(script, calls, state), getServerRow: async () => (o.row === undefined ? row() : o.row),
     policy: async () => ({ ...APP_SERVER_POLICY_DEFAULT, ...(o.policy ?? {}) }), record: (app, r) => recorded.push({ app, r }),
   };
   const app = express();
@@ -75,7 +77,7 @@ async function start(script: Script, o: { row?: ServerRow | null; view?: "instal
     await serveAppServer(req, res, target, body, String(req.query.path ?? req.url), deps);
   });
   const srv = await new Promise<http.Server>((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
-  return { port: (srv.address() as net.AddressInfo).port, calls, recorded, close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }) };
+  return { port: (srv.address() as net.AddressInfo).port, calls, recorded, consumed: () => state.consumed, close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }) };
 }
 
 function get(port: number, path: string, headers: Record<string, string> = {}, method = "GET", body?: string):
@@ -238,6 +240,11 @@ test("D10 · D11 · D12 응답 — 상태 · 머리글 · 쿠키 여러 줄 · �
   } finally { await h.close(); }
   assert.equal(stripFrameAncestors("frame-ancestors 'none'"), null);
   assert.equal(stripFrameAncestors("default-src 'self';  FRAME-ANCESTORS x; img-src *"), "default-src 'self'; img-src *");
+  //  D21 같은 이름 머리글 여러 줄 = 쉼표로 이은 여러 정책 — 정책마다 빼고 빈 정책은 버린다
+  assert.equal(stripFrameAncestors("default-src 'self', frame-ancestors 'none'"), "default-src 'self'", "뒤 정책의 frame-ancestors 가 남았다");
+  assert.equal(stripFrameAncestors("frame-ancestors 'none', default-src 'self'"), "default-src 'self'", "앞 정책 하나로 전체를 지웠다");
+  assert.equal(stripFrameAncestors("a 1; frame-ancestors x, b 2; frame-ancestors y"), "a 1, b 2");
+  assert.equal(stripFrameAncestors("frame-ancestors 'none', frame-ancestors 'self'"), null);
   assert.deepEqual(responseHeadersOf({ statusCode: 200, headers: { "set-cookie": "x=1" }, cookies: ["y=2"] }).cookies, ["y=2", "x=1"]);
 });
 
@@ -318,16 +325,51 @@ test("D17 경로 — `/` 로 시작하지 않음 · `//` · 제어문자 · 공�
   } finally { await h.close(); }
 });
 
-test("D19 브라우저가 중간에 떠나면 함수 흐름을 끊는다(abort)", async () => {
-  const h = await start({ kind: "ok", prelude: { statusCode: 200, headers: {} }, body: ["a", { wait: 500 }, "b"] });
+test("D7' · D19 ★ 브라우저가 응답 도중 떠나도 — 함수 흐름은 끝까지 읽고 그동안 상한 자리를 쥔다 · 끝나면 돌려주고 REPORT 청구 시간으로 · 앱 오류로 세지 않는다", async () => {
+  resetInflightForTest();
+  const h = await start({ kind: "ok", prelude: { statusCode: 200, headers: {} }, body: ["a", { wait: 600 }, "b"],
+    report: "REPORT RequestId: r\tDuration: 650.00 ms\tBilled Duration: 651 ms\t" });
   try {
     await new Promise<void>((resolve) => {
       const q = http.request({ host: "127.0.0.1", port: h.port, path: `/?path=${encodeURIComponent("/")}`, headers: { "x-lively-identity": ident() }, agent: false }, (res) => {
-        res.once("data", () => { q.destroy(); setTimeout(resolve, 150); });
+        res.once("data", () => { q.destroy(); resolve(); });
       });
       q.on("error", () => undefined);
       q.end();
     });
-    assert.equal(h.calls[0]!.signal?.aborted, true, "브라우저가 떠났는데 함수 흐름을 계속 받았다");
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(inflightNow("notes").app, 1, "브라우저가 떠나자마자 자리를 돌려줬다 — 함수는 아직 돈다(끊었다 다시 붙기로 상한을 넘는다)");
+    assert.equal(h.calls[0]!.signal, undefined, "함수 흐름을 끊으려 했다(끊어도 Lambda 는 계속 돈다)");
+    for (let i = 0; i < 60 && inflightNow("notes").app !== 0; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(inflightNow("notes").app, 0, "흐름이 끝났는데 자리를 안 돌려줬다");
+    assert.equal(h.consumed(), true, "남은 흐름을 끝까지 읽지 않았다");
+    assert.deepEqual(h.recorded.map((x) => x.r), [{ billedMs: 651, error: false }], "실제 청구 시간으로 세지 않았거나 · 떠난 것을 앱 오류로 셌다");
   } finally { await h.close(); }
+});
+
+test("D20 흐름 끝(InvokeComplete)에 ErrorCode — REPORT 가 ok 이거나 없어도 잘린 응답으로 본다(끊는다) · 오류로 셈", async () => {
+  for (const report of ["REPORT RequestId: r\tDuration: 3.00 ms\tBilled Duration: 4 ms\t", ""]) {
+    const h = await start({ kind: "ok", prelude: { statusCode: 200, headers: {} }, body: ["part"], errorCode: "Sandbox.Timedout", report });
+    try {
+      const r = await get(h.port, "/", { "x-lively-identity": ident() });
+      assert.equal(r.body, "part");
+      assert.equal(r.complete, false, `REPORT=${JSON.stringify(report)}: 잘린 응답을 온전히 끝냈다`);
+      assert.equal((h.recorded[0]!.r as { error: boolean }).error, true);
+    } finally { await h.close(); }
+  }
+});
+
+test("D22 ★ 그 별칭의 판에 앱 토큰 기록이 없다(v2-5 때 올린 판) — 부르지 않고 503 app_server_outdated", async () => {
+  for (const [view, o] of [["installed", { cur_token_hash: null }], ["published", { pub_token_hash: null }]] as const) {
+    const h = await start({ kind: "ok", prelude: { statusCode: 200, headers: {} }, body: ["x"] }, { view, row: row(o) });
+    try {
+      const r = await get(h.port, "/", { "x-lively-identity": ident(), accept: "application/json" });
+      assert.equal(r.status, 503, view);
+      assert.equal(JSON.parse(r.body).error, "app_server_outdated", view);
+      assert.equal(h.calls.length, 0, `${view}: 옛 판을 불렀다`);
+    } finally { await h.close(); }
+  }
+  //  다른 별칭의 기록만 없으면 이 주소는 연다(공개 판만 옛 판 · 지금 판은 새 판)
+  const h = await start({ kind: "ok", prelude: { statusCode: 200, headers: {} }, body: ["ok"] }, { view: "installed", row: row({ pub_token_hash: null }) });
+  try { assert.equal((await get(h.port, "/", { "x-lively-identity": ident() })).status, 200); } finally { await h.close(); }
 });

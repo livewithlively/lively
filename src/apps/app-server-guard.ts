@@ -21,13 +21,14 @@ import { crc32 } from "../util/crc32.js";
 declare const require: (id: string) => unknown;   // guardMain 이 Lambda 안에서 CommonJS 로 돌 때의 require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 문 판 — 레이어 설명에 들어간다(사람이 보는 표지 · 실제 같고 다름은 내용 지문으로 가른다). */
-export const GUARD_VERSION = 1;
+export const GUARD_VERSION = 2;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다(#4485 격리 리뷰)
 /** 문이 받는 포트(웹 어댑터 AWS_LWA_PORT) — 앱은 $PORT(8080)에서 받는다. */
 export const GUARD_PORT = 8099;
 export const APP_PORT = 8080;
 /** 준비 판정 경로 — 앱 포트가 열렸을 때만 200. 앱 주소 앞단은 `/_lively/*` 를 앱으로 보내지 않는다. */
 export const GUARD_READY_PATH = "/_lively/guard/ready";
-/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음). 시험 호출이 «문이 있다» 를 이것으로 본다. */
+/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음) · error(문 안의 오류). 시험 호출이 «문이 있다» 를 이것으로 본다.
+ *  앱이 받는 머리글: x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(decodeURIComponent 로 푼다) · x-lively-variant(pub | draft). */
 export const GUARD_HEADER = "x-lively-guard";
 /** 레이어 안 경로(/opt 아래). */
 export const GUARD_BOOTSTRAP_PATH = "/opt/lively/bootstrap";
@@ -102,6 +103,8 @@ function guardMain(): void {
   const agent = new http.Agent({ keepAlive: true, maxSockets: 256 });
   let denials = 0, denialsAt = 0;
 
+  const enc = (x: string): string => encodeURIComponent((x as string & { toWellFormed?: () => string }).toWellFormed?.() ?? x);
+
   const sendJson = (res: import("node:http").ServerResponse, status: number, mark: string, o: unknown): void => {
     const body = Buffer.from(JSON.stringify(o), "utf8");
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": body.length, "cache-control": "no-store", [GUARD]: mark });
@@ -111,6 +114,14 @@ function guardMain(): void {
   const server = http.createServer((req, res) => {
     req.on("error", () => undefined);
     res.on("error", () => undefined);
+    try { handle(req, res); } catch (e) {
+      //  예기치 못한 오류(앱으로 갈 요청을 못 만듦 등) — 던진 채 두면 답이 안 나가 함수 시간까지 매달린다. 답하고 끝낸다.
+      console.error("[lively-guard] 처리 실패", (e as Error)?.message ?? e);
+      if (!res.headersSent) sendJson(res, 500, "error", { error: "guard_error", message: "앱 서버 앞의 검사 층이 요청을 처리하지 못했습니다." });
+      else res.destroy();
+    }
+  });
+  function handle(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): void {
     const url = String(req.url || "/");
     const path = url.split("?")[0];
     if (path === READY_PATH) {
@@ -147,8 +158,10 @@ function guardMain(): void {
       if (k.startsWith("x-lively-") && k !== "x-lively-identity") continue;
       headers[k] = val;
     }
-    headers["x-lively-member"] = v.claims.sub;
-    headers["x-lively-member-name"] = encodeURIComponent(v.claims.name);
+    //  구성원 id · 이름은 퍼센트 인코딩해서 싣는다 — 머리글은 Latin-1 밖 글자(한글 id «윤상민» 등)를 못 담는다(그대로 실으면 요청을 못 만들어 매달린다 · 격리 리뷰).
+    //   영숫자 · - _ . ~ 만인 id 는 그대로다. 짝 없는 대리 문자는 바로잡아(U+FFFD) 인코딩한다(encodeURIComponent 가 던지지 않게).
+    headers["x-lively-member"] = enc(v.claims.sub);
+    headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
     const preq = http.request({ host: APP_HOST, port: APP_PORT, method: req.method, path: url, headers, agent }, (pres) => {
       const out: string[] = [];
@@ -167,7 +180,7 @@ function guardMain(): void {
     });
     res.on("close", () => { if (!res.writableFinished) preq.destroy(); });
     req.pipe(preq);
-  });
+  }
   server.keepAliveTimeout = 60_000;
   server.on("clientError", (_e, socket) => { try { socket.destroy(); } catch { /* 이미 닫혔다 */ } });
   server.listen(GUARD_PORT, "127.0.0.1");

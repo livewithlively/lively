@@ -11,7 +11,8 @@
 //   · 응답: 앞머리(상태 · 머리글 · 쿠키)를 쓰고 본문을 조각째 흘려 보낸다(SSE 가 된다). 앱의 화면 끼우기 규칙(X-Frame-Options · CSP frame-ancestors)은
 //     걷는다 — 앱 주소를 어디에 끼울지는 앞단이 정한다(라이블리 워크스페이스 화면만 · CP 라우터가 frame-ancestors 를 붙인다). 쿠키는 앞단이 고쳐 넘긴다
 //     (그래서 이 응답임을 x-lvly-app-server: 1 로 알린다 — 앞단이 지우고 넘긴다).
-//   · 앱이 본문을 보내다 죽거나 시간이 넘으면(REPORT «Status: error|timeout») 연결을 끊는다 — 잘린 응답을 온전히 끝난 것처럼 닫지 않는다.
+//   · 앱이 본문을 보내다 죽거나 시간이 넘으면(REPORT «Status: error|timeout» · 흐름 끝의 ErrorCode) 연결을 끊는다 — 잘린 응답을 온전히 끝난 것처럼 닫지 않는다.
+//   · 브라우저가 떠나도 함수 흐름은 끝까지 읽는다(자리 · 실행 시간 셈을 지키려고 — serveAppServer 안 ★).
 import type express from "express";
 import crypto from "node:crypto";
 import { logger } from "../log.js";
@@ -75,10 +76,14 @@ export const liveServerFrontDeps = (tenantId: string): AppServerFrontDeps => ({
 const HOP_REQ = new Set(["connection", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade", "content-length", "expect", "host"]);
 const HOP_RES = new Set(["connection", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
 
-/** CSP 한 줄에서 frame-ancestors 지시를 뺀다(순수). 남는 게 없으면 null. */
+/**
+ * CSP 에서 frame-ancestors 지시를 뺀다(순수). 같은 이름 머리글 여러 줄은 쉼표로 이어져 온다(parsePrelude) — 쉼표는 정책 사이의 구분이라
+ *  (CSP3 serialized-policy-list) 정책마다 뺀 뒤 빈 정책은 버린다. 남는 게 없으면 null.
+ */
 export function stripFrameAncestors(csp: string): string | null {
-  const kept = csp.split(";").map((d) => d.trim()).filter((d) => d && !/^frame-ancestors(\s|$)/i.test(d));
-  return kept.length ? kept.join("; ") : null;
+  const policies = csp.split(",").map((pol) => pol.split(";").map((d) => d.trim()).filter((d) => d && !/^frame-ancestors(\s|$)/i.test(d)).join("; "))
+    .filter(Boolean);
+  return policies.length ? policies.join(", ") : null;
 }
 
 /** 앞단 → 게이트웨이로 온 경로(경로 + 쿼리, 인코딩된 그대로) → rawPath · rawQueryString. `/` 로 시작하지 않으면 null. */
@@ -199,6 +204,11 @@ export async function serveAppServer(req: express.Request, res: express.Response
     return failReply(req, res, 503, "app_server_not_deployed", "앱 서버가 아직 올라가지 않았습니다",
       "앱을 만든 사람이 「이대로 넣기」 또는 app_server_deploy 로 서버를 올리면 열립니다.");
   }
+  //  그 판에 앱 토큰 기록이 없다 = v2-6 전(v2-5)에 올린 판 — 검사 층 · 흘려 보내기 설정이 없어 부르면 알 수 없는 오류가 된다. 다시 올리라고 말한다.
+  if (!(alias === "pub" ? row.pub_token_hash : row.cur_token_hash)) {
+    return failReply(req, res, 503, "app_server_outdated", "앱 서버를 다시 올려야 합니다",
+      "이 판은 앱 주소에서 부르는 설정 전에 올라갔습니다. 앱을 만든 사람이 「이대로 넣기」 또는 app_server_deploy 로 다시 올리면 열립니다.");
+  }
   if (row.stopped_at) {
     return failReply(req, res, 503, "app_server_stopped", "앱 서버가 멈춰 있습니다",
       `${row.stop_reason ? `까닭: ${row.stop_reason}. ` : ""}관리자(손으로 멈췄으면 책임자)가 다시 켜면 열립니다.`);
@@ -226,9 +236,10 @@ export async function serveAppServer(req: express.Request, res: express.Response
   }
   const now = (deps.now ?? Date.now)();
   const t0 = Date.now();
-  const ac = new AbortController();
-  const onClose = (): void => { if (!res.writableFinished) ac.abort(); };
-  res.on("close", onClose);
+  //  ★ 브라우저가 떠나도 함수 흐름을 끊지 않는다 — Lambda 는 부른 쪽이 끊어도 함수가 끝날 때(또는 시간)까지 돈다. 끊고 자리를 돌려주면
+  //   «부르고 곧 끊기» 를 되풀이해 동시 처리 상한을 넘기고, 실행 시간도 끊은 때까지만 세어 자동 멈춤이 덜 본다(격리 리뷰).
+  //   그래서 남은 흐름은 끝까지 읽어 버리고(브라우저로는 안 보낸다) 그동안 자리를 쥐며, 끝나면 REPORT 의 청구 시간으로 센다.
+  //   흐름은 invokeStream 의 시한(요청 상한 + 5초)이 끊는다.
   let counted = false;
   const count = (r: { billedMs?: number | null; error?: boolean }): void => { if (!counted) { counted = true; (deps.record ?? recordAppServerCall)(t.app.id, r); } };
   try {
@@ -239,10 +250,10 @@ export async function serveAppServer(req: express.Request, res: express.Response
     const api = deps.api ?? realLambdaApi(env.region);
     let out;
     try {
-      out = await api.invokeStream(row.function_name, alias, JSON.stringify(event), { timeoutMs: policy.timeout_s * 1000 + 5_000, logTail: true, signal: ac.signal });
+      out = await api.invokeStream(row.function_name, alias, JSON.stringify(event), { timeoutMs: policy.timeout_s * 1000 + 5_000, logTail: true });
     } catch (e) {
       count({ billedMs: Date.now() - t0, error: true });
-      if (ac.signal.aborted) { res.destroy(); return; }
+      if (res.destroyed) return;
       if (e instanceof AwsError) {
         logger.warn({ app: t.app.id, fn: row.function_name, alias, code: e.code, status: e.status }, "[app-front-server] 앱 서버 함수를 부르지 못했다");
         if (e.code === "TooManyRequestsException") return failReply(req, res, 503, "app_server_throttled", "앱 서버가 지금 바쁩니다", "잠시 뒤 다시 해 주세요.", { "Retry-After": "5" });
@@ -279,27 +290,27 @@ export async function serveAppServer(req: express.Request, res: express.Response
     let complete: Complete | null = null;
     for await (const ev of start.rest) {
       if (ev.type === "complete") { complete = ev; break; }
-      if (alive) alive = await writeChunk(res, ev.data);
-      if (!alive) { ac.abort(); break; }
+      if (alive) alive = await writeChunk(res, ev.data);   // 브라우저가 떠났으면 읽기만 한다(위 ★)
     }
     const rep = complete ? parseReport(complete.log) : null;
-    const bad = !alive || !complete || (rep !== null && rep.status !== "ok");
-    count({ billedMs: rep?.billedMs ?? Date.now() - t0, error: bad });
-    if (bad) {
-      if (alive) logger.warn({ app: t.app.id, fn: row.function_name, alias, status: rep?.status ?? "no-complete", type: rep?.errorType }, "[app-front-server] 앱 서버 응답이 중간에 끊겼다 — 연결을 끊는다");
-      if (alive) abortAfterFlush(res); else res.destroy();
+    //  앱 쪽 실패 — 흐름이 끝 표시 없이 끝남 · 흐름 끝에 AWS 오류 칸(ErrorCode) · REPORT 가 error/timeout. 브라우저가 떠난 것은 앱의 오류가 아니다(셈에서 가른다).
+    const appFailed = !complete || !!complete.errorCode || (rep !== null && rep.status !== "ok");
+    count({ billedMs: rep?.billedMs ?? Date.now() - t0, error: appFailed });
+    if (!alive) { res.destroy(); return; }   // 브라우저가 떠났다 — 보낼 곳이 없다
+    if (appFailed) {
+      logger.warn({ app: t.app.id, fn: row.function_name, alias, status: rep?.status ?? "no-complete", type: rep?.errorType ?? complete?.errorCode }, "[app-front-server] 앱 서버 응답이 중간에 끊겼다 — 연결을 끊는다");
+      abortAfterFlush(res);   // 잘린 응답 — 온전히 끝난 것처럼 닫지 않는다
       return;
     }
     res.end();
   } catch (e) {
     count({ billedMs: Date.now() - t0, error: true });
-    if (!res.headersSent && !ac.signal.aborted) {
+    if (!res.headersSent && !res.destroyed) {
       logger.warn({ app: t.app.id, err: (e as Error)?.message }, "[app-front-server] 앱 서버 응답을 잇다 실패");
       return failReply(req, res, 502, "app_server_stream_error", "앱 서버 응답을 받지 못했습니다", "잠시 뒤 다시 해 주세요.");
     }
     res.destroy();
   } finally {
-    res.off("close", onClose);
     slot();
   }
 }

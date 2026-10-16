@@ -37,6 +37,8 @@ export declare function createLivelyDb<TSchema extends Record<string, unknown> =
 
 /** Express·Connect 미들웨어 — 그 요청 안의 DB 호출이 들어온 사람 신원(X-Lively-Identity)을 싣는다. */
 export declare function livelyIdentity(): (req: { headers: Record<string, string | string[] | undefined> }, res: unknown, next: () => void) => void;
+/** 이 요청의 사람(앱 서버 함수 앞 검사 층이 붙인 머리글을 풀어서) — 없으면 null. 라이블리 앱 서버 함수 안에서만 믿을 수 있다. */
+export declare function livelyMember(req: { headers: Record<string, string | string[] | undefined> }): { id: string; name: string; variant: "pub" | "draft" } | null;
 
 /** fn 안의 DB 호출이 그 신원을 싣는다(Next 라우트 · Lambda 핸들러). fn 의 결과를 안에서 기다려 Promise 로 돌려준다. */
 export declare function withIdentity<T>(identity: string | null | undefined, fn: () => T): Promise<Awaited<T>>;
