@@ -795,7 +795,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (!S.dead) S.logT = window.setTimeout(() => { void pump(); }, 2500);
   };
   // 기다림 띠(③ 보낸 뒤) — m:ss
-  const tickWait = (): void => { if (!S.waiting) return; const s = Math.floor((Date.now() - S.waitT0) / 1000); band.replaceChildren(el('span', { text: 'AI가 수정하고 있어요(' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') + '). 다음 버전이 나오면 알려드려요.' })); band.hidden = false; S.tick = window.setTimeout(tickWait, 1000); };
+  const tickWait = (): void => { if (!S.waiting) return; const s = Math.floor((Date.now() - S.waitT0) / 1000); band.replaceChildren(el('span', { text: 'AI 수정 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') })); band.hidden = false; S.tick = window.setTimeout(tickWait, 1000); };
 
   // ── 단계 화면들 ──
   const paintPlan = (): void => {
