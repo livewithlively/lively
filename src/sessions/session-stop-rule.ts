@@ -141,8 +141,49 @@ export function stopVerdict(f: StopFacts, view: Pick<ViewState, "viewing" | "unk
   return { act: "stop", state, since, dueAt };
 }
 
-/** 목록 행 + 장부 행 → 판정 재료. */
-export function stopFactsOf(s: SessionInfo, st: SessionState | undefined, managedIds: ReadonlySet<string>): StopFacts {
+// ── 옛 회수 시계와의 경계 (#4697 T7) ─────────────────────────────────────────────────────────────────────────────────
+//  매니지드에서 옛 회수 시계(유휴 120 · 붙음 240 · 작업 480분 · 메모리 압박 — session-reaper.ts)는 **이 규칙이 판정하는 세션에서 손을 뗀다.**
+//  판정하는 세션 = stopVerdict 가 «범위 안이고 판정할 재료가 있다» 고 답한 세션이다: 끈다 · 보는 중 · 모름(게이트웨이가 막 뜸) · 작업 중 ·
+//   백그라운드 · 예약 · 시계가 가는 중. 그 밖은 옛 시계가 그대로 맡는다 — grok·opencode·셸(하네스 밖) · 대화 id 없음 · 위탁·앱·로그인(사람 세션 아님) ·
+//   대화창 런타임 · 예약을 모름(옛 훅으로 뜬 claude) · 그 상태의 시계를 관리자가 꺼 둠(0) · 시계 재료 없음.
+//  ⚠ 둘이 한 세션을 함께 보면 옛 시계가 이 규칙이 지키는 세션(보는 중 · 예약 깨움 대기 — 상한 없음)을 240·120분에 죽인다. 반대로 이 규칙이
+//   판정하지 않는 세션에서까지 옛 시계를 빼면 그 세션은 아무도 끄지 않는다(실측 2026-10-16: 옛 훅으로 뜬 claude 세션 둘이 39시간째 «예약 모름» 으로 남았다).
+//  ⚠ 두 분(N·M)을 모두 0 으로 두면 이 규칙이 아무것도 판정하지 않으니 옛 시계가 모든 세션을 다시 맡는다 — 관리자가 쥔 되돌리기 손잡이다.
+const RULE_DECIDES: ReadonlySet<KeepWhy> = new Set<KeepWhy>(["viewing", "view-unknown", "working", "background", "scheduled", "clock"]);
+
+/** (순수) 이 판정이 «이 규칙이 그 세션을 맡는다» 는 뜻인가 — 옛 회수 시계가 손을 떼는 조건(위 머리말). */
+export function stopRuleDecides(v: StopVerdict): boolean {
+  return v.act === "stop" || RULE_DECIDES.has(v.why);
+}
+
+/**
+ * 이 판에서 이 규칙이 맡는 세션 id — 옛 회수기(session-reaper.ts)가 후보를 고르기 전에 묻는다. 테넌트 컨텍스트 안에서 부른다.
+ *  셀프호스트(규칙이 안 도는 배포)면 늘 빈 집합이다 — 옛 회수기는 종전 그대로 돈다.
+ *  @param policy  옛 회수기가 이미 읽은 같은 정책(N·M 을 거기서 읽는다 — 두 모듈이 정책을 따로 읽어 판이 갈리지 않게)
+ */
+export function sessionsUnderStopRule(
+  live: ReadonlyArray<SessionInfo>,
+  states: ReadonlyArray<{ id: string } & Partial<Pick<SessionState, "kind" | "claude_session_id">>>,
+  managedIds: ReadonlySet<string>,
+  policy: Partial<SessionReclaimPolicy>,
+  over: Partial<Pick<StopRuleDeps, "enabled" | "view" | "now">> = {},
+): ReadonlySet<string> {
+  const enabled = over.enabled ?? (() => tmuxInSessionContainer(tenantSlug()));
+  if (!enabled()) return new Set();
+  const mins = stopMinutesOf(policy);
+  if (!(mins.doneMin > 0) && !(mins.askingMin > 0)) return new Set();
+  const view = over.view ?? ((id: string) => viewState(id));
+  const nowSec = Math.floor((over.now ?? Date.now)() / 1000);
+  const byId = new Map(states.map((s) => [s.id, s]));
+  const out = new Set<string>();
+  for (const s of live) {
+    if (stopRuleDecides(stopVerdict(stopFactsOf(s, byId.get(s.id), managedIds), view(s.id), mins, nowSec))) out.add(s.id);
+  }
+  return out;
+}
+
+/** 목록 행 + 장부 행 → 판정 재료. 장부 행은 종류·대화 id 만 본다(옛 회수기는 id 만 든 행을 넘길 수 있다 — 그러면 «대화 id 없음»). */
+export function stopFactsOf(s: SessionInfo, st: Partial<Pick<SessionState, "kind" | "claude_session_id">> | undefined, managedIds: ReadonlySet<string>): StopFacts {
   const appServer = codexChatMode({ harness: s.harness, stamp: s.runtimeRaw }) === "app-server";
   const runtime = appServer ? "app-server" : s.runtimeChoice === "chat" ? "chat" : "tui";
   return {
@@ -204,6 +245,11 @@ export interface StopRuleResult {
   stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null }>;
   /** 남겨 둔 이유별 수 */
   kept: Partial<Record<KeepWhy | HoldWhy, number>>;
+  /**
+   * #4697 — 이유별로 가장 오래 논 세션(마지막 활동 → 지금, 초). 7일 측정이 «같은 세션이 며칠째 그 이유로 남는가» 를 본다 — 규칙이 맡은 세션은
+   *  옛 시계가 손을 떼므로(session-reaper.ts), 이 규칙이 못 끄는 채 굳는 세션(보는 중 · 작업 중 · 판정 불가 …)은 여기서만 보인다(격리 리뷰).
+   */
+  keptOldest?: Partial<Record<KeepWhy | HoldWhy, { id: string; idleSec: number }>>;
   /** 다음 마감까지 남은 초(없으면 없음) */
   nextDueInSec?: number;
 }
@@ -253,6 +299,11 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
   const d: StopRuleDeps = { ...defaultDeps(), ...over };
   const kept: StopRuleResult["kept"] = {};
   const count = (k: keyof StopRuleResult["kept"]): void => { kept[k] = (kept[k] ?? 0) + 1; };
+  const oldest: NonNullable<StopRuleResult["keptOldest"]> = {};
+  const noteOldest = (k: keyof StopRuleResult["kept"], id: string, idleSec: number): void => {
+    const o = oldest[k];
+    if (!o || idleSec > o.idleSec) oldest[k] = { id, idleSec: Math.max(0, Math.round(idleSec)) };
+  };
   if (!d.enabled()) return { enabled: false, why: "self-hosted", scanned: 0, stopped: [], kept };
   const key = tenantKey();
   if (inFlight.has(key)) { count("busy-sweep"); return { enabled: true, why: "in-flight", scanned: 0, stopped: [], kept }; }
@@ -271,9 +322,11 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const due: Array<{ s: SessionInfo; state: StopState; since: number }> = [];
     let nextDue = Infinity;
     for (const s of live) {
-      const v = stopVerdict(stopFactsOf(s, byId.get(s.id), managedIds), d.view(s.id), mins, nowSec);
+      const f = stopFactsOf(s, byId.get(s.id), managedIds);
+      const v = stopVerdict(f, d.view(s.id), mins, nowSec);
       if (v.act === "keep") {
         count(v.why);
+        noteOldest(v.why, s.id, nowSec - (f.lastActive || (f.lastReport?.at ?? 0) || f.created || nowSec));
         if (v.why === "clock" && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
         continue;
       }
@@ -287,32 +340,34 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const holdKey = (id: string): string => key + "\u0000" + id;
     for (const [k, until] of jobHold) if (until <= nowMs) jobHold.delete(k);
     const held = due.filter((x) => jobHold.has(holdKey(x.s.id)));
-    for (let i = 0; i < held.length; i++) count("jobs");
+    for (const x of held) { count("jobs"); noteOldest("jobs", x.s.id, nowSec - x.since); }
     const toJudge = due.filter((x) => !jobHold.has(holdKey(x.s.id)));
     //  상한은 프로브 **앞**에서도 건다 — 롤 직후처럼 후보가 많을 때 전부를 동시에 컨테이너 프로브하지 않게(격리 리뷰). 오래 논 것부터 본다.
     let capped = false;
     toJudge.sort((a, b) => a.since - b.since);
-    for (const _ of toJudge.splice(MAX_STOPS_PER_SWEEP * 2)) { count("capped"); capped = true; }
+    for (const x of toJudge.splice(MAX_STOPS_PER_SWEEP * 2)) { count("capped"); noteOldest("capped", x.s.id, nowSec - x.since); capped = true; }
     let verdicts: JobVerdicts = { jobs: new Set(), unknown: new Set() };
     if (toJudge.length) {
       try { verdicts = await d.jobVerdicts(new Set(toJudge.map((x) => x.s.id))); }
       catch (e) {
         logger.warn({ err: e, candidates: toJudge.length }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
-        for (let i = 0; i < toJudge.length; i++) count("jobs-unknown");
+        for (const x of toJudge) { count("jobs-unknown"); noteOldest("jobs-unknown", x.s.id, nowSec - x.since); }
         toJudge.length = 0;
       }
     }
     const stopped: StopRuleResult["stopped"] = [];
     for (const { s, state, since } of toJudge) {
-      if (verdicts.jobs.has(s.id)) { count("jobs"); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
-      if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); continue; }
-      if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); capped = true; continue; }
+      if (verdicts.jobs.has(s.id)) { count("jobs"); noteOldest("jobs", s.id, nowSec - since); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
+      if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); noteOldest("jobs-unknown", s.id, nowSec - since); continue; }
+      if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; continue; }
       try {
         const out = await stopOne(d, s, state);
-        if (out.skip) { count(out.skip); continue; }
+        //  낡은 질의 표식으로 «답이 났다(answered)» 에 영영 걸리는 세션도 여기서 보인다(재검토 C).
+        if (out.skip) { count(out.skip); noteOldest(out.skip, s.id, nowSec - since); continue; }
         stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null });
       } catch (e) {
         count("failed");
+        noteOldest("failed", s.id, nowSec - since);
         logger.warn({ err: e, id: s.id, state }, "하네스 종료 규칙: 끄기 실패(다음 판에 다시)");
       }
     }
@@ -320,13 +375,31 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     if (capped) nextDue = Math.min(nextDue, nowSec);
     const nextDueInSec = Number.isFinite(nextDue) ? Math.max(0, nextDue - nowSec) : undefined;
     if (nextDueInSec !== undefined) d.arm(nextDue);
-    const result: StopRuleResult = { enabled: true, ...mins, scanned: live.length, stopped, kept, ...(nextDueInSec !== undefined ? { nextDueInSec } : {}) };
+    const result: StopRuleResult = {
+      enabled: true, ...mins, scanned: live.length, stopped, kept,
+      ...(Object.keys(oldest).length ? { keptOldest: oldest } : {}),
+      ...(nextDueInSec !== undefined ? { nextDueInSec } : {}),
+    };
     //  끈 판은 무엇을 왜 껐는지 남긴다(#2652 교훈 — 개수만 남긴 로그는 사후에 아무것도 못 판다). 아무것도 안 끈 판은 조용히(30초마다 돈다).
-    if (stopped.length) logger.info(result, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
+    //  #4697 — 어느 워크스페이스의 판인지 싣는다(7일 측정이 워크스페이스별로 센다). 결과 모양(CP 가 읽는다)은 그대로 둔다.
+    if (stopped.length) logger.info({ tenant: currentTenant()?.slug ?? null, ...result }, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
     return result;
   } finally {
     inFlight.delete(key);
   }
+}
+
+/**
+ * #4697 T7 — 5분 하우스키핑 틱의 판을 워크스페이스당 한 줄로 남긴다(«왜 안 껐나» 분포 — 7일 측정이 센다: 예약 모름(옛 훅) 세션이 줄어드는가 ·
+ *  보는 중·작업 중으로 오래 남는 세션이 있는가). 요청 정비(30초)·마감 깨움 판은 끈 것이 있을 때만 찍는다(위 sweepSessionStopRule) — 그 판까지 매번 찍으면
+ *  워크스페이스마다 분당 두 줄이다. 다른 판이 돌던 중이라 이 판이 건너뛰었으면(in-flight) 안 찍는다(빈 표를 «아무것도 없다» 로 읽지 않게).
+ */
+export function logStopRuleTick(
+  r: StopRuleResult,
+  log: (o: Record<string, unknown>) => void = (o) => logger.info(o, "하네스 종료 규칙 틱(측정 #4697)"),
+): void {
+  if (!r.enabled || r.why === "in-flight") return;
+  log({ tenant: currentTenant()?.slug ?? null, scanned: r.scanned, stopped: r.stopped.length, kept: r.kept, keptOldest: r.keptOldest, nextDueInSec: r.nextDueInSec });
 }
 
 /**

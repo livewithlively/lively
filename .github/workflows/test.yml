@@ -128,6 +128,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/app-instance-dismiss.pg-test.mjs
+      # ④-c2 아웃박스 결말 SQL(#4697 T7) — 모든 프롬프트 배달이 지나는 UPDATE 에 측정용 RETURNING 을 붙였다. SQL 이 틀리면
+      #    배달 루프가 결말마다 던져 사람의 말이 하나도 안 간다 — 목 풀은 SQL 문자열이 무엇이든 초록이라 실 Postgres 로만 판정된다.
+      - name: 아웃박스 결말 SQL PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-outbox-mark.pg-test.mjs
       # ④-d 새 셸 개인화 저장(#3887) — 목으로는 못 보는 것: **저장소 단위 병합이 다른 저장소를 안 지우나 · jsonb 를 지나도
       #    치움 순서가 되살아나나**. 병합은 SQL 한 문장(`prefs - 지울 칸 || 넣을 칸`)이고, jsonb 는 객체 키를 길이순으로
       #    다시 늘어놓는다 — 둘 다 실제 Postgres 가 돌려주는 값으로만 판정된다.

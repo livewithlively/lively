@@ -49,6 +49,8 @@ import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { logger } from "../log.js";
+import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
+import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
 /** prompt=사람이 보낸 말(대화창 말풍선) · control=설정 슬래시 명령(모델·추론강도 바꾸기, #1758 — 말풍선 아님·에코 없음). */
@@ -317,9 +319,12 @@ async function deliverLoop(sessionId: string): Promise<void> {
         if (verdict === "gone" && !restorable) {
           // 확답으로 사라졌고 되살릴 자리도 없다 — 나이와 무관하게 같은 결말이니 대기분 전부 실패로(종전과 같다).
           //  ⚠ 나이로 갈리는 실패(TTL 초과)는 여기 오면 안 된다 — 아직 어린 뒷줄까지 같이 버리게 된다.
-          await itemsPool.query(
+          const gone = await itemsPool.query(
             `UPDATE org_session_outbox SET status='failed', last_error=$2, updated_at=now()
              WHERE session_id=$1 AND status IN ('queued','sending')`, [sessionId, reason]);
+          //  #4697 T7 — 측정: 되살릴 자리가 없는 세션에 묶여 있던 말(한 줄에 행 수만).
+          logger.info({ tenant: currentTenant()?.slug ?? null, sessionId, status: "failed", error: outboxErrorCode(reason), rows: gone.rowCount ?? 0 },
+            "outbox: 배달 결말(측정 #4697)");
           return true;
         }
         await mark(row.id, "failed", reason);   // 입력창이 끝내 안 떴다·끝내 못 닿았다 — 화면이 사유와 함께 보여준다
@@ -481,13 +486,28 @@ async function deliverViaCodexChat(
   }
 }
 
-async function mark(id: number, status: OutboxStatus, err?: string): Promise<void> {
-  await itemsPool.query(
+async function mark(id: number, status: OutboxStatus, err?: string): Promise<OutboxSettledMeasure | null> {
+  //  #4697 T7 — 결말(delivered·sent·failed)이면 측정 한 줄(outbox-measure.ts 머리말). 시간은 DB 의 now() 로 잰다. 글은 머리만 받아 답 문장인지만 본다.
+  const r = await itemsPool.query(
     `UPDATE org_session_outbox SET status=$2, last_error=$3, updated_at=now(),
        delivered_at=CASE WHEN $2='delivered' THEN now() ELSE delivered_at END
-     WHERE id=$1`,
+     WHERE id=$1
+     RETURNING session_id, seq, kind, attempts,
+       (extract(epoch FROM now() - created_at) * 1000)::bigint AS wait_ms,
+       CASE WHEN stalled_since IS NULL THEN NULL ELSE (extract(epoch FROM now() - stalled_since) * 1000)::bigint END AS held_ms,
+       left(text, ${ANSWER_HEAD_CHARS}) AS head`,
     [id, status, err ?? null]);
+  const row = r.rows?.[0] as OutboxSettledRow | undefined;
+  if (!row || (status !== "delivered" && status !== "sent" && status !== "failed")) return null;
+  //  측정은 배달을 죽이지 않는다 — 이 함수가 던지면 codex 경로의 catch 가 «못 보냄» 으로 읽어 이미 간 말을 다시 큐에 넣는다(격리 리뷰).
+  try {
+    const m = outboxSettledMeasure(row, status, err, currentTenant()?.slug ?? null);
+    logger.info(m, "outbox: 배달 결말(측정 #4697)");
+    return m;
+  } catch { return null; }
 }
+/** #4697 T7 — 실 Postgres 시험(outbox-mark.pg-test.mjs)이 결말 SQL 을 그대로 부른다. 배달 루프 밖에서 부르지 마라. */
+export { mark as markOutboxRowForTest };
 
 /** 준비 판정의 폴 간격 — 한 행이 sending 에 머무는 상한의 합(`outbox-exec.test` E15)이 이 값을 센다. */
 export const READY_POLL_MS = 500;

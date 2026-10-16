@@ -160,7 +160,13 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     await step("session-reaper", () => reapIdleSessions());
     // #4695 T5 — 하네스 종료 규칙(완료+안 봄 N분 · 질의+안 봄 M분). 주로는 요청에 얹은 정비(30초)와 마감 깨움이 돌리고, 이 틱(5분)은
     //  아무도 안 쓰는 테넌트의 받침이다. 셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다.
-    await step("session-stop-rule", async () => (await import("./sessions/session-stop-rule.js")).sweepSessionStopRule());
+    //  #4697 T7 — 이 틱의 판은 워크스페이스당 한 줄을 남긴다(7일 측정 — «왜 안 껐나» 분포. logStopRuleTick 머리말).
+    await step("session-stop-rule", async () => {
+      const rule = await import("./sessions/session-stop-rule.js");
+      const r = await rule.sweepSessionStopRule();
+      rule.logStopRuleTick(r);
+      return r;
+    });
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
