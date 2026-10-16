@@ -8,7 +8,13 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import * as store from "../org/store/apps.js";
 import { canSeeApp, isAdminViewer, isAppOwner, type Viewer } from "../apps/visibility.js";
-import { appFolderUsageOf, folderFields, fmtGiB, parseFolderLimit, recordAppFolderUsage, APP_FOLDER_LIMIT_MAX_GB } from "../apps/app-folder-quota.js";
+import { appFolderUsageOf, folderFields, fmtGiB, isSchemaNotReady, parseFolderLimit, recordAppFolderUsage, APP_FOLDER_LIMIT_MAX_GB } from "../apps/app-folder-quota.js";
+
+/** CP 전용 두 길 — 표 · 열이 아직 없으면(롤 중 마이그레이션 전 창) 이 기능 전 코어와 같은 404 를 준다(CP 가 경보 없이 건너뛴다). */
+async function orNotReady<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); }
+  catch (e) { if (isSchemaNotReady(e)) throw new HttpError(404, "앱 폴더 상한 표가 아직 없습니다(마이그레이션 전) — 다음 정비에 다시 오세요"); throw e; }
+}
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const viewerOf = (u: LivelyUser | undefined): Viewer => ({ userId: actorOf(u), scopes: u?.scopes ?? [] });
@@ -57,7 +63,7 @@ const appFolderLimits: Capability = {
   scope: "admin",
   input: {},
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/app-folder-limits"], parse: () => ({}) }] },
-  handler: async () => ({ apps: await store.listAppFolderLimits() }),
+  handler: async () => ({ apps: await orNotReady(() => store.listAppFolderLimits()) }),
 };
 
 const appFolderUsageReport: Capability = {
@@ -74,7 +80,7 @@ const appFolderUsageReport: Capability = {
   },
   handler: async (input: Record<string, unknown>) => {
     const rows = (Array.isArray(input.apps) ? input.apps : []) as Array<{ app_id: string; used_bytes: number; limit_gb: number | null }>;
-    return recordAppFolderUsage(rows);
+    return orNotReady(() => recordAppFolderUsage(rows));
   },
 };
 

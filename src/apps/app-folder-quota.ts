@@ -59,9 +59,19 @@ export async function appFolderUsageOf(ids: readonly string[]): Promise<Map<stri
   return out;
 }
 
-/** 앱을 지울 때 — 그 앱의 사용량 행도(FK 없음, remove-run). */
+/**
+ * 표 · 열이 아직 없다는 오류인가(42P01 · 42703) — 매니지드 롤은 게이트웨이가 공용 DB 마이그레이션보다 먼저 요청을 받을 수 있다
+ *  (지식 cp-login-job-asbuilt-4067 «새 표를 더하는 코어 변경은 표가 없는 창을 견뎌야 한다»).
+ */
+export function isSchemaNotReady(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return code === "42P01" || code === "42703";
+}
+
+/** 앱을 지울 때 — 그 앱의 사용량 행도(FK 없음, remove-run). 표가 아직 없으면(마이그레이션 전 창) 지울 것도 없다 — 앱 지우기를 막지 않는다. */
 export async function pruneAppFolderUsage(appId: string): Promise<void> {
-  await itemsPool.query(`DELETE FROM org_app_folder_usage WHERE app_id=$1`, [appId]);
+  try { await itemsPool.query(`DELETE FROM org_app_folder_usage WHERE app_id=$1`, [appId]); }
+  catch (e) { if (!isSchemaNotReady(e)) throw e; }
 }
 
 /** 화면 · 응답에 싣는 앱 폴더 칸 — 원하는 상한 · 지금 걸린 상한 · 사용량 · 단계 · 이 사람이 상한을 바꿀 수 있나. */

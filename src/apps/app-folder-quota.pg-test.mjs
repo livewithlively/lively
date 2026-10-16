@@ -9,6 +9,7 @@
 //     다시 넘을 때 또 알린다 · 없는 앱 건너뜀 · 상한 없는 앱은 알리지 않는다 · 구성원 403
 //  P6 앱 목록 · 상세의 folder 칸 — 쓰는 양 · 걸린 상한 · 단계 · 바꿀 수 있나(책임자 true · 남 false)
 //  P7 새 상한이 지금 쓰는 양보다 작으면 경고를 싣는다      P8 앱을 지우면 사용량 행도 지운다
+//  P9 롤 중 마이그레이션 전 창(표 · 열 없음) — CP 두 길은 404 · 앱 지우기는 막히지 않는다
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -151,6 +152,18 @@ try {
   await cap("org_app_remove").handler({ app_id: "crm" }, admin, { source: "mcp" });
   const left = await q(`SELECT count(*)::int AS n FROM org_app_folder_usage WHERE app_id='crm'`);
   chk("P8 앱을 지우면 사용량 행도 지운다", left[0].n === 0, J(left));
+
+  // ── P9 ── 롤 중 마이그레이션 전 창(표 · 열이 아직 없다) — CP 두 길은 이 기능 전 코어처럼 404 · 앱 지우기는 막히지 않는다
+  await q(`ALTER TABLE org_app_folder_usage RENAME TO org_app_folder_usage_hidden`);
+  await q(`ALTER TABLE org_app RENAME COLUMN folder_limit_gb TO folder_limit_gb_hidden`);
+  const nl = await call("pgt-admin", "GET", "/api/ui/app-folder-limits");
+  const nu = await call("pgt-admin", "POST", "/api/ui/app-folder-usage", { apps: [{ app_id: "memo", used_bytes: 1, limit_gb: null }] });
+  let removed = null;
+  try { await cap("org_app_remove").handler({ app_id: "memo" }, admin, { source: "mcp" }); removed = true; } catch (e) { removed = String(e?.message ?? e); }
+  await q(`ALTER TABLE org_app RENAME COLUMN folder_limit_gb_hidden TO folder_limit_gb`);
+  await q(`ALTER TABLE org_app_folder_usage_hidden RENAME TO org_app_folder_usage`);
+  chk("P9 표 · 열이 아직 없는 창 — 상한 목록 · 사용량 보내기는 404(CP 가 경보 없이 건너뛴다) · 앱 지우기는 된다",
+    nl.status === 404 && nu.status === 404 && removed === true, J({ nl: nl.status, nu: nu.status, removed }));
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);
 } finally {
