@@ -323,10 +323,10 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fb-spacer' }));
     const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
     container.replaceChildren(bar, stage);
-    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
-    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 전체페이지가 맡는다.
+    // ↗ 자료 보기 — 같은 파일을 자료 보기 화면(#/f, #4672)으로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
+    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 자료 보기 화면이 맡는다.
     const fullBtn = el('a', { class: 'dash-fb-btn', href: fileLinkUrl(root, rel), target: '_blank', rel: 'noopener',
-      title: '전체화면(새 탭)으로 열기', text: '⛶ 전체화면' });
+      title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' });
     let out;
     try {
       out = await buildFilePreview({

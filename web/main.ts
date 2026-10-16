@@ -21,7 +21,7 @@ import { parseGuideRoute, renderGuideApp } from './guide/app.js';   // #4179 사
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { renderSessions } from './sessions-app.js'; // #/sessions — 세션 이력 앱(가로탭 셋, #4553) · #/sessions/<sid> 대화록(#905 C1)
-import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
+import { renderFilePage } from './filepage.js'; // #/f — 파일 링크의 «자료 보기»(#1436 → #4672): 상단바를 둔 채 미리보기 · 정보 · 내려받기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
@@ -185,9 +185,9 @@ async function route() {
       setActiveTab('');
       await renderActivate(view);
     } else if (page === 'f') {
-      // #/f?root=<shared|personal>&path=<rel> — 공유 링크의 착지 화면(#1436). **내비게이션이 없는** 전체 페이지로
-      //  파일 하나(또는 폴더 하나)만 보여준다: 링크를 받은 사람이 무엇을 봐야 하는지 찾지 않아도 되게.
-      //  셸(상단바·푸터) 숨김은 body[data-route="f"] CSS 가 한다(위에서 dataset.route 를 이미 세웠다).
+      // #/f?root=<shared|personal|apps>&path=<rel> — 파일 링크의 «자료 보기»(#1436 → #4672). 파일 하나(또는 폴더 하나)를
+      //  미리보기 · 정보 칸 · 내려받기로 보여 준다. 상단바는 둔다(워크스페이스 안 화면 — 다른 데로 갈 수 있게). 푸터만
+      //  body[data-route="f"] CSS 가 숨긴다(위에서 dataset.route 를 이미 세웠다). 새 셸은 이 주소를 셸이 직접 그린다(web/v2/main.ts).
       //  ⚠ 탭 활성 표시는 비운다 — 어느 탭에도 속하지 않는 화면이라 아무 탭이 켜져 있으면 거짓말이 된다.
       setActiveTab('');
       await renderFilePage(view, params);

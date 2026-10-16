@@ -58,8 +58,8 @@ async function openFileViewer(id, rel, name, reload, base, shareBase?) {
   if (out.wide) box.classList.add('ov-box-wide');
   box.append(el('div', { class: 'ov-actions' },
     ...out.tools,
-    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. 좌표를 모르면 버튼 없음(죽은 링크 금지).
-    shareRel ? el('a', { class: 'btn btn-ghost', href: fileLinkUrl('shared', shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면' }) : null,
+    // ↗ 자료 보기 — 같은 파일을 자료 보기 화면(#/f, #4672 — 미리보기 · 정보 · 내려받기)으로 새 탭에 연다. 좌표를 모르면 버튼 없음(죽은 링크 금지).
+    shareRel ? el('a', { class: 'btn btn-ghost', href: fileLinkUrl('shared', shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' }) : null,
     shareRel ? el('button', { class: 'btn btn-ghost', type: 'button', text: '🔗 링크 복사', onclick: () => copyFileLink('shared', shareRel, 'file') }) : null,
     el('button', { class: 'btn btn-ghost', type: 'button', text: '다운로드', onclick: () => authDownload(url + '&download=1', name) }),
     el('button', { class: 'btn btn-ghost', type: 'button', text: '닫기', onclick: () => back.remove() })));

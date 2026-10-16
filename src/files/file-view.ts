@@ -6,7 +6,7 @@
 //   경로 봉쇄(.. · 링크로 바깥)를 건 **뒤에** 부른다 — 여기서는 보여도 되는 자리를 받아 모양만 만든다. 살아 있는 의존(파일 시스템 · DB)은
 //   FileInfoDeps 로 받는다(시험이 가짜를 꽂는다 — file-access.ts 와 같은 자세).
 import path from "node:path";
-import { formatAddress, parseAddress } from "./address.js";
+import { ADDRESS_APP_ID_RE, formatAddress, parseAddress } from "./address.js";
 
 /** 이 자리가 속한 곳 — 화면의 «위치» 와 «○○ 로 가기» 문. */
 export type FilePlace =
@@ -70,6 +70,22 @@ export interface FileInfoDeps {
 export function addressOfLink(root: string, rel: string): string | null {
   if (root !== "shared" && root !== "apps") return null;
   try { return formatAddress(parseAddress(rel ? `${root}/${rel}` : root)); } catch { return null; }
+}
+
+/**
+ * 앱 폴더 링크(root apps)가 가리키는 앱 — 경로를 접은 뒤(. · ..) 첫 마디가 앱 id 꼴(files/address ADDRESS_APP_ID_RE)일 때만 그 id, 아니면 "". 순수.
+ *  동의 안내(browse/info)는 판정에서 떨어진 링크를 이 값으로만 묻는다 — 날 글자(NUL · 꼴이 아닌 이름)를 DB 에 넘기지 않고,
+ *  `crmx/../crm/a` 처럼 접히는 링크는 접힌 경로(실제로 판정받은 자리)의 앱으로 안내한다. 역슬래시는 탐색기 게이트와 같이 구분자로 본다.
+ */
+export function appIdOfLink(rel: string): string {
+  const segs: string[] = [];
+  for (const s of String(rel ?? "").replace(/\\/g, "/").split("/")) {
+    if (!s || s === ".") continue;
+    if (s === "..") { if (!segs.length) return ""; segs.pop(); continue; }
+    segs.push(s);
+  }
+  const first = segs[0] ?? "";
+  return ADDRESS_APP_ID_RE.test(first) ? first : "";
 }
 
 /** 공유 자리에서 프로젝트 밖 자리의 «위치» — 맨 위 폴더 이름(자리 자신이나 맨 위 파일이면 ""). 순수. */

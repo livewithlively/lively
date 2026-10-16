@@ -22,7 +22,7 @@
 //  · 앱 폴더만 하나 다르다(#4671 ③ 결정 1): 그 앱이 보이는데 아직 동의하지 않은 사람에게는 동의 안내를 그린다(서버가 403 app_consent_required).
 //  · 옮긴 파일의 옛 링크(#4688)도 같다 — 서버가 옛 경로와 닿은 자리를 둘 다 이 사람 기준으로 판정한 뒤에만 새 자리를 답한다.
 //  · 셸 `mv` 로 옮긴 것은 서버가 모른다(기록 없음) — «옮겨졌거나 지워졌을 수 있어요» + 같은 이름 후보(browse/similar, 후보도 하나하나 판정을 지난다).
-import { TOKEN_KEY, api, apiUrl, el, errorNote, personDisplayName, sv, toast } from './core.js';
+import { TOKEN_KEY, api, apiUrl, el, errorNote, personDisplayName, replaceKids, sv, toast } from './core.js';
 import { iconPath } from './lib/icon-paths.js';
 import { copyFileLink, fileLinkHash, joinRel, shareLinkIcon, shareRootLabel } from './lib/sharelink.js';
 import { buildFilePreview } from './lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(세 화면 공용)
@@ -71,7 +71,9 @@ const browseQs = (root: string, rel: string): string =>
 //  지금 자리로 넘긴다 — 서버가 닿은 자리를 **이 사람 기준으로 다시 판정**한 뒤에만 답하므로 이 화면은 특권이 없다(위 «권한»).
 //  주소창에는 새 주소만 남긴다(replace — 뒤로가기가 옛 주소로 돌아와 다시 넘기는 고리가 없다 · 링크 복사도 새 주소).
 //  «옮겨진 파일이에요» 한 줄은 넘어온 직후 한 번만 — 넘어간 자리에서 또 못 찾으면 더 따라가지 않는다(서버가 단계 상한을 진다).
-let movedNotice: { root: string; from: string; to: string } | null = null;
+//  안내는 **그린 자리(host)마다** 따로 둔다 — 새 셸은 탭마다 본창이 따로라, 하나를 두면 다른 탭이 먼저 그릴 때 지워 버린다
+//  (보고 있지 않은 탭을 옛 링크로 넘겼다가 돌아오면 안내가 없고, 두 번째 넘기기 막이도 빠진다).
+const movedNotices = new WeakMap<object, { root: string; from: string; to: string }>();
 
 /** 옛 경로의 지금 자리 — 기록이 없거나 · 지금 그 자리를 볼 수 없거나 · 옛 자리에 무엇이 있으면 null(종전 안내 그대로). */
 async function movedTo(root: string, rel: string): Promise<string | null> {
@@ -123,8 +125,9 @@ async function paintFileView(host, params, env: FileViewEnv): Promise<void> {
   const root = String(params.get('root') || 'shared');
   const rel = String(params.get('path') || '').replace(/^\/+|\/+$/g, '');
   const name = rel ? rel.split('/').pop()! : shareRootLabel(root);
-  const arrived = movedNotice && movedNotice.root === root && movedNotice.to === rel ? movedNotice : null;
-  movedNotice = null;
+  const left = movedNotices.get(host);
+  movedNotices.delete(host);   // 이 자리는 이제 이 링크를 그린다 — 남은 안내는 이번 한 번만 쓴다
+  const arrived = left && left.root === root && left.to === rel ? left : null;
   const startHash = location.hash;   // 기다리는 사이 사람이 다른 화면으로 갔으면 끌고 오지 않는다(아래 옛 링크 넘기기)
   const current = env.isCurrent ?? ((): boolean => location.hash === startHash);
 
@@ -142,7 +145,7 @@ async function paintFileView(host, params, env: FileViewEnv): Promise<void> {
       el('b', { text: '옮겨진 자리로 열었어요' }),
       el('span', { class: 'fpg-moved-from', text: '받은 링크의 예전 자리: ' + shareRootLabel(root) + ' / ' + arrived.from }))
     : null;
-  host.replaceChildren(el('div', { class: 'fpg' }, head, ...(note ? [note] : []), el('div', { class: 'fpg-main' }, stage, side)));
+  replaceKids(host, el('div', { class: 'fpg' }, head, ...(note ? [note] : []), el('div', { class: 'fpg-main' }, stage, side)));
 
   //  정보(종류 · 크기 · 속한 곳 · 자료)는 서버 한 번 — 판정은 목록 · 내려받기와 같은 한 벌이고, 안 보이는 자리와 없는 자리는 같은 404 다.
   let info: FileInfo | null = null;
@@ -153,15 +156,16 @@ async function paintFileView(host, params, env: FileViewEnv): Promise<void> {
   } catch (e: any) {
     if (!current()) return;
     if (e && e.status === 403 && e.body && e.body.code === 'app_consent_required' && e.body.app) {
-      showConsent(stage, acts, root, rel, e.body.app, () => { void paintFileView(host, params, env); }, env);
+      showConsent(stage, acts, root, rel, e.body.app, () => { void paintFileView(host, params, env); }, current, env);
       return;
     }
     if (!e || e.status !== 404) {
-      stage.replaceChildren(errorNote(e, '이 링크를 열지 못했습니다'));
-      acts.replaceChildren(...tailActions(root, rel, 'file'));
+      replaceKids(stage, errorNote(e, '이 링크를 열지 못했습니다'));
+      replaceKids(acts, ...tailActions(root, rel, 'file'));
       return;
     }
-    entry = await listedEntry(root, rel);
+    //  이 게이트웨이의 404(못 봄 · 없음 — 같은 몸)면 그대로 «없음» 이다. code 가 없는 404 는 이 라우트가 없는 옛 게이트웨이다 — 부모 목록으로 다시 본다.
+    entry = e.body && e.body.code === 'file_not_found' ? null : await listedEntry(root, rel);
   }
   if (!current()) return;
   if (!entry) {
@@ -169,7 +173,7 @@ async function paintFileView(host, params, env: FileViewEnv): Promise<void> {
     const to = arrived ? null : await movedTo(root, rel);
     if (!current()) return;
     if (to) {
-      movedNotice = { root, from: rel, to };
+      movedNotices.set(host, { root, from: rel, to });
       if (env.replaceRoute) env.replaceRoute(fileLinkHash(root, to));
       else location.replace(fileLinkHash(root, to));
       return;
@@ -177,24 +181,24 @@ async function paintFileView(host, params, env: FileViewEnv): Promise<void> {
     //  기록이 없으면(셸 `mv` 등) 근처의 같은 이름을 후보로 보인다(#4672) — 넘기지는 않는다.
     const near = await sameNameNear(root, rel);
     if (!current()) return;
-    stage.replaceChildren(el('div', { class: 'fpg-msg fpg-msg-empty' },
+    replaceKids(stage, el('div', { class: 'fpg-msg fpg-msg-empty' },
       el('b', { text: '이 링크의 대상을 찾을 수 없어요' }),
       el('span', { text: '파일이 옮겨졌거나 지워졌을 수 있어요. 볼 권한이 없을 때도 같게 보입니다 — 공유한 사람에게 확인해 주세요.' }),
       el('div', { class: 'fpg-msg-path', text: shareRootLabel(root) + ' / ' + rel }),
       near.length ? nearBox(root, near) : null));
-    acts.replaceChildren(...tailActions(root, rel, 'file'));
+    replaceKids(acts, ...tailActions(root, rel, 'file'));
     return;
   }
   if (info) {
     paintInfo(side, info, env);
-    crumbBox.replaceChildren(crumb(root, rel, info.place));
+    replaceKids(crumbBox, crumb(root, rel, info.place));
     //  프로젝트 폴더 · 앱 폴더 자신이면 이름은 그 프로젝트 · 앱의 이름이다 — 폴더 이름(4410 · crm)은 링크를 받은 사람에게 아무 말도 안 한다.
     const own = info.place.kind === 'project' && rel === info.place.folder ? info.place.name
       : info.place.kind === 'app' && rel === info.place.id ? info.place.name : '';
     if (own) titleEl.textContent = own;
   }
   if (entry.type === 'dir') {
-    icon.replaceChildren(dashFolderThumb());
+    replaceKids(icon, dashFolderThumb());
     await showDir(root, rel, stage, acts);
     return;
   }
@@ -306,16 +310,19 @@ function paintInfo(side, info: FileInfo, env: FileViewEnv): void {
       ...(s.createdAt ? row('올린 때', fmtFileDateFull(Date.parse(s.createdAt))) : []),
     ];
     const href = env.sourceHref ? env.sourceHref(s.id) : '';
-    parts.push(el('h2', { class: 'fpg-info-h', text: '자료' }),
-      srow.length ? el('dl', { class: 'fpg-dl' }, ...srow) : null,
-      href ? el('a', { class: 'fpg-door fpg-door-block', href, text: '자료 앱에서 보기 →', title: '자료 앱에서 이 자료를 엽니다 — 목록에서 앞뒤 자료를 훑을 수 있어요' }) : null);
+    //  말할 것이 하나도 없으면(클래식이라 자료 앱 문이 없고 · 올린 사람 · 때 · 지식이 모두 빔) «자료» 제목만 남기지 않는다.
+    if (srow.length || href || s.knowledge.length) {
+      parts.push(el('h2', { class: 'fpg-info-h', text: '자료' }),
+        srow.length ? el('dl', { class: 'fpg-dl' }, ...srow) : null,
+        href ? el('a', { class: 'fpg-door fpg-door-block', href, text: '자료 앱에서 보기 →', title: '자료 앱에서 이 자료를 엽니다 — 목록에서 앞뒤 자료를 훑을 수 있어요' }) : null);
+    }
     if (s.knowledge.length) {
       parts.push(el('div', { class: 'fpg-kn' },
         el('div', { class: 'fpg-kn-h', text: '여기서 나온 지식 ' + s.knowledge.length + '건' }),
         ...s.knowledge.map((k) => el('a', { class: 'fpg-kn-row', href: '#/k/' + encodeURIComponent(k.name), text: k.title || k.name }))));
     }
   }
-  side.replaceChildren(...parts);
+  replaceKids(side, ...parts);
   side.hidden = false;
 }
 
@@ -327,16 +334,20 @@ function shortName(s: string | null): string {
 }
 
 // ── 앱 동의 안내(#4671 ③ 결정 1) — 그 앱은 보이는데 아직 동의하지 않았다 ──────────────────────────────
-function showConsent(stage, acts, root: string, rel: string, app: { id: string; title: string }, again: () => void, env: FileViewEnv): void {
+//  동의 창이 떠 있는 사이 사람이 다른 화면으로 갈 수 있다 — 동의한 뒤에는 **아직 이 자리일 때만** 다시 그린다(current). 안 그러면
+//  그 탭의 지금 화면을 이 링크의 머리로 덮고, 다시 그리기는 자기 «아직 이 자리인가» 에서 멈춰 «불러오는 중» 에 굳는다.
+//  클래식에는 동의 창이 없다 — 같은 링크를 새 화면(?ui=v2 — 이번 한 번만, 고른 화면은 그대로)으로 여는 문을 둔다.
+function showConsent(stage, acts, root: string, rel: string, app: { id: string; title: string }, again: () => void, current: () => boolean, env: FileViewEnv): void {
   const consent = env.consent;
-  stage.replaceChildren(el('div', { class: 'fpg-msg fpg-msg-empty' },
+  replaceKids(stage, el('div', { class: 'fpg-msg fpg-msg-empty' },
     el('b', { text: '앱 「' + app.title + '」 사용에 동의하면 볼 수 있어요' }),
     el('span', { text: '앱 폴더의 파일은 그 앱 사용에 동의한 사람만 열 수 있어요. 한 번 동의하면 이 앱의 다른 파일 링크도 열려요.' }),
     consent
       ? el('button', { class: 'fpg-btn fpg-btn-primary fpg-btn-lg', type: 'button', text: '이 앱 사용에 동의하기',
-        onclick: async () => { if (await consent(app.id, app.title)) again(); } })
-      : el('span', { class: 'fpg-msg-path', text: '새 화면에서 이 링크를 열면 그 자리에서 동의할 수 있어요.' })));
-  acts.replaceChildren(...tailActions(root, rel, 'file'));
+        onclick: async () => { if (await consent(app.id, app.title) && current()) again(); } })
+      : el('a', { class: 'fpg-btn fpg-btn-primary fpg-btn-lg', href: location.pathname + '?ui=v2' + fileLinkHash(root, rel),
+        title: '새 화면은 그 자리에서 동의할 수 있어요 — 이번 한 번만 새 화면으로 열고, 고른 화면(클래식)은 그대로예요', text: '새 화면에서 열고 동의하기' })));
+  replaceKids(acts, ...tailActions(root, rel, 'file'));
 }
 
 // ── 같은 이름 후보(#4672) ─────────────────────────────────────────────────────
@@ -395,12 +406,12 @@ async function download(root: string, rel: string, name: string, address: string
 //  폴더 링크는 '이 폴더를 열어 보라'는 뜻이므로 목록을 준다(파일마다 링크를 다시 뿌리지 않아도 되게 행마다 🔗).
 //  여기선 업로드·삭제 같은 편집을 일부러 넣지 않는다 — 공유받은 사람의 화면이고, 편집 표면은 앱 안에 이미 있다.
 async function showDir(root: string, rel: string, stage, acts): Promise<void> {
-  acts.replaceChildren(...tailActions(root, rel, 'dir'));
+  replaceKids(acts, ...tailActions(root, rel, 'dir'));
   let data: any;
   try { data = await api('/api/ui/terminal/browse?' + browseQs(root, rel)); }
-  catch (e: any) { stage.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다')); return; }
+  catch (e: any) { replaceKids(stage, errorNote(e, '폴더를 불러오지 못했습니다')); return; }
   const items = (data && data.items) || [];
-  if (!items.length) { stage.replaceChildren(el('div', { class: 'fpg-msg', text: '빈 폴더입니다.' })); return; }
+  if (!items.length) { replaceKids(stage, el('div', { class: 'fpg-msg', text: '빈 폴더입니다.' })); return; }
   const list = el('div', { class: 'fpg-list' },
     el('div', { class: 'fpg-row fpg-row-head' },
       el('span', { class: 'fpg-row-ic' }), el('span', { class: 'fpg-row-nm', text: '이름' }),
@@ -419,7 +430,7 @@ async function showDir(root: string, rel: string, stage, acts): Promise<void> {
           onclick: (ev: any) => { ev.preventDefault(); ev.stopPropagation(); copyFileLink(root, childRel, isDir ? 'dir' : 'file'); } },
         shareLinkIcon(13)))));
   }
-  stage.replaceChildren(list);
+  replaceKids(stage, list);
 }
 
 // ── 파일 ────────────────────────────────────────────────────────────────────
@@ -431,7 +442,7 @@ async function showFile(root: string, rel: string, name: string, entry: Entry, s
   const mkBtn = (label: string, onClick: () => void): any =>
     el('button', { class: 'fpg-btn', type: 'button', text: label, onclick: onClick });
   const tail = tailActions(root, rel, 'file', dl);
-  acts.replaceChildren(...tail);
+  replaceKids(acts, ...tail);
 
   let out;
   try {
@@ -448,11 +459,11 @@ async function showFile(root: string, rel: string, name: string, entry: Entry, s
       mkBtn,
     });
   } catch (e: any) {
-    stage.replaceChildren(el('div', { class: 'fpg-msg', text: '미리보기 실패 — ' + ((e && e.message) || e) }));
+    replaceKids(stage, el('div', { class: 'fpg-msg', text: '미리보기 실패 — ' + ((e && e.message) || e) }));
     return;
   }
-  acts.replaceChildren(...out.tools, ...tail);
-  stage.replaceChildren(out.body);
+  replaceKids(acts, ...out.tools, ...tail);
+  replaceKids(stage, out.body);
   // 미리보기가 없는 형식이면 이 화면의 결론은 '내려받기'다 — 상단 바에만 두지 말고 본문 가운데에 크게 한 번 더.
   //  (공용 렌더러는 안내 문구만 만든다. '이 화면에서 무엇을 하라'는 화면 소관이라 여기서 붙인다.)
   if (out.tools.length === 0 && out.body.classList && out.body.classList.contains('fp-msg')) {

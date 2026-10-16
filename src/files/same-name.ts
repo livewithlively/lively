@@ -10,14 +10,17 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-/** 훑는 상한 — 디렉터리 항목 수 · 깊이 · 후보 수. 넘으면 거기서 멈추고 truncated 를 세운다(링크 하나 여는 데 폴더 전체를 걷지 않는다). */
-export const SAME_NAME_LIMITS = { maxSeen: 5000, maxDepth: 8, maxHits: 20 } as const;
+/**
+ * 훑는 상한 — 디렉터리 항목 수 · 깊이 · 후보 수 · 시간(ms). 넘으면 거기서 멈추고 truncated 를 세운다(링크 하나 여는 데 폴더 전체를 걷지 않는다).
+ *  항목 수는 진짜 상한이다 — 폴더를 통째로 읽지 않고 한 항목씩 읽는다(opendir). 시간은 폴더 하나를 열 때마다 잰다.
+ */
+export const SAME_NAME_LIMITS = { maxSeen: 5000, maxDepth: 8, maxHits: 20, maxMs: 3000 } as const;
 /** 화면에 세우는 후보 수 */
 export const SAME_NAME_SHOW = 8;
 
 export interface SameNameHit { path: string; type: "file" | "dir"; size: number; mtime: number }
 export interface SameNameFound { hits: SameNameHit[]; truncated: boolean }
-export interface SameNameLimits { maxSeen: number; maxDepth: number; maxHits: number }
+export interface SameNameLimits { maxSeen: number; maxDepth: number; maxHits: number; maxMs: number }
 
 /**
  * 후보를 찾을 범위(그 자리 기준 상대경로) — 받은 링크의 경로가 든 «덩어리» 하나. 순수.
@@ -49,47 +52,60 @@ export function rankSameName(hits: readonly SameNameHit[], missingRel: string, l
 
 /**
  * 격리 멤버 uid 로 도는 한 줄(고정 리터럴 — 값은 전부 stdin JSON: memberNodeJson 계약). findSameNameLocal 과 같은 사양:
- *  넓이 우선 · 이름 비교는 NFC 로 맞춰 · 점으로 시작하는 이름 · 링크 · node_modules · git 저장소(.git 을 가진 폴더) 안으로는 안 들어간다.
+ *  넓이 우선 · 이름 비교는 NFC 로 맞춰 · 점으로 시작하는 이름 · 링크 · node_modules · git 저장소(.git 을 가진 폴더) 안으로는 안 들어간다 ·
+ *  skip(범위 기준 경로 — 이 사람이 못 보는 자리)은 그 자리도 그 안도 보지 않는다. 입력 { base, name, skip, maxSeen, maxDepth, maxHits, maxMs }.
  */
 export const SAME_NAME_JS =
   "const fs=require('fs'),p=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);" +
-  "process.stdin.on('end',()=>{const q=JSON.parse(d||'null');const t=String(q.name).normalize('NFC');const hits=[];let seen=0,trunc=false;" +
-  "const Q=[{dir:q.base,rel:'',depth:0}];outer:while(Q.length){const cur=Q.shift();let es;try{es=fs.readdirSync(cur.dir,{withFileTypes:true})}catch(e){continue}" +
-  "for(const e of es){if(seen>=q.maxSeen){trunc=true;break outer}seen++;if(e.name.startsWith('.')||e.isSymbolicLink())continue;" +
-  "const isDir=e.isDirectory();if(!isDir&&!e.isFile())continue;const r=cur.rel?cur.rel+'/'+e.name:e.name;const full=p.join(cur.dir,e.name);" +
+  "process.stdin.on('end',()=>{const q=JSON.parse(d||'null');const t=String(q.name).normalize('NFC');const skip=new Set(q.skip||[]);const t0=Date.now();" +
+  "const hits=[];let seen=0,trunc=false;const Q=[{dir:q.base,rel:'',depth:0}];" +
+  "outer:while(Q.length){if(Date.now()-t0>=q.maxMs){trunc=true;break}const cur=Q.shift();let dh;try{dh=fs.opendirSync(cur.dir)}catch(e){continue}" +
+  "try{let e;while((e=dh.readSync())!==null){if(seen>=q.maxSeen){trunc=true;break outer}seen++;if(e.name.startsWith('.')||e.isSymbolicLink())continue;" +
+  "const isDir=e.isDirectory();if(!isDir&&!e.isFile())continue;const r=cur.rel?cur.rel+'/'+e.name:e.name;if(skip.has(r))continue;const full=p.join(cur.dir,e.name);" +
   "if(e.name.normalize('NFC')===t){let s=0,m=0;try{const st=fs.statSync(full);m=Math.floor(st.mtimeMs);if(!isDir)s=st.size}catch(x){}" +
   "hits.push({path:r,type:isDir?'dir':'file',size:s,mtime:m});if(hits.length>=q.maxHits){trunc=true;break outer}}" +
   "if(isDir&&cur.depth+1<=q.maxDepth&&e.name!=='node_modules'&&!fs.existsSync(p.join(full,'.git')))Q.push({dir:full,rel:r,depth:cur.depth+1})}}" +
+  "finally{try{dh.closeSync()}catch(x){}}}" +
   "process.stdout.write(JSON.stringify({hits,truncated:trunc}))});";
 
-/** SAME_NAME_JS 와 같은 사양의 게이트웨이 로컬 판(격리 멤버가 없는 배포 · 시험). */
-export async function findSameNameLocal(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS): Promise<SameNameFound> {
+/** `.git` 이 있나(파일이든 폴더든 — 워크트리 · 서브모듈은 파일이다). 게이트웨이 스레드를 막지 않게 비동기로. */
+const hasGit = (dir: string): Promise<boolean> => fsp.access(path.join(dir, ".git")).then(() => true, () => false);
+
+/** SAME_NAME_JS 와 같은 사양의 게이트웨이 로컬 판(격리 멤버가 없는 배포 · 시험). skip 은 범위 기준 경로(이 사람이 못 보는 자리). */
+export async function findSameNameLocal(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS, skip: readonly string[] = []): Promise<SameNameFound> {
   const target = String(name).normalize("NFC");
+  const skipSet = new Set(skip);
+  const t0 = Date.now();
   const hits: SameNameHit[] = [];
   let seen = 0;
   const queue: Array<{ dir: string; rel: string; depth: number }> = [{ dir: base, rel: "", depth: 0 }];
   while (queue.length) {
+    if (Date.now() - t0 >= lim.maxMs) return { hits, truncated: true };
     const cur = queue.shift()!;
-    let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(cur.dir, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) {
-      if (seen >= lim.maxSeen) return { hits, truncated: true };
-      seen++;
-      if (e.name.startsWith(".") || e.isSymbolicLink()) continue;
-      const isDir = e.isDirectory();
-      if (!isDir && !e.isFile()) continue;
-      const rel = cur.rel ? `${cur.rel}/${e.name}` : e.name;
-      const full = path.join(cur.dir, e.name);
-      if (e.name.normalize("NFC") === target) {
-        let size = 0, mtime = 0;
-        try { const st = await fsp.stat(full); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* 아는 만큼만 */ }
-        hits.push({ path: rel, type: isDir ? "dir" : "file", size, mtime });
-        if (hits.length >= lim.maxHits) return { hits, truncated: true };
+    let dh: fs.Dir;
+    try { dh = await fsp.opendir(cur.dir); } catch { continue; }
+    try {
+      let e: fs.Dirent | null;
+      while ((e = await dh.read()) !== null) {
+        if (seen >= lim.maxSeen) return { hits, truncated: true };
+        seen++;
+        if (e.name.startsWith(".") || e.isSymbolicLink()) continue;
+        const isDir = e.isDirectory();
+        if (!isDir && !e.isFile()) continue;
+        const rel = cur.rel ? `${cur.rel}/${e.name}` : e.name;
+        if (skipSet.has(rel)) continue;
+        const full = path.join(cur.dir, e.name);
+        if (e.name.normalize("NFC") === target) {
+          let size = 0, mtime = 0;
+          try { const st = await fsp.stat(full); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* 아는 만큼만 */ }
+          hits.push({ path: rel, type: isDir ? "dir" : "file", size, mtime });
+          if (hits.length >= lim.maxHits) return { hits, truncated: true };
+        }
+        if (isDir && cur.depth + 1 <= lim.maxDepth && e.name !== "node_modules" && !(await hasGit(full))) {
+          queue.push({ dir: full, rel, depth: cur.depth + 1 });
+        }
       }
-      if (isDir && cur.depth + 1 <= lim.maxDepth && e.name !== "node_modules" && !fs.existsSync(path.join(full, ".git"))) {
-        queue.push({ dir: full, rel, depth: cur.depth + 1 });
-      }
-    }
+    } finally { await dh.close().catch(() => { /* 이미 닫힘 */ }); }
   }
   return { hits, truncated: false };
 }

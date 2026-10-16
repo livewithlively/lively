@@ -158,7 +158,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .sharelink-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
 /* ── 공용 미리보기 렌더러(web/lib/file-preview.ts)의 기본 스타일 ──────────────
-   #1436 후속: 프로젝트 모달·홈 모달·공유 링크 전체페이지가 **같은 렌더러**를 쓴다. 여기 `fp-*` 는 그 기본이고,
+   #1436 후속: 프로젝트 모달·홈 모달·파일 링크의 자료 보기 화면(#4672)이 **같은 렌더러**를 쓴다. 여기 `fp-*` 는 그 기본이고,
    각 화면은 자기 클래스(.proj-file-* / .dash-fp-* / .fpg-*)를 같은 노드에 함께 얹어 **크기만** 덮는다
    (컨테이너가 달라 max-height 등이 다른 건 정당한 차이다).
    ⚠ 기존 셀렉터는 지우지 않는다 — scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다. */

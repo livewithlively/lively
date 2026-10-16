@@ -1,10 +1,10 @@
 // 같은 이름 후보(#4672)의 규칙 — 사양 표 A(범위) · B(줄 세우기) · C(이름 찾기 — 로컬 판과 멤버 한 줄이 같은 사양). 진짜 임시 폴더를 쓴다.
 //  사양(태스크 #4672 · 지식 file-address-scheme-design-4670 §4): 기록 없이 사라진 경로는 같은 이름 후보를 보인다(넘기지 않는다).
 //   범위는 그 경로가 든 덩어리 하나(앱 폴더 · 프로젝트 폴더 · 맨 위 폴더) · 이름은 꼭 같아야(NFC/NFD 꼴 차이는 같은 이름) ·
-//   숨김 · node_modules · git 저장소 · 링크로는 안 들어간다 · 걷는 양에 상한.
+//   숨김 · node_modules · git 저장소 · 링크로는 안 들어간다 · 걷는 양 · 시간에 상한 · 이 사람이 못 보는 자리(skip)는 그 자리도 그 안도 안 본다.
 //   실행: npm run build && node --test dist/files/same-name.test.js
 import { strict as assert } from "node:assert";
-import test from "node:test";
+import test, { after } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,16 +12,17 @@ import { spawnSync } from "node:child_process";
 import { sameNameScope, rankSameName, findSameNameLocal, SAME_NAME_JS, SAME_NAME_LIMITS, SAME_NAME_SHOW, type SameNameFound, type SameNameHit, type SameNameLimits } from "./same-name.js";
 
 /** 멤버 uid 로 돌 그 한 줄을 이 프로세스의 node 로 돌린다(stdin JSON → stdout JSON — memberNodeJson 과 같은 계약). */
-function runMemberJs(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS): SameNameFound {
-  const r = spawnSync(process.execPath, ["-e", SAME_NAME_JS], { input: JSON.stringify({ base, name, ...lim }), encoding: "utf8" });
+function runMemberJs(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS, skip?: string[]): SameNameFound {
+  const input = { base, name, ...lim, ...(skip ? { skip } : {}) };   // skip 이 없는 입력(옛 부르는 쪽)도 돈다
+  const r = spawnSync(process.execPath, ["-e", SAME_NAME_JS], { input: JSON.stringify(input), encoding: "utf8" });
   assert.equal(r.status, 0, `한 줄이 죽었다: ${r.stderr}`);
   return JSON.parse(r.stdout || "null") as SameNameFound;
 }
 const paths = (f: SameNameFound): string[] => f.hits.map((h) => h.path).sort();
 /** 두 판을 같은 폴더에 돌려 같은 답인지 보고, 로컬 판의 답을 돌려준다. */
-async function both(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS): Promise<SameNameFound> {
-  const local = await findSameNameLocal(base, name, lim);
-  const member = runMemberJs(base, name, lim);
+async function both(base: string, name: string, lim: SameNameLimits = SAME_NAME_LIMITS, skip?: string[]): Promise<SameNameFound> {
+  const local = skip ? await findSameNameLocal(base, name, lim, skip) : await findSameNameLocal(base, name, lim);
+  const member = runMemberJs(base, name, lim, skip);
   assert.deepEqual(paths(member), paths(local), "멤버 한 줄과 로컬 판이 다른 후보를 낸다");
   assert.equal(member.truncated, local.truncated, "멤버 한 줄과 로컬 판의 truncated 가 다르다");
   for (const h of local.hits) {
@@ -31,8 +32,11 @@ async function both(base: string, name: string, lim: SameNameLimits = SAME_NAME_
   return local;
 }
 
+const made: string[] = [];
+after(() => { for (const d of made) fs.rmSync(d, { recursive: true, force: true }); });
 function tree(files: Record<string, string | null>): string {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "same-name-"));
+  made.push(base);
   for (const [rel, body] of Object.entries(files)) {
     const abs = path.join(base, rel);
     if (body === null) fs.mkdirSync(abs, { recursive: true });
@@ -153,4 +157,43 @@ test("C7b 훑는 칸 상한의 경계 — 정확히 상한만큼 본 뒤의 칸�
 test("C8 범위 폴더가 없으면 빈 답(던지지 않는다)", async () => {
   const f = await both(path.join(os.tmpdir(), "same-name-none-" + process.pid), "a.md");
   assert.deepEqual(f, { hits: [], truncated: false });
+});
+
+// ── C9 · C10 — 못 보는 자리 건너뛰기(skip) · 시간 상한(#4672 격리 리뷰) ─────────────────────────────────
+//  보이는 하나는 숨은 것들보다 한 칸 깊다 — 넓이 우선이라 형제 순서(디스크마다 다르다)와 상관없이 숨은 쪽이 먼저 잡힌다.
+const hidden22 = (): Record<string, string | null> => {
+  const files: Record<string, string | null> = { "pub/a/b/x.md": "보임" };
+  for (let i = 1; i <= 22; i++) files[`hidden/h${String(i).padStart(2, "0")}/x.md`] = "숨음";
+  return files;
+};
+test("C9a 못 보는 자리(skip)는 그 안으로 안 들어간다 — 그 안의 같은 이름이 후보 상한을 먼저 채우지 않는다", async () => {
+  const base = tree(hidden22());
+  const without = await both(base, "x.md");
+  assert.equal(without.hits.length, SAME_NAME_LIMITS.maxHits, "건너뛰지 않으면 숨은 쪽이 상한을 채운다(이 시험의 전제)");
+  assert.ok(!paths(without).includes("pub/a/b/x.md"), "전제: 건너뛰지 않으면 보이는 후보가 상한에 밀린다");
+  const f = await both(base, "x.md", SAME_NAME_LIMITS, ["hidden"]);
+  assert.deepEqual({ hits: paths(f), truncated: f.truncated }, { hits: ["pub/a/b/x.md"], truncated: false });
+});
+test("C9b 건너뛴 자리는 훑는 칸으로도 세지 않는다 — 들어가지 않으니까", async () => {
+  const base = tree(hidden22());
+  //  맨 위 두 칸(hidden · pub — hidden 은 이름만 세고 열지 않는다) + pub 안 a + a 안 b + b 안 x.md = 5칸. hidden 을 걸었다면 44칸이 더 든다.
+  const f = await both(base, "x.md", { ...SAME_NAME_LIMITS, maxSeen: 5 }, ["hidden"]);
+  assert.deepEqual({ hits: paths(f), truncated: f.truncated }, { hits: ["pub/a/b/x.md"], truncated: false });
+});
+test("C9c 건너뛸 자리가 파일이면 그 파일만 빠진다 · 깊은 자리도 범위 기준 경로로 맞춘다", async () => {
+  const base = tree({ "a/x.md": "1", "b/x.md": "1", "c/d/x.md": "1" });
+  assert.deepEqual(paths(await both(base, "x.md", SAME_NAME_LIMITS, ["a/x.md", "c/d"])), ["b/x.md"]);
+});
+test("C9d (새로 도입) 건너뛸 자리가 비었거나 아예 없으면 종전과 같다", async () => {
+  const base = tree({ "a/x.md": "1", "b/x.md": "1" });
+  assert.deepEqual(paths(await both(base, "x.md", SAME_NAME_LIMITS, [])), ["a/x.md", "b/x.md"]);
+  assert.deepEqual(paths(await both(base, "x.md")), ["a/x.md", "b/x.md"]);
+});
+test("C10 시간 상한 — 0 이면 첫 폴더도 열지 않고 truncated · 넉넉하면 상한 없을 때와 같다", async () => {
+  const base = tree({ "a/x.md": "1", "x.md": "1" });
+  const zero = await both(base, "x.md", { ...SAME_NAME_LIMITS, maxMs: 0 });
+  assert.deepEqual({ hits: paths(zero), truncated: zero.truncated }, { hits: [], truncated: true });
+  const roomy = await both(base, "x.md", { ...SAME_NAME_LIMITS, maxMs: 60_000 });
+  assert.deepEqual({ hits: paths(roomy), truncated: roomy.truncated }, { hits: ["a/x.md", "x.md"], truncated: false });
+  assert.equal(SAME_NAME_LIMITS.maxMs, 3000, "사람이 기다리는 조회의 시간 상한");
 });

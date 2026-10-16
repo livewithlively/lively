@@ -2,16 +2,21 @@
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/files/file-view.pg-test.mjs
 //
 // 한 프로세스에 게이트웨이를 띄운다 — 진짜 인증(구성원 토큰) · 프로젝트 자료 올리기(자료 행이 생긴다) · 홈 탐색기의 정보(browse/info) ·
-//  같은 이름 후보(browse/similar). 파일은 임시 폴더. 판정은 응답과 실제 행·디스크로 한다. 사양 표(태스크 #4672 · 스크래치 spec.md):
-//   E1 프로젝트 파일 — 정보 · 속한 프로젝트 · 주소 · 자료(올린 사람)        E2 그 프로젝트를 못 보는 사람 — 정보 · 후보 404
+//  같은 이름 후보(browse/similar). 파일은 임시 폴더. 판정은 응답과 실제 행·디스크로 한다. 사양 표(태스크 #4672 — 아래 줄이 그 표다):
+//   E1 프로젝트 파일 — 정보 · 속한 프로젝트 · 주소 · 자료(올린 사람 · 올린 때 밀리초까지)
+//   E2 그 프로젝트를 못 보는 사람 — 정보 404 · 후보는 «볼 수 있는데 근처에 없는 자리» 와 같은 빈 답
 //   E3 폴더 · 자리 자신 — 폴더 · 자료 없음                                  E4 없는 경로 404
 //   E5 잠긴 공유 폴더 — 대상은 locked · 아닌 사람은 404                     E6 앱 폴더 — 동의한 사람 · 그 앱 이름 · 자료 없음
 //   E7 앱은 보이는데 동의 안 함 — 403 app_consent_required(없는 파일이어도 같은 답)
 //   E8 안 보이는 앱 · 없는 앱 · 꺼진 앱 — 404                               E9 개인 폴더 — 주소 없음
 //   E10 자료를 못 보게 잠긴 자료 — 파일 정보는 그대로 · 자료만 빠진다
+//   E11 앱 폴더 링크에 NUL · 앱 id 꼴이 아닌 첫 마디 — 404(500 아님)      E12 접히는 링크(crmx/../crm/a) — 동의 안내는 접힌 경로의 앱
+//   E13 관리자가 남의 «나만» 앱 폴더 링크 — 404(앱 찾기에 안 서는 앱은 안내하지 않는다)
+//   E14 못 봄 · 없음 — 같은 몸의 404(code file_not_found)                  E15 프로젝트 폴더 꼴 어긋남(DB project/ · 디스크 legacy-project/) — 그 프로젝트
 //   S1 셸 mv(기록 없음) — 같은 프로젝트 안 새 자리가 후보                    S2 지금 있는 자리 — 후보 없음
 //   S3 공유 폴더 — 잠긴 하위 폴더 안 같은 이름은 대상에게만                   S4 다른 프로젝트 폴더의 같은 이름은 범위 밖
-//   S5 앱 폴더 — 같은 앱 안 후보 · 동의 안 한 사람 404                       S6 개인 폴더 — 그 사람 폴더 안
+//   S3b 못 보는 하위 폴더 안 같은 이름이 후보 상한보다 많아도 — 볼 수 있는 후보가 나온다 · 답은 items 하나
+//   S5 앱 폴더 — 같은 앱 안 후보 · 동의 안 한 사람은 빈 답                   S6 개인 폴더 — 그 사람 폴더 안
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -69,6 +74,7 @@ try {
   await upsertMember({ id: "pgt-b", display_name: "나", state: "active", scopes: ["items"] }, "pgt");
   const tok = {};
   for (const m of ["pgt-a", "pgt-b"]) tok[m] = (await mintToken({ userId: m, memberId: m, scopes: ["items"] }, "pgt")).token;
+  tok["pgt-admin"] = (await mintToken({ userId: "pgt-admin", memberId: "pgt-admin", scopes: ["admin", "items"] }, "pgt")).token;
 
   const gw = express();
   gw.use(express.json({ limit: "1mb" }));
@@ -121,13 +127,18 @@ try {
   chk("E1c 자료 — 번호 · 올린 사람 · 올린 때 · 여기서 나온 지식(관계 둘이어도 한 줄)",
     e1.source?.id === SRC && e1.source.uploaderId === "pgt-a" && !!e1.source.createdAt
     && e1.source.knowledge.length === 1 && e1.source.knowledge[0].name === "pgt-k-4672" && e1.source.knowledge[0].title === "설계 정리", e1.source);
+  const createdAt = (await itemsPool.query(`SELECT created_at FROM source WHERE id=$1`, [SRC])).rows[0].created_at;
+  chk("E1d 올린 때 — DB 값 그대로(밀리초까지)", e1.source?.createdAt === new Date(createdAt).toISOString(), { got: e1.source?.createdAt, db: new Date(createdAt).toISOString() });
 
   // ── E2 ──
   const e2a = await info("pgt-a", "shared", `${HF}/숨은.md`);
   const e2b = await info("pgt-b", "shared", `${HF}/숨은.md`);
-  const e2c = await similar("pgt-b", "shared", `${HF}/없는.md`);
-  chk("E2 숨은 프로젝트 — 볼 수 있는 사람은 정보 · 못 보는 사람은 정보 404 · 후보 404(근처에 무엇이 있는지도 말하지 않는다)",
-    e2a.status === 200 && e2a.place?.kind === "project" && e2a.locked === true && e2b.status === 404 && e2c.status === 404, { e2a: e2a.status, e2b: e2b.status, e2c: e2c.status, locked: e2a.locked });
+  const e2c = await similar("pgt-b", "shared", `${HF}/숨은.md`);
+  const e2d = await similar("pgt-b", "shared", `${FOLDER}/아무것도/없는-이름-4672.md`);
+  chk("E2 숨은 프로젝트 — 볼 수 있는 사람은 정보 · 못 보는 사람은 정보 404 · 후보는 «볼 수 있는데 근처에 없는 자리» 와 같은 빈 답(근처에 무엇이 있는지 말하지 않는다)",
+    e2a.status === 200 && e2a.place?.kind === "project" && e2a.locked === true && e2b.status === 404
+    && e2c.status === 200 && JSON.stringify(e2c) === JSON.stringify(e2d) && JSON.stringify(e2c) === JSON.stringify({ status: 200, items: [] }),
+    { e2a: e2a.status, e2b: e2b.status, e2c, e2d, locked: e2a.locked });
 
   // ── E3 · E4 ──
   const e3a = await info("pgt-b", "shared", `${FOLDER}/docs`);
@@ -136,6 +147,8 @@ try {
     && e3b.status === 200 && e3b.type === "dir" && e3b.path === "" && e3b.address === "shared" && e3b.place?.kind === "folder", { e3a, e3b });
   const e4 = await info("pgt-b", "shared", `${FOLDER}/docs/없는.md`);
   chk("E4 없는 경로 404", e4.status === 404, e4);
+  chk("E14 못 봄(E2) · 없음(E4) — 같은 몸의 404(code file_not_found)",
+    JSON.stringify(e2b) === JSON.stringify(e4) && e4.code === "file_not_found", { e2b, e4 });
 
   // ── E5 ──
   putDisk("shared/hr/급여.md");
@@ -169,8 +182,17 @@ try {
   const e8c = await info("pgt-a", "apps", "off-app/a.txt");
   const e8d = await info("pgt-b", "apps", "off-app/a.txt");
   chk("E8 안 보이는 앱(남의 «나만» 앱) · 없는 앱 · 꺼진 앱(동의가 있어도 · 없어도) — 404(동의 안내도 아니다)",
-    e8a.status === 404 && e8b.status === 404 && e8c.status === 404 && e8d.status === 404 && !e8a.code && !e8c.code && !e8d.code,
+    [e8a, e8b, e8c, e8d].every((r) => r.status === 404 && r.code === "file_not_found" && !r.app),
     { e8a: e8a.status, e8b: e8b.status, e8c: e8c.status, e8d: e8d.status });
+  const e11 = await Promise.all([info("pgt-b", "apps", "\u0000"), info("pgt-b", "apps", "crm\u0000/x"), info("pgt-b", "apps", "Bad_Id/x")]);
+  chk("E11 앱 폴더 링크에 NUL · 앱 id 꼴이 아닌 첫 마디 — 404(500 아님 · 동의 안내 아님)",
+    e11.every((r) => r.status === 404 && r.code === "file_not_found"), e11.map((r) => ({ status: r.status, code: r.code })));
+  const e12a = await info("pgt-b", "apps", "crmx/../crm/out/보고.png");
+  const e12b = await info("pgt-b", "apps", "crm/../secret-app/a.txt");
+  chk("E12 접히는 링크 — 동의 안내는 접힌 경로의 앱(crm) · 접혀 남의 «나만» 앱이면 404",
+    e12a.status === 403 && e12a.code === "app_consent_required" && e12a.app?.id === "crm" && e12b.status === 404 && !e12b.app, { e12a, e12b });
+  const e13 = await info("pgt-admin", "apps", "secret-app/a.txt");
+  chk("E13 관리자가 남의 «나만» 앱 폴더 링크 — 404(앱 찾기에 안 서는 앱은 동의 안내를 내지 않는다)", e13.status === 404 && !e13.app, e13);
 
   // ── E9 ──
   putDisk("box/pgt-b/uploads/메모.txt", "개인");
@@ -184,14 +206,24 @@ try {
   chk("E10 자료만 잠기면 — 파일 정보는 그대로 · 자료는 빠진다", e10.status === 200 && e10.type === "file" && e10.source === null, e10.source);
   await itemsPool.query(`UPDATE source SET visibility='open' WHERE id=$1`, [SRC]);
 
+  // ── E15 ── 끝난 프로젝트 폴더가 legacy-project/ 로 옮겨졌는데 DB folder 는 project/ 꼴 그대로
+  const drift = await createProject({ name: "끝난 프로젝트", dedupe: false }, { actor: "pgt-a" });
+  const DF = await createProjectFolder(drift.id); await setProjectFolder(drift.id, DF, { source: "web" });
+  const LF = DF.replace(/^project\//, "legacy-project/");
+  putDisk(path.join("shared", LF, "끝.md"));
+  const e15 = await info("pgt-b", "shared", `${LF}/끝.md`);
+  chk("E15 폴더 꼴 어긋남 — 그 프로젝트로 보인다(folder 는 링크의 꼴)",
+    DF.startsWith("project/") && e15.status === 200 && e15.place?.kind === "project" && e15.place.id === drift.id && e15.place.folder === LF, { DF, e15: e15.place });
+
   // ── S1 · S2 · S4 ──
-  renameSync(disk("shared", FOLDER, "docs", "설계.md"), (mkdirSync(disk("shared", FOLDER, "archive", "2026"), { recursive: true }), disk("shared", FOLDER, "archive", "2026", "설계.md")));
+  mkdirSync(disk("shared", FOLDER, "archive", "2026"), { recursive: true });
+  renameSync(disk("shared", FOLDER, "docs", "설계.md"), disk("shared", FOLDER, "archive", "2026", "설계.md"));   // 셸 mv — 서버는 모른다(기록 없음)
   const other = await createProject({ name: "다른 프로젝트", dedupe: false }, { actor: "pgt-a" });
   const OF = await createProjectFolder(other.id); await setProjectFolder(other.id, OF, { source: "web" });
   putDisk(path.join("shared", OF, "설계.md"));
   const s1 = await similar("pgt-b", "shared", `${FOLDER}/docs/설계.md`);
   chk("S1 셸 mv(기록 없음) — 같은 프로젝트 안 새 자리가 후보 · 범위는 그 프로젝트 폴더",
-    s1.status === 200 && s1.items?.length === 1 && s1.items[0].path === `${FOLDER}/archive/2026/설계.md` && s1.items[0].type === "file" && s1.scope === FOLDER, s1);
+    s1.status === 200 && s1.items?.length === 1 && s1.items[0].path === `${FOLDER}/archive/2026/설계.md` && s1.items[0].type === "file", s1);
   chk("S4 다른 프로젝트 폴더의 같은 이름은 범위 밖", !(s1.items || []).some((h) => h.path.startsWith(OF + "/")), s1.items);
   const s2 = await similar("pgt-b", "shared", `${FOLDER}/archive/2026/설계.md`);
   chk("S2 지금 있는 자리 — 후보 없음", s2.status === 200 && Array.isArray(s2.items) && s2.items.length === 0, s2);
@@ -209,17 +241,25 @@ try {
   chk("S3 잠긴 하위 폴더 안 같은 이름은 대상에게만 — 대상은 둘 · 아닌 사람은 하나",
     JSON.stringify(pathsOf(s3a)) === JSON.stringify(["team/pub/회의록.md", "team/secret/회의록.md"]) && JSON.stringify(pathsOf(s3b)) === JSON.stringify(["team/pub/회의록.md"]),
     { a: pathsOf(s3a), b: pathsOf(s3b) });
+  //  S3b — 못 보는 하위 폴더(team3/hidden) 안에 같은 이름 22개(후보 상한 20 보다 많다) · 볼 수 있는 자리에 하나(한 칸 더 깊다 — 넓이 우선이라 숨은 쪽이 먼저 잡힌다)
+  for (let i = 1; i <= 22; i++) putDisk(`shared/team3/hidden/h${String(i).padStart(2, "0")}/x.md`);
+  putDisk("shared/team3/pub/a/b/x.md");
+  await setSharedFolderAcl("team3/hidden", "members", ["pgt-a"], { actor: "pgt-a" });
+  invalidateVisibilityCache();
+  const s3c = await similar("pgt-b", "shared", "team3/옛/x.md");
+  chk("S3b 못 보는 폴더 안 같은 이름이 상한보다 많아도 — 볼 수 있는 후보가 나온다 · 답은 items 하나(잘림 · 범위 덧말 없음)",
+    s3c.status === 200 && JSON.stringify(pathsOf(s3c)) === JSON.stringify(["team3/pub/a/b/x.md"]) && JSON.stringify(Object.keys(s3c).sort()) === JSON.stringify(["items", "status"]), s3c);
 
   // ── S5 · S6 ──
   const s5a = await similar("pgt-a", "apps", "crm/new/보고.png");
   const s5b = await similar("pgt-b", "apps", "crm/new/보고.png");
-  chk("S5 앱 폴더 — 같은 앱 안 후보(다른 앱 폴더는 범위 밖) · 동의 안 한 사람 404",
-    s5a.status === 200 && JSON.stringify(pathsOf(s5a)) === JSON.stringify(["crm/old/보고.png", "crm/out/보고.png"]) && s5a.scope === "crm" && s5b.status === 404, { s5a, s5b: s5b.status });
+  chk("S5 앱 폴더 — 같은 앱 안 후보(다른 앱 폴더는 범위 밖) · 동의 안 한 사람은 빈 답",
+    s5a.status === 200 && JSON.stringify(pathsOf(s5a)) === JSON.stringify(["crm/old/보고.png", "crm/out/보고.png"]) && s5b.status === 200 && s5b.items?.length === 0, { s5a, s5b });
   putDisk("box/pgt-b/2026/메모.txt", "개인2");
   const s6 = await similar("pgt-b", "personal", "uploads/옛/메모.txt");
-  chk("S6 개인 폴더 — 그 사람 폴더 안(맨 위 폴더 uploads)", s6.status === 200 && JSON.stringify(pathsOf(s6)) === JSON.stringify(["uploads/메모.txt"]) && s6.scope === "uploads", s6);
+  chk("S6 개인 폴더 — 그 사람 폴더 안(맨 위 폴더 uploads)", s6.status === 200 && JSON.stringify(pathsOf(s6)) === JSON.stringify(["uploads/메모.txt"]), s6);
   const s6b = await similar("pgt-b", "personal", "메모.txt");
-  chk("S6b 개인 폴더 맨 위 파일 — 자리 전체에서", s6b.status === 200 && JSON.stringify(pathsOf(s6b)) === JSON.stringify(["2026/메모.txt", "uploads/메모.txt"]) && s6b.scope === "", s6b);
+  chk("S6b 개인 폴더 맨 위 파일 — 자리 전체에서", s6b.status === 200 && JSON.stringify(pathsOf(s6b)) === JSON.stringify(["2026/메모.txt", "uploads/메모.txt"]), s6b);
 
   chk("배선 — 시험이 실제 디스크를 썼다", existsSync(disk("shared", FOLDER, "archive", "2026", "설계.md")) && existsSync(disk("apps", "crm", "out", "보고.png")));
 } catch (e) {

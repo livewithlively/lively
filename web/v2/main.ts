@@ -1430,7 +1430,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         },
         sourceHref: (id) => '#/sources/' + id,
         openApp: (appId) => { void openAppById(appId).then((ok) => { if (!ok) toast('이 앱을 열 수 없어요 — 앱이 꺼졌거나 지금 쓸 수 있는 앱 목록에 없습니다', true); }); },
-        consent: (appId, title) => ensureAppGrant(appId, title).catch(() => false),
+        //  동의 창 — 취소는 조용히(false), 동의 저장이 실패하면 알린다(삼키면 «눌렀는데 아무 일도 없다» 가 된다).
+        consent: (appId, title) => ensureAppGrant(appId, title).catch((e: any) => { toast('동의하지 못했어요 — ' + ((e && e.message) || e), true); return false; }),
       });
     } else if (page === 'taxonomy') {
       // #4233 분류체계 앱. builtin(project=global·single). 자료와 같은 규칙: 주소가 정본, 인스턴스는 뒤에서 멱등 확보.

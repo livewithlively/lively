@@ -7,7 +7,8 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import fs from "node:fs";
 import path from "node:path";
-import { buildFileInfo, addressOfLink, topFolderOf, type FileInfoDeps, type FileViewSource } from "./file-view.js";
+import { buildFileInfo, addressOfLink, appIdOfLink, topFolderOf, type FileInfoDeps, type FileViewSource } from "./file-view.js";
+import { gateFromSets } from "../v6/shared-folder-store.js";
 
 const ROOT = path.resolve(new URL("../../", import.meta.url).pathname.replace("/dist/", "/"));
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -168,7 +169,9 @@ test("F4 서버 라우트 — 정보 · 후보가 판정(resolveBrowse)을 먼�
   const tf = read("src/terminal/terminal-files.ts");
   const info = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/info"'), tf.indexOf('app.get("/api/ui/terminal/browse/similar"'));
   before(info, "try { at = await resolveBrowse(req, false); }", "appConsentNeeded(", "판정 전에 앱 동의를 묻는다");
-  before(info, "e.status === 404 && rootKey === APPS_ROOT_KEY", "appConsentNeeded(", "앱 폴더 밖에서도 동의를 묻는다");
+  before(info, "if (!(e instanceof HttpError) || e.status !== 404) throw e;", "appConsentNeeded(", "404 가 아닌 실패에도 동의를 묻는다");
+  assert.match(info, /const appId = rootKey === APPS_ROOT_KEY && viewer && !u\.appId \? appIdOfLink\(String\(req\.query\.path \?\? ""\)\) : "";/,
+    "앱 폴더 밖에서도 · 날 글자로 동의를 묻는다(앱 id 꼴로 거른 접힌 경로의 앱만)");
   assert.match(info, /!u\.appId/, "앱 주체에게도 동의 안내를 낸다");
   before(info, "const { base, abs, osUser, gate } = at;", "buildFileInfo(", "판정을 지나지 않은 자리의 정보를 만든다");
   const sim = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/similar"'), tf.indexOf("// 미리보기/다운로드(?download=1)"));
@@ -176,4 +179,103 @@ test("F4 서버 라우트 — 정보 · 후보가 판정(resolveBrowse)을 먼�
   before(sim, "await fsExists(osUser, abs)", "sameNameScope(", "지금 있는 자리에도 후보를 찾는다");
   assert.match(sim, /\.filter\(\(h\) => !gate \|\| gate\.ok\(h\.path\)\)/, "후보를 이 사람 기준으로 다시 판정하지 않는다");
   assert.match(sim, /memberNodeJson<SameNameFound \| null>\(osUser, SAME_NAME_JS,/, "격리 멤버면 그 uid 로 찾지 않는다");
+});
+
+// ── D11 · G · F5~F9 — 격리 리뷰 반영(#4672) ───────────────────────────────────────────────────────
+test("D11 앱 폴더 링크의 앱 — 접은 경로의 첫 마디가 앱 id 꼴일 때만(날 글자 · 바깥 · 꼴 아닌 이름은 \"\")", () => {
+  assert.equal(appIdOfLink("crm/out/a.png"), "crm");
+  assert.equal(appIdOfLink("crmx/../crm/a"), "crm", "접히는 링크는 접힌 경로(판정받은 자리)의 앱");
+  assert.equal(appIdOfLink("./crm/a"), "crm");
+  assert.equal(appIdOfLink("/crm/a"), "crm");
+  assert.equal(appIdOfLink("crm\\x"), "crm", "역슬래시는 탐색기 게이트처럼 구분자");
+  assert.equal(appIdOfLink("crm\u0000/x"), "", "NUL 이 든 이름");
+  assert.equal(appIdOfLink("\u0000"), "");
+  assert.equal(appIdOfLink("../crm/a"), "", "자리 밖으로 나가는 링크");
+  assert.equal(appIdOfLink("a/../.."), "");
+  assert.equal(appIdOfLink("Bad_Id/x"), "");
+  assert.equal(appIdOfLink(""), "");
+  //  경계 — 앱 id 는 2~32자(소문자 · 숫자로 시작)
+  assert.equal(appIdOfLink("a/x"), "", "1자");
+  assert.equal(appIdOfLink("ab/x"), "ab", "2자");
+  assert.equal(appIdOfLink("a".repeat(32) + "/x"), "a".repeat(32), "32자");
+  assert.equal(appIdOfLink("a".repeat(33) + "/x"), "", "33자");
+  assert.equal(appIdOfLink("-ab/x"), "", "하이픈으로 시작");
+});
+
+const S = (...xs: string[]): Set<string> => new Set(xs);
+test("G1 못 보는 하위 자리(hiddenWithin) — 숨은 프로젝트 폴더(양형) · 막힌 공유 폴더 · 자기 자신과 이름만 겹치는 형제는 빼고", () => {
+  const gate = gateFromSets({ hiddenFolders: S("project/12"), locked: S("team/secret", "team2", "pub"), blocked: S("team/secret", "team2") });
+  const hw = (rel: string): string[] => gate.hiddenWithin!(rel);
+  assert.deepEqual(hw(""), ["legacy-project/12", "project/12", "team/secret", "team2"]);
+  assert.deepEqual(hw("team"), ["team/secret"], "이름만 겹치는 형제(team2)는 아래가 아니다");
+  assert.deepEqual(hw("project"), ["project/12"]);
+  assert.deepEqual(hw("legacy-project"), ["legacy-project/12"], "DB 는 project/ 꼴이어도 legacy-project/ 아래도 숨는다");
+  assert.deepEqual(hw("project/1"), [], "project/12 는 project/1 아래가 아니다");
+  assert.deepEqual(hw("team/secret"), [], "자기 자신은 빼고(자기가 안 보이면 ok 가 이미 막는다)");
+  assert.deepEqual(hw("pub"), [], "잠겼지만 이 사람이 대상인 자리(locked · 막힘 아님)는 숨지 않는다");
+  assert.deepEqual(hw("../x"), [], "이상한 경로");
+});
+test("G2 hiddenWithin 은 ok 와 같은 답 — 보이는 자리 아래의 경로는 «숨은 자리 안이 아니다» 와 «ok» 가 같다", () => {
+  const gate = gateFromSets({ hiddenFolders: S("project/12", "legacy-project/30"), locked: S("team/secret", "team/a/b"), blocked: S("team/secret", "team/a/b") });
+  const samples = ["team/x.md", "team/secret", "team/secret/x.md", "team/a", "team/a/b", "team/a/b/c/x.md", "team/a/bb/x.md",
+    "project/12/x.md", "project/123/x.md", "legacy-project/12/y", "project/30/z", "legacy-project/30", "other/x"];
+  for (const rel of ["", "team", "project", "legacy-project", "team/a"]) {
+    assert.ok(gate.ok(rel), `전제: ${rel} 는 보인다`);
+    const hidden = gate.hiddenWithin!(rel);
+    for (const p of samples.filter((x) => rel === "" || x.startsWith(rel + "/"))) {
+      const inHidden = hidden.some((h) => p === h || p.startsWith(h + "/"));
+      assert.equal(!inHidden, gate.ok(p), `${rel} 아래 ${p}: hiddenWithin 과 ok 가 다르다`);
+    }
+  }
+});
+
+test("F5 정보 칸 · 화면 전체 — DOM replaceChildren 을 직접 부르지 않는다(조건부 null 이 글자 «null» 로 찍힌다 · lib/dom replaceKids 로만)", () => {
+  const fp = read("web/filepage.ts");
+  assert.doesNotMatch(fp, /\.replaceChildren\(/, "web/filepage.ts 에 replaceChildren 직접 호출이 있다");
+  assert.match(fp, /replaceKids\(side, \.\.\.parts\);/, "정보 칸을 replaceKids 로 채우지 않는다");
+  assert.match(fp, /srow\.length \? el\('dl', \{ class: 'fpg-dl' \}, \.\.\.srow\) : null,/, "전제: 정보 칸은 조건부 null 을 쓴다(이 시험이 지키는 자리)");
+});
+
+test("F6 동의한 뒤에는 아직 이 자리일 때만 다시 그린다 — 동의 창이 떠 있는 사이 다른 화면으로 갔으면 덮지 않는다", () => {
+  const fp = read("web/filepage.ts");
+  assert.match(fp, /if \(await consent\(app\.id, app\.title\) && current\(\)\) again\(\);/, "동의한 뒤 «아직 이 자리인가» 를 보지 않는다");
+  assert.match(fp, /showConsent\(stage, acts, root, rel, e\.body\.app, \(\) => \{ void paintFileView\(host, params, env\); \}, current, env\);/, "동의 안내에 이 그림의 current 를 넘기지 않는다");
+  assert.match(fp, /href: location\.pathname \+ '\?ui=v2' \+ fileLinkHash\(root, rel\)/, "클래식 동의 안내가 막다른 길이다(새 화면으로 여는 문이 없다)");
+  const main = read("web/v2/main.ts");
+  assert.doesNotMatch(main, /ensureAppGrant\(appId, title\)\.catch\(\(\) => false\)/, "새 셸이 동의 실패를 조용히 삼킨다");
+  assert.match(main, /ensureAppGrant\(appId, title\)\.catch\(\(e: any\) => \{ toast\(/, "새 셸이 동의 실패를 알리지 않는다");
+});
+
+test("F7 «옮겨진 자리로 열었어요» 는 그린 자리(탭 본창)마다 따로 — 다른 탭이 먼저 그려도 지우지 않는다", () => {
+  const fp = read("web/filepage.ts");
+  assert.doesNotMatch(fp, /let movedNotice\b/, "모든 탭이 나눠 쓰는 안내 하나가 남아 있다");
+  assert.match(fp, /const movedNotices = new WeakMap<object, \{ root: string; from: string; to: string \}>\(\);/, "자리마다 안내를 두지 않는다");
+  const paint = fp.slice(fp.indexOf("async function paintFileView"), fp.indexOf("// ── 위치(브레드크럼)"));
+  assert.match(paint, /const left = movedNotices\.get\(host\);/, "그린 자리의 안내를 읽지 않는다");
+  assert.match(paint, /movedNotices\.set\(host, \{ root, from: rel, to \}\);/, "넘길 때 그 자리에 안내를 두지 않는다");
+  before(paint, "movedNotices.set(host, { root, from: rel, to });", "env.replaceRoute(fileLinkHash(root, to))", "넘긴 뒤에 안내를 둔다(다시 그리기가 먼저 돌면 안내가 없다)");
+});
+
+test("F8 정보 404 — 이 게이트웨이의 404(code file_not_found)는 그대로 «없음» · code 없는 404(옛 게이트웨이)만 부모 목록으로 다시 본다", () => {
+  const fp = read("web/filepage.ts");
+  assert.match(fp, /entry = e\.body && e\.body\.code === 'file_not_found' \? null : await listedEntry\(root, rel\);/, "모든 404 에 부모 목록을 한 번 더 부른다");
+  const tf = read("src/terminal/terminal-files.ts");
+  const info = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/info"'), tf.indexOf('app.get("/api/ui/terminal/browse/similar"'));
+  assert.match(info, /const notFound = \(\): HttpError => new HttpError\(404, "경로를 찾을 수 없습니다", \{ body: \{ code: "file_not_found" \} \}\);/);
+  assert.equal((info.match(/throw notFound\(\);/g) || []).length, 2, "못 봄 · 없음 두 자리가 같은 404 를 던지지 않는다");
+  assert.doesNotMatch(info, /throw new HttpError\(404/, "같은 몸이 아닌 404 가 남아 있다");
+});
+
+test("F9 같은 이름 후보 라우트 — 못 보는 링크도 빈 목록(같은 몸) · 못 보는 하위 자리는 건너뛴다 · 답은 items 하나 · 시간 상한", () => {
+  const tf = read("src/terminal/terminal-files.ts");
+  const sim = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/similar"'), tf.indexOf("// 미리보기/다운로드(?download=1)"));
+  assert.match(sim, /catch \(e\) \{ if \(e instanceof HttpError && e\.status === 404\) \{ none\(\); return; \} throw e; \}/, "못 보는 링크가 다른 답(404)을 낸다");
+  assert.match(sim, /const none = \(\): void => \{ res\.json\(\{ items: \[\] \}\); \};/);
+  assert.match(sim, /res\.json\(\{ items: rankSameName\(seen, rel\) \}\);/, "답에 items 말고 덧말이 실린다");
+  assert.doesNotMatch(sim, /truncated: found\.truncated|scope, truncated|scope: /, "잘림 · 범위를 답에 싣는다");
+  assert.match(sim, /const skip = \(gate\?\.hiddenWithin\?\.\(scope\) \?\? \[\]\)\.map\(\(h\) => \(scope \? h\.slice\(scope\.length \+ 1\) : h\)\);/, "못 보는 하위 자리를 건너뛰지 않는다");
+  assert.match(sim, /\{ base: scopeAbs, name, skip, \.\.\.SAME_NAME_LIMITS \}/, "격리 멤버 판에 skip 을 넘기지 않는다");
+  assert.match(sim, /findSameNameLocal\(scopeAbs, name, SAME_NAME_LIMITS, skip\)/, "로컬 판에 skip 을 넘기지 않는다");
+  assert.match(sim, /\{ timeoutMs: SAME_NAME_LIMITS\.maxMs \+ 5000 \}/, "멤버 왕복에 기다리는 상한이 없다");
+  assert.match(sim, /logger\.warn\(/, "찾기 실패를 흔적 없이 삼킨다");
 });

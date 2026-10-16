@@ -52,9 +52,10 @@ import { followMoves, normalizeMovePath } from "../files/file-move-core.js";
 import { SHARED_MOVE_SCOPE, personalMoveScope, findFileMove } from "../v6/file-move-store.js";
 import { APPS_ROOT_KEY } from "./catalog.js";
 import { readableAppFoldersFor, appConsentNeeded, appTitleFor, fileViewSourceAt } from "../files/files-live.js";   // #4673 — 앱 폴더는 그 앱에 동의한 구성원만 · #4672 자료 보기
-import { buildFileInfo } from "../files/file-view.js";   // #4672 — 링크 하나의 정보 · 속한 곳 · 자료
+import { appIdOfLink, buildFileInfo } from "../files/file-view.js";   // #4672 — 링크 하나의 정보 · 속한 곳 · 자료
 import { sameNameScope, rankSameName, findSameNameLocal, SAME_NAME_JS, SAME_NAME_LIMITS, type SameNameFound } from "../files/same-name.js";
-import { projectIdForSessionCoord } from "../project/folder-bind.js";
+import { projectFolderOfCoord, projectIdForSessionCoord } from "../project/folder-bind.js";
+import { logger } from "../log.js";
 
 // 업로드 상한(#1870) — 종전 50MB 는 화면 녹화·데이터셋이 걸렸다. receiveUpload 가 임시파일로 **스트리밍**하므로
 //  (RAM 상주 없음, upload-file.ts) 상한을 올려도 메모리 위험이 없다. project-routes.ts MAX_UPLOAD 와 같은 값이어야 한다.
@@ -515,23 +516,24 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
 
   // ── 자료 보기(#4672) — 링크(#/f?root=&path=) 하나가 가리키는 자리의 정보 · 속한 곳 · 자료 ─────────────────────────────
   //  자료 보기 화면(web/filepage)이 미리보기와 함께 부른다. 판정은 목록 · 내려받기와 같은 한 벌(resolveBrowse — 안 보이면 404, 존재 은닉)이고
-  //  없는 자리도 같은 404 다. 그때 화면은 «옛 링크 풀기»(browse/moved) → «같은 이름 후보»(browse/similar) 순으로 묻는다. 모양은 files/file-view.
-  //  · 앱 폴더는 하나가 다르다(#4671 ③ 결정 1 «동의하지 않은 사람에게는 동의 안내») — 그 앱이 이 사람에게 보이고 켜져 있는데 아직 동의하지
+  //  없는 자리도 **같은 몸**의 404 다(code file_not_found). 그때 화면은 «옛 링크 풀기»(browse/moved) → «같은 이름 후보»(browse/similar) 순으로 묻는다.
+  //  code 가 없는 404(이 라우트가 없는 옛 게이트웨이)를 받은 화면만 부모 목록으로 다시 본다. 모양은 files/file-view.
+  //  · 앱 폴더는 하나가 다르다(#4671 ③ 결정 1 «동의하지 않은 사람에게는 동의 안내») — 그 앱이 이 사람의 앱 찾기에 서고 켜져 있는데 아직 동의하지
   //    않았으면 403 app_consent_required + 그 앱(id · 이름). 판정에서 떨어진 **뒤에만** 묻고 파일은 보지 않는다 — 그 자리에 파일이 있는지는
-  //    새지 않는다(그 앱이 있다는 것은 그 사람의 앱 찾기에도 보인다). 앱 주체(앱 세션 토큰)는 안내를 받지 않는다 — 제 앱 폴더만 보는 자리다.
+  //    새지 않는다. 묻는 앱은 접은 경로의 첫 마디가 앱 id 꼴일 때만(files/file-view appIdOfLink). 앱 주체(앱 세션 토큰)는 안내를 받지 않는다 — 제 앱 폴더만 보는 자리다.
   app.get("/api/ui/terminal/browse/info", auth, wrap(async (req, res) => {
     const rootKey = String(req.query.root ?? "");
     const u = userOf(req);
     const viewer = viewerFor(req);
+    const notFound = (): HttpError => new HttpError(404, "경로를 찾을 수 없습니다", { body: { code: "file_not_found" } });
     let at: Awaited<ReturnType<typeof resolveBrowse>>;
     try { at = await resolveBrowse(req, false); }
     catch (e) {
-      const appSeg = String(req.query.path ?? "").replace(/^[/\\]+/, "").split(/[\\/]/)[0] ?? "";
-      if (e instanceof HttpError && e.status === 404 && rootKey === APPS_ROOT_KEY && viewer && !u.appId && appSeg) {
-        const need = await appConsentNeeded(viewer, u.scopes ?? [], appSeg);
-        if (need) throw new HttpError(403, `앱 「${need.title}」 사용에 동의한 사람만 이 앱 폴더를 볼 수 있어요`, { body: { code: "app_consent_required", app: need } });
-      }
-      throw e;
+      if (!(e instanceof HttpError) || e.status !== 404) throw e;
+      const appId = rootKey === APPS_ROOT_KEY && viewer && !u.appId ? appIdOfLink(String(req.query.path ?? "")) : "";
+      const need = appId && viewer ? await appConsentNeeded(viewer, u.scopes ?? [], appId) : null;
+      if (need) throw new HttpError(403, `앱 「${need.title}」 사용에 동의한 사람만 이 앱 폴더를 볼 수 있어요`, { body: { code: "app_consent_required", app: need } });
+      throw notFound();
     }
     const { base, abs, osUser, gate } = at;
     const info = await buildFileInfo(rootKey, base, abs, {
@@ -541,12 +543,23 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
         catch { return null; }
       },
       //  프로젝트 폴더 좌표(project/<x> · legacy-project/<x>)의 프로젝트 — 이 사람이 볼 수 있을 때만(세션 소속 판정과 같은 함수).
+      //   링크의 꼴이 먼저고, 그 폴더를 정확히 가진 프로젝트가 없을 때만 반대 꼴을 본다 — 끝난 프로젝트는 폴더가 legacy-project/ 로 옮겨지는데
+      //   DB folder 가 옛 꼴일 수 있다(게이트 · 🔒 이 folderVariants 로 보는 것과 같은 너그러움). folder 는 링크의 꼴로 준다(화면의 위치 줄).
       projectAt: async (rel) => {
-        const id = await projectIdForSessionCoord(SHARED_ROOT_KEY, rel, viewer);
-        const row = id ? await getProjectRow(id) : undefined;
-        return row ? { id: Number(row.id), name: String(row.name ?? ""), folder: String(row.folder ?? "") } : null;
+        const folder = projectFolderOfCoord(SHARED_ROOT_KEY, rel);
+        if (!folder) return null;
+        for (const v of folderVariants(folder)) {
+          const id = await projectIdForSessionCoord(SHARED_ROOT_KEY, v, viewer);
+          const row = id ? await getProjectRow(id) : undefined;
+          if (row) return { id: Number(row.id), name: String(row.name ?? ""), folder };
+        }
+        return null;
       },
-      appTitle: (id) => (viewer ? appTitleFor(viewer, u.scopes ?? [], id).catch(() => null) : Promise.resolve(null)),
+      appTitle: async (id) => {
+        if (!viewer) return null;
+        try { return await appTitleFor(viewer, u.scopes ?? [], id); }
+        catch (err) { logger.warn({ err, app: id }, "자료 보기 — 앱 이름을 읽지 못했다(앱 id 로 보인다)"); return null; }
+      },
       //  🔒 과 같은 뜻 — 목록(GET browse)이 배지를 다는 규칙 그대로: 공유 폴더 공개범위(조상 포함) 또는 그 자리가 든 프로젝트의 공개범위.
       locked: async (rel) => {
         if (!gate) return false;
@@ -557,39 +570,52 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
         return folderVariants(pf).some((v) => restricted.has(v));
       },
       sourceAt: async (p) => {
-        const loc = await localRootForBrowse(rootKey, u, base, p).catch(() => null);
-        return loc ? fileViewSourceAt(loc.root, normalizeLocalRel(path.relative(loc.base, p)), viewer).catch(() => null) : null;
+        try {
+          const loc = await localRootForBrowse(rootKey, u, base, p);
+          return loc ? await fileViewSourceAt(loc.root, normalizeLocalRel(path.relative(loc.base, p)), viewer) : null;
+        } catch (err) { logger.warn({ err, root: rootKey }, "자료 보기 — 자료 요약을 읽지 못했다(자료 칸 없이 보인다)"); return null; }
       },
     });
-    if (!info) throw new HttpError(404, "경로를 찾을 수 없습니다");
+    if (!info) throw notFound();
     res.setHeader("Cache-Control", "no-store");
     res.json(info);
   }));
 
   // ── 같은 이름 후보(#4672) — 링크의 자리에 아무것도 없을 때 그 근처에서 이름이 꼭 같은 파일·폴더 ──────────────────────────────
   //  «옛 링크 풀기»(browse/moved)가 기록을 못 찾았을 때(셸 `mv` 는 서버가 모른다) 자료 보기 화면이 부른다. 넘기지는 않는다 — 후보로만 보인다.
-  //  · 받은 링크의 경로부터 판정을 지난다(resolveBrowse) — 안 보이는 자리면 404 이고, 그 근처에 무엇이 있는지도 말하지 않는다.
+  //  · 받은 링크의 경로부터 판정을 지난다(resolveBrowse). 못 보는 자리의 링크는 «볼 수 있는데 근처에 같은 이름이 없는 자리» 와 같은 답(빈 목록)이다 —
+  //    정보(browse/info)가 둘을 같은 404 로 답하는 것과 같은 자세. 답은 items 하나뿐이다(잘림 · 범위 같은 덧말을 싣지 않는다).
   //  · 그 자리에 지금 무엇이 있으면 후보가 없다(빈 목록 — 화면은 그것을 연다).
-  //  · 찾는 범위는 그 경로가 든 덩어리 하나(프로젝트 폴더 · 앱 폴더 · 맨 위 폴더 — files/same-name sameNameScope)이고 걷는 양에 상한이 있다.
-  //  · 후보도 하나하나 이 사람 기준으로 다시 판정한다(잠긴 하위 폴더 · 숨은 프로젝트 폴더 안은 빠진다). 찾는 일은 이 사람의 uid 로 한다.
+  //  · 찾는 범위는 그 경로가 든 덩어리 하나(프로젝트 폴더 · 앱 폴더 · 맨 위 폴더 — files/same-name sameNameScope)이고 걷는 양 · 시간에 상한이 있다.
+  //  · 이 사람이 못 보는 하위 자리(숨은 프로젝트 폴더 · 막힌 공유 폴더 — gate.hiddenWithin)에는 들어가지 않고, 찾은 후보도 하나하나 다시 판정한다.
+  //    찾는 일은 이 사람의 uid 로 한다.
   app.get("/api/ui/terminal/browse/similar", auth, wrap(async (req, res) => {
     const rootKey = String(req.query.root ?? "");
-    const { base, abs, osUser, gate } = await resolveBrowse(req, true);
-    const rel = normalizeMovePath(path.relative(base, abs));
     res.setHeader("Cache-Control", "no-store");
-    if (!rel || await fsExists(osUser, abs)) { res.json({ items: [], scope: null, truncated: false }); return; }
+    const none = (): void => { res.json({ items: [] }); };
+    let at: Awaited<ReturnType<typeof resolveBrowse>>;
+    try { at = await resolveBrowse(req, true); }
+    catch (e) { if (e instanceof HttpError && e.status === 404) { none(); return; } throw e; }
+    const { base, abs, osUser, gate } = at;
+    const rel = normalizeMovePath(path.relative(base, abs));
+    if (!rel || await fsExists(osUser, abs)) { none(); return; }
     const scope = sameNameScope(rootKey, rel);
     let scopeAbs: string;
     try {
       scopeAbs = inBase(base, scope);
       await assertJailed(base, scopeAbs, osUser, rootKey === APPS_ROOT_KEY && scope ? scope.split("/")[0] : undefined);
-    } catch { res.json({ items: [], scope, truncated: false }); return; }   // 범위가 링크로 바깥을 가리키면 찾지 않는다
+    } catch { none(); return; }   // 범위가 링크로 바깥을 가리키면 찾지 않는다
+    const skip = (gate?.hiddenWithin?.(scope) ?? []).map((h) => (scope ? h.slice(scope.length + 1) : h));
     const name = path.basename(abs);
-    const found: SameNameFound = osUser
-      ? (await memberNodeJson<SameNameFound | null>(osUser, SAME_NAME_JS, { base: scopeAbs, name, ...SAME_NAME_LIMITS }).catch(() => null)) ?? { hits: [], truncated: false }
-      : await findSameNameLocal(scopeAbs, name);
+    let found: SameNameFound = { hits: [], truncated: false };
+    try {
+      found = osUser
+        ? (await memberNodeJson<SameNameFound | null>(osUser, SAME_NAME_JS, { base: scopeAbs, name, skip, ...SAME_NAME_LIMITS },
+          { timeoutMs: SAME_NAME_LIMITS.maxMs + 5000 })) ?? found
+        : await findSameNameLocal(scopeAbs, name, SAME_NAME_LIMITS, skip);
+    } catch (err) { logger.warn({ err, root: rootKey }, "같은 이름 후보를 찾지 못했다(후보 없이 보인다)"); }
     const seen = found.hits.map((h) => ({ ...h, path: scope ? `${scope}/${h.path}` : h.path })).filter((h) => !gate || gate.ok(h.path));
-    res.json({ items: rankSameName(seen, rel), scope, truncated: found.truncated });
+    res.json({ items: rankSameName(seen, rel) });
   }));
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
   app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
