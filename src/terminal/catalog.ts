@@ -592,6 +592,9 @@ export interface CreateInput {
   //  컨테이너는 늘 새 자리로 청한다(SessionEnsureRequest.fresh). 훅·MCP 토큰은 종전대로 이 id 로 다시 굽는다(옛 것은 mint 가 먼저 거둔다).
   //  ⚠ 부르는 쪽(routes.ts 복원)이 «그 id 의 tmux 가 없다» 를 확답받은 뒤에만 넘긴다.
   reuseId?: string;
+  // #4684 — 새 id 복원일 때 **옛 세션 id**. 옛 세션에 붙어 있던 앱을 새 세션으로 넘기고(org_session_app) 그 앱 폴더를 새 컨테이너에
+  //  붙인다. 같은 id 복원(reuseId)은 기록이 그 id 에 그대로 있어 필요 없다. 게이트웨이 능력(sessionAppFolders)이 없으면(노드) 무시한다.
+  carryAppsFrom?: string;
   // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
   //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
   //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다

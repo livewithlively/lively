@@ -109,11 +109,18 @@ console.log(`[boot] ${installTenantBinding()}`);
   //  #4687 — 세션 작업 폴더의 공개범위 판정. 열람 신원은 링크·MCP 와 같은 규칙(viewerOf)으로 잰다 — 사람과 그 사람의 AI 가 같은 답.
   const { assertSessionCwdVisibleTo } = await import("./v6/shared-folder-store.js");
   const { viewerOf } = await import("./capabilities/principal.js");
+  //  #4684 — 세션에 붙인 앱 폴더(확보에 실을 목록 · 새 id 복원 때 넘기기).
+  const { folderAppsFor, resyncIfChangedAfterCreate } = await import("./apps/session-app-folders.js");
+  const { carrySessionApps, dropSessionApps } = await import("./apps/session-apps.js");
   registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
     outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
     assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
+    sessionAppFolders: {
+      listFor: (id) => folderAppsFor(id), carry: (from, to) => carrySessionApps(from, to), drop: (id) => dropSessionApps(id),
+      afterCreate: (id, sent) => { void resyncIfChangedAfterCreate(id, sent); },
+    },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 

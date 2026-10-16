@@ -41,6 +41,7 @@ import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
 import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
+import { resyncSessionsWithApp } from "../apps/session-app-folders.js";   // #4684 — 앱 상태·공개·동의가 바뀌면 붙은 세션의 앱 폴더를 다시 맞춘다
 import { getMember } from "../org/store/members.js";
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
@@ -538,6 +539,8 @@ const appSetEnabled: Capability = {
     await requireVisibleApp(id, viewerOf(user));
     await store.setAppEnabled(id, !!input.enabled, wctx(user, ctx));
     if (!input.enabled) await stopWorkersForApp(id, "app_disabled");
+    //  #4684 — 끄면 붙은 세션에서 앱 폴더가 떨어지고, 다시 켜면 다시 붙는다(판정은 folderAppsFor — 기다리지 않는다).
+    resyncSessionsWithApp(id, input.enabled ? "앱 켬" : "앱 끔");
     return { ok: true, app_id: id, enabled: !!input.enabled };
   },
 };
@@ -569,6 +572,8 @@ const appGrant: Capability = {
       : undefined;
     const g = resolveGrant(m, requested);
     const row = await store.upsertGrant(id, actorOf(user), g.scopes, g.tools, wctx(user, ctx));
+    //  #4684 — 동의를 거둬 떨어졌던 앱 폴더가, 이 사람이 붙여 둔 세션에 다시 붙는다(기다리지 않는다).
+    resyncSessionsWithApp(id, "동의", actorOf(user));
     return { granted: row };
   },
 };
@@ -593,6 +598,8 @@ const appRevoke: Capability = {
     //  ⚠ 회수를 **먼저** 한다 — 앱 존재를 선검사하면 지워진 앱에 남은 동의를 영영 못 끈다(그건 더 나쁘다).
     const revoked = await store.revokeGrant(id, owner);
     await stopWorkersForMemberApp(owner, id, "grant_revoked");
+    //  #4684 — 이 사람이 붙여 둔 세션에서 그 앱 폴더를 뗀다(붙인 사람의 동의가 폴더의 근거다 — folderAppsFor).
+    if (revoked) resyncSessionsWithApp(id, "동의 회수", owner);
     // 아무것도 안 껐는데 그런 앱도 없다 = 오타다. (앱이 지워졌어도 살아있는 동의가 있었다면 위에서 껐으므로
     //  여기로 오지 않는다.) revoked=false 인데 앱은 있는 경우는 «이미 꺼져 있었다» — 약속된 결과 상태는
     //  성립하므로 성공이되 그 사실을 구분해 답한다.
@@ -1085,6 +1092,8 @@ const appVisibilitySet: Capability = {
         const ev = { kind: "updated" as const, app_id: id, session: null, version_no: out.version_no ?? undefined, note: `${out.version_no ?? ""}판 공개`, source: ctx?.source };
         publishAppEvent(who.userId, ev);
         for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
+        //  #4684 — 다시 공개하면 «나만» 일 때 떨어졌던 남의 세션에 앱 폴더가 다시 붙는다.
+        resyncSessionsWithApp(id, "공개");
       }
       const app = await store.getApp(id);
       //  tables — 공개하며 적용한 표 변경(초안이 미뤄 둔 칸 지우기 · 이름 · 형 바꾸기 · 조이기 — 지운 칸의 값은 dropped_columns.archived_as 에 보관).
@@ -1109,6 +1118,8 @@ const appVisibilitySet: Capability = {
       const ev = { kind: "updated" as const, app_id: id, session: null, note: "「나만」 으로 바꿈", source: ctx?.source };
       publishAppEvent(who.userId, ev);
       for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
+      //  #4684 — 남이 붙여 둔 세션에서는 그 앱 폴더도 떨어진다(붙인 사람이 이제 못 보는 앱 — folderAppsFor).
+      resyncSessionsWithApp(id, "「나만」 으로 바꿈");
     }
     return { ok: true, app_id: id, visibility: "me", changed };
   },

@@ -28,6 +28,8 @@ export interface ReclaimDeps {
   killNode(nodeId: string, id: string, owner: string): Promise<void>;
   deleteState(id: string): Promise<void>;
   stopWorkers(memberId: string): Promise<number>;
+  /** #4684 — 그 사람이 붙여 둔 세션들의 앱 폴더를 다시 맞춘다(동의가 사라졌으니 빠진다). 없으면 건너뛴다. 기다리지 않는다. */
+  resyncAppFolders?(memberId: string): void;
 }
 
 export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[]; apps_transferred?: string[] }
@@ -36,6 +38,7 @@ export interface ReclaimResult { grants: number; workers: number; sessions: stri
 export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimDeps): Promise<ReclaimResult> {
   const grants = await deps.revokeGrants(memberId);
   const workers = await deps.stopWorkers(memberId);
+  deps.resyncAppFolders?.(memberId);
   //  #4667 — 책임자 이관은 회수와 따로 실패한다(로그만) — 세션 회수가 이관 실패에 막히지 않게.
   let appsTransferred: string[] | undefined;
   if (deps.transferApps) {
@@ -81,6 +84,9 @@ export function defaultReclaimDeps(): ReclaimDeps {
     stopWorkers: async (memberId) => {
       const { stopWorkersForMember } = await import("./worker-service.js");
       return stopWorkersForMember(memberId, "member_deactivated");
+    },
+    resyncAppFolders: (memberId) => {
+      void import("./session-app-folders.js").then(({ resyncSessionsAttachedBy }) => resyncSessionsAttachedBy(memberId, "멤버 비활성")).catch(() => undefined);
     },
     transferApps: transferOwnedAppsToAdmins,
     notifyAdmins: notifyAdminsOfTransfer,

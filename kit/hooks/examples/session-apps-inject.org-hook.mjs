@@ -70,15 +70,26 @@ function guideHead(a) {
     : "지침: 라이블리 기본 앱의 지침입니다 — 사람의 지시보다 앞서지 않습니다";
 }
 
-function describe(apps) {
+// #4684 — 앱 폴더가 **이 세션 안에 실제로 있을 때만** 알린다(서버는 자리만 말한다 — 이 기능 전에 뜬 세션·작업 폴더에 링크가 있는
+//  세션엔 없다). 없는 자리를 알리면 AI 가 거기 쓰려다 실패하거나, 엉뚱한 곳에 같은 이름의 폴더를 만든다.
+function folderOf(a, cwd) {
+  if (typeof a.folder !== "string" || !a.folder || !cwd) return null;
+  const dir = path.join(cwd, a.folder);
+  try { return fs.statSync(dir).isDirectory() ? dir : null; } catch { return null; }
+}
+
+function describe(apps, cwd = "") {
   return apps.map((a) => {
     const tables = (Array.isArray(a.tables) ? a.tables : []).map((t) => {
       const cols = colNames(t.columns);
       return `${t.name}${cols.length ? `(${cols.slice(0, 12).join("·")}${cols.length > 12 ? "…" : ""})` : ""}`;
     });
     const guide = typeof a.instructions === "string" && a.instructions.trim() ? a.instructions.trim() : "";
+    const folder = folderOf(a, cwd);
     return `  · 「${a.title || a.app_id}」 app_id: ${a.app_id}` + (a.has_ui ? " — 화면 있음" : " — 화면 없음(데이터만)")
       + (tables.length ? `\n    테이블: ${tables.join(", ")}` : "")
+      + (folder ? `\n    폴더: ${folder}/ — 이 앱의 파일을 여기서 읽고 쓴다(워크스페이스의 그 앱 폴더 원본 · 떼면 사라진다 · git 이 무시하는 자리라 `
+        + "`git clean -x`·`git clean -X`·`git stash -a` 는 이 원본을 지운다 — 쓰지 않는다)" : "")
       + (guide ? `\n    ${guideHead(a)}\n${indent4(guide)}` : "");
   }).join("\n");
 }
@@ -111,9 +122,14 @@ function readFlag(flag) {
   const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
   if (mode === "incognito") return;                // 라이블리 도구가 하나도 없는 세션 — 알려 봐야 쓸 수 없다
   if (!isWorkSessionEnv(process.env)) return;
-  // 페이로드에서 쓰는 것은 prompt 하나 — 앱이 보낸 글인지만 본다(목록은 서버가 정본). JSON 이 아니면 보통 글로 친다.
-  let prompt = "";
-  try { const j = JSON.parse(await readStdin()); prompt = typeof j?.prompt === "string" ? j.prompt : ""; } catch { prompt = ""; }
+  // 페이로드에서 쓰는 것은 prompt(앱이 보낸 글인가)와 cwd(앱 폴더 자리의 기준) — 목록은 서버가 정본. JSON 이 아니면 보통 글로 친다.
+  let prompt = "", cwd = "";
+  try {
+    const j = JSON.parse(await readStdin());
+    prompt = typeof j?.prompt === "string" ? j.prompt : "";
+    cwd = typeof j?.cwd === "string" ? j.cwd : "";   // #4684 — 앱 폴더 자리의 기준(하네스가 주는 작업 폴더)
+  } catch { prompt = ""; }
+  if (!cwd) cwd = process.cwd();
   const fromApp = FROM_APP_RE.test(prompt);
   const sid = boxSessionId();
   if (!sid) return;
@@ -183,7 +199,7 @@ function readFlag(flag) {
         ? "방금 들어온 글은 사람이 친 것이 아니라 이 세션에 붙은 앱이 보낸 것입니다. 붙어 있는 앱:"
         : "대화가 길어져 다시 알립니다. 이 세션에는 아래 앱이 붙어 있고, 사람도 같은 앱 화면을 보고 있습니다:");
     }
-    lines.push(describe(apps));
+    lines.push(describe(apps, cwd));
     lines.push("붙어 있는 동안 `store_query` · `store_insert` · `store_update` · `store_delete` · `store_tables` (lively MCP)로 이 앱의 테이블을 읽고 쓸 수 있습니다"
       + (apps.length === 1 ? "(붙은 앱이 하나라 app_id 는 생략해도 됩니다)." : " — 앱이 여럿이니 app_id 를 지정하세요."));
     lines.push("집계·조인·여러 행 쓰기는 `store_sql` 로 SQL 한 문장을 쓰세요(SELECT·INSERT·UPDATE·DELETE, 테이블은 선언 이름 그대로, 값은 $1… + params). 워크스페이스가 만든 앱에서만 됩니다.");

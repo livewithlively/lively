@@ -11,6 +11,7 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { assertNotAppFolderMount } from "../terminal/app-folder-guard.js";   // #4684 — `.lively/apps` 는 세션 앱 폴더 자리
 import { projectAbsPath } from "./project-fs.js";
 import { projectStorage, type ProjectStorage } from "./project-storage.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
@@ -258,6 +259,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  덮는다**(같은 바이트 크기 · 다른 내용은 흔하다). 기존 클라이언트는 이 필드를 무시하므로 하위호환.
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { project, store, base } = await projStore(Number(req.params.id), req);
+    assertNotAppFolderMount(req.query.path);
     const abs = await resolveInProject(store, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
     try { await store.receive(req, abs, MAX_UPLOAD); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
@@ -273,6 +275,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   // 새 폴더 생성
   app.post(`${prefix}/:id/folder`, auth, wrap(async (req, res) => {
     const { store } = await projStore(Number(req.params.id), req);
+    assertNotAppFolderMount(req.query.path);
     const abs = await resolveInProject(store, nfcPath(req.query.path), true);   // 폴더 이름도 NFC 정본(#1278b)
     // 게이트웨이 소유(lively)·umask(755)로 생긴 폴더는 box_ 격리 세션(lively-shared 그룹)이 못 쓴다 —
     //  프로젝트 폴더 자체(2770)와 같은 계약을 하위에도(#1246 신고 증상: 웹에서 만든 폴더에 클로드 쓰기 불가).
@@ -300,6 +303,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     }
     const toAbs = path.join(path.dirname(fromAbs), newName);
     if (toAbs !== base && !toAbs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+    assertNotAppFolderMount(path.relative(base, fromAbs), path.relative(base, toAbs));
     await jailIfMember(store, fromAbs);
     await jailIfMember(store, toAbs);
     if (!(await store.stat(fromAbs))) throw new HttpError(404, "대상이 없습니다");
@@ -318,6 +322,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const list = Array.isArray(b.paths) ? b.paths : (b.path != null ? [b.path] : []);
     if (!list.length) throw new HttpError(400, "옮길 대상이 필요합니다");
     const destDir = resolveIn(base, nfcPath(b.to ?? ""), false);
+    assertNotAppFolderMount(path.relative(base, destDir), ...list);
     await jailIfMember(store, destDir);
     const dstat = await store.stat(destDir);
     if (!dstat || !dstat.dir) throw new HttpError(400, "목적지가 폴더가 아닙니다");
