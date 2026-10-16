@@ -11,13 +11,14 @@
 import { classifyCollectRun } from "./unit-plan.js";
 
 export type RunOutcome =
-  | "ok" | "login" | "quota" | "no_connector" | "oom" | "gone" | "timeout" | "lost" | "max_turns" | "canceled" | "error";
+  | "ok" | "login" | "quota" | "no_connector" | "connector_load" | "oom" | "gone" | "timeout" | "lost" | "max_turns" | "canceled" | "error";
 
 export const RUN_OUTCOME_LABEL: Readonly<Record<RunOutcome, string>> = {
   ok: "성공",
   login: "Claude 로그인 끊김",
   quota: "사용 한도 초과",
   no_connector: "연결된 커넥터 없음",
+  connector_load: "커넥터를 불러오지 못함",
   oom: "강제 종료(메모리 초과 추정)",
   gone: "끝 신호 없이 세션이 사라짐",
   timeout: "시간 상한 초과",
@@ -59,6 +60,8 @@ export function classifyRunOutcome(
   if (err === "runner-gone") return { outcome: "gone", error: errOut };
   if (err === "timeout" || exit.timedOut === true) return { outcome: "timeout", error: errOut ?? "timeout" };
   if (err === "canceled") return { outcome: "canceled", error: errOut };
+  //  커넥터는 연결돼 있는데 그 판에 안 떴다(세 번 다시 띄워도) — 잠깐의 일이라 담당 건강은 건드리지 않는다(T10 판정도 그대로 둔다).
+  if (err === "connector-not-loaded") return { outcome: "connector_load", error: errOut };
   if (exit.signal === "SIGKILL" || exit.code === 137 || err === "claude exit 137") return { outcome: "oom", error: errOut ?? "SIGKILL" };
   const sum = rec(summary);
   const res = rec(sum?.result);
@@ -101,6 +104,8 @@ export interface RunMetrics {
   tool_calls: number | null;
   tool_errors: number | null;
   captures: number | null;
+  /** claude -p 를 몇 번 띄웠나(커넥터가 안 떠 다시 띄운 수 + 1). */
+  attempts: number | null;
 }
 
 /** "1073741824" 같은 cgroup 바이트 문자열 → MB. "max"·잡값 → null. */
@@ -143,6 +148,7 @@ export function runMetricsOf(exit: Record<string, unknown> | null, summary: Reco
     tool_calls: calls ? calls.length : null,
     tool_errors: calls ? calls.filter((c) => rec(c)?.error === true).length : null,
     captures: nonNegInt(sum?.captures),
+    attempts: nonNegInt(sum?.attempts),
   };
 }
 
@@ -159,6 +165,7 @@ export interface RunStatRow {
   cost_usd: number | null;
   tool_calls: number | null;
   tool_errors: number | null;
+  attempts?: number | null;
 }
 
 export interface RunStats {
@@ -185,6 +192,8 @@ export interface RunStats {
   duration: { p50_sec: number | null; p95_sec: number | null };
   cost: { total_usd: number; avg_usd: number | null };
   tools: { calls: number; errors: number };
+  /** 커넥터가 안 떠 claude 를 다시 띄운 실행 수. */
+  load_retried: number;
   daily: Array<{ day: string; runs: number; failed: number; peak_max_mb: number | null }>;
   /** 크기 추천 — 표본이 적으면 null. 규칙은 rule 에 그대로 적는다(화면이 그 문장을 보여 준다). */
   suggestion: { max_mb: number; request_mb: number; samples: number; rule: string } | null;
@@ -262,7 +271,7 @@ export function summarizeRuns(rows: readonly RunStatRow[], opts: { tz?: string; 
   const counts = new Map<RunOutcome, number>();
   const peaks: number[] = [];
   const durs: number[] = [];
-  let running = 0, nearCap = 0, maxRatio: number | null = null, costTotal = 0, costN = 0, calls = 0, toolErr = 0, excluded = 0;
+  let running = 0, nearCap = 0, maxRatio: number | null = null, costTotal = 0, costN = 0, calls = 0, toolErr = 0, excluded = 0, retried = 0;
   let suspectCap: number | null = null;
   const days = new Map<string, { runs: number; failed: number; peak: number | null }>();
   for (const r of rows) {
@@ -296,6 +305,7 @@ export function summarizeRuns(rows: readonly RunStatRow[], opts: { tz?: string; 
     if (r.cost_usd != null) { costTotal += r.cost_usd; costN++; }
     calls += r.tool_calls ?? 0;
     toolErr += r.tool_errors ?? 0;
+    if ((r.attempts ?? 0) > 1) retried++;
   }
   peaks.sort((a, b) => a - b);
   durs.sort((a, b) => a - b);
@@ -321,6 +331,7 @@ export function summarizeRuns(rows: readonly RunStatRow[], opts: { tz?: string; 
     duration: { p50_sec: sec(percentile(durs, 50)), p95_sec: sec(percentile(durs, 95)) },
     cost: { total_usd: costTotal, avg_usd: costN ? costTotal / costN : null },
     tools: { calls, errors: toolErr },
+    load_retried: retried,
     daily: [...days.entries()].sort((a, b) => a[0].localeCompare(b[0]))
       .map(([day, v]) => ({ day, runs: v.runs, failed: v.failed, peak_max_mb: v.peak })),
     suggestion: suggestSize(peaks, { suspectCapMb: suspects ? suspectCap : null, suspects }),

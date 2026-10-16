@@ -18,6 +18,8 @@
 //   · collect_run          — 수집 실행(#4213 T11) 한 판 = 한 행. 시작에 그때 크기(상한·예약)를, 끝에 결과(성공·실패 사유)·최고 메모리·
 //                             걸린 시간·비용을 적는다. [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 의 실패율·메모리 지표가 이 표에서 나온다.
 //                             원문·결과 문장은 싣지 않는다(그 사람 홈의 실행 폴더에만 있다). 90일 지난 행은 지운다(run-log.ts).
+//                             목록·수집 실행은 계획(plan — 단위 id·ref·구간, 이름은 뺀다)과 저장 결과(ingest — 수)를 싣는다. ref 만으로도
+//                             «누가 어떤 비공개 대화를 읽었나» 가 보이므로 이 표도 DENIED_TABLES 에 올렸다(조회는 관리자 지표 표면으로만).
 //
 //  ⚠ tenant_id 는 boot/schemas.ts 의 ensureTenantColumn 이 붙인다. 자연키(collect_unit 좌표 · collect_assignee_state PK)는
 //   (tenant_id, …) 로 다시 쓰이므로 store 의 ON CONFLICT 는 tenant_id 를 명시한다. 대리키를 가리키는 PK(unit_id, …)는 그대로다.
@@ -141,5 +143,10 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
       collect_run_ended_by_chk: "ended_by IS NULL OR ended_by IN ('runner','gateway')",
     })}
     CREATE INDEX IF NOT EXISTS collect_run_started_idx ON collect_run(started_at DESC);
+    -- 저장 단계(#4213 T11): 실행 종류(probe · listing · collect) · 계획(단위·앱) · 저장 결과 · claude 를 띄운 수(커넥터가 안 떠 다시 띄운 것 포함)
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS mode TEXT;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS plan JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS ingest JSONB;
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS attempts INT;
   `);
 }
