@@ -101,14 +101,16 @@ export interface FinishAiRun {
   error: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  /** 프록시 실행의 «형식에 맞게 다시» 횟수 — 작업 실행은 retryAiRun 이 센다. */
+  retries?: number | null;
 }
 /** 한 번만 끝난다 — 열린 실행일 때만. 끝낸 행을 돌려준다(이미 끝났으면 null). */
 export async function finishAiRun(id: number, f: FinishAiRun): Promise<AiRunRow | null> {
   const r = await itemsPool.query(
     `UPDATE org_app_ai_run SET status=$2, result=$3::jsonb, error=$4, input_tokens=COALESCE($5, input_tokens), output_tokens=COALESCE($6, output_tokens),
-            ended_at=now(), updated_at=now()
+            retries=COALESCE($7, retries), ended_at=now(), updated_at=now()
       WHERE id=$1 AND status IN ('queued','running') RETURNING ${COLS}`,
-    [id, f.status, f.result ? JSON.stringify(f.result) : null, f.error, f.inputTokens ?? null, f.outputTokens ?? null]);
+    [id, f.status, f.result ? JSON.stringify(f.result) : null, f.error, f.inputTokens ?? null, f.outputTokens ?? null, f.retries ?? null]);
   return norm(r.rows[0]);
 }
 

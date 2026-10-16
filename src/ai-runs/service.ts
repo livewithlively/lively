@@ -312,14 +312,14 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
       await d.store.finishAiRun(row.id, {
         status: "failed", error: `답이 결과 형식에 맞지 않습니다(${judged.errors.slice(0, 3).join(" · ")}) — 원문은 result.text 에`,
         result: proxyResult({ text: out.text, json: undefined, model: out.model, usage: total, durationMs, retries, stopReason: out.stopReason, truncated }),
-        inputTokens: total.input_tokens, outputTokens: total.output_tokens,
+        inputTokens: total.input_tokens, outputTokens: total.output_tokens, retries,
       });
       return;
     }
     await d.store.finishAiRun(row.id, {
       status: "done", error: null,
       result: proxyResult({ text: out.text, json: judged.json, model: out.model, usage: total, durationMs, retries, stopReason: out.stopReason, truncated }),
-      inputTokens: total.input_tokens, outputTokens: total.output_tokens,
+      inputTokens: total.input_tokens, outputTokens: total.output_tokens, retries,
     });
   } catch (e) {
     logger.warn({ run: row.id, err: (e as Error)?.message }, "[ai-run] 프록시 실행 실패");

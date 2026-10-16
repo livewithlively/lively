@@ -40,10 +40,10 @@ try {
     JSON.stringify([p1.status, !!p1.started_at, j1.status, j1.started_at]));
 
   // ── T2 한 번만 끝난다 — 두 번째 finish 는 null · 행은 첫 값 그대로 ──
-  const f1 = await st.finishAiRun(p1.id, { status: "done", result: { text: "답" }, error: null, inputTokens: 3, outputTokens: 4 });
+  const f1 = await st.finishAiRun(p1.id, { status: "done", result: { text: "답" }, error: null, inputTokens: 3, outputTokens: 4, retries: 1 });
   const f2 = await st.finishAiRun(p1.id, { status: "failed", result: null, error: "늦은 실패" });
   const r2 = await row(p1.id);
-  chk("T2 끝내기는 한 번 — 두 번째는 null · 결과 그대로", f1 && f1.status === "done" && f2 === null && r2.status === "done" && r2.result.text === "답" && r2.input_tokens === 3 && r2.ended_at, JSON.stringify(r2));
+  chk("T2 끝내기는 한 번 — 두 번째는 null · 결과 그대로 · retries 적힘", f1 && f1.status === "done" && f2 === null && r2.status === "done" && r2.result.text === "답" && r2.input_tokens === 3 && r2.retries === 1 && r2.ended_at, JSON.stringify(r2));
 
   // ── T3 프록시 토큰 → 열린 실행만 ──
   const j2 = await st.insertAiRun(base({ executor: "job", status: "queued", accountKind: "api_key" }));
@@ -86,10 +86,11 @@ try {
     JSON.stringify(list.map((r) => [r.id, r.status, r.prompt_preview, r.has_result])));
 
   // ── T9 정비 조회 — 열린 작업 실행만 · 오래 열린 프록시만 ──
-  const open = await st.openJobRuns();
-  const stale0 = await st.staleProxyRuns(3600);
+  //  이 앱(APP) 행만 견준다 — 같은 DB 에 다른 열린 실행(끝단 시험 · 운영)이 있어도 판정이 흔들리지 않게.
+  const open = (await st.openJobRuns()).filter((r) => r.app_id === APP);
+  const stale0 = (await st.staleProxyRuns(3600)).filter((r) => r.app_id === APP);
   await itemsPool.query(`UPDATE org_app_ai_run SET started_at = now() - interval '2 hours' WHERE requester=$1 AND status='running' AND executor='proxy'`, [`${REQ}b`]);
-  const stale1 = await st.staleProxyRuns(3600);
+  const stale1 = (await st.staleProxyRuns(3600)).filter((r) => r.app_id === APP);
   chk("T9 열린 작업 실행만 · 오래 열린 프록시만", open.length === 1 && open[0].id === j1.id && stale0.length === 0 && stale1.length === 1 && stale1[0].requester === `${REQ}b`,
     JSON.stringify([open.map((r) => r.id), stale0.length, stale1.length]));
 

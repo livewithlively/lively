@@ -52,7 +52,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async setAiRunProxyToken(id, h) { w.runs.get(id)!.proxy_token_hash = h; },
       async markAiRunRunning(id) { const r = w.runs.get(id)!; if (r.status === "queued") { r.status = "running"; r.started_at = new Date(); } },
       async retryAiRun(id, jobId) { const r = w.runs.get(id)!; if (ended(r.status)) return false; r.job_id = jobId; r.retries++; return true; },
-      async finishAiRun(id, f) { const r = w.runs.get(id)!; if (ended(r.status)) return null; Object.assign(r, { status: f.status, result: f.result, error: f.error, ended_at: new Date(), input_tokens: f.inputTokens ?? r.input_tokens, output_tokens: f.outputTokens ?? r.output_tokens }); return { ...r }; },
+      async finishAiRun(id, f) { const r = w.runs.get(id)!; if (ended(r.status)) return null; Object.assign(r, { status: f.status, result: f.result, error: f.error, ended_at: new Date(), input_tokens: f.inputTokens ?? r.input_tokens, output_tokens: f.outputTokens ?? r.output_tokens, retries: f.retries ?? r.retries }); return { ...r }; },
       async openJobRuns() { return [...w.runs.values()].filter((r) => !ended(r.status) && r.executor === "job"); },
       async staleProxyRuns() { return []; },
       async openRunCountOf(req) { return [...w.runs.values()].filter((r) => r.requester === req && !ended(r.status)).length; },
@@ -125,6 +125,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await settle();
   const b = bad.w.runs.get(1)!;
   assert.equal(b.status, "failed"); assert.match(b.error!, /형식에 맞지 않습니다/); assert.equal((b.result as { text: string }).text, "계속 글");
+  assert.equal(b.retries, 1, "행의 retries 도 1(끝단 시험 E7 에서 잡힌 것 — result 안에만 적혀 있었다)");
   assert.equal(bad.w.llm.length, 2, "정확히 두 번 — 세 번째는 없다");
   ok("S3 두 번 다 어긋나면 원문 붙여 실패 · LLM 정확히 2번");
 }
