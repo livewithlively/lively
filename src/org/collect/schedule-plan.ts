@@ -20,8 +20,12 @@
 
 /** 글 빈도를 재는 창 — 최근 14일(처음 수집 기간과 같다 — collect-plan FIRST_READ_DAYS). */
 export const ACTIVITY_WINDOW_SEC = 14 * 86400;
-/** 표본을 이만큼만 남긴다(단위 행의 sched 칸 크기 상한 — 14일 안의 판이 이보다 많으면 오래된 것부터 버린다). */
-export const ACTIVITY_SAMPLES_MAX = 60;
+/**
+ * 표본을 이만큼만 낱개로 둔다 — 최근 하루 안의 판은 낱개, 그보다 오래된 판은 **날마다 하나로 합친다**(글 수·구간 길이를 더해도
+ *  비율 추정은 그대로다). 그래서 14일 창이 판 수와 무관하게 유지된다 — 판 수로 자르면 30분 주기 단위는 창이 하루 남짓으로 줄어
+ *  평일만 바쁜 채널이 주말을 지나며 24시간 주기로 떨어졌다(리뷰 2026-10-17). 하루 안의 낱개가 이보다 많으면 오래된 것부터 시간마다 합친다.
+ */
+export const ACTIVITY_RAW_MAX = 120;
 /** 이만큼도 못 봤으면 빈도를 모른다고 본다 — 한 시간 구간 하나로 «하루 24개» 를 단정하지 않게. */
 export const ACTIVITY_MIN_OBSERVED_SEC = 6 * 3600;
 
@@ -64,17 +68,33 @@ export function samplesOf(raw: unknown): ActivitySample[] {
   return Array.isArray(raw) ? raw.filter(isSample).map((x) => ({ e: Math.floor(x.e), s: Math.floor(x.s), n: Math.floor(x.n) })) : [];
 }
 
+/** 끝 시각이 같은 칸(날·시간)의 표본을 하나로 — 끝은 가장 늦은 끝, 길이·글 수는 더한다. */
+function mergeBy(samples: readonly ActivitySample[], slotSec: number): ActivitySample[] {
+  const m = new Map<number, ActivitySample>();
+  for (const x of samples) {
+    const k = Math.floor(x.e / slotSec);
+    const p = m.get(k);
+    m.set(k, p ? { e: Math.max(p.e, x.e), s: p.s + x.s, n: p.n + x.n } : { ...x });
+  }
+  return [...m.values()];
+}
+
 /**
- * 표본 하나를 더한다 — 창(14일) 밖은 버리고 최근 것부터 ACTIVITY_SAMPLES_MAX 개. 같은 끝 시각이 이미 있으면 바꿔 넣는다(같은 판을 두 번 적지 않게).
- *  sample 이 null 이면 오래된 것만 걷는다(다 못 읽은 판 — 표본은 없지만 창은 흐른다).
+ * 표본 하나를 더한다 — 창(14일) 밖은 버리고, 하루보다 오래된 표본은 날마다 합친다(ACTIVITY_RAW_MAX 머리말). 같은 끝 시각의 낱개
+ *  표본이 이미 있으면 바꿔 넣는다(같은 판을 두 번 적지 않게). sample 이 null 이면 오래된 것만 걷고 합친다(다 못 읽은 판 — 표본은 없지만 창은 흐른다).
  */
 export function addSample(hist: unknown, sample: ActivitySample | null, nowSec: number): ActivitySample[] {
   const base = sample ? samplesOf(hist).filter((x) => x.e !== Math.floor(sample.e)) : samplesOf(hist);
   if (sample && isSample(sample)) base.push({ e: Math.floor(sample.e), s: Math.floor(sample.s), n: Math.floor(sample.n) });
-  return base
-    .filter((x) => x.e > nowSec - ACTIVITY_WINDOW_SEC)
-    .sort((a, b) => a.e - b.e)
-    .slice(-ACTIVITY_SAMPLES_MAX);
+  const live = base.filter((x) => x.e > nowSec - ACTIVITY_WINDOW_SEC);
+  const dayAgo = nowSec - 86400;
+  const old = mergeBy(live.filter((x) => x.e <= dayAgo), 86400);
+  let raw = live.filter((x) => x.e > dayAgo).sort((a, b) => a.e - b.e);
+  if (raw.length > ACTIVITY_RAW_MAX) {
+    const cut = raw.length - Math.floor(ACTIVITY_RAW_MAX / 2);
+    raw = [...mergeBy(raw.slice(0, cut), 3600), ...raw.slice(cut)];
+  }
+  return [...old, ...raw].sort((a, b) => a.e - b.e);
 }
 
 export interface Activity {
@@ -128,15 +148,25 @@ export interface NextCheckInput {
   outcome: ReadOutcome;
   /** 다 읽었지만 아직 «지금» 까지 못 왔다 — 다음 구간의 끝도 지금보다 앞(처음 수집 14일을 7일·1일 구간으로 따라잡는 중). */
   behind?: boolean;
+  /** 못 다 읽어서 다음 판의 구간을 줄였다(슬랙·지메일). 노션처럼 줄일 구간이 없는 단위는 false — 곧바로 다시 읽어도 같은 결과다. */
+  shrunk?: boolean;
   /** 못 다 읽었는데 구간을 더 줄일 수 없다(이미 1시간) — 같은 자리에 머문다. */
   stuck?: boolean;
   /** 이번 판 전까지 연달아 진척이 없던 판 수. */
   fails?: number;
-  /** 다음 판에 읽을 일이 이미 쌓였다(옛 글에 새로 달린 답글 등) — 곧바로. */
-  pending?: boolean;
 }
 
 export type NextWhy = "interval" | "catchup" | "retry";
+
+/** 저장 단계가 단위 하나에 대해 넘기는 «이번 판에 어떻게 읽었나» — collect-plan.readNoteOf 가 만든다. */
+export interface ReadNote {
+  outcome: ReadOutcome;
+  behind?: boolean;
+  shrunk?: boolean;
+  stuck?: boolean;
+  /** 다 읽은 판의 글 빈도 표본. */
+  sample?: ActivitySample | null;
+}
 
 /** 물러서기 간격 — k 번째 연속 실패(1부터). */
 export function retryDelaySec(k: number): number {
@@ -146,20 +176,21 @@ export function retryDelaySec(k: number): number {
 
 /**
  * 다음 확인 시각(epoch 초)과 연속 실패 수. 사양:
- *  · 다 읽음 + 따라잡음 → 주기 뒤(쌓인 일이 있으면 곧바로) · 실패 수 0
+ *  · 다 읽음 + 따라잡음 → 주기 뒤 · 실패 수 0
  *  · 다 읽음 + 밀림 → 곧바로 · 실패 수 0
- *  · 못 다 읽음(구간을 줄였다) → 곧바로 · 실패 수 그대로(줄이며 따라잡는 중이다 — 바닥에 닿으면 아래 갈래로 간다)
- *  · 못 다 읽음 + 더 못 줄임(stuck) · 안 읽음 · 막힘 → 물러서기(실패 수 + 1)
+ *  · 못 다 읽음 + 구간을 줄였다 → 곧바로 · 실패 수 그대로(줄이며 따라잡는 중이다 — 바닥에 닿으면 아래 갈래로 간다)
+ *  · 못 다 읽음 + 줄일 구간이 없다(노션 — 리뷰 2026-10-17: 곧바로 다시 읽으면 같은 실패가 틱마다 되풀이된다) · 더 못 줄임(stuck) ·
+ *    안 읽음 · 막힘 → 물러서기(실패 수 + 1)
  */
 export function nextCheck(i: NextCheckInput): { nextSec: number; fails: number; why: NextWhy } {
   const now = Math.floor(i.nowSec);
   const fails = Math.max(0, Math.floor(i.fails ?? 0));
   const interval = Math.max(60, Math.floor(i.intervalSec));
   if (i.outcome === "complete") {
-    if (i.behind || i.pending) return { nextSec: now + CATCHUP_DELAY_SEC, fails: 0, why: "catchup" };
+    if (i.behind) return { nextSec: now + CATCHUP_DELAY_SEC, fails: 0, why: "catchup" };
     return { nextSec: now + interval, fails: 0, why: "interval" };
   }
-  if (i.outcome === "incomplete" && !i.stuck) return { nextSec: now + CATCHUP_DELAY_SEC, fails, why: "catchup" };
+  if (i.outcome === "incomplete" && i.shrunk && !i.stuck) return { nextSec: now + CATCHUP_DELAY_SEC, fails, why: "catchup" };
   return { nextSec: now + retryDelaySec(fails + 1), fails: fails + 1, why: "retry" };
 }
 

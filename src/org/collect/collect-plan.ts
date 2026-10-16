@@ -15,7 +15,7 @@
 //   (span — 바쁜 대화는 작은 구간으로 따라잡는다, 1시간까지). 다 읽은 판은 구간을 다시 두 배로 늘린다.
 //   구간 끝이 «지금» 인 판은 위치를 계획 시각 − 60초로 옮긴다 — 글의 시각(특히 메일의 Date 머리)은 보낸 쪽이 정하므로 위치로 쓰지 않는다.
 import type { RawItem } from "../../items/store.js";
-import { ACTIVITY_WINDOW_SEC, type ActivitySample } from "./schedule-plan.js";
+import { ACTIVITY_WINDOW_SEC, type ActivitySample, type ReadNote } from "./schedule-plan.js";
 import {
   type Capture, type ListedUnit, type SlackMsg, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem,
   parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem,
@@ -483,6 +483,19 @@ export function behindAfter(app: string, nextCursor: Record<string, unknown> | n
   const key = app === "slack" ? "ts" : "after";
   if (nextCursor[key] == null) return false;
   return unitWindow({ app, cursor: nextCursor, last_item_at: null, from_collector: false }, nowMs).until != null;
+}
+
+/**
+ * (#4744) 저장 단계가 단위 하나의 결과를 주기 판정에 넘기는 모양 — 이 판이 안 읽었다(unread) · 원문이 잘렸거나 저장이 실패했다(blocked) ·
+ *  다 읽었다(complete — 밀림·표본) · 못 다 읽었다(incomplete — 구간을 줄였나 · 더 못 줄이나). 노션처럼 다음 위치가 없는(구간을 안 줄인)
+ *  «못 다 읽음» 은 shrunk:false 다 — 주기 판정이 곧바로가 아니라 물러서기로 보낸다(곧바로 다시 읽어도 같은 결과다).
+ */
+export function readNoteOf(u: Pick<PlannedUnit, "app">, h: Pick<UnitHarvest, "reads" | "complete" | "nextCursor" | "stuck" | "sample">,
+  opts: { blocked: boolean; nowMs: number }): ReadNote {
+  if (!h.reads) return { outcome: "unread" };
+  if (opts.blocked) return { outcome: "blocked" };
+  if (h.complete) return { outcome: "complete", behind: behindAfter(u.app, h.nextCursor, opts.nowMs), sample: h.sample };
+  return { outcome: "incomplete", shrunk: h.nextCursor != null, stuck: h.stuck };
 }
 
 /** 목록 실행의 원문 → 단위 목록 · 전부인가. «전부» 는 그 사람의 via-listing 자리를 정리하는 판정이라 증거가 다 있을 때만. */

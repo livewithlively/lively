@@ -198,7 +198,7 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
 // ── 저장 단계의 차례(#4213 T11) — 한 실행의 원문은 **한 번만** 자료로 넣는다 ─────────────────────────────
 
 /** 저장 단계가 붙잡고 있다가 죽었으면(게이트웨이 재기동) 이만큼 뒤에 다시 잡을 수 있다. */
-const INGEST_STALE_MIN = 15;
+export const INGEST_STALE_MIN = 15;   // #4744 지속 수집 틱의 훑기·«도는 사람» 판정도 같은 값을 쓴다(collect-schedule)
 
 /**
  * 이 실행의 저장 차례를 잡는다 — 목록·수집 실행이고 아직 안 했거나(붙잡은 채 오래됐으면) 잡고, 계획을 돌려준다. 이미 했으면 null.

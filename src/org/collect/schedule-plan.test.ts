@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ACTIVITY_SAMPLES_MAX, ACTIVITY_WINDOW_SEC, CATCHUP_DELAY_SEC, QUIET_INTERVAL_SEC, RETRY_BASE_SEC, RETRY_MAX_SEC, UNKNOWN_INTERVAL_SEC,
+  ACTIVITY_RAW_MAX, ACTIVITY_WINDOW_SEC, CATCHUP_DELAY_SEC, QUIET_INTERVAL_SEC, RETRY_BASE_SEC, RETRY_MAX_SEC, UNKNOWN_INTERVAL_SEC,
   activityOf, addSample, dueSinceMs, effectiveIntervalSec, isUnitDue, memberBackoffUntil, nextCheck, pickMembers, recommendIntervalSec,
   retryDelaySec, runFailed, samplesOf,
   type DueGroup, type MemberRunRow,
@@ -17,17 +17,48 @@ const D = 86400, H = 3600;
 const iso = (sec: number): string => new Date(sec * 1000).toISOString();
 
 // ── F 글 빈도 ──
-test("F1 표본 더하기 — 14일 창 밖은 버리고 · 같은 끝 시각은 바꿔 넣고 · 최근 60개만", () => {
+test("F1 표본 더하기 — 14일 창 밖은 버리고 · 같은 끝 시각은 바꿔 넣고 · 하루 넘은 표본은 날마다 합친다(창은 14일 그대로)", () => {
   assert.deepEqual(addSample([], { e: NOW - 15 * D, s: D, n: 3 }, NOW), [], "창 밖 표본은 남지 않는다");
-  assert.deepEqual(addSample([{ e: NOW - 2 * D, s: D, n: 1 }], { e: NOW - 2 * D, s: D, n: 9 }, NOW),
-    [{ e: NOW - 2 * D, s: D, n: 9 }], "같은 판(같은 끝 시각)은 한 줄 — 뒤 값");
-  let many: unknown = [];
-  for (let i = 0; i < ACTIVITY_SAMPLES_MAX + 5; i++) many = addSample(many, { e: NOW - (ACTIVITY_SAMPLES_MAX + 5 - i) * 600, s: 600, n: 1 }, NOW);
-  const arr = samplesOf(many);
-  assert.equal(arr.length, ACTIVITY_SAMPLES_MAX);
-  assert.equal(arr[arr.length - 1].e, NOW - 600, "가장 새 표본이 남는다");
-  assert.equal(arr[0].e, NOW - ACTIVITY_SAMPLES_MAX * 600, "가장 오래된 다섯이 빠진다");
+  assert.deepEqual(addSample([{ e: NOW - 2 * H, s: H, n: 1 }], { e: NOW - 2 * H, s: H, n: 9 }, NOW),
+    [{ e: NOW - 2 * H, s: H, n: 9 }], "같은 판(같은 끝 시각)은 한 줄 — 뒤 값");
+  //  30분 판을 13일 동안(하루 48판 · 판마다 글 1개) — 판 수와 무관하게 13일이 다 남고, 하루 넘은 판은 날마다 하나다.
+  let h: unknown = [];
+  for (let t = NOW - 13 * D + 1800; t <= NOW; t += 1800) h = addSample(h, { e: t, s: 1800, n: 1 }, t);
+  const arr = samplesOf(h);
+  const a = activityOf(arr, NOW);
+  assert.ok(a.observedSec >= 13 * D - 1800, `본 시간이 13일 그대로 — ${a.observedSec}`);
+  assert.equal(a.perDay, 48, "하루 48개");
+  assert.ok(arr.length <= 14 + 48 + 1, `낱개는 최근 하루 몫만 — 줄 수 ${arr.length}`);
   assert.ok(arr.every((x, i) => i === 0 || arr[i - 1].e < x.e), "끝 시각 순");
+  assert.ok(arr.filter((x) => x.e <= NOW - D).length <= 14, "하루 넘은 표본은 날마다 하나(13일 구간이 걸치는 날 수 이하)");
+});
+
+test("F1b 최근 하루의 낱개가 상한을 넘으면 오래된 것부터 시간마다 합친다(글 수·길이는 그대로)", () => {
+  let h: unknown = [];
+  for (let i = ACTIVITY_RAW_MAX + 40; i >= 1; i--) h = addSample(h, { e: NOW - i * 300, s: 300, n: 2 }, NOW);
+  const arr = samplesOf(h);
+  assert.ok(arr.length < ACTIVITY_RAW_MAX + 40 && arr.length <= ACTIVITY_RAW_MAX, `줄 수 ${arr.length}`);
+  const total = arr.reduce((t, x) => t + x.n, 0), span = arr.reduce((t, x) => t + x.s, 0);
+  assert.equal(total, (ACTIVITY_RAW_MAX + 40) * 2, "글 수는 그대로");
+  assert.equal(span, (ACTIVITY_RAW_MAX + 40) * 300, "길이도 그대로");
+  assert.equal(arr[arr.length - 1].e, NOW - 300, "가장 새 판은 낱개");
+});
+
+test("F1c 평일만 바쁜 채널 — 주말을 지나도 14일 평균이라 주기가 하루로 떨어지지 않는다(리뷰 시뮬레이션)", () => {
+  //  평일 08~20시에 하루 100개(30분 판마다 약 4개), 주말 0. 3주를 흘리고 월요일 07시에 본다.
+  const MON0 = 1_799_971_200;   // 시험 속 «월요일 00:00» — 요일은 이 값에서 센다(실제 달력 요일과 무관)
+  let h: unknown = [];
+  let last = 0;
+  for (let t = MON0 - 21 * D + 1800; t <= MON0 + 7 * H; t += 1800) {
+    const day = Math.floor((t - (MON0 - 21 * D)) / D) % 7;   // 0 = 월
+    const hour = Math.floor(((t - (MON0 - 21 * D)) % D) / H);
+    const busy = day < 5 && hour >= 8 && hour < 20;
+    h = addSample(h, { e: t, s: 1800, n: busy ? 4 : 0 }, t);
+    last = t;
+  }
+  const a = activityOf(h, last);
+  assert.ok((a.perDay ?? 0) >= 20, `월요일 아침에도 하루 평균이 높다 — ${a.perDay}`);
+  assert.equal(recommendIntervalSec(a.perDay), 1800, "주기 30분 그대로");
 });
 
 test("F2 하루 평균 = 본 시간 안의 글 수 ÷ 본 시간 — 6시간도 못 봤으면 모른다(null)", () => {
@@ -77,15 +108,16 @@ test("N2 다 읽었지만 밀림(다음 구간도 지금보다 앞) → 곧바�
   assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: 3 * H, outcome: "complete", behind: true, fails: 2 }),
     { nextSec: NOW + CATCHUP_DELAY_SEC, fails: 0, why: "catchup" });
 });
-test("N3 다 읽음 + 쌓인 일(옛 글의 새 답글) → 곧바로", () => {
-  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: D, outcome: "complete", pending: true }),
-    { nextSec: NOW + CATCHUP_DELAY_SEC, fails: 0, why: "catchup" });
+test("N4 못 다 읽음 + 구간을 줄였다(슬랙·지메일) → 곧바로 · 실패 수는 그대로", () => {
+  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: H, outcome: "incomplete", shrunk: true, fails: 2 }), { nextSec: NOW + CATCHUP_DELAY_SEC, fails: 2, why: "catchup" });
 });
-test("N4 못 다 읽음(구간을 줄였다) → 곧바로 · 실패 수는 그대로", () => {
-  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: H, outcome: "incomplete", fails: 2 }), { nextSec: NOW + CATCHUP_DELAY_SEC, fails: 2, why: "catchup" });
+test("N4b 못 다 읽음 + 줄일 구간이 없다(노션) → 물러서기 — 곧바로 다시 읽어도 같은 실패라 틱마다 되풀이되지 않게", () => {
+  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: D, outcome: "incomplete", shrunk: false, fails: 0 }),
+    { nextSec: NOW + RETRY_BASE_SEC, fails: 1, why: "retry" });
+  assert.equal(nextCheck({ nowSec: NOW, intervalSec: D, outcome: "incomplete" }).why, "retry", "줄였다는 표시가 없으면 줄이지 않은 것");
 });
-test("N5 못 다 읽음 + 더 못 줄임(stuck) → 물러서기 · 실패 수 + 1", () => {
-  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: H, outcome: "incomplete", stuck: true, fails: 1 }),
+test("N5 못 다 읽음 + 줄였지만 더 못 줄임(stuck) → 물러서기 · 실패 수 + 1", () => {
+  assert.deepEqual(nextCheck({ nowSec: NOW, intervalSec: H, outcome: "incomplete", shrunk: true, stuck: true, fails: 1 }),
     { nextSec: NOW + 2 * RETRY_BASE_SEC, fails: 2, why: "retry" });
 });
 test("N6 안 읽음 · 막힘 → 물러서기가 10분부터 두 배씩, 6시간에서 멈춘다", () => {

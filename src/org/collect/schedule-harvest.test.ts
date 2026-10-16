@@ -11,9 +11,10 @@
 //   K1 한 판에 실을 단위 — 때가 된 단위가 먼저(오래 안 읽은 «곧» 단위보다) · 상한 6 안에서 때가 된 단위가 밀려나지 않는다
 //   K2 계획에 읽은 시각이 실린다 · 고친 시각은 노션만
 //   S1 곧 때가 될 단위 — 주기대로 기다리는 중(interval)이고 남은 시간이 주기의 절반 이하 · 물러서는 단위·이미 때가 된 단위·시각 없음은 아니다
+//   R1 저장 단계 → 주기 판정 입력(readNoteOf) — 안 읽음 · 막힘(안 읽음이 먼저) · 다 읽음(밀림·표본) · 못 다 읽음(줄였나 = 다음 위치가 있나 · 바닥)
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NOW_MARGIN_SEC, SLACK_WINDOW_SEC, UNITS_PER_RUN, behindAfter, harvestUnits, pickUnitsForRun, type AssignedLike, type PlannedUnit } from "./collect-plan.js";
+import { NOW_MARGIN_SEC, SLACK_WINDOW_SEC, UNITS_PER_RUN, behindAfter, harvestUnits, pickUnitsForRun, readNoteOf, type AssignedLike, type PlannedUnit } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
 import { ACTIVITY_WINDOW_SEC, SOON_RATIO, isUnitSoon } from "./schedule-plan.js";
 
@@ -162,4 +163,28 @@ test("S1 곧 때가 될 단위 — 주기대로 기다리는 중이고 남은 �
   assert.equal(isUnitSoon({ next_at: at(0), interval_sec: iv, sched: { why: "interval" } }, NOW), false, "이미 때가 된 단위는 isUnitDue 몫");
   assert.equal(isUnitSoon({ next_at: null, interval_sec: iv, sched: { why: "interval" } }, NOW), false);
   assert.equal(isUnitSoon({ next_at: at(60), interval_sec: iv, sched: null }, NOW), false);
+});
+
+test("R1 저장 단계 → 주기 판정 입력 — 노션처럼 다음 위치가 없는 «못 다 읽음» 은 줄이지 않은 것(shrunk:false)", () => {
+  const base = { reads: 1, complete: false, nextCursor: null as Record<string, unknown> | null, stuck: false, sample: null };
+  const now = NOW;
+  assert.deepEqual(readNoteOf({ app: "slack" }, { ...base, reads: 0 }, { blocked: true, nowMs: now }), { outcome: "unread" }, "안 읽었으면 막힘보다 먼저");
+  assert.deepEqual(readNoteOf({ app: "slack" }, { ...base, complete: true }, { blocked: true, nowMs: now }), { outcome: "blocked" });
+  const sample = { e: PLANNED - 60, s: 3600, n: 2 };
+  assert.deepEqual(readNoteOf({ app: "slack" }, { ...base, complete: true, nextCursor: { ts: `${PLANNED - 60}.000000` }, sample }, { blocked: false, nowMs: now }),
+    { outcome: "complete", behind: false, sample });
+  assert.deepEqual(readNoteOf({ app: "slack" }, { ...base, complete: true, nextCursor: { ts: `${PLANNED - 8 * D}.000000` }, sample: null }, { blocked: false, nowMs: now }),
+    { outcome: "complete", behind: true, sample: null }, "다 읽었지만 밀림");
+  assert.deepEqual(readNoteOf({ app: "slack" }, { ...base, nextCursor: { ts: "1.0", span: 3600 }, stuck: true }, { blocked: false, nowMs: now }),
+    { outcome: "incomplete", shrunk: true, stuck: true });
+  assert.deepEqual(readNoteOf({ app: "notion" }, { ...base, nextCursor: null }, { blocked: false, nowMs: now }),
+    { outcome: "incomplete", shrunk: false, stuck: false }, "노션 — 줄일 구간이 없다");
+});
+
+test("R1b 노션 fetch 가 오류 모양이면(실측 리뷰 재현) 다음 위치 없이 «못 다 읽음» → shrunk:false", () => {
+  const bad = cap("Notion", "notion-fetch", { error: "rate limited" }, { id: NOTION_REF });
+  const h = harvestUnits([bad], [notionUnit()], { plannedAt: PLANNED }).byUnit.get(3)!;
+  assert.equal(h.reads, 1);
+  assert.equal(h.complete, false);
+  assert.deepEqual(readNoteOf({ app: "notion" }, h, { blocked: false, nowMs: NOW }), { outcome: "incomplete", shrunk: false, stuck: false });
 });

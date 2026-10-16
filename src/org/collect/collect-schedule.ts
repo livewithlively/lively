@@ -7,112 +7,66 @@
 //   · 활동 트리거는 없다(폐기) · 백그라운드 대기열도 없다(검색 실패는 세션 쪽 보조 안내만).
 //
 //  ── 흐름 ──
-//   ① 저장 단계(run-ingest)가 단위마다 noteUnitRead 를 부른다 — 표본을 더하고(다 읽은 판만) · 주기를 빈도로 다시 맞추고(자동일 때) ·
-//      다음 확인 시각을 적는다(다 읽고 따라잡음 → 주기 뒤 · 밀림 → 곧바로 · 못 읽음 → 물러서며).
+//   ① 수집 실행이 뜨면 실은 단위를 붙잡고(unit-schedule.leaseUnits), 저장 단계(run-ingest)가 단위마다 noteUnitRead 로 표본·주기·다음 확인을
+//      적는다(다 읽고 따라잡음 → 주기 뒤 · 밀림 → 곧바로 · 못 읽음 → 물러서며 · 지금 담당의 판만).
 //   ② 스케줄러 틱(scheduler/engine.ts — 워크스페이스 컨텍스트 안. 셀프호스트 30초 · 매니지드 CP 하우스키핑 5분)이 collectScheduleTick 을
 //      기다리지 않고 부른다. 안에서 워크스페이스마다 1분에 한 번만 돈다:
-//      a. 정책 — 구성원 Claude 커넥터를 막은 워크스페이스는 아무것도 안 띄운다(#4427 — 못 읽으면 막음).
+//      a. 끄개 — env LIVELY_COLLECT_SCHEDULE=off 면 아무것도 안 한다. 정책 — 구성원 Claude 커넥터를 막은 워크스페이스도(#4427 — 못 읽으면 막음).
 //      b. 훑기 — 끝났는데 저장 단계를 못 탄 실행(게이트웨이 재기동으로 지켜보기가 사라짐 — T11 이 넘긴 몫)을 상태 읽기로 마저 넣는다.
-//      c. 띄우기 — 때가 된 단위의 담당자별로, 이미 도는 사람·실패가 이어져 물러선 사람은 빼고, 동시 실행 상한 안에서
-//         가장 오래 기다린 사람부터 수집 실행(mode collect · 때가 된 단위 + 곧 때가 될 단위)을 띄운다.
+//      c. 띄우기 — 때가 된 단위의 담당자별로, 도는 사람(실행 중 · 저장 단계 중)·실패가 이어져 물러선 사람·하루 상한에 닿은 사람은 빼고,
+//         동시 실행 상한 안에서 가장 오래 기다린 사람부터 수집 실행(mode collect · 때가 된 단위 + 곧 때가 될 단위)을 띄운다.
 //   ③ 실행이 끝나면 T11 의 지켜보기가 저장 단계를 돌리고(①), 담당 건강을 바꾼다(T10 — 끊긴 사람은 다음 후보가 이어받는다).
 //
-//  ⚠ 비용은 담당자의 구독에서 나간다 — 그래서 가장 짧은 주기는 30분이고(schedule-plan INTERVAL_TIERS), 실패가 이어지면 물러서며,
-//   곧 때가 될 단위를 한 판에 묶는다. 동시 실행 상한(기본 2)은 세션 노드 자리를 사람 세션과 나눠 쓰기 때문이다(예약 640MB 씩).
+//  ⚠ 비용은 담당자의 구독에서 나간다 — 그래서 가장 짧은 주기는 30분이고(schedule-plan INTERVAL_TIERS), 실패가 이어지면 물러서며, 곧 때가 될
+//   단위를 한 판에 묶고, 구성원마다 하루 주기 판 수에 상한이 있다(env LIVELY_COLLECT_DAILY_MAX · 기본 150). 동시 실행 상한(기본 2)은 세션 노드
+//   자리를 사람 세션과 나눠 쓰기 때문이다(예약 640MB 씩). 이 루프는 org_cron 브레이커 밖이라 끄개(env)를 따로 둔다.
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import type { LivelyUser } from "../../context.js";
 import { currentTenant } from "../tenant-context.js";
 import { CLAUDE_COLLECT_APPS, validUnitRef } from "./collect-plan.js";
+import { INGEST_STALE_MIN } from "./run-log.js";
 import {
-  RUN_ALIVE_SEC, activityOf, addSample, effectiveIntervalSec, memberBackoffUntil, nextCheck, pickMembers, retryDelaySec,
-  type ActivitySample, type DueGroup, type MemberRunRow, type NextWhy, type ReadOutcome,
+  RUN_ALIVE_SEC, memberBackoffUntil, pickMembers, retryDelaySec, type DueGroup, type MemberRunRow,
 } from "./schedule-plan.js";
 
 /** 틱이 실제로 일하는 간격(워크스페이스마다) — 스케줄러 틱이 30초여도 여기는 1분에 한 번. */
 export const SCHEDULE_TICK_MIN_MS = 60_000;
 /** 워크스페이스마다 동시에 도는 수집 실행 상한 — env LIVELY_COLLECT_MAX_CONCURRENT 로 바꾼다(1~10). */
 export const MAX_CONCURRENT_RUNS_DEFAULT = 2;
+/**
+ * 구성원마다 최근 24시간 동안 기본 주기가 띄우는 판 수 상한 — env LIVELY_COLLECT_DAILY_MAX(1~1000). 바쁜 단위 서른 개(30분 주기 · 한 판 6단위)면
+ *  하루 240판이 정상이라 상한을 그보다 낮게 두면 정상 수집도 밀린다 — 상한은 «모르는 헛돌기» 를 자르는 안전망이다(리뷰 2026-10-17).
+ */
+export const DAILY_RUNS_DEFAULT = 150;
 /** 한 틱에 훑는 «저장 단계를 못 탄 실행» 상한 — 하나 읽는 데 중계 왕복이 몇 번이라 많이 안 한다. */
 export const SWEEP_PER_TICK = 5;
-/** 띄우기가 실패한 사람(노드 자리 없음 등)을 다시 띄워 보기까지 — 연달아 실패하면 schedule-plan 물러서기 규칙대로 늘린다. */
+/** 훑기가 같은 판을 못 읽은 지 이만큼 지나고 세 번 넘게 실패하면 닫는다(중계가 잠깐 끊긴 것으로 비용 낸 원문을 버리지 않게). */
+export const SWEEP_CLOSE_AFTER_MS = 3600_000;
+const SWEEP_MIN_TRIES = 3;
+
+const envInt = (name: string, lo: number, hi: number, dflt: number): number => {
+  const n = Number(process.env[name]);
+  return Number.isInteger(n) && n >= lo && n <= hi ? n : dflt;
+};
+const maxConcurrent = (): number => envInt("LIVELY_COLLECT_MAX_CONCURRENT", 1, 10, MAX_CONCURRENT_RUNS_DEFAULT);
+const dailyMax = (): number => envInt("LIVELY_COLLECT_DAILY_MAX", 1, 1000, DAILY_RUNS_DEFAULT);
+/** 끄개 — 정책 토글(구성원 Claude 커넥터 전체)을 건드리지 않고 기본 주기만 끈다. */
+export const scheduleOff = (): boolean => /^(off|0|false|no)$/i.test(String(process.env.LIVELY_COLLECT_SCHEDULE ?? "").trim());
+
+/** 워크스페이스별 기억의 열쇠 — 중앙 모드는 한 프로세스가 여러 워크스페이스를 돌고, 구성원 id 는 워크스페이스 안에서만 유일하다. */
+const tkey = (): string => currentTenant()?.id ?? "-";
+const mkey = (member: string): string => `${tkey()}\u0000${member}`;
+
+/** 띄우기가 실패한 사람(노드 자리 없음 등) — 연달아 실패하면 schedule-plan 물러서기 규칙대로 늘린다. 열쇠 = 워크스페이스 + 구성원. */
 const startFails = new Map<string, { k: number; until: number }>();
 
-function maxConcurrent(): number {
-  const n = Number(process.env.LIVELY_COLLECT_MAX_CONCURRENT);
-  return Number.isInteger(n) && n >= 1 && n <= 10 ? n : MAX_CONCURRENT_RUNS_DEFAULT;
-}
-
-// ── ① 저장 단계 → 다음 확인 시각 ─────────────────────────────────────────────
-
-export interface UnitReadNote {
-  outcome: ReadOutcome;
-  /** 다 읽었지만 아직 «지금» 까지 못 왔다(collect-plan.behindAfter). */
-  behind?: boolean;
-  /** 못 다 읽었는데 구간을 더 줄일 수 없다. */
-  stuck?: boolean;
-  /** 다 읽은 판의 글 빈도 표본(collect-plan UnitHarvest.sample). */
-  sample?: ActivitySample | null;
-  /** 다음 판에 읽을 일이 이미 쌓였다 — 곧바로. */
-  pending?: boolean;
-  /** 판정 시각(ms) — 시험이 고정한다. */
-  now?: number;
-}
-
-/**
- * 한 단위를 이번 판이 어떻게 읽었나를 적는다 — 표본 · 주기(자동일 때) · 다음 확인 시각 · 연속 실패 수 · 활동량(meta.activity — 리브·현황판이 본다).
- *  **던지지 않는다**(저장 단계의 나머지를 막지 않는다 — 못 적으면 그 단위는 다음 틱에 다시 때가 된 것으로 보이고, 구성원 물러서기가 헛돌기를 막는다).
- *  단위 행을 FOR UPDATE 로 잡고 읽어 계산한 뒤 쓴다(같은 단위의 두 판이 겹쳐도 표본이 사라지지 않게).
- */
-export async function noteUnitRead(unitId: number, note: UnitReadNote): Promise<{ next_at: string; why: NextWhy; interval_sec: number } | null> {
-  const nowMs = note.now ?? Date.now();
-  const nowSec = Math.floor(nowMs / 1000);
-  const client = await itemsPool.connect();
-  try {
-    await client.query("BEGIN");
-    const r = await client.query(`SELECT interval_sec, interval_auto, sched FROM collect_unit WHERE id = $1 FOR UPDATE`, [unitId]);
-    const row = r.rows[0] as { interval_sec: number | null; interval_auto: boolean; sched: Record<string, unknown> | null } | undefined;
-    if (!row) { await client.query("ROLLBACK"); return null; }
-    const sched = row.sched && typeof row.sched === "object" && !Array.isArray(row.sched) ? row.sched : {};
-    const hist = addSample(sched.hist, note.sample ?? null, nowSec);
-    const auto = row.interval_auto !== false;
-    const interval = effectiveIntervalSec({ interval_sec: row.interval_sec, interval_auto: auto }, hist, nowSec);
-    const verdict = nextCheck({
-      nowSec, intervalSec: interval, outcome: note.outcome, behind: note.behind, stuck: note.stuck, pending: note.pending,
-      fails: Number.isFinite(Number(sched.fails)) ? Number(sched.fails) : 0,
-    });
-    const act = activityOf(hist, nowSec);
-    const activity = {
-      per_day: act.perDay == null ? null : Math.round(act.perDay * 100) / 100,
-      observed_days: Math.round((act.observedSec / 86400) * 10) / 10,
-      measured_at: new Date(nowMs).toISOString(),
-    };
-    const nextAt = new Date(verdict.nextSec * 1000).toISOString();
-    await client.query(
-      `UPDATE collect_unit SET
-          next_at = $2::timestamptz,
-          sched = $3::jsonb,
-          interval_sec = CASE WHEN interval_auto THEN $4::int ELSE interval_sec END,
-          meta = meta || jsonb_build_object('activity', $5::jsonb)
-        WHERE id = $1`,
-      [unitId, nextAt, JSON.stringify({ hist, fails: verdict.fails, why: verdict.why, at: new Date(nowMs).toISOString() }), interval, JSON.stringify(activity)]);
-    await client.query("COMMIT");
-    return { next_at: nextAt, why: verdict.why, interval_sec: auto ? interval : (row.interval_sec ?? interval) };
-  } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
-    logger.warn({ unitId, err: (e as Error)?.message }, "[collect-schedule] 다음 확인 시각을 못 적었다 — 다음 틱에 다시 때가 된 것으로 보인다");
-    return null;
-  } finally {
-    client.release();
-  }
-}
-
-// ── ② 스케줄러 틱 ───────────────────────────────────────────────────────────
+// ── 스케줄러 틱 ─────────────────────────────────────────────────────────────
 
 /** 시험·다른 배선이 갈아 끼우는 자리. 기본은 T11 수집 실행(collect-run.ts). */
 export interface ScheduleDeps {
   now?: () => number;
-  /** 그 구성원의 수집 실행을 띄운다(때가 된 단위 + 곧 때가 될 단위). 던지면 그 사람만 물러선다. */
+  /** 그 구성원의 수집 실행을 띄운다(때가 된 단위 + 곧 때가 될 단위). 던지면 그 사람만 물러선다(정책이 막았으면 틱이 멈춘다). */
   start?: (member: string) => Promise<{ runId: string }>;
   /** 끝난 실행 하나를 상태 읽기로 마저 처리한다(저장 단계 · 끝 기록 · 세션 정리). */
   read?: (member: string, runId: string) => Promise<unknown>;
@@ -121,14 +75,17 @@ export interface ScheduleDeps {
   /** 구성원 Claude 커넥터 정책(#4427). */
   policy?: () => Promise<string>;
   maxConcurrent?: number;
+  dailyMax?: number;
 }
 
 export interface ScheduleTickResult {
-  skipped?: "throttle" | "busy" | "policy" | "error";
+  skipped?: "throttle" | "busy" | "off" | "policy" | "error";
   swept: number;
   due_units: number;
   due_members: number;
   running: number;
+  /** 하루 상한에 닿아 이번엔 안 띄운 사람 수. */
+  capped: number;
   started: Array<{ member: string; run_id: string }>;
   failed: Array<{ member: string; status: number | null; error: string }>;
 }
@@ -136,7 +93,7 @@ export interface ScheduleTickResult {
 const lastTickAt = new Map<string, number>();
 const ticking = new Set<string>();
 
-/** 서버가 그 구성원으로 수집 실행을 띄울 때의 신원 — 세션·토큰은 구성원 id 로 굽는다(리브 2턴 스윕과 같은 모양). */
+/** 서버가 그 구성원으로 수집 실행을 띄울 때의 신원 — 세션·토큰은 구성원 id 로 굽는다(리브 2턴 스윕 · profiles 와 같은 모양). */
 export const memberUser = (member: string): LivelyUser =>
   ({ userId: member, email: "", scopes: [], projects: [] }) as unknown as LivelyUser;
 
@@ -162,17 +119,18 @@ async function defaultPolicy(): Promise<string> {
  * 기본 주기 틱 — 위 머리말 ②. **던지지 않는다**(스케줄러 틱을 막지 않는다). 워크스페이스마다 1분에 한 번(force 면 바로) · 겹치면 뒤 판은 그냥 돌아간다.
  */
 export async function collectScheduleTick(opts: { force?: boolean } & ScheduleDeps = {}): Promise<ScheduleTickResult> {
-  const res: ScheduleTickResult = { swept: 0, due_units: 0, due_members: 0, running: 0, started: [], failed: [] };
+  const res: ScheduleTickResult = { swept: 0, due_units: 0, due_members: 0, running: 0, capped: 0, started: [], failed: [] };
+  if (scheduleOff()) return { ...res, skipped: "off" };
   const now = (opts.now ?? Date.now)();
-  const key = currentTenant()?.id ?? "-";
+  const key = tkey();
   if (!opts.force && now - (lastTickAt.get(key) ?? 0) < SCHEDULE_TICK_MIN_MS) return { ...res, skipped: "throttle" };
   if (ticking.has(key)) return { ...res, skipped: "busy" };
   ticking.add(key);
   lastTickAt.set(key, now);
   try {
-    const policy = await (opts.policy ?? defaultPolicy)();
-    if (policy !== "allowed") return { ...res, skipped: "policy" };
-    res.swept = await sweepUningested(opts.read ?? defaultRead);
+    const readPolicy = opts.policy ?? defaultPolicy;
+    if ((await readPolicy()) !== "allowed") return { ...res, skipped: "policy" };
+    res.swept = await sweepUningested(opts.read ?? defaultRead, now);
     const { dueAssignments } = await import("./unit-store.js");
     //  수집 실행이 읽을 줄 아는 단위만 센다(collect-plan pickUnitsForRun 과 같은 거름) — 못 읽는 단위로 사람을 띄우면
     //   «맡은 단위 없음»(409)이 틱마다 되풀이된다.
@@ -191,8 +149,21 @@ export async function collectScheduleTick(opts: { force?: boolean } & ScheduleDe
     const local = opts.running ? opts.running() : await defaultRunning();
     const running = new Set<string>([...alive, ...local]);
     res.running = running.size;
-    const backoff = await memberBackoffs(now);
-    for (const [m, f] of startFails) if (f.until > now) backoff.set(m, Math.max(backoff.get(m) ?? 0, f.until));
+    const { backoff, scheduledToday } = await memberHistory(now);
+    const prefix = `${key}\u0000`;
+    for (const [k, f] of startFails) {
+      if (!k.startsWith(prefix)) continue;
+      if (f.until > now) { const m = k.slice(prefix.length); backoff.set(m, Math.max(backoff.get(m) ?? 0, f.until)); }
+    }
+    //  하루 상한 — 넘은 사람은 그 하루가 흐를 때까지 띄우지 않는다(로그로 알린다 — 지표 화면의 판 수로도 보인다).
+    const cap = opts.dailyMax ?? dailyMax();
+    for (const [m, n] of scheduledToday) {
+      if (n >= cap && groups.has(m)) {
+        backoff.set(m, Number.POSITIVE_INFINITY);
+        res.capped++;
+        logger.warn({ member: m, runs: n, cap }, "[collect-schedule] 최근 24시간 주기 판 수가 상한에 닿았다 — 이 사람의 주기 수집을 잠시 쉰다");
+      }
+    }
     const picks = pickMembers([...groups.values()], {
       running, backoffUntilMs: backoff, nowMs: now, slots: (opts.maxConcurrent ?? maxConcurrent()) - running.size,
     });
@@ -200,21 +171,27 @@ export async function collectScheduleTick(opts: { force?: boolean } & ScheduleDe
     for (const g of picks) {
       try {
         const r = await start(g.member);
-        startFails.delete(g.member);
+        startFails.delete(mkey(g.member));
         res.started.push({ member: g.member, run_id: r.runId });
       } catch (e) {
         const status = Number((e as { status?: unknown })?.status);
         const st = Number.isFinite(status) ? status : null;
-        //  409 — 그새 실행이 떴거나(다른 게이트웨이·사람) 맡은 단위가 없어졌다(담당이 바뀜). 실패가 아니다.
+        const error = String((e as Error)?.message ?? e).slice(0, 200);
+        //  409 — 그새 실행이 떴거나(다른 게이트웨이·사람) 때가 된 단위가 없어졌다(담당이 바뀜 · 다른 판이 읽음). 실패가 아니다.
         if (st === 409) continue;
-        //  403·503 — 워크스페이스 정책이 막았다(그새 관리자가 껐다 · 못 읽음). 이번 틱은 여기서 멈춘다.
-        if (st === 403 || st === 503) { res.failed.push({ member: g.member, status: st, error: String((e as Error)?.message ?? e).slice(0, 200) }); break; }
-        const k = (startFails.get(g.member)?.k ?? 0) + 1;
-        startFails.set(g.member, { k, until: now + retryDelaySec(k) * 1000 });
-        res.failed.push({ member: g.member, status: st, error: String((e as Error)?.message ?? e).slice(0, 200) });
-        logger.warn({ member: g.member, status: st, err: (e as Error)?.message }, "[collect-schedule] 수집 실행을 못 띄웠다 — 물러섰다가 다시 띄운다");
+        //  403·503 — 정책이 그새 막혔을 수도, 세션 컨테이너가 모자란 것일 수도 있다(503 «세션 컨테이너를 확보하지 못해»). 정책을 다시 읽어
+        //   막혔으면 이 틱을 멈추고, 아니면 그 사람만 물러선다 — 한 사람의 실패가 뒤 사람을 영영 막지 않게(리뷰 2026-10-17).
+        if ((st === 403 || st === 503) && (await readPolicy().catch(() => "unknown")) !== "allowed") {
+          res.failed.push({ member: g.member, status: st, error });
+          break;
+        }
+        const k = (startFails.get(mkey(g.member))?.k ?? 0) + 1;
+        startFails.set(mkey(g.member), { k, until: now + retryDelaySec(k) * 1000 });
+        res.failed.push({ member: g.member, status: st, error });
+        logger.warn({ member: g.member, status: st, err: error }, "[collect-schedule] 수집 실행을 못 띄웠다 — 이 사람만 물러섰다가 다시 띄운다");
       }
     }
+    if (startFails.size > 2000) startFails.delete(startFails.keys().next().value as string);
     return res;
   } catch (e) {
     logger.warn({ err: (e as Error)?.message }, "[collect-schedule] 기본 주기 틱 실패 — 다음 틱에 다시 본다");
@@ -224,78 +201,94 @@ export async function collectScheduleTick(opts: { force?: boolean } & ScheduleDe
   }
 }
 
-/** 실행 기록에서 «아직 도는» 수집 실행의 주인 — 끝 기록이 없고 가장 긴 상한 안에서 시작한 판(다른 게이트웨이가 띄운 것도 보인다). */
+/**
+ * 실행 기록에서 «아직 도는» 수집 실행의 주인 — 끝 기록이 없고 가장 긴 상한 안에서 시작한 판(다른 게이트웨이가 띄운 것도 보인다), 그리고
+ *  끝났지만 저장 단계가 아직이거나 도는 판(끝난 지 INGEST_STALE_MIN 분 안 — 그 판의 단위는 저장이 끝나야 다음 확인 시각이 옮겨진다).
+ */
 async function runningFromLog(now: number): Promise<Set<string>> {
   const r = await itemsPool.query(
-    `SELECT DISTINCT member_id FROM collect_run WHERE outcome IS NULL AND started_at > $1::timestamptz`,
-    [new Date(now - RUN_ALIVE_SEC * 1000)]);
+    `SELECT DISTINCT member_id FROM collect_run
+      WHERE (outcome IS NULL AND started_at > $1::timestamptz)
+         OR (outcome IS NOT NULL AND mode IN ('listing','collect') AND (ingest IS NULL OR ingest->>'state' = 'running')
+             AND COALESCE(ended_at, started_at) > $2::timestamptz)`,
+    [new Date(now - RUN_ALIVE_SEC * 1000), new Date(now - INGEST_STALE_MIN * 60_000)]);
   return new Set(r.rows.map((x: { member_id: string }) => String(x.member_id)));
 }
 
-/** 구성원마다 «언제까지 띄우지 않나» — 최근 하루 수집 실행에서 연달아 실패한 수만큼(schedule-plan.memberBackoffUntil). */
-async function memberBackoffs(now: number): Promise<Map<string, number>> {
+/**
+ * 구성원마다 «언제까지 띄우지 않나»(최근 하루 수집 실행에서 연달아 실패한 수만큼 — schedule-plan.memberBackoffUntil)와
+ *  최근 24시간 기본 주기가 띄운 판 수(하루 상한).
+ */
+async function memberHistory(now: number): Promise<{ backoff: Map<string, number>; scheduledToday: Map<string, number> }> {
   const r = await itemsPool.query(
-    `SELECT member_id, started_at, ended_at, outcome, ingest->>'state' AS ingest_state
+    `SELECT member_id, started_at, ended_at, outcome, ingest->>'state' AS ingest_state, plan->>'trigger' AS trigger
        FROM collect_run WHERE mode = 'collect' AND started_at > $1::timestamptz
       ORDER BY member_id, started_at DESC`, [new Date(now - 86400_000)]);
   const by = new Map<string, MemberRunRow[]>();
-  for (const x of r.rows as Array<{ member_id: string; started_at: Date; ended_at: Date | null; outcome: string | null; ingest_state: string | null }>) {
+  const scheduledToday = new Map<string, number>();
+  for (const x of r.rows as Array<{ member_id: string; started_at: Date; ended_at: Date | null; outcome: string | null; ingest_state: string | null; trigger: string | null }>) {
     const rows = by.get(x.member_id) ?? [];
     rows.push({
       started_ms: new Date(x.started_at).getTime(), ended_ms: x.ended_at ? new Date(x.ended_at).getTime() : null,
       outcome: x.outcome, ingest_state: x.ingest_state,
     });
     by.set(x.member_id, rows);
+    if (x.trigger === "schedule") scheduledToday.set(x.member_id, (scheduledToday.get(x.member_id) ?? 0) + 1);
   }
-  const out = new Map<string, number>();
+  const backoff = new Map<string, number>();
   for (const [m, rows] of by) {
     const until = memberBackoffUntil(rows);
-    if (until != null) out.set(m, until);
+    if (until != null) backoff.set(m, until);
   }
-  return out;
+  return { backoff, scheduledToday };
 }
+
+/** 훑기가 못 읽은 판 — 처음 못 읽은 시각 · 횟수 · 404 수. 열쇠 = 워크스페이스 + 실행 id. 이 게이트웨이 메모리에만 있다(재기동하면 다시 센다). */
+const sweepFails = new Map<string, { first: number; tries: number; notFound: number }>();
 
 /**
  * 끝났는데 저장 단계를 못 탄 실행을 마저 처리한다 — T11 의 저장 단계는 지켜보기·상태 읽기에서만 돈다. 게이트웨이가 재기동하면 지켜보기가
  *  사라지고 아무도 상태를 안 읽으면 원문이 자료가 되지 않는다(as-built «남은 것»). 그런 실행을 상태 읽기(readCollectRun)로 다시 밟는다 —
  *  끝을 적고 · 저장 단계를 돌리고(한 실행에 한 번 — collect_run.ingest 차례 잡기) · 남은 세션을 지운다. 이틀 지난 실행은 보지 않는다.
- *  아직 도는 판(끝 기록 없음 · 가장 긴 상한 안)은 건드리지 않는다.
+ *  아직 도는 판(끝 기록 없음 · 가장 긴 상한 안)은 건드리지 않는다. 못 읽는 판은 «폴더 없음(404) 두 번» 이거나 «처음 실패 뒤 한 시간 · 세 번 넘게
+ *  실패» 일 때만 닫는다 — 중계가 잠깐 끊긴 것으로 이미 비용을 낸 원문을 버리지 않게(리뷰 2026-10-17).
  */
-async function sweepUningested(read: (member: string, runId: string) => Promise<unknown>): Promise<number> {
+async function sweepUningested(read: (member: string, runId: string) => Promise<unknown>, now: number): Promise<number> {
   const r = await itemsPool.query(
     `SELECT run_id, member_id FROM collect_run
       WHERE mode IN ('listing','collect') AND started_at > now() - interval '2 days'
-        AND (ingest IS NULL OR (ingest->>'state' = 'running' AND (ingest->>'at')::timestamptz < now() - interval '15 minutes'))
+        AND (ingest IS NULL OR (ingest->>'state' = 'running' AND (ingest->>'at')::timestamptz < now() - make_interval(mins => $3::int)))
         AND (outcome IS NOT NULL OR started_at < now() - make_interval(secs => $1::int))
-      ORDER BY started_at LIMIT $2`, [RUN_ALIVE_SEC, SWEEP_PER_TICK]);
+      ORDER BY started_at LIMIT $2`, [RUN_ALIVE_SEC, SWEEP_PER_TICK, INGEST_STALE_MIN]);
   let n = 0;
   for (const x of r.rows as Array<{ run_id: string; member_id: string }>) {
     const runId = String(x.run_id);
+    const k = mkey(runId);
     try {
       await read(String(x.member_id), runId);
-      sweepFails.delete(runId);
+      sweepFails.delete(k);
       n++;
     } catch (e) {
       const status = Number((e as { status?: unknown })?.status);
-      const tries = (sweepFails.get(runId) ?? 0) + 1;
-      sweepFails.set(runId, tries);
-      //  실행 폴더가 없다(사흘 지나 치워졌다 · 그 사람 홈이 없다) — 또는 몇 번을 읽어도 안 된다. 원문을 다시 읽을 길이 없으니
-      //   «저장 단계 실패» 로 닫아 다음 틱이 같은 판을 다시 집지 않게 한다(실패율 지표에도 보인다).
-      if (status === 404 || tries >= SWEEP_MAX_TRIES) {
-        await closeUnreadable(runId, status === 404 ? "실행 폴더가 없어 원문을 읽을 수 없다" : `상태를 ${tries}번 읽지 못했다`);
-        sweepFails.delete(runId);
+      const f = sweepFails.get(k) ?? { first: now, tries: 0, notFound: 0 };
+      f.tries++;
+      if (status === 404) f.notFound++;
+      sweepFails.set(k, f);
+      //  실행 폴더가 없다(사흘 지나 치워졌다 · 그 사람 홈이 없다) — 두 번 확인하면 닫는다. 그 밖의 실패는 한 시간 넘게 · 세 번 넘게.
+      //   원문을 다시 읽을 길이 없으니 «저장 단계 실패» 로 닫아 다음 틱이 같은 판을 다시 집지 않게 한다(실패율 지표에도 보인다).
+      const close = f.notFound >= 2 ? "실행 폴더가 없어 원문을 읽을 수 없다"
+        : f.tries >= SWEEP_MIN_TRIES && now - f.first >= SWEEP_CLOSE_AFTER_MS ? `상태를 ${f.tries}번(${Math.round((now - f.first) / 60_000)}분) 읽지 못했다` : null;
+      if (close) {
+        await closeUnreadable(runId, close);
+        sweepFails.delete(k);
       }
-      logger.warn({ runId, status: Number.isFinite(status) ? status : null, tries, err: (e as Error)?.message },
-        "[collect-schedule] 끝난 실행을 마저 처리하지 못했다 — 다음 틱에 다시 본다(몇 번 넘으면 닫는다)");
+      logger.warn({ runId, status: Number.isFinite(status) ? status : null, tries: f.tries, err: (e as Error)?.message },
+        "[collect-schedule] 끝난 실행을 마저 처리하지 못했다 — 다음 틱에 다시 본다(오래 못 읽으면 닫는다)");
     }
   }
   if (sweepFails.size > 500) sweepFails.delete(sweepFails.keys().next().value as string);
   return n;
 }
-
-/** 훑기가 같은 판을 이만큼 못 읽으면 닫는다. 판마다 센 수는 이 게이트웨이 메모리에만 있다(재기동하면 다시 센다 — 이틀 창이 끝을 보장한다). */
-const SWEEP_MAX_TRIES = 3;
-const sweepFails = new Map<string, number>();
 
 /** 원문을 다시 읽을 길이 없는 실행을 닫는다 — 저장 단계 «실패» · 끝 기록이 없으면 «잃음»(게이트웨이 추정). 던지지 않는다. */
 async function closeUnreadable(runId: string, why: string): Promise<void> {

@@ -12,9 +12,16 @@
 import type { Pool } from "pg";
 
 export async function initV6CollectTrigger(pool: Pool): Promise<void> {
+  //  interval_auto 를 처음 만들 때만, 이미 주기가 적힌 단위는 «고정» 으로 둔다 — T10(10/16) 도구 설명대로 리브·사람이 정해 둔 주기를 첫 판정이
+  //   조용히 덮지 않게(리뷰 2026-10-17). 칸이 이미 있으면 아무것도 안 한다(이후 값은 collect_unit_update 가 정한다).
   await pool.query(`
     ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS next_at TIMESTAMPTZ;
-    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS interval_auto BOOLEAN NOT NULL DEFAULT true;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'collect_unit'::regclass AND attname = 'interval_auto' AND NOT attisdropped) THEN
+        ALTER TABLE collect_unit ADD COLUMN interval_auto BOOLEAN NOT NULL DEFAULT true;
+        UPDATE collect_unit SET interval_auto = false WHERE interval_sec IS NOT NULL;
+      END IF;
+    END $$;
     ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS sched JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS collect_unit_due_idx ON collect_unit(next_at) WHERE state = 'active';
   `);

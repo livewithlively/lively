@@ -84,6 +84,8 @@ interface RunRec {
 
 /** 이 게이트웨이가 띄우고 지켜보는 실행. 재기동하면 비지만, 상태 읽기가 폴더에서 다시 판정한다. */
 const runs = new Map<string, RunRec>();
+/** 지금 띄우는 중인 자리(워크스페이스 + 사람) — 확인과 자리 잡기 사이의 레이스를 막는다(startCollectRun). */
+const starting = new Set<string>();
 
 const ownerOf = (u: LivelyUser): string => String(u.userId || u.email || "solo");
 const inTenant = <T>(t: TenantContext | null, fn: () => Promise<T>): Promise<T> => (t ? withTenant(t, fn) : fn());
@@ -100,9 +102,27 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
     throw new HttpError(403, "이 워크스페이스는 구성원 Claude 커넥터를 쓰지 않도록 설정돼 있어 수집 실행을 띄우지 않습니다 — 관리자가 [고급 설정 ▸ 구성원 권한 관리 ▸ Claude 커넥터]에서 켤 수 있습니다");
   }
   if (policy !== "allowed") throw new HttpError(503, "구성원 Claude 커넥터 정책을 읽지 못해 수집 실행을 띄우지 않았습니다 — 잠시 뒤 다시 시도해 주세요");
+  //  한 사람(같은 워크스페이스)에 한 번에 하나 — 확인과 자리 잡기를 **같은 동기 구간**에서 한다. 사이에 await 이 끼면 사람이 누른
+  //   «지금 수집» 과 기본 주기 틱(#4744)이 겹쳐 둘 다 통과한다(리뷰 2026-10-17). 중앙 모드는 한 프로세스가 여러 워크스페이스를 돈다 —
+  //   구성원 id 는 워크스페이스 안에서만 유일하므로 워크스페이스로도 가른다.
+  const tid = currentTenant()?.id ?? null;
+  const slot = `${tid ?? "-"}\u0000${owner}`;
+  if (starting.has(slot)) throw new HttpError(409, "이미 수집 실행을 띄우는 중입니다 — 끝난 뒤 다시 띄워 주세요");
   for (const r of runs.values()) {
-    if (r.owner === owner && !r.done) throw new HttpError(409, `이미 도는 수집 실행이 있습니다(${r.runId}) — 끝난 뒤 다시 띄워 주세요`);
+    if (r.owner === owner && (r.tenant?.id ?? null) === tid && !r.done) throw new HttpError(409, `이미 도는 수집 실행이 있습니다(${r.runId}) — 끝난 뒤 다시 띄워 주세요`);
   }
+  starting.add(slot);
+  try {
+    return await startCollectRunHeld(user, input, owner);
+  } finally {
+    starting.delete(slot);
+  }
+}
+
+/** 자리를 잡은 뒤의 띄우기(startCollectRun 의 몸통). */
+async function startCollectRunHeld(user: LivelyUser, input: CollectRunStart, owner: string): Promise<{
+  runId: string; sessionId: string | null; model: string; apps: string[]; timeoutSec: number; mode: CollectMode; units?: number;
+}> {
   const { mode, prompt, apps, maxTurns, plan } = await planRun(user, input);
   const osUser = await resolveMemberOsUser(userSlug(user));
   const home = loginHomeOf(osUser);
@@ -131,6 +151,12 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
   } catch (e) {
     runs.delete(runId);
     throw e;
+  }
+  //  #4744 이 판에 실은 단위를 붙잡는다 — 저장 단계가 다음 확인 시각을 적을 때까지 기본 주기 틱이 같은 단위로 판을 또 띄우지 않게.
+  //   세션이 뜬 **뒤에** 한다(못 뜬 판이 단위를 한 시간 붙잡아 두지 않게). 못 붙잡아도 실행은 그대로다.
+  if (plan?.mode === "collect" && plan.units?.length) {
+    const { leaseUnits } = await import("../org/collect/unit-schedule.js");
+    await leaseUnits(plan.units.map((u) => u.id), runId);
   }
   //  세션 id 를 폴더에 적는다 — 게이트웨이가 재기동해도 상태 읽기가 그 세션을 찾아 지운다. 못 적어도 실행은 계속된다.
   await runAtLoginSeatSh(osUser, collectSessionNoteSh(dir, rec.sessionId!)).catch((e) =>
@@ -315,7 +341,7 @@ function noteIngest(osUser: string | null, dir: string, runId: string, member: s
       const caps = plan ? parseCollectCaps(await runAtLoginSeatSh(osUser, collectCapsReadSh(dir))) : null;
       if (!plan) result = { state: "failed", mode: claim.mode, error: "실행 기록의 계획을 읽지 못했다" };
       else if (!caps) result = { state: "failed", mode: claim.mode, error: "원문을 읽지 못했다" };
-      else result = { ...(await ingestRun({ member: claim.member, plan, files: caps.files, truncated: caps.truncated })) };
+      else result = { ...(await ingestRun({ member: claim.member, plan, files: caps.files, truncated: caps.truncated, runId })) };
     } catch (e) {
       result = { state: "failed", mode: claim.mode, error: String((e as Error)?.message ?? e).slice(0, 300) };
     }
@@ -406,4 +432,5 @@ export function runningCollectOwners(): Set<string> {
 export function _resetCollectRunsForTest(): void {
   for (const r of runs.values()) if (r.timer) clearInterval(r.timer);
   runs.clear();
+  starting.clear();
 }

@@ -1018,6 +1018,11 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
   if (patch.interval_sec != null && !(Number.isInteger(patch.interval_sec) && patch.interval_sec >= 60 && patch.interval_sec <= 30 * 86400)) {
     throw new UnitError(400, "interval_sec 는 60~2592000 초입니다");
   }
+  //  #4744 활동량(meta.activity)은 서버가 수집 판마다 잰다(unit-schedule.noteUnitRead) — 작성자를 하나로 두려고 고치기 입력에서는 뺀다.
+  if (patch.meta && Object.prototype.hasOwnProperty.call(patch.meta, "activity")) {
+    const { activity: _measured, ...rest } = patch.meta;
+    patch = { ...patch, meta: Object.keys(rest).length ? rest : null };
+  }
   //  잠그기 전에 한 번 거른다 — 단위를 못 보거나 못 고치는 사람은 잠금을 기다리지 않고 바로 404/403 이다(남의 단위 id 를 돌려
   //   진행 중인 저장을 막거나 연결을 붙들지 못하게 · 재검토 N-a). 통과한 호출만 잠근 뒤 최신 행으로 같은 판정을 다시 한다.
   assertCanEdit(await getUnit(id), id, actor);
