@@ -31,10 +31,32 @@ export const unseenStripped = (s: string): string => String(s ?? "").normalize("
 /** 입력칸 위쪽이 잘려 꼬리만 보일 때 «우리 글» 로 쳐 주는 최소 길이 — 짧은 꼬리는 우연히 겹칠 수 있다. */
 export const TAIL_MATCH_MIN = 24;
 
-/** Claude Code 가 접은 붙여넣기 표시(2.1.301 번들 `zZ`) — 한 번에 너무 길게 들어온 글은 입력칸에 이것만 보인다. */
-const PASTED_PLACEHOLDER = /^\[Pasted text #\d+(?: \+\d+ lines)?\]$/;
-/** 그 접힘 문턱(2.1.301 `L3`) — 이보다 긴 우리 글이면 접힌 표시만 남은 입력칸을 우리 글로 친다(붙여넣기를 모르는 옛 호스트가 친 긴 글). */
+/**
+ * Claude Code 가 입력칸에서 접어 그리는 표시(2.1.301 번들 `zZ`) — 글이 그 자리에 있지만 이 표시로만 보인다.
+ *  · `[Pasted text #N]`·`[Pasted text #N +M lines]` — 한 번에 800자 넘게 들어온 글(붙여넣기 하나, 또는 한 번에 읽힌 긴 친 글).
+ *    붙여넣기를 모르는 옛 호스트가 8KiB 씩 친 긴 글은 덩어리마다 하나씩 생긴다(`[Pasted text #1][Pasted text #2]` — 실측).
+ *  · `[...Truncated text #N +M lines...]` — 입력이 1만 자를 넘으면 가운데를 접는다(앞 약 500자 · 뒤는 남긴다 — 12,000자 실측).
+ *  공백을 다 지운 글(unseenStripped)에서 찾는다 — 표시도 글처럼 줄 끝에서 꺾여 그려질 수 있다.
+ */
+const COLLAPSED = /\[Pastedtext#\d+(?:\+\d+lines)?\]|\[\.\.\.Truncatedtext#\d+\+\d+lines\.\.\.\]/;
+/** 그 접힘 문턱(2.1.301 `L3`) — 이보다 긴 우리 글이어야 접힌 표시가 든 입력칸을 우리 글로 친다. */
 export const PASTE_COLLAPSE_UNITS = 800;
+
+/** (순수) 접힌 표시가 든 입력칸이 우리 글인가 — 표시를 뺀 글 조각이 우리 글 안에 **차례대로** 있고, 첫 조각은 머리·끝 조각은 꼬리여야 한다
+ *  (사람이 앞뒤에 덧붙인 글이면 아니다). 표시가 없으면 거짓 — 그 판정은 위의 그대로-같음이 한다. */
+function collapsedOurs(seen: string, ours: string): boolean {
+  const parts = seen.split(COLLAPSED);
+  if (parts.length < 2) return false;
+  const head = parts[0], tail = parts[parts.length - 1];
+  if (!ours.startsWith(head) || !ours.endsWith(tail)) return false;
+  let at = head.length;
+  for (const mid of parts.slice(1, -1)) {
+    const i = ours.indexOf(mid, at);
+    if (i < 0) return false;
+    at = i + mid.length;
+  }
+  return ours.length - tail.length >= at;   // 꼬리가 앞 조각과 겹치지 않는다
+}
 
 /**
  * 이 화면의 입력칸이 우리 글(`oneLine` — 실제로 친 한 줄)을 들고 있나(순수).
@@ -51,7 +73,7 @@ export function inputHolds(pane: string, oneLine: string): InputHold {
   if (box !== null && ours) {
     const seen = unseenStripped(box);
     if (seen === ours || (seen.length >= TAIL_MATCH_MIN && ours.endsWith(seen))) return "ours";
-    if (oneLine.length > PASTE_COLLAPSE_UNITS && PASTED_PLACEHOLDER.test(box.trim())) return "ours";
+    if (oneLine.length > PASTE_COLLAPSE_UNITS && collapsedOurs(seen, ours)) return "ours";
   }
   if (screenAsks(cap)) return "dialog";
   if (box === null) return "unknown";

@@ -92,6 +92,51 @@ export function splitUnits(text: string, maxUnits: number): string[] {
   return out;
 }
 
+//  ⚠ 이미지 경로 — Claude Code 2.1.301 의 붙여넣기 처리(번들 handlePaste)는 붙여넣은 글을 «`/`·`X:\` 앞의 공백» 과 줄바꿈에서 조각으로
+//   자르고, 조각 하나가 **통째로** 이미지 경로면(앞뒤 공백·감싼 따옴표·역슬래시를 푼 뒤 `kAt = /\.(png|jpe?g|gif|webp)$/i`) 그 파일을 읽어
+//   **글에서 그 조각을 빼고 이미지로 붙인다**(남은 조각은 줄바꿈으로 잇는다 · 못 읽으면 글 그대로). 실측(격리 리뷰 지적): «… The file is
+//   /…/dot.png» 를 붙이면 입력칸 «[Image #1]… The file is» · 기록에 경로가 없다. 친 글(한 번에 800자 이하)은 그 처리를 안 탄다 — 붙여넣기로
+//   바꾸며 생긴 차이다. 그래서 그런 조각이 붙여넣기 하나에 통째로 들지 않게 **조각 경계를 그 확장자 가운데(«.p|ng»)에 둔다** — 나뉜
+//   두 쪽은 어느 쪽도 이미지 경로가 아니라 글 그대로 들어간다(실측). 파일이 있는지는 여기서 모른다 — 모양만 보고 자른다(자르기는 해가 없다).
+const PASTE_SEGMENT_CUT = / (?=\/|[A-Za-z]:\\)/g;
+const IMAGE_PATH = /\.(?:png|jpe?g|gif|webp)$/i;
+const unquoted = (s: string): string => ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) ? s.slice(1, -1) : s;
+const unescaped = (s: string): string => s.replace(/\\\\|\\(.)/g, (_m, c: string | undefined) => c ?? "\\");
+
+/** (순수) 이 글을 붙여넣기 하나로 실으면 Claude Code 가 이미지로 바꿀 조각이 있나 — 있으면 첫 그런 조각의 확장자 «.» 뒤 한 글자 자리(자를 곳), 없으면 -1. */
+export function imagePathCut(piece: string): number {
+  let start = 0;
+  for (const end of [...[...piece.matchAll(PASTE_SEGMENT_CUT)].map((m) => m.index ?? 0), piece.length]) {
+    for (const [off, seg] of lineSegments(piece.slice(start, end))) {
+      if (!IMAGE_PATH.test(unescaped(unquoted(seg.trim())))) continue;
+      return piece.lastIndexOf(".", start + off + seg.trimEnd().length - 1) + 2;
+    }
+    start = end + 1;
+  }
+  return -1;
+}
+/** 줄바꿈 조각(시작 자리 · 글) — 한 줄 글(규약 ①)엔 하나뿐이지만 Claude Code 와 같은 자리에서 자른다. */
+function lineSegments(s: string): Array<[number, string]> {
+  const out: Array<[number, string]> = [];
+  let at = 0;
+  for (const seg of s.split("\n")) { out.push([at, seg]); at += seg.length + 1; }
+  return out;
+}
+
+/** (순수) 붙여넣기 조각들 — PASTE_CHUNK_UNITS 상한(코드포인트 경계) · 이미지 경로 조각이 한 붙여넣기에 통째로 들지 않게(위). 이어 붙이면 원글이다. */
+export function piecesToPaste(text: string): string[] {
+  const out: string[] = [];
+  let rest = text;
+  while (rest) {
+    let piece = splitUnits(rest.slice(0, PASTE_CHUNK_UNITS + 1), PASTE_CHUNK_UNITS)[0];
+    const cut = imagePathCut(piece);
+    if (cut > 0 && cut < piece.length) piece = piece.slice(0, cut);
+    out.push(piece);
+    rest = rest.slice(piece.length);
+  }
+  return out;
+}
+
 /** 바이트 그대로 싣는 argv(`send-keys -H`) — 키 이름 해석·확장 키 인코딩을 안 탄다. */
 const hexKeys = (id: string, s: string): string[] => ["send-keys", "-t", id, "-H", ...[...Buffer.from(s, "utf8")].map((b) => b.toString(16).padStart(2, "0"))];
 
@@ -174,7 +219,7 @@ export function sendKeysPlan(id: string, text: string, bin: string, opts: SendKe
   //   (2.1.301 키 읽기 — 붙여넣기 중 2초 무입력이면 흘려보냄). 조각끼리는 잇지 않는다: 한 묶음의 글 바이트를 조각 하나(≤2KB)로 묶어 둔다.
   const keys = !oneLine ? []
     : opts.paste && !KEYS_IN_TEXT.test(oneLine)
-      ? splitUnits(oneLine, PASTE_CHUNK_UNITS).flatMap((piece) => chunkTmuxCommands([hexKeys(id, PASTE_OPEN), ...literalArgv(id, piece), hexKeys(id, PASTE_CLOSE)]))
+      ? piecesToPaste(oneLine).flatMap((piece) => chunkTmuxCommands([hexKeys(id, PASTE_OPEN), ...literalArgv(id, piece), hexKeys(id, PASTE_CLOSE)]))
       : literalArgv(id, oneLine);
   return { oneLine, keys, enter: ["send-keys", "-t", id, "Enter"] };
 }

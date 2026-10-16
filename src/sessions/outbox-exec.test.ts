@@ -565,6 +565,9 @@ test("W13 지킴이는 호스트에 화면 꼬리를 길게(SUBMIT_PEEK_LINES) �
   const exec = await outboxExecFor(ID, r.deps);
   await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["confirmed"]).echo, { now: () => r.clock.t });
   const { SUBMIT_PEEK_LINES } = await import("../terminal/submit-check.js");
+  const { OUTBOX_PEEK_LINES_MAX } = await import("../terminal/outbox-host-step.js");
+  //  호스트는 상한을 넘는 lines 를 «모름» 으로 거절하고, 그러면 그 행은 게이트웨이 tmux 로 내려앉는다(매니지드에선 상자를 못 본다 — 격리 리뷰).
+  assert.ok(SUBMIT_PEEK_LINES <= OUTBOX_PEEK_LINES_MAX, `지킴이 ${SUBMIT_PEEK_LINES}줄 > 호스트 상한 ${OUTBOX_PEEK_LINES_MAX}줄`);
   const peeks = r.sentTo("peek");
   assert.ok(peeks.length > 0, "배선 — 지킴이가 화면을 안 봤다");
   for (const a of peeks) assert.equal((a as { lines?: unknown }).lines, SUBMIT_PEEK_LINES);

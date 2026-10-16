@@ -324,14 +324,84 @@ t("[33·S5] 붙여넣기 조각 경계의 `;` — 조각 끝에 걸려도 사라
   for (const c of commandsOf(keys)) if (c[3] === "-l") assert.ok(!c[5]!.endsWith(";"), `-l 인자가 ; 로 끝난다: …${c[5]!.slice(-8)}`);
 });
 
-t("[34·S6] `;` 가 아주 많아도 한 명령의 인자는 브로커 상한(64) 안 · 묶음은 60 안 · 첫 명령이 세션을 지목한다", () => {
-  for (const [raw, paste] of [[";".repeat(40), false], ["끝" + ";".repeat(40), true], ["x".repeat(UNITS - 3) + ";;;", true]] as const) {
+t("[34·S6] `;` 가 아주 많아도 한 명령의 `;` 토큰은 16개까지 · 인자는 브로커 상한(64) 안 · 묶음은 60 안 · 첫 명령이 세션을 지목한다", () => {
+  const cases = [[";".repeat(40), false], ["끝" + ";".repeat(40), true], ["x".repeat(UNITS - 3) + ";;;", true],
+    [";".repeat(200), false], ["끝" + ";".repeat(200), true]] as const;
+  for (const [raw, paste] of cases) {
     const keys = planP("box-yoon-1", raw, TMUX, { paste });
     for (const argv of keys.keys) {
       assert.ok(argv.length <= 60, `argv ${argv.length}개`);
       assert.deepEqual(argv.slice(0, 3), ["send-keys", "-t", "box-yoon-1"], "묶음의 첫 명령이 세션을 지목해야 라우팅된다");
     }
+    for (const c of commandsOf(keys.keys)) {
+      const semis = c.filter((a) => a === "3b").length;
+      assert.ok(semis <= 16, `한 명령에 3b ${semis}개 — 64 를 넘는 명령은 매니지드 브로커가 거절한다`);
+    }
     assert.equal(paste ? pastePieces(keys.keys).join("") : typedOf(commandsOf(keys.keys)), keys.oneLine, JSON.stringify(raw).slice(0, 30));
+  }
+});
+
+//  ── 이미지 경로(I1~I5) — Claude Code 2.1.301 의 붙여넣기 처리(번들 handlePaste)를 **그 코드 그대로** 옮긴 판정으로 잰다 ──
+//   붙여넣은 글을 « (?=/|X:\)» 와 줄바꿈에서 자르고, 조각이 통째로 이미지 경로(따옴표·역슬래시 풀고 kAt)면 그 조각을 글에서 빼고 이미지로 붙인다.
+//   실측: «… The file is /…/dot.png» 붙여넣기 → «[Image #1]… The file is»(기록에 경로 없음) · 친 글은 그대로였다.
+const kAt = /\.(png|jpe?g|gif|webp)$/i;
+const ccUnquote = (e: string): string => (e.startsWith('"') && e.endsWith('"') || e.startsWith("'") && e.endsWith("'")) ? e.slice(1, -1) : e;
+const ccUnescape = (e: string): string => { const c = "__DOUBLE_BACKSLASH__"; return e.replaceAll("\\\\", c).replace(/\\(.)/g, "$1").replace(new RegExp(c, "g"), "\\"); };
+/** 붙여넣기 한 번에 Claude Code 가 이미지로 바꿀 조각들(번들 코드의 옮김 — 구현과 따로 쓴다). */
+const ccImageSegments = (Q: string): string[] => Q.split(/ (?=\/|[A-Za-z]:\\)/).flatMap((j) => j.split("\n")).filter((j) => j.trim())
+  .filter((j) => kAt.test(ccUnescape(ccUnquote(j.trim()))));
+const pastedOf = (text: string): string[] => pastePieces(planP("s", text, TMUX, { paste: true }).keys);
+
+t("[35·I1] 끝이 이미지 경로인 글 — 경로가 붙여넣기 하나에 통째로 안 든다(확장자 가운데서 나눔) · 이어 붙이면 원문", () => {
+  const text = "Reply with only the word OK. The file is /work/shared/project/1/dot.png";
+  assert.equal(ccImageSegments(text).length, 1, "배선 — 옮긴 판정이 이 글을 이미지로 본다(관측 장치가 살아 있다)");
+  const pieces = pastedOf(text);
+  assert.deepEqual(pieces, ["Reply with only the word OK. The file is /work/shared/project/1/dot.p", "ng"]);
+  for (const pc of pieces) assert.deepEqual(ccImageSegments(pc), [], JSON.stringify(pc));
+});
+
+t("[36·I2] 경로가 글 가운데(뒤에 낱말)면 이미지로 안 바뀐다 — 나누지 않는다 · 이미지 아닌 확장자도 그대로", () => {
+  for (const text of ["The file /a/dot.png is a dot.", "see /a/notes.txt", "see /a/x.pngx", "png 파일을 봐 줘", "/a/b.png로 바꿔 줘"]) {
+    assert.deepEqual(ccImageSegments(text), [], `전제: ${text}`);
+    assert.deepEqual(pastedOf(text), [text], text);
+  }
+});
+
+t("[37·I3] 여러 경로 · 대소문자 · 윈도우 경로 · 따옴표 · 역슬래시 공백 — 어느 붙여넣기에도 이미지 조각이 없다", () => {
+  //  따옴표는 조각이 통째로 감싸였을 때만 풀린다(조각은 « /» 앞에서 시작하니 글 맨 앞일 때뿐이다).
+  //  역슬래시는 풀고 본다 — 확장자 안에 낀 것(`c.pn\g`)도 Claude Code 에겐 `.png` 다.
+  for (const text of ["compare /a/x.png /b/y.JPG", "C:\\Users\\me\\shot.jpeg", "'/a b/c.webp'", "\"/a b/c.gif\"", "look /a\\ b/c.png", "see /a/c.pn\\g", "/only.png", ".png"]) {
+    assert.ok(ccImageSegments(text).length > 0, `전제(이미지로 바뀌는 글): ${text}`);
+    const pieces = pastedOf(text);
+    assert.equal(pieces.join(""), text, text);
+    for (const pc of pieces) assert.deepEqual(ccImageSegments(pc), [], `${text} → ${JSON.stringify(pc)}`);
+  }
+});
+
+t("[38·I4] 경로가 조각 경계(500)에 딱 걸려도 — 그 붙여넣기가 이미지 경로로 끝나지 않는다", () => {
+  const path = " /p/q.png";
+  const text = "가".repeat(UNITS - path.length) + path + " 그리고 이어지는 말";
+  assert.equal(sk.splitUnits(text, UNITS)[0].endsWith("/p/q.png"), true, "전제 — 단순 자르기면 첫 조각이 경로로 끝난다");
+  const pieces = pastedOf(text);
+  assert.equal(pieces.join(""), text);
+  for (const pc of pieces) { assert.ok(pc.length <= UNITS); assert.deepEqual(ccImageSegments(pc), [], JSON.stringify(pc.slice(-12))); }
+});
+
+t("[39·I5] 무작위 글 300개 — 이어 붙이면 원문 · 조각마다 상한 이하 · 어느 붙여넣기도 Claude Code 가 이미지로 바꾸지 않는다", () => {
+  const atoms = ["a", " ", "/", ".", "png", "JPG", "jpeg", "gif", "webp", "C:\\", "\\", "'", '"', "가", "😀", ";", "x.png", " /d/e.png"];
+  let seed = 4818;
+  const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  for (let k = 0; k < 300; k++) {
+    let text = "";
+    const len = 1 + rnd(k % 10 === 0 ? 900 : 60);
+    for (let i = 0; i < len; i++) text += atoms[rnd(atoms.length)];
+    const oneLine = planP("s", text, TMUX, { paste: true }).oneLine;
+    const pieces = pastedOf(text);
+    assert.equal(pieces.join(""), oneLine, `#${k}`);
+    for (const pc of pieces) {
+      assert.ok(pc.length <= UNITS, `#${k} 조각 ${pc.length}`);
+      assert.deepEqual(ccImageSegments(pc), [], `#${k} ${JSON.stringify(pc).slice(0, 80)}`);
+    }
   }
 });
 
@@ -489,12 +559,13 @@ console.log(`\n${pass} passed`);
     if (!TMUX || process.platform === "win32") console.log("skip  [#4818 R1] tmux 없음");
     else {
       const { runSendKeysPlan } = await import("./send-keys.js");
-      const sock = `lively-sk-${process.pid}`;
+      //  소켓은 이 시험의 임시 폴더에(-S) — `-L` 이면 tmux 공용 소켓 폴더에 판마다 하나씩 남는다(격리 리뷰).
+      const sock = path.join(tmp, "sk.sock");
       const out = path.join(tmp, "typed.out");
-      const T = (argv: string[]): string => execFileSync(TMUX, ["-L", sock, "-f", "/dev/null", ...argv], { encoding: "utf8" });
+      const T = (argv: string[]): string => execFileSync(TMUX, ["-S", sock, "-f", "/dev/null", ...argv], { encoding: "utf8" });
       const typedBy = async (raw: string, paste: boolean): Promise<{ got: string; oneLine: string }> => {
         fs.rmSync(out, { force: true });
-        spawnSync(TMUX, ["-L", sock, "kill-server"]);
+        spawnSync(TMUX, ["-S", sock, "kill-server"]);
         T(["new-session", "-d", "-s", "sk", "-x", "200", "-y", "10", `bash -c 'IFS= read -r line; printf %s "$line" > ${out}'`]);
         const plan = planP("sk", raw, "tmux", { paste });
         const r = await runSendKeysPlan("sk", plan, { tmux: async (argv) => T(argv), sleep: async () => {} });
@@ -515,7 +586,7 @@ console.log(`\n${pass} passed`);
             assert.equal(got.includes(PASTE_OPEN_S), paste, `${JSON.stringify(raw).slice(0, 24)}: 표지 유무`);
           }
         });
-      } finally { spawnSync(TMUX, ["-L", sock, "kill-server"]); }
+      } finally { spawnSync(TMUX, ["-S", sock, "kill-server"]); }
     }
   }
 

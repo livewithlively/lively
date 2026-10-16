@@ -121,6 +121,46 @@ test(`H18·H19 접힌 붙여넣기 표시만 남은 입력칸 — 우리 글이 
   assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1] 그리고 사람이 덧붙인 글`]), long), "other");
 });
 
+//  ── 접힌 표시 둘 이상 · 가운데 접힘(격리 리뷰 · 2026-10-16 실측) ──
+//   붙여넣기를 모르는 옛 호스트가 긴 글을 덩어리로 치면 덩어리마다 `[Pasted text #N]` 이 생긴다(900자 둘 → `[Pasted text #1][Pasted text #2]`).
+//   입력이 1만 자를 넘으면 Claude Code 는 가운데를 `[...Truncated text #N +M lines...]` 로 접는다 — 12,000자를 500자씩 붙였을 때 앞 495자 ·
+//   표시 · 뒤 1,969자가 보였다(가로줄 사이 38줄). 둘 다 종전 판정에선 other 라, 그 글이 멈춰 있어도 지킴이가 안 눌렀다(창 끝 Enter 까지).
+const KO_UNIT = "세션을 새로 열거나 회수된 세션에 말을 보낼 때 입력칸에 글만 남고 제출되지 않던 문제를 끝단에서 재는 긴 한국어 문장입니다. ";
+const KO_LONG = ("OK 라고만 답해 주세요. BOX-long " + KO_UNIT.repeat(220)).slice(0, 12_000).trim();
+/** 입력칸 폭으로 꺾어 그린다 — 첫 줄은 «❯ », 이어지는 줄은 두 칸 들여쓰기. */
+const wrapped = (s: string, w = 57): string[] => Array.from({ length: Math.ceil(s.length / w) }, (_, i) => (i ? "  " : `❯${NB}`) + s.slice(i * w, (i + 1) * w));
+
+test("H20 접힌 표시가 여럿(옛 호스트가 친 긴 글) — 우리 글이 800자 넘으면 ours", () => {
+  const long = KO_LONG.slice(0, 1_800);
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1][Pasted text #2]`]), long), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1 +2 lines] [Pasted text #2]`]), long), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1][Pasted text #2]`]), long.slice(0, PASTE_COLLAPSE_UNITS)), "other", "800자 이하면 접힐 수 없다");
+});
+
+test("H21 가운데가 접힌 1만 자 넘는 우리 글(앞·표시·뒤) — ours · 표시가 줄 끝에서 꺾여도 ours", () => {
+  const shown = KO_LONG.slice(0, 495) + "[...Truncated text #1 +0 lines...]" + KO_LONG.slice(KO_LONG.length - 1_969);
+  assert.equal(inputHolds(screen(wrapped(shown)), KO_LONG), "ours");
+  assert.equal(inputHolds(screen(wrapped(shown, 61)), KO_LONG), "ours", "다른 폭(표시가 다른 자리에서 꺾인다)");
+  const mixed = "[Pasted text #1]" + KO_LONG.slice(KO_LONG.length - 300);   // 접힌 덩어리 뒤에 펼쳐진 꼬리
+  assert.equal(inputHolds(screen(wrapped(mixed)), KO_LONG.slice(0, 2_000) + KO_LONG.slice(KO_LONG.length - 300)), "ours");
+});
+
+test("H22 접힌 표시 + 사람이 쓴 글(앞이나 뒤) — other(누르면 그 글이 나간다)", () => {
+  const shown = KO_LONG.slice(0, 495) + "[...Truncated text #1 +0 lines...]" + KO_LONG.slice(KO_LONG.length - 1_969);
+  assert.equal(inputHolds(screen(wrapped("잠깐 이것부터 " + shown)), KO_LONG), "other", "앞에 덧붙임");
+  assert.equal(inputHolds(screen(wrapped(shown + " 그리고 이것도")), KO_LONG), "other", "뒤에 덧붙임");
+  assert.equal(inputHolds(screen([`❯${NB}메모[Pasted text #1]`]), KO_LONG), "other", "사람 글 + 접힌 표시");
+});
+
+test("H23 접힌 표시 앞뒤가 우리 글과 다르다(다른 긴 글) — other · 꼬리가 머리와 겹칠 만큼 짧은 우리 글도 other", () => {
+  const other = "다른 지시 " + KO_UNIT.repeat(200);
+  const shown = other.slice(0, 495) + "[...Truncated text #1 +0 lines...]" + other.slice(other.length - 1_969);
+  assert.equal(inputHolds(screen(wrapped(shown)), KO_LONG), "other");
+  const ours = "가".repeat(900);
+  assert.equal(inputHolds(screen([`❯${NB}${"가".repeat(500)}[...Truncated text #1 +0 lines...]${"가".repeat(500)}`]), ours), "other",
+    "보이는 앞뒤(1,000자)가 우리 글(900자)보다 길다 — 같은 글이 접혔을 리 없다");
+});
+
 // ── 지킴이 ──────────────────────────────────────────────────────────────────────
 
 /** 가짜 화면·시계 — 박자마다 무엇을 했는지(peek·enter) 남긴다. pane 은 지금 보여 줄 화면(함수면 부를 때마다). */
