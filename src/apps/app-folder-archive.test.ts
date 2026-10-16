@@ -8,6 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "lively-app-folder-archive-"));
 const APPS = path.join(ROOT, "apps");
@@ -449,7 +450,36 @@ test("매니지드 갈래 — 중계로 돈다 · 감옥 안 자리(isolatedBase
 
 const src = (f: string): string => fs.readFileSync(f, "utf8");
 /** 주석을 뺀 소스(배선 단언이 주석 속 글자에 속지 않게). */
-const code = (f: string): string => src(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+/**
+ * 주석을 걷은 소스 — 파서가 찾은 주석 자리만 지운다. 문자열 · 정규식 · 템플릿 안의 «/*» · «//» 는 주석이 아니다.
+ *  정규식으로 걷으면 "…/_lively/* …" 같은 문자열에서 다음 «*\/» 까지 수만 자를 지워, 배선 시험이 그 사이 코드를 못 본다
+ *  (2026-10-16 실측 — capabilities/apps.ts 의 app_build_start 예약 자리가 통째로 사라졌다).
+ */
+const codeCache = new Map<string, string>();
+const code = (f: string): string => {
+  const hit = codeCache.get(f);
+  if (hit !== undefined) return hit;
+  const text = src(f);
+  const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, /\.(m?js)$/.test(f) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const cuts = new Map<number, number>();
+  //  주석은 늘 어떤 토큰 둘레에 있다 — 잎 토큰마다 앞 주석(줄이 바뀐 뒤) · 뒤 주석(같은 줄)을 모은다. JSDoc 노드 안은 내려가지 않는다
+  //   (그 주석은 뒤 토큰의 앞 주석으로 잡힌다).
+  const visit = (n: ts.Node): void => {
+    if (n.kind === ts.SyntaxKind.JSDoc) return;
+    const kids = n.getChildren(sf);
+    if (!kids.length) {
+      for (const r of [...(ts.getLeadingCommentRanges(text, n.pos) ?? []), ...(ts.getTrailingCommentRanges(text, n.end) ?? [])]) cuts.set(r.pos, r.end);
+      return;
+    }
+    for (const k of kids) visit(k);
+  };
+  visit(sf);
+  let out = "", at = 0;
+  for (const [pos, end] of [...cuts].sort((x, y) => x[0] - y[0])) { if (pos < at) continue; out += text.slice(at, pos); at = end; }
+  out += text.slice(at);
+  codeCache.set(f, out);
+  return out;
+};
 const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [path.join(dir, e.name)] : []);
 
@@ -466,10 +496,28 @@ test("K2 자가호스팅 정비 타이머 — 테넌트마다 같은 함수", ()
   assert.match(h, /setInterval\(\(\) => \{ void appFolderArchive\(\); \}/);
 });
 
+test("L0 배선 시험의 주석 걷기 — 진짜 주석만 지우고 문자열 · 정규식 · 템플릿 안의 «/*» · «//» 와 그 뒤 코드는 남긴다", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "afa-code-"));
+  try {
+    const f = path.join(dir, "sample.ts");
+    fs.writeFileSync(f, [
+      `/** 문서 주석 */`,
+      `const a = "앱 주소 /_lively/* 로 연다"; // 줄 주석`,
+      `const re = /\\/\\*/g; const t = \`템플릿 // 안 /* 도 \${a} */\`;`,
+      `/* 막 주석 */ keepMe(1);`,
+      `const u = "https://x.y/z"; afterUrl();`,
+    ].join("\n"));
+    const c = code(f);
+    for (const keep of [`"앱 주소 /_lively/* 로 연다"`, "keepMe(1);", "/\\/\\*/g", "템플릿 // 안 /* 도", `"https://x.y/z"`, "afterUrl();"]) assert.ok(c.includes(keep), `남아야 한다: ${keep}\n${c}`);
+    for (const gone of ["문서 주석", "줄 주석", "막 주석"]) assert.ok(!c.includes(gone), `지워야 한다: ${gone}\n${c}`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("L1 앱 행을 지우는 store 함수 셋은 remove-run 에서만 부른다", () => {
   const offenders: string[] = [];
   for (const f of walk("src")) {
     if (f === path.join("src", "org", "store", "apps.ts") || f === path.join("src", "apps", "remove-run.ts")) continue;
+    if (!["deleteApp(", "dropEmptyDraftApp(", "dropStaleEmptyDrafts("].some((n) => src(f).includes(n))) continue;   // 바늘이 없으면 주석을 걷어도 없다
     const c = code(f);
     for (const fn of ["deleteApp(", "dropEmptyDraftApp(", "dropStaleEmptyDrafts("]) {
       if (new RegExp(`\\b${fn.replace("(", "\\(")}`).test(c)) offenders.push(`${f}: ${fn}`);
@@ -477,7 +525,7 @@ test("L1 앱 행을 지우는 store 함수 셋은 remove-run 에서만 부른다
   }
   assert.deepEqual(offenders, [], "앱 행을 지우는 입구가 remove-run 밖에 생겼다 — 앱 폴더 보관이 빠진다");
   //  날 SQL 로 앱 행을 지우는 곳도 store 의 그 셋뿐이다(org_app_* 다른 표는 상관없다).
-  const rawDeletes = walk("src").flatMap((f) => (code(f).match(/DELETE FROM org_app\b(?!_)/g) ?? []).map(() => f));
+  const rawDeletes = walk("src").flatMap((f) => (src(f).includes("DELETE FROM org_app") ? code(f).match(/DELETE FROM org_app\b(?!_)/g) ?? [] : []).map(() => f));
   assert.deepEqual(rawDeletes, Array(3).fill(path.join("src", "org", "store", "apps.ts")), `org_app 행을 지우는 SQL: ${rawDeletes.join(" · ")}`);
   const r = code("src/apps/remove-run.ts");
   for (const fn of ["store.deleteApp(", "store.dropEmptyDraftApp(", "store.dropStaleEmptyDrafts("]) assert.ok(r.includes(fn), `remove-run 이 ${fn} 를 부른다(배선)`);
@@ -491,6 +539,7 @@ test("L2 reserveDraftApp 을 부르는 곳마다 그 앞에 남은 앱 폴더 �
   const sites: string[] = [];
   for (const f of walk("src")) {
     if (f === path.join("src", "org", "store", "apps.ts")) continue;
+    if (!src(f).includes("reserveDraftApp(")) continue;
     const c = code(f);
     let i = -1;
     while ((i = c.indexOf("reserveDraftApp(", i + 1)) >= 0) {
