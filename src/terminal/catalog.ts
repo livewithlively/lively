@@ -1,6 +1,7 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
+import type { LabelSource } from "../sessions/session-label-source.js";   // #4418 — 타입만(노드 번들에도 들어간다)
 import type { SessionStopNote } from "../sessions/session-state.js";   // #4695 — 타입만(이 모듈은 노드 번들에도 들어간다)
 import type { SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 타입만(같은 이유)
 import type { ReportedState } from "./phase.js";
@@ -569,6 +570,12 @@ export interface CreateInput {
   //  실행 모드(readOnly·incognito)는 **직교 축**이니 여기 흡수하지 마라(읽기전용 위탁이 표현 불가해진다).
   kind: SessionKind;
   label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  /**
+   * #4418 — `label` 의 **원래 출처**. 있던 세션을 잇는 길(복원 · 다른 AI 로 전환)만 싣는다 — 그 길은 저장된 이름을 `label` 로
+   *  싣고 오는데, 출처가 없으면 «받아 온 이름 = 사람 것» 으로 읽혀 새 id 로 뜨는 순간 규칙 이름도 사람 이름으로 굳는다.
+   *  새로 여는 세션은 비워 둔다(받아 온 이름은 사람 것 · 없으면 rule/id — session-label-source.openingLabelSource).
+   */
+  labelSource?: LabelSource;
   /**
    * 이 세션의 **대화 런타임 모드** — "chat" 이면 pane 이 셸이고 대화는 런타임이 쥔다 (#2439).
    *  ⚠ 이 축이 없어서 «한 세션만 켜 보기» 가 불가능했고, 확인하려면 **남의 기본까지** 바꿔야 했다.

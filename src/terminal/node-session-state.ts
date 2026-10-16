@@ -11,6 +11,7 @@
 // 이 모듈은 **게이트웨이 전용**이다 — node/registry(WS 서버)를 import 하므로 노드 에이전트 번들에 들어가면 안 된다
 //  (sessions.ts 가 이걸 import 하지 않는 이유. routes 가 부른다).
 import type { CreateInput, SessionInfo } from "./catalog.js";
+import { carriedLabelSource } from "../sessions/session-label-source.js";
 import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, clearSelfNodeSessionRows, type SessionStateInput } from "../sessions/session-state.js";
 import { liveNodes, onNodeSessions, onSelfNodeJudged, isSelfNode } from "../node/registry.js";
 import { selfNodeMessage } from "../node/self-node.js";
@@ -40,13 +41,20 @@ export function nodeSessionStateInput(session: SessionInfo, nodeId: string, inpu
     created: session.created || Math.floor(Date.now() / 1000), last_busy: null,
     node_id: nodeId,
     app_id: input.appId || null,
+    //  #4418 — 세션의 종류(#2162). 종전엔 이 칸을 안 실어 노드 세션은 전부 human 으로 적혔다 — 노드 앱 세션을 되살리면(복원은 이 값을
+    //   되살린다) 사람 세션으로 떠서 이름짓기 안내까지 받았다. 중앙 createSession 은 처음부터 싣는다(sessions.ts desiredRow).
+    kind: input.kind,
     //  #4632 — 사람이 준 이름(input.label)으로 만든 세션은 그 이름이 **사람 것**이다. 중앙 createSession 과 같은 판정(sessions.ts labelSource).
     //   종전엔 이 칸을 안 실어 노드 세션은 'rule' 로 읽혔다 — 만들 때 준 이름도 AI 의 session_rename(agent)이 걸쇠를 이겨 덮는다.
     //   앱빌더가 세션 이름 «"이름" 앱 제작» 을 만들 때 싣게 되면서(「회의록 기획카드」 로 덮인 것, 원준 2026-10-15) 이 구멍이 드러났다.
     //   이름을 안 줬으면 종전 그대로(칸 없음).
-    ...(String(input.label ?? "").replace(/[\t\n\r]/g, " ").trim() ? { label_source: "human" } : {}),
+    //  #4418 — 복원·전환은 저장된 이름과 함께 원래 출처를 싣고 온다(input.labelSource) — 그대로 잇는다(규칙 이름이 사람 이름으로 굳지 않게).
+    ...withLabelSource(carriedLabelSource(String(input.label ?? "").replace(/[\t\n\r]/g, " "), input.labelSource)),
   };
 }
+
+/** 출처가 정해졌을 때만 칸을 싣는다 — 안 실으면 행의 출처는 비어 있고(rule 로 읽힌다) 그 이름은 노드가 지은 것이다. */
+const withLabelSource = (src: ReturnType<typeof carriedLabelSource>): Pick<SessionStateInput, "label_source"> => (src ? { label_source: src } : {});
 
 /** 노드 create 릴레이 직후 — 행을 쓴다(best-effort). 실패해도 세션은 떠 있다(로그만). */
 export async function mirrorNodeSession(session: SessionInfo, nodeId: string, input: CreateInput, ownerId: string): Promise<void> {

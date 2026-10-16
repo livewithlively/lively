@@ -108,6 +108,15 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
       "LIVELY_TASK_WS(제 뜻이 따로 있는 값) 스니핑으로 되돌아간다. 라벨일 뿐이라 비밀·권한과 무관.",
   },
   {
+    title: "세션 이름 출처",
+    names: ["LIVELY_SESSION_LABEL_SOURCE"],
+    keep: "keep",
+    why:
+      "#4418 — 이 세션 이름을 누가 지었나(id|rule|agent|human). 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 세션 " +
+      "이름짓기를 안내하지 않는다. 미보존이면 격리 세션에서만 그 안내가 나간다(서버 걸쇠가 흡수해 이름은 안 바뀌고, 첫 턴에 헛 툴콜 하나가 는다). " +
+      "라벨일 뿐이라 비밀·권한과 무관.",
+  },
+  {
     title: "워크스페이스 소속",
     names: ["LVLY_TENANT_SLUG"],
     keep: "keep",

@@ -242,6 +242,11 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 그래서 이 행은 '보이게' 하되 '되살릴 수 있다'고 말하지 않는다 — 복원이 좌표를 추측하면(root_key||'shared')
   //   그 세션이 **엉뚱한 폴더에서** 되살아난다. 복원 경로가 이 표식을 보고 거절한다(terminal/routes.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false;`);
+  // #4418 — 좌표(root_key)를 아는 발견 행은 **게이트웨이가 만든 세션**이다: root_key 를 쓰는 자리는 생성·복원 기록(upsertSessionState)
+  //  하나뿐인데, 노드의 상태 보고가 그보다 먼저 닿으면 발견 표식이 남았다(그 기록이 표식을 안 거뒀다 — 지금은 거둔다). 그 표식이 남은
+  //  행은 이어서 열기·토큰 되채우기·주인 확인에서 «그 컴퓨터에서 직접 띄운 세션» 으로 잘못 다뤄진다. 멱등(이미 거둔 행엔 안 맞는다).
+  //  이름 출처는 되살리지 못한다(누가 지었는지 모른다 — 비어 있는 채로 둔다).
+  await pool.query(`UPDATE org_session_state SET discovered=false WHERE discovered AND root_key IS NOT NULL;`);
   // #2231 — **이 세션은 어느 새 세션으로 이어졌나**(복원 성공 시 새 id). NULL = 아직 이어지지 않은 살아있는 desired-state.
   //  왜: 종전엔 복원이 성공하면 옛 행을 **지웠다**. 그러면 그 옛 id 는 서버에서 통째로 모르는 값이 되어, 이미 열려 있던
   //   화면·탭·북마크·다른 칸이 그 id 를 계속 가리킨 채 "중단된 세션이에요 — 이어받을 수 있어요"를 띄우고, 누르면

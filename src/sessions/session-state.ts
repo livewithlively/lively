@@ -649,6 +649,14 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  이름의 출처가 바뀌는 자리는 개명(claimSessionLabel·updateSessionStateMeta) 하나뿐이다.
        -- #2162 kind 도 **이 경로로 안 바뀐다**(INSERT 때만). 세션의 종류는 태어날 때 정해지고 변하지 않는다 —
        --  복원이 원래 종류를 되살려 보내지만(routes.ts), 만에 하나 그게 비면 기존 값이 살아남아야 한다.
+       -- #4418 — 단 **발견 행**(discovered)은 예외다. 노드는 세션을 띄우자마자 상태를 밀어 올리고, 그게 게이트웨이의 생성
+       --  기록보다 먼저 닿으면 discoverNodeSessions 가 출처·종류 없는 자리표시 행을 먼저 적는다(node-session-state.ts).
+       --  그 행에선 출처·종류가 «아직 아무도 안 정한 값» 이라 이 기록이 **처음으로 정하는 자리**다 — 안 채우면 사람이 준
+       --  이름이 rule 로 읽혀 AI 의 이름짓기가 덮고, 앱 세션이 사람 세션으로 읽힌다(맥미니 노드 실측 2026-10-16: 태스크에서 연
+       --  세션 넷의 출처가 비어 이름짓기가 이겼다). 좌표도 이 기록이 채우므로 발견 표식은 여기서 거둔다.
+       label_source=CASE WHEN org_session_state.discovered THEN EXCLUDED.label_source ELSE org_session_state.label_source END,
+       kind=CASE WHEN org_session_state.discovered THEN EXCLUDED.kind ELSE org_session_state.kind END,
+       discovered=false,
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
        -- node_id 는 세션 정체성의 일부다(같은 id 가 다른 노드로 옮겨 가는 일은 없다) — 그래도 EXCLUDED 로 그대로 쓴다:
