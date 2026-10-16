@@ -119,5 +119,8 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
     tokenHashPrefix: user.tokenHashPrefix,
     appId: bound.appId,
     appServer: true,
+    //  #4485 주소의 판 — 서버 코드는 주소의 판으로 돈다(공개 주소 = 공개 판의 함수 별칭 pub · app-front-server). 그 코드가 부르는 표 · 도구도
+    //   같은 판의 선언이어야 한다 — 초안을 고친 사람이 공개 주소를 열어도 공개 판의 표(apps/visibility.ts addressViewFor). 앞단이 서명한 신원에서만 온다.
+    appAddress: claims.var,
   };
 }

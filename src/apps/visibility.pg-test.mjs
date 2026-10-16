@@ -8,7 +8,7 @@
 //  B1 남의 세션으로 예약 403 · B2 예약 → 나만 보는 빈 앱(멱등 · 목록·역조회) · B3 예약한 세션에서 다른 id 로 저장 409
 //  B4 예약 id 로 저장 → 1판 · 서버 기록(매니페스트 studio.made_by 위조 무시) · 남에겐 404 일곱 길  B5 남이 같은 id 로 덮어쓰기 403
 //  B6 공개하기(남 404 · 만든 사람 OK) → 모두에게  B7 공개 뒤 고치면 초안 — 고친 사람만 새 판, 나머지는 공개 판(목록·화면·판 이력·내려받기)
-//  B8 초안이 새로 선언한 표 · 공개 판의 표에 쓰기  B9 초안이 뺀 표는 공개 판이 쓰는 동안 남고, 공개하면 보관된다
+//  B8 초안이 새로 선언한 표 · 공개 판의 표에 쓰기  B8b 앱 서버 주체는 주소의 판의 표(#4485)  B9 초안이 뺀 표는 공개 판이 쓰는 동안 남고, 공개하면 보관된다
 //  B10 남(고치기 전원)이 고친 초안 — 그 사람만 보고 책임자가 공개  B11 되돌리기 + publish  B12 사본 — 원본 기록 · 못 보는 원본 404
 //  B13 공개 거두기 — 남은 다시 404 · 붙여 둔 세션에서도 막힘  B14 오래된 빈 예약은 새 시작 때 거둔다
 //  B15 떠난 사람 — 책임자만 관리자로(만든 사람 그대로) · 관리자에게 알림  B16 관리자가 책임자를 바꿈 → 새 책임자가 보고 지운다
@@ -167,6 +167,29 @@ try {
   const ins = await call("store_insert", { table: "notes", row: { text: "bob 의 메모" } }, appBob, { source: "app-ui" });
   const extraExists = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name LIKE $1`, [`%__extra`]))[0].n;
   chk("B8 공개 판의 표에 쓰기(남 · 앱 화면) · 초안이 새로 선언한 표도 만들어져 있다", ins.id != null && extraExists >= 1, JSON.stringify({ ins, extraExists }));
+
+  // B8b #4485 앱 서버 주체의 주소 판 — 서버 코드는 주소의 판으로 돈다(공개 주소 = 공개 판의 함수 pub). 그 코드가 SDK 로 부르는 표도 그 판의 선언이어야 한다.
+  {
+    const { resolveAppServerPrincipal } = await import(`${D}/apps/app-server-auth.js`);
+    const { appServerUserId } = await import(`${D}/apps/app-server-id.js`);
+    const { appSqlTenantId } = await import(`${D}/apps/app-sql-exec.js`);
+    const IDK = await import(`${D}/apps/app-identity.js`);
+    const key = IDK.ed25519FromSeed(Buffer.alloc(32, 7));
+    const opts = { identity: { keys: new Map([["k1", IDK.ed25519PublicKey(key.publicKeyB64)]]) } };
+    const ws = appSqlTenantId();
+    const nowS = Math.floor(Date.now() / 1000);
+    const idOf = (sub, v) => IDK.signAppIdentity({ ws, app: ID, var: v, sub, name: sub, iat: nowS, exp: nowS + 600 }, key.privateKey, "k1");
+    const tokenUser = { userId: appServerUserId(ws, ID), email: "", scopes: [], projects: ["*"], appId: ID };
+    await call("me_app_grant", { app_id: ID }, alice);
+    const aPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "pub"), opts);
+    const aDraft = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "draft"), opts);
+    const bPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-bob", "pub"), opts);
+    const names = async (u) => (await call("store_tables", { app_id: ID }, u, { source: "rest" })).tables.map((t) => t.name).sort().join(",");
+    const tPubAlice = await names(aPub), tDraftAlice = await names(aDraft), tPubBob = await names(bPub);
+    chk("B8b ★#4485 앱 서버 주체에 주소의 판 — 초안을 고친 사람도 공개 주소면 공개 판의 표(notes) · 초안 주소면 초안의 표(extra,notes) · 남은 공개 판",
+      aPub.appAddress === "pub" && aDraft.appAddress === "draft" && tPubAlice === "notes" && tDraftAlice === "extra,notes" && tPubBob === "notes",
+      JSON.stringify({ aPub: aPub.appAddress, aDraft: aDraft.appAddress, tPubAlice, tDraftAlice, tPubBob }));
+  }
 
   // B9 — 초안이 notes 를 뺀다 → 공개 판(1판)이 아직 쓰므로 남는다 → 공개하면 데이터가 있어 보관된다
   const s9 = await call("app_save", { files: files(ID, "<p>v3 초안</p>", { title: "회의 안건 3", tables: ["extra"] }), note: "notes 뺌" }, alice, inSession("box-alice-1"));
