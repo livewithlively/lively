@@ -10,6 +10,9 @@
 //  격리 리뷰 뒤(R): R1 같은 파일의 두 앱 — zip 은 앱마다 · 하나를 지워도 다른 앱 되돌리기가 된다 · zip 이 없어지면 다시 빌드한다
 //   R2 자동 멈춤 · 관리자 멈춤을 책임자가 «멈추기 → 다시 켜기» 로 못 푼다 · R3 남의 워크스페이스 함수는 멈추지도 지우지도 않는다
 //   R4 함수를 못 지우면 줄을 남기고 하우스키핑이 다시 지운다 · R5 상한을 바꾸면 같은 코드도 새 설정의 판으로 · R6 화면 단추 길(세션 없음 → 만들기 세션)
+//  #4792 워크스페이스 상한(W — 사양 엣지 표 spec-4792.md): W1 코드 크기 기록(C1 · C2 · U2) · W2 함수 수 상한(F2~F4 · F1 은 D1 이 함수 0개에서 지난다)
+//   W3 동시 첫 배포(F5) · W4 코드 저장 상한 · 같은 빌드 재사용(C3 · C7) · W5 함수 없는 앱이 코드 상한(C6) · W6 보기 · 고치기 범위(U1 · U3)
+//   W7 코드를 올린 뒤 실패해도 다시 잰다(C9) · W8 공개 길도 같은 판정(F7)
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import crypto from "node:crypto";
@@ -38,7 +41,7 @@ const { itemsPool } = await import(`${D}/db/client.js`);
 const { setServerDepsForTest } = await import(`${D}/apps/app-server-deploy.js`);
 const { SERVER_BUILDER_JS } = await import(`${D}/apps/app-server-builder.js`);
 const { watchAppServers, resetWatchStateForTest, runAppServerHousekeeping } = await import(`${D}/apps/app-server-watch.js`);
-const { appServerPolicy, setServerStopped } = await import(`${D}/apps/app-server-store.js`);
+const { appServerPolicy, setServerStopped, claimServerRow } = await import(`${D}/apps/app-server-store.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
 
@@ -96,14 +99,14 @@ const api = {
     if (fns.has(i.FunctionName)) throw new AwsError(409, "ResourceConflictException", "exists");
     const z = zipOr(i.Code.S3Key);
     fns.set(i.FunctionName, { cfg: { FunctionName: i.FunctionName, Role: i.Role, Handler: i.Handler, Runtime: i.Runtime, MemorySize: i.MemorySize, Timeout: i.Timeout,
-      Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: shaB64(z), State: "Active", LastUpdateStatus: "Successful" },
+      Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: shaB64(z), CodeSize: z.length, State: "Active", LastUpdateStatus: "Successful" },
       tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
     return cfgOf(fns.get(i.FunctionName));
   },
   updateFunctionCode: async (n, code) => {
     log.push(["updateFunctionCode", n, code.S3Key]);
     if (s3Denied) { s3Denied = false; throw new AwsError(400, "InvalidParameterValueException", "Error occurred while GetObject. S3 Error Code: AccessDenied. S3 Error Message: Access Denied"); }
-    const f = fns.get(n); f.cfg.CodeSha256 = shaB64(zipOr(code.S3Key)); return cfgOf(f);
+    const f = fns.get(n); const z = zipOr(code.S3Key); f.cfg.CodeSha256 = shaB64(z); f.cfg.CodeSize = z.length; return cfgOf(f);
   },
   updateFunctionConfiguration: async (n, i) => { log.push(["updateFunctionConfiguration", n, i]); const f = fns.get(n); Object.assign(f.cfg, i, i.Layers ? { Layers: i.Layers.map((a) => ({ Arn: a })) } : {}); return cfgOf(f); },
   publishVersion: async (n, i) => {
@@ -118,7 +121,8 @@ const api = {
     f.versions.push(v);
     return { ...snap, Version: v.Version };
   },
-  listVersions: async (n) => [{ Version: "$LATEST" }, ...(fns.get(n)?.versions ?? [])],
+  //  실제(ListVersionsByFunction)처럼 $LATEST 와 판마다 CodeSize — #4792 코드 저장 셈이 이 값을 더한다.
+  listVersions: async (n) => { const f = fns.get(n); return f ? [{ Version: "$LATEST", CodeSize: f.cfg.CodeSize }, ...f.versions.map((v) => ({ Version: v.Version, CodeSize: v.cfg.CodeSize }))] : []; },
   putAlias: async (n, a, v) => { log.push(["putAlias", n, a, v]); fns.get(n).aliases.set(a, v); return { Name: a, FunctionVersion: v, AliasArn: `${n}:${a}` }; },
   invoke: async (n, qual) => {
     log.push(["invoke", n, qual]);
@@ -511,6 +515,133 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   chk("R9 빌드 도중 기록이 지워지면 방금 올린 zip 을 지운다 · 함수에 올리지 않는다", d9.status === "failed" && leftZips.length === 0 && deletedZips.some((k) => k.includes("/z/gone/"))
     && !calls("createFunction").some((x) => x[1].FunctionName.includes("gone")), JSON.stringify({ status: d9.status, stage: d9.stage, error: d9.error, leftZips }));
   await call("org_app_remove", { app_id: "gone" }, boss);
+}
+
+// ── #4792 워크스페이스 상한(W) ──
+const MiB = 1024 * 1024;
+const codeOf = (name) => { const f = fns.get(name); return f ? (f.cfg.CodeSize ?? 0) + f.versions.reduce((n, v) => n + (v.cfg.CodeSize ?? 0), 0) : 0; };
+const fnRows = async () => Number((await q(`SELECT count(*)::int AS n FROM org_app_server`))[0].n);
+const codeBytes = async () => Number((await serverRow()).code_bytes);   // 날 SQL 은 BIGINT 를 글자로 준다
+const srvCode = (tag) => filesOf({ server: `require('http').createServer((q,s)=>s.end('${tag}')).listen(Number(process.env.PORT));` });
+
+// W1 배포가 끝나면 그 함수의 코드 크기 = AWS 가 알려 준 $LATEST + 남은 판 CodeSize 합(옛 판 정리 뒤) · 상태에 code_mb
+{
+  await call("app_save", { files: srvCode("w1") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const cb = await codeBytes();
+  const f = fns.get(FN);
+  const st = await call("app_server_status", { app_id: "srv" }, alice, aliceCtx);
+  chk("W1 배포 뒤 code_bytes = $LATEST + 남은 판 CodeSize 합 · 옛 판은 정리됐다 · 상태 code_mb", d.status === "deployed" && cb > 0 && cb === codeOf(FN)
+    && f.versions.length <= 3 + 2 && st.function?.code_mb === Math.round((cb / MiB) * 10) / 10,
+    JSON.stringify({ status: d.status, code_bytes: cb, want: codeOf(FN), versions: f.versions.length, code_mb: st.function?.code_mb }));
+}
+
+// W2 함수 수 상한 — 함수가 없는 앱은 빌드 전에 409 · 함수 있는 앱은 그대로 · 상한을 올리면 된다
+{
+  const n0 = await fnRows();
+  await call("app_server_limits_set", { workspace_functions_max: n0 }, boss);
+  await call("app_save", { files: twin("cap-new") }, alice, aliceCtx);
+  const seats0 = seats.length, cf0 = calls("createFunction").length;
+  const e = await errOf(call("app_server_deploy", { app_id: "cap-new", wait_s: 120 }, alice, aliceCtx));
+  chk("W2a 함수 수 = 상한 · 새 앱 → 409(수 · 상한 · 고치는 길) · 빌드 0 · 함수 만들기 0 · 함수 줄 없음",
+    e?.status === 409 && /상한/.test(String(e?.message)) && /workspace_functions_max/.test(String(e?.message)) && seats.length === seats0
+    && calls("createFunction").length === cf0 && !(await rowOf("cap-new")), String(e?.message));
+  await call("app_save", { files: srvCode("w2") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  chk("W2b 함수가 있는 앱은 상한에 닿아도 새 코드를 올린다", d.status === "deployed" && d.build.reused === false, JSON.stringify({ status: d.status, error: d.error }));
+  await call("app_server_limits_set", { workspace_functions_max: n0 + 1 }, boss);
+  const ok = await call("app_server_deploy", { app_id: "cap-new", wait_s: 120 }, alice, aliceCtx);
+  chk("W2c 상한을 올리면 새 앱이 배포된다", ok.status === "deployed" && !!(await rowOf("cap-new")) && fns.has("lvly-app-cap-new-local"), JSON.stringify({ status: ok.status, error: ok.error }));
+  await call("org_app_remove", { app_id: "cap-new" }, boss);
+  await call("app_server_limits_set", { reset: true }, boss);
+}
+
+// W3 함수 수 = 상한−1 에 다섯 앱이 같은 때 줄을 잡아도 하나만 생긴다(세기와 만들기를 워크스페이스 자문 락으로 묶음)
+{
+  const n0 = await fnRows();
+  const ids = ["race-a", "race-b", "race-c", "race-d", "race-e"];
+  const got = await Promise.all(ids.map((id) => claimServerRow(id, `lvly-app-${id}-local`, n0 + 1)));
+  const made = (await q(`SELECT app_id FROM org_app_server WHERE app_id = ANY($1)`, [ids])).length;
+  chk("W3 동시 첫 배포 다섯 → 함수 줄은 하나만 · 나머지는 줄 없이 지금 수(= 상한)를 받는다", made === 1 && got.filter((g) => g.row).length === 1
+    && got.filter((g) => !g.row).every((g) => g.count === n0 + 1), JSON.stringify({ made, got: got.map((g) => ({ row: !!g.row, count: g.count })) }));
+  await q(`DELETE FROM org_app_server WHERE app_id = ANY($1)`, [ids]);
+}
+
+// W4 코드 저장 상한 — 다른 함수 합 + 이 함수 배포 뒤 > 상한이면 코드를 안 올린다 · 같은 빌드를 다시 쓰는 배포는 판정 없이 된다
+{
+  await call("app_server_limits_set", { workspace_code_mb: 100 }, boss);
+  await q(`INSERT INTO org_app_server(app_id, function_name, code_bytes) VALUES ('ghost-big', 'lvly-app-ghost-big-local', $1)`, [100 * MiB]);
+  const r0 = await serverRow();
+  const uc0 = calls("updateFunctionCode").length, pv0 = calls("publishVersion").length;
+  //  옛 판이 쌓인 함수를 비슷한 크기로 고치면 배포 뒤 크기가 그대로라 상한을 넘어도 된다(C4) — 늘어나는 배포를 만들려고 압축이 안 되는 150KB 를 싣는다.
+  const bulk = crypto.randomBytes(150_000).toString("base64");
+  await call("app_save", { files: filesOf({ server: `// ${bulk}\nrequire('http').createServer((q,s)=>s.end('w4')).listen(Number(process.env.PORT));` }) }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  const r1 = await serverRow();
+  chk("W4a 코드 저장이 상한을 넘으면 409(까닭) · 코드 안 올림 · 판 고정 없음 · 별칭 그대로 · last_error", d.status === "failed" && /코드 저장/.test(String(d.error))
+    && /workspace_code_mb/.test(String(d.error)) && calls("updateFunctionCode").length === uc0 && calls("publishVersion").length === pv0
+    && r1.cur_lambda_version === r0.cur_lambda_version && fns.get(FN).aliases.get("cur") === r0.cur_lambda_version && /코드 저장/.test(String(r1.last_error)),
+    JSON.stringify({ status: d.status, error: d.error, last_error: r1.last_error }));
+  //  cur 가 이미 가리키는 빌드(지금 판과 같은 코드)를 다시 넣으면 새 코드가 없다 — 상한을 넘은 채로도 된다.
+  await call("app_save", { files: srvCode("w2") }, alice, aliceCtx);
+  const uc1 = calls("updateFunctionCode").length, pv1 = calls("publishVersion").length;
+  const d2 = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  chk("W4b 같은 빌드 재사용은 판정 없이 된다 · 코드 올리기 · 판 고정 0", d2.status === "deployed" && d2.build.reused === true
+    && calls("updateFunctionCode").length === uc1 && calls("publishVersion").length === pv1, JSON.stringify({ status: d2.status, error: d2.error }));
+}
+
+// W5 함수가 없는 앱이 코드 저장 상한에 걸리면 — 함수를 만들지 않고 빈 함수 줄도 남기지 않는다(함수 수 한 칸을 차지하지 않게)
+{
+  await call("app_save", { files: twin("code-new") }, alice, aliceCtx);
+  const cf0 = calls("createFunction").length;
+  const d = await call("app_server_deploy", { app_id: "code-new", wait_s: 120 }, alice, aliceCtx);
+  chk("W5 새 앱이 코드 상한에 걸림 → 실패(까닭) · 함수 만들기 0 · 함수 줄 없음 · 빌드는 남는다", d.status === "failed" && /코드 저장/.test(String(d.error))
+    && calls("createFunction").length === cf0 && !(await rowOf("code-new")) && d.build?.status === "ok",
+    JSON.stringify({ status: d.status, error: d.error, build: d.build?.status }));
+}
+
+// W8 공개 길도 같은 판정 — 빌드는 있고 함수는 없는 앱을 공개하면: 코드 상한이면 서버를 옮기지 못하고 줄도 안 남는다 · 함수 수 상한이면 줄을 안 만든다
+{
+  const cf0 = calls("createFunction").length;
+  const pub = await call("app_visibility_set", { app_id: "code-new", visibility: "all" }, alice, aliceCtx);
+  chk("W8a 공개는 되고 서버 옮기기는 코드 상한으로 실패 · 함수 만들기 0 · 줄 없음", pub.changed === true && pub.server?.ok === false && /코드 저장/.test(String(pub.server?.message))
+    && calls("createFunction").length === cf0 && !(await rowOf("code-new")), JSON.stringify(pub.server));
+  await q(`DELETE FROM org_app_server WHERE app_id='ghost-big'`);
+  await call("app_server_limits_set", { reset: true }, boss);
+  await call("app_server_limits_set", { workspace_functions_max: await fnRows() }, boss);
+  await call("app_visibility_set", { app_id: "code-new", visibility: "me" }, alice, aliceCtx);
+  const pub2 = await call("app_visibility_set", { app_id: "code-new", visibility: "all" }, alice, aliceCtx);
+  chk("W8b 함수 수 상한이면 공개 뒤 서버 옮기기가 실패(까닭) · 함수 만들기 0 · 줄 없음", pub2.changed === true && pub2.server?.ok === false
+    && /workspace_functions_max/.test(String(pub2.server?.message)) && calls("createFunction").length === cf0 && !(await rowOf("code-new")), JSON.stringify(pub2.server));
+  await call("app_server_limits_set", { reset: true }, boss);
+  await call("org_app_remove", { app_id: "code-new" }, boss);
+}
+
+// W6 보기 — 사용량 · 새 두 키 / 고치기 — 범위 밖은 400 · 범위 안은 반영
+{
+  const lim = await call("app_server_limits", {}, alice, aliceCtx);
+  const n = await fnRows();
+  chk("W6a app_server_limits — usage(functions · code_mb) · policy · min · ceiling 에 새 두 키", lim.usage?.functions === n && typeof lim.usage?.code_mb === "number"
+    && lim.policy?.workspace_functions_max === 20 && lim.policy?.workspace_code_mb === 5120 && lim.min?.workspace_code_mb === 100
+    && lim.ceiling?.workspace_functions_max === 200 && lim.ceiling?.workspace_code_mb === 20480, JSON.stringify({ usage: lim.usage, policy: lim.policy }));
+  const bad = await Promise.all([{ workspace_functions_max: 0 }, { workspace_functions_max: 201 }, { workspace_code_mb: 99 }, { workspace_code_mb: 20481 }]
+    .map((x) => errOf(call("app_server_limits_set", x, boss))));
+  const good = await call("app_server_limits_set", { workspace_functions_max: 7, workspace_code_mb: 2048 }, boss);
+  chk("W6b 범위 밖(0 · 201 · 99MB · 20481MB) 400 · 범위 안은 반영", bad.every((e) => e?.status === 400) && good.policy?.workspace_functions_max === 7 && good.policy?.workspace_code_mb === 2048,
+    JSON.stringify({ bad: bad.map((e) => e?.status), policy: good.policy }));
+  await call("app_server_limits_set", { reset: true }, boss);
+}
+
+// W7 코드를 올린 뒤 실패해도(시험 호출 실패) 그 함수의 코드 크기를 다시 잰다 — 낡은 값으로 상한을 세지 않게
+{
+  const b0 = await codeBytes();
+  invokeMode = "notready";
+  await call("app_save", { files: srvCode("w7-a-longer-body-so-the-zip-size-changes") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice, aliceCtx);
+  invokeMode = "ok";
+  const b1 = await codeBytes();
+  chk("W7 시험 호출 실패(코드는 올라감) → code_bytes 를 다시 잰 값 = 가짜 Lambda 합 · 이전 값과 다르다", d.status === "failed" && d.stage === "smoke" && b1 === codeOf(FN) && b1 !== b0,
+    JSON.stringify({ status: d.status, stage: d.stage, b0, b1, want: codeOf(FN) }));
 }
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip

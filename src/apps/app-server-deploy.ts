@@ -17,7 +17,7 @@ import {
   LAMBDA_HANDLER, appServerEnv, functionNameFor, lambdaEnvFor, logGroupFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
-import type { AppServerPolicy } from "./app-server-policy.js";
+import { codeBytesAfterDeploy, codeBytesOf, codeCapDenial, functionsCapDenial, type AppServerPolicy } from "./app-server-policy.js";
 import { buildKeyFor, ensureServerBuild, usableBuild, type BuildDeps, type BuildSeat } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
@@ -171,6 +171,8 @@ export class DeployError extends HttpError {
  */
 export async function deployBuildToAliases(i: {
   app: Pick<OrgApp, "id" | "title">; versionNo: number | null; buildKey: string; zipKey: string; zipSha256: string;
+  /** zip 크기(바이트) — 워크스페이스 코드 저장 상한(#4792)이 이번 배포가 더할 크기를 셈한다. */
+  zipBytes: number;
   aliases: Array<"cur" | "pub">; policy: AppServerPolicy;
 }, deps0: ServerDeps = {}): Promise<DeployResult> {
   const deps = withDeps(deps0);
@@ -182,11 +184,14 @@ export async function deployBuildToAliases(i: {
   const slug = tenantSlug() ?? "local";
   const fn = await functionNameOf(i.app.id, env);
   if (!fn) throw nameTooLong(i.app.id);
-  await st.ensureServerRow(i.app.id, fn);
+  //  #4792 새 함수는 워크스페이스 함수 수 상한 안에서만 — 공개 · 되돌리기도 이 길로 와서, 함수가 없는 앱이면 여기서 막힌다(있는 함수는 늘 고친다).
+  const claim = await st.claimServerRow(i.app.id, fn, i.policy.workspace_functions_max);
+  if (!claim.row) throw new HttpError(409, functionsCapDenial(i.policy, claim.count) ?? "앱 서버 줄을 만들지 못했습니다");
   const sleep = deps.sleep ?? sleepDefault;
   let locked = false;
   for (let n = 0; n < 30 && !locked; n++) { locked = await st.lockServer(i.app.id, 15 * 60); if (!locked) await sleep(deps.pollMs ?? 2000); }
   if (!locked) throw new HttpError(409, lockedMsg);
+  let owned = false;   // 이 워크스페이스의 함수로 확인했다 — 도중에 실패해도 남은 판의 코드 크기를 다시 잰다(#4792)
   try {
     const row = await st.getServerRow(i.app.id);
     const want = {
@@ -205,8 +210,23 @@ export async function deployBuildToAliases(i: {
     if (reuse) {
       version = reuse;
     } else {
-      await api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days);
       let got = await api.getFunction(fn);
+      //  이름이 겹친 남의 워크스페이스 함수면 무엇을 재거나 고치기 전에 멈춘다(아래 만든 뒤의 확인과 같은 판정).
+      if (got && got.Tags?.["lvly:tenant"] !== blobTenant()) {
+        await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+        throw new HttpError(409, foreignMsg(fn));
+      }
+      //  #4792 코드 저장 상한 — 이 함수가 배포 뒤 차지할 크기(옛 판 정리와 같은 규칙)를 다른 함수들의 합에 더해 본다.
+      //   이번에 옮기지 않는 별칭(초안만 올릴 때의 pub)이 가리키는 판은 정리에서 빠지니 남는 쪽에 센다.
+      const vers = got ? await api.listVersions(fn) : [];
+      const after = codeBytesAfterDeploy(vers, i.zipBytes, i.policy.keep_versions, i.aliases.includes("pub") ? [] : [row?.pub_lambda_version]);
+      const full = codeCapDenial(i.policy, await st.sumServerCodeBytes(i.app.id), codeBytesOf(vers), after);
+      if (full) {
+        //  함수가 아직 없는 앱이면 방금 잡은 줄을 지운다 — 남으면 함수 수 상한의 한 칸을 빈 줄이 차지한다.
+        if (!got) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+        throw new HttpError(409, full);
+      }
+      await api.ensureLogGroup(logGroupFor(fn), i.policy.log_retention_days);
       if (!got) {
         //  실행 역할을 막 만든 직후(인프라 적용 직후)엔 Lambda 가 그 역할을 아직 못 맡는다는 오류가 잠깐 난다 — 몇 번 다시 한다.
         for (let n = 0; ; n++) {
@@ -235,6 +255,7 @@ export async function deployBuildToAliases(i: {
         await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
         throw new HttpError(409, foreignMsg(fn));
       }
+      owned = true;
       if (got.Configuration.CodeSha256 !== i.zipSha256) {
         await waitReady(api, fn, deps);
         await api.updateFunctionCode(fn, { S3Bucket: bucket, S3Key: i.zipKey });
@@ -275,6 +296,8 @@ export async function deployBuildToAliases(i: {
       await st.invalidateServerBuild(i.app.id, i.buildKey, "빌드 결과(zip)를 함수에 올리지 못했습니다(저장소에 없음)").catch(() => { /* 다음에 */ });
     }
     if (e instanceof AwsError) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 AWS 오류(#4484)");
+    //  코드를 올렸거나 판을 고정한 뒤 실패했으면 그 함수의 코드 크기가 바뀌었다 — 다시 재 둔다(상한이 낡은 값으로 세지 않게).
+    if (owned) await recordCodeBytes(api, fn, i.app.id).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 재기 실패(비치명)"));
     const msg = publicError(e);
     await st.setServerError(i.app.id, msg).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
     if (e instanceof AwsError) throw new HttpError(502, msg);
@@ -284,14 +307,30 @@ export async function deployBuildToAliases(i: {
   }
 }
 
-/** 별칭이 가리키지 않는 옛 함수 판 — 최근 keep 개만 남긴다(코드 저장 합 300GiB 를 아껴 쓴다). */
+/**
+ * 별칭이 가리키지 않는 옛 함수 판 — 최근 keep 개만 남긴다(코드 저장 합 300GiB 를 아껴 쓴다). 남은 판의 코드 크기 합을 적는다(#4792 —
+ *  지우다 실패해도 지운 것까지만 빼서 적는다). 이 규칙을 바꾸면 codeBytesAfterDeploy(상한 셈)도 같이 바꾼다.
+ */
 async function pruneVersions(api: LambdaApi, fn: string, appId: string, keep: number): Promise<number> {
   const row = await st.getServerRow(appId);
   const pinned = new Set([row?.cur_lambda_version, row?.pub_lambda_version].filter((v): v is string => !!v));
-  const nums = (await api.listVersions(fn)).map((v) => v.Version).filter((v): v is string => !!v && /^\d+$/.test(v)).sort((a, b) => Number(b) - Number(a));
+  const all = await api.listVersions(fn);
+  const nums = all.map((v) => v.Version).filter((v): v is string => !!v && /^\d+$/.test(v)).sort((a, b) => Number(b) - Number(a));
   const drop = nums.filter((v, idx) => idx >= keep && !pinned.has(v));
-  for (const v of drop) await api.deleteFunction(fn, v);
+  const gone = new Set<string>();
+  try {
+    for (const v of drop) { await api.deleteFunction(fn, v); gone.add(v); }
+  } finally {
+    await st.setServerCodeBytes(appId, codeBytesOf(all.filter((v) => !gone.has(v.Version ?? "")))).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 적기 실패(비치명)"));
+  }
   return drop.length;
+}
+
+/** 이 함수의 지금 코드 크기를 AWS 에서 재 적는다(#4792 — 판 정리를 못 한 실패 길). */
+async function recordCodeBytes(api: LambdaApi, fn: string, appId: string): Promise<number> {
+  const bytes = codeBytesOf(await api.listVersions(fn));
+  await st.setServerCodeBytes(appId, bytes);
+  return bytes;
 }
 
 // ── 지금 판(설치된 판) 올리기 — app_server_deploy · 「이대로 넣기」·「공개하기」 ──
@@ -333,8 +372,12 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   const env = deps.env ?? appServerEnv();
   if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
   if (!t.bundle) throw new HttpError(409, "판 파일 목록이 없습니다");
-  //  함수 이름(64자)을 못 지으면 몇 분 빌드한 뒤가 아니라 지금 알린다.
+  //  함수 이름(64자)을 못 지으면 · 워크스페이스 함수 수가 상한에 닿았으면(#4792 · 함수가 아직 없는 앱만) 몇 분 빌드한 뒤가 아니라 지금 알린다.
   if (!(await functionNameOf(t.app.id, env))) throw nameTooLong(t.app.id);
+  if (!(await st.getServerRow(t.app.id))) {
+    const full = functionsCapDenial(policy, await st.countServerRows());
+    if (full) throw new HttpError(409, full);
+  }
   const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
   const have = await usableBuild(await st.getServerBuild(t.app.id, key), deps);
   if (!have && !seat) {
@@ -352,7 +395,7 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   }
   const aliases: Array<"cur" | "pub"> = installedIsPublished(t.app) ? ["cur", "pub"] : ["cur"];
   try {
-    const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, aliases, policy }, deps);
+    const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases, policy }, deps);
     return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy };
   } catch (e) {
     const stage = e instanceof DeployError ? e.stage : "deploy";
@@ -401,7 +444,7 @@ export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, d
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: "공개한 판의 서버 빌드가 없어 서버를 옮기지 못했습니다 — app_server_deploy" };
-    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, aliases: ["cur", "pub"], policy }, deps);
+    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: ["cur", "pub"], policy }, deps);
     return { ok: true, state: "deployed", deploy };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "공개 뒤 앱 서버 옮기기 실패(#4484)");
@@ -420,7 +463,7 @@ export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, de
     const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: `${t.versionNo}판은 서버가 빌드된 적이 없어(또는 빌드 결과가 없어져) 서버는 그대로입니다 — 「이대로 넣기」 또는 app_server_deploy` };
-    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
+    const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
     return { ok: true, state: "deployed", deploy };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "되돌린 뒤 앱 서버 옮기기 실패(#4484)");

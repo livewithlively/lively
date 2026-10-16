@@ -5,6 +5,7 @@ import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
 import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, logGroupFor, serverDeclOf } from "./app-server-config.js";
+import { mbOf } from "./app-server-policy.js";
 import { buildKeyFor, liveBuildProgress } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import {
@@ -139,6 +140,7 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       pub: row.pub_lambda_version ? { version_no: row.pub_version_no, lambda_version: row.pub_lambda_version, build_key: row.pub_build_key, at: row.pub_at } : null,
       stopped: row.stopped_at ? { at: row.stopped_at, by: row.stopped_by, kind: row.stop_kind, reason: row.stop_reason } : null,
       last_error: row.last_error,
+      code_mb: mbOf(row.code_bytes),   // #4792 이 함수의 코드 저장(판마다의 zip 합 · 워크스페이스 상한 workspace_code_mb 에 든다)
     } : null,
     builds: builds.map((b) => ({
       build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,

@@ -1,6 +1,6 @@
 // 앱 서버 저장 계층(#4484 앱 v2-5) — 빌드 기록(org_app_server_build) · 앱별 함수 상태(org_app_server) · 상한(org_runtime_config.app_server_policy).
 //  표 정의는 org/schema/apps.ts. 테넌트 칸(tenant_id)은 컬럼 기본값이 채우고 ON CONFLICT 타깃은 그 칸을 포함한다(ensureTenantColumn 규약).
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 import { audit } from "../org/store/audit.js";
 import { resolveAppServerPolicy, type AppServerPolicy } from "./app-server-policy.js";
@@ -145,24 +145,55 @@ export interface ServerRow {
   pub_version_no: number | null; pub_build_key: string | null; pub_lambda_version: string | null; pub_at: string | null;
   stopped_at: string | null; stopped_by: string | null; stop_kind: "auto" | "manual" | null; stop_reason: string | null;
   lock_until: string | null; last_error: string | null;
+  /** #4792 이 함수의 코드 저장(바이트) — 마지막 배포 · 옛 판 정리 때 AWS 가 알려 준 판마다의 CodeSize 합($LATEST 포함). */
+  code_bytes: number;
   created_at: string; updated_at: string;
 }
+//  code_bytes 는 BIGINT 라 드라이버가 글자로 준다 — 숫자로 읽는다(빌드 기록의 ::float8 과 같은 까닭).
+const toServerRow = (x: Record<string, unknown>): ServerRow => ({ ...x, code_bytes: Number(x.code_bytes ?? 0) || 0 }) as ServerRow;
 
 export async function getServerRow(appId: string): Promise<ServerRow | null> {
   const r = await itemsPool.query(`SELECT * FROM org_app_server WHERE app_id=$1`, [appId]);
-  return (r.rows[0] as ServerRow | undefined) ?? null;
+  return r.rows[0] ? toServerRow(r.rows[0] as Record<string, unknown>) : null;
 }
 export async function listServerRows(): Promise<ServerRow[]> {
   const r = await itemsPool.query(`SELECT * FROM org_app_server ORDER BY app_id`);
-  return r.rows as ServerRow[];
+  return r.rows.map((x) => toServerRow(x as Record<string, unknown>));
 }
 
-/** 줄이 없으면 만든다(함수 이름을 그때 못 박는다 — 슬러그가 나중에 바뀌어도 이 앱의 함수는 그대로). */
-export async function ensureServerRow(appId: string, functionName: string): Promise<ServerRow> {
-  await itemsPool.query(`INSERT INTO org_app_server(app_id, function_name) VALUES ($1, $2) ON CONFLICT (tenant_id, app_id) DO NOTHING`, [appId, functionName]);
-  const row = await getServerRow(appId);
-  if (!row) throw new Error(`앱 서버 줄을 만들지 못했습니다: ${appId}`);
-  return row;
+/** 이 워크스페이스의 함수 줄 수(#4792 상한이 센다 — 앱마다 하나 · 함수를 못 지워 남긴 줄도 함수가 있으니 센다). */
+export async function countServerRows(): Promise<number> {
+  const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_server`);
+  return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
+}
+/** 이 워크스페이스 함수들의 코드 저장 합(바이트, #4792) — exceptApp 을 주면 그 앱 것은 뺀다(배포하는 함수는 AWS 에서 직접 잰다). */
+export async function sumServerCodeBytes(exceptApp: string | null = null): Promise<number> {
+  const r = await itemsPool.query(`SELECT coalesce(sum(code_bytes), 0)::float8 AS n FROM org_app_server WHERE $1::text IS NULL OR app_id <> $1`, [exceptApp]);
+  return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
+}
+export async function setServerCodeBytes(appId: string, bytes: number): Promise<void> {
+  await itemsPool.query(`UPDATE org_app_server SET code_bytes=$2 WHERE app_id=$1`, [appId, Math.max(0, Math.round(bytes))]);
+}
+
+/**
+ * 함수 줄을 잡는다 — 없으면 만든다(함수 이름을 그때 못 박는다 — 슬러그가 나중에 바뀌어도 이 앱의 함수는 그대로).
+ *  이미 있으면 그 줄(상한과 무관 — 있는 함수는 늘 고친다). 없으면 이 워크스페이스의 줄이 max 개 밑일 때만 만든다(#4792) — 못 만들면 row null 과 지금 수.
+ *  세기와 만들기를 한 트랜잭션 · 워크스페이스 자문 락으로 묶는다: 두 앱의 첫 배포가 같은 때 와도 둘 다 «아직 밑» 을 보고 상한을 넘지 않게.
+ *  락은 클러스터 전역이라 키에 테넌트를 섞는다(남의 워크스페이스 배포를 기다리지 않게 · v6 project-store 와 같은 꼴).
+ */
+export async function claimServerRow(appId: string, functionName: string, max: number): Promise<{ row: ServerRow | null; count: number }> {
+  const out = await withTx(async (c) => {
+    await c.query(`SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|lvly-app-server-functions'))`);
+    const have = await c.query(`SELECT 1 FROM org_app_server WHERE app_id=$1`, [appId]);
+    const n = Number(((await c.query(`SELECT count(*)::int AS n FROM org_app_server`)).rows[0] as { n: number } | undefined)?.n ?? 0);
+    if (!have.rows.length) {
+      if (n >= max) return { created: false, count: n };
+      await c.query(`INSERT INTO org_app_server(app_id, function_name) VALUES ($1, $2) ON CONFLICT (tenant_id, app_id) DO NOTHING`, [appId, functionName]);
+      return { created: true, count: n + 1 };
+    }
+    return { created: false, count: n };
+  });
+  return { row: await getServerRow(appId), count: out.count };
 }
 
 /** 배포 잠금 — 한 앱의 배포를 한 줄로(별칭을 둘이 동시에 옮기면 엉뚱한 판이 남는다). 잡으면 true. 끝나면 unlockServer. */
