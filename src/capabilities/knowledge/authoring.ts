@@ -13,10 +13,11 @@ import {
 } from "../../v6/knowledge-store.js";
 // #4824 증류 저장 — 저장 · 원본 연결 · 공개범위를 한 트랜잭션에서(사양 R6) · 증류 배치는 원본 없이 못 쓴다(R7).
 import {
-  derivedEnforced, distillBatchOf, linkDerivedSources, planNewDerivedKnowledge, withDerivedTx, writeNewDerivedKnowledge,
+  derivedEnforced, linkDerivedSources, planNewDerivedKnowledge, withDerivedTx, writeNewDerivedKnowledge,
   type LinkDerivedResult,
 } from "../../v6/derived-visibility.js";
 import { derivedDupNote } from "../../v6/knowledge-links.js";
+import { distillBatchOf } from "../../org/distill/distill-batch.js";
 import { canSeeSource } from "../../v6/source-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
@@ -211,16 +212,21 @@ export const knowledgeSave: Capability = {
     if (derivedIds.length > DERIVED_FROM_MAX) {
       throw new HttpError(400, `derived_from 은 한 번에 ${DERIVED_FROM_MAX}건까지입니다(${derivedIds.length}건) — 자료를 나눠 저장하세요. 아무것도 저장하지 않았습니다.`);
     }
-    if (!derivedIds.length && input.is_folder !== true && await distillBatchOf(ctx?.session)) {
+    //  축 상태는 트랜잭션(잠금) **전에** 읽어 넘긴다 — 잠금을 쥔 채 풀을 기다리지 않게(derived-visibility.ts 머리말). 30초 캐시.
+    //   폴더도 같은 값을 쓴다 — derived_from 을 실은 폴더가 잠긴 자료에서 나왔으면 그 대상으로 태어나야 한다(가드만 폴더를 뺀다).
+    const enforced = await derivedEnforced();
+    //  증류 배치 가드는 축이 켜져 있을 때만 — 꺼진 워크스페이스는 공개범위를 강제하지 않아 «연결 빠뜨림 = 공개로 남음» 이 아니고,
+    //   종전 두 번 호출(저장 → source_link_knowledge)도 켤 때 reconcileAllDerived 가 연결을 따라 맞춘다(격리 리뷰 — 레인마다
+    //   저장된 옛 기준 문구가 첫 저장마다 400 을 맞지 않게).
+    if (!derivedIds.length && input.is_folder !== true && enforced && await distillBatchOf(ctx?.session)) {
       throw new HttpError(400,
         "증류 배치의 지식 저장에는 derived_from(이 지식이 나온 자료 id 목록)이 필수입니다 — knowledge_save(…, derived_from: [자료 id]) 로 "
-        + "저장과 원본 연결을 한 번에 하세요(따로 source_link_knowledge 를 부르는 두 번 호출은 연결이 빠지면 잠긴 자료로 만든 지식이 공개로 남습니다).");
+        + "저장과 원본 연결을 한 번에 하세요(따로 source_link_knowledge 를 부르는 두 번 호출은 연결이 빠지면 잠긴 자료로 만든 지식이 공개로 남습니다). "
+        + "아무것도 저장하지 않았습니다.");
     }
     for (const id of derivedIds) {
       if (!(await canSeeSource(id, ctx?.viewer ?? null))) throw new HttpError(404, `자료 #${id} 없음`);
     }
-    //  축 상태는 트랜잭션(잠금) **전에** 읽어 넘긴다 — 잠금을 쥔 채 풀을 기다리지 않게(derived-visibility.ts 머리말).
-    const enforced = derivedIds.length ? await derivedEnforced() : false;
     //  #1631 중복 증류 알림 — 두 번 호출 시절 source_link_knowledge 에만 있던 것을 이 길에도 싣는다(커밋 뒤에 잰다).
     const dupWarning = async (name: string): Promise<Record<string, unknown>> => {
       const notes = new Set<string>();
@@ -332,6 +338,8 @@ export const knowledgeSave: Capability = {
         // #4824 — 저장 · 원본 연결 · 공개범위를 **한 트랜잭션**에서(사양 R6). 공개범위는 INSERT 전에 정해 그 값으로 태어난다 —
         //  잠긴 자료로 만든 지식이 한순간도 공개로 있지 않다. 하나라도 실패하면 행·연결·감사 전부 롤백된다.
         //  세션 스탬핑(비공개 프로젝트)도 같은 자리에서 정한다 — 잠긴 자료와 겹치면 거절(planNewDerivedKnowledge).
+        //  ⚠ 스탬프 조회가 실패하면(null) 리스트 없이 만든다 — derived_from 이 없는 저장과 같은 종전 규칙이다(프로젝트 스탬핑은
+        //   #1291 v2 의 best-effort). 잠긴 자료의 대상은 그대로 걸리므로 «잠긴 자료로 만든 지식이 공개» 는 생기지 않는다.
         const stampList = await sessionStampListId(ctx?.session).catch(() => null);
         let created;
         try {
@@ -374,6 +382,7 @@ export const knowledgeSave: Capability = {
             note: "이 지식은 지금 세션이 속한 프로젝트가 비공개라, 그 프로젝트를 볼 수 있는 사람에게만 보이도록 저장됐습니다(공개 위키에는 안 뜹니다). 전 조직에 공유할 내용이라면 프로젝트 밖 세션에서 다시 쓰거나 사람에게 공개범위 변경을 요청하세요." } }
         : {};
       const wl = wikiLinkInfo(wikilinks);   // #907 자동 엣지 결과 — 응답 최상위로(knowledge 행에 섞지 않는다)
+      const derivedOut = derivedInfo ? { derived: derivedInfo, ...(await dupWarning(knowledge.name)) } : {};
       const gateInfo = lifecycle === "pending"
         ? { action: "confirm", state: "pending", rule_id: gate.rule_id,
             note: "검토 대기(pending)로 저장됐습니다 — 사람이 승인하기 전까지 검색·세션주입·목록에 노출되지 않습니다(knowledge_get·knowledge_list(lifecycle='pending')로는 조회 가능). 같은 name 으로 다시 저장하면 이 초안이 갱신됩니다." }
@@ -384,10 +393,10 @@ export const knowledgeSave: Capability = {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(derivedInfo ? { derived: derivedInfo, ...(await dupWarning(knowledge.name)) } : {}), ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(derivedInfo ? { derived: derivedInfo, ...(await dupWarning(knowledge.name)) } : {}), ...(await classificationInfo(knowledge.name)) };
+      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).

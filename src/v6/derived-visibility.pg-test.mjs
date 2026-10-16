@@ -23,6 +23,7 @@
 //   G1 증류 배치 세션의 derived_from 없는 저장 → 400 · 지식 없음
 //   G2 증류 배치 세션의 폴더 저장 → 허용
 //   G3 일반 세션의 derived_from 없는 저장 → 종전대로
+//   G5 축이 꺼진 워크스페이스의 증류 배치 → 가드 없음(종전 두 번 호출 · 켤 때 맞춘다)
 //   N1 단위 «모두» → «나만» → 그 단위 자료로 만든 지식이 주인만(완료 조건 ③)
 //   N2 단위 구성원이 빠지면 지식도 같은 만큼
 //   N3 단위를 넓혀도 지식은 그대로
@@ -33,6 +34,13 @@
 //   M1 같은 외부 좌표의 지식 사본(수집기 both) → 자료가 잠기면 이어지고 좁혀짐
 //   V1 지식 상세 — 안 보이는 인용 자료·자식 문서의 제목을 싣지 않는다
 //   C1 연결과 자료 좁히기가 겹쳐도 지식이 자료보다 넓게 남지 않는다
+//   C2 단위 여러 개를 함께 좁힐 때 자료를 전역 id 순으로 잡는다 — 막힌 자리보다 큰 id 를 쥐고 기다리지 않는다(연결과 교착 없음 · 격리 리뷰 차단)
+//   N4 정책 소급(source_vis_policy_backfill)으로 자료가 잠기면 그 자료로 만든 지식도 같은 트랜잭션에서 · 감사에 누가
+//   M2 수집기 both 미러가 잠긴 자료를 들이면 같은 원문의 지식 사본이 이어지고 좁혀진다(미러 배선)
+//   E4 기존 지식 + derived_from 저장 중 판이 바뀌면 409 · 본문·연결·판 그대로
+//   D7 비공개 프로젝트 세션 + 잠긴 자료로 새 지식 → 409 · 지식 없음 / 열린 자료면 프로젝트 리스트로 잠겨 태어난다
+//   V2 지식 상세 — 안 보이는 조상 문서의 제목을 싣지 않는다
+//   T1 프리셋 레인의 저장된 옛 문구는 글자 그대로 같을 때만 새 문구로 · 사람이 고친 줄은 그대로 · 두 번째는 0건
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool, withTx } = await import(`${DIST}/db/client.js`);
@@ -44,7 +52,12 @@ const { invalidateVisAxes } = await import(`${DIST}/v6/visibility-axes.js`);
 const { invalidateSourceVisRules } = await import(`${DIST}/v6/source-vis-policy.js`);
 const { linkKnowledgeSource, getKnowledge } = await import(`${DIST}/v6/knowledge-store.js`);
 const dv = await import(`${DIST}/v6/derived-visibility.js`);
+const { invalidateDistillBatchCache } = await import(`${DIST}/org/distill/distill-batch.js`);
 const store = await import(`${DIST}/org/collect/unit-store.js`);
+const { sourceVisPolicyCapabilities } = await import(`${DIST}/ee/capabilities/source-vis-policy.js`);
+const { mirrorExternalToV6 } = await import(`${DIST}/v6/connector-mirror.js`);
+const { withCollector } = await import(`${DIST}/connectors/config.js`);
+const { migrateDistillerPresetText, PRESET_TEXT_MIGRATIONS } = await import(`${DIST}/org/distill/preset-text-migrate.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -56,6 +69,8 @@ const A = `__${TAG}_a`, B = `__${TAG}_b`, C = `__${TAG}_c`, OUT = `__${TAG}_out`
 const MEMBERS = [A, B, C, OUT];
 const CAT = `${TAG}-cat`;
 const SYS = `${TAG}sys`;              // 이 시험의 자료만 쓰는 external_system
+const SYS2 = `${TAG}pol`;             // 정책(잠금 규칙)이 걸린 external_system — N4·M2
+const PROJ_SESSION = `box-${TAG}-9c0d1e2f`;
 const APP = `${TAG}app`;              // 수집 단위 앱 키
 const JOB = `${TAG}-job`;
 const BATCH_SESSION = `box-${TAG}-1a2b3c4d`;
@@ -115,10 +130,16 @@ const setAxes = async (patch) => {
 
 async function cleanup() {
   await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}_fail ON knowledge_source`).catch(() => {});
+  await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}_bump ON knowledge_source`).catch(() => {});
+  await itemsPool.query(`DELETE FROM knowledge WHERE external_system = ANY($1::text[])`, [[SYS, SYS2]]);
+  await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE note LIKE $1`, [`${TAG}%`]);
+  await itemsPool.query(`DELETE FROM session_project WHERE session_id=$1`, [PROJ_SESSION]);
+  await itemsPool.query(`DELETE FROM project WHERE name LIKE $1`, [`${TAG}%`]);
+  await itemsPool.query(`DELETE FROM org_distiller WHERE key LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${TAG}-%`]);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key LIKE $1`, [`${TAG}-%`]);
   await itemsPool.query(`DELETE FROM collect_unit WHERE app=$1`, [APP]);
-  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP]]);
+  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP, SYS2]]);
   await itemsPool.query(`DELETE FROM org_task WHERE requester_session LIKE $1`, [`cron:${JOB}%`]);
   await itemsPool.query(`DELETE FROM org_cron WHERE id=$1`, [JOB]);
   await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
@@ -126,7 +147,7 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM team WHERE key=$1`, [`${TAG}-team`]);
   await itemsPool.query(`DELETE FROM org_member WHERE id = ANY($1::text[])`, [MEMBERS]);
   await setAxes({ source: true, knowledge: true });
-  invalidateSourceVisRules(); dv.invalidateDistillBatchCache();
+  invalidateSourceVisRules(); invalidateDistillBatchCache();
 }
 
 try {
@@ -220,7 +241,7 @@ try {
   await itemsPool.query(
     `INSERT INTO org_task(requester, requester_session, prompt, status, session_id, started_at, exec_profile)
      VALUES($1, $2, '대상 자료 id: …', 'running', $3, now() - interval '5 minutes', 'context')`, [A, `cron:${JOB}#lane`, BATCH_SESSION]);
-  dv.invalidateDistillBatchCache();
+  invalidateDistillBatchCache();
   {
     const r = await attempt(() => save(NEW(kname("g1")), A, BATCH_SESSION));
     chk("G1 ★증류 배치의 derived_from 없는 저장 → 400 · 지식 없음", !r.ok && r.status === 400 && !(await knowRow(kname("g1"))), JSON.stringify(r));
@@ -228,10 +249,18 @@ try {
     chk("D5b 빈 derived_from 도 증류 배치에서는 400", !r5.ok && r5.status === 400, JSON.stringify(r5));
     const rf = await attempt(() => save({ name: kname("g2"), title: "폴더", body_md: "", is_folder: true, type: "reference", category: CAT }, A, BATCH_SESSION));
     chk("G2 증류 배치의 폴더 저장은 허용", rf.ok && !!(await knowRow(kname("g2"))), JSON.stringify(rf));
+    const rf2 = await attempt(() => save({ name: kname("g2b"), title: "폴더", body_md: "", is_folder: true, type: "reference", category: CAT, derived_from: [sA] }, A, PLAIN_SESSION));
+    chk("G2b derived_from 을 실은 폴더도 잠긴 자료면 그 대상으로 태어난다", rf2.ok && (await knowRow(kname("g2b")))?.visibility === "members" && !(await sees(kname("g2b"), OUT)),
+      JSON.stringify({ rf2, k: await knowRow(kname("g2b")) }));
     const rp = await attempt(() => save(NEW(kname("g3")), A, PLAIN_SESSION));
     chk("G3 일반 세션의 derived_from 없는 저장은 종전대로", rp.ok && (await knowRow(kname("g3")))?.visibility === "open", JSON.stringify(rp));
     const rd = await attempt(() => save(NEW(kname("g4"), { derived_from: [sA] }), A, BATCH_SESSION));
     chk("G4 증류 배치도 derived_from 을 실으면 저장된다(잠긴 채)", rd.ok && (await knowRow(kname("g4")))?.visibility === "members", JSON.stringify(rd));
+    //  G5 — 축이 꺼진 워크스페이스는 공개범위를 강제하지 않으므로 가드도 걸지 않는다(종전 두 번 호출 · 켤 때 맞춘다 — 격리 리뷰).
+    await setAxes({ knowledge: false });
+    const rg = await attempt(() => save(NEW(kname("g5")), A, BATCH_SESSION));
+    await setAxes({ knowledge: true });
+    chk("G5 축이 꺼진 워크스페이스의 증류 배치는 derived_from 없이도 저장된다", rg.ok && !!(await knowRow(kname("g5"))), JSON.stringify(rg));
   }
 
   // ── L 단독 연결 ──
@@ -411,6 +440,177 @@ try {
       if (aud.includes(`member:${B}`) || (await knowRow(kname(`c${i}`)))?.visibility !== "members") worst = { i, aud };
     }
     chk("C1 ★연결과 자료 좁히기가 겹쳐도 지식이 자료보다 넓게 남지 않는다(12회)", worst === null, JSON.stringify(worst));
+  }
+
+  // ── C2 단위 여러 개를 함께 좁힐 때 자료 잠금 순서(격리 리뷰 차단 — 교착) ──
+  {
+    //  단위 두 개에 자료가 번갈아 들어간다(id a<b<c<d · lo1={a,c} · lo2={b,d}). 다른 트랜잭션 X 가 자료 하나를 FOR SHARE 로
+    //   쥔 채(연결이 자료를 잡는 모양), 두 단위를 한 번에 좁히는 Y 가 그 자료에서 막히게 한다. 전역 id 순으로 잡으면 Y 는 막힌 자리보다
+    //   **작은** id 만 쥐고 있다 — 그보다 큰 id 는 X 가 NOWAIT 로 잡을 수 있어야 한다(쥐고 있으면 연결과 서로 기다린다 = 교착).
+    //   묶음(단위 조합)마다 따로 잡던 종전 모양은 묶음 순서에 따라 둘 중 한 판에서 큰 id 를 쥔 채 막힌다 — 그래서 두 판을 본다.
+    const listing = (member, refs) => store.recordUnitListing({
+      member, app: APP, connector: "Dvpg", instance: "", items: refs.map((r) => ({ ref: r, kind: "private_channel", name: `#${r}` })), verified: true });
+    const unitBy = async (ref) => (await itemsPool.query(`SELECT * FROM collect_unit WHERE app=$1 AND instance='' AND ref=$2`, [APP, ref])).rows[0];
+    const item = (ext) => ({ type: "message", provenance: { category: "messenger", system: APP, instance: "", external_id: ext },
+      title: null, body: `글 ${ext}`, occurred_at: "2026-10-16T02:00:00Z", fields: {} });
+    await listing(A, ["lo1", "lo2"]);
+    const u1 = await unitBy("lo1"), u2 = await unitBy("lo2");
+    await itemsPool.query(`UPDATE collect_unit SET state='active' WHERE id = ANY($1::int[])`, [[u1.id, u2.id]]);
+    const ids = [];
+    for (const [u, e] of [[u1, "c2a"], [u2, "c2b"], [u1, "c2c"], [u2, "c2d"]]) {
+      await store.storeUnitItems(u.id, [item(`${TAG}-${e}`)], { member: A });
+      ids.push(Number((await itemsPool.query(`SELECT id FROM source WHERE external_system=$1 AND external_id=$2`, [APP, `${TAG}-${e}`])).rows[0].id));
+    }
+    const [ia, ib, ic, id] = ids;
+    const addViewer = async (m) => {
+      for (const u of [u1, u2]) {
+        await itemsPool.query(
+          `INSERT INTO collect_unit_member(unit_id, member_id, priority, via, verified_at) VALUES($1,$2,100,'listing',now()) ON CONFLICT (unit_id, member_id) DO UPDATE SET verified_at=now()`,
+          [u.id, m]);
+      }
+    };
+    const blockedOnSource = async () => Number((await itemsPool.query(
+      `SELECT count(*)::int n FROM pg_stat_activity
+        WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'
+          AND query ILIKE '%FROM source%' AND query ILIKE '%FOR NO KEY UPDATE%'`)).rows[0].n);
+    const round = async (label, held, newViewer) => {
+      await addViewer(newViewer);
+      const x = await itemsPool.connect();
+      const out = { label, held, blocked: false, probes: {}, y: null };
+      try {
+        await x.query("BEGIN");
+        await x.query(`SELECT id FROM source WHERE id=$1 FOR SHARE`, [held]);
+        const y = withTx((c) => store.syncUnitAudience(c, [u1.id, u2.id])).then(() => "ok", (e) => `err:${e?.code ?? e?.message}`);
+        for (let i = 0; i < 200 && !out.blocked; i++) { if (await blockedOnSource()) out.blocked = true; else await new Promise((r) => setTimeout(r, 25)); }
+        for (const big of [ia, ib, ic, id].filter((v) => v > held)) {
+          await x.query("SAVEPOINT p");
+          try { await x.query(`SELECT id FROM source WHERE id=$1 FOR SHARE NOWAIT`, [big]); out.probes[big] = "free"; await x.query("RELEASE SAVEPOINT p"); }
+          catch (e) { out.probes[big] = e?.code ?? "error"; await x.query("ROLLBACK TO SAVEPOINT p"); }
+        }
+        await x.query("ROLLBACK");
+        out.y = await y;
+      } finally { x.release(); }
+      return out;
+    };
+    const r1 = await round("X 가 b 를 쥠", ib, B);
+    const r2 = await round("X 가 c 를 쥠", ic, C);
+    chk("C2-0 배선 — 두 판 모두 Y 가 실제로 그 자료에서 막혔다", r1.blocked && r2.blocked, JSON.stringify({ r1, r2 }));
+    chk("C2 ★막힌 자리보다 큰 id 는 하나도 쥐고 있지 않다(전역 id 순 — 연결과 서로 기다리지 않는다)",
+      [r1, r2].every((r) => Object.values(r.probes).every((v) => v === "free")) && Object.keys(r1.probes).length === 2 && Object.keys(r2.probes).length === 1,
+      JSON.stringify({ r1, r2 }));
+    const aud = async (sid) => (await itemsPool.query(`SELECT member_id FROM source_member WHERE source_id=$1 ORDER BY 1`, [sid])).rows.map((r) => r.member_id);
+    chk("C2b 막혔던 좁히기는 X 가 놓은 뒤 끝까지 간다 · 자료 넷 다 새 대상", r1.y === "ok" && r2.y === "ok"
+      && (await Promise.all(ids.map(aud))).every((a) => JSON.stringify(a) === JSON.stringify([A, B, C].sort())),
+      JSON.stringify({ y1: r1.y, y2: r2.y, aud: await Promise.all(ids.map(aud)) }));
+  }
+
+  // ── N4 정책 소급 + M2 수집기 both 미러 — 잠금 규칙이 걸린 커넥터(SYS2) ──
+  {
+    const pol = (await itemsPool.query(
+      `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, enabled, note) VALUES($1, NULL, 'members', 0, true, $2) RETURNING id`,
+      [SYS2, `${TAG}-policy`])).rows[0].id;
+    await itemsPool.query(`INSERT INTO org_source_vis_policy_member(policy_id, subject_kind, member_id) VALUES($1,'member',$2)`, [pol, A]);
+    //  N4 — 규칙보다 먼저 들어와 열려 있던 자료(정책 도장 전) + 그 자료로 만든 열린 지식 → 소급하면 둘 다 A 만.
+    const sPol = await mkSource(false, [], { system: SYS2, ext: `${TAG}-n4` });
+    invalidateSourceVisRules();
+    const r0 = await attempt(() => save(NEW(kname("n4"), { derived_from: [sPol] })));
+    chk("N4-0 소급 전 — 열린 자료로 만든 지식은 열려 있다", r0.ok && (await knowRow(kname("n4")))?.visibility === "open", JSON.stringify(r0));
+    const backfill = sourceVisPolicyCapabilities.find((c) => c.name === "source_vis_policy_backfill");
+    const bf = await attempt(() => backfill.handler({ system: SYS2, dry_run: false }, { userId: C }, { actor: C, source: "web" }));
+    chk("N4 ★정책 소급으로 자료가 잠기면 그 자료로 만든 지식도 A 만 본다(같은 트랜잭션)",
+      bf.ok && bf.v?.knowledge_narrowed >= 1 && (await knowRow(kname("n4")))?.visibility === "members"
+      && JSON.stringify(await knowAud(kname("n4"))) === JSON.stringify([`member:${A}`]) && !(await sees(kname("n4"), OUT)),
+      JSON.stringify({ bf, aud: await knowAud(kname("n4")) }));
+    const who = (await itemsPool.query(
+      `SELECT actor FROM org_content_audit WHERE entity='knowledge' AND entity_key=$1 AND op='set_visibility' ORDER BY id DESC LIMIT 1`, [kname("n4")])).rows[0]?.actor;
+    chk("N4b 좁힌 감사에 누가(소급을 부른 사람)가 남는다", who === C, JSON.stringify({ who }));
+
+    //  M2 — 수집기 «자료+지식(both)» 이 이 커넥터의 항목을 들이면: 자료는 정책으로 잠겨 태어나고, 같은 원문의 지식 사본은 그 자료에
+    //   이어져 A 만 본다(미러 배선 — 맞추기 호출이 빠지면 사본이 연결 없이 공개로 남는다).
+    const ext = `${TAG}-m2`;
+    const c = await itemsPool.connect();
+    let mOk;
+    try {
+      mOk = await attempt(() => withCollector({ id: 990001, presetKey: "dvpg", instanceKey: "_", outputMode: "both" }, () => mirrorExternalToV6(c,
+        { type: "message", provenance: { category: "messenger", system: SYS2, instance: "default", external_id: ext },
+          title: "both 사본", body: "잠긴 채널의 글", occurred_at: "2026-10-16T03:00:00Z", fields: {} })));
+    } finally { c.release(); }
+    const srcRow = (await itemsPool.query(`SELECT id, visibility FROM source WHERE external_system=$1 AND external_id=$2`, [SYS2, ext])).rows[0];
+    const copy = (await itemsPool.query(`SELECT name, visibility FROM knowledge WHERE external_system=$1 AND external_id=$2`, [SYS2, ext])).rows[0];
+    chk("M2-0 배선 — 미러가 자료(잠김)와 지식 사본을 둘 다 만들었다", mOk.ok && srcRow?.visibility === "members" && !!copy, JSON.stringify({ mOk, srcRow, copy }));
+    chk("M2 ★같은 원문의 지식 사본이 그 자료에 이어지고 A 만 본다",
+      !!copy && JSON.stringify(await linksOf(copy.name)) === JSON.stringify([`derived_from:${srcRow?.id}`]) && copy.visibility === "members"
+      && (await sees(copy.name, A)) && !(await sees(copy.name, OUT)),
+      JSON.stringify({ copy, links: copy ? await linksOf(copy.name) : null }));
+  }
+
+  // ── E4 저장 중 판이 바뀜 ──
+  {
+    await mkKnowledge(kname("e4"), C);
+    const sOpen4 = await mkSource(false);
+    const before = await knowRow(kname("e4"));
+    //  연결 행이 들어가는 순간 그 지식의 판을 올린다 — «게이트가 읽은 판» 과 «트랜잭션 안의 판» 사이에 다른 저장이 끼인 장면.
+    await itemsPool.query(`CREATE OR REPLACE FUNCTION ${TAG}_bump_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.name = '${kname("e4")}' THEN UPDATE knowledge SET version = version + 1 WHERE name = NEW.name; END IF; RETURN NEW; END $$`);
+    await itemsPool.query(`CREATE TRIGGER ${TAG}_bump AFTER INSERT ON knowledge_source FOR EACH ROW EXECUTE FUNCTION ${TAG}_bump_fn()`);
+    const r = await attempt(() => save({ name: kname("e4"), mode: "append", body_md: "덧붙임", derived_from: [sOpen4] }));
+    await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}_bump ON knowledge_source`);
+    await itemsPool.query(`DROP FUNCTION IF EXISTS ${TAG}_bump_fn()`);
+    const after = await knowRow(kname("e4"));
+    chk("E4 ★저장 중 판이 바뀌면 409 · 본문·판·연결 그대로(남의 저장을 덮지 않는다)",
+      !r.ok && r.status === 409 && after?.body_md === before?.body_md && after?.version === before?.version && (await linksOf(kname("e4"))).length === 0,
+      JSON.stringify({ r, before, after }));
+  }
+
+  // ── D7 비공개 프로젝트 세션 ──
+  {
+    const L2 = (await itemsPool.query(`INSERT INTO project_list(name, visibility) VALUES($1,'members') RETURNING id`, [`${TAG}-list2`])).rows[0].id;
+    await itemsPool.query(`INSERT INTO project_list_member(list_id, member_id) VALUES($1,$2)`, [L2, A]);
+    const P = (await itemsPool.query(`INSERT INTO project(name, list_id) VALUES($1,$2) RETURNING id`, [`${TAG}-proj`, L2])).rows[0].id;
+    await itemsPool.query(`INSERT INTO session_project(session_id, project_id) VALUES($1,$2)`, [PROJ_SESSION, P]);
+    const r = await attempt(() => save(NEW(kname("d7"), { derived_from: [sA] }), A, PROJ_SESSION));
+    chk("D7 ★비공개 프로젝트 세션 + 잠긴 자료로 새 지식 → 409 · 지식 없음", !r.ok && r.status === 409 && r.body?.reason === "project_list" && !(await knowRow(kname("d7"))),
+      JSON.stringify(r));
+    const sOpen7 = await mkSource(false);
+    const r2 = await attempt(() => save(NEW(kname("d7b"), { derived_from: [sOpen7] }), A, PROJ_SESSION));
+    chk("D7b 같은 세션 + 열린 자료 → 그 프로젝트 리스트로 잠겨 태어난다", r2.ok && (await knowRow(kname("d7b")))?.visibility === "members"
+      && JSON.stringify(await knowLists(kname("d7b"))) === JSON.stringify([Number(L2)]) && (await sees(kname("d7b"), A)) && !(await sees(kname("d7b"), OUT)),
+      JSON.stringify({ r2, lists: await knowLists(kname("d7b")) }));
+  }
+
+  // ── V2 지식 상세의 조상 제목 ──
+  {
+    await itemsPool.query(
+      `INSERT INTO knowledge(name, title, body_md, provenance, lifecycle, visibility, type) VALUES($1,'잠긴 조상 제목','x','authored','active','members','reference')`,
+      [kname("v2-parent")]);
+    await itemsPool.query(`INSERT INTO knowledge_member(name, subject_kind, member_id) VALUES($1,'member',$2)`, [kname("v2-parent"), B]);
+    await itemsPool.query(
+      `INSERT INTO knowledge(name, title, body_md, provenance, lifecycle, visibility, type, parent_name) VALUES($1,$1,'x','authored','active','open','reference',$2)`,
+      [kname("v2"), kname("v2-parent")]);
+    invalidateVisibilityCache();
+    const forOut = await getKnowledge(kname("v2"), OUT);
+    const forB = await getKnowledge(kname("v2"), B);
+    chk("V2 안 보이는 조상 문서의 제목을 싣지 않는다", (forOut?.ancestors ?? []).length === 0, JSON.stringify(forOut?.ancestors));
+    chk("V2b 볼 수 있는 사람에게는 그대로", (forB?.ancestors ?? []).length === 1, JSON.stringify(forB?.ancestors));
+  }
+
+  // ── T1 프리셋 레인 문구 이관 ──
+  {
+    const [mA, mB] = PRESET_TEXT_MIGRATIONS;
+    const crit = `## 머리\n${mA.from}\n## 꼬리`;
+    const edited = `## 머리\n${mA.from.replace("마라", "말 것")}\n## 꼬리`;
+    await itemsPool.query(`INSERT INTO org_distiller(key, criteria_md, format_md) VALUES($1,$2,$3)`, [`${TAG}-old`, crit, `- 출처 ${mB.from}`]);
+    await itemsPool.query(`INSERT INTO org_distiller(key, criteria_md, format_md) VALUES($1,$2,NULL)`, [`${TAG}-edited`, edited]);
+    const row = async (k) => (await itemsPool.query(`SELECT criteria_md, format_md, version FROM org_distiller WHERE key=$1`, [k])).rows[0];
+    const v0 = await row(`${TAG}-old`), e0 = await row(`${TAG}-edited`);
+    const m1 = await migrateDistillerPresetText();
+    const v1 = await row(`${TAG}-old`), e1 = await row(`${TAG}-edited`);
+    chk("T1 글자 그대로 같은 옛 문구는 새 문구로(기준·형식 두 칸) · 판이 오른다",
+      v1.criteria_md === `## 머리\n${mA.to}\n## 꼬리` && v1.format_md === `- 출처 ${mB.to}` && Number(v1.version) === Number(v0.version) + 2 && m1.keys.includes(`${TAG}-old`),
+      JSON.stringify({ v1, m1 }));
+    chk("T1b 사람이 고친 줄은 그대로", e1.criteria_md === e0.criteria_md && Number(e1.version) === Number(e0.version) && !m1.keys.includes(`${TAG}-edited`), JSON.stringify(e1));
+    const m2 = await migrateDistillerPresetText();
+    chk("T1c 두 번째 실행은 이 레인들을 건드리지 않는다(멱등)", !m2.keys.includes(`${TAG}-old`) && Number((await row(`${TAG}-old`)).version) === Number(v1.version), JSON.stringify(m2));
   }
 } catch (e) {
   bad("예외", e?.stack ?? String(e));

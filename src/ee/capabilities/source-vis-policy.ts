@@ -11,7 +11,7 @@ import { z } from "zod";
 import { HttpError } from "../../http-error.js";
 import type { Capability } from "../../capabilities/types.js";
 import { itemsPool, withTx } from "../../db/client.js";
-import { reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
+import { derivedEnforced, reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../../v6/source-vis-policy.js";
@@ -242,10 +242,13 @@ const backfill: Capability = {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/source-vis-policy/backfill"], parse: (req) => (req.body ?? {}) }],
   },
-  handler: async (input: any) => {
+  handler: async (input: any, user: any, ctx?: any) => {
     if (!(await axisOn("source"))) {
       throw new HttpError(400, "자료 공개범위 축이 꺼져 있습니다 — 관리탭 ▸ 맥락 공개범위에서 먼저 켜세요(꺼진 채로 잠그면 강제되지 않습니다).");
     }
+    //  #4824 — 지식 맞추기용 축 상태 · 감사의 «누가» 는 트랜잭션 **전에** 정한다(행을 잡은 채 풀을 기다리지 않게).
+    const enforced = await derivedEnforced();
+    const wctx = { actor: user?.userId ?? null, source: ctx?.source ?? "web", reason: "source_vis_policy_backfill" };
     const rules = await sourceVisRules();
     if (!rules.length) throw new HttpError(400, "적용할 규칙이 없습니다");
     const systems = input.system ? [String(input.system)] : [...new Set(rules.map((r) => r.match_system))];
@@ -272,7 +275,7 @@ const backfill: Capability = {
       if (!dry) {
         knowledgeNarrowed += await withTx(async (c) => {
           await applyVisibility(c, Number(r.id), picked.members);
-          return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, undefined, "policy_backfill")).length;
+          return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
         });
       }
     }

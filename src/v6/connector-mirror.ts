@@ -47,7 +47,14 @@ import { mirrorKnowledgeByNameV6, mirrorKnowledgeV6 } from "./mirror/mirror-know
 import { mirrorPmCommentV6, mirrorPmFolderV6, mirrorPmListV6, mirrorPmTimeV6, mirrorPmViewV6 } from "./mirror/mirror-pm.js";
 import { mirrorProjectV6 } from "./mirror/mirror-project.js";
 import { mirrorSourceV6 } from "./mirror/mirror-source.js";
-import { reconcileDerivedVisibility } from "./derived-visibility.js";
+import { derivedEnforced, reconcileDerivedVisibility } from "./derived-visibility.js";
+import type { WriteCtx } from "./content-audit.js";
+
+/** #4824 — 수집이 사본 지식을 좁힐 때 감사에 남길 «누가»(그 수집기 · 없으면 그 커넥터). */
+const MIRROR_CTX = (system: string): WriteCtx => {
+  const b = boundCollector();
+  return { actor: b ? `collector:${b.id}` : `connector:${system}`, source: "connector_mirror" };
+};
 import { normalizeExternalInstance } from "../org/ingest/external-identity.js";
 
 // ── 재수출 배럴(#1313 R20) — 축별 모듈로 해체했으나 **외부 표면은 byte 불변**이다. 소비자(run-sync·items/store·
@@ -262,6 +269,8 @@ export async function mirrorExternalToV6(
   const outputMode = boundCollector()?.outputMode ?? "preset";
   const target = routeIngestV6(it.type, system, outputMode);
   if (target == null) return false; // 라우팅 정의 밖 — 미러 skip(보수적, 임의 분류 금지).
+  //  #4824 — 'both' 사본 맞추기용 축 상태는 행을 잡기 **전에** 읽는다(잡은 채 풀을 기다리지 않게 — derived-visibility.ts 머리말).
+  const enforced = target === "source" && alsoMirrorKnowledge(it.type, system, outputMode) ? await derivedEnforced() : false;
 
   await client.query("BEGIN");
   try {
@@ -286,7 +295,9 @@ export async function mirrorExternalToV6(
             `SELECT id FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND visibility='members'`,
             [system, normalizeExternalInstance(it.provenance.instance), externalId]);
           const sid = Number(src.rows[0]?.id);
-          if (Number.isInteger(sid) && sid > 0) await reconcileDerivedVisibility(client, { sourceIds: [sid] }, undefined, "mirror_copy");
+          if (enforced && Number.isInteger(sid) && sid > 0) {
+            await reconcileDerivedVisibility(client, { sourceIds: [sid] }, MIRROR_CTX(system), "mirror_copy", enforced);
+          }
         }
       }
     }

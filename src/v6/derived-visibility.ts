@@ -25,7 +25,7 @@
 //
 //  ⚠ 이 파일의 쿼리는 전부 받은 `db`(트랜잭션 클라이언트)로 낸다 — 풀(itemsPool)로 내면 트랜잭션 밖에서 읽어
 //   이 트랜잭션이 막 좁힌 대상을 못 보고(옛 대상으로 계산 = 유출), 잡은 행을 풀이 기다리면 스스로를 기다린다.
-//   예외: 축 설정(derivedEnforced — 잠그기 **전에** 읽어 넘긴다) · 배치 판정(distillBatchOf)처럼 잡은 행과 무관한 읽기.
+//   예외: 축 설정(derivedEnforced — 잠그기 **전에** 읽어 넘긴다). 증류 배치 판정은 org/distill/distill-batch.ts(잠그기 전에 부른다).
 import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { HttpError } from "../http-error.js";
@@ -58,7 +58,8 @@ export async function derivedEnforced(): Promise<boolean> {
 
 /**
  * 이 파일의 쓰기 트랜잭션 — 잠금 대기 상한(SET LOCAL lock_timeout) + 교착(40P01) 한 번 다시 + 대기 초과(55P03)는 503.
- *  잠금 순서를 지켜도 다른 경로(공유 메일 자료 등)와의 교착은 남을 수 있다 — 한 번 다시 하면 대개 풀린다.
+ *  자료를 잡는 곳은 모두 한 문장 · 전역 id 순이다(여기 lockSources · 단위 applySourceAudience). 그래도 잠금 순서가 다른 옛 경로
+ *   (자료를 행마다 따로 고치는 곳)와는 교착이 남을 수 있다 — 한 번 다시 하면 대개 풀린다.
  */
 export async function withDerivedTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -373,6 +374,8 @@ export async function linkDerivedSources(
   const inserted = (ins.rows as Array<{ source_id: number }>).map((x) => Number(x.source_id)).sort((a, b) => a - b);
   for (const sid of inserted) await auditKnowledge(name, "link_source", null, { source_id: sid, relation: "derived_from" }, ctx, db);
 
+  //  아무도 못 보게 되는 연결(대상이 안 겹치는 잠긴 자료)도 단독 연결에서는 거절하지 않는다 — 새 저장(planNewDerivedKnowledge)과
+  //   다른 까닭: 내용이 이미 들어간 뒤라 거절하면 잠긴 내용이 더 넓은 문서에 남는다. 닫힌 쪽(관리자만)으로 두고 응답 empty 로 알린다.
   if (plan?.changed) await applyPlan(db, name, k, plan, ctx, { sources: lockedAll.map((s) => s.id), reason: "linked" });
   const final = plan?.changed ? plan.next : k;
   return {
@@ -480,43 +483,3 @@ export async function writeNewDerivedKnowledge(
       }, ctx, db);
   }
 }
-
-// ── 증류 배치 세션 알아보기(사양 R7) ─────────────────────────────────────────
-//  헤드리스 증류만: 세션 id(x-lively-session) → org_task.session_id(org_task_session_idx) → requester_session
-//   'cron:<잡>#<레인>' 또는 'cron:<잡>'(레인 없는 방치·전역 배치) → org_cron.action = 'distill_sources_headless'.
-//   그 태스크 하나가 곧 배치 하나다 — 잡이 나중에 꺼져도 그 판은 증류 배치였다(켜짐을 안 본다).
-//  세션 주입(distill_sources)은 판정하지 않는다 — 그 상시 세션은 다른 크론·사람도 함께 쓴다(격리 검토). 프롬프트로만 안내한다.
-//  ⚠ 세션 id 는 하네스가 싣는 머리글이다(모델이 고르는 값이 아니다) — 이 판정이 막는 것은 모델의 실수(연결 빠뜨림)지
-//   일부러 피하려는 사람이 아니다. 판정을 못 하면(구 스키마 등) 막지 않는다(저장 자체를 깨지 않는다). 아니라는 판정은 캐시하지
-//   않는다 — 태스크 행이 세션보다 조금 늦게 기록될 수 있다(markRunning).
-const BATCH_TTL_MS = 60_000;
-const batchCache = new Map<string, { since: Date; at: number }>();
-
-/** 이 세션이 헤드리스 증류 배치면 그 배치의 시작 시각, 아니면 null. */
-export async function distillBatchOf(sessionId: string | null | undefined): Promise<{ since: Date } | null> {
-  const sid = String(sessionId ?? "").trim();
-  if (!sid) return null;
-  const now = Date.now();
-  const hit = batchCache.get(sid);
-  if (hit && now - hit.at < BATCH_TTL_MS) return { since: hit.since };
-  try {
-    const r = await itemsPool.query(
-      `SELECT COALESCE(t.started_at, t.created_at) AS since
-         FROM org_task t
-         JOIN org_cron c ON c.id = split_part(substr(t.requester_session, 6), '#', 1)
-        WHERE t.session_id = $1 AND t.requester_session LIKE 'cron:%'
-          AND c.action = 'distill_sources_headless'
-        ORDER BY t.id DESC LIMIT 1`, [sid]);
-    const since = r.rows[0]?.since ? new Date(r.rows[0].since) : null;
-    if (!since) return null;
-    if (batchCache.size > 2000) batchCache.clear();
-    batchCache.set(sid, { since, at: now });
-    return { since };
-  } catch (e) {
-    if ((e as { code?: string })?.code !== "42P01") logger.warn({ err: (e as Error)?.message }, "[derived-vis] 증류 배치 판정 실패 — 막지 않는다");
-    return null;
-  }
-}
-
-/** 시험용 — 캐시를 비운다. */
-export function invalidateDistillBatchCache(): void { batchCache.clear(); }

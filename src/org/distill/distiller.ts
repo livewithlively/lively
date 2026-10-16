@@ -250,7 +250,7 @@ export const threadIdSql = (alias = "s"): string => {
 // ⚠ body_md 를 포함한다 — 배치 프롬프트에 본문을 동봉하기 위해서다(buildSourceDigest). 빼면 에이전트가
 //  서버가 이미 쥔 것을 source_get 으로 다시 조회하고, 실측에선 인자를 틀려 19건 전부 실패 후 재시도했다.
 const INBOX_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url,
-  s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.body_md, s.visibility, ${AUD_KEY_SQL} AS aud_key`;
+  s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.body_md, s.visibility`;
 
 /** 자료 한 건의 «볼 수 있는 사람» 묶음 열쇠 — 열린 자료는 모두 한 묶음, 잠긴 자료는 대상이 같으면 한 묶음. */
 export function audienceGroupKey(r: Record<string, unknown>): string {
@@ -333,7 +333,9 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
        SELECT _ch, _tid FROM ranked
        WHERE rn <= ${p.add(nThreads)} AND (cum <= ${p.add(maxMsgs)} OR rn = 1))
      SELECT c.id, c.name, c.kind, c.title, c.provenance, c.external_system, c.external_url,
-            c.occurred_at, c.updated_at, c.fields, c.parent_external_id, c.body_md, c.visibility, c.aud_key
+            c.occurred_at, c.updated_at, c.fields, c.parent_external_id, c.body_md, c.visibility,
+            -- #4824 대상 열쇠(oneAudienceGroup) — 후보 전부가 아니라 고른 행에만 잰다(잠긴 행마다 상관 질의라 후보가 큰 레인에서 비싸다).
+            (SELECT ${AUD_KEY_SQL} FROM source s WHERE s.id = c.id) AS aud_key
      FROM cand c JOIN picked pk ON pk._ch = c._ch AND pk._tid = c._tid
      ORDER BY c._tid, COALESCE(c.occurred_at, c.updated_at)`;
   return { sql, values: p.values };

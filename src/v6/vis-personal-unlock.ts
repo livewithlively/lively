@@ -20,7 +20,7 @@
 //
 //  ⚠ 여는 것은 되돌릴 수 없다. 그래서 조건을 넓히지 마라 — 특히 `external_system='local'` 과
 //   `fields.root='personal'` 두 술어는 «자동 잠금이 만든 행» 의 정의 그 자체다.
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 
 export interface PersonalUnlockResult { sources: number; sourceGrants: number; knowledge: number; skipped?: string }
@@ -49,28 +49,7 @@ export async function reconcilePersonalUploadVisibility(): Promise<PersonalUnloc
     ? `EXISTS (SELECT 1 FROM org_source_vis_policy p WHERE p.enabled AND p.match_system='local'${byTenant ? " AND p.tenant_id = s.tenant_id" : ""})`
     : "false";
 
-  const src = await itemsPool.query(`
-    WITH tgt AS (
-      UPDATE source s SET visibility='open', updated_at=now()
-       WHERE s.visibility='members'
-         AND s.external_system='local'
-         AND s.fields->>'root'='personal'
-         AND NOT ${governed}
-      RETURNING s.id),
-    freed AS (DELETE FROM source_member m WHERE m.source_id IN (SELECT id FROM tgt) RETURNING 1)
-    SELECT (SELECT count(*) FROM tgt)::int AS sources, (SELECT count(*) FROM freed)::int AS grants,
-           (SELECT COALESCE(array_agg(id), '{}') FROM tgt) AS opened`);
-  const opened = ((src.rows[0]?.opened ?? []) as unknown[]).map(Number).filter(Number.isFinite);
-
-  // 지식 재계산 — 근거가 전부 열린 것만. (근거가 하나도 없는 지식은 상속으로 잠긴 것이 아니므로 건드리지 않는다.)
-  //  #4824 — 이번 실행이 **방금 연 자료**에 이어진 지식만 본다. 이번에 연 것이 없으면 지식도 안 연다 — 부팅마다 도는 이 조정기가
-  //   «근거가 지금 다 열려 있다» 만으로 지식을 열면, 잠긴 근거가 지워졌거나(CASCADE) 끊긴 지식·나중에 넓힌 단위의 지식까지 열린다.
-  //   그리고 그 지식을 잠근 기록(set_visibility 감사)이 전부 이번에 연 자료에서 온 것이어야 한다 — 다른 근거·프로젝트 스탬핑
-  //   (via_project_list)·리스트 걷기(dropped_list_grants)가 한 번이라도 잠갔으면 열지 않는다. 리스트 grant 가 남아 있어도 열지 않는다.
-  if (!opened.length) {
-    return { sources: Number(src.rows[0]?.sources ?? 0), sourceGrants: Number(src.rows[0]?.grants ?? 0), knowledge: 0 };
-  }
-  //  리스트 grant 표가 없는 배포면 그 술어는 참(grant 가 있을 수 없다).
+  //  지식 술어에 쓰는 표 확인은 트랜잭션 **전에**(풀 읽기). 리스트 grant 표가 없는 배포면 그 술어는 참(grant 가 있을 수 없다).
   const listed = (await hasTable("knowledge_list_grant"))
     ? `NOT EXISTS (SELECT 1 FROM knowledge_list_grant g WHERE g.name = k.name)` : "TRUE";
   const audited = (await hasTable("org_content_audit"))
@@ -83,25 +62,46 @@ export async function reconcilePersonalUploadVisibility(): Promise<PersonalUnloc
                                         CASE WHEN jsonb_typeof(a.after->'via_sources') = 'array' THEN a.after->'via_sources' ELSE '[]'::jsonb END) x
                                        WHERE NOT (x ~ '^[0-9]+$' AND x::int = ANY($1::int[])))))`
     : "TRUE";
-  const kno = await itemsPool.query(`
-    WITH tgt AS (
-      UPDATE knowledge k SET visibility='open'
-       WHERE k.visibility='members'
-         AND ${listed}
-         AND ${audited}
-         AND EXISTS (SELECT 1 FROM knowledge_source ks
-                      WHERE ks.name = k.name AND ks.relation='derived_from' AND ks.source_id = ANY($1::int[]))
-         AND NOT EXISTS (SELECT 1 FROM knowledge_source ks JOIN source s ON s.id = ks.source_id
-                          WHERE ks.name = k.name AND ks.relation='derived_from' AND s.visibility='members')
-      RETURNING k.name),
-    freed AS (DELETE FROM knowledge_member m WHERE m.name IN (SELECT name FROM tgt) RETURNING 1)
-    SELECT (SELECT count(*) FROM tgt)::int AS knowledge, (SELECT count(*) FROM freed)::int AS grants`, [opened]);
 
-  return {
-    sources: Number(src.rows[0]?.sources ?? 0),
-    sourceGrants: Number(src.rows[0]?.grants ?? 0),
-    knowledge: Number(kno.rows[0]?.knowledge ?? 0),
-  };
+  //  #4824 — 자료 열기와 지식 열기를 **한 트랜잭션**에서. 지식은 «이번에 연 자료» 로만 열므로(아래), 둘 사이에서 프로세스가 죽거나
+  //   지식 문장이 실패하면 다음 부팅은 이번에 연 자료가 없어 그 지식을 영영 열지 않는다(격리 리뷰). 함께 커밋·롤백되면 다음 부팅이
+  //   둘 다 다시 한다.
+  return withTx(async (c) => {
+    const src = await c.query(`
+      WITH tgt AS (
+        UPDATE source s SET visibility='open', updated_at=now()
+         WHERE s.visibility='members'
+           AND s.external_system='local'
+           AND s.fields->>'root'='personal'
+           AND NOT ${governed}
+        RETURNING s.id),
+      freed AS (DELETE FROM source_member m WHERE m.source_id IN (SELECT id FROM tgt) RETURNING 1)
+      SELECT (SELECT count(*) FROM tgt)::int AS sources, (SELECT count(*) FROM freed)::int AS grants,
+             (SELECT COALESCE(array_agg(id), '{}') FROM tgt) AS opened`);
+    const opened = ((src.rows[0]?.opened ?? []) as unknown[]).map(Number).filter(Number.isFinite);
+    const sources = Number(src.rows[0]?.sources ?? 0), sourceGrants = Number(src.rows[0]?.grants ?? 0);
+
+    // 지식 재계산 — 근거가 전부 열린 것만. (근거가 하나도 없는 지식은 상속으로 잠긴 것이 아니므로 건드리지 않는다.)
+    //  #4824 — 이번 실행이 **방금 연 자료**에 이어진 지식만 본다. 이번에 연 것이 없으면 지식도 안 연다 — 부팅마다 도는 이 조정기가
+    //   «근거가 지금 다 열려 있다» 만으로 지식을 열면, 잠긴 근거가 지워졌거나(CASCADE) 끊긴 지식·나중에 넓힌 단위의 지식까지 열린다.
+    //   그리고 그 지식을 잠근 기록(set_visibility 감사)이 전부 이번에 연 자료에서 온 것이어야 한다 — 다른 근거·프로젝트 스탬핑
+    //   (via_project_list)·리스트 걷기(dropped_list_grants)가 한 번이라도 잠갔으면 열지 않는다. 리스트 grant 가 남아 있어도 열지 않는다.
+    if (!opened.length) return { sources, sourceGrants, knowledge: 0 };
+    const kno = await c.query(`
+      WITH tgt AS (
+        UPDATE knowledge k SET visibility='open'
+         WHERE k.visibility='members'
+           AND ${listed}
+           AND ${audited}
+           AND EXISTS (SELECT 1 FROM knowledge_source ks
+                        WHERE ks.name = k.name AND ks.relation='derived_from' AND ks.source_id = ANY($1::int[]))
+           AND NOT EXISTS (SELECT 1 FROM knowledge_source ks JOIN source s ON s.id = ks.source_id
+                            WHERE ks.name = k.name AND ks.relation='derived_from' AND s.visibility='members')
+        RETURNING k.name),
+      freed AS (DELETE FROM knowledge_member m WHERE m.name IN (SELECT name FROM tgt) RETURNING 1)
+      SELECT (SELECT count(*) FROM tgt)::int AS knowledge, (SELECT count(*) FROM freed)::int AS grants`, [opened]);
+    return { sources, sourceGrants, knowledge: Number(kno.rows[0]?.knowledge ?? 0) };
+  });
 }
 
 /** 부팅용 래퍼 — 데이터 조정은 **부팅을 막지 않는다**(실패해도 제품은 종전 동작으로 뜬다). */

@@ -9,7 +9,7 @@ import { listSources, countSources, getSource, upsertSource, deleteSource, listU
 import { SOURCE_GROUP_FILTERS } from "../v6/source-group.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
-import { distillBatchOf } from "../v6/derived-visibility.js";
+import { distillBatchOf } from "../org/distill/distill-batch.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 휴지통 목록의 «내 개인 폴더» 판정(#3778)

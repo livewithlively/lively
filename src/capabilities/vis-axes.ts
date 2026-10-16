@@ -30,7 +30,10 @@ const visAxisSet: Capability = {
   description:
     "맥락 유형의 공개범위 기능을 켜거나 끈다. **끄면 그 유형에 걸려 있던 공개범위가 전부 무효가 되어 " +
     "조직 전원에게 공개된다** — 잠긴 항목이 있는 축을 끌 때는 confirm:true 가 필요하고, 그 사실이 작업기록에 남는다. " +
-    "켜는 것은 확인이 필요 없다(좁히는 방향이라 새로 공개되는 것이 없다).",
+    "켜는 것은 확인이 필요 없다(좁히는 방향이라 새로 공개되는 것이 없다). " +
+    "⚠ 자료·지식 축이 둘 다 켜지는 순간(또는 이미 켜진 자료·지식 축을 다시 켜기로 부르면) 잠긴 자료에서 나온 지식(derived_from)을 " +
+    "그 자료를 볼 수 있는 사람만 보도록 **좁힌다** — 지금 그 지식을 보던 사람이 못 보게 될 수 있고, 지식을 다시 넓히는 도구는 없다. " +
+    "응답의 derived_narrowed 가 좁힌 지식 수다. 바뀐 지식마다 감사(set_visibility · reason axis_on)가 남는다.",
   scope: "admin",
   input: {
     axis: z.enum(VIS_AXES).describe("project|knowledge|source|shared_folder|session_cap"),

@@ -19,6 +19,7 @@ const TAG = `__pu_${crypto.randomBytes(3).toString("hex")}__`;
 const MEMBER = `${TAG}_up`;
 
 async function cleanup() {
+  await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}fail ON knowledge`).catch(() => {});
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM source WHERE external_id LIKE $1`, [`${TAG}%`]);
@@ -119,6 +120,23 @@ try {
   chk("I4 ★이번에 연 자료에 이어진 지식만 연다 — 이미 열려 있던 근거뿐인 지식은 그대로(#4824)",
     r2c.sources === 1 && await visOf("knowledge", "name", `${TAG}k-new`) === "open" && await visOf("knowledge", "name", `${TAG}k-steady`) === "members",
     JSON.stringify({ r2c, kNew: await visOf("knowledge", "name", `${TAG}k-new`), kSteady: await visOf("knowledge", "name", `${TAG}k-steady`) }));
+
+  //  T1 — 자료 열기와 지식 열기는 한 트랜잭션(#4824 격리 리뷰): 지식 문장이 실패하면 자료도 그대로여야 다음 실행이 둘 다 다시 한다.
+  //   (따로 커밋하면 자료만 열린 채 남고, 다음 실행은 «이번에 연 자료» 가 없어 그 지식을 영영 열지 않는다.)
+  const sPersonal4 = await mkLockedSource("personal4", "local", "personal");
+  await mkLockedKnowledge("k-tx", [[sPersonal4, "derived_from"]]);
+  await itemsPool.query(`CREATE OR REPLACE FUNCTION ${TAG}fail_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.name = '${TAG}k-tx' THEN RAISE EXCEPTION 'injected knowledge failure'; END IF; RETURN NEW; END $$`);
+  await itemsPool.query(`CREATE TRIGGER ${TAG}fail BEFORE UPDATE ON knowledge FOR EACH ROW EXECUTE FUNCTION ${TAG}fail_fn()`);
+  let threw = false;
+  try { await reconcilePersonalUploadVisibility(); } catch { threw = true; }
+  await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}fail ON knowledge`);
+  await itemsPool.query(`DROP FUNCTION IF EXISTS ${TAG}fail_fn()`);
+  chk("T1 ★지식 문장이 실패하면 자료 열기도 함께 되돌린다(한 트랜잭션)", threw && await visOf("source", "id", sPersonal4) === "members",
+    JSON.stringify({ threw, src: await visOf("source", "id", sPersonal4) }));
+  const rT = await reconcilePersonalUploadVisibility();
+  chk("T1b 다음 실행이 둘 다 연다", rT.sources === 1 && await visOf("source", "id", sPersonal4) === "open" && await visOf("knowledge", "name", `${TAG}k-tx`) === "open",
+    JSON.stringify({ rT, k: await visOf("knowledge", "name", `${TAG}k-tx`) }));
 
   // ── 라운드 3: 로컬 대상 정책이 생기면 손을 뗀다(사람이 정한 잠금을 되돌리지 않는다) ──
   const sPersonal2 = await mkLockedSource("personal2", "local", "personal");
