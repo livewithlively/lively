@@ -7,8 +7,9 @@ import { MEANING } from "../../org/delivery/meaning.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../../org/policies/storage-policy.js";
 import type { CallLogPolicyPatch } from "../../org/policies/call-log-policy.js"; // #1082 호출 감사로그 보존기간
 import {
-  normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch
-} from "../../sessions/session-memory-policy.js"; // #1059 D
+  normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch,
+  normalizeCollectSessionPolicy, COLLECT_MEM_MAX_MB_MIN, COLLECT_MEM_REQUEST_MB_MIN, COLLECT_MEM_MB_MAX, type CollectSessionPolicyPatch,
+} from "../../sessions/session-memory-policy.js"; // #1059 D · #4213 T11 수집 세션 크기
 import {
   RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, RECLAIM_PRESSURE_PCT_MIN, RECLAIM_PRESSURE_PCT_MAX, RECLAIM_SWAP_PCT_MAX,
   RECLAIM_PRIORITY_MIN, RECLAIM_PRIORITY_MAX, RECLAIM_MAX_REAP_MIN, RECLAIM_MAX_REAP_MAX,
@@ -125,6 +126,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         storage_policy?: StoragePolicyPatch;
         call_log_policy?: CallLogPolicyPatch;
         session_memory_policy?: SessionMemoryPolicyPatch;
+        collect_session_policy?: CollectSessionPolicyPatch | null;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
         context_job_policy?: ContextJobPolicyPatch;
@@ -235,6 +237,28 @@ export const runtimeConfigCapabilities: Capability[] = [
           throw new HttpError(400, `예약치(${patchIn.per_session_request_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
         }
         patch.session_memory_policy = patchIn;
+      }
+      // 수집 실행 세션 크기(#4213 T11) — 상한·예약(MB). [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 이 실행 지표 옆에서 저장한다.
+      //  범위 밖·숫자 아닌 값은 조용히 접지 않고 400 — «저장됐는데 다른 값으로 뜬다» 가 가장 나쁘다(worker_policy 와 같은 이유).
+      //  null = 기본값으로 되돌리기 — 저장값을 비운다(그 뒤로는 .env 시드 → 코드 기본값을 따라간다. 1,024/640 을 손으로 넣으면 그 값이 굳는다).
+      if (input.collect_session_policy === null) patch.collect_session_policy = null;
+      else if (input.collect_session_policy !== undefined) {
+        const raw = input.collect_session_policy;
+        if (typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "collect_session_policy 는 객체(또는 기본값으로 되돌리는 null)여야 합니다");
+        const c = raw as Record<string, unknown>;
+        const mb = (v: unknown, field: string, min: number): number => {
+          const n = typeof v === "number" ? v : (typeof v === "string" && v.trim() ? Number(v) : NaN);
+          if (!Number.isInteger(n) || n < min || n > COLLECT_MEM_MB_MAX) throw new HttpError(400, `collect_session_policy.${field} 는 ${min}~${COLLECT_MEM_MB_MAX} 정수(MB)여야 합니다`);
+          return n;
+        };
+        const patchIn: CollectSessionPolicyPatch = {};
+        if (c.max_mb !== undefined) patchIn.max_mb = mb(c.max_mb, "max_mb", COLLECT_MEM_MAX_MB_MIN);
+        if (c.request_mb !== undefined) patchIn.request_mb = mb(c.request_mb, "request_mb", COLLECT_MEM_REQUEST_MB_MIN);
+        //  예약 > 상한 은 사람이 뜻한 값일 리 없다 — 정규화가 조용히 내리기 전에 알린다(세션 메모리 정책과 같은 단방향 검사).
+        const merged = normalizeCollectSessionPolicy({ ...(await getRuntimeConfig()).collect_session_policy, ...patchIn });
+        const reqWanted = patchIn.request_mb ?? merged.request_mb;
+        if (reqWanted > merged.max_mb) throw new HttpError(400, `예약(${reqWanted}MB)은 상한(${merged.max_mb}MB) 이하여야 합니다`);
+        patch.collect_session_policy = patchIn;
       }
       // idle 세션 자동 회수 정책(#1059 F) — idle TTL(분). 0=끔(무회귀). 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
       if (input.session_reclaim_policy !== undefined) {
@@ -711,6 +735,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
         per_session_request_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 스케줄링 예약치(MB) — 노드에 자리를 얼마나 차지하는 것으로 칠지. 0=미설정(심사가 MemoryMax 를 그대로 쓴다). 캡은 폭주 상한이라 크게 잡아야 하는데 그 값으로 배치를 심사하면 노드가 놀면서도 새 세션을 거절한다 — 실사용 기준으로 이 값을 따로 둔다(k8s requests/limits 와 같은 분리). MemoryMax 이하여야"),
       }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB) + 스케줄링 예약치(#2120). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
+      collect_session_policy: z.object({
+        max_mb: z.number().int().min(256).max(8192).optional().describe("수집 실행 세션 상한(MB) — 넘으면 그 실행이 메모리 초과로 끝난다. 기본 1024"),
+        request_mb: z.number().int().min(128).max(8192).optional().describe("수집 실행 세션 배치 예약치(MB) — 노드에 앉힐 때 차지하는 것으로 치는 양. 상한 이하. 기본 640"),
+      }).nullable().optional().describe("수집 실행 세션 크기(#4213 T11) — Claude 커넥터로 수집하는 작은 세션의 상한·예약. 일반 세션 메모리 정책과 따로다. 실행 지표(collect_claude_run_stats)의 최고 메모리를 보고 정한다. null 이면 저장값을 비워 기본값으로 되돌린다"),
       session_reclaim_policy: z.object({
         idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed 는 항상 제외 · attached 는 attach_idle_minutes, 승인 대기·셸 작업은 busy_idle_minutes 를 켜기 전까지 제외 · 하네스가 말하는 작업 중은 항상 제외"),
         pressure_used_pct: z.number().int().min(RECLAIM_PRESSURE_PCT_MIN).max(RECLAIM_PRESSURE_PCT_MAX).optional().describe("메모리 사용률이 이 %를 넘으면 평시 TTL 을 기다리지 않고 회수(#1220). 0=끔. RSS 큰 세션부터 걷고 임계 밑으로 내려가면 멈춘다. ⚠ 상한이 earlyoom 발동선(94%)보다 낮게 잡혀 있다(#1675 ⑤) — 그 위 값은 earlyoom 이 먼저 죽여 영영 발동하지 못한다"),

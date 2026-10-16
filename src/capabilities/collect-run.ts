@@ -9,6 +9,11 @@ import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { readCollectRun, startCollectRun } from "../terminal/collect-run.js";
+import { collectRunStats } from "../org/collect/run-log.js";
+import { getRuntimeConfig, getCollectSessionPolicySource } from "../org/store/runtime-config.js";
+import {
+  DEFAULT_COLLECT_SESSION_POLICY, COLLECT_MEM_MAX_MB_MIN, COLLECT_MEM_REQUEST_MB_MIN, COLLECT_MEM_MB_MAX,
+} from "../sessions/session-memory-policy.js";
 
 const startInput = {
   apps: z.array(z.string().max(64)).max(12).optional().describe(
@@ -86,4 +91,61 @@ const collectRunGet: Capability = {
   handler: async (input: GetInput, user: LivelyUser) => readCollectRun(user, String(input.run_id || "").trim()),
 };
 
-export const collectRunCapabilities: Capability[] = [collectRunStart, collectRunGet];
+/** 날짜 묶기의 시간대 — 보는 사람의 IANA 이름(예 Asia/Seoul). 모르는 값이면 UTC(auto-runs 와 같은 규칙). */
+function tzOf(v: unknown): string {
+  const t = String(v || "").trim();
+  if (!t || t.length > 64 || !/^[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+)*$/.test(t)) return "UTC";
+  try { new Intl.DateTimeFormat("en-CA", { timeZone: t }); return t; } catch { return "UTC"; }
+}
+
+const statsInput = {
+  days: z.number().int().min(1).max(31).optional().describe("최근 며칠(기본 7, 최대 31)"),
+  tz: z.string().max(64).optional().describe("날짜 묶기 시간대(IANA, 예 Asia/Seoul). 기본 UTC"),
+  recent: z.number().int().min(0).max(200).optional().describe("최근 실행 목록 길이(기본 50)"),
+};
+type StatsInput = z.infer<z.ZodObject<typeof statsInput>>;
+
+const collectRunStatsCap: Capability = {
+  name: "collect_claude_run_stats",
+  title: "수집 실행 지표(실패율·메모리)",
+  description:
+    "Claude 커넥터 수집 실행(collect_claude_run)의 지표 — 기간 안 실행 수 · 실패율 · 실패 사유별 건수 · 최고 메모리(중앙값·상위 25%·상위 5%·최대) · " +
+    "상한의 90% 를 넘은 실행 · 메모리 탓일 수 있는 실패(강제 종료·끝 신호 없이 사라짐) · 걸린 시간 · 비용 · 날짜별 추이 · 최근 실행 목록, " +
+    "그리고 지금 수집 세션 크기(상한·예약)와 그 출처 · 표본 10회 이상이면 크기 추천. 크기는 org_runtime_update 의 collect_session_policy 로 바꾼다. " +
+    "원문·결과 문장은 싣지 않는다. 관리자만. REST 등가: GET /api/ui/collect/claude-run-stats?days=&tz=&recent=.",
+  scope: "admin",
+  input: statsInput,
+  mutates: false,
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/collect/claude-run-stats"],
+      parse: (req) => {
+        const q = (req.query ?? {}) as Record<string, unknown>;
+        const days = optInt(q.days), recent = optInt(q.recent);
+        if (days != null && (days < 1 || days > 31)) throw new HttpError(400, "days 는 1~31 이어야 합니다");
+        if (recent != null && (recent < 0 || recent > 200)) throw new HttpError(400, "recent 는 0~200 이어야 합니다");
+        return { days, recent, tz: q.tz == null ? undefined : String(q.tz).slice(0, 64) };
+      } }],
+  },
+  handler: async (input: StatsInput, _user: LivelyUser) => {
+    const days = input.days ?? 7;
+    const tz = tzOf(input.tz);
+    const until = new Date();
+    const since = new Date(until.getTime() - days * 86400_000);
+    const [{ stats, recent, truncated }, cfg, source] = await Promise.all([
+      collectRunStats({ since, until, tz, recent: input.recent ?? 50 }),
+      getRuntimeConfig(),
+      getCollectSessionPolicySource(),
+    ]);
+    return {
+      window: { since: since.toISOString(), until: until.toISOString(), days, tz },
+      policy: {
+        ...cfg.collect_session_policy, source, defaults: DEFAULT_COLLECT_SESSION_POLICY,
+        bounds: { max_mb_min: COLLECT_MEM_MAX_MB_MIN, request_mb_min: COLLECT_MEM_REQUEST_MB_MIN, max: COLLECT_MEM_MB_MAX },
+      },
+      stats, recent, truncated,
+    };
+  },
+};
+
+export const collectRunCapabilities: Capability[] = [collectRunStart, collectRunGet, collectRunStatsCap];

@@ -23,6 +23,8 @@ import { type SessionShareConfig, type SessionSharePatch, resolveSessionShare, n
 import {
   type SessionMemoryPolicy, type SessionMemoryPolicyPatch, resolveSessionMemoryPolicy, normalizeSessionMemoryPolicy,
   sessionMemoryPolicySource, invalidateSessionMemoryPolicyCache,
+  type CollectSessionPolicy, type CollectSessionPolicyPatch, resolveCollectSessionPolicy, normalizeCollectSessionPolicy,
+  collectSessionPolicySource, invalidateCollectSessionPolicyCache,
 } from "../../sessions/session-memory-policy.js";
 // idle 세션 자동 회수(reaper) 정책(#1059 F) — idle TTL(분). storage/session-memory 와 같은 seam(DB 우선, 비면 env 시드).
 import {
@@ -60,6 +62,7 @@ export interface OrgRuntimeConfig {
   storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
   call_log_policy: CallLogPolicy; // MCP 호출 감사로그 보관(#1082) — 보존일수. DB 우선, 비면 env 시드 → 90일. 0=무기한
   session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
+  collect_session_policy: CollectSessionPolicy; // 수집 실행 세션 크기(#4213 T11) — 상한·예약(MB). DB 우선, 비면 env 시드 → 1,024/640
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   context_job_policy: ContextJobPolicy; // 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 누구 자격으로. 미설정이면 종전 동작
   delegate_policy: DelegatePolicy; // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. DB 우선, 비면 env 시드 → 5분
@@ -145,7 +148,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, collect_session_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -173,6 +176,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
     call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
     session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
+    collect_session_policy: resolveCollectSessionPolicy(row?.collect_session_policy), // #4213 T11 — DB 우선, 비면 env 시드 → 1,024/640
     session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
     context_job_policy: resolveContextJobPolicy(row?.context_job_policy), // #4012 T1 — DB 우선, 비면 env 시드 → 미설정
     delegate_policy: resolveDelegatePolicy(row?.delegate_policy), // #1101 — DB 우선, 비면 env 시드 → 300000(5분)
@@ -212,6 +216,7 @@ export async function updateRuntimeConfig(
     storage_policy?: StoragePolicyPatch;
     call_log_policy?: CallLogPolicyPatch;
     session_memory_policy?: SessionMemoryPolicyPatch;
+    collect_session_policy?: CollectSessionPolicyPatch | null;   // null = 저장값을 비운다(기본값으로 되돌리기)
     session_reclaim_policy?: SessionReclaimPolicyPatch;
     delegate_policy?: DelegatePolicyPatch;
     context_job_policy?: ContextJobPolicyPatch;
@@ -301,6 +306,16 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT session_memory_policy FROM org_runtime_config WHERE id=1`);
     sessionMemoryPolicy = (raw.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? {};
   }
+  // 수집 실행 세션 크기(#4213 T11) — 위와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  let collectSessionPolicy: unknown;
+  if (patch.collect_session_policy === null) {
+    collectSessionPolicy = {};   // 되돌리기 — 비운 칸은 env 시드 → 코드 기본값을 따라간다
+  } else if (patch.collect_session_policy !== undefined) {
+    collectSessionPolicy = normalizeCollectSessionPolicy({ ...before.collect_session_policy, ...patch.collect_session_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT collect_session_policy FROM org_runtime_config WHERE id=1`);
+    collectSessionPolicy = (raw.rows[0] as { collect_session_policy?: unknown } | undefined)?.collect_session_policy ?? {};
+  }
   // 앱 worker 예산 정책(#1780 Stage B) — 위와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  before(resolved) 를 되쓰면 코드 기본값이 DB 로 굳어 '미설정'(= 기본값을 따라감)이 사라진다.
   let workerPolicy: unknown;
@@ -353,8 +368,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, collect_session_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,$33::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -368,17 +383,19 @@ export async function updateRuntimeConfig(
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
-       context_job_policy=EXCLUDED.context_job_policy,
+       context_job_policy=EXCLUDED.context_job_policy, collect_session_policy=EXCLUDED.collect_session_policy,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy)],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy),
+     JSON.stringify(collectSessionPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
   if (patch.session_memory_policy !== undefined) invalidateSessionMemoryPolicyCache(); // #1059 D — 저장 즉시 다음 세션 생성이 새 캡을 본다
+  if (patch.collect_session_policy !== undefined) invalidateCollectSessionPolicyCache(); // #4213 T11 — 저장 즉시 다음 수집 실행이 새 크기로 뜬다
   if (patch.session_reclaim_policy !== undefined) invalidateSessionReclaimPolicyCache(); // #1059 F — 저장 즉시 다음 reaper tick 이 새 TTL 을 본다
   if (patch.delegate_policy !== undefined) invalidateDelegatePolicyCache(); // #1101 — 저장 즉시 다음 스케줄러 tick 이 새 stall 상한을 본다
   const after = await getRuntimeConfig();
@@ -426,6 +443,11 @@ export function getCallLogPolicySource(): Promise<"db" | "env" | "default"> {
 // per-session 메모리 정책(#1059 D)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
 export function getSessionMemoryPolicySource(): Promise<"db" | "env" | "default"> {
   return policySourceOf("session_memory_policy", sessionMemoryPolicySource);
+}
+
+// 수집 실행 세션 크기(#4213 T11)의 출처(관리 UI 안내) — db(관리 화면 저장)·env(.env 시드)·default(코드 기본값 1,024/640).
+export function getCollectSessionPolicySource(): Promise<"db" | "env" | "default"> {
+  return policySourceOf("collect_session_policy", collectSessionPolicySource);
 }
 
 // idle 회수 정책(#1059 F)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).

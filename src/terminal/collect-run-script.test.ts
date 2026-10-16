@@ -26,7 +26,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, collectJob, collectMemLimits, collectPaneArgv,
+  COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, collectJob, collectPaneArgv,
   collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, isCollectRunDir, newCollectRunId, parseCollectRead,
 } from "./collect-run-script.js";
 
@@ -424,14 +424,7 @@ t("P4 일감 경계 — 턴 1·60 · 시간 60·3600 · 빈 지시 거절 · 이
   assert.equal(J({ model: "claude-sonnet-5-5" }).model, "claude-sonnet-5-5");
   assert.deepEqual(J({ apps: ["Slack", "Google Drive", "bad;app", "", "Slack"] }).apps, ["Slack", "Google Drive"]);
 });
-t("P5 메모리 env 경계 — 기본 768/512 · 128·8192 그대로 · 범위 밖은 기본 · 예약은 캡 이하", () => {
-  assert.deepEqual(collectMemLimits({}), { maxMb: 768, requestMb: 512 }, "예약은 잠정 512(최소 실행 +389~450MB 실측)");
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "128", LIVELY_COLLECT_MEM_REQUEST_MB: "128" }), { maxMb: 128, requestMb: 128 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "8192", LIVELY_COLLECT_MEM_REQUEST_MB: "8192" }), { maxMb: 8192, requestMb: 8192 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "127", LIVELY_COLLECT_MEM_REQUEST_MB: "8193" }), { maxMb: 768, requestMb: 512 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "512", LIVELY_COLLECT_MEM_REQUEST_MB: "900" }), { maxMb: 512, requestMb: 512 });
-  assert.deepEqual(collectMemLimits({ LIVELY_COLLECT_MEM_MB: "abc" }), { maxMb: 768, requestMb: 512 });
-});
+//  P5(크기)는 관리 화면 정책으로 옮겼다 — src/sessions/collect-session-policy.test.ts.
 t("P6 쓰기 셸은 이상한 파일 이름·폴더·세션 id 를 거절한다", () => {
   const d = "/home/box_yoon/.cache/lvly-collect/cr-20261016030405-abc9xy";
   assert.throws(() => collectWriteSh(d, { "../x": "1" }));

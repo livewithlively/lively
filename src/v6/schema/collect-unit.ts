@@ -2,7 +2,7 @@
 //  메일함 하나·저장소 하나)마다 한 행이고, 누가 볼 수 있는지 · 누가 모으는지 · 어디까지 읽었는지를 서버가 쥔다.
 //  설계 정본: 지식 connect-collect-tobe-claude-connector-4213 §2(표)·§3(메타데이터)·§5(한 판).
 //
-//  표 넷:
+//  표 다섯:
 //   · collect_unit          — 단위 1행. 좌표 = 앱(source.external_system 과 같은 키) + 외부 인스턴스 + 단위 id.
 //                             경로(라이블리 수집기 / 구성원 Claude 커넥터 / 리브 직접 연결) · 상태 · 읽은 위치 · 주기 · 메타데이터.
 //   · collect_unit_member   — 볼 수 있는 구성원 = 담당 후보. priority 가 작을수록 먼저 모은다(1순위가 끊기면 다음).
@@ -13,6 +13,9 @@
 //                             들어와 있던 자료(봇 수집기)» 라 공개범위를 건드리지 않는다는 표시다.
 //   · collect_assignee_state — 구성원 × 커넥터의 담당 건강(로그인 끊김·커넥터 끊김·한도 초과). connector='*' 는 Claude 로그인 전체.
 //                             끊김은 «수집 실행이 실패해야» 안다(로그인 파일은 만료돼도 있다 — profiles.aiAccountStatus 는 존재만 본다).
+//   · collect_run          — 수집 실행(#4213 T11) 한 판 = 한 행. 시작에 그때 크기(상한·예약)를, 끝에 결과(성공·실패 사유)·최고 메모리·
+//                             걸린 시간·비용을 적는다. [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 의 실패율·메모리 지표가 이 표에서 나온다.
+//                             원문·결과 문장은 싣지 않는다(그 사람 홈의 실행 폴더에만 있다). 90일 지난 행은 지운다(run-log.ts).
 //
 //  ⚠ tenant_id 는 boot/schemas.ts 의 ensureTenantColumn 이 붙인다. 자연키(collect_unit 좌표 · collect_assignee_state PK)는
 //   (tenant_id, …) 로 다시 쓰이므로 store 의 ON CONFLICT 는 tenant_id 를 명시한다. 대리키를 가리키는 PK(unit_id, …)는 그대로다.
@@ -99,5 +102,36 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
     ${ensureCheck("collect_assignee_state", {
       collect_assignee_state_chk: "state IN ('ok','login_broken','connector_missing','quota')",
     })}
+  `);
+
+  //  ended_by — 끝을 누가 적었나. runner = 러너의 끝 신호(exit.json) · gateway = 게이트웨이가 추정한 끝(끝 신호 없음 · 판이 사라짐).
+  //   늦게 온 러너의 끝은 게이트웨이 추정을 덮고, 그 반대는 없다(run-log.ts recordRunEnd).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collect_run(
+      run_id TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL,
+      ended_at TIMESTAMPTZ,
+      apps TEXT[] NOT NULL DEFAULT '{}',
+      model TEXT,
+      cap_mb INT,
+      request_mb INT,
+      outcome TEXT,
+      error TEXT,
+      ended_by TEXT,
+      mem_limit_mb INT,
+      mem_start_mb INT,
+      mem_peak_mb INT,
+      duration_ms BIGINT,
+      cost_usd DOUBLE PRECISION,
+      turns INT,
+      tool_calls INT,
+      tool_errors INT,
+      captures INT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    ${ensureCheck("collect_run", {
+      collect_run_ended_by_chk: "ended_by IS NULL OR ended_by IN ('runner','gateway')",
+    })}
+    CREATE INDEX IF NOT EXISTS collect_run_started_idx ON collect_run(started_at DESC);
   `);
 }
