@@ -12,13 +12,13 @@
 //  ⑤ 서버 선언을 뺀 앱의 함수(#4791 · 결정 상민 2026-10-16) — 설치된 상태 · 지금 판 · 공개 판 모두 web.server 가 없으면 표시(unused_since)를 붙이고,
 //     unused_retire_days(기본 7일)가 지나면 함수 · 로그 그룹 · 함수 줄을 걷는다(빌드 기록은 남긴다). 알림은 보내지 않는다(상태에 retire_at).
 //     멈춘 함수는 표시도 걷기도 하지 않는다 — 지웠다 새로 만들면 자동 멈춤 · 관리자 멈춤이 풀리는 길이 된다(되살린 함수는 멈춤 기록이 없다).
+//  ⑥ 코드 크기를 모르는 함수(#4792) — 별칭이 있는데 code_bytes 가 0 인 줄을 AWS 에서 다시 잰다(틱마다 20개 · 못 잰 줄은 뒤로 보낸다).
 import { logger } from "../log.js";
 import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import { appServerEnv, serverDeclOf } from "./app-server-config.js";
-import { APP_SERVER_POLICY_MAX, autoStopReason, type AppServerPolicy } from "./app-server-policy.js";
+import { APP_SERVER_POLICY_MAX, autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
 import { publicError, realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
-import { codeBytesOf } from "./app-server-policy.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
@@ -165,10 +165,15 @@ export async function refreshUnknownCodeBytes(deps: WatchDeps = {}, limit = 20):
   const api = deps.api ?? realLambdaApi(env.region);
   let n = 0;
   for (const r of await st.serverRowsWithoutCodeSize(limit)) {
+    let done = false;
     try {
       const bytes = codeBytesOf(await api.listVersions(r.function_name));
-      if (bytes > 0) { await st.setServerCodeBytes(r.app_id, bytes); n++; }
-    } catch (e) { logger.warn({ err: e, app: r.app_id }, "함수 코드 크기 다시 재기 실패 — 다음 틱(#4792)"); }
+      //  아직 0 일 때만 적는다 — 고른 뒤 같은 앱의 배포가 자리를 잡았거나 실측을 적었으면 늦게 온 이 값이 덮지 않게(재검토).
+      done = bytes > 0 && await st.fillServerCodeBytes(r.app_id, bytes);
+    } catch (e) { logger.warn({ err: e, app: r.app_id }, "함수 코드 크기 다시 재기 실패 — 다음 차례(#4792)"); }
+    if (done) n++;
+    //  못 잰 줄(함수가 AWS 에서 사라짐 등)은 뒤로 보낸다 — 앞자리에 남으면 틱마다 같은 줄만 보고 다른 줄이 굶는다(재검토).
+    else await st.touchServerRow(r.app_id).catch(() => { /* 다음 틱 */ });
   }
   return n;
 }

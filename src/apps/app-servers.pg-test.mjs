@@ -16,6 +16,8 @@
 //   격리 리뷰 뒤: W9 동시 배포도 코드 상한을 넘지 않는다(자리 잡기) · W10 하우스키핑이 크기를 모르는 줄을 잰다 · W11 만든 직후 실패도 잰다
 //   W12 zip 크기를 모르는 빌드는 저장소 크기로 채운다 · W13 첫 배포가 함수 없이 끝나면 빈 줄을 걷는다 · W14 되돌리기도 함수 수 상한을 알린다
 //   W15 잠금을 기다리는 사이 줄이 사라지면 다시 잡는다 · X2 40일 된 빌드도 걷은 뒤 유예 · X8 잠긴 함수 · X9 남의 함수 · X10 지우기 실패
+//   재검토 뒤: W16 기다리는 사이 앱이 지워지면 줄을 되살리지 않는다 · W17 있는 함수가 자리를 잡은 뒤 실패해도 실측 · W18 만들기 응답 실패(함수는 생김)도 실측
+//   W19 하우스키핑의 늦은 측정이 배포가 적은 값을 덮지 않는다 · W20 못 재는 줄이 앞자리를 차지해도 다른 줄이 굶지 않는다
 //  #4791 서버 선언을 뺀 앱의 함수 정리(X — 사양 엣지 표 R1~R9): X1 표시 · 상태 retire_at · X2 7일 경계 · 걷기(빌드는 남김) · X3 되돌리면 다시 생김
 //   X4 공개 판에 서버가 남아 있으면 표시 안 함 · X5 서버 선언이 돌아오면 표시를 걷음(X5b 다시 배포하면 곧바로) · X6 멈춘 함수는 걷지 않음 · X7 걷기 직전 다시 봄
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
@@ -94,6 +96,8 @@ let s3Denied = false;           // R1g — 다음 코드 올리기를 S3 권한 
 let publishDelayMs = 0;         // W9 — 판 고정을 늦춰 «판정 뒤 · 실측 앞» 창을 넓힌다
 let createFail = null;          // W13 — 다음 함수 만들기를 이 AWS 오류로
 const readyFail = new Set();    // W11 — 이 함수는 만든 뒤 «Failed» 상태로 보인다(준비 기다리기가 실패)
+let createThenFail = null;      // W18 — 다음 함수 만들기는 AWS 에선 되지만 응답은 이 오류로(시간 넘김 흉내)
+let logFail = null;             // W17 — 다음 로그 그룹 맞추기를 이 AWS 오류로
 const api = {
   getFunction: async (n) => { const f = fns.get(n); return f ? { Configuration: cfgOf(f), Tags: { ...f.tags } } : null; },
   //  판을 주면 그 판을 고정할 때의 설정(판은 바뀌지 않는다) — 없으면 $LATEST.
@@ -111,6 +115,7 @@ const api = {
     fns.set(i.FunctionName, { cfg: { FunctionName: i.FunctionName, Role: i.Role, Handler: i.Handler, Runtime: i.Runtime, MemorySize: i.MemorySize, Timeout: i.Timeout,
       Layers: i.Layers.map((a) => ({ Arn: a })), Environment: i.Environment, Architectures: i.Architectures, CodeSha256: shaB64(z), CodeSize: z.length, State: "Active", LastUpdateStatus: "Successful" },
       tags: { ...i.Tags }, versions: [], seq: 0, aliases: new Map(), conc: null });
+    if (createThenFail) { const e = createThenFail; createThenFail = null; throw e; }
     return cfgOf(fns.get(i.FunctionName));
   },
   updateFunctionCode: async (n, code) => {
@@ -147,7 +152,7 @@ const api = {
   },
   putConcurrency: async (n, k) => { log.push(["putConcurrency", n, k]); fns.get(n).conc = k; },
   deleteConcurrency: async (n) => { log.push(["deleteConcurrency", n]); const f = fns.get(n); if (f) f.conc = null; },
-  ensureLogGroup: async (g, d) => { log.push(["ensureLogGroup", g, d]); },
+  ensureLogGroup: async (g, d) => { log.push(["ensureLogGroup", g, d]); if (logFail) { const e = logFail; logFail = null; throw e; } },
   deleteLogGroup: async (g) => { log.push(["deleteLogGroup", g]); },
 };
 const deletedZips = [];
@@ -762,6 +767,72 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   chk("W15 기다리는 사이 줄이 사라지면 다시 잡아 배포한다(잠금 409 아님)", gone && d.status === "deployed" && !!(await rowOf("lk-a")) && fns.has(fnOf("lk-a")),
     JSON.stringify({ gone, status: d.status, error: d.error }));
   await call("org_app_remove", { app_id: "lk-a" }, boss);
+}
+
+// W16 잠금을 기다리는 사이 앱이 지워지면(앱 · 줄 · 함수가 사라짐) 줄을 되살리지 않는다 — 함수를 다시 만들지 않고 끝난다(재검토: 고아 쓸기가 걷을 함수를 만들었다)
+{
+  await call("app_save", { files: twin("lk-b") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lk-b", wait_s: 120 }, alice, aliceCtx);
+  await q(`UPDATE org_app_server SET lock_until = now() + interval '10 minutes' WHERE app_id='lk-b'`);
+  let gone = false;
+  setServerDepsForTest({ ...baseDepsW(), sleep: async () => { if (!gone) { gone = true; fns.delete(fnOf("lk-b")); await q(`DELETE FROM org_app_server WHERE app_id='lk-b'`); await q(`DELETE FROM org_app WHERE id='lk-b'`); } } });
+  await call("app_save", { files: twin("lk-b", "require('http').createServer((q,s)=>s.end('lk3')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  const cf0 = calls("createFunction").length;
+  let d;
+  try { d = await call("app_server_deploy", { app_id: "lk-b", wait_s: 120 }, alice, aliceCtx); } catch (e) { d = { status: "threw", error: String(e?.message) }; }
+  setServerDepsForTest(baseDepsW());
+  chk("W16 기다리는 사이 앱이 지워지면 줄을 되살리지 않는다 · 함수 만들기 0", gone && d.status !== "deployed" && !(await rowOf("lk-b")) && !fns.has(fnOf("lk-b"))
+    && calls("createFunction").length === cf0, JSON.stringify({ gone, status: d.status, error: d.error }));
+  for (const r of await q(`DELETE FROM org_app_server_build WHERE app_id='lk-b' RETURNING zip_key`)) if (r.zip_key) zips.delete(r.zip_key);
+}
+
+// W17 있는 함수의 배포가 코드 자리를 잡은 뒤 실패하면(로그 그룹 맞추기 실패) 잡아 둔 크기를 실측으로 덮는다(재검토: 과대 값이 남아 다른 앱을 막았다)
+{
+  await call("app_save", { files: twin("lg-a") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lg-a", wait_s: 120 }, alice, aliceCtx);
+  await call("app_save", { files: twin("lg-a", "require('http').createServer((q,s)=>s.end('lg2')).listen(Number(process.env.PORT));") }, alice, aliceCtx);
+  logFail = new AwsError(503, "ServiceUnavailableException", "흉내 — 로그 그룹 실패");
+  const d = await call("app_server_deploy", { app_id: "lg-a", wait_s: 120 }, alice, aliceCtx);
+  const r = await rowOf("lg-a");
+  chk("W17 자리 잡은 뒤 실패 → code_bytes = 실측(새 코드 몫이 남지 않음)", d.status === "failed" && logFail === null && !!r
+    && Number(r.code_bytes) === codeOf(fnOf("lg-a")) && codeOf(fnOf("lg-a")) > 0, JSON.stringify({ status: d.status, error: d.error, cb: r && r.code_bytes, want: codeOf(fnOf("lg-a")) }));
+  await call("org_app_remove", { app_id: "lg-a" }, boss);
+}
+
+// W18 첫 배포의 함수 만들기가 응답 없이 끝났는데 함수는 생겼으면 — 줄은 남고(함수가 있다) 잡아 둔 크기(배포 뒤 셈)를 실측으로 덮는다(재검토)
+{
+  createThenFail = new AwsError(503, "ServiceUnavailableException", "흉내 — 만들고 응답 없음");
+  await call("app_save", { files: twin("cg-a") }, alice, aliceCtx);
+  const d = await call("app_server_deploy", { app_id: "cg-a", wait_s: 120 }, alice, aliceCtx);
+  const r = await rowOf("cg-a");
+  chk("W18 만들기 응답 실패 · 함수는 생김 → 줄 남김 · code_bytes = 실측($LATEST 하나)", d.status === "failed" && createThenFail === null && fns.has(fnOf("cg-a")) && !!r
+    && Number(r.code_bytes) === codeOf(fnOf("cg-a")) && codeOf(fnOf("cg-a")) > 0, JSON.stringify({ status: d.status, error: d.error, cb: r && r.code_bytes, want: codeOf(fnOf("cg-a")) }));
+  await call("org_app_remove", { app_id: "cg-a" }, boss);
+}
+
+// W19 하우스키핑이 재는 사이 같은 앱의 배포가 값을 적었으면(자리 잡기 · 실측) 늦게 온 측정이 덮지 않는다(재검토)
+{
+  await q(`UPDATE org_app_server SET code_bytes = 0 WHERE app_id='srv'`);
+  const racing = { ...api, listVersions: async (n) => { const v = await api.listVersions(n); if (n === FN) await q(`UPDATE org_app_server SET code_bytes = 4242 WHERE app_id='srv'`); return v; } };
+  await refreshUnknownCodeBytes({ api: racing });
+  const cb = await codeBytes();
+  chk("W19 재는 사이 배포가 적은 값을 덮지 않는다", cb === 4242, JSON.stringify({ cb, stale: codeOf(FN) }));
+  await q(`UPDATE org_app_server SET code_bytes = $1 WHERE app_id='srv'`, [codeOf(FN)]);
+}
+
+// W20 영영 못 재는 줄(함수가 AWS 에서 사라짐)이 고르는 순서의 앞자리에 있어도 다른 줄이 굶지 않는다 — 못 잰 줄은 뒤로 보낸다(재검토)
+{
+  await q(`INSERT INTO org_app_server(app_id, function_name, code_bytes, cur_lambda_version, updated_at) VALUES
+    ('st-a', 'lvly-app-st-a-local', 0, '1', now() - interval '10 days'), ('st-b', 'lvly-app-st-b-local', 0, '1', now() - interval '9 days')`);
+  const flaky = { ...api, listVersions: async (n) => {
+    if (n === "lvly-app-st-a-local") throw new AwsError(404, "ResourceNotFoundException", "흉내 — 함수 없음");
+    return n === "lvly-app-st-b-local" ? [{ Version: "$LATEST", CodeSize: 777 }] : api.listVersions(n);
+  } };
+  await refreshUnknownCodeBytes({ api: flaky }, 1);
+  await refreshUnknownCodeBytes({ api: flaky }, 1);
+  const b = Number((await q(`SELECT code_bytes FROM org_app_server WHERE app_id='st-b'`))[0].code_bytes);
+  chk("W20 못 잰 줄은 뒤로 — 두 번째 틱엔 다음 줄을 잰다", b === 777, JSON.stringify({ b }));
+  await q(`DELETE FROM org_app_server WHERE app_id IN ('st-a', 'st-b')`);
 }
 
 // ── #4791 서버 선언을 뺀 앱의 함수 정리(X) ──

@@ -24,7 +24,7 @@ import { versionBundle } from "./app-version-files.js";
 import * as lam from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
 import type { OrgApp } from "../org/store/apps.js";
-import { getAppVersionBundle } from "../org/store/apps.js";
+import { getApp, getAppVersionBundle } from "../org/store/apps.js";
 
 /** 시험이 갈아 끼우는 AWS 면(기본 = lambda-lite 를 그 지역으로). */
 export interface LambdaApi {
@@ -202,7 +202,11 @@ export async function deployBuildToAliases(i: {
     locked = await st.lockServer(i.app.id, 15 * 60);
     if (locked) break;
     //  줄이 사라졌으면(그 사이 하우스키핑이 서버 선언을 뺀 앱의 함수를 걷었다 · #4791) 잠금 다툼이 아니다 — 줄을 다시 잡는다(격리 리뷰).
-    if (!(await st.getServerRow(i.app.id))) { await claimRow(); continue; }
+    //   앱을 지워서 사라졌으면(removeServer) 되살리지 않는다 — 다시 만든 함수는 고아 쓸기가 걷을 것뿐이다(재검토).
+    if (!(await st.getServerRow(i.app.id))) {
+      if (!(await getApp(i.app.id))) throw new HttpError(404, `앱 없음: ${i.app.id} — 배포를 기다리는 사이 지워졌습니다`);
+      await claimRow(); continue;
+    }
     await sleep(deps.pollMs ?? 2000);
   }
   if (!locked) throw new HttpError(409, lockedMsg);
@@ -231,6 +235,8 @@ export async function deployBuildToAliases(i: {
         await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
         throw new HttpError(409, foreignMsg(fn));
       }
+      //  zip 크기를 모르면(저장소를 못 본 옛 빌드) 상한이 이번 코드를 0 으로 센다 — 드물지만 보이게 남긴다(재검토).
+      if (!(i.zipBytes > 0)) logger.warn({ app: i.app.id, build: i.buildKey }, "빌드 zip 크기를 모른다 — 코드 저장 상한이 이번 코드를 0 으로 센다(#4792)");
       //  #4792 코드 저장 상한 — 이 함수가 배포 뒤 차지할 크기(옛 판 정리와 같은 규칙)를 다른 함수들의 합에 더해 본다.
       //   이번에 옮기지 않는 별칭(초안만 올릴 때의 pub)이 가리키는 판은 정리에서 빠지니 남는 쪽에 센다.
       const vers = got ? await api.listVersions(fn) : [];
@@ -316,10 +322,12 @@ export async function deployBuildToAliases(i: {
     //  코드를 올렸거나 판을 고정한 뒤 실패했으면 그 함수의 코드 크기가 바뀌었다 — 다시 재 둔다(상한이 낡은 값으로 세지 않게).
     if (owned) await recordCodeBytes(api, fn, i.app.id).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 재기 실패(비치명)"));
     //  함수를 하나도 못 만든 채 끝난 첫 배포(역할 전파 · 계정 한도 등)면 빈 줄을 걷는다 — 남으면 함수 수 상한의 한 칸을 계속 잡는다(격리 리뷰).
-    //   AWS 에 함수가 있으면(남이 만든 것 포함) 줄을 남긴다 — 확인을 못 했어도 남긴다.
+    //   AWS 에 함수가 있으면(남이 만든 것 포함) 줄을 남긴다 — 확인을 못 했어도 남긴다. 우리 함수가 있으면(자리를 잡은 뒤 로그 그룹 등에서 실패 ·
+    //   만들기가 응답 없이 끝났는데 함수는 생김) 잡아 둔 크기(배포 뒤 셈)를 실측으로 덮는다(재검토).
     else {
-      const exists = await api.getFunction(fn).then((g) => !!g).catch(() => true);
-      if (!exists) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+      const g = await api.getFunction(fn).catch(() => undefined);   // undefined = 확인 못 함
+      if (g === null) await st.deleteServerRowIfUnused(i.app.id).catch(() => { /* 다음에 */ });
+      else if (g && g.Tags?.["lvly:tenant"] === blobTenant()) await recordCodeBytes(api, fn, i.app.id).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 재기 실패(비치명)"));
     }
     const msg = publicError(e);
     await st.setServerError(i.app.id, msg).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });

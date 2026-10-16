@@ -191,6 +191,15 @@ export async function sumServerCodeBytes(): Promise<number> {
 export async function setServerCodeBytes(appId: string, bytes: number): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET code_bytes=$2 WHERE app_id=$1`, [appId, Math.max(0, Math.round(bytes))]);
 }
+/** 아직 모를 때(0)만 적는다 — 하우스키핑이 잰 사이 같은 앱의 배포가 자리를 잡았거나 실측을 적었으면 그 값이 맞다(재검토). 적었으면 true. */
+export async function fillServerCodeBytes(appId: string, bytes: number): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_server SET code_bytes=$2 WHERE app_id=$1 AND code_bytes = 0`, [appId, Math.max(0, Math.round(bytes))]);
+  return (r.rowCount ?? 0) > 0;
+}
+/** 줄을 고른 순서(updated_at)의 뒤로 보낸다 — 영영 못 재는 줄이 하우스키핑의 앞자리를 차지해 다른 줄이 굶지 않게(재검토). */
+export async function touchServerRow(appId: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_app_server SET updated_at=now() WHERE app_id=$1`, [appId]);
+}
 
 /** 워크스페이스 상한(#4792) 자문 락 — 함수 수 줄 잡기와 코드 저장 자리 잡기가 같은 키로 한 줄로 선다. 클러스터 전역이라 테넌트를 섞는다. */
 const QUOTA_LOCK_SQL = `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|lvly-app-server-quota'))`;
