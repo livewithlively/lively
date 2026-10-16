@@ -188,9 +188,9 @@ export const knowledgeSearch: Capability = {
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
     //   **세션이 부른 검색에만**(허용 목록) — MCP, 또는 세션 헤더(x-lively-session)를 실은 REST. 웹 화면의 «의미검색» · 앱 화면 다리
     //   (app-ui · app-front — 열람 신원이 실리지 않는다)에는 계산하지 않는다(리뷰 2026-10-17). 안내는 늘 질문한 사람 자신의 공개범위로만 찾는다
-    //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId)으로 들어온 MCP 도 뺀다 — 그 앱이 동의받은 도구는
-    //   knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
-    const forSession = (ctx?.source === "mcp" && !user?.appId) || (ctx?.source === "web" && !!ctx?.session);
+    //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId — 앱 서버 호출 포함)은 길(MCP · REST)을 가리지 않고 뺀다 —
+    //   그 앱이 동의받은 도구는 knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
+    const forSession = !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
     if (!forSession || !user?.userId) return { entries };
     const deadline = Date.now() + HINT_BUDGET_MS;
     const hint = await withinMs(HINT_BUDGET_MS, async () => {

@@ -112,14 +112,44 @@ export async function hybridSearchKnowledge(
 /**
  * (#4213 T12 #4744 검색 실패 보조 안내) 하이브리드 검색이 돌려준 지식이 질의와 얼마나 맞나 — RRF 점수는 순위라 «약하다» 를 말하지 못해서
  *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
- *  lexical = 그 가운데 질의 낱말이 모두(knowledge_grep plain 규칙 — 조사를 뗀 꼴 · 군말은 없어도 됨) 이름·제목·본문에 든 지식이 있나.
- *  돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진 것이다. 질의 임베딩은 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억).
+ *  lexical = 그 가운데 질의 낱말이 (부르는 쪽이 정한 수만큼 — termsNeeded · 큰따옴표 구절은 늘) 이름·제목·본문에 든 지식이 있나(knowledge_grep
+ *  plain 규칙 — 조사를 뗀 꼴 · 군말은 없어도 됨). 낱말이 맞으면 topSim 은 재지 않는다(null). 돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진
+ *  것이다. 질의 임베딩은 검색과 같은 원문(qstr)으로 묻어 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억) — 낱말은 termsQuery 에서 뽑는다.
  *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
  */
 export async function knowledgeSearchStrength(qstr: string, names: readonly string[],
-  termsNeeded: (n: number) => number = (n) => n): Promise<{ topSim: number | null; lexical: boolean }> {
+  opts: { termsQuery?: string; termsNeeded?: (n: number) => number } = {}): Promise<{ topSim: number | null; lexical: boolean }> {
   const list = [...new Set(names)].slice(0, 100);
   if (!list.length) return { topSim: null, lexical: false };
+  //  낱말 먼저 — 맞은 지식이 있으면 «강함» 이라 의미 거리는 재지 않는다(임베딩을 부르지 않는다 · 3차 리뷰).
+  //   낱말은 plain 규칙(조사를 뗀 꼴 · 같은 뜻 표기)으로 · **군말은 빼고**(«어떻게» · 한 글자) — 자연어 질의의 «공개범위를» 이 «공개범위» 로 맞고
+  //   «어떻게 돼» 가 지식에 없다고 약해지지 않게(리뷰 2026-10-17). 낱말이 전부 군말이면 그대로 다 쓴다. 낱말은 termsQuery(문장부호를 뗀 글)에서
+  //   뽑는다. 몇 개가 맞아야 하나는 부르는 쪽이 정한다(termsNeeded) — 큰따옴표 구절은 늘 맞아야 한다.
+  let lexical = false;
+  try {
+    const all = parseQueryTerms(opts.termsQuery ?? qstr);
+    const must = requiredTerms(all);
+    const terms = must.length ? must : all;
+    if (terms.length) {
+      const params: unknown[] = [];
+      const termSql = (t: (typeof terms)[number]) => grepWhereSql({ mode: "plain", terms: [t] } as GrepPlan, {}, params);
+      const quoted = terms.filter((t) => t.quoted), loose = terms.filter((t) => !t.quoted);
+      const need = Math.min(Math.max((opts.termsNeeded ?? ((n: number) => n))(terms.length), 1), terms.length);
+      const needLoose = Math.max(0, need - quoted.length);
+      const conds = quoted.map((t) => `(${termSql(t)})`);
+      if (loose.length && needLoose > 0) {
+        const hits = loose.map((t) => `(CASE WHEN (${termSql(t)}) THEN 1 ELSE 0 END)`);
+        params.push(needLoose);
+        conds.push(`(${hits.join(" + ")}) >= $${params.length}`);
+      }
+      params.push(list);
+      const rows = await q(itemsPool,
+        `SELECT count(*)::int AS n FROM knowledge k WHERE ${conds.join(" AND ")} AND k.name = ANY($${params.length}::text[])`, params);
+      lexical = Number(rows[0]?.n ?? 0) > 0;
+    }
+  } catch { lexical = false; }
+  if (lexical) return { topSim: null, lexical };
+  //  의미 거리 — 질의 벡터는 **검색과 같은 원문(qstr)** 으로 묻는다(검색이 방금 계산한 것을 기억에서 다시 쓴다).
   let topSim: number | null = null;
   try {
     const qe = await embedQuery(qstr);
@@ -130,24 +160,6 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
       topSim = r?.s == null ? null : Number(r.s);
     }
   } catch { topSim = null; }
-  let lexical = false;
-  try {
-    //  낱말은 plain 규칙(조사를 뗀 꼴 · 같은 뜻 표기)으로 · **군말은 빼고**(«어떻게» · 한 글자) — 자연어 질의의 «공개범위를» 이 «공개범위» 로 맞고
-    //   «어떻게 돼» 가 지식에 없다고 약해지지 않게(리뷰 2026-10-17). 낱말이 전부 군말이면 그대로 다 쓴다.
-    //   몇 개가 맞아야 하나는 부르는 쪽이 정한다(termsNeeded — 검색 실패 보조 안내는 «셋 이상이면 하나 빼고 전부»).
-    const all = parseQueryTerms(qstr);
-    const must = requiredTerms(all);
-    const terms = must.length ? must : all;
-    if (terms.length) {
-      const params: unknown[] = [];
-      const hits = terms.map((t) => `(CASE WHEN (${grepWhereSql({ mode: "plain", terms: [t] } as GrepPlan, {}, params)}) THEN 1 ELSE 0 END)`);
-      params.push(Math.min(Math.max(termsNeeded(terms.length), 1), terms.length)); const needP = `$${params.length}`;
-      params.push(list);
-      const rows = await q(itemsPool,
-        `SELECT count(*)::int AS n FROM knowledge k WHERE (${hits.join(" + ")}) >= ${needP} AND k.name = ANY($${params.length}::text[])`, params);
-      lexical = Number(rows[0]?.n ?? 0) > 0;
-    }
-  } catch { lexical = false; }
   return { topSim, lexical };
 }
 

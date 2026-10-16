@@ -114,14 +114,17 @@ async function myConnectors(member: string): Promise<Map<string, string>> {
  *  같은 점수면 최근에 글이 올라온 단위 먼저.
  */
 export async function findUnitsFor(actor: { member: string; isAdmin: boolean }, query: string,
-  opts: { limit?: number; now?: number; blocked?: boolean } = {}): Promise<UnitPointer[]> {
-  const q = cleanQuery(query);
+  opts: { limit?: number; now?: number; blocked?: boolean; deadline?: number } = {}): Promise<UnitPointer[]> {
+  //  낱말 맞춤은 문장부호를 뗀 글로 · 설명 벡터와 잴 질의 벡터는 원문으로(검색이 기억해 둔 벡터를 다시 쓴다 — cleanQuery 머리말).
+  const raw = String(query ?? "").trim();
+  const q = cleanQuery(raw);
   if (!q || !actor.member) return [];
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 5), 1), 10);
   const now = opts.now ?? Date.now();
   const visible = await loadCandidates(actor.member);
   if (!visible.length) return [];
-  const [sims, mine] = await Promise.all([unitSims(q, visible.map((u) => u.id)), myConnectors(actor.member)]);
+  if (opts.deadline != null && Date.now() > opts.deadline) return [];
+  const [sims, mine] = await Promise.all([unitSims(raw, visible.map((u) => u.id)), myConnectors(actor.member)]);
   const scored = visible.map((u) => {
     const m = unitMatch(sims.get(u.id) ?? null, textMatchScore(q, unitHaystack(u), u.name));
     return { u, m };
@@ -162,7 +165,7 @@ async function looseSources(q: string, viewer: string, limit: number, deadline?:
   const params: unknown[] = [];
   const hits = terms.map((term) => {
     const pats = [...termPatterns(term), ...termAltPatterns(term)].map((pat) => pat.toLowerCase());
-    const ors = pats.map((pat) => { params.push(pat); return `x.hay LIKE $${params.length} ESCAPE '\\'`; });
+    const ors = pats.map((pat) => { params.push(pat); return `h.hay LIKE $${params.length} ESCAPE '\\'`; });
     return `(CASE WHEN ${ors.join(" OR ")} THEN 1 ELSE 0 END)`;
   });
   const vis = await sourceVisWhere(viewer, params);
@@ -172,7 +175,9 @@ async function looseSources(q: string, viewer: string, limit: number, deadline?:
   params.push(LOOSE_BODY_CHARS); const bodyP = `$${params.length}`;
   const sql =
     //  두 CTE 를 MATERIALIZED 로 막는다 — 막지 않으면 플래너가 낱말 맞춤(hay LIKE)을 source 전체 훑기의 필터로 내려 본문을 다 푼다
-    //   (2026-10-17 실측: 30,000건에서 1.3초). w = id 만 3,000건(기본키 역순으로 읽다 멈춘다) · x = 그 행에서만 본문을 푼다.
+    //   (2026-10-17 실측: 30,000건에서 1.3초). w = id 만 3,000건(기본키 역순으로 읽다 멈춘다) · x = 그 행에서만 본문을 풀어 **점수까지** 낸다 —
+    //   풀어 쓴 본문(hay)을 x 에 남기면 본문이 긴 워크스페이스에서 CTE 가 디스크로 넘친다(3차 리뷰: 2만 자 × 3,000건 → 약 30MB). hay 는 행마다
+    //   한 번 계산하는 곁 질의(LATERAL · OFFSET 0 — 펼쳐지지 않게)에만 둔다.
     `WITH w AS MATERIALIZED (
        SELECT s.id FROM source s
         WHERE s.lifecycle = 'active' AND ${vis}
@@ -181,19 +186,20 @@ async function looseSources(q: string, viewer: string, limit: number, deadline?:
         LIMIT ${scanP}
      ), x AS MATERIALIZED (
        SELECT s.id, s.title, s.external_system, s.fields->>'container_name' AS container, s.occurred_at,
-              COALESCE(s.occurred_at, s.updated_at) AS at,
-              lower(COALESCE(s.title, '') || ' ' || left(COALESCE(s.body_md, ''), ${bodyP}::int)) AS hay
-         FROM source s WHERE s.id IN (SELECT id FROM w)
+              COALESCE(s.occurred_at, s.updated_at) AS at, (${hits.join(" + ")}) AS score
+         FROM source s
+         CROSS JOIN LATERAL (SELECT lower(COALESCE(s.title, '') || ' ' || left(COALESCE(s.body_md, ''), ${bodyP}::int)) AS hay OFFSET 0) h
+        WHERE s.id IN (SELECT id FROM w)
      )
-     SELECT id, title, external_system, container, occurred_at FROM (
-       SELECT x.id, x.title, x.external_system, x.container, x.occurred_at, x.at, (${hits.join(" + ")}) AS score FROM x
-     ) y WHERE score >= ${needP}
+     SELECT id, title, external_system, container, occurred_at FROM x WHERE score >= ${needP}
      ORDER BY score DESC, at DESC NULLS LAST, id DESC LIMIT ${limP}`;
   const client = await itemsPool.connect();
   if (deadline != null && Date.now() > deadline) { client.release(); throw new Error("hint deadline passed"); }
   try {
     await client.query("BEGIN");
-    await client.query(`SET LOCAL statement_timeout = ${LOOSE_TIMEOUT_MS}`);
+    //  남은 시간만큼만(부르는 쪽이 포기한 뒤까지 연결을 쥐지 않게) — 마감이 없으면 LOOSE_TIMEOUT_MS.
+    const budget = deadline != null ? Math.max(50, Math.min(LOOSE_TIMEOUT_MS, deadline - Date.now())) : LOOSE_TIMEOUT_MS;
+    await client.query(`SET LOCAL statement_timeout = ${Math.floor(budget)}`);
     //  짧은 쿼리라 JIT 컴파일(수백 ms)이 득이 안 된다 — 추정 비용이 문턱을 넘어 JIT 가 켜지는 일을 막는다.
     await client.query("SET LOCAL jit = off");
     const r = await client.query(sql, params);
@@ -242,12 +248,14 @@ export async function collectHintFor(input: {
   /** 이 시각(ms)이 지나면 더 묻지 않는다 — 부르는 쪽(knowledge_search)이 기다리는 상한. 지나서 끝난 일은 버려지므로 미리 멈춘다. */
   deadline?: number;
 }): Promise<CollectHint | null> {
-  const q = cleanQuery(input.q);
+  //  raw = 검색과 같은 원문(질의 임베딩 기억을 다시 쓴다) · q = 문장부호를 뗀 글(낱말 판정 · 원문 자료 찾기).
+  const raw = String(input.q ?? "").trim();
+  const q = cleanQuery(raw);
   const late = () => input.deadline != null && Date.now() > input.deadline;
   //  안내는 질문한 사람의 것이다 — 사람이 없으면(내부 호출) 만들지 않는다. 자료·단위 모두 그 사람 자신의 공개범위로만 찾는다.
   if (!q || !input.member) return null;
   try {
-    const strength = await knowledgeSearchStrength(q, input.names, knowledgeTermsNeeded);
+    const strength = await knowledgeSearchStrength(raw, input.names, { termsQuery: q, termsNeeded: knowledgeTermsNeeded });
     const w = knowledgeWeak({ count: input.names.length, topSim: strength.topSim, lexical: strength.lexical });
     if (!w.weak || !w.reason) return null;
     const base = { reason: w.reason, knowledge: { top_similarity: strength.topSim == null ? null : Math.round(strength.topSim * 1000) / 1000, lexical: strength.lexical } };
@@ -255,7 +263,8 @@ export async function collectHintFor(input: {
     let checked = true;
     const found = await looseSources(q, input.member, HINT_SOURCES, input.deadline).catch((e) => {
       checked = false;
-      warnSometimes("[unit-find] 원문 자료를 못 찾아봤다(시간 상한 · 오류) — 단위로 넘어간다", e);
+      if (late()) logger.debug?.({ err: (e as Error)?.message }, "[unit-find] 마감이 지나 원문 자료 찾기를 멈췄다");
+      else warnSometimes("[unit-find] 원문 자료를 못 찾아봤다(시간 상한 · 오류) — 단위로 넘어간다", e);
       return [] as NonNullable<CollectHint["sources"]>;
     });
     if (late()) return null;
@@ -271,7 +280,9 @@ export async function collectHintFor(input: {
     }
     const { memberAiConnectorsPolicy } = await import("../store/member-ai-connectors.js");
     const allowed = (await memberAiConnectorsPolicy()) === "allowed";
-    const units = allowed ? await findUnitsFor({ member: input.member, isAdmin: input.isAdmin }, q, { limit: HINT_UNITS, now: input.now }) : [];
+    const units = allowed
+      ? await findUnitsFor({ member: input.member, isAdmin: input.isAdmin }, raw, { limit: HINT_UNITS, now: input.now, deadline: input.deadline }) : [];
+    if (late()) return null;
     //  원문 자료를 못 찾아봤으면(시간 상한 · 오류) «원문 자료에도 없다» 고 하지 않는다 — source_list 로 직접 찾을 수 있다고 알린다.
     const head = checked
       ? (empty ? "지식·원문 자료에 맞는 것이 없습니다." : "지식 결과에 질문의 낱말이 다 든 것이 없고, 원문 자료에도 맞는 것이 없습니다.")

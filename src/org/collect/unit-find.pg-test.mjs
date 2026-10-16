@@ -114,8 +114,13 @@ try {
     chk("H1c 질의 끝의 물음표는 떼고 맞춘다(«일정?» → «일정») — 안내가 안 붙는다", asked === null, JSON.stringify(asked));
     const most = await collectHintFor({ q: "결제 출시 일정 변경", names: [KN], member: A, isAdmin: false, now: NOW });
     const few = await collectHintFor({ q: "결제 변경 취소 사유", names: [KN], member: A, isAdmin: false, now: NOW });
-    chk("H1d 낱말이 셋 이상이면 하나 빼고 다 든 지식이 있으면 강하다(«변경» 하나 없음 → 안내 없음) · 하나만 맞으면 약하다",
+    chk("H1d 낱말이 넷 이상이면 하나 빼고 다 든 지식이 있으면 강하다(«변경» 하나 없음 → 안내 없음) · 하나만 맞으면 약하다",
       most === null && few?.reason === "weak", JSON.stringify({ most, few: few && { reason: few.reason, note: few.note } }));
+    const three = await collectHintFor({ q: "결제 출시 변경", names: [KN], member: A, isAdmin: false, now: NOW });
+    const quotedMiss = await collectHintFor({ q: '결제 출시 일정 "출시 연기"', names: [KN], member: A, isAdmin: false, now: NOW });
+    chk("H1e 낱말이 셋이면 전부 맞아야 강하다(«변경» 하나 없음 → 약함) · 큰따옴표 구절은 빼는 낱말이 될 수 없다(넷 중 구절만 없음 → 약함)",
+      three?.reason === "weak" && quotedMiss?.reason === "weak",
+      JSON.stringify({ three: three && three.reason, quotedMiss: quotedMiss && quotedMiss.reason }));
     await itemsPool.query(`INSERT INTO source(name, kind, title, body_md, provenance) VALUES($1,'doc',$2,$3,'observed')`,
       [SRC, "결제 출시 회의록", "결제 기능 출시를 11월로 미루자는 의견"]);
     //  이미 지식이 된 자료(knowledge_source 로 묶임)는 «아직 지식이 안 된 원문 자료» 가 아니다.
@@ -187,8 +192,11 @@ try {
     const priv = await handler("knowledge_search")({ q: "롤아웃 날짜 확정 메모" }, userOf(A), { source: "mcp", viewer: null });
     const lockedId = (await itemsPool.query(`SELECT id FROM source WHERE name=$1`, [`${SRC}-locked`])).rows[0].id;
     const viaApp = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, { ...userOf(A), appId: "app-ci-find" }, { source: "mcp", viewer: A });
-    chk("S1e 앱 세션 토큰(appId)으로 들어온 MCP 에는 안내를 안 붙인다(앱 동의 경계)", !viaApp.collect_hint && Array.isArray(viaApp.entries),
-      JSON.stringify(Object.keys(viaApp)));
+    const viaAppRest = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, { ...userOf(A), appId: "app-ci-find" },
+      { source: "web", session: "box-ci-find-1", viewer: A });
+    chk("S1e 앱 세션 토큰(appId)으로 들어오면 MCP · 세션 헤더를 실은 REST 모두 안내를 안 붙인다(앱 동의 경계)",
+      !viaApp.collect_hint && Array.isArray(viaApp.entries) && !viaAppRest.collect_hint && Array.isArray(viaAppRest.entries),
+      JSON.stringify({ mcp: Object.keys(viaApp), rest: Object.keys(viaAppRest) }));
     chk("S1d 앱 화면 다리에는 안내를 안 붙인다 · 특권 열람 신원(null)으로 불러도 안내의 원문 자료는 그 사람 공개범위대로(C 만 보는 메모가 안 나온다)",
       !appUi.collect_hint && !appFront.collect_hint && !(priv.collect_hint?.sources ?? []).some((x) => x.id === lockedId),
       JSON.stringify({ appUi: !!appUi.collect_hint, appFront: !!appFront.collect_hint, priv: priv.collect_hint }));
@@ -223,11 +231,13 @@ try {
         const n = Math.hypot(...v);
         return v.map((x) => x / n);
       };
+      let embedded = 0;   // 가짜 서버가 임베딩한 글 수(V4 — 질의 임베딩을 몇 번 불렀나)
       const server = http.createServer((req, res) => {
         let body = "";
         req.on("data", (c) => { body += c; }).on("end", () => {
           const j = JSON.parse(body || "{}");
           const input = Array.isArray(j.input) ? j.input : [j.input];
+          embedded += input.length;
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ data: input.map((t, index) => ({ index, embedding: vec(t) })) }));
         });
@@ -263,6 +273,16 @@ try {
         chk("V3 결과가 있어도 뜻이 멀면(코사인 < 0.65) 약함 · 가까우면(≥ 0.65) 낱말이 안 맞아도 강함",
           far?.reason === "weak" && far.knowledge.top_similarity < 0.65 && near === null,
           JSON.stringify({ far: far && { reason: far.reason, k: far.knowledge }, near }));
+        //  «?» 로 끝나는 세션 검색 — 질의 임베딩은 검색이 부른 한 번뿐이어야 한다(안내는 같은 원문으로 물어 기억을 다시 쓰고, 낱말이 맞으면 묻지 않는다).
+        __resetQueryEmbedCache(); embedded = 0;
+        const strongQ = await handler("knowledge_search")({ q: "결제 출시 일정?" }, userOf(A), { source: "mcp", viewer: A });
+        const strongCalls = embedded;
+        __resetQueryEmbedCache(); embedded = 0;
+        const weakQ = await handler("knowledge_search")({ q: "recruit pipeline?" }, userOf(A), { source: "mcp", viewer: A });
+        const weakCalls = embedded;
+        chk("V4 «?» 로 끝나는 세션 검색도 질의 임베딩은 한 번 — 강하면(낱말 맞음) 의미 거리를 안 재고, 약하면 검색이 계산한 벡터를 다시 쓴다(단위 뜻 맞춤까지)",
+          strongCalls === 1 && !strongQ.collect_hint && weakCalls === 1 && !!weakQ.collect_hint?.units?.length,
+          JSON.stringify({ strongCalls, weakCalls, strongHint: !!strongQ.collect_hint, weakHint: weakQ.collect_hint && { reason: weakQ.collect_hint.reason, units: weakQ.collect_hint.units?.map((x) => x.name) } }));
         //  고치기 — 임베딩할 글이 그대로면 벡터를 안 비운다 · 바뀌면 비워 다시 임베딩한다(시각이 바뀐다).
         const stamp = async () => (await itemsPool.query(`SELECT embedding_updated_at AS t FROM collect_unit WHERE id=$1`, [u2.id])).rows[0].t?.toISOString?.() ?? null;
         const t0 = await stamp();
