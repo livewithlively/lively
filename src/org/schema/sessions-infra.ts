@@ -264,6 +264,17 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  NULL = 이 칸 이전에 태어난 판(사유를 모른다 — 화면은 종전처럼 그린다).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS end_note JSONB;`);
 
+  // #4783 후속(상민님 2026-10-16 «사유 모름이 왜 이렇게 많냐 — 유저 행동이 필요한 세션을 숨기는 꼴») —
+  //  **마지막으로 관측한 실행 상태**. { at(관측 epoch초) · run(working|done|asking|bg|scheduled) }.
+  //  왜: end_note 는 끝낸 **자리가 적는다**(사람 /exit · 시스템 회수 · 런처 종료코드). 그런데 세션은 그 세 자리를 안 거치고도 꺼진다
+  //   (노드 죽음 · 게이트웨이·노드 재시작 · PC 꺼짐 · 고장 · 브로커 정리). 그때 end_note 가 비어 화면이 «사유 모름» 으로 떨어졌고,
+  //   그 안에 **답을 기다리던 세션·작업 도중 끊긴 세션**이 숨었다(실측: unknown 205 — 사람이 끝낸 게 아니다).
+  //  해결: 종료 규칙 sweep(session-stop-rule)이 매 틱 **관측한** 세션마다 그 순간의 실행 상태를 여기 적는다. 세션이 어떤 길로 꺼지든
+  //   이 칸은 마지막 관측값으로 남아, 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 에서 끊김=고장 · asking=확인 필요 · done=완료).
+  //  수명: sweep 이 관측할 때마다 덮어쓴다(관측 못 한 세션은 **안 건드린다** — 모름을 덮으면 안다가 모름이 된다). 판이 새로 서면(upsert) 지운다.
+  //  우선순위: end_note.why 가 있으면 그게 이긴다(끝낸 자리가 적은 확정 사실). 이 칸은 end_note 가 빌 때의 폴백이다. NULL = 아직 한 번도 관측 못 함.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_run_state JSONB;`);
+
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
   //   행은 남아 '기록' 세션으로 다시 떠올랐다(같은 대화가 지웠는데도 목록에 돌아온다). 그래서 **두 단계**로 나눈다:

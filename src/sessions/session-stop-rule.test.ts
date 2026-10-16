@@ -8,7 +8,8 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, type StopFacts } from "./session-stop-rule.js";
+import { stopVerdict, stopFactsOf, stopMinutesOf, sweepSessionStopRule, resetStopRule, stopRuleDecides, sessionsUnderStopRule, logStopRuleTick, runStateFromFacts, WAKE_GRACE_SEC, MAX_STOPS_PER_SWEEP, JOB_HOLD_MS, QUOTA_RECHECK_MS, QUOTA_UNKNOWN_MAX, QUOTA_UNKNOWN_FOLD_MS, QUOTA_UNKNOWN_RETRY_MS, launchedAtMsOf, defaultQuotaWait, type StopFacts } from "./session-stop-rule.js";
+import type { QuotaWait } from "../terminal/harness-io/quota-wait.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { SessionState } from "./session-state.js";
 
@@ -193,11 +194,14 @@ test.beforeEach(() => resetStopRule());
 const verdictsOf = (jobs: string[] = [], unknown: string[] = []) => async (ids: ReadonlySet<string>) => ({
   jobs: new Set([...ids].filter((id) => jobs.includes(id))), unknown: new Set([...ids].filter((id) => unknown.includes(id))),
 });
-function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Record<string, string>; jobs?: string[]; unknown?: string[]; view?: (id: string) => { viewing: boolean; unknown: boolean; endedAtMs: number }; enabled?: boolean; policy?: Record<string, number>; nowMs?: number } = {}) {
+function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Record<string, string>; jobs?: string[]; unknown?: string[]; view?: (id: string) => { viewing: boolean; unknown: boolean; endedAtMs: number }; enabled?: boolean; policy?: Record<string, number>; nowMs?: number; quota?: (id: string) => QuotaWait | null } = {}) {
   const reaped: string[] = [];
   const notes: Array<[string, unknown]> = [];
   const keys: Array<[string, string]> = [];
+  const lastRuns: Array<[string, string]> = [];
   const armed: number[] = [];
+  /** 대화 기록(한도 대기) 판정을 부른 세션 id 와 넘긴 지금(ms) — 읽으면 안 되는 세션에서 읽었나를 본다. */
+  const quotaCalls: Array<[string, number]> = [];
   const run = sweepSessionStopRule({
     enabled: () => o.enabled ?? true,
     loadPolicy: async () => (o.policy ?? {}) as never,
@@ -207,14 +211,16 @@ function sweepWith(rows: SessionInfo[], states: SessionState[], o: { screen?: Re
     view: o.view ?? (() => NOT_VIEWING),
     jobVerdicts: verdictsOf(o.jobs, o.unknown),
     capture: async (id) => o.screen?.[id] ?? CLAUDE_DRAFT_SCREEN,
+    quotaWait: async (s, nowMs) => { quotaCalls.push([s.id, nowMs]); return o.quota ? o.quota(s.id) : null; },
     keys: async (id, k) => { keys.push([id, k]); },
     saveNote: async (id, n) => { notes.push([id, n]); },
+    markLastRun: async (id, s) => { lastRuns.push([id, s.run]); },
     reap: async (id) => { reaped.push(id); },
     sleep: async () => {},
     now: () => o.nowMs ?? NOW * 1000,
     arm: (at) => { armed.push(at); },
   });
-  return run.then((r) => ({ r, reaped, notes, keys, armed }));
+  return run.then((r) => ({ r, reaped, notes, keys, armed, quotaCalls, lastRuns }));
 }
 const liveDone = (id: string, o: Partial<SessionInfo> = {}): SessionInfo => row({
   id, agentState: "idle", lastActive: NOW - 600, lastReport: { phase: "idle", at: NOW - 600, bg: 0, wake: 0, cron: 0 }, ...o,
@@ -231,7 +237,7 @@ test("S2 완료+안 봄 3분 → 쓰다 만 글을 쪽지로 남기고 끈다(�
   const reaped: string[] = [];
   const r = await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async (id, n) => { order.push(`save:${id}:${(n as { draft?: string }).draft}`); },
     reap: async (id) => { order.push(`reap:${id}`); reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -257,7 +263,7 @@ test("S4 하네스가 띄운 작업이 살아 있으면(⑥) 끄지 않는다 �
   const reaped: string[] = [];
   const r = await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: async () => { throw new Error("ps 실패"); }, capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: async () => { throw new Error("ps 실패"); }, quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.deepEqual(reaped, []);
@@ -309,7 +315,7 @@ test("S8 claude 여러 질문(탭) — → 키로 넘기며 각 질문을 읽는
   const notes: unknown[] = [];
   await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [asking], listStates: async () => [stOf("box-a-6")],
-    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => shown,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), quotaWait: async () => null, capture: async () => shown,
     keys: async (_id, k) => { keys.push(k); shown = tabs1; }, saveNote: async (_id, n) => { notes.push(n); },
     reap: async () => {}, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -321,7 +327,7 @@ test("S9 쪽지 저장이 실패해도 끈다(글이 있다고 끄기를 미루�
   const reaped: string[] = [];
   await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
-    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => CLAUDE_DRAFT_SCREEN,
+    listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN,
     keys: async () => {}, saveNote: async () => { throw new Error("DB 다운"); }, reap: async (id) => { reaped.push(id); },
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -344,7 +350,7 @@ test("S12 작업이 살아 있던 세션은 3분 동안 다시 재지 않고(프
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-1")], listStates: async () => [stOf("box-a-1")],
     listManaged: async () => [], view: () => NOT_VIEWING,
     jobVerdicts: async (ids) => { asked.push([...ids]); return verdictsOf(jobs)(ids); },
-    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
+    quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
     sleep: async () => {}, now: () => nowMs, arm: () => {},
   });
   await run(NOW * 1000, ["box-a-1"]);
@@ -385,7 +391,7 @@ test("S15 질문 탭을 못 넘겼으면(같은 질문이 다시 보인다) 같�
   const notes: unknown[] = [];
   await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-7", { awaiting: true, agentState: "waiting", lastActive: NOW - 4000 })],
-    listStates: async () => [stOf("box-a-7")], listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), capture: async () => tabs0,
+    listStates: async () => [stOf("box-a-7")], listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(), quotaWait: async () => null, capture: async () => tabs0,
     keys: async () => { /* 키가 안 먹었다 — 화면이 그대로다 */ }, saveNote: async (_id, n) => { notes.push(n); },
     reap: async () => {}, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
@@ -401,7 +407,7 @@ test("S13b 후보가 많으면 프로브 앞에서 자른다(상한의 두 배�
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => rows, listStates: async () => ids.map(stOf),
     listManaged: async () => [], view: () => NOT_VIEWING,
     jobVerdicts: async (s) => { asked.push([...s]); return verdictsOf()(s); },
-    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
+    quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); },
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.equal(asked.length, 1);
@@ -426,7 +432,7 @@ test("S16 질문 탭을 넘기기 전에 사람이 돌아왔으면 → 키를 �
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => [liveDone("box-a-8", { awaiting: true, agentState: "waiting", lastActive: NOW - 4000 })],
     listStates: async () => [stOf("box-a-8")], listManaged: async () => [],
     view: () => (calls++ === 0 ? NOT_VIEWING : { viewing: true, unknown: false, endedAtMs: 0 }),
-    jobVerdicts: verdictsOf(), capture: async () => tabs0, keys: async (_id, k) => { keys.push(k); }, saveNote: async () => {},
+    jobVerdicts: verdictsOf(), quotaWait: async () => null, capture: async () => tabs0, keys: async (_id, k) => { keys.push(k); }, saveNote: async () => {},
     reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.deepEqual(keys, [], "돌아온 사람의 대화상자 탭을 움직이지 않는다");
@@ -539,7 +545,7 @@ test("L4 이유별로 가장 오래 논 세션을 남긴다 — 보는 중으로
     listManaged: async () => [],
     view: (id) => ({ viewing: id.startsWith("box-v"), unknown: false, endedAtMs: 0 }),
     jobVerdicts: verdictsOf(["box-j"], ["box-u"]),
-    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
+    quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.deepEqual(r.keptOldest?.viewing, { id: "box-v2", idleSec: 86_400 });
@@ -552,7 +558,7 @@ test("L5 끄기 직전 확인에 걸려 남긴 세션(답이 남 · 상한)도 �
     enabled: () => true, loadPolicy: async () => ({}),
     listLive: async () => [liveDone("box-q", { awaiting: true, agentState: "waiting", lastActive: NOW - 9000 })],
     listStates: async () => [stOf("box-q")], listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(),
-    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
+    quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.equal(r.kept.answered, 1);
@@ -564,7 +570,7 @@ test("L6 상한에 걸려 남긴 세션도 가장 오래 논 것을 남긴다(ca
   const r = await sweepSessionStopRule({
     enabled: () => true, loadPolicy: async () => ({}), listLive: async () => rows, listStates: async () => ids.map(stOf),
     listManaged: async () => [], view: () => NOT_VIEWING, jobVerdicts: verdictsOf(),
-    capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
+    quotaWait: async () => null, capture: async () => CLAUDE_DRAFT_SCREEN, keys: async () => {}, saveNote: async () => {}, reap: async () => {},
     sleep: async () => {}, now: () => NOW * 1000, arm: () => {},
   });
   assert.equal(r.kept.capped, ids.length - MAX_STOPS_PER_SWEEP);
@@ -572,4 +578,213 @@ test("L6 상한에 걸려 남긴 세션도 가장 오래 논 것을 남긴다(ca
   const capIds = new Set(ids.slice(0, 2).concat(ids.slice(2, ids.length - MAX_STOPS_PER_SWEEP)));
   assert.ok(r.keptOldest?.capped && capIds.has(r.keptOldest.capped.id), JSON.stringify(r.keptOldest?.capped));
   assert.ok((r.keptOldest?.capped?.idleSec ?? 0) >= 600);
+});
+
+// ── #4810 한도 자동 이어감 대기 — 사양·엣지 표 SQ1~SQ11 · F3: 작업 스크래치 spec-4810.md ──────────────────────────────────────
+//  Claude Code 는 턴 도중 한도에 닿으면 턴을 정리해 끝내고(Stop 훅 → «쉼» 보고 → 판정은 완료) 하네스 안에서 풀리는 시각을 기다린다.
+//  🔴 그 세션을 «완료» 로 끄면 — 대기가 사라져 일이 스스로 이어지지 않는다(2026-10-16 상민님 세션 5개).
+//  🔴 대기 판정을 못 하는 판(중계 장애)에 끄면 — 같은 사고가 장애 때마다 난다 · 영영 못 판정하는 세션을 영영 남기면 — 예약 1GB 를 잡는다.
+//  🔴 한도가 풀린 순간(이어 가기 시작한 하네스)을 «끝남» 으로 끄면 — 이어 간 일이 첫 몇 초에 죽는다(격리 리뷰).
+const WAITING: QuotaWait = { kind: "armed", atMs: NOW * 1000 - 300_000, text: "Usage limit reached · continuing automatically at 4:10pm · esc to cancel" };
+/** 판마다 무엇을 쟀나(화면·작업 판정·대화 기록)와 무엇을 껐나를 센다 — 보호 중인 세션은 셋 다 0 이어야 한다. */
+function quotaRun(rows: SessionInfo[], quota: (id: string) => QuotaWait | null, screens: (id: string, n: number) => string = () => CLAUDE_DRAFT_SCREEN) {
+  const n = { captures: 0, probes: 0, quota: 0 };
+  const per: Record<string, { captures: number; quota: number }> = {};
+  const reaped: string[] = [];
+  const run = (nowMs: number) => sweepSessionStopRule({
+    enabled: () => true, loadPolicy: async () => ({}), listLive: async () => rows, listStates: async () => rows.map((r) => stOf(r.id)),
+    listManaged: async () => [], view: () => NOT_VIEWING,
+    jobVerdicts: async (ids) => { n.probes++; return verdictsOf()(ids); },
+    capture: async (id) => { n.captures++; const p = (per[id] ??= { captures: 0, quota: 0 }); p.captures++; return screens(id, p.captures); },
+    quotaWait: async (s) => { n.quota++; (per[s.id] ??= { captures: 0, quota: 0 }).quota++; return quota(s.id); },
+    keys: async () => {}, saveNote: async () => {}, reap: async (id) => { reaped.push(id); }, sleep: async () => {}, now: () => nowMs, arm: () => {},
+  });
+  return { n, per, reaped, run };
+}
+
+test("SQ1 완료+안 봄 3분이 지난 claude 세션이라도 한도 자동 이어감을 기다리는 중이면 끄지 않는다(쪽지도 안 남긴다)", async () => {
+  const { r, reaped, notes, quotaCalls } = await sweepWith([liveDone("box-l-1")], [stOf("box-l-1")], { quota: () => WAITING });
+  assert.deepEqual(reaped, []);
+  assert.deepEqual(notes, []);
+  assert.equal(r.kept["limit-wait"], 1);
+  assert.deepEqual(r.keptOldest?.["limit-wait"], { id: "box-l-1", idleSec: 600 });
+  assert.deepEqual(quotaCalls, [["box-l-1", NOW * 1000]], "SQ8 대화 기록 판정에 판의 시계를 넘긴다(배선)");
+});
+test("SQ2 기다리는 중이 아니면(대화 기록이 «대기 없음») 종전대로 끈다", async () => {
+  const { reaped, quotaCalls } = await sweepWith([liveDone("box-l-2")], [stOf("box-l-2")], { quota: () => null });
+  assert.deepEqual(reaped, ["box-l-2"]);
+  assert.equal(quotaCalls.length, 1, "끄기 전에 대화 기록을 한 번 봤다");
+});
+test("SQ3 기다리던 세션은 5분 동안 다시 재지 않는다(화면·작업 판정·대화 기록 0회) — 정확히 5분이면 다시 잰다", async () => {
+  const q = quotaRun([liveDone("box-l-3")], () => WAITING);
+  const t0 = NOW * 1000;
+  assert.equal((await q.run(t0)).kept["limit-wait"], 1);
+  assert.deepEqual(q.n, { captures: 1, probes: 1, quota: 1 });
+  const held = await q.run(t0 + QUOTA_RECHECK_MS - 1);
+  assert.equal(held.kept["limit-wait"], 1);
+  assert.deepEqual(q.n, { captures: 1, probes: 1, quota: 1 }, "보호 중엔 아무것도 다시 재지 않는다");
+  assert.deepEqual(q.reaped, []);
+  assert.equal(QUOTA_RECHECK_MS, 5 * 60_000);
+  await q.run(t0 + QUOTA_RECHECK_MS);
+  assert.deepEqual(q.n, { captures: 2, probes: 2, quota: 2 }, "5분이 되면 다시 잰다");
+  assert.deepEqual(q.reaped, [], "여전히 기다리는 중이라 안 끈다");
+});
+test("SQ3c 기다림이 끝난 것을 다시 재서 알면(접힘·늦게 깸) 그 판에 종전대로 끈다", async () => {
+  let waiting = true;
+  const q = quotaRun([liveDone("box-l-4")], () => (waiting ? WAITING : null));
+  await q.run(NOW * 1000);
+  waiting = false;
+  await q.run(NOW * 1000 + QUOTA_RECHECK_MS);
+  assert.deepEqual(q.reaped, ["box-l-4"]);
+});
+test("SQ4 대화 기록을 못 읽으면 안 끈다(limit-unknown) — 세 번을 넘겨도 첫 실패에서 10분 전엔 안 끄고, 10분이 되면 대기 없음으로 보고 끈다", async () => {
+  const q = quotaRun([liveDone("box-l-5")], () => { throw new Error("relay: 503"); });
+  const t0 = NOW * 1000;
+  assert.equal(QUOTA_UNKNOWN_MAX, 3);
+  assert.equal(QUOTA_UNKNOWN_FOLD_MS, 10 * 60_000);
+  assert.equal(QUOTA_UNKNOWN_RETRY_MS, 60_000);
+  for (let k = 0; k < 10; k++) {   // 1분마다(재시도 간격) — 10번째(9분)까지 안 끈다(1~2분짜리 중계 장애에 대기 세션을 끄지 않는다)
+    const r = await q.run(t0 + k * QUOTA_UNKNOWN_RETRY_MS);
+    assert.equal(r.kept["limit-unknown"], 1, `+${k}분`);
+    assert.deepEqual(q.reaped, [], `+${k}분엔 안 끈다`);
+  }
+  assert.equal(q.n.quota, 10);
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS);
+  assert.deepEqual(q.reaped, ["box-l-5"], "첫 실패에서 10분이면 끈다");
+});
+test("SQ4d 못 읽은 세션은 1분 동안 다시 읽지 않는다(화면·작업 판정·대화 기록 0회) — 그동안도 limit-unknown 으로 센다", async () => {
+  const q = quotaRun([liveDone("box-l-5d")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000;
+  await q.run(t0);
+  const held = await q.run(t0 + QUOTA_UNKNOWN_RETRY_MS - 1);
+  assert.equal(held.kept["limit-unknown"], 1);
+  assert.deepEqual(q.n, { captures: 1, probes: 1, quota: 1 });
+  await q.run(t0 + QUOTA_UNKNOWN_RETRY_MS);
+  assert.equal(q.n.quota, 2, "1분이 되면 다시 읽는다");
+});
+test("SQ4a 10분이 지났어도 못 읽은 횟수가 셋이 안 되면 안 끈다", async () => {
+  const q = quotaRun([liveDone("box-l-5a")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000;
+  await q.run(t0);
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS);   // 두 번째 — 실패 사이가 10분(연달아)이고 첫 실패에서 10분이지만 둘뿐
+  assert.deepEqual(q.reaped, [], "두 번째엔 안 끈다");
+  await q.run(t0 + QUOTA_UNKNOWN_FOLD_MS + QUOTA_UNKNOWN_RETRY_MS);
+  assert.deepEqual(q.reaped, ["box-l-5a"], "세 번째에 끈다");
+});
+test("SQ4b 못 읽은 횟수는 사이에 한 번이라도 읽히면 처음부터 센다", async () => {
+  const seq: Array<"throw" | "wait"> = ["throw", "throw", "wait", "throw", "throw", "throw"];
+  let i = 0;
+  const q = quotaRun([liveDone("box-l-6")], () => { const k = seq[i++]; if (k === "throw") throw new Error("relay"); return WAITING; });
+  const t0 = NOW * 1000, m = 60_000;
+  //  0·1분 실패 → 5분 읽힘(대기 · 보호 5분) → 10·11·12분 실패. 셈이 안 지워졌다면 다섯째 실패(12분)가 «첫 실패에서 12분» 이라 접힌다.
+  for (const t of [t0, t0 + m, t0 + 5 * m, t0 + 10 * m, t0 + 11 * m, t0 + 12 * m]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${(t - t0) / m}분`); }
+  assert.equal(q.n.quota, 6);
+});
+test("SQ4c 실패 사이가 10분을 넘으면 새로 센다(띄엄띄엄 난 실패를 이어 붙여 곧바로 접지 않는다)", async () => {
+  const q = quotaRun([liveDone("box-l-6c")], () => { throw new Error("relay"); });
+  const t0 = NOW * 1000, m = 60_000;
+  for (const t of [t0, t0 + m, t0 + 12 * m, t0 + 13 * m, t0 + 14 * m]) { await q.run(t); assert.deepEqual(q.reaped, [], `+${(t - t0) / m}분`); }
+  assert.equal(q.n.quota, 5);
+});
+test("SQ5 질의 · 셸만 남음 · codex · agy 는 대화 기록을 보지 않고 종전대로 끈다", async () => {
+  const asking = liveDone("box-l-ask", { awaiting: true, agentState: "waiting", lastActive: NOW - 3700, lastReport: { phase: "waiting", at: NOW - 3700 } });
+  const exited = liveDone("box-l-exit", { agentState: "exited" });
+  const codex = liveDone("box-l-codex", { harness: "codex", runtimeRaw: "terminal" });   // 표식이 없으면 app-server(규칙 밖 — F1)
+  const agy = liveDone("box-l-agy", { harness: "antigravity" });
+  const rows = [asking, exited, codex, agy];
+  const { reaped, quotaCalls } = await sweepWith(rows, rows.map((x) => stOf(x.id)), {
+    quota: () => WAITING, screen: { "box-l-ask": CLAUDE_ASK_SCREEN },
+  });
+  assert.deepEqual(quotaCalls, []);
+  assert.deepEqual([...reaped].sort(), ["box-l-agy", "box-l-ask", "box-l-codex", "box-l-exit"]);
+});
+test("SQ6 끄기 직전 화면에 턴이 돌면 그것이 먼저다(turn-now) — 대화 기록을 읽지 않는다", async () => {
+  const { r, quotaCalls } = await sweepWith([liveDone("box-l-7")], [stOf("box-l-7")], { quota: () => WAITING, screen: { "box-l-7": CLAUDE_TURN_SCREEN } });
+  assert.equal(r.kept["turn-now"], 1);
+  assert.deepEqual(quotaCalls, []);
+});
+test("SQ7 끄라는 판정이 안 난 세션(보는 중 · 작업 중 · 시계 남음)은 대화 기록을 읽지 않는다", async () => {
+  const working = liveDone("box-l-work", { working: true });
+  const fresh = liveDone("box-l-fresh", { lastActive: NOW - 60, lastReport: { phase: "idle", at: NOW - 60, bg: 0, wake: 0, cron: 0 } });
+  const watched = liveDone("box-l-view");
+  const rows = [working, fresh, watched];
+  const { r, quotaCalls } = await sweepWith(rows, rows.map((x) => stOf(x.id)), {
+    quota: () => WAITING, view: (id) => ({ viewing: id === "box-l-view", unknown: false, endedAtMs: 0 }),
+  });
+  assert.deepEqual(quotaCalls, []);
+  assert.deepEqual([r.kept.working, r.kept.clock, r.kept.viewing], [1, 1, 1]);
+});
+test("SQ9 대화 기록을 읽는 사이 턴이 시작됐으면(두 번째 화면) 끄지 않는다 — 한도가 풀린 순간 이어 가기 시작한 하네스", async () => {
+  const q = quotaRun([liveDone("box-l-9")], () => null, (_id, n) => (n === 1 ? CLAUDE_DRAFT_SCREEN : CLAUDE_TURN_SCREEN));
+  const r = await q.run(NOW * 1000);
+  assert.equal(r.kept["turn-now"], 1);
+  assert.deepEqual(q.reaped, []);
+  assert.deepEqual(q.per["box-l-9"], { captures: 2, quota: 1 }, "화면 → 대화 기록 → 화면 순서로 두 번 봤다");
+});
+test("SQ10 한 판에 대기 A · 대기 없음 B · 못 읽음 C — 세션마다 따로 판정하고, 보호도 세션마다다", async () => {
+  const rows = ["box-l-a", "box-l-b", "box-l-c"].map((id) => liveDone(id));
+  const q = quotaRun(rows, (id) => { if (id === "box-l-c") throw new Error("relay"); return id === "box-l-a" ? WAITING : null; });
+  const r = await q.run(NOW * 1000);
+  assert.deepEqual(q.reaped, ["box-l-b"]);
+  assert.deepEqual([r.kept["limit-wait"], r.kept["limit-unknown"]], [1, 1]);
+  const before = { a: q.per["box-l-a"].quota, c: q.per["box-l-c"].quota };
+  await q.run(NOW * 1000 + 60_000);
+  assert.equal(q.per["box-l-a"].quota, before.a, "A 는 보호 중이라 다시 안 읽는다");
+  assert.equal(q.per["box-l-c"].quota, before.c + 1, "C 는 보호가 없어 다음 판에 다시 읽는다");
+});
+test("SQ11 막 이어 가는 중이면 그 유예가 끝날 때까지만 보호한다(걸려서 기다리는 중은 5분)", async () => {
+  const t0 = NOW * 1000;
+  const resuming: QuotaWait = { kind: "resuming", atMs: t0 - 240_000, text: "Usage limit reset · continuing automatically", untilMs: t0 + 60_000 };
+  const q = quotaRun([liveDone("box-l-11")], () => resuming);
+  await q.run(t0);
+  await q.run(t0 + 60_000 - 1);
+  assert.equal(q.n.quota, 1, "유예 끝 전엔 다시 안 읽는다");
+  await q.run(t0 + 60_000);
+  assert.equal(q.n.quota, 2, "유예가 끝나는 때 다시 잰다(5분을 다 기다리지 않는다)");
+});
+test("F3 하네스를 띄운 시각 = tmux 세션을 만든 시각(초) × 1000 — 모르면 0(그 조건을 안 본다)", () => {
+  assert.equal(launchedAtMsOf({ created: 1_800_000_000 }), 1_800_000_000_000);
+  assert.equal(launchedAtMsOf({ created: 0 }), 0);
+  assert.equal(launchedAtMsOf({} as { created: number }), 0);
+});
+test("F3b 기본 «한도 대기» 재료는 읽는 함수에 띄운 시각(ms)·판의 지금을 넘긴다(배선)", async () => {
+  const calls: Array<[string, { launchedAtMs: number; nowMs: number }]> = [];
+  const read = async (id: string, at: { launchedAtMs: number; nowMs: number }) => { calls.push([id, at]); return WAITING; };
+  const w = await defaultQuotaWait(read as never)(liveDone("box-l-f3", { created: NOW - 3600 }), NOW * 1000 + 7);
+  assert.deepEqual(calls, [["box-l-f3", { launchedAtMs: (NOW - 3600) * 1000, nowMs: NOW * 1000 + 7 }]]);
+  assert.equal(w, WAITING);
+});
+// ── #4783 후속 — 마지막 관측 실행 상태(last_run_state). 세션이 끝낸 자리를 안 거치고 꺼져도 «꺼질 때 무슨 상태였나» 를 남긴다.
+test("W1 runStateFromFacts — 관측한 실행 상태(화면이 꺼진 뒤 그린다) · 가릴 수 없으면 null", () => {
+  const F = runStateFromFacts;
+  // 작업 중 — 세 신호 어느 하나라도
+  assert.equal(F(done({ working: true }), NOW), "working");
+  assert.equal(F(done({ harnessWorking: true }), NOW), "working");
+  assert.equal(F(done({ agentState: "busy" }), NOW), "working");
+  // 질의 대기(승인·선택) — 유저 행동이 필요한 상태. 숨기면 안 된다.
+  assert.equal(F(done({ awaiting: true }), NOW), "asking");
+  assert.equal(F(done({ agentState: "waiting" }), NOW), "asking");
+  // 백그라운드 작업
+  assert.equal(F(done({ background: true }), NOW), "bg");
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 2, wake: 0, cron: 0 } }), NOW), "bg");
+  // 예약 깨움 대기
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 0, wake: NOW + 100, cron: 0 } }), NOW), "scheduled");
+  assert.equal(F(done({ lastReport: { phase: "idle", at: NOW, bg: 0, wake: 0, cron: 3 } }), NOW), "scheduled");
+  // 완료 — claude 는 예약 셈이 턴 끝 보고에 실렸을 때만 완료를 확신(done() 기본)
+  assert.equal(F(done(), NOW), "done");
+  // 가릴 수 없음 → null
+  assert.equal(F(done({ agentState: "exited" }), NOW), null, "하네스가 끝나 셸만 남음 — end_note harness_exit 의 몫");
+  assert.equal(F(done({ observed: false }), NOW), null, "관측 못 한 행 — 지어낸 값을 적지 않는다");
+  // claude 인데 예약 셈이 보고에 없으면 완료를 확신 못 함 → null(거짓 완료를 안 만든다)
+  assert.equal(F(done({ harness: "claude", lastReport: { phase: "idle", at: NOW } as never }), NOW), null);
+  // codex 는 예약 도구가 없다 — idle 이면 완료
+  assert.equal(F(done({ harness: "codex", lastReport: { phase: "idle", at: NOW } as never }), NOW), "done");
+});
+
+test("W2 sweep 은 관측한 run 이 바뀐 세션만 적는다(그대로면 안 적는다 · 끄는 것과 무관하게 매 틱)", async () => {
+  const a = liveDone("box-a-1", { agentState: "busy", working: true });   // working — 이전 기록 없음 → 적는다
+  const b = liveDone("box-b-1");                                          // done — 이미 done 기록 → 안 적는다
+  const states = [stOf("box-a-1"), { ...stOf("box-b-1"), last_run_state: { at: NOW - 100, run: "done" } } as SessionState];
+  const { lastRuns } = await sweepWith([a, b], states, {});
+  assert.deepEqual(lastRuns, [["box-a-1", "working"]], "🔴 run 이 바뀐 것만, 그대로인 것은 안 적는다");
 });
