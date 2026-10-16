@@ -24,9 +24,13 @@
 //   W13 관측 못 한 행(observed:false) · 첫 지시 → 숨겨 붙이기 없음
 //   W14 숨겨 붙이는 중 화면이 부서진다(destroy) → 상한이 지나도 아무 일 없음(오류 없음)
 //   W15 숨은 탭(display:none)에서 열렸다가 보인다 → 숨은 액자가 그때 대화창 자리·크기로 맞춰진다 · 그린 뒤 넘긴다
+//       ⚠ 이 헤드리스(--dump-dom · 가상 시간)는 그리기 단계를 안 돌려 requestAnimationFrame 도 ResizeObserver 도 한 번도 안 뜬다
+//        (실측 2026-10-16: rAF 0회 · RO 0회 — display:none → flex 로 보여도). 그래서 이 장면만 가짜 RO 를 끼워, 대화창 칸을 지켜보는지와
+//        그 콜백이 자리를 다시 맞추는지 · 끝나면 끊는지를 잰다(진짜 브라우저에선 탭이 보이는 순간 RO 가 뜬다).
 //   W16 숨겨 붙이는 중 액자가 «끝났다»(status end) → 기다리지 않고 곧바로 터미널(그 배너를 봐야 한다)
 //   W17 사람이 이 화면 밖(다른 입력칸)에 초점을 두고 있다 → 그려서 넘기되 초점은 빼앗지 않는다
 //   W18 숨겨 붙이는 중 연결 오류(status err) → 넘기지 않되 머리줄 칩으로는 보인다
+//   W19 숨겨 붙이는 중 목록 갱신이 «대화가 본자리»(대화 런타임 — chatHome)를 알려 온다 → 숨겨 붙이기를 접고 그려도 넘기지 않는다
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
 //
 //  가짜는 «서버» 와 «하네스 출력» 뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을, 액자는 실제 터미널 모듈
@@ -300,17 +304,28 @@ async function PAGE_MAIN() {
       await sleep(13000);
       R.w14.newErrors = pageErrors.slice(errs0);
     }
-    // W15 — 숨은 탭에서 열렸다가 보인다
+    // W15 — 숨은 탭에서 열렸다가 보인다(가짜 RO — 머리말 ⚠)
     {
-      const v = mount("box-w15", "ink=1500", { firstPrompt: "첫 지시" }, true, null, true);
-      await sleep(400);
-      R.w15 = { hiddenSnap: v.snap() };
-      v.box.style.display = "flex";
-      await sleep(400);
-      R.w15.shownSnap = v.snap(); R.w15.geo = v.geo();
-      await sleep(2500);
-      R.w15.after = v.snap();
-      v.done();
+      const RealRO = window.ResizeObserver;
+      const fakes = [];
+      window.ResizeObserver = class { constructor(cb) { this.cb = cb; this.els = []; this.dead = false; fakes.push(this); } observe(el) { this.els.push(el); } unobserve() {} disconnect() { this.dead = true; } };
+      try {
+        const v = mount("box-w15", "ink=1500", { firstPrompt: "첫 지시" }, true, null, true);
+        await sleep(400);
+        R.w15 = { hiddenSnap: v.snap(), hiddenGeo: v.geo() };
+        v.box.style.display = "flex";
+        const chatEl = v.box.querySelector(".sc-chat");
+        R.w15.watchesChat = fakes.some((f) => !f.dead && f.els.includes(chatEl));
+        for (const f of fakes) if (!f.dead) f.cb([]);               // 탭이 보이는 순간 진짜 브라우저가 부르는 자리
+        await sleep(100);
+        R.w15.shownSnap = v.snap(); R.w15.geo = v.geo();
+        await sleep(2500);
+        R.w15.after = v.snap();
+        const mine = fakes.filter((f) => f.els.includes(chatEl));      // 대화창 칸을 지켜보는 것(숨겨 붙이기의 것) — 다른 부품의 RO 는 제 몫이다
+        R.w15.watchers = mine.length;
+        R.w15.disconnected = mine.length > 0 && mine.every((f) => f.dead);
+        v.done();
+      } finally { window.ResizeObserver = RealRO; }
     }
     // W16 — 숨겨 붙이는 중 «끝났다»
     {
@@ -337,6 +352,18 @@ async function PAGE_MAIN() {
       const v = mount("box-w18", "err=500", { firstPrompt: "첫 지시" });
       await sleep(2200);
       R.w18 = { after: v.snap() };
+      v.done();
+    }
+    // W19 — 숨겨 붙이는 중 «대화가 본자리» 를 뒤늦게 안다
+    {
+      const v = mount("box-w19", "ink=900", { firstPrompt: "첫 지시" });
+      await sleep(300);
+      const r19 = row("box-w19", true); r19.raw.runtimeMode = "chat";
+      v.h.update(r19);
+      await sleep(200);
+      R.w19 = { afterUpdate: v.snap() };
+      await sleep(1600);
+      R.w19.after = v.snap(); R.w19.ink = !!v.fx()["test-ink"]; R.w19.termAt = v.termAt();
       v.done();
     }
   } catch (e) { R.err = String(e && e.stack || e); }
@@ -434,9 +461,9 @@ const w14 = R.w14 || {};
 check((w14.before || {}).warm && w14.warmAfterDestroy === false && Array.isArray(w14.newErrors) && !w14.newErrors.length, "W14 숨겨 붙이는 중 부서지면 그 자리에서 걷힌다(상한 타이머를 남기지 않는다) · 오류 0", w14);
 const w15 = R.w15 || {};
 const g15 = w15.geo || { chat: [], term: [] };
-check((w15.hiddenSnap || {}).warm && (w15.shownSnap || {}).warm && !(w15.shownSnap || {}).term && g15.chat.length === 3 && g15.chat[1] > 100 && g15.chat.every((x, i) => near(x, g15.term[i])),
-  "W15 숨은 탭에서 열렸다 보이면 숨은 액자가 그때 대화창 자리·크기로 맞춰진다", { shown: w15.shownSnap, geo: g15 });
-check((w15.after || {}).term && !(w15.after || {}).warm, "W15 그린 뒤 넘긴다", w15.after);
+check((w15.hiddenSnap || {}).warm && w15.watchesChat && (w15.shownSnap || {}).warm && !(w15.shownSnap || {}).term && g15.chat.length === 3 && g15.chat[1] > 100 && g15.chat.every((x, i) => near(x, g15.term[i])),
+  "W15 숨은 탭에서 열렸다 보이면(대화창 칸의 크기 변화) 숨은 액자가 그때 대화창 자리·크기로 맞춰진다", { watches: w15.watchesChat, hiddenGeo: w15.hiddenGeo, shown: w15.shownSnap, geo: g15 });
+check((w15.after || {}).term && !(w15.after || {}).warm && w15.disconnected === true, "W15 그린 뒤 넘긴다 · 대화창 칸 지켜보기는 끊는다", { after: w15.after, watchers: w15.watchers, disconnected: w15.disconnected });
 const w16 = R.w16 || {};
 check((w16.after || {}).term && !(w16.after || {}).warm && w16.endAt != null && w16.termAt >= w16.endAt - 50 && w16.termAt <= w16.endAt + 400,
   "W16 액자가 «끝났다» 고 하면 기다리지 않고 그 자리에서 터미널로(배너를 보게)", w16);
@@ -444,6 +471,10 @@ const w17 = R.w17 || {};
 check((w17.after || {}).term && !w17.focusedFrame && w17.active === "outside", "W17 이 화면 밖에 초점이 있으면 넘기되 초점은 빼앗지 않는다", w17);
 const w18 = R.w18 || {};
 check((w18.after || {}).warm && !(w18.after || {}).term && /재연결/.test(String((w18.after || {}).chip || "")), "W18 연결 오류는 넘기지 않되 머리줄 칩으로 보인다", w18.after);
+
+const w19 = R.w19 || {};
+check(!(w19.afterUpdate || {}).warm && !(w19.afterUpdate || {}).term && w19.ink && !(w19.after || {}).term && !w19.termAt,
+  "W19 숨겨 붙이는 중 «대화가 본자리» 를 알게 되면 접고 · 그려도 터미널로 안 넘긴다", w19);
 
 check(!(R.pageErrors || []).length, "E 페이지 오류 없음", R.pageErrors);
 console.log(`\nterm-warm-runtime: ${pass} 통과 · ${fail} 실패`);
