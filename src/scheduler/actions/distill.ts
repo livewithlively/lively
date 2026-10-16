@@ -181,8 +181,8 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //  ⚠ «인박스가 비었다» 가 아니라 «어느 켜진 레인의 **스코프에도** 안 든다» 로 재야 한다.
   //   인박스는 이미 판정(seen)한 것을 빼므로, 처리 중인 자료까지 방치로 세면 **두 번 증류**하게 된다.
   if (!batches.length || !opt.one) {
-    //  #4824 — 한 배치 = 볼 수 있는 사람이 같은 자료(oneGroup · 나머지는 다음 배치로). 기록·대상 지정이 같은 집합을 쓴다.
-    const stranded = await listStrandedSources(claiming, 50, null, { oneGroup: true }).catch(() => [] as Record<string, unknown>[]);
+    //  #4824 — 한 배치 = 볼 수 있는 사람이 같은 자료(oneAudienceGroup · 나머지는 다음 배치로). 기록·대상 지정이 같은 집합을 쓴다.
+    const stranded = await listStrandedSources(claiming, 50, null).then(oneAudienceGroup).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
       //  대상을 못박는다 — 안 그러면 본문이 source_undistilled(전역)를 부르게 해서 **에이전트가 다루는 집합과
       //   서버가 '판정함'으로 기록하는 집합(아래 ids)이 어긋난다.** 그 어긋남은 아무도 안 본 자료를 인박스에서
