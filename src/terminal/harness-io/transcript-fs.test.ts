@@ -158,6 +158,93 @@ await t("[E3] 정상 중계에서 **없는 파일**은 여전히 null — 이 �
   assert.equal(await m.stat(hello), 12, "있는 파일은 크기 그대로");
 });
 
+// ── #4821 ① turnOrigin — 끝 창보다 긴 «이어 간 턴» 의 첫 줄(출처)을 거슬러 찾는다. 로컬 구현과 중계 구현(노드 쪽 node 한 줄)이 **같은 답**을
+//  내야 한다(prevTranscript 와 같은 이유 — 둘이 갈리면 관리형에서만 대기를 놓친다). 사양 F5a~F5j: 작업 스크래치 spec-4821.md.
+//   🔴 덩어리(1MB) 경계에 걸친 첫 줄을 못 이으면 — 그 자리에 떨어진 턴만 조용히 못 찾는다.
+//   🔴 중계를 덩어리마다 부르면 — 128MB 를 거슬러 읽는 데 왕복 128번이다(한 번에 끝내야 한다).
+//   🔴 중계 실패를 «못 찾음» 으로 뭉개면 — 읽는 쪽이 못 찾음을 기억해 그 턴의 다시 걸림을 영영 못 본다.
+const PA = "a2f54353-020b-43b9-a5af-8fa53646c25e", PH = "e612e7e8-a25c-4a6c-ae5c-d12909d4e0cc", PT = "0d9c8b7a-6f5e-4d3c-9b2a-1f0e9d8c7b6a";
+const PX = "9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a", PB = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+const jl = (o: object): string => JSON.stringify(o) + "\n";
+const opener = (pid: string, kind: string, pad = 0): string => jl({ type: "user", isMeta: kind !== "human", origin: { kind }, turnOrigin: kind.replace(/-/g, "_"),
+  promptId: pid, message: { role: "user", content: "start" + "s".repeat(pad) } });
+const toolLine = (pid: string, pad = 0): string => jl({ type: "user", promptId: pid, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "x".repeat(pad) }] } });
+const asstLine = (pad = 0): string => jl({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y".repeat(pad) }] } });
+const both = async (file: string, pid: string, before: number, max: number): Promise<string | null> => {
+  const want = await localTranscriptFs.turnOrigin(file, pid, before, max);
+  assert.equal(await memberTranscriptFs(OS).turnOrigin(file, pid, before, max), want, `로컬과 중계가 갈렸다 — ${pid}@${before}/${max}`);
+  return want;
+};
+const MB = 1024 * 1024;
+const turns = path.join(tmp, "turns.jsonl");
+let turnsBody = opener(PH, "human") + toolLine(PH) + toolLine(PH) + asstLine();
+const PA_START = Buffer.byteLength(turnsBody);
+turnsBody += opener(PA, "auto-continuation");
+for (let i = 0; i < 1300; i++) turnsBody += toolLine(PA, 900) + asstLine(60);   // 이어 간 턴 ≈ 1.4MB — 덩어리 여럿을 건넌다
+turnsBody += jl({ type: "user", turnOrigin: "auto_continuation", promptId: PT, message: { role: "user", content: "x" } }) + toolLine(PT);   // origin 없이 turnOrigin 만
+turnsBody += `{"type":"user","promptId":"${PA}", 깨진 줄\n`;   // 찾는 문자열이 든 깨진 줄 — 건너뛴다
+const BEFORE = Buffer.byteLength(turnsBody);
+fs.writeFileSync(turns, turnsBody + toolLine(PA) + opener(PX, "auto-continuation") + toolLine(PX));   // before 뒤의 줄은 보지 않는다
+const F5 = { before: BEFORE, paStart: PA_START };
+
+await t("[F5a] 첫 줄(origin auto-continuation)을 같은 턴의 줄 1.4MB 너머까지 거슬러 찾는다 — 로컬 = 중계", async () => {
+  assert.equal(await both(turns, PA, F5.before, 128 * MB), "auto-continuation");
+});
+await t("[F5b] 첫 줄 출처가 사람이면 «human»", async () => {
+  assert.equal(await both(turns, PH, F5.before, 128 * MB), "human");
+});
+await t("[F5c] origin 없이 turnOrigin 만 있는 첫 줄 — «_» 를 «-» 로 맞춘다", async () => {
+  assert.equal(await both(turns, PT, F5.before, 128 * MB), "auto-continuation");
+});
+await t("[F5d] 첫 줄이 before 뒤에만 있으면 못 찾음 · before 가 첫 줄 시작이면 그 줄은 안 본다", async () => {
+  assert.equal(await both(turns, PX, F5.before, 128 * MB), null);
+  assert.equal(await both(turns, PA, F5.paStart, 128 * MB), null);
+  assert.equal(await both(turns, PA, F5.paStart + 1, 128 * MB), null, "첫 줄 중간에서 시작하면 그 반 줄도 안 본다");
+});
+await t("[F5e] 상한(maxBytes) 밖의 첫 줄은 못 찾음 — 상한에서 잘린 반 줄도 안 본다", async () => {
+  assert.equal(await both(turns, PA, F5.before, 1 * MB), null);
+  assert.equal(await both(turns, PA, F5.before, F5.before - F5.paStart - 10), null, "첫 줄 끝 10바이트 앞에서 멈추면(반 줄) 못 찾음");
+  assert.equal(await both(turns, PA, F5.before, F5.before - F5.paStart), "auto-continuation", "첫 줄 시작까지 닿으면 찾는다(경계값)");
+});
+await t("[F5f] 없는 promptId 는 못 찾음 — 찾는 문자열이 든 깨진 줄에서 죽지 않는다", async () => {
+  assert.equal(await both(turns, "ffffffff-0000-4000-8000-000000000000", F5.before, 128 * MB), null);
+});
+await t("[F5g] 첫 줄이 1MB 덩어리 경계에 걸쳐도 이어 붙여 찾는다 — 파일 맨 앞 · 중간 둘 다", async () => {
+  const fill = (n: number): string => { let out = ""; const base = Buffer.byteLength(toolLine(PB)); for (let i = 0; i < n; i++) out += toolLine(PB, 1000 - base); return out; };
+  assert.equal(Buffer.byteLength(fill(1)), 1000, "채움 줄은 정확히 1000바이트(전제)");
+  for (const prefix of ["", asstLine(40) + toolLine(PH) + asstLine(10)]) {
+    const op = opener(PB, "auto-continuation", 700);
+    const f = path.join(tmp, `boundary-${prefix ? "mid" : "head"}.jsonl`);
+    fs.writeFileSync(f, prefix + op + fill(1048));
+    const before = fs.statSync(f).size;
+    const cut = before - MB;   // 첫 덩어리의 시작 — 첫 줄 안이어야 한다
+    const opStart = Buffer.byteLength(prefix);
+    assert.ok(cut > opStart && cut < opStart + Buffer.byteLength(op) - 1, `덩어리 경계(${cut})가 첫 줄(${opStart}~) 안이다(전제)`);
+    assert.equal(await both(f, PB, before, 128 * MB), "auto-continuation", prefix ? "중간" : "맨 앞");
+  }
+});
+await t("[F5h] 중계 구현은 한 번 찾는 데 중계를 **한 번**만 부른다(덩어리마다 왕복하지 않는다)", async () => {
+  const before = relayCalls().length;
+  assert.equal(await memberTranscriptFs(OS).turnOrigin(turns, PA, F5.before, 128 * MB), "auto-continuation");
+  assert.equal(relayCalls().length - before, 1);
+});
+await t("[F5i] before 0 · 빈 파일 · 없는 파일은 못 찾음(던지지 않는다) · 이상한 promptId 는 중계 없이 못 찾음", async () => {
+  const empty = path.join(tmp, "empty.jsonl"); fs.writeFileSync(empty, "");
+  assert.equal(await both(turns, PA, 0, 128 * MB), null);
+  assert.equal(await both(empty, PA, 0, 128 * MB), null);
+  assert.equal(await both(path.join(tmp, "no-such.jsonl"), PA, 100, 128 * MB), null);
+  const before = relayCalls().length;
+  assert.equal(await both(turns, `${PA}","x":"`, F5.before, 128 * MB), null);
+  assert.equal(relayCalls().length, before, "찾는 문자열을 만드는 값이 이상하면 중계를 부르지 않는다");
+});
+await t("[F5j] ★ 중계가 죽으면 turnOrigin 도 503 을 던진다 — «못 찾음(null)» 으로 둔갑하면 읽는 쪽이 그걸 기억해 영영 다시 안 찾는다", async () => {
+  await withBadRelay(async () => {
+    const e: unknown = await memberTranscriptFs(OS).turnOrigin(turns, PA, F5.before, 128 * MB).then(() => null, (x: unknown) => x);
+    assert.ok(e instanceof HttpError, `던진 것이 HttpError 가 아니다: ${String(e)}`);
+    assert.equal(e.status, 503);
+  });
+});
+
 installTenantSlugResolver(() => null);
 delete process.env.LIVELY_MEMBER_EXEC;
 fs.rmSync(tmp, { recursive: true, force: true });

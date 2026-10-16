@@ -7,7 +7,7 @@
 //   🔴 «이어 감» 직후를 대기 끝으로 읽으면 — 한도가 풀린 바로 그 순간 이어 가기 시작한 하네스를 끈다(격리 리뷰).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { quotaWaitOf, quotaScan, QUOTA_WAIT_MAX_MS, QUOTA_RESUME_GRACE_MS, QUOTA_CLOCK_SKEW_MS } from "./quota-wait.js";
+import { quotaWaitOf, quotaScan, openTurnOf, QUOTA_WAIT_MAX_MS, QUOTA_RESUME_GRACE_MS, QUOTA_CLOCK_SKEW_MS } from "./quota-wait.js";
 
 const T0 = Date.parse("2026-10-16T06:59:09.533Z");   // 걸림 줄 시각(실측 d9e9c882)
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -148,14 +148,14 @@ test("Q20 이어 간 턴이 또 한도에 막히면(오류 줄) — 줄 없이 �
   const w = quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), limitError(f + 4_000), ...turnEnd(f + 4_100)], at({ nowMs: f + 600_000 }));
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, f + 4_000);
-  assert.match(w?.text ?? "", /첫 요청부터/, "어느 길로 다시 걸렸는지 로그로 가른다");
+  assert.match(w?.text ?? "", /한도 오류/, "어느 길로 다시 걸렸는지 로그로 가른다");
 });
 test("Q21 다시 막힌 것이 연달아 넘쳐 Claude Code 가 «Automatic continue stopped …» 를 남기면 → 대기 아님", () => {
   const f = T0 + 600_000;
   const stopped = info("Automatic continue stopped after repeated usage-limit hits · this task will not resume on its own (/rate-limit-options to try again)", f + 4_050, { level: "warning" });
   assert.equal(quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), limitError(f + 4_000), stopped], at({ nowMs: f + 600_000 })), null);
 });
-test("Q22 이어 감 없이 한도 오류 줄만 있으면 걸림이 아니다(자동으로 걸리면 Claude Code 가 걸림 줄을 따로 남긴다 · 대화상자로 건 대기는 못 읽는 틈)", () => {
+test("Q22 이어 감 없이 한도 오류 줄만 있으면 걸림이 아니다(자동으로 걸리면 Claude Code 가 걸림 줄을 따로 남긴다 · 대화상자로 건 대기는 명령 결과 줄로 읽는다 — D 행)", () => {
   assert.equal(quotaWaitOf([human(T0 - 2_000), limitError(T0)], at()), null);
   assert.equal(quotaWaitOf([ARMED(T0 - 60_000), limitError(T0)], at())?.atMs, T0 - 60_000, "이미 걸린 대기는 오류 줄로 바뀌지 않는다");
 });
@@ -229,4 +229,124 @@ test("Q31 이어감 메시지 전에 끼어든 작업 알림 턴이 한도 오�
   const f = T0 + 600_000;
   const w = quotaWaitOf([ARMED(), FIRED(f), taskNote(f + 500), limitError(f + 1_000), ...turnEnd(f + 1_100)], at({ nowMs: f + 2_000 }));
   assert.notEqual(w?.kind, "armed");
+});
+
+// ── #4821 ③ — 사람이 한도 대화상자(/rate-limit-options)에서 «기다리기» 를 고른 대기. 본체는 걸림 줄을 안 쓰고 명령 결과만 남긴다
+//  (2.1.301 local-jsx onDone 기본 표시 = 사용자 줄 `<local-command-stdout>…</local-command-stdout>` · origin 없음 — /model 실측과 같은 모양).
+//  사양·엣지 표 D1~D10 · O1~O8 · T1~T4: 작업 스크래치 spec-4821.md.
+//   🔴 이 줄을 못 읽으면 — 사람이 «기다리기» 를 고르고 떠난 세션을 3분 뒤 꺼 그 대기를 없앤다.
+//   🔴 다른 명령 결과·사람 말 본문의 같은 문구를 걸림으로 읽으면 — 끝난 세션을 하루 동안 붙잡는다.
+const DIALOG_TEXT = "Claude Code will continue automatically at 4:10pm. Keep this session open; it may still pause for permission prompts. Press esc to cancel the wait.";
+const dialogOut = (ms: number, o: Record<string, unknown> = {}) => ({ type: "user", isSidechain: false, promptId: "6b0e1c2a-0d4e-4f55-9a1b-2c3d4e5f6a7b", timestamp: iso(ms),
+  message: { role: "user", content: `<local-command-stdout>${DIALOG_TEXT}</local-command-stdout>` }, ...o });
+const stdout = (ms: number, text: string) => ({ ...dialogOut(ms), message: { role: "user", content: `<local-command-stdout>${text}</local-command-stdout>` } });
+
+test("D1 대화상자 «기다리기» 의 명령 결과 줄 → 대기(시각 = 그 줄 · 문구는 태그를 뗀 결과)", () => {
+  const w = quotaWaitOf([...turnEnd(T0 - 10), dialogOut(T0)], at());
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, T0);
+  assert.equal(w?.text, DIALOG_TEXT);
+});
+test("D2 본문이 text 블록 배열이어도 같다", () => {
+  const arr = { ...dialogOut(T0), message: { role: "user", content: [{ type: "text", text: `<local-command-stdout>${DIALOG_TEXT}</local-command-stdout>` }] } };
+  assert.equal(quotaWaitOf([arr], at())?.atMs, T0);
+});
+test("D3 대화상자 대기도 이어 감 → 이어감 메시지 → 그 턴이 끝나면 대기 아님", () => {
+  const f = T0 + 600_000;
+  assert.equal(quotaWaitOf([dialogOut(T0), FIRED(f), continuation(f + 200), assistant(f + 5_000, "계속합니다"), ...turnEnd(f + 6_000)], at({ nowMs: f + 60_000 })), null);
+});
+test("D4 대화상자 대기 뒤 사람이 말을 보내면 대기 아님", () => {
+  assert.equal(quotaWaitOf([dialogOut(T0), human(T0 + 60_000)], at()), null);
+});
+test("D5 대화상자 대기를 Esc 로 거두면(«Automatic continue cancelled …») 대기 아님", () => {
+  assert.equal(quotaWaitOf([dialogOut(T0), info("Automatic continue cancelled · /rate-limit-options to re-arm", T0 + 60_000)], at()), null);
+});
+test("D6 다른 명령 결과는 걸림이 아니다 — «esc to cancel» 이 없으면 «continue automatically» 가 있어도", () => {
+  assert.equal(quotaWaitOf([stdout(T0, "Set model to `Sonnet 5.5` and saved as your default for new sessions")], at()), null);
+  assert.equal(quotaWaitOf([stdout(T0, "Claude Code will continue automatically at 4:10pm.")], at()), null);
+});
+test("D7 같은 문구라도 명령 결과 줄이 아니면 걸림이 아니다 — 사람 말 본문(그건 앞선 대기를 접는다) · 모델 답 · 다른 사용자 줄", () => {
+  assert.equal(quotaWaitOf([human(T0, DIALOG_TEXT)], at()), null);
+  assert.equal(quotaWaitOf([assistant(T0, `<local-command-stdout>${DIALOG_TEXT}</local-command-stdout>`)], at()), null);
+  assert.equal(quotaWaitOf([{ ...dialogOut(T0), message: { role: "user", content: `안내: ${DIALOG_TEXT}` } }], at()), null);
+});
+test("D8 사이드체인 줄의 명령 결과는 본 대화의 대기가 아니다", () => {
+  assert.equal(quotaWaitOf([dialogOut(T0, { isSidechain: true })], at()), null);
+});
+test("D9 시각이 없는 명령 결과 줄은 대기가 아니다(상한을 잴 수 없다)", () => {
+  assert.equal(quotaWaitOf([dialogOut(T0, { timestamp: undefined })], at()), null);
+});
+test("D10 자동 걸림 → 사람이 접음 → 대화상자로 다시 걸면 대기(새 줄 시각)", () => {
+  assert.equal(quotaWaitOf([ARMED(T0 - 120_000), human(T0 - 60_000), dialogOut(T0)], at())?.atMs, T0);
+});
+
+// ── #4821 ① — 끝 창보다 긴 «이어 간 턴». 창이 그 턴 중간에서 열리면 이어 감 줄·이어감 메시지가 창 앞이라 정리 안내만 보인다.
+//  정리 안내 줄엔 promptId 만 있다(실측 4건: isMeta · usageLimitNote · promptId · isSidechain — origin·turnOrigin 없음). 읽는 쪽이 그 턴의 첫 줄을
+//  거슬러 찾아 출처를 넘긴다(quotaScan 의 둘째 인자) — 여기는 그 출처를 받았을 때의 판정.
+//   🔴 출처를 받고도 못 읽으면 — 긴 이어 간 턴이 다시 걸린 대기(연달아 두 번까지)를 끈다.
+//   🔴 출처 없이 정리 안내만으로 읽으면 — 사람 턴의 첫 걸림(걸림 줄이 따로 온다)·자동 이어감이 꺼진 세션까지 대기로 붙잡는다.
+const P = "f7c15b7e-9fd9-41a7-9e0b-c85f433e9ca9";   // 실측 5c30e17b 의 이어 간 턴 promptId
+const toolResult = (ms: number, pid = P) => ({ type: "user", promptId: pid, timestamp: iso(ms), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_x", content: "ok" }] } });
+const wrapUpP = (ms: number, pid = P) => ({ ...wrapUp(ms), promptId: pid, isSidechain: false });
+const openTail = (f: number) => [toolResult(f), assistant(f + 1_000, "작업 계속"), toolResult(f + 2_000)];
+
+test("O1 창 앞에서 시작한 이어 간 턴이 정리 안내로 끝나면 → 다시 걸림(정리 안내 시각)", () => {
+  const f = T0 - 60_000;
+  const w = quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), assistant(f + 55_000, "여기서 멈춥니다"), ...turnEnd(f + 56_000)], at(), "auto-continuation");
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, f + 50_000);
+  assert.match(w?.text ?? "", /정리 안내/);
+});
+test("O2 출처를 모르면(안 넘김) 종전처럼 대기 아님", () => {
+  const f = T0 - 60_000;
+  assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)], at()), null);
+});
+test("O3 그 턴의 출처가 사람이면 대기 아님(첫 걸림은 턴 뒤 걸림 줄로 읽는다)", () => {
+  const f = T0 - 60_000;
+  assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)], at(), "human"), null);
+});
+test("O4 창 앞에서 시작한 이어 간 턴이 한도 오류로 끝나면 → 다시 걸림(오류 줄 시각)", () => {
+  const f = T0 - 60_000;
+  const w = quotaWaitOf([...openTail(f), limitError(f + 50_000), ...turnEnd(f + 50_100)], at(), "auto-continuation");
+  assert.equal(w?.kind, "armed");
+  assert.equal(w?.atMs, f + 50_000);
+  assert.match(w?.text ?? "", /한도 오류/);
+});
+test("O5 이어 간 턴이 다시 걸리지 않고 끝났으면 대기 아님(평범한 완료)", () => {
+  const f = T0 - 60_000;
+  assert.equal(quotaWaitOf([...openTail(f), assistant(f + 50_000, "끝났습니다"), ...turnEnd(f + 51_000)], at(), "auto-continuation"), null);
+});
+test("O6 다시 걸린 뒤 사람이 말을 보내면 대기 아님", () => {
+  const f = T0 - 60_000;
+  assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), human(f + 58_000)], at(), "auto-continuation"), null);
+});
+test("O7 다시 걸린 뒤 작업 알림 한 턴이 돌고 끝나도 대기", () => {
+  const f = T0 - 60_000;
+  const w = quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000), taskNote(f + 57_000), assistant(f + 58_000, "알림 처리"), ...turnEnd(f + 59_000)],
+    at(), "auto-continuation");
+  assert.equal(w?.atMs, f + 50_000);
+});
+test("O8 창 앞에서 시작한 이어 간 턴이 아직 도는 중이면 대기 아님 — 이어 감 시각을 몰라 «막 이어 가는 중» 유예를 주지 않는다", () => {
+  const f = T0 - 60_000;
+  assert.deepEqual(quotaScan(openTail(f), "auto-continuation"), { kind: "fired", atMs: 0, text: "창 앞에서 시작한 이어 간 턴", continued: true });
+  assert.equal(quotaWaitOf(openTail(f), at(), "auto-continuation"), null);
+  assert.equal(quotaWaitOf(openTail(f), { launchedAtMs: 0, nowMs: T0 }, "auto-continuation"), null, "띄운 시각을 몰라도");
+});
+
+test("T1 창 맨 앞 턴 = promptId 가 있는 첫 줄의 것(도구 결과 · 정리 안내)", () => {
+  assert.equal(openTurnOf([assistant(T0, "…"), toolResult(T0 + 1), toolResult(T0 + 2, "other-prompt-id-0001")]), P);
+  assert.equal(openTurnOf([...turnEnd(T0).slice(0, 2), wrapUpP(T0 + 5)]), P);
+});
+test("T2 promptId 가 있는 첫 줄이 턴의 첫 줄(출처 있음)이면 창 앞에서 열린 턴은 없다", () => {
+  assert.equal(openTurnOf([assistant(T0, "…"), { ...human(T0 + 1), promptId: P }, toolResult(T0 + 2)]), null);
+  assert.equal(openTurnOf([{ ...continuation(T0), promptId: P }, toolResult(T0 + 2)]), null);
+});
+test("T3 promptId 줄이 없으면 · 빈 입력 · 사이드체인뿐이면 없다", () => {
+  assert.equal(openTurnOf([assistant(T0, "…"), ...turnEnd(T0 + 1)]), null);
+  assert.equal(openTurnOf([]), null);
+  assert.equal(openTurnOf([{ ...toolResult(T0), isSidechain: true }]), null);
+  assert.equal(openTurnOf([null, "문자열", 3, { ...toolResult(T0), promptId: "" }]), null);
+});
+test("T4 사이드체인 줄의 promptId 는 건너뛴다", () => {
+  assert.equal(openTurnOf([{ ...toolResult(T0, "sidechain-prompt-0001"), isSidechain: true }, toolResult(T0 + 1)]), P);
 });

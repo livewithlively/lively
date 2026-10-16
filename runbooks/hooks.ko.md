@@ -17,7 +17,7 @@
 |---|---|---|---|
 | `session-preload.mjs` | SessionStart, matcher `startup\|resume\|clear` (compact 는 재주입 노이즈로 의도적 제외) | 읽지 않음(hang 차단) | 성공 시 한국어 현황 블록 + exit 0 → 세션 컨텍스트로 주입. 실패는 전부 무출력 exit 0 |
 | `sync-harness-assets.mjs` | SessionStart, matcher `startup\|resume\|clear` | 읽지 않음 | 조직 하네스 자산(스킬·서브에이전트·커맨드)을 게이트웨이에서 받아 하네스 디스크에 비파괴 materialize. 바뀐 게 있으면(claude) `{"hookSpecificOutput":{"hookEventName":"SessionStart","reloadSkills":true}}`, 그 외 무출력. 항상 exit 0(fetch 실패 시 디스크 현상 유지) |
-| `work-flag.mjs` | PostToolUse ×3 (`mcp__lively__.*`, `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash`, `Agent\|Task` — #4217) + **SessionStart**(`startup\|resume\|clear`) + **SessionEnd** — #1059 · **UserPromptSubmit + Notification(matcher 없음) + Stop** — #1221 · **SubagentStop** — #4217 | hook-input JSON (session_id, tool_name, hook_event_name, reason, notification_type/message …) | 출력 없음, 항상 exit 0. PostToolUse=플래그 touch(기록 fork 를 띄우면 `.writeback-pending` 표시). SubagentStop=그 표시 걷음. SessionStart=claude UUID 매핑 보고(정밀복원). SessionEnd(reason=prompt_input_exit\|logout)=정상종료 보고(복원목록 '종료됨'). **UserPromptSubmit/PostToolUse/Notification/Stop=세션 실행 단계 보고**(아래 §1.6) |
+| `work-flag.mjs` | PostToolUse ×3 (`mcp__lively__.*`, `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash`, `Agent\|Task` — #4217) + **SessionStart**(`startup\|resume\|clear`) + **SessionEnd** — #1059 · **UserPromptSubmit + Notification(matcher 없음) + Stop** — #1221 · **SubagentStop** — #4217 · **StopFailure** — #4821 | hook-input JSON (session_id, tool_name, hook_event_name, reason, notification_type/message …) | 출력 없음, 항상 exit 0. PostToolUse=플래그 touch(기록 fork 를 띄우면 `.writeback-pending` 표시). SubagentStop=그 표시 걷음. SessionStart=claude UUID 매핑 보고(정밀복원). SessionEnd(reason=prompt_input_exit\|logout)=정상종료 보고(복원목록 '종료됨'). **UserPromptSubmit/PostToolUse/Notification/Stop=세션 실행 단계 보고**(아래 §1.6) |
 | `stop-writeback-gate.mjs` | Stop (matcher 없음) | hook-input JSON (`stop_hook_active` 포함) | 차단 시에만 `{"decision":"block","reason":…}` + exit 0 (동일 라이브 세션 재가동). 그 외 무출력 exit 0 |
 
 > **memory_write 는 work-flag 에서 의도적 제외** — work-flag.mjs `WRITE_TOOLS_DEFAULT`·settings-hooks 매처에 **넣지 않는다**.
@@ -67,6 +67,7 @@
 | `Notification` (`permission_prompt`·`elicitation_dialog`·`agent_needs_input`) | `waiting` | **matcher 를 안 건다** — 타입 matcher 를 모르는 구 빌드에서 엔트리가 통째로 안 걸려 조용히 죽는 걸 피한다. 분류는 훅이 페이로드로(신형 `notification_type` / 구형 `message` 문구 둘 다) |
 | `Notification` (`idle_prompt`) | `idle` | |
 | `Stop` | `idle` | 턴 종료 |
+| `StopFailure` | `idle` | API 오류(사용 한도·없는 모델 …)로 끝난 턴의 종료 — Claude Code 는 그때 Stop 대신 이것만 띄운다. 없으면 턴 시작의 `busy` 만 남는다(#4821) |
 | `PermissionRequest` | `waiting` | **코덱스 패리티** — 코덱스엔 Notification 이 없다 |
 | `SessionStart`·그 외 알림(`auth_success` 등) | 보고 안 함 | 세션이 뜬 것은 작업이 아니다(활동 시각을 부풀리면 회수·'작업 완료' 판정이 함께 망가진다) |
 

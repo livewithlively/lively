@@ -31,6 +31,32 @@ export interface TranscriptFs {
    *  왜 필요한가: 매핑(대화 id)이 아직 없는 갓 뜬 세션은 규약 경로를 만들 수 없어 **그 폴더에서 방금 자란 파일**을
    *  찾아야 한다(session-outbox 의 에코 확인). 중계 배포에선 그 폴더가 노드의 멤버 홈이라 로컬 readdir 이 빈손이다. */
   listDir(dir: string): Promise<Array<{ name: string; mtimeMs: number }>>;
+  /**
+   * promptId 턴의 **첫 줄**(출처가 있는 사용자 줄)을 `before` 바이트 앞쪽으로 거슬러 찾아 그 출처를 준다 — origin.kind, 없으면 turnOrigin 의
+   *  `_` 를 `-` 로 맞춘 것(«auto-continuation» · «human» …). 최대 maxBytes 만 거슬러 읽는다. 못 찾음 · 없는 파일 · 이상한 promptId = null.
+   *  그 밖의 읽기 실패(중계·입출력)는 던진다. (#4821 — 한도 대기 판정이 끝 창보다 긴 «이어 간 턴» 의 출처를 알아야 한다: session-quota-wait.ts)
+   *  ⚠ 중계 배포에선 노드 쪽 node 한 줄로 **한 번에** 찾는다 — 덩어리마다 중계를 왕복하면 수십 MB 에 수십 번이다(prevTranscript 와 같은 이유).
+   */
+  turnOrigin(file: string, promptId: string, before: number, maxBytes: number): Promise<string | null>;
+}
+
+/** turnOrigin 이 한 번에 읽는 덩어리 — 중계 구현(TURN_ORIGIN_JS)과 같은 값. */
+const TURN_SCAN_CHUNK = 1024 * 1024;
+/** turnOrigin 이 받는 promptId 모양(본체는 uuid) — 아니면 찾지 않는다(찾을 문자열을 만드는 값이다). */
+const PROMPT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+const NL = 0x0a;
+
+/** 그 줄이 promptId 턴의 첫 줄이면 출처, 아니면 null — TURN_ORIGIN_JS 의 kindOf 와 같은 규칙. */
+function turnOpenerKind(line: Buffer, needle: Buffer, promptId: string): string | null {
+  if (line.indexOf(needle) < 0) return null;
+  let o: unknown;
+  try { o = JSON.parse(line.toString("utf8")); } catch { return null; }
+  if (!o || typeof o !== "object") return null;
+  const l = o as Record<string, unknown>;
+  if (l.type !== "user" || l.isSidechain === true || l.promptId !== promptId) return null;
+  const k = l.origin && typeof l.origin === "object" ? (l.origin as { kind?: unknown }).kind : undefined;
+  if (typeof k === "string" && k) return k;
+  return typeof l.turnOrigin === "string" && l.turnOrigin ? l.turnOrigin.replace(/_/g, "-") : null;
 }
 
 export const localTranscriptFs: TranscriptFs = {
@@ -52,7 +78,59 @@ export const localTranscriptFs: TranscriptFs = {
     }
     return out;
   },
+  async turnOrigin(file, promptId, before, maxBytes) {
+    if (!PROMPT_ID_RE.test(promptId)) return null;
+    let fh: Awaited<ReturnType<typeof fsp.open>>;
+    try { fh = await fsp.open(file, "r"); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return null; throw e; }
+    try {
+      const needle = Buffer.from(`"promptId":"${promptId}"`);
+      const end = Math.min(Math.max(0, before), (await fh.stat()).size);
+      const lo = Math.max(0, end - Math.max(0, maxBytes));
+      let pos = end;
+      let carry = Buffer.alloc(0);          // 덩어리 첫 개행 앞 조각 — 더 앞 덩어리의 끝과 이어 붙여 한 줄이 된다
+      while (pos > lo) {
+        const s = Math.max(lo, pos - TURN_SCAN_CHUNK);
+        const got = Buffer.alloc(pos - s);
+        const { bytesRead } = await fh.read(got, 0, got.length, s);
+        const data = carry.length ? Buffer.concat([got.subarray(0, bytesRead), carry]) : got.subarray(0, bytesRead);
+        let e = data.length;                // 아직 안 본 줄의 끝 — 뒤에서부터(첫 줄은 그 턴의 가장 앞이라 거슬러 가며 처음 만나는 출처가 곧 첫 줄)
+        while (e > 0) {
+          const nl = data.lastIndexOf(NL, e - 1);
+          if (nl < 0) break;
+          const k = turnOpenerKind(data.subarray(nl + 1, e), needle, promptId);
+          if (k) return k;
+          e = nl;
+        }
+        carry = data.subarray(0, e);
+        pos = s;
+      }
+      //  남은 조각은 파일 맨 앞이거나 상한 바로 앞이 개행이면 온전한 줄이다(상한이 줄 시작에 꼭 맞았다). 아니면 상한에 잘린 반 줄 — 보지 않는다.
+      if (!carry.length) return null;
+      let whole = lo === 0;
+      if (!whole) { const b = Buffer.alloc(1); whole = (await fh.read(b, 0, 1, lo - 1)).bytesRead === 1 && b[0] === NL; }
+      return whole ? turnOpenerKind(carry, needle, promptId) : null;
+    } finally { await fh.close(); }
+  },
 };
+
+// localTranscriptFs.turnOrigin 과 같은 규칙을 **멤버 실행환경에서** 돌리는 node 한 줄(고정 리터럴 · 값은 stdin JSON). 없는 파일 = null,
+//  그 밖의 입출력 실패는 종료코드 1 → memberNodeJson 이 던진다(«못 찾음» 으로 기억하지 않게 — session-quota-wait 가 못 찾음을 기억한다).
+const TURN_ORIGIN_JS =
+  "const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{let out=null;try{" +
+  "const {file,promptId,before,max}=JSON.parse(d);let fd;try{fd=fs.openSync(file,'r')}catch(e){if(e&&e.code==='ENOENT'){process.stdout.write('null');return}throw e}" +
+  "try{const needle=Buffer.from('\"promptId\":\"'+promptId+'\"');const C=1048576;" +
+  "const kindOf=(b)=>{if(b.indexOf(needle)<0)return null;let o;try{o=JSON.parse(b.toString('utf8'))}catch{return null}" +
+  "if(!o||typeof o!=='object'||o.type!=='user'||o.isSidechain===true||o.promptId!==promptId)return null;" +
+  "const k=o.origin&&typeof o.origin==='object'?o.origin.kind:undefined;if(typeof k==='string'&&k)return k;" +
+  "return typeof o.turnOrigin==='string'&&o.turnOrigin?o.turnOrigin.replace(/_/g,'-'):null};" +
+  "const end=Math.min(Math.max(0,before),fs.fstatSync(fd).size);const lo=Math.max(0,end-Math.max(0,max));" +
+  "let pos=end,carry=Buffer.alloc(0);outer:while(pos>lo){const s=Math.max(lo,pos-C);const got=Buffer.alloc(pos-s);" +
+  "const n=fs.readSync(fd,got,0,got.length,s);const data=carry.length?Buffer.concat([got.subarray(0,n),carry]):got.subarray(0,n);" +
+  "let e=data.length;while(e>0){const nl=data.lastIndexOf(10,e-1);if(nl<0)break;const k=kindOf(data.subarray(nl+1,e));if(k){out=k;break outer}e=nl}" +
+  "carry=data.subarray(0,e);pos=s}" +
+  "if(out===null&&carry.length){let whole=lo===0;if(!whole){const b=Buffer.alloc(1);whole=fs.readSync(fd,b,0,1,lo-1)===1&&b[0]===10}if(whole)out=kindOf(carry)}" +
+  "}finally{fs.closeSync(fd)}" +
+  "}catch(e){process.stderr.write(String(e&&e.message||e));process.exit(1)}process.stdout.write(JSON.stringify(out))});";
 
 /**
  * 중계가 답하지 않을 때의 문장 — «파일이 없다»가 아니라 «지금 못 읽는다» (#2257 후속).
@@ -121,6 +199,12 @@ export function memberTranscriptFs(osUser: string): TranscriptFs {
       // memberLs 가 이미 그 멤버 uid 로 도는 한 줄(LS_JS)로 name·type·mtime 을 준다 — 여기서 왕복을 새로 만들지 않는다.
       try { return (await memberLs(osUser, dir)).filter((e) => e.type === "file").map((e) => ({ name: e.name, mtimeMs: e.mtime })); }
       catch { return []; }
+    },
+    async turnOrigin(file, promptId, before, maxBytes) {
+      if (!PROMPT_ID_RE.test(promptId)) return null;
+      let r: unknown;
+      try { r = await memberNodeJson<unknown>(osUser, TURN_ORIGIN_JS, { file, promptId, before, max: maxBytes }); } catch (e) { relayFailed(e); }
+      return typeof r === "string" && /^[\w-]{1,64}$/.test(r) ? r : null;   // 우리 한 줄의 답 모양 — 로컬 구현이 주는 값과 같은 범위
     },
   };
 }
