@@ -88,7 +88,7 @@ export function toNdjson(lines: ChatLine[]): string {
 //  질문 15개 중 14개가 창 밖 — 화면엔 2줄만 떴다).
 //  그렇다고 20MB 를 브라우저로 보낼 수는 없다. 그래서 **덩치만 버린 같은 모양**을 만든다:
 //    · 버리는 것 — 도구 결과 본문(제일 크다) · 도구 입력의 파일 내용 · 생각(thinking) · 화면이 안 보는 type
-//    · 남기는 것 — 사람 말 · AI 가 한 말 · 어떤 도구를 무엇에 썼나 · 턴 마감
+//    · 남기는 것 — 사람 말(일하는 중에 친 말의 끼워 넣기 줄 포함 — #4850 thinQueued) · AI 가 한 말 · 어떤 도구를 무엇에 썼나 · 턴 마감
 //  실측(같은 20.3MB 파일): 455KB = 2.24%, 44배. 모양은 ChatLine 그대로라 **화면의 분류 규칙을 그대로 쓴다**
 //  (규칙을 서버에 또 적으면 두 벌이 갈라진다).
 /** 도구 입력에서 남길 열쇠 — 화면의 분류기(web/session-trail.ts classifyToolUse)가 실제로 읽는 것만. */
@@ -166,7 +166,33 @@ export function thinLine(line: ChatLine): ChatLine | null {
     if (o.isSidechain) out.isSidechain = true;
     return out as ChatLine;
   }
+  if (o.type === "attachment") return thinQueued(o);
   return null;                                  // summary·file-history-snapshot 등 — 타임라인이 안 본다
+}
+
+/**
+ * #4850 — 하네스가 일하는 동안 사람이 친 말은 claude 기록에 사람 말 줄이 아니라 끼워 넣기 줄
+ *  (`{"type":"attachment","attachment":{"type":"queued_command","prompt":…,"commandMode":"prompt","origin":{"kind":"human"}}}`)로만 남는다.
+ *  타임라인의 장 머리이므로 남긴다 — 글은 사람 말처럼 앞뒤를 남겨 자르고, 모양은 그대로 둔다(어느 것이 사람 말인지는 화면이 가른다:
+ *  web/lib/queued-say.ts — 규칙을 여기 또 적으면 두 벌이 갈라진다). 작업 끝 알림(commandMode task-notification)·메타(하위 에이전트 보고·
+ *  다른 세션의 말·채널 중계)는 사람 말이 아니라 버린다.
+ */
+function thinQueued(o: any): ChatLine | null {
+  const a = o.attachment;
+  if (!a || typeof a !== "object" || a.type !== "queued_command" || a.isMeta === true) return null;
+  if (a.commandMode !== undefined && a.commandMode !== "prompt") return null;
+  const p = a.prompt;
+  const text = typeof p === "string" ? p
+    : Array.isArray(p) ? p.filter((b: any) => b && b.type === "text").map((b: any) => String(b.text ?? "")).join("\n") : "";
+  if (!text.trim()) return null;
+  const att: any = { type: "queued_command", prompt: clipEnds(text, THIN_SAY_MAX) };
+  if (a.commandMode !== undefined) att.commandMode = a.commandMode;
+  if (a.origin && typeof a.origin === "object" && typeof a.origin.kind === "string") att.origin = { kind: a.origin.kind };
+  if (typeof a.source_uuid === "string" && a.source_uuid) att.source_uuid = a.source_uuid;
+  const out: any = { type: "attachment", timestamp: o.timestamp ?? "", attachment: att };
+  if (o.uuid) out.uuid = o.uuid;
+  if (o.isSidechain) out.isSidechain = true;
+  return out as ChatLine;
 }
 
 export function toThinNdjson(lines: ChatLine[]): string {

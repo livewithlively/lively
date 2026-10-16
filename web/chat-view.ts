@@ -94,8 +94,14 @@ export interface ChatTurn {
 
 export interface ChatView {
   root: HTMLElement; list: HTMLElement; input: HTMLTextAreaElement; form: HTMLFormElement; noteEl: HTMLElement;
-  /** 새 턴(사람 말 한 마디). userText=null 이면 사람 말 없이 AI 가 한 일만(창을 중간부터 읽을 때). */
-  turn(userText: string | null, opts?: { ts?: string; at?: 'end' | 'start' }): ChatTurn;
+  /**
+   * 새 턴(사람 말 한 마디). userText=null 이면 사람 말 없이 AI 가 한 일만(창을 중간부터 읽을 때).
+   *  pinned — #4850 아직 대화 기록에 안 들어간 내 말(대기 말풍선): 맨 아래에 붙들어 두고, 그동안 끝에 붙는 턴·구분선·알림은 그 위에 선다
+   *  (하네스가 하던 일의 출력이 그 말 위로 쌓인다 — 터미널이 대기 중인 말을 맨 아래에 두는 것처럼). 기록에 그 말이 적히면 unpin 한다.
+   */
+  turn(userText: string | null, opts?: { ts?: string; at?: 'end' | 'start'; pinned?: boolean }): ChatTurn;
+  /** #4850 — 붙들어 둔 턴을 놓는다: 아직 붙들린 것들 바로 위(= 지금까지 쌓인 것의 맨 끝, 기록에 그 말이 적힌 자리)로 간다. 지운 턴이면 목록에서만 뺀다. */
+  unpin(t: ChatTurn): void;
   /** 완성본 이벤트(assistant/user 메시지)를 그 턴에 반영. text=그 줄에 AI 의 글이 있었나. */
   event(t: ChatTurn, ev: any): { text?: string };
   /** 조각(stream_event) — 글자가 오는 대로. */
@@ -1031,7 +1037,31 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       el('span', { class: 'tui-spin-m' }));
   }
 
-  function turn(userText: string | null, o?: { ts?: string; at?: 'end' | 'start' }): ChatTurn {
+  //  #4850 — 맨 아래에 붙들어 둔 턴(아직 기록에 안 들어간 내 말) · 보낸 순서. 끝에 붙는 것은 그 첫 턴 위에 선다(appendEnd).
+  const pinnedTurns: ChatTurn[] = [];
+  const firstPinned = (): ChatTurn | null => pinnedTurns.find((p) => p.root.parentElement === list) ?? null;
+  const appendEnd = (node: HTMLElement): void => {
+    const a = firstPinned()?.root;
+    if (a && a !== node) list.insertBefore(node, a); else list.append(node);
+  };
+  /** turnsArr 도 화면 순서와 같게 — 붙들린 첫 턴 앞에 넣는다(없으면 끝). */
+  const turnsInsert = (t: ChatTurn): void => {
+    const i = turnsArr.findIndex((x) => pinnedTurns.includes(x));
+    if (i < 0) turnsArr.push(t); else turnsArr.splice(i, 0, t);
+  };
+  const unpin = (t: ChatTurn): void => {
+    const i = pinnedTurns.indexOf(t);
+    if (i < 0) return;
+    pinnedTurns.splice(i, 1);
+    if (t.root.parentElement !== list) return;                 // 지운 턴(지우기·다시 그리기) — 목록에서만 뺀다
+    const a = firstPinned()?.root;
+    //  아직 붙들린 턴보다 아래에 있었으면 그 위로 옮긴다(보낸 순서와 들어간 순서가 다를 때). 이미 위면 그 자리가 곧 «쌓인 것의 맨 끝» 이다.
+    if (a && (a.compareDocumentPosition(t.root) & Node.DOCUMENT_POSITION_FOLLOWING)) list.insertBefore(t.root, a);
+    const k = turnsArr.indexOf(t);
+    if (k >= 0) { turnsArr.splice(k, 1); turnsInsert(t); }
+  };
+
+  function turn(userText: string | null, o?: { ts?: string; at?: 'end' | 'start'; pinned?: boolean }): ChatTurn {
     let work: HTMLElement; let ask: HTMLElement | null = null;
     if (tui) {
       // Claude Code 터미널 문법 — 내 말은 `> …` 한 띠(옅은 바탕), AI 가 한 일은 그 아래 `⏺` 덩이들. 이름표·말풍선 없음.
@@ -1076,7 +1106,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     const t: ChatTurn = { root: root0, work, ask, text: userText ?? '', ts: o?.ts, r: { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() }, live: null, startedAt: Number.isFinite(t0) ? t0 : Date.now() };
     if (o?.at === 'start') { list.prepend(root0); turnsArr.unshift(t); }
     else {
-      list.append(root0); turnsArr.push(t);
+      if (o?.pinned) { list.append(root0); turnsArr.push(t); pinnedTurns.push(t); }   // 대기 말풍선 — 맨 끝(앞서 붙든 것들 아래)
+      else { appendEnd(root0); turnsInsert(t); }
       //  새 턴이 섰다 — 쉬는 동안의 안내는 걷는다(Claude Code 도 턴이 시작되면 걷고, 끝나면 시계를 다시 건다).
       if (tui && idleAt != null) { idleAt = null; paintIdle(); }
     }
@@ -1405,7 +1436,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
         ? el('details', { class: 'livc-divider' }, el('summary', { text }), el('div', { class: 'livc-divider-body', text: details }))
         : el('div', { class: 'livc-divider' }, el('span', { text }));
     }
-    if (at === 'start') list.prepend(node); else list.append(node);
+    if (at === 'start') list.prepend(node); else appendEnd(node);
   }
   const splitLinesForErr = (s: string): string[] => { const ls = String(s || '').replace(/\s+$/, '').split('\n'); return ls.length ? ls : ['Error']; };
 
@@ -1562,13 +1593,13 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
 
   return {
     root, list, input, form, noteEl: note, style,
-    turn, event, stream, settle, running, busy, scroll,
+    turn, unpin, event, stream, settle, running, busy, scroll,
     scrollToBottom: () => { stick = true; toBottom(); },
     setNote: (text: string) => { note.textContent = text; },
     error: (t, text) => {
       //  tui — 빨간 `⎿` 덩이(Claude Code 가 도구·API 오류를 그리는 자리). 그 밖은 종전 오류 줄.
       const n = tui ? el('div', { class: 'livc-err tui-res tui-err' }, ...splitLinesForErr(text).map((l) => rl(l))) : el('div', { class: 'livc-err', text });
-      if (t) appendWork(t, n); else list.append(n);
+      if (t) appendWork(t, n); else appendEnd(n);
       scroll();
     },
     divider,
@@ -1582,7 +1613,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       //   줄이 넘치면 0번 칸부터 잇는다(걸친 들여쓰기 없음 — 2.1.299 실측). 그래서 점도 글 흐름 안에 둔다.
       const segs: TuiSeg[] = typeof text === 'string' ? [{ t: text }] : text;
       const n = el('div', { class: 'tui-notice tui-notice-' + tone }, el('span', { class: 'tui-dot', 'aria-hidden': 'true', text: '⏺' + VS15 }), ' ', ...segEls(segs));
-      if (t) appendWork(t, n); else list.append(n);
+      if (t) appendWork(t, n); else appendEnd(n);
     },
     bgDone: (id) => {
       if (!id) return;

@@ -14,6 +14,7 @@
 import { apiUrl, TOKEN_KEY } from './core.js';
 import { humanTitle, type TimelineHandle, type TlKind, type TlOut, type TlTier } from './timeline.js';
 import { isTrySessionTitle } from './lib/builder-flow.js';
+import { queuedSay } from './lib/queued-say.js';
 
 /** session-chat.ts 가 받는 싱크 타입(이름 유지 — 호출부 무변경). */
 export type TrailWidget = TimelineHandle;
@@ -272,6 +273,12 @@ export function replayTrail(w: TimelineHandle, ndjson: string): void {
       if (o.isMeta || !text.trim()) continue;
       if (INTERRUPT_RE.test(text) || CONTINUED_RE.test(text) || INJECTED_RE.test(text) || isHiddenBrief(text)) continue;
       trailSay(w, o, text, 'end');
+      continue;
+    }
+    //  #4850 — 일하는 중에 친 사람 말(끼워 넣기 줄)도 장 머리다 — 대화창(applySay)과 같은 판정·같은 열쇠(그 줄의 uuid).
+    const q = queuedSay(o);
+    if (q) {
+      if (!(INTERRUPT_RE.test(q.text) || CONTINUED_RE.test(q.text) || INJECTED_RE.test(q.text) || isHiddenBrief(q.text))) trailSay(w, o, q.text, 'end');
       continue;
     }
     if (o.type === 'assistant') trailMsg(w, o, 'end');
