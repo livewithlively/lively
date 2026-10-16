@@ -1285,3 +1285,74 @@ a.cxc-name:hover { color: var(--blue); }
 .rvp-one-t { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .rvp-one-d { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .rvp-one-sp { flex: 1; }
+
+/* ── #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기(web/context-claude-runs.ts) ─────────────── */
+.cxcr-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: 13px; }
+.cxcr-entry:hover { border-color: var(--blue); }
+.cxcr-entry > b { font-size: 13px; font-weight: 800; }
+.cxcr-entry-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+.cxcr-entry-facts .is-fail { color: var(--danger-deep); font-weight: 700; }
+.cxcr-entry-go { margin-left: auto; color: var(--blue); font-weight: 700; white-space: nowrap; }
+.cxcr { min-width: 0; }
+.cxcr-periods { display: flex; gap: 6px; flex-wrap: wrap; }
+.cxcr-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cxcr-warn { margin: 0; padding: 8px 12px; border: 1px solid var(--warn-line); border-radius: 8px; background: var(--warn-bg); color: var(--warn-ink); font-size: 13px; }
+.cxcr-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.cxcr-tile { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 0; }
+.cxcr-tile-l { font-size: 12px; color: var(--muted-head); }
+.cxcr-tile-v { font-size: 20px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.cxcr-tile-s { font-size: 12px; color: var(--ink-sub); word-break: keep-all; }
+.cxcr-tile.is-warn { border-color: var(--warn-line); background: var(--warn-bg); }
+.cxcr-tile.is-warn .cxcr-tile-v { color: var(--warn-ink); }
+.cxcr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.cxcr-card { margin: 0; min-width: 0; }
+.cxcr-h { margin: 0 0 10px; font-size: 14px; font-weight: 800; color: var(--ink); }
+.cxcr-bar { display: grid; grid-template-columns: minmax(120px, 1.4fr) 2fr auto 52px; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--ink); }
+.cxcr-bar-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cxcr-bar-p { color: var(--muted); text-align: right; font-size: 12px; }
+.cxcr-bar-track { position: relative; display: flex; height: 8px; border-radius: 4px; background: var(--bg-tint); overflow: hidden; }
+.cxcr-bar-track > i { display: block; height: 100%; background: var(--blue); }
+.cxcr-bar-track > i.is-fail, .cxcr-bar.is-mem .cxcr-bar-track > i { background: var(--danger); }
+.cxcr-scale { position: relative; height: 22px; margin: 6px 4px 8px; border-radius: 4px; background: var(--bg-tint); }
+.cxcr-scale > i { position: absolute; top: 0; bottom: 0; }
+.cxcr-scale-band { background: var(--node-blue-soft); border-radius: 4px 0 0 4px; }
+.cxcr-scale-req, .cxcr-scale-cap { width: 2px; margin-left: -1px; }
+.cxcr-scale-req { width: 3px !important; background: var(--ink-sub); }
+.cxcr-scale-cap { width: 3px !important; background: var(--danger); }
+.cxcr-scale-dot { top: 5px !important; bottom: auto !important; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 2px var(--surface); }
+.cxcr-scale-dot.is-hi { background: var(--warn); }
+.cxcr-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 4px 12px; font-size: 12px; color: var(--ink-sub); }
+.cxcr-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.cxcr-legend i { display: inline-block; }
+.cxcr-lg-band { width: 14px; height: 8px; border-radius: 2px; background: var(--node-blue-soft); }
+.cxcr-lg-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--blue); }
+.cxcr-lg-dot.is-hi { background: var(--warn); }
+.cxcr-lg-req, .cxcr-lg-cap { width: 3px; height: 12px; }
+.cxcr-lg-req { background: var(--ink-sub); }
+.cxcr-lg-cap { background: var(--danger); }
+.cxcr-dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 8px; font-size: 13px; }
+.cxcr-dl dt { color: var(--ink-sub); }
+.cxcr-dl dd { margin: 0; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cxcr-dl dd.is-fail { color: var(--danger-deep); }
+.cxcr-size-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 6px 0 8px; }
+.cxcr-field { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.cxcr-in { width: 96px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 14px; }
+.cxcr-unit { color: var(--muted); font-size: 12px; }
+.cxcr-src { margin: 0; font-size: 12px; color: var(--muted); word-break: keep-all; }
+.cxcr-sug { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg-tint); font-size: 13px; color: var(--ink-sub); }
+.cxcr-sug > b { color: var(--ink); }
+.cxcr-days { display: flex; flex-direction: column; gap: 4px; }
+.cxcr-day { display: grid; grid-template-columns: 52px 2fr auto auto; align-items: center; gap: 10px; font-size: 13px; color: var(--ink); }
+.cxcr-muted { color: var(--muted); }
+.cxcr-tablewrap { overflow-x: auto; }
+.cxcr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cxcr-table th { padding: 6px 8px; text-align: left; font-size: 12px; font-weight: 700; color: var(--muted-head); border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cxcr-table td { padding: 7px 8px; border-bottom: 1px solid var(--line-row); color: var(--ink); white-space: nowrap; }
+.cxcr-table td.num { font-variant-numeric: tabular-nums; }
+.cxcr-table tr.is-fail td:nth-child(4) { color: var(--danger-deep); font-weight: 700; }
+@media (max-width: 640px) {
+  .cxcr-bar { grid-template-columns: 1fr auto 44px; }
+  .cxcr-bar .cxcr-bar-track { grid-column: 1 / -1; order: 5; }
+  .cxcr-day { grid-template-columns: 44px 1fr auto; }
+  .cxcr-day > .cxcr-muted { display: none; }
+}

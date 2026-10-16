@@ -104,6 +104,13 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: collect_session_policy — 수집 실행 세션 크기(#4213 T11). 상한·예약(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_COLLECT_MEM_MB·_REQUEST_MB) → 1,024/640 순(src/sessions/session-memory-policy.ts).
+  //  session_memory_policy 와 칸을 가른다 — 컨트롤플레인이 그 칸을 프로비저닝마다 통째로 다시 쓴다.
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS collect_session_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: session_reclaim_policy — idle 세션 자동 회수(reaper) 정책(#1059 F). idle TTL(분). ──
   // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_IDLE_TTL_MIN) → 0(회수 끔, 무회귀) 순으로 해석
   //  (src/sessions/session-reclaim-policy.ts). 켜면 그 시간 넘게 idle 인 세션을 reaper 가 회수하되 desired-state

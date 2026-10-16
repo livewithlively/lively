@@ -8,6 +8,8 @@
 //  ③ 러너가 끝나면 판이 닫히고 브로커가 컨테이너를 거둔다(#4696). 게이트웨이는 폴더를 읽어 끝난 것을 보고
 //     세션 행·훅 토큰을 지운다(killSession — 멱등). 시간이 넘도록 끝나지 않으면 «잃음» 으로 적고 같은 정리를 한다.
 //  ④ 게이트웨이가 재기동하면 지켜보던 타이머는 사라진다. 그래도 실행은 계속되고, 상태 읽기가 같은 정리를 대신한다.
+//  ⑤ 판마다 시작·끝을 collect_run 표에 적는다(org/collect/run-log.ts) — 결과(성공·실패 사유)·최고 메모리·시간·비용.
+//     [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] 의 실패율·메모리 지표가 여기서 나오고, 수집 세션 크기는 그 옆에서 고친다.
 //
 //  ⚠ 이번 판(B)은 **실행기와 실측**까지다 — 원문을 자료로 넣는 저장 단계(외부 좌표·볼 수 있는 사람)는 다음 판이다.
 //   그래서 상태 응답은 원문을 싣지 않고 목록(도구·크기·해시)만 준다. 원문은 그 사람 홈의 실행 폴더에만 있다.
@@ -20,6 +22,9 @@ import { runAtLoginSeatSh, loginHomeOf, loginShQuote } from "./ai-login-run.js";
 import { resolveMemberOsUser } from "./terminal-isolation.js";
 import { userSlug } from "./profiles.js";
 import { memberAiConnectorsPolicy, recordFromCollectSummary } from "../org/store/member-ai-connectors.js";   // #4427 — 정책 · 커넥터 기록
+import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
+import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
+import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
   collectJob, collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, newCollectRunId,
@@ -54,6 +59,8 @@ interface RunRec {
   timer?: ReturnType<typeof setInterval>;
   /** 끝 신호 없이 세션이 «없다» 로 확답된 연속 횟수 — 러너가 죽었다(메모리 상한에 걸린 경우 등). */
   goneStrikes: number;
+  /** 이 판이 뜬 크기(수집 세션 크기 정책) — 실행 기록의 시작·끝이 같이 싣는다. 읽기 전이면 없다. */
+  size?: { capMb: number; requestMb: number };
 }
 
 /** 이 게이트웨이가 띄우고 지켜보는 실행. 재기동하면 비지만, 상태 읽기가 폴더에서 다시 판정한다. */
@@ -110,6 +117,18 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
     logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 세션 id 기록 실패 — 지켜보기가 대신 지운다"));
   rec.timer = setInterval(() => { void inTenant(rec.tenant, () => pollOnce(rec)); }, POLL_MS);
   rec.timer.unref?.();
+  //  시작 기록 — 세션 생성이 쓴 것과 같은 크기 정책(같은 캐시)을 함께 적는다. 지켜보기를 건 **뒤에**, 기다리지 않고 던지지 않는다
+  //   (DB 가 막혀도 실행·뒷정리를 붙잡지 않는다 — 기다리는 사이 지켜보기가 없으면 세션이 안 지워지고 그 사람의 다음 실행이 409 로 막힌다).
+  //   끝 기록도 같은 크기를 싣는다 — 시작 기록이 늦거나 빠져도 그 판이 어떤 크기로 돌았는지 남게.
+  void (async () => {
+    const size = await effectiveCollectSessionPolicy(getCollectSessionPolicy);
+    rec.size = { capMb: size.max_mb, requestMb: size.request_mb };
+    const m = await import("../org/collect/run-log.js");
+    await m.recordRunStart({
+      runId, member: memberOf(user), apps: job.apps, model: job.model,
+      capMb: size.max_mb, requestMb: size.request_mb, startedAt: new Date(collectRunStartedAt(runId) ?? Date.now()),
+    });
+  })().catch((e) => logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 시작 기록 실패 — 실행은 그대로"));
   return { runId, sessionId: rec.sessionId, model: job.model, apps: job.apps, timeoutSec: job.timeoutSec };
 }
 
@@ -117,7 +136,7 @@ async function pollOnce(rec: RunRec): Promise<void> {
   if (rec.done) return;
   try {
     const st = parseCollectRead(await runAtLoginSeatSh(rec.osUser, collectReadSh(rec.dir)));
-    if (st.state === "done") noteOutcome(rec.user, rec.runId, st.exit, st.summary);
+    if (st.state === "done") { noteOutcome(rec.user, rec.runId, st.exit, st.summary); noteRunEnd(rec.user, rec.runId, st.exit, st.summary, rec.size); }
     //  #4427 — 러너가 시작 때 잰 커넥터 목록을 그 사람 기록에 남긴다(던지지 않는다 — 뒷정리를 막지 않게). 관측 시각 = 실행 id 의 시작 시각.
     if (st.state === "done") await recordFromCollectSummary(rec.owner, st.summary, st.exit, collectRunStartedAt(rec.runId));
     if (st.state === "done" || st.state === "missing") return void (await finalize(rec, null));
@@ -141,7 +160,11 @@ async function finalize(rec: RunRec, lost: LostReason | null): Promise<void> {
   if (rec.done) return;
   rec.done = true;
   if (rec.timer) clearInterval(rec.timer);
-  if (lost) await markLost(rec.osUser, rec.dir, lost).catch(() => undefined);
+  if (lost) {
+    await markLost(rec.osUser, rec.dir, lost).catch(() => undefined);
+    //  게이트웨이가 추정한 끝 — 러너 끝 신호가 나중에 읽히면 그쪽이 이 기록을 바로잡는다(run-log recordRunEnd).
+    noteRunEnd(rec.user, rec.runId, gatewayExit(lost), null, rec.size);
+  }
   if (rec.sessionId) await dropSession(rec.user, rec.sessionId);
   //  끝난 기록은 잠시 남긴다 — 그동안 같은 사람의 새 실행을 막지는 않는다(done=true).
   setTimeout(() => runs.delete(rec.runId), 10 * 60_000).unref?.();
@@ -181,6 +204,33 @@ function noteOutcome(user: LivelyUser, runId: string, exit: Record<string, unkno
     .then((m) => m.recordCollectOutcome({ member, runId, exit: { error: strOrNull(exit.error), code: typeof exit.code === "number" ? exit.code : null }, summary: sum, at }))
     .catch((e) => logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 결과를 단위 표에 넘기지 못했다 — 담당 건강은 그대로"));
 }
+/** collect_run 의 구성원 칸 — 담당 건강(noteOutcome)과 같은 id. 비면 지켜보기 키와 같은 값으로. */
+const memberOf = (u: LivelyUser): string => String(u.userId || "").trim() || ownerOf(u);
+
+/**
+ * 끝난 실행을 실행 기록(collect_run)에 넘긴다 — 지표(실패율·최고 메모리) 몫. noteOutcome 과 같은 자리에서 부르되 따로 거른다:
+ *  게이트웨이 추정 끝(by gateway) 뒤에 러너 끝이 오면 그것도 넘겨야 하므로 (실행 id, 누가 적었나) 짝으로 한 번씩.
+ *  **기다리지 않고 던지지 않는다**(noteOutcome 과 같은 이유).
+ */
+const endedRuns = new Set<string>();
+function noteRunEnd(
+  user: LivelyUser, runId: string, exit: Record<string, unknown> | null, summary: Record<string, unknown> | null,
+  size?: { capMb: number; requestMb: number },
+): void {
+  if (!exit) return;
+  const by = endedByOf(exit);
+  const k = `${runId}\u0000${by}`;
+  if (endedRuns.has(k)) return;
+  endedRuns.add(k);
+  if (endedRuns.size > 1000) endedRuns.delete(endedRuns.values().next().value as string);
+  const started = collectRunStartedAt(runId);
+  //  못 적었으면(DB 오류) 거름 표식을 지운다 — 다음 읽기(지켜보기·상태 조회)가 다시 적는다.
+  void import("../org/collect/run-log.js")
+    .then((m) => m.recordRunEnd({ runId, member: memberOf(user), exit, summary, by, startedAt: started ? new Date(started) : null, capMb: size?.capMb ?? null, requestMb: size?.requestMb ?? null }))
+    .then((r) => { if (r === "error") endedRuns.delete(k); })
+    .catch((e) => { endedRuns.delete(k); logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 끝 기록 실패 — 실행 정리는 그대로"); });
+}
+
 /** 끝난 시각을 못 읽으면 시작 시각(실행 id 에 박혀 있다)으로 — 그래야 재기동 뒤 옛 실행이 나중 결과를 덮지 않는다. */
 function collectRunEndedAtFallback(runId: string): string | null {
   const started = collectRunStartedAt(runId);
@@ -192,7 +242,7 @@ type LostReason = "lost" | "runner-gone";
 
 /** exit.json 이 없을 때만 잃음을 적는다(러너가 늦게라도 쓴 것을 덮지 않는다). */
 function markLost(osUser: string | null, dir: string, why: LostReason): Promise<string> {
-  const body = JSON.stringify({ code: null, error: why, endedAt: new Date().toISOString() });
+  const body = JSON.stringify(gatewayExit(why));
   const f = loginShQuote(`${dir}/exit.json`);
   return runAtLoginSeatSh(osUser, `[ -d ${loginShQuote(dir)} ] && [ ! -f ${f} ] && printf '%s' ${loginShQuote(body)} > ${f}; echo ok`);
 }
@@ -221,6 +271,7 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
   const started = collectRunStartedAt(runId);
   if (st.state === "done") {
     noteOutcome(user, runId, st.exit, st.summary);
+    noteRunEnd(user, runId, st.exit, st.summary, rec?.size);
     //  #4427 — 지켜보기가 놓친 끝(게이트웨이 재기동)도 여기서 남긴다. 관측 시각이 실행 id 의 시작 시각이라 몇 번 읽어도 같은 값이고,
     //   그 뒤에 더 새 확인이 있었으면 옛 관측으로 버려진다(잃은 실행 — 요약이 없는 끝 — 은 아예 적지 않는다: collectSummaryScan).
     await recordFromCollectSummary(ownerOf(user), st.summary, st.exit, started);

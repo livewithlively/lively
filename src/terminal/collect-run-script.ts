@@ -17,7 +17,7 @@
 //    허락한 앱 밖의 서버는 전부 `--disallowedTools mcp__<서버>` 로 뺀다(`--strict-mcp-config` 는 claude.ai 커넥터까지 지운다 — 실측).
 
 import { COLLECT_PARENT, isCollectRunDir } from "./collect-run-pane.js";
-export { COLLECT_PARENT, collectMemLimits, collectPaneArgv, isCollectRunDir } from "./collect-run-pane.js";
+export { COLLECT_PARENT, collectPaneArgv, isCollectRunDir } from "./collect-run-pane.js";
 
 /** 실행 id — 시각(UTC 14자리) + 무작위 6자. 폴더 이름이 되므로 모양을 좁힌다. */
 export const COLLECT_RUN_ID_RE = /^cr-\d{14}-[a-z0-9]{6}$/;

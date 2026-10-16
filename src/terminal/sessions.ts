@@ -16,7 +16,7 @@ import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
 import { markExecutionSessionApplied, setExecutionSessionProject } from "../v6/execution-session-store.js";
 import { listMembers } from "../org/store/members.js";
-import { getRuntimeConfig } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
+import { getRuntimeConfig, getCollectSessionPolicy } from "../org/store/runtime-config.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
 import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
@@ -28,9 +28,9 @@ import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시�
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
-import { collectPaneArgv, isCollectRunDir, collectMemLimits } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
+import { collectPaneArgv, isCollectRunDir } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
-import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
+import { effectiveSessionMemoryPolicy, effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡 · #4213 T11 수집 세션 크기
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, markSessionEnded, revertSessionEnded, restoreSessionEndNote, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원 · #4783 끝난 사유
 import { endNoteForRow, lastResultSeenFrom, LAST_RESULT_SEEN_FMT, type SessionEndInput, type SessionEndNote } from "../sessions/session-end.js";   // #4783 — 이 판이 왜 끝났나
 import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
@@ -922,11 +922,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
-    //  #4213 T11 — 수집 실행은 워크스페이스 정책 대신 **작은 고정 크기**다(확정판 §5: 일반 세션의 절반에서 시작, 실측 뒤 조정).
-    //   한 사람의 대화 세션과 나눠 쓰지 않으려고 따로 띄우는 자리라, 크기도 따로 정한다.
+    //  #4213 T11 — 수집 실행은 일반 세션 정책 대신 **수집 세션 크기 정책**을 쓴다(기본 상한 1,024 · 예약 640, 관리 화면에서 바꾼다).
+    //   한 사람의 대화 세션과 나눠 쓰지 않으려고 따로 띄우는 자리라, 크기도 따로 정한다. 조회가 실패해도 던지지 않는다(캐시 → 기본값).
     if (input.kind === "collect") {
-      const lim = collectMemLimits();
-      cg = { highMb: 0, maxMb: lim.maxMb, requestMb: lim.requestMb };
+      const lim = await effectiveCollectSessionPolicy(getCollectSessionPolicy);
+      cg = { highMb: 0, maxMb: lim.max_mb, requestMb: lim.request_mb };
     }
     if (inside) {
       // ── #2545 (3단계) 새 경로 — 생성 순서 역전: ① DB desired 행 → ② 브로커에 세션 컨테이너 → ③ 멤버 홈 준비 → ④ 그 안에서 tmux ──

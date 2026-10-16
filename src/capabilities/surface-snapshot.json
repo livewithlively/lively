@@ -3965,6 +3965,26 @@
   "input_hash": "b87a2ff2a0e63f0d"
  },
  {
+  "name": "collect_claude_run_stats",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/collect/claude-run-stats"
+  ],
+  "input_hash": "91ee4b627c8cb429"
+ },
+ {
+  "name": "collect_session_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/collect/session-policy"
+  ],
+  "input_hash": "f020a566b9d44618"
+ },
+ {
   "name": "collect_units",
   "scope": "memory",
   "mcp": true,

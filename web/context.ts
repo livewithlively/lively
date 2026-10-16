@@ -24,6 +24,7 @@ import { stageHealthDetails } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
 import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
 import { renderCollectors } from './context-collectors.js';
+import { claudeRunsEntry, renderClaudeRunsScreen } from './context-claude-runs.js';   // #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
@@ -89,6 +90,8 @@ const STAGES: CtxStage[] = [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
       { key: 'presets', label: '새 소스 만들기', draw: (b) => presetsScreen(b) },
       { key: 'source-vis', label: '자료를 볼 사람', adminOnly: true, draw: async (b) => { await sourceVisPolicyPanel(b); } },
+      //  #4213 T11 — 수집 실행 지표(실패율·메모리)와 수집 세션 크기. 수집기 설정 화면 맨 위 한 줄에서 들어온다.
+      { key: 'claude', label: 'Claude 커넥터 수집', adminOnly: true, draw: (b) => renderClaudeRunsScreen(b) },
     ],
   },
   {
@@ -122,7 +125,9 @@ async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<vo
 /** 수집기 — 목록 하나. 「새 소스 만들기」(직접 정의하는 방식)는 만들기 흐름 안의 링크로만 들어간다(#3830 — 비개발자
  *  화면에서 개발자용 입구를 상시 카드로 세우지 않는다). */
 async function sourcesScreen(b: HTMLElement): Promise<void> {
-  await stack(b, [(h) => renderCollectors(h)]);
+  //  #4213 T11 — 맨 위 한 줄: Claude 커넥터 수집의 최근 7일(관리자만 — 아니면 빈 자리). 누르면 지표·크기 화면.
+  //   기다리지 않는다 — 통계 읽기가 수집기 목록을 늦추지 않게(그 줄은 다 읽히면 제자리에 선다).
+  await stack(b, [(h) => { void claudeRunsEntry(h); }, (h) => renderCollectors(h)]);
 }
 
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */
