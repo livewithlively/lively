@@ -2554,7 +2554,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "bde5f7ca2b43ccf6"
+  "input_hash": "4681c4d31c0096be"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -4022,7 +4022,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "16c21044604542fb"
+  "input_hash": "da021296d84d1901"
  },
  {
   "name": "collect_unit_split",

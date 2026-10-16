@@ -172,14 +172,16 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
     if (d === "before") await linkKnowledge(String(r.entity_key), String(t.to_name), String(t.relation), ctx);
     else await unlinkKnowledge(String(r.entity_key), String(t.to_name), String(t.relation), ctx);
   },
+  //  #4824 — 되돌리기가 연결을 되살릴 때는 «지금 보는 사람이 줄면 거절» 을 받지 않는다(allowNarrow): 원래 있던 연결이고,
+  //   그 연결의 내용은 이미 지식에 들어 있다. 거절하면 잠긴 자료의 내용이 넓게 남는다 — 좁히는 쪽이 맞다.
   link_source: async (r, d, ctx) => {
     const t = rec(r.after ?? r.before);
     if (d === "before") await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
-    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
+    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true });
   },
   unlink_source: async (r, d, ctx) => {
     const t = rec(r.before ?? r.after);
-    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
+    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true });
     else await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
   },
   // link_category(#1563) — 스토어가 교체 직전 매핑을 before 에 실으면서 되돌릴 수 있게 됐다.

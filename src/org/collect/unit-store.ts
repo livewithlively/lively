@@ -22,6 +22,7 @@ import { mirrorSourceV6 } from "../../v6/mirror/mirror-source.js";
 import { pickRule, sourceVisRules, type ResolvedSourceVis, type SourceVisRule } from "../../v6/source-vis-policy.js";
 import { axisOn } from "../../v6/visibility-axes.js";
 import { auditOrgContent, type WriteCtx } from "../../v6/content-audit.js";
+import { derivedEnforced, reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
 import { failReason } from "../store/run-fail-reason.js";
 import { dueSinceMs, effectiveIntervalSec, isUnitDue, isUnitSoon } from "./schedule-plan.js";
 import { currentTenant } from "../tenant-context.js";
@@ -390,9 +391,11 @@ const POLICY_CLOSED: ResolvedSourceVis = { visibility: "members", members: [], r
  *   묶음마다 대상을 한 번 계산해 500건씩 세 문장(UPDATE·DELETE·INSERT)으로 쓴다. 정책 고르기는 자료마다지만 메모리 안 계산이다.
  *  정책을 못 읽으면 닫는 쪽(대상 0)으로 — 열어 두면 정책 위반이 유출로 굳는다(stampSourceVisibility 와 같은 규칙).
  */
-export async function applySourceAudience(q: Q, sourceIds: readonly number[]): Promise<number> {
+export async function applySourceAudience(q: Q, sourceIds: readonly number[], ctx?: WriteCtx): Promise<number> {
   const ids = [...new Set(sourceIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   if (!ids.length) return 0;
+  //  #4824 — 축 상태는 자료 행을 잡기 **전에** 읽어 둔다(잡은 채 풀을 기다리지 않게 — derived-visibility.ts 머리말).
+  const enforced = await derivedEnforced();
   let rules: SourceVisRule[] | null = null;
   try { rules = await sourceVisRules(); }
   catch { logger.warn({ n: ids.length }, "[collect-unit] 공개범위 정책을 못 읽었다 — 단위 자료를 닫힌 채로 둔다(정책 복구 뒤 다시 맞춘다)"); }
@@ -442,13 +445,14 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
     const t = await q.query(`SELECT team_id::text AS team_id, member_id FROM team_member WHERE team_id::text = ANY($1::text[])`, [[...teamIds]]);
     for (const r of t.rows as any[]) teamMembers.set(String(r.team_id), (teamMembers.get(String(r.team_id)) ?? new Set()).add(String(r.member_id)));
   }
-  let changed = 0;
+  //  ⑤ 먼저 **읽기만** 해서 묶음마다 바꿀 자료(todo)를 모은다. 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
+  const plans: Array<{ want: ReturnType<typeof computeAudience>; todo: number[] }> = [];
   for (const g of groups.values()) {
     const want = computeAudience({ units: g.units, teamMembers });
     const wantKey = want.members.map((m) => `member:${m}`).join("\u0001");
+    const todo: number[] = [];
     for (let i = 0; i < g.sources.length; i += AUDIENCE_BATCH) {
       const chunk = g.sources.slice(i, i + AUDIENCE_BATCH);
-      //  ④ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
       const cur = await q.query(
         `SELECT s.id, s.visibility,
                 COALESCE(string_agg(sm.subject_kind || ':' || sm.member_id, E'\\u0001' ORDER BY sm.subject_kind || ':' || sm.member_id)
@@ -458,29 +462,54 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
       const same = (r: any): boolean => want.open
         ? r.visibility === "open" && String(r.aud) === ""
         : r.visibility === "members" && String(r.aud) === wantKey;
-      const todo = (cur.rows as any[]).filter((r) => !same(r)).map((r) => Number(r.id));
-      if (!todo.length) continue;
+      for (const r of cur.rows as any[]) if (!same(r)) todo.push(Number(r.id));
+    }
+    if (todo.length) plans.push({ want, todo });
+  }
+  if (!plans.length) return 0;
+  //  ⑥ 바꿀 자료 **전부**를 한 문장으로, 전역 id 순으로 잡는다(#4824 · 격리 리뷰 차단). 묶음마다 따로 id 순으로 잡으면 묶음을 넘어서는
+  //   순서가 엇갈려(묶음 A 의 5·15 를 쥔 뒤 묶음 B 의 10) 연결(자료를 한 문장 id 순 FOR SHARE — derived-visibility lockSources)과
+  //   서로 기다린다. FOR NO KEY UPDATE — 자료를 가리키는 FK 삽입(knowledge_source 등)의 KEY SHARE 와는 안 부딪친다.
+  const allTodo = [...new Set(plans.flatMap((p) => p.todo))].sort((a, b) => a - b);
+  await q.query(`SELECT id FROM source WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE`, [allTodo]);
+  let changed = 0;
+  const touched: number[] = [];
+  for (const { want, todo } of plans) {
+    for (let i = 0; i < todo.length; i += AUDIENCE_BATCH) {
+      const chunk = todo.slice(i, i + AUDIENCE_BATCH);
       //  모두(open) — 잠금을 풀고 대상을 지운다. 그 밖 — 잠그고 대상을 갈아 끼운다.
-      await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [todo, want.open ? "open" : "members"]);
-      await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [todo]);
+      await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [chunk, want.open ? "open" : "members"]);
+      await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [chunk]);
       if (!want.open && want.members.length) {
         await q.query(
           `INSERT INTO source_member(source_id, subject_kind, member_id)
            SELECT s, 'member', m FROM unnest($1::int[]) AS s CROSS JOIN unnest($2::text[]) AS m
-           ON CONFLICT DO NOTHING`, [todo, want.members]);
+           ON CONFLICT DO NOTHING`, [chunk, want.members]);
       }
-      changed += todo.length;
+      changed += chunk.length;
     }
+    //  열린 쪽으로 바뀐 자료는 맞출 것이 없다(지식은 넓히지 않는다). 잠긴 쪽은 좁아졌든 넓어졌든 넘긴다 — 맞추기는 멱등이고
+    //   이미 맞은 지식은 읽기만 한다. 넓어진 판도 넘기는 까닭: 정책을 못 읽어 닫혔던 자료가 돌아오는 판이 곧 «진짜 대상» 을
+    //   처음 정하는 판이라, 거기서 안 맞추면 그 사이 좁아진 것이 지식에 영영 안 닿는다.
+    if (!want.open) touched.push(...todo);
   }
+  //  #4824 빈틈 ③ — 자료가 좁혀졌으면 그 자료로 이미 만든 지식(derived_from)도 **같은 트랜잭션에서** 같은 범위로 맞춘다.
+  //   종전엔 상속이 연결 때 한 번뿐이라 단위를 «모두» → «나만» 으로 바꿔도 지식은 공개로 남았다(T10 격리 리뷰 N2).
+  //   좁히기만 한다 — 자료를 넓혀도(모두로) 지식은 그대로다. 잠금 순서: 단위 → 자료(위) → 지식(여기).
+  //  ⚠ 정책을 못 읽어 닫는 쪽(대상 0)으로 맞춘 판에서는 지식을 맞추지 않는다 — 자료는 정책이 돌아오면 다시 맞춰지지만
+  //   지식은 넓히지 않으므로, 순간 장애가 그 자료로 만든 지식 전부를 영구히 닫게 된다(격리 검토). 이 판의 지식은 그대로 두고,
+  //   정책이 돌아온 뒤 자료가 실제로 좁아지는 판에서 맞춘다.
+  if (touched.length && rules) await reconcileDerivedVisibility(q, { sourceIds: touched }, ctx, "source_narrowed", enforced);
+  else if (touched.length) logger.warn({ n: touched.length }, "[collect-unit] 정책을 못 읽은 판 — 그 자료로 만든 지식은 이번엔 맞추지 않는다(정책이 돌아온 판에서 맞춘다)");
   return changed;
 }
 
 /** 단위들이 공개범위를 정하는 자료 전부를 다시 맞춘다 — 확인된 구성원이 바뀐 뒤(목록 반영·쪼개기·저장으로 확인됨). */
-export async function syncUnitAudience(q: Q, unitIds: readonly number[]): Promise<number> {
+export async function syncUnitAudience(q: Q, unitIds: readonly number[], ctx?: WriteCtx): Promise<number> {
   const ids = [...new Set(unitIds)].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return 0;
   const r = await q.query(`SELECT DISTINCT source_id FROM collect_unit_source WHERE unit_id = ANY($1::int[]) AND audience`, [ids]);
-  return applySourceAudience(q, r.rows.map((x: any) => Number(x.source_id)));
+  return applySourceAudience(q, r.rows.map((x: any) => Number(x.source_id)), ctx);
 }
 
 /** 이 사람을 이 단위의 «확인된» 볼 수 있는 구성원으로 — 그 사람 커넥터로 그 단위를 실제로 읽은 것이 확인됐을 때. 새로 확인되면 true. */
@@ -526,6 +555,8 @@ export async function storeUnitItems(
   }
   const kids = new Set((await itemsPool.query(`SELECT ref FROM collect_unit WHERE parent_id = $1`, [unitId])).rows.map((r: any) => String(r.ref)));
   const shareable = MAIL_APPS.has(u.app);
+  //  #4824 — 저장이 자료를 좁혀 지식까지 맞출 때 감사에 남길 «누가»(그 사람의 실행 · 또는 그 수집기).
+  const storeCtx: WriteCtx = { actor: member ?? (by.collector_id != null ? `collector:${by.collector_id}` : null), source: "collect_unit_store" };
   const res: StoreResult = { stored: 0, inserted: 0, skipped: 0, conflicts: 0, failed: 0, refused: 0, source_ids: [] };
   const client = await itemsPool.connect();
   try {
@@ -569,7 +600,7 @@ export async function storeUnitItems(
           `INSERT INTO collect_unit_source(unit_id, source_id, audience) VALUES($1,$2,$3)
            ON CONFLICT (unit_id, source_id) DO UPDATE SET audience = collect_unit_source.audience OR EXCLUDED.audience`,
           [unitId, sid, owned]);
-        if (owned) await applySourceAudience(client, [sid]);
+        if (owned) await applySourceAudience(client, [sid], storeCtx);
         await client.query("COMMIT");
         res.stored++; if (inserted) res.inserted++;
         res.source_ids.push(sid);
@@ -585,7 +616,7 @@ export async function storeUnitItems(
       await client.query("BEGIN");
       try {
         await client.query(`SELECT 1 FROM collect_unit WHERE id=$1 FOR UPDATE`, [unitId]);   // 구성원이 바뀐다 — 진행 중인 저장과 줄을 세운다
-        if (await verifyMember(client, unitId, member)) await syncUnitAudience(client, [unitId]);
+        if (await verifyMember(client, unitId, member)) await syncUnitAudience(client, [unitId], storeCtx);
         await client.query("COMMIT");
       } catch (e) {
         await client.query("ROLLBACK").catch(() => {});
@@ -719,7 +750,7 @@ export async function recordUnitListing(input: ListingInput, ctx?: WriteCtx): Pr
         res.left = left.rows.length;
         for (const r of left.rows as any[]) if (r.verified_at != null) touched.add(Number(r.unit_id));
       }
-      res.audience_changed = await syncUnitAudience(client, [...touched]);
+      res.audience_changed = await syncUnitAudience(client, [...touched], ctx);
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
@@ -1092,8 +1123,9 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     if (visChanged) {
       await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`, [id, next, next === "me" ? actor.member : null]);
       //  이미 모은 자료도 새 공개범위로 — 같은 트랜잭션이라 좁힌 순간 빠진 사람이 계속 보는 틈이 없다.
-      //  ⚠ 이미 증류한 지식은 따라 좁혀지지 않는다(상속은 원본 연결 때 한 번 — T14 #4824).
-      await syncUnitAudience(client, [id]);
+      //  그 자료로 이미 증류한 지식도 같은 트랜잭션에서 좁혀진다(applySourceAudience → reconcileDerivedVisibility · #4824).
+      //  넓히기(모두로)는 지식에 따라가지 않는다 — 지식 넓히기는 사람 몫이다.
+      await syncUnitAudience(client, [id], ctx);
     }
     await client.query("COMMIT");
   } catch (e) {
@@ -1176,7 +1208,7 @@ export async function splitUnit(
            ON CONFLICT (unit_id, member_id) DO NOTHING`, [cid, m, pm?.priority ?? 100, pm?.verified_at ?? null]);
       }
     }
-    await syncUnitAudience(client, ids);
+    await syncUnitAudience(client, ids, ctx);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});

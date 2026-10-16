@@ -16,8 +16,6 @@
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
 import { axisOn } from "./visibility-axes.js";
-import { auditKnowledge } from "./knowledge-common.js";
-import type { WriteCtx } from "./content-audit.js";
 import type pg from "pg";
 
 export interface SourceVisRule {
@@ -124,71 +122,6 @@ export async function applyVisibility(
     [sourceId, members.map((m) => m.subject_kind), members.map((m) => m.member_id)]);
 }
 
-/**
- * 증류 지식이 원본 자료의 공개범위를 물려받는다(#1291 v4) — `derived_from` 링크가 생기는 순간 한 번.
- *
- *  왜 여기인가: 증류기는 `knowledge_save` 로 지식을 쓰고 `source_link_knowledge` 로 원본을 잇는다.
- *  그 링크가 "이 지식은 저 자료에서 나왔다"가 성립하는 **유일한 지점**이라, 상속도 여기 한 곳에 건다.
- *
- *  왜 교집합인가: 이 프로젝트의 상속 규칙은 일관되게 **단조 축소**다. 제한된 자료가 하나라도 섞였는데
- *  지식이 전체공개로 나가면 그게 유출이다 — 증류는 원문을 요약할 뿐 기밀성을 없애지 않는다.
- *
- *  ⚠ 교집합이 비면(서로 다른 팀의 자료를 섞어 증류) 지식은 **아무에게도 안 보이게** 된다. 그게 안전한
- *   기본값이지만 사람이 알아야 고칠 수 있으므로 호출부가 결과를 받아 알린다(조용히 잠그지 않는다).
- */
-export interface InheritResult { applied: boolean; visibility: "open" | "members"; audience: number; empty: boolean }
-
-export async function inheritSourceVisibility(name: string, sourceId: number, ctx?: WriteCtx): Promise<InheritResult> {
-  const none: InheritResult = { applied: false, visibility: "open", audience: 0, empty: false };
-  // 두 축이 다 켜져 있어야 의미가 있다 — 자료 잠금이 강제되지 않거나(자료 축 off) 지식 잠금이 강제되지
-  //  않으면(지식 축 off) 상속은 아무 보호도 못 하면서 예상 못 한 잠금만 만든다.
-  if (!(await axisOn("source")) || !(await axisOn("knowledge"))) return none;
-
-  const src = await itemsPool.query(
-    `SELECT visibility FROM source WHERE id=$1`, [sourceId]);
-  if (src.rows[0]?.visibility !== "members") return none;   // 원본이 전원 공개면 물려줄 제한이 없다
-
-  const srcAud = await itemsPool.query(
-    `SELECT subject_kind, member_id FROM source_member WHERE source_id=$1`, [sourceId]);
-  const srcSet = new Set(srcAud.rows.map((r: any) => `${r.subject_kind}:${r.member_id}`));
-
-  const kRow = await itemsPool.query(`SELECT visibility FROM knowledge WHERE name=$1`, [name]);
-  if (!kRow.rows.length) return none;
-  const kLocked = kRow.rows[0].visibility === "members";
-
-  let nextSet: Set<string>;
-  let prevAudience = 0;                                // 잠금 전 대상 수 — 감사 before 와 no-op 판정에 쓴다
-  if (!kLocked) {
-    nextSet = srcSet;                                  // 열려 있던 지식 → 원본 대상으로 좁힌다
-  } else {
-    const kAud = await itemsPool.query(
-      `SELECT subject_kind, member_id FROM knowledge_member WHERE name=$1`, [name]);
-    const kSet = new Set(kAud.rows.map((r: any) => `${r.subject_kind}:${r.member_id}`));
-    prevAudience = kSet.size;
-    nextSet = new Set([...kSet].filter((x) => srcSet.has(x)));   // 이미 잠긴 지식 → 교집합(더 좁아지기만)
-  }
-
-  const rows = [...nextSet].map((x) => { const i = x.indexOf(":"); return { k: x.slice(0, i), m: x.slice(i + 1) }; });
-  await itemsPool.query(`UPDATE knowledge SET visibility='members' WHERE name=$1`, [name]);
-  await itemsPool.query(`DELETE FROM knowledge_member WHERE name=$1`, [name]);
-  if (rows.length) {
-    await itemsPool.query(
-      `INSERT INTO knowledge_member(name, subject_kind, member_id)
-       SELECT $1, k, m FROM unnest($2::text[], $3::text[]) AS t(k, m) ON CONFLICT DO NOTHING`,
-      [name, rows.map((r) => r.k), rows.map((r) => r.m)]);
-  }
-  if (!rows.length) {
-    logger.warn({ knowledge: name, sourceId },
-      "[source-vis] 증류 지식의 상속 대상이 비었다 — 서로 다른 대상의 자료를 섞었을 수 있다(현재 아무도 못 본다)");
-  }
-  // #1561 감사 — **접근통제 이력**. 이 경로는 사람이 아무것도 누르지 않았는데 문서가 잠기는 자리라,
-  //  안 남기면 '누가·언제·왜 이 문서를 잠갔나'에 답할 수 없다(그건 감사가 반드시 덮어야 하는 종류의 변경이다).
-  //  ⚠ 실변경일 때만 — 이미 같은 대상으로 잠긴 문서를 재증류할 때마다 감사행이 쌓이면 타임라인이 덮인다
-  //   (미러의 감사 노이즈 게이트와 같은 결). nextSet ⊆ kSet 이라 크기 비교만으로 동일 집합 판정이 성립한다.
-  if (!kLocked || nextSet.size !== prevAudience) {
-    await auditKnowledge(name, "set_visibility",
-      { name, visibility: kLocked ? "members" : "open", audience: prevAudience },
-      { name, visibility: "members", audience: rows.length, via_source: sourceId }, ctx);
-  }
-  return { applied: true, visibility: "members", audience: rows.length, empty: !rows.length };
-}
+// 증류 지식이 원본 자료의 공개범위를 물려받는 일(#1291 v4)은 #4824 부터 derived-visibility.ts 가 한다 —
+//  연결·판정·맞추기를 한 트랜잭션에서, 그리고 자료가 나중에 좁혀질 때도(applySourceAudience · 정책 소급) 같은 함수로.
+//  종전의 «연결 뒤 한 번 · 실패는 삼킴» 상속(inheritSourceVisibility)은 그 자리로 옮겨 걷었다.

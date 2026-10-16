@@ -7,6 +7,7 @@ import { auditOrgContent, type WriteCtx } from "./content-audit.js";
 import { visibleListIds, effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
 import { itemsPool } from "../db/client.js";
+import type pg from "pg";
 
 // 지식 1건의 가시성 술어(#1291) — 'k' 별칭 기준. 뷰어가 몇 번째 바인드 파라미터인지는 호출부가 정한다
 //  (번호를 고정하면 파라미터가 하나 늘어나는 순간 조용히 엉뚱한 값으로 판정하게 된다).
@@ -59,8 +60,8 @@ export function slugify(s: string): string {
 // icon(#657) = props_ui->>'icon' — 페이지 아이콘(노션형). 목록·검색·트리 행이 문서 글리프 대신 표시.
 export const K_ICON_EXPR = `k.props_ui->>'icon' AS icon`;
 
-export const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
-  auditOrgContent("knowledge", name, op, before, after, ctx);
+export const auditKnowledge = (name: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx, db?: Pick<pg.PoolClient, "query">): Promise<void> =>
+  auditOrgContent("knowledge", name, op, before, after, ctx, undefined, db);
 
 /**
  * 카테고리를 **잃은** 지식의 '봤다' 기록을 지운다(#4194) — 증류기의 카테고리 붙이기 레인이 그 지식을 다시 보게.

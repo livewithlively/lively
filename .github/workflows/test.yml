@@ -463,6 +463,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/vis-personal-unlock.pg-test.mjs
+      # ⑤-n2 증류 지식 공개범위(#4824) — 목으로는 못 보는 것: **저장·원본 연결·공개범위가 한 트랜잭션**이라 연결이 실패하면 지식 행도
+      #    없다(D6) · 잠긴 자료를 남이 보던 지식에 합치면 본문도 그대로다(E1) · 단위를 좁히면 이미 만든 지식도 같은 트랜잭션에서
+      #    좁혀진다(N1) · 연결과 좁히기가 겹쳐도 지식이 자료보다 넓게 남지 않는다(C1). 핸들러를 부르고 DB 를 되읽어 판정한다.
+      - name: 증류 지식 공개범위 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/derived-visibility.pg-test.mjs
       # ⑤-n2 ClickUp 반출의 부모 좌표 치유 — 위 가시성 축과 같은 경계다. 치유가 부모 프로젝트의 list_id 를 옮기는데,
       #    미러 안 된 리스트로 옮겨졌을 때 list_id 를 비우면 «미분류 = 전원 공개» 가 된다. 판정이 UPDATE 한 문장의
       #    CASE·서브쿼리·NULL 비교라 목으로는 조건 하나를 지워도 초록이다 — 행을 깔고 기록 뒤 되읽어 바깥 사람 가시성까지 본다.
