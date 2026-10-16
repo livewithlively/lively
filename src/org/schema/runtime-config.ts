@@ -232,4 +232,11 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_server_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── org_runtime_config 확장(#4213 T6 #4427): 구성원 AI 계정(Claude) 커넥터를 이 워크스페이스에서 쓰나. 기본 TRUE(상민 2026-10-16
+  //  «허용이 기본» — 연결·수집 To-Be 의 기본 연결이 구성원 Claude 커넥터다). 끄면 세션 안내문이 «ext__ 만» 으로 바뀌고, 라이블리가
+  //  띄우는 claude 세션에 claude.ai 커넥터를 싣지 않으며, 구성원 AI 계정 수집이 돌지 않는다. 관리자 도구 member_ai_connectors_policy_set 이
+  //  이 칸만 쓴다(org/member-ai-connectors.ts — app_bundle_policy 와 같은 «한 칸 전용 입구» 규약).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allow_member_ai_connectors BOOLEAN NOT NULL DEFAULT TRUE;
+  `);
 }

@@ -19,6 +19,7 @@ import { currentTenant, withTenant, type TenantContext } from "../org/tenant-con
 import { runAtLoginSeatSh, loginHomeOf, loginShQuote } from "./ai-login-run.js";
 import { resolveMemberOsUser } from "./terminal-isolation.js";
 import { userSlug } from "./profiles.js";
+import { memberAiConnectorsPolicy, recordFromCollectSummary } from "../org/store/member-ai-connectors.js";   // #4427 — 정책 · 커넥터 기록
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
   collectJob, collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, newCollectRunId,
@@ -66,6 +67,13 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
   runId: string; sessionId: string | null; model: string; apps: string[]; timeoutSec: number;
 }> {
   const owner = ownerOf(user);
+  //  #4427 — 이 워크스페이스가 구성원 AI 계정(Claude) 커넥터를 막았으면 그 커넥터로 하는 수집도 돌지 않는다(상민 2026-10-16 «실제로 막는다»).
+  //   정책을 못 읽었으면 띄우지 않는다(fail-closed) — 끈 워크스페이스에서 DB 가 잠깐 막힌 사이에 수집이 돌지 않게.
+  const policy = await memberAiConnectorsPolicy();
+  if (policy === "blocked") {
+    throw new HttpError(403, "이 워크스페이스는 구성원 Claude 커넥터를 쓰지 않도록 설정돼 있어 수집 실행을 띄우지 않습니다 — 관리자가 [고급 설정 ▸ 구성원 권한 관리 ▸ Claude 커넥터]에서 켤 수 있습니다");
+  }
+  if (policy !== "allowed") throw new HttpError(503, "구성원 Claude 커넥터 정책을 읽지 못해 수집 실행을 띄우지 않았습니다 — 잠시 뒤 다시 시도해 주세요");
   for (const r of runs.values()) {
     if (r.owner === owner && !r.done) throw new HttpError(409, `이미 도는 수집 실행이 있습니다(${r.runId}) — 끝난 뒤 다시 띄워 주세요`);
   }
@@ -110,6 +118,8 @@ async function pollOnce(rec: RunRec): Promise<void> {
   try {
     const st = parseCollectRead(await runAtLoginSeatSh(rec.osUser, collectReadSh(rec.dir)));
     if (st.state === "done") noteOutcome(rec.user, rec.runId, st.exit, st.summary);
+    //  #4427 — 러너가 시작 때 잰 커넥터 목록을 그 사람 기록에 남긴다(던지지 않는다 — 뒷정리를 막지 않게). 관측 시각 = 실행 id 의 시작 시각.
+    if (st.state === "done") await recordFromCollectSummary(rec.owner, st.summary, st.exit, collectRunStartedAt(rec.runId));
     if (st.state === "done" || st.state === "missing") return void (await finalize(rec, null));
     //  끝 신호 없이 판이 사라졌다 = 러너가 죽었다(메모리 상한 OOM · node 가 파일을 못 읽음 등). 상한까지 기다리지 않는다.
     //   러너는 끝 신호를 쓴 **뒤에** 끝나므로, 이 순서(읽기 → 세션 확인)에서 «없음» 이 두 번 연속이면 끝 신호가 올 일은 없다.
@@ -211,6 +221,9 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
   const started = collectRunStartedAt(runId);
   if (st.state === "done") {
     noteOutcome(user, runId, st.exit, st.summary);
+    //  #4427 — 지켜보기가 놓친 끝(게이트웨이 재기동)도 여기서 남긴다. 관측 시각이 실행 id 의 시작 시각이라 몇 번 읽어도 같은 값이고,
+    //   그 뒤에 더 새 확인이 있었으면 옛 관측으로 버려진다(잃은 실행 — 요약이 없는 끝 — 은 아예 적지 않는다: collectSummaryScan).
+    await recordFromCollectSummary(ownerOf(user), st.summary, st.exit, started);
     if (rec && !rec.done) await finalize(rec, null);
     else if (!rec && st.sessionId) await dropSession(user, st.sessionId);
   } else if (!rec && started && Date.now() > started + 3600_000 + GRACE_MS) {

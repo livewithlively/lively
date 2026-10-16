@@ -67,6 +67,8 @@
   "dist/sessions/transcript-range.js",
   "dist/terminal/broker-client.js",
   "dist/terminal/catalog.js",
+  "dist/terminal/claude-ai-connectors-off.js",
+  "dist/terminal/claude-ai-connectors-policy.js",
   "dist/terminal/codex-chat-mode.js",
   "dist/terminal/codex-chat-thread.js",
   "dist/terminal/codex-hook-trust-apply.js",

@@ -43,6 +43,7 @@ import { ensureCodexHooksTrusted } from "./codex-hook-trust-apply.js";   // #413
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB 를 타는 자격 주입은 게이트웨이 능력이다
+import { claudeAiConnectorsBlocked } from "./claude-ai-connectors-policy.js";   // #4427 — 판·대화 런타임 한 벌 판정
 // #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
 import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
@@ -743,7 +744,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  ⚠ managed 는 #2170 이후 boolean 이 아니라 **상시세션 id** 다(누구의 것인가를 말해야 해서). statusLine
     //   주입 여부는 "상시세션인가"만 필요하므로 여기서 truthy 로 좁힌다 — id 자체는 표식(stampManagedMarker)이 쓴다.
     //  #3626 — 윈도우 노드(psmux)에는 얹지 않는다(값이 JSON = 따옴표 → pane 이 뜨지도 못한다). 판정은 catalog 가 한다.
-    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: !!input.managed, platform: process.platform }));
+    //  #4427 — 구성원 AI 계정(Claude) 커넥터를 막은 워크스페이스면 claude.ai 커넥터를 싣지 않는다(같은 --settings 에 env 로).
+    //   판정은 대화 런타임과 한 벌이다(claude-ai-connectors-policy — 못 읽으면 막음 · 노드는 안내문만).
+    const blockClaudeAiConnectors = await claudeAiConnectorsBlocked(harness.key);
+    cmd.push(...harnessSettingsArgv(harness.key, { theme: input.theme, managed: !!input.managed, platform: process.platform, blockClaudeAiConnectors }));
   }
   // pane 이 실제로 실행할 argv(#1516). 세 갈래:
   //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는

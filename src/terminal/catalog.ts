@@ -6,6 +6,7 @@ import type { SessionEndForRow } from "../sessions/session-end.js";   // #4783 �
 import type { ReportedState } from "./phase.js";
 import path from "node:path";
 import os from "node:os";
+import { CLAUDE_AI_CONNECTORS_OFF_ENV } from "./claude-ai-connectors-off.js";   // #4427 — import 0 인 잎(대화 런타임과 한 벌)
 
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
 export const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
@@ -1101,11 +1102,11 @@ function managedStatusLineSpec(): { type: string; command: string } {
 }
 
 /**
- * claude 스폰 argv 에 얹을 `--settings` 인자 — theme·statusLine 을 **한 객체로 합쳐 한 번만** 준다.
+ * claude 스폰 argv 에 얹을 `--settings` 인자 — theme·statusLine·(막을 때) env 를 **한 객체로 합쳐 한 번만** 준다.
  *  같은 `--settings` 플래그를 두 번 줬을 때 머지되는지 뒤가 이기는지가 미검증이라 합쳐서 준다(안전).
- *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
+ *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀). claude.ai 커넥터도 claude 만의 것이다.
  */
-export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string }): string[] {
+export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string; blockClaudeAiConnectors?: boolean }): string[] {
   if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
   const s: Record<string, unknown> = {};
   const t = normalizeTheme(opts.theme);
@@ -1113,6 +1114,8 @@ export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown;
   // statusLine 명령은 POSIX 셸 문법이라 Windows Claude에는 싣지 않는다. theme JSON은 paneLaunchArgv의
   // psmux 직접 실행 경계가 보존하므로 Windows에서도 안전하다(#3982).
   if (opts.managed && opts.platform !== "win32") s.statusLine = managedStatusLineSpec();
+  //  #4427 — 구성원 AI 계정 커넥터를 막은 워크스페이스: claude.ai 커넥터를 싣지 않는다(claude-ai-connectors-off.ts 머리말 — 실측·경계).
+  if (opts.blockClaudeAiConnectors) s.env = { ...CLAUDE_AI_CONNECTORS_OFF_ENV };
   return Object.keys(s).length ? ["--settings", JSON.stringify(s)] : [];
 }
 

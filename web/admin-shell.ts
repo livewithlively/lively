@@ -21,6 +21,7 @@ import { myAiSection } from './me-ai.js';
 import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
 import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
+import { memberAiConnectorsPanel } from './admin-ai-connectors.js';   // #4427 구성원 Claude 커넥터 — 정책 스위치 · 연결 현황
 import { reposPanel } from './admin-repos.js';
 import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
@@ -568,12 +569,14 @@ function memberAddSection(detail, data) {
 // ── [구성원 권한 관리] — 접속 토큰 + AI 실행 계정(구 [구성원] 서브탭 둘을 그대로 옮김, #1085). ──
 function memberAccessSection(detail, data) {
   detail.replaceChildren(
-    sectionHead('구성원 권한 관리', '구성원이 무엇으로 라이블리에 접속하는지, 그 사람의 AI가 어느 계정으로 실행되는지 관리합니다.'),
+    sectionHead('구성원 권한 관리', '구성원이 무엇으로 라이블리에 접속하는지, 그 사람의 AI가 어느 계정으로 실행되는지, 그 계정에 연결한 앱을 쓰는지 관리합니다.'),
     segTabs('member-access', [
       // 접속 토큰 = 우리 게이트웨이에 접속하는 bearer 토큰(auth_token). [외부 서비스 관리]의 서비스 로그인과 다른 것 — 용어 사전 참조.
       { key: 'tokens', label: '접속 토큰', render: (h) => tokensPanel(h, data) },
       // 'AI 실행 계정' — 구 '중앙박스 계정(프로필)'. '프로필'은 우상단 [내 프로필]과 겹쳐 버렸다(#524 에서 개념도 은퇴).
       { key: 'accounts', label: 'AI 실행 계정', render: (h) => { void profilesEditor(h); } },
+      // #4213 T6 — 구성원이 자기 Claude 계정에 연결한 앱을 쓰나(정책) + 누가 무엇을 연결했나(보기). [AI 도구]는 개인형에서 숨겨져 여기다.
+      { key: 'ai-connectors', label: 'Claude 커넥터', render: (h) => { void memberAiConnectorsPanel(h, data); } },
     ]));
 }
 

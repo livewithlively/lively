@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import {
-  ClaudeChatUnavailable, claudeChatArgv, claudeChatSpawnArgv,
+  ClaudeChatUnavailable, chatArgvWithConnectorPolicy, claudeChatArgv, claudeChatSpawnArgv,
   ensureClaudeChat, isClaudeChatLive, sendClaudeChat, stopClaudeChat,
 } from "./claude-chat-runtime.js";
 import { ask, onSessionEvent, pendingAsks, resetSessionBus } from "./runtime-bus.js";
@@ -42,6 +42,40 @@ await t("[1] argv — 필요한 플래그가 다 있다(하나 빠지면 그 표
   assert.ok(!a.includes("--resume"), "convId 가 없으면 --resume 을 안 붙인다");
   assert.ok(claudeChatArgv({ convId: "abc" }).includes("--resume"));
   assert.ok(claudeChatArgv({ model: "claude-haiku-4-5" }).includes("--model"));
+});
+
+await t("[1b] #4427 막음 — claude 대화 런타임에도 판(pane)과 같은 env 를 싣는다(I1~I4)", () => {
+  //  I1 claude + 막음 → --settings 한 번, env 값 "false"
+  const blocked = claudeChatArgv({ blockClaudeAiConnectors: true });
+  assert.equal(blocked.filter((a) => a === "--settings").length, 1);
+  assert.deepEqual(JSON.parse(blocked[blocked.indexOf("--settings") + 1]), { env: { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } });
+  //  I2 막음 아님 → --settings 없음(종전 argv 그대로)
+  assert.ok(!claudeChatArgv({}).includes("--settings"));
+  assert.ok(!claudeChatArgv({ blockClaudeAiConnectors: false }).includes("--settings"));
+  //  I3 claude 가 아닌 하네스 + 막음 → --settings 없음. 지금 표에서 argv 를 가진 하네스는 claude 하나라 표를 지나는 길로는
+  //   이 갈래가 안 보인다 — 순수 함수에 가짜 argv 를 줘서 직접 본다(표가 다른 하네스의 argv 를 얻는 날을 위한 줄이다).
+  assert.ok(!claudeChatArgv({ harness: "codex", blockClaudeAiConnectors: true }).includes("--settings"));
+  assert.deepEqual(chatArgvWithConnectorPolicy("grok", ["grok", "agent", "stdio"], true), ["grok", "agent", "stdio"]);
+  assert.deepEqual(chatArgvWithConnectorPolicy("claude", ["claude", "--print"], true).slice(-2)[0], "--settings");
+  //  I4 모르는 하네스 + 막음 → 빈 argv(띄울 수 없다는 사실이 그대로)
+  assert.deepEqual(claudeChatArgv({ harness: "nope", blockClaudeAiConnectors: true }), []);
+});
+
+await t("[1c] #4427 막음 — sendClaudeChat 이 **실제로 띄우는 argv** 에 --settings env 가 실린다 · 안 막으면 안 실린다(배선 끝까지)", async () => {
+  for (const block of [true, false]) {
+    const S = `r1c-${block}`; resetSessionBus(S);
+    const child = fakeChild();
+    let got: string[] = [];
+    const p = sendClaudeChat({ sessionId: S, cwd: "/tmp", osUser: null, harness: "claude", text: "hi", blockClaudeAiConnectors: block,
+      spawnFn: (argv: string[]) => { got = argv; return child; } } as any);
+    setImmediate(() => child.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: `c-${block}`, model: "m" }) + "\n"));
+    await p;
+    assert.ok(got.length > 0, "spawn 이 안 불렸다(관측 장치 배선)");
+    const i = got.indexOf("--settings");
+    if (block) assert.deepEqual(JSON.parse(got[i + 1]), { env: { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } }, got.join(" "));
+    else assert.equal(i, -1, got.join(" "));
+    stopClaudeChat(S, "테스트 정리");
+  }
 });
 
 await t("[2] 실행 경계 사다리 — 세션 → 멤버 → 로컬 (경계 계산을 두 벌로 두지 않는다)", () => {
