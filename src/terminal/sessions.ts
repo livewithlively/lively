@@ -844,7 +844,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // #2162 — **훅이 읽는 유일한 종류 신호.** 종전엔 서버만 알고(managed·loginFor·appId) pane 엔 안 나가서,
   //  훅은 `LIVELY_TASK_WS` 같은 부산물을 스니핑해 종류를 되짚어야 했다. 이제 한 축이다.
   args.push("-e", `${SESSION_KIND_ENV}=${input.kind}`);
-  // #4418 — 이 세션 이름의 출처. 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 안내하지 않는다(SESSION_LABEL_SOURCE_ENV 머리말).
+  // #4418 — 이 세션 이름의 출처. 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 세션 이름짓기를 안내하지 않는다(SESSION_LABEL_SOURCE_ENV 머리말).
   args.push("-e", `${SESSION_LABEL_SOURCE_ENV}=${labelSource}`);
   // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
   //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):

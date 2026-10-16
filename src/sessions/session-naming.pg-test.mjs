@@ -6,7 +6,8 @@
 //  따라간다»(UPDATE … WHERE 순위) · «사람이 이름을 실제로 바꾸면 사람 것»(SET 의 CASE) · «사람이 고른 태스크는 사람 것».
 //  목 풀로는 조건 하나를 지워도 초록이다. 그래서 진짜 함수(발견 기록 · 노드 미러 · 이름짓기)를 순서대로 부르고 **행을 되읽어** 판정한다.
 //
-//  사양·엣지 표: 스크래치패드 spec-4418.md — A1~A8(노드 경합) · B1(복원 출처) · C1~C10(태스크 이름 승계) · K1(사람이 고른 태스크).
+//  사양·엣지 표: 스크래치패드 spec-4418.md — A1~A10(노드 경합 · 옛 발견 행 정리) · B1(복원 출처) · C1~C12(태스크 이름 승계 · 바깥 개명 ·
+//   되살린 세션) · K1(사람이 고른 태스크).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ss = await import(`${DIST}/sessions/session-state.js`);
@@ -15,6 +16,8 @@ const st = await import(`${DIST}/v6/session-task.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
 const es = await import(`${DIST}/v6/execution-session-store.js`);
 const { relabelSession } = await import(`${DIST}/terminal/session-relabel.js`);
+const mp = await import(`${DIST}/v6/mirror/mirror-project.js`);
+const { initSessionsInfra } = await import(`${DIST}/org/schema/sessions-infra.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -47,6 +50,7 @@ const createInput = (over = {}) => ({ kind: "human", label: "", rootKey: "shared
   flags: {}, autoApprove: false, ...over });
 
 async function cleanup() {
+  await itemsPool.query(`DELETE FROM external_outbox WHERE entity_id IN (SELECT id FROM project WHERE created_by=$1)`, [A]).catch(() => {});
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ALL_S]);
   await itemsPool.query(`DELETE FROM session_project WHERE session_id = ANY($1::text[])`, [ALL_S]);
   await itemsPool.query(`DELETE FROM execution_session_task WHERE session_id = ANY($1::text[])`, [ALL_S]);
@@ -101,6 +105,14 @@ try {
     await ss.upsertSessionState({ ...nss.nodeSessionStateInput(nodeInfo(S(7), "AI 가 지은 이름"), NODE, createInput({ kind: "app", label: "AI 가 지은 이름" }), A) });
     const a7 = await row(S(7));
     chk("A7 발견 행이 아니면 다시 기록해도 출처·종류 그대로(agent · human)", a7?.label_source === "agent" && a7?.kind === "human", JSON.stringify(a7));
+
+    // A10 — 이 고침 전에 경합으로 남은 옛 행(발견 표식 + 좌표 있음)은 스키마 정리가 표식을 거둔다 · 좌표 없는 발견 행은 그대로
+    await itemsPool.query(`INSERT INTO org_session_state(id, owner, label, root_key, subpath, node_id, discovered)
+      VALUES($1,$2,'옛 경합 행','shared','project/1',$3,true), ($4,$2,'직접 띄운 행',NULL,NULL,$3,true)`, [S(30), A, NODE, S(31)]);
+    await initSessionsInfra(itemsPool);
+    const a10 = await row(S(30)), a10b = await row(S(31));
+    chk("A10 옛 경합 행(좌표 있음)은 발견 표식을 거두고 · 좌표 없는 발견 행은 그대로 · 출처는 지어내지 않는다",
+      a10?.discovered === false && a10?.label_source === null && a10b?.discovered === true, JSON.stringify({ a10, a10b }));
   }
 
   // ══ B. 복원(새 id)은 원래 출처를 잇는다 ═══════════════════════════════════════════════════════════════
@@ -208,6 +220,50 @@ try {
     chk("C9·C10 빈 이름은 안 쓰고 · 걸쇠에 진 이름짓기는 태스크를 안 바꾼다",
       empty === null && r.applied === false && c9?.name === "사람이 지은 세션 이름" && c9?.name_source === "session",
       JSON.stringify({ empty, r, c9 }));
+  }
+
+  {
+    // C11 — 세션이 만든 태스크를 바깥(ClickUp 등)에서 사람이 고쳤고 그 이름이 들어오는 미러로 왔다 → 사람 이름 → 이름짓기가 안 바꾼다
+    await bind(S(19), P);
+    await sessionRow(S(19), "외부 연동 태스크의 첫 지시 이름", "rule");
+    const made = await st.ensureSessionTask({ sessionId: S(19), owner: A, name: "외부 연동 태스크의 첫 지시 이름" });
+    const cur = (await itemsPool.query(`SELECT name, description, status_category FROM project WHERE id=$1`, [made.id])).rows[0];
+    const ext = `__naming_pg_ext_${made.id}`;
+    //  푸시가 끝나 바깥과 이어진 상태(링크백 · 공통 조상 = 지금 값 · 아웃박스 드레인 완료)를 만든다. 드레인 전이면 미러가 바깥 값을
+    //   일부러 안 받는다(아웃박스 pending 가드 — 우리 값이 아직 안 나갔다) — 실제로도 바깥 개명은 드레인 뒤에만 들어온다.
+    await itemsPool.query(`UPDATE project SET external_system='clickup', external_instance='__naming_pg__', external_id=$2, external_base=$3::jsonb WHERE id=$1`,
+      [made.id, ext, JSON.stringify({ name: cur.name, description: cur.description, status_category: cur.status_category })]);
+    await itemsPool.query(`UPDATE external_outbox SET done_at=now() WHERE entity_id=$1 AND done_at IS NULL`, [made.id]);
+    const client = await itemsPool.connect();
+    try {
+      await mp.mirrorProjectV6(client, {
+        type: "task", level: "task", title: "클릭업에서 사람이 고친 이름", body: cur.description ?? undefined,
+        provenance: { category: "collab_tool", system: "clickup", instance: "__naming_pg__", external_id: ext },
+        fields: { status_category: cur.status_category },
+      }, "clickup", ext);
+    } finally { client.release(); }
+    const mid = await taskRow(made.id);
+    const r = await relabelSession({ userId: A }, S(19), "AI 가 지은 이름", "agent");
+    const c11 = await taskRow(made.id);
+    chk("C11 바깥에서 사람이 고친 이름이 미러로 들어오면 human — 이름짓기가 안 바꾼다",
+      mid?.name === "클릭업에서 사람이 고친 이름" && mid?.name_source === "human" && r.applied === true && c11?.name === "클릭업에서 사람이 고친 이름",
+      JSON.stringify({ mid, r: { applied: r.applied, task: r.task }, c11 }));
+  }
+
+  {
+    // C12 — 새 id 로 되살린 세션(옛 세션의 태스크를 이어받는다)이 처음 이름을 지으면 그 태스크도 따라간다
+    await bind(S(20), P);
+    await sessionRow(S(20), "되살리기 전 첫 지시 이름", "rule");
+    const old = await st.ensureSessionTask({ sessionId: S(20), owner: A, name: "되살리기 전 첫 지시 이름" });
+    await itemsPool.query(`UPDATE org_session_state SET superseded_by=$2 WHERE id=$1`, [S(20), S(21)]);
+    await bind(S(21), P);
+    await sessionRow(S(21), "되살리기 전 첫 지시 이름", "rule");   // 복원이 실어 온 출처(rule) 그대로
+    const r = await relabelSession({ userId: A }, S(21), "되살린 세션 이름", "agent");
+    const c12 = await taskRow(old.id);
+    chk("C12 되살린 세션의 첫 이름짓기 — 옛 태스크를 이어받고(새로 안 만든다) 그 이름으로 따라간다",
+      r.applied === true && r.task?.id === old.id && r.task?.name === "되살린 세션 이름" && c12?.name === "되살린 세션 이름"
+        && (await taskIdOf(S(21))) === old.id,
+      JSON.stringify({ r: { applied: r.applied, task: r.task }, c12 }));
   }
 
   {

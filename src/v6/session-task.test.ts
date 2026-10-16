@@ -112,6 +112,8 @@ ok("P4 이미 진행 중이면 쓰지 않고, 그 밖(완료 포함 — 다시 �
   assert.match(launch, /if \(!label \|\| label === session\.id\) return;/, "이름 없는 세션(첫 지시 없음) 가드가 없다");
   const relabel = readFileSync(new URL("../../src/terminal/session-relabel.ts", import.meta.url), "utf8");
   assert.ok(relabel.indexOf("claimSessionLabel(id") < relabel.indexOf("renameSessionTaskForLabel({"), "이름 승계는 세션 걸쇠를 이긴 뒤에만");
+  assert.ok(relabel.indexOf("ensureSessionTask({ sessionId: id") < relabel.indexOf("renameSessionTaskForLabel({"),
+    "승계를 보장(이어받기)보다 먼저 부르면 새 id 로 되살린 세션의 이어받은 태스크가 따라가지 못한다");
   assert.match(relabel, /renameSessionTaskForLabel\(\{ sessionId: id, owner: me, name: label \}\)/, "이름 승계 호출이 없다");
   assert.doesNotMatch(relabel, /expectName/, "이름 글자 비교(직전 이름 == 태스크 이름)로 승계를 판정하면 #4418 이 돌아온다");
   ok("W1 배선 — 관문의 두 입구가 태스크를 붙이고, 이름 승계는 걸쇠를 이긴 뒤 출처로 판정한다");

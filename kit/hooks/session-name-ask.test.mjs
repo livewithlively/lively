@@ -102,23 +102,28 @@ try {
   }
   ok("경계 — LIVELY_TASK_WS 빈 문자열·공백은 위탁 표식이 아니다");
 
-  // ── #4418 — 이미 이름이 정해진 세션(사람이 준 이름 · AI 가 지은 세션의 복원)엔 안내하지 않는다. ──
+  // ── #4418 — 이미 이름이 정해진 세션(사람이 준 이름 · AI 가 지은 세션의 복원)엔 **세션 이름짓기(①)를 안내하지 않는다.** ──
   //  🔴 없으면: 태스크에서 연 세션마다 첫 턴에 헛 이름짓기 툴콜이 붙고, 종전 노드 경합에선 그 툴콜이 이겨
   //   사람이 지은 태스크 이름까지 바뀌었다(맥미니 실측 2026-10-16 — 태스크에서 연 세션 넷).
+  //  ②(자동 생성 프로젝트 이름)는 남는다 — 이름을 지어 프로젝트 없이 연 세션의 임시 프로젝트(«새 작업»)를 지을 유일한 자리다.
+  const projectOnly = (out) => !guided(out) && /project_rename_v6/.test(out);
   {
     const sid = `box-nametest-${process.pid}-named`;
-    const flag = path.join(os.tmpdir(), "lively-hooks", `${sid}.sessname`);
-    flags.push(flag);
-    assert.equal(guided(await run(REAL, { LIVELY_SESSION_ID: sid, LIVELY_SESSION_LABEL_SOURCE: "human" })), false, "사람이 이름을 준 세션에 안내가 나갔다");
-    assert.equal(await fsp.access(flag).then(() => true, () => false), false, "안내를 안 했는데 세션당 1회 플래그를 써 버렸다");
+    flags.push(path.join(os.tmpdir(), "lively-hooks", `${sid}.sessname`));
+    const twice = [];
+    for (let i = 0; i < 2; i++) twice.push(await run(REAL, { LIVELY_SESSION_ID: sid, LIVELY_SESSION_LABEL_SOURCE: "human" }));
+    assert.equal(projectOnly(twice[0]), true, "사람이 이름을 준 세션 — 세션 이름짓기 없이 프로젝트 이름(②)만 안내해야 한다");
+    assert.equal(twice[1], "", "②만 안내해도 세션당 1회다 — 두 번째 턴은 침묵");
     for (const v of ["agent", "HUMAN", " human ", "Agent"]) {
-      assert.equal(guided(await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v })), false, `출처 ${JSON.stringify(v)} 인데 안내가 나갔다`);
+      const out = await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v });
+      assert.equal(projectOnly(out), true, `출처 ${JSON.stringify(v)} 인데 세션 이름짓기가 안내됐다(또는 ②가 빠졌다)`);
     }
-    // 대조군 — 아직 이름이 없는 세션(rule·id)과 이 env 이전 세션(빈 값)은 종전대로 안내가 나와야 한다(위 단언이 vacuous 하지 않게).
+    // 대조군 — 아직 이름이 없는 세션(rule·id)과 이 env 이전 세션(빈 값)은 종전대로 전부 안내한다(위 단언이 vacuous 하지 않게).
     for (const v of ["rule", "id", "", "   ", "humanoid"]) {
-      assert.equal(guided(await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v })), true, `출처 ${JSON.stringify(v)} 인데 안내가 안 나왔다`);
+      const out = await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v });
+      assert.equal(guided(out) && /project_rename_v6/.test(out), true, `출처 ${JSON.stringify(v)} 인데 종전 안내(①+②)가 안 나왔다`);
     }
-    ok("★이미 이름이 정해진 세션(human·agent, 대소문자·공백 무관) → 안내·플래그 없음 · rule·id·빈 값·모르는 값은 종전대로 안내");
+    ok("★이미 이름이 정해진 세션(human·agent, 대소문자·공백 무관) → ②만 · 세션당 1회 · rule·id·빈 값·모르는 값은 종전대로 ①+②");
   }
 
   // ── 억제 플래그 — 종전 계약(전역 OFF·읽기전용·인코그니토)이 그대로인지. ──

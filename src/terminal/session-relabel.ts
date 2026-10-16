@@ -119,7 +119,11 @@ export async function relabelSession(
   //      사람이 만든 태스크·사람이 고른 태스크·사람이 이름을 고친 태스크는 그대로 둔다(#4418 — 판정은 태스크의 이름 출처 칸).
   //   ⓑ **보장(폴백)** — 관문을 안 지난 세션(이 기능 전에 열린 세션·잇기가 실패한 세션)엔 지금이라도 만든다.
   //  프로젝트 밖 세션은 null. 출처로 가르지 않는다 — 사람이 웹에서 이름을 붙여도 그 세션의 일은 생긴 것이다.
-  await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label }).catch(() => null);
-  const task = await ensureSessionTask({ sessionId: id, owner: me, name: label });
+  //  ⚠ 순서 — **보장(이어받기 포함) 먼저, 승계는 그다음**(#4418). 새 id 로 되살린 세션은 옛 세션의 태스크를 ensureSessionTask 가
+  //   이어받기 전까지 맡은 태스크가 없다 — 승계를 먼저 부르면 «태스크 없음» 으로 건너뛰어, 이어받은 태스크가 첫 지시를 자른 이름에
+  //   남는다. 방금 이 이름으로 만든 태스크면 승계는 같은 이름이라 아무것도 안 한다.
+  const ensured = await ensureSessionTask({ sessionId: id, owner: me, name: label });
+  const renamed = await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label }).catch(() => null);
+  const task = ensured && renamed && renamed.id === ensured.id ? { ...ensured, name: renamed.name } : ensured;
   return withTask({ ok: true, applied: true, label, source }, task);
 }
