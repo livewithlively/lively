@@ -6,6 +6,8 @@
 //   같은 조건의 컨테이너(리눅스 arm64 · 1536MB · node 22)에서 재현했다: 기본 한도 → exit 134 · 1100MB → 통과(컨테이너 최대 1033MB).
 //   2026-10-16(#4743 머지 뒤 굽기) 코드가 늘어 1100MB 도 넘었다 — 같은 조건 재현: 1100 → exit 134(증분 빌드를 꺼도 같다) ·
 //   1150 → 통과(최대 1332MB) · 1300 → 통과(최대 1369MB). 위쪽 경계 1300 으로 올렸다 — ⚠ 다음은 러너 메모리를 늘리거나 tsc 를 나눠야 한다.
+//   같은 날(#4795 · 상민님 결정 «러너 증설 + 힙 1600») 러너 컨테이너를 3GiB 로 늘렸다(맥 미니 ~/lvly-runners compose runner-2
+//   mem_limit 3072m · docker update — 위탁 #5765) — 그래서 상한 1600 · 위쪽 경계 2000. 1300 은 오늘 겨우 넘긴 값이라 여유가 없다.
 //   GitHub 러너(16GB)에서는 드러나지 않는다 — CI 는 초록인 채 굽기만 죽는다. 그래서 여기서 못박는다.
 //  ⚠ 상한을 더 올려야 하면 러너 메모리도 같이 본다: 힙 상한이 컨테이너 한도에 가까우면 V8 의 분명한 OOM 대신
 //   cgroup 의 SIGKILL 로 죽는다(원인이 흐려진다). 그래서 위쪽 경계도 둔다.
@@ -23,8 +25,8 @@ assert.ok(m, `build 의 첫 단계가 힙 상한을 준 코어 tsc 가 아니다
 console.log("ok  build 의 첫 단계는 힙 상한을 준 코어 tsc 다(윈도우에서도 도는 모양)");
 
 const mb = Number(m[1]);
-assert.ok(mb >= 1100 && mb <= 1300, `힙 상한 ${mb}MB — 1100~1300 이어야 한다(러너 1.5GiB 안에서 V8 OOM 이 cgroup kill 보다 먼저)`);
-console.log(`ok  힙 상한 ${mb}MB — 기본 792MB 위 · 러너 한도 아래`);
+assert.ok(mb >= 1400 && mb <= 2000, `힙 상한 ${mb}MB — 1400~2000 이어야 한다(1300 은 경계 · 러너 3GiB 안에서 V8 OOM 이 cgroup kill 보다 먼저)`);
+console.log(`ok  힙 상한 ${mb}MB — 1300(경계) 위 · 러너 3GiB 한도 아래`);
 
 //  나머지 단계는 그대로다 — 이 규칙이 빌드 순서를 바꾸지 않았다.
 assert.match(build, /&& node scripts\/build-web\.mjs && tsc -p web\/standalone\/tsconfig\.json && /);
