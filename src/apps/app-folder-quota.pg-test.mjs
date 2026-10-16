@@ -13,6 +13,7 @@
 import pg from "pg";
 import http from "node:http";
 import crypto from "node:crypto";
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 
 const BASE = process.env.ITEMS_DATABASE_URL;
 if (!BASE) { console.error("ITEMS_DATABASE_URL(슈퍼유저 DSN)이 필요합니다"); process.exit(2); }
