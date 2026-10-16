@@ -49,6 +49,7 @@ import { sessionOsUser } from "../terminal/profiles.js";
 import { getSessionState, type SessionState } from "./session-state.js";
 import { outboxExecFor, type OutboxExec } from "./outbox-exec.js";   // #3773 — 한 걸음의 실행 자리(세션 호스트 또는 게이트웨이)
 import { logger } from "../log.js";
+import { emitSessionEvent } from "../terminal/harness-io/runtime-bus.js";   // #4794 — «다 쳤다» 를 세션 상태 통로로 알린다
 import { outboxSettledMeasure, outboxErrorCode, ANSWER_HEAD_CHARS, type OutboxSettledMeasure, type OutboxSettledRow } from "./outbox-measure.js";   // #4697 T7 — 배달 결말 측정 한 줄
 import { currentTenant } from "../org/tenant-context.js";   // #4697 — 측정 줄의 워크스페이스(이 모듈과 함께 노드 번들의 알려진 부채 — 새 모듈 유입 없음)
 
@@ -381,7 +382,8 @@ async function deliverLoop(sessionId: string): Promise<void> {
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).
-    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine));
+    const sent = await sendReadyRow(row, harness, exec, (oneLine) => waitEcho(sessionId, st, oneLine),
+      () => emitSessionEvent(sessionId, { t: "outbox.typed", id: row.id, head: flatOneLine(row.text).slice(0, 160) }));
     if (sent.kind === "stall") {
       if (await settleStall(sent.verdict)) return;
       continue;
@@ -413,12 +415,18 @@ export type SendOutcome =
  *     줄 때만 delivered 이고 아니면 failed `send: host-unknown`(화면이 사람에게 재시도·삭제를 준다). 같은 지시가 두 번 가는 것보다
  *     사람이 한 번 더 누르는 편이 되돌리기 쉽다. 미제출 방어 Enter 도 누르지 않는다 — 입력칸이 어떤 상태인지 모른다.
  *   · echo — 다 쳤다. 아래 확인 경로(종전 그대로).
+ *
+ *  onTyped(#4794) — 사람의 말(prompt)을 **다 치고 Enter 까지 누른 순간** 한 번 부른다(에코를 기다리기 전). 사람에게 «보냈다» 는 이때다:
+ *   Claude Code 는 제출 훅을 다 돈 뒤에야 그 말을 대화 기록에 모델 요청과 함께 적어, 에코는 몇 초 늦다(매니지드 실측 2026-10-16:
+ *   제출 10.57초 · 기록에 적힘 14.51초). 쳤는지 모르는 갈래(echo-only)·설정 명령(control)·못 친 갈래에선 부르지 않는다.
+ *   ⚠ 배달의 확정은 여전히 에코다 — 이 알림으로 delivered 를 매기지 않는다(Enter 가 줄바꿈으로 먹힌 판이 있다).
  */
 export async function sendReadyRow(
   row: Pick<OutboxRow, "text" | "kind">,
   harness: string,
   exec: Pick<OutboxExec, "type" | "enter">,
   echo: (oneLine: string) => Promise<"confirmed" | "timeout" | "unreadable">,
+  onTyped?: () => void,
 ): Promise<SendOutcome> {
   const oneLine = flatOneLine(row.text);
   const typed = await exec.type(row.text);
@@ -433,6 +441,7 @@ export async function sendReadyRow(
   //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
   //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
   if (row.kind === "control") return { kind: "mark", status: "sent", error: "control-no-echo" };
+  try { onTyped?.(); } catch (e) { logger.warn({ err: e }, "outbox: «다 쳤다» 알림 실패(비치명)"); }
   let echoed = await echo(oneLine);
   if (needsSubmitRetry(echoed, harness)) {
     // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18).

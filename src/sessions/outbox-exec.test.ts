@@ -532,3 +532,40 @@ test("H1 registry 형제 함수 — 사유를 함께 준다 · sessionHostFor �
   assert.equal(lines.filter((l) => /recordDefers\(`session:\$\{r\.why\}`\)/.test(l)).length, 1, "사유 계수를 두 곳에서 센다");
   assert.ok(lines.some((l) => /return sessionHostTargetFor\(sessionId, op, now\)\.host;/.test(l)), "sessionHostFor 가 형제 함수를 안 지난다 — 판정이 두 벌이 된다");
 });
+
+// ── #4794 «다 쳤다» 알림(onTyped) — 사람에게 «보냈다» 는 Enter 를 누른 순간이다(에코는 제출 훅 뒤에 적혀 몇 초 늦다) ──
+test("T1~T6 onTyped — 사람의 말을 다 치고 Enter 까지 누른 뒤 **에코를 보기 전에 한 번만** · 쳤는지 모르거나 못 쳤거나 설정 명령이면 안 부른다", async () => {
+  type Typed = Awaited<ReturnType<Parameters<typeof sendReadyRow>[2]["type"]>>;
+  const run = async (typed: Typed, kind: "prompt" | "control", answers: Array<"confirmed" | "timeout" | "unreadable">, onTypedThrows = false) => {
+    const log: string[] = [];
+    const exec = { type: async () => { log.push("type"); return typed; }, enter: async () => { log.push("enter"); } };
+    let i = 0;
+    const echo = async () => { log.push("echo"); return answers[Math.min(i++, answers.length - 1)]; };
+    const out = await sendReadyRow({ text: "첫 줄\n둘째 줄", kind }, "claude", exec, echo, () => { log.push("typed"); if (onTypedThrows) throw new Error("알림 실패"); });
+    return { out, log };
+  };
+  //  T1 다 쳤다 · 에코 확인 → 친 뒤 · 에코 전에 한 번
+  let r = await run({ next: "echo" }, "prompt", ["confirmed"]);
+  assert.deepEqual(r.out, { kind: "mark", status: "delivered" });
+  assert.deepEqual(r.log, ["type", "typed", "echo"], "알림이 친 뒤 · 에코 전이 아니다");
+  //  T2 미제출 방어 Enter 를 한 번 더 눌러도 알림은 한 번
+  r = await run({ next: "echo" }, "prompt", ["timeout", "confirmed"]);
+  assert.deepEqual(r.log, ["type", "typed", "echo", "enter", "echo"], "다시 누를 때 알림을 또 보냈다");
+  //  T3 설정 명령(control) — 사람의 말이 아니다(대화창 말풍선 없음)
+  r = await run({ next: "echo" }, "control", ["confirmed"]);
+  assert.ok(!r.log.includes("typed"), "설정 명령에 «보냈다» 를 알렸다");
+  //  T4 쳤는지 모른다(echo-only) · T5 치다 멈췄다(fail) · 한 글자도 안 갔다(stall) — «보냈다» 가 아니다
+  for (const typed of [{ next: "echo-only" }, { next: "fail", error: "send: x" }, { next: "stall", verdict: "unknown" }] as Typed[]) {
+    r = await run(typed, "prompt", ["confirmed"]);
+    assert.ok(!r.log.includes("typed"), `${JSON.stringify(typed)} 에서 «보냈다» 를 알렸다`);
+  }
+  //  T6 알림이 던져도 배달은 그대로(비치명)
+  r = await run({ next: "echo" }, "prompt", ["confirmed"], true);
+  assert.deepEqual(r.out, { kind: "mark", status: "delivered" }, "알림 실패가 배달 결말을 바꿨다");
+});
+
+test("T7 배달 루프가 «다 쳤다» 를 세션 상태 통로로 낸다(outbox.typed · 행 id · 한 줄 머리) — 배선", () => {
+  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine\) => waitEcho\(sessionId, st, oneLine\),\s*\n\s*\(\) => emitSessionEvent\(sessionId, \{ t: "outbox\.typed", id: row\.id, head: flatOneLine\(row\.text\)\.slice\(0, 160\) \}\)\);/,
+    "배달 루프가 onTyped 로 outbox.typed 를 안 낸다 — 화면이 «보냈다» 를 에코(몇 초 늦음)로만 안다");
+});

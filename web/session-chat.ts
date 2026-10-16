@@ -1059,7 +1059,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ★ 넘기는 때는 «그렸다» 하나가 아니라 **«그렸다» + «보낸 말이 실제로 들어갔다»** 다(상민님 2026-10-16: «프롬프트가 실제로
   //   전송된 시점에 전환하는 게 좋지 않을지»). 그린 순간 넘기면 그때 서버(아웃박스)는 아직 그 말을 입력창에 치는 중이다(매니지드 실측:
   //   첫 그림 뒤 3~4초에 들어갔다) — 사람이 그 사이 터미널에 치면 두 글이 섞이고, 말이 끝내 안 들어간 판에선 빈 입력칸만 보고 모른다.
-  //   «들어갔다» = 대화 기록에 그 말이 나타났다(대기 말풍선의 에코 — 아래 pending 매칭). 그린 뒤 기다리는 동안은 0.7초마다 읽는다(schedule).
+  //   «들어갔다» = 서버(아웃박스)가 그 말을 입력칸에 다 치고 Enter 까지 눌렀다(세션 상태 통로의 outbox.typed) — 또는, 그 알림을 못 받았으면
+  //   대화 기록에 그 말이 나타났다(대기 말풍선의 에코 — 아래 pending 매칭). 에코는 늦다: Claude Code 는 제출 훅을 다 돈 뒤에야 그 말을
+  //   모델 요청과 함께 기록에 적는다(매니지드 실측 2026-10-16: 제출 10.57초 · 기록 14.51초). 그린 뒤 기다리는 동안은 0.7초마다 읽는다(schedule).
   //   그린 뒤 WARM_DELIVERY_GRACE_MS 안에 안 들어가면 그때 넘긴다 — 로그인·신뢰·경고 창처럼 입력을 못 받는 화면은 터미널에서 봐야 한다.
   //   ⚠ 에코를 볼 수 있는 곳은 박스 대화 파일뿐이다 — 중앙 기록(노드 세션)은 턴이 끝나야 자라고(#1744), 지켜보는 곳이 없으면(src 없음)
   //    아무도 안 읽는다. 둘 다 기다리면 유예를 통째로 쓴다. 빗금 명령(/compact)·셸 모드(!ls)도 기다리지 않는다 — 기록엔 다른 모양
@@ -1069,6 +1071,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let termWarm: { timer: number; ro: ResizeObserver | null; painted: boolean; grace: number } | null = null;
   //  말을 보내 연 화면의 그 말(대기 말풍선) — 기록에 나타나면(에코) 들어간 것이다. 기록을 아직 읽는 중이면(opening) 말풍선 전이라 firstPrompt 로 본다.
   let warmPrompt: Pending | null = null;
+  //  서버가 그 말을 다 치고 Enter 까지 눌렀다(outbox.typed) — 사람에게 «보냈다» 는 이때다(onOutboxTyped).
+  let warmTyped = false;
   //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
   let warmOwed = false;
   /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
@@ -1124,6 +1128,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 대기 말풍선이 에코를 기다리는 중이거나, 기록을 아직 읽는 중이라 말풍선을 그리기 전이다.
    *  ⚠ 기록 읽기가 끝났는데도 firstPrompt 가 남는 판(못 읽는 하네스 · 그때 세션이 아직 안 떠 있었음)은 기다릴 근거가 없다 — opening 으로 가른다. */
   function deliveryPending(): boolean {
+    if (warmTyped) return false;
     const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
     if (opening && firstPrompt) return echoable(firstPrompt);
     return !!warmPrompt && pending.includes(warmPrompt) && echoable(warmPrompt.text) && src?.kind === 'box';
@@ -1136,6 +1141,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!deliveryPending()) { endTermWarm(true); return; }
     w.grace = window.setTimeout(() => endTermWarm(true), WARM_DELIVERY_GRACE_MS);
     pokePoll();   // 지금 한 번 읽고, 그 뒤로는 촘촘히(schedule) — 걸려 있던 주기가 3초일 수 있다
+  }
+  /** #4794 서버가 말을 다 치고 Enter 까지 눌렀다(outbox.typed) — 기다리던 그 말이면 «보냈다». 머리(공백을 뺀 앞 40자)로 맞춰 본다 —
+   *  서버는 줄바꿈을 공백으로 편 한 줄을 친다(flatOneLine). 다른 말(다른 탭에서 보낸 것 등)이면 넘어간다. */
+  function onOutboxTyped(head: string): void {
+    const want = warmPrompt?.text ?? firstPrompt;
+    if (warmTyped || !want) return;
+    const key = (t: string): string => t.replace(/\s+/g, '').slice(0, 40);
+    if (!key(head) || key(head) !== key(want)) return;
+    warmTyped = true;
+    warmSwitchIfDelivered();
   }
   /** #4794 하네스가 이미 그렸고 보낸 말도 들어갔으면 이제 넘긴다 — 읽기(poll)가 끝날 때마다 · 기록 열기(open)가 끝났을 때 다시 본다
    *  (에코 · 지켜보는 곳이 바뀜 · 대기 말을 지움 — 무엇이 «들어갔나» 를 바꿨든). 안 그렸으면 그린 때 넘긴다. */
@@ -2821,6 +2836,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const offEvents = onSessionEvents(target.id, (ev) => {
     const e = ev as { t?: string; size?: number; live?: boolean };
     if (e?.t === 'transcript.grew') { pokePoll(); return; }
+    if (e?.t === 'outbox.typed') { onOutboxTyped(String((ev as { head?: unknown }).head ?? '')); return; }   // #4794 — 서버가 말을 다 쳤다
     if (e?.t === 'transcript.watch') {
       const next = e.live === true;
       if (next === watchLive) return;

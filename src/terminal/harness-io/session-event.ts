@@ -163,6 +163,10 @@ export type SessionEvent =
   //  그 통보가 **지금 실제로 오고 있나**(#3699). 화면은 이 값이 참일 때만 폴을 안전망 주기로 늦춘다 —
   //   못 미는 배포(노드 세션·못 읽는 하네스·중계 실패)에서 늦추면 대화가 그냥 느려진다.
   | { t: "transcript.watch"; live: boolean; reason?: string }
+  //  아웃박스가 사람의 말을 **입력칸에 다 치고 Enter 까지 눌렀다**(#4794). 대화 기록의 에코보다 몇 초 이르다 — Claude Code 는
+  //   제출 훅을 다 돈 뒤에야 그 말을 기록에 적는다. 화면은 이걸 «보냈다» 로 읽어 터미널로 넘긴다(web/session-chat.ts termWarm).
+  //   head = 그 말의 한 줄 머리(대기 말풍선과 맞춰 본다). ⚠ 배달 확정(delivered)은 여전히 에코다 — 이건 «쳤다» 일 뿐이다.
+  | { t: "outbox.typed"; id: number; head: string }
   //  ★2 — 못 알아본 것. 버리지 않는다: 새 하네스가 무엇을 주는지 여기로 관측한다.
   | { t: "raw"; source: string; payload: unknown };
 
