@@ -4002,7 +4002,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "dd4da63f5aa29300"
+  "input_hash": "1785e9eab4eb665b"
  },
  {
   "name": "collect_unit_split",

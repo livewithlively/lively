@@ -1,24 +1,26 @@
 // 수집 단위 표 표면(#4213 T10 #4742) — 리브·화면이 «무엇을 · 누가 · 어디까지» 모으나 보고 고친다.
 //
-//  · 볼 수 있는 것만 보인다: 구성원 경로 단위는 그 단위를 볼 수 있는 구성원에게만(관리자도 남의 비공개 단위 이름·설명은 못 본다 —
-//    개수만). 수집기 경로 단위는 수집기 설정을 이미 보는 사람(워크스페이스를 굴리는 사람)에게도.
-//  · 목록 반영(collect_unit_listing)은 **부르는 사람 자신의** 목록만 받는다 — 남 대신 «이 사람이 이 채널을 본다» 를 적으면
-//    그 채널에서 모은 자료가 그 사람에게 열린다. 남의 목록은 서버 안쪽(T11 수집 실행)이 그 사람 실행 결과로만 적는다.
+//  · 볼 수 있는 것만 보인다(unit-plan.unitAccess): 확인된 볼 수 있는 구성원은 전부, 수집기 단위는 관리자도 전부, 그 밖의 구성원은
+//    수집기 단위의 «겉»(이름·상태·담당 종류·후보 수 — 비공개 대화는 이름도 없이)만. 구성원 경로 단위는 관리자도 못 본다(개수만).
+//    ⚠ «워크스페이스를 굴리는 사람»(memory scope)으로 가르지 않는다 — 기본 구성원이 모두 memory 라 그 판정은 전원이다.
+//  · 목록 반영(collect_unit_listing)은 **부르는 사람 자신의** 목록만, 그리고 **본인 신고**로만 받는다 — 후보로 설 뿐 이미 모인 자료는
+//    열리지 않는다. 그 사람 커넥터로 실제로 읽은 것이 확인돼야(서버가 연 목록 실행 · 그 사람 실행의 저장) 볼 수 있는 구성원이 된다.
 //  · 담당(누가 모으나)은 저장하지 않고 늘 그 자리에서 판정한다(org/collect/unit-plan.ts) — 응답의 assignee 가 그 판정이다.
 import { z } from "zod";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
-import { canManageWorkspace } from "./principal.js";
+import { isAdmin } from "./principal.js";
 import {
-  UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
+  LISTING_CAP, UnitError, listUnitsFor, recordUnitListing, splitUnit, syncCollectorUnits, updateUnit, type Actor,
 } from "../org/collect/unit-store.js";
+import { currentTenant } from "../org/tenant-context.js";
 import { COLLECT_ROUTES, UNIT_KINDS, UNIT_STATES, type CollectRoute, type UnitState } from "../org/collect/unit-plan.js";
 
 function actorOf(user: LivelyUser | undefined): Actor {
   const member = String(user?.userId || "").trim();
   if (!member) throw new HttpError(401, "구성원 신원이 필요합니다");
-  return { member, canManage: canManageWorkspace(user) };
+  return { member, isAdmin: isAdmin(user) };
 }
 
 /** 저장소의 판정 오류(UnitError)를 표면 상태코드로 — 그 밖의 오류는 그대로 올린다. */
@@ -49,12 +51,12 @@ const collectUnits: Capability = {
   name: "collect_units",
   title: "수집 단위 표",
   description:
-    "수집 단위(한 번에 모으는 묶음 — 채널 하나·페이지 묶음 하나·메일함 하나·저장소 하나) 목록(#4213 T10). 단위마다 " +
+    "수집 단위(한 번에 모으는 묶음 — 채널 하나·페이지 묶음 하나·메일함 하나·저장소 하나) 목록(#4213 T10). access=full 인 줄은 " +
     "수집 경로(lively_collector=라이블리 수집기 · member_ai=구성원 Claude 커넥터 · liv_direct=리브가 직접 연결) · 상태 · " +
-    "볼 수 있는 구성원(=담당 후보, 우선순위 순 · 각자의 로그인/커넥터 건강) · 지금 담당(assignee — 수집기가 켜져 있으면 수집기, " +
-    "아니면 건강한 첫 후보) · 읽은 위치 · 주기 · 설명/메타데이터. 내가 볼 수 있는 단위만 나온다(구성원 경로 단위는 그 단위를 볼 수 " +
-    "있는 사람만 · 수집기 단위는 워크스페이스를 굴리는 사람도). 못 보는 단위는 hidden 개수로만 알린다. " +
-    "지금 수집기 설정(채널 목록 등)은 조회할 때 단위로 풀려 들어와 있다(6시간마다 다시 맞춤 · 즉시는 collect_units_sync). " +
+    "볼 수 있는 구성원(=담당 후보, 확인된 사람 먼저·우선순위 순 · 각자의 로그인/커넥터 건강) · 지금 담당(assignee — 수집기가 켜져 있으면 " +
+    "수집기, 아니면 건강한 첫 후보) · 읽은 위치 · 주기 · 설명/메타데이터를 싣는다. access=coarse 인 줄(수집기 단위의 다른 구성원 · 신고만 한 " +
+    "본인)은 이름·상태·담당 종류·후보 수만. 구성원 경로 단위는 그 단위의 구성원에게만 나오고 관리자에게는 hidden 개수로만. " +
+    "지금 수집기 설정(채널 목록 등)은 스케줄러가 6시간마다 단위로 풀어 둔다(즉시는 collect_units_sync). " +
     "REST 등가: GET /api/ui/collect/units?app=&state=&mine=.",
   scope: "memory",
   input: listInput,
@@ -85,7 +87,7 @@ const updateInput = {
   description: z.string().max(4000).nullable().optional().describe("메타데이터: 이 단위에서 오가는 일(검색 실패 안내에서 단위를 고를 때 쓴다)"),
   meta: z.record(z.unknown()).optional().describe("메타데이터 덧쓰기(얕은 병합) — context(연결된 맥락)·character(성격)·activity(활동량)·knowhow(단위 노하우)"),
   priorities: z.array(z.string().max(80)).max(200).optional().describe("담당 후보 순서(구성원 id 앞에서부터 1순위). 이 단위를 볼 수 있는 구성원만"),
-  route: z.enum(COLLECT_ROUTES).optional().describe("수집 경로 바꾸기 — 워크스페이스를 굴리는 사람만"),
+  route: z.enum(COLLECT_ROUTES).optional().describe("수집 경로 바꾸기 — 관리자만"),
   name: z.string().max(200).nullable().optional().describe("표시 이름"),
 };
 type UpdateInput = z.infer<z.ZodObject<typeof updateInput>>;
@@ -95,8 +97,8 @@ const collectUnitUpdate: Capability = {
   title: "수집 단위 고치기",
   description:
     "수집 단위 하나를 고친다(#4213 T10) — 모을지(state)·주기(interval_sec)·설명/메타데이터(리브가 첫 수집 뒤 쓰고 수집마다 유지)·" +
-    "담당 후보 순서(priorities)·수집 경로(route). 구성원 경로 단위는 그 단위를 볼 수 있는 구성원만, 수집기 단위는 워크스페이스를 " +
-    "굴리는 사람만 고칠 수 있다. 볼 수 있는 구성원 자체는 여기서 못 바꾼다(그건 각자의 목록 반영 — collect_unit_listing). " +
+    "담당 후보 순서(priorities)·수집 경로(route). 구성원 경로 단위는 그 단위의 확인된 볼 수 있는 구성원만, 수집기 단위는 관리자 또는 " +
+    "확인된 볼 수 있는 구성원만 고칠 수 있고, 경로 바꾸기는 관리자만. 볼 수 있는 구성원 자체는 여기서 못 바꾼다(각자의 목록 반영). " +
     "REST 등가: POST /api/ui/collect/units/:id {state?, interval_sec?, description?, meta?, priorities?, route?, name?}.",
   scope: "memory",
   input: updateInput,
@@ -199,10 +201,12 @@ const collectUnitListing: Capability = {
   name: "collect_unit_listing",
   title: "수집 단위 목록 반영(내 커넥터)",
   description:
-    "내 Claude 커넥터로 훑은 «무엇이 있나» 를 수집 단위 표에 반영한다(#4213 T10). 처음 나온 단위는 후보(candidate)로 생기고 — 모을지는 " +
-    "리브·사람이 collect_unit_update 로 정한다 — 나는 그 단위의 볼 수 있는 구성원(담당 후보 줄 맨 뒤)이 된다. 이미 있는 단위(수집기 단위 포함)는 " +
-    "경로·상태를 바꾸지 않는다. 내가 볼 수 있게 된 단위의 이미 모인 자료는 나에게도 열린다. **내 목록만** 받는다(남 대신 적을 수 없다). " +
-    "메일함 단위는 내 메일 주소일 때만 받는다. REST 등가: POST /api/ui/collect/units/listing {app, connector?, instance?, items, complete?}.",
+    "내 Claude 커넥터로 훑은 «무엇이 있나» 를 수집 단위 표에 **본인 신고**로 반영한다(#4213 T10). 처음 나온 단위는 후보(candidate)로 생기고 — " +
+    "모을지는 리브·사람이 collect_unit_update 로 정한다 — 나는 그 단위의 담당 후보(확인된 사람 뒤)가 된다. 신고만으로는 이미 모인 자료가 " +
+    "열리지 않는다 — 내 커넥터로 그 단위를 실제로 읽은 것이 확인되면(서버가 연 목록 실행 · 내 실행의 저장) 그때부터 볼 수 있는 구성원이다. " +
+    "이미 있는 단위(수집기 단위 포함)는 경로·상태를 바꾸지 않는다. **내 목록만** 받는다(남 대신 적을 수 없다). 메일(gmail·outlook)은 내 " +
+    "메일 주소인 메일함만 받는다. complete 는 빈 목록·상한(5000) 초과면 무시된다. " +
+    "REST 등가: POST /api/ui/collect/units/listing {app, connector?, instance?, items, complete?}.",
   scope: "memory",
   input: listingInput,
   expose: {
@@ -211,11 +215,12 @@ const collectUnitListing: Capability = {
       const b = (req.body ?? {}) as Record<string, unknown>;
       if (!Array.isArray(b.items)) throw new HttpError(400, "items 는 단위 배열이어야 합니다");
       if (b.member != null) throw new HttpError(400, "member 는 받지 않습니다 — 목록 반영은 늘 부르는 사람 자신의 것입니다");
+      if (b.items.length > LISTING_CAP) throw new HttpError(400, `한 번에 ${LISTING_CAP}개까지 받습니다 — 잘라 보내면 «전부(complete)» 가 될 수 없습니다`);
       return {
         app: String(b.app ?? "").slice(0, 40),
         connector: b.connector == null || b.connector === "" ? undefined : String(b.connector).slice(0, 80),
         instance: b.instance == null ? undefined : String(b.instance).slice(0, 200),
-        items: b.items.slice(0, 5000), complete: b.complete === true ? true : undefined,
+        items: b.items, complete: b.complete === true ? true : undefined,
       };
     } }],
   },
@@ -223,7 +228,7 @@ const collectUnitListing: Capability = {
     const me = actorOf(user).member;
     const r = await recordUnitListing({
       member: me, app: input.app, connector: input.connector ?? null, instance: input.instance ?? null,
-      items: input.items, complete: !!input.complete,
+      items: input.items, complete: !!input.complete, verified: false,     // 본인 신고 — 확인은 서버가 연 실행만 한다
     }, ctx);
     return { ok: true, ...r };
   }),
@@ -231,18 +236,26 @@ const collectUnitListing: Capability = {
 
 // ── 수집기 설정 → 단위(즉시) ──────────────────────────────────────────────────
 
+const SYNC_COOLDOWN_MS = 60_000;
+const syncAt = new Map<string, number>();
+
 const collectUnitsSync: Capability = {
   name: "collect_units_sync",
   title: "수집기 설정을 수집 단위로 다시 맞추기",
   description:
     "지금 켜진 라이블리 수집기의 설정(채널 목록 등)과 실제로 모인 그릇(채널·저장소·팀·폴더·메일함·노션 맨 위 페이지)을 수집 단위로 " +
-    "다시 푼다(#4213 T10 이관 — 멱등). 조회 때 6시간마다 저절로 하므로 보통은 필요 없다. 구성원 경로였던 단위가 수집기 범위에 들어오면 " +
-    "수집기 경로로 바뀐다(수집기가 1순위). 워크스페이스를 굴리는 사람만. REST 등가: POST /api/ui/collect/units/sync.",
+    "다시 푼다(#4213 T10 이관 — 멱등). 스케줄러가 6시간마다 저절로 하므로 보통은 필요 없다. 구성원 경로였던 단위가 수집기 범위에 들어오면 " +
+    "수집기 경로로 바뀐다(수집기가 1순위). 관리자만 · 워크스페이스마다 1분에 한 번. REST 등가: POST /api/ui/collect/units/sync.",
   scope: "memory",
   input: {},
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/collect/units/sync"], parse: () => ({}) }] },
   handler: async (_input: unknown, user: LivelyUser) => guard(async () => {
-    if (!actorOf(user).canManage) throw new HttpError(403, "수집기 설정을 다시 맞추는 것은 워크스페이스를 관리하는 사람만 할 수 있습니다");
+    if (!actorOf(user).isAdmin) throw new HttpError(403, "수집기 설정을 단위로 다시 맞추는 것은 관리자만 할 수 있습니다");
+    //  자료 전체를 훑는 일이라 연타를 막는다(스케줄러가 6시간마다 이미 한다).
+    const key = currentTenant()?.id ?? "_";
+    const last = syncAt.get(key) ?? 0;
+    if (Date.now() - last < SYNC_COOLDOWN_MS) throw new HttpError(429, "방금 다시 맞췄습니다 — 1분 뒤에 다시 해 주세요");
+    syncAt.set(key, Date.now());
     return { ok: true, ...(await syncCollectorUnits()) };
   }),
 };

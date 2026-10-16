@@ -6,6 +6,8 @@
 //   · collect_unit          — 단위 1행. 좌표 = 앱(source.external_system 과 같은 키) + 외부 인스턴스 + 단위 id.
 //                             경로(라이블리 수집기 / 구성원 Claude 커넥터 / 리브 직접 연결) · 상태 · 읽은 위치 · 주기 · 메타데이터.
 //   · collect_unit_member   — 볼 수 있는 구성원 = 담당 후보. priority 가 작을수록 먼저 모은다(1순위가 끊기면 다음).
+//                             verified_at 이 비면 «본인 신고만» — 후보(확인된 사람 뒤)일 뿐 자료는 열리지 않는다. 그 사람 커넥터로
+//                             실제로 읽은 것(서버가 연 목록 실행 · 그 사람 실행의 저장)이 확인되면 채워지고, 그때부터 자료를 본다.
 //   · collect_unit_source   — 단위로 모은 자료. 같은 자료가 여러 단위로 들어오면(같은 메일이 두 사람 메일함에) 행이 둘이고,
 //                             자료의 볼 수 있는 사람은 그 단위들의 합집합이다. audience=false 는 «단위 체계 밖에서 먼저
 //                             들어와 있던 자료(봇 수집기)» 라 공개범위를 건드리지 않는다는 표시다.
@@ -62,11 +64,13 @@ export async function initV6CollectUnit(pool: Pool): Promise<void> {
       via TEXT NOT NULL DEFAULT 'listing',
       added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      verified_at TIMESTAMPTZ,
       PRIMARY KEY (unit_id, member_id));
     ${ensureCheck("collect_unit_member", {
       collect_unit_member_via_chk: "via IN ('listing','split','migrate')",
     })}
     CREATE INDEX IF NOT EXISTS collect_unit_member_member_idx ON collect_unit_member(member_id);
+    ALTER TABLE collect_unit_member ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
   `);
 
   await pool.query(`

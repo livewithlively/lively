@@ -7,7 +7,12 @@
 //   ② «다시 로그인» 알림 대상 — 아무도 메우지 못해 멈춘 단위만, 사람이 고칠 수 있는 끊김인 첫 사람에게 한 번.
 //   ③ 수집 실행(T11 collect-run) 결과 분류 — 로그인 끊김 · 한도 초과 · 커넥터 끊김 · 정상 · 모름.
 //   ④ 자료의 볼 수 있는 사람 — 단위 구성원의 합집합, 조직 공개범위 정책이 있으면 그 안으로.
-//   ⑤ 목록 정규화 · 쪼개기 검사 · 조회/수정 권한.
+//   ⑤ 목록 정규화 · 좌표 정규화 · 쪼개기 검사 · 조회/수정 권한 · 수집기 자격 실패 판정.
+//
+//  ★ 볼 수 있는 구성원은 두 층이다 — **본인 신고(claim)** 와 **확인됨(verified)**. 목록 반영 표면(MCP·REST)으로 «나도 이 채널을
+//   본다» 고 적은 것만으로는 후보(뒤 순번)일 뿐이고, 이미 모인 자료는 열리지 않는다. 그 사람 커넥터로 그 단위를 **실제로 읽은 것**
+//   (서버가 연 목록 실행 · 그 사람 실행의 저장)이 확인돼야 볼 수 있는 사람이 된다. 아니면 채널 id 하나 아는 구성원이나, 외부 글에 심긴
+//   지시를 읽은 그 사람의 AI 가 신고 한 번으로 남의 비공개 채널 자료를 열 수 있다(리뷰 2026-10-16).
 //
 //  설계 정본: 지식 connect-collect-tobe-claude-connector-4213 §2. 사양·엣지 표: as-built 지식 «수집 단위 표».
 import { detectAuthFailure } from "../../node/task-failure.js";
@@ -40,7 +45,7 @@ export function connectorKey(name: string | null | undefined): string {
 
 // ── ① 담당 고르기 ─────────────────────────────────────────────────────────────
 
-export interface PlanCandidate { member_id: string; priority: number; added_at: number }
+export interface PlanCandidate { member_id: string; priority: number; added_at: number; verified: boolean }
 export interface PlanHealth {
   member_id: string; connector: string; state: AssigneeState;
   since: number; retry_at: number | null; notified_at: number | null;
@@ -87,10 +92,14 @@ export function healthOf(idx: HealthIndex, member: string, connector: string, no
   return { ok: true };
 }
 
-/** 후보 줄 — 우선순위(작을수록 먼저) → 들어온 순서 → 구성원 id. 같은 입력이면 늘 같은 줄이다. */
+/**
+ * 후보 줄 — **확인된 사람 먼저** → 우선순위(작을수록 먼저) → 들어온 순서 → 구성원 id. 같은 입력이면 늘 같은 줄이다.
+ *  확인이 먼저인 이유: 신고만 한 사람이 1순위를 차지하면, 실제로는 못 보는 단위를 «새 글 없음» 으로 붙잡아 정당한 후보의 수집을 막는다.
+ */
 export function orderCandidates(c: readonly PlanCandidate[]): PlanCandidate[] {
   return [...c].sort((a, b) =>
-    (a.priority - b.priority) || (a.added_at - b.added_at) || (a.member_id < b.member_id ? -1 : a.member_id > b.member_id ? 1 : 0));
+    (Number(b.verified) - Number(a.verified)) || (a.priority - b.priority) || (a.added_at - b.added_at)
+    || (a.member_id < b.member_id ? -1 : a.member_id > b.member_id ? 1 : 0));
 }
 
 export function planUnit(unit: PlanUnit, idx: HealthIndex, opts: PlanOpts): UnitPlan {
@@ -276,11 +285,37 @@ export function normalizeListing(items: ReadonlyArray<{ ref?: unknown; name?: un
   return [...out.values()];
 }
 
-/** 메일함 단위는 본인 주소일 때만 «본인이 볼 수 있다» 로 적는다 — 남의 메일함을 자기 것이라 적어 그 메일을 받아 보는 길을 막는다. */
-export function listingClaimAllowed(item: ListingItem, memberEmails: readonly string[]): boolean {
-  if (item.kind !== "mailbox") return true;
+/** 메일이 단위인 앱 — 단위 = 메일함(본인 주소). 같은 메일이 여러 메일함에 들어오는 것이 정상이라 자료 합치기도 허락한다. */
+export const MAIL_APPS: ReadonlySet<string> = new Set(["gmail", "outlook"]);
+
+/**
+ * 메일함 단위는 본인 주소일 때만 «본인이 볼 수 있다» 로 적는다 — 남의 메일함을 자기 것이라 적어 그 메일을 받아 보는 길을 막는다.
+ *  메일함인지는 **좌표(앱)와 저장된 단위의 종류**로 정한다 — 신고하는 쪽이 고른 kind 로 정하면 kind 를 빼거나 바꿔 그냥 지나간다.
+ */
+export function listingClaimAllowed(
+  item: ListingItem, ctx: { app: string; existingKind?: string | null; memberEmails: readonly string[] },
+): boolean {
+  const mailbox = MAIL_APPS.has(ctx.app) || item.kind === "mailbox" || ctx.existingKind === "mailbox";
+  if (!mailbox) return true;
   const ref = item.ref.trim().toLowerCase();
-  return memberEmails.some((e) => e && e.trim().toLowerCase() === ref);
+  return ctx.memberEmails.some((e) => e && e.trim().toLowerCase() === ref);
+}
+
+/**
+ * 단위 좌표 정규화 — 목록 반영·쪼개기·이관·저장이 **같은 함수**로 좌표를 만든다(아니면 같은 단위가 두 행이 되고 자료가 안 합쳐진다).
+ *  · 메일(gmail·outlook): 인스턴스는 수집기와 같은 'default', 주소는 소문자.
+ *  · 노션: 하이픈 없는 32자 id 는 수집기가 쓰는 하이픈 꼴(8-4-4-4-12, 소문자)로.
+ *  · 그 밖: 앞뒤 공백만.
+ */
+export function canonicalCoord(app: string, instance: unknown, ref: unknown): { instance: string; ref: string } {
+  let inst = String(instance ?? "").trim();
+  let r = String(ref ?? "").trim();
+  if (MAIL_APPS.has(app)) { inst = inst || "default"; r = r.toLowerCase(); }
+  else if (app === "notion") {
+    const hex = r.replace(/-/g, "").toLowerCase();
+    if (/^[0-9a-f]{32}$/.test(hex)) r = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return { instance: inst, ref: r };
 }
 
 /** 쪼개기는 좁히기만 한다 — 자식의 볼 수 있는 구성원은 부모의 볼 수 있는 구성원 안에서만. 넘는 사람을 돌려준다(비면 통과). */
@@ -289,18 +324,46 @@ export function splitOverreach(parentViewers: readonly string[], childViewers: r
   return [...new Set(childViewers)].filter((m) => !p.has(m));
 }
 
+export interface UnitAccessInput {
+  route: CollectRoute;
+  /** 볼 수 있는 구성원 — verified=false 는 본인 신고만 한 사람. */
+  members: ReadonlyArray<{ member_id: string; verified: boolean }>;
+}
 /**
- * 이 단위를 이 사람이 볼 수 있나 — 구성원 경로는 볼 수 있는 구성원만(관리자도 남의 비공개 단위 이름·설명은 못 본다).
- *  수집기 경로는 워크스페이스를 굴리는 사람(canManage — 수집기 설정을 이미 보는 사람)에게도 보인다.
+ * 이 사람이 이 단위를 어디까지 보나.
+ *  · full   — 확인된 볼 수 있는 구성원 · 수집기 경로 단위의 관리자(admin). 이름·설명·메타·후보 줄·건강까지.
+ *  · coarse — 신고만 한 본인(자기 신고가 어떻게 됐는지) · 수집기 경로 단위의 다른 구성원(수집기 설정 화면이 이미 보여 주는 정도).
+ *             후보 줄·건강·설명·메타는 없다 — 누가 어떤 비공개 대화·메일함에 있는지는 member_channel_meta 와 같은 급의 사생활이다.
+ *  · none   — 그 밖. 구성원 경로 단위는 관리자도 못 본다(개수만).
+ *  ⚠ «워크스페이스를 굴리는 사람»(memory scope)으로 가르면 안 된다 — 기본 구성원이 모두 memory 라 전원이 된다(리뷰 2026-10-16).
  */
-export function canSeeUnit(u: { route: CollectRoute; viewers: readonly string[] }, member: string, canManage: boolean): boolean {
-  if (u.viewers.includes(member)) return true;
-  return isCollectorRoute(u.route) && canManage;
+export function unitAccess(u: UnitAccessInput, member: string, isAdmin: boolean): "full" | "coarse" | "none" {
+  const me = u.members.find((m) => m.member_id === member);
+  if (me?.verified) return "full";
+  if (isCollectorRoute(u.route)) return isAdmin ? "full" : "coarse";
+  return me ? "coarse" : "none";
 }
 
-/** 이 단위를 이 사람이 고칠 수 있나 — 구성원 경로는 볼 수 있는 구성원, 수집기 경로는 워크스페이스를 굴리는 사람. */
-export function canEditUnit(u: { route: CollectRoute; viewers: readonly string[] }, member: string, canManage: boolean): boolean {
-  return isCollectorRoute(u.route) ? canManage : u.viewers.includes(member);
+/** 고칠 수 있나 — 구성원 경로는 확인된 볼 수 있는 구성원 · 수집기 경로는 관리자 또는 확인된 볼 수 있는 구성원. */
+export function canEditUnit(u: UnitAccessInput, member: string, isAdmin: boolean): boolean {
+  const verified = !!u.members.find((m) => m.member_id === member)?.verified;
+  return isCollectorRoute(u.route) ? (isAdmin || verified) : verified;
+}
+
+/**
+ * 라이블리 수집기 실행이 **자격 실패**로 끝났나 — 수집기 로그 꼬리(그 수집기 코드가 쓴 오류 줄)로 판정한다.
+ *  Claude CLI 문구(detectAuthFailure)는 수집기가 내지 않는다. 앱마다 실제로 내는 말:
+ *   슬랙 `slack <메서드> error: invalid_auth|token_revoked|token_expired|account_inactive|not_authed`(connectors/slack.ts) ·
+ *   노션 `401 … API token is invalid.` · 구글 `invalid_grant` · GitHub `Bad credentials` · 그 밖 401+인증 낱말(failure-class.isInvalidCredential 규칙).
+ *  ⚠ 권한 부족(missing_scope·403)·한도(ratelimited)·없음(404)은 자격 실패가 아니다 — 그건 사람이 다른 걸 고칠 일이다.
+ */
+export function collectorAuthFailed(logTail: string | null | undefined): boolean {
+  const t = String(logTail ?? "");
+  if (!t) return false;
+  if (/\berror:\s*(invalid_auth|token_revoked|token_expired|account_inactive|not_authed)\b/.test(t)) return true;
+  if (/\binvalid_grant\b/.test(t)) return true;
+  if (/\bBad credentials\b/i.test(t)) return true;
+  return /(^|[^0-9])401([^0-9]|$)/.test(t) && /unauthorized|invalid[_\s-]*(api[_\s-]*)?token|authentication|api key/i.test(t);
 }
 
 /** 읽은 위치를 옮길 수 있나 — 지금 담당만(담당이 아닌 실행의 늦은 보고는 거절. 자료는 좌표로 합쳐지므로 해가 없다). */

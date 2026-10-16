@@ -6,14 +6,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ANY_CONNECTOR, canAdvanceCursor, canEditUnit, canSeeUnit, classifyCollectRun, computeAudience, connectorKey, healthIndex,
-  listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs, splitOverreach,
+  ANY_CONNECTOR, canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
+  healthIndex, listingClaimAllowed, noticeTargets, normalizeListing, orderCandidates, planUnit, retryDelayMs, splitOverreach, unitAccess,
   type PlanCandidate, type PlanHealth, type PlanUnit,
 } from "./unit-plan.js";
 
 const NOW = 1_800_000_000_000;
 const H = 3600_000;
-const cand = (member_id: string, priority = 10, added_at = 1): PlanCandidate => ({ member_id, priority, added_at });
+const cand = (member_id: string, priority = 10, added_at = 1, verified = true): PlanCandidate => ({ member_id, priority, added_at, verified });
 const unit = (o: Partial<PlanUnit> = {}): PlanUnit => ({
   id: 1, route: "member_ai", state: "active", connector: "Slack", collector: null, candidates: [cand("a", 10), cand("b", 20)], ...o,
 });
@@ -53,6 +53,10 @@ test("P5 우선순위가 작은 쪽 → 같으면 먼저 들어온 쪽 → 같�
   assert.equal(who(plan(unit({ candidates: [cand("b", 10, 5), cand("a", 10, 9)] }))), "b");
   assert.equal(who(plan(unit({ candidates: [cand("b", 10, 5), cand("a", 10, 5)] }))), "a");
   assert.deepEqual(orderCandidates([cand("c", 5, 1), cand("a", 5, 1), cand("b", 1, 9)]).map((c) => c.member_id), ["b", "a", "c"]);
+});
+test("P5d 확인된 사람이 먼저 — 신고만 한 사람은 우선순위가 앞이어도 뒤에 선다(확인된 사람이 없으면 그 사람이 맡는다)", () => {
+  assert.equal(who(plan(unit({ candidates: [cand("z", 1, 1, false), cand("a", 50, 9, true)] }))), "a");
+  assert.equal(who(plan(unit({ candidates: [cand("z", 1, 1, false)] }))), "z");
 });
 test("P6 1순위의 로그인이 끊기면 2순위가 이어받는다(건너뛴 사람이 남는다)", () => {
   const p = plan(unit(), [health("a", "login_broken")]);
@@ -194,11 +198,22 @@ test("L8 같은 ref 는 한 건(뒤의 이름이 빈 이름을 채운다) · 빈
   const n = normalizeListing([{ ref: " C1 ", kind: "channel" }, { ref: "C1", name: "제품" }, { ref: "" }, { ref: "   " }, { ref: "C2", kind: "weird" }]);
   assert.deepEqual(n, [{ ref: "C1", name: "제품", kind: "channel" }, { ref: "C2", name: null, kind: "other" }]);
 });
-test("L10 메일함 단위는 본인 메일 주소일 때만(대소문자 무시) · 다른 종류는 제한 없음", () => {
-  assert.equal(listingClaimAllowed({ ref: "A@x.io", name: null, kind: "mailbox" }, ["a@x.io"]), true);
-  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "mailbox" }, ["a@x.io"]), false);
-  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "mailbox" }, []), false);
-  assert.equal(listingClaimAllowed({ ref: "C1", name: null, kind: "channel" }, []), true);
+test("L10 메일함은 본인 주소만(대소문자 무시) — 메일함인지는 앱·저장된 단위로 정한다(신고자가 kind 를 빼거나 바꿔도 못 지나간다)", () => {
+  const me = { memberEmails: ["a@x.io"] };
+  assert.equal(listingClaimAllowed({ ref: "A@x.io", name: null, kind: "mailbox" }, { app: "gmail", ...me }), true);
+  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "mailbox" }, { app: "gmail", ...me }), false);
+  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "other" }, { app: "gmail", ...me }), false, "kind 를 빼도 gmail 은 메일함");
+  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "channel" }, { app: "outlook", ...me }), false, "kind 를 바꿔도 outlook 은 메일함");
+  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "other" }, { app: "cupg", existingKind: "mailbox", ...me }), false, "저장된 단위가 메일함");
+  assert.equal(listingClaimAllowed({ ref: "b@x.io", name: null, kind: "mailbox" }, { app: "cupg", memberEmails: [] }), false);
+  assert.equal(listingClaimAllowed({ ref: "C1", name: null, kind: "channel" }, { app: "slack", memberEmails: [] }), true);
+});
+test("L11 좌표 정규화 — 메일은 인스턴스 default·주소 소문자 · 노션 32자 id 는 하이픈 꼴 · 그 밖은 공백만", () => {
+  assert.deepEqual(canonicalCoord("gmail", "", " A@X.io "), { instance: "default", ref: "a@x.io" });
+  assert.deepEqual(canonicalCoord("outlook", "tenant", "B@X.io"), { instance: "tenant", ref: "b@x.io" });
+  assert.deepEqual(canonicalCoord("notion", "ws", "0123456789ABCDEF0123456789abcdef"), { instance: "ws", ref: "01234567-89ab-cdef-0123-456789abcdef" });
+  assert.deepEqual(canonicalCoord("notion", "ws", "01234567-89ab-cdef-0123-456789abcdef"), { instance: "ws", ref: "01234567-89ab-cdef-0123-456789abcdef" });
+  assert.deepEqual(canonicalCoord("slack", " T1 ", " C0AB "), { instance: "T1", ref: "C0AB" });
 });
 
 // ── S 쪼개기 ──
@@ -209,17 +224,28 @@ test("S1·S2 쪼개기는 좁히기만 — 부모 밖 구성원을 돌려준다"
 });
 
 // ── V 조회·수정 권한 ──
-test("V1 구성원 경로 단위는 볼 수 있는 구성원만(관리하는 사람도 못 본다) · V2 수집기 단위는 관리하는 사람도 · V3 수정", () => {
-  const m = { route: "member_ai" as const, viewers: ["a"] };
-  const c = { route: "lively_collector" as const, viewers: [] as string[] };
-  assert.equal(canSeeUnit(m, "z", true), false);
-  assert.equal(canSeeUnit(m, "a", false), true);
-  assert.equal(canSeeUnit(c, "z", true), true);
-  assert.equal(canSeeUnit(c, "z", false), false);
-  assert.equal(canEditUnit(m, "z", true), false);
+test("V1 구성원 경로 단위: 확인된 구성원 full · 신고만 한 본인 coarse · 그 밖(관리자 포함) none", () => {
+  const m = { route: "member_ai" as const, members: [{ member_id: "a", verified: true }, { member_id: "c", verified: false }] };
+  assert.equal(unitAccess(m, "a", false), "full");
+  assert.equal(unitAccess(m, "c", false), "coarse");
+  assert.equal(unitAccess(m, "z", true), "none");
+});
+test("V2 수집기 단위: 관리자 full · 확인된 구성원 full · 다른 구성원 coarse(후보 줄·건강은 안 보임)", () => {
+  const c = { route: "lively_collector" as const, members: [{ member_id: "a", verified: true }] };
+  assert.equal(unitAccess(c, "z", true), "full");
+  assert.equal(unitAccess(c, "a", false), "full");
+  assert.equal(unitAccess(c, "z", false), "coarse");
+  assert.equal(unitAccess({ route: "liv_direct", members: [] }, "z", false), "coarse");
+});
+test("V3 고치기: 구성원 경로 = 확인된 구성원만(신고만 한 사람·관리자 안 됨) · 수집기 경로 = 관리자 또는 확인된 구성원", () => {
+  const m = { route: "member_ai" as const, members: [{ member_id: "a", verified: true }, { member_id: "c", verified: false }] };
+  const c = { route: "lively_collector" as const, members: [{ member_id: "a", verified: true }] };
   assert.equal(canEditUnit(m, "a", false), true);
-  assert.equal(canEditUnit(c, "a", false), false);
+  assert.equal(canEditUnit(m, "c", false), false);
+  assert.equal(canEditUnit(m, "z", true), false);
   assert.equal(canEditUnit(c, "z", true), true);
+  assert.equal(canEditUnit(c, "a", false), true);
+  assert.equal(canEditUnit(c, "z", false), false);
 });
 
 // ── C 읽은 위치 ──
@@ -232,6 +258,28 @@ test("C1·C2 지금 담당만 읽은 위치를 옮긴다(구성원·수집기 �
   assert.equal(canAdvanceCursor(pc, { collector_id: 7 }), true);
   assert.equal(canAdvanceCursor(pc, { member: "a" }), false);
   assert.equal(canAdvanceCursor(plan(unit({ state: "candidate" })), { member: "a" }), false);
+});
+
+test("K1 수집기 자격 실패 — 실제 수집기 로그 문구(슬랙·노션·구글·GitHub)를 알아본다", () => {
+  for (const t of [
+    '{"level":50,"err":"slack conversations.history error: invalid_auth","msg":"generic 싱크 실패"}',
+    "slack auth.test error: token_revoked",
+    "slack users.conversations error: account_inactive",
+    "slack conversations.list error: not_authed",
+    'Notion 401 /databases/1a2b3c4d: {"object":"error","status":401,"code":"unauthorized","message":"API token is invalid."}',
+    "Google 토큰 갱신 실패 400: invalid_grant",
+    "GitHub 401: Bad credentials",
+  ]) assert.equal(collectorAuthFailed(t), true, t);
+});
+test("K2 권한 부족·한도·없음·숫자만 401 은 자격 실패가 아니다", () => {
+  for (const t of [
+    "slack search.messages error: missing_scope (search:read 가 필요합니다)",
+    "slack conversations.history error: ratelimited",
+    "slack conversations.info error: channel_not_found",
+    "Notion 404 /pages/401abc: object_not_found",
+    "page 401 of 900 processed",
+    "",
+  ]) assert.equal(collectorAuthFailed(t), false, t);
 });
 
 test("커넥터 키는 대소문자·앞뒤 공백 무시, * 는 그대로", () => {
