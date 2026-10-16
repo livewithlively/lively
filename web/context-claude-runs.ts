@@ -38,14 +38,19 @@ function ingestText(r: any): { text: string; title: string; fail: boolean } {
   if (g.state === 'failed') return { text: '저장 못 함', title: g.error || '', fail: true };
   if (r.mode === 'listing') {
     return {
-      text: '단위 ' + fmtNum(g.listed ?? 0) + (g.created ? ' (새 ' + fmtNum(g.created) + ')' : '') + (g.refused ? ' · 받지 않음 ' + fmtNum(g.refused) : ''),
-      title: g.refused ? '그 사람 것으로 확인되지 않아 받지 않은 단위(예: 라이블리 이메일과 다른 메일함)' : '', fail: false,
+      text: '단위 ' + fmtNum(g.listed ?? 0) + (g.created ? ' (새 ' + fmtNum(g.created) + ')' : '') + (g.refused ? ' · 받지 않음 ' + fmtNum(g.refused) : '')
+        + (g.proof_pending ? ' · 확인 대기 ' + fmtNum(g.proof_pending) : ''),
+      title: [g.refused ? '받지 않음: 그 사람 것으로 확인되지 않은 단위(예: 라이블리 이메일과 다른 메일함)' : '',
+        g.proof_pending ? '확인 대기: 이미 모인 자료가 있는 비공개 단위 — 그 사람 커넥터로 읽은 글이 저장된 글과 같으면(다음 수집 실행의 확인 읽기) 볼 수 있게 됩니다' : '']
+        .filter(Boolean).join(' · '), fail: false,
     };
   }
   //  다 못 읽은 단위 · 못 푼 결과 · 저장 실패가 있으면 «확인 필요» — 위치는 그대로라 다음 판이 다시 읽지만, 계속되면 형식이 바뀌었을 수 있다.
   const why = [g.incomplete ? '다 못 읽은 단위 ' + fmtNum(g.incomplete) : '', g.stuck ? '구간을 더 줄일 수 없는 단위 ' + fmtNum(g.stuck) : '',
     g.unread ? '안 읽은 단위 ' + fmtNum(g.unread) : '', g.unparsed ? '풀지 못한 결과 ' + fmtNum(g.unparsed) : '',
-    g.failed ? '저장 실패 ' + fmtNum(g.failed) : ''].filter(Boolean).join(' · ');
+    g.failed ? '저장 실패 ' + fmtNum(g.failed) : '', g.proof_passed ? '확인 읽기 통과 ' + fmtNum(g.proof_passed) : '',
+    g.proof_failed ? '확인 읽기 실패 ' + fmtNum(g.proof_failed) + '(저장된 글과 다름 — 넣지 않음)' : '',
+    g.proof_held ? '확인 대기 ' + fmtNum(g.proof_held) + '(맡은 비공개 단위 — 확인 읽기 뒤에 모음)' : ''].filter(Boolean).join(' · ');
   return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : '') + (g.partial ? ' · 확인 필요' : ''), title: why || g.error || '', fail: !!g.stuck };
 }
 

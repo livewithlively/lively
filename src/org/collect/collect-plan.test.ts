@@ -13,12 +13,16 @@
 //   H11 첫 쪽 없는 사슬 · 둘째 쪽의 답글 부모   H12 같은 인자로 다시 불러 제 모양이면 앞 실패는 안 센다   H13 가짜 답글(부모보다 앞 · 계획 시각 뒤)
 //   H14 지메일 펼침은 메시지 단위 · 빈 검색 {} 는 제 모양   H15 부모는 결과가 먼저   H16 바닥 구간에서 못 다 읽으면 «멈춤»
 //   K1 한 판에 실을 단위 — 아는 앱·모양 맞는 ref·정한 앱만 · 오래 안 읽은 것부터(같으면 id) · 상한 · 커넥터 이름 고정
+//   Q1 확인 창(G13) — 가장 새 글 5개를 덮는 구간 · 저장된 ts 없음·모르는 앱·모양 밖 ref 는 없음   Q2 확인 지시는 한 번만 작게(쪽·스레드 없음)
+//   Q3 확인 판정(슬랙) — 계획한 창 안 · 같은 좌표·같은 본문(가린 뒤) · 창 밖·빈 본문은 증거 아님   Q3b 노션 — 꾸밈 줄 뺀 서로 다른 줄 3개 이상 · 절반(경계 통과) · 짧으면 증명 불가
+//   Q4 확인 단위 고르기 — 맡은 단위와 겹치면 빼고 · 정한 앱 · 한 판 max 개
 //   L1 슬랙 목록 — 쪽 사슬 · 보관 채널 뺌 · «전부»   L2 마지막 쪽에 cursor · 못 푼 쪽 · 종류가 빠진 쪽 → «전부» 아님   L3 노션·지메일은 «전부» 아님
 import assert from "node:assert/strict";
 import {
   CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, FIRST_READ_DAYS_MAX, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
-  UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstDaysError, firstReadDaysOf, gmailQuery, harvestListing, harvestUnits, listingPrompt, pickUnitsForRun, storedSpan, unitInstruction,
-  unitSince, unitWindow, type AssignedLike, type PlannedUnit,
+  PROOF_NOTION_MIN_LINES, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, PROOF_RECENT, UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstDaysError, firstReadDaysOf,
+  gmailQuery, harvestListing, harvestUnits, judgeProof, listingPrompt, notionProofLines, pickUnitsForRun, planProofUnits, proofUnit, storedSpan,
+  unitInstruction, unitSince, unitWindow, unitsToLease, type AssignedLike, type PlannedUnit,
 } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
 
@@ -77,6 +81,8 @@ t("T1 턴 상한 — 바닥 12 · 단위당 8 · 지메일 단위당 40 더 · �
   assert.equal(collectMaxTurns(7), 60, "6+56=62 → 60");
   assert.equal(collectMaxTurns(1, 1), 54);
   assert.equal(collectMaxTurns(2, 1), 60);
+  assert.equal(collectMaxTurns(1, 0, 3), 20, "확인 읽기는 하나에 둘");
+  assert.equal(collectMaxTurns(0, 0, PROOF_ONLY_PER_RUN), 30);
 });
 
 // ── W 구간 ──
@@ -338,6 +344,73 @@ t("K1 한 판에 실을 단위 — 아는 앱·모양 맞는 ref·정한 앱만 
   assert.ok(got.every((u) => u.since != null || u.app === "notion"));
   assert.deepEqual(pickUnitsForRun(units, { now: NOW, app: "notion" }).map((u) => u.id), [4]);
   assert.equal(pickUnitsForRun([A(1, { connector: "엉뚱한 이름" } as never)], { now: NOW })[0].connector, "Slack", "저장된 커넥터 칸을 믿지 않는다");
+});
+
+t("Q1 확인 창 — 가장 새로 저장된 글 5개를 덮는 작은 구간(첫 ts − 1초 ~ 마지막 ts + 1초) · ts 가 없으면·모르는 앱·모양 밖 ref 는 확인 단위가 없다", () => {
+  const base = { id: 7, app: "slack", instance: "T0", ref: "C0AAAAAAA1", kind: "private_channel" };
+  const ts = ["1787195400.000200", "1787193938.792269", "1787199000.000001", "1787190000.5", "1787191000.1", "1787180000.000001", "bad"];
+  const u = proofUnit(base, ts)!;
+  assert.equal(PROOF_RECENT, 5);
+  assert.deepEqual([u.proof, u.since, u.until, u.connector], [true, "1787189999.000000", "1787199001.000000", "Slack"], "가장 새 5개(1787180000 은 빠진다)");
+  assert.equal(proofUnit(base, []), null);
+  assert.equal(proofUnit({ ...base, app: "gmail", ref: "me@example.com" }, ts), null, "메일함은 확인 읽기가 없다(주인 이메일로만 선다)");
+  assert.equal(proofUnit({ ...base, ref: "bad ref" }, ts), null);
+  const n = proofUnit({ ...base, app: "notion", ref: "abcdef01-2345-6789-abcd-ef0123456789", kind: "page" }, [])!;
+  assert.deepEqual([n.proof, n.since, n.until], [true, null, null]);
+});
+t("Q2 확인 지시는 한 번만 작게 — 쪽 넘김·스레드 없이 · limit 20", () => {
+  const u = proofUnit({ id: 7, app: "slack", instance: "T0", ref: "C0AAAAAAA1", kind: "private_channel" }, ["1787195400.000200"])!;
+  const line = unitInstruction(u)!;
+  assert.match(line, /확인 읽기\): slack_read_channel 을 channel_id="C0AAAAAAA1", oldest="1787195399.000000", latest="1787195401.000000", limit=20 으로 한 번 부른다/);
+  assert.ok(!/slack_read_thread|cursor/.test(line));
+  assert.match(unitInstruction(proofUnit({ id: 8, app: "notion", instance: "", ref: "abcdef01-2345-6789-abcd-ef0123456789", kind: "page" }, [])!)!, /notion-fetch 를 id=/);
+});
+t("Q3 확인 판정(슬랙) — 계획한 창 안의 글만 · 같은 좌표에 같은 본문(가린 뒤) · 창 밖 옛 글 · 다른 본문 · 빈 본문은 증거가 아니다", () => {
+  const it = (ts: string, body: string) => ({ type: "message", provenance: { category: "messenger", system: "slack", instance: "T0", external_id: `C0AAAAAAA1:${ts}` },
+    body, fields: { ts } }) as never;
+  const win = { app: "slack", since: "1787199999.000000", until: "1787200101.000000" };
+  const stored = new Map([["C0AAAAAAA1:1787200000.000100", "본문 [가림]"], ["C0AAAAAAA1:1787100000.000100", "옛 글"], ["C0AAAAAAA1:1787200050.000100", ""],
+    ["C0AAAAAAA1:1787200100.000100", "다른 글"]]);
+  const redact = (s: string) => s.replace("sk-secret", "[가림]");
+  assert.deepEqual(judgeProof(win, [it("1787200000.000100", "본문 sk-secret")], stored, redact), { outcome: "pass", hits: 1, compared: 1 });
+  assert.equal(judgeProof(win, [it("1787100000.000100", "옛 글")], stored, redact).outcome, "empty", "창 밖의 옛 글은 맞아도 증거가 아니다");
+  assert.equal(judgeProof(win, [it("1787200050.000100", "")], stored, redact).outcome, "empty", "저장 본문이 빈 글은 증거가 아니다");
+  assert.deepEqual(judgeProof(win, [it("1787200100.000100", "가짜")], stored, redact), { outcome: "no_match", hits: 0, compared: 1 });
+  assert.equal(judgeProof(win, [it("1787200101.000000", "x")], stored, redact).outcome, "empty", "창 끝(포함) — 저장 안 된 좌표는 셀 것이 없다");
+  assert.equal(judgeProof({ app: "slack", since: null, until: null }, [it("1787200000.000100", "본문 sk-secret")], stored, redact).outcome, "empty", "창이 없으면 판정하지 않는다");
+});
+t("Q3b 확인 판정(노션) — 꾸밈 줄을 뺀 서로 다른 증거 줄 3개 이상 · 절반 이상(경계: 정확히 절반 = 통과) · 짧은 페이지는 증명 불가", () => {
+  const P = "abcdef01-2345-6789-abcd-ef0123456789";
+  const it = (body: string) => ({ type: "doc", provenance: { category: "collab_tool", system: "notion", instance: "", external_id: P }, body }) as never;
+  const u = { app: "notion", since: null, until: null };
+  assert.equal(PROOF_NOTION_MIN_LINES, 3);
+  assert.deepEqual([...notionProofLines("첫째 줄입니다\n---\n<empty-block/>\n첫째 줄입니다\n짧음\n  둘째 줄입니다  ")], ["첫째 줄입니다", "둘째 줄입니다"],
+    "구분선 · 빈 블록 · 네 글자 미만 · 같은 줄은 뺀다");
+  const six = ["가나다라 1", "가나다라 2", "가나다라 3", "가나다라 4", "가나다라 5", "가나다라 6"];
+  const st = (lines: string[]) => new Map([[P, lines.join("\n")]]);
+  assert.equal(judgeProof(u, [it(six.slice(0, 3).join("\n"))], st(six), (s) => s).outcome, "pass", "6줄 중 3줄 — 정확히 절반");
+  assert.equal(judgeProof(u, [it(six.slice(0, 2).join("\n"))], st(six), (s) => s).outcome, "no_match", "6줄 중 2줄");
+  assert.equal(judgeProof(u, [it(six.slice(0, 2).join("\n"))], st(six.slice(0, 4)), (s) => s).outcome, "no_match", "절반이어도 3줄 미만은 아니다");
+  assert.equal(judgeProof(u, [it("가나다라 1\n가나다라 2")], st(["가나다라 1", "가나다라 2", "---", "<empty-block/>", "가나다라 1"]), (s) => s).outcome, "unprovable",
+    "증거 줄이 2개뿐인 페이지는 본문을 몰라도 맞힐 수 있어 증명 불가");
+  assert.equal(judgeProof(u, [it("아무 글")], new Map(), (s) => s).outcome, "empty");
+});
+t("Q4 확인 단위 고르기 — 이미 맡은 단위로 실린 것은 빼고 · 정한 앱만 · 한 판 max 개(맡은 단위가 있으면 PROOF_PER_RUN)", () => {
+  const P = (unit_id: number, o: Record<string, unknown> = {}) => ({ unit_id, app: "slack", instance: "T0", ref: `C0AAAAAA${String(unit_id).padStart(2, "0")}`, kind: "private_channel",
+    newest_ts: ["1787195400.000200"], ...o });
+  const planned = [{ ...SLACK, id: 2 }];
+  assert.deepEqual([PROOF_PER_RUN, PROOF_ONLY_PER_RUN], [4, 12]);
+  assert.deepEqual(planProofUnits([P(2), P(3), P(4, { newest_ts: [] }), P(5), P(6), P(7), P(8)], planned).map((u) => u.id), [3, 5, 6, 7],
+    "2 는 맡은 단위 · 4 는 확인 창이 없다 · 8 은 상한");
+  assert.deepEqual(planProofUnits([P(3), P(5), P(6)], [], { max: 2 }).map((u) => u.id), [3, 5]);
+  assert.deepEqual(planProofUnits([P(3), P(9, { app: "notion", ref: "abcdef01-2345-6789-abcd-ef0123456789", kind: "page" })], [], { app: "notion" }).map((u) => u.id), [9]);
+});
+
+t("Q5 수집 실행이 붙잡을 단위 — 맡은 단위만(확인 읽기 단위는 뺀다 · 목록 판·계획 없음은 없음)", () => {
+  const units = [{ ...SLACK, id: 1 }, { ...SLACK, id: 2, proof: true }, { ...NOTION, id: 3 }];
+  assert.deepEqual(unitsToLease({ mode: "collect", units }), [1, 3]);
+  assert.deepEqual(unitsToLease({ mode: "listing", units }), []);
+  assert.deepEqual(unitsToLease(null), []);
 });
 
 // ── L 목록 ──

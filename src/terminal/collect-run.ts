@@ -28,7 +28,9 @@ import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
 import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
 import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
-  CLAUDE_COLLECT_APPS, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, type CollectMode, type CollectPlan,
+  CLAUDE_COLLECT_APPS, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, planProofUnits, unitsToLease,
+  type CollectMode, type CollectPlan,
+  type PlannedUnit,
 } from "../org/collect/collect-plan.js";
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
@@ -155,9 +157,10 @@ async function startCollectRunHeld(user: LivelyUser, input: CollectRunStart, own
   //  #4744 이 판에 실은 단위를 붙잡는다 — 저장 단계가 다음 확인 시각을 적을 때까지 기본 주기 틱이 같은 단위로 판을 또 띄우지 않게.
   //   세션이 뜬 **뒤에** 한다(못 뜬 판이 단위를 붙잡아 두지 않게). 임대는 이 판의 마감 + 여유까지 — 저장을 못 탄 판이면 그때 다시 때가 된다.
   //   못 붙잡아도 실행은 그대로다.
-  if (plan?.mode === "collect" && plan.units?.length) {
+  const leased = unitsToLease(plan);
+  if (leased.length) {
     const { leaseUnits, LEASE_MARGIN_MS } = await import("../org/collect/unit-schedule.js");
-    await leaseUnits(plan.units.map((u) => u.id), runId, rec.deadline + LEASE_MARGIN_MS);
+    await leaseUnits(leased, runId, rec.deadline + LEASE_MARGIN_MS);
   }
   //  세션 id 를 폴더에 적는다 — 게이트웨이가 재기동해도 상태 읽기가 그 세션을 찾아 지운다. 못 적어도 실행은 계속된다.
   await runAtLoginSeatSh(osUser, collectSessionNoteSh(dir, rec.sessionId!)).catch((e) =>
@@ -195,25 +198,48 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
     if (!app) throw new HttpError(400, "목록 실행은 앱(app: slack · gmail · notion)을 주세요");
     return { mode, prompt: listingPrompt(app), apps: [CLAUDE_COLLECT_APPS[app]], maxTurns: 30, plan: { mode: "listing", app } };
   }
-  const { listAssignedUnits } = await import("../org/collect/unit-store.js");
-  const member = memberOf(user);
   const now = Date.now();
   const scheduled = input.trigger === "schedule";
-  const assigned = await listAssignedUnits(member, { dueOnly: scheduled || input.dueOnly === true, soon: scheduled, now });
-  const planned = pickUnitsForRun(assigned, { now, app });
-  const { prompt, units } = collectPrompt(planned);
-  if (!units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
-  //  주기 판은 때가 된 단위가 하나라도 있어야 띄운다 — 곧 때가 될 단위만으로 판을 띄우면 «함께 싣기» 가 판을 오히려 늘린다.
-  if (scheduled && !units.some((u) => assigned.find((a) => a.id === u.id)?.due)) {
-    throw new HttpError(409, "지금 때가 된 수집 단위가 없습니다 — 그새 다른 판이 읽었습니다");
-  }
+  const { prompt, units } = await planCollectUnits(memberOf(user), { app, dueOnly: input.dueOnly === true, scheduled, now });
   //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
   const apps = [...new Set(units.map((u) => CLAUDE_COLLECT_APPS[u.app]))];
   if (!apps.length) throw new HttpError(500, "수집 실행의 허락할 앱을 정하지 못했습니다");
   return {
-    mode, prompt, apps, maxTurns: collectMaxTurns(units.length, units.filter((u) => u.app === "gmail").length),
+    mode, prompt, apps,
+    maxTurns: collectMaxTurns(units.filter((u) => !u.proof).length, units.filter((u) => u.app === "gmail" && !u.proof).length, units.filter((u) => u.proof).length),
     plan: { mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}) },
   };
+}
+
+/**
+ * 수집 판에 실을 단위 — 맡은 단위(오래 안 읽은 것부터) + 확인 읽기(collect_proof 대기). 둘 다 비면 409.
+ *  보호 단위(이미 모인 자료가 있는 비공개 단위)를 아직 확인되지 않은 사람이 맡았으면(확인된 사람이 모두 끊겨 다음 후보로 넘어온 때)
+ *   그 단위는 수집이 아니라 확인 읽기로 싣는다 — 수집 창(읽은 위치 뒤)에는 맞춰 볼 저장된 글이 없어, 수집으로 실으면 확인이 영영 안 된다.
+ */
+export async function planCollectUnits(member: string, opts: { app?: string | null; dueOnly?: boolean; scheduled?: boolean; now?: number } = {}): Promise<{
+  prompt: string; units: PlannedUnit[];
+}> {
+  const now = opts.now ?? Date.now();
+  const app = opts.app ?? null;
+  const scheduled = opts.scheduled === true;
+  const { listAssignedUnits } = await import("../org/collect/unit-store.js");
+  const { guardsByUnitId, pendingProofs, requestProof } = await import("../org/collect/unit-proof.js");
+  //  보호 단위는 고르기 **전에** 뺀다 — 확인을 못 받는 보호 단위가 한 판의 자리를 늘 차지해 다른 맡은 단위가 밀리지 않게.
+  //   #4744 주기 판은 곧 때가 될 단위도 함께 싣는다(soon).
+  const assigned = await listAssignedUnits(member, { dueOnly: scheduled || opts.dueOnly === true, soon: scheduled, now });
+  const guard = await guardsByUnitId(member, assigned.map((u) => u.id));
+  const held = assigned.filter((u) => guard.get(u.id) === true).map((u) => u.id);
+  if (held.length) await requestProof(member, held);
+  const planned = pickUnitsForRun(assigned.filter((u) => guard.get(u.id) !== true), { now, app });
+  const slots = planned.length ? PROOF_PER_RUN : PROOF_ONLY_PER_RUN;
+  const proofs = planProofUnits(await pendingProofs(member, slots + planned.length, { app }), planned, { app, max: slots });
+  const r = collectPrompt([...planned, ...proofs]);
+  if (!r.units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
+  //  #4744 주기 판은 때가 된 단위(또는 확인 읽기)가 하나라도 있어야 띄운다 — 곧 때가 될 단위만으로 판을 띄우면 «함께 싣기» 가 판을 오히려 늘린다.
+  if (scheduled && !r.units.some((u) => u.proof || assigned.find((a) => a.id === u.id)?.due)) {
+    throw new HttpError(409, "지금 때가 된 수집 단위가 없습니다 — 그새 다른 판이 읽었습니다");
+  }
+  return r;
 }
 
 async function pollOnce(rec: RunRec): Promise<void> {
