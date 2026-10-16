@@ -2,7 +2,8 @@
 
 Thank you for contributing to Lively.
 
-By submitting a contribution (a "Contribution") to this project, you agree to the terms below.
+By signing this agreement, you agree to the terms below for every contribution (a "Contribution")
+you submit to this project.
 It is short on purpose.
 
 **1. Grant of rights.** You grant to 윤상민 (Sangmin Yoon) and 장원준 (Wonjoon Jang), and to our
@@ -36,4 +37,6 @@ to the whole codebase — including your Contribution. This agreement is what ma
 It also preserves the option to relicense **more permissively** in future. We have committed
 publicly not to move in the other direction — see [LICENSING.md](LICENSING.md).
 
-You sign this once, automatically, when you open your first pull request.
+You sign this once. On your first pull request, a bot asks you to post this comment on the pull
+request: `I have read the CLA Document and I hereby sign the CLA`. The signature is recorded against
+your GitHub account and covers your later contributions too.
