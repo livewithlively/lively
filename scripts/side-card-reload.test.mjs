@@ -53,7 +53,8 @@ ok(/fold = v;\s*paint\(\);/.test(between(card, "function setFold(", "let pillTim
 ok(/let glassIdle = false;/.test(term), "S8 터미널이 «비치는 카드에서 고르지 않음» 을 안다");
 ok(/else if \(m\.cmd === 'glass'\) \{ setGlass\(m\.on === true\); glassIdle = m\.on === true && m\.idle === true; \}/.test(term), "S10 glass 메시지의 idle 을 읽는다 — idle 이 없으면(옛 셸) 거짓");
 const open = between(term, "initialSettleRedraw();", "sock.onmessage");
-ok(/if \(!glassIdle\) term\.focus\(\);/.test(open) && !/^\s*term\.focus\(\);/m.test(open), "S3e·S8·S9 연결될 때 비치는(고르지 않은) 카드면 초점을 가져가지 않는다 · 아니면 종전대로", open.slice(0, 200));
+//  #4794 — 숨겨 붙인 액자(frameHiddenNow)도 초점을 안 가져간다. 그 항이 붙는 것은 막지 않는다 — 재는 것은 glassIdle 이 초점을 가르는가다.
+ok(/if \(!glassIdle( && !frameHiddenNow\(\))?\) term\.focus\(\);/.test(open) && !/^\s*term\.focus\(\);/m.test(open), "S3e·S8·S9 연결될 때 비치는(고르지 않은) 카드면 초점을 가져가지 않는다 · 아니면 종전대로", open.slice(0, 200));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

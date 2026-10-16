@@ -245,6 +245,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-shellbar .btn { flex: none; }
 /* 터미널 기본 모드(상민님 지시 2026-08-18) — 대화는 숨고 터미널이 본문을 다 차지한다. */
 .sc-mode-term .sc-term { flex: 1; height: auto; border-top: 0; }
+/* #4794 — 말을 보낸 직후: 하네스가 그릴 때까지 대화창을 보여 두고, 터미널 액자는 대화창 자리에 숨긴 채 먼저 붙인다.
+   자리·크기는 대화창과 같게(session-chat.ts placeWarmTerm 이 top·height 를 준다) — 넘길 때 크기가 바뀌면 하네스가 다시 그린다. */
+.sc-wrap.sc-term-warm { position: relative; }
+.sc-wrap.sc-term-warm > .sc-term { position: absolute; left: 0; right: 0; visibility: hidden; pointer-events: none; border-top: 0; }
 /* '베타' 뱃지 — 대화 인터페이스가 아직 다듬는 중임을 알리는 칩(버튼 안·제목 옆 공용). */
 .sc-beta { font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 5px 1px; border-radius: 999px; background: var(--bg-note); color: var(--ink-sub); border: 1px solid var(--line); letter-spacing: .02em; flex: none; margin-left: 4px; }
 .sc-beta[hidden] { display: none; }

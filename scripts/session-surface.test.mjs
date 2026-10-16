@@ -156,7 +156,8 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   }
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
-  ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
+  //  #4794 — 첫 화면 판정이 chatFirstView 로 꺼내졌다(그 뒤 «말을 보낸 직후» 가 붙는다). 그 축이 여전히 chatHome() 에서 시작하는지 잰다.
+  ok(/const chatFirstView = chatHome\(\)[^;\n]{0,80};[\s\S]{0,600}setMode\(chatFirstView[^;\n]{0,40}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
   ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");

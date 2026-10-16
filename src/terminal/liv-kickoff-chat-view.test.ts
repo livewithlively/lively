@@ -25,6 +25,10 @@ test("★★ 리브 킥오프 세션은 보기 판정(chatHome)에서 대화가 
   assert.match(CHAT, /const livKickoff = \(\): boolean => String\(target\.label \|\| ''\) === LIV_KICKOFF_LABEL;/, "리브 킥오프 세션 판정이 없다");
   assert.match(CHAT, /const chatHome = \(\): boolean => [^\n]*livKickoff\(\)/, "★ 보기 판정이 리브 킥오프 세션을 모른다 — 터미널로 열린다");
   //  보기 판정을 쓰는 세 자리(열 때 · 목록 갱신 두 방향)가 chatHome 을 본다 — 판정 한 곳만 바꾸면 셋이 함께 따른다.
-  assert.match(CHAT, /setMode\(chatHome\(\) \|\| target\.raw\?\.observed === false \|\| draftBack \? 'chat' : 'term'\);/, "열 때의 기본 보기가 chatHome 을 안 본다");
+  //  #4794 — 열 때의 판정이 chatFirstView 로 꺼내졌고, «말을 보낸 직후(warmFirst — 터미널을 숨겨 붙였다 그린 순간 넘긴다)» 는
+  //   그 조건이 거짓일 때만 선다. 리브 세션(첫 지시를 들고 온다 — liv-chat.ts rememberFirstPrompt)을 터미널로 넘기지 않는다.
+  assert.match(CHAT, /const chatFirstView = chatHome\(\) \|\| target\.raw\?\.observed === false \|\| draftBack;/, "열 때의 기본 보기가 chatHome 을 안 본다");
+  assert.match(CHAT, /const warmFirst = !chatFirstView && /, "★ 말을 보낸 직후의 숨겨 붙이기가 대화가 본자리인 화면까지 건드린다");
+  assert.match(CHAT, /setMode\(chatFirstView \|\| warmFirst \? 'chat' : 'term'\);/, "열 때의 기본 보기가 chatFirstView 를 안 본다");
   assert.match(CHAT, /mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)\) setMode\('term'\)/, "목록 갱신이 chatHome 과 무관하게 터미널로 되돌린다");
 });
