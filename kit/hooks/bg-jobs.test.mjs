@@ -181,6 +181,9 @@ t("S1 셸 띄움 두 갈래는 출력 파일을 기억하고, 에이전트·Moni
 });
 
 t("S2 heldFiles(리눅스) — /proc/<pid>/fd 링크가 가리키는 파일만 «쥐었다» · 못 읽는 프로세스는 건너뛴다 · /proc 이 없으면 모른다", () => {
+  //  윈도우에서는 readlink 가 심은 대상 문자열(`/tmp/a.output`)을 그대로 돌려주지 않아 빈 집합이 나온다(test-windows 잡에서
+  //  이 행만 실패). 이 갈래는 실제 /proc 이 있는 리눅스에서만 도니, 판정은 리눅스 CI 가 맡는다.
+  if (process.platform === "win32") return;
   const root = mkdtempSync(join(tmpdir(), "bg-proc-"));
   try {
     //  ⚠ 윈도우에서는 /proc 링크를 심볼릭 링크로 흉내 낼 수 없다 — node 가 절대경로 대상을 드라이브가 붙은 이름
