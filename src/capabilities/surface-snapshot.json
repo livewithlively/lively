@@ -3995,6 +3995,16 @@
   "input_hash": "3383857b616c6915"
  },
  {
+  "name": "collect_unit_find",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/collect/units/find"
+  ],
+  "input_hash": "bed240758774864e"
+ },
+ {
   "name": "collect_unit_listing",
   "scope": "memory",
   "mcp": true,

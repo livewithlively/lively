@@ -1103,6 +1103,10 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     client.release();
   }
   const after = (await getUnit(id))!;
+  //  #4744 설명 벡터 — 이름·설명·메타데이터(연결된 맥락)가 바뀌면 벡터를 비워 임베딩 대기로 돌린다(채우는 것은 임베딩 백필). 기다리지 않는다.
+  if (patch.description !== undefined || patch.name !== undefined || patch.meta != null) {
+    void import("../../v6/embedding-backfill.js").then((m) => m.markEmbeddingPending(m.COLLECT_UNIT_TARGET, id)).catch(() => undefined);
+  }
   await auditOrgContent("collect_unit", String(id), "update", before,
     { state: after.state, visibility: after.visibility, owner_member: after.owner_member, interval_sec: after.interval_sec, interval_auto: after.interval_auto,
       description: after.description, route: after.route, priorities: after.members.map((m) => m.member_id) },

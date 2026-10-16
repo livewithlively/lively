@@ -108,6 +108,40 @@ export async function hybridSearchKnowledge(
   }
 }
 
+/**
+ * (#4213 T12 #4744 검색 실패 보조 안내) 하이브리드 검색이 돌려준 지식이 질의와 얼마나 맞나 — RRF 점수는 순위라 «약하다» 를 말하지 못해서
+ *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
+ *  lexical = 그 가운데 질의 낱말이 모두(knowledge_grep 과 같은 규칙) 이름·제목·본문에 든 지식이 있나.
+ *  돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진 것이다. 질의 임베딩은 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억).
+ *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
+ */
+export async function knowledgeSearchStrength(qstr: string, names: readonly string[]): Promise<{ topSim: number | null; lexical: boolean }> {
+  const list = [...new Set(names)].slice(0, 100);
+  if (!list.length) return { topSim: null, lexical: false };
+  let topSim: number | null = null;
+  try {
+    const qe = await embedQuery(qstr);
+    if (qe.vec) {
+      const r = await one(itemsPool,
+        `SELECT max(1 - (embedding_vector <=> $1::vector))::float8 AS s FROM knowledge WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
+        [toVectorLiteral(qe.vec), list]) as { s?: number | null } | undefined;
+      topSim = r?.s == null ? null : Number(r.s);
+    }
+  } catch { topSim = null; }
+  let lexical = false;
+  try {
+    const { result } = await grepExec(qstr, async (plan) => {
+      const params: unknown[] = [];
+      const where = grepWhereSql(plan, {}, params);
+      params.push(list);
+      const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where} AND k.name = ANY($${params.length}::text[])`, params);
+      return Number(rows[0]?.n ?? 0);
+    });
+    lexical = result > 0;
+  } catch { lexical = false; }
+  return { topSim, lexical };
+}
+
 // RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
 async function rrfSearch(
   qstr: string, qvec: number[],
