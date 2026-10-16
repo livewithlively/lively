@@ -22,11 +22,17 @@
 //     (실측: 걸린 뒤 백그라운드 작업 알림이 와서 한 턴 돌고 끝나도 대기는 그대로였다).
 //   · **이어 간 턴이 또 한도에 닿으면** 줄 없이 다시 걸린다(본체: 턴 끝 처리가 이어 가는 중이면 걸림 줄 없이 다시 건다 — 연달아 두 번까지,
 //     그 너머는 «Automatic continue stopped …» 줄). 그 턴은 처음과 같은 정리 안내(wrap_up)로 끝나거나, 첫 요청부터 막혀 한도 오류 줄
-//     (assistant · isApiErrorMessage · apiError "usage_limit_reached")로 끝난다 — «이어 감» 뒤의 둘 다 다시 걸림으로 읽는다.
-//     apiError 가 없는 오류(서버 스로틀 등 error "rate_limit" 만)는 계정 한도가 아니다 — 다시 걸림이 아니다.
+//     (assistant · isApiErrorMessage · apiError "usage_limit_reached")로 끝난다 — 자동 이어감 메시지 **뒤의** 둘 다 다시 걸림으로 읽는다
+//     (그 메시지 전의 다른 턴 · 그 턴이 끝난 뒤의 다른 턴의 것은 아니다 — 격리 리뷰 3차). apiError 가 없는 오류(서버 스로틀 등 error "rate_limit"
+//     만)는 계정 한도가 아니다 — 다시 걸림이 아니다. 이어 간 턴이 Esc 로 끊기면 턴 끝 줄이 안 남는다 — 그 뒤 다른 턴(작업 알림 등)이 오면
+//     이어 간 턴은 끝난 것으로 본다.
 //   · «앞선 한도 안내는 이제 무효» 쪽지(isMeta · usageLimitNote "release")는 대기를 바꾸지 않는다 — 정리 안내 뒤 한도가 풀린 다음 턴의 첫 요청에
-//     붙는데, 자동 이어 간 턴에도 붙는다(실측: 사람 말 4.7초 뒤). 다시 띄운 하네스의 대기는 아래 «띄운 시각» 조건과 relaunch 접힘 줄이 맡는다.
+//     붙는다(실측: 사람 말 4.7초 뒤 · 본체 코드상 자동 이어 간 턴에도 붙는다). 다시 띄운 하네스의 대기는 아래 «띄운 시각» 조건이 맡는다
+//     (실측 복원 세 세션엔 relaunch 접힘 줄이 없었다 — 풀리는 시각 뒤에 다시 띄웠기 때문).
 //  ⚠ 못 읽는 경우(남은 틈 — 종전보다 나빠지지는 않는다):
+//   · **이어 간 턴이 읽는 창(대화 기록 끝 1MB · session-quota-wait.ts)보다 길면** 다시 걸림을 못 본다 — 근거(이어 감 줄·이어감 메시지)는 그 턴의
+//     맨 앞에, 증거(정리 안내)는 맨 끝에 있다. 실측 대화 기록은 시간당 2~35MB(중앙값 약 7.6MB) 자라므로 1MB 는 약 8분 작업이다(격리 리뷰 3차).
+//     첫 걸림(이번 사고)은 걸림 줄이 늘 끝에 있어 이 한계가 없다. 근본 해결(그 턴의 시작까지 창을 넓히기 등)은 후속.
 //   · 사람이 한도 대화상자에서 «기다리기» 를 고른 대기 — 본체가 걸림 줄을 안 남긴다(자동 걸림만 남긴다).
 //   · 턴 **시작**에서 막혀 Stop 훅이 안 뜬 대기(첫 걸림이든 다시 걸림이든) — 종료 규칙은 이 판정까지 오지 않는다: 훅의 «작업 중» 보고가
 //     신선한 10분(PHASE_TTL_SEC) 동안은 «작업 중» 으로 지키고, 그 뒤엔 «예약 모름» 이 되어 옛 회수 시계(유휴 120분)로 넘어간다(후속).
@@ -73,7 +79,8 @@ export const QUOTA_CLOCK_SKEW_MS = 5 * 60_000;
 const ARMED = /\bcontinuing automatically\b.*\besc to cancel\b/i;
 const FIRED = /^\s*usage limit (?:reset|available again)\b/i;
 const RELEASED = /^\s*(?:usage limit has reset\b|automatic continue\b)/i;
-const REARMED_TEXT = "이어 간 턴이 다시 한도에 닿았다(줄 없이 다시 걸림)";
+const REARMED_WRAPUP = "이어 간 턴이 정리 안내로 끝났다(줄 없이 다시 걸림)";
+const REARMED_ERROR = "이어 간 턴이 첫 요청부터 한도에 막혔다(줄 없이 다시 걸림)";
 
 /** 사람이 친 말인가 — 2.1.301 은 `origin.kind`(·`turnOrigin`)를 남긴다. 표식이 없거나 메타 줄이면 사람의 말로 보지 않는다(대기를 접지 않는 쪽). */
 function humanPrompt(l: Record<string, unknown>): boolean {
@@ -108,13 +115,15 @@ export function quotaScan(lines: ReadonlyArray<unknown>): QuotaScan | null {
     if (l.type === "user") {
       if (humanPrompt(l)) st = null;
       else if (st?.kind === "fired") {
-        if (originKind(l) === "auto-continuation") st = { ...st, continued: true };
-        else if (l.usageLimitNote === "wrap_up") st = event("armed", l, REARMED_TEXT);   // 이어 간 턴이 정리 안내로 끝난다 → 조용히 다시 걸림
+        const k = originKind(l);
+        if (k === "auto-continuation") st = { ...st, continued: true };
+        else if (st.continued && k !== undefined) st = null;   // 이어 간 턴 뒤에 다른 턴이 시작됐다 — 그 턴은 끝났다(Esc 로 끊기면 턴 끝 줄이 없다)
+        else if (st.continued && l.usageLimitNote === "wrap_up") st = event("armed", l, REARMED_WRAPUP);   // 이어 간 턴이 정리 안내로 끝난다 → 조용히 다시 걸림
       }
       continue;
     }
-    if (l.type === "assistant" && st?.kind === "fired" && l.isApiErrorMessage === true && l.apiError === "usage_limit_reached") {
-      st = event("armed", l, REARMED_TEXT);   // 이어 간 턴이 첫 요청부터 막혔다 → 조용히 다시 걸림
+    if (l.type === "assistant" && st?.kind === "fired" && st.continued && l.isApiErrorMessage === true && l.apiError === "usage_limit_reached") {
+      st = event("armed", l, REARMED_ERROR);   // 이어 간 턴이 첫 요청부터 막혔다 → 조용히 다시 걸림
     }
   }
   return st;

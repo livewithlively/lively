@@ -148,6 +148,7 @@ test("Q20 이어 간 턴이 또 한도에 막히면(오류 줄) — 줄 없이 �
   const w = quotaWaitOf([ARMED(), FIRED(f), continuation(f + 200), limitError(f + 4_000), ...turnEnd(f + 4_100)], at({ nowMs: f + 600_000 }));
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, f + 4_000);
+  assert.match(w?.text ?? "", /첫 요청부터/, "어느 길로 다시 걸렸는지 로그로 가른다");
 });
 test("Q21 다시 막힌 것이 연달아 넘쳐 Claude Code 가 «Automatic continue stopped …» 를 남기면 → 대기 아님", () => {
   const f = T0 + 600_000;
@@ -181,6 +182,7 @@ test("Q20b 이어 간 턴이 정리 안내(wrap_up)로 끝나면 — 줄 없이 
   const w = quotaWaitOf(lines, at({ nowMs: f + 3_800_000 }));
   assert.equal(w?.kind, "armed");
   assert.equal(w?.atMs, f + 3_600_000);
+  assert.match(w?.text ?? "", /정리 안내/, "어느 길로 다시 걸렸는지 로그로 가른다");
 });
 test("Q20c 이어 간 턴의 첫 요청에 무효 쪽지가 붙은 직후(3초)는 «막 이어 가는 중» 이다", () => {
   const f = T0 + 600_000;
@@ -207,4 +209,24 @@ test("Q27 이어 감 메시지가 오기 전에 끝난 다른 턴(작업 알림)
 test("Q28 이어 감 없이 온 정리 안내는 걸림이 아니다 — 첫 걸림은 턴이 끝난 뒤 남는 걸림 줄로 읽는다", () => {
   assert.equal(quotaWaitOf([human(T0 - 9_000), wrapUp(T0 - 5_000), assistant(T0 - 1_000, "멈춥니다"), ...turnEnd(T0 - 500)], at()), null);
   assert.equal(quotaWaitOf([human(T0 - 9_000), wrapUp(T0 - 5_000), ...turnEnd(T0 - 500), ARMED()], at())?.atMs, T0, "그 뒤 걸림 줄이 오면 그때 걸림");
+});
+test("Q27b 이어 감 뒤 · 이어감 메시지 전에 작업 알림 턴이 돌고 끝나도 그 턴의 끝은 이어 간 턴의 끝이 아니다 — 계속 «막 이어 가는 중»", () => {
+  const f = T0 + 600_000;
+  const w = quotaWaitOf([ARMED(), FIRED(f), taskNote(f + 500), assistant(f + 1_000, "알림 처리"), ...turnEnd(f + 1_500)], at({ nowMs: f + 2_000 }));
+  assert.equal(w?.kind, "resuming");
+});
+test("Q29 이어감 메시지 전에 끼어든 작업 알림 턴의 정리 안내는 다시 걸림이 아니다(그 턴은 이어 간 턴이 아니다)", () => {
+  const f = T0 + 600_000;
+  const w = quotaWaitOf([ARMED(), FIRED(f), taskNote(f + 500), wrapUp(f + 1_000), ...turnEnd(f + 1_500)], at({ nowMs: f + 2_000 }));
+  assert.notEqual(w?.kind, "armed");
+});
+test("Q30 이어 간 턴이 끊겨(Esc — 턴 끝 줄 없음) 다른 턴이 시작되면 이어 간 턴은 끝난 것이다 — 그 뒤 정리 안내는 다시 걸림이 아니다", () => {
+  const f = T0 + 600_000;
+  const interrupted = [ARMED(), FIRED(f), continuation(f + 200), assistant(f + 5_000, "작업 중…")];
+  assert.equal(quotaWaitOf([...interrupted, taskNote(f + 20_000), wrapUp(f + 25_000), ...turnEnd(f + 26_000)], at({ nowMs: f + 30_000 })), null);
+});
+test("Q31 이어감 메시지 전에 끼어든 작업 알림 턴이 한도 오류로 막혀도 다시 걸림이 아니다(그 턴은 이어 간 턴이 아니다)", () => {
+  const f = T0 + 600_000;
+  const w = quotaWaitOf([ARMED(), FIRED(f), taskNote(f + 500), limitError(f + 1_000), ...turnEnd(f + 1_100)], at({ nowMs: f + 2_000 }));
+  assert.notEqual(w?.kind, "armed");
 });

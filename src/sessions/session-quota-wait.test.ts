@@ -1,5 +1,5 @@
 // #4810 — 한도 자동 이어감 대기의 재료를 대화 기록 **끝**에서 읽는 계약(readQuotaWait). 파일 찾기만 가짜로 갈아 끼우고, 읽기는 진짜
-//  파일·진짜 claude 파서·진짜 창 정렬(readAlignedWindow)로 한다. 사양·엣지 표 R1~R10: 작업 스크래치 spec-4810.md.
+//  파일·진짜 claude 파서·진짜 창 정렬(readAlignedWindow)로 한다. 사양·엣지 표 R1~R11: 작업 스크래치 spec-4810.md.
 //  틀리면 티가 크다:
 //   🔴 창을 파일 앞에서 읽으면 — 몇 MB 짜리 대화(실측 25~67MB)에서 걸림 줄을 영영 못 본다.
 //   🔴 읽기 실패를 «대기 없음» 으로 뭉개면 — 중계가 잠깐 막힌 판에 대기 중인 세션을 끈다(모르면 안 끈다).
@@ -118,4 +118,16 @@ test("R10 크기가 있는 파일에서 한 바이트도 못 받으면(중계가
   const empty: TranscriptFs = { ...localTranscriptFs, read: (_f, _s, fn) => fn({ read: async () => Buffer.alloc(0) }) };
   await assert.rejects(readQuotaWait("box-a-1", AT, found(p, { tfs: empty })), /못 읽음/);
   assert.equal((await readQuotaWait("box-a-1", AT, found(p)))?.atMs, T0, "다음엔 제대로 읽는다(빈 결과를 기억하지 않았다)");
+});
+test("R11 (특성화 — 알려진 한계) 이어 간 턴이 창(1MB)보다 길면 그 턴 끝의 정리 안내로 다시 걸린 것을 못 본다 — 대기 없음", async () => {
+  //  근거(이어 감 줄·이어감 메시지)는 그 턴 맨 앞, 증거(정리 안내)는 맨 끝에 있다. 근본 해결(턴 시작까지 창 넓히기)이 들어오면 이 시험을 뒤집는다.
+  const FIRED = JSON.stringify({ type: "system", subtype: "informational", content: "Usage limit reset · continuing automatically", timestamp: new Date(T0 + 600_000).toISOString() });
+  const CONT = JSON.stringify({ type: "user", isMeta: true, origin: { kind: "auto-continuation" }, timestamp: new Date(T0 + 600_200).toISOString(), message: { role: "user", content: "Your claude.ai usage limit has reset. …" } });
+  const WRAP = JSON.stringify({ type: "user", isMeta: true, usageLimitNote: "wrap_up", timestamp: new Date(T0 + 4_200_000).toISOString(), message: { role: "user", content: "[Usage limit reached; …]" } });
+  const END = JSON.stringify({ type: "system", subtype: "turn_duration", timestamp: new Date(T0 + 4_210_000).toISOString() });
+  const at = { launchedAtMs: T0 - 3_600_000, nowMs: T0 + 4_400_000 };
+  const short = file("r11s.jsonl", [ARMED, FIRED, CONT, ...Array.from({ length: 300 }, () => filler(1000)), WRAP, END]);
+  assert.equal((await readQuotaWait("box-r11s", at, found(short)))?.kind, "armed", "짧은 이어 간 턴(0.3MB)은 다시 걸림을 본다");
+  const long = file("r11l.jsonl", [ARMED, FIRED, CONT, ...Array.from({ length: 1200 }, () => filler(1000)), WRAP, END]);
+  assert.equal(await readQuotaWait("box-r11l", at, found(long)), null, "긴 이어 간 턴(1.2MB)은 못 본다 — 알려진 한계");
 });
