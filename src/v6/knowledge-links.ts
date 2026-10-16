@@ -9,7 +9,9 @@ import { type WriteCtx } from "./content-audit.js";
 import { extractWikiLinkTargets } from "./wikilink.js";   // #907 본문 [[…]] → 자동 엣지(문법층은 순수 함수로 분리)
 import { visibleListIds, type Viewer } from "./visibility.js";
 import { knowledgeVisSql, knowledgeVisWhere, slugify, auditKnowledge } from "./knowledge-common.js";
-import { inheritSourceVisibility, type InheritResult } from "./source-vis-policy.js";
+import {
+  assertCitesAllowed, derivedEnforced, linkDerivedSources, withDerivedTx, type LinkDerivedResult,
+} from "./derived-visibility.js";
 import { logger } from "../log.js";
 
 // ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
@@ -184,31 +186,53 @@ export async function derivedPeersOf(sourceId: number): Promise<Array<{ name: st
 }
 
 // 지식→자료 인용(knowledge_source). relation=derived_from(증류)|cites(참조).
-export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<(InheritResult & { dupNote?: string | null }) | { dupNote: string | null } | null> {
+export interface LinkSourceResult {
+  /** #1631 — 이 자료에서 이미 다른 지식이 나왔으면 그 알림 */
+  dupNote: string | null;
+  /** derived_from 일 때 — 맞춘 공개범위(#4824) */
+  derived?: LinkDerivedResult;
+}
+export async function linkKnowledgeSource(
+  name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx,
+  opts: { allowNarrow?: boolean; batchSince?: Date | null } = {},
+): Promise<LinkSourceResult> {
   //  ⚠ 알림은 **반환값**으로 준다 — 모듈 전역에 담으면 동시 호출(배치 병렬)에서 남의 알림을 집어 온다.
   let dupNote: string | null = null;
   //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 **막지 않고 알린다**(증류 세션이 그 자리에서 합칠 수 있게).
   //   실측: 같은 파일이 3초 간격으로 지식 2건이 됐다(슬러그만 다름). 중복 방지가 전적으로 모델 자율이라
   //   건너뛰면 그대로 통과한다. 한 자료에서 여러 지식이 나오는 정당한 경우가 있어 **거절은 하지 않는다.**
-  if (relation === "derived_from") {
-    const { checkDerivedDup } = await import("../org/distill/derived-dup.js");
-    const notice = checkDerivedDup(await derivedPeersOf(sourceId), name);
-    if (notice.duplicate) {
-      logger.warn({ name, sourceId, siblings: notice.siblings }, "[distill] 한 자료에서 지식이 여러 개 파생됐다 — 중복일 수 있다(#1631)");
-      dupNote = notice.note;
-    }
+  if (relation === "derived_from") dupNote = await derivedDupNote(sourceId, name);
+  //  #4824 — 축 상태는 트랜잭션(잠금) 전에 읽는다(잠금을 쥔 채 풀을 기다리지 않게).
+  const enforced = await derivedEnforced();
+  // 'cites'(단순 참조)는 공개범위를 건드리지 않는다: 인용했다는 이유로 참조한 쪽까지 잠그면 공개 지식이 링크 하나로
+  //  잠기는 사고가 난다. 파생(derived_from)만 내용이 흘러든다. 다만 잠긴 자료를 더 넓은 지식에서 cites 로 잇는 것은
+  //  거절한다(#4824) — derived_from 거절을 relation 만 바꿔 빠져나가는 길이 되기 때문이다.
+  if (relation !== "derived_from") {
+    await withDerivedTx(async (c) => {
+      await assertCitesAllowed(c, name, sourceId, enforced);
+      await c.query(
+        `INSERT INTO knowledge_source(name, source_id, relation, created_at)
+         VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,
+        [name, sourceId, relation]);
+      await auditKnowledge(name, "link_source", null, { source_id: sourceId, relation }, ctx, c);
+    });
+    return { dupNote };
   }
-  await itemsPool.query(
-    `INSERT INTO knowledge_source(name, source_id, relation, created_at)
-     VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,
-    [name, sourceId, relation]);
-  await auditKnowledge(name, "link_source", null, { source_id: sourceId, relation }, ctx);
-  // 증류물은 원본의 공개범위를 물려받는다(#1291 v4) — 'cites'(단순 참조)는 제외한다: 인용했다는 이유로
-  //  참조한 쪽까지 잠그면 공개 지식이 링크 하나로 잠기는 사고가 난다. 파생(derived_from)만 내용이 흘러든다.
-  if (relation !== "derived_from") return null;
-  const inherited = await inheritSourceVisibility(name, sourceId, ctx)
-    .catch((e) => { logger.warn({ name, sourceId, err: (e as Error)?.message }, "[source-vis] 상속 실패"); return null; });
-  return inherited ? { ...inherited, dupNote } : { dupNote };
+  //  #4824 — 증류물은 원본의 공개범위를 물려받는다(#1291 v4). 종전엔 연결 행을 먼저 커밋하고 상속을 따로 돌려
+  //   실패를 삼켰다 — 연결은 있는데 공개로 남는 지식이 생겼다. 이제 연결·판정·맞추기가 한 트랜잭션이다.
+  //   단독 연결은 내용이 이미 들어간 뒤라 좁힌다(닫히는 쪽 — derived-visibility.ts 머리말). 증류 배치는 예외 판정.
+  const derived = await withDerivedTx((c) => linkDerivedSources(c, name, [sourceId], ctx,
+    { mode: "link", allowNarrow: opts.allowNarrow, batchSince: opts.batchSince ?? null, enforced }));
+  return { dupNote, derived };
+}
+
+/** #1631 중복 증류 알림 — 이 자료에서 이미 다른 지식이 나왔으면 그 문장(아니면 null). knowledge_save(derived_from)도 쓴다. */
+export async function derivedDupNote(sourceId: number, name: string): Promise<string | null> {
+  const { checkDerivedDup } = await import("../org/distill/derived-dup.js");
+  const notice = checkDerivedDup(await derivedPeersOf(sourceId), name);
+  if (!notice.duplicate) return null;
+  logger.warn({ name, sourceId, siblings: notice.siblings }, "[distill] 한 자료에서 지식이 여러 개 파생됐다 — 중복일 수 있다(#1631)");
+  return notice.note;
 }
 export async function unlinkKnowledgeSource(name: string, sourceId: number, relation: string, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(`DELETE FROM knowledge_source WHERE name=$1 AND source_id=$2 AND relation=$3`, [name, sourceId, relation]);

@@ -4,7 +4,7 @@
 //  검색(grep·하이브리드·유사·추천)은 knowledge-search.ts, 링크·위키링크·그래프는 knowledge-links.ts 로 분리(#1313 R21).
 //  둘 다 아래에서 **재수출**한다 — 이 모듈이 지식 표면의 배럴이라 기존 호출부(40+)는 무수정이다.
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, type Db } from "../db/client.js";
 import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임.
@@ -198,20 +198,30 @@ export async function getKnowledge(name: string, viewer?: Viewer): Promise<(Know
     `SELECT kc.category_id, kc.state, c.key, c.name
      FROM knowledge_category kc JOIN category c ON c.id=kc.category_id WHERE kc.name=$1`, [name]);
   const links = await listKnowledgeLinks(name, viewer);      // #290 지식↔지식(outgoing + 백링크). viewer: 안 보이는 이웃은 뺀다(#1291)
+  //  #4824 — 인용한 자료·자식·조상의 **제목**도 보는 사람 기준으로 거른다. 이 문서는 보이는데 잠긴 자료(슬랙 자료의 제목은
+  //   메시지 본문이다)·잠긴 자식 문서의 제목이 그대로 실려 나갔다(격리 검토). 안 보이는 행은 뺀다(존재 은닉).
+  //   source-store 가 이 모듈을 import 하므로 자료 술어는 동적 import 로 가져온다(정적 순환 금지).
+  const { sourceVisWhere } = await import("./source-store.js");
+  const sParams: unknown[] = [name];
+  const sVis = await sourceVisWhere(viewer, sParams);
   const sources = await q(itemsPool,                          // #290 인용한 자료(derived_from/cites)
     `SELECT ks.source_id, ks.relation, s.title, s.kind FROM knowledge_source ks JOIN source s ON s.id=ks.source_id
-     WHERE ks.name=$1 ORDER BY ks.relation`, [name]);
+     WHERE ks.name=$1 AND ${sVis} ORDER BY ks.relation`, sParams);
   // #551 페이지 트리 — 자식(sort 순, archived 는 UI 가 배지로 구분)과 조상 체인(브레드크럼). parent_name 소프트참조.
+  const cParams: unknown[] = [name];
+  const cVis = await knowledgeVisWhere(viewer, cParams);
   const children = await q(itemsPool,
-    `SELECT name, title, sort, lifecycle, external_system, type, is_folder,
-            props_ui->>'icon' AS icon,
-            fields->'notion'->>'kind' AS notion_kind
-     FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'
-     ORDER BY sort, title NULLS LAST, name LIMIT 500`, [name]);
+    `SELECT k.name, k.title, k.sort, k.lifecycle, k.external_system, k.type, k.is_folder,
+            k.props_ui->>'icon' AS icon,
+            k.fields->'notion'->>'kind' AS notion_kind
+     FROM knowledge k WHERE k.parent_name=$1 AND k.lifecycle <> 'superseded' AND ${cVis}
+     ORDER BY k.sort, k.title NULLS LAST, k.name LIMIT 500`, cParams);
   // 캡 도달 시 총계 동봉 — 대형 DB(수천 행)에서 knowledge_get 응답이 행 수에 비례 폭주하지 않게(#551 리뷰).
   const childrenTotal = children.length === 500
-    ? Number((await one(itemsPool, `SELECT count(*)::int AS n FROM knowledge WHERE parent_name=$1 AND lifecycle <> 'superseded'`, [name]))?.n ?? 500)
+    ? Number((await one(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE k.parent_name=$1 AND k.lifecycle <> 'superseded' AND ${cVis}`, cParams))?.n ?? 500)
     : children.length;
+  const aParams: unknown[] = [name];
+  const aVis = await knowledgeVisWhere(viewer, aParams);
   const ancestors = await q(itemsPool,
     `WITH RECURSIVE up AS (
        SELECT k2.name, k2.title, k2.parent_name, 1 AS depth
@@ -219,7 +229,7 @@ export async function getKnowledge(name: string, viewer?: Viewer): Promise<(Know
        UNION ALL
        SELECT k3.name, k3.title, k3.parent_name, up.depth + 1
        FROM knowledge k3 JOIN up ON k3.name = up.parent_name WHERE up.depth < 20
-     ) SELECT name, title FROM up ORDER BY depth DESC`, [name]);
+     ) SELECT up.name, up.title FROM up JOIN knowledge k ON k.name = up.name WHERE ${aVis} ORDER BY up.depth DESC`, aParams);
   return { ...k, categories, links, sources, children, children_total: childrenTotal, ancestors };
 }
 
@@ -398,27 +408,44 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
 // 반환에 wikilinks 를 얹는다(#907) — getKnowledge 가 categories/links 를 얹는 것과 같은 급의 파생 정보다.
 //  행 자체(감사·undo 입력)는 오염되지 않는다: auditKnowledge 는 이 아래에서 raw `after` 로 이미 기록된다.
 //  호출부는 응답에 실을 때 구조분해로 떼어낸다(knowledge_save) — 기존 호출부는 무시하면 그만이라 비파괴.
+/**
+ * upsert 의 선택지(#4824) — 기본값이면 종전과 같다.
+ *  · db: 트랜잭션 클라이언트. 행·감사·카테고리 연결을 그 트랜잭션 안에서 쓴다(증류 저장이 «저장 + 원본 연결 + 공개범위» 를 한 번에).
+ *  · insertOnly: 새로 만들 때만 — 같은 이름이 이미 있으면(경합 포함) 아무것도 안 쓰고 KnowledgeExistsError.
+ *    종전 upsert 는 이름이 겹치면 남의 문서를 덮어쓰는 수정이 된다 — 공개범위를 미리 정해 넣는 저장에선 그러면 안 된다.
+ *  · visibility: INSERT 때의 공개범위(수정엔 안 쓴다 — 공개범위는 이 함수가 바꾸지 않는다).
+ *  · deferPost: 임베딩 표시·위키링크 엣지를 커밋 **뒤**로 미룬다(post 로 돌려준다). 위키링크는 제 연결로 knowledge_link 를
+ *    쓰는데, 그 FK 가 아직 커밋 안 된 이 행을 기다려 트랜잭션이 스스로를 기다리게 된다.
+ */
+export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean }
+export class KnowledgeExistsError extends Error {
+  constructor(public readonly knowledgeName: string) { super(`지식 '${knowledgeName}' 이(가) 이미 있습니다`); }
+}
+
 export async function upsertKnowledge(
   input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
   ctx?: WriteCtx,
-): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult }> {
+  opts: UpsertKnowledgeOpts = {},
+): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult; post?: () => Promise<WikiLinkResult | undefined> }> {
+  const db: Db = opts.db ?? itemsPool;
   let name: string;
   if (input.name) {
     name = slugify(input.name);
   } else {
     const base = slugify(input.title || input.body_md.slice(0, 40));
     name = base;
-    for (let i = 2; await one(itemsPool, `SELECT 1 FROM knowledge WHERE name=$1`, [name]); i++) {
+    for (let i = 2; await one(db, `SELECT 1 FROM knowledge WHERE name=$1`, [name]); i++) {
       if (i > 999) throw new Error("이름 자동생성 실패");
       name = `${base}-${i}`;
     }
   }
-  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  const before = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  if (opts.insertOnly && before) throw new KnowledgeExistsError(name);
   // 단일 카테고리(#290): 단일 키 문자열 또는 배열(커넥터 호환) 정규화. 미존재 key 는 INSERT 전 차단(미분류·오타 방지).
   const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
   for (const key of catKeys) {
-    const cat = await one(itemsPool, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
+    const cat = await one(db, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
     if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
     catIds.push((cat as { id: number }).id);
   }
@@ -453,24 +480,28 @@ export async function upsertKnowledge(
   if (input.parent_name != null && input.parent_name !== before?.parent_name) {
     await assertTreeParent(name, input.parent_name);
   }
-  await itemsPool.query(
-    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
-     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
-     ON CONFLICT (tenant_id, name) DO UPDATE SET
+  // #4824 $17 visibility — INSERT 때만(ON CONFLICT DO UPDATE 는 안 건드린다). 미지정이면 종전 DDL 기본값과 같은 'open'.
+  //  insertOnly 면 겹친 이름을 덮어쓰지 않는다(DO NOTHING → 행 없음 → KnowledgeExistsError).
+  const ins = await db.query(
+    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by, visibility)
+     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15,$17)
+     ${opts.insertOnly ? "ON CONFLICT (tenant_id, name) DO NOTHING RETURNING name" : `ON CONFLICT (tenant_id, name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name,
-       version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+       version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`}`,
     [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
      // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
-     input.lifecycle ?? "active"]);
-  const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
-  await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);
+     input.lifecycle ?? "active",
+     opts.visibility ?? "open"]);
+  if (opts.insertOnly && !ins.rowCount) throw new KnowledgeExistsError(name);
+  const after = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  await auditKnowledge(name, before ? "update" : "insert", before, after, ctx, db);
   // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
   if (catIds.length > 1) console.warn(`[knowledge] '${name}' 단일 카테고리 정책 — 첫 카테고리만 적용(${catIds.length}개 전달).`);
-  if (catIds.length) await linkKnowledgeCategory(name, catIds[0], "confirmed", ctx);
+  if (catIds.length) await linkKnowledgeCategory(name, catIds[0], "confirmed", ctx, db);
   // 벡터검색(#172)을 쓰기 경로에서 분리(#1053) — 저장은 즉시 반환하고, 임베딩은 백그라운드 스윕이 배치로 채운다.
   //  신규 행은 embedding_vector 가 NULL(=pending)이라 그대로 스윕 대상. 수정은 임베딩 입력 텍스트(제목+요약+본문)가
   //  '실제로 바뀐' 경우에만 벡터를 비워 pending 으로 되돌린다 — 무변경·facet-only(is_wiki·sort 등) 재저장엔 헛임베딩·
@@ -479,11 +510,15 @@ export async function upsertKnowledge(
   const oldEmbedText = before
     ? embeddingInputText({ title: before.title as string | null, summary: before.summary as string | null, body_md: before.body_md as string | null })
     : "";
-  if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
   // #907 본문 [[…]] → 자동 엣지. 스토어 층에 두는 이유: 리비전 승인(knowledge-revision-store)·undo 등 **모든 upsert
   //  writer** 가 본문을 바꾸면 엣지도 따라가야 한다(capability 에만 두면 그 경로들이 조용히 어긋난다).
   //  미매칭은 예외가 아니라 경고다 — 호출부가 응답에 실어 붕 뜬 링크를 알린다(#907 목표2).
-  const wikilinks = await materializeWikiLinksBestEffort(name, input.body_md);
+  const post = async (): Promise<WikiLinkResult | undefined> => {
+    if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
+    return materializeWikiLinksBestEffort(name, input.body_md);
+  };
+  if (opts.deferPost) return { ...after, post };
+  const wikilinks = await post();
   return wikilinks ? { ...after, wikilinks } : after;
 }
 
@@ -585,17 +620,26 @@ export async function moveKnowledge(name: string, parentName: string | null, sor
 //   **아무 grant 도 없는 사람(PUBLIC_VIEWER)에게 그 리스트가 보이나** 로 판정한다 — 스페이스 상속(폴더 체인)까지
 //   자동으로 반영되고, 상속 규칙 사본을 여기 또 만들지 않는다.
 //  실패는 비치명(open 유지): 세션↔프로젝트 바인딩은 부가 정보라, 못 찾았다고 저장을 깨뜨리지 않는다.
+/** 이 세션이 잠긴 리스트의 프로젝트에 붙어 있으면 그 리스트 id(스탬프할 자리), 아니면 null — 읽기만 한다.
+ *  #4824 증류 저장(신규 + derived_from)이 INSERT 전에 공개범위를 정할 때도 같은 판정을 쓴다(규칙 사본을 두지 않는다). */
+export async function sessionStampListId(sessionId?: string | null): Promise<number | null> {
+  if (!sessionId) return null;
+  // 세션→프로젝트는 session_project(타임라인 귀속과 같은 소스)로 본다. 바인딩이 없으면 프로젝트 세션이 아니다.
+  const { latestProjectForSession } = await import("./project-store.js");
+  const proj = await latestProjectForSession(String(sessionId));
+  if (!proj) return null;
+  const listId = await projectRowListId(proj.id);
+  if (listId == null) return null;                       // 미분류 프로젝트 = 전원 열람 = 잠금 아님
+  const openIds = await visibleListIds(PUBLIC_VIEWER);
+  if (openIds === null || openIds.has(listId)) return null;   // 열린 리스트 — 종전대로 open
+  return listId;
+}
+
 export async function stampSessionVisibility(name: string, sessionId?: string | null, ctx?: WriteCtx): Promise<number | null> {
   if (!name || !sessionId) return null;
   try {
-    // 세션→프로젝트는 session_project(타임라인 귀속과 같은 소스)로 본다. 바인딩이 없으면 프로젝트 세션이 아니다.
-    const { latestProjectForSession } = await import("./project-store.js");
-    const proj = await latestProjectForSession(String(sessionId));
-    if (!proj) return null;
-    const listId = await projectRowListId(proj.id);
-    if (listId == null) return null;                       // 미분류 프로젝트 = 전원 열람 = 잠금 아님
-    const openIds = await visibleListIds(PUBLIC_VIEWER);
-    if (openIds === null || openIds.has(listId)) return null;   // 열린 리스트 — 종전대로 open
+    const listId = await sessionStampListId(sessionId);
+    if (listId == null) return null;
     await itemsPool.query(
       `INSERT INTO knowledge_list_grant(name, list_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [name, listId]);
     await itemsPool.query(`UPDATE knowledge SET visibility='members' WHERE name=$1`, [name]);
@@ -638,14 +682,14 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
 //  #1563: 그래서 **지우기 전에 기존 매핑을 읽어 before 에 싣는다.** 안 읽으면 감사에 '무엇에서 무엇으로'가
 //   없어 두 곳이 동시에 반쪽이 된다 — 이력 화면은 분류 변경을 '분류 지정'이라고만 쓸 수 있고,
 //   Cmd+Z(#702)는 아예 이 op 을 되돌릴 수 없다(그 한계 때문에 undo 행렬에서 제외돼 있었다).
-export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
+export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx, db: Db = itemsPool): Promise<void> {
   // single_uq 로 name 당 1행이지만 ORDER BY 로 결정적으로 고른다(이행기 다중 잔존 대비 — 비결정 스냅샷은 되돌리기를 복불복으로 만든다).
-  const prev = await one(itemsPool,
+  const prev = await one(db,
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
     [name]) as { category_id: number; state: string; mapped_by: string } | undefined;
   // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
-  await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
-  await itemsPool.query(
+  await db.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
+  await db.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, state, created_at)
      VALUES($1,$2,'manual',$3,now())
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state`,
@@ -656,7 +700,7 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
   if (prev && Number(prev.category_id) === categoryId && prev.state === state) return;
   await auditKnowledge(name, "link_category",
     prev ? { category_id: Number(prev.category_id), state: prev.state, mapped_by: prev.mapped_by } : null,
-    { category_id: categoryId, state }, ctx);
+    { category_id: categoryId, state }, ctx, db);
 }
 
 export async function unlinkKnowledgeCategory(name: string, categoryId: number, ctx?: WriteCtx): Promise<void> {

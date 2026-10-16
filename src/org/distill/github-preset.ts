@@ -48,7 +48,7 @@ export const GITHUB_CRITERIA_MD = `## 판단 단위 — 이슈/PR 하나가 한 
 ## 중복 방지 규약
 - 저장 전 knowledge_similar 로 확인한다. 같은 사건·같은 규칙이 있으면 **그 지식을 같은 name 으로 갱신**한다(knowledge_save mode='edit').
 - 같은 저장소의 같은 번호(fields.number)는 한 사건이다 — 댓글이 더 달리면 기존 지식을 갱신한다.
-- 자료 링크 없는 지식을 만들지 마라. 만든 지식마다 source_link_knowledge(derived_from) 를 건다.
+- 자료 링크 없는 지식을 만들지 마라. 지식은 knowledge_save 에 derived_from:[이 지식이 나온 자료 id 전부] 를 실어 저장한다(저장과 자료 연결이 한 번에 된다).
 - 배치를 서브에이전트로 쪼개지 마라.
 `;
 

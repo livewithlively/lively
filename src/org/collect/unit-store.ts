@@ -22,6 +22,7 @@ import { mirrorSourceV6 } from "../../v6/mirror/mirror-source.js";
 import { pickRule, sourceVisRules, type ResolvedSourceVis, type SourceVisRule } from "../../v6/source-vis-policy.js";
 import { axisOn } from "../../v6/visibility-axes.js";
 import { auditOrgContent, type WriteCtx } from "../../v6/content-audit.js";
+import { reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
 import { failReason } from "../store/run-fail-reason.js";
 import { dueSinceMs, effectiveIntervalSec, isUnitDue, isUnitSoon } from "./schedule-plan.js";
 import { currentTenant } from "../tenant-context.js";
@@ -443,11 +444,14 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
     for (const r of t.rows as any[]) teamMembers.set(String(r.team_id), (teamMembers.get(String(r.team_id)) ?? new Set()).add(String(r.member_id)));
   }
   let changed = 0;
+  const touched: number[] = [];
   for (const g of groups.values()) {
     const want = computeAudience({ units: g.units, teamMembers });
     const wantKey = want.members.map((m) => `member:${m}`).join("\u0001");
-    for (let i = 0; i < g.sources.length; i += AUDIENCE_BATCH) {
-      const chunk = g.sources.slice(i, i + AUDIENCE_BATCH);
+    //  id 순 — 아래에서 자료 행을 id 순으로 먼저 잡는다(연결이 자료를 id 순 FOR SHARE 로 잡으므로 순서가 엇갈리면 교착 · #4824).
+    const sorted = [...g.sources].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i += AUDIENCE_BATCH) {
+      const chunk = sorted.slice(i, i + AUDIENCE_BATCH);
       //  ④ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
       const cur = await q.query(
         `SELECT s.id, s.visibility,
@@ -458,8 +462,10 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
       const same = (r: any): boolean => want.open
         ? r.visibility === "open" && String(r.aud) === ""
         : r.visibility === "members" && String(r.aud) === wantKey;
-      const todo = (cur.rows as any[]).filter((r) => !same(r)).map((r) => Number(r.id));
+      const todo = (cur.rows as any[]).filter((r) => !same(r)).map((r) => Number(r.id)).sort((a, b) => a - b);
       if (!todo.length) continue;
+      //  자료 행을 id 순으로 먼저 잡는다 — 여러 행 UPDATE 는 실행 계획 순으로 잠가 순서가 정해지지 않는다.
+      await q.query(`SELECT id FROM source WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE`, [todo]);
       //  모두(open) — 잠금을 풀고 대상을 지운다. 그 밖 — 잠그고 대상을 갈아 끼운다.
       await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [todo, want.open ? "open" : "members"]);
       await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [todo]);
@@ -470,8 +476,20 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
            ON CONFLICT DO NOTHING`, [todo, want.members]);
       }
       changed += todo.length;
+      //  열린 쪽으로 바뀐 자료는 맞출 것이 없다(지식은 넓히지 않는다). 잠긴 쪽은 좁아졌든 넓어졌든 넘긴다 — 맞추기는 멱등이고
+      //   이미 맞은 지식은 읽기만 한다. 넓어진 판도 넘기는 까닭: 정책을 못 읽어 닫혔던 자료가 돌아오는 판이 곧 «진짜 대상» 을
+      //   처음 정하는 판이라, 거기서 안 맞추면 그 사이 좁아진 것이 지식에 영영 안 닿는다.
+      if (!want.open) touched.push(...todo);
     }
   }
+  //  #4824 빈틈 ③ — 자료가 좁혀졌으면 그 자료로 이미 만든 지식(derived_from)도 **같은 트랜잭션에서** 같은 범위로 맞춘다.
+  //   종전엔 상속이 연결 때 한 번뿐이라 단위를 «모두» → «나만» 으로 바꿔도 지식은 공개로 남았다(T10 격리 리뷰 N2).
+  //   좁히기만 한다 — 자료를 넓혀도(모두로) 지식은 그대로다. 잠금 순서: 단위 → 자료(위) → 지식(여기).
+  //  ⚠ 정책을 못 읽어 닫는 쪽(대상 0)으로 맞춘 판에서는 지식을 맞추지 않는다 — 자료는 정책이 돌아오면 다시 맞춰지지만
+  //   지식은 넓히지 않으므로, 순간 장애가 그 자료로 만든 지식 전부를 영구히 닫게 된다(격리 검토). 이 판의 지식은 그대로 두고,
+  //   정책이 돌아온 뒤 자료가 실제로 좁아지는 판에서 맞춘다.
+  if (touched.length && rules) await reconcileDerivedVisibility(q, { sourceIds: touched }, undefined, "source_narrowed");
+  else if (touched.length) logger.warn({ n: touched.length }, "[collect-unit] 정책을 못 읽은 판 — 그 자료로 만든 지식은 이번엔 맞추지 않는다(정책이 돌아온 판에서 맞춘다)");
   return changed;
 }
 
@@ -1092,7 +1110,8 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     if (visChanged) {
       await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`, [id, next, next === "me" ? actor.member : null]);
       //  이미 모은 자료도 새 공개범위로 — 같은 트랜잭션이라 좁힌 순간 빠진 사람이 계속 보는 틈이 없다.
-      //  ⚠ 이미 증류한 지식은 따라 좁혀지지 않는다(상속은 원본 연결 때 한 번 — T14 #4824).
+      //  그 자료로 이미 증류한 지식도 같은 트랜잭션에서 좁혀진다(applySourceAudience → reconcileDerivedVisibility · #4824).
+      //  넓히기(모두로)는 지식에 따라가지 않는다 — 지식 넓히기는 사람 몫이다.
       await syncUnitAudience(client, [id]);
     }
     await client.query("COMMIT");

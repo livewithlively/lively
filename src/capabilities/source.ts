@@ -9,6 +9,7 @@ import { listSources, countSources, getSource, upsertSource, deleteSource, listU
 import { SOURCE_GROUP_FILTERS } from "../v6/source-group.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
+import { distillBatchOf } from "../v6/derived-visibility.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 휴지통 목록의 «내 개인 폴더» 판정(#3778)
@@ -159,7 +160,11 @@ type SourceLinkKnowledgeInput = z.infer<z.ZodObject<typeof sourceLinkKnowledgeIn
 const sourceLinkKnowledge: Capability = {
   name: "source_link_knowledge",
   title: "자료↔지식 인용",
-  description: "지식이 어느 자료에서 파생됐는지 잇는다(derived_from=증류 | cites=참조). 또는 unlink=true 로 해제. 카파시 source→wiki citation.",
+  description: "지식이 어느 자료에서 파생됐는지 잇는다(derived_from=증류 | cites=참조). 또는 unlink=true 로 해제. 카파시 source→wiki citation. "
+    + "**증류(새 지식 저장)는 이 도구 대신 knowledge_save 의 derived_from 에 자료 id 를 실어라** — 저장과 연결이 한 번에 돼 연결을 빠뜨릴 수 없다(#4824). "
+    + "derived_from 으로 잠긴 자료(볼 수 있는 사람만)를 이으면 지식도 그 사람들만 보게 된다 — **이미 더 넓게 보이던 지식이면 지금 보던 사람이 못 보게 된다**(내용이 이미 들어갔을 수 있어 닫는 쪽으로 좁힌다 · 응답의 visibility.narrowed). "
+    + "그러니 잠긴 자료의 내용을 기존 지식에 합치지 말고 새 지식으로 따로 써라 — knowledge_save(derived_from) 로 저장하면 내용을 쓰기 전에 서버가 판정해 막아 준다. "
+    + "증류 배치는 이번 판에 고치지 않은 지식에 잠긴 자료를 이을 수 없다(409). 단순 참고라면 relation=cites(공개범위를 안 바꾼다) — 다만 잠긴 자료를 더 넓게 보이는 지식에서 cites 로 잇는 것도 거절된다(409).",
   scope: "memory",
   input: sourceLinkKnowledgeInput,
   expose: {
@@ -186,11 +191,19 @@ const sourceLinkKnowledge: Capability = {
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     if (input.unlink) { await unlinkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx); return { unlinked: true }; }
-    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx);
+    //  #4824 — derived_from 은 연결·판정·맞추기가 한 트랜잭션이다. 단독 연결은 좁힌다(닫히는 쪽) — 증류 배치는 그 판에 쓴
+    //   지식만 좁힐 수 있다(아니면 409, HttpError 그대로 나간다). 잠긴 자료로의 cites 는 더 넓은 지식에서 409.
+    const batch = input.relation === "derived_from" ? await distillBatchOf(ctx?.session) : null;
+    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx, { batchSince: batch?.since ?? null });
     //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 그 사실을 **응답에 실어** 알린다(막지는 않는다).
     //   증류 세션이 그 자리에서 «합칠까 그대로 둘까» 를 정할 수 있어야 중복이 조용히 쌓이지 않는다.
-    const dupNote = (r as { dupNote?: string | null } | null)?.dupNote ?? null;
-    return dupNote ? { linked: true, warning: dupNote } : { linked: true };
+    const visibility = r.derived?.changed
+      ? { visibility: {
+          level: r.derived.visibility, audience: r.derived.audience, ...(r.derived.empty ? { empty: true } : {}),
+          ...(r.derived.narrowed ? { narrowed: true, note: "잠긴 자료의 파생이라 이 지식을 그 자료를 볼 수 있는 사람만 보도록 좁혔습니다 — 지금까지 보던 사람 일부가 못 보게 됐습니다. 잠긴 자료의 내용은 다음부터 knowledge_save(derived_from) 로 새 지식에 따로 쓰세요." } : {}),
+        } }
+      : {};
+    return r.dupNote ? { linked: true, ...visibility, warning: r.dupNote } : { linked: true, ...visibility };
   },
 };
 

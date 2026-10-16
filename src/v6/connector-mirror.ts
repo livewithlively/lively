@@ -47,6 +47,8 @@ import { mirrorKnowledgeByNameV6, mirrorKnowledgeV6 } from "./mirror/mirror-know
 import { mirrorPmCommentV6, mirrorPmFolderV6, mirrorPmListV6, mirrorPmTimeV6, mirrorPmViewV6 } from "./mirror/mirror-pm.js";
 import { mirrorProjectV6 } from "./mirror/mirror-project.js";
 import { mirrorSourceV6 } from "./mirror/mirror-source.js";
+import { reconcileDerivedVisibility } from "./derived-visibility.js";
+import { normalizeExternalInstance } from "../org/ingest/external-identity.js";
 
 // ── 재수출 배럴(#1313 R20) — 축별 모듈로 해체했으나 **외부 표면은 byte 불변**이다. 소비자(run-sync·items/store·
 //  list-store·delivery·notion 커넥터·R7 테스트)는 종전대로 connector-mirror.js 만 import 한다.
@@ -277,6 +279,15 @@ export async function mirrorExternalToV6(
           ? await mirrorKnowledgeByNameV6(client, it, system, externalId)
           : await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
         ok = ok || kOk;
+        //  #4824 — 원문이 잠긴 자료면(정책 도장) 같은 원문의 지식 사본도 그 자료를 볼 수 있는 사람만 본다 — 같은 트랜잭션에서
+        //   사본을 derived_from 으로 잇고 맞춘다(종전엔 사본이 연결 없이 공개로 남았다). 열린 자료면 아무것도 안 한다.
+        if (system !== "domain-wiki") {
+          const src = await client.query(
+            `SELECT id FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND visibility='members'`,
+            [system, normalizeExternalInstance(it.provenance.instance), externalId]);
+          const sid = Number(src.rows[0]?.id);
+          if (Number.isInteger(sid) && sid > 0) await reconcileDerivedVisibility(client, { sourceIds: [sid] }, undefined, "mirror_copy");
+        }
       }
     }
     else if (target === "pm_folder") ok = await mirrorPmFolderV6(client, it, system, externalId);

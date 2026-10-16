@@ -10,7 +10,8 @@
 import { z } from "zod";
 import { HttpError } from "../../http-error.js";
 import type { Capability } from "../../capabilities/types.js";
-import { itemsPool } from "../../db/client.js";
+import { itemsPool, withTx } from "../../db/client.js";
+import { reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../../v6/source-vis-policy.js";
@@ -258,7 +259,7 @@ const backfill: Capability = {
         WHERE external_system = ANY($1::text[])
         ORDER BY id DESC LIMIT $2`, [systems, limit]);
 
-    let toLock = 0, already = 0, noRule = 0;
+    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0;
     const samples: string[] = [];
     for (const r of rows as any[]) {
       const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
@@ -266,11 +267,19 @@ const backfill: Capability = {
       if (r.visibility === "members") { already++; continue; }
       toLock++;
       if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}`.trim());
-      if (!dry) await applyVisibility(itemsPool as any, Number(r.id), picked.members);
+      //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
+      //   종전엔 자료만 잠기고 그 자료로 증류한 지식은 공개로 남았다(상속이 연결 때 한 번뿐이었다).
+      if (!dry) {
+        knowledgeNarrowed += await withTx(async (c) => {
+          await applyVisibility(c, Number(r.id), picked.members);
+          return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, undefined, "policy_backfill")).length;
+        });
+      }
     }
     return {
       dry_run: dry, scanned: rows.length, systems,
       locked: toLock, already_locked: already, no_rule: noRule, samples,
+      ...(dry ? {} : { knowledge_narrowed: knowledgeNarrowed }),
       note: dry ? "미리보기입니다 — 실제로 적용하려면 dry_run:false 로 다시 부르세요." : undefined,
     };
   },

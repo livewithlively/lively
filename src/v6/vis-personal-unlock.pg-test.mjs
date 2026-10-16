@@ -20,8 +20,10 @@ const MEMBER = `${TAG}_up`;
 
 async function cleanup() {
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${TAG}%`]);
+  await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM source WHERE external_id LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE note LIKE $1`, [`${TAG}%`]);
+  await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
 }
 
 /** 잠긴 자료 1건(대상=MEMBER). system·root 를 바꿔 가며 «자동 잠금이 만든 행» 과 그 밖을 만든다. */
@@ -65,6 +67,16 @@ try {
   await mkLockedKnowledge("k-mixed", [[sPersonal, "derived_from"], [sSlack, "derived_from"]]); // 슬랙이 남는다 → 잠김
   await mkLockedKnowledge("k-none", []);                                        // 근거 없음 → 상속 산물이 아니다
   await mkLockedKnowledge("k-cites", [[sPersonal, "cites"]]);                    // 참조뿐 → 상속 산물이 아니다
+  //  #4824 — 비공개 프로젝트 지식(리스트 grant)은 근거가 다 열려도 열지 않는다(잠금이 근거가 아니라 프로젝트에서 왔다).
+  const L = (await itemsPool.query(`INSERT INTO project_list(name, visibility) VALUES($1,'members') RETURNING id`, [`${TAG}list`])).rows[0].id;
+  await mkLockedKnowledge("k-listed", [[sPersonal, "derived_from"]]);
+  await itemsPool.query(`INSERT INTO knowledge_list_grant(name, list_id) VALUES($1,$2)`, [`${TAG}k-listed`, L]);
+  //  #4824 — 다른 근거(지금은 지워진 잠긴 자료 #99999…)로 잠갔던 기록이 있는 지식도 열지 않는다(그 내용이 본문에 남아 있다).
+  await mkLockedKnowledge("k-audited", [[sPersonal, "derived_from"]]);
+  await itemsPool.query(
+    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source)
+     VALUES('knowledge', $1, 'set_visibility', '{"visibility":"open"}'::jsonb, '{"visibility":"members","via_source":999999999}'::jsonb, NULL, NULL)`,
+    [`${TAG}k-audited`]);
 
   const r1 = await reconcilePersonalUploadVisibility();
 
@@ -81,6 +93,9 @@ try {
     "슬랙 근거가 남았는데 지식을 열었다 — 유출");
   chk("K3 근거 없는 지식은 건드리지 않는다(상속 산물이 아니다)", await visOf("knowledge", "name", `${TAG}k-none`) === "members");
   chk("K4 cites(참조)뿐인 지식은 건드리지 않는다", await visOf("knowledge", "name", `${TAG}k-cites`) === "members");
+  chk("K5 ★리스트 grant(비공개 프로젝트) 지식은 근거가 다 열려도 열지 않는다(#4824)", await visOf("knowledge", "name", `${TAG}k-listed`) === "members",
+    "프로젝트 지식이 부팅 때 전원 공개로 열렸다 — 유출");
+  chk("K6 ★다른 근거로 잠갔던 기록이 있으면 열지 않는다(#4824 — 지워진 잠긴 근거의 내용)", await visOf("knowledge", "name", `${TAG}k-audited`) === "members");
 
   chk("C1 집계가 실제 변경분과 맞다", r1.sources === 1 && r1.knowledge === 1, JSON.stringify(r1));
 
@@ -89,6 +104,21 @@ try {
   chk("I1 두 번째 실행은 아무것도 바꾸지 않는다", r2.sources === 0 && r2.knowledge === 0, JSON.stringify(r2));
   chk("I2 두 번째 실행이 남은 잠금을 풀지 않는다",
     await visOf("source", "id", sSlack) === "members" && await visOf("knowledge", "name", `${TAG}k-mixed`) === "members");
+  //  #4824 — 이번 실행이 연 자료가 없으면 지식도 안 연다: 근거가 «지금» 다 열려 있다는 것만으로는 열지 않는다.
+  const sOpenLater = (await itemsPool.query(
+    `INSERT INTO source(kind, title, body_md, fields, provenance, external_system, external_instance, external_id, visibility)
+     VALUES('local_file', 'later', 'body', '{"root":"personal"}'::jsonb, 'observed', 'local', 'default', $1, 'open') RETURNING id`, [`${TAG}later`])).rows[0].id;
+  await mkLockedKnowledge("k-steady", [[Number(sOpenLater), "derived_from"]]);
+  const r2b = await reconcilePersonalUploadVisibility();
+  chk("I3 ★연 자료가 없는 실행은 지식을 열지 않는다(근거가 이미 열려 있어도 — #4824)",
+    r2b.knowledge === 0 && await visOf("knowledge", "name", `${TAG}k-steady`) === "members", JSON.stringify(r2b));
+  //  I4 — 이번 실행이 **다른** 자료를 열 때도, 이번에 연 자료에 이어지지 않은 지식은 그대로다(술어가 실제로 거르는 장면).
+  const sPersonal3 = await mkLockedSource("personal3", "local", "personal");
+  await mkLockedKnowledge("k-new", [[sPersonal3, "derived_from"]]);
+  const r2c = await reconcilePersonalUploadVisibility();
+  chk("I4 ★이번에 연 자료에 이어진 지식만 연다 — 이미 열려 있던 근거뿐인 지식은 그대로(#4824)",
+    r2c.sources === 1 && await visOf("knowledge", "name", `${TAG}k-new`) === "open" && await visOf("knowledge", "name", `${TAG}k-steady`) === "members",
+    JSON.stringify({ r2c, kNew: await visOf("knowledge", "name", `${TAG}k-new`), kSteady: await visOf("knowledge", "name", `${TAG}k-steady`) }));
 
   // ── 라운드 3: 로컬 대상 정책이 생기면 손을 뗀다(사람이 정한 잠금을 되돌리지 않는다) ──
   const sPersonal2 = await mkLockedSource("personal2", "local", "personal");

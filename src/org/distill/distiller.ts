@@ -13,7 +13,7 @@
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
 import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
-import { sourceVisSql, resolveSourceViewer, S_LIST_SEL } from "../../v6/source-store.js";
+import { sourceVisSql, resolveSourceViewer, S_LIST_SEL, AUD_KEY_SQL } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 import { isAutoDisabledLane } from "./lanes.js";
 
@@ -250,7 +250,24 @@ export const threadIdSql = (alias = "s"): string => {
 // ⚠ body_md 를 포함한다 — 배치 프롬프트에 본문을 동봉하기 위해서다(buildSourceDigest). 빼면 에이전트가
 //  서버가 이미 쥔 것을 source_get 으로 다시 조회하고, 실측에선 인자를 틀려 19건 전부 실패 후 재시도했다.
 const INBOX_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url,
-  s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.body_md`;
+  s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.body_md, s.visibility, ${AUD_KEY_SQL} AS aud_key`;
+
+/** 자료 한 건의 «볼 수 있는 사람» 묶음 열쇠 — 열린 자료는 모두 한 묶음, 잠긴 자료는 대상이 같으면 한 묶음. */
+export function audienceGroupKey(r: Record<string, unknown>): string {
+  return String(r.visibility ?? "") === "members" ? `locked:${String(r.aud_key ?? "")}` : "open";
+}
+
+/**
+ * #4824 — 배치 하나에는 **볼 수 있는 사람이 같은 자료만** 담는다(첫 행의 묶음). 나머지는 판정 기록 없이 다음 배치로 간다.
+ *  왜: 대상이 다른 자료가 한 배치에 섞이면, 모델이 derived_from 에 잠긴 자료 id 를 빠뜨리기만 해도 그 내용이 공개 지식으로
+ *   나간다(서버는 무엇을 읽고 썼는지 모른다 — 선언된 derived_from 만 안다). 한 배치가 한 묶음이면 빠뜨려도 같은 대상 안이다.
+ *  첫 묶음이 처리되면 인박스에서 빠지므로 다음 배치가 다른 묶음을 받는다(굶지 않는다).
+ */
+export function oneAudienceGroup<T extends Record<string, unknown>>(rows: T[]): T[] {
+  if (rows.length < 2) return rows;
+  const k = audienceGroupKey(rows[0]);
+  return rows.filter((r) => audienceGroupKey(r) === k);
+}
 
 // 이 증류기가 **아직 판정하지 않은** 자료만 남기는 술어 — 증류됨(knowledge_source) + 이미 봄(org_distiller_seen) 둘 다 제외.
 //  ⚠ 'seen' 이 없으면 skip 한 자료가 매 배치 다시 올라온다(실측 64% 재독, 전량 skip 시 진행 0). 증류 성공분은
@@ -316,7 +333,7 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
        SELECT _ch, _tid FROM ranked
        WHERE rn <= ${p.add(nThreads)} AND (cum <= ${p.add(maxMsgs)} OR rn = 1))
      SELECT c.id, c.name, c.kind, c.title, c.provenance, c.external_system, c.external_url,
-            c.occurred_at, c.updated_at, c.fields, c.parent_external_id, c.body_md
+            c.occurred_at, c.updated_at, c.fields, c.parent_external_id, c.body_md, c.visibility, c.aud_key
      FROM cand c JOIN picked pk ON pk._ch = c._ch AND pk._tid = c._tid
      ORDER BY c._tid, COALESCE(c.occurred_at, c.updated_at)`;
   return { sql, values: p.values };
@@ -378,7 +395,7 @@ export function buildStrandedQuery(enabled: DistillerRow[], viewer: string | nul
   const where = strandedWhereSql(enabled, p, viewer);
   const lim = p.add(Math.min(limit, 500));
   return {
-    sql: `SELECT ${S_LIST_SEL} FROM source s
+    sql: `SELECT ${S_LIST_SEL}, ${AUD_KEY_SQL} AS aud_key FROM source s
      WHERE ${where}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${lim}`,
     values: p.values,
@@ -931,11 +948,12 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   const who = s(f.author_name);
   const ch = s(f.container_name);
   const tid = s(f.thread_ts ?? f.ts);
-  // #1881 — 개인 폴더에서 올라온 자료는 **올린 사람만 보는 자료**다. 이걸 안 알려주면 증류기가 그 내용을
-  //  조직 공개 지식에 합치고, derived_from 상속(단조 축소)이 그 공개 문서를 올린 사람 전용으로 잠근다(실측 위험).
-  //  fields.root 는 로컬 업로드 자료만 갖는 값이라 다른 커넥터의 digest 는 종전 그대로다.
-  const priv = s(f.root) === "personal" ? "개인 폴더(올린 사람만 봄)" : "";
-  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, tid && `thread=${tid}`].filter(Boolean).join(" · ");
+  // #4824 — 잠긴 자료(볼 수 있는 사람만)는 머리줄에 그 사실을 단다. 안 알려주면 증류기가 그 내용을 더 넓게 보이는
+  //  기존 지식에 합치려 한다(서버가 거절하지만, 미리 알아야 처음부터 새 지식으로 따로 쓴다). 판정은 자료의 공개범위 하나다 —
+  //  #1881 의 «개인 폴더(올린 사람만 봄)» 는 #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 사실이 아니어서 자리만 남긴다.
+  const lock = s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
+  const priv = s(f.root) === "personal" ? "개인 폴더" : "";
+  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
   const truncated = raw.length > DIGEST_PER_SOURCE;
   return {
@@ -997,7 +1015,7 @@ export function buildThreadKnowledgeBlock(kn: Record<string, unknown>[]): string
     `[이 스레드의 자료가 이미 지식에 연결돼 있다 — 새로 만들지 말고 그것을 갱신해라]`,
     `아래 지식에는 이번 대상 자료와 **같은 스레드**의 자료가 근거(derived_from)로 이미 연결돼 있다.`
       + ` 이번 자료는 그 논의의 후속(답글·정정·적용보고)이므로 **새 지식을 만들면 파편화된다.**`
-      + ` knowledge_save 를 같은 name 으로 불러 본문을 보강하고, 이번 자료를 source_link_knowledge 로 연결해라.`,
+      + ` knowledge_save 를 같은 name 으로 불러 본문을 보강하고, 이번 자료 id 를 derived_from 에 실어라(저장과 연결이 한 번에 된다).`,
     `⚠ 그 지식이 **이 스레드에서 만들어졌다는 뜻은 아니다** — 근거의 대부분이 다른 채널·다른 스레드의 논의이거나,`
       + ` 사람이 다른 자료로 손수 쓴 문서일 수 있다. 그러니 기존 본문을 갈아엎지 말고 **덧붙여라.**`,
     ...lines, ...more,
@@ -1100,7 +1118,7 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
       if (!d.thread_aware) return "";
       return ["[스레드는 한 덩어리로]",
         "위 본문은 스레드 순서(thread= 값·시각)로 정렬돼 있다 — 같은 thread 는 묶어 **스레드 단위로 하나의 지식**을 만든다. "
-        + "그 스레드에 속한 자료 전부를 source_link_knowledge 로 그 지식에 연결해라(한 건만 연결하면 나머지가 미증류로 남아 다음 배치에 또 올라온다). "
+        + "그 스레드에 속한 자료 id 전부를 그 지식의 knowledge_save derived_from 에 실어라(한 건만 실으면 나머지가 미증류로 남아 다음 배치에 또 올라온다). "
         + "대상 id 목록에 같은 스레드의 메시지가 여러 개 있으면 묶어서 한 번만 증류한다."].join("\n");
     case "procedure":
       return ["[절차]",
@@ -1109,10 +1127,12 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
         + "스텁의 filename·mime·channel 로 볼 가치부터 판단하고(밈·UI캡처 등 노이즈면 fetch 없이 skip), 가치 있으면 "
         + "source_artifact(source_id)로 원본을 받아 그 path 를 Read 해 내용을 확보한다(unavailable=삭제/이동이면 skip).",
         "② 위 기준에 걸리면 knowledge_similar 로 중복을 먼저 확인한다 — 이미 있으면 새로 만들지 말고 그 지식을 갱신한다.",
-        "③ knowledge_save 로 저장(위 형식 규칙대로) → source_link_knowledge(지식 name, source_id, relation=derived_from)로 자료↔지식을 연결한다.",
+        "③ knowledge_save 로 저장한다(위 형식 규칙대로) — **derived_from: [이 지식이 나온 자료 id 전부]** 를 꼭 실어라. 저장과 자료↔지식 연결을 서버가 한 번에 한다"
+        + "(source_link_knowledge 를 따로 부르지 마라 — 이 배치에서 derived_from 없는 저장은 거절된다). "
+        + "머리줄에 «잠김(볼 수 있는 사람만 봄)» 이 붙은 자료는 그 자료를 볼 수 있는 사람만 보는 지식이 된다 — 그 내용을 잠기지 않은(더 넓게 보이는) 기존 지식에 합치지 말고 새 지식으로 따로 써라(합치려 하면 서버가 409 로 거절한다).",
         `④ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정한다. ${o.policySummary} `
         + "lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리된다(승인 전엔 검색·주입에 안 뜸). drop 이면 저장하지 않는다(skip).",
-        "⑤ 기준에 안 걸리면 skip 한다(source_link 를 만들지 마 — 다음 배치에 다시 올라온다).",
+        "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마 — 다음 배치에 다시 올라온다).",
       ].join("\n");
   }
 }

@@ -65,6 +65,11 @@ export const SOURCE_CATEGORIES_SQL = `COALESCE((
        JOIN category c ON c.id = kc.category_id AND c.state <> 'merged'
       WHERE ks.source_id = s.id), '[]'::jsonb)`;
 
+// #4824 — 잠긴 자료의 «볼 수 있는 사람» 열쇠(같은 대상이면 같은 값 · 열린 자료는 NULL). 증류 배치를 같은 대상끼리 묶는 데 쓴다
+//  (org/distill/distiller.ts oneAudienceGroup). 's' 별칭 기준.
+export const AUD_KEY_SQL = `CASE WHEN s.visibility = 'members' THEN COALESCE((SELECT string_agg(sm.subject_kind || ':' || sm.member_id, ','
+    ORDER BY sm.subject_kind, sm.member_id) FROM source_member sm WHERE sm.source_id = s.id), '') END`;
+
 export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
    EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge,
    ${SOURCE_CATEGORIES_SQL} AS categories`;
@@ -332,7 +337,7 @@ export async function listUndistilledSources(limit = 50, viewer?: Viewer): Promi
   const params: unknown[] = [Math.min(limit, 500)];
   const vis = await sourceVisWhere(viewer, params);
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL} FROM source s
+    `SELECT ${S_LIST_SEL}, ${AUD_KEY_SQL} AS aud_key FROM source s
      WHERE s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
        AND ${vis}
