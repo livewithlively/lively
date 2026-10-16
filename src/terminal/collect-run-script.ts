@@ -214,16 +214,18 @@ let job = null, child = null, timedOut = false, finished = false;
 const info = { version: null, flags: {}, servers: [], connectors: [], allowed: [], missing: [], denied: [], attempts: 0, loadMisses: [], account: null };
 //  이 홈의 Claude 로그인이 어느 계정인가 — 커넥터는 계정에 붙으므로(웹에서 연결한 계정과 다르면 여기서는 안 보인다) 그 계정을 남긴다.
 //   메일은 앞 두 글자와 도메인만 · 조직 이름 · 계정 종류(개인 구독/팀). 자격(토큰)은 다른 파일이라 읽지 않는다.
+//   개인 구독의 조직 이름은 «<메일>'s Organization» 이라(매니지드 실측) 조직 이름 안의 메일도 같은 모양으로 가린다.
+const maskMail = (e) => { const at = e.indexOf("@"); return at > 0 ? e.slice(0, Math.min(2, at)) + "***" + e.slice(at) : "***"; };
 function readAccount() {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join((job && job.home) || process.env.HOME || "", ".claude.json"), "utf8"));
     const a = cfg && cfg.oauthAccount;
     if (!a || typeof a !== "object") return null;
     const e = typeof a.emailAddress === "string" ? a.emailAddress : "";
-    const at = e.indexOf("@");
     const s = (v, n) => (typeof v === "string" && v ? v.slice(0, n) : null);
-    return { email: e ? (at > 0 ? e.slice(0, Math.min(2, at)) + "***" + e.slice(at) : "***") : null,
-      org: s(a.organizationName, 80), orgType: s(a.organizationType, 40), billing: s(a.billingType, 40), role: s(a.organizationRole, 40) };
+    const org = typeof a.organizationName === "string" ? a.organizationName.replace(/[^\s@'"\u2019]+@[^\s@'"\u2019]+/g, maskMail) : null;
+    return { email: e ? maskMail(e) : null,
+      org: s(org, 80), orgType: s(a.organizationType, 40), billing: s(a.billingType, 40), role: s(a.organizationRole, 40) };
   } catch (_) { return null; }
 }
 //  커넥터가 안 뜬 판을 몇 번까지 다시 띄우나 · 시작 알림(init)을 얼마나 기다리나.
