@@ -143,21 +143,50 @@ process.stdin.on("data", (c) => { buf += c; }).on("end", () => {
  * PostToolUse 원문 받기 — `node cap.cjs <폴더>`. 커넥터 결과를 **고치지 않고** `cap/<n>.json` 에 남기고, 목록 한 줄을
  *  `caps.jsonl` 에 더한다(게이트웨이는 목록만 읽고, 원문은 저장 단계가 읽는다). 실패해도 0 으로 끝낸다 — 받기 실패가
  *  수집 자체를 막지는 않는다(목록에 error 줄이 남는다).
+ *  · 상한을 넘는 결과는 Claude Code 가 파일(`~/.claude/projects/<폴더>/<세션>/tool-results/*.txt`)에 저장하고 훅에도 모델에도
+ *    **안내문 문자열만** 넘긴다(매니지드 실측 2026-10-16: 원문 114,934자 → 안내문 1,490자). 그때는 그 파일을 읽어 원문으로 남긴다.
+ *  · ⚠ 그 파일만 읽는다 — tool_response **전체가** 안내문 문자열일 때, 그 사람 홈의 그 자리 모양(폴더/36자 세션/tool-results/*.txt)일 때만.
+ *    커넥터가 돌려준 글(배열) 속에 같은 문구가 있어도 읽지 않는다 — 남이 쓴 글이 이 훅에게 아무 파일이나 읽히게 할 수 없게.
+ *  · 첫 호출이 이 실행의 Claude 프로젝트 폴더(transcript_path 의 부모)를 적어 둔다 — 러너가 끝날 때 그 폴더를 치운다.
  */
 export const COLLECT_CAPTURE_JS = String.raw`"use strict";
-const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto");
 const dir = process.argv[2] || "";
+const SAVED = /^Error: result \([^)]*\) exceeds maximum allowed tokens\. Output has been saved to (\/[^\n]+?\.txt)\.(?:\n|$)/;
+function projectsRoot() {
+  const r = path.join(process.env.HOME || os.homedir(), ".claude", "projects");
+  try { return fs.realpathSync(r); } catch (_) { return r; }
+}
+function savedFile(resp) {
+  if (typeof resp !== "string") return null;
+  const m = SAVED.exec(resp);
+  if (!m) return null;
+  let real;
+  try { real = fs.realpathSync(m[1]); } catch (_) { return null; }
+  const root = projectsRoot() + path.sep;
+  if (!real.startsWith(root)) return null;
+  const rel = real.slice(root.length).split(path.sep);
+  if (rel.length !== 4 || !/^[0-9a-f-]{36}$/.test(rel[1]) || rel[2] !== "tool-results" || !/\.txt$/.test(rel[3])) return null;
+  return fs.statSync(real).isFile() ? real : null;
+}
 const parts = [];
 process.stdin.on("data", (c) => parts.push(c)).on("end", () => {
   const ts = new Date().toISOString();
   try {
     const j = JSON.parse(Buffer.concat(parts).toString("utf8"));
     const resp = j.tool_response === undefined ? null : j.tool_response;
-    const flat = JSON.stringify(resp);
+    const saved = savedFile(resp);
+    const text = saved ? fs.readFileSync(saved, "utf8") : null;
+    const flat = text != null ? text : JSON.stringify(resp);
     const file = Date.now() + "-" + crypto.randomBytes(3).toString("hex") + ".json";
     fs.mkdirSync(path.join(dir, "cap"), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(dir, "cap", file), JSON.stringify({ tool_name: j.tool_name, tool_input: j.tool_input, tool_use_id: j.tool_use_id, tool_response: resp }), { mode: 0o600 });
-    fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify({ ts, tool: j.tool_name, id: j.tool_use_id || null, chars: flat.length, sha256: crypto.createHash("sha256").update(flat).digest("hex"), file }) + "\n", { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, "cap", file), JSON.stringify(Object.assign({ tool_name: j.tool_name, tool_input: j.tool_input, tool_use_id: j.tool_use_id, tool_response: resp },
+      text != null ? { saved_text: text } : {})), { mode: 0o600 });
+    fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify(Object.assign({ ts, tool: j.tool_name, id: j.tool_use_id || null, chars: flat.length, sha256: crypto.createHash("sha256").update(flat).digest("hex"), file },
+      text != null ? { saved: true } : {})) + "\n", { mode: 0o600 });
+    const tp = typeof j.transcript_path === "string" ? j.transcript_path : "";
+    const note = path.join(dir, "claude-project.txt");
+    if (tp && !fs.existsSync(note)) fs.writeFileSync(note, path.dirname(tp), { mode: 0o600 });
   } catch (e) {
     try { fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify({ ts, error: String(e && e.message ? e.message : e).slice(0, 200) }) + "\n", { mode: 0o600 }); } catch (_) {}
   }
@@ -280,7 +309,19 @@ function finish(o) {
   const ex = Object.assign({ startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), durationMs: Date.now() - t0, timedOut }, o);
   try { W("exit.json.tmp", ex); fs.renameSync(P("exit.json.tmp"), P("exit.json")); } catch (_) {}
   try { fs.unlinkSync(P("runner.pid")); } catch (_) {}
+  cleanProject();
   process.exit(0);
+}
+//  이 실행의 Claude 프로젝트 폴더(~/.claude/projects/<작업 폴더 슬러그>)를 치운다 — 실행마다 작업 폴더가 달라 한 판에 하나씩 쌓인다.
+//   큰 결과 파일(tool-results)도 거기 있다(원문은 이미 cap/ 에 옮겼다). 그 자리 모양일 때만 지운다.
+function cleanProject() {
+  try {
+    const d = rd(P("claude-project.txt"));
+    if (!d || !job) return;
+    const root = path.join((job && job.home) || process.env.HOME || "", ".claude", "projects");
+    if (path.dirname(d) !== root || !path.basename(d).endsWith(job.runId + "-work")) return;
+    fs.rmSync(d, { recursive: true, force: true });
+  } catch (_) {}
 }
 process.on("SIGTERM", () => { try { if (child) child.kill("SIGTERM"); } catch (_) {} finish({ code: null, error: "canceled" }); });
 process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + String(e && e.message || e).slice(0, 300) }));
@@ -294,7 +335,7 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   info.version = v.out.trim().split(/\s+/)[0] || null;
   const help = (await run(["--help"], 30000)).out;
   const has = (s) => help.includes(s);
-  info.flags = { tools: has("--tools <"), dontAsk: has("dontAsk"), noPersist: has("--no-session-persistence"), noSkills: has("--disable-slash-commands") };
+  info.flags = { tools: has("--tools <"), dontAsk: has("dontAsk"), noPersist: has("--no-session-persistence"), noSkills: has("--disable-slash-commands"), sources: has("--setting-sources") };
   const list = await run(["mcp", "list"], 90000);
   info.servers = parseMcpList(list.out);
   info.connectors = info.servers.filter((s) => s.name.startsWith("claude.ai ")).map((s) => ({ app: s.name.slice(10), status: s.status, key: key(s.name) }));
@@ -317,6 +358,9 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   if (info.flags.dontAsk) args.push("--permission-mode", "dontAsk");
   if (info.flags.noSkills) args.push("--disable-slash-commands");
   if (info.flags.noPersist) args.push("--no-session-persistence");
+  //  사용자 설정을 뺀다 — 사용자 훅·사용자 MCP(라이블리 MCP 등 로컬 프로세스)가 안 뜬다. claude.ai 커넥터는 그대로 뜬다
+  //   (매니지드 실측 2026-10-16: 컨테이너 사용 +450MB → +389MB). 문지기·원문 받기 훅은 --settings 라 그대로 걸린다.
+  if (info.flags.sources) args.push("--setting-sources", "project,local");
   const out = fs.openSync(P("out.jsonl"), "a", 0o600), err = fs.openSync(P("err.log"), "a", 0o600);
   let c;
   try { c = cp.spawn(job.bin || "claude", args, { cwd: P("work"), env: env(), stdio: ["pipe", out, err] }); }
