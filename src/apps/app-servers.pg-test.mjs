@@ -893,6 +893,11 @@ const baseDepsW = () => ({ api, bucket: "fake-bucket", pollMs: 1, sleep: async (
   const d2 = await call("app_server_deploy", { app_id: "lg-r", wait_s: 120 }, alice, aliceCtx);
   chk("T2b 다음 재사용 배포가 로그 그룹을 맞추면 경고 · 마지막 오류가 없다", d2.status === "deployed" && d2.deploy?.logs_warning === undefined && d2.warnings === undefined && (await rowOf("lg-r"))?.last_error == null,
     JSON.stringify({ deploy: d2.deploy, last_error: (await rowOf("lg-r"))?.last_error }));
+  //  재사용 길을 가장 자주 타는 것은 «공개하기» 다 — 그 응답(server)에도 최상위 warnings 가 보여야 한다(상태만 읽는 쪽 · 재검토).
+  logFail = new AwsError(503, "ServiceUnavailableException", "흉내 — 로그 그룹 실패");
+  const pub = await call("app_visibility_set", { app_id: "lg-r", visibility: "all" }, alice, aliceCtx);
+  chk("T2c 공개하기(별칭만 옮김)도 로그 그룹 실패면 공개 · 서버 deployed · 응답 server.warnings", pub.changed === true && pub.server?.ok === true && pub.server?.state === "deployed"
+    && logFail === null && /로그 그룹/.test(String(pub.server?.warnings?.[0])) && (await rowOf("lg-r"))?.pub_lambda_version === v0, JSON.stringify(pub.server));
   await call("org_app_remove", { app_id: "lg-r" }, boss);
 }
 

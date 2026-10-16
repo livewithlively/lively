@@ -322,7 +322,7 @@ export async function deployBuildToAliases(i: {
       await st.setServerAlias(i.app.id, a, { version_no: i.versionNo, build_key: i.buildKey, lambda_version: version });
     }
     //  별칭을 옮기면 마지막 오류가 지워진다 — 로그 그룹을 못 맞춘 것은 그 뒤에 적어 상태에서도 보이게(다음에 맞추면 다시 지워진다).
-    if (logsWarning) await st.setServerError(i.app.id, `로그 그룹을 맞추지 못했습니다 — 이 함수 기록이 CloudWatch 에 안 남을 수 있습니다: ${logsWarning}`).catch(() => { /* 결과에 있다 */ });
+    if (logsWarning) await st.setServerError(i.app.id, logsWarningText(logsWarning)).catch(() => { /* 결과에 있다 */ });
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
     return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke, ...(logsWarning ? { logs_warning: logsWarning } : {}) };
   } catch (e) {
@@ -440,8 +440,7 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   const aliases: Array<"cur" | "pub"> = installedIsPublished(t.app) ? ["cur", "pub"] : ["cur"];
   try {
     const deploy = await deployBuildToAliases({ app: t.app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases, policy }, deps);
-    const warnings = deploy.logs_warning ? [`로그 그룹을 맞추지 못했습니다 — 이 함수 기록이 CloudWatch 에 안 남을 수 있습니다: ${deploy.logs_warning}`] : [];
-    return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy, ...(warnings.length ? { warnings } : {}) };
+    return { ok: true, app_id: t.app.id, version_no: t.versionNo, build: buildView, deploy, ...deployWarnings(deploy) };
   } catch (e) {
     const stage = e instanceof DeployError ? e.stage : "deploy";
     const log = e instanceof DeployError ? e.log : null;
@@ -476,7 +475,14 @@ export async function publishServerDenial(app: OrgApp, deps0: ServerDeps = {}): 
 }
 
 /** 공개 · 되돌리기 뒤 서버 옮기기의 결과 — 응답 server 칸(state: deployed · failed). */
-export interface ServerMove { ok: boolean; state: "deployed" | "failed"; message?: string; deploy?: DeployResult }
+export interface ServerMove { ok: boolean; state: "deployed" | "failed"; message?: string; deploy?: DeployResult; warnings?: string[] }
+
+/** 로그 그룹을 못 맞춘 배포의 알림 글(#4790) — 마지막 오류 · 배포 결과 · 공개 · 되돌리기 응답이 같은 글을 쓴다. */
+const logsWarningText = (w: string): string => `로그 그룹을 맞추지 못했습니다 — 이 함수 기록이 CloudWatch 에 안 남을 수 있습니다: ${w}`;
+/** 배포는 됐지만 알릴 것 — 응답 최상위 warnings 로(상태만 읽는 쪽에도 보이게). 없으면 빈 객체. */
+function deployWarnings(d: DeployResult): { warnings?: string[] } {
+  return d.logs_warning ? { warnings: [logsWarningText(d.logs_warning)] } : {};
+}
 
 /** 공개된 뒤 — 공개 판의 빌드를 pub(과 cur)에 올린다. 실패해도 공개는 이미 됐다(돌려준 글을 응답에 싣는다 · 다시 하기 = app_server_deploy). */
 export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<ServerMove | null> {
@@ -490,7 +496,7 @@ export async function afterPublishServer(app: OrgApp, policy: AppServerPolicy, d
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: "공개한 판의 서버 빌드가 없어 서버를 옮기지 못했습니다 — app_server_deploy" };
     const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: ["cur", "pub"], policy }, deps);
-    return { ok: true, state: "deployed", deploy };
+    return { ok: true, state: "deployed", deploy, ...deployWarnings(deploy) };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "공개 뒤 앱 서버 옮기기 실패(#4484)");
     return { ok: false, state: "failed", message: `공개는 됐지만 서버를 공개 판으로 옮기지 못했습니다: ${publicError(e)} — app_server_deploy 로 다시 하세요` };
@@ -509,7 +515,7 @@ export async function afterRevertServer(app: OrgApp, policy: AppServerPolicy, de
     const b = await usableBuild(await st.getServerBuild(app.id, key), deps);
     if (!b?.zip_key || !b.zip_sha256) return { ok: false, state: "failed", message: `${t.versionNo}판은 서버가 빌드된 적이 없어(또는 빌드 결과가 없어져) 서버는 그대로입니다 — 「이대로 넣기」 또는 app_server_deploy` };
     const deploy = await deployBuildToAliases({ app, versionNo: t.versionNo, buildKey: key, zipKey: b.zip_key, zipSha256: b.zip_sha256, zipBytes: Number(b.zip_bytes ?? 0), aliases: installedIsPublished(app) ? ["cur", "pub"] : ["cur"], policy }, deps);
-    return { ok: true, state: "deployed", deploy };
+    return { ok: true, state: "deployed", deploy, ...deployWarnings(deploy) };
   } catch (e) {
     logger.warn({ err: e, app: app.id }, "되돌린 뒤 앱 서버 옮기기 실패(#4484)");
     return { ok: false, state: "failed", message: `서버를 되돌린 판으로 옮기지 못했습니다: ${publicError(e)}` };
