@@ -83,7 +83,7 @@ function rig(o: {
         down: async (id, times) => { calls.push(["local.down", id, times]); },
         enter: async (id) => { calls.push(["local.enter", id]); },
       },
-      type: async (id, text) => { calls.push(["local.type", id, text]); return o.localType ?? { next: "echo" }; },
+      type: async (id, text, opts?: unknown) => { calls.push(opts === undefined ? ["local.type", id, text] : ["local.type", id, text, opts]); return o.localType ?? { next: "echo" }; },
     },
     warn: (_o, msg) => { calls.push(["warn", msg]); },
     sleep: async (ms) => { calls.push(["sleep", ms]); clock.t += ms; },
@@ -441,11 +441,12 @@ test("F6·N3 치기 표식 없는 오류·모양 틀린 답({ok:true} 뿐) — �
   }
 });
 
-test("E9·F4c 치기 연결 없음(sent=false) — 게이트웨이가 한 번 친다 → 오늘 경로", async () => {
+test("E9·F4c 치기 연결 없음(sent=false) — 게이트웨이가 한 번 친다 → 오늘 경로 · #4818 붙여넣기 선택도 그대로 넘긴다", async () => {
   const r = rig({ host: (a) => { if (a.step === "type") throw rpcErr(false); return { ok: true }; } });
   const exec = await outboxExecFor(ID, r.deps);
   assert.deepEqual(await sendReadyRow({ text: "안녕", kind: "prompt" }, "claude", exec, echoes(["confirmed"]).echo), { kind: "mark", status: "delivered" });
-  assert.deepEqual(r.onGateway(), [["local.type", ID, "안녕"]], "안 간 치기를 게이트웨이가 다시 치지 않았다 — 순간 끊김 하나로 지시를 잃는다");
+  assert.deepEqual(r.onGateway(), [["local.type", ID, "안녕", { paste: true }]],
+    "안 간 치기를 게이트웨이가 다시 치지 않았거나(순간 끊김 하나로 지시를 잃는다) 붙여넣기 선택을 잃었다(그 판은 Enter 가 글자로 박힐 수 있다)");
   assert.equal(r.sentTo("type").length, 1);
 });
 
@@ -484,17 +485,20 @@ test("F7c 치기 full — 오늘 경로: 에코 미확인(claude)이면 호스�
   const r = rig();
   const exec = await outboxExecFor(ID, r.deps);
   const e = echoes(["timeout", "confirmed"]);
-  assert.deepEqual(await sendReadyRow({ text: "안녕", kind: "prompt" }, "claude", exec, e.echo), { kind: "mark", status: "delivered" });
-  assert.deepEqual(r.sentTo("type"), [{ step: "type", id: ID, text: "안녕" }]);
+  //  #4818 — 이 가짜 에코는 박자를 안 불러 화면을 한 번도 못 봤다 → 창 끝 Enter 는 종전대로 누르고(P7) 더 누른 수로 센다(P13).
+  assert.deepEqual(await sendReadyRow({ text: "안녕", kind: "prompt" }, "claude", exec, e.echo), { kind: "mark", status: "delivered", extraEnters: 1 });
+  assert.deepEqual(r.sentTo("type"), [{ step: "type", id: ID, text: "안녕", paste: true }], "#4818 W1 — claude 는 붙여넣기로 싣는다");
   assert.deepEqual(r.sentTo("keys"), [{ step: "keys", id: ID, down: 0, enter: true }]);
   assert.equal(e.seen.length, 2);
   assert.deepEqual(r.onGateway(), []);
-  //  claude 외 하네스는 입력칸 문법을 모르므로 Enter 를 더 누르지 않는다(종전과 같다).
+  //  claude 외 하네스는 입력칸 문법을 모르므로 Enter 를 더 누르지 않는다(종전과 같다) · 붙여넣기도 안 한다 · 화면도 안 본다(#4818 W2·W8).
   const other = rig();
   const oexec = await outboxExecFor(ID, other.deps);
   assert.deepEqual(await sendReadyRow({ text: "안녕", kind: "prompt" }, "codex", oexec, echoes(["timeout"]).echo),
     { kind: "mark", status: "sent", error: "echo-unconfirmed" });
   assert.equal(other.sentTo("keys").length, 0);
+  assert.deepEqual(other.sentTo("type"), [{ step: "type", id: ID, text: "안녕" }]);
+  assert.equal(other.sentTo("peek").length, 0);
 });
 
 test("E13 control 행(설정 명령) + full — sent/control-no-echo · 에코를 기다리지 않는다", async () => {
@@ -505,6 +509,134 @@ test("E13 control 행(설정 명령) + full — sent/control-no-echo · 에코�
     { kind: "mark", status: "sent", error: "control-no-echo" });
   assert.equal(e.seen.length, 0);
   assert.equal(r.sentTo("keys").length, 0);
+});
+
+// ── #4818 제출 지킴이 — 에코를 기다리는 동안 입력칸을 보고, 우리 글이 남아 있을 때만 Enter ───────────────────────────
+//  실측(2.1.301): 글과 Enter 가 한 덩어리로 읽히면 첫 Enter 는 글자 CR, 둘째는 «Removed 1 invisible character · review and press
+//   Enter to send» 로 멈추고 셋째에 제출된다. 종전 배달자는 Enter 를 두 번만 눌러 «글 + 빈 줄, 미제출» 로 멈췄다.
+//  가짜 에코는 창마다 폴(700ms)을 돌며 지킴이 박자(tick)를 불러 준다 — 진짜 waitEcho 가 하는 일(W12 가 소스로 잰다).
+//  엣지 표는 스크래치패드 spec.md 의 W1~W12.
+const NB = "\u{A0}";
+const LONG_TEXT = "Reply with only the word OK. This is a long test prompt typed by the outbox to check Enter handling.";
+const RULE_LINE = "─".repeat(100);
+const FOOTER = "  ⏵⏵ auto mode on (shift+tab to cycle)                                   ◐ medium · /effort";
+const claudeScreen = (box: string[]): string => [" ▐▛███▛█   Claude Code v2.1.301", "", RULE_LINE, ...box, RULE_LINE, FOOTER].join("\n");
+const STUCK_PANE = claudeScreen([`❯${NB}${LONG_TEXT}`, ""]);         // Enter 가 글자 CR 로 박힌 화면
+const EMPTY_PANE = claudeScreen([`❯${NB}`]);
+const OTHER_PANE = claudeScreen([`❯${NB}사람이 쓰던 다른 글`]);
+const DIALOG_PANE = [RULE_LINE, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend"].join("\n");
+/** 창마다 tick 을 polls 번 불러 주는 가짜 에코(시계를 pollMs 씩 민다). 답은 차례로(끝나면 마지막 답). */
+const tickingEchoes = (clock: { t: number }, answers: Array<"confirmed" | "timeout" | "unreadable">, polls = 20, pollMs = 700) => {
+  const seen: string[] = [];
+  let ticks = 0;
+  const echo = async (line: string, tick?: () => Promise<void>) => {
+    seen.push(line);
+    for (let i = 0; i < polls; i++) { clock.t += pollMs; if (tick) { ticks++; await tick(); } }
+    return answers[Math.min(seen.length - 1, answers.length - 1)]!;
+  };
+  return { seen, echo, ticks: () => ticks };
+};
+/** 호스트 화면 — pane 이 null 이면 «못 닿음» 으로 답한다. 함수면 Enter(누르기 RPC)를 몇 번 받았는지로 화면을 바꾼다. */
+const paneHost = (pane: string | null | ((enters: number) => string)) => {
+  let enters = 0;
+  return (a: Record<string, unknown>): unknown => {
+    if (a.step === "keys") { if (a.enter === true) enters++; return { ok: true }; }
+    if (a.step === "type") return { ok: true, typed: "full" };
+    const p = typeof pane === "function" ? pane(enters) : pane;
+    return p === null ? { ok: false, reach: "unknown" } : { ok: true, pane: p, paneCmd: "claude" };
+  };
+};
+const send = sendReadyRow as (row: { text: string; kind: "prompt" | "control" }, harness: string, exec: unknown,
+  echo: (line: string, tick?: () => Promise<void>) => Promise<"confirmed" | "timeout" | "unreadable">, clock?: { now: () => number }) => Promise<unknown>;
+const enters = (r: ReturnType<typeof rig>): number => r.sentTo("keys").filter((a) => (a as { enter?: unknown }).enter === true).length;
+
+test("★ W3 글자 CR → «검토 후 Enter» → 제출 — 우리 글이 남은 동안만 Enter 를 더 누르고, 사라지면 멈춘다 · 결말에 더 누른 수", async () => {
+  const r = rig({ host: paneHost((n) => (n >= 2 ? EMPTY_PANE : STUCK_PANE)) });
+  const exec = await outboxExecFor(ID, r.deps);
+  const e = tickingEchoes(r.clock, ["confirmed"]);
+  const out = await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, e.echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "delivered", extraEnters: 2 });
+  assert.equal(enters(r), 2, "남아 있는 동안 안 눌렀거나, 제출된 뒤에도 눌렀다");
+  assert.ok(e.ticks() > 0 && r.sentTo("peek").length > 0, "배선 — 에코가 지킴이 박자를 안 불렀거나 화면을 안 봤다");
+});
+
+test("W13 지킴이는 호스트에 화면 꼬리를 길게(SUBMIT_PEEK_LINES) 달라고 한다 — 긴 지시도 입력칸 윗줄이 보이게(준비 판정의 보기는 종전 그대로)", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const exec = await outboxExecFor(ID, r.deps);
+  await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["confirmed"]).echo, { now: () => r.clock.t });
+  const { SUBMIT_PEEK_LINES } = await import("../terminal/submit-check.js");
+  const { OUTBOX_PEEK_LINES_MAX } = await import("../terminal/outbox-host-step.js");
+  //  호스트는 상한을 넘는 lines 를 «모름» 으로 거절하고, 그러면 그 행은 게이트웨이 tmux 로 내려앉는다(매니지드에선 상자를 못 본다 — 격리 리뷰).
+  assert.ok(SUBMIT_PEEK_LINES <= OUTBOX_PEEK_LINES_MAX, `지킴이 ${SUBMIT_PEEK_LINES}줄 > 호스트 상한 ${OUTBOX_PEEK_LINES_MAX}줄`);
+  const peeks = r.sentTo("peek");
+  assert.ok(peeks.length > 0, "배선 — 지킴이가 화면을 안 봤다");
+  for (const a of peeks) assert.equal((a as { lines?: unknown }).lines, SUBMIT_PEEK_LINES);
+  const wr = rig();
+  await waitReady(ID, "claude", false, await outboxExecFor(ID, wr.deps), wr.waitClock);
+  for (const a of wr.sentTo("peek")) assert.equal((a as { lines?: unknown }).lines, undefined, "준비 판정의 보기에 lines 를 실었다");
+});
+
+test(`W11 계속 남아 있으면 창 안에서 상한까지만 — 창 끝 «미제출 방어 Enter» 까지 합쳐도 늘지 않는다`, async () => {
+  const r = rig({ host: paneHost(STUCK_PANE) });
+  const exec = await outboxExecFor(ID, r.deps);
+  const e = tickingEchoes(r.clock, ["timeout", "timeout"]);
+  const out = await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, e.echo, { now: () => r.clock.t }) as { extraEnters?: number };
+  const { SUBMIT_PRESS_MAX } = await import("../terminal/submit-check.js");
+  assert.equal(enters(r), SUBMIT_PRESS_MAX);
+  assert.equal(out.extraEnters, SUBMIT_PRESS_MAX);
+});
+
+test("W4 제출됐다(입력칸이 빔) — 에코를 못 봐도 Enter 0(창 끝도) · 결말에 더 누른 수 없음", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const exec = await outboxExecFor(ID, r.deps);
+  const out = await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["timeout", "timeout"]).echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unconfirmed" });
+  assert.equal(enters(r), 0, "빈 입력칸에 Enter — 자동 이어가기 상태면 엉뚱한 것이 제출된다");
+});
+
+test("W5·W6 다른 글(사람이 쓰는 중·불려 나온 지난 지시)·대화상자 — Enter 0", async () => {
+  for (const pane of [OTHER_PANE, DIALOG_PANE]) {
+    const r = rig({ host: paneHost(pane) });
+    const exec = await outboxExecFor(ID, r.deps);
+    await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["timeout", "timeout"]).echo, { now: () => r.clock.t });
+    assert.equal(enters(r), 0, pane === OTHER_PANE ? "남의 글을 제출했다" : "대화상자의 기본 선택을 눌렀다");
+  }
+});
+
+test("W7 화면을 못 읽는다 — 창 안에선 안 누르고 창 끝에서 종전대로 한 번(#1867 호환)", async () => {
+  const r = rig({ host: paneHost(null) });
+  const exec = await outboxExecFor(ID, r.deps);
+  const out = await send({ text: LONG_TEXT, kind: "prompt" }, "claude", exec, tickingEchoes(r.clock, ["timeout", "timeout"]).echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unconfirmed", extraEnters: 1 });
+  assert.equal(enters(r), 1);
+});
+
+test("W9·W10 쳤는지 모름(echo-only)·설정 명령(control) — 화면도 안 보고 Enter 도 안 누른다", async () => {
+  const unknownType = rig({ host: (a) => { if (a.step === "type") throw rpcErr(true); return paneHost(STUCK_PANE)(a); } });
+  const ue = await outboxExecFor(ID, unknownType.deps);
+  await send({ text: LONG_TEXT, kind: "prompt" }, "claude", ue, tickingEchoes(unknownType.clock, ["timeout"]).echo, { now: () => unknownType.clock.t });
+  assert.equal(unknownType.sentTo("peek").length, 0, "쳤는지 모르는 입력칸을 보고 눌렀다");
+  assert.equal(enters(unknownType), 0);
+  const control = rig({ host: paneHost(STUCK_PANE) });
+  const ce = await outboxExecFor(ID, control.deps);
+  //  실제 설정 명령 모양 — 앞에 «치던 글 치워 두기» 키(Ctrl+S, catalog runtimeDraftStash)가 붙는다.
+  const out = await send({ text: "\x13/model opus", kind: "control" }, "claude", ce, tickingEchoes(control.clock, ["timeout"]).echo, { now: () => control.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "control-no-echo" });
+  assert.equal(control.sentTo("peek").length, 0);
+  assert.equal(enters(control), 0);
+  assert.deepEqual(control.sentTo("type"), [{ step: "type", id: ID, text: "\x13/model opus" }],
+    "설정 명령을 붙여넣으면 치워 두기 키가 글자가 되고 Claude Code 가 «보이지 않는 글자» 로 제출을 멈춘다 — 종전대로 친다");
+});
+
+test("W12 waitEcho 배선 — 창 안에서만 박자를 부른다(마감 확인 뒤 · 폴 대기 앞) · 배달 루프가 그 박자를 넘긴다", () => {
+  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
+  const body = /async function waitEcho\([^)]*tick\?: \(\) => Promise<void>\)[^{]*\{([\s\S]*?)\n\}\n/.exec(src)?.[1];
+  assert.ok(body, "waitEcho 가 박자(tick)를 안 받는다");
+  const deadline = body.indexOf("if (Date.now() - sentAt >= ECHO_WINDOW_MS)");
+  const tickAt = body.indexOf("await tick()");
+  const sleepAt = body.indexOf("await sleep(pollMs)");
+  assert.ok(deadline > 0 && tickAt > deadline && sleepAt > tickAt, "박자가 마감 확인 뒤·폴 대기 앞에 있지 않다 — 창 밖에서 걸음을 넘기면 한 행의 시간 상한이 깨진다");
+  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine, tick\) => waitEcho\(sessionId, st, oneLine, tick\)\)/, "배달 루프가 박자를 안 넘긴다");
 });
 
 // ── 시간·registry ─────────────────────────────────────────────────────────────────
@@ -518,9 +650,10 @@ test("E15 시간 불변식 — 한 행이 sending 에 머무는 상한의 합이
   assert.ok(push, "agent.ts 의 STATE_PUSH_MS 를 못 찾았다 — 이름이 바뀌었나");
   assert.ok(HOST_WAIT_CAP_MS > Number(push[1]!.replace(/_/g, "")),
     "좌표를 상태 push 한 주기보다 짧게 기다리면 새 세션의 첫 지시가 늘 게이트웨이로 간다");
-  //  좌표 대기 + 준비 창 + 마지막 폴 간격 + RPC 넷(창 끝에 걸린 보기·신뢰 키 · 치기 · Enter) + 에코 창 둘.
+  //  좌표 대기 + 준비 창 + 마지막 폴 간격 + RPC 여섯(창 끝에 걸린 보기·신뢰 키 · 치기 · 창 끝 Enter · #4818 제출 지킴이가 에코 창
+  //   둘의 끝에 넘기는 걸음 하나씩 — 지킴이는 박자마다 걸음 하나다) + 에코 창 둘.
   //   게이트웨이 칸의 tmux 지연(중계 22초/호출)은 종전과 같은 성질이라, 에코 파일 읽기 지연은 계획 E15 와 같이 넣지 않는다.
-  const worst = HOST_WAIT_CAP_MS + READY_WINDOW_MS + READY_POLL_MS + 4 * NODE_RPC_TIMEOUT_MS + 2 * ECHO_WINDOW_MS;
+  const worst = HOST_WAIT_CAP_MS + READY_WINDOW_MS + READY_POLL_MS + 6 * NODE_RPC_TIMEOUT_MS + 2 * ECHO_WINDOW_MS;
   assert.ok(worst < staleMs, `한 행 상한 ${worst}ms 가 잔재 판정 ${staleMs}ms 이상이다 — 살아 있는 배달이 «죽은 잔재» 로 회수돼 다시 보내진다`);
 });
 
