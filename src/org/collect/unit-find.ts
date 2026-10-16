@@ -3,19 +3,20 @@
 //  ── 확정(상민님 2026-10-15 «검색 실패 트리거 결정» · «트리거 최종 확정») ──
 //   · 순서: 지식 → 이미 모은 원문 자료 → 둘 다 없거나 약하면 질문한 사람이 볼 수 있는 단위 2~3개를 «가져올 곳» 으로(마지막 수집 시각과 함께).
 //   · 세션이 그 사람 커넥터로 직접 찾을지는 세션이 판단한다(약한 권유) · 백그라운드 대기열은 없다.
-//   · **응답에 싣는 단위는 질문한 사람이 다 보는 단위(unit-plan.unitAccess === "full")뿐이다** — 수집기 단위의 겉(coarse)이나
-//     신고만 한 단위의 이름·설명이 남에게 새지 않게(설계 §6-3 필수 조건). 모으지 않기로 한 단위(excluded)는 권하지 않는다.
+//   · **응답에 싣는 단위는 질문한 사람이 그 단위의 확인된 구성원인 것뿐이다**(그 사람의 커넥터로 실제로 읽은 것이 확인된 곳) — 수집기 단위의
+//     겉(coarse)이나 신고만 한 단위의 이름·설명이 남에게 새지 않게(설계 §6-3 필수 조건). 관리자라고 해서 자기가 속하지 않은 비공개 채널을
+//     안내받지 않는다(principal v2 — AI 자동 안내가 잠긴 이름을 되뱉지 않게 · 리뷰 2026-10-17, 다온 판단 — 상민님 확인 전).
+//     모으지 않기로 한 단위(excluded)는 권하지 않는다.
+//   · 원문 자료도 **질문한 사람 자신의** 자료 공개범위로만 찾는다(특권 열람 신원으로 찾지 않는다).
 //
 //  게이트웨이 MCP: knowledge_search 응답의 collect_hint(약할 때만) · 새 도구 collect_unit_find(주제 → 볼 수 있는 단위).
 import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
-import { embedQuery } from "../../v6/search-util.js";
+import { activeEmbeddingProvider, embedQuery } from "../../v6/search-util.js";
 import { toVectorLiteral } from "../../v6/embedding-provider.js";
 import { sourceVisWhere } from "../../v6/source-store.js";
 import { parseQueryTerms, termAltPatterns, termPatterns } from "../../v6/query-terms.js";
-import type { Viewer } from "../../v6/visibility.js";
 import { knowledgeSearchStrength } from "../../v6/knowledge-search.js";
-import { unitAccess, type CollectRoute } from "./unit-plan.js";
 import { connectorOfApp } from "./unit-store.js";
 import {
   HINT_SOURCES, HINT_UNITS, knowledgeWeak, termsNeeded, textMatchScore, unitHaystack, unitHintText, unitMatch,
@@ -42,31 +43,38 @@ interface UnitRowLite {
   id: number; app: string; kind: string; name: string | null; route: string; state: string; connector: string | null;
   description: string | null; meta: Record<string, unknown> | null;
   read_at: string | null; last_item_at: string | null; next_at: string | null;
-  members: Array<{ member_id: string; verified: boolean; active: boolean }>;
+  visibility: string; owner_member: string | null;
 }
+
+/** 후보 단위 상한 — 확인된 구성원인 단위만 싣는다(보통 수십~수백). 넘으면 id 순 앞쪽만(다음 판에도 같은 것). */
+const CANDIDATE_UNITS_MAX = 2000;
+/** 원문 자료를 느슨하게 찾을 때 보는 자료 수(아직 지식이 안 된 것 가운데 최근 것부터) · 본문 앞 글자 수 · 문장 시간 상한(ms). */
+const LOOSE_SCAN_ROWS = 3000;
+const LOOSE_BODY_CHARS = 4000;
+const LOOSE_TIMEOUT_MS = 1200;
 
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
 
-/** 이 사람에게 보일 수 있는 단위(수집기 경로이거나 이 사람이 후보인 단위) — collect_units 와 같은 첫 거름. 모으지 않기로 한 단위는 뺀다. */
+/**
+ * 이 사람이 **확인된 구성원**인 단위(그 사람이 비활성이 아니고) — 모으지 않기로 한 단위는 뺀다. 접근 판정을 SQL 에서 해 구성원 목록을
+ *  통째로 싣지 않는다(리뷰 2026-10-17 — 수집기 단위 수천 개·구성원 수십만 줄을 JS 로 거르던 것).
+ */
 async function loadCandidates(member: string): Promise<UnitRowLite[]> {
   const r = await itemsPool.query(
     `SELECT u.id, u.app, u.kind, u.name, u.route, u.state, u.connector, u.description, u.meta, u.read_at, u.last_item_at, u.next_at,
-            COALESCE(json_agg(json_build_object('member_id', m.member_id, 'verified', m.verified_at IS NOT NULL,
-                     'inactive', EXISTS (SELECT 1 FROM org_member om WHERE om.id = m.member_id AND om.state = 'inactive')))
-                     FILTER (WHERE m.member_id IS NOT NULL), '[]') AS members
-       FROM collect_unit u LEFT JOIN collect_unit_member m ON m.unit_id = u.id
+            u.visibility, u.owner_member
+       FROM collect_unit u
       WHERE u.state <> 'excluded'
-        AND (u.route IN ('lively_collector','liv_direct') OR EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = u.id AND x.member_id = $1))
-      GROUP BY u.id
-      LIMIT 5000`, [member]);
+        AND EXISTS (SELECT 1 FROM collect_unit_member m WHERE m.unit_id = u.id AND m.member_id = $1 AND m.verified_at IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM org_member om WHERE om.id = $1 AND om.state = 'inactive')
+      ORDER BY u.id
+      LIMIT $2`, [member, CANDIDATE_UNITS_MAX]);
   return (r.rows as Array<Record<string, any>>).map((x) => ({
     id: Number(x.id), app: String(x.app), kind: String(x.kind), name: x.name ?? null, route: String(x.route), state: String(x.state),
     connector: x.connector ?? null, description: x.description ?? null,
     meta: x.meta && typeof x.meta === "object" && !Array.isArray(x.meta) ? x.meta : null,
     read_at: iso(x.read_at), last_item_at: iso(x.last_item_at), next_at: iso(x.next_at),
-    members: (Array.isArray(x.members) ? x.members : []).map((m: Record<string, unknown>) => ({
-      member_id: String(m.member_id), verified: m.verified === true, active: m.inactive !== true,
-    })),
+    visibility: String(x.visibility ?? "viewers"), owner_member: x.owner_member ?? null,
   }));
 }
 
@@ -77,9 +85,12 @@ async function unitSims(query: string, ids: readonly number[]): Promise<Map<numb
   try {
     const qe = await embedQuery(query);
     if (!qe.vec) return out;
+    //  지금 모델로 만든 벡터끼리만 잰다(모델을 바꿨는데 옛 벡터가 남았으면 그 단위는 낱말로만 맞춘다).
+    const model = (await activeEmbeddingProvider())?.model ?? null;
     const r = await itemsPool.query(
-      `SELECT id, (1 - (embedding_vector <=> $1::vector))::float8 AS s FROM collect_unit WHERE id = ANY($2::int[]) AND embedding_vector IS NOT NULL`,
-      [toVectorLiteral(qe.vec), [...ids]]);
+      `SELECT id, (1 - (embedding_vector <=> $1::vector))::float8 AS s FROM collect_unit
+        WHERE id = ANY($2::int[]) AND embedding_vector IS NOT NULL AND ($3::text IS NULL OR embedding_model = $3)`,
+      [toVectorLiteral(qe.vec), [...ids], model]);
     for (const x of r.rows as Array<{ id: number; s: number }>) out.set(Number(x.id), Number(x.s));
   } catch (e) {
     //  벡터 칸이 아직 없는 DB(임베딩 스키마 전) · 차원이 다른 질의 — 낱말만으로 맞춘다.
@@ -102,14 +113,13 @@ async function myConnectors(member: string): Promise<Map<string, string>> {
  * 단위 찾기 — 주제(질의)와 맞는, **이 사람이 다 보는** 단위를 맞음 점수 순으로. 맞는 것이 없으면 빈 목록이다(아무 단위나 권하지 않는다).
  *  같은 점수면 최근에 글이 올라온 단위 먼저.
  */
-export async function findUnitsFor(actor: { member: string; isAdmin: boolean }, query: string, opts: { limit?: number; now?: number } = {}): Promise<UnitPointer[]> {
+export async function findUnitsFor(actor: { member: string; isAdmin: boolean }, query: string,
+  opts: { limit?: number; now?: number; blocked?: boolean } = {}): Promise<UnitPointer[]> {
   const q = String(query ?? "").trim();
   if (!q || !actor.member) return [];
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 5), 1), 10);
   const now = opts.now ?? Date.now();
-  const visible = (await loadCandidates(actor.member)).filter((u) => unitAccess(
-    { route: u.route as CollectRoute, members: u.members.map((m) => ({ member_id: m.member_id, verified: m.verified, active: m.active })) },
-    actor.member, actor.isAdmin) === "full");
+  const visible = await loadCandidates(actor.member);
   if (!visible.length) return [];
   const [sims, mine] = await Promise.all([unitSims(q, visible.map((u) => u.id)), myConnectors(actor.member)]);
   const scored = visible.map((u) => {
@@ -126,39 +136,67 @@ export async function findUnitsFor(actor: { member: string; isAdmin: boolean }, 
       last_collected_at: u.read_at, last_item_at: u.last_item_at, next_at: u.next_at,
       my_connector: mine.get(connector.toLowerCase()) ?? null,
       match: { score: m.score, by: m.by! },
-      hint: unitHintText(u, now),
+      hint: unitHintText({ ...u, mineHidden: u.visibility === "me" && u.owner_member !== actor.member, blocked: !!opts.blocked }, now),
     };
   });
 }
 
 /**
- * 원문 자료를 느슨하게 찾는다 — 질의의 (군말이 아닌) 낱말 가운데 **절반 이상**이 제목·본문에 든 자료를, 많이 든 것 · 최근 것 순으로.
+ * 원문 자료를 느슨하게 찾는다 — 질의의 (군말·한 글자가 아닌) 낱말 가운데 **절반 이상**이 제목·본문 앞부분에 든 자료를, 많이 든 것 · 최근 것 순으로.
  *  source_list 의 q 는 낱말이 **전부** 들어야 맞아서, 세션이 자연어로 묻는 질의(낱말 다섯)로는 거의 늘 0건이다 — 그래서 따로 센다.
- *  질문한 사람의 자료 공개범위 그대로(sourceVisWhere). 낱말 맞춤 규칙은 query-terms(조사를 뗀 꼴 · 같은 뜻 표기)와 같다.
+ *  · **아직 지식이 안 된 자료만**(지식의 근거로 묶인 자료는 지식 검색이 이미 봤다 — 안내 문구 «아직 지식이 안 된» 과 같다).
+ *  · 그 가운데 최근 LOOSE_SCAN_ROWS 건 · 본문 앞 LOOSE_BODY_CHARS 자 · 행마다 소문자 한 번 · 문장 시간 상한(SET LOCAL statement_timeout)
+ *    — 리뷰 2026-10-17 실측: 5,700건·37MB 를 낱말×꼴×제목·본문 ILIKE 로 다 훑으면 자연어 질의가 2~3초였고, 상한이 지나도 쿼리가 연결을 쥐었다.
+ *  · 질문한 사람 자신의 자료 공개범위(sourceVisWhere — viewer 는 늘 그 사람이다).
  */
-async function looseSources(q: string, viewer: Viewer | null, limit: number): Promise<NonNullable<CollectHint["sources"]>> {
+async function looseSources(q: string, viewer: string, limit: number): Promise<NonNullable<CollectHint["sources"]>> {
   const all = parseQueryTerms(q);
-  const terms = (all.some((t) => !t.optional) ? all.filter((t) => !t.optional) : all).slice(0, 8);
+  const base = all.some((t) => !t.optional) ? all.filter((t) => !t.optional) : all;
+  //  한 글자 낱말은 세지 않는다(단위 맞춤 textMatchScore 와 같은 규칙) — «것»·«때» 같은 낱말이 아무 자료나 맞게 하지 않게.
+  const terms = base.filter((t) => t.quoted || [...t.stem].length >= 2).slice(0, 8);
   if (!terms.length) return [];
   const params: unknown[] = [];
   const hits = terms.map((term) => {
-    const pats = [...termPatterns(term), ...termAltPatterns(term)];
-    const ors = pats.flatMap((pat) => { params.push(pat); return [`s.title ILIKE $${params.length} ESCAPE '\\'`, `s.body_md ILIKE $${params.length} ESCAPE '\\'`]; });
+    const pats = [...termPatterns(term), ...termAltPatterns(term)].map((pat) => pat.toLowerCase());
+    const ors = pats.map((pat) => { params.push(pat); return `x.hay LIKE $${params.length} ESCAPE '\\'`; });
     return `(CASE WHEN ${ors.join(" OR ")} THEN 1 ELSE 0 END)`;
   });
-  const vis = await sourceVisWhere(viewer ?? undefined, params);
+  const vis = await sourceVisWhere(viewer, params);
   params.push(termsNeeded(terms.length)); const needP = `$${params.length}`;
   params.push(Math.min(Math.max(limit, 1), 10)); const limP = `$${params.length}`;
-  const r = await itemsPool.query(
-    `SELECT id, title, external_system, fields->>'container_name' AS container, occurred_at, score FROM (
-       SELECT s.id, s.title, s.external_system, s.fields, s.occurred_at, s.updated_at, (${hits.join(" + ")}) AS score
-         FROM source s WHERE s.lifecycle = 'active' AND ${vis}
-     ) x WHERE score >= ${needP}
-     ORDER BY score DESC, COALESCE(occurred_at, updated_at) DESC LIMIT ${limP}`, params);
-  return (r.rows as Array<Record<string, unknown>>).map((x) => ({
-    id: Number(x.id), title: (x.title as string | null) ?? null, system: (x.external_system as string | null) ?? null,
-    container: (x.container as string | null) ?? null, occurred_at: iso(x.occurred_at ?? null),
-  }));
+  params.push(LOOSE_SCAN_ROWS); const scanP = `$${params.length}`;
+  params.push(LOOSE_BODY_CHARS); const bodyP = `$${params.length}`;
+  const sql =
+    `SELECT id, title, external_system, container, occurred_at FROM (
+       SELECT x.id, x.title, x.external_system, x.container, x.occurred_at, x.at, (${hits.join(" + ")}) AS score
+         FROM (
+           SELECT s.id, s.title, s.external_system, s.fields->>'container_name' AS container, s.occurred_at,
+                  COALESCE(s.occurred_at, s.updated_at) AS at,
+                  lower(COALESCE(s.title, '') || ' ' || left(COALESCE(s.body_md, ''), ${bodyP}::int)) AS hay
+             FROM source s
+            WHERE s.lifecycle = 'active' AND ${vis}
+              AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
+            ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC NULLS LAST
+            LIMIT ${scanP}
+         ) x
+     ) y WHERE score >= ${needP}
+     ORDER BY score DESC, at DESC NULLS LAST LIMIT ${limP}`;
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL statement_timeout = ${LOOSE_TIMEOUT_MS}`);
+    const r = await client.query(sql, params);
+    await client.query("COMMIT");
+    return (r.rows as Array<Record<string, unknown>>).map((x) => ({
+      id: Number(x.id), title: (x.title as string | null) ?? null, system: (x.external_system as string | null) ?? null,
+      container: (x.container as string | null) ?? null, occurred_at: iso(x.occurred_at ?? null),
+    }));
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /** knowledge_search 응답에 붙는 «가져올 곳» — 지식이 약할 때만. */
@@ -179,30 +217,38 @@ export interface CollectHint {
  *  · 단위: 원문 자료도 없을 때만 — 그리고 이 워크스페이스가 구성원 Claude 커넥터를 허용할 때만(막았으면 «그 커넥터로 직접» 을 권하지 않는다).
  */
 export async function collectHintFor(input: {
-  q: string; names: readonly string[]; member: string | null; isAdmin: boolean; viewer: Viewer | null; now?: number;
+  q: string; names: readonly string[]; member: string | null; isAdmin: boolean; now?: number;
 }): Promise<CollectHint | null> {
   const q = String(input.q ?? "").trim();
-  if (!q) return null;
+  //  안내는 질문한 사람의 것이다 — 사람이 없으면(내부 호출) 만들지 않는다. 자료·단위 모두 그 사람 자신의 공개범위로만 찾는다.
+  if (!q || !input.member) return null;
   try {
     const strength = await knowledgeSearchStrength(q, input.names);
     const w = knowledgeWeak({ count: input.names.length, topSim: strength.topSim, lexical: strength.lexical });
     if (!w.weak || !w.reason) return null;
     const base = { reason: w.reason, knowledge: { top_similarity: strength.topSim == null ? null : Math.round(strength.topSim * 1000) / 1000, lexical: strength.lexical } };
-    const found = await looseSources(q, input.viewer, HINT_SOURCES).catch((e) => {
+    const found = await looseSources(q, input.member, HINT_SOURCES).catch((e) => {
       logger.warn({ err: (e as Error)?.message }, "[unit-find] 원문 자료를 못 찾아봤다 — 단위로 넘어간다");
       return [] as NonNullable<CollectHint["sources"]>;
     });
+    //  «약하다» 는 «질문의 낱말이 다 든 지식이 없다» 는 뜻이다(의미 거리로는 가를 수 없다 — WEAK_TOP_SIM 머리말). 결과가 맞을 수도 있으니
+    //   단정하지 않는다 — «결과가 모자라면» 으로 권한다.
+    const empty = w.reason === "empty";
     if (found.length) {
-      return { ...base, sources: found, note: "지식에는 맞는 것이 약합니다. 아직 지식이 안 된 원문 자료가 있습니다 — source_get 으로 먼저 보세요." };
+      return {
+        ...base, sources: found,
+        note: empty ? "지식에 맞는 것이 없습니다. 아직 지식이 안 된 원문 자료부터 보세요(source_get)."
+          : "지식 결과에 질문의 낱말이 다 든 것이 없습니다. 결과가 모자라면 아직 지식이 안 된 원문 자료부터 보세요(source_get).",
+      };
     }
-    if (!input.member) return { ...base, note: "지식·원문 자료 모두 맞는 것이 약합니다." };
     const { memberAiConnectorsPolicy } = await import("../store/member-ai-connectors.js");
     const allowed = (await memberAiConnectorsPolicy()) === "allowed";
     const units = allowed ? await findUnitsFor({ member: input.member, isAdmin: input.isAdmin }, q, { limit: HINT_UNITS, now: input.now }) : [];
-    if (!units.length) return { ...base, note: "지식·원문 자료 모두 맞는 것이 약합니다." };
+    const head = empty ? "지식·원문 자료에 맞는 것이 없습니다." : "지식 결과에 질문의 낱말이 다 든 것이 없고, 원문 자료에도 맞는 것이 없습니다.";
+    if (!units.length) return { ...base, note: head };
     return {
       ...base, units,
-      note: "지식·원문 자료 모두 맞는 것이 약합니다. 아래는 이 주제가 오갈 만한 곳입니다(마지막 수집 이후의 새 글은 아직 없을 수 있습니다) — " +
+      note: `${head} ${empty ? "" : "결과가 모자라면 "}아래는 이 주제가 오갈 만한 곳입니다(마지막 수집 이후의 새 글은 아직 없을 수 있습니다) — ` +
         "필요하면 그 앱 커넥터(조직 연결 ext__* 가 있으면 그것, 없으면 mcp__claude_ai_<connector>__*)로 직접 한번 찾아보세요. 가져온 원문은 남깁니다.",
     };
   } catch (e) {

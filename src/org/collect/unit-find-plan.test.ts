@@ -9,6 +9,7 @@
 //   M1 맞음 점수 — 의미는 0.5 이상일 때만 · 낱말은 0.5 + 0.4 × 비율 · 큰 값 · 맞은 까닭(vector · text · both) · 둘 다 아니면 0
 //   A1 몇 전 — 59초 «방금» · 60초 «1분 전» · 59분 · 1시간 · 23시간 · 1일 · 읽을 수 없는 시각 null
 //   N1 안내 문구 — 수집 시각이 있으면 «N 전 수집했습니다 …» · 켠 단위인데 아직이면 «첫 수집 전» · 후보면 «모으지 않는 곳»
+//   N2 남이 «나만» 으로 모으는 곳(모은 자료가 안 보인다) · 막은 워크스페이스(조직 연결 ext__ 로)
 //   S1 원문 자료에 맞아야 하는 낱말 수 — 0·1·2 는 전부 · 3→2 · 4→2 · 5→3
 //   E1 설명 벡터의 글 — «앱 종류 이름» + 설명 + 연결된 맥락 · 모르는 앱·종류는 그대로/빈칸 · 8,000자
 import test from "node:test";
@@ -89,6 +90,15 @@ test("N1 안내 문구 — 수집 시각 · 첫 수집 전 · 모으지 않는 �
   assert.match(unitHintText({ read_at: null, state: "active" }, now), /^아직 첫 수집 전입니다/);
   assert.match(unitHintText({ read_at: null, state: "candidate" }, now), /^아직 모으지 않는 곳입니다/);
   for (const s of [unitHintText({ read_at: null, state: "active" }, now), unitHintText({ read_at: null, state: "candidate" }, now)]) assert.ok(s.endsWith("."), s);
+});
+
+test("N2 안내 문구 — 남이 «나만» 으로 모으는 곳 · 막은 워크스페이스는 조직 연결로", () => {
+  const now = Date.parse("2026-10-17T00:00:00.000Z");
+  const read = new Date(now - 2 * 3600_000).toISOString();
+  assert.equal(unitHintText({ read_at: read, state: "active", mineHidden: true }, now), "다른 사람만 보도록 모으는 곳입니다 — 필요하면 이 커넥터로 직접 찾아보세요.",
+    "모은 자료가 안 보이니 «N 전 수집» 이라고 하지 않는다");
+  assert.equal(unitHintText({ read_at: read, state: "active", blocked: true }, now), "2시간 전 수집했습니다 — 그 뒤 새 글이 필요하면 조직 연결(ext__)이 있으면 그것으로 찾아보세요.");
+  assert.doesNotMatch(unitHintText({ read_at: null, state: "candidate", blocked: true }, now), /이 커넥터로 직접/);
 });
 
 test("S1 원문 자료에 맞아야 하는 낱말 수 — 둘 이하 전부 · 그 위 절반 올림", () => {

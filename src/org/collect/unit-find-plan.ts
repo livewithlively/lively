@@ -12,13 +12,16 @@
 import { parseQueryTerms, type QueryTerm } from "../../v6/query-terms.js";
 
 /**
- * 지식 결과의 의미 거리 문턱 — 이보다 멀면(코사인 유사도가 낮으면) «약하다». bge-m3 기준이다. 세션 recall 훅의 게이트가 0.6 이고
- *  그 언저리(0.6~0.65)에 무관한 지식이 걸리는 것이 실측됐다(2026-10-17 세션 recall 표시 «유사도 61~62%» 의 무관 지식) — 안내가 붙는
- *  비용은 몇 줄이라 문턱을 조금 높여 약한 쪽으로 기운다.
+ * 지식 결과의 의미 거리 문턱 — 이 값 **이상**이면 낱말이 안 맞아도 «강하다». 이 아래라고 «약하다» 는 뜻은 아니다 — 매니지드 실측
+ *  (2026-10-17 격리 리뷰, bge-m3): 맞는 지식과 무관한 지식이 0.53~0.63 에서 겹쳐 절대 문턱으로는 «약함» 을 가를 수 없다. 그래서 «약함» 은
+ *  낱말(조사를 뗀 꼴 — knowledge_grep plain 규칙)로 가르고, 의미는 아주 가까울 때만(≥ 0.65) 강함 쪽 증거로 쓴다.
  */
 export const WEAK_TOP_SIM = 0.65;
-/** 단위 설명 벡터의 의미 거리 문턱 — 설명이 짧아 지식보다 낮다. 이보다 멀면 낱말이 맞을 때만 고른다. */
-export const UNIT_MIN_SIM = 0.5;
+/**
+ * 단위 설명 벡터의 의미 거리 문턱 — 이 이상일 때만 뜻으로 맞았다고 본다. 무관한 글도 0.55~0.58 이 나오고(매니지드 실측) 단위 설명은 짧아
+ *  «슬랙 채널» 같은 머리말끼리도 가깝다 — 낮은 문턱이면 «맞는 단위가 없으면 빈 목록» 이 깨진다. 낱말 맞춤이 기본이고 뜻은 보탬이다.
+ */
+export const UNIT_MIN_SIM = 0.7;
 /** «가져올 곳» 으로 붙이는 단위 수(설계 «2~3개»). */
 export const HINT_UNITS = 3;
 /** 원문 자료 후보 수. */
@@ -114,10 +117,14 @@ export function agoText(iso: string | null, nowMs: number): string | null {
  * ③ 단위 한 줄의 안내 — 마지막 수집 시각이 있으면 «N 전 수집 — 그 뒤 새 글이 필요하면 찾아보세요», 아직 안 모은 단위면
  *  «아직 모으지 않은 곳 — 필요하면 직접 찾아보세요». 문장은 세션이 사람에게 그대로 옮겨도 되게 끝맺는다.
  */
-export function unitHintText(u: { read_at: string | null; state: string }, nowMs: number): string {
+export function unitHintText(u: { read_at: string | null; state: string; mineHidden?: boolean; blocked?: boolean }, nowMs: number): string {
+  //  구성원 Claude 커넥터를 막은 워크스페이스 — «그 커넥터로 직접» 을 권하지 않는다(조직 연결 ext__ 가 있으면 그것으로).
+  const how = u.blocked ? "조직 연결(ext__)이 있으면 그것으로 찾아보세요" : "이 커넥터로 직접 찾아보세요";
+  //  남이 «나만» 으로 모으는 곳 — 모은 자료가 이 사람에게 안 보이므로 «N 전 수집 — 그 뒤 새 글만» 은 틀린 말이다.
+  if (u.mineHidden) return `다른 사람만 보도록 모으는 곳입니다 — 필요하면 ${how}.`;
   const ago = agoText(u.read_at, nowMs);
-  if (ago) return `${ago} 수집했습니다 — 그 뒤 새 글이 필요하면 이 커넥터로 직접 찾아보세요.`;
+  if (ago) return `${ago} 수집했습니다 — 그 뒤 새 글이 필요하면 ${how}.`;
   return u.state === "active"
-    ? "아직 첫 수집 전입니다 — 필요하면 이 커넥터로 직접 찾아보세요."
-    : "아직 모으지 않는 곳입니다 — 필요하면 이 커넥터로 직접 찾아보세요.";
+    ? `아직 첫 수집 전입니다 — 필요하면 ${how}.`
+    : `아직 모으지 않는 곳입니다 — 필요하면 ${how}.`;
 }

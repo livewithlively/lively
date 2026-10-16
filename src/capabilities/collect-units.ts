@@ -325,9 +325,10 @@ const collectUnitFind: Capability = {
   handler: async (input: FindInput, user: LivelyUser) => guard(async () => {
     const { findUnitsFor } = await import("../org/collect/unit-find.js");
     const { memberAiConnectorsPolicy } = await import("../org/store/member-ai-connectors.js");
-    const units = await findUnitsFor(actorOf(user), input.q, { limit: input.limit ?? 5 });
-    //  구성원 Claude 커넥터를 막은 워크스페이스면 알린다 — 그때는 조직 연결(ext__*)로만 찾는다.
-    return { units, count: units.length, member_ai_connectors: await memberAiConnectorsPolicy() };
+    //  구성원 Claude 커넥터를 막은 워크스페이스면 알리고, 줄마다의 안내도 «그 커넥터로 직접» 이 아니라 조직 연결(ext__*)로 바꾼다.
+    const policy = await memberAiConnectorsPolicy();
+    const units = await findUnitsFor(actorOf(user), input.q, { limit: input.limit ?? 5, blocked: policy !== "allowed" });
+    return { units, count: units.length, member_ai_connectors: policy };
   }),
 };
 

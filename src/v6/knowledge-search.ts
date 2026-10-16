@@ -10,6 +10,7 @@ import {
   RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedQuery,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
+import { parseQueryTerms, requiredTerms } from "./query-terms.js";   // #4744 검색 실패 보조 안내의 낱말 판정(군말 빼기)
 import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
@@ -111,7 +112,7 @@ export async function hybridSearchKnowledge(
 /**
  * (#4213 T12 #4744 검색 실패 보조 안내) 하이브리드 검색이 돌려준 지식이 질의와 얼마나 맞나 — RRF 점수는 순위라 «약하다» 를 말하지 못해서
  *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
- *  lexical = 그 가운데 질의 낱말이 모두(knowledge_grep 과 같은 규칙) 이름·제목·본문에 든 지식이 있나.
+ *  lexical = 그 가운데 질의 낱말이 모두(knowledge_grep plain 규칙 — 조사를 뗀 꼴 · 군말은 없어도 됨) 이름·제목·본문에 든 지식이 있나.
  *  돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진 것이다. 질의 임베딩은 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억).
  *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
  */
@@ -130,14 +131,18 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
   } catch { topSim = null; }
   let lexical = false;
   try {
-    const { result } = await grepExec(qstr, async (plan) => {
+    //  낱말은 plain 규칙(조사를 뗀 꼴 · 같은 뜻 표기)으로 · **군말은 빼고**(«어떻게» · 한 글자) — 자연어 질의의 «공개범위를» 이 «공개범위» 로 맞고
+    //   «어떻게 돼» 가 지식에 없다고 약해지지 않게(리뷰 2026-10-17). 낱말이 전부 군말이면 그대로 다 쓴다.
+    const all = parseQueryTerms(qstr);
+    const must = requiredTerms(all);
+    const plan: GrepPlan = { mode: "plain", terms: must.length ? must : all };
+    if (plan.terms.length) {
       const params: unknown[] = [];
       const where = grepWhereSql(plan, {}, params);
       params.push(list);
       const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where} AND k.name = ANY($${params.length}::text[])`, params);
-      return Number(rows[0]?.n ?? 0);
-    });
-    lexical = result > 0;
+      lexical = Number(rows[0]?.n ?? 0) > 0;
+    }
   } catch { lexical = false; }
   return { topSim, lexical };
 }

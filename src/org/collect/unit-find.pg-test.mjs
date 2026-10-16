@@ -68,6 +68,10 @@ try {
   const u4 = await makeUnit(CH(4), "#결제-알림", C, { description: "결제 알림 봇", route: "lively_collector" });
   const u5 = await makeUnit(CH(5), "#결제-비밀", C, { description: "결제 출시 비밀 논의" });
   const u6 = await makeUnit(CH(6), "#결제-후보", A, { description: "결제 출시 후보 채널", state: "candidate" });
+  //  C 가 «나만» 으로 모으는 채널 — A 도 그 채널을 보는 확인된 구성원이다(자료는 A 에게 안 보인다).
+  const u7 = await makeUnit(CH(7), "#결제-나만", C, { description: "결제 출시 나만 메모" });
+  await store.recordUnitListing({ member: A, app: "slack", connector: "Slack", instance: TEAM, items: [{ ref: CH(7), kind: "channel", name: "#결제-나만" }], verified: true });
+  await itemsPool.query(`UPDATE collect_unit SET visibility = 'me', owner_member = $2 WHERE id = $1`, [u7.id, C]);
   await itemsPool.query(`INSERT INTO member_ai_connector(member_id, provider, app, status, origin) VALUES($1,'claude','Slack','connected','probe')`, [A]);
 
   // ── F1~F4 단위 찾기 — 누가 무엇을 보나 ──
@@ -87,8 +91,13 @@ try {
     const rb = await findUnitsFor({ member: B, isAdmin: false }, "결제 출시 일정", { now: NOW });
     chk("F3 신고만 한 사람(B — 확인 안 됨)에게는 그 단위의 이름·설명도 안 나온다", rb.length === 0, JSON.stringify(rb));
     const ra = await findUnitsFor({ member: ADM, isAdmin: true }, "결제 알림", { now: NOW });
-    chk("F4 관리자는 수집기 단위를 다 본다 · 구성원 경로 단위(남의 것)는 관리자도 못 본다",
-      ra.some((x) => x.id === u4.id) && !ra.some((x) => [u1.id, u5.id, u6.id].includes(x.id)), JSON.stringify(ra.map((x) => x.name)));
+    const rc = await findUnitsFor({ member: C, isAdmin: false }, "결제 알림", { now: NOW });
+    chk("F4 관리자라도 확인된 구성원이 아닌 단위(수집기 단위 포함)는 안 나온다 · 확인된 구성원(C)에게는 나온다(principal v2)",
+      ra.length === 0 && rc.some((x) => x.id === u4.id), JSON.stringify({ adm: ra.map((x) => x.name), c: rc.map((x) => x.name) }));
+    const r7 = await findUnitsFor({ member: A, isAdmin: false }, "결제 출시 나만", { now: NOW });
+    const p7 = r7.find((x) => x.id === u7.id);
+    chk("F6 남이 «나만» 으로 모으는 곳 — 그 채널을 보는 사람에게는 나오되 «N 전 수집» 이 아니라 «다른 사람만 보도록 모으는 곳» 으로",
+      !!p7 && /^다른 사람만 보도록 모으는 곳입니다/.test(p7.hint), JSON.stringify(r7.map((x) => [x.name, x.hint])));
     const none = await findUnitsFor({ member: A, isAdmin: false }, "분기 재무 보고서", { now: NOW });
     chk("F5 맞는 단위가 없으면 빈 목록(아무 단위나 권하지 않는다)", none.length === 0, JSON.stringify(none.map((x) => x.name)));
   }
@@ -99,11 +108,18 @@ try {
       [KN, "결제 출시 일정", "결제 출시 일정은 11월 둘째 주로 정했다."]);
     const strong = await collectHintFor({ q: "결제 출시 일정", names: [KN], member: A, isAdmin: false, viewer: A, now: NOW });
     chk("H1 낱말이 다 든 지식이 있으면 안내가 안 붙는다(null)", strong === null, JSON.stringify(strong));
+    const particles = await collectHintFor({ q: "결제의 출시 일정은 어떻게 돼", names: [KN], member: A, isAdmin: false, now: NOW });
+    chk("H1b 조사가 붙은 자연어 질의도 조사를 떼고 낱말을 맞춘다(knowledge_grep plain 규칙) — 안내가 안 붙는다", particles === null, JSON.stringify(particles));
     await itemsPool.query(`INSERT INTO source(name, kind, title, body_md, provenance) VALUES($1,'doc',$2,$3,'observed')`,
       [SRC, "결제 출시 회의록", "결제 기능 출시를 11월로 미루자는 의견"]);
+    //  이미 지식이 된 자료(knowledge_source 로 묶임)는 «아직 지식이 안 된 원문 자료» 가 아니다.
+    await itemsPool.query(`INSERT INTO source(name, kind, title, body_md, provenance) VALUES($1,'doc',$2,$3,'observed')`,
+      [`${SRC}-distilled`, "결제 출시 연기 결정", "결제 출시 연기 사유 정리"]);
+    const did = (await itemsPool.query(`SELECT id FROM source WHERE name=$1`, [`${SRC}-distilled`])).rows[0].id;
+    await itemsPool.query(`INSERT INTO knowledge_source(name, source_id) VALUES($1,$2)`, [KN, did]);
     const withSrc = await collectHintFor({ q: "결제 출시 연기 사유", names: [], member: A, isAdmin: false, viewer: A, now: NOW });
-    chk("H2 지식이 없고 원문 자료에 낱말 절반 이상이 든 것이 있으면 그 자료(단위는 아직 안 싣는다)",
-      withSrc?.reason === "empty" && withSrc.sources?.some((s) => s.title === "결제 출시 회의록") && !withSrc.units,
+    chk("H2 지식이 없고 아직 지식이 안 된 원문 자료에 낱말 절반 이상이 든 것이 있으면 그 자료(단위는 아직 안 싣는다) · 지식이 된 자료는 빠진다",
+      withSrc?.reason === "empty" && withSrc.sources?.some((s) => s.title === "결제 출시 회의록") && !withSrc.sources.some((s) => s.id === did) && !withSrc.units,
       JSON.stringify(withSrc));
     const toUnits = await collectHintFor({ q: "결제 롤아웃 날짜 확정", names: [], member: A, isAdmin: false, viewer: A, now: NOW });
     chk("H3 원문 자료에도 없으면 질문한 사람이 다 보는 단위(«결제» 가 든 #결제-출시 · #결제-후보) · 남의 비공개·제외 단위는 없다",
@@ -128,10 +144,10 @@ try {
 
   // ── S1·S2 표면 — knowledge_search 의 collect_hint · collect_unit_find ──
   {
-    const res = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { viewer: A });
+    const res = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "mcp", viewer: A });
     chk("S1 knowledge_search — 약하면 응답에 collect_hint(단위) · 강하면 없다",
       Array.isArray(res.entries) && res.collect_hint?.units?.some((x) => x.id === u1.id), JSON.stringify({ n: res.entries?.length, hint: res.collect_hint }));
-    const strong = await handler("knowledge_search")({ q: "결제 출시 일정" }, userOf(A), { viewer: A });
+    const strong = await handler("knowledge_search")({ q: "결제 출시 일정" }, userOf(A), { source: "mcp", viewer: A });
     chk("S1b 낱말이 다 든 지식이 결과에 있으면 collect_hint 가 없다", strong.entries?.some((e) => e.name === KN) && !strong.collect_hint,
       JSON.stringify({ names: strong.entries?.map((e) => e.name), hint: strong.collect_hint }));
     const web = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "web", viewer: A });
@@ -140,10 +156,24 @@ try {
     chk("S1c 웹 화면의 의미검색(세션 헤더 없는 REST)에는 안내를 계산하지 않는다 · 세션이 부른 REST·MCP 에는 붙는다",
       !web.collect_hint && !!script.collect_hint?.units?.length && !!mcp.collect_hint?.units?.length,
       JSON.stringify({ web: !!web.collect_hint, script: !!script.collect_hint, mcp: !!mcp.collect_hint }));
+    //  앱 화면 다리(열람 신원이 실리지 않는 app-ui · app-front)에는 계산하지 않는다 · 특권 열람 신원(null)으로 불러도 안내는 그 사람 것으로만.
+    const appUi = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-ui", actor: A });
+    const appFront = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-front", actor: A });
+    const priv = await handler("knowledge_search")({ q: "롤아웃 날짜 확정 메모" }, userOf(A), { source: "mcp", viewer: null });
+    const lockedId = (await itemsPool.query(`SELECT id FROM source WHERE name=$1`, [`${SRC}-locked`])).rows[0].id;
+    chk("S1d 앱 화면 다리에는 안내를 안 붙인다 · 특권 열람 신원(null)으로 불러도 안내의 원문 자료는 그 사람 공개범위대로(C 만 보는 메모가 안 나온다)",
+      !appUi.collect_hint && !appFront.collect_hint && !(priv.collect_hint?.sources ?? []).some((x) => x.id === lockedId),
+      JSON.stringify({ appUi: !!appUi.collect_hint, appFront: !!appFront.collect_hint, priv: priv.collect_hint }));
     const f = await handler("collect_unit_find")({ q: "결제 출시 일정", limit: 1 }, userOf(A), { viewer: A });
     const fb = await handler("collect_unit_find")({ q: "결제 출시 일정" }, userOf(B), { viewer: B });
     chk("S2 collect_unit_find — 부르는 사람이 다 보는 단위만 · limit · 정책 상태를 싣는다",
       f.count === 1 && f.units[0].id === u1.id && f.member_ai_connectors === "allowed" && fb.count === 0, JSON.stringify({ f, fb }));
+    await itemsPool.query(`UPDATE org_runtime_config SET allow_member_ai_connectors = false WHERE id=1`);
+    const fBlocked = await handler("collect_unit_find")({ q: "결제 출시 일정", limit: 1 }, userOf(A), { viewer: A });
+    await itemsPool.query(`UPDATE org_runtime_config SET allow_member_ai_connectors = true WHERE id=1`);
+    chk("S2b 막은 워크스페이스 — 단위 찾기는 되지만 줄마다의 안내가 «그 커넥터로 직접» 이 아니라 조직 연결(ext__)로",
+      fBlocked.member_ai_connectors === "blocked" && fBlocked.units[0]?.id === u1.id && /조직 연결\(ext__\)/.test(fBlocked.units[0]?.hint ?? "")
+        && !/이 커넥터로 직접/.test(fBlocked.units[0]?.hint ?? ""), JSON.stringify(fBlocked.units));
   }
 
   // ── V1~V3 뜻으로 맞추기(pgvector 가 있을 때) — 가짜 임베딩 서버 ──
@@ -192,6 +222,11 @@ try {
         const r = await findUnitsFor({ member: A, isAdmin: false }, "hiring plan", { now: NOW });
         chk("V2 낱말이 안 맞아도 설명의 뜻이 가까우면 맞는다(by vector)", r[0]?.id === u2.id && r[0].match.by === "vector" && r[0].match.score > 0.9,
           JSON.stringify(r.map((x) => [x.name, x.match])));
+        //  모델을 바꿨는데 옛 벡터가 남았다 — 다른 모델의 벡터와는 재지 않는다(낱말로만 맞춘다 → «hiring plan» 은 안 맞는다).
+        await itemsPool.query(`UPDATE collect_unit SET embedding_model = 'old-model' WHERE id = $1`, [u2.id]);
+        const stale = await findUnitsFor({ member: A, isAdmin: false }, "hiring plan", { now: NOW });
+        await itemsPool.query(`UPDATE collect_unit SET embedding_model = 'ci-fake' WHERE id = $1`, [u2.id]);
+        chk("V2b 지금 모델이 아닌 옛 벡터와는 재지 않는다", !stale.some((x) => x.id === u2.id), JSON.stringify(stale.map((x) => [x.name, x.match])));
         //  지식의 의미 거리 — 지식 벡터를 채우고, 뜻이 먼 질의는 약함(collect_hint) · 가까운 질의는 강함.
         const kj = bf.startBackfillJob("pending", bf.KNOWLEDGE_TARGET);
         while (kj.started && kj.job.running) await new Promise((r2) => setTimeout(r2, 100));
@@ -200,6 +235,17 @@ try {
         chk("V3 결과가 있어도 뜻이 멀면(코사인 < 0.65) 약함 · 가까우면(≥ 0.65) 낱말이 안 맞아도 강함",
           far?.reason === "weak" && far.knowledge.top_similarity < 0.65 && near === null,
           JSON.stringify({ far: far && { reason: far.reason, k: far.knowledge }, near }));
+        //  고치기 — 임베딩할 글이 그대로면 벡터를 안 비운다 · 바뀌면 비워 다시 임베딩한다(시각이 바뀐다).
+        const stamp = async () => (await itemsPool.query(`SELECT embedding_updated_at AS t FROM collect_unit WHERE id=$1`, [u2.id])).rows[0].t?.toISOString?.() ?? null;
+        const t0 = await stamp();
+        await store.updateUnit(u2.id, { description: "채용 공고와 면접 일정", meta: { knowhow: "봇 글 제외" } }, { member: A, isAdmin: false });
+        await new Promise((r2) => setTimeout(r2, 400));
+        const t1 = await stamp();
+        await store.updateUnit(u2.id, { description: "채용 공고와 면접 일정 — 인턴 포함" }, { member: A, isAdmin: false });
+        let t2 = t0;
+        for (let i = 0; i < 30 && t2 === t0; i++) { await new Promise((r2) => setTimeout(r2, 100)); t2 = await stamp(); }
+        chk("V1b 고치기 — 임베딩할 글이 그대로(설명 같음 · 맥락 밖 메타만)면 벡터를 안 비우고, 설명이 바뀌면 비워 다시 임베딩한다",
+          t0 != null && t1 === t0 && t2 !== t0, JSON.stringify({ t0, t1, t2 }));
       } finally {
         await itemsPool.query(`UPDATE org_runtime_config SET embedding_config = $1::jsonb WHERE id=1`, [embedBefore == null ? null : JSON.stringify(embedBefore)]);
         __resetQueryEmbedCache();
