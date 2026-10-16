@@ -18,7 +18,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, setLaunchpadContext } from './apps.js';
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, openAppById, setLaunchpadContext } from './apps.js';
 import { instanceSideIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
@@ -32,6 +32,8 @@ import { keepObserved, type ObsMemory } from './obs-carry.js';
 import { PINNED_GROUP, PRIORITY_GROUP, QUIET_RANK, dayGroup, pruneHolds, stepRowHold, type RowHold } from './hold-rules.js';   // #3856 — 「지금 볼 것」 해제·카드 자리 규칙(순수)   // #2544 후속 — 중계가 «못 본» 판을 직전 관측으로 잇는다(순수)
 import { renderPast, renderSessAll, renderTrash } from './bins.js';   // #1851 — 지난 세션(#/archive) · 휴지통(#/trash) 화면 · #3778 이름·주인공 교체 · #4158 [AI 세션] 전체 목록
 import { renderSourcesApp, renderSourceDetail } from './sources.js';   // #2423 자료 앱 — 열람실(사이드바 갈래는 side.ts)
+import { renderFileView } from '../filepage.js';   // #4672 자료 보기 — 파일 링크(#/f?root=&path=) 하나를 자료 앱의 한 화면으로(클래식과 같은 코드)
+import { shareRootLabel } from '../lib/sharelink.js';
 import { renderTaxonomyApp } from './taxonomy.js';   // #4233 분류체계 앱(사이드바 갈래는 side.ts renderTaxonomySection)
 import { builderTabTitleFor, renderBuilderApp } from './builder.js';   // #4632 앱빌더(셸이 직접 그린다 · 앱 만들기 여섯 단계가 이 안에 선다)
 import { isBuilderProjectName, isBuilderSession, isTrySessionRow } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
@@ -1125,6 +1127,15 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
   //  #2423 자료 앱 — 목록은 «자료», 자료 하나는 그 제목이 정본이라 데이터가 오면 힌트로 따라잡는다.
   if (p === 'sources') return { title: segs[1] ? (routeTitleHint.get(key) || '자료') : '자료', noAside: true };
+  //  #4672 자료 보기 — 파일 링크 하나. 탭 이름은 그 파일(폴더) 이름이다(링크마다 탭이 하나라 이름이 곧 구분이다).
+  if (p === 'f') {
+    const q = parseRoute(route).params;
+    const fp = String(q.get('path') || '').replace(/\/+$/, '');
+    //  프로젝트 폴더 자신(project/<id>)이면 그 프로젝트 이름 — 폴더 이름(숫자)은 탭에서 아무 말도 안 한다(화면 머리도 같은 규칙, web/filepage).
+    const pm = q.get('root') === 'shared' ? /^(?:project|legacy-project)\/(\d+)$/.exec(fp) : null;
+    const pn = pm ? projectPath(Number(pm[1]))?.name : '';
+    return { title: pn || (fp ? fp.split('/').pop()! : shareRootLabel(q.get('root') || 'shared')), noAside: true };
+  }
   if (p === 'taxonomy') return { title: '분류체계', noAside: true };
   if (p === 'builder') return { title: builderTabTitleFor(segs, parseRoute(route).params), noAside: true };   // #4632 앱빌더
   //  #4179 사용 가이드. 문서를 보고 있으면 그 문서의 제목이 이름이다(홈 목록에서 무엇을 읽던 창인지 보인다).
@@ -1395,6 +1406,32 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       void ensureSingletonAppInstance('sources', '자료')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이 — 무회귀 */ });
+    } else if (page === 'f') {
+      // #4672 자료 보기 — 파일 링크(#/f?root=&path=)를 **자료 앱의 한 화면**으로 셸 안에 그린다(상민님 2026-10-14 «구글 드라이브처럼
+      //  워크스페이스 화면에서 자료로 조회되고 거기서 내려받기»). 사이드바는 자료의 나무, 레일은 자료가 켜진다. 종전엔 클래식 위키 액자에
+      //  내비 없는 전체 페이지를 실었다. 화면 코드는 클래식과 같은 한 벌(web/filepage.ts)이고, 셸에만 있는 문 셋을 여기서 꽂는다.
+      //  ⚠ 탭은 링크마다 하나다(routeKey 'raw:f?…') — 파일 두 개를 열면 둘이 나란히 산다. 앱 인스턴스는 자료 앱 탭(#/sources)의 몫이라 여기서 잡지 않는다.
+      markActive('sources');
+      noteAppUse('sources');
+      drawSide();
+      tab.aside.replaceChildren();
+      renderFileView(tab.center, params, {
+        //  탭마다 본창이 따로다 — «아직 이 탭이 이 링크를 보는가» 로 잰다(주소로 재면 다른 탭을 보는 사이 이 탭이 «불러오는 중» 에 굳는다).
+        isCurrent: () => tab.seq === seq,
+        //  옛 링크 넘기기(#4688) — 이 탭의 주소만 바꾼다. 지금 보는 탭이면 주소창도 바꾸고 다시 그리고, 아니면 돌아올 때 새 자리로 그린다.
+        replaceRoute: (hash) => {
+          if (tab.seq !== seq) return;
+          tab.route = hash;
+          if (tabsApi?.current() === tab) {
+            if (location.hash !== hash) { suppressHash++; location.replace(location.pathname + location.search + hash); }
+            tabsApi?.routed(tab);
+            void renderRoute(tab);
+          } else { tab.rendered = false; tabsApi?.routed(tab); }
+        },
+        sourceHref: (id) => '#/sources/' + id,
+        openApp: (appId) => { void openAppById(appId).then((ok) => { if (!ok) toast('이 앱을 열 수 없어요 — 앱이 꺼졌거나 지금 쓸 수 있는 앱 목록에 없습니다', true); }); },
+        consent: (appId, title) => ensureAppGrant(appId, title).catch(() => false),
+      });
     } else if (page === 'taxonomy') {
       // #4233 분류체계 앱. builtin(project=global·single). 자료와 같은 규칙: 주소가 정본, 인스턴스는 뒤에서 멱등 확보.
       //  `#/taxonomy` = 전체 지도 · `#/taxonomy?view=fix` = 손볼 것 · `#/taxonomy/<id>` = 분류 하나.
@@ -1790,7 +1827,7 @@ function activeKey(): string {
  *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
 function activeKeyOf(route: string): string {
   const cur = parseRoute(route);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'builder' ? 'builder' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' || cur.segs[0] === 'f' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'builder' ? 'builder' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 /** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
 const CTX_FULL_WIDTH = new Set(['app:context', 'learn']);   // 'learn' = 사용 가이드(#4179). 제 문서 목록을 스스로 그리므로 셸 사이드바를 읽지 않는다
