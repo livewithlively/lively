@@ -3,7 +3,10 @@
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
 import { appServerEnv, buildKeyOf, functionNameFor, lambdaEnvFor, serverDeclOf, smokeFailure, zipKeyFor } from "./app-server-config.js";
-import { APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, envAppServerPolicy, normalizeAppServerPolicy, retentionDaysFor } from "./app-server-policy.js";
+import {
+  APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
+  normalizeAppServerPolicy, retentionDaysFor,
+} from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
 import { publicError } from "./app-server-deploy.js";
 import { appServerEnabledFor } from "./app-server-config.js";
@@ -163,6 +166,67 @@ t("B14 워크스페이스 스위치 — 목록 없음 · '*' 은 전부 · 목�
   assert.equal(withTenant({ id: "t2", slug: "someone-else" }, () => appServerEnv(env)), null, "목록 밖 워크스페이스의 요청이면 꺼짐");
   assert.equal(appServerEnv(env), null, "워크스페이스를 모르면 꺼짐");
   assert.notEqual(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE2 }), null, "목록이 없으면 워크스페이스를 몰라도 켜짐(자가호스팅 · 시험)");
+});
+
+//  #4792 워크스페이스 상한 — 사양 엣지 표(spec-4792.md P · F · C 절)의 행마다 시험 하나.
+t("B15 워크스페이스 상한 정규화(P1~P4) — 0 · 잡값은 기본 20개 · 5120MB · 바닥 100MB · 천장 200개 · 20480MB · 글자 숫자 · env 기본", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.workspace_functions_max, 20);
+  assert.equal(APP_SERVER_POLICY_DEFAULT.workspace_code_mb, 5120);
+  const z = normalizeAppServerPolicy({ workspace_functions_max: 0, workspace_code_mb: "x" });
+  assert.equal(z.workspace_functions_max, 20, "0 은 «그 값 없음»");
+  assert.equal(z.workspace_code_mb, 5120, "잡값");
+  assert.equal(normalizeAppServerPolicy({ workspace_code_mb: 5 }).workspace_code_mb, 100, "바닥");
+  assert.equal(normalizeAppServerPolicy({ workspace_functions_max: 1 }).workspace_functions_max, 1, "바닥(1개) 그대로");
+  const big = normalizeAppServerPolicy({ workspace_functions_max: 10_000, workspace_code_mb: 10 ** 7 });
+  assert.equal(big.workspace_functions_max, 200, "천장 — 관리자가 스스로 올릴 수 있는 끝");
+  assert.equal(big.workspace_code_mb, 20480);
+  assert.equal(normalizeAppServerPolicy({ workspace_functions_max: "7" }).workspace_functions_max, 7);
+  assert.equal(envAppServerPolicy({ LIVELY_APP_SERVER_POLICY: "{\"workspace_functions_max\":50}" }).workspace_functions_max, 50, "플랫폼 기본(env)");
+  assert.equal(APP_SERVER_POLICY_MIN.workspace_functions_max, 1);
+  assert.equal(APP_SERVER_POLICY_MAX.workspace_code_mb, 20480);
+});
+
+t("B16 함수 수 판정(F6) — 상한−1 개면 통과 · 상한 개면 막음(까닭에 수 · 상한 · 고치는 길) · 상한을 내려 이미 넘친 수도 막음", () => {
+  const p = { ...APP_SERVER_POLICY_DEFAULT, workspace_functions_max: 3 };
+  assert.equal(functionsCapDenial(p, 0), null, "함수가 하나도 없는 워크스페이스");
+  assert.equal(functionsCapDenial(p, 2), null, "2개 있으면 세 번째는 된다(경계)");
+  const m = functionsCapDenial(p, 3)!;
+  assert.ok(m.includes("3개") && m.includes("workspace_functions_max") && m.includes("org_app_remove"), m);
+  assert.notEqual(functionsCapDenial(p, 9), null, "상한을 내려 이미 넘쳤으면 새 함수는 막는다");
+});
+
+const MB = 1024 * 1024;
+t("B17 배포 뒤 코드 크기(C8 · C10) — 새 함수 2벌 · 최근 keep−1 판 · 옮기지 않는 별칭의 판 · 겹치면 한 번 · keep 1 · 크기 없는 줄 0 · zip 0", () => {
+  const vs = [{ Version: "$LATEST", CodeSize: 3 * MB }, { Version: "1", CodeSize: 1 * MB }, { Version: "2", CodeSize: 2 * MB }, { Version: "3", CodeSize: 3 * MB }];
+  assert.equal(codeBytesAfterDeploy([], 5 * MB, 3, []), 10 * MB, "새 함수 = $LATEST + 판 1");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, []), 10 * MB + 3 * MB + 2 * MB, "cur · pub 를 함께 옮김 — 옛 판은 최근 2개(3 · 2)만 남는다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, ["1"]), 10 * MB + 3 * MB + 2 * MB + 1 * MB, "초안만 올림 — pub 가 가리키는 1판도 남는다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 3, ["3", null]), 10 * MB + 3 * MB + 2 * MB, "pub 판이 이미 최근 판이면 한 번만 센다");
+  assert.equal(codeBytesAfterDeploy(vs, 5 * MB, 1, []), 10 * MB, "keep 1 — 옛 판은 하나도 안 남는다");
+  assert.equal(codeBytesAfterDeploy([{ Version: "$LATEST" }, { Version: "4" }], 0, 3, []), 0, "크기 없는 줄 · zip 0 은 0 으로 센다");
+  assert.equal(codeBytesOf(vs), 9 * MB, "지금 크기 = $LATEST 포함 합(AWS TotalCodeSize 와 같은 셈)");
+  assert.equal(codeBytesOf([]), 0, "함수가 없으면 0");
+});
+
+t("B18 코드 저장 판정(C3 · C4 · C5) — 합 = 상한이면 통과 · 1바이트 넘고 늘면 막음 · 넘어도 줄거나 그대로면 통과", () => {
+  const p = { ...APP_SERVER_POLICY_DEFAULT, workspace_code_mb: 100 };
+  assert.equal(codeCapDenial(p, 90 * MB, 0, 10 * MB), null, "합이 꼭 상한이면 된다(경계)");
+  const m = codeCapDenial(p, 90 * MB, 0, 10 * MB + 1)!;
+  assert.ok(m.includes("100MB") && m.includes("workspace_code_mb") && m.includes("org_app_remove"), m);
+  assert.ok(m.includes("1KB 넘습니다"), `넘는 양을 적는다(반올림한 합만 보면 앞뒤가 안 맞아 보인다): ${m}`);
+  assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB), null, "이미 넘었어도 이 함수가 그대로면 막지 않는다");
+  assert.equal(codeCapDenial(p, 500 * MB, 20 * MB, 15 * MB), null, "줄어드는 배포도 된다");
+  assert.notEqual(codeCapDenial(p, 500 * MB, 20 * MB, 20 * MB + 1), null, "넘은 채로 늘리면 막는다");
+});
+
+//  #4791 서버 선언을 뺀 앱의 함수 정리 — 사양 엣지 표 R10.
+t("B19 걷기까지의 날수 정규화(R10) — 기본 7일 · 0 · 잡값은 기본 · 바닥 1 · 천장 365", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0 }).unused_retire_days, 7, "0 은 «그 값 없음»");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: "x" }).unused_retire_days, 7);
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 0.5 }).unused_retire_days, 1, "바닥");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 9999 }).unused_retire_days, 365, "천장");
+  assert.equal(normalizeAppServerPolicy({ unused_retire_days: 30 }).unused_retire_days, 30);
 });
 
 console.log(`\n${pass} passed`);

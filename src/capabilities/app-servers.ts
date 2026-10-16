@@ -17,9 +17,9 @@ import { sessionOwnerOf } from "../apps/session-apps.js";
 import { blobTenant } from "../apps/app-blob-store.js";
 import { tailText } from "../apps/app-server-config.js";
 import {
-  APP_SERVER_POLICY_KEYS, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, envAppServerPolicy, normalizeAppServerPolicy, type AppServerPolicy,
+  APP_SERVER_POLICY_KEYS, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, envAppServerPolicy, mbOf, normalizeAppServerPolicy, type AppServerPolicy,
 } from "../apps/app-server-policy.js";
-import { appServerPolicy, appServerPolicyRow, getServerRow, setAppServerPolicy } from "../apps/app-server-store.js";
+import { appServerPolicy, appServerPolicyRow, countServerRows, getServerRow, setAppServerPolicy, sumServerCodeBytes } from "../apps/app-server-store.js";
 import { appServerUnavailable, deployInstalled, installedTarget, type DeployOutcome, type InstalledTarget } from "../apps/app-server-deploy.js";
 import { resumeServer, serverStatus, stopServer } from "../apps/app-server-lifecycle.js";
 import type { BuildSeat } from "../apps/app-server-build.js";
@@ -130,7 +130,8 @@ const appServerStatus: Capability = {
   name: "app_server_status",
   title: "앱 서버 상태",
   description: "앱 서버의 상태 — 서버 선언(web.server) · 지금 판의 빌드(빌드 중이면 지금 하는 일 · 실패면 단계와 까닭) · 함수(cur = 고친 사람이 보는 판 · pub = 공개 판이 가리키는 판) · " +
-    "멈춤 여부 · 최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
+    "멈춤 여부 · code_mb(이 함수의 코드 저장) · retire(지금 판 · 공개 판 둘 다 web.server 를 뺐으면 함수를 걷는 날 retire_at — 서버 판을 다시 올리면 걷힌다) · " +
+    "최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
   scope: null,
   input: { app_id: z.string() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/apps/:id/server"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }] },
@@ -181,15 +182,21 @@ const appServerResume: Capability = {
 };
 
 async function limitsSnapshot(): Promise<Record<string, unknown>> {
-  const [policy, row] = await Promise.all([appServerPolicy(), appServerPolicyRow()]);
-  return { policy, workspace_setting: row, platform_default: envAppServerPolicy(), min: APP_SERVER_POLICY_MIN, ceiling: APP_SERVER_POLICY_MAX, available: appServerUnavailable() };
+  const [policy, row, functions, code] = await Promise.all([appServerPolicy(), appServerPolicyRow(), countServerRows(), sumServerCodeBytes()]);
+  return {
+    policy, workspace_setting: row, platform_default: envAppServerPolicy(), min: APP_SERVER_POLICY_MIN, ceiling: APP_SERVER_POLICY_MAX, available: appServerUnavailable(),
+    usage: { functions, code_mb: mbOf(code) },
+  };
 }
 
 const appServerLimits: Capability = {
   name: "app_server_limits",
   title: "앱 서버 상한 보기",
   description: "앱 서버 상한 — policy(지금 값: memory_mb 함수 메모리 · timeout_s 요청 시간 · build_timeout_s 빌드 시간 · build_mem_floor_mb 빌드를 멈추는 세션 남은 메모리 · " +
-    "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions) · workspace_setting · platform_default · min · ceiling. 구성원 누구나.",
+    "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions · " +
+    "workspace_functions_max 이 워크스페이스의 서버 함수 수(앱마다 하나 · 새 함수만 막는다) · workspace_code_mb 이 워크스페이스 함수들의 코드 저장 합(MiB · AWS 가 세는 판마다의 zip 크기 · " +
+    "늘리는 배포만 막는다) · unused_retire_days 지금 판 · 공개 판 둘 다 web.server 가 없는 앱의 함수를 걷기까지의 날수) · workspace_setting · platform_default · min · ceiling · " +
+    "usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
   scope: null,
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/app-server-limits"], parse: () => ({}) }] },
@@ -199,8 +206,10 @@ const appServerLimits: Capability = {
 const appServerLimitsSet: Capability = {
   name: "app_server_limits_set",
   title: "앱 서버 상한 고치기",
-  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터). 준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
-    `천장: 메모리 ${APP_SERVER_POLICY_MAX.memory_mb}MB · 요청 ${APP_SERVER_POLICY_MAX.timeout_s}초 · 빌드 ${APP_SERVER_POLICY_MAX.build_timeout_s}초. 관리자.`,
+  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터 · 함수 수 · 코드 저장은 다음 배포부터 — 내려도 있는 함수는 그대로). " +
+    "준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
+    `천장: 메모리 ${APP_SERVER_POLICY_MAX.memory_mb}MB · 요청 ${APP_SERVER_POLICY_MAX.timeout_s}초 · 빌드 ${APP_SERVER_POLICY_MAX.build_timeout_s}초 · ` +
+    `함수 ${APP_SERVER_POLICY_MAX.workspace_functions_max}개 · 코드 저장 ${APP_SERVER_POLICY_MAX.workspace_code_mb}MB. 관리자.`,
   scope: "admin",
   input: {
     ...Object.fromEntries(APP_SERVER_POLICY_KEYS.map((k) => [k, z.number().int().min(APP_SERVER_POLICY_MIN[k]).max(APP_SERVER_POLICY_MAX[k]).optional()])),

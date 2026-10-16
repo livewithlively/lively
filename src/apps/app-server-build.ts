@@ -14,7 +14,7 @@ import { appBundleS3Config, blobTenant, getBlob, type BlobStoreKind } from "./ap
 import { SERVER_BUILDER_JS, ZIP_EXCLUDE, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 import { buildKeyOf, tailText, zipKeyFor, type AppServerDecl, type AppServerEnv } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
-import { claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
+import { claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, setServerBuildZipBytes, touchServerBuild, type ServerBuildRow } from "./app-server-store.js";
 import { s3Delete, s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
 import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 
@@ -162,7 +162,12 @@ export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = 
     logger.warn({ err: e, appId: row.app_id, key: row.build_key }, "빌드 zip 을 확인하지 못했다 — 있다고 보고 진행(#4484)");
     return row;
   }
-  if (head && (row.zip_bytes == null || head.size === Number(row.zip_bytes))) return row;
+  if (head && row.zip_bytes == null) {
+    //  크기를 모르는 옛 줄 — 본 크기를 적는다(#4792 코드 저장 셈이 «모름 → 0 → 통과» 로 새지 않게 · 격리 리뷰).
+    await setServerBuildZipBytes(row.app_id, row.build_key, head.size).catch(() => { /* 다음에 */ });
+    return { ...row, zip_bytes: head.size };
+  }
+  if (head && head.size === Number(row.zip_bytes)) return row;
   await invalidateServerBuild(row.app_id, row.build_key, head ? `빌드 결과(zip) 크기가 기록과 다릅니다(${head.size} ≠ ${row.zip_bytes}) — 다시 빌드합니다` : "빌드 결과(zip)가 저장소에 없습니다 — 다시 빌드합니다");
   return null;
 }
