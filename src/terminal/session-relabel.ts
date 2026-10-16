@@ -89,9 +89,6 @@ export async function relabelSession(
   }
 
   // ① 걸쇠 — 원자적. 지면 여기서 끝(tmux 미접촉).
-  //  ⚠ 직전 이름을 **걸쇠 전에** 읽어 둔다(#4084) — 태스크 이름 승계가 «그때 우리가 넣은 이름 그대로인가» 로
-  //   판정하기 때문이다(shouldRenameSessionTask). 걸쇠 뒤에 읽으면 이미 새 이름이라 늘 «사람이 손댔다» 가 된다.
-  const prevLabel = await getSessionState(id).then((st) => st?.label ?? null).catch(() => null);
   const won = await claimSessionLabel(id, label, source, me);
   if (!won) {
     // 미러 행이 아예 없을 수도 있다(구 세션·managed·미러 실패) — 그건 '졌다'와 다르지만 결과는 같다: 그냥 둔다.
@@ -118,10 +115,11 @@ export async function relabelSession(
   //  ★ 만드는 자리는 여기가 **아니다**(2026-09-20 정정) — 세션이 프로젝트에 붙는 순간 관문이 만든다
   //   (session-launch.ts attachLaunchTask). 그 자리는 서버가 반드시 지나지만 여기는 «AI 가 툴을 불러 주면» 이라
   //   조건부였다(실측: 프로젝트 세션 6개 중 3개만 생성). 여기서 남는 일은 둘이다:
-  //   ⓐ **이름 승계** — 방금 지은 이름으로 태스크 이름을 한 번 따라 바꾼다(사람이 손댄 태스크는 그대로 둔다).
+  //   ⓐ **이름 승계** — 방금 지은 이름으로 태스크 이름을 한 번 따라 바꾼다. 이 세션이 **스스로 만든** 태스크만이다 —
+  //      사람이 만든 태스크·사람이 고른 태스크·사람이 이름을 고친 태스크는 그대로 둔다(#4418 — 판정은 태스크의 이름 출처 칸).
   //   ⓑ **보장(폴백)** — 관문을 안 지난 세션(이 기능 전에 열린 세션·잇기가 실패한 세션)엔 지금이라도 만든다.
   //  프로젝트 밖 세션은 null. 출처로 가르지 않는다 — 사람이 웹에서 이름을 붙여도 그 세션의 일은 생긴 것이다.
-  await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label, expectName: prevLabel }).catch(() => null);
+  await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label }).catch(() => null);
   const task = await ensureSessionTask({ sessionId: id, owner: me, name: label });
   return withTask({ ok: true, applied: true, label, source }, task);
 }

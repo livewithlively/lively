@@ -42,6 +42,17 @@ function isWorkSessionEnv(env) {
   return !String(env.LIVELY_TASK_WS || "").trim();   // 구 세션 폴백
 }
 
+// #4418 — **이미 이름이 정해진 세션인가.** 세션을 열 때 서버가 pane 에 실어 준 이름 출처(LIVELY_SESSION_LABEL_SOURCE)를 본다.
+//  human — 태스크에서 연 세션(이름 = 태스크 이름) · 앱 만들기 · 이름을 지어 연 세션. agent — AI 가 이미 지은 세션을 되살린 것.
+//  둘 다 걸쇠상 AI 의 이름짓기가 못 이기므로, 안내하면 첫 턴에 헛 툴콜만 하나 붙는다(사람이 기다리는 시간) — 그리고 종전엔
+//  그 헛 툴콜이 노드 세션에서 실제로 이겨 사람이 지은 태스크 이름까지 바꿨다. 그런 세션의 프로젝트는 이미 있던 것이거나 사람이
+//  이름 지은 것(또는 앞 판에서 이미 지은 것)이라 ②도 할 일이 없다.
+//  rule·id·값 없음(이 env 이전에 뜬 세션·옛 노드)은 종전대로 안내한다 — 이름이 정해져 있으면 서버 걸쇠가 조용히 흡수한다.
+function alreadyNamedEnv(env) {
+  const src = String(env.LIVELY_SESSION_LABEL_SOURCE || "").trim().toLowerCase();
+  return src === "human" || src === "agent";
+}
+
 const readStdin = () => new Promise((resolve) => {
   let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
   try {
@@ -79,6 +90,7 @@ const GUIDE =
   "① **세션 이름** — 이 세션이 **무엇을 하는 자리인지** 드러나는 이름을 지어 `session_rename {name: \"…\"}` " +
   "(lively MCP — session_id 는 생략, 이 세션 자신)로 한 번 등록하세요.\n" +
   "  · 한국어 명사구 한 줄 · 공백 포함 10자 이내 · 조사·서술어 없이 (예: `결제 백오프`, `한글 자모분리`)\n" +
+  "  · 이 세션이 프로젝트에 붙으며 **자동으로 만든 태스크**는 이 이름으로 한 번 바뀝니다(보드에서 이 일의 제목이 됩니다).\n" +
   "  · ⚠ **프로젝트 이름을 그대로 쓰지 마세요.** 소속은 트리·칩이 이미 말합니다. 한 프로젝트 아래 세션이 " +
   "전부 같은 이름이면 목록에서 서로 구분되지 않습니다(실측: 프로젝트 세션 147건 중 104건이 그랬습니다). " +
   "세션 이름은 '어디에 속하나'가 아니라 **'여기서 무엇을 시켰나'** 입니다.\n" +
@@ -108,6 +120,8 @@ const GUIDE =
   //  보드에서 진짜 작업과 구분되지 않았다. 게다가 배치마다 툴콜이 한 번씩 붙는 순수 낭비였다.
   //  ⚠ 폴백(LIVELY_TASK_WS)을 남겨 둔다 — 이 축이 생기기 **전에 뜬 세션**은 kind 를 안 달고 있다.
   if (!isWorkSessionEnv(process.env)) return;
+  // 이미 이름이 정해진 세션 — 지을 이름이 없다(플래그도 안 쓴다: env 는 판이 사는 동안 그대로라 다음 턴도 여기서 빠진다).
+  if (alreadyNamedEnv(process.env)) return;
 
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }

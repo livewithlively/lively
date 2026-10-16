@@ -35,6 +35,7 @@ async function run(prompt, env = {}) {
     // ⚠ 억제 env 를 전부 ""로 지운다 — 이 테스트를 돌리는 셸이 LIVELY_OFF 등을 들고 있으면
     //  훅이 통째로 침묵해 **모든 단언이 vacuous** 해진다(아래 대조군 행이 그걸 잡는다).
     env: { ...process.env, ...offlineLivelyEnv(), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_TASK_WS: "",
+           LIVELY_SESSION_KIND: "", LIVELY_SESSION_LABEL_SOURCE: "",
            LIVELY_HARNESS: "claude", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "",
            LIVELY_SESSION_ID: sid, ...env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -100,6 +101,25 @@ try {
     assert.equal(guided(await run(REAL, { LIVELY_TASK_WS: val })), true, `LIVELY_TASK_WS=${label} 이 표식으로 오인됐다`);
   }
   ok("경계 — LIVELY_TASK_WS 빈 문자열·공백은 위탁 표식이 아니다");
+
+  // ── #4418 — 이미 이름이 정해진 세션(사람이 준 이름 · AI 가 지은 세션의 복원)엔 안내하지 않는다. ──
+  //  🔴 없으면: 태스크에서 연 세션마다 첫 턴에 헛 이름짓기 툴콜이 붙고, 종전 노드 경합에선 그 툴콜이 이겨
+  //   사람이 지은 태스크 이름까지 바뀌었다(맥미니 실측 2026-10-16 — 태스크에서 연 세션 넷).
+  {
+    const sid = `box-nametest-${process.pid}-named`;
+    const flag = path.join(os.tmpdir(), "lively-hooks", `${sid}.sessname`);
+    flags.push(flag);
+    assert.equal(guided(await run(REAL, { LIVELY_SESSION_ID: sid, LIVELY_SESSION_LABEL_SOURCE: "human" })), false, "사람이 이름을 준 세션에 안내가 나갔다");
+    assert.equal(await fsp.access(flag).then(() => true, () => false), false, "안내를 안 했는데 세션당 1회 플래그를 써 버렸다");
+    for (const v of ["agent", "HUMAN", " human ", "Agent"]) {
+      assert.equal(guided(await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v })), false, `출처 ${JSON.stringify(v)} 인데 안내가 나갔다`);
+    }
+    // 대조군 — 아직 이름이 없는 세션(rule·id)과 이 env 이전 세션(빈 값)은 종전대로 안내가 나와야 한다(위 단언이 vacuous 하지 않게).
+    for (const v of ["rule", "id", "", "   ", "humanoid"]) {
+      assert.equal(guided(await run(REAL, { LIVELY_SESSION_LABEL_SOURCE: v })), true, `출처 ${JSON.stringify(v)} 인데 안내가 안 나왔다`);
+    }
+    ok("★이미 이름이 정해진 세션(human·agent, 대소문자·공백 무관) → 안내·플래그 없음 · rule·id·빈 값·모르는 값은 종전대로 안내");
+  }
 
   // ── 억제 플래그 — 종전 계약(전역 OFF·읽기전용·인코그니토)이 그대로인지. ──
   for (const [label, env] of [

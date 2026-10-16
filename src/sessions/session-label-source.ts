@@ -20,6 +20,15 @@
 //  ⚠ DB·tmux 를 안 부른다(순수) — 판정을 표로 못박으려고. 집행은 editSession·session-state 가 한다.
 export type LabelSource = "id" | "rule" | "agent" | "human";
 
+/**
+ * pane env 이름 — 세션을 열 때 이 세션 이름의 출처를 훅에 알린다(#4418). 값은 LabelSource 그대로.
+ *  이름짓기 안내 훅(session-name-ask)이 human·agent 면 안내하지 않는다 — 이미 정해진 이름은 걸쇠상 AI 가 못 바꾸므로,
+ *  안내해 봐야 첫 턴에 헛 툴콜 하나(사람이 기다리는 시간)만 는다. 훅은 네트워크를 안 쓰므로 이 값이 유일한 신호다.
+ *  ⚠ 여는 순간의 값이다(pane env 는 exec 때 고정) — 그 뒤 웹에서 사람이 이름을 바꿔도 안 바뀐다. 그 경우 안내가 나가도
+ *   서버 걸쇠가 applied:false 로 흡수한다(해가 없다).
+ */
+export const SESSION_LABEL_SOURCE_ENV = "LIVELY_SESSION_LABEL_SOURCE";
+
 const RANK: Record<LabelSource, number> = { id: 1, rule: 2, agent: 3, human: 4 };
 
 /** 저장된 값 → LabelSource. 모르는 값·NULL 은 `rule` — 이 컬럼이 생기기 전 행들이 여기로 온다(그 이름은 전부
@@ -33,4 +42,31 @@ export function normalizeLabelSource(v: unknown): LabelSource {
 export function canRelabel(cur: unknown, next: LabelSource): boolean {
   if (next === "human") return true;
   return RANK[next] > RANK[normalizeLabelSource(cur)];
+}
+
+/**
+ * 세션을 열 때 **이름을 받아 왔다면** 그 이름의 출처(#4418). 이름을 안 받았으면 null — 그때 출처는 세션을 띄우는 쪽이
+ *  이름을 짓는 규칙(rule·id)으로 정한다(openingLabelSource).
+ *
+ *  받아 온 이름은 기본이 사람 것이다(새 작업 창·태스크에서 열기·앱 만들기가 싣는 이름). 단 **있던 세션을 잇는 길**
+ *  (복원·다른 AI 로 전환)은 그 세션의 저장된 이름을 싣고 오므로, 함께 실어 온 원래 출처(carried)를 그대로 쓴다.
+ *  종전엔 그 이름도 «받아 온 이름» 이라 human 으로 올라갔다 — 새 id 로 뜨는 복원 한 번에 규칙 이름이 사람 이름으로 굳었다.
+ */
+export function carriedLabelSource(givenLabel: unknown, carried?: unknown): LabelSource | null {
+  if (!String(givenLabel ?? "").trim()) return null;
+  return carried == null || String(carried).trim() === "" ? "human" : normalizeLabelSource(carried);
+}
+
+/**
+ * 저장된 출처 → 복원·전환이 실어 갈 값(CreateInput.labelSource). **비어 있으면 undefined** — 이 칸 이전의 행이거나
+ *  노드 경합으로 출처를 못 적은 행이라 그 이름을 누가 지었는지 모른다(사람이 준 태스크 이름일 수도 있다). 모르면
+ *  종전처럼 «받아 온 이름 = 사람 것» 으로 연다 — 되살린 세션의 이름이 AI 이름짓기로 갑자기 바뀌지 않게.
+ */
+export function carriedSourceOf(stored: unknown): LabelSource | undefined {
+  return String(stored ?? "").trim() ? normalizeLabelSource(stored) : undefined;
+}
+
+/** 세션을 여는 자리의 출처 — 받아 온 이름이 있으면 carriedLabelSource, 없으면 첫 지시로 지었나(rule) id 그대로인가(id). */
+export function openingLabelSource(givenLabel: unknown, label: string, id: string, carried?: unknown): LabelSource {
+  return carriedLabelSource(givenLabel, carried) ?? (label === id ? "id" : "rule");
 }

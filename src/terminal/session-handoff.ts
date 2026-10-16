@@ -2,6 +2,7 @@
 // 화면은 하네스별 원문을 공통 ChatLine으로 바꾼 뒤 최근 대화만 보낸다. 서버는 길이 상한과
 // 경계를 다시 고정해 임의 클라이언트가 첫 지시 상한(20,000자)을 우회하지 못하게 한다.
 import { normalizeSessionKind } from "../sessions/session-kind.js";
+import { carriedSourceOf } from "../sessions/session-label-source.js";
 import type { SessionState } from "../sessions/session-state.js";
 import type { CreateInput } from "./catalog.js";
 
@@ -28,6 +29,9 @@ export function sessionHandoffInput(
     // #2162 — 핸드오버는 **그 세션을 잇는 것**이라 원래 종류를 그대로 물려받는다.
     kind: normalizeSessionKind(st.kind),
     label: st.label || "", rootKey: st.root_key || "personal", subpath: st.subpath || "",
+    // #4418 — 이름과 함께 그 출처도 잇는다(받아 온 이름이라 human 으로 굳지 않게). 이름이 비었으면 쓰이지 않는다.
+    //  출처가 비어 있는 옛 행은 싣지 않는다(누가 지었는지 모른다 — carriedSourceOf).
+    labelSource: carriedSourceOf(st.label_source),
     harness, flags, autoApprove: st.auto_approve, invites: st.invites,
     projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
     readOnly: st.read_only, incognito: st.incognito, writeVis: st.write_vis ?? undefined,

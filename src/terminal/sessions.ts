@@ -63,7 +63,7 @@ import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 import { shouldFallbackToDesired, unobservedSessionInfo } from "./session-unobserved.js";   // #2544 — 중계가 «못 봤을 때» 목록의 정본은 DB(tmux 는 관측)
 import { sessionNameFromPrompt } from "./session-name.js";
-import { type LabelSource, canRelabel } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
+import { type LabelSource, canRelabel, openingLabelSource, SESSION_LABEL_SOURCE_ENV } from "../sessions/session-label-source.js";   // #1979 — 세션 이름 걸쇠
 
 import { sessionPrefix, acceptPreissuedId } from "./session-id.js";   // #4135 — id 모양은 리프 한 자리(게이트웨이 preissue 와 같은 규칙)
 export { sessionPrefix };
@@ -783,7 +783,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식. 근거는 아래 tmux(args) 뒤 주석).
   //  #2545 — 선언을 여기로 올렸다: 새 경로는 desired 행을 new-session **전**에 쓴다(생성 순서 역전). 값은 종전과 같다.
   const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
-  const labelSource: LabelSource = cleanLabel(input.label) ? "human" : (label === id ? "id" : "rule");
+  //  #4418 — 있던 세션을 잇는 길(복원·전환)은 저장된 이름과 함께 그 출처를 싣고 온다(CreateInput.labelSource) — 그대로 잇는다.
+  const labelSource: LabelSource = openingLabelSource(cleanLabel(input.label), label, id, input.labelSource);
   const createdSec = Math.floor(Date.now() / 1000);
   //  desired-state 행(#1059 E) — 두 자리에서 쓴다(새 경로: 컨테이너 확보 전 · 옛 경로: 종전대로 생성 뒤). 한 벌로 둔다.
   const desiredRow = (): SessionStateInput => ({
@@ -843,6 +844,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // #2162 — **훅이 읽는 유일한 종류 신호.** 종전엔 서버만 알고(managed·loginFor·appId) pane 엔 안 나가서,
   //  훅은 `LIVELY_TASK_WS` 같은 부산물을 스니핑해 종류를 되짚어야 했다. 이제 한 축이다.
   args.push("-e", `${SESSION_KIND_ENV}=${input.kind}`);
+  // #4418 — 이 세션 이름의 출처. 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 안내하지 않는다(SESSION_LABEL_SOURCE_ENV 머리말).
+  args.push("-e", `${SESSION_LABEL_SOURCE_ENV}=${labelSource}`);
   // 화면 테마(#1683) — 이 pane 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 고르게 한다.
   //  두 경로로 알린다(둘 다 터미널이 앱에게 알려주는 표준 방식이고, 어느 쪽을 읽는지는 도구마다 다르다):
   //   · COLORFGBG — 오래된 관습(vim/neovim 의 background 자동판정, less 등). "<fg>;<bg>" ANSI 번호.
@@ -1130,8 +1133,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  (label 선언은 위로 올렸다 — #2545. 값·규칙은 그대로다.)
   // #1979 — 이름 옆에 **누가 지었나**를 같이 남긴다. 이게 "한 번만 짓고 고정"의 걸쇠다(session-label-source.ts).
   //  사람이 준 이름 = human(에이전트가 못 덮는다) · 첫 지시 규칙 이름 = rule(에이전트가 한 번 다듬는다) · id = 아직 이름 없음.
-  //  ⚠ 복원(restore)도 이 함수를 타지만 그때는 이 값이 무시된다 — upsert 의 ON CONFLICT 가 label_source 를
-  //   손대지 않는다(안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석).
+  //  ⚠ 복원(restore)도 이 함수를 탄다. 같은 id 복원은 upsert 의 ON CONFLICT 가 label_source 를 손대지 않고
+  //   (안 그러면 복원 한 번에 걸쇠가 풀린다. 근거는 session-state.ts 의 그 주석), 새 id 복원·전환은 원래 출처를
+  //   CreateInput.labelSource 로 싣고 와 그대로 잇는다(#4418 — 종전엔 저장된 이름이 «받아 온 이름» 이라 human 으로 굳었다).
   //  (labelSource 선언도 위로 — #2545.)
   // ── 세션 메타(@box_*)를 **한 번에** 박는다 (#3537) ──────────────────────────────
   //  종전엔 값 하나에 중계 왕복 하나였다 — 매니지드에서 회당 0.45~1.0초라 이 블록만으로 5~10초였다
