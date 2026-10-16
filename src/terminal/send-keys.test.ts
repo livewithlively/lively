@@ -387,8 +387,35 @@ t("[38·I4] 경로가 조각 경계(500)에 딱 걸려도 — 그 붙여넣기�
   for (const pc of pieces) { assert.ok(pc.length <= UNITS); assert.deepEqual(ccImageSegments(pc), [], JSON.stringify(pc.slice(-12))); }
 });
 
-t("[39·I5] 무작위 글 300개 — 이어 붙이면 원문 · 조각마다 상한 이하 · 어느 붙여넣기도 Claude Code 가 이미지로 바꾸지 않는다", () => {
-  const atoms = ["a", " ", "/", ".", "png", "JPG", "jpeg", "gif", "webp", "C:\\", "\\", "'", '"', "가", "😀", ";", "x.png", " /d/e.png"];
+//  포커스 꼬리(F1~F2) — Claude Code 는 붙여넣기 하나가 `[I`·`[O` 로 끝나면 그 두 글자를 지우고, 딱 그것뿐이면 빈 붙여넣기로 버린다(번들 Fde —
+//   옮긴 판정). 실측: 498자+«[I» · «NFO] x» 를 붙이면 «…NFO] x», «[OK] done» 이 경계에 걸리면 «K] done».
+const ccDropsTail = (raw: string): boolean => raw.endsWith("[I") || raw.endsWith("[O");
+const ccEmpty = (raw: string): boolean => raw.length === 0 || raw === "[I" || raw === "[O";
+
+t("[40·F1] 조각 경계에 걸린 «[INFO»·«[OK» — 붙여넣기가 «[I»·«[O» 로 끝나지 않는다(한 글자 앞에서 자른다) · 이어 붙이면 원문", () => {
+  const info = "a".repeat(UNITS - 2) + "[INFO] boot ok";
+  assert.equal(ccDropsTail(sk.splitUnits(info, UNITS)[0]), true, "전제 — 단순 자르기면 첫 조각이 «[I» 로 끝난다");
+  assert.deepEqual(pastedOf(info), ["a".repeat(UNITS - 2) + "[", "INFO] boot ok"]);
+  for (const text of ["a".repeat(UNITS - 2) + "[OK] done", "상태 [O", "[I", "[O", "x[I", "끝[I[O"]) {
+    const pieces = pastedOf(text);
+    assert.equal(pieces.join(""), text, text);
+    for (const pc of pieces) assert.ok(!ccDropsTail(pc) && !ccEmpty(pc), `${JSON.stringify(text)} → ${JSON.stringify(pc)}`);
+  }
+});
+
+t("[41·F2] 포커스 꼬리 처리와 이미지 경로 처리가 겹쳐도 — «[» 로 끝난 조각은 이미지 경로가 아니다 · 다음 조각이 경로면 다시 나눈다", () => {
+  for (const text of ["a".repeat(UNITS - 2) + "[I /x/y.png", "/a.png[I", "[O/b.png", "a".repeat(UNITS - 8) + "/p.png[I"]) {
+    const pieces = pastedOf(text);
+    assert.equal(pieces.join(""), text, text);
+    for (const pc of pieces) {
+      assert.ok(!ccDropsTail(pc) && !ccEmpty(pc), `${JSON.stringify(text).slice(0, 20)} → ${JSON.stringify(pc).slice(-12)}`);
+      assert.deepEqual(ccImageSegments(pc), [], `${JSON.stringify(text).slice(0, 20)} → ${JSON.stringify(pc).slice(-12)}`);
+    }
+  }
+});
+
+t("[39·I5] 무작위 글 300개 — 이어 붙이면 원문 · 조각마다 상한 이하 · 어느 붙여넣기도 Claude Code 가 이미지로 바꾸거나 꼬리를 지우지 않는다", () => {
+  const atoms = ["a", " ", "/", ".", "png", "JPG", "jpeg", "gif", "webp", "C:\\", "\\", "'", '"', "가", "😀", ";", "x.png", " /d/e.png", "[", "I", "O", "[I", "[O"];
   let seed = 4818;
   const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
   for (let k = 0; k < 300; k++) {
@@ -401,6 +428,7 @@ t("[39·I5] 무작위 글 300개 — 이어 붙이면 원문 · 조각마다 상
     for (const pc of pieces) {
       assert.ok(pc.length <= UNITS, `#${k} 조각 ${pc.length}`);
       assert.deepEqual(ccImageSegments(pc), [], `#${k} ${JSON.stringify(pc).slice(0, 80)}`);
+      assert.ok(!ccDropsTail(pc) && !ccEmpty(pc), `#${k} 포커스 꼬리 ${JSON.stringify(pc).slice(-12)}`);
     }
   }
 });

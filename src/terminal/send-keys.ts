@@ -123,7 +123,12 @@ function lineSegments(s: string): Array<[number, string]> {
   return out;
 }
 
-/** (순수) 붙여넣기 조각들 — PASTE_CHUNK_UNITS 상한(코드포인트 경계) · 이미지 경로 조각이 한 붙여넣기에 통째로 들지 않게(위). 이어 붙이면 원글이다. */
+//  ⚠ 포커스 꼬리 — 같은 처리는 붙여넣기 하나가 `[I`·`[O` 로 끝나면 그 두 글자를 지우고(포커스 보고 ESC[I·ESC[O 의 꼬리로 본다 —
+//   번들 `Fde.rawEndedWithFocusTail`), 딱 `[I`·`[O` 면 빈 붙여넣기로 버린다(macOS 면 클립보드 이미지를 찾는다). 실측: 498자+«[I» 와
+//   «NFO] x» 를 붙이면 «…NFO] x» · «[OK] done» 이 경계에 걸리면 «K] done»(격리 리뷰 지적). 그래서 조각이 그렇게 끝나지 않게 한 글자 앞에서 자른다.
+const FOCUS_TAIL = /\[[IO]$/;
+
+/** (순수) 붙여넣기 조각들 — PASTE_CHUNK_UNITS 상한(코드포인트 경계) · 이미지 경로 조각이 한 붙여넣기에 통째로 들지 않게 · 포커스 꼬리로 끝나지 않게(위). 이어 붙이면 원글이다. */
 export function piecesToPaste(text: string): string[] {
   const out: string[] = [];
   let rest = text;
@@ -131,6 +136,7 @@ export function piecesToPaste(text: string): string[] {
     let piece = splitUnits(rest.slice(0, PASTE_CHUNK_UNITS + 1), PASTE_CHUNK_UNITS)[0];
     const cut = imagePathCut(piece);
     if (cut > 0 && cut < piece.length) piece = piece.slice(0, cut);
+    if (FOCUS_TAIL.test(piece)) piece = piece.slice(0, -1);   // «…[» 로 끝내고 «I…» 는 다음 조각으로 — «[» 로 끝난 조각은 이미지 경로도 아니다
     out.push(piece);
     rest = rest.slice(piece.length);
   }

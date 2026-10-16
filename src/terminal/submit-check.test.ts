@@ -152,6 +152,22 @@ test("H22 접힌 표시 + 사람이 쓴 글(앞이나 뒤) — other(누르면 �
   assert.equal(inputHolds(screen([`❯${NB}메모[Pasted text #1]`]), KO_LONG), "other", "사람 글 + 접힌 표시");
 });
 
+test("H24 우리 글이 다 펼쳐져 있고 그 앞이나 뒤에 접힌 표시 — 그 표시는 사람이 붙여넣은 다른 글이다: other(격리 리뷰)", () => {
+  const ours = KO_LONG.slice(0, 1_200);
+  assert.equal(inputHolds(screen(wrapped("[Pasted text #1]" + ours)), ours), "other", "앞에 사람의 붙여넣기");
+  assert.equal(inputHolds(screen(wrapped(ours + "[Pasted text #1 +4 lines]")), ours), "other", "뒤에 사람의 붙여넣기");
+  assert.equal(inputHolds(screen(wrapped("[Pasted text #1]" + ours.slice(0, 600) + "[Pasted text #2]" + ours.slice(ours.length - 200))), ours), "other",
+    "첫 표시가 아무것도 안 감췄다(펼쳐진 조각이 우리 글 맨 앞부터) — 그 표시는 사람 것");
+  assert.equal(inputHolds(screen(wrapped("[Pasted text #1][Pasted text #2]" + ours.slice(ours.length - 200))), ours), "ours", "표시가 앞을 감췄으면 우리 글");
+});
+
+test(`H25 접힌 표시 옆의 짧은 글 조각 — ${TAIL_MATCH_MIN}자 미만이면 other(«OK[Pasted text #1]» 은 사람 글과 우연히 겹친다) · 경계 ${TAIL_MATCH_MIN} → ours`, () => {
+  assert.equal(inputHolds(screen([`❯${NB}OK[Pasted text #1]`]), "OK " + KO_LONG.slice(0, 1_200)), "other");
+  const oursNoSpace = "가".repeat(1_000) + "abcdefghijklmnopqrstuvwxyz";   // 꼬리에 공백이 없어야 보이는 길이가 그대로 센다
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1]${oursNoSpace.slice(-TAIL_MATCH_MIN)}`]), oursNoSpace), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}[Pasted text #1]${oursNoSpace.slice(-(TAIL_MATCH_MIN - 1))}`]), oursNoSpace), "other");
+});
+
 test("H23 접힌 표시 앞뒤가 우리 글과 다르다(다른 긴 글) — other · 꼬리가 머리와 겹칠 만큼 짧은 우리 글도 other", () => {
   const other = "다른 지시 " + KO_UNIT.repeat(200);
   const shown = other.slice(0, 495) + "[...Truncated text #1 +0 lines...]" + other.slice(other.length - 1_969);

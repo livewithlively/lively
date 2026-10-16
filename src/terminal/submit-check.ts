@@ -43,19 +43,22 @@ const COLLAPSED = /\[Pastedtext#\d+(?:\+\d+lines)?\]|\[\.\.\.Truncatedtext#\d+\+
 export const PASTE_COLLAPSE_UNITS = 800;
 
 /** (순수) 접힌 표시가 든 입력칸이 우리 글인가 — 표시를 뺀 글 조각이 우리 글 안에 **차례대로** 있고, 첫 조각은 머리·끝 조각은 꼬리여야 한다
- *  (사람이 앞뒤에 덧붙인 글이면 아니다). 표시가 없으면 거짓 — 그 판정은 위의 그대로-같음이 한다. */
+ *  (사람이 앞뒤에 덧붙인 글이면 아니다). 표시가 없으면 거짓 — 그 판정은 위의 그대로-같음이 한다.
+ *  · 표시마다 무언가를 감췄어야 한다 — 우리 글 전부가 펼쳐져 있고 그 앞뒤에 표시가 붙었으면 그 표시는 사람이 붙여넣은 다른 글이다(격리 리뷰).
+ *  · 보이는 조각은 비었거나 TAIL_MATCH_MIN 자 이상 — «OK[Pasted text #1]» 같은 짧은 조각은 사람 글과 우연히 겹친다. */
 function collapsedOurs(seen: string, ours: string): boolean {
   const parts = seen.split(COLLAPSED);
   if (parts.length < 2) return false;
+  if (parts.some((p) => p && p.length < TAIL_MATCH_MIN)) return false;
   const head = parts[0], tail = parts[parts.length - 1];
   if (!ours.startsWith(head) || !ours.endsWith(tail)) return false;
   let at = head.length;
   for (const mid of parts.slice(1, -1)) {
-    const i = ours.indexOf(mid, at);
+    const i = ours.indexOf(mid, at + 1);   // 앞 표시가 적어도 한 글자는 감췄다
     if (i < 0) return false;
     at = i + mid.length;
   }
-  return ours.length - tail.length >= at;   // 꼬리가 앞 조각과 겹치지 않는다
+  return ours.length - tail.length > at;   // 마지막 표시도 무언가를 감췄다 · 꼬리가 앞 조각과 겹치지 않는다
 }
 
 /**
