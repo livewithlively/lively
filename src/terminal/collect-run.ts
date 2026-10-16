@@ -153,10 +153,11 @@ async function startCollectRunHeld(user: LivelyUser, input: CollectRunStart, own
     throw e;
   }
   //  #4744 이 판에 실은 단위를 붙잡는다 — 저장 단계가 다음 확인 시각을 적을 때까지 기본 주기 틱이 같은 단위로 판을 또 띄우지 않게.
-  //   세션이 뜬 **뒤에** 한다(못 뜬 판이 단위를 한 시간 붙잡아 두지 않게). 못 붙잡아도 실행은 그대로다.
+  //   세션이 뜬 **뒤에** 한다(못 뜬 판이 단위를 붙잡아 두지 않게). 임대는 이 판의 마감 + 여유까지 — 저장을 못 탄 판이면 그때 다시 때가 된다.
+  //   못 붙잡아도 실행은 그대로다.
   if (plan?.mode === "collect" && plan.units?.length) {
-    const { leaseUnits } = await import("../org/collect/unit-schedule.js");
-    await leaseUnits(plan.units.map((u) => u.id), runId);
+    const { leaseUnits, LEASE_MARGIN_MS } = await import("../org/collect/unit-schedule.js");
+    await leaseUnits(plan.units.map((u) => u.id), runId, rec.deadline + LEASE_MARGIN_MS);
   }
   //  세션 id 를 폴더에 적는다 — 게이트웨이가 재기동해도 상태 읽기가 그 세션을 찾아 지운다. 못 적어도 실행은 계속된다.
   await runAtLoginSeatSh(osUser, collectSessionNoteSh(dir, rec.sessionId!)).catch((e) =>
@@ -173,7 +174,7 @@ async function startCollectRunHeld(user: LivelyUser, input: CollectRunStart, own
     await m.recordRunStart({
       runId, member: memberOf(user), apps: job.apps, model: job.model,
       capMb: size.max_mb, requestMb: size.request_mb, startedAt: new Date(collectRunStartedAt(runId) ?? Date.now()),
-      mode, plan,
+      mode, plan, deadlineAt: new Date(rec.deadline),
     });
   })().catch((e) => logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 시작 기록 실패 — 실행은 그대로"));
   return { runId, sessionId: rec.sessionId, model: job.model, apps: job.apps, timeoutSec: job.timeoutSec, mode, ...(plan?.units ? { units: plan.units.length } : {}) };
@@ -346,7 +347,12 @@ function noteIngest(osUser: string | null, dir: string, runId: string, member: s
       result = { state: "failed", mode: claim.mode, error: String((e as Error)?.message ?? e).slice(0, 300) };
     }
     await log.finishIngest(runId, result);
-    if (result.state !== "done") logger.warn({ runId, error: result.error }, "수집 실행 저장 단계가 실패했다 — 다음 판이 다시 읽는다");
+    if (result.state !== "done") {
+      logger.warn({ runId, error: result.error }, "수집 실행 저장 단계가 실패했다 — 다음 판이 다시 읽는다");
+      //  #4744 단위마다 판정이 안 났다(원문·계획을 못 읽음 · 예외) — 이 판이 건 임대를 풀어 물러서기 간격 뒤에 다시 때가 되게 한다
+      //   (임대 끝까지 묶여 있지 않게 · 담당이 바뀌었으면 새 담당이 이어받게).
+      if (claim.mode === "collect") await import("../org/collect/unit-schedule.js").then((m) => m.releaseRunLeases(runId));
+    }
   })().catch((e) => { ingesting.delete(runId); logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 저장 단계를 시작하지 못했다"); });
 }
 

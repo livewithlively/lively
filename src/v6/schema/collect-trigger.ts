@@ -24,5 +24,6 @@ export async function initV6CollectTrigger(pool: Pool): Promise<void> {
     END $$;
     ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS sched JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS collect_unit_due_idx ON collect_unit(next_at) WHERE state = 'active';
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
   `);
 }

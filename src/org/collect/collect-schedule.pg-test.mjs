@@ -13,8 +13,8 @@ const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const store = await import(`${DIST}/org/collect/unit-store.js`);
 const sched = await import(`${DIST}/org/collect/collect-schedule.js`);
-const { noteUnitRead, leaseUnits } = await import(`${DIST}/org/collect/unit-schedule.js`);
-const { RUN_ALIVE_SEC } = await import(`${DIST}/org/collect/schedule-plan.js`);
+const { noteUnitRead, leaseUnits, releaseRunLeases } = await import(`${DIST}/org/collect/unit-schedule.js`);
+const { collectRunCapabilities } = await import(`${DIST}/capabilities/collect-run.js`);
 const { ingestRun } = await import(`${DIST}/org/collect/run-ingest.js`);
 const { NOW_MARGIN_SEC } = await import(`${DIST}/org/collect/collect-plan.js`);
 const { withTenant } = await import(`${DIST}/org/tenant-context.js`);
@@ -66,8 +66,11 @@ function deps(o = {}) {
     d: {
       force: true, now: () => o.now ?? NOW, running: () => new Set(o.running ?? []),
       policy: async () => (policies ? (policies.length > 1 ? policies.shift() : policies[0]) : (o.policy ?? "allowed")),
-      maxConcurrent: o.max ?? 2, dailyMax: o.dailyMax,
-      start: async (m) => { if (o.startErr?.[m]) throw o.startErr[m]; started.push(m); return { runId: `cr-test-${m}` }; },
+      maxConcurrent: o.max ?? 2, dailyMax: o.dailyMax, callDeadlineMs: o.deadlineMs,
+      start: async (m) => {
+        if (o.hang?.includes(m)) return new Promise(() => {});   // 중계가 멈춘 띄우기 — 끝나지 않는다
+        if (o.startErr?.[m]) throw o.startErr[m]; started.push(m); return { runId: `cr-test-${m}` };
+      },
       read: async (m, id) => { if (o.readErr?.[id]) throw o.readErr[id]; read.push(`${m}:${id}`); return {}; },
     },
   };
@@ -75,11 +78,11 @@ function deps(o = {}) {
 const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
 async function runRow(runId, member, o = {}) {
   await itemsPool.query(
-    `INSERT INTO collect_run(run_id, member_id, started_at, ended_at, mode, outcome, ingest, plan)
-     VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
+    `INSERT INTO collect_run(run_id, member_id, started_at, ended_at, mode, outcome, ingest, plan, deadline_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9)`,
     [runId, member, o.started ?? new Date(NOW - 10 * 60_000), o.ended ?? null, o.mode ?? "collect", o.outcome ?? null,
       o.ingest == null ? null : JSON.stringify(o.ingest),   // null 은 SQL NULL(JSON null 이 아니다 — 저장 단계 전)
-      o.plan == null ? null : JSON.stringify(o.plan)]);
+      o.plan == null ? null : JSON.stringify(o.plan), o.deadline ?? null]);
 }
 /** 앞 시험이 같은 DB 에 남긴 «때가 된 단위» · «도는 실행» 이 자리를 먹지 않게 이 시험 동안 비켜 둔다(시험 DB 전용). */
 async function isolate() {
@@ -128,11 +131,11 @@ try {
   // ── L1~L3 임대 · 지금 담당만 ──
   {
     const u = await makeUnit(CH(40), A, { set: `next_at = '${iso(NOW - 60_000)}'` });
-    const n = await leaseUnits([u.id], "cr-lease-1", NOW);
+    const n = await leaseUnits([u.id], "cr-lease-1", NOW + 23 * 60_000);
     const leased = await unitBy(CH(40));
     const due = (await store.dueAssignments(NOW)).map((d) => d.unit_id);
-    chk("L1 실행이 실은 단위는 붙잡힌다 — 다음 확인 = 지금 + 가장 긴 상한 · sched.lease = 그 판 · 그동안 틱이 «때가 됨» 으로 안 본다",
-      n === 1 && new Date(leased.next_at).getTime() === NOW + RUN_ALIVE_SEC * 1000 && leased.sched?.lease?.run === "cr-lease-1" && !due.includes(u.id),
+    chk("L1 실행이 실은 단위는 붙잡힌다 — 다음 확인 = 그 판의 마감 + 여유 · sched.lease = 그 판 · 그동안 틱이 «때가 됨» 으로 안 본다",
+      n === 1 && new Date(leased.next_at).getTime() === NOW + 23 * 60_000 && leased.sched?.lease?.run === "cr-lease-1" && !due.includes(u.id),
       JSON.stringify({ n, next: leased.next_at, sched: leased.sched, due }));
     //  담당이 B 로 바뀐다(A 의 로그인이 끊김) — A 의 늦은 판은 아무것도 안 쓰고 자기 임대만 푼다.
     await itemsPool.query(`INSERT INTO collect_assignee_state(member_id, connector, state, since, retry_at, fails) VALUES($1,'*','login_broken',now(), now() + interval '1 hour', 1)`, [A]);
@@ -147,12 +150,22 @@ try {
         && (await store.dueAssignments(Date.now() + 1000)).some((d) => d.unit_id === u.id && d.member === B),
       JSON.stringify({ kept: kept.sched, released: [released.next_at, released.sched] }));
     await itemsPool.query(`DELETE FROM collect_assignee_state WHERE member_id = $1`, [A]);
-    await leaseUnits([u.id], "cr-lease-2", NOW);
+    await leaseUnits([u.id], "cr-lease-2", NOW + 20 * 60_000);
     await noteUnitRead(u.id, { outcome: "complete", sample: { e: NOW_SEC - 60, s: DAY, n: 1 }, now: NOW }, { member: A, runId: "cr-lease-2" });
     const done = await unitBy(CH(40));
     chk("L3 담당의 판이 저장되면 판정이 임대를 대신한다(다음 확인 = 주기 뒤 · lease 없음)",
       done.sched?.lease == null && done.sched?.why === "interval" && new Date(done.next_at).getTime() === NOW + done.interval_sec * 1000,
       JSON.stringify({ next: done.next_at, sched: done.sched, iv: done.interval_sec }));
+    //  판정 없이 끝난 판(저장 단계 실패 · 훑기가 닫음)은 자기 임대만 푼다 — 다음 확인 = 지금 + 10분(곧바로 같은 실패를 되풀이하지 않게).
+    const x1 = await makeUnit(CH(41), A), x2 = await makeUnit(CH(42), A), y1 = await makeUnit(CH(43), A);
+    await leaseUnits([x1.id, x2.id], "cr-lease-x", NOW + 23 * 60_000);
+    await leaseUnits([y1.id], "cr-lease-y", NOW + 23 * 60_000);
+    const freed = await releaseRunLeases("cr-lease-x", NOW);
+    const [a1, a2, b1] = [await unitBy(CH(41)), await unitBy(CH(42)), await unitBy(CH(43))];
+    chk("L4 판정 없이 끝난 판의 임대 풀기 — 그 판의 단위만 · 다음 확인 = 지금 + 10분 · 남의 판 임대는 그대로",
+      freed === 2 && [a1, a2].every((x) => x.sched?.lease == null && new Date(x.next_at).getTime() === NOW + 600_000)
+        && b1.sched?.lease?.run === "cr-lease-y" && new Date(b1.next_at).getTime() === NOW + 23 * 60_000,
+      JSON.stringify({ freed, a1: [a1.next_at, a1.sched], b1: [b1.next_at, b1.sched] }));
   }
 
   // ── R4~R6 주기 고정·자동 · 모으기로 켜기 · 활동량 작성자 ──
@@ -245,6 +258,16 @@ try {
     r = await sched.collectScheduleTick(t.d);
     chk("R9c' 저장 단계가 아직인 판의 주인(끝난 지 15분 안)은 안 띄운다 · 그보다 오래된 판은 훑기 몫이라 막지 않는다",
       !t.started.includes(B) && t.started.includes(C) && t.started.includes(A), JSON.stringify({ started: t.started }));
+    //  끝 기록이 없는 판 — 그 판의 마감 전이면 도는 사람(C) · 마감이 지났으면(지켜보던 게이트웨이가 사라진 판) 도는 사람이 아니다(B) ·
+    //   마감을 모르는 옛 판은 가장 긴 상한(65분)으로(A — 20분 전 시작).
+    await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
+    await runRow("cr-b-orphan", B, { started: new Date(NOW - 25 * 60_000), deadline: new Date(NOW - 7 * 60_000) });
+    await runRow("cr-c-live", C, { started: new Date(NOW - 5 * 60_000), deadline: new Date(NOW + 13 * 60_000) });
+    await runRow("cr-a-old", A, { started: new Date(NOW - 20 * 60_000) });
+    t = deps({ max: 5, readErr: { "cr-b-orphan": httpErr(502, "x"), "cr-a-old": httpErr(502, "x") } });
+    r = await sched.collectScheduleTick(t.d);
+    chk("R9c'' 끝 기록 없는 판 — 마감 전이면 도는 사람(C) · 마감이 지났으면 아니다(B) · 마감을 모르는 옛 판은 65분까지 도는 사람(A)",
+      t.started.includes(B) && !t.started.includes(C) && !t.started.includes(A), JSON.stringify({ started: t.started }));
     //  A 는 최근 두 판이 연달아 실패했다 → 마지막 실패 뒤 20분 물러섬.
     await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
     sched._resetCollectScheduleForTest();
@@ -318,8 +341,32 @@ try {
     await runRow("cr-b-manual", B, { started: new Date(NOW - 2 * H * 1000), ended: new Date(NOW - 2 * H * 1000 + 60_000), outcome: "ok", ingest: { state: "done" }, plan: { mode: "collect", units: [] } });
     t = deps({ max: 5, dailyMax: 3 });
     r = await sched.collectScheduleTick(t.d);
-    chk("R9l 최근 24시간 주기 판이 상한에 닿은 사람(A)은 쉰다 · 사람이 직접 띄운 판은 안 센다(B)",
+    chk("R9l 최근 24시간 주기 판이 안전망(3)에 닿은 사람(A)은 늦춘다 · 사람이 직접 띄운 판은 안 센다(B)",
       !t.started.includes(A) && t.started.includes(B) && r.capped === 1, JSON.stringify({ started: t.started, capped: r.capped }));
+    //  멈추지 않고 고르게 — 마지막 주기 판(2시간 전) + 24시간/3 = 6시간 뒤면 다시 띄운다(24시간 창에 아직 3판이 있어도).
+    t = deps({ max: 5, dailyMax: 3, now: NOW + 6 * H * 1000 + 1000 });
+    r = await sched.collectScheduleTick(t.d);
+    chk("R9l' 안전망은 멈춤이 아니라 늦춤 — 마지막 주기 판 + 24시간/상한이 지나면 다시 띄운다",
+      t.started.includes(A) && r.capped === 0, JSON.stringify({ started: t.started, capped: r.capped }));
+    //  중계가 멈춘 띄우기 — 마감(시험 50ms)이 지나면 그 사람만 실패로 세고 틱은 끝난다 · 다음 틱은 «도는 중» 이 아니다 · 그 사람은 물러선다.
+    sched._resetCollectScheduleForTest();
+    await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
+    t = deps({ max: 5, hang: [B], deadlineMs: 50 });
+    r = await sched.collectScheduleTick(t.d);
+    const t2 = deps({ max: 5 });
+    const r2 = await sched.collectScheduleTick(t2.d);
+    chk("R9m 중계가 멈춘 띄우기는 마감 뒤 그 사람만 실패 — 뒤 사람은 띄우고 · 다음 틱은 돈다 · 멈춘 사람은 물러선다",
+      r.failed.length === 1 && r.failed[0].member === B && r.failed[0].status === null && t.started.includes(A) && t.started.includes(C)
+        && !r2.skipped && !t2.started.includes(B),
+      JSON.stringify({ r: { failed: r.failed, started: t.started }, r2: { skipped: r2.skipped, started: t2.started } }));
+    //  마감이 없는 자리(정책 조회)에서 틱이 멈췄다 — 그동안의 틱은 «도는 중» 으로 돌아가고, 30분이 넘으면 다음 틱이 이어받는다.
+    sched._resetCollectScheduleForTest();
+    void sched.collectScheduleTick({ ...deps({}).d, policy: () => new Promise(() => {}) });   // 끝나지 않는 틱(기다리지 않는다)
+    const during = await sched.collectScheduleTick(deps({ now: NOW + 60_000 }).d);
+    const tn = deps({ max: 5, now: NOW + 31 * 60_000 });
+    const after = await sched.collectScheduleTick(tn.d);
+    chk("R9n 앞 틱이 멈춘 채면 «도는 중» 으로 돌아가다가 30분이 넘으면 이어받는다",
+      during.skipped === "busy" && !after.skipped && tn.started.length > 0, JSON.stringify({ during: during.skipped, after: after.skipped, started: tn.started }));
   }
 
   // ── R10 훑기 — 저장 단계를 못 탄 끝난 실행 ──
@@ -356,6 +403,25 @@ try {
     chk("R10c 네 번 못 읽어도 한 시간 전이면 그대로 · 한 시간이 넘으면 닫는다 — 끝 기록이 없었으면 «잃음»(게이트웨이 추정)",
       early.ingest === null && early.outcome === null && flaky.ingest?.state === "failed" && flaky.outcome === "lost" && flaky.ended_by === "gateway",
       JSON.stringify({ early, flaky }));
+    //  마감을 아는 판 — 끝 기록이 없어도 마감이 지났으면(지켜보던 게이트웨이가 사라짐) 65분을 기다리지 않고 읽는다 · 마감 전이면 안 읽는다.
+    await itemsPool.query(`DELETE FROM collect_run WHERE member_id = ANY($1::text[])`, [MEMBERS]);
+    sched._resetCollectScheduleForTest();
+    await runRow("cr-sw-orphan", A, { outcome: null, started: new Date(Date.now() - 25 * 60_000), deadline: new Date(Date.now() - 7 * 60_000) });
+    await runRow("cr-sw-live", B, { outcome: null, started: new Date(Date.now() - 25 * 60_000), deadline: new Date(Date.now() + 30 * 60_000) });
+    t = deps({ max: 0 });
+    await sched.collectScheduleTick(t.d);
+    chk("R10d 끝 기록 없는 판은 그 판의 마감이 지나면 읽는다(65분을 기다리지 않는다) · 마감 전이면 안 읽는다",
+      JSON.stringify(t.read) === JSON.stringify([`${A}:cr-sw-orphan`]), JSON.stringify(t.read));
+    //  닫는 판이 건 단위 임대는 풀린다 — 임대 끝(마감 + 여유)까지 묶이지 않게.
+    const lu = await makeUnit(CH(44), C);
+    await leaseUnits([lu.id], "cr-sw-closing", Date.now() + 23 * 60_000);
+    await runRow("cr-sw-closing", C, { outcome: "ok", ended: new Date(NOW - 60_000) });
+    const gone2 = { "cr-sw-closing": httpErr(404, "없음") };
+    for (let i = 0; i < 2; i++) await sched.collectScheduleTick(deps({ max: 0, readErr: gone2 }).d);
+    const lu2 = await unitBy(CH(44));
+    chk("R10e 훑기가 닫은 판이 건 단위 임대는 풀린다 — 다음 확인이 지금 + 10분 안",
+      lu2.sched?.lease == null && new Date(lu2.next_at).getTime() <= Date.now() + 600_000 + 1000,
+      JSON.stringify({ next: lu2.next_at, sched: lu2.sched }));
   }
 
   // ── R11 저장 단계가 단위마다 다음 확인을 적는다 ──
@@ -375,7 +441,7 @@ try {
     });
     const notionErr = { tool_name: "mcp__claude_ai_Notion__notion-fetch", tool_input: { id: NOTION_REF },
       tool_response: [{ type: "text", text: JSON.stringify({ error: "rate limited" }) }] };
-    await leaseUnits([u.id, v.id, nu.id], "cr-r11", NOW);
+    await leaseUnits([u.id, v.id, nu.id], "cr-r11", NOW + 20 * 60_000);
     const res = await ingestRun({
       member: A, now: NOW, runId: "cr-r11",
       plan: { mode: "collect", planned_at: PLANNED, units: [
@@ -401,7 +467,7 @@ try {
     const w = await makeUnit(CH(32), A);
     await store.recordUnitListing({ member: B, app: "slack", connector: "Slack", instance: TEAM, items: [{ ref: CH(32), kind: "channel", name: "#w" }], verified: true });
     await itemsPool.query(`INSERT INTO collect_assignee_state(member_id, connector, state, since, retry_at, fails) VALUES($1,'*','login_broken',now(), now() + interval '1 hour', 1)`, [A]);
-    await leaseUnits([w.id], "cr-r11d", NOW);
+    await leaseUnits([w.id], "cr-r11d", NOW + 20 * 60_000);
     const late = await ingestRun({
       member: A, now: NOW, runId: "cr-r11d",
       plan: { mode: "collect", planned_at: PLANNED, units: [{ id: w.id, app: "slack", instance: TEAM, ref: CH(32), kind: "channel", connector: "Slack", since, until: null }] },
@@ -414,6 +480,21 @@ try {
         && late.per_unit?.[0]?.next == null,
       JSON.stringify({ next: wl.next_at, sched: wl.sched, per: late.per_unit?.[0] }));
   }
+  // ── R12 수집 실행 띄우기 — 같은 사람을 동시에 두 번 부르면 하나만 지나간다 ──
+  {
+    const run = collectRunCapabilities.find((c) => c.name === "collect_claude_run");
+    if (!run) throw new Error("collect_claude_run 를 못 찾았다(배선)");
+    const user = { userId: "__ci_sched_nobody__", email: "", scopes: ["items", "context", "memory"], projects: [] };
+    const call = () => run.handler({ mode: "collect" }, user, { source: "pg-test" });
+    const both = await Promise.allSettled([call(), call()]);
+    const after = await Promise.allSettled([call()]);
+    const msgs = both.map((x) => x.reason?.message ?? "");
+    chk("R12 같은 사람의 동시 띄우기 둘 — 둘 다 409 지만 하나는 자리 확인에서 막히고(다른 까닭) · 끝나면 자리가 풀려 다시 앞쪽 까닭으로 막힌다",
+      both.every((x) => x.status === "rejected" && x.reason?.status === 409) && msgs[0] !== msgs[1]
+        && after[0].status === "rejected" && after[0].reason?.status === 409 && msgs.includes(after[0].reason?.message),
+      JSON.stringify({ msgs, after: after[0].reason?.message }));
+  }
+
   // ── S1 칸을 처음 만들 때 — 이미 주기가 적힌 단위는 고정으로 남는다 ──
   {
     await cleanup(); await addMembers();

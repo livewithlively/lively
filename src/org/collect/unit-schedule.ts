@@ -3,8 +3,9 @@
 //  틱은 수집 실행 모듈을 부른다).
 //
 //  ── 임대(lease) ──
-//   수집 실행이 뜨면 그 판에 실은 단위의 다음 확인 시각을 «가장 긴 상한 뒤» 로 붙잡는다(sched.lease = 그 판). 저장 단계가 판정으로 덮어쓰고,
-//   저장을 못 탄 판이면 임대가 끝나 저절로 다시 때가 된다. 그래서 직전 판의 저장 단계가 아직 도는 동안 틱이 같은 단위로 판을 또 띄우지 않는다
+//   수집 실행이 뜨면 그 판에 실은 단위의 다음 확인 시각을 «그 판의 마감 + 여유» 로 붙잡는다(sched.lease = 그 판). 저장 단계가 판정으로 덮어쓰고,
+//   저장 단계가 판정 없이 실패했거나 훑기가 그 판을 닫으면 임대를 풀어 물러서기 간격 뒤에 다시 때가 된다(releaseRunLeases). 아무도 못 풀면
+//   임대가 끝나 저절로 다시 때가 된다. 그래서 직전 판의 저장 단계가 아직 도는 동안 틱이 같은 단위로 판을 또 띄우지 않는다
 //   (리뷰 2026-10-17 — 끝난 판은 «도는 중» 에서 빠지는데 단위는 저장이 끝나야 다음 확인 시각이 옮겨진다).
 //  ── 지금 담당만 ──
 //   다음 확인 시각 · 실패 수 · 주기 · 활동량은 **지금 담당의 판**만 쓴다(T10 «읽은 위치는 지금 담당만» 과 같은 규칙). 담당이 바뀐 뒤 늦게 끝난
@@ -15,8 +16,11 @@ import { logger } from "../../log.js";
 import { canAdvanceCursor } from "./unit-plan.js";
 import { getUnit, planUnits } from "./unit-store.js";
 import {
-  RUN_ALIVE_SEC, activityOf, addSample, effectiveIntervalSec, nextCheck, type NextWhy, type ReadNote,
+  RETRY_BASE_SEC, activityOf, addSample, effectiveIntervalSec, nextCheck, type NextWhy, type ReadNote,
 } from "./schedule-plan.js";
+
+/** 임대는 그 판의 마감(실행 상한 + 유예)에서 이만큼 더 — 끝 신호를 읽고 저장 단계가 판정을 적을 여유. */
+export const LEASE_MARGIN_MS = 5 * 60_000;
 
 export interface UnitReadBy {
   /** 그 판의 주인 — 지금 담당이 아니면 쓰지 않는다. 비우면 확인하지 않는다(시험·내부). */
@@ -90,22 +94,41 @@ export async function noteUnitRead(unitId: number, note: ReadNote & { now?: numb
 }
 
 /**
- * 수집 실행이 실은 단위를 붙잡는다 — 다음 확인 시각을 «지금 + 가장 긴 상한»(이미 더 뒤면 그대로)으로, sched.lease 에 그 판을 적는다.
+ * 수집 실행이 실은 단위를 붙잡는다 — 다음 확인 시각을 untilMs(그 판의 마감 + 여유 — 이미 더 뒤면 그대로)로, sched.lease 에 그 판을 적는다.
  *  저장 단계(noteUnitRead)가 판정으로 덮어쓴다. **던지지 않는다**(못 붙잡아도 실행은 그대로 — 틱의 «도는 사람» 판정이 겹 방어다).
  */
-export async function leaseUnits(unitIds: readonly number[], runId: string, nowMs = Date.now()): Promise<number> {
+export async function leaseUnits(unitIds: readonly number[], runId: string, untilMs: number): Promise<number> {
   const ids = [...new Set(unitIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
-  if (!ids.length || !runId) return 0;
-  const until = new Date(nowMs + RUN_ALIVE_SEC * 1000).toISOString();
+  if (!ids.length || !runId || !Number.isFinite(untilMs)) return 0;
   try {
     const r = await itemsPool.query(
       `UPDATE collect_unit SET
           next_at = GREATEST(COALESCE(next_at, '-infinity'::timestamptz), $3::timestamptz),
-          sched = sched || jsonb_build_object('lease', jsonb_build_object('run', $2::text, 'until', $3::text))
-        WHERE id = ANY($1::int[])`, [ids, runId, until]);
+          sched = sched || jsonb_build_object('lease', jsonb_build_object('run', $2::text))
+        WHERE id = ANY($1::int[])`, [ids, runId, new Date(untilMs).toISOString()]);
     return r.rowCount ?? 0;
   } catch (e) {
     logger.warn({ runId, err: (e as Error)?.message }, "[collect-schedule] 수집 실행이 실은 단위를 못 붙잡았다 — 실행은 그대로");
+    return 0;
+  }
+}
+
+/**
+ * 그 판이 건 임대를 푼다 — 저장 단계가 단위 판정 없이 끝났을 때(원문·계획을 못 읽음 · 예외) · 훑기가 그 판을 닫을 때. 다음 확인 시각을
+ *  «지금 + 물러서기 첫 간격» 으로 당긴다(이미 더 이르면 그대로) — 임대 끝까지 묶이지 않고, 곧바로 같은 실패를 되풀이하지도 않게.
+ *  남의 판이 건 임대는 건드리지 않는다. **던지지 않는다.**
+ */
+export async function releaseRunLeases(runId: string, nowMs = Date.now()): Promise<number> {
+  if (!runId) return 0;
+  try {
+    const r = await itemsPool.query(
+      `UPDATE collect_unit SET
+          next_at = LEAST(COALESCE(next_at, 'infinity'::timestamptz), $2::timestamptz),
+          sched = sched - 'lease'
+        WHERE sched->'lease'->>'run' = $1`, [runId, new Date(nowMs + RETRY_BASE_SEC * 1000).toISOString()]);
+    return r.rowCount ?? 0;
+  } catch (e) {
+    logger.warn({ runId, err: (e as Error)?.message }, "[collect-schedule] 그 판이 건 임대를 못 풀었다 — 임대가 끝나면 다시 때가 된다");
     return 0;
   }
 }

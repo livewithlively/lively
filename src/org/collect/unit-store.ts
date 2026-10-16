@@ -85,7 +85,7 @@ export interface UnitRow {
 
 const UNIT_COLS = `u.id, u.app, u.instance, u.ref, u.kind, u.name, u.parent_id, u.route, u.collector_id, u.connector, u.state,
   u.cursor, u.read_at, u.read_by, u.last_item_at, u.interval_sec, u.description, u.meta, u.visibility, u.owner_member,
-  u.next_at, u.interval_auto, u.sched,
+  u.next_at, u.interval_auto, (u.sched - 'hist') AS sched,
   u.created_at, u.updated_at, u.updated_by`;
 
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
@@ -1057,7 +1057,9 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     //   다음 확인 시각은 «읽은 시각 + 새 주기» 로 옮긴다(아직 안 읽은 단위는 그대로 곧바로다). 모으기로 새로 켠 단위는 다음 틱에 곧바로.
     const ivSet = patch.interval_sec !== undefined;
     const ivAuto = ivSet ? patch.interval_sec === null : null;
-    const ivVal = !ivSet ? null : patch.interval_sec ?? effectiveIntervalSec({ interval_sec: null, interval_auto: true }, u.sched.hist, Math.floor(Date.now() / 1000));
+    //   표본(sched.hist)은 단위 조회 칸에서 뺐다(판마다 쌓여 무겁다 — 목록·틱은 안 쓴다) — 자동으로 되돌릴 때만 따로 읽는다.
+    const hist = ivAuto ? (await client.query(`SELECT sched->'hist' AS hist FROM collect_unit WHERE id = $1`, [id])).rows[0]?.hist : null;
+    const ivVal = !ivSet ? null : patch.interval_sec ?? effectiveIntervalSec({ interval_sec: null, interval_auto: true }, hist, Math.floor(Date.now() / 1000));
     await client.query(
       `UPDATE collect_unit SET
           state = COALESCE($2, state),

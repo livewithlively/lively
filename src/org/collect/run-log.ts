@@ -34,19 +34,22 @@ export async function recordRunStart(input: {
   capMb: number | null; requestMb: number | null; startedAt: Date; now?: number;
   /** 실행 종류와 계획(저장 단계가 다시 읽는다 — 게이트웨이가 재기동해도). */
   mode?: string | null; plan?: unknown;
+  /** #4744 이 판의 마감(실행 상한 + 유예) — 지켜보던 게이트웨이가 사라져도 «아직 도나» · «훑을 때가 됐나» 를 이 시각으로 가른다. */
+  deadlineAt?: Date | null;
 }): Promise<void> {
   try {
     await itemsPool.query(
       //  끝 기록이 먼저 행을 만들었으면(시작 기록이 늦은 판) 비어 있는 칸만 채운다 — 끝이 적은 결과·지표는 건드리지 않는다.
-      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb, mode, plan)
-       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9::jsonb)
+      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb, mode, plan, deadline_at)
+       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9::jsonb,$10)
        ON CONFLICT (tenant_id, run_id) DO UPDATE SET
          model = COALESCE(collect_run.model, EXCLUDED.model),
          cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb),
          mode = COALESCE(collect_run.mode, EXCLUDED.mode), plan = COALESCE(collect_run.plan, EXCLUDED.plan),
+         deadline_at = COALESCE(collect_run.deadline_at, EXCLUDED.deadline_at),
          apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END`,
       [input.runId, input.member, input.startedAt, appsOf(input.apps), input.model, input.capMb, input.requestMb,
-       input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan)]);
+       input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan), input.deadlineAt ?? null]);
     await purgeOld(input.now ?? Date.now());
   } catch (e) {
     logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 시작 기록 실패 — 실행은 그대로");
