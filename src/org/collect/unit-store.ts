@@ -350,6 +350,7 @@ const POLICY_CLOSED: ResolvedSourceVis = { visibility: "members", members: [], r
  *  · 줄 세우기(리뷰 B1)는 부르는 쪽이 한다 — 저장은 제 단위를 FOR SHARE, 공개범위 바꾸기·구성원 변경은 FOR UPDATE 로 먼저 잡는다.
  *    여기서 «함께 묶인 다른 단위» 까지 잡지 않는다: 저장은 자료 행을 이미 쥐고(mirror) 있고 공개범위 바꾸기는 단위 행을 쥔 채 그 자료를
  *    쓰려 하므로 서로 기다리는 교착이 된다. 잡지 않아도 자료 행 잠금이 쓰기 순서를 정해, 결과는 맞거나 더 좁다(닫히는 쪽).
+ *    더 좁아진 자료는 같은 자료를 다시 저장하거나 그 단위를 다시 맞출 때 돌아온다 — 증분 수집은 옛 자료를 다시 읽지 않아 한동안 남을 수 있다.
  *  ⚠ 자료마다 문장을 돌리지 않는다 — 한 채널 5만 건이면 구성원 한 명이 들어올 때마다 15만 문장이 된다(리뷰 2026-10-16).
  *   묶음마다 대상을 한 번 계산해 500건씩 세 문장(UPDATE·DELETE·INSERT)으로 쓴다. 정책 고르기는 자료마다지만 메모리 안 계산이다.
  *  정책을 못 읽으면 닫는 쪽(대상 0)으로 — 열어 두면 정책 위반이 유출로 굳는다(stampSourceVisibility 와 같은 규칙).
@@ -585,9 +586,14 @@ export interface ListingResult {
   complete_ignored: boolean;
 }
 
-/** 신고로만 생긴 채 아직 검토 전인 단위 — 서버 목록($10 = verified)이 처음 오면 종류·첫 제안·주인을 다시 정한다(ON CONFLICT 의 옛 행 기준). */
+/**
+ * 신고로만 생긴 채 아직 검토 전인 단위 — 서버 목록($10 = verified)이 처음 오면 종류·첫 제안·주인을 다시 정한다(ON CONFLICT 의 옛 행 기준).
+ *  모은 자료가 하나라도 있으면 사람이 검토한 단위다 — 보류로 돌리고 확인된 구성원이 다 빠졌어도 다시 정하지 않는다
+ *  (다시 정하면 이미 모은 자료가 확인 없이 소급해 열린다 · 재검토 B5).
+ */
 const PROVISIONAL = `($10::boolean AND collect_unit.route = 'member_ai' AND collect_unit.state = 'candidate'
-  AND NOT EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = collect_unit.id AND x.verified_at IS NOT NULL))`;
+  AND NOT EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = collect_unit.id AND x.verified_at IS NOT NULL)
+  AND NOT EXISTS (SELECT 1 FROM collect_unit_source us WHERE us.unit_id = collect_unit.id))`;
 
 /**
  * 구성원 한 명이 커넥터로 훑은 «무엇이 있나» 를 표에 반영한다.
@@ -943,6 +949,15 @@ export interface UnitPatch {
   confirm?: boolean;
 }
 
+/** 이 사람이 이 단위를 고칠 수 있나 — 못 보면 404(없는 단위로 답한다) · 보지만 못 고치면 403. 통과하면 그 단위를 돌려준다. */
+function assertCanEdit(u: UnitRow | null, id: number, actor: Actor): UnitRow {
+  if (!u || unitAccess(accessInput(u), actor.member, actor.isAdmin) !== "full") throw new UnitError(404, `수집 단위 #${id} 가 없습니다`);
+  if (!canEditUnit(accessInput(u), actor.member, actor.isAdmin)) {
+    throw new UnitError(403, "이 단위를 고칠 권한이 없습니다 — 수집기 단위는 관리자 또는 확인된 볼 수 있는 구성원, 그 밖은 확인된 볼 수 있는 구성원만");
+  }
+  return u;
+}
+
 const VIS_AUDIENCE_LABEL: Record<UnitVisibility, string> = {
   me: "정한 사람 한 명", viewers: "이 단위를 볼 수 있는 것이 확인된 구성원", all: "워크스페이스 전원",
 };
@@ -961,16 +976,15 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
   if (patch.interval_sec != null && !(Number.isInteger(patch.interval_sec) && patch.interval_sec >= 60 && patch.interval_sec <= 30 * 86400)) {
     throw new UnitError(400, "interval_sec 는 60~2592000 초입니다");
   }
+  //  잠그기 전에 한 번 거른다 — 단위를 못 보거나 못 고치는 사람은 잠금을 기다리지 않고 바로 404/403 이다(남의 단위 id 를 돌려
+  //   진행 중인 저장을 막거나 연결을 붙들지 못하게 · 재검토 N-a). 통과한 호출만 잠근 뒤 최신 행으로 같은 판정을 다시 한다.
+  assertCanEdit(await getUnit(id), id, actor);
   let before: Record<string, unknown> = {};
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
     const got = await client.query(`SELECT id FROM collect_unit WHERE id=$1 FOR UPDATE`, [id]);
-    const u = got.rows.length ? await getUnit(id, client) : null;
-    if (!u || unitAccess(accessInput(u), actor.member, actor.isAdmin) !== "full") throw new UnitError(404, `수집 단위 #${id} 가 없습니다`);
-    if (!canEditUnit(accessInput(u), actor.member, actor.isAdmin)) {
-      throw new UnitError(403, "이 단위를 고칠 권한이 없습니다 — 수집기 단위는 관리자 또는 확인된 볼 수 있는 구성원, 그 밖은 확인된 볼 수 있는 구성원만");
-    }
+    const u = assertCanEdit(got.rows.length ? await getUnit(id, client) : null, id, actor);
     const viewers = u.members.map((m) => m.member_id);
     //  경로를 바꾸면 누가 모으나가 바뀐다(수집기는 제 설정대로 따로 돈다 — 구성원 경로로 돌리면 둘이 겹쳐 모은다).
     if (patch.route != null && patch.route !== u.route && !actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");

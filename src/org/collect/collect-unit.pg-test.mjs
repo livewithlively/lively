@@ -31,6 +31,7 @@ const MEMBERS = [A, B, C, D];
 const APP = "cupg";                 // 이 시험만 쓰는 앱 키 — 남의 자료·수집기와 섞이지 않는다
 const BULK_APP = "cupg-bulk";
 const LEFT_APP = "cupg-left";       // «완전한 목록» 으로 빠지는 시험 — 다른 시험의 단위를 건드리지 않게 앱을 따로 쓴다
+const PROV_APP = "cupg-prov";       // 보류로 돌린 단위를 서버 목록이 다시 정하지 않는지(B5) — 같은 이유로 따로
 const TEAM_SLACK = "T_CUPG";       // 이관 시험용 슬랙 팀(인스턴스)
 const NOTION_INST = "cupg-notion";
 const COLLECTOR_KEYS = ["pgtest-cu-slack", "pgtest-cu-gmail", "pgtest-cu-gmail-c", "pgtest-cu-notion"];
@@ -76,8 +77,8 @@ const healthRow = async (member, connector = "*") => (await itemsPool.query(
 
 async function cleanup() {
   await itemsPool.query(`DELETE FROM collect_unit WHERE app = ANY($1::text[]) OR (app='slack' AND instance=$2) OR (app='notion' AND instance=$3)
-                           OR (app='gmail' AND lower(ref) = ANY($4::text[]))`, [[APP, BULK_APP, LEFT_APP], TEAM_SLACK, NOTION_INST, MEMBERS.map((m) => `${m}@cupg.test`)]);
-  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[]) OR (external_system='slack' AND external_instance=$2)`, [[APP, BULK_APP, LEFT_APP], TEAM_SLACK]);
+                           OR (app='gmail' AND lower(ref) = ANY($4::text[]))`, [[APP, BULK_APP, LEFT_APP, PROV_APP], TEAM_SLACK, NOTION_INST, MEMBERS.map((m) => `${m}@cupg.test`)]);
+  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[]) OR (external_system='slack' AND external_instance=$2)`, [[APP, BULK_APP, LEFT_APP, PROV_APP], TEAM_SLACK]);
   await itemsPool.query(`DELETE FROM knowledge WHERE external_system='notion' AND external_instance=$1`, [NOTION_INST]);
   await itemsPool.query(`DELETE FROM collect_assignee_state WHERE member_id = ANY($1::text[])`, [MEMBERS]);
   await itemsPool.query(`DELETE FROM connector_run WHERE collector_id IN (SELECT id FROM org_collector WHERE key = ANY($1::text[]))`, [COLLECTOR_KEYS]).catch(() => {});
@@ -380,6 +381,8 @@ try {
     chk("A8 축이 꺼져도 담당이 맡는다 · 저장된 자료는 단위 공개범위대로 잠금·대상이 적힌다 · 목록이 «적용 안 함» 을 알린다",
       lc.includes("ch1") && r.visibility === "members" && (await audience(r.id)).length > 0 && off.visibility_enforced === false,
       JSON.stringify({ lc, vis: r.visibility, enforced: off.visibility_enforced }));
+    const offUpd = await capOf("collect_unit_update").handler({ id: u.id, description: "축 꺼짐 시험" }, userOf(C), {});
+    chk("A8c 고치기 응답도 «적용 안 함» 을 알린다(visibility_enforced=false)", offUpd.visibility_enforced === false, JSON.stringify(offUpd.visibility_enforced));
     await itemsPool.query(`UPDATE org_runtime_config SET visibility_axes = visibility_axes - 'source' WHERE id=1`);
     invalidateVisAxes();
     chk("A8b 축을 다시 켜면 목록이 «적용함» 으로 돌아온다", (await capOf("collect_units").handler({ app: APP }, userOf(A))).visibility_enforced === true);
@@ -447,6 +450,18 @@ try {
     const nbU = await unitBy("nobody");
     chk("W1f 수집 중(active) 단위는 서버 목록이 와도 종류·공개범위·주인을 다시 정하지 않는다",
       nbU.kind === "channel" && nbU.visibility === "viewers" && nbU.owner_member == null, JSON.stringify([nbU.kind, nbU.visibility, nbU.owner_member]));
+    //  모은 자료가 있는 단위는 보류로 돌리고 확인된 구성원이 다 빠져도, 서버 목록이 공개범위를 다시 정하지 않는다(재검토 B5).
+    await listing(A, [{ ref: "p-1", kind: "channel" }, { ref: "p-keep", kind: "channel" }], { app: PROV_APP });
+    const p1u = await unitBy("p-1", PROV_APP);
+    await store.updateUnit(p1u.id, { visibility: "viewers", state: "active" }, { member: A, isAdmin: false });
+    await store.storeUnitItems(p1u.id, [item("p-1-a")], { member: A });
+    await store.updateUnit(p1u.id, { state: "candidate" }, { member: A, isAdmin: false });
+    await listing(A, [{ ref: "p-keep", kind: "channel" }], { app: PROV_APP, complete: true });   // A 가 p-1 에서 빠진다 — 확인된 구성원 0
+    await listing(D, [{ ref: "p-1", kind: "channel" }], { app: PROV_APP });                       // 다른 구성원의 서버 목록(공개 채널)
+    const p1after = await unitBy("p-1", PROV_APP), pa = (await srcRows("p-1-a", PROV_APP))[0];
+    chk("W1g 자료가 있는 보류 단위는 서버 목록이 와도 공개범위를 다시 정하지 않는다 — 이미 모은 자료가 확인 없이 열리지 않는다",
+      p1after.visibility === "viewers" && pa.visibility === "members" && !(await canSeeSource(pa.id, C)),
+      JSON.stringify({ unit: p1after.visibility, vis: pa.visibility }));
     for (const r of ["w-pub", "w-priv", "w-dm"]) await activate(r);
 
     await store.storeUnitItems(pub.id, [item("w-pub-1")], { member: A });
@@ -557,6 +572,13 @@ try {
     chk("W9b «모두» 단위라도 정책이 채널 이름(그릇 이름 finance)으로 걸려 있으면 그 정책 대상(C)만",
       fin.visibility === "all" && f1.visibility === "members" && JSON.stringify(await audience(f1.id)) === JSON.stringify([`member:${C}`]) && !(await canSeeSource(f1.id, A)),
       JSON.stringify({ unit: fin.visibility, vis: f1.visibility, aud: await audience(f1.id) }));
+    //  한 단위 안에서 그릇 이름이 다른 자료(이름이 바뀐 채널)는 정책도 다르다 — 한 번에 다시 맞춰도 자료마다 제 정책으로.
+    await store.storeUnitItems(fin.id, [item("fin-2", "이름 바뀐 뒤", { extra: { container_name: "finance-renamed" } })], { member: A });
+    await store.syncUnitAudience(itemsPool, [fin.id]);
+    const f1b = (await srcRows("fin-1"))[0], f2 = (await srcRows("fin-2"))[0];
+    chk("W9c 한 단위의 자료 둘 — 정책 이름과 맞는 자료는 정책 대상(C)만 · 안 맞는 자료는 «모두» 로 열림(한 번에 다시 맞춰도 섞이지 않는다)",
+      f1b.visibility === "members" && JSON.stringify(await audience(f1b.id)) === JSON.stringify([`member:${C}`]) && f2.visibility === "open",
+      JSON.stringify({ f1: [f1b.visibility, await audience(f1b.id)], f2: f2.visibility }));
     await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE id=$1`, [polN]);
     invalidateSourceVisRules();
 
@@ -612,6 +634,13 @@ try {
       return { reached: at, release: () => release() };
     };
     const holdNextCommit = () => holdNth("COMMIT", 1);
+    //  붙잡은 지점에 닿기를 기다리되 끝없이 기다리지 않는다 — 닿지 못하면 풀어 주고 실패로(CI 가 멈추지 않게).
+    const reach = async (h, what) => {
+      let timer;
+      try {
+        await Promise.race([h.reached, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`멈출 자리에 닿지 못함: ${what}`)), 15_000); })]);
+      } catch (e) { h.release(); throw e; } finally { clearTimeout(timer); }
+    };
     //  다른 쪽이 끝났는지, 아니면 잠금을 기다리는 중인지 — 시간에 기대지 않고 pg_stat_activity 로 본다.
     const settle = async (done) => {
       for (let i = 0; i < 200; i++) {
@@ -630,7 +659,7 @@ try {
     await store.updateUnit(r1.id, { visibility: "all" }, { member: A, isAdmin: false });
     const h1 = holdNextCommit();
     const storing = store.storeUnitItems(r1.id, [item("r-1-a")], { member: A });
-    await h1.reached;                                   // 저장은 «모두» 로 계산을 마치고 커밋 직전
+    await reach(h1, "R1 저장 커밋 직전");               // 저장은 «모두» 로 계산을 마치고 커밋 직전
     let narrowed = false;
     const narrowing = store.updateUnit(r1.id, { visibility: "me" }, { member: A, isAdmin: false }).then((v) => { narrowed = true; return v; });
     const st1 = await settle(() => narrowed);
@@ -647,7 +676,7 @@ try {
     await store.storeUnitItems(r2.id, [item("r-2-a")], { member: A });
     const h2 = holdNextCommit();
     const narrowing2 = store.updateUnit(r2.id, { visibility: "me" }, { member: A, isAdmin: false });
-    await h2.reached;                                   // A 의 «나만» 이 커밋 직전(단위 행을 잡고 있음)
+    await reach(h2, "R2 좁히기 커밋 직전");             // A 의 «나만» 이 커밋 직전(단위 행을 잡고 있음)
     let bDone = false;
     const widening = statusOf(() => store.updateUnit(r2.id, { visibility: "all", confirm: true }, { member: B, isAdmin: false })).then((x) => { bDone = true; return x; });
     const st2 = await settle(() => bDone);
@@ -666,7 +695,7 @@ try {
     await activate("r-3", LEFT_APP);
     const h3 = holdNextCommit();
     const storing3 = store.storeUnitItems(r3.id, [item("r-3-a")], { member: A });
-    await h3.reached;
+    await reach(h3, "R3 저장 커밋 직전");
     let leftDone = false;
     const leaving = listing(B, ["r-3-other"], { app: LEFT_APP, complete: true }).then((x) => { leftDone = true; return x; });
     const st3 = await settle(() => leftDone);
@@ -683,7 +712,7 @@ try {
     await activate("r-4");
     const h4 = holdNextCommit();
     const narrowing4 = store.updateUnit(r4.id, { visibility: "me" }, { member: A, isAdmin: false });
-    await h4.reached;
+    await reach(h4, "R4 좁히기 커밋 직전");
     let bStored = false;
     const bStore = store.storeUnitItems(r4.id, [item("r-4-b")], { member: B }).then((x) => { bStored = true; return x; });
     const st4 = await settle(() => bStored);
@@ -704,10 +733,10 @@ try {
     const hv = holdNth("BEGIN", 2);                     // D 의 저장 — 항목 트랜잭션은 끝내고 «확인됨» 트랜잭션 직전에 멈춘다
     let dDone = false;
     const dStore = store.storeUnitItems(r5.id, [item("r-5-d")], { member: D }).then((x) => { dDone = true; return x; });
-    await hv.reached;
+    await reach(hv, "R5 확인됨 트랜잭션 직전");
     const hu = holdNextCommit();
     const narrowing5 = store.updateUnit(r5.id, { visibility: "me" }, { member: A, isAdmin: false });
-    await hu.reached;                                   // A 의 «나만» 이 커밋 직전(단위 행·자료 행을 잡고 있음)
+    await reach(hu, "R5 좁히기 커밋 직전");             // A 의 «나만» 이 커밋 직전(단위 행·자료 행을 잡고 있음)
     hv.release();
     const st5 = await settle(() => dDone);
     hu.release();
@@ -716,6 +745,19 @@ try {
     chk("R5 «확인됨» 으로 올리는 중에 «나만»(A)이 되면, 이미 모은 자료는 A 만 — 새로 확인된 D 에게 남지 않는다",
       st5 === "waiting" && JSON.stringify(await audience(s5.id)) === JSON.stringify([`member:${A}`]) && !(await canSeeSource(s5.id, D)),
       JSON.stringify({ st5, aud: await audience(s5.id) }));
+
+    //  단위를 못 보는 사람의 고치기는 잠금을 기다리지 않고 바로 404 — 남의 단위 id 를 돌려 저장을 막거나 연결을 붙들지 못한다(재검토 N-a).
+    const h6 = holdNextCommit();
+    const storing6 = store.storeUnitItems(r1.id, [item("r-1-b")], { member: A });
+    await reach(h6, "R6 저장 커밋 직전");
+    let strangerDone = false;
+    const stranger = statusOf(() => store.updateUnit(r1.id, { visibility: "all", confirm: true }, { member: "__outsider__", isAdmin: false }))
+      .then((x) => { strangerDone = true; return x; });
+    const st6 = await settle(() => strangerDone);
+    h6.release();
+    await storing6;
+    const code6 = await stranger;
+    chk("R6 단위를 못 보는 사람의 고치기는 잠금을 기다리지 않고 바로 404", st6 === "done" && code6 === 404, JSON.stringify({ st6, code6 }));
   }
 
   // ── M 지금 수집기 설정 → 단위(이관) · 수집기 1순위 · 꺼짐/끊김 ──
