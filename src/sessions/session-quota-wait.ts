@@ -73,17 +73,23 @@ export async function readQuotaWait(
 
 /**
  * 그 턴의 첫 줄 출처 — 기억이 있으면 그것, 없으면 창 시작(before)에서 거슬러 찾아 기억한다(못 찾음도). 찾다 실패하면 던지고 기억하지 않는다.
- *  실제로 찾은 판은 소요(ms)와 답을 info 로 남긴다 — 드문 일이고, 중계 한 번의 상한(허브 20초)에 얼마나 다가가는지 보는 유일한 자리다.
+ *  실제로 찾아본 판(던진 판 포함)은 소요(ms)와 결과를 info 로 남긴다 — 드문 일이고, 중계 한 번의 상한(허브 20초)에 얼마나 다가가는지 보는
+ *  유일한 자리다. «다시 찾을 땐 캐시가 데워져 빨라진다» 는 아직 가정이다 — 롤 뒤 이 로그의 ms 로 확인한다.
  */
 async function openerOriginOf(id: string, tfs: TranscriptFs, file: string, promptId: string, before: number): Promise<string | null> {
   const key = id + "\u0000" + file + "\u0000" + promptId;
   let v: string | null;
   if (openerCache.has(key)) v = openerCache.get(key) ?? null;
   else {
+    //  던진 판(허브 20초 상한 등)도 소요를 남긴다 — 관찰하려는 것이 바로 그 판이다(격리 리뷰).
     const t0 = Date.now();
-    v = await tfs.turnOpenerOrigin(file, promptId, before, QUOTA_OPENER_SCAN_BYTES);
-    logger.info({ id, promptId, origin: v === null ? null : v.slice(0, 64), before, ms: Date.now() - t0 },
-      "한도 대기 판정: 끝 창보다 긴 이어 간 턴 — 그 턴의 첫 줄을 거슬러 찾았다(#4821)");
+    let outcome = "실패(던짐)";
+    try {
+      v = await tfs.turnOpenerOrigin(file, promptId, before, QUOTA_OPENER_SCAN_BYTES);
+      outcome = v ?? "못 찾음";
+    } finally {
+      logger.info({ id, promptId, origin: outcome, before, ms: Date.now() - t0 }, "한도 대기 판정: 끝 창보다 긴 이어 간 턴 — 그 턴의 첫 줄을 거슬러 찾아봤다(#4821)");
+    }
   }
   openerCache.delete(key);
   openerCache.set(key, v);   // 최근에 쓴 것을 뒤로(scanCache 와 같은 규칙)

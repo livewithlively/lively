@@ -268,6 +268,15 @@ await t("[F5m] ★ 중계가 실패를 삼켜 종료코드 0 · 빈 출력이면
     assert.equal(e.status, 503);
   } finally { process.env.LIVELY_MEMBER_EXEC = saved; }
 });
+await t("[F5n] 출처 모양이 아니면(거대한 값 · 공백) 첫 줄로 안 친다 — 멤버가 꾸민 값이 게이트웨이 기억에 오르지 않게(로컬·중계 둘 다)", async () => {
+  const f = path.join(tmp, "bigkind.jsonl");
+  const big = jl({ type: "user", origin: { kind: "x".repeat(100_000) }, promptId: PB, message: { role: "user", content: "x" } });
+  const spaced = jl({ type: "user", origin: { kind: "auto continuation" }, promptId: PX, message: { role: "user", content: "x" } });
+  fs.writeFileSync(f, big + toolLine(PB) + spaced + toolLine(PX));
+  const size = fs.statSync(f).size;
+  assert.equal(await both(f, PB, size, 128 * MB), null);
+  assert.equal(await both(f, PX, size, 128 * MB), null);
+});
 await t("[F5j] ★ 중계가 죽으면 turnOpenerOrigin 도 503 을 던진다 — «못 찾음(null)» 으로 둔갑하면 읽는 쪽이 그걸 기억해 영영 다시 안 찾는다", async () => {
   await withBadRelay(async () => {
     const e: unknown = await memberTranscriptFs(OS).turnOpenerOrigin(turns, PA, F5.before, 128 * MB).then(() => null, (x: unknown) => x);

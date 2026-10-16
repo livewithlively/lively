@@ -44,6 +44,9 @@ export interface TranscriptFs {
 const TURN_SCAN_CHUNK = 1024 * 1024;
 /** turnOpenerOrigin 이 받는 promptId 모양(본체는 uuid) — 아니면 찾지 않는다(찾을 문자열을 만드는 값이다). */
 const PROMPT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+/** 첫 줄 출처의 모양(본체: human · auto-continuation · task-notification · peer …) — 아니면 첫 줄로 안 친다. 멤버가 꾸민 거대한 값이
+ *  여러 워크스페이스가 함께 쓰는 게이트웨이 기억(session-quota-wait 의 openerCache)에 올라가지 않게 원천에서 거른다(격리 리뷰). */
+const OPENER_KIND_RE = /^[\w-]{1,64}$/;
 const NL = 0x0a;
 
 /** 그 줄이 promptId 턴의 첫 줄(출처가 있는 사용자 줄)이면 그 출처, 아니면 null — TURN_OPENER_JS 의 kindOf 와 같은 규칙. */
@@ -55,8 +58,8 @@ function openerOriginOfLine(line: Buffer, needle: Buffer, promptId: string): str
   const l = o as Record<string, unknown>;
   if (l.type !== "user" || l.isSidechain === true || l.promptId !== promptId) return null;
   const k = l.origin && typeof l.origin === "object" ? (l.origin as { kind?: unknown }).kind : undefined;
-  if (typeof k === "string" && k) return k;
-  return typeof l.turnOrigin === "string" && l.turnOrigin ? l.turnOrigin.replace(/_/g, "-") : null;
+  const kind = typeof k === "string" && k ? k : typeof l.turnOrigin === "string" && l.turnOrigin ? l.turnOrigin.replace(/_/g, "-") : null;
+  return kind !== null && OPENER_KIND_RE.test(kind) ? kind : null;
 }
 
 export const localTranscriptFs: TranscriptFs = {
@@ -125,8 +128,9 @@ const TURN_OPENER_JS =
   "try{const needle=Buffer.from('\"promptId\":\"'+promptId+'\"');const C=1048576;" +
   "const kindOf=(b)=>{if(b.indexOf(needle)<0)return null;let o;try{o=JSON.parse(b.toString('utf8'))}catch{return null}" +
   "if(!o||typeof o!=='object'||o.type!=='user'||o.isSidechain===true||o.promptId!==promptId)return null;" +
-  "const k=o.origin&&typeof o.origin==='object'?o.origin.kind:undefined;if(typeof k==='string'&&k)return k;" +
-  "return typeof o.turnOrigin==='string'&&o.turnOrigin?o.turnOrigin.replace(/_/g,'-'):null};" +
+  "const k=o.origin&&typeof o.origin==='object'?o.origin.kind:undefined;" +
+  "const kind=typeof k==='string'&&k?k:typeof o.turnOrigin==='string'&&o.turnOrigin?o.turnOrigin.replace(/_/g,'-'):null;" +
+  "return kind!==null&&/^[\\w-]{1,64}$/.test(kind)?kind:null};" +
   "const end=Math.min(Math.max(0,before),fs.fstatSync(fd).size);const lo=Math.max(0,end-Math.max(0,max));" +
   "let pos=end,carry=Buffer.alloc(0);outer:while(pos>lo){const s=Math.max(lo,pos-C);const got=Buffer.alloc(pos-s);" +
   "const n=fs.readSync(fd,got,0,got.length,s);const data=carry.length?Buffer.concat([got.subarray(0,n),carry]):got.subarray(0,n);" +

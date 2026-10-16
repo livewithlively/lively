@@ -304,7 +304,7 @@ test("O2 «이어 간 턴» 을 모르면(안 넘김) 종전처럼 대기 아님
   const f = T0 - 60_000;
   assert.equal(quotaWaitOf([...openTail(f), wrapUpP(f + 50_000), ...turnEnd(f + 56_000)], at()), null);
 });
-test("O3 «이어 간 턴» 을 받아도 그 턴이 다시 걸리지 않았으면(정리 안내·한도 오류 없음) quotaScan 은 fired 에 머문다 — 대기 아님", () => {
+test("O3 «이어 간 턴» 을 받아도 사람이 말을 보내면 접힌다 — 대기 아님(출처가 사람인 경우는 Z5 · 아직 도는 중은 O8)", () => {
   const f = T0 - 60_000;
   assert.equal(continuedWait([...openTail(f), human(f + 50_000)]), null, "사람 말이 오면 접힌다");
 });

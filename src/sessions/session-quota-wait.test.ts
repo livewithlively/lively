@@ -236,3 +236,14 @@ test("R20 기억의 열쇠엔 그 턴의 promptId 가 든다 — 같은 세션·
   assert.equal((await readQuotaWait("box-r20", AT_LONG, found(p, { tfs: c.tfs })))?.kind, "armed", "다음 턴(이어 간 턴)은 그 턴의 첫 줄로 판정");
   assert.deepEqual(c.calls.map((x) => x.promptId), [PID, P2]);
 });
+test("R21 턴 첫 줄 기억도 상한(500)까지 — 넘치면 가장 오래 안 쓴 것부터 버린다(격리 리뷰: R9 와 같은 모양)", async () => {
+  const p = file("r21.jsonl", [...fills(3), WRAP_L(), END_L]);   // 첫 줄이 파일에 없다 — 판마다 거슬러 찾는다(답은 아래 가짜)
+  const c = spying(async () => "auto-continuation");
+  const ask = (i: number) => readQuotaWait(`box-r21-${i}`, AT_LONG, found(p, { tfs: c.tfs }));
+  for (let i = 0; i <= QUOTA_SCAN_CACHE_MAX; i++) assert.equal((await ask(i))?.kind, "armed");
+  assert.equal(c.calls.length, QUOTA_SCAN_CACHE_MAX + 1);
+  await ask(QUOTA_SCAN_CACHE_MAX);
+  assert.equal(c.calls.length, QUOTA_SCAN_CACHE_MAX + 1, "최근 것은 기억한다");
+  await ask(0);
+  assert.equal(c.calls.length, QUOTA_SCAN_CACHE_MAX + 2, "가장 오래된 것은 버렸다 — 다시 찾는다");
+});
