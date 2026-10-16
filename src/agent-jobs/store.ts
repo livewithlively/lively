@@ -123,13 +123,19 @@ async function lockTenantQueue(c: Parameters<Parameters<typeof withTx>[0]>[0]): 
 export async function claimAgentJobs(
   p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member">,
   mint: (jobId: number) => { sessionId: string; boot: { secret: string; hash: string } },
+  o: { retryGapSec?: number } = {},
 ): Promise<Array<{ row: AgentJobRow; bootSecret: string }>> {
+  const gap = Math.max(0, Math.floor(o.retryGapSec ?? 0));
   return withTx(async (c) => {
     await lockTenantQueue(c);
     const live = await q(c, `SELECT id, account_member FROM org_agent_job WHERE status IN ('starting','running')`);
     //  대기열 전부를 본다(상한 = max_queued 의 범위 끝) — 앞줄이 사람당 상한에 걸려 있어도 그 뒤의 남의 작업이 굶지 않게.
-    const queued = await q(c, `SELECT id, account_member FROM org_agent_job WHERE status='queued' AND NOT cancel_requested ORDER BY id LIMIT $1`,
-      [QUEUE_SCAN_MAX]);
+    //   일시 실패로 되돌린 작업(attempts > 0)은 되돌린 뒤 gap 초가 지나야 다시 받는다 — 쉬는 동안엔 뒤의 작업이 그 자리를 쓴다.
+    const queued = await q(c,
+      `SELECT id, account_member FROM org_agent_job
+        WHERE status='queued' AND NOT cancel_requested AND (attempts = 0 OR updated_at < now() - make_interval(secs => $2))
+        ORDER BY id LIMIT $1`,
+      [QUEUE_SCAN_MAX, gap]);
     const pick = planClaims(
       live.map((r) => ({ id: Number(r.id), account_member: (r.account_member as string | null) ?? null })),
       queued.map((r) => ({ id: Number(r.id), account_member: (r.account_member as string | null) ?? null })),
@@ -167,7 +173,7 @@ export async function getAgentJobAuth(id: number): Promise<AgentJobAuthRow | nul
 }
 
 /**
- * 일시 실패(컨테이너 확보가 막힘 — 노드 자리·브로커 중계)로 못 띄운 작업을 대기열로 되돌린다. 띄우는 중이고 · 취소 요청이 없고 ·
+ * 일시 실패(확보 단계 — OS 계정 · 작업 폴더 · 컨테이너 · 홈 준비 · 판 · 판정을 못 함)로 못 띄운 작업을 대기열로 되돌린다. 띄우는 중이고 · 취소 요청이 없고 ·
  *  시도 횟수가 상한 밑일 때만. 세션 id·부트 비밀을 지운다(다음 자리 주기가 새로 단다) · 사유는 error 에 남긴다(대기 상한으로 끝날 때
  *  문장에 붙는다). 돌려주는 것: 되돌렸나(false 면 부르는 쪽이 그 작업을 실패로 끝낸다).
  */

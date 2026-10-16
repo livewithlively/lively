@@ -37,6 +37,7 @@ const claimAll = () => st.claimAgentJobs(WIDE, mint);
 const byStatus = async () => (await itemsPool.query(
   `SELECT status, account_member, count(*)::int AS c FROM org_agent_job WHERE requester LIKE $1 GROUP BY 1, 2`, [`${REQ}%`])).rows;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let savedPolicy;   // J 블록이 건드리기 전의 워크스페이스 설정(agent_job_policy)
 /** 저장소 함수가 쓰는 것과 같은 테넌트 잠금 열쇠(테넌트 GUC 가 없으면 상수). */
 const LOCK = `SELECT pg_advisory_xact_lock(hashtextextended('lvly-agent-job:' || COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '-'), 0))`;
 const running = async (who) => {
@@ -257,6 +258,14 @@ try {
       JSON.stringify({ s: again.status, e: again.error, a: again.attempts }));
     chk("F5 시도 상한(2)에 닿았으면 되돌리지 않는다(부르는 쪽이 실패로 끝낸다)", (await st.requeueAgentJob(r2, "z", 2)) === false && (await row(r2)).status === "starting");
     chk("F5 상한 밑이면 되돌린다", (await st.requeueAgentJob(r2, "z", 3)) === true && (await row(r2)).status === "queued");
+    //  F6 — 되돌린 작업은 쉬는 동안(retryGapSec) 다시 받지 않는다 — 그 자리는 뒤 작업이 쓴다 · 쉬고 나면 다시 받는다.
+    const behind = await add("r3");
+    const during = await st.claimAgentJobs({ max_running: 5, max_running_per_member: 5 }, mint, { retryGapSec: 30 });
+    chk("F6 쉬는 동안엔 되돌린 작업을 건너뛰고 뒤 작업을 받는다", !during.some((x) => x.row.id === r2) && during.some((x) => x.row.id === behind),
+      JSON.stringify(during.map((x) => x.row.id)));
+    await itemsPool.query(`UPDATE org_agent_job SET updated_at = now() - interval '31 seconds' WHERE id=$1`, [r2]);
+    const after = await st.claimAgentJobs({ max_running: 5, max_running_per_member: 5 }, mint, { retryGapSec: 30 });
+    chk("F6 쉬고 나면 다시 받는다(시도 3)", after.some((x) => x.row.id === r2) && (await row(r2)).attempts === 3, JSON.stringify(after.map((x) => x.row.id)));
   }
 
   // ── G·H. 작업 토큰 ────────────────────────────────────────────────────────
@@ -315,8 +324,9 @@ try {
     const set = caps.find((c) => c.name === "agent_job_limits_set");
     const admin = { userId: `${REQ}admin`, email: "", scopes: ["admin"], projects: ["*"] };
     const ctx = { source: "pg-test" };
-    const hasRow = (await itemsPool.query(`SELECT 1 FROM org_runtime_config WHERE id=1`)).rows.length === 1;
-    if (!hasRow) throw new Error("org_runtime_config 에 id=1 행이 없다(스키마 준비가 덜 됐다)");
+    const orig = (await itemsPool.query(`SELECT agent_job_policy FROM org_runtime_config WHERE id=1`)).rows[0];
+    if (!orig) throw new Error("org_runtime_config 에 id=1 행이 없다(스키마 준비가 덜 됐다)");
+    savedPolicy = orig.agent_job_policy;   // 끝나면 이 값으로 되돌린다(빈 DB 가 아닌 곳에서 돌려도 설정을 잃지 않게)
     await set.handler({ reset: true }, admin, ctx);
     const r1 = await set.handler({ max_running: 4 }, admin, ctx);
     const r2 = await set.handler({ max_queued: 7 }, admin, ctx);
@@ -339,7 +349,9 @@ try {
   bad("예외", String((e && e.stack) || e));
 } finally {
   await cleanup().catch(() => {});
-  await itemsPool.query(`UPDATE org_runtime_config SET agent_job_policy='{}'::jsonb WHERE id=1`).catch(() => {});
+  if (savedPolicy !== undefined) {
+    await itemsPool.query(`UPDATE org_runtime_config SET agent_job_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPolicy ?? {})]).catch(() => {});
+  }
   await itemsPool.end().catch(() => {});
 }
 

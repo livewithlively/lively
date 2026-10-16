@@ -9,8 +9,9 @@
 //    목록이 신호). 게이트웨이도 결과를 받은 뒤 kill-session 을 한 번 보낸다(판이 빠지지 못한 경우 · 신호를 앞당김).
 //  · 시간 상한은 판이 스스로 지킨다(SIGTERM → 10초 → SIGKILL → 보고). 판이 못 지키면 감시가 상한+2분에 끝내고 걷는다.
 //  · 작업 컨테이너는 세션이 아니다 — 사람 목록·복원·회수 규칙(T5)을 타지 않고, 걷기는 이 흐름과 브로커 안전망(닻 없음 5분·장부)이 한다.
-//  · 띄우기 실패: 컨테이너 확보가 막힌 것(노드 자리·브로커 중계 — 일시)은 대기열로 되돌리고 이번 배차를 멈춘다(다음 감시가 다시 띄운다 ·
-//    대기 상한이 끝을 정한다). 그 밖(계정·폴더·판·앱 동의)은 그 작업만 실패로 끝내고 다음 작업을 띄운다.
+//  · 띄우기 실패: 확보 단계(OS 계정 · 작업 폴더 · 컨테이너 · 홈 준비 · 판 — launch.stepFailure)와 판정을 못 한 것은 일시다 — 대기열로 되돌리고
+//    이번 배차를 멈춘다. 다시 받기 전에 LAUNCH_RETRY_GAP_SEC 를 쉬고, 시도 MAX_LAUNCH_ATTEMPTS 번이 끝을 정한다(«N번 시도» 로 실패).
+//    다시 해도 안 될 것(세션 id · 실행 계정 없음 · 매니지드 아님 · 앱 동의 없음)은 그 작업만 실패로 끝내고 다음 작업을 띄운다.
 //    ⚠ 자리를 받은(starting) 뒤 띄우기 전에 게이트웨이가 죽으면 되돌리지 않는다 — 시작 상한(180초)에 «시작하지 않았습니다» 로 끝난다.
 //
 //  ── 누가 보낼 수 있나(설계 §12 ④ · 상민 2026-10-16 결정 ③ «본인 세션과 같은 신뢰») ──
@@ -19,7 +20,8 @@
 //  `/_lively/*` `app-front` — 둘 다 capabilities/app-tool-call.runAppTool 의 같은 판정)만. 앱 서버 대리 · 앱 토큰의 직접 호출 ·
 //  작업 AI 자신(작업 토큰)은 거절한다. ⚠ 작업 AI 의 라이블리 도구를 앱 토큰으로 좁히는 것은 **도구 배선**이지 운영체제 경계가 아니다 —
 //  같은 uid 라 홈의 멤버 토큰을 읽을 수 있다(본인 세션과 같은 한계 · apps/principal.ts 머리말).
-//  동의를 거두거나 앱이 꺼지면: 기다리는 작업은 띄우지 않고(배차 직전 재판정) · 도는 작업은 감시가 멈춘다(다음 박동에 끊김).
+//  동의를 거두거나 앱이 꺼지거나 실행 계정이 비활성이 되면: 기다리는 작업은 띄우지 않고(배차 직전 재판정) · 도는 작업은 감시가 멈춘다
+//  (사유를 남겨 다음 박동에 끊김 · 띄우는 중이면 바로 끝내고 걷는다).
 //  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
@@ -27,6 +29,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { AgentJobPolicy } from "../org/policies/agent-job-policy.js";
+import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
   LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, convIdOf, finalOutcome, isEnded,
   jobSessionId, noNul, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
@@ -47,8 +50,11 @@ export interface AgentJobDeps {
   launch(job: AgentJobRow, bootSecret: string): Promise<unknown>;
   /** 걷는다 — 이미 없다는 확답이면 조용히, 그 밖의 실패는 던진다(launch.killJobContainer). */
   kill(sessionId: string): Promise<void>;
-  /** 앱 작업 — 실행 계정 멤버가 그 앱을 아직 쓸 수 있나(보임 · 켜짐 · 동의). 못 쓰면 HttpError 를 던진다(띄우기 직전 · 도는 동안 감시). */
-  assertJobAppUsable(job: Pick<AgentJobRow, "id" | "app_id" | "account_member">): Promise<void>;
+  /**
+   * 이 작업을 아직 돌려도 되나 — 실행 계정이 활성 구성원이고, 앱 작업이면 그 사람이 그 앱을 쓸 수 있나(보임 · 켜짐 · 동의).
+   *  «안 된다» 는 HttpError 로 던진다(띄우기 직전 · 도는 동안 감시). 그 밖의 던짐은 «판정을 못 했다»(DB 가 잠깐 막힘)다.
+   */
+  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
@@ -71,12 +77,17 @@ export const REAP_DELAY_MS = 8_000;
 export const REAP_GIVE_UP_MS = 10 * 60_000;
 /** 감시가 한 번에 보는 작업 수 — 대기열 상한의 범위 끝(500)과 동시 상한(20)을 넉넉히 넘는다. */
 export const SWEEP_SCAN_MAX = 1_000;
-/** 띄우기 시도 상한 — 일시 실패로 되돌리는 것은 여기까지(감시 주기 30초면 약 2분 반). 넘으면 그 작업을 실패로 끝낸다. */
+/** 띄우기 시도 상한 — 일시 실패로 되돌리는 것은 여기까지. 넘으면 그 작업을 실패로 끝낸다(«N번 시도»). */
 export const MAX_LAUNCH_ATTEMPTS = 5;
-/** 앱 화면에서 온 호출의 표식(ctx.source) — 라이블리 화면의 다리 · 앱 주소의 `/_lively/*`. */
-const APP_SCREEN_SOURCES: ReadonlySet<string> = new Set(["app-ui", "app-front"]);
-/** 동의를 거두거나 앱이 꺼져 감시가 멈춘 작업의 오류 문장. */
-export const APP_REVOKED_REASON = "앱을 더 쓸 수 없게 돼(사용 동의 철회 · 앱 꺼짐) 멈췄습니다";
+/**
+ * 되돌린 작업을 다시 받기 전에 쉬는 시간(초) — 배차는 감시만이 아니라 접수·결과·취소 때도 돈다. 쉬지 않으면 몇 분짜리 장애(노드 자리 없음)에
+ *  시도 상한이 몇 초 만에 다 닳는다(증분 재검토). 감시 주기와 같은 30초 — 시도 5번이면 적어도 2분.
+ */
+export const LAUNCH_RETRY_GAP_SEC = 30;
+/** 더 돌릴 수 없게 돼(동의 철회 · 앱 꺼짐 · 실행 계정 비활성) 감시가 멈춘 작업의 오류 문장 — 판정이 낸 사유를 붙인다. */
+export function stoppedReason(why: string): string {
+  return `더 돌릴 수 없게 돼 멈췄습니다 — ${why}`.slice(0, 600);
+}
 /** MCP 토큰 만료 여유(초) — 작업 상한 + 대기·부트·보고 시간. */
 export const MCP_TOKEN_SLACK_SEC = 15 * 60;
 
@@ -108,19 +119,21 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
 }
 
 /**
- * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 프롬프트·답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
+ * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
+ *  프롬프트는 본인이 하나 보기(agent_job_get)로 물을 때만(withPrompt) — 접수·취소 응답엔 싣지 않는다(최대 10만 자).
  */
-export function publicJob(r: AgentJobRow, o: { own: boolean; position?: number | null }): Record<string, unknown> {
+export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null }): Record<string, unknown> {
   return {
     ...jobHead(r),
-    ...(o.own ? { result: r.result, output_tail: r.output_tail, prompt: r.prompt } : { has_result: r.result !== null }),
+    ...(o.own ? { result: r.result, output_tail: r.output_tail } : { has_result: r.result !== null }),
+    ...(o.own && o.withPrompt ? { prompt: r.prompt } : {}),
     ...(o.position != null ? { queue_position: o.position } : {}),
   };
 }
 
 /** 목록 한 줄 — 답은 앞머리(result_preview)만, 전문은 agent_job_get 으로. 남의 작업(관리자 목록)은 앞머리도 없다. */
-export function publicJobSummary(r: AgentJobSummaryRow, own: boolean): Record<string, unknown> {
-  return { ...jobHead(r), result_preview: own ? r.result_preview : null, has_result: r.has_result };
+export function publicJobSummary(r: AgentJobSummaryRow, o: { own: boolean }): Record<string, unknown> {
+  return { ...jobHead(r), result_preview: o.own ? r.result_preview : null, has_result: r.has_result };
 }
 
 /**
@@ -190,9 +203,8 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   logger.info({ job: put.row.id, requester: me, app: appId, project: projectId }, "[agent-job] 접수");
   //  자리가 있으면 곧바로 띄운다 — 응답을 붙잡지 않게 뒤로 미룬다(같은 테넌트 맥락으로).
   d.later(() => dispatchAgentJobs(d), 0);
-  const pub = publicJob(put.row, { own: true, position: await d.store.queuePosition(put.row.id).catch(() => null) });
-  delete pub.prompt;   // 접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게)
-  return pub;
+  //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
+  return publicJob(put.row, { own: true, position: await d.store.queuePosition(put.row.id).catch(() => null) });
 }
 
 /**
@@ -203,7 +215,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
  */
 async function assertMaySubmit(user: LivelyUser, via: { source?: string }, d: AgentJobDeps): Promise<void> {
   if (user.appServer) throw new HttpError(403, "앱 서버는 사람의 구독으로 작업을 보낼 수 없습니다 — 사람이 앱 화면에서 보낸 작업만 그 사람의 구독으로 돕니다");
-  if (user.appId && !APP_SCREEN_SOURCES.has(String(via.source ?? ""))) {
+  if (user.appId && !isAppScreenSource(via.source)) {
     throw new HttpError(403, "앱 토큰으로는 작업을 보낼 수 없습니다 — 사람이 앱 화면에서 보낸 작업만 그 사람의 구독으로 돕니다");
   }
   if (user.tokenHashPrefix && (await d.store.isAgentJobToken(user.tokenHashPrefix))) throw new HttpError(403, "작업 안에서는 새 작업을 보낼 수 없습니다");
@@ -223,19 +235,27 @@ const isTransient = (e: unknown): boolean => !!e && typeof e === "object" && (e 
 export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
   if (!(await d.available())) return 0;
   const p = await d.policy();
-  const claimed = await d.store.claimAgentJobs(p, (id) => ({ sessionId: jobSessionId(id, d.hex8()), boot: d.store.newJobSecret() }));
+  const claimed = await d.store.claimAgentJobs(p, (id) => ({ sessionId: jobSessionId(id, d.hex8()), boot: d.store.newJobSecret() }),
+    { retryGapSec: LAUNCH_RETRY_GAP_SEC });
   for (const { row, bootSecret } of claimed) {
     logger.info({ job: row.id, session: row.session_id }, "[agent-job] 자리 받음 — 컨테이너를 띄운다");
     d.later(async () => {
       try {
-        if (row.app_id) await d.assertJobAppUsable(row);
+        //  «안 된다»(HttpError)는 그 작업의 끝이고, 판정을 못 한 것(DB 가 잠깐 막힘)은 일시다 — 되돌려 다시 본다.
+        await d.assertJobAllowed(row).catch((e) => {
+          throw e instanceof HttpError ? e : Object.assign(new Error(`돌려도 되는지 판정하지 못했습니다: ${(e as Error)?.message ?? e}`), { transient: true });
+        });
         await d.launch(row, bootSecret);
       } catch (e) {
         let why = String((e as Error)?.message ?? e).slice(0, 600);
         if (isTransient(e)) {
           const back = await d.store.requeueAgentJob(row.id, `띄우기 실패 — 다시 기다립니다: ${why}`.slice(0, 600), MAX_LAUNCH_ATTEMPTS);
-          //  반쯤 만든 자리가 있으면 걷는다(없으면 «이미 없다» 확답이라 조용하다).
-          if (row.session_id) await d.kill(row.session_id).catch(() => undefined);
+          //  반쯤 만든 자리가 있으면 걷는다(없으면 «이미 없다» 확답이라 조용하다). 되돌리면 세션 id 가 지워져 다시 걷을 길이 없으니,
+          //   못 걷으면 크게 남긴다(브로커 안전망 — 닻 없음 — 이 마저 걷는다).
+          if (row.session_id) {
+            const sid = row.session_id;
+            await d.kill(sid).catch((ke) => logger.warn({ job: row.id, session: sid, err: (ke as Error)?.message }, "[agent-job] 반쯤 만든 작업 컨테이너를 못 걷었다 — 브로커 안전망에 맡긴다"));
+          }
           if (back) { logger.warn({ job: row.id, attempt: row.attempts, err: why }, "[agent-job] 띄우기 일시 실패 — 대기열로 되돌렸다(다음 감시가 다시 띄운다)"); return; }
           if (row.attempts >= MAX_LAUNCH_ATTEMPTS) why = `띄우기를 ${row.attempts}번 시도했지만 실패했습니다: ${why}`.slice(0, 600);
         }
@@ -380,15 +400,23 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
   for (const j of jobs) {
     if (isEnded(j.status)) { if (await reapJob(j, d)) reaped++; continue; }
     if (j.status === "queued") queued = true;
-    //  앱 작업이 도는 동안 동의를 거뒀거나 앱이 꺼졌으면 멈춘다(대기 작업은 배차 직전에 따로 본다). 판정이 «못 쓴다»(HttpError)일 때만 —
-    //   DB 가 잠깐 막힌 것으로 멈추지 않는다.
-    if (j.app_id && (j.status === "starting" || j.status === "running") && !j.cancel_requested) {
-      const gone = await d.assertJobAppUsable(j).then(() => false, (e) => (e instanceof HttpError ? true : null));
-      if (gone) {
-        logger.info({ job: j.id, app: j.app_id }, "[agent-job] 앱을 더 쓸 수 없다 — 작업을 멈춘다");
-        const asked = await d.store.requestCancelAgentJob(j.id, APP_REVOKED_REASON);
+    //  도는 동안 더 돌릴 수 없게 됐으면(동의 철회 · 앱 꺼짐 · 실행 계정 비활성) 멈춘다(대기 작업은 배차 직전에 따로 본다).
+    //   판정이 «안 된다»(HttpError)일 때만 — DB 가 잠깐 막힌 것으로 멈추지 않는다(그때는 크게 남기고 다음 감시가 다시 본다).
+    //   ⚠ 취소가 이미 걸린 작업은 다시 보지 않고 아래 판정(무응답 · 시간 초과)으로 간다 — 판이 죽었으면 그 판정만이 끝낼 수 있다.
+    if ((j.status === "starting" || j.status === "running") && !j.cancel_requested) {
+      const stop = await d.assertJobAllowed(j).then(
+        () => null,
+        (e) => {
+          if (e instanceof HttpError) return e.message;
+          logger.warn({ job: j.id, err: (e as Error)?.message }, "[agent-job] 돌려도 되는지 판정하지 못했다 — 이번 감시는 그대로 둔다");
+          return null;
+        });
+      if (stop) {
+        const reason = stoppedReason(stop);
+        logger.info({ job: j.id, app: j.app_id, why: stop }, "[agent-job] 더 돌릴 수 없다 — 작업을 멈춘다");
+        const asked = await d.store.requestCancelAgentJob(j.id, reason);
         if (asked?.status === "starting") {
-          const row = await d.store.finishAgentJob(j.id, { status: "canceled", error: APP_REVOKED_REASON, from: ["starting"] });
+          const row = await d.store.finishAgentJob(j.id, { status: "canceled", error: reason, from: ["starting"] });
           if (row) { ended++; if (await reapJob(row, d)) reaped++; }
         }
         continue;
@@ -429,7 +457,7 @@ export async function getAgentJobFor(id: number, user: LivelyUser, d: AgentJobDe
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
   if (!row || !canSeeJob(row, user)) throw new HttpError(404, "없는 작업입니다");
   const position = row.status === "queued" ? await d.store.queuePosition(row.id).catch(() => null) : null;
-  return publicJob(row, { own: row.requester === memberOf(user), position });
+  return publicJob(row, { own: row.requester === memberOf(user), withPrompt: true, position });
 }
 
 export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {
@@ -439,7 +467,7 @@ export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; 
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && APP_ID_RE.test(f.app_id) ? f.app_id : null);
   const rows = await d.store.listAgentJobs({ requester: admin ? null : memberOf(user), appId, status, limit });
   const me = memberOf(user);
-  return { jobs: rows.map((r) => publicJobSummary(r, r.requester === me)), limit };
+  return { jobs: rows.map((r) => publicJobSummary(r, { own: r.requester === me })), limit };
 }
 
 /** 취소 — 대기 중이면 바로 끝내고, 띄우는 중이면 끝내고 걷고, 도는 중이면 판의 다음 박동이 받아 하네스를 끊는다. */

@@ -171,11 +171,16 @@ export function errorForLog(_tool: string, raw: string | null | undefined): stri
  *  · 외부 통신 툴 → 값 없는 요약. capArgs(절단·redact)를 태우지 않는 이유는 그 경로가 값을 '보존'하기 때문 —
  *    여기선 애초에 보존할 값이 없다. 남는 건 누가·언제·어떤 툴·성공여부(호출 행 자체)로 충분하다.
  *  · db_query → SQL 리터럴 스크럽(#705) 후 통상 가공. redactDeep(시크릿)만으론 PII 미포착이라 별도 처리.
+ *  · agent_job_run → 지시(prompt) 값을 남기지 않고 길이만(#4490) — 작업 지시는 보낸 사람 것이다(관리자 API 도 남의 지시를 열지 않는다).
  *  · 그 외(빌트인) → 현행 그대로(시크릿 마스킹 + 절단 + 총량 캡).
  */
 export function argsForLog(tool: string, raw: unknown): unknown {
   if (externalArgsPolicy(tool) === "omit") return omitArgValues(raw);
   let args = raw;
+  if (tool === "agent_job_run" && args && typeof args === "object" && !Array.isArray(args)
+      && typeof (args as Record<string, unknown>).prompt === "string") {
+    args = { ...(args as Record<string, unknown>), prompt: `(지시 ${((args as Record<string, unknown>).prompt as string).length}자 — 기록하지 않음)` };
+  }
   if (tool === "db_query" && args && typeof args === "object" && !Array.isArray(args)
       && typeof (args as Record<string, unknown>).sql === "string") {
     args = { ...(args as Record<string, unknown>), sql: scrubSqlLiterals((args as Record<string, unknown>).sql as string) };

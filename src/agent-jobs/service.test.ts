@@ -7,7 +7,7 @@ import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
   submitAgentJob, onBoot, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob,
-  REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, APP_REVOKED_REASON, type AgentJobDeps,
+  REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
 import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE } from "./runner.js";
@@ -56,6 +56,7 @@ interface World {
   available: boolean;
   policy: AgentJobPolicy;
   usable: Set<string>;     // `${member}:${app}` — 그 앱을 쓸 수 있다
+  inactive: Set<string>;   // 비활성이 된 실행 계정
   projects: Set<string>;   // `${member}:${project}` — 그 프로젝트 폴더에서 셸을 띄울 수 있다
   drain(maxMs?: number): Promise<void>;
 }
@@ -64,6 +65,7 @@ const tokHash = (id: number): string => hashJobSecret(`tok-${id}`);
 
 function world(): World {
   const rows = new Map<number, AgentJobRow>();
+  const requeuedAt = new Map<number, number>();   // 되돌린 시각(SQL 의 updated_at 자리)
   let seq = 0, now = 1_000_000_000_000, hex = 0;
   const w = {} as World;
   const ended = (s: string): boolean => ["done", "failed", "timeout", "canceled"].includes(s);
@@ -85,10 +87,13 @@ function world(): World {
       rows.set(id, row);
       return { row: { ...row } };
     },
-    async claimAgentJobs(p, mint) {
+    async claimAgentJobs(p, mint, o = {}) {
       w.claims++;
+      const gapMs = (o.retryGapSec ?? 0) * 1000;
       const live = [...rows.values()].filter((r) => r.status === "starting" || r.status === "running");
-      const queued = [...rows.values()].filter((r) => r.status === "queued" && !r.cancel_requested).sort((a, b) => a.id - b.id);
+      const queued = [...rows.values()]
+        .filter((r) => r.status === "queued" && !r.cancel_requested && (r.attempts === 0 || now - (requeuedAt.get(r.id) ?? 0) >= gapMs))
+        .sort((a, b) => a.id - b.id);
       const pick = planClaims(live, queued, p);
       return pick.map((id) => {
         const m = mint(id);
@@ -103,6 +108,7 @@ function world(): World {
       const r = rows.get(id);
       if (!r || r.status !== "starting" || r.cancel_requested || r.attempts >= maxAttempts) return false;
       Object.assign(r, { status: "queued", session_id: null, boot_hash: null, claimed_at: null, error: why });
+      requeuedAt.set(id, now);
       return true;
     },
     async isAgentJobToken(prefix) {
@@ -168,7 +174,7 @@ function world(): World {
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
     mintError: null, onMint: null, beforeFinish: null, claims: 0, listening: 0, bootRace: false, available: true,
-    policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), projects: new Set<string>(),
+    policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(),
     setNow: (ms: number) => { now = ms; },
   });
   w.deps = {
@@ -181,8 +187,9 @@ function world(): World {
       if (w.failLaunch === "transient") throw Object.assign(new Error("작업 컨테이너를 확보하지 못했습니다(가짜 — 노드 자리 없음)"), { transient: true });
     },
     kill: async (sid) => { w.killed.push(sid); if (w.killError) throw new Error("중계 시간 초과(가짜)"); },
-    assertJobAppUsable: async (job) => {
-      if (!w.usable.has(`${job.account_member}:${job.app_id}`)) throw new HttpError(403, `앱 '${job.app_id}' 사용 동의(grant)가 없습니다`);
+    assertJobAllowed: async (job) => {
+      if (w.inactive.has(String(job.account_member))) throw new HttpError(409, `실행 계정(${job.account_member})이 활성 구성원이 아닙니다`);
+      if (job.app_id && !w.usable.has(`${job.account_member}:${job.app_id}`)) throw new HttpError(403, `앱 '${job.app_id}' 사용 동의(grant)가 없습니다`);
     },
     listeningSince: () => w.listening,
     mintMcpToken: async (job) => {
@@ -455,6 +462,7 @@ await t("X1b 띄우기 일시 실패(컨테이너 확보가 막힘) — 대기�
   assert.deepEqual(w.launched.map((x) => x.id), [a.id], "이번 배차는 멈췄다(같은 판에서 다시 띄우지 않는다)");
   assert.equal(w.killed.length, 1, "반쯤 만든 자리를 걷으러 간다");
   w.failLaunch = false;
+  w.setNow(1_000_000_000_000 + (LAUNCH_RETRY_GAP_SEC + 1) * 1000);   // 되돌린 뒤 쉬는 시간이 지났다
   await sweepAgentJobs(w.deps);
   await w.drain(0);
   const again = w.launched.filter((x) => x.id === a.id);
@@ -767,6 +775,7 @@ await t("X5 띄우기 일시 실패가 상한(MAX_LAUNCH_ATTEMPTS)까지 이어�
   await w.drain(0);
   for (let i = 1; i < MAX_LAUNCH_ATTEMPTS; i++) {
     assert.equal(w.rows.get(a.id as number)!.status, "queued", `${i}번째 실패 뒤엔 다시 기다린다`);
+    w.setNow(1_000_000_000_000 + i * (LAUNCH_RETRY_GAP_SEC + 1) * 1000);
     await sweepAgentJobs(w.deps);
     await w.drain(0);
   }
@@ -801,19 +810,19 @@ await t("R5 도는 앱 작업 — 동의를 거두면 감시가 멈춘다(사유
   await sweepAgentJobs(w.deps);
   assert.equal(w.rows.get(run.id)!.cancel_requested, true, "도는 작업엔 취소를 건다(판의 다음 박동이 받는다)");
   assert.equal(w.rows.get(st.id)!.status, "canceled");
-  assert.equal(w.rows.get(st.id)!.error, APP_REVOKED_REASON);
+  assert.match(w.rows.get(st.id)!.error ?? "", /^더 돌릴 수 없게 돼 멈췄습니다 — .*동의/);
   assert.ok(w.killed.includes(st.sid));
   assert.deepEqual(await onTick(run.id, job.secret, {}, w.deps), { cancel: true });
   await onResult(run.id, job.secret, { stopped: "canceled" }, w.deps);
   assert.equal(w.rows.get(run.id)!.status, "canceled");
-  assert.equal(w.rows.get(run.id)!.error, APP_REVOKED_REASON, "사람이 누른 취소처럼 보이지 않게 사유를 남긴다");
+  assert.equal(w.rows.get(run.id)!.error, stoppedReason(`앱 'memo' 사용 동의(grant)가 없습니다`), "사람이 누른 취소처럼 보이지 않게 사유를 남긴다");
 });
 
 await t("R6 앱 판정이 «못 쓴다» 가 아니라 실패(DB 가 잠깐 막힘)면 멈추지 않는다", async () => {
   const w = world();
   const run = await startedJob(w, "alice");
   await onBoot(run.id, run.boot, w.deps);
-  w.deps.assertJobAppUsable = async () => { throw new Error("connection terminated"); };
+  w.deps.assertJobAllowed = async () => { throw new Error("connection terminated"); };
   await sweepAgentJobs(w.deps);
   assert.equal(w.rows.get(run.id)!.cancel_requested, false);
   assert.equal(w.rows.get(run.id)!.status, "running");
@@ -847,6 +856,88 @@ await t("B5 같은 비밀로 두 판이 겹쳐 물면 늦은 쪽은 409", async 
   const { id, boot } = await startedJob(w);
   w.bootRace = true;
   await assert.rejects(onBoot(id, boot, w.deps), httpErr(409));
+});
+
+await t("R7 동의를 거둔 뒤 판이 죽었으면 — 취소만 걸린 채 남지 않고 무응답 판정으로 끝난다(자리가 새지 않게)", async () => {
+  const w = world();
+  const t0 = 1_000_000_000_000;
+  const run = await startedJob(w, "alice");
+  await onBoot(run.id, run.boot, w.deps);
+  w.usable.delete("alice:memo");
+  await sweepAgentJobs(w.deps);                                    // 취소를 건다 — 판은 이미 죽어 박동이 없다
+  assert.equal(w.rows.get(run.id)!.cancel_requested, true);
+  w.setNow(t0 + (w.policy.silent_sec + 1) * 1000);
+  await sweepAgentJobs(w.deps);
+  const row = w.rows.get(run.id)!;
+  assert.equal(row.status, "failed", "취소가 걸린 작업도 무응답 판정은 탄다");
+  assert.ok(w.killed.includes(run.sid));
+});
+
+await t("R8 실행 계정이 비활성이 되면 프로젝트 작업도 멈춘다(앱 작업만이 아니다)", async () => {
+  const w = world();
+  w.projects.add("alice:42");
+  const out = await submitAgentJob({ prompt: "일", project_id: 42 }, human("alice"), w.deps);
+  await w.drain(0);
+  const id = out.id as number;
+  const boot = w.launched.find((x) => x.id === id)!.boot;
+  await onBoot(id, boot, w.deps);
+  w.inactive.add("alice");
+  await sweepAgentJobs(w.deps);
+  assert.equal(w.rows.get(id)!.cancel_requested, true);
+  assert.match(w.rows.get(id)!.cancel_reason ?? "", /활성 구성원이 아닙니다/);
+});
+
+await t("X1e 배차 직전 판정을 못 했으면(DB 가 잠깐 막힘) 끝내지 않고 일시로 되돌린다", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.deps.assertJobAllowed = async () => { throw new Error("connection terminated unexpectedly"); };
+  const a = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  const row = w.rows.get(a.id as number)!;
+  assert.equal(row.status, "queued");
+  assert.match(row.error ?? "", /판정하지 못했습니다/);
+  assert.equal(w.launched.length, 0, "판정 못 한 채 띄우지 않는다");
+});
+
+await t("X1f 되돌린 작업은 쉬는 동안 다시 받지 않는다 — 접수·결과 같은 다른 배차에도 · 그 자리는 뒤 작업이 쓴다", async () => {
+  const w = world();
+  const t0 = 1_000_000_000_000;
+  w.policy = { ...w.policy, max_running: 1, max_running_per_member: 1 };
+  w.usable.add("alice:memo"); w.usable.add("bob:memo");
+  w.failLaunch = "transient";
+  const a = await submitAgentJob({ prompt: "앞" }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  assert.equal(w.rows.get(a.id as number)!.status, "queued");
+  w.failLaunch = false;
+  w.setNow(t0 + (LAUNCH_RETRY_GAP_SEC - 1) * 1000);
+  const b = await submitAgentJob({ prompt: "뒤" }, appUser("bob", "memo"), w.deps, UI);   // 접수가 배차를 부른다
+  await w.drain(0);
+  assert.equal(w.rows.get(a.id as number)!.attempts, 1, "쉬는 동안엔 다시 받지 않는다");
+  assert.equal(w.rows.get(b.id as number)!.status, "starting", "그 자리는 뒤 작업이 쓴다");
+});
+
+await t("P3 앱 주체의 REST(`web`) · MCP(`mcp`) 호출은 앱 화면이 아니다 — 403", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  for (const source of ["web", "mcp", ""]) {
+    await assert.rejects(submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, { source }), httpErr(403, /앱 토큰/), source);
+  }
+});
+
+await t("X6 취소 응답 — 본인에게도 지시를 되싣지 않고 · 관리자에게는 남의 답·진행 꼬리도 없다", async () => {
+  const w = world();
+  const own = await startedJob(w, "alice");
+  const job = await onBoot(own.id, own.boot, w.deps);
+  await onTick(own.id, job.secret, { tail: "남의 진행" }, w.deps);
+  const mine = await cancelAgentJobFor(own.id, appUser("alice", "memo"), w.deps);
+  assert.ok(!("prompt" in mine), "취소 응답엔 지시를 싣지 않는다");
+  assert.equal(mine.output_tail, "남의 진행", "본인은 진행 꼬리를 본다");
+  const other = await startedJob(w, "bob");
+  const ojob = await onBoot(other.id, other.boot, w.deps);
+  await onTick(other.id, ojob.secret, { tail: "밥의 진행" }, w.deps);
+  const byAdmin = await cancelAgentJobFor(other.id, human("root", ["context", "admin"]), w.deps);
+  for (const k of ["prompt", "result", "output_tail"]) assert.ok(!(k in byAdmin), `관리자 취소 응답에 ${k} 가 없다`);
+  assert.equal(byAdmin.cancel_requested, true);
 });
 
 // ── 보기 ─────────────────────────────────────────────────────────────────────

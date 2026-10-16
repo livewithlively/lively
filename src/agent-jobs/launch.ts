@@ -23,6 +23,21 @@ export class JobLaunchError extends Error {
   constructor(message: string, readonly transient = false) { super(message); }
 }
 
+/** 띄우기의 확보 단계 — 다시 하면 될 수도 있는 것들(인프라가 잠깐 막힘). 다시 해도 안 될 것(계정·배포)은 여기 없다. */
+export type LaunchStep = "os-user" | "workdir" | "ensure" | "home" | "pane";
+const STEP_FAILURE: Readonly<Record<LaunchStep, string>> = {
+  "os-user": "실행 계정의 OS 계정을 준비하지 못했습니다",
+  workdir: "작업 폴더를 만들지 못했습니다",
+  ensure: "작업 컨테이너를 확보하지 못했습니다",
+  home: "실행 계정의 홈을 준비하지 못했습니다",
+  pane: "작업 컨테이너에 판을 띄우지 못했습니다",
+};
+/** (순수) 확보 단계의 실패 → 일시(transient) 띄우기 실패. 분류는 여기 한 자리다(launch.test 가 단계마다 본다). */
+export function stepFailure(step: LaunchStep, detail: unknown): JobLaunchError {
+  const d = detail instanceof Error ? detail.message : String(detail ?? "");
+  return new JobLaunchError(d ? `${STEP_FAILURE[step]}: ${d}` : STEP_FAILURE[step], true);
+}
+
 /** 이 배포에서 작업 컨테이너를 띄울 수 있나(매니지드 — 세션 컨테이너 확보 훅이 있고 테넌트 컨텍스트가 있다). */
 export async function jobContainersAvailable(): Promise<boolean> {
   const { tenantSlug } = await import("../terminal/catalog.js");
@@ -76,8 +91,8 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   if (!tmuxInSessionContainer(slug) || !slug) throw new JobLaunchError("이 배포에서는 작업 컨테이너를 띄울 수 없습니다(매니지드 전용)");
   const user = await accountUser(job.account_member);
   const { ensureMemberOsUser } = await import("../terminal/profiles.js");
-  const osUser = await ensureMemberOsUser(user).catch((e) => { throw new JobLaunchError(`실행 계정(${job.account_member})의 OS 계정을 준비하지 못했습니다: ${(e as Error)?.message ?? e}`, true); });
-  if (!osUser) throw new JobLaunchError(`실행 계정(${job.account_member})의 OS 계정을 준비하지 못했습니다`, true);
+  const osUser = await ensureMemberOsUser(user).catch((e) => { throw stepFailure("os-user", e); });
+  if (!osUser) throw stepFailure("os-user", `실행 계정 ${job.account_member}`);
   //  메모리 — 사람 세션과 같은 정책·같은 셈(sessions.ts createSession: max 없으면 high, 0 = 브로커 기본).
   const { effectiveSessionMemoryPolicy } = await import("../sessions/session-memory-policy.js");
   const { getRuntimeConfig } = await import("../org/store/runtime-config.js");
@@ -91,7 +106,7 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   if (job.project_id != null) {
     const { memberMkdir } = await import("../terminal/terminal-member-fs.js");
     try { await memberMkdir(osUser, job.cwd); }
-    catch (e) { throw new JobLaunchError(`작업 폴더를 만들지 못했습니다(${job.cwd}): ${(e as Error)?.message ?? e}`, true); }
+    catch (e) { throw stepFailure("workdir", `${job.cwd} — ${(e as Error)?.message ?? e}`); }
   }
   let made: { container: string; created: boolean } & Record<string, unknown>;
   //  `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
@@ -101,13 +116,13 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
       ...(apps ? { apps } : {}),
     });
   } catch (e) {
-    throw new JobLaunchError(`작업 컨테이너를 확보하지 못했습니다: ${(e as Error)?.message ?? e}`, true);
+    throw stepFailure("ensure", e);
   }
   //  어느 자리(컨테이너)에 앉았나 — 브로커 저널(철거 줄은 컨테이너 이름만 싣는다)과 이 작업을 잇는 유일한 단서다.
   logger.info({ job: job.id, session: sid, container: made.container, created: made.created }, "[agent-job] 작업 컨테이너 확보");
   const { prepareMemberHome } = await import("../terminal/sessions.js");
   try { await prepareMemberHome(user, { osUser, sessionId: sid }); }
-  catch (e) { throw new JobLaunchError(`실행 계정의 홈을 준비하지 못했습니다: ${(e as Error)?.message ?? e}`, true); }
+  catch (e) { throw stepFailure("home", e); }
   const { orgTimezone } = await import("../org/timezone.js");
   const { BOX_SPAWN } = await import("../terminal/terminal-isolation.js");
   const { tmux } = await import("../terminal/tmux-exec.js");
@@ -115,7 +130,7 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   try {
     await tmux(argv);
   } catch (e) {
-    throw new JobLaunchError(`작업 컨테이너에 판을 띄우지 못했습니다: ${redactSecret((e as Error)?.message ?? String(e), bootSecret).slice(0, 400)}`, true);
+    throw stepFailure("pane", redactSecret((e as Error)?.message ?? String(e), bootSecret).slice(0, 400));
   }
   return { container: made.container };
 }

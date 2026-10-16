@@ -1,7 +1,7 @@
 // 작업 컨테이너를 띄우고 걷는 자리(launch.ts)의 순수한 부분 — 브로커 tmux 인자 계약 · 비밀 가리기 · 걷기의 마지막 자리 (#4490).
 //  행 번호(L·K)는 지식 agent-job-container-research-4490 의 엣지 표다. tmux 실행은 바꿔 끼운 실행기로 본다(부른 argv · 던진 것).
 import assert from "node:assert/strict";
-import { jobTmuxArgv, redactSecret, killJobContainer } from "./launch.js";
+import { jobTmuxArgv, redactSecret, killJobContainer, stepFailure, launchJobContainer, JobLaunchError, type LaunchStep } from "./launch.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV } from "./runner.js";
 import { outcomeToError, sessionGoneResult } from "../terminal/tmux-route.js";
 import { sessionPaneArgv } from "../terminal/session-tmux.js";
@@ -88,6 +88,25 @@ await t("K3 걷기 — 확답이 아닌 실패(중계 시간 초과 · 목록을
   for (const e of [timedOut, unobserved, broker]) {
     await assert.rejects(killJobContainer(sid, async () => { throw e; }), (x: unknown) => x === e);
   }
+});
+
+await t("F1 확보 단계의 실패는 전부 일시(transient) — 대기열로 되돌려 다시 한다(시도 상한까지) · 문장에 단계와 사유", () => {
+  const steps: LaunchStep[] = ["os-user", "workdir", "ensure", "home", "pane"];
+  for (const step of steps) {
+    const e = stepFailure(step, new Error("노드 자리 없음"));
+    assert.ok(e instanceof JobLaunchError, step);
+    assert.equal(e.transient, true, `${step} 는 일시`);
+    assert.match(e.message, /노드 자리 없음$/, step);
+  }
+  assert.equal(stepFailure("ensure", "").message, "작업 컨테이너를 확보하지 못했습니다");
+});
+
+await t("F2 다시 해도 안 될 것(세션 id 없음 · 실행 계정 없음)은 일시가 아니다 — 그 작업을 바로 끝낸다", async () => {
+  const base = { id: 7, app_id: null, project_id: 1, cwd: "/work/shared/project/1" } as never;
+  await assert.rejects(launchJobContainer({ ...(base as object), session_id: null, account_member: "alice" } as never, "x"),
+    (e: unknown) => e instanceof JobLaunchError && e.transient === false && /세션 id/.test(e.message));
+  await assert.rejects(launchJobContainer({ ...(base as object), session_id: "job-7-0123abcd", account_member: null } as never, "x"),
+    (e: unknown) => e instanceof JobLaunchError && e.transient === false && /실행 계정/.test(e.message));
 });
 
 console.log(`# ${pass} pass`);

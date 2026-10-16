@@ -1,6 +1,7 @@
 // 작업 컨테이너 도구 (#4490 앱 v2-11) — 에이전트 작업을 보내고 · 보고 · 취소하고, 워크스페이스 상한을 보고 고친다.
 //  흐름·판정은 agent-jobs/service.ts(살아 있는 의존은 live.ts), 여기는 입력과 표면뿐이다.
-//  앱 화면은 v1 다리(/api/ui/apps/:id/tool-call)로 부른다 — 매니페스트 permissions.tools 에 선언하고 사람이 동의해야 한다(앱 principal 재판정).
+//  앱 화면은 다리(/api/ui/apps/:id/tool-call)나 앱 주소의 /_lively/*(#4482)로 부른다 — 매니페스트 permissions.tools 에 선언하고 사람이 동의해야 한다
+//  (앱 principal 재판정 · 두 길 다 runAppTool). 앱 서버 · 앱 토큰 · 작업 안에서는 못 보낸다(agent-jobs/service.assertMaySubmit).
 //  v2-9 의 `/_lively/ai/runs`(에이전트·구독 갈래)가 이 흐름을 감싼다.
 import { z } from "zod";
 import type { Capability } from "./types.js";
@@ -58,7 +59,7 @@ const agentJobGet: Capability = {
   name: "agent_job_get",
   title: "에이전트 작업 보기",
   description: "에이전트 작업 하나의 상태·결과 — status(queued·starting·running·done·failed·timeout·canceled) · result(text·is_error·num_turns·cost_usd·usage) · error · " +
-    "output_tail(진행 요지) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)과 관리자만 본다.",
+    "output_tail(진행 요지) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
   scope: "context",
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/agent-jobs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },
@@ -68,7 +69,7 @@ const agentJobGet: Capability = {
 const agentJobList: Capability = {
   name: "agent_job_list",
   title: "에이전트 작업 목록",
-  description: "내 에이전트 작업 목록(최근 것부터) — 한 줄은 요약이다(답은 result_preview 앞머리 · 전문은 agent_job_get). 앱 화면에서 부르면 그 앱의 내 작업만, 관리자는 워크스페이스 전체. status·app_id 로 좁힌다.",
+  description: "내 에이전트 작업 목록(최근 것부터) — 한 줄은 요약이다(답은 result_preview 앞머리 · 전문은 agent_job_get). 앱 화면에서 부르면 그 앱의 내 작업만, 관리자는 워크스페이스 전체(남의 작업은 상태·오류만). status·app_id 로 좁힌다.",
   scope: "context",
   input: {
     app_id: z.string().optional(),

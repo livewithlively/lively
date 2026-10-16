@@ -38,13 +38,12 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     available: () => launch.jobContainersAvailable(),
     launch: (job, boot) => launch.launchJobContainer(job, boot),
     kill: (sid) => launch.killJobContainer(sid),
-    assertJobAppUsable: async (job) => {
-      if (!job.app_id) return;
-      //  실행 계정 멤버의 지금 권한으로 본다(관리자 보임 판정 · 동의) — 접수 때와 같은 판정(assertAppUsableFor).
+    assertJobAllowed: async (job) => {
+      //  실행 계정 멤버가 아직 활성인가(모든 작업) · 앱 작업이면 그 사람의 지금 권한으로 그 앱을 쓸 수 있나(접수 때와 같은 판정).
       const { getMember } = await import("../org/store/members.js");
       const m = job.account_member ? await getMember(job.account_member) : null;
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${job.account_member ?? "?"})이 활성 구성원이 아닙니다`);
-      await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
+      if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
     },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {
