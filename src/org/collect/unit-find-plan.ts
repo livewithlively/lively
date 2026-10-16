@@ -27,6 +27,23 @@ export const HINT_UNITS = 3;
 /** 원문 자료 후보 수. */
 export const HINT_SOURCES = 3;
 
+/**
+ * 질의의 낱말 끝 문장부호(?!.,… — 전각 포함)를 뗀다. 세션이 묻는 질의는 «… 상한이 얼마야?» 처럼 끝에 물음표가 붙는데, 조사 떼기(stemKo)는 한글로
+ *  끝날 때만 돌아 «얼마야?» 가 그대로 남아 어떤 글에도 안 맞았다(리뷰 2026-10-17). 낱말 가운데의 점(«v1.2» · 주소)은 그대로 둔다.
+ */
+export function cleanQuery(q: string): string {
+  return String(q ?? "").replace(/(\S)[?？!！.。,，…~]+(?=\s|$)/gu, "$1").trim();
+}
+
+/**
+ * 지식 결과가 «낱말이 맞았다» 고 볼 낱말 수 — 둘 이하면 전부, 셋 이상이면 하나 빼고 전부. 자연어 질의의 «정해지나» 같은 꼴 하나 때문에
+ *  정답 지식이 1위인데도 «약함» 이 되지 않게(리뷰 2026-10-17 매니지드 확인: «수집 단위 공개범위는 어떻게 정해지나» 의 1위가 정답 지식이었다).
+ */
+export function knowledgeTermsNeeded(terms: number): number {
+  const n = Math.max(0, Math.floor(terms));
+  return n <= 2 ? n : n - 1;
+}
+
 /** ① 지식이 약한가. topSim 이 null(임베딩이 꺼졌거나 못 물었다)이면 낱말이 맞은 지식이 있어야 강하다. */
 export function knowledgeWeak(input: { count: number; topSim: number | null; lexical: boolean }): { weak: boolean; reason: "empty" | "weak" | null } {
   if (input.count <= 0) return { weak: true, reason: "empty" };

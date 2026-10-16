@@ -116,7 +116,8 @@ export async function hybridSearchKnowledge(
  *  돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진 것이다. 질의 임베딩은 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억).
  *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
  */
-export async function knowledgeSearchStrength(qstr: string, names: readonly string[]): Promise<{ topSim: number | null; lexical: boolean }> {
+export async function knowledgeSearchStrength(qstr: string, names: readonly string[],
+  termsNeeded: (n: number) => number = (n) => n): Promise<{ topSim: number | null; lexical: boolean }> {
   const list = [...new Set(names)].slice(0, 100);
   if (!list.length) return { topSim: null, lexical: false };
   let topSim: number | null = null;
@@ -133,14 +134,17 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
   try {
     //  낱말은 plain 규칙(조사를 뗀 꼴 · 같은 뜻 표기)으로 · **군말은 빼고**(«어떻게» · 한 글자) — 자연어 질의의 «공개범위를» 이 «공개범위» 로 맞고
     //   «어떻게 돼» 가 지식에 없다고 약해지지 않게(리뷰 2026-10-17). 낱말이 전부 군말이면 그대로 다 쓴다.
+    //   몇 개가 맞아야 하나는 부르는 쪽이 정한다(termsNeeded — 검색 실패 보조 안내는 «셋 이상이면 하나 빼고 전부»).
     const all = parseQueryTerms(qstr);
     const must = requiredTerms(all);
-    const plan: GrepPlan = { mode: "plain", terms: must.length ? must : all };
-    if (plan.terms.length) {
+    const terms = must.length ? must : all;
+    if (terms.length) {
       const params: unknown[] = [];
-      const where = grepWhereSql(plan, {}, params);
+      const hits = terms.map((t) => `(CASE WHEN (${grepWhereSql({ mode: "plain", terms: [t] } as GrepPlan, {}, params)}) THEN 1 ELSE 0 END)`);
+      params.push(Math.min(Math.max(termsNeeded(terms.length), 1), terms.length)); const needP = `$${params.length}`;
       params.push(list);
-      const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM knowledge k WHERE ${where} AND k.name = ANY($${params.length}::text[])`, params);
+      const rows = await q(itemsPool,
+        `SELECT count(*)::int AS n FROM knowledge k WHERE (${hits.join(" + ")}) >= ${needP} AND k.name = ANY($${params.length}::text[])`, params);
       lexical = Number(rows[0]?.n ?? 0) > 0;
     }
   } catch { lexical = false; }

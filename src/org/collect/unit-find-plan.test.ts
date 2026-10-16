@@ -10,12 +10,14 @@
 //   A1 몇 전 — 59초 «방금» · 60초 «1분 전» · 59분 · 1시간 · 23시간 · 1일 · 읽을 수 없는 시각 null
 //   N1 안내 문구 — 수집 시각이 있으면 «N 전 수집했습니다 …» · 켠 단위인데 아직이면 «첫 수집 전» · 후보면 «모으지 않는 곳»
 //   N2 남이 «나만» 으로 모으는 곳(모은 자료가 안 보인다) · 막은 워크스페이스(조직 연결 ext__ 로)
+//   Q1 질의 다듬기 — 낱말 끝 물음표·느낌표·마침표(전각 포함)를 뗀다 · 낱말 가운데 점(v1.2 · 주소)은 그대로
+//   Q2 지식 낱말 판정 문턱 — 둘 이하 전부 · 셋 이상 하나 빼고 전부
 //   S1 원문 자료에 맞아야 하는 낱말 수 — 0·1·2 는 전부 · 3→2 · 4→2 · 5→3
 //   E1 설명 벡터의 글 — «앱 종류 이름» + 설명 + 연결된 맥락 · 모르는 앱·종류는 그대로/빈칸 · 8,000자
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  UNIT_MIN_SIM, WEAK_TOP_SIM, agoText, knowledgeWeak, termsNeeded, textMatchScore, unitEmbeddingText, unitHaystack, unitHintText, unitMatch,
+  agoText, cleanQuery, knowledgeTermsNeeded, knowledgeWeak, termsNeeded, textMatchScore, UNIT_MIN_SIM, unitEmbeddingText, unitHaystack, unitHintText, unitMatch, WEAK_TOP_SIM,
 } from "./unit-find-plan.js";
 
 test("W 지식이 약한가 — 결과 없음 · 낱말 · 의미 문턱(0.65) · 못 잼", () => {
@@ -110,4 +112,16 @@ test("E1 설명 벡터의 글 — 앱·종류 이름표 + 이름 · 설명 · �
     "슬랙 비공개 채널 #결제-출시\n\n결제 기능 출시 논의\n\nprj-1");
   assert.equal(unitEmbeddingText({ app: "jira", kind: "weird", name: null, description: null }), "jira", "모르는 앱은 키 그대로 · 모르는 종류는 빈칸");
   assert.equal(unitEmbeddingText({ app: "notion", kind: "page", name: "x", description: "가".repeat(9000) }).length, 8000);
+});
+
+test("Q1 질의 다듬기 — 낱말 끝 물음표·느낌표·마침표(전각 포함)를 뗀다 · 낱말 가운데 점은 그대로", () => {
+  assert.equal(cleanQuery("수집 세션 메모리 상한이 얼마야?"), "수집 세션 메모리 상한이 얼마야");
+  assert.equal(cleanQuery("정말?! 이게 맞아？"), "정말 이게 맞아");
+  assert.equal(cleanQuery("v1.2 배포 example.com. 확인…"), "v1.2 배포 example.com 확인");
+  assert.equal(cleanQuery("a,b 그대로"), "a,b 그대로");
+  assert.equal(cleanQuery("  ?  "), "?", "낱말이 문장부호뿐이면 그대로(뗄 앞 글자가 없다)");
+});
+
+test("Q2 지식 낱말 판정 문턱 — 둘 이하 전부 · 셋 이상 하나 빼고 전부", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map(knowledgeTermsNeeded), [0, 1, 2, 2, 3, 4]);
 });

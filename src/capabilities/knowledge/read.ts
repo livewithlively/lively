@@ -188,12 +188,14 @@ export const knowledgeSearch: Capability = {
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
     //   **세션이 부른 검색에만**(허용 목록) — MCP, 또는 세션 헤더(x-lively-session)를 실은 REST. 웹 화면의 «의미검색» · 앱 화면 다리
     //   (app-ui · app-front — 열람 신원이 실리지 않는다)에는 계산하지 않는다(리뷰 2026-10-17). 안내는 늘 질문한 사람 자신의 공개범위로만 찾는다
-    //   (특권 열람 신원으로 찾지 않는다 — collectHintFor).
-    const forSession = ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session);
+    //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId)으로 들어온 MCP 도 뺀다 — 그 앱이 동의받은 도구는
+    //   knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
+    const forSession = (ctx?.source === "mcp" && !user?.appId) || (ctx?.source === "web" && !!ctx?.session);
     if (!forSession || !user?.userId) return { entries };
+    const deadline = Date.now() + HINT_BUDGET_MS;
     const hint = await withinMs(HINT_BUDGET_MS, async () => {
       const { collectHintFor } = await import("../../org/collect/unit-find.js");
-      return collectHintFor({ q: input.q, names: entries.map((e) => e.name), member: String(user.userId), isAdmin: isAdmin(user) });
+      return collectHintFor({ q: input.q, names: entries.map((e) => e.name), member: String(user.userId), isAdmin: isAdmin(user), deadline });
     });
     return hint ? { entries, collect_hint: hint } : { entries };
   },
@@ -201,7 +203,7 @@ export const knowledgeSearch: Capability = {
 
 /** «가져올 곳» 을 만드는 데 쓰는 시간 상한 — 원문 자료 찾기는 DB 쪽에서도 이보다 짧게 끊는다(unit-find LOOSE_TIMEOUT_MS). */
 const HINT_BUDGET_MS = 1500;
-/** fn 을 ms 안에서만 기다린다 — 넘기거나 실패하면 null(fn 은 뒤에서 끝난다 — 조회 몇 개라 따로 끊지 않는다). */
+/** fn 을 ms 안에서만 기다린다 — 넘기거나 실패하면 null(fn 은 뒤에서 끝나되, 마감 시각을 받아 그 뒤로는 더 묻지 않는다 — collectHintFor). */
 async function withinMs<T>(ms: number, fn: () => Promise<T | null>): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

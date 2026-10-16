@@ -110,6 +110,12 @@ try {
     chk("H1 낱말이 다 든 지식이 있으면 안내가 안 붙는다(null)", strong === null, JSON.stringify(strong));
     const particles = await collectHintFor({ q: "결제의 출시 일정은 어떻게 돼", names: [KN], member: A, isAdmin: false, now: NOW });
     chk("H1b 조사가 붙은 자연어 질의도 조사를 떼고 낱말을 맞춘다(knowledge_grep plain 규칙) — 안내가 안 붙는다", particles === null, JSON.stringify(particles));
+    const asked = await collectHintFor({ q: "출시 일정?", names: [KN], member: A, isAdmin: false, now: NOW });
+    chk("H1c 질의 끝의 물음표는 떼고 맞춘다(«일정?» → «일정») — 안내가 안 붙는다", asked === null, JSON.stringify(asked));
+    const most = await collectHintFor({ q: "결제 출시 일정 변경", names: [KN], member: A, isAdmin: false, now: NOW });
+    const few = await collectHintFor({ q: "결제 변경 취소 사유", names: [KN], member: A, isAdmin: false, now: NOW });
+    chk("H1d 낱말이 셋 이상이면 하나 빼고 다 든 지식이 있으면 강하다(«변경» 하나 없음 → 안내 없음) · 하나만 맞으면 약하다",
+      most === null && few?.reason === "weak", JSON.stringify({ most, few: few && { reason: few.reason, note: few.note } }));
     await itemsPool.query(`INSERT INTO source(name, kind, title, body_md, provenance) VALUES($1,'doc',$2,$3,'observed')`,
       [SRC, "결제 출시 회의록", "결제 기능 출시를 11월로 미루자는 의견"]);
     //  이미 지식이 된 자료(knowledge_source 로 묶임)는 «아직 지식이 안 된 원문 자료» 가 아니다.
@@ -140,6 +146,25 @@ try {
     await itemsPool.query(`UPDATE org_runtime_config SET allow_member_ai_connectors = true WHERE id=1`);
     chk("H5 구성원 Claude 커넥터를 막은 워크스페이스는 «그 커넥터로 직접» 을 권하지 않는다 — 단위 없이 안내만",
       blocked && !blocked.units && blocked.reason === "empty", JSON.stringify(blocked));
+    //  원문 자료 찾기가 시간 상한에 걸리면(다른 일이 표를 잠갔다) «원문 자료에도 없다» 고 단정하지 않는다 — 단위는 그대로 싣는다.
+    const locker = await itemsPool.connect();
+    let slow = null, ms = 0;
+    try {
+      await locker.query("BEGIN");
+      await locker.query("LOCK TABLE knowledge_source IN ACCESS EXCLUSIVE MODE");
+      const t0 = Date.now();
+      slow = await collectHintFor({ q: "결제 롤아웃 날짜 확정", names: [], member: A, isAdmin: false, now: NOW });
+      ms = Date.now() - t0;
+    } finally {
+      await locker.query("ROLLBACK").catch(() => {});
+      locker.release();
+    }
+    chk("H6 원문 자료 찾기가 시간 상한에 걸리면 «원문 자료에도 없다» 고 하지 않는다(sources_checked false) · 단위는 그대로 · 상한(1.2초) 무렵 끝난다",
+      slow?.sources_checked === false && /찾아보지 못했습니다/.test(slow.note) && !/원문 자료에 맞는 것이 없습니다|원문 자료에도 맞는 것이 없습니다/.test(slow.note)
+        && (slow.units ?? []).some((x) => x.id === u1.id) && ms >= 1000 && ms < 5000,
+      JSON.stringify({ ms, slow: slow && { sources_checked: slow.sources_checked, note: slow.note, units: slow.units?.map((x) => x.name) } }));
+    const lateHint = await collectHintFor({ q: "결제 롤아웃 날짜 확정", names: [], member: A, isAdmin: false, now: NOW, deadline: Date.now() - 1 });
+    chk("H7 마감 시각이 지났으면 더 묻지 않는다(null — 부르는 쪽이 이미 검색 결과만 돌려줬다)", lateHint === null, JSON.stringify(lateHint));
   }
 
   // ── S1·S2 표면 — knowledge_search 의 collect_hint · collect_unit_find ──
@@ -161,6 +186,9 @@ try {
     const appFront = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-front", actor: A });
     const priv = await handler("knowledge_search")({ q: "롤아웃 날짜 확정 메모" }, userOf(A), { source: "mcp", viewer: null });
     const lockedId = (await itemsPool.query(`SELECT id FROM source WHERE name=$1`, [`${SRC}-locked`])).rows[0].id;
+    const viaApp = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, { ...userOf(A), appId: "app-ci-find" }, { source: "mcp", viewer: A });
+    chk("S1e 앱 세션 토큰(appId)으로 들어온 MCP 에는 안내를 안 붙인다(앱 동의 경계)", !viaApp.collect_hint && Array.isArray(viaApp.entries),
+      JSON.stringify(Object.keys(viaApp)));
     chk("S1d 앱 화면 다리에는 안내를 안 붙인다 · 특권 열람 신원(null)으로 불러도 안내의 원문 자료는 그 사람 공개범위대로(C 만 보는 메모가 안 나온다)",
       !appUi.collect_hint && !appFront.collect_hint && !(priv.collect_hint?.sources ?? []).some((x) => x.id === lockedId),
       JSON.stringify({ appUi: !!appUi.collect_hint, appFront: !!appFront.collect_hint, priv: priv.collect_hint }));
