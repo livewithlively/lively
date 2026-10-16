@@ -7,8 +7,10 @@
 //   세션 안에서 보이는 «남은 메모리»(/proc/meminfo)에는 gVisor 자체 몫(약 200~330MB)이 안 보이므로 바닥은 그 몫 + 여유로 잡는다.
 //  워크스페이스 상한(#4792 · 결정 상민 2026-10-16): 모든 워크스페이스가 AWS 계정 하나를 나눠 쓴다 — Lambda 코드 저장 300GiB(문서상 늘릴 수 없음) ·
 //   동시 실행 1,000. 함수 수(기본 20 · 천장 200)와 코드 저장(기본 5GB · 천장 20GB)을 새 함수 · 새 코드를 올릴 때 본다.
-//   코드 저장은 AWS 가 세는 그대로 함수 판마다의 CodeSize(zip 크기) 합이다 — 2026-10-16 계정 측정: TotalCodeSize 36,599,256 = 판 없이 $LATEST 만
+//   코드 저장은 함수 판마다의 CodeSize(zip 크기) 합이다 — 2026-10-16 계정 측정: TotalCodeSize 36,599,256 = 판 없이 $LATEST 만
 //   있던 옛 함수 셋의 CodeSize 합(zip 크기로 센다는 것까지 확인). 고정 판을 $LATEST 와 따로 세는지는 재지 않았다 — 따로 더해 넉넉히(많게) 센다.
+//   ★ #4801 부터 함수는 코드를 복사하지 않고 우리 S3 zip 을 바로 읽는다(REFERENCE) — 그 판은 계정 TotalCodeSize 를 늘리지 않지만 Lambda 는 CodeSize 를
+//   그대로 보인다(2026-10-16 시험). ListVersions 엔 저장 방식이 없어 가를 수도 없다 — 이 상한은 그대로 zip 합을 센다(우리 S3 몫 · 공평 몫의 상한으로).
 //   동시 실행 몫은 Lambda 예약으로 걸지 않는다(예약 합 ≤ 1,000 − 100) — v2-6(#4485) 앞단이 요청을 센다.
 
 export interface AppServerPolicy {
@@ -98,7 +100,10 @@ const MIB = 1024 * 1024;
 const mbText = (n: number): string => (n < MIB ? `${Math.ceil(n / 1024)}KB` : `${(n / MIB).toFixed(n < 10 * MIB ? 1 : 0)}MB`);
 export const mbOf = (bytes: number): number => Math.round((bytes / MIB) * 10) / 10;
 
-/** 함수 판들의 코드 크기 합(바이트) — ListVersionsByFunction 의 CodeSize($LATEST 포함). AWS 계정 사용량(TotalCodeSize)이 이 값들의 합이다. */
+/**
+ * 함수 판들의 코드 크기 합(바이트) — ListVersionsByFunction 의 CodeSize($LATEST 포함). COPY 판이면 AWS 계정 사용량(TotalCodeSize)에 들고,
+ *  REFERENCE 판(#4801)이면 계정 사용량엔 안 들지만 CodeSize 는 같은 zip 크기로 보인다 — 둘 다 센다(상한 = zip 합).
+ */
 export const codeBytesOf = (versions: ReadonlyArray<{ CodeSize?: number }>): number => versions.reduce((s, v) => s + (Number(v.CodeSize) || 0), 0);
 
 /**
