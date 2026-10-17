@@ -62,6 +62,8 @@ export interface MobileChrome {
   isPhone(): boolean;
   /** 폰 아래 탭 바로 연 구역 목록(서랍)의 구역 — 그 서랍이 열려 있는 동안만. 사람이 고른 목록이라 지금 화면의 앱 사이드바보다 앞선다(#4632). */
   sheetSection(): RailSection | null;
+  /** 탭 바로 연 구역 목록 서랍이 닫혔다 — 셸이 사이드바를 다시 그려 지금 화면(앱)의 것으로 되돌린다. 안 그리면 다음 ☰ 에 그 구역 목록이 남는다. */
+  onSheetClosed(fn: () => void): void;
 }
 
 /** #v2-root 에 모바일 크롬을 단다. bar 는 root 맨 앞, scrim·tabs 는 맨 뒤에 호출자가 끼운다(그리드 열 순서를 안 건드리게). */
@@ -97,6 +99,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   let open: Which | null = null;
   let sheetOpen = false;
   let sheetSec: RailSection | null = null;   // 탭 바로 연 구역 목록 — 서랍을 닫거나 ☰ 로 열면 지운다
+  const sheetEndFns = new Set<() => void>();
   const paint = (): void => {
     root.classList.toggle('m-side', open === 'side');
     root.classList.toggle('m-aside', open === 'aside');
@@ -112,7 +115,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     if (!open && !sheetOpen) return;
     const was = open;
     const wasSheet = sheetOpen;
+    const hadSheet = !!sheetSec;
     open = null; sheetOpen = false; sheetSec = null; paint();
+    if (hadSheet) for (const f of sheetEndFns) { try { f(); } catch (_) { /* 다시 그리기가 깨져도 닫기는 끝난다 */ } }
     //  [더보기] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([더보기])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
     if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
     const panel = was === 'side' ? side : (asideTarget || aside);
@@ -241,6 +246,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     //  ⚠ 서랍이 열렸는지(open)로 거르지 않는다 — 탭을 누르면 사이드바를 먼저 그리고(setRailSection → drawSide) 서랍은 그다음에 연다.
     //   그 그리기에서 null 이면 서랍에 앱 사이드바가 선다(폰 실측). 닫으면(closeAll) · ☰ 로 열면 지워지므로 이 값이 남아 있는 동안은 탭으로 연 서랍이다.
     sheetSection: () => sheetSec,
+    onSheetClosed(fn: () => void): void { sheetEndFns.add(fn); },
     adoptStrip(el0: HTMLElement, restore: () => void): void { strip = { el: el0, restore }; placeStrip(); },
     setAside(on: boolean): void {
       asideBtn.hidden = !on;

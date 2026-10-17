@@ -13,13 +13,13 @@ import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
 import { appGlassIcon } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
-import { builderModelNow, deletedSids, listAllApps, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
+import { builderModelFailed, builderModelNow, deletedSids, listAllApps, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioRecs, studioUiOnly } from './app-studio.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 import { FOLDER_LIMIT_MAX_GB, folderLine, folderSavedText, parseFolderInput } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 
 export type { BuilderEnv } from './builder-model.js';
@@ -48,6 +48,21 @@ export function builderOnHash(hash: string): boolean {
   return true;
 }
 if (typeof window !== 'undefined') window.addEventListener('hashchange', () => { builderOnHash(location.hash); });
+
+/** 앱빌더 안에서 주소만 바꾼다(hashchange 없이 · 뒤로 가기에 남기지 않게). 뒤로/앞으로 순번(history.state)은 그대로 두고,
+ *  셸 탭의 주소(탭을 다시 켤 때 이 주소로 돌아온다)와 사이드바의 켜진 줄도 맞춘다. */
+function replaceRoute(to: string): void {
+  if (location.hash !== to) { try { history.replaceState(history.state, '', location.pathname + location.search + to); } catch (_) { /* noop */ } lastDrawn = to; }
+  mounted?.env.setRoute?.(to);
+  mounted?.env.redrawSide?.();
+}
+/** 고른 카드를 바꾼다 — v.sel 과 주소(#/builder?sel=)를 늘 함께. 목록이 아닌 화면(만들기)에서는 주소를 건드리지 않는다. */
+function setSel(v: View, key: string): void {
+  v.sel = key;
+  const w = parseBuilderHash(location.hash);
+  if (!w || w.view !== 'list') return;
+  replaceRoute(builderRoute('list', key));
+}
 
 export function builderTabTitleFor(segs: readonly string[], params: { get(k: string): string | null }): string {
   const w = parseBuilderRoute(segs, params);
@@ -97,14 +112,13 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
   v.studioKey = key;
   const opts = { host: v.stage, onClose: () => {
     v.studioKey = '';
-    //  닫기 = 목록으로. 이미 다른 데로 갔으면(창 닫힘 · 다른 주소) 건드리지 않는다.
-    if (/^#\/builder\/(new|s|app)(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('list');
+    //  닫기 = 목록으로 — 열기 전에 골라 둔 카드 그대로. 이미 다른 데로 갔으면(창 닫힘 · 다른 주소) 건드리지 않는다.
+    if (/^#\/builder\/(new|s|app)(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('list', v.sel);
   }, onSession: (sid: string) => {
     //  세션이 생겼다 — 주소를 그 세션으로 바꿔 둔다(새로고침 · 뒤로 와도 만들던 자리). hashchange 를 내지 않아(replaceState) 지금 화면은 그대로다.
     const to = builderRoute('resume', sid);
     v.studioKey = 'resume:' + sid + ':edit';
-    if (location.hash !== to) { try { history.replaceState(null, '', location.pathname + location.search + to); } catch (_) { /* noop */ } lastDrawn = to; }
-    env.redrawSide?.();   // 새 앱이 「만들던 앱」 에 들어왔다 — 사이드바에 그 줄이 켜진 채로 선다
+    replaceRoute(to);   // 사이드바에도 새 앱이 「만들던 앱」 에 켜진 채로 선다 · 탭을 다시 켜도 이 자리로
   } };
   if (where.view === 'new') { openAppStudio(null, opts); return; }
   if (where.view === 'resume') {
@@ -140,19 +154,15 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
   await refreshBuilderModel(true);
   const M = builderModelNow(env);
-  if (seq !== v.seq || !v.root.isConnected || !M) return;
+  if (seq !== v.seq || !v.root.isConnected) return;
+  if (!M) { v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: builderModelFailed() ? '앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' : '불러오는 중…' })); return; }
   const { apps, me: m, drafts, mine, team } = M;
   //  사이드바에서 팀원이 만든 앱을 골라 왔으면 그 묶음을 펴 둔다 — 고른 카드가 접힌 묶음 안에 숨지 않게.
   if (v.sel && team.some((a) => a.id === v.sel)) v.teamOpen = true;
   const hidden = new Set(readPadHidden());
   const refresh = (): void => { void paintList(v, env); };
-  //  카드를 고르면 주소에도 적는다(뒤로 가기에 남기지 않게 replace) — 사이드바가 같은 줄을 켠다.
-  const pick = (key: string): void => {
-    v.sel = key;
-    const to = builderRoute('list', key);
-    if (location.hash !== to) { try { history.replaceState(history.state, '', location.pathname + location.search + to); } catch (_) { /* noop */ } lastDrawn = to; }
-    refresh(); env.redrawSide?.();
-  };
+  //  카드를 고르면 주소에도 적는다(setSel) — 사이드바가 같은 줄을 켠다.
+  const pick = (key: string): void => { setSel(v, key); refresh(); };
 
   const appCard = (a: BApp, own: boolean): HTMLElement => {
     const pl = placeOf(a.studio);
@@ -186,7 +196,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
       el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-acts' },
         el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
-        el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); if (v.sel === draftKey(d)) v.sel = ''; refresh(); } })));
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, ''); refresh(); } })));
     return card;
   };
   //  지우기 — 앱(있으면 · 판 이력째) → 앱빌딩 세션(멈추고 휴지통으로) → 이 브라우저의 기록. 진짜로 없어진다(원준: «기능적으로도 싹 삭제»).
@@ -205,7 +215,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     //  ③ 시험 세션(목록엔 안 서는 «"이름" 앱 시험» — app-try-session.ts)도 함께 걷는다. 이 브라우저가 띄운 것만 안다 — 없으면 건너뛴다.
     const trySid = (studioRecs().find((r) => r.sid === d.sid) || { trySid: '' }).trySid;
     if (trySid) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(trySid) + '?reclaim=1', { method: 'DELETE' }); } catch (_) { /* 이미 없으면 그만 */ } }
-    deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) v.sel = '';
+    deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, '');
     toast(shared ? '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요. 공개한 앱은 그대로 있고, 비공개 버전은 버전 이력에 남아요.' : d.appId ? '「' + d.title + '」 앱과 앱빌딩 세션, 기록을 모두 지웠어요.' : '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요.');
     refresh();
   };
@@ -302,7 +312,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   const del = el('button', { class: 'btn btn-ghost btn-sm v2-bld-danger', type: 'button', text: '앱 지우기' }) as HTMLButtonElement;
   del.onclick = () => {
     //  #4667 나만 보는 앱은 책임자가 지운다(/discard) · 공개한 앱은 관리자가(/remove — 아니면 서버가 403 을 말한다).
-    if (del.dataset.arm) { void post(a.visibility === 'me' ? '/discard' : '/remove', {}, '「' + a.title + '」 앱을 지웠어요'); v.sel = ''; return; }
+    if (del.dataset.arm) { void post(a.visibility === 'me' ? '/discard' : '/remove', {}, '「' + a.title + '」 앱을 지웠어요'); setSel(v, ''); return; }
     del.dataset.arm = '1'; del.textContent = '한 번 더 누르면 지워져요'; window.setTimeout(() => { delete del.dataset.arm; del.textContent = '앱 지우기'; }, 4000);
   };
   //  #4667 만든 사람 · 만들기 세션 · 책임자 · 공개 상태는 서버 기록이다(매니페스트 studio 칸이 아니라).

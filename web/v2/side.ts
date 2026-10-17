@@ -42,10 +42,9 @@ import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세�
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
 import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
-import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';
+import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
-import { builderModelNow, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
-import { builderRoute, builderSideKey, draftStageShort, draftStageText, parseBuilderHash } from '../lib/builder-flow.js';   // #4233 분류체계 앱 사이드바 재료
+import { builderModelFailed, builderModelNow, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
@@ -66,7 +65,7 @@ import { refreshStatusCount, switcherTop } from './switcher.js';   // #1875 — 
 import { openSectionMenu, railIsHidden, sectionDef, setRailSection, stackTile, type RailSection } from './rail.js';   // #2016 — 무엇을 그릴지는 레일이 고른 구역이 정한다
 import { ICONS, icon } from './icons.js';   // #2016 — 선 아이콘 한 벌
 import { iconPath, projGlyph } from '../lib/icon-paths.js';
-import { isBuilderProjectName, isBuilderSession } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수)
+import { builderRoute, builderSideKey, draftStageShort, draftStageText, isBuilderProjectName, isBuilderSession, parseBuilderHash } from '../lib/builder-flow.js';   // #4632 — 앱빌더 프로젝트 · 앱빌딩 세션 판정(순수) · 앱빌더 사이드바의 주소 · 켜진 줄 · 짧은 단계
 import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내 프로필·환경설정 창(#1843) — 테마·클래식 전환·로그아웃이 그 안에 있다
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
@@ -1856,9 +1855,8 @@ function renderBuilderSection(): void {
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   if (!bldBound) { bldBound = true; onBuilderModel(() => { if (last && ownerNow() === 'builder') redraw(); }); }
   void refreshBuilderModel().catch(() => { /* 다음 그리기에서 다시 받는다 */ });
-  const M = builderModelNow({ projects: () => data.projects, sessions: () => data.sessions });
-  //  #3870 — 세션 목록을 받기 전엔 만들던 앱이 덜 서므로 숫자도 «없어요» 도 말하지 않는다.
-  const ready = !!M && sideTruthReady(data);
+  //  #3870 — 세션 목록을 받기 전엔 만들던 앱이 덜 서므로 숫자도 «없어요» 도 말하지 않는다(M = null).
+  const M = sideTruthReady(data) ? builderModelNow({ projects: () => data.projects, sessions: () => data.sessions }) : null;
   const at = builderSideKey(parseBuilderHash(location.hash) || { view: 'list', id: '', how: 'edit' });
   const fix = (href: string, ic: string, label: string, n: number | null, key: string, tip: string, cls = ''): HTMLElement =>
     el('a', { class: 'v2-wcat v2-ptl v2-kview' + cls + (at === key ? ' on' : ''), href, title: tip, ...(at === key ? { 'aria-current': 'true' } : {}) },
@@ -1881,14 +1879,14 @@ function renderBuilderSection(): void {
   const keep = listBefore();
   const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-bld-shelf', 'aria-label': '앱' });
   appListEl = listEl;
-  if (!ready) listEl.append(el('p', { class: 'v2-empty', text: '불러오는 중…' }));
+  if (!M) listEl.append(el('p', { class: 'v2-empty', text: builderModelFailed() && sideTruthReady(data) ? '앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' : '불러오는 중…' }));
   else {
-    const drafts = M!.drafts.map((d) => {
-      const long = draftStageText(d.stage, !!d.appId, d.done);
-      return row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done), d.title + ' · ' + long + '. 누르면 이어서 만들어요');
-    });
-    const mine = M!.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + ' · 누르면 배포 설정이 열려요'));
-    const team = M!.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + (a.madeBy ? ' · ' + a.madeBy + ' 만듦' : '') + ' · 누르면 배포 설정이 열려요'));
+    //  툴팁 — 이름. 지금 단계. 누르면 할 일(문장은 마침표로 끊는다 · ui-copy 규칙).
+    const drafts = M.drafts.map((d) => row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done),
+      d.title + '. ' + draftStageText(d.stage, !!d.appId, d.done) + '. 누르면 이어서 만들어요.'));
+    const mine = M.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + '. 누르면 배포 설정이 열려요.'));
+    const team = M.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a),
+      a.title + '.' + (a.madeBy ? ' 만든 사람: ' + a.madeBy + '.' : '') + ' 누르면 배포 설정이 열려요.'));
     listEl.append(
       card('draft', '만들던 앱', 'buildsess', drafts, '만들던 앱이 없어요.'),
       card('mine', '내가 만든 앱', 'apps', mine, '아직 만든 앱이 없어요.'),
@@ -1900,12 +1898,12 @@ function renderBuilderSection(): void {
       secHead('앱빌더', null),
       el('nav', { class: 'v2-kviews', 'aria-label': '앱빌더 화면' },
         fix(builderRoute('new'), 'plus', '새 앱 만들기', null, 'new', '새 앱을 처음부터 만들어요', ' v2-bld-new'),
-        fix(builderRoute('list'), 'grid', '모든 앱', ready ? M!.drafts.length + M!.mine.length : null, 'all', '만들던 앱과 내가 만든 앱을 한눈에 봐요')),
+        fix(builderRoute('list'), 'grid', '모든 앱', M ? M.drafts.length + M.mine.length : null, 'all', '만들던 앱과 내가 만든 앱을 한눈에 봐요')),
       listEl),
+    //  레일을 숨겼으면 레일 발치의 [앱] · [나] 가 내려온다(footRow) — 그 [앱] 이 같은 앱 찾기라 「앱 찾기」 줄은 그때 두지 않는다.
     el('footer', { class: 'v2-side-foot v2-bld-foot' }, updateSlot(),
-      el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
-        icon('apps', 'v2-nav-ic'), el('span', { class: 'n', text: '앱 찾기' })),
-      railIsHidden() ? footRow() : null));
+      railIsHidden() ? footRow() : el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
+        icon('apps', 'v2-nav-ic'), el('span', { class: 'n', text: '앱 찾기' }))));
   listAfter(keep);
   bindSideKeys();
 }

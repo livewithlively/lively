@@ -55,7 +55,7 @@ import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워
 import { confirmSessionArchive, watchSessionTrash, SESSION_LEFT_EVENT } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
 import { drawRail, mountRail, railIsHidden, railShownSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
-import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음(그 자리까지 앱이 쓴다)
+import { activeKeyOfRoute, sideOwnerOfRoute } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음(그 자리까지 앱이 쓴다)
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
@@ -391,6 +391,7 @@ export async function bootV2(): Promise<void> {
     mobile = mountMobileChrome(root, sideEl!, asideEl!);
     //  문턱(≤900)을 넘나들면 활성 탭의 서랍 단추를 다시 맞춘다 — 종전엔 활성화·마운트 때만 계산돼 창을 줄이면 단추가 없었다.
     mobile.onChange(() => { const t = tabsApi?.current(); if (t) applyTabChrome(t); });
+    mobile.onSheetClosed(() => drawSide());   // #4632 탭 바로 연 구역 목록을 닫으면 사이드바를 지금 화면(앱)의 것으로 되돌린다
     root.prepend(mobile.bar);
     root.append(mobile.scrim);
     //  폰 아래 탭 바(#4088) — 맨 뒤(flex 열의 발치). 넓은 폭에선 CSS 가 숨긴다(50-mobile.css).
@@ -1462,7 +1463,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('builder');
       noteAppUse('builder');
       tab.aside.replaceChildren();
-      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide() });
+      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide(),
+        setRoute: (h) => { if (tab.route !== h) { tab.route = h; tabsApi?.routed(tab); } } });
       void ensureSingletonAppInstance('builder', '앱빌더')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
@@ -1845,12 +1847,8 @@ function activeKey(): string {
 }
 /** 주소 하나가 갖는 활성 키 — activeKey() 는 '지금 탭'의 것을 묻고, 이 함수는 **아무 주소나** 묻는다.
  *  탭 크롬(applyTabChrome)은 그 탭의 주소로 물어야 한다: 부팅 중엔 tabsApi.current() 가 아직 그 탭이 아니다. */
-function activeKeyOf(route: string): string {
-  const cur = parseRoute(route);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' || cur.segs[0] === 'f' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'builder' ? 'builder' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
-}
-/** 이 주소의 사이드바 주인(lib/side-owner) — 'none' 이면 사이드바 열을 접는다(applyTabChrome), 앱 이름이면 그 앱이 사이드바를 그린다(side.ts). */
-function sideOwnerOfRoute(route: string): SideOwner { return sideOwnerOf(activeKeyOf(route), parseRoute(route).segs[0] || ''); }
+//  #4632 — 판정은 lib/side-owner activeKeyOfRoute 한 벌(사이드바 주인 표와 같은 자리 · 실제 주소로 시험한다).
+function activeKeyOf(route: string): string { return activeKeyOfRoute(route); }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
 //  ⓑ 새로고침·상태에 따라 목록이 사라져 "왜 없어졌나"를 매번 되찾아야 했다(원준 신고). 목록은 셸의 뼈대다 —

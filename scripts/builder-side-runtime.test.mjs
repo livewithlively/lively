@@ -14,6 +14,7 @@
 //  D6 팀원 카드 — 기본 접힘 · 그 안의 앱이 켜지면 펴진다 · 머리를 누르면 펴진다
 //  D7 다른 화면(리브) — 앱빌더 사이드바가 아니다
 //  D8 셸이 주인을 «구역» 이라 하면(폰 탭 바로 연 목록) — 앱빌더 화면이어도 구역 목록
+//  D9 앱 목록을 못 받았다(받아 둔 것 없음) — «아직 만든 앱이 없어요» 라고 거짓말하지 않고 못 받았다고 말한다 · 다음 그리기에서 다시 받아 선다
 //  W  페이지 예외 없음 · 앱 목록 · 나 요청이 실제로 나갔다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(앱빌더 사이드바가 없던 origin/main 에서 D1~D6 이 빨갛다).
@@ -136,10 +137,39 @@ ${FETCH}
 <script>${pack("v2/side.ts", "Side")}</script>
 <script>(${PAGE_MAIN.toString()})();</script>`;
 
-const dom = await dumpDom(chrome, { html: PAGE, prefix: "builder-side-", virtualTimeBudget: 30000, args: ["--window-size=1400,900"] });
-const m = /RESULT(\{.*\})ENDRESULT/s.exec(dom.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
-if (!m) { console.error("FAIL  결과 표지를 못 받았다 — 페이지가 끝까지 못 돌았다\n" + dom.slice(-800)); process.exit(1); }
-const R = JSON.parse(m[1]);
+//  D9 — 앱 목록 요청이 처음엔 실패하고(500) 그다음엔 된다. 받아 둔 것이 없는 새 페이지여야 한다(모듈의 받아 둔 것은 페이지 수명).
+async function PAGE_FAIL() {
+  const R = {}; const errors = [];
+  window.addEventListener("error", (e) => errors.push(String(e.message || e)));
+  window.addEventListener("unhandledrejection", (e) => errors.push("rej: " + String(e.reason && e.reason.message || e.reason)));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const host = document.getElementById("host");
+  const txt = (n) => (n ? n.textContent.replace(/\s+/g, " ").trim() : null);
+  const data = { projects: [], sessions: [], lists: [], folders: [], loadedAt: Date.now() };
+  const hooks = { section: () => "home", instances: () => [], navHost: () => null, railHidden: () => false };
+  history.replaceState(null, "", "#/builder");
+  const draw = async () => { Side.drawSide(host, data, () => "builder", hooks); await sleep(80); };
+  await draw(); await sleep(80);
+  R.fail = { empty: txt(host.querySelector(".v2-empty")), cards: host.querySelectorAll(".v2-ksp").length, all: txt(host.querySelector(".v2-kview:nth-child(2) .v2-cnt")) };
+  window.__failApps = false;
+  await draw(); await sleep(80); await draw();
+  R.back = { empty: txt(host.querySelector(".v2-empty")), cards: [...host.querySelectorAll(".v2-ksp .v2-ksp-t .n")].map(txt) };
+  R.errors = errors; R.calls = window.__calls.filter((u) => u.startsWith("/api/ui/apps")).length;
+  document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
+}
+const PAGE2 = PAGE.replace("window.__calls = [];", "window.__calls = []; window.__failApps = true;")
+  .replace('if (url.includes("/api/ui/apps?include_empty=1")) return', 'if (url.includes("/api/ui/apps?include_empty=1") && window.__failApps) return new Response("{}", { status: 500, headers: { "Content-Type": "application/json" } });\n  if (url.includes("/api/ui/apps?include_empty=1")) return')
+  .replace(`(${PAGE_MAIN.toString()})();`, `(${PAGE_FAIL.toString()})();`);
+
+const grab = async (html, prefix) => {
+  const dom = await dumpDom(chrome, { html, prefix, virtualTimeBudget: 30000, args: ["--window-size=1400,900"] });
+  const m = /RESULT(\{.*\})ENDRESULT/s.exec(dom.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
+  if (!m) { console.error("FAIL  결과 표지를 못 받았다 — 페이지가 끝까지 못 돌았다\n" + dom.slice(-800)); process.exit(1); }
+  return JSON.parse(m[1]);
+};
+const R = await grab(PAGE, "builder-side-");
+const R2 = await grab(PAGE2, "builder-side-fail-");
+if (process.env.DEBUG) console.log(JSON.stringify(R2, null, 1));
 if (process.env.DEBUG) console.log(JSON.stringify(R, null, 1));
 
 let pass = 0, fail = 0;
@@ -178,8 +208,13 @@ same(R.d6c && [R.d6c.open, R.d6c.rows.map((r) => r[0])], [true, ["주간 안건"
 // ── D7 · D8 ──
 check(!!R.d7 && R.d7.sec !== "builder" && !R.d7.bld, "D7 다른 화면(리브)이 활성이면 앱빌더 사이드바가 아니다", JSON.stringify(R.d7));
 same(R.d8, { sec: "home", bld: false }, "D8 셸이 주인을 «구역» 이라 하면(폰 탭 바로 연 목록) 앱빌더 화면이어도 그 구역의 목록");
+// ── D9 ──
+same(R2.fail && [R2.fail.empty, R2.fail.cards, R2.fail.all], ["앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.", 0, null], "D9 앱 목록을 못 받으면 못 받았다고 말한다(«없어요» 카드 · 수를 세우지 않는다)");
+same(R2.back && R2.back.cards, ["만들던 앱", "내가 만든 앱", "팀원이 만든 앱"], "D9 실패를 받아 둔 것으로 삼지 않는다 — 다음 그리기에서 다시 받아 카드가 선다");
+check(!!R2.back && R2.calls >= 2, "D9 배선 — 앱 목록 요청이 두 번 나갔다(실패 · 다시)", String(R2.calls));
 // ── W ──
 same(R.errors, [], "W 페이지 예외 없음");
+same(R2.errors, [], "W 페이지 예외 없음(실패 장면)");
 check((R.calls || []).some((u) => u.startsWith("/api/ui/apps?include_empty=1")) && (R.calls || []).some((u) => u.startsWith("/api/ui/me/whoami")),
   "W 배선 — 앱 목록 · 나 요청이 실제로 나갔다", JSON.stringify(R.calls));
 check((R.calls || []).filter((u) => u.startsWith("/api/ui/apps?include_empty=1")).length <= 2, "W 그릴 때마다 다시 받지 않는다(30초 안에는 받아 둔 것)", JSON.stringify(R.calls));

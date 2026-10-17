@@ -14,6 +14,8 @@ export interface BuilderEnv {
   sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null }>;
   /** 앱빌더 사이드바를 다시 그린다 — 앱빌더 안의 이동(셸이 다시 그리지 않는다)과 목록을 새로 받은 뒤. */
   redrawSide?: () => void;
+  /** 앱빌더가 주소를 hashchange 없이 바꿨다(고른 카드 · 새 세션) — 셸 탭의 주소도 맞춘다(탭을 다시 켜면 그 주소로 돌아온다). */
+  setRoute?: (hash: string) => void;
 }
 /** 앱 한 줄 — /api/ui/apps 의 행을 앱빌더가 보는 만큼만. 꺼진 앱도 든다(런치패드용 listSessionApps 는 켜진 것만 준다). */
 export interface BApp {
@@ -26,7 +28,9 @@ export interface BApp {
   //  #4785 앱 폴더 — 원하는 상한 · 매니지드 쿼터 정비가 잰 쓰는 양과 그때 걸려 있던 상한 · 단계 · 바꿀 수 있나 · 거나(lib/app-folder-text).
   folder: FolderView;
 }
-export async function listAllApps(): Promise<BApp[]> {
+export async function listAllApps(): Promise<BApp[]> { return (await fetchApps()) || []; }
+/** 받지 못하면 null — 받아 둔 것을 빈 목록으로 덮지 않으려고(사이드바가 «아직 만든 앱이 없어요» 로 거짓말하지 않게). */
+async function fetchApps(): Promise<BApp[] | null> {
   try {
     //  include_empty — 아직 첫 판이 없는 예약 앱(만들던 앱 ②)도 받는다. 나만 보는 앱은 서버가 책임자에게만 싣는다.
     const out: any = await api('/api/ui/apps?include_empty=1');
@@ -41,7 +45,7 @@ export async function listAllApps(): Promise<BApp[]> {
       ...appStateOf(a), empty: a.empty === true,
       folder: folderView(a.folder),
     }));
-  } catch (_) { return []; }
+  } catch (_) { return null; }
 }
 
 /** 만들던 앱 한 줄. local = 이 브라우저의 기록에서 왔다 · serverApp = 서버가 아는 그 만들기의 앱. */
@@ -93,18 +97,24 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
 // ── 받아 둔 것 ──
 const FRESH_MS = 30_000;
 let got: { apps: BApp[]; me: { id: string; name: string }; at: number } | null = null;
+let failed = false;   // 마지막으로 받기가 실패했다(받아 둔 것이 있으면 그것을 그대로 쓴다)
 let inflight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 /** 받아 둔 재료로 지금의 세 묶음 — 아직 한 번도 못 받았으면 null(그리는 쪽은 «불러오는 중»). */
 export function builderModelNow(env: Pick<BuilderEnv, 'projects' | 'sessions'>): BuilderModel | null {
   return got ? buildModel(got.apps, got.me, env) : null;
 }
-/** 앱 목록 · 나를 새로 받는다. force 가 아니면 30초 안에 받은 것은 그대로 쓴다. 받으면 듣는 쪽(사이드바)에 알린다. */
+/** 한 번도 못 받았고 마지막 받기가 실패했다 — 그리는 쪽은 «불러오는 중» 대신 그렇다고 말한다. */
+export function builderModelFailed(): boolean { return !got && failed; }
+/** 앱 목록 · 나를 새로 받는다. force 가 아니면 30초 안에 받은 것은 그대로 쓴다. 받으면 듣는 쪽(사이드바)에 알린다.
+ *  받기가 실패하면 받아 둔 것을 그대로 둔다(빈 목록으로 덮지 않는다 · 받은 때도 그대로라 다음 그리기에서 다시 받는다).
+ *  force 인데 이미 받는 중이면 그 받기가 끝난 뒤 한 번 더 받는다 — 방금 바꾼 것(지우기 · 공개)이 그 전 받기에 안 들었을 수 있다. */
 export function refreshBuilderModel(force = false): Promise<void> {
   if (!force && got && Date.now() - got.at < FRESH_MS) return Promise.resolve();
-  if (inflight) return inflight;
-  inflight = Promise.all([listAllApps(), studioMe()]).then(([apps, me]) => {
-    got = { apps, me, at: Date.now() };
+  if (inflight) return force ? inflight.then(() => refreshBuilderModel(true)) : inflight;
+  inflight = Promise.all([fetchApps(), studioMe()]).then(([apps, me]) => {
+    if (!apps) { failed = true; if (got) return; }
+    else { failed = false; got = { apps, me, at: Date.now() }; }
     for (const f of listeners) { try { f(); } catch (_) { /* 한 쪽이 깨져도 다른 쪽은 그린다 */ } }
   }).finally(() => { inflight = null; });
   return inflight;

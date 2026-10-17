@@ -47,5 +47,42 @@ check(sh("s:x", "proj") === "proj" && sh("s:x", "sess") === "sess" && sh("home",
 check(sh("archive", "wiki") === "wiki" && sh("trash", "proj") === "proj", "B4 지난 세션 · 휴지통은 어느 구역 발치에도 있으니 기억 그대로", [sh("archive", "wiki"), sh("trash", "proj")]);
 check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화면 · 빈 키는 기억 그대로(구역 목록은 폰 서랍에만 쓰인다)", [sh("builder", "wiki"), sh("", "sess")]);
 
+// ── C. 실제 주소 → 활성 키 → 주인 (activeKeyOfRoute · sideOwnerOfRoute — 셸이 이 함수를 쓴다) ──
+//  격리 리뷰: 손으로 친 활성 키만 재면 셸의 키 판정 · 클래식 표와 이 표가 어긋나도 안 보인다. 그래서 셸의 최상위 화면 대장(SHELL_SURFACES)과
+//   클래식 표(CLASSIC_PAGES)의 모든 첫 칸을 실제 주소로 넣는다 — 새 화면을 만들면 여기서 주인을 고르기 전엔 빨갛다(말없이 «없음» 으로 떨어지지 않게).
+{
+  const surf = join(root, process.env.SHELL_SURFACES_JS || "public/app/v2/shell-surfaces.js");
+  const classic = join(root, "public/app/lib/classic-pages.js");
+  if (existsSync(surf) && existsSync(classic) && typeof O.sideOwnerOfRoute === "function") {
+    const { SHELL_SURFACES } = await import(surf);
+    const { CLASSIC_PAGES } = await import(classic);
+    //  화면 대장의 첫 칸마다 — 그 화면의 사이드바 주인(이유는 lib/side-owner 머리말).
+    const EXPECT = {
+      "": "section", dashboard: "section", welcome: "section", "app-open": "section", "app-grant": "section", p: "section", s: "section",
+      archive: "section", trash: "section",
+      i: "none", full: "none", app: "none", learn: "none", inbox: "none", liv: "none", connect: "none",
+      taxonomy: "taxonomy", sources: "sources", f: "sources", builder: "builder",
+    };
+    const unknown = Object.keys(SHELL_SURFACES).filter((k) => !(k in EXPECT));
+    check(unknown.length === 0, "C1 화면 대장의 모든 첫 칸에 사이드바 주인이 정해져 있다(새 화면은 여기서 고른다)", unknown);
+    const wrong = Object.keys(SHELL_SURFACES).filter((k) => k in EXPECT).map((k) => ["#/" + k + (k ? "/x1" : ""), EXPECT[k]]).map(([h, w]) => [h, w, O.sideOwnerOfRoute(h)]).filter((x) => x[1] !== x[2]);
+    check(wrong.length === 0, "C2 화면 대장 — 실제 주소의 주인이 표와 같다", wrong);
+    const CEXP = { dashboard: "section", terminal: "section", projects2: "section", projects: "section", knowledge: "section", k: "section", "k-edit": "section", trash: "section",
+      context: "none", system: "none", start: "none", onboarding: "none", install: "none", sessions: "sessions", activate: "none" };
+    const cun = Object.keys(CLASSIC_PAGES).filter((k) => !(k in CEXP));
+    check(cun.length === 0, "C3 클래식 표의 모든 첫 칸에 사이드바 주인이 정해져 있다", cun);
+    const cw = Object.keys(CLASSIC_PAGES).filter((k) => k in CEXP).map((k) => ["#/" + k + "/x1", CEXP[k], O.sideOwnerOfRoute("#/" + k + "/x1")]).filter((x) => x[1] !== x[2]);
+    check(cw.length === 0, "C4 클래식 옛 주소 — 실제 주소의 주인(구역과 같은 문은 구역 · 세션 이력은 제 것 · 그 밖은 없음)", cw);
+    const A = (h) => O.activeKeyOfRoute(h);
+    check(A("#/app/knowledge") === "app:knowledge" && A("#/k/doc-1") === "app:knowledge" && A("#/projects/l/3") === "app:projects2" && A("#/app/terminal?x=1") === "app:terminal"
+      && A("#/s/box%201") === "s:box 1" && A("#/") === "home" && A("") === "home" && A("#/f?root=a&path=b") === "sources" && A("#/i/inst-1") === "app:",
+      "C5 활성 키 — 구역과 같은 문 · 옛 첫 칸 · 쿼리 · 세션 id 풀기 · 홈 · 자료 보기 · 앱 인스턴스", [A("#/k/doc-1"), A("#/s/box%201"), A("#/i/inst-1")]);
+    let threw = null; try { A("#/s/%"); A("#/s/%E0%A4%A"); } catch (e) { threw = String(e); }
+    check(threw === null && A("#/s/%") === "s:%", "C6 틀린 %-꼴의 세션 주소에도 던지지 않는다(그리기마다 묻는 값)", threw);
+    check(O.sideOwnerOfRoute("#/app/sessions") === "sessions" && O.sideOwnerOfRoute("#/app/context") === "none" && O.sideOwnerOfRoute("#/app/system") === "none"
+      && O.sideOwnerOfRoute("#/builder/s/box-1") === "builder" && O.sideOwnerOfRoute("#/builder?sel=memo") === "builder", "C7 #/app/<키> · 앱빌더 안의 주소");
+  } else console.log("C  건너뜀 — 빌드 없음(shell-surfaces.js · classic-pages.js)");
+}
+
 console.log(`\n#4632 사이드바 주인: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);

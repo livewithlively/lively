@@ -69,6 +69,11 @@ check(JSON.stringify(H("#/builder/s/box%201")) === JSON.stringify({ view: "resum
 check(F.draftStageShort("put", true, true) === "다 만듦" && F.draftStageShort("plan", false, false) === "② 기획" && F.draftStageShort("draft", false, false) === "③ 시안"
   && F.draftStageShort("fix", true, false) === "③ 시안" && F.draftStageShort("draft", true, false) === "③ 시안" && F.draftStageShort("check", true, false) === "④ 확인"
   && F.draftStageShort("put", true, false) === "⑤ 넣기" && F.draftStageShort("zzz", true, false) === "③ 시안", "R12 사이드바 줄의 짧은 단계 — 긴 글(draftStageText)과 같은 번호");
+{
+  let threw = null; let w1 = null, w2 = null;
+  try { w1 = F.parseBuilderHash("#/builder/s/%"); w2 = F.parseBuilderHash("#/builder/app/%E0%A4%A"); } catch (e) { threw = String(e); }
+  check(threw === null && w1 && w1.view === "resume" && w1.id === "%" && w2 && w2.view === "app" && w2.id === "%E0%A4%A", "R13 틀린 %-꼴에도 던지지 않고 그대로 읽는다(사이드바가 그리기마다 읽는다)", threw || [w1, w2]);
+}
 
 // ── 만들던 앱 상태 글 ──
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정») — 속 단계 draft · fix 는 사람에게 같은 ③.

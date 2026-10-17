@@ -86,7 +86,9 @@ export type BuilderView = 'list' | 'new' | 'resume' | 'app';
 export interface BuilderWhere { view: BuilderView; id: string; how: 'edit' | 'copy' }
 /** 주소 뒤 칸을 읽는다 — 모르는 꼴은 목록. 목록의 id 는 고른 카드(?sel= — 앱 id, 만들던 앱이면 «draft:<세션>»). */
 export function parseBuilderRoute(segs: readonly string[], params?: { get(k: string): string | null } | null): BuilderWhere {
-  const s1 = String(segs[1] || ''), s2 = segs[2] ? decodeURIComponent(String(segs[2])) : '';
+  //  틀린 %-꼴은 그대로 둔다 — 사이드바가 그리기마다 이 주소를 읽는다(parseBuilderHash). 여기서 던지면 사이드바 · 셸의 결이 통째로 멈춘다.
+  const dec = (x: string): string => { try { return decodeURIComponent(x); } catch (_) { return x; } };
+  const s1 = String(segs[1] || ''), s2 = segs[2] ? dec(String(segs[2])) : '';
   const how = params && params.get('how') === 'copy' ? 'copy' : 'edit';
   if (s1 === 'new') return { view: 'new', id: '', how };
   if (s1 === 's' && s2) return { view: 'resume', id: s2, how };

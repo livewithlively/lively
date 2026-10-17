@@ -5,12 +5,16 @@
 //  종전엔 자료 · 분류체계 · 세션 이력만 제 사이드바를 갖고, 나머지 앱(앱빌더 · 설정 · 리브 · 확인할 것 · 외부 앱 연결 · 대시보드 …)은
 //   직전에 고른 구역(대개 홈)의 목록을 그대로 둔 채 가운데만 바뀌었다. 설정은 제 왼쪽 목록까지 있어 사이드바가 둘로 섰다.
 //
-//  그래서 화면마다 사이드바의 주인을 셋 중 하나로 정한다 — 이 표가 셸의 유일한 판정이다(main.ts 의 열 접기 · side.ts 의 그리기 · rail.ts 의 켜짐):
+//  그래서 화면마다 사이드바의 주인을 셋 중 하나로 정한다 — 누가 사이드바를 갖나는 이 표 한 자리가 정한다(main.ts 의 열 접기 · side.ts 의 갈래 · rail.ts 의 켜짐이 읽는다.
+//   제 사이드바를 그리는 앱을 늘리면 OWN 과 side.ts render() 의 갈래 · wsHead 의 이름표를 함께 늘린다):
 //   · 'section' — 구역(홈 · 세션 목록 · 프로젝트 · 위키)의 목록. 구역의 화면과 그 구역에서 여는 것(세션 · 프로젝트 · 지난 세션 · 휴지통)이다.
 //   · 앱 이름 — 그 앱이 제 사이드바를 그린다(자료 · 분류체계 · 세션 이력 · 앱빌더).
 //   · 'none' — 사이드바가 없는 앱. 사이드바 열을 접고 그 자리까지 앱이 쓴다(레일은 남는다 — 다른 앱 · 구역으로 가는 길).
 //     표에 없는 앱은 여기로 온다: 앱의 기본은 «사이드바 없음» 이다. 앱 안에 제 왼쪽 목록이 있으면(설정) 그것이 그 앱의 사이드바다.
-//  ⚠ 입력은 main.ts activeKeyOf 의 활성 키다('home' · 's:<id>' · 'p:<id>' · 'builder' · 'app:<클래식 앱>' · 앱 인스턴스는 'app:').
+//  ⚠ 입력은 활성 키다(아래 activeKeyOfRoute — 'home' · 's:<id>' · 'p:<id>' · 'builder' · 'app:<클래식 앱>' · 앱 인스턴스는 'app:').
+//  ⚠ 좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 로 여는 서랍이다. 사이드바가 없는 앱에서 ☰ 를 누르면 그 서랍은 구역 목록을 연다:
+//   레일이 없는 폭에서 ☰ 는 사람이 «다른 데로 가는 길» 을 청한 것이라(넓은 화면의 레일과 같은 자리) 앱 화면을 가리는 남의 사이드바가 아니다.
+import { CLASSIC_PAGES } from './classic-pages.js';
 
 export type SideSec = 'home' | 'sess' | 'proj' | 'wiki';
 export type OwnSide = 'sources' | 'taxonomy' | 'sessions' | 'builder';
@@ -49,4 +53,34 @@ export function sectionShown(ak: string, remembered: SideSec): SideSec {
   if (door) return door;
   if (remembered === 'wiki' && isSessionScreen(ak)) return 'home';
   return remembered;
+}
+
+/** 주소 한 줄의 칸들 — 앞의 «#/» 와 «?…» 는 뗀다. */
+function routeSegs(route: string): string[] {
+  const h = String(route || '').replace(/^#\/?/, '');
+  const q = h.indexOf('?');
+  return (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
+}
+/** 틀린 %-꼴은 그대로 둔다 — 활성 키는 그리기마다 묻는 값이라 여기서 던지면 사이드바 · 탭 크롬이 통째로 멈춘다. */
+function safeDecode(s: string): string { try { return decodeURIComponent(s); } catch (_) { return s; } }
+
+/**
+ * 주소 하나의 활성 키 — 셸(main.ts activeKeyOf)이 이 함수를 쓴다. 사이드바 주인 · 레일 켜짐 · 탭 크롬이 같은 키를 본다.
+ *  구역 키(home) · 세션 's:<id>' · 프로젝트 'p:<id>' · 셸이 직접 그리는 앱(리브 · 확인할 것 · 자료 · 분류체계 · 사용 가이드 · 앱빌더 · 외부 앱 연결 · 지난 세션 · 휴지통)은
+ *  제 이름, 클래식 액자는 'app:<앱 키>'(#/app/<키> 또는 옛 첫 칸 → lib/classic-pages), 그 밖(앱 인스턴스 · 크게 보기 · 처음 설정 · 모르는 주소)은 'app:'.
+ */
+export function activeKeyOfRoute(route: string): string {
+  const segs = routeSegs(route);
+  const s0 = segs[0];
+  if (s0 === 'p') return 'p:' + segs[1];
+  if (s0 === 's') return 's:' + safeDecode(segs[1] || '');
+  if (s0 === 'liv' || s0 === 'inbox' || s0 === 'taxonomy' || s0 === 'learn' || s0 === 'builder' || s0 === 'connect' || s0 === 'archive' || s0 === 'trash') return s0;
+  if (s0 === 'sources' || s0 === 'f') return 'sources';
+  if (!s0 || s0 === 'dashboard') return 'home';
+  if (s0 === 'app') return 'app:' + segs[1];
+  return 'app:' + (CLASSIC_PAGES[s0] || '');
+}
+/** 이 주소의 사이드바 주인 — 'none' 이면 셸이 사이드바 열을 접는다(main.ts applyTabChrome), 앱 이름이면 그 앱이 사이드바를 그린다(side.ts). */
+export function sideOwnerOfRoute(route: string): SideOwner {
+  return sideOwnerOf(activeKeyOfRoute(route), routeSegs(route)[0] || '');
 }
