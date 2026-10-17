@@ -639,6 +639,34 @@
             "instructions"
           ],
           "additionalProperties": false
+        },
+        "icon": {
+          "type": "object",
+          "description": "#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "pattern": "^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\\-\\s]+$",
+              "description": "SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"
+            },
+            "color": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"
+            },
+            "color_dark": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "다크 테마의 선 색 #RRGGBB(없으면 color)"
+            }
+          },
+          "required": [
+            "path",
+            "color"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [

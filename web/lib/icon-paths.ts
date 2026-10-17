@@ -176,7 +176,12 @@ export const ICONS: Record<string, string> = {
 /** 이름으로 그림을 찾는다. 표에 없는 이름이면 예비 그림(기본 「앱」)을 준다.
  *  표의 열쇠만 본다: `constructor` 같은 이름은 객체에 늘 있는 값이라 `ICONS[name] || …` 로는 걸러지지 않는다. */
 export const iconPath = (name: string, fallback = 'apps'): string =>
-  (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS[fallback]);
+  (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : (REGISTERED.has(name) ? (REGISTERED.get(name) as string) : ICONS[fallback]));
+
+/** #4769 구성원 앱이 선언한 그림(매니페스트 icon.path) — 앱마다 이름(`app-<id>`)으로 등록해 두면 표의 그림처럼 iconPath 로 찾는다.
+ *  표(ICONS)의 이름은 덮지 못한다(표가 먼저다). 그림 글자는 등록하는 쪽(v2/glass-icon registerAppIcon)이 거른다. */
+const REGISTERED = new Map<string, string>();
+export function registerIconPath(name: string, d: string): void { if (!Object.prototype.hasOwnProperty.call(ICONS, name)) REGISTERED.set(name, d); }
 
 /** 앱 표(v2/apps.ts APPS)의 icon 이름 → 이 표의 이름. 「대시보드」(옛 「홈(클래식)」)의 icon 은 home 이지만 그림은 판 넷(dashboard)이다.
  *  레일 · 앱 화면 · 구역 메뉴가 같은 앱을 같은 그림으로 그리게 이 함수 하나를 지난다. */

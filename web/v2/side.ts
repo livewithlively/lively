@@ -509,6 +509,7 @@ function instanceIcon(inst: SideInstance): SVGElement {
   if (inst.icon === 'app') return icon('apps', cls);
   //  앱빌더 · 앱빌딩 세션(#4632) — 그림 표의 이름 그대로(망치 든 격자 · 망치 든 말풍선).
   if (inst.icon === 'builder' || inst.icon === 'buildsess') return icon(inst.icon, cls);
+  if (String(inst.icon).startsWith('app-')) return icon(inst.icon, cls);   // #4769 구성원 앱이 선언한 그림(등록한 이름) — 표의 그림처럼 iconPath 로
   return appIcon(inst.icon as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 

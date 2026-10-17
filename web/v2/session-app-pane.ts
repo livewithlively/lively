@@ -20,7 +20,7 @@ import { ctxMenu, pnIcon } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versions.js';
 import { bandText, draftTextFor, isOwnWriteSource, sessAppMenuRows } from '../lib/app-menu.js';
-import { builtinAppIcon } from './glass-icon.js';
+import { installedAppFace, type AppIconSpec } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { verName } from '../lib/studio-flow.js';
 
@@ -31,6 +31,7 @@ export interface AttachedApp {
   attached_by: string;
   usable: boolean;
   has_ui: boolean;
+  icon?: AppIconSpec | null;   // #4769 — 매니페스트가 선언한 앱 아이콘(옛 게이트웨이는 안 준다)
   pages: Array<{ key: string; title: string }>;
   tables: Array<{ name: string; columns: unknown[] }>;
   /** #4600 — 지금 판 번호(app_versions 의 version_no · 옛 게이트웨이는 안 준다) · 워크스페이스 판이 원본을 덮고 있나. */
@@ -67,17 +68,17 @@ export function sessAppTabTitle(apps: ReadonlyArray<{ title: string }>): string 
   return apps.length === 1 ? apps[0].title : `앱 ${apps.length}개`;
 }
 /** 붙은 앱 하나의 앱 아이콘 이름 — 앱 찾기 · [이 세션에 붙이기] 목록과 **같은 그림 · 같은 색**(glass-icon builtinAppIcon). */
-export const sessAppFace = (a: { app_id: string; has_ui: boolean }): string => builtinAppIcon(a.app_id, a.has_ui);
+export const sessAppFace = (a: { app_id: string; has_ui: boolean; icon?: AppIconSpec | null }): string => installedAppFace({ id: a.app_id, hasUi: a.has_ui, icon: a.icon });
 /** 탭에 걸 얼굴 — 하나면 그 앱의 아이콘, 여럿이면 null(«앱 n개» 는 어느 한 앱이 아니다 → 종류의 기본 그림). 이름과 같은 때에 셸이 건다. */
-export function sessAppTabFace(apps: ReadonlyArray<{ app_id: string; has_ui: boolean }>): string | null {
+export function sessAppTabFace(apps: ReadonlyArray<{ app_id: string; has_ui: boolean; icon?: AppIconSpec | null }>): string | null {
   return apps.length === 1 ? sessAppFace(apps[0]) : null;
 }
 /** 세션 머리줄 [붙은 앱](#4443)의 아이콘. 하나면 그 앱의 아이콘(그 앱 색), 여럿이면 «앱» 기본 그림(탭 얼굴 sessAppTabFace 와 같은 규칙). */
-export function sessAppDoorIcon(apps: ReadonlyArray<{ app_id: string; has_ui: boolean }>, cls: string): SVGElement {
+export function sessAppDoorIcon(apps: ReadonlyArray<{ app_id: string; has_ui: boolean; icon?: AppIconSpec | null }>, cls: string): SVGElement {
   return apps.length === 1 ? faceIcon(apps[0], cls) : pnIcon('apps', cls);
 }
 /** 앱 아이콘의 선 그림을 그 앱 색으로(머리줄 · 앱이 둘 이상일 때의 안쪽 탭). */
-function faceIcon(a: { app_id: string; has_ui: boolean }, cls: string): SVGElement {
+function faceIcon(a: { app_id: string; has_ui: boolean; icon?: AppIconSpec | null }, cls: string): SVGElement {
   const face = sessAppFace(a);
   const svg = pnIcon(appGlyphName(face), cls);
   svg.setAttribute('style', `color: var(--gi-c-${face})`);

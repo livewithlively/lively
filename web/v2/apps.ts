@@ -228,7 +228,7 @@ export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 
 // ── 런치패드 아이콘 — 유리 (#1841) ── 정의는 ./glass-icon.ts(리프)로 옮겼다(#3830, 맥락 관리 표지가 같은 문패를 쓴다).
 //  여기서는 받아서 다시 내보낸다 — appGlassIcon 을 이 파일에서 import 하던 자리(views.ts)가 그대로 살아 있다.
-import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
+import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';
 export { appGlassIcon };
 
 // ── 런치패드 오버레이 ──
@@ -319,7 +319,7 @@ export function openLaunchpad(): void {
       const node = el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => { closeLaunchpad(); openAppEntry(a); } },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
+        el('span', { class: 'v2-pad-ico' }, (() => { const own = registerAppIcon(a.id, a.icon); return own ? appGlassIcon(own) : appGlassIcon(builtinAppIcon(a.id, hasUi)); })()),   // #4769 선언한 그림이 있으면 그것
         el('b', { text: a.title }),
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.

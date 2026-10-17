@@ -11,7 +11,7 @@
 //   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · 목록에서 빼기 · **지우기**(앱 + 세션 + 기록 전부).
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
-import { appGlassIcon } from './glass-icon.js';
+import { appGlassIcon, installedAppFace, appIconSpecOf, type AppIconSpec } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioMe, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
@@ -28,7 +28,7 @@ export interface BuilderEnv {
 }
 /** 앱 한 줄 — /api/ui/apps 의 행을 앱빌더가 보는 만큼만. 꺼진 앱도 든다(런치패드용 listSessionApps 는 켜진 것만 준다). */
 interface BApp {
-  id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean;
+  id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean; icon: AppIconSpec | null;
   studio: { place?: string; card?: unknown; put?: boolean } | null;   // 매니페스트의 자리 · 기획 카드 · 마무리 표시(앱 코드 — 누가 · 어느 세션 · 원본은 아래 서버 칸)
   //  #4667 서버가 찍은 기록 · 공개 상태(apps/visibility.ts) — app-session.appStateOf 와 같은 자로 읽는다.
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
@@ -48,6 +48,7 @@ async function listAllApps(): Promise<BApp[]> {
       hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0), canEdit: a.can_edit === true,
       builtin: !!(a.source && a.source.kind === 'builtin'), versionNo: Number(a.current_version_no) || 0,
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
+      icon: appIconSpecOf(a.manifest),   // #4769
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
       ...appStateOf(a), empty: a.empty === true,
       folder: folderView(a.folder),
@@ -220,7 +221,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     const card = el('div', { class: 'v2-bld-card v2-bld-card--sel' + (v.sel === a.id ? ' on' : ''), role: 'listitem', tabindex: '0', title: '누르면 오른쪽에 배포 설정이 떠요',
       onclick: (e: MouseEvent) => { if ((e.target as HTMLElement).closest('button')) return; v.sel = a.id; refresh(); },
       onkeydown: (e: KeyboardEvent) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); v.sel = a.id; refresh(); } } },
-      el('div', { class: 'hd' }, appGlassIcon(a.hasUi ? 'liv' : 'term'), el('div', { style: 'min-width:0' }, el('b', { text: a.title }), el('small', { text: [pl ? PLACE[pl].title : '', verName(a.versionNo), when(a.installedAt)].filter(Boolean).join(' · ') }))),
+      el('div', { class: 'hd' }, appGlassIcon(installedAppFace({ id: a.id, hasUi: a.hasUi, icon: a.icon })), el('div', { style: 'min-width:0' }, el('b', { text: a.title }), el('small', { text: [pl ? PLACE[pl].title : '', verName(a.versionNo), when(a.installedAt)].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-chips' }, ...chips.map(([k, t]) => el('span', { class: 'v2-bld-chip' + (k ? ' ' + k : ''), text: t }))),
       el('div', { class: 'v2-bld-acts' },
         own || a.canEdit
