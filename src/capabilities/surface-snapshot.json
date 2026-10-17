@@ -3602,7 +3602,7 @@
   "rest": [
    "POST /api/ui/me/notify-prefs"
   ],
-  "input_hash": "59f15ec58f542936"
+  "input_hash": "7466b152700d4c10"
  },
  {
   "name": "task_field_create_v6",
@@ -4812,7 +4812,7 @@
   "rest": [
    "POST /api/ui/app-notifications"
   ],
-  "input_hash": "38808f62c5d06ce5"
+  "input_hash": "c7fecfedf4b5797d"
  },
  {
   "name": "me_notifications",
