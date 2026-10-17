@@ -304,7 +304,8 @@ if (lib) {
     "W2a ★열 이름은 표 맨 위 한 줄뿐 — 묶음 머리줄은 이름과 개수만 든다");
   ok(/hc\('made', '생성 시각'\)/.test(all2) && /hc\('seen', '마지막 활동'\)/.test(all2) && !/text: 'AI' \}/.test(all2) && /class: 'c-made' \}, madeCell\(Number\(s\.createdAt\)/.test(all2),
     "W2b ★「AI」 열은 없고 시각은 둘로 갈린다 — 생성 시각(절대) · 마지막 활동(상대)");
-  const VIEWS = read("web/v2/views.ts");
+  // #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다).
+  const VIEWS = read("web/v2/sess-merge.ts");
   ok(/createdAt: msOf\(r\.created\)/.test(VIEWS) && /createdAt: r\.first_seen \? new Date\(r\.first_seen\)\.getTime\(\) : 0/.test(VIEWS)
     && /if \(firstMs && \(!owner\.createdAt \|\| firstMs < owner\.createdAt\)\) owner\.createdAt = firstMs;/.test(VIEWS),
     "W2c ★만든 때 — 박스는 created, 기록은 first_seen, 둘 다 있으면 이른 쪽(되살린 박스는 대화가 먼저다)");

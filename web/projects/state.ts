@@ -7,6 +7,7 @@
 //   반드시 아래 세터를 거친다: consumeKeepScroll() · setSortCtx() · setGroupCtx() · clearSortCtx().
 //   (객체·Map 싱글턴은 프로퍼티 변형이라 세터가 필요 없다 — pjvBoardView.kanban = … 등은 그대로.)
 import { api, state } from '../core.js';
+import { viewOpensSessions } from '../lib/board-view.js';   // #4865 — 기억된 뷰 → 리스트(세션)로 여나
 
 // ── 인라인 편집(상태 아이콘·우선순위·담당자 등) 후 재렌더 시 스크롤 위치 보존 (#358) ──
 //  상태 아이콘 클릭 등 인라인 편집은 전체 재페인트(reload)를 부른다. 기본 경로는 먼저 스켈레톤으로
@@ -100,7 +101,9 @@ const pjvBoardMineOnly = { on: false };
 //  byFolder=폴더로 나누기(본문에 폴더별 접이식 구역들을 인라인으로 쌓아 한눈에, 필터 팝오버 토글, #455) /
 //  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐; byFolder 와 겹치면 폴더 › 상태 중첩). 세션 유지.
 //  byArea(사이드바)와 byFolder(인라인)는 같은 '폴더로 보기'의 두 방식이라 상호배타 — 한쪽을 켜면 다른쪽을 끈다.
-const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false, table: false, timeline: false };
+//  sessions(#4865) = 「리스트」 뷰 — 스코프 안 프로젝트들의 **세션** 목록(세션 목록 화면과 같은 열). 뷰 탭의 기본이다.
+//   종전의 「리스트」(프로젝트 상태 그룹 표)는 「태스크」 탭으로 이름이 바뀌었다 — 그 뷰는 sessions=false 이고 나머지 플래그가 정한다.
+const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false, table: false, timeline: false, sessions: true };
 
 // ── 저장 뷰(#541) — project_view(ClickUp 이관 포함)를 보드에 적용. 세션 한정 상태(다른 보기 상태들과 동형). ──
 //  적용 범위(보수적 — UI 불변식 우선): type board→상태로 나누기 / list→평면, 정렬(지원 필드만). 필터·컬럼은
@@ -117,12 +120,13 @@ function pjvScopeIsFolder(k) { return typeof k === 'string' && k[0] === 'F'; }
 // 스코프 기본 뷰(#1067) — 폴더/스페이스도 '리스트 박스'로 연다(ClickUp 폴더 List 뷰).
 //  예전 기본이던 개요(요약 카드)는 프로젝트가 한 줄도 안 보여서, 폴더에서 필터·그룹을 걸어도 아무 반응이 없는 것처럼 보였다.
 //  개요는 없어지지 않고 톱니(보기 설정) → 보기 방식 → '개요' 로 언제든 돌아갈 수 있다.
+//  #4865 — 기본은 「리스트」(세션 목록) 뷰다(원준 2026-10-17 «디폴트를 리스트뷰가 보이게»).
 function pjvDefaultView(_scopeKey) {
-  return { overview: false, byStatus: true, kanban: false, table: false, timeline: false, savedViewId: null, savedViewName: '', savedViewSort: null };
+  return { overview: false, byStatus: true, kanban: false, table: false, timeline: false, sessions: true, savedViewId: null, savedViewName: '', savedViewSort: null };
 }
 function pjvSnapshotView() {
   return { kanban: !!pjvBoardView.kanban, byStatus: pjvBoardView.byStatus !== false, overview: !!pjvBoardView.overview,
-    table: !!pjvBoardView.table, timeline: !!pjvBoardView.timeline,
+    table: !!pjvBoardView.table, timeline: !!pjvBoardView.timeline, sessions: !!pjvBoardView.sessions,
     savedViewId: pjvSavedView.id, savedViewName: pjvSavedView.name, savedViewSort: pjvSavedView.sort };
 }
 function pjvApplyView(v) {
@@ -131,6 +135,9 @@ function pjvApplyView(v) {
   pjvBoardView.overview = !!(v && v.overview);
   pjvBoardView.table = !!(v && v.table);
   pjvBoardView.timeline = !!(v && v.timeline);
+  //  sessions 가 없는 기억(#4865 이전에 저장된 스코프 뷰)은 — 칸반·표·타임라인·개요·저장 뷰가 아니었으면 옛 「리스트」였다.
+  //   그 자리는 이제 새 「리스트」(세션) 뷰가 받는다(기본을 리스트 뷰로). 칸반 등을 골라 둔 스코프는 그대로 둔다.
+  pjvBoardView.sessions = viewOpensSessions(v);
   pjvSavedView.id = (v && v.savedViewId) != null ? v.savedViewId : null;
   pjvSavedView.name = (v && v.savedViewName) || '';
   pjvSavedView.sort = (v && v.savedViewSort) || null;
