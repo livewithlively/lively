@@ -18,7 +18,7 @@ const notifyInput = {
   body: z.string().optional().describe("한 줄 설명(400자까지)"),
   href: z.string().optional().describe("누르면 갈 곳 — **우리 화면 안 상대경로만**(`#/…` 또는 `/…`). 외부 URL 은 버려지고 알림만 남는다"),
   dedupe_key: z.string().optional().describe("같은 key 를 60초 안에 다시 쏘면 새 알림을 만들지 않는다(상태 떨림 방어). 비우면 억제 없음"),
-  member_id: z.string().optional().describe("받을 사람. 생략하면 이 앱 토큰의 주인(보통 이것이 맞다)"),
+  member_id: z.string().optional().describe("받을 사람(구성원 id). 생략하면 이 앱 토큰의 주인. 다른 사람에게 보내려면 그 사람이 이 앱에 동의(grant)했고 [나 ▸ 알림] 에서 이 앱을 끄지 않았어야 한다 — 아니면 알림이 남지 않는다(#4769)"),
 };
 
 const appNotify: Capability = {
@@ -27,27 +27,31 @@ const appNotify: Capability = {
   description:
     "이 앱이 사용자에게 알림을 보낸다(#1891). 매니페스트에 permissions.notifications 를 선언하고 그 멤버의 동의(grant)가 있어야 한다 — 둘 중 하나라도 없으면 거부(fail-closed). "
     + "중복 억제: 같은 dedupe_key 를 60초 안에 다시 보내면 새 알림을 만들지 않고 suppressed 로 답한다(실패가 아니다). "
-    + "href 는 우리 화면 안 상대경로만 받는다 — 외부 URL 은 버리고 알림 자체는 살린다(알림 클릭이 곧 피싱 경로가 되지 않게).",
+    + "href 는 우리 화면 안 상대경로만 받는다 — 외부 URL 은 버리고 알림 자체는 살린다(알림 클릭이 곧 피싱 경로가 되지 않게). "
+    + "받는 사람이 [나 ▸ 알림] 에서 이 앱을 껐으면 muted 로 답한다(실패가 아니다 · 다시 보내지 마라). 설치한 앱 화면으로 보내는 href 는 `#/open/<앱 id>?<앱에 줄 값>` — 앱이 lively.state 로 그 값을 읽는다.",
   scope: null,
   input: notifyInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/app-notifications"], parse: (req) => ({ ...((req.body ?? {}) as Record<string, unknown>) }) }] },
   handler: async (input: z.infer<z.ZodObject<typeof notifyInput>>, user: LivelyUser) => {
-    // 받는 사람은 기본이 토큰 주인이다. 남에게 보내는 것은 지금 열지 않는다 —
-    //  "앱이 아무에게나 배너를 띄운다"는 표면을 열기 전에 그 권한 모델부터 정해야 한다.
-    const target = actorOf(user);
-    if (input.member_id && input.member_id !== target) {
-      throw new HttpError(403, "지금은 이 앱 토큰의 주인에게만 알림을 보낼 수 있습니다");
-    }
+    //  받는 사람은 기본이 토큰 주인이다. 다른 구성원에게도 보낸다(#4769 — 팀 채널처럼 사람이 사람을 부르는 앱) — 권한 모델:
+    //   ① 받는 사람이 **그 앱에 동의(grant)** 했어야 하고(notifyMember 가 받는 사람 기준으로 재검 · fail-closed 그대로)
+    //   ② 받는 사람이 [나 ▸ 알림] 에서 그 앱을 끄지 않았어야 한다(껐으면 muted — 어디에도 남지 않는다).
+    //   그래서 «앱이 아무에게나 배너를 띄운다» 는 표면은 열리지 않는다 — 그 앱을 쓰기로 한 사람에게만, 그 사람이 켜 둔 동안만 간다.
+    //   보낸 사람(토큰 주인)이 받는 사람과 다르면 actor 로 남긴다(누가 불렀는지 화면이 말할 수 있게).
+    const me = actorOf(user);
+    const target = String(input.member_id || "").trim() || me;
     //  ⚠ 입력을 통째로 펼치지 않는다(#4051) — REST 경로는 본문을 그대로 넘기므로(zod 로 거르지 않는다), 펼치면 앱이
     //   서버 전용 칸(now·cooldownMs)을 실어 **중복 억제를 풀 수 있다.** 스키마에 있는 네 칸만 옮긴다.
     const r = await notifyMember({
       appId: user?.appId ?? null, memberId: target,
       title: input.title, body: input.body, href: input.href, dedupe_key: input.dedupe_key,
+      actor: target !== me ? me : null,
     });
     if (!r.ok) {
       const status = r.denial === "notify-title-required" ? 400 : 403;
       throw new HttpError(status, r.denial);
     }
+    if ("muted" in r) return { ok: true, muted: true };
     return "suppressed" in r ? { ok: true, suppressed: true } : { ok: true, notification: r.notification };
   },
 };

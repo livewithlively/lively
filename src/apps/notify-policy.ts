@@ -200,3 +200,26 @@ export function freshEnoughForFirstSight(
   if (!lastActiveSec) return false;
   return nowSec - lastActiveSec <= maxAgeSec;
 }
+
+// ── 사람이 앱마다 끈 알림(#4769, 원준 2026-10-17 «사람마다 자기의 앱 종류마다 알림이 올지 말지를 한 워크스페이스 안에서 끄고 킬 수 있도록») ──
+//  매니페스트 선언 · grant 와는 다른 축이다: grant 는 «이 앱이 내 이름으로 행동해도 되나», 이것은 «이 앱이 나를 불러도 되나».
+//  [나 ▸ 알림] 의 앱 줄이 끄면 member_notify_pref.prefs.apps 에 `{ <앱 id>: false }` 로 적힌다 — **꺼진 앱만** 적는다(기본은 켜짐이라
+//  켠 앱을 적으면 앱이 늘수록 설정이 자란다). 빌트인(제품 자신)은 종류 토글(session_waiting · session_done · person)이 맡으므로 여기 안 걸린다.
+export const NOTIFY_APP_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** 저장할 꼴로 정리 — false 인 앱 id 만 남긴다(true · 모르는 값 · 앱 id 꼴이 아닌 키는 버린다). 객체가 아니면 빈 표. */
+export function normalizeAppMutes(src: unknown): Record<string, false> {
+  const out: Record<string, false> = {};
+  if (!src || typeof src !== "object" || Array.isArray(src)) return out;
+  for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+    const id = String(k).trim();
+    if (v === false && NOTIFY_APP_ID_RE.test(id)) out[id] = false;
+  }
+  return out;
+}
+
+/** 이 사람이 이 앱의 알림을 껐나. 빌트인은 늘 false(종류 토글이 맡는다). 표가 없으면 안 끈 것. */
+export function isAppMutedByMember(apps: Record<string, unknown> | null | undefined, appId: string, isBuiltin = false): boolean {
+  if (isBuiltin) return false;
+  return !!apps && typeof apps === "object" && apps[appId] === false;
+}

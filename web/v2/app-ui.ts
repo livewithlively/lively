@@ -133,6 +133,8 @@ export interface AppInsets { top: number; right: number; bottom: number; left: n
 export interface AppMenuRequest { items: Array<{ id: string; label: string }>; x: number; y: number }
 export interface AppUiMountOpts {
   page?: string; title?: string; instanceId?: string; sessionId?: string;
+  /** #4769 인스턴스 state — 앱이 lively.state 로 읽는다(#/open/<앱>?… 로 온 값: 알림을 누르면 그 채널 · 그 글로). 없으면 null. */
+  state?: Record<string, unknown> | null;
   /** 앱이 호스트의 머리줄을 접거나 펴 달라고 했다(lively.ui.chrome). init = 새 문서가 막 인사했다(아직 아무것도 청하지 않았다). 없으면 그 능력이 없는 자리다. */
   onChrome?: (c: { head: boolean; init?: boolean }) => void;
   /** 앱이 호스트 메뉴를 열어 달라고 했다(lively.ui.openMenu). 없으면 못 여는 자리(인사의 capabilities.menu = false · 부르면 -32601). */
@@ -300,7 +302,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     if (msg.method === 'ui/initialize') {
       relaunches = 0;   // 앱 문서가 제대로 떴다 — 다음에 쿠키가 만료돼 로그인 신호가 오면 다시 한 번 새 코드로 띄울 수 있다
       greeted = true; clearHello();   // 인사 감시 끝 — 이 문서는 살아 있다
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId, chat: !!opts?.sessionId, me: true, grant: true, standalone: false } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, instance: opts?.instanceId ?? null, state: opts?.state ?? null, page: meta.page_key ?? null, session: opts?.sessionId ?? null, capabilities: { tools: true, menu: !!opts?.onMenu, chrome: !!opts?.onChrome, expand: !!opts?.onExpand, files_all: !!opts?.sessionId, chat: !!opts?.sessionId, me: true, grant: true, standalone: false } } });
       opts?.onChrome?.({ head: true, init: true });   // 새 문서 — 머리줄을 접어 달라는 말은 이 문서가 다시 해야 한다
       opts?.onTyping?.(false);                        // 새 문서엔 초점 든 글 상자가 없다(옛 문서가 쓰던 중이었어도)
       //  새 문서(처음 · 다시 불러옴)는 가려진 폭을 모른다 — 인사 뒤에 한 번 알린다(가리는 것이 없으면 보내지 않는다).

@@ -151,5 +151,18 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(dash.length === 0, "M3 앱빌더 화면 글에 「—」 가 없다(문장은 마침표로 끊는다)", dash);
 }
 
+// ══ S 기획 카드 「알림」 줄(#4769 원준 2026-10-17 «알림에 대한 것도 앱 빌딩할 때 전반적으로 설정해야 하는 체계 … 기획 카드에도») ══
+{
+  const nc = F.parseCard("[[기획카드]]\n이름: 팀 채널\n할 수 있는 것: 올리기 · 답하기 · 찾기\n알림: 나를 언급하면 · 내 스레드에 답이 달리면\n참고한 것: 슬랙\n[[/기획카드]]");
+  check(nc && nc.notify === "나를 언급하면 · 내 스레드에 답이 달리면" && nc.ref === "슬랙", "S1 카드의 「알림」 줄을 읽는다(참고한 것과 섞이지 않는다)", nc);
+  const pb = F.planBrief("팀 대화", "side");
+  check(/\n첫 화면: \n알림: \n참고한 것: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
+  const old = F.parseCard("[[기획카드]]\n이름: 옛 앱\n[[/기획카드]]");
+  check(old && !old.notify && /\n알림: \n참고한 것: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
+  check(F.CARD_ROWS.some((r) => r.k === "notify" && r.label === "알림") && F.emptyCard().notify === "", "S4 CARD_ROWS 에 알림 줄 · 빈 카드에도 칸");
+  const db = F.draftBrief(nc, "side", "talk");
+  check(/permissions\.notifications: true/.test(db) && /app_notify/.test(db) && /\[나 ▸ 알림\]/.test(db) && /#\/open\//.test(db), "S5 draftBrief 가 알림 규칙(권한 선언 · app_notify · 앱 안 설정 · 전체 on/off 는 라이블리)을 싣는다", db);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

@@ -18,7 +18,8 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, openAppById, setLaunchpadContext } from './apps.js';
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledApp, openAppById, setLaunchpadContext } from './apps.js';
+import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱의 최근 기록 키
 import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
@@ -72,9 +73,9 @@ import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(�
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { announceDeskTitlebar, mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
 import { dismissAppUi, mountAppUiFrame, openAppUi } from './app-ui.js';
-import { ensureAppGrant } from './app-session.js';
+import { ensureAppGrant, listSessionApps } from './app-session.js';
 import { appGrantReturn } from '../lib/app-address.js';   // #4482 동의 경유에서 돌아갈 앱 주소(열린 리다이렉트 방지)
-import { cachedAppInstance, closeAppInstance, createAppInstance, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
+import { cachedAppInstance, closeAppInstance, createAppInstance, openInstalledApp, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
 import { keptSessionRefs, planDismissMigration, sessRowVerdict, verdictStands, withoutSessionKeys, type SessRowVerdict } from './sess-visibility.js';   // #3855·#3857 — 세션 행이 서는 규칙(순수)
 import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
@@ -1160,6 +1161,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'connect') return { title: !segs[1] ? '외부 앱 연결' : segs[1] === '_git' ? '코드 저장소' : segs[1] === '_db' ? '데이터베이스' : '앱 연결', noAside: true };
   if (p === 'full') return { title: parseRoute(route).params.get('t') || '앱', noAside: true };   // 새 탭으로 연 앱(크게 보기)
   if (p === 'app-open') return { title: '앱 여는 중', noAside: true };   // #4480 앱 주소로 직접 들어온 사람을 앱 주소로 돌려보내는 자리
+  if (p === 'open') return { title: '앱 여는 중', noAside: true };   // #4769 설치한 앱의 문(#/open/<앱 id>) — 인스턴스를 확보해 #/i/ 로 넘긴다
   if (p === 'app-grant') return { title: '앱 사용 동의', noAside: true };   // #4482 앱 주소(새 탭 · 폰)에서 동의를 받으러 왔다 돌아가는 자리
   if (p === 'liv') return { title: '리브', noAside: true };
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
@@ -1614,10 +1616,37 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       }
       //  #2022 — 목록에 아직·영영 없는 세션이어도 서버가 아는 소속으로 셸을 두른다(종전엔 무조건 0 = 프로젝트 없음).
       await mountProjectShell(tab, s ? (s.projectId ? Number(s.projectId) : 0) : sessFallback(id).projectId, id, seq);
+    } else if (page === 'open' && segs[1]) {
+      //  #/open/<앱 id>?<앱에 줄 값> — #4769 설치한 앱의 **문**. 레일 · 홈의 최근 줄 · 앱 알림의 href 가 이 주소로 온다(인스턴스 id 는 사람마다 달라
+      //   주소가 될 수 없다). 인스턴스를 확보해 #/i/<인스턴스> 로 넘기고(replace — 뒤로 가기에 이 자리를 남기지 않는다), 물음표 뒤 값은 인스턴스
+      //   state 로 실어 앱이 lively.state 로 읽는다(알림을 누르면 그 채널 · 그 글로). 지나가는 주소라 저장본에서 빠진다(tabs.ts routeSticky).
+      const appId = decodeURIComponent(segs[1]);
+      tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱을 여는 중이에요…' })));
+      tab.aside.replaceChildren();
+      const a = (await listSessionApps().catch(() => [])).find((x) => x.id === appId);
+      if (seq !== tab.seq) return;
+      const go = (to: string): void => {
+        if (seq !== tab.seq) return;
+        tab.route = to;
+        if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+        tabsApi?.routed(tab);
+        void renderRoute(tab);
+      };
+      if (!a) { toast('이 앱을 열 수 없어요 — 앱이 꺼졌거나 지금 쓸 수 있는 앱 목록에 없습니다', true); return; }
+      if (a.system?.route) { go(a.system.route); return; }   // 정본 주소를 가진 빌트인(자료 · 확인할 것)은 그 주소로
+      const state: Record<string, string> = {};
+      params.forEach((v, k) => { state[k] = v; });
+      await openInstalledApp(a, null, { state: Object.keys(state).length ? state : undefined, go });
     } else if (page === 'i' && segs[1]) {
       const instance = await getAppInstance(decodeURIComponent(segs[1]));
       if (seq !== tab.seq) return;
       setTabAppInstance(tab, instance.id, instance.app_id);
+      //  #4769 설치한 앱도 최근 줄에 선다(원준 2026-10-17 «팀 채널 여러 번 눌렀는데 안 뜸») — 기록은 `i:<앱 id>`, 목록엔 바로 올려 레일이 그린다.
+      if (!instance.app.system?.route) {
+        noteAppUse(installedRecentKey(instance.app_id));
+        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: !!(instance.app.ui && instance.app.ui.pages && instance.app.ui.pages.length), icon: instance.app.icon ?? null, systemRoute: null });
+        drawRail();
+      }
       const renderer = instance.app.system?.renderer;
       if (renderer === 'browser') {
         let lastSaved = String(instance.state?.url || '');
@@ -1655,6 +1684,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           page: instance.page_key || undefined,
           title: instance.title || instance.app.title,
           instanceId: instance.id,
+          state: (instance.state && typeof instance.state === 'object') ? instance.state as Record<string, unknown> : null,   // #4769 앱이 lively.state 로 읽는다
         });
         if (seq !== tab.seq) { frame.destroy(); return; }
         const view = instance.app.runtime ? mountAppRuntimeView(instance, frame) : frame;

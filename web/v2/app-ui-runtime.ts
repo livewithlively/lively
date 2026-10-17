@@ -183,7 +183,7 @@ export const APP_RUNTIME_JS = `
       return http('GET', '/me').then(function (me) {
         var page = null;
         try { page = new URLSearchParams(location.search).get('page'); } catch (_) { page = null; }
-        return { host: null, app: (me && me.app && me.app.id) || null, instance: null, page: page, session: null, standalone: true,
+        return { host: null, app: (me && me.app && me.app.id) || null, instance: null, state: null, page: page, session: null, standalone: true,
           capabilities: { tools: true, menu: false, chrome: false, expand: false, files_all: false, chat: false, me: true, grant: true, standalone: true } };
       });
     }
@@ -300,6 +300,7 @@ export const APP_RUNTIME_JS = `
     version: 1,
     app: null,
     instance: null,
+    state: null,   // #4769 인스턴스 state(#/open/<앱>?… 의 값) — 인사 뒤에 채워진다. 없으면 null
     page: null,
     session: null,
     standalone: standalone,
@@ -356,6 +357,7 @@ export const APP_RUNTIME_JS = `
   api.ready = post('ui/initialize', {}).then(function (r) {
     api.app = (r && r.app) || null;
     api.instance = (r && r.instance) || null;
+    api.state = (r && r.state && typeof r.state === 'object') ? r.state : null;
     api.page = (r && r.page) || null;
     api.session = (r && r.session) || null;
     return r;
