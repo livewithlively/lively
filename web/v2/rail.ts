@@ -21,7 +21,7 @@
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
 import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
-import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
+import { APPS, appHref, installedAppDefs, openLaunchpad, primeInstalledApps, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';
@@ -34,7 +34,7 @@ import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로�
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
-import { railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
+import { isInstalledRecentKey, railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
 import { sectionShown, type SideOwner } from '../lib/side-owner.js';   // #4632 — 이 화면에 서는 구역(구역과 같은 문은 그 구역 · 세션 화면에 위키는 홈)
 
 export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
@@ -211,7 +211,8 @@ function recentForRail(n: number): AppDef[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
   //  hidden(#2199): 문이 다른 곳에 있는 앱 · 구역과 같은 문 · 이미 메인에 고정한 앱 · 꺼진 앱은 설 수 없다.
-  const eligible = APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab)));
+  //  #4769 설치한 앱(구성원 앱 — 팀 채널 · 장표 수정)도 선다. 앱 표 뒤에 서고, 기록(`i:` 키)에 있는 것만 들어온다(railRecentKeys 가 거른다).
+  const eligible = [...APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab))), ...installedAppDefs()];
   //  칸 순서는 연 순서가 아니라 앱 표 순서다(#3870) — 누를 때마다 칸이 섞이면 방금 누른 자리에 딴 앱이 선다.
   return railRecentKeys(keys, eligible.map((a) => a.key), n).map((k) => eligible.find((a) => a.key === k) as AppDef);
 }
@@ -656,6 +657,7 @@ function pinApp(key: string, idx = order.length): void {
 }
 function unpinApp(key: string): void { saveOrder(order.filter((k) => k !== key)); drawRail(); }
 function dockMenu(x: number, y: number, a: AppDef, pinned: boolean): void {
+  if (isInstalledRecentKey(a.key)) { ctxMenu(x, y, [{ label: '열기', run: () => { location.hash = appHref(a); } }]); return; }   // #4769 설치한 앱은 아직 독에 못 박는다
   ctxMenu(x, y, [
     { label: '열기', run: () => { location.hash = appHref(a); } },
     { sep: true, label: '' },
@@ -909,6 +911,7 @@ export function mountRail(el0: HTMLElement, h?: RailHooks): void {
   window.addEventListener('pointerup', releasePress, true);
   window.addEventListener('pointercancel', releasePress, true);
   drawRail();
+  void primeInstalledApps().then(() => drawRail());   // #4769 설치한 앱 목록이 오면 기록의 `i:` 키가 이름 · 그림을 얻는다
 }
 
 export function drawRail(): void {
@@ -933,6 +936,7 @@ export function drawRail(): void {
       onclick: (e: Event) => { if (!href) e.preventDefault(); onclick(); },
     }, icon(ic, 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: label }), extra);
   const appItem = (a: AppDef, kind: 'pin' | 'recent'): HTMLElement => {
+    const inst = isInstalledRecentKey(a.key);   // #4769 설치한 앱 — 열 수는 있지만 독 고정 · 끌기는 아직 없다(순서 저장 normalizeOrder 가 앱 표 키만 믿는다)
     //  독에 고정한 앱도 **지금 그 화면이면 켜져 보인다** — 구역·리브와 같은 잣대(litKey).
     //   안 그러면 자료를 고정해 놓고 그 안에 들어가 있어도 레일만 아무 데도 안 가리킨다.
     //  ⚠ 맥 독의 '실행 중' 점은 걷었다(#3870) — 새 셸은 탭 줄을 안 그려서(main.ts TABS_OFF) 그 점은 사람에게 보이지도
@@ -941,9 +945,9 @@ export function drawRail(): void {
       null, () => { /* href 가 간다 */ }, appHref(a));
     it.classList.add(kind === 'pin' ? 'pinned' : 'recent');
     it.dataset.app = a.key; it.dataset.kind = kind;
-    it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
+    it.title = a.title + (inst ? ' — 최근에 연 앱' : kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
     it.addEventListener('contextmenu', (e) => { e.preventDefault(); if (drag?.lifted) return; dockMenu(e.clientX, e.clientY, a, kind === 'pin'); });
-    wireDrag(it, a.key, kind);
+    if (!inst) wireDrag(it, a.key, kind);
     return it;
   };
 

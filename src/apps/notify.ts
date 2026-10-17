@@ -4,13 +4,15 @@
 import { getActiveGrant, getApp } from "../org/store/apps.js";
 import * as store from "../org/store/app-notifications.js";
 import { parseAppManifest } from "./manifest.js";
+import { getNotifyPrefs } from "../v6/notify-pref-store.js";   // #4769 사람이 앱마다 끈 알림
 import {
-  decideNotifyAllowed, normalizeActor, normalizeKind, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial, type NotifyKind,
+  decideNotifyAllowed, isAppMutedByMember, normalizeActor, normalizeKind, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial, type NotifyKind,
 } from "./notify-policy.js";
 
 export type NotifyResult =
   | { ok: true; notification: store.AppNotificationRow }
   | { ok: true; suppressed: true }                 // 중복 억제 — 실패가 아니다
+  | { ok: true; muted: true }                      // #4769 받는 사람이 [나 ▸ 알림] 에서 이 앱을 껐다 — 실패가 아니다(앱이 다시 보낼 일도 아니다)
   | { ok: false; denial: NotifyDenial | "notify-app-inactive" };
 
 /**
@@ -63,6 +65,13 @@ export async function notifyMember(input: {
     isBuiltin,
   });
   if (denial) return { ok: false, denial };
+
+  //  #4769 받는 사람이 이 앱을 껐으면 저장하지 않는다 — 배너 · 확인할 것 · 이력 어디에도 남지 않는다(끈 사람에겐 «안 온다» 가 전부다).
+  //   설정을 못 읽으면 안 끈 것으로 본다(fail-open — 설정 조회 장애로 알림이 멎으면 안 된다 · notify-pref-store 머리말과 같은 규율).
+  if (!isBuiltin) {
+    const prefs = await getNotifyPrefs(input.memberId).catch(() => null);
+    if (prefs && isAppMutedByMember(prefs.apps, input.appId)) return { ok: true, muted: true };
+  }
 
   const norm = normalizeNotification(input);
   if (!norm.ok) return { ok: false, denial: norm.denial };

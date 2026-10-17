@@ -60,20 +60,22 @@ const notifyPrefsGet: Capability = {
   }),
 };
 
-const notifyPrefsSetInput = Object.fromEntries(
-  NOTIFY_KINDS.map((k) => [k, z.boolean().optional()]),
-) as Record<string, z.ZodOptional<z.ZodBoolean>>;
+const notifyPrefsSetInput = {
+  ...(Object.fromEntries(NOTIFY_KINDS.map((k) => [k, z.boolean().optional()])) as Record<string, z.ZodOptional<z.ZodBoolean>>),
+  //  #4769 앱마다 on/off — `{ apps: { talk: false } }`. 보낸 앱만 바뀐다(true 면 그 앱의 끔이 풀린다).
+  apps: z.record(z.boolean()).optional().describe("앱 id → 받을지(false = 이 앱의 알림을 끈다). 보낸 앱만 바뀐다"),
+};
 
 const notifyPrefsSet: Capability = {
   name: "notify_prefs_set",
   title: "내 알림 설정 저장",
-  description: "알림 종류별 on/off. 보낸 항목만 바뀐다(부분 갱신).",
+  description: "알림 종류별 on/off · 앱마다 on/off(apps). 보낸 항목만 바뀐다(부분 갱신).",
   scope: "memory",
   mutates: true,
   input: notifyPrefsSetInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/me/notify-prefs"], parse: (req: any) => req.body ?? {} }] },
-  handler: async (input: Record<string, boolean | undefined>, user: LivelyUser, ctx?: CapabilityCtx) => ({
-    prefs: await setNotifyPrefs(ctx?.actor ?? user?.userId ?? "", input),
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => ({
+    prefs: await setNotifyPrefs(ctx?.actor ?? user?.userId ?? "", input as Parameters<typeof setNotifyPrefs>[1]),
   }),
 };
 

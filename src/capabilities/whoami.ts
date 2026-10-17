@@ -159,6 +159,9 @@ const whoami: Capability = {
         system: i.system, instance: i.instance ?? null, external_id: i.external_id,
         email: i.email ?? null, display_name: i.display_name ?? null,
       })),
+      // ── 얼굴(#4769) — 앱 화면이 라이블리 프로필(아바타 · 글자 · 색)을 그대로 쓰게. **앱 principal 에만** 준다 —
+      //  하네스의 whoami 는 늘 로드되는 배관이라 base64 그림을 실으면 세션 컨텍스트를 잡아먹는다(me 를 MCP 에 안 여는 이유와 같다).
+      ...(isApp ? { avatar: member?.avatar ?? null, avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null } : {}),
       // ── 소속 ── (#4233: 팀별 소유/이해관계 카테고리는 분류 담당 개념과 함께 걷었다)
       teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // ── 이 요청의 접속 신원(게이트웨이가 헤더에서 본 것이 권위 — 자기보고 아님) ──

@@ -112,7 +112,7 @@ export function routeKey(route: string): string {
  */
 export function routeSticky(route: string): boolean {
   const k = routeKey(route);
-  return k !== 'raw:welcome' && !/^raw:(app-open|app-grant|full)(\/|\?|$)/.test(k);
+  return k !== 'raw:welcome' && !/^raw:(app-open|app-grant|full|open)(\/|\?|$)/.test(k);   // open — #4769 설치한 앱의 문(인스턴스로 넘긴다)
 }
 
 export interface TabsApi {

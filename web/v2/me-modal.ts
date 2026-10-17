@@ -30,6 +30,7 @@
 import { api, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { field, skeleton } from '../ui-primitives.js';
+import { listSessionApps, type SessionApp } from './app-session.js';   // #4769 [알림] 의 앱 줄 — 알림을 보내는 앱마다 on/off
 import {
   PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, companyLoginRow, parseMyProfile, profChips,
 } from '../me-profile.js';
@@ -550,10 +551,17 @@ const NOTIFY_ROWS: Array<{ key: string; label: string; desc: string }> = [
 function notifyPane(): HTMLElement {
   const status = el('span', { class: 'v2me-status' });
   const list = el('div', { class: 'v2me-sw-list' }, skeleton('알림 설정을 불러오는 중'));
-  //  값은 구성원 아이디별로 서버에 저장된다(v6/notify-pref-store) — 그래서 «계정 기준» 이라고 말한다.
+  //  #4769 앱 알림 — 워크스페이스 앱(팀 채널 …)이 보내는 알림을 **앱마다** 끄고 켠다(원준 2026-10-17 «사람마다 자기의 앱 종류마다 알림이 올지 말지를
+  //   … 내 프로필 아이콘 눌렀을 때의 환경설정 안에서»). 끈 앱의 알림은 서버가 저장하지 않는다(배너 · 확인할 것 · 이력 전부 — src/apps/notify.ts).
+  //   채널마다 · 언급만 같은 세부는 그 앱 안의 설정이 맡는다(슬랙의 환경설정 ↔ 채널 알림 설정과 같은 두 층).
+  const appList = el('div', { class: 'v2me-sw-list' }, skeleton('앱 알림을 불러오는 중'));
   const body = pane('알림',
     '라이블리 데스크톱 앱에서 받을 알림을 설정합니다. 설정은 내 계정에 저장되며, 같은 계정으로 로그인한 모든 컴퓨터에 똑같이 적용됩니다.',
     list,
+    el('div', { class: 'v2me-sub', style: 'margin-top:18px' },
+      el('b', { text: '앱 알림' }),
+      el('p', { class: 'prof-hint', style: 'margin:2px 0 8px' }, ...uiText('워크스페이스 앱이 보내는 알림입니다. 끄면 그 앱의 알림이 어디에도 쌓이지 않습니다. 채널마다 · 나를 언급할 때만 같은 세부 설정은 그 앱 안에서 합니다.'))),
+    appList,
     //  다운로드 주소는 사용 가이드 · 처음 설정과 같은 곳(GitHub 최신 릴리스 페이지).
     el('div', { class: 'v2me-dl' },
       el('div', {},
@@ -587,8 +595,36 @@ function notifyPane(): HTMLElement {
     }), status);
   };
 
+  const paintApps = (apps: SessionApp[], mutes: Record<string, unknown>): void => {
+    const rows = apps.filter((a) => a.notifications);
+    if (!rows.length) { appList.replaceChildren(el('p', { class: 'prof-hint', text: '알림을 보내는 앱이 아직 없습니다. 앱이 알림 권한을 선언하면 여기 줄이 생깁니다.' })); return; }
+    appList.replaceChildren(...rows.map((a) => {
+      const box = el('input', { type: 'checkbox', class: 'v2me-sw-in', role: 'switch' }) as HTMLInputElement;
+      box.checked = mutes[a.id] !== false;   // 꺼진 앱만 적혀 있다 — 없으면 켜짐
+      box.addEventListener('change', () => {
+        const on = box.checked;
+        box.disabled = true;
+        status.textContent = '저장 중…';
+        void api('/api/ui/me/notify-prefs', { method: 'POST', body: JSON.stringify({ apps: { [a.id]: on } }) })
+          .then(() => { status.textContent = on ? '켰습니다.' : '껐습니다.'; })
+          .catch((e: any) => { box.checked = !on; status.textContent = ''; toast((e && e.message) || '저장하지 못했습니다', true); })
+          .finally(() => { box.disabled = false; });
+      });
+      return el('label', { class: 'v2me-sw' },
+        el('span', { class: 'v2me-sw-txt' },
+          el('span', { class: 'v2me-sw-l', text: a.title }),
+          el('span', { class: 'v2me-sw-d' }, ...uiText('이 앱이 보내는 알림을 받습니다.'))),
+        box);
+    }));
+  };
+
   void api('/api/ui/me/notify-prefs')
-    .then((r: any) => paint((r && r.prefs) || {}))
+    .then((r: any) => {
+      const prefs = (r && r.prefs) || {};
+      paint(prefs);
+      return listSessionApps().then((apps) => paintApps(apps, (prefs.apps && typeof prefs.apps === 'object' ? prefs.apps : {}) as Record<string, unknown>))
+        .catch((e: any) => appList.replaceChildren(errorNote(e, '앱 목록을 불러오지 못했습니다')));
+    })
     .catch((e) => list.replaceChildren(errorNote(e, '알림 설정을 불러오지 못했습니다')));
   return body;
 }
