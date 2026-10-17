@@ -23,9 +23,9 @@ import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 액자가 알려 온 리스트 즐겨찾기 변경
-import { INVITED_GROUP, invitedRowStands } from '../lib/invited-up.js';   // #3870 — 홈 「초대받은 세션」 층
+import { HOSTING_GROUP, INVITED_GROUP, invitedRowStands } from '../lib/invited-up.js';   // #3870 — 홈 「초대받은 세션」·「초대한 세션」 층
 import { appPinnedKeys, applyFavList, bySeen, drawSide as drawSideTree, isAppPinned, sideInvitedUp, loadFavLists, markNav, movePinnedSession, projLandingRoute, projectOrder, reloadSidePrefs, sessText, type SideInstance } from './side.js';
-import { canMoveSess, dotCls, findSessIn, isInvitedSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
+import { canMoveSess, dotCls, findSessIn, isHostingSess, isInvitedSess, isTrashedSess, mergeSessions, projName, renderHome, renderInbox, renderSession, type HomeDest, type Sess, type V2Data } from './views.js';
 import { pickSessFace } from './sess-face.js';   // #2022 — 목록에 없는 세션의 이름·소속 폴백 규칙(순수)
 import { mergeLogRows } from './log-rows.js';     // #2022 후속 — 기록 목록 두 겹(얕은 판 + 깊은 캐시) 합치기(순수)
 import { keepObserved, type ObsMemory } from './obs-carry.js';
@@ -2224,7 +2224,7 @@ function sideInstances(): SideInstance[] {
   for (const s of data.sessions) if (s.raw && s.raw.observed === false) unobserved.add('sess:' + s.id);
   interface Row extends SideInstance { at: number; rank: number }
   const rows = new Map<string, Row>();
-  const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string, past?: boolean, invited?: boolean): void => {
+  const put = (key: string, route: string, at: number, stateKey?: string, force?: boolean, draft?: string, past?: boolean, invited?: boolean, hosting?: boolean): void => {
     //  #4135(원준 2026-10-04) — 앱 인스턴스 행은 홈 사이드바의 대상이 아니다. 고정·열린 창·치움 판정보다 먼저 뺀다.
     if (homeRowExcluded(route)) return;
     const prev = rows.get(key);
@@ -2256,7 +2256,8 @@ function sideInstances(): SideInstance[] {
     //  고정한 것은 상태·날짜와 무관하게 맨 위 제 묶음에 선다 — 사람이 고른 자리를 자동 규칙이 흔들지 않는다.
     const pin = isAppPinned(key);
     //  #3870 — 초대받은 세션(①″)은 「고정」 다음 자기 층에 선다(lib/invited-up). 상태 점은 그대로 단다 — 자리만 그 층이다.
-    let group = pin ? PINNED_GROUP : invited ? INVITED_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
+    //  #3870(2026-10-17) — 초대한 세션(①‴)도 「초대받은 세션」 바로 아래 자기 층. ① 보다 먼저 세워야 자리가 이 층이 된다(prev 가 자리를 잇는다).
+    let group = pin ? PINNED_GROUP : invited ? INVITED_GROUP : hosting ? HOSTING_GROUP : st ? PRIORITY_GROUP : dayGroup(rawAt, now);
     let rank = st ? st.rank : QUIET_RANK;
     //  ★ 자리 — 위로는 즉시, 「지금 볼 것」에서 내려가는 것은 가라앉았고 · 올라간 뒤 열어 봤고 · 지금 안 보고 있고 ·
     //   그걸 관측으로 알 때만(holds 머리말 · hold-rules.ts stepRowHold). 점이 꺼지는 것과는 별개다.
@@ -2264,7 +2265,7 @@ function sideInstances(): SideInstance[] {
     //   «봤다»·해제가 겹쳐 적히고, ③ 이 넘기는 stateKey 는 점을 끈 표시값이라 원본 판정(hot)의 재료가 못 된다.
     if (prev) { group = prev.group || group; rank = prev.rank; }
     //  초대 층의 줄은 「지금 볼 것」 자물쇠를 안 돈다 — 그 층이 이미 위다(돌리면 자물쇠가 그 줄을 「지금 볼 것」 으로 끌어간다).
-    else if (invited && !pin) holds.delete(key);
+    else if ((invited || hosting) && !pin) holds.delete(key);
     else {
       const step = stepRowHold(holds.get(key), {
         group, rank, pinned: pin, viewing: key === activeKey, known: !unobserved.has(key),
@@ -2274,7 +2275,7 @@ function sideInstances(): SideInstance[] {
       if (step.hold) holds.set(key, step.hold); else holds.delete(key);
       group = step.group; rank = step.rank;
     }
-    rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin, invited: !!(invited || prev?.invited),
+    rows.set(key, { ...sideRowFace(route, draft), id: key, active: key === activeKey, pinned: pin, invited: !!(invited || prev?.invited), hosting: !!(hosting || prev?.hosting),
       status: st ? { key: sk!, label: st.label } : null,
       //  지난 세션 표식은 **①이 세운 것만 믿는다** — ③(열린 창)은 그 행이 세션인지도 모르고 넘기지 않으므로,
       //   여기서 prev 의 것을 잇지 않으면 창을 연 순간 표식이 지워진다(#2208).
@@ -2288,6 +2289,18 @@ function sideInstances(): SideInstance[] {
   //   «이 세션이 홈에 서 있나 · 치웠나» 를 **같은 함수**로 잰다(회의 #3977 «AI 세션 탭과 홈 사이드바는 한 로직으로»).
   const facts = homeVisFacts(now);
   const { kept, gone } = facts;
+  //  ①‴ **초대한 세션**(#3870, 원준 2026-10-17 «초대받은 세션 그 바로 아래에 초대한 세션도») — 내 세션인데 남을 초대한 것은
+  //   같은 토글이 켜져 있으면 「초대한 세션」 층에 선다. 서는 잣대는 초대받은 층과 같다(invitedRowStands — 도는 것 + 최근 7일 · 치운 것 제외).
+  //   ⚠ ① 보다 **먼저** 세운다 — put 은 같은 줄을 두 번째 세울 때 첫 자리(group)를 잇는다. ① 이 먼저 날짜 묶음에 세우면 이 층에 못 온다.
+  if (sideInvitedUp()) {
+    for (const s of data.sessions) {
+      if (!s.owned || isTrashedSess(s) || !isHostingSess(s)) continue;
+      const liveNow = s.live && s.alive;
+      const dismissedNow = sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: false, lastSeen: 0, dayStart: 0, kept, dismissed: gone }) === 'dismissed';
+      if (!invitedRowStands({ live: liveNow, lastSeen: s.lastSeen || 0, now, dismissed: dismissedNow })) continue;
+      put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, liveNow ? s.stateKey : (s.stopDot || ''), false, undefined, !liveNow && s.stopPast !== false, false, true);
+    }
+  }
   for (const s of data.sessions) {                                   // ① 내 세션 — 목록에 둔 것 + 도는 것 + 오늘 쓴 것
     if (!s.owned || isTrashedSess(s)) continue;
     const liveNow = s.live && s.alive;
@@ -2373,7 +2386,7 @@ function sideInstances(): SideInstance[] {
 
   const all = [...rows.values()];
   const dayOf = new Map<string, number>();   // 묶음 이름 → 그 묶음의 최신 시각(묶음끼리의 순서)
-  for (const r of all) if (r.group !== PRIORITY_GROUP && r.group !== PINNED_GROUP && r.group !== INVITED_GROUP) dayOf.set(r.group!, Math.max(dayOf.get(r.group!) || 0, r.at));
+  for (const r of all) if (r.group !== PRIORITY_GROUP && r.group !== PINNED_GROUP && r.group !== INVITED_GROUP && r.group !== HOSTING_GROUP) dayOf.set(r.group!, Math.max(dayOf.get(r.group!) || 0, r.at));
   const out = all.sort((a, b) => {
     const af = a.group === PINNED_GROUP, bf = b.group === PINNED_GROUP;
     if (af !== bf) return af ? -1 : 1;                       // 고정한 것이 맨 위 — 사람이 고른 자리다
@@ -2381,6 +2394,9 @@ function sideInstances(): SideInstance[] {
     const ai = a.group === INVITED_GROUP, bi = b.group === INVITED_GROUP;
     if (ai !== bi) return ai ? -1 : 1;                       // #3870 — 초대받은 세션 층이 그다음(켜 둔 사람만 이 묶음이 있다)
     if (ai) return a.rank - b.rank || b.at - a.at;           // 층 안: 볼 일 있는 것(확인 필요 → 완료 → 작업 중) 먼저, 그다음 최근
+    const ah = a.group === HOSTING_GROUP, bh = b.group === HOSTING_GROUP;
+    if (ah !== bh) return ah ? -1 : 1;                       // #3870(2026-10-17) — 초대한 세션 층이 그 바로 아래
+    if (ah) return a.rank - b.rank || b.at - a.at;
     const ap = a.group === PRIORITY_GROUP, bp = b.group === PRIORITY_GROUP;
     if (ap !== bp) return ap ? -1 : 1;                       // 볼 일 있는 것이 그다음
     if (ap) return a.rank - b.rank || b.at - a.at;           // 확인 필요 → 작업 완료 → 작업 중
@@ -2645,7 +2661,7 @@ function drawSide(): void {
     //  '새로 시작한다'는 이름과 동작이 어긋난다. 빈 홈 탭이 남으면 세션을 열 때 그 자리가 세션이 되어 정리된다.
     onNewTask: () => { tabsApi?.add('#/'); },
     //  #3870 — 「초대받은 세션」 층 토글: 초대받은 세션이 있어야 단추가 선다 · 누르면 재료(sideInstances ①″)부터 다시 세운다.
-    invitedCount: () => data.sessions.filter((s) => !s.owned && !isTrashedSess(s) && isInvitedSess(s)).length,
+    invitedCount: () => data.sessions.filter((s) => !isTrashedSess(s) && ((!s.owned && isInvitedSess(s)) || (s.owned && isHostingSess(s)))).length,
     onInvitedToggle: () => { drawSide(); },
     onSearch: () => omniOpen(),
     onBack: () => history.back(),

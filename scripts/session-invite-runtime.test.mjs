@@ -82,6 +82,13 @@ else {
   const on = splitInvited(rows, true), off = splitInvited(rows, false);
   check(j(on.invited.map((r) => r.id)) === '["a"]' && j(on.rest.map((r) => r.id)) === '["b","c"]', "P1·P2 켬 — 안 고정 초대는 층, 고정한 초대는 나머지(「고정」)", j(on));
   check(off.invited.length === 0 && off.rest.length === 3, "P3 끔 → 층 없음", j(off));
+  //  #3870(원준 2026-10-17) — 「초대한 세션」 층: 같은 토글 · 「초대받은 세션」 바로 아래 · 고정이 이김 · 둘 다 달면 «초대받은» 이 이김.
+  const { HOSTING_GROUP: HG } = await import(tscOut(INV_LIB, "invited-up-"));
+  const rows2 = [{ id: "a", invited: true }, { id: "h1", hosting: true }, { id: "b" }, { id: "hp", hosting: true, pinned: true }, { id: "both", invited: true, hosting: true }];
+  const on2 = splitInvited(rows2, true), off2 = splitInvited(rows2, false);
+  check(HG === "초대한 세션" && j(on2.invited.map((r) => r.id)) === '["a","both"]' && j(on2.hosting.map((r) => r.id)) === '["h1"]' && j(on2.rest.map((r) => r.id)) === '["b","hp"]',
+    "P4 켬 — 초대한 줄은 제 층 · 고정한 것은 「고정」 · 둘 다 단 줄은 「초대받은」", j(on2));
+  check(off2.invited.length === 0 && off2.hosting.length === 0 && off2.rest.length === 5, "P5 끔 → 두 층 다 없음", j(off2));
 }
 
 // ───────────────────────── W. 배선(주석을 걷고 본다)
@@ -90,15 +97,27 @@ const MAIN = strip(path.join(WEB, "v2/main.ts")), CTX = strip(path.join(WEB, "v2
 {
   const at = MAIN.indexOf("function sideInstances(");
   const body = at > 0 ? MAIN.slice(at, MAIN.indexOf("\nfunction ", at + 10)) : "";
-  const blk = /if \(sideInvitedUp\(\)\) \{\s*for \(const s of data\.sessions\) \{([\s\S]*?)\n    \}\n  \}/.exec(body);
-  check(!!blk && /if \(s\.owned \|\| isTrashedSess\(s\) \|\| !isInvitedSess\(s\)\) continue;/.test(blk[1])
-    && /invitedRowStands\(\{ live: liveNow, lastSeen: s\.lastSeen \|\| 0, now, dismissed: dismissedNow \}\)/.test(blk[1])
-    && /put\('sess:' \+ s\.id,[^\n]*, true\);/.test(blk[1]),
+  //  토글 블록이 둘이다(①‴ 초대한 · ①″ 초대받은) — 각각 제 술어로 찾는다.
+  const blks = [...body.matchAll(/if \(sideInvitedUp\(\)\) \{\s*for \(const s of data\.sessions\) \{([\s\S]*?)\n    \}\n  \}/g)].map((m) => m[1]);
+  const blk = blks.find((b) => /!isInvitedSess\(s\)/.test(b)), hblk = blks.find((b) => /!isHostingSess\(s\)/.test(b));
+  check(!!blk && /if \(s\.owned \|\| isTrashedSess\(s\) \|\| !isInvitedSess\(s\)\) continue;/.test(blk)
+    && /invitedRowStands\(\{ live: liveNow, lastSeen: s\.lastSeen \|\| 0, now, dismissed: dismissedNow \}\)/.test(blk)
+    && /put\('sess:' \+ s\.id,[^\n]*, true\);/.test(blk),
     "W1a 셸 — 토글이 켜졌을 때 남의 세션 중 초대받은 것만 · 서기 규칙으로 · 초대 표식을 달아 세운다");
-  check(/pin \? PINNED_GROUP : invited \? INVITED_GROUP :/.test(body)
-    && body.indexOf("af ? -1 : 1") > 0 && body.indexOf("ai ? -1 : 1") > body.indexOf("af ? -1 : 1") && body.indexOf("ap ? -1 : 1") > body.indexOf("ai ? -1 : 1"),
-    "W1b 셸 — 초대 줄의 묶음은 「초대받은 세션」 · 정렬은 고정 → 초대 → 지금 볼 것");
+  check(/pin \? PINNED_GROUP : invited \? INVITED_GROUP : hosting \? HOSTING_GROUP :/.test(body)
+    && body.indexOf("af ? -1 : 1") > 0 && body.indexOf("ai ? -1 : 1") > body.indexOf("af ? -1 : 1") && body.indexOf("ah ? -1 : 1") > body.indexOf("ai ? -1 : 1")
+    && body.indexOf("ap ? -1 : 1") > body.indexOf("ah ? -1 : 1"),
+    "W1b 셸 — 초대 줄의 묶음은 「초대받은 세션」·「초대한 세션」 · 정렬은 고정 → 초대받은 → 초대한 → 지금 볼 것");
+  //  #3870(2026-10-17) — 초대한 세션 블록은 ① (내 세션) **앞**에 선다. put 은 두 번째 세울 때 첫 자리를 잇기 때문이다.
+  const mineAt = body.indexOf("// ① 내 세션") > 0 ? body.indexOf("// ① 내 세션") : body.indexOf("if (!s.owned || isTrashedSess(s)) continue;");
+  check(!!hblk && /if \(!s\.owned \|\| isTrashedSess\(s\) \|\| !isHostingSess\(s\)\) continue;/.test(hblk)
+    && /invitedRowStands\(\{ live: liveNow, lastSeen: s\.lastSeen \|\| 0, now, dismissed: dismissedNow \}\)/.test(hblk)
+    && /put\('sess:' \+ s\.id,[^\n]*, false, true\);/.test(hblk) && body.indexOf(hblk) < mineAt,
+    "W1c 셸 — 초대한 세션(내 세션 + 초대 명단)을 같은 서기 규칙으로 · hosting 표식 · ① 보다 먼저 세운다");
+  check(/isHostingSess\(s\)/.test(MAIN.slice(MAIN.indexOf("invitedCount:"), MAIN.indexOf("invitedCount:") + 200)),
+    "W1d 셸 — 토글 단추의 셈(invitedCount)에 초대한 세션도 든다");
 }
+check(/export const isHostingSess = [\s\S]{0,400}inv\.some\(\(id\) => id && id !== me\)/.test(VIEWS), "W1e views — isHostingSess = 내 세션 + 나 아닌 사람이 명단에");
 check(/if \(isInvitedSess\(s\)\) rows\.push\([^\n]*label: '이 세션에서 나가기'[^\n]*leaveInvitedSession\(/.test(CTX)
   && /opts\.canLeave\?\.\(target\)\s*\?\s*row\('이 세션에서 나가기'/.test(CHAT) && /canLeave: \(t\) => isInvitedSess\(t\)/.test(VIEWS)
   && /window\.addEventListener\(SESSION_LEFT_EVENT,[\s\S]{0,700}closeRowTabs\([\s\S]{0,200}v2Refresh\(\);/.test(MAIN),
@@ -273,14 +292,15 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
       row('sess:inv-pinned', 'INV-PINNED', { pinned: true, group: '고정', invited: true, owner: { id: 'boss', name: 'BOSS' } }),
       row('sess:inv-a', 'INV-A', { invited: true, group: '초대받은 세션', owner: { id: 'boss', name: 'BOSS' } }),
       row('sess:inv-b', 'INV-B', { invited: true, group: '초대받은 세션', owner: { id: 'boss', name: 'BOSS' }, project: { id: 9, name: 'PROJ-NINE' } }),
+      row('sess:host-a', 'HOST-A', { hosting: true, group: '초대한 세션' }),
       row('sess:now-mine', 'NOW-MINE', { group: '지금 볼 것', status: { key: 'waiting', label: 'WAIT' }, rank: 0 }),
-      row('sess:day-mine', 'DAY-MINE'),
+      row('sess:day-mine', 'DAY-MINE', { ask: 'LAST-ASK-TEXT' }),
     ];
     const sessions = [{ id: 'inv-a', owned: false, raw: { owner: 'boss', invites: ['me'] } }];
     const data = { projects: [{ id: 7, name: 'PROJ-SEVEN' }, { id: 9, name: 'PROJ-NINE' }], lists: [], folders: [], loadedAt: NOW, sessions: [] };
     let invN = 2, toggled = 0;
     //  셸이 하는 대로 — 토글이 꺼지면 초대 표식 없이 제 날짜 묶음으로 넘긴다(main.ts sideInstances ①″ 은 켜졌을 때만 단다).
-    const asShell = () => Side.sideInvitedUp() ? rows : rows.map((r) => r.invited && !r.pinned ? Object.assign({}, r, { invited: false, group: 'TODAY-GROUP' }) : r);
+    const asShell = () => Side.sideInvitedUp() ? rows : rows.map((r) => (r.invited || r.hosting) && !r.pinned ? Object.assign({}, r, { invited: false, hosting: false, group: 'TODAY-GROUP' }) : r);
     const hooks = { section: () => 'home', instances: asShell, navHost: () => null, railHidden: () => false,
       invitedCount: () => invN, onInvitedToggle: () => { toggled++; draw(); } };
     const draw = () => Side.drawSide(host, data, () => '', hooks);
@@ -290,6 +310,11 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
     const btn = () => host.querySelector('.v2-invbtn');
     draw(); await sleep(40);
     R.g1 = { layout: layout(), layer: inLayer(), up: Side.sideInvitedUp ? Side.sideInvitedUp() : 'no-export', btn: btn() ? btn().getAttribute('aria-pressed') : null };
+    //  G4 — 「초대한 세션」 층 · 단추 그림 · 둘째 줄(#3870 2026-10-17)
+    const hostLayer = [...host.querySelectorAll('.v2-pg--hosting .v2-app-inst[data-instance]')].map((e) => e.getAttribute('data-instance').slice(5));
+    const sub = (id) => { const r = host.querySelector('.v2-app-inst[data-instance="sess:' + id + '"]'); const pj = r && r.querySelector('.v2-app-inst-pj'); return { pj: pj ? pj.querySelector('.v2-app-inst-askt').textContent : null, title: pj ? pj.getAttribute('title') : null, askEl: !!(r && r.querySelector('.v2-app-inst-ask')) }; };
+    R.g4 = { hostLayer, iconD: btn() && btn().querySelector('path') ? btn().querySelector('path').getAttribute('d').slice(0, 14) : null,
+      day: sub('day-mine'), pin: sub('pin-mine'), inv: sub('inv-b'), host: sub('host-a') };
     //  G2 — 프로젝트로 묶기 축
     { const a = host.querySelector('.v2-axisbtn:not(.v2-invbtn)'); if (a) a.click(); } await sleep(40);
     const cards = [...host.querySelectorAll('.v2-pg:not(.v2-pg--invited) .v2-app-inst[data-instance]')].map((e) => e.getAttribute('data-instance').slice(5));
@@ -315,7 +340,13 @@ const SIDE_PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"
     && R.g2.layout.indexOf("#초대받은 세션") > R.g2.layout.indexOf("#고정"),
     "G2 프로젝트로 묶기 축 — 같은 층 · 초대 줄이 프로젝트 카드에 섞이지 않는다", j(R.g2));
   check(R.g3.none === true && R.g1.btn === "true" && R.g3.toggled === 1 && R.g3.up === false && R.g3.pressed === "false"
-    && R.g3.layer.length === 0 && !R.g3.groups.includes("#초대받은 세션") && R.g3.back === true,
-    "G3 토글 — 초대 0 이면 단추 없음 · 눌림 · 누르면 끄고 셸에 알린다 · 끄면 층 없음 · 다시 켠다", j(R.g3));
+    && R.g3.layer.length === 0 && !R.g3.groups.includes("#초대받은 세션") && !R.g3.groups.includes("#초대한 세션") && R.g3.back === true,
+    "G3 토글 — 초대 0 이면 단추 없음 · 눌림 · 누르면 끄고 셸에 알린다 · 끄면 두 층 없음 · 다시 켠다", j(R.g3));
+  check(gi("초대한 세션") > gi("초대받은 세션") && gi("지금 볼 것") > gi("초대한 세션") && j(R.g4.hostLayer) === '["host-a"]',
+    "G4a 「초대한 세션」 층이 「초대받은 세션」 바로 아래 · 지금 볼 것 위 · 제 카드에", j({ L, hostLayer: R.g4.hostLayer }));
+  check(/^M9 11\.5a3\.75/.test(R.g4.iconD || "") , "G4b 토글 단추 그림은 «사람 둘»(people) — 플러스 달린 사람(adduser, 'M15 20…')이 아니다", j(R.g4.iconD));
+  check(R.g4.day.pj === "PROJ-SEVEN" && R.g4.day.askEl === false && /LAST-ASK-TEXT/.test(R.g4.day.title || "")
+    && R.g4.pin.pj === "PROJ-SEVEN" && R.g4.inv.pj === "PROJ-NINE" && R.g4.host.pj === "PROJ-SEVEN",
+    "G4c 둘째 줄은 자리(날짜·고정·초대받은·초대한)와 무관하게 소속 프로젝트 · 마지막 말은 툴팁에", j(R.g4));
 }
 done();
