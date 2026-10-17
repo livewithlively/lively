@@ -58,7 +58,7 @@ check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화
     const { CLASSIC_PAGES } = await import(classic);
     //  화면 대장의 첫 칸마다 — 그 화면의 사이드바 주인(이유는 lib/side-owner 머리말).
     const EXPECT = {
-      "": "section", dashboard: "section", welcome: "section", "app-open": "section", "app-grant": "section", p: "section", s: "section",
+      "": "section", dashboard: "section", welcome: "section", "app-open": "section", "app-grant": "section", p: "section", s: "section", open: "section",   // #4769 설치한 앱의 문(경유지) — 구역 사이드바 그대로
       archive: "section", trash: "section",
       i: "none", full: "none", app: "none", learn: "none", inbox: "none", liv: "none", connect: "none",
       taxonomy: "taxonomy", sources: "sources", f: "sources", builder: "builder",
