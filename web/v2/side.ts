@@ -42,7 +42,10 @@ import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세�
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
 import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
-import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
+import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';
+import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
+import { builderModelNow, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
+import { builderRoute, builderSideKey, draftStageShort, draftStageText, parseBuilderHash } from '../lib/builder-flow.js';   // #4233 분류체계 앱 사이드바 재료
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
@@ -308,6 +311,8 @@ export interface SideHooks {
   onPinChanged?: () => void;
   /** #2016 — 레일이 고른 구역(홈 · AI 세션 · 프로젝트 · 위키). 없으면 홈(종전 화면 그대로). [확인할 것] 구역은 #4180 에서 걷었다. */
   section?: () => RailSection;
+  /** #4632 — 이 사이드바의 주인(lib/side-owner): 구역이면 위 section 의 목록, 앱이면 그 앱의 사이드바. 없으면 활성 키로 잰다(셸이 아닌 임베더 · 시험). */
+  owner?: () => SideOwner;
   /** #4158 · #4233 2안 — [AI 세션] 사이드바에서 묶기 기준 · 카드 · 줄을 골랐다(sess-scope.ts). 셸이 가운데 전체 목록을 그 값으로 다시 그린다 — 없으면 그리로 간다. */
   onSessProject?: (opts?: { keepDrawer?: boolean }) => void;
   /** #4553 — 「세션 이력」 사이드바에서 골랐다(범위는 hist-side.ts 가 액자에 알린다). 셸은 폰 서랍만 닫는다 — keepDrawer 면 그대로 둔다. */
@@ -403,6 +408,8 @@ export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => strin
   render();
 }
 function redraw(): void { if (last) render(); }
+/** 이 사이드바의 주인 — 셸이 알려 주면 그것, 아니면 활성 키로(lib/side-owner). */
+function ownerNow(): SideOwner { return hooks.owner ? hooks.owner() : sideOwnerOf(last ? last.activeKey() : ''); }
 watchTrashCounts(redraw);   // 「휴지통 N」의 서버 몫이 도착·변경되면 다시 그린다(#3778)
 //  '내 마지막 말'이 도착했다 — 홈이면 목록만(검색칸은 살아 있는 IME 조합), 다른 구역은 그 구역을 다시 그린다.
 //  ⚠ 홈만 목록 갈아 끼우기로 끝내는 이유: 홈의 붓은 hooks.instances() 를 그때 다시 읽지만, 다른 구역의
@@ -1194,12 +1201,17 @@ function render(): void {
   //   판정한다(자료는 레일의 '갈 곳'이 아니라 앱이다) — 구역 기억(section)은 건드리지 않아서, 자료를 떠나면
   //   보던 구역이 그대로 돌아온다. 조립은 아래 renderSourcesSection — 구역들과 같은 틀(topBits·secHead·secFoot)이라
   //   레일을 숨겨도 문패·구역 이동·발치 도크가 똑같이 선다.
-  if (last.activeKey() === 'sources') { sideRoot?.setAttribute('data-sec', 'sources'); renderSourcesSection(); return; }
+  //  #4632 — 누가 이 사이드바를 갖나는 lib/side-owner 한 자리가 정한다(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야»). 앱이 제 사이드바를 가지면
+  //   그 앱의 것만 선다. 사이드바가 없는 앱은 셸이 이 열을 접는다(main.ts app-ctx) — 그때 여기 그리는 구역 목록은 넓은 화면에선 안 보이고 폰 서랍에만 쓰인다.
+  const own = ownerNow();
+  if (own === 'sources') { sideRoot?.setAttribute('data-sec', 'sources'); renderSourcesSection(); return; }
   //  #4233 분류체계 앱도 앱 소유 사이드바다(자료와 같은 판정 · 같은 틀).
-  if (last.activeKey() === 'taxonomy') { sideRoot?.setAttribute('data-sec', 'taxonomy'); renderTaxonomySection(); return; }
+  if (own === 'taxonomy') { sideRoot?.setAttribute('data-sec', 'taxonomy'); renderTaxonomySection(); return; }
   //  #4553 안 A — 세션 이력 앱도 앱 소유 사이드바다. 종전엔 제 것이 없어 직전 구역(홈 등)의 목록이 그대로 남았다.
   //   ⚠ 목록만 다시 그리는 붓(listPaint)을 여기서 비운다 — 직전 구역(홈)의 붓이 남아 있으면 늦게 온 답이 이 목록 자리에 홈의 줄을 그린다.
-  if (last.activeKey() === 'app:sessions') { sideRoot?.setAttribute('data-sec', 'sessions'); listPaint = null; renderHistorySection(); return; }
+  if (own === 'sessions') { sideRoot?.setAttribute('data-sec', 'sessions'); listPaint = null; renderHistorySection(); return; }
+  //  #4632 앱빌더 — 만들던 앱 · 내가 만든 앱 · 팀원이 만든 앱. 종전엔 직전 구역(홈)의 목록이 그대로 남았다. 같은 이유로 붓을 비운다.
+  if (own === 'builder') { sideRoot?.setAttribute('data-sec', 'builder'); listPaint = null; renderBuilderSection(); return; }
   const sec: RailSection = hooks.section?.() || 'home';
   sideRoot?.setAttribute('data-sec', sec);
   //  목록만 다시 그리는 붓은 **그 구역이 자기 것을 건다** — 여기서 먼저 비워, 붓이 없는 구역(트리·서가)에서
@@ -1228,7 +1240,7 @@ function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
   //  구역 아닌 화면의 특례 — 리브('갈 곳')와 자료(앱, #2423). 여기 있는데 머리가 «홈»이면 거짓말이다.
-  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : ak === 'taxonomy' ? { label: '분류체계', icon: 'tags' } : ak === 'app:sessions' ? { label: '세션 이력', icon: 'sess' } : sectionDef(sec);
+  const cur = ak === 'liv' ? { label: '리브', icon: 'liv' } : ak === 'sources' ? { label: '자료', icon: 'src' } : ak === 'taxonomy' ? { label: '분류체계', icon: 'tags' } : ak === 'app:sessions' ? { label: '세션 이력', icon: 'sess' } : ak === 'builder' ? { label: '앱빌더', icon: 'builder' } : sectionDef(sec);
   return el('div', { class: 'v2-side-wshd' },
     stackTile({ small: true, label: true }),
     el('button', { class: 'v2-secdd', type: 'button', 'aria-haspopup': 'menu', title: '구역 바꾸기 — 홈 · 세션 목록 · 프로젝트 · 위키 · 리브',
@@ -1822,6 +1834,78 @@ function renderSessions(): void {
     const p = planFor(fit);
     return { order: p.shown.filter((k) => !full(k)), sizes, forced, build: build(p.shown, p.hidden) };
   });
+  listAfter(keep);
+  bindSideKeys();
+}
+
+// ══ [앱빌더] 앱 사이드바 (#4632) ══════════════════════════════════════════════════════════════════════
+//  원준 2026-10-17 «앱 빌더의 사이드바도 기획해줘 … 사이드바 내용까지가 하나의 앱이야». 앱 만드는 서비스들의 왼쪽 줄(v0 · Lovable · 클로드의 「새로 만들기」 +
+//   묶음 + 최근 것)을 우리 부품으로 — 고정 줄 둘(새 앱 만들기 · 모든 앱) + 카드 셋(만들던 앱 · 내가 만든 앱 · 팀원이 만든 앱). 위키 · 분류체계 사이드바와 같은 부품이다.
+//  · 만들던 앱 줄 → 그 앱을 이어서 만든다(#/builder/s/<세션>) · 짧은 단계(「③ 시안」)가 수 자리에 선다.
+//  · 내가 만든 앱 · 팀원이 만든 앱 줄 → 가운데 목록에서 그 카드를 골라 배포 설정을 연다(#/builder?sel=<앱>). 고치기는 그 패널 · 카드의 단추로.
+//  · 켜진 줄 = 지금 앱빌더가 보는 것(lib/builder-flow builderSideKey) — 이어 만드는 그 앱 · 고치는 그 앱 · 고른 카드.
+//  · 발치는 앱빌더의 것만 — 다 만든 앱을 여는 곳(앱 찾기). 홈의 발치(지난 세션 · 휴지통 · 외부 앱 연결)는 두지 않는다.
+//  재료(만들던 앱 판정)는 가운데 목록과 같은 한 벌(builder-model) — 한쪽에만 보이는 앱이 없게.
+const bldFold = new Map<string, boolean>();   // 사람이 접고 편 카드. 없으면 만들던 앱 · 내가 만든 앱은 펼침, 팀원이 만든 앱은 접힘
+let bldBound = false;
+function renderBuilderSection(): void {
+  if (!last) return;
+  const { host, data } = last;
+  const navEl = navRow();
+  const navHost = hooks.navHost?.() || null;
+  if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
+  if (!bldBound) { bldBound = true; onBuilderModel(() => { if (last && ownerNow() === 'builder') redraw(); }); }
+  void refreshBuilderModel().catch(() => { /* 다음 그리기에서 다시 받는다 */ });
+  const M = builderModelNow({ projects: () => data.projects, sessions: () => data.sessions });
+  //  #3870 — 세션 목록을 받기 전엔 만들던 앱이 덜 서므로 숫자도 «없어요» 도 말하지 않는다.
+  const ready = !!M && sideTruthReady(data);
+  const at = builderSideKey(parseBuilderHash(location.hash) || { view: 'list', id: '', how: 'edit' });
+  const fix = (href: string, ic: string, label: string, n: number | null, key: string, tip: string, cls = ''): HTMLElement =>
+    el('a', { class: 'v2-wcat v2-ptl v2-kview' + cls + (at === key ? ' on' : ''), href, title: tip, ...(at === key ? { 'aria-current': 'true' } : {}) },
+      icon(ic, 'v2-ptl-ic'), el('span', { class: 'n', text: label }), n != null ? el('span', { class: 'v2-cnt', text: String(n) }) : null);
+  const row = (key: string, href: string, ic: string, label: string, right: string, tip: string): HTMLElement =>
+    el('a', { class: 'v2-wcat v2-ptl v2-kcat v2-bld-srow' + (at === key ? ' on' : ''), href, title: tip, 'data-bkey': key, ...(at === key ? { 'aria-current': 'true' } : {}) },
+      icon(ic, 'v2-ptl-ic'), el('span', { class: 'n', text: label }), right ? el('span', { class: 'v2-cnt v2-bld-st', text: right }) : null);
+  const card = (k: 'draft' | 'mine' | 'team', title: string, ic: string, rows: HTMLElement[], empty: string): HTMLElement => {
+    const hasOn = rows.some((r) => r.classList.contains('on'));
+    const open = hasOn || (bldFold.has(k) ? !!bldFold.get(k) : k !== 'team');
+    return el('section', { class: 'v2-ksp' + (open ? ' open' : ''), 'aria-label': title, 'data-grp': k },
+      el('div', { class: 'v2-ksp-h' },
+        el('button', { class: 'v2-ksp-t', type: 'button', 'aria-expanded': String(open), title: open ? title + ' 접기' : title + ' 펼치기',
+          onclick: () => { bldFold.set(k, !open); redraw(); } },
+          el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }), icon(ic, 'v2-ksp-ic'), el('span', { class: 'n', text: title })),
+        el('span', { class: 'v2-cnt', text: String(rows.length) })),
+      open ? el('div', { class: 'v2-ksp-b' }, ...(rows.length ? rows : [el('p', { class: 'v2-ksp-empty', text: empty })])) : null);
+  };
+  const appRight = (a: { enabled: boolean; visibility: string }): string => (!a.enabled ? '꺼짐' : a.visibility === 'me' ? '나만' : '');
+  const keep = listBefore();
+  const listEl = el('div', { class: 'v2-app-list v2-kshelf v2-bld-shelf', 'aria-label': '앱' });
+  appListEl = listEl;
+  if (!ready) listEl.append(el('p', { class: 'v2-empty', text: '불러오는 중…' }));
+  else {
+    const drafts = M!.drafts.map((d) => {
+      const long = draftStageText(d.stage, !!d.appId, d.done);
+      return row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done), d.title + ' · ' + long + '. 누르면 이어서 만들어요');
+    });
+    const mine = M!.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + ' · 누르면 배포 설정이 열려요'));
+    const team = M!.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + (a.madeBy ? ' · ' + a.madeBy + ' 만듦' : '') + ' · 누르면 배포 설정이 열려요'));
+    listEl.append(
+      card('draft', '만들던 앱', 'buildsess', drafts, '만들던 앱이 없어요.'),
+      card('mine', '내가 만든 앱', 'apps', mine, '아직 만든 앱이 없어요.'),
+      ...(team.length ? [card('team', '팀원이 만든 앱', 'person', team, '')] : []));
+  }
+  host.replaceChildren(
+    ...topBits(navEl, navHost),
+    el('section', { class: 'v2-app-space', 'aria-label': '앱빌더' },
+      secHead('앱빌더', null),
+      el('nav', { class: 'v2-kviews', 'aria-label': '앱빌더 화면' },
+        fix(builderRoute('new'), 'plus', '새 앱 만들기', null, 'new', '새 앱을 처음부터 만들어요', ' v2-bld-new'),
+        fix(builderRoute('list'), 'grid', '모든 앱', ready ? M!.drafts.length + M!.mine.length : null, 'all', '만들던 앱과 내가 만든 앱을 한눈에 봐요')),
+      listEl),
+    el('footer', { class: 'v2-side-foot v2-bld-foot' }, updateSlot(),
+      el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
+        icon('apps', 'v2-nav-ic'), el('span', { class: 'n', text: '앱 찾기' })),
+      railIsHidden() ? footRow() : null));
   listAfter(keep);
   bindSideKeys();
 }

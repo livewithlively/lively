@@ -54,7 +54,8 @@ import { createTabs, routeKey, routeSticky, type ShellTab, type TabsApi } from '
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
 import { confirmSessionArchive, watchSessionTrash, SESSION_LEFT_EVENT } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
-import { drawRail, mountRail, railIsHidden, railSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
+import { drawRail, mountRail, railIsHidden, railShownSection, reloadRailPrefs, resetRailSection, setRailSection, toggleRail, type RailSection } from './rail.js';
+import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음(그 자리까지 앱이 쓴다)
 import { lastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'   // #2016 — 좌측 끝 레일(구역 + 워크스페이스 + 최근 앱), 보임/숨김
 import { ASIDE_MSG, setAsideGuestOpener, type AsideGuest } from './aside-slot.js';
 import { takeCreated } from './created-cache.js';
@@ -445,6 +446,7 @@ export async function bootV2(): Promise<void> {
     mountRail(railEl!, {
       counts: railCounts,
       activeKey: () => activeKey(),
+      sideOwner: () => sideOwnerOfRoute(tabsApi?.current()?.route || location.hash),   // #4632 앱 화면에선 구역 칸을 켜지 않는다
       onSection: (sec, o) => {
         drawSide();
         if (o.navigate) location.hash = sectionRoute(sec);
@@ -1224,13 +1226,12 @@ function applyTabChrome(tab: ShellTab): void {
   for (const [s, r] of guestRoots) r.hidden = s !== shown;
   paintAsidePanes(tab.aside as AsideHost);
   root!.classList.toggle('no-aside', tab.noAside && !shown);
-  //  ★ 맥락 관리(#3830, 원준 2026-09-09 "사이드바가 굳이 필요 없다 · 검색창은 전체 가로 다 차지하게 슬랙처럼") —
-  //   이 앱에 있는 동안만 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 전환은 레일 몫).
-  //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css:326 rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이
-  //    한 칸씩 밀려 본문이 0px 열에 앉는다. 판정은 화면 키 하나(app:context)로, 여기 한 자리에서만 한다.
-  //   #4632 앱 화면(#/i/<앱>)도 — 앱이 화면 가득, 왼쪽 세션 목록은 접는다(원준 2026-10-16 질문 #732 «실제 화면도 사이드바 없이 — 앱 화면으로 열면
-  //    왼쪽 세션 목록을 접고 앱이 화면 가득»). 앱은 셸 사이드바에서 아무것도 안 읽는다. 레일은 남아 다른 구역으로 갈 수 있다.
-  root!.classList.toggle('app-ctx', CTX_FULL_WIDTH.has(activeKeyOf(tab.route)) || parseRoute(tab.route).segs[0] === 'i');
+  //  ★ 사이드바가 없는 앱(#4632, 원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야 … 없을 때에는 사이드바 영역만큼도 다 그 앱이 쓰는게 디폴트») —
+  //   그 앱에 있는 동안 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 · 다른 앱으로 가는 길).
+  //   누가 사이드바를 갖나는 lib/side-owner 의 표 한 자리가 정한다 — 맥락 관리(#3830) · 사용 가이드 · 앱 화면(#/i · #732) · 설정(제 왼쪽 목록이 그 앱의 사이드바) ·
+  //   리브 · 확인할 것 · 외부 앱 연결 · 대시보드처럼 표에 없는 앱은 다 «없음» 이다.
+  //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이 한 칸씩 밀려 본문이 0px 열에 앉는다.
+  root!.classList.toggle('app-ctx', sideOwnerOfRoute(tab.route) === 'none');
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
@@ -1461,7 +1462,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('builder');
       noteAppUse('builder');
       tab.aside.replaceChildren();
-      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions });
+      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide() });
       void ensureSingletonAppInstance('builder', '앱빌더')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
@@ -1848,8 +1849,8 @@ function activeKeyOf(route: string): string {
   const cur = parseRoute(route);
   return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'sources' || cur.segs[0] === 'f' ? 'sources' : cur.segs[0] === 'taxonomy' ? 'taxonomy' : cur.segs[0] === 'learn' ? 'learn' : cur.segs[0] === 'builder' ? 'builder' : cur.segs[0] === 'connect' ? 'connect' : cur.segs[0] === 'archive' ? 'archive' : cur.segs[0] === 'trash' ? 'trash' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
-/** 사이드바를 접고 맨 윗줄을 창 전폭으로 펴는 화면(#3830). 늘리려면 그 화면이 **사이드바에서 아무것도 안 읽는지** 먼저 본다. */
-const CTX_FULL_WIDTH = new Set(['app:context', 'learn']);   // 'learn' = 사용 가이드(#4179). 제 문서 목록을 스스로 그리므로 셸 사이드바를 읽지 않는다
+/** 이 주소의 사이드바 주인(lib/side-owner) — 'none' 이면 사이드바 열을 접는다(applyTabChrome), 앱 이름이면 그 앱이 사이드바를 그린다(side.ts). */
+function sideOwnerOfRoute(route: string): SideOwner { return sideOwnerOf(activeKeyOf(route), parseRoute(route).segs[0] || ''); }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
 //  ⓑ 새로고침·상태에 따라 목록이 사라져 "왜 없어졌나"를 매번 되찾아야 했다(원준 신고). 목록은 셸의 뼈대다 —
@@ -2660,7 +2661,10 @@ function drawSide(): void {
     navHost: () => (titlebar ? titlebar.host : webTopbar),
     onPinChanged: () => { orderPin.clear(); },   // 고정이 바뀌면 자물쇠를 푼다 — 새 묶음에서 자리를 다시 잡아야 한다
     //  #2016 — 사이드바가 무엇을 그릴지는 레일이 고른 구역이 정한다(홈 · AI 세션 · 프로젝트 · 위키).
-    section: railSection,
+    //   #4632 — 기억한 구역 가운데 이 화면의 것이 아닌 것은 비킨다(railShownSection — 구역과 같은 문 · 세션 화면의 위키). 폰 탭 바로 연 목록은 그 구역 그대로.
+    section: () => mobile?.sheetSection() || railShownSection(),
+    //  #4632 사이드바의 주인 — 앱이면 그 앱의 사이드바(앱빌더 · 자료 · 분류체계 · 세션 이력). 폰 탭 바로 연 목록은 사람이 고른 구역이 앞선다.
+    owner: () => (mobile?.sheetSection() ? 'section' : sideOwnerOfRoute(tabsApi?.current()?.route || location.hash)),
     onSessProject: showSessAll,   // #4158 — [AI 세션] 사이드바의 프로젝트 줄 → 가운데 전체 목록을 그 프로젝트로
     onHistPick: (o) => { if (!o?.keepDrawer) mobile?.closeAll(); },   // #4553 — 「세션 이력」 사이드바에서 골랐다: 범위는 액자가 받는다, 셸은 폰 서랍만 닫는다
     onToggleRail: () => { toggleRail(); syncRailBtn(); },

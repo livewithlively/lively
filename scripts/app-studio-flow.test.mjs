@@ -122,7 +122,7 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
 //  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.
 {
   const { readFileSync } = await import("node:fs");
-  const files = ["web/v2/publish-preview.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/builder.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts", "web/v2/app-versions.ts", "web/v2/session-app-pane.ts", "web/lib/app-menu.ts", "web/lib/studio-flow.ts", "web/lib/builder-flow.ts"];
+  const files = ["web/v2/publish-preview.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/builder.ts", "web/v2/builder-model.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts", "web/v2/app-versions.ts", "web/v2/session-app-pane.ts", "web/lib/app-menu.ts", "web/lib/studio-flow.ts", "web/lib/builder-flow.ts"];
   const left = [];
   for (const f of files) {
     const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
