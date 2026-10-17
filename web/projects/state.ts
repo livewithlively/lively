@@ -7,7 +7,7 @@
 //   반드시 아래 세터를 거친다: consumeKeepScroll() · setSortCtx() · setGroupCtx() · clearSortCtx().
 //   (객체·Map 싱글턴은 프로퍼티 변형이라 세터가 필요 없다 — pjvBoardView.kanban = … 등은 그대로.)
 import { api, state } from '../core.js';
-import { viewOpensSessions } from '../lib/board-view.js';   // #4865 — 기억된 뷰 → 리스트(세션)로 여나
+import { migrateStoredView } from '../lib/board-view.js';   // #4865 — 옛 기억(리스트 표시 없음)을 읽을 때만 새 형식으로
 
 // ── 인라인 편집(상태 아이콘·우선순위·담당자 등) 후 재렌더 시 스크롤 위치 보존 (#358) ──
 //  상태 아이콘 클릭 등 인라인 편집은 전체 재페인트(reload)를 부른다. 기본 경로는 먼저 스켈레톤으로
@@ -113,7 +113,9 @@ const pjvSavedView: { id: number | null; name: string; sort: { field: string; di
 // ── 스코프별 뷰 상태(#541) — 리스트/폴더/스페이스마다 마지막 뷰(보기 모드 + 저장 뷰)를 각자 기억. localStorage 영속. ──
 //  전역 globals(pjvBoardView/pjvSavedView)은 '현재 스코프의 live 뷰'를 담고, renderArea 진입 시 스코프 store 에서 로드한다.
 function pjvScopeViewKey(k) { return 'pjv:scopeView:' + k; }
-function pjvLoadScopeView(k) { try { return JSON.parse(localStorage.getItem(pjvScopeViewKey(k)) || 'null'); } catch (_) { return null; } }
+//  #4865 — 읽는 자리에서만 옛 형식을 옮긴다(migrateStoredView). pjvApplyView 는 받은 값 그대로 적용한다 — 코드가 직접 만든 뷰
+//   (저장된 뷰 메뉴의 «리스트 묶음» 등)에 옛 기억 추정을 걸면 세션 뷰로 새 버린다(격리 리뷰 지적).
+function pjvLoadScopeView(k) { try { return migrateStoredView(JSON.parse(localStorage.getItem(pjvScopeViewKey(k)) || 'null')); } catch (_) { return null; } }
 function pjvSaveScopeView(k, v) { try { if (v == null) localStorage.removeItem(pjvScopeViewKey(k)); else localStorage.setItem(pjvScopeViewKey(k), JSON.stringify(v)); } catch (_) { /* noop */ } }
 function pjvScopeIsFolder(k) { return typeof k === 'string' && k[0] === 'F'; }
 // 스코프 기본 뷰 — 폴더/스페이스=개요(Overview), 그 외(리스트/미분류/전체)=상태로 나누기.
@@ -135,9 +137,8 @@ function pjvApplyView(v) {
   pjvBoardView.overview = !!(v && v.overview);
   pjvBoardView.table = !!(v && v.table);
   pjvBoardView.timeline = !!(v && v.timeline);
-  //  sessions 가 없는 기억(#4865 이전에 저장된 스코프 뷰)은 — 칸반·표·타임라인·개요·저장 뷰가 아니었으면 옛 「리스트」였다.
-  //   그 자리는 이제 새 「리스트」(세션) 뷰가 받는다(기본을 리스트 뷰로). 칸반 등을 골라 둔 스코프는 그대로 둔다.
-  pjvBoardView.sessions = viewOpensSessions(v);
+  //  리스트(세션) 뷰(#4865) — 받은 값 그대로. 기억이 없으면 기본(리스트). 옛 기억의 변환은 pjvLoadScopeView 가 한다.
+  pjvBoardView.sessions = !v ? true : !!v.sessions;
   pjvSavedView.id = (v && v.savedViewId) != null ? v.savedViewId : null;
   pjvSavedView.name = (v && v.savedViewName) || '';
   pjvSavedView.sort = (v && v.savedViewSort) || null;

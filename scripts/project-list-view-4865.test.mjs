@@ -28,7 +28,7 @@ let lib = null;
 try { lib = await import(pathToFileURL(join(root, "public/app/lib/board-view.js")).href); } catch { /* 없으면 V0 가 빨간불 */ }
 ok(!!lib, "V0 public/app/lib/board-view.js 가 있다(npm run build 뒤에 돌린다)");
 if (lib) {
-  const { viewOpensSessions: open, isMyProject: mine, countMyLiveSessions: count } = lib;
+  const { viewOpensSessions: open, isMyProject: mine, countMyLiveSessions: count, migrateStoredView: migrate } = lib;
   // 기억된 뷰 → 리스트(세션)로 여나
   eq(open(null), true, "V1 기억 없음 → 리스트");
   eq(open(undefined), true, "V1b 기억 undefined → 리스트");
@@ -44,6 +44,12 @@ if (lib) {
   eq(open({ savedViewId: 0 }), false, "V9b 저장된 뷰 id 0 도 저장된 뷰");
   eq(open({ sessions: false }), false, "V10 새 형식 false 는 다른 플래그 없어도 태스크");
   eq(open({ sessions: true, kanban: true }), true, "V11 새 형식 값이 옛 플래그를 이긴다");
+  // 저장소에서 읽을 때만 옮긴다 — 옛 기억은 sessions 를 채우고, 새 형식은 그대로, 없던 기억은 null
+  eq(migrate(null), null, "V11b 없던 기억 → null(기본 뷰는 부르는 쪽이 정한다)");
+  eq(migrate({ byStatus: true }).sessions, true, "V11c 옛 리스트 기억 → sessions:true");
+  eq(migrate({ kanban: true }).sessions, false, "V11d 옛 칸반 기억 → sessions:false");
+  eq(migrate({ sessions: false, kanban: false }).sessions, false, "V11e 새 형식은 그대로");
+  eq(migrate({ kanban: true, savedViewId: 3 }).savedViewId, 3, "V11f 다른 값은 보존");
   // 내 할당
   eq(mine({ created_by: "wonjoon", members: [] }, "wonjoon"), true, "V12 내가 만듦");
   eq(mine({ created_by: "yoon", members: [{ member_id: "wonjoon" }] }, "wonjoon"), true, "V13 팀원(객체)");
@@ -90,7 +96,12 @@ ok(/const boardP = api\('\/api\/ui\/v6\/board-fields'\)/.test(entry) && !/await 
 const tabs = cut(code(read("web/projects/filters.ts")), "const PJV_VIEW_TABS", "];");
 eq([...tabs.matchAll(/key: '(\w+)', label: '([^']+)'/g)].map((x) => x[1] + ":" + x[2]),
   ["list:리스트", "tasks:태스크", "board:보드", "table:테이블", "timeline:타임라인"], "S6 탭 순서");
-ok(/pjvBoardView\.sessions = viewOpensSessions\(v\)/.test(code(read("web/projects/state.ts"))), "S7 기억된 뷰는 잣대로 연다");
+const stateSrc = code(read("web/projects/state.ts"));
+ok(/function pjvLoadScopeView[^\n]*migrateStoredView\(/.test(stateSrc), "S7 저장소에서 읽는 자리에서만 옛 기억을 옮긴다");
+//  격리 리뷰 지적 ① — 코드가 직접 만든 뷰(저장된 뷰 메뉴 «리스트 묶음» = {overview:false,byStatus:false,kanban:false})가 세션 뷰로 새지 않는다.
+ok(/pjvBoardView\.sessions = !v \? true : !!v\.sessions;/.test(cut(stateSrc, "function pjvApplyView", "pjvSavedView.id =")), "S7b pjvApplyView 는 받은 값 그대로(옛 기억 추정 없음)");
+//  격리 리뷰 지적 ② — 사이드바를 닫은 채 «리스트로 나누기»: 기본 뷰로 되돌린 뒤 세션 뷰를 다시 끈다.
+ok(/pjvExitAreaMode\(\);[^\n]*pjvBoardView\.sessions = false;/.test(cut(code(read("web/projects/filters.ts")), "function pjvBoardSettingsPopover", "mkMode('status'")), "S7c 리스트로 나누기는 기본 뷰 되돌림 뒤 세션 뷰를 끈다");
 ok(/kind === 'tasks'/.test(cut(code(read("web/projects/icons.ts")), "function pjvTabIcon", "PJV_FIELD_ICON_PATHS")), "S8 태스크 탭 아이콘이 있다");
 
 console.log(`project-list-view-4865: ${pass} pass, ${fails.length} fail`);

@@ -2,6 +2,13 @@
 //  화면 코드(projects/state.ts · board.ts · session-list.ts) 안에 두면 core.js 를 끌어 Node 에서 값으로 시험할 수 없다
 //  (scripts/project-list-view-4865.test.mjs). 그래서 분기 있는 판정만 여기 둔다.
 
+/** 저장소에서 읽은 스코프 뷰를 새 형식으로 — sessions 를 채워 돌려준다(없던 기억이면 null 그대로).
+ *  ⚠ 읽는 자리(projects/state.ts pjvLoadScopeView)에서만 쓴다. 코드가 직접 만든 뷰 객체에 걸면 sessions 가 없다는 이유로 세션 뷰로 샌다. */
+export function migrateStoredView<T extends Record<string, unknown>>(v: T | null | undefined): (T & { sessions: boolean }) | null {
+  if (!v || typeof v !== 'object') return null;
+  return { ...v, sessions: viewOpensSessions(v) };
+}
+
 /** 기억된 스코프 뷰 → 「리스트」(세션) 뷰로 여나.
  *  · 기억이 없으면 연다 — 기본 뷰가 리스트다(원준 2026-10-17 «디폴트를 리스트뷰가 보이게»).
  *  · 새 형식(sessions 가 적힌 기억)은 그 값을 따른다.

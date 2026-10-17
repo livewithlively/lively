@@ -136,7 +136,7 @@ function pjvBoardSettingsPopover(anchor, ctx) {
       pjvBoardView.byFolder = key === 'list';
       pjvBoardView.byStatus = key === 'status' || key === 'list';
       pjvBoardView.overview = key === 'overview';
-      if (key === 'list' && !pjvBoardView.byArea) { pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvExitAreaMode(); pjvPersistSideOpen(); }
+      if (key === 'list' && !pjvBoardView.byArea) { pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvExitAreaMode(); pjvPersistSideOpen(); pjvBoardView.sessions = false; } // #4865 — 기본 뷰(=리스트·세션)로 되돌리는 pjvExitAreaMode 뒤에 고른 것을 다시 세운다
       syncs.forEach((s) => s());
       ctx.onView();
     };

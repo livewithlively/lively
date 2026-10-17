@@ -15,7 +15,7 @@ import { NO_PROJECT_NAME, isCollectSessRow, isSpentLoginSess } from '../lib/proj
 import { isTrySessionRow } from '../lib/builder-flow.js';
 import { PAST_PERIODS, type PastPeriod } from '../lib/past-sess.js';
 import { groupAllSess, nextSessSort, ownerCounts, selectAllSess, sortAllSess, type AllSessLike, type SessGroupBy, type SessSort, type SessSortKey } from '../lib/sess-all.js';
-import { SESS_STATES } from '../session-status.js';
+import { SESS_STATES, sessIsDead } from '../session-status.js';
 import { countMyLiveSessions } from '../lib/board-view.js';
 import { enterSession } from './detail-hub-kit.js';
 import { pjvPopover } from './popover.js';
@@ -25,8 +25,6 @@ const PAGE = 50;
 // 세션 목록 화면과 같은 두 축(main.ts loadData) — 기록은 서버 상한(2000)까지 한 번에. 실측 384건 · 0.2MB.
 const LIVE_URL = '/api/ui/terminal/sessions?includeProjects=1';
 const LOGS_URL = '/api/ui/v6/sessions?limit=2000';
-// 같은 보드 안에서 스코프를 오가면 다시 받지 않는다 — 세션 상태는 몇 초 단위로 바뀌므로 길게 쥐지 않는다.
-const TTL_MS = 15_000;
 
 // ── 묶기 기준 — 세션 목록 사이드바의 기준에 «프로젝트별»을 더한 것. 리스트 · 폴더 안에서는 프로젝트별이 기본이다. ──
 const GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
@@ -49,27 +47,41 @@ const ui = {
   closed: new Set<string>(), openUntitled: new Set<string>(),
 };
 
-let cache: { at: number; p: Promise<Sess[]> } | null = null;
-/** 세션 재료 — 라이브 + 기록을 셸과 같은 규칙으로 접고, 셸이 목록에 세우지 않는 것(끝난 로그인 · 수집 실행 · 앱 시험)은 뺀다(main.ts loadData). */
-function loadSessions(force = false): Promise<Sess[]> {
-  if (!force && cache && Date.now() - cache.at < TTL_MS) return cache.p;
+//  재료는 **보드 한 판 동안** 쥔다 — 보드 진입·다시 받기(pjvPrefetchSessions)만 새로 받는다. 검색 · 묶기 · 스코프 전환 같은 다시 그리기마다
+//  받으면 «불러오는 중» 이 번쩍이고 보던 자리를 잃는다(격리 리뷰 지적 — 종전엔 15초 수명이라 그 뒤 다시 그릴 때마다 받았다).
+let liveP: Promise<any[]> | null = null;
+let cache: Promise<Sess[]> | null = null;
+function fetchSessions(): void {
+  const lp = api(LIVE_URL).then((d: any) => (d && d.sessions) || []);
   const p = Promise.all([
-    api(LIVE_URL).then((d: any) => (d && d.sessions) || []),
+    lp,
     api(LOGS_URL).then((d: any) => (d && d.sessions) || []).catch(() => []),
     loadPeopleAvatars().catch(() => null),   // 사람 이름 — 첫 그림에 id 대신 이름이 서게
   ]).then(([live, logs]) => mergeSessions(live, logs)
     .filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive) && !isCollectSessRow(s.raw) && !isTrySessionRow(s)));
-  cache = { at: Date.now(), p };
-  p.catch(() => { if (cache && cache.p === p) cache = null; });   // 실패한 판은 쥐지 않는다 — 다음 진입이 다시 받는다
-  return p;
+  liveP = lp; cache = p;
+  //  실패한 판은 쥐지 않는다 — 다음에 그릴 때 다시 받는다.
+  lp.catch(() => { if (liveP === lp) liveP = null; });
+  p.catch(() => { if (cache === p) cache = null; });
 }
-/** 보드 진입 때 먼저 출발시킨다 — 프로젝트 목록을 기다리는 동안 세션도 받아 두면 기본 뷰(리스트)가 곧바로 선다. */
-export function pjvPrefetchSessions(): void { void loadSessions(true).catch(() => null); }
+/** 세션 재료 — 라이브 + 기록을 셸과 같은 규칙으로 접고, 셸이 목록에 세우지 않는 것(끝난 로그인 · 수집 실행 · 앱 시험)은 뺀다(main.ts loadData). */
+function loadSessions(): Promise<Sess[]> {
+  if (!cache) fetchSessions();
+  return cache!;
+}
+/** 보드 진입(다시 받기 포함) 때 새로 출발시킨다 — 프로젝트 목록을 기다리는 동안 세션도 받아 두면 기본 뷰(리스트)가 곧바로 선다. */
+export function pjvPrefetchSessions(): void { fetchSessions(); }
 /** 프로젝트별 «내 세션» 수 — 보드 「내 세션」 칸(rows.ts pjvProjSessionCell)의 재료. 종전엔 서버 mine=1 이 tmux 목록을 한 번 더 훑어
- *  붙여 줬다(projects-v6 project_list_v6 — owned 이고 projectId 가 있는 도는 세션). 같은 셈을 이미 받은 세션 목록으로 한다(#4865 —
- *  그 요청이 첫 화면의 가장 느린 줄이었다, 실측 0.6초). 못 받으면 빈 셈(칸이 «없음»으로 선다 — 종전 실패 때와 같다). */
+ *  붙여 줬다(projects-v6 project_list_v6 — 내가 주인이고 projectId 가 있는 세션 행). 여기선 **라이브 목록 행만** 센다 — 기록 · 이름 접기를
+ *  기다리지 않으니 칸반 · 표 같은 다른 뷰의 첫 그림도 이 셈 때문에 늦지 않다(#4865 — mine=1 은 첫 화면의 가장 느린 줄이었다, 실측 0.6초).
+ *  살아 있는 행만 센다(칸의 뜻이 «지금 내 세션이 있나» 다).
+ *  못 받으면 빈 셈(칸이 «없음»으로 선다 — 종전 실패 때와 같다). */
 export function pjvMySessionCounts(): Promise<Map<number, number>> {
-  return loadSessions().then(countMyLiveSessions).catch(() => new Map<number, number>());
+  if (!liveP) fetchSessions();
+  const now = Date.now();
+  return liveP!.then((rows) => countMyLiveSessions(rows.map((r: any) => ({
+    live: true, alive: r.observed === false ? false : !sessIsDead(r, now), owned: !!r.owned, projectId: r.projectId ? Number(r.projectId) : null,
+  })))).catch(() => new Map<number, number>());
 }
 
 // ── 「그룹」 단추 — 이 뷰에서는 세션 묶기 기준 ──
@@ -260,13 +272,22 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
 
   const list = el('div', { class: 'pjv-sl-list', 'aria-label': '세션 목록' });
   let budget = ui.shown;
+  //  [더 보기]의 «외 N개» — 쪽수 때문에 못 그린 줄만 센다. 접은 묶음 · 접은 «이름 없는 세션» 줄은 더 보기로 나오지 않으니 빼고 센다.
+  const groups = by === 'none' ? [] : groupAllSess(vis, by, now, stateRank);
+  const reachable = by === 'none' ? vis.length : groups.reduce((n, g) => {
+    const gk = `${by}:${g.key}`;
+    if (ui.closed.has(gk)) return n;
+    const un = g.rows.filter((it) => it.untitled).length;
+    return n + (g.rows.length - un) + (ui.openUntitled.has(gk) ? un : 0);
+  }, 0);
+  let drawn = 0;
   if (vis.length) list.append(head);
   if (by === 'none' && vis.length) {
     const body = el('div', { class: 'pjv-tgroup-body' });
-    for (const it of ordered(vis)) { if (budget-- <= 0) break; body.append(rowOf(it)); }
+    for (const it of ordered(vis)) { if (budget-- <= 0) break; body.append(rowOf(it)); drawn++; }
     list.append(body);
   }
-  for (const g of by === 'none' ? [] : groupAllSess(vis, by, now, stateRank)) {
+  for (const g of groups) {
     if (budget <= 0) break;
     const gk = `${by}:${g.key}`;
     const closed = ui.closed.has(gk);
@@ -278,17 +299,17 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
     const rows = ordered(g.rows);
     const named = rows.filter((it) => !it.untitled);
     const unnamed = rows.filter((it) => it.untitled);
-    for (const it of named) { if (budget-- <= 0) break; body.append(rowOf(it)); }
+    for (const it of named) { if (budget-- <= 0) break; body.append(rowOf(it)); drawn++; }
     if (unnamed.length && budget > 0) {
       const uOpen = ui.openUntitled.has(gk);
       const hs = [...new Set(unnamed.map((it) => harnessName(it.s)).filter(Boolean))].join(' · ');
       body.append(el('button', { class: 'pjv-sl-fold', type: 'button', 'aria-expanded': String(uOpen),
         onclick: () => { if (uOpen) ui.openUntitled.delete(gk); else ui.openUntitled.add(gk); repaint(); } },
         el('span', { class: 'pjv-sl-fold-car', text: uOpen ? '▾' : '▸' }), el('span', { text: `이름 없는 세션 ${unnamed.length}개${hs ? ' · ' + hs : ''}` })));
-      if (uOpen) for (const it of unnamed) { if (budget-- <= 0) break; body.append(rowOf(it)); }
+      if (uOpen) for (const it of unnamed) { if (budget-- <= 0) break; body.append(rowOf(it)); drawn++; }
     }
   }
-  const left = vis.length - Math.min(vis.length, ui.shown);
+  const left = Math.max(0, reachable - drawn);
   const empty = !inScope.length
     ? (ctx.projects.length ? '이 범위의 프로젝트에서 연 세션이 아직 없습니다. 프로젝트를 열어 세션을 시작하세요.' : '이 범위에 프로젝트가 없습니다.')
     : '이 조건에 맞는 세션이 없습니다. 기간 · 사람 · 상태 · 검색어를 바꿔 보세요.';
