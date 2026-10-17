@@ -1061,19 +1061,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const typed = cmds.map((c) => (h.runtimeDraftStash ?? "") + c);
     if (nodeId) {
       // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
+      //  ⚠ stage 판: 노드 프로토콜에 화면 읽기(outboxStep)가 없어 #4772 전환 확인창은 노드에서 눌러 주지 못한다
+      //   (main 판은 outboxStep 로 처리). 게이트웨이 세션은 아래 아웃박스 경로가 눌러 준다.
       const { injectPrompt } = await import("../node/session-inject.js");
-      //  #4772 — 그 컴퓨터의 화면을 읽고(outboxStep peek) 확인창이면 Enter(outboxStep keys)를 눌러 준다. 노드 op 라
-      //   옛 번들은 지원하지 않을 수 있어 **best-effort** 다(못 읽으면 "unknown" 으로 조용히 포기 — 명령은 이미 나갔다).
-      const { nodeRpc } = await import("../node/registry.js");
-      const { confirmRuntimeSwitch } = await import("./runtime-switch-confirm.js");
-      const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-      const nodeSwitchExec = {
-        peek: async (): Promise<{ ok: boolean; pane?: string }> => {
-          const r = await nodeRpc<{ ok?: boolean; pane?: string }>(nodeId, "outboxStep", { step: "peek", id: req.params.id }).catch(() => null);
-          return r && r.ok ? { ok: true, pane: String(r.pane ?? "") } : { ok: false };
-        },
-        enter: async (): Promise<void> => { await nodeRpc(nodeId, "outboxStep", { step: "keys", id: req.params.id, down: 0, enter: true }).catch(() => undefined); },
-      };
       for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
         catch (e) {
@@ -1083,8 +1073,6 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
           throw e;
         }
-        // 다음 명령을 넣기 전에 이 명령의 확인창을 닫는다(두 번째 명령이 첫 창에 타이핑되는 것 방지).
-        if (h.key === "claude") await confirmRuntimeSwitch(nodeSwitchExec, { sleep }).catch(() => undefined);
       }
       res.json({ ok: true, harness: h.key, sent: cmds });
       return;
