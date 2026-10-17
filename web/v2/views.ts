@@ -116,6 +116,13 @@ export const isInvitedSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
   const inv = s.raw && Array.isArray(s.raw.invites) ? (s.raw.invites as unknown[]).map(String) : [];
   return !!me && !isMineSess(s) && inv.includes(me);
 };
+/** 이 세션에 **내가 남을 초대했나**(#3870, 원준 2026-10-17 «초대한 세션도 보이게») — 내 세션이고 초대 명단에 나 아닌 사람이 있다. */
+export const isHostingSess = (s: Pick<Sess, 'owned' | 'raw'>): boolean => {
+  if (!isMineSess(s)) return false;
+  const me = String((state.me && (state.me as { userId?: string }).userId) || '');
+  const inv = s.raw && Array.isArray(s.raw.invites) ? (s.raw.invites as unknown[]).map(String) : [];
+  return inv.some((id) => id && id !== me);
+};
 /**
  * 이 세션을 다른 프로젝트로 옮길 수 있나(#3778 → #3870) — 주인 **또는 초대받은 사람**(원준 2026-09-30 «둘 다 되게»).
  *  초대받은 사람은 이미 그 세션에 주인 이름으로 지시를 넣을 수 있다 — 소속을 바꾸는 것은 그보다 큰 권한이 아니다.

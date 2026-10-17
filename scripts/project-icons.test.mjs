@@ -129,7 +129,8 @@ let omniIcon = null, binProjIcon = null;
   }
   ok(!/folderIcon\(/.test(BINS), "Q2 휴지통에 옛 폴더 그림 부품(folderIcon)이 남아 있지 않다");
   const app = cut(SIDE, "function appRowEl(", "\n}\n");
-  ok(/glyph\(inst\.project && !inst\.project\.self \? projGlyph\(11\) : 'projNone', 'v2-app-inst-ask-ic'\)/.test(app), "Q2 홈 고정 세션 둘째 줄(11px) = 작은 과녁, 프로젝트가 없으면 점선 원");
+  //  #3870(2026-10-17) — 둘째 줄 붓이 projLineEl 로 한 자리가 됐다(고정·초대·날짜 카드 공통).
+  ok(/glyph\(has \? projGlyph\(11\) : 'projNone', 'v2-app-inst-ask-ic'\)/.test(cut(SIDE, "function projLineEl(", "\n}\n")), "Q2 홈 세션 둘째 줄(11px) = 작은 과녁, 프로젝트가 없으면 점선 원");
   ok(/glyph\(projGlyph\(12\), 'v2-app-inst-project-ic'\)/.test(app), "Q2 홈 고정 세션의 프로젝트 단추(12px) = 작은 과녁");
   ok(/l\.pid \? glyph\(projGlyph\(16\), 'v2-ptl-ic'\) : glyph\('projNone', 'v2-ptl-ic'\)/.test(cut(SIDE, "function renderSessions(", "\n}\n")), "Q2 세션 목록 사이드바의 프로젝트 줄(16px) = 과녁, 없으면 점선 원");
   ok(/k\.startsWith\('p:'\) \? \[ICONS\.proj\]/.test(TABS) && !/k\.startsWith\('p:'\) \? \[ICONS\.folder\]/.test(TABS), "Q2 탭(15px)의 프로젝트 = 과녁");

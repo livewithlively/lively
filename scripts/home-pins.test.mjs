@@ -133,7 +133,10 @@ ok(/const pinIn = pinnedFirst\(g\.rows\)\.filter\(\(r\) => r\.pinned\);/.test(ca
   && /\.\.\.pinIn\.map\(row\),\s*\.\.\.fold\.now\.map\(row\)/.test(card),
   "W1b ★카드 안 고정 줄은 맨 위에 서고 「지난 세션」 뒤로 접히지 않는다");
 const pc = cut(SIDE, "function pinCard(", "\n}");
-ok(/projLine: true/.test(pc) && /v2-pg--pins/.test(pc) && !/v2-pg-row/.test(pc), "W1c 「고정」 세션 카드는 머리가 없고, 줄 둘째 칸이 소속 프로젝트다");
+//  #3870(원준 2026-10-17) — 둘째 줄은 자리와 무관하게 늘 소속 프로젝트(projLineEl). 종전 projLine 옵션은 걷혔다.
+ok(/one: false/.test(pc) && /v2-pg--pins/.test(pc) && !/v2-pg-row/.test(pc) && !/projLine: true/.test(pc)
+  && /inst\.icon === 'chat'\s*\?\s*projLineEl\(inst\)/.test(cut(SIDE, "function appRowEl(", "\n}\n")),
+  "W1c 「고정」 세션 카드는 머리가 없고, 줄 둘째 칸이 소속 프로젝트다(모든 두 줄 세션 줄과 같은 붓 projLineEl)");
 const al = cut(SIDE, "function appListKids(", "\n}\n");
 const sx = cut(SIDE, "function sessAxisKids(", "\n}\n");
 ok(/groupProj \? projListKids\(shown, o\) : sessAxisKids\(shown, o\)/.test(al) && /if \(kids\.length\) return kids;/.test(al),

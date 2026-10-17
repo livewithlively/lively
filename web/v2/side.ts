@@ -50,7 +50,7 @@ import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
-import { INVITED_GROUP, splitInvited } from '../lib/invited-up.js';   // #3870 — 「초대받은 세션」 층
+import { HOSTING_GROUP, INVITED_GROUP, splitInvited } from '../lib/invited-up.js';   // #3870 — 「초대받은 세션」·「초대한 세션」 층
 import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
 import { makeSplitter, readSplit, writeSplit } from './split.js';   // 경계 끌어 조정(#1719) — 나눔선 원형을 재사용한다
@@ -345,6 +345,8 @@ export interface SideInstance {
   liv?: boolean;
   /** 「초대받은 세션」 층에 설 줄인가(#3870, lib/invited-up) — main.ts ①″ 이 토글이 켜져 있을 때만 단다. */
   invited?: boolean;
+  /** 「초대한 세션」 층에 설 줄인가(#3870, 원준 2026-10-17) — 내 세션인데 남을 초대한 것. main.ts ①‴ 이 같은 토글로 단다. */
+  hosting?: boolean;
   /** 정렬 시각(ms) — main.ts 가 **얼려 둔** 값(#1954 orderPin). 프로젝트 축이 그룹 순서를 이걸로 잰다(#2033). */
   at?: number;
   /** 묶음 안 순위 — main.ts 가 자물쇠까지 반영한 값(#3856). 점이 꺼진 채 붙들린 행도 순위를 들고 있어, 카드 자리가 이걸로 잰다. */
@@ -518,13 +520,15 @@ function instanceIcon(inst: SideInstance): SVGElement {
  * 좌측의 정본은 프로젝트 트리가 아니라 **열린 앱 인스턴스**다(#1883).
  * 상단 탭의 상태 기계는 화면·터미널 DOM 보존을 위해 남겨 두되, 사람이 보는 목록은 이 한 곳으로 합친다.
  */
-/** 세션 행의 둘째 줄 — **내가 마지막으로 시킨 말**(#2016 6차, 원준: "밑에 2행은 내가 한 마지막 질문의 짧은 요약본으로").
- *  단추가 아니다(종전 폴더+프로젝트명은 누르면 프로젝트로 갔다) — 행 전체가 세션을 연다. 프로젝트는 툴팁에 남긴다. */
-function askLine(ask: string, projName: string, tail = false): HTMLElement {
-  return el('span', { class: 'v2-app-inst-ask', title: (projName ? projName + '\n' : '') + '내가 마지막으로 한 말 — ' + ask },
-    glyph('ask', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: ask }),
-    //  #4233 — 세션별 축에는 카드 머리가 없어 소속이 안 보였다. 줄 끝에 흐리게 붙이고, 좁으면 먼저 잘린다(CSS).
-    tail && projName ? el('span', { class: 'v2-app-inst-askp', text: projName }) : null) as HTMLElement;
+/** 세션 행의 둘째 줄 — **소속 프로젝트 이름**(원준 2026-10-17: «핀을 했을 때에는 밑에 프로젝트 이름이 뜨거든? 이렇게 할 이유가 없는 것
+ *  같고 그냥 항상 프로젝트 이름이 뜨는 게 맞는 것 같아»). 종전(#2016 6차)엔 날짜 카드만 «내 마지막 말» 이었고 「고정」·「초대받은」 카드는
+ *  프로젝트명이라 같은 목록 안에서 줄의 뜻이 자리마다 달랐다. 이제 두 줄 구조의 세션 줄은 어디서든 둘째 줄이 소속이다.
+ *  마지막 말은 버리지 않고 툴팁으로 내린다. 단추가 아니다 — 행 전체가 세션을 연다. */
+function projLineEl(inst: SideInstance): HTMLElement {
+  const has = !!(inst.project && !inst.project.self);
+  const name = has ? inst.project!.name : '';
+  return el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (name || NO_PROJECT_NAME) + (inst.ask ? '\n내가 마지막으로 한 말 — ' + inst.ask : '') },
+    glyph(has ? projGlyph(11) : 'projNone', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: name || NO_PROJECT_NAME })) as HTMLElement;
 }
 
 /** 열린 앱 한 줄. 목록을 그리는 두 자리(첫 렌더 · 검색 중 부분 갱신)가 같은 붓을 쓴다.
@@ -536,10 +540,6 @@ interface RowOpts {
   /** 압정·× 를 그리나. **목록의 성질**이 정한다(아래 renderSessions 머리말) — 행의 성질이 아니다. */
   pin?: boolean;
   close?: boolean;
-  /** #4233 — 둘째 줄을 **소속 프로젝트 이름**으로(「고정」 세션 카드 — 머리가 없으니 줄이 소속을 말한다). */
-  projLine?: boolean;
-  /** #4233 — 세션별 축 날짜 카드: 둘째 줄(마지막 말) 끝에 소속 프로젝트를 흐리게 붙인다(자리가 있을 때만 보인다). */
-  projTail?: boolean;
 }
 function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
   const one = !!o.one, canPin = o.pin !== false;
@@ -617,15 +617,10 @@ function appRowEl(inst: SideInstance, o: RowOpts = {}): HTMLElement {
         : sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))),
     //  ⚠ 한 줄 모드(#2033)에서는 둘째 줄을 **만들지 않는다** — 숨기기(display:none)로 두면 빈 그리드 행이 남아
     //   행 높이가 두 축에서 어긋난다. 소속은 머리글이, 시각·상태어는 툴팁이 말한다.
-    //  둘째 줄 — 세션이면 **내 마지막 말**(#2016 6차, 아직 모르면 프로젝트명을 글자로), 그 밖의 앱은 종전대로 프로젝트 단추.
+    //  둘째 줄 — 세션이면 **소속 프로젝트**(projLineEl — 마지막 말은 툴팁), 그 밖의 앱은 종전대로 프로젝트 단추.
     one ? null
-      : o.projLine && inst.icon === 'chat'
-        ? el('span', { class: 'v2-app-inst-meta v2-app-inst-pj', title: (inst.project && !inst.project.self ? inst.project.name : NO_PROJECT_NAME) },
-            glyph(inst.project && !inst.project.self ? projGlyph(11) : 'projNone', 'v2-app-inst-ask-ic'), el('span', { class: 'v2-app-inst-askt', text: (inst.project && !inst.project.self ? inst.project.name : '') || NO_PROJECT_NAME }))
       : inst.icon === 'chat'
-        ? (inst.ask
-            ? askLine(inst.ask, inst.project && !inst.project.self ? inst.project.name : '', !!o.projTail)
-            : el('span', { class: 'v2-app-inst-meta', text: (inst.project && !inst.project.self ? inst.project.name : '') || inst.meta || 'AI 세션' }))
+        ? projLineEl(inst)
         : inst.project && !inst.project.self
           ? el('button', { class: 'v2-app-inst-project', type: 'button',
               title: `${inst.project.name}\n프로젝트 페이지를 엽니다`,
@@ -929,7 +924,7 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
     if (pinnedRows.length) kids.push(pinCard(pinnedRows, o));
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
-  if (inv.invited.length) { kids.push(...invitedLayer(inv.invited, o)); lastBucket = INVITED_GROUP; }
+  if (inv.invited.length || inv.hosting.length) { kids.push(...invitedLayer(inv, o)); lastBucket = inv.hosting.length ? HOSTING_GROUP : INVITED_GROUP; }
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
     if (g.bucket && g.bucket !== lastBucket) {
@@ -1016,27 +1011,36 @@ function cardPastHead(pk: string, n: number, open: boolean): HTMLElement {
 /** #4233 — 압정 통(PIN_KEY)에 꽂힌 프로젝트인가. 「프로젝트 없음」(0)은 꽂을 수 없다. */
 const projPinnedId = (id: number): boolean => !!id && isPinned('p:' + id);
 
-/** #4233 — 「고정」 세션 카드. 머리 없이 줄만 든다(바로 위 「고정」 이름표가 말한다). 줄은 두 줄 — 둘째 줄이 소속 프로젝트. */
+/** #4233 — 「고정」 세션 카드. 머리 없이 줄만 든다(바로 위 「고정」 이름표가 말한다). 줄은 두 줄 — 둘째 줄이 소속 프로젝트(projLineEl). */
 function pinCard(rows: SideInstance[], o: RowOpts): HTMLElement {
   return el('div', { class: 'v2-pg open v2-pg--rows v2-pg--pins', role: 'presentation', 'data-anch': 'pins:' },
-    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement;
+    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false })))) as HTMLElement;
 }
 
-/** #3870 — 「초대받은 세션」 층: 이름표 + 카드 한 장. 줄은 두 줄(둘째 줄이 소속 프로젝트) · 주인 얼굴은 줄이 이미 단다(owner). */
-function invitedLayer(rows: SideInstance[], o: RowOpts): HTMLElement[] {
-  return [
-    el('div', { class: 'v2-app-group', role: 'presentation', text: INVITED_GROUP }) as HTMLElement,
-    el('div', { class: 'v2-pg open v2-pg--rows v2-pg--invited', role: 'presentation', 'data-anch': 'invited:' },
-      el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false, projLine: true })))) as HTMLElement,
-  ];
+/**
+ * #3870 — 「초대받은 세션」 층 + 바로 아래 「초대한 세션」 층(원준 2026-10-17): 이름표 + 카드 한 장씩. 비어 있는 층은 세우지 않는다.
+ *  줄은 두 줄(둘째 줄이 소속 프로젝트) · 초대받은 줄의 주인 얼굴은 줄이 이미 단다(owner).
+ */
+function invitedLayer(inv: { invited: SideInstance[]; hosting: SideInstance[] }, o: RowOpts): HTMLElement[] {
+  const card = (rows: SideInstance[], cls: string, anch: string): HTMLElement =>
+    el('div', { class: 'v2-pg open v2-pg--rows ' + cls, role: 'presentation', 'data-anch': anch },
+      el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, one: false })))) as HTMLElement;
+  const kids: HTMLElement[] = [];
+  if (inv.invited.length) {
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: INVITED_GROUP }) as HTMLElement, card(inv.invited, 'v2-pg--invited', 'invited:'));
+  }
+  if (inv.hosting.length) {
+    kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: HOSTING_GROUP }) as HTMLElement, card(inv.hosting, 'v2-pg--hosting', 'hosting:'));
+  }
+  return kids;
 }
 
-/** #4233 — 세션별 축의 날짜 카드. 머리 없이 줄만 든다(바로 위 날짜 이름표가 말한다). 줄은 두 줄 — 마지막 말 + 소속. */
+/** #4233 — 세션별 축의 날짜 카드. 머리 없이 줄만 든다(바로 위 날짜 이름표가 말한다). 줄은 두 줄 — 둘째 줄이 소속 프로젝트(projLineEl). */
 //  앵커는 구간 순번을 붙인다 — 같은 묶음 이름이 떨어져 두 번 나올 수 있어(planSessAxis) 이름만으로는 겹친다.
 //  카드 틀은 role=presentation — 줄(listitem)이 목록(role=list)의 항목으로 남게 한다.
 function dayCard(group: string, rows: SideInstance[], o: RowOpts, seq = 0): HTMLElement {
   return el('div', { class: 'v2-pg open v2-pg--rows', role: 'presentation', 'data-anch': `day:${seq}:${group}` },
-    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, { ...o, projTail: true })))) as HTMLElement;
+    el('div', { class: 'v2-pg-list', role: 'presentation' }, ...rows.map((r) => appRowEl(r, o)))) as HTMLElement;
 }
 
 /**
@@ -1060,7 +1064,7 @@ function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
     if (plan.pinRows.length) kids.push(pinCard(plan.pinRows, o));
     for (const g of pinGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
-  if (inv.invited.length) kids.push(...invitedLayer(inv.invited, o));
+  if (inv.invited.length || inv.hosting.length) kids.push(...invitedLayer(inv, o));
   plan.dated.forEach((d, i) => {
     if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
     kids.push(dayCard(d.group, d.rows, o, i));
@@ -3007,15 +3011,17 @@ function axisBtn(): HTMLElement {
 }
 
 /**
- * 「초대받은 세션」 층 토글(#3870, 원준 2026-10-14 «프로젝트 묶기 버튼처럼 온오프»). 「프로젝트로 묶기」 옆, 같은 붓·같은 문법 —
- *  켜짐은 채움이 말한다. 초대받은 세션이 하나도 없으면 세우지 않는다(눌러도 아무것도 안 바뀌는 단추가 된다 — #4135 와 같은 규율).
+ * 「초대받은 세션」·「초대한 세션」 층 토글(#3870, 원준 2026-10-14 «프로젝트 묶기 버튼처럼 온오프» · 2026-10-17 «초대한 세션도»).
+ *  「프로젝트로 묶기」 옆, 같은 붓·같은 문법 — 켜짐은 채움이 말한다. 두 층에 설 세션이 하나도 없으면 세우지 않는다
+ *  (눌러도 아무것도 안 바뀌는 단추가 된다 — #4135 와 같은 규율).
+ *  그림은 «사람 둘»(people) — 종전 «사람+플러스»(adduser)는 «사람을 초대한다» 로 읽혔다(원준 2026-10-17 «너무 어색함»).
  */
 function invitedBtn(): HTMLElement | null {
   if (!(hooks.invitedCount?.() ?? 0)) return null;
   return el('button', {
     class: 'v2-axisbtn v2-invbtn' + (invitedUp ? ' on' : ''), type: 'button', 'aria-pressed': String(invitedUp),
-    'aria-label': invitedUp ? '초대받은 세션 층 끄기' : '초대받은 세션 위로 모아 보기',
-    title: invitedUp ? '지금은 초대받은 세션을 맨 위(고정 다음)에 모아 보는 중 — 눌러서 끄기' : '초대받은 세션을 맨 위(고정 다음)에 모아 봅니다',
+    'aria-label': invitedUp ? '초대받은·초대한 세션 층 끄기' : '초대받은·초대한 세션 위로 모아 보기',
+    title: invitedUp ? '지금은 초대받은 세션과 초대한 세션을 맨 위(고정 다음)에 모아 보는 중 — 눌러서 끄기' : '초대받은 세션과 초대한 세션을 맨 위(고정 다음)에 모아 봅니다',
     onclick: () => {
       invitedUp = !invitedUp;
       try { if (invitedUp) localStorage.removeItem(INVITED_STORE); else localStorage.setItem(INVITED_STORE, 'off'); shellPrefsPush(); }
@@ -3023,7 +3029,7 @@ function invitedBtn(): HTMLElement | null {
       //  재료(main.ts ①″)가 이 값을 보므로 목록을 다시 세운다 — redraw 는 그림만 다시 그린다.
       if (hooks.onInvitedToggle) hooks.onInvitedToggle(); else redraw();
     } },
-    icon('adduser', 'v2-axisbtn-ic')) as HTMLElement;
+    icon('people', 'v2-axisbtn-ic')) as HTMLElement;
 }
 
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
