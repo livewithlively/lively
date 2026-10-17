@@ -19,7 +19,7 @@ import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, openAppById, setLaunchpadContext } from './apps.js';
-import { instanceSideIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다
+import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 액자가 알려 온 리스트 즐겨찾기 변경
@@ -1974,7 +1974,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'i' && segs[1]) {
     const id = decodeURIComponent(segs[1]);
     const inst = cachedAppInstance(id) || appInstances.find((x) => x.id === id) || null;
-    if (inst) icon = instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length)) as SideInstance['icon'];
+    if (inst) icon = (registerAppIcon(inst.app.id, inst.app.icon) || instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length))) as SideInstance['icon'];   // #4769 선언한 그림이 있으면 그것
   }
   else {
     const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];

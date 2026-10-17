@@ -45,6 +45,7 @@ import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
 import { builderModelFailed, builderModelNow, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
+import { installedAppFace } from './glass-icon.js';   // #4769 앱 줄의 그림 = 그 앱의 얼굴
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
 import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870 — 목록 · 숫자 · «없어요» 안내는 정본을 받은 뒤에만 그린다
@@ -515,6 +516,7 @@ function instanceIcon(inst: SideInstance): SVGElement {
   if (inst.icon === 'app') return icon('apps', cls);
   //  앱빌더 · 앱빌딩 세션(#4632) — 그림 표의 이름 그대로(망치 든 격자 · 망치 든 말풍선).
   if (inst.icon === 'builder' || inst.icon === 'buildsess') return icon(inst.icon, cls);
+  if (String(inst.icon).startsWith('app-')) return icon(inst.icon, cls);   // #4769 구성원 앱이 선언한 그림(등록한 이름) — 표의 그림처럼 iconPath 로
   return appIcon(inst.icon as 'term' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags', cls);
 }
 
@@ -1884,8 +1886,10 @@ function renderBuilderSection(): void {
     //  툴팁 — 이름. 지금 단계. 누르면 할 일(문장은 마침표로 끊는다 · ui-copy 규칙).
     const drafts = M.drafts.map((d) => row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done),
       d.title + '. ' + draftStageText(d.stage, !!d.appId, d.done) + '. 누르면 이어서 만들어요.'));
-    const mine = M.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a), a.title + '. 누르면 배포 설정이 열려요.'));
-    const team = M.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), 'apps', a.title, appRight(a),
+    //  앱 줄의 그림은 그 앱의 얼굴(#4769 매니페스트 icon 선언 · 없으면 기본 그림) — 앱 찾기 · 독 · 가운데 카드와 같은 그림.
+    const face = (a: { id: string; hasUi: boolean; icon: Parameters<typeof installedAppFace>[0]['icon'] }): string => installedAppFace({ id: a.id, hasUi: a.hasUi, icon: a.icon });
+    const mine = M.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), face(a), a.title, appRight(a), a.title + '. 누르면 배포 설정이 열려요.'));
+    const team = M.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), face(a), a.title, appRight(a),
       a.title + '.' + (a.madeBy ? ' 만든 사람: ' + a.madeBy + '.' : '') + ' 누르면 배포 설정이 열려요.'));
     listEl.append(
       card('draft', '만들던 앱', 'buildsess', drafts, '만들던 앱이 없어요.'),

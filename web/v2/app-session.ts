@@ -8,6 +8,7 @@
 //  스폰 전제 = **동의(grant)**. 서버는 grant 가 없으면 mintAppToken 에서 403 을 준다. 이 모듈이 그 403 을 받아
 //   동의 창을 띄우고, 동의하면 POST /apps/:id/grant(선언 상한 그대로 — 서버가 매니페스트 부분집합으로 고정)한 뒤
 //   **한 번** 재시도한다. 거절하면 조용히 멈춘다(세션 안 뜸).
+import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 앱 아이콘 선언
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
 
@@ -46,6 +47,7 @@ export interface SessionApp {
   workspaceFiles: string[];   // #4629 — 볼 수 있는 모든 프로젝트의 자료에서 읽을 수 있는 확장자(프로젝트 자료와 다른 동의 줄)
   projectFiles: string[];   // #4592 — 이 앱 화면이 붙은 세션의 프로젝트 자료에서 읽을 수 있는 확장자(동의 창이 제 줄로 보여 준다)
   appFolder: boolean;       // #4673 — 이 앱이 제 앱 폴더(apps/<앱>/)에 파일을 올리고 받나(동의 창이 제 줄로 보여 준다)
+  icon: AppIconSpec | null;   // #4769 — 매니페스트가 선언한 앱 아이콘(없으면 기본 그림)
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -78,7 +80,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
           workspaceFiles: Array.isArray(perm.workspace_files) ? perm.workspace_files.map(String) : [],   // #4629
           projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [],   // #4592
-          appFolder: perm.app_folder === true };   // #4673
+          appFolder: perm.app_folder === true,   // #4673
+          icon: appIconSpecOf(a.manifest) };   // #4769
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -125,7 +128,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [], appFolder: false,
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null, ...appStateOf(null),
-        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
+        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {}, icon: null };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;

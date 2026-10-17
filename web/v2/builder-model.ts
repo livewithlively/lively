@@ -6,6 +6,7 @@
 import { api } from '../core.js';
 import { studioMe, studioRecBuildingFor, studioRecs } from './app-studio.js';
 import { appStateOf } from './app-session.js';
+import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 구성원 앱의 아이콘 선언
 import { folderView, type FolderView } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';
 
@@ -19,7 +20,7 @@ export interface BuilderEnv {
 }
 /** 앱 한 줄 — /api/ui/apps 의 행을 앱빌더가 보는 만큼만. 꺼진 앱도 든다(런치패드용 listSessionApps 는 켜진 것만 준다). */
 export interface BApp {
-  id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean;
+  id: string; title: string; version: string; enabled: boolean; installedBy: string; installedAt: number; hasUi: boolean; canEdit: boolean; builtin: boolean; versionNo: number; hasInstructions: boolean; icon: AppIconSpec | null;
   studio: { place?: string; card?: unknown; put?: boolean } | null;   // 매니페스트의 자리 · 기획 카드 · 마무리 표시(앱 코드 — 누가 · 어느 세션 · 원본은 아래 서버 칸)
   //  #4667 서버가 찍은 기록 · 공개 상태(apps/visibility.ts) — app-session.appStateOf 와 같은 자로 읽는다.
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
@@ -41,6 +42,7 @@ async function fetchApps(): Promise<BApp[] | null> {
       hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0), canEdit: a.can_edit === true,
       builtin: !!(a.source && a.source.kind === 'builtin'), versionNo: Number(a.current_version_no) || 0,
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
+      icon: appIconSpecOf(a.manifest),   // #4769
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
       ...appStateOf(a), empty: a.empty === true,
       folder: folderView(a.folder),

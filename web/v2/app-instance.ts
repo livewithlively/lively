@@ -57,6 +57,7 @@ export interface AppInstanceRecord {
     system: { renderer: 'session' | 'browser' | 'classic'; route?: string; home?: string } | null;
     runtime: AppWorkerRuntime | null;
     ui: { pages: Array<{ key: string; title: string; display: string[] }> };
+    icon?: { path: string; color: string; color_dark?: string } | null;   // #4769 선언한 앱 아이콘
   };
 }
 

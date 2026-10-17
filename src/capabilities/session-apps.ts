@@ -15,6 +15,7 @@ import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersionHead, type OrgApp } from "../org/store/apps.js";
 import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
+import { appIconSpecOf } from "../apps/manifest.js";   // #4769 앱 아이콘 선언
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
@@ -64,6 +65,7 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
     attached_by: row.member_id,
     usable: !!app && app.status === "active" && app.enabled,
     has_ui: pages.length > 0,
+    icon: appIconSpecOf(app?.manifest ?? null),   // #4769 — 앱 탭 · 독 · 머리줄이 그 앱의 그림을 그린다(없으면 기본 그림)
     pages,
     tables,
     instructions,

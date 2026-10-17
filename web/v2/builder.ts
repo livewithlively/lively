@@ -11,7 +11,7 @@
 //   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · 목록에서 빼기 · **지우기**(앱 + 세션 + 기록 전부).
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
-import { appGlassIcon } from './glass-icon.js';
+import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { builderModelFailed, builderModelNow, deletedSids, listAllApps, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
@@ -178,7 +178,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     const card = el('div', { class: 'v2-bld-card v2-bld-card--sel' + (v.sel === a.id ? ' on' : ''), role: 'listitem', tabindex: '0', title: '누르면 오른쪽에 배포 설정이 떠요',
       onclick: (e: MouseEvent) => { if ((e.target as HTMLElement).closest('button')) return; pick(a.id); },
       onkeydown: (e: KeyboardEvent) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); pick(a.id); } } },
-      el('div', { class: 'hd' }, appGlassIcon(a.hasUi ? 'liv' : 'term'), el('div', { style: 'min-width:0' }, el('b', { text: a.title }), el('small', { text: [pl ? PLACE[pl].title : '', verName(a.versionNo), when(a.installedAt)].filter(Boolean).join(' · ') }))),
+      el('div', { class: 'hd' }, appGlassIcon(installedAppFace({ id: a.id, hasUi: a.hasUi, icon: a.icon })), el('div', { style: 'min-width:0' }, el('b', { text: a.title }), el('small', { text: [pl ? PLACE[pl].title : '', verName(a.versionNo), when(a.installedAt)].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-chips' }, ...chips.map(([k, t]) => el('span', { class: 'v2-bld-chip' + (k ? ' ' + k : ''), text: t }))),
       el('div', { class: 'v2-bld-acts' },
         own || a.canEdit

@@ -37,7 +37,7 @@ import { bindCtx, type CtxResult } from './ctx-registry.js';
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 import { appMatches, appRank } from '../lib/app-match.js';
 import { openLaunchpad } from './apps.js';
-import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
+import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { listSessionApps, type SessionApp } from './app-session.js';
 import {
   DOCK_DEFAULTS, DOCK_METRICS, MAG_GROW, appColor, dockClick, dockInset, dockItems, dockPins, dockThickness, effectiveHome, fitIconSize, floatAt, floatCenter, floatIconSize,
@@ -829,7 +829,7 @@ export function mountDock(host: DockHost): DockHandle {
       const attQ = byQ(att.map((a) => ({ ...a, desc: a.id })));
       const secAtt = !host.attach ? null : sApps === null ? section('이 세션에 붙이기', '불러오는 중…', [])
         : attQ.length ? section('이 세션에 붙이기', sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요', attQ.map((a) => tileBtn({
-          ic: appGlassIcon(builtinAppIcon(a.id, a.pages.length > 0)), name: a.title, off: !sid,
+          ic: appGlassIcon(installedAppFace({ id: a.id, hasUi: a.pages.length > 0, icon: a.icon })), name: a.title, off: !sid,
           hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요` : '세션을 열면 붙일 수 있어요',
           onClick: () => { close(); void host.attach?.({ id: a.id, title: a.title }); },
         }))) : null;
