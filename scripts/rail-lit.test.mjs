@@ -44,6 +44,11 @@ check(lit("app:projects2", "proj") === "proj", "E8 구역과 같은 문(프로�
 check(lit("app:system") === "home", "E9 숨긴 앱(설정)은 레일에 칸이 없으니 구역이 남는다", lit("app:system"));
 check(lit("app:") === "home" && lit("") === "home", "E10 빈 키는 구역으로", `${lit("app:")} / ${lit("")}`);
 check(lit("taxonomy", "home", []) === "home", "E11 앱 목록이 비면 구역으로", lit("taxonomy", "home", []));
+//  #4632(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야») — 사이드바 주인(lib/side-owner)을 주면, 구역 목록이 아닌 화면에서 구역 칸을 켜지 않는다.
+const litO = (ak, owner, sec = "home") => railLitKey(ak, sec, LINKS, APPS, owner);
+check(litO("app:system", "none") === "" && litO("inbox", "none") === "" && litO("app:", "none") === "", "E12 ★ 레일에 칸이 없는 앱(설정 · 확인할 것 · 앱 인스턴스)에선 아무 칸도 안 켠다 — 「홈」 이 켜져 «홈에 있다» 로 읽히던 것", [litO("app:system", "none"), litO("inbox", "none")]);
+check(litO("taxonomy", "taxonomy") === "taxonomy" && litO("liv", "none") === "liv" && litO("app:learn", "none") === "learn", "E13 레일에 칸이 있는 앱 · 갈 곳은 그대로 그 칸", [litO("taxonomy", "taxonomy"), litO("app:learn", "none")]);
+check(litO("s:abc", "section") === "home" && litO("app:projects2", "section", "proj") === "proj" && litO("app:system", undefined) === "home", "E14 구역 목록 화면은 구역 · 주인을 안 주면 종전 그대로", [litO("s:abc", "section"), litO("app:system", undefined)]);
 
 // ───────────────────────── B. 배선 — 레일·구역 드롭다운이 이 잣대 하나를 쓴다
 const rail = code(readFileSync(path.join(root, "web/v2/rail.ts"), "utf8"));

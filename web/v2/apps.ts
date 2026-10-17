@@ -17,6 +17,7 @@ import { ctxMenu } from './panes-kit.js';
 import { studioRecBuildingFor, studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
 import { builderRoute, isAppInProgress, isBuildingSession } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
 import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
+import { CLASSIC_PAGES } from '../lib/classic-pages.js';   // #4632 클래식 첫 칸 → 앱 키(활성 키 판정과 한 벌)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -89,16 +90,8 @@ export const APPS: AppDef[] = [
   { key: 'dashboard', title: '대시보드', desc: '내 프로젝트 · 알림 · 세션 · 팀 로그 위젯을 한 판에', route: 'dashboard', tab: 'dashboard', icon: 'home', group: 'workspace', aka: DASH_OLD_NAMES },
 ];
 
-// 클래식 라우트 첫 세그먼트 → 앱 키. 새 셸에서 옛 딥링크(#/knowledge/…, #/projects2/p/12 …)가 들어오면
-//  이 표로 '어느 앱 프레임에 실을지'를 정한다 — 북마크·공유 링크가 새 셸에서도 그대로 산다.
-export const CLASSIC_PAGES: Record<string, string> = {
-  dashboard: 'dashboard', terminal: 'terminal', projects2: 'projects2', projects: 'projects2',
-  knowledge: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge', trash: 'knowledge',
-  context: 'context',
-  system: 'system', start: 'learn', onboarding: 'learn', install: 'learn',   // #/learn 은 셸이 직접 그린다(#4179). 여기 두면 클래식 액자가 먼저 선다
-  sessions: 'sessions', activate: 'system',
-  //  'f'(파일 링크 #/f?root=&path=)는 여기 없다 — 셸이 자료 앱의 한 화면(자료 보기 #4672)으로 직접 그린다(main.ts 의 'f' 갈래).
-};
+// 클래식 라우트 첫 세그먼트 → 앱 키 — 표는 lib/classic-pages(활성 키 판정 lib/side-owner 와 한 벌). 종전 이름 그대로 내보낸다.
+export { CLASSIC_PAGES };
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden && (!a.tab || navOn(a.tab))); }
 

@@ -35,6 +35,7 @@ import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — �
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
 import { railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
+import { sectionShown, type SideOwner } from '../lib/side-owner.js';   // #4632 — 이 화면에 서는 구역(구역과 같은 문은 그 구역 · 세션 화면에 위키는 홈)
 
 export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
@@ -43,6 +44,8 @@ export interface RailHooks {
   counts?: () => { busy: number; projects: number };
   /** 지금 화면의 활성 키(main.ts activeKey) — 구역이 아닌 '갈 곳'(리브)의 활성 표시에 쓴다. */
   activeKey?: () => string;
+  /** #4632 지금 화면의 사이드바 주인(lib/side-owner) — 앱 화면이면(구역 목록이 아니면) 구역 칸은 켜지지 않는다. 없으면 종전대로. */
+  sideOwner?: () => SideOwner;
   /** 구역이 바뀌었다 — 사이드바를 다시 그리고 그 구역의 첫 화면으로 간다. */
   onSection?: (sec: RailSection, opts: { navigate: boolean }) => void;
   /** 레일을 숨기거나 되살렸다 — 사이드바도 같이 다시 그린다(숨김에만 머리·발치에 워크스페이스·구역·앱·나가 선다). */
@@ -158,6 +161,8 @@ export function reloadRailPrefs(): void {
 //   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
 //   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
 export function railSection(): RailSection { init(); return section; }
+/** 지금 화면에 **서는** 구역 — 기억한 구역에서 이 화면의 것이 아닌 구역만 비킨다(lib/side-owner sectionShown). 사이드바 · 레일 켜짐 · 폰 탭 바가 같은 값을 쓴다. */
+export function railShownSection(): RailSection { init(); return sectionShown(hooks.activeKey?.() || '', section); }
 /** 레일이 숨겨져 있는가 — 좁은 폭에선 늘 '아니오'(거기선 CSS 가 레일을 아이콘으로 세운다). */
 export function railIsHidden(): boolean { return hidden && !window.matchMedia(NARROW_MQ).matches; }
 
@@ -212,9 +217,12 @@ function recentForRail(n: number): AppDef[] {
 }
 /** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
 function litKey(): string {
-  return railLitKey(hooks.activeKey?.() || '', section, LINKS.map((l) => l.key),
-    APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key));
+  //  #4632 — 앱 화면(설정 · 확인할 것 · 앱 인스턴스처럼 레일에 제 칸이 없는 앱)에선 구역 칸을 켜지 않는다(owner — lib/rail-lit).
+  return railLitKey(hooks.activeKey?.() || '', railShownSection(), LINKS.map((l) => l.key),
+    APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key), hooks.sideOwner?.());
 }
+/** 레일에서 켜진 구역 — 앱 화면이면 ''(폰 아래 탭 바가 같은 잣대로 켠다). */
+export function railLitSection(): RailSection | '' { init(); const k = litKey(); return SECTIONS.some((s) => s.key === k) ? (k as RailSection) : ''; }
 
 // ── 워크스페이스 — 스택 타일 + 슬랙식 팝오버 ─────────────────────────────────
 function wsTile(w: { name: string; kind: string }, cls: string): HTMLElement {

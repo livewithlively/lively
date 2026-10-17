@@ -720,6 +720,18 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 /* 빈 묶음 한 줄 · «묶음을 정해 주세요» 카드는 이름을 한 단계 흐리게(#1631 그대로). */
 .v2-ksp-empty { margin: 0; padding: 4px 8px 6px; font-size: 11.5px; color: var(--muted); white-space: normal; }
 .v2-ksp-fix .v2-ksp-t .n { color: var(--muted); }
+/* #4632 [앱빌더] 사이드바(side.ts renderBuilderSection) — 위키 · 분류체계와 같은 부품. 「새 앱 만들기」 줄만 앱빌더 색(보라)으로 한 단계 세운다(앱빌더의 첫 단추와 같은 색).
+   만들던 앱 줄의 수 자리에는 짧은 단계(「③ 시안」)가 선다 — 숫자 붓(고정폭)이 아니라 글 붓으로. */
+.v2-kview.v2-bld-new { color: var(--purple-text, #5B3FD0); font-weight: 700; }
+.v2-kview.v2-bld-new .v2-ptl-ic { stroke: var(--purple, #7B61E0); }
+.v2-kview.v2-bld-new:hover, .v2-kview.v2-bld-new.on { background: color-mix(in srgb, var(--purple, #7B61E0) 9%, transparent); }
+.v2-kcat .v2-bld-st { font-family: inherit; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.v2-kcat.on .v2-bld-st { color: var(--ink); }
+.v2-bld-shelf .v2-kcat .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2-bld-foot { gap: 2px; }
+/* 발치 「앱 찾기」 는 링크가 아니라 단추(앱 찾기 창을 연다) — 링크 줄(.v2-foot-link)과 같은 모양이 되게 단추 기본 붓을 걷는다. */
+button.v2-foot-link { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
+button.v2-foot-link:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 /* #4233 안 1 — [프로젝트] 사이드바를 위키와 같은 부품으로(고정 줄 · 이름표 · 카드). 이름표는 최상위 폴더라 누를 수 있다(그 폴더 보드). */
 button.v2-kedit { border: 0; background: none; font-family: inherit; line-height: inherit; cursor: pointer; }
 .v2-pgroup a.n { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mod = join(root, "public/app/lib/builder-flow.js");
+//  BUILDER_FLOW_JS — 다른 빌드(fail-first · 옛 트리)를 물릴 때. 없으면 이 트리의 빌드.
+const mod = process.env.BUILDER_FLOW_JS || join(root, "public/app/lib/builder-flow.js");
 if (!existsSync(mod)) { console.log("builder-flow: 빌드 없음(public/app/lib/builder-flow.js) — 건너뜀"); process.exit(0); }
 const F = await import(mod);
 
@@ -48,6 +49,31 @@ for (const w of [{ view: "resume", id: "a b", how: "edit" }, { view: "app", id: 
 check(true, "R3 짓고 다시 읽으면 같다(왕복)");
 const T = (view, how = "edit") => F.builderTabTitle({ view, id: "m", how });
 check(T("list") === "앱빌더" && T("new") === "앱빌더 · 새 앱" && T("resume") === "앱빌더 · 이어서" && T("app") === "앱빌더 · 고치기" && T("app", "copy") === "앱빌더 · 사본", "R4 탭 이름 다섯");
+
+// ── 앱빌더 사이드바(#4632 원준 2026-10-17 «앱 빌더의 사이드바도 기획해줘») — 고른 카드도 주소에 · 켜진 줄 · 짧은 단계. 엣지 표: 스크래치패드 spec-side-owner.md C ──
+check(JSON.stringify(F.parseBuilderRoute(["builder"], q({ sel: "memo" }))) === JSON.stringify({ view: "list", id: "memo", how: "edit" })
+  && F.parseBuilderRoute(["builder"], q({ sel: "  memo " })).id === "memo" && F.parseBuilderRoute(["builder"], q({ sel: "" })).id === "", "R5 목록의 고른 카드는 ?sel= — 앞뒤 공백은 떼고 빈 값은 고른 것 없음");
+check(F.parseBuilderRoute(["builder", "new"], q({ sel: "x" })).id === "" && F.parseBuilderRoute(["builder", "zzz"], q({ sel: "x" })).id === "", "R6 목록이 아닌 칸 · 모르는 칸에 붙은 sel 은 고른 것이 아니다");
+{
+  const back = (r) => { const [path, qs] = r.replace(/^#\//, "").split("?"); return F.parseBuilderRoute(path.split("/"), q(qs ? Object.fromEntries(new URLSearchParams(qs)) : {})); };
+  check(F.builderRoute("list", "memo") === "#/builder?sel=memo" && back(F.builderRoute("list", "memo")).id === "memo" && back(F.builderRoute("list", "draft:box-1")).id === "draft:box-1"
+    && F.builderRoute("list", "") === "#/builder", "R7 고른 카드 주소 짓기 ↔ 읽기 왕복(앱 · 만들던 앱 «draft:<세션>») · 빈 값은 맨 목록");
+}
+const K = (view, id = "", how = "edit") => F.builderSideKey({ view, id, how });
+check(K("new") === "new" && K("resume", "box-1") === "draft:box-1" && K("app", "memo") === "app:memo" && K("app", "memo", "copy") === "app:memo", "R8 켜질 줄 — 새 앱 · 이어서 = 그 만들던 앱 · 고치기 · 사본 = 그 앱");
+check(K("list") === "all" && K("list", "memo") === "app:memo" && K("list", "draft:box-1") === "draft:box-1", "R9 목록 — 고른 것 없으면 「모든 앱」 · 고른 앱 · 고른 만들던 앱");
+const H = (h) => F.parseBuilderHash(h);
+check(H("#/sources") === null && H("") === null && H(null) === null && H("#/") === null, "R10 앱빌더 주소가 아니면 null");
+check(JSON.stringify(H("#/builder/s/box%201")) === JSON.stringify({ view: "resume", id: "box 1", how: "edit" }) && H("#builder").view === "list"
+  && H("#/builder?sel=a").id === "a" && JSON.stringify(H("#/builder/app/m?how=copy")) === JSON.stringify({ view: "app", id: "m", how: "copy" }), "R11 주소 한 줄 읽기 — 이어서(디코드) · 슬래시 없는 꼴 · 고른 카드 · 사본");
+check(F.draftStageShort("put", true, true) === "다 만듦" && F.draftStageShort("plan", false, false) === "② 기획" && F.draftStageShort("draft", false, false) === "③ 시안"
+  && F.draftStageShort("fix", true, false) === "③ 시안" && F.draftStageShort("draft", true, false) === "③ 시안" && F.draftStageShort("check", true, false) === "④ 확인"
+  && F.draftStageShort("put", true, false) === "⑤ 넣기" && F.draftStageShort("zzz", true, false) === "③ 시안", "R12 사이드바 줄의 짧은 단계 — 긴 글(draftStageText)과 같은 번호");
+{
+  let threw = null; let w1 = null, w2 = null;
+  try { w1 = F.parseBuilderHash("#/builder/s/%"); w2 = F.parseBuilderHash("#/builder/app/%E0%A4%A"); } catch (e) { threw = String(e); }
+  check(threw === null && w1 && w1.view === "resume" && w1.id === "%" && w2 && w2.view === "app" && w2.id === "%E0%A4%A", "R13 틀린 %-꼴에도 던지지 않고 그대로 읽는다(사이드바가 그리기마다 읽는다)", threw || [w1, w2]);
+}
 
 // ── 만들던 앱 상태 글 ──
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정») — 속 단계 draft · fix 는 사람에게 같은 ③.

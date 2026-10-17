@@ -84,21 +84,40 @@ export function builderSessionWhat(label: string | null | undefined): string {
 
 export type BuilderView = 'list' | 'new' | 'resume' | 'app';
 export interface BuilderWhere { view: BuilderView; id: string; how: 'edit' | 'copy' }
-/** 주소 뒤 칸을 읽는다 — 모르는 꼴은 목록. */
+/** 주소 뒤 칸을 읽는다 — 모르는 꼴은 목록. 목록의 id 는 고른 카드(?sel= — 앱 id, 만들던 앱이면 «draft:<세션>»). */
 export function parseBuilderRoute(segs: readonly string[], params?: { get(k: string): string | null } | null): BuilderWhere {
-  const s1 = String(segs[1] || ''), s2 = segs[2] ? decodeURIComponent(String(segs[2])) : '';
+  //  틀린 %-꼴은 그대로 둔다 — 사이드바가 그리기마다 이 주소를 읽는다(parseBuilderHash). 여기서 던지면 사이드바 · 셸의 결이 통째로 멈춘다.
+  const dec = (x: string): string => { try { return decodeURIComponent(x); } catch (_) { return x; } };
+  const s1 = String(segs[1] || ''), s2 = segs[2] ? dec(String(segs[2])) : '';
   const how = params && params.get('how') === 'copy' ? 'copy' : 'edit';
   if (s1 === 'new') return { view: 'new', id: '', how };
   if (s1 === 's' && s2) return { view: 'resume', id: s2, how };
   if (s1 === 'app' && s2) return { view: 'app', id: s2, how };
-  return { view: 'list', id: '', how };
+  return { view: 'list', id: s1 ? '' : String((params && params.get('sel')) || '').trim(), how };
+}
+/** 주소 한 줄(#/builder/…?…)을 읽는다 — 앱빌더 주소가 아니면 null. 사이드바가 지금 탭의 주소로 켜진 줄을 정할 때 쓴다. */
+export function parseBuilderHash(hash: string | null | undefined): BuilderWhere | null {
+  const h = String(hash || '').replace(/^#\/?/, '');
+  const q = h.indexOf('?');
+  const segs = (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
+  if (segs[0] !== 'builder') return null;
+  return parseBuilderRoute(segs, new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''));
 }
 /** 앱빌더 안의 주소를 짓는다. */
 export function builderRoute(view: BuilderView, id = '', how: 'edit' | 'copy' = 'edit'): string {
   if (view === 'new') return '#/builder/new';
   if (view === 'resume') return '#/builder/s/' + encodeURIComponent(id);
   if (view === 'app') return '#/builder/app/' + encodeURIComponent(id) + (how === 'copy' ? '?how=copy' : '');
-  return '#/builder';
+  return id ? '#/builder?sel=' + encodeURIComponent(id) : '#/builder';
+}
+/** 앱빌더 사이드바에서 켜질 줄 — 「모든 앱」('all') · 「새 앱 만들기」('new') · 만들던 앱 하나(«draft:<세션>») · 앱 하나(«app:<앱>»).
+ *  만들던 앱을 이어 만드는 화면이면 그 만들던 앱이, 있는 앱을 고치는(사본 포함) 화면이면 그 앱이 켜진다. 목록에서 고른 카드도 같은 줄을 켠다. */
+export function builderSideKey(where: BuilderWhere): string {
+  if (where.view === 'new') return 'new';
+  if (where.view === 'resume') return 'draft:' + where.id;
+  if (where.view === 'app') return 'app:' + where.id;
+  if (!where.id) return 'all';
+  return where.id.startsWith('draft:') ? where.id : 'app:' + where.id;
 }
 /** 탭 이름 — 목록이면 「앱빌더」, 만드는 중이면 「앱빌더 · 새 앱」 처럼. */
 export function builderTabTitle(where: BuilderWhere): string {
@@ -113,6 +132,14 @@ export function draftStageText(stage: string, hasApp: boolean, done: boolean): s
   if (!hasApp) return stage === 'draft' ? '③ 시안 만드는 중' : '② 세부 기획 정하기';
   const n: Record<string, string> = { draft: '③ 시안 확인 · 수정', fix: '③ 시안 확인 · 수정', check: '④ 확인', put: '⑤ 넣기' };
   return n[stage] || '③ 시안 확인 · 수정';
+}
+
+/** 사이드바 한 줄에 들어가는 짧은 단계 — 「③ 시안」 처럼. 긴 글(draftStageText)은 줄의 툴팁과 가운데 카드가 쓴다. */
+export function draftStageShort(stage: string, hasApp: boolean, done: boolean): string {
+  if (done) return '다 만듦';
+  if (!hasApp) return stage === 'draft' ? '③ 시안' : '② 기획';
+  const n: Record<string, string> = { check: '④ 확인', put: '⑤ 넣기' };
+  return n[stage] || '③ 시안';
 }
 
 /** 이 세션이 앱빌더에서 **새 앱을 만드는** 세션인가 — 이름 «"이름" 앱 제작» · 「새 앱 제작」 · 옛 「앱 만들기 · 」, 또는 그 밖의 이름이어도
