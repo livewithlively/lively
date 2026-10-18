@@ -456,6 +456,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/capabilities/knowledge/write-gate-name.pg-test.mjs
+      # ⑤-m3 지식 fields 부분 갱신 — 잠근 행 위에서 병합·버전 대조·감사가 한 트랜잭션에 묶이는가. 목으로는 jsonb 왕복과
+      #    FOR UPDATE 위의 CAS 가 안 보인다(그 파일 머리말의 사양 엣지 표).
+      - name: 지식 fields 갱신 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/knowledge/set-fields.pg-test.mjs
       # ⑤-n 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
       #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
       - name: 가시성 개인 해제 PG 통합 테스트

@@ -2597,6 +2597,16 @@
   "input_hash": "3f9f3b9278775b20"
  },
  {
+  "name": "knowledge_set_fields",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/fields"
+  ],
+  "input_hash": "a995962e974212ad"
+ },
+ {
   "name": "knowledge_link_category",
   "scope": "memory",
   "mcp": true,

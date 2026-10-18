@@ -36,7 +36,7 @@ const UPDATE_CHANGED_SQL =
 //  섞으면 '누가 본문을 고쳤나'가 다시 흐려진다. 화면에서는 메타 중에서도 눈에 띄게 라벨링한다.
 export const META_OPS = [
   "link_category", "unlink_category", "propose_category", "set_lifecycle", "set_wiki",
-  "move", "set_props_ui", "set_visibility", "link_knowledge", "unlink_knowledge", "link_source", "unlink_source",
+  "move", "set_props_ui", "set_fields", "set_visibility", "link_knowledge", "unlink_knowledge", "link_source", "unlink_source",
 ] as const;
 
 // 이력이 읽는 감사 entity(#1562) — **한 문서의 이력이 두 entity 로 쪼개져 있다.**
