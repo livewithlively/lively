@@ -178,7 +178,7 @@ else {
 `;
 
 /** 하네스 모델 이름 모양 — 별칭(sonnet·opus·haiku)이나 전체 id. `-` 로 시작하면 플래그로 읽히므로 막는다. */
-export const MODEL_RE = /^[a-z0-9][a-z0-9.\-[\]]{1,63}$/i;
+export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
 
 /**
  * (순수) 작업용 claude 인자.

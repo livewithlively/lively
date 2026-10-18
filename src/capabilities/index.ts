@@ -313,7 +313,7 @@ export function resolveToolMeta(
 }
 
 // capability.input(zod raw shape) → JSON Schema(하네스가 tools/list 에서 보는 입력 표면). 변환 실패 시 빈 객체 스키마.
-function toInputSchema(input: unknown): unknown {
+export function toInputSchema(input: unknown): unknown {
   try {
     return zodToJsonSchema(z.object((input ?? {}) as z.ZodRawShape), { $refStrategy: "none" });
   } catch { return { type: "object", properties: {} }; }

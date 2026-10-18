@@ -28,7 +28,8 @@ export const SYSTEM_MAX = 20_000;
 export const LABEL_MAX = 120;
 export const SCHEMA_MAX_BYTES = 32_768;
 export const JOB_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-export const MODEL_RE = /^[a-z0-9][a-z0-9.\-[\]]{1,63}$/i;
+// MCP 입력 스키마 pattern 으로 그대로 나간다 — 클래스 안 [ 를 이스케이프하지 않으면 하네스 요청이 400(mcp-input-schema.test R6).
+export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
 /** 단발 실행 기본 모델 — 설정(app_ai_account.default_model)이 없을 때. 워크스페이스가 바꿀 수 있다. */
 export const DEFAULT_MODEL = "claude-opus-5-5";
 /** 요청이 `wait` 로 기다릴 수 있는 최대(초) — 앱 주소 앞단(CP 라우터)의 위쪽 무응답 30초보다 짧게. */
