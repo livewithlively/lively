@@ -46,6 +46,7 @@ const row: ServerRow = {
   app_id: "srv", function_name: "lvly-app-srv-lively-46e3", cur_version_no: 1, cur_build_key: "b", cur_lambda_version: "3", cur_at: null,
   pub_version_no: null, pub_build_key: null, pub_lambda_version: null, pub_at: null, stopped_at: null, stopped_by: null, stop_kind: null, stop_reason: null,
   lock_until: null, last_error: null, created_at: "", updated_at: "", cur_token_hash: "th-cur", pub_token_hash: null, code_bytes: 0, unused_since: null,
+  health: null, health_checked_at: null,
 };
 
 interface Seen { method: string; rawPath: string; rawQueryString: string; body: Buffer; qual: string }

@@ -259,6 +259,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  #4791 unused_since — 지금 판 · 공개 판 둘 다 서버 선언(web.server)이 없다고 하우스키핑이 처음 본 때. 정책 unused_retire_days(기본 7일)가
   //   지나면 함수 · 로그 그룹 · 이 줄을 걷는다(빌드 기록은 남긴다). 서버 판을 다시 올리면(별칭을 옮기면) 걷는다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS unused_since TIMESTAMPTZ;`);
+  //  #4887 health · health_checked_at — 하우스키핑이 하루 한 번 별칭(cur · pub)이 가리키는 함수 판을 보고 남긴 결과(정상 · 쉬는 판 · 옮김 · 멈춤 · 못 고침)와 그 시각.
+  //   원본 zip 판을 잃었거나 곧 지워질 옛 판을 읽으면 같은 빌드의 지금 zip 으로 새 판을 고정해 별칭을 옮긴다(app-server-watch ⑦).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health JSONB;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health_checked_at TIMESTAMPTZ;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
   await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  #4801 org_app_server_build.zip_version — 빌드가 올린 zip 의 S3 판 번호(버킷이 판 번호를 켰을 때). Lambda 가 코드를 복사하지 않고 이 판을

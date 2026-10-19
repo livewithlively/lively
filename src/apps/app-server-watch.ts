@@ -13,15 +13,22 @@
 //     unused_retire_days(기본 7일)가 지나면 함수 · 로그 그룹 · 함수 줄을 걷는다(빌드 기록은 남긴다). 알림은 보내지 않는다(상태에 retire_at).
 //     멈춘 함수는 표시도 걷기도 하지 않는다 — 지웠다 새로 만들면 자동 멈춤 · 관리자 멈춤이 풀리는 길이 된다(되살린 함수는 멈춤 기록이 없다).
 //  ⑥ 코드 크기를 모르는 함수(#4792) — 별칭이 있는데 code_bytes 가 0 인 줄을 AWS 에서 다시 잰다(틱마다 20개 · 못 잰 줄은 뒤로 보낸다).
+//  ⑦ 별칭 판 상태 점검(#4887 · 결정 상민 2026-10-19) — 함수마다 하루 한 번 cur · pub 이 가리키는 함수 판을 본다. 함수는 우리 S3 의 zip 을 그 판 번호로
+//     바로 읽어서(#4801 REFERENCE) 그 zip 판이 사라지면 한동안 멀쩡하다가 Lambda 가 코드를 다시 다듬을 때 멈춘다(Inactive · 고정한 판은 못 고친다).
+//     그 판이 원본을 잃었거나(저장소에 없음 · 코드 오류) 곧 지워질 옛 zip 판(같은 키를 다시 빌드한 뒤 · 수명 규칙 30일)을 읽으면, 같은 빌드의 지금 zip 으로
+//     새 판을 고정해 별칭을 옮긴다(배포와 같은 길). 알림은 판이 실제로 멈췄을 때와 못 고쳤을 때만(책임자 + 관리자). 쉬는 판(오래 안 불려 Inactive ·
+//     원본 멀쩡)은 건드리지 않는다 — 첫 호출 한 번이 실패하고 AWS 가 스스로 되살린다(그 재시도는 v2-6 앞단 몫 · #4485 메모).
 import { logger } from "../log.js";
 import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, serverDeclOf } from "./app-server-config.js";
 import { autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { publicError, realLambdaApi, withDeps, type LambdaApi } from "./app-server-deploy.js";
+import { codeErrorOf, deployBuildToAliases, isServerChangedError, isServerLockedError, publicError, realLambdaApi, withDeps, type LambdaApi } from "./app-server-deploy.js";
+import { usableBuild } from "./app-server-build.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { s3Delete } from "../net/aws/s3-lite.js";
+import { S3Error, s3Delete, s3Head } from "../net/aws/s3-lite.js";
+import { HttpError } from "../http-error.js";
 import { appServerUsage5m, pruneAppServerUsage } from "./app-server-usage.js";
 import { notifyAppInstaller } from "./notify.js";
 import { listActiveAdminIds } from "../org/store/members.js";
@@ -39,13 +46,18 @@ export interface WatchDeps {
   beforeRetire?: (appId: string) => Promise<void>;
   /** 시험 — 옛 빌드 정리의 zip 지우기(기본 = setServerDepsForTest 의 deleteZip · 운영은 S3). */
   deleteZip?: (key: string) => Promise<void>;
-  /** kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함). 같은 앱 · 같은 종류는 읽기 전까지 한 장. */
-  notify?: (appId: string, title: string, body: string, kind: "stopped" | "stop-failed") => Promise<void>;
+  /**
+   * kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함) · #4887 'code-lost'(멈췄던 판을 다시 올림) · 'code-unfixed'(못 고침 — 상태가 바뀔 때만) ·
+   *  'check-stuck'(점검을 하루 넘게 못 봄). 같은 앱 · 같은 종류는 1분 안에 한 장(notifyAppInstaller 기본 · dedupe_key app-server-<종류>:<앱>).
+   */
+  notify?: (appId: string, title: string, body: string, kind: ServerAlertKind) => Promise<void>;
   now?: () => number;
 }
 
 
-async function defaultNotify(appId: string, title: string, body: string, kind: "stopped" | "stop-failed"): Promise<void> {
+type ServerAlertKind = "stopped" | "stop-failed" | "code-lost" | "code-unfixed" | "check-stuck";
+
+async function defaultNotify(appId: string, title: string, body: string, kind: ServerAlertKind): Promise<void> {
   const app = await getApp(appId).catch(() => null);
   const to = new Set<string>(await listActiveAdminIds().catch(() => [] as string[]));
   if (app?.owner_member) to.add(app.owner_member);
@@ -233,6 +245,216 @@ export async function refreshUnknownCodeBytes(deps: WatchDeps = {}, limit = 20):
   return n;
 }
 
+/**
+ * ⑦ 상태 점검(#4887) — 한 틱에 볼 함수 수 · 다시 올릴 수(코드 올리기 · 판 고정 · 시험 호출이라 느리다) · 주기(상민 2026-10-19 «하루 한 번») ·
+ *  시간 예산(틱은 CP 가 기다리는 요청이다 — 넘으면 새 줄을 시작하지 않고 다음 틱에) · 이만큼 이어서 못 보면(한 시간마다 → 하루) 관리자에게 한 번 알린다.
+ */
+export const HEALTH_CHECK_LIMIT = 20;
+export const HEALTH_REPAIR_LIMIT = 3;
+export const HEALTH_EVERY_HOURS = 24;
+export const HEALTH_BUDGET_MS = 60_000;
+export const HEALTH_STUCK_DEFERS = 24;
+
+/** 함수 판 하나를 본 것 — 상태 · 읽는 zip(REFERENCE · COPY 면 null) · 코드 오류 · 그 zip 판이 저장소에 아직 있나(null = 볼 판 번호가 없음 · 볼 수 없음). */
+export interface VersionProbe {
+  gone: boolean;
+  state?: string;
+  ref?: { S3Bucket?: string; S3Key?: string; S3ObjectVersion?: string } | null;
+  err?: { ErrorCode?: string; Message?: string } | null;
+  source?: boolean | null;
+}
+/** 판정 — move 면 같은 빌드의 지금 zip 으로 새 판을 고정해 옮긴다. broken = 판이 실제로 멈췄다(알림). */
+export type HealthVerdict = { kind: "ok" | "idle" } | { kind: "move"; why: string; broken: boolean };
+
+/**
+ * 별칭 판 하나의 판정(#4887 사양). 판이 없음 · 코드를 못 읽음(Code.Error) · Failed 면 멈춤. 원본 zip 판이 저장소에 없으면 — 이미 멈췄으면(Inactive · Failed ·
+ *  코드 오류) 멈춤, 아직 돌면 조용히 옮긴다(다시 다듬는 때 멈춘다). 빌드의 지금 zip 판과 다른 판을 읽으면(같은 키를 다시 빌드한 뒤 — 옛 판은 수명 규칙으로
+ *  30일 뒤 지워진다) 조용히 옮긴다. 원본이 멀쩡한 Inactive 는 쉬는 판(첫 호출에 AWS 가 스스로 되살린다).
+ *  지금 zip 판을 읽는데 코드 오류여도 고칠 수 있다 — 배포 길은 망가진 판을 재사용하지 않고, 판을 고정할 때마다 토큰을 새로 구워 늘 새 판이 생긴다(v2-6).
+ */
+export function healthVerdict(p: VersionProbe, want: { zipKey: string | null; zipVersion: string | null }): HealthVerdict {
+  if (p.gone) return { kind: "move", why: "함수 판이 없음", broken: true };
+  if (p.source === false) return { kind: "move", why: "읽는 zip 판이 저장소에 없음", broken: p.state === "Inactive" || p.state === "Failed" || !!p.err };
+  if (p.err) return { kind: "move", why: `코드를 못 읽음(${p.err.ErrorCode ?? "오류"})`, broken: true };
+  if (p.state === "Failed") return { kind: "move", why: "함수 판이 Failed", broken: true };
+  if (p.ref && want.zipVersion && (p.ref.S3ObjectVersion !== want.zipVersion || (!!want.zipKey && p.ref.S3Key !== want.zipKey))) return { kind: "move", why: "곧 지워질 옛 zip 판을 읽음", broken: false };
+  if (p.state === "Inactive") return { kind: "idle" };
+  return { kind: "ok" };
+}
+
+const ALIAS_LABEL = { cur: "초안(cur)", pub: "공개(pub)" } as const;
+interface HealthMove { alias: "cur" | "pub"; version: string; buildKey: string | null; versionNo: number | null; why: string; broken: boolean }
+
+//  구성원이 보는 상태 · 알림에 싣는 글 — 원문(저장소 키 · 내부 오류)은 싣지 않고 기록(logger)에만 둔다(#4801 규칙 · 격리 리뷰).
+/** 미룬 까닭 — 짧게 나눈 것만(AWS · 저장소 · 내부). */
+function deferReasonOf(e: unknown): string {
+  if (e instanceof AwsError) return `AWS 조회 실패(${e.code || e.status})`;
+  if (e instanceof S3Error) return `저장소 조회 실패(${e.code})`;
+  return "내부 오류(게이트웨이 기록 참고)";
+}
+/** 다시 올리기 실패 글 — 배포 길의 글(사람이 배포할 때 보는 것과 같다 · AWS 원문은 publicError 로 걷힌다). */
+function repairErrorText(e: unknown): string {
+  if (e instanceof HttpError) return e.message;
+  if (e instanceof AwsError) return publicError(e);
+  return deferReasonOf(e);
+}
+
+/**
+ * ⑦ 별칭 판 상태 점검 — 하루 안에 안 본 함수(걷을 예정 · 잠긴 줄 제외)를 틱마다 limit 개, 시간 예산 안에서(새 줄을 시작할 때 본다).
+ *  옮겨야 할 별칭은 빌드 · 판 번호가 같은 것끼리 한 번에 배포 길(deployBuildToAliases — 잠금 한 번만 · 고를 때 본 판이 아니면 아무것도 안 함)로 옮기고,
+ *  옮긴 판을 다시 봐서 여전히 문제면 고쳐졌다고 적지 않는다. 빌드 zip 이 없으면(usableBuild — 그 빌드를 못 쓰게 적는다) 못 고침.
+ *  알림: 멈췄던 판을 고쳤을 때(code-lost) · 못 고친 상태로 바뀌었을 때(code-unfixed — 같은 판 · 같은 까닭이면 다시 알리지 않는다) · 하루 넘게 못 봤을 때(check-stuck).
+ *  한 틱 다시 올리기 repairMax 번 · AWS · 저장소 일시 오류 · 배포 잠금은 한 시간쯤 뒤 다시(결과에 deferred). 그사이 사람이 별칭을 옮겼으면(raced) 아무것도
+ *  안 쓴다 — 사람의 배포가 결과를 비워 두었고 다음 틱에 새 판을 본다.
+ */
+export async function checkServerHealth(policy: AppServerPolicy, deps: WatchDeps = {}, limit = HEALTH_CHECK_LIMIT, repairMax = HEALTH_REPAIR_LIMIT, budgetMs = HEALTH_BUDGET_MS):
+  Promise<{ checked: number; moved: string[]; unfixed: string[]; deferred: number; raced: number; budget_hit: boolean }> {
+  const out = { checked: 0, moved: [] as string[], unfixed: [] as string[], deferred: 0, raced: 0, budget_hit: false };
+  const env = appServerEnv();
+  if (!env) return out;
+  const api = deps.api ?? realLambdaApi(env.region);
+  const sd = withDeps();
+  const s3 = appBundleS3Config();
+  const clock = deps.now ?? Date.now;
+  const started = clock();
+  //  그 zip 판이 아직 있나 — 시험 고리(headZip) · 운영은 S3 HEAD ?versionId=(박스 역할 GetObjectVersion · ListBucket 이 있어 지운 판은 404). 저장소를 못 보는 배포면 모름.
+  const headVersion = async (key: string, v: string): Promise<boolean | null> => {
+    if (sd.headZip) return !!(await sd.headZip(key, v));
+    if (!s3) return null;
+    return !!(await s3Head(s3, key, { attempts: 1, timeoutMs: 5_000 }, { versionId: v }));
+  };
+  const notify = deps.notify ?? defaultNotify;
+  const defer = async (row: st.ServerRow, why: string): Promise<void> => {
+    out.deferred++;
+    const d = await st.deferServerHealth(row.app_id, why, HEALTH_EVERY_HOURS, HEALTH_STUCK_DEFERS).catch(() => null);
+    if (d?.tell) {
+      await notify(row.app_id, `앱 서버 상태 점검이 하루 넘게 못 돌았습니다 — ${row.app_id}`,
+        `한 시간마다 다시 보지만 ${d.n}번 이어서 못 봤습니다(마지막 까닭: ${why}). 운영자 확인이 필요합니다.`, "check-stuck");
+    }
+  };
+  let repairs = 0;
+  for (const row of await st.serverRowsForHealth(limit, HEALTH_EVERY_HOURS)) {
+    if (clock() - started >= budgetMs) { out.budget_hit = true; break; }   // 남은 줄은 그대로 차례 — 다음 틱
+    try {
+      const probes = new Map<string, VersionProbe>();
+      const probe = async (version: string): Promise<VersionProbe> => {
+        if (!probes.has(version)) {
+          const g = await api.getFunction(row.function_name, version);
+          const ref = g?.Code?.ResolvedS3Object ?? null;
+          probes.set(version, g
+            ? { gone: false, state: g.Configuration.State, ref, err: codeErrorOf(g.Code), source: ref?.S3Key && ref.S3ObjectVersion ? await headVersion(ref.S3Key, ref.S3ObjectVersion) : null }
+            : { gone: true });
+        }
+        return probes.get(version)!;
+      };
+      const prev = row.health ?? {};
+      const health: st.ServerHealth = { checked_at: new Date(clock()).toISOString() };
+      const markUnfixed = (): void => { if (!out.unfixed.includes(row.app_id)) out.unfixed.push(row.app_id); };
+      const seen = { cur: row.cur_lambda_version, pub: row.pub_lambda_version };   // 결과를 쓸 때 별칭이 이 판이어야 한다(점검이 옮기면 옮긴 판)
+      const moves: HealthMove[] = [];
+      for (const alias of ["cur", "pub"] as const) {
+        const version = alias === "cur" ? row.cur_lambda_version : row.pub_lambda_version;
+        if (!version) continue;
+        const buildKey = alias === "cur" ? row.cur_build_key : row.pub_build_key;
+        const b = buildKey ? await st.getServerBuild(row.app_id, buildKey) : null;
+        const v = healthVerdict(await probe(version), { zipKey: b?.zip_key ?? null, zipVersion: b?.zip_version ?? null });
+        const p0 = prev[alias];
+        if (v.kind === "move" && p0?.state === "unfixed" && p0.to === version && (p0.why ?? "").includes(v.why)) {
+          //  지난 점검이 다시 올려 옮긴 판인데 여전히 **같은 까닭으로** 문제 — 날마다 새 판 · 토큰 · 시험 호출 · 알림이 쌓이지 않게 다시 올리지 않는다(알림은
+          //   그때 나갔다 · to 를 남겨 다음 날도 같다 · 사람이 다시 넣으면 setServerAlias 가 결과를 비워 처음부터 본다 · 격리 리뷰). 까닭이 바뀌면(판이 지워짐 ·
+          //   원본 분실 · 옛 판이 됨) 다시 고쳐 본다 — 판이 없는 채로 남지 않게(재검토).
+          health[alias] = { state: "unfixed", version, to: version, why: `${v.why} — 지난번 다시 올린 판도 같은 문제라 다시 올리지 않는다(운영자 확인 · 서버를 다시 넣으면 처음부터 본다)` };
+          markUnfixed();
+        } else if (v.kind === "move") moves.push({ alias, version, buildKey, versionNo: alias === "cur" ? row.cur_version_no : row.pub_version_no, why: v.why, broken: v.broken });
+        else health[alias] = { state: v.kind, version };
+      }
+      //  같은 빌드 · 같은 판 번호끼리 한 번에(별칭마다 판 번호를 지킨다 — setServerAlias 가 version_no 를 그대로 적는다). cur 가 먼저다 — pub 이
+      //   같은 빌드면 배포 길이 cur 의 (새) 판을 재사용한다.
+      const groups = new Map<string, HealthMove[]>();
+      for (const m of moves) { const k = `${m.buildKey ?? ""}|${m.versionNo ?? ""}`; groups.set(k, [...(groups.get(k) ?? []), m]); }
+      const app = groups.size ? await getApp(row.app_id) : null;
+      const title = app ? app.title || app.id : row.app_id;
+      //  못 고침 — 같은 판 · 같은 까닭(same — 바뀌는 꼬리(AWS 요청 번호 등) 앞까지)이면 어제 알렸다(하루마다 같은 알림이 쌓이지 않게 · 격리 리뷰).
+      //   고아(앱 없음)는 알리지 않는다(④ 고아 쓸기가 걷는다). to — 별칭이 이미 새 판으로 옮겨졌을 때(새 판도 문제).
+      const unfixed = async (ms: HealthMove[], text: string, o: { state?: "unfixed" | "failed"; tell?: boolean; same?: string; to?: string } = {}): Promise<void> => {
+        const state = o.state ?? "unfixed";
+        for (const m of ms) health[m.alias] = { state, version: m.version, ...(o.to ? { to: o.to } : {}), why: text };
+        markUnfixed();
+        const key = o.same ?? text;
+        const already = ms.every((m) => { const p = prev[m.alias]; return !!p && p.state === state && p.version === m.version && (p.why ?? "").startsWith(key); });
+        if ((o.tell ?? true) && !already) await notify(row.app_id, `앱 서버 판을 고치지 못했습니다 — ${title}`, `${ms.map((m) => ALIAS_LABEL[m.alias]).join(" · ")} 판이 ${text}.`, "code-unfixed");
+      };
+      let deferWhy: string | null = null;
+      let raced = false;
+      let recheckAny = false;
+      if (groups.size && !app) {
+        await unfixed(moves, `${[...new Set(moves.map((m) => m.why))].join(" · ")} — 앱이 없음(고아 쓸기가 함수를 걷는다)`, { tell: false });
+      } else if (groups.size && repairs + groups.size > repairMax) {
+        deferWhy = "한 틱 다시 올리기 몫이 찼다";
+      } else if (app) {
+        for (const ms of groups.values()) {
+          const [first] = ms as [HealthMove, ...HealthMove[]];
+          const broken = ms.some((m) => m.broken);
+          const why = [...new Set(ms.map((m) => m.why))].join(" · ");
+          const where = ms.map((m) => ALIAS_LABEL[m.alias]).join(" · ");
+          //  멈춘 함수가 AWS 에서 사라졌으면 다시 만들지 않는다 — 새로 만든 함수는 멈춤(동시 실행 0)이 풀린 채다(⑤ 와 같은 까닭 · 격리 리뷰).
+          if (row.stopped_at && (await api.getFunction(row.function_name)) == null) {
+            await unfixed(ms, `${why} — 멈춘 함수가 AWS 에 없어 다시 만들지 않았다(관리자가 다시 켠 뒤 서버를 다시 넣어야 한다)`);
+            continue;
+          }
+          const b = first.buildKey ? await st.getServerBuild(row.app_id, first.buildKey) : null;
+          const usable = b ? await usableBuild(b, sd) : null;
+          if (!usable?.zip_key || !usable.zip_sha256) {
+            await unfixed(ms, `${why} — 다시 올릴 빌드 zip 이 저장소에 없다(서버를 다시 넣으면 다시 빌드한다 — app_server_deploy · 「이대로 넣기」 · 「공개하기」)`);
+            continue;
+          }
+          repairs++;
+          let d: Awaited<ReturnType<typeof deployBuildToAliases>>;
+          try {
+            d = await deployBuildToAliases({
+              app, versionNo: first.versionNo, buildKey: usable.build_key, zipKey: usable.zip_key, zipSha256: usable.zip_sha256, zipBytes: Number(usable.zip_bytes ?? 0),
+              zipVersion: usable.zip_version ?? null, aliases: ms.map((m) => m.alias), policy, lockTries: 1,
+              expect: Object.fromEntries(ms.map((m) => [m.alias, m.version])),
+            }, deps.api ? { api: deps.api } : {});
+          } catch (e) {
+            if (isServerLockedError(e)) { deferWhy = "배포 잠금(다른 배포 중)"; break; }
+            if (isServerChangedError(e)) { raced = true; break; }
+            logger.warn({ err: e, app: row.app_id }, "앱 서버 판 다시 올리기 실패(#4887)");
+            const same = `${why} — 다시 올리다 실패했다`;
+            await unfixed(ms, `${same}(${repairErrorText(e)}) — 서버를 다시 넣어 주세요(app_server_deploy · 「이대로 넣기」)`, { state: "failed", same });
+            continue;
+          }
+          for (const m of ms) seen[m.alias] = d.lambda_version;
+          //  옮긴 판을 한 번 더 본다 — 새 판도 코드를 못 읽으면 고쳐졌다고 적지 않는다. 같은 판이 돌아오면(재사용 길) 새 판이 안 생긴 것이다.
+          //   재확인이 일시 오류면 옮긴 것은 그대로 적고 한 시간쯤 뒤 다시 본다(성공한 배포를 실패로 적지 않게 · 격리 리뷰).
+          let after: HealthVerdict | null = null;
+          let recheck = false;
+          try { after = healthVerdict(await probe(d.lambda_version), { zipKey: usable.zip_key, zipVersion: usable.zip_version ?? null }); }
+          catch (e) { logger.warn({ err: e, app: row.app_id }, "옮긴 앱 서버 판 재확인 실패 — 한 시간쯤 뒤 다시(#4887)"); recheck = true; recheckAny = true; }
+          if (after?.kind === "move") {
+            await unfixed(ms, `${why} — 다시 올렸지만 ${d.lambda_version === first.version ? "새 판이 생기지 않았다" : `새 판도 ${after.why}`}`, { to: d.lambda_version });
+            continue;
+          }
+          for (const m of ms) health[m.alias] = { state: broken ? "repaired" : "moved", version: m.version, to: d.lambda_version, why: recheck ? `${why}(옮긴 판 재확인 못 함 — 곧 다시 본다)` : why };
+          if (!out.moved.includes(row.app_id)) out.moved.push(row.app_id);
+          if (broken) {
+            await notify(row.app_id, `멈췄던 앱 서버 판을 다시 올렸습니다 — ${title}`,
+              `${where} 판이 ${why}(멈춤). 같은 빌드의 zip 으로 새 판(${d.lambda_version})을 올려 옮겼습니다${row.stopped_at ? " — 멈춘 함수라 다시 켜기 전까지는 돌지 않습니다" : " — 앱 주소는 다시 돕니다"}.`, "code-lost");
+          }
+        }
+      }
+      if (raced) { out.raced++; continue; }
+      if (deferWhy) { await defer(row, deferWhy); continue; }
+      if (await st.setServerHealth(row.app_id, health, seen, HEALTH_EVERY_HOURS, recheckAny ? 1 : undefined)) out.checked++;
+      else out.raced++;   // 그사이 사람이 별칭을 옮겼다 — 그 배포가 결과를 비웠고 다음 틱에 새 판을 본다
+    } catch (e) {
+      logger.warn({ err: e, app: row.app_id }, "앱 서버 함수 상태 점검 실패 — 한 시간쯤 뒤 다시(#4887)");
+      await defer(row, `일시 오류 — ${deferReasonOf(e)}`).catch(() => { /* 다음 틱 */ });
+    }
+  }
+  return out;
+}
+
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
   if (!appServerEnv()) return { skipped: "disabled" };
@@ -245,5 +467,7 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.pruned = await pruneServerBuilds(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.usage_pruned = await pruneAppServerUsage(USAGE_KEEP_DAYS).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  //  ⑦ 은 맨 끝 — 다시 올리기가 느릴 수 있어 앞 단계(자동 멈춤 · 정리)를 밀지 않게(시간 예산 안에서만 돈다).
+  out.health = await checkServerHealth(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;
 }

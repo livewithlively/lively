@@ -197,6 +197,9 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       retire: row.unused_since && retireDays != null
         ? { unused_since: row.unused_since, retire_at: new Date(new Date(row.unused_since).getTime() + retireDays * 86_400_000).toISOString(), stopped_kept: !!row.stopped_at }
         : null,
+      //  #4887 하루 한 번 별칭 판 점검 — checked_at(끝낸 시각) · 별칭마다 ok · idle(쉬는 판) · moved(옛 zip 판 · 원본 잃음을 옮김) · repaired(멈췄던 판을
+      //   다시 올림) · unfixed · failed · deferred(이번에 못 본 까닭 · 연속 횟수). 별칭을 옮기면 비고 다음 틱에 다시 본다.
+      health: row.health ?? null,
     } : null,
     builds: builds.map((b) => ({
       build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,
