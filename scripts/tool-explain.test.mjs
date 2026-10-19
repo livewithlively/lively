@@ -98,9 +98,10 @@ else {
     pe(first, "pointerdown", "touch"); await sleep(30);
     pe(tools[1], "pointerdown", "touch"); await sleep(30);
     R.r4 = { described: tools.map((c) => c.getAttribute("aria-describedby")), text: tip() && tip().textContent };
-    pe(last, "pointerdown", "touch"); await sleep(30);
-    pe(first, "pointerdown", "touch"); await sleep(30);
-    const t1 = tip().getBoundingClientRect();
+    //  눌림은 오른쪽 끝에 짧은 설명이 뜬 뒤 그 근처 칩에 긴 설명이 뜰 때 남는다(격리 리뷰 재현 — 왼쪽 칩이면 자리를 새로 잡아 안 보인다).
+    last.setAttribute("data-tip", "짧아요."); pe(last, "pointerdown", "touch"); await sleep(30);
+    tools[2].setAttribute("data-tip", first.getAttribute("data-tip")); pe(tools[2], "pointerdown", "touch"); await sleep(30);
+    const t1 = tip().getBoundingClientRect();   // 단언 대상은 tools[2] 의 긴 설명(첫 칩과 같은 글 — 처음 잰 폭과 같아야 한다)
     R.r4.firstAfterRight = { w: Math.round(t1.width), h: Math.round(t1.height), wRight, fresh: R.r1.hover.w, vw: window.innerWidth, right: Math.round(t1.right) };
     // R5 — 창 안 다른 곳을 누르면 닫힌다 · 창을 닫으면(취소) 설명도 함께 사라진다
     document.querySelector(".v2-consent-t").click(); await sleep(30);
@@ -110,7 +111,6 @@ else {
     if (cancel) cancel.click(); await sleep(30);
     R.r5.closed = { tip: !!document.querySelector(".v2-consent-tip"), ov: !!document.querySelector(".v2-consent-ov") };
     // R3 — 권한 칩 · 빈 칩
-    R.r3 = R.r3 || {};
     R.errors = errors;
     document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
   }
@@ -132,7 +132,7 @@ else {
     check(R.r2 && R.r2.vw <= 520 && R.r2.left >= 12 && R.r2.right <= R.r2.vw - 12 && R.r2.top >= 0 && R.r2.bottom <= R.r2.vh, "R2 좁은 창(헤드리스 최소 폭) · 끝 칩의 설명도 화면 안에 선다(좌우 12px 안쪽)", JSON.stringify(R.r2));
     same(R.r4 && [R.r4.described.filter(Boolean).length, R.r4.described[1], R.r4.text === (T && T.toolExplain(TOOLS[1]))], [1, "v2-consent-tip", true], "R4 칩을 바꿔 누르면 앞 칩의 연결이 끊기고 새 칩만 설명과 이어진다");
     check(R.r4 && R.r4.firstAfterRight.fresh > 0 && Math.abs(R.r4.firstAfterRight.w - R.r4.firstAfterRight.fresh) <= 2 && R.r4.firstAfterRight.right <= R.r4.firstAfterRight.vw - 12,
-      "R4 오른쪽 끝에서 뜬 뒤 같은 칩에서 다시 떠도 처음과 같은 폭이다(지난 자리를 지우고 잰다 · 눌려 좁고 길어지지 않는다)", JSON.stringify(R.r4 && R.r4.firstAfterRight));
+      "R4 오른쪽 끝에서 짧은 설명이 뜬 뒤 옆 칩에 긴 설명이 떠도 처음과 같은 폭 · 오른쪽 12px 안쪽(지난 자리를 지우고 잰다 · 눌려 좁고 길어지지 않는다)", JSON.stringify(R.r4 && R.r4.firstAfterRight));
     same(R.r5 && [R.r5.outside, R.r5.closed.tip, R.r5.closed.ov], [false, false, false], "R5 창 안 다른 곳을 누르면 닫히고 · 창을 닫으면 설명도 함께 사라진다");
     same(R.r3 && R.r3.scope, [["items", false, null]], "R3 권한 칩에는 도구 설명을 붙이지 않는다");
     same(R.errors, [], "R  페이지 예외 없음");
