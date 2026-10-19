@@ -18,8 +18,7 @@ import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
-import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledApp, openAppById, setLaunchpadContext } from './apps.js';
-import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱의 최근 기록 키
+import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledAppOpened, openAppById, setLaunchpadContext } from './apps.js';
 import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
@@ -1641,12 +1640,10 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       const instance = await getAppInstance(decodeURIComponent(segs[1]));
       if (seq !== tab.seq) return;
       setTabAppInstance(tab, instance.id, instance.app_id);
-      //  #4769 설치한 앱도 최근 줄에 선다(원준 2026-10-17 «팀 채널 여러 번 눌렀는데 안 뜸») — 기록은 `i:<앱 id>`, 목록엔 바로 올려 레일이 그린다.
-      if (!instance.app.system?.route) {
-        noteAppUse(installedRecentKey(instance.app_id));
-        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: !!(instance.app.ui && instance.app.ui.pages && instance.app.ui.pages.length), icon: instance.app.icon ?? null, systemRoute: null });
-        drawRail();
-      }
+      //  #4769 설치한 앱도 최근 줄에 선다(원준 2026-10-17 «팀 채널 여러 번 눌렀는데 안 뜸») — 기록은 `i:<앱 id>`, 목록에 올려 레일이 그린다.
+      //  #4878 — 단 **아직 만드는 중인 앱은 안 선다**(원준 2026-10-19 «회의록 앱 아직 만들기 끝나지 않았는데 최근에 연 앱이나 사이드바에 바로 뜨는게 이해가 안가네»):
+      //   앱빌더 ③ 「앱 화면으로 보기」 도 이 주소로 오므로, 인스턴스의 이름 · 그림만 보고 바로 올리지 않고 앱 찾기와 같은 자(apps.ts noteInstalledAppOpened)를 거친다.
+      if (!instance.app.system?.route) void noteInstalledAppOpened(instance.app_id).then((stood) => { if (stood) drawRail(); });
       const renderer = instance.app.system?.renderer;
       if (renderer === 'browser') {
         let lastSaved = String(instance.state?.url || '');

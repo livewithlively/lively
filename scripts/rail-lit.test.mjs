@@ -19,7 +19,7 @@ execFileSync(
    "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
-const { railLitKey } = await import(path.join(out, "lib/rail-lit.js"));
+const { railLitKey, installedRailEligible } = await import(path.join(out, "lib/rail-lit.js"));
 
 let pass = 0, fail = 0;
 const ok  = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -53,6 +53,7 @@ check(litO("s:abc", "section") === "home" && litO("app:projects2", "section", "p
 // ───────────────────────── B. 배선 — 레일·구역 드롭다운이 이 잣대 하나를 쓴다
 const rail = code(readFileSync(path.join(root, "web/v2/rail.ts"), "utf8"));
 const mainTs = code(readFileSync(path.join(root, "web/v2/main.ts"), "utf8"));
+const appsTs = code(readFileSync(path.join(root, "web/v2/apps.ts"), "utf8"));
 const css = code(readFileSync(path.join(root, "public/styles/47-v2-rail.css"), "utf8"));
 
 const fnBody = (name) => { const i = rail.indexOf(`function ${name}(`); return i < 0 ? "" : rail.slice(i, rail.indexOf("\n}\n", i)); };
@@ -65,6 +66,21 @@ check(!/v2-rail-run/.test(rail) && !/v2-rail-run/.test(css),
   "W3 ★ 최근 앱의 '실행 중' 점이 그려지지도, 스타일도 남아 있지 않다");
 check(!/openApps/.test(rail) && !/openAppKeys/.test(mainTs),
   "W4 점을 위해서만 있던 훅(openApps·openAppKeys)도 걷혔다");
+
+// ───────────────────────── P. 설치 앱의 최근 칸 — 만드는 중인 앱은 서지 않는다 (#4878)
+//  원준 2026-10-19: «회의록 앱 아직 만들기 끝나지 않았는데 최근에 연 앱이나 사이드바에 바로 뜨는게 이해가 안가네» · «앱 아이콘까지도 떠».
+//  앱 찾기는 #4632 부터 만드는 중인 앱(lib/builder-flow isAppInProgress)을 앱으로 세우지 않는데, #4769 의 최근 줄 · 레일 최근 칸은 그 자를 안 봤다.
+const inst = (id, over = {}) => ({ id, hasUi: true, systemRoute: null, ...over });
+check(installedRailEligible([inst("meeting-notes", { inProgress: true })]).length === 0,
+  "P1 ★ 만드는 중인 앱(inProgress)은 최근 칸에 설 수 없다 — 회의록 꼴", JSON.stringify(installedRailEligible([inst("meeting-notes", { inProgress: true })])));
+check(installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: true }), inst("deck-edit", { inProgress: false })]).join() === "i:talk,i:deck-edit",
+  "P2 다 만든 앱은 그대로 선다 — inProgress 를 안 주거나 false 면 종전 그대로", installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: true }), inst("deck-edit", { inProgress: false })]).join());
+check(installedRailEligible([inst("x", { hasUi: false }), inst("sources", { systemRoute: "#/sources" })]).length === 0,
+  "P3 화면 없는 앱 · 정본 주소를 가진 빌트인은 종전처럼 빠진다");
+check(/inProgress:\s*isAppInProgress\(/.test(appsTs) && !/export function noteInstalledApp\(/.test(appsTs),
+  "P4 ★ apps.ts 는 설치 앱의 최근 칸 자격을 앱 찾기와 같은 자(isAppInProgress)로 재고, 자를 거치지 않는 noteInstalledApp 은 없다");
+check(!/noteInstalledApp\(/.test(mainTs) && /noteInstalledAppOpened\(/.test(mainTs) && !/noteAppUse\(installedRecentKey\(/.test(mainTs),
+  "P5 ★ main.ts 의 앱 인스턴스 화면(#/i/)은 자를 거친 한 길(noteInstalledAppOpened)로만 최근 기록을 적는다");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
