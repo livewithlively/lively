@@ -28,6 +28,8 @@ import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; //
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
+import { consolePart } from './panes-console.js';   // #4876 곁칸 «콘솔»
+import type { TlItem } from '../timeline.js';
 import { composerMention } from './compose-mention.js';
 import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
 import { createRunPicker } from './run-picker.js';
@@ -54,7 +56,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
+export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
 
 export interface PartCtx {
   id: number;
@@ -83,6 +85,8 @@ export interface PartCtx {
   /** 지금 세션의 **발자취 위젯이 사는 자리**. 세션 화면(대화)이 트랜스크립트를 읽으며 여기를 채운다 —
    *  타임라인 칸은 이 자리를 자기 몸에 들이기만 한다(셸이 세션마다 새로 만들어 준다). */
   trailHost: () => HTMLElement;
+  /** 지금 세션의 발자취 **항목**(시간순 사본) — 그릇은 한 자리뿐이지만 재료는 여러 칸이 읽는다(#4876 콘솔). 세션이 없으면 빈 배열. */
+  trailItems: () => TlItem[];
   /** 그 세션에만 딸리는 값의 저장 열쇠 — 세션이 있으면 세션, 없으면(새 세션 자리) 프로젝트로 떨어진다. */
   memKey: () => string;
   /** **이 곁칸 한 벌의 뿌리**. 부품끼리의 신호는 여기서만 오간다 — `document` 에 뿌리면 열려 있는 **모든
@@ -134,6 +138,8 @@ export interface PartDef {
  *  지난 세션 = 사이드바 아래 줄의 그것, 앱 = 레일의 앱과 같은 그림을 쓴다. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
+  // #4876(원준 2026-10-19) — 첫 탭. 세션을 열고 첫 답 전엔 «알려 줄 것» 점검표, 첫 답 뒤엔 «다녀온 사이 · 남긴 것». 조작(파일 넣기 · 지시 문장 · 멈추기)은 바닥 줄.
+  { type: 'console', name: '콘솔', icon: 'console', hint: '이 세션에 시키는 일을 돕고, 다른 세션에 갔다 돌아왔을 때 그 사이 생긴 것과 남긴 것을 보여 줍니다.' },
   { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   // #4088 후속(2026-09-23) — 세션이 만든 파일이 **프로젝트 폴더 밖**(프로젝트 없는 세션·개인 폴더)에 있으면 여기서 본다. 폰의 «자료로 바로 가기»가 이 칸을 연다.
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
@@ -1597,6 +1603,7 @@ function previewPart(ctx: PartCtx): Part {
 
 export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'sessions') return sessionsPart(ctx);
+  if (type === 'console') return consolePart(ctx);
   if (type === 'archive') return archivePart(ctx);
   if (type === 'web') return webPart(ctx);
   if (type === 'preview') return previewPart(ctx);
