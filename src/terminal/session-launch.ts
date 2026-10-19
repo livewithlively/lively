@@ -101,6 +101,9 @@ export function sessionInputFromBody(headers: Record<string, unknown>, b: Record
  *   · 태스크 여러 개 — 순서 안내 + 1번 본문 + 친 글로 다시 짓는다. · 홈 첫 지시의 첨부를 프로젝트로 옮기면 좌표를 고친다(routes.ts).
  *     둘 다 «다 쳤다» · 에코 맞추기가 빗나가 그린 뒤 8초 유예로 넘어갔다.
  *  넣을 첫 지시가 없으면(빈 · 공백뿐) 싣지 않는다 — 화면은 종전대로 친 글(없으면 없음)을 쓴다. 옛 화면은 이 필드를 모른 채 무시한다.
+ *  ⚠ 셸 하네스 · 로그인 세션(loginFor)엔 서버가 첫 지시를 넣지 않는데(sessions.ts createSession) 여기선 그 조건을 다시 보지 않는다 —
+ *   화면에서 그 길로 첫 지시를 보내는 입구가 없다(run-picker 가 셸을 거르고, spawnSession 은 loginFor 를 안 보낸다). 종전에도 화면은
+ *   친 글을 같은 조건 없이 기억했다. 그 입구가 생기면 이 판정을 createSession 과 한 술어로 묶는다.
  */
 export function launchReply<T>(session: T, input: { initialPrompt?: unknown }): { session: T; initialPrompt?: string } {
   const p = input.initialPrompt;

@@ -53,6 +53,8 @@ import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 �
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, routeSticky, type ShellTab, type TabsApi } from './tabs.js';
+import { rememberFirstPrompt } from './quick-session.js';   // #4906 — 액자에서 만든 세션의 첫 지시를 이 문서의 기억으로 옮긴다
+import { openRouteFirstPrompt } from '../lib/open-route.js';
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
 import { confirmSessionArchive, watchSessionTrash, SESSION_LEFT_EVENT } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
@@ -544,6 +546,10 @@ export async function bootV2(): Promise<void> {
     // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
     //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
     if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
+      //  #4906 — 액자에서 만든 세션이면 그 첫 지시가 함께 온다(액자 문서의 기억은 이 문서가 못 읽는다 — lib/open-route.ts 머리말).
+      //   탭을 열기 **전에** 이 문서의 기억으로 옮긴다 — 그 세션 화면이 마운트될 때 꺼내 쓴다(views.ts takeFirstPrompt).
+      const first = openRouteFirstPrompt(m);
+      if (first) rememberFirstPrompt(first.sid, first.text);
       //  세션은 홈에서 연다 — 세션 목록의 [세션 열기](paintSessAll onOpen)와 같이 구역을 홈으로 옮긴다.
       //   안 옮기면 프로젝트 탭(구역 «프로젝트»)에서 연 세션 옆에 프로젝트 사이드바가 남는다(#3870).
       if (routeKey(m.href).startsWith('s:')) setRailSection('home', { navigate: false });
