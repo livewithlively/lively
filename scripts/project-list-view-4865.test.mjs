@@ -113,5 +113,15 @@ ok(!/pjvProjStatusDot|statusDot/.test(slSrc) && !/pjv-tgroup-head/.test(slSrc), 
 ok(/sessFilterPicks\(/.test(slSrc) && /sessFilterPicks\(/.test(binsSrc), "S12 거르개 줄(기간 · 사람 · 상태)도 한 벌");
 ok(/return 'day';/.test(cut(slSrc, "function loadGroupBy", "\n}")), "S13 리스트 뷰 기본 묶기 = 세션 목록과 같은 «시간»");
 
+// ── S: 첫 진입 «불러오는 중» 줄이기(2026-10-19) — 지난 판 먼저, 새 판은 뒤에서 · 다시 받기는 보관함을 건너뛴다 · 로그아웃이 비운다 ──
+const entry2 = code(cut(read("web/projects/board.ts"), "async function renderProjectV2Board", "function pjvProjectListBoard"));
+const iCacheGet = entry2.indexOf("cacheGet<PjvBoardData>(cacheKey)"), iFetch = entry2.indexOf("api('/api/ui/v6/projects?slim=1')");
+ok(iCacheGet > 0 && iFetch > iCacheGet && /paint\(c\.v\);/.test(entry2), "S14 보관함의 지난 판을 서버보다 먼저 그린다");
+ok(/if \(keepY == null && !fresh && cacheKey\)/.test(entry2) && /const reload = \(\) => renderProjectV2Board\(view, undefined, true\);/.test(entry2), "S15 다시 받기 · 스크롤 지키는 재렌더는 보관함을 건너뛴다");
+ok(/void cacheSet\(cacheKey, fresh_\)/.test(entry2) && /pjvSameBoardData\(shown, fresh_\)\) return;/.test(entry2), "S16 새 판을 보관하고, 지난 판과 같으면 다시 그리지 않는다");
+ok(/if \(shown\) return;/.test(entry2), "S17 새 판을 못 받아도 서 있는 지난 판을 오류로 덮지 않는다");
+ok(/await cacheClear\(\);/.test(cut(code(read("web/core.ts")), "async function logout", "export {")), "S18 로그아웃이 보관함을 비운다");
+ok(/'projects-board:v1:' \+ \(currentWorkspace\(\) \|\| '-'\) \+ ':' \+ meId/.test(entry2 + code(read("web/projects/board.ts"))), "S19 보관함 열쇠는 사람 · 워크스페이스로 가른다");
+
 console.log(`project-list-view-4865: ${pass} pass, ${fails.length} fail`);
 if (fails.length) { for (const f of fails) console.error("  ✗ " + f); process.exit(1); }

@@ -7,7 +7,8 @@
 //   · 위 세 층(브레드크럼 · 뷰 탭 · 툴바)은 보드 것. 「그룹」 단추가 세션 묶기 기준을 고르고, 툴바 검색이 세션 이름 · 프로젝트 이름에 걸린다.
 //   · 재료: 셸과 **같은 함수**(v2/sess-merge.ts mergeSessions)로 라이브 + 기록을 한 목록으로 접는다. 거르기 · 묶기 · 정렬 잣대는 lib/sess-all.ts.
 //  ⚠ 툴바의 프로젝트 전용 단추(하위 태스크 · 컬럼 · 필터 · 완료 · 담당자 · 나)는 이 뷰에서 숨는다(CSS .pjv-sess-mode).
-import { api, el, loadPeopleAvatars, personDisplayName, state } from '../core.js';
+import { api, currentWorkspace, el, loadPeopleAvatars, personDisplayName, state } from '../core.js';
+import { cacheGet, cacheSet } from '../lib/idb-cache.js';   // «지난 판» 먼저 그리기(보드와 같은 보관함)
 import { isMineSess, mergeSessions, sessWork, type Sess } from '../v2/sess-merge.js';
 import { SESS_TABLE_PAGE, sessFilterPicks, sessTable, type SessTableItem, type SessTableUi } from '../v2/sess-table.js';
 import { sessNameFace } from '../lib/sess-name.js';
@@ -51,6 +52,13 @@ const ui: SessTableUi & { period: PastPeriod; owner: string; state: string; by: 
 //  받으면 «불러오는 중» 이 번쩍이고 보던 자리를 잃는다(격리 리뷰 지적 — 종전엔 15초 수명이라 그 뒤 다시 그릴 때마다 받았다).
 let liveP: Promise<any[]> | null = null;
 let cache: Promise<Sess[]> | null = null;
+/** 지금 쥔 판이 다 받아졌으면 그 목록(동기로 바로 그린다 — «불러오는 중» 이 번쩍이지 않게). */
+let ready: { p: Promise<Sess[]>; all: Sess[] } | null = null;
+//  보관함 열쇠 — 보드와 같은 규칙(사람 · 워크스페이스). 모르면 쓰지 않는다.
+const sessCacheKey = (): string | null => {
+  const me = String((state.me && (state.me.userId || state.me.email)) || '');
+  return me ? 'projects-sessions:v1:' + (currentWorkspace() || '-') + ':' + me : null;
+};
 function fetchSessions(): void {
   const lp = api(LIVE_URL).then((d: any) => (d && d.sessions) || []);
   const p = Promise.all([
@@ -60,6 +68,11 @@ function fetchSessions(): void {
   ]).then(([live, logs]) => mergeSessions(live, logs)
     .filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive) && !isCollectSessRow(s.raw) && !isTrySessionRow(s)));
   liveP = lp; cache = p;
+  void p.then((all) => {
+    ready = { p, all };
+    const k = sessCacheKey();
+    if (k) void cacheSet(k, all);
+  }).catch(() => null);
   //  실패한 판은 쥐지 않는다 — 다음에 그릴 때 다시 받는다.
   lp.catch(() => { if (liveP === lp) liveP = null; });
   p.catch(() => { if (cache === p) cache = null; });
@@ -120,11 +133,18 @@ export interface SessListCtx {
 export function pjvSessionListView(ctx: SessListCtx): HTMLElement {
   const host = el('div', { class: 'pjv-sl' });
   if (ui.scopeKey !== ctx.scopeKey) { ui.scopeKey = ctx.scopeKey; ui.shown = PAGE; }
+  const paintWith = (all: Sess[]): void => { const paint = (): void => paintList(host, all, ctx, paint); paint(); };
+  const p = loadSessions();
+  //  이번 판이 이미 다 받아졌으면 바로 그린다(스코프 전환 · 검색 · 묶기처럼 보드가 통째로 다시 그리는 경우).
+  if (ready && ready.p === p) { paintWith(ready.all); return host; }
+  //  아직이면 — 보관함의 «지난 판» 을 먼저 그리고, 새 판이 오면 그것으로 바꿔 그린다(#4865 «불러오는 중» 이 오래 서 있던 것).
   host.append(el('p', { class: 'v2-bin-empty', text: '세션을 불러오는 중' }));
-  loadSessions().then((all) => {
-    const paint = (): void => paintList(host, all, ctx, paint);
-    paint();
-  }).catch((e: any) => {
+  let freshDone = false;
+  const k = sessCacheKey();
+  if (k) void cacheGet<Sess[]>(k).then((c) => { if (!freshDone && c && Array.isArray(c.v)) paintWith(c.v); });
+  p.then((all) => { freshDone = true; paintWith(all); }).catch((e: any) => {
+    freshDone = true;
+    if (host.querySelector('.v2-sa-list')) return;   // 지난 판이 서 있다 — 그 화면을 오류로 덮지 않는다
     host.replaceChildren(el('p', { class: 'v2-bin-empty', text: '세션을 불러오지 못했습니다 — ' + ((e && e.message) || e) }));
   });
   return host;

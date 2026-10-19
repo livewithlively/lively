@@ -19,6 +19,7 @@
 'use strict';
 
 // 토큰·API 베이스·fetch 는 leaf 모듈 web/lib/net.ts 소관(R29a). 401 처리기 배선은 main.ts 최상단(setUnauthorizedHandler).
+import { cacheClear } from './lib/idb-cache.js';   // #4865 — 로그아웃 때 화면 보관함(지난 판)도 비운다
 import { TOKEN_KEY, apiUrl } from './lib/net.js';
 import { state } from './lib/state.js';
 import { logoutRedirectTarget } from './lib/logout-target.js';   // #2536 — 매니지드 로그아웃은 CP 세션까지 끝내야 한다
@@ -76,6 +77,7 @@ async function logout(message?: any) {
   if (desk && typeof desk.logout === 'function') { try { await desk.logout(); } catch (_) { /* 앱 쪽 실패는 아래 웹 로그아웃을 막지 않는다 */ } }
   try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
+  await cacheClear();   // #4865 — 화면이 먼저 그리던 «지난 판»(프로젝트 목록 · 세션)도 같이 비운다
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
   // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
