@@ -103,10 +103,13 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     },
     now: () => Date.now(),
     sessionTie: async (sid, member) => {
-      const { sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
-      const owner = await sessionOwnerOf(sid).catch(() => null);
-      if (!owner) return { owner: null, participant: false };
-      return { owner, participant: owner === member || (await sessionCanEnter(sid, member).catch(() => false)) };
+      const { sessionCanEnter } = await import("../apps/session-apps.js");
+      const { getSessionState } = await import("../sessions/session-state.js");
+      const { normalizeSessionKind } = await import("../sessions/session-kind.js");
+      const st = await getSessionState(sid).catch(() => undefined);
+      const owner = String(st?.owner ?? "").trim() || null;
+      if (!owner) return { owner: null, participant: false, human: false };
+      return { owner, participant: owner === member || (await sessionCanEnter(sid, member).catch(() => false)), human: normalizeSessionKind(st?.kind) === "human" };
     },
     attachedSessions: async (appId, member) => {
       const { sessionsWithApp, sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");

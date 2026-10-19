@@ -10,7 +10,7 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings } from "./plan.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, bootEnvForJob, cancelRunFor, getRunFor, submitRun, syncRun, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -18,7 +18,7 @@ const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await tick(); };
 
 interface World {
-  sessions: Record<string, { owner: string; members: string[] }>;
+  sessions: Record<string, { owner: string; members: string[]; human?: boolean }>;
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
   usedToday: number; inflightCount: number;
@@ -57,7 +57,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async openJobRuns() { return [...w.runs.values()].filter((r) => !ended(r.status) && r.executor === "job"); },
       async staleProxyRuns() { return []; },
       async openRunCountOf(req) { return [...w.runs.values()].filter((r) => r.requester === req && !ended(r.status)).length; },
-      async listAiRuns(f) { return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester)).map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null } as unknown as AiRunSummaryRow)); },
+      async listAiRuns(f) { return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester))).map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null } as unknown as AiRunSummaryRow)); },
       async appConversations() { return []; },
       async insertLlmCall(c) { w.calls.push(c); },
       async tokensUsedTodayByApp() { return w.usedToday; },
@@ -80,7 +80,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     attachedSessions: async () => [],
     subscriptionLoggedIn: async () => true,
     //  세션 tie(가짜): w.sessions[sid] = { owner, members(들어갈 수 있는 사람) } · 모르는 세션은 owner null.
-    sessionTie: async (sid, member) => { const s = w.sessions[sid]; return s ? { owner: s.owner, participant: s.owner === member || s.members.includes(member) } : { owner: null, participant: false }; },
+    sessionTie: async (sid, member) => { const s = w.sessions[sid]; return s ? { owner: s.owner, participant: s.owner === member || s.members.includes(member), human: s.human !== false } : { owner: null, participant: false, human: false }; },
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
   };
@@ -147,15 +147,15 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
 {
   const sub = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
   await fails(submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui" }, sub.d), 403, /초대받은 사람/, "account_unavailable");
-  await fails(submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui", session: "box-alice" }, sub.d), 403, /초대받은 사람/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui", session: "box-alice" }, sub.d), 403, /사람이 보는 세션/, "account_unavailable"); // 아직 모르는 세션 — 막는다
   assert.equal(sub.w.runs.size, 0, "거절은 행을 안 남긴다");
   //  본인은 어느 길이든(상민 2026-10-19) — 세션의 AI(mcp) · 제 토큰(web)도 본인이다. 구독 단발은 작업 컨테이너(bare).
+  sub.w.sessions["box-alice"] = { owner: "alice", members: ["bob"] };   // 사람 세션 · alice 주인 · bob 초대
   const viaMcp = await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "mcp", session: "box-alice" }, sub.d);
   assert.equal(viaMcp.executor, "job"); assert.deepEqual(viaMcp.account, { kind: "subscription", member: "alice" });
   const viaWeb = await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "web" }, sub.d);
   assert.equal(viaWeb.executor, "job");
   //  초대받은 사람 — alice 세션(box-alice)에 bob 이 들어갈 수 있으면, 그 세션에 매인 bob 의 요청은 alice 구독으로 돈다(기록: 보낸 사람 bob · 계정 alice · 자리 alice).
-  sub.w.sessions["box-alice"] = { owner: "alice", members: ["bob"] };
   const invited = await submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui", session: "box-alice" }, sub.d);
   assert.equal(invited.requester, "bob"); assert.deepEqual(invited.account, { kind: "subscription", member: "alice" }); assert.equal(invited.executor, "job");
   assert.equal(sub.w.submitted.at(-1)!.accountMember, "alice", "작업은 구독 주인 alice 의 자리·구독으로");
@@ -164,6 +164,26 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   sub.w.sessions["box-carol"] = { owner: "carol", members: ["bob"] };
   await fails(submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui", session: "box-carol" }, sub.d), 403, /초대받은 사람/, "account_unavailable"); // 남의(carol) 세션은 alice 구독과 무관
   await fails(submitRun({ prompt: "x" }, appUser("dave", "crm"), { source: "app-ui", session: "box-alice" }, sub.d), 403, /초대받은 사람/, "account_unavailable"); // alice 세션이라도 들어갈 수 없는 dave 는 거절
+  //  사람 세션이 아닌 곳(위탁·크론 헤드리스 · 상시 세션)에 매인 요청은 본인 토큰이라도 거절 — 격리 리뷰 blocking 1. 모르는 세션(조회 실패)도 거절.
+  sub.w.sessions["box-task"] = { owner: "alice", members: [], human: false };
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "mcp", session: "box-task" }, sub.d), 403, /사람이 보는 세션/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "mcp", session: "box-unknown" }, sub.d), 403, /사람이 보는 세션/, "account_unavailable");
+  //  구독 주인 alice 는 초대받은 bob 이 보내 제 구독으로 도는 실행을 보고(지시 포함) · 목록에서 보고 · 취소할 수 있다 — 격리 리뷰 non-blocking 3.
+  const seenByOwner = await getRunFor(Number(invited.id), member("alice"), sub.d);
+  assert.equal(seenByOwner.requester, "bob"); assert.equal(seenByOwner.prompt, "x", "구독 주인에게는 지시도 보인다(제 자리에서 돈 것)");
+  const ownerList = await listRunsFor({ app_id: "crm" }, member("alice"), sub.d);
+  assert.ok((ownerList.runs as Array<{ id: number }>).some((r) => r.id === invited.id), "목록에도(가짜 저장소는 requester 만 걸러 — SQL 조건은 store.pg-test T8)");
+  const cancelledByOwner = await cancelRunFor(Number(invited.id), member("alice"), sub.d);
+  assert.ok(sub.w.canceled.includes(Number(invited.job_id)), "구독 주인의 취소가 작업 취소로 간다");
+  assert.equal(cancelledByOwner.id, invited.id);
+  await fails(getRunFor(Number(invited.id), member("carol"), sub.d), 404, undefined, undefined); // 제3자는 404
+  //  targets 도 같은 판정 — bob 이 alice 세션에 매여 물으면 쓸 수 있음, 매임 없이 물으면 못 씀(이유에 초대 문구)
+  const tgTied = await targetsFor(appUser("bob", "crm"), {}, sub.d, { session: "box-alice" });
+  assert.equal((tgTied.account as { available: boolean }).available, true, "targets — 초대받은 사람 · 그 세션");
+  const tgLoose = await targetsFor(appUser("bob", "crm"), {}, sub.d, {});
+  assert.equal((tgLoose.account as { available: boolean }).available, false); assert.match(String((tgLoose.account as { reason: string }).reason), /초대받은 사람/);
+  const tgTask = await targetsFor(appUser("alice", "crm"), {}, sub.d, { session: "box-task" });
+  assert.equal((tgTask.account as { available: boolean }).available, false, "targets — 본인이라도 기계 세션");
   const none = world({ key: null });
   await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-ui" }, none.d), 409, /실행 계정이 없습니다/, "account_unavailable");
   const srv = world();
@@ -171,7 +191,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.equal(srv.w.runs.size, 0);
   const srvOk = await submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), appServer: true }, { source: "web" }, srv.d);
   assert.equal(srvOk.executor, "proxy"); assert.equal(srvOk.requester_kind, "app_server");
-  ok("S5~S7 남의 구독 403 · 본인은 mcp·web 도 됨 · 초대받은 사람은 그 세션에서 됨(자리는 구독 주인) · 계정 없음 409 · 앱 서버 에이전트 501 · 앱 서버 단발은 됨");
+  ok("S5~S7 남의 구독 403 · 본인은 mcp·web 도 됨 · 초대받은 사람은 그 세션에서 됨(자리는 구독 주인 · 주인이 보고 취소) · 기계 세션 403 · targets 같은 판정 · 계정 없음 409 · 앱 서버 에이전트 501 · 앱 서버 단발은 됨");
 }
 
 // ── S25 작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳지 않는다(#4490 규칙) ──

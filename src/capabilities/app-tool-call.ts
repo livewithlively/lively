@@ -19,6 +19,7 @@ import { getApp } from "../org/store/apps.js";
 import { canSeeApp } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { logToolCall } from "../org/policies/tool-log.js";
+import { logger } from "../log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
 
@@ -51,8 +52,14 @@ const appToolCall: Capability = {
     const appId = String(input.app_id ?? "").trim();
     const name = String(input.name ?? "").trim();
     if (!appId || !name) throw new HttpError(400, "app_id 와 name 이 필요합니다");
-    //  세션 id 는 띄운 쪽(라이블리 화면 opts.sessionId)이 본문에 싣는다 — 앱 arguments 의 것이 아니다. 형식만 보고 ctx.session 으로 넘긴다(권한은 소비처가 — #4488 구독 tie).
-    const sid = typeof input.session_id === "string" && SESSION_ID_RE.test(input.session_id) ? input.session_id : undefined;
+    //  세션 id 는 띄운 쪽(라이블리 화면 opts.sessionId)이 본문에 싣는다 — 앱 arguments 의 것이 아니다. 형식을 보고, **그 사람이 들어갈 수 있는 세션일 때만**
+    //  ctx.session 으로 넘긴다 — ctx.session 을 믿는 다른 도구(앱 변경 알림 · 지식 공개범위 · 위탁 출처)에 남의 세션 id 가 새지 않게(격리 리뷰 blocking 2). 아니면 세션 없이.
+    let sid = typeof input.session_id === "string" && SESSION_ID_RE.test(input.session_id) ? input.session_id : undefined;
+    if (sid) {
+      const { requireSessionParticipant } = await import("../apps/session-apps.js");
+      try { await requireSessionParticipant(sid, member.userId); }
+      catch (e) { logger.warn({ session: sid, member: member.userId, err: (e as Error)?.message }, "[app-tool-call] 본문의 세션 id 를 버린다 — 들어갈 수 없는 세션"); sid = undefined; }
+    }
     const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui", sessionId: sid });
     return { app_id: appId, name, result };
   },

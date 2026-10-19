@@ -954,6 +954,11 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
   assert.ok(!("prompt" in admin), "관리자에게도 남의 프롬프트 원문은 안 준다");
   assert.ok(!("result" in admin) && !("output_tail" in admin), "관리자에게도 남의 답·진행 꼬리는 안 준다(상태·오류만)");
   assert.equal(canSeeJob(w.rows.get(id)!, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser), false, "앱 화면 안의 관리자는 관리자로 안 본다");
+  //  #4488 — 초대받은 사람이 보내 내 구독·내 자리로 도는 작업은 그 구독의 주인도 본다(취소도 같은 판정). API 키 작업은 보낸 사람만.
+  const invitedJob = { ...w.rows.get(id)!, requester: "bob", account_kind: "subscription", account_member: "alice" } as AgentJobRow;
+  assert.equal(canSeeJob(invitedJob, { userId: "alice", scopes: ["context"] } as LivelyUser), true, "구독 주인은 본다");
+  assert.equal(canSeeJob(invitedJob, { userId: "carol", scopes: ["context"] } as LivelyUser), false);
+  assert.equal(canSeeJob({ ...invitedJob, account_kind: "api_key", account_member: null } as AgentJobRow, { userId: "alice", scopes: ["context"] } as LivelyUser), false, "API 키 작업은 보낸 사람만");
   const list = await listAgentJobsFor({}, human("bob"), w.deps);
   assert.deepEqual(list.jobs, []);
   const listAdmin = await listAgentJobsFor({}, human("root", ["admin"]), w.deps);

@@ -473,7 +473,9 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
 /** 이 사람(이 앱)이 이 작업을 볼 수 있나 — 관리자는 다 · 앱 화면은 제 앱의 제 작업만 · 사람은 제 작업만. */
 export function canSeeJob(r: AgentJobRow, user: LivelyUser): boolean {
   if (isAdmin(user) && !user.appId) return true;
-  if (r.requester !== memberOf(user)) return false;
+  const me = memberOf(user);
+  //  구독 실행의 주인(account_member)도 본다 — 초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 작업(#4488 · 격리 리뷰). 취소도 같은 판정.
+  if (r.requester !== me && !(r.account_kind === "subscription" && r.account_member === me)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
 }

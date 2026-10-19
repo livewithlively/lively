@@ -98,12 +98,21 @@ export function executorFor(kind: RunKind, account: AiAccount): Executor {
  *  요청이 매인 세션의 주인이 S 이고 보낸 사람이 그 세션에 들어갈 수 있다 · 판정은 chat.send · 앱 붙이기와 같은 requireSessionParticipant 기준).
  *  상민 2026-10-19: «세션의 AI 와 초대된 사람은 내 노트북을 함께 보는 사람이다 — 원준이가 내 마우스로 누르는 게 정책 위반이 아니듯». 종전(10-16)의
  *  «앱 화면(app-ui · app-front)에서 온 요청만» 조건은 뺐다 — 그 조건이 더 막던 길은 S 세션의 AI 와 S 의 토큰뿐이었고 둘 다 S 본인이다.
- *  사람이 아닌 요청자(앱 서버 대리 · 자동화 · 작업 토큰)는 그대로 거절 — 사람 없이 구독이 도는 모양(#4423)이라서.
+ *  사람이 아닌 요청자(앱 서버 대리 · 자동화 · 작업 토큰)는 그대로 거절 — 사람 없이 구독이 도는 모양(#4423)이라서. 사람 세션이 아닌 세션(task · managed · app · login)에
+ *  매인 요청도 거절(tie.human) — 위탁·크론 헤드리스가 S 의 토큰으로 S 구독을 쓰는 길을 막는다.
+ *  한계(알고 가는 것 · 격리 리뷰 non-blocking 4~6): ① tie 는 «그 세션 안에서 눌렀다» 의 증명이 아니라 «세션 id 주장 + 참가자 여부» 다 — 초대받은 사람은
+ *  제 토큰과 세션 헤더만으로 세션 밖 스크립트에서도 S 구독을 쓸 수 있다(초대 = 함께 보는 사람이라는 결정의 범위 안). ② 들어갈 수 있나(sessionCanEnter)는
+ *  끝난 세션도 참으로 본다 — 수명을 두려면 세션 활성 여부를 더 봐야 한다. ③ 세션 없는 S 본인의 토큰(REST)은 사람 세션인지 가릴 길이 없어 본인으로 통과한다.
+ *  ④ 앱 주소(app-front · 새 탭)에서 초대받은 사람이 보내는 것은 세션이 안 실려 거절된다(S 본인은 된다).
  */
-export interface SessionTie { owner: string | null; participant: boolean }
+/** 요청이 매인 세션(ctx.session)의 사실 — 주인 · 보낸 사람이 들어갈 수 있나 · 사람 세션인가(kind human — 위탁·상시·앱·로그인 세션이 아니다). */
+export interface SessionTie { owner: string | null; participant: boolean; human: boolean }
 export function subscriptionRefusal(account: AiAccount, requester: { member: string; kind: "member" | "app_server" }, tie: SessionTie | null | undefined): string | null {
   if (account.kind !== "subscription") return null;
   if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다`;
+  //  세션에 매인 요청인데 그 세션을 모르거나(fail-closed) 사람 세션이 아니면(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인) 구독 주인 본인의 토큰이라도 거절 —
+  //  사람 없이 구독이 도는 모양(#4423 · 격리 리뷰 blocking 1). 세션 헤더가 없는 본인 토큰은 가릴 길이 없어 본인으로 통과한다(머리말 한계 ③).
+  if (tie && (tie.owner === null || !tie.human)) return `이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다`;
   if (requester.member === account.member) return null;
   if (tie && tie.owner === account.member && tie.participant) return null;
   return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다)`;

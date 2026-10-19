@@ -52,16 +52,21 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   const alice = { member: "alice", kind: "member" as const }, bob = { member: "bob", kind: "member" as const };
   assert.equal(subscriptionRefusal({ kind: "api_key" }, bob, null), null, "API 키는 누구 요청이든");
   assert.equal(subscriptionRefusal(sub, alice, null), null, "본인 — 세션 매임 없이(앱 화면 · 도구 · REST 모두)");
-  assert.equal(subscriptionRefusal(sub, alice, { owner: "carol", participant: true }), null, "본인이면 매인 세션이 남의 것이어도 본인");
+  assert.equal(subscriptionRefusal(sub, alice, { owner: "carol", participant: true, human: true }), null, "본인이면 매인 세션이 남의 것이어도 본인");
   assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, null)!, /앱 서버/, "앱 서버 대리는 거절");
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, { owner: "alice", participant: true })!, /앱 서버/);
+  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, { owner: "alice", participant: true, human: true })!, /앱 서버/);
   assert.match(subscriptionRefusal(sub, bob, null)!, /초대받은 사람/, "남 — 세션 매임 없음");
-  assert.equal(subscriptionRefusal(sub, bob, { owner: "alice", participant: true }), null, "남 — alice 세션에 초대받아 그 세션에서 보냄");
-  assert.match(subscriptionRefusal(sub, bob, { owner: "alice", participant: false })!, /초대받은 사람/, "alice 세션이지만 들어갈 수 없는 사람");
-  assert.match(subscriptionRefusal(sub, bob, { owner: "carol", participant: true })!, /초대받은 사람/, "남의(carol) 세션에 초대받은 것은 alice 구독과 무관");
-  assert.match(subscriptionRefusal(sub, bob, { owner: null, participant: false })!, /초대받은 사람/, "없는 세션");
-  assert.match(subscriptionRefusal(sub, bob, { owner: "bob", participant: true })!, /초대받은 사람/, "제 세션에서 남의 구독을 고르면 거절");
-  ok("P7 구독 선 — 본인(어느 길이든) · 구독 주인 세션에 초대받은 사람 · 사람 아니면 거절 · 세션 주인이 구독 주인이어야");
+  assert.equal(subscriptionRefusal(sub, bob, { owner: "alice", participant: true, human: true }), null, "남 — alice 세션에 초대받아 그 세션에서 보냄");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "alice", participant: false, human: true })!, /초대받은 사람/, "alice 세션이지만 들어갈 수 없는 사람");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "carol", participant: true, human: true })!, /초대받은 사람/, "남의(carol) 세션에 초대받은 것은 alice 구독과 무관");
+  assert.match(subscriptionRefusal(sub, bob, { owner: null, participant: false, human: false })!, /사람이 보는 세션/, "없는 세션 — 확인할 수 없으면 막는다");
+  assert.match(subscriptionRefusal(sub, alice, { owner: null, participant: false, human: false })!, /사람이 보는 세션/, "본인이라도 매인 세션을 모르면 막는다(fail-closed)");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "bob", participant: true, human: true })!, /초대받은 사람/, "제 세션에서 남의 구독을 고르면 거절");
+  //  사람 세션이 아닌 곳(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인)에 매인 요청은 본인 토큰이라도 거절 — 격리 리뷰 blocking 1.
+  assert.match(subscriptionRefusal(sub, alice, { owner: "alice", participant: true, human: false })!, /사람이 보는 세션/, "본인 토큰의 위탁 세션");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "alice", participant: true, human: false })!, /사람이 보는 세션/, "초대받은 사람이라도 기계 세션이면");
+  assert.equal(subscriptionRefusal({ kind: "api_key" }, alice, { owner: "alice", participant: true, human: false }), null, "API 키는 기계 세션이어도 된다");
+  ok("P7 구독 선 — 본인(어느 길이든) · 구독 주인 세션에 초대받은 사람 · 사람 아니면 거절 · 세션 주인이 구독 주인이어야 · 기계 세션은 거절");
 }
 
 // ── P8 실행 계정 설정 권한 — 누구의 구독(본인만) × 어느 자리(워크스페이스 = 관리자 · 앱 = 관리자/책임자) ──
