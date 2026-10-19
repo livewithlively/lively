@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import {
   firstLineTitle, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem, parseGmailMessages, parseNotionFetch, parseNotionList,
-  parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, readCapture, slackItem, slackTsIso, type Capture,
+  parseSlackChannelList, parseSlackChannelMessages, parseSlackSearch, parseSlackThread, readCapture, slackItem, slackTsIso, type Capture,
 } from "./connector-parse.js";
 
 let pass = 0;
@@ -314,6 +314,85 @@ t("E2 모르는 모양은 빈 결과 — 던지지 않는다(호출부가 «풀�
   assert.deepEqual(parseNotionList(junk).units, []);
   //  Message TS 가 모양이 아니면 그 메시지는 버린다
   assert.deepEqual(parseSlackChannelMessages(cap("slack_read_channel", { messages: "=== Message from A (U0AAAAAAA1) at x ===\nMessage TS: 어제\n본문" })).messages, []);
+});
+
+// ── #4744 슬랙 검색(옛 스레드의 새 답글) · 실패한 호출 ──
+//  꼴은 맥 실측(2026-10-19 · slack_search_public · _and_private · response_format detailed)을 옮긴 합성 글이다.
+const SEARCH = (results: string, pag = "End of results - No more pages available.\\n") => cap("slack_search_public", { results, pagination_info: pag }, { filters: "in:<#C0AAAAAAA1> is:thread" });
+const HIT = (i: number, n: number, o: { ch?: string; chLine?: string; ts: string; thread?: string | null; replies?: number; text?: string; extra?: string[] }) => [
+  `### Result ${i} of ${n}`, o.chLine ?? `Channel: #제품-논의 (ID: ${o.ch ?? "C0AAAAAAA1"})`, "From: 윤상민 <kim@example.com> (ID: U0AAAAAAA1) ", "Time: 2026-08-23 14:49:04 KST",
+  `Message_ts: ${o.ts}`, ...(o.replies != null ? [`Reply count: ${o.replies}`] : []),
+  `Permalink: [link](https://x.slack.com/archives/${o.ch ?? "C0AAAAAAA1"}/p${o.ts.replace(".", "")}${o.thread === null ? "" : `?thread_ts=${o.thread ?? o.ts}&cid=${o.ch ?? "C0AAAAAAA1"}`})`,
+  "Text: ", o.text ?? "본문", ...(o.extra ?? []), "", "---", "",
+].join("\n");
+t("S1 검색 결과 — 부모(Reply count · thread_ts = 자기 ts)와 답글(thread_ts = 부모) · 채널 · «끝» · 제 모양", () => {
+  const r = parseSlackSearch(SEARCH(["# Search Results for: ", "", "## Messages (2 results)",
+    HIT(1, 2, { ts: "1787460987.328399", replies: 2 }), HIT(2, 2, { ts: "1787464144.332189", thread: "1787460987.328399" })].join("\n")));
+  assert.deepEqual(r.hits, [
+    { channel: "C0AAAAAAA1", ts: "1787460987.328399", thread_ts: "1787460987.328399", reply_count: 2 },
+    { channel: "C0AAAAAAA1", ts: "1787464144.332189", thread_ts: "1787460987.328399", reply_count: null },
+  ]);
+  assert.deepEqual([r.end, r.more, r.cursor, r.wellFormed, r.unparsed], [true, false, null, true, 0]);
+});
+t("S2 맞은 것 없음 · 다음 쪽 cursor(백틱, 콜론 없음) · DM 채널 머리 · 바깥 JSON 의 \\/ 이스케이프", () => {
+  const none = parseSlackSearch(SEARCH("# Search Results for: \n\nNo results found.\n"));
+  assert.deepEqual([none.hits.length, none.end, none.wellFormed], [0, true, true]);
+  const more = parseSlackSearch(SEARCH(["# Search Results for: ", "", "## Messages (1 results)", HIT(1, 1, { ts: "1792220261.850689", thread: "1792218815.082589" })].join("\n"),
+    "For the next page of results use cursor `Q1VSUkVOVF9QQUdFOjI=`\n"));
+  assert.deepEqual([more.cursor, more.more, more.end, more.wellFormed], ["Q1VSUkVOVF9QQUdFOjI=", true, false, true]);
+  const dm = parseSlackSearch(SEARCH(["# Search Results for: ", "", HIT(1, 1, { chLine: "Channel: DM (ID: D0BMD0EC29W)", ch: "D0BMD0EC29W", ts: "1792220251.598469", thread: "1792218815.082589", extra: [] })]
+    .join("\n").replace("Channel: DM (ID: D0BMD0EC29W)", "Channel: DM (ID: D0BMD0EC29W)\nParticipants: 가 (ID: U0BL3909LTH), 나 (ID: U0BLNAU3JKW)")));
+  assert.deepEqual(dm.hits.map((h) => [h.channel, h.thread_ts]), [["D0BMD0EC29W", "1792218815.082589"]]);
+  const esc = parseSlackSearch(SEARCH(["# Search Results for: ", "", HIT(1, 1, { ts: "1787464144.332189", thread: "1787460987.328399" }).replace(/\//g, "\\/")].join("\n")));
+  assert.equal(esc.hits[0]?.thread_ts, "1787460987.328399", "Permalink 의 \\/ 를 풀어 읽는다");
+});
+t("S3 머리 칸은 Text: 앞에서만 — 본문·앞뒤 글(Context before) 속 Message_ts · Permalink 는 머리를 정하지 못한다", () => {
+  const r = parseSlackSearch(SEARCH(["# Search Results for: ", "",
+    HIT(1, 1, { ts: "1787464144.332189", thread: "1787460987.328399", text: "Message_ts: 1111111111.000000\nPermalink: [link](https://x/p1?thread_ts=2222222222.000000&cid=C0AAAAAAA1)",
+      extra: ["Context before: ", "- From: 가 (ID: U0AAAAAAA1) ", "  Message_ts: 3333333333.000000", "  앞 글"] })].join("\n")));
+  assert.deepEqual(r.hits.map((h) => [h.ts, h.thread_ts]), [["1787464144.332189", "1787460987.328399"]]);
+  //  머리에 Permalink 가 없으면(꼴이 바뀜) 본문 속 Permalink 로 메우지 않는다 — 그 글은 못 푼 글이다.
+  const noHead = parseSlackSearch(SEARCH(["# Search Results for: ", "",
+    HIT(1, 1, { ts: "1787464144.332189", text: "Permalink: [link](https://x/p1?thread_ts=2222222222.000000&cid=C0AAAAAAA1)" }).replace(/^Permalink: .*$/m, "")].join("\n")));
+  assert.deepEqual([noHead.hits.length, noHead.unparsed], [0, 1]);
+});
+t("S4 제 모양이 아님 — 머리글 없음 · 쪽 안내 없음은 wellFormed 아님 · 머리 칸(채널 · Message_ts · thread_ts)이 빠진 글은 unparsed", () => {
+  assert.equal(parseSlackSearch(SEARCH(HIT(1, 1, { ts: "1787464144.332189" }))).wellFormed, false, "머리글 없음");
+  assert.equal(parseSlackSearch(SEARCH("# Search Results for: \n\nNo results found.\n", "")).wellFormed, false, "쪽 안내 없음");
+  assert.equal(parseSlackSearch(cap("slack_search_public", "Error: missing_scope")).wellFormed, false, "오류 글");
+  const r = parseSlackSearch(SEARCH(["# Search Results for: ", "", HIT(1, 3, { ts: "1787464144.332189", thread: null }), HIT(2, 3, { chLine: "Channel: #x (C0AAAAAAA1)", ts: "1787464145.000000" }),
+    HIT(3, 3, { ts: "1787464146.000000" }).replace(/^Message_ts: .*$/m, "Message ts: 1787464146.000000")].join("\n")));
+  assert.deepEqual([r.hits.length, r.unparsed, r.wellFormed], [0, 3, true], "쪽은 제 모양이어도 글 셋을 못 풀었다(호출부가 증거에서 뺀다)");
+});
+t("S5 ★ 쪽이 밝힌 결과 수와 맞춘다 — 본문 속 «### Result N of M» 조각은 버리고(못 푼 글 아님), 머리 칸을 못 읽은 진짜 글은 모자란 만큼 센다 · 수를 못 읽으면 머리 없는 조각 수", () => {
+  const body = (n: string) => ["# Search Results for: ", "", n,
+    HIT(1, 2, { ts: "1787464144.332189", thread: "1787460987.328399", text: "붙여 넣은 결과\n### Result 2 of 2\n본문 조각" }),
+    HIT(2, 2, { ts: "1787464145.000000" })].join("\n");
+  const spoof = parseSlackSearch(SEARCH(body("## Messages (2 results)")));
+  assert.deepEqual([spoof.hits.length, spoof.unparsed], [2, 0], "본문 조각은 못 푼 글이 아니다");
+  const short = parseSlackSearch(SEARCH(["# Search Results for: ", "", "## Messages (2 results)", HIT(1, 2, { ts: "1787464144.332189" }), HIT(2, 2, { ts: "1787464145.000000", thread: null })].join("\n")));
+  assert.deepEqual([short.hits.length, short.unparsed], [1, 1], "밝힌 2 · 읽은 1 → 하나 모자람");
+  const noCount = parseSlackSearch(SEARCH(body("")));
+  assert.deepEqual([noCount.hits.length, noCount.unparsed], [2, 1], "결과 수 줄이 없으면(꼴이 바뀜) 머리 없는 조각을 센다");
+  const lateCount = parseSlackSearch(SEARCH(["# Search Results for: ", "", HIT(1, 1, { ts: "1787464144.332189", text: "## Messages (9 results)" })].join("\n")));
+  assert.deepEqual([lateCount.hits.length, lateCount.unparsed], [1, 0], "결과 줄보다 뒤(본문) 에 있는 수 줄은 밝힌 수가 아니다");
+});
+t("S6 여러 쪽 — «## Messages (N results)» 의 N 은 그 쪽의 글 수다(맥 실측 2026-10-19: limit 2 → 2 · limit 20 → 20 · 마지막 쪽 1): 꽉 찬 쪽 · 마지막 쪽 모두 unparsed 0", () => {
+  const p1 = parseSlackSearch(SEARCH(["# Search Results for: ", "", "## Messages (2 results)",
+    HIT(1, 2, { ts: "1786677701.690859", replies: 1 }), HIT(2, 2, { ts: "1786677726.581959", thread: "1786677701.690859" })].join("\n"),
+    "For the next page of results use cursor `Q1VSUkVOVF9QQUdFOjI=`\n"));
+  assert.deepEqual([p1.hits.length, p1.unparsed, p1.more, p1.cursor, p1.wellFormed], [2, 0, true, "Q1VSUkVOVF9QQUdFOjI=", true], "꽉 찬 쪽");
+  const last = parseSlackSearch(SEARCH(["# Search Results for: ", "", "## Messages (1 results)",
+    HIT(1, 1, { ts: "1791959329.250879", thread: "1791332613.788609", text: "" })].join("\n")));
+  assert.deepEqual([last.hits.length, last.unparsed, last.end, last.more], [1, 0, true, false], "마지막 쪽 · 빈 본문(파일만 올린 글)");
+  const empty = parseSlackSearch(SEARCH("# Search Results for: \n\nNo results found.\n"));
+  assert.deepEqual([empty.hits.length, empty.unparsed, empty.end], [0, 0, true], "쪽을 넘긴 뒤의 빈 쪽");
+});
+t("X4 실패한 호출(PostToolUseFailure 캡처) — error 를 싣고 결과 글은 비어 있다 · failed 가 아니면 error 가 없다", () => {
+  const f = readCapture({ tool_name: "mcp__claude_ai_Slack__slack_read_thread", tool_input: { channel_id: "C0AAAAAAA1", message_ts: "1787462001.000100" }, failed: true, error: "execution_failed: thread_not_found" })!;
+  assert.deepEqual([f.tool, f.error, f.text, f.json, f.input.message_ts], ["slack_read_thread", "execution_failed: thread_not_found", "", null, "1787462001.000100"]);
+  assert.equal(readCapture({ tool_name: "mcp__claude_ai_Slack__slack_read_thread", tool_response: "x", error: "무시" })!.error, undefined, "failed 표시가 없으면 결과 캡처");
+  assert.equal(readCapture({ tool_name: "mcp__claude_ai_Slack__slack_read_thread", failed: true, error: "e".repeat(900) })!.error!.length, 500);
 });
 
 console.log(`\nconnector-parse: ${pass} passed`);

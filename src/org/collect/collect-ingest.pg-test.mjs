@@ -6,7 +6,7 @@
 //  «같은 좌표는 한 행(두 번 넣어도 새 행 없음)» · «요청 안 한 채널의 글은 안 들어간다» · «안 읽은 단위는 위치를 안 옮긴다» ·
 //  «원문이 잘렸거나 저장이 실패한 판은 위치를 안 옮긴다» · «담당이 아니면 위치를 못 옮긴다» · «한 실행은 그 주인이 한 번만 처리».
 //  풀기·위치 셈(순수)은 collect-plan.test.ts · connector-parse.test.ts. 여기는 run-ingest(ingestRun)를 실제 표에 대고 부른 뒤
-//  **행을 되읽어** 판정한다(사양 I1~I6 · J2). 원문은 커넥터 결과의 모양(맥 실측)만 옮긴 합성 글이다.
+//  **행을 되읽어** 판정한다(사양 I1~I7 · J2 — I7 은 #4744 옛 스레드의 새 답글). 원문은 커넥터 결과의 모양(맥 실측)만 옮긴 합성 글이다.
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const store = await import(`${DIST}/org/collect/unit-store.js`);
@@ -213,6 +213,53 @@ try {
     const row = (await sources("slack", TEAM, `${CH1}:1787199999`))[0];
     chk("I6c 볼 수 있는 구성원이 아닌 실행은 저장·위치 이동 둘 다 못 한다", p?.stored === 0 && !row && JSON.stringify((await unitBy(CH1)).cursor) === JSON.stringify(before)
       && /볼 수 있는 구성원/.test(p?.reason ?? ""), JSON.stringify({ p, row: !!row }));
+  }
+
+  // ── #4744 1b 옛 스레드의 새 답글 — 계획에 search 가 있는 슬랙 단위 · 검색 답글의 스레드까지 · «없는 스레드»(실패 캡처) ──
+  {
+    const CH12 = "C0CIPG0012", OLD = "1786900000.000100", OLD2 = "1786800000.000500", R0 = "1786950000.000200", R1 = "1787300500.000200", R2 = "1787300600.000300";
+    await store.recordUnitListing({ member: A, app: "slack", connector: "Slack", instance: TEAM, items: [{ ref: CH12, kind: "channel", name: "#c12" }], verified: true });
+    const u12 = await unitBy(CH12);
+    await activate(u12.id);
+    const raw = { mode: "collect", units: [{ ...planned(u12), search: "public" }, { ...planned(u12), id: u12.id + 100000, search: "엉뚱" },
+      { id: 7, app: "notion", instance: NOTION_INST, ref: PAGE, kind: "page", connector: "Notion", since: null, search: "public" }], planned_at: PLANNED };
+    const tp = toIngestPlan("collect", raw);
+    chk("I7a 계획의 search — 슬랙의 아는 값(public · private)만 남고, 모르는 값 · 슬랙 아닌 단위의 칸은 지운다(검색 없는 계획으로 판정)",
+      tp?.units?.[0]?.search === "public" && tp?.units?.[1]?.search === undefined && tp?.units?.[2]?.search === undefined, JSON.stringify(tp?.units));
+    const search = file("Slack", "slack_search_public", {
+      results: ["# Search Results for: ", "", "## Messages (2 results)", ...[[R1, OLD], [R2, OLD2]].flatMap(([ts, th], i) => [`### Result ${i + 1} of 2`, `Channel: #c12 (ID: ${CH12})`,
+        "From: Lee (ID: U0CIPG0002) ", "Time: y", `Message_ts: ${ts}`, `Permalink: [link](https://x.slack.com/archives/${CH12}/p${ts.replace(".", "")}?thread_ts=${th}&cid=${CH12})`, "Text: ", "답글", "", "---", ""])].join("\n"),
+      pagination_info: "End of results - No more pages available.\\n",
+    }, { filters: `in:<#${CH12}> is:thread`, after: "1787000000", sort: "timestamp", sort_dir: "asc", content_types: "messages", response_format: "detailed",
+      include_context: false, include_bots: true, limit: 20 });
+    const gone = { tool_name: "mcp__claude_ai_Slack__slack_read_thread", tool_input: { channel_id: CH12, message_ts: OLD2, limit: 200 }, failed: true, error: "execution_failed: thread_not_found" };
+    const res = await ingestRun({ member: A, plan: { mode: "collect", units: [tp.units[0]], planned_at: PLANNED }, now: NOW,
+      files: [chFile(CH12, [["1787300000.000100", "새 글"]]), search, thFile(CH12, OLD, [R0, R1]), gone] });
+    const p = res.per_unit?.[0];
+    const rows = await sources("slack", TEAM, `${CH12}:`);
+    const reply = rows.find((r) => r.external_id === `${CH12}:${R1}`);
+    const a12 = await unitBy(CH12);
+    chk("I7 옛 스레드 — 검색 답글의 스레드(부모·구간 앞 답글 포함)까지 저장 · 답글의 parent · «없는 스레드» 는 읽을 것 없음 · 다 읽어 위치를 옮긴다 · 실패 캡처는 원문 수에 안 든다",
+      res.state === "done" && res.captures === 3 && p?.complete === true && p?.cursor_moved === true && p?.unparsed === 0
+        && JSON.stringify(p?.old_threads) === JSON.stringify({ found: 2, read: 1 }) && p?.gone_threads === 1 && p?.inserted === 4
+        && rows.map((r) => r.external_id).sort().join(",") === [`${CH12}:${OLD}`, `${CH12}:${R0}`, `${CH12}:${R1}`, `${CH12}:1787300000.000100`].sort().join(",")
+        && reply?.parent_external_id === `${CH12}:${OLD}` && a12.cursor?.ts === `${PLANNED - NOW_MARGIN_SEC}.000000`,
+      JSON.stringify({ res: { ...res, per_unit: undefined }, p, rows: rows.map((r) => r.external_id), cursor: a12.cursor }));
+    const noSearch = await ingestRun({ member: A, plan: { mode: "collect", units: [tp.units[0]], planned_at: PLANNED }, now: NOW + 60_000,
+      files: [chFile(CH12, [["1787300000.000100", "새 글"]])] });
+    chk("I7b 검색을 안 한 판은 못 다 읽음 — 위치 그대로 · «확인 필요»", noSearch.per_unit?.[0]?.complete === false && noSearch.per_unit?.[0]?.reason === "답글 검색을 안 함"
+      && noSearch.partial === true && (await unitBy(CH12)).cursor?.ts === SINCE, JSON.stringify({ p: noSearch.per_unit?.[0], cursor: (await unitBy(CH12)).cursor }));
+    //  검색을 못 쓰는 계정(권한 없음 등 — 실패 캡처만) — 종전 규칙으로 다 읽어 위치를 옮기되, 옛 스레드를 못 찾은 판이라 «확인 필요».
+    const failedSearch = { tool_name: "mcp__claude_ai_Slack__slack_search_public", tool_input: { filters: `in:<#${CH12}> is:thread`, after: "1787000000" },
+      failed: true, error: "execution_failed: missing_scope" };
+    const unsearched = await ingestRun({ member: A, plan: { mode: "collect", units: [tp.units[0]], planned_at: PLANNED }, now: NOW + 120_000,
+      files: [chFile(CH12, [["1787300000.000100", "새 글"]]), failedSearch] });
+    const pu = unsearched.per_unit?.[0];
+    chk("I7c 검색을 못 쓰는 판 — 다 읽음(종전 규칙) · old_threads.unsearched · 판은 «확인 필요»(partial · unsearched 1) · 실패 캡처는 원문 수에 안 든다",
+      pu?.complete === true && pu?.old_threads?.unsearched === true && unsearched.partial === true && unsearched.unsearched === 1 && unsearched.captures === 1
+        && /검색을 못 써/.test(pu?.reason ?? ""),
+      JSON.stringify({ res: { ...unsearched, per_unit: undefined }, pu }));
+    await itemsPool.query(`UPDATE collect_unit SET state='candidate' WHERE id=$1`, [u12.id]);
   }
 
   // ── 확인 읽기 — 이미 모인 자료가 있는 비공개 단위는 목록만으로 열리지 않는다(구성원이 고쳐 쓸 수 있는 원문을 믿지 않는다) ──

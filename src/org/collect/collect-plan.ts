@@ -11,6 +11,10 @@
 //    ① 그 단위의 결과가 전부 제 모양이다 — 오류 문구 · 형식이 바뀐 글이 하나라도 있으면 아니다
 //    ② 계획한 구간 그대로(입력 oldest·latest · query 가 계획과 같다) 첫 쪽부터 «더 없음» 까지 쪽 사슬이 이어진다(cursor · pageToken)
 //    ③ 슬랙: 그 사슬에서 답글이 있는 부모마다 스레드를 끝까지 읽었다 · 지메일: 찾은 스레드를 하나도 빼지 않고 펼쳤다
+//    ④ 슬랙(#4744, 계획에 search 가 있는 단위): 구간의 스레드 글 검색(is:thread)도 첫 쪽부터 끝까지 읽었고, 검색에 나온 답글의 스레드도
+//       끝까지 읽었다 — 채널 읽기는 부모 ts 로 거르므로 «구간 전에 시작한 스레드에 구간 안에 달린 답글» 은 검색으로만 보인다.
+//       예외: 검색을 불렀는데 제 모양인 쪽이 하나도 없고 일시 오류도 아니면(권한 없음 · 꼴이 바뀜) 그 판은 ④ 없이 ①~③ 으로 판정하고
+//       실행 기록에 «검색을 못 씀»(unsearched)으로 남긴다.
 //   하나라도 모자라면 읽은 항목은 저장하되(같은 좌표라 다시 읽어도 행이 안 는다) 시작점은 그대로 두고 다음 판의 구간을 반으로 줄인다
 //   (span — 바쁜 대화는 작은 구간으로 따라잡는다, 1시간까지). 다 읽은 판은 구간을 다시 두 배로 늘린다.
 //   구간 끝이 «지금» 인 판은 위치를 계획 시각 − 60초로 옮긴다 — 글의 시각(특히 메일의 Date 머리)은 보낸 쪽이 정하므로 위치로 쓰지 않는다.
@@ -22,7 +26,7 @@ import {
 } from "./link-plan.js";
 import {
   type Capture, type ListedUnit, type SlackMsg, gmailItem, gmailMailbox, isGmailFetch, isGmailSearch, notionId, notionItem,
-  parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackThread, slackItem,
+  parseGmailMessages, parseNotionFetch, parseNotionList, parseSlackChannelList, parseSlackChannelMessages, parseSlackSearch, parseSlackThread, slackItem,
   type NotionPage,
 } from "./connector-parse.js";
 
@@ -132,6 +136,36 @@ export interface PlannedUnit {
   edited_at?: string | null;
   /** 확인 읽기 단위 — 저장된 글과 맞춰 보기만 한다(저장·위치 이동 없음). */
   proof?: boolean;
+  /**
+   * #4744 슬랙 — 구간의 스레드 글 검색으로 «옛 스레드의 새 답글» 도 읽는다(어느 검색 도구로: public = slack_search_public · private =
+   *  slack_search_public_and_private). 이 칸이 있는 계획만 검색까지 다 읽어야 «다 읽음» 이다(배포 전에 세운 계획은 종전대로 판정한다).
+   */
+  search?: SlackSearchScope;
+}
+
+/** #4744 슬랙 검색 도구 — 공개 채널은 공개 검색(동의 문구가 없는 도구) · 그 밖(비공개 · DM · 그룹 DM · 모르는 종류)은 공개·비공개 검색. */
+export type SlackSearchScope = "public" | "private";
+export const SLACK_SEARCH_TOOL: Readonly<Record<SlackSearchScope, string>> = {
+  public: "slack_search_public", private: "slack_search_public_and_private",
+};
+/** 검색 한 쪽의 글 수 — 도구의 상한이 20이다. */
+export const SLACK_SEARCH_LIMIT = 20;
+
+/** (순수) 슬랙 단위의 검색 범위 — 단위 종류가 공개 채널이면 public, 아니면 private. */
+export function slackSearchScope(kind: string): SlackSearchScope {
+  return kind === "channel" ? "public" : "private";
+}
+
+/**
+ * (순수) #4744 슬랙 단위의 스레드 글 검색 인자 — 지시에 쓰고, 끝난 뒤 입력과 맞춰 본다(같아야 «계획한 구간을 검색했다»).
+ *  after·before 는 유닉스 초(둘 다 포함) — 채널 읽기의 oldest·latest 와 같은 구간이다. 끝이 «지금» 인 판은 before 가 없다.
+ */
+export function slackSearchArgs(u: Pick<PlannedUnit, "ref" | "since" | "until">): { filters: string; after: string; before: string | null } {
+  return {
+    filters: `in:<#${u.ref}> is:thread`,
+    after: String(Math.floor(Number(u.since))),
+    before: u.until != null ? String(Math.floor(Number(u.until))) : null,
+  };
 }
 
 /** 실행 계획(collect_run.plan 에 남는다) — 수집 실행은 단위들과 계획 시각을 싣는다. */
@@ -258,11 +292,22 @@ export function unitInstruction(u: PlannedUnit): string | null {
     if (u.app === "notion") return `· 노션 ${u.kind === "database" ? "데이터베이스" : "페이지"} ${u.ref}(확인 읽기): notion-fetch 를 id="${u.ref}" 로 한 번 부른다.`;
     return null;
   }
-  if (u.app === "slack") return [
-    `· 슬랙 대화 ${u.ref}: slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}"${u.until ? `, latest="${u.until}"` : ""}, limit=100 으로 부른다.`,
-    `  결과 끝에 다음 쪽 cursor 가 있으면 같은 channel_id·oldest${u.until ? "·latest" : ""} 에 cursor 를 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
-    `  읽은 메시지 가운데 «Thread: N replies» 가 붙은 것마다 slack_read_thread 를 channel_id="${u.ref}", message_ts=<그 메시지의 Message TS>, limit=200 으로 부른다(최대 ${THREADS_PER_UNIT}개). 스레드 결과에 다음 쪽 cursor 가 있으면 cursor 를 더해 이어서 부른다.`,
-  ].join("\n");
+  if (u.app === "slack") {
+    const read = [
+      `· 슬랙 대화 ${u.ref}: slack_read_channel 을 channel_id="${u.ref}", oldest="${u.since}"${u.until ? `, latest="${u.until}"` : ""}, limit=100 으로 부른다.`,
+      `  결과 끝에 다음 쪽 cursor 가 있으면 같은 channel_id·oldest${u.until ? "·latest" : ""} 에 cursor 를 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
+    ];
+    if (!u.search) return [...read,
+      `  읽은 메시지 가운데 «Thread: N replies» 가 붙은 것마다 slack_read_thread 를 channel_id="${u.ref}", message_ts=<그 메시지의 Message TS>, limit=200 으로 부른다(최대 ${THREADS_PER_UNIT}개). 스레드 결과에 다음 쪽 cursor 가 있으면 cursor 를 더해 이어서 부른다.`,
+    ].join("\n");
+    //  #4744 옛 스레드의 새 답글 — 구간의 스레드 글을 검색해 답글이 속한 스레드도 읽는다. 맥 실측(2026-10-19, 헤드리스 haiku): 이 지시대로
+    //   공개·비공개 검색을 둘 다 동의 문구에 멈추지 않고 불렀고, 부모가 구간 앞인 스레드를 골라 읽었다.
+    const s = slackSearchArgs(u);
+    return [...read,
+      `  ${SLACK_SEARCH_TOOL[u.search]} 을 filters="${s.filters}", after="${s.after}"${s.before ? `, before="${s.before}"` : ""}, sort="timestamp", sort_dir="asc", content_types="messages", response_format="detailed", include_context=false, include_bots=true, limit=${SLACK_SEARCH_LIMIT} 로 부른다. 결과에 다음 쪽 cursor 가 있으면 같은 인자에 cursor 를 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
+      `  채널 읽기에서 «Thread: N replies» 가 붙은 메시지의 Message TS 와, 검색 결과 가운데 Permalink 의 thread_ts 가 그 결과의 Message_ts 와 다른 것(답글)의 thread_ts 를 모은다. 서로 다른 값마다 slack_read_thread 를 channel_id="${u.ref}", message_ts=<그 값>, limit=200 으로 한 번씩 부른다(최대 ${THREADS_PER_UNIT}개). 스레드 결과에 다음 쪽 cursor 가 있으면 cursor 를 더해 이어서 부른다.`,
+    ].join("\n");
+  }
   if (u.app === "gmail") return [
     `· 지메일 메일함: search_threads 를 query="${gmailQuery(u)}", pageSize=50 으로 부른다. 결과에 nextPageToken 이 있으면 같은 query 에 pageToken 을 더해 다시 부른다(최대 ${PAGES_PER_UNIT}쪽).`,
     `  찾은 스레드마다 하나도 빼지 말고 get_thread 를 threadId=<그 id>, messageFormat="PLAIN_TEXT" 로 부른다.`,
@@ -298,6 +343,7 @@ export function pickUnitsForRun(assigned: readonly AssignedLike[], opts: { now: 
       id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, connector: CLAUDE_COLLECT_APPS[u.app], ...unitWindow(u, opts.now),
       read_at: u.read_at ?? null,
       ...(u.app === "notion" ? { edited_at: typeof u.cursor?.edited_at === "string" ? u.cursor.edited_at : null } : {}),
+      ...(u.app === "slack" ? { search: slackSearchScope(u.kind) } : {}),
     }));
 }
 
@@ -334,10 +380,14 @@ export function collectPrompt(units: readonly PlannedUnit[], links: readonly Pla
   };
 }
 
-/** 턴 상한 — 단위가 많을수록 넉넉히(쪽 넘김 · 스레드 펼침). 지메일은 스레드마다 한 번씩 펼쳐야 해서 더 준다. 확인 읽기는 한 번씩이라 둘. */
-export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0, linkReads = 0): number {
+/**
+ * 턴 상한 — 단위가 많을수록 넉넉히(쪽 넘김 · 스레드 펼침). 지메일은 스레드마다 한 번씩 펼쳐야 해서 더 준다. 확인 읽기는 한 번씩이라 둘.
+ *  #4744 스레드 글 검색을 하는 슬랙 단위는 둘 더(검색 한 쪽 + 옛 스레드 하나 몫).
+ */
+export function collectMaxTurns(units: number, gmailUnits = 0, proofUnits = 0, linkReads = 0, slackSearchUnits = 0): number {
   //  #4744 링크 읽기 몫(최대 12턴)을 더하되 러너의 상한 60 안에서 — 넘는 몫은 없다. 지시에서 링크 읽기가 맨 끝이라 턴이 모자라면 링크가 먼저 빠진다.
-  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40 + proofUnits * 2) + Math.min(12, Math.max(0, Math.floor(linkReads))));
+  return Math.min(60, Math.max(12, 6 + units * 8 + gmailUnits * 40 + proofUnits * 2 + Math.max(0, Math.floor(slackSearchUnits)) * 2)
+    + Math.min(12, Math.max(0, Math.floor(linkReads))));
 }
 
 // ── 확인 읽기의 판정(순수) ───────────────────────────────────────────────────
@@ -440,6 +490,14 @@ export interface UnitHarvest {
    *  (모자란 판의 글 수는 빈도를 낮춰 잡는다). 노션은 구간 대신 «지난번 읽은 뒤 새로 고쳐졌나»(0 · 1)를 지난번 읽은 시각부터 계획 시각까지로 센다.
    */
   sample: ActivitySample | null;
+  /**
+   * #4744 옛 스레드 — 스레드 글 검색에 나온 답글의 스레드 가운데 채널 읽기(구간)에 부모가 없는 것의 수 · 그중 끝까지 읽은 수.
+   *  «없는 스레드»(thread_not_found — 지워진 부모 · 본문 속 가짜 머리)는 읽을 것이 없으므로 gone 으로 세고 «다 읽음» 을 막지 않는다.
+   *  unsearched — 검색을 불렀는데 제 모양인 쪽이 하나도 없다(검색 권한이 없는 계정 · 오류 · 꼴이 바뀜). 그 판은 옛 스레드를 못 찾은 채
+   *  종전(1b 이전) 규칙으로 판정한다 — 검색 하나가 그 사람의 모든 슬랙 단위를 멈추지 않게(격리 리뷰). 실행 기록에 남아 «확인 필요» 로 보인다.
+   */
+  oldThreads: { found: number; read: number; unsearched?: boolean };
+  gone: number;
 }
 
 export interface HarvestOpts {
@@ -447,7 +505,17 @@ export interface HarvestOpts {
   plannedAt?: number | null;
   /** #4744 이 판에 실은 링크 — 그 대상을 읽은 결과는 «링크 읽기» 로 받는다. */
   links?: readonly PlannedLink[];
+  /**
+   * #4744 실패한 호출(PostToolUseFailure 캡처 — error 가 있는 Capture). «없는 스레드»(slack_read_thread 의 thread_not_found) 판정에만 쓴다 —
+   *  그 밖의 실패는 지금처럼 «받은 결과 없음» 이다(못 읽은 스레드로 남아 다 읽음을 막는다).
+   */
+  failed?: readonly Capture[];
 }
+
+/** #4744 «없는 스레드» 오류 — 커넥터 오류 글(맥 실측 2026-10-19: «execution_failed: thread_not_found»). */
+const THREAD_GONE = /\bthread_not_found\b/;
+/** #4744 검색의 일시 오류(다시 부르면 될 수 있는 것) — 그 판을 «검색을 못 씀»(unsearched)으로 굳히지 않는다. */
+const SEARCH_TRANSIENT = /rate.?limit|time[ds]?.?out|internal_error|fatal_error|unavailable|temporar|\b5\d\d\b/i;
 
 /**
  * #4744 링크로 읽은 문서 하나 — 계획 밖 읽기 가운데 «이번 판 글 속 같은 앱 링크» 또는 «계획에 실은 링크» 가 가리키는 것. 저장 단계가
@@ -498,6 +566,51 @@ const sameNum = (got: unknown, want: string | null | undefined): boolean => {
 };
 const sameText = (got: unknown, want: string): boolean => typeof got === "string" && got.replace(/\s+/g, " ").trim() === want;
 
+/** #4744 검색 filters 속 채널 — `in:<#C…>` 가 정확히 하나일 때 그 채널(어느 단위의 검색인지 가린다). 아니면 null. */
+export function searchChannelOf(filters: unknown): string | null {
+  if (typeof filters !== "string") return null;
+  const chs = filters.trim().split(/\s+/).map((t) => /^in:<#([CDG][A-Z0-9]{6,})(?:\|[^>]*)?>$/.exec(t)?.[1]).filter((x): x is string => !!x);
+  return chs.length === 1 ? chs[0] : null;
+}
+
+const truthy = (v: unknown): boolean => v === true || v === "true";
+/** 단위 종류 → 검색의 channel_types 값(모르는 종류는 null — 그때는 channel_types 를 주지 않은 검색만 믿는다). */
+const SEARCH_CHANNEL_TYPE: Readonly<Record<string, string>> = { channel: "public_channel", private_channel: "private_channel", group_dm: "mpim", dm: "im" };
+
+/**
+ * 검색 입력에 와도 되는 칸 — 그 밖의 칸(모르는 거르개 등)이 있으면 계획한 검색이 아니다(아는 것만 허용).
+ *  context_channel_id(그 채널 결과를 앞으로 올림) · max_context_length(앞뒤 글 자르기) · include_context 는 결과 범위를 안 바꾼다(도구 설명 2026-10-19).
+ */
+const SEARCH_ARG_KEYS = new Set(["filters", "after", "before", "sort", "sort_dir", "content_types", "response_format", "include_context", "include_bots",
+  "limit", "cursor", "keywords", "natural_language_query", "channel_types", "only_my_channels", "max_context_length", "context_channel_id"]);
+
+/**
+ * (순수) #4744 검색 입력이 계획과 같은가 — 이것만 «구간의 스레드 글을 다 찾았다» 의 증거가 된다:
+ *  같은 채널의 스레드 글만(filters 낱말이 계획과 같다 · 순서 무관) · 같은 구간(after · before — 끝이 «지금» 이면 before 없음) ·
+ *  시각 오름차순(쪽이 새 글에 밀리지 않는다) · 봇 글 포함 · 낱말로 거르지 않음(keywords · natural_language_query 가 비었다) · 내 채널만이 아님 ·
+ *  메시지만(content_types="messages") · 글을 빼는 channel_types 가 아님 · 쪽 크기 = SLACK_SEARCH_LIMIT · response_format="detailed".
+ *  ⚠ 쪽 크기와 꼴은 «있고 같아야» 한다(도구 기본값에 기대지 않는다) — 쪽 cursor 는 «몇 번째 쪽» 이라(맥 실측: `Q1VSUkVOVF9QQUdFOjI=` =
+ *  CURRENT_PAGE:2) 쪽마다 크기가 다르면 사이의 글을 건너뛴다. 모르는 칸이 있으면 아니다.
+ */
+export function searchInPlan(input: Record<string, unknown>, u: Pick<PlannedUnit, "ref" | "kind" | "since" | "until">): boolean {
+  if (Object.keys(input).some((k) => !SEARCH_ARG_KEYS.has(k))) return false;
+  if (Number(input.limit) !== SLACK_SEARCH_LIMIT || input.response_format !== "detailed") return false;
+  if (String(input.content_types ?? "").replace(/\s+/g, "") !== "messages") return false;
+  const want = slackSearchArgs(u);
+  const toks = typeof input.filters === "string" ? input.filters.trim().split(/\s+/).sort() : [];
+  if (toks.join(" ") !== want.filters.split(" ").sort().join(" ")) return false;
+  if (!sameNum(input.after, want.after) || !sameNum(input.before, want.before)) return false;
+  if (input.sort !== "timestamp" || input.sort_dir !== "asc" || !truthy(input.include_bots) || truthy(input.only_my_channels)) return false;
+  const blank = (v: unknown) => v == null || (typeof v === "string" && !v.trim());
+  const kw = input.keywords;
+  const noWords = blank(kw) || kw === "[]" || (Array.isArray(kw) && kw.every((k) => typeof k === "string" && !k.trim()));
+  if (!noWords || !blank(input.natural_language_query)) return false;
+  const list = (v: unknown) => String(v).split(",").map((s) => s.trim());
+  const type = SEARCH_CHANNEL_TYPE[u.kind];
+  if (input.channel_types != null && !(type && list(input.channel_types).includes(type))) return false;
+  return true;
+}
+
 /** 수집 실행의 원문 → 단위별 자료와 위치. 요청하지 않은 그릇(채널·메일함·페이지)의 항목은 버린다(stray). */
 export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUnit[], opts: HarvestOpts = {}):
   { byUnit: Map<number, UnitHarvest>; stray: number; linked: LinkedRead[]; linkStray: number } {
@@ -506,8 +619,26 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
   //  같은 좌표가 여러 번 나오면 rank 가 큰 쪽(같으면 먼저 본 것)이 남는다.
   const seen = new Map<number, Map<string, { it: RawItem; rank: number }>>();
   for (const u of units) {
-    byUnit.set(u.id, { items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0, stuck: false, sample: null });
+    byUnit.set(u.id, {
+      items: [], reads: 0, complete: false, why: null, nextCursor: null, advanced: false, lastItemAt: null, unparsed: 0, stuck: false, sample: null,
+      oldThreads: { found: 0, read: 0 }, gone: 0,
+    });
     seen.set(u.id, new Map());
+  }
+  //  #4744 «없는 스레드» — 실패한 slack_read_thread 가운데 thread_not_found 인 것(채널:ts). 실패한 검색 호출은 그 단위의 «검색을 못 씀» 셈으로,
+  //   일시 오류(SEARCH_TRANSIENT)면 그 단위를 따로 적는다.
+  const gone = new Set<string>();
+  const searchBad = new Map<number, number>();
+  const searchFlaky = new Set<number>();
+  for (const f of opts.failed ?? []) {
+    const ch = str(f.input.channel_id), ts = str(f.input.message_ts);
+    if (f.tool === "slack_read_thread" && THREAD_GONE.test(String(f.error ?? "")) && ch && ts && SLACK_TS.test(ts)) gone.add(`${ch}:${ts}`);
+    if (f.tool === SLACK_SEARCH_TOOL.public || f.tool === SLACK_SEARCH_TOOL.private) {
+      const ch2 = searchChannelOf(f.input.filters);
+      const u = ch2 ? units.find((x) => x.app === "slack" && x.ref === ch2 && x.search) : undefined;
+      if (u) searchBad.set(u.id, (searchBad.get(u.id) ?? 0) + 1);
+      if (u && SEARCH_TRANSIENT.test(String(f.error ?? ""))) searchFlaky.add(u.id);
+    }
   }
   let stray = 0;
   //  #4744 계획 밖 노션 페이지 · 슬랙 스레드 읽기 — 단위 자료를 다 모은 뒤 링크로 읽은 것인지 가린다(아니면 stray).
@@ -523,6 +654,8 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
   const chanPages = new Map<number, Array<Page & { inWindow: boolean; msgs: SlackMsg[] }>>();
   const threadPages = new Map<number, Array<Page & { ts: string }>>();
   const searchPages = new Map<number, Array<Page & { inPlan: boolean; threads: Array<{ id: string; msgs: string[] }> }>>();
+  //  #4744 슬랙 스레드 글 검색의 쪽 — 쪽마다 «답글이 속한 스레드의 부모 ts».
+  const slackSearchPages = new Map<number, Array<Page & { inPlan: boolean; threads: string[] }>>();
   //  지메일 «펼침» 의 증거는 메시지 단위 — 검색이 준 스레드의 메시지 id 를 펼친 결과가 다 덮어야 그 스레드를 펼친 것이다.
   const fetchedMsgs = new Map<number, Set<string>>();
   const notionOk = new Set<number>();
@@ -563,12 +696,36 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
       good(u, c);
       if (r.parent) put(u, slackItem({ ...r.parent, reply_count: r.parent.reply_count ?? (r.replies.length || null) }, { instance: u.instance, channel: u.ref }), 1);
       //  답글은 부모보다 뒤 · 계획 시각(+5분)보다 앞이어야 한다 — 본문이 «--- Reply» 머리를 흉내 낸 가짜 답글을 거른다.
+      //   #4744 답글은 채널 읽기의 같은 글보다 이긴다(rank 2) — «채널에도 보내기» 한 답글은 채널 읽기에도 부모 표시 없이 나와, 먼저 본 쪽이
+      //   남으면 부모 연결을 잃는다(맥 실측 2026-10-19: 1787467757.012329).
       for (const m of r.replies) {
         const t = Number(m.ts);
         if (!(t > Number(parentTs)) || (plannedAt != null && t > plannedAt + 300)) continue;
-        put(u, slackItem(m, { instance: u.instance, channel: u.ref, threadParentTs: parentTs }), 1);
+        put(u, slackItem(m, { instance: u.instance, channel: u.ref, threadParentTs: parentTs }), 2);
       }
       push(threadPages, u.id, { ts: parentTs, inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end });
+    } else if (c.tool === SLACK_SEARCH_TOOL.public || c.tool === SLACK_SEARCH_TOOL.private) {
+      //  #4744 검색은 계획에 search 가 있는 슬랙 단위의 것만 받는다(옛 계획 · 단위가 아닌 채널의 검색은 지시를 벗어난 것).
+      const u = slackUnit(searchChannelOf(c.input.filters));
+      if (!u || !u.search) { stray++; continue; }
+      const h = byUnit.get(u.id)!;
+      h.reads++;
+      const r = parseSlackSearch(c);
+      //  머리 칸을 못 읽은 글이 섞인 쪽은 증거가 못 된다 — 그 글의 스레드를 조용히 빠뜨리지 않게. 단위의 «못 푼 결과» 로는 세지 않는다
+      //   (검색은 옛 스레드를 찾는 보조 단계다 — 제 모양인 쪽이 하나도 없으면 아래에서 종전 규칙으로 물러선다).
+      if (!r.wellFormed || r.unparsed) {
+        searchBad.set(u.id, (searchBad.get(u.id) ?? 0) + 1);
+        //  결과 글로 온 짧은 오류 문구(결과 머리가 없는 쪽)도 일시 오류면 따로 적는다.
+        if (!r.wellFormed && c.text.length <= 500 && SEARCH_TRANSIENT.test(c.text)) searchFlaky.add(u.id);
+        continue;
+      }
+      //  비공개 범위(비공개 채널 · DM · 그룹 DM) 단위는 공개·비공개 검색만 증거다 — 공개 검색은 그 대화에 빈 결과를 준다(격리 리뷰).
+      const toolOk = c.tool === SLACK_SEARCH_TOOL.private || (u.search === "public" && c.tool === SLACK_SEARCH_TOOL.public);
+      //  읽을 스레드 = 답글(thread_ts ≠ 자기 ts)이 속한 스레드 · 이 채널의 것만(검색 결과 본문은 자료로 넣지 않는다 — parseSlackSearch 머리말).
+      push(slackSearchPages, u.id, {
+        inCursor: str(c.input.cursor), outCursor: r.cursor, end: r.end, inPlan: toolOk && searchInPlan(c.input, u),
+        threads: r.hits.filter((x) => x.channel === u.ref && x.thread_ts !== x.ts).map((x) => x.thread_ts!),
+      });
     } else if (c.tool === "search_threads" || c.tool === "get_thread" || c.tool === "get_message") {
       const msgs = parseGmailMessages(c);
       const box = gmailMailbox(msgs);
@@ -628,11 +785,29 @@ export function harvestUnits(caps: readonly Capture[], units: readonly PlannedUn
     if (u.app === "slack") {
       const pages = chanPages.get(u.id) ?? [];
       const ch = walkChain(pages.filter((p) => p.inWindow));
-      const parents = [...new Set(ch.used.flatMap((p) => p.msgs.filter((m) => (m.reply_count ?? 0) > 0).map((m) => m.ts)))];
+      const inWindow = [...new Set(ch.used.flatMap((p) => p.msgs.filter((m) => (m.reply_count ?? 0) > 0).map((m) => m.ts)))];
+      //  #4744 ④ 스레드 글 검색 — 계획한 검색의 쪽 사슬 · 그 사슬의 답글이 속한 스레드 가운데 채널 읽기에 부모가 없는 것(옛 스레드).
+      const sp = slackSearchPages.get(u.id) ?? [];
+      //  검색을 불렀는데(결과 · 실패) 제 모양인 쪽이 하나도 없으면 «검색을 못 씀» — 그 판은 검색 없이 종전 규칙으로(unsearched).
+      //   단 일시 오류(rate limit · 시간 초과 · 5xx)가 있었으면 굳히지 않는다 — 못 다 읽은 판으로 두고 다음 판이 다시 부른다.
+      const tried = sp.length + (searchBad.get(u.id) ?? 0) > 0;
+      const flaky = !!u.search && sp.length === 0 && searchFlaky.has(u.id);
+      const unsearched = !!u.search && tried && sp.length === 0 && !flaky;
+      const sch = u.search && !unsearched ? walkChain(sp.filter((p) => p.inPlan)) : null;
+      const old = sch ? [...new Set(sch.used.flatMap((p) => p.threads))].filter((ts) => !inWindow.includes(ts)) : [];
       const tp = threadPages.get(u.id) ?? [];
-      const missing = parents.filter((ts) => !walkChain(tp.filter((p) => p.ts === ts)).done);
+      const read = (ts: string) => walkChain(tp.filter((p) => p.ts === ts)).done;
+      const unread = [...inWindow, ...old].filter((ts) => !read(ts));
+      const missing = unread.filter((ts) => !gone.has(`${u.ref}:${ts}`));
+      h.oldThreads = { found: old.length, read: old.filter(read).length, ...(unsearched ? { unsearched: true } : {}) };
+      h.gone = unread.length - missing.length;
       h.why = h.unparsed ? "풀지 못한 결과" : !pages.some((p) => p.inWindow) ? (pages.length ? "계획과 다른 구간을 읽음" : "채널을 안 읽음")
-        : !ch.done ? "쪽을 끝까지 못 읽음" : missing.length ? `스레드 ${missing.length}개를 못 읽음` : null;
+        : !ch.done ? "쪽을 끝까지 못 읽음"
+        : u.search && !tried ? "답글 검색을 안 함"
+        : flaky ? "답글 검색 일시 오류"
+        : sch && !sp.some((p) => p.inPlan) ? "계획과 다른 답글 검색"
+        : sch && !sch.done ? "답글 검색 쪽을 끝까지 못 읽음"
+        : missing.length ? `스레드 ${missing.length}개를 못 읽음` : null;
     } else if (u.app === "gmail") {
       const pages = searchPages.get(u.id) ?? [];
       const ch = walkChain(pages.filter((p) => p.inPlan));
