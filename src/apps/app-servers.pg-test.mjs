@@ -640,6 +640,9 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   //  #4801 함수가 남은 동안은 그 함수가 읽는 zip · 빌드 기록도 남는다(함수가 우리 S3 를 바로 읽는다 — 지우면 나중에 그 함수가 멈춘다).
   chk("R4a 함수를 못 지우면 함수 줄 · 빌드 기록 · zip 을 남긴다(#4801 — 함수가 그 zip 을 읽는다)", fns.has(fnO) && !!kept && keptBuilds.length > 0
     && zk.length > 0 && zk.every((k) => zips.has(k) && !deletedZips.includes(k)), JSON.stringify({ kept: !!kept, builds: keptBuilds.length, zk }));
+  //  #4485 — 함수를 못 지운 동안(pending)엔 그 함수가 쓰는 토큰도 살아 있다(앱 행이 없으니 쓸 수는 없다) · 고아 쓸기가 함수를 지울 때 함께 거둔다(R4d).
+  const tkPending = await fnTokens("orph");
+  chk("R4e 함수가 남은 동안엔 그 함수의 토큰도 남는다(지우기가 미뤄진 창)", tkPending.some((t) => !t.revoked_at), JSON.stringify(tkPending));
   //  그 사이 하우스키핑이 돌아도(함수 지우기는 또 실패) 옛 빌드 정리가 그 zip 을 고르지 않는다(앱은 없지만 함수 줄이 남았다).
   await q(`UPDATE org_app_server_build SET started_at = now() - interval '40 days' WHERE app_id='orph'`);
   const hk0 = await runAppServerHousekeeping({ api, usage: async () => new Map(), notify: async () => {} });
@@ -650,6 +653,23 @@ const waitFor = async (pred, ms = 5000) => { const until = Date.now() + ms; for 
   chk("R4b 하우스키핑이 앱 없는 함수 줄을 다시 지운다(함수 · 로그 그룹 · 줄) — 그 뒤에 빌드 기록 · zip 도 걷는다", !fns.has(fnO) && !(await rowOf("orph")) && hk.orphans === 1
     && calls("deleteLogGroup").some((x) => x[1] === `/aws/lambda/${fnO}`)
     && (await q(`SELECT 1 FROM org_app_server_build WHERE app_id='orph'`)).length === 0 && zk.every((k) => deletedZips.includes(k)), JSON.stringify(hk));
+  const tkSwept = await fnTokens("orph");
+  chk("R4d ★ 고아 쓸기가 함수를 지우며 그 앱의 함수 토큰도 회수(#4485 · 합치기 증분 리뷰)", tkSwept.length > 0 && tkSwept.every((t) => !!t.revoked_at), JSON.stringify(tkSwept));
+}
+
+// G3b ★ 토큰 지문이 없는 cur 판(v2-5 때 올린 판 흉내)은 같은 빌드 · 같은 설정이어도 재사용하지 않는다 — 새 판 · 새 토큰 지문(합치기 증분 리뷰:
+//  이 조건을 지키는 DB 시험이 없었다 · 지우면 지문 없는 판에 별칭이 남아 앱 주소가 503 app_server_outdated)
+{
+  await call("app_save", { files: twin("g3b") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "g3b", wait_s: 120 }, alice, aliceCtx);
+  const before = await rowOf("g3b");
+  await q(`UPDATE org_app_server SET cur_token_hash = NULL WHERE app_id='g3b'`);
+  const d = await call("app_server_deploy", { app_id: "g3b", wait_s: 120 }, alice, aliceCtx);
+  const after = await rowOf("g3b");
+  chk("G3b ★ 토큰 지문 없는 cur 판은 재사용하지 않는다 — 새 판 · 새 토큰 지문", d.status === "deployed" && !!before?.cur_lambda_version
+    && after?.cur_lambda_version !== before.cur_lambda_version && !!after?.cur_token_hash && after.cur_token_hash !== before.cur_token_hash,
+    JSON.stringify({ status: d.status, error: d.error, before: before?.cur_lambda_version, after: after?.cur_lambda_version, hash: !!after?.cur_token_hash }));
+  await call("org_app_remove", { app_id: "g3b" }, boss);
 }
 
 // R5 상한을 바꾸면 같은 코드도 새 설정의 함수 판으로(«다음 배포부터»)
