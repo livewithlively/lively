@@ -132,6 +132,8 @@ const appServerStatus: Capability = {
   title: "앱 서버 상태",
   description: "앱 서버의 상태 — 서버 선언(web.server) · 지금 판의 빌드(빌드 중이면 지금 하는 일 · 실패면 단계와 까닭) · 함수(cur = 고친 사람이 보는 판 · pub = 공개 판이 가리키는 판) · " +
     "멈춤 여부 · code_mb(이 함수의 코드 저장) · retire(지금 판 · 공개 판 둘 다 web.server 를 뺐으면 함수를 걷는 날 retire_at — 서버 판을 다시 올리면 걷힌다) · " +
+    "health(하루 한 번 점검 — checked_at · 별칭마다 ok · idle(쉬는 판) · moved(곧 지워질 옛 zip 판 · 원본 잃은 판을 같은 빌드로 옮김) · repaired(멈췄던 판을 다시 올림) · " +
+    "unfixed · failed(못 고침 — 서버를 다시 넣으면 다시 빌드) · deferred(이번에 못 본 까닭 · 연속 횟수)) · " +
     "최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
   scope: null,
   input: { app_id: z.string() },

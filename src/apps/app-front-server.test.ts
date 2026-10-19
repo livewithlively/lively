@@ -29,7 +29,8 @@ const ident = (o: Partial<{ sub: string; var: "pub" | "draft"; app: string }> = 
 const row = (o: Partial<ServerRow> = {}): ServerRow => ({
   app_id: "notes", function_name: "lvly-app-notes-lively-46e3", cur_version_no: 3, cur_build_key: "b", cur_lambda_version: "7", cur_at: null,
   pub_version_no: 2, pub_build_key: "a", pub_lambda_version: "5", pub_at: null, stopped_at: null, stopped_by: null, stop_kind: null, stop_reason: null,
-  lock_until: null, last_error: null, created_at: "", updated_at: "", cur_token_hash: "th-cur", pub_token_hash: "th-pub", code_bytes: 0, unused_since: null, ...o,
+  lock_until: null, last_error: null, created_at: "", updated_at: "", cur_token_hash: "th-cur", pub_token_hash: "th-pub", code_bytes: 0, unused_since: null,
+  health: null, health_checked_at: null, ...o,
 });
 
 type Script = { kind: "ok"; prelude: unknown; body: Array<string | { wait: number }>; report?: string; errorCode?: string } | { kind: "err"; payload: string; report?: string } | { kind: "throw"; e: unknown };

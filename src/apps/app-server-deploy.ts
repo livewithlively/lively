@@ -30,7 +30,7 @@ import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
 import * as lam from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { s3Head } from "../net/aws/s3-lite.js";
+import { S3Error, s3Head } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { getApp, getAppVersionBundle } from "../org/store/apps.js";
 
@@ -109,6 +109,19 @@ export function appServerUnavailable(env: NodeJS.ProcessEnv = process.env): stri
 
 export const sleepDefault = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const lockedMsg = "이 앱의 서버를 다른 요청이 지금 올리고 있습니다 — 잠시 뒤 다시 하세요";
+/** 배포 잠금을 못 잡아 실패했나(#4887 — 상태 점검은 그 앱을 다음에 다시 본다 · 고치기 실패로 알리지 않는다). */
+export const isServerLockedError = (e: unknown): boolean => e instanceof HttpError && e.status === 409 && e.message === lockedMsg;
+const changedMsg = "그사이 이 앱의 서버 별칭이 옮겨졌습니다 — 다시 보고 하세요";
+/** expect 와 지금 별칭이 달라 아무것도 안 했나(#4887 — 점검이 본 뒤 사람이 배포 · 공개했다 · 되돌리지 않고 다음에 다시 본다). */
+export const isServerChangedError = (e: unknown): boolean => e instanceof HttpError && e.status === 409 && e.message === changedMsg;
+/**
+ * 함수 판이 코드를 못 읽나(GetFunction Code.Error · #4887) — 오류 코드나 글이 있을 때만 오류로 본다. 빈 칸을 «코드를 못 읽음» 으로 읽으면 건강한 판을
+ *  날마다 다시 올린다(재사용 길도 거른다 — 격리 리뷰).
+ */
+export function codeErrorOf(code: { Error?: { ErrorCode?: string; Message?: string } | null } | null | undefined): { ErrorCode?: string; Message?: string } | null {
+  const e = code?.Error;
+  return e && (e.ErrorCode || e.Message) ? e : null;
+}
 
 /**
  * 구성원에게 보일 오류 글 — AWS 오류 원문에는 플랫폼 계정 번호 · 박스 역할 · 인스턴스 이름이 들어갈 수 있다(AccessDenied 의 «User: arn:aws:sts::…»).
@@ -258,6 +271,13 @@ export async function deployBuildToAliases(i: {
   /** zip 의 S3 판 번호(#4801) — REFERENCE 면 함수가 이 판을 바로 읽는다. 모르면(옛 빌드 · 판 번호 없는 저장소) null — Lambda 가 지금 판으로 푼다. */
   zipVersion: string | null;
   aliases: Array<"cur" | "pub">; policy: AppServerPolicy;
+  /** 배포 잠금을 몇 번 잡아 볼까(기본 30 — 2초 간격 · 약 1분). 하우스키핑의 상태 점검(#4887)은 1 — 잠겨 있으면 기다리지 않고 다음 틱에. */
+  lockTries?: number;
+  /**
+   * 잠금을 잡은 뒤 별칭이 이 판이어야 한다(#4887 상태 점검 — 고를 때 본 판). 다르면 그사이 사람이 배포 · 공개 · 되돌리기를 끝낸 것이다 —
+   *  아무것도 안 하고 409(isServerChangedError). 낡은 판단으로 사람이 방금 옮긴 별칭을 되돌리지 않게(격리 리뷰).
+   */
+  expect?: Partial<Record<"cur" | "pub", string | null>>;
 }, deps0: ServerDeps = {}): Promise<DeployResult> {
   const deps = withDeps(deps0);
   const env = deps.env ?? appServerEnv();
@@ -283,7 +303,8 @@ export async function deployBuildToAliases(i: {
   await claimRow();
   const sleep = deps.sleep ?? sleepDefault;
   let locked = false;
-  for (let n = 0; n < 30 && !locked; n++) {
+  const lockTries = Math.max(1, i.lockTries ?? 30);
+  for (let n = 0; n < lockTries && !locked; n++) {
     locked = await st.lockServer(i.app.id, 15 * 60);
     if (locked) break;
     //  줄이 사라졌으면(그 사이 하우스키핑이 서버 선언을 뺀 앱의 함수를 걷었다 · #4791) 잠금 다툼이 아니다 — 줄을 다시 잡는다(격리 리뷰).
@@ -292,9 +313,18 @@ export async function deployBuildToAliases(i: {
       if (!(await getApp(i.app.id))) throw new HttpError(404, `앱 없음: ${i.app.id} — 배포를 기다리는 사이 지워졌습니다`);
       await claimRow(); continue;
     }
-    await sleep(deps.pollMs ?? 2000);
+    if (n < lockTries - 1) await sleep(deps.pollMs ?? 2000);   // 마지막 시도 뒤엔 기다리지 않는다
   }
   if (!locked) throw new HttpError(409, lockedMsg);
+  if (i.expect) {
+    //  아래 try 밖이라 finally 가 잠금을 안 푼다 — 다시 읽기가 실패해도 · 달라도 여기서 푼다(15분 잠금이 사람의 배포를 막지 않게 · 격리 리뷰).
+    let moved: boolean;
+    try {
+      const now = await st.getServerRow(i.app.id);
+      moved = (Object.entries(i.expect) as Array<["cur" | "pub", string | null]>).some(([a, v]) => (a === "cur" ? now?.cur_lambda_version : now?.pub_lambda_version) !== v);
+    } catch (e) { await st.unlockServer(i.app.id).catch(() => { /* 저절로 풀린다 */ }); throw e; }
+    if (moved) { await st.unlockServer(i.app.id).catch(() => { /* 저절로 풀린다 */ }); throw new HttpError(409, changedMsg); }
+  }
   let minted: { token: string; tokenHash: string } | null = null;
   let pinned = false;
   let owned = false;   // 이 워크스페이스의 함수다(확인했거나 막 만들었다) — 도중에 실패해도 남은 판의 코드 크기를 다시 잰다(#4792)
@@ -314,10 +344,13 @@ export async function deployBuildToAliases(i: {
     //   #4801 그 판이 읽는 코드 자리도 지금 빌드의 것(저장 방식 · 판 번호)이어야 한다 — 같은 지문을 다시 빌드해 zip 판이 바뀌었으면 옛 판을 읽는 함수 판은
     //   그 옛 판이 버킷 수명 규칙으로 사라질 때 멈춘다. COPY 로 만든 옛 함수 판도 여기서 REFERENCE 판으로 갈아탄다.
     //   Inactive 인 판도 재사용하지 않는다 — 별칭만 옮기면 멈춘 판에 그대로 묶인다. 아래 길이 코드를 다시 올려 되살린다(격리 리뷰).
+    //   #4887 코드를 못 읽는 판(GetFunction Code.Error · Failed)도 — 아래 길은 토큰을 새로 구워 늘 새 판을 고정하니, 같은 zip 판이어도 새로 읽는다.
+    //    재사용하면 공개하기 · 상태 점검이 망가진 판에 별칭을 묶는다(점검이 cur 의 망가진 판을 «다시 올려» 도 같은 판이 돌아오던 까닭).
     let reuse = row && row.cur_build_key === i.buildKey && row.cur_lambda_version && row.cur_token_hash ? row.cur_lambda_version : null;
     if (reuse) {
       const vg = await api.getFunction(fn, reuse);
-      if (!vg || Object.keys(configDrift(vg.Configuration, want)).length || !codeAt(vg.Code, code) || vg.Configuration.State === "Inactive") reuse = null;
+      if (!vg || Object.keys(configDrift(vg.Configuration, want)).length || !codeAt(vg.Code, code) || vg.Configuration.State === "Inactive"
+        || vg.Configuration.State === "Failed" || codeErrorOf(vg.Code)) reuse = null;
     }
     let version: string;
     let tokenHash: string | null;
@@ -476,7 +509,12 @@ export async function deployBuildToAliases(i: {
       else if (g && g.Tags?.["lvly:tenant"] === blobTenant()) await recordCodeBytes(api, fn, i.app.id).catch((err) => logger.warn({ err, fn }, "함수 코드 크기 재기 실패(비치명)"));
     }
     const msg = publicError(e);
-    await st.setServerError(i.app.id, msg).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
+    //  구성원이 보는 마지막 오류(app_server_status) — 배포 길이 일부러 던진 글(HttpError) · 걷은 AWS 글만 그대로 싣고, 저장소 · 내부 오류는 나눈 글만(원문은 기록에).
+    //   #4887 하우스키핑이 사람 없이 이 길을 타게 되어 «상태에 원문을 싣지 않는다» 를 여기서도 지킨다(격리 리뷰). 던지는 오류는 그대로다.
+    const shown = e instanceof HttpError || e instanceof AwsError ? msg
+      : e instanceof S3Error ? `저장소 조회 실패(${e.code})로 배포하지 못했습니다` : "내부 오류로 배포하지 못했습니다(게이트웨이 기록 참고)";
+    if (!(e instanceof HttpError) && !(e instanceof AwsError)) logger.warn({ err: e, app: i.app.id, fn }, "앱 서버 배포 내부 오류(#4887)");
+    await st.setServerError(i.app.id, shown).catch(() => { /* 기록 실패는 원래 오류를 덮지 않는다 */ });
     if (e instanceof AwsError) throw new HttpError(502, msg);
     throw e;
   } finally {
