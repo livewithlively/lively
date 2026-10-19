@@ -136,5 +136,21 @@ check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySess
   check(F.findTrySession([{ id: "box-x", label: '"회의록" 앱 시험', projectId: 4680, owned: false }, { id: "box-y", label: '"회의록" 앱 시험', projectId: 4680, trashedAt: "2026-10-15" }, { id: "box-z", label: '"회의록" 앱 시험', projectId: 4680 }], '"회의록" 앱 시험', 4680) === "box-z", "G11 남의 세션 · 치운 세션은 다시 쓰지 않는다");
 }
 
+// V ③ 실제 화면을 보는 중 — 주소에 적는다(#4632 원준 2026-10-19 «3단계에서 앱 전체화면 보면서 만들 때 … 앱 빌더의 사이드바가 등장하네. 안그렇게 해줘»)
+//  사이드바 주인(lib/side-owner)이 이 표시로 앱빌더 사이드바를 접는다. 이게 틀리면 시험 세션 옆에 앱빌더 목록이 서거나, 허브로 돌아와도 사이드바가 안 돌아온다.
+{
+  const has = typeof F.builderSeeRoute === "function" && typeof F.builderSeeing === "function";
+  check(has, "V0 builderSeeRoute · builderSeeing 이 있다");
+  if (has) {
+    const r = F.builderSeeRoute("box 1", "widget");
+    check(r === "#/builder/s/box%201?see=widget" && F.builderSeeing(r) === "widget" && F.builderSeeing(F.builderSeeRoute("s2", "app")) === "app", "V1 짓기 ↔ 읽기 — 세션 id 를 싸서 · 꼴 둘(widget · app)");
+    check(F.parseBuilderHash(r) && F.parseBuilderHash(r).view === "resume" && F.parseBuilderHash(r).id === "box 1", "V1 보는 중 주소도 그 세션을 이어 만드는 주소다(앱빌더가 같은 화면을 그린다)");
+    const S = F.builderSeeing;
+    check(S("#/builder/s/x?see=zzz") === "" && S("#/builder/s/x?see=") === "" && S("#/builder/s/x") === "" && S("#/builder?see=widget") === "" && S("#/builder/new?see=widget") === ""
+      && S("#/builder/app/memo?see=app") === "" && S("#/s/box-1?see=widget") === "" && S("") === "" && S(null) === "" && S(undefined) === "" && S("#/builder/s/?see=widget") === "",
+      "V2 그 밖은 '' — 모르는 값 · 빈 값 · 표시 없음 · 목록 · 새 앱 · 고치기 · 다른 화면 · 빈 주소 · 세션 없는 주소");
+  }
+}
+
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);
 if (fail) process.exit(1);

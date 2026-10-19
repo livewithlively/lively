@@ -1470,7 +1470,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       noteAppUse('builder');
       tab.aside.replaceChildren();
       renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide(),
-        setRoute: (h) => { if (tab.route !== h) { tab.route = h; tabsApi?.routed(tab); } } });
+        //  주소만 바꾼 것(replaceState)도 크롬을 다시 맞춘다 — ③ 실제 화면을 보는 동안 사이드바 열을 접는 것(app-ctx)이 이 주소를 따른다(#4632).
+        setRoute: (h) => { if (tab.route !== h) { tab.route = h; tabsApi?.routed(tab); if (tabsApi?.current() === tab) applyTabChrome(tab); } } });
       void ensureSingletonAppInstance('builder', '앱빌더')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });

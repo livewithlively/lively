@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mod = join(root, "public/app/lib/studio-flow.js");
+//  STUDIO_FLOW_JS — 다른 빌드(fail-first · 옛 트리)를 물릴 때. 없으면 이 트리의 빌드.
+const mod = process.env.STUDIO_FLOW_JS || join(root, "public/app/lib/studio-flow.js");
 if (!existsSync(mod)) { console.log("app-studio-flow: 빌드 없음(public/app/lib/studio-flow.js) — 건너뜀"); process.exit(0); }
 const F = await import(mod);
 let pass = 0, fail = 0;
@@ -162,6 +163,26 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(F.CARD_ROWS.some((r) => r.k === "notify" && r.label === "알림") && F.emptyCard().notify === "", "S4 CARD_ROWS 에 알림 줄 · 빈 카드에도 칸");
   const db = F.draftBrief(nc, "side", "talk");
   check(/permissions\.notifications: true/.test(db) && /app_notify/.test(db) && /\[나 ▸ 알림\]/.test(db) && /#\/open\//.test(db), "S5 draftBrief 가 알림 규칙(권한 선언 · app_notify · 앱 안 설정 · 전체 on/off 는 라이블리)을 싣는다", db);
+}
+
+// ══ N 단계 바 — 와 본 곳이면 앞으로도 간다(#4632 원준 2026-10-19 «다 저장했었으면 이전으로 가는거 말고 다음으로 가는것도 · 상단 탭을 클릭하는 방향으로도») ══
+//  사양 표 N(스크래치패드 spec-side-foot-phone.md 사양 2). 이게 틀리면 ①로 돌아간 뒤 ③으로 다시 갈 길이 «이 내용으로 다시 기획»(AI 에게 다시 시키기)뿐이다.
+{
+  const has = typeof F.reachedOf === "function" && typeof F.stageTabs === "function" && typeof F.nextStageOpen === "function";
+  check(has, "N0 단계 바 규칙(reachedOf · stageTabs · nextStageOpen)이 있다");
+  if (has) {
+    const R = F.reachedOf;
+    check(R({ stage: "plan" }) === 1 && R({ stage: "fix", appId: "a" }) === 2 && R({ stage: "plan", appId: "a" }) === 2 && R({ stage: "put", done: true }) === 4 && R({ stage: "draft" }) === 2,
+      "N1 옛 기록(reached 없음) — 지금 단계 · 앱이 있으면 ③ · 넣었으면 ⑤ · 첫 판 기다림(draft)은 ③", [R({ stage: "plan" }), R({ stage: "fix", appId: "a" }), R({ stage: "put", done: true }), R({ stage: "draft" })]);
+    check(R({ stage: "plan", reached: 3 }) === 3 && R({ stage: "plan", reached: 9 }) === 4 && R({ stage: "check", reached: -1 }) === 3 && R({ stage: "check", reached: NaN }) === 3 && R({ stage: "check", reached: 0 }) === 3 && R({ stage: "plan", reached: 2.7 }) === 2,
+      "N2 와 본 끝 — 적힌 값 · 끝(⑤)에서 자른다 · 틀린 값(음수 · NaN)은 버린다 · 지금 단계보다 작으면 지금 단계", [R({ stage: "plan", reached: 9 }), R({ stage: "check", reached: -1 }), R({ stage: "check", reached: 0 })]);
+    const T = (c, r, m) => F.stageTabs(c, r, m).join(",");
+    check(T(2, 3, "new") === "back,back,on,ahead,todo" && T(0, 2, "new") === "on,ahead,ahead,todo,todo" && T(2, 4, "copy") === "done,done,on,ahead,ahead" && T(4, 4, "new") === "back,back,back,back,on" && T(1, 1, "new") === "back,on,todo,todo,todo",
+      "N3 칸마다 — 지난 곳 돌아가기 · 와 본 앞 곳 다시 가기 · 아직 안 간 곳은 못 누른다 · 사본 · 고치기의 ①②는 원본의 것", [T(2, 3, "new"), T(0, 2, "new"), T(2, 4, "copy")]);
+    const N = F.nextStageOpen;
+    check(N(0, 0, "new") === -1 && N(0, 2, "new") === 1 && N(1, 2, "new") === 2 && N(4, 4, "new") === -1 && N(2, 2, "new") === -1 && N(2, 3, "edit") === 3 && N(1, 4, "copy") === 2,
+      "N4 「다음 →」 — 바로 다음이 와 본 곳일 때만 · 끝 단계엔 없다", [N(0, 0, "new"), N(1, 2, "new"), N(2, 2, "new"), N(2, 3, "edit")]);
+  }
 }
 
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);

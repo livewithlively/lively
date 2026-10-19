@@ -17,6 +17,7 @@
 //   폰 탭 바로 구역을 고르면 그 구역의 목록이 선다 — 사람이 그 구역(구역도 제 사이드바를 가진 화면이다)을 고른 것이다(main.ts owner 훅 · mobile.ts sheetSection).
 //  ⚠ 발치도 그 앱의 것이다 — 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)는 구역 목록에만 선다(side.ts secFoot · appFoot).
 import { CLASSIC_PAGES } from './classic-pages.js';
+import { builderSeeing } from './builder-flow.js';
 
 export type SideSec = 'home' | 'sess' | 'proj' | 'wiki';
 export type OwnSide = 'sources' | 'taxonomy' | 'sessions' | 'builder';
@@ -84,5 +85,8 @@ export function activeKeyOfRoute(route: string): string {
 }
 /** 이 주소의 사이드바 주인 — 'none' 이면 셸이 사이드바 열을 접는다(main.ts applyTabChrome), 앱 이름이면 그 앱이 사이드바를 그린다(side.ts). */
 export function sideOwnerOfRoute(route: string): SideOwner {
-  return sideOwnerOf(activeKeyOfRoute(route), routeSegs(route)[0] || '');
+  const own = sideOwnerOf(activeKeyOfRoute(route), routeSegs(route)[0] || '');
+  //  앱빌더 ③ 에서 만들고 있는 앱을 실제 화면으로 써 보는 중 — 그 화면은 만들고 있는 앱의 것이라 앱빌더 사이드바를 접는다(lib/builder-flow builderSeeing).
+  if (own === 'builder' && builderSeeing(route)) return 'none';
+  return own;
 }
