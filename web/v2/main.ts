@@ -1234,7 +1234,11 @@ function applyTabChrome(tab: ShellTab): void {
   //   누가 사이드바를 갖나는 lib/side-owner 의 표 한 자리가 정한다 — 맥락 관리(#3830) · 사용 가이드 · 앱 화면(#/i · #732) · 설정(제 왼쪽 목록이 그 앱의 사이드바) ·
   //   리브 · 확인할 것 · 외부 앱 연결 · 대시보드처럼 표에 없는 앱은 다 «없음» 이다.
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이 한 칸씩 밀려 본문이 0px 열에 앉는다.
-  root!.classList.toggle('app-ctx', sideOwnerOfRoute(tab.route) === 'none');
+  const hasSide = sideOwnerOfRoute(tab.route) !== 'none';
+  root!.classList.toggle('app-ctx', !hasSide);
+  //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
+  //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
+  mobile?.setSide(hasSide);
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
