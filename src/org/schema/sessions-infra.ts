@@ -615,4 +615,6 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_requester_idx ON org_agent_job(requester, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_app_idx ON org_agent_job(app_id, id DESC) WHERE app_id IS NOT NULL`);
+  //  #4828 보존 정리가 보는 것 — 걷기를 마친 작업을 끝난 때 순으로(agent-jobs/store.pruneAgentJobs).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_ended_idx ON org_agent_job(ended_at) WHERE reaped = true`);
 }

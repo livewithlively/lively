@@ -284,6 +284,25 @@ export async function openAgentJobs(limit = 1000): Promise<AgentJobSweepRow[]> {
   return rows.map((r) => ({ ...r, id: Number(r.id) }) as unknown as AgentJobSweepRow);
 }
 
+/** 보존 정리 한 판에 지우는 행 수 상한 — 밀린 행이 많으면(보존 기간을 줄인 직후) 다음 판이 잇는다. */
+export const AGENT_JOB_PRUNE_BATCH = 1000;
+
+/**
+ * 보존 정리(#4828) — 끝났고 걷기를 마친 작업 가운데 끝난 지 keepDays 일이 지난 행을 지운다(끝난 때가 오래된 것부터 batch 행까지).
+ *  keepDays ≤ 0 이면 무기한이라 아무것도 지우지 않는다. 걷기 전(reaped=false) 행은 남긴다 — 감시가 컨테이너 · 토큰을 걷는 근거다.
+ *  돌려주는 것 = 지운 행 수.
+ */
+export async function pruneAgentJobs(keepDays: number, batch: number = AGENT_JOB_PRUNE_BATCH): Promise<number> {
+  if (!Number.isFinite(keepDays) || keepDays <= 0) return 0;
+  const r = await itemsPool.query(
+    `DELETE FROM org_agent_job WHERE id IN (
+       SELECT id FROM org_agent_job
+        WHERE reaped = true AND status IN ('done','failed','timeout','canceled') AND ended_at < now() - make_interval(days => $1)
+        ORDER BY ended_at LIMIT $2)`,
+    [Math.floor(keepDays), Math.max(1, Math.floor(batch))]);
+  return r.rowCount ?? 0;
+}
+
 /** 걷기를 마쳤다 — 종료 신호(kill-session 성공 또는 이미 없다는 확답)를 보냈고 토큰을 폐기했다. 컨테이너 철거 자체는 브로커(#4696) 몫이다. */
 export async function markAgentJobReaped(id: number): Promise<void> {
   await q(itemsPool, `UPDATE org_agent_job SET reaped=true, updated_at=now() WHERE id=$1 AND status IN ('done','failed','timeout','canceled')`, [id]);

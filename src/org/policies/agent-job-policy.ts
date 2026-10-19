@@ -6,6 +6,8 @@
 //
 // 숫자(상민님 2026-10-16 결정 — 추천안): 동시 2 · 대기 20건 · 대기 30분 넘으면 실패 · 실행 기본 15분 / 최대 60분 ·
 //  판이 90초 말이 없으면 끊긴 것. «관리 설정으로 바꿀 수 있게» 가 같은 결정의 조건이다.
+// 보존(#4828 · 상민님 2026-10-19 결정 — 추천안): 끝난 작업 기록(지시 · 답 · 진행 꼬리)은 90일 뒤 행째 지운다 · 0 = 무기한.
+//  «누가 언제 보냈나» 는 도구 호출 기록(mcp_call_log)에 따로 남고, 앱 AI 실행(#4488)은 결과를 실행 기록에 옮겨 두므로 행째 지운다.
 //
 // 왜 DB 인가(delegate-policy 와 같은 교리): 배포 없이 바꾼다 — 관리 설정(org_runtime_update)이 단일 창구, env 는 시드.
 //  우선순위: **DB > env 시드 > 코드 기본값.**
@@ -35,6 +37,11 @@ export interface AgentJobPolicy {
   silent_sec: number;
   /** 자리를 받은 뒤 이 안(초)에 판이 첫 말(boot)을 못 하면 실패 — 컨테이너 확보·이미지·하네스 준비가 막힌 것이다. */
   start_timeout_sec: number;
+  /**
+   * 끝난 작업 기록을 며칠 두나(#4828) — 끝났고 걷은 작업이 끝난 지 이만큼 지나면 정비(job-record-prune)가 행째 지운다.
+   *  0 = 무기한(지우지 않는다). 지운 작업은 목록 · 조회 · 이어받기에서 사라진다.
+   */
+  keep_days: number;
 }
 
 export type AgentJobPolicyPatch = Partial<AgentJobPolicy>;
@@ -48,6 +55,7 @@ export const DEFAULT_AGENT_JOB_POLICY: AgentJobPolicy = {
   max_timeout_min: 60,
   silent_sec: 90,
   start_timeout_sec: 180,
+  keep_days: 90,
 };
 
 // 관리 설정·검증에 쓰는 범위 — capability(zod·patch 블록)와 같은 상수를 쓴다(드리프트 금지).
@@ -60,6 +68,7 @@ export const AGENT_JOB_POLICY_RANGE: { readonly [K in keyof AgentJobPolicy]: rea
   max_timeout_min: [1, 480],
   silent_sec: [30, 900],
   start_timeout_sec: [30, 900],
+  keep_days: [0, 3650],
 };
 
 const R = AGENT_JOB_POLICY_RANGE;
@@ -74,6 +83,7 @@ const policy = definePolicy<AgentJobPolicy>({
     max_timeout_min: { env: "LIVELY_AGENT_JOB_MAX_TIMEOUT_MIN", min: R.max_timeout_min[0], max: R.max_timeout_min[1] },
     silent_sec: { env: "LIVELY_AGENT_JOB_SILENT_SEC", min: R.silent_sec[0], max: R.silent_sec[1] },
     start_timeout_sec: { env: "LIVELY_AGENT_JOB_START_TIMEOUT_SEC", min: R.start_timeout_sec[0], max: R.start_timeout_sec[1] },
+    keep_days: { env: "LIVELY_AGENT_JOB_KEEP_DAYS", min: R.keep_days[0], max: R.keep_days[1] },
   },
   //  축 사이 관계 둘 — 사람당 상한이 워크스페이스 상한보다 크면 의미가 없고, 기본 시간이 최대 시간보다 길면 기본값이 최대를 뚫는다.
   invariant: (o) => {

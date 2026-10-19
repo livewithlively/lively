@@ -318,6 +318,40 @@ try {
     chk("K3 취소가 걸렸어도 답을 내고 끝났으면(done) 사유를 오류로 적지 않는다", ec?.status === "done" && ec?.error === null, JSON.stringify(ec && { s: ec.status, e: ec.error }));
   }
 
+  // ── P. 보존 정리(#4828) — 끝났고 걷은 작업 가운데 끝난 지 보존 일수가 지난 행만 지운다 ──────────────────
+  //  조건이 SQL 한 문장(store.pruneAgentJobs)이라 가짜 저장소로는 못 잰다 — 여기서 행을 되읽어 판정한다.
+  {
+    await cleanup();
+    //  남의 오래된 끝난 행이 있으면 «지운 수» 를 판정할 수 없다 — 빈 DB 에서 돌린다(CI 가 그렇다).
+    const foreign = (await itemsPool.query(
+      `SELECT count(*)::int AS n FROM org_agent_job WHERE requester NOT LIKE $1 AND reaped AND ended_at < now() - interval '1 day'`, [`${REQ}%`])).rows[0].n;
+    if (foreign > 0) throw new Error(`이 DB 에 시험 밖의 끝난 작업이 ${foreign}건 있다 — 빈 DB 에서 돌린다`);
+    const mk = async (who, status, reaped, endedAgoDays) => {
+      const id = await add(who);
+      await itemsPool.query(
+        `UPDATE org_agent_job SET status=$2, reaped=$3, ended_at = CASE WHEN $4::int IS NULL THEN NULL ELSE now() - make_interval(days => $4::int) END WHERE id=$1`,
+        [id, status, reaped, endedAgoDays]);
+      return id;
+    };
+    const old = await mk("p-old", "done", true, 91);
+    const older = await mk("p-older", "canceled", true, 400);
+    const fresh = await mk("p-fresh", "failed", true, 89);
+    const unreaped = await mk("p-unreaped", "timeout", false, 400);
+    const openOld = await mk("p-open", "running", false, null);
+    await itemsPool.query(`UPDATE org_agent_job SET created_at = now() - interval '400 days' WHERE id=$1`, [openOld]);
+    //  있어선 안 되는 모양(열린 작업인데 끝난 때 · 걷음 표시가 있다)이어도 열린 작업은 지우지 않는다 — 상태 조건이 마지막 울타리다.
+    const openOdd = await mk("p-open-odd", "running", true, 400);
+    const exists = async (id) => !!(await row(id));
+    chk("P1 0(무기한)은 아무것도 지우지 않는다", (await st.pruneAgentJobs(0)) === 0 && (await exists(old)) && (await exists(older)));
+    const n1 = await st.pruneAgentJobs(90, 1);
+    chk("P2 한 판의 상한(batch) — 끝난 때가 가장 오래된 것부터", n1 === 1 && !(await exists(older)) && (await exists(old)), JSON.stringify({ n1 }));
+    const n2 = await st.pruneAgentJobs(90);
+    chk("P3 보존 일수(90)가 지난 «끝났고 걷은» 행만 — 89일 · 걷기 전 · 열린 작업(끝난 때가 잘못 적혔어도)은 남긴다",
+      n2 === 1 && !(await exists(old)) && (await exists(fresh)) && (await exists(unreaped)) && (await exists(openOld)) && (await exists(openOdd)),
+      JSON.stringify({ n2, fresh: await exists(fresh), unreaped: await exists(unreaped), openOld: await exists(openOld), openOdd: await exists(openOdd) }));
+    chk("P4 다시 돌리면 지울 것이 없다(멱등)", (await st.pruneAgentJobs(90)) === 0);
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;
@@ -344,6 +378,13 @@ try {
     chk("J3 범위 밖 값은 400", ranged?.status === 400);
     const r4 = await set.handler({ reset: true }, admin, ctx);
     chk("J4 reset 은 워크스페이스 값을 비운다", JSON.stringify(r4.workspace_setting) === "{}" && r4.source !== "db", JSON.stringify(r4.workspace_setting));
+    //  #4828 보존 일수 — 기본 90 · 0(무기한)도 받는다 · 범위 밖(3651)은 400.
+    const r5 = await set.handler({ keep_days: 0 }, admin, ctx);
+    let tooLong = null;
+    try { await set.handler({ keep_days: 3651 }, admin, ctx); } catch (e) { tooLong = e; }
+    chk("J5 보존 일수(keep_days)를 고친다 — 기본 90 · 0(무기한)은 받고 3651 은 400",
+      r4.policy.keep_days === 90 && r5.policy.keep_days === 0 && r5.workspace_setting.keep_days === 0 && tooLong?.status === 400,
+      JSON.stringify({ before: r4.policy.keep_days, after: r5.workspace_setting, status: tooLong?.status }));
   }
 } catch (e) {
   bad("예외", String((e && e.stack) || e));

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
-  submitAgentJob, onBoot, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob,
+  submitAgentJob, onBoot, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
@@ -58,6 +58,8 @@ interface World {
   usable: Set<string>;     // `${member}:${app}` — 그 앱을 쓸 수 있다
   inactive: Set<string>;   // 비활성이 된 실행 계정
   projects: Set<string>;   // `${member}:${project}` — 그 프로젝트 폴더에서 셸을 띄울 수 있다
+  /** 보존 정리(#4828)가 저장소에 넘긴 보존 일수들. */
+  prunedWith: number[];
   drain(maxMs?: number): Promise<void>;
 }
 /** 가짜 작업 토큰 해시 — 진짜처럼 64자 16진(작업 토큰 판별이 앞자리로 대조한다). */
@@ -170,11 +172,18 @@ function world(): World {
     async queuePosition(id) { return [...rows.values()].filter((r) => r.status === "queued" && r.id < id).length; },
     newJobSecret: () => { const secret = `s${++hex}`; return { secret, hash: hashJobSecret(secret) }; },
     secretMatches,
+    //  실 SQL(store.pruneAgentJobs)의 조건을 흉내만 낸다 — 조건 자체는 store.pg-test(블록 P)가 잰다. 여기선 정비가 무엇을 넘기나를 본다.
+    async pruneAgentJobs(keepDays) {
+      w.prunedWith.push(keepDays);
+      let n = 0;
+      for (const [id, r] of rows) if (ended(r.status) && r.reaped && r.ended_at && now - +r.ended_at > keepDays * 86_400_000) { rows.delete(id); n++; }
+      return n;
+    },
   };
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
     mintError: null, onMint: null, beforeFinish: null, claims: 0, listening: 0, bootRace: false, available: true,
-    policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(),
+    policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
     setNow: (ms: number) => { now = ms; },
   });
   w.deps = {
@@ -961,6 +970,30 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
   assert.equal((listAdmin.jobs as Array<Record<string, unknown>>)[0]!.result_preview, null, "관리자 목록엔 남의 답 앞머리가 없다");
   const adminInApp = await listAgentJobsFor({}, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser, w.deps);
   assert.deepEqual(adminInApp.jobs, [], "앱 화면 안의 관리자는 관리자로 안 본다 — 남의 작업이 목록에 안 뜬다");
+});
+
+await t("Z1 보존 정리(#4828) — 정책 보존 일수(기본 90일)를 저장소에 넘겨 지난 기록만 지우고 · 0(무기한)이면 저장소를 부르지도 않는다", async () => {
+  const w = world();
+  const DAY = 86_400_000;
+  //  끝났고 걷은 작업 — 끝난 때를 지금(가짜 시계 = 접수 시각)에서 며칠 전으로 둔다.
+  const mk = async (prompt: string, endedAgoDays: number): Promise<number> => {
+    const r = await w.deps.store.insertAgentJob({
+      requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
+      harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900,
+    }, w.policy);
+    assert.ok("row" in r);
+    const row = w.rows.get(r.row.id)!;
+    Object.assign(row, { status: "done", reaped: true, ended_at: new Date(+row.created_at - endedAgoDays * DAY) });
+    return r.row.id;
+  };
+  const old = await mk("91일 전에 끝남", 91);
+  const fresh = await mk("10일 전에 끝남", 10);
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 1, keep_days: 90 });
+  assert.deepEqual(w.prunedWith, [90], "기본 보존 일수는 90일(상민 2026-10-19)");
+  assert.ok(!w.rows.has(old) && w.rows.has(fresh), "보존 기간이 지난 것만 지운다");
+  w.policy = { ...w.policy, keep_days: 0 };
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 });
+  assert.deepEqual(w.prunedWith, [90], "0(무기한)이면 저장소를 부르지 않는다");
 });
 
 console.log(`# ${pass} pass`);

@@ -42,7 +42,7 @@ type Store = typeof import("./store.js");
 export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
-    | "isAgentJobToken" | "newJobSecret" | "secretMatches">;
+    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 컨테이너를 띄울 수 있는 배포인가(매니지드). */
   available(): Promise<boolean>;
@@ -466,6 +466,18 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
   //  자리 주기는 기다리는 작업이 있을 때만 — 작업이 없는 워크스페이스가 30초마다 잠금 트랜잭션을 돌지 않게. 목록이 꽉 찼으면 모르니 돈다.
   const launched = queued || jobs.length >= SWEEP_SCAN_MAX ? await dispatchAgentJobs(d) : 0;
   return { ended, reaped, launched };
+}
+
+/**
+ * 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 가운데 끝난 지 보존 기간(정책 keep_days · 기본 90일)이 지난 행을 지운다.
+ *  0 = 무기한(아무것도 안 지운다). 요청 정비 «job-record-prune»(6시간)이 부른다 — 한 판에 store.AGENT_JOB_PRUNE_BATCH 행까지.
+ */
+export async function pruneAgentJobRecords(d: Pick<AgentJobDeps, "policy" | "store">): Promise<{ deleted: number; keep_days: number }> {
+  const p = await d.policy();
+  if (!(p.keep_days > 0)) return { deleted: 0, keep_days: p.keep_days };
+  const deleted = await d.store.pruneAgentJobs(p.keep_days);
+  if (deleted > 0) logger.info({ deleted, keepDays: p.keep_days }, "[agent-job] 보존 기간이 지난 작업 기록을 지웠다");
+  return { deleted, keep_days: p.keep_days };
 }
 
 // ── 사람·앱이 쓰는 조회·취소 ──────────────────────────────────────────────────
