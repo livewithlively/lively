@@ -2227,7 +2227,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   옮겨 오기 전 화면이 그리던 대기 말풍선을 여기서도 그린다 — 안 그리면 하네스가 그릴 때까지 대화창에 머무는 동안(termWarm)
     //   방금 보낸 말이 사라져 보인다(매니지드 실측 2026-10-16: 되살린 뒤 6초 동안 그 말이 대화창에 없었다).
     //   아래 syncOutbox 는 큐 응답이 와야 그린다(그 사이가 빈다) · 멤버 PC 세션은 큐를 아예 안 묻는다 · 터미널로 넘길 말(warmPrompt)도 여기서 정한다.
-    //   (그때는 syncOutbox 가 매니지드 행도 건너뛰었다 — 세션 호스트 좌표 때문. #4904 가 고쳤고, 큐 행은 같은 글의 이 말풍선에 잇는다.)
+    //   큐 행은 같은 글(sameSaid)의 이 말풍선에 잇는다 — 두 번 서지 않는다.
     //   기록의 마지막 사람 말이 이미 그것이면(그새 들어갔다) 그리지 않는다. 나중에 기록에 나타나면 이 턴을 그대로 쓴다(pendingSent 규약).
     if (firstPrompt && canType()) {
       const lastAsk = [...recs].reverse().find((r) => r.t.text);

@@ -51,7 +51,7 @@
 //       · 보낸 말은 한 번만 그려진다(겹친 읽기의 낡은 답은 버린다 — 고치기 전엔 두 번 그려졌다)
 //   W27 새로 연 세션(홈 입력창) — 기록 파일이 아직 없다(404) · 말이 들어가면서 파일이 생긴다 → 그려도 그때까지 대화창 · 생긴 뒤 터미널
 //   W28 첫 말이 빗금 명령(/compact) — 기록엔 다른 모양으로 적혀 대기 말풍선과 안 맞는다 → 기다리지 않고 그린 때 넘긴다
-//   W29 멤버 PC 행(노드 칸 = 그 컴퓨터)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 지켜볼 곳이 없어(src 없음 — 중앙 기록 좌표가 없다)
+//   W29 멤버 PC 행(노드 칸 = 그 컴퓨터) — 박스 경로는 409 node 인데 대화 id 를 모른다 → 지켜볼 곳이 없어(src 없음 — 중앙 기록 좌표가 없다)
 //       에코를 못 본다 → 기다리지 않고 그린 때 넘긴다(8초를 헛되이 쓰지 않는다 — 격리 검토가 찾음)
 //   W29b 매니지드 행(노드 칸 = 세션 호스트)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 세션 호스트는 «그 컴퓨터» 가 아니라(#4904)
 //       박스 기록을 지켜본다 → W27 처럼 그 말이 기록에 나타날 때까지 대화창 · 나타난 뒤 터미널
@@ -168,6 +168,7 @@ async function PAGE_MAIN() {
     if (/\/transcript$/.test(u.pathname)) {
       //  진짜 서버처럼 창(from · 크기)을 머리에 싣는다 — 안 실으면 화면의 폴링이 «파일이 줄었다(교체)» 로 읽고 처음부터 다시 그린다(낙관 턴이 사라진다).
       const sid = decodeURIComponent((/\/sessions\/([^/]+)\/transcript$/.exec(u.pathname) || [])[1] || "");
+      if (sid === "box-w29") return J({ error: "node" }, 409);   // W29 — 멤버 PC 의 세션: 박스 경로는 409 node 인데 대화 uuid 를 모른다(중앙 기록 좌표도 없다)
       if (sid === "box-w24") return J({ error: "node", uuid: "u-w24", node: "n-w24" }, 409);   // W24 — 그 컴퓨터의 세션: 서버가 중앙 기록 좌표를 알려 준다
       const fr = { sid, start: Date.now(), end: 0 }; FETCHES.push(fr);
       if (SLOW[sid]) await sleep(SLOW[sid]);
@@ -556,9 +557,8 @@ async function PAGE_MAIN() {
       R.w27.after = v.snap(); R.w27.termAt = v.termAt();
       v.done();
     }
-    // W29 — 멤버 PC 행 · 대화 id 모름 · 기록 파일 없음(지켜볼 곳이 없다)
+    // W29 — 멤버 PC 행 · 박스 경로 409 node · 대화 id 모름(지켜볼 곳이 없다)
     {
-      NOTYET["box-w29"] = Date.now() + 600000;
       const v = mount("box-w29", "ink=600", { firstPrompt: "첫 지시 W29" }, true, null, false, { node: "pc-test" });
       await sleep(2000);
       const ink = v.fx()["test-ink"];
