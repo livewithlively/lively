@@ -26,7 +26,7 @@
 //   V6 판 번호 없는 옛 빌드는 지금 판을 채워 쓴다 · V7 저장소가 판 번호를 안 주면 무효로 하지 않는다 · V8 남은 함수 판이 읽는 zip 은 30일 정리에서 뺀다(V8b 안 읽으면 지움)
 //   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
 //   격리 리뷰 · 재검토: V12 판 목록 404 면 지운다 · V13 잠긴 앱은 건너뛴다 · V14 잠금 안 재확인(V14b 저장소 오류면 막지 않는다) · V15 Inactive 되살리기
-//   (V15b Inactive + 지난 고치기 실패 · V15c 지난 고치기 실패 뒤 새 코드 · V15d 지난 고치기 실패 뒤 설정만) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
+//   (V15b Inactive + 지난 고치기 실패 · V15c 그 뒤 새 코드 · V15d 그 뒤 설정만 · V15e 그 뒤 같은 코드 · 같은 설정 — 모두 코드를 다시 올린다) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
 //   V18 고른 뒤 별칭이 옮겨 온 빌드는 남긴다 · V19 고를 때 함수 줄 없던 앱에 줄이 생기면 남긴다 · V20 «아직 읽힘» 은 판 목록 한 번으로 거른다 · W11 실패 글 걷기
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
@@ -1396,7 +1396,8 @@ const hasBuild = async (id, key) => (await okBuilds(id)).some((x) => x.build_key
   await call("org_app_remove", { app_id: "in-a" }, boss);
 }
 
-//  V15b~d 지난 고치기가 실패한 채(LastUpdateStatus Failed — AWS 는 실패한 고치기를 걷고 그 전 코드 · 설정을 둔다)인 함수 — 그 표시가 다음 배포를 막지 않는다(재검토).
+//  V15b~e 지난 고치기가 실패한 채(LastUpdateStatus Failed)인 함수 — 그 표시가 다음 배포를 막지 않고, 배포는 코드를 다시 올려 제 고치기 결과로 정한다
+//   (그때 보이는 코드 · 설정이 실제로 도는 것과 같은지 재 보지 않았으니 믿지 않는다 · 재검토).
 const staleFail = (f) => Object.assign(f.cfg, { LastUpdateStatus: "Failed", LastUpdateStatusReason: "흉내 — 지난 고치기 실패" });
 // V15b Inactive 이면서 지난 고치기도 실패 — 실패 표시에 먼저 걸려 502 가 아니라 코드를 다시 올려 되살린다
 {
@@ -1436,9 +1437,28 @@ const staleFail = (f) => Object.assign(f.cfg, { LastUpdateStatus: "Failed", Last
   const uc0 = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-b")).length;
   const d = await call("app_server_deploy", { app_id: "lf-b", wait_s: 120 }, alice, aliceCtx);
   const uc = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-b")).length - uc0;
-  chk("V15d 지난 고치기 실패 · 같은 코드 · 설정만 다름 → 코드 올리기 0 · 설정 고치기 1 · 배포", d.status === "deployed" && codeUps(fnOf("lf-b")).length === u0 && uc === 1
+  chk("V15d 지난 고치기 실패 · 같은 코드 · 설정만 다름 → 코드 다시 올리기 1 · 설정 고치기 1 · 배포", d.status === "deployed" && codeUps(fnOf("lf-b")).length === u0 + 1 && uc === 1
     && f.cfg.MemorySize !== 1 && f.cfg.LastUpdateStatus === "Successful", JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("lf-b")).length - u0, uc, mem: f.cfg.MemorySize }));
   await call("org_app_remove", { app_id: "lf-b" }, boss);
+}
+// V15e 지난 고치기 실패 뒤 같은 코드 · $LATEST 설정도 바라는 값(cur 판만 옛 설정) — 실패 표시만 남은 $LATEST 를 그대로 못 박지 않고 코드를 다시 올린다
+{
+  await call("app_save", { files: twin("lf-c") }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: "lf-c", wait_s: 120 }, alice, aliceCtx);
+  const f = fns.get(fnOf("lf-c"));
+  //  cur 판은 옛 설정(그래서 별칭만 옮기기는 못 한다) · $LATEST 는 이미 바라는 설정 · 지난 고치기는 실패한 채.
+  staleFail(f);
+  for (const v of f.versions) v.cfg.MemorySize = 1;
+  const u0 = codeUps(fnOf("lf-c")).length;
+  const uc0 = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-c")).length;
+  const d = await call("app_server_deploy", { app_id: "lf-c", wait_s: 120 }, alice, aliceCtx);
+  const uc = calls("updateFunctionConfiguration").filter((x) => x[1] === fnOf("lf-c")).length - uc0;
+  const r = await rowOf("lf-c");
+  chk("V15e 지난 고치기 실패 · 같은 코드 · 설정 그대로 → 코드 다시 올리기 1 · 설정 고치기 0 · 고친 뒤의 판을 못 박는다", d.status === "deployed"
+    && codeUps(fnOf("lf-c")).length === u0 + 1 && uc === 0 && f.cfg.LastUpdateStatus === "Successful"
+    && f.versions.find((v) => v.Version === r?.cur_lambda_version)?.cfg.LastUpdateStatus === "Successful",
+    JSON.stringify({ status: d.status, error: d.error, ups: codeUps(fnOf("lf-c")).length - u0, uc, cur: r?.cur_lambda_version }));
+  await call("org_app_remove", { app_id: "lf-c" }, boss);
 }
 
 // V16 건너뛴 후보(아직 읽히는 zip)가 앞자리에 있어도 뒤의 후보를 지운다 — 넘겨 가며 훑는다(쪽 크기 1 · 지울 수 1 로 좁혀 본다)

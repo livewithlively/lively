@@ -150,8 +150,8 @@ const nameTooLong = (appId: string): HttpError => new HttpError(400, `앱 id 와
  * 함수가 준비될 때까지(만들기 · 코드/설정 고치기 뒤 Pending · InProgress) — 큰 zip(파일 수만 개)은 몇 분 걸린다(2026-10-15 실측).
  *  beforeUpdate — 코드를 올리기 바로 앞의 기다림: 다른 고치기가 도는 중(InProgress) · 만드는 중(Pending)만 기다린다.
  *   Inactive(오래 쉼 · #4801 원본 zip 을 잃음)는 코드를 다시 올려야 살아나고(AWS 문서 «restore access to the source artifact and update the function»),
- *   지난 고치기가 실패한 채(LastUpdateStatus Failed)도 다음 고치기가 덮어야 풀린다 — 여기서 막으면 6분 뒤 504 · 곧바로 502 로 끝나 스스로 못 고친다
- *   (격리 리뷰 · 재검토). 올린 뒤의 기다림은 Active 를 요구한다.
+ *   지난 고치기가 실패한 채(LastUpdateStatus Failed)도 이번 고치기가 덮어야 풀린다 — 여기서 막으면 6분 뒤 504 · 곧바로 502 로 끝나 스스로 못 고친다
+ *   (격리 리뷰 · 재검토). 올린 뒤 · 만든 뒤 · 설정을 고친 뒤의 기다림은 늘 Active · 고치기 성공을 요구한다(이번 배포 자신의 실패는 502).
  */
 async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { beforeUpdate?: boolean; maxMs?: number } = {}): Promise<lam.FnConfiguration> {
   const until = Date.now() + (opts.maxMs ?? 6 * 60_000);
@@ -298,7 +298,8 @@ export async function deployBuildToAliases(i: {
       }
       //  #4801 잠금 안에서 zip 을 한 번 더 본다 — 잠금 밖에서 본 뒤(usableBuild) 옛 빌드 정리가 그 zip 을 지웠으면(지움 표시) 못 박을 판이 «옛 판» 이 된다.
       //   Lambda 는 옛 판도 읽어 배포는 초록인데, 그 판은 버킷 수명 규칙으로 30일 뒤 사라져 함수가 그때 멈춘다(조용한 성공 · 격리 리뷰). 정리는 이 잠금을
-      //   잡아야 지우므로(app-server-watch pruneServerBuilds) 여기서 본 판은 이 배포가 끝날 때까지 지금 판으로 남는다.
+      //   잡아야 지우므로(app-server-watch pruneServerBuilds) 여기서 본 판은 이 배포가 끝날 때까지 지금 판으로 남는다 — 고를 때 함수 줄이 없던 후보만
+      //   잠금 없이 지우되 지우기 직전 줄을 다시 본다(그쪽 주석 · 재검토).
       if (code.S3ObjectStorageMode === "REFERENCE") {
         const problem = await zipProblem(i.zipKey, i.zipVersion, deps);
         if (problem) {
@@ -353,14 +354,15 @@ export async function deployBuildToAliases(i: {
       owned = true;
       //  같은 코드 지문이어도 저장 방식 · 읽는 판이 다르면 다시 올린다(#4801 — COPY 로 만든 옛 함수를 REFERENCE 로 옮긴다 · 그 반대도).
       //   Inactive(오래 쉼 · 원본을 잃음)면 같은 코드라도 다시 올린다 — 코드 고치기가 되살리는 길이다(AWS 문서 · 격리 리뷰).
-      const upload = got.Configuration.CodeSha256 !== i.zipSha256 || !codeAt(got.Code, code) || got.Configuration.State === "Inactive";
-      if (upload) {
+      //   지난 고치기가 실패한 채(LastUpdateStatus Failed)여도 다시 올린다 — 그때 보이는 코드 · 설정이 실제로 도는 것과 같은지 재 보지 않았으니
+      //   «모름» 으로 보고 이번 배포 자신의 고치기 결과로 정한다. 바로 읽기는 복사가 없어 싸고, 다시 실패하면 아래 기다림이 진짜 까닭을 502 로 보인다.
+      //   안 올리면 그 표시에 막혀 그 전 판으로 되돌리기 · 설정만 고치기가 영영 502 였다(#4484 부터 · 재검토).
+      if (got.Configuration.CodeSha256 !== i.zipSha256 || !codeAt(got.Code, code) || got.Configuration.State === "Inactive"
+        || got.Configuration.LastUpdateStatus === "Failed") {
         await waitReady(api, fn, deps, { beforeUpdate: true });
         await api.updateFunctionCode(fn, code);
       }
-      //  코드를 안 올렸으면 남은 «고치기 실패»(LastUpdateStatus Failed)는 지난 시도의 것이다 — AWS 는 실패한 고치기를 걷고 그 전 코드 · 설정을 둔다.
-      //   여기서 막으면 그 전 판으로 되돌리기 · 설정만 고치기가 영영 502 다(재검토). 이번에 올렸으면 그 결과를 기다린다(실패면 502).
-      const cfg = await waitReady(api, fn, deps, { beforeUpdate: !upload });
+      const cfg = await waitReady(api, fn, deps);
       if (cfg.CodeSha256 !== i.zipSha256) {
         //  zip 의 바이트가 빌드 기록과 다르다 — 그 빌드를 못 쓰게 적어 두면 다음 배포가 다시 빌드한다(같은 줄을 «재사용» 하며 영영 실패하지 않게).
         await st.invalidateServerBuild(i.app.id, i.buildKey, "함수에 올라간 코드가 빌드 기록의 지문과 다릅니다").catch(() => { /* 다음에 */ });
