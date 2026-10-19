@@ -750,18 +750,25 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     class: 'livc-jump', type: 'button', hidden: true, text: jumpText(0),
     onclick: () => { stick = true; toBottom(); },
   }) as HTMLButtonElement;
-  // ⚠ 우리가 바닥으로 내린 직후의 scroll 이벤트는 '사람이 올렸다'가 아니다 — 내용이 연달아 붙는 되그리기 중에는 내린 뒤
-  //  다음 덩이가 먼저 붙어 이벤트가 '바닥이 아님'으로 잡히고, 그 한 번에 stick 이 풀려 [최신 대화로] 가 괜히 뜬다(실측).
-  //  프로그램 스크롤 뒤 120ms 안의 이벤트는 stick 을 풀지 않는다(붙이는 방향은 그대로 반영).
-  let progAt = 0;
+  // ⚠ «사람이 올렸다» 는 scroll 사건이 아니라 **사람의 입력**(휠 · 터치 · 스크롤 막대 누름 · 글쇠)으로 안다.
+  //  종전엔 «우리가 내린 뒤 120ms 안의 사건이 아니면 사람» 으로 쳤는데, 큰 대화를 처음 그릴 때(2,400px tui 글 · 한글 두 칸 감싸기)는
+  //  프레임이 늦어 우리가 내린 스크롤의 사건이 1초 넘게 뒤에 오고, 그 사이 안내 줄·입력칸이 서서 «바닥이 아님» 으로 잡혀 stick 이 풀렸다
+  //  (실측 2026-10-19, 꺼진 세션 box-wonjoon-jang-febbca30: 사건 1.4초 지연 → 마지막 답 54px 숨음 · «Jump to bottom» 만 섬).
+  //  내용이 자라거나 칸이 줄어 생기는 스크롤(브라우저 고정 · 글꼴 도착 · 우리 toBottom)은 사람이 아니다 — stick 을 건드리지 않는다.
+  let userAt = 0;
+  const USER_WINDOW_MS = 1500;
+  const markUser = (): void => { userAt = Date.now(); };
+  for (const ev of ['wheel', 'touchstart', 'touchmove', 'pointerdown'] as const) list.addEventListener(ev, markUser, { passive: true });
+  list.addEventListener('keydown', markUser);
   list.addEventListener('scroll', () => {
     const near = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
     if (near) { stick = true; jump.hidden = true; unseen = 0; return; }
+    if (Date.now() - userAt > USER_WINDOW_MS) return;        // 사람이 아닌 스크롤 — 바닥 따라가기는 그대로(다음 크기 변화에서 다시 내린다)
     //  tui — 터미널은 바닥을 떠나는 순간 그 단추를 세운다(새 글이 오기 전에도).
-    if (tui && Date.now() - progAt > 120 && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
-    if (Date.now() - progAt > 120) stick = false;
+    if (tui && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
+    stick = false;
   });
-  const toBottom = (): void => { progAt = Date.now(); list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
+  const toBottom = (): void => { list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
   const scroll = (): void => {
     if (stick) { toBottom(); return; }
     unseen++;

@@ -12,7 +12,8 @@
 //   S2  입력칸이 다시 서고(setFooter(null)) 안내 줄이 선다(setNote) · 칸이 111px(>48) 준다 → **그대로 바닥**(틈 ≤ 1)
 //   S2b 안내 줄만 선다(36px < NEAR_BOTTOM 48 · 경계값) → 틈 ≤ 1 · [최신 대화로] 안 섬
 //   S3  끝 덩이가 늦게 자란다(표·그림이 그려지듯 마지막 턴 안에 200px 이 더 붙는다) → 그대로 바닥(크기 관찰자)
-//   S4  사람이 올려 둔 상태(stick 거짓)에서 같은 일이 나면 → 자리를 **안 옮긴다**(scrollTop 그대로) · [최신 대화로] 단추가 선다
+//   S4  사람이 올려 둔 상태(휠 뒤 stick 거짓)에서 같은 일이 나면 → 자리를 **안 옮긴다**(scrollTop 그대로) · [최신 대화로] 단추가 선다
+//   S4b 사람 입력 없이 자리만 바뀐 스크롤(브라우저 고정 · 글꼴 도착) → stick 그대로 · 다음 크기 변화에서 바닥
 //   S5  새로 도입한 ResizeObserver 가 **없는** 브라우저 → S2 는 여전히 틈 ≤ 1(틱 뒤 재고정 경로)
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물리면 S2 · S2b · S5 가 빨갛다(두 문법 모두).
 //   크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0). 헤드리스(가상 시간)는 화면을 안 그려 ResizeObserver 배달이 보장되지 않는다 —
@@ -92,6 +93,7 @@ async function PAGE_MAIN() {
       r.s3 = gap(list); r.s3ro = roFired;
       //  S4 — 사람이 올려 둔 상태
       await sleep(200);
+      list.dispatchEvent(new WheelEvent("wheel", { deltaY: -300, bubbles: true }));   // 사람의 휠 — 이것 없이 스크롤 자리만 바뀌면 사람이 아니다(S4b)
       list.scrollTop = 0; list.dispatchEvent(new Event("scroll"));
       await sleep(200);
       const trace = [list.scrollTop];
@@ -106,6 +108,15 @@ async function PAGE_MAIN() {
       r.s4top = list.scrollTop;
       const jump = host.querySelector(".livc-jump");
       r.s4jump = jump ? !jump.hidden : null;
+      //  S4b — 사람 입력 없는 스크롤(브라우저 고정 · 글꼴 도착 흉내): 자리만 위로 바뀐 뒤 끝 덩이가 자라면 다시 바닥
+      await sleep(1700);
+      view.scrollToBottom(); await sleep(30);
+      list.scrollTop = list.scrollTop - 120; list.dispatchEvent(new Event("scroll"));
+      await sleep(60);
+      const grow3 = document.createElement("div"); grow3.style.cssText = "height:120px"; last.work.append(grow3);
+      view.scroll();
+      await sleep(120);
+      r.s4b = gap(list);
       view.destroy(); host.remove();
     }
     {
@@ -166,6 +177,7 @@ for (const style of ["tui", "desktop"]) {
   else console.log(`skip  S3 ${style} — 헤드리스가 ResizeObserver 를 배달하지 않았다 · 실제 크롬에서만 재는 행`);
   check(r.s4top === 0, `S4 ${style} — 사람이 올려 둔 동안엔 자리를 안 옮긴다`, r.s4trace);
   check(r.s4jump === true, `S4 ${style} — 올려 둔 동안 새 것이 붙으면 [최신 대화로] 단추가 선다`, r.s4jump);
+  check(r.s4b <= 1, `S4b ${style} — 사람 입력 없이 자리가 바뀐 스크롤(브라우저 고정 · 글꼴 도착)은 바닥 따라가기를 풀지 않는다`, r.s4b);
   check(r.s5 <= 1, `S5 ${style} — ResizeObserver 가 없는 브라우저에서도 S2 가 바닥`, r.s5);
 }
 console.log(`\n${fail ? "✗" : "✓"} chat-stick-bottom-runtime: ${pass} 통과 · ${fail} 실패`);
