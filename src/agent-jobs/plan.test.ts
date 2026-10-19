@@ -216,7 +216,7 @@ t("BF1 시작 실패 보고 거르기(#4829) — 판은 작업 AI 와 같은 uid
   assert.equal(parseBootFailure({ message: "a".repeat(299) + "\ud83d\ude00" }).message, "a".repeat(299) + "\ufffd", "자르다 남은 외톨이 서로게이트는 고친다(jsonb)");
 });
 
-t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 중 401) · 게이트웨이에 못 닿음 · 그 밖의 상태", () => {
+t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 중 401) · 읽지 못한 응답(200) · 게이트웨이에 못 닿음 · 그 밖의 상태", () => {
   const f = (o: Partial<ReturnType<typeof parseBootFailure>>) => ({ stage: "boot" as const, status: null, message: "", ...o });
   assert.equal(bootFailureError(f({ stage: "runner", status: 0, message: "본체 깨짐" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다: 본체 깨짐");
   assert.equal(bootFailureError(f({ stage: "runner" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다");
@@ -224,6 +224,8 @@ t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 
   assert.equal(bootFailureError(f({ status: 401, message: '{"error":"작업 비밀이 맞지 않습니다"}' }), "running"),
     "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)");
   assert.equal(bootFailureError(f({ status: 401, message: "no" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(401): no");
+  //  200 인데 JSON 이 아니다 — 응답은 받았으니 «받지 못했다» 가 아니라 «읽지 못했다».
+  assert.equal(bootFailureError(f({ status: 200, message: "응답이 JSON 이 아닙니다" }), "starting"), "작업 컨테이너가 게이트웨이의 시작 응답을 읽지 못했습니다: 응답이 JSON 이 아닙니다");
   assert.equal(bootFailureError(f({ status: 0, message: "connect ECONNREFUSED" }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다: connect ECONNREFUSED");
   assert.equal(bootFailureError(f({ status: null }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
   assert.equal(bootFailureError(f({ status: 503, message: "busy" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(503): busy");

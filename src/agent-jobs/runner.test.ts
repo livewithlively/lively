@@ -55,8 +55,8 @@ interface Seen {
 /** 가짜 게이트웨이 — 시나리오별 응답. */
 async function gateway(o: {
   mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
-  /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기. */
-  bootRaw?: string; runnerCode?: string; failedHang?: boolean;
+  /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
+  bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
 }): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
   const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [] };
   let resultCalls = 0;
@@ -82,6 +82,7 @@ async function gateway(o: {
       if (req.url === "/api/agent-jobs/1/boot-failed") {
         seen.failed.push({ auth: req.headers.authorization, body: JSON.parse(body || "{}") });
         if (o.failedHang) return;   // 답하지 않는다 — 판은 5초 뒤 스스로 끝나야 한다
+        if (o.failedStall) { res.writeHead(200, { "content-type": "application/json" }); res.write("{"); return; }   // 머리만 주고 본문이 멈춘다
         return json(200, { ok: true });
       }
       if (req.url === "/api/agent-jobs/1/tick") {
@@ -227,6 +228,17 @@ await t("F2 판 본체가 곧바로 던지면 — stage runner 와 그 말로 �
     assert.equal(await runBoot(g.port), 5);
     assert.deepEqual(g.seen.failed.map((f) => f.body), [{ stage: "runner", status: 0, message: "본체 깨짐 1" }]);
     assert.ok(!fs.existsSync(path.join(tmp, "f2.json")), "하네스가 떴다");
+  } finally { await g.close(); }
+});
+
+await t("F4 실패 보고의 답이 머리만 오고 멈춰도 5초 남짓에 같은 종료 코드로 끝난다(격리 리뷰 — 종전엔 0)", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "f4.json"), bootRaw: "x", failedStall: true });
+  try {
+    const t0 = Date.now();
+    assert.equal(await runBoot(g.port), 4);
+    const took = Date.now() - t0;
+    assert.equal(g.seen.failed.length, 1);
+    assert.ok(took >= 4_500 && took < 9_000, `${took}ms`);
   } finally { await g.close(); }
 });
 

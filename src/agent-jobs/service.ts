@@ -29,11 +29,12 @@
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
-import type { AgentJobPolicy } from "../org/policies/agent-job-policy.js";
+import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
   LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
   jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
@@ -43,7 +44,7 @@ type Store = typeof import("./store.js");
 export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
-    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob">;
+    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 컨테이너를 띄울 수 있는 배포인가(매니지드). */
   available(): Promise<boolean>;
@@ -357,7 +358,7 @@ export async function onBootFailed(id: number, presented: string, body: unknown,
   const f = parseBootFailure(body);
   const ended = await d.store.failBootAgentJob(auth.id, auth.fail_hash!, bootFailureError(f, auth.status));
   if (!ended) throw new HttpError(409, "판이 이미 돌고 있거나 끝난 작업입니다");   // 박동이 왔다 · 그 사이 감시·결과가 먼저 끝냈다
-  logger.warn({ job: ended.id, session: ended.session_id, stage: f.stage, status: f.status, msg: f.message }, "[agent-job] 판이 시작하지 못했다고 알렸다");
+  logger.warn({ job: ended.id, session: ended.session_id, stage: f.stage, status: f.status, report: f.message }, "[agent-job] 판이 시작하지 못했다고 알렸다");
   d.later(() => reapJob(ended, d), 0);
   d.later(() => dispatchAgentJobs(d), 0);
   return { ok: true };
@@ -496,12 +497,23 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
 
 /**
  * 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 가운데 끝난 지 보존 기간(정책 keep_days · 기본 90일)이 지난 행을 지운다.
- *  0 = 무기한(아무것도 안 지운다). 요청 정비 «job-record-prune»(6시간)이 부른다 — 한 판에 store.AGENT_JOB_PRUNE_BATCH 행까지.
+ *  0 = 무기한(아무것도 안 지운다). 요청 정비 «job-record-prune»(6시간)이 부른다 — 한 판에 PRUNE_BATCH 행, 꽉 찬 판이 이어지면 PRUNE_ROUNDS_MAX 판까지.
+ *  ★ 정책은 캐시(d.policy)를 거치지 않고 DB 에서 바로 읽는다 — 캐시는 읽기가 실패하면 기본값(90일)을 준다. 배차 · 감시엔 무해하지만 지우기는
+ *   되돌릴 수 없어, 0(무기한)이나 더 긴 기간을 정해 둔 워크스페이스를 기본값으로 지울 수 있다. 못 읽으면 던진다 — 정비 틀이 «테넌트 스윕
+ *   실패(비치명)» 로 남기고 다음 판에 다시 한다(격리 리뷰 · 보안 기본값은 닫힌 쪽).
  */
-export async function pruneAgentJobRecords(d: Pick<AgentJobDeps, "policy" | "store">): Promise<{ deleted: number; keep_days: number }> {
-  const p = await d.policy();
+export async function pruneAgentJobRecords(
+  d: Pick<AgentJobDeps, "store">, o: { batch?: number; maxRounds?: number } = {},
+): Promise<{ deleted: number; keep_days: number }> {
+  const p = resolveAgentJobPolicy(await d.store.agentJobPolicyRow());
   if (!(p.keep_days > 0)) return { deleted: 0, keep_days: p.keep_days };
-  const deleted = await d.store.pruneAgentJobs(p.keep_days);
+  const batch = o.batch ?? PRUNE_BATCH, rounds = o.maxRounds ?? PRUNE_ROUNDS_MAX;
+  let deleted = 0;
+  for (let i = 0; i < rounds; i++) {
+    const n = await d.store.pruneAgentJobs(p.keep_days, batch);
+    deleted += n;
+    if (n < batch) break;
+  }
   if (deleted > 0) logger.info({ deleted, keepDays: p.keep_days }, "[agent-job] 보존 기간이 지난 작업 기록을 지웠다");
   return { deleted, keep_days: p.keep_days };
 }

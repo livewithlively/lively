@@ -293,7 +293,7 @@ try {
     chk("I1 콜백 대조는 다섯 칸만 읽는다(비밀 셋 — 부트 · 실패 보고 #4829 · 콜백)", a && Object.keys(a).sort().join(",") === "boot_hash,fail_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
     chk("I1 없는 작업은 null", (await st.getAgentJobAuth(987654321)) === null);
     const [l] = await st.listAgentJobs({ requester: `${REQ}l1`, limit: 5 });
-    const leaked = ["prompt", "result", "output_tail", "boot_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
+    const leaked = ["prompt", "result", "output_tail", "boot_hash", "fail_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
     chk("I2 목록은 요약만 — 프롬프트·결과 전문·꼬리·비밀 해시 없음 · 답 앞머리 280자", leaked.length === 0 && l.result_preview.length === 280 && l.has_result === true,
       JSON.stringify({ leaked, len: l.result_preview?.length }));
     await itemsPool.query(`UPDATE org_agent_job SET reaped=false, error=$2 WHERE id=$1`, [id, "e".repeat(5000)]);
@@ -319,7 +319,7 @@ try {
   }
 
   // ── BF. 시작 실패 보고(#4829) — 실패 보고 비밀(fail_hash = 부트 비밀) · 첫 박동 전까지만 ──────────────────
-  //  «박동 전» 은 SQL 한 식(last_tick_at <= started_at — 부트가 둘을 한 문장의 now() 로 찍는다)이라 가짜 저장소로는 못 잰다.
+  //  «박동 전» 은 데이터다 — 부트는 실패 보고 비밀을 남기고 첫 박동 · 되돌리기 · 끝내기가 지운다. 그 쓰기들이 SQL 조건이라 가짜 저장소로는 못 잰다.
   {
     await cleanup();
     const id = await add("bf1");
@@ -339,19 +339,18 @@ try {
     const c2 = (await claimAll()).find((x) => x.row.id === id2);
     await st.bootAgentJob(id2, c2.row.boot_hash, "a".repeat(64));
     const b2 = await row(id2);
-    chk("BF4 부트는 부트 비밀만 지우고 실패 보고 비밀은 남긴다 · 시작과 마지막 박동이 같은 시각",
-      b2.status === "running" && b2.boot_hash === null && b2.fail_hash === c2.row.boot_hash && +b2.last_tick_at === +b2.started_at,
-      JSON.stringify({ s: b2.status, f: b2.fail_hash, t: b2.last_tick_at, st: b2.started_at }));
+    chk("BF4 부트는 부트 비밀만 지우고 실패 보고 비밀은 남긴다",
+      b2.status === "running" && b2.boot_hash === null && b2.fail_hash === c2.row.boot_hash,
+      JSON.stringify({ s: b2.status, b: b2.boot_hash, f: b2.fail_hash }));
     const e2 = await st.failBootAgentJob(id2, c2.row.boot_hash, "응답 못 받음");
     chk("BF5 도는 중이라도 박동 전이면 실패로 끝낸다", e2?.status === "failed" && (await row(id2)).fail_hash === null);
 
     const id3 = await add("bf3");
     const c3 = (await claimAll()).find((x) => x.row.id === id3);
     await st.bootAgentJob(id3, c3.row.boot_hash, "b".repeat(64));
-    await sleep(5);
     await st.tickAgentJob(id3, { tail: "도는 중", conversationId: null });
-    chk("BF6 박동이 온 판(살아 있다)은 실패 보고로 끝낼 수 없다",
-      (await st.failBootAgentJob(id3, c3.row.boot_hash, "x")) === null && (await row(id3)).status === "running");
+    chk("BF6 첫 박동이 실패 보고 비밀을 지운다 — 박동이 온 판(살아 있다)은 실패 보고로 끝낼 수 없다",
+      (await row(id3)).fail_hash === null && (await st.failBootAgentJob(id3, c3.row.boot_hash, "x")) === null && (await row(id3)).status === "running");
     await st.finishAgentJob(id3, { status: "done", error: null, from: ["running"] });
     chk("BF7 끝내면 실패 보고 비밀도 지운다", (await row(id3)).fail_hash === null);
 
@@ -369,6 +368,13 @@ try {
       st.failBootAgentJob(id5, c5.row.boot_hash, "판 보고 2"),
     ]);
     chk("BF9 실패 보고 둘과 감시가 겹쳐도 한 번만 끝난다", race.filter(Boolean).length === 1, JSON.stringify(race.map((x) => x?.error ?? null)));
+
+    //  끝내는 길은 모두 비밀을 지운다 — 그래도 상태 조건이 마지막 울타리다: 비밀이 남은 끝난 행(앞으로 생길 다른 끝내기 길)을 덮어쓰지 않는다.
+    const id6 = await add("bf6");
+    const c6 = (await claimAll()).find((x) => x.row.id === id6);
+    await itemsPool.query(`UPDATE org_agent_job SET status='done', error=NULL, ended_at=now() WHERE id=$1`, [id6]);
+    chk("BF10 끝난 작업은 비밀이 남아 있어도 실패 보고로 덮어쓰지 않는다",
+      (await st.failBootAgentJob(id6, c6.row.boot_hash, "x")) === null && (await row(id6)).status === "done" && (await row(id6)).error === null);
   }
 
   // ── P. 보존 정리(#4828) — 끝났고 걷은 작업 가운데 끝난 지 보존 일수가 지난 행만 지운다 ──────────────────
@@ -396,8 +402,12 @@ try {
     const openOdd = await mk("p-open-odd", "running", true, 400);
     const exists = async (id) => !!(await row(id));
     chk("P1 0(무기한)은 아무것도 지우지 않는다", (await st.pruneAgentJobs(0)) === 0 && (await exists(old)) && (await exists(older)));
+    //  1 일 아래 소수 · 음수 · 숫자 아님도 무기한 — 버림 뒤 0 일(make_interval(days => 0))로 돌면 걷은 행을 다 지운다(격리 리뷰).
+    chk("P1b 1 일 아래(0.5 · -3 · NaN)도 아무것도 지우지 않는다",
+      (await st.pruneAgentJobs(0.5)) === 0 && (await st.pruneAgentJobs(-3)) === 0 && (await st.pruneAgentJobs(NaN)) === 0 && (await exists(old)) && (await exists(older)));
     const n1 = await st.pruneAgentJobs(90, 1);
-    chk("P2 한 판의 상한(batch) — 끝난 때가 가장 오래된 것부터", n1 === 1 && !(await exists(older)) && (await exists(old)), JSON.stringify({ n1 }));
+    //  «가장 오래된 것부터» 는 ORDER BY 가 약속하고 부분 인덱스(ended_at)도 같은 순서로 읽는다 — ORDER BY 를 지워도 이 시험은 초록이다(격리 리뷰).
+    chk("P2 한 판의 상한(batch) — batch 행까지만 · 끝난 때가 오래된 것이 먼저", n1 === 1 && !(await exists(older)) && (await exists(old)), JSON.stringify({ n1 }));
     const n2 = await st.pruneAgentJobs(90);
     chk("P3 보존 일수(90)가 지난 «끝났고 걷은» 행만 — 89일 · 걷기 전 · 열린 작업(끝난 때가 잘못 적혔어도)은 남긴다",
       n2 === 1 && !(await exists(old)) && (await exists(fresh)) && (await exists(unreaped)) && (await exists(openOld)) && (await exists(openOdd)),

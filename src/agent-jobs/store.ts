@@ -3,7 +3,7 @@
 //  상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만» 조건을 단다 — 청/녹 두 슬롯·감시·판 보고가 겹쳐도 한 번만 넘어간다.
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
-import { planClaims, type AgentJobStatus } from "./plan.js";
+import { planClaims, PRUNE_BATCH, type AgentJobStatus } from "./plan.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
 export interface AgentJobRow {
@@ -26,7 +26,7 @@ export interface AgentJobRow {
   bare: boolean;
   session_id: string | null;
   boot_hash: string | null;
-  /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동 전까지만 연다. */
+  /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동이 지운다(그 전까지만 연다). */
   fail_hash: string | null;
   secret_hash: string | null;
   mcp_token_hash: string | null;
@@ -100,7 +100,7 @@ export interface NewAgentJob {
 export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "max_queued" | "max_running">): Promise<{ row: AgentJobRow } | { full: { queued: number; running: number } }> {
   return withTx(async (c) => {
     await lockTenantQueue(c);
-    //  WHERE 로 열린 작업만 센다 — 끝난 작업은 쌓이기만 하므로(보존 정리는 후속) 접수마다 표 전체를 훑지 않게 열린 작업 인덱스를 탄다.
+    //  WHERE 로 열린 작업만 센다 — 끝난 작업이 보존 기간(#4828 keep_days)만큼 쌓이므로 접수마다 표 전체를 훑지 않게 열린 작업 인덱스를 탄다.
     const cnt = await q(c, `SELECT count(*) FILTER (WHERE status='queued')::int AS queued,
                                    count(*) FILTER (WHERE status IN ('starting','running'))::int AS running
                               FROM org_agent_job WHERE status IN ('queued','starting','running')`);
@@ -225,10 +225,13 @@ export async function setAgentJobMcpToken(id: number, tokenHash: string): Promis
   return rows.length > 0;
 }
 
-/** 박동 — 진행 꼬리·대화 id 를 싣는다. 도는 작업에만. 돌려주는 것: 취소 요청 여부(행이 없거나 끝났으면 null). */
+/**
+ * 박동 — 진행 꼬리·대화 id 를 싣는다. 도는 작업에만. 돌려주는 것: 취소 요청 여부(행이 없거나 끝났으면 null).
+ *  첫 박동이 시작 실패 보고 비밀(fail_hash)을 지운다(#4829) — 박동한 판은 살아 있으니 «시작하지 못했다» 로 끝낼 길을 닫는다.
+ */
 export async function tickAgentJob(id: number, o: { tail: string; conversationId: string | null }): Promise<{ cancel: boolean } | null> {
   const rows = await q(itemsPool,
-    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), updated_at=now()
+    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), fail_hash=NULL, updated_at=now()
       WHERE id=$1 AND status='running' RETURNING cancel_requested`, [id, o.tail, o.conversationId]);
   return rows.length ? { cancel: rows[0].cancel_requested === true } : null;
 }
@@ -266,15 +269,15 @@ export async function finishAgentJob(id: number, o: {
 }
 
 /**
- * 판의 시작 실패 보고(#4829) — 그 작업을 실패로 끝낸다. 실패 보고 비밀(fail_hash)이 맞고 · 아직 첫 박동이 없을 때만:
- *  띄우는 중(starting)이거나, 도는 중이라도 박동이 한 번도 안 왔을 때(부트가 시작을 받고 응답을 못 받은 판 — last_tick_at 은 부트 때
- *  started_at 과 같은 값으로 찍히고 첫 박동이 뒤로 민다). 박동이 온 판(살아 있다)은 null — 실패 보고로 도는 작업을 끝낼 수 없다.
+ * 판의 시작 실패 보고(#4829) — 그 작업을 실패로 끝낸다. 실패 보고 비밀(fail_hash)이 맞을 때만: 띄우는 중(starting)이거나, 도는 중이라도
+ *  부트가 시작을 받고 응답을 못 받은 판(아직 박동 전). 비밀은 부트가 지우지 않고 첫 박동 · 되돌리기 · 끝내기가 지운다 — 박동이 온 판(살아 있다)은
+ *  비밀이 없어 null 이다. 실패 보고로 도는 작업을 끝낼 수 없다.
  */
 export async function failBootAgentJob(id: number, failHash: string, error: string): Promise<AgentJobRow | null> {
   const rows = await q(itemsPool,
     `UPDATE org_agent_job SET status='failed', error=$3, ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
             reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
-      WHERE id=$1 AND fail_hash=$2 AND (status='starting' OR (status='running' AND last_tick_at <= started_at))
+      WHERE id=$1 AND fail_hash=$2 AND status IN ('starting','running')
       RETURNING ${COLS}`, [id, failHash, error]);
   return norm(rows[0]);
 }
@@ -304,21 +307,20 @@ export async function openAgentJobs(limit = 1000): Promise<AgentJobSweepRow[]> {
 }
 
 /** 보존 정리 한 판에 지우는 행 수 상한 — 밀린 행이 많으면(보존 기간을 줄인 직후) 다음 판이 잇는다. */
-export const AGENT_JOB_PRUNE_BATCH = 1000;
-
 /**
  * 보존 정리(#4828) — 끝났고 걷기를 마친 작업 가운데 끝난 지 keepDays 일이 지난 행을 지운다(끝난 때가 오래된 것부터 batch 행까지).
- *  keepDays ≤ 0 이면 무기한이라 아무것도 지우지 않는다. 걷기 전(reaped=false) 행은 남긴다 — 감시가 컨테이너 · 토큰을 걷는 근거다.
- *  돌려주는 것 = 지운 행 수.
+ *  keepDays 가 1 일 아래(0 · 음수 · 1 미만 소수 · 숫자 아님)면 무기한이라 아무것도 지우지 않는다 — 버림 뒤 0 일로 돌면 걷은 행을 다 지운다.
+ *  걷기 전(reaped=false) 행은 남긴다 — 감시가 컨테이너 · 토큰을 걷는 근거다. 돌려주는 것 = 지운 행 수.
  */
-export async function pruneAgentJobs(keepDays: number, batch: number = AGENT_JOB_PRUNE_BATCH): Promise<number> {
-  if (!Number.isFinite(keepDays) || keepDays <= 0) return 0;
+export async function pruneAgentJobs(keepDays: number, batch: number = PRUNE_BATCH): Promise<number> {
+  const days = Math.floor(keepDays);
+  if (!(days >= 1)) return 0;
   const r = await itemsPool.query(
     `DELETE FROM org_agent_job WHERE id IN (
        SELECT id FROM org_agent_job
         WHERE reaped = true AND status IN ('done','failed','timeout','canceled') AND ended_at < now() - make_interval(days => $1)
         ORDER BY ended_at LIMIT $2)`,
-    [Math.floor(keepDays), Math.max(1, Math.floor(batch))]);
+    [days, Math.max(1, Math.floor(batch))]);
   return r.rowCount ?? 0;
 }
 

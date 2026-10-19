@@ -49,6 +49,10 @@ interface World {
   onMint: ((id: number) => void) | null;
   /** 끝내기 직전에 일어날 일(감시가 읽은 뒤 박동이 오는 흉내). */
   beforeFinish: ((id: number) => void) | null;
+  /** 시작 실패로 끝내기 직전에 일어날 일(비밀 대조 뒤 첫 박동이 끼어드는 흉내 · #4829). */
+  beforeFailBoot: ((id: number) => void) | null;
+  /** 보존 기간 설정을 읽는 것이 던지나(#4828 — DB 가 잠깐 막힘). */
+  policyRowError: boolean;
   claims: number;
   listening: number;
   /** 다음 부트를 «다른 판이 먼저 물었다» 로 만든다(한 번). */
@@ -68,7 +72,6 @@ const tokHash = (id: number): string => hashJobSecret(`tok-${id}`);
 function world(): World {
   const rows = new Map<number, AgentJobRow>();
   const requeuedAt = new Map<number, number>();   // 되돌린 시각(SQL 의 updated_at 자리)
-  const ticked = new Set<number>();               // 박동이 한 번이라도 온 작업(#4829 — 시작 실패 보고는 그 전까지만)
   let seq = 0, now = 1_000_000_000_000, hex = 0;
   const w = {} as World;
   const ended = (s: string): boolean => ["done", "failed", "timeout", "canceled"].includes(s);
@@ -133,8 +136,7 @@ function world(): World {
     async tickAgentJob(id, o) {
       const r = rows.get(id);
       if (!r || r.status !== "running") return null;
-      ticked.add(id);
-      Object.assign(r, { last_tick_at: new Date(now), output_tail: o.tail, conversation_id: o.conversationId ?? r.conversation_id });
+      Object.assign(r, { last_tick_at: new Date(now), output_tail: o.tail, conversation_id: o.conversationId ?? r.conversation_id, fail_hash: null });
       return { cancel: r.cancel_requested };
     },
     async finishAgentJob(id, o) {
@@ -154,10 +156,11 @@ function world(): World {
       });
       return { ...r };
     },
-    //  실 SQL(store.failBootAgentJob)의 조건을 흉내 낸다 — «첫 박동 전» 은 가짜 시계가 같은 값을 줄 수 있어 박동을 따로 센다(조건 자체는 store.pg-test 블록 F).
+    //  실 SQL(store.failBootAgentJob)의 조건을 흉내 낸다 — 비밀이 맞고 열린(띄우는 중 · 도는 중) 작업만. 첫 박동이 비밀을 지운다(조건 자체는 store.pg-test 블록 BF).
     async failBootAgentJob(id, failHash, error) {
+      w.beforeFailBoot?.(id);
       const r = rows.get(id);
-      if (!r || r.fail_hash !== failHash || !(r.status === "starting" || (r.status === "running" && !ticked.has(id)))) return null;
+      if (!r || r.fail_hash !== failHash || !(r.status === "starting" || r.status === "running")) return null;
       Object.assign(r, { status: "failed", error, ended_at: new Date(now), boot_hash: null, fail_hash: null, reaped: r.session_id === null && r.mcp_token_hash === null });
       return { ...r };
     },
@@ -182,16 +185,22 @@ function world(): World {
     newJobSecret: () => { const secret = `s${++hex}`; return { secret, hash: hashJobSecret(secret) }; },
     secretMatches,
     //  실 SQL(store.pruneAgentJobs)의 조건을 흉내만 낸다 — 조건 자체는 store.pg-test(블록 P)가 잰다. 여기선 정비가 무엇을 넘기나를 본다.
-    async pruneAgentJobs(keepDays) {
+    async pruneAgentJobs(keepDays, batch = 1000) {
       w.prunedWith.push(keepDays);
-      let n = 0;
-      for (const [id, r] of rows) if (ended(r.status) && r.reaped && r.ended_at && now - +r.ended_at > keepDays * 86_400_000) { rows.delete(id); n++; }
-      return n;
+      const old = [...rows.values()]
+        .filter((r) => ended(r.status) && r.reaped && r.ended_at && now - +r.ended_at > keepDays * 86_400_000)
+        .sort((a, b) => +a.ended_at! - +b.ended_at!).slice(0, batch);
+      for (const r of old) rows.delete(r.id);
+      return old.length;
+    },
+    async agentJobPolicyRow() {
+      if (w.policyRowError) throw new Error("db 가 잠깐 막혔다");
+      return { ...w.policy };
     },
   };
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
-    mintError: null, onMint: null, beforeFinish: null, claims: 0, listening: 0, bootRace: false, available: true,
+    mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
     setNow: (ms: number) => { now = ms; },
   });
@@ -982,28 +991,52 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
   assert.deepEqual(adminInApp.jobs, [], "앱 화면 안의 관리자는 관리자로 안 본다 — 남의 작업이 목록에 안 뜬다");
 });
 
+/** 끝났고 걷은 작업 하나(#4828 보존 정리 시험) — 끝난 때를 지금(가짜 시계 = 접수 시각)에서 며칠 전으로 둔다. */
+async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
+  const r = await w.deps.store.insertAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900,
+  }, { ...w.policy, max_queued: 500 });
+  assert.ok("row" in r);
+  const row = w.rows.get(r.row.id)!;
+  Object.assign(row, { status: "done", reaped: true, ended_at: new Date(+row.created_at - endedAgoDays * 86_400_000) });
+  return r.row.id;
+}
+
 await t("Z1 보존 정리(#4828) — 정책 보존 일수(기본 90일)를 저장소에 넘겨 지난 기록만 지우고 · 0(무기한)이면 저장소를 부르지도 않는다", async () => {
   const w = world();
-  const DAY = 86_400_000;
-  //  끝났고 걷은 작업 — 끝난 때를 지금(가짜 시계 = 접수 시각)에서 며칠 전으로 둔다.
-  const mk = async (prompt: string, endedAgoDays: number): Promise<number> => {
-    const r = await w.deps.store.insertAgentJob({
-      requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-      harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900,
-    }, w.policy);
-    assert.ok("row" in r);
-    const row = w.rows.get(r.row.id)!;
-    Object.assign(row, { status: "done", reaped: true, ended_at: new Date(+row.created_at - endedAgoDays * DAY) });
-    return r.row.id;
-  };
-  const old = await mk("91일 전에 끝남", 91);
-  const fresh = await mk("10일 전에 끝남", 10);
+  const old = await endedJob(w, "91일 전에 끝남", 91);
+  const fresh = await endedJob(w, "10일 전에 끝남", 10);
   assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 1, keep_days: 90 });
   assert.deepEqual(w.prunedWith, [90], "기본 보존 일수는 90일(상민 2026-10-19)");
   assert.ok(!w.rows.has(old) && w.rows.has(fresh), "보존 기간이 지난 것만 지운다");
   w.policy = { ...w.policy, keep_days: 0 };
   assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 });
   assert.deepEqual(w.prunedWith, [90], "0(무기한)이면 저장소를 부르지 않는다");
+});
+
+await t("Z2 보존 기간 설정을 못 읽으면 지우지 않고 던진다 — 기본값(90일)으로 지우지 않게(0 = 무기한을 지킨다 · 격리 리뷰)", async () => {
+  const w = world();
+  w.policy = { ...w.policy, keep_days: 0 };
+  const old = await endedJob(w, "400일 전에 끝남", 400);
+  w.policyRowError = true;
+  await assert.rejects(pruneAgentJobRecords(w.deps), /막혔다/);
+  assert.deepEqual(w.prunedWith, [], "저장소의 지우기를 부르지 않는다");
+  assert.ok(w.rows.has(old));
+  w.policyRowError = false;
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 }, "읽히면 저장된 0(무기한)을 따른다");
+  assert.ok(w.rows.has(old));
+});
+
+await t("Z3 꽉 찬 판이 이어지면 한 번의 정비에서 여러 판을 돈다(상한까지) — 밀린 기록을 몇 주에 걸쳐 지우지 않게", async () => {
+  const w = world();
+  for (let i = 0; i < 7; i++) await endedJob(w, `밀린 ${i}`, 100 + i);
+  const fresh = await endedJob(w, "어제 끝남", 1);
+  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 6, keep_days: 90 });
+  assert.equal(w.prunedWith.length, 3, "꽉 찬 판 셋 — 상한에서 멈춘다");
+  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 1, keep_days: 90 });
+  assert.equal(w.prunedWith.length, 4, "덜 찬 판이 나오면 멈춘다");
+  assert.ok(w.rows.has(fresh), "보존 기간 안의 것은 남는다");
 });
 
 await t("F1 시작 실패 보고(#4829) — 띄우는 중인 작업은 그 사유로 곧바로 실패 · 컨테이너를 걷고 다음 작업을 띄운다", async () => {
@@ -1032,13 +1065,20 @@ await t("F2 시작을 받고 응답을 못 받은 판(도는 중 · 박동 전)�
   assert.ok(w.revoked.length >= 1, "도는 중에 만든 작업 AI 토큰을 걷는다");
 });
 
-await t("F3 박동이 온 판(살아 있다)에는 시작 실패 보고가 안 먹는다(409) · 틀린 비밀 401 · 없는 작업 401", async () => {
+await t("F3 박동이 온 판(살아 있다)은 시작 실패로 못 끝낸다 — 첫 박동이 비밀을 지운다(401) · 대조 뒤 박동이 끼면 409 · 틀린 비밀 · 없는 작업 401", async () => {
   const w = world();
   const { id, boot } = await startedJob(w);
   const job = await onBoot(id, boot, w.deps);
   await onTick(id, job.secret, { tail: "도는 중" }, w.deps);
-  await assert.rejects(onBootFailed(id, boot, { stage: "runner", message: "x" }, w.deps), httpErr(409));
+  assert.equal(w.rows.get(id)!.fail_hash, null, "첫 박동이 실패 보고 비밀을 지운다");
+  await assert.rejects(onBootFailed(id, boot, { stage: "runner", message: "x" }, w.deps), httpErr(401));
   assert.equal(w.rows.get(id)!.status, "running", "도는 작업은 그대로");
+  w.usable.add("bob:memo");
+  const other = await startedJob(w, "bob");
+  await onBoot(other.id, other.boot, w.deps);
+  w.beforeFailBoot = (jid) => { w.rows.get(jid)!.fail_hash = null; w.beforeFailBoot = null; };   // 비밀 대조와 끝내기 사이에 첫 박동이 왔다
+  await assert.rejects(onBootFailed(other.id, other.boot, { stage: "boot", status: 401 }, w.deps), httpErr(409));
+  assert.equal(w.rows.get(other.id)!.status, "running", "경합에서도 도는 작업은 그대로");
   await assert.rejects(onBootFailed(id, "wrong", {}, w.deps), httpErr(401));
   await assert.rejects(onBootFailed(424242, boot, {}, w.deps), httpErr(401));
   await assert.rejects(onBootFailed(id, job.secret, {}, w.deps), httpErr(401), "콜백 비밀로는 열리지 않는다");

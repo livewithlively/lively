@@ -36,14 +36,15 @@ export const TMUX_ARG_MAX = 4096;
  *  ★ 끝내기 전에 실패를 알린다(#4829 — `boot-failed`, 같은 부트 비밀 · 한 번 · 5초): 401(시작 응답을 못 받고 다시 물은 판) · 5xx ·
  *   끊김 · JSON 아님 · 판 본체가 곧바로 던짐(stage runner). 종전엔 사유가 tmux 화면(console.error)에만 남아 컨테이너와 함께 사라지고,
  *   작업은 시작 상한(180초) · 무응답 상한(90초)이 지나서야 일반 문장으로 끝났다. 게이트웨이에 아예 못 닿으면 알림도 못 가므로
- *   그때는 종전처럼 시작 상한이 끝낸다. 종료 코드: 3 부트 실패 · 4 응답이 JSON 아님 · 5 본체가 곧바로 던짐.
+ *   그때는 종전처럼 시작 상한이 끝낸다. 종료 코드: 3 부트 실패 · 4 응답이 JSON 아님 · 5 본체가 곧바로 던짐(알림이 답하지 않거나
+ *   도중에 멈춰도 5초 뒤 같은 코드 — 답이 끝나든 끊기든 «close» 에서 끝낸다).
  */
 export const BOOT_SOURCE = [
   `const h=require("http"),e=process.env,id=e.${JOB_ID_ENV},k=e.${JOB_BOOT_ENV};delete e.${JOB_BOOT_ENV};let n=0;`,
   `const G={host:"${RUNNER_GATEWAY.host}",port:${RUNNER_GATEWAY.port}},u=s=>"/api/agent-jobs/"+encodeURIComponent(id)+"/"+s,`,
   `H={authorization:"Bearer "+k,"content-type":"application/json"};`,
   `const fail=(s,c,m,x)=>{console.error("lvly-job "+s+": "+c+" "+m);`,
-  `const q=h.request({...G,path:u("boot-failed"),method:"POST",headers:H,timeout:5000},r=>{r.resume();r.on("end",()=>process.exit(x))});`,
+  `const q=h.request({...G,path:u("boot-failed"),method:"POST",headers:H,timeout:5000},r=>{r.resume();r.on("close",()=>process.exit(x))});`,
   `q.on("timeout",()=>q.destroy());q.on("error",()=>process.exit(x));q.end(JSON.stringify({stage:s,status:c,message:String(m).slice(0,300)}))};`,
   `const go=()=>{const q=h.request({...G,path:u("boot"),method:"POST",headers:H},r=>{let b="";r.setEncoding("utf8");r.on("data",d=>b+=d);`,
   `r.on("end",()=>{if(r.statusCode===200){let j;try{j=JSON.parse(b)}catch(x){return fail("boot",200,"응답이 JSON 이 아닙니다",4)}`,

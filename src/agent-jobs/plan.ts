@@ -158,6 +158,10 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
   return { act: "none" };
 }
 
+/** 보존 정리(#4828) — 한 판에 지우는 행 수 · 꽉 찬 판이 이어질 때 한 번의 정비에서 도는 판 수(밀린 것을 몇 주에 걸쳐 지우지 않게 — 격리 리뷰). */
+export const PRUNE_BATCH = 1000;
+export const PRUNE_ROUNDS_MAX = 10;
+
 /** 판의 시작 실패 보고(#4829 — runner.ts BOOT_SOURCE 의 boot-failed 본문): 어느 단계 · 게이트웨이가 준 상태 코드(못 닿았으면 0) · 짧은 말. */
 export interface BootFailure { stage: "boot" | "runner"; status: number | null; message: string }
 
@@ -178,6 +182,7 @@ export function bootFailureError(f: BootFailure, jobStatus: AgentJobStatus): str
   const detail = f.message ? `: ${f.message}` : "";
   const s = f.stage === "runner" ? `작업 컨테이너의 실행기가 시작하자마자 멈췄습니다${detail}`
     : f.status === 401 && jobStatus === "running" ? "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)"
+      : f.status === 200 ? `작업 컨테이너가 게이트웨이의 시작 응답을 읽지 못했습니다${detail}`
       : !f.status ? `작업 컨테이너가 게이트웨이에 닿지 못했습니다${detail}`
         : `작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(${f.status})${detail}`;
   return s.slice(0, 600);
