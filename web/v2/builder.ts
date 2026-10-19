@@ -121,10 +121,12 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
     replaceRoute(to);   // 사이드바에도 새 앱이 「만들던 앱」 에 켜진 채로 선다 · 탭을 다시 켜도 이 자리로
   }, onSee: (sid: string, see: 'widget' | 'app' | null) => {
     //  ③ 실제 화면으로 써 보는 중 — 주소에 적어(#/builder/s/<세션>?see=…) 셸이 앱빌더 사이드바를 접게 한다(lib/side-owner · 원준 2026-10-19 «안그렇게 해줘»).
-    //   그 세션을 이어 만드는 주소에 있을 때만 — 이미 다른 데로 갔으면(앱 화면 #/i · 다른 탭) 건드리지 않는다.
+    //   지금 주소가 그 세션을 이어 만드는 주소일 때만 주소창을 고친다 — 이미 다른 데로 갔으면(앱 화면 #/i · 다른 탭) 주소창은 그대로.
+    //   ⚠ 걷을 때(null)는 그래도 **이 탭의 주소**는 고친다 — 안 그러면 탭을 다시 켤 때 낡은 ?see= 가 주소로 되살아나 허브에서 사이드바가 접힌 채 선다(격리 리뷰).
+    const to = see ? builderSeeRoute(sid, see) : builderRoute('resume', sid);
     const w = parseBuilderHash(location.hash);
-    if (!w || w.view !== 'resume' || w.id !== sid) return;
-    replaceRoute(see ? builderSeeRoute(sid, see) : builderRoute('resume', sid));
+    if (w && w.view === 'resume' && w.id === sid) { replaceRoute(to); return; }
+    if (!see) mounted?.env.setRoute?.(to);
   } };
   if (where.view === 'new') { openAppStudio(null, opts); return; }
   if (where.view === 'resume') {

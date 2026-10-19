@@ -37,6 +37,15 @@ const same = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringi
     "W  셸이 사이드바 주인으로 열 접기(app-ctx)와 ☰ 걷기(setSide)를 함께 정한다", m ? m[0].slice(0, 200) : "판정 줄 없음");
 }
 
+//  W2 · W3 — 주소만 바뀐 경우에도 크롬(app-ctx · ☰)을 다시 맞춘다(격리 리뷰): 같은 화면 안의 해시 이동(뒤로 가기로 ?see= 가 걷힘) · replaceState(setRoute).
+{
+  const main = readFileSync(path.join(WEB, "v2/main.ts"), "utf8");
+  check(/if \(routeKey\(cur\.route\) === routeKey\(hash\)\) \{ cur\.route = hash; tabsApi\.routed\(cur\); applyTabChrome\(cur\); return; \}/.test(main),
+    "W2 같은 화면 안의 해시 이동(앱빌더 목록 ↔ 이어 만들기 · 쿼리만)도 크롬을 다시 맞춘다");
+  check(/setRoute: \(h\) => \{ if \(tab\.route !== h && routeKey\(tab\.route\) === routeKey\(h\)\) \{ tab\.route = h; tabsApi\?\.routed\(tab\); if \(tabsApi\?\.current\(\) === tab\) applyTabChrome\(tab\); \} \}/.test(main),
+    "W3 앱빌더가 주소만 바꿔도(setRoute) 크롬을 다시 맞춘다 · 다른 화면으로 옮긴 탭의 주소는 되돌려 쓰지 않는다");
+}
+
 const chrome = findChrome();
 if (!chrome) { console.log("skip  크롬을 못 찾아 런타임 검증(F · P)을 건너뜁니다(CHROME_BIN 으로 지정)"); console.log(`\n#4632 발치 · ☰: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`); process.exit(fail ? 1 : 0); }
 const ESBUILD = path.join(ROOT, "node_modules/.bin/esbuild");
