@@ -8,7 +8,7 @@ import { el, navOn, sv } from '../core.js';
 import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 최근 줄의 정본은 서버
 import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
-import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
+import { fetchSessionApps, listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
@@ -141,37 +141,41 @@ export function togglePadHidden(tileId: string): string[] {
 }
 // ── 설치한 앱(구성원 앱)도 최근 줄 · 레일 최근 칸에 선다(#4769, 원준 2026-10-17). 키는 `i:<앱 id>`(lib/rail-lit) · 문은 #/open/<앱 id>(main.ts —
 //  인스턴스를 확보해 #/i/<인스턴스> 로 간다. 인스턴스 id 는 사람마다 달라 기록 · 주소가 될 수 없다). 그림은 앱이 선언한 아이콘(#4769) · 없으면 기본 그림.
-//  목록은 한 번 받아 둔다(primeInstalledApps) — 기록의 `i:` 키를 이름 · 그림으로 풀 때 쓴다. 방금 연 앱은 noteInstalledAppOpened 가 목록을 다시 받아 올린다.
-//  #4878 — 설 수 있는지는 **installedRecentOk 한 자리**에서 잰다: 화면이 있고 · 정본 주소가 없고 · **아직 만드는 중이 아니다**(앱 찾기와 같은 자 isAppInProgress).
+//  #4878 — 받아 두는 것은 **목록 행(installedRows)뿐**이고 설 수 있는지는 **그릴 때마다** installedRecentOk 로 잰다: 화면이 있고 · 정본 주소가 없고 ·
+//   **아직 만드는 중이 아니다**(앱 찾기와 같은 자 lib/builder-flow isAppInProgress — lib/rail-lit installedRecentEligible). 「만드는 중」 은 셸이 아는 세션 목록(padCtx)에
+//   기대는데 그 목록은 레일보다 늦게 오므로, 받을 때 한 번 재어 두면 틀린 답이 남는다. 넣기 · 공개 뒤에도 그 자리에서 바로 맞는다.
 //   원준 2026-10-19 «회의록 앱 아직 만들기 끝나지 않았는데 최근에 연 앱이나 사이드바에 바로 뜨는게 이해가 안가네 · 앱 아이콘까지도 떠» — 앱빌더 ③ 「앱 화면으로 보기」 가
-//   #/i/ 를 열면 종전엔 인스턴스의 앱 이름 · 그림만 보고 바로 올렸다(noteInstalledApp). 그 길을 없애고 목록(공개 범위 · 만들기 세션)을 받아 잰 뒤에만 올린다.
-let installedDefs: AppDef[] = [];
+//   #/i/ 를 열면 종전엔 인스턴스의 앱 이름 · 그림만 보고 바로 올렸다(noteInstalledApp). 그 길을 없애고 목록(공개 범위 · 만들기 세션)으로 잰 뒤에만 올린다.
+//  목록을 못 받으면(fetchSessionApps 가 던진다) 받아 둔 행을 지킨다 — 못 받았다고 비우면 팀 채널처럼 멀쩡한 앱까지 레일에서 사라진다.
+let installedRows: SessionApp[] = [];
 let installedPrimed: Promise<void> | null = null;
 function installedDefOf(a: { id: string; title: string; hasUi: boolean; icon: AppIconSpec | null }): AppDef {
   return { key: INSTALLED_RECENT_PREFIX + a.id, title: a.title, desc: '', route: 'open/' + encodeURIComponent(a.id), tab: null,
     icon: (registerAppIcon(a.id, a.icon) || builtinAppIcon(a.id, a.hasUi)) as AppDef['icon'], kind: 'native', group: 'workspace' };
 }
-/** 이 설치 앱이 최근 줄 · 레일 최근 칸에 설 수 있나 — 앱 찾기가 앱으로 세우는 것만(만드는 중인 앱은 앱빌더 「만들던 앱」 에만 선다, #4878). */
+/** 이 설치 앱이 지금 최근 줄 · 레일 최근 칸에 설 수 있나 — 앱 찾기가 앱으로 세우는 것만(만드는 중인 앱은 앱빌더 「만들던 앱」 에만 선다, #4878). */
 function installedRecentOk(a: SessionApp): boolean {
-  return installedRailEligible([{ id: a.id, hasUi: a.pages.length > 0, systemRoute: a.system?.route || null, inProgress: isAppInProgress(a, buildingNow(a)) }]).length > 0;
+  return installedRecentEligible({ id: a.id, hasUi: a.pages.length > 0, systemRoute: a.system?.route || null, visibility: a.visibility, studio: a.studio }, buildingNow(a));
 }
-/** 목록을 받아 설 수 있는 앱만 정본으로 둔다 — 만드는 중으로 남은 앱은 기록(`i:` 키)에 있어도 이름 · 그림을 못 얻어 서지 않는다. */
+/** 최근 줄에 설 수 있는 설치 앱(앱 표 뒤에 선다) — 받아 둔 행에서 **부를 때마다** 거른다. hasUi 는 installedRecentOk 가 이미 걸렀으니 참. */
+export function installedAppDefs(): AppDef[] {
+  return installedRows.filter(installedRecentOk).map((a) => installedDefOf({ id: a.id, title: a.title, hasUi: true, icon: a.icon }));
+}
+/** 목록을 받아 둔다 — 못 받으면 던지고 받아 둔 행은 그대로. */
 async function loadInstalled(): Promise<SessionApp[]> {
-  const rows = await listSessionApps();
-  installedDefs = rows.filter(installedRecentOk).map((a) => installedDefOf({ id: a.id, title: a.title, hasUi: true, icon: a.icon }));
-  return rows;
+  installedRows = await fetchSessionApps();
+  return installedRows;
 }
-/** 최근 줄에 설 수 있는 설치 앱(앱 표 뒤에 선다). */
-export function installedAppDefs(): AppDef[] { return installedDefs; }
 export function primeInstalledApps(): Promise<void> {
-  if (!installedPrimed) installedPrimed = loadInstalled().then(() => undefined).catch(() => { installedPrimed = null; });
+  if (!installedPrimed) installedPrimed = loadInstalled().then(() => undefined).catch(() => { installedPrimed = null; });   // 못 받았으면 다음에 다시
   return installedPrimed;
 }
-/** 설치 앱을 열었다(#/i/<인스턴스>) — 설 수 있는 앱이면 최근 기록에 적고 목록에 올린다. 돌려주는 값 = 레일을 다시 그릴 일이 있나.
+/** 설치 앱을 열었다(#/i/<인스턴스>) — 설 수 있는 앱이면 최근 기록에 적는다. 돌려주는 값 = 레일을 다시 그릴 일이 있나.
+ *  목록을 다시 받아 잰다(공개 · 넣기가 그 사이 바뀌었을 수 있다). 못 받으면 받아 둔 행으로 재고, 거기에도 없는 앱은 적지 않는다(다음에 열 때 적힌다 — 모르는 앱을 «앱이 됐다» 로 올리지 않는다).
  *  정본 주소를 가진 빌트인(자료 · 확인할 것)은 앱 표의 줄이 맡고, 만드는 중인 앱은 적지 않는다(#4878). */
 export async function noteInstalledAppOpened(appId: string): Promise<boolean> {
-  const rows = await loadInstalled().catch(() => null);
-  const a = rows ? rows.find((x) => x.id === appId) : null;
+  const rows = await loadInstalled().catch(() => installedRows);
+  const a = rows.find((x) => x.id === appId);
   if (!a || !installedRecentOk(a)) return false;
   noteAppUse(installedRecentKey(appId));
   return true;
@@ -262,7 +266,7 @@ export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 // ── 런치패드 아이콘 — 유리 (#1841) ── 정의는 ./glass-icon.ts(리프)로 옮겼다(#3830, 맥락 관리 표지가 같은 문패를 쓴다).
 //  여기서는 받아서 다시 내보낸다 — appGlassIcon 을 이 파일에서 import 하던 자리(views.ts)가 그대로 살아 있다.
 import { appGlassIcon, builtinAppIcon, registerAppIcon, type AppIconSpec } from './glass-icon.js';
-import { INSTALLED_RECENT_PREFIX, installedRailEligible, installedRecentKey, isInstalledRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱도 최근 줄에
+import { INSTALLED_RECENT_PREFIX, installedRecentEligible, installedRecentKey, isInstalledRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱도 최근 줄에
 export { appGlassIcon };
 
 // ── 런치패드 오버레이 ──

@@ -19,7 +19,7 @@ execFileSync(
    "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
-const { railLitKey, installedRailEligible } = await import(path.join(out, "lib/rail-lit.js"));
+const { railLitKey, installedRailEligible, installedRecentEligible } = await import(path.join(out, "lib/rail-lit.js"));
 
 let pass = 0, fail = 0;
 const ok  = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -56,7 +56,7 @@ const mainTs = code(readFileSync(path.join(root, "web/v2/main.ts"), "utf8"));
 const appsTs = code(readFileSync(path.join(root, "web/v2/apps.ts"), "utf8"));
 const css = code(readFileSync(path.join(root, "public/styles/47-v2-rail.css"), "utf8"));
 
-const fnBody = (name) => { const i = rail.indexOf(`function ${name}(`); return i < 0 ? "" : rail.slice(i, rail.indexOf("\n}\n", i)); };
+const fnBody = (name, src = rail) => { const i = src.indexOf(`function ${name}(`); return i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i)); };
 check(/from '\.\.\/lib\/rail-lit\.js'/.test(rail) && /railLitKey\(/.test(rail)
     && /\blitKey\(\)/.test(fnBody("drawRail")) && /\blitKey\(\)/.test(fnBody("openSectionMenu")),
   "W1 ★ rail.ts 의 레일과 구역 드롭다운 둘 다 lib/rail-lit 의 railLitKey 로 켜짐을 정한다");
@@ -77,8 +77,19 @@ check(installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: t
   "P2 다 만든 앱은 그대로 선다 — inProgress 를 안 주거나 false 면 종전 그대로", installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: true }), inst("deck-edit", { inProgress: false })]).join());
 check(installedRailEligible([inst("x", { hasUi: false }), inst("sources", { systemRoute: "#/sources" })]).length === 0,
   "P3 화면 없는 앱 · 정본 주소를 가진 빌트인은 종전처럼 빠진다");
-check(/inProgress:\s*isAppInProgress\(/.test(appsTs) && !/export function noteInstalledApp\(/.test(appsTs),
-  "P4 ★ apps.ts 는 설치 앱의 최근 칸 자격을 앱 찾기와 같은 자(isAppInProgress)로 재고, 자를 거치지 않는 noteInstalledApp 은 없다");
+//  순수 자격(자격 + 만드는 중) — 매니지드 실측 꼴 그대로
+const ws = (over = {}) => ({ id: "talk", hasUi: true, systemRoute: null, visibility: "all", studio: null, ...over });
+check(installedRecentEligible(ws(), false) === true && installedRecentEligible(ws(), true) === true, "R1 공개한 앱(팀 채널)은 만들기 세션이 있어도 선다(#4769 그대로)");
+check(installedRecentEligible(ws({ id: "meeting-notes", visibility: "me" }), true) === false, "R2 ★ 나만 보는 앱 · 앱빌더가 새로 만드는 중(회의록 꼴)은 안 선다");
+check(installedRecentEligible(ws({ id: "report-check", visibility: "me" }), false) === true, "R3 나만 보는 앱이라도 만드는 중이 아니면(보통 AI 세션이 저장 · 고치는 중) 선다");
+check(installedRecentEligible(ws({ id: "meeting-notes", visibility: "me", studio: { put: true } }), true) === true, "R4 ⑤ 넣기를 지난 앱은 선다");
+check(installedRecentEligible(ws({ id: "sources", systemRoute: "#/sources" }), false) === false && installedRecentEligible(ws({ hasUi: false }), false) === false, "R5 정본 주소를 가진 빌트인 · 화면 없는 앱은 종전처럼 빠진다");
+check(/installedRecentEligible\(/.test(fnBody("installedRecentOk", appsTs)) && /buildingNow\(a\)/.test(fnBody("installedRecentOk", appsTs)) && !/export function noteInstalledApp\(/.test(appsTs),
+  "P4 ★ apps.ts 는 설치 앱의 최근 칸 자격을 한 자리(installedRecentOk — installedRecentEligible + buildingNow)에서 재고, 자를 거치지 않는 noteInstalledApp 은 없다");
+check(/installedRows\.filter\(installedRecentOk\)/.test(fnBody("installedAppDefs", appsTs)) && !/installedDefs\s*=/.test(appsTs),
+  "P6 ★ 설 수 있는지는 받아 둘 때가 아니라 **그릴 때마다**(installedAppDefs) 잰다 — 세션 목록이 레일보다 늦게 와도 · 넣기 · 공개 뒤에도 맞게");
+check(/fetchSessionApps\(\)/.test(fnBody("loadInstalled", appsTs)) && /catch\(\(\) => installedRows\)/.test(fnBody("noteInstalledAppOpened", appsTs)),
+  "P7 ★ 목록을 못 받으면 던지는 판(fetchSessionApps)을 써서 받아 둔 행을 지킨다 — 빈 목록으로 덮어 멀쩡한 앱을 지우지 않는다");
 check(!/noteInstalledApp\(/.test(mainTs) && /noteInstalledAppOpened\(/.test(mainTs) && !/noteAppUse\(installedRecentKey\(/.test(mainTs),
   "P5 ★ main.ts 의 앱 인스턴스 화면(#/i/)은 자를 거친 한 길(noteInstalledAppOpened)로만 최근 기록을 적는다");
 

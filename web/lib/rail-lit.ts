@@ -1,3 +1,5 @@
+import { isAppInProgress } from './builder-flow.js';   // #4878 — 만드는 중인 앱은 최근 칸에 안 선다(앱 찾기와 같은 자)
+
 // 레일에서 **켜질 칸 하나**를 고른다(#3870).
 //
 //  원준 2026-09-27 신고: "홈 눌렀다가 밑에 분류체계 저거 눌르면 홈도 배경 하얗게 선택된 느낌인데 분류체계도 …
@@ -56,4 +58,10 @@ export const isInstalledRecentKey = (key: string): boolean => typeof key === 'st
  *   앱 인스턴스(#/i/)를 열면서 최근 기록에 적혔다. 앱 찾기에선 안 서는 앱이 홈 「최근에 연 앱」 과 레일 최근 칸에만 서면 «앱이 됐다» 로 읽힌다. */
 export function installedRailEligible(apps: ReadonlyArray<{ id: string; hasUi: boolean; systemRoute?: string | null; inProgress?: boolean }>): string[] {
   return apps.filter((a) => !!a.id && a.hasUi && !a.systemRoute && !a.inProgress).map((a) => installedRecentKey(a.id));
+}
+/** 설치 앱 하나가 최근 줄 · 레일 최근 칸에 설 수 있나 — 위 자격 + 만드는 중(lib/builder-flow isAppInProgress)을 한 자리에서(#4878).
+ *  building 은 부르는 쪽이 잰다(이 브라우저의 새 앱 만들기 기록 · 그 앱의 만들기 세션이 앱빌더 세션인가 — apps.ts buildingNow). 그릴 때마다 다시 잰다 —
+ *  세션 목록이 뒤에 와도, ⑤ 넣기 · 공개 뒤에도 그 자리에서 맞게. */
+export function installedRecentEligible(a: { id: string; hasUi: boolean; systemRoute?: string | null; visibility?: unknown; empty?: boolean | null; studio?: { put?: unknown } | null }, building: boolean): boolean {
+  return installedRailEligible([{ id: a.id, hasUi: a.hasUi, systemRoute: a.systemRoute, inProgress: isAppInProgress(a, building) }]).length > 0;
 }

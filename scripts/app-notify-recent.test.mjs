@@ -48,8 +48,8 @@ check(/installedAppDefs\(\)/.test(fnBody(apps, "recentApps")), "W3b 홈의 최�
 check(/route: 'open\/' \+ encodeURIComponent\(a\.id\)/.test(apps) && /registerAppIcon\(a\.id, a\.icon\) \|\| builtinAppIcon\(a\.id, a\.hasUi\)/.test(apps),
   "W3c 설치 앱의 문은 #/open/<앱 id> · 그림은 선언한 아이콘 → 기본 그림");
 //  #4878 — 잣대는 installedRecentOk 한 자리(installedRailEligible + 만드는 중 isAppInProgress). 목록(loadInstalled)도 방금 연 앱(noteInstalledAppOpened)도 그 한 자리를 거친다.
-check(/installedRailEligible\(/.test(fnBody(apps, "installedRecentOk")) && /inProgress: isAppInProgress\(/.test(fnBody(apps, "installedRecentOk"))
-    && /filter\(installedRecentOk\)/.test(fnBody(apps, "loadInstalled")) && /installedRecentOk\(a\)/.test(fnBody(apps, "noteInstalledAppOpened")),
+check(/installedRecentEligible\(/.test(fnBody(apps, "installedRecentOk")) && /buildingNow\(a\)/.test(fnBody(apps, "installedRecentOk"))
+    && /filter\(installedRecentOk\)/.test(fnBody(apps, "installedAppDefs")) && /installedRecentOk\(a\)/.test(fnBody(apps, "noteInstalledAppOpened")),
   "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRecentOk — installedRailEligible + 만드는 중 제외)로 거른다");
 
 const rail = read("web/v2/rail.ts");
