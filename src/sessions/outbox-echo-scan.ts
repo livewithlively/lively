@@ -8,7 +8,8 @@
 //   #4818 제출 지킴이(입력칸에 글이 남았으면 Enter)가 돌 틈도 없었다(«진행해»·«1» 같은 짧은 말은 거의 늘 걸린다).
 //  ⇒ 이제 셋 다 «보낸 뒤에 적힌 사람 말 줄» 만 증거로 본다.
 //  ⓘ 화면은 이미 그린 사람 말 턴(user 글)만 대조하므로 «같은 말» 규칙(samePrompt · exactPrompt · 증거 창)만 서버와 같다(E3). 빗금 명령 줄 ·
-//   system local_command 줄 · «대기열에 넣었다» 줄은 화면이 말풍선으로 그리지 않는 줄이라 서버 쪽에서만 증거가 된다 — 서버 판정이 더 넓다.
+//   system local_command 줄 · «대기열에 넣었다» 줄 · 셸 명령 줄(`<bash-input>`)은 화면이 말풍선으로 그리지 않는 줄이라 서버 쪽에서만 증거가
+//   된다 — 서버 판정이 더 넓다.
 //
 //  ── 알려진 한계(#4851 격리 리뷰 · 후속 후보) ──
 //  · 시각 하한은 게이트웨이 시계(친 때)와 하네스 시계(줄 시각)를 견준다 — 하네스 쪽이 5초 넘게 느리면 그 세션의 말이 «미확인» 이 된다.
@@ -76,6 +77,30 @@ export function typedCommandOf(text: string): string | null {
   return args ? `${name} ${args}` : name;
 }
 
+//  `!` 로 시작하는 말은 Claude Code 가 **셸 명령(bash 모드)** 으로 받는다 — 맨 앞 `!` 는 모드 전환으로 먹고 나머지를 셸로 돌린다(#4851 후속 ·
+//   매니지드 실측 2026-10-19 · Claude Code 2.1.301). 기록엔 친 글 그대로가 아니라:
+//   · 한가할 때 — user 줄 `<bash-input> 명령</bash-input>`(`!` 뒤 공백이 남는다) · 뒤이어 출력 줄 `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`.
+//   · 바쁠 때 — «대기열에 넣었다» 줄의 content 가 `!` 와 공백을 뗀 명령뿐이다(모드 칸 없음 — 키 content·operation·sessionId·timestamp·type).
+//     차례가 오면 dequeue 뒤 `<bash-input>명령</bash-input>`(공백 없이)으로 적힌다(실측 26분 뒤).
+//   그래서 «! 명령» 은 어느 줄과도 같을 수 없어 실제로 돈 셸 명령이 «미확인» 이었다(매니지드 행 131429·131430 — 경고를 보고 다시 보내면 명령이
+//   한 번 더 돈다). 셸 명령으로 보낸 말은 그 명령끼리 견준다 — 셸 명령 줄과 대기열 줄에서만(일반 사람 말 줄 «명령» 은 그 짝이 아니다).
+//   화면 렌더러는 셸 명령 줄을 말풍선으로 그리지 않는다(transcript-render) — 빗금 명령 줄처럼 서버 쪽에서만 증거가 된다.
+const BASH_OPEN = "<bash-input>", BASH_CLOSE = "</bash-input>";
+
+/** (순수) 셸 명령 줄의 글 `<bash-input>명령</bash-input>` → 명령(앞뒤 공백 뗌). 태그로 시작해 태그로 끝나는 꼴이 아니면 null. 선형 · 상한 CMD_LINE_MAX. */
+export function bashInputOf(text: string): string | null {
+  if (text.length > CMD_LINE_MAX) return null;
+  const s = text.trim();
+  if (s.length < BASH_OPEN.length + BASH_CLOSE.length || !s.startsWith(BASH_OPEN) || !s.endsWith(BASH_CLOSE)) return null;
+  return s.slice(BASH_OPEN.length, s.length - BASH_CLOSE.length).trim();
+}
+
+/** (순수) 친 글이 셸 명령(맨 앞 `!`)이면 그 명령(`!` 와 앞뒤 공백을 뗌 — 빌 수 있다), 아니면 null. */
+export function bashCommandOf(said: string): string | null {
+  const s = String(said ?? "").trim();
+  return s.startsWith("!") ? s.slice(1).trim() : null;
+}
+
 /**
  * (순수) 기록 한 줄이 **사람이 보낸 말**이면 그 글과 갈래, 아니면 null.
  *  · user 줄의 text 블록(또는 문자열 본문) — 주입(isMeta)·서브에이전트 가지(isSidechain)·도구 결과(tool_result 만 있는 줄)는 아니다.
@@ -88,9 +113,12 @@ export function typedCommandOf(text: string): string | null {
  *    원문 그대로 이 줄을 적는다(2.1.301 실측 0.3초). 끼워 넣은 말 줄은 도구가 끝나야 적혀(실측 28초 뒤 — 긴 도구면 몇 분) 그동안 «미확인» 경고가
  *    떴다. 하네스가 그 말을 받았다는 증거로 충분하다. Enter 가 먹히지 않아 두 말이 이어 붙어 들어간 판(«/context끝나면 알려줘» — 실측)은 어느 말과도
  *    같지 않아 증거가 안 된다(그 판의 경고는 사실이다).
+ *  · 셸 명령 줄(user 줄 `<bash-input>명령</bash-input>`) — 명령만 돌려준다(form "bash"). 대기열 줄은 form "enqueue"(셸 명령이면 `!` 가 떨어져 있다 —
+ *    위 BASH 머리말). 둘 다 견주는 규칙은 lineMatches 가 정한다.
  *  다른 하네스의 줄도 이 모양이다 — 어댑터(harness-io/*.ts)가 공통 ChatLine(user 줄의 text = 사람 말)으로 올린다.
  */
-export function promptOfLine(line: unknown): { text: string; queued: boolean } | null {
+export interface LinePrompt { text: string; queued: boolean; form?: "bash" | "enqueue" }
+export function promptOfLine(line: unknown): LinePrompt | null {
   if (!line || typeof line !== "object") return null;
   const o = line as Record<string, any>;
   if (o.type === "system" && o.subtype === "local_command") {
@@ -98,7 +126,7 @@ export function promptOfLine(line: unknown): { text: string; queued: boolean } |
     return cmd ? { text: cmd, queued: false } : null;
   }
   if (o.type === "queue-operation" && o.operation === "enqueue" && typeof o.content === "string") {
-    return { text: o.content, queued: false };
+    return { text: o.content, queued: false, form: "enqueue" };
   }
   if (o.type === "user") {
     if (o.isMeta || o.isSidechain) return null;
@@ -110,6 +138,8 @@ export function promptOfLine(line: unknown): { text: string; queued: boolean } |
       if (!texts.length) return null;
       text = texts.join("\n");
     } else return null;
+    const bash = bashInputOf(text);
+    if (bash !== null) return { text: bash, queued: false, form: "bash" };
     return { text: typedCommandOf(text) ?? text, queued: false };
   }
   if (o.type === "attachment" && o.attachment?.type === "queued_command" && typeof o.attachment.prompt === "string") {
@@ -149,6 +179,7 @@ export interface EchoWindow { notBefore: number; userNotAfter: number; queuedNot
 export function scanLinesForPrompt(lines: readonly unknown[], said: string, win: EchoWindow):
   { found: boolean; at: string | null; earliestMs: number | null } {
   let earliest: number | null = null;
+  const cmd = bashCommandOf(said);
   for (const l of lines) {
     const raw = (l as { timestamp?: unknown } | null)?.timestamp;
     const ts = typeof raw === "string" ? Date.parse(raw) : NaN;
@@ -158,9 +189,21 @@ export function scanLinesForPrompt(lines: readonly unknown[], said: string, win:
     const p = promptOfLine(l);
     if (!p) continue;
     const timely = ts <= (p.queued ? win.queuedNotAfter : win.userNotAfter);
-    if (timely ? samePrompt(said, p.text) : exactPrompt(said, p.text)) return { found: true, at: new Date(ts).toISOString(), earliestMs: earliest };
+    if (lineMatches(timely ? samePrompt : exactPrompt, said, cmd, p)) return { found: true, at: new Date(ts).toISOString(), earliestMs: earliest };
   }
   return { found: false, at: null, earliestMs: earliest };
+}
+
+/**
+ * (순수) 이 줄의 글이 그 말의 짝인가 — rule 은 같은 말(samePrompt) 또는 통째로 같은 글(exactPrompt).
+ *  · 셸 명령 줄(form "bash")은 셸 명령으로 보낸 말의 명령(cmd = bashCommandOf(said))과만 견준다.
+ *  · 대기열 줄(form "enqueue")은 글 그대로, 또는 셸 명령으로 보낸 말이면 그 명령과도 견준다(Claude Code 가 `!` 를 떼고 적는다).
+ *  · 나머지 사람 말 줄은 글 그대로(bash 모드가 없는 하네스는 «! 명령» 을 글 그대로 적는다).
+ */
+export function lineMatches(rule: (said: string, line: string) => boolean, said: string, cmd: string | null, p: LinePrompt): boolean {
+  if (p.form === "bash") return cmd !== null && rule(cmd, p.text);
+  if (rule(said, p.text)) return true;
+  return p.form === "enqueue" && cmd !== null && rule(cmd, p.text);
 }
 
 /** 대조할 기록 — 파일 하나의 크기·읽기·해석. 실제는 대화 파일(로컬 fs 또는 멤버 중계)이, 시험은 메모리 버퍼가 채운다(둘 다 alignedSource). */
