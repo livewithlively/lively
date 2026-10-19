@@ -203,8 +203,10 @@ function appConsent(app: SessionApp): Promise<boolean> {
     const tip = el('div', { class: 'v2-consent-tip', role: 'tooltip', id: 'v2-consent-tip', hidden: true }) as HTMLElement;
     let tipFor: HTMLElement | null = null;
     const showTip = (chip: HTMLElement): void => {
+      if (tipFor && tipFor !== chip) tipFor.removeAttribute('aria-describedby');   // 다른 칩으로 옮겼다 — 앞 칩의 연결을 끊는다(남으면 읽어 주는 프로그램이 앞 칩을 이 설명으로 읽는다)
       tipFor = chip; tip.textContent = chip.dataset.tip || ''; tip.hidden = false;
       chip.setAttribute('aria-describedby', tip.id);
+      tip.style.left = '0px'; tip.style.top = '0px';   // 재기 전에 — 지난 자리(오른쪽 끝)가 남아 있으면 폭이 눌려 좁고 길게 잰다
       const r = chip.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
       const left = Math.max(12, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 12));
       let top = r.bottom + 8; if (top + h > window.innerHeight - 12) top = Math.max(12, r.top - h - 8);   // 아래 자리가 모자라면 위로
