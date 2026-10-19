@@ -297,7 +297,7 @@ export function consolePart(ctx: PartCtx): Part {
     const state = !s ? '' : !s.alive ? '끝남' : s.stateKey === 'busy' ? '작업 중' : s.stateKey === 'waiting' ? '확인 필요' : s.stateKey === 'done' ? '작업 완료' : '쉬는 중';
     const kids: Array<HTMLElement | null> = [];
     if (phase === 'start') {
-      kids.push(headEl(name, [ctx.id ? `프로젝트 #${ctx.id}` : '프로젝트 없음', asks.length ? '첫 답을 기다리는 중' : '첫 지시 전'].join(' · ')));
+      kids.push(headEl(name, [ctx.id ? `프로젝트 #${ctx.id}` : '프로젝트에 붙지 않음', asks.length ? '첫 답을 기다리는 중' : '첫 지시 전'].join(' · ')));
       kids.push(el('div', { class: 'pn-con-lead', text: '여기서 채운 것을 세션이 다음 지시부터 압니다.' }));
       kids.push(...checklistEl());
       kids.push(attRow);
