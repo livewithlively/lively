@@ -475,6 +475,7 @@ export function canSeeJob(r: AgentJobRow, user: LivelyUser): boolean {
   if (isAdmin(user) && !user.appId) return true;
   const me = memberOf(user);
   //  구독 실행의 주인(account_member)도 본다 — 초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 작업(#4488 · 격리 리뷰). 취소도 같은 판정.
+  //  단 이 표면(agent_job_*)에서 own(지시·답·진행 꼬리)은 보낸 사람 기준 그대로 — 주인은 상태·오류만. 지시·답까지 보는 길은 앱 AI 실행(app_ai_run_get · isOwnRun)이다.
   if (r.requester !== me && !(r.account_kind === "subscription" && r.account_member === me)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;

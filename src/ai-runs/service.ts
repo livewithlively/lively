@@ -142,7 +142,6 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
  * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(501) → 상한(429) → 행 → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
-
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
   const who = requesterOf(user);
   //  작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳으면 사람 없이 끝없이 돈다(agent-jobs/service.assertMaySubmit 과 같은 규칙 · 격리 리뷰).
