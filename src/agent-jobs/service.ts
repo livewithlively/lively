@@ -350,7 +350,8 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
  * 판의 시작 실패 보고(#4829) — 부트가 게이트웨이의 답을 못 받았거나(401 · 5xx · 끊김) 판 본체가 곧바로 죽었을 때, 그 작업을 그 사유로
  *  곧바로 끝낸다. 종전엔 사유가 컨테이너 tmux 화면에만 남고 컨테이너와 함께 사라졌고, 작업은 시작 상한(180초) · 무응답 상한(90초)이
  *  지나서야 일반 문장으로 끝났다.
- *  비밀 = 부트 비밀과 같은 값(fail_hash — 자리 줄 때 단다 · 부트가 지워도 남는다). 첫 박동 전까지만 받는다 — 박동이 온 판(살아 있다)은 409.
+ *  비밀 = 부트 비밀과 같은 값(fail_hash — 자리 줄 때 단다 · 부트가 지워도 남는다). 첫 박동이 지운다 — 박동한 판(살아 있다)의 보고는 401,
+ *  대조와 끝내기 사이에 첫 박동이 끼면 409.
  *  보고는 작업 AI 와 같은 uid 에서 온다 — 칸마다 거르고(plan.parseBootFailure) · 그 작업 하나만 실패로 끝낼 수 있다(새 권한이 아니다).
  */
 export async function onBootFailed(id: number, presented: string, body: unknown, d: AgentJobDeps): Promise<{ ok: true }> {

@@ -306,7 +306,6 @@ export async function openAgentJobs(limit = 1000): Promise<AgentJobSweepRow[]> {
   return rows.map((r) => ({ ...r, id: Number(r.id) }) as unknown as AgentJobSweepRow);
 }
 
-/** 보존 정리 한 판에 지우는 행 수 상한 — 밀린 행이 많으면(보존 기간을 줄인 직후) 다음 판이 잇는다. */
 /**
  * 보존 정리(#4828) — 끝났고 걷기를 마친 작업 가운데 끝난 지 keepDays 일이 지난 행을 지운다(끝난 때가 오래된 것부터 batch 행까지).
  *  keepDays 가 1 일 아래(0 · 음수 · 1 미만 소수 · 숫자 아님)면 무기한이라 아무것도 지우지 않는다 — 버림 뒤 0 일로 돌면 걷은 행을 다 지운다.
