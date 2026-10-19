@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 import { Readable, pipeline } from "node:stream";
 import { createHash } from "node:crypto";
 import { wrap } from "../http/rest-util.js";
+import { viewerOf } from "../capabilities/principal.js";
 import { logger } from "../log.js";
 import { currentTenant, type TenantContext } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
@@ -90,8 +91,8 @@ const prefsCap = (name: string) => {
 const liveApiDeps: AppFrontApiDeps = {
   workspaceAccess: (id) => workspaceAccessAllowed(id),
   runTool: (member, appId, name, args, address) => runAppTool(member, appId, name, args, { source: "app-front", address }),
-  prefsGet: (member, appId) => prefsCap("app_prefs_get").handler({ app_id: appId }, member, { source: "app-front", actor: member.userId }),
-  prefsSet: (member, appId, patch) => prefsCap("app_prefs_set").handler({ app_id: appId, patch }, member, { source: "app-front", actor: member.userId }),
+  prefsGet: (member, appId) => prefsCap("app_prefs_get").handler({ app_id: appId }, member, { source: "app-front", actor: member.userId, viewer: viewerOf(member) }),
+  prefsSet: (member, appId, patch) => prefsCap("app_prefs_set").handler({ app_id: appId, patch }, member, { source: "app-front", actor: member.userId, viewer: viewerOf(member) }),
   gatewayBase: () => gatewayUrl(),
 };
 const liveDeps = (): AppFrontDeps => ({

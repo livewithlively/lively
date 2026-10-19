@@ -21,7 +21,7 @@ export interface CapabilityCtx {
   // 맥락 가시성(#1291) — 이 요청의 **열람 신원**. 문자열=그 멤버로 필터, null=특권(admin·내부 경로, 필터 없음).
   //  actor 와 값은 같지만 의미가 다르다: actor 는 '누가 썼나'(감사), viewer 는 '누가 보나'(접근통제).
   //  admin 은 어댑터에서 null 로 정규화된다 — 그래서 핸들러는 admin 분기를 따로 쓰지 않는다.
-  //  두 어댑터(capabilities/index.ts, web.ts)가 이 한 필드를 채우므로 MCP·REST 가 자동으로 같은 규칙을 탄다.
+  //  두 어댑터(capabilities/index.ts, web.ts)와 앱 화면 다리(app-tool-call.ts runAppTool)가 이 한 필드를 채우므로 MCP·REST·앱 화면이 같은 규칙을 탄다.
   viewer?: string | null;
 }
 

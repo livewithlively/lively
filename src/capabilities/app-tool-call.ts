@@ -12,6 +12,7 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { requireScope, type LivelyUser } from "../context.js";
+import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
 import { needsRegrant } from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
@@ -62,15 +63,16 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
   opts: { source: AppScreenSource; address?: "pub" | "draft" }): Promise<unknown> {
   if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
   if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
-  const viewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
+  //  앱을 보는 사람(앱 공개범위 판정용) — 아래 핸들러 ctx 의 viewer(데이터 공개범위 · 문자열)와 다르다.
+  const appViewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
 
   // 앱 존재·활성 확인. #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404).
   const installed = await getApp(appId);
-  if (!installed || !canSeeApp(installed, viewer)) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (!installed || !canSeeApp(installed, appViewer)) throw new HttpError(404, `앱 없음: ${appId}`);
   if (installed.status !== "active" || !installed.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
   //  선언은 **이 사람이 보는 판**의 것 — 공개 판을 보는 사람의 화면이 남의 초안이 새로 선언한 도구를 쓰지 않게.
   //   앱 주소로 들어온 호출이면 그 주소의 판(#4482 — 공개 주소는 초안을 고친 사람에게도 공개 판).
-  const seen = await viewAppFor(installed, viewer);
+  const seen = await viewAppFor(installed, appViewer);
   if (seen.view === "none") throw new HttpError(404, `앱 없음: ${appId}`);
   const app = seen.app;
 
@@ -114,7 +116,8 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
 
   const started = Date.now();
   try {
-    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId });
+    //  열람 신원(#1291)은 앱 세션 MCP 경로(capabilities/index.ts)와 같다 — 도구는 그 사람의 공개범위로 읽고 쓴다.
+    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId, viewer: viewerOf(member) });
     logToolCall({ tool: name, harness: opts.source, actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
     return result;
   } catch (e) {
