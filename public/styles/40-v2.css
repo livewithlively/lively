@@ -1664,6 +1664,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-consent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .v2-consent-chip { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 7px; padding: 2px 8px; }
 .v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
+/* 도구 칩의 쉬운 설명(#4632 · v2/app-session.ts · lib/tool-explain) — 올려 두거나 · 초점 · 누르면 창 위에 뜬다. 이름은 그대로 두고 설명이 있다는 표시만 점선으로. */
+.v2-consent-chip.has-tip { cursor: help; text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
+.v2-consent-chip.has-tip:hover, .v2-consent-chip.has-tip[aria-describedby] { background: color-mix(in srgb, var(--blue) 10%, var(--bg-tint)); }
+.v2-consent-chip.has-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-consent-tip { position: fixed; z-index: 2; max-width: min(300px, calc(100vw - 24px)); padding: 9px 12px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 13px; font-weight: 500; line-height: 1.55; box-shadow: 0 10px 28px rgba(var(--shadow-ink), .22); pointer-events: none; word-break: keep-all; }
 .v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 /* ── 앱 만들기(#4592 · v2/app-studio.ts) — 창 전체. ① 시작(무엇을 · 어디에) ② 만드는 중(가운데 앱 · 옆에 대화) ── */

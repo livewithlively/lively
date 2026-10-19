@@ -31,6 +31,8 @@ export interface ServerBuildRow {
   zip_key: string | null;
   zip_bytes: number | null;
   zip_sha256: string | null;
+  /** #4801 zip 의 S3 판 번호 — 함수가 이 판을 바로 읽는다(REFERENCE). 판 번호를 끈 버킷 · 칸이 생기기 전의 빌드면 null. */
+  zip_version: string | null;
   unzipped_bytes: number | null;
   entries: number | null;
   stage: string | null;
@@ -43,7 +45,7 @@ export interface ServerBuildRow {
   finished_at: string | null;
   lease_until: string | null;
 }
-const BUILD_COLS = `app_id, build_key, version_no, status, zip_key, zip_bytes::float8 AS zip_bytes, zip_sha256, unzipped_bytes::float8 AS unzipped_bytes, entries,
+const BUILD_COLS = `app_id, build_key, version_no, status, zip_key, zip_bytes::float8 AS zip_bytes, zip_sha256, zip_version, unzipped_bytes::float8 AS unzipped_bytes, entries,
   stage, error, log_tail, detail, built_by, session_id, started_at, finished_at, lease_until`;
 
 export async function getServerBuild(appId: string, key: string): Promise<ServerBuildRow | null> {
@@ -67,7 +69,7 @@ export async function claimServerBuild(appId: string, key: string, info: { versi
      ON CONFLICT (tenant_id, app_id, build_key) DO UPDATE SET
        version_no=EXCLUDED.version_no, status='building', built_by=EXCLUDED.built_by, session_id=EXCLUDED.session_id,
        started_at=now(), finished_at=NULL, lease_until=EXCLUDED.lease_until, stage=NULL, error=NULL, log_tail=NULL, detail='{}'::jsonb,
-       zip_key=NULL, zip_bytes=NULL, zip_sha256=NULL, unzipped_bytes=NULL, entries=NULL
+       zip_key=NULL, zip_bytes=NULL, zip_sha256=NULL, zip_version=NULL, unzipped_bytes=NULL, entries=NULL
      WHERE org_app_server_build.status='failed'
         OR (org_app_server_build.status='building' AND org_app_server_build.lease_until < now())
      RETURNING ${BUILD_COLS}`,
@@ -83,7 +85,8 @@ export async function touchServerBuild(appId: string, key: string, leaseSec: num
 
 export interface BuildFinish {
   ok: boolean;
-  zip?: { key: string; bytes: number; sha256_b64: string; unzipped: number; entries: number };
+  /** version — 올라온 zip 의 S3 판 번호(#4801 · 저장소가 판 번호를 안 주면 null). */
+  zip?: { key: string; bytes: number; sha256_b64: string; unzipped: number; entries: number; version?: string | null };
   stage?: string | null;
   error?: string | null;
   log_tail?: string | null;
@@ -92,10 +95,10 @@ export interface BuildFinish {
 export async function finishServerBuild(appId: string, key: string, f: BuildFinish): Promise<ServerBuildRow | null> {
   const r = await itemsPool.query(
     `UPDATE org_app_server_build SET status=$3, finished_at=now(), lease_until=NULL,
-       zip_key=$4, zip_bytes=$5, zip_sha256=$6, unzipped_bytes=$7, entries=$8, stage=$9, error=$10, log_tail=$11, detail=$12::jsonb
+       zip_key=$4, zip_bytes=$5, zip_sha256=$6, unzipped_bytes=$7, entries=$8, stage=$9, error=$10, log_tail=$11, detail=$12::jsonb, zip_version=$13
      WHERE app_id=$1 AND build_key=$2 RETURNING ${BUILD_COLS}`,
     [appId, key, f.ok ? "ok" : "failed", f.zip?.key ?? null, f.zip?.bytes ?? null, f.zip?.sha256_b64 ?? null, f.zip?.unzipped ?? null, f.zip?.entries ?? null,
-      f.stage ?? null, f.error ?? null, f.log_tail ?? null, JSON.stringify(f.detail ?? {})]);
+      f.stage ?? null, f.error ?? null, f.log_tail ?? null, JSON.stringify(f.detail ?? {}), f.zip?.version ?? null]);
   return (r.rows[0] as ServerBuildRow | undefined) ?? null;
 }
 
@@ -121,21 +124,33 @@ export async function failStaleServerBuilds(): Promise<number> {
 }
 
 /**
+ * 정리 후보 빌드 — function_name 은 그 앱의 함수 줄이 있을 때(그 함수의 남은 판이 이 zip 을 아직 읽는지 부르는 쪽이 본다 · #4801).
+ *  started_at 은 다음 쪽을 이어 고를 자리 — timestamptz 를 글자로(마이크로초까지 그대로 되돌려 넣는다 · JS Date 는 밀리초에서 잘린다).
+ */
+export interface PruneCandidate { app_id: string; build_key: string; zip_key: string | null; zip_sha256: string | null; function_name: string | null; started_at: string }
+/** 정리 후보를 이어 고르는 자리(started_at · app_id · build_key 순). */
+export interface PruneCursor { started_at: string; app_id: string; build_key: string }
+/**
  * 지울 zip — 앱이 사라졌거나, 별칭이 안 가리키고 오래된 빌드(성공 · 실패). 실패한 빌드는 zip 이 없다(행만 지운다).
  *  keep_until(#4791) 이 남은 빌드는 앱이 있는 한 지우지 않는다 — 서버 선언을 뺀 앱의 함수를 걷을 때 그 함수가 쓰던 빌드에 유예를 준다
  *  (빌드한 지 30일이 지났어도 걷은 뒤 30일 동안은 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다 · 격리 리뷰).
+ *  ★ #4801 앱이 사라졌어도 함수 줄이 남아 있으면(앱을 지울 때 함수를 못 지움 — 고아 쓸기가 다시 지운다) 고르지 않는다: 그 함수는 아직 이 zip 을
+ *   바로 읽는다(REFERENCE). 함수가 지워진 뒤 removeServer 가 기록과 zip 을 함께 걷는다. 별칭 밖의 남은 판($LATEST · 최근 판)이 읽는 zip 은
+ *   부르는 쪽(pruneServerBuilds)이 함수의 판 목록으로 거른다.
  */
-export async function serverBuildsToPrune(olderThanDays: number, limit = 50): Promise<Array<{ app_id: string; build_key: string; zip_key: string | null }>> {
+export async function serverBuildsToPrune(olderThanDays: number, limit = 50, after: PruneCursor | null = null): Promise<PruneCandidate[]> {
   const r = await itemsPool.query(
-    `SELECT b.app_id, b.build_key, b.zip_key FROM org_app_server_build b
+    `SELECT b.app_id, b.build_key, b.zip_key, b.zip_sha256, s.function_name, b.started_at::text AS started_at FROM org_app_server_build b
        LEFT JOIN org_app a ON a.id = b.app_id
        LEFT JOIN org_app_server s ON s.app_id = b.app_id
       WHERE b.status <> 'building'
-        AND (a.id IS NULL OR (b.started_at < now() - make_interval(days => $1)
+        AND ((a.id IS NULL AND s.app_id IS NULL) OR (a.id IS NOT NULL AND b.started_at < now() - make_interval(days => $1)
              AND (b.keep_until IS NULL OR b.keep_until < now())
              AND b.build_key IS DISTINCT FROM s.cur_build_key AND b.build_key IS DISTINCT FROM s.pub_build_key))
-      ORDER BY b.started_at LIMIT $2`, [olderThanDays, limit]);
-  return r.rows as Array<{ app_id: string; build_key: string; zip_key: string | null }>;
+        AND ($3::timestamptz IS NULL OR (b.started_at, b.app_id, b.build_key) > ($3::timestamptz, $4::text, $5::text))
+      ORDER BY b.started_at, b.app_id, b.build_key LIMIT $2`,
+    [olderThanDays, limit, after?.started_at ?? null, after?.app_id ?? null, after?.build_key ?? null]);
+  return r.rows as PruneCandidate[];
 }
 /** 빌드 유예(#4791) — 걷는 함수가 쓰던 빌드(별칭이 가리키던 빌드)를 days 일 동안 정리에서 뺀다. */
 export async function keepServerBuilds(appId: string, keys: Array<string | null>, days: number): Promise<void> {
@@ -146,6 +161,10 @@ export async function keepServerBuilds(appId: string, keys: Array<string | null>
 /** zip 크기를 모르는 성공 빌드(옛 줄)에 저장소에서 본 크기를 적는다(#4792 — 코드 저장 셈이 0 으로 새지 않게). */
 export async function setServerBuildZipBytes(appId: string, key: string, bytes: number): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server_build SET zip_bytes=$3 WHERE app_id=$1 AND build_key=$2 AND zip_bytes IS NULL`, [appId, key, bytes]);
+}
+/** 판 번호를 모르는 성공 빌드(#4801 칸이 생기기 전)에 저장소의 지금 판 번호를 적는다 — 함수에 그 판을 못 박게. 비어 있을 때만. */
+export async function setServerBuildZipVersion(appId: string, key: string, version: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_app_server_build SET zip_version=$3 WHERE app_id=$1 AND build_key=$2 AND zip_version IS NULL AND status='ok'`, [appId, key, version]);
 }
 export async function deleteServerBuild(appId: string, key: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_app_server_build WHERE app_id=$1 AND build_key=$2 AND status <> 'building'`, [appId, key]);

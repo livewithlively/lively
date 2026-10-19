@@ -142,13 +142,17 @@ export async function s3Put(cfg: S3Config, key: string, body: Buffer, opts: { co
   });
 }
 
-/** 있으면 크기, 없으면 null. */
-export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}): Promise<{ size: number } | null> {
+/**
+ * 있으면 크기와 지금 판 번호(versionId), 없으면 null. 판 번호는 버킷이 판 번호를 켰을 때만 온다(#4801 — Lambda 가 그 판을 바로 읽게 함수에 적는다).
+ *  판 번호를 끈 적이 있는 버킷의 옛 객체는 «null» 이라는 글자를 준다 — 판 번호 없음으로 읽는다.
+ */
+export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}): Promise<{ size: number; versionId: string | null } | null> {
   return withRetry(deps, async () => {
     const res = await send(cfg, deps, { method: "HEAD", key });
     if (res.status === 404) return null;
     if (!res.ok) throw new S3Error(res.status, `HTTP${res.status}`, `S3 HEAD ${key} 실패: ${res.status}`);
-    return { size: Number(res.headers.get("content-length") ?? "0") };
+    const v = res.headers.get("x-amz-version-id");
+    return { size: Number(res.headers.get("content-length") ?? "0"), versionId: v && v !== "null" ? v : null };
   });
 }
 

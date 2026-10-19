@@ -123,10 +123,23 @@ await t("E11 GET/HEAD — 404 는 null · 200 은 내용/크기", async () => {
   assert.equal(await s3Get(cfg, "a", d), null);
   assert.equal((await s3Get(cfg, "a", d))?.toString(), "hello");
   assert.equal(await s3Head(cfg, "a", d), null);
-  assert.deepEqual(await s3Head(cfg, "a", d), { size: 5 });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 5, versionId: null });
   assert.equal(seen.length, 4);
   assert.equal(seen[0].headers["x-amz-content-sha256"], EMPTY_SHA256);
   assert.equal(seen[2].method, "HEAD");
+});
+
+await t("E11b HEAD 판 번호(#4801) — 머리 x-amz-version-id 가 있으면 그 값 · «null»(판 번호 끈 적 있는 버킷의 옛 객체) · 없으면 null", async () => {
+  const seen: Seen[] = [];
+  const d = deps(fakeFetch([
+    { status: 200, headers: { "content-length": "7", "x-amz-version-id": "GphBDgso437Z5WE45HG2Rx1gsprz0Rbu" } },
+    { status: 200, headers: { "content-length": "7", "x-amz-version-id": "null" } },
+    { status: 200, headers: { "content-length": "7" } },
+  ], seen));
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: "GphBDgso437Z5WE45HG2Rx1gsprz0Rbu" });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: null });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: null });
+  assert.equal(seen.length, 3);
 });
 
 await t("E12 DELETE — 204 · 404 둘 다 성공", async () => {

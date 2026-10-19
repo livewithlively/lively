@@ -8,6 +8,7 @@
 //     실행 시간은 «호출 수 × 요청 시간 천장(60초)» 이 기준을 넘을 수 있는 함수만 본다(그 밑이면 넘을 수가 없다 — 격리 리뷰).
 //  ② 죽은 빌드 걷기 — 게이트웨이가 빌드 도중 다시 시작되면 'building' 줄이 남는다(lease 지남 → failed).
 //  ③ 옛 빌드 정리 — 앱이 사라졌거나, 별칭이 안 가리키고 30일 지난 빌드의 zip 을 지운다(판 묶음이 남아 있어 다시 빌드할 수 있다).
+//     함수의 남은 판이 아직 읽는 zip 은 빼고(#4801 — 함수가 우리 S3 를 바로 읽는다 · 지우면 나중에 그 판이 멈춘다).
 //  ④ 고아 함수 — 앱을 지울 때 함수를 못 지워 남긴 줄(org_app_server)을 다시 지운다.
 //  ⑤ 서버 선언을 뺀 앱의 함수(#4791 · 결정 상민 2026-10-16) — 설치된 상태 · 지금 판 · 공개 판 모두 web.server 가 없으면 표시(unused_since)를 붙이고,
 //     unused_retire_days(기본 7일)가 지나면 함수 · 로그 그룹 · 함수 줄을 걷는다(빌드 기록은 남긴다). 알림은 보내지 않는다(상태에 retire_at).
@@ -18,9 +19,10 @@ import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
 import { appServerEnv, serverDeclOf } from "./app-server-config.js";
 import { APP_SERVER_POLICY_MAX, autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { publicError, realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import { publicError, realLambdaApi, withDeps, type LambdaApi } from "./app-server-deploy.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { getMetricData, type MetricQuery, type MetricResult } from "../net/aws/lambda-lite.js";
+import { AwsError } from "../net/aws/aws-json.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
 import { notifyAppInstaller } from "./notify.js";
 import { listActiveAdminIds } from "../org/store/members.js";
@@ -38,6 +40,8 @@ export interface WatchDeps {
   metrics?: (queries: MetricQuery[], range: { start: Date; end: Date; periodSec: number }) => Promise<MetricResult[]>;
   /** 시험 — ⑤ 걷기 직전(후보를 고른 뒤 · 잠그기 전). 그 사이 서버 판이 돌아오는 경합을 흉내 낸다. */
   beforeRetire?: (appId: string) => Promise<void>;
+  /** 시험 — 옛 빌드 정리의 zip 지우기(기본 = setServerDepsForTest 의 deleteZip · 운영은 S3). */
+  deleteZip?: (key: string) => Promise<void>;
   /** kind — 'stopped'(멈춤) · 'stop-failed'(기준을 넘었는데 멈추지 못함). 같은 앱 · 같은 종류는 읽기 전까지 한 장. */
   notify?: (appId: string, title: string, body: string, kind: "stopped" | "stop-failed") => Promise<void>;
   now?: () => number;
@@ -103,16 +107,86 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
   return { checked: due.length, stopped };
 }
 
-/** ③ 옛 빌드 정리 — zip 을 지우고 줄을 지운다. 지운 수. */
-export async function pruneServerBuilds(limit = 50): Promise<number> {
+/**
+ * ③ 옛 빌드 정리 — zip 을 지우고 줄을 지운다. 지운 수.
+ *  ★ #4801 함수가 우리 S3 의 zip 을 바로 읽으므로(REFERENCE) 그 함수의 남은 판($LATEST · 별칭 밖에 남긴 최근 판)이 아직 읽는 zip 은 지우지 않는다.
+ *   지워도 곧바로는 멀쩡하다가(2026-10-16 시험: 영구 삭제 뒤에도 새 실행 환경 · 설정 고치기가 됐다) Lambda 가 코드를 다시 다듬을 때 그 판이 멈춘다
+ *   (Inactive — 고정한 판은 고칠 수도 없다). 함수의 판 목록(ListVersionsByFunction)에 그 빌드의 zip 지문(CodeSha256)이 있으면 남긴다(같은 바이트의
+ *   다른 빌드도 함께 남는다 — 넉넉한 쪽). 판 목록을 못 읽으면 이번 틱엔 그 함수의 빌드를 지우지 않는다. COPY 함수도 같은 규칙(모드가 섞여도 하나로).
+ *  ★ 배포와 한 줄로 — 함수가 남은 앱의 빌드는 그 앱의 배포 잠금을 쥔 채 별칭 · 판 목록을 새로 읽고 지운다(배포 중이면 이번 틱엔 건너뛴다). 안 그러면
+ *   고른 뒤 그 빌드로 되돌리는 배포가 판을 고정한 사이에 zip 을 지워 «초록인데 30일 뒤 멈추는» 함수가 생긴다(격리 리뷰). 배포 쪽도 잠금 안에서 zip 을
+ *   다시 본다(app-server-deploy deployBuildToAliases).
+ *  건너뛴 후보(아직 읽히는 zip)가 앞자리를 차지해 뒤의 후보가 굶지 않게 넘겨 가며 훑는다 — 지운 수 limit · 훑은 수 scanMax 까지.
+ *  «아직 읽힘» 은 먼저 이 틱 안의 판 목록 기억으로 잠금 없이 거른다(낡았어도 «남김» 쪽이라 안전) — 오래 쉰 앱의 영구 후보가 틱마다 잠금 · 판 목록을
+ *  되풀이하지 않게(규모가 커지면 Lambda 제어면 호출 몫 · 재검토). 지울 후보만 잠금을 쥐고 새로 읽는다.
+ */
+export async function pruneServerBuilds(deps: WatchDeps = {}, limit = 50, scanMax = 500, pageSize = 50): Promise<number> {
   const s3 = appBundleS3Config();
-  let n = 0;
-  for (const b of await st.serverBuildsToPrune(BUILD_PRUNE_DAYS, limit)) {
+  //  zip 지우기 — 시험이 끼운 고리(deps · 앱 지우기 removeServer 와 같은 setServerDepsForTest 고리) · 운영은 비어 있어 S3 를 지운다.
+  const deleteZip = deps.deleteZip ?? withDeps().deleteZip;
+  const env = appServerEnv();
+  const api = deps.api ?? (env ? realLambdaApi(env.region) : null);
+  /** 그 함수의 남은 판들이 읽는 코드 지문 — null = 못 읽었다(지우지 않는다). 함수가 AWS 에 없으면 빈 묶음(읽는 판도 없다). */
+  const liveShas = async (fn: string): Promise<Set<string> | null> => {
+    if (!api) return null;
+    try { return new Set((await api.listVersions(fn)).map((v) => v.CodeSha256).filter((x): x is string => !!x)); }
+    catch (e) {
+      if (e instanceof AwsError && (e.status === 404 || e.code === "ResourceNotFoundException")) return new Set();
+      logger.warn({ err: e, fn }, "함수 판 목록을 못 읽어 그 함수의 옛 빌드는 이번 틱에 지우지 않는다(#4801)");
+      return null;
+    }
+  };
+  /** 이 틱 안의 판 목록 기억 — 거르기에만 쓴다(지우기 전엔 잠금 안에서 새로 읽는다). */
+  const seenShas = new Map<string, Set<string> | null>();
+  const readsNow = async (fn: string, sha: string | null): Promise<boolean> => {
+    if (!seenShas.has(fn)) seenShas.set(fn, await liveShas(fn));
+    const shas = seenShas.get(fn);
+    return shas == null || (!!sha && shas.has(sha));   // 못 읽었으면 «읽는다» 로(남김)
+  };
+  const drop = async (b: st.PruneCandidate): Promise<void> => {
+    if (b.zip_key && deleteZip) await deleteZip(b.zip_key);
+    else if (b.zip_key && s3) await s3Delete(s3, b.zip_key, { attempts: 1, timeoutMs: 10_000 });
+    await st.deleteServerBuild(b.app_id, b.build_key);
+  };
+  /** 후보 하나 — 지웠으면 true. */
+  const pruneOne = async (b: st.PruneCandidate): Promise<boolean> => {
+    if (!b.zip_key) { await drop(b); return true; }   // 실패한 빌드 — zip 이 없다(줄만)
+    if (!b.function_name) {
+      //  고를 때 함수 줄이 없던 앱(앱이 사라짐) — 그 사이 같은 id 로 다시 만든 앱의 배포가 줄을 잡았으면 건너뛴다(틈을 S3 지우기 한 번으로 좁힌다 ·
+      //   줄 없이 잡히는 잠금이 없어 완전히 닫지는 못한다 — 재검토).
+      if (await st.getServerRow(b.app_id)) return false;
+      await drop(b);
+      return true;
+    }
+    if (await readsNow(b.function_name, b.zip_sha256)) return false;
+    //  배포 · 걷기 · 지우기가 잠금을 쥐고 있으면 다음 틱에. 임대는 removeServer · retireServer 와 같은 5분 — 판 목록 · S3 가 느려(시한 · 다시 하기)
+    //   임대가 먼저 끝나면 배포가 그 잠금을 잡은 뒤 이쪽이 풀어 버릴 수 있다(잠금에 주인 표시가 없다 · 재검토).
+    if (!(await st.lockServer(b.app_id, 5 * 60))) return false;
     try {
-      if (b.zip_key && s3) await s3Delete(s3, b.zip_key, { attempts: 1, timeoutMs: 10_000 });
-      await st.deleteServerBuild(b.app_id, b.build_key);
-      n++;
-    } catch (e) { logger.warn({ err: e, app: b.app_id, key: b.build_key }, "옛 앱 서버 빌드 정리 실패(비치명 — 다음 틱)"); }
+      const row = await st.getServerRow(b.app_id);
+      //  고른 뒤 별칭이 이 빌드로 옮겨졌으면(되돌리기 · 공개) 정리 대상이 아니다.
+      if (row && (row.cur_build_key === b.build_key || row.pub_build_key === b.build_key)) return false;
+      const shas = await liveShas(row?.function_name ?? b.function_name);
+      if (!shas || (b.zip_sha256 && shas.has(b.zip_sha256))) return false;
+      await drop(b);
+      return true;
+    } finally {
+      await st.unlockServer(b.app_id).catch(() => { /* 잠금은 5분 뒤 저절로 풀린다 */ });
+    }
+  };
+  let n = 0;
+  let scanned = 0;
+  let after: st.PruneCursor | null = null;
+  while (n < limit && scanned < scanMax) {
+    const page = await st.serverBuildsToPrune(BUILD_PRUNE_DAYS, Math.min(pageSize, scanMax - scanned), after);
+    if (!page.length) break;
+    for (const b of page) {
+      scanned++;
+      after = { started_at: b.started_at, app_id: b.app_id, build_key: b.build_key };
+      if (n >= limit) break;
+      try { if (await pruneOne(b)) n++; }
+      catch (e) { logger.warn({ err: e, app: b.app_id, key: b.build_key }, "옛 앱 서버 빌드 정리 실패(비치명 — 다음 틱)"); }
+    }
   }
   return n;
 }
@@ -187,7 +261,7 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.watch = await watchAppServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.retire = await retireUnusedServers(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.code_sizes = await refreshUnknownCodeBytes(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
-  out.pruned = await pruneServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  out.pruned = await pruneServerBuilds(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;
 }

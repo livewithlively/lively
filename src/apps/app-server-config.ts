@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 import type { AppBundle } from "./app-bundle.js";
 import { BUILDER_VERSION, ZIP_EXCLUDE, RUN_SCRIPT } from "./app-server-builder.js";
 import { currentTenant } from "../org/tenant-context.js";
-import type { LogGroupTag } from "../net/aws/lambda-lite.js";
+import type { FnCode, FnCodeLocation, LogGroupTag } from "../net/aws/lambda-lite.js";
 
 /** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
 export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
@@ -52,6 +52,13 @@ export interface AppServerEnv {
   prefix: string;
   runtime: string;
   arch: "arm64";
+  /**
+   * 함수 코드를 어디에 두나(#4801 · env LIVELY_APP_SERVER_CODE_STORAGE) — REFERENCE(기본) = Lambda 가 우리 판 묶음 버킷의 zip 을 그 판 번호로 바로 읽는다
+   *  (계정 코드 저장 300GiB 를 쓰지 않는다) · COPY = Lambda 가 제 저장소로 복사한다(#4484 방식). REFERENCE 는 인프라(lively-infra app-bundles.tf 버킷 정책 ·
+   *  app-servers.tf 박스 역할 GetObjectVersion)가 먼저 깔려 있어야 한다 — 없으면 함수 만들기 · 코드 고치기가 곧바로 거절된다. COPY 는 그 정책이 없는
+   *  다른 배포(자기 버킷)를 위한 길이다.
+   */
+  codeStorage: "REFERENCE" | "COPY";
 }
 
 export const DEFAULT_ADAPTER_LAYER_VERSION = 30;   // LambdaAdapterLayerArm64:30 = Lambda Web Adapter 1.1.0(2026-09-18) · 서울 실측 2026-10-15
@@ -85,7 +92,30 @@ export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string 
   const p = String(env.LIVELY_APP_SERVER_PREFIX ?? "").trim();
   const prefix = p && PREFIX_RE.test(p) ? p : "lvly-app-";
   const runtime = String(env.LIVELY_APP_SERVER_RUNTIME ?? "").trim() || DEFAULT_RUNTIME;
-  return { region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64" };
+  //  모르는 값은 기본(REFERENCE)으로 — «copy» 라고 또렷이 적었을 때만 복사한다.
+  const codeStorage = String(env.LIVELY_APP_SERVER_CODE_STORAGE ?? "").trim().toLowerCase() === "copy" ? "COPY" : "REFERENCE";
+  return { region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64", codeStorage };
+}
+
+/**
+ * 함수에 줄 코드 자리(#4801) — REFERENCE 면 zip 의 판 번호까지 못 박는다(그 판을 Lambda 가 계속 읽는다 · 판 번호를 모르는 옛 빌드면 Lambda 가 지금 판으로
+ *  풀어 적는다). COPY 는 #4484 그대로(판 번호 없이 — 판 번호를 주면 부르는 쪽에 GetObjectVersion 이 따로 든다).
+ */
+export function functionCodeFor(env: Pick<AppServerEnv, "codeStorage">, bucket: string, zipKey: string, zipVersion: string | null): FnCode {
+  if (env.codeStorage === "COPY") return { S3Bucket: bucket, S3Key: zipKey };
+  return { S3Bucket: bucket, S3Key: zipKey, ...(zipVersion ? { S3ObjectVersion: zipVersion } : {}), S3ObjectStorageMode: "REFERENCE" };
+}
+
+/**
+ * 함수의 지금 코드($LATEST)가 바라는 자리에 이미 있나(#4801) — 같은 코드 지문이어도 저장 방식 · 객체 · 판 번호가 다르면 코드를 다시 올린다
+ *  (COPY 로 만든 옛 함수를 REFERENCE 로 옮기기 · 그 반대). REFERENCE 면 GetFunction 의 Code.ResolvedS3Object 가 읽는 객체를 알려 주고,
+ *  COPY 면 그 칸이 비어 있다(2026-10-16 시험). want 에 판 번호가 없으면(옛 빌드) 객체만 맞으면 된다.
+ */
+export function codeAt(have: FnCodeLocation | undefined, want: FnCode): boolean {
+  const r = have?.ResolvedS3Object ?? null;
+  if (want.S3ObjectStorageMode !== "REFERENCE") return !r;
+  if (!r) return false;
+  return r.S3Bucket === want.S3Bucket && r.S3Key === want.S3Key && (!want.S3ObjectVersion || r.S3ObjectVersion === want.S3ObjectVersion);
 }
 
 /**
