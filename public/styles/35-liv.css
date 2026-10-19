@@ -152,7 +152,10 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
     살아있음=mint-deep, 실패=coral-text, 이 구역에서 채운 것은 [보내기] 하나. */
 :root { --livc-mono: 'D2Coding', ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
 
-.livc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* min-width: 0 — 가로 flex(.sc-chat 등)에 들면 기본 min-width:auto 가 **내용 폭**이라, 칸 수에 맞춰 그린 tui 표(white-space: pre)가
+   대화창을 그 폭에 묶는다. 그러면 곁칸을 열거나 창을 줄여도 대화창이 안 좁아져 오른쪽이 곁칸 밑으로 잘리고, 목록 폭이 그대로라
+   표도 다시 안 그려진다(실측 2026-10-19: 700px 칸에서 목록 1320px). */
+.livc-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* 일지는 **아래에서 쌓인다.** 첫 항목을 바닥에 붙여 쓰는 자리(입력칸) 바로 위에서 시작하게 한다 —
    위로 붙이면 아래가 통째로 비고, 가운데 띄우면 '빈 채팅앱'이 된다. 남는 공백은 위에 둔다. */
 .livc-list { flex: 1; min-height: 0; overflow: auto; padding: 20px 22px 8px;
