@@ -12,6 +12,7 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { requireScope, type LivelyUser } from "../context.js";
+import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
 import { needsRegrant } from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
@@ -87,7 +88,8 @@ const appToolCall: Capability = {
 
     const started = Date.now();
     try {
-      const result = await cap.handler(args as Record<string, unknown>, appUser, { source: "app-ui", actor: member.userId });
+      //  열람 신원(#1291)은 앱 세션 MCP 경로(capabilities/index.ts)와 같다 — 도구는 그 사람의 공개범위로 읽고 쓴다.
+      const result = await cap.handler(args as Record<string, unknown>, appUser, { source: "app-ui", actor: member.userId, viewer: viewerOf(member) });
       logToolCall({ tool: name, harness: "app-ui", actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
       return { app_id: appId, name, result };
     } catch (e) {
