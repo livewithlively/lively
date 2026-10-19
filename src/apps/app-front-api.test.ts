@@ -149,6 +149,15 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
   ok("C15~C19 동의 자리(공개 · 초안 주소) · 주소 없으면 생략 · 동의 실패에만 · HttpError 그대로 · 스코프 403 · 내부 오류 500 감춤");
 }
 
+// ── C19b 도구가 던진 도메인 글(store 의 plain Error)은 REST(wrap)와 같은 4xx — «없음» 404 · 검증 400. 그 밖은 글을 감춘 500 ──
+{
+  assert.deepEqual(apiErrorReply(new Error("지식 'k' 없음"), () => null), { status: 404, json: { error: "지식 'k' 없음" } }, "C19b «없음» 404 — 안 보이는 것과 없는 것이 같은 답");
+  assert.deepEqual(apiErrorReply(new Error("name 은 필수입니다"), () => null), { status: 400, json: { error: "name 은 필수입니다" } }, "C19b 검증 400");
+  const r = apiErrorReply(new Error("domainmap fetch failed http://10.0.0.5:7000"), () => null);
+  assert.ok(r.status === 500 && !JSON.stringify(r.json).includes("10.0.0.5"), "C19b 내부 서비스 연결 실패는 글을 감춘 500 그대로");
+  ok("C19b 도메인 글 — «없음» 404 · 검증 400 · 내부 연결 실패는 감춘 500");
+}
+
 // ── C20 도구에 넘기는 주체 — 그 사람 · 주소의 판 · 유효 스코프만 ──
 {
   const { d, calls } = deps();

@@ -24,6 +24,7 @@
 //  ⓘ 쓰기의 출처 검사(같은 주소에서 온 것만)는 앞단이 한다(Origin · Sec-Fetch-Site). 여기 오는 요청은 그 검사를 지났다.
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
+import { domainErrorReply } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { isScope } from "../auth/scopes.js";
 import type { OrgApp } from "../org/store/apps.js";
@@ -163,6 +164,10 @@ export function apiErrorReply(e: unknown, consentUrl: () => string | null): ApiR
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (/^Forbidden:/.test(msg)) return { status: 403, json: { error: "이 앱의 권한 밖입니다 — " + msg.replace(/^Forbidden:\s*/, "") } };
+  //  도구가 던진 도메인 글(«없음» · 검증)은 REST 와 같은 4xx 로 — 안 보이는 대상과 없는 대상이 같은 404 다.
+  //   내부 서비스 연결 실패(502)는 글에 주소가 실릴 수 있어 아래의 감춘 500 그대로 둔다.
+  const mapped = domainErrorReply(msg);
+  if (mapped && mapped.status !== 502) return { status: mapped.status, json: { error: mapped.error } };
   logger.error({ err: msg, stack: e instanceof Error ? e.stack : undefined }, "[app-front] /_lively API 처리 실패");
   return { status: 500, json: { error: "처리하지 못했습니다 — 잠시 뒤 다시 하세요" } };
 }
