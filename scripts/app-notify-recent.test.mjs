@@ -47,8 +47,10 @@ check(/isInstalledRecentKey\(key\)/.test(note) && /appByKey\(key\)/.test(note),
 check(/installedAppDefs\(\)/.test(fnBody(apps, "recentApps")), "W3b 홈의 최근 줄(recentApps)이 설치 앱 목록을 합친다");
 check(/route: 'open\/' \+ encodeURIComponent\(a\.id\)/.test(apps) && /registerAppIcon\(a\.id, a\.icon\) \|\| builtinAppIcon\(a\.id, a\.hasUi\)/.test(apps),
   "W3c 설치 앱의 문은 #/open/<앱 id> · 그림은 선언한 아이콘 → 기본 그림");
-check(/installedRailEligible\(/.test(fnBody(apps, "primeInstalledApps")) && /installedRailEligible\(\[a\]\)/.test(fnBody(apps, "noteInstalledApp")),
-  "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRailEligible)로 거른다");
+//  #4878 — 잣대는 installedRecentOk 한 자리(installedRailEligible + 만드는 중 isAppInProgress). 목록(loadInstalled)도 방금 연 앱(noteInstalledAppOpened)도 그 한 자리를 거친다.
+check(/installedRecentEligible\(/.test(fnBody(apps, "installedRecentOk")) && /buildingNow\(a\)/.test(fnBody(apps, "installedRecentOk"))
+    && /filter\(installedRecentOk\)/.test(fnBody(apps, "installedAppDefs")) && /installedRecentOk\(a\)/.test(fnBody(apps, "noteInstalledAppOpened")),
+  "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRecentOk — installedRailEligible + 만드는 중 제외)로 거른다");
 
 const rail = read("web/v2/rail.ts");
 check(/\.\.\.installedAppDefs\(\)\]/.test(fnBody(rail, "recentForRail")), "W4a ★ 레일 최근 칸(recentForRail)이 설치 앱 목록을 합친다");
@@ -58,8 +60,8 @@ check(/primeInstalledApps\(\)\.then\(\(\) => drawRail\(\)\)/.test(fnBody(rail, "
 
 const main = read("web/v2/main.ts");
 check(/page === 'open' && segs\[1\]/.test(main) && /openInstalledApp\(a, null, \{ state: /.test(main), "W5a ★ #/open/<앱 id> 갈래 — 설치 앱을 열며 물음표 뒤 값을 state 로 싣는다");
-check(/noteAppUse\(installedRecentKey\(instance\.app_id\)\)/.test(main) && /noteInstalledApp\(\{ id: instance\.app_id/.test(main),
-  "W5b ★ #/i/<인스턴스> 를 그릴 때 설치 앱을 최근 기록 · 목록에 올린다");
+check(/noteInstalledAppOpened\(instance\.app_id\)/.test(main) && /noteAppUse\(installedRecentKey\(appId\)\)/.test(fnBody(apps, "noteInstalledAppOpened")),
+  "W5b ★ #/i/<인스턴스> 를 그릴 때 설치 앱을 최근 기록 · 목록에 올린다(#4878 — 자를 거친 한 길 noteInstalledAppOpened)");
 check(/if \(p === 'open'\) return \{ title: '앱 여는 중', noAside: true \}/.test(main), "W5c 탭 제목 표에 open");
 check(/\(app-open\|app-grant\|full\|open\)/.test(read("web/v2/tabs.ts")), "W5d ★ #/open 은 지나가는 주소(저장본에서 빠진다)");
 check(/state: \(instance\.state && typeof instance\.state === 'object'\)/.test(main), "W5e #/i 가 앱 프레임에 인스턴스 state 를 넘긴다");

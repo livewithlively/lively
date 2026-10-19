@@ -50,9 +50,14 @@ export interface SessionApp {
   icon: AppIconSpec | null;   // #4769 — 매니페스트가 선언한 앱 아이콘(없으면 기본 그림)
 }
 
-/** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
+/** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. 못 받으면 조용히 빈 목록(아래 fetchSessionApps 가 던지는 것을 삼킨다). */
 export async function listSessionApps(): Promise<SessionApp[]> {
-  try {
+  // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
+  return fetchSessionApps().catch(() => []);
+}
+/** listSessionApps 와 같은 목록인데 **못 받으면 던진다**(#4878) — «빈 워크스페이스» 와 «못 받음» 을 갈라야 하는 자리(최근 줄 · 레일의 설치 앱 목록 — 못 받았다고 받아 둔 목록을 비우면 안 된다)가 쓴다. */
+export async function fetchSessionApps(): Promise<SessionApp[]> {
+  {
     const out: any = await api('/api/ui/apps');
     const rows: any[] = Array.isArray(out?.apps) ? out.apps : [];
     return rows
@@ -83,9 +88,6 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           appFolder: perm.app_folder === true,   // #4673
           icon: appIconSpecOf(a.manifest) };   // #4769
       });
-  } catch (e: any) {
-    // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
-    return [];
   }
 }
 
