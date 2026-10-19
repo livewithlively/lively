@@ -22,6 +22,9 @@ import { logToolCall } from "../org/policies/tool-log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
 
+/** 세션 id 꼴(box-<slug>-<8hex> 등) — 형식만. 권한은 소비처(ai-runs 구독 tie)가 본다. */
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+
 // 방어심화: grant 에 있어도 UI 브리지가 절대 호출하지 않는 도구(신원·자격·grant·앱관리 mutator). 관리자 도구는
 //  이미 scope 게이트로 막히므로(앱은 admin/runtime 불가), 여기선 scope-null 이면서 보안상태를 바꾸는 것들을 겨냥한다.
 const BRIDGE_DENY = /^(me_app_|me_credential|me_git_credential|me_oauth_|org_app_tool_call$)/;
@@ -37,7 +40,7 @@ const appToolCall: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/tool-call"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { app_id: (req.params as Record<string, string>)?.id, name: b.name, arguments: b.arguments };
+        return { app_id: (req.params as Record<string, string>)?.id, name: b.name, arguments: b.arguments, session_id: b.session_id };
       } }],
   },
   handler: async (input: Record<string, unknown>, member: LivelyUser | undefined) => {
@@ -45,7 +48,9 @@ const appToolCall: Capability = {
     const appId = String(input.app_id ?? "").trim();
     const name = String(input.name ?? "").trim();
     if (!appId || !name) throw new HttpError(400, "app_id 와 name 이 필요합니다");
-    const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui" });
+    //  세션 id 는 띄운 쪽(라이블리 화면 opts.sessionId)이 본문에 싣는다 — 앱 arguments 의 것이 아니다. 형식만 보고 ctx.session 으로 넘긴다(권한은 소비처가 — #4488 구독 tie).
+    const sid = typeof input.session_id === "string" && SESSION_ID_RE.test(input.session_id) ? input.session_id : undefined;
+    const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui", sessionId: sid });
     return { app_id: appId, name, result };
   },
 };
@@ -59,7 +64,7 @@ export { CONSENT_REQUIRED };
  *  opts.address — 앱 주소로 들어온 호출이면 그 주소의 판(pub|draft): 선언(도구 · 표)을 사람이 아니라 주소의 판에서 읽는다(Viewer.address).
  */
 export async function runAppTool(member: LivelyUser, appId: string, name: string, rawArgs: unknown,
-  opts: { source: AppScreenSource; address?: "pub" | "draft" }): Promise<unknown> {
+  opts: { source: AppScreenSource; address?: "pub" | "draft"; sessionId?: string }): Promise<unknown> {
   if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
   if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
   const viewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
@@ -114,7 +119,7 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
 
   const started = Date.now();
   try {
-    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId });
+    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId, ...(opts.sessionId ? { session: opts.sessionId } : {}) });
     logToolCall({ tool: name, harness: opts.source, actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
     return result;
   } catch (e) {

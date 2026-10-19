@@ -311,7 +311,8 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       const name = String(msg.params?.name ?? '');
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
       if (!name) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: 'params.name 이 필요합니다' } }); return; }
-      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/tool-call', { method: 'POST', body: JSON.stringify({ name, arguments: args }) });
+      //  세션 id 는 띄운 쪽(opts)의 것 — 앱이 arguments 에 적은 session_id 는 서버가 보지 않는다(chat/send 와 같은 규칙). 구독 AI 실행의 «초대받은 사람» 판정에 쓴다(#4488).
+      const send = (): Promise<any> => api('/api/ui/apps/' + encodeURIComponent(appId) + '/tool-call', { method: 'POST', body: JSON.stringify({ name, arguments: args, ...(opts?.sessionId ? { session_id: opts.sessionId } : {}) }) });
       // 첫 호출이 '동의 없음'(403)이면 **그 자리에서 동의 창**을 띄우고 한 번 재시도한다 —
       //  UI 앱은 열 때 동의를 묻지 않으므로(그냥 화면만 보는 앱도 있다), 능력이 실제로 필요해진 순간이 물어볼 자리다.
       void send()

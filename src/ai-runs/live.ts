@@ -102,6 +102,12 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (ms <= 0) setImmediate(run); else setTimeout(run, ms).unref?.();
     },
     now: () => Date.now(),
+    sessionTie: async (sid, member) => {
+      const { sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
+      const owner = await sessionOwnerOf(sid).catch(() => null);
+      if (!owner) return { owner: null, participant: false };
+      return { owner, participant: owner === member || (await sessionCanEnter(sid, member).catch(() => false)) };
+    },
     attachedSessions: async (appId, member) => {
       const { sessionsWithApp, sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
       const { getSessionLabel } = await import("../terminal/tmux-exec.js");

@@ -46,17 +46,22 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("P5~P6 작업 종류 · 실행 자리 표(§3-E)");
 }
 
-// ── P7 구독 선(#4423) — 본인 · 앱 화면 · 사람만 ──
+// ── P7 구독 선(#4423 · 상민 2026-10-19) — 본인(어느 길이든) · 그 사람 세션에 초대받은 사람(그 세션에서) · 사람이 아니면 거절 ──
 {
   const sub = { kind: "subscription" as const, member: "alice" };
-  assert.equal(subscriptionRefusal({ kind: "api_key" }, { member: "bob", kind: "member" }, "mcp"), null, "API 키는 누구 요청이든");
-  assert.equal(subscriptionRefusal(sub, { member: "alice", kind: "member" }, "app-ui"), null);
-  assert.equal(subscriptionRefusal(sub, { member: "alice", kind: "member" }, "app-front"), null);
-  assert.match(subscriptionRefusal(sub, { member: "bob", kind: "member" }, "app-ui")!, /본인이 보낸 요청에만/);
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, "app-ui")!, /앱 서버/);
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "member" }, "mcp")!, /앱 화면에서 사람이 보낸/);
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "member" }, undefined)!, /앱 화면/);
-  ok("P7 구독 선 — 본인 · 앱 화면(app-ui/app-front) · 사람만");
+  const alice = { member: "alice", kind: "member" as const }, bob = { member: "bob", kind: "member" as const };
+  assert.equal(subscriptionRefusal({ kind: "api_key" }, bob, null), null, "API 키는 누구 요청이든");
+  assert.equal(subscriptionRefusal(sub, alice, null), null, "본인 — 세션 매임 없이(앱 화면 · 도구 · REST 모두)");
+  assert.equal(subscriptionRefusal(sub, alice, { owner: "carol", participant: true }), null, "본인이면 매인 세션이 남의 것이어도 본인");
+  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, null)!, /앱 서버/, "앱 서버 대리는 거절");
+  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, { owner: "alice", participant: true })!, /앱 서버/);
+  assert.match(subscriptionRefusal(sub, bob, null)!, /초대받은 사람/, "남 — 세션 매임 없음");
+  assert.equal(subscriptionRefusal(sub, bob, { owner: "alice", participant: true }), null, "남 — alice 세션에 초대받아 그 세션에서 보냄");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "alice", participant: false })!, /초대받은 사람/, "alice 세션이지만 들어갈 수 없는 사람");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "carol", participant: true })!, /초대받은 사람/, "남의(carol) 세션에 초대받은 것은 alice 구독과 무관");
+  assert.match(subscriptionRefusal(sub, bob, { owner: null, participant: false })!, /초대받은 사람/, "없는 세션");
+  assert.match(subscriptionRefusal(sub, bob, { owner: "bob", participant: true })!, /초대받은 사람/, "제 세션에서 남의 구독을 고르면 거절");
+  ok("P7 구독 선 — 본인(어느 길이든) · 구독 주인 세션에 초대받은 사람 · 사람 아니면 거절 · 세션 주인이 구독 주인이어야");
 }
 
 // ── P8 실행 계정 설정 권한 — 누구의 구독(본인만) × 어느 자리(워크스페이스 = 관리자 · 앱 = 관리자/책임자) ──
