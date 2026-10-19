@@ -7,14 +7,19 @@ import { overlayBox } from '../learn.js';
 import { pjvPopover } from './popover.js';
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvPatchTask } from './task-controls.js';
-import { spawnSession } from '../v2/quick-session.js';   // #4084 — 세션 생성은 한 곳(생성 캐시·첫 지시 규약이 거기 묶여 있다)
+import { rememberFirstPrompt, spawnSession, takeFirstPrompt } from '../v2/quick-session.js';   // #4084 — 세션 생성은 한 곳(생성 캐시·첫 지시 규약이 거기 묶여 있다)
+import { openRouteMsg } from '../lib/open-route.js';
 
 // #4084 세션 = 태스크 — 세션 화면으로 간다. 보드는 새 셸 안의 액자로 떠 있으므로 주소는 **바깥 셸**이 연다
 //  (context-map.ts 와 같은 'lively:open-route' 규약). 액자가 아니면(구 셸 단독) 제 주소를 바꾼다.
+//  #4906 — 이 액자에서 만든 세션의 첫 지시는 **이 문서의 기억**에만 있다(셸 문서는 못 읽는다) — 메시지에 함께 올린다(lib/open-route.ts 머리말).
+//   못 올렸으면 제자리에 되돌린다 — 아래 이 문서의 길(location.hash)이 쓴다.
 function pjvOpenSessionRoute(sid: string): void {
   const href = '#/s/' + encodeURIComponent(sid);
   if (window.parent && window.parent !== window) {
-    try { window.parent.postMessage({ type: 'lively:open-route', href }, location.origin); return; } catch (_) { /* 아래로 */ }
+    const first = takeFirstPrompt(sid);
+    try { window.parent.postMessage(openRouteMsg(href, first), location.origin); return; }
+    catch (_) { if (first) rememberFirstPrompt(sid, first); }
   }
   location.hash = href;
 }
