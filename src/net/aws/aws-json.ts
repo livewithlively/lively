@@ -1,4 +1,4 @@
-// AWS JSON 서비스 호출(#4484 앱 v2-5) — Lambda(REST JSON) · CloudWatch Logs(JSON 1.1) · CloudWatch 지표(JSON 1.0). SDK 무의존(s3-lite 와 같은 관례).
+// AWS JSON 서비스 호출(#4484 앱 v2-5) — Lambda(REST JSON) · CloudWatch Logs(JSON 1.1) · JSON 1.0 서비스. SDK 무의존(s3-lite 와 같은 관례).
 //
 //  서명은 signRequestV4(AWS 공개 벡터로 못 박음) · 자격은 게이트웨이 base 자격(env → EC2 인스턴스 프로파일 = 매니지드 CP 박스 역할).
 //  canonical URI 규칙(S3 와 다르다): 경로 조각을 **두 번** 인코딩한다 — https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html.
@@ -29,7 +29,7 @@ export class AwsError extends Error {
 }
 
 export interface AwsCall {
-  service: string;           // SigV4 서비스 이름 — lambda · logs · monitoring
+  service: string;           // SigV4 서비스 이름 — lambda · logs
   region: string;
   host: string;
   method: "GET" | "POST" | "PUT" | "DELETE";
@@ -63,13 +63,14 @@ export function awsErrorOf(status: number, headers: Headers, text: string, what:
   return new AwsError(status, code, `${what} 실패: ${status} ${code}${msg ? ` — ${msg.slice(0, 500)}` : ""}`, headers.get("x-amzn-requestid"));
 }
 
-async function once(c: AwsCall, deps: AwsDeps): Promise<AwsResponse> {
+/** 서명해 보내고 응답(본문은 아직 안 읽음)을 돌려준다 — 4xx · 5xx 는 본문을 읽어 AwsError. once · awsOpen 공용. */
+async function send(c: AwsCall & { rawBody?: string; signal?: AbortSignal }, deps: AwsDeps): Promise<Response> {
   const creds = await (deps.creds ?? resolveGatewayBaseCreds)();
   if (!creds) throw new AwsError(0, "NoCredentials", `${c.service} 자격이 없습니다 — 게이트웨이 env(AWS_*) 또는 EC2 인스턴스 프로파일이 필요합니다`);
   const reqPath = "/" + c.path.map((p) => s3Encode(p)).join("/");
   const canonPath = "/" + c.path.map((p) => s3Encode(s3Encode(p))).join("/");
   const query = c.query ? s3CanonicalQuery(c.query) : "";
-  const body = c.body === undefined ? "" : JSON.stringify(c.body);
+  const body = c.rawBody ?? (c.body === undefined ? "" : JSON.stringify(c.body));
   const headers: Record<string, string> = { ...(c.headers ?? {}) };
   if (c.target) {
     headers["content-type"] = `application/x-amz-json-${c.target.jsonVersion}`;
@@ -79,11 +80,12 @@ async function once(c: AwsCall, deps: AwsDeps): Promise<AwsResponse> {
   }
   const auth = signRequestV4({ method: c.method, host: c.host, path: canonPath, region: c.region, service: c.service, body, headers, creds, now: (deps.now ?? (() => new Date()))(), query });
   const f = deps.fetch ?? fetch;
+  const timeout = AbortSignal.timeout(c.timeoutMs ?? deps.timeoutMs ?? 30_000);
   let res: Response;
   try {
     res = await f(`https://${c.host}${reqPath}${query ? "?" + query : ""}`, {
       method: c.method, headers: { ...headers, ...auth }, body: body || undefined,
-      signal: AbortSignal.timeout(c.timeoutMs ?? deps.timeoutMs ?? 30_000),
+      signal: c.signal ? AbortSignal.any([timeout, c.signal]) : timeout,
     });
   } catch (e) {
     const name = (e as { name?: string })?.name;
@@ -91,9 +93,27 @@ async function once(c: AwsCall, deps: AwsDeps): Promise<AwsResponse> {
     throw new AwsError(0, name === "TimeoutError" || name === "AbortError" ? "Timeout" : "NetworkError",
       `${c.service} ${c.method} /${c.path.join("/")} 연결 실패: ${(e as Error)?.message ?? e}${cause?.code ? ` (${String(cause.code)})` : ""}`);
   }
+  if (res.status >= 400) {
+    const text = await res.text().catch(() => "");
+    throw awsErrorOf(res.status, res.headers, text, `${c.service} ${c.method} /${c.path.join("/")}`);
+  }
+  return res;
+}
+
+async function once(c: AwsCall, deps: AwsDeps): Promise<AwsResponse> {
+  const res = await send(c, deps);
   const text = await res.text().catch(() => "");
-  if (res.status >= 400) throw awsErrorOf(res.status, res.headers, text, `${c.service} ${c.method} /${c.path.join("/")}`);
   return { status: res.status, headers: res.headers, text };
+}
+
+/**
+ * 한 번만 보내고 응답 본문을 **흘려 읽을 수 있게** 돌려준다(#4485 흘려 받기 — InvokeWithResponseStream). 다시 하지 않는다:
+ *  함수 호출은 앱 코드가 도는 일이라 같은 요청을 두 번 보내면 안 된다. rawBody = 이미 만든 JSON 글(큰 이벤트를 두 번 직렬화하지 않게).
+ *  timeoutMs 는 응답을 다 받을 때까지의 시한이다(흘려 받는 동안에도 걸린다). signal 로 부르는 쪽이 끊을 수 있다 — 앱 주소 길(app-front-server)은
+ *  쓰지 않는다: 브라우저가 떠나도 함수는 돌므로 흐름을 끝까지 읽어 상한 자리 · 실행 시간을 센다(#4485 격리 리뷰).
+ */
+export async function awsOpen(c: AwsCall & { rawBody?: string; signal?: AbortSignal }, deps: AwsDeps = {}): Promise<Response> {
+  return send(c, deps);
 }
 
 /** 서명해 부르고, 일시 오류면 두 번까지 다시 한다. 4xx(조절 말고)는 곧바로 AwsError. */

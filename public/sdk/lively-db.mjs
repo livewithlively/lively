@@ -10,6 +10,7 @@
 //    const app = express();
 //    app.use(livelyIdentity());                            // 들어온 요청의 사람 신원(X-Lively-Identity)을 그 요청의 DB 호출에 싣는다
 //    app.get("/api/contacts", async (_req, res) => res.json(await db.select().from(schema.contacts)));
+//    app.get("/api/me", (req, res) => res.json(livelyMember(req)));   // 이 요청의 사람 {id, name, variant}(한글 id · 이름도 풀어서)
 //
 //  규칙(게이트웨이가 지킨다 — 어기면 오류 문구가 대신 쓸 길을 말한다):
 //   · 표·칸·제약은 매니페스트(lively-app.json data.tables)로만 만든다. SQL 로 CREATE/ALTER 하지 않는다.
@@ -46,6 +47,23 @@ export function livelyIdentity() {
     const h = req?.headers?.[IDENTITY_HEADER];
     identityStore.run({ identity: Array.isArray(h) ? h[0] : h }, next);
   };
+}
+
+/**
+ * 이 요청의 사람 — 앱 서버 함수 앞의 검사 층(#4485)이 신원을 검사한 뒤 붙인 머리글을 풀어 준다: {id, name, variant}. 없으면 null.
+ *  x-lively-member(구성원 id) · x-lively-member-name(이름)은 퍼센트 인코딩이다(한글 id «윤상민» 도 머리글에 실리게) — 그대로 쓰지 말고 이것으로 읽는다.
+ *  ⚠ 라이블리 앱 서버 함수 안에서만 믿을 수 있다(검사 층이 들어온 같은 이름 머리글을 지우고 다시 쓴다). 그 밖에서 돌리면 누구나 이 머리글을 붙일 수 있다.
+ */
+export function livelyMember(req) {
+  const h = req?.headers ?? {};
+  //  Node(Express) 는 머리글 객체 · Fetch API(Next 앱 라우터 · Hono · Lambda 핸들러의 Request)는 Headers(get) — 둘 다 읽는다.
+  const one = typeof h.get === "function"
+    ? (k) => { const v = h.get(k); return typeof v === "string" ? v.split(",")[0].trim() : null; }
+    : (k) => { const v = Array.isArray(h[k]) ? h[k][0] : h[k]; return typeof v === "string" ? v : null; };
+  const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  const id = one("x-lively-member");
+  if (!id) return null;
+  return { id: dec(id), name: dec(one("x-lively-member-name") ?? ""), variant: one("x-lively-variant") === "draft" ? "draft" : "pub" };
 }
 
 /** 미들웨어를 못 쓰는 곳(Next 라우트 · Lambda 핸들러 · 백그라운드)에서 — fn 안의 DB 호출이 그 신원을 싣는다.

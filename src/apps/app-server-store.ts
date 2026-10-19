@@ -179,6 +179,8 @@ export interface ServerRow {
   pub_version_no: number | null; pub_build_key: string | null; pub_lambda_version: string | null; pub_at: string | null;
   stopped_at: string | null; stopped_by: string | null; stop_kind: "auto" | "manual" | null; stop_reason: string | null;
   lock_until: string | null; last_error: string | null;
+  /** #4485 — 그 별칭의 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 옛 줄(v2-5)은 없다. */
+  cur_token_hash?: string | null; pub_token_hash?: string | null;
   /** #4792 이 함수의 코드 저장(바이트) — 마지막 배포 · 옛 판 정리 때 AWS 가 알려 준 판마다의 CodeSize 합($LATEST 포함). */
   code_bytes: number;
   /** #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다고 하우스키핑이 처음 본 때(null = 쓰는 중). unused_retire_days 가 지나면 함수를 걷는다. */
@@ -278,12 +280,12 @@ export async function unlockServer(appId: string): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET lock_until = NULL WHERE app_id=$1`, [appId]);
 }
 
-export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string }): Promise<void> {
+export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string; token_hash?: string | null }): Promise<void> {
   const c = alias === "cur" ? "cur" : "pub";
   //  별칭을 옮겼다 = 서버 선언이 있는 판을 올렸다 — «쓰지 않음» 표시(#4791)를 걷는다(다음 하우스키핑을 기다리지 않게).
   await itemsPool.query(
-    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_at=now(), last_error=NULL, unused_since=NULL, updated_at=now() WHERE app_id=$1`,
-    [appId, v.version_no, v.build_key, v.lambda_version]);
+    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_at=now(), last_error=NULL, unused_since=NULL, updated_at=now() WHERE app_id=$1`,
+    [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null]);
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);

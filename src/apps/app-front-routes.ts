@@ -13,8 +13,11 @@
 //        → 200 text/html(v1 화면 + SDK 런타임 [+ 탐침]) · CSP 는 헤더 · 경로는 `/` 뿐(?page=<키>), 나머지는 404
 //        → #4481 여러 파일 앱(보는 판의 매니페스트에 web.root): 그 판 묶음의 파일을 그 경로로(규칙은 app-front-files.ts) · HTML 문서엔 SDK 런타임 ·
 //          ETag(내용 지문) · 304 · gzip · 지문 이름은 1년 캐시
+//        → #4485 서버 앱(보는 판의 매니페스트에 web.server · 이 워크스페이스에 앱 서버 켜짐): 그 판의 함수가 답한다(app-front-server.ts serveAppServer)
 //   *    /api/app-front/lively?path=<경로+쿼리>                     (op=act · #4482 v2-3)
 //        → 앱 주소의 같은 주소 API `/_lively/<경로>`(store · tools · prefs) — 경로 · 판정 · 답은 app-front-api.ts
+//   POST · PUT · PATCH · DELETE /api/app-front/server?path=<경로+쿼리>  (op=act · #4485 v2-6 · index.ts 가 전역 JSON 읽기 전에 붙인다)
+//        → 서버 앱의 쓰기 요청 — 본문 날것(4MB · 압축 본문 415) 그대로 함수로 · 서버가 없는 판이면 405 · 답은 함수의 것(막히면 JSON)
 //  ⓘ 매번 구성원(활성 · 사람)과 앱(있음 · 이 사람에게 보임)을 다시 본다 — 앱 주소 쿠키가 살아 있는 동안 빠진 사람·닫힌 앱을 바로 막는다.
 import express from "express";
 import zlib from "node:zlib";
@@ -42,6 +45,8 @@ import { runAppTool } from "../capabilities/app-tool-call.js";
 import { appPrefsCapabilities } from "../capabilities/app-prefs.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { gatewayUrl } from "../gateway-url.js";
+import { serverDeclOf, appServerEnv } from "./app-server-config.js";   // #4485 앱 서버(web.server) — 주소의 판이 서버를 선언했으면 함수로
+import { APP_SERVER_BODY_LIMIT, serveAppServer, type AppServerFrontDeps, type ServerTarget } from "./app-front-server.js";
 import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
 import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
 import {
@@ -73,6 +78,8 @@ export interface AppFrontDeps {
   readBlob?: (kind: BlobStoreKind, h: string, size: number) => Promise<Buffer | Readable | null>;
   /** #4482 같은 주소 API(/_lively/*)의 실행 배관. 없으면(시험 등) 그 길은 503. */
   api?: AppFrontApiDeps;
+  /** #4485 앱 서버로 넘길 때의 의존(Lambda · 서버 줄 · 상한). 없으면 살아 있는 것(app-front-server liveServerFrontDeps) — 시험이 가짜 Lambda 를 넣는다. */
+  server?: (tenantId: string) => AppServerFrontDeps;
 }
 /** 앱 개인 설정 능력(capabilities/app-prefs.ts) — 같은 규칙(보이는 앱만 · 16KB · 분당 60)을 한 벌로. */
 const prefsCap = (name: string) => {
@@ -107,7 +114,9 @@ const liveDeps = (): AppFrontDeps => ({
 /** 시험용 — 살아 있는 의존(실제 DB · 저장소)을 그대로(시험이 env · 워크스페이스만 바꿔 쓴다 — app-bundles.pg-test D10). */
 export const appFrontLiveDepsForTest = liveDeps;
 
-export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string>; body?: Buffer; stream?: Readable; gzip?: boolean }
+export interface FrontReply { status: number; json?: unknown; html?: string; headers?: Record<string, string>; body?: Buffer; stream?: Readable; gzip?: boolean;
+  /** #4485 — 이 요청은 앱 서버(함수)가 답한다(라우트가 serveAppServer 로 넘긴다). */
+  server?: ServerTarget }
 
 /** 문 — 꺼졌으면 404, 서명이 틀리면 401(사유는 로그로만). 통과하면 서명 안의 값. */
 export function appFrontGate(headers: Record<string, string | string[] | undefined>, op: AppFrontOp, d: AppFrontDeps):
@@ -188,24 +197,46 @@ export async function appFrontLively(headers: Record<string, string | string[] |
   return { status: r.status, json: r.json };
 }
 
-export async function appFrontPage(headers: Record<string, string | string[] | undefined>, rawPath: unknown, d: AppFrontDeps): Promise<FrontReply> {
+/**
+ * 화면 길(/page)과 서버 쓰기 길(/server)이 함께 쓰는 문 — 기계 헤더 · 사람 · 앱 · 활성 · 주소의 판. 한쪽만 고쳐 어긋나지 않게 한 곳에 둔다(#4485).
+ *  asHtml: 막혔을 때 화면 오류(HTML · /page)로 답할지, JSON(/server)으로 답할지.
+ */
+async function frontTarget(headers: Record<string, string | string[] | undefined>, d: AppFrontDeps, asHtml: boolean):
+  Promise<{ ok: true; target: ServerTarget } | { ok: false; reply: FrontReply }> {
   const g = appFrontGate(headers, "act", d);
   if (!g.ok) {
-    return { status: g.reply.status, html: g.reply.status === 404
+    return { ok: false, reply: !asHtml ? g.reply : { status: g.reply.status, html: g.reply.status === 404
       ? appErrorHtml("화면을 찾지 못했습니다", "이 워크스페이스에서는 앱 주소가 꺼져 있습니다.")
-      : appErrorHtml("앱을 열 수 없습니다", "앱 주소의 앞단을 거치지 않은 요청입니다.") };
+      : appErrorHtml("앱을 열 수 없습니다", "앱 주소의 앞단을 거치지 않은 요청입니다.") } };
   }
   const act = g.act as AppFrontAct;
-  const w = await whoAndApp(act, d, true);
-  if ("reply" in w) return w.reply;
-  const notFound = (detail: string): FrontReply => ({ status: 404, html: appErrorHtml("화면을 찾지 못했습니다", detail) });
-  if (w.app.status !== "active" || !w.app.enabled) return { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) };
+  const w = await whoAndApp(act, d, asHtml);
+  if ("reply" in w) return { ok: false, reply: w.reply };
+  if (w.app.status !== "active" || !w.app.enabled) {
+    return { ok: false, reply: asHtml ? { status: 409, html: appErrorHtml("앱이 꺼져 있습니다", `앱 '${w.app.id}' 이(가) 지금 활성 상태가 아닙니다.`) }
+      : { status: 409, json: { error: "app_disabled" } } };
+  }
   //  #4667 주소의 판 — 공개 주소는 모두에게 공개 판(초안이 걸려 있으면 공개 판 행의 파일), 초안 주소는 그 초안을 고친 사람에게만 설치된 화면
   //   (남의 초안은 없는 판 · apps/visibility.ts addressViewFor). 초안 코드가 공개 판 주소에서 돌지 않게 — 설계 §13-5.
   const view = addressViewFor(w.app, { userId: w.member.id, scopes: w.member.scopes }, act.var === "draft" ? "draft" : "pub");
-  if (view === "none") return notFound(`앱 '${w.app.id}' 에 열 수 있는 초안 판이 없습니다.`);
+  if (view === "none") {
+    return { ok: false, reply: asHtml ? { status: 404, html: appErrorHtml("화면을 찾지 못했습니다", `앱 '${w.app.id}' 에 열 수 있는 초안 판이 없습니다.`) }
+      : { status: 404, json: { error: "not_found" } } };
+  }
+  return { ok: true, target: { tenant: g.tenant, act, member: w.member, app: w.app, view } };
+}
+
+export async function appFrontPage(headers: Record<string, string | string[] | undefined>, rawPath: unknown, d: AppFrontDeps): Promise<FrontReply> {
+  const f = await frontTarget(headers, d, true);
+  if (!f.ok) return f.reply;
+  const { tenant, view } = f.target;
+  const w = { member: f.target.member, app: f.target.app };
+  const notFound = (detail: string): FrontReply => ({ status: 404, html: appErrorHtml("화면을 찾지 못했습니다", detail) });
+  //  #4485 앱 서버 — 주소의 판이 web.server 를 선언했고 이 워크스페이스에 앱 서버가 켜져 있으면 그 판의 함수가 답한다(`/_lively/*` 밖의 모든 경로).
+  //   status 0 은 «여기서 답하지 않는다» 표시다 — 라우트가 serveAppServer 로 넘긴다(send 는 이 답을 받지 않는다).
+  if (await viewDeclaresServer(w.app, view === "published", d, tenant.id)) return { status: 0, server: f.target };
   //  #4481 여러 파일 앱 — 보는 판의 매니페스트에 web.root 가 있으면 판 묶음에서 낸다(아니면 null → 아래 v1 길). 판은 위 주소의 판 그대로.
-  const multi = await multiFilePage(w, view === "published", rawPath, headers, d, g.tenant.id);
+  const multi = await multiFilePage(w, view === "published", rawPath, headers, d, tenant.id);
   if (multi) return multi;
   const path = parseAppPath(rawPath);
   if (!path || !path.root) return notFound("이 앱의 화면은 주소 맨 앞(/) 에만 있습니다.");
@@ -276,6 +307,18 @@ async function loadBundle(d: AppFrontDeps, tenant: string, appId: string, no: nu
   bundleCache.set(key, c);
   while (bundleCache.size > BUNDLE_CACHE_MAX) bundleCache.delete(bundleCache.keys().next().value as string);
   return c;
+}
+
+/**
+ * #4485 — 이 주소의 판이 앱 서버를 선언했나(web.server). 설치된 판은 앱 행의 매니페스트, 공개 판은 그 판 묶음의 매니페스트(캐시)로 본다.
+ *  앱 서버가 꺼진 워크스페이스(env 없음 · 스위치 밖)면 늘 거짓 — 화면(web.root)은 그대로 정적으로 낸다(v2-5 와 같다).
+ */
+async function viewDeclaresServer(app: appStore.OrgApp, published: boolean, d: AppFrontDeps, tenant: string): Promise<boolean> {
+  if (!appServerEnv(d.env, d.tenant()?.slug)) return false;
+  if (!published) return serverDeclOf(app.manifest) !== null;
+  if (app.published_version_no == null) return false;
+  const c = await loadBundle(d, tenant, app.id, app.published_version_no);
+  return !!c && c !== "no-bundle" && serverDeclOf(c.manifest) !== null;
 }
 
 /** 화면 키 → web.root 기준 entry 경로(`/?page=<키>` 를 풀 때). */
@@ -389,6 +432,7 @@ async function streamToBuffer(s: Readable): Promise<Buffer> {
 }
 
 function send(res: express.Response, r: FrontReply): void {
+  if (r.server) throw new Error("앱 서버 답(status 0)은 serveAppServer 로 넘겨야 한다 — send 로 보낼 수 없다(#4485)");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   for (const [k, v] of Object.entries(r.headers ?? {})) res.setHeader(k, v);
@@ -410,12 +454,24 @@ function send(res: express.Response, r: FrontReply): void {
   res.status(r.status).json(r.json ?? {});
 }
 
+/** 본문 읽기(body-parser)의 오류인가 — type 이 붙은 4xx 만. 그 밖의 오류는 감추지 않고 다음(전역 처리 · 로그)으로 넘긴다. */
+function isBodyParserError(err: unknown): err is { status: number; type: string } {
+  const e = err as { status?: unknown; type?: unknown };
+  return typeof e?.type === "string" && typeof e?.status === "number" && e.status >= 400 && e.status < 500;
+}
+
 /** web.ts 가 사람 로그인 라우트(세션 교환 등)와 같은 자리 — capability 마운트보다 **먼저** — 에서 부른다. */
 export function registerAppFrontRoutes(app: express.Express, deps: () => AppFrontDeps = liveDeps): void {
   const H = (req: express.Request) => req.headers as Record<string, string | string[] | undefined>;
   app.post("/api/app-front/redeem", wrap(async (req, res) => { send(res, await appFrontRedeem(H(req), req.body, deps())); }));
   app.get("/api/app-front/me", wrap(async (req, res) => { send(res, await appFrontMe(H(req), deps())); }));
-  app.get("/api/app-front/page", wrap(async (req, res) => { send(res, await appFrontPage(H(req), (req.query as Record<string, unknown>)?.path, deps())); }));
+  app.get("/api/app-front/page", wrap(async (req, res) => {
+    const path = (req.query as Record<string, unknown>)?.path;
+    const d = deps();
+    const r = await appFrontPage(H(req), path, d);
+    if (r.server) { await serveAppServer(req, res, r.server, null, path, d.server?.(r.server.tenant.id)); return; }
+    send(res, r);
+  }));
   //  #4482 같은 주소 API — 본문은 JSON(앱이 Content-Type 을 빠뜨려도 JSON 으로 읽는다 · 쓰기의 출처 검사는 앞단이 이미 했다). 상한은 게이트웨이 REST 와 같다.
   //   전역 express.json(1mb · application/json 만)은 이 라우터보다 먼저 돌아 이미 읽은 본문은 건너뛴다 — 여기 파서는 그 밖의 종류만 읽는다.
   app.all("/api/app-front/lively", express.json({ limit: APP_FRONT_API_BODY_LIMIT, type: () => true }),
@@ -423,10 +479,54 @@ export function registerAppFrontRoutes(app: express.Express, deps: () => AppFron
   //  본문을 못 읽었다(깨진 JSON · 큼) — 파서의 오류는 wrap 밖이라 Express 기본 HTML 400 이 나갔다(격리 리뷰). 이 길의 답은 늘 JSON 이다.
   //   본문 파서의 오류(type 이 붙은 4xx)만 여기서 답한다 — 그 밖의 오류는 감추지 않고 다음(전역 처리 · 로그)으로 넘긴다.
   app.use("/api/app-front/lively", (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const e = err as { status?: unknown; type?: unknown };
-    const parserErr = typeof e?.type === "string" && typeof e?.status === "number" && e.status >= 400 && e.status < 500;
-    if (res.headersSent || !parserErr) { next(err); return; }
+    if (res.headersSent || !isBodyParserError(err)) { next(err); return; }
+    const e = err;
     const big = e.status === 413 || e.type === "entity.too.large";
     send(res, { status: big ? 413 : 400, json: { error: big ? "본문이 너무 큽니다(1MB 까지)" : "본문을 JSON 으로 읽지 못했습니다", code: big ? "body_too_large" : "bad_body" } });
   });
+}
+
+/**
+ * #4485 앱 서버의 쓰기 요청(POST · PUT · PATCH · DELETE) — 앞단이 본문째(4MB 까지) 넘긴다. 본문을 **날것 그대로** 받아야 해서(앱이 받는 바이트)
+ *  전역 express.json() 보다 먼저 마운트한다(index.ts — 서명 주소 · 웹훅과 같은 자리). 문 · 판정은 화면 길(/page)과 같다.
+ *  서버를 선언하지 않은 판이면 405 — 화면(정적) 주소에는 쓰기를 받을 곳이 없다.
+ */
+export async function appFrontServerWrite(req: express.Request, res: express.Response, d: AppFrontDeps = liveDeps()): Promise<void> {
+  const path = (req.query as Record<string, unknown>)?.path;
+  const f = await frontTarget(req.headers as Record<string, string | string[] | undefined>, d, false);
+  if (!f.ok) { send(res, f.reply); return; }
+  const t = f.target;
+  if (!(await viewDeclaresServer(t.app, t.view === "published", d, t.tenant.id))) {
+    res.setHeader("Allow", "GET, HEAD");
+    send(res, { status: 405, json: { error: "method_not_allowed", message: "이 앱은 서버가 없어 쓰기 요청을 받지 않습니다 — 화면에서 /_lively/* API 를 쓰세요." } });
+    return;
+  }
+  const body = Buffer.isBuffer(req.body) ? req.body : null;
+  await serveAppServer(req, res, t, body, path, d.server?.(t.tenant.id));
+}
+
+/** index.ts 가 전역 JSON 파서보다 먼저 붙인다 — 본문을 날것(Buffer)으로 받는다. */
+export function appFrontServerRouter(deps: () => AppFrontDeps = liveDeps): Array<express.RequestHandler | express.ErrorRequestHandler> {
+  return [
+    (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      //  쓰기 메서드만 — GET · HEAD 는 화면 길(/page)이 맡는다(앞단도 그렇게 보낸다).
+      if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) { res.status(405).setHeader("Allow", "POST, PUT, PATCH, DELETE"); res.json({ error: "method_not_allowed" }); return; }
+      next();
+    },
+    //  ★ inflate: false — 압축 본문을 풀면 «보낸 바이트 그대로» 가 아니게 되고(풀린 본문 + Content-Encoding: gzip 이 함께 가 앱이 다시 풀다 실패한다 · 격리 리뷰)
+    //   압축 본문은 415 로 받지 않는다. 브라우저는 요청 본문을 압축하지 않는다.
+    express.raw({ type: () => true, limit: APP_SERVER_BODY_LIMIT, inflate: false }),
+    wrap(async (req, res) => { await appFrontServerWrite(req, res, deps()); }),
+    //  본문을 못 읽었다(4MB 넘음 · 압축 · 도중에 끊김) — 파서의 오류는 wrap 밖이라 Express 기본 HTML 이 나간다. 이 길의 답도 JSON 이다(/lively 와 같은 규칙).
+    (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (res.headersSent || !isBodyParserError(err)) { next(err); return; }
+      if (err.status === 413 || err.type === "entity.too.large") {
+        send(res, { status: 413, json: { error: "body_too_large", message: "본문이 너무 큽니다(4MB 까지) — 큰 파일은 파일 저장 API(서명 주소)로 올리세요." } });
+      } else if (err.status === 415 || err.type === "encoding.unsupported") {
+        send(res, { status: 415, json: { error: "unsupported_encoding", message: "압축한 본문(Content-Encoding)은 받지 않습니다 — 압축하지 않고 보내세요." } });
+      } else {
+        send(res, { status: 400, json: { error: "bad_body", message: "본문을 읽지 못했습니다" } });
+      }
+    },
+  ];
 }
