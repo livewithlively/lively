@@ -1234,7 +1234,11 @@ function applyTabChrome(tab: ShellTab): void {
   //   누가 사이드바를 갖나는 lib/side-owner 의 표 한 자리가 정한다 — 맥락 관리(#3830) · 사용 가이드 · 앱 화면(#/i · #732) · 설정(제 왼쪽 목록이 그 앱의 사이드바) ·
   //   리브 · 확인할 것 · 외부 앱 연결 · 대시보드처럼 표에 없는 앱은 다 «없음» 이다.
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이 한 칸씩 밀려 본문이 0px 열에 앉는다.
-  root!.classList.toggle('app-ctx', sideOwnerOfRoute(tab.route) === 'none');
+  const hasSide = sideOwnerOfRoute(tab.route) !== 'none';
+  root!.classList.toggle('app-ctx', !hasSide);
+  //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
+  //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
+  mobile?.setSide(hasSide);
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면
@@ -1289,7 +1293,9 @@ async function onHash(): Promise<void> {
     }
   }
   const cur = tabsApi.active();
-  if (routeKey(cur.route) === routeKey(hash)) { cur.route = hash; tabsApi.routed(cur); return; }
+  //  같은 화면 안의 이동(같은 routeKey — 앱빌더 목록 ↔ 이어 만들기 · 쿼리만 바뀜)도 크롬은 다시 맞춘다: 사이드바 주인이 주소 전체를 본다
+  //   (#4632 ③ 실제 화면 ?see= — 뒤로 가기로 그 표시가 걷히면 사이드바 열도 돌아와야 한다).
+  if (routeKey(cur.route) === routeKey(hash)) { cur.route = hash; tabsApi.routed(cur); applyTabChrome(cur); return; }
   // 이 탭 안에서 이어지는 이동인가(프로젝트 → 그 프로젝트의 세션) — 새 탭 규칙만 건너뛴다.
   const hop = inTabHops > 0;
   if (hop) inTabHops--;
@@ -1466,7 +1472,9 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       noteAppUse('builder');
       tab.aside.replaceChildren();
       renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide(),
-        setRoute: (h) => { if (tab.route !== h) { tab.route = h; tabsApi?.routed(tab); } } });
+        //  주소만 바꾼 것(replaceState)도 크롬을 다시 맞춘다 — ③ 실제 화면을 보는 동안 사이드바 열을 접는 것(app-ctx)이 이 주소를 따른다(#4632).
+        //  같은 화면(routeKey 'builder') 안의 주소일 때만 — 그 탭이 이미 다른 화면으로 옮겨 갔으면 탭 주소를 앱빌더로 되돌려 쓰지 않는다.
+        setRoute: (h) => { if (tab.route !== h && routeKey(tab.route) === routeKey(h)) { tab.route = h; tabsApi?.routed(tab); if (tabsApi?.current() === tab) applyTabChrome(tab); } } });
       void ensureSingletonAppInstance('builder', '앱빌더')
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
@@ -1520,7 +1528,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           if (seq !== tab.seq || !h.isConnected) return null;
           const handle = renderSession(h, data, sid, {
             chatHome: true,
-            onOpenSidebar: () => mobile?.openSide(),   // 폰 머리줄 ≡(#4229 후속) — 리브 칸도 세션 화면이라 맨 윗줄이 걷힌다
+            //  폰 머리줄 ≡(#4229 후속)은 사이드바가 있는 화면에서만 — 리브는 사이드바가 없는 앱이라(lib/side-owner · #4632 «각자 앱 사이드바로») 단추를 두지 않는다.
+            ...(sideOwnerOfRoute(tab.route) !== 'none' ? { onOpenSidebar: () => mobile?.openSide() } : {}),
             isVisible: () => tabsApi?.current() === tab && o.isVisible(),
             onResumed: o.onResumed,
           });

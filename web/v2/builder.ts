@@ -19,7 +19,7 @@ import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppS
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSeeRoute, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 import { FOLDER_LIMIT_MAX_GB, folderLine, folderSavedText, parseFolderInput } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 
 export type { BuilderEnv } from './builder-model.js';
@@ -119,6 +119,14 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
     const to = builderRoute('resume', sid);
     v.studioKey = 'resume:' + sid + ':edit';
     replaceRoute(to);   // 사이드바에도 새 앱이 「만들던 앱」 에 켜진 채로 선다 · 탭을 다시 켜도 이 자리로
+  }, onSee: (sid: string, see: 'widget' | 'app' | null) => {
+    //  ③ 실제 화면으로 써 보는 중 — 주소에 적어(#/builder/s/<세션>?see=…) 셸이 앱빌더 사이드바를 접게 한다(lib/side-owner · 원준 2026-10-19 «안그렇게 해줘»).
+    //   지금 주소가 그 세션을 이어 만드는 주소일 때만 주소창을 고친다 — 이미 다른 데로 갔으면(앱 화면 #/i · 다른 탭) 주소창은 그대로.
+    //   ⚠ 걷을 때(null)는 그래도 **이 탭의 주소**는 고친다 — 안 그러면 탭을 다시 켤 때 낡은 ?see= 가 주소로 되살아나 허브에서 사이드바가 접힌 채 선다(격리 리뷰).
+    const to = see ? builderSeeRoute(sid, see) : builderRoute('resume', sid);
+    const w = parseBuilderHash(location.hash);
+    if (w && w.view === 'resume' && w.id === sid) { replaceRoute(to); return; }
+    if (!see) mounted?.env.setRoute?.(to);
   } };
   if (where.view === 'new') { openAppStudio(null, opts); return; }
   if (where.view === 'resume') {

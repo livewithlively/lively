@@ -17,6 +17,31 @@ export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string
 ];
 export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === (s === 'draft' ? 'fix' : s)); }
 
+//  단계 바는 **와 본 곳이면 앞으로도** 간다(원준 2026-10-19 «내용 다 저장했었으면 이전으로 가는거 말고 다음으로 가는것도 있어야 · (3)하는 도중에 뒤로 뒤로 눌러서
+//   (1)로 간 다음에 이전 (3)으로 다시 가는 느낌은 없고 밑에 이 내용으로 다시 기획 이거밖에 없어서 어색해 · 상단 탭을 클릭하는 방향으로도 원하는 위치로»).
+//   «와 본 곳» 의 끝 = reached. 그 뒤 단계의 내용이 낡으면 끝을 당긴다 — 기획을 다시 받으면 ②, 새 버전이 나오면 ③(그 버전으로 ④ 확인 · ⑤ 넣기를 다시 해야 한다).
+/** 한 번이라도 와 본 가장 뒤 단계(0~4). 기록에 없으면(옛 기록) 지금 단계 · 앱이 있으면 ③ · 넣었으면 ⑤ 까지. */
+export function reachedOf(r: { stage: 'what' | StudioStage; appId?: string; done?: boolean; reached?: number }): number {
+  const base = Math.max(stageIndex(r.stage), r.appId ? 2 : 0, r.done ? 4 : 0);
+  const n = Number(r.reached);
+  return Number.isFinite(n) && n >= 0 ? Math.max(base, Math.min(STAGES.length - 1, Math.floor(n))) : base;
+}
+/** 단계 바 칸마다의 꼴 — on 지금 · back 눌러서 돌아간다 · ahead 눌러서 다시 간다(와 본 곳) · done 지나왔지만 못 간다(고치기 · 사본의 ①②는 원본의 것) · todo 아직. */
+export type StageTab = 'on' | 'back' | 'ahead' | 'done' | 'todo';
+export function stageTabs(cur: number, reached: number, mode: 'new' | 'copy' | 'edit'): StageTab[] {
+  return STAGES.map((_, i) => {
+    if (i === cur) return 'on';
+    const open = mode === 'new' || i >= 2;
+    if (i < cur) return open ? 'back' : 'done';
+    return open && i <= reached ? 'ahead' : 'todo';
+  });
+}
+/** 「다음 →」 이 갈 단계 — 바로 다음 칸이 와 본 곳이면 그 번호, 아니면 -1(아직 안 간 단계는 그 단계의 주 단추가 연다). */
+export function nextStageOpen(cur: number, reached: number, mode: 'new' | 'copy' | 'edit'): number {
+  const i = cur + 1;
+  return i < STAGES.length && stageTabs(cur, reached, mode)[i] === 'ahead' ? i : -1;
+}
+
 //  앱 화면에는 라이블리 사이드바가 없다(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야 … 앱빌더로 만들때는 디폴트가 없는거임 · 없을 때에는 사이드바 영역만큼도
 //   다 그 앱이 쓰는게 디폴트»). 셸은 앱 화면(#/i)에서 사이드바 열을 접는다(lib/side-owner) — AI 가 왼쪽 목록을 기본으로 그리지 않게 이 사실을 말해 둔다.
 export const FULL_NO_SIDE = '앱 화면은 라이블리 사이드바 없이 창 가득 열려(그 자리까지 앱이 써). 사이드바는 기본으로 두지 말고, 목록을 옆에 두고 써야 하는 앱일 때만 앱 안 왼쪽에 직접 그려.';

@@ -285,6 +285,9 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 /* 데스크톱 창 맨 윗줄의 ☰ — 좁은 폭엔 ☰, 넓은 폭엔 패널 아이콘(둘 중 하나만). */
 .v2-mbar-menu .v2-mbar-ic--m { display: none; }
 @media (max-width: 900px) { .v2-mbar-menu .v2-mbar-ic--m { display: block; } .v2-mbar-menu .v2-mbar-ic--w { display: none; } }
+/* #4632 원준 2026-10-19 «아니 각자 앱 사이드바로» — 좁은 폭의 ☰ 는 그 앱의 사이드바만 연다. 사이드바가 없는 앱(mobile.ts setSide(false))에선 ☰ 를 걷는다.
+   넓은 폭의 같은 단추는 레일 여닫이라 그대로 선다. 창 맨 윗줄의 자리 규칙(43-v2-topbar-search)이 display 를 정해 두어 !important 로 이긴다([hidden] 과 같은 결). */
+@media (max-width: 900px) { .v2-mbar-btn.v2-mbar-menu.no-side { display: none !important; } }
 /* 우측 서랍 단추의 얼굴(#4088 후속) — 우패널(타임라인) ↔ 칸 셸의 곁칸(폴더: 자료가 그 서랍의 첫 탭이다). 둘 중 하나만. */
 .v2-mbar-aside .v2-mbar-ic--pn { display: none; }
 .v2-mbar-aside.is-panes .v2-mbar-ic--pn { display: block; }
@@ -728,7 +731,9 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-kcat .v2-bld-st { font-family: inherit; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .v2-kcat.on .v2-bld-st { color: var(--ink); }
 .v2-bld-shelf .v2-kcat .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.v2-bld-foot { gap: 2px; }
+.v2-app-foot { gap: 2px; }
+/* 앱 사이드바의 발치(side.ts appFoot, #4632) — 그 앱의 문 · 업데이트 알림 · 레일을 숨겼을 때의 [앱] · [나] 만 선다. 다 숨었거나 없으면 줄(위 선 · 여백)도 안 선다. */
+.v2-app-foot:not(:has(> :not([hidden]))) { display: none; }
 /* 발치 「앱 찾기」 는 링크가 아니라 단추(앱 찾기 창을 연다) — 링크 줄(.v2-foot-link)과 같은 모양이 되게 단추 기본 붓을 걷는다. */
 button.v2-foot-link { width: 100%; border: 0; background: none; font-family: inherit; text-align: left; cursor: pointer; }
 button.v2-foot-link:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
