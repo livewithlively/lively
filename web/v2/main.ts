@@ -20,6 +20,7 @@ import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledApp, openAppById, setLaunchpadContext } from './apps.js';
 import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱의 최근 기록 키
+import { writeLeftAt } from '../lib/console-phase.js';   // #4876 — 세션을 떠난 때(곁칸 «콘솔» 의 «다녀온 사이» 기준)
 import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
 import { browserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
@@ -2145,6 +2146,8 @@ let viewingSid = '';
 /** 이 세션 화면을 떠났다 — 서버가 남은 사람들에게 새 얼굴 줄을 민다. 실패는 삼킨다(TTL 이 늦게라도 걷는다). */
 function leaveViewed(sid: string, keepalive = false): void {
   seenSentAt.delete(sid);   // 곧 돌아오면 15초를 기다리지 않고 바로 다시 도장을 찍는다(돌아온 것도 곧바로 보이게)
+  //  #4876 — 떠난 때를 이 브라우저에 적어 둔다. 곁칸 «콘솔» 이 «다녀온 사이» 의 기준으로 읽는다(서버엔 사람별 열람 시각이 없다 — #4783).
+  try { writeLeftAt(localStorage, sid, Date.now()); } catch { /* 저장이 막힌 브라우저 */ }
   void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/leave`, Object.assign({ method: 'POST', body: '{}' }, keepalive ? { keepalive: true } : {}))
     .catch(() => { /* 비치명 */ });
 }

@@ -46,7 +46,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -125,9 +125,10 @@ const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 
 //  #4443(원준 2026-10-01) — **아래 칸은 비워 둔다**. 종전엔 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를
 //   누르면 넣은 적 없는 타임라인이 터미널 밑에 있었다. 타임라인은 독에서 누르면 곁칸에 열린다. 저장된 옛 기본은 unparkBottom.
 //  #4443(원준 10-05) — «앱» 탭도 뺀다. 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 맡는다. 저장된 것은 dropAppsTab.
+//  #4876(원준 2026-10-19) — 첫 탭은 «콘솔»(세션 조작 · 다녀온 사이 · 남긴 것). 자료는 둘째. 저장된 배치는 seedConsoleTab 이 한 번만 앞에 세운다.
 const DEF_LAYOUT = (): Layout => ({
-  main: ['sessions'], side: ['files', 'tasks', 'knowledge'], bottom: [],
-  act: { main: 'sessions', side: 'files', bottom: null },
+  main: ['sessions'], side: ['console', 'files', 'tasks', 'knowledge'], bottom: [],
+  act: { main: 'sessions', side: 'console', bottom: null },
   sideOn: true, bottomOn: false, pin: [],
 });
 const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
@@ -202,7 +203,8 @@ function seedLayoutStore(): void {
     const r = seedTasksTab(layoutStore());
     const u = unparkBottom(r.store);             // #4443 — 닫힌 아래 칸에 숨겨 둔 옛 기본 타임라인을 한 번만 걷는다
     const a = dropAppsTab(u.store);              // #4443 — «앱» 탭(옛 기본에서 물려받은 것)을 한 번만 걷는다
-    if (r.changed || u.changed || a.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(a.store));
+    const c = seedConsoleTab(a.store);           // #4876 — «콘솔» 탭을 곁칸 맨 앞에 한 번만 세운다(자료는 둘째로)
+    if (r.changed || u.changed || a.changed || c.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(c.store));
   } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
 /** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본.
@@ -527,6 +529,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     curSession: () => curSession(),
     onSession: (fn) => { sessSubs.add(fn); return () => { sessSubs.delete(fn); }; },
     trailHost: () => trailHost,
+    trailItems: () => (trailW ? trailW.items() : []),   // #4876 콘솔 — 발자취 재료를 읽기만(그릇은 타임라인 칸의 것)
     // 세션에 딸린 값(웹 주소·편집 중인 파일)의 저장 열쇠. 세션이 없을 때만 프로젝트로 떨어진다(새 세션 자리).
     memKey: () => curSession() || 'p' + id,
     // 부품끼리의 신호가 도는 **울타리**. 아래 wrap 은 이 객체보다 나중에 만들어지지만, 부르는 것은 늘
