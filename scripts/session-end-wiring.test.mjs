@@ -93,7 +93,8 @@ test("K1 홈 ① · ①″ · ①‴ — 꺼진 행의 점은 stopDot · «지�
 });
 
 test("K2 행 자료(mergeSessions)가 꺼진 박스에만 겉모습을 정한다 · 관측 못 한 행은 안 정한다", () => {
-  const v = read("web/v2/views.ts");
+  // #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다).
+  const v = read("web/v2/sess-merge.ts");
   assert.match(v, /if \(!s\.alive && r\.observed !== false\) \{ s\.stopDot = stoppedDotKey\(r, now\); s\.stopPast = stoppedIsPast\(r\); \}/);
 });
 

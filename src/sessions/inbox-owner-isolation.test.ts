@@ -46,6 +46,8 @@ function repoRoot(): string {
 }
 const readSrc = (rel: string): string => readFileSync(path.join(repoRoot(), rel), "utf8");
 const VIEWS = readSrc("web/v2/views.ts");
+// #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다).
+const MERGE = readSrc("web/v2/sess-merge.ts");
 const SIDE = readSrc("web/v2/side.ts");
 const MAIN = readSrc("web/v2/main.ts");
 const DOCS = readSrc("web/docs-content.ts");
@@ -53,8 +55,8 @@ const DOCS = readSrc("web/docs-content.ts");
 /** 소유 술어를 **화면 소스에서 그대로 떼어** 실행한다 — 여기 사본을 두면 그 사본만 맞고 화면은 틀릴 수 있다. */
 function loadIsMine(): (s: Record<string, unknown>, meId: string) => boolean {
   //  #3870 — 인자 타입은 묻지 않는다(Pick<Sess, 'owned' | 'raw'> 로 넓혔다 — 세션 화면의 target 도 같은 술어를 쓴다). 본문이 판정이다.
-  const m = /export const isMineSess = \(s: [^)]*\): boolean => \{([\s\S]*?)\n\};/.exec(VIEWS);
-  assert.ok(m, "views.ts 에서 isMineSess 본문을 찾지 못했다 — 「확인할 것」의 소유 판정이 한 벌이 아니다");
+  const m = /export const isMineSess = \(s: [^)]*\): boolean => \{([\s\S]*?)\n\};/.exec(MERGE);
+  assert.ok(m, "sess-merge.ts 에서 isMineSess 본문을 찾지 못했다 — 「확인할 것」의 소유 판정이 한 벌이 아니다");
   const body = m![1]
     .replace(/String\(\(state\.me && \(state\.me as \{ userId\?: string \}\)\.userId\) \|\| ''\)/g, "__ME__")
     .replace(/:\s*string/g, "");
@@ -105,7 +107,7 @@ test("★ E7 (#4180) 「확인할 것」 배지를 세션으로 세는 자리가
 
 test("★ E8 'waiting' 을 「확인할 것」 뜻으로 세는 자리는 전부 소유를 본다 (새 자리가 생겨도 잡힌다)", () => {
   const misses: string[] = [];
-  for (const [rel, src] of [["web/v2/views.ts", VIEWS], ["web/v2/side.ts", SIDE], ["web/v2/main.ts", MAIN]] as const) {
+  for (const [rel, src] of [["web/v2/views.ts", VIEWS], ["web/v2/sess-merge.ts", MERGE], ["web/v2/side.ts", SIDE], ["web/v2/main.ts", MAIN]] as const) {
     for (const line of src.split("\n")) {
       if (!/stateKey === 'waiting'/.test(line) || !/\.(filter|some)\(/.test(line)) continue;
       // 비대상: 프로젝트별 상태 집계·정렬 순위는 '누구 것이든 이 프로젝트에서 벌어지는 일'이라 소유 축이 아니다.

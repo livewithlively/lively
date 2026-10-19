@@ -2842,7 +2842,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "58a40d9e96c6e092"
+  "input_hash": "3bb0ac2ae2b6c795"
  },
  {
   "name": "project_grep",
