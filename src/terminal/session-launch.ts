@@ -91,6 +91,23 @@ export function sessionInputFromBody(headers: Record<string, unknown>, b: Record
 }
 
 /**
+ * 두 입구가 **같은 모양으로** 답하는 생성 응답 — 세션과 함께 **서버가 넣을 첫 지시**를 싣는다(#4906 — #4794 후속, 순수).
+ *
+ *  화면(web/v2/quick-session.ts spawnSession)은 이 글을 그 세션의 첫 지시로 기억한다 — 세션 화면이 그 말을 대기 말풍선으로 그리고,
+ *  터미널을 숨겨 붙였다가 하네스가 그렸고 **그 말이 실제로 제출된 뒤** 넘긴다(«다 쳤다» 알림의 머리 · 대화 기록 에코를 이 글과 맞춘다).
+ *  그런데 서버가 지시를 짓거나 고치는 길이 있어 친 글과 다를 수 있다 — 종전엔 화면이 친 글만 기억해 어긋났다:
+ *   · 태스크에서 연 세션 — 지시를 비워 보내면 «태스크 #id 진행해» + 본문으로 채운다(project-routes.ts). 화면은 기억할 글이 없어
+ *     숨겨 붙이기를 못 타고, 하네스가 뜨는 몇 초 동안 빈 터미널을 보였다(#4794 §10-2).
+ *   · 태스크 여러 개 — 순서 안내 + 1번 본문 + 친 글로 다시 짓는다. · 홈 첫 지시의 첨부를 프로젝트로 옮기면 좌표를 고친다(routes.ts).
+ *     둘 다 «다 쳤다» · 에코 맞추기가 빗나가 그린 뒤 8초 유예로 넘어갔다.
+ *  넣을 첫 지시가 없으면(빈 · 공백뿐) 싣지 않는다 — 화면은 종전대로 친 글(없으면 없음)을 쓴다. 옛 화면은 이 필드를 모른 채 무시한다.
+ */
+export function launchReply<T>(session: T, input: { initialPrompt?: unknown }): { session: T; initialPrompt?: string } {
+  const p = input.initialPrompt;
+  return typeof p === "string" && p.trim() ? { session, initialPrompt: p } : { session };
+}
+
+/**
  * 세션이 섰다 — 그 세션의 **앱 인스턴스**를 세운다(#1954 후속 · #1780 v2.2 §2.5: 일반 세션 = ai-session 앱의 인스턴스).
  *  종전엔 웹에서 그 세션을 처음 열 때만 만들어져(lazy), CLI 로 띄우고 웹에서 안 연 세션은 인스턴스가 없었다 —
  *  그래서 좌측 목록이 '돌고 있는 세션'을 따로 훑어 그 구멍을 메워야 했다. 정체성은 세션이 태어날 때 정해진다.
