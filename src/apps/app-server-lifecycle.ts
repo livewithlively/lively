@@ -64,6 +64,7 @@ export async function resumeServer(appId: string, deps0: ServerDeps = {}): Promi
  * 앱을 지울 때 — 함수 · 로그 그룹 · zip · 기록을 걷는다(되돌릴 수 없다 · 판 묶음이 남으니 다시 빌드할 수는 있다). best-effort: 실패는 돌려준다.
  *  함수를 못 지우면(AWS 오류 · 배포가 잠금을 쥐고 있음) 함수 줄(org_app_server)을 남긴다 — 앱이 없는 줄을 하우스키핑이 다시 지운다(고아 함수가
  *  단서 없이 남지 않게 · 격리 리뷰). 남의 워크스페이스 함수(태그)는 건드리지 않고 우리 줄만 지운다.
+ *  ★ #4801 순서 — 함수가 남아 있는 동안은 빌드 기록과 zip 도 남긴다(함수가 우리 S3 의 zip 을 바로 읽는다). 고아 쓸기가 다시 불러 함수를 지운 뒤에 함께 걷는다.
  */
 export async function removeServer(appId: string, deps0: ServerDeps = {}): Promise<{ removed: boolean; errors: string[]; pending: boolean }> {
   const deps = withDeps(deps0);
@@ -96,17 +97,18 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
       }
     }
   }
+  if (pending) return { removed: false, errors, pending };   // 함수가 남았다 — 그 함수가 읽는 zip · 기록은 함수를 지운 뒤에(#4801)
   const s3 = appBundleS3Config();
   const { zipKeys } = await st.deleteServerBuildRows(appId).catch((e) => { errors.push(`기록: ${publicError(e)}`); return { zipKeys: [] as string[] }; });
-  if (row && !pending) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
+  if (row) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
   //  #4485 — 이 앱의 함수 토큰을 모두 회수한다 — 함수 줄이 없어도(앞서 걷기가 회수를 못 했을 수 있다 · 합치기 격리 리뷰). 같은 id 로 앱을 다시 만들어도
-  //   옛 토큰이 살아나지 않게. 줄을 남기는 때(pending — 함수를 아직 못 지움)는 하우스키핑이 다시 지우며 거둔다.
-  if (!pending) await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
+  //   옛 토큰이 살아나지 않게. 줄을 남기는 때(pending — 함수를 아직 못 지움)는 위에서 돌아갔다 — 하우스키핑이 다시 지우며 거둔다.
+  await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
   for (const k of zipKeys) {
     if (deps.deleteZip) await deps.deleteZip(k).catch((e) => errors.push(`zip: ${publicError(e)}`));
     else if (s3) await s3Delete(s3, k, { attempts: 1, timeoutMs: 10_000 }).catch((e) => errors.push(`zip: ${publicError(e)}`));
   }
-  return { removed: !!row && !pending, errors, pending };
+  return { removed: !!row, errors, pending: false };
 }
 
 /** 걷은 함수가 쓰던 빌드를 정리에서 빼 두는 날수(#4791) — 그동안 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다. */

@@ -99,7 +99,7 @@ async function pjvSavedViewMenu(anchor, rerender) {
       const vt = String(v.type);
       pjvBoardView.kanban = vt === 'board';
       // ClickUp 저장뷰의 table/timeline 타입은 아직 우리 렌더에 매핑하지 않는다 — 평면으로 폴백(#1067).
-      pjvBoardView.table = false; pjvBoardView.timeline = false;
+      pjvBoardView.table = false; pjvBoardView.timeline = false; pjvBoardView.sessions = false;
       // 개요(location_overview)는 폴더/스페이스 스코프에서만 유효(렌더 브랜치가 selFolder 필요) — 리스트/미분류에선 평면 폴백(#541 리뷰).
       pjvBoardView.overview = vt === 'location_overview' && selKey[0] === 'F';
       pjvBoardView.byStatus = false;
@@ -120,7 +120,7 @@ function pjvBoardSettingsPopover(anchor, ctx) {
   // 보기 방식(상태/리스트/칸반) — 라디오. 예전 '필터' 버튼이 품고 있던 것.
   pop.append(el('div', { class: 'pjv-set-sec', text: '보기 방식' }));
   //  뷰 탭(테이블·타임라인)에 있을 땐 여기 라디오 넷 중 어느 것도 켜지 않는다 — 켜면 실제 화면과 다른 걸 가리킨다.
-  const curMode = () => pjvBoardView.table ? 'table' : pjvBoardView.timeline ? 'timeline'
+  const curMode = () => pjvBoardView.sessions ? 'sessions' : pjvBoardView.table ? 'table' : pjvBoardView.timeline ? 'timeline'
     : pjvBoardView.overview ? 'overview' : pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
   const syncs: any[] = [];
   const mkMode = (key, label, hint) => {
@@ -132,11 +132,11 @@ function pjvBoardSettingsPopover(anchor, ctx) {
       e.stopPropagation();
       if (curMode() === key) return;
       pjvBoardView.kanban = key === 'kanban';
-      pjvBoardView.table = false; pjvBoardView.timeline = false; // 보기 방식은 뷰 탭과 상호배타(#1067)
+      pjvBoardView.table = false; pjvBoardView.timeline = false; pjvBoardView.sessions = false; // 보기 방식은 뷰 탭과 상호배타(#1067)
       pjvBoardView.byFolder = key === 'list';
       pjvBoardView.byStatus = key === 'status' || key === 'list';
       pjvBoardView.overview = key === 'overview';
-      if (key === 'list' && !pjvBoardView.byArea) { pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvExitAreaMode(); pjvPersistSideOpen(); }
+      if (key === 'list' && !pjvBoardView.byArea) { pjvSidebarSel.key = '__all__'; pjvSidebarSel.explicit = false; pjvExitAreaMode(); pjvPersistSideOpen(); pjvBoardView.sessions = false; } // #4865 — 기본 뷰(=리스트·세션)로 되돌리는 pjvExitAreaMode 뒤에 고른 것을 다시 세운다
       syncs.forEach((s) => s());
       ctx.onView();
     };
@@ -166,32 +166,36 @@ function pjvBoardSettingsPopover(anchor, ctx) {
   pop.append(el('div', { class: 'pjv-set-sec', text: '뷰' }), sv2);
 }
 
-// ── 뷰 탭 줄(#1067) — 보드·타임라인·테이블·리스트 + ＋뷰. ──
-//  보드/리스트는 이미 있는 렌더에 연결(칸반 #541 / 상태그룹). 테이블·타임라인은 아직 없어 준비 중 토스트.
+// ── 뷰 탭 줄(#1067) — 리스트·태스크·보드·테이블·타임라인 + ＋뷰. ──
+//  #4865(원준 2026-10-17) — 「리스트」는 이제 스코프 안 프로젝트들의 **세션 목록**(projects/session-list.ts)이고 기본 탭이다.
+//   종전의 「리스트」(프로젝트를 상태로 묶은 표)는 「태스크」로 이름을 바꿔 둘째 자리에 둔다 — 아이콘은 원 안의 체크.
 //  ⚠ 설정(톱니) 팝오버의 '보기 방식' 라디오와 **같은 상태**(pjvBoardView)를 본다 — 두 곳이 항상 일치해야 한다.
 const PJV_VIEW_TABS = [
   { key: 'list', label: '리스트' },
+  { key: 'tasks', label: '태스크' },
   { key: 'board', label: '보드' },
   { key: 'table', label: '테이블' },
   { key: 'timeline', label: '타임라인' },
 ];
 
-// 현재 보기 → 탭 키. 칸반=보드 / 표=테이블 / 타임라인 / 나머지(상태그룹·리스트박스·개요)는 리스트 계열.
+// 현재 보기 → 탭 키. 세션=리스트 / 칸반=보드 / 표=테이블 / 타임라인 / 나머지(상태그룹·리스트박스·개요)는 태스크 계열.
 function pjvCurrentViewTab() {
+  if (pjvBoardView.sessions) return 'list';
   if (pjvBoardView.kanban) return 'board';
   if (pjvBoardView.table) return 'table';
   if (pjvBoardView.timeline) return 'timeline';
-  return 'list';
+  return 'tasks';
 }
 
 // 탭 하나만 켜고 나머지 보기 플래그는 끈다(상호배타).
 function pjvSetViewTab(key) {
   // 타임라인에 **들어올 때마다** 하위 작업 캐시를 비운다(#1305) — 다른 뷰에서 태스크를 고치고 돌아와도 신선하게.
   if (key === 'timeline' && !pjvBoardView.timeline) pjvTlClearTasks();
+  pjvBoardView.sessions = key === 'list';
   pjvBoardView.kanban = key === 'board';
   pjvBoardView.table = key === 'table';
   pjvBoardView.timeline = key === 'timeline';
-  if (key !== 'list') { pjvBoardView.overview = false; return; }
+  if (key !== 'tasks') { pjvBoardView.overview = false; return; }
   pjvBoardView.overview = false;
   if (!pjvBoardView.byFolder) pjvBoardView.byStatus = true;
 }

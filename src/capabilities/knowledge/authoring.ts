@@ -9,8 +9,16 @@ import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeGateFields, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
   applyKnowledgeEdits, type KnowledgeEdit,
-  setKnowledgeTitle,
+  setKnowledgeTitle, sessionStampListId, KnowledgeExistsError,
 } from "../../v6/knowledge-store.js";
+// #4824 증류 저장 — 저장 · 원본 연결 · 공개범위를 한 트랜잭션에서(사양 R6) · 증류 배치는 원본 없이 못 쓴다(R7).
+import {
+  derivedEnforced, linkDerivedSources, planNewDerivedKnowledge, withDerivedTx, writeNewDerivedKnowledge,
+  type LinkDerivedResult,
+} from "../../v6/derived-visibility.js";
+import { derivedDupNote } from "../../v6/knowledge-links.js";
+import { distillBatchOf } from "../../org/distill/distill-batch.js";
+import { canSeeSource } from "../../v6/source-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
 import { denyLifecycleChange } from "./lifecycle-guard.js";
@@ -27,6 +35,20 @@ import { assertNoContentSecrets } from "../content-secrets.js";
 //  부르고, 그 실패는 mcp_call_log 에도 안 남았다. 상한은 describe(softCapHint)로 광고하고 조정은
 //  핸들러(applySoftCaps)가 한다 — 표는 soft-cap.ts SOFT_CAPS.knowledge_save 하나뿐이다.
 const CAPS = SOFT_CAPS.knowledge_save;
+/** derived_from 한 번에 실을 수 있는 자료 수 — 스레드 하나(대개 수십 건)를 넉넉히 덮는다. */
+const DERIVED_FROM_MAX = 500;
+
+/** REST 의 derived_from — zod 를 안 타므로 여기서 모양을 본다(양의 정수 배열 · 상한). 없으면 undefined.
+ *  자료 id 하나(숫자·숫자 문자열)는 [id] 로 받는다 — 폼·쿼리에서 한 건만 보내는 호출을 굳이 튕기지 않는다(잘못된 값은 400). */
+function parseDerivedFrom(raw: unknown): number[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const list = Array.isArray(raw) ? raw : [raw];
+  const ids = list.map((x) => (typeof x === "number" || (typeof x === "string" && /^\d+$/.test(x.trim())) ? Number(x) : NaN));
+  if (ids.some((n) => !Number.isInteger(n) || n <= 0)) throw new HttpError(400, "derived_from 은 자료 id(양의 정수) 배열입니다");
+  if (ids.length > DERIVED_FROM_MAX) throw new HttpError(400, `derived_from 은 한 번에 ${DERIVED_FROM_MAX}건까지입니다`);
+  return ids;
+}
+
 const knowledgeSaveInput = {
   name: z.string().optional()
     .describe(`지식 이름(슬러그) — 없으면 title·본문에서 자동 생성. 기존 지식을 고칠 땐 그 이름을 그대로. ${softCapHint(CAPS.name)}`),
@@ -72,6 +94,13 @@ const knowledgeSaveInput = {
   change_note: z.string().optional()
     .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다. "
       + softCapHint(CAPS.change_note)),
+  // #4824 — 증류(자료 → 지식)의 정식 길. 따로 source_link_knowledge 를 부르던 두 번 호출은 둘째를 빠뜨리면 잠긴 자료로 만든
+  //  지식이 공개로 남았다. 여기 실으면 저장·연결·공개범위가 한 트랜잭션이다.
+  //  ⚠ 배열 상한을 zod .max() 로 두지 않는다(#1442) — SDK 가 핸들러 앞에서 검증해 본문째 튕기고 기록도 안 남는다. 핸들러가 본다.
+  derived_from: z.array(z.number().int().positive()).optional()
+    .describe("이 지식이 나온 자료(source) id 목록 — **자료를 지식으로 증류할 땐 반드시 싣는다**. 저장과 원본 연결(derived_from)과 공개범위를 서버가 한 번에 한다(source_link_knowledge 를 따로 부를 필요 없다). "
+      + "잠긴 자료(볼 수 있는 사람만)가 섞이면 이 지식도 그 사람들만 보게 된다. 그래서 **잠긴 자료를 이미 더 넓게 보이는 기존 지식에 합치는 저장은 거절된다(409)** — 그땐 새 이름으로 따로 저장하라. "
+      + "볼 수 있는 사람이 서로 안 겹치는 잠긴 자료를 한 지식에 모으는 것도 거절된다(아무도 못 보게 되므로 — 자료별로 나눠라). 증류 배치 세션에서는 이 칸 없는 저장이 거절된다."),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
 export const knowledgeSave: Capability = {
@@ -86,6 +115,7 @@ export const knowledgeSave: Capability = {
     "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
     "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
     "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다. " +
+    "**자료를 지식으로 증류할 땐 derived_from(자료 id 배열)을 실어라(#4824)** — 저장·원본 연결·공개범위가 한 번에 된다(source_link_knowledge 를 따로 부르지 않는다). 잠긴 자료(볼 수 있는 사람만)에서 나온 지식은 그 사람들만 보도록 저장되고, 잠긴 자료를 더 넓게 보이는 기존 지식에 합치는 저장은 409 로 거절된다(새 이름으로 따로 저장하라). 증류 배치에서는 derived_from 없는 저장이 거절된다. " +
     "**시딩 지식 경고(#846): 응답에 seed_warning 이 오면** 이 지식은 신규 고객 게이트웨이에 시딩되는 런북이라, 이 WIKI 편집은 고객이 받는 각색 스냅샷(src/org/delivery/seed-knowledge/…)에 자동 반영되지 않는다 — 안내대로 그 파일도 갱신하고, 그 사실을 사용자에게 알려라. " +
     "**append 모드(#921): 기존 문서에 내용을 보탤 땐 mode='append' 를 써라** — 이때 body_md 는 전문이 아니라 **덧붙일 조각**이고, 서버가 기존 본문 끝에 빈 줄로 잇는다. " +
     "전문을 읽어와(knowledge_get) 재조립해 통째로 되보내지 마라 — 원문이 그대로 보존되고(네가 재출력하며 생기는 요약·드리프트·누락이 없다) 전문이 컨텍스트를 오갈 일도 없다. " +
@@ -147,6 +177,7 @@ export const knowledgeSave: Capability = {
           // #968 변경 요약(검토 카드·기록). 길이 조정은 여기서 하지 않는다 — 핸들러 소프트캡(#1442)이 유일한
           //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
           change_note: b.change_note ? String(b.change_note) : undefined,
+          derived_from: parseDerivedFrom(b.derived_from),                  // #4824 저장 + 원본 연결 한 번에
         };
       } }],
   },
@@ -174,6 +205,34 @@ export const knowledgeSave: Capability = {
     // 공개범위(#1291) — 이름을 명시해 **기존 문서를 고치는** 경우만 막는다(신규 생성은 그대로).
     //  안 그러면 이름만 알면 안 보이는 문서를 upsert 로 통째로 덮어쓸 수 있다.
     if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+
+    // ── #4824 증류 저장 — derived_from 정리 · 증류 배치 가드(사양 R7) · 볼 수 있는 자료인가. 전부 쓰기 **전에**. ──
+    //  빈 배열은 «없음» 과 같다. 안 보이는 자료는 없는 자료와 같은 문구(존재 은닉 — source_link_knowledge 와 같은 규율).
+    const derivedIds = [...new Set((input.derived_from ?? []).map(Number))];
+    if (derivedIds.length > DERIVED_FROM_MAX) {
+      throw new HttpError(400, `derived_from 은 한 번에 ${DERIVED_FROM_MAX}건까지입니다(${derivedIds.length}건) — 자료를 나눠 저장하세요. 아무것도 저장하지 않았습니다.`);
+    }
+    //  축 상태는 트랜잭션(잠금) **전에** 읽어 넘긴다 — 잠금을 쥔 채 풀을 기다리지 않게(derived-visibility.ts 머리말). 30초 캐시.
+    //   폴더도 같은 값을 쓴다 — derived_from 을 실은 폴더가 잠긴 자료에서 나왔으면 그 대상으로 태어나야 한다(가드만 폴더를 뺀다).
+    const enforced = await derivedEnforced();
+    //  증류 배치 가드는 축이 켜져 있을 때만 — 꺼진 워크스페이스는 공개범위를 강제하지 않아 «연결 빠뜨림 = 공개로 남음» 이 아니고,
+    //   종전 두 번 호출(저장 → source_link_knowledge)도 켤 때 reconcileAllDerived 가 연결을 따라 맞춘다(격리 리뷰 — 레인마다
+    //   저장된 옛 기준 문구가 첫 저장마다 400 을 맞지 않게).
+    if (!derivedIds.length && input.is_folder !== true && enforced && await distillBatchOf(ctx?.session)) {
+      throw new HttpError(400,
+        "증류 배치의 지식 저장에는 derived_from(이 지식이 나온 자료 id 목록)이 필수입니다 — knowledge_save(…, derived_from: [자료 id]) 로 "
+        + "저장과 원본 연결을 한 번에 하세요(따로 source_link_knowledge 를 부르는 두 번 호출은 연결이 빠지면 잠긴 자료로 만든 지식이 공개로 남습니다). "
+        + "아무것도 저장하지 않았습니다.");
+    }
+    for (const id of derivedIds) {
+      if (!(await canSeeSource(id, ctx?.viewer ?? null))) throw new HttpError(404, `자료 #${id} 없음`);
+    }
+    //  #1631 중복 증류 알림 — 두 번 호출 시절 source_link_knowledge 에만 있던 것을 이 길에도 싣는다(커밋 뒤에 잰다).
+    const dupWarning = async (name: string): Promise<Record<string, unknown>> => {
+      const notes = new Set<string>();
+      for (const id of derivedIds) { const n = await derivedDupNote(id, name).catch(() => null); if (n) notes.add(n); }
+      return notes.size ? { warning: [...notes].join(" ") } : {};
+    };
 
     // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
     const gate = await resolveKnowledgeGate(input, ctx);
@@ -271,17 +330,59 @@ export const knowledgeSave: Capability = {
       }
       // 서버 클램프: 에이전트가 lifecycle='active' 로 우회할 수 없다. 반대로 에이전트가 자진 pending 하면 존중(안전 방향).
       const lifecycle = (gate.create === "confirm" || input.lifecycle === "pending") ? "pending" : (input.lifecycle ?? "active");
-      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx);
-      // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
-      //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
-      //  (가시성 축소가 편집의 부수효과가 되면 안 된다 — 축소는 언제나 명시적 행위여야 한다).
-      //  잠긴 리스트의 프로젝트 세션이 아니면 no-op → 종전대로 open.
-      const stampedList = await stampSessionVisibility(knowledge.name, ctx?.session, writeCtx);
+      let knowledge: Record<string, unknown> & { name: string; version?: unknown };
+      let wikilinks: Awaited<ReturnType<typeof upsertKnowledge>>["wikilinks"];
+      let stampedList: number | null;
+      let derivedInfo: Record<string, unknown> | null = null;
+      if (derivedIds.length) {
+        // #4824 — 저장 · 원본 연결 · 공개범위를 **한 트랜잭션**에서(사양 R6). 공개범위는 INSERT 전에 정해 그 값으로 태어난다 —
+        //  잠긴 자료로 만든 지식이 한순간도 공개로 있지 않다. 하나라도 실패하면 행·연결·감사 전부 롤백된다.
+        //  세션 스탬핑(비공개 프로젝트)도 같은 자리에서 정한다 — 잠긴 자료와 겹치면 거절(planNewDerivedKnowledge).
+        //  ⚠ 스탬프 조회가 실패하면(null) 리스트 없이 만든다 — derived_from 이 없는 저장과 같은 종전 규칙이다(프로젝트 스탬핑은
+        //   #1291 v2 의 best-effort). 잠긴 자료의 대상은 그대로 걸리므로 «잠긴 자료로 만든 지식이 공개» 는 생기지 않는다.
+        const stampList = await sessionStampListId(ctx?.session).catch(() => null);
+        let created;
+        try {
+          created = await withDerivedTx(async (client) => {
+            const planned = await planNewDerivedKnowledge(client, derivedIds, stampList, enforced);
+            const row = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx,
+              { db: client, insertOnly: true, deferPost: true, visibility: planned.plan.next.open ? "open" : "members" });
+            await writeNewDerivedKnowledge(client, row.name, planned, writeCtx);
+            return { row, planned };
+          });
+        } catch (e) {
+          if (e instanceof KnowledgeExistsError) {
+            throw new HttpError(409, `지식 '${e.knowledgeName}' 이(가) 방금 다른 저장으로 생겼습니다 — 아무것도 저장하지 않았습니다. knowledge_get 으로 그 지식을 보고, 고칠 거면 같은 이름으로 다시 저장하세요.`);
+          }
+          throw e;
+        }
+        const { post, wikilinks: _unused, ...row } = created.row;
+        knowledge = row as typeof knowledge;
+        wikilinks = await post?.();   // 커밋 뒤 — 임베딩 표시·위키링크 엣지(best-effort)
+        stampedList = created.planned.plan.next.lists[0] ?? null;
+        const next = created.planned.plan.next;
+        derivedInfo = {
+          linked: created.planned.sourceIds.length, visibility: next.open ? "open" : "members", audience: next.subjects.length,
+          ...(created.planned.lockedIds.length ? {
+            locked_sources: created.planned.lockedIds,
+            note: "잠긴 자료(볼 수 있는 사람만)에서 나온 지식이라, 그 자료를 볼 수 있는 사람만 보도록 저장했습니다. 이 지식에 잠기지 않은 다른 내용을 합치지 마세요.",
+          } : {}),
+        };
+      } else {
+        const r = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx);
+        ({ wikilinks, ...knowledge } = r);
+        // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
+        //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
+        //  (가시성 축소가 편집의 부수효과가 되면 안 된다 — 축소는 언제나 명시적 행위여야 한다).
+        //  잠긴 리스트의 프로젝트 세션이 아니면 no-op → 종전대로 open.
+        stampedList = await stampSessionVisibility(knowledge.name, ctx?.session, writeCtx);
+      }
       const visInfo = stampedList
         ? { visibility: { level: "members", via_project_list: stampedList,
             note: "이 지식은 지금 세션이 속한 프로젝트가 비공개라, 그 프로젝트를 볼 수 있는 사람에게만 보이도록 저장됐습니다(공개 위키에는 안 뜹니다). 전 조직에 공유할 내용이라면 프로젝트 밖 세션에서 다시 쓰거나 사람에게 공개범위 변경을 요청하세요." } }
         : {};
       const wl = wikiLinkInfo(wikilinks);   // #907 자동 엣지 결과 — 응답 최상위로(knowledge 행에 섞지 않는다)
+      const derivedOut = derivedInfo ? { derived: derivedInfo, ...(await dupWarning(knowledge.name)) } : {};
       const gateInfo = lifecycle === "pending"
         ? { action: "confirm", state: "pending", rule_id: gate.rule_id,
             note: "검토 대기(pending)로 저장됐습니다 — 사람이 승인하기 전까지 검색·세션주입·목록에 노출되지 않습니다(knowledge_get·knowledge_list(lifecycle='pending')로는 조회 가능). 같은 name 으로 다시 저장하면 이 초안이 갱신됩니다." }
@@ -292,10 +393,10 @@ export const knowledgeSave: Capability = {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)) };
+      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -303,6 +404,33 @@ export const knowledgeSave: Capability = {
       throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
     }
     const before = gate.before!;
+    // #4824 — 기존 지식 + derived_from: 판정 · 연결 · 내용을 **한 트랜잭션**에서(사양 R6). 자료를 잡고(FOR SHARE) 지식을 잡은 뒤
+    //  «이 자료들을 이으면 지금 이 지식을 보는 사람이 줄어드나» 를 본다 — 줄면 409, 본문·연결·공개범위 아무것도 안 바뀐다
+    //  (잠긴 자료를 공개 지식에 합치지 않는다 — 빈틈 ②). 줄지 않으면 연결과 내용이 함께 커밋된다(검증 실패면 함께 롤백 —
+    //  «증류됨» 으로 빠졌는데 내용은 없는 자료가 생기지 않는다).
+    //  그 사이 다른 저장이 끼었으면(판이 바뀜) 409 — append·edit 가 합친 본문의 바탕이 낡아 남의 저장을 덮지 않게.
+    //  검토 게이트 stage 는 본문을 안 바꾸므로 연결만 하고 제안은 커밋 뒤에 낸다.
+    let derivedLink: LinkDerivedResult | null = null;
+    let written: Awaited<ReturnType<typeof upsertKnowledge>> | null = null;
+    if (derivedIds.length) {
+      const res = await withDerivedTx(async (c) => {
+        const link = await linkDerivedSources(c, before.name, derivedIds, writeCtx, { mode: "save", enforced });
+        const cur = await c.query(`SELECT version FROM knowledge WHERE name=$1`, [before.name]);
+        if (Number(cur.rows[0]?.version) !== Number(before.version)) {
+          throw new HttpError(409, `지식 '${before.name}' 이(가) 그 사이 다른 저장으로 바뀌었습니다(판 ${before.version} → ${cur.rows[0]?.version}) — 아무것도 저장하지 않았습니다. knowledge_get 으로 지금 본문을 보고 다시 저장하세요.`);
+        }
+        const row = gate.update === "stage" ? null : await upsertKnowledge(saveInput, writeCtx, { db: c, deferPost: true });
+        return { link, row };
+      });
+      derivedLink = res.link;
+      written = res.row;
+    }
+    const derivedOut = derivedLink
+      ? {
+          derived: { linked: derivedLink.inserted.length, visibility: derivedLink.visibility, audience: derivedLink.audience, ...(derivedLink.changed ? { changed: true } : {}) },
+          ...(await dupWarning(before.name)),
+        }
+      : {};
     if (gate.update === "stage") {
       // 본문 미반영 — 라이브는 옛 승인본 유지, 제안만 큐로. (같은 지식의 pending 제안은 1건으로 coalesce.)
       const revision = await proposeRevision({
@@ -317,6 +445,7 @@ export const knowledgeSave: Capability = {
         knowledge: null,
         ...seedSyncWarning(before.name),
         ...capped,
+        ...derivedOut,
         gate: {
           action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
@@ -324,7 +453,16 @@ export const knowledgeSave: Capability = {
       };
     }
     // #921 saveInput — append 면 body_md 가 조각이 아니라 base+조각 전문(위 append 분기에서 병합).
-    const { wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx);
+    //  #4824 derived_from 이면 위 트랜잭션이 이미 썼다 — 커밋 뒤 임베딩 표시·위키링크(post)만 남았다.
+    let knowledge: Record<string, unknown> & { name: string };
+    let wikilinks: Awaited<ReturnType<typeof upsertKnowledge>>["wikilinks"];
+    if (written) {
+      const { post, wikilinks: _unused, ...row } = written;
+      knowledge = row as typeof knowledge;
+      wikilinks = await post?.();
+    } else {
+      ({ wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx));
+    }
     const wl = wikiLinkInfo(wikilinks);
     if (gate.update === "review") {
       // 본문은 즉시 반영(라이브 유지) — 사람은 사후에 diff 를 보고 확인 또는 되돌리기.
@@ -340,13 +478,14 @@ export const knowledgeSave: Capability = {
         ...seedSyncWarning(knowledge.name),
         ...capped,
         ...wl,
+        ...derivedOut,
         gate: {
           action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다.",
         },
       };
     }
-    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...wl, ...(await classificationInfo(knowledge.name)) };
+    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
   },
 };
 

@@ -7,6 +7,7 @@
 //  판단 자체가 node 의 관심사이기도 하다.
 import { nodeOfSession, nodeRpc } from "./registry.js";
 import { sendKeysToSession, sessionPastes } from "../terminal/send-keys.js";
+import { guardAfterSend } from "../terminal/session-first-prompt.js";
 
 /**
  * 세션 PTY 에 텍스트를 넣고 제출한다. **인가는 호출자 책임**이다 — 크론은 관리세션 해소로,
@@ -19,5 +20,8 @@ export async function injectPrompt(sessionId: string, text: string, opts?: { har
   const nodeId = nodeOfSession(sessionId);
   //  #4818 — 하네스를 알면 함께 싣는다: Claude Code 세션이면 노드가 붙여넣기로 싣는다(send-keys 규약 ⑤). 옛 노드는 이 칸을 무시하고 친다.
   if (nodeId) { await nodeRpc(nodeId, "sendKeys", { id: sessionId, text, ...(opts?.harness ? { harness: opts.harness } : {}) }); return; }
-  await sendKeysToSession(sessionId, text, { paste: await sessionPastes(sessionId, opts?.harness) });
+  const paste = await sessionPastes(sessionId, opts?.harness);
+  await sendKeysToSession(sessionId, text, { paste });
+  //  #4852 — 넣은 뒤 입력칸을 지킨다(뒤에서 — 부른 쪽을 막지 않는다). 노드 쪽 sendKeys 와 같은 함수(session-ops).
+  void guardAfterSend(sessionId, text, paste);
 }

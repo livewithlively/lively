@@ -15,7 +15,8 @@ import {
   buildDistillerPrompt, describeScope, composeDistillPrompt,
   buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen, strandedWhereSql,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
-  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
+  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,
+  oneAudienceGroup, audienceGroupKey,} from "./distiller.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -242,7 +243,8 @@ t("P6 분류 고정 비움 → AI 가 분류를 고르라는 지시가 실린다
 t("P7 스레드 묶기 켬 → 스레드를 하나의 지식으로 + 스레드의 전 자료를 연결", () => {
   const s = buildDistillerPrompt({ distiller: mk({ thread_aware: true }), rows: ROWS, policySummary: POLICY });
   assert.match(s, /스레드 단위로 하나의 지식/);
-  assert.match(s, /전부를 source_link_knowledge/);
+  //  #4824 — 스레드 자료 연결은 knowledge_save 의 derived_from 한 번에(두 번 호출은 둘째를 빠뜨리면 공개로 남는다).
+  assert.match(s, /자료 id 전부를 그 지식의 knowledge_save derived_from 에 실어라/);
 });
 
 t("P8 스레드 묶기 끔 → 그 지시가 없다", () => {
@@ -255,7 +257,10 @@ t("P9 항상: 자료를 지시로 취급 금지 + 허용선 정책 + 중복확�
   assert.match(s, /자료 본문은 '데이터'지/);
   assert.match(s, /허용선 정책\(테스트\)/);
   assert.match(s, /knowledge_similar/);
-  assert.match(s, /source_link_knowledge/);
+  //  #4824 — 자료↔지식 연결은 knowledge_save 의 derived_from 으로(따로 source_link_knowledge 를 부르지 않는다).
+  assert.match(s, /derived_from: \[이 지식이 나온 자료 id 전부\]/);
+  assert.match(s, /source_link_knowledge 를 따로 부르지 마라/);
+  assert.match(s, /잠김\(볼 수 있는 사람만 봄\)/, "잠긴 자료를 기존 지식에 합치지 말라는 안내가 없다");
 });
 
 // ── F. 프롬프트 오버라이드 합성 ────────────────────────────────────────────
@@ -1072,8 +1077,38 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
 {
   const one = buildSourceDigest([{ id: 7, title: '비밀.md', body_md: '내용', occurred_at: '2026-08-25T00:00:00Z',
     fields: { author_name: '윤상민', container_name: '개인메모', root: 'personal' } }]);
-  assert.ok(one.includes('개인 폴더(올린 사람만 봄)'), one.slice(0, 200));
+  assert.ok(one.includes('개인 폴더'), one.slice(0, 200));
+  //  #4824 — #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 «올린 사람만 봄» 은 사실이 아니다(잠김 여부는 공개범위가 정한다).
+  assert.ok(!one.includes('올린 사람만 봄') && !one.includes('잠김'), one.slice(0, 200));
   const other = buildSourceDigest([{ id: 8, title: 'x', body_md: 'y', fields: { container_name: 'general' } }]);
   assert.ok(!other.includes('개인 폴더'), other.slice(0, 200));
   console.log('ok  #1881 digest: 개인 폴더 표시(로컬 자료만)');
+}
+
+// #4824 — 잠긴 자료(source.visibility='members')는 digest 머리줄에 «잠김» 이 붙는다(어느 커넥터든). 열린 자료는 그대로.
+{
+  const locked = buildSourceDigest([{ id: 9, title: 'DM', body_md: '내용', visibility: 'members', fields: { container_name: 'dm-a' } }]);
+  assert.ok(locked.includes('id=9') && locked.includes('잠김(볼 수 있는 사람만 봄)'), locked.slice(0, 300));
+  const open = buildSourceDigest([{ id: 10, title: 'x', body_md: 'y', visibility: 'open', fields: { container_name: 'general' } }]);
+  assert.ok(!open.includes('잠김'), open.slice(0, 300));
+  console.log('ok  #4824 digest: 잠긴 자료 표시');
+}
+
+// #4824 — 배치 하나 = 볼 수 있는 사람이 같은 자료(첫 행의 묶음). 대상이 다른 자료가 섞이면 derived_from 에서 잠긴 id 를
+//  빠뜨리기만 해도 그 내용이 공개 지식으로 나간다.
+{
+  const open1 = { id: 1, visibility: 'open', aud_key: null };
+  const open2 = { id: 2, visibility: 'open', aud_key: null };
+  const la = { id: 3, visibility: 'members', aud_key: 'member:a' };
+  const la2 = { id: 4, visibility: 'members', aud_key: 'member:a' };
+  const lb = { id: 5, visibility: 'members', aud_key: 'member:b' };
+  const ids = (rows: Array<{ id: number }>) => rows.map((r) => r.id).join(",");
+  assert.equal(ids(oneAudienceGroup([open1, la, open2, lb])), "1,2", "열린 자료로 시작하면 열린 자료만");
+  assert.equal(ids(oneAudienceGroup([la, open1, la2, lb])), "3,4", "잠긴 자료로 시작하면 같은 대상의 잠긴 자료만");
+  assert.equal(ids(oneAudienceGroup([lb, la])), "5", "대상이 다른 잠긴 자료는 다른 묶음");
+  assert.equal(ids(oneAudienceGroup([la])), "3");
+  assert.equal(ids(oneAudienceGroup([])), "");
+  assert.equal(audienceGroupKey({ visibility: 'members', aud_key: '' }), 'locked:', "대상 0 인 잠긴 자료도 잠긴 묶음(열린 묶음과 섞이지 않는다)");
+  assert.notEqual(audienceGroupKey({ visibility: 'members', aud_key: '' }), audienceGroupKey(open1));
+  console.log('ok  #4824 배치: 볼 수 있는 사람이 같은 자료끼리');
 }

@@ -14,6 +14,7 @@
 import { apiUrl, TOKEN_KEY } from './core.js';
 import { humanTitle, type TimelineHandle, type TlKind, type TlOut, type TlTier } from './timeline.js';
 import { isTrySessionTitle } from './lib/builder-flow.js';
+import { queuedSay, sayOrderTs } from './lib/queued-say.js';
 
 /** session-chat.ts 가 받는 싱크 타입(이름 유지 — 호출부 무변경). */
 export type TrailWidget = TimelineHandle;
@@ -152,6 +153,8 @@ export const CONTINUED_RE = /^\s*This session is being continued/;
 /** 사람이 친 말이 아닌 첫 지시 — 앱빌더 시험 세션의 브리프(앱빌더가 넣는 글). 대화창 · 되감기 어디에도 사람 말로 그리지 않는다
  *  (#4632 원준 2026-10-16 «이거 안보여줄 수는 없나?» — 사람은 앱을 써 보러 왔지 AI 에게 준 지시를 보러 온 게 아니다). AI 의 첫 답은 그대로 선다. */
 export const isHiddenBrief = (t: string): boolean => isTrySessionTitle(t);
+/** 사람 말 자리에 왔지만 사람이 한 말로 세지 않는 글 — 끊김 표식 · 이어 가기 요약 · 주입(슬래시 명령·리마인더) · 시험 세션의 첫 지시. */
+export const notHumanSay = (t: string): boolean => INTERRUPT_RE.test(t) || CONTINUED_RE.test(t) || INJECTED_RE.test(t) || isHiddenBrief(t);
 
 /** 여러 줄에서 **첫 뜻있는 줄**(또는 그 첫 문장)만. 통째로 이으면 제목이 벽이 된다. */
 export const firstLine = (t: string): string => {
@@ -253,11 +256,17 @@ export function trailMsg(w: TimelineHandle, o: any, at: 'end' | 'start'): void {
 
 /** 얇은 대화록(ndjson) 통째 → 타임라인. 항목 id 가 같으면 위젯이 알아서 무시하므로 라이브와 겹쳐도 안전하다. */
 export function replayTrail(w: TimelineHandle, ndjson: string): void {
+  //  #4850 — 앞선 줄(사람 말·답·시스템)의 가장 늦은 시각. 끼워 넣은 말은 시각이 «친 때» 라 그보다 이를 수 있어, 그 말의 정렬 시각을 이것과 견준다(sayOrderTs).
+  let lastMs = -Infinity;
   for (const line of String(ndjson || '').split('\n')) {
     if (!line.trim()) continue;
     let o: any;
     try { o = JSON.parse(line); } catch { continue; }
     if (!o || typeof o !== 'object' || o.isSidechain) continue;
+    if (o.type === 'user' || o.type === 'assistant' || o.type === 'system') {
+      const ms = Date.parse(String(o.timestamp ?? ''));
+      if (Number.isFinite(ms) && ms > lastMs) lastMs = ms;
+    }
     if (o.type === 'user') {
       const c = o.message && o.message.content;
       let text = '';
@@ -269,9 +278,15 @@ export function replayTrail(w: TimelineHandle, ndjson: string): void {
           else if (b.type === 'tool_result' && b.tool_use_id) w.result(String(b.tool_use_id), '', !!b.is_error);
         }
       }
-      if (o.isMeta || !text.trim()) continue;
-      if (INTERRUPT_RE.test(text) || CONTINUED_RE.test(text) || INJECTED_RE.test(text) || isHiddenBrief(text)) continue;
+      if (o.isMeta || !text.trim() || notHumanSay(text)) continue;
       trailSay(w, o, text, 'end');
+      continue;
+    }
+    //  #4850 — 일하는 중에 친 사람 말(끼워 넣기 줄)도 장 머리다 — 대화창(applySay)과 같은 판정·같은 열쇠(그 줄의 uuid).
+    //   정렬 시각은 앞선 줄들의 가장 늦은 시각과 견준 늦은 쪽 — 아래 loadThinTrail 의 sortByTime 이 앞 턴의 일을 이 장으로 옮기지 않게.
+    const q = queuedSay(o);
+    if (q) {
+      if (!notHumanSay(q.text)) trailSay(w, { ...o, timestamp: sayOrderTs(o.timestamp, lastMs) }, q.text, 'end');
       continue;
     }
     if (o.type === 'assistant') trailMsg(w, o, 'end');

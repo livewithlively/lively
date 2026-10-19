@@ -24,6 +24,8 @@ import { onSessionEvent } from "../terminal/harness-io/runtime-bus.js";   // #47
 //  배달자·registry 는 **네임스페이스로** 받는다 — 이름을 정적으로 묶으면 배선이 옛 모양(내보내기 없음)일 때 파일 전체가 링크 오류로 죽어
 //   어느 행이 배선에 걸렸는지 안 보인다. 이렇게 두면 옛 배선에서는 그 배선을 쓰는 행만 빨간불이다(fail-first).
 const { waitReady, sendReadyRow, READY_WINDOW_MS, READY_POLL_MS, ECHO_WINDOW_MS, STALE_SENDING } = outbox;
+//  #4851 늦은 창 — 옛 배선(이 이름 없음)에서도 파일이 링크 오류로 죽지 않게 네임스페이스에서 읽는다(그 행만 빨간불).
+const ECHO_LATE_WINDOW_MS = (outbox as unknown as { ECHO_LATE_WINDOW_MS?: number }).ECHO_LATE_WINDOW_MS;
 const { NODE_RPC_TIMEOUT_MS, sessionHostFor, sessionHostTargetFor } = registry;
 
 const ID = "box-a";
@@ -633,12 +635,107 @@ test("W12 waitEcho 배선 — 창 안에서만 박자를 부른다(마감 확인
   const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
   const body = /async function waitEcho\([^)]*tick\?: \(\) => Promise<void>\)[^{]*\{([\s\S]*?)\n\}\n/.exec(src)?.[1];
   assert.ok(body, "waitEcho 가 박자(tick)를 안 받는다");
-  const deadline = body.indexOf("if (Date.now() - sentAt >= ECHO_WINDOW_MS)");
+  //  #4851 — 창 길이는 부른 쪽(sendReadyRow)이 정한다(첫 창 · 늦은 창). 마감은 그 길이로 잰다.
+  const deadline = body.indexOf("if (Date.now() - sentAt >= windowMs)");
   const tickAt = body.indexOf("await tick()");
   const sleepAt = body.indexOf("await sleep(pollMs)");
   assert.ok(deadline > 0 && tickAt > deadline && sleepAt > tickAt, "박자가 마감 확인 뒤·폴 대기 앞에 있지 않다 — 창 밖에서 걸음을 넘기면 한 행의 시간 상한이 깨진다");
-  //  끝의 `[),]` — #4794 가 뒤에 시계·«다 쳤다» 알림 인자를 더 넘긴다(T7). 박자를 넘기는지만 본다.
-  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine, tick\) => waitEcho\(sessionId, st, oneLine, tick\)[),]/, "배달 루프가 박자를 안 넘긴다");
+  //  끝의 `[),]` — #4794 가 뒤에 시계·«다 쳤다» 알림 인자를 더 넘긴다(T7). 박자·창 길이·그 행의 에코 기억(watch)을 넘기는지 본다.
+  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine, tick, windowMs\) => waitEcho\(sessionId, st, oneLine, watch, windowMs \?\? ECHO_WINDOW_MS, tick\)[),]/,
+    "배달 루프가 박자·창 길이·에코 기억을 안 넘긴다");
+  //  #4851 — 에코의 하한(친 때)은 치기 **직전**에 잡는다: 그 앞에 적힌 같은 말은 이 행의 짝이 아니다. 행마다 새 기억이어야 한다(루프 안).
+  const loop = src.slice(src.indexOf("async function deliverLoop"), src.indexOf("export type SendOutcome"));
+  const stamp = loop.indexOf("const watch = echoWatch(Date.now());");
+  assert.ok(stamp > loop.indexOf("for (;;)") && stamp < loop.indexOf("await sendReadyRow("), "에코 하한을 치기 직전(행마다)에 잡지 않는다");
+});
+
+// ── #4851 창 길이 · 빗금 명령 마감 ──────────────────────────────────────────────────────────────
+//  사양·엣지 표: 지식 outbox-echo-typed-window-4851 §사양 의 Z 행. 가짜 에코는 창마다 받은 창 길이를 남긴다(무엇을 얼마나 기다렸나가 곧 행위다).
+const windowedEchoes = (clock: { t: number }, answers: Array<"confirmed" | "timeout" | "unreadable">, polls = 20, pollMs = 700) => {
+  const windows: Array<number | undefined> = [];
+  const echo = async (_line: string, tick?: () => Promise<void>, windowMs?: number) => {
+    windows.push(windowMs);
+    for (let i = 0; i < polls; i++) { clock.t += pollMs; if (tick) await tick(); }
+    return answers[Math.min(windows.length - 1, answers.length - 1)]!;
+  };
+  return { windows, echo };
+};
+const sendW = sendReadyRow as (row: { text: string; kind: "prompt" | "control" }, harness: string, exec: unknown,
+  echo: (line: string, tick?: () => Promise<void>, windowMs?: number) => Promise<"confirmed" | "timeout" | "unreadable">, clock?: { now: () => number }) => Promise<unknown>;
+const EXIT_PANE = claudeScreen([`❯${NB}/exit`]);                    // 친 명령이 입력칸에 그대로 남은 화면
+
+test("★ Z1 claude 보통 말 · 에코 없음 — 첫 창 ECHO_WINDOW_MS 뒤 늦은 창 ECHO_LATE_WINDOW_MS(훅 뒤에 적히는 말을 덮는다) · 결말은 종전대로 미확인", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const e = windowedEchoes(r.clock, ["timeout", "timeout"]);
+  const out = await sendW({ text: LONG_TEXT, kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t });
+  assert.deepEqual(e.windows, [ECHO_WINDOW_MS, ECHO_LATE_WINDOW_MS]);
+  assert.ok((ECHO_LATE_WINDOW_MS ?? 0) >= 60_000, "늦은 창이 훅 기본 시한(60초)을 못 덮는다");
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unconfirmed" });
+});
+test("Z2 쳤는지 모름(echo-only) — claude 는 두 창을 합친 만큼 한 번 · codex 는 첫 창만 · 둘 다 다시 치지도 Enter 도 안 한다", async () => {
+  for (const [harness, want] of [["claude", ECHO_WINDOW_MS + (ECHO_LATE_WINDOW_MS ?? 0)], ["codex", ECHO_WINDOW_MS]] as const) {
+    const r = rig({ host: (a) => { if (a.step === "type") throw rpcErr(true); return paneHost(EMPTY_PANE)(a); } });
+    const e = windowedEchoes(r.clock, ["timeout"]);
+    const out = await sendW({ text: LONG_TEXT, kind: "prompt" }, harness, await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t });
+    assert.deepEqual([e.windows, out], [[want], { kind: "mark", status: "failed", error: "send: host-unknown" }], harness);
+    assert.equal(enters(r), 0, harness);
+  }
+});
+test("★ Z3 claude 빗금 명령(/exit) · 첫 창에 에코 없음 · 입력칸이 비었다 — 그 자리에서 «command-no-echo» (경고 없음 · Enter 0 · 늦은 창 없음)", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const e = windowedEchoes(r.clock, ["timeout", "timeout"]);
+  const out = await sendW({ text: "/exit", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "command-no-echo" });
+  assert.deepEqual(e.windows, [ECHO_WINDOW_MS], "명령이 이미 입력칸을 떠났는데 늦은 창을 기다렸다");
+  assert.equal(enters(r), 0);
+  assert.ok(r.sentTo("peek").length > 0, "배선 — 지킴이가 화면을 안 봤다");
+});
+test("Z4 빗금 명령이 입력칸에 그대로 남았다 — 종전대로 Enter(지킴이)·늦은 창·미확인 경고(정말 안 들어갔다)", async () => {
+  const r = rig({ host: paneHost(EXIT_PANE) });
+  const e = windowedEchoes(r.clock, ["timeout", "timeout"]);
+  const out = await sendW({ text: "/exit", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t }) as { error?: string; extraEnters?: number };
+  const { SUBMIT_PRESS_MAX } = await import("../terminal/submit-check.js");
+  assert.deepEqual([out.error, e.windows.length, enters(r)], ["echo-unconfirmed", 2, SUBMIT_PRESS_MAX]);
+});
+test("★ Z5 빗금 명령 · 화면을 못 읽는다 — 첫 창 끝엔 종전대로 Enter 하나와 늦은 창 · 끝내 모르면 경고 대신 «command-no-echo»", async () => {
+  const r = rig({ host: paneHost(null) });
+  const e = windowedEchoes(r.clock, ["timeout", "timeout"]);
+  const out = await sendW({ text: "/exit", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "command-no-echo", extraEnters: 1 });
+  assert.deepEqual(e.windows, [ECHO_WINDOW_MS, ECHO_LATE_WINDOW_MS]);
+});
+test("Z6 빗금 명령이 기록에 적혔다(명령 줄) — delivered", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const out = await sendW({ text: "/model sonnet", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), windowedEchoes(r.clock, ["confirmed"]).echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "delivered" });
+});
+test("Z7 경로로 시작하는 보통 말(/tmp/x.txt …) · 입력칸 빔 · 에코 없음 — 빗금 명령이 아니다: 종전대로 미확인 경고", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const out = await sendW({ text: "/tmp/x.txt 이 파일 봐줘", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), windowedEchoes(r.clock, ["timeout", "timeout"]).echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unconfirmed" });
+});
+test("Z8 claude 밖 하네스(codex)의 빗금 명령 · 에코 없음 — 화면 근거가 없어 종전대로 미확인(창 하나)", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const e = windowedEchoes(r.clock, ["timeout"]);
+  const out = await sendW({ text: "/exit", kind: "prompt" }, "codex", await outboxExecFor(ID, r.deps), e.echo, { now: () => r.clock.t });
+  assert.deepEqual([out, e.windows], [{ kind: "mark", status: "sent", error: "echo-unconfirmed" }, [ECHO_WINDOW_MS]]);
+});
+test("Z9 빗금 명령 · 기록을 못 읽는다 — «못 읽음» 은 그대로(명령 마감은 «못 봤다» 만 바꾼다)", async () => {
+  const r = rig({ host: paneHost(EMPTY_PANE) });
+  const out = await sendW({ text: "/exit", kind: "prompt" }, "claude", await outboxExecFor(ID, r.deps), windowedEchoes(r.clock, ["unreadable", "unreadable"]).echo, { now: () => r.clock.t });
+  assert.deepEqual(out, { kind: "mark", status: "sent", error: "echo-unreadable" });
+});
+
+//  #4852 — waitEcho 는 파일·DB 를 타는 실행부라(이 파일의 경계) 배선은 소스로 잰다(W12 와 같은 방식).
+test("W15 waitEcho — 대화 id 가 없으면 폴마다 세션 행을 다시 읽고(첫 폴은 넘겨받은 행) · 찾기·폴백은 다시 읽은 행으로 한다", () => {
+  const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
+  const body = /async function waitEcho\([^)]*tick\?: \(\) => Promise<void>\)[^{]*\{([\s\S]*?)\n\}\n/.exec(src)?.[1] ?? "";
+  assert.ok(body, "waitEcho 를 못 찾았다");
+  const reread = body.indexOf("if (poll > 0 && cur && !cur.claude_session_id) cur = (await getSessionState(sessionId)");
+  const locate = body.indexOf("locateTranscript(io, { cwd, convId: cur.claude_session_id");
+  assert.ok(reread > 0 && locate > reread, "id 를 다시 읽지 않거나, 읽기 전에 찾는다 — 그사이 온 id 로 제 대화 파일을 못 찾는다");
+  assert.match(body, /newestGrownFile\(tfs, io, cwd, cur\.owner/, "폴백이 처음 넘겨받은 행(st)을 쓴다");
+  assert.ok(!/\bst\.(?:claude_session_id|transcript_path|owner)\b/.test(body), "루프가 아직 처음 행(st)을 읽는다");
 });
 
 // ── 시간·registry ─────────────────────────────────────────────────────────────────
@@ -653,9 +750,10 @@ test("E15 시간 불변식 — 한 행이 sending 에 머무는 상한의 합이
   assert.ok(HOST_WAIT_CAP_MS > Number(push[1]!.replace(/_/g, "")),
     "좌표를 상태 push 한 주기보다 짧게 기다리면 새 세션의 첫 지시가 늘 게이트웨이로 간다");
   //  좌표 대기 + 준비 창 + 마지막 폴 간격 + RPC 여섯(창 끝에 걸린 보기·신뢰 키 · 치기 · 창 끝 Enter · #4818 제출 지킴이가 에코 창
-  //   둘의 끝에 넘기는 걸음 하나씩 — 지킴이는 박자마다 걸음 하나다) + 에코 창 둘.
+  //   둘의 끝에 넘기는 걸음 하나씩 — 지킴이는 박자마다 걸음 하나다) + 에코 첫 창 + 늦은 창(#4851 — 쳤는지 모르는 갈래의 합친 창도 이 합과 같다).
   //   게이트웨이 칸의 tmux 지연(중계 22초/호출)은 종전과 같은 성질이라, 에코 파일 읽기 지연은 계획 E15 와 같이 넣지 않는다.
-  const worst = HOST_WAIT_CAP_MS + READY_WINDOW_MS + READY_POLL_MS + 6 * NODE_RPC_TIMEOUT_MS + 2 * ECHO_WINDOW_MS;
+  assert.equal(typeof ECHO_LATE_WINDOW_MS, "number", "늦은 창 상수가 없다");
+  const worst = HOST_WAIT_CAP_MS + READY_WINDOW_MS + READY_POLL_MS + 6 * NODE_RPC_TIMEOUT_MS + ECHO_WINDOW_MS + ECHO_LATE_WINDOW_MS!;
   assert.ok(worst < staleMs, `한 행 상한 ${worst}ms 가 잔재 판정 ${staleMs}ms 이상이다 — 살아 있는 배달이 «죽은 잔재» 로 회수돼 다시 보내진다`);
 });
 
@@ -751,6 +849,7 @@ test("T7 «다 쳤다» 알림 — 세션 상태 통로에 { t: outbox.typed, id
   assert.equal(typedHead("가".repeat(500)).length, 160, "머리 길이가 같은 말 판정(ECHO_HEAD_CHARS)과 다르다");
   //  배선 — 배달 루프가 이 알림을 onTyped 로 넘긴다(넘기지 않으면 화면은 에코 — 제출 훅 뒤 몇 초 — 로만 안다)
   const src = readFileSync(new URL("../../src/sessions/session-outbox.ts", import.meta.url), "utf8");
-  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine, tick\) => waitEcho\(sessionId, st, oneLine, tick\), undefined, \(\) => emitTypedNotice\(sessionId, row\)\);/,
+  //  #4851 — 에코 콜백이 창 길이·그 행의 에코 기억(watch)을 더 받는다(W12). 이 행이 재는 것은 onTyped 자리다.
+  assert.match(src, /sendReadyRow\(row, harness, exec, \(oneLine, tick, windowMs\) => waitEcho\(sessionId, st, oneLine, watch, windowMs \?\? ECHO_WINDOW_MS, tick\), undefined, \(\) => emitTypedNotice\(sessionId, row\)\);/,
     "배달 루프가 onTyped 로 emitTypedNotice 를 안 건다");
 });

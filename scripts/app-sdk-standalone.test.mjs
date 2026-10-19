@@ -57,13 +57,19 @@ function bootAlone(routes, opts = {}) {
     const method = (init.method || "GET").toUpperCase();
     fetched.push({ url, method, body: init.body === undefined ? undefined : JSON.parse(init.body), headers: init.headers, credentials: init.credentials });
     const r = routes(method, url, init.body === undefined ? undefined : JSON.parse(init.body)) || { status: 404, json: { error: "없음" } };
-    return { ok: r.status >= 200 && r.status < 300, status: r.status, text: async () => (r.json === undefined ? "" : JSON.stringify(r.json)) };
+    if (r.reject) throw r.reject;   // #4848 서버의 답을 받지 못함(fetch 의 TypeError)
+    //  답 머리(retry-after 등 — #4848) · JSON 이 아닌 본문(HTML 413 등)도 흉내 낸다.
+    const hdrs = Object.fromEntries(Object.entries(r.headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+    return { ok: r.status >= 200 && r.status < 300, status: r.status, headers: { get: (k) => hdrs[String(k).toLowerCase()] ?? null },
+      text: async () => { if (r.textReject) throw r.textReject; return r.text !== undefined ? r.text : r.json === undefined ? "" : JSON.stringify(r.json); } };
   };
+  //  #4848 쉬는 시간 — opts.timers 를 주면 SDK 의 setTimeout 이 기다리지 않고 곧바로 돌며 쉰 시간(ms)을 적는다(관측 = 적힌 값).
+  const timerFn = opts.timers ? (fn, ms) => { opts.timers.push(ms); setImmediate(fn); return 0; } : setTimeout;
   const sessionStorage = opts.storageThrows
     ? { getItem: () => { throw new Error("SecurityError"); }, setItem: () => { throw new Error("SecurityError"); } }
     : { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
   const ctx = vm.createContext({
-    window: win, parent: win, location, fetch: fetchFn, sessionStorage, document: doc, URLSearchParams, setTimeout, Promise, Error, Object, String,
+    window: win, parent: win, location, fetch: fetchFn, sessionStorage, document: doc, URLSearchParams, setTimeout: timerFn, Promise, Error, Object, String,
   });
   vm.runInContext(runtimeSource(), ctx);
   const fireDoc = (t) => { for (const fn of docListeners[t] || []) fn({}); };
@@ -126,6 +132,7 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   ]) {
     const e = await p.then(() => null, (x) => x);
     ok(e && e.code === code, `S3/S4 ${name} → ${code}`);
+    ok(e.status === null && e.reason === null, `S3/S4 ${name} 서버까지 안 간 거절은 status · reason 이 null(#4848 — 다리와 같은 모양)`);
   }
   eq(fetched.length, n, "S3/S4 서버에 묻지 않는다");
 }
@@ -154,6 +161,7 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   ok(store.has("lively.consent"), "S6 이 탭이 한 번 갔다는 표지");
   const e = await lively.store.query("notes", {}).then(() => null, (x) => x);
   ok(e && e.code === -32001 && e.status === 403 && e.consentUrl === ME.consent_url, "S7 10분 안 두 번째는 실패(-32001 · consentUrl 실음)");
+  ok(e.reason === "consent_required" && e.message === consent.json.error, "S7 짧은 코드는 서버의 code(#4848 C10) · 글은 서버 글 그대로");
   eq(nav.assigned.length, 1, "S7 다시 이동하지 않는다(끝없는 왕복 금지)");
 }
 
@@ -208,6 +216,7 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   }));
   const a = await lively.store.sql("drop table x").then(() => null, (x) => x);
   ok(a && a.code === -32602 && a.message === "검사기가 거부: DROP" && a.status === 400, "S11 400 → -32602 · 서버 글");
+  ok(a.reason === null, "S11 짧은 코드 꼴이 아닌 글만 있으면 reason 은 null — 지어내지 않는다(#4848 C9)");
   const b = await lively.tools.call("store_sql_batch", {}).then(() => null, (x) => x);
   ok(b && b.code === -32602 && b.status === 413, "S11 413 → -32602");
   const c = await lively.tools.call("store_tables", {}).then(() => null, (x) => x);
@@ -298,6 +307,131 @@ const baseRoutes = (over = {}) => (method, url, body) => {
   L.me(); L.requestConsent(); L.store.query("notes");
   eq(posted.map((m) => m.method), ["ui/initialize", "ui/me", "ui/grant", "tools/call"], "S17 다리 메서드로");
   eq(fetches, 0, "S17 fetch 0");
+}
+
+// ══ S18 #4848 본문 거절 — 짧은 코드(e.reason) · 사람이 읽을 글 · 붐빔(503 busy)은 retry-after 만큼 쉬고 한 번만 다시 ══
+//  앞단(lvly-cloud appfront)은 본문을 다 받기 전에 거절하면 503 {error:"busy"}(retry-after: 5) · 408 {error:"body_timeout"} · 413 {error:"body_too_large"},
+//   코어는 413 {error:"본문이 너무 큽니다(1MB 까지)", code:"body_too_large"} · 400 {…, code:"bad_body"} 를 준다. 앱은 글이 아니라 reason 으로 가른다.
+const korean = (s) => typeof s === "string" && /[가-힣]/.test(s);
+{
+  //  (C1) 붐빔 → retry-after(2초)만큼 쉬고 한 번 다시 → 그 답으로 풀린다 · 같은 요청 · 앱이 넘긴 객체를 곧바로 고쳐도 다시 보낸 본문은 첫 번째와 같다
+  const timers = [];
+  let n = 0;
+  const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": () => (++n === 1
+    ? { status: 503, json: { error: "busy" }, headers: { "Retry-After": "2" } }
+    : { status: 200, json: { row: { id: 9 } } }) }), { timers });
+  await lively.ready;
+  const before = fetched.length;
+  const row = { text: "a" };
+  const p = lively.store.insert("notes", row);
+  row.text = "고친 값";
+  eq(await p, { row: { id: 9 } }, "S18 C1 붐빔 뒤 한 번 다시 보내 그 답으로 풀린다");
+  const sent = fetched.slice(before);
+  eq(sent.length, 2, "S18 C1 두 번 보냈다");
+  eq(sent[1], sent[0], "S18 C1 같은 메서드 · 경로 · 본문 · 머리");
+  eq(sent[0].body, { table: "notes", row: { text: "a" } }, "S18 C1 본문은 부른 때의 것(다시 보낼 때 새로 만들지 않는다)");
+  ok(timers.length === 1 && timers[0] >= 2000 && timers[0] < 2500, `S18 C1 retry-after(2초)만큼 쉬었다 + ¼ 안 흩뿌림(${timers})`);
+}
+{
+  //  (C2) 또 붐비면 실패 — reason busy · status 503 · 셋째는 없다 · 글은 사람이 읽을 말(짧은 코드 그대로가 아니다)
+  const timers = [];
+  const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": { status: 503, json: { error: "busy" }, headers: { "retry-after": "5" } } }), { timers });
+  await lively.ready;
+  const before = fetched.length;
+  const e = await lively.store.insert("notes", { text: "a" }).then(() => null, (x) => x);
+  ok(e && e.reason === "busy" && e.status === 503 && e.code === -32000, "S18 C2 또 붐비면 reason busy · 503 · -32000 으로 실패");
+  ok(e.message !== "busy" && korean(e.message), `S18 C2 글은 사람이 읽을 말(${e.message})`);
+  eq(fetched.length - before, 2, "S18 C2 다시 보내기는 한 번뿐(셋째 없음)");
+  eq(timers.length, 1, "S18 C2 한 번만 쉬었다");
+}
+{
+  //  (C3) 쉬는 시간 — retry-after 없음 · 숫자 아님 · 음수는 5초, 30초 넘음은 30초, 0 은 곧바로, 소수는 그대로
+  for (const [ra, lo, hi] of [[undefined, 5000, 6000], ["abc", 5000, 6000], ["-3", 5000, 6000], ["  ", 5000, 6000], ["999", 30000, 31000], ["0", 0, 1], ["1.5", 1500, 1875]]) {
+    const timers = [];
+    let n = 0;
+    const { lively } = bootAlone(baseRoutes({ "POST /_lively/prefs": () => (++n === 1
+      ? { status: 503, json: { error: "busy" }, headers: ra === undefined ? {} : { "retry-after": ra } }
+      : { status: 200, json: { prefs: { k: 1 } } }) }), { timers });
+    eq(await lively.prefs.set({ k: 1 }), { k: 1 }, `S18 C3 retry-after ${JSON.stringify(ra)} — 다시 보내 풀린다`);
+    ok(timers.length === 1 && timers[0] >= lo && timers[0] < hi, `S18 C3 retry-after ${JSON.stringify(ra)} → ${timers[0]}ms ∈ [${lo}, ${hi})`);
+  }
+}
+{
+  //  (C4) busy 가 아닌 503 은 다시 보내지 않는다 — 다른 짧은 코드 · JSON 이 아닌 503(HTML)
+  for (const [route, reason] of [[{ status: 503, json: { error: "app_server_stopped" }, headers: { "retry-after": "1" } }, "app_server_stopped"],
+    [{ status: 503, text: "<html>잠시 이용할 수 없습니다</html>", headers: { "retry-after": "10" } }, null]]) {
+    const timers = [];
+    const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": route }), { timers });
+    await lively.ready;
+    const before = fetched.length;
+    const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
+    ok(e && e.status === 503 && e.reason === reason, `S18 C4 503 ${reason} → reason ${reason}`);
+    eq([fetched.length - before, timers.length], [1, 0], `S18 C4 503 ${reason} 은 다시 보내지 않는다`);
+  }
+}
+{
+  //  (C5 · C6 · C7 · C8 · C14) 408 · 413(앞단 · 코어 · HTML) — 짧은 코드 · 사람이 읽을 글 · 다시 보내지 않는다 · 붐빔 뒤 둘째가 413 이면 그 실패로
+  const cases = [
+    ["C5 408 앞단", { status: 408, json: { error: "body_timeout" } }, "body_timeout", -32000],
+    ["C6 413 앞단", { status: 413, json: { error: "body_too_large" } }, "body_too_large", -32602],
+    ["C7 413 코어", { status: 413, json: { error: "본문이 너무 큽니다(1MB 까지)", code: "body_too_large" } }, "body_too_large", -32602],
+    ["C8 413 HTML", { status: 413, text: "<html><body>Payload Too Large</body></html>" }, "body_too_large", -32602],
+    ["bad_body 코어", { status: 400, json: { error: "본문을 JSON 으로 읽지 못했습니다", code: "bad_body" } }, "bad_body", -32602],
+  ];
+  for (const [name, route, reason, code] of cases) {
+    const timers = [];
+    const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_sql": route }), { timers });
+    await lively.ready;
+    const before = fetched.length;
+    const e = await lively.store.sql("insert into t values ($1)", ["x"]).then(() => null, (x) => x);
+    ok(e && e.reason === reason && e.status === route.status && e.code === code, `S18 ${name} → reason ${reason} · ${route.status} · ${code}`);
+    ok(korean(e.message) && e.message !== reason && e.message !== (route.json && route.json.error) && e.message !== `요청이 실패했습니다(${route.status})`,
+      `S18 ${name} 글은 SDK 의 사람이 읽을 말로 바뀐다(${e.message})`);
+    eq([fetched.length - before, timers.length], [1, 0], `S18 ${name} 다시 보내지 않는다`);
+  }
+  let n = 0;
+  const timers = [];
+  const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_sql": () => (++n === 1
+    ? { status: 503, json: { error: "busy" }, headers: { "retry-after": "1" } } : { status: 413, json: { error: "body_too_large" } }) }), { timers });
+  await lively.ready;
+  const before = fetched.length;
+  const e = await lively.store.sql("select 1").then(() => null, (x) => x);
+  ok(e && e.reason === "body_too_large" && e.status === 413 && fetched.length - before === 2, "S18 C14 붐빔 뒤 둘째가 413 이면 그 실패로(다시 보내기는 한 번)");
+}
+{
+  //  (C15) 서버가 제 글을 준 413(코드 없음 — 개인 설정 16KB · 파일 읽기 8MB · 결과 상한)은 «1MB» 로 짐작하지 않는다 — reason null · 서버 글 그대로(격리 리뷰 B1)
+  for (const text of ["설정이 너무 큽니다(16KB 까지)", "파일이 너무 큽니다(9MB > 8MB)", "결과가 상한(5MB)을 넘었습니다 — LIMIT·OFFSET 으로 나눠 읽으세요. 쓰기였다면 취소했습니다"]) {
+    const { lively } = bootAlone(baseRoutes({ "POST /_lively/prefs": { status: 413, json: { error: text } } }));
+    const e = await lively.prefs.set({ big: 1 }).then(() => null, (x) => x);
+    ok(e && e.status === 413 && e.reason === null && e.message === text && e.code === -32602, `S18 C15 413 «${text.slice(0, 12)}…» → reason null · 서버 글 그대로`);
+  }
+}
+{
+  //  (C16) 코어 모양의 busy(code 를 싣는다)는 다시 보내지 않는다 — 다시 보내기는 앞단의 모양({error:"busy"})일 때만(격리 리뷰 N1)
+  for (const route of [{ status: 503, json: { error: "지금 바쁩니다", code: "busy" }, headers: { "retry-after": "1" } },
+    { status: 503, json: { error: "busy", code: "other_busy" }, headers: { "retry-after": "1" } }]) {
+    const timers = [];
+    const { lively, fetched } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": route }), { timers });
+    await lively.ready;
+    const before = fetched.length;
+    const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
+    ok(e && e.status === 503 && e.reason === route.json.code, `S18 C16 ${JSON.stringify(route.json)} → reason ${route.json.code}`);
+    eq([fetched.length - before, timers.length], [1, 0], `S18 C16 ${JSON.stringify(route.json)} 은 다시 보내지 않는다`);
+  }
+}
+{
+  //  (C17) 서버에 닿지 못함(fetch 의 TypeError) — 같은 모양의 실패: code -32000 · status · reason null · 원래 오류는 cause(격리 리뷰 N2)
+  const boom = new TypeError("Failed to fetch");
+  const { lively } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": { reject: boom } }));
+  await lively.ready;
+  const e = await lively.store.insert("notes", {}).then(() => null, (x) => x);
+  ok(e && e.code === -32000 && e.status === null && e.reason === null && e.cause === boom && korean(e.message), `S18 C17 끊김 → -32000 · null · null · cause(${e && e.message})`);
+  //  (C18) 답 머리 뒤 본문을 읽다 끊김 — 같은 모양(격리 리뷰 재검토 1)
+  const cut = new TypeError("network error");
+  const { lively: L2 } = bootAlone(baseRoutes({ "POST /_lively/tools/store_insert": { status: 200, textReject: cut } }));
+  await L2.ready;
+  const e2 = await L2.store.insert("notes", {}).then(() => null, (x) => x);
+  ok(e2 && e2.code === -32000 && e2.status === null && e2.reason === null && e2.cause === cut, `S18 C18 본문 읽다 끊김 → -32000 · null · null · cause`);
 }
 
 console.log(`\n${pass} passed`);

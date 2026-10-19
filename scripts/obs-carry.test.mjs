@@ -166,7 +166,8 @@ const fallbackRow = (over = {}) => ({
 
 // ── E14·E15 화면이 실제로 이 규칙을 지난다 ──────────────────────────────────
 {
-  const views = read("web/v2/views.ts");
+  // #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다).
+  const views = read("web/v2/sess-merge.ts");
   ok(/r\.observed === false \? false : !sessIsDead\(r, now\)/.test(views),
     "E14 세션 목록 조립이 «못 본 행» 을 살아 있다고 말하지 않는다 — 없으면 날짜 컷이 통째로 우회된다");
   const main = read("web/v2/main.ts");

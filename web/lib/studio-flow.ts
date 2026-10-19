@@ -17,15 +17,44 @@ export const STAGES: Array<{ key: 'what' | StudioStage; n: number; label: string
 ];
 export function stageIndex(s: 'what' | StudioStage): number { return STAGES.findIndex((x) => x.key === (s === 'draft' ? 'fix' : s)); }
 
+//  단계 바는 **와 본 곳이면 앞으로도** 간다(원준 2026-10-19 «내용 다 저장했었으면 이전으로 가는거 말고 다음으로 가는것도 있어야 · (3)하는 도중에 뒤로 뒤로 눌러서
+//   (1)로 간 다음에 이전 (3)으로 다시 가는 느낌은 없고 밑에 이 내용으로 다시 기획 이거밖에 없어서 어색해 · 상단 탭을 클릭하는 방향으로도 원하는 위치로»).
+//   «와 본 곳» 의 끝 = reached. 그 뒤 단계의 내용이 낡으면 끝을 당긴다 — 기획을 다시 받으면 ②, 새 버전이 나오면 ③(그 버전으로 ④ 확인 · ⑤ 넣기를 다시 해야 한다).
+/** 한 번이라도 와 본 가장 뒤 단계(0~4). 기록에 없으면(옛 기록) 지금 단계 · 앱이 있으면 ③ · 넣었으면 ⑤ 까지. */
+export function reachedOf(r: { stage: 'what' | StudioStage; appId?: string; done?: boolean; reached?: number }): number {
+  const base = Math.max(stageIndex(r.stage), r.appId ? 2 : 0, r.done ? 4 : 0);
+  const n = Number(r.reached);
+  return Number.isFinite(n) && n >= 0 ? Math.max(base, Math.min(STAGES.length - 1, Math.floor(n))) : base;
+}
+/** 단계 바 칸마다의 꼴 — on 지금 · back 눌러서 돌아간다 · ahead 눌러서 다시 간다(와 본 곳) · done 지나왔지만 못 간다(고치기 · 사본의 ①②는 원본의 것) · todo 아직. */
+export type StageTab = 'on' | 'back' | 'ahead' | 'done' | 'todo';
+export function stageTabs(cur: number, reached: number, mode: 'new' | 'copy' | 'edit'): StageTab[] {
+  return STAGES.map((_, i) => {
+    if (i === cur) return 'on';
+    const open = mode === 'new' || i >= 2;
+    if (i < cur) return open ? 'back' : 'done';
+    return open && i <= reached ? 'ahead' : 'todo';
+  });
+}
+/** 「다음 →」 이 갈 단계 — 바로 다음 칸이 와 본 곳이면 그 번호, 아니면 -1(아직 안 간 단계는 그 단계의 주 단추가 연다). */
+export function nextStageOpen(cur: number, reached: number, mode: 'new' | 'copy' | 'edit'): number {
+  const i = cur + 1;
+  return i < STAGES.length && stageTabs(cur, reached, mode)[i] === 'ahead' ? i : -1;
+}
+
+//  앱 화면에는 라이블리 사이드바가 없다(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야 … 앱빌더로 만들때는 디폴트가 없는거임 · 없을 때에는 사이드바 영역만큼도
+//   다 그 앱이 쓰는게 디폴트»). 셸은 앱 화면(#/i)에서 사이드바 열을 접는다(lib/side-owner) — AI 가 왼쪽 목록을 기본으로 그리지 않게 이 사실을 말해 둔다.
+export const FULL_NO_SIDE = '앱 화면은 라이블리 사이드바 없이 창 가득 열려(그 자리까지 앱이 써). 사이드바는 기본으로 두지 말고, 목록을 옆에 두고 써야 하는 앱일 때만 앱 안 왼쪽에 직접 그려.';
 // 사람에게 보이는 이름은 둘로 통일한다(원준 2026-10-14) — 세션 오른쪽에 붙는 것 = 「세션 위젯」, 화면 전체로 여는 것 = 「앱 화면」.
 export const PLACE: Record<StudioPlace, { title: string; sub: string; say: string; width: string }> = {
   side: { title: '세션 위젯', sub: 'AI 세션 오른쪽에 붙여 써요. AI에게 말하면 위젯 내용을 읽고 바꿔줘요.', say: '세션 위젯(세션 오른쪽 사이드바, 폭 340px 안팎)으로 붙여 쓰는 앱이야. 좁은 폭에서 잘 보이게 만들어 줘.', width: '세션 위젯 폭(360px)' },
-  full: { title: '앱 화면', sub: '앱 찾기에서 열어 전체 화면으로 써요.', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. 넓은 화면에 맞게 만들어 줘.', width: '앱 화면 폭' },
-  both: { title: '둘 다', sub: '세션 위젯으로도, 앱 화면으로도 써요.', say: '세션 위젯(세션 오른쪽 좁은 사이드바)으로도 붙이고 화면 전체로도 여는 앱이야. 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 위젯 폭과 앱 화면 폭 둘 다' },
+  full: { title: '앱 화면', sub: '앱 찾기에서 열어 전체 화면으로 써요.', say: '앱 찾기에서 열어 화면 전체로 넓게 쓰는 앱이야. ' + FULL_NO_SIDE + ' 넓은 화면에 맞게 만들어 줘.', width: '앱 화면 폭' },
+  both: { title: '둘 다', sub: '세션 위젯으로도, 앱 화면으로도 써요.', say: '세션 위젯(세션 오른쪽 좁은 사이드바)으로도 붙이고 화면 전체로도 여는 앱이야. ' + FULL_NO_SIDE + ' 좁을 때와 넓을 때 둘 다 잘 보이게 만들어 줘.', width: '세션 위젯 폭과 앱 화면 폭 둘 다' },
 };
 
 //  ref(참고한 것) — 원준 2026-10-15 «초안 만들 때 비슷한 다른 앱이나 서비스 있으면 구조나 기능 같은 거 벤치마크해서 참고해서». 옛 카드엔 없다(빈 글로 읽는다).
-export interface StudioCard { name: string; who: string; items: string; can: string[]; not: string; first: string; ref?: string }
+//  notify(알림) — 원준 2026-10-17 «알림에 대한 것도 앱 빌딩할 때 전반적으로 설정해야 하는 중요한 체계 … 기획 카드나 이런 데에도 다 넣어야». 옛 카드엔 없다(빈 글).
+export interface StudioCard { name: string; who: string; items: string; can: string[]; not: string; first: string; ref?: string; notify?: string }
 export const CARD_ROWS: Array<{ k: keyof StudioCard; label: string; hint: string }> = [
   { k: 'name', label: '이름', hint: '짧은 한글 이름' },
   { k: 'who', label: '누가 쓰나', hint: '예: 회의를 준비하는 사람과 참석자' },
@@ -33,14 +62,15 @@ export const CARD_ROWS: Array<{ k: keyof StudioCard; label: string; hint: string
   { k: 'can', label: '할 수 있는 것', hint: '세 가지. 예: 더하기, 회의별 보기, 끝난 것 접기' },
   { k: 'not', label: '안 하는 것', hint: '예: 회의록 쓰기, 알림 보내기' },
   { k: 'first', label: '첫 화면', hint: '예: 이번 회의 안건 목록(안 끝난 것 먼저)' },
+  { k: 'notify', label: '알림', hint: '언제 누구에게 알리나. 예: 나를 언급하면 · 새 안건마다 담당자에게 · 없음' },
   { k: 'ref', label: '참고한 것', hint: '비슷한 서비스에서 가져온 구조나 기능. 예: Otter의 회의 목록과 정리본 탭' },
 ];
 const KEY_OF: Array<[RegExp, keyof StudioCard]> = [
   [/^이름$/, 'name'], [/^누가/, 'who'], [/^(무엇을적나|적는것|무엇을|적는칸|칸)$/, 'items'],
-  [/^할수있는것|^기능/, 'can'], [/^안하는것|^하지않는것/, 'not'], [/^첫화면|^처음화면/, 'first'], [/^참고/, 'ref'],
+  [/^할수있는것|^기능/, 'can'], [/^안하는것|^하지않는것/, 'not'], [/^첫화면|^처음화면/, 'first'], [/^알림/, 'notify'], [/^참고/, 'ref'],
 ];
 export function splitList(s: string): string[] { return String(s || '').split(/\s*[·•,|]\s*|\s+\/\s+|\n/).map((x) => x.trim()).filter(Boolean); }
-export function emptyCard(): StudioCard { return { name: '', who: '', items: '', can: [], not: '', first: '', ref: '' }; }
+export function emptyCard(): StudioCard { return { name: '', who: '', items: '', can: [], not: '', first: '', ref: '', notify: '' }; }
 
 /** AI 답 글에서 기획 카드를 읽는다 — 블록이 여럿이면 마지막. 이름이 없으면 카드가 아니다. */
 export function parseCard(text: string): StudioCard | null {
@@ -142,6 +172,8 @@ const BENCH = '먼저 비슷한 앱 · 서비스(같은 일을 하며 오래 널
 const LEGACY = '★ 우선순위 높음 — 짜기 전에 이 앱과 같은 일을 하는 기존 서비스(오래 쓰여 온 회사 제품 두셋)의 화면 구성 · 기능 · UI 를 조사하고(웹 검색을 쓸 수 있으면 찾아봐), 그 익숙한 꼴과 비슷하게 짜 줘 — 처음 보는 사람도 바로 쓸 줄 아는 화면이 목표야. 카드의 「참고한 것」 이 그 출발점이야.';
 /** 화면 흐름 와이어프레임(원준 2026-10-15 «초안 만든 뒤 와이어프레임 볼 수 있게 · 클로드 아티팩트처럼 버튼 누르면») — 앱 패키지의 이 파일을 앱빌더 ③ 「와이어프레임 보기」 가 띄운다. */
 export const WIREFRAME_PATH = 'studio/wireframe.html';
+//  알림 체계(#4769, 원준 2026-10-17) — 기획 카드의 「알림」 줄이 앱의 알림 권한 · 보내는 순간 · 앱 안 설정으로 이어진다. 앱 전체 on/off 는 라이블리 [나 ▸ 알림] 의 몫.
+const NOTIFY = '알림: 기획 카드의 「알림」 줄이 「없음」 이 아니면 lively-app.json 에 permissions.notifications: true 를 켜고(app_notify 도구가 따라온다), 그 순간에 app_notify {member_id, title, body, href, dedupe_key} 로 받을 사람마다 보내 줘(href 는 #/open/<앱 id>?… — 앱이 lively.state 로 읽어 그 자리를 연다). 앱 안에는 사람마다 «무엇을 받을지»(예: 전부 · 나를 언급할 때만 · 없음) 고르는 설정을 두고 그 값은 보내는 쪽이 읽을 수 있게 앱 표에 저장해(개인 prefs 는 남이 못 읽어). 앱 전체 알림 켜고 끄기는 라이블리 [나 ▸ 알림] 이 맡으니 앱이 따로 만들지 마.';
 const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 피그마 보드처럼 이 앱의 화면을 한 장씩 프레임으로 가로로 나란히 놓고(화면이 하나여도 한 장), 프레임마다 위에 화면 이름표 · 안은 얇은 선(1px 회색)으로 그린 칸 · 글 · 단추, 그리고 **단추 하나하나마다** 그 단추에서 나가는 화살표로 어느 화면(또는 어느 칸)으로 이어지는지 이어 그린 HTML 한 장(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림 · 화면 수만큼 넓어도 된다).`;
 /** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
 export function planBrief(what: string, place: StudioPlace, name = ''): string {
@@ -149,13 +181,13 @@ export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
   return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 이름 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
-    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · 할 수 있는 것은 셋을 · 로 · 참고한 것은 어디서 무엇을 가져왔는지):\n'
-    + '[[기획카드]]\n이름: \n누가 쓰나: \n무엇을 적나: \n할 수 있는 것: \n안 하는 것: \n첫 화면: \n참고한 것: \n[[/기획카드]]';
+    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · 할 수 있는 것은 셋을 · 로 · 알림은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · 참고한 것은 어디서 무엇을 가져왔는지):\n'
+    + '[[기획카드]]\n이름: \n누가 쓰나: \n무엇을 적나: \n할 수 있는 것: \n안 하는 것: \n첫 화면: \n알림: \n참고한 것: \n[[/기획카드]]';
 }
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
   const id = String(appId || '').trim();
-  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${WIRE}\n`
+  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n`
     + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';

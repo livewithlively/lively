@@ -61,6 +61,9 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
     [/\\/api\\/ui\\/v6\\/project-lists/, { lists: [{ id: 10, name: 'LIST-TEN', folder_id: 5, sort: 0 }] }],
     [/\\/api\\/ui\\/v6\\/project-folders/, { folders: [{ id: 5, name: 'FOLDER-FIVE', parent_id: null, sort: 0 }] }],
     [/\\/api\\/ui\\/v6\\/board-fields/, { anchorId: null, fields: [], valuesByProject: {} }],
+    //  #4865 — 보드의 기본 뷰는 「리스트」(이 스코프 프로젝트들의 세션)다. 세션이 하나 있어야 그 프로젝트가 묶음 머리로 선다(rows 판정).
+    [/\\/api\\/ui\\/terminal\\/sessions/, { sessions: [{ id: 'box-test-1', label: 'SESS-ONE', projectId: 1, owned: true, owner: 'me', created: 1759276800, lastActive: 1759276800 }] }],
+    [/\\/api\\/ui\\/v6\\/sessions/, { sessions: [] }],
   ];
   window.__calls = [];
   window.fetch = async (url) => {

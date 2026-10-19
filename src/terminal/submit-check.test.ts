@@ -180,7 +180,7 @@ test("H23 접힌 표시 앞뒤가 우리 글과 다르다(다른 긴 글) — ot
 // ── 지킴이 ──────────────────────────────────────────────────────────────────────
 
 /** 가짜 화면·시계 — 박자마다 무엇을 했는지(peek·enter) 남긴다. pane 은 지금 보여 줄 화면(함수면 부를 때마다). */
-function rig(pane: string | null | (() => string | null), o: { enterThrows?: boolean; peekThrows?: boolean } = {}) {
+function rig(pane: string | null | (() => string | null), o: { enterThrows?: boolean; peekThrows?: boolean; guard?: sc.SubmitGuardOpts } = {}) {
   const clock = { t: 0 };
   const log: string[] = [];
   const g = submitGuard({
@@ -192,7 +192,7 @@ function rig(pane: string | null | (() => string | null), o: { enterThrows?: boo
     },
     enter: async () => { log.push("enter"); if (o.enterThrows) throw new Error("send-keys 실패"); },
     now: () => clock.t,
-  }, LONG);
+  }, LONG, o.guard);
   /** ms 만큼 시계를 민 뒤 박자 하나 */
   const step = async (ms: number): Promise<string[]> => { clock.t += ms; const before = log.length; await g.tick(); return log.slice(before); };
   return { g, log, clock, step };
@@ -288,4 +288,85 @@ test("G-흐름 글자 CR → «검토 후 Enter» → 제출: 우리 글이 사�
   assert.equal(presses, 2, "제출된 뒤에도 눌렀거나, 남아 있는데 덜 눌렀다");
   assert.equal(r.g.last(), "empty");
   assert.equal(r.g.shouldPressAtWindowEnd(), false);
+});
+
+// ── #4852 격리 리뷰 후속 — 보이지 않는 것의 집합(U1~U4) · 제어열 든 우리 글(H26) · 다시 보고 누르기(G14) ─────────────────────
+//  U — Claude Code 2.1.301 이 지우는 글자(그 번들의 숨은 글자 판정 — 격리 리뷰가 번들에서 옮겼다)를 우리도 모두 지우나. 하나라도 빠지면 그 글자가 든
+//   지시는 화면이 «다른 글»(지킴이가 안 누른다 — 입력칸에 남는다) · 기록이 «미확인» 이 된다(한글 채움 문자 U+3164 · CGJ 가 그렇게 빠져 있었다).
+function claudeHidden(e: number): boolean {   // 그 판정 그대로 — 조건부로 남기는 것(이모지 뒤 VS16 등)은 무조건 지우는 쪽에 둔다(양쪽에서 지우면 같다)
+  if (e < 160) return (e < 32 && e !== 9 && e !== 10) || e >= 127;
+  if (e < 8192) return e === 173 || e === 847 || e === 1564 || e === 4447 || e === 4448 || e === 6068 || e === 6069 || (e >= 6155 && e <= 6159);
+  if (e < 65536) return (e >= 8203 && e <= 8207) || (e >= 8232 && e <= 8238) || (e >= 8288 && e <= 8303) || e === 12644 || (e >= 65024 && e <= 65039) || e === 65279 || e === 65440 || (e >= 65520 && e <= 65531);
+  return e === 69759 || (e >= 78896 && e <= 78911) || e === 94180 || (e >= 113824 && e <= 113827) || (e >= 119155 && e <= 119162) || (e >= 917504 && e <= 921599);
+}
+//  Claude Code 는 이 글자들을 지우지 않고 **줄바꿈으로 바꾼다**(그 번들의 숨은 글자 처리 nEe 실측 — 격리 리뷰가 바이너리에서 뽑아 돌렸다) — 공백 접기가 맡는다.
+const NEWLINED = new Set([0x0b, 0x0c, 0x0d, 0x85, 0x2028, 0x2029]);
+const allCodePoints = function* (): Generator<number> { for (let c = 0; c <= 0x10ffff; c++) if (c < 0xd800 || c > 0xdfff) yield c; };
+//  글자는 **끝에** 붙여 잰다 — ESC·8비트 CSI·끈(DCS·OSC …)을 여는 글자는 뒤따르는 글자를 제어열로 함께 먹는다(Bun 과 같다 · U4 가 그 모양을 잰다).
+
+test("U1·#4852 Claude Code 가 지우는 글자는 모두 지운다(모든 코드 포인트) — 줄바꿈으로 바꾸는 VT·FF·CR·NEL·U+2028·U+2029 만 빼고", () => {
+  const missed: string[] = [];
+  for (const c of allCodePoints()) {
+    if (!claudeHidden(c) || NEWLINED.has(c)) continue;
+    if (sc.stripUnseen("ab" + String.fromCodePoint(c)) !== "ab") missed.push("U+" + c.toString(16).toUpperCase());
+  }
+  assert.deepEqual(missed.slice(0, 20), [], `안 지운 글자 ${missed.length}개`);
+});
+test("U1b·#4852 줄바꿈으로 바뀌는 글자(VT·FF·CR·NEL·U+2028·U+2029)는 지우지 않는다 — 화면 대조는 공백처럼 다 지운다(NEL 은 \\s 밖)", () => {
+  for (const c of NEWLINED) {
+    const ch = String.fromCodePoint(c);
+    assert.equal(sc.stripUnseen("a" + ch + "b"), "a" + ch + "b", `U+${c.toString(16)} 를 지웠다 — Claude Code 는 줄바꿈으로 적는다`);
+    assert.equal(sc.unseenStripped("a" + ch + "b"), "ab", `U+${c.toString(16)} 화면 대조`);
+  }
+});
+test("U2·#4852 서식 글자(Cf — 이 런타임의 유니코드)·이체 선택자(VS1~256)·한글 채움 문자도 지운다 · 공백류는 안 지운다(접기가 맡는다)", () => {
+  const missed: string[] = [];
+  for (const c of allCodePoints()) {
+    const ch = String.fromCodePoint(c);
+    const want = /\p{Cf}/u.test(ch) || (c >= 0xfe00 && c <= 0xfe0f) || (c >= 0xe0100 && c <= 0xe01ef) || [0x115f, 0x1160, 0x3164, 0xffa0].includes(c);
+    if (want && sc.stripUnseen("ab" + ch) !== "ab") missed.push("U+" + c.toString(16).toUpperCase());
+  }
+  assert.deepEqual(missed.slice(0, 20), [], `안 지운 글자 ${missed.length}개 — 새 유니코드에 서식 글자가 늘었으면 HIDDEN_CHARS 와 화면 사본을 함께 늘린다`);
+  for (const ws of ["\t", "\n", "\r", "\x0b", "\x0c", "\x85", "\u{2028}", "\u{2029}", " ", "\u{A0}", "\u{3000}"]) assert.equal(sc.stripUnseen("a" + ws + "b"), "a" + ws + "b", JSON.stringify(ws));
+});
+test("U3·#4852 보이는 글자는 안 지운다 — 한글·한자·라틴·결합 문자·이모지(피부색)·기호·전각", () => {
+  for (const x of ["가힣", "漢字", "Ünïcødé", "e\u{301}", "👍🏽", "①→★", "Ａ１"]) assert.equal(sc.stripUnseen(x), x, x);
+});
+test("U4·#4852 제어열은 통째로 지운다 — CSI(7·8비트) · OSC(BEL·ST·안 닫힘) · DCS · nF(ESC ( B) · ESC+글자 · 붙여넣기 표지 · 홀로 남은 ESC", () => {
+  const rows: Array<[string, string]> = [
+    ["a\x1b[31mb\x1b[0mc", "abc"], ["a\u{9B}1;2mb", "ab"], ["a\x1b]0;t\x07b", "ab"], ["a\x1b]8;;u\x1b\\b", "ab"], ["a\x1b]0;t", "a"],
+    ["a\x1bP1$r\x1b\\b", "ab"], ["a\x1b(Bb", "ab"], ["a\x1b7b\x1b8", "ab"], ["a\x1bcb", "ab"], ["a\x1b[200~b\x1b[201~", "ab"], ["a\x1b", "a"],
+  ];
+  for (const [raw, want] of rows) assert.equal(sc.stripUnseen(raw), want, JSON.stringify(raw));
+});
+
+test("H26·#4852 우리 글에 제어열(색 코드)·한글 채움 문자·CGJ 가 있다 — 입력칸엔 지워진 꼴로 보인다 — ours · 다른 글이면 other", () => {
+  const ours = "로그: \x1b[31mERROR\x1b[0m 디스크 가득 — 복사해 온\u{3164}글\u{34F} 끝까지 확인해 줘";
+  assert.equal(inputHolds(screen([`❯${NB}로그: ERROR 디스크 가득 — 복사해 온글 끝까지 확인해 줘`]), ours), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}로그: ERROR 디스크 가득 — 다른 글`]), ours), "other");
+});
+
+test("H27·#4852 VT·FF·NEL 든 우리 글 — Claude Code 가 줄바꿈으로 바꿔 입력칸이 여러 줄이 돼도 ours · 줄이 다르면 other", () => {
+  const ours = "세로\x0b탭\x0c넘김 \x85다음 그리고 끝";   // 보낸 그대로(oneLineOf 는 이 셋을 펴지 않는다)
+  assert.equal(inputHolds(screen([`❯${NB}세로`, "  탭", "  넘김 ", "  다음 그리고 끝"]), ours), "ours");
+  assert.equal(inputHolds(screen([`❯${NB}세로탭넘김 다음 그리고 끝`]), ours), "ours", "멈추기 전(줄바꿈 전) 모양");
+  assert.equal(inputHolds(screen([`❯${NB}세로`, "  탭", "  다른 글"]), ours), "other");
+});
+
+test("G14·#4852 다시 보고 누르기(confirmBeforePress) — 누를 박자에 다시 봐서 아직 우리 글이면 누르고, 그새 바뀌었으면(사람의 글) 안 누른다 · 기본은 종전대로", async () => {
+  const a = rig(STUCK, { guard: { confirmBeforePress: true } });
+  assert.deepEqual(await a.step(SUBMIT_STUCK_MS + 100), ["peek"]);
+  assert.deepEqual(await a.step(SUBMIT_POLL_MS), ["peek", "enter"], "다시 보지 않고 눌렀다");
+  assert.equal(a.g.presses(), 1);
+  const HUMAN = screen([`❯${NB}사람이 이어서 치는 다른 글`]);
+  let n = 0;
+  const b = rig(() => (n++ === 0 ? STUCK : HUMAN), { guard: { confirmBeforePress: true } });
+  assert.deepEqual(await b.step(SUBMIT_STUCK_MS + 100), ["peek"]);
+  assert.deepEqual(await b.step(SUBMIT_POLL_MS), ["peek"], "바뀐 입력칸에 눌렀다");
+  assert.equal(b.g.presses(), 0);
+  assert.equal(b.g.last(), "other");
+  assert.deepEqual(await b.step(SUBMIT_POLL_MS), ["peek"], "다음 박자엔 다시 보기만");
+  const c = rig(STUCK);
+  await c.step(SUBMIT_STUCK_MS + 100);
+  assert.deepEqual(await c.step(SUBMIT_POLL_MS), ["enter"], "기본(아웃박스)은 한 박자 한 걸음 그대로");
 });

@@ -274,7 +274,7 @@ t("A9 메모리 의심 실패 = oom + gone", () => {
 });
 
 t("D10 실행 기록(collect_run)은 자유 조회 금지 표 — 계획에 구성원별로 읽은 비공개 대화·메일함 ref 가 남는다", () => {
-  for (const tbl of ["collect_run", "collect_unit", "collect_unit_member"]) assert.equal(isSystemDeniedTable(tbl), true, tbl);
+  for (const tbl of ["collect_run", "collect_unit", "collect_unit_member", "collect_proof"]) assert.equal(isSystemDeniedTable(tbl), true, tbl);
 });
 
 console.log(`run-outcome: ${pass} passed`);

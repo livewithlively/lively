@@ -17,6 +17,7 @@
 //   R6 시간 상한 초과 → 끊고 timeout · 끝 신호                        R7 일감 깨짐 → job.json 실패 · 끝 신호
 //   R8 사용자 설정을 뺀다(--setting-sources project,local — 지원할 때만)  R9 큰 결과가 러너 한 판을 지나 원문으로 남고, Claude 프로젝트 폴더는 치운다
 //   R11~R15 커넥터가 안 뜬 판 다시 띄우기 · R16 claude 가 지시를 안 읽고 끝나도 러너는 죽지 않는다(EPIPE) · R17 다시 띄우기 전에 상한이 오면 끝
+//   R18 그 홈의 Claude 계정(가린 메일 · 조직 · 종류)을 요약에 · 자격·다른 칸은 안 싣는다 · 조직 이름 안의 메일도 가린다 · 설정 파일이 없거나 깨지면 null
 //   R10 컨테이너 메모리(/proc/meminfo) — 상한(MemTotal) · 시작 · 최고 / 파일이 없으면 null(맥)
 //   S1 쓰기 셸 0600 · S2 끝난 폴더(done·세션 id·목록) · S3 없음/도는 중(반쯤 쓰인 줄 버림)
 //   P1 id · P2 폴더 모양 · P3 판 명령 · P4 일감 경계 · P5 메모리 env 경계 · P6 쓰기 셸 입력 거절 · P7 쓰기 셸 크기 상한(경계)
@@ -467,6 +468,40 @@ t("R17 다시 띄우기를 기다리는 사이 시간 상한이 오면 새 claud
   assert.equal(attemptsOf("r17"), 1, "두 번째 claude 를 띄우지 않았다");
   assert.equal(r.exit.error, "timeout");
   assert.equal(r.summary.attempts, 1);
+});
+
+t("R18 그 홈의 Claude 로그인 계정을 요약에 남긴다 — 메일은 앞 두 글자와 도메인만 · 조직 · 종류 · 그 밖의 칸은 안 싣는다", () => {
+  const home = path.join(tmp, "home-r18");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({
+    oauthAccount: { emailAddress: "sangmin@example.com", organizationName: "Lively Team", organizationType: "claude_team", billingType: "stripe_subscription",
+      organizationRole: "admin", accountUuid: "SECRET-UUID", fullName: "윤상민" },
+    userID: "SECRET-USER-ID",
+  }));
+  const r = runOnce("r18", { apps: ["Slack"] });
+  assert.deepEqual(r.summary.claude.account, { email: "sa***@example.com", org: "Lively Team", orgType: "claude_team", billing: "stripe_subscription", role: "admin" });
+  const flat = JSON.stringify(r.summary);
+  for (const secret of ["SECRET-UUID", "SECRET-USER-ID", "sangmin@", "윤상민"]) assert.ok(!flat.includes(secret), secret);
+  //  한 글자 앞부분 · @ 없는 값 · 칸이 이상한 값
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "a@x.io", organizationName: 7 } }));
+  assert.deepEqual(runOnce("r18", { apps: ["Slack"] }).summary.claude.account, { email: "a***@x.io", org: null, orgType: null, billing: null, role: null });
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "noat" } }));
+  assert.equal(runOnce("r18", { apps: ["Slack"] }).summary.claude.account.email, "***");
+  //  개인 구독의 조직 이름은 «<메일>'s Organization» — 그 안의 메일도 같은 모양으로 가린다(매니지드 실측 2026-10-16)
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "kim.agent.2@proton.me",
+    organizationName: "kim.agent.2@proton.me's Organization", organizationType: "claude_max" } }));
+  const solo = runOnce("r18", { apps: ["Slack"] });
+  assert.deepEqual([solo.summary.claude.account.email, solo.summary.claude.account.org], ["ki***@proton.me", "ki***@proton.me's Organization"]);
+  assert.ok(!JSON.stringify(solo.summary).includes("kim.agent.2@"), "조직 이름으로 메일 전체가 새지 않는다");
+  fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { emailAddress: "x@y.io", organizationName: "Team of lee@corp.io and \u2019park@corp.io\u2019" } }));
+  assert.equal(runOnce("r18", { apps: ["Slack"] }).summary.claude.account.org, "Team of le***@corp.io and \u2019pa***@corp.io\u2019");
+});
+t("R18b 설정 파일이 없거나 깨졌거나 로그인 칸이 없으면 계정은 null — 실행은 그대로", () => {
+  const none = runOnce("r18b", { apps: ["Slack"] });
+  assert.equal(none.summary.claude.account, null);
+  assert.equal(none.exit.code, 0);
+  fs.writeFileSync(path.join(tmp, "home-r18b", ".claude.json"), "{깨짐");
+  assert.equal(runOnce("r18b", { apps: ["Slack"] }).summary.claude.account, null);
 });
 
 const R7 = runOnce("r7", { apps: ["Slack"], job: "{not json" });

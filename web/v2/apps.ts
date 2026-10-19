@@ -17,6 +17,7 @@ import { ctxMenu } from './panes-kit.js';
 import { studioRecBuildingFor, studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
 import { builderRoute, isAppInProgress, isBuildingSession } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
 import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
+import { CLASSIC_PAGES } from '../lib/classic-pages.js';   // #4632 클래식 첫 칸 → 앱 키(활성 키 판정과 한 벌)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
 const MENU_ICON = { resume: 'plus', copy: 'copy', edit: 'pen' } as const;
 import { icon as lineIcon } from './icons.js';
@@ -89,16 +90,8 @@ export const APPS: AppDef[] = [
   { key: 'dashboard', title: '대시보드', desc: '내 프로젝트 · 알림 · 세션 · 팀 로그 위젯을 한 판에', route: 'dashboard', tab: 'dashboard', icon: 'home', group: 'workspace', aka: DASH_OLD_NAMES },
 ];
 
-// 클래식 라우트 첫 세그먼트 → 앱 키. 새 셸에서 옛 딥링크(#/knowledge/…, #/projects2/p/12 …)가 들어오면
-//  이 표로 '어느 앱 프레임에 실을지'를 정한다 — 북마크·공유 링크가 새 셸에서도 그대로 산다.
-export const CLASSIC_PAGES: Record<string, string> = {
-  dashboard: 'dashboard', terminal: 'terminal', projects2: 'projects2', projects: 'projects2',
-  knowledge: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge', trash: 'knowledge',
-  context: 'context',
-  system: 'system', start: 'learn', onboarding: 'learn', install: 'learn',   // #/learn 은 셸이 직접 그린다(#4179). 여기 두면 클래식 액자가 먼저 선다
-  sessions: 'sessions', activate: 'system',
-  //  'f'(파일 링크 #/f?root=&path=)는 여기 없다 — 셸이 자료 앱의 한 화면(자료 보기 #4672)으로 직접 그린다(main.ts 의 'f' 갈래).
-};
+// 클래식 라우트 첫 세그먼트 → 앱 키 — 표는 lib/classic-pages(활성 키 판정 lib/side-owner 와 한 벌). 종전 이름 그대로 내보낸다.
+export { CLASSIC_PAGES };
 
 export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden && (!a.tab || navOn(a.tab))); }
 
@@ -146,14 +139,45 @@ export function togglePadHidden(tileId: string): string[] {
   shellPrefsPush();
   return next;
 }
+// ── 설치한 앱(구성원 앱)도 최근 줄 · 레일 최근 칸에 선다(#4769, 원준 2026-10-17). 키는 `i:<앱 id>`(lib/rail-lit) · 문은 #/open/<앱 id>(main.ts —
+//  인스턴스를 확보해 #/i/<인스턴스> 로 간다. 인스턴스 id 는 사람마다 달라 기록 · 주소가 될 수 없다). 그림은 앱이 선언한 아이콘(#4769) · 없으면 기본 그림.
+//  목록은 한 번 받아 둔다(primeInstalledApps) — 기록의 `i:` 키를 이름 · 그림으로 풀 때 쓴다. 방금 연 앱은 noteInstalledApp 이 바로 올린다.
+let installedDefs: AppDef[] = [];
+let installedPrimed: Promise<void> | null = null;
+function installedDefOf(a: { id: string; title: string; hasUi: boolean; icon: AppIconSpec | null }): AppDef {
+  return { key: INSTALLED_RECENT_PREFIX + a.id, title: a.title, desc: '', route: 'open/' + encodeURIComponent(a.id), tab: null,
+    icon: (registerAppIcon(a.id, a.icon) || builtinAppIcon(a.id, a.hasUi)) as AppDef['icon'], kind: 'native', group: 'workspace' };
+}
+/** 최근 줄에 설 수 있는 설치 앱(앱 표 뒤에 선다). */
+export function installedAppDefs(): AppDef[] { return installedDefs; }
+export function primeInstalledApps(): Promise<void> {
+  if (!installedPrimed) {
+    installedPrimed = listSessionApps().then((rows) => {
+      const ok = new Set(installedRailEligible(rows.map((a) => ({ id: a.id, hasUi: a.pages.length > 0, systemRoute: a.system?.route || null }))));
+      const fresh = rows.filter((a) => ok.has(INSTALLED_RECENT_PREFIX + a.id)).map((a) => installedDefOf({ id: a.id, title: a.title, hasUi: true, icon: a.icon }));
+      //  방금 연 앱(noteInstalledApp)이 먼저 올라와 있으면 그 자리를 지킨다 — 목록이 늦게 와서 레일이 다시 섞이지 않게.
+      installedDefs = [...installedDefs.filter((d) => !fresh.some((f) => f.key === d.key)), ...fresh];
+    }).catch(() => { installedPrimed = null; });
+  }
+  return installedPrimed;
+}
+/** 방금 연 설치 앱을 목록에 올린다(전체 목록이 아직 안 왔어도 레일이 그 앱을 그릴 수 있게). 정본 주소를 가진 빌트인(자료)은 앱 표의 줄이 맡으므로 넣지 않는다. */
+export function noteInstalledApp(a: { id: string; title: string; hasUi: boolean; icon: AppIconSpec | null; systemRoute?: string | null }): void {
+  if (!installedRailEligible([a]).length) return;
+  const d = installedDefOf(a);
+  installedDefs = [...installedDefs.filter((x) => x.key !== d.key), d];
+}
 function readRecent(): string[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
   catch { return []; }
 }
 /** 앱을 열었다 — 맨 앞으로. 같은 앱을 되풀이 열어도 줄이 늘지 않는다. */
 export function noteAppUse(key: string): void {
-  const a = key ? appByKey(key) : null;
-  if (!a || a.hidden) return;   // 문이 없는 앱은 '최근'에도 안 선다 — 서면 최근 줄이 문 없는 앱을 만든다
+  if (!key) return;
+  if (!isInstalledRecentKey(key)) {   // #4769 설치 앱의 키(`i:…`)는 표에 없어도 적는다 — 설 수 있는지는 그릴 때 목록(installedAppDefs)이 가른다
+    const a = appByKey(key);
+    if (!a || a.hidden) return;   // 문이 없는 앱은 '최근'에도 안 선다 — 서면 최근 줄이 문 없는 앱을 만든다
+  }
   const next = [key, ...readRecent().filter((k) => k !== key)].slice(0, RECENT_MAX);
   try { localStorage.setItem(RECENT_STORE, JSON.stringify(next)); } catch { /* 못 남겨도 이번 화면은 된다 */ }
   shellPrefsPush();   // #2460 — 최근 줄은 계정의 것이다(다른 기기에서도 같은 줄이 뜬다)
@@ -163,7 +187,7 @@ export function noteAppUse(key: string): void {
  * (빈 줄은 '아직 아무것도 없다'가 아니라 '고장'으로 읽힌다).
  */
 export function recentApps(n: number): AppDef[] {
-  const vis = visibleApps();
+  const vis = [...visibleApps(), ...installedAppDefs()];   // #4769 설치한 앱도(표 뒤에) — 홈의 「최근에 연 앱」 한 줄
   const byKey = new Map(vis.map((a) => [a.key, a]));
   const out: AppDef[] = [];
   for (const k of readRecent()) { const a = byKey.get(k); if (a && !out.includes(a)) out.push(a); if (out.length >= n) return out; }
@@ -228,7 +252,8 @@ export function appIcon(icon: AppDef['icon'], cls?: string): SVGElement {
 
 // ── 런치패드 아이콘 — 유리 (#1841) ── 정의는 ./glass-icon.ts(리프)로 옮겼다(#3830, 맥락 관리 표지가 같은 문패를 쓴다).
 //  여기서는 받아서 다시 내보낸다 — appGlassIcon 을 이 파일에서 import 하던 자리(views.ts)가 그대로 살아 있다.
-import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
+import { appGlassIcon, builtinAppIcon, registerAppIcon, type AppIconSpec } from './glass-icon.js';
+import { INSTALLED_RECENT_PREFIX, installedRailEligible, isInstalledRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱도 최근 줄에
 export { appGlassIcon };
 
 // ── 런치패드 오버레이 ──
@@ -319,7 +344,7 @@ export function openLaunchpad(): void {
       const node = el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
         title: isScreen ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
         onclick: () => { closeLaunchpad(); openAppEntry(a); } },
-        el('span', { class: 'v2-pad-ico' }, appGlassIcon(builtinAppIcon(a.id, hasUi))),
+        el('span', { class: 'v2-pad-ico' }, (() => { const own = registerAppIcon(a.id, a.icon); return own ? appGlassIcon(own) : appGlassIcon(builtinAppIcon(a.id, hasUi)); })()),   // #4769 선언한 그림이 있으면 그것
         el('b', { text: a.title }),
         //  배지는 «세션 앱» 에만 단다(#4554, 원준 2026-10-04 "앱 이라고 뱃지 달려있는데 그거 없애줘"). 화면이 뜨는 앱은 앱 표의
         //   화면 앱과 여는 방식이 같아 따로 말할 것이 없다. 세션 앱은 누르면 AI 세션이 뜨는, 다른 일이 일어나는 앱이라 남긴다.

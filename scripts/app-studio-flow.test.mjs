@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mod = join(root, "public/app/lib/studio-flow.js");
+//  STUDIO_FLOW_JS — 다른 빌드(fail-first · 옛 트리)를 물릴 때. 없으면 이 트리의 빌드.
+const mod = process.env.STUDIO_FLOW_JS || join(root, "public/app/lib/studio-flow.js");
 if (!existsSync(mod)) { console.log("app-studio-flow: 빌드 없음(public/app/lib/studio-flow.js) — 건너뜀"); process.exit(0); }
 const F = await import(mod);
 let pass = 0, fail = 0;
@@ -122,7 +123,7 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
 //  격리 리뷰: 글 함수만 보는 시험은 화면 곳곳의 하드코딩된 글을 못 잡는다. 「판단」 · 대시보드 소개의 「한 판에」 는 버전과 무관해 허용한다.
 {
   const { readFileSync } = await import("node:fs");
-  const files = ["web/v2/publish-preview.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/builder.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts", "web/v2/app-versions.ts", "web/v2/session-app-pane.ts", "web/lib/app-menu.ts", "web/lib/studio-flow.ts", "web/lib/builder-flow.ts"];
+  const files = ["web/v2/publish-preview.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/builder.ts", "web/v2/builder-model.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts", "web/v2/app-versions.ts", "web/v2/session-app-pane.ts", "web/lib/app-menu.ts", "web/lib/studio-flow.ts", "web/lib/builder-flow.ts"];
   const left = [];
   for (const f of files) {
     const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
@@ -149,6 +150,39 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(seen > 300, "M1 배선 — 화면 글자열을 실제로 읽었다", seen);
   check(label.length === 0, "M2 「지금 할 일:」 머리말이 화면 글에 없다(단계 줄 · 둘러보기)", label);
   check(dash.length === 0, "M3 앱빌더 화면 글에 「—」 가 없다(문장은 마침표로 끊는다)", dash);
+}
+
+// ══ S 기획 카드 「알림」 줄(#4769 원준 2026-10-17 «알림에 대한 것도 앱 빌딩할 때 전반적으로 설정해야 하는 체계 … 기획 카드에도») ══
+{
+  const nc = F.parseCard("[[기획카드]]\n이름: 팀 채널\n할 수 있는 것: 올리기 · 답하기 · 찾기\n알림: 나를 언급하면 · 내 스레드에 답이 달리면\n참고한 것: 슬랙\n[[/기획카드]]");
+  check(nc && nc.notify === "나를 언급하면 · 내 스레드에 답이 달리면" && nc.ref === "슬랙", "S1 카드의 「알림」 줄을 읽는다(참고한 것과 섞이지 않는다)", nc);
+  const pb = F.planBrief("팀 대화", "side");
+  check(/\n첫 화면: \n알림: \n참고한 것: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
+  const old = F.parseCard("[[기획카드]]\n이름: 옛 앱\n[[/기획카드]]");
+  check(old && !old.notify && /\n알림: \n참고한 것: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
+  check(F.CARD_ROWS.some((r) => r.k === "notify" && r.label === "알림") && F.emptyCard().notify === "", "S4 CARD_ROWS 에 알림 줄 · 빈 카드에도 칸");
+  const db = F.draftBrief(nc, "side", "talk");
+  check(/permissions\.notifications: true/.test(db) && /app_notify/.test(db) && /\[나 ▸ 알림\]/.test(db) && /#\/open\//.test(db), "S5 draftBrief 가 알림 규칙(권한 선언 · app_notify · 앱 안 설정 · 전체 on/off 는 라이블리)을 싣는다", db);
+}
+
+// ══ N 단계 바 — 와 본 곳이면 앞으로도 간다(#4632 원준 2026-10-19 «다 저장했었으면 이전으로 가는거 말고 다음으로 가는것도 · 상단 탭을 클릭하는 방향으로도») ══
+//  사양 표 N(스크래치패드 spec-side-foot-phone.md 사양 2). 이게 틀리면 ①로 돌아간 뒤 ③으로 다시 갈 길이 «이 내용으로 다시 기획»(AI 에게 다시 시키기)뿐이다.
+{
+  const has = typeof F.reachedOf === "function" && typeof F.stageTabs === "function" && typeof F.nextStageOpen === "function";
+  check(has, "N0 단계 바 규칙(reachedOf · stageTabs · nextStageOpen)이 있다");
+  if (has) {
+    const R = F.reachedOf;
+    check(R({ stage: "plan" }) === 1 && R({ stage: "fix", appId: "a" }) === 2 && R({ stage: "plan", appId: "a" }) === 2 && R({ stage: "put", done: true }) === 4 && R({ stage: "draft" }) === 2,
+      "N1 옛 기록(reached 없음) — 지금 단계 · 앱이 있으면 ③ · 넣었으면 ⑤ · 첫 판 기다림(draft)은 ③", [R({ stage: "plan" }), R({ stage: "fix", appId: "a" }), R({ stage: "put", done: true }), R({ stage: "draft" })]);
+    check(R({ stage: "plan", reached: 3 }) === 3 && R({ stage: "plan", reached: 9 }) === 4 && R({ stage: "check", reached: -1 }) === 3 && R({ stage: "check", reached: NaN }) === 3 && R({ stage: "check", reached: 0 }) === 3 && R({ stage: "plan", reached: 2.7 }) === 2,
+      "N2 와 본 끝 — 적힌 값 · 끝(⑤)에서 자른다 · 틀린 값(음수 · NaN)은 버린다 · 지금 단계보다 작으면 지금 단계", [R({ stage: "plan", reached: 9 }), R({ stage: "check", reached: -1 }), R({ stage: "check", reached: 0 })]);
+    const T = (c, r, m) => F.stageTabs(c, r, m).join(",");
+    check(T(2, 3, "new") === "back,back,on,ahead,todo" && T(0, 2, "new") === "on,ahead,ahead,todo,todo" && T(2, 4, "copy") === "done,done,on,ahead,ahead" && T(4, 4, "new") === "back,back,back,back,on" && T(1, 1, "new") === "back,on,todo,todo,todo",
+      "N3 칸마다 — 지난 곳 돌아가기 · 와 본 앞 곳 다시 가기 · 아직 안 간 곳은 못 누른다 · 사본 · 고치기의 ①②는 원본의 것", [T(2, 3, "new"), T(0, 2, "new"), T(2, 4, "copy")]);
+    const N = F.nextStageOpen;
+    check(N(0, 0, "new") === -1 && N(0, 2, "new") === 1 && N(1, 2, "new") === 2 && N(4, 4, "new") === -1 && N(2, 2, "new") === -1 && N(2, 3, "edit") === 3 && N(1, 4, "copy") === 2,
+      "N4 「다음 →」 — 바로 다음이 와 본 곳일 때만 · 끝 단계엔 없다", [N(0, 0, "new"), N(1, 2, "new"), N(2, 2, "new"), N(2, 3, "edit")]);
+  }
 }
 
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);

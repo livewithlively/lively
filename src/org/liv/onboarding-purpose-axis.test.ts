@@ -43,12 +43,15 @@ test("② 카드는 세 장이고, 값은 company·solo·study 다", () => {
   }
 });
 
-test("③ 「두 번만 고르시면 됩니다」 약속을 지킨다 — 질문은 여전히 둘", () => {
+//  (#4213 T13, 상민님 2026-10-15) 처음 설정은 «Claude 로그인 + 리브 대화» 로 바뀌어 용도·직무 장면이 차례에서 빠졌다 — 용도는 리브가
+//   일하다 필요하면 대화로 묻는다. 장면 코드는 남아 있어(검토 점프) 약속 문구도 남는다. 그래서 이 검사는 «둘은 함께 서거나 함께 빠진다» 를 지킨다:
+//   누가 용도 장면만 차례에 되살리면 «두 번만 고르시면 됩니다» 가 한 번으로 끝나 약속이 깨진다.
+test("③ 「두 번만 고르시면 됩니다」 약속을 지킨다 — 용도·직무 장면은 차례에 함께 서거나 함께 빠진다", () => {
   assert.match(WEB, /두 번만 고르시면 됩니다/, "약속 문구가 사라졌다");
   const order = WEB.match(/const ORDER = \[([^\]]*)\]/);
   assert.ok(order, "ORDER 를 못 찾았다");
   const qs = ["'stage'", "'role'"].filter((k) => order[1].includes(k));
-  assert.deepEqual(qs, ["'stage'", "'role'"], "질문 장면이 둘이 아니다 — 약속과 화면이 어긋난다");
+  assert.ok(qs.length === 0 || qs.length === 2, `질문 장면이 하나만 차례에 있다(${qs.join(",")}) — 약속과 화면이 어긋난다`);
   //  단을 하나 더 끼우려던 갈래가 되살아나면 약속이 깨진다.
   assert.ok(!order[1].includes("'purpose'"), "1단 앞에 또 다른 질문 장면이 끼었다");
 });
@@ -109,7 +112,7 @@ test("⑤ study 의 2단 답이 실제 묶음 집합으로 간다 — 빈손이 
 
 test("⑥ ★자리는 워크스페이스 칸으로, 사람은 계정 칸으로 — 한 칸에 몰지 않는다", () => {
   //  자리(용도)는 welcome 에 실린다. welcome 은 #2265 이후 워크스페이스 칸이다.
-  assert.match(WELCOME, /welcome: \{ done_at:[^}]*stage: stage \|\| null \}/,
+  assert.match(WELCOME, /welcome: \{ done_at:[^}]*stage: stage \|\| null\b/,
     "1단 답이 워크스페이스 칸(welcome.stage)에 안 실린다 — 두 번째 워크스페이스가 첫 번째를 덮는다");
   //  사람(직무)은 계정 칸 work.asis 그대로. 그래서 두 표가 따로 있어야 한다.
   assert.match(WELCOME, /const STAGE_LABEL: Record<string, string> = \{/, "사람 말 표가 없다");

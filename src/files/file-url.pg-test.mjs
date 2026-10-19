@@ -8,7 +8,7 @@
 //  P2 앱 서버 — 동의 안 한 사람의 신원 403 · 공유 폴더 403 · 남의 앱 폴더 403 · 신원 없음 401
 //  P3 사람(구성원 토큰) — 동의한 앱 폴더 받기 주소는 받는다 · 올리기 주소 403 · 동의 없는 사람 403
 //  P4 동의를 거두면 이미 받은 주소도 쓰는 순간 막힌다
-//  P5 홈 탐색기 root=apps — 동의한 사람에게만 그 앱 폴더가 보인다 · 웹 쓰기 403
+//  P5 홈 탐색기 root=apps — 동의한 사람에게만 그 앱 폴더가 보인다(못 보는 앱 폴더 = 없는 앱 폴더의 빈 목록 — #4847) · 웹 쓰기 403
 //  P6 공유 폴더 올리기 — 다른 업로드처럼 자료가 생긴다(앱 폴더 올리기는 자료가 안 생긴다)
 //  P7 읽기전용 세션 — 올리기 주소 403 · 받기 주소 200      P8 method 허용값 밖 → 400
 //  P9 app_folder 를 선언하지 않은 앱(도구 이름만) → 403    P10 세션 안 경로 ↔ 주소는 그 세션의 참가자만
@@ -131,12 +131,17 @@ try {
   // ── P5 (P4 전에 — 동의를 거두기 전) ──
   const listUser = await (await fetch(GW + "/api/ui/terminal/browse?root=apps&path=", { headers: { authorization: `Bearer ${userTok}` } })).json();
   const listOther = await (await fetch(GW + "/api/ui/terminal/browse?root=apps&path=", { headers: { authorization: `Bearer ${otherTok}` } })).json();
-  const intoOther = await fetch(GW + "/api/ui/terminal/browse?root=apps&path=files-app", { headers: { authorization: `Bearer ${otherTok}` } });
+  //  못 보는 앱 폴더로 들어가면 없는 앱 폴더와 같은 빈 목록이다(#4847 — 못 봄 · 없음은 같은 답) — 안의 이름이 하나도 안 나온다.
+  const listOf = async (tok, p) => { const r = await fetch(GW + `/api/ui/terminal/browse?root=apps&path=${encodeURIComponent(p)}`, { headers: { authorization: `Bearer ${tok}` } }); return { status: r.status, body: await r.json() }; };
+  const sansPath = (a) => ({ status: a.status, body: { ...a.body, path: undefined, parent: undefined } });
+  const intoOther = await listOf(otherTok, "files-app");
+  const intoNone = await listOf(otherTok, "no-such-app-4847");
   const webPut = await fetch(GW + "/api/ui/terminal/browse/file?root=apps&path=files-app%2Fw.txt", { method: "PUT", headers: { authorization: `Bearer ${userTok}` }, body: "w" });
-  chk("P5 홈 탐색기 — 동의한 사람만 그 앱 폴더를 보고(목록 · 들어가기) · 웹 올리기 403",
-    (listUser.dirs ?? []).includes("files-app") && !(listOther.dirs ?? []).includes("files-app") && intoOther.status === 404 && webPut.status === 403
-    && !existsSync(path.join(ROOT, "apps", "files-app", "w.txt")),
-    JSON.stringify({ user: listUser.dirs, other: listOther.dirs, intoOther: intoOther.status, webPut: webPut.status }));
+  chk("P5 홈 탐색기 — 동의한 사람만 그 앱 폴더를 보고(목록 · 들어가기 — 동의 안 한 사람은 없는 앱 폴더와 같은 빈 목록) · 웹 올리기 403",
+    (listUser.dirs ?? []).includes("files-app") && !(listOther.dirs ?? []).includes("files-app")
+    && intoOther.status === 200 && (intoOther.body.items ?? [null]).length === 0 && JSON.stringify(sansPath(intoOther)) === JSON.stringify(sansPath(intoNone))
+    && webPut.status === 403 && !existsSync(path.join(ROOT, "apps", "files-app", "w.txt")),
+    JSON.stringify({ user: listUser.dirs, other: listOther.dirs, intoOther, intoNone, webPut: webPut.status }));
 
   // ── P11 ── 앱 세션 토큰은 탐색기에서도 제 앱 폴더만(사람은 동의한 앱 폴더 전부) — P4(동의 철회) 전에
   mkdirSync(path.join(ROOT, "apps", "other-app"), { recursive: true });
@@ -144,11 +149,13 @@ try {
   const browse = (tok, p) => fetch(`${GW}/api/ui/terminal/browse?root=apps&path=${encodeURIComponent(p)}`, { headers: { authorization: `Bearer ${tok}` } });
   const listHuman = await (await browse(userTok, "")).json();
   const listAppSess = await (await browse(appSessTok, "")).json();
-  const intoOtherAsApp = await browse(appSessTok, "other-app");
-  chk("P11 앱 세션 토큰은 탐색기에서도 제 앱 폴더만 — 사람은 동의한 앱 폴더 둘 다",
+  const intoOtherAsApp = await listOf(appSessTok, "other-app");
+  const intoNoneAsApp = await listOf(appSessTok, "no-such-app-4847");
+  chk("P11 앱 세션 토큰은 탐색기에서도 제 앱 폴더만(남의 앱 폴더는 없는 앱 폴더와 같은 빈 목록) — 사람은 동의한 앱 폴더 둘 다",
     (listHuman.dirs ?? []).includes("files-app") && (listHuman.dirs ?? []).includes("other-app")
-    && (listAppSess.dirs ?? []).includes("files-app") && !(listAppSess.dirs ?? []).includes("other-app") && intoOtherAsApp.status === 404,
-    JSON.stringify({ human: listHuman.dirs, app: listAppSess.dirs ?? listAppSess, into: intoOtherAsApp.status }));
+    && (listAppSess.dirs ?? []).includes("files-app") && !(listAppSess.dirs ?? []).includes("other-app")
+    && intoOtherAsApp.status === 200 && (intoOtherAsApp.body.items ?? [null]).length === 0 && JSON.stringify(sansPath(intoOtherAsApp)) === JSON.stringify(sansPath(intoNoneAsApp)),
+    JSON.stringify({ human: listHuman.dirs, app: listAppSess.dirs ?? listAppSess, into: intoOtherAsApp, none: intoNoneAsApp }));
 
   // ── P12 ── 탐색기의 앱 폴더 봉쇄 — 앱 폴더 자신이 이웃 앱 폴더로 가는 링크 · 앱 폴더 안의 파일 링크(동의는 다 있어도 막는다)
   await install("link-app", true);

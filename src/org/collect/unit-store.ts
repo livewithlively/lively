@@ -22,9 +22,12 @@ import { mirrorSourceV6 } from "../../v6/mirror/mirror-source.js";
 import { pickRule, sourceVisRules, type ResolvedSourceVis, type SourceVisRule } from "../../v6/source-vis-policy.js";
 import { axisOn } from "../../v6/visibility-axes.js";
 import { auditOrgContent, type WriteCtx } from "../../v6/content-audit.js";
+import { derivedEnforced, reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
 import { failReason } from "../store/run-fail-reason.js";
+import { dueSinceMs, effectiveIntervalSec, isUnitDue, isUnitSoon } from "./schedule-plan.js";
 import { currentTenant } from "../tenant-context.js";
 import { HEADLESS_NOTICE_APP, HEADLESS_NOTICE_HREF } from "../credentials/headless-connect.js";
+import { firstReadDaysOf } from "./collect-plan.js";   // T13 — 단위 meta.first_days(처음 기간)를 읽는 한 벌(collect-plan 은 이 파일을 import 하지 않는다)
 import {
   ANY_CONNECTOR, COLLECT_ROUTES, MAIL_APPS, UNIT_STATES, UNIT_VISIBILITIES,
   canAdvanceCursor, canEditUnit, canonicalCoord, classifyCollectRun, collectorAuthFailed, computeAudience, connectorKey,
@@ -34,6 +37,7 @@ import {
   type HealthChange, type HealthIndex, type NoticeTarget, type PlanCollector, type PlanHealth, type PlanUnit, type UnitKind,
   type UnitPlan, type UnitState, type UnitVisibility,
 } from "./unit-plan.js";
+import { unitEmbeddingText } from "./unit-find-plan.js";   // #4744 설명 벡터의 글(순수) — 바뀌었을 때만 다시 임베딩
 
 type Q = Pick<pg.PoolClient, "query">;
 
@@ -42,13 +46,9 @@ export const DEFAULT_UNIT_INTERVAL_SEC = 3600;
 /** 목록 한 번에 받는 단위 수 상한 — 넘는 목록은 «전부(complete)» 일 수 없다(잘린 꼬리를 «빠졌다» 로 읽으면 볼 수 있는 사람이 지워진다). */
 export const LISTING_CAP = 5000;
 
-/** 측정한 claude.ai 커넥터 이름(«claude.ai » 뒤) — 단위에 connector 가 비었을 때만 쓴다. 목록 반영이 정확한 이름을 남긴다. */
-const CONNECTOR_OF_APP: Record<string, string> = {
-  slack: "Slack", notion: "Notion", gmail: "Gmail", gdrive: "Google Drive", outlook: "Microsoft 365",
-};
-export function connectorOfApp(app: string): string {
-  return CONNECTOR_OF_APP[app] ?? app;
-}
+//  앱 키 → claude.ai 커넥터 이름 표는 순수 모듈(connector-names.ts)에 있다 — 화면 역매핑과의 계약 시험이 DB 없이 불러오게(T13).
+import { connectorOfApp } from "./connector-names.js";
+export { connectorOfApp };
 
 /** 앱 키 — source.external_system 과 같은 공간(slack·notion·gmail·gdrive·github …). */
 export function normalizeAppKey(v: unknown): string {
@@ -76,12 +76,15 @@ export interface UnitRow {
   last_item_at: string | null; interval_sec: number | null; description: string | null; meta: Record<string, unknown>;
   /** 공개범위 — 나만(me)·볼 수 있는 사람만(viewers)·모두(all). owner_member = «나만» 으로 정한 사람. */
   visibility: UnitVisibility; owner_member: string | null;
+  /** #4744 지속 수집 — 다음에 «새 글 있나» 를 볼 시각 · 주기를 빈도가 정하나(아니면 리브·사람이 고정) · 판정 재료(서버 전용). */
+  next_at: string | null; interval_auto: boolean; sched: Record<string, unknown>;
   created_at: string; updated_at: string; updated_by: string | null;
   members: UnitMember[];
 }
 
 const UNIT_COLS = `u.id, u.app, u.instance, u.ref, u.kind, u.name, u.parent_id, u.route, u.collector_id, u.connector, u.state,
   u.cursor, u.read_at, u.read_by, u.last_item_at, u.interval_sec, u.description, u.meta, u.visibility, u.owner_member,
+  u.next_at, u.interval_auto, (u.sched - 'hist') AS sched,
   u.created_at, u.updated_at, u.updated_by`;
 
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
@@ -100,6 +103,8 @@ function mapUnit(r: Record<string, any>): UnitRow {
     meta: (r.meta && typeof r.meta === "object") ? r.meta : {},
     visibility: ((UNIT_VISIBILITIES as readonly string[]).includes(String(r.visibility)) ? String(r.visibility) : "viewers") as UnitVisibility,
     owner_member: r.owner_member ?? null,
+    next_at: iso(r.next_at), interval_auto: r.interval_auto !== false,
+    sched: (r.sched && typeof r.sched === "object" && !Array.isArray(r.sched)) ? r.sched : {},
     created_at: iso(r.created_at)!, updated_at: iso(r.updated_at)!, updated_by: r.updated_by ?? null,
     members: members.map((m) => ({
       member_id: String(m.member_id), priority: Number(m.priority), via: String(m.via ?? "listing"),
@@ -259,12 +264,15 @@ export interface AssignedUnit {
   id: number; app: string; instance: string; ref: string; kind: UnitKind; name: string | null;
   connector: string; rank: number;
   cursor: Record<string, unknown>; read_at: string | null; last_item_at: string | null;
-  interval_sec: number; due: boolean;
+  /** due — 지금 읽을 때가 됐나(#4744: 다음 확인 시각이 있으면 그것, 없으면 읽은 시각 + 주기 — schedule-plan.isUnitDue). */
+  interval_sec: number; due: boolean; next_at: string | null;
   description: string | null; knowhow: unknown;
   /** 이 단위에서 떼어 낸 자식 단위의 ref — 이 단위를 읽을 때 건너뛴다(자식은 볼 수 있는 사람이 달라 따로 모은다). */
   exclude_refs: string[];
   /** 수집기가 끊겨 넘어온 단위 — 읽은 위치가 수집기 쪽에 있어 last_item_at 부터 읽는다. */
   from_collector: boolean;
+  /** 처음 읽을 때 거슬러 갈 날 수 — meta.first_days(리브가 대화로 정한다, T13). 없거나 범위 밖이면 null(기본 FIRST_READ_DAYS). */
+  first_days: number | null;
 }
 
 /**
@@ -272,7 +280,11 @@ export interface AssignedUnit {
  *  수집기 경로 단위도 수집기가 끊겨 넘어왔으면 들어간다. connector 를 주면 그 커넥터 단위만, dueOnly 면 주기가 된 것만.
  *  ⚠ 같은 사람의 실행은 한 번에 하나다(T11 collect-run 409) — 호출부가 앱들을 한 판에 묶는다.
  */
-export async function listAssignedUnits(memberId: string, opts: { connector?: string | null; dueOnly?: boolean; now?: number } = {}): Promise<AssignedUnit[]> {
+export async function listAssignedUnits(memberId: string, opts: {
+  connector?: string | null; dueOnly?: boolean; now?: number;
+  /** #4744 dueOnly 와 함께 — 곧 때가 될 단위(주기대로 기다리는 중 · 남은 시간이 주기의 절반 이하)도 싣는다(due:false). 주기 판이 판 수를 줄이려고 쓴다. */
+  soon?: boolean;
+} = {}): Promise<AssignedUnit[]> {
   if (!memberId) return [];
   const now = opts.now ?? Date.now();
   const units = await loadUnits(itemsPool,
@@ -293,15 +305,40 @@ export async function listAssignedUnits(memberId: string, opts: { connector?: st
     const connector = u.connector ?? connectorOfApp(u.app);
     if (want && connectorKey(connector) !== want) continue;
     const interval = u.interval_sec ?? DEFAULT_UNIT_INTERVAL_SEC;
-    const due = u.read_at == null || now - (ms(u.read_at) ?? 0) >= interval * 1000;
-    if (opts.dueOnly && !due) continue;
+    const due = isUnitDue(u, now);
+    if (opts.dueOnly && !due && !(opts.soon && isUnitSoon(u, now))) continue;
     const a = plans.get(u.id)!.assignee as { kind: "member"; rank: number };
     out.push({
       id: u.id, app: u.app, instance: u.instance, ref: u.ref, kind: u.kind, name: u.name, connector, rank: a.rank,
-      cursor: u.cursor, read_at: u.read_at, last_item_at: u.last_item_at, interval_sec: interval, due,
+      cursor: u.cursor, read_at: u.read_at, last_item_at: u.last_item_at, interval_sec: interval, due, next_at: u.next_at,
       description: u.description, knowhow: (u.meta as Record<string, unknown>).knowhow ?? null,
       exclude_refs: kids.get(u.id) ?? [], from_collector: isCollectorRoute(u.route),
+      first_days: firstReadDaysOf(u.meta),
     });
+  }
+  return out;
+}
+
+export interface DueAssignment { member: string; unit_id: number; app: string; ref: string; due_since_ms: number }
+
+/**
+ * #4744 지금 때가 된 단위와 그 담당자 — 기본 주기 틱(collect-schedule)이 «누구의 수집 실행을 띄우나» 를 고르는 재료.
+ *  구성원이 담당인 수집 중 단위만이다 — 라이블리 수집기가 모으는 단위는 수집기가 제 주기로 돌고, 볼 수 있는 구성원이 하나도 없는
+ *  수집기 단위는 구성원에게 넘어갈 일이 없어 처음부터 읽지 않는다(수집기 단위가 수천이어도 틱이 가볍게).
+ *  담당은 listAssignedUnits 와 같은 판정(planUnits)이라 «틱이 고른 사람» 과 «그 사람 실행이 실을 단위» 가 어긋나지 않는다.
+ */
+export async function dueAssignments(now = Date.now()): Promise<DueAssignment[]> {
+  const units = await loadUnits(itemsPool,
+    `u.state = 'active' AND (u.next_at IS NULL OR u.next_at <= $1::timestamptz)
+       AND (u.route = 'member_ai' OR EXISTS (SELECT 1 FROM collect_unit_member x WHERE x.unit_id = u.id))`, [new Date(now)]);
+  const due = units.filter((u) => isUnitDue(u, now));
+  if (!due.length) return [];
+  const { plans } = await planUnits(due, itemsPool, now);
+  const out: DueAssignment[] = [];
+  for (const u of due) {
+    const a = plans.get(u.id)?.assignee;
+    if (a?.kind !== "member") continue;
+    out.push({ member: a.member_id, unit_id: u.id, app: u.app, ref: u.ref, due_since_ms: dueSinceMs(u) });
   }
   return out;
 }
@@ -355,9 +392,11 @@ const POLICY_CLOSED: ResolvedSourceVis = { visibility: "members", members: [], r
  *   묶음마다 대상을 한 번 계산해 500건씩 세 문장(UPDATE·DELETE·INSERT)으로 쓴다. 정책 고르기는 자료마다지만 메모리 안 계산이다.
  *  정책을 못 읽으면 닫는 쪽(대상 0)으로 — 열어 두면 정책 위반이 유출로 굳는다(stampSourceVisibility 와 같은 규칙).
  */
-export async function applySourceAudience(q: Q, sourceIds: readonly number[]): Promise<number> {
+export async function applySourceAudience(q: Q, sourceIds: readonly number[], ctx?: WriteCtx): Promise<number> {
   const ids = [...new Set(sourceIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   if (!ids.length) return 0;
+  //  #4824 — 축 상태는 자료 행을 잡기 **전에** 읽어 둔다(잡은 채 풀을 기다리지 않게 — derived-visibility.ts 머리말).
+  const enforced = await derivedEnforced();
   let rules: SourceVisRule[] | null = null;
   try { rules = await sourceVisRules(); }
   catch { logger.warn({ n: ids.length }, "[collect-unit] 공개범위 정책을 못 읽었다 — 단위 자료를 닫힌 채로 둔다(정책 복구 뒤 다시 맞춘다)"); }
@@ -407,13 +446,14 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
     const t = await q.query(`SELECT team_id::text AS team_id, member_id FROM team_member WHERE team_id::text = ANY($1::text[])`, [[...teamIds]]);
     for (const r of t.rows as any[]) teamMembers.set(String(r.team_id), (teamMembers.get(String(r.team_id)) ?? new Set()).add(String(r.member_id)));
   }
-  let changed = 0;
+  //  ⑤ 먼저 **읽기만** 해서 묶음마다 바꿀 자료(todo)를 모은다. 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
+  const plans: Array<{ want: ReturnType<typeof computeAudience>; todo: number[] }> = [];
   for (const g of groups.values()) {
     const want = computeAudience({ units: g.units, teamMembers });
     const wantKey = want.members.map((m) => `member:${m}`).join("\u0001");
+    const todo: number[] = [];
     for (let i = 0; i < g.sources.length; i += AUDIENCE_BATCH) {
       const chunk = g.sources.slice(i, i + AUDIENCE_BATCH);
-      //  ④ 이미 그 대상인 자료는 뺀다(행 교체·잠금 소음 없음).
       const cur = await q.query(
         `SELECT s.id, s.visibility,
                 COALESCE(string_agg(sm.subject_kind || ':' || sm.member_id, E'\\u0001' ORDER BY sm.subject_kind || ':' || sm.member_id)
@@ -423,29 +463,54 @@ export async function applySourceAudience(q: Q, sourceIds: readonly number[]): P
       const same = (r: any): boolean => want.open
         ? r.visibility === "open" && String(r.aud) === ""
         : r.visibility === "members" && String(r.aud) === wantKey;
-      const todo = (cur.rows as any[]).filter((r) => !same(r)).map((r) => Number(r.id));
-      if (!todo.length) continue;
+      for (const r of cur.rows as any[]) if (!same(r)) todo.push(Number(r.id));
+    }
+    if (todo.length) plans.push({ want, todo });
+  }
+  if (!plans.length) return 0;
+  //  ⑥ 바꿀 자료 **전부**를 한 문장으로, 전역 id 순으로 잡는다(#4824 · 격리 리뷰 차단). 묶음마다 따로 id 순으로 잡으면 묶음을 넘어서는
+  //   순서가 엇갈려(묶음 A 의 5·15 를 쥔 뒤 묶음 B 의 10) 연결(자료를 한 문장 id 순 FOR SHARE — derived-visibility lockSources)과
+  //   서로 기다린다. FOR NO KEY UPDATE — 자료를 가리키는 FK 삽입(knowledge_source 등)의 KEY SHARE 와는 안 부딪친다.
+  const allTodo = [...new Set(plans.flatMap((p) => p.todo))].sort((a, b) => a - b);
+  await q.query(`SELECT id FROM source WHERE id = ANY($1::int[]) ORDER BY id FOR NO KEY UPDATE`, [allTodo]);
+  let changed = 0;
+  const touched: number[] = [];
+  for (const { want, todo } of plans) {
+    for (let i = 0; i < todo.length; i += AUDIENCE_BATCH) {
+      const chunk = todo.slice(i, i + AUDIENCE_BATCH);
       //  모두(open) — 잠금을 풀고 대상을 지운다. 그 밖 — 잠그고 대상을 갈아 끼운다.
-      await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [todo, want.open ? "open" : "members"]);
-      await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [todo]);
+      await q.query(`UPDATE source SET visibility=$2 WHERE id = ANY($1::int[])`, [chunk, want.open ? "open" : "members"]);
+      await q.query(`DELETE FROM source_member WHERE source_id = ANY($1::int[])`, [chunk]);
       if (!want.open && want.members.length) {
         await q.query(
           `INSERT INTO source_member(source_id, subject_kind, member_id)
            SELECT s, 'member', m FROM unnest($1::int[]) AS s CROSS JOIN unnest($2::text[]) AS m
-           ON CONFLICT DO NOTHING`, [todo, want.members]);
+           ON CONFLICT DO NOTHING`, [chunk, want.members]);
       }
-      changed += todo.length;
+      changed += chunk.length;
     }
+    //  열린 쪽으로 바뀐 자료는 맞출 것이 없다(지식은 넓히지 않는다). 잠긴 쪽은 좁아졌든 넓어졌든 넘긴다 — 맞추기는 멱등이고
+    //   이미 맞은 지식은 읽기만 한다. 넓어진 판도 넘기는 까닭: 정책을 못 읽어 닫혔던 자료가 돌아오는 판이 곧 «진짜 대상» 을
+    //   처음 정하는 판이라, 거기서 안 맞추면 그 사이 좁아진 것이 지식에 영영 안 닿는다.
+    if (!want.open) touched.push(...todo);
   }
+  //  #4824 빈틈 ③ — 자료가 좁혀졌으면 그 자료로 이미 만든 지식(derived_from)도 **같은 트랜잭션에서** 같은 범위로 맞춘다.
+  //   종전엔 상속이 연결 때 한 번뿐이라 단위를 «모두» → «나만» 으로 바꿔도 지식은 공개로 남았다(T10 격리 리뷰 N2).
+  //   좁히기만 한다 — 자료를 넓혀도(모두로) 지식은 그대로다. 잠금 순서: 단위 → 자료(위) → 지식(여기).
+  //  ⚠ 정책을 못 읽어 닫는 쪽(대상 0)으로 맞춘 판에서는 지식을 맞추지 않는다 — 자료는 정책이 돌아오면 다시 맞춰지지만
+  //   지식은 넓히지 않으므로, 순간 장애가 그 자료로 만든 지식 전부를 영구히 닫게 된다(격리 검토). 이 판의 지식은 그대로 두고,
+  //   정책이 돌아온 뒤 자료가 실제로 좁아지는 판에서 맞춘다.
+  if (touched.length && rules) await reconcileDerivedVisibility(q, { sourceIds: touched }, ctx, "source_narrowed", enforced);
+  else if (touched.length) logger.warn({ n: touched.length }, "[collect-unit] 정책을 못 읽은 판 — 그 자료로 만든 지식은 이번엔 맞추지 않는다(정책이 돌아온 판에서 맞춘다)");
   return changed;
 }
 
 /** 단위들이 공개범위를 정하는 자료 전부를 다시 맞춘다 — 확인된 구성원이 바뀐 뒤(목록 반영·쪼개기·저장으로 확인됨). */
-export async function syncUnitAudience(q: Q, unitIds: readonly number[]): Promise<number> {
+export async function syncUnitAudience(q: Q, unitIds: readonly number[], ctx?: WriteCtx): Promise<number> {
   const ids = [...new Set(unitIds)].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return 0;
   const r = await q.query(`SELECT DISTINCT source_id FROM collect_unit_source WHERE unit_id = ANY($1::int[]) AND audience`, [ids]);
-  return applySourceAudience(q, r.rows.map((x: any) => Number(x.source_id)));
+  return applySourceAudience(q, r.rows.map((x: any) => Number(x.source_id)), ctx);
 }
 
 /** 이 사람을 이 단위의 «확인된» 볼 수 있는 구성원으로 — 그 사람 커넥터로 그 단위를 실제로 읽은 것이 확인됐을 때. 새로 확인되면 true. */
@@ -491,6 +556,8 @@ export async function storeUnitItems(
   }
   const kids = new Set((await itemsPool.query(`SELECT ref FROM collect_unit WHERE parent_id = $1`, [unitId])).rows.map((r: any) => String(r.ref)));
   const shareable = MAIL_APPS.has(u.app);
+  //  #4824 — 저장이 자료를 좁혀 지식까지 맞출 때 감사에 남길 «누가»(그 사람의 실행 · 또는 그 수집기).
+  const storeCtx: WriteCtx = { actor: member ?? (by.collector_id != null ? `collector:${by.collector_id}` : null), source: "collect_unit_store" };
   const res: StoreResult = { stored: 0, inserted: 0, skipped: 0, conflicts: 0, failed: 0, refused: 0, source_ids: [] };
   const client = await itemsPool.connect();
   try {
@@ -534,7 +601,7 @@ export async function storeUnitItems(
           `INSERT INTO collect_unit_source(unit_id, source_id, audience) VALUES($1,$2,$3)
            ON CONFLICT (unit_id, source_id) DO UPDATE SET audience = collect_unit_source.audience OR EXCLUDED.audience`,
           [unitId, sid, owned]);
-        if (owned) await applySourceAudience(client, [sid]);
+        if (owned) await applySourceAudience(client, [sid], storeCtx);
         await client.query("COMMIT");
         res.stored++; if (inserted) res.inserted++;
         res.source_ids.push(sid);
@@ -550,7 +617,7 @@ export async function storeUnitItems(
       await client.query("BEGIN");
       try {
         await client.query(`SELECT 1 FROM collect_unit WHERE id=$1 FOR UPDATE`, [unitId]);   // 구성원이 바뀐다 — 진행 중인 저장과 줄을 세운다
-        if (await verifyMember(client, unitId, member)) await syncUnitAudience(client, [unitId]);
+        if (await verifyMember(client, unitId, member)) await syncUnitAudience(client, [unitId], storeCtx);
         await client.query("COMMIT");
       } catch (e) {
         await client.query("ROLLBACK").catch(() => {});
@@ -684,7 +751,7 @@ export async function recordUnitListing(input: ListingInput, ctx?: WriteCtx): Pr
         res.left = left.rows.length;
         for (const r of left.rows as any[]) if (r.verified_at != null) touched.add(Number(r.unit_id));
       }
-      res.audience_changed = await syncUnitAudience(client, [...touched]);
+      res.audience_changed = await syncUnitAudience(client, [...touched], ctx);
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
@@ -857,8 +924,10 @@ export async function markAssigneeHealthy(member: string, connector: string = AN
 // ── 조회 · 수정 · 쪼개기(리브·화면) ─────────────────────────────────────────
 
 /** 다 보는 사람(확인된 볼 수 있는 구성원 · 수집기 단위의 관리자)의 한 줄. */
-export interface UnitView extends Omit<UnitRow, "members"> {
+export interface UnitView extends Omit<UnitRow, "members" | "sched"> {
   access: "full";
+  /** #4744 주기 판정의 겉 — 마지막 판정(주기 뒤 · 곧바로 · 물러섬) · 연달아 진척 없는 판 수. 판정 재료(표본)는 싣지 않는다. */
+  schedule: { why: string | null; fails: number; at: string | null };
   candidates: Array<{ member_id: string; priority: number; via: string; seen_at: string; verified: boolean; active: boolean; health: AssigneeState; retry_at: string | null }>;
   assignee: UnitPlan["assignee"];
   assignee_reason: UnitPlan["reason"];
@@ -878,10 +947,15 @@ export interface UnitCoarseView {
 const PRIVATE_KINDS: ReadonlySet<string> = new Set(["private_channel", "group_dm", "dm", "mailbox"]);
 
 function viewOf(u: UnitRow, plan: UnitPlan, idx: HealthIndex): UnitView {
-  const { members, ...rest } = u;
+  const { members, sched, ...rest } = u;
   const connector = u.connector ?? connectorOfApp(u.app);
   return {
     ...rest, access: "full",
+    schedule: {
+      why: typeof sched.why === "string" ? sched.why : null,
+      fails: Number.isFinite(Number(sched.fails)) ? Number(sched.fails) : 0,
+      at: typeof sched.at === "string" ? sched.at : null,
+    },
     candidates: members.map((m) => {
       const h = [idx.get(`${m.member_id}\u0000${ANY_CONNECTOR}`), idx.get(`${m.member_id}\u0000${connectorKey(connector)}`)]
         .find((x) => x && x.state !== "ok");
@@ -976,15 +1050,22 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
   if (patch.interval_sec != null && !(Number.isInteger(patch.interval_sec) && patch.interval_sec >= 60 && patch.interval_sec <= 30 * 86400)) {
     throw new UnitError(400, "interval_sec 는 60~2592000 초입니다");
   }
+  //  #4744 활동량(meta.activity)은 서버가 수집 판마다 잰다(unit-schedule.noteUnitRead) — 작성자를 하나로 두려고 고치기 입력에서는 뺀다.
+  if (patch.meta && Object.prototype.hasOwnProperty.call(patch.meta, "activity")) {
+    const { activity: _measured, ...rest } = patch.meta;
+    patch = { ...patch, meta: Object.keys(rest).length ? rest : null };
+  }
   //  잠그기 전에 한 번 거른다 — 단위를 못 보거나 못 고치는 사람은 잠금을 기다리지 않고 바로 404/403 이다(남의 단위 id 를 돌려
   //   진행 중인 저장을 막거나 연결을 붙들지 못하게 · 재검토 N-a). 통과한 호출만 잠근 뒤 최신 행으로 같은 판정을 다시 한다.
   assertCanEdit(await getUnit(id), id, actor);
   let before: Record<string, unknown> = {};
+  let textBefore: string | null = null;   // #4744 설명 벡터의 글(고치기 전)
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
     const got = await client.query(`SELECT id FROM collect_unit WHERE id=$1 FOR UPDATE`, [id]);
     const u = assertCanEdit(got.rows.length ? await getUnit(id, client) : null, id, actor);
+    textBefore = unitEmbeddingText(u);
     const viewers = u.members.map((m) => m.member_id);
     //  경로를 바꾸면 누가 모으나가 바뀐다(수집기는 제 설정대로 따로 돈다 — 구성원 경로로 돌리면 둘이 겹쳐 모은다).
     if (patch.route != null && patch.route !== u.route && !actor.isAdmin) throw new UnitError(403, "수집 경로는 관리자만 바꿀 수 있습니다");
@@ -1005,11 +1086,22 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
         }
       }
     }
-    before = { state: u.state, visibility: u.visibility, owner_member: u.owner_member, interval_sec: u.interval_sec, description: u.description, route: u.route, priorities: viewers };
+    before = { state: u.state, visibility: u.visibility, owner_member: u.owner_member, interval_sec: u.interval_sec, interval_auto: u.interval_auto, description: u.description, route: u.route, priorities: viewers };
+    //  #4744 주기 — 값을 주면 그 값으로 고정(빈도가 더는 안 바꾼다), null 이면 다시 자동(최근 14일 글 빈도로 지금 바로 다시 맞춘다).
+    //   다음 확인 시각은 «읽은 시각 + 새 주기» 로 옮긴다(아직 안 읽은 단위는 그대로 곧바로다). 모으기로 새로 켠 단위는 다음 틱에 곧바로.
+    const ivSet = patch.interval_sec !== undefined;
+    const ivAuto = ivSet ? patch.interval_sec === null : null;
+    //   표본(sched.hist)은 단위 조회 칸에서 뺐다(판마다 쌓여 무겁다 — 목록·틱은 안 쓴다) — 자동으로 되돌릴 때만 따로 읽는다.
+    const hist = ivAuto ? (await client.query(`SELECT sched->'hist' AS hist FROM collect_unit WHERE id = $1`, [id])).rows[0]?.hist : null;
+    const ivVal = !ivSet ? null : patch.interval_sec ?? effectiveIntervalSec({ interval_sec: null, interval_auto: true }, hist, Math.floor(Date.now() / 1000));
     await client.query(
       `UPDATE collect_unit SET
           state = COALESCE($2, state),
           interval_sec = CASE WHEN $3::boolean THEN $4::int ELSE interval_sec END,
+          interval_auto = CASE WHEN $3::boolean THEN $12::boolean ELSE interval_auto END,
+          next_at = CASE WHEN $2::text = 'active' AND state <> 'active' THEN NULL
+                         WHEN $3::boolean AND read_at IS NOT NULL THEN read_at + make_interval(secs => $4::int)
+                         ELSE next_at END,
           description = CASE WHEN $5::boolean THEN $6 ELSE description END,
           meta = CASE WHEN $7::jsonb IS NULL THEN meta ELSE meta || $7::jsonb END,
           route = COALESCE($8, route),
@@ -1017,12 +1109,12 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
           updated_at = now(), updated_by = $11
         WHERE id = $1`,
       [id, patch.state ?? null,
-        patch.interval_sec !== undefined, patch.interval_sec ?? null,
+        ivSet, ivVal,
         patch.description !== undefined, patch.description == null ? null : String(patch.description).slice(0, 4000),
         patch.meta == null ? null : JSON.stringify(patch.meta),
         patch.route ?? null,
         patch.name !== undefined, patch.name == null ? null : String(patch.name).slice(0, 200),
-        actor.member]);
+        actor.member, ivAuto]);
     if (patch.priorities?.length) {
       //  준 순서대로 10·20·30… — 빠진 후보는 그 뒤에 원래 순서로 남는다(확인된 사람이 먼저인 규칙은 판정이 따로 지킨다).
       const rest = viewers.filter((m) => !patch.priorities!.includes(m));
@@ -1034,8 +1126,9 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     if (visChanged) {
       await client.query(`UPDATE collect_unit SET visibility=$2, owner_member=$3 WHERE id=$1`, [id, next, next === "me" ? actor.member : null]);
       //  이미 모은 자료도 새 공개범위로 — 같은 트랜잭션이라 좁힌 순간 빠진 사람이 계속 보는 틈이 없다.
-      //  ⚠ 이미 증류한 지식은 따라 좁혀지지 않는다(상속은 원본 연결 때 한 번 — T14 #4824).
-      await syncUnitAudience(client, [id]);
+      //  그 자료로 이미 증류한 지식도 같은 트랜잭션에서 좁혀진다(applySourceAudience → reconcileDerivedVisibility · #4824).
+      //  넓히기(모두로)는 지식에 따라가지 않는다 — 지식 넓히기는 사람 몫이다.
+      await syncUnitAudience(client, [id], ctx);
     }
     await client.query("COMMIT");
   } catch (e) {
@@ -1045,8 +1138,13 @@ export async function updateUnit(id: number, patch: UnitPatch, actor: Actor, ctx
     client.release();
   }
   const after = (await getUnit(id))!;
+  //  #4744 설명 벡터 — 임베딩할 글(앱·종류 · 이름 · 설명 · 연결된 맥락)이 **실제로 바뀌었을 때만** 벡터를 비워 임베딩 대기로 돌린다
+  //   (embedding-backfill 의 «입력 글이 바뀐 경우에만» 계약 · 리브가 판마다 같은 값을 다시 써도 벡터가 비지 않게). 기다리지 않는다.
+  if (textBefore != null && unitEmbeddingText(after) !== textBefore) {
+    void import("../../v6/embedding-backfill.js").then((m) => m.markEmbeddingPending(m.COLLECT_UNIT_TARGET, id)).catch(() => undefined);
+  }
   await auditOrgContent("collect_unit", String(id), "update", before,
-    { state: after.state, visibility: after.visibility, owner_member: after.owner_member, interval_sec: after.interval_sec,
+    { state: after.state, visibility: after.visibility, owner_member: after.owner_member, interval_sec: after.interval_sec, interval_auto: after.interval_auto,
       description: after.description, route: after.route, priorities: after.members.map((m) => m.member_id) },
     ctx).catch(() => undefined);
   const { plans, idx } = await planUnits([after]);
@@ -1118,7 +1216,7 @@ export async function splitUnit(
            ON CONFLICT (unit_id, member_id) DO NOTHING`, [cid, m, pm?.priority ?? 100, pm?.verified_at ?? null]);
       }
     }
-    await syncUnitAudience(client, ids);
+    await syncUnitAudience(client, ids, ctx);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});

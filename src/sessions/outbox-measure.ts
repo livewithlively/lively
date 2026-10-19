@@ -43,7 +43,7 @@ export interface OutboxSettledRow {
 /** 측정 줄에 그대로 싣는 사유 코드 — 배달 루프가 스스로 짓는 고정 문자열뿐이다(stallAction · sendReadyRow · outbox-exec 의 fail:text/enter). */
 export const OUTBOX_ERROR_CODES: ReadonlySet<string> = new Set([
   "not-ready", "session-gone", "session-gone-restorable", "unreachable",
-  "echo-unconfirmed", "echo-unreadable", "control-no-echo",
+  "echo-unconfirmed", "echo-unreadable", "control-no-echo", "command-no-echo",
   "send: host-unknown", "send: text", "send: enter",
 ]);
 

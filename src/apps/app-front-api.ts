@@ -145,7 +145,11 @@ export function consentUrlFor(base: string | null, tenantSlug: string, appId: st
   return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${new URLSearchParams({ v: variant }).toString()}`;
 }
 
-/** 실행 중 던진 것 → 상태 코드 · 글. HttpError 는 그대로, 스코프 판정(requireScope 의 «Forbidden:»)은 403, 그 밖은 500(글은 감춘다). */
+/**
+ * 실행 중 던진 것 → 상태 코드 · 글. HttpError 는 그대로, 스코프 판정(requireScope 의 «Forbidden:»)은 403, 그 밖은 500(글은 감춘다).
+ *  ⚠ #4848 503 `{error:"busy"}`(code 없음)는 앞단(lvly-cloud appfront)만 쓰는 «본문을 받기 전에 거절» 표지다 — 앱 SDK 가 그 모양을 받으면
+ *   retry-after 뒤 같은 요청을 한 번 다시 보낸다(web/v2/app-ui-runtime.ts frontBusy). 이미 실행한 쓰기의 답으로 그 모양을 내지 않는다.
+ */
 export function apiErrorReply(e: unknown, consentUrl: () => string | null): ApiReply {
   if (e instanceof HttpError) {
     //  5xx 는 로그에 남긴다(rest-util wrap 과 같은 규칙 #1278 — 도구 앞 단계의 실패는 mcp_call_log 에도 안 남는다).

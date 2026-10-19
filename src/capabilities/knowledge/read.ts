@@ -16,6 +16,7 @@ import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
 import type { SimilarDiag } from "../../v6/knowledge-search.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible } from "./shared.js";
+import { isAdmin } from "../principal.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
@@ -154,7 +155,9 @@ export const knowledgeSearch: Capability = {
     "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 찾아낸다(단어가 본문에 그대로 없어도 잡힘). " +
     "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
-    "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본).",
+    "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본). " +
+    "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
+    "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다).",
   scope: "memory",
   input: knowledgeSearchInput,
   // MCP + REST(/api/ui/knowledge/semantic) — 웹 지식탭의 '의미검색' 토글이 소비. grep 은 /knowledge/search(불변).
@@ -176,12 +179,40 @@ export const knowledgeSearch: Capability = {
         };
       } }],
   },
-  handler: async (input: KnowledgeSearchInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
-    entries: await hybridSearchKnowledge(input.q, {
+  handler: async (input: KnowledgeSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const viewer = ctx?.viewer ?? null;
+    const entries = await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
-    }, ctx?.viewer ?? null),
-  }),
+    }, viewer);
+    //  #4213 T12 #4744 검색 실패 보조 안내 — 결과가 없거나 약하면 «가져올 곳»(아직 지식이 안 된 원문 자료 → 그것도 없으면 질문한 사람이
+    //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
+    //   **세션이 부른 검색에만**(허용 목록) — MCP, 또는 세션 헤더(x-lively-session)를 실은 REST. 웹 화면의 «의미검색» · 앱 화면 다리
+    //   (app-ui · app-front — 열람 신원이 실리지 않는다)에는 계산하지 않는다(리뷰 2026-10-17). 안내는 늘 질문한 사람 자신의 공개범위로만 찾는다
+    //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId — 앱 서버 호출 포함)은 길(MCP · REST)을 가리지 않고 뺀다 —
+    //   그 앱이 동의받은 도구는 knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
+    const forSession = !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
+    if (!forSession || !user?.userId) return { entries };
+    const deadline = Date.now() + HINT_BUDGET_MS;
+    const hint = await withinMs(HINT_BUDGET_MS, async () => {
+      const { collectHintFor } = await import("../../org/collect/unit-find.js");
+      return collectHintFor({ q: input.q, names: entries.map((e) => e.name), member: String(user.userId), isAdmin: isAdmin(user), deadline });
+    });
+    return hint ? { entries, collect_hint: hint } : { entries };
+  },
 };
+
+/** «가져올 곳» 을 만드는 데 쓰는 시간 상한 — 원문 자료 찾기는 DB 쪽에서도 이보다 짧게 끊는다(unit-find LOOSE_TIMEOUT_MS). */
+const HINT_BUDGET_MS = 1500;
+/** fn 을 ms 안에서만 기다린다 — 넘기거나 실패하면 null(fn 은 뒤에서 끝나되, 마감 시각을 받아 그 뒤로는 더 묻지 않는다 — collectHintFor). */
+async function withinMs<T>(ms: number, fn: () => Promise<T | null>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn().catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 
 // 유사 지식(벡터검색 #172) — 코사인 유사도(0~1) 기반 최근접. dedup(저장 전 확인)·관련패널의 프리미티브.
 //  search/grep 과 직교: 이건 "이 지식/텍스트와 가까운 것" 자체를 절대 유사도로 돌려준다(랭크 아님 → 임계 비교 가능).

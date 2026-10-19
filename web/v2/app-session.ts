@@ -8,8 +8,10 @@
 //  스폰 전제 = **동의(grant)**. 서버는 grant 가 없으면 mintAppToken 에서 403 을 준다. 이 모듈이 그 403 을 받아
 //   동의 창을 띄우고, 동의하면 POST /apps/:id/grant(선언 상한 그대로 — 서버가 매니페스트 부분집합으로 고정)한 뒤
 //   **한 번** 재시도한다. 거절하면 조용히 멈춘다(세션 안 뜸).
+import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 앱 아이콘 선언
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
+import { toolExplain } from '../lib/tool-explain.js';   // #4632 동의 창 도구 칩의 쉬운 설명
 
 export interface SessionApp {
   id: string;
@@ -46,6 +48,7 @@ export interface SessionApp {
   workspaceFiles: string[];   // #4629 — 볼 수 있는 모든 프로젝트의 자료에서 읽을 수 있는 확장자(프로젝트 자료와 다른 동의 줄)
   projectFiles: string[];   // #4592 — 이 앱 화면이 붙은 세션의 프로젝트 자료에서 읽을 수 있는 확장자(동의 창이 제 줄로 보여 준다)
   appFolder: boolean;       // #4673 — 이 앱이 제 앱 폴더(apps/<앱>/)에 파일을 올리고 받나(동의 창이 제 줄로 보여 준다)
+  icon: AppIconSpec | null;   // #4769 — 매니페스트가 선언한 앱 아이콘(없으면 기본 그림)
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */
@@ -78,7 +81,8 @@ export async function listSessionApps(): Promise<SessionApp[]> {
           chatSend: perm.chat_send === true,               // #4594 — 같은 자리에 제 줄로
           workspaceFiles: Array.isArray(perm.workspace_files) ? perm.workspace_files.map(String) : [],   // #4629
           projectFiles: Array.isArray(perm.project_files) ? perm.project_files.map(String) : [],   // #4592
-          appFolder: perm.app_folder === true };   // #4673
+          appFolder: perm.app_folder === true,   // #4673
+          icon: appIconSpecOf(a.manifest) };   // #4769
       });
   } catch (e: any) {
     // 앱 레지스트리가 아직 없는 배포(구버전)·권한 없음 등 — 조용히 빈 목록(런치패드는 화면앱만 보인다).
@@ -125,7 +129,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
     const app = (await listSessionApps()).find((a) => a.id === appId)
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [], appFolder: false,
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null, ...appStateOf(null),
-        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {} };
+        instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {}, icon: null };
     if (!(await appConsent(app))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;
@@ -194,13 +198,39 @@ function appConsent(app: SessionApp): Promise<boolean> {
     const chips = (xs: string[], empty: string) => (xs.length
       ? xs.map((s) => el('span', { class: 'v2-consent-chip', text: s }))
       : [el('span', { class: 'v2-consent-chip none', text: empty })]);
+    //  도구 칩 — 이름은 그대로 두고(무엇에 동의하는지 정확해야 한다) 쉬운 설명을 붙인다(lib/tool-explain · #4632 원준 2026-10-19 «호버하면 고등학생도 이해할 수 있는 수준으로»).
+    //   마우스는 올려 두면, 키보드는 초점이 가면, 손가락은 누르면 뜬다(폰엔 호버가 없다). 창 가장자리 칩도 잘리지 않게 창 위에 떠서 자리를 잡는다.
+    const tip = el('div', { class: 'v2-consent-tip', role: 'tooltip', id: 'v2-consent-tip', hidden: true }) as HTMLElement;
+    let tipFor: HTMLElement | null = null;
+    const showTip = (chip: HTMLElement): void => {
+      if (tipFor && tipFor !== chip) tipFor.removeAttribute('aria-describedby');   // 다른 칩으로 옮겼다 — 앞 칩의 연결을 끊는다(남으면 읽어 주는 프로그램이 앞 칩을 이 설명으로 읽는다)
+      tipFor = chip; tip.textContent = chip.dataset.tip || ''; tip.hidden = false;
+      chip.setAttribute('aria-describedby', tip.id);
+      tip.style.left = '0px'; tip.style.top = '0px';   // 재기 전에 — 지난 자리(오른쪽 끝)가 남아 있으면 폭이 눌려 좁고 길게 잰다
+      const r = chip.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+      const left = Math.max(12, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 12));
+      let top = r.bottom + 8; if (top + h > window.innerHeight - 12) top = Math.max(12, r.top - h - 8);   // 아래 자리가 모자라면 위로
+      tip.style.left = Math.round(left) + 'px'; tip.style.top = Math.round(top) + 'px';
+    };
+    const hideTip = (chip?: HTMLElement): void => { if (chip && tipFor !== chip) return; tip.hidden = true; if (tipFor) tipFor.removeAttribute('aria-describedby'); tipFor = null; };
+    const toolChips = (xs: string[], empty: string) => (xs.length
+      ? xs.map((s) => {
+        const c = el('span', { class: 'v2-consent-chip has-tip', text: s, tabindex: '0', 'data-tip': toolExplain(s) }) as HTMLElement;
+        c.addEventListener('pointerenter', (e: PointerEvent) => { if (e.pointerType !== 'touch') showTip(c); });
+        c.addEventListener('pointerleave', (e: PointerEvent) => { if (e.pointerType !== 'touch') hideTip(c); });
+        c.addEventListener('pointerdown', (e: PointerEvent) => { if (e.pointerType === 'touch') { if (tipFor === c) hideTip(c); else showTip(c); } });
+        c.addEventListener('focus', () => showTip(c));
+        c.addEventListener('blur', () => hideTip(c));
+        return c;
+      })
+      : [el('span', { class: 'v2-consent-chip none', text: empty })]);
     const ov = el('div', { class: 'v2-consent-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': app.title + ' 사용 동의',
-      onclick: (e: Event) => { if (e.target === ov) finish(false); } },
+      onclick: (e: Event) => { if (e.target === ov) finish(false); else if (tipFor && !(e.target as HTMLElement).closest('.has-tip')) hideTip(); } },
       el('div', { class: 'v2-consent' },
         el('h3', { class: 'v2-consent-t', text: '「' + app.title + '」을(를) 내 자격으로 실행할까요?' }),
         el('p', { class: 'v2-consent-sub', text: '이 앱이 여는 세션은 아래 권한만 내 이름으로 씁니다. 언제든 설정에서 철회할 수 있어요.' }),
         el('div', { class: 'v2-consent-grp' }, el('b', { text: '권한' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.scopes, '추가 권한 없음'))),
-        el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...chips(app.tools, '도구 없음'))),
+        el('div', { class: 'v2-consent-grp' }, el('b', { text: '도구' }), el('div', { class: 'v2-consent-chips' }, ...toolChips(app.tools, '도구 없음'))),
         // 알림(#1891) — 다른 권한과 **성격이 다르다**: 나머지는 '앱이 내 데이터에 무엇을 하나'인데
         //  이건 '앱이 나를 언제 부르나'다. 그래서 도구 칩에 섞지 않고 제 줄로 세운다(선언했을 때만).
         app.notifications ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '알림' }),
@@ -240,7 +270,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
           el('div', { class: 'v2-consent-chips' }, ...chips(app.net, ''))) : null,
         el('div', { class: 'v2-consent-acts' },
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(false) }),
-          el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))));
+          el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '동의하고 열기', onclick: () => finish(true) }))), tip);
     document.body.append(ov as HTMLElement);
     document.addEventListener('keydown', onKey);
     (ov.querySelector('.btn-primary') as HTMLElement | null)?.focus();

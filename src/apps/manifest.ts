@@ -245,7 +245,14 @@ export const SUPPORTED_MANIFEST_SCHEMA = 1;
 //   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
-export const appManifestSchema = z.object({
+export // #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+const appIconSchema = z.object({
+  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB"),
+  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional(),
+}).strict().optional();
+
+const appManifestSchema = z.object({
   // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
   $schema: z.string().max(500).optional(),
@@ -293,11 +300,30 @@ export const appManifestSchema = z.object({
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
   agent: agentSchema,
+  //  #4769 앱 아이콘 — 구성원이 만든 앱도 제 그림을 갖는다. 24 격자 선 그림(path d)과 색 둘(라이트 · 다크). 선언이 없으면
+  //   화면이 있는 앱은 liv, 없는 앱은 term(web/v2/glass-icon.ts builtinAppIcon). 최상위 passthrough 라 이 칸을 모르는 옛 코어도 읽는다.
+  icon: appIconSchema,
   //  #4488 AI 실행 작업 선언 — 최상위 passthrough 라 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
   ai: aiSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/** #4769 앱 아이콘 선언 — 화면(SVG · CSS)에 그대로 들어가므로 글자를 좁게 받는다. path 는 SVG path 명령 · 숫자 · 구분자만, 색은 #RRGGBB. */
+export const APP_ICON_PATH_RE = /^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]{1,2000}$/;
+export const APP_ICON_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export interface AppIconSpec { path: string; color: string; color_dark?: string }
+/** 저장된 매니페스트에서 아이콘 선언을 읽는다 — 모양이 틀리면 null(화면은 기본 그림). 던지지 않는다. */
+export function appIconSpecOf(manifest: unknown): AppIconSpec | null {
+  const raw = (manifest as { icon?: unknown } | null)?.icon;
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const path = typeof o.path === "string" ? o.path.trim() : "";
+  const color = typeof o.color === "string" ? o.color.trim() : "";
+  const dark = typeof o.color_dark === "string" ? o.color_dark.trim() : "";
+  if (!APP_ICON_PATH_RE.test(path) || !APP_ICON_COLOR_RE.test(color)) return null;
+  return dark && APP_ICON_COLOR_RE.test(dark) ? { path, color, color_dark: dark } : { path, color };
+}
 
 /** 선언한 장치 권한(중복 · 모르는 값은 버린다). 저장된 매니페스트를 읽는 자리라 던지지 않는다. */
 export function webDevicesOf(manifest: unknown): AppDevice[] {

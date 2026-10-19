@@ -134,10 +134,14 @@ test("F1 새 셸 라우터 — 'f' 는 자료 보기(renderFileView)를 셸 안�
   before(rr, "if (tabsApi?.current() === tab) {", "location.replace(", "보고 있지 않은 탭의 넘기기가 주소창(다른 탭)을 바꾼다");
   assert.match(rr, /else \{ tab\.rendered = false; tabsApi\?\.routed\(tab\); \}/, "보고 있지 않은 탭은 돌아올 때 새 자리로 그려야 한다");
   before(render, "} else if (page === 'f') {", "} else if (CLASSIC_PAGES[page]) {", "클래식 액자 갈래가 먼저 서면 'f' 가 액자로 간다");
-  const apps = read("web/v2/apps.ts");
-  const classic = apps.slice(apps.indexOf("export const CLASSIC_PAGES"), apps.indexOf("};", apps.indexOf("export const CLASSIC_PAGES")));
+  //  #4632 — 클래식 표는 lib/classic-pages, 활성 키 판정은 lib/side-owner activeKeyOfRoute 로 옮겼다(셸 main.ts activeKeyOf 가 그것을 부른다).
+  const pages = read("web/lib/classic-pages.ts");
+  const at = pages.indexOf("export const CLASSIC_PAGES");
+  assert.ok(at >= 0, "클래식 표(lib/classic-pages)가 없다");
+  const classic = pages.slice(at, pages.indexOf("};", at));
   assert.doesNotMatch(classic, /\bf:\s*'/, "클래식 액자 표에 'f' 가 남아 있다(셸이 그리지 않고 액자에 싣는다)");
-  assert.match(main, /cur\.segs\[0\] === 'sources' \|\| cur\.segs\[0\] === 'f' \? 'sources'/, "사이드바가 자료의 나무로 바뀌지 않는다");
+  assert.match(read("web/lib/side-owner.ts"), /if \(s0 === 'sources' \|\| s0 === 'f'\) return 'sources';/, "사이드바가 자료의 나무로 바뀌지 않는다");
+  assert.match(main, /function activeKeyOf\(route: string\): string \{ return activeKeyOfRoute\(route\); \}/, "셸의 활성 키가 lib/side-owner 판정을 쓰지 않는다");
   const surf = read("web/v2/shell-surfaces.ts");
   assert.match(surf, /\n\s*f: \{ kind: "app", appId: "sources"/, "대장에 자료 앱의 화면으로 적혀 있지 않다");
   assert.match(surf, /if \(page === "f"\) return "sources";/, "레일의 자료가 켜지지 않는다");
@@ -262,10 +266,12 @@ test("F8 정보 404 — 이 게이트웨이의 404(code file_not_found)는 그�
   const fp = read("web/filepage.ts");
   assert.match(fp, /entry = e\.body && e\.body\.code === 'file_not_found' \? null : await listedEntry\(root, rel\);/, "모든 404 에 부모 목록을 한 번 더 부른다");
   const tf = read("src/terminal/terminal-files.ts");
+  //  #4847 — 그 404 는 홈 탐색기 라우트 전부의 공용 몸이다(정보 라우트만의 것이 아니다).
+  assert.match(tf, /class BrowseNotFound extends HttpError \{\n {2}constructor\(readonly rel: string = ""\) \{ super\(404, "경로를 찾을 수 없습니다", \{ body: \{ code: "file_not_found" \} \}\); \}\n\}/,
+    "홈 탐색기의 공용 404 가 code file_not_found 몸이 아니다");
   const info = tf.slice(tf.indexOf('app.get("/api/ui/terminal/browse/info"'), tf.indexOf('app.get("/api/ui/terminal/browse/similar"'));
-  assert.match(info, /const notFound = \(\): HttpError => new HttpError\(404, "경로를 찾을 수 없습니다", \{ body: \{ code: "file_not_found" \} \}\);/);
-  assert.equal((info.match(/throw notFound\(\);/g) || []).length, 2, "못 봄 · 없음 두 자리가 같은 404 를 던지지 않는다");
-  assert.doesNotMatch(info, /throw new HttpError\(404/, "같은 몸이 아닌 404 가 남아 있다");
+  assert.equal((info.match(/throw browseNotFound\(\);/g) || []).length, 2, "못 봄 · 없음 두 자리가 같은 404 를 던지지 않는다");
+  assert.doesNotMatch(info, /throw new HttpError\(404|const notFound\b/, "같은 몸이 아닌 404 가 남아 있다");
 });
 
 test("F9 같은 이름 후보 라우트 — 못 보는 링크도 빈 목록(같은 몸) · 못 보는 하위 자리는 건너뛴다 · 답은 items 하나 · 시간 상한", () => {

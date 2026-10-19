@@ -39,7 +39,9 @@ import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { finishUpload } from "../ingest/upload-finish.js";
 import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기·옮기기 뒤 자료 좌표 + «옛 경로 → 새 경로»
-import { SHARED_MOVE_SCOPE } from "../v6/file-move-store.js";
+import { SHARED_MOVE_SCOPE, findFileMove } from "../v6/file-move-store.js";
+import { followMovedPath, normalizeMovePath } from "../files/file-move-core.js";   // #4822 — 읽기 라우트가 옛 경로를 따라간다
+import { logger } from "../log.js";
 import { projectFoldersUnder, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
@@ -212,6 +214,44 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     });
   };
 
+  // 옛 경로 → 이 프로젝트 안의 지금 자리(#4822) — 읽기 라우트(미리보기 · 내려받기 · HEAD)가 파일을 못 찾으면 «옛 경로 → 새 경로» 기록을
+  //  따라간다. 본문에 박힌 그림 주소(`…/file?path=<옛 경로>`)가 웹에서 이름을 바꾸거나 옮긴 뒤에도 그대로 보이게 하는 것이 목적이다.
+  //  규칙은 옛 링크 풀기(terminal-files browse/moved)와 같고, 판정은 이 프로젝트의 projStore 그대로다 — 그래서 **같은 프로젝트 안에서만**
+  //  닿는다(다른 프로젝트 · 공유 폴더로 옮겨졌으면 없는 것과 같다). 기록은 공유 루트 기준 경로라 `<프로젝트 폴더>/<상대경로>` 로 묻는다.
+  //  쓰기 라우트(올리기 · 지우기 · 이름 바꾸기)는 부르지 않는다 — 옛 자리에 새로 쓰는 것이 그 경로의 뜻이다.
+  //  ⚠ «닿은 자리 재판정» 은 여기선 «같은 프로젝트 안인가» 하나다 — 프로젝트 폴더 안에는 경로마다 다른 공개범위가 없고(이 라우트의 직접 읽기도
+  //   같은 판정이다), 탐색기만 그 안에 담긴 다른 프로젝트 폴더를 따로 가린다. 그 안쪽 이름은 이 라우트의 직접 읽기로도 이미 열리는 자리다.
+  const movedInProject = async (project: { folder: string }, store: ProjectStorage, base: string, abs: string)
+    : Promise<{ abs: string; rel: string; st: NonNullable<Awaited<ReturnType<ProjectStorage["stat"]>>> } | null> => {
+    const root = normalizeMovePath(project.folder);
+    if (!root) return null;
+    const inProject = (p: string): string | null => (p.startsWith(root + "/") ? p.slice(root.length + 1) : null);
+    //  이 프로젝트 안의 그 자리 — 글자 판정 · 멤버 봉쇄를 지난 절대경로와 stat. 밖이거나 봉쇄에 걸리면 null. 자리마다 한 번만 본다
+    //   (마지막 자리를 따라가기 안에서 보고 답할 때 또 보지 않게 — 멤버 저장소면 한 번이 중계 두 번이다).
+    const seen = new Map<string, Promise<{ abs: string; st: Awaited<ReturnType<ProjectStorage["stat"]>> } | null>>();
+    const at = (rel: string) => {
+      let v = seen.get(rel);
+      if (!v) {
+        v = (async () => {
+          let a: string;
+          try { a = resolveIn(base, rel, true); await jailIfMember(store, a); } catch { return null; }
+          return { abs: a, st: await store.stat(a).catch(() => null) };
+        })();
+        seen.set(rel, v);
+      }
+      return v;
+    };
+    const hit = await followMovedPath(path.join(project.folder, path.relative(base, abs)), {
+      lookup: (p, since) => findFileMove(SHARED_MOVE_SCOPE, p, since),
+      //  이 프로젝트 밖은 «여기엔 없다» — 이 라우트가 열 자리가 아니다(따라가기는 그 너머의 기록을 더 볼 수 있다).
+      exists: async (p) => { const rel = inProject(p); return rel !== null && !!(await at(rel))?.st; },
+      visible: (p) => inProject(p) !== null,
+    });
+    const rel = hit ? inProject(hit.path) : null;
+    const got = rel !== null ? await at(rel) : null;
+    return rel !== null && got?.st ? { abs: got.abs, rel, st: got.st } : null;
+  };
+
   // ── ① 공유 폴더 — 목록 / 검색(q) ──
   app.get(`${prefix}/:id/files`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
@@ -245,14 +285,26 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 다운로드 / 미리보기
   app.get(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
-    const abs = resolveIn(base, req.query.path, true);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
+    let abs = resolveIn(base, req.query.path, true);
     await jailIfMember(store, abs);
-    const st = await store.stat(abs);
+    let st = await store.stat(abs);
+    //  #4822 — 없으면 옮긴 기록을 따라 이 프로젝트 안의 지금 자리를 연다(본문 그림 주소가 이름 바꾸기에 안 깨지게). 옛 자리에 무엇이 있으면 그것이 이긴다.
+    let movedTo: string | null = null;
+    if (!st) {
+      //  최선 노력 — 기록 조회가 실패하면 따라가지 않고 남기기만 한다(없는 파일은 종전처럼 404 — 따라가기 때문에 500 이 되면 안 된다).
+      const moved = await movedInProject(project, store, base, abs).catch((e) => {
+        logger.warn({ err: e, project: Number(req.params.id) }, "[project] 옛 경로 따라가기 실패(비치명 — 종전대로 답한다)");
+        return null;
+      });
+      if (moved) { abs = moved.abs; st = moved.st; movedTo = moved.rel; }
+    }
     if (!st) throw new HttpError(404, "파일 없음");
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
     const download = req.query.download === "1";
     if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+    //  따라갔으면 어디로 갔는지 머리로 남긴다(X-File-Moved-To — 프로젝트 폴더 기준 지금 경로, URI 인코딩). 성공 응답에만 싣는다.
+    if (movedTo !== null) res.setHeader("X-File-Moved-To", encodeURIComponent(movedTo));
     //  #3870 판이 실린 미리보기(`&v=`)는 판이 지금 파일과 같을 때만 브라우저가 보관해도 된다 — 판정은 fileCacheHeaders 한 자리.
     for (const [k, v] of Object.entries(fileCacheHeaders(req.query.v, st, download))) res.setHeader(k, v);
     // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라

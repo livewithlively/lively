@@ -82,10 +82,10 @@ test("J1 액자가 넘긴 끝난 사실로 대화창 안내를 고른다 · 목�
   assert.match(s, /const why = endedSessPhrase\(target\.raw\) \|\| \(/, "멈춘 세션 안내도 같은 이름");
 });
 
-test("K1 홈 ① · ①″ — 꺼진 행의 점은 stopDot · «지난 세션» 은 stopPast(사람이 끝냈을 때만)", () => {
+test("K1 홈 ① · ①″ · ①‴ — 꺼진 행의 점은 stopDot · «지난 세션» 은 stopPast(사람이 끝냈을 때만)", () => {
   const m = read("web/v2/main.ts");
   const hits = m.match(/liveNow \? s\.stateKey : \(s\.stopDot \|\| ''\), false, undefined, !liveNow && s\.stopPast !== false/g) || [];
-  assert.equal(hits.length, 2, "🔴 ①(내 세션)·①″(초대받은 세션) 둘 다 같은 규칙");
+  assert.equal(hits.length, 3, "🔴 ①(내 세션)·①″(초대받은 세션)·①‴(초대한 세션, #4785) 셋 다 같은 규칙");
   assert.doesNotMatch(m, /liveNow \? s\.stateKey : '', false, undefined, !liveNow\)/, "🔴 종전 규칙(꺼지면 무조건 점 없음·지난 세션)이 남아 있다");
   assert.match(m, /error:\s+\{ label: '오류',\s+rank: 0 \}/, "오류는 «지금 볼 것» 에 선다");
   const v = fn(m, "viewedSessionId");
@@ -93,7 +93,8 @@ test("K1 홈 ① · ①″ — 꺼진 행의 점은 stopDot · «지난 세션»
 });
 
 test("K2 행 자료(mergeSessions)가 꺼진 박스에만 겉모습을 정한다 · 관측 못 한 행은 안 정한다", () => {
-  const v = read("web/v2/views.ts");
+  // #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다).
+  const v = read("web/v2/sess-merge.ts");
   assert.match(v, /if \(!s\.alive && r\.observed !== false\) \{ s\.stopDot = stoppedDotKey\(r, now\); s\.stopPast = stoppedIsPast\(r\); \}/);
 });
 

@@ -24,7 +24,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { confined, isConfined, probeLocal, PROBE_JS, type PathProbe } from "./path-jail.js";
+import { confined, isConfined, probeLocal, probeSaysAbsent, PROBE_JS, type PathProbe } from "./path-jail.js";
 
 /** 표본 트리 — 엣지 표의 상황을 한 번에 담는다. 베이스 밖 대상(outside*)이 있어야 '넘어간다'가 재진다. */
 function fixture(): { root: string; base: string; baseLink: string; missingBase: string } {
@@ -147,6 +147,40 @@ test("⑯ 해소 결과를 그대로 믿지 않는다 — rest 에 이름 아닌
   assert.equal(confined({ base: "/b", real: "/b", rest: ["ok"] }), true);
   assert.equal(confined({ base: "/b", real: "/b", rest: ["..", "..", "etc"] }), false);
   assert.equal(confined({ base: "/b", real: "/b", rest: ["a/../../etc"] }), false);
+});
+
+// ── «그 이름은 여기 있을 수 없다»(#4847) — 거부는 그대로 거부고, 까닭만 따로 읽힌다 ────────────────────
+//  부르는 쪽(홈 탐색기)은 이 까닭을 «없는 자리» 와 같은 답으로 돌린다. 두 구현이 같은 까닭을 싣는지 함께 잰다.
+test("⑰ 파일 아래 경로(plain.txt/x) — 거부 · 까닭 ENOTDIR · 없는 자리로 읽힌다(두 구현 같은 사실)", async () => {
+  const f = fixture();
+  const abs = path.join(f.base, "plain.txt", "x");
+  const local = await probeLocal(f.base, abs);
+  assert.deepEqual(local, probeOneLiner(f.base, abs));
+  assert.equal(local.error, "ENOTDIR");
+  assert.equal(confined(local), false, "판정은 여전히 거부다");
+  assert.equal(probeSaysAbsent(local), true);
+});
+
+test("⑱ 이 파일 시스템에 너무 긴 이름(300바이트) — 거부 · 까닭 ENAMETOOLONG · 없는 자리로 읽힌다(두 구현 같은 사실)", async () => {
+  const f = fixture();
+  const abs = path.join(f.base, "n".repeat(300), "x");
+  const local = await probeLocal(f.base, abs);
+  assert.deepEqual(local, probeOneLiner(f.base, abs));
+  assert.equal(local.error, "ENAMETOOLONG");
+  assert.equal(confined(local), false);
+  assert.equal(probeSaysAbsent(local), true);
+});
+
+test("⑲ 감옥의 까닭은 «없는 자리» 가 아니다 — 바깥 링크 · 끊어진 링크 · 권한 · 해소 불가 · 비었음", async () => {
+  const f = fixture();
+  assert.equal(probeSaysAbsent(await probeLocal(f.base, path.join(f.base, "link-dir", "secret.txt"))), false, "바깥 링크");
+  assert.equal(probeSaysAbsent(await probeLocal(f.base, path.join(f.base, "link-broken"))), false, "끊어진 링크");
+  assert.equal(probeSaysAbsent({ base: "/b", real: null, rest: [], error: "EACCES" }), false, "권한");
+  assert.equal(probeSaysAbsent({ base: "/b", real: null, rest: [], error: "ELOOP" }), false, "링크 고리");
+  assert.equal(probeSaysAbsent({ base: "/b", real: null, rest: [] }), false, "까닭 없이 해소 불가");
+  assert.equal(probeSaysAbsent(null), false);
+  assert.equal(probeSaysAbsent(undefined), false);
+  assert.equal(probeSaysAbsent(await probeLocal(f.base, path.join(f.base, "newdir", "new.txt"))), false, "아직 없는 경로는 통과하는 자리라 까닭이 없다");
 });
 
 // ── 배선(wiring) — 관측 장치가 살아 있나 ─────────────────────────────────────

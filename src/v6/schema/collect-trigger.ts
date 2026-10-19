@@ -1,0 +1,65 @@
+// v6 스키마 조각 — collect-trigger(#4213 T12 #4744): **지속 수집 트리거**. 수집 단위 표(collect-unit.ts)에 주기 판정의 칸을 더한다.
+//  설계 정본: 지식 connect-collect-tobe-claude-connector-4213 §6 · 태스크 #4744(상민님 2026-10-15 «트리거 최종 확정»).
+//
+//  collect_unit 에 더하는 칸:
+//   · next_at       — 다음에 «새 글 있나» 를 볼 시각. 수집 실행의 저장 단계가 단위마다 적는다(다 읽고 따라잡았으면 주기 뒤 ·
+//                     밀렸으면 곧바로 · 못 읽었으면 물러서며). 비면 «읽은 시각 + 주기»(T12 전 단위)이고, 처음 읽는 단위는 곧바로다.
+//   · interval_auto — 주기(interval_sec)를 빈도가 정하나. 기본 그렇다(저장 단계가 최근 14일 글 빈도로 다시 맞춘다).
+//                     리브·사람이 collect_unit_update 로 interval_sec 를 주면 false(그 값 고정), null 을 주면 다시 true.
+//   · sched         — 판정 재료(서버만 쓴다): hist(다 읽은 판의 표본 — 끝 시각·구간 길이·그 구간의 글 수) · fails(연달아 진척 없는 판 수) ·
+//                     why(마지막 판정 — interval·catchup·retry) · at(판정 시각). 사람이 고치는 칸이 아니다 — 리브는 meta.activity 를 본다.
+//  ⚠ 번호 없는 ADD COLUMN IF NOT EXISTS — 병렬 브랜치 사이 순서 충돌이 없다. collect_unit 이 있어야 하므로 오케스트레이터에서 collect-unit 뒤에 둔다.
+//  · embedding_vector·model·updated_at — 단위의 «설명 벡터»(설계 §3). 검색 실패 보조 안내 · 단위 찾기가 질문과 뜻으로 맞춘다.
+//                     임베딩 칸은 다른 대상(knowledge·session_card)과 같은 방식으로 provider 와 무관하게 늘 만든다(뜻 검색 SQL 이 칸을 가정한다).
+import type { Pool } from "pg";
+import { ensureEmbeddingSchema, resolveEmbeddingConfig } from "../embedding-provider.js";
+
+export async function initV6CollectTrigger(pool: Pool): Promise<void> {
+  //  interval_auto 를 처음 만들 때만, 이미 주기가 적힌 단위는 «고정» 으로 둔다 — T10(10/16) 도구 설명대로 리브·사람이 정해 둔 주기를 첫 판정이
+  //   조용히 덮지 않게(리뷰 2026-10-17). 칸이 이미 있으면 아무것도 안 한다(이후 값은 collect_unit_update 가 정한다).
+  await pool.query(`
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS next_at TIMESTAMPTZ;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'collect_unit'::regclass AND attname = 'interval_auto' AND NOT attisdropped) THEN
+        ALTER TABLE collect_unit ADD COLUMN interval_auto BOOLEAN NOT NULL DEFAULT true;
+        UPDATE collect_unit SET interval_auto = false WHERE interval_sec IS NOT NULL;
+      END IF;
+    END $$;
+    ALTER TABLE collect_unit ADD COLUMN IF NOT EXISTS sched JSONB NOT NULL DEFAULT '{}'::jsonb;
+    CREATE INDEX IF NOT EXISTS collect_unit_due_idx ON collect_unit(next_at) WHERE state = 'active';
+    ALTER TABLE collect_run ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+  `);
+  //  #4744 링크 따라 읽기 — 수집한 글 속 앱 링크(org/collect/link-store.ts 머리말). (앱 · 대상 · 링크가 나온 단위) 한 줄.
+  //   주소는 비공개 채널·DM 의 글에서 나온다 — 조회 방화벽(db/firewall.ts) 대상이고, 밖으로는 앱별 개수만 낸다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collect_link(
+      id BIGSERIAL PRIMARY KEY,
+      app TEXT NOT NULL,
+      ref TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'other',
+      url TEXT NOT NULL,
+      channel TEXT,
+      thread TEXT,
+      from_unit_id INT NOT NULL REFERENCES collect_unit(id) ON DELETE CASCADE,
+      member_id TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending',
+      seen_count INT NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      read_at TIMESTAMPTZ,
+      target_unit_id INT REFERENCES collect_unit(id) ON DELETE SET NULL,
+      UNIQUE (app, ref, from_unit_id),
+      CONSTRAINT collect_link_state_chk CHECK (state IN ('pending','read','unsupported')));
+    ALTER TABLE collect_link ADD COLUMN IF NOT EXISTS tries INT NOT NULL DEFAULT 0;
+    ALTER TABLE collect_link ADD COLUMN IF NOT EXISTS tried_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS collect_link_pending_idx ON collect_link(member_id, app) WHERE state = 'pending';
+  `);
+  try {
+    const r = await pool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`);
+    const ec = resolveEmbeddingConfig((r.rows[0] as { embedding_config?: unknown } | undefined)?.embedding_config);
+    const ok = await ensureEmbeddingSchema(pool, ec.dimensions, "collect_unit");
+    console.log(`[v6 schema] 수집 단위 설명 벡터 스키마 ${ok ? "준비됨" : "건너뜀(낱말로만 맞춤)"} (dim=${ec.dimensions})`);
+  } catch (e) {
+    console.warn(`[v6 schema] 수집 단위 설명 벡터 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
+  }
+}

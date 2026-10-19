@@ -21,6 +21,7 @@ import { TMUX_BIN, harnessLiveThemeSteps, harnessLiveThemeSupported, type LiveTh
 import { detectAwaiting, isSpinning, SHELL_CMDS } from "./phase.js";   // #1683 후속2 — 바쁜/모달 세션엔 키를 넣지 않는다 · #4818 셸 화면엔 표지를 안 싣는다
 import { tmux, getOpt, chunkTmuxCommands } from "./tmux-exec.js";
 import { isPsmuxBin, inputToSendKeysArgv } from "./terminal-pty.js";
+import { ANSI_SEQ } from "./submit-check.js";   // #4852 — 붙여넣기 조각이 제어열을 가르지 않게(piecesToPaste)
 
 // 텍스트가 pane 에 닿은 뒤 Enter 가 가도록 두는 창(규약 ②). 길이 비례이되 상·하한을 둔다 —
 //  짧은 프롬프트에 1.5s 를 쓰면 크론 주입이 느려지고, 긴 프롬프트에 500ms 는 모자란다.
@@ -128,15 +129,36 @@ function lineSegments(s: string): Array<[number, string]> {
 //   «NFO] x» 를 붙이면 «…NFO] x» · «[OK] done» 이 경계에 걸리면 «K] done»(격리 리뷰 지적). 그래서 조각이 그렇게 끝나지 않게 한 글자 앞에서 자른다.
 const FOCUS_TAIL = /\[[IO]$/;
 
-/** (순수) 붙여넣기 조각들 — PASTE_CHUNK_UNITS 상한(코드포인트 경계) · 이미지 경로 조각이 한 붙여넣기에 통째로 들지 않게 · 포커스 꼬리로 끝나지 않게(위). 이어 붙이면 원글이다. */
+//  ⚠ 제어열 — 같은 처리는 붙여넣기마다 터미널 제어열을 지운다(Bun.stripANSI). 경계가 제어열 가운데에 떨어지면 두 반쪽은 제어열이 아니라 글자로
+//   남는다(Bun 실측: «abc ESC[3» + «1mERR» → «abc » + «1mERR» — 색 입힌 긴 로그에 «1m» 이 낀다 · 기록이 우리 글과 갈려 «미확인»). #4852 — 이 글을
+//   붙여넣게 되면서 생긴 자리다. 경계에 걸린 제어열은 통째로 다음 조각으로 넘긴다(조각 맨 앞이면 못 넘긴다 — 한 조각보다 긴 제어열).
+const ESC_INTRO = /[\x1b\x90\x98\x9b\x9d-\x9f]/g;
+const ANSI_AT = new RegExp(ANSI_SEQ.source, "y");
+/** 조각 끝에 걸린 제어열의 시작 — `rest` 에서 그 제어열이 조각 밖까지 이어지면 그 자리, 아니면 -1. */
+function escapeCut(piece: string, rest: string): number {
+  let k = -1;
+  for (const m of piece.matchAll(ESC_INTRO)) k = m.index ?? -1;
+  if (k <= 0 || piece.length >= rest.length) return -1;
+  ANSI_AT.lastIndex = k;
+  const m = ANSI_AT.exec(rest);
+  return m && k + m[0].length > piece.length ? k : -1;
+}
+
+/** (순수) 붙여넣기 조각들 — PASTE_CHUNK_UNITS 상한(코드포인트 경계) · 이미지 경로 조각이 한 붙여넣기에 통째로 들지 않게 · 포커스 꼬리로 끝나지 않게 ·
+ *  제어열을 가르지 않게(위). 자르기는 조각을 줄이기만 하니 더 줄 것이 없을 때까지 다시 본다(한 자르기가 다른 꼬리를 만들 수 있다). 이어 붙이면 원글이다. */
 export function piecesToPaste(text: string): string[] {
   const out: string[] = [];
   let rest = text;
   while (rest) {
     let piece = splitUnits(rest.slice(0, PASTE_CHUNK_UNITS + 1), PASTE_CHUNK_UNITS)[0];
-    const cut = imagePathCut(piece);
-    if (cut > 0 && cut < piece.length) piece = piece.slice(0, cut);
-    if (FOCUS_TAIL.test(piece)) piece = piece.slice(0, -1);   // «…[» 로 끝내고 «I…» 는 다음 조각으로 — «[» 로 끝난 조각은 이미지 경로도 아니다
+    for (let prev = ""; prev !== piece;) {
+      prev = piece;
+      const cut = imagePathCut(piece);
+      if (cut > 0 && cut < piece.length) piece = piece.slice(0, cut);
+      if (piece.length > 1 && FOCUS_TAIL.test(piece)) piece = piece.slice(0, -1);   // «…[» 로 끝내고 «I…» 는 다음 조각으로 — «[» 로 끝난 조각은 이미지 경로도 아니다
+      const esc = escapeCut(piece, rest);
+      if (esc > 0) piece = piece.slice(0, esc);
+    }
     out.push(piece);
     rest = rest.slice(piece.length);
   }
@@ -149,12 +171,18 @@ const hexKeys = (id: string, s: string): string[] => ["send-keys", "-t", id, "-H
 /** 이 하네스에 글을 붙여넣기로 싣나(규약 ⑤) — Claude Code 만. */
 export const pastesFor = (harness: string | null | undefined): boolean => String(harness ?? "").trim() === "claude";
 
-//  붙여넣기는 **글**만 싣는다 — 제어 글자(탭 빼고 C0 · DEL)는 키다. 붙여넣기 안에 들어가면 키가 아니라 글자가 되고, Claude Code 는
-//   제출할 때 그 글자를 «보이지 않는 글자» 로 지우며 멈춘다(«… review and press Enter to send»). 실제로 그런 글이 있다: 모델·추론강도
-//   명령은 사람이 치던 글을 치워 두는 키(Ctrl+S, catalog runtimeDraftStash)를 앞에 붙여 보낸다 — 붙여넣으면 치워 두기도 안 되고
-//   명령도 안 나간다. 그런 글은 종전대로 친다(키는 키로). 탭은 붙여넣기에서 공백 넷이 된다(친 탭은 자동완성을 부른다 — 붙이는 편이 낫다).
+//  **맨 앞의** 제어 글자(공백류·ESC 빼고 C0 · DEL)는 키다 — 모델·추론강도 명령은 사람이 치던 글을 치워 두는 키(Ctrl+S, catalog
+//   runtimeDraftStash)를 앞에 붙여 보낸다. 붙여넣으면 그 키가 글자가 돼 치워 두기도 명령도 안 된다 — 그런 글은 종전대로 친다(키는 키로).
+//   ESC 는 뺀다(#4852 격리 리뷰): 색 입힌 로그는 ESC[31m 으로 **시작한다** — 치면 아래의 뒤섞임·앞 4KB 유실을 그대로 겪는다. 키로서의 Esc 는
+//   글로 싣지 않는다(키 이름으로 누른다 — CHAT_KEYS · 업데이트 창 닫기). 공백류는 한 줄로 펴며 앞뒤가 다듬어져 맨 앞에 오지 않는다(oneLineOf).
+//  ⚠ 글 **가운데**의 제어 글자는 키가 아니라 사람이 옮겨 온 글의 찌꺼기다(색 입힌 로그의 ESC[31m · 벨 …). 그런 지시도 붙여넣는다(#4852):
+//   치면 ESC 는 Esc 키 · Ctrl+A 는 «줄 맨 앞으로» 라 글이 뒤섞이고, Claude Code 2.1.301 은 긴 친 글의 **앞 약 4KB 를 잃는다**(실측: 4,500자를
+//   치면 끝 412자만 기록에 — 이 맥 · 매니지드 둘 다, 붙여넣으면 원문 그대로). 붙여넣은 제어 글자는 Claude Code 가 제출할 때 지운다
+//   (ANSI 색 코드는 통째로 · 실측) — 그 «검토 후 Enter» 멈춤은 제출 지킴이가 Enter 로 넘긴다. 탭은 붙여넣기에서 공백 넷이 된다.
 // eslint-disable-next-line no-control-regex
-const KEYS_IN_TEXT = /[\x00-\x08\x0a-\x1f\x7f]/;
+const LEADING_KEY = /^[\x00-\x08\x0e-\x1a\x1c-\x1f\x7f]/;
+/** 글이 키(제어 글자)로 시작하나 — 그런 글은 붙여넣지 않고 친다(위). 넣은 뒤 지키는 자리도 이 글(설정 명령)은 건너뛴다 — 확인창은 따로 본다(#4772). */
+export const startsWithKey = (text: string): boolean => LEADING_KEY.test(oneLineOf(text));
 
 /**
  * 그 세션이 붙여넣기를 받나 — 부른 쪽이 하네스를 알면 그것으로, 모르면 이 호스트 tmux 의 `@box_harness` 로(규약 ⑤).
@@ -177,9 +205,12 @@ export async function sessionPastes(id: string, harness?: string | null): Promis
  *  한 명령의 토큰은 SEMI_TOKENS_MAX 개까지(브로커 인자 상한 64 · 묶음 상한 60 안에 들게).
  */
 const SEMI_TOKENS_MAX = 16;
+/** 치는 인자 하나의 UTF-16 상한 — 매니지드 브로커의 tmux 중계(`/lvly/tmux`, 게이트웨이 칸)는 인자 하나가 4,096자를 넘으면 명령을
+ *  통째로 거절한다(lvly-cloud validateTmuxArgv `a.length > 4096`). 바이트 상한(8KiB)만 보면 영문 위주 긴 글이 그 길에서 막힌다(#4852). */
+export const TMUX_LITERAL_CHUNK_UNITS = 4_000;
 function literalArgv(id: string, text: string): string[][] {
   const out: string[][] = [];
-  for (const part of splitUtf8(text, TMUX_LITERAL_CHUNK_BYTES)) {
+  for (const part of splitUtf8(text, TMUX_LITERAL_CHUNK_BYTES).flatMap((p) => splitUnits(p, TMUX_LITERAL_CHUNK_UNITS))) {
     const body = part.replace(/;+$/, "");
     if (body) out.push(["send-keys", "-t", id, "-l", "--", body]);
     for (let n = part.length - body.length; n > 0; n -= SEMI_TOKENS_MAX) out.push(["send-keys", "-t", id, "-H", ...Array<string>(Math.min(n, SEMI_TOKENS_MAX)).fill("3b")]);
@@ -189,7 +220,7 @@ function literalArgv(id: string, text: string): string[][] {
 
 export interface SendKeysOpts {
   /** 글을 붙여넣기 조각으로 싣는다(규약 ⑤ — Claude Code 세션만 참). psmux 는 무시한다(입력 표면이 다르다 — 규약 ③).
-   *  글에 키(제어 글자)가 섞여 있으면 무시한다(KEYS_IN_TEXT 머리말). */
+   *  글이 키(제어 글자)로 **시작하면** 무시한다(LEADING_KEY 머리말). */
   paste?: boolean;
 }
 
@@ -202,6 +233,21 @@ export interface SendKeysPlan {
   enter: string[];
 }
 
+/** (순수) 글 속의 붙여넣기 표지를 지운다(#4852 격리 리뷰) — 남기면 글이 붙여넣기를 그 자리에서 닫아 **나머지가 키로** 읽힌다(«앞 ESC[201~ ^C^D 뒤» 면
+ *  Ctrl+C·Ctrl+D). 지운 자리에서 새로 생긴 표지(«ESC[20» + 표지 + «1~»)도 지운다. Claude Code 도 붙여넣은 글의 제어열은 지우니 들어가는 글은 같다. */
+export function withoutPasteMarks(text: string): string {
+  if (!text.includes("\x1b[20")) return text;
+  //  한 번 훑기(격리 리뷰 — 겹겹이 쌓은 표지면 «다 지울 때까지 다시» 가 제곱 시간이었다: 94KB 4초 · 본문 상한 1MB 면 게이트웨이가 몇 분 선다).
+  //   지운 결과(out)의 끝 여섯 글자가 표지가 되는 순간마다 떼어 낸다 — 표지는 늘 «~» 로 끝나니, 지운 자리에서 새로 생긴 표지도 그 «~» 가 올 때 잡힌다.
+  const out: string[] = [];
+  for (const ch of text) {
+    out.push(ch);
+    const n = out.length;
+    if (ch === "~" && n >= 6 && out[n - 6] === "\x1b" && out[n - 5] === "[" && out[n - 4] === "2" && out[n - 3] === "0" && (out[n - 2] === "0" || out[n - 2] === "1")) out.length = n - 6;
+  }
+  return out.join("");
+}
+
 /**
  * 주입 계획을 세운다(순수 함수 — 프로세스를 안 띄운다).
  *
@@ -209,7 +255,7 @@ export interface SendKeysPlan {
  * CI 에서 못 띄운다. 순수 함수면 mac 에서도 psmux 규칙을 표로 못박을 수 있다.
  *
  * 인젝션 안전: 두 경로 다 execFile argv(셸 미경유)이고 psmux 경로는 값이 전부 `0x…` 토큰이라
- * `;kill-server;` 를 넣어도 화면에 리터럴로만 도달한다(terminal-pty 실측). 붙여넣기 표지는 고정 상수라 글이 표지를 못 바꾼다.
+ * `;kill-server;` 를 넣어도 화면에 리터럴로만 도달한다(terminal-pty 실측). 붙여넣기 표지는 고정 상수이고, 글 속의 표지는 지운다(withoutPasteMarks).
  */
 export function sendKeysPlan(id: string, text: string, bin: string, opts: SendKeysOpts = {}): SendKeysPlan {
   const oneLine = oneLineOf(text);
@@ -224,8 +270,8 @@ export function sendKeysPlan(id: string, text: string, bin: string, opts: SendKe
   //   따로 부르면 중계에선 호출마다 0.5~1초(드물게 4.8초)라, 표지 사이가 2초를 넘으면 Claude Code 가 붙여넣기를 거기서 끊는다
   //   (2.1.301 키 읽기 — 붙여넣기 중 2초 무입력이면 흘려보냄). 조각끼리는 잇지 않는다: 한 묶음의 글 바이트를 조각 하나(≤2KB)로 묶어 둔다.
   const keys = !oneLine ? []
-    : opts.paste && !KEYS_IN_TEXT.test(oneLine)
-      ? piecesToPaste(oneLine).flatMap((piece) => chunkTmuxCommands([hexKeys(id, PASTE_OPEN), ...literalArgv(id, piece), hexKeys(id, PASTE_CLOSE)]))
+    : opts.paste && !LEADING_KEY.test(oneLine)
+      ? piecesToPaste(withoutPasteMarks(oneLine)).flatMap((piece) => chunkTmuxCommands([hexKeys(id, PASTE_OPEN), ...literalArgv(id, piece), hexKeys(id, PASTE_CLOSE)]))
       : literalArgv(id, oneLine);
   return { oneLine, keys, enter: ["send-keys", "-t", id, "Enter"] };
 }

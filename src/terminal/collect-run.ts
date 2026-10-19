@@ -28,8 +28,11 @@ import { getCollectSessionPolicy } from "../org/store/runtime-config.js";
 import { effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js";
 import { endedByOf, gatewayExit } from "../org/collect/run-outcome.js";   // #4213 T11 — 실행 기록의 «누가 끝을 적었나» (순수)
 import {
-  CLAUDE_COLLECT_APPS, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, type CollectMode, type CollectPlan,
+  CLAUDE_COLLECT_APPS, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, collectMaxTurns, collectPrompt, listingPrompt, pickUnitsForRun, planProofUnits, sameRunLinkUnit,
+  unitsToLease, type CollectMode, type CollectPlan,
+  type PlannedLink, type PlannedUnit,
 } from "../org/collect/collect-plan.js";
+import { PLANNED_LINKS_PER_RUN, SAME_APP_LINKS_PER_UNIT } from "../org/collect/link-plan.js";   // #4744 링크 따라 읽기(순수 상수)
 import {
   COLLECT_CAPTURE_JS, COLLECT_GATE_JS, COLLECT_PROBE_PROMPT, COLLECT_RUNNER_JS, COLLECT_RUN_ID_RE, COLLECT_SESSION_LABEL,
   collectCapsReadSh, collectJob, collectReadSh, collectRunDir, collectRunStartedAt, collectSessionNoteSh, collectWriteSh, newCollectRunId,
@@ -48,6 +51,11 @@ export interface CollectRunStart {
   app?: string | null;
   /** collect — 주기가 된 단위만(기본 아니오: 맡은 단위 전부). */
   dueOnly?: boolean | null;
+  /**
+   * #4744 누가 띄웠나 — schedule = 기본 주기 틱(org/collect/collect-schedule). 그때는 때가 된 단위에 곧 때가 될 단위를 함께 싣고(판 수를 줄인다),
+   *  실을 단위 가운데 때가 된 것이 하나도 없으면 띄우지 않는다(409 — 틱이 본 뒤 그새 다른 판이 읽었다). 실행 기록의 계획에 남는다.
+   */
+  trigger?: "schedule" | null;
   /** 지시. 없으면 점검 지시(COLLECT_PROBE_PROMPT). probe 에서만 쓴다. */
   prompt?: string | null;
   /** claude.ai 커넥터 앱 이름(Slack · Notion · Gmail …). 비면 연결된 것 전부. */
@@ -79,6 +87,8 @@ interface RunRec {
 
 /** 이 게이트웨이가 띄우고 지켜보는 실행. 재기동하면 비지만, 상태 읽기가 폴더에서 다시 판정한다. */
 const runs = new Map<string, RunRec>();
+/** 지금 띄우는 중인 자리(워크스페이스 + 사람) — 확인과 자리 잡기 사이의 레이스를 막는다(startCollectRun). */
+const starting = new Set<string>();
 
 const ownerOf = (u: LivelyUser): string => String(u.userId || u.email || "solo");
 const inTenant = <T>(t: TenantContext | null, fn: () => Promise<T>): Promise<T> => (t ? withTenant(t, fn) : fn());
@@ -95,9 +105,27 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
     throw new HttpError(403, "이 워크스페이스는 구성원 Claude 커넥터를 쓰지 않도록 설정돼 있어 수집 실행을 띄우지 않습니다 — 관리자가 [고급 설정 ▸ 구성원 권한 관리 ▸ Claude 커넥터]에서 켤 수 있습니다");
   }
   if (policy !== "allowed") throw new HttpError(503, "구성원 Claude 커넥터 정책을 읽지 못해 수집 실행을 띄우지 않았습니다 — 잠시 뒤 다시 시도해 주세요");
+  //  한 사람(같은 워크스페이스)에 한 번에 하나 — 확인과 자리 잡기를 **같은 동기 구간**에서 한다. 사이에 await 이 끼면 사람이 누른
+  //   «지금 수집» 과 기본 주기 틱(#4744)이 겹쳐 둘 다 통과한다(리뷰 2026-10-17). 중앙 모드는 한 프로세스가 여러 워크스페이스를 돈다 —
+  //   구성원 id 는 워크스페이스 안에서만 유일하므로 워크스페이스로도 가른다.
+  const tid = currentTenant()?.id ?? null;
+  const slot = `${tid ?? "-"}\u0000${owner}`;
+  if (starting.has(slot)) throw new HttpError(409, "이미 수집 실행을 띄우는 중입니다 — 끝난 뒤 다시 띄워 주세요");
   for (const r of runs.values()) {
-    if (r.owner === owner && !r.done) throw new HttpError(409, `이미 도는 수집 실행이 있습니다(${r.runId}) — 끝난 뒤 다시 띄워 주세요`);
+    if (r.owner === owner && (r.tenant?.id ?? null) === tid && !r.done) throw new HttpError(409, `이미 도는 수집 실행이 있습니다(${r.runId}) — 끝난 뒤 다시 띄워 주세요`);
   }
+  starting.add(slot);
+  try {
+    return await startCollectRunHeld(user, input, owner);
+  } finally {
+    starting.delete(slot);
+  }
+}
+
+/** 자리를 잡은 뒤의 띄우기(startCollectRun 의 몸통). */
+async function startCollectRunHeld(user: LivelyUser, input: CollectRunStart, owner: string): Promise<{
+  runId: string; sessionId: string | null; model: string; apps: string[]; timeoutSec: number; mode: CollectMode; units?: number;
+}> {
   const { mode, prompt, apps, maxTurns, plan } = await planRun(user, input);
   const osUser = await resolveMemberOsUser(userSlug(user));
   const home = loginHomeOf(osUser);
@@ -127,6 +155,14 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
     runs.delete(runId);
     throw e;
   }
+  //  #4744 이 판에 실은 단위를 붙잡는다 — 저장 단계가 다음 확인 시각을 적을 때까지 기본 주기 틱이 같은 단위로 판을 또 띄우지 않게.
+  //   세션이 뜬 **뒤에** 한다(못 뜬 판이 단위를 붙잡아 두지 않게). 임대는 이 판의 마감 + 여유까지 — 저장을 못 탄 판이면 그때 다시 때가 된다.
+  //   못 붙잡아도 실행은 그대로다.
+  const leased = unitsToLease(plan);
+  if (leased.length) {
+    const { leaseUnits, LEASE_MARGIN_MS } = await import("../org/collect/unit-schedule.js");
+    await leaseUnits(leased, runId, rec.deadline + LEASE_MARGIN_MS);
+  }
   //  세션 id 를 폴더에 적는다 — 게이트웨이가 재기동해도 상태 읽기가 그 세션을 찾아 지운다. 못 적어도 실행은 계속된다.
   await runAtLoginSeatSh(osUser, collectSessionNoteSh(dir, rec.sessionId!)).catch((e) =>
     logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 세션 id 기록 실패 — 지켜보기가 대신 지운다"));
@@ -142,7 +178,7 @@ export async function startCollectRun(user: LivelyUser, input: CollectRunStart =
     await m.recordRunStart({
       runId, member: memberOf(user), apps: job.apps, model: job.model,
       capMb: size.max_mb, requestMb: size.request_mb, startedAt: new Date(collectRunStartedAt(runId) ?? Date.now()),
-      mode, plan,
+      mode, plan, deadlineAt: new Date(rec.deadline),
     });
   })().catch((e) => logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 시작 기록 실패 — 실행은 그대로"));
   return { runId, sessionId: rec.sessionId, model: job.model, apps: job.apps, timeoutSec: job.timeoutSec, mode, ...(plan?.units ? { units: plan.units.length } : {}) };
@@ -163,19 +199,66 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
     if (!app) throw new HttpError(400, "목록 실행은 앱(app: slack · gmail · notion)을 주세요");
     return { mode, prompt: listingPrompt(app), apps: [CLAUDE_COLLECT_APPS[app]], maxTurns: 30, plan: { mode: "listing", app } };
   }
-  const { listAssignedUnits } = await import("../org/collect/unit-store.js");
-  const member = memberOf(user);
   const now = Date.now();
-  const planned = pickUnitsForRun(await listAssignedUnits(member, { dueOnly: input.dueOnly === true, now }), { now, app });
-  const { prompt, units } = collectPrompt(planned);
-  if (!units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
+  const scheduled = input.trigger === "schedule";
+  const { prompt, units, links } = await planCollectUnits(memberOf(user), { app, dueOnly: input.dueOnly === true, scheduled, now });
   //  허락할 앱은 앱 키에서 고정 이름으로 — 비면 러너가 «연결된 것 전부» 를 허락하므로 여기서 비지 않음을 보장한다.
   const apps = [...new Set(units.map((u) => CLAUDE_COLLECT_APPS[u.app]))];
   if (!apps.length) throw new HttpError(500, "수집 실행의 허락할 앱을 정하지 못했습니다");
   return {
-    mode, prompt, apps, maxTurns: collectMaxTurns(units.length, units.filter((u) => u.app === "gmail").length),
-    plan: { mode: "collect", units, planned_at: Math.floor(now / 1000) },
+    mode, prompt, apps,
+    //  #4744 링크 읽기 몫 — 실은 링크마다 둘(스레드 이어 읽기) · 같은 판 링크를 따라가는 단위(sameRunLinkUnit — 확인 읽기 단위는 아니다)마다 상한만큼.
+    maxTurns: collectMaxTurns(units.filter((u) => !u.proof).length, units.filter((u) => u.app === "gmail" && !u.proof).length, units.filter((u) => u.proof).length,
+      links.length * 2 + units.filter(sameRunLinkUnit).length * SAME_APP_LINKS_PER_UNIT),
+    plan: {
+      mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}),
+      ...(links.length ? { links } : {}),
+    },
   };
+}
+
+/**
+ * 수집 판에 실을 단위 — 맡은 단위(오래 안 읽은 것부터) + 확인 읽기(collect_proof 대기). 둘 다 비면 409.
+ *  보호 단위(이미 모인 자료가 있는 비공개 단위)를 아직 확인되지 않은 사람이 맡았으면(확인된 사람이 모두 끊겨 다음 후보로 넘어온 때)
+ *   그 단위는 수집이 아니라 확인 읽기로 싣는다 — 수집 창(읽은 위치 뒤)에는 맞춰 볼 저장된 글이 없어, 수집으로 실으면 확인이 영영 안 된다.
+ */
+export async function planCollectUnits(member: string, opts: { app?: string | null; dueOnly?: boolean; scheduled?: boolean; now?: number } = {}): Promise<{
+  prompt: string; units: PlannedUnit[]; links: PlannedLink[];
+}> {
+  const now = opts.now ?? Date.now();
+  const app = opts.app ?? null;
+  const scheduled = opts.scheduled === true;
+  const { listAssignedUnits } = await import("../org/collect/unit-store.js");
+  const { guardsByUnitId, pendingProofs, requestProof } = await import("../org/collect/unit-proof.js");
+  //  보호 단위는 고르기 **전에** 뺀다 — 확인을 못 받는 보호 단위가 한 판의 자리를 늘 차지해 다른 맡은 단위가 밀리지 않게.
+  //   #4744 주기 판은 곧 때가 될 단위도 함께 싣는다(soon).
+  const assigned = await listAssignedUnits(member, { dueOnly: scheduled || opts.dueOnly === true, soon: scheduled, now });
+  const guard = await guardsByUnitId(member, assigned.map((u) => u.id));
+  const held = assigned.filter((u) => guard.get(u.id) === true).map((u) => u.id);
+  if (held.length) await requestProof(member, held);
+  const planned = pickUnitsForRun(assigned.filter((u) => guard.get(u.id) !== true), { now, app });
+  const slots = planned.length ? PROOF_PER_RUN : PROOF_ONLY_PER_RUN;
+  const proofs = planProofUnits(await pendingProofs(member, slots + planned.length, { app }), planned, { app, max: slots });
+  //  #4744 링크 따라 읽기 — 지난 판들이 적어 둔 이 사람의 «다른 앱 링크» 가운데 이 판에 모을(확인 읽기 아닌) 앱의 것(상한은 collectPrompt 가 자른다).
+  const { pendingLinksFor } = await import("../org/collect/link-store.js");
+  const pending = await pendingLinksFor(member, [...new Set(planned.map((u) => u.app))], PLANNED_LINKS_PER_RUN);
+  const r = collectPrompt([...planned, ...proofs], pending);
+  //  #4744 이 판이 맡아야 했던(때가 된 · 정한 앱의) 보호 단위 가운데 확인 읽기로도 못 실은 것(시도 상한 · 간격 안 · 확인 창 없음)은
+  //   «막힘» 으로 물러서게 한다 — 안 그러면 그 단위가 계속 때가 된 단위로 남아 주기 틱이 이 사람을 매번 골라 409 로 자리만 차지한다.
+  //   때가 안 된 단위 · 다른 앱의 단위는 건드리지 않는다(그 일정은 그대로).
+  const unplannedHeld = assigned
+    .filter((a) => guard.get(a.id) === true && a.due && (!app || a.app === app) && !r.units.some((u) => u.id === a.id))
+    .map((a) => a.id);
+  if (unplannedHeld.length) {
+    const { noteUnitRead } = await import("../org/collect/unit-schedule.js");
+    for (const id of unplannedHeld) await noteUnitRead(id, { outcome: "blocked", now }, { member });
+  }
+  if (!r.units.length) throw new HttpError(409, "지금 맡은 수집 단위가 없습니다 — 목록 실행(mode listing)으로 단위를 올리고, 모을 단위를 켜 주세요");
+  //  #4744 주기 판은 때가 된 단위(또는 확인 읽기)가 하나라도 있어야 띄운다 — 곧 때가 될 단위만으로 판을 띄우면 «함께 싣기» 가 판을 오히려 늘린다.
+  if (scheduled && !r.units.some((u) => u.proof || assigned.find((a) => a.id === u.id)?.due)) {
+    throw new HttpError(409, "지금 때가 된 수집 단위가 없습니다 — 그새 다른 판이 읽었습니다");
+  }
+  return r;
 }
 
 async function pollOnce(rec: RunRec): Promise<void> {
@@ -304,12 +387,17 @@ function noteIngest(osUser: string | null, dir: string, runId: string, member: s
       const caps = plan ? parseCollectCaps(await runAtLoginSeatSh(osUser, collectCapsReadSh(dir))) : null;
       if (!plan) result = { state: "failed", mode: claim.mode, error: "실행 기록의 계획을 읽지 못했다" };
       else if (!caps) result = { state: "failed", mode: claim.mode, error: "원문을 읽지 못했다" };
-      else result = { ...(await ingestRun({ member: claim.member, plan, files: caps.files, truncated: caps.truncated })) };
+      else result = { ...(await ingestRun({ member: claim.member, plan, files: caps.files, truncated: caps.truncated, runId })) };
     } catch (e) {
       result = { state: "failed", mode: claim.mode, error: String((e as Error)?.message ?? e).slice(0, 300) };
     }
     await log.finishIngest(runId, result);
-    if (result.state !== "done") logger.warn({ runId, error: result.error }, "수집 실행 저장 단계가 실패했다 — 다음 판이 다시 읽는다");
+    if (result.state !== "done") {
+      logger.warn({ runId, error: result.error }, "수집 실행 저장 단계가 실패했다 — 다음 판이 다시 읽는다");
+      //  #4744 단위마다 판정이 안 났다(원문·계획을 못 읽음 · 예외) — 이 판이 건 임대를 풀어 물러서기 간격 뒤에 다시 때가 되게 한다
+      //   (임대 끝까지 묶여 있지 않게 · 담당이 바뀌었으면 새 담당이 이어받게).
+      if (claim.mode === "collect") await import("../org/collect/unit-schedule.js").then((m) => m.releaseRunLeases(runId));
+    }
   })().catch((e) => { ingesting.delete(runId); logger.warn({ runId, err: (e as Error)?.message }, "수집 실행 저장 단계를 시작하지 못했다"); });
 }
 
@@ -380,8 +468,20 @@ export async function readCollectRun(user: LivelyUser, runId: string): Promise<C
   };
 }
 
+/**
+ * #4744 이 게이트웨이 안에서 지금 도는 수집 실행의 주인(구성원 id) — 기본 주기 틱이 «이미 도는 사람» 을 뺄 때 실행 기록보다 먼저 아는 몫
+ *  (시작 기록은 기다리지 않고 적으므로 막 띄운 판은 표에 아직 없을 수 있다). 지금 워크스페이스의 실행만 센다.
+ */
+export function runningCollectOwners(): Set<string> {
+  const t = currentTenant()?.id ?? null;
+  const out = new Set<string>();
+  for (const r of runs.values()) if (!r.done && (r.tenant?.id ?? null) === t) out.add(memberOf(r.user));
+  return out;
+}
+
 /** (시험용) 지켜보던 실행 표를 비운다. */
 export function _resetCollectRunsForTest(): void {
   for (const r of runs.values()) if (r.timer) clearInterval(r.timer);
   runs.clear();
+  starting.clear();
 }

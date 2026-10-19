@@ -35,3 +35,22 @@ test("⑦ reuse·skip·create 가 모두 실제로 나온다", () => {
   const got = [planLivKickoff("s", []).action, planLivKickoff(null, []).action, planLivKickoff(null, ["claude"]).action];
   assert.deepEqual(got, ["reuse", "skip", "create"]);
 });
+
+// ── #4213 T13 — «처음 연결» 대화는 Claude 커넥터를 읽으므로 로그인된 claude 를 먼저 쓴다(사양 spec.md §D P1~P5). ──
+test("P1 claude 를 원하고 로그인돼 있으면 순서와 무관하게 claude 로 연다", () => {
+  assert.deepEqual(planLivKickoff(null, ["codex", "claude"], "claude"), { action: "create", harness: "claude" });
+});
+test("P2 원하는 하네스가 로그인돼 있지 않으면 가두지 않고 첫 하네스로 연다", () => {
+  assert.deepEqual(planLivKickoff(null, ["codex"], "claude"), { action: "create", harness: "codex" });
+});
+test("P3 로그인된 하네스가 없으면 원해도 열지 않는다", () => {
+  assert.deepEqual(planLivKickoff(null, [], "claude"), { action: "skip", reason: "ai-not-connected" });
+});
+test("P4 이미 연 세션이 있으면 원하는 하네스와 무관하게 다시 쓴다", () => {
+  assert.deepEqual(planLivKickoff("box-1", ["codex", "claude"], "claude"), { action: "reuse", sessionId: "box-1" });
+});
+test("P5 원하는 것이 없거나 빈칸이면 종전대로 첫 하네스", () => {
+  assert.deepEqual(planLivKickoff(null, ["codex", "claude"]), { action: "create", harness: "codex" });
+  assert.deepEqual(planLivKickoff(null, ["codex", "claude"], "  "), { action: "create", harness: "codex" });
+  assert.deepEqual(planLivKickoff(null, ["codex", "claude"], null), { action: "create", harness: "codex" });
+});

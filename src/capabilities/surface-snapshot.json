@@ -1443,7 +1443,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "d83f9aee899c74cc"
+  "input_hash": "0f2e7a5859c28a7f"
  },
  {
   "name": "me_liv_profile_get",
@@ -2554,7 +2554,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "bde5f7ca2b43ccf6"
+  "input_hash": "4681c4d31c0096be"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2842,7 +2842,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "58a40d9e96c6e092"
+  "input_hash": "3bb0ac2ae2b6c795"
  },
  {
   "name": "project_grep",
@@ -3602,7 +3602,7 @@
   "rest": [
    "POST /api/ui/me/notify-prefs"
   ],
-  "input_hash": "59f15ec58f542936"
+  "input_hash": "7466b152700d4c10"
  },
  {
   "name": "task_field_create_v6",
@@ -3962,7 +3962,7 @@
   "rest": [
    "GET /api/ui/collect/claude-runs/:id"
   ],
-  "input_hash": "b87a2ff2a0e63f0d"
+  "input_hash": "2c527a1ea147af10"
  },
  {
   "name": "collect_claude_run_stats",
@@ -3995,6 +3995,16 @@
   "input_hash": "3383857b616c6915"
  },
  {
+  "name": "collect_unit_find",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/collect/units/find"
+  ],
+  "input_hash": "bed240758774864e"
+ },
+ {
   "name": "collect_unit_listing",
   "scope": "memory",
   "mcp": true,
@@ -4022,7 +4032,7 @@
   "rest": [
    "POST /api/ui/collect/units/:id"
   ],
-  "input_hash": "76dc1ce8ab2d12f6"
+  "input_hash": "da021296d84d1901"
  },
  {
   "name": "collect_unit_split",
@@ -4802,7 +4812,7 @@
   "rest": [
    "POST /api/ui/app-notifications"
   ],
-  "input_hash": "38808f62c5d06ce5"
+  "input_hash": "c7fecfedf4b5797d"
  },
  {
   "name": "me_notifications",
@@ -4823,6 +4833,16 @@
    "POST /api/ui/me/notifications/read"
   ],
   "input_hash": "c0922e821b084a79"
+ },
+ {
+  "name": "link_preview",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/link-preview"
+  ],
+  "input_hash": "1a5c5e2cd5970e6d"
  },
  {
   "name": "me_slack_channels",

@@ -34,19 +34,22 @@ export async function recordRunStart(input: {
   capMb: number | null; requestMb: number | null; startedAt: Date; now?: number;
   /** 실행 종류와 계획(저장 단계가 다시 읽는다 — 게이트웨이가 재기동해도). */
   mode?: string | null; plan?: unknown;
+  /** #4744 이 판의 마감(실행 상한 + 유예) — 지켜보던 게이트웨이가 사라져도 «아직 도나» · «훑을 때가 됐나» 를 이 시각으로 가른다. */
+  deadlineAt?: Date | null;
 }): Promise<void> {
   try {
     await itemsPool.query(
       //  끝 기록이 먼저 행을 만들었으면(시작 기록이 늦은 판) 비어 있는 칸만 채운다 — 끝이 적은 결과·지표는 건드리지 않는다.
-      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb, mode, plan)
-       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9::jsonb)
+      `INSERT INTO collect_run(run_id, member_id, started_at, apps, model, cap_mb, request_mb, mode, plan, deadline_at)
+       VALUES($1,$2,$3,$4::text[],$5,$6,$7,$8,$9::jsonb,$10)
        ON CONFLICT (tenant_id, run_id) DO UPDATE SET
          model = COALESCE(collect_run.model, EXCLUDED.model),
          cap_mb = COALESCE(collect_run.cap_mb, EXCLUDED.cap_mb), request_mb = COALESCE(collect_run.request_mb, EXCLUDED.request_mb),
          mode = COALESCE(collect_run.mode, EXCLUDED.mode), plan = COALESCE(collect_run.plan, EXCLUDED.plan),
+         deadline_at = COALESCE(collect_run.deadline_at, EXCLUDED.deadline_at),
          apps = CASE WHEN cardinality(collect_run.apps) = 0 THEN EXCLUDED.apps ELSE collect_run.apps END`,
       [input.runId, input.member, input.startedAt, appsOf(input.apps), input.model, input.capMb, input.requestMb,
-       input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan)]);
+       input.mode ?? null, input.plan == null ? null : JSON.stringify(input.plan), input.deadlineAt ?? null]);
     await purgeOld(input.now ?? Date.now());
   } catch (e) {
     logger.warn({ runId: input.runId, err: (e as Error)?.message }, "[collect-run] 시작 기록 실패 — 실행은 그대로");
@@ -112,10 +115,13 @@ export interface CollectRunListRow {
   duration_ms: number | null; cost_usd: number | null; turns: number | null;
   tool_calls: number | null; tool_errors: number | null; captures: number | null;
   mode: string | null; attempts: number | null;
+  /** #4744 누가 띄웠나 — schedule = 기본 주기 틱 · null = 사람·리브가 직접. */
+  trigger: string | null;
   /** 저장 단계 결과의 요약(목록·수집 실행만) — 화면은 수만 쓴다. */
   ingest: {
     state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
     unparsed?: number; failed?: number; incomplete?: number; unread?: number; stuck?: number; partial?: boolean; error?: string;
+    proof_pending?: number; proof_passed?: number; proof_failed?: number; proof_held?: number;
   } | null;
 }
 
@@ -149,7 +155,7 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
   const r = await itemsPool.query(
     `SELECT run_id, member_id, started_at, ended_at, apps, model, cap_mb, request_mb, outcome, error, ended_by,
             mem_limit_mb, mem_start_mb, mem_peak_mb, duration_ms, cost_usd, turns, tool_calls, tool_errors, captures,
-            mode, attempts, ingest
+            mode, attempts, ingest, plan->>'trigger' AS trigger
        FROM collect_run
       WHERE started_at >= $1 AND started_at < $2
       ORDER BY started_at DESC
@@ -167,6 +173,7 @@ export async function collectRunStats(input: { since: Date; until: Date; tz: str
     duration_ms: num(x.duration_ms), cost_usd: num(x.cost_usd), turns: num(x.turns),
     tool_calls: num(x.tool_calls), tool_errors: num(x.tool_errors), captures: num(x.captures),
     mode: (x.mode as string | null) ?? null, attempts: num(x.attempts), ingest: ingestBrief(x.ingest),
+    trigger: typeof x.trigger === "string" ? x.trigger : null,
   }));
   const statRows: RunStatRow[] = rows.map((x) => ({
     started_at: x.started_at, outcome: x.outcome, cap_mb: x.cap_mb, mem_limit_mb: x.mem_limit_mb, mem_peak_mb: x.mem_peak_mb,
@@ -187,6 +194,7 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
     state: typeof j.state === "string" ? j.state : undefined,
     stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created), refused: n(j.refused),
     unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), unread: n(j.unread), stuck: n(j.stuck),
+    proof_pending: n(j.proof_pending), proof_passed: n(j.proof_passed), proof_failed: n(j.proof_failed), proof_held: n(j.proof_held),
     partial: j.partial === true ? true : undefined,
     error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
   };
@@ -195,7 +203,7 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
 // ── 저장 단계의 차례(#4213 T11) — 한 실행의 원문은 **한 번만** 자료로 넣는다 ─────────────────────────────
 
 /** 저장 단계가 붙잡고 있다가 죽었으면(게이트웨이 재기동) 이만큼 뒤에 다시 잡을 수 있다. */
-const INGEST_STALE_MIN = 15;
+export const INGEST_STALE_MIN = 15;   // #4744 지속 수집 틱의 훑기·«도는 사람» 판정도 같은 값을 쓴다(collect-schedule)
 
 /**
  * 이 실행의 저장 차례를 잡는다 — 목록·수집 실행이고 아직 안 했거나(붙잡은 채 오래됐으면) 잡고, 계획을 돌려준다. 이미 했으면 null.

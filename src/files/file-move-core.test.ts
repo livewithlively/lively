@@ -4,7 +4,7 @@
 //   실행: npm run build && node --test dist/files/file-move-core.test.js
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { normalizeMovePath, movePrefixes, applyMovePrefix, followMoves, MOVE_FOLLOW_MAX, type MoveRecord } from "./file-move-core.js";
+import { normalizeMovePath, movePrefixes, applyMovePrefix, followMoves, followMovedPath, MOVE_FOLLOW_MAX, type MoveRecord } from "./file-move-core.js";
 
 /** 기록 표(옛 → 새)를 가장 긴 접두로 고르는 가짜 조회 — 실제 저장소(findFileMove)와 같은 규칙. */
 function lookupOf(records: Array<[string, string]>) {
@@ -125,4 +125,42 @@ test("F13 다음 걸음은 앞 기록의 도착 시각 이후 기록만 — 첫 
   const r = await followMoves("x/a.md", { lookup, exists: setOf(["y/b.md", "old/a.md"]), visible: () => true });
   assert.deepEqual(r, { path: "y/b.md", hops: 2 });
   assert.deepEqual(asked, [["x/a.md", null], ["y/a.md", "t1"]], "첫 걸음은 시각 없이 · 다음 걸음은 앞 기록의 도착 시각으로 물어야 한다");
+});
+
+// ── #4822 바깥에서 받은 옛 경로(주소 · 본문 그림 주소) — 글자 꼴 너그러움(followMovedPath) ──
+//  기록의 옛 경로는 디스크 이름 그대로(맥에서 올린 한글은 NFD), AI 가 적은 주소는 대개 NFC 다.
+const askLog = (records: Array<[string, string]>) => {
+  const asked: string[] = [];
+  const base = lookupOf(records);
+  return { asked, lookup: async (p: string): Promise<MoveRecord | null> => { asked.push(p); return base(p); } };
+};
+
+test("F14 적힌 꼴로 기록이 있으면 그 꼴로 한 번에 — 다른 꼴은 묻지 않는다", async () => {
+  const nfc = "회의록".normalize("NFC");
+  const { asked, lookup } = askLog([[`d/${nfc}.md`, `d/새 ${nfc}.md`]]);
+  const r = await followMovedPath(`d/${nfc}.md`, { lookup, exists: setOf([`d/새 ${nfc}.md`]), visible: () => true });
+  assert.deepEqual(r, { path: `d/새 ${nfc}.md`, hops: 1 });
+  assert.deepEqual(asked, [`d/${nfc}.md`], "첫 꼴에서 닿았으면 더 묻지 않는다");
+});
+
+test("F15 적힌 꼴(NFC)엔 기록이 없고 디스크 꼴(NFD)에 있으면 그 꼴로 따라간다", async () => {
+  const nfc = "회의록".normalize("NFC"), nfd = "회의록".normalize("NFD");
+  const { asked, lookup } = askLog([[`d/${nfd}.md`, `d/b.md`]]);
+  const r = await followMovedPath(`d/${nfc}.md`, { lookup, exists: setOf(["d/b.md"]), visible: () => true });
+  assert.deepEqual(r, { path: "d/b.md", hops: 1 });
+  assert.ok(asked.includes(`d/${nfd}.md`), "NFD 꼴로도 물어야 한다");
+});
+
+test("F16 '..' · 빈 경로는 null — 기록을 묻지도 않는다", async () => {
+  for (const bad of ["a/../b.md", "", "/", null]) {
+    const { asked, lookup } = askLog([["a/b.md", "c.md"]]);
+    assert.equal(await followMovedPath(bad, { lookup, exists: setOf(["c.md"]), visible: () => true }), null, String(bad));
+    assert.equal(asked.length, 0, `${String(bad)} — 조회 0번이어야 한다`);
+  }
+});
+
+test("F17 꼴이 하나뿐인 경로(ASCII)는 한 번만 묻는다 · 못 찾으면 null", async () => {
+  const { asked, lookup } = askLog([]);
+  assert.equal(await followMovedPath("docs/a.md", { lookup, exists: setOf([]), visible: () => true }), null);
+  assert.deepEqual(asked, ["docs/a.md"]);
 });

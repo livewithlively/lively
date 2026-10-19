@@ -10,7 +10,7 @@
 //   E7 앱은 보이는데 동의 안 함 — 403 app_consent_required(없는 파일이어도 같은 답)
 //   E8 안 보이는 앱 · 없는 앱 · 꺼진 앱 — 404                               E9 개인 폴더 — 주소 없음
 //   E10 자료를 못 보게 잠긴 자료 — 파일 정보는 그대로 · 자료만 빠진다
-//   E11 앱 폴더 링크에 NUL · 앱 id 꼴이 아닌 첫 마디 — 404(500 아님)      E12 접히는 링크(crmx/../crm/a) — 동의 안내는 접힌 경로의 앱
+//   E11 앱 폴더 링크에 NUL — 동의했든 말든 같은 400(500 · 동의 안내 아님, #4847) · 앱 id 꼴이 아닌 첫 마디 — 404      E12 접히는 링크(crmx/../crm/a) — 동의 안내는 접힌 경로의 앱
 //   E13 관리자가 남의 «나만» 앱 폴더 링크 — 404(앱 찾기에 안 서는 앱은 안내하지 않는다)
 //   E14 못 봄 · 없음 — 같은 몸의 404(code file_not_found)                  E15 프로젝트 폴더 꼴 어긋남(DB project/ · 디스크 legacy-project/) — 그 프로젝트
 //   S1 셸 mv(기록 없음) — 같은 프로젝트 안 새 자리가 후보                    S2 지금 있는 자리 — 후보 없음
@@ -195,9 +195,14 @@ try {
   chk("E8 안 보이는 앱(남의 «나만» 앱) · 없는 앱 · 꺼진 앱(동의가 있어도 · 없어도) — 404(동의 안내도 아니다)",
     [e8a, e8b, e8c, e8d].every((r) => r.status === 404 && r.code === "file_not_found" && !r.app),
     { e8a: e8a.status, e8b: e8b.status, e8c: e8c.status, e8d: e8d.status });
-  const e11 = await Promise.all([info("pgt-b", "apps", "\u0000"), info("pgt-b", "apps", "crm\u0000/x"), info("pgt-b", "apps", "Bad_Id/x")]);
-  chk("E11 앱 폴더 링크에 NUL · 앱 id 꼴이 아닌 첫 마디 — 404(500 아님 · 동의 안내 아님)",
-    e11.every((r) => r.status === 404 && r.code === "file_not_found"), e11.map((r) => ({ status: r.status, code: r.code })));
+  //  NUL 은 이름 꼴(#4847) — 판정보다 먼저라 앱에 동의했든(가) 말든(나) · 앱 id 꼴이든 아니든 같은 400 이다.
+  const e11 = await Promise.all([info("pgt-b", "apps", "\u0000"), info("pgt-b", "apps", "crm\u0000/x"), info("pgt-b", "apps", "crm/\u0000"), info("pgt-a", "apps", "crm/\u0000")]);
+  const e11b = await info("pgt-b", "apps", "Bad_Id/x");
+  const e11s = e11.map((r) => JSON.stringify(r));
+  chk("E11 앱 폴더 링크에 NUL — 같은 400(이름 꼴 · 500 아님 · 동의 안내 아님) · 앱 id 꼴이 아닌 첫 마디 — 404",
+    e11.every((r) => r.status === 400 && r.code === "path_name_invalid" && !r.app) && new Set(e11s).size === 1
+    && e11b.status === 404 && e11b.code === "file_not_found" && !e11b.app,
+    { e11, e11b });
   const e12a = await info("pgt-b", "apps", "crmx/../crm/out/보고.png");
   const e12b = await info("pgt-b", "apps", "crm/../secret-app/a.txt");
   chk("E12 접히는 링크 — 동의 안내는 접힌 경로의 앱(crm) · 접혀 남의 «나만» 앱이면 404",

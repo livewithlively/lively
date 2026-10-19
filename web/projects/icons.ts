@@ -170,7 +170,7 @@ function pjvTbIcon(kind, cls?) {
   n.append(sv('path', { d: 'M6.5 9.5 12 15l5.5-5.5' })); // caret(기본)
   return n;
 }
-// ── 뷰 탭 아이콘(보드·타임라인·테이블·리스트) — 같은 광학 상자·같은 획. ────────
+// ── 뷰 탭 아이콘(리스트·태스크·보드·타임라인·테이블) — 같은 광학 상자·같은 획. ────────
 function pjvTabIcon(kind) {
   const n = sv('svg', { class: 'pjv-vtab-ic', viewBox: '0 0 24 24',
     fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
@@ -182,6 +182,8 @@ function pjvTabIcon(kind) {
     n.append(sv('rect', { x: 3, y: 5, width: 10, height: 4, rx: 2 }),
       sv('rect', { x: 8, y: 10, width: 13, height: 4, rx: 2 }),
       sv('rect', { x: 5, y: 15, width: 9, height: 4, rx: 2 }));
+  } else if (kind === 'tasks') { // 태스크(#4865) — 원 안의 체크(툴바 「완료」 글리프와 같은 형태)
+    n.append(sv('circle', { cx: 12, cy: 12, r: 8.6 }), sv('path', { d: 'M8.3 12.2l2.6 2.6 4.9-5.4' }));
   } else if (kind === 'table') { // 표 — 헤더행 + 첫 열 경계
     n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }),
       sv('path', { d: 'M3 9.4h18M9.6 9.4v10.1' }));

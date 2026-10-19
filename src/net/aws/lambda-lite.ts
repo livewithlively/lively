@@ -30,15 +30,31 @@ export interface FnConfiguration {
   RevisionId?: string;
   VpcConfig?: { VpcId?: string; SubnetIds?: string[] };
 }
-export interface FnGet { Configuration: FnConfiguration; Tags?: Record<string, string>; Concurrency?: { ReservedConcurrentExecutions?: number } }
+/**
+ * 함수 코드를 어디서 받나(#4801). S3ObjectStorageMode — COPY(기본) = Lambda 가 코드를 제 저장소로 복사한다(계정 코드 저장 300GiB 를 쓴다) ·
+ *  REFERENCE = 복사하지 않고 우리 S3 객체를 그 판 번호(S3ObjectVersion)로 바로 읽는다. REFERENCE 는 버킷이 판 번호를 켜고, 버킷 정책이
+ *  lambda.amazonaws.com 에 GetObject · GetObjectVersion 을 주고, 부르는 쪽(박스 역할)도 그 둘을 가져야 한다 — 하나라도 빠지면 만들기 · 코드 고치기가
+ *  곧바로 400 · 403 으로 거절된다(2026-10-16 시험). 모드를 빼고 코드를 고치면 COPY 로 돌아간다(AWS 문서 — 고칠 때마다 REFERENCE 를 다시 준다).
+ */
+export interface FnCode { S3Bucket: string; S3Key: string; S3ObjectVersion?: string; S3ObjectStorageMode?: "COPY" | "REFERENCE" }
+/** GetFunction 의 Code — REFERENCE 면 ResolvedS3Object(읽는 객체와 그 판 번호) · COPY 면 그 칸이 없고 Location(Lambda 쪽 내려받기 주소)이 온다. */
+export interface FnCodeLocation {
+  RepositoryType?: string | null;
+  ResolvedS3Object?: { S3Bucket?: string; S3Key?: string; S3ObjectVersion?: string } | null;
+  Error?: { ErrorCode?: string; Message?: string } | null;
+}
+export interface FnGet { Configuration: FnConfiguration; Code?: FnCodeLocation; Tags?: Record<string, string>; Concurrency?: { ReservedConcurrentExecutions?: number } }
 export interface FnAlias { AliasArn: string; Name: string; FunctionVersion: string; RevisionId?: string; Description?: string }
 
 const host = (c: LambdaCfg): string => `lambda.${c.region}.amazonaws.com`;
 const isNotFound = (e: unknown): boolean => e instanceof AwsError && (e.status === 404 || e.code === "ResourceNotFoundException");
 
-export async function getFunction(c: LambdaCfg, name: string, deps?: AwsDeps): Promise<FnGet | null> {
-  try { return jsonOf<FnGet>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "GET", path: ["2015-03-31", "functions", name] }, deps)); }
-  catch (e) { if (isNotFound(e)) return null; throw e; }
+/** 함수(또는 판 하나 — qualifier) — 설정 · 코드 자리(Code · #4801) · 태그. 판을 주면 그 판의 설정과 그 판이 읽는 코드 자리다. */
+export async function getFunction(c: LambdaCfg, name: string, qualifier?: string, deps?: AwsDeps): Promise<FnGet | null> {
+  try {
+    return jsonOf<FnGet>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "GET", path: ["2015-03-31", "functions", name],
+      ...(qualifier ? { query: { Qualifier: qualifier } } : {}) }, deps));
+  } catch (e) { if (isNotFound(e)) return null; throw e; }
 }
 
 export async function getFunctionConfiguration(c: LambdaCfg, name: string, qualifier?: string, deps?: AwsDeps): Promise<FnConfiguration | null> {
@@ -53,7 +69,7 @@ export interface CreateFunctionInput {
   Runtime: string;
   Role: string;
   Handler: string;
-  Code: { S3Bucket: string; S3Key: string };
+  Code: FnCode;
   Architectures: string[];
   MemorySize: number;
   Timeout: number;
@@ -67,7 +83,7 @@ export async function createFunction(c: LambdaCfg, input: CreateFunctionInput, d
   return jsonOf<FnConfiguration>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "POST", path: ["2015-03-31", "functions"], body: input }, deps));
 }
 
-export async function updateFunctionCode(c: LambdaCfg, name: string, code: { S3Bucket: string; S3Key: string; RevisionId?: string }, deps?: AwsDeps): Promise<FnConfiguration> {
+export async function updateFunctionCode(c: LambdaCfg, name: string, code: FnCode & { RevisionId?: string }, deps?: AwsDeps): Promise<FnConfiguration> {
   return jsonOf<FnConfiguration>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "PUT", path: ["2015-03-31", "functions", name, "code"], body: { ...code, Publish: false } }, deps));
 }
 

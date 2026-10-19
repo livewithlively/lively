@@ -151,7 +151,11 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
     "㉚-d 시험 세션의 첫 지시는 라이브 · 되그리기 · 낙관 첫 말 어디서도 말풍선이 되지 않는다");
   {
     const trail = readFileSync(join(root, "web/session-trail.ts"), "utf8");
-    ok(/export const isHiddenBrief = \(t: string\): boolean => isTrySessionTitle\(t\);/.test(trail) && /INJECTED_RE\.test\(text\) \|\| isHiddenBrief\(text\)\) continue;/.test(trail),
+    //  #4850 — 되감기의 제외 규칙(끊김·이어 가기·주입·시험 세션 첫 지시)을 notHumanSay 한 벌로 모았다(사람 말 줄 · 끼워 넣은 말 두 가지가 같이 쓴다).
+    ok(/export const isHiddenBrief = \(t: string\): boolean => isTrySessionTitle\(t\);/.test(trail)
+      && /export const notHumanSay = \(t: string\): boolean => [^\n]*\|\| isHiddenBrief\(t\);/.test(trail)
+      && /if \(o\.isMeta \|\| !text\.trim\(\) \|\| notHumanSay\(text\)\) continue;/.test(trail)
+      && /if \(!notHumanSay\(q\.text\)\) trailSay\(/.test(trail),
       "㉚-d 되감기(발자취)도 시험 세션의 첫 지시를 사람 말로 세우지 않는다 — 판정은 시험 세션 첫 지시 머리(lib/builder-flow TRY_TITLE_RE)");
   }
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
