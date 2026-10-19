@@ -112,8 +112,8 @@ async function bootZip(z: ZEnt[]): Promise<string> {
     if ((e.mode & 0o170000) === 0o120000) fs.symlinkSync(e.data.toString(), abs); else fs.writeFileSync(abs, e.data, { mode: e.mode & 0o777 });
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
-  //  detached = 제 프로세스 그룹. 시작 스크립트는 sh 라 서버(node)는 그 손자다 — sh 만 죽이면 node 가 PID 1 에 붙어 영영 남는다
-  //  (맥미니 실측 2026-10-19: 시험 한 번에 3개씩 · 나흘에 255개 · 메모리 3.9GB → 스왑). 그래서 그룹째 죽인다.
+  //  detached = 제 프로세스 그룹. 시작 스크립트는 sh 라 서버(node)는 그 손자다 — sh 만 죽이면 node 가 PID 1 에 붙어 영영 남는다.
+  //   그래서 그룹째 죽인다.
   const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore", detached: true });
   let body = "";
   try {
@@ -122,8 +122,8 @@ async function bootZip(z: ZEnt[]): Promise<string> {
       body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
     }
   } finally {
-    try { process.kill(-srvProc.pid!, "SIGKILL"); } catch { /* 이미 끝났다 */ }
-    fs.rmSync(dir, { recursive: true, force: true });
+    if (srvProc.pid) { try { process.kill(-srvProc.pid, "SIGKILL"); } catch { /* 이미 끝났다 */ } }
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
   return body;
 }
