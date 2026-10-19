@@ -2,6 +2,7 @@
 //
 //  접수(submit) → 자리 주기(dispatch: 워크스페이스 동시 상한·사람당 상한) → 컨테이너 띄우기(launch) → 판 첫 말(boot: 프롬프트·인자·콜백 비밀을 받아 감)
 //   → 박동(tick: 진행 꼬리 · 취소 전달) → 결과(result: 상태·답을 적는다) → 걷기(reap: kill-session · 작업 토큰 폐기) → 다음 대기 작업.
+//  첫 말이 안 되면(답을 못 받음 · 판 본체가 곧바로 죽음) 판이 그 사유를 알린다(boot-failed #4829) — 그 사유로 곧바로 끝내고 걷는다.
 //  감시(sweep)가 그 사이 끊긴 것을 끝낸다 — 대기 초과 · 시작 못 함 · 판 말 없음 · 시간 초과 · 걷지 못한 끝난 작업.
 //
 //  ── 수명 규칙(설계 §12 ⑤-3 «남은 설계» — 이 태스크가 정한다) ──
@@ -12,7 +13,7 @@
 //  · 띄우기 실패: 확보 단계(OS 계정 · 작업 폴더 · 컨테이너 · 홈 준비 · 판 — launch.stepFailure)와 판정을 못 한 것은 일시다 — 대기열로 되돌리고
 //    이번 배차를 멈춘다. 다시 받기 전에 LAUNCH_RETRY_GAP_SEC 를 쉬고, 시도 MAX_LAUNCH_ATTEMPTS 번이 끝을 정한다(«N번 시도» 로 실패).
 //    다시 해도 안 될 것(세션 id · 실행 계정 없음 · 매니지드 아님 · 앱 동의 없음)은 그 작업만 실패로 끝내고 다음 작업을 띄운다.
-//    ⚠ 자리를 받은(starting) 뒤 띄우기 전에 게이트웨이가 죽으면 되돌리지 않는다 — 시작 상한(180초)에 «시작하지 않았습니다» 로 끝난다.
+//    ⚠ 자리를 받은(starting) 뒤 띄우기 전에 게이트웨이가 죽으면 되돌리지 않는다 — 시작 상한(180초)에 «시작하지 못했습니다» 로 끝난다.
 //
 //  ── 누가 보낼 수 있나(설계 §12 ④ · 상민 2026-10-16 결정 ③ «본인 세션과 같은 신뢰») ──
 //  작업은 **보낸 사람 본인으로** 돈다 — 그 사람의 Claude 구독과 홈(로그인·git 자격·키트 토큰)을 그대로 쓴다. 앱 동의는 «그 앱 화면에서 내가 보낸
@@ -31,8 +32,8 @@ import type { LivelyUser } from "../context.js";
 import type { AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
-  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
@@ -42,7 +43,7 @@ type Store = typeof import("./store.js");
 export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
-    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs">;
+    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 컨테이너를 띄울 수 있는 배포인가(매니지드). */
   available(): Promise<boolean>;
@@ -287,9 +288,9 @@ export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
  * 판의 콜백 인증 — 대조에 필요한 칸만 읽는다(비밀을 모르는 요청에 프롬프트·결과를 읽지 않는다).
  *  비밀이 맞지 않으면(없는 작업 포함) 상태와 무관하게 401 — 순차 id 로 «있나 · 끝났나» 를 엿볼 수 없게. 맞는데 끝난 작업이면 410.
  */
-async function authed(id: number, presented: string, which: "boot" | "secret", d: AgentJobDeps): Promise<AgentJobAuthRow> {
+async function authed(id: number, presented: string, which: "boot" | "fail" | "secret", d: AgentJobDeps): Promise<AgentJobAuthRow> {
   const row = await d.store.getAgentJobAuth(id);
-  const hash = row ? (which === "boot" ? row.boot_hash : row.secret_hash) : null;
+  const hash = row ? (which === "boot" ? row.boot_hash : which === "fail" ? row.fail_hash : row.secret_hash) : null;
   if (!row || !d.store.secretMatches(hash, presented)) throw new HttpError(401, "작업 비밀이 맞지 않습니다");
   if (isEnded(row.status)) throw new HttpError(410, "끝난 작업입니다");
   return row;
@@ -299,7 +300,8 @@ async function authed(id: number, presented: string, which: "boot" | "secret", d
  * 판의 첫 말 — 부트 비밀을 한 번 쓰고 버리며 판 본체·프롬프트·인자·콜백 비밀을 준다.
  *  부트 비밀은 자리 줄 때 달리고 첫 말·끝내기가 지운다 — 그래서 두 번째 부트는 인증(401)에서 막힌다. 409 는 두 판이 같은 비밀로 겹쳐 물었을 때뿐이다.
  *  작업 AI 의 라이블리 토큰을 못 만들면 그 작업은 돌리지 않는다 — 앱 작업이면 동의 철회·앱 꺼짐이고, 신원 없이 돌릴 작업은 없다.
- *  ⚠ 부트 비밀을 쓴 뒤 응답이 판에 못 닿으면(5xx·끊김) 판의 재시도는 401 로 끝난다 — 판 없는 «도는 중» 작업은 무응답 상한에 끝난다.
+ *  ⚠ 부트 비밀을 쓴 뒤 응답이 판에 못 닿으면(5xx·끊김) 판의 재시도는 401 이다 — 판은 그 401 을 실패 보고(onBootFailed)로 알리고, 작업은
+ *   «응답이 컨테이너에 닿지 않았다» 로 곧바로 끝난다. 알림마저 못 닿으면 판 없는 «도는 중» 작업은 무응답 상한에 끝난다.
  */
 export async function onBoot(id: number, presented: string, d: AgentJobDeps): Promise<RunnerJob> {
   const auth = await authed(id, presented, "boot", d);
@@ -341,6 +343,24 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     prompt: booted.prompt, mcp, env, cwd: booted.cwd,
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
   };
+}
+
+/**
+ * 판의 시작 실패 보고(#4829) — 부트가 게이트웨이의 답을 못 받았거나(401 · 5xx · 끊김) 판 본체가 곧바로 죽었을 때, 그 작업을 그 사유로
+ *  곧바로 끝낸다. 종전엔 사유가 컨테이너 tmux 화면에만 남고 컨테이너와 함께 사라졌고, 작업은 시작 상한(180초) · 무응답 상한(90초)이
+ *  지나서야 일반 문장으로 끝났다.
+ *  비밀 = 부트 비밀과 같은 값(fail_hash — 자리 줄 때 단다 · 부트가 지워도 남는다). 첫 박동 전까지만 받는다 — 박동이 온 판(살아 있다)은 409.
+ *  보고는 작업 AI 와 같은 uid 에서 온다 — 칸마다 거르고(plan.parseBootFailure) · 그 작업 하나만 실패로 끝낼 수 있다(새 권한이 아니다).
+ */
+export async function onBootFailed(id: number, presented: string, body: unknown, d: AgentJobDeps): Promise<{ ok: true }> {
+  const auth = await authed(id, presented, "fail", d);
+  const f = parseBootFailure(body);
+  const ended = await d.store.failBootAgentJob(auth.id, auth.fail_hash!, bootFailureError(f, auth.status));
+  if (!ended) throw new HttpError(409, "판이 이미 돌고 있거나 끝난 작업입니다");   // 박동이 왔다 · 그 사이 감시·결과가 먼저 끝냈다
+  logger.warn({ job: ended.id, session: ended.session_id, stage: f.stage, status: f.status, msg: f.message }, "[agent-job] 판이 시작하지 못했다고 알렸다");
+  d.later(() => reapJob(ended, d), 0);
+  d.later(() => dispatchAgentJobs(d), 0);
+  return { ok: true };
 }
 
 /** 판의 박동 — 진행 꼬리를 싣고 취소 요청을 돌려준다. */
@@ -423,7 +443,13 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
   let ended = 0, reaped = 0, queued = false;
   const jobs = await d.store.openAgentJobs(SWEEP_SCAN_MAX);
   for (const j of jobs) {
-    if (isEnded(j.status)) { if (await reapJob(j, d)) reaped++; continue; }
+    if (isEnded(j.status)) {
+      //  결과를 받은 판이 스스로 빠질 틈(REAP_DELAY)은 감시도 기다린다 — 그 걷기는 결과 보고(onResult)가 그 뒤에 한다. 그 사이 게이트웨이가
+      //   내려가 그 걷기를 잃어도 틈이 지난 다음 감시가 걷는다(#4834 — 결과 0.5초 뒤 감시가 먼저 걷던 것).
+      if (j.ended_at && d.now() - +new Date(j.ended_at) < REAP_DELAY_MS) continue;
+      if (await reapJob(j, d)) reaped++;
+      continue;
+    }
     if (j.status === "queued") queued = true;
     //  도는 동안 더 돌릴 수 없게 됐으면(동의 철회 · 앱 꺼짐 · 실행 계정 비활성) 멈춘다(대기 작업은 배차 직전에 따로 본다).
     //   판정이 «안 된다»(HttpError)일 때만 — DB 가 잠깐 막힌 것으로 멈추지 않는다(그때는 크게 남기고 다음 감시가 다시 본다).
@@ -460,7 +486,7 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
     const row = await d.store.finishAgentJob(j.id, { status: act.status, error: act.error, from: [j.status], silentSec });
     if (!row) continue;
     ended++;
-    logger.info({ job: j.id, status: act.status, why: act.error }, "[agent-job] 감시가 끝냈다");
+    logger.info({ job: j.id, session: j.session_id, status: act.status, why: act.error }, "[agent-job] 감시가 끝냈다");
     if (await reapJob(row, d)) reaped++;
   }
   //  자리 주기는 기다리는 작업이 있을 때만 — 작업이 없는 워크스페이스가 30초마다 잠금 트랜잭션을 돌지 않게. 목록이 꽉 찼으면 모르니 돈다.

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SweepFacts,
+  convIdOf, parseBootFailure, bootFailureError, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SweepFacts,
 } from "./plan.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
 
@@ -56,6 +56,8 @@ t("S4 띄우는 중 — 시작 상한 정확히는 그대로, 넘으면 failed +
   assert.deepEqual(sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 }), NOW, P), { act: "none" });
   const a = sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P);
   assert.ok(a.act === "end" && a.status === "failed" && a.kill === true, JSON.stringify(a));
+  //  판이 실패를 알렸다면 그 사유로 이미 끝났다(#4829) — 여기 오는 것은 판이 게이트웨이에 한 번도 못 닿은 경우다.
+  assert.ok(a.act === "end" && /180초 안에 시작하지 못했습니다 — 컨테이너가 뜨지 않았거나 게이트웨이에 닿지 못했습니다/.test(a.error), a.act === "end" ? a.error : "");
 });
 t("S5 띄우는 중인데 자리 받은 시각이 없으면 접수 시각으로 잰다", () => {
   assert.equal(sweepDecision(base({ status: "starting", claimedAt: null, createdAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P).act, "end");
@@ -200,6 +202,32 @@ t("ID2 앱 폴더·프로젝트 폴더 경로 — 규칙 밖 id 면 경로를 �
   assert.equal(projectFolderCwd(4478), "/work/shared/project/4478");
   for (const bad of ["", "a", "Memo", "../x", "a/b", "-x", "x".repeat(33)]) assert.throws(() => appFolderCwd(bad), bad);
   for (const bad of [0, -1, 1.5, NaN]) assert.throws(() => projectFolderCwd(bad), String(bad));
+});
+
+t("BF1 시작 실패 보고 거르기(#4829) — 판은 작업 AI 와 같은 uid 라 칸마다 거른다: 단계 둘 · 상태 0..999 정수 · 한 줄 300자", () => {
+  assert.deepEqual(parseBootFailure({ stage: "runner", status: 0, message: "본체 깨짐" }), { stage: "runner", status: 0, message: "본체 깨짐" });
+  assert.deepEqual(parseBootFailure({ stage: "boot", status: 503, message: "  바쁨\n\t둘째 줄\r\n" }), { stage: "boot", status: 503, message: "바쁨 둘째 줄" });
+  assert.deepEqual(parseBootFailure({ stage: "rm -rf", status: 999, message: "a\u0000b" }), { stage: "boot", status: 999, message: "ab" }, "모르는 단계는 boot · NUL 은 뺀다");
+  for (const bad of [1000, -1, 1.5, "503", NaN, null]) assert.equal(parseBootFailure({ status: bad }).status, null, String(bad));
+  assert.deepEqual(parseBootFailure(null), { stage: "boot", status: null, message: "" });
+  assert.deepEqual(parseBootFailure("x"), { stage: "boot", status: null, message: "" });
+  assert.equal(parseBootFailure({ message: { x: 1 } }).message, "", "글이 아니면 버린다");
+  assert.equal(parseBootFailure({ message: "가".repeat(500) }).message.length, 300);
+  assert.equal(parseBootFailure({ message: "a".repeat(299) + "\ud83d\ude00" }).message, "a".repeat(299) + "\ufffd", "자르다 남은 외톨이 서로게이트는 고친다(jsonb)");
+});
+
+t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 중 401) · 게이트웨이에 못 닿음 · 그 밖의 상태", () => {
+  const f = (o: Partial<ReturnType<typeof parseBootFailure>>) => ({ stage: "boot" as const, status: null, message: "", ...o });
+  assert.equal(bootFailureError(f({ stage: "runner", status: 0, message: "본체 깨짐" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다: 본체 깨짐");
+  assert.equal(bootFailureError(f({ stage: "runner" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다");
+  //  도는 중인데 부트가 401 — 게이트웨이는 시작을 받았고(부트 비밀을 지웠다) 응답만 판에 못 닿았다. «비밀이 틀렸다» 가 아니다.
+  assert.equal(bootFailureError(f({ status: 401, message: '{"error":"작업 비밀이 맞지 않습니다"}' }), "running"),
+    "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)");
+  assert.equal(bootFailureError(f({ status: 401, message: "no" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(401): no");
+  assert.equal(bootFailureError(f({ status: 0, message: "connect ECONNREFUSED" }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다: connect ECONNREFUSED");
+  assert.equal(bootFailureError(f({ status: null }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+  assert.equal(bootFailureError(f({ status: 503, message: "busy" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(503): busy");
+  assert.ok(bootFailureError(f({ status: 502, message: "x".repeat(300) }), "starting").length <= 600);
 });
 
 console.log(`# ${pass} pass`);

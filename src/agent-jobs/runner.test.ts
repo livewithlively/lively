@@ -46,12 +46,19 @@ process.stdin.on("end", () => {
 });
 `);
 
-interface Seen { boot: number; ticks: Array<Record<string, unknown>>; results: Array<Record<string, unknown>>; auth: string[]; tickAt: number[]; resultAt: number[] }
+interface Seen {
+  boot: number; ticks: Array<Record<string, unknown>>; results: Array<Record<string, unknown>>; auth: string[]; tickAt: number[]; resultAt: number[];
+  /** 시작 실패 보고(#4829 boot-failed) — 비밀 · 본문. */
+  failed: Array<{ auth: string | undefined; body: Record<string, unknown> }>;
+}
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
-async function gateway(o: { mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string }):
-  Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
-  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [] };
+async function gateway(o: {
+  mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
+  /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기. */
+  bootRaw?: string; runnerCode?: string; failedHang?: boolean;
+}): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
+  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [] };
   let resultCalls = 0;
   const srv = http.createServer((req, res) => {
     let body = "";
@@ -63,13 +70,19 @@ async function gateway(o: { mode: "ok" | "hang"; timeoutMs: number; cancelAfterT
       if (req.url === "/api/agent-jobs/1/boot") {
         seen.boot++;
         if (req.headers.authorization !== "Bearer BOOT-SECRET") return json(401, { error: "no" });
+        if (o.bootRaw !== undefined) { res.writeHead(200, { "content-type": "text/html" }); res.end(o.bootRaw); return; }
         return json(200, {
-          id: 1, secret: "CALLBACK-SECRET", code: RUNNER_SOURCE.replace(/port: 8080/, `port: ${port}`),
+          id: 1, secret: "CALLBACK-SECRET", code: o.runnerCode ?? RUNNER_SOURCE.replace(/port: 8080/, `port: ${port}`),
           argv: [process.execPath, FAKE, "--mcp-config", MCP_CONFIG_PLACEHOLDER, "--flag"],
           prompt: "프롬프트 — 한글과 \"따옴표\"\n둘째 줄", mcp: { mcpServers: { lively: { type: "http", url: "x" } } },
           env: { EXTRA: "1", FAKE_MODE: o.mode, FAKE_RECORD: o.record }, cwd: tmp,
           timeoutMs: o.timeoutMs, tickMs: 150, tailMax: 4000, resultMax: 1000, stderrMax: 500,
         });
+      }
+      if (req.url === "/api/agent-jobs/1/boot-failed") {
+        seen.failed.push({ auth: req.headers.authorization, body: JSON.parse(body || "{}") });
+        if (o.failedHang) return;   // 답하지 않는다 — 판은 5초 뒤 스스로 끝나야 한다
+        return json(200, { ok: true });
       }
       if (req.url === "/api/agent-jobs/1/tick") {
         seen.ticks.push(JSON.parse(body || "{}"));
@@ -182,7 +195,7 @@ await t("R5 결과 콜백이 5xx 면 다시 보낸다 — 두 번째를 받는�
   } finally { await g.close(); }
 });
 
-await t("부트 비밀이 틀리면(401) 판은 하네스를 안 띄우고 0 아닌 코드로 끝난다", async () => {
+await t("부트 비밀이 틀리면(401) 판은 하네스를 안 띄우고 실패를 알린 뒤(같은 비밀 · #4829) 0 아닌 코드로 끝난다", async () => {
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "x.json") });
   try {
     const src = BOOT_SOURCE.replace(/port:8080/, `port:${g.port}`);
@@ -193,6 +206,38 @@ await t("부트 비밀이 틀리면(401) 판은 하네스를 안 띄우고 0 아
     assert.equal(code, 3);
     assert.equal(g.seen.ticks.length + g.seen.results.length, 0);
     assert.ok(!fs.existsSync(path.join(tmp, "x.json")), "하네스가 떴다");
+    assert.deepEqual(g.seen.failed, [{ auth: "Bearer WRONG", body: { stage: "boot", status: 401, message: '{"error":"no"}' } }], "한 번 · 부트에 쓴 비밀로");
+  } finally { await g.close(); }
+});
+
+await t("F1 부트 응답이 JSON 이 아니면 — stage boot · 200 으로 알리고 4 로 끝난다(하네스 안 띄움)", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "f1.json"), bootRaw: "<html>proxy</html>" });
+  try {
+    assert.equal(await runBoot(g.port), 4);
+    assert.equal(g.seen.failed.length, 1);
+    assert.deepEqual(g.seen.failed[0]!.body, { stage: "boot", status: 200, message: "응답이 JSON 이 아닙니다" });
+    assert.equal(g.seen.failed[0]!.auth, "Bearer BOOT-SECRET");
+    assert.equal(g.seen.ticks.length + g.seen.results.length, 0);
+  } finally { await g.close(); }
+});
+
+await t("F2 판 본체가 곧바로 던지면 — stage runner 와 그 말로 알리고 5 로 끝난다", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "f2.json"), runnerCode: `throw new Error("본체 깨짐 " + job.id)` });
+  try {
+    assert.equal(await runBoot(g.port), 5);
+    assert.deepEqual(g.seen.failed.map((f) => f.body), [{ stage: "runner", status: 0, message: "본체 깨짐 1" }]);
+    assert.ok(!fs.existsSync(path.join(tmp, "f2.json")), "하네스가 떴다");
+  } finally { await g.close(); }
+});
+
+await t("F3 실패 보고에 게이트웨이가 답하지 않아도 판은 5초 남짓에 끝난다(컨테이너가 남지 않게)", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "f3.json"), bootRaw: "x", failedHang: true });
+  try {
+    const t0 = Date.now();
+    assert.equal(await runBoot(g.port), 4);
+    const took = Date.now() - t0;
+    assert.equal(g.seen.failed.length, 1);
+    assert.ok(took >= 4_500 && took < 9_000, `${took}ms`);
   } finally { await g.close(); }
 });
 

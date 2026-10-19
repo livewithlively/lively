@@ -610,6 +610,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS cancel_reason TEXT`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS bare BOOLEAN NOT NULL DEFAULT false`);
+  //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
+  //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 전까지만 받는다(store.failBootAgentJob) · 끝내면 지운다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).

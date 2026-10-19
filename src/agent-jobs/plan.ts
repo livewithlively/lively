@@ -139,7 +139,8 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
   if (f.status === "starting") {
     const since = f.claimedAt ?? f.createdAt;
     if (nowMs - since > p.start_timeout_sec * 1000) {
-      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.start_timeout_sec}초 안에 시작하지 않았습니다`, kill: true };
+      //  판이 실패를 알렸다면(#4829 boot-failed) 그 사유로 이미 끝났다 — 여기까지 온 것은 판이 게이트웨이에 한 번도 닿지 못한 경우다.
+      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.start_timeout_sec}초 안에 시작하지 못했습니다 — 컨테이너가 뜨지 않았거나 게이트웨이에 닿지 못했습니다`, kill: true };
     }
     return { act: "none" };
   }
@@ -155,6 +156,31 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
     return { act: "none" };
   }
   return { act: "none" };
+}
+
+/** 판의 시작 실패 보고(#4829 — runner.ts BOOT_SOURCE 의 boot-failed 본문): 어느 단계 · 게이트웨이가 준 상태 코드(못 닿았으면 0) · 짧은 말. */
+export interface BootFailure { stage: "boot" | "runner"; status: number | null; message: string }
+
+/** (순수) 시작 실패 보고를 거른다 — 판은 작업 AI 와 같은 uid 라 보고를 믿지 않고 칸마다 거르고 자른다(한 줄 · 300자). */
+export function parseBootFailure(body: unknown): BootFailure {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const status = typeof b.status === "number" && Number.isInteger(b.status) && b.status >= 0 && b.status < 1000 ? b.status : null;
+  const message = typeof b.message === "string" ? wellFormed(noNul(b.message).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300)) : "";
+  return { stage: b.stage === "runner" ? "runner" : "boot", status, message };
+}
+
+/**
+ * (순수) 시작 실패를 사람이 읽을 오류 문장으로(600자까지).
+ *  ★ 도는 중인 작업에 부트가 401 이면 게이트웨이는 시작을 받았는데 그 응답이 판에 못 닿은 것이다 — 부트 비밀은 한 번 쓰면 지워져
+ *   다시 물으면 401 이다(service.onBoot 머리말). «비밀이 틀렸다» 로 말하면 틀린 말이 된다.
+ */
+export function bootFailureError(f: BootFailure, jobStatus: AgentJobStatus): string {
+  const detail = f.message ? `: ${f.message}` : "";
+  const s = f.stage === "runner" ? `작업 컨테이너의 실행기가 시작하자마자 멈췄습니다${detail}`
+    : f.status === 401 && jobStatus === "running" ? "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)"
+      : !f.status ? `작업 컨테이너가 게이트웨이에 닿지 못했습니다${detail}`
+        : `작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(${f.status})${detail}`;
+  return s.slice(0, 600);
 }
 
 /** 판이 보내는 마지막 보고(runner.ts 의 result 본문). */

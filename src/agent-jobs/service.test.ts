@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
-  submitAgentJob, onBoot, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
+  submitAgentJob, onBoot, onBootFailed, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
@@ -68,6 +68,7 @@ const tokHash = (id: number): string => hashJobSecret(`tok-${id}`);
 function world(): World {
   const rows = new Map<number, AgentJobRow>();
   const requeuedAt = new Map<number, number>();   // 되돌린 시각(SQL 의 updated_at 자리)
+  const ticked = new Set<number>();               // 박동이 한 번이라도 온 작업(#4829 — 시작 실패 보고는 그 전까지만)
   let seq = 0, now = 1_000_000_000_000, hex = 0;
   const w = {} as World;
   const ended = (s: string): boolean => ["done", "failed", "timeout", "canceled"].includes(s);
@@ -82,7 +83,7 @@ function world(): World {
         id, status: "queued", requester: j.requester, account_kind: j.accountKind, account_member: j.accountMember, app_id: j.appId,
         project_id: j.projectId, cwd: j.cwd, harness: j.harness, model: j.model, label: j.label, prompt: j.prompt,
         resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, bare: j.bare === true, session_id: null,
-        boot_hash: null, secret_hash: null, mcp_token_hash: null, conversation_id: null, output_tail: "", result: null, exit_code: null,
+        boot_hash: null, fail_hash: null, secret_hash: null, mcp_token_hash: null, conversation_id: null, output_tail: "", result: null, exit_code: null,
         error: null, cancel_requested: false, cancel_reason: null, attempts: 0, created_at: new Date(now), claimed_at: null, started_at: null,
         last_tick_at: null, ended_at: null, reaped: false,
       };
@@ -100,16 +101,16 @@ function world(): World {
       return pick.map((id) => {
         const m = mint(id);
         const r = rows.get(id)!;
-        Object.assign(r, { status: "starting", claimed_at: new Date(now), session_id: m.sessionId, boot_hash: m.boot.hash, error: null, attempts: r.attempts + 1 });
+        Object.assign(r, { status: "starting", claimed_at: new Date(now), session_id: m.sessionId, boot_hash: m.boot.hash, fail_hash: m.boot.hash, error: null, attempts: r.attempts + 1 });
         return { row: { ...r }, bootSecret: m.boot.secret };
       });
     },
     async getAgentJob(id) { const r = rows.get(id); return r ? { ...r } : null; },
-    async getAgentJobAuth(id) { const r = rows.get(id); return r ? { id: r.id, status: r.status, boot_hash: r.boot_hash, secret_hash: r.secret_hash } : null; },
+    async getAgentJobAuth(id) { const r = rows.get(id); return r ? { id: r.id, status: r.status, boot_hash: r.boot_hash, fail_hash: r.fail_hash, secret_hash: r.secret_hash } : null; },
     async requeueAgentJob(id, why, maxAttempts) {
       const r = rows.get(id);
       if (!r || r.status !== "starting" || r.cancel_requested || r.attempts >= maxAttempts) return false;
-      Object.assign(r, { status: "queued", session_id: null, boot_hash: null, claimed_at: null, error: why });
+      Object.assign(r, { status: "queued", session_id: null, boot_hash: null, fail_hash: null, claimed_at: null, error: why });
       requeuedAt.set(id, now);
       return true;
     },
@@ -132,6 +133,7 @@ function world(): World {
     async tickAgentJob(id, o) {
       const r = rows.get(id);
       if (!r || r.status !== "running") return null;
+      ticked.add(id);
       Object.assign(r, { last_tick_at: new Date(now), output_tail: o.tail, conversation_id: o.conversationId ?? r.conversation_id });
       return { cancel: r.cancel_requested };
     },
@@ -147,9 +149,16 @@ function world(): World {
       Object.assign(r, {
         status: o.status, error: o.status === "canceled" && r.cancel_reason ? r.cancel_reason : (o.error ?? null),
         result: o.result ?? r.result, exit_code: o.exitCode ?? r.exit_code,
-        conversation_id: o.conversationId ?? r.conversation_id, output_tail: o.tail ?? r.output_tail, ended_at: new Date(now), boot_hash: null,
+        conversation_id: o.conversationId ?? r.conversation_id, output_tail: o.tail ?? r.output_tail, ended_at: new Date(now), boot_hash: null, fail_hash: null,
         reaped: r.session_id === null && r.mcp_token_hash === null,
       });
+      return { ...r };
+    },
+    //  실 SQL(store.failBootAgentJob)의 조건을 흉내 낸다 — «첫 박동 전» 은 가짜 시계가 같은 값을 줄 수 있어 박동을 따로 센다(조건 자체는 store.pg-test 블록 F).
+    async failBootAgentJob(id, failHash, error) {
+      const r = rows.get(id);
+      if (!r || r.fail_hash !== failHash || !(r.status === "starting" || (r.status === "running" && !ticked.has(id)))) return null;
+      Object.assign(r, { status: "failed", error, ended_at: new Date(now), boot_hash: null, fail_hash: null, reaped: r.session_id === null && r.mcp_token_hash === null });
       return { ...r };
     },
     async requestCancelAgentJob(id, reason = null) {
@@ -164,7 +173,7 @@ function world(): World {
     async listAgentJobs(f) {
       return [...rows.values()].filter((r) => (!f.requester || r.requester === f.requester) && (!f.appId || r.app_id === f.appId) && (!f.status || r.status === f.status))
         .sort((a, b) => b.id - a.id).slice(0, f.limit).map((r) => {
-          const { prompt: _p, output_tail: _o, result, boot_hash: _b, secret_hash: _s, mcp_token_hash: _m, ...rest } = r;
+          const { prompt: _p, output_tail: _o, result, boot_hash: _b, fail_hash: _f, secret_hash: _s, mcp_token_hash: _m, ...rest } = r;
           const text = result && typeof (result as { text?: unknown }).text === "string" ? (result as { text: string }).text : null;
           return { ...rest, result_preview: text ? text.slice(0, 280) : null, has_result: result !== null };
         });
@@ -618,7 +627,7 @@ await t("S4 감시 — 띄우는 중 상한을 넘기면 failed + 걷기 + 같�
   w.setNow(t0 + (w.policy.start_timeout_sec + 1) * 1000);
   const r = await sweepAgentJobs(w.deps);
   assert.equal(w.rows.get(id)!.status, "failed");
-  assert.match(w.rows.get(id)!.error ?? "", /시작하지 않았/);
+  assert.match(w.rows.get(id)!.error ?? "", /180초 안에 시작하지 못했습니다/);
   assert.deepEqual(w.killed, [sid]);
   assert.equal(r.launched, 1);
   assert.equal(w.rows.get(next.id as number)!.status, "starting");
@@ -690,6 +699,7 @@ await t("R1 걷기 실패(확답 아님) — «걷음» 으로 적지 않는다 
   assert.equal(w.rows.get(id)!.reaped, false, "못 걷은 것을 걷었다고 적지 않는다");
   assert.ok(w.revoked.includes(tokHash(id)), "kill 이 막혀도 작업 토큰은 끊는다");
   w.killError = false;
+  w.setNow(+w.rows.get(id)!.ended_at! + REAP_DELAY_MS);   // 미룬 걷기는 결과 뒤 REAP_DELAY 에 돈다 — 그 뒤의 감시
   const r = await sweepAgentJobs(w.deps);
   assert.equal(r.reaped, 1);
   assert.equal(w.rows.get(id)!.reaped, true);
@@ -994,6 +1004,73 @@ await t("Z1 보존 정리(#4828) — 정책 보존 일수(기본 90일)를 저�
   w.policy = { ...w.policy, keep_days: 0 };
   assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 });
   assert.deepEqual(w.prunedWith, [90], "0(무기한)이면 저장소를 부르지 않는다");
+});
+
+await t("F1 시작 실패 보고(#4829) — 띄우는 중인 작업은 그 사유로 곧바로 실패 · 컨테이너를 걷고 다음 작업을 띄운다", async () => {
+  const w = world();
+  const { id, boot, sid } = await startedJob(w);
+  assert.deepEqual(await onBootFailed(id, boot, { stage: "boot", status: 503, message: "게이트웨이 바쁨\n둘째 줄" }, w.deps), { ok: true });
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.equal(row.error, "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(503): 게이트웨이 바쁨 둘째 줄");
+  assert.equal(row.fail_hash, null, "한 번 쓰면 닫힌다");
+  await w.drain(0);
+  assert.deepEqual(w.killed, [sid], "컨테이너를 곧바로 걷는다");
+  await assert.rejects(onBootFailed(id, boot, { stage: "boot", status: 503 }, w.deps), httpErr(401), "끝난 작업엔 다시 못 쓴다(비밀이 지워졌다)");
+});
+
+await t("F2 시작을 받고 응답을 못 받은 판(도는 중 · 박동 전)의 401 보고 — «응답이 컨테이너에 닿지 않았다» 로 끝내고 작업 토큰도 걷는다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  await onBoot(id, boot, w.deps);                       // 게이트웨이는 시작을 받았다(부트 비밀은 지워졌다)
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(401), "응답을 못 받은 판이 다시 물으면 401");
+  await onBootFailed(id, boot, { stage: "boot", status: 401, message: "작업 비밀이 맞지 않습니다" }, w.deps);
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /시작 응답을 받지 못했습니다\(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다\)/);
+  await w.drain(0);
+  assert.ok(w.revoked.length >= 1, "도는 중에 만든 작업 AI 토큰을 걷는다");
+});
+
+await t("F3 박동이 온 판(살아 있다)에는 시작 실패 보고가 안 먹는다(409) · 틀린 비밀 401 · 없는 작업 401", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  await onTick(id, job.secret, { tail: "도는 중" }, w.deps);
+  await assert.rejects(onBootFailed(id, boot, { stage: "runner", message: "x" }, w.deps), httpErr(409));
+  assert.equal(w.rows.get(id)!.status, "running", "도는 작업은 그대로");
+  await assert.rejects(onBootFailed(id, "wrong", {}, w.deps), httpErr(401));
+  await assert.rejects(onBootFailed(424242, boot, {}, w.deps), httpErr(401));
+  await assert.rejects(onBootFailed(id, job.secret, {}, w.deps), httpErr(401), "콜백 비밀로는 열리지 않는다");
+});
+
+await t("F4 일시 실패로 대기열에 되돌린 작업 — 앞 컨테이너의 비밀로는 실패를 알릴 수 없다(다음 자리가 새 비밀을 단다)", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.failLaunch = "transient";
+  const out = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  const id = out.id as number;
+  const first = w.launched.find((x) => x.id === id)!.boot;
+  assert.equal(w.rows.get(id)!.status, "queued", "일시 실패는 되돌린다");
+  await assert.rejects(onBootFailed(id, first, { stage: "boot", status: 0, message: "ECONNREFUSED" }, w.deps), httpErr(401));
+  assert.equal(w.rows.get(id)!.status, "queued", "되돌린 작업은 그대로 기다린다");
+});
+
+await t("F5 감시는 결과를 받은 지 REAP_DELAY 가 안 된 작업을 걷지 않는다(판이 스스로 빠질 틈) · 지나면 걷는다(#4834 곁가지)", async () => {
+  const w = world();
+  const { id, boot, sid } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false } }, w.deps);
+  w.later.length = 0;                                   // 결과 보고가 미룬 걷기를 잃었다고 치자(게이트웨이가 내려갔다)
+  const t0 = +w.rows.get(id)!.ended_at!;
+  w.setNow(t0 + 500);
+  await sweepAgentJobs(w.deps);
+  assert.deepEqual(w.killed, [], "0.5초 뒤의 감시는 걷지 않는다");
+  w.setNow(t0 + REAP_DELAY_MS + 1);
+  await sweepAgentJobs(w.deps);
+  assert.deepEqual(w.killed, [sid], "틈이 지난 다음 감시가 걷는다");
+  assert.equal(w.rows.get(id)!.reaped, true);
 });
 
 console.log(`# ${pass} pass`);

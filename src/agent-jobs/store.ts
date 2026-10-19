@@ -26,6 +26,8 @@ export interface AgentJobRow {
   bare: boolean;
   session_id: string | null;
   boot_hash: string | null;
+  /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동 전까지만 연다. */
+  fail_hash: string | null;
   secret_hash: string | null;
   mcp_token_hash: string | null;
   conversation_id: string | null;
@@ -47,7 +49,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, session_id, boot_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -153,7 +155,7 @@ export async function claimAgentJobs(
       //  «대기 중이고 취소 요청이 없을 때만» — 고른 뒤 다른 쪽(취소 · 감시 — 잠금 밖)이 끝냈거나 취소를 걸었으면 넘기지 않는다.
       //   지난 띄우기 실패 사유(error)는 비운다(도는 작업에 «다시 기다립니다» 가 남지 않게) · 시도 횟수를 센다.
       const rows = await q(c,
-        `UPDATE org_agent_job SET status='starting', claimed_at=now(), session_id=$2, boot_hash=$3, error=NULL, attempts=attempts+1, updated_at=now()
+        `UPDATE org_agent_job SET status='starting', claimed_at=now(), session_id=$2, boot_hash=$3, fail_hash=$3, error=NULL, attempts=attempts+1, updated_at=now()
           WHERE id=$1 AND status='queued' AND NOT cancel_requested RETURNING ${COLS}`, [id, m.sessionId, m.boot.hash]);
       const row = norm(rows[0]);
       if (row) out.push({ row, bootSecret: m.boot.secret });
@@ -171,11 +173,14 @@ export async function getAgentJob(id: number): Promise<AgentJobRow | null> {
 }
 
 /** 판 콜백의 대조에 필요한 것만 — 비밀이 맞는지 모르는 요청에 프롬프트·결과(행당 수백 KB)를 읽지 않는다. */
-export interface AgentJobAuthRow { id: number; status: AgentJobStatus; boot_hash: string | null; secret_hash: string | null }
+export interface AgentJobAuthRow { id: number; status: AgentJobStatus; boot_hash: string | null; fail_hash: string | null; secret_hash: string | null }
 export async function getAgentJobAuth(id: number): Promise<AgentJobAuthRow | null> {
   if (!Number.isSafeInteger(id) || id < 1) return null;
-  const r = (await q(itemsPool, `SELECT id, status, boot_hash, secret_hash FROM org_agent_job WHERE id=$1`, [id]))[0];
-  return r ? { id: Number(r.id), status: r.status as AgentJobStatus, boot_hash: (r.boot_hash as string | null) ?? null, secret_hash: (r.secret_hash as string | null) ?? null } : null;
+  const r = (await q(itemsPool, `SELECT id, status, boot_hash, fail_hash, secret_hash FROM org_agent_job WHERE id=$1`, [id]))[0];
+  return r ? {
+    id: Number(r.id), status: r.status as AgentJobStatus, boot_hash: (r.boot_hash as string | null) ?? null,
+    fail_hash: (r.fail_hash as string | null) ?? null, secret_hash: (r.secret_hash as string | null) ?? null,
+  } : null;
 }
 
 /**
@@ -185,7 +190,7 @@ export async function getAgentJobAuth(id: number): Promise<AgentJobAuthRow | nul
  */
 export async function requeueAgentJob(id: number, why: string, maxAttempts: number): Promise<boolean> {
   const rows = await q(itemsPool,
-    `UPDATE org_agent_job SET status='queued', session_id=NULL, boot_hash=NULL, claimed_at=NULL, error=$2, updated_at=now()
+    `UPDATE org_agent_job SET status='queued', session_id=NULL, boot_hash=NULL, fail_hash=NULL, claimed_at=NULL, error=$2, updated_at=now()
       WHERE id=$1 AND status='starting' AND NOT cancel_requested AND attempts < $3 RETURNING id`, [id, why, maxAttempts]);
   return rows.length > 0;
 }
@@ -251,12 +256,26 @@ export async function finishAgentJob(id: number, o: {
             error = CASE WHEN $2 = 'canceled' AND cancel_reason IS NOT NULL THEN cancel_reason ELSE $3 END,
             result=COALESCE($4::jsonb, result), exit_code=COALESCE($5, exit_code),
             conversation_id=COALESCE($6, conversation_id), output_tail=COALESCE($7, output_tail),
-            ended_at=now(), boot_hash=NULL, updated_at=now(),
+            ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
             reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
       WHERE id=$1 AND status = ANY($8::text[])
         AND ($9::int IS NULL OR COALESCE(last_tick_at, started_at, claimed_at, created_at) < now() - make_interval(secs => $9::int))
       RETURNING ${COLS}`,
     [id, o.status, o.error ?? null, o.result ? JSON.stringify(o.result) : null, o.exitCode ?? null, o.conversationId ?? null, o.tail ?? null, from, silent]);
+  return norm(rows[0]);
+}
+
+/**
+ * 판의 시작 실패 보고(#4829) — 그 작업을 실패로 끝낸다. 실패 보고 비밀(fail_hash)이 맞고 · 아직 첫 박동이 없을 때만:
+ *  띄우는 중(starting)이거나, 도는 중이라도 박동이 한 번도 안 왔을 때(부트가 시작을 받고 응답을 못 받은 판 — last_tick_at 은 부트 때
+ *  started_at 과 같은 값으로 찍히고 첫 박동이 뒤로 민다). 박동이 온 판(살아 있다)은 null — 실패 보고로 도는 작업을 끝낼 수 없다.
+ */
+export async function failBootAgentJob(id: number, failHash: string, error: string): Promise<AgentJobRow | null> {
+  const rows = await q(itemsPool,
+    `UPDATE org_agent_job SET status='failed', error=$3, ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
+            reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
+      WHERE id=$1 AND fail_hash=$2 AND (status='starting' OR (status='running' AND last_tick_at <= started_at))
+      RETURNING ${COLS}`, [id, failHash, error]);
   return norm(rows[0]);
 }
 
@@ -310,7 +329,7 @@ export async function markAgentJobReaped(id: number): Promise<void> {
 
 export interface AgentJobListFilter { requester?: string | null; appId?: string | null; status?: string | null; limit: number }
 /** 목록 한 줄 — 프롬프트·결과 전문·진행 꼬리·비밀 해시는 싣지 않는다(목록 100건이면 수십 MB 가 된다). 답은 앞머리만. */
-export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "result" | "boot_hash" | "secret_hash" | "mcp_token_hash"> & {
+export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "result" | "boot_hash" | "fail_hash" | "secret_hash" | "mcp_token_hash"> & {
   result_preview: string | null;
   has_result: boolean;
 };

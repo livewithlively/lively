@@ -290,7 +290,7 @@ try {
     const id = await running("l1");
     await st.finishAgentJob(id, { status: "done", result: { text: "가".repeat(1000) }, tail: "꼬리", from: ["running"] });
     const a = await st.getAgentJobAuth(id);
-    chk("I1 콜백 대조는 네 칸만 읽는다", a && Object.keys(a).sort().join(",") === "boot_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
+    chk("I1 콜백 대조는 다섯 칸만 읽는다(비밀 셋 — 부트 · 실패 보고 #4829 · 콜백)", a && Object.keys(a).sort().join(",") === "boot_hash,fail_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
     chk("I1 없는 작업은 null", (await st.getAgentJobAuth(987654321)) === null);
     const [l] = await st.listAgentJobs({ requester: `${REQ}l1`, limit: 5 });
     const leaked = ["prompt", "result", "output_tail", "boot_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
@@ -316,6 +316,59 @@ try {
     await st.requestCancelAgentJob(c, "사유");
     const ec = await st.finishAgentJob(c, { status: "done", error: null, from: ["running"] });
     chk("K3 취소가 걸렸어도 답을 내고 끝났으면(done) 사유를 오류로 적지 않는다", ec?.status === "done" && ec?.error === null, JSON.stringify(ec && { s: ec.status, e: ec.error }));
+  }
+
+  // ── BF. 시작 실패 보고(#4829) — 실패 보고 비밀(fail_hash = 부트 비밀) · 첫 박동 전까지만 ──────────────────
+  //  «박동 전» 은 SQL 한 식(last_tick_at <= started_at — 부트가 둘을 한 문장의 now() 로 찍는다)이라 가짜 저장소로는 못 잰다.
+  {
+    await cleanup();
+    const id = await add("bf1");
+    const [c] = await claimAll();
+    chk("BF1 자리를 주면 실패 보고 비밀을 부트 비밀과 같은 값으로 단다", c.row.fail_hash === c.row.boot_hash && /^[0-9a-f]{64}$/.test(c.row.fail_hash ?? ""));
+    chk("BF2 해시가 다르면 아무것도 안 바꾼다", (await st.failBootAgentJob(id, "0".repeat(64), "x")) === null && (await row(id)).status === "starting");
+    const e1 = await st.failBootAgentJob(id, c.row.fail_hash, "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+    const r1 = await row(id);
+    chk("BF3 띄우는 중 — 그 사유로 failed · 끝난 때 · 두 비밀을 지운다 · 컨테이너가 있으니 아직 안 걷음",
+      e1?.status === "failed" && r1.error === "작업 컨테이너가 게이트웨이에 닿지 못했습니다" && r1.ended_at !== null
+        && r1.fail_hash === null && r1.boot_hash === null && r1.reaped === false,
+      JSON.stringify({ s: r1.status, f: r1.fail_hash, b: r1.boot_hash, reaped: r1.reaped }));
+    chk("BF3 한 번만 — 두 번째 보고는 null", (await st.failBootAgentJob(id, c.row.fail_hash, "y")) === null && (await row(id)).error === "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+
+    //  부트는 받았는데(부트 비밀은 지워졌다) 응답이 판에 못 닿은 판 — 도는 중이지만 박동 전.
+    const id2 = await add("bf2");
+    const c2 = (await claimAll()).find((x) => x.row.id === id2);
+    await st.bootAgentJob(id2, c2.row.boot_hash, "a".repeat(64));
+    const b2 = await row(id2);
+    chk("BF4 부트는 부트 비밀만 지우고 실패 보고 비밀은 남긴다 · 시작과 마지막 박동이 같은 시각",
+      b2.status === "running" && b2.boot_hash === null && b2.fail_hash === c2.row.boot_hash && +b2.last_tick_at === +b2.started_at,
+      JSON.stringify({ s: b2.status, f: b2.fail_hash, t: b2.last_tick_at, st: b2.started_at }));
+    const e2 = await st.failBootAgentJob(id2, c2.row.boot_hash, "응답 못 받음");
+    chk("BF5 도는 중이라도 박동 전이면 실패로 끝낸다", e2?.status === "failed" && (await row(id2)).fail_hash === null);
+
+    const id3 = await add("bf3");
+    const c3 = (await claimAll()).find((x) => x.row.id === id3);
+    await st.bootAgentJob(id3, c3.row.boot_hash, "b".repeat(64));
+    await sleep(5);
+    await st.tickAgentJob(id3, { tail: "도는 중", conversationId: null });
+    chk("BF6 박동이 온 판(살아 있다)은 실패 보고로 끝낼 수 없다",
+      (await st.failBootAgentJob(id3, c3.row.boot_hash, "x")) === null && (await row(id3)).status === "running");
+    await st.finishAgentJob(id3, { status: "done", error: null, from: ["running"] });
+    chk("BF7 끝내면 실패 보고 비밀도 지운다", (await row(id3)).fail_hash === null);
+
+    const id4 = await add("bf4");
+    const c4 = (await claimAll()).find((x) => x.row.id === id4);
+    await st.requeueAgentJob(id4, "띄우기 실패 — 다시 기다립니다: x", 5);
+    chk("BF8 대기열로 되돌리면 앞 컨테이너의 실패 보고 비밀을 지운다(그 비밀로는 못 끝낸다)",
+      (await row(id4)).fail_hash === null && (await st.failBootAgentJob(id4, c4.row.boot_hash, "x")) === null && (await row(id4)).status === "queued");
+
+    const id5 = await add("bf5");
+    const c5 = (await claimAll()).find((x) => x.row.id === id5);
+    const race = await Promise.all([
+      st.failBootAgentJob(id5, c5.row.boot_hash, "판 보고"),
+      st.finishAgentJob(id5, { status: "failed", error: "감시", from: ["starting"] }),
+      st.failBootAgentJob(id5, c5.row.boot_hash, "판 보고 2"),
+    ]);
+    chk("BF9 실패 보고 둘과 감시가 겹쳐도 한 번만 끝난다", race.filter(Boolean).length === 1, JSON.stringify(race.map((x) => x?.error ?? null)));
   }
 
   // ── P. 보존 정리(#4828) — 끝났고 걷은 작업 가운데 끝난 지 보존 일수가 지난 행만 지운다 ──────────────────
