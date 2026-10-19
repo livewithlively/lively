@@ -12,6 +12,7 @@
 //     채널 읽기: `Channel: #이름 (C…)` · `=== Message from 이름 <메일> (U…) at 2026-08-20 11:45:38 KST ===` · `Message TS: 1787193938.792269`
 //     · 본문 · 꼬리 `Thread: N replies (latest: …)` / `Reactions: …` / `Files: …`. 다음 쪽은 pagination_info 의 «use cursor: `…`».
 //     스레드 읽기: `=== THREAD PARENT MESSAGE ===` · `--- Reply i of N ---` · `From: 이름 <메일> (U…)` · `Time: …` · `Message TS: …`.
+//     검색(#4744, 2026-10-19): 결과는 {results, pagination_info} — 꼴은 parseSlackSearch 머리말.
 //   · 지메일 — 결과는 JSON 문자열. search_threads {resultCountEstimate, threads:[{id, messageCount, messages:[…], viewUrl}], nextPageToken} ·
 //     **빈 검색은 {}** (칸이 하나도 없다) · get_thread {id, messageCount, messages, viewUrl} · get_message {id, …}.
 //     메시지: id · threadId · subject · sender · date · internalDate · plaintextBody · htmlBody · snippet · labelIds · viewUrl(authuser=메일함).
@@ -25,8 +26,8 @@ import type { RawItem } from "../../items/store.js";
 
 // ── 캡처 한 건 ───────────────────────────────────────────────────────────────
 
-/** cap/<n>.json 의 모양(훅이 받은 그대로 + 큰 결과면 saved_text). */
-export interface CaptureFile { tool_name?: unknown; tool_input?: unknown; tool_response?: unknown; saved_text?: unknown }
+/** cap/<n>.json 의 모양(훅이 받은 그대로 + 큰 결과면 saved_text · 실패한 호출이면 failed + error). */
+export interface CaptureFile { tool_name?: unknown; tool_input?: unknown; tool_response?: unknown; saved_text?: unknown; failed?: unknown; error?: unknown }
 
 export interface Capture {
   /** claude.ai 커넥터 이름(«claude.ai » 뒤 — Slack · Notion · Gmail · Google Drive). 도구 이름에서 읽는다. */
@@ -38,6 +39,11 @@ export interface Capture {
   text: string;
   /** 글이 JSON 이면 그 값. 슬랙·노션처럼 바깥이 [{text}] 이고 안쪽이 JSON 문자열이면 안쪽까지 푼 값. */
   json: unknown;
+  /**
+   * #4744 실패한 호출(PostToolUseFailure 훅이 남긴 것)이면 그 오류 글(예 «execution_failed: thread_not_found») — 결과 글은 비어 있다.
+   *  저장 단계는 실패한 호출을 결과와 섞지 않는다(run-ingest 가 갈라 «없는 스레드» 판정에만 넘긴다).
+   */
+  error?: string;
 }
 
 const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -60,8 +66,10 @@ export function readCapture(c: CaptureFile): Capture | null {
   const m = /^mcp__claude_ai_([A-Za-z0-9_]+?)__(.+)$/.exec(name);
   if (!m) return null;
   const connector = m[1].replace(/_/g, " ");
+  const input = isRec(c.tool_input) ? c.tool_input : {};
+  if (c.failed === true) return { connector, tool: m[2], input, text: "", json: null, error: String(c.error ?? "").slice(0, 500) };
   const text = str(c.saved_text) ?? responseText(c.tool_response);
-  return { connector, tool: m[2], input: isRec(c.tool_input) ? c.tool_input : {}, text, json: tryJson(text) };
+  return { connector, tool: m[2], input, text, json: tryJson(text) };
 }
 
 /** 슬랙·노션은 안쪽 JSON 의 글 칸(result · messages · text)을 본다. */
@@ -238,6 +246,62 @@ export function parseSlackThread(cap: Capture): {
     //  부모 머리가 있고 쪽 안내가 분명할 때만 증거가 된다(«스레드를 끝까지 읽었다»).
     wellFormed: !!parent && (end || !!cursor),
   };
+}
+
+/** 검색 결과의 글 하나 — 채널 · 그 글의 ts · 그 글이 속한 스레드의 부모 ts(Permalink 의 thread_ts — 부모 글이면 자기 ts) · 답글 수. */
+export interface SlackSearchHit { channel: string | null; ts: string; thread_ts: string | null; reply_count: number | null }
+
+/**
+ * slack_search_public · slack_search_public_and_private 결과 → 맞은 글들 · 다음 쪽 (#4744 옛 스레드의 새 답글).
+ *  맥 실측(2026-10-19, response_format detailed): `# Search Results for: …` · `### Result i of N` 다음에
+ *   `Channel: #이름 (ID: C…)`(DM 은 `Channel: DM (ID: D…)` + `Participants:`) · `From:` · `Time:` · `Message_ts:` · (`Reply count:`) ·
+ *   `Permalink: [link](…/archives/C…/p…?thread_ts=<부모 ts>&cid=C…)` · `Text:` 뒤가 본문. 맞은 것이 없으면 `No results found.`
+ *   쪽 안내(pagination_info)는 «For the next page of results use cursor `…`» · 끝은 «End of results - No more pages available.».
+ *   include_context 의 앞뒤 글(`Context before:`)은 본문 **뒤**에 들여 써서 붙는다.
+ *  · 글마다 머리 칸은 `Text:` **앞**에서만 읽는다 — 본문·앞뒤 글 속 같은 모양의 줄이 머리를 정하지 못하게.
+ *  · 쪽이 밝힌 결과 수(`## Messages (N results)` — 그 쪽의 글 수다. 맥 실측: 꽉 찬 쪽 = 쪽 크기 · 마지막 쪽 = 나머지 · 없으면
+ *    `No results found.` = 0)와 맞춘다: 머리 칸을 다 읽은 글이 N 이상이면 머리 없는 조각(본문 속 `### Result N of M` 줄에서 갈라진 것)은
+ *    본문 조각으로 버리고, 모자랄 때만 모자란 만큼 센다. 결과 수 줄을 못 읽으면(꼴이 바뀜) 머리 없는 조각을 그대로 센다.
+ *    머리 칸이 다 맞는 조각은 결과로 센다 — 그 스레드 읽기가 «없는 스레드»(thread_not_found)면 읽을 것이 없는 스레드로 센다(collect-plan harvestUnits).
+ *  · 검색 본문은 꾸밈(*굵게* · `코드` · 앱 서명)이 빠진 글이라 스레드 읽기 본문과 다르다 — **자료로 넣지 않는다**(어느 스레드를 읽을지만 정한다).
+ *  · wellFormed — 머리글이 있고 쪽 안내가 «다음 쪽 cursor» 나 «끝» 둘 중 하나다. end — «끝» 이 분명하고 cursor 가 없다.
+ */
+export function parseSlackSearch(cap: Capture): {
+  hits: SlackSearchHit[]; more: boolean; end: boolean; cursor: string | null; wellFormed: boolean;
+  /**
+   * 머리 칸(채널 · Message_ts · Permalink 의 thread_ts)을 다 읽은 글이 쪽이 밝힌 결과 수보다 모자란 만큼 — 있으면 형식이 바뀐 것이다(그 글을
+   *  조용히 빠뜨리지 않게 호출부가 증거에서 뺀다). 결과 수를 못 읽으면 머리 칸이 없는 조각 수.
+   */
+  unparsed: number;
+} {
+  const text = innerText(cap, ["results"]);
+  const head = /^#\s*Search Results\b/.test((text.split("\n").find((l) => l.trim()) ?? "").trim());
+  //  쪽이 밝힌 결과 수 — 첫 «## Messages (N results)» 줄(본문보다 앞이다) · 맞은 것이 없다는 줄이면 0 · 못 읽으면 null.
+  const declaredM = /^## Messages \((\d+) results?\)[ \t]*$/m.exec(text);
+  const firstResult = text.search(/^### Result \d+ of \d+[ \t]*$/m);
+  const declared = declaredM && (firstResult < 0 || declaredM.index < firstResult) ? Number(declaredM[1])
+    : firstResult < 0 && /^No results found\.?[ \t]*$/m.test(text) ? 0 : null;
+  const hits: SlackSearchHit[] = [];
+  let headless = 0;
+  for (const chunk of text.split(/^### Result \d+ of \d+[ \t]*$/m).slice(1)) {
+    const lines = chunk.split("\n");
+    const stop = lines.findIndex((l) => /^Text:/.test(l.trim()));
+    const hdr = (stop >= 0 ? lines.slice(0, stop) : lines).map((l) => l.trim());
+    const get = (re: RegExp): RegExpExecArray | null => { for (const l of hdr) { const m = re.exec(l); if (m) return m; } return null; };
+    const ts = get(/^Message_ts:\s*(\d{9,11}\.\d{1,6})$/)?.[1] ?? null;
+    const channel = get(/^Channel:.*\(ID:\s*([CDG][A-Z0-9]{6,})\)$/)?.[1] ?? null;
+    const link = get(/^Permalink:\s*\[[^\]]*\]\((\S+)\)$/)?.[1] ?? "";
+    //  is:thread 로 찾은 글은 부모든 답글이든 Permalink 에 thread_ts 가 있다(부모는 자기 ts) — 없으면 꼴이 바뀐 것이다.
+    const thread = /[?&]thread_ts=(\d{9,11}\.\d{1,6})(?:[&#]|$)/.exec(link.replace(/\\\//g, "/"))?.[1] ?? null;
+    if (!ts || !channel || !thread) { headless++; continue; }
+    const rc = get(/^Reply count:\s*(\d+)$/)?.[1];
+    hits.push({ channel, ts, thread_ts: thread, reply_count: rc != null ? Number(rc) : null });
+  }
+  const unparsed = declared != null ? Math.max(0, declared - hits.length) : headless;
+  const pag = isRec(cap.json) && typeof cap.json.pagination_info === "string" ? cap.json.pagination_info : "";
+  const cursor = /use cursor:?\s*`([^`]+)`/i.exec(pag)?.[1] ?? null;
+  const end = !cursor && /end of results|no more pages/i.test(pag);
+  return { hits, more: !!cursor, end, cursor, wellFormed: head && (end || !!cursor), unparsed };
 }
 
 /** 슬랙 ts → ISO(초.마이크로초 — 밀리초까지). */
