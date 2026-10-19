@@ -5,6 +5,8 @@
 //  (팀 설정 — 기본 담당자, 3칸 폭에서만 담당자 이름까지) · 묶기·필터·열은 1칸 폭에선 위젯 머리의 「⚙ 보기」 팝아웃에서 · 세션 줄은
 //  상태 점 · 이름 · 태스크 칩(이름 바로 뒤) · 입장(이름 뒤, 다른 열을 가리지 않는다).
 
+import { isSessionHostNode } from '../lib/node-coord.js';
+
 export type TaskColKey = 'assignee' | 'due' | 'priority';
 export const TASK_COLS: TaskColKey[] = ['assignee', 'due', 'priority'];
 export const TASK_COL_LABEL: Record<TaskColKey, string> = { assignee: '담당자', due: '마감일', priority: '우선순위' };
@@ -143,7 +145,7 @@ export function sessionLastActivity(s: SessionLike): number {
 export function nodeLabel(node: { id?: string | null; name?: string | null } | null | undefined): string {
   if (!node || (!node.id && !node.name)) return '중앙';
   const id = String(node.id || '');
-  if (/^sesshost-/.test(id)) return '서버';
+  if (isSessionHostNode(id)) return '서버';   // 세션 호스트 판정 한 벌(web/lib/node-coord.ts — 대화창의 «그 컴퓨터» 갈래와 같은 자)
   const nm = String(node.name || id).replace(/\.local$/i, '');
   return nm || '중앙';
 }

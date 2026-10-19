@@ -51,8 +51,11 @@
 //       · 보낸 말은 한 번만 그려진다(겹친 읽기의 낡은 답은 버린다 — 고치기 전엔 두 번 그려졌다)
 //   W27 새로 연 세션(홈 입력창) — 기록 파일이 아직 없다(404) · 말이 들어가면서 파일이 생긴다 → 그려도 그때까지 대화창 · 생긴 뒤 터미널
 //   W28 첫 말이 빗금 명령(/compact) — 기록엔 다른 모양으로 적혀 대기 말풍선과 안 맞는다 → 기다리지 않고 그린 때 넘긴다
-//   W29 매니지드 행(노드 칸 = 세션 호스트)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 지켜볼 곳이 없어(src 없음) 에코를 못 본다
-//       → 기다리지 않고 그린 때 넘긴다(8초를 헛되이 쓰지 않는다 — 격리 검토가 찾음)
+//   W29 멤버 PC 행(노드 칸 = 그 컴퓨터)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 지켜볼 곳이 없어(src 없음 — 중앙 기록 좌표가 없다)
+//       에코를 못 본다 → 기다리지 않고 그린 때 넘긴다(8초를 헛되이 쓰지 않는다 — 격리 검토가 찾음)
+//   W29b 매니지드 행(노드 칸 = 세션 호스트)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 세션 호스트는 «그 컴퓨터» 가 아니라(#4904)
+//       박스 기록을 지켜본다 → W27 처럼 그 말이 기록에 나타날 때까지 대화창 · 나타난 뒤 터미널
+//       (#4904 전엔 세션 호스트 좌표를 멤버 PC 로 읽어 src 가 없었고, 그래서 이 장면이 W29 였다)
 //   W30 되살린 화면 · 그린 뒤 서버가 «다 쳤다»(outbox.typed — 세션 상태 통로) → 기록 에코를 기다리지 않고 그 자리에서 터미널
 //       (에코는 Claude Code 가 제출 훅을 다 돈 뒤 적어 몇 초 늦다 — 매니지드 실측. 이 장면엔 에코가 아예 없다)
 //   W31 «다 쳤다» 가 다른 말(다른 탭에서 보낸 것)의 것 → 넘기지 않는다
@@ -553,13 +556,25 @@ async function PAGE_MAIN() {
       R.w27.after = v.snap(); R.w27.termAt = v.termAt();
       v.done();
     }
-    // W29 — 매니지드 행 · 대화 id 모름 · 기록 파일 없음(지켜볼 곳이 없다)
+    // W29 — 멤버 PC 행 · 대화 id 모름 · 기록 파일 없음(지켜볼 곳이 없다)
     {
       NOTYET["box-w29"] = Date.now() + 600000;
-      const v = mount("box-w29", "ink=600", { firstPrompt: "첫 지시 W29" }, true, null, false, { node: "sesshost-test" });
+      const v = mount("box-w29", "ink=600", { firstPrompt: "첫 지시 W29" }, true, null, false, { node: "pc-test" });
       await sleep(2000);
       const ink = v.fx()["test-ink"];
       R.w29 = { after: v.snap(), n: v.count("첫 지시 W29"), inkAt: ink ? ink.at - v.t0 : null, termAt: v.termAt() };
+      v.done();
+    }
+    // W29b — 매니지드 행(세션 호스트) · 대화 id 모름 · 기록 파일이 말이 들어가면서 생긴다(박스 기록을 지켜본다 — #4904)
+    {
+      NOTYET["box-w29b"] = Date.now() + 2600;
+      echoAt("box-w29b", 2600, "첫 지시 W29b");
+      const v = mount("box-w29b", "ink=600", { firstPrompt: "첫 지시 W29b" }, true, null, false, { node: "sesshost-test" });
+      await sleep(1800);
+      const ink = v.fx()["test-ink"];
+      R.w29b = { during: v.snap(), n: v.count("첫 지시 W29b"), echoAt: ECHO["box-w29b"].at - v.t0, ink: !!ink };
+      await sleep(2400);
+      R.w29b.after = v.snap(); R.w29b.termAt = v.termAt();
       v.done();
     }
     // W30 — 되살린 화면 · 그린 뒤 서버가 «다 쳤다»(에코 없음)
@@ -772,7 +787,12 @@ check((w32.before || {}).warm && !(w32.before || {}).term && (w32.after || {}).t
   "W32 «다 쳤다» 가 그리기 전에 왔으면 — 그리기 전엔 대화창 · 그린 때 넘긴다", { before: w32.before, inkAt: w32.inkAt, termAt: w32.termAt });
 const w29 = R.w29 || {};
 check((w29.after || {}).term && w29.inkAt != null && w29.termAt >= w29.inkAt && w29.termAt - w29.inkAt <= 700,
-  "W29 지켜볼 기록이 없는 화면(매니지드 행 · 대화 id 모름 · 파일 없음)은 기다리지 않고 그린 때 넘긴다", w29);
+  "W29 지켜볼 기록이 없는 화면(멤버 PC 행 · 대화 id 모름 · 파일 없음)은 기다리지 않고 그린 때 넘긴다", w29);
+const w29b = R.w29b || {};
+check(w29b.ink && (w29b.during || {}).warm && !(w29b.during || {}).term && w29b.n === 1,
+  "W29b 매니지드 행(세션 호스트 · 대화 id 모름 · 파일 없음) — 박스 기록을 지켜봐 그 말이 들어갈 때까지 대화창(#4904)", w29b);
+check((w29b.after || {}).term && w29b.termAt >= w29b.echoAt && w29b.termAt <= w29b.echoAt + 1000,
+  "W29b 기록 파일이 생기며 그 말이 나타난 뒤 터미널로(W27 과 같다)", { echoAt: w29b.echoAt, termAt: w29b.termAt, after: w29b.after });
 {
   //  G — 겹친 읽기 가드의 배선(소스 글). 런타임으로 못 잡는 갈래를 한 글자도 안 빠뜨리게 박아 둔다.
   const scSrc = readFileSync(path.join(ROOT, "web/session-chat.ts"), "utf8");

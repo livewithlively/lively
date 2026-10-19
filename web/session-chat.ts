@@ -22,6 +22,7 @@ import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replac
 import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
+import { remoteNodeOf } from './lib/node-coord.js';   // #4904 — 노드 좌표가 «정말 다른 컴퓨터» 인가(세션 호스트는 아니다)
 import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
 import { ccModelName, ctxFeed, ctxNew, ctxTokens, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
 import { parseTermPrefs, serializeTermPrefs, TERM_CURSORS, TERM_FONTS, TERM_PREFS_KEY, TERM_THEMES, type TermPrefs } from './lib/term-prefs.js';   // #4707 웹 터미널 설정 = 대화창 설정
@@ -266,7 +267,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   restorable 이 없어(라이브 행이니까) 이 술어가 거짓이 되고, 그러면 멈춘 세션인데 입력창이 막힌 화면이 된다.
   const canRevive = (): boolean => dead() && isBox() && (!!target.raw?.restorable || goneCanRestore) && !!target.owned && !target.raw?.trashedAt;
   const caps = (): { read: boolean; answer: boolean } => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true };   // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
-  const canKeys = (): boolean => canType() && !target.node && caps().answer;
+  //  #4904 — «그 컴퓨터(멤버 PC)» 갈래(키 · 전달 큐 · 문구 · 지켜볼 곳 · 도는 컴퓨터 표시)는 전부 이 값으로 가른다.
+  //   살아 있는 매니지드 세션의 행엔 세션 호스트 좌표(`sesshost-…`)가 실리는데, 그건 이 게이트웨이의 세션이다(web/lib/node-coord.ts 머리말).
+  //   종전엔 그 좌표만 보고 멈춤 · 승인 단추를 막고 전달 큐를 안 물었다 — 서버는 같은 좌표를 이미 접어 받아 준다(#2600 T2 d6).
+  //   ⚠ 좌표 **값** 자체가 필요한 자리(중앙 기록 좌표 logSrc · 서버의 409 `node` 응답)는 그대로 target.node 를 싣는다 — 접는 것은 서버가 한다.
+  const remoteNode = (): string | null => remoteNodeOf(target.node);
+  const canKeys = (): boolean => canType() && !remoteNode() && caps().answer;
 
   // 헤더 — 이 세션의 **한 줄 신원**(지금 하는 일 · 상태 · 프로젝트 · 하네스)과 **이 세션에 하는 모든 일**이 여기 모인다.
   //  #1744 로 터미널 페이지의 상단바(파일 탐색기 · 질문 · 화면 복구 · 환경 설정 · 사용법 · 프로젝트 페이지)를 여기로
@@ -586,7 +592,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // ⚠ '그 컴퓨터로 전달'은 **정말 다른 컴퓨터일 때만** 맞는 말이다. 게이트웨이 박스가 노드로도 등록돼
     //  있으면 그 박스의 로컬 세션에도 노드 좌표가 붙는다(같은 함정을 네 번째로 밟는 자리) — app-server
     //  세션은 여기서 도는데 "그 컴퓨터로 전달"이라고 적혀 있으면 사람이 다른 기계를 상상하게 된다.
-    placeholder: (target.node && !chatFirst()) ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
+    placeholder: (remoteNode() && !chatFirst()) ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
     toolLabel,
     thinking: 'fold',
     sendWhileBusy: true,
@@ -774,7 +780,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(nowVal('model')) : '' },
       { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(nowVal('effort')) : '' },
       // ⚠ 노드는 **윗줄과 무관하게 늘 싣는다** — 어느 컴퓨터에서 도는지는 칩도 선택기도 말하지 않는다.
-      { v: target.node ? String(target.node) : '', cls: 'sc-run-node' },
+      //  #4904 — 세션 호스트는 «도는 컴퓨터» 가 아니다(중앙과 같다) — 인스턴스 id 를 머리줄에 내지 않는다.
+      { v: remoteNode() ?? '', cls: 'sc-run-node' },
     ].filter((x) => !!x.v);
     runEl.replaceChildren(...vals.flatMap((x, i) => {
       const cell = el('span', x.cls ? { class: x.cls, text: x.v, title: x.v } : { text: x.v });
@@ -1554,9 +1561,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '무엇으로 도나' }),
           el('span', { class: 'm', text: 'AI · 모델 · 추론강도 — 고르면 그 자리에서 바뀝니다' })),
         runHost),
-      target.node ? el('div', { class: 'v2set-row' },
+      remoteNode() ? el('div', { class: 'v2set-row' },   // #4904 — 세션 호스트는 «돌아가는 컴퓨터» 가 아니다(머리줄 칩과 같은 판단)
         el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
-          el('span', { class: 'm', text: String(target.node) })),
+          el('span', { class: 'm', text: String(remoteNode()) })),
         el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null,
       note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
     ] });
@@ -2073,7 +2080,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   /** 서버 큐와 화면을 맞춘다 — 몰랐던 행(다른 탭·홈 첫 지시)은 턴으로 올리고, 아는 행은 상태 줄만 갱신. */
   async function syncOutbox(): Promise<void> {
-    if (destroyed || !isBox() || target.node) return;
+    //  #4904 — 멤버 PC 세션만 건너뛴다(그 세션의 말은 큐 없이 그 컴퓨터로 곧장 간다). 세션 호스트 좌표가 실린 매니지드 행은
+    //   이 게이트웨이의 큐를 쓴다 — 종전엔 그 좌표 때문에 여기서 돌아가, 전달 실패 · 미확인 · 다른 탭에서 보낸 대기 말이 안 그려졌다.
+    if (destroyed || !isBox() || remoteNode()) return;
     let items: any[] = [];
     try { items = ((await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/outbox`)) as any).items || []; }
     catch { return; }
@@ -2161,12 +2170,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  ⚠ 노드 세션에 박스 경로를 걸면 409 node 가 영원히 반복된다(실측 #1744: '진행을 따라가지 못하고…' 가 그 증상).
       //  ⚠ 지켜볼 곳은 **방금 실제로 읽힌 곳**(src)을 먼저 쓴다 — node 가 붙었다고 중앙 기록으로 못박으면
       //   로컬 파일로 읽히는 세션(위 주석의 배포)이 갱신을 못 받는다.
-      const watch = (): Source | null => src ?? (target.node ? logSrc() : { kind: 'box', id: target.id });
+      const watch = (): Source | null => src ?? (remoteNode() ? logSrc() : { kind: 'box', id: target.id });
       // 홈 입력창이 방금 연 세션 — 첫 지시는 서버(또는 노드)가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
       if (notYet && firstPrompt && canType()) {
         const pd = addPending(firstPrompt); firstPrompt = null;   // 박스면 서버 큐가 obId 를 붙인다(syncOutbox); 노드면 큐 없이 로컬 주입
         warmPrompt = pd;                                           // #4794 — 이 말이 들어가야 터미널로 넘긴다(termWarm 머리말)
-        if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';
+        if (remoteNode()) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';
         view.scrollToBottom();
         view.setNote('세션을 여는 중이에요 — AI 가 뜨면 첫 지시가 들어갑니다.');
         paintState();
@@ -2177,7 +2186,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // ⚠ 압축(Compacting) 탓을 하지 않는다 — 압축은 새 uuid 파일로 이어지고 폴링이 그 전환을 따라간다(아래 poll()). 여기 닿는
       //  '기록 없음'의 실제 원인은 대부분 ① 방금 연 세션(하네스 부팅 전) ② 로그인·신뢰 대화상자에 멈춤 — 둘 다 **터미널에만 보인다**.
       //  그래서 문구가 터미널을 가리키고, 버튼도 이 경우에 항상 둔다(막다른 안내 금지 — 확인할 길을 같이 준다).
-      const nodeMsg = target.node && canType()
+      const nodeMsg = remoteNode() && canType()
         ? (tries.length ? '아직 중앙 기록이 없어요 — 그 컴퓨터의 세션은 턴이 끝날 때마다 기록이 올라와 여기 보여요. 지금 진행은 터미널로 보세요.'
           : '이 세션의 대화 id 를 아직 몰라요 — 첫 턴이 끝나면 중앙 기록으로 여기 보여요. 지금은 터미널로 보세요.')
         : null;
@@ -2217,7 +2226,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4794 — 말을 보내 되살린 화면(firstPrompt + 이미 있는 기록): 그 말은 아직 기록에 없다(되살아난 하네스가 뜨면 들어간다).
     //   옮겨 오기 전 화면이 그리던 대기 말풍선을 여기서도 그린다 — 안 그리면 하네스가 그릴 때까지 대화창에 머무는 동안(termWarm)
     //   방금 보낸 말이 사라져 보인다(매니지드 실측 2026-10-16: 되살린 뒤 6초 동안 그 말이 대화창에 없었다).
-    //   아래 syncOutbox 는 노드 칸이 있는 행을 건너뛰는데, 매니지드 행은 세션 호스트가 노드 칸에 실려 온다 — 그래서 이 자리를 못 메운다.
+    //   아래 syncOutbox 는 큐 응답이 와야 그린다(그 사이가 빈다) · 멤버 PC 세션은 큐를 아예 안 묻는다 · 터미널로 넘길 말(warmPrompt)도 여기서 정한다.
+    //   (그때는 syncOutbox 가 매니지드 행도 건너뛰었다 — 세션 호스트 좌표 때문. #4904 가 고쳤고, 큐 행은 같은 글의 이 말풍선에 잇는다.)
     //   기록의 마지막 사람 말이 이미 그것이면(그새 들어갔다) 그리지 않는다. 나중에 기록에 나타나면 이 턴을 그대로 쓴다(pendingSent 규약).
     if (firstPrompt && canType()) {
       const lastAsk = [...recs].reverse().find((r) => r.t.text);
@@ -2564,9 +2574,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
       //  등록돼 있으면 노드 좌표가 붙어(같은 함정) 방금 보낸 말이 "그 컴퓨터로 전달했어요"로 덮였다(실측).
-      if (target.node && !chatFirst()) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
+      if (remoteNode() && !chatFirst()) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
       // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
-      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
+      if (!src) src = remoteNode() ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
       void syncOutbox();
       onSent?.();
@@ -3017,7 +3027,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
       const ls = logSrc();
       if (!destroyed && ls) {
-        if (!src && !!t.node && canType()) { void open(); }
+        //  #4904 — 멤버 PC 세션만이다. 세션 호스트 좌표의 매니지드 행은 박스 기록을 지켜보고(watch), 그래도 src 가 비었으면
+        //   그건 못 읽는 하네스(409)라 다시 열어도 같은 답이다 — 종전엔 그 좌표 때문에 목록 갱신마다 다시 열었다.
+        if (!src && !!remoteNode() && canType()) { void open(); }
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
