@@ -38,7 +38,7 @@ import { PJV_STD_COLS, PJV_STD_COL_VAR, PJV_STD_COL_W, pjvApplyColOrder, pjvAppl
 import { pjvAddColumnButton, pjvColumnHead } from './fields.js';
 import { pjvApplyToolbarFilters, pjvAsgFilter, pjvAssigneePopover, pjvBoardSearch, pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvFilterCount, pjvFilterPopover, pjvMeModeOn, pjvMeModePopover, pjvSavedViewMenu, pjvSetFilterUniverse, pjvViewTabsRow } from './filters.js';
 import { pjvSelReset } from './selection.js';
-import { PJV_GROUPBY_FIELDS, pjvColSortCmp, pjvContainerCmp, pjvGetAlsoList, pjvGetGroupBy, pjvManualCmp, pjvProjAddRow, pjvProjRow, pjvProjStatusDot, pjvRenderStatusGroups, pjvSetAlsoList, pjvSetGroupBy } from './rows.js';
+import { PJV_GROUPBY_FIELDS, pjvColSortCmp, pjvContainerCmp, pjvGetAlsoList, pjvGetGroupBy, pjvManualCmp, pjvProjAddRow, pjvProjRow, pjvRenderStatusGroups, pjvSetAlsoList, pjvSetGroupBy } from './rows.js';
 import { pjvTableDefaultCmp, pjvTimelineView } from './timeline.js';
 import { openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace } from './list-forms.js';
 import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 술어(서버 mine=1 과 같은 것)
@@ -633,7 +633,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
     if (pjvBoardView.sessions) {
       // 리스트(#4865) — 이 스코프 프로젝트들의 세션. 세션 목록 화면과 같은 열 · 프로젝트 표의 결.
-      main.append(pjvSessionListView({ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch.q, statusDot: (p) => pjvProjStatusDot(p, reload) }));
+      main.append(pjvSessionListView({ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch.q }));
     } else if (pjvBoardView.overview && selFolder) {
       // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
       const isSpace = pjvFolderIsSpace(selFolder);
@@ -1183,7 +1183,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     mainNo.append(body);
     shellHost.replaceChildren(mainNo);
     const base = boardProjects(); // 아카이브 안(#1067)은 전체 보기에서 제외 — 아카이브 스코프로 들어가야 보인다
-    if (pjvBoardView.sessions) { body.replaceChildren(pjvSessionListView({ projects: base, scopeKey: '__all__', query: pjvBoardSearch.q, statusDot: (p) => pjvProjStatusDot(p, reload) })); return; } // 리스트(#4865) — 세션
+    if (pjvBoardView.sessions) { body.replaceChildren(pjvSessionListView({ projects: base, scopeKey: '__all__', query: pjvBoardSearch.q })); return; } // 리스트(#4865) — 세션
     if (byFolder) { renderByFolder(byStatus); return; }
     // 툴바 좁히기(#1067 필터·담당자·검색)는 '내 할당만' 과 같은 자리에서 한 번에 — 모든 하위 뷰가 같은 목록을 본다.
     const shown = pjvApplyToolbarFilters(pjvBoardMineOnly.on ? base.filter((p) => mineIds.has(p.id)) : base);

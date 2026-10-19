@@ -104,5 +104,14 @@ ok(/pjvBoardView\.sessions = !v \? true : !!v\.sessions;/.test(cut(stateSrc, "fu
 ok(/pjvExitAreaMode\(\);[^\n]*pjvBoardView\.sessions = false;/.test(cut(code(read("web/projects/filters.ts")), "function pjvBoardSettingsPopover", "mkMode('status'")), "S7c 리스트로 나누기는 기본 뷰 되돌림 뒤 세션 뷰를 끈다");
 ok(/kind === 'tasks'/.test(cut(code(read("web/projects/icons.ts")), "function pjvTabIcon", "PJV_FIELD_ICON_PATHS")), "S8 태스크 탭 아이콘이 있다");
 
+// ── S: 2판(2026-10-19 원준 «세션목록 앱 참고해서 제대로») — 표는 [세션 목록] 앱과 같은 함수 하나 ──
+const slSrc = code(read("web/projects/session-list.ts"));
+const binsSrc = code(read("web/v2/bins.ts"));
+ok(/from '\.\.\/v2\/sess-table\.js'/.test(slSrc) && /sessTable\(\{/.test(slSrc), "S9 리스트 뷰는 v2/sess-table.ts 의 sessTable 로 그린다");
+ok(/from '\.\/sess-table\.js'/.test(binsSrc) && /sessTable\(\{/.test(binsSrc), "S10 [세션 목록] 앱도 같은 sessTable 로 그린다");
+ok(!/pjvProjStatusDot|statusDot/.test(slSrc) && !/pjv-tgroup-head/.test(slSrc), "S11 리스트 뷰 묶음 머리에 프로젝트 상태 동그라미가 없다");
+ok(/sessFilterPicks\(/.test(slSrc) && /sessFilterPicks\(/.test(binsSrc), "S12 거르개 줄(기간 · 사람 · 상태)도 한 벌");
+ok(/return 'day';/.test(cut(slSrc, "function loadGroupBy", "\n}")), "S13 리스트 뷰 기본 묶기 = 세션 목록과 같은 «시간»");
+
 console.log(`project-list-view-4865: ${pass} pass, ${fails.length} fail`);
 if (fails.length) { for (const f of fails) console.error("  ✗ " + f); process.exit(1); }
