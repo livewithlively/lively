@@ -34,7 +34,10 @@ const appToolCall: Capability = {
   title: "앱 UI 도구 호출(브리지)",
   description: "샌드박스 앱 UI 가 요청한 도구를 그 앱 principal 로 실행한다(호스트 중개). 호출자(멤버)가 이 앱에 grant 가 있어야 하고, 도구는 그 grant allowlist 안이어야 하며, appUser 스코프(멤버∩grant)로 판정된다. REST 전용.",
   scope: null,
-  input: { app_id: z.string(), name: z.string(), arguments: z.record(z.unknown()).optional() },
+  input: {
+    app_id: z.string(), name: z.string(), arguments: z.record(z.unknown()).optional(),
+    session_id: z.string().max(128).optional().describe("띄운 쪽(라이블리 화면)이 싣는 붙은 세션 id — 앱 arguments 의 것이 아니다. 구독 AI 실행의 «초대받은 사람» 판정(#4488)"),
+  },
   expose: {
     mcp: false, // 브라우저 UI 브리지 전용 — 하네스 세션은 앱 토큰으로 직접 MCP 를 쓴다(이 우회 불필요).
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/tool-call"],
