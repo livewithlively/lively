@@ -293,6 +293,7 @@
   .spot.box { border: 2px dashed var(--amber); background: rgba(217,154,91,.10); border-radius: 4px; pointer-events: none; }
   .spot.box b { position: absolute; left: -2px; top: -2px; min-width: 20px; height: 20px; padding: 0 5px; border: 0; border-radius: 4px 0 7px 0; display: grid; place-items: center; font: 800 12px/1 var(--mono); color: #3A2400; background: var(--amber); pointer-events: auto; cursor: pointer; }
   .spot.box.obj { border-style: solid; }
+  .spot.box.obj.more b { opacity: .75; }
   .spot.sent.pin, .spot.sent.box b { background: var(--muted-2); color: #fff; }
   .spot.sent.box { border-color: var(--muted-2); background: rgba(138,153,181,.08); }
   .spot.applied.pin, .spot.applied.box b { background: var(--mint); color: #fff; }
@@ -394,20 +395,14 @@
   .no { padding-top: 7px; text-align: right; font: 700 12px var(--mono); color: var(--muted-2); user-select: none; }
   .row.ed .no { color: var(--amber-text); }
   .col { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .ed { font-size: var(--row-fs); line-height: 1.5; font-weight: 500; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 30px 5px 8px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; min-height: 32px; }
+  .ed { font-size: var(--row-fs); line-height: 1.5; font-weight: 500; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 8px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; min-height: 32px; }
   .row:hover .ed { border-color: var(--line-2); background: var(--bg); }
   .ed:focus { border-color: var(--blue); background: var(--bg); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
   .row.ed .ed { background: var(--yellow-bg); border-color: var(--yellow); border-width: 0 0 2px; border-radius: 6px 6px 0 0; }
   .row.del .ed::before { content: "(삭제) 이 글을 뺍니다"; color: var(--coral-text); font-weight: 700; }
   .row.del .ed { background: var(--coral-bg); }
-  .ed[contenteditable=false] { cursor: default; padding-right: 8px; }
-  /* 줄 오른쪽의 「의견」 — 지나가거나 들어가면 보인다. 누르면 그 글의 의견 칸이 선다(Tab 과 같다) */
-  .cmBtn { position: absolute; right: 12px; top: 5px; height: 24px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 700 12px var(--font); display: inline-flex; align-items: center; gap: 4px; opacity: 0; transition: opacity .1s; }
-  .cmBtn .i { width: 13px; height: 13px; }
-  .row:hover .cmBtn, .row:focus-within .cmBtn { opacity: 1; }
-  .cmBtn:hover { background: var(--amber-bg); color: var(--amber-text); }
-  .row.cm .cmBtn, .row.show .cmBtn, .row.sent .cmBtn { display: none; }
-  body.rows:not(.compact) .cmBtn { right: 4px; }
+  .ed[contenteditable=false] { cursor: default; }
+  /* 줄의 의견 칸 — 줄에 들어가면(누르거나 Tab) 글 바로 아래에 늘 선다(2.0.1, 원준 2026-10-20: 글 끝에 떠 있던 「의견」 단추가 긴 글과 겹쳤다 — 1.x 처럼 누르면 아래에 칸). 비워 두고 떠나면 접힌다. */
   .orig { display: none; font-size: 12px; line-height: 1.45; font-weight: 600; color: var(--muted); padding: 0 8px; align-items: baseline; gap: 8px; }
   .row.ed .orig { display: flex; }
   .orig s { text-decoration-color: var(--muted-2); flex: 1 1 auto; min-width: 0; }
@@ -740,7 +735,7 @@
   <section id="left">
     <div class="stageBar" id="stageBar">
       <div class="seg tools" id="tools" role="group" aria-label="장표에서 누를 때" hidden><button type="button" data-t="sel" class="on" title="고르기 · 글을 누르면 그 줄로, 상자 · 도식 · 그림을 누르면 그 개체에 의견" aria-label="고르기"><svg class="i"><use href="#i-cursor"/></svg></button><button type="button" data-t="pin" title="핀 · 누른 자리에 의견" aria-label="핀"><svg class="i"><use href="#i-spot"/></svg></button><button type="button" data-t="box" title="영역 · 끌어서 그 영역에 의견" aria-label="영역"><svg class="i"><use href="#i-area"/></svg></button></div>
-      <span class="hint" id="stageHint">글을 누르면 오른쪽 그 줄로 · 상자나 그림을 누르면 거기에 의견</span>
+      <span class="hint" id="stageHint">글을 누르면 오른쪽 그 줄로 · 상자나 그림을 누르면 거기에 의견 · ⌘+누름으로 여러 개체에 한 의견</span>
       <span class="sp"></span>
     </div>
     <div class="leftIn" id="leftIn">
@@ -817,8 +812,8 @@
     <div class="mb help">
       <div><b>글 고치기</b><span>오른쪽 글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. <kbd>Enter</kbd> 는 줄 나눔, <kbd>Tab</kbd> 은 그 글의 의견 칸.</span></div>
       <div><b>강조</b><span>글을 끌어 고르면 「색 강조 · 굵게 · 풀기」 가 뜹니다.</span></div>
-      <div><b>의견</b><span>글 줄 오른쪽 「의견」 또는 <kbd>Tab</kbd>. 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
-      <div><b>그림 · 도식</b><span>장표에서 상자 · 도식 · 그림을 누르면 그 개체에 의견이 달립니다. 장표 위 도구의 핀 · 영역으로 한 자리 · 넓은 곳에도.</span></div>
+      <div><b>의견</b><span>글을 누르면 그 아래 의견 칸이 섭니다(<kbd>Tab</kbd> 으로 바로 그 칸). 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
+      <div><b>그림 · 도식</b><span>장표에서 상자 · 도식 · 그림을 누르면 그 개체에 의견이 달립니다. <kbd>⌘</kbd>(윈도우 <kbd>Ctrl</kbd>)를 누른 채 다른 개체를 누르면 여러 개체에 한 의견. 장표 위 도구의 핀 · 영역으로 한 자리 · 넓은 곳에도.</span></div>
       <div><b>장 옮기기</b><span>왼쪽 장 번호를 끌어 순서를 바꿉니다. 머리의 휴지통은 그 장을 통째로 지웁니다(보내기 전에는 되살릴 수 있습니다).</span></div>
       <div><b>장 넘기기</b><span><kbd>←</kbd> <kbd>→</kbd> 또는 장 번호 · 장표 밀기. 고정(핀)하면 장표를 밀어도 오른쪽은 그 장에 머뭅니다.</span></div>
       <div><b>보내기</b><span>아래 「AI에게 보내기」 — 안 보낸 고침과 의견만 묶어 세션에 보냅니다. 되돌리기는 <kbd>⌘Z</kbd>.</span></div>
@@ -2674,7 +2669,10 @@
         var g = spotGeo(c), cls = (c.status === 'applied' ? ' applied' : (c.status !== 'draft' ? ' sent' : '')) + (st.spotOn === c ? ' on' : '') + (i === st.cur ? '' : ' far');
         var e, hit;
         if (g.k === 'pin') { e = el('button', 'spot pin' + cls, String(n + 1)); e.type = 'button'; e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; hit = e; }
-        else { e = el('div', 'spot box' + (g.k === 'obj' ? ' obj' : '') + cls); e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; e.style.width = (g.w * p.w * sc) + 'px'; e.style.height = (g.h * p.h * sc) + 'px'; hit = el('b', '', String(n + 1)); e.appendChild(hit); }
+        else {
+          e = el('div', 'spot box' + (g.k === 'obj' ? ' obj' : '') + cls); e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; e.style.width = (g.w * p.w * sc) + 'px'; e.style.height = (g.h * p.h * sc) + 'px'; hit = el('b', '', String(n + 1)); e.appendChild(hit);
+          (g.rects || []).slice(1).forEach(function (r) { var e2 = el('div', 'spot box obj more' + cls); e2.style.left = (r.x * p.w * sc) + 'px'; e2.style.top = ((p.t + r.y * p.h) * sc) + 'px'; e2.style.width = (r.w * p.w * sc) + 'px'; e2.style.height = (r.h * p.h * sc) + 'px'; e2.appendChild(el('b', '', String(n + 1))); canvas.appendChild(e2); });   // 같은 번호 — 한 의견의 다른 개체
+        }
         hit.title = (c.note ? String(c.note).slice(0, 80) : '자리에 단 의견') + (c.orig ? ' · ' + c.orig : '');
         hit.addEventListener('click', function (ev) { ev.stopPropagation(); focusSpot(i, c).catch(fail); });
         canvas.appendChild(e);
@@ -2684,11 +2682,32 @@
 
   /* ───────────── 자리에 단 의견(핀 · 영역) ───────────── */
   var tmpSeq = 0;
+  /** unit_key → 자리. 개체(obj)는 `;` 로 이어 여러 테두리를 가질 수 있다(⌘+누름으로 고른 여러 개체 — 한 의견) — 첫 테두리가 대표, 전부는 .rects. */
   function spotGeo(c) {
-    var m = /^(pin|box|obj):([\d.,]+)$/.exec(String(c.unit_key || '')); if (!m) return null;
-    var a = m[2].split(',').map(Number); if (a.some(function (v) { return !(v >= 0 && v <= 1); })) return null;
-    if (m[1] === 'pin') return a.length === 2 ? { k: 'pin', x: a[0], y: a[1], w: 0, h: 0 } : null;
-    return a.length === 4 && a[2] > 0 && a[3] > 0 ? { k: m[1], x: a[0], y: a[1], w: a[2], h: a[3] } : null;
+    var m = /^(pin|box|obj):([\d.,;]+)$/.exec(String(c.unit_key || '')); if (!m) return null;
+    var parts = m[2].split(';'), rects = [];
+    for (var i = 0; i < parts.length; i++) {
+      var a = parts[i].split(',').map(Number); if (a.some(function (v) { return !(v >= 0 && v <= 1); })) return null;
+      if (m[1] === 'pin') { if (a.length !== 2 || parts.length !== 1) return null; return { k: 'pin', x: a[0], y: a[1], w: 0, h: 0 }; }
+      if (!(a.length === 4 && a[2] > 0 && a[3] > 0)) return null;
+      rects.push({ x: a[0], y: a[1], w: a[2], h: a[3] });
+      if (m[1] === 'box' && parts.length !== 1) return null;
+    }
+    var g = { k: m[1], x: rects[0].x, y: rects[0].y, w: rects[0].w, h: rects[0].h }; if (rects.length > 1) g.rects = rects; return g;
+  }
+  function rectKey(r) { return [r.x, r.y, r.w, r.h].map(frac).join(','); }
+  function sameRect(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.w - b.w) + Math.abs(a.h - b.h) < 0.012; }
+  /** 고르고 있는 개체 의견(지금 장 · 초안 · obj)에 테두리를 더하거나(이미 든 것이면) 뺀다 — ⌘/Ctrl 을 누른 채 개체를 눌렀을 때. 표의 행은 unit_key · orig 를 같이 고친다. */
+  async function toggleObjIn(c, g, ctx) {
+    var cur = spotGeo(c), rects = (cur.rects || [cur]).slice(), i = -1;
+    rects.forEach(function (r, n) { if (sameRect(r, g)) i = n; });
+    var ctxs = String(c.orig || '').split(' ∥ ').filter(Boolean);
+    if (i >= 0) { if (rects.length < 2) return; rects.splice(i, 1); if (ctxs.length === rects.length + 1) ctxs.splice(i, 1); }
+    else { rects.push({ x: g.x, y: g.y, w: g.w, h: g.h }); ctxs.push(ctx || '(개체)'); }
+    c.unit_key = 'obj:' + rects.map(rectKey).join(';'); c.orig = ctxs.join(' ∥ ');
+    if (!c._tmp) { try { await sdk.store.update('comments', { id: c.id }, { unit_key: c.unit_key, orig: c.orig }); } catch (e) { fail(e); } }
+    renderRows(); renderPageMarks();
+    toast(rects.length > 1 ? '개체 ' + rects.length + '개에 한 의견 · ⌘ 를 누른 채 더 고르거나 다시 누르면 뺍니다' : '개체 1개', 1600);
   }
   function frac(n) { return String(Math.round(Math.max(0, Math.min(1, n)) * 10000) / 10000); }
   /** 이 장에 보일 자리 의견 — 이 버전의 것 전부 + 지난 버전에 남긴 채 안 보낸 것. 번호는 이 차례(먼저 단 것부터 · 아직 저장 전인 것은 뒤). */
@@ -2752,14 +2771,14 @@
     var g = spotGeo(c), sent = c.status !== 'draft';
     var row = el('div', 'row spotrow' + (sent ? ' sent' : '')), no = el('span', 'no'), col = el('div', 'col');
     no.appendChild(el('b', 'sbadge' + (c.status === 'applied' ? ' applied' : (sent ? ' sent' : '')), String(n)));
-    var ctx = el('div', 'spotctx'); ctx.appendChild(el('span', 'clip', (g.k === 'pin' ? '핀' : (g.k === 'obj' ? '개체' : '영역')) + (c.orig ? ' · ' + c.orig : ''))); ctx.title = c.orig || '';
+    var ctx = el('div', 'spotctx'); ctx.appendChild(el('span', 'clip', (g.k === 'pin' ? '핀' : (g.k === 'obj' ? (g.rects ? '개체 ' + g.rects.length + '개' : '개체') : '영역')) + (c.orig ? ' · ' + c.orig : ''))); ctx.title = c.orig || '';
     col.appendChild(ctx);
     if (!sent) {
       var del = el('button', '', '지우기'); del.type = 'button'; del.tabIndex = -1; del.addEventListener('mousedown', function (e) { e.preventDefault(); }); del.onclick = function () { removeSpot(c).catch(fail); }; ctx.appendChild(del);
-      var cm = el('textarea', 'nt'); cm.rows = 1; cm.placeholder = g.k === 'pin' ? '이 자리에 대한 의견' : (g.k === 'obj' ? '이 개체에 대한 의견' : '이 영역에 대한 의견'); cm.value = c.note || '';
+      var cm = el('textarea', 'nt'); cm.rows = 1; cm.placeholder = g.k === 'pin' ? '이 자리에 대한 의견' : (g.k === 'obj' ? (g.rects ? '이 개체 ' + g.rects.length + '개에 대한 의견' : '이 개체에 대한 의견 · ⌘ 를 누른 채 다른 개체를 누르면 함께') : '이 영역에 대한 의견'); cm.value = c.note || '';
       cm.addEventListener('input', function () { autoGrow(cm); c.note = cm.value; schedule('spot:' + (c._seq || c.id), function () { return saveSpot(c); }); });
       //  글 없이 떠나면 핀을 거둔다(잘못 누른 핀이 남지 않게). 저장된 것이면 표에서도 지운다.
-      cm.addEventListener('blur', function () { setTimeout(function () { whenUp(function () { if (!String(c.note || '').trim() && document.activeElement !== cm && st.comments.indexOf(c) >= 0) removeSpot(c).catch(fail); }); }, 180); });   // 다른 것을 누르는 중이면 손을 뗀 뒤에 거둔다(글 줄을 다시 그리면 그 누름이 사라진다)
+      cm.addEventListener('blur', function () { setTimeout(function () { whenUp(function () { if (Date.now() - keepSpotAt < 1500) return; if (!String(c.note || '').trim() && document.activeElement !== cm && st.comments.indexOf(c) >= 0) removeSpot(c).catch(fail); }); }, 180); });   // 다른 것을 누르는 중이면 손을 뗀 뒤에 거둔다(글 줄을 다시 그리면 그 누름이 사라진다)
       col.appendChild(cm); c._ta = cm; if (cm.value) setTimeout(function () { autoGrow(cm); }, 0);
     } else { var t = el('div', 'ed'); t.contentEditable = 'false'; t.textContent = c.note || ''; col.appendChild(t); col.appendChild(aiChip(c)); c._ta = null; }
     row.appendChild(no); row.appendChild(col);
@@ -2916,6 +2935,9 @@
     hovT = setTimeout(function () { pickObj(p.fi, p.x, p.y).then(function (o) { if (seq === hovSeq) markObj(p.fi, o && o.rect); }); }, 60);
   });
   $('hit').addEventListener('mouseleave', function () { hovSeq++; markObj(0, null); mark(st.focused); });
+  //  ⌘/Ctrl 을 누른 채 장표를 누르는 순간 — 의견 칸이 초점을 잃어도 빈 자리 의견을 거두지 않는다(그 의견에 개체를 더하려는 누름이다)
+  var keepSpotAt = 0;
+  $('hit').addEventListener('mousedown', function (e) { if (e.metaKey || e.ctrlKey) keepSpotAt = Date.now(); });
   $('hit').addEventListener('click', function (e) {
     if (mqJust || pageDragged || noClick) return;
     var p = pointAt(e); if (!p || p.fi == null) return;
@@ -2935,7 +2957,10 @@
       if (!pg || was !== p.fi) return;
       var o = await pickObj(p.fi, p.x, p.y); if (!o) return;
       var g = { k: 'obj', x: o.rect.l / pg.w, y: o.rect.t / pg.h, w: o.rect.w / pg.w, h: o.rect.h / pg.h };
-      var had = spotsOf(st.sections[p.fi].id).filter(function (c) { var q2 = spotGeo(c); return c.status === 'draft' && q2.k === 'obj' && Math.abs(q2.x - g.x) + Math.abs(q2.y - g.y) + Math.abs(q2.w - g.w) + Math.abs(q2.h - g.h) < 0.012; })[0];
+      //  ⌘/Ctrl 을 누른 채 — 고르고 있는 개체 의견(지금 장의 초안)에 이 개체를 더한다(이미 든 것이면 뺀다). 고르는 중인 것이 없으면 보통 누름과 같다.
+      var on = st.spotOn, onG = on && on.status === 'draft' && on.slide_id === st.sections[p.fi].id && st.comments.indexOf(on) >= 0 ? spotGeo(on) : null;
+      if ((e.metaKey || e.ctrlKey) && onG && onG.k === 'obj') { if (st.zoom) setZoom(false); await toggleObjIn(on, g, o.ctx); await focusSpot(p.fi, on); return; }
+      var had = spotsOf(st.sections[p.fi].id).filter(function (c) { var q2 = spotGeo(c); return c.status === 'draft' && q2.k === 'obj' && (q2.rects || [q2]).some(function (r) { return sameRect(r, g); }); })[0];
       if (had) { if (st.zoom) setZoom(false); await focusSpot(p.fi, had); return; }   // 이미 의견을 달던 개체 — 그 의견으로
       await addSpot(p.fi, g, o.ctx);
     })().catch(fail);
@@ -3099,7 +3124,6 @@
     var chg = pt != null && u.origText && pt.replace(/\s+/g, '').indexOf(u.origText.replace(/\s+/g, '')) < 0;
     if (chg) { var head = el('div', 'tags'); head.appendChild(el('span', 'st chg', '바뀜')); col.appendChild(head); }
     col.appendChild(ed);
-    var cb = el('button', 'cmBtn'); cb.type = 'button'; cb.tabIndex = -1; cb.innerHTML = svg('plus') + '<span>의견</span>'; cb.title = '이 글에 의견 달기(Tab)'; cb.addEventListener('mousedown', function (e) { e.preventDefault(); }); cb.onclick = function () { row.classList.add('show'); cm.focus(); }; row.appendChild(cb);
     st.pins.forEach(function (p) { if ((!p.slide_id || p.slide_id === sid) && p.match && u.origText.indexOf(p.match) >= 0) { var pn = el('div', 'pin'); pn.innerHTML = svg('pin'); pn.appendChild(el('span', '', (p.memo || '') + (p.author ? ' · ' + p.author : ''))); col.appendChild(pn); row.classList.add('pinned'); } });
     col.appendChild(og); col.appendChild(cm);
     if (sents && sents.length) { col.appendChild(aiChip(sents[0])); if (!dr) row.classList.add('sent'); }
@@ -3142,7 +3166,7 @@
     });
     cm.addEventListener('keydown', function (e) { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); var next = nextEd(row); if (next) next.focus(); } });
     row.addEventListener('mouseenter', function () { mark(u); });
-    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); });
+    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); if (!row.classList.contains('sent')) row.classList.add('show'); });   // 들어가면 의견 칸이 글 아래 선다
     row.addEventListener('focusout', function () { pump('u:' + ukey); setTimeout(function () { if (st.focused === u && !row.contains(document.activeElement)) { st.focused = null; row.classList.remove('show'); mark(null); } }, 0); });   // 칸을 떠나면 기다리지 않고 곧바로 쓴다
     if (cm.value) autoGrow(cm);
     return row;
@@ -3532,7 +3556,7 @@
      (동료에게 붙여 주거나 · 다른 세션에 넣거나 · 메모에 남길 때). 아직 저장 전인 글(st.want · st.wantScope)도 화면에 선 값으로 넣는다 —
      저장을 기다리면 사람이 누른 동작이 끝나 복사가 막힌다(Safari). */
   function spotWhere(c) {
-    var k = String(c.unit_key || ''), kind = /^obj:/.test(k) ? '개체' : (/^box:/.test(k) ? '영역' : '핀');
+    var k = String(c.unit_key || ''), g = spotGeo(c), kind = /^obj:/.test(k) ? (g && g.rects ? '개체 ' + g.rects.length + '개' : '개체') : (/^box:/.test(k) ? '영역' : '핀');
     return kind + (c.orig ? ' · ' + String(c.orig).trim() : '');
   }
   function myCommentsText() {
