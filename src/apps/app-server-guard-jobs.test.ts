@@ -1,6 +1,6 @@
 // 앱 서버 검사 층의 백그라운드 작업 길 · 사람 요청 시간 끊기(#4486 앱 v2-7) 시험 — 진짜 검사 층 글(GUARD_JS)을 이 기계의 node 로 띄우고,
 //  뒤에 가짜 앱 · 앞에 가짜 게이트웨이(LIVELY_API_URL — claim · tick · result 를 받아 적는다)를 둔다(Lambda 안과 같은 모양: 웹 어댑터 → 검사 층 → 앱).
-//  사양 엣지 표 A(spec-4486.md): K1~K15 작업 길 · P1~P5 사람 요청 시간.
+//  사양 엣지 표 A(spec-4486.md): K1~K15 작업 길 · P1~P5 사람 요청 시간 · K16~K18 · P6 함수 마감(x-amzn-lambda-context) · P7 위조 작업 번호(격리 리뷰).
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -53,7 +53,7 @@ async function startApp(port: number): Promise<{ seen: Seen[]; close: () => Prom
 
 interface ApiCall { path: string; headers: http.IncomingHttpHeaders; body: unknown; at: number }
 type Reply = { status: number; body: unknown };
-/** 가짜 게이트웨이 — 길마다 답을 정해 두고(배열이면 차례로 · 마지막 것을 되풀이 · 없으면 기본) 부른 것을 적는다. */
+/** 가짜 게이트웨이 — 길마다 답을 정해 두고(배열이면 차례로 · 마지막 것을 되풀이 · 없으면 기본) 부른 것을 적는다. 상태 0 이면 답하지 않는다(매달림). */
 async function startApi(replies: Partial<Record<"claim" | "tick" | "result", Reply | Reply[]>> = {}): Promise<{ url: string; calls: ApiCall[]; close: () => Promise<void> }> {
   const calls: ApiCall[] = [];
   const port = await freePort();
@@ -77,6 +77,7 @@ async function startApi(replies: Partial<Record<"claim" | "tick" | "result", Rep
         ? { status: 200, body: { job: Number(m[1]), run: RUN, member: "윤상민", member_name: "윤 상민", variant: "draft", timeout_s: 30, tick_s: 1 } }
         : op === "tick" ? { status: 200, body: { cancel: false } } : { status: 200, body: { ok: true, status: "done" } };
       const r = next(op) ?? def;
+      if (r.status === 0) return;
       res.writeHead(r.status, { "content-type": "application/json" });
       res.end(JSON.stringify(r.body));
     });
@@ -355,6 +356,72 @@ test("P1 · P2 · P4 · P5 ★ 사람 요청 시간(1초) — 앞머리 전이�
     const job = await jobReq(r.g.port, "/api/jobs/x?ms=1500", {});
     assert.equal(job.status, 200);
     assert.equal(results(r.api)[0]!.outcome, "response", "P5 작업은 사람 요청 시간을 타지 않는다");
+  } finally { await r.done(); }
+});
+
+//  웹 어댑터가 앱 쪽에 넘기는 이번 호출의 마감(2026-10-20 실제 AWS 실측 — deadline 은 epoch ms).
+const lambdaCtx = (deadline: number): Record<string, string> => ({ "x-amzn-lambda-context": JSON.stringify({ request_id: "r", deadline, invoked_function_arn: "arn", xray_trace_id: null }) });
+const MARGIN = 15_000;   // 검사 층의 JOB_REPORT_MARGIN_MS
+
+test("K16 ★ 함수 마감 — 작업 시간(900초)보다 함수 마감이 이르면 결과를 알릴 여유(15초)를 두고 그 앞에서 끊고 timeout 을 보고한다", async () => {
+  const r = await rig({ claim: claimReply({ timeout_s: 900 }) });
+  try {
+    const out = await jobReq(r.g.port, "/api/jobs/x?ms=5000", {}, undefined, lambdaCtx(Date.now() + MARGIN + 1500));
+    assert.equal(out.status, 200);
+    const rep = results(r.api)[0]!;
+    assert.equal(rep.outcome, "timeout", "Lambda 가 먼저 멈추면 결과가 사라진다 — 검사 층이 먼저 끊어 알려야 한다");
+    assert.ok(Number(rep.duration_ms) >= 1000 && Number(rep.duration_ms) < 3500, `${rep.duration_ms}ms`);
+    assert.equal(r.app.seen[0]!.closedEarly, true, "앱 요청을 끊었다");
+    assert.ok(out.at < 4500, `함수 응답 ${out.at}ms`);
+  } finally { await r.done(); }
+});
+
+test("K17 함수 마감 머리가 없거나 · 못 읽거나 · 작업 시간보다 늦으면 작업 시간대로(새 칸 부재)", async () => {
+  const r = await rig({ claim: claimReply({ timeout_s: 1 }) });
+  try {
+    for (const extra of [{ "x-amzn-lambda-context": "not json" }, { "x-amzn-lambda-context": JSON.stringify({ deadline: "soon" }) }, lambdaCtx(Date.now() + 600_000)]) {
+      const before = results(r.api).length;
+      await jobReq(r.g.port, "/api/jobs/x?ms=3000", {}, undefined, extra);
+      const rep = results(r.api)[before]!;
+      assert.equal(rep.outcome, "timeout", JSON.stringify(extra));
+      assert.ok(Number(rep.duration_ms) >= 900 && Number(rep.duration_ms) < 2500, `${rep.duration_ms}ms ${JSON.stringify(extra)}`);
+    }
+  } finally { await r.done(); }
+  const r2 = await rig({ claim: claimReply({ timeout_s: 900 }) });
+  try {
+    await jobReq(r2.g.port, "/api/jobs/x?ms=1500", {});
+    assert.equal(results(r2.api)[0]!.outcome, "response", "머리가 없으면 마감을 모른다 — 끊지 않는다");
+  } finally { await r2.done(); }
+});
+
+test("K18 결과 보고도 함수 마감 전에 — 마감이 지났으면 보고를 붙잡지 않고 곧바로 함수 응답을 끝낸다(게이트웨이가 매달려도)", async () => {
+  const r = await rig({ claim: claimReply({ timeout_s: 900 }), result: { status: 0, body: null } });
+  try {
+    const out = await jobReq(r.g.port, "/api/jobs/x?ms=5000", {}, undefined, lambdaCtx(Date.now() + 1500));
+    assert.equal(out.status, 200);
+    assert.equal(JSON.parse(out.body).reported, false);
+    assert.ok(out.at < 3000, `마감 뒤에도 보고를 붙잡았다 — ${out.at}ms`);
+    assert.equal(calls(r.api, "result").length, 0, "마감이 지난 보고는 보내지 않는다");
+  } finally { await r.done(); }
+});
+
+test("P6 사람 요청도 함수 마감 1초 앞에서 끊는다(요청 시간이 함수 시간과 같게 설정된 때) — Lambda 오류 대신 504", async () => {
+  const r = await rig({}, { LIVELY_REQUEST_TIMEOUT_S: "30" });
+  try {
+    const slow = await req(r.g.port, "/slow?ms=4000", { "x-lively-identity": personTok(), ...lambdaCtx(Date.now() + 2500) });
+    assert.equal(slow.status, 504);
+    assert.equal(slow.headers["x-lively-guard"], "timeout");
+    assert.ok(slow.at >= 1200 && slow.at < 2400, `${slow.at}ms`);
+  } finally { await r.done(); }
+});
+
+test("P7 사람 요청에 실린 위조 x-lively-job — 앱은 작업 번호를 못 본다(livelyMember(req).job 으로 판정하는 새 머리글)", async () => {
+  const r = await rig();
+  try {
+    const out = await req(r.g.port, "/slow?ms=0", { "x-lively-identity": personTok(), "x-lively-job": "999" });
+    assert.equal(out.status, 200);
+    assert.equal(r.app.seen[0]!.headers["x-lively-job"], undefined);
+    assert.equal(r.app.seen[0]!.headers["x-lively-member"], "sangmin-yoon");
   } finally { await r.done(); }
 });
 

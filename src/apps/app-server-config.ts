@@ -205,9 +205,9 @@ export interface AppServerRuntime {
   identityPubkeys: string;
   /**
    * 사람 요청 하나의 시간(초 · app_server_policy.timeout_s) — #4486 부터 함수 시간은 작업 시간(15분)이라, 사람 요청은 검사 층이 이 시간에 끊는다(504).
-   *  없으면(시험) 검사 층이 끊지 않는다.
+   *  꼭 준다 — 빠뜨리면 사람 요청이 함수 시간(15분)까지 붙잡힌다(정책은 있는데 집행이 없는 꼴 · 격리 리뷰).
    */
-  requestTimeoutS?: number;
+  requestTimeoutS: number;
 }
 
 /** 검사 층(app-server-guard)과 웹 어댑터를 잇는 값 — 앱 코드가 보지 않아도 되는 칸이라 고칠 때는 문 판과 함께 본다. */
@@ -248,7 +248,7 @@ export function lambdaEnvFor(appId: string, rt?: AppServerRuntime): Record<strin
       LIVELY_API_URL: rt.apiUrl,
       LIVELY_APP_TOKEN: rt.token,
       LIVELY_APP_IDENTITY_PUBKEYS: rt.identityPubkeys,
-      ...(rt.requestTimeoutS ? { LIVELY_REQUEST_TIMEOUT_S: String(rt.requestTimeoutS) } : {}),
+      LIVELY_REQUEST_TIMEOUT_S: String(rt.requestTimeoutS),
     } : {}),
   };
 }

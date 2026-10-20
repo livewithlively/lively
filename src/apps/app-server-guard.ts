@@ -71,6 +71,16 @@ function guardMain(): void {
   const REQ_TIMEOUT_MS = Math.max(0, Math.floor(Number(env.LIVELY_REQUEST_TIMEOUT_S) || 0)) * 1000;
   const JOB_CALL_RE = /^lvjc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
   const JOB_RESULT_MAX = 64 * 1024, JOB_BODY_MAX = 2 * 1024 * 1024;
+  //  이번 호출의 마감 — 웹 어댑터가 앱 쪽에 넘기는 x-amzn-lambda-context 의 deadline(epoch ms · 2026-10-20 실측: 함수 시간 30초에 받은 순간 29,775ms 남음).
+  //   함수 시간(작업 시간 15분)이 먼저 끝나면 Lambda 가 환경째 멈춰 결과를 못 알린다 — 작업은 JOB_REPORT_MARGIN_MS 앞에서 끊고 «시간 초과» 를 보고하고,
+  //   사람 요청은 REQ_MARGIN_MS 앞에서 끊는다. 머리가 없거나 못 읽으면 0(마감을 모른다 — 종전대로 작업 · 요청 시간만).
+  const JOB_REPORT_MARGIN_MS = 15_000, REQ_MARGIN_MS = 1_000;
+  const lambdaDeadlineOf = (h: string | string[] | undefined): number => {
+    try {
+      const d = Number((JSON.parse(String((Array.isArray(h) ? h[0] : h) ?? "")) as { deadline?: unknown } | null)?.deadline);
+      return Number.isFinite(d) && d > 0 ? d : 0;
+    } catch { return 0; }
+  };
 
   const keys = new Map<string, import("node:crypto").KeyObject>();
   try {
@@ -190,8 +200,11 @@ function guardMain(): void {
     headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
     //  #4486 사람 요청 시간 — 함수 시간은 작업 시간(15분)이라 사람 요청은 이 문이 끊는다. 끊은 뒤엔 앱의 늦은 답 · 오류가 응답을 다시 건드리지 않는다(cut).
+    //   함수 마감이 더 이르면(관리자가 요청 시간 = 함수 시간으로 맞춘 때) 그보다 조금 앞에서 끊는다 — Lambda 오류 대신 504 를 돌려주게.
     let cut = false;
-    const timer = REQ_TIMEOUT_MS > 0 ? setTimeout(() => {
+    const reqDeadline = lambdaDeadlineOf(req.headers["x-amzn-lambda-context"]);
+    const cutMs = REQ_TIMEOUT_MS > 0 && reqDeadline ? Math.max(1, Math.min(REQ_TIMEOUT_MS, reqDeadline - Date.now() - REQ_MARGIN_MS)) : REQ_TIMEOUT_MS;
+    const timer = cutMs > 0 ? setTimeout(() => {
       cut = true;
       try {
         if (!res.headersSent) {
@@ -200,7 +213,7 @@ function guardMain(): void {
         } else res.destroy();   // 흘려 보내는 중이었다 — 잘린 응답으로 끝낸다(게이트웨이가 «덜 끝난 응답» 으로 넘긴다)
       } catch { res.destroy(); }
       preq.destroy();
-    }, REQ_TIMEOUT_MS) : null;
+    }, cutMs) : null;
     if (timer) { res.on("close", () => clearTimeout(timer)); res.on("finish", () => clearTimeout(timer)); }
     //  앱이 잘못된 응답을 내면(상태 099 · 상태 문구에 제어문자 · 101 전환) 넘기다 던지거나 응답 콜백이 안 온다 — 그때도 매달리지 않고 502 로 답한다(재검토).
     const badApp = (why: string): void => {
@@ -258,15 +271,22 @@ function guardMain(): void {
     } finally { clearTimeout(t); }
   };
   //  일시 오류(연결 실패 · 5xx · 429)면 몇 번 다시 — 게이트웨이 교대(새 판 반영) 중에도 작업을 잃지 않게. 4xx 는 판정이라 곧바로 돌려준다.
-  const callApiRetry = async (path: string, extra: Record<string, string>, body: unknown, tries: number, timeoutMs: number): Promise<ApiReply> => {
+  //   until(epoch ms · 0 = 없음)을 주면 그 전에만 다시 한다(한 번의 시한도 그 안으로) — 함수 마감 전에 응답을 끝내야 Lambda 가 환경째 멈추지 않는다.
+  const callApiRetry = async (path: string, extra: Record<string, string>, body: unknown, tries: number, timeoutMs: number, until = 0): Promise<ApiReply> => {
     let last: ApiReply = { status: 0, json: null };
     for (let i = 0; i < tries; i++) {
+      const left = until ? until - Date.now() : timeoutMs;
+      if (left < 500) break;
       try {
-        const r = await callApi(path, extra, body, timeoutMs);
+        const r = await callApi(path, extra, body, Math.min(timeoutMs, left));
         if (r.status > 0 && r.status < 500 && r.status !== 429) return r;
         last = r;
       } catch (e) { last = { status: 0, json: { error: String((e as Error)?.message ?? e) } }; }
-      if (i < tries - 1) await new Promise((ok) => setTimeout(ok, 500 * 2 ** i));
+      if (i < tries - 1) {
+        const pause = 500 * 2 ** i;
+        if (until && Date.now() + pause > until - 500) break;
+        await new Promise((ok) => setTimeout(ok, pause));
+      }
     }
     return last;
   };
@@ -311,7 +331,10 @@ function guardMain(): void {
     headers["x-lively-variant"] = j.variant === "draft" ? "draft" : "pub";
     headers["x-lively-job"] = String(id);
     headers["content-length"] = String(body.length);
+    //  작업 시간 상한 — 함수 마감이 더 이르면(작업 시간 = 함수 시간 15분이 기본) 결과를 보고할 여유를 두고 그 앞에서 끊는다(격리 리뷰).
+    const fnDeadline = lambdaDeadlineOf(req.headers["x-amzn-lambda-context"]);
     const timeoutMs = Math.max(1, Math.floor(Number(j.timeout_s) || 900)) * 1000;
+    const runMs = fnDeadline ? Math.max(1000, Math.min(timeoutMs, fnDeadline - Date.now() - JOB_REPORT_MARGIN_MS)) : timeoutMs;
     //  박동 간격은 게이트웨이가 정한다(claim 의 tick_s — app-jobs-plan JOB_TICK_SEC) · 1~60초 밖이면 20초.
     const tickS = Math.floor(Number(j.tick_s));
     const tickMs = (tickS >= 1 && tickS <= 60 ? tickS : 20) * 1000;
@@ -341,7 +364,7 @@ function guardMain(): void {
       });
       preq.on("error", () => finish("app_unreachable"));
       preq.on("upgrade", (_r, sock) => { sock.destroy(); finish("app_bad_response"); });
-      const deadline = setTimeout(() => { outcome = "timeout"; preq.destroy(); finish("timeout"); }, timeoutMs);
+      const deadline = setTimeout(() => { outcome = "timeout"; preq.destroy(); finish("timeout"); }, runMs);
       //  박동 — 게이트웨이가 취소를 알리거나(cancel) 이미 끝낸 작업이면(409 — 감시가 끝냄) 앱 요청을 끊는다.
       const tick = setInterval(() => {
         callApi(`/api/app-jobs/${id}/tick`, runHdr, {}, 10_000).then((r) => {
@@ -355,7 +378,7 @@ function guardMain(): void {
       outcome, status_code: statusCode, content_type: contentType, body_b64: kept.length ? Buffer.concat(kept).toString("base64") : null,
       truncated, bytes, duration_ms: Date.now() - t0,
     };
-    const r = await callApiRetry(`/api/app-jobs/${id}/result`, runHdr, report, 5, 15_000);
+    const r = await callApiRetry(`/api/app-jobs/${id}/result`, runHdr, report, 5, 15_000, fnDeadline ? fnDeadline - REQ_MARGIN_MS : 0);
     if (r.status !== 200) console.error(`[lively-guard] 작업 ${id} 결과 보고 실패(${r.status}) — 게이트웨이 감시가 끝낸다`);
     sendJson(res, 200, "job-done", { job: id, outcome, reported: r.status === 200 });
   }

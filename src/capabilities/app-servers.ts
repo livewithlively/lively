@@ -201,7 +201,7 @@ const appServerLimits: Capability = {
     "늘리는 배포만 막는다) · unused_retire_days 지금 판 · 공개 판 둘 다 web.server 가 없는 앱의 함수를 걷기까지의 날수 · " +
     "max_inflight_workspace · max_inflight_app 동시 처리 상한 — 워크스페이스 · 앱마다 지금 처리 중인 요청 수, 넘으면 함수를 부르지 않고 429 · 앱 값은 워크스페이스 값까지만 쓴다 · " +
     "#4486 백그라운드 작업: job_timeout_s 함수 시간 = 작업 하나의 시간(사람 요청은 timeout_s 에서 검사 층이 끊는다) · memory_max_mb 앱이 web.server.memory_mb 로 고를 수 있는 천장 · " +
-    "jobs_running_workspace · jobs_running_app 동시에 도는 작업 수(넘으면 줄을 선다) · jobs_queued_app 앱의 대기 줄 · jobs_daily_app 앱의 최근 24시간 작업 수 · job_wait_s 대기 시간 · job_body_kb 작업 본문) · " +
+    "jobs_running_workspace · jobs_running_app 동시에 도는 작업 수(넘으면 줄을 선다) · jobs_queued_app 앱의 대기 줄 · jobs_daily_app 앱의 최근 24시간 작업 수 · job_wait_s 대기 시간 · job_body_kb 작업 본문 · job_keep_days 끝난 작업 기록 보존 일수) · " +
     "workspace_setting(저장한 값) · platform_default · min · ceiling · usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
   scope: null,
   input: {},
@@ -218,7 +218,7 @@ const appServerLimitsSet: Capability = {
     `함수 ${APP_SERVER_POLICY_MAX.workspace_functions_max}개 · 코드 저장 ${APP_SERVER_POLICY_MAX.workspace_code_mb}MB · ` +
     `동시 처리 워크스페이스 ${APP_SERVER_POLICY_MAX.max_inflight_workspace} · 앱 ${APP_SERVER_POLICY_MAX.max_inflight_app}(앱 값은 워크스페이스 값까지만 쓴다) · ` +
     `작업 시간 ${APP_SERVER_POLICY_MAX.job_timeout_s}초 · 앱 메모리 천장 ${APP_SERVER_POLICY_MAX.memory_max_mb}MB · 동시 작업 워크스페이스 ${APP_SERVER_POLICY_MAX.jobs_running_workspace} · ` +
-    `앱 ${APP_SERVER_POLICY_MAX.jobs_running_app} · 작업 본문 ${APP_SERVER_POLICY_MAX.job_body_kb}KB(작업 시간 · 메모리는 다음 배포부터 · 작업 수는 곧바로). 관리자.`,
+    `앱 ${APP_SERVER_POLICY_MAX.jobs_running_app} · 작업 본문 ${APP_SERVER_POLICY_MAX.job_body_kb}KB · 작업 기록 보존 ${APP_SERVER_POLICY_MAX.job_keep_days}일(작업 시간 · 메모리는 다음 배포부터 · 작업 수 · 보존은 곧바로). 관리자.`,
   scope: "admin",
   input: {
     ...Object.fromEntries(APP_SERVER_POLICY_KEYS.map((k) => [k, z.number().int().min(APP_SERVER_POLICY_MIN[k]).max(APP_SERVER_POLICY_MAX[k]).optional()])),

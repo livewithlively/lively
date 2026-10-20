@@ -89,7 +89,7 @@ const deps = {
 const credOf = (inv) => parseJobCredential(inv.payload.headers["x-lively-identity"]);
 const lastInvoke = (jobId) => [...invokes].reverse().find((i) => credOf(i)?.id === jobId);
 const start = (input, user = srvUser("notes")) => svc.startAppJob({ route: "/api/jobs/run", body: { n: 1 }, ...input }, user, {}, deps);
-const jobRow = async (id) => js.getAppJob(id);
+const jobRow = async (id) => js.getAppJob(id, { view: true });
 const claimOf = async (id, app = "notes") => svc.onJobClaim(id, svc.jobCallerOf(tokUser(app)), credOf(lastInvoke(id)).secret);
 const finish = async (id, report = { outcome: "response", status_code: 200, content_type: "application/json", body_b64: Buffer.from('{"ok":true}').toString("base64"), truncated: false, bytes: 11, duration_ms: 1234 }, run, app = "notes") =>
   svc.onJobResult(id, svc.jobCallerOf(tokUser(app)), run, report, deps);
@@ -120,6 +120,13 @@ try {
   chk("C2d 다른 앱의 함수 토큰 → 404(어느 작업인지 말하지 않는다)", otherApp?.status === 404, String(otherApp?.status));
   const noTok = await errOf(Promise.resolve().then(() => svc.jobCallerOf(person())));
   chk("C2e 앱 서버 토큰이 아니면 401", noTok?.status === 401, String(noTok?.status));
+  //  C2j 시작하면 요청 본문을 비운다(다시 부르지 않고 보기에도 없다 — 앱 자료를 30일 쥐지 않게) · 크기는 남긴다.
+  const raw2 = (await q(`SELECT body, body_bytes FROM org_app_job WHERE id=$1`, [j1.id]))[0];
+  chk("C2j 시작한 작업의 요청 본문은 비우고 크기는 남긴다", raw2.body === "" && raw2.body_bytes === Buffer.byteLength('{"file":"a.mp3"}'), JSON.stringify(raw2));
+  //  C2k 다른 워크스페이스의 앱 서버 토큰(같은 앱 id)으로는 콜백 자체를 못 부른다 — 테넌트 대조(jobCallerOf).
+  const otherWs = { ...tokUser("notes"), userId: appServerUserId("11111111-2222-4333-8444-555555555555", "notes") };
+  const crossWs = await errOf(Promise.resolve().then(() => svc.jobCallerOf(otherWs)));
+  chk("C2k 다른 워크스페이스의 토큰(같은 앱 id) → 401(claim · 박동 · 결과 모두 이 판정을 지난다)", crossWs?.status === 401 && /다른 워크스페이스/.test(crossWs.message), crossWs?.message);
 
   //  C2g 같은 부르기가 동시에 두 번 닿아도(AWS 중복 전달) 시작은 한 번 — 둘 다 «아직 안 시작» 을 읽어도 SQL 조건이 하나만 넘긴다.
   {
@@ -337,10 +344,15 @@ try {
   const list = await svc.listAppJobsFor({}, srvUser("notes"));
   const bobList = await svc.listAppJobsFor({}, srvUser("notes", "pgt-bob"));
   const adminList = await svc.listAppJobsFor({ app_id: "notes" }, boss);
-  chk("C12 보기 — 시작한 사람은 결과까지 · 같은 앱의 남 404 · 다른 앱 404 · 관리자는 상태 · 오류만 · 목록도 같은 선",
+  chk("C12 보기 — 시작한 사람은 결과까지 · 같은 앱의 남 404 · 다른 앱 404 · 관리자는 상태 · 오류만 · 목록도 같은 선(목록엔 결과 본문 없음)",
     mine.result?.json?.ok === true && sameAppOther?.status === 404 && viaOtherApp?.status === 404 && adminView.status === "done" && adminView.result === undefined
-      && viaMcp.result?.json?.ok === true && list.jobs.length === 1 && bobList.jobs.length === 0 && adminList.jobs.length === 1 && adminList.jobs[0].result === undefined,
-    JSON.stringify({ mine: !!mine.result, adm: adminView.result, b: bobList.jobs.length }));
+      && viaMcp.result?.json?.ok === true && list.jobs.length === 1 && !("result" in list.jobs[0]) && list.jobs[0].status_code === 200
+      && bobList.jobs.length === 0 && adminList.jobs.length === 1 && adminList.jobs[0].result === undefined,
+    JSON.stringify({ mine: !!mine.result, adm: adminView.result, b: bobList.jobs.length, l: list.jobs[0] }));
+  //  C12d 자주 도는 읽기(박동 · 돌기 신원 · 기다리기 · 감시)는 큰 칸을 끌어오지 않는다 — 보기만 결과까지.
+  const light = await js.getAppJob(v12.id);
+  chk("C12d 가벼운 읽기엔 결과 · 본문이 없고 보기 읽기엔 결과가 있다", light.result === undefined && light.body === "" && (await js.getAppJob(v12.id, { view: true })).result?.json?.ok === true,
+    JSON.stringify({ r: light.result, b: light.body }));
   const waited = await svc.getAppJobFor(v12.id, srvUser("notes"), 5);
   chk("C12b 끝난 작업은 wait 를 줘도 곧바로", waited.status === "done", waited.status);
   const pend = await start({});
@@ -362,6 +374,27 @@ try {
   const pins2 = await js.openJobPins("notes");
   chk("C13b 끝나면 핀이 풀린다", pins2.versions.length === 0 && pins2.tokens.length === 0, JSON.stringify(pins2));
   await q(`UPDATE org_app_server SET cur_lambda_version='3', cur_token_hash='th-notes-3' WHERE app_id='notes'`);
+
+  // ── C5c 고르기의 공평 — 상한에 닿은 앱의 긴 줄이 앞을 채워도 다른 앱의 작업을 부른다(앞 500줄만 보면 굶었다) ──
+  await resetJobs();
+  await setAppServerPolicy({ jobs_running_app: 1, jobs_running_workspace: 10 }, { actor: "t" });
+  await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s)
+           VALUES ('notes','running','pgt-alice','pub','cur','lvly-app-notes-ws','3','/r','{}',900)`);
+  await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s)
+           SELECT 'notes','queued','pgt-alice','pub','cur','lvly-app-notes-ws','3','/r','{}',900 FROM generate_series(1, 520)`);
+  const lone = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s)
+           VALUES ('other','queued','pgt-alice','pub','cur','lvly-app-other-ws','3','/r','{}',900) RETURNING id`))[0].id;
+  const picked5c = await js.claimDispatchable({ workspace: 10, app: 1 });
+  chk("C5c 상한에 닿은 앱(notes 1/1)의 줄 520 뒤에 선 다른 앱 작업도 부른다 — notes 는 하나도 안 고름",
+    picked5c.length === 1 && Number(picked5c[0].row.id) === Number(lone) && picked5c[0].row.app_id === "other", JSON.stringify(picked5c.map((x) => [x.row.id, x.row.app_id])));
+
+  // ── C10g 감시는 열린 작업을 끝까지 본다(앞 200줄만 보면 뒤의 죽은 작업이 남는다) ──
+  await resetJobs();
+  await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s, created_at)
+           SELECT 'notes','queued','pgt-alice','pub','cur','lvly-app-notes-ws','3','/r','{}',900, now() - interval '2 hours' FROM generate_series(1, 450)`);
+  const sw = await svc.sweepAppJobs({ ...deps, env: () => null });
+  const left10g = (await q(`SELECT count(*)::int AS n FROM org_app_job WHERE status='queued'`))[0].n;
+  chk("C10g 대기 초과 줄 450 — 한 번의 감시가 모두 끝낸다(판을 이어 본다)", sw.ended === 450 && left10g === 0, JSON.stringify({ sw, left10g }));
 
   // ── C15 새로 도입한 칸 부재 — 작업의 토큰 칸이 비어도 핀에 빈 값이 없다 ──
   await resetJobs();
@@ -389,6 +422,17 @@ try {
   await q(`UPDATE org_app_job SET ended_at = now() - interval '29 days' WHERE id=$1`, [k2.id]);
   const pruned = await svc.pruneAppJobRecords();
   chk("C16 끝난 지 30일 넘은 줄만 지운다(29일 · 열린 줄은 남김)", pruned === 1 && !(await jobRow(k1.id)) && !!(await jobRow(k2.id)) && !!(await jobRow(k3.id)), String(pruned));
+  //  C16b 보존 기간은 관리자 값(job_keep_days) — 45일이면 29일 · 40일 줄은 남고 50일 줄만 지운다.
+  const k4 = await start({}); await svc.cancelAppJobFor(k4.id, srvUser("notes"), deps);
+  const k5 = await start({}); await svc.cancelAppJobFor(k5.id, srvUser("notes"), deps);
+  await q(`UPDATE org_app_job SET ended_at = now() - interval '40 days' WHERE id=$1`, [k4.id]);
+  await q(`UPDATE org_app_job SET ended_at = now() - interval '50 days' WHERE id=$1`, [k5.id]);
+  await setAppServerPolicy({ job_keep_days: 45 }, { actor: "t" });
+  const pruned45 = await svc.pruneAppJobRecords();
+  chk("C16b 보존 45일 — 50일 줄만 지운다(40일 · 29일 남김)", pruned45 === 1 && !(await jobRow(k5.id)) && !!(await jobRow(k4.id)) && !!(await jobRow(k2.id)), String(pruned45));
+  //  C16c 보존 기간을 못 읽으면 지우지 않는다(기본 30일로 접으면 관리자가 늘린 기간의 기록이 지워진다).
+  const failRead = await errOf(svc.pruneAppJobRecords(async () => { throw new Error("db down"); }));
+  chk("C16c 보존 기간 읽기 실패 → 던지고 아무것도 안 지운다", failRead?.message === "db down" && !!(await jobRow(k4.id)) && !!(await jobRow(k2.id)), failRead?.message);
 
   // ── 능력 배선(MCP · REST 와 같은 handler) — 사람이 도구로(app_id 필수) ──
   await resetJobs();

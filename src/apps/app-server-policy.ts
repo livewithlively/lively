@@ -41,6 +41,7 @@ export interface AppServerPolicy {
   jobs_daily_app: number;           // 앱 하나의 최근 24시간 작업 수 — 넘으면 받지 않는다(429)
   job_wait_s: number;               // 기다리는 시간 상한(초) — 넘으면 «대기 시간 초과» 로 끝낸다
   job_body_kb: number;              // 작업에 넘기는 본문 상한(KB) — 비동기 호출 한 번의 한도(1MB)가 이벤트(본문은 base64 로 ⁴⁄₃)까지 담아야 한다
+  job_keep_days: number;            // 끝난 작업 기록(결과 본문에 앱 데이터가 실린다) 보존(일) — 지나면 행째 지운다(작업 컨테이너 keep_days 와 같은 자리 · 격리 리뷰)
 }
 export type AppServerPolicyPatch = Partial<AppServerPolicy>;
 
@@ -50,7 +51,7 @@ export const APP_SERVER_POLICY_DEFAULT: AppServerPolicy = {
   max_inflight_workspace: 50, max_inflight_app: 20,
   workspace_functions_max: 20, workspace_code_mb: 5 * 1024, unused_retire_days: 7,
   job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 10, jobs_running_app: 5, jobs_queued_app: 100, jobs_daily_app: 1000,
-  job_wait_s: 1800, job_body_kb: 256,
+  job_wait_s: 1800, job_body_kb: 256, job_keep_days: 30,
 };
 
 /** 바닥 — 설정이 이 밑으로 못 간다(0 · 음수 · 잡값은 바닥이 아니라 «그 값 없음» = 기본값으로 읽는다). */
@@ -60,7 +61,7 @@ export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
   max_inflight_workspace: 1, max_inflight_app: 1,
   workspace_functions_max: 1, workspace_code_mb: 100, unused_retire_days: 1,
   job_timeout_s: 60, memory_max_mb: 128, jobs_running_workspace: 1, jobs_running_app: 1, jobs_queued_app: 1, jobs_daily_app: 1,
-  job_wait_s: 60, job_body_kb: 1,
+  job_wait_s: 60, job_body_kb: 1, job_keep_days: 1,
 };
 /**
  * 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 10GB(Lambda 의 끝 — #4486 전엔 4GB).
@@ -75,7 +76,7 @@ export const APP_SERVER_POLICY_MAX: AppServerPolicy = {
   //  #4486 — 함수 시간 15분 · 메모리 10GB 는 Lambda 의 끝(https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html). 본문 700KB 는
   //   비동기 호출 한 번의 한도 1MB 에 base64(⁴⁄₃) · 머리글 · 이벤트 틀이 드는 끝.
   job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 200, jobs_running_app: 100, jobs_queued_app: 1000, jobs_daily_app: 100_000,
-  job_wait_s: 86_400, job_body_kb: 700,
+  job_wait_s: 86_400, job_body_kb: 700, job_keep_days: 3650,
 };
 
 export const APP_SERVER_POLICY_KEYS = Object.keys(APP_SERVER_POLICY_DEFAULT) as Array<keyof AppServerPolicy>;

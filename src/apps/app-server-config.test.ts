@@ -116,7 +116,7 @@ t("B8 시험 호출 실패 판독 — 오류 없음 null · 시작 직후 끝남
 });
 
 t("I1 ★ 함수 환경(#4485) — 웹 어댑터는 검사 층(:8099)으로 · 준비 판정도 검사 층 · 흘려 보내기 · 앱은 $PORT 8080 · 앱 값(주소 · 토큰 · 워크스페이스 · 공개 키)", () => {
-  const env = lambdaEnvFor("my-app", { tenantId: "11111111-2222-4333-8444-555555555555".toUpperCase(), slug: "lively-46e3", apiUrl: "https://lively-46e3.app.lvly.io", token: "lvk_x", identityPubkeys: "{\"k1\":\"x\"}" });
+  const env = lambdaEnvFor("my-app", { tenantId: "11111111-2222-4333-8444-555555555555".toUpperCase(), slug: "lively-46e3", apiUrl: "https://lively-46e3.app.lvly.io", token: "lvk_x", identityPubkeys: "{\"k1\":\"x\"}", requestTimeoutS: 30 });
   assert.equal(env.AWS_LAMBDA_EXEC_WRAPPER, GUARD_BOOTSTRAP_PATH, "웹 어댑터의 /opt/bootstrap 을 그대로 쓰면 검사 층이 앞에 서지 않는다");
   assert.equal(env.AWS_LWA_PORT, String(GUARD_PORT));
   assert.equal(env.LIVELY_GUARD_PORT, String(GUARD_PORT));
@@ -456,10 +456,10 @@ t("J2 함수 크기 — 선언 없으면 워크스페이스 기본(512 · 임시
   assert.equal(bad.notes.length, 2, "못 읽은 두 선언을 모두 알린다");
 });
 
-t("J3 함수 환경 — 사람 요청 시간(LIVELY_REQUEST_TIMEOUT_S)을 검사 층에 넘긴다 · 안 주면(시험) 싣지 않는다", () => {
+t("J3 함수 환경 — 사람 요청 시간(LIVELY_REQUEST_TIMEOUT_S)을 검사 층에 늘 넘긴다(앱 값을 싣는 함수엔 빠질 수 없다)", () => {
   const rt = { tenantId: "11111111-2222-4333-8444-555555555555", slug: "w", apiUrl: "https://w.app.lvly.io", token: "t", identityPubkeys: "{}" };
   assert.equal(lambdaEnvFor("a", { ...rt, requestTimeoutS: 30 }).LIVELY_REQUEST_TIMEOUT_S, "30");
-  assert.equal(lambdaEnvFor("a", rt).LIVELY_REQUEST_TIMEOUT_S, undefined);
+  assert.equal(lambdaEnvFor("a", { ...rt, requestTimeoutS: 60 }).LIVELY_REQUEST_TIMEOUT_S, "60");
 });
 
 t("J4 설정 비교 — 임시 디스크가 다르면 고친다 · AWS 가 칸을 안 보이면 512 로 본다 · want 에 없으면 보지 않는다(옛 부르는 쪽)", () => {

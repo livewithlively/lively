@@ -34,11 +34,16 @@ test("B2 작업 신원 모양이 틀리면 null — 번호 0 · 앞 0 · 2^53 �
   assert.equal(parseJobCredential(`lvjc1.9007199254740991.${S}`)?.id, 9007199254740991, "2^53-1 받음");
 });
 
-test("B3 라우트 — / 로 시작하는 앱 안 경로만 · /_lively 자리 · 빈칸 · 제어문자 · 역슬래시 · 2,048자 경계", () => {
-  for (const ok of ["/", "/api/jobs/x", "/api/jobs/x?lang=ko&n=1", "/_livelyx", "/a/_lively/b", "/" + "a".repeat(JOB_ROUTE_MAX - 1)]) assert.equal(jobRouteError(ok), null, ok.slice(0, 30));
-  for (const bad of [undefined, "", 5, "x", "//evil.example/x", "/a b", "/a\tb", "/a\u0000", "/a\\b", "/_lively", "/_lively/ai/runs", "/_LIVELY/x", "/_lively?x=1", "/" + "a".repeat(JOB_ROUTE_MAX)]) {
+test("B3 라우트 — / 로 시작하는 앱 안 경로만 · /_lively 자리 · 빈칸 · 제어문자 · 역슬래시 · 인코딩 안 한 글자 · 2,048자 경계", () => {
+  for (const ok of ["/", "/api/jobs/x", "/api/jobs/x?lang=ko&n=1", "/_livelyx", "/a/_lively/b", "/a?title=%ED%9A%8C%EC%9D%98", "/a~b", "/" + "a".repeat(JOB_ROUTE_MAX - 1)]) {
+    assert.equal(jobRouteError(ok), null, ok.slice(0, 30));
+  }
+  for (const bad of [undefined, "", 5, "x", "//evil.example/x", "/a b", "/a\tb", "/a\u0000", "/a\\b", "/a\u007f", "/_lively", "/_lively/ai/runs", "/_LIVELY/x", "/_lively?x=1",
+    "/" + "a".repeat(JOB_ROUTE_MAX)]) {
     assert.ok(jobRouteError(bad), `${String(bad).slice(0, 30)} 를 받았다`);
   }
+  //  인코딩하지 않은 글자(한글 · 0x7e 너머) — 받기 전에 «인코딩하세요» 로 막는다(웹 어댑터 · 앱이 어떻게 읽을지 정해지지 않았다 · 격리 리뷰).
+  for (const raw of ["/a?title=회의", "/회의", "/a\u00a0b", "/a\u0080"]) assert.match(jobRouteError(raw) ?? "", /인코딩/, raw);
 });
 
 test("B4 작업 종류 — 없음 · 빈 글 · function 만 받는다 · agent 는 AI 실행 입구로 안내 · 그 밖 거부", () => {
@@ -133,6 +138,24 @@ test("B11 결과 보기 — 온전한 JSON → json · 잘린 JSON → text · �
   assert.equal(resultViewOf(rep({ content_type: "text/plain", body_b64: b(bin) }))?.base64, b(bin), "글이라 했어도 UTF-8 이 아니면 base64");
   assert.equal(resultViewOf(rep({ outcome: "timeout" })), null);
   assert.deepEqual(resultViewOf(rep({ body_b64: null, status_code: 204 })), { status_code: 204, content_type: null, truncated: false, bytes: 0 });
+});
+
+test("B11b 결과 보기 — NUL(U+0000)이 든 응답은 글 · JSON 으로 두지 않는다(Postgres 가 jsonb 의 \\u0000 을 받지 않아 결과 기록이 통째로 실패한다)", () => {
+  const b = (s: string | Buffer): string => Buffer.from(s).toString("base64");
+  const raw = resultViewOf(rep({ content_type: "text/plain", body_b64: b("a\u0000b") }));
+  assert.equal(raw?.text, undefined, "날 NUL 이 든 글");
+  assert.equal(raw?.base64, b("a\u0000b"));
+  const esc = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"v":"a\\u0000b"}') }));
+  assert.equal(esc?.json, undefined, "JSON 이스케이프로 들어온 NUL — 풀면 NUL 이 생긴다");
+  assert.equal(esc?.text, '{"v":"a\\u0000b"}', "글로는 남긴다(역슬래시 글자라 저장된다)");
+  const lit = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"v":"a\\\\u0000b"}') }));
+  assert.deepEqual(lit?.json, { v: "a\\u0000b" }, "역슬래시 글자 + u0000 은 NUL 이 아니다 — json 그대로");
+  //  저장되는 꼴(jsonb 로 갈 JSON 글)에 NUL 이스케이프가 없어야 한다 — 세 경우 모두.
+  for (const v of [raw, esc, lit]) assert.doesNotMatch(JSON.stringify(v), /(?:^|[^\\])(?:\\\\)*\\u0000/, JSON.stringify(v));
+  //  실패 오류 글(응답 앞부분)에도 NUL · 제어문자가 없다.
+  const f = endOf(rep({ status_code: 500, body_b64: b("bad\u0000thing\u0007here") }), { timeoutSec: 900, cancelRequested: false });
+  assert.match(f.error!, /500 로 답했습니다 — bad thing here/);
+  assert.ok(!f.error!.includes("\u0000"));
 });
 
 const at = (sec: number): Date => new Date(1_000_000_000_000 - sec * 1000);

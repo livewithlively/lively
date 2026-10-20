@@ -51,6 +51,9 @@ export function liveAppJobDeps(): AppJobDeps {
   };
 }
 
+/** 감시가 한 번에 보는 열린 작업 — 한 판 · 판 수. */
+const SWEEP_PAGE = 200, SWEEP_PAGES = 25;
+
 const actorSource = (user: LivelyUser, source?: string): string =>
   user.appServer ? (user.appJobId ? "app-job" : "app-server") : source ?? (user.appId ? "app-ui" : "person");
 
@@ -118,7 +121,7 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   //  곧바로 부를 수 있으면 부른다(다음 감시를 기다리지 않게) — 실패해도 받은 것은 그대로(감시가 다시 민다).
   await dispatchAppJobs(deps).catch((e) => logger.warn({ err: (e as Error)?.message ?? e, app: appId }, "[app-jobs] 곧바로 부르기 실패 — 감시가 다시 민다"));
   const wait = waitSecOf(input.wait);
-  const now = wait > 0 ? await waitForJob(out.row.id, wait) : await js.getAppJob(out.row.id);
+  const now = wait > 0 ? await waitForJob(out.row.id, wait) : await js.getAppJob(out.row.id, { view: true });
   return jobView(now ?? out.row, true);
 }
 
@@ -127,12 +130,12 @@ const waitSecOf = (v: unknown): number => {
   return Number.isFinite(n) && n > 0 ? Math.min(JOB_WAIT_MAX_SEC, Math.floor(n)) : 0;
 };
 
-/** 끝날 때까지 기다린다(1초마다 · sec 초까지). 끝났거나 시간이 다 되면 그 줄. */
+/** 끝날 때까지 기다린다(1초마다 가벼운 줄로 · sec 초까지). 끝났거나 시간이 다 되면 결과까지 읽은 줄. */
 async function waitForJob(id: number, sec: number): Promise<js.AppJobRow | null> {
   const until = Date.now() + sec * 1000;
   for (;;) {
     const r = await js.getAppJob(id);
-    if (!r || isJobEnded(r.status) || Date.now() >= until) return r;
+    if (!r || isJobEnded(r.status) || Date.now() >= until) return r ? (await js.getAppJob(id, { view: true })) ?? r : r;
     await new Promise((ok) => setTimeout(ok, Math.min(1000, Math.max(0, until - Date.now()))));
   }
 }
@@ -148,7 +151,7 @@ function accessOf(r: js.AppJobRow, user: LivelyUser): "full" | "summary" | null 
 
 export async function getAppJobFor(id: number, user: LivelyUser, wait?: unknown): Promise<Record<string, unknown>> {
   const sec = waitSecOf(wait);
-  let r = await js.getAppJob(id);
+  let r = await js.getAppJob(id, { view: true });
   const how = r ? accessOf(r, user) : null;
   if (!r || !how) throw new HttpError(404, "없는 작업입니다");
   if (sec > 0 && !isJobEnded(r.status)) r = (await waitForJob(id, sec)) ?? r;
@@ -162,7 +165,9 @@ export async function listAppJobsFor(input: Record<string, unknown>, user: Livel
   const admin = !user.appId && isAdminViewer({ userId: user.userId, scopes: user.scopes ?? [] });
   const appId = user.appId ?? (typeof input.app_id === "string" && input.app_id ? input.app_id : null);
   const rows = await js.listAppJobs({ appId, requester: admin ? null : user.userId, status, limit });
-  return { jobs: rows.map((r) => jobView(r, accessOf(r, user) === "full")).filter((v) => v), count: rows.length };
+  //  목록엔 결과 본문을 싣지 않는다(작업마다 64KB 까지) — 결과는 app_job_get 으로.
+  const jobs = rows.map((r) => { const v = jobView(r, accessOf(r, user) === "full"); delete v.result; return v; });
+  return { jobs, count: rows.length };
 }
 
 /** 취소 — 기다리는 · 부른 작업은 곧바로 끝내고, 도는 작업은 표시만(검사 층이 다음 박동에 앱 요청을 끊는다 · 그동안 그 작업의 라이블리 호출은 막힌다). */
@@ -176,8 +181,8 @@ export async function cancelAppJobFor(id: number, user: LivelyUser, deps: AppJob
   await js.requestCancelAppJob(id);
   //  아직 함수에 닿지 않은 작업은 곧바로 끝낸다 — 부른 작업이 늦게 닿아도 시작 확인이 거절한다(취소 표시).
   await js.endAppJob(id, ["queued", "dispatched"], { status: "canceled", error: "취소했습니다" });
-  await dispatchAppJobs(deps).catch(() => { /* 감시가 민다 */ });
-  return jobView((await js.getAppJob(id)) ?? r, how === "full");
+  await dispatchAppJobs(deps).catch((e) => logger.warn({ err: (e as Error)?.message ?? e }, "[app-jobs] 취소 뒤 줄 밀기 실패 — 감시가 민다"));
+  return jobView((await js.getAppJob(id, { view: true })) ?? r, how === "full");
 }
 
 // ── 부르기 ──────────────────────────────────────────────────────────────────────────────
@@ -209,14 +214,18 @@ export async function dispatchAppJobs(deps: AppJobDeps = liveAppJobDeps()): Prom
       await deps.invokeAsync(env, j.function_name, j.lambda_version, event);
       n++;
     } catch (e) {
+      //  구성원이 보는 오류 칸엔 AWS 의 짧은 오류 이름만 — 그 밖의 원문(우리 코드 · 연결 오류)은 기록에만 남긴다(#4887 «상태에 원문 안 싣기» 와 같다 · 격리 리뷰).
+      const why = e instanceof AwsError ? publicError(e) : "일시 오류";
+      const onEndFail = (err: unknown): void => logger.warn({ err: (err as Error)?.message ?? err, job: j.id }, "[app-jobs] 작업 끝내기 실패 — 감시가 끝낸다");
       if (permanentInvokeError(e)) {
         logger.warn({ err: (e as Error)?.message, app: j.app_id, job: j.id }, "[app-jobs] 함수를 부르지 못했다(다시 해도 같다) — 작업을 끝낸다");
-        await end(`앱 서버 함수를 부르지 못했습니다: ${publicError(e)}`).catch(() => { /* 감시가 끝낸다 */ });
+        await end(`앱 서버 함수를 부르지 못했습니다: ${why}`).catch(onEndFail);
       } else if (j.attempts >= JOB_DISPATCH_ATTEMPTS + 2) {
-        await end(`앱 서버 함수를 부르지 못했습니다(${j.attempts}번 — ${publicError(e)})`).catch(() => { /* 감시가 끝낸다 */ });
+        logger.warn({ err: (e as Error)?.message, app: j.app_id, job: j.id, attempts: j.attempts }, "[app-jobs] 함수 부르기가 거듭 실패 — 작업을 끝낸다");
+        await end(`앱 서버 함수를 부르지 못했습니다(${j.attempts}번 — ${why})`).catch(onEndFail);
       } else {
         logger.warn({ err: (e as Error)?.message, app: j.app_id, job: j.id }, "[app-jobs] 함수 부르기 일시 실패 — 줄로 되돌린다");
-        await js.requeueAppJob(j.id, j.call_hash).catch(() => { /* 감시가 다시 민다 */ });
+        await js.requeueAppJob(j.id, j.call_hash).catch((err) => logger.warn({ err: (err as Error)?.message ?? err, job: j.id }, "[app-jobs] 줄로 되돌리기 실패 — 감시가 다시 민다"));
       }
     }
   }
@@ -300,7 +309,7 @@ export async function onJobResult(id: number, caller: JobCaller, runCred: string
   if (!ended) throw conflict("ended", "이미 끝난 작업입니다(감시가 먼저 끝냈습니다)");
   logger.info({ app: j.app_id, job: id, status: ended.status, code: rep.status_code, ms: rep.duration_ms }, "[app-jobs] 작업 끝(#4486)");
   //  자리가 났다 — 기다리는 작업을 민다.
-  await dispatchAppJobs(deps).catch(() => { /* 감시가 민다 */ });
+  await dispatchAppJobs(deps).catch((err) => logger.warn({ err: (err as Error)?.message ?? err }, "[app-jobs] 끝난 뒤 줄 밀기 실패 — 감시가 민다"));
   return { ok: true, status: ended.status };
 }
 
@@ -341,29 +350,43 @@ export async function sweepAppJobs(deps: AppJobDeps = liveAppJobDeps()): Promise
   const p = await deps.policy();
   const now = deps.now();
   let ended = 0, requeued = 0;
-  for (const j of await js.openAppJobs()) {
-    const v = sweepVerdict(j, now, p);
-    if (v.kind === "requeue") { if (await js.requeueAppJob(j.id, j.call_hash)) requeued++; continue; }
-    if (v.kind === "end") {
-      const from: AppJobStatus[] = [j.status];
-      if (await js.endAppJob(j.id, from, { status: v.status, error: v.error })) {
-        ended++;
-        logger.info({ app: j.app_id, job: j.id, from: j.status, to: v.status, why: v.error }, "[app-jobs] 감시가 작업을 끝냈다(#4486)");
+  //  열린 작업을 끝까지 판을 이어 본다(한 판 200줄 · 25판까지) — 앞줄만 보면 뒤의 죽은 작업이 동시 자리를 붙잡는다(격리 리뷰).
+  let after = 0;
+  for (let page = 0; page < SWEEP_PAGES; page++) {
+    const rows = await js.openAppJobs(after, SWEEP_PAGE);
+    for (const j of rows) {
+      const v = sweepVerdict(j, now, p);
+      if (v.kind === "requeue") { if (await js.requeueAppJob(j.id, j.call_hash)) requeued++; continue; }
+      if (v.kind === "end") {
+        const from: AppJobStatus[] = [j.status];
+        if (await js.endAppJob(j.id, from, { status: v.status, error: v.error })) {
+          ended++;
+          logger.info({ app: j.app_id, job: j.id, from: j.status, to: v.status, why: v.error }, "[app-jobs] 감시가 작업을 끝냈다(#4486)");
+        }
       }
     }
+    if (rows.length < SWEEP_PAGE) break;
+    after = rows[rows.length - 1]!.id;
   }
   const dispatched = deps.env() ? await dispatchAppJobs(deps) : 0;
   return { ended, requeued, dispatched };
 }
 
-/** 끝난 지 30일이 지난 작업 행을 지운다(한 판 1,000줄 · 10판까지). */
-export async function pruneAppJobRecords(): Promise<number> {
+/**
+ * 끝난 지 job_keep_days(기본 30일)가 지난 작업 행을 지운다(한 판 1,000줄 · 10판까지).
+ *  보존 기간은 DB 에서 바로 읽고, 못 읽으면 지우지 않는다(던진다) — 기본값으로 잘못 읽어 관리자가 늘린 기간의 기록을 지우지 않게(#4828 과 같은 규칙).
+ */
+export async function pruneAppJobRecords(policy: () => Promise<AppServerPolicy> = st.appServerPolicyStrict): Promise<number> {
+  const days = (await policy()).job_keep_days;
   let n = 0;
-  for (let i = 0; i < 10; i++) { const k = await js.pruneAppJobs(1000); n += k; if (k < 1000) break; }
+  for (let i = 0; i < 10; i++) { const k = await js.pruneAppJobs(1000, days); n += k; if (k < 1000) break; }
   return n;
 }
 
-/** 앱을 지울 때 — 열린 작업을 끝낸다(함수 · 토큰이 곧 사라진다). */
+/**
+ * 앱을 지울 때 — 열린 작업을 끝낸다(함수 · 토큰이 곧 사라진다). 행(결과)은 보존 기간까지 남긴다 — 누구 이름으로 무엇이 돌았나의 기록이고,
+ *  요청 본문은 시작할 때 이미 비웠다.
+ */
 export async function endJobsForApp(appId: string, why: string): Promise<number> {
   return js.endOpenAppJobsForApp(appId, "failed", why);
 }

@@ -13,8 +13,6 @@ import type { AppServerPolicy } from "./app-server-policy.js";
 export type AppJobStatus = "queued" | "dispatched" | "running" | "done" | "failed" | "canceled";
 /** 열린 작업 — 함수 판 · 토큰을 붙잡는다(배포가 회수 · 정리하지 않는다). */
 export const OPEN_JOB_STATUSES: readonly AppJobStatus[] = Object.freeze(["queued", "dispatched", "running"]);
-/** 동시 상한이 세는 작업 — 함수를 불렀거나 도는 중. */
-export const BUSY_JOB_STATUSES: readonly AppJobStatus[] = Object.freeze(["dispatched", "running"]);
 export const isJobEnded = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
 
 /** 검사 층(app-server-guard) 판 — 이 판부터 작업을 받는다. 그 전 판의 함수는 다시 올려야 한다(app_server_outdated 와 같은 안내). */
@@ -40,8 +38,6 @@ export const JOB_DISPATCH_ATTEMPTS = 3;
 export const JOB_TIMEOUT_GRACE_SEC = 60;
 /** «끝날 때까지 기다리기» 상한(초) — 앞단 · 라우터 시한(30초) 안. */
 export const JOB_WAIT_MAX_SEC = 25;
-/** 끝난 작업 기록 보존(일) — 지나면 행째 지운다(요청 본문 · 결과에 앱 데이터가 실린다). */
-export const JOB_KEEP_DAYS = 30;
 
 // ── 작업 신원(글 모양) ──────────────────────────────────────────────────────────────────
 //  부르기 신원 `lvjc1.<작업 id>.<비밀>` — 게이트웨이가 함수를 부를 때 이벤트의 X-Lively-Identity 에 싣는다. 검사 층만 쓴다(claim 한 번).
@@ -83,7 +79,9 @@ export function jobRouteError(route: unknown): string | null {
   if (typeof route !== "string" || !route) return "route(작업으로 돌릴 앱 라우트 — 예 /api/jobs/transcribe)가 필요합니다";
   if (route.length > JOB_ROUTE_MAX) return `route 가 너무 깁니다(${JOB_ROUTE_MAX}자까지)`;
   if (!route.startsWith("/") || route.startsWith("//")) return "route 는 / 로 시작하는 앱 안 경로여야 합니다(예 /api/jobs/transcribe)";
-  if (/[\u0000-\u001f\u007f\s\\]/.test(route)) return "route 에 빈칸 · 제어문자 · 역슬래시를 쓸 수 없습니다(쿼리 값은 인코딩하세요)";
+  //  ASCII 보이는 글자만 — 빈칸 · 제어문자 · 한글 같은 글자는 인코딩해서 보낸다(이벤트의 경로 · 쿼리는 그대로 앱에 가고, 인코딩하지 않은 글자를
+  //   웹 어댑터 · 앱이 어떻게 읽을지 정해져 있지 않다 — 받기 전에 까닭을 말하는 편이 «시작하지 못했습니다» 보다 낫다 · 격리 리뷰).
+  if (/[^\x21-\x7e]|\\/.test(route)) return "route 에는 ASCII 글자만 씁니다 — 빈칸 · 제어문자 · 한글 같은 글자는 인코딩하세요(encodeURIComponent · 예 ?title=%ED%9A%8C%EC%9D%98) · 역슬래시는 쓸 수 없습니다";
   const path = route.split("?")[0]!.toLowerCase();
   if (path === "/_lively" || path.startsWith("/_lively/")) return "/_lively/* 는 라이블리 자리라 작업 라우트로 쓸 수 없습니다";
   return null;
@@ -208,16 +206,26 @@ export function resultViewOf(r: JobResultReport): JobResultView | null {
   if (!r.body_b64) return out;
   const buf = Buffer.from(r.body_b64, "base64");
   const ct = (r.content_type ?? "").toLowerCase();
-  const asText = (): string | null => { const s = buf.toString("utf8"); return Buffer.from(s, "utf8").equals(buf) ? s : null; };
+  //  ⚠ NUL(U+0000)이 든 글은 글로 두지 않는다 — Postgres 는 jsonb 의 \u0000 을 받지 않아 결과 기록이 통째로 실패한다(격리 리뷰). 그 응답은 base64 로.
+  const asText = (): string | null => { const s = buf.toString("utf8"); return Buffer.from(s, "utf8").equals(buf) && !s.includes("\u0000") ? s : null; };
   if (/\bjson\b/.test(ct) && !r.truncated) {
     const s = asText();
-    if (s !== null) { try { out.json = JSON.parse(s); return out; } catch { /* 글로 둔다 */ } }
+    if (s !== null) {
+      try {
+        const v: unknown = JSON.parse(s);
+        //  글에 NUL 이 없어도 이스케이프(«\u0000»)로 들어올 수 있다 — 다시 써 본 글에 홀로 선 \u0000 이 있으면 base64 로(너무 깊어 못 쓰는 것도).
+        if (!NUL_ESCAPE_RE.test(JSON.stringify(v))) { out.json = v; return out; }
+      } catch { /* 글 · base64 로 둔다 */ }
+    }
   }
   const s = asText();
   if (s !== null && (!ct || /^text\/|json|xml|javascript|x-www-form-urlencoded/.test(ct))) out.text = s;
   else out.base64 = r.body_b64;
   return out;
 }
+
+/** JSON.stringify 결과 안의 NUL 이스케이프 — 앞의 역슬래시가 홀수 개일 때만 진짜 «\u0000» 이다(«\\u0000» 은 역슬래시 글자 + u0000). */
+const NUL_ESCAPE_RE = /(?:^|[^\\])(?:\\\\)*\\u0000/;
 
 /** 보고 → 끝 상태 · 오류 글. 앱이 2xx 로 답했으면 done, 그 밖은 failed(앱이 고를 수 있게 상태 · 본문을 함께 남긴다). */
 export function endOf(r: JobResultReport, ctx: { timeoutSec: number; cancelRequested: boolean }): { status: "done" | "failed" | "canceled"; error: string | null } {
@@ -240,7 +248,7 @@ export function endOf(r: JobResultReport, ctx: { timeoutSec: number; cancelReque
 /** 오류 글에 덧붙일 앱 응답 앞부분(글이면 한 줄로 · 200자). */
 function snippetOf(r: JobResultReport): string {
   if (!r.body_b64) return "";
-  const s = Buffer.from(r.body_b64, "base64").toString("utf8").replace(/\s+/g, " ").trim();
+  const s = Buffer.from(r.body_b64, "base64").toString("utf8").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
   return s.slice(0, 200);
 }
 

@@ -272,7 +272,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   → done · failed · canceled(검사 층의 결과 보고 · 감시). 판정은 apps/app-jobs-plan.ts · 흐름은 apps/app-jobs.ts.
   //   ⚠ 비밀 **값**은 없다 — sha256 만. 상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만»(청/녹 두 슬롯 · 감시 · 검사 층 보고가 겹쳐도 한 번만).
   //   lambda_version · token_hash = 이 작업이 돌 함수 판과 그 판에 구운 앱 서버 토큰 — 작업이 열려 있는 동안 배포가 그 판을 정리하거나 토큰을 회수하지 않는다.
-  //   body = 앱이 넘긴 JSON 글(job_body_kb 까지) · result = 앱 응답의 앞 64KB(글 · JSON · base64). 끝난 지 30일이 지나면 행째 지운다(JOB_KEEP_DAYS).
+  //   body = 앱이 넘긴 JSON 글(job_body_kb 까지 · 시작(claim)하면 비운다) · result = 앱 응답의 앞 64KB(글 · JSON · base64).
+  //   끝난 지 app_server_policy.job_keep_days(기본 30일)가 지나면 행째 지운다.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_app_job(
       id BIGSERIAL PRIMARY KEY,

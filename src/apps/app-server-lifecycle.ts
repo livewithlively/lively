@@ -106,7 +106,7 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   if (row) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
   //  #4485 — 이 앱의 함수 토큰을 모두 회수한다 — 함수 줄이 없어도(앞서 걷기가 회수를 못 했을 수 있다 · 합치기 격리 리뷰). 같은 id 로 앱을 다시 만들어도
   //   옛 토큰이 살아나지 않게. 줄을 남기는 때(pending — 함수를 아직 못 지움)는 위에서 돌아갔다 — 하우스키핑이 다시 지우며 거둔다.
-  await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
+  await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, [], "app-server-remove", { jobPins: false }).catch((e) => errors.push(`토큰: ${publicError(e)}`));
   for (const k of zipKeys) {
     if (deps.deleteZip) await deps.deleteZip(k).catch((e) => errors.push(`zip: ${publicError(e)}`));
     else if (s3) await s3Delete(s3, k, { attempts: 1, timeoutMs: 10_000 }).catch((e) => errors.push(`zip: ${publicError(e)}`));
@@ -147,7 +147,7 @@ export async function retireServer(appId: string, recheck: () => Promise<boolean
     //  #4485 — 걷는 함수 판에 구운 앱 서버 토큰을 줄을 지우기 «전»에 회수한다. 잠금을 쥔 채라 기다리던 배포가 줄을 다시 잡아 새 토큰을 굽는 것과
     //   겹치지 않고(그 새 토큰까지 거두면 새 함수 판이 죽은 토큰을 구운 채 남는다), 줄이 사라진 뒤 게이트웨이가 멈춰도 거둘 것이 남지 않는다(합치기 격리 리뷰).
     //   못 거두면 errors 에 담고 걷기는 이어 간다 — 남은 토큰은 다음 배포 · 앱 지우기(removeServer)가 거둔다.
-    await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, []).catch((e) => errors.push(`토큰: ${publicError(e)}`));
+    await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, [], "app-server-retire", { jobPins: false }).catch((e) => errors.push(`토큰: ${publicError(e)}`));
     await st.keepServerBuilds(appId, [row.cur_build_key, row.pub_build_key], BUILD_KEEP_AFTER_RETIRE_DAYS);
     await st.deleteServerRow(appId);
     gone = true;

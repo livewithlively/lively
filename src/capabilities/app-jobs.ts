@@ -60,7 +60,8 @@ const appJobGet: Capability = {
 const appJobs: Capability = {
   name: "app_jobs",
   title: "앱 백그라운드 작업 목록",
-  description: "내 백그라운드 작업 목록(최근 것부터). 앱 화면 · 앱 서버에서 부르면 그 앱의 내 작업, 관리자는 워크스페이스 전체(남의 것은 상태 · 오류만). status · app_id 로 좁힌다.",
+  description: "내 백그라운드 작업 목록(최근 것부터). 앱 화면 · 앱 서버에서 부르면 그 앱의 내 작업, 관리자는 워크스페이스 전체(남의 것은 상태 · 오류만). status · app_id 로 좁힌다. " +
+    "결과 본문은 싣지 않는다(작업마다 64KB 까지라) — 결과는 app_job_get 으로.",
   scope: null,
   input: {
     app_id: z.string().optional(),

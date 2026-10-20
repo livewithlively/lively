@@ -96,7 +96,7 @@ export interface ServerDeps extends BuildDeps {
   identityPubkeys?: string;
   apiUrl?: string;
   mintFunctionToken?: (appId: string) => Promise<{ token: string; tokenHash: string }>;
-  revokeFunctionTokens?: (appId: string, keep: Array<string | null | undefined>) => Promise<number>;
+  revokeFunctionTokens?: (appId: string, keep: Array<string | null | undefined>, actor?: string, opts?: { jobPins?: boolean }) => Promise<number>;
 }
 
 /** 시험이 끼우는 기본 의존(가짜 Lambda · zip 저장소 · 세션 실행) — 운영에서는 비어 있다. */
@@ -501,13 +501,10 @@ export async function deployBuildToAliases(i: {
     //  별칭을 옮기면 마지막 오류가 지워진다 — 로그 그룹을 못 맞춘 것은 그 뒤에 적어 상태에서도 보이게(다음에 맞추면 다시 지워진다).
     if (logsWarning) await st.setServerError(i.app.id, logsWarningText(logsWarning)).catch(() => { /* 결과에 있다 */ });
     //  어느 별칭도 안 가리키게 된 판의 토큰 회수(#4485) — 실패해도 배포는 됐다(다음 배포가 다시 거둔다).
-    //  #4486 열린 백그라운드 작업이 도는(돌) 판의 토큰은 남긴다 — 작업 도중 새 판을 올려도 그 작업의 라이블리 호출이 끊기지 않게(다음 배포가 거둔다).
+    //  #4486 열린 백그라운드 작업이 도는(돌) 판의 토큰은 회수 함수가 스스로 남긴다(작업을 못 읽으면 아무것도 거두지 않고 던진다).
     const after = await st.getServerRow(i.app.id);
-    const pinsNow = await openJobPins(i.app.id).catch(() => null);
-    if (pinsNow) {
-      await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(i.app.id, [after?.cur_token_hash, after?.pub_token_hash, ...pinsNow.tokens])
-        .catch((err) => logger.warn({ err: String((err as Error)?.message ?? err), app: i.app.id }, "옛 앱 서버 토큰 회수 실패(비치명 — 다음 배포에서)"));
-    } else logger.warn({ app: i.app.id }, "열린 백그라운드 작업을 읽지 못해 옛 앱 서버 토큰 회수를 다음 배포로 미룬다(#4486)");
+    await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(i.app.id, [after?.cur_token_hash, after?.pub_token_hash])
+      .catch((err) => logger.warn({ err: String((err as Error)?.message ?? err), app: i.app.id }, "옛 앱 서버 토큰 회수 실패(비치명 — 다음 배포에서)"));
     await pruneVersions(api, fn, i.app.id, i.policy.keep_versions).catch((err) => logger.warn({ err, fn }, "옛 함수 판 정리 실패(비치명)"));
     return { function_name: fn, aliases: i.aliases, lambda_version: version, build_key: i.buildKey, smoke, ...(logsWarning ? { logs_warning: logsWarning } : {}),
       ...(sizing.notes.length ? { sizing_notes: sizing.notes } : {}) };
@@ -515,7 +512,9 @@ export async function deployBuildToAliases(i: {
     //  #4485 — 새로 구운 토큰을 어느 별칭에도 못 올렸으면 회수한다(그 판은 쓰이지 않는다).
     if (minted && !pinned) {
       const keep = await st.getServerRow(i.app.id).then((r) => [r?.cur_token_hash, r?.pub_token_hash]).catch(() => null);
-      if (keep) await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(i.app.id, keep).catch(() => { /* 다음 배포가 거둔다 */ });
+      //  #4486 열린 작업이 붙잡은 옛 판의 토큰은 회수 함수가 남긴다(이 길에서도 — 격리 리뷰).
+      if (keep) await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(i.app.id, keep)
+        .catch((err) => logger.warn({ err: String((err as Error)?.message ?? err), app: i.app.id }, "못 쓴 새 토큰 회수 실패(비치명 — 다음 배포에서)"));
     }
     //  zip 이 저장소에 없다(ZIP_MISSING_RE — COPY · REFERENCE 의 두 글) — 그 빌드를 못 쓰게 적는다(다음 배포가 다시 빌드).
     //   S3 권한 오류(AccessDenied · REFERENCE 권한 거절)는 zip 탓이 아니다 — 무효로 적으면 누를 때마다 저장한 사람의 세션에서 처음부터 다시 빌드한다.

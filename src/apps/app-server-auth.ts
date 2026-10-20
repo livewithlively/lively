@@ -27,6 +27,7 @@ import { appSqlTenantId } from "./app-sql-exec.js";
 import { verifyAppIdentity, type VerifyAppIdentityOpts } from "./app-identity.js";
 import { appServerUserId, parseAppServerUserId } from "./app-server-id.js";
 import { looksLikeJobCredential } from "./app-jobs-plan.js";
+import { openJobPins } from "./app-jobs-store.js";
 
 export { appServerUserId, parseAppServerUserId };
 
@@ -69,9 +70,13 @@ export async function mintAppServerFunctionToken(appId: string, actor: string): 
  * 어느 별칭도 안 가리키게 된 함수 판의 토큰을 회수한다(#4485) — keep = 지금 cur · pub 판의 토큰. 회수한 수.
  *  이 앱의 함수 판 토큰(FUNCTION_TOKEN_LABEL)만 본다 — 관리자가 바깥 서버용으로 받은 토큰은 건드리지 않는다.
  *  ⚠ 판에서 토큰을 읽어 오지 않는다(AWS 를 다시 부르지 않게) — 별칭을 옮길 때 그 판의 토큰 지문을 org_app_server 에 함께 적는다.
+ *  #4486 열린 백그라운드 작업이 붙잡은 판의 토큰은 늘 남긴다 — 부르는 쪽(배포 성공 · 실패 길)이 빠뜨릴 수 없게 여기서 합친다(격리 리뷰).
+ *   작업을 읽지 못하면 던진다(아무것도 회수하지 않는다 — 다음 배포가 거둔다). 작업을 먼저 끝낸 앱 지우기 · 걷기만 jobPins:false 로 전부 거둔다
+ *   (그사이 새로 들어온 작업이 토큰을 붙잡아 지운 앱의 토큰이 살아남지 않게).
  */
-export async function revokeStaleFunctionTokens(appId: string, keep: Array<string | null | undefined>, actor = "app-server-deploy"): Promise<number> {
-  const keepSet = new Set(keep.filter((x): x is string => !!x));
+export async function revokeStaleFunctionTokens(appId: string, keep: Array<string | null | undefined>, actor = "app-server-deploy", opts: { jobPins?: boolean } = {}): Promise<number> {
+  const pinned = opts.jobPins === false ? [] : (await openJobPins(appId)).tokens;
+  const keepSet = new Set([...keep, ...pinned].filter((x): x is string => !!x));
   const r = await itemsPool.query(
     `SELECT token_hash FROM auth_token WHERE user_id=$1 AND label=$2 AND app_id=$3 AND revoked_at IS NULL`,
     [appServerUserId(appSqlTenantId(), appId), FUNCTION_TOKEN_LABEL(appId), appId]);

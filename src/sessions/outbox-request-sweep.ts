@@ -158,7 +158,8 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  검사 층이 20초마다 박동한다 — 둘 다 요청이라 이 정비를 깨운다). ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
   { key: "app-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("../apps/app-jobs.js").then((m) => m.sweepAppJobs()) },
-  // 앱 백그라운드 작업 기록 보존(#4486) — 끝난 지 30일이 지난 작업 행(요청 본문 · 결과에 앱 데이터가 실린다)을 행째 지운다. 일 단위라 6시간이면 넉넉하다.
+  // 앱 백그라운드 작업 기록 보존(#4486) — 끝난 지 job_keep_days(기본 30일 · 관리자 조정)가 지난 작업 행(결과에 앱 데이터가 실린다)을 행째 지운다.
+  //  일 단위라 6시간이면 넉넉하다. 보존 기간을 못 읽으면 이 정비만 실패한다(지우지 않는다).
   //  ⚠ 테넌트 스코프 — 작업 행은 그 워크스페이스 것이다(RLS).
   { key: "app-job-prune", intervalMs: SIX_HOURS_MS,
     run: () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()) },

@@ -219,12 +219,12 @@ export async function invokeStream(c: LambdaCfg, name: string, qualifier: string
 //  Lambda 가 이벤트를 제 줄에 받아 두고(202) 따로 돌린다 — 부른 쪽은 결과를 받지 않는다(함수 안 검사 층이 게이트웨이에 결과를 보고한다).
 //  이벤트 한도 1MB(https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html). Lambda 는 같은 이벤트를 두 번 보낼 수 있고
 //  함수가 오류로 끝나면 1분 · 2분 뒤 다시 부른다(invocation-async-error-handling) — 그래서 일시 오류에 다시 보내도 된다: 한 작업은 검사 층의
-//  claim(게이트웨이가 한 번만 넘긴다)을 지나야 앱에 닿는다(awsCall 의 다시 하기를 그대로 쓴다).
+//  claim(게이트웨이가 한 번만 넘긴다)을 지나야 앱에 닿는다. 사람의 요청 안에서 기다리므로 짧게(8초 · 두 번) — 못 보내면 줄로 되돌리고 감시가 다시 민다.
 export async function invokeAsync(c: LambdaCfg, name: string, qualifier: string, payload: unknown, deps?: AwsDeps): Promise<{ status: number; requestId: string | null }> {
   const r = await awsCall({
     service: "lambda", region: c.region, host: host(c), method: "POST", path: ["2015-03-31", "functions", name, "invocations"],
-    query: { Qualifier: qualifier }, body: payload, headers: { "x-amz-invocation-type": "Event" },
-  }, deps);
+    query: { Qualifier: qualifier }, body: payload, headers: { "x-amz-invocation-type": "Event" }, timeoutMs: 8_000,
+  }, { attempts: 2, ...deps });
   return { status: r.status, requestId: r.headers.get("x-amzn-requestid") };
 }
 

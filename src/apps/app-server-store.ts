@@ -15,6 +15,12 @@ export async function appServerPolicy(): Promise<AppServerPolicy> {
   const row = await appServerPolicyRow().catch((err) => { logger.warn({ err: String(err) }, "앱 서버 상한을 읽지 못해 기본값을 쓴다(#4484)"); return {}; });
   return resolveAppServerPolicy(Object.keys(row).length ? row : null);
 }
+/** 못 읽으면 던진다(기본값으로 접지 않는다) — 지우기처럼 «기본값으로 잘못 읽으면 되돌릴 수 없는» 일이 쓴다(#4486 작업 기록 보존 · #4828 과 같은 규칙). */
+export async function appServerPolicyStrict(): Promise<AppServerPolicy> {
+  const r = await itemsPool.query(`SELECT app_server_policy FROM org_runtime_config WHERE id=1`);
+  const row = r.rows[0]?.app_server_policy;
+  return resolveAppServerPolicy(row && typeof row === "object" && Object.keys(row).length ? row : null);
+}
 export async function setAppServerPolicy(next: Record<string, number>, ctx: { actor?: string; source?: string }): Promise<void> {
   const before = await appServerPolicyRow();
   await itemsPool.query(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(next)]);

@@ -30,7 +30,7 @@
 //   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
 //   격리 리뷰 · 재검토: V12 판 목록 404 면 지운다 · V13 잠긴 앱은 건너뛴다 · V14 잠금 안 재확인(V14b 저장소 오류면 막지 않는다) · V15 Inactive 되살리기
 //   (V15b Inactive + 지난 고치기 실패 · V15c 그 뒤 새 코드 · V15d 그 뒤 설정만 · V15e 그 뒤 같은 코드 · 같은 설정 — 모두 코드를 다시 올린다) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
-//  #4486 백그라운드 작업(J): J6 별칭의 검사 층 판 · J7 열린 작업이 붙잡은 판 · 토큰은 정리 · 회수 안 함(J7b 끝나면 거둠) · J8 함수 크기 = 그 판의 선언
+//  #4486 백그라운드 작업(J): J6 별칭의 검사 층 판 · J7 열린 작업이 붙잡은 판 · 토큰은 정리 · 회수 안 함(J7c 시험 호출이 실패한 배포도 · J7b 끝나면 거둠) · J8 함수 크기 = 그 판의 선언
 //  #4887 별칭 판 상태 점검(H): H0 판정 · H1 정상 · H2 하루 주기 · H3 쉬는 판 · H4 옛 판(cur · pub 한 번에) · H5 pub 만 옛 판 · H6 원본 잃음(돎) · H7 멈춤(알림)
 //   H8 zip 없음(알림만 · H8b 다음 날 다시 안 알림 · 다른 판이면 다시) · H9 일시 오류(H9b 하루 넘으면 한 번 · H9c 저장소 오류 원문 안 보임) · H10 잠김(H10b 그사이 잠김 ·
 //   H10c 그사이 옮겨짐 · H10c2 한 별칭만 옮겨짐 · H10d 정상 판정 중 옮겨짐 — 결과 안 덮음) · H11 한 틱 몫 · H12 빌드가 다른 별칭 · H13 멈춘 함수 · H14 상태 · H15 COPY · H16 고아
@@ -1185,7 +1185,7 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   const lg0 = calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length;
   //  X2c 회수는 줄을 지우기 «전»(잠금을 쥔 채)에 — 줄이 있는 때 불렸는지 본다(합치기 격리 리뷰: 기다리던 배포의 새 토큰과 겹치지 않게)
   const seenRevoke = [];
-  setServerDepsForTest({ ...baseDepsW(), revokeFunctionTokens: async (app, keep) => { seenRevoke.push({ app, row: !!(await rowOf(app)) }); return revokeStaleFunctionTokens(app, keep); } });
+  setServerDepsForTest({ ...baseDepsW(), revokeFunctionTokens: async (app, keep, ...rest) => { seenRevoke.push({ app, row: !!(await rowOf(app)) }); return revokeStaleFunctionTokens(app, keep, ...rest); } });
   const h3 = (await runAppServerHousekeeping({ api, usage: async () => new Map(), notify: async () => {} })).retire;
   setServerDepsForTest(baseDepsW());
   const builds = await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='ret-a' AND status='ok'`);
@@ -2433,6 +2433,19 @@ for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "
   chk("J8 함수 크기 = 그 판의 선언(web.server.memory_mb 2048 · tmp_mb 1024) · 시간 = 작업 시간 900 · 사람 요청 시간은 검사 층 env 30",
     cfgJ?.MemorySize === 2048 && cfgJ?.EphemeralStorage?.Size === 1024 && cfgJ?.Timeout === 900 && cfgJ?.Environment?.Variables?.LIVELY_REQUEST_TIMEOUT_S === "30",
     JSON.stringify({ m: cfgJ?.MemorySize, e: cfgJ?.EphemeralStorage, t: cfgJ?.Timeout }));
+  //  J7c 배포가 시험 호출에서 실패하는 길(못 쓴 새 토큰을 회수하는 catch)도 열린 작업의 토큰은 남긴다 — 성공 길만 지키면 이 길이 그 토큰을 거둬
+  //   도는 작업의 SDK 호출 · 박동 · 결과 보고가 모두 401 이 된다(격리 리뷰 막을 것).
+  const toksBefore = (await fnTokens(ID)).filter((t) => !t.revoked_at).map((t) => t.token_hash);
+  invokeMode = "noguard";
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j2c')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  const dj2c = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  invokeMode = "ok";
+  const toks2c = await fnTokens(ID);
+  const minted2c = toks2c.filter((t) => !toksBefore.includes(t.token_hash));
+  chk("J7c ★ 시험 호출이 실패한 배포 — 못 쓴 새 토큰만 회수하고 열린 작업이 붙잡은 토큰은 남긴다",
+    dj2c.status === "failed" && dj2c.stage === "smoke" && toks2c.some((t) => t.token_hash === pinnedTok && !t.revoked_at)
+      && minted2c.length === 1 && !!minted2c[0].revoked_at,
+    JSON.stringify({ s: dj2c.status, stage: dj2c.stage, pinned: toks2c.find((t) => t.token_hash === pinnedTok), minted2c }));
   await q(`UPDATE org_app_job SET status='done', ended_at=now() WHERE id=$1`, [jid]);
   await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j3')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
   await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
