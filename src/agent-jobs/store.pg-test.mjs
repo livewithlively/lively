@@ -290,10 +290,10 @@ try {
     const id = await running("l1");
     await st.finishAgentJob(id, { status: "done", result: { text: "가".repeat(1000) }, tail: "꼬리", from: ["running"] });
     const a = await st.getAgentJobAuth(id);
-    chk("I1 콜백 대조는 네 칸만 읽는다", a && Object.keys(a).sort().join(",") === "boot_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
+    chk("I1 콜백 대조는 다섯 칸만 읽는다(비밀 셋 — 부트 · 실패 보고 #4829 · 콜백)", a && Object.keys(a).sort().join(",") === "boot_hash,fail_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
     chk("I1 없는 작업은 null", (await st.getAgentJobAuth(987654321)) === null);
     const [l] = await st.listAgentJobs({ requester: `${REQ}l1`, limit: 5 });
-    const leaked = ["prompt", "result", "output_tail", "boot_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
+    const leaked = ["prompt", "result", "output_tail", "boot_hash", "fail_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
     chk("I2 목록은 요약만 — 프롬프트·결과 전문·꼬리·비밀 해시 없음 · 답 앞머리 280자", leaked.length === 0 && l.result_preview.length === 280 && l.has_result === true,
       JSON.stringify({ leaked, len: l.result_preview?.length }));
     await itemsPool.query(`UPDATE org_agent_job SET reaped=false, error=$2 WHERE id=$1`, [id, "e".repeat(5000)]);
@@ -316,6 +316,103 @@ try {
     await st.requestCancelAgentJob(c, "사유");
     const ec = await st.finishAgentJob(c, { status: "done", error: null, from: ["running"] });
     chk("K3 취소가 걸렸어도 답을 내고 끝났으면(done) 사유를 오류로 적지 않는다", ec?.status === "done" && ec?.error === null, JSON.stringify(ec && { s: ec.status, e: ec.error }));
+  }
+
+  // ── BF. 시작 실패 보고(#4829) — 실패 보고 비밀(fail_hash = 부트 비밀) · 첫 박동 전까지만 ──────────────────
+  //  «박동 전» 은 데이터다 — 부트는 실패 보고 비밀을 남기고 첫 박동 · 되돌리기 · 끝내기가 지운다. 그 쓰기들이 SQL 조건이라 가짜 저장소로는 못 잰다.
+  {
+    await cleanup();
+    const id = await add("bf1");
+    const [c] = await claimAll();
+    chk("BF1 자리를 주면 실패 보고 비밀을 부트 비밀과 같은 값으로 단다", c.row.fail_hash === c.row.boot_hash && /^[0-9a-f]{64}$/.test(c.row.fail_hash ?? ""));
+    chk("BF2 해시가 다르면 아무것도 안 바꾼다", (await st.failBootAgentJob(id, "0".repeat(64), "x")) === null && (await row(id)).status === "starting");
+    const e1 = await st.failBootAgentJob(id, c.row.fail_hash, "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+    const r1 = await row(id);
+    chk("BF3 띄우는 중 — 그 사유로 failed · 끝난 때 · 두 비밀을 지운다 · 컨테이너가 있으니 아직 안 걷음",
+      e1?.status === "failed" && r1.error === "작업 컨테이너가 게이트웨이에 닿지 못했습니다" && r1.ended_at !== null
+        && r1.fail_hash === null && r1.boot_hash === null && r1.reaped === false,
+      JSON.stringify({ s: r1.status, f: r1.fail_hash, b: r1.boot_hash, reaped: r1.reaped }));
+    chk("BF3 한 번만 — 두 번째 보고는 null", (await st.failBootAgentJob(id, c.row.fail_hash, "y")) === null && (await row(id)).error === "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+
+    //  부트는 받았는데(부트 비밀은 지워졌다) 응답이 판에 못 닿은 판 — 도는 중이지만 박동 전.
+    const id2 = await add("bf2");
+    const c2 = (await claimAll()).find((x) => x.row.id === id2);
+    await st.bootAgentJob(id2, c2.row.boot_hash, "a".repeat(64));
+    const b2 = await row(id2);
+    chk("BF4 부트는 부트 비밀만 지우고 실패 보고 비밀은 남긴다",
+      b2.status === "running" && b2.boot_hash === null && b2.fail_hash === c2.row.boot_hash,
+      JSON.stringify({ s: b2.status, b: b2.boot_hash, f: b2.fail_hash }));
+    const e2 = await st.failBootAgentJob(id2, c2.row.boot_hash, "응답 못 받음");
+    chk("BF5 도는 중이라도 박동 전이면 실패로 끝낸다", e2?.status === "failed" && (await row(id2)).fail_hash === null);
+
+    const id3 = await add("bf3");
+    const c3 = (await claimAll()).find((x) => x.row.id === id3);
+    await st.bootAgentJob(id3, c3.row.boot_hash, "b".repeat(64));
+    await st.tickAgentJob(id3, { tail: "도는 중", conversationId: null });
+    chk("BF6 첫 박동이 실패 보고 비밀을 지운다 — 박동이 온 판(살아 있다)은 실패 보고로 끝낼 수 없다",
+      (await row(id3)).fail_hash === null && (await st.failBootAgentJob(id3, c3.row.boot_hash, "x")) === null && (await row(id3)).status === "running");
+    await st.finishAgentJob(id3, { status: "done", error: null, from: ["running"] });
+    chk("BF7 끝내면 실패 보고 비밀도 지운다", (await row(id3)).fail_hash === null);
+
+    const id4 = await add("bf4");
+    const c4 = (await claimAll()).find((x) => x.row.id === id4);
+    await st.requeueAgentJob(id4, "띄우기 실패 — 다시 기다립니다: x", 5);
+    chk("BF8 대기열로 되돌리면 앞 컨테이너의 실패 보고 비밀을 지운다(그 비밀로는 못 끝낸다)",
+      (await row(id4)).fail_hash === null && (await st.failBootAgentJob(id4, c4.row.boot_hash, "x")) === null && (await row(id4)).status === "queued");
+
+    const id5 = await add("bf5");
+    const c5 = (await claimAll()).find((x) => x.row.id === id5);
+    const race = await Promise.all([
+      st.failBootAgentJob(id5, c5.row.boot_hash, "판 보고"),
+      st.finishAgentJob(id5, { status: "failed", error: "감시", from: ["starting"] }),
+      st.failBootAgentJob(id5, c5.row.boot_hash, "판 보고 2"),
+    ]);
+    chk("BF9 실패 보고 둘과 감시가 겹쳐도 한 번만 끝난다", race.filter(Boolean).length === 1, JSON.stringify(race.map((x) => x?.error ?? null)));
+
+    //  끝내는 길은 모두 비밀을 지운다 — 그래도 상태 조건이 마지막 울타리다: 비밀이 남은 끝난 행(앞으로 생길 다른 끝내기 길)을 덮어쓰지 않는다.
+    const id6 = await add("bf6");
+    const c6 = (await claimAll()).find((x) => x.row.id === id6);
+    await itemsPool.query(`UPDATE org_agent_job SET status='done', error=NULL, ended_at=now() WHERE id=$1`, [id6]);
+    chk("BF10 끝난 작업은 비밀이 남아 있어도 실패 보고로 덮어쓰지 않는다",
+      (await st.failBootAgentJob(id6, c6.row.boot_hash, "x")) === null && (await row(id6)).status === "done" && (await row(id6)).error === null);
+  }
+
+  // ── P. 보존 정리(#4828) — 끝났고 걷은 작업 가운데 끝난 지 보존 일수가 지난 행만 지운다 ──────────────────
+  //  조건이 SQL 한 문장(store.pruneAgentJobs)이라 가짜 저장소로는 못 잰다 — 여기서 행을 되읽어 판정한다.
+  {
+    await cleanup();
+    //  남의 오래된 끝난 행이 있으면 «지운 수» 를 판정할 수 없다 — 빈 DB 에서 돌린다(CI 가 그렇다).
+    const foreign = (await itemsPool.query(
+      `SELECT count(*)::int AS n FROM org_agent_job WHERE requester NOT LIKE $1 AND reaped AND ended_at < now() - interval '1 day'`, [`${REQ}%`])).rows[0].n;
+    if (foreign > 0) throw new Error(`이 DB 에 시험 밖의 끝난 작업이 ${foreign}건 있다 — 빈 DB 에서 돌린다`);
+    const mk = async (who, status, reaped, endedAgoDays) => {
+      const id = await add(who);
+      await itemsPool.query(
+        `UPDATE org_agent_job SET status=$2, reaped=$3, ended_at = CASE WHEN $4::int IS NULL THEN NULL ELSE now() - make_interval(days => $4::int) END WHERE id=$1`,
+        [id, status, reaped, endedAgoDays]);
+      return id;
+    };
+    const old = await mk("p-old", "done", true, 91);
+    const older = await mk("p-older", "canceled", true, 400);
+    const fresh = await mk("p-fresh", "failed", true, 89);
+    const unreaped = await mk("p-unreaped", "timeout", false, 400);
+    const openOld = await mk("p-open", "running", false, null);
+    await itemsPool.query(`UPDATE org_agent_job SET created_at = now() - interval '400 days' WHERE id=$1`, [openOld]);
+    //  있어선 안 되는 모양(열린 작업인데 끝난 때 · 걷음 표시가 있다)이어도 열린 작업은 지우지 않는다 — 상태 조건이 마지막 울타리다.
+    const openOdd = await mk("p-open-odd", "running", true, 400);
+    const exists = async (id) => !!(await row(id));
+    chk("P1 0(무기한)은 아무것도 지우지 않는다", (await st.pruneAgentJobs(0)) === 0 && (await exists(old)) && (await exists(older)));
+    //  1 일 아래 소수 · 음수 · 숫자 아님도 무기한 — 버림 뒤 0 일(make_interval(days => 0))로 돌면 걷은 행을 다 지운다(격리 리뷰).
+    chk("P1b 1 일 아래(0.5 · -3 · NaN)도 아무것도 지우지 않는다",
+      (await st.pruneAgentJobs(0.5)) === 0 && (await st.pruneAgentJobs(-3)) === 0 && (await st.pruneAgentJobs(NaN)) === 0 && (await exists(old)) && (await exists(older)));
+    const n1 = await st.pruneAgentJobs(90, 1);
+    //  «가장 오래된 것부터» 는 ORDER BY 가 약속하고 부분 인덱스(ended_at)도 같은 순서로 읽는다 — ORDER BY 를 지워도 이 시험은 초록이다(격리 리뷰).
+    chk("P2 한 판의 상한(batch) — batch 행까지만 · 끝난 때가 오래된 것이 먼저", n1 === 1 && !(await exists(older)) && (await exists(old)), JSON.stringify({ n1 }));
+    const n2 = await st.pruneAgentJobs(90);
+    chk("P3 보존 일수(90)가 지난 «끝났고 걷은» 행만 — 89일 · 걷기 전 · 열린 작업(끝난 때가 잘못 적혔어도)은 남긴다",
+      n2 === 1 && !(await exists(old)) && (await exists(fresh)) && (await exists(unreaped)) && (await exists(openOld)) && (await exists(openOdd)),
+      JSON.stringify({ n2, fresh: await exists(fresh), unreaped: await exists(unreaped), openOld: await exists(openOld), openOdd: await exists(openOdd) }));
+    chk("P4 다시 돌리면 지울 것이 없다(멱등)", (await st.pruneAgentJobs(90)) === 0);
   }
 
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
@@ -344,6 +441,13 @@ try {
     chk("J3 범위 밖 값은 400", ranged?.status === 400);
     const r4 = await set.handler({ reset: true }, admin, ctx);
     chk("J4 reset 은 워크스페이스 값을 비운다", JSON.stringify(r4.workspace_setting) === "{}" && r4.source !== "db", JSON.stringify(r4.workspace_setting));
+    //  #4828 보존 일수 — 기본 90 · 0(무기한)도 받는다 · 범위 밖(3651)은 400.
+    const r5 = await set.handler({ keep_days: 0 }, admin, ctx);
+    let tooLong = null;
+    try { await set.handler({ keep_days: 3651 }, admin, ctx); } catch (e) { tooLong = e; }
+    chk("J5 보존 일수(keep_days)를 고친다 — 기본 90 · 0(무기한)은 받고 3651 은 400",
+      r4.policy.keep_days === 90 && r5.policy.keep_days === 0 && r5.workspace_setting.keep_days === 0 && tooLong?.status === 400,
+      JSON.stringify({ before: r4.policy.keep_days, after: r5.workspace_setting, status: tooLong?.status }));
   }
 } catch (e) {
   bad("예외", String((e && e.stack) || e));

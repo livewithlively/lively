@@ -143,6 +143,12 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
   { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
+  // 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 행을 보존 기간(agent_job_policy.keep_days · 기본 90일 · 0 = 무기한)이 지나면 행째 지운다.
+  //  일 단위 보존이라 6시간이면 넉넉하다(세션 기록 정리 session-log-reap 과 같은 박자). 한 판에 1,000 행씩 10 판까지 — 더 밀리면 다음 정비가 잇는다.
+  //  DB 행만 지운다(컨테이너 · 토큰은 감시 agent-job-sweep 이 먼저 걷는다 — 걷기 전 행은 지우지 않는다). 보존 기간을 못 읽으면 이 정비만 실패한다.
+  //  ⚠ 테넌트 스코프 — 작업 행도 보존 기간 설정도 그 워크스페이스 것이다(RLS).
+  { key: "job-record-prune", intervalMs: SIX_HOURS_MS,
+    run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).pruneAgentJobRecords(await m.liveAgentJobDeps())) },
   // 앱 AI 실행 정비(#4488 앱 v2-9) — 작업 컨테이너에 붙은 열린 실행을 작업 상태에 맞추고(결과 형식 판정 · 재시도), 게이트웨이가 죽어 끝맺지 못한 단발(프록시)
   //  실행을 끝낸다. 파괴적 동작 없음(DB 행만). ⚠ 테넌트 스코프 — 실행 행은 RLS 로 그 워크스페이스 것만 보인다.
   { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS,
