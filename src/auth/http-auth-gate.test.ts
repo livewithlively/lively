@@ -2,7 +2,7 @@
 //  그 밖(터미널 · 파일 · 웹 라우트 — 사람 이름으로 세션을 열거나 파일 · 계정을 만지는 길)은 거부한다. 무조건 통과 도구(EXEMPT)도 꺼진다.
 //  판정은 순수 함수(appPrincipalGate) 표로, 문을 어디에 어떤 갈래로 달았나는 소스로 잰다(문 하나가 빠지면 그 길이 열린다).
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import type { LivelyUser } from "../context.js";
 import { appPrincipalGate, type AppPrincipalGateMode } from "./http-auth.js";
 import { appServerUserId } from "../apps/app-server-id.js";
@@ -44,7 +44,19 @@ t("G4 문 배선 — /mcp 는 mcp 갈래 · /install 은 deny · 능력 REST 만
   assert.equal(IDX.split("bearerWithResourceMetadata(verifier").length - 1, 2, "/mcp(기본 mcp) 하나 · /install(deny) 하나");
   const sob = SRC.slice(SRC.indexOf("export function sessionOrBearer("));
   assert.match(sob, /const gate = appServerGate\(opts\.appServer === true \? "cap" : "deny"\);/);
-  //  능력 REST 마운트 하나만 cap 을 단다(web.ts authCap) — 다른 자리가 appServer:true 로 열면 이 수가 는다.
+  //  능력 REST 마운트 하나만 cap 을 단다(web.ts authCap) — 소스 전체(시험 제외)를 훑어 다른 자리가 appServer:true 로 열면 빨개진다(증분 재검토).
+  const root = new URL("../../src/", import.meta.url);
+  const hits: string[] = [];
+  const walk = (dir: URL): void => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) { walk(new URL(`${e.name}/`, dir)); continue; }
+      if (!e.name.endsWith(".ts") || e.name.endsWith(".test.ts")) continue;
+      const f = new URL(e.name, dir);
+      if (/sessionOrBearer\([^)]*appServer:\s*true/.test(readFileSync(f, "utf8"))) hits.push(f.pathname.replace(root.pathname, ""));
+    }
+  };
+  walk(root);
+  assert.deepEqual(hits, ["web.ts"], JSON.stringify(hits));
   const WEB = readFileSync(new URL("../../src/web.ts", import.meta.url), "utf8");
   assert.equal(WEB.split("sessionOrBearer(verifier, { appServer: true })").length - 1, 1);
 });

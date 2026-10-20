@@ -12,6 +12,12 @@ import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from
 import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess, type LivelyUser } from "../context.js";
 import { requireAppTool } from "../apps/principal.js";
 
+import { SELF_SOURCE } from "../db/self-source.js";
+import { SELF_RLS_ROLE, plantScope, clearScope, selfRlsReady } from "../db/self-rls.js";
+import { viewerOf } from "../capabilities/principal.js";
+import { suggestSimilarNames, filterTableNames } from "../db/schema-hint.js";
+import { execReadQuery, enrichSchemaError, requireSelfSourceAllowed, unknownTableMessage, type DbQueryResult } from "../db/query-exec.js";
+
 /**
  * #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 사람 홈 없는 작업 AI)는 DB 도구도 앱 도구 게이트(그 앱 동의의 도구 목록)를 탄다.
  *  이 셋은 능력 레지스트리 밖이라 scope(db · db:<소스>)만 봐 왔다. 앱 세션 토큰(사람의 하네스)은 종전대로 scope 만 — 새 길만 닫는다(격리 리뷰).
@@ -19,11 +25,6 @@ import { requireAppTool } from "../apps/principal.js";
 export async function requireDbToolForAppServer(user: LivelyUser, name: string): Promise<void> {
   if (user.appServer === true) await requireAppTool(user, name);
 }
-import { SELF_SOURCE } from "../db/self-source.js";
-import { SELF_RLS_ROLE, plantScope, clearScope, selfRlsReady } from "../db/self-rls.js";
-import { viewerOf } from "../capabilities/principal.js";
-import { suggestSimilarNames, filterTableNames } from "../db/schema-hint.js";
-import { execReadQuery, enrichSchemaError, requireSelfSourceAllowed, unknownTableMessage, type DbQueryResult } from "../db/query-exec.js";
 
 // db 직접등록 툴(capability 레지스트리 밖) — 등록 정의 단일 출처(#1313 R24).
 //  MCP 등록(registerDbTools)과 메타 상수(DB_TOOLS — 웹 도구 토글 후보·http_proxy 섀도잉 차단)가

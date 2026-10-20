@@ -240,6 +240,18 @@ try {
   chk("E3g DB 도구 — 작업 AI(앱 서버 급, 진짜 검증기로 받은 주체)는 동의에 없는 db_query 가 403 · 동의한 도구는 통과 · 앱 세션 토큰은 종전대로 통과",
     jobUser?.appServer === true && !sessUser?.appServer && g.jobDb === 403 && g.jobGranted === "ok" && g.sessDb === "ok", JSON.stringify({ appServer: jobUser?.appServer, ...g }));
 
+  // ── E3h #4891 DB 도구 핸들러 셋(능력 레지스트리 밖)을 실제로 모아 부른다 — 작업 AI 주체면 셋 다 앱 도구 게이트 403 · 앱 세션 토큰은 종전(scope 판정) ──
+  //  호출 줄 하나가 빠지거나 넷째 DB 도구가 생기면 여기서 빨개진다(헬퍼만 재는 E3g 의 빈틈 — 증분 재검토).
+  const dbHandlers = new Map();
+  DBT.registerDbTools({ registerTool: (name, _cfg, handler) => { dbHandlers.set(name, handler); } });
+  const argsOf = { db_sources: {}, db_schema: { table: "contacts" }, db_query: { sql: "SELECT 1" } };
+  const runDb = async (u, name) => { try { await dbHandlers.get(name)(argsOf[name], { authInfo: { extra: u } }); return "ok"; } catch (e) { return e?.status === 403 ? 403 : String(e?.message ?? e).slice(0, 80); } };
+  const h = {};
+  for (const name of [...dbHandlers.keys()].sort()) h[name] = { job: await runDb(jobUser, name), sess: await runDb(sessUser, name) };
+  chk("E3h DB 도구 셋 — 등록은 정확히 셋 · 작업 AI 는 셋 다 403(동의 밖) · 앱 세션 토큰은 앱 도구 게이트가 아니라 scope 판정에서 걸린다(종전)",
+    JSON.stringify([...dbHandlers.keys()].sort()) === JSON.stringify(["db_query", "db_schema", "db_sources"])
+      && Object.values(h).every((x) => x.job === 403 && x.sess !== 403), JSON.stringify(h));
+
   // ── E4 앱 서버 빈도 — 사람마다 ──
   X.resetAppSqlLimits({ ...process.env, LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "100" });
   const burst = [];
