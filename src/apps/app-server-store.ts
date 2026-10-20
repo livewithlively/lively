@@ -358,9 +358,16 @@ export async function setServerAlias(appId: string, alias: AliasName, v: { versi
   //  별칭을 옮겼다 = 서버 선언이 있는 판을 올렸다 — «쓰지 않음» 표시(#4791)를 걷는다(다음 하우스키핑을 기다리지 않게).
   //   #4887 점검 결과도 비운다 — 옛 판의 결과(못 고침 등)가 새 판에 남지 않게 · 다음 틱에 새 판을 본다.
   await itemsPool.query(
-    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_guard=$6, ${c}_at=now(), last_error=NULL, unused_since=NULL,
+    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_at=now(), last_error=NULL, unused_since=NULL,
             health=NULL, health_checked_at=NULL, updated_at=now() WHERE app_id=$1`,
-    [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null, v.guard ?? null]);
+    [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null]);
+  //  #4486 검사 층 판은 따로 적는다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다(약 5분 · 지식
+  //   roll-order-migrate-after-gw-swap-auth-outage-2026-10-20). 그 사이 칸이 없다고 위 문장까지 실패하면 AWS 별칭은 옮겼는데 줄은 옛 판이고,
+  //   배포의 실패 길이 새 판에 구운 토큰을 회수해 그 앱 서버가 다음 배포까지 401 이 된다. 칸이 없으면 비워 둔다(작업은 다음 배포까지 «다시 올려야» 409).
+  await itemsPool.query(`UPDATE org_app_server SET ${c}_guard=$2 WHERE app_id=$1`, [appId, v.guard ?? null]).catch((err: unknown) => {
+    if ((err as { code?: unknown })?.code !== "42703") throw err;   // undefined_column — 마이그레이션 전
+    logger.warn({ app: appId, alias: c }, "검사 층 판 칸이 아직 없다(공용 DB 마이그레이션 전) — 비워 둔다(#4486)");
+  });
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);

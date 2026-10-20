@@ -2464,6 +2464,20 @@ for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "
   chk("J7d 회수 — 기본은 열린 작업의 토큰을 남기고(keep 비어도) · jobPins:false 는 그것까지 거둔다", !!kept4 && !kept4.revoked_at && !!gone4?.revoked_at,
     JSON.stringify({ kept4, gone4 }));
   await q(`UPDATE org_app_job SET status='failed', ended_at=now() WHERE id=$1`, [jid4]);
+  //  J9 공용 DB 마이그레이션 전(검사 층 판 칸이 아직 없다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 마이그레이션을 맨 끝에 돌린다)에 배포해도
+  //   별칭 · 판 · 토큰은 맞게 적히고 칸만 빈다. 칸 탓에 별칭 기록이 실패하면 실패 길이 새 판에 구운 토큰을 회수해 앱 서버가 401 이 된다.
+  await q(`ALTER TABLE org_app_server DROP COLUMN cur_guard, DROP COLUMN pub_guard`);
+  let dj9, rj9, toks9;
+  try {
+    await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j9')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+    dj9 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+    rj9 = await rowOf(ID);
+    toks9 = await fnTokens(ID);
+  } finally { await q(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT, ADD COLUMN IF NOT EXISTS pub_guard INT`); }
+  chk("J9 ★ 검사 층 판 칸이 없는(마이그레이션 전) 배포 — 별칭 · 판 · 토큰은 적히고 그 토큰은 살아 있다",
+    dj9?.status === "deployed" && rj9?.cur_lambda_version !== rj4.cur_lambda_version && rj9?.cur_lambda_version === fns.get(FNJ).aliases.get("cur")
+      && toks9.some((t) => t.token_hash === rj9.cur_token_hash && !t.revoked_at) && !("cur_guard" in rj9),
+    JSON.stringify({ s: dj9?.status, err: dj9?.error, v: rj9?.cur_lambda_version, alias: fns.get(FNJ).aliases.get("cur"), before: rj4.cur_lambda_version }));
   await q(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPol)]);
   await call("org_app_remove", { app_id: ID }, boss);
 }
