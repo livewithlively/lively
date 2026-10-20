@@ -12,4 +12,11 @@ const row = form.split("\n").find((l) => l.includes(`kind: '${ANTHROPIC_KEY_KIND
 assert.ok(row, `AF1 관리탭 자격 폼에 kind '${ANTHROPIC_KEY_KIND}' 줄이 있다`);
 assert.ok(!/memberOnly:\s*true/.test(row!), "AF2 조직 통합(owner=gateway) 자격이라 개인 전용이 아니다 — 통합 자격 카드에 보여야 한다");
 assert.match(row!, /secretPh: 'sk-ant-/, "AF3 키 모양 안내");
-console.log("✓ admin-form-wiring — 관리탭 자격 폼 × 코어 ANTHROPIC_KEY_KIND (AF1~AF3)");
+// AF4 워크스페이스에 묶이지 않은 키를 위한 부속 칸 — meta.workspace_id(코어 live.ts workspaceAnthropicWorkspaceId 가 읽는 키 이름과 같아야 한다)
+const start = form.indexOf(row!); const rowBlock = form.slice(start, form.indexOf("\n  {", start + 1) > 0 ? form.indexOf("\n  // #1101", start) : form.length);
+assert.match(rowBlock, /metaField: \{ key: 'workspace_id'/, "AF4 폼의 부속 칸 key = workspace_id");
+const live = readFileSync(path.join(ROOT, "src/ai-runs/live.ts"), "utf8");
+assert.match(live, /meta\?\.workspace_id/, "AF4 코어가 같은 meta 키를 읽는다");
+// AF5 폼이 부속 칸 값을 meta 에 실어 보낸다(값이 있을 때만)
+assert.match(form, /if \(spec\.metaField && metaIn\.value\.trim\(\)\) payload\.meta = \{ \.\.\.\(payload\.meta \|\| \{\}\), \[spec\.metaField\.key\]: metaIn\.value\.trim\(\) \}/, "AF5 저장 payload.meta[key]");
+console.log("✓ admin-form-wiring — 관리탭 자격 폼 × 코어 ANTHROPIC_KEY_KIND (AF1~AF5)");

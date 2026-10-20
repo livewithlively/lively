@@ -72,7 +72,8 @@ export function llmProxyHandler(p: LlmProxyDeps): express.RequestHandler {
     const d = await p.deps();
     const { overDailyBudget } = await import("./plan.js");
     const key = await d.apiKey();
-    if (!key) throw new HttpError(503, "이 워크스페이스에 Anthropic API 키가 없습니다 — 관리자가 org_credential_set kind=anthropic_api_key 로 등록해야 합니다");
+    const workspaceId = (await d.apiWorkspaceId?.()) ?? null;
+    if (!key) throw new HttpError(503, "이 워크스페이스에 Anthropic API 키가 없습니다 — 관리자가 관리탭 ▸ 서비스 로그인(또는 org_credential_set kind=anthropic_api_key)으로 등록해야 합니다");
     const pol = await d.policy();
     if (overDailyBudget(await d.store.tokensUsedTodayByApp(who.appId), pol.daily_tokens_per_app)) {
       throw new HttpError(429, `이 앱의 오늘 토큰 상한(${pol.daily_tokens_per_app.toLocaleString()})을 다 썼습니다`);
@@ -97,7 +98,7 @@ export function llmProxyHandler(p: LlmProxyDeps): express.RequestHandler {
       }).catch((e) => logger.warn({ app: who.appId, err: (e as Error)?.message }, "[llm-proxy] 계측 기록 실패"));
     };
     try {
-      upstream = await p.forward({ path, headers: forwardHeaders(req.headers, key), body, stream, signal: ac.signal });
+      upstream = await p.forward({ path, headers: forwardHeaders(req.headers, key, workspaceId), body, stream, signal: ac.signal });
       res.status(upstream.status);
       for (const [k, v] of Object.entries(upstream.headers)) res.setHeader(k, v);
       if (!upstream.body) { res.end(); await record(upstream.status, (await upstream.usage).usage, null, null); return; }

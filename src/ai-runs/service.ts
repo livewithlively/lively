@@ -57,6 +57,8 @@ export interface AiRunDeps {
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
   apiKey(): Promise<string | null>;
+  /** 그 키의 Anthropic 워크스페이스 id(자격 meta.workspace_id) — 워크스페이스에 묶이지 않은 키는 이게 있어야 돈다. 없으면 null. */
+  apiWorkspaceId?(): Promise<string | null>;
   getApp(appId: string): Promise<OrgApp | null>;
   /** 이 사람이 이 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 안 되면 던진다. */
   assertAppUsable(user: LivelyUser, appId: string): Promise<void>;
@@ -313,10 +315,11 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
   const model = row.model ?? DEFAULT_MODEL;
   const maxTokens = p.max_output_tokens;
   const prompt = row.prompt + (row.schema ? schemaInstruction(row.schema) : "");
+  const workspaceId = (await d.apiWorkspaceId?.()) ?? null;   // 워크스페이스에 묶이지 않은 키의 anthropic-workspace-id
   const call = async (i: SingleShotInput): Promise<SingleShotOutput> => {
     const t0 = d.now();
     let out: SingleShotOutput;
-    try { out = await d.singleShot(key, i, ac.signal); }
+    try { out = await d.singleShot(key, { ...i, workspaceId: i.workspaceId ?? workspaceId }, ac.signal); }
     catch (e) {
       const why = ac.signal.aborted ? `시간 상한(${p.single_timeout_sec}초)을 넘었습니다` : `LLM 호출 실패: ${e instanceof Error ? e.message : String(e)}`;
       out = { ok: false, status: 0, text: "", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, model: null, stopReason: null, error: why.slice(0, 400) };

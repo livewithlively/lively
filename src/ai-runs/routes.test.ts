@@ -102,6 +102,14 @@ try {
   await sleep(20);
   const c5 = calls.at(-1)!;
   assert.equal(c5.caller, "run_token"); assert.equal(c5.runId, 7); assert.equal(c5.inputTokens, 5); assert.equal(c5.outputTokens, 2); assert.equal(c5.status, 200); assert.equal(c5.model, "m");
+  assert.equal(s5.headers["anthropic-workspace-id"], undefined, "X5c 자격에 워크스페이스 id 가 없으면 헤더도 없다");
+  // X5c 워크스페이스에 묶이지 않은 키 — deps.apiWorkspaceId 가 주는 id 를 anthropic-workspace-id 로 싣는다(앱이 보낸 같은 헤더는 버림)
+  (d as unknown as { apiWorkspaceId?: () => Promise<string | null> }).apiWorkspaceId = async () => "wrkspc_ours";
+  const r5c = await post("/v1/messages", { authorization: "Bearer lvai_ok", "anthropic-workspace-id": "wrkspc_from_app" }, { model: "claude-opus-5-5", messages: [] });
+  assert.equal(r5c.status, 200);
+  assert.equal(seen.at(-1)!.headers["anthropic-workspace-id"], "wrkspc_ours", "X5c 자격 meta 의 워크스페이스 id");
+  delete (d as unknown as { apiWorkspaceId?: unknown }).apiWorkspaceId;
+  await sleep(20);
   assert.equal(inflightN, 0, "슬롯 반환");
   ok("X5 키 교체(앱 자격 · 쿠키 버림 · 베타 통과) · 계측(run_token · 토큰 · 상태)");
 
