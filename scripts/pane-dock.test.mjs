@@ -32,13 +32,13 @@ const near = (got, want, n, eps = 1e-9) => check(Math.abs(got - want) <= eps, n,
 
 // ── 1부: 순수 규칙 ────────────────────────────────────────────────────────────
 // 설정 읽기·쓰기 (P1–P7) — 이음매 판(10-01): 서는 곳(home) 둘 · 이음매 자리(at) · 확대
-eq(D.readDockPrefs(undefined), { home: "seam", at: 0.5, fx: 0.5, mag: true }, "P1 적은 적 없으면 기본 — 이음매(4안) 가운데, 확대 켬(원준 10-01: 디폴트는 4안)");
-eq(D.readDockPrefs({ home: "float", at: "0.30", mag: "0" }), { home: "float", at: 0.3, fx: 0.5, mag: false }, "P2 적어 둔 대로");
-eq(D.readDockPrefs({ home: "diagonal", at: "x", mag: 3 }), { home: "seam", at: 0.5, fx: 0.5, mag: true }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
+eq(D.readDockPrefs(undefined), { home: "seam", at: 0.5, fx: 0.5, mag: true, min: false, sc: 1 }, "P1 적은 적 없으면 기본 — 이음매(4안) 가운데, 확대 켬(원준 10-01: 디폴트는 4안)");
+eq(D.readDockPrefs({ home: "float", at: "0.30", mag: "0" }), { home: "float", at: 0.3, fx: 0.5, mag: false, min: false, sc: 1 }, "P2 적어 둔 대로");
+eq(D.readDockPrefs({ home: "diagonal", at: "x", mag: 3 }), { home: "seam", at: 0.5, fx: 0.5, mag: true, min: false, sc: 1 }, "P3 깨진 칸은 칸마다 기본값(한 칸이 깨져도 나머지는 산다)");
 eq(D.readDockPrefs({ home: "float", at: "x" }).home, "float", "P3b 한 칸만 깨지면 나머지 칸은 적힌 대로");
-eq(D.readDockPrefs({ edge: "right", at: "0.80", mode: "bar", hide: "1", mag: "1" }), { home: "seam", at: 0.8, fx: 0.5, mag: true }, "P3c 종전 판의 칸(edge · mode · hide)은 안 읽는다 — 무엇을 골랐든 이음매에서 다시 시작(막대·가리기는 걷었다)");
+eq(D.readDockPrefs({ edge: "right", at: "0.80", mode: "bar", hide: "1", mag: "1" }), { home: "seam", at: 0.8, fx: 0.5, mag: true, min: false, sc: 1 }, "P3c 종전 판의 칸(edge · mode · hide)은 안 읽는다 — 무엇을 골랐든 이음매에서 다시 시작(막대·가리기는 걷었다)");
 eq([D.readDockPrefs({ at: "1.7" }).at, D.readDockPrefs({ at: "-2" }).at, D.readDockPrefs({ at: "" }).at], [1, 0, 0.5], "P4 자리는 0~1 로 자르고, 빈 값은 가운데");
-const p5 = { home: "float", at: 0.123, fx: 0.876, mag: false };
+const p5 = { home: "float", at: 0.123, fx: 0.876, mag: false, min: true, sc: 0.8 };
 eq(D.readDockPrefs(D.writeDockPrefs(p5)), { ...p5, at: 0.12, fx: 0.88 }, "P5 적은 것을 다시 읽으면 같다(자리는 소수 둘째 자리)");
 check(Object.values(D.writeDockPrefs(p5)).every((v) => typeof v === "string" && v.length <= 64), "P6 서버 map 저장소 규격 — 값은 문자열 64자 이내");
 eq([D.effectiveHome({ home: "seam" }, true), D.effectiveHome({ home: "seam" }, false), D.effectiveHome({ home: "float" }, true)], ["seam", "float", "float"],
@@ -56,6 +56,22 @@ eq([D.floatAt(50, 200, 1000), D.floatAt(5000, 200, 1000)], [0, 1], "FX6 구간 �
 eq([D.floatAt(614, 200, 1000), D.floatAt(586, 200, 1000), D.floatAt(615, 200, 1000)], [0.5, 0.5, 0.52], "FX7 경계 — 가운데 ±14px 은 가운데로 붙는다, 15px 은 놓은 자리 그대로");
 eq([D.floatAt(170, 160, 183), D.floatAt(170, 180, 160), D.floatAt(170, 160, 184) !== undefined], [undefined, undefined, true], "FX8 경계 — 움직일 구간이 24px 도 안 되면 자리를 안 돌려준다(넓을 때 고른 자리를 지우지 않게), 24px 이면 돌려준다");
 near(D.floatCenter(D.floatAt(431, 200, 1000), 200, 1000), 431, "FX9 놓은 자리에 다시 선다(적고 읽어도 2.5% 이내 — 800px 구간에 4px)", 4);
+
+// 최소화 · 크기 배율 (MN1–MN3 · SC1–SC6) — 원준 10-20 «핸들 부분 더블클릭해서 최소화 … 사이즈 조절이나 이런것도»
+eq([D.readDockPrefs({ min: "1" }).min, D.readDockPrefs({ min: "0" }).min, D.readDockPrefs({ min: "yes" }).min, D.readDockPrefs({}).min], [true, false, false, false], "MN1 접힘은 «1» 일 때만 — 적은 적 없거나 깨진 값은 펼침");
+eq([D.writeDockPrefs({ ...D.DOCK_DEFAULTS, min: true }).min, D.writeDockPrefs({ ...D.DOCK_DEFAULTS }).min], ["1", "0"], "MN2 접힘을 계정에 적는다(문자열)");
+eq([D.dockInset("float", 36, D.DOCK_METRICS, true).bottom, D.dockInset("float", 36, D.DOCK_METRICS, false).bottom, D.dockInset("seam", 36, D.DOCK_METRICS, true).bottom], [30, 70, 0],
+  "MN3 접힌 곁칸 아래 독이 비키는 폭 = 손잡이 두께 14 + 바깥 여백 16 · 펼치면 70 · 이음매는 늘 0");
+eq([D.readDockPrefs({ sc: "0.75" }).sc, D.readDockPrefs({ sc: "9" }).sc, D.readDockPrefs({ sc: "0.1" }).sc, D.readDockPrefs({ sc: "x" }).sc, D.readDockPrefs({ sc: "" }).sc, D.readDockPrefs({}).sc], [0.75, 1.6, 0.5, 1, 1, 1],
+  "SC1 크기 배율은 적어 둔 대로 · 0.5~1.6 으로 자르고 · 깨진 값 · 빈 값은 보통(1)");
+eq([D.writeDockPrefs({ ...D.DOCK_DEFAULTS, sc: 0.8 }).sc, D.writeDockPrefs({ ...D.DOCK_DEFAULTS, sc: 3 }).sc], ["0.80", "1.60"], "SC2 배율을 계정에 적는다(소수 둘째 자리 · 범위로 잘라서)");
+eq([D.scaledIcon(36, 50, 1), D.scaledIcon(36, 50, 0.5), D.scaledIcon(36, 50, 0.75), D.scaledIcon(36, 50, 1.25), D.scaledIcon(36, 50, 1.6)], [36, 18, 27, 45, 50],
+  "SC3 배율 = 보통 크기 × 배율 — 키우면 그 자리에 들어가는 크기(cap)까지만");
+eq([D.scaledIcon(20, 40, 0.5), D.scaledIcon(26, 20, 1.3)], [14, 26], "SC4 경계 — 줄여도 14px 아래로는 안 간다 · 들어갈 자리가 보통보다 작으면(곁칸이 좁다) 보통 그대로");
+eq([D.dragScale(36, 36, 0), D.dragScale(36, 36, -9), D.dragScale(36, 36, 36), D.dragScale(36, 36, -100), D.dragScale(36, 27, 9)], [1, 0.75, 1.6, 0.5, 1],
+  "SC5 구분선을 끈 거리만큼 아이콘이 따라온다 — 보통 36px 에서 9px 줄이면 0.75 · 범위로 자른다 · 27px(0.75)에서 9px 키우면 보통");
+eq([D.dragScale(36, 50, -4), D.dragScale(36, 50, 0)], [1.28, 1.39], "SC5b 들어갈 자리(50px)에 막혀 배율 1.6 이어도 «지금 선 크기» 에서 잰다 — 줄이면 곧바로 작아진다(헛구간 없음)");
+eq([D.dragScale(36, 36, 1.8), D.dragScale(36, 36, 2.2), D.dragScale(36, 36, -1.8)], [1, 1.06, 1], "SC6 경계 — 보통 ±0.05 는 보통으로 붙는다, 0.06 은 그대로");
 
 // 고정 목록 (N1–N5)
 const known = (t) => ["tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
@@ -224,7 +240,7 @@ check([".pn-fbody", ".pn-knlist", ".pn-knr-scroll", ".pn-tl .tl-scroll", ".pn-pr
   "W13b 목록 상자(자료 · 지식 목록 · 지식 읽기 · 타임라인 · 미리보기 · 뷰어 · 앱 · 세션 파일)는 끝에만 독 두께만큼 빈 자리 · 입력칸 앱(프로젝트 · 리브)은 앱 끝에 · 고치기 칸은 아래 안 여백", JSON.stringify({ lists, lifts }));
 //  곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 서랍만 없다 · 크기와 놓일 자리 윤곽이 손잡이 몫을 안다.
 check(/if \(!host\.narrow\(\)\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
-  && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /SEP \+ HANDLE_FLOAT;\n\s*const s = floatIconSize\(W, n, \{[^}]*extra, grow/.test(DOCK) && /const w = Math\.min\(W - 2 \* M\.margin, floatWidth\(n, s, extra\)\)/.test(DOCK),
+  && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /SEP \+ HANDLE_FLOAT;\n\s*const fit = \(max: number\): number => floatIconSize\(W, n, \{[^}]*extra, grow/.test(DOCK) && /const w = Math\.min\(W - 2 \* M\.margin, floatWidth\(n, s, extra\)\)/.test(DOCK),
   "W14 손잡이는 이음매 · 곁칸 아래 둘 다(서랍만 없다) — 곁칸 아래 크기와 끌 때의 윤곽이 손잡이 몫(HANDLE_FLOAT)을 셈한다");
 //  곁칸 아래 좌우 자리(원준 10-07) — 자리 · 끌어 놓기 · 윤곽이 모두 규칙(floatCenter · floatAt)을 타고, 자리를 못 정했으면 열쇠째 안 적는다.
 check(/st\.left = floatCenter\(host\.narrow\(\) \? DOCK_DEFAULTS\.fx : prefs\.fx, lo, hi\) \+ 'px';/.test(DOCK) && !/st\.left = pane\.clientWidth \/ 2 \+ 'px';/.test(DOCK), "W15 곁칸 아래 독은 바닥의 fx 자리에 선다(늘 한가운데가 아니다)");
