@@ -9,7 +9,8 @@
 //   쪽 크기는 장표 폭 + 의견 칸 폭 × 장표 높이(1280×720 장표면 1700×720).
 //
 //  쓰는 법(세션 안):
-//    node bin/deck-export.mjs --doc <문서이름> [--ver <판>] [--bundle <묶음>] [--draft] [--only-commented] [--by <이름>] [--base] [--plain] <받을 경로.pdf|.html>
+//    node bin/deck-export.mjs --doc <문서이름> [--ver <판>] [--bundle <묶음>] [--draft] [--only-commented] [--slides p3,p4] [--by <이름>] [--base] [--plain] <받을 경로.pdf|.html>
+//  --slides 는 그 장(id)만(앱의 내려받기 창 「이 장 · 바뀐 장만 · 의견 있는 장만」). --plain 과 같이 쓰면 그 장만 의견 없이.
 //  --plain 은 의견 없이 장표만(그 판을 그대로 PDF 로 — 장마다 한 쪽, 쪽 크기 = 장표 크기).
 //  받을 경로가 .pdf 면 같은 자리에 .html 도 함께 남기고 크롬(헤드리스)으로 PDF 를 굽는다(크롬 자리: --chrome <경로> 또는 CHROME_PATH).
 //  기본은 그 판의 의견 전부 + 지난 판에 남긴 채 안 보낸 것(앱 화면에 보이는 것과 같다). --bundle K 는 그 묶음만, --draft 는 아직 안 보낸 것만.
@@ -38,11 +39,15 @@ const RUNTIME = "(" + function (D) {
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function norm(s) { return String(s || "").replace(/==|\*\*/g, "").replace(/\s+/g, " ").trim(); }
   function geo(c) {
-    var m = /^(pin|box|obj):([\d.,]+)$/.exec(String(c.unit_key || "")); if (!m) return null;
-    var a = m[2].split(",").map(Number);
-    if (a.some(function (v) { return !(v >= 0 && v <= 1); })) return null;
+    var m = /^(pin|box|obj|path):([\d.,;]+)$/.exec(String(c.unit_key || "")); if (!m) return null;
+    if (m[1] === "path") { var pts = m[2].split(";").map(function (q) { var a = q.split(",").map(Number); return a.length === 2 && a[0] >= 0 && a[0] <= 1 && a[1] >= 0 && a[1] <= 1 ? { x: a[0], y: a[1] } : null; }).filter(Boolean); return pts.length >= 2 ? { k: "path", pts: pts } : null; }   // 펜 획(2.1)
+    var rects = m[2].split(";").map(function (q) { return q.split(",").map(Number); });
+    if (rects.some(function (a) { return a.some(function (v) { return !(v >= 0 && v <= 1); }); })) return null;
+    var a = rects[0];
     if (m[1] === "pin") return a.length === 2 ? { k: "pin", x: a[0], y: a[1] } : null;
-    return a.length === 4 ? { k: m[1], x: a[0], y: a[1], w: a[2], h: a[3] } : null;
+    if (a.length !== 4) return null;
+    var g = { k: m[1], x: a[0], y: a[1], w: a[2], h: a[3] }; if (rects.length > 1) g.rects = rects.filter(function (r) { return r.length === 4; }).map(function (r) { return { x: r[0], y: r[1], w: r[2], h: r[3] }; });   // ⌘ 로 고른 여러 개체(2.0.1)
+    return g;
   }
   /** 글 줄 의견이 가리키는 요소 — 그 글(바탕 글 · 없으면 열쇠에 든 앞 20자)을 담은 가장 안쪽 요소. 못 찾으면 null(칸에만 적는다). */
   function findUnit(sec, c) {
@@ -74,6 +79,7 @@ const RUNTIME = "(" + function (D) {
       var mine = D.comments.filter(function (c) { return c.slide_id === sid && (c.scope === "spot" || c.scope === "unit" || c.scope === "slide"); });
       var gen = shown === 0 ? general : [];
       if (D.onlyCommented && !mine.length && !gen.length) { sec.style.display = "none"; return; }
+      if (D.slides && D.slides.length && D.slides.indexOf(sid) < 0) { sec.style.display = "none"; return; }   // --slides p3,p4 — 그 장만(2.1 G1 범위)
       shown++;
       var page = el("div", "dx-page"), stage = el("div", "dx-stage"), layer = el("div", "dx-layer"), side = el("aside", "dx-side");
       sec.parentNode.insertBefore(page, sec); stage.appendChild(sec); stage.appendChild(layer); page.appendChild(stage); if (D.plain) return;   // 의견 없이 장표만(--plain) — 쪽 틀과 쪽 크기만 쓴다
@@ -100,7 +106,13 @@ const RUNTIME = "(" + function (D) {
           var g = geo(c); if (!g) { item(n, "spot", c, c.orig); return; }
           var m;
           if (g.k === "pin") { m = el("b", "dx-pin", String(n)); m.style.left = g.x * 100 + "%"; m.style.top = g.y * 100 + "%"; }
-          else { m = el("div", "dx-box" + (g.k === "obj" ? " obj" : "")); m.style.left = g.x * 100 + "%"; m.style.top = g.y * 100 + "%"; m.style.width = g.w * 100 + "%"; m.style.height = g.h * 100 + "%"; m.appendChild(el("b", "", String(n))); }
+          else if (g.k === "path") {
+            var sv = document.createElementNS("http://www.w3.org/2000/svg", "svg"); sv.setAttribute("class", "dx-path"); sv.setAttribute("viewBox", "0 0 1 1"); sv.setAttribute("preserveAspectRatio", "none");
+            var pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline"); pl.setAttribute("points", g.pts.map(function (q) { return q.x + "," + q.y; }).join(" ")); sv.appendChild(pl); layer.appendChild(sv);
+            m = el("b", "dx-pin", String(n)); m.style.left = g.pts[0].x * 100 + "%"; m.style.top = g.pts[0].y * 100 + "%";
+          }
+          else { m = el("div", "dx-box" + (g.k === "obj" ? " obj" : "")); m.style.left = g.x * 100 + "%"; m.style.top = g.y * 100 + "%"; m.style.width = g.w * 100 + "%"; m.style.height = g.h * 100 + "%"; m.appendChild(el("b", "", String(n)));
+            (g.rects || []).slice(1).forEach(function (r) { var m2 = el("div", "dx-box obj"); m2.style.left = r.x * 100 + "%"; m2.style.top = r.y * 100 + "%"; m2.style.width = r.w * 100 + "%"; m2.style.height = r.h * 100 + "%"; m2.appendChild(el("b", "", String(n))); layer.appendChild(m2); }); }
           layer.appendChild(m);
           item(n, "spot", c, "");
         } else {
@@ -146,6 +158,8 @@ const STYLE = `
 .dx-layer{position:absolute;inset:0;z-index:2147483000;pointer-events:none}
 .dx-pin{position:absolute;transform:translate(-50%,-50%);min-width:24px;height:24px;padding:0 6px;border-radius:12px;display:grid;place-items:center;font:800 13px/1 ui-monospace,Menlo,monospace;color:#3A2400;background:#F2B56B;border:2px solid #fff;outline:1px solid #B97A2E}
 .dx-box{position:absolute;border:2px dashed #D98A2B;background:rgba(242,181,107,.13);border-radius:4px}
+.dx-path{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.dx-path polyline{fill:none;stroke:#D98A2B;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .dx-box.obj{border-style:solid}
 .dx-box.txt{border:2px solid #2D6BF0;background:rgba(45,107,240,.07)}
 .dx-box>b{position:absolute;left:-2px;top:-2px;transform:translateY(-100%);min-width:22px;height:20px;padding:0 6px;border-radius:5px 5px 5px 0;display:grid;place-items:center;font:800 12.5px/1 ui-monospace,Menlo,monospace;color:#3A2400;background:#F2B56B}
@@ -180,7 +194,7 @@ const STYLE = `
  */
 export function annotateHtml(html, comments, opts = {}) {
   const rows = comments.map((c) => ({ id: c.id, scope: c.scope, slide_id: c.slide_id || "", unit_key: c.unit_key || "", orig: c.orig || "", edited: c.edited == null ? null : String(c.edited), note: c.note || "", status: c.status || "" }));
-  const data = JSON.stringify({ comments: rows, by: opts.by || "", onlyCommented: !!opts.onlyCommented, plain: !!opts.plain }).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  const data = JSON.stringify({ comments: rows, by: opts.by || "", onlyCommented: !!opts.onlyCommented, plain: !!opts.plain, slides: opts.slides || [] }).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   const add = `<style data-deck-export>${STYLE}</style><script data-deck-export>${RUNTIME}(${data});</script>`;
   const at = html.lastIndexOf("</body>");
   return at < 0 ? html + add : html.slice(0, at) + add + html.slice(at);
@@ -243,7 +257,8 @@ async function main() {
   if (!a.base) for (const p of await q("picks", { doc: a.doc, ver }, 500)) picks[p.slide_id] = p.variant || "";
   const comments = a.plain ? [] : pickComments(await q("comments", { doc: a.doc }, 1000), { ver, bundle: a.bundle != null ? Number(a.bundle) : null, draftOnly: !!a.draft });
   if (!comments.length && !a.plain) { console.error(`내보낼 의견이 없습니다(문서 ${a.doc} · 판 ${ver}${a.bundle != null ? ` · 묶음 #${a.bundle}` : ""}) — 앱에서 단 의견이 저장됐는지 확인하세요.`); process.exit(1); }
-  const html = annotateHtml(assembleHtml(rows, assets, picks), comments, { by: a.by || "", onlyCommented: !!a["only-commented"], plain: !!a.plain });
+  const slides = String(a.slides || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const html = annotateHtml(assembleHtml(rows, assets, picks), comments, { by: a.by || "", onlyCommented: !!a["only-commented"], plain: !!a.plain, slides });
   const pdf = /\.pdf$/i.test(out);
   const htmlOut = resolve(pdf ? out.replace(/\.pdf$/i, ".html") : out);
   mkdirSync(dirname(htmlOut), { recursive: true });
