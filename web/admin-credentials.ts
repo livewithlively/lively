@@ -136,6 +136,17 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
       { name: 'current_user:read', why: '연결된 계정 확인' },
       { name: 'folders:read', why: '팀 전체를 한 번에 모을 때 — 파일 링크만 넣을 거면 없어도 됩니다' },
     ] },
+  // #4488 앱 v2-9 — 앱 AI 실행(/_lively/ai/runs)의 워크스페이스 기본 실행 계정. owner=gateway(조직 통합)로만 저장한다 — 코어 ai-runs/live.ts 의 ANTHROPIC_KEY_KIND.
+  //  구성원 개인 오버라이드 자리는 없다(앱 AI 실행은 «워크스페이스 API 키 또는 본인 구독» 둘뿐 · 설계 §12 ④).
+  { kind: 'anthropic_api_key', label: 'Anthropic API 키(앱 AI 실행)', secretLabel: 'API 키', secretPh: 'sk-ant-…',
+    docUrl: 'https://console.anthropic.com/settings/keys',
+    help: '앱이 보내는 AI 작업의 워크스페이스 기본 실행 계정입니다. 등록하면 앱 서버·자동화·누구의 요청이든 이 키로 돕니다(앱당 하루 토큰 상한 안에서). 없으면 사람 본인의 Claude 구독으로만 돕니다. Claude 구독(Pro·Max)과 별개 계정이라 콘솔에서 선불 크레딧을 따로 충전해야 호출됩니다.',
+    steps: [
+      'console.anthropic.com 에 로그인(없으면 가입 — 조직 하나를 만듭니다)',
+      '**Settings ▸ Billing** 에서 결제 수단과 선불 크레딧을 넣습니다 — 크레딧이 없으면 키가 있어도 호출이 거절됩니다',
+      '**Settings ▸ API Keys ▸ [Create Key]** — 이름은 «lively 앱 AI 실행» 정도',
+      '만들어진 `sk-ant-…` 는 그 화면에서 한 번만 보입니다 — 바로 아래 칸에 붙여넣고 [저장]',
+    ] },
   // #1101(b)/#1299 — 헤드리스 claude -p(위탁) 실행 인증. task-scheduler 가 requester 의 member_secret(kind=claude_setup_token)을 CLAUDE_CODE_OAUTH_TOKEN 으로 리스한다. member 전용(격리 박스엔 공유 폴백 없음 — #1014) → 조직 자격 폼에선 숨긴다(memberOnly).
   //  ⚠ kind 는 member-secret-store 의 KIND_RE(소문자·숫자·_)를 지켜야 한다 — 하이픈이면 저장 단계에서 거부된다(#1299 초판 결함).
   { kind: 'claude_setup_token', label: 'Claude 헤드리스 토큰(setup-token)', secretLabel: 'setup-token', help: '터미널에서 `claude setup-token` 을 실행해 나온 토큰을 붙여넣으세요(클로드에 로그인된 상태에서 발급). 헤드리스 분류·에이전트 크론(claude -p)이 이 토큰으로 내 Claude 계정으로 인증·실행됩니다(구독 크레딧 과금). 내 세션·에이전트 실행에만 쓰이고 타 구성원에게 노출되지 않습니다.', memberOnly: true },
