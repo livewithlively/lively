@@ -7,6 +7,7 @@ import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
   submitAgentJob, onBoot, onBootFailed, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
+  enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
@@ -85,7 +86,7 @@ function world(): World {
       const row: AgentJobRow = {
         id, status: "queued", requester: j.requester, account_kind: j.accountKind, account_member: j.accountMember, app_id: j.appId,
         project_id: j.projectId, cwd: j.cwd, harness: j.harness, model: j.model, label: j.label, prompt: j.prompt,
-        resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, bare: j.bare === true, session_id: null,
+        resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, bare: j.bare === true, homeless: j.homeless === true, session_id: null,
         boot_hash: null, fail_hash: null, secret_hash: null, mcp_token_hash: null, conversation_id: null, output_tail: "", result: null, exit_code: null,
         error: null, cancel_requested: false, cancel_reason: null, attempts: 0, created_at: new Date(now), claimed_at: null, started_at: null,
         last_tick_at: null, ended_at: null, reaped: false,
@@ -1000,7 +1001,7 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
 async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900,
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false,
   }, { ...w.policy, max_queued: 500 });
   assert.ok("row" in r);
   const row = w.rows.get(r.row.id)!;
@@ -1116,6 +1117,20 @@ await t("F5 감시는 결과를 받은 지 REAP_DELAY 가 안 된 작업을 걷�
   await sweepAgentJobs(w.deps);
   assert.deepEqual(w.killed, [sid], "틈이 지난 다음 감시가 걷는다");
   assert.equal(w.rows.get(id)!.reaped, true);
+});
+
+await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(homeless)에 실린다 · 사람 도구로 보낸 작업은 false", async () => {
+  const w = world();
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
+    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true,
+  }, w.policy, w.deps);
+  assert.equal(row.homeless, true);
+  assert.equal(publicJob(row, { own: true }).homeless, true);
+  w.usable.add("alice:memo");
+  const mine = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(mine.homeless, false, "사람이 보낸 작업은 사람 자리");
+  assert.equal(w.rows.get(mine.id as number)!.homeless, false);
 });
 
 console.log(`# ${pass} pass`);

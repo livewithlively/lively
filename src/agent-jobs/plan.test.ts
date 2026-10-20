@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, parseBootFailure, bootFailureError, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SweepFacts,
+  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
+  type RunnerReport, type SweepFacts,
 } from "./plan.js";
+import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
 
 let pass = 0;
@@ -230,6 +232,38 @@ t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 
   assert.equal(bootFailureError(f({ status: null }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
   assert.equal(bootFailureError(f({ status: 503, message: "busy" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(503): busy");
   assert.ok(bootFailureError(f({ status: 502, message: "x".repeat(300) }), "starting").length <= 600);
+});
+
+t("HL1 홈 없는 작업의 조건(#4891) — API 키 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더 / 홈 없는 작업이 아니면 판정에 안 걸린다", () => {
+  type J = { homeless?: boolean; account_kind: string; app_id: string | null; project_id: number | null; cwd: string };
+  const ok: J = { homeless: true, account_kind: "api_key", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  assert.equal(homelessJobRefusal(ok), null);
+  const rows: Array<[Partial<J>, RegExp]> = [
+    [{ account_kind: "subscription" }, /API 키 실행만/],
+    [{ app_id: null }, /앱 작업만/],
+    [{ app_id: "Bad_Id" }, /앱 작업만/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, /그 앱 폴더/],
+    [{ cwd: "/work/apps/crm/sub" }, /그 앱 폴더/],
+    [{ cwd: "/work/apps" }, /그 앱 폴더/],
+  ];
+  for (const [o, re] of rows) assert.match(homelessJobRefusal({ ...ok, ...o }) ?? "", re, JSON.stringify(o));
+  //  홈 없는 작업이 아니면(사람 자리) 무엇이든 null — 종전 작업은 이 판정을 안 탄다.
+  assert.equal(homelessJobRefusal({ ...ok, homeless: false, account_kind: "subscription", project_id: 3, cwd: "/work/shared/project/3" }), null);
+  assert.equal(homelessJobRefusal({ ...ok, homeless: undefined, app_id: null }), null);
+});
+
+t("HL2 전용 계정 이름은 어떤 구성원 계정과도 겹치지 않는다 — 구성원 slug 엔 `_` 가 없다(memberSlug) · 브로커 이름 규칙(box_ + SAFE)은 지킨다", () => {
+  assert.equal(HOMELESS_OS_USER, "box_lvly_job");
+  for (const id of ["lvly_job", "LVLY_JOB", "lvly job", "lvly-job", "_lvly_job_", "box_lvly_job", "job"]) {
+    assert.notEqual(osUsername(memberSlug(id)), HOMELESS_OS_USER, id);
+  }
+  assert.ok(/^box_/.test(HOMELESS_OS_USER) && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(HOMELESS_OS_USER.replace(/^box_/, "")));
+});
+
+t("HL3 작업 AI 의 앱 토큰 — 홈 없는 작업이면 앱 서버 급 주체(능력 API · /mcp 만 · EXEMPT 없음) · 사람 자리는 종전 꼴(그 칸 없음)", () => {
+  assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900), { ttlSec: 900, appServerPrincipal: true });
+  assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900), { ttlSec: 900 });
 });
 
 console.log(`# ${pass} pass`);

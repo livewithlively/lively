@@ -21,6 +21,8 @@ export interface LivelyUser {
   appId?: string;
   // 앱 서버가 사람 신원(X-Lively-Identity)을 싣고 부른 요청이면 true(#4483) — 그때 userId 는 그 **구성원**이고 권한은
   //  그 사람 ∩ 그 사람의 앱 동의다(apps/app-server-auth). 빈도 한도를 사람마다 따로 센다.
+  //  #4891 — 앱 서버 급 토큰(auth_token.app_server_principal — 사람 홈 없는 작업 AI)도 검증부터 true 다. 둘 다 능력 API(· 앱 서버 급은 /mcp)
+  //   에서만 통하고 무조건 통과 도구가 꺼진다(auth/http-auth.appPrincipalGate · apps/principal.appToolAllowed).
   appServer?: boolean;
   // 앱 주소의 `/_lively/*` 로 들어온 호출이면 그 주소의 판(#4482) — 보는 판(선언한 도구 · 표)을 사람이 아니라 주소가 정한다
   //  (apps/visibility.ts Viewer.address). 앞단이 서명한 것에서만 채운다 — 기계 헤더(apps/app-front-api.ts) · 앱 서버가 실어 온 사람 신원의 판

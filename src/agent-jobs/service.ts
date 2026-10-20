@@ -118,6 +118,8 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
     id: r.id, status: r.status, label: r.label, app_id: r.app_id, project_id: r.project_id, cwd: r.cwd,
     requester: r.requester, account: r.account_kind === "subscription" ? { kind: "subscription", member: r.account_member } : { kind: r.account_kind },
     harness: r.harness, model: r.model, timeout_sec: r.timeout_sec,
+    //  #4891 — 사람 홈 없는 작업 컨테이너에서 돌았나(앱 서버가 보낸 에이전트 작업).
+    homeless: r.homeless === true,
     conversation_id: r.conversation_id, resume_job_id: r.resume_job_id,
     error: r.error, exit_code: r.exit_code, cancel_requested: r.cancel_requested,
     created_at: r.created_at, claimed_at: r.claimed_at, started_at: r.started_at, ended_at: r.ended_at,
@@ -201,6 +203,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     appId, projectId, cwd, harness: "claude", model, label, prompt,
     resumeConversation: resumeConv, resumeJobId,
     timeoutSec: timeoutSecOf(input.timeout_min, p),
+    homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
