@@ -13,7 +13,7 @@
 //  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
 //  MCP 등록은 `lively install`(CLI) 또는 박스의 register-clients.sh 가 담당(여기서 호출 안 함).
 //
-// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs --allow-host-effects [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
+// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs --allow-host-effects [--harness claude|codex|opencode|antigravity|grok|cursor|claude,codex,…] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
 //   Codex(--harness codex): 같은 ~/.lively 자산 + ~/.codex/config.toml([hooks]+[mcp_servers.*]) + ~/.codex/AGENTS.md.
 //     **codex 배선의 정본은 이 파일 하나다** — adapters/codex/install.mjs 라는 형제 설치기가 있었지만 아무도
@@ -1327,6 +1327,228 @@ function installGrok(ctx) {
   //  네이티브 [permission] 테이블은 위 (b) 주석의 이유로 싣지 않는다 — WIRING 이 mergeAutoApprove() 를 호출한다.
 }
 
+// ── Cursor(IDE·CLI) user-level 설치 (#4927) ─────────────────────────────────
+//  배선 방식 6번째(hooks-json): Cursor 의 사용자 훅 파일은 **하나**(~/.cursor/hooks.json)이고 사용자 것과 공유한다 —
+//  grok 처럼 파일을 통째로 가질 수 없다. 그래서 **우리 엔트리**(command 가 ~/.lively/hooks/cursor-adapter.mjs 를
+//  가리키는 것)만 걷고 다시 넣는다(antigravity 글로벌 hooks.json 머지와 같은 원칙 — 사용자 엔트리 불가침).
+//  MCP 는 ~/.cursor/mcp.json 의 mcpServers 에 우리 이름만(회수 원장), CLI 승인은 cli-config.json permissions.allow 에
+//  `Mcp(<server>:<tool>)` 로(회수 원장). 맥락은 파일이 아니라 sessionStart 훅의 additional_context 다 — Cursor 엔
+//  전역 규칙 파일이 없다(User Rules 는 설정 화면 전용 · 규칙 파일은 프로젝트 .cursor/rules 뿐, #4927 실측).
+//  ⚠ 경로(번들 실측 — cursor-agent 2026.10.19): hooks.json·mcp.json·skills·agents·commands 는 homedir()/.cursor
+//   **고정**이다(env 오버라이드 없음). cli-config.json 만 CURSOR_CONFIG_DIR > $XDG_CONFIG_HOME/cursor > ~/.cursor 다
+//   (코드엔 플랫폼 조건이 없다). LIVELY_HOME 격리면 env 를 따르지 않는다(opencode XDG·grok GROK_HOME 과 같은 계약).
+//   harness-registry 의 cursor 행과 **같은 계산**이어야 한다(이 파일은 발행 배치가 달라 정적 import 를 못 해 인라인).
+const CURSOR = join(HOME, ".cursor");
+const CURSOR_CLI_DIR = process.env.LIVELY_HOME ? CURSOR
+  : (String(process.env.CURSOR_CONFIG_DIR || "").trim()
+    || (String(process.env.XDG_CONFIG_HOME || "").trim() ? join(String(process.env.XDG_CONFIG_HOME).trim(), "cursor") : CURSOR));
+const CURSOR_HOOKS = join(CURSOR, "hooks.json");
+const CURSOR_MCP = join(CURSOR, "mcp.json");
+const CURSOR_CLI_CONFIG = join(CURSOR_CLI_DIR, "cli-config.json");
+const CURSOR_ADAPTER = "cursor-adapter.mjs";
+// 우리 엔트리의 정체성 = command 가 우리 어댑터를 가리킨다(표기 세대 — 번들 node 절대경로·`node`·윈도우 구분자 — 무관).
+const isOurCursorHook = (e) => !!e && typeof e === "object" && !Array.isArray(e)
+  && typeof e.command === "string" && /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/.test(e.command);
+
+// 어댑터 호출 command — **절대경로**로 쓴다($HOME 확장에 기대지 않는다). Cursor 가 command 를 어떤 셸로 돌리든
+//  (POSIX sh·윈도우 PowerShell — 포럼 실측: 윈도우 훅이 셸 불일치로 전 툴을 막은 사례) 경로가 그대로 성립한다.
+//  #355 — POSIX 는 번들 node 절대경로(실행 셸 PATH 무관). 윈도우는 claude 와 같은 bare `node`(User PATH).
+const cursorHookCmd = (event) => WIN
+  ? `node "${hookAbs(CURSOR_ADAPTER)}" ${event}`
+  : `"${NODEBIN}" "${hookAbs(CURSOR_ADAPTER)}" ${event}`;
+
+// 배선할 Cursor 이벤트와 timeout(초). 어댑터가 받는 argv 는 **Cursor 이벤트 이름 그대로**다(번역은 어댑터 몫).
+//  timeout 은 어댑터 내부 러너 타임박스 합보다 넉넉히 — 초과하면 Cursor 가 훅을 죽이고 fail-open 으로 넘어간다
+//  (권한 훅인 preToolUse 도 failClosed 를 켜지 않는 한 그렇다 — 우리는 켜지 않는다: 배선 고장이 곧 장애가 되면 안 된다).
+//  beforeMCPExecution 은 MCP 툴의 org 훅 자리다 — preToolUse 엔 MCP 서버 이름이 없다(`MCP:<툴>` — 번들 실측).
+export const CURSOR_HOOK_EVENTS = [
+  ["sessionStart", 75],
+  ["sessionEnd", 15],
+  ["beforeSubmitPrompt", 25],
+  ["preToolUse", 25],
+  ["beforeMCPExecution", 25],
+  ["postToolUse", 25],
+  ["stop", 40],
+  ["subagentStop", 20],
+  ["preCompact", 20],
+];
+
+// (순수) 사용자 hooks.json + 우리 엔트리 → 새 hooks.json. 우리 엔트리는 **전부 걷고** 다시 넣는다(어느 세대 표기든).
+//  사용자 엔트리·다른 최상위 키(version 등)는 그대로. 값이 배열이 아닌 이벤트 키(손상)는 건드리지 않고 그 이벤트만 건너뛴다.
+//  두 번 돌려도 결과가 같다(멱등) — 우리 엔트리는 늘 각 이벤트 배열의 끝에 한 벌.
+export function mergeCursorHooks(cur, entries) {
+  const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
+  if (base.version === undefined) base.version = 1;
+  const hooks = (base.hooks && typeof base.hooks === "object" && !Array.isArray(base.hooks)) ? { ...base.hooks } : {};
+  const skipped = [];
+  for (const [ev, arr] of Object.entries(hooks)) {
+    if (!Array.isArray(arr)) continue;
+    const kept = arr.filter((e) => !isOurCursorHook(e));
+    if (kept.length === arr.length) continue;
+    if (kept.length) hooks[ev] = kept; else delete hooks[ev];
+  }
+  for (const [ev, entry] of entries) {
+    if (hooks[ev] !== undefined && !Array.isArray(hooks[ev])) { skipped.push(ev); continue; }
+    hooks[ev] = [...(hooks[ev] || []), entry];
+  }
+  base.hooks = hooks;
+  return { next: base, skipped };
+}
+
+// (순수) 우리 엔트리만 걷는다 — 제거기와 같은 규칙(설치↔제거 대칭). 비게 된 이벤트 키는 지운다.
+export function stripCursorHooks(cur) {
+  return mergeCursorHooks(cur, []).next;
+}
+
+function cursorHookEntries() {
+  return CURSOR_HOOK_EVENTS.map(([ev, timeout]) => [ev, { command: cursorHookCmd(ev), timeout }]);
+}
+
+// 읽기 — 없으면 {} · 못 읽으면 null(호출부가 무수정으로 건너뛴다 — 비파괴 불변식: 주석 든 JSON 등을 우리 파서 수준으로 덮어쓰지 않는다).
+function readJsonOrNull(path) {
+  if (!existsSync(path)) return {};
+  try { const v = JSON.parse(readFileSync(path, "utf8")); return (v && typeof v === "object" && !Array.isArray(v)) ? v : null; }
+  catch { return null; }
+}
+
+function cursorMergeHooks() {
+  const cur = readJsonOrNull(CURSOR_HOOKS);
+  if (cur === null) { console.warn("  ⚠️ ~/.cursor/hooks.json 을 JSON 객체로 못 읽음 — 훅 배선 건너뜀(기존 파일 무수정). 파일을 고친 뒤 다시 설치하세요."); return; }
+  const { next, skipped } = mergeCursorHooks(cur, cursorHookEntries());
+  if (skipped.length) console.warn(`  ⚠️ ~/.cursor/hooks.json 의 ${skipped.join(", ")} 값이 배열이 아님 — 그 이벤트만 배선 건너뜀(사용자 값 보존).`);
+  if (JSON.stringify(next) === JSON.stringify(cur)) { console.log("  · ~/.cursor/hooks.json — 변화 없음(이미 최신 배선)"); return; }
+  if (existsSync(CURSOR_HOOKS)) {
+    const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+    try { copyFileSync(CURSOR_HOOKS, join(backupDir, "cursor-hooks.json.bak")); }
+    catch (e) { console.warn(`  ⚠️ ~/.cursor/hooks.json 백업 실패 — 훅 배선 건너뜀: ${e.message}`); return; }
+  }
+  try {
+    mkdirSync(CURSOR, { recursive: true });
+    writeFileSync(CURSOR_HOOKS, JSON.stringify(next, null, 2) + "\n");
+    console.log(`  ✓ ~/.cursor/hooks.json (lively 훅 ${CURSOR_HOOK_EVENTS.length}개 이벤트 배선 — 사용자 훅 보존)`);
+  } catch (e) { console.warn(`  ⚠️ Cursor 훅 배선 실패: ${e.message}`); }
+}
+
+// MCP 서버 — codex·grok 과 같은 이유로 stdio 프록시(`lively mcp`): 세션·모드 헤더가 따라가고 토큰이 설정에 안 굽힌다.
+//  env LIVELY_HARNESS=cursor 가 프록시의 x-lively-harness 스탬프가 된다(빠지면 게이트웨이가 claude 로 센다).
+//  추가 org MCP 서버는 stdio 만 싣는다 — url 형(headers 인증)은 Cursor 가 문서상 지원하지만 우리 실측이 없어 보류
+//  (grok·antigravity 와 같은 정직 표기 — 넣으면 되는 척하다 조용히 안 되는 게 최악).
+function cursorMcpServers() {
+  const shim = fwd(join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"));
+  const env = { LIVELY_HARNESS: "cursor" };
+  const servers = {
+    lively: { type: "stdio", command: shim, args: ["mcp"], env },
+    // 로컬 조작 MCP(#899 — 레포·워크트리 툴). claude·codex 와 패리티(#1884).
+    "lively-local": { type: "stdio", command: shim, args: ["mcp-local"], env },
+  };
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "mcp-servers.json")), "utf8"));
+    for (const s of (d.servers || [])) {
+      if (s.enabled === false || !s.name || servers[s.name]) continue;
+      if (!/^[A-Za-z0-9_-]+$/.test(s.name)) continue;
+      if (s.transport === "stdio" && s.command) {
+        const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
+        servers[s.name] = { type: "stdio", command: parts[0], ...(parts.length > 1 ? { args: parts.slice(1) } : {}) };
+      } else if (s.url) {
+        console.log(`  · Cursor MCP '${s.name}' 보류(url 형 — headers 인증 미실측, #4927)`);
+      }
+    }
+  } catch { /* 없으면 lively·lively-local 만 */ }
+  return servers;
+}
+
+// (순수) 사용자 mcp.json + 우리 서버 + 지난번 우리 이름 → 새 mcp.json. 지난번에 넣었는데 이번에 없는 이름만 회수한다.
+//  사용자가 직접 넣은 다른 이름은 불가침. ⚠ 우리 이름과 같은 사용자 항목(예: 손으로 넣은 url 형 `lively`)은 덮는다 —
+//  정본은 stdio 프록시다. 덮기 전 값은 호출부가 원장(cursor-mcp-user-backup.json)에 **최초 1회** 남겨 제거 때 되돌린다.
+export function mergeCursorMcp(cur, servers, prevManaged) {
+  const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
+  const ms = (base.mcpServers && typeof base.mcpServers === "object" && !Array.isArray(base.mcpServers)) ? { ...base.mcpServers } : {};
+  const want = new Set(Object.keys(servers));
+  for (const name of prevManaged || []) if (!want.has(name)) delete ms[name];
+  for (const [name, entry] of Object.entries(servers)) ms[name] = entry;
+  base.mcpServers = ms;
+  return base;
+}
+
+function cursorMergeMcp() {
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+  if (!existsSync(shim)) { console.warn("  ⚠️ lively CLI 심 미설치 — Cursor MCP 등록 보류(http 직결은 세션 헤더·토큰 관리가 안 돼 싣지 않는다)."); return; }
+  const cur = readJsonOrNull(CURSOR_MCP);
+  if (cur === null) { console.warn("  ⚠️ ~/.cursor/mcp.json 을 JSON 객체로 못 읽음 — MCP 등록 건너뜀(기존 파일 무수정)."); return; }
+  const servers = cursorMcpServers();
+  const ledgerPath = join(LIVELY, "managed-cursor-mcp.json");
+  let prev = []; try { prev = JSON.parse(readFileSync(ledgerPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* 첫 설치 */ }
+  // 우리 이름과 같은 **사용자** 항목을 덮기 전에 최초 1회 스냅샷(제거 때 되돌린다 — mcp-register 의 USER_BACKUP 과 동형).
+  const backupPath = join(LIVELY, "cursor-mcp-user-backup.json");
+  let ub = {}; try { ub = JSON.parse(readFileSync(backupPath, "utf8")) || {}; } catch { /* 없음 */ }
+  let ubDirty = false;
+  const curMs = (cur.mcpServers && typeof cur.mcpServers === "object" && !Array.isArray(cur.mcpServers)) ? cur.mcpServers : {};
+  for (const name of Object.keys(servers)) {
+    if (Object.prototype.hasOwnProperty.call(ub, name) || prev.includes(name)) continue;
+    ub[name] = Object.prototype.hasOwnProperty.call(curMs, name) ? curMs[name] : null;
+    ubDirty = true;
+  }
+  const next = mergeCursorMcp(cur, servers, prev);
+  try {
+    if (existsSync(CURSOR_MCP)) {
+      const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+      copyFileSync(CURSOR_MCP, join(backupDir, "cursor-mcp.json.bak"));
+    }
+    if (ubDirty) { writeFileSync(backupPath, JSON.stringify(ub, null, 2)); chmodSync(backupPath, 0o600); }
+    mkdirSync(CURSOR, { recursive: true });
+    if (JSON.stringify(next) !== JSON.stringify(cur)) writeFileSync(CURSOR_MCP, JSON.stringify(next, null, 2) + "\n");
+    writeFileSync(ledgerPath, JSON.stringify(Object.keys(servers), null, 2)); chmodSync(ledgerPath, 0o600);
+    console.log(`  ✓ ~/.cursor/mcp.json (MCP stdio 프록시: ${Object.keys(servers).join(", ")} · 사용자 서버 보존 · 토큰 리터럴 없음)`);
+  } catch (e) { console.warn(`  ⚠️ Cursor MCP 등록 실패: ${e.message}`); }
+}
+
+// (순수) cli-config.json permissions.allow reconcile — 우리가 넣었다 뺀 것만 회수, 사용자 규칙 보존(claude·agy 와 동형).
+export function mergeCursorPermissions(cur, want, prev) {
+  const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
+  const perms = (base.permissions && typeof base.permissions === "object" && !Array.isArray(base.permissions)) ? { ...base.permissions } : {};
+  const allow = Array.isArray(perms.allow) ? perms.allow : [];
+  const wantSet = new Set(want); const prevSet = new Set(prev || []);
+  const next = allow.filter((e) => !(prevSet.has(e) && !wantSet.has(e)));
+  for (const e of want) if (!next.includes(e)) next.push(e);
+  perms.allow = next;
+  if (!Array.isArray(perms.deny)) perms.deny = [];
+  base.permissions = perms;
+  return base;
+}
+
+// auto-approve(Cursor CLI) — 두 Lively 서버 도구를 CLI 규칙 문법 `Mcp(<server>:<tool>)` 로 옮겨 반영한다.
+//  ⚠ 파일이 **없으면 만들지 않는다** — CLI 가 첫 실행 때 스스로 만든다(필수 키 형태를 CLI 가 정한다). 그 뒤의 세션에서
+//   session-preload 의 매 세션 reconcile 이 같은 규칙으로 채운다. IDE 의 승인 허용목록은 파일 표면이 없다(설정 화면 전용).
+function cursorMergePermissions() {
+  let want = [];
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
+    want = (Array.isArray(d.allow) ? d.allow : []).map(managedAutoApproveParts).filter(Boolean).map((p) => `Mcp(${p.server}:${p.tool})`);
+  } catch { /* 번들에 없으면 회수만 */ }
+  if (!existsSync(CURSOR_CLI_CONFIG)) { console.log("  · Cursor CLI 승인 설정(cli-config.json) 없음 — CLI 첫 실행 뒤 세션 시작 훅이 반영합니다."); return; }
+  const cur = readJsonOrNull(CURSOR_CLI_CONFIG);
+  if (cur === null) { console.warn("  ⚠️ Cursor cli-config.json 을 JSON 객체로 못 읽음 — 승인 머지 건너뜀(기존 파일 무수정)."); return; }
+  const prevPath = join(LIVELY, "managed-cursor-permission.json");
+  let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
+  const next = mergeCursorPermissions(cur, want, prev);
+  try {
+    const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+    copyFileSync(CURSOR_CLI_CONFIG, join(backupDir, "cursor-cli-config.json.bak"));
+    if (JSON.stringify(next) !== JSON.stringify(cur)) writeFileSync(CURSOR_CLI_CONFIG, JSON.stringify(next, null, 2) + "\n");
+    writeFileSync(prevPath, JSON.stringify(want, null, 2)); chmodSync(prevPath, 0o600);
+    console.log(`  ✓ Cursor cli-config.json (auto-approve ${want.length}건 · 사용자 규칙 보존)`);
+  } catch (e) { console.warn(`  ⚠️ Cursor 승인 반영 실패: ${e.message}`); }
+}
+
+function installCursor() {
+  // (a) 훅 — 어댑터가 번들에 없으면(구버전) 배선하지 않는다(없는 파일을 가리키는 훅은 매 이벤트 실패 로그만 남긴다).
+  if (existsSync(join(LIVELY, "hooks", CURSOR_ADAPTER))) cursorMergeHooks();
+  else console.warn("  ⚠️ Cursor 어댑터 미동봉(구버전 번들) — 훅이 배선되지 않습니다. MCP·자산만 적용됩니다.");
+  // (b) MCP · (c) CLI 승인. 맥락은 훅(sessionStart additional_context)이 매 세션 싣는다 — 설치 시 파일 시드가 없다.
+  cursorMergeMcp();
+  cursorMergePermissions();
+}
+
 // 설치-시 org-context 시드 — 세션 훅(session-preload)과 동일 라이브 소스(/api/ui/org/preview)를 1회 fetch.
 //  토큰·게이트웨이는 setup 이 먼저 ~/.lively 에 기록하므로 거기서 읽는다. fail-soft(오프라인/무토큰/구 node → "").
 async function fetchOrgSeed() {
@@ -1463,6 +1685,10 @@ async function main() {
       // auto-approve 는 ~/.claude/settings.json permissions 경유(installGrok (d) 주석) — grok 이 compat 로 읽는다.
       mergeAutoApprove();
     },
+    cursor: () => {
+      console.log("  ── Cursor ──");
+      installCursor();
+    },
   };
   const unknown = [];
   for (const h of harnesses) {
@@ -1475,7 +1701,7 @@ async function main() {
   //  `lively install` 경로에선 바로 다음 단계인 CLI 의 [3/3] 이 등록한다 — 화면상 이 줄 **바로 아래**에서
   //  "✓ MCP 등록: lively" 가 뜨므로 사용자는 서로 모순된 두 문장을 연달아 읽었다. 게다가 윈도우 사용자에겐
   //  실행조차 못 하는 `.sh` 를 가리켰다. 설치 화면의 거짓 안내는 장애 진단을 통째로 헛돌게 만든다.
-  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에, OpenCode·Antigravity MCP 는 각 설정/플러그인에 포함.");
+  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에, OpenCode·Antigravity·Grok·Cursor MCP 는 각 설정/플러그인에 포함.");
   console.log("✓ user-level 설치 완료 — 다음 세션부터 적용(현 세션은 안전).");
 }
 

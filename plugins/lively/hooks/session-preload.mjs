@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 //  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
 //   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
-import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -41,7 +41,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
 //  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
@@ -280,11 +281,41 @@ export function reconcileCodexAutoApprove(want) {
   } catch { return false; }                                  // fail-soft
 }
 
+// auto-approve reconcile(Cursor CLI, #4927) — claude·codex 와 같은 결과를 매 세션 낸다. 표면은 cli-config.json 의
+//  permissions.allow 이고 규칙 문법은 `Mcp(<server>:<tool>)`(번들 실측). 회수 원장은 설치기와 **같은 파일**
+//  (managed-cursor-permission.json) — 둘이 다른 원장을 쓰면 한쪽이 넣은 규칙을 다른 쪽이 영영 못 걷는다.
+//  ⚠ 파일이 없으면 만들지 않는다 — CLI 가 첫 실행에 스스로 만든다(만들어진 뒤의 세션이 채운다). IDE 의 승인 허용목록은
+//   파일 표면이 없어 여기서 못 다룬다(정직 표기 — 지식 cursor-harness-judgment-4927).
+//  ⚠ 타입이 틀리면 CLI 가 파일을 .bad 로 옮기고 기본값으로 갈아끼운다(실측) — allow 가 배열이 아니면 손대지 않는다.
+export function reconcileCursorAutoApprove(dir, want, file = harness("cursor").autoApprove.file(homedir())) {
+  try {
+    if (!existsSync(file)) return false;
+    let cur; try { cur = JSON.parse(readFileSync(file, "utf8")); } catch { return false; }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
+    const perms = (cur.permissions && typeof cur.permissions === "object" && !Array.isArray(cur.permissions)) ? cur.permissions : {};
+    if (perms.allow !== undefined && !Array.isArray(perms.allow)) return false;
+    const allow = Array.isArray(perms.allow) ? perms.allow : [];
+    const rules = [];
+    for (const full of want) { const p = managedAutoApproveParts(full); if (p) rules.push(`Mcp(${p.server}:${p.tool})`); }
+    const prevPath = join(dir, "managed-cursor-permission.json");
+    let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
+    const wantSet = new Set(rules); const prevSet = new Set(prev);
+    const next = allow.filter((e) => !(prevSet.has(e) && !wantSet.has(e)));   // 우리가 넣었다 뺀 것만 회수(사용자 규칙 보존)
+    for (const e of rules) if (!next.includes(e)) next.push(e);
+    if (JSON.stringify(next) === JSON.stringify(allow) && prev.join("\u0000") === rules.join("\u0000")) return false;   // 변화 없음
+    cur.permissions = { ...perms, allow: next, ...(Array.isArray(perms.deny) ? {} : { deny: [] }) };
+    writeFileSync(file, JSON.stringify(cur, null, 2) + "\n");
+    writeFileSync(prevPath, JSON.stringify(rules, null, 2));
+    return true;
+  } catch { return false; }                                  // fail-soft
+}
+
 // auto-approve reconcile 전략 — 표의 autoApprove.kind → 실제 반영 함수. 여기 없는 kind 는 no-op 이고,
 //  그건 "그 하네스는 아직 자동승인 배선이 없다"를 뜻한다(조용히 claude 표면에 쓰는 것보다 안전하다).
 const AUTO_APPROVE = {
   "settings-allow": (dir, want) => reconcileClaudeAutoApprove(dir, want),
   "toml-approval": (_dir, want) => reconcileCodexAutoApprove(want),
+  "cursor-cli-allow": (dir, want) => reconcileCursorAutoApprove(dir, want),
 };
 
 // kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임

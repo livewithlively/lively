@@ -94,6 +94,7 @@
   "dist/terminal/harness-io/codex-chat-runtime.js",
   "dist/terminal/harness-io/codex-stream.js",
   "dist/terminal/harness-io/codex.js",
+  "dist/terminal/harness-io/cursor.js",
   "dist/terminal/harness-io/grok-stream.js",
   "dist/terminal/harness-io/grok.js",
   "dist/terminal/harness-io/locate.js",

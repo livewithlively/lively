@@ -63,6 +63,11 @@ export function watchedTargets(env = process.env, home = homedir()) {
     { path: join(home, ".gemini", "config", "plugins", "lively", "mcp_config.json") },
     { path: join(home, ".gemini", "antigravity-cli", "settings.json") },
     { path: join(grok, "config.toml") },
+    // cursor(#4927) — hooks.json·mcp.json 은 ~/.cursor 고정(사용자와 공유 — 우리가 쓰는 키만 본다). cli-config.json 은
+    //  CLI 가 스스로 다시 쓰므로(기본값 채움·모르는 키 제거 — 실측) permissions 만 본다(아래 env 변형 자리도 같이).
+    { path: join(home, ".cursor", "hooks.json"), keys: ["hooks"] },
+    { path: join(home, ".cursor", "mcp.json"), keys: ["mcpServers"] },
+    { path: join(home, ".cursor", "cli-config.json"), keys: ["permissions"] },
     { path: join(home, ".lively", "token") },
     { path: join(home, ".lively", "gateway-url") },
     { path: join(home, ".lively", "mcp-servers.json") },
@@ -74,6 +79,10 @@ export function watchedTargets(env = process.env, home = homedir()) {
     { path: join(ccd, ".claude.json"), keys: CLAUDE_JSON_KEYS },
     { path: join(ccd, "settings.json"), keys: CLAUDE_SETTINGS_KEYS },
   );
+  // cursor(#4927) — cli-config.json 만 CURSOR_CONFIG_DIR > $XDG_CONFIG_HOME/cursor 로 옮겨 간다(번들 실측 — 플랫폼 무관).
+  const ccfg = String(env.CURSOR_CONFIG_DIR || "").trim();
+  if (ccfg) t.push({ path: join(ccfg, "cli-config.json"), keys: ["permissions"] });
+  if (String(env.XDG_CONFIG_HOME || "").trim()) t.push({ path: join(xdg, "cursor", "cli-config.json"), keys: ["permissions"] });
   // 같은 파일을 두 번 보지 않는다(CCD 가 ~/.claude 인 흔한 배치).
   const seen = new Set();
   return t.filter(({ path }) => !seen.has(path) && seen.add(path));
