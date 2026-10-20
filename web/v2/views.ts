@@ -31,8 +31,8 @@ export interface ProjList { id: number; name: string; folder_id?: number | null;
 export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 // 세션 행 모양(Sess)과 그 재료 맞추기(mergeSessions) · '내 세션인가'(isMineSess) · '하던 일'(sessWork)은 v2/sess-merge.ts 한 벌이다 —
 //  셸 밖 화면(프로젝트 보드의 리스트 뷰)도 이 무거운 모듈을 끌지 않고 같은 규칙을 쓰도록 거기로 내렸다. 여기서는 그대로 다시 내보낸다.
-import { isMineSess, sessWork, type Sess } from './sess-merge.js';
-export { isMineSess, sessWork, type Sess };
+import { dotCls, isMineSess, sessWork, type Sess } from './sess-merge.js';
+export { dotCls, isMineSess, sessWork, type Sess };
 export { mergeSessions } from './sess-merge.js';
 export interface V2Data {
   projects: Proj[];
@@ -47,17 +47,6 @@ export interface V2Data {
 }
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
-// 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
-//  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
-export function dotCls(stateKey: string): string {
-  if (stateKey === 'busy') return 'busy';
-  if (stateKey === 'waiting') return 'wait';
-  if (stateKey === 'done') return 'done';
-  if (stateKey === 'idle') return 'idle';
-  if (stateKey === 'offline') return 'off';
-  if (stateKey === 'shell') return 'shell';
-  return '';
-}
 //  (세션 시각 서식 `when` 은 #4180 에서 걷었다 — 「확인할 것」이 세션 줄을 세우지 않는다. 알림 행의 시각은 notifications.ts 가 그린다.)
 
 // ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
