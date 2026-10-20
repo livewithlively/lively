@@ -141,6 +141,19 @@ try {
     allowOf(C, "Read", { file_path: "a~b.txt" });
     allowOf(C, "Read", { file_path: "my notes.md" });
   });
+  //  G41 — 하네스는 경로를 NFC 로 접어 읽는다: 켈빈 기호(U+212A)로 쓴 my.Key 는 my.Key 다(재검토). 판정기도 같게 접어 비밀 이름으로 막는다.
+  t("G41 NFC — 켈빈 기호로 쓴 비밀 이름(my.Key)도 거절 · 보통 한글 이름은 허용(대조군)", () => {
+    denyOf(C, "Read", { file_path: "my.Key" });
+    allowOf(C, "Read", { file_path: "회의록.md" });
+  });
+  //  G42 — Grep 제외 글로브는 대소문자를 가리지 않는다(ripgrep 글로브는 가린다 — 재검토 실측: Credentials.JSON · my.PEM 이 새었다).
+  //   글로브를 정규식으로 옮겨(* · [..] 만 쓰는 꼴) 이름마다 제외되는지 본다 — 숨김 · 비밀 이름은 빠지고 보통 이름은 남는다.
+  t("G42 Grep 제외 글로브 — 대문자 비밀 이름도 빠진다 · 보통 이름은 남는다", () => {
+    const toRe = (g: string): RegExp => new RegExp("^" + g.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, "[^/]*") + "$");
+    const excluded = (name: string): boolean => FORK_GREP_EXCLUDE.some((g) => toRe(g.slice(1)).test(name));
+    for (const n of ["Credentials.JSON", "my.PEM", "my.Key", "ID_RSA", "Secret.txt", "Service-Account.json", ".env", "server.pem"]) assert.ok(excluded(n), `${n} 가 빠지지 않는다`);
+    for (const n of ["README.md", "src.ts", "keynote.md", "pemberton.txt"]) assert.ok(!excluded(n), `${n} 는 보통 파일인데 빠진다`);
+  });
   t("N1 appFolder 가 없으면 .lively/apps/myapp 도 숨김으로 거절", () => denyOf(baseCfg({ appFolder: null }), "Read", { file_path: path.join(ROOT, ".lively/apps/myapp/x.md") }));
   t("N2 livelyAllow 가 비면 라이블리 도구 전부 거절", () => denyOf(baseCfg({ livelyAllow: [] }), "mcp__lively__knowledge_get", {}));
   t("N3 Bash · Write 는 어떤 설정이어도 거절(셸 갈래 없음 — Codex 는 #4920)", () => { denyOf(C, "Bash", { command: "cat a.txt" }); denyOf(baseCfg({ livelyAllow: [] }), "Write", { file_path: "a.txt", content: "" }); });

@@ -9,8 +9,9 @@
 // ── 무엇을 여나(상민 2026-10-20 결정 ②) ────────────────────────────────────────
 //  세션 대화(이미 맥락에 있다) + 그 앱의 표 읽기 + 작업 폴더 파일 읽기(숨김·비밀 파일 제외) + 라이블리 읽기 도구(FORK_LIVELY_READ_TOOLS — 이름으로
 //  적은 목록). 쓰기 · 셸 실행 · 웹 · 하위 에이전트 · 라이블리 밖 MCP 는 막는다. 라이블리 쓰기는 게이트웨이도 막는다 — 분기는 `x-lively-mode=readonly` 로
-//  돈다(#1007). 판은 이 훅 말고 둘째 문도 둔다 — 권한 모드 `dontAsk`(이 훅이 허락하지 않은 도구는 묻지 않고 거절 — 훅이 죽거나 시간을 넘겨도 셸이
-//  돌지 않는다 · fork-boot.ts).
+//  돈다(#1007). 판은 이 훅 말고 둘째 문도 둔다 — 권한 모드 `dontAsk`(이 훅이 허락하지 않은 도구는 묻지 않고 거절 — 훅이 죽거나 시간을 넘겨도
+//  셸이 돌지 않는다 · fork-boot.ts). 단 사람이 본 세션에서 «항상 허용» 으로 쌓은 허용 규칙(.claude/settings*.json)이 있으면 훅이 답하지 못한 때
+//  그 규칙대로 돈다 — 이 훅은 모든 오류 길에서 거절을 내므로(아래 본체 끝) 그 틈은 훅 프로세스가 통째로 죽은 때뿐이다.
 //  Claude 세션만이다 — Codex 는 후속 #4920(셸로 파일을 읽어 셸 해석이 필요하다 · 진짜 codex 로 검증하며 다시 들인다).
 //
 // ── 경로는 하네스와 같게 읽는다 ─────────────────────────────────────────────────
@@ -40,9 +41,14 @@ export interface ForkGuardConfig {
 
 /** 훅 스크립트 안에서 «비밀이 든 파일» 로 보는 이름(작업 폴더 안 · 숨김 아닌 것) — 시험이 같은 표를 쓴다. */
 export const FORK_SECRET_FILE_RE = String.raw`^(id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|(credentials?|secrets?|service[-_]?account)(\.[a-z0-9]{1,8})?|.+\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk))$`;
-/** claude Grep 에 맨 뒤로 붙이는 제외 글로브 — 숨김(점으로 시작) · 비밀 이름. ripgrep 은 뒤의 글로브가 이긴다. */
-export const FORK_GREP_EXCLUDE = ["!.*", "!*.pem", "!*.key", "!*.p12", "!*.pfx", "!*.jks", "!*.keystore", "!*.kdbx", "!*.ppk",
-  "!id_rsa*", "!id_dsa*", "!id_ecdsa*", "!id_ed25519*", "!credential*", "!secret*", "!service*account*"] as const;
+/**
+ * claude Grep 에 맨 뒤로 붙이는 제외 글로브 — 숨김(점으로 시작) · 비밀 이름. ripgrep 은 뒤의 글로브가 이긴다.
+ *  글자마다 대소문자를 함께 받는다([pP][eE][mM]) — ripgrep 글로브는 대소문자를 가려 `Credentials.JSON` · `my.PEM` 이 빠지지 않았다(재검토 실측 ·
+ *  Read 판정은 대소문자를 안 가린다 — FORK_SECRET_FILE_RE 의 "i").
+ */
+const ANY_CASE = (g: string): string => g.replace(/[a-z]/gi, (c) => `[${c.toLowerCase()}${c.toUpperCase()}]`);
+export const FORK_GREP_EXCLUDE: readonly string[] = ["!.*", ...["*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.ppk",
+  "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "credential*", "secret*", "service*account*"].map((g) => "!" + ANY_CASE(g))];
 
 /**
  * 판정기 본체 — `node <이 글> <설정 파일>` 로 돈다(ES2020 · 노드 내장만). stdin = 하네스의 PreToolUse 입력 JSON.
@@ -89,12 +95,14 @@ function realOf(p) {
   }
   return cur;
 }
-//  경로를 읽어도 되나 — 안 되면 사유, 되면 null. 하네스는 앞뒤 공백을 걷고 ~ 를 홈으로 펼쳐 읽는다 — 그 둘은 여기서 막는다(머리말).
-function pathRefusal(p) {
-  if (typeof p !== "string" || !p.trim()) return "경로가 비었습니다";
-  if (p.indexOf("\u0000") >= 0) return "경로에 쓸 수 없는 문자가 있습니다";
-  if (p !== p.trim()) return "앞뒤에 공백이 있는 경로는 읽지 않습니다: " + JSON.stringify(p);
-  if (p.charAt(0) === "~") return "~ 로 시작하는 경로(홈 폴더)는 읽지 않습니다 — 작업 폴더 기준 경로를 쓰세요: " + p;
+//  경로를 읽어도 되나 — 안 되면 사유, 되면 null. 하네스는 앞뒤 공백을 걷고 ~ 를 홈으로 펼치고 NFC 로 접어 읽는다 — 앞의 둘은 막고,
+//   NFC 는 같게 접어 잰다(켈빈 기호 K 로 쓴 my.Key 를 하네스는 my.Key 로 읽는다 — 재검토).
+function pathRefusal(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return "경로가 비었습니다";
+  if (raw.indexOf("\u0000") >= 0) return "경로에 쓸 수 없는 문자가 있습니다";
+  if (raw !== raw.trim()) return "앞뒤에 공백이 있는 경로는 읽지 않습니다: " + JSON.stringify(raw);
+  if (raw.charAt(0) === "~") return "~ 로 시작하는 경로(홈 폴더)는 읽지 않습니다 — 작업 폴더 기준 경로를 쓰세요: " + raw;
+  const p = raw.normalize("NFC");
   const root = rootOf();
   const real = realOf(p);
   const rel = path.relative(root, real);
@@ -130,7 +138,7 @@ function decide(ev) {
     case "LS": needPath(inp.path === undefined ? "." : inp.path); return allow();
     case "Glob": {
       if (inp.path !== undefined) needPath(inp.path);
-      const pat = String(inp.pattern || "");
+      const pat = String(inp.pattern || "").normalize("NFC");
       if (!pat || pat !== pat.trim() || pat.startsWith("/") || pat.startsWith("~") || pat.split("/").some((s) => s === "..")) {
         deny("Glob 은 작업 폴더 안의 상대 패턴만 씁니다: " + pat);
       }
@@ -181,7 +189,7 @@ export const FORK_LIVELY_READ_TOOLS: readonly string[] = [
   "store_query", "store_tables",
   "task_detail_v6",
   "team_get", "team_list",
-  "whoami", "workspace_people",
+  "whoami",
 ];
 
 /**

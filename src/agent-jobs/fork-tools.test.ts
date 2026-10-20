@@ -16,8 +16,9 @@ assert.deepEqual(forkLivelyReadTools(surface), [...FORK_LIVELY_READ_TOOLS].sort(
 ok("T1 목록의 도구는 전부 노출된 읽기 도구");
 
 //  T2 — 밖으로 나가거나 · 서명 주소를 내주거나 · 파일을 만들거나 · 자격을 돌려주는 이름은 목록에 없다(늘릴 때 다시 보게).
-const RISKY = /(credential|secret|token|password|unmask|_url$|preview|pull|discover|github|gitlab|google|slack|notion|figma|linear|oauth|broker|delegate|db_query|org_)/;
+//  people · member — 구성원 이메일 · 초대 대기 이메일을 주는 도구(workspace_people · org_members — 재검토: 업무 맥락이 아니다).
+const RISKY = /(credential|secret|token|password|unmask|_url$|preview|pull|discover|github|gitlab|google|slack|notion|figma|linear|oauth|broker|delegate|db_query|org_|people|member)/;
 assert.deepEqual(FORK_LIVELY_READ_TOOLS.filter((n) => RISKY.test(n)), []);
-ok("T2 밖으로 나가는 · 자격 · 서명 주소 · 관리 설정 이름은 없다");
+ok("T2 밖으로 나가는 · 자격 · 서명 주소 · 관리 설정 · 구성원 연락처 이름은 없다");
 
 console.log(`agent-jobs fork-tools.test: ${pass} passed`);

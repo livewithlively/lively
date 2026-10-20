@@ -299,6 +299,10 @@ try {
     await itemsPool.query(`UPDATE org_agent_job SET reaped=false, error=$2 WHERE id=$1`, [id, "e".repeat(5000)]);
     const open = (await st.openAgentJobs(50)).find((x) => x.id === id);
     chk("I3 감시가 읽는 행엔 프롬프트·결과가 없고 오류는 600자까지", open && !("prompt" in open) && !("result" in open) && open.error.length === 600, JSON.stringify(open && Object.keys(open)));
+    //  #4489 — 도는 동안 허락을 다시 볼 때 분기 작업인지 알아야 «붙은 세션에서 실행» 동의를 다시 본다(빠지면 동의를 거둬도 안 멈춘다).
+    await itemsPool.query(`UPDATE org_agent_job SET fork=$2::jsonb WHERE id=$1`, [id, JSON.stringify({ session: "box-x", harness: "claude" })]);
+    const openF = (await st.openAgentJobs(50)).find((x) => x.id === id);
+    chk("I4 감시가 읽는 행에 분기 좌표(fork)가 온다", openF && openF.fork && openF.fork.session === "box-x", JSON.stringify(openF && openF.fork));
   }
 
   // ── K. 멈춘 사유 ──────────────────────────────────────────────────────────

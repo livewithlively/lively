@@ -297,10 +297,13 @@ export async function requestCancelAgentJob(id: number, reason: string | null = 
   return norm(rows[0]);
 }
 
-/** 감시가 보는 칸 — 판단(시각·상한·취소)과 걷기(세션·토큰)에 필요한 것만. 프롬프트·결과(행당 수백 KB)는 읽지 않는다. */
+/**
+ * 감시가 보는 칸 — 판단(시각·상한·취소)과 걷기(세션·토큰)에 필요한 것만. 프롬프트·결과(행당 수백 KB)는 읽지 않는다.
+ *  fork(#4489) — 도는 동안의 허락 재확인(assertJobAllowed)이 분기 작업의 «붙은 세션에서 실행» 동의도 다시 본다(빠지면 동의를 거둬도 안 멈춘다).
+ */
 export type AgentJobSweepRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id" | "mcp_token_hash" | "timeout_sec" | "cancel_requested" | "account_kind" | "requester"
-  | "created_at" | "claimed_at" | "started_at" | "last_tick_at" | "ended_at" | "error" | "app_id" | "account_member">;
-const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, account_kind, requester, app_id, account_member,
+  | "created_at" | "claimed_at" | "started_at" | "last_tick_at" | "ended_at" | "error" | "app_id" | "account_member" | "fork">;
+const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, account_kind, requester, app_id, account_member, fork,
   created_at, claimed_at, started_at, last_tick_at, ended_at, left(error, 600) AS error`;
 
 /** 감시 대상 — 열린 작업과, 끝났지만 아직 걷지 않은 작업(열린 작업 인덱스의 조건과 같은 꼴). */
