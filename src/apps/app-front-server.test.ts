@@ -16,6 +16,7 @@ import type { ServerRow } from "./app-server-store.js";
 import type { StreamEvent } from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
 import { scriptVersion } from "./app-server-page.js";
+import zlib from "node:zlib";
 
 const TENANT = { id: "11111111-2222-4333-8444-555555555555", slug: "lively-46e3" };
 const key = ed25519FromSeed(crypto.createHash("sha256").update("front-server-test").digest());
@@ -34,7 +35,8 @@ const row = (o: Partial<ServerRow> = {}): ServerRow => ({
   health: null, health_checked_at: null, ...o,
 });
 
-type Script = { kind: "ok"; prelude: unknown; body: Array<string | { wait: number }>; report?: string; errorCode?: string } | { kind: "err"; payload: string; report?: string } | { kind: "throw"; e: unknown };
+type Script = { kind: "ok"; prelude: unknown; body: Array<string | { wait: number }>; report?: string; errorCode?: string;
+  /** 첫 본문 조각을 앞머리 사건에 붙여 보낸다(운영에선 작은 문서가 첫 사건에 다 온다 — startHttpStream 의 first). */ coalesce?: boolean } | { kind: "err"; payload: string; report?: string } | { kind: "throw"; e: unknown };
 interface Call { fn: string; qual: string; event: Record<string, unknown>; timeoutMs: number; signal?: AbortSignal }
 
 function fakeApi(script: Script, calls: Call[], state: { consumed: boolean } = { consumed: false }): LambdaApi {
@@ -45,8 +47,10 @@ function fakeApi(script: Script, calls: Call[], state: { consumed: boolean } = {
       async function* events(): AsyncGenerator<StreamEvent> {
         if (script.kind === "err") { yield { type: "chunk", data: Buffer.from(script.payload) }; yield { type: "complete", errorCode: null, errorDetails: null, log: script.report ?? "" }; return; }
         if (script.kind !== "ok") return;
-        yield { type: "chunk", data: Buffer.concat([Buffer.from(JSON.stringify(script.prelude)), Buffer.alloc(8)]) };
-        for (const b of script.body) {
+        const body = [...script.body];
+        const head = script.coalesce && typeof body[0] === "string" ? Buffer.from(body.shift() as string) : Buffer.alloc(0);
+        yield { type: "chunk", data: Buffer.concat([Buffer.from(JSON.stringify(script.prelude)), Buffer.alloc(8), head]) };
+        for (const b of body) {
           if (typeof b === "string") yield { type: "chunk", data: Buffer.from(b) };
           else await new Promise((r) => setTimeout(r, b.wait));
         }
@@ -379,42 +383,63 @@ test("D22 ★ 그 별칭의 판에 앱 토큰 기록이 없다(v2-5 때 올린 �
 });
 
 // ── R #4485 후속 — 화면 문서에 SDK 런타임 넣기(사양 spec-4485-runtime.md 표 B · C · D 의 흐름 쪽) ──
-//  이게 틀리면: 서버 앱이 라이블리 안에서 인사하지 않아 8초 뒤 종전 화면으로 바뀌거나, fetch 로 받는 HTML · JSON · 압축 답이 깨진다.
+//  이게 틀리면: 서버 앱이 라이블리 안에서 인사하지 않아 8초 뒤 종전 화면으로 바뀌거나, fetch 로 받는 HTML · JSON · 내려받기 · 압축 답이 깨지거나,
+//   문서가 압축 없이 나가거나, 캐시가 런타임 든 문서와 안 든 문서를 섞는다.
 const DOC = { "sec-fetch-dest": "iframe", "sec-fetch-mode": "navigate", accept: "text/html,application/xhtml+xml,*/*;q=0.8" };
 const FAKE_SCRIPTS = async () => ({ runtime: "RT()", probe: "PB()" });
-const page = (headers: Record<string, string> = {}, body: Array<string | { wait: number }> = ["<!doctype html><p>안녕</p>"], status = 200): Script =>
-  ({ kind: "ok", prelude: { statusCode: status, headers: { "content-type": "text/html; charset=utf-8", ...headers }, cookies: [] }, body });
+const SDK = `<script src="/_lively/sdk.js?v=${scriptVersion("RT()")}"></script>`;
+const page = (headers: Record<string, string> = {}, body: Array<string | { wait: number }> = ["<!doctype html><p>안녕</p>"], status = 200, coalesce = false): Script =>
+  ({ kind: "ok", prelude: { statusCode: status, headers: { "content-type": "text/html; charset=utf-8", ...headers }, cookies: [] }, body, coalesce });
 const sentHeaders = (h: Harness): Record<string, string> => (h.calls[0]!.event as { headers: Record<string, string> }).headers;
+/** 날바이트로 받는다(압축 답) — 조각마다 도착 시각. */
+function getRaw(port: number, path: string, headers: Record<string, string>): Promise<{ status: number; headers: http.IncomingHttpHeaders; chunks: Array<{ at: number; b: Buffer }>; all: Buffer; complete: boolean }> {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const r = http.request({ host: "127.0.0.1", port, path: `/?path=${encodeURIComponent(path)}`, headers, agent: false }, (res) => {
+      const chunks: Array<{ at: number; b: Buffer }> = [];
+      res.on("data", (b: Buffer) => chunks.push({ at: Date.now() - t0, b }));
+      res.on("error", () => undefined);
+      res.on("close", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, chunks, all: Buffer.concat(chunks.map((c) => c.b)), complete: res.complete }));
+    });
+    r.on("error", () => resolve({ status: 0, headers: {}, chunks: [], all: Buffer.alloc(0), complete: false }));
+    r.end();
+  });
+}
 
-test("R1 ★ 화면 문서 — 런타임이 doctype 바로 뒤 · 길이 · 검증값 머리를 뺀다 · 함수로 가는 요청에서 압축 · 조건부 머리를 뺀다 · 나머지는 그대로", async () => {
+test("R1 ★ 화면 문서 — 런타임이 doctype 바로 뒤(첫 사건에 온 작은 문서도) · 길이 · 검증값 머리를 뺀다 · Vary · 함수로 가는 요청에서 압축 · 조건부 머리를 뺀다", async () => {
   const body = "<!doctype html><p>안녕</p>";
-  const h = await start(page({ "content-length": String(Buffer.byteLength(body)), etag: "\"e1\"", "last-modified": "Mon, 01 Jan 2024 00:00:00 GMT", "cache-control": "max-age=60" }, [body]),
-    { scripts: FAKE_SCRIPTS });
-  try {
-    const r = await get(h.port, "/page", { ...DOC, "x-lively-identity": ident(), "accept-encoding": "gzip, br", "if-none-match": "\"e1\"", "if-modified-since": "Mon" });
-    assert.equal(r.status, 200);
-    assert.equal(r.body, "<!doctype html><script>RT()</script><p>안녕</p>");
-    assert.equal(r.complete, true);
-    assert.equal(r.headers["content-length"], undefined, "넣기 전 길이를 그대로 보냈다");
-    assert.equal(r.headers.etag, undefined, "넣기 전 본문의 ETag 를 그대로 보냈다");
-    assert.equal(r.headers["last-modified"], undefined);
-    assert.equal(r.headers["cache-control"], "max-age=60", "앱의 캐시 머리는 그대로");
-    const sent = sentHeaders(h);
-    assert.equal(sent["accept-encoding"], undefined, "압축을 청하면 넣을 수 없다");
-    assert.equal(sent["if-none-match"], undefined, "304 면 넣을 본문이 없다");
-    assert.equal(sent["if-modified-since"], undefined);
-    assert.equal(sent["sec-fetch-dest"], "iframe", "나머지 머리는 그대로 간다");
-  } finally { await h.close(); }
+  for (const coalesce of [true, false]) {
+    const h = await start(page({ "content-length": String(Buffer.byteLength(body)), etag: "\"e1\"", "last-modified": "Mon, 01 Jan 2024 00:00:00 GMT", "cache-control": "max-age=60" }, [body], 200, coalesce),
+      { scripts: FAKE_SCRIPTS });
+    try {
+      const r = await get(h.port, "/page", { ...DOC, "x-lively-identity": ident(), "accept-encoding": "identity", "if-none-match": "\"e1\"", "if-modified-since": "Mon" });
+      assert.equal(r.status, 200);
+      assert.equal(r.body, `<!doctype html>${SDK}<p>안녕</p>`, `coalesce=${coalesce}`);
+      assert.equal(r.complete, true);
+      assert.equal(r.headers["content-length"], undefined, "넣기 전 길이를 그대로 보냈다");
+      assert.equal(r.headers.etag, undefined, "넣기 전 본문의 ETag 를 그대로 보냈다");
+      assert.equal(r.headers["last-modified"], undefined);
+      assert.equal(r.headers["cache-control"], "max-age=60", "앱의 캐시 머리는 그대로");
+      assert.match(String(r.headers.vary), /Sec-Fetch-Dest/, "캐시가 문서 · fetch 답을 섞는다");
+      const sent = sentHeaders(h);
+      assert.equal(sent["accept-encoding"], undefined, "압축을 청하면 넣을 수 없다");
+      assert.equal(sent["if-none-match"], undefined, "304 면 넣을 본문이 없다");
+      assert.equal(sent["if-modified-since"], undefined);
+      assert.equal(sent["sec-fetch-dest"], "iframe", "나머지 머리는 그대로 간다");
+    } finally { await h.close(); }
+  }
 });
 
-test("R2 문서가 아닌 요청(fetch) · HEAD · JSON · 압축된 답 · 준비물 없음 → 손대지 않는다(바이트 · 머리 · 넘기는 머리 그대로)", async () => {
+test("R2 문서가 아닌 요청(fetch) · HEAD · JSON · 압축된 답 · 내려받기 · 준비물 없음 → 런타임을 넣지 않는다(바이트 · 머리 그대로)", async () => {
   const body = "<!doctype html><li>조각</li>";
-  //  fetch 로 받는 HTML 조각
+  //  fetch 로 받는 HTML 조각 — 압축 머리는 그대로 함수로 · 게이트웨이가 압축하지 않는다 · Vary 는 단다
   let h = await start(page({ etag: "\"e2\"" }, [body]), { scripts: FAKE_SCRIPTS });
   try {
     const r = await get(h.port, "/frag", { "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", accept: "text/html", "accept-encoding": "gzip", "x-lively-identity": ident() });
     assert.equal(r.body, body);
     assert.equal(r.headers.etag, "\"e2\"");
+    assert.equal(r.headers["content-encoding"], undefined, "문서가 아닌 답을 게이트웨이가 압축했다");
+    assert.match(String(r.headers.vary), /Sec-Fetch-Dest/);
     assert.equal(sentHeaders(h)["accept-encoding"], "gzip", "문서가 아니면 압축 머리를 그대로 넘긴다");
   } finally { await h.close(); }
   //  HEAD — 본문 없음
@@ -432,6 +457,15 @@ test("R2 문서가 아닌 요청(fetch) · HEAD · JSON · 압축된 답 · 준�
       assert.equal(r.body, b, JSON.stringify(headers));
     } finally { await h.close(); }
   }
+  //  B15 내려받기(보고서 HTML) — 브라우저는 문서 요청으로 보낸다 · 파일은 앱이 보낸 바이트 그대로 · 길이 머리도 그대로 · 다시 압축하지 않는다
+  const report = "<!doctype html><h1>보고서</h1>";
+  h = await start(page({ "content-disposition": 'attachment; filename="report.html"', "content-length": String(Buffer.byteLength(report)) }, [report], 200, true), { scripts: FAKE_SCRIPTS });
+  try {
+    const r = await get(h.port, "/export", { ...DOC, "sec-fetch-dest": "document", "accept-encoding": "gzip", "x-lively-identity": ident() });
+    assert.equal(r.body, report, "내려받은 파일에 런타임이 들어갔다");
+    assert.equal(r.headers["content-length"], String(Buffer.byteLength(report)));
+    assert.equal(r.headers["content-encoding"], undefined);
+  } finally { await h.close(); }
   //  준비물(웹 빌드 산출물)을 못 읽음 — 넣지 않고 그대로 낸다(화면은 열린다)
   h = await start(page({}, [body]), { scripts: async () => { throw new Error("no web build"); } });
   try {
@@ -442,35 +476,36 @@ test("R2 문서가 아닌 요청(fetch) · HEAD · JSON · 압축된 답 · 준�
   } finally { await h.close(); }
 });
 
-test("R3 조각으로 오는 문서 — doctype 이 조각에 걸쳐도 그 뒤에 · doctype 이 끝나기 전에 흐름이 끝나면 맨 앞 · 흘려 보내기는 그대로", async () => {
+test("R3 조각으로 오는 문서 — doctype 이 조각에 걸쳐도 그 뒤에 · doctype 이 끝나기 전에 흐름이 끝나면 맨 앞 · 흘려 보내기는 그대로 · 앱의 오류 화면에도", async () => {
   let h = await start(page({}, ["<!doc", { wait: 30 }, "type html><p>a</p>", { wait: 250 }, "<p>b</p>"]), { scripts: FAKE_SCRIPTS });
   try {
     const r = await get(h.port, "/page", { ...DOC, "x-lively-identity": ident() });
-    assert.equal(r.body, "<!doctype html><script>RT()</script><p>a</p><p>b</p>");
+    assert.equal(r.body, `<!doctype html>${SDK}<p>a</p><p>b</p>`);
     assert.ok(r.chunks.length >= 2 && r.chunks.at(-1)!.at - r.chunks[0]!.at >= 150, `모았다 한 번에 보냈다: ${JSON.stringify(r.chunks)}`);
   } finally { await h.close(); }
   h = await start(page({}, ["<!doctype ht"]), { scripts: FAKE_SCRIPTS });
   try {
     const r = await get(h.port, "/page", { ...DOC, "x-lively-identity": ident() });
-    assert.equal(r.body, "<script>RT()</script><!doctype ht");
+    assert.equal(r.body, `${SDK}<!doctype ht`);
     assert.equal(r.complete, true);
   } finally { await h.close(); }
-  //  앱의 오류 화면(404 HTML)도 문서다 — 넣는다
   h = await start(page({}, ["<!doctype html><h1>없음</h1>"], 404), { scripts: FAKE_SCRIPTS });
   try {
     const r = await get(h.port, "/nope", { ...DOC, "x-lively-identity": ident() });
     assert.equal(r.status, 404);
-    assert.equal(r.body, "<!doctype html><script>RT()</script><h1>없음</h1>");
+    assert.equal(r.body, `<!doctype html>${SDK}<h1>없음</h1>`);
   } finally { await h.close(); }
 });
 
-test("R4 앱의 CSP · 탐침 — 인라인을 막으면 같은 주소 파일 · nonce 면 그 nonce · 탐침 쿼리면 탐침도 · frame-ancestors 는 걷은 뒤 판정", async () => {
+test("R4 앱의 CSP · 탐침 — 같은 주소 파일이 기본 · nonce 면 그 nonce · 파일을 막고 인라인만 받으면 인라인 · 탐침 쿼리면 탐침도 · frame-ancestors 는 걷은 뒤 판정", async () => {
+  const PROBE = `<script src="/_lively/probe.js?v=${scriptVersion("PB()")}"></script>`;
   const cases: Array<[Record<string, string>, string, string]> = [
-    [{ "content-security-policy": "default-src 'self'; script-src 'self'; frame-ancestors 'self'" }, "/page", `<script src="/_lively/sdk.js?v=${scriptVersion("RT()")}"></script>`],
-    [{ "content-security-policy": "script-src 'nonce-n0nce' 'strict-dynamic'" }, "/page", "<script nonce=\"n0nce\">RT()</script>"],
-    [{ "content-security-policy": "frame-ancestors 'none'" }, "/page", "<script>RT()</script>"],
-    [{}, "/page?__lively_probe=1", "<script>RT()</script><script>PB()</script>"],
-    [{ "content-security-policy": "script-src 'self'" }, "/page?x=1&__lively_probe=1", `<script src="/_lively/sdk.js?v=${scriptVersion("RT()")}"></script><script src="/_lively/probe.js?v=${scriptVersion("PB()")}"></script>`],
+    [{ "content-security-policy": "default-src 'self'; script-src 'self'; frame-ancestors 'self'" }, "/page", SDK],
+    [{ "content-security-policy": "script-src 'nonce-n0nce' 'strict-dynamic'" }, "/page", `<script nonce="n0nce" src="/_lively/sdk.js?v=${scriptVersion("RT()")}"></script>`],
+    [{ "content-security-policy": "frame-ancestors 'none'" }, "/page", SDK],
+    [{ "content-security-policy": "script-src 'unsafe-inline'" }, "/page", "<script>RT()</script>"],
+    [{}, "/page?__lively_probe=1", SDK + PROBE],
+    [{ "content-security-policy": "script-src 'unsafe-inline' https://cdn.example.com" }, "/page?x=1&__lively_probe=1", "<script>RT()</script><script>PB()</script>"],
   ];
   for (const [headers, path, tag] of cases) {
     const h = await start(page(headers, ["<!doctype html><p>x</p>"]), { scripts: FAKE_SCRIPTS });
@@ -479,4 +514,28 @@ test("R4 앱의 CSP · 탐침 — 인라인을 막으면 같은 주소 파일 ·
       assert.equal(r.body, `<!doctype html>${tag}<p>x</p>`, `${JSON.stringify(headers)} ${path}`);
     } finally { await h.close(); }
   }
+});
+
+test("R5 ★ 문서 답 다시 압축 — 브라우저가 gzip 을 받으면 게이트웨이가 압축(조각마다 바로 풀림) · Vary · 앱의 ETag 는 약하게 · gzip 을 안 받으면 날것", async () => {
+  const h = await start(page({ etag: "\"e5\"", "content-type": "application/json" }, ["{\"a\":", { wait: 200 }, "1}"]), { scripts: FAKE_SCRIPTS });
+  try {
+    const r = await getRaw(h.port, "/data.json", { ...DOC, "sec-fetch-dest": "document", "accept-encoding": "gzip, br", "x-lively-identity": ident() });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers["content-encoding"], "gzip");
+    assert.equal(r.headers.etag, "W/\"e5\"", "압축한 몸에 앱의 강한 ETag 를 그대로 붙였다");
+    assert.match(String(r.headers.vary), /Accept-Encoding/);
+    assert.equal(zlib.gunzipSync(r.all).toString(), "{\"a\":1}");
+    assert.ok(r.chunks.length >= 2 && r.chunks.at(-1)!.at - r.chunks[0]!.at >= 150, `압축이 모았다 보냈다: ${JSON.stringify(r.chunks.map((c) => c.at))}`);
+    assert.equal(zlib.gunzipSync(r.chunks[0]!.b, { finishFlush: zlib.constants.Z_SYNC_FLUSH }).toString(), "{\"a\":", "첫 조각이 바로 풀리지 않는다");
+  } finally { await h.close(); }
+  const h2 = await start(page({}, ["<!doctype html><p>압축</p>"], 200, true), { scripts: FAKE_SCRIPTS });
+  try {
+    const r = await getRaw(h2.port, "/page", { ...DOC, "accept-encoding": "gzip", "x-lively-identity": ident() });
+    assert.equal(r.headers["content-encoding"], "gzip");
+    assert.match(String(r.headers.vary), /Sec-Fetch-Dest/);
+    assert.equal(zlib.gunzipSync(r.all).toString(), `<!doctype html>${SDK}<p>압축</p>`, "넣고 압축");
+    const plain = await getRaw(h2.port, "/page", { ...DOC, "accept-encoding": "br", "x-lively-identity": ident() });
+    assert.equal(plain.headers["content-encoding"], undefined, "gzip 을 안 받는 브라우저에 gzip");
+    assert.equal(plain.all.toString(), `<!doctype html>${SDK}<p>압축</p>`);
+  } finally { await h2.close(); }
 });

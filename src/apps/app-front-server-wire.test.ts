@@ -283,6 +283,9 @@ test("SW-E #4485 후속 같은 주소 파일 — /_lively/sdk.js · probe.js(지
     const blocked = await call(h.port, "GET", L("/sdk.js"), { app: "srv", noFront: true });
     assert.notEqual(blocked.status, 200, "E5 앞단 문 없이 받았다");
     assert.equal(blocked.text.includes("RT()"), false);
+    const gone = await call(h.port, "GET", L("/sdk.js"), { app: "srv", who: { mid: "carol" } });
+    assert.notEqual(gone.status, 200, "E5 빠진(비활성) 구성원이 받았다 — 사람 · 앱 문(whoAndApp)을 건너뛰었다");
+    assert.equal(gone.text.includes("RT()"), false);
     const probe = await call(h.port, "GET", L(`/probe.js?v=${scriptVersion("PB()")}`), { app: "plain" });
     assert.equal(probe.text, "PB()", "E6 서버 없는 앱 주소에서도 같은 파일");
     assert.equal(probe.headers["cache-control"], "public, max-age=31536000, immutable");

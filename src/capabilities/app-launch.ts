@@ -26,7 +26,7 @@ import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
 import { webDevicesOf } from "../apps/manifest.js";
-import { serverDeclOf } from "../apps/app-server-config.js";
+import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { logger } from "../log.js";
 
 const launchInput = {
@@ -131,13 +131,16 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
     }
   }
   const pages = pub ? uiPagesFromFiles(pub.manifest, pub.files as AppFile[]) : await d.listUiAssets(appId);
-  //  #4485 후속 — 서버가 화면을 만드는 앱(그 판의 매니페스트에 web.server)은 화면 파일이 없어도 연다: 앱 주소의 모든 경로를 그 판의 함수가 답한다.
-  //   쪽 이름(?page=)은 서버가 맡는다. 화면 파일이 없으면 라이블리 화면이 바꿔 띄울 종전 화면(srcdoc)도 없다 — fallback 으로 알린다.
-  const server = serverDeclOf(pub ? pub.manifest : app.manifest) !== null;
+  //  #4485 후속 — 서버가 화면을 만드는 앱(그 판의 매니페스트에 web.server · 이 워크스페이스에 앱 서버가 켜짐 — 앱 주소 길 viewDeclaresServer 와 같은
+  //   판정)은 화면 파일이 없어도 연다: 앱 주소의 모든 경로를 그 판의 함수가 답한다. `?page=` 도 서버가 맡는다(쪽 번호 같은 앱의 쿼리일 수 있다 —
+  //   화면 키로 따지지 않는다). 화면 파일이 없으면 라이블리 화면이 바꿔 띄울 종전 화면(srcdoc)도 없다 — fallback 으로 알린다.
+  const server = serverDeclOf(pub ? pub.manifest : app.manifest) !== null && appServerEnv(d.env, tenant.slug) !== null;
   if (pages.length === 0 && !server) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);
   const path = parseAppPath(next);
-  const pageKey = path?.page ?? pages[0]?.page_key ?? null;
-  if (path?.page && pages.length > 0 && !pages.some((p) => p.page_key === path.page)) throw new HttpError(404, `UI 페이지 없음: ${path.page}`);
+  const wantPage = path?.page ?? null;
+  const known = wantPage !== null && pages.some((p) => p.page_key === wantPage);
+  if (wantPage !== null && !known && !server) throw new HttpError(404, `UI 페이지 없음: ${wantPage}`);
+  const pageKey = known ? wantPage : pages[0]?.page_key ?? null;
 
   const host = appHost(tenant.slug, appId, variant, domain);
   if (!host) throw deny(409, "no_address", `앱 '${appId}' 은(는) 앱 주소를 만들 수 없습니다(이름이 길거나 쓸 수 없는 꼴)`);

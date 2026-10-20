@@ -8,7 +8,8 @@ import { el, navOn, sv } from '../core.js';
 import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 최근 줄의 정본은 서버
 import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
-import { hasAppScreen, listSessionApps, openAppSession, type SessionApp } from './app-session.js';
+import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { openInstalledApp } from './app-instance.js';
 import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';

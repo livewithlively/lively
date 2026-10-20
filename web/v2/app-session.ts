@@ -11,7 +11,8 @@
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 앱 아이콘 선언
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
-import { toolExplain } from '../lib/tool-explain.js';   // #4632 동의 창 도구 칩의 쉬운 설명
+import { toolExplain } from '../lib/tool-explain.js';
+import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 화면 앱 판정 한 벌   // #4632 동의 창 도구 칩의 쉬운 설명
 
 export interface SessionApp {
   id: string;
@@ -20,7 +21,7 @@ export interface SessionApp {
   scopes: string[];   // 매니페스트 선언 상한(동의 창 표시용)
   tools: string[];    // 〃 (permissions.tools ∪ ext_tools)
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
-  server: boolean;    // #4485 후속 — 매니페스트 web.server(서버가 화면을 만든다) — 화면 파일(pages)이 없어도 화면 앱이다(hasAppScreen)
+  server: boolean;    // #4485 후속 — 매니페스트 web.server(서버가 화면을 만든다) — 화면 파일(pages)이 없어도 화면 앱이다(lib/app-screen hasAppScreen)
   tables: string[];   // #4225 — data.tables 이름. 있으면 세션에 붙여 AI 가 쓸 데이터가 있는 앱
   editMode: 'all' | 'members';   // #4225 누가 고칠 수 있나(app_save) — 기본 전원
   editMembers: string[];
@@ -50,16 +51,6 @@ export interface SessionApp {
   projectFiles: string[];   // #4592 — 이 앱 화면이 붙은 세션의 프로젝트 자료에서 읽을 수 있는 확장자(동의 창이 제 줄로 보여 준다)
   appFolder: boolean;       // #4673 — 이 앱이 제 앱 폴더(apps/<앱>/)에 파일을 올리고 받나(동의 창이 제 줄로 보여 준다)
   icon: AppIconSpec | null;   // #4769 — 매니페스트가 선언한 앱 아이콘(없으면 기본 그림)
-}
-
-/** 매니페스트가 앱 서버를 선언했나(web.server = true 또는 객체 — 서버 src/apps/app-server-config.ts serverDeclOf 와 같은 판정). */
-export function declaresServer(manifest: any): boolean {
-  const s = manifest && manifest.web ? manifest.web.server : undefined;
-  return s === true || (!!s && typeof s === 'object' && !Array.isArray(s));
-}
-/** 화면 앱인가 — 화면 파일(ui.pages)이 있거나 서버가 화면을 만든다(#4485 후속 — 앱 주소의 모든 경로를 그 앱의 서버가 답한다). 아니면 세션 앱. */
-export function hasAppScreen(a: { pages: ReadonlyArray<unknown>; server?: boolean }): boolean {
-  return a.pages.length > 0 || a.server === true;
 }
 
 /** 설치된 세션 앱 = status 'active' + enabled. 런치패드·앱서랍이 격자에 싣는다. */

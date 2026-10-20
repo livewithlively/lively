@@ -24,7 +24,7 @@ import type { OrgApp } from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { AppFrontAct } from "./app-front-auth.js";
 import { appErrorHtml, loadAppScripts, type AppScripts } from "./app-front-page.js";
-import { docInjector, documentRequestHeaders, injectableResponse, isDocumentRequest, scriptModeFor, sdkTags, type DocInjector } from "./app-server-page.js";
+import { addVary, docInjector, documentRequestHeaders, gzipDocResponse, gzipStream, injectableResponse, isDocumentRequest, scriptModeFor, sdkTags, type DocInjector, type GzipStream } from "./app-server-page.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv } from "./app-server-config.js";
 import { realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
@@ -265,6 +265,7 @@ export async function serveAppServer(req: express.Request, res: express.Response
   //  화면 문서 요청 — 런타임을 넣을 수 있게 압축 · 조건부(304) 머리를 빼고 넘긴다(온전한 날 HTML 을 받는다).
   const reqHeaders = req.headers as Record<string, string | string[] | undefined>;
   const doc = isDocumentRequest(req.method, reqHeaders);
+  let gz: GzipStream | null = null;   // 문서 답을 다시 압축하는 중(끝나지 않고 나가면 finally 가 걷는다)
   try {
     const event = buildFunctionUrlEvent({
       method: req.method, headers: doc ? documentRequestHeaders(reqHeaders) : reqHeaders, path, host, identity, body,
@@ -304,20 +305,32 @@ export async function serveAppServer(req: express.Request, res: express.Response
           : `서버가 오류로 끝났습니다(${le.type ?? rep?.errorType ?? "까닭 모름"}).`);
     }
     const { headers, cookies } = responseHeadersOf(start.prelude);
+    const status = start.prelude.statusCode;
+    //  HTML 은 문서 요청인지에 따라 모양이 달라진다(런타임을 넣음 · 안 넣음) — 브라우저 캐시가 둘을 섞지 않게.
+    if (/^\s*text\/html/i.test(headers["content-type"] ?? "")) addVary(headers, "Sec-Fetch-Dest");
     //  화면 문서면 런타임을 끼운다 — 본문 길이가 바뀌고, 앱의 검증값(ETag · Last-Modified)은 넣기 전 본문의 것이라 뺀다(다시 열면 늘 온전한 문서).
-    const inj = doc && injectableResponse(start.prelude.statusCode, headers) ? await injectorFor(headers, path.rawQueryString, deps) : null;
+    const inj = doc && injectableResponse(status, headers) ? await injectorFor(headers, path.rawQueryString, deps) : null;
     if (inj) { delete headers["content-length"]; delete headers.etag; delete headers["last-modified"]; }
-    const pass = (b: Buffer): Buffer => (inj ? inj.push(b) : b);
-    res.status(start.prelude.statusCode);
+    //  문서 요청은 압축 머리를 빼고 넘겼다 — 앱 대신 게이트웨이가 압축한다(브라우저가 gzip 을 받으면 · 압축이 듣는 종류 · 내려받기는 앱이 보낸 그대로).
+    gz = doc && gzipDocResponse(status, headers, reqHeaders) ? gzipStream() : null;
+    if (gz) {
+      headers["content-encoding"] = "gzip";
+      delete headers["content-length"];
+      if (headers.etag && !/^W\//.test(headers.etag)) headers.etag = "W/" + headers.etag;   // 압축한 몸은 다른 바이트다
+      addVary(headers, "Accept-Encoding");
+    }
+    const z = gz;
+    const pass = async (b: Buffer): Promise<Buffer> => { const x = inj ? inj.push(b) : b; return z ? z.push(x) : x; };
+    res.status(status);
     for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     if (cookies.length) res.setHeader("set-cookie", cookies);
     res.setHeader(APP_SERVER_MARK, "1");
     res.flushHeaders();
-    let alive = await writeChunk(res, pass(start.first));
+    let alive = await writeChunk(res, await pass(start.first));
     let complete: Complete | null = null;
     for await (const ev of start.rest) {
       if (ev.type === "complete") { complete = ev; break; }
-      if (alive) alive = await writeChunk(res, pass(ev.data));   // 브라우저가 떠났으면 읽기만 한다(위 ★)
+      if (alive) alive = await writeChunk(res, await pass(ev.data));   // 브라우저가 떠났으면 읽기만 한다(위 ★)
     }
     const rep = complete ? parseReport(complete.log) : null;
     //  앱 쪽 실패 — 흐름이 끝 표시 없이 끝남 · 흐름 끝에 AWS 오류 칸(ErrorCode) · REPORT 가 error/timeout. 브라우저가 떠난 것은 앱의 오류가 아니다(셈에서 가른다).
@@ -329,8 +342,13 @@ export async function serveAppServer(req: express.Request, res: express.Response
       abortAfterFlush(res);   // 잘린 응답 — 온전히 끝난 것처럼 닫지 않는다
       return;
     }
-    //  아직 자리를 못 정한 짧은 문서(doctype 이 끝나기 전에 흐름이 끝남 · 빈 본문) — 모아 둔 머리에 넣어 보낸다.
-    if (inj && !(await writeChunk(res, inj.end()))) { res.destroy(); return; }
+    //  아직 자리를 못 정한 짧은 문서(doctype 이 끝나기 전에 흐름이 끝남 · 빈 본문)는 모아 둔 머리에 넣어 보내고, 압축 꼬리를 붙인다.
+    if (inj || z) {
+      const tail = inj ? inj.end() : Buffer.alloc(0);
+      const last = z ? Buffer.concat([await z.push(tail), await z.end()]) : tail;
+      gz = null;
+      if (!(await writeChunk(res, last))) { res.destroy(); return; }
+    }
     res.end();
   } catch (e) {
     count({ billedMs: Date.now() - t0, error: true });
@@ -340,6 +358,7 @@ export async function serveAppServer(req: express.Request, res: express.Response
     }
     res.destroy();
   } finally {
+    gz?.destroy();
     slot();
   }
 }

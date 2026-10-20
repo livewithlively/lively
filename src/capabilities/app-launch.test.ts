@@ -200,7 +200,9 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
 //  이게 틀리면: 서버가 화면을 만드는 앱(화면 파일 없음)이 라이블리 안에서도 새 탭(직접 접속 top)에서도 «UI 페이지가 없습니다» 로 막히거나,
 //   서버 없는 빈 앱이 열리거나, 공개 판을 보는 사람에게 초안의 서버 선언으로 판정한다.
 {
+  const SRV_ENV = { ...ENV, LIVELY_APP_SERVER_EXEC_ROLE: "arn:aws:iam::111122223333:role/lvly-app-exec" } as NodeJS.ProcessEnv;
   const { d, mints } = deps({
+    env: SRV_ENV,
     getApp: async (id) => ({
       srv: app("srv", { manifest: { web: { server: true } } }),
       srvpg: app("srvpg", { manifest: { web: { server: {} } } }),
@@ -223,9 +225,13 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   const s3 = await launchAppFor({ app_id: "srvpg" }, user(), d) as Record<string, unknown>;
   assert.equal(s3.fallback, true, "화면 파일이 있으면 종전 화면이 있다");
   assert.equal(s3.page_key, "main");
-  assert.equal((await status(launchAppFor({ app_id: "srvpg", next: "/?page=nope" }, user(), d))).status, 404, "화면 파일이 있는 앱은 쪽 이름 검사 그대로");
+  const s4 = await launchAppFor({ app_id: "srvpg", next: "/items?page=2" }, user(), d) as Record<string, unknown>;
+  assert.equal(s4.page_key, "main", "서버 앱의 ?page= 는 서버가 맡는다(쪽 번호 같은 앱 쿼리) — 화면 키가 아니면 첫 화면 키");
+  assert.ok(String(s4.url).endsWith("&next=" + encodeURIComponent("/items?page=2")), "가던 주소 그대로");
+  const s4b = await launchAppFor({ app_id: "srvpg", next: "/?page=main" }, user(), d) as Record<string, unknown>;
+  assert.equal(s4b.page_key, "main");
   const s5 = await launchAppFor({ app_id: "srv", next: "/?page=x" }, user(), d) as Record<string, unknown>;
-  assert.equal(s5.page_key, "x", "화면 파일이 없으면 쪽 이름은 서버가 맡는다");
+  assert.equal(s5.page_key, null, "화면 파일이 없으면 화면 키도 없다");
   await launchAppFor({ app_id: "srv", mode: "top", state: STATE }, user(), d);
   assert.equal(mints.at(-1)?.mode, "top", "직접 접속(top)도 같은 규칙");
   const pub = await launchAppFor({ app_id: "pubsrv" }, user(), d) as Record<string, unknown>;
@@ -237,7 +243,14 @@ const status = async (p: Promise<unknown>): Promise<{ status: number; code?: str
   assert.equal(draft.fallback, false);
   const legacy = await launchAppFor({ app_id: "deck-edit" }, user(), deps().d) as Record<string, unknown>;
   assert.equal(legacy.fallback, true, "화면 파일 앱");
-  ok("F10 서버 앱 — 화면 파일 없이 연다(embed · top) · fallback · 공개 판 · 초안 판의 선언대로 · 빈 앱은 404");
+  assert.equal((await status(launchAppFor({ app_id: "deck-edit", next: "/?page=nope" }, user(), deps().d))).status, 404, "서버 없는 앱은 쪽 이름 검사 그대로");
+  //  이 워크스페이스에 앱 서버가 꺼져 있으면(실행 역할 없음 · 스위치 밖) 서버 선언은 없는 것 — 앱 주소 길(viewDeclaresServer)과 같은 판정
+  for (const env of [ENV, { ...SRV_ENV, LIVELY_APP_SERVER_TENANTS: "other-1a2b" } as NodeJS.ProcessEnv]) {
+    const off = deps({ env, getApp: d.getApp, getMember: d.getMember, listUiAssets: d.listUiAssets, getAppVersion: d.getAppVersion });
+    assert.equal((await status(launchAppFor({ app_id: "srv" }, user(), off.d))).status, 404, "앱 서버가 꺼진 워크스페이스에서 화면 파일 없는 서버 앱을 열었다");
+    assert.equal(((await launchAppFor({ app_id: "srvpg" }, user(), off.d)) as Record<string, unknown>).fallback, true);
+  }
+  ok("F10 서버 앱 — 화면 파일 없이 연다(embed · top) · fallback · ?page= 는 서버 몫 · 공개 판 · 초안 판의 선언대로 · 앱 서버 꺼짐 · 빈 앱은 404");
 }
 
 console.log(`\n${pass} passed`);

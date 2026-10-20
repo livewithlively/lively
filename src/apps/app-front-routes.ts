@@ -187,7 +187,7 @@ export async function appFrontMe(headers: Record<string, string | string[] | und
 
 /**
  * #4482 같은 주소 API — `/_lively/<경로>`(앞단이 `?path=` 로 넘김). 문 · 사람 · 앱은 화면과 같은 판정, 그 뒤는 app-front-api.ts.
- *  답은 늘 JSON(앱 코드가 fetch 로 받는다) — 문이 닫혀도 화면용 HTML 이 아니라 JSON.
+ *  답은 JSON(앱 코드가 fetch 로 받는다) — 문이 닫혀도 화면용 HTML 이 아니라 JSON. 단 `/_lively/sdk.js` · `/_lively/probe.js` 는 JS 파일(sdkFile · #4485 후속).
  */
 export async function appFrontLively(headers: Record<string, string | string[] | undefined>, method: string, rawPath: unknown, body: unknown, d: AppFrontDeps): Promise<FrontReply> {
   const g = appFrontGate(headers, "act", d);

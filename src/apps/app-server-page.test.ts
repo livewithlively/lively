@@ -3,9 +3,10 @@
 //  doctype 앞에 넣어 문서가 호환 모드로 그려지거나 · CSP 에 막혀 런타임이 돌지 않는다.
 import test from "node:test";
 import assert from "node:assert/strict";
+import zlib from "node:zlib";
 import {
-  HEAD_WAIT_LIMIT, PROBE_PATH, SDK_PATH, asciiJs, docInjector, documentRequestHeaders, injectableResponse, insertAt, isDocumentRequest, scriptModeFor,
-  scriptVersion, sdkTags,
+  HEAD_WAIT_LIMIT, PROBE_PATH, SDK_PATH, addVary, asciiJs, docInjector, documentRequestHeaders, gzipDocResponse, gzipStream, injectableResponse, insertAt,
+  isDocumentRequest, scriptModeFor, scriptVersion, sdkTags,
 } from "./app-server-page.js";
 import { loadAppScripts } from "./app-front-page.js";
 
@@ -41,6 +42,26 @@ test("B 넣을지 — HTML 문서 답만 · 압축 · 본문 없음 · 옮기기
   assert.equal(injectableResponse(206, html), false, "B14 부분 답");
   assert.equal(injectableResponse(205, html), false);
   assert.equal(injectableResponse(200, { "content-type": "text/html; charset=UTF-16" }), false, "ASCII 를 품지 않는 문자 집합");
+  assert.equal(injectableResponse(200, { ...html, "content-disposition": 'attachment; filename="report.html"' }), false, "B15 내려받기(보고서 HTML)는 앱이 보낸 그대로");
+  assert.equal(injectableResponse(200, { ...html, "content-disposition": "ATTACHMENT" }), false, "B15 대소문자");
+  assert.equal(injectableResponse(200, { ...html, "content-disposition": 'inline; filename="a.html"' }), true, "B15 inline 은 화면");
+  //  B-gz — 문서 요청의 답을 게이트웨이가 다시 압축하나(압축 머리를 빼고 넘겼으니)
+  const gzReq = { "accept-encoding": "gzip, deflate, br" };
+  assert.equal(gzipDocResponse(200, html, gzReq), true, "HTML");
+  assert.equal(gzipDocResponse(200, { "content-type": "application/json" }, gzReq), true, "JSON 도(내비게이션으로 연 JSON)");
+  assert.equal(gzipDocResponse(200, { "content-type": "image/png" }, gzReq), false, "이미 압축된 꼴");
+  assert.equal(gzipDocResponse(200, html, { "accept-encoding": "br" }), false, "브라우저가 gzip 을 안 받음");
+  assert.equal(gzipDocResponse(200, html, {}), false);
+  assert.equal(gzipDocResponse(200, { ...html, "content-encoding": "gzip" }, gzReq), false, "앱이 이미 압축");
+  assert.equal(gzipDocResponse(304, html, gzReq), false, "본문 없음");
+  assert.equal(gzipDocResponse(200, { ...html, "content-disposition": "attachment" }, gzReq), false, "내려받기는 그대로(길이 머리)");
+  //  Vary 더하기 — 있으면 그대로 · 대소문자 무시 · `*` 는 그대로
+  const v1: Record<string, string> = {}; addVary(v1, "Sec-Fetch-Dest"); addVary(v1, "accept-encoding"); addVary(v1, "Accept-Encoding");
+  assert.equal(v1.vary, "Sec-Fetch-Dest, accept-encoding");
+  const v2: Record<string, string> = { vary: "Origin" }; addVary(v2, "Sec-Fetch-Dest");
+  assert.equal(v2.vary, "Origin, Sec-Fetch-Dest");
+  const v3: Record<string, string> = { vary: "*" }; addVary(v3, "Sec-Fetch-Dest");
+  assert.equal(v3.vary, "*");
   //  B-req — 문서 요청은 압축 · 조건부 머리를 빼고 넘긴다(원본은 그대로)
   const req = { accept: "text/html", "accept-encoding": "gzip, br", "If-None-Match": "\"x\"", "if-modified-since": "Mon", "user-agent": "u", cookie: "a=1" };
   const out = documentRequestHeaders(req);
@@ -89,6 +110,18 @@ test("C 넣는 자리 — doctype 바로 뒤(대소문자 · BOM · 공백 · �
   //  C14 — 흐름이 doctype 중간에 끝났다
   assert.equal(feed(["<!doctype ht"]).all.toString(), "<T><!doctype ht", "C14");
   assert.equal(feed(["﻿<!doc"]).all.toString(), "﻿<T><!doc", "C14 BOM 뒤");
+  //  BOM 이 조각 경계에 걸림 — BOM 앞에 넣지 않는다(문서 맨 앞 BOM · doctype 이 그대로)
+  const bom = Buffer.from("\uFEFF<!doctype html><p>", "utf8");
+  for (let cut = 1; cut < 3; cut++) {
+    const r = feed([bom.subarray(0, cut), bom.subarray(cut)]);
+    assert.equal(r.all.toString(), "\uFEFF<!doctype html><T><p>", `BOM ${cut}바이트에서 잘림`);
+  }
+  //  모든 두 조각 나눔이 한 조각과 같다
+  for (const doc of ["<!doctype html><p>x", "\uFEFF<!DOCTYPE html>\n<p>", "<!-- c --><!doctype html><b>", "<html><p>", "\n\n<?xml x?><!doctype html><i>"]) {
+    const buf = Buffer.from(doc, "utf8");
+    const whole = feed([buf]).all.toString();
+    for (let cut = 1; cut < buf.length; cut++) assert.equal(feed([buf.subarray(0, cut), buf.subarray(cut)]).all.toString(), whole, `${JSON.stringify(doc)} ${cut}`);
+  }
   //  UTF-16 BOM — 넣지 않는다
   const u16 = Buffer.from([0xff, 0xfe, 0x3c, 0x00]);
   assert.deepEqual(feed([u16]).all, u16);
@@ -99,36 +132,55 @@ test("C 넣는 자리 — doctype 바로 뒤(대소문자 · BOM · 공백 · �
   assert.equal(insertAt("<p>", false), 0);
 });
 
-test("D 넣는 모양 — CSP 가 인라인을 받으면 인라인(필요하면 nonce) · 아니면 같은 주소 파일 · 탐침 · 속성을 깨는 nonce 는 안 씀", () => {
+test("D 넣는 모양 — 같은 주소 파일이 기본(‘self’ · nonce · CSP 없음) · 파일을 막고 인라인만 받으면 인라인 · 탐침 · 속성을 깨는 nonce 는 안 씀", () => {
   const m = (csp?: string) => scriptModeFor(csp);
-  assert.deepEqual(m(undefined), { kind: "inline", nonce: null }, "D1");
-  assert.deepEqual(m("default-src 'self'"), { kind: "external", nonce: null }, "D2");
-  assert.deepEqual(m("script-src 'self' 'unsafe-inline'"), { kind: "inline", nonce: null }, "D3");
-  assert.deepEqual(m("script-src 'nonce-abc'"), { kind: "inline", nonce: "abc" }, "D4");
-  assert.deepEqual(m("script-src 'nonce-abc' 'strict-dynamic'"), { kind: "inline", nonce: "abc" }, "D5");
-  assert.deepEqual(m("script-src 'unsafe-inline' 'nonce-abc'"), { kind: "inline", nonce: "abc" }, "D6 nonce 가 있으면 unsafe-inline 은 무시된다");
-  assert.deepEqual(m("script-src 'sha256-xyz' 'unsafe-inline'"), { kind: "external", nonce: null }, "D7 해시가 있으면 unsafe-inline 무시");
-  assert.deepEqual(m("img-src *; style-src 'self'"), { kind: "inline", nonce: null }, "D8 스크립트를 막지 않음");
-  assert.deepEqual(m("default-src *, script-src 'self'"), { kind: "external", nonce: null }, "D9 두 정책");
-  assert.deepEqual(m("script-src 'nonce-a', script-src 'nonce-b'"), { kind: "external", nonce: null }, "D10 nonce 가 다름");
-  assert.deepEqual(m("script-src-elem 'self'; script-src 'unsafe-inline'"), { kind: "external", nonce: null }, "D11 script-src-elem 이 이긴다");
-  assert.deepEqual(m("default-src 'none'"), { kind: "external", nonce: null }, "D12");
-  assert.deepEqual(m("script-src 'nonce-a\"b'"), { kind: "external", nonce: null }, "D15 따옴표 든 nonce");
-  assert.deepEqual(m("script-src 'strict-dynamic' 'nonce-n1', script-src 'self'"), { kind: "external", nonce: "n1" }, "D18 외부에도 nonce");
-  assert.deepEqual(m("script-src 'unsafe-inline', script-src 'nonce-q'"), { kind: "inline", nonce: "q" }, "한 정책은 인라인 · 다른 정책은 nonce");
-  assert.deepEqual(m("script-src 'unsafe-inline' 'strict-dynamic'"), { kind: "external", nonce: null }, "strict-dynamic 이면 unsafe-inline 무시");
-  assert.deepEqual(m("script-src 'self'; script-src 'unsafe-inline'"), { kind: "external", nonce: null }, "같은 지시가 둘이면 앞의 것");
+  const file = (nonce: string | null = null) => ({ kind: "external", nonce });
+  const inline = (nonce: string | null = null) => ({ kind: "inline", nonce });
+  assert.deepEqual(m(undefined), file(), "D1 CSP 없음 — 파일(판마다 한 번 · 1년 캐시)");
+  assert.deepEqual(m("default-src 'self'"), file(), "D2");
+  assert.deepEqual(m("script-src 'self' 'unsafe-inline'"), file(), "D3 둘 다 받으면 파일");
+  assert.deepEqual(m("script-src 'nonce-abc'"), file("abc"), "D4 nonce 로 연 파일");
+  assert.deepEqual(m("script-src 'nonce-abc' 'strict-dynamic'"), file("abc"), "D5");
+  assert.deepEqual(m("script-src 'unsafe-inline' 'nonce-abc'"), file("abc"), "D6");
+  assert.deepEqual(m("script-src 'sha256-xyz' 'unsafe-inline'"), file(), "D7 해시가 있으면 unsafe-inline 무시 — 둘 다 막힘(파일이 최선)");
+  assert.deepEqual(m("img-src *; style-src 'self'"), file(), "D8 스크립트를 막지 않음");
+  assert.deepEqual(m("default-src *, script-src 'self'"), file(), "D9 두 정책");
+  assert.deepEqual(m("script-src 'nonce-a', script-src 'nonce-b'"), file(), "D10 nonce 가 다름");
+  assert.deepEqual(m("script-src-elem 'self'; script-src 'unsafe-inline'"), file(), "D11 script-src-elem 이 이긴다");
+  assert.deepEqual(m("default-src 'none'"), file(), "D12 다 막힘");
+  assert.deepEqual(m("script-src 'nonce-a\"b'"), file(), "D15 따옴표 든 nonce 는 쓰지 않는다");
+  assert.deepEqual(m("script-src 'strict-dynamic' 'nonce-n1', script-src 'self'"), file("n1"), "D18 한 정책은 nonce · 한 정책은 self");
+  assert.deepEqual(m("script-src 'unsafe-inline' https://cdn.example.com"), inline(), "D19 파일은 막히고 인라인만 — 인라인");
+  assert.deepEqual(m("script-src 'unsafe-inline'"), inline(), "D19");
+  assert.deepEqual(m("script-src 'unsafe-inline', script-src 'nonce-q'"), inline("q"), "한 정책은 인라인만 · 다른 정책은 nonce — 파일은 첫째가 막아 nonce 인라인");
+  assert.deepEqual(m("script-src 'unsafe-inline' 'strict-dynamic'"), file(), "strict-dynamic 이면 unsafe-inline · self 모두 무시 — 다 막힘");
+  assert.deepEqual(m("script-src 'self'; script-src 'unsafe-inline'"), file(), "같은 지시가 둘이면 앞의 것");
+  assert.deepEqual(m("script-src https:"), file(), "https: 출처");
+  assert.deepEqual(m("script-src *"), file(), "* 출처");
+  assert.deepEqual(m("script-src 'unsafe-inline' 'nonce-x', script-src 'unsafe-inline'"), inline("x"), "nonce 정책 + 인라인만 정책 — 파일은 둘째가 막아 nonce 인라인");
 
   const s = { runtime: "window.lively={k:'한'};</script><b>", probe: "probe()" };
-  const inline = sdkTags({ kind: "inline", nonce: null }, { ...s, probe: null });
-  assert.equal(inline, "<script>window.lively={k:'\\ud55c'};<\\/script><b></script>", "D16 ASCII · D17 </script 끊기");
+  const tag = sdkTags({ kind: "inline", nonce: null }, { ...s, probe: null });
+  assert.equal(tag, "<script>window.lively={k:'\\ud55c'};<\\/script><b></script>", "D16 ASCII · D17 </script 끊기");
   assert.equal(sdkTags({ kind: "inline", nonce: "n" }, { ...s, probe: null }).startsWith('<script nonce="n">'), true);
   assert.equal(sdkTags({ kind: "inline", nonce: null }, { runtime: "r()", probe: "p()" }), "<script>r()</script><script>p()</script>", "D13 탐침 인라인");
   const ext = sdkTags({ kind: "external", nonce: "n" }, { runtime: "r()", probe: "p()" });
   assert.equal(ext, `<script nonce="n" src="${SDK_PATH}?v=${scriptVersion("r()")}"></script><script nonce="n" src="${PROBE_PATH}?v=${scriptVersion("p()")}"></script>`, "D14 · D18");
+  assert.equal(sdkTags({ kind: "external", nonce: null }, { runtime: "r()" }), `<script src="${SDK_PATH}?v=${scriptVersion("r()")}"></script>`);
   assert.match(scriptVersion("r()"), /^[0-9a-f]{16}$/);
   assert.notEqual(scriptVersion("r()"), scriptVersion("r( )"), "판이 바뀌면 지문도 바뀐다");
   assert.equal(asciiJs("a—b😀"), "a\\u2014b\\ud83d\\ude00");
+});
+
+test("G 다시 압축 — 조각마다 그 조각까지 바로 풀리고(흘려 보내기) · 끝을 붙이면 전부 · 빈 조각은 빈 것", async () => {
+  const z = gzipStream();
+  const a = await z.push(Buffer.from("<!doctype html><p>첫 조각</p>", "utf8"));
+  assert.equal(zlib.gunzipSync(a, { finishFlush: zlib.constants.Z_SYNC_FLUSH }).toString(), "<!doctype html><p>첫 조각</p>", "첫 조각만으로 풀린다");
+  assert.equal((await z.push(Buffer.alloc(0))).length, 0);
+  const b = await z.push(Buffer.from("<p>둘</p>", "utf8"));
+  const c = await z.end();
+  assert.equal(zlib.gunzipSync(Buffer.concat([a, b, c])).toString(), "<!doctype html><p>첫 조각</p><p>둘</p>");
+  const d = gzipStream(); await d.push(Buffer.from("x")); d.destroy();   // 중간에 그만둬도 던지지 않는다
 });
 
 test("D16 ★ 실제 런타임 · 탐침 — ASCII 로 바꿔도 같은 글(백슬래시 바로 뒤의 비ASCII · String.raw 없음) · 바꾼 것이 JS 로 읽힌다", async () => {
