@@ -66,6 +66,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (!(await jobs.available())) throw new HttpError(501, "작업 컨테이너는 매니지드 워크스페이스에서만 돕니다 — 이 실행은 단발(프록시)로만 됩니다");
       const plan = await import("../agent-jobs/plan.js");
       const p = await jobs.policy();
+      //  #4891 — 홈 없는 작업은 앱 폴더에서만 돈다(부르는 쪽이 이미 걸렀다 — 여기서도 프로젝트 폴더를 받지 않는다).
+      if (j.homeless && j.projectId != null) throw new HttpError(400, "홈 없는 작업은 앱 폴더에서만 돕니다");
       if (j.projectId != null) await jobs.assertProjectCwd(user, j.projectId);
       const cwd = j.projectId != null ? plan.projectFolderCwd(j.projectId) : plan.appFolderCwd(j.appId);
       let resumeConv: string | null = null;
@@ -78,6 +80,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
         requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd,
         harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: resumeConv, resumeJobId: j.resumeJobId,
         timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p), bare: j.bare,
+        ...(j.homeless ? { homeless: true } : {}),
       }, p, jobs);
       return { id: row.id };
     },

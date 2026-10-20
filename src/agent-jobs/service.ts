@@ -118,6 +118,8 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
     id: r.id, status: r.status, label: r.label, app_id: r.app_id, project_id: r.project_id, cwd: r.cwd,
     requester: r.requester, account: r.account_kind === "subscription" ? { kind: "subscription", member: r.account_member } : { kind: r.account_kind },
     harness: r.harness, model: r.model, timeout_sec: r.timeout_sec,
+    //  #4891 — 사람 홈 없는 작업 컨테이너에서 돌았나(앱 서버가 보낸 에이전트 작업).
+    homeless: r.homeless === true,
     conversation_id: r.conversation_id, resume_job_id: r.resume_job_id,
     error: r.error, exit_code: r.exit_code, cancel_requested: r.cancel_requested,
     created_at: r.created_at, claimed_at: r.claimed_at, started_at: r.started_at, ended_at: r.ended_at,

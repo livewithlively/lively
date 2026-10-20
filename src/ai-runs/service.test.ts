@@ -143,7 +143,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S4 LLM 오류 → failed · 계측에 상태");
 }
 
-// ── S5~S7 실행 계정 거절 — 남의 구독 403 · 계정 없음 409 · 앱 서버 에이전트 501 · 행 안 남음 ──
+// ── S5~S7 실행 계정 거절 — 남의 구독 403 · 계정 없음 409 · 행 안 남음 / 앱 서버 에이전트 작업은 홈 없는 작업 컨테이너(#4891) ──
 {
   const sub = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
   await fails(submitRun({ prompt: "x" }, appUser("bob", "crm"), { source: "app-ui" }, sub.d), 403, /초대받은 사람/, "account_unavailable");
@@ -186,12 +186,26 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.equal((tgTask.account as { available: boolean }).available, false, "targets — 본인이라도 기계 세션");
   const none = world({ key: null });
   await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-ui" }, none.d), 409, /실행 계정이 없습니다/, "account_unavailable");
+  const srvUser = { ...appUser("alice", "crm"), appServer: true } as LivelyUser;
+  //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 501 이 아니라 사람 홈 없는 작업 컨테이너로 간다(앱 폴더 · API 키 · 보낸 사람은 그대로).
   const srv = world();
-  await fails(submitRun({ prompt: "x", files: ["a.md"] }, appUser("alice", "crm", ) && { ...appUser("alice", "crm"), appServer: true }, { source: "web" }, srv.d), 501, /앱 서버/);
-  assert.equal(srv.w.runs.size, 0);
-  const srvOk = await submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), appServer: true }, { source: "web" }, srv.d);
-  assert.equal(srvOk.executor, "proxy"); assert.equal(srvOk.requester_kind, "app_server");
-  ok("S5~S7 남의 구독 403 · 본인은 mcp·web 도 됨 · 초대받은 사람은 그 세션에서 됨(자리는 구독 주인 · 주인이 보고 취소) · 기계 세션 403 · targets 같은 판정 · 계정 없음 409 · 앱 서버 에이전트 501 · 앱 서버 단발은 됨");
+  const agent = await submitRun({ prompt: "x", files: ["a.md"] }, srvUser, { source: "web" }, srv.d);
+  assert.equal(agent.executor, "job"); assert.equal(agent.requester_kind, "app_server");
+  const sent = srv.w.submitted.at(-1)!;
+  assert.equal(sent.homeless, true, "앱 서버의 에이전트 작업은 홈 없는 자리로");
+  assert.equal(sent.projectId, null); assert.equal(sent.accountKind, "api_key"); assert.equal(sent.requester, "alice"); assert.equal(sent.appId, "crm");
+  //  프로젝트 폴더는 사람 경계(공개범위) — 앱 서버가 보낸 에이전트 작업엔 받지 않는다(400 · 행 안 남음 · 작업도 안 보냄).
+  const proj = world();
+  await fails(submitRun({ prompt: "x", files: ["a.md"], project_id: 12 }, srvUser, { source: "web" }, proj.d), 400, /앱 폴더에서만/);
+  assert.equal(proj.w.runs.size, 0, "거절은 행을 안 남긴다"); assert.equal(proj.w.submitted.length, 0);
+  //  사람이 보낸 에이전트 작업은 그 사람의 자리(홈)에서 돈다 — homeless 를 싣지 않는다(무회귀).
+  const human = world();
+  const mine = await submitRun({ prompt: "x", files: ["a.md"] }, appUser("alice", "crm"), { source: "app-ui" }, human.d);
+  assert.equal(mine.executor, "job"); assert.equal(human.w.submitted.at(-1)!.homeless, undefined);
+  const single = world();
+  const srvOk = await submitRun({ prompt: "x" }, srvUser, { source: "web" }, single.d);
+  assert.equal(srvOk.executor, "proxy"); assert.equal(srvOk.requester_kind, "app_server"); assert.equal(single.w.submitted.length, 0);
+  ok("S5~S7 남의 구독 403 · 본인은 mcp·web 도 됨 · 초대받은 사람은 그 세션에서 됨(자리는 구독 주인 · 주인이 보고 취소) · 기계 세션 403 · targets 같은 판정 · 계정 없음 409 · 앱 서버 에이전트 → 홈 없는 작업(프로젝트 400) · 사람 에이전트는 그대로 · 앱 서버 단발은 프록시");
 }
 
 // ── S25 작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳지 않는다(#4490 규칙) ──
