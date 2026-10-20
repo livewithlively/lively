@@ -74,7 +74,7 @@ export const HOMELESS_OS_USER = "box_lvly_job";
  * (순수) 작업 AI 의 앱 토큰 옵션 — 작업 상한만큼 살고(ttlSec), 홈 없는 작업(#4891)이면 주체를 앱 서버 급으로: 능력 API · /mcp 에서만 통하고
  *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
  */
-export function jobAppTokenOpts(job: { homeless?: boolean }, ttlSec: number): { ttlSec: number; appServerPrincipal?: true } {
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number): { ttlSec: number; appServerPrincipal?: true } {
   return job.homeless === true ? { ttlSec, appServerPrincipal: true } : { ttlSec };
 }
 

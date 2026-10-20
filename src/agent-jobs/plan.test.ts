@@ -264,7 +264,6 @@ t("HL2 전용 계정 이름은 어떤 구성원 계정과도 겹치지 않는다
 t("HL3 작업 AI 의 앱 토큰 — 홈 없는 작업이면 앱 서버 급 주체(능력 API · /mcp 만 · EXEMPT 없음) · 사람 자리는 종전 꼴(그 칸 없음)", () => {
   assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900), { ttlSec: 900, appServerPrincipal: true });
   assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900), { ttlSec: 900 });
-  assert.deepEqual(jobAppTokenOpts({}, 60), { ttlSec: 60 });
 });
 
 console.log(`# ${pass} pass`);

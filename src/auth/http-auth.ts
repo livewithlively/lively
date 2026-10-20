@@ -65,11 +65,12 @@ function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: 
  * SDK 의 requireBearerAuth 는 그 URL 을 **생성 시점 상수**로 받는데 우리 공개 주소는 DB(org 프로필)에서 오므로,
  *  해소된 주소별로 미들웨어를 만들어 캐시한다(주소는 사실상 1개 — 캐시가 무한히 자라지 않는다).
  */
-export function bearerWithResourceMetadata(verifier: BearerVerifier): express.RequestHandler {
+export function bearerWithResourceMetadata(verifier: BearerVerifier, mode: AppPrincipalGateMode = "mcp"): express.RequestHandler {
   const cache = new Map<string, express.RequestHandler>();
   const plain = requireBearerAuth({ verifier }); // 공개 주소 미설정 시(= OAuth 비활성) 종전 동작 그대로
-  //  /mcp(·/install) — 앱 서버 토큰은 거부, 앱 서버 급 주체(#4891 작업 AI)는 받는다(도구는 앱 도구 게이트가 그 앱 동의로 좁힌다).
-  const gate = appServerGate("mcp");
+  //  /mcp — 앱 서버 토큰은 거부, 앱 서버 급 주체(#4891 작업 AI)는 받는다(도구는 앱 도구 게이트가 그 앱 동의로 좁힌다).
+  //   /install 은 "deny" 로 단다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다 — 격리 리뷰).
+  const gate = appServerGate(mode);
   return (req, res, next) => {
     const then = (): void => gate(req, res, next);
     resourceIds().then((ids) => {

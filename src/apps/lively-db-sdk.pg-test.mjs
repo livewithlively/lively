@@ -94,6 +94,7 @@ try {
   // 터미널·파일·프로젝트·프리뷰·노드 라우트가 쓰는 인증 미들웨어(sessionOrBearer 기본값)와 /mcp 의 것을 그대로 건 탐침 경로
   gw.get("/probe/plain", sessionOrBearer(verifier), (_req, res) => res.json({ ok: true }));
   gw.get("/probe/mcp", bearerWithResourceMetadata(verifier), (_req, res) => res.json({ ok: true }));
+  gw.get("/probe/install", bearerWithResourceMetadata(verifier, "deny"), (_req, res) => res.json({ ok: true }));   // index.ts 의 /install 과 같은 문(#4891)
   const GW = await listen(gw);
 
   // ② 앱 서버 — 매니페스트에서 만든 Drizzle 스키마 + SDK
@@ -209,6 +210,35 @@ try {
   const memberHooks = await fetch(GW + "/api/ui/org/runner/hooks", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
   chk("E3e 앱 서버 주체는 세션 배관 면제 도구(훅 소스 · 회사 컨텍스트)도 동의 없이는 403 · 구성원 토큰은 그대로 200",
     hooks === 403 && preview === 403 && memberHooks === 200, JSON.stringify({ hooks, preview, memberHooks }));
+
+  // ── E3f #4891 앱 서버 급 토큰(사람 홈 없는 작업 AI) — 검증(DB) → 주체(bearer) → 문(sessionOrBearer 기본 deny · /mcp · /install) 사슬 ──
+  //  한 고리라도 빠지면(검증이 표시를 안 싣거나 · bearer 가 안 옮기거나 · 문이 안 막으면) 이 토큰은 앱 세션 토큰처럼 사람 이름의 길을 연다(격리 리뷰).
+  //  발급도 실제 사슬로 — 작업 AI 토큰 옵션(plan.jobAppTokenOpts) → 앱 토큰 발급(principal.mintAppToken, 동의 확인) → 저장(tokens.mintToken).
+  const { mintAppToken } = await import(`${D}/apps/principal.js`);
+  const { jobAppTokenOpts } = await import(`${D}/agent-jobs/plan.js`);
+  const jobTok = (await mintAppToken("pgt-user", "crm-v2", "agent-job", jobAppTokenOpts({ homeless: true }, 900))).token;
+  const jst = async (p, init = {}) => (await fetch(GW + p, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${jobTok}` } })).status;
+  const json = { "content-type": "application/json" };
+  const jj = {
+    plain: await jst("/probe/plain"), mcp: await jst("/probe/mcp"), install: await jst("/probe/install"),
+    logins: await jst("/api/ui/me/logins"),
+    pw: await jst("/api/ui/password", { method: "POST", headers: json, body: JSON.stringify({ current: "x", next: "yyyyyyyyyyyy" }) }),
+    hooks: await jst("/api/ui/org/runner/hooks"), preview: await jst("/api/ui/org/preview"),
+    sql: await jst("/api/ui/store/sql", { method: "POST", headers: json, body: JSON.stringify({ sql: "SELECT count(*)::int AS n FROM contacts" }) }),
+  };
+  const memberInstall = await fetch(GW + "/probe/install", { headers: { authorization: `Bearer ${memberTok}` } }).then((r) => r.status);
+  chk("E3f 작업 AI 토큰(앱 서버 급) — 사람 이름의 길(sessionOrBearer · 로그인 수단 · 비밀번호 · 배관 면제 · /install)은 403 · /mcp 와 동의한 앱 도구는 200 · 구성원의 /install 은 그대로",
+    jj.plain === 403 && jj.mcp === 200 && jj.install === 403 && jj.logins === 403 && jj.pw === 403 && jj.hooks === 403 && jj.preview === 403
+      && jj.sql === 200 && memberInstall === 200, JSON.stringify({ ...jj, memberInstall }));
+  // ── E3g #4891 DB 도구(능력 레지스트리 밖)도 앱 서버 급 주체에겐 앱 도구 게이트 — 동의에 없는 도구는 403 · 동의한 도구 · 앱 세션 토큰은 종전대로 ──
+  const DBT = await import(`${D}/tools/db.js`);
+  const jobUser = (await verifier.verifyAccessToken(jobTok)).extra;
+  const sessTok = (await mintToken({ userId: "pgt-user", memberId: "pgt-user", scopes: ["items"], appId: "crm-v2" }, "pgt")).token;
+  const sessUser = (await verifier.verifyAccessToken(sessTok)).extra;
+  const outcome = async (u, name) => { try { await DBT.requireDbToolForAppServer(u, name); return "ok"; } catch (e) { return e?.status ?? "throw"; } };
+  const g = { jobDb: await outcome(jobUser, "db_query"), jobGranted: await outcome(jobUser, "store_sql"), sessDb: await outcome(sessUser, "db_query") };
+  chk("E3g DB 도구 — 작업 AI(앱 서버 급, 진짜 검증기로 받은 주체)는 동의에 없는 db_query 가 403 · 동의한 도구는 통과 · 앱 세션 토큰은 종전대로 통과",
+    jobUser?.appServer === true && !sessUser?.appServer && g.jobDb === 403 && g.jobGranted === "ok" && g.sessDb === "ok", JSON.stringify({ appServer: jobUser?.appServer, ...g }));
 
   // ── E4 앱 서버 빈도 — 사람마다 ──
   X.resetAppSqlLimits({ ...process.env, LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "100" });

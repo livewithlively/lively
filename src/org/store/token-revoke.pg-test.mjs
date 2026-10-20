@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const tok = await import(`${DIST}/org/store/tokens.js`);
+const { BearerVerifier } = await import(`${DIST}/auth/bearer.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -223,6 +224,12 @@ try {
       `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by, app_id, app_server_principal)
          VALUES($1,$2,'["items"]'::jsonb,'["*"]'::jsonb,'pgtest-bogus',$2,$3,NULL,true)`, [bh, MID, ACTOR]);
     chk("AS4 표시만 있고 앱이 없는 토큰은 검증이 거부한다", (await tok.verifyDbToken(bogus)) === null);
+    //  진짜 검증기(bearer.ts)가 그 표시를 주체(LivelyUser)로 옮기는가 — 문(auth/http-auth)이 보는 것은 이 주체다.
+    const vf = new BearerVerifier();
+    const jobU = (await vf.verifyAccessToken(app.token)).extra;
+    const plainU = (await vf.verifyAccessToken(plainApp.token)).extra;
+    chk("AS5 진짜 검증기가 앱 서버 급 표시를 주체로 옮긴다 · 표시 없는 앱 토큰은 그대로", jobU?.appServer === true && jobU?.appId === "pgt-app" && !plainU?.appServer,
+      JSON.stringify({ job: jobU && { appServer: jobU.appServer, appId: jobU.appId }, plain: plainU && { appServer: plainU.appServer } }));
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));

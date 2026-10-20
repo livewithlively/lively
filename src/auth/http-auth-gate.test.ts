@@ -34,10 +34,14 @@ t("G3 앱 세션 토큰 · 사람 · 신원 없음은 어느 문에서도 그대
   for (const u of [appSession, human, undefined]) assert.deepEqual(MODES.map((m) => appPrincipalGate(u, m)), ["next", "next", "next"], JSON.stringify(u));
 });
 
-t("G4 문 배선 — /mcp(·/install) 는 mcp 갈래 · 능력 REST 만 cap · 그 밖 sessionOrBearer 는 deny", () => {
+t("G4 문 배선 — /mcp 는 mcp 갈래 · /install 은 deny · 능력 REST 만 cap · 그 밖 sessionOrBearer 는 deny", () => {
   const SRC = readFileSync(new URL("../../src/auth/http-auth.ts", import.meta.url), "utf8");
   const mcp = SRC.slice(SRC.indexOf("export function bearerWithResourceMetadata("), SRC.indexOf("export function sessionOrBearer("));
-  assert.match(mcp, /const gate = appServerGate\("mcp"\);/);
+  assert.match(mcp, /export function bearerWithResourceMetadata\(verifier: BearerVerifier, mode: AppPrincipalGateMode = "mcp"\)/);
+  assert.match(mcp, /const gate = appServerGate\(mode\);/);
+  const IDX = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
+  assert.match(IDX, /app\.get\("\/install", bearerWithResourceMetadata\(verifier, "deny"\),/);
+  assert.equal(IDX.split("bearerWithResourceMetadata(verifier").length - 1, 2, "/mcp(기본 mcp) 하나 · /install(deny) 하나");
   const sob = SRC.slice(SRC.indexOf("export function sessionOrBearer("));
   assert.match(sob, /const gate = appServerGate\(opts\.appServer === true \? "cap" : "deny"\);/);
   //  능력 REST 마운트 하나만 cap 을 단다(web.ts authCap) — 다른 자리가 appServer:true 로 열면 이 수가 는다.

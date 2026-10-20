@@ -9,7 +9,16 @@ import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAc
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs, resolveUnmaskKeys, peekMaskedSrcKeyToCol } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
-import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess } from "../context.js";
+import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess, type LivelyUser } from "../context.js";
+import { requireAppTool } from "../apps/principal.js";
+
+/**
+ * #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 사람 홈 없는 작업 AI)는 DB 도구도 앱 도구 게이트(그 앱 동의의 도구 목록)를 탄다.
+ *  이 셋은 능력 레지스트리 밖이라 scope(db · db:<소스>)만 봐 왔다. 앱 세션 토큰(사람의 하네스)은 종전대로 scope 만 — 새 길만 닫는다(격리 리뷰).
+ */
+export async function requireDbToolForAppServer(user: LivelyUser, name: string): Promise<void> {
+  if (user.appServer === true) await requireAppTool(user, name);
+}
 import { SELF_SOURCE } from "../db/self-source.js";
 import { SELF_RLS_ROLE, plantScope, clearScope, selfRlsReady } from "../db/self-rls.js";
 import { viewerOf } from "../capabilities/principal.js";
@@ -47,6 +56,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
       },
       handler: async (_args, extra) => {
         const user = resolveUser(extra);
+        await requireDbToolForAppServer(user, "db_sources");
         if (!hasAnyDbAccess(user)) {
           throw new Error(`Forbidden: user '${user.userId}' lacks any 'db' scope`);
         }
@@ -85,6 +95,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
       },
       handler: async ({ table, source, match }, extra) => {
         const user = resolveUser(extra);
+        await requireDbToolForAppServer(user, "db_schema");
         await refreshSources();
         await refreshPolicy();
         // P5(#746) — 스키마 접근도 성공·차단·실패 전건 감사에 남긴다(메타데이터라 best-effort — 기록 실패가 조회를 막진 않음).
@@ -168,6 +179,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
       },
       handler: async ({ sql, source }, extra) => {
         const user = resolveUser(extra);
+        await requireDbToolForAppServer(user, "db_query");
         await refreshSources();
         await refreshPolicy();
         const src = resolveSourceName(source);

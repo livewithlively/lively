@@ -243,7 +243,8 @@ registerMcpTransport(app, auth);
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.
-app.get("/install", auth, async (_req, res) => {
+//  #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 작업 AI)는 /install 을 못 쓴다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다). 그 밖은 /mcp 와 같다.
+app.get("/install", bearerWithResourceMetadata(verifier, "deny"), async (_req, res) => {
   try {
     const { buffer } = await buildInstallBundle("claude");
     res.setHeader("Content-Type", "application/gzip");
