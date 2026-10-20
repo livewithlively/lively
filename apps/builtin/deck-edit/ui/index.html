@@ -389,6 +389,7 @@
   .row.cm { border-left-color: var(--amber); }
   .row.ed.cm { border-left-color: var(--yellow); }
   .row.sent { opacity: .8; }
+  .row.sent:focus-within, .row.sent:hover { opacity: 1; }   /* 보낸 줄도 다시 고치고 의견을 더할 수 있다 — 흐림은 「이미 보냈다」 표시일 뿐 */
   .row.sed .ed { background: var(--soft-2); border-color: var(--muted-2); border-width: 0 0 2px; border-radius: 6px 6px 0 0; }
   .row.sed .orig { display: flex; }
   .row.sed:not(.ed) .orig button { display: none; }
@@ -812,7 +813,7 @@
     <div class="mb help">
       <div><b>글 고치기</b><span>오른쪽 글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. <kbd>Enter</kbd> 는 줄 나눔, <kbd>Tab</kbd> 은 그 글의 의견 칸.</span></div>
       <div><b>강조</b><span>글을 끌어 고르면 「색 강조 · 굵게 · 풀기」 가 뜹니다.</span></div>
-      <div><b>의견</b><span>글을 누르면 그 아래 의견 칸이 섭니다(<kbd>Tab</kbd> 으로 바로 그 칸). 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
+      <div><b>의견</b><span>글을 누르면 그 아래 의견 칸이 섭니다(<kbd>Tab</kbd> 으로 바로 그 칸). 이미 보낸 줄도 같습니다 — 새 의견은 다음 묶음에 실리고 앞 의견은 「보냄」 칩으로 남습니다. 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
       <div><b>그림 · 도식</b><span>장표에서 상자 · 도식 · 그림을 누르면 그 개체에 의견이 달립니다. <kbd>⌘</kbd>(윈도우 <kbd>Ctrl</kbd>)를 누른 채 다른 개체를 누르면 여러 개체에 한 의견. 장표 위 도구의 핀 · 영역으로 한 자리 · 넓은 곳에도.</span></div>
       <div><b>장 옮기기</b><span>왼쪽 장 번호를 끌어 순서를 바꿉니다. 머리의 휴지통은 그 장을 통째로 지웁니다(보내기 전에는 되살릴 수 있습니다).</span></div>
       <div><b>장 넘기기</b><span><kbd>←</kbd> <kbd>→</kbd> 또는 장 번호 · 장표 밀기. 고정(핀)하면 장표를 밀어도 오른쪽은 그 장에 머뭅니다.</span></div>
@@ -3126,7 +3127,7 @@
     col.appendChild(ed);
     st.pins.forEach(function (p) { if ((!p.slide_id || p.slide_id === sid) && p.match && u.origText.indexOf(p.match) >= 0) { var pn = el('div', 'pin'); pn.innerHTML = svg('pin'); pn.appendChild(el('span', '', (p.memo || '') + (p.author ? ' · ' + p.author : ''))); col.appendChild(pn); row.classList.add('pinned'); } });
     col.appendChild(og); col.appendChild(cm);
-    if (sents && sents.length) { col.appendChild(aiChip(sents[0])); if (!dr) row.classList.add('sent'); }
+    if (sents && sents.length) { col.appendChild(aiChip(sents[0])); if (!dr) row.classList.add('sent'); cm.placeholder = '이 글에 다시 의견 (앞서 보낸 의견은 위에 남습니다 · 다음 묶음에 실립니다)'; }
     row.appendChild(no); row.appendChild(col);
     u.row = row; u.ed = ed; u.cm = cm;
     //  무엇을 보이나: 아직 저장 중인 «바라는 값» > 안 보낸 고침(초안) > 이 버전에서 이미 보낸 고침(바탕 글) > 원문.
@@ -3166,7 +3167,7 @@
     });
     cm.addEventListener('keydown', function (e) { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); var next = nextEd(row); if (next) next.focus(); } });
     row.addEventListener('mouseenter', function () { mark(u); });
-    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); if (!row.classList.contains('sent')) row.classList.add('show'); });   // 들어가면 의견 칸이 글 아래 선다
+    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); row.classList.add('show'); });   // 들어가면 의견 칸이 글 아래 선다 — 이미 의견을 보낸 줄도(앞 의견은 칩으로 남고, 새 의견은 다음 묶음에 실린다)
     row.addEventListener('focusout', function () { pump('u:' + ukey); setTimeout(function () { if (st.focused === u && !row.contains(document.activeElement)) { st.focused = null; row.classList.remove('show'); mark(null); } }, 0); });   // 칸을 떠나면 기다리지 않고 곧바로 쓴다
     if (cm.value) autoGrow(cm);
     return row;
