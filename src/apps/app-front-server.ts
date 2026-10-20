@@ -13,6 +13,8 @@
 //     (그래서 이 응답임을 x-lvly-app-server: 1 로 알린다 — 앞단이 지우고 넘긴다).
 //   · 앱이 본문을 보내다 죽거나 시간이 넘으면(REPORT «Status: error|timeout» · 흐름 끝의 ErrorCode) 연결을 끊는다 — 잘린 응답을 온전히 끝난 것처럼 닫지 않는다.
 //   · 브라우저가 떠나도 함수 흐름은 끝까지 읽는다(자리 · 실행 시간 셈을 지키려고 — serveAppServer 안 ★).
+//   · 화면 문서(브라우저가 문서로 여는 요청의 HTML 답)에는 SDK 런타임을 넣는다 — 정적 화면과 같은 자리 · 앱의 CSP 에 맞는 모양(app-server-page.ts).
+//     그래야 라이블리 안에서 인사하고(8초 뒤 종전 화면으로 바뀌지 않는다) 새 탭에서도 window.lively 가 있다(#4485 후속 · 상민 2026-10-20).
 import type express from "express";
 import crypto from "node:crypto";
 import { logger } from "../log.js";
@@ -21,7 +23,8 @@ import type { TenantContext } from "../org/tenant-context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { AppFrontAct } from "./app-front-auth.js";
-import { appErrorHtml } from "./app-front-page.js";
+import { appErrorHtml, loadAppScripts, type AppScripts } from "./app-front-page.js";
+import { docInjector, documentRequestHeaders, injectableResponse, isDocumentRequest, scriptModeFor, sdkTags, type DocInjector } from "./app-server-page.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv } from "./app-server-config.js";
 import { realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
@@ -55,6 +58,8 @@ export interface AppServerFrontDeps {
   now?: () => number;
   /** 시험 — 호출 셈(기본 = app-server-usage recordAppServerCall). */
   record?: (appId: string, r: { billedMs?: number | null; error?: boolean; rejected?: boolean }) => void;
+  /** 화면 문서에 넣을 SDK 런타임 · 탐침(기본 = 웹 빌드 산출물 loadAppScripts). */
+  scripts?: () => Promise<AppScripts>;
 }
 
 const policyCache = new Map<string, { at: number; p: AppServerPolicy }>();
@@ -171,6 +176,20 @@ function abortAfterFlush(res: express.Response): void {
   else res.destroy();
 }
 
+/**
+ * 화면 문서에 넣을 끼우개 — 앱의 CSP 로 모양을 고르고, 앱 주소 쿼리 `__lively_probe=1` 이면 탐침도(정적 화면과 같은 규칙).
+ *  준비물(웹 빌드 산출물)을 못 읽으면 넣지 않고 그대로 보낸다 — 화면은 종전처럼 열린다(라이블리 안에서만 8초 뒤 종전 화면으로 바뀐다).
+ */
+async function injectorFor(headers: Record<string, string>, rawQueryString: string, deps: AppServerFrontDeps): Promise<DocInjector | null> {
+  let s: AppScripts;
+  try { s = await (deps.scripts ?? loadAppScripts)(); } catch (e) {
+    logger.error({ err: (e as Error)?.message }, "[app-front-server] SDK 런타임 준비물이 없어 서버 화면에 넣지 못했다");
+    return null;
+  }
+  const probe = new URLSearchParams(rawQueryString).get("__lively_probe") === "1";
+  return docInjector(sdkTags(scriptModeFor(headers["content-security-policy"]), { runtime: s.runtime, probe: probe ? s.probe : null }));
+}
+
 async function writeChunk(res: express.Response, buf: Buffer): Promise<boolean> {
   if (!buf.length) return !res.destroyed;
   if (res.destroyed || res.writableEnded) return false;
@@ -243,9 +262,12 @@ export async function serveAppServer(req: express.Request, res: express.Response
   //   앞단(CP 라우터)의 위 침묵 시한(75초)이 연결을 걷어 풀린다(게이트웨이의 이 길은 앞단을 거쳐서만 닿는다).
   let counted = false;
   const count = (r: { billedMs?: number | null; error?: boolean }): void => { if (!counted) { counted = true; (deps.record ?? recordAppServerCall)(t.app.id, r); } };
+  //  화면 문서 요청 — 런타임을 넣을 수 있게 압축 · 조건부(304) 머리를 빼고 넘긴다(온전한 날 HTML 을 받는다).
+  const reqHeaders = req.headers as Record<string, string | string[] | undefined>;
+  const doc = isDocumentRequest(req.method, reqHeaders);
   try {
     const event = buildFunctionUrlEvent({
-      method: req.method, headers: req.headers as Record<string, string | string[] | undefined>, path, host, identity, body,
+      method: req.method, headers: doc ? documentRequestHeaders(reqHeaders) : reqHeaders, path, host, identity, body,
       requestId: crypto.randomUUID(), now,
     });
     const api = deps.api ?? realLambdaApi(env.region);
@@ -282,16 +304,20 @@ export async function serveAppServer(req: express.Request, res: express.Response
           : `서버가 오류로 끝났습니다(${le.type ?? rep?.errorType ?? "까닭 모름"}).`);
     }
     const { headers, cookies } = responseHeadersOf(start.prelude);
+    //  화면 문서면 런타임을 끼운다 — 본문 길이가 바뀌고, 앱의 검증값(ETag · Last-Modified)은 넣기 전 본문의 것이라 뺀다(다시 열면 늘 온전한 문서).
+    const inj = doc && injectableResponse(start.prelude.statusCode, headers) ? await injectorFor(headers, path.rawQueryString, deps) : null;
+    if (inj) { delete headers["content-length"]; delete headers.etag; delete headers["last-modified"]; }
+    const pass = (b: Buffer): Buffer => (inj ? inj.push(b) : b);
     res.status(start.prelude.statusCode);
     for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
     if (cookies.length) res.setHeader("set-cookie", cookies);
     res.setHeader(APP_SERVER_MARK, "1");
     res.flushHeaders();
-    let alive = await writeChunk(res, start.first);
+    let alive = await writeChunk(res, pass(start.first));
     let complete: Complete | null = null;
     for await (const ev of start.rest) {
       if (ev.type === "complete") { complete = ev; break; }
-      if (alive) alive = await writeChunk(res, ev.data);   // 브라우저가 떠났으면 읽기만 한다(위 ★)
+      if (alive) alive = await writeChunk(res, pass(ev.data));   // 브라우저가 떠났으면 읽기만 한다(위 ★)
     }
     const rep = complete ? parseReport(complete.log) : null;
     //  앱 쪽 실패 — 흐름이 끝 표시 없이 끝남 · 흐름 끝에 AWS 오류 칸(ErrorCode) · REPORT 가 error/timeout. 브라우저가 떠난 것은 앱의 오류가 아니다(셈에서 가른다).
@@ -303,6 +329,8 @@ export async function serveAppServer(req: express.Request, res: express.Response
       abortAfterFlush(res);   // 잘린 응답 — 온전히 끝난 것처럼 닫지 않는다
       return;
     }
+    //  아직 자리를 못 정한 짧은 문서(doctype 이 끝나기 전에 흐름이 끝남 · 빈 본문) — 모아 둔 머리에 넣어 보낸다.
+    if (inj && !(await writeChunk(res, inj.end()))) { res.destroy(); return; }
     res.end();
   } catch (e) {
     count({ billedMs: Date.now() - t0, error: true });

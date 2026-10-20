@@ -19,6 +19,7 @@ import type { LambdaApi } from "./app-server-deploy.js";
 import type { StreamEvent } from "../net/aws/lambda-lite.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { OrgApp } from "../org/store/apps.js";
+import { scriptVersion } from "./app-server-page.js";
 
 const SECRET = "s3cret";
 const T = { id: "11111111-2222-4333-8444-555555555555", slug: "lively-46e3" };
@@ -69,7 +70,7 @@ function echoApi(seen: Seen[]): LambdaApi {
   } as unknown as LambdaApi;
 }
 
-async function start(o: { serverOn?: boolean } = {}): Promise<{ port: number; seen: Seen[]; close: () => Promise<void> }> {
+async function start(o: { serverOn?: boolean; scripts?: AppFrontDeps["scripts"] } = {}): Promise<{ port: number; seen: Seen[]; close: () => Promise<void> }> {
   const seen: Seen[] = [];
   const env = { ...BASE_ENV, ...(o.serverOn === false ? {} : { LIVELY_APP_SERVER_EXEC_ROLE: ROLE }) } as NodeJS.ProcessEnv;
   const server = (): AppServerFrontDeps => ({
@@ -77,7 +78,7 @@ async function start(o: { serverOn?: boolean } = {}): Promise<{ port: number; se
   });
   const deps: AppFrontDeps = {
     env, tenant: () => T as never, getMember: async (id) => (id === "alice" ? member : id === "carol" ? gone : null), getApp: async (id) => APPS[id] ?? null,
-    listUiAssets: async () => [], getUiAsset: async () => null, redeem: async () => null, scripts: async () => ({ runtime: "window.lively={}", probe: "" }), server,
+    listUiAssets: async () => [], getUiAsset: async () => null, redeem: async () => null, scripts: o.scripts ?? (async () => ({ runtime: "window.lively={}", probe: "" })), server,
   };
   const app = express();
   //  index.ts 와 같은 순서 — 서버 쓰기 길이 전역 JSON 읽기보다 먼저다.
@@ -90,7 +91,7 @@ async function start(o: { serverOn?: boolean } = {}): Promise<{ port: number; se
 }
 
 function call(port: number, method: string, path: string, o: { app?: string; body?: Buffer | string; headers?: Record<string, string>; noFront?: boolean; badFront?: boolean; who?: Who } = {}):
-  Promise<{ status: number; type: string; allow: string; text: string; json: any }> {
+  Promise<{ status: number; type: string; allow: string; text: string; json: any; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const app = o.app ?? "srv";
     const h: Record<string, string> = { "x-lively-identity": ident(app, o.who), ...(o.headers ?? {}) };
@@ -103,7 +104,7 @@ function call(port: number, method: string, path: string, o: { app?: string; bod
       res.on("end", () => {
         let j: unknown = null;
         try { j = JSON.parse(t); } catch { j = null; }
-        resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"] ?? ""), allow: String(res.headers.allow ?? ""), text: t, json: j });
+        resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"] ?? ""), allow: String(res.headers.allow ?? ""), text: t, json: j, headers: res.headers });
       });
     });
     r.on("error", (e: NodeJS.ErrnoException) => { if (e.code === "EPIPE" || e.code === "ECONNRESET") return; reject(e); });
@@ -256,4 +257,42 @@ test("SW8 index.ts — 서버 쓰기 길이 전역 express.json 보다 먼저 �
   assert.ok(server > 0, "index.ts 에 서버 쓰기 길이 없다");
   assert.ok(json > 0, "index.ts 에서 전역 JSON 읽기를 못 찾았다(이 시험을 고쳐야 한다)");
   assert.ok(server < json, "서버 쓰기 길이 전역 JSON 읽기 뒤에 붙었다 — JSON 본문을 전역 파서가 먼저 먹는다");
+});
+
+test("SW-E #4485 후속 같은 주소 파일 — /_lively/sdk.js · probe.js(지문이 맞으면 1년 · 아니면 no-cache) · HEAD · 쓰기 405 · 문 없음 막힘 · 준비물 없음 503 · 다른 경로는 API", async () => {
+  const h = await start({ scripts: async () => ({ runtime: "RT()", probe: "PB()" }) });
+  const L = (p: string): string => `/api/app-front/lively?path=${encodeURIComponent(p)}`;
+  try {
+    const v = scriptVersion("RT()");
+    const a = await call(h.port, "GET", L(`/sdk.js?v=${v}`), { app: "srv" });
+    assert.equal(a.status, 200, a.text);
+    assert.match(a.type, /^text\/javascript; charset=utf-8/);
+    assert.equal(a.text, "RT()");
+    assert.equal(a.headers["cache-control"], "public, max-age=31536000, immutable", "E1");
+    for (const p of ["/sdk.js", "/sdk.js?v=0000000000000000"]) {
+      const b = await call(h.port, "GET", L(p), { app: "srv" });
+      assert.equal(b.status, 200);
+      assert.equal(b.headers["cache-control"], "no-cache", `E2 ${p}`);
+    }
+    const head = await call(h.port, "HEAD", L(`/sdk.js?v=${v}`), { app: "srv" });
+    assert.equal(head.status, 200, "E3");
+    assert.equal(head.text, "");
+    const post = await call(h.port, "POST", L("/sdk.js"), { app: "srv", body: "{}", headers: { "content-type": "application/json" } });
+    assert.equal(post.status, 405, "E4");
+    assert.equal(post.allow, "GET, HEAD");
+    const blocked = await call(h.port, "GET", L("/sdk.js"), { app: "srv", noFront: true });
+    assert.notEqual(blocked.status, 200, "E5 앞단 문 없이 받았다");
+    assert.equal(blocked.text.includes("RT()"), false);
+    const probe = await call(h.port, "GET", L(`/probe.js?v=${scriptVersion("PB()")}`), { app: "plain" });
+    assert.equal(probe.text, "PB()", "E6 서버 없는 앱 주소에서도 같은 파일");
+    assert.equal(probe.headers["cache-control"], "public, max-age=31536000, immutable");
+    const other = await call(h.port, "GET", L("/sdk.jsx"), { app: "srv" });
+    assert.notEqual(other.text, "RT()", "비슷한 이름은 파일이 아니다(같은 주소 API 로)");
+  } finally { await h.close(); }
+  const bad = await start({ scripts: async () => { throw new Error("no build"); } });
+  try {
+    const r = await call(bad.port, "GET", L("/sdk.js"), { app: "srv" });
+    assert.equal(r.status, 503, "E7");
+    assert.equal(r.json?.code, "sdk_unavailable");
+  } finally { await bad.close(); }
 });

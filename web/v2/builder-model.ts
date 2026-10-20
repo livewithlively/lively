@@ -5,7 +5,7 @@
 //  서버에서 받는 것(앱 목록 · 나)은 한 번 받아 두고 30초 안에는 다시 받지 않는다. 이 브라우저의 만들기 기록 · 셸의 세션 목록은 그릴 때마다 새로 읽는다.
 import { api } from '../core.js';
 import { studioMe, studioRecBuildingFor, studioRecs } from './app-studio.js';
-import { appStateOf } from './app-session.js';
+import { appStateOf, declaresServer } from './app-session.js';
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 구성원 앱의 아이콘 선언
 import { folderView, type FolderView } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';
@@ -39,7 +39,7 @@ async function fetchApps(): Promise<BApp[] | null> {
     return rows.filter((a) => a && a.status === 'active').map((a) => ({
       id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'), enabled: a.enabled !== false,
       installedBy: String(a.installed_by || ''), installedAt: (() => { const t = Date.parse(String(a.installed_at || '')); return Number.isFinite(t) ? t : 0; })(),
-      hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0), canEdit: a.can_edit === true,
+      hasUi: ((((a.manifest && a.manifest.ui) || {}).pages || []).length > 0) || declaresServer(a.manifest), canEdit: a.can_edit === true,   // #4485 후속 — 서버가 화면을 만드는 앱도
       builtin: !!(a.source && a.source.kind === 'builtin'), versionNo: Number(a.current_version_no) || 0,
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
       icon: appIconSpecOf(a.manifest),   // #4769

@@ -1660,7 +1660,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //  #4769 설치한 앱도 최근 줄에 선다(원준 2026-10-17 «팀 채널 여러 번 눌렀는데 안 뜸») — 기록은 `i:<앱 id>`, 목록엔 바로 올려 레일이 그린다.
       if (!instance.app.system?.route) {
         noteAppUse(installedRecentKey(instance.app_id));
-        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: !!(instance.app.ui && instance.app.ui.pages && instance.app.ui.pages.length), icon: instance.app.icon ?? null, systemRoute: null });
+        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: !!(instance.app.ui && instance.app.ui.pages && instance.app.ui.pages.length) || instance.app.server === true, icon: instance.app.icon ?? null, systemRoute: null });
         drawRail();
       }
       const renderer = instance.app.system?.renderer;
@@ -2020,7 +2020,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'i' && segs[1]) {
     const id = decodeURIComponent(segs[1]);
     const inst = cachedAppInstance(id) || appInstances.find((x) => x.id === id) || null;
-    if (inst) icon = (registerAppIcon(inst.app.id, inst.app.icon) || instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length))) as SideInstance['icon'];   // #4769 선언한 그림이 있으면 그것
+    if (inst) icon = (registerAppIcon(inst.app.id, inst.app.icon) || instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length) || inst.app.server === true)) as SideInstance['icon'];   // #4769 선언한 그림이 있으면 그것
   }
   else {
     const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];

@@ -8,7 +8,7 @@ import { el, navOn, sv } from '../core.js';
 import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 최근 줄의 정본은 서버
 import { ICONS } from './icons.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
-import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
+import { hasAppScreen, listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openInstalledApp } from './app-instance.js';
 import { CTX_APP_NAME, CTX_OLD_NAMES } from '../lib/ctx-names.js';   // #4233 앱 이름은 한 곳에서
 import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup } from '../lib/app-match.js';
@@ -99,11 +99,11 @@ export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden &&
  * 설치된 앱 하나를 연다 — 앱 찾기의 칸을 누를 때의 규칙 한 벌(자료 보기 #4672 의 «앱 열기» 도 이것을 쓴다).
  *  정본 주소가 있는 앱(확인할 것·자료)은 **그 주소로** 간다 — 그 화면이 인스턴스를 뒤에서 멱등 확보한다.
  *  여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
- *  UI 앱이면 UI 를(샌드박스 iframe), 아니면 그 앱 전용 AI 세션을 연다.
+ *  UI 앱이면 UI 를(샌드박스 iframe), 아니면 그 앱 전용 AI 세션을 연다. 서버가 화면을 만드는 앱(web.server)도 UI 앱이다(#4485 후속 — hasAppScreen).
  */
 export function openAppEntry(a: SessionApp): void {
   if (a.system?.route) { location.hash = a.system.route; return; }
-  if (a.pages.length > 0 || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
+  if (hasAppScreen(a) || a.system) void openInstalledApp(a); else void openAppSession(a.id, { title: a.title });
 }
 
 /** 앱 id 로 연다 — 지금 이 사람에게 서 있는 앱(앱 찾기와 같은 목록)이면 openAppEntry, 없으면 false(호출부가 말한다). */
@@ -153,7 +153,7 @@ export function installedAppDefs(): AppDef[] { return installedDefs; }
 export function primeInstalledApps(): Promise<void> {
   if (!installedPrimed) {
     installedPrimed = listSessionApps().then((rows) => {
-      const ok = new Set(installedRailEligible(rows.map((a) => ({ id: a.id, hasUi: a.pages.length > 0, systemRoute: a.system?.route || null }))));
+      const ok = new Set(installedRailEligible(rows.map((a) => ({ id: a.id, hasUi: hasAppScreen(a), systemRoute: a.system?.route || null }))));
       const fresh = rows.filter((a) => ok.has(INSTALLED_RECENT_PREFIX + a.id)).map((a) => installedDefOf({ id: a.id, title: a.title, hasUi: true, icon: a.icon }));
       //  방금 연 앱(noteInstalledApp)이 먼저 올라와 있으면 그 자리를 지킨다 — 목록이 늦게 와서 레일이 다시 섞이지 않게.
       installedDefs = [...installedDefs.filter((d) => !fresh.some((f) => f.key === d.key)), ...fresh];
@@ -337,7 +337,7 @@ export function openLaunchpad(): void {
       .filter((a) => !isAppInProgress(a, buildingNow(a)))
       .filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       .sort((a, b) => rank(a.title) - rank(b.title)).map((a) => {
-      const hasUi = a.pages.length > 0;   // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+      const hasUi = hasAppScreen(a);   // UI 앱이면 UI 를 연다(샌드박스 iframe · 서버가 화면을 만드는 앱 포함), 아니면 세션 앱.
       //  정본 주소를 갖는 빌트인(확인할 것·자료)은 **화면 앱**이다 — UI 페이지가 없다고 «세션 앱» 이라 부르면
       //   배지가 거짓말을 한다(그 앱을 열어도 AI 세션은 안 뜬다). 셋을 가르는 축은 pages 가 아니라 '무엇으로 뜨나'다.
       const isScreen = !!a.system?.route || hasUi;

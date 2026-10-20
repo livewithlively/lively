@@ -16,6 +16,7 @@
 //        → #4485 서버 앱(보는 판의 매니페스트에 web.server · 이 워크스페이스에 앱 서버 켜짐): 그 판의 함수가 답한다(app-front-server.ts serveAppServer)
 //   *    /api/app-front/lively?path=<경로+쿼리>                     (op=act · #4482 v2-3)
 //        → 앱 주소의 같은 주소 API `/_lively/<경로>`(store · tools · prefs) — 경로 · 판정 · 답은 app-front-api.ts
+//        → `/_lively/sdk.js` · `/_lively/probe.js`(GET · HEAD): SDK 런타임 · 탐침 파일(#4485 후속 — 인라인을 막는 CSP 의 서버 화면에 넣는 것)
 //   POST · PUT · PATCH · DELETE /api/app-front/server?path=<경로+쿼리>  (op=act · #4485 v2-6 · index.ts 가 전역 JSON 읽기 전에 붙인다)
 //        → 서버 앱의 쓰기 요청 — 본문 날것(4MB · 압축 본문 415) 그대로 함수로 · 서버가 없는 판이면 405 · 답은 함수의 것(막히면 JSON)
 //  ⓘ 매번 구성원(활성 · 사람)과 앱(있음 · 이 사람에게 보임)을 다시 본다 — 앱 주소 쿠키가 살아 있는 동안 빠진 사람·닫힌 앱을 바로 막는다.
@@ -48,6 +49,7 @@ import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { serverDeclOf, appServerEnv } from "./app-server-config.js";   // #4485 앱 서버(web.server) — 주소의 판이 서버를 선언했으면 함수로
 import { APP_SERVER_BODY_LIMIT, serveAppServer, type AppServerFrontDeps, type ServerTarget } from "./app-front-server.js";
+import { PROBE_PATH, SDK_PATH, scriptVersion } from "./app-server-page.js";   // #4485 후속 — 서버 화면용 같은 주소 파일
 import { parseBundle, type AppBundle, type BundleEntry } from "./app-bundle.js";
 import { BLOB_CACHE_ENTRY_MAX, getBlob, streamBlob, type BlobStoreKind } from "./app-blob-store.js";
 import {
@@ -193,9 +195,36 @@ export async function appFrontLively(headers: Record<string, string | string[] |
   const act = g.act as AppFrontAct;
   const w = await whoAndApp(act, d, false);
   if ("reply" in w) return w.reply;
+  const file = await sdkFile(method, rawPath, d);
+  if (file) return file;
   if (!d.api) return { status: 503, json: { error: "이 게이트웨이에서는 앱 API 가 준비되지 않았습니다" } };
   const r = await handleAppFrontApi({ act, tenant: g.tenant, member: w.member, app: w.app, method, rawPath, body, env: d.env }, d.api);
   return { status: r.status, json: r.json };
+}
+
+/**
+ * #4485 후속 — 서버 화면에 넣는 SDK 런타임 · 탐침을 같은 주소의 파일로 낸다(앱의 CSP 가 인라인을 막으면 app-server-page.ts 가 이 주소를 넣는다).
+ *  `?v=` 가 지금 판의 지문이면 1년 캐시(판이 바뀌면 지문도 바뀐다), 아니면 늘 다시 묻게. `/_lively/*` 는 앱 서버로 가지 않는 우리 자리다.
+ *  이 둘이 아닌 경로면 null(같은 주소 API 로).
+ */
+async function sdkFile(method: string, rawPath: unknown, d: AppFrontDeps): Promise<FrontReply | null> {
+  const raw = String(rawPath ?? "");
+  const q = raw.indexOf("?");
+  const p = "/_lively" + (q < 0 ? raw : raw.slice(0, q));
+  if (p !== SDK_PATH && p !== PROBE_PATH) return null;
+  const m = method.toUpperCase();
+  if (m !== "GET" && m !== "HEAD") return { status: 405, json: { error: "method_not_allowed" }, headers: { Allow: "GET, HEAD" } };
+  let s: AppScripts;
+  try { s = await d.scripts(); } catch (e) {
+    logger.error({ err: e instanceof Error ? e.message : String(e) }, "[app-front] SDK 런타임 준비물 없음(같은 주소 파일)");
+    return { status: 503, json: { error: "SDK 런타임을 준비하지 못했습니다 — 잠시 뒤 다시 열어 주세요", code: "sdk_unavailable" } };
+  }
+  const js = p === SDK_PATH ? s.runtime : s.probe;
+  const v = new URLSearchParams(q < 0 ? "" : raw.slice(q + 1)).get("v");
+  return { status: 200, body: Buffer.from(js, "utf8"), headers: {
+    "Content-Type": "text/javascript; charset=utf-8",
+    "Cache-Control": v === scriptVersion(js) ? "public, max-age=31536000, immutable" : "no-cache",
+  } };
 }
 
 /**
