@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { awsCall, awsErrorOf, AwsError, type AwsDeps } from "./aws-json.js";
 import { signRequestV4 } from "./aws-sigv4.js";
-import { deleteFunction, ensureLogGroup, getFunction, invokeStream, listLayerVersions, parseReport, publishLayerVersion, putAlias, type StreamEvent } from "./lambda-lite.js";
+import { deleteFunction, ensureLogGroup, getFunction, invokeAsync, invokeStream, listLayerVersions, parseReport, publishLayerVersion, putAlias, type StreamEvent } from "./lambda-lite.js";
 import { encodeEventStreamMessage } from "./event-stream.js";
 
 let pass = 0;
@@ -242,6 +242,21 @@ await t("L3 레이어 — 판 목록(GET · MaxItems · 다음 쪽 Marker · 없
   assert.equal(body.Content.ZipFile, zip.toString("base64"));
   assert.equal(body.Description.length, 256);
   assert.deepEqual(body.CompatibleArchitectures, ["arm64"]);
+});
+
+await t("L4 비동기 부르기(#4486 백그라운드 작업) — 경로 · 판 · Event · 본문 JSON · 202 · 요청 번호 · 일시 오류는 두 번까지(사람 요청 안이라 짧게)", async () => {
+  const a = fake([{ status: 202, headers: { "x-amzn-requestid": "rid-9" } }]);
+  const r = await invokeAsync(c, "lvly-app-x", "3", { rawPath: "/a" }, a.deps);
+  const u = new URL(a.seen[0]!.url);
+  assert.equal(a.seen[0]!.method, "POST");
+  assert.equal(u.pathname, "/2015-03-31/functions/lvly-app-x/invocations");
+  assert.equal(u.searchParams.get("Qualifier"), "3");
+  assert.equal(a.seen[0]!.headers["x-amz-invocation-type"], "Event");
+  assert.deepEqual(JSON.parse(a.seen[0]!.body), { rawPath: "/a" });
+  assert.deepEqual(r, { status: 202, requestId: "rid-9" });
+  const b = fake([{ status: 503 }]);
+  await assert.rejects(invokeAsync(c, "f", "cur", {}, b.deps), (e: unknown) => e instanceof AwsError && e.status === 503);
+  assert.equal(b.seen.length, 2, "두 번까지만(awsCall 기본 세 번이 아니다)");
 });
 
 console.log(`\n${pass} passed`);

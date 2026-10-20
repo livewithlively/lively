@@ -258,6 +258,10 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.tools.includes('app_ai_fork') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '붙은 세션에서 실행' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션의 대화를 이어받아 AI 가 보이지 않게 한 번 답해요 — 그 세션 주인의 Claude 구독으로, 그 세션의 대화 · 작업 폴더 파일(숨김 · 비밀 파일 제외) · 이 앱의 표 · 라이블리에서 읽을 수 있는 내용을 읽기만 해요. 답은 이 앱으로 가고, 짧은 메모가 그 세션의 다음 대화에 붙어요. 초대받은 사람이 보낼 때는 세션 주인도 이 앱에 이렇게 동의해 두어야 해요' }))) : null,
+        // 백그라운드 작업(#4486 앱 v2-7) — '앱 서버가 내 이름으로 뒤에서 일을 하나'. 서버를 둔 앱(web.server)이 함의한다. 화면을 닫아도 15분까지 돈다.
+        app.tools.includes('app_job_start') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '백그라운드 작업' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱의 서버가 오래 걸리는 일을 뒤에서 내 이름으로 처리할 수 있어요 — 화면을 닫아도 한 번에 15분까지 돌고, 이 앱에 동의한 범위 안에서만 움직여요. 진행과 결과는 이 앱의 작업 목록에 남아요' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },

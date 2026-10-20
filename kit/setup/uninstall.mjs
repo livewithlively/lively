@@ -12,7 +12,7 @@
 // 플래그:
 //   --dry-run            무엇을 지울지 출력만, 변경 없음.
 //   --purge              ~/.lively 를 휴지통 이동 대신 하드 삭제(백업 포함 완전 제거).
-//   --harness claude|codex|opencode|antigravity|grok|all   대상 하네스 한정(기본 all — 감지된 것 모두).
+//   --harness claude|codex|opencode|antigravity|grok|cursor|all   대상 하네스 한정(기본 all — 감지된 것 모두).
 //
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 전체를 리다이렉트(라이브 dogfood 보호). 미지정 시 os.homedir().
 //   ※ 스크립트는 런타임 실행이므로 stamp(Date)·env 읽기 허용(워크플로 스크립트와 달리 결정성 제약 없음). LLM/모델 호출 없음.
@@ -28,6 +28,7 @@ import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
 import { uninstallOpencode } from "../adapters/opencode/uninstall.mjs";
 import { uninstallAntigravity } from "../adapters/antigravity/uninstall.mjs";
 import { uninstallGrok } from "../adapters/grok/uninstall.mjs";
+import { uninstallCursor, cursorHooksWired } from "../adapters/cursor/uninstall.mjs";
 
 // kit 안 오케스트레이터 — 하네스별 어댑터(adapters/claude·codex/uninstall.mjs)를 import 해 dispatch 한다.
 //  (install 의 user-install.mjs → adapters/*/install.mjs 와 같은 미러 관계.)
@@ -155,6 +156,13 @@ const HARNESS_UNINSTALL = {
       process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok")),
       "hooks", "lively-grok.json")),
     run: uninstallGrok,
+  },
+  cursor: {
+    label: "Cursor",
+    // ~/.cursor/hooks.json 은 사용자와 공유라 파일 존재가 아니라 **우리 어댑터 엔트리**가 신호다(#4927).
+    //  훅 배선이 보류된 구번들 설치(MCP 만 등록)도 걷어야 하므로 MCP 원장도 신호로 본다.
+    detect: () => cursorHooksWired() || existsSync(join(LIVELY, "managed-cursor-mcp.json")),
+    run: uninstallCursor,
   },
 };
 // 제거 어댑터를 가진 하네스 = 이 파일이 다룰 수 있는 전부(install 측 범위와 같아야 한다).

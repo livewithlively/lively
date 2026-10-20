@@ -104,9 +104,10 @@ t("[3] 어떤 screen 구현도 대화상자·인증 화면을 'ready' 로 오판
 });
 
 // [표 4] 미실측은 명시적 null — 이 목록이 늘거나 줄면 표(fixture)와 함께 갱신해야 한다.
-t("[4] screen=null 하네스는 정확히 {shell} — AI 하네스는 전부 실측 화면 판정을 가진다", () => {
+//  cursor(#4927) 는 이 판이 세션을 띄우지 않는다(멤버 PC 키트 배선만) — 화면을 본 적이 없어 null 이다. 웹 세션을 열 때 실측해 지운다.
+t("[4] screen=null 하네스는 정확히 {cursor, shell} — 띄우는 AI 하네스는 전부 실측 화면 판정을 가진다", () => {
   const noScreen = HARNESS_IO.filter((a) => !a.screen).map((a) => a.key).sort();
-  assert.deepEqual(noScreen, ["shell"]);
+  assert.deepEqual(noScreen, ["cursor", "shell"]);
 });
 
 // [표 5] answer 축과 caps 정합 — 화면은 caps 를 보고 버튼을 숨긴다(있는 척 금지의 화면 짝).

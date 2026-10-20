@@ -312,6 +312,21 @@ test("#4489 permissions.ai_fork → app_ai_fork 표지 + AI 실행 도구 다섯
   assert.equal(parseAppManifest(base()).permissions.ai_fork, false);
 });
 
+// ── #4486 서버를 선언한 앱 → 백그라운드 작업 도구 넷 함의 ─────────────────────────────────────────────
+//  이게 틀리면: 서버 앱의 SDK livelyJobs() · 앱 주소 /_lively/jobs 가 «권한 밖» 으로 막히거나, 서버 없는 앱이 작업 도구를 얻는다.
+test("#4486 web.server(객체 · true) → app_job_* 넷 함의(중복 없음) · 서버 없음 · 배열 · 글은 없음", () => {
+  const JOB = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"];
+  for (const server of [{}, { start: "node s.js" }, true]) {
+    const tools = parseAppManifest({ ...base(), web: { server }, permissions: { tools: ["app_jobs"] } }).permissions.tools;
+    for (const t of JOB) assert.ok(tools.includes(t), `${JSON.stringify(server)} ${t}`);
+    assert.equal(tools.filter((t) => t === "app_jobs").length, 1, "이미 적은 도구는 한 번만");
+  }
+  for (const server of [undefined, false, [], "node s.js", null]) {
+    const tools = parseAppManifest({ ...base(), ...(server === undefined ? {} : { web: { server } }) }).permissions.tools;
+    assert.ok(!tools.some((t) => t.startsWith("app_job")), `${JSON.stringify(server)} 에 작업 도구가 붙었다`);
+  }
+});
+
 // ── #4488 AI 실행 선언(permissions.ai_runs · ai.jobs) — M1~M2 ─────────────────────────────────────────────────────────────────────────
 //  이게 틀리면: 선언만 하고 도구가 grant 에 안 들어가 앱 주소 /_lively/ai/* 가 «권한 밖» 으로 막히거나, 작업 이름 꼴 밖 선언이 저장돼 설정 칸과 어긋난다.
 test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음) · 기본 false 면 없음 · ai.jobs 이름 꼴", () => {

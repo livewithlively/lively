@@ -67,6 +67,14 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
     ["POST", "/ai/runs", { prompt: "x", target: { fork: "box-a" }, project_id: 3 }, "app_ai_run", { prompt: "x", target: { fork: "box-a" }, project_id: 3 }],
     ["GET", "/ai/runs?fork_session=box-a&limit=3", undefined, "app_ai_runs", { limit: 3, fork_session: "box-a" }],
     ["POST", "/ai/runs/42/cancel", {}, "app_ai_run_cancel", { id: 42 }],
+    //  #4486 백그라운드 작업 — 시작(그 칸만 · 본문의 app_id 는 버림) · 목록(쿼리로 좁힘) · 보기(wait 는 쿼리) · 취소.
+    ["POST", "/jobs", { route: "/api/jobs/t", body: { f: 1 }, label: "전사", timeout_s: 300, type: "function", wait: 3, app_id: "남의앱", bogus: 1 }, "app_job_start",
+      { route: "/api/jobs/t", body: { f: 1 }, label: "전사", timeout_s: 300, type: "function", wait: 3 }],
+    ["GET", "/jobs?status=running&limit=3&app_id=x", undefined, "app_jobs", { status: "running", limit: 3 }],
+    ["GET", "/jobs", undefined, "app_jobs", {}],
+    ["GET", "/jobs/77?wait=20", undefined, "app_job_get", { id: 77, wait: 20 }],
+    ["GET", "/jobs/77", undefined, "app_job_get", { id: 77 }],
+    ["POST", "/jobs/77/cancel", {}, "app_job_cancel", { id: 77 }],
   ];
   for (const [m, p, b, name, args] of cases) {
     const r = await run(d, m, p, b);
@@ -86,13 +94,15 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
 {
   const { d, calls } = deps();
   for (const [m, p] of [["GET", "/nope"], ["POST", "/store/notes/drop"], ["POST", "/store/a-b/query"], ["POST", `/store/${"a".repeat(64)}/query`],
-    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"], ["GET", "/ai/runs/0"], ["GET", "/ai/runs/abc"], ["GET", "/ai"]] as const) {
+    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"], ["GET", "/ai/runs/0"], ["GET", "/ai/runs/abc"], ["GET", "/ai"],
+    ["GET", "/jobs/0"], ["GET", "/jobs/abc"], ["GET", "/jobs/1/2"], ["POST", "/job"]] as const) {
     const r = await run(d, m, p, {});
     assert.equal(r.status, 404, `${m} ${p}`);
     assert.equal((r.json as { code?: string }).code, "not_found");
   }
   for (const [m, p] of [["GET", "/store/sql"], ["POST", "/store/tables"], ["GET", "/tools/whoami"], ["DELETE", "/prefs"], ["PUT", "/store/notes/query"], ["GET", "/store/sql/batch"],
-    ["PUT", "/ai/runs"], ["POST", "/ai/targets"], ["POST", "/ai/runs/42"], ["GET", "/ai/runs/42/cancel"]] as const) {
+    ["PUT", "/ai/runs"], ["POST", "/ai/targets"], ["POST", "/ai/runs/42"], ["GET", "/ai/runs/42/cancel"],
+    ["PUT", "/jobs"], ["DELETE", "/jobs/1"], ["POST", "/jobs/1"], ["GET", "/jobs/1/cancel"]] as const) {
     assert.equal((await run(d, m, p, {})).status, 405, `${m} ${p}`);
   }
   for (const p of ["//evil", "/a b", "/a\\b", `/${"a".repeat(512)}`, "store/tables", 5, null, undefined]) {

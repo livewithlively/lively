@@ -6,6 +6,9 @@
 //  ② 호출 세기 — 함수를 부르는 길이 게이트웨이 하나뿐이라(함수 주소 없음 · 설계 §19) 여기서 센 수가 곧 전부다. 자동 멈춤 감시(app-server-watch)가
 //     CloudWatch 지표(1,000개당 $0.01) 대신 이 수를 본다. 5분 칸(org_app_server_usage)에 쌓고, 몇 초마다 한 번에 적는다(요청마다 DB 를 쓰지 않게).
 //     실행 시간은 Lambda 가 흘려 받기 끝에 주는 REPORT 줄의 «Billed Duration» 이다(없으면 게이트웨이가 잰 시간).
+//  ③ 백그라운드 작업(#4486)은 이 수에 넣지 않는다(의도) — 작업은 사람 요청이 아니라 게이트웨이가 함수를 비동기로 맡긴 것이고(app-jobs dispatchAppJobs),
+//     하나가 15분까지 돌아 «5분 실행 시간 합 3,000초» 기준이 작업 넷에 걸린다. 작업의 비용 안전망은 작업 상한이다 — 동시 · 대기 줄 · 하루 수 ·
+//     작업 시간 · 메모리 천장(app_server_policy jobs_* · job_timeout_s · memory_max_mb). 그래서 ②의 «여기서 센 수가 곧 전부» 는 사람 요청의 수다.
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";

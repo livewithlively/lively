@@ -38,7 +38,25 @@ export declare function createLivelyDb<TSchema extends Record<string, unknown> =
 /** Express·Connect 미들웨어 — 그 요청 안의 DB 호출이 들어온 사람 신원(X-Lively-Identity)을 싣는다. */
 export declare function livelyIdentity(): (req: { headers: Record<string, string | string[] | undefined> }, res: unknown, next: () => void) => void;
 /** 이 요청의 사람(앱 서버 함수 앞 검사 층이 붙인 머리글을 풀어서) — 없으면 null. 라이블리 앱 서버 함수 안에서만 믿을 수 있다. */
-export declare function livelyMember(req: { headers: Record<string, string | string[] | undefined> | { get(name: string): string | null } }): { id: string; name: string; variant: "pub" | "draft" } | null;
+export declare function livelyMember(req: { headers: Record<string, string | string[] | undefined> | { get(name: string): string | null } }): { id: string; name: string; variant: "pub" | "draft"; job: number | null } | null;
+
+/** 백그라운드 작업 하나(#4486) — 끝 상태 done(라우트가 2xx) · failed · canceled. result 는 라우트 응답의 앞 64KB. */
+export interface LivelyJob {
+  id: number; app_id: string; status: "queued" | "dispatched" | "running" | "done" | "failed" | "canceled"; label: string | null; requester: string;
+  created_at: string | null; started_at: string | null; ended_at: string | null; duration_ms: number | null; error: string | null; cancel_requested: boolean;
+  route?: string; variant?: "pub" | "draft"; body_bytes?: number; timeout_s?: number; attempts?: number; parent_id?: number | null; depth?: number;
+  dispatched_at?: string | null; status_code?: number | null;
+  result?: { status_code: number | null; content_type: string | null; json?: unknown; text?: string; base64?: string; truncated: boolean; bytes: number | null } | null;
+}
+export interface LivelyJobs {
+  start(route: string, body?: unknown, opts?: { label?: string; timeout_s?: number; wait?: number }): Promise<LivelyJob>;
+  get(id: number, opts?: { wait?: number }): Promise<LivelyJob>;
+  list(opts?: { status?: LivelyJob["status"]; limit?: number }): Promise<LivelyJob[]>;
+  cancel(id: number): Promise<LivelyJob>;
+  wait(id: number, opts?: { timeout_ms?: number }): Promise<LivelyJob>;
+}
+/** 백그라운드 작업 — 이 앱 서버의 라우트를 라이블리가 뒤에서(15분까지) 부르게 한다. 신원은 들어온 요청의 것(livelyIdentity)을 싣는다. */
+export declare function livelyJobs(opts?: { url?: string; token?: string; fetch?: typeof fetch; identity?: () => string | undefined }): LivelyJobs;
 
 /** fn 안의 DB 호출이 그 신원을 싣는다(Next 라우트 · Lambda 핸들러). fn 의 결과를 안에서 기다려 Promise 로 돌려준다. */
 export declare function withIdentity<T>(identity: string | null | undefined, fn: () => T): Promise<Awaited<T>>;

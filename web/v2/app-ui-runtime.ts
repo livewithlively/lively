@@ -18,6 +18,7 @@
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
 //    await lively.ai.run({prompt, schema?, job?, files?, wait?, target?}) → AI 실행 하나(#4488 — {id,status,result}; wait 초를 주면 끝날 때까지). get(id) · list() · cancel(id) · targets()
 //                                                target:{fork: lively.session} 은 붙은 세션 대화를 이어받는 분기(#4489 — 결과는 앱에 · session_note 는 그 세션의 다음 턴에).
+//    await lively.jobs.start(route, body?, {label?, timeout_s?, wait?}) → 이 앱 서버의 라우트를 뒤에서(#4486 — 15분까지 · {id,status,result}). get(id,{wait}) · list() · cancel(id) · wait(id)
 //    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
 //                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·
 //                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
@@ -336,6 +337,28 @@ export const APP_RUNTIME_JS = `
       list: function (opts) { return api.tools.call('app_ai_runs', opts || {}).then(function (r) { return (r && r.runs) || []; }); },
       cancel: function (id) { return api.tools.call('app_ai_run_cancel', { id: Number(id) }); },
       targets: function () { return api.tools.call('app_ai_targets', {}); }
+    },
+    // 백그라운드 작업(#4486 앱 v2-7) — 이 앱 서버의 라우트를 뒤에서(요청 하나 30초와 달리 15분까지). 서버를 선언한 앱(web.server)만. 작업은 내 이름으로 돈다.
+    //  wait(id) 는 끝날 때까지 25초씩 다시 묻는다(전체 상한 opts.timeout_ms — 기본 17분). 끝 상태: done(라우트가 2xx) · failed · canceled.
+    jobs: {
+      start: function (route, body, opts) {
+        var o = opts || {};
+        return api.tools.call('app_job_start', { route: String(route), body: body === undefined ? {} : body, label: o.label, timeout_s: o.timeout_s, wait: o.wait });
+      },
+      get: function (id, opts) { var o = opts || {}; return api.tools.call('app_job_get', { id: Number(id), wait: o.wait }); },
+      list: function (opts) { return api.tools.call('app_jobs', opts || {}).then(function (r) { return (r && r.jobs) || []; }); },
+      cancel: function (id) { return api.tools.call('app_job_cancel', { id: Number(id) }); },
+      wait: function (id, opts) {
+        var o = opts || {};
+        var until = Date.now() + (Number(o.timeout_ms) || 17 * 60 * 1000);
+        var once = function () {
+          return api.tools.call('app_job_get', { id: Number(id), wait: 25 }).then(function (j) {
+            if (!j || j.status === 'done' || j.status === 'failed' || j.status === 'canceled' || Date.now() >= until) return j;
+            return once();
+          });
+        };
+        return once();
+      }
     },
     prefs: {
       get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },

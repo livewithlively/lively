@@ -19,7 +19,7 @@ import { join } from "node:path";
 import crypto from "node:crypto";
 // 주입 봉투는 하네스별 규약이다 — 표에서 파생한다. ⚠ HARNESS 상수는 종전 계산식 유지(빈 문자열 가능):
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
-import { harness, isForeignGrokInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -33,6 +33,8 @@ const executionSessionId = (input = {}) => {
   if (direct) return direct;
   const native = String(input.session_id || input.sessionId || "").trim();
   if (native && HARNESS === "codex") return `codex-${native}`;
+  // #4927 — cursor-adapter 가 session_id(없으면 conversation_id)를 싣는다. 서버 agent-identity 가 `cursor-` 를 받는다.
+  if (native && HARNESS === "cursor") return `cursor-${native}`;
   if (native && (HARNESS || "claude") === "claude") return `claude-${native}`;   // 미지정=claude(resolveHarness 규약)
   const codex = String(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim();
   if (codex) return `codex-${codex}`;
@@ -47,7 +49,8 @@ const scopeHeaders = (input = {}) => ({
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 러너 엔트리를 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 org 훅이 이벤트당 두 번 울린다).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);
 

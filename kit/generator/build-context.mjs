@@ -337,6 +337,10 @@ function emitGrokArtifact({ copied }) {
   const ok = copied.includes("setup/user-install.mjs");
   console.log(`  ▶ harness=grok → 발행물 동봉 user-install.mjs(--harness grok)${ok ? "" : " ⚠️ user-install.mjs 미동봉 — claude 와 함께 발행하세요"} + 어댑터(grok-adapter.mjs)는 훅 목록에 동봉.`);
 }
+function emitCursorArtifact({ copied }) {
+  const ok = copied.includes("setup/user-install.mjs");
+  console.log(`  ▶ harness=cursor → 발행물 동봉 user-install.mjs(--harness cursor)${ok ? "" : " ⚠️ user-install.mjs 미동봉 — claude 와 함께 발행하세요"} + 어댑터(cursor-adapter.mjs)는 훅 목록에 동봉.`);
+}
 
 const HARNESS_EMIT = {
   claude: emitClaudeArtifact,
@@ -344,6 +348,7 @@ const HARNESS_EMIT = {
   opencode: emitOpencodeArtifact,
   antigravity: emitAntigravityArtifact,
   grok: emitGrokArtifact,
+  cursor: emitCursorArtifact,
 };
 
 // 다중 하네스 발행: --harness claude,codex → 두 emit 을 순서대로 실행(같은 발행물에 양쪽 설정 추가).

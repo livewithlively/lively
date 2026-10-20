@@ -63,6 +63,11 @@ export const AI_RUN_TOOL = AI_RUN_TOOLS[0];
  *  `/_lively/ai/runs` 의 `target: {fork}` 가 그 사람의 grant 에서 이 이름을 찾는다(ai-runs/live.forkConsent). 분기는 AI 실행 도구로 가므로 AI_RUN_TOOLS 도 함께 함의한다.
  */
 export const AI_FORK_TOOL = "app_ai_fork";
+/**
+ * #4486 — 서버를 선언한 앱(web.server)이 함의하는 «백그라운드 작업» 도구들(capabilities/app-jobs.ts 와 같은 글자). 앱 서버 SDK livelyJobs() · 앱 주소 /_lively/jobs ·
+ *  lively.jobs.* 가 이 도구를 grant 에서 찾는다. 작업은 그 앱의 서버 코드를 그 사람 이름으로 뒤에서(15분까지) 돌리는 것이라 동의 창에 «백그라운드 작업» 줄로 보인다.
+ */
+export const APP_JOB_TOOLS = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"] as const;
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -411,6 +416,12 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   }
   if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];
+  }
+  // #4486 — 서버를 선언한 앱(web.server 가 객체이거나 true — apps/app-server-config.ts serverDeclOf 와 같은 판정)은 백그라운드 작업 도구 넷을 함의한다
+  //  (사람에게 보이는 권한은 「백그라운드 작업」 — 그 앱의 서버 코드를 내 이름으로 뒤에서 돌리기). web 은 passthrough 라 원문을 본다.
+  const srv = (m as { web?: { server?: unknown } }).web?.server;
+  if (srv === true || (!!srv && typeof srv === "object" && !Array.isArray(srv))) {
+    for (const t of APP_JOB_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

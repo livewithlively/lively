@@ -30,6 +30,7 @@
 //   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
 //   격리 리뷰 · 재검토: V12 판 목록 404 면 지운다 · V13 잠긴 앱은 건너뛴다 · V14 잠금 안 재확인(V14b 저장소 오류면 막지 않는다) · V15 Inactive 되살리기
 //   (V15b Inactive + 지난 고치기 실패 · V15c 그 뒤 새 코드 · V15d 그 뒤 설정만 · V15e 그 뒤 같은 코드 · 같은 설정 — 모두 코드를 다시 올린다) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
+//  #4486 백그라운드 작업(J): J6 별칭의 검사 층 판 · J7 열린 작업이 붙잡은 판 · 토큰은 정리 · 회수 안 함(J7c 시험 호출이 실패한 배포도 · J7b 끝나면 거둠) · J8 함수 크기 = 그 판의 선언
 //  #4887 별칭 판 상태 점검(H): H0 판정 · H1 정상 · H2 하루 주기 · H3 쉬는 판 · H4 옛 판(cur · pub 한 번에) · H5 pub 만 옛 판 · H6 원본 잃음(돎) · H7 멈춤(알림)
 //   H8 zip 없음(알림만 · H8b 다음 날 다시 안 알림 · 다른 판이면 다시) · H9 일시 오류(H9b 하루 넘으면 한 번 · H9c 저장소 오류 원문 안 보임) · H10 잠김(H10b 그사이 잠김 ·
 //   H10c 그사이 옮겨짐 · H10c2 한 별칭만 옮겨짐 · H10d 정상 판정 중 옮겨짐 — 결과 안 덮음) · H11 한 틱 몫 · H12 빌드가 다른 별칭 · H13 멈춘 함수 · H14 상태 · H15 COPY · H16 고아
@@ -282,8 +283,10 @@ const d1 = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice
 const r1 = await serverRow();
 const cf = calls("createFunction")[0]?.[1];
 chk("D1b 배포 성공 · 빌드 1번(앨리스의 세션)", d1.status === "deployed" && seats.length === 1 && seats[0].memberId === "pgt-alice" && seats[0].sessionId === "box-pgt-alice-1", JSON.stringify({ d1, seats }));
-chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB · 30초 · 워크스페이스 태그 · S3 zip",
-  cf && cf.FunctionName === FN && cf.Role === ROLE && cf.Handler === "lively-run.sh" && cf.Runtime === "nodejs22.x" && cf.Architectures[0] === "arm64" && cf.MemorySize === 512 && cf.Timeout === 30
+//  #4486 함수 시간 = 작업 시간(900초) · 임시 디스크 512 · 사람 요청 30초는 검사 층 env(LIVELY_REQUEST_TIMEOUT_S — 아래 J8).
+chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB · 900초(작업 시간) · 임시 512MB · 워크스페이스 태그 · S3 zip",
+  cf && cf.FunctionName === FN && cf.Role === ROLE && cf.Handler === "lively-run.sh" && cf.Runtime === "nodejs22.x" && cf.Architectures[0] === "arm64" && cf.MemorySize === 512 && cf.Timeout === 900
+  && cf.EphemeralStorage?.Size === 512 && cf.Environment?.Variables?.LIVELY_REQUEST_TIMEOUT_S === "30"
   && cf.Tags["lvly:tenant"] === SINGLE_TENANT_ID && cf.Code.S3Bucket === "fake-bucket" && zips.has(cf.Code.S3Key) && cf.Code.S3Key.includes("/z/srv/"), JSON.stringify(cf));
 const v1env = cf?.Environment?.Variables ?? {};
 const fnTokens = async (app) => q(`SELECT token_hash, revoked_at FROM auth_token WHERE label=$1 ORDER BY created_at`, [`app-server-fn:${app}`]);
@@ -1182,7 +1185,7 @@ const ageUnused = async (id, sql) => q(`UPDATE org_app_server SET unused_since =
   const lg0 = calls("deleteLogGroup").filter((x) => x[1] === `/aws/lambda/${fnOf("ret-a")}`).length;
   //  X2c 회수는 줄을 지우기 «전»(잠금을 쥔 채)에 — 줄이 있는 때 불렸는지 본다(합치기 격리 리뷰: 기다리던 배포의 새 토큰과 겹치지 않게)
   const seenRevoke = [];
-  setServerDepsForTest({ ...baseDepsW(), revokeFunctionTokens: async (app, keep) => { seenRevoke.push({ app, row: !!(await rowOf(app)) }); return revokeStaleFunctionTokens(app, keep); } });
+  setServerDepsForTest({ ...baseDepsW(), revokeFunctionTokens: async (app, keep, ...rest) => { seenRevoke.push({ app, row: !!(await rowOf(app)) }); return revokeStaleFunctionTokens(app, keep, ...rest); } });
   const h3 = (await runAppServerHousekeeping({ api, usage: async () => new Map(), notify: async () => {} })).retire;
   setServerDepsForTest(baseDepsW());
   const builds = await q(`SELECT zip_key FROM org_app_server_build WHERE app_id='ret-a' AND status='ok'`);
@@ -2402,6 +2405,101 @@ const hDeploy = async (id, code) => { await call("app_save", { files: code ? twi
 }
 
 for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "hl-q1", "hl-q2", "hl-two", "hl-stop", "hl-copy"]) await call("org_app_remove", { app_id: id }, boss);
+
+// #4486 J — 백그라운드 작업 쪽 배포: 별칭의 검사 층 판 · 열린 작업이 붙잡은 판 · 토큰 · 함수 크기(앱 선언)
+{
+  const ID = "jobsrv";
+  const files = (o = {}) => filesOf(o).map((f) => (f.path === "lively-app.json" ? { ...f, content: f.content.replace('"id":"srv"', `"id":"${ID}"`) } : f));
+  const savedPol = (await q(`SELECT app_server_policy FROM org_runtime_config WHERE id=1`))[0]?.app_server_policy ?? {};
+  await call("app_server_limits_set", { keep_versions: 1 }, boss);
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j1')).listen(Number(process.env.PORT));" }) }, alice, aliceCtx);
+  const dj1 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const rj1 = await rowOf(ID);
+  chk("J6 별칭에 검사 층 판(4) — 백그라운드 작업이 이 판부터 받는다", dj1.status === "deployed" && rj1?.cur_guard === 4, JSON.stringify({ s: dj1.status, g: rj1?.cur_guard }));
+  const FNJ = rj1.function_name;
+  const pinnedVer = rj1.cur_lambda_version;
+  const pinnedTok = rj1.cur_token_hash;
+  const jid = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, token_hash, route, body, timeout_s)
+                        VALUES ($1,'running','pgt-alice','pub','cur',$2,$3,$4,'/x','{}',900) RETURNING id`, [ID, FNJ, pinnedVer, pinnedTok]))[0].id;
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j2')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  const dj2 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const rj2 = await rowOf(ID);
+  const vers2 = fns.get(FNJ).versions.map((v) => v.Version);
+  const toks2 = await fnTokens(ID);
+  chk("J7 ★ 열린 작업이 붙잡은 판 · 토큰 — 새 판을 올려도(정리 1판만 남김) 그 판은 남고 · 그 토큰은 회수하지 않는다",
+    dj2.status === "deployed" && rj2.cur_lambda_version !== pinnedVer && vers2.includes(pinnedVer) && toks2.some((t) => t.token_hash === pinnedTok && !t.revoked_at),
+    JSON.stringify({ cur: rj2.cur_lambda_version, pinnedVer, vers2, toks2 }));
+  const cfgJ = fns.get(FNJ).versions.find((v) => v.Version === rj2.cur_lambda_version)?.cfg;
+  chk("J8 함수 크기 = 그 판의 선언(web.server.memory_mb 2048 · tmp_mb 1024) · 시간 = 작업 시간 900 · 사람 요청 시간은 검사 층 env 30",
+    cfgJ?.MemorySize === 2048 && cfgJ?.EphemeralStorage?.Size === 1024 && cfgJ?.Timeout === 900 && cfgJ?.Environment?.Variables?.LIVELY_REQUEST_TIMEOUT_S === "30",
+    JSON.stringify({ m: cfgJ?.MemorySize, e: cfgJ?.EphemeralStorage, t: cfgJ?.Timeout }));
+  //  J7c 배포가 시험 호출에서 실패하는 길(못 쓴 새 토큰을 회수하는 catch)도 열린 작업의 토큰은 남긴다 — 성공 길만 지키면 이 길이 그 토큰을 거둬
+  //   도는 작업의 SDK 호출 · 박동 · 결과 보고가 모두 401 이 된다(격리 리뷰 막을 것).
+  const toksBefore = (await fnTokens(ID)).filter((t) => !t.revoked_at).map((t) => t.token_hash);
+  invokeMode = "noguard";
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j2c')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  const dj2c = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  invokeMode = "ok";
+  const toks2c = await fnTokens(ID);
+  const minted2c = toks2c.filter((t) => !toksBefore.includes(t.token_hash));
+  chk("J7c ★ 시험 호출이 실패한 배포 — 못 쓴 새 토큰만 회수하고 열린 작업이 붙잡은 토큰은 남긴다",
+    dj2c.status === "failed" && dj2c.stage === "smoke" && toks2c.some((t) => t.token_hash === pinnedTok && !t.revoked_at)
+      && minted2c.length === 1 && !!minted2c[0].revoked_at,
+    JSON.stringify({ s: dj2c.status, stage: dj2c.stage, pinned: toks2c.find((t) => t.token_hash === pinnedTok), minted2c }));
+  await q(`UPDATE org_app_job SET status='done', ended_at=now() WHERE id=$1`, [jid]);
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j3')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const vers3 = fns.get(FNJ).versions.map((v) => v.Version);
+  const toks3 = await fnTokens(ID);
+  chk("J7b 작업이 끝난 뒤 배포 — 그 판을 정리하고 그 토큰을 회수한다", !vers3.includes(pinnedVer) && toks3.some((t) => t.token_hash === pinnedTok && !!t.revoked_at), JSON.stringify({ vers3, toks3 }));
+  //  J7d 회수 함수의 두 갈래 — 기본은 열린 작업이 붙잡은 토큰을 남기고(keep 이 비어도), jobPins:false(앱 지우기 · 걷기 — 작업을 먼저 끝낸 쪽)는 전부 거둔다.
+  const rj4 = await rowOf(ID);
+  const tok4 = rj4.cur_token_hash;
+  const jid4 = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, token_hash, route, body, timeout_s)
+                         VALUES ($1,'running','pgt-alice','pub','cur',$2,$3,$4,'/x','{}',900) RETURNING id`, [ID, FNJ, rj4.cur_lambda_version, tok4]))[0].id;
+  await revokeStaleFunctionTokens(ID, [], "t");
+  const kept4 = (await fnTokens(ID)).find((t) => t.token_hash === tok4);
+  await revokeStaleFunctionTokens(ID, [], "t", { jobPins: false });
+  const gone4 = (await fnTokens(ID)).find((t) => t.token_hash === tok4);
+  chk("J7d 회수 — 기본은 열린 작업의 토큰을 남기고(keep 비어도) · jobPins:false 는 그것까지 거둔다", !!kept4 && !kept4.revoked_at && !!gone4?.revoked_at,
+    JSON.stringify({ kept4, gone4 }));
+  await q(`UPDATE org_app_job SET status='failed', ended_at=now() WHERE id=$1`, [jid4]);
+  //  J9 공용 DB 마이그레이션 전(검사 층 판 칸이 아직 없다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 마이그레이션을 맨 끝에 돌린다)에 배포해도
+  //   별칭 · 판 · 토큰은 맞게 적히고 칸만 빈다. 칸 탓에 별칭 기록이 실패하면 실패 길이 새 판에 구운 토큰을 회수해 앱 서버가 401 이 된다.
+  //   실제 창엔 작업 표(org_app_job)도 없다 — 배포 쪽 작업 핀 읽기는 모두 비치명이어야 한다(잠깐 이름을 바꿔 둔다).
+  await q(`ALTER TABLE org_app_server DROP COLUMN cur_guard, DROP COLUMN pub_guard`);
+  await q(`ALTER TABLE org_app_job RENAME TO org_app_job_pgt_hidden`);
+  let dj9, rj9, toks9;
+  try {
+    await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j9')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+    dj9 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+    rj9 = await rowOf(ID);
+    toks9 = await fnTokens(ID);
+  } finally {
+    await q(`ALTER TABLE org_app_job_pgt_hidden RENAME TO org_app_job`);
+    await q(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT, ADD COLUMN IF NOT EXISTS pub_guard INT`);
+  }
+  chk("J9 ★ 검사 층 판 칸이 없는(마이그레이션 전) 배포 — 별칭 · 판 · 토큰은 적히고 그 토큰은 살아 있다",
+    dj9?.status === "deployed" && rj9?.cur_lambda_version !== rj4.cur_lambda_version && rj9?.cur_lambda_version === fns.get(FNJ).aliases.get("cur")
+      && toks9.some((t) => t.token_hash === rj9.cur_token_hash && !t.revoked_at) && !("cur_guard" in rj9),
+    JSON.stringify({ s: dj9?.status, err: dj9?.error, v: rj9?.cur_lambda_version, alias: fns.get(FNJ).aliases.get("cur"), before: rj4.cur_lambda_version }));
+  //  J9b 검사 층 판 칸 쓰기가 «칸 없음» 이 아닌 오류로 실패하면 배포는 실패로 끝나지만, 별칭 · 판 · 토큰은 첫 문장으로 이미 적혔고
+  //   실패 길은 그 줄(새 토큰)을 남긴다 — 새 판에 구운 토큰이 회수되어 앱 서버가 401 이 되지 않는다.
+  await q(`ALTER TABLE org_app_server ADD CONSTRAINT pgt_guard_neg CHECK (cur_guard IS NULL OR cur_guard < 0)`);
+  let dj9b, rj9b, toks9b;
+  try {
+    await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j9b')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+    dj9b = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+    rj9b = await rowOf(ID);
+    toks9b = await fnTokens(ID);
+  } finally { await q(`ALTER TABLE org_app_server DROP CONSTRAINT IF EXISTS pgt_guard_neg`); }
+  chk("J9b 검사 층 판 칸이 다른 오류(23514)로 실패 — 배포 실패 · 별칭 · 판 · 새 토큰은 맞고 그 토큰은 살아 있다",
+    dj9b?.status === "failed" && rj9b?.cur_lambda_version === fns.get(FNJ).aliases.get("cur") && rj9b?.cur_lambda_version !== rj9?.cur_lambda_version
+      && toks9b.some((t) => t.token_hash === rj9b.cur_token_hash && !t.revoked_at),
+    JSON.stringify({ s: dj9b?.status, v: rj9b?.cur_lambda_version, alias: fns.get(FNJ).aliases.get("cur") }));
+  await q(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPol)]);
+  await call("org_app_remove", { app_id: ID }, boss);
+}
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip
 {
