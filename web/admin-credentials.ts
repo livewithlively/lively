@@ -112,7 +112,9 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
 //   steps 가 있으면 번호 카드로 그리고, scopes 가 있으면 **켜야 할 항목을 칩 목록 + 한 번에 복사**로 낸다.
 //   토큰 발급 화면에서 체크박스를 하나 빠뜨리는 것이 이 경로의 대표 실패였다(2026-08-26 실측: 팀 열거 403).
 const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secretPh?: string; scope?: string; scopePh?: string; meta?: Record<string, string>; help?: string; docUrl?: string; memberOnly?: boolean;
-  steps?: string[]; scopes?: Array<{ name: string; why: string }> }> = [
+  steps?: string[]; scopes?: Array<{ name: string; why: string }>;
+  /** 비밀 아닌 부속 칸 하나(meta[key]) — 예: Anthropic 워크스페이스 id. 값이 있으면 meta 에 실려 저장된다. */
+  metaField?: { key: string; label: string; placeholder?: string; help?: string } }> = [
   { kind: 'gitlab_pat', label: 'GitLab 개인 토큰(PAT)', secretLabel: 'GitLab 토큰', secretPh: 'glpat-…', scope: 'GitLab 호스트', scopePh: 'git.example.com', docUrl: 'https://gitlab.com/-/user_settings/personal_access_tokens', meta: { auth_header: 'PRIVATE-TOKEN', token_prefix: '' }, help: 'GitLab ▸ 우측상단 프로필 ▸ Preferences ▸ Access Tokens 에서 발급(read_api·read_repository). 여러 GitLab 서버를 쓰면 호스트로 구분하세요. 레포(git) 관리의 [목록에서 선택] 드롭다운도 이 토큰으로 조회합니다 — git 전송을 SSH 로 하더라도 이 토큰만 있으면 목록을 불러올 수 있습니다.' },
   { kind: 'github_pat', label: 'GitHub 토큰(PAT)', secretLabel: 'GitHub 토큰', secretPh: 'ghp_… / github_pat_…', scope: 'GitHub 호스트', scopePh: 'github.com', docUrl: 'https://github.com/settings/tokens', meta: { auth_header: 'Authorization', token_prefix: 'Bearer ' }, help: 'GitHub ▸ Settings ▸ Developer settings ▸ Personal access tokens 에서 발급(classic=repo / fine-grained=Metadata read). 레포(git) 관리의 [목록에서 선택] 드롭다운이 이 토큰으로 조회합니다 — git 전송을 SSH(deploy key)로 하더라도 이 토큰만 있으면 목록을 불러올 수 있습니다.' },
   { kind: 'slack_user_token', label: 'Slack 사용자 토큰(xoxp)', secretLabel: 'xoxp- 토큰', secretPh: 'xoxp-…', help: '메시지 검색(search.messages)은 봇 토큰이 안 되고 사용자 토큰(xoxp)이 필요합니다. 내가 초대된 채널만 검색됩니다.', docUrl: 'https://api.slack.com/apps' },
@@ -140,6 +142,8 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
   //  구성원 개인 오버라이드 자리는 없다(앱 AI 실행은 «워크스페이스 API 키 또는 본인 구독» 둘뿐 · 설계 §12 ④).
   { kind: 'anthropic_api_key', label: 'Anthropic API 키(앱 AI 실행)', secretLabel: 'API 키', secretPh: 'sk-ant-…',
     docUrl: 'https://console.anthropic.com/settings/keys',
+    metaField: { key: 'workspace_id', label: 'Anthropic 워크스페이스 ID(선택)', placeholder: 'wrkspc_…',
+      help: '워크스페이스에 묶이지 않은 키(조직 단위 · 계정 연동 키)는 Anthropic 이 요청마다 쓸 워크스페이스를 요구합니다 — 콘솔 Settings ▸ Workspaces 에서 그 워크스페이스의 ID 를 복사해 넣으세요. 워크스페이스 안에서 만든 키면 비워 둡니다.' },
     help: '앱이 보내는 AI 작업의 워크스페이스 기본 실행 계정입니다. 등록하면 앱 서버·자동화·누구의 요청이든 이 키로 돕니다(앱당 하루 토큰 상한 안에서). 없으면 사람 본인의 Claude 구독으로만 돕니다. Claude 구독(Pro·Max)과 별개 계정이라 콘솔에서 선불 크레딧을 따로 충전해야 호출됩니다.',
     steps: [
       'console.anthropic.com 에 로그인(없으면 가입 — 조직 하나를 만듭니다)',
@@ -320,6 +324,9 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
   const scopeField = field('대상 구분(선택)', scopeIn);
   const secretIn = secretInput({ placeholder: '' });          // 계정 비번 아님 — #1250
   const secretField = field('토큰', secretRow(secretIn));
+  const metaIn = el('input', { type: 'text', placeholder: '' });
+  const metaField = field('부속 정보(선택)', metaIn);
+  const metaHelp = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
   const helpP = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
   const docLink = el('a', { class: 'admin-hint', target: '_blank', rel: 'noopener', style: 'display:none;margin:4px 0 0' });
   const submit = el('button', { class: 'btn btn-primary', text: '저장' });
@@ -334,6 +341,11 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
     secretIn.placeholder = spec.secretPh || '토큰 값 붙여넣기';
     helpP.textContent = spec.help || '';
     helpP.style.display = spec.help ? '' : 'none';
+    metaField.style.display = spec.metaField ? '' : 'none';
+    (metaField.querySelector('.field-label') as HTMLElement).textContent = spec.metaField?.label || '부속 정보(선택)';
+    metaIn.placeholder = spec.metaField?.placeholder || '';
+    metaHelp.textContent = spec.metaField?.help || '';
+    metaHelp.style.display = spec.metaField?.help ? '' : 'none';
     if (spec.docUrl) { docLink.setAttribute('href', spec.docUrl); (docLink as any).textContent = '토큰 발급 페이지 열기 ↗'; docLink.style.display = ''; } else { docLink.style.display = 'none'; }
   };
   kindSel.addEventListener('change', syncKind); syncKind();
@@ -345,6 +357,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
     const payload: any = { kind: spec.kind, secret: secretIn.value };
     if (spec.scope && scopeIn.value.trim()) payload.scope_key = scopeIn.value.trim();
     if (spec.meta) payload.meta = spec.meta; // 헤더 형식 프리셋(사용자가 신경 안 써도 됨)
+    if (spec.metaField && metaIn.value.trim()) payload.meta = { ...(payload.meta || {}), [spec.metaField.key]: metaIn.value.trim() };
     (submit as any).disabled = true; status.textContent = '저장 중…';
     try { await api(base, { method: 'POST', body: JSON.stringify(payload) }); toast('저장됨'); reload(); }
     catch (e: any) { status.textContent = ''; (submit as any).disabled = false; toast((e && e.message) || '저장 실패', true); }
@@ -352,7 +365,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
 
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
     cardHead('새 자격 추가'),
-    field('서비스', kindSel), scopeField, secretField, helpP, docLink,
+    field('서비스', kindSel), scopeField, secretField, metaField, metaHelp, helpP, docLink,
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
   return el('div', { class: 'admin-section', style: 'margin-top:18px' }, el('h3', { class: 'admin-subhead', text: title }), ...rows);

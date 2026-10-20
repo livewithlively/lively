@@ -112,6 +112,20 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S1 단발 + API 키 → 프록시 · 계측 · done · 컨테이너 0");
 }
 
+// ── S1b 워크스페이스에 묶이지 않은 키 — 자격의 워크스페이스 id 가 단발 호출에 실린다(없으면 null) ──
+{
+  const { w, d } = world();
+  await submitRun({ prompt: "요약해" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.equal(w.llm[0]!.workspaceId ?? null, null, "자격에 id 없음 → null");
+  (d as unknown as { apiWorkspaceId: () => Promise<string | null> }).apiWorkspaceId = async () => "wrkspc_ours";
+  await submitRun({ prompt: "요약해", schema: { type: "object", required: ["n"], properties: { n: { type: "integer" } } } }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.ok(w.llm.length >= 2);
+  for (const i of w.llm.slice(1)) assert.equal(i.workspaceId, "wrkspc_ours", "첫 호출 · 형식 재시도 호출 모두 자격의 워크스페이스 id");
+  ok("S1b anthropic-workspace-id — 단발 · 재시도 호출에 자격의 id");
+}
+
 // ── S2~S3 스키마 — 첫 답 어긋남 → «형식에 맞게 다시» 1회 → 맞으면 done · 또 어긋나면 원문 붙여 실패(정확히 2번) ──
 {
   const { w, d } = world({ llmReply: (_i, n) => okText(n === 1 ? "그냥 글" : '{"n": 3}') });

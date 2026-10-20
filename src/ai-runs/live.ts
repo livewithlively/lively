@@ -34,6 +34,15 @@ export async function workspaceApiKey(): Promise<string | null> {
   return v ? v : null;
 }
 
+/** 워크스페이스 키의 Anthropic 워크스페이스 id(자격 meta.workspace_id) — 워크스페이스에 묶이지 않은 키일 때 헤더로 싣는다. 없거나 모양이 틀리면 null. */
+export async function workspaceAnthropicWorkspaceId(): Promise<string | null> {
+  const { getMemberSecret, GATEWAY_OWNER } = await import("../org/credentials/member-secret-store.js");
+  const { ANTHROPIC_WORKSPACE_ID_RE } = await import("./anthropic.js");
+  const s = await getMemberSecret(GATEWAY_OWNER, ANTHROPIC_KEY_KIND, "").catch(() => null);
+  const v = typeof s?.meta?.workspace_id === "string" ? s.meta.workspace_id.trim() : "";
+  return v && ANTHROPIC_WORKSPACE_ID_RE.test(v) ? v : null;
+}
+
 /** 이 사람이 이 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 작업 컨테이너와 같은 판정. */
 async function assertAppUsableFor(user: LivelyUser, appId: string): Promise<void> {
   const { getApp, getActiveGrant } = await import("../org/store/apps.js");
@@ -57,6 +66,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     policy: () => pol.effectiveAiRunPolicy(async () => pol.resolveAiRunPolicy(await store.aiRunPolicyRow())),
     accountSettings: async () => parseAccountSettings(await store.aiAccountRow()),
     apiKey: workspaceApiKey,
+    apiWorkspaceId: workspaceAnthropicWorkspaceId,
     getApp: async (id) => (await import("../org/store/apps.js")).getApp(id),
     assertAppUsable: assertAppUsableFor,
     submitJob: async (j: SubmitJobInput, user: LivelyUser) => {
