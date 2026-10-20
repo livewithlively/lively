@@ -27,7 +27,13 @@ export async function mintToken(input: {
   //  세션·박스 토큰에만** 켠다(computeEffectiveScopes 주석). scopes 인자는 그래도 넘겨 둔다 — 감사/토큰탭이
   //  '발급 당시 무엇이었나'를 읽고, 이 플래그를 끄면 그 값이 그대로 상한으로 돌아온다.
   followMemberScopes?: boolean;
+  /**
+   * #4891 — 이 앱 토큰의 주체를 앱 서버 급으로(검증이 LivelyUser.appServer 를 켠다): 능력 API · /mcp 에서만 통하고(auth/http-auth) 무조건
+   *  통과 도구(EXEMPT)가 꺼진다(apps/principal). appId 와 함께만 — 없으면 던진다.
+   */
+  appServerPrincipal?: boolean;
 }, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
+  if (input.appServerPrincipal === true && !input.appId) throw new Error("앱 서버 급 토큰은 앱 토큰(appId)이어야 한다");
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
@@ -36,14 +42,14 @@ export async function mintToken(input: {
   // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
   const r = await exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
-                            client_id, resource, app_id, expires_at, follow_member_scopes)
+                            client_id, resource, app_id, expires_at, follow_member_scopes, app_server_principal)
        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$11,
-              now() + ($10::int * interval '1 second'), $12)
+              now() + ($10::int * interval '1 second'), $12, $13)
      RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
      input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null,
-     input.followMemberScopes === true],
+     input.followMemberScopes === true, input.appServerPrincipal === true],
   );
   await audit("auth_token", input.userId, "mint",
     null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
@@ -200,6 +206,8 @@ export interface DbTokenIdentity {
   resource: string | null;   // RFC 8707 대상(audience) — 자원서버가 '내 앞으로 발급된 토큰인가'를 이걸로 판정.
   expiresAt: number | null;  // Unix 초. null = 만료 없음.
   appId: string | null;      // 앱 세션 토큰이면 그 앱 id(#1780). null = 일반 토큰. requireAppTool 이 도구를 축소한다.
+  /** #4891 — 앱 서버 급 주체(auth_token.app_server_principal). 켜진 토큰만 싣는다 — LivelyUser.appServer 로 그대로 간다(bearer.ts). */
+  appServer?: true;
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -217,7 +225,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       `SELECT t.user_id, t.member_id, m.email AS email, m.state AS member_state,
               t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects,
               t.follow_member_scopes AS follow_member_scopes,
-              t.client_id, t.resource, t.app_id, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch,
+              t.client_id, t.resource, t.app_id, t.app_server_principal, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
@@ -229,7 +237,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
       follow_member_scopes: boolean | null;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
-      app_live: boolean | null;
+      app_live: boolean | null; app_server_principal: boolean | null;
     } | undefined;
     if (!row) return null;
     // JSONB scopes/projects 는 런타임에 무엇이든 될 수 있다(마이그레이션 버그·손상) → 보안 경계에서
@@ -247,6 +255,9 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       followMemberScopes: row.follow_member_scopes === true,
     });
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
+    //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.
+    const appServer = row.app_server_principal === true;
+    if (appServer && !row.app_id) return null;
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
@@ -254,6 +265,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       clientId: row.client_id ?? null,
       resource: row.resource ?? null,
       appId: row.app_id ?? null,
+      ...(appServer ? { appServer: true as const } : {}),
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };

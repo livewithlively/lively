@@ -1411,6 +1411,16 @@ const appActivityCap: Capability = {
   },
 };
 
+/**
+ * 화면 파일이 없다 — 서버가 화면을 만드는 앱(#4485 · web.server)이면 종전 화면(srcdoc)으로는 못 열고 앱 주소로만 열린다고 말한다
+ *  (앱 주소 쿠키를 막는 브라우저가 라이블리 안에서 이 길로 온다 — 새 탭은 된다). 그 자리엔 «새 탭에서 열기» 단추가 없을 수 있어 주소를 글에 싣는다.
+ */
+function noUiPage(id: string, manifest: unknown, appUrl: string | null): HttpError {
+  return new HttpError(404, serverDeclOf(manifest) && appServerEnv()
+    ? `앱 '${id}' 은(는) 서버가 화면을 만드는 앱이라 이 화면에서는 열 수 없습니다 — 새 탭에서 앱 주소${appUrl ? `(${appUrl})` : ""}로 열어 주세요`
+    : `앱 '${id}' 에 UI 페이지가 없습니다`);
+}
+
 // ── 앱 UI 페이지 서빙(#1780 PR5) — 샌드박스 srcdoc iframe 용 entry HTML ──
 //  정적 URL 이 아니라 **인증 API**로 준다: 앱 UI 는 호스트가 fetch → sandbox="allow-scripts" srcdoc 으로 실어
 //  오리진 격리(불투명)·네트워크 없음. tools/call 은 postMessage 로 호스트가 앱 grant 로 제약(PR5b). scope null —
@@ -1437,7 +1447,7 @@ const appUi: Capability = {
       if (pub) {
         //  #4481 — 화면 entry 파일만 꺼낸다(판 묶음이면 저장소에서 그 파일만 · 앱 주소 · 앱 열기와 같은 자리).
         const ui = uiPagesFromFiles(pub.manifest, pub.files);
-        if (ui.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
+        if (ui.length === 0) throw noUiPage(id, pub.manifest, appAddressUrlFor(app, who, null));
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
         const csp = { ...(((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(pub.manifest) };
@@ -1448,7 +1458,7 @@ const appUi: Capability = {
       logger.warn({ app: id, published: app.published_version_no }, "공개 판 행이 없어 설치된 화면을 준다(#4667 불변식)");
     }
     const pages = await store.listUiAssets(id);
-    if (pages.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
+    if (pages.length === 0) throw noUiPage(id, app.manifest, appAddressUrlFor(app, who, null));
     const key = input.page ? String(input.page) : pages[0].page_key;
     const a = await store.getUiAsset(id, key);
     if (!a) throw new HttpError(404, `UI 페이지 없음: ${key}`);

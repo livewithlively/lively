@@ -37,6 +37,7 @@ import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { openInstalledApp } from './app-instance.js';
 import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
@@ -1501,10 +1502,10 @@ function appsPart(ctx: PartCtx): Part {
       return;
     }
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
-      const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
+      const hasUi = hasAppScreen(a) || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
       //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
-      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const attachable = (hasAppScreen(a) || a.tables.length > 0) && !a.system;
       const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
