@@ -5169,7 +5169,7 @@
   "name": "store_query",
   "scope": null,
   "mcp": true,
-  "mutates": true,
+  "mutates": false,
   "rest": [
    "POST /api/ui/store/:table/query"
   ],
