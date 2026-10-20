@@ -13,17 +13,19 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-// ⚠ tmux-exec 는 모듈을 읽을 때 env 를 복사한다(TMUX_ENV) — 소켓 자리는 **import 전에** 정한다.
+// ⚠ tmux-exec 는 모듈을 읽을 때 env 를 복사하고(TMUX_ENV) 실행 파일 자리를 굳힌다(catalog TMUX_BIN — 기본값이
+//  맥 Homebrew 경로라 리눅스 CI 에선 없다). 둘 다 **import 전에** 정한다 — 이 PATH 의 tmux 를 쓰고, 소켓은 빈 자리에.
 const TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), "gone-node-"));
+const TMUX = process.platform === "win32" ? "" : spawnSync("sh", ["-c", "command -v tmux"], { encoding: "utf8" }).stdout.trim();
 process.env.TMUX_TMPDIR = TMPDIR;
+if (TMUX) process.env.TMUX_BIN = TMUX;
 delete process.env.TMUX;          // 바깥 tmux 안에서 돌려도 그 서버에 붙지 않게
 delete process.env.LIVELY_TMUX_EXEC;
 const { isTmuxServerAbsentError } = await import("./tmux-exec.js");
 const { runSessionOp } = await import("./session-ops.js");
 
-const tmuxOk = process.platform !== "win32" && spawnSync("tmux", ["-V"], { encoding: "utf8" }).status === 0;
-const skip = tmuxOk ? false : "tmux 없음";
-const tmuxHere = (...a: string[]) => spawnSync("tmux", a, { encoding: "utf8", env: { ...process.env, TMUX_TMPDIR: TMPDIR } });
+const skip = TMUX ? false : "tmux 없음";
+const tmuxHere = (...a: string[]) => spawnSync(TMUX || "tmux", a, { encoding: "utf8", env: { ...process.env, TMUX_TMPDIR: TMPDIR } });
 after(() => { tmuxHere("kill-server"); fs.rmSync(TMPDIR, { recursive: true, force: true }); });
 
 async function asNode<T>(fn: () => Promise<T>): Promise<T> {
