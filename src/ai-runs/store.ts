@@ -142,7 +142,9 @@ export async function listAiRuns(f: AiRunListFilter): Promise<AiRunSummaryRow[]>
             left(regexp_replace(prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (result IS NOT NULL) AS has_result, error, session_note, retries,
             input_tokens, output_tokens, created_at, started_at, ended_at, updated_at
        FROM org_app_ai_run
-      WHERE ($1::text IS NULL OR app_id=$1) AND ($2::text IS NULL OR requester=$2) AND ($3::text IS NULL OR status=$3)
+      WHERE ($1::text IS NULL OR app_id=$1)
+        AND ($2::text IS NULL OR requester=$2 OR (account_kind='subscription' AND account_member=$2))  -- 내 실행 = 보낸 것 + 내 구독으로 도는 것(service.isOwnRun 과 한 뜻)
+        AND ($3::text IS NULL OR status=$3)
       ORDER BY id DESC LIMIT $4`, [f.appId, f.requester, f.status, f.limit]);
   return r.rows.map((x) => ({ ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id) } as unknown as AiRunSummaryRow));
 }

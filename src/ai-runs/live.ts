@@ -102,6 +102,16 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (ms <= 0) setImmediate(run); else setTimeout(run, ms).unref?.();
     },
     now: () => Date.now(),
+    sessionTie: async (sid, member) => {
+      const { sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
+      const { getSessionState } = await import("../sessions/session-state.js");
+      const { normalizeSessionKind } = await import("../sessions/session-kind.js");
+      const st = await getSessionState(sid).catch(() => undefined);
+      //  주인은 다리(requireSessionParticipant → sessionOwnerOf)와 같은 근거로 — 상태 행이 없고 tmux 에만 주인이 있는 세션에서 둘이 어긋나지 않게(재검토 nit).
+      const owner = String(st?.owner ?? "").trim() || (await sessionOwnerOf(sid).catch(() => null));
+      if (!owner) return { owner: null, participant: false, human: false };
+      return { owner, participant: owner === member || (await sessionCanEnter(sid, member).catch(() => false)), human: normalizeSessionKind(st?.kind) === "human" };
+    },
     attachedSessions: async (appId, member) => {
       const { sessionsWithApp, sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
       const { getSessionLabel } = await import("../terminal/tmux-exec.js");

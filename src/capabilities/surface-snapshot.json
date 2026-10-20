@@ -5153,7 +5153,7 @@
   "rest": [
    "POST /api/ui/apps/:id/tool-call"
   ],
-  "input_hash": "05e07fe981720e97"
+  "input_hash": "04ea7395cbbfc1c0"
  },
  {
   "name": "store_insert",
