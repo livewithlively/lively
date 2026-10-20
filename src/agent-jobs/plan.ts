@@ -19,6 +19,8 @@ export const RESULT_TEXT_MAX = 200_000;
 export const STDERR_TAIL_MAX = 8_000;
 /** 판의 박동 간격 — silent_sec(기본 90초)의 1/18. 진행 꼬리도 이 간격으로 올라온다. */
 export const TICK_MS = 5_000;
+/** #4489 stream 판이 첫 지시를 되돌려 받기까지 기다리는 상한 — 큰 대화를 이어받는 하네스도 지시를 읽기 전에 대화를 다 올린다(맥 실측 첫 답 15~19초). */
+export const REPLAY_WAIT_MS = 90_000;
 /** 라벨 상한(문자). */
 export const LABEL_MAX = 120;
 
@@ -196,8 +198,11 @@ export interface RunnerReport {
   stopped: string | null;
   conversation_id: string | null;
   model: string | null;
-  /** 하네스의 마지막 result 이벤트에서 고른 칸(없으면 null — 하네스가 답 없이 끝났다). */
-  result: { text: string | null; is_error: boolean; subtype: string | null; num_turns: number | null; duration_ms: number | null; cost_usd: number | null; usage: Record<string, unknown> | null } | null;
+  /**
+   * 하네스의 마지막 result 이벤트에서 고른 칸(없으면 null — 하네스가 답 없이 끝났다).
+   *  turns(#4489 분기 — stream 입력): 같은 프로세스에서 답한 턴 수(«형식에 맞게 다시» 면 2). usage 는 그 턴들의 합이다.
+   */
+  result: { text: string | null; is_error: boolean; subtype: string | null; num_turns: number | null; duration_ms: number | null; cost_usd: number | null; usage: Record<string, unknown> | null; turns?: number | null } | null;
   stderr_tail: string;
   tail: string;
 }
@@ -246,6 +251,7 @@ export function parseRunnerReport(body: unknown): RunnerReport {
       duration_ms: num(res.duration_ms),
       cost_usd: num(res.cost_usd),
       usage: usage ? numericFields(usage) : null,
+      turns: typeof res.turns === "number" && Number.isInteger(res.turns) && res.turns >= 0 && res.turns <= 100 ? res.turns : null,
     } : null,
     stderr_tail: str(b.stderr_tail, STDERR_TAIL_MAX) ?? "",
     tail: str(b.tail, TAIL_MAX) ?? "",

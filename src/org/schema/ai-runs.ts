@@ -45,6 +45,31 @@ export async function initAiRuns(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_open_idx ON org_app_ai_run(id) WHERE status IN ('queued','running')`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_job_idx ON org_app_ai_run(job_id) WHERE job_id IS NOT NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_token_idx ON org_app_ai_run(proxy_token_hash) WHERE proxy_token_hash IS NOT NULL`);
+  //  fork_session(#4489 앱 v2-10) — 분기 실행이면 그 대상 세션 id(대화를 이어받은 사람 세션). NULL = 새 대화(v2-9).
+  //   세션 앱 칸이 «이 앱이 이 세션 대화로 보낸 요청» 기록을 이 칸으로 찾는다(설계 §12 ④ «앱이 보낸 요청 원문을 세션 앱 칸에 기록으로»).
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS fork_session TEXT`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_fork_idx ON org_app_ai_run(fork_session, id DESC) WHERE fork_session IS NOT NULL`);
+
+  // ── org_session_notice — 사람 세션의 **안 읽은 알림**(#4489 앱 v2-10 · 설계 §4 «분기 실행» 3·4).
+  //  분기 실행이 끝나면 게이트웨이가 그 세션 앞으로 한 줄을 쌓는다(성공이면 분기 AI 가 쓴 session_note, 실패면 «앱 요청 실패 — 사유»). 사람이 다음 말을 보내면
+  //  턴 훅(session-apps-inject)이 안 읽은 것을 가져와 AI 입력에 붙이고, **붙인 뒤에** «N번까지 전달» 을 알린다(delivered_at) — 가져오며 읽음 처리하면
+  //  훅 시간 초과 때 사라진다(설계 §4). 사람 입력창엔 안 보이고 AI 입력 · 세션 기록에만 남는다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_notice(
+      id BIGSERIAL PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'ai_run' CHECK (kind IN ('ai_run')),
+      app_id TEXT,
+      run_id BIGINT,
+      requester TEXT,
+      text TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      delivered_at TIMESTAMPTZ);
+  `);
+  //  훅이 매 턴 보는 것 — 그 세션의 안 읽은 알림(먼저 온 것부터). 실행 한 건에 알림은 하나다 — 실행을 끝맺는 조건부 UPDATE 와 같은 문장에서
+  //   쌓는다(ai-runs/store.finishAiRun 의 CTE — 끝맺기가 된 쪽만 · 둘 사이에 죽어도 반쪽이 없다). UNIQUE 인덱스로 막지 않는 것은 매니지드 테넌트
+  //   게이트가 tenant_id 없는 자연키 UNIQUE 를 위반으로 보기 때문이다(lvly-cloud tenantrls ⑤).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_notice_unread_idx ON org_session_notice(session_id, id) WHERE delivered_at IS NULL`);
 
   // ── org_app_llm_call — LLM 프록시(/api/llm/anthropic/*)를 지난 호출 한 건의 계측(설계 §3-E «프록시 = API 키 갈래 전체의 출구 — 계측·한도 한곳»).
   //  단발 실행(run_id 있음) · 에이전트 작업이 프록시 토큰으로 부른 것(run_id 있음) · 고급 길(앱 서버 토큰 · run_id 없음) 전부 여기 한 줄.

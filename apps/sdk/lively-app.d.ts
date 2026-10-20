@@ -32,6 +32,26 @@ export interface LivelyError extends Error {
   reason: string | null;
 }
 
+/** AI 실행 하나(lively.ai.*). result · session_note 는 보낸 사람 본인에게만 온다. */
+export interface LivelyAiRun {
+  id: number;
+  status: "queued" | "running" | "done" | "failed" | "canceled";
+  app_id: string;
+  kind: "single" | "agent";
+  account: { kind: "api_key" } | { kind: "subscription"; member: string };
+  executor: "proxy" | "job";
+  error: string | null;
+  retries: number;
+  /** #4489 — 붙은 세션 분기면 그 세션 id. */
+  fork_session: string | null;
+  usage: { input_tokens: number | null; output_tokens: number | null } | null;
+  created_at: string; started_at: string | null; ended_at: string | null;
+  /** 끝나면 { text, json?(schema 를 줬을 때), model, usage, duration_ms, retries }. */
+  result?: { text: string; json?: unknown; model?: string | null; duration_ms?: number | null; retries?: number } | null;
+  /** #4489 — 분기 AI 가 그 세션에 남긴 짧은 메모(그 세션의 안 읽은 알림과 같은 글). */
+  session_note?: string | null;
+}
+
 /** 앱 UI ↔ 라이블리 호스트 다리. 모든 호출은 **그 앱의 grant 범위 안에서만** 서버가 재판정해 실행한다. 실패는 {@link LivelyError} 로 reject 한다. */
 export interface LivelyApp {
   readonly version: 1;
@@ -181,6 +201,37 @@ export interface LivelyApp {
      *  · 붙은 세션이 없으면 reject(code -32602).
      */
     send(text: string): Promise<{ sent: boolean; session: string; transport?: string | null; draft?: boolean }>;
+  };
+
+  /**
+   * AI 실행(#4488) — 입구 하나. 앱은 실행 계정을 고르지 않는다(워크스페이스 설정 — 작업별 > 앱별 > 기본값). 매니페스트 `permissions.ai_runs: true` + 동의.
+   *  · 파일 · agent 없이 보내면 단발(API 키면 몇 초), 그 밖은 작업 컨테이너(분 단위 — `wait` 초 안에 안 끝나면 `get` 으로 다시 본다).
+   *  · `schema` 를 주면 답을 검사해 `result.json` 에 싣는다(어긋나면 «형식에 맞게 다시» 한 번 · 그래도 어긋나면 실패).
+   *  · **붙은 세션에서 실행**(#4489) — `target: { fork: lively.session }` 이면 그 세션 대화를 이어받아 **보이지 않게 한 번** 돈다.
+   *    세션 기록 · 사람 화면은 그대로다. 그 세션 주인의 구독으로, 그 세션 작업 폴더에서 **읽기만** 한다(대화 · 이 앱 표 ·
+   *    작업 폴더 파일(숨김 · 비밀 이름 제외) · 라이블리 읽기 도구). 매니페스트 `permissions.ai_fork: true` 를 선언하고(동의 창에
+   *    「붙은 세션에서 실행」으로 보인다) 사람이 동의해야 한다. 그 세션 주인이나 그 세션에 초대받은 사람만 보낼 수 있고, 초대받은 사람이
+   *    보내면 세션 주인도 이 앱의 그 항목에 동의해 두었어야 한다(아니면 reason `consent_required`).
+   *    답의 `session_note`(분기 AI 가 함께 쓴 짧은 메모)는 그 세션의 안 읽은 알림이 되어, 사람이 다음 말을 보낼 때 세션 AI 가 받는다
+   *    (실패도 알림으로 남는다). 되는지는 `targets()` 의 `attached[].can_fork`(안 되면 `fork_reason`).
+   */
+  ai: {
+    run(opts: {
+      prompt: string; system?: string; schema?: Record<string, unknown>; job?: string; model?: string; label?: string;
+      files?: string[]; project_id?: number; agent?: boolean; timeout_min?: number; wait?: number;
+      target?: { fork: string };
+    }): Promise<LivelyAiRun>;
+    get(id: number): Promise<LivelyAiRun>;
+    /** 내 실행(최근 것부터 · 요약). fork_session 을 주면 그 세션 대화로 돈 분기만. */
+    list(opts?: { status?: LivelyAiRun["status"]; limit?: number; fork_session?: string }): Promise<LivelyAiRun[]>;
+    cancel(id: number): Promise<LivelyAiRun>;
+    targets(): Promise<{
+      account: { kind: "api_key" | "subscription" | null; available: boolean; reason: string | null };
+      jobs: Array<{ name: string; account: { kind: "api_key" | "subscription" | null; available: boolean; reason: string | null } }>;
+      attached: Array<{ session_id: string; title: string; owner_is_you: boolean; can_send: boolean; can_fork: boolean; fork_reason: string | null }>;
+      /** 이 배포 · 이 앱이 분기를 쓸 수 있나(세션별 가부는 attached[].can_fork). */
+      fork: boolean;
+    }>;
   };
 
   /**

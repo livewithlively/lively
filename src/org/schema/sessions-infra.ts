@@ -613,6 +613,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
   //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 · 되돌리기 · 끝내기가 지운다(store.failBootAgentJob — 박동한 판은 못 끝낸다).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
+  //  fork(#4489 앱 v2-10): 세션 분기 실행 — 사람 세션의 대화를 이어받는 새 대화(claude `--resume <대화> --fork-session --no-session-persistence`)를
+  //   이 작업 컨테이너에서 돌린다. {session · conversation · harness · model · effort · block_connectors · app_folder}(agent-jobs/fork-boot.ForkSpec).
+  //   NULL 이면 보통 작업이다. 분기는 그 세션 주인의 자리·구독으로 돌고(account_member = 주인), 작업 폴더는 그 세션의 작업 폴더다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fork JSONB`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).

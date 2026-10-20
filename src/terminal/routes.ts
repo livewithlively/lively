@@ -143,7 +143,7 @@ async function transcriptResumable(id: string, st: { harness?: string | null; di
  *   (session_host, 인메모리 hello 상태)이 재시작 직후나 미보고 노드에서 비어 있을 수 있어서다 —
  *   그 공백이 그대로 «못 본다» 로 흐르면 안전하지만, kind 는 등록 때 박히는 값이라 흔들리지 않는다.
  */
-async function resumeTranscriptCheck(
+export async function resumeTranscriptCheck(   // #4489 — 세션 분기 실행(ai-runs/live)도 같은 판정을 쓴다(대화 파일이 그 자리에 있나)
   id: string,
   st: { harness?: string | null; dir?: string | null; owner?: string | null; transcript_path?: string | null },
   uuid: string,
@@ -265,7 +265,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   registerSessionLedgerRoute(app);        // #2544 — /session-ledger (브로커 회수 판정의 desired 입력 — 경로가 겹치지 않는다)
   registerSessionHostRoute(app);          // #2600 T2 d5 — /node/session-host/ensure (브로커가 세션 호스트 자격을 받아 가는 창구. 장부와 같은 «테넌트 비밀 + 서명» 문)
-  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,boot-failed,tick,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀)
+  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,boot-failed,tick,turn,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀 · turn 은 #4489)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);

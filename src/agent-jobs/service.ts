@@ -32,11 +32,12 @@ import type { LivelyUser } from "../context.js";
 import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
-  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
+  LABEL_MAX, PROMPT_MAX, REPLAY_WAIT_MS, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
   jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
   PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
+import type { ForkBoot } from "./fork-boot.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
 
 type Store = typeof import("./store.js");
@@ -56,7 +57,7 @@ export interface AgentJobDeps {
    * 이 작업을 아직 돌려도 되나 — 실행 계정이 활성 구성원이고, 앱 작업이면 그 사람이 그 앱을 쓸 수 있나(보임 · 켜짐 · 동의).
    *  «안 된다» 는 HttpError 로 던진다(띄우기 직전 · 도는 동안 감시). 그 밖의 던짐은 «판정을 못 했다»(DB 가 잠깐 막힘)다.
    */
-  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester">): Promise<void>;
+  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester" | "fork">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
@@ -65,6 +66,14 @@ export interface AgentJobDeps {
   jobEnv?(job: AgentJobRow): Promise<Record<string, string>>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
+  /**
+   * #4489 세션 분기 작업의 판 재료(하네스 인자 · 환경 · 판정기 파일 · stream 입력 · 턴 수). 분기 작업(job.fork)이면 이 길로만 뜬다 — 라이블리 MCP 는
+   *  작업 토큰이 아니라 그 세션 주인 홈의 설정 그대로 붙는다(본 세션과 같은 도구 목록이어야 캐시가 맞는다 · 쓰기는 읽기 전용 모드와 판정기가 막는다).
+   *  던지면 그 작업은 돌지 않는다.
+   */
+  forkBoot?(job: AgentJobRow): Promise<ForkBoot>;
+  /** #4489 — 판이 한 턴의 답을 보여 줬다. 다음 지시(«형식에 맞게 다시»)가 있으면 그 글, 없으면 null. 던지면 null 로 본다. */
+  onTurn?(job: Pick<AgentJobRow, "id">, turn: { n: number; text: string | null; is_error: boolean }): Promise<string | null>;
   revokeToken(tokenHash: string): Promise<void>;
   /** 그 프로젝트 폴더에서 이 사람이 셸을 띄울 수 있나(사람 세션과 같은 판정 — 안 되면 던진다). */
   assertProjectCwd(user: LivelyUser, projectId: number): Promise<void>;
@@ -309,6 +318,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   const callback = d.store.newJobSecret();
   const booted = await d.store.bootAgentJob(auth.id, auth.boot_hash!, callback.hash);
   if (!booted) throw new HttpError(409, "이미 시작한 작업입니다");   // 두 판이 겹쳐 물었다 — 먼저 온 쪽만
+  if (booted.fork) return forkBootJob(booted, callback.secret, d);
   let t: { token: string; tokenHash: string } | null = null;
   let why = "실행 계정이 활성 구성원이 아닙니다";
   try { t = await d.mintMcpToken(booted); } catch (e) { why = String((e as Error)?.message ?? e); }
@@ -365,6 +375,51 @@ export async function onBootFailed(id: number, presented: string, body: unknown,
   return { ok: true };
 }
 
+/**
+ * #4489 세션 분기 작업의 첫 말 — 작업 토큰을 만들지 않는다(라이블리 MCP 는 그 세션 주인 홈의 설정 그대로 · 읽기 전용 모드). 판 재료는 d.forkBoot 가
+ *  만든다(하네스 인자 · 환경 · 판정기 파일 · stream 입력). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
+ */
+async function forkBootJob(booted: AgentJobRow, secret: string, d: AgentJobDeps): Promise<RunnerJob> {
+  let fb: ForkBoot;
+  try {
+    if (!d.forkBoot) throw new Error("이 배포는 세션 분기 작업을 띄울 수 없습니다");
+    fb = await d.forkBoot(booted);
+  } catch (e) {
+    const why = String((e as Error)?.message ?? e);
+    logger.warn({ job: booted.id, err: why }, "[agent-job] 분기 판 재료를 못 만들었다 — 돌리지 않는다");
+    const ended = await d.store.finishAgentJob(booted.id, { status: "failed", error: `세션 분기를 준비하지 못했습니다: ${why}`.slice(0, 600), from: ["running"] });
+    if (ended) { d.later(() => reapJob(ended, d), 0); d.later(() => dispatchAgentJobs(d), 0); }
+    throw new HttpError(410, "작업을 시작하지 못했습니다");
+  }
+  logger.info({ job: booted.id, session: booted.session_id }, "[agent-job] 분기 판이 섰다");
+  return {
+    id: booted.id, secret, code: RUNNER_SOURCE, argv: fb.argv, prompt: booted.prompt, mcp: null, env: fb.env, cwd: booted.cwd,
+    files: fb.files, input: fb.input, turns: fb.turns, replayWaitMs: REPLAY_WAIT_MS,
+    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
+  };
+}
+
+/**
+ * 판의 턴 보고(#4489 — stream 입력 작업) — 한 턴의 답을 보이고 다음 지시를 받는다. 다음 지시를 정하는 것은 d.onTurn(ai-runs — 결과 형식 판정)이다.
+ *  끝난 작업 410 · 비밀이 틀리면 401(박동과 같은 인증). 판정이 던지면 «다음 없음» 으로 접는다(판은 입력을 닫고 끝낸다 — 결과는 끝맺기가 판정한다).
+ */
+export async function onTurn(id: number, presented: string, body: unknown, d: AgentJobDeps): Promise<{ next: string | null }> {
+  await authed(id, presented, "secret", d);   // 끝난 작업은 여기서 410
+  if (!d.onTurn) return { next: null };
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const turn = {
+    n: typeof b.n === "number" && Number.isInteger(b.n) ? b.n : 0,
+    text: typeof b.text === "string" ? wellFormedText(b.text) : null,
+    is_error: b.is_error === true,
+  };
+  const next = await d.onTurn({ id }, turn).catch((e) => {
+    logger.warn({ job: id, err: (e as Error)?.message }, "[agent-job] 턴 판정 실패 — 다음 턴 없이 끝낸다");
+    return null;
+  });
+  return { next: typeof next === "string" && next.trim() ? next.slice(0, PROMPT_MAX) : null };
+}
+const wellFormedText = (s: string): string => noNul(s).slice(0, RESULT_TEXT_MAX);
+
 /** 판의 박동 — 진행 꼬리를 싣고 취소 요청을 돌려준다. */
 export async function onTick(id: number, presented: string, body: unknown, d: AgentJobDeps): Promise<{ cancel: boolean }> {
   await authed(id, presented, "secret", d);
@@ -383,7 +438,7 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
   const result = rep.result ? {
     text: rep.result.text, is_error: rep.result.is_error, subtype: rep.result.subtype, num_turns: rep.result.num_turns,
     duration_ms: rep.result.duration_ms, cost_usd: rep.result.cost_usd, usage: rep.result.usage, model: rep.model,
-    truncated: (rep.result.text?.length ?? 0) >= RESULT_TEXT_MAX,
+    truncated: (rep.result.text?.length ?? 0) >= RESULT_TEXT_MAX, ...(rep.result.turns != null ? { turns: rep.result.turns } : {}),
   } : null;
   const ended = await d.store.finishAgentJob(id, {
     status: out.status, error: out.error, result, exitCode: rep.exit_code, conversationId: rep.conversation_id, tail: rep.tail, from: ["running"],

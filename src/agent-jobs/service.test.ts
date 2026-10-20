@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
-  submitAgentJob, onBoot, onBootFailed, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
+  submitAgentJob, enqueueAgentJob, onBoot, onBootFailed, onTick, onTurn, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims } from "./plan.js";
@@ -85,7 +85,7 @@ function world(): World {
       const row: AgentJobRow = {
         id, status: "queued", requester: j.requester, account_kind: j.accountKind, account_member: j.accountMember, app_id: j.appId,
         project_id: j.projectId, cwd: j.cwd, harness: j.harness, model: j.model, label: j.label, prompt: j.prompt,
-        resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, bare: j.bare === true, session_id: null,
+        resume_conversation: j.resumeConversation, resume_job_id: j.resumeJobId, timeout_sec: j.timeoutSec, bare: j.bare === true, fork: j.fork ?? null, session_id: null,
         boot_hash: null, fail_hash: null, secret_hash: null, mcp_token_hash: null, conversation_id: null, output_tail: "", result: null, exit_code: null,
         error: null, cancel_requested: false, cancel_reason: null, attempts: 0, created_at: new Date(now), claimed_at: null, started_at: null,
         last_tick_at: null, ended_at: null, reaped: false,
@@ -399,6 +399,85 @@ await t("B2 부트 성공 — 콜백 비밀 · 판 본체 · 하네스 인자(�
   assert.equal(lv.headers.Authorization, `Bearer tok-${id}`);
   assert.equal(lv.headers["x-lively-workspace"], "acme-1234");
   assert.equal(job.timeoutMs, row.timeout_sec * 1000);
+});
+
+// ── #4489 세션 분기 작업 — 판 재료는 forkBoot 가 · 작업 토큰 없음 · 턴 보고 ──
+const FORK_SPEC = { session: "box-alice", conversation: "11111111-2222-3333-4444-555555555555", harness: "claude", model: null, effort: null, auto_approve: false, block_connectors: false, app_folder: ".lively/apps/memo" };
+async function startedFork(w: World): Promise<{ id: number; boot: string }> {
+  w.usable.add("alice:memo");
+  const row = await enqueueAgentJob({
+    requester: "bob", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: 7, cwd: "/work/proj", harness: "claude", model: null,
+    label: "분기", prompt: "[라이블리 — 앱 분기 실행]\n질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, fork: FORK_SPEC,
+  }, w.policy, w.deps);
+  await w.drain(0);
+  return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
+}
+
+await t("K1 분기 부트 — forkBoot 의 재료 그대로(stream · 턴 1 · 판정기 파일) · 작업 토큰을 만들지 않는다 · 그 세션 작업 폴더", async () => {
+  const w = world();
+  const seen: AgentJobRow[] = [];
+  w.deps.forkBoot = async (job) => {
+    seen.push(job);
+    return { argv: ["claude", "-p", "--resume", "c"], env: { LIVELY_SESSION_ID: "box-alice", LIVELY_HOOKS_OFF: "1", LIVELY_MODE: "readonly" }, files: [{ name: "guard.cjs", content: "//" }], input: "stream", turns: 1 };
+  };
+  const { id, boot } = await startedFork(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.equal(seen.length, 1); assert.deepEqual(seen[0]!.fork, FORK_SPEC);
+  assert.deepEqual(job.argv, ["claude", "-p", "--resume", "c"]);
+  assert.deepEqual(job.env, { LIVELY_SESSION_ID: "box-alice", LIVELY_HOOKS_OFF: "1", LIVELY_MODE: "readonly" });
+  assert.deepEqual(job.files, [{ name: "guard.cjs", content: "//" }]); assert.equal(job.input, "stream"); assert.equal(job.turns, 1);
+  assert.equal(job.replayWaitMs, 90_000, "되돌려 받기 상한 — 하네스가 지시를 안 되돌려 주면 시간 상한까지 서 있지 않는다");
+  assert.equal(job.mcp, null); assert.equal(job.cwd, "/work/proj"); assert.equal(job.code, RUNNER_SOURCE);
+  assert.deepEqual(w.minted, [], "분기 작업에 작업 토큰을 만들었다(라이블리 도구는 그 세션 주인 홈 설정 그대로 · 읽기 전용)");
+  assert.equal(w.rows.get(id)!.mcp_token_hash, null); assert.equal(w.rows.get(id)!.status, "running");
+});
+
+await t("K2 분기 부트 — 재료를 못 만들면(또는 이 배포에 길이 없으면) 410 · 작업 failed(사유) · 걷기 예약", async () => {
+  for (const fb of [async () => { throw new Error("분기 좌표의 모양이 틀렸습니다"); }, undefined]) {
+    const w = world();
+    w.deps.forkBoot = fb as AgentJobDeps["forkBoot"];
+    const { id, boot } = await startedFork(w);
+    await assert.rejects(onBoot(id, boot, w.deps), httpErr(410));
+    const row = w.rows.get(id)!;
+    assert.equal(row.status, "failed"); assert.match(row.error!, /세션 분기를 준비하지 못했습니다/);
+    assert.ok(w.later.length > 0, "걷기 · 다음 배차를 예약하지 않았다");
+    assert.deepEqual(w.minted, []);
+  }
+});
+
+await t("K3 턴 보고 — 비밀 401 · 끝난 작업 410 · 판정이 준 다음 지시 · 판정 실패/없음은 null · 글 정리", async () => {
+  const w = world();
+  w.deps.forkBoot = async () => ({ argv: ["claude"], env: {}, files: [], input: "stream", turns: 1 });
+  const turns: Array<{ n: number; text: string | null; is_error: boolean }> = [];
+  w.deps.onTurn = async (j, turn) => { assert.equal(j.id, id); turns.push(turn); return turn.n === 1 ? "형식에 맞게 다시" : null; };
+  const { id, boot } = await startedFork(w);
+  const job = await onBoot(id, boot, w.deps);
+  await assert.rejects(onTurn(id, "wrong", { n: 1, text: "x" }, w.deps), httpErr(401));
+  assert.deepEqual(await onTurn(id, job.secret, { n: 1, text: "모양\u0000틀린 답", is_error: false }, w.deps), { next: "형식에 맞게 다시" });
+  assert.deepEqual(turns[0], { n: 1, text: "모양틀린 답", is_error: false }, "NUL 은 걷는다");
+  assert.deepEqual(await onTurn(id, job.secret, { n: 2, text: "또" }, w.deps), { next: null });
+  assert.deepEqual(await onTurn(id, job.secret, { n: "x", text: 5, is_error: "yes" }, w.deps), { next: null });
+  assert.deepEqual(turns[2], { n: 0, text: null, is_error: false }, "꼴 밖 칸은 버린다");
+  w.deps.onTurn = async () => { throw new Error("판정 실패"); };
+  assert.deepEqual(await onTurn(id, job.secret, { n: 1, text: "x" }, w.deps), { next: null });
+  w.deps.onTurn = undefined;
+  assert.deepEqual(await onTurn(id, job.secret, { n: 1, text: "x" }, w.deps), { next: null });
+  await w.deps.store.finishAgentJob(id, { status: "canceled", error: "x" });
+  await assert.rejects(onTurn(id, job.secret, { n: 1 }, w.deps), httpErr(410));
+});
+
+await t("K4 결과 — 판이 센 턴 수를 결과에 싣는다(없으면 칸이 없다)", async () => {
+  const w = world();
+  w.deps.forkBoot = async () => ({ argv: ["claude"], env: {}, files: [], input: "stream", turns: 1 });
+  const { id, boot } = await startedFork(w);
+  const job = await onBoot(id, boot, w.deps);
+  await onResult(id, job.secret, { exit_code: 0, conversation_id: null, tail: "", model: "m", result: { text: "답", is_error: false, subtype: "success", num_turns: 2, duration_ms: 5, cost_usd: null, usage: { input_tokens: 3 }, turns: 2 } }, w.deps);
+  assert.equal((w.rows.get(id)!.result as { turns?: number }).turns, 2);
+  const w2 = world();
+  const s = await startedJob(w2);
+  const j2 = await onBoot(s.id, s.boot, w2.deps);
+  await onResult(s.id, j2.secret, { exit_code: 0, conversation_id: "c", tail: "", model: "m", result: { text: "답", is_error: false, subtype: "success", num_turns: 1, duration_ms: 5, cost_usd: 0.1, usage: null } }, w2.deps);
+  assert.equal("turns" in (w2.rows.get(s.id)!.result as object), false);
 });
 
 await t("박동 — 비밀이 맞을 때만 · 진행 꼬리·대화 id 를 싣고 취소 요청을 돌려준다", async () => {

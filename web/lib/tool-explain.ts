@@ -29,6 +29,7 @@ export const TOOL_EXPLAIN: Readonly<Record<string, string>> = {
   app_workspace_files: '내가 볼 수 있는 모든 프로젝트의 자료 파일을 읽어요. 고치지는 못해요.',
   agent_job_run: '이 앱 화면에서 내가 보낸 지시를 AI가 내 이름으로 따로 맡아 처리해요.',
   app_ai_run: '이 앱이 AI에게 일을 시켜요. 내가 이 앱 화면에서 보낸 요청만 처리해요.',
+  app_ai_fork: '이 앱을 붙인 세션의 대화를 이어받아 AI가 보이지 않게 한 번 답해요. 읽기만 하고, 답은 이 앱으로 가요.',
   source_list: '자료(올린 파일과 모아 온 글)의 목록을 봐요.',
   source_get: '자료 하나를 열어 내용을 읽어요.',
   source_tree: '자료가 어떤 폴더에 들어 있는지 폴더 구조를 봐요.',

@@ -102,7 +102,8 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
   const memMb = mp ? (mp.per_session_max_mb > 0 ? mp.per_session_max_mb : mp.per_session_high_mb) : 0;
   const memRequestMb = mp?.per_session_request_mb ?? 0;
   //  프로젝트 폴더에서 도는 앱 작업이면 그 앱 폴더를 `<작업 폴더>/.lively/apps/<앱>` 에 붙인다(#4684 와 같은 길). 앱 폴더가 작업 폴더면 붙일 것이 없다.
-  const apps = job.app_id && job.project_id != null ? [job.app_id] : undefined;
+  //   #4489 세션 분기도 붙인다 — 분기는 그 세션의 작업 폴더에서 돌고, 그 세션에 붙은 앱의 폴더를 본 세션처럼 읽는다(판정기가 그 자리만 연다).
+  const apps = job.app_id && (job.project_id != null || job.fork) ? [job.app_id] : undefined;
   //  작업 폴더 — 프로젝트 폴더는 사람 세션처럼 멤버 경계에서 먼저 만든다(createSession 과 같은 순서 · 없으면 바인드가 실패한다).
   //   앱 폴더(`/work/apps/<앱>`)는 브로커가 확보 때 원본을 보장한다(lvly-cloud #4490 — 링크 없이 O_NOFOLLOW 사슬).
   if (job.project_id != null) {

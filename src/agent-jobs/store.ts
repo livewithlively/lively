@@ -24,6 +24,8 @@ export interface AgentJobRow {
   timeout_sec: number;
   /** #4488 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다. */
   bare: boolean;
+  /** #4489 세션 분기 실행의 좌표(fork-boot.ForkSpec 의 저장 모양 — 읽을 때 parseForkSpec 로 고른다). 보통 작업은 null. */
+  fork?: Record<string, unknown> | null;
   session_id: string | null;
   boot_hash: string | null;
   /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동이 지운다(그 전까지만 연다). */
@@ -49,7 +51,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, fork, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -91,6 +93,8 @@ export interface NewAgentJob {
   timeoutSec: number;
   /** 단발(도구 없음) — 없으면 false. */
   bare?: boolean;
+  /** #4489 세션 분기 실행의 좌표 — 없으면 보통 작업. */
+  fork?: Record<string, unknown> | null;
 }
 
 /**
@@ -109,10 +113,10 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, fork)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.fork ? JSON.stringify(j.fork) : null]);
     return { row: norm(rows[0])! };
   });
 }

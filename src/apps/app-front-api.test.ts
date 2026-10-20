@@ -63,6 +63,9 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
     ["GET", "/ai/runs?status=done&limit=5&app_id=x", undefined, "app_ai_runs", { status: "done", limit: 5 }],
     ["GET", "/ai/runs", undefined, "app_ai_runs", {}],
     ["GET", "/ai/runs/42", undefined, "app_ai_run_get", { id: 42 }],
+    //  #4489 붙은 세션 분기 — 대상(target)은 그대로 넘기고, 목록은 그 세션 분기만 거를 수 있다.
+    ["POST", "/ai/runs", { prompt: "x", target: { fork: "box-a" }, project_id: 3 }, "app_ai_run", { prompt: "x", target: { fork: "box-a" }, project_id: 3 }],
+    ["GET", "/ai/runs?fork_session=box-a&limit=3", undefined, "app_ai_runs", { limit: 3, fork_session: "box-a" }],
     ["POST", "/ai/runs/42/cancel", {}, "app_ai_run_cancel", { id: 42 }],
   ];
   for (const [m, p, b, name, args] of cases) {

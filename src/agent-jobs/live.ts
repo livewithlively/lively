@@ -12,6 +12,21 @@ import type { LivelyUser } from "../context.js";
 import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
 import { jobSeatMember } from "./plan.js";
 
+/**
+ * #4489 — 세션 분기에서 열 라이블리 도구(판정기 설정 livelyAllow) — 이름으로 적은 목록(fork-guard.FORK_LIVELY_READ_TOOLS) 가운데 지금 MCP 로
+ *  노출됐고 쓰지 않는 것. 조직 HTTP 도구 · 프록시 MCP(슬랙 · 메일 · 드라이브 …)는 열지 않는다 — 라이블리 밖으로 나가는 도구이고, 읽기 전용 모드
+ *  (x-lively-mode=readonly)에서도 등록되므로 판정기 목록이 그 둘의 유일한 문이다.
+ */
+async function forkLivelyAllow(): Promise<string[]> {
+  const idx = await import("../capabilities/index.js");
+  const { forkLivelyReadTools } = await import("./fork-guard.js");
+  const { listBuiltinOverrides } = await import("../org/store/tools.js");
+  const overrides = await listBuiltinOverrides().catch(() => undefined);
+  const tools: Array<{ name: string; mutates: boolean }> = [];
+  for (const cap of idx.registry.values()) if (idx.isToolExposed(cap, overrides)) tools.push({ name: cap.name, mutates: idx.capMutates(cap) });
+  return forkLivelyReadTools(tools);
+}
+
 let cached: AgentJobDeps | null = null;
 /** 이 프로세스가 판의 말을 듣기 시작한 시각 — 재기동 직후의 무응답 판정 보류 기준(plan.sweepDecision listeningSince). */
 const LISTENING_SINCE = Date.now() - Math.round(process.uptime() * 1000);
@@ -46,10 +61,28 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
       const m = seat ? await getMember(seat) : null;
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${seat ?? "?"})이 활성 구성원이 아닙니다`);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
+      //  #4489 분기 — 접수 뒤 기다리는 사이 «붙은 세션에서 실행» 동의를 거뒀으면 띄우지 않는다(세션 주인 · 보낸 사람 둘 다 — 접수 때와 같은 판정).
+      if (job.fork && job.app_id) {
+        const { getApp } = await import("../org/store/apps.js");
+        const ai = await (await import("../ai-runs/live.js")).liveAiRunDeps();
+        const app = await getApp(job.app_id);
+        for (const who of new Set([m.id, job.requester])) {
+          if (!app || (await ai.forkConsent(who, app)) !== "ok") throw new HttpError(403, `${who}님의 «붙은 세션에서 실행» 동의가 없습니다`);
+        }
+      }
     },
     //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체.
     jobEnv: async (job) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps()); },
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
+    //  #4489 — 세션 분기 작업의 판 재료(하네스 인자 · 환경 · 판정기 파일) · 턴 판정(«형식에 맞게 다시» — ai-runs 가 정한다).
+    forkBoot: async (job) => {
+      const { parseForkSpec, forkBoot } = await import("./fork-boot.js");
+      const spec = parseForkSpec(job.fork);
+      if (!spec) throw new Error("분기 좌표의 모양이 틀렸습니다");
+      if (!job.app_id) throw new Error("분기 작업에 앱이 없습니다");
+      return forkBoot({ spec, cwd: job.cwd, appId: job.app_id, livelyAllow: await forkLivelyAllow() });
+    },
+    onTurn: async (job, turn) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).onForkTurn(job, turn, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {
       const ttlSec = job.timeout_sec + MCP_TOKEN_SLACK_SEC;

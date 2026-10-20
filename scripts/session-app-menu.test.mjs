@@ -161,5 +161,45 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   ok(/「목록에서 빼기」로 격자에서 치웁니다/.test(DOCS) && /「다시 넣기」로 언제든 돌려 둡니다/.test(DOCS), "사용 가이드 「앱」에 빼기·다시 넣기 한 줄");
 }
 
+// ══ S6-7 #4489 「이 세션 대화로 돌린 실행」 — 분기를 선언한 앱만 줄이 서고, 기록 줄 · 누른 뒤 보일 말 ══
+{
+  const h = Object.fromEntries(["edit", "prefs", "versions", "original", "big", "detach"].map((k) => [k, () => {}]));
+  const picked = [];
+  const withFork = menu.sessAppMenuRows({ title: "x", hasPrefs: true, overridesBuiltin: false, versionNo: 2 }, { ...h, forkRuns: () => picked.push("fork") });
+  const labels = withFork.map((r) => (r.sep ? "—" : r.label));
+  eq(labels.slice(0, 4), ["AI에게 고치기…", "표시 설정", "버전 이력…", "이 세션 대화로 돌린 실행…"], "S6-7 분기를 선언한 앱 → 「버전 이력…」 바로 다음 줄");
+  withFork.find((r) => r.label === "이 세션 대화로 돌린 실행…").run();
+  eq(picked, ["fork"], "S6-7 그 줄은 제 손잡이를 부른다");
+  ok(!menu.sessAppMenuRows({ title: "x", hasPrefs: true, overridesBuiltin: false, versionNo: 2 }, h).some((r) => r.label === "이 세션 대화로 돌린 실행…"), "S6-7 손잡이가 없으면(선언 안 한 앱) 줄이 없다");
+
+  const opened = [];
+  const at = new Date(2026, 9, 20, 9, 5).toISOString();
+  const rows = menu.forkRunRows([
+    { id: 7, status: "done", requester: "bob", label: null, prompt_preview: "3쪽\n  요약해 줘", created_at: at },
+    { id: 8, status: "failed", requester: "alice", label: "표 질문", prompt_preview: "무시되는 요지", created_at: at },
+    { id: 9, status: "running", requester: "alice", label: null, prompt_preview: null, created_at: "bad" },
+    { id: 10, status: "weird", requester: "alice", label: "가".repeat(41), prompt_preview: null, created_at: at },
+  ], (id) => opened.push(id));
+  eq(rows.map((r) => r.label), ["끝남 · 3쪽 요약해 줘", "실패 · 표 질문", "도는 중 · 요청", `weird · ${"가".repeat(40)}…`], "S6-7 줄 = «상태 · 요지»(이름 > 지시 앞부분 > «요청» · 공백 접기 · 40자 넘으면 자름 · 모르는 상태는 그대로)");
+  eq(rows.map((r) => r.hint), ["#7 · bob · 10/20 09:05", "#8 · alice · 10/20 09:05", "#9 · alice", "#10 · alice · 10/20 09:05"], "S6-7 힌트 = «#번호 · 누가 · 언제»(시각을 못 읽으면 뺀다)");
+  rows[1].run();
+  eq(opened, [8], "S6-7 줄을 누르면 그 실행을 연다");
+
+  eq([
+    menu.forkRunNote({ status: "done", session_note: "앱이 묻고 답함" }), menu.forkRunNote({ status: "done", session_note: null }),
+    menu.forkRunNote({ status: "failed", error: "시간 초과" }), menu.forkRunNote({ status: "failed" }), menu.forkRunNote({ status: "canceled" }),
+    menu.forkRunNote({ status: "running" }), menu.forkRunNote({ status: "queued" }), menu.forkRunNote(null),
+  ], [
+    "이 세션에 남긴 메모: 앱이 묻고 답함", "끝났어요(남긴 메모가 없어요).", "실패했어요: 시간 초과", "실패했어요: 사유 기록 없음", "취소한 실행이에요.",
+    "아직 도는 중이에요.", "아직 도는 중이에요.", "실행 상태를 알 수 없어요.",
+  ], "S6-7 누른 뒤 보일 말 — 메모 · 실패 사유 · 상태");
+
+  const PANE7 = readFileSync(join(root, "web/v2/session-app-pane.ts"), "utf8");
+  ok(/^\s*\.\.\.\(cur\.ai_fork \? \{ forkRuns: \(\) => \{ void openForkRunsMenu\(x, y, \{ id: cur\.app_id, title: cur\.title \}, s\); \} \} : \{\}\),$/m.test(PANE7),
+    "S6-7 배선 — 붙은 앱 줄의 ai_fork 가 참일 때만 손잡이를 단다");
+  ok(/'\/api\/ui\/ai-runs\?app_id=' \+ encodeURIComponent\(app\.id\) \+ '&fork_session=' \+ encodeURIComponent\(sid\) \+ '&limit=20'/.test(PANE7),
+    "S6-7 배선 — 그 앱 · 그 세션 분기만 묻는다");
+}
+
 console.log(`\n${pass} passed`);
 process.exit(0);

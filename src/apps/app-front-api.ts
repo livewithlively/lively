@@ -14,8 +14,8 @@
 //   POST   /tools/<도구>        {…인자}           → 선언한 그 도구(file_url · whoami · …) — lively.tools.call 과 같다
 //   GET    /prefs                                → 이 앱 × 나의 개인 설정     POST|PATCH /prefs {patch} → 얕은 병합 저장
 //   GET    /ai/targets                           → app_ai_targets        (#4488 앱 v2-9 — 고를 수 있는 실행 계정 · 작업 · 붙은 세션 · 만든 대화)
-//   POST   /ai/runs            {prompt, schema, …} → app_ai_run           AI 실행 입구 하나(단발+API 키=프록시 · 그 밖=작업 컨테이너)
-//   GET    /ai/runs?status&limit                 → app_ai_runs           GET /ai/runs/<id> → app_ai_run_get · POST /ai/runs/<id>/cancel → app_ai_run_cancel
+//   POST   /ai/runs            {prompt, schema, …} → app_ai_run           AI 실행 입구 하나(단발+API 키=프록시 · 그 밖=작업 컨테이너 · target:{fork} 는 붙은 세션 분기 #4489)
+//   GET    /ai/runs?status&limit&fork_session    → app_ai_runs           GET /ai/runs/<id> → app_ai_run_get · POST /ai/runs/<id>/cancel → app_ai_run_cancel
 //   (GET /me 는 앞단이 /api/app-front/me 로 따로 넘긴다 — app-front-routes.ts appFrontMe)
 //  답: 성공은 그 도구의 결과 JSON 그대로. 실패는 `{error, code?, consent_url?}` + 상태 코드.
 //   · 403 + code "consent_required" — 이 사람이 이 앱에 아직 동의하지 않았거나 예전 범위다. consent_url(라이블리 화면의 동의 자리)로
@@ -78,8 +78,10 @@ export function routeAppFrontApi(method: string, path: string, body: unknown, qu
   // #4488 AI 실행 — 입구 하나와 그 둘레(보기 · 목록 · 취소 · 대상). app_id 는 주소가 정한다(본문의 app_id 는 받지 않는다).
   if (path === "/ai/targets") return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_ai_targets", args: {} } : "method";
   if (path === "/ai/runs") {
-    if (m === "POST") return { kind: "tool", name: "app_ai_run", args: pick(b, ["prompt", "system", "schema", "job", "model", "label", "files", "project_id", "agent", "timeout_min", "wait"]) };
-    if (m === "GET" || m === "HEAD") return { kind: "tool", name: "app_ai_runs", args: { ...(query.status ? { status: query.status } : {}), ...(query.limit ? { limit: Number(query.limit) } : {}) } };
+    if (m === "POST") return { kind: "tool", name: "app_ai_run", args: pick(b, ["prompt", "system", "schema", "job", "model", "label", "files", "project_id", "agent", "timeout_min", "wait", "target"]) };
+    if (m === "GET" || m === "HEAD") {
+      return { kind: "tool", name: "app_ai_runs", args: { ...(query.status ? { status: query.status } : {}), ...(query.limit ? { limit: Number(query.limit) } : {}), ...(query.fork_session ? { fork_session: query.fork_session } : {}) } };
+    }
     return "method";
   }
   const ar = AI_RUN_RE.exec(path);

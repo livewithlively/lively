@@ -300,6 +300,18 @@ test("#4482 web.devices — 아는 장치만 저장 · 모르는 값 · 꼴 밖�
   assert.deepEqual([...APP_DEVICES], ["microphone", "camera", "clipboard-read", "geolocation"]);
 });
 
+// ── #4489 붙은 세션에서 실행(permissions.ai_fork) — 동의 표지 + AI 실행 도구 ──────────────────────────────────────────────────────────
+//  이게 틀리면: 선언한 앱의 grant 에 표지가 안 들어가 분기가 늘 «동의 없음» 이거나, 선언 안 한 앱에 표지가 붙어 동의 창에 없는 능력이 열린다.
+test("#4489 permissions.ai_fork → app_ai_fork 표지 + AI 실행 도구 다섯 · 기본 false 면 둘 다 없음", () => {
+  const m = parseAppManifest({ ...base(), permissions: { ai_fork: true } });
+  assert.equal(m.permissions.ai_fork, true);
+  for (const t of ["app_ai_fork", "app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"]) assert.ok(m.permissions.tools.includes(t), t);
+  assert.equal(m.permissions.tools.filter((t) => t === "app_ai_fork").length, 1);
+  const runsOnly = parseAppManifest({ ...base(), permissions: { ai_runs: true } });
+  assert.ok(!runsOnly.permissions.tools.includes("app_ai_fork"), "AI 실행만 선언하면 분기 표지는 없다");
+  assert.equal(parseAppManifest(base()).permissions.ai_fork, false);
+});
+
 // ── #4488 AI 실행 선언(permissions.ai_runs · ai.jobs) — M1~M2 ─────────────────────────────────────────────────────────────────────────
 //  이게 틀리면: 선언만 하고 도구가 grant 에 안 들어가 앱 주소 /_lively/ai/* 가 «권한 밖» 으로 막히거나, 작업 이름 꼴 밖 선언이 저장돼 설정 칸과 어긋난다.
 test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음) · 기본 false 면 없음 · ai.jobs 이름 꼴", () => {

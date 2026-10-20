@@ -32,6 +32,8 @@ export interface MenuHandlers {
   detach(): void;        // 「이 세션에서 떼기」
   /** #4482 「새 탭에서 열기」 — 맨 앱 주소(라이블리 밖 · 폰 홈 화면). 앱 주소가 꺼진 워크스페이스면 없다(줄을 그리지 않는다). */
   tab?(): void;
+  /** #4489 「이 세션 대화로 돌린 실행…」 — 앱이 붙은 세션에서 실행(분기)을 선언했을 때만 있다(없으면 줄을 그리지 않는다). */
+  forkRuns?(): void;
 }
 
 /**
@@ -46,6 +48,7 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
     { label: 'AI에게 고치기…', icon: 'pencil', hint: '세션에 말하기', run: h.edit },
     { label: '표시 설정', icon: 'sliders', off: !app.hasPrefs, hint: app.hasPrefs ? '나에게만' : '이 앱은 표시 설정이 없어요', run: h.prefs },
     { label: '버전 이력…', icon: 'clock', hint: app.versionNo ? verName(app.versionNo) : undefined, run: h.versions },
+    ...(h.forkRuns ? [{ label: '이 세션 대화로 돌린 실행…', icon: 'list', hint: '보이지 않는 실행', run: h.forkRuns }] : []),
     { label: '원본으로 되돌리기', icon: 'undo', off: !app.overridesBuiltin, hint: app.overridesBuiltin ? '릴리스 버전으로' : '지금이 원본', run: h.original },
     { label: '', sep: true },
     { label: '크게 보기', icon: 'expand', hint: '새 탭 · 화면 가득', run: h.big },
@@ -59,6 +62,37 @@ export function sessAppMenuRows(app: { title: string; hasPrefs: boolean; overrid
  *  'app-ui' = 라이블리 화면의 다리로 쓴 것 · 'app-front' = 앱 주소의 같은 주소 API(/_lively/*, #4482)로 쓴 것. 그 밖(세션의 AI · 다른 사람)은 바깥 변경이다.
  */
 export function isOwnWriteSource(source: unknown): boolean { return source === 'app-ui' || source === 'app-front'; }
+
+/** #4489 이 세션 대화로 돈 분기 실행 한 줄(app_ai_runs 요약의 필요한 칸). */
+export interface ForkRunSummary { id: number; status: string; requester: string; label: string | null; prompt_preview: string | null; created_at: string }
+const RUN_STATUS_KO: Record<string, string> = { queued: '기다리는 중', running: '도는 중', done: '끝남', failed: '실패', canceled: '취소' };
+
+/** 「이 세션 대화로 돌린 실행」 메뉴의 줄 — 최신 먼저(서버 규약). 줄 = «상태 · 요청 요지», 힌트 = «#번호 · 누가 · 언제». */
+export function forkRunRows(runs: readonly ForkRunSummary[], open: (id: number) => void): MenuRow[] {
+  const when = (iso: string): string => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  return runs.map((r) => {
+    const gist = String(r.label || r.prompt_preview || '요청').replace(/\s+/g, ' ').trim();
+    return {
+      label: `${RUN_STATUS_KO[r.status] ?? r.status} · ${gist.length > 40 ? gist.slice(0, 40) + '…' : gist}`,
+      hint: [`#${r.id}`, r.requester, when(r.created_at)].filter(Boolean).join(' · '),
+      run: () => open(r.id),
+    };
+  });
+}
+
+/** 실행 하나를 눌렀을 때 보일 말 — 끝났으면 이 세션에 남긴 메모, 실패면 사유, 아니면 상태. */
+export function forkRunNote(r: { status?: string; session_note?: string | null; error?: string | null } | null | undefined): string {
+  const st = r && r.status;
+  if (st === 'done') return r!.session_note ? '이 세션에 남긴 메모: ' + r!.session_note : '끝났어요(남긴 메모가 없어요).';
+  if (st === 'failed') return '실패했어요: ' + (r!.error || '사유 기록 없음');
+  if (st === 'canceled') return '취소한 실행이에요.';
+  return st === 'running' || st === 'queued' ? '아직 도는 중이에요.' : '실행 상태를 알 수 없어요.';
+}
 
 /** 「AI에게 고치기」가 세션 입력칸에 채우는 글 — 뒤를 사람이 잇는다. 보내지 않는다(그건 앱의 chat.send 몫). */
 export function draftTextFor(title: string): string { return `「${title}」 앱을 이렇게 고쳐 줘: `; }

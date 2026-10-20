@@ -10,7 +10,7 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings } from "./plan.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, onForkTurn, submitRun, syncRun, targetsFor, type AiRunDeps, type ForkSessionFacts, type SubmitForkJobInput, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -21,7 +21,11 @@ interface World {
   sessions: Record<string, { owner: string; members: string[]; human?: boolean }>;
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
-  usedToday: number; inflightCount: number;
+  usedToday: number; inflightCount: number; notices: Array<{ sessionId: string; appId: string | null; runId: number | null; requester: string | null; text: string }>;
+  forks: Record<string, Omit<ForkSessionFacts, "participant"> & { members?: string[] }>; forkConsent: "ok" | "undeclared" | "no_grant" | "regrant";
+  /** 사람마다 다른 동의(없으면 forkConsent). */
+  forkConsents: Record<string, "ok" | "undeclared" | "no_grant" | "regrant">; forkManaged: boolean; forkJobs: SubmitForkJobInput[];
+  forkFactsCalls: Array<{ sid: string; transcript: boolean | undefined }>;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -33,7 +37,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
   let seq = 0, jseq = 100;
   const w: World = {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
-    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, ...o,
+    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, notices: [], forks: {}, forkConsent: "ok", forkConsents: {}, forkManaged: true, forkJobs: [], forkFactsCalls: [], ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const d: AiRunDeps = {
@@ -42,7 +46,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
         const id = ++seq;
         const row: AiRunRow = { id, status: n.status, app_id: n.appId, requester: n.requester, requester_kind: n.requesterKind, source: n.source, job_name: n.jobName, kind: n.kind,
           account_kind: n.accountKind, account_member: n.accountMember, executor: n.executor, job_id: null, model: n.model, label: n.label, prompt: n.prompt, system_prompt: n.systemPrompt,
-          schema: n.schema, result: null, error: null, session_note: null, proxy_token_hash: null, retries: 0, input_tokens: null, output_tokens: null,
+          schema: n.schema, result: null, error: null, session_note: null, fork_session: n.forkSession ?? null, proxy_token_hash: null, retries: 0, input_tokens: null, output_tokens: null,
           created_at: new Date(), started_at: n.status === "running" ? new Date() : null, ended_at: null, updated_at: new Date() };
         w.runs.set(id, row); return { ...row };
       },
@@ -52,12 +56,19 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async setAiRunJob(id, jobId) { w.runs.get(id)!.job_id = jobId; },
       async setAiRunProxyToken(id, h) { w.runs.get(id)!.proxy_token_hash = h; },
       async markAiRunRunning(id) { const r = w.runs.get(id)!; if (r.status === "queued") { r.status = "running"; r.started_at = new Date(); } },
+      async markAiRunRetried(id) { const r = w.runs.get(id)!; if (ended(r.status) || r.retries > 0) return false; r.retries++; return true; },
       async retryAiRun(id, jobId) { const r = w.runs.get(id)!; if (ended(r.status)) return false; r.job_id = jobId; r.retries++; return true; },
-      async finishAiRun(id, f) { const r = w.runs.get(id)!; if (ended(r.status)) return null; Object.assign(r, { status: f.status, result: f.result, error: f.error, ended_at: new Date(), input_tokens: f.inputTokens ?? r.input_tokens, output_tokens: f.outputTokens ?? r.output_tokens, retries: f.retries ?? r.retries }); return { ...r }; },
+      async finishAiRun(id, f) {
+        const r = w.runs.get(id)!; if (ended(r.status)) return null;
+        Object.assign(r, { status: f.status, result: f.result, error: f.error, ended_at: new Date(), input_tokens: f.inputTokens ?? r.input_tokens, output_tokens: f.outputTokens ?? r.output_tokens, retries: f.retries ?? r.retries, session_note: f.sessionNote ?? r.session_note });
+        //  끝맺기가 된 때만 알림(같은 문장 — store.finishAiRun 의 CTE 흉내)
+        if (f.notice) w.notices.push({ sessionId: f.notice.sessionId, appId: f.notice.appId, runId: id, requester: f.notice.requester, text: f.notice.text });
+        return { ...r };
+      },
       async openJobRuns() { return [...w.runs.values()].filter((r) => !ended(r.status) && r.executor === "job"); },
       async staleProxyRuns() { return []; },
       async openRunCountOf(req) { return [...w.runs.values()].filter((r) => r.requester === req && !ended(r.status)).length; },
-      async listAiRuns(f) { return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester))).map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null } as unknown as AiRunSummaryRow)); },
+      async listAiRuns(f) { return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.forkSession || r.fork_session === f.forkSession) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester))).map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null } as unknown as AiRunSummaryRow)); },
       async appConversations() { return []; },
       async insertLlmCall(c) { w.calls.push(c); },
       async tokensUsedTodayByApp() { return w.usedToday; },
@@ -81,6 +92,17 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     subscriptionLoggedIn: async () => true,
     //  세션 tie(가짜): w.sessions[sid] = { owner, members(들어갈 수 있는 사람) } · 모르는 세션은 owner null.
     sessionTie: async (sid, member) => { const s = w.sessions[sid]; return s ? { owner: s.owner, participant: s.owner === member || s.members.includes(member), human: s.human !== false } : { owner: null, participant: false, human: false }; },
+    //  #4489 분기(가짜): w.forks[sid] = 세션 사실(없으면 «세션 없음») · 동의 w.forkConsent · 접수한 분기 작업은 w.forkJobs 에.
+    forkSession: async (sid, member, _app, opts) => {
+      w.forkFactsCalls.push({ sid, transcript: opts?.transcript });
+      const f = w.forks[sid];
+      if (!f) return { exists: false, owner: null, kind: null, harness: null, dir: null, nodeId: null, appAttached: false, participant: false, conversation: null, projectId: null, flags: {}, incognito: false };
+      return { ...f, participant: f.owner === member || (f.members ?? []).includes(member) };
+    },
+    forkConsent: async (who) => w.forkConsents[who] ?? w.forkConsent,
+    forkManaged: async () => w.forkManaged,
+    blockConnectors: async () => false,
+    submitForkJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.forkJobs.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: null, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, fork: j.spec } as unknown as AgentJobRow); return { id }; },
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
   };
@@ -350,6 +372,178 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   const r = await submitRun({ prompt: "x", wait: 5 }, appUser("alice", "crm"), { source: "app-ui" }, d);
   assert.equal(r.status, "done"); assert.equal((r.result as { text: string }).text, "기다린 답");
   ok("S24 wait — 한 번에 결과");
+}
+
+// ── F1~F15 #4489 붙은 세션 분기 — 접수 · 거절 · 끝맺기(결과 + 그 세션 알림) · 같은 프로세스 재요청 · 대상 ──
+{
+  const CONV = "11111111-2222-3333-4444-555555555555";
+  type Fork = World["forks"][string];
+  const sess = (o: Partial<Fork> = {}): Fork => ({
+    exists: true, owner: "alice", kind: "human", harness: "claude", dir: "/work/proj", nodeId: null, appAttached: true, conversation: CONV, incognito: false,
+    projectId: 7, flags: { "--model": "opus", "--effort": "high" }, members: ["bob"], ...o,
+  });
+  const forkWorld = (o: Partial<World> = {}) => world({ forks: { "box-alice": sess() }, ...o });
+  const fork = { fork: "box-alice" };
+  const inSess = { source: "app-ui", session: "box-alice" };
+
+  //  F1 주인 — 워크스페이스 기본값이 API 키여도 분기는 그 세션 주인의 구독 · 그 세션 작업 폴더 · 본 세션 실행 설정 그대로
+  {
+    const { w, d } = forkWorld();
+    const r = await submitRun({ prompt: "표를 읽고 답해", target: fork, label: "질문" }, appUser("alice", "crm"), inSess, d);
+    assert.equal(r.status, "queued"); assert.equal(r.kind, "agent"); assert.equal(r.executor, "job"); assert.equal(r.fork_session, "box-alice");
+    assert.deepEqual(r.account, { kind: "subscription", member: "alice" });
+    assert.equal(w.forkJobs.length, 1); assert.equal(w.submitted.length, 0, "새 대화 작업은 없다");
+    const j = w.forkJobs[0]!;
+    assert.deepEqual({ owner: j.owner, requester: j.requester, appId: j.appId, cwd: j.cwd, projectId: j.projectId, label: j.label }, { owner: "alice", requester: "alice", appId: "crm", cwd: "/work/proj", projectId: 7, label: "질문" });
+    assert.deepEqual(j.spec, { session: "box-alice", conversation: CONV, harness: "claude", model: "opus", effort: "high", block_connectors: false, app_folder: ".lively/apps/crm" });
+    assert.equal(w.runs.get(1)!.source, "app-ui", "요청이 온 길을 실행 행에 남긴다(감사)");
+    assert.match(j.prompt, /^\[라이블리 — 앱 분기 실행\]/); assert.ok(j.prompt.includes("[앱 요청]\n표를 읽고 답해"), j.prompt);
+    assert.equal(w.runs.get(1)!.job_id, 101); assert.equal(w.runs.get(1)!.account_member, "alice");
+    ok("F1 주인 → 그 세션 주인 구독 · 그 세션 폴더 · 본 세션 설정 그대로의 분기 작업");
+  }
+  //  F2 초대받은 bob — 보낸 사람 bob · 실행 계정과 자리는 주인 alice
+  {
+    const { w, d } = forkWorld();
+    const r = await submitRun({ prompt: "x", target: fork }, appUser("bob", "crm"), inSess, d);
+    assert.equal(r.requester, "bob"); assert.deepEqual(r.account, { kind: "subscription", member: "alice" });
+    assert.equal(w.forkJobs[0]!.owner, "alice"); assert.equal(w.forkJobs[0]!.requester, "bob");
+    assert.match(w.forkJobs[0]!.prompt, /bob님\(이 세션에 초대받은 사람\)/);
+    ok("F2 초대받은 사람 → 보낸 사람 bob · 계정 · 자리는 주인");
+    //  F2b — 주인이 이 앱의 «붙은 세션에서 실행» 에 동의하지 않았으면 bob 의 분기는 거절(주인 몰래 대화를 읽지 않는다) · 주인 자신은 제 동의만 본다
+    const nc = forkWorld({ forkConsents: { alice: "no_grant", bob: "ok" } });
+    await fails(submitRun({ prompt: "x", target: fork }, appUser("bob", "crm"), inSess, nc.d), 403, /세션 주인/, "consent_required");
+    assert.equal(nc.w.runs.size, 0);
+    const own = forkWorld({ forkConsents: { alice: "ok", bob: "no_grant" } });
+    assert.equal((await submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, own.d)).status, "queued");
+    ok("F2b 세션 주인의 동의가 없으면 초대받은 사람의 분기는 거절 · 주인은 제 동의로");
+  }
+  //  F3~F6 거절 — 행도 작업도 남지 않는다
+  {
+    const { w, d } = forkWorld({ forkConsent: "regrant" });
+    await fails(submitRun({ prompt: "x", target: fork }, appUser("eve", "crm"), inSess, forkWorld().d), 403, /주인이나 그 세션에 초대받은/, "fork_unavailable");
+    await fails(submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, d), 403, /다시 동의/, "consent_required");
+    await fails(submitRun({ prompt: "x", target: fork }, { ...appUser("alice", "crm"), appServer: true }, { source: "web" }, forkWorld().d), 403, /사람이 보낸 요청/, "fork_unavailable");
+    await fails(submitRun({ prompt: "x", target: { fork: "box-nope" } }, appUser("alice", "crm"), inSess, forkWorld().d), 404, /분기할 세션이 없습니다/);
+    await fails(submitRun({ prompt: "x", target: fork, project_id: 3 }, appUser("alice", "crm"), inSess, forkWorld().d), 400, /project_id/);
+    await fails(submitRun({ prompt: "x", target: fork, cwd: "/etc" }, appUser("alice", "crm"), inSess, forkWorld().d), 400, /cwd/);
+    await fails(submitRun({ prompt: "x", target: { fork: "../x" } }, appUser("alice", "crm"), inSess, forkWorld().d), 400, /세션 id/);
+    await fails(submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, forkWorld({ forks: { "box-alice": sess({ incognito: true }) } }).d), 409, /비공개/);
+    assert.equal(w.runs.size, 0); assert.equal(w.forkJobs.length, 0);
+    ok("F3~F6 남 · 옛 동의 · 앱 서버 · 없는 세션 · 폴더 지정 · 꼴 밖 대상 · 비공개 세션 → 거절(행 · 작업 0)");
+  }
+  //  F7 요청이 매인 세션 — 대상과 다르면 그 세션도 사람이 보는 세션이어야 한다(위탁 세션의 AI · 모르는 세션은 거절)
+  {
+    const sessions = { "box-task": { owner: "alice", members: [], human: false }, "box-alice2": { owner: "alice", members: [] } };
+    const t = forkWorld({ sessions });
+    await fails(submitRun({ prompt: "x", target: fork, app_id: "crm" }, member("alice"), { source: "mcp", session: "box-task" }, t.d), 403, /사람이 보는 세션이 아닙니다/, "account_unavailable");
+    await fails(submitRun({ prompt: "x", target: fork, app_id: "crm" }, member("alice"), { source: "mcp", session: "box-unknown" }, t.d), 403, /확인할 수 없거나/);
+    assert.equal(t.w.runs.size, 0);
+    const okHuman = await submitRun({ prompt: "x", target: fork, app_id: "crm" }, member("alice"), { source: "mcp", session: "box-alice2" }, t.d);
+    assert.equal(okHuman.status, "queued");
+    const okNoSess = await submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), { source: "app-front" }, t.d);
+    assert.equal(okNoSess.status, "queued");
+    ok("F7 다른 세션에 매인 요청 — 위탁 · 모르는 세션은 거절 · 사람 세션 · 매임 없음은 받는다");
+  }
+  //  F8 상한 — 사람당 동시 실행에 분기도 센다 · F9 접수 실패 → 행 failed
+  {
+    const { w, d } = forkWorld({ policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 1 } });
+    await submitRun({ prompt: "a", target: fork }, appUser("alice", "crm"), inSess, d);
+    await fails(submitRun({ prompt: "b", target: fork }, appUser("alice", "crm"), inSess, d), 429, /이미 1개/);
+    assert.equal(w.forkJobs.length, 1);
+    ok("F8 사람당 동시 상한에 분기도 센다");
+    const bad = forkWorld({ submitThrows: new HttpError(429, "작업 대기열이 찼습니다") });
+    await fails(submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, bad.d), 429, /대기열/);
+    assert.equal(bad.w.runs.get(1)!.status, "failed"); assert.match(bad.w.runs.get(1)!.error!, /분기 작업을 보내지 못했습니다/);
+    assert.equal(bad.w.notices.length, 0, "접수 실패는 세션 알림이 아니다(앱이 곧바로 오류를 받는다)");
+    ok("F9 분기 작업 접수 실패 → 행 failed · 오류 그대로 · 알림 없음");
+  }
+  //  F10~F13 끝맺기 — 결과는 앱에 · 요지는 그 세션 알림에(한 번만) · 취소는 알리지 않는다
+  {
+    const { w, d } = forkWorld();
+    await submitRun({ prompt: "3쪽 요약해 줘", target: fork }, appUser("bob", "crm"), inSess, d);
+    const job = w.jobs.get(101)!;
+    job.status = "done"; job.conversation_id = "fork-conv-x";
+    job.result = { text: JSON.stringify({ result: "세 줄 요약", session_note: "bob 이 3쪽 요약을 물어 세 줄로 답함" }), usage: { input_tokens: 9, output_tokens: 3 }, turns: 1 };
+    const stale = { ...w.runs.get(1)! };   // 정비와 걷기가 같은 열린 행을 읽고 겹쳐 끝맺는 경합 — 아래에서 이 낡은 행으로 한 번 더
+    const done = (await syncRun(w.runs.get(1)!, d))!;
+    assert.equal(done.status, "done"); assert.equal(done.session_note, "bob 이 3쪽 요약을 물어 세 줄로 답함");
+    const res = done.result as Record<string, unknown>;
+    assert.equal(res.text, "세 줄 요약"); assert.equal(res.conversation_id, null, "분기 대화는 저장되지 않는다 — 이어받기 id 를 주지 않는다"); assert.equal(res.turns, 1); assert.equal("json" in res, false);
+    assert.equal(done.input_tokens, 9);
+    assert.equal(w.notices.length, 1);
+    assert.deepEqual({ ...w.notices[0], text: undefined }, { sessionId: "box-alice", appId: "crm", runId: 1, requester: "bob", text: undefined });
+    assert.match(w.notices[0]!.text, /^앱 「crm」 요청\(실행 #1 · bob님이 보냄\) — 3쪽 요약해 줘 → bob 이 3쪽 요약을 물어 세 줄로 답함$/);
+    assert.equal(stale.status, "queued");
+    await syncRun(stale, d);
+    assert.equal(w.notices.length, 1, "겹쳐 끝맺어도 알림은 한 줄(끝맺는 쓰기가 성공한 쪽만)");
+    ok("F10 끝남 · 맞는 모양 → done(결과 · 메모) · 그 세션 알림 1줄 · 다시 맞춰도 1줄");
+
+    const sch = { type: "object", required: ["n"], properties: { n: { type: "integer" } } };
+    const s2 = forkWorld();
+    await submitRun({ prompt: "n?", target: fork, schema: sch }, appUser("alice", "crm"), inSess, s2.d);
+    const j2 = s2.w.jobs.get(101)!; j2.status = "done"; j2.result = { text: JSON.stringify({ result: { n: 3 }, session_note: "n 은 3" }) };
+    const d2 = (await syncRun(s2.w.runs.get(1)!, s2.d))!;
+    assert.deepEqual((d2.result as { json: unknown }).json, { n: 3 }); assert.equal((d2.result as { text: string }).text, '{"n":3}');
+    ok("F10b 앱 스키마 → result.json · text 는 그 JSON");
+
+    const s3 = forkWorld();
+    await submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, s3.d);
+    const j3 = s3.w.jobs.get(101)!; j3.status = "done"; j3.result = { text: "그냥 글", turns: 2 };
+    const f3 = (await syncRun(s3.w.runs.get(1)!, s3.d))!;
+    assert.equal(f3.status, "failed"); assert.match(f3.error!, /형식에 맞지 않습니다/); assert.equal((f3.result as { text: string }).text, "그냥 글");
+    assert.equal(s3.w.forkJobs.length, 1, "새 작업으로 다시 하지 않는다(분기 대화는 이어받을 수 없다)"); assert.equal(s3.w.submitted.length, 0);
+    assert.equal(s3.w.notices.length, 1); assert.match(s3.w.notices[0]!.text, /실패했습니다/);
+    ok("F11 끝까지 모양이 틀림 → failed(원문) · 새 작업 없음 · 실패 알림");
+
+    const s4 = forkWorld();
+    await submitRun({ prompt: "a", target: fork }, appUser("alice", "crm"), inSess, s4.d);
+    await submitRun({ prompt: "b", target: fork }, appUser("alice", "crm"), inSess, s4.d);
+    s4.w.jobs.get(101)!.status = "timeout"; s4.w.jobs.get(101)!.error = "시간 초과";
+    s4.w.jobs.get(102)!.status = "canceled"; s4.w.jobs.get(102)!.error = "취소했습니다";
+    assert.equal((await syncRun(s4.w.runs.get(1)!, s4.d))!.status, "failed");
+    assert.equal((await syncRun(s4.w.runs.get(2)!, s4.d))!.status, "canceled");
+    assert.equal(s4.w.notices.length, 1, "취소는 알리지 않는다"); assert.match(s4.w.notices[0]!.text, /실패했습니다\(실행 #1\) — a: 시간 초과$/);
+    ok("F12~F13 시간 초과 → failed + 실패 알림 · 취소 → canceled · 알림 없음");
+  }
+  //  F14 같은 프로세스 재요청 — 첫 턴이 틀리면 «형식에 맞게 다시» 한 번 · 맞으면 · 이미 썼으면 · 오류 턴이면 · 분기가 아니면 null
+  {
+    const { w, d } = forkWorld();
+    await submitRun({ prompt: "x", target: fork }, appUser("alice", "crm"), inSess, d);
+    assert.equal(await onForkTurn({ id: 101 }, { text: JSON.stringify({ result: "r", session_note: "n" }), is_error: false }, d), null);
+    assert.equal(await onForkTurn({ id: 101 }, { text: "모양 틀린 답", is_error: true }, d), null);
+    assert.equal(w.runs.get(1)!.retries, 0, "맞는 답 · 오류 턴은 재요청을 쓰지 않는다");
+    const next = await onForkTurn({ id: 101 }, { text: "모양 틀린 답", is_error: false }, d);
+    assert.ok(next && /형식/.test(next) && /session_note/.test(next), `재요청 글: ${next}`);
+    assert.equal(w.runs.get(1)!.retries, 1);
+    assert.equal(await onForkTurn({ id: 101 }, { text: "또 틀림", is_error: false }, d), null, "재요청은 한 번뿐");
+    const plain = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+    await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, plain.d);
+    assert.equal(await onForkTurn({ id: 101 }, { text: "틀림", is_error: false }, plain.d), null, "분기가 아닌 작업");
+    assert.equal(await onForkTurn({ id: 999 }, { text: "틀림", is_error: false }, d), null, "모르는 작업");
+    ok("F14 같은 프로세스 재요청 — 틀린 첫 턴만 한 번");
+  }
+  //  F15 대상 — 붙은 세션마다 분기 가부 · 배포 · 동의 · 목록 거르기
+  {
+    const { w, d } = forkWorld({ forks: { "box-alice": sess(), "box-codex": sess({ harness: "codex" }), "box-carol": sess({ owner: "carol", members: ["alice"] }) }, forkConsents: { carol: "no_grant" } });
+    d.attachedSessions = async () => [{ session_id: "box-alice", title: "A", owner_is_you: true }, { session_id: "box-codex", title: "C", owner_is_you: true }, { session_id: "box-carol", title: "R", owner_is_you: false }];
+    const t = await targetsFor(appUser("alice", "crm"), {}, d);
+    const att = t.attached as Array<{ session_id: string; can_fork: boolean; fork_reason: string | null }>;
+    assert.deepEqual(att.map((a) => [a.session_id, a.can_fork]), [["box-alice", true], ["box-codex", false], ["box-carol", false]]);
+    assert.match(att[1]!.fork_reason!, /#4920/); assert.match(att[2]!.fork_reason!, /세션 주인/); assert.equal(t.fork, true);
+    assert.ok(w.forkFactsCalls.length === 3 && w.forkFactsCalls.every((c) => c.transcript === false), "대상 목록은 대화 파일 확인(원격 stat)을 하지 않는다");
+    w.forkManaged = false;
+    assert.equal((await targetsFor(appUser("alice", "crm"), {}, d)).fork, false);
+    ok("F15 대상 — 세션별 can_fork · 안 되는 까닭 · 배포가 안 되면 fork false");
+
+    w.forkManaged = true;
+    await submitRun({ prompt: "f", target: fork }, appUser("alice", "crm"), inSess, d);
+    w.settings = { default: { kind: "subscription", member: "alice" } }; w.key = null;
+    await submitRun({ prompt: "n" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+    const only = (await listRunsFor({ fork_session: "box-alice" }, appUser("alice", "crm"), d)).runs as Array<{ id: number; fork_session: string | null }>;
+    assert.deepEqual(only.map((r) => [r.id, r.fork_session]), [[1, "box-alice"]]);
+    await fails(listRunsFor({ fork_session: "../x" }, appUser("alice", "crm"), d), 400, /fork_session/);
+    ok("F15b 목록 — fork_session 으로 그 세션 분기만 · 꼴이 틀리면 «전부» 가 아니라 400");
+  }
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);
