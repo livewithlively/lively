@@ -49,8 +49,14 @@ export class SseUsageCollector {
   }
 }
 
-/** (순수) 흘려 보낼 요청 헤더만 고른다 — 자격(x-api-key · authorization)은 버리고 워크스페이스 키를 새로 붙인다. */
-export function forwardHeaders(incoming: Record<string, string | string[] | undefined>, apiKey: string): Record<string, string> {
+/** Anthropic 워크스페이스 id 모양(콘솔 Settings ▸ Workspaces 의 ID · wrkspc_…). 자격 meta 에서 읽은 값을 헤더에 싣기 전에 거른다. */
+export const ANTHROPIC_WORKSPACE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** (순수) 흘려 보낼 요청 헤더만 고른다 — 자격(x-api-key · authorization)은 버리고 워크스페이스 키를 새로 붙인다.
+ *  workspaceId — 키가 워크스페이스에 묶이지 않은 것(조직 단위 · 계정 연동 키)이면 Anthropic 이 요청마다 `anthropic-workspace-id` 를 요구한다
+ *  (없으면 400 «This API key is not scoped to a workspace»). 자격 meta.workspace_id 에서 온 값만 싣고, 부른 쪽이 보낸 같은 이름 헤더는
+ *  버린다 — 어느 Anthropic 워크스페이스로 청구되는지는 자격의 일부라 앱이 고르지 않는다. */
+export function forwardHeaders(incoming: Record<string, string | string[] | undefined>, apiKey: string, workspaceId?: string | null): Record<string, string> {
   const pick = (k: string): string | undefined => { const v = incoming[k]; return Array.isArray(v) ? v[0] : v; };
   const out: Record<string, string> = {
     "x-api-key": apiKey,
@@ -59,6 +65,7 @@ export function forwardHeaders(incoming: Record<string, string | string[] | unde
     accept: pick("accept") ?? "application/json",
   };
   const beta = pick("anthropic-beta"); if (beta) out["anthropic-beta"] = beta;
+  if (workspaceId && ANTHROPIC_WORKSPACE_ID_RE.test(workspaceId)) out["anthropic-workspace-id"] = workspaceId;
   return out;
 }
 
@@ -113,7 +120,7 @@ export function textOfMessage(j: unknown): string {
   return content.map((b) => (b && typeof b === "object" && (b as { type?: unknown }).type === "text" ? String((b as { text?: unknown }).text ?? "") : "")).join("");
 }
 
-export interface SingleShotInput { model: string; prompt: string; system: string | null; maxTokens: number; messages?: Array<{ role: "user" | "assistant"; content: string }> }
+export interface SingleShotInput { model: string; prompt: string; system: string | null; maxTokens: number; /** 자격 meta.workspace_id — forwardHeaders 참조 */ workspaceId?: string | null; messages?: Array<{ role: "user" | "assistant"; content: string }> }
 export interface SingleShotOutput { ok: boolean; status: number; text: string; usage: Usage; model: string | null; stopReason: string | null; error: string | null }
 
 /**
@@ -126,7 +133,7 @@ export async function singleShot(apiKey: string, i: SingleShotInput, signal: Abo
     messages: i.messages ?? [{ role: "user", content: i.prompt }],
   };
   if (i.system) body.system = i.system;
-  const r = await forwardToAnthropic({ path: "/v1/messages", headers: forwardHeaders({}, apiKey), body: JSON.stringify(body), stream: false, signal }, f);
+  const r = await forwardToAnthropic({ path: "/v1/messages", headers: forwardHeaders({}, apiKey, i.workspaceId ?? null), body: JSON.stringify(body), stream: false, signal }, f);
   const u = await r.usage;
   let j: Record<string, unknown> = {};
   try { j = JSON.parse(u.text ?? "{}") as Record<string, unknown>; } catch { /* 빈 응답 */ }

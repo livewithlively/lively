@@ -24,6 +24,8 @@ export interface AgentJobRow {
   timeout_sec: number;
   /** #4488 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다. */
   bare: boolean;
+  /** #4891 사람 홈 없는 작업 컨테이너에서 도나(앱 서버가 보낸 API 키 에이전트 작업 — 작업 폴더는 앱 폴더뿐). */
+  homeless: boolean;
   /** #4489 세션 분기 실행의 좌표(fork-boot.ForkSpec 의 저장 모양 — 읽을 때 parseForkSpec 로 고른다). 보통 작업은 null. */
   fork?: Record<string, unknown> | null;
   session_id: string | null;
@@ -51,7 +53,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, fork, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, homeless, fork, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -93,6 +95,11 @@ export interface NewAgentJob {
   timeoutSec: number;
   /** 단발(도구 없음) — 없으면 false. */
   bare?: boolean;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다 — 앱 서버가 보낸 API 키 에이전트 작업만(ai-runs/service). 작업 폴더는 앱 폴더여야 한다.
+   *  필수다 — 접수하는 자리가 빠뜨리면 컴파일이 잡는다(빠지면 사람 홈에서 돈다).
+   */
+  homeless: boolean;
   /** #4489 세션 분기 실행의 좌표 — 없으면 보통 작업. */
   fork?: Record<string, unknown> | null;
 }
@@ -113,10 +120,10 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare, fork)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless, fork)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.fork ? JSON.stringify(j.fork) : null]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, j.fork ? JSON.stringify(j.fork) : null]);
     return { row: norm(rows[0])! };
   });
 }
@@ -344,7 +351,7 @@ export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "r
 /** 목록이 싣는 답 앞머리 길이(문자). */
 export const RESULT_PREVIEW_MAX = 280;
 const SUMMARY_COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label,
-  resume_conversation, resume_job_id, timeout_sec, session_id, conversation_id, exit_code, error, cancel_requested,
+  resume_conversation, resume_job_id, timeout_sec, homeless, session_id, conversation_id, exit_code, error, cancel_requested,
   created_at, claimed_at, started_at, last_tick_at, ended_at, reaped,
   left(result->>'text', ${RESULT_PREVIEW_MAX}) AS result_preview, (result IS NOT NULL) AS has_result`;
 export async function listAgentJobs(f: AgentJobListFilter): Promise<AgentJobSummaryRow[]> {

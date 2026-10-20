@@ -38,6 +38,7 @@ import type { SessAppDoor } from '../session-chat.js';   // #4443 세션 머리�
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
 import { listSessionApps } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
@@ -1465,8 +1466,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const attachSec = (apps: Awaited<ReturnType<typeof listSessionApps>> | null) => ({
       title: '이 세션에 붙이기', note: sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요',
       //  독 ⊞ 와 같은 표 — 화면이 있거나 AI 가 쓸 데이터가 있는 설치 앱(시스템 앱 · 이 세션 앱 자신 제외)
-      items: apps === null ? null : apps.filter((a) => a.id !== 'ai-session' && !a.system && (a.pages.length > 0 || a.tables.length > 0)).map((a): DrawerItem => ({
-        id: a.id, name: a.title, off: !sid, ic: () => appGlassIcon(installedAppFace({ id: a.id, hasUi: a.pages.length > 0, icon: a.icon })),
+      items: apps === null ? null : apps.filter((a) => a.id !== 'ai-session' && !a.system && (hasAppScreen(a) || a.tables.length > 0)).map((a): DrawerItem => ({
+        id: a.id, name: a.title, off: !sid, ic: () => appGlassIcon(installedAppFace({ id: a.id, hasUi: hasAppScreen(a), icon: a.icon })),
         hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요 — AI 도 같은 화면을 씁니다.` : '세션을 열면 붙일 수 있어요',
         pick: () => { void attachApp({ id: a.id, title: a.title }); },
       })),

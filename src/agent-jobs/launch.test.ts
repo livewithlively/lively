@@ -1,7 +1,9 @@
 // 작업 컨테이너를 띄우고 걷는 자리(launch.ts)의 순수한 부분 — 브로커 tmux 인자 계약 · 비밀 가리기 · 걷기의 마지막 자리 (#4490).
 //  행 번호(L·K)는 지식 agent-job-container-research-4490 의 엣지 표다. tmux 실행은 바꿔 끼운 실행기로 본다(부른 argv · 던진 것).
 import assert from "node:assert/strict";
-import { jobTmuxArgv, redactSecret, killJobContainer, stepFailure, launchJobContainer, JobLaunchError, type LaunchStep } from "./launch.js";
+import { jobTmuxArgv, redactSecret, killJobContainer, stepFailure, launchJobContainer, jobEnsureRequest, homelessEnsureMismatch, JobLaunchError, type LaunchStep } from "./launch.js";
+import { readFileSync } from "node:fs";
+import { HOMELESS_OS_USER } from "./plan.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV } from "./runner.js";
 import { outcomeToError, sessionGoneResult } from "../terminal/tmux-route.js";
 import { sessionPaneArgv } from "../terminal/session-tmux.js";
@@ -107,6 +109,74 @@ await t("F2 다시 해도 안 될 것(세션 id 없음 · 실행 계정 없음)�
     (e: unknown) => e instanceof JobLaunchError && e.transient === false && /세션 id/.test(e.message));
   await assert.rejects(launchJobContainer({ ...(base as object), session_id: "job-7-0123abcd", account_member: null } as never, "x"),
     (e: unknown) => e instanceof JobLaunchError && e.transient === false && /실행 계정/.test(e.message));
+});
+
+await t("H1 확보 요청(#4891) — 홈 없는 작업은 homeless:true · 전용 계정 · 앱 폴더 · 붙일 앱 없음 / 사람 자리는 종전 꼴(homeless 칸 없음 · 프로젝트 작업이면 앱을 붙인다)", () => {
+  const mem = { memMb: 2048, memRequestMb: 768 };
+  const homeless = jobEnsureRequest({ session_id: "job-7-0123abcd", cwd: "/work/apps/crm", app_id: "crm", project_id: null, homeless: true }, { osUser: HOMELESS_OS_USER, ...mem });
+  assert.deepEqual(homeless, { sessionId: "job-7-0123abcd", osUser: "box_lvly_job", cwd: "/work/apps/crm", memMb: 2048, memRequestMb: 768, tmux: "inside", homeless: true });
+  const seat = jobEnsureRequest({ session_id: "job-8-0123abcd", cwd: "/work/apps/crm", app_id: "crm", project_id: null, homeless: false }, { osUser: "box_alice", ...mem });
+  assert.ok(!("homeless" in seat) && !("apps" in seat) && !("fresh" in seat), JSON.stringify(seat));
+  const proj = jobEnsureRequest({ session_id: "job-9-0123abcd", cwd: "/work/shared/project/3", app_id: "crm", project_id: 3, homeless: false }, { osUser: "box_alice", ...mem });
+  assert.deepEqual(proj.apps, ["crm"]);
+  assert.ok(!("homeless" in proj));
+});
+
+await t("H1b 확보 요청(#4489) — 세션 분기는 프로젝트 폴더가 아니어도 그 앱 폴더를 붙인다 · 앱이 없거나 분기가 아니면 종전대로", () => {
+  const mem = { memMb: 2048, memRequestMb: 768 };
+  const fork = { session: "box-alice", conversation: "11111111-2222-3333-4444-555555555555" };
+  const personal = jobEnsureRequest({ session_id: "job-10-0123abcd", cwd: "/work/personal", app_id: "memo", project_id: null, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.deepEqual(personal.apps, ["memo"], "개인 폴더 세션의 분기도 그 앱 폴더를 본다");
+  assert.ok(!("homeless" in personal) && !("fresh" in personal), JSON.stringify(personal));
+  const proj = jobEnsureRequest({ session_id: "job-11-0123abcd", cwd: "/work/shared/project/3", app_id: "memo", project_id: 3, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.deepEqual(proj.apps, ["memo"]);
+  const noApp = jobEnsureRequest({ session_id: "job-12-0123abcd", cwd: "/work/personal", app_id: null, project_id: null, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.ok(!("apps" in noApp), "붙일 앱이 없다");
+  const plain = jobEnsureRequest({ session_id: "job-13-0123abcd", cwd: "/work/apps/memo", app_id: "memo", project_id: null, homeless: false, fork: null }, { osUser: "box_alice", ...mem });
+  assert.ok(!("apps" in plain), "분기가 아닌 앱 폴더 작업은 붙일 것이 없다(종전)");
+});
+
+await t("H2 홈 없는 작업의 조건은 부수효과 앞 — 구독 · 프로젝트 폴더 · 다른 앱 폴더 · 앱 없음이면 일시가 아닌 실패(OS 계정 · 브로커를 부르지 않는다)", async () => {
+  const base = { id: 7, session_id: "job-7-0123abcd", requester: "alice", account_member: null, account_kind: "api_key", app_id: "crm", project_id: null, cwd: "/work/apps/crm", homeless: true };
+  const rows: Array<[Record<string, unknown>, RegExp]> = [
+    [{ account_kind: "subscription", account_member: "alice" }, /API 키 실행만/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, /그 앱 폴더/],
+    [{ app_id: null }, /앱 작업만/],
+  ];
+  for (const [o, re] of rows) {
+    await assert.rejects(launchJobContainer({ ...base, ...o } as never, "x"),
+      (e: unknown) => e instanceof JobLaunchError && e.transient === false && re.test(e.message), JSON.stringify(o));
+  }
+});
+
+await t("H3 옛 브로커 대비 — 홈 없이 만들라고 했는데 그 답(homeless:true)이 없으면 거절 사유 · 사람 자리 확보는 그 칸을 안 본다", () => {
+  assert.match(homelessEnsureMismatch(true, { container: "lvly-s-x-slot-1", created: true }) ?? "", /홈 없는 작업 컨테이너를 모른다\(lvly-s-x-slot-1\)/);
+  assert.match(homelessEnsureMismatch(true, { container: "c", homeless: "true" }) ?? "", /모른다/, "정확히 true 만");
+  assert.equal(homelessEnsureMismatch(true, { container: "c", homeless: true }), null);
+  assert.equal(homelessEnsureMismatch(false, { container: "c" }), null);
+  assert.equal(homelessEnsureMismatch(false, { container: "c", homeless: true }), null);
+});
+
+await t("H4 띄우기 배선 — 판정은 OS 계정 · 확보 앞 · 확보 뒤 곧바로 옛 브로커 거절(일시) · 멤버 홈 준비는 사람 자리만 · 그 뒤에 판", () => {
+  const SRC = readFileSync(new URL("../../src/agent-jobs/launch.ts", import.meta.url), "utf8");
+  const body = SRC.slice(SRC.indexOf("export async function launchJobContainer("), SRC.indexOf("type TmuxRun ="));
+  assert.ok(body.length > 500, "본문을 못 잘랐다(관측 장치 확인)");
+  const at = (needle: string): number => { const i = body.indexOf(needle); assert.ok(i > 0, `못 찾았다: ${needle}`); return i; };
+  const seq = [
+    "const homelessWhy = homelessJobRefusal(job);",
+    "const user = homeless ? null : await accountUser(seat);",
+    "made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), jobEnsureRequest(job, { osUser, memMb, memRequestMb }));",
+    "const skew = homelessEnsureMismatch(homeless, made);",
+    "if (skew) throw stepFailure(\"ensure\", skew);",
+    "await prepareMemberHome(user, { osUser, sessionId: sid });",
+    "await tmux(argv);",
+  ].map(at);
+  for (let k = 1; k < seq.length; k++) assert.ok(seq[k] > seq[k - 1], `순서가 틀렸다(${k})`);
+  assert.equal(body.split("prepareMemberHome(").length - 1, 1, "멤버 홈 준비는 한 자리");
+  assert.equal(body.split("ensureMemberOsUser(").length - 1, 1, "OS 계정 준비는 한 자리");
+  assert.match(body, /if \(user\) \{\n\s*const \{ ensureMemberOsUser \}/, "OS 계정 준비는 사람 자리만");
+  assert.match(body, /if \(user\) \{\n\s*const \{ prepareMemberHome \} = await import\(/, "멤버 홈 준비는 사람 자리만");
 });
 
 console.log(`# ${pass} pass`);

@@ -613,6 +613,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
   //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 · 되돌리기 · 끝내기가 지운다(store.failBootAgentJob — 박동한 판은 못 끝낸다).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
+  //  #4891 homeless — 사람 홈 없는 작업 컨테이너에서 도는 작업(앱 서버가 보낸 API 키 에이전트 작업). 그 작업 폴더는 앱 폴더뿐이고
+  //   브로커는 멤버 홈을 붙이지 않는다(agent-jobs/launch.ts). 접수 때 정해지고 바뀌지 않는다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS homeless BOOLEAN NOT NULL DEFAULT false`);
   //  fork(#4489 앱 v2-10): 세션 분기 실행 — 사람 세션의 대화를 이어받는 새 대화(claude `--resume <대화> --fork-session --no-session-persistence`)를
   //   이 작업 컨테이너에서 돌린다. {session · conversation · harness · model · effort · block_connectors · app_folder}(agent-jobs/fork-boot.ForkSpec).
   //   NULL 이면 보통 작업이다. 분기는 그 세션 주인의 자리·구독으로 돌고(account_member = 주인), 작업 폴더는 그 세션의 작업 폴더다.

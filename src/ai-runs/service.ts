@@ -6,15 +6,16 @@
 //  작업 컨테이너에 붙은 실행은 그 작업 행의 상태를 따라간다(syncRun — 작업이 끝나면 걷기(agent-jobs reapJob)가 알리고, 정비(sweepAiRuns)와 읽기(getRun)도 맞춘다).
 //
 //  누가 보내나: 앱 화면(app-ui · app-front — runAppTool 의 같은 판정) · 앱 서버(앱 서버 토큰 + 사람 신원 — 능력 REST) · 사람(도구 호출 · app_id 지정).
-//   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보낸 것만 — 앱 서버가 보낸 에이전트 작업은
-//   «홈 없는 작업 컨테이너»(후속)가 생길 때까지 501(이 코어의 작업 컨테이너는 실행 계정 구성원의 홈을 붙인다 · launch.ts 머리말).
+//   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보내면 그 사람의 자리(홈)에서,
+//   앱 서버가 보내면 «홈 없는 작업 컨테이너»(#4891 — 전용 계정 · 빈 홈 · 앱 폴더만)에서 돈다 — 앱 서버 코드가 사람의 홈(자격 · 토큰)을 쓰는
+//   작업을 띄우지 못하게(agent-jobs/launch.ts 머리말).
 //  관리자는 남의 실행의 상태·오류만 본다(지시·답은 보낸 사람 것 — 작업 컨테이너와 같은 규칙).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
-import type { AgentJobRow } from "../agent-jobs/store.js";
+import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
@@ -32,6 +33,23 @@ type Store = typeof import("./store.js");
 export interface SubmitJobInput {
   requester: string; accountKind: "api_key" | "subscription"; accountMember: string | null; appId: string; projectId: number | null;
   model: string | null; label: string | null; prompt: string; timeoutMin: number | null; bare: boolean; resumeJobId: number | null;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다(앱 서버가 보낸 에이전트 작업) — 앱 폴더에서만(projectId 는 null).
+   *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 앱 서버의 에이전트 작업이 사람 홈에서 돈다(격리 리뷰).
+   */
+  homeless: boolean;
+}
+
+/**
+ * (순수) AI 실행의 작업 접수 → 작업 컨테이너 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다).
+ *  작업 폴더 · 이어받을 대화 · 시간 상한은 부르는 쪽(live.submitJob)이 정한다.
+ */
+export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConversation: string | null; timeoutSec: number }): NewAgentJob {
+  return {
+    requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
+    harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless,
+  };
 }
 
 export interface AiRunDeps {
@@ -42,6 +60,8 @@ export interface AiRunDeps {
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
   apiKey(): Promise<string | null>;
+  /** 그 키의 Anthropic 워크스페이스 id(자격 meta.workspace_id) — 워크스페이스에 묶이지 않은 키는 이게 있어야 돈다. 없으면 null. */
+  apiWorkspaceId?(): Promise<string | null>;
   getApp(appId: string): Promise<OrgApp | null>;
   /** 이 사람이 이 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 안 되면 던진다. */
   assertAppUsable(user: LivelyUser, appId: string): Promise<void>;
@@ -168,7 +188,8 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
 }
 
 /**
- * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(501) → 상한(429) → 행 → 띄움.
+ * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
+ *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -228,9 +249,11 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
-  if (executor === "job" && who.kind === "app_server") {
-    throw new HttpError(501, "앱 서버가 보낸 에이전트 작업(파일 · 도구)은 아직 자리가 없습니다 — 단발(텍스트 · 결과 스키마)만 보내거나, 앱 화면에서 사람이 보내게 하세요");
-  }
+  //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
+  //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 위에서 이미 거절됐다(앱 서버는 사람이 아니다) — 한 겹 더 본다.
+  const homeless = executor === "job" && who.kind === "app_server";
+  if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
+  if (homeless && projectId != null) throw new HttpError(400, "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
 
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
   const p = await d.policy();
@@ -263,6 +286,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       const job = await d.submitJob({
         requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
         prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
+        homeless,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
@@ -402,10 +426,11 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
   const model = row.model ?? DEFAULT_MODEL;
   const maxTokens = p.max_output_tokens;
   const prompt = row.prompt + (row.schema ? schemaInstruction(row.schema) : "");
+  const workspaceId = (await d.apiWorkspaceId?.()) ?? null;   // 워크스페이스에 묶이지 않은 키의 anthropic-workspace-id
   const call = async (i: SingleShotInput): Promise<SingleShotOutput> => {
     const t0 = d.now();
     let out: SingleShotOutput;
-    try { out = await d.singleShot(key, i, ac.signal); }
+    try { out = await d.singleShot(key, { ...i, workspaceId: i.workspaceId ?? workspaceId }, ac.signal); }
     catch (e) {
       const why = ac.signal.aborted ? `시간 상한(${p.single_timeout_sec}초)을 넘었습니다` : `LLM 호출 실패: ${e instanceof Error ? e.message : String(e)}`;
       out = { ok: false, status: 0, text: "", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, model: null, stopReason: null, error: why.slice(0, 400) };
@@ -497,6 +522,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         requester: run.requester, accountKind: run.account_kind, accountMember: run.account_member, appId: run.app_id, projectId: job.project_id,
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
+        //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
+        homeless: job.homeless === true,
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {

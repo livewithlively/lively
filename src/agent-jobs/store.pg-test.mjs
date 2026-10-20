@@ -381,6 +381,21 @@ try {
       (await st.failBootAgentJob(id6, c6.row.boot_hash, "x")) === null && (await row(id6)).status === "done" && (await row(id6)).error === null);
   }
 
+  // ── HL. 홈 없는 작업(#4891) — 접수가 그 표시를 그대로 적고(기본 false) 행 · 목록 요약에 실린다 ──────────────────
+  {
+    await cleanup();
+    const plain = await add("hl-plain");
+    const put = await st.insertAgentJob(job("hl-app", {
+      accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", homeless: true,
+    }), ROOMY);
+    const hid = put.row?.id;
+    chk("HL1 접수 — 표시를 안 주면 false · 주면 true 로 적는다(되읽기) · 접수 응답에도 실린다",
+      (await row(plain)).homeless === false && put.row?.homeless === true && (await row(hid)).homeless === true,
+      JSON.stringify({ plain: (await row(plain)).homeless, put: put.row?.homeless, read: hid && (await row(hid)).homeless }));
+    const [l] = await st.listAgentJobs({ requester: `${REQ}hl-app`, limit: 5 });
+    chk("HL2 목록 요약에도 실린다", l?.homeless === true, JSON.stringify(l && { id: l.id, homeless: l.homeless }));
+  }
+
   // ── P. 보존 정리(#4828) — 끝났고 걷은 작업 가운데 끝난 지 보존 일수가 지난 행만 지운다 ──────────────────
   //  조건이 SQL 한 문장(store.pruneAgentJobs)이라 가짜 저장소로는 못 잰다 — 여기서 행을 되읽어 판정한다.
   {

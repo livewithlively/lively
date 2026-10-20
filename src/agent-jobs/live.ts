@@ -5,12 +5,15 @@
 //   멤버의 uid·홈으로 돈다(구독 로그인이 거기 있다) — 같은 uid 라 홈의 키트 토큰·git 자격을 읽을 수 있고, 판이 물려준 env 도 같다.
 //   그래서 앱 동의의 뜻은 «그 앱 화면에서 내가 보낸 지시를 나로서 실행» 이다(상민 2026-10-16 결정 ③ «본인 세션과 같은 신뢰» · 동의 창의
 //   «에이전트 작업» 줄). 받는 길은 service.assertMaySubmit 이 좁힌다(앱 서버 · 앱 토큰 직접 · 작업 AI 자신은 거절).
+//  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 다르다: 그 사람의 홈 · OS 계정을 붙이지 않고(launch.ts — 전용 계정 · 빈 홈),
+//   작업 AI 의 토큰도 앱 서버 급 주체다(plan.jobAppTokenOpts — 능력 API · /mcp 에서만 · 무조건 통과 도구 없음). 그 AI 를 부린 것은 앱 서버
+//   코드라, 사람 이름으로 세션을 열거나(홈이 붙는다) 파일 · 계정 길을 쓰는 것을 토큰 층에서도 막는다(격리 리뷰 — 마운트 층만으로는 모자랐다).
 import crypto from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
-import { jobSeatMember } from "./plan.js";
+import { jobAppTokenOpts, jobSeatMember } from "./plan.js";
 
 /**
  * #4489 — 세션 분기에서 열 라이블리 도구(판정기 설정 livelyAllow) — 이름으로 적은 목록(fork-guard.FORK_LIVELY_READ_TOOLS) 가운데 지금 MCP 로
@@ -91,7 +94,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
         //  앱 작업 — 앱 토큰(구성원 권한 ∩ 앱 동의 · 도구도 그 앱 동의 목록으로 좁혀진다 — principal.requireAppTool). 배선이지 경계가 아니다(머리말).
         //   동의를 거뒀거나 앱이 꺼졌으면 던진다 → 그 작업은 돌지 않는다(service.onBoot).
         const { mintAppToken } = await import("../apps/principal.js");
-        const t = await mintAppToken(seat, job.app_id, "agent-job", { ttlSec });
+        //   #4891 — 홈 없는 작업은 앱 서버 급 주체(plan.jobAppTokenOpts) — 사람 이름의 세션 · 파일 · 계정 길을 열지 않는다.
+        const t = await mintAppToken(seat, job.app_id, "agent-job", jobAppTokenOpts(job, ttlSec));
         return { token: t.token, tokenHash: t.tokenHash };
       }
       if (!seat) return null;

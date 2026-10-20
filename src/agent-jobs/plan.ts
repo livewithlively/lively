@@ -56,12 +56,41 @@ export function jobSessionId(jobId: number, hex8: string): string {
 export const JOB_SESSION_ID_RE = /^job-[1-9][0-9]{0,15}-[0-9a-f]{8}$/;
 
 /**
- * (순수) 작업이 앉는 자리(OS 계정 · 홈)의 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람.
- *  API 키 실행도 사람의 자리에서 돈다(이 코어의 작업 컨테이너는 구성원 홈을 붙인다 — launch.ts 머리말). 키는 그 자리에 들어가지 않고 하네스는
- *  빈 설정 폴더 + 프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob). «홈 없는 작업 컨테이너» 는 후속이다.
+ * (순수) 작업의 판정 · 권한 기준 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람. 동시 상한 셈 · 활성 판정
+ *  (live.assertJobAllowed) · 작업 AI 토큰(live.mintMcpToken)이 이 사람으로 본다. 키는 어느 자리에도 들어가지 않고 하네스는 빈 설정 폴더 +
+ *  프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob).
+ *  컨테이너의 자리(OS 계정 · 홈)는 이와 다를 수 있다: 홈 없는 작업(#4891 — 앱 서버가 보낸 API 키 에이전트 작업)은 이 사람의 홈을 붙이지 않고
+ *  전용 계정(HOMELESS_OS_USER)의 빈 홈에서 돈다(launch.ts).
  */
 export function jobSeatMember(job: { account_kind: string; account_member: string | null; requester: string }): string | null {
   return job.account_kind === "api_key" ? job.requester : job.account_member;
+}
+
+/**
+ * #4891 — 홈 없는 작업 컨테이너의 OS 계정(브로커 HOMELESS_OS_USER 와 같은 값). 구성원 계정은 `box_<slug>` 이고 slug 엔 `_` 가 없다
+ *  (terminal-isolation.memberSlug — [a-z0-9-]) → 어떤 구성원과도 겹치지 않는다. 브로커는 이 계정으로는 홈 없는 확보만 받는다.
+ */
+export const HOMELESS_OS_USER = "box_lvly_job";
+
+/**
+ * (순수) 작업 AI 의 앱 토큰 옵션 — 작업 상한만큼 살고(ttlSec), 홈 없는 작업(#4891)이면 주체를 앱 서버 급으로: 능력 API · /mcp 에서만 통하고
+ *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
+ */
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number): { ttlSec: number; appServerPrincipal?: true } {
+  return job.homeless === true ? { ttlSec, appServerPrincipal: true } : { ttlSec };
+}
+
+/**
+ * (순수) 홈 없는 작업이 될 수 있나(#4891) — API 키 실행 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더. 어기면 사유, 맞으면 null.
+ *  구독은 그 사람의 로그인(홈)으로만 돌고, 프로젝트 폴더는 사람 경계(공개범위)라 홈 없는 자리에 붙이지 않는다. 홈 없는 작업이 아니면 null.
+ */
+export function homelessJobRefusal(job: { homeless?: boolean; account_kind: string; app_id: string | null; project_id: number | null; cwd: string }): string | null {
+  if (job.homeless !== true) return null;
+  if (job.account_kind !== "api_key") return "홈 없는 작업은 API 키 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "홈 없는 작업은 앱 작업만 됩니다";
+  if (job.project_id != null) return "홈 없는 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "홈 없는 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  return null;
 }
 
 /** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */

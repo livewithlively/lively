@@ -5,13 +5,16 @@
 //   ② 멤버 홈 준비(prepareMemberHome — 키트·safe.directory·git 자격) — 구독 실행은 그 멤버 홈이 붙는다(설계 §12 ④)
 //   ③ 컨테이너 안 tmux 에 판(부트) — `box-spawn --cwd <작업 폴더> node -e <부트>`. 판이 빠지면 tmux 가 끝나고 브로커가 걷는다(#4696).
 //  걷기는 tmux kill-session 한 번이다 — 브로커가 그 결과를 «끝났다» 신호로 받아 안이 비면 곧바로 철거한다(신호 +1초, 실측 p50 2.2초).
+//  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 ①의 확보를 «홈 없음» 으로 하고(전용 계정 · 앱 폴더 작업 폴더 · 브로커가 빈 홈을
+//   컨테이너 안에 만든다) ②를 건너뛴다 — 앱 서버 코드가 사람의 홈(자격 · 토큰 · 키트)을 쓰는 작업을 띄우지 못하게.
 //
 //  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 작업 컨테이너는 매니지드 전용이다(자가호스팅 실행은 v2-8).
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
-import { JOB_SESSION_ID_RE, jobSeatMember } from "./plan.js";
+import { HOMELESS_OS_USER, JOB_SESSION_ID_RE, homelessJobRefusal, jobSeatMember } from "./plan.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX } from "./runner.js";
 import type { AgentJobRow } from "./store.js";
+import type { SessionEnsureRequest } from "../terminal/session-tmux.js";
 
 /**
  * 띄우기 실패. transient = 다시 하면 될 수도 있는 실패(OS 계정 · 작업 폴더 · 컨테이너 확보 · 홈 준비 · 판 띄우기 — 노드 자리 · 브로커 중계 ·
@@ -72,6 +75,33 @@ export function jobTmuxArgv(o: { sessionId: string; jobId: number; bootSecret: s
   ];
 }
 
+/**
+ * (순수) 브로커 확보 요청(`/lvly/session/ensure` 본문) — 사람 세션(createSession)과 같은 꼴에 작업 컨테이너의 몫만 얹는다.
+ *  · 프로젝트 폴더에서 도는 앱 작업이면 그 앱 폴더를 `<작업 폴더>/.lively/apps/<앱>` 에 붙인다(#4684 와 같은 길). 앱 폴더가 작업 폴더면 붙일 것이 없다.
+ *    #4489 세션 분기도 붙인다 — 분기는 그 세션의 작업 폴더에서 돌고, 그 세션에 붙은 앱의 폴더를 본 세션처럼 읽는다(판정기가 그 자리만 연다).
+ *  · `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
+ *  · 홈 없는 작업(#4891)은 `homeless: true` — 계정은 전용 계정이어야 한다(브로커가 다시 본다).
+ */
+export function jobEnsureRequest(
+  job: Pick<AgentJobRow, "session_id" | "cwd" | "app_id" | "project_id" | "homeless" | "fork">,
+  o: { osUser: string; memMb: number; memRequestMb: number },
+): SessionEnsureRequest {
+  const apps = job.app_id && (job.project_id != null || job.fork) ? [job.app_id] : undefined;
+  return {
+    sessionId: job.session_id ?? "", osUser: o.osUser, cwd: job.cwd, memMb: o.memMb, memRequestMb: o.memRequestMb, tmux: "inside",
+    ...(apps ? { apps } : {}),
+    ...(job.homeless === true ? { homeless: true } : {}),
+  };
+}
+
+/**
+ * (순수) 홈 없는 확보를 요청했는데 브로커가 «홈 없이 만들었다»(`homeless: true`)고 답하지 않았으면 사유, 아니면 null (#4891).
+ *  이 칸을 모르는 옛 브로커는 요청의 homeless 를 무시하고 멤버 홈 자리를 붙인다 — 그 컨테이너에는 판을 띄우지 않는다.
+ */
+export function homelessEnsureMismatch(requested: boolean, made: Record<string, unknown>): string | null {
+  return requested && made.homeless !== true ? `브로커가 홈 없는 작업 컨테이너를 모른다(${String(made.container ?? "?")})` : null;
+}
+
 /** 실패 문장에서 비밀을 가린다 — tmux 실행 실패는 명령줄을 통째로 싣는다(execFile 의 «Command failed: …»). */
 export function redactSecret(msg: string, secret: string): string {
   return secret ? String(msg).split(secret).join("***") : String(msg);
@@ -84,48 +114,56 @@ export function redactSecret(msg: string, secret: string): string {
 export async function launchJobContainer(job: AgentJobRow, bootSecret: string): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid) throw new JobLaunchError("세션 id 가 없는 작업입니다");
+  //  #4891 — 홈 없는 작업의 조건(API 키 · 앱 작업 · 앱 폴더 작업 폴더)은 부수효과 앞에서 본다. 어기면 다시 해도 안 된다.
+  const homelessWhy = homelessJobRefusal(job);
+  if (homelessWhy) throw new JobLaunchError(homelessWhy);
+  const homeless = job.homeless === true;
   //  자리의 구성원 — 구독이면 실행 계정, API 키(#4488)면 보낸 사람(plan.jobSeatMember). 키는 자리에 들어가지 않는다(판 env 가 프록시를 가리킨다).
+  //   홈 없는 작업은 그 사람의 홈 · OS 계정을 쓰지 않는다(전용 계정 · 빈 홈) — 그래도 보낸 사람은 있어야 한다(권한 판정 · 작업 AI 토큰의 기준).
   const seat = jobSeatMember(job);
   if (!seat) throw new JobLaunchError("실행 계정이 없는 작업입니다");
   const { tenantSlug, PANE_LOCALE } = await import("../terminal/catalog.js");
   const { ensureSessionContainerViaRelay, sessionEnsureArgv, tmuxInSessionContainer } = await import("../terminal/session-tmux.js");
   const slug = tenantSlug();
   if (!tmuxInSessionContainer(slug) || !slug) throw new JobLaunchError("이 배포에서는 작업 컨테이너를 띄울 수 없습니다(매니지드 전용)");
-  const user = await accountUser(seat);
-  const { ensureMemberOsUser } = await import("../terminal/profiles.js");
-  const osUser = await ensureMemberOsUser(user).catch((e) => { throw stepFailure("os-user", e); });
-  if (!osUser) throw stepFailure("os-user", `실행 계정 ${seat}`);
+  const user = homeless ? null : await accountUser(seat);
+  let osUser: string = HOMELESS_OS_USER;
+  if (user) {
+    const { ensureMemberOsUser } = await import("../terminal/profiles.js");
+    const mine = await ensureMemberOsUser(user).catch((e) => { throw stepFailure("os-user", e); });
+    if (!mine) throw stepFailure("os-user", `실행 계정 ${seat}`);
+    osUser = mine;
+  }
   //  메모리 — 사람 세션과 같은 정책·같은 셈(sessions.ts createSession: max 없으면 high, 0 = 브로커 기본).
   const { effectiveSessionMemoryPolicy } = await import("../sessions/session-memory-policy.js");
   const { getRuntimeConfig } = await import("../org/store/runtime-config.js");
   const mp = await effectiveSessionMemoryPolicy(() => getRuntimeConfig().then((c) => c.session_memory_policy)).catch(() => null);
   const memMb = mp ? (mp.per_session_max_mb > 0 ? mp.per_session_max_mb : mp.per_session_high_mb) : 0;
   const memRequestMb = mp?.per_session_request_mb ?? 0;
-  //  프로젝트 폴더에서 도는 앱 작업이면 그 앱 폴더를 `<작업 폴더>/.lively/apps/<앱>` 에 붙인다(#4684 와 같은 길). 앱 폴더가 작업 폴더면 붙일 것이 없다.
-  //   #4489 세션 분기도 붙인다 — 분기는 그 세션의 작업 폴더에서 돌고, 그 세션에 붙은 앱의 폴더를 본 세션처럼 읽는다(판정기가 그 자리만 연다).
-  const apps = job.app_id && (job.project_id != null || job.fork) ? [job.app_id] : undefined;
   //  작업 폴더 — 프로젝트 폴더는 사람 세션처럼 멤버 경계에서 먼저 만든다(createSession 과 같은 순서 · 없으면 바인드가 실패한다).
-  //   앱 폴더(`/work/apps/<앱>`)는 브로커가 확보 때 원본을 보장한다(lvly-cloud #4490 — 링크 없이 O_NOFOLLOW 사슬).
+  //   앱 폴더(`/work/apps/<앱>`)는 브로커가 확보 때 원본을 보장한다(lvly-cloud #4490 — 링크 없이 O_NOFOLLOW 사슬). 홈 없는 작업은 앱 폴더뿐이다.
   if (job.project_id != null) {
     const { memberMkdir } = await import("../terminal/terminal-member-fs.js");
     try { await memberMkdir(osUser, job.cwd); }
     catch (e) { throw stepFailure("workdir", `${job.cwd} — ${(e as Error)?.message ?? e}`); }
   }
   let made: { container: string; created: boolean } & Record<string, unknown>;
-  //  `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
   try {
-    made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), {
-      sessionId: sid, osUser, cwd: job.cwd, memMb, memRequestMb, tmux: "inside",
-      ...(apps ? { apps } : {}),
-    });
+    made = await ensureSessionContainerViaRelay(sessionEnsureArgv(slug), jobEnsureRequest(job, { osUser, memMb, memRequestMb }));
   } catch (e) {
     throw stepFailure("ensure", e);
   }
   //  어느 자리(컨테이너)에 앉았나 — 브로커 저널(철거 줄은 컨테이너 이름만 싣는다)과 이 작업을 잇는 유일한 단서다.
-  logger.info({ job: job.id, session: sid, container: made.container, created: made.created }, "[agent-job] 작업 컨테이너 확보");
-  const { prepareMemberHome } = await import("../terminal/sessions.js");
-  try { await prepareMemberHome(user, { osUser, sessionId: sid }); }
-  catch (e) { throw stepFailure("home", e); }
+  logger.info({ job: job.id, session: sid, container: made.container, created: made.created, homeless }, "[agent-job] 작업 컨테이너 확보");
+  //  #4891 — 홈 없이 만들었다는 브로커의 답이 없으면(이 칸을 모르는 옛 브로커 — 멤버 홈 자리를 붙였다) 그 컨테이너에 판을 띄우지 않는다.
+  //   일시 실패로 되돌린다(노드 브로커가 새 판으로 바뀌는 중일 수 있다). 판이 없으면 tmux 도 없어 브로커의 닻 없음 안전망이 걷는다.
+  const skew = homelessEnsureMismatch(homeless, made);
+  if (skew) throw stepFailure("ensure", skew);
+  if (user) {
+    const { prepareMemberHome } = await import("../terminal/sessions.js");
+    try { await prepareMemberHome(user, { osUser, sessionId: sid }); }
+    catch (e) { throw stepFailure("home", e); }
+  }
   const { orgTimezone } = await import("../org/timezone.js");
   const { BOX_SPAWN } = await import("../terminal/terminal-isolation.js");
   const { tmux } = await import("../terminal/tmux-exec.js");
