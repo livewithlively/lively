@@ -4,6 +4,7 @@
 //   C 빗금 명령 줄 해석(typedCommandOf · promptOfLine)
 //   S 빗금 명령 꼴(looksLikeSlashCommand) · 입력칸을 떠났나(slashCommandLeftInput)
 //   B 번들 경계(이 모듈은 노드 번들에 실린다)
+//   Q 셸 명령(맨 앞 `!` — Claude Code bash 모드 · 매니지드 실측 2026-10-19)
 //  K 는 진짜 줄 맞춤(alignedSource → readAlignedWindow)과 진짜 claude 해석기(harness-io/adapter)를 메모리 버퍼 위에서 돌린다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -264,6 +265,97 @@ t("★ C7 조작된 거대한 명령 줄(여는 인자 태그만 되풀이) — 
   assert.equal(typedCommandOf(huge), null, "상한을 넘는 글은 명령 줄이 아니다");
   assert.ok(performance.now() - t0 < 20, "상한을 넘는 글을 훑었다");
   assert.equal(typedCommandOf(`<command-name>/hello</command-name><command-args>${"사".repeat(70_000)}</command-args>`), null, "상한을 넘는 정상 꼴도 명령 줄로 보지 않는다");
+});
+
+// ── Q — 셸 명령(맨 앞 `!`) ─────────────────────────────────────────────────────────────
+//  실측 꼴(매니지드 d6496554 — Claude Code 2.1.301): 한가할 때 `<bash-input> 명령</bash-input>`(앞 공백) + 출력 줄 · 바쁠 때 대기열 줄 content = 명령뿐
+//   → 차례가 오면 `<bash-input>명령</bash-input>`(공백 없이).
+const { bashInputOf, bashCommandOf } = scan as unknown as { bashInputOf: (text: string) => string | null; bashCommandOf: (said: string) => string | null };
+const bashIn = (cmd: string, ts: string, space = true): string => user(`<bash-input>${space ? " " : ""}${cmd}</bash-input>`, ts);
+const bashOut = (out: string, ts: string): string => user(`<bash-stdout>${out}</bash-stdout><bash-stderr></bash-stderr>`, ts);
+t("★ Q1 셸 명령(«! 명령») — 친 뒤 `<bash-input> 명령</bash-input>` 사람 줄(한가할 때 실측 꼴)이면 «전달됨» (직전 판정은 «미확인»)", async () => {
+  const fs = memFs({ "b.jsonl": BEFORE + bashIn("git status", at(7_000)) + bashOut("On branch main", at(7_100)) });
+  assert.equal(await check(fs, "b.jsonl", "! git status", echoWatch(T0)), true);
+});
+t("Q2 공백 없이 적힌 셸 명령 줄(대기열에서 꺼내 돈 실측 꼴) · `!` 뒤 공백 없이 친 말 · 앞뒤 공백 — 모두 «전달됨»", async () => {
+  for (const said of ["! git status", "!git status", "  !  git status  "]) {
+    assert.equal(await check(memFs({ "b.jsonl": BEFORE + bashIn("git status", at(3_000), false) }), "b.jsonl", said, echoWatch(T0)), true, `공백 없는 줄 · ${JSON.stringify(said)}`);
+    assert.equal(await check(memFs({ "b.jsonl": BEFORE + bashIn("git status", at(3_000)) }), "b.jsonl", said, echoWatch(T0)), true, `앞 공백 줄 · ${JSON.stringify(said)}`);
+  }
+});
+t("★ Q3 바쁠 때 친 셸 명령 — 친 뒤 «대기열에 넣었다» 줄(content = `!`·공백 뗀 명령)이면 «전달됨»", async () => {
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + enqueue("git status", at(800)) }), "b.jsonl", "! git status", echoWatch(T0)), true);
+});
+t("Q4 다른 명령의 셸 명령 줄 · 대기열 줄 → 아님", async () => {
+  const fs = memFs({ "b.jsonl": BEFORE + bashIn("git log", at(2_000)) + bashOut("…", at(2_100)) + enqueue("git diff", at(3_000)) });
+  assert.equal(await check(fs, "b.jsonl", "! git status", echoWatch(T0)), false);
+});
+t("Q5 같은 셸 명령을 전에 돌린 줄(친 때−5초 앞)뿐이면 아님 — 경계는 사람 말 줄과 같다(정확히 −5초는 증거 · 1ms 앞은 아님)", async () => {
+  const old = BEFORE + bashIn("git status", at(-60_000)) + bashOut("…", at(-59_000)) + enqueue("git status", at(-30_000));
+  assert.equal(await check(memFs({ "b.jsonl": old }), "b.jsonl", "! git status", echoWatch(T0)), false);
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + bashIn("git status", at(-5_000)) }), "b.jsonl", "! git status", echoWatch(T0)), true);
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + bashIn("git status", at(-5_001)) }), "b.jsonl", "! git status", echoWatch(T0)), false);
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + enqueue("git status", at(-5_001)) }), "b.jsonl", "! git status", echoWatch(T0)), false);
+});
+t("Q6 셸 명령이 아닌 말(«git status»)은 셸 명령 줄로 «전달됨» 이 아니다", async () => {
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + bashIn("git status", at(2_000)) }), "b.jsonl", "git status", echoWatch(T0)), false);
+});
+t("Q7 셸 명령(«! 명령»)은 일반 사람 말 줄 «명령» 으로 «전달됨» 이 아니다(셸 명령 줄·대기열 줄에서만 명령끼리 견준다)", async () => {
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + user("git status", at(2_000)) }), "b.jsonl", "! git status", echoWatch(T0)), false);
+});
+t("Q8 «! 명령» 을 글 그대로 적는 줄(bash 모드 없는 하네스) — 친 뒤 사람 말 줄 «! 명령» 이면 «전달됨»(종전 그대로)", async () => {
+  assert.equal(await check(memFs({ "b.jsonl": BEFORE + user("! git status", at(2_000)) }), "b.jsonl", "! git status", echoWatch(T0)), true);
+  const parse = (text: string): unknown[] => harnessIo("codex")!.parse!(text, {}).lines;
+  const fs = memFs({ "c.jsonl": codexUser("! git status", at(2_000)) });
+  assert.equal(await echoInTranscript(fs, "c.jsonl", fs.size("c.jsonl"), "! git status", echoWatch(T0), parse), true, "codex");
+});
+t("Q9 셸 출력 줄(`<bash-stdout>…`)은 어느 말의 증거도 아니다", async () => {
+  const fs = memFs({ "b.jsonl": BEFORE + bashOut("git status", at(2_000)) });
+  for (const said of ["! git status", "git status"]) assert.equal(await check(fs, "b.jsonl", said, echoWatch(T0)), false, said);
+});
+t("Q10 명령이 빈 셸 명령(«!» · «!   ») — 빈 셸 명령 줄 · 빈 대기열 줄과도 짝이 아니다 · 오류 없음", async () => {
+  const fs = memFs({ "b.jsonl": BEFORE + bashIn("", at(1_000), false) + enqueue("", at(2_000)) + bashIn("   ", at(3_000)) });
+  for (const said of ["!", "!   ", " ! "]) assert.equal(await check(fs, "b.jsonl", said, echoWatch(T0)), false, JSON.stringify(said));
+  assert.equal(bashCommandOf("!"), "");
+  assert.equal(bashCommandOf("git status"), null);
+  assert.equal(bashInputOf("<bash-input></bash-input>"), "");
+  for (const s of ["<bash-input>", "</bash-input>", "", "<bash-input>ls", "ls</bash-input>", "<bash-stdout>ls</bash-stdout>"]) assert.equal(bashInputOf(s), null, JSON.stringify(s));
+});
+t("Q11 늦은 에코(제때 창 뒤) — 셸 명령 줄 · 대기열 줄의 명령이 통째로 같으면 증거 · 머리만 같으면 아님 · 제때 창 안이면 머리 160자", () => {
+  const LONG = "echo " + "가".repeat(200);
+  const win = { notBefore: T0 - ECHO_SKEW_MS, userNotAfter: T0 + 60_000, queuedNotAfter: T0 + 60_000 };
+  const one = (s: string): unknown => JSON.parse(s);
+  const late = at(10 * 60_000);
+  assert.equal(scan.scanLinesForPrompt([one(bashIn(LONG, late, false))], "! " + LONG, win).found, true, "셸 명령 줄 · 통째로 같음");
+  assert.equal(scan.scanLinesForPrompt([one(enqueue(LONG, late))], "! " + LONG, win).found, true, "대기열 줄 · 통째로 같음");
+  assert.equal(scan.scanLinesForPrompt([one(bashIn(LONG + " 끝", late, false))], "! " + LONG, win).found, false, "늦은 줄은 통째로 같아야");
+  assert.equal(scan.scanLinesForPrompt([one(bashIn(LONG + " 끝", at(30_000), false))], "! " + LONG, win).found, true, "제때 창 안이면 머리 160자");
+});
+t("Q12 셸 명령 줄 상한 — 정확히 64KB 인 글은 읽는다 · 1자 넘으면 셸 명령 줄이 아니다 · 닫는 태그 없는 거대한 조작 줄도 곧 끝난다", () => {
+  const max = scan.CMD_LINE_MAX;
+  const body = (n: number): string => "<bash-input>" + "a".repeat(n - "<bash-input>".length - "</bash-input>".length) + "</bash-input>";
+  assert.equal(body(max).length, max, "재료 전제");
+  assert.equal(bashInputOf(body(max))?.length, max - "<bash-input></bash-input>".length);
+  assert.equal(bashInputOf(body(max + 1)), null);
+  const t0 = performance.now();
+  assert.equal(bashInputOf("<bash-input>".repeat(300_000)), null);
+  assert.equal(bashInputOf("<bash-input>" + "x".repeat(60_000)), null, "닫는 태그 없음");
+  assert.ok(performance.now() - t0 < 20, "상한·태그 판단이 선형이 아니다");
+});
+t("★ Q13 실측 재현(매니지드 행 131429·131430 꼴) — 복원 직후 친 «! 명령» 은 7초 뒤 셸 명령 줄로 · 바쁠 때 친 같은 말은 1초 뒤 대기열 줄로 → 둘 다 «전달됨» (직전 판정은 둘 다 «미확인»)", async () => {
+  const SAID = "! gh pr checks 1421 --repo livewithlively/lively";
+  const CMD = SAID.slice(2);
+  const fs = memFs({ "r.jsonl": BEFORE });
+  const w2 = echoWatch(T0);
+  assert.equal(await check(fs, "r.jsonl", SAID, w2), false, "친 직후엔 아직 없다");
+  const afterRun = BEFORE + bashIn(CMD, at(7_000)) + bashOut("✓ test", at(12_000)) + L({ type: "api-request", timestamp: at(12_300) }) + ai("확인했습니다.", at(14_000));
+  fs.set("r.jsonl", afterRun);
+  assert.equal(await check(fs, "r.jsonl", SAID, w2), true, "앞 행 — 셸 명령 줄");
+  const T3 = 85_000;
+  const w3 = echoWatch(T0 + T3);
+  fs.set("r.jsonl", afterRun + enqueue(CMD, at(T3 + 800)));
+  assert.equal(await check(fs, "r.jsonl", SAID, w3), true, "뒤 행 — 대기열 줄(앞 행의 셸 명령 줄은 친 때 하한 앞이라 증거가 아니다)");
+  assert.equal(await check(memFs({ "q.jsonl": afterRun }), "q.jsonl", SAID, echoWatch(T0 + T3)), false, "뒤 행에 대기열 줄이 없으면 앞 행의 줄로 «전달됨» 이 아니다");
 });
 
 // ── S — 빗금 명령 꼴 · 입력칸을 떠났나 ────────────────────────────────────────────────

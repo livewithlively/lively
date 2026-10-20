@@ -23,7 +23,8 @@ export interface LivelyUser {
   //  그 사람 ∩ 그 사람의 앱 동의다(apps/app-server-auth). 빈도 한도를 사람마다 따로 센다.
   appServer?: boolean;
   // 앱 주소의 `/_lively/*` 로 들어온 호출이면 그 주소의 판(#4482) — 보는 판(선언한 도구 · 표)을 사람이 아니라 주소가 정한다
-  //  (apps/visibility.ts Viewer.address). 앞단이 서명한 기계 헤더에서만 채운다(apps/app-front-api.ts).
+  //  (apps/visibility.ts Viewer.address). 앞단이 서명한 것에서만 채운다 — 기계 헤더(apps/app-front-api.ts) · 앱 서버가 실어 온 사람 신원의 판
+  //  (#4485 apps/app-server-auth.ts — 서버 코드가 도는 판과 같은 판의 표).
   appAddress?: "pub" | "draft";
 }
 

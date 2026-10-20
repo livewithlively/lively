@@ -39,8 +39,8 @@ export interface BuildDeps {
   spawnInSession?: (seat: BuildSeat, argv: string[]) => Promise<ChildProcess>;
   /** zip 서명 주소(시험이 로컬 주소로). */
   presignPut?: (key: string, expiresSec: number) => Promise<string>;
-  /** S3 에 zip 이 실제로 있나(크기 · 지금 판 번호 — #4801). */
-  headZip?: (key: string) => Promise<{ size: number; versionId?: string | null } | null>;
+  /** S3 에 zip 이 실제로 있나(크기 · 지금 판 번호 — #4801). versionId 를 주면 그 판이 아직 있나(#4887 — 함수 판이 읽는 zip 판). */
+  headZip?: (key: string, versionId?: string) => Promise<{ size: number; versionId?: string | null } | null>;
   /** 시험 — zip 지우기(빌드 도중 앱이 지워진 경우 · 앱 지우기). 기본 = S3. */
   deleteZip?: (key: string) => Promise<void>;
   readBlob?: (kind: BlobStoreKind, h: string) => Promise<Buffer | null>;

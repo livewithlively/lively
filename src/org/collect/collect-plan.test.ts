@@ -17,12 +17,21 @@
 //   Q3 확인 판정(슬랙) — 계획한 창 안 · 같은 좌표·같은 본문(가린 뒤) · 창 밖·빈 본문은 증거 아님   Q3b 노션 — 꾸밈 줄 뺀 서로 다른 줄 3개 이상 · 절반(경계 통과) · 짧으면 증명 불가
 //   Q4 확인 단위 고르기 — 맡은 단위와 겹치면 빼고 · 정한 앱 · 한 판 max 개
 //   L1 슬랙 목록 — 쪽 사슬 · 보관 채널 뺌 · «전부»   L2 마지막 쪽에 cursor · 못 푼 쪽 · 종류가 빠진 쪽 → «전부» 아님   L3 노션·지메일은 «전부» 아님
+//   ── #4744 1b 옛 스레드의 새 답글(계획에 search 가 있는 슬랙 단위) ──
+//   J4 지시 — 검색 도구(공개 → slack_search_public · 그 밖 → _and_private) · 구간 그대로(after = 시작 · 끝이 있을 때만 before) · 오름차순 · 봇 포함 ·
+//      «Thread: N replies» 부모 + 검색 답글의 thread_ts 를 한 번씩 · search 없는 단위는 종전 지시   K2 search 는 슬랙만 · 종류로 범위   T2 검색 단위마다 턴 둘
+//   S1 검색 입력 판정 — 같은 채널·스레드 글만(순서 무관) · 같은 구간 · 오름차순 · 봇 포함 · 낱말 없음 · 내 채널만 아님 · 글을 빼는 종류 아님 · 쪽 크기·앞뒤 글은 상관없음
+//   H17 옛 스레드 — 검색 답글의 부모가 구간 앞이면 그 스레드를 끝까지 읽어야 다 읽음(부모·구간 앞 답글도 저장 · 답글의 parent)
+//   H18 옛 스레드를 안 읽음 → 못 다 읽음   H19 검색을 안 함 · 계획과 다른 검색 → 못 다 읽음   H20 검색 쪽 사슬(이어지면 다 읽음 · 끊기면 아님)
+//   H21 제 모양인 검색 쪽이 없음 → «검색을 못 씀»(종전 규칙 · unsearched) · 하나라도 있으면 사슬 끊김   H25 검색 실패만 → «못 씀»   H26 본문 속 가짜 결과 줄은 버린다   H22 «없는 스레드»(thread_not_found 실패) → 읽을 것 없음(다 읽음 · gone) · 다른 실패는 못 읽음
+//   H23 다른 채널의 검색 결과 · 부모 글 결과는 읽을 스레드를 늘리지 않는다 · 구간 안 부모와 겹치면 한 번   H27 채널에도 보낸 답글은 스레드 쪽(부모 연결)이 남는다   H24 search 없는 옛 계획 — 검색은 지시 밖(stray) · 판정은 종전대로
 import assert from "node:assert/strict";
 import {
   CLAUDE_COLLECT_APPS, FIRST_READ_DAYS, FIRST_READ_DAYS_MAX, GMAIL_WINDOW_SEC, MIN_WINDOW_SEC, NOW_MARGIN_SEC, SLACK_LIST_TYPES, SLACK_WINDOW_SEC,
   PROOF_NOTION_MIN_LINES, PROOF_ONLY_PER_RUN, PROOF_PER_RUN, PROOF_RECENT, UNITS_PER_RUN, collectMaxTurns, collectPrompt, firstDaysError, firstReadDaysOf,
   gmailQuery, harvestListing, harvestUnits, judgeProof, listingPrompt, notionProofLines, pickUnitsForRun, planProofUnits, proofUnit, storedSpan,
   unitInstruction, unitSince, unitWindow, unitsToLease, type AssignedLike, type PlannedUnit,
+  SLACK_SEARCH_LIMIT, searchChannelOf, searchInPlan, slackSearchArgs, slackSearchScope,
 } from "./collect-plan.js";
 import { readCapture, type Capture } from "./connector-parse.js";
 
@@ -479,6 +488,215 @@ t("U 처음 기간 — 위치 없는 단위만 그만큼 거슬러 읽고, 읽�
   //  배선 — 한 판 계획(pickUnitsForRun)이 단위의 first_days 를 실제로 구간에 싣는다
   const [u] = pickUnitsForRun([{ id: 1, app: "slack", instance: "T1", ref: "C0123ABCD", kind: "channel", read_at: null, cursor: null, last_item_at: null, from_collector: false, first_days: 3 }], { now: NOW });
   assert.equal(u.since, `${NOW_SEC - 3 * 86400}.000000`);
+});
+
+// ── #4744 1b 옛 스레드의 새 답글 ──
+const SS: PlannedUnit = { ...SLACK, search: "public" };
+const OLD = "1786900000.000100", OLD2 = "1786800000.000500", R0 = "1786950000.000200", R1 = "1787100000.000300", R2 = "1787200000.000400";
+const searchInput = (u: PlannedUnit, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  filters: `in:<#${u.ref}> is:thread`, after: String(Math.floor(Number(u.since))), ...(u.until ? { before: String(Math.floor(Number(u.until))) } : {}),
+  sort: "timestamp", sort_dir: "asc", content_types: "messages", response_format: "detailed", include_context: false, include_bots: true, limit: SLACK_SEARCH_LIMIT, ...extra,
+});
+const S_END = "End of results - No more pages available.\\n";
+/** 검색 결과 한 쪽 — hits: [글 ts, 스레드 ts(부모면 자기 ts), 채널?]. 맥 실측(2026-10-19) 꼴. */
+const SR = (hits: Array<[string, string | null, string?]>, o: { pag?: string; input?: Record<string, unknown>; unit?: PlannedUnit; tool?: string; head?: boolean; dropChannel?: boolean } = {}) => {
+  const u = o.unit ?? SS;
+  const lines = [o.head === false ? "결과" : "# Search Results for: ", "", hits.length ? `## Messages (${hits.length} results)` : "No results found."];
+  hits.forEach(([ts, thread, ch], i) => {
+    const c = ch ?? u.ref;
+    lines.push(`### Result ${i + 1} of ${hits.length}`, ...(o.dropChannel ? [] : [`Channel: #general (ID: ${c})`]), "From: Kim <kim@example.com> (ID: U0AAAAAAA1) ", "Time: x",
+      `Message_ts: ${ts}`, ...(thread === ts ? ["Reply count: 2"] : []),
+      `Permalink: [link](https://x.slack.com/archives/${c}/p${ts.replace(".", "")}${thread ? `?thread_ts=${thread}&cid=${c}` : ""})`,
+      "Text: ", `본문 ${i}`, "Message_ts: 9999999999.000000", "", "---", "");
+  });
+  return cap("Slack", o.tool ?? "slack_search_public", { results: lines.join("\n"), pagination_info: o.pag ?? S_END }, o.input ?? searchInput(u));
+};
+const failCap = (tool: string, input: Record<string, unknown>, error: string): Capture => {
+  const c = readCapture({ tool_name: `mcp__claude_ai_Slack__${tool}`, tool_input: input, failed: true, error });
+  assert.ok(c && c.error === error, "배선 — 실패 캡처");
+  return c!;
+};
+const oneS = (caps: Capture[], o: { unit?: PlannedUnit; failed?: Capture[] } = {}) =>
+  harvestUnits(caps, [o.unit ?? SS], { plannedAt: PLANNED, failed: o.failed ?? [] }).byUnit.get((o.unit ?? SS).id)!;
+
+t("J4 지시 — 검색 도구·인자 · 끝이 있을 때만 before · 부모와 검색 답글의 스레드를 한 번씩 · search 없는 단위는 종전 지시 그대로", () => {
+  const pub = unitInstruction(SS)!;
+  assert.ok(pub.includes(`slack_search_public 을 filters="in:<#C0AAAAAAA1> is:thread", after="1787000000", before="1787604800", sort="timestamp", sort_dir="asc", content_types="messages", response_format="detailed", include_context=false, include_bots=true, limit=${SLACK_SEARCH_LIMIT}`), pub);
+  assert.match(pub, /같은 인자에 cursor 를 더해 다시 부른다\(최대 10쪽\)/);
+  assert.match(pub, /«Thread: N replies» 가 붙은 메시지의 Message TS 와, 검색 결과 가운데 Permalink 의 thread_ts 가 그 결과의 Message_ts 와 다른 것\(답글\)의 thread_ts/);
+  assert.match(pub, /서로 다른 값마다 slack_read_thread 를 channel_id="C0AAAAAAA1", message_ts=<그 값>, limit=200 으로 한 번씩 부른다\(최대 20개\)/);
+  const priv = unitInstruction({ ...SS, search: "private", until: null })!;
+  assert.ok(priv.includes('slack_search_public_and_private 을 filters="in:<#C0AAAAAAA1> is:thread", after="1787000000", sort="timestamp"'), "끝이 «지금» 이면 before 없음");
+  assert.ok(!priv.includes("before="));
+  const plain = unitInstruction(SLACK)!;
+  assert.ok(!/slack_search/.test(plain), "search 없는 단위(배포 전 계획)는 검색 지시가 없다");
+  assert.match(plain, /«Thread: N replies» 가 붙은 것마다 slack_read_thread/);
+  assert.deepEqual(slackSearchArgs({ ref: "C0X1234567", since: "1787000000.999999", until: null }), { filters: "in:<#C0X1234567> is:thread", after: "1787000000", before: null });
+});
+t("K2 search 는 슬랙 단위만 · 공개 채널은 public · 비공개·DM·그룹 DM·모르는 종류는 private · 확인 읽기 단위에는 없다", () => {
+  const A = (id: number, kind: string, app = "slack", ref = `C0AAAAAA${String(id).padStart(2, "0")}`): AssignedLike =>
+    ({ id, app, instance: "T0", ref, kind, read_at: null, cursor: null, last_item_at: null, from_collector: false });
+  const got = pickUnitsForRun([A(1, "channel"), A(2, "private_channel"), A(3, "dm", "slack", "D0AAAAAA03"), A(4, "group_dm", "slack", "G0AAAAAA04"), A(5, "other"),
+    A(6, "page", "notion", "abcdef01-2345-6789-abcd-ef0123456789")], { now: NOW });
+  assert.deepEqual(got.map((u) => [u.id, u.search ?? null]), [[1, "public"], [2, "private"], [3, "private"], [4, "private"], [5, "private"], [6, null]]);
+  assert.equal(slackSearchScope("channel"), "public");
+  assert.equal(proofUnit({ id: 9, app: "slack", instance: "T0", ref: "C0AAAAAAA9", kind: "channel" }, ["1787000000.000100"])!.search, undefined);
+});
+t("T2 턴 상한 — 검색하는 슬랙 단위마다 둘 더(천장 60)", () => {
+  assert.equal(collectMaxTurns(1, 0, 0, 0, 1), 16);
+  assert.equal(collectMaxTurns(3, 0, 0, 0, 3), 36);
+  assert.equal(collectMaxTurns(6, 0, 0, 0, 6), 60, "6+48+12=66 → 60");
+  assert.equal(collectMaxTurns(1), 14, "검색 없는 판은 종전 그대로");
+});
+t("S1 검색 입력 판정 — 계획과 같을 때만(앞뒤 글·filters 순서는 상관없음 · 쪽 크기·글 종류·꼴은 있고 같아야 · 낱말·자연어 질의는 비어야 · 모르는 칸은 아님)", () => {
+  const base = searchInput(SS);
+  assert.equal(searchInPlan(base, SS), true);
+  const drop = (k: string) => Object.fromEntries(Object.entries(base).filter(([x]) => x !== k));
+  for (const [label, input] of [
+    ["순서 바꾼 filters", { ...base, filters: "is:thread in:<#C0AAAAAAA1>" }], ["앞뒤 글", { ...base, include_context: true }],
+    ["낱말 빈 배열", { ...base, keywords: [] }], ["문자열 true", { ...base, include_bots: "true" }],
+    ["대화 종류에 공개 채널", { ...base, channel_types: "public_channel,private_channel" }],
+    ["자연어 질의 빈 글", { ...base, natural_language_query: "" }], ["쪽 크기 글자 20", { ...base, limit: "20" }],
+    ["채널 올림 · 앞뒤 글 길이(범위를 안 바꾼다)", { ...base, context_channel_id: "C0AAAAAAA1", max_context_length: 200 }],
+  ] as const) assert.equal(searchInPlan(input, SS), true, label);
+  for (const [label, input] of [
+    ["다른 시작", { ...base, after: "1787000001" }], ["끝이 빠짐", drop("before")], ["낱말로 거름", { ...base, keywords: ["배포"] }], ["내림차순", { ...base, sort_dir: "desc" }],
+    ["관련도 순", { ...base, sort: "score" }], ["봇 빠짐", drop("include_bots")], ["거르개 더함", { ...base, filters: "in:<#C0AAAAAAA1> is:thread from:<@U1>" }],
+    ["다른 채널", { ...base, filters: "in:<#C0BBBBBBB2> is:thread" }], ["스레드 아님", { ...base, filters: "in:<#C0AAAAAAA1>" }], ["내 채널만", { ...base, only_my_channels: true }],
+    ["파일만", { ...base, content_types: "files" }], ["파일도", { ...base, content_types: "messages,files" }], ["글 종류 생략", drop("content_types")],
+    ["다른 대화 종류", { ...base, channel_types: "private_channel" }],
+    //  쪽 cursor 는 «몇 번째 쪽» 이다 — 쪽 크기가 다르면 사이 글을 건너뛴다. 쪽 크기 · 꼴은 도구 기본값에 기대지 않는다.
+    ["쪽 크기 5", { ...base, limit: 5 }], ["다른 꼴", { ...base, response_format: "concise" }], ["모르는 칸", { ...base, query: "x" }],
+    ["쪽 크기 생략", drop("limit")], ["꼴 생략", drop("response_format")], ["자연어 질의", { ...base, natural_language_query: "배포" }],
+  ] as const) assert.equal(searchInPlan(input, SS), false, label);
+  assert.equal(searchInPlan(searchInput({ ...SS, until: null }), { ...SS, until: null }), true, "끝이 «지금» 이면 before 없음");
+  assert.equal(searchInPlan({ ...searchInput({ ...SS, until: null }), before: "1787604800" }, { ...SS, until: null }), false, "끝이 없는데 before 를 줬다");
+  assert.equal(searchInPlan({ ...base, channel_types: "im" }, { ...SS, kind: "other" }), false, "모르는 종류는 channel_types 를 준 검색을 안 믿는다");
+  assert.equal(searchChannelOf("is:thread in:<#C0AAAAAAA1|general>"), "C0AAAAAAA1");
+  assert.equal(searchChannelOf("in:<#C0AAAAAAA1> in:<#C0BBBBBBB2>"), null, "채널이 둘이면 어느 단위인지 모른다");
+});
+t("H17 옛 스레드 — 검색 답글의 부모가 구간 앞이면 그 스레드를 끝까지 읽어야 다 읽음 · 부모와 구간 앞 답글도 같은 스레드로 저장", () => {
+  const h = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD]]), TH(OLD, [R0, R1])]);
+  assert.deepEqual([h.complete, h.why, h.unparsed], [true, null, 0]);
+  assert.deepEqual(h.oldThreads, { found: 1, read: 1 });
+  assert.deepEqual(h.nextCursor, { ts: UNTIL });
+  const ids = h.items.map((i) => i.provenance.external_id).sort();
+  assert.deepEqual(ids, [`C0AAAAAAA1:${OLD}`, `C0AAAAAAA1:${R0}`, `C0AAAAAAA1:${R1}`, `C0AAAAAAA1:${P2}`].sort());
+  assert.equal(h.items.find((i) => i.provenance.external_id.endsWith(R1))!.parent_external_id, `C0AAAAAAA1:${OLD}`);
+  assert.ok(!h.items.some((i) => i.body === "본문 0"), "검색 본문은 자료가 아니다");
+});
+t("H18 옛 스레드를 안 읽었으면 못 다 읽음 — 시작점 그대로 + 구간 반", () => {
+  const h = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD], [R2, OLD2]]), TH(OLD, [R1])]);
+  assert.deepEqual([h.complete, h.why], [false, "스레드 1개를 못 읽음"]);
+  assert.deepEqual(h.oldThreads, { found: 2, read: 1 });
+  assert.equal(h.nextCursor?.ts, SINCE);
+});
+t("H19 검색을 안 했거나 계획과 다른 검색이면 못 다 읽음(채널·스레드는 다 읽어도)", () => {
+  const none = oneS([CH([[P2, "새 글"]])]);
+  assert.deepEqual([none.complete, none.why], [false, "답글 검색을 안 함"]);
+  const other = oneS([CH([[P2, "새 글"]]), SR([], { input: searchInput(SS, { sort_dir: "desc" }) })]);
+  assert.deepEqual([other.complete, other.why], [false, "계획과 다른 답글 검색"]);
+  const both = oneS([CH([[P2, "새 글"]]), SR([], { input: searchInput(SS, { keywords: ["x"] }) }), SR([])]);
+  assert.equal(both.complete, true, "계획대로 한 검색이 하나라도 이어지면 그 사슬로 본다");
+  const priv = oneS([CH([[P2, "새 글"]]), SR([], { tool: "slack_search_public_and_private" })]);
+  assert.equal(priv.complete, true, "공개 범위 단위는 검색 도구를 둘 다 받는다");
+  //  비공개 범위(비공개 채널 · DM · 그룹 DM) 단위는 공개·비공개 검색만 — 공개 검색은 그 대화에 빈 결과를 준다(격리 리뷰).
+  const PS: PlannedUnit = { ...SS, kind: "private_channel", search: "private" };
+  const pubOnPriv = oneS([CH([[P2, "새 글"]], { unit: PS }), SR([], { unit: PS, tool: "slack_search_public" })], { unit: PS });
+  assert.deepEqual([pubOnPriv.complete, pubOnPriv.why], [false, "계획과 다른 답글 검색"]);
+  const p1 = SR([[R1, OLD]], { unit: PS, tool: "slack_search_public_and_private", pag: "For the next page of results use cursor `Q1VSUkVOVF9QQUdFOjI=`\n" });
+  const p2 = SR([], { unit: PS, tool: "slack_search_public", input: searchInput(PS, { cursor: "Q1VSUkVOVF9QQUdFOjI=" }) });
+  const mixed = oneS([CH([[P2, "새 글"]], { unit: PS }), p1, p2, TH(OLD, [R1])], { unit: PS });
+  assert.deepEqual([mixed.complete, mixed.why], [false, "답글 검색 쪽을 끝까지 못 읽음"], "다음 쪽만 공개 검색으로 부른 사슬");
+  const okPriv = oneS([CH([[P2, "새 글"]], { unit: PS }), SR([], { unit: PS, tool: "slack_search_public_and_private" })], { unit: PS });
+  assert.equal(okPriv.complete, true);
+});
+t("H20 검색 쪽 사슬 — 첫 쪽부터 «끝» 까지 이어지면 다 읽음 · 다음 쪽을 안 읽었으면 아니다", () => {
+  const p1 = SR([[R1, OLD]], { pag: "For the next page of results use cursor `Q1VSUkVOVF9QQUdFOjI=`\n" });
+  const p2 = SR([[R2, OLD2]], { input: searchInput(SS, { cursor: "Q1VSUkVOVF9QQUdFOjI=" }) });
+  const all = oneS([CH([[P2, "새 글"]]), p2, p1, TH(OLD, [R1]), TH(OLD2, [R2])]);
+  assert.deepEqual([all.complete, all.oldThreads], [true, { found: 2, read: 2 }], "거꾸로 들어와도 잇는다");
+  const half = oneS([CH([[P2, "새 글"]]), p1, TH(OLD, [R1])]);
+  assert.deepEqual([half.complete, half.why], [false, "답글 검색 쪽을 끝까지 못 읽음"]);
+});
+t("H21 제 모양인 검색 쪽이 하나도 없으면(머리글 없음 · 채널 칸 빠짐 · thread_ts 없음 · 쪽 안내 없음) «검색을 못 씀» — 종전 규칙으로 다 읽음 · unsearched", () => {
+  for (const [label, c] of [
+    ["머리글 없음", SR([[R1, OLD]], { head: false })], ["채널 칸 빠짐", SR([[R1, OLD]], { dropChannel: true })],
+    ["thread_ts 없음", SR([[R1, null]])], ["쪽 안내 없음", SR([[R1, OLD]], { pag: "" })],
+  ] as const) {
+    const h = oneS([CH([[P2, "새 글"]]), c]);
+    assert.deepEqual([h.complete, h.why, h.unparsed, h.oldThreads], [true, null, 0, { found: 0, read: 0, unsearched: true }], label);
+  }
+  //  제 모양인 쪽이 하나라도 있으면 «못 씀» 이 아니다 — 못 푼 다음 쪽은 사슬이 끊긴 것(못 다 읽음 → 구간을 줄여 다시).
+  const p1 = SR([[R1, OLD]], { pag: "For the next page of results use cursor `c2`\n" });
+  const bad2 = SR([[R2, OLD2]], { head: false, input: searchInput(SS, { cursor: "c2" }) });
+  const h2 = oneS([CH([[P2, "새 글"]]), p1, bad2, TH(OLD, [R1])]);
+  assert.deepEqual([h2.complete, h2.why, h2.oldThreads.unsearched], [false, "답글 검색 쪽을 끝까지 못 읽음", undefined]);
+});
+t("H25 검색 호출이 실패만 했으면(PostToolUseFailure — 권한 없음 등) «검색을 못 씀» — 종전 규칙 · 그 판의 다른 단위에는 안 번진다", () => {
+  const OTHER: PlannedUnit = { ...SS, id: 7, ref: "C0BBBBBBB2" };
+  const { byUnit } = harvestUnits([CH([[P2, "새 글"]]), CH([[P2, "남 글"]], { unit: OTHER })], [SS, OTHER], { plannedAt: PLANNED, failed: [
+    failCap("slack_search_public", searchInput(SS), "execution_failed: missing_scope"),
+  ] });
+  const a = byUnit.get(SS.id)!, b = byUnit.get(OTHER.id)!;
+  assert.deepEqual([a.complete, a.oldThreads.unsearched], [true, true]);
+  assert.deepEqual([b.complete, b.why], [false, "답글 검색을 안 함"], "실패는 그 채널의 검색에만");
+});
+t("H28 검색의 일시 오류(속도 제한 · 시간 초과 · 5xx)는 «검색을 못 씀» 으로 굳히지 않는다 — 못 다 읽음(다음 판이 다시) · 다시 불러 된 판은 그대로", () => {
+  for (const err of ["execution_failed: ratelimited", "execution_failed: request timed out", "upstream 503", "internal_error"]) {
+    const h = oneS([CH([[P2, "새 글"]])], { failed: [failCap("slack_search_public", searchInput(SS), err)] });
+    assert.deepEqual([h.complete, h.why, h.oldThreads.unsearched, h.nextCursor?.ts], [false, "답글 검색 일시 오류", undefined, SINCE], err);
+  }
+  const text = cap("Slack", "slack_search_public", "Error: ratelimited", searchInput(SS));
+  const t2 = oneS([CH([[P2, "새 글"]]), text]);
+  assert.deepEqual([t2.complete, t2.why], [false, "답글 검색 일시 오류"], "결과 글로 온 짧은 오류 문구");
+  const retried = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD]]), TH(OLD, [R1])], { failed: [failCap("slack_search_public", searchInput(SS), "execution_failed: ratelimited")] });
+  assert.deepEqual([retried.complete, retried.oldThreads], [true, { found: 1, read: 1 }], "다시 불러 된 판");
+  const perm = oneS([CH([[P2, "새 글"]])], { failed: [failCap("slack_search_public", searchInput(SS), "execution_failed: not_allowed_token_type")] });
+  assert.deepEqual([perm.complete, perm.oldThreads.unsearched], [true, true], "일시 오류가 아닌 실패는 종전대로 «못 씀»");
+});
+t("H26 ★ 본문 속 «### Result N of M» 줄 — 쪽이 밝힌 결과 수와 맞춰 본문 조각으로 버린다(본문 조각은 못 푼 결과가 아니다)", () => {
+  const spoof = cap("Slack", "slack_search_public", {
+    results: ["# Search Results for: ", "", "## Messages (2 results)",
+      "### Result 1 of 2", "Channel: #g (ID: C0AAAAAAA1)", `Message_ts: ${R1}`, `Permalink: [link](https://x/archives/C0AAAAAAA1/p1?thread_ts=${OLD}&cid=C0AAAAAAA1)`,
+      "Text: ", "붙여 넣은 검색 결과:", "### Result 2 of 2", "본문 조각", "", "---", "",
+      "### Result 2 of 2", "Channel: #g (ID: C0AAAAAAA1)", `Message_ts: ${R2}`, `Permalink: [link](https://x/archives/C0AAAAAAA1/p2?thread_ts=${R2}&cid=C0AAAAAAA1)`,
+      "Text: ", "부모", "", "---", ""].join("\n"),
+    pagination_info: S_END,
+  }, searchInput(SS));
+  const h = oneS([CH([[P2, "새 글"]]), spoof, TH(OLD, [R1])]);
+  assert.deepEqual([h.complete, h.why, h.unparsed, h.oldThreads], [true, null, 0, { found: 1, read: 1 }]);
+});
+t("H22 «없는 스레드»(thread_not_found) — 읽을 것이 없으니 다 읽음(gone) · 다른 실패(속도 제한)는 못 읽은 스레드", () => {
+  const ok = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD]])], { failed: [failCap("slack_read_thread", { channel_id: "C0AAAAAAA1", message_ts: OLD, limit: 200 }, "execution_failed: thread_not_found")] });
+  assert.deepEqual([ok.complete, ok.gone, ok.oldThreads], [true, 1, { found: 1, read: 0 }]);
+  const rate = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD]])], { failed: [failCap("slack_read_thread", { channel_id: "C0AAAAAAA1", message_ts: OLD }, "execution_failed: ratelimited")] });
+  assert.deepEqual([rate.complete, rate.why, rate.gone], [false, "스레드 1개를 못 읽음", 0]);
+  const otherCh = oneS([CH([[P2, "새 글"]]), SR([[R1, OLD]])], { failed: [failCap("slack_read_thread", { channel_id: "C0ZZZZZZZ9", message_ts: OLD }, "thread_not_found")] });
+  assert.equal(otherCh.complete, false, "다른 채널의 «없는 스레드» 는 이 단위의 스레드가 아니다");
+  //  구간 안 부모(«Thread: N replies» — 본문 속 가짜 머리 · 그사이 지워진 글)도 같다
+  const chanGone = oneS([CH([[P1, "부모", "Thread: 2 replies (latest: z)"]]), SR([])], { failed: [failCap("slack_read_thread", { channel_id: "C0AAAAAAA1", message_ts: P1 }, "execution_failed: thread_not_found")] });
+  assert.deepEqual([chanGone.complete, chanGone.gone], [true, 1]);
+  //  search 없는 옛 계획에서도 같다
+  const plain = harvestUnits([CH([[P1, "부모", "Thread: 2 replies (latest: z)"]])], [SLACK], { plannedAt: PLANNED, failed: [failCap("slack_read_thread", { channel_id: "C0AAAAAAA1", message_ts: P1 }, "thread_not_found")] }).byUnit.get(1)!;
+  assert.equal(plain.complete, true);
+});
+t("H23 다른 채널의 결과 · 부모 글 결과는 읽을 스레드를 늘리지 않는다 · 구간 안 부모와 겹치면 한 번만", () => {
+  const h = oneS([CH([[P1, "부모", "Thread: 1 reply (latest: z)"]]), SR([[R1, P1], [P1, P1], [R2, OLD, "C0ZZZZZZZ9"]]), TH(P1, [R1])]);
+  assert.deepEqual([h.complete, h.oldThreads], [true, { found: 0, read: 0 }]);
+});
+t("H27 «채널에도 보내기» 한 답글 — 채널 읽기(부모 표시 없음)와 스레드 읽기에 둘 다 나오면 스레드 쪽(부모 연결)이 남는다 · 읽은 순서와 무관", () => {
+  for (const order of ["채널 먼저", "스레드 먼저"]) {
+    const caps = [CH([[R1, "채널에도 보낸 답글"]]), SR([[R1, OLD]]), TH(OLD, [R1])];
+    const h = oneS(order === "채널 먼저" ? caps : [caps[2], caps[0], caps[1]]);
+    const r = h.items.find((i) => i.provenance.external_id === `C0AAAAAAA1:${R1}`)!;
+    assert.equal(r.parent_external_id, `C0AAAAAAA1:${OLD}`, order);
+  }
+});
+t("H24 search 없는 옛 계획 — 검색 결과는 지시 밖(stray)이고 판정은 종전대로", () => {
+  const { byUnit, stray } = harvestUnits([CH([[P2, "새 글"]]), SR([[R1, OLD]], { unit: SLACK })], [SLACK], { plannedAt: PLANNED });
+  assert.equal(stray, 1);
+  assert.deepEqual([byUnit.get(1)!.complete, byUnit.get(1)!.oldThreads], [true, { found: 0, read: 0 }]);
 });
 
 console.log(`\ncollect-plan: ${pass} passed`);

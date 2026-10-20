@@ -20,6 +20,7 @@ import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { fileUrlRouter } from "./files/signed-routes.js";   // #4673 서명 주소 받는 곳
+import { appFrontServerRouter } from "./apps/app-front-routes.js";   // #4485 앱 서버 쓰기 요청(본문 날것)
 import { liveSignedRouteDeps } from "./files/files-live.js";
 import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
@@ -153,6 +154,10 @@ app.use("/api/webhook", domainmapWebhookRouter());
 //  앱이 `Content-Type: application/json` 으로 JSON 파일을 올리면 전역 파서가 먼저 본문을 먹어 빈 파일이 된다(다른 업로드 입구는
 //  octet-stream 으로만 와서 이 일이 없었다). 인증 미들웨어 밖이다 — 토큰 서명이 자격이고, 판정은 쓰는 순간 다시 탄다(files/signed-routes).
 app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
+
+// 앱 서버의 쓰기 요청(#4485 앱 v2-6 — POST·PUT·PATCH·DELETE /api/app-front/server?path=…). 역시 전역 express.json() **이전**: 앱이 받는 본문은
+//  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
+app.use("/api/app-front/server", ...appFrontServerRouter());
 
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.

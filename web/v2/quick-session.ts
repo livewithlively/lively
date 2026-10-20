@@ -116,7 +116,11 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
     if (!id) throw new Error('세션 id 를 받지 못했습니다');
     rememberCreated(out.session);   // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
-    if (t) firstPrompts.set(id, t);
+    //  #4906 — 기억할 첫 지시는 **서버가 넣을 글**(응답 initialPrompt — src/terminal/session-launch.ts launchReply)이다. 태스크에서 연 세션은
+    //   친 글이 비고(서버가 태스크로 채운다), 태스크 여러 개 · 첨부를 옮긴 홈 첫 지시는 서버가 글을 다시 짓는다. 친 글로 기억하면 세션 화면의
+    //   «다 쳤다» · 에코 맞추기가 빗나가고, 비었으면 숨겨 붙이기를 못 타 빈 터미널부터 보였다(#4794 §10-2). 옛 서버(필드 없음)면 종전대로 친 글.
+    const sent = typeof out.initialPrompt === 'string' && out.initialPrompt.trim() ? out.initialPrompt : t;
+    if (sent) firstPrompts.set(id, sent);
     await linkPredecessor(out.session, pid, opts && opts.predecessorId);
     return { id, session: out.session };
   } catch (e: any) {

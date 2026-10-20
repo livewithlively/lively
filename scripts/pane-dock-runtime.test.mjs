@@ -37,6 +37,12 @@
 //  HD5 좁은 폭(서랍)엔 손잡이가 없다
 //  HF1 곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 알약 왼쪽 끝 · 세운 막대 · 아이콘 높이 가운데 · 앱 단추가 아니다
 //  HF2 그 손잡이를 잡고 경계선으로 끌면 이음매로(R11 이 손잡이에서 시작) · HF3 그 손잡이 위에선 확대하지 않는다
+//  MN1–MN12 최소화(원준 10-20 «핸들 부분 더블클릭해서 최소화») — 한 번 누름은 그대로 · 두 번 누르면 손잡이만 남은 알약(이음매 14×44 · 곁칸 아래 44×14)
+//      · 누르면 펼침(두 번 눌러도 둘째 누름이 앱을 안 연다) · 접힌 채 끌어 옮김 · 메뉴 «독 접기/펼치기» · 키보드 · 손가락 · 보조기기 · 서랍은 안 따름
+//  SZ1–SZ9 크기(원준 10-20 «사이즈 조절») — 구분선 끌기(곁칸 아래 ↕ · 이음매 ↔)만큼 아이콘이 따라옴 · «크기 N%» · 놓을 때만 계정에 · Esc 없던 일
+//      · 메뉴 › 크기 › 작게 = 3/4 · 되돌리기 · 끌기는 한 번에 하나
+//  fail-first(2026-10-20): 바꾸기 전 판(독 · CSS 를 git show HEAD 로)에 물리면 MN · SZ 16줄 빨강. 돌연변이 — 크기 조절의 한 번에 하나 가드 → SZ9 ·
+//   두 번 누름 거리 8000 → MN10 · 손가락 펼치기 → MN9 가 빨갛다.
 //  GL1 「프로젝트」 타일 = 과녁(proj) · GL2 [모든 앱] 타일 = 각진 사각 넷(apps)(#4233 원준 2026-10-05 «독에는 아이콘은 왜 안 바꿨나»)
 //
 // 왜 런타임인가: 경계선 위에 걸쳤는지 · 곁칸 폭을 따라 커지는지 · 끌어 놓은 곳에 서는지는 CSS 가 실제로 그린 자리에서만 잰다.
@@ -502,6 +508,128 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     R.b7_reset=!!rs && pinsNow()===null && !!pd && pd.home==='seam' && pd.at==='0.50' && pd.mag==='1' && root.dataset.home==='seam';
   }catch(e){R.err_b7=String(e&&e.message||e);}
   ESC(); await frame();
+  // ── MN 최소화 · SZ 크기(원준 10-20 «핸들 부분 더블클릭해서 최소화 … 사이즈 조절이나 이런것도») ──
+  try{
+    await setPins(['tasks','files','knowledge','web','timeline']); await setPrefs(); await sleep(560);
+    const hdl=()=>shelf.querySelector('.pn-dock-handle');
+    const tap=(n)=>{const q=rc(n); const x=cx(q), y=cy(q); P('pointerdown',x,y,n); P('pointerup',x,y);};
+    const pref=()=>JSON.parse(prefsNow()||'{}');
+    // MN2 — 손잡이를 한 번 누르면 아무 일 없다
+    tap(hdl()); await frame(); await sleep(600);
+    R.mn2_single=!root.classList.contains('min') && pref().min!=='1' && !!it('tasks');
+    // MN1 — 두 번 누르면(이음매) 접힌다: 손잡이만 남은 세로 알약 · 경계선 위 · 앱 단추 없음 · 계정에 min=1
+    tap(hdl()); await sleep(120); tap(hdl()); await frame(); await sleep(60);
+    let a=rc(shelf);
+    R.mn1_info=[pref().min, Math.round(a.width), Math.round(a.height), shelf.children.length, Math.round(cx(a)-seamX())];
+    R.mn1_min=pref().min==='1' && root.classList.contains('min') && shelf.children.length===1 && !!hdl() && !shelf.querySelector('.pn-dock-it')
+      && Math.abs(a.width-14)<=1 && Math.abs(a.height-44)<=1 && Math.abs(cx(a)-seamX())<=1;
+    R.mn1_button=hdl().tagName==='BUTTON' && hdl().getAttribute('aria-label')==='독 펼치기' && !hdl().hasAttribute('aria-hidden');
+    // MN3 — 접힌 알약을 누르면 펼친다 · 곧바로 한 번 더 눌러도(두 번 누름의 둘째) 다시 접히지 않는다 · 그 누름이 앱을 열지도 않는다
+    calls.length=0;
+    tap(hdl()); await frame(); await sleep(40);
+    R.mn3_open=pref().min==='0' && !root.classList.contains('min') && !!it('tasks');
+    const t2=it('tasks'); tap(hdl()); t2.click(); await frame(); await sleep(40);
+    R.mn3_guard=pref().min==='0' && !root.classList.contains('min') && calls.length===0; R.mn3_info=JSON.stringify(calls);
+    await sleep(560);
+    // MN4 — 곁칸 아래에서 접으면: 바닥의 가로 알약(44×14) · 목록 끝 빈 자리는 손잡이 두께(14 + 바깥 여백 16 = 30)만큼
+    await setPrefs({home:'float'}); await sleep(560);
+    tap(hdl()); await sleep(120); tap(hdl()); await frame(); await sleep(60);
+    a=rc(shelf);
+    R.mn4_info=[pref().min, Math.round(a.width), Math.round(a.height), pane.style.getPropertyValue('--pn-dock-b'), getComputedStyle(tkPart,'::after').height, Math.round(rc(pane).bottom-a.bottom)];
+    R.mn4_float=pref().min==='1' && root.dataset.home==='float' && Math.abs(a.width-44)<=1 && Math.abs(a.height-14)<=1
+      && pane.style.getPropertyValue('--pn-dock-b')==='30px' && getComputedStyle(tkPart,'::after').height==='30px' && Math.abs(rc(pane).bottom-a.bottom-8)<=1.5;
+    // MN8 — 접힌 알약도 끌어 옮긴다(펼치지 않는다): 경계선 30% 높이로 → 이음매 · 접힌 채
+    { const g=rc(hdl()); const sp=span(); const ty=sp.top+(sp.bottom-sp.top)*0.3;
+      P('pointerdown',cx(g),cy(g),hdl()); P('pointermove',cx(g)-20,cy(g)-20); P('pointermove',seamX()+10,ty);
+      const pv=grid.querySelector('.pn-dock-preview'); R.mn8_preview=!!pv && Math.abs(rc(pv).width-14)<=1 && Math.abs(rc(pv).height-44)<=1;
+      P('pointerup',seamX()+10,ty); await frame(); await sleep(560);
+      R.mn8_info=JSON.stringify(pref()); R.mn8_moved=pref().home==='seam' && pref().min==='1' && root.dataset.home==='seam' && root.classList.contains('min'); }
+    // MN7 — 독 설정 메뉴: 접혀 있으면 «독 펼치기» · 누르면 펼친다 / 펼쳐져 있으면 «독 접기»
+    { const g=rc(hdl()); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(g),clientY:cy(g)})); await frame();
+      const rOpen=row('독 펼치기'); R.mn7_rows=!!rOpen && !row('독 접기'); if(rOpen) rOpen.click(); await frame(); await sleep(60); ESC(); await frame();
+      R.mn7_open=pref().min==='0' && !!it('tasks');
+      const g2=grabPt(); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g2[0],clientY:g2[1]})); await frame();
+      const rFold=row('독 접기'); R.mn7_fold_row=!!rFold; if(rFold) rFold.click(); await frame(); await sleep(60); ESC(); await frame();
+      R.mn7_fold=pref().min==='1' && root.classList.contains('min'); }
+    // MN5 — 키보드: 접힌 손잡이는 탭 순서의 한 칸 · Enter(click detail 0) → 펼치고 초점이 독의 앱 단추로
+    hdl().focus(); R.mn5_focus=document.activeElement===hdl();
+    hdl().dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:0})); await frame(); await sleep(60);
+    R.mn5_open=pref().min==='0' && !!document.activeElement && document.activeElement.classList.contains('pn-dock-it');
+    document.activeElement.blur(); await sleep(560);
+    // MN6 — 서랍(좁은 폭)은 접어 둔 것을 따르지 않는다(거기엔 손잡이가 없다 — 펼칠 길이 없다)
+    await setPrefs({min:'1'}); narrowNow=true; dock.sync(); await frame();
+    R.mn6_narrow=!root.classList.contains('min') && !!root.querySelector('.pn-dock-it');
+    narrowNow=false; dock.sync(); await frame();
+    R.mn6_back=root.classList.contains('min');
+    // MN9 — 손가락: 접힌 알약을 짚으면 펼친다(손가락엔 끌기가 없다) · 뒤따르는 click 이 한 번 더 펼치거나 앱을 열지 않는다
+    { const g=rc(hdl()); calls.length=0;
+      hdl().dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:cx(g),clientY:cy(g),pointerId:31,pointerType:'touch',isPrimary:true}));
+      await frame(); await sleep(40);
+      R.mn9_touch=pref().min==='0' && !root.classList.contains('min') && calls.length===0;
+      window.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:31,pointerType:'touch'})); ESC(); await frame(); await sleep(820); }
+    // MN10 — 두 번째 누름이 8px 넘게 떨어지면 두 번 누름이 아니다
+    { const g=rc(hdl()); P('pointerdown',cx(g)-6,cy(g),hdl()); P('pointerup',cx(g)-6,cy(g)); await sleep(100);
+      P('pointerdown',cx(g)+6,cy(g)+3,hdl()); P('pointerup',cx(g)+6,cy(g)+3); await frame(); await sleep(40);
+      R.mn10_far=pref().min==='0' && !root.classList.contains('min'); await sleep(560); }
+    // MN11 — 보조기기의 누르기(포인터 길 없이 오는 click — VoiceOver 는 detail 1 로 올 수 있다)로도 펼친다
+    await setPrefs({min:'1'});
+    hdl().dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,detail:1})); await frame(); await sleep(40);
+    R.mn11_at=pref().min==='0' && !root.classList.contains('min');
+    // MN12 — 펼치고 곧바로 손잡이를 두 번 누르면 접힌다(펼친 누름이 짝이 되지 않는다 — 그 뒤 두 번 누름은 제대로 센다)
+    await setPrefs({min:'1'}); tap(hdl()); await frame(); await sleep(40);
+    tap(hdl()); await sleep(100); tap(hdl()); await frame(); await sleep(40);
+    R.mn12_refold=pref().min==='1' && root.classList.contains('min');
+    await setPrefs(); await sleep(560);
+    // SZ1 — 곁칸 아래: 구분선을 위로 12px 끌면 아이콘이 12px 커진다 · 끄는 동안 «크기 N%» · 놓으면 계정에 배율
+    await setPrefs({home:'float'}); await sleep(30);
+    grid.style.setProperty('--pn-side-w','560px'); dock.sync(); await frame();
+    const sep=()=>shelf.querySelector('.pn-dock-sep');
+    const s0=sizeNow(); let q=rc(sep());
+    R.sz6_cursor_float=getComputedStyle(sep()).cursor==='ns-resize';
+    P('pointerdown',cx(q),cy(q),sep()); P('pointermove',cx(q),cy(q)-4); P('pointermove',cx(q),cy(q)-12); await frame();
+    const tipEl=document.querySelector('.pn-dock-tip');
+    R.sz1_live=Math.abs(sizeNow()-(s0+12))<=1 && !tipEl.hidden && /^크기 \\d+%$/.test(tipEl.textContent) && pref().sc===undefined;
+    R.sz1a_info=[s0, sizeNow(), tipEl.hidden, tipEl.textContent, prefsNow()];
+    P('pointerup',cx(q),cy(q)-12); await frame(); await sleep(60);
+    R.sz1_info=[s0, sizeNow(), pref().sc, tipEl.textContent];
+    R.sz1_up=Number(pref().sc)>1 && Math.abs(sizeNow()-(s0+12))<=1 && tipEl.hidden;
+    // SZ2 — 아래로 끌면 작아진다
+    const s1=sizeNow(); q=rc(sep());
+    P('pointerdown',cx(q),cy(q),sep()); P('pointermove',cx(q),cy(q)+4); P('pointermove',cx(q),cy(q)+24); P('pointerup',cx(q),cy(q)+24); await frame(); await sleep(60);
+    R.sz2_info=[s1, sizeNow(), pref().sc]; R.sz2_down=Number(pref().sc)<1 && Math.abs(sizeNow()-(s1-24))<=1;
+    // SZ4 — 끄다가 Esc 면 없던 일(배율 · 크기 그대로)
+    const s2=sizeNow(), sc2=pref().sc; q=rc(sep());
+    P('pointerdown',cx(q),cy(q),sep()); P('pointermove',cx(q),cy(q)-4); P('pointermove',cx(q),cy(q)-20); await frame(); ESC(); await frame(); await sleep(40);
+    R.sz4_esc=pref().sc===sc2 && Math.abs(sizeNow()-s2)<=0.5 && !root.classList.contains('sizing') && !document.documentElement.classList.contains('pn-dock-sizing');
+    // SZ9 — 끌기는 한 번에 하나: 아이콘을 누른 채 구분선을 눌러도 크기 조절이 안 선다
+    { const ic=rc(it('files').querySelector('.pn-dock-ic')); const s9=sizeNow(); q=rc(sep());
+      P('pointerdown',cx(ic),cy(ic),it('files'));
+      P('pointerdown',cx(q),cy(q),sep()); P('pointermove',cx(q),cy(q)-30); await frame();
+      R.sz9_one=!root.classList.contains('sizing') && Math.abs(sizeNow()-s9)<=0.5;
+      ESC(); window.dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9,pointerType:'mouse'})); await frame(); await sleep(40);
+      R.sz9_clean=!document.querySelector('.pn-dock-ghost') && !document.documentElement.classList.contains('pn-dock-dragging'); }
+    grid.style.removeProperty('--pn-side-w');
+    // SZ3 — 이음매: 구분선을 경계선에서 멀어지는 쪽으로 8px 끌면 8px 커진다(어느 쪽이든)
+    await setPrefs(); await sleep(30);
+    const s3=sizeNow(); q=rc(sep());
+    R.sz6_cursor_seam=getComputedStyle(sep()).cursor==='ew-resize';
+    P('pointerdown',cx(q),cy(q),sep()); P('pointermove',cx(q)-4,cy(q)); P('pointermove',cx(q)-8,cy(q)); P('pointerup',cx(q)-8,cy(q)); await frame(); await sleep(60);
+    R.sz3_info=[s3, sizeNow(), pref().sc]; R.sz3_seam=Number(pref().sc)>1 && Math.abs(sizeNow()-(s3+8))<=1 && root.dataset.home==='seam';
+    // SZ5 — 메뉴 › 크기 › 작게 = 배율 0.75 → 보통 크기의 3/4
+    await setPrefs(); await sleep(30);
+    const s5=sizeNow(); const g5=grabPt();
+    shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:g5[0],clientY:g5[1]})); await frame();
+    const rSize=row('크기'); if(rSize) rSize.click(); await frame();
+    const small=[...document.querySelectorAll('.pn-ctx-sub .pn-ctx-i')].find((b)=>(b.querySelector('.pn-ctx-l')||b).textContent==='작게');
+    if(small) small.click(); await frame(); await sleep(60); ESC(); ESC(); await frame();
+    R.sz5_info=[s5, sizeNow(), pref().sc]; R.sz5_menu=pref().sc==='0.75' && sizeNow()===Math.round(s5*0.75);
+    // SZ7 — «독 되돌리기» 는 크기 · 접힘도 되돌린다
+    await setPrefs({sc:'0.60', min:'1'});
+    const g7b=rc(hdl()); shelf.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(g7b),clientY:cy(g7b)})); await frame();
+    const rs7=row('독 되돌리기'); if(rs7) rs7.click(); await frame(); await sleep(60); ESC(); await frame();
+    R.sz7_reset=pref().sc==='1.00' && pref().min==='0' && !root.classList.contains('min') && sizeNow()===s5;
+  }catch(e){R.err_mn=String(e&&e.stack||e);}
+  ESC(); narrowNow=false; grid.style.removeProperty('--pn-side-w'); await setPrefs(); await sleep(560);
   // A6 — 좁은 폭(서랍): 곁칸 아래로 서고, [더보기] 우클릭엔 메뉴가 없다 — 곁칸 빈 자리 메뉴도, 브라우저 메뉴도(엔진이 막는다)
   try{
     narrowNow=true; dock.sync(); await frame();
@@ -740,6 +868,30 @@ check(R.i1_float, "I1b 곁칸 아래 독의 이름표는 아이콘 위 · 긴 �
 check(R.b1_case, "B1a (배선) 좁힌 화면에서도 웹 메뉴에 «독에서 빼기» 가 섰다");
 check(R.b1_hidden_kept, "B1 프로젝트 없는 화면에서 웹을 빼도 안 보이는 고정(태스크·자료·지식)은 계정에 남는다", R.b1_info);
 check(R.b7_reset, "B7 «독 되돌리기» = 이음매 가운데 · 확대 켬 + 고정 목록 «적은 적 없음»", JSON.stringify(R.b7_info));
+check(R.mn2_single, "MN2 손잡이를 한 번 누르면 아무 일 없다");
+check(R.mn1_min, "MN1 손잡이를 두 번 누르면 접힌다 — 손잡이만 남은 세로 알약(14×44) · 경계선 위 · 앱 단추 없음 · 계정에 min=1(원준 10-20)", JSON.stringify(R.mn1_info));
+check(R.mn1_button, "MN1b 접힌 손잡이는 단추 — «독 펼치기» (보조기기에 읽힌다)");
+check(R.mn3_open, "MN3 접힌 알약을 누르면 펼친다");
+check(R.mn3_guard, "MN3b 접힌 알약을 두 번 눌러도 두 번째 누름이 다시 접거나 앱을 열지 않는다", R.mn3_info);
+check(R.mn4_float, "MN4 곁칸 아래에서 접으면 바닥의 가로 알약(44×14) · 목록 끝 빈 자리도 30px 로 준다", JSON.stringify(R.mn4_info));
+check(R.mn8_preview && R.mn8_moved, "MN8 접힌 알약도 끌어 옮긴다 — 윤곽도 접힌 크기 · 놓아도 접힌 채", R.mn8_info);
+check(R.mn7_rows && R.mn7_open, "MN7 독 설정 메뉴 — 접혀 있으면 «독 펼치기»(키보드 · 손가락으로 닿는 길)");
+check(R.mn7_fold_row && R.mn7_fold, "MN7b 펼쳐져 있으면 «독 접기»");
+check(R.mn5_focus && R.mn5_open, "MN5 키보드 — 접힌 손잡이에 초점 · Enter 로 펼치고 초점은 독의 앱 단추로");
+check(R.mn6_narrow && R.mn6_back, "MN6 서랍(좁은 폭)은 접어 둔 것을 안 따른다 — 넓은 화면으로 돌아오면 접힌 채");
+check(R.mn9_touch, "MN9 손가락으로 접힌 알약을 짚으면 펼친다 — 뒤따르는 click 은 앱을 열지 않는다");
+check(R.mn10_far, "MN10 두 번째 누름이 8px 넘게 떨어지면 접지 않는다");
+check(R.mn11_at, "MN11 보조기기의 누르기(포인터 없이 오는 click)로도 펼친다");
+check(R.mn12_refold, "MN12 펼친 뒤 손잡이를 두 번 누르면 다시 접힌다");
+check(R.sz9_one && R.sz9_clean, "SZ9 끌기는 한 번에 하나 — 아이콘을 누른 채 구분선을 눌러도 크기 조절이 안 선다");
+check(R.sz1_live, "SZ1a 곁칸 아래 독의 구분선을 위로 끄는 동안 아이콘이 끈 만큼 커지고 «크기 N%» 가 보인다 — 끄는 동안엔 계정에 안 적는다", JSON.stringify(R.sz1a_info));
+check(R.sz1_up, "SZ1 놓으면 그 크기 — 계정에 배율(sc > 1)", JSON.stringify(R.sz1_info));
+check(R.sz2_down, "SZ2 아래로 끌면 작아진다", JSON.stringify(R.sz2_info));
+check(R.sz4_esc, "SZ4 끄다가 Esc 면 없던 일 — 배율 · 크기 그대로");
+check(R.sz3_seam, "SZ3 이음매 독은 구분선을 경계선에서 멀어지는 쪽으로 끌면 커진다", JSON.stringify(R.sz3_info));
+check(R.sz6_cursor_float && R.sz6_cursor_seam, "SZ6 구분선 위 손 모양 = 크기 조절(곁칸 아래 ↕ · 이음매 ↔)");
+check(R.sz5_menu, "SZ5 독 설정 › 크기 › 작게 = 배율 0.75 — 보통 크기의 3/4", JSON.stringify(R.sz5_info));
+check(R.sz7_reset, "SZ7 «독 되돌리기» 는 크기 · 접힘도 되돌린다");
 check(R.a6_narrow_none, "A6 좁은 폭(서랍)은 곁칸 아래 · [더보기]엔 메뉴가 없다 — 곁칸 메뉴도 브라우저 메뉴도 안 뜬다");
 check(R.hd5_narrow_no_handle, "HD5 좁은 폭(서랍)엔 손잡이가 없다(끌기가 없다)");
 check(R.r17_noseam, "R17 이음매가 없으면(카드 모드 · 접힘) 곁칸 아래");

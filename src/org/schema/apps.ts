@@ -235,12 +235,34 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   //  stop_kind 는 표를 만든 뒤에 더한 칸이라 ALTER 로(이미 만들어진 표에도 붙게 — 관례).
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS stop_kind TEXT CHECK (stop_kind IN ('auto','manual'));`);
+  //  #4485(v2-6) — 별칭이 가리키는 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 판마다 새로 발급하고, 어느 별칭도 안 가리키게 된 판의 토큰은 회수한다.
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_token_hash TEXT;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_token_hash TEXT;`);
+  //  org_app_server_usage(#4485) — 앱 주소 → 함수 호출 수 · 실행 시간(5분 칸). 함수를 부르는 길이 게이트웨이뿐이라 이 수가 전부다 —
+  //   자동 멈춤 감시가 CloudWatch 지표 대신 본다(app-server-usage.ts). rejected = 동시 처리 상한으로 함수를 부르지 않고 거절한 수. 7일 뒤 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_server_usage(
+      app_id TEXT NOT NULL,
+      bucket TIMESTAMPTZ NOT NULL,
+      calls INT NOT NULL DEFAULT 0,
+      billed_ms BIGINT NOT NULL DEFAULT 0,
+      errors INT NOT NULL DEFAULT 0,
+      rejected INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, bucket)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_server_usage_bucket_idx ON org_app_server_usage(bucket);`);
   //  #4792 code_bytes — 이 함수의 코드 저장(판마다의 CodeSize 합 · $LATEST 포함). 배포 · 옛 판 정리 때 AWS 에서 잰 값을 적고,
   //   워크스페이스 코드 저장 상한(app_server_policy.workspace_code_mb)이 이 합을 본다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS code_bytes BIGINT NOT NULL DEFAULT 0;`);
   //  #4791 unused_since — 지금 판 · 공개 판 둘 다 서버 선언(web.server)이 없다고 하우스키핑이 처음 본 때. 정책 unused_retire_days(기본 7일)가
   //   지나면 함수 · 로그 그룹 · 이 줄을 걷는다(빌드 기록은 남긴다). 서버 판을 다시 올리면(별칭을 옮기면) 걷는다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS unused_since TIMESTAMPTZ;`);
+  //  #4887 health · health_checked_at — 하우스키핑이 하루 한 번 별칭(cur · pub)이 가리키는 함수 판을 보고 남긴 결과(정상 · 쉬는 판 · 옮김 · 멈춤 · 못 고침)와 그 시각.
+  //   원본 zip 판을 잃었거나 곧 지워질 옛 판을 읽으면 같은 빌드의 지금 zip 으로 새 판을 고정해 별칭을 옮긴다(app-server-watch ⑦).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health JSONB;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health_checked_at TIMESTAMPTZ;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
   await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  #4801 org_app_server_build.zip_version — 빌드가 올린 zip 의 S3 판 번호(버킷이 판 번호를 켰을 때). Lambda 가 코드를 복사하지 않고 이 판을

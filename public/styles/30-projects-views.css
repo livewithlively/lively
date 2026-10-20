@@ -274,65 +274,16 @@
 
 /* ═══════════════════════════════════════════════════════════════════════════
    #4865 뷰: 리스트(세션) — 스코프 안 프로젝트들의 세션 목록(projects/session-list.ts).
-   - 열은 세션 목록 화면(.v2-sa — 47-v2-rail.css)과 같은 여섯(세션 · 프로젝트 · 상태 · 사람 · 생성 시각 · 마지막 활동).
-   - 결은 프로젝트 표(.pjv-tgroup-head · .pjv-trow — 13-projects.css)를 그대로 입는다. 여기서는 열 폭과 이 뷰 고유의 줄만 정한다.
+   2판(2026-10-19): 표는 [세션 목록] 앱과 **같은 함수**(v2/sess-table.ts)가 같은 클래스(.v2-sa-* — 47-v2-rail.css)로 그린다.
+   여기는 보드 칼럼 안에 앉히는 맞춤뿐이다(보드 칼럼이 이미 좌우 여백을 가진다).
    ═══════════════════════════════════════════════════════════════════════════ */
-/* 툴바의 프로젝트 전용 단추 — 세션 뷰에서는 뜻이 없다(세션을 좁히는 것은 아래 .pjv-sl-tools 줄과 검색). */
+/* 툴바의 프로젝트 전용 단추 — 세션 뷰에서는 뜻이 없다(세션을 좁히는 것은 아래 거르개 줄과 검색). */
 .pjv-sess-mode .pjv-subtask-btn, .pjv-sess-mode .pjv-cols-btn, .pjv-sess-mode .pjv-filter-btn,
 .pjv-sess-mode .pjv-closed-btn, .pjv-sess-mode .pjv-asg-btn, .pjv-sess-mode .pjv-mine-btn { display: none; }
 
-.pjv-sl { padding: 0 2px 24px; }
-.pjv-sl-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 4px 4px; }
-.pjv-sl-tools .pjv-tb-pill { height: 28px; font-weight: 600; color: var(--ink-sub); box-shadow: inset 0 0 0 1px var(--line); }
-.pjv-sl-tools .pjv-tb-pill.active { color: var(--blue); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent); }
-.pjv-sl-chip { gap: 7px; }
-.pjv-sl-sp { flex: 1; }
-.pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
-
-/* 열 — 머리 · 행이 같은 격자. .np = 프로젝트로 묶어 프로젝트 열이 빠진 판. */
-.pjv-sl-head, .pjv-trow.pjv-sl-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 200px) 112px 52px 96px 100px; align-items: center; gap: 0; }
-.pjv-sl-head.np, .pjv-trow.pjv-sl-row.np { grid-template-columns: minmax(180px, 1fr) 112px 52px 96px 100px; }
-.pjv-sl-head { position: sticky; top: 0; z-index: 3; height: 34px; padding: 0 6px; margin-top: 6px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.pjv-sl-hc { display: inline-flex; align-items: center; gap: 4px; height: 26px; min-width: 0; padding: 0 6px; margin-left: -6px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 11.5px; font-weight: 600; letter-spacing: .2px; color: var(--muted-2); cursor: pointer; text-align: left; }
-.pjv-sl-hc > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-sl-hc:hover { background: var(--bg-tint); color: var(--ink-sub); }
-.pjv-sl-hc.on { color: var(--blue); }
-.pjv-sl-ic { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-
-/* 묶음 머리 — 프로젝트 표의 그룹 머리와 같은 줄. 프로젝트로 묶으면 그 프로젝트의 상태 동그라미 + 이름(누르면 프로젝트로). */
-.pjv-sl-group { margin-top: 14px; }
-.pjv-sl-group:first-of-type { margin-top: 4px; }
-.pjv-sl-gh { padding-left: 6px; padding-right: 6px; }
-.pjv-sl-gname { font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-sl-gname.clickable { cursor: pointer; }
-.pjv-sl-gname.clickable:hover { text-decoration: underline; text-underline-offset: 3px; }
-
-/* 행 — .pjv-trow 의 높이 · 밑줄 · 호버를 그대로. 칸은 세션 목록과 같은 글. */
-.pjv-trow.pjv-sl-row { min-height: 37px; cursor: pointer; }
-.pjv-sl-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--blue) 45%, transparent); outline-offset: -2px; }
-.pjv-sl-name { text-decoration: none; }
-.pjv-sl-name:hover { text-decoration: underline; text-underline-offset: 3px; }
-.pjv-sl-name.un { color: var(--muted); font-style: normal; }
-.pjv-sl-proj { font-size: 13px; color: var(--ink-sub); padding-right: 10px; }
-.pjv-sl-proj > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pjv-sl-proj.none { color: var(--muted-2); }
-.pjv-sl-st { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
-.pjv-sl-st.loud { font-weight: 700; color: var(--ink-sub); }
-.pjv-sl-st.loud.wait { color: var(--warn-deep); }
-.pjv-sl-st.loud.busy { color: var(--blue); }
-.pjv-sl-st.loud.done { color: var(--mint-deep); }
-.pjv-sl-face { width: 22px; height: 22px; font-size: 10px; }
-.pjv-sl-m { font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-
-/* 이름 없는 세션 접기 · 더 보기 */
-.pjv-sl-fold { display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line-row); background: none; font: inherit; font-size: 12.5px; color: var(--muted); cursor: pointer; text-align: left; }
-.pjv-sl-fold:hover { background: var(--bg-tint); color: var(--ink-sub); }
-.pjv-sl-fold-car { width: 14px; font-size: 10px; color: var(--muted-2); }
-.pjv-sl-more { display: block; margin: 12px auto 0; padding: 6px 14px; border: 0; border-radius: 999px; background: var(--bg-tint); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
-.pjv-sl-more:hover { background: var(--bg-tint-2); }
-
-@media (max-width: 640px) {
-  /* 폰 — 세션 · 상태 · 마지막 활동만(나머지는 줄을 누르면 세션 화면에 있다). */
-  .pjv-sl-head, .pjv-trow.pjv-sl-row, .pjv-sl-head.np, .pjv-trow.pjv-sl-row.np { grid-template-columns: minmax(0, 1fr) 96px 72px; }
-  .pjv-sl-hc.k-proj, .pjv-sl-hc.k-owner, .pjv-sl-hc.k-made, .pjv-sl-row > .pjv-sl-proj, .pjv-sl-row > .pjv-sl-who, .pjv-sl-row > .pjv-sl-made { display: none; }
-}
+.pjv-sl { padding-bottom: 24px; }
+.pjv-sl .v2-sa-tools { height: 48px; padding: 0 2px; border-bottom: 0; }
+.pjv-sl .v2-sa-list { padding: 0; }
+.pjv-sl .v2-bin-more { margin: 10px 0 0; }
+.pjv-sl .v2-bin-empty { margin: 14px 2px; }
+.pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
