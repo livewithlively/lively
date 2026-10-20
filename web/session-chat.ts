@@ -2724,8 +2724,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
+      //  #4917 — 서버가 «아직 살아 있다(already)» 고만 답하고 새로 띄운 것이 없으면 이어받은 게 아니다. 종전엔 그때도
+      //   «이어받기 세션을 열었어요» 가 떠, 사람은 열렸다는데 화면이 그대로인 세션 앞에서 같은 말을 계속 보냈다.
+      const stillHere = nextId === target.id && !revivedInPlace;
       toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.'
-        : revivedInPlace ? '세션을 다시 띄웠어요 — 대화가 이어집니다.' : '이어받기 세션을 열었어요.');
+        : revivedInPlace ? '세션을 다시 띄웠어요 — 대화가 이어집니다.'
+        : stillHere ? '서버가 이 세션을 아직 살아 있다고 봐요 — 그대로 다시 붙습니다. 화면이 바뀌지 않으면 잠시 뒤 다시 보내 주세요.'
+        : '이어받기 세션을 열었어요.');
       //  ⚠ 라우팅 **전에** 훅을 부른다(#2439) — 되살린 세션에 말을 넣는 일이 여기서 일어나야 한다. 옮겨 간 뒤에
       //   넣으면 이 컴포넌트는 이미 destroy 된 뒤라 실패해도 아무도 모른다.
       if (beforeRoute) await beforeRoute(nextId);
