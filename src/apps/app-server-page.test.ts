@@ -45,6 +45,8 @@ test("B 넣을지 — HTML 문서 답만 · 압축 · 본문 없음 · 옮기기
   assert.equal(injectableResponse(200, { ...html, "content-disposition": 'attachment; filename="report.html"' }), false, "B15 내려받기(보고서 HTML)는 앱이 보낸 그대로");
   assert.equal(injectableResponse(200, { ...html, "content-disposition": "ATTACHMENT" }), false, "B15 대소문자");
   assert.equal(injectableResponse(200, { ...html, "content-disposition": 'inline; filename="a.html"' }), true, "B15 inline 은 화면");
+  assert.equal(injectableResponse(200, { ...html, "cache-control": "private, no-transform" }), false, "B16 앱이 «바꾸지 말라»(no-transform)");
+  assert.equal(injectableResponse(200, { ...html, "cache-control": "no-store" }), true, "B16 다른 캐시 지시는 상관없다");
   //  B-gz — 문서 요청의 답을 게이트웨이가 다시 압축하나(압축 머리를 빼고 넘겼으니)
   const gzReq = { "accept-encoding": "gzip, deflate, br" };
   assert.equal(gzipDocResponse(200, html, gzReq), true, "HTML");
@@ -55,6 +57,7 @@ test("B 넣을지 — HTML 문서 답만 · 압축 · 본문 없음 · 옮기기
   assert.equal(gzipDocResponse(200, { ...html, "content-encoding": "gzip" }, gzReq), false, "앱이 이미 압축");
   assert.equal(gzipDocResponse(304, html, gzReq), false, "본문 없음");
   assert.equal(gzipDocResponse(200, { ...html, "content-disposition": "attachment" }, gzReq), false, "내려받기는 그대로(길이 머리)");
+  assert.equal(gzipDocResponse(200, { ...html, "cache-control": "no-transform" }, gzReq), false, "no-transform 은 다시 압축도 안 한다");
   //  Vary 더하기 — 있으면 그대로 · 대소문자 무시 · `*` 는 그대로
   const v1: Record<string, string> = {}; addVary(v1, "Sec-Fetch-Dest"); addVary(v1, "accept-encoding"); addVary(v1, "Accept-Encoding");
   assert.equal(v1.vary, "Sec-Fetch-Dest, accept-encoding");

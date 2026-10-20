@@ -20,6 +20,7 @@ import type { StreamEvent } from "../net/aws/lambda-lite.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { scriptVersion } from "./app-server-page.js";
+import zlib from "node:zlib";
 
 const SECRET = "s3cret";
 const T = { id: "11111111-2222-4333-8444-555555555555", slug: "lively-46e3" };
@@ -286,6 +287,22 @@ test("SW-E #4485 후속 같은 주소 파일 — /_lively/sdk.js · probe.js(지
     const gone = await call(h.port, "GET", L("/sdk.js"), { app: "srv", who: { mid: "carol" } });
     assert.notEqual(gone.status, 200, "E5 빠진(비활성) 구성원이 받았다 — 사람 · 앱 문(whoAndApp)을 건너뛰었다");
     assert.equal(gone.text.includes("RT()"), false);
+    const gz = await new Promise<{ enc: string; vary: string; text: string }>((resolve, reject) => {
+      const r = http.request({ host: "127.0.0.1", port: h.port, method: "GET", path: L(`/sdk.js?v=${v}`), agent: false,
+        headers: { "x-lively-identity": ident("srv"), "x-lvly-app-front": front("srv"), "accept-encoding": "gzip, br" } }, (res) => {
+        const parts: Buffer[] = [];
+        res.on("data", (c: Buffer) => parts.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(parts);
+          let text: string;
+          try { text = zlib.gunzipSync(raw).toString("utf8"); } catch { text = `(gzip 아님) ${raw.toString("utf8").slice(0, 40)}`; }
+          resolve({ enc: String(res.headers["content-encoding"] ?? ""), vary: String(res.headers.vary ?? ""), text });
+        });
+      });
+      r.on("error", reject);
+      r.end();
+    });
+    assert.deepEqual(gz, { enc: "gzip", vary: "Accept-Encoding", text: "RT()" }, "압축을 받는 브라우저엔 압축해서");
     const probe = await call(h.port, "GET", L(`/probe.js?v=${scriptVersion("PB()")}`), { app: "plain" });
     assert.equal(probe.text, "PB()", "E6 서버 없는 앱 주소에서도 같은 파일");
     assert.equal(probe.headers["cache-control"], "public, max-age=31536000, immutable");

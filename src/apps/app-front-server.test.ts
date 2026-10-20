@@ -517,12 +517,14 @@ test("R4 앱의 CSP · 탐침 — 같은 주소 파일이 기본 · nonce 면 �
 });
 
 test("R5 ★ 문서 답 다시 압축 — 브라우저가 gzip 을 받으면 게이트웨이가 압축(조각마다 바로 풀림) · Vary · 앱의 ETag 는 약하게 · gzip 을 안 받으면 날것", async () => {
-  const h = await start(page({ etag: "\"e5\"", "content-type": "application/json" }, ["{\"a\":", { wait: 200 }, "1}"]), { scripts: FAKE_SCRIPTS });
+  const h = await start(page({ etag: "\"e5\"", "content-type": "application/json", "content-length": "7" }, ["{\"a\":", { wait: 200 }, "1}"]), { scripts: FAKE_SCRIPTS });
   try {
     const r = await getRaw(h.port, "/data.json", { ...DOC, "sec-fetch-dest": "document", "accept-encoding": "gzip, br", "x-lively-identity": ident() });
     assert.equal(r.status, 200);
     assert.equal(r.headers["content-encoding"], "gzip");
     assert.equal(r.headers.etag, "W/\"e5\"", "압축한 몸에 앱의 강한 ETag 를 그대로 붙였다");
+    assert.equal(r.headers["content-length"], undefined, "압축 전 길이를 그대로 보냈다 — 받는 쪽이 모자란 바이트를 기다린다");
+    assert.equal(r.complete, true);
     assert.match(String(r.headers.vary), /Accept-Encoding/);
     assert.equal(zlib.gunzipSync(r.all).toString(), "{\"a\":1}");
     assert.ok(r.chunks.length >= 2 && r.chunks.at(-1)!.at - r.chunks[0]!.at >= 150, `압축이 모았다 보냈다: ${JSON.stringify(r.chunks.map((c) => c.at))}`);
@@ -538,4 +540,13 @@ test("R5 ★ 문서 답 다시 압축 — 브라우저가 gzip 을 받으면 게
     assert.equal(plain.headers["content-encoding"], undefined, "gzip 을 안 받는 브라우저에 gzip");
     assert.equal(plain.all.toString(), `<!doctype html>${SDK}<p>압축</p>`);
   } finally { await h2.close(); }
+  //  B16 앱이 «바꾸지 말라»(Cache-Control: no-transform) — 넣지도 다시 압축하지도 않는다(앱이 고른 탈출구)
+  const body = "<!doctype html><p>그대로</p>";
+  const h3 = await start(page({ "cache-control": "no-transform", "content-length": String(Buffer.byteLength(body)) }, [body]), { scripts: FAKE_SCRIPTS });
+  try {
+    const r = await getRaw(h3.port, "/page", { ...DOC, "accept-encoding": "gzip", "x-lively-identity": ident() });
+    assert.equal(r.all.toString(), body);
+    assert.equal(r.headers["content-encoding"], undefined);
+    assert.equal(r.headers["content-length"], String(Buffer.byteLength(body)));
+  } finally { await h3.close(); }
 });

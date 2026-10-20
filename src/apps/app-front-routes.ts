@@ -195,7 +195,7 @@ export async function appFrontLively(headers: Record<string, string | string[] |
   const act = g.act as AppFrontAct;
   const w = await whoAndApp(act, d, false);
   if ("reply" in w) return w.reply;
-  const file = await sdkFile(method, rawPath, d);
+  const file = await sdkFile(method, rawPath, headers, d);
   if (file) return file;
   if (!d.api) return { status: 503, json: { error: "이 게이트웨이에서는 앱 API 가 준비되지 않았습니다" } };
   const r = await handleAppFrontApi({ act, tenant: g.tenant, member: w.member, app: w.app, method, rawPath, body, env: d.env }, d.api);
@@ -207,7 +207,7 @@ export async function appFrontLively(headers: Record<string, string | string[] |
  *  `?v=` 가 지금 판의 지문이면 1년 캐시(판이 바뀌면 지문도 바뀐다), 아니면 늘 다시 묻게. `/_lively/*` 는 앱 서버로 가지 않는 우리 자리다.
  *  이 둘이 아닌 경로면 null(같은 주소 API 로).
  */
-async function sdkFile(method: string, rawPath: unknown, d: AppFrontDeps): Promise<FrontReply | null> {
+async function sdkFile(method: string, rawPath: unknown, headers: Record<string, string | string[] | undefined>, d: AppFrontDeps): Promise<FrontReply | null> {
   const raw = String(rawPath ?? "");
   const q = raw.indexOf("?");
   const p = "/_lively" + (q < 0 ? raw : raw.slice(0, q));
@@ -220,11 +220,16 @@ async function sdkFile(method: string, rawPath: unknown, d: AppFrontDeps): Promi
     return { status: 503, json: { error: "SDK 런타임을 준비하지 못했습니다 — 잠시 뒤 다시 열어 주세요", code: "sdk_unavailable" } };
   }
   const js = p === SDK_PATH ? s.runtime : s.probe;
+  const ver = scriptVersion(js);
   const v = new URLSearchParams(q < 0 ? "" : raw.slice(q + 1)).get("v");
-  return { status: 200, body: Buffer.from(js, "utf8"), headers: {
-    "Content-Type": "text/javascript; charset=utf-8",
-    "Cache-Control": v === scriptVersion(js) ? "public, max-age=31536000, immutable" : "no-cache",
-  } };
+  const base: Record<string, string> = {
+    "Content-Type": "text/javascript; charset=utf-8", Vary: "Accept-Encoding",
+    "Cache-Control": v === ver ? "public, max-age=31536000, immutable" : "no-cache",
+  };
+  const body = Buffer.from(js, "utf8");
+  //  화면마다 기본으로 받는 파일이다(판마다 한 번) — 21KB 를 압축해 낸다(압축본은 판 지문으로 한 벌만 기억).
+  if (/\bgzip\b/.test(hdr(headers, "accept-encoding"))) return { status: 200, headers: { ...base, "Content-Encoding": "gzip" }, body: await gzipCached(`sdk:${p}:${ver}`, body) };
+  return { status: 200, body, headers: base };
 }
 
 /**

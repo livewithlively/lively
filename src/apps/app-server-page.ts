@@ -6,7 +6,7 @@
 //  무엇을:
 //   · 문서 요청(브라우저가 문서로 여는 것 — Sec-Fetch-Dest document · iframe · frame, 그 머리가 없으면 Accept 의 text/html + navigate)의 HTML 답에만.
 //     fetch 로 받는 HTML 조각 · JSON · 파일 · 내려받기(Content-Disposition: attachment) · 압축된 답 · 본문 없는 답(204 · 205 · 304) ·
-//     옮기기(3xx) · 부분 답(206)은 손대지 않는다.
+//     옮기기(3xx) · 부분 답(206) · 앱이 «바꾸지 말라» 고 한 답(Cache-Control: no-transform)은 손대지 않는다.
 //   · 자리는 정적 화면과 같다 — doctype 바로 뒤(없으면 맨 앞 · BOM 뒤). 본문이 조각으로 오므로 doctype 이 끝날 때까지만(1KB 안) 모았다 보낸다.
 //   · 모양은 같은 주소의 파일(/_lively/sdk.js — 판마다 한 번 받고 1년 캐시 · 문서는 짧다)이 기본이다. 앱의 CSP 가 그 파일을 막고(‘self’ 없음)
 //     인라인만 받으면 인라인, nonce 를 쓰면 그 nonce 를 단다. 문서 안 <meta> CSP 는 그보다 뒤의 것에만 걸린다(우리 것은 그 앞에 선다).
@@ -49,6 +49,8 @@ export function documentRequestHeaders(headers: HeaderMap): HeaderMap {
 const bodyStatus = (status: number): boolean => (status >= 200 && status < 300 && status !== 204 && status !== 205 && status !== 206) || status >= 400;
 const isAttachment = (headers: Record<string, string>): boolean => /^\s*attachment\b/i.test(headers["content-disposition"] ?? "");
 const encoded = (headers: Record<string, string>): boolean => { const e = (headers["content-encoding"] ?? "").trim().toLowerCase(); return !!e && e !== "identity"; };
+/** 앱이 «중간에서 바꾸지 말라» 고 했다(Cache-Control: no-transform · RFC 9111 §5.2.2.6) — 넣지도 다시 압축하지도 않는다. */
+const noTransform = (headers: Record<string, string>): boolean => /(^|,)\s*no-transform\s*(,|$)/i.test(headers["cache-control"] ?? "");
 
 /** 이 답에 런타임을 넣나(순수) — 머리 이름은 소문자(responseHeadersOf). 문서 요청인지는 부르는 쪽이 본다. */
 export function injectableResponse(status: number, headers: Record<string, string>): boolean {
@@ -58,7 +60,7 @@ export function injectableResponse(status: number, headers: Record<string, strin
   //  ASCII 를 품지 않는 문자 집합(UTF-16 · UTF-32)엔 ASCII 바이트를 끼울 수 없다.
   if (params.some((p) => /^charset\s*=\s*"?utf-(16|32)/.test(p))) return false;
   //  내려받기(보고서 · 내보내기 HTML) — 브라우저는 응답을 보기 전에 문서 요청으로 보낸다. 파일은 앱이 보낸 바이트 그대로여야 한다(격리 리뷰).
-  if (isAttachment(headers)) return false;
+  if (isAttachment(headers) || noTransform(headers)) return false;
   return !encoded(headers);
 }
 
@@ -66,6 +68,7 @@ export function injectableResponse(status: number, headers: Record<string, strin
 export function gzipDocResponse(status: number, headers: Record<string, string>, request: HeaderMap): boolean {
   if (!bodyStatus(status) || encoded(headers)) return false;
   if (isAttachment(headers)) return false;   // 내려받기는 앱이 보낸 그대로(길이 머리가 남아 내려받기 진행이 보인다)
+  if (noTransform(headers)) return false;
   if (!/\bgzip\b/i.test(one(request, "accept-encoding"))) return false;
   return compressible((headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase());
 }

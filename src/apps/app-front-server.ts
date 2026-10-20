@@ -15,6 +15,8 @@
 //   · 브라우저가 떠나도 함수 흐름은 끝까지 읽는다(자리 · 실행 시간 셈을 지키려고 — serveAppServer 안 ★).
 //   · 화면 문서(브라우저가 문서로 여는 요청의 HTML 답)에는 SDK 런타임을 넣는다 — 정적 화면과 같은 자리 · 앱의 CSP 에 맞는 모양(app-server-page.ts).
 //     그래야 라이블리 안에서 인사하고(8초 뒤 종전 화면으로 바뀌지 않는다) 새 탭에서도 window.lively 가 있다(#4485 후속 · 상민 2026-10-20).
+//     넣으려면 날 HTML 이 필요해 문서 요청은 압축 머리를 빼고 함수로 넘기고, 압축이 듣는 문서 답은 게이트웨이가 다시 gzip 한다(조각마다).
+//     HTML 답엔 Vary: Sec-Fetch-Dest(런타임 든 답 · 안 든 답을 캐시가 섞지 않게) · 다시 압축한 답엔 Vary: Accept-Encoding.
 import type express from "express";
 import crypto from "node:crypto";
 import { logger } from "../log.js";

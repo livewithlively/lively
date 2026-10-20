@@ -1416,7 +1416,7 @@ const appActivityCap: Capability = {
  *  (앱 주소 쿠키를 막는 브라우저가 라이블리 안에서 이 길로 온다 — 새 탭은 된다). 그 자리엔 «새 탭에서 열기» 단추가 없을 수 있어 주소를 글에 싣는다.
  */
 function noUiPage(id: string, manifest: unknown, appUrl: string | null): HttpError {
-  return new HttpError(404, serverDeclOf(manifest)
+  return new HttpError(404, serverDeclOf(manifest) && appServerEnv()
     ? `앱 '${id}' 은(는) 서버가 화면을 만드는 앱이라 이 화면에서는 열 수 없습니다 — 새 탭에서 앱 주소${appUrl ? `(${appUrl})` : ""}로 열어 주세요`
     : `앱 '${id}' 에 UI 페이지가 없습니다`);
 }

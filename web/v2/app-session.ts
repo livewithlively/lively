@@ -11,8 +11,8 @@
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 앱 아이콘 선언
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
-import { toolExplain } from '../lib/tool-explain.js';
-import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 화면 앱 판정 한 벌   // #4632 동의 창 도구 칩의 쉬운 설명
+import { toolExplain } from '../lib/tool-explain.js';   // #4632 동의 창 도구 칩의 쉬운 설명
+import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 화면 앱 판정 한 벌
 
 export interface SessionApp {
   id: string;
