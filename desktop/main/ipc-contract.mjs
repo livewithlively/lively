@@ -99,7 +99,7 @@ function gateway(o) {
  *  없으므로(패키징 경계가 다르다) 여기 사본을 두고 desktop-core.test.mjs 가 두 목록의 일치를 못박는다.
  * ⚠ 값이 없으면 인자를 **안 붙인다** — 그러면 CLI 가 게이트웨이에서 온보딩 선택을 직접 읽는다(정본은 CLI 다).
  */
-export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok"];
+export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
 function harnessArgs(o) {
   const h = String(o.harness || "").trim().toLowerCase();
   if (!h) return [];

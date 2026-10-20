@@ -241,7 +241,18 @@ const opencodeChat: ChatAdapter = {
   note: "serve 실측(1.18.25·2026-09-01 실기동): /event SSE 로 server.connected 수신 · POST /session 이 인증 없이 ses_ id 발급 · /permission/{id}/reply. 기동 3단계는 ensureOpencodeChat 이 쥔다.",
 };
 
-export const CHAT_ADAPTERS: readonly ChatAdapter[] = [claudeChat, codexChat, grokChat, antigravityChat, opencodeChat];
+const cursorChat: ChatAdapter = {
+  key: "cursor", label: "Cursor",
+  //  #4927 범위는 멤버 PC 의 Cursor IDE·CLI 배선(키트)이다 — 이 판은 Cursor 세션을 띄우지 않는다(웹 세션 카탈로그에 없다).
+  //   그래서 대화 런타임의 모든 축이 null 이다. 대화 기록 읽기는 harness-io/cursor.ts(parse)가 따로 쥔다.
+  transport: null,
+  argv: null,
+  translate: null,
+  encode: null,
+  note: "서버 호스팅 Cursor 세션은 후속 단계(#4927 범위 밖) — cursor-agent 의 비대화 출력(--print --output-format stream-json)은 로그인 계정이 있어야 재볼 수 있어 미실측이다.",
+};
+
+export const CHAT_ADAPTERS: readonly ChatAdapter[] = [claudeChat, codexChat, grokChat, antigravityChat, opencodeChat, cursorChat];
 
 /** 하네스 key → 어댑터. 모르는 key 는 null — **claude 로 추측하지 않는다**(남의 하네스를 대신 띄우게 된다). */
 export function chatAdapter(key: string | null | undefined): ChatAdapter | null {

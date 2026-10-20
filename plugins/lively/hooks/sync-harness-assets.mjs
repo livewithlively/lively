@@ -27,7 +27,7 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir, sessionTokenFromFile } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, isForeignCursorInvocation, claudeConfigDir, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -43,7 +43,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -143,6 +144,8 @@ const COMPOSERS = {
   "antigravity-agent": composeAntigravityAgent,
   "antigravity-workflow": composeAntigravityWorkflow,
   "grok-agent": composeGrokAgent,
+  "cursor-agent": composeCursorAgent,
+  "cursor-command": composeCursorCommand,
 };
 // opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
 //  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
@@ -189,6 +192,28 @@ function composeGrokAgent(asset) {
   const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
   const name = fm.name != null ? String(fm.name) : String(asset.id || "");
   return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// cursor 서브에이전트(agents/<id>.md, #4927) — 파서는 단순 `key: value`(번들 실측: name·description·model·tools·readonly·
+//  is_background 를 읽고 모르는 키는 무시). claude 의 model 슬러그·tools 이름의 **백엔드 해석**은 미실측이라 다른 하네스와
+//  같은 판단으로 이식 최소셋(name·description·본문)만 넘긴다. ⚠ 본문이 비면 Cursor 가 그 파일을 건너뛴다(실측) — 본문은 그대로.
+function composeCursorAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// cursor 커맨드(commands/<id>.md, #4927) — ⚠ Cursor 는 frontmatter 를 **해석하지 않는다**: 파일 전문(trim)이 프롬프트이고
+//  **첫 줄이 제목**이다(번들 실측). claude 형 YAML 을 그대로 두면 제목이 `---` 로 보이고 YAML 이 프롬프트로 샌다.
+//  그래서 첫 줄 = 설명(사람이 고를 때 보는 제목), 그 뒤 provenance 주석, 그 뒤 본문. `$ARGUMENTS`·`$1` 치환은 Cursor 가
+//  claude 와 같은 규약으로 한다(실측) — 본문을 그대로 두면 된다. 설명이 없으면 본문 첫 줄이 곧 제목이 된다.
+function composeCursorCommand(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = String(asset.description != null ? asset.description : (fm.description ?? "")).replace(/\s+/g, " ").trim();
+  //  설명이 없으면 provenance 주석이 첫 줄(=제목)이 되지 않게 맨 끝으로 보낸다.
+  if (!desc) return `${asset.body || ""}\n\n<!-- ${PROVENANCE} -->\n`;
+  return `${desc}\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 // 자산 body 는 **frontmatter 를 담지 않는다** — 파일의 frontmatter 는 composeFile 이 description 컬럼·frontmatter

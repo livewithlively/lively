@@ -199,7 +199,8 @@ function sessionShareEditor(detail, data) {
     };
     const harnessRows = el('div', {},
       hChk('claude', 'Claude Code', ''),
-      hChk('codex', 'Codex', ''));   // #1759 rollout 파서 + #1884 기본 캡처 — 종전 '미지원(실험)' 문구는 낡았다
+      hChk('codex', 'Codex', ''),   // #1759 rollout 파서 + #1884 기본 캡처 — 종전 '미지원(실험)' 문구는 낡았다
+      hChk('cursor', 'Cursor', '구성원 PC 의 Cursor IDE·CLI'));   // #4927 — 파서(harness-io/cursor.ts)가 생겨 서버가 받는다. 기본은 꺼짐
 
     // ── select 헬퍼 ──
     const sel = (opts, val) => {
