@@ -5373,7 +5373,7 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "e7bde85461eb3c2c"
+  "input_hash": "b9846f4af13b26f2"
  },
  {
   "name": "app_folder_limit_set",
@@ -5564,6 +5564,46 @@
    "POST /api/ui/ai-run-limits"
   ],
   "input_hash": "8d6eea919f231c8c"
+ },
+ {
+  "name": "app_job_start",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs"
+  ],
+  "input_hash": "1c46338bf43e1d21"
+ },
+ {
+  "name": "app_job_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs/:id"
+  ],
+  "input_hash": "ca68465d3bbdd1a1"
+ },
+ {
+  "name": "app_jobs",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs"
+  ],
+  "input_hash": "29cbb303f1e260ed"
+ },
+ {
+  "name": "app_job_cancel",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "agent_job_run",

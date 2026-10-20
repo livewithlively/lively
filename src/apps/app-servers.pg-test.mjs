@@ -30,6 +30,7 @@
 //   V9 판 목록을 못 읽으면 이번엔 남긴다 · V11 앱 서버를 끈 배포에서 앱을 지우면 함수 · 기록 · zip 을 남긴다 · R4a/R4c 함수를 못 지우면 기록 · zip 도 남긴다
 //   격리 리뷰 · 재검토: V12 판 목록 404 면 지운다 · V13 잠긴 앱은 건너뛴다 · V14 잠금 안 재확인(V14b 저장소 오류면 막지 않는다) · V15 Inactive 되살리기
 //   (V15b Inactive + 지난 고치기 실패 · V15c 그 뒤 새 코드 · V15d 그 뒤 설정만 · V15e 그 뒤 같은 코드 · 같은 설정 — 모두 코드를 다시 올린다) · V16 건너뛴 후보 뒤도 훑는다 · V17 같은 시각 후보
+//  #4486 백그라운드 작업(J): J6 별칭의 검사 층 판 · J7 열린 작업이 붙잡은 판 · 토큰은 정리 · 회수 안 함(J7b 끝나면 거둠) · J8 함수 크기 = 그 판의 선언
 //  #4887 별칭 판 상태 점검(H): H0 판정 · H1 정상 · H2 하루 주기 · H3 쉬는 판 · H4 옛 판(cur · pub 한 번에) · H5 pub 만 옛 판 · H6 원본 잃음(돎) · H7 멈춤(알림)
 //   H8 zip 없음(알림만 · H8b 다음 날 다시 안 알림 · 다른 판이면 다시) · H9 일시 오류(H9b 하루 넘으면 한 번 · H9c 저장소 오류 원문 안 보임) · H10 잠김(H10b 그사이 잠김 ·
 //   H10c 그사이 옮겨짐 · H10c2 한 별칭만 옮겨짐 · H10d 정상 판정 중 옮겨짐 — 결과 안 덮음) · H11 한 틱 몫 · H12 빌드가 다른 별칭 · H13 멈춘 함수 · H14 상태 · H15 COPY · H16 고아
@@ -282,8 +283,10 @@ const d1 = await call("app_server_deploy", { app_id: "srv", wait_s: 120 }, alice
 const r1 = await serverRow();
 const cf = calls("createFunction")[0]?.[1];
 chk("D1b 배포 성공 · 빌드 1번(앨리스의 세션)", d1.status === "deployed" && seats.length === 1 && seats[0].memberId === "pgt-alice" && seats[0].sessionId === "box-pgt-alice-1", JSON.stringify({ d1, seats }));
-chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB · 30초 · 워크스페이스 태그 · S3 zip",
-  cf && cf.FunctionName === FN && cf.Role === ROLE && cf.Handler === "lively-run.sh" && cf.Runtime === "nodejs22.x" && cf.Architectures[0] === "arm64" && cf.MemorySize === 512 && cf.Timeout === 30
+//  #4486 함수 시간 = 작업 시간(900초) · 임시 디스크 512 · 사람 요청 30초는 검사 층 env(LIVELY_REQUEST_TIMEOUT_S — 아래 J8).
+chk("D1c 함수 만들기 — 역할 · 핸들러 · 런타임 · arm64 · 512MB · 900초(작업 시간) · 임시 512MB · 워크스페이스 태그 · S3 zip",
+  cf && cf.FunctionName === FN && cf.Role === ROLE && cf.Handler === "lively-run.sh" && cf.Runtime === "nodejs22.x" && cf.Architectures[0] === "arm64" && cf.MemorySize === 512 && cf.Timeout === 900
+  && cf.EphemeralStorage?.Size === 512 && cf.Environment?.Variables?.LIVELY_REQUEST_TIMEOUT_S === "30"
   && cf.Tags["lvly:tenant"] === SINGLE_TENANT_ID && cf.Code.S3Bucket === "fake-bucket" && zips.has(cf.Code.S3Key) && cf.Code.S3Key.includes("/z/srv/"), JSON.stringify(cf));
 const v1env = cf?.Environment?.Variables ?? {};
 const fnTokens = async (app) => q(`SELECT token_hash, revoked_at FROM auth_token WHERE label=$1 ORDER BY created_at`, [`app-server-fn:${app}`]);
@@ -2402,6 +2405,43 @@ const hDeploy = async (id, code) => { await call("app_save", { files: code ? twi
 }
 
 for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "hl-q1", "hl-q2", "hl-two", "hl-stop", "hl-copy"]) await call("org_app_remove", { app_id: id }, boss);
+
+// #4486 J — 백그라운드 작업 쪽 배포: 별칭의 검사 층 판 · 열린 작업이 붙잡은 판 · 토큰 · 함수 크기(앱 선언)
+{
+  const ID = "jobsrv";
+  const files = (o = {}) => filesOf(o).map((f) => (f.path === "lively-app.json" ? { ...f, content: f.content.replace('"id":"srv"', `"id":"${ID}"`) } : f));
+  const savedPol = (await q(`SELECT app_server_policy FROM org_runtime_config WHERE id=1`))[0]?.app_server_policy ?? {};
+  await call("app_server_limits_set", { keep_versions: 1 }, boss);
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j1')).listen(Number(process.env.PORT));" }) }, alice, aliceCtx);
+  const dj1 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const rj1 = await rowOf(ID);
+  chk("J6 별칭에 검사 층 판(4) — 백그라운드 작업이 이 판부터 받는다", dj1.status === "deployed" && rj1?.cur_guard === 4, JSON.stringify({ s: dj1.status, g: rj1?.cur_guard }));
+  const FNJ = rj1.function_name;
+  const pinnedVer = rj1.cur_lambda_version;
+  const pinnedTok = rj1.cur_token_hash;
+  const jid = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, token_hash, route, body, timeout_s)
+                        VALUES ($1,'running','pgt-alice','pub','cur',$2,$3,$4,'/x','{}',900) RETURNING id`, [ID, FNJ, pinnedVer, pinnedTok]))[0].id;
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j2')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  const dj2 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const rj2 = await rowOf(ID);
+  const vers2 = fns.get(FNJ).versions.map((v) => v.Version);
+  const toks2 = await fnTokens(ID);
+  chk("J7 ★ 열린 작업이 붙잡은 판 · 토큰 — 새 판을 올려도(정리 1판만 남김) 그 판은 남고 · 그 토큰은 회수하지 않는다",
+    dj2.status === "deployed" && rj2.cur_lambda_version !== pinnedVer && vers2.includes(pinnedVer) && toks2.some((t) => t.token_hash === pinnedTok && !t.revoked_at),
+    JSON.stringify({ cur: rj2.cur_lambda_version, pinnedVer, vers2, toks2 }));
+  const cfgJ = fns.get(FNJ).versions.find((v) => v.Version === rj2.cur_lambda_version)?.cfg;
+  chk("J8 함수 크기 = 그 판의 선언(web.server.memory_mb 2048 · tmp_mb 1024) · 시간 = 작업 시간 900 · 사람 요청 시간은 검사 층 env 30",
+    cfgJ?.MemorySize === 2048 && cfgJ?.EphemeralStorage?.Size === 1024 && cfgJ?.Timeout === 900 && cfgJ?.Environment?.Variables?.LIVELY_REQUEST_TIMEOUT_S === "30",
+    JSON.stringify({ m: cfgJ?.MemorySize, e: cfgJ?.EphemeralStorage, t: cfgJ?.Timeout }));
+  await q(`UPDATE org_app_job SET status='done', ended_at=now() WHERE id=$1`, [jid]);
+  await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j3')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+  await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+  const vers3 = fns.get(FNJ).versions.map((v) => v.Version);
+  const toks3 = await fnTokens(ID);
+  chk("J7b 작업이 끝난 뒤 배포 — 그 판을 정리하고 그 토큰을 회수한다", !vers3.includes(pinnedVer) && toks3.some((t) => t.token_hash === pinnedTok && !!t.revoked_at), JSON.stringify({ vers3, toks3 }));
+  await q(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPol)]);
+  await call("org_app_remove", { app_id: ID }, boss);
+}
 
 // D11 앱 지우기 → 함수 · 로그 · 기록 · zip
 {

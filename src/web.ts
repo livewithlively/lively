@@ -40,6 +40,7 @@ import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
 import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트(redeem · me · page · #4482 lively)
+import { registerAppJobRoutes } from "./apps/app-jobs-routes.js"; // #4486 v2-7 — 앱 백그라운드 작업의 콜백(함수 안 검사 층 → 시작 확인 · 박동 · 결과)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -239,6 +240,9 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
   //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
   registerAppFrontRoutes(app);
+  // ── 앱 백그라운드 작업의 콜백(#4486 v2-7) — /api/app-jobs/:id/{claim,tick,result}. 함수 안 검사 층이 부른다(사람 로그인이 아니라
+  //  그 함수의 앱 서버 토큰 + 작업 비밀). 본문은 apps/app-jobs-routes.ts.
+  registerAppJobRoutes(app, verifier);
 
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);

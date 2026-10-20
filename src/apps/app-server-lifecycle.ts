@@ -15,6 +15,7 @@ import {
 import { AwsError } from "../net/aws/aws-json.js";
 import { s3Delete } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
+import { endJobsForApp } from "./app-jobs.js";
 
 /**
  * 멈춤 — 동시 실행 0. 이미 멈춘 함수면 아무것도 바꾸지 않는다(changed:false — 자동 멈춤 · 남의 멈춤 기록을 덮지 않는다).
@@ -72,6 +73,8 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   const row = await st.getServerRow(appId).catch(() => null);
   const errors: string[] = [];
   let pending = false;
+  //  #4486 열린 백그라운드 작업을 끝낸다 — 함수 · 토큰이 곧 사라진다(도는 작업의 라이블리 호출 · 결과 보고가 막힌다).
+  await endJobsForApp(appId, "앱(서버)을 지워 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
   if (row && !env) pending = true;   // 이 배포가 앱 서버를 끈 채다 — 켜진 배포의 하우스키핑이 지우게 줄을 남긴다
   if (env && row) {
     const api = deps.api ?? realLambdaApi(env.region);
@@ -130,6 +133,8 @@ export async function retireServer(appId: string, recheck: () => Promise<boolean
   const errors: string[] = [];
   try {
     if (!(await recheck())) return { retired: false, skipped: "in-use", errors };
+    //  #4486 서버 선언을 뺀 지 오래된 앱의 함수를 걷는다 — 남은 백그라운드 작업도 끝낸다(그 함수가 곧 사라진다).
+    await endJobsForApp(appId, "앱이 서버 선언(web.server)을 뺀 채 오래되어 서버를 걷으며 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
     const api = deps.api ?? realLambdaApi(env.region);
     const own = await functionOwnership(api, row.function_name);
     if (own === "foreign") errors.push(`함수: ${foreignMsg(row.function_name)} — 지우지 않았습니다`);

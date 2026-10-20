@@ -32,6 +32,15 @@ export interface AppServerPolicy {
   workspace_functions_max: number;  // #4792 이 워크스페이스의 서버 함수 수(앱마다 하나) — 새 함수를 만들 때만 본다(있는 함수는 늘 고친다)
   workspace_code_mb: number;        // #4792 이 워크스페이스 함수들의 코드 저장 합(MiB · AWS 가 세는 판마다의 zip 크기) — 새 코드를 올릴 때 본다
   unused_retire_days: number;       // #4791 지금 판 · 공개 판 둘 다 서버 선언이 없는 채로 이 날수가 지나면 그 함수를 걷는다
+  //  #4486 v2-7 백그라운드 작업(결정 상민 2026-10-20 — 함수 하나 · 함수 시간 15분 · 사람 요청 시간은 검사 층이 끊는다 · 메모리는 앱이 web.server.memory_mb 로).
+  job_timeout_s: number;            // 함수 시간(초) = 작업 하나의 시간 상한. 사람 요청(timeout_s)은 함수 안 검사 층이 끊는다
+  memory_max_mb: number;            // 앱이 web.server.memory_mb 로 고를 수 있는 메모리 천장(MB) — 넘게 적으면 이 값으로 줄인다
+  jobs_running_workspace: number;   // 워크스페이스에서 동시에 도는(부른 · 도는) 작업 수 — 넘으면 줄을 세워 기다린다
+  jobs_running_app: number;         // 앱 하나에서 동시에 도는 작업 수(워크스페이스 상한까지만)
+  jobs_queued_app: number;          // 앱 하나에서 기다리는 작업 수 — 넘으면 새 작업을 받지 않는다(429)
+  jobs_daily_app: number;           // 앱 하나의 최근 24시간 작업 수 — 넘으면 받지 않는다(429)
+  job_wait_s: number;               // 기다리는 시간 상한(초) — 넘으면 «대기 시간 초과» 로 끝낸다
+  job_body_kb: number;              // 작업에 넘기는 본문 상한(KB) — 비동기 호출 한 번의 한도(1MB)가 이벤트(본문은 base64 로 ⁴⁄₃)까지 담아야 한다
 }
 export type AppServerPolicyPatch = Partial<AppServerPolicy>;
 
@@ -40,6 +49,8 @@ export const APP_SERVER_POLICY_DEFAULT: AppServerPolicy = {
   stop_invocations_5m: 30_000, stop_duration_s_5m: 3_000, log_retention_days: 14, keep_versions: 3,
   max_inflight_workspace: 50, max_inflight_app: 20,
   workspace_functions_max: 20, workspace_code_mb: 5 * 1024, unused_retire_days: 7,
+  job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 10, jobs_running_app: 5, jobs_queued_app: 100, jobs_daily_app: 1000,
+  job_wait_s: 1800, job_body_kb: 256,
 };
 
 /** 바닥 — 설정이 이 밑으로 못 간다(0 · 음수 · 잡값은 바닥이 아니라 «그 값 없음» = 기본값으로 읽는다). */
@@ -48,17 +59,23 @@ export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
   stop_invocations_5m: 100, stop_duration_s_5m: 60, log_retention_days: 1, keep_versions: 1,
   max_inflight_workspace: 1, max_inflight_app: 1,
   workspace_functions_max: 1, workspace_code_mb: 100, unused_retire_days: 1,
+  job_timeout_s: 60, memory_max_mb: 128, jobs_running_workspace: 1, jobs_running_app: 1, jobs_queued_app: 1, jobs_daily_app: 1,
+  job_wait_s: 60, job_body_kb: 1,
 };
 /**
- * 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 4GB.
+ * 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 10GB(Lambda 의 끝 — #4486 전엔 4GB).
  *  함수 수 200 · 코드 저장 20GB — 워크스페이스 관리자가 스스로 올릴 수 있는 끝이다. 모든 워크스페이스가 AWS 계정 하나(동시 실행 · 코드 저장 300GiB)를
  *  나눠 쓰므로 그 너머는 플랫폼이 코드로 정한다(#4792).
  */
 export const APP_SERVER_POLICY_MAX: AppServerPolicy = {
-  memory_mb: 4096, timeout_s: 60, build_timeout_s: 1800, build_mem_floor_mb: 1500, build_heap_mb: 4096,
+  memory_mb: 10_240, timeout_s: 60, build_timeout_s: 1800, build_mem_floor_mb: 1500, build_heap_mb: 4096,
   stop_invocations_5m: 3_000_000, stop_duration_s_5m: 300_000, log_retention_days: 365, keep_versions: 20,
   max_inflight_workspace: 1000, max_inflight_app: 500,
   workspace_functions_max: 200, workspace_code_mb: 20 * 1024, unused_retire_days: 365,
+  //  #4486 — 함수 시간 15분 · 메모리 10GB 는 Lambda 의 끝(https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html). 본문 700KB 는
+  //   비동기 호출 한 번의 한도 1MB 에 base64(⁴⁄₃) · 머리글 · 이벤트 틀이 드는 끝.
+  job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 200, jobs_running_app: 100, jobs_queued_app: 1000, jobs_daily_app: 100_000,
+  job_wait_s: 86_400, job_body_kb: 700,
 };
 
 export const APP_SERVER_POLICY_KEYS = Object.keys(APP_SERVER_POLICY_DEFAULT) as Array<keyof AppServerPolicy>;
@@ -83,7 +100,11 @@ export function normalizeAppServerPolicy(patch: unknown, base: AppServerPolicy =
   const out = { ...base };
   for (const k of APP_SERVER_POLICY_KEYS) out[k] = clamp(p[k], base[k], APP_SERVER_POLICY_MIN[k], APP_SERVER_POLICY_MAX[k]);
   out.log_retention_days = retentionDaysFor(out.log_retention_days);
-  if (o.effective !== false) out.max_inflight_app = Math.min(out.max_inflight_app, out.max_inflight_workspace);
+  if (o.effective !== false) {
+    out.max_inflight_app = Math.min(out.max_inflight_app, out.max_inflight_workspace);
+    out.jobs_running_app = Math.min(out.jobs_running_app, out.jobs_running_workspace);   // #4486 같은 규칙
+    out.memory_mb = Math.min(out.memory_mb, out.memory_max_mb);                           // #4486 기본 메모리도 천장 안
+  }
   return out;
 }
 

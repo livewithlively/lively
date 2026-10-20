@@ -259,7 +259,7 @@ export async function serveAppServer(req: express.Request, res: express.Response
         logger.warn({ app: t.app.id, fn: row.function_name, alias, code: e.code, status: e.status }, "[app-front-server] 앱 서버 함수를 부르지 못했다");
         if (e.code === "TooManyRequestsException") return failReply(req, res, 503, "app_server_throttled", "앱 서버가 지금 바쁩니다", "잠시 뒤 다시 해 주세요.", { "Retry-After": "5" });
         if (e.code === "ResourceNotFoundException") return failReply(req, res, 503, "app_server_missing", "앱 서버를 찾지 못했습니다", "앱을 만든 사람이 서버를 다시 올려야 합니다(app_server_deploy).");
-        if (e.code === "Timeout") return failReply(req, res, 504, "app_server_timeout", "앱 서버가 제때 답하지 않았습니다", `요청 하나는 ${policy.timeout_s}초까지입니다 — 더 긴 일은 /jobs 로 넘겨야 합니다.`);
+        if (e.code === "Timeout") return failReply(req, res, 504, "app_server_timeout", "앱 서버가 제때 답하지 않았습니다", `요청 하나는 ${policy.timeout_s}초까지입니다 — 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘겨야 합니다.`);
       } else {
         logger.warn({ app: t.app.id, err: (e as Error)?.message }, "[app-front-server] 앱 서버 호출 실패");
       }
@@ -275,11 +275,21 @@ export async function serveAppServer(req: express.Request, res: express.Response
       logger.warn({ app: t.app.id, fn: row.function_name, alias, type: le.type, status: rep?.status }, "[app-front-server] 앱 서버가 응답을 시작하지 못했다");
       //  요청 하나가 함수 시간을 넘겼다 — 앞머리 전에 넘기면 이 길로 온다(2026-10-16 AWS 실측: errorType Sandbox.Timedout · REPORT Status: timeout).
       if (rep?.status === "timeout" || le.type === "Sandbox.Timedout") {
-        return failReply(req, res, 504, "app_server_timeout", "앱 서버가 제때 답하지 않았습니다", `요청 하나는 ${policy.timeout_s}초까지입니다 — 더 긴 일은 /jobs 로 넘겨야 합니다.`);
+        return failReply(req, res, 504, "app_server_timeout", "앱 서버가 제때 답하지 않았습니다", `요청 하나는 ${policy.timeout_s}초까지입니다 — 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘겨야 합니다.`);
       }
       return failReply(req, res, 502, "app_server_error", "앱 서버가 응답하지 못했습니다",
         le.type === "Runtime.ExitError" ? "서버 프로그램이 요청을 처리하다 끝났습니다. 앱을 만든 사람이 서버 기록을 확인해야 합니다."
           : `서버가 오류로 끝났습니다(${le.type ?? rep?.errorType ?? "까닭 모름"}).`);
+    }
+    //  #4486 사람 요청 시간 — 함수 시간이 작업 시간(15분)이 된 뒤로는 함수 안 검사 층이 요청 상한에서 끊고 504 를 낸다(x-lively-guard: timeout).
+    //   앞머리 전에 넘긴 것과 같은 안내(화면이면 HTML)로 바꿔 답한다 — 남은 흐름(검사 층의 JSON)은 읽어 버리고 셈한다.
+    if (start.prelude.headers["x-lively-guard"] === "timeout") {
+      let done: Complete | null = null;
+      for await (const ev of start.rest) if (ev.type === "complete") { done = ev; break; }
+      const rep = done ? parseReport(done.log) : null;
+      count({ billedMs: rep?.billedMs ?? Date.now() - t0, error: true });
+      return failReply(req, res, 504, "app_server_timeout", "앱 서버가 제때 답하지 않았습니다",
+        `요청 하나는 ${policy.timeout_s}초까지입니다 — 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘겨야 합니다.`);
     }
     const { headers, cookies } = responseHeadersOf(start.prelude);
     res.status(start.prelude.statusCode);

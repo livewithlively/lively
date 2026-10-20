@@ -10,7 +10,16 @@
 //    const app = express();
 //    app.use(livelyIdentity());                            // 들어온 요청의 사람 신원(X-Lively-Identity)을 그 요청의 DB 호출에 싣는다
 //    app.get("/api/contacts", async (_req, res) => res.json(await db.select().from(schema.contacts)));
-//    app.get("/api/me", (req, res) => res.json(livelyMember(req)));   // 이 요청의 사람 {id, name, variant}(한글 id · 이름도 풀어서)
+//    app.get("/api/me", (req, res) => res.json(livelyMember(req)));   // 이 요청의 사람 {id, name, variant, job}(한글 id · 이름도 풀어서)
+//
+//  백그라운드 작업(#4486 — 요청 하나는 30초, 작업은 15분까지 · 같은 앱 코드의 라우트를 라이블리가 뒤에서 부른다):
+//    const jobs = livelyJobs();                            // 환경변수 LIVELY_API_URL · LIVELY_APP_TOKEN · 신원은 livelyIdentity() 가 실은 것
+//    app.post("/api/transcribe", async (req, res) => res.status(202).json(await jobs.start("/api/jobs/transcribe", { file: req.body.file })));
+//    app.post("/api/jobs/transcribe", async (req, res) => {        // 작업 라우트 — 일을 다 끝낸 뒤 답한다(답한 뒤의 일은 멈춘다)
+//      const text = await callTranscribeApi(req.body.file);        //  여기서 부르는 DB 는 작업을 시작한 사람 이름으로 쓴다(livelyMember(req).job 이 작업 번호)
+//      await db.insert(schema.transcripts).values({ text });
+//      res.json({ ok: true });                                     //  2xx 면 작업 done · 그 밖은 failed(응답 앞 64KB 가 결과로 남는다)
+//    });
 //
 //  규칙(게이트웨이가 지킨다 — 어기면 오류 문구가 대신 쓸 길을 말한다):
 //   · 표·칸·제약은 매니페스트(lively-app.json data.tables)로만 만든다. SQL 로 CREATE/ALTER 하지 않는다.
@@ -22,7 +31,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "1";
+export const LIVELY_DB_SDK_VERSION = "2";   // 2 = livelyJobs · livelyMember(req).job(#4486)
 const IDENTITY_HEADER = "x-lively-identity";
 
 /** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */
@@ -63,7 +72,56 @@ export function livelyMember(req) {
   const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   const id = one("x-lively-member");
   if (!id) return null;
-  return { id: dec(id), name: dec(one("x-lively-member-name") ?? ""), variant: one("x-lively-variant") === "draft" ? "draft" : "pub" };
+  //  job — 백그라운드 작업이면 그 작업 번호(#4486 — 검사 층이 게이트웨이에 «이 작업 시작» 을 확인받은 뒤 붙인다), 사람이 보낸 요청이면 null.
+  const job = Number(one("x-lively-job"));
+  return { id: dec(id), name: dec(one("x-lively-member-name") ?? ""), variant: one("x-lively-variant") === "draft" ? "draft" : "pub", job: Number.isSafeInteger(job) && job > 0 ? job : null };
+}
+
+// ── 백그라운드 작업(#4486 앱 v2-7) ────────────────────────────────────────────────────────
+/**
+ * 백그라운드 작업 — 이 앱 서버의 라우트 하나를 라이블리가 뒤에서 부르게 한다(요청 하나 30초와 달리 15분까지 · 메모리는 web.server.memory_mb).
+ *  start(route, body, {label, timeout_s, wait}) → {id, status, …} · get(id, {wait}) · list({status, limit}) · cancel(id) · wait(id) — 끝 상태 done · failed · canceled.
+ *  작업 라우트는 POST 로 body(JSON)를 받고, 일을 다 끝낸 뒤 답한다(2xx = done). 그 안의 DB 호출은 작업을 시작한 사람 이름으로 간다(livelyIdentity 그대로).
+ *  신원은 들어온 요청의 것(livelyIdentity · withIdentity)을 싣는다 — 작업은 그 사람으로 돈다. 15분 넘는 일 · AI 에이전트 일은 /_lively/ai/runs 로.
+ *  opts: url(기본 LIVELY_API_URL) · token(기본 LIVELY_APP_TOKEN) · fetch(시험) · identity(() => 신원).
+ */
+export function livelyJobs(opts = {}) {
+  const env = typeof process !== "undefined" ? process.env : {};
+  const url = String(opts.url ?? env.LIVELY_API_URL ?? "").replace(/\/+$/, "");
+  const token = opts.token ?? env.LIVELY_APP_TOKEN;
+  const fetchImpl = opts.fetch ?? globalThis.fetch;
+  if (!url) throw new Error("라이블리 주소가 없습니다 — LIVELY_API_URL 환경변수(또는 livelyJobs({ url }))를 주세요");
+  if (!token) throw new Error("앱 토큰이 없습니다 — LIVELY_APP_TOKEN 환경변수(또는 livelyJobs({ token }))를 주세요");
+  async function call(method, path, body) {
+    const headers = { authorization: `Bearer ${token}` };
+    const identity = opts.identity ? opts.identity() : identityStore.getStore()?.identity;
+    if (identity) headers[IDENTITY_HEADER] = identity;
+    if (body !== undefined) headers["content-type"] = "application/json";
+    let res;
+    try { res = await fetchImpl(url + path, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }); }
+    catch (e) { throw new LivelyDbError(`라이블리에 닿지 못했습니다(${url}) — ${e?.message ?? e}`, { status: 0 }); }
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text.slice(0, 500) }; }
+    if (!res.ok) throw new LivelyDbError(String(data?.error ?? data?.message ?? `HTTP ${res.status}`), { status: res.status, body: data });
+    return data;
+  }
+  const q = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v)); const s = p.toString(); return s ? `?${s}` : ""; };
+  const api = {
+    start: (route, body, o = {}) => call("POST", "/api/ui/app-jobs", { route: String(route), body: body === undefined ? {} : body, label: o.label, timeout_s: o.timeout_s, wait: o.wait }),
+    get: (id, o = {}) => call("GET", `/api/ui/app-jobs/${Number(id)}${q({ wait: o.wait })}`),
+    list: (o = {}) => call("GET", `/api/ui/app-jobs${q({ status: o.status, limit: o.limit })}`).then((r) => r?.jobs ?? []),
+    cancel: (id) => call("POST", `/api/ui/app-jobs/${Number(id)}/cancel`, {}),
+    /** 끝날 때까지 25초씩 다시 묻는다(전체 상한 timeout_ms — 기본 17분). */
+    wait: async (id, o = {}) => {
+      const until = Date.now() + (Number(o.timeout_ms) || 17 * 60 * 1000);
+      for (;;) {
+        const j = await api.get(id, { wait: 25 });
+        if (!j || ["done", "failed", "canceled"].includes(j.status) || Date.now() >= until) return j;
+      }
+    },
+  };
+  return api;
 }
 
 /** 미들웨어를 못 쓰는 곳(Next 라우트 · Lambda 핸들러 · 백그라운드)에서 — fn 안의 DB 호출이 그 신원을 싣는다.

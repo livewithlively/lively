@@ -29,6 +29,8 @@ export interface FnConfiguration {
   LastUpdateStatusReason?: string;
   RevisionId?: string;
   VpcConfig?: { VpcId?: string; SubnetIds?: string[] };
+  /** 임시 디스크(/tmp) 크기(MB · 512~10,240) — #4486 앱이 web.server.tmp_mb 로 고른다. 안 주면 512. */
+  EphemeralStorage?: { Size?: number };
 }
 /**
  * 함수 코드를 어디서 받나(#4801). S3ObjectStorageMode — COPY(기본) = Lambda 가 코드를 제 저장소로 복사한다(계정 코드 저장 300GiB 를 쓴다) ·
@@ -75,6 +77,7 @@ export interface CreateFunctionInput {
   Timeout: number;
   Layers: string[];
   Environment: { Variables: Record<string, string> };
+  EphemeralStorage?: { Size: number };
   Description?: string;
   Tags?: Record<string, string>;
   Publish?: boolean;
@@ -89,7 +92,7 @@ export async function updateFunctionCode(c: LambdaCfg, name: string, code: FnCod
 
 export interface UpdateConfigInput {
   Role?: string; Handler?: string; Runtime?: string; MemorySize?: number; Timeout?: number; Layers?: string[];
-  Environment?: { Variables: Record<string, string> }; Description?: string; RevisionId?: string;
+  Environment?: { Variables: Record<string, string> }; EphemeralStorage?: { Size: number }; Description?: string; RevisionId?: string;
 }
 export async function updateFunctionConfiguration(c: LambdaCfg, name: string, input: UpdateConfigInput, deps?: AwsDeps): Promise<FnConfiguration> {
   return jsonOf<FnConfiguration>(await awsCall({ service: "lambda", region: c.region, host: host(c), method: "PUT", path: ["2015-03-31", "functions", name, "configuration"], body: input }, deps));
@@ -210,6 +213,19 @@ export async function invokeStream(c: LambdaCfg, name: string, qualifier: string
     contentType: res.headers.get("x-amzn-remapped-content-type"),
     events: events(),
   };
+}
+
+// ── 비동기로 부르기(#4486 앱 v2-7 백그라운드 작업) — InvocationType=Event · 권한은 lambda:InvokeFunction 그대로 ──
+//  Lambda 가 이벤트를 제 줄에 받아 두고(202) 따로 돌린다 — 부른 쪽은 결과를 받지 않는다(함수 안 검사 층이 게이트웨이에 결과를 보고한다).
+//  이벤트 한도 1MB(https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html). Lambda 는 같은 이벤트를 두 번 보낼 수 있고
+//  함수가 오류로 끝나면 1분 · 2분 뒤 다시 부른다(invocation-async-error-handling) — 그래서 일시 오류에 다시 보내도 된다: 한 작업은 검사 층의
+//  claim(게이트웨이가 한 번만 넘긴다)을 지나야 앱에 닿는다(awsCall 의 다시 하기를 그대로 쓴다).
+export async function invokeAsync(c: LambdaCfg, name: string, qualifier: string, payload: unknown, deps?: AwsDeps): Promise<{ status: number; requestId: string | null }> {
+  const r = await awsCall({
+    service: "lambda", region: c.region, host: host(c), method: "POST", path: ["2015-03-31", "functions", name, "invocations"],
+    query: { Qualifier: qualifier }, body: payload, headers: { "x-amz-invocation-type": "Event" },
+  }, deps);
+  return { status: r.status, requestId: r.headers.get("x-amzn-requestid") };
 }
 
 /** 기록 끝부분의 REPORT 줄 → 시간 · 상태. 줄이 없으면 null(흘려 받기 기록 끝 4KB 안에 늘 있다 — 실측). */

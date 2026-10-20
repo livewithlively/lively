@@ -293,6 +293,33 @@ test("D13b 응답 시작 전 시간 넘김 → 504 app_server_timeout(요청 하
   try { assert.equal((await get(h.port, "/", { "x-lively-identity": ident(), accept: "application/json" })).status, 502); } finally { await h.close(); }
 });
 
+test("D13c #4486 검사 층이 사람 요청 시간에서 끊음(x-lively-guard: timeout 504) → 504 app_server_timeout(fetch 면 JSON · 문서 이동이면 HTML) · 오류로 셈 · 남은 흐름은 읽어 버린다", async () => {
+  const guardCut: Script = { kind: "ok", prelude: { statusCode: 504, headers: { "content-type": "application/json", "x-lively-guard": "timeout" } },
+    body: ["{\"error\":\"app_timeout\"}"], report: "REPORT RequestId: r\tDuration: 30001.00 ms\tBilled Duration: 30002 ms\tStatus: success" };
+  const h = await start(guardCut);
+  try {
+    const r = await get(h.port, "/", { "x-lively-identity": ident(), accept: "application/json" });
+    assert.equal(r.status, 504);
+    const j = JSON.parse(r.body);
+    assert.equal(j.error, "app_server_timeout");
+    assert.match(j.message, /30초까지/);
+    assert.match(j.message, /백그라운드 작업/, "더 긴 일은 백그라운드 작업으로");
+    assert.equal(r.headers["x-lively-guard"], undefined, "검사 층 표지는 밖으로 안 나간다");
+    assert.deepEqual(h.recorded.map((x) => x.r), [{ billedMs: 30002, error: true }]);
+    assert.equal(h.consumed(), true, "남은 흐름을 끝까지 읽었다(자리 · 셈)");
+    const html = await get(h.port, "/", { "x-lively-identity": ident(), accept: "text/html", "sec-fetch-mode": "navigate" });
+    assert.equal(html.status, 504);
+    assert.match(String(html.headers["content-type"]), /text\/html/);
+  } finally { await h.close(); }
+  //  앱 스스로 504 를 냈으면(검사 층 표지 없음) 그대로 넘긴다.
+  const own = await start({ kind: "ok", prelude: { statusCode: 504, headers: { "content-type": "text/plain" } }, body: ["upstream slow"] });
+  try {
+    const r = await get(own.port, "/", { "x-lively-identity": ident() });
+    assert.equal(r.status, 504);
+    assert.equal(r.body, "upstream slow");
+  } finally { await own.close(); }
+});
+
 test("D15 AWS 오류 — 조절 503 · 함수 없음 503 · 시간 초과 504 · 그 밖 502 · fetch 면 JSON", async () => {
   const cases: Array<[unknown, number, string]> = [
     [new AwsError(429, "TooManyRequestsException", "Rate Exceeded"), 503, "app_server_throttled"],

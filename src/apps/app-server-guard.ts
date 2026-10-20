@@ -14,7 +14,19 @@
 //   흘려 보내기 · 쿠키 · 4.5MB 본문 · 7MB 응답 · 위조 · 만료 · 다른 앱 신원 거부 · 앱이 $PORT 를 안 열면 20초 뒤 «did not become ready».
 //
 //  앱이 받는 머리글(계약): x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(한글 id 도 실리게 · SDK livelyMember 가 푼다) ·
-//   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다). 들어온 그 밖의 x-lively-* 는 지운다.
+//   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다) · x-lively-job(백그라운드 작업이면 그 작업 번호 —
+//   #4486 · 없으면 사람이 보낸 요청). 들어온 그 밖의 x-lively-* 는 지운다.
+//
+//  #4486 앱 v2-7 백그라운드 작업(결정 상민 2026-10-20 — 태스크 #4486 댓글 539):
+//   · 게이트웨이가 함수를 비동기로 부를 때 이벤트의 X-Lively-Identity 에 «부르기 신원»(lvjc1.<작업>.<한 번 쓰는 비밀>)을 싣는다. 이 문은 그것을 받으면
+//     앱 코드보다 먼저 게이트웨이(LIVELY_API_URL)에 «이 작업 시작»(POST /api/app-jobs/<작업>/claim · 함수의 앱 서버 토큰 + 그 비밀)을 확인받는다.
+//     게이트웨이는 부른 그 작업 · 그 비밀 · 아직 시작 안 함 · 취소 안 됨일 때만 한 번 넘긴다 — 아니면 앱에 닿기 전에 401 · 409(위조 · 재전송 · AWS 의 중복 전달).
+//   · 넘기면 «돌기 신원»(lvjr1.…)과 작업을 시작한 사람을 받아 앱에 넘긴다(사람 요청과 같은 머리글 + x-lively-job). 앱의 SDK 가 돌기 신원을 다시 실어
+//     게이트웨이를 부른다(그 사람 ∩ 그 사람의 앱 동의 · 작업이 도는 동안만).
+//   · 도는 동안 20초마다 박동(/tick — 취소를 알아챈다) · 작업 시간 상한에서 끊는다 · 앱이 답하면 상태 · 본문 앞 64KB 를 결과로 보고(/result)한 뒤에
+//     함수의 응답을 끝낸다(응답을 끝내면 Lambda 가 환경을 얼려 보고가 못 나간다). 이 응답은 비동기 호출이라 아무도 받지 않는다.
+//   · 사람 요청은 이제 함수 시간(작업 시간 15분)보다 짧은 LIVELY_REQUEST_TIMEOUT_S(요청 상한 · 기본 30초)에서 이 문이 끊는다 — 앞머리 전이면 504(x-lively-guard: timeout),
+//     흘려 보내는 중이면 연결을 끊는다(잘린 응답 — 게이트웨이가 «덜 끝난 응답» 으로 넘긴다). 그 전엔 Lambda 함수 시간이 같은 일을 했다.
 //  ⚠ guardMain 은 `.toString()` 으로 글이 되어 Lambda 안 node 에서 돈다 — **바깥 이름(import · 이 파일의 상수)을 쓰면 안 된다**(빌더와 같은 규율).
 //   검사 규칙은 src/apps/app-identity.ts verifyAppIdentity 와 같아야 한다 — 시험(app-server-guard.test)이 같은 토큰 표로 둘을 대조한다.
 import crypto from "node:crypto";
@@ -23,13 +35,14 @@ import { crc32 } from "../util/crc32.js";
 declare const require: (id: string) => unknown;   // guardMain 이 Lambda 안에서 CommonJS 로 돌 때의 require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 문 판 — 레이어 설명에 들어간다(사람이 보는 표지 · 실제 같고 다름은 내용 지문으로 가른다). */
-export const GUARD_VERSION = 3;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토)
+export const GUARD_VERSION = 4;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토) · 4 = 백그라운드 작업 · 사람 요청 시간 끊기(#4486)
 /** 문이 받는 포트(웹 어댑터 AWS_LWA_PORT) — 앱은 $PORT(8080)에서 받는다. */
 export const GUARD_PORT = 8099;
 export const APP_PORT = 8080;
 /** 준비 판정 경로 — 앱 포트가 열렸을 때만 200. 앱 주소 앞단은 `/_lively/*` 를 앱으로 보내지 않는다. */
 export const GUARD_READY_PATH = "/_lively/guard/ready";
-/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음) · app-bad-response(앱이 읽을 수 없는 답) · error(문 안의 오류).
+/** 문이 붙이는 응답 머리글 — ready(준비 판정) · denied(신원 거부) · app-unreachable(앱에 못 닿음) · app-bad-response(앱이 읽을 수 없는 답) · error(문 안의 오류) ·
+ *  timeout(#4486 사람 요청이 시간 상한을 넘어 문이 끊음) · job-done(#4486 백그라운드 작업을 끝내고 보고함 — 비동기 호출이라 아무도 안 받는다).
  *  시험 호출이 «문이 있다» 를 이것으로 본다. */
 export const GUARD_HEADER = "x-lively-guard";
 /** 레이어 안 경로(/opt 아래). */
@@ -52,6 +65,12 @@ function guardMain(): void {
   const MAX_TTL = 900, SKEW = 30, MAX_LEN = 4096;
   const KID_RE = /^[A-Za-z0-9_-]{1,32}$/, B64_RE = /^[A-Za-z0-9_-]+$/;
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, APP_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+  //  #4486 백그라운드 작업 — app-jobs-plan.ts 의 같은 값(JOB_CALL_PREFIX · JOB_RESULT_MAX). 박동 간격은 claim 이 준다. 사람 요청 시간(초)은 함수 환경에서.
+  const API = String(env.LIVELY_API_URL || "").replace(/\/+$/, "");
+  const APP_TOKEN = String(env.LIVELY_APP_TOKEN || "");
+  const REQ_TIMEOUT_MS = Math.max(0, Math.floor(Number(env.LIVELY_REQUEST_TIMEOUT_S) || 0)) * 1000;
+  const JOB_CALL_RE = /^lvjc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
+  const JOB_RESULT_MAX = 64 * 1024, JOB_BODY_MAX = 2 * 1024 * 1024;
 
   const keys = new Map<string, import("node:crypto").KeyObject>();
   try {
@@ -142,6 +161,10 @@ function guardMain(): void {
       s.once("error", () => done(false));
       return;
     }
+    //  #4486 백그라운드 작업 — 부르기 신원이면 작업 길로(게이트웨이 확인 · 박동 · 결과 보고). 사람 신원 검사(아래)는 타지 않는다.
+    const rawId = String((Array.isArray(req.headers["x-lively-identity"]) ? req.headers["x-lively-identity"][0] : req.headers["x-lively-identity"]) ?? "").trim();
+    const jm = JOB_CALL_RE.exec(rawId);
+    if (jm) { handleJob(req, res, url, Number(jm[1]), jm[2]!); return; }
     const v = verify(req.headers["x-lively-identity"], Math.floor(Date.now() / 1000));
     if ("why" in v) {
       const now = Date.now();
@@ -166,8 +189,22 @@ function guardMain(): void {
     headers["x-lively-member"] = enc(v.claims.sub);
     headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
+    //  #4486 사람 요청 시간 — 함수 시간은 작업 시간(15분)이라 사람 요청은 이 문이 끊는다. 끊은 뒤엔 앱의 늦은 답 · 오류가 응답을 다시 건드리지 않는다(cut).
+    let cut = false;
+    const timer = REQ_TIMEOUT_MS > 0 ? setTimeout(() => {
+      cut = true;
+      try {
+        if (!res.headersSent) {
+          for (const h of res.getHeaderNames()) res.removeHeader(h);
+          sendJson(res, 504, "timeout", { error: "app_timeout", message: `앱 서버가 제때 답하지 않았습니다 — 요청 하나는 ${REQ_TIMEOUT_MS / 1000}초까지입니다. 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘기세요` });
+        } else res.destroy();   // 흘려 보내는 중이었다 — 잘린 응답으로 끝낸다(게이트웨이가 «덜 끝난 응답» 으로 넘긴다)
+      } catch { res.destroy(); }
+      preq.destroy();
+    }, REQ_TIMEOUT_MS) : null;
+    if (timer) { res.on("close", () => clearTimeout(timer)); res.on("finish", () => clearTimeout(timer)); }
     //  앱이 잘못된 응답을 내면(상태 099 · 상태 문구에 제어문자 · 101 전환) 넘기다 던지거나 응답 콜백이 안 온다 — 그때도 매달리지 않고 502 로 답한다(재검토).
     const badApp = (why: string): void => {
+      if (cut) return;
       console.error(`[lively-guard] 앱 응답을 넘기지 못했다(${why})`);
       try {
         if (!res.headersSent) {
@@ -177,6 +214,7 @@ function guardMain(): void {
       } catch { res.destroy(); }   // 그래도 못 쓰면 끊는다 — 매달리지는 않는다
     };
     const preq = http.request({ host: APP_HOST, port: APP_PORT, method: req.method, path: url, headers, agent }, (pres) => {
+      if (cut) { pres.destroy(); return; }
       try {
         const out: string[] = [];
         for (let i = 0; i + 1 < pres.rawHeaders.length; i += 2) {
@@ -195,11 +233,131 @@ function guardMain(): void {
     });
     preq.on("upgrade", (_pres, socket) => { socket.destroy(); badApp("101 프로토콜 전환 — Lambda 는 연결을 넘겨받지 못한다"); });
     preq.on("error", () => {
+      if (cut) return;
       if (!res.headersSent) sendJson(res, 502, "app-unreachable", { error: "app_unreachable", message: "앱 서버에 닿지 못했습니다." });
       else res.destroy();
     });
     res.on("close", () => { if (!res.writableFinished) preq.destroy(); });
     req.pipe(preq);
+  }
+
+  // ── #4486 백그라운드 작업 ──────────────────────────────────────────────────────────────
+  //  게이트웨이 부르기(검사 층 → LIVELY_API_URL). 자격 = 이 함수의 앱 서버 토큰(LIVELY_APP_TOKEN) + 작업 비밀 머리글.
+  type ApiReply = { status: number; json: Record<string, unknown> | null };
+  const callApi = async (path: string, extra: Record<string, string>, body: unknown, timeoutMs: number): Promise<ApiReply> => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(API + path, {
+        method: "POST", signal: ac.signal, body: JSON.stringify(body ?? {}),
+        headers: { "content-type": "application/json", authorization: "Bearer " + APP_TOKEN, "user-agent": "lively-guard", ...extra },
+      });
+      let json: Record<string, unknown> | null = null;
+      try { const j = await r.json(); json = j && typeof j === "object" ? j as Record<string, unknown> : null; } catch { /* 본문 없음 */ }
+      return { status: r.status, json };
+    } finally { clearTimeout(t); }
+  };
+  //  일시 오류(연결 실패 · 5xx · 429)면 몇 번 다시 — 게이트웨이 교대(새 판 반영) 중에도 작업을 잃지 않게. 4xx 는 판정이라 곧바로 돌려준다.
+  const callApiRetry = async (path: string, extra: Record<string, string>, body: unknown, tries: number, timeoutMs: number): Promise<ApiReply> => {
+    let last: ApiReply = { status: 0, json: null };
+    for (let i = 0; i < tries; i++) {
+      try {
+        const r = await callApi(path, extra, body, timeoutMs);
+        if (r.status > 0 && r.status < 500 && r.status !== 429) return r;
+        last = r;
+      } catch (e) { last = { status: 0, json: { error: String((e as Error)?.message ?? e) } }; }
+      if (i < tries - 1) await new Promise((ok) => setTimeout(ok, 500 * 2 ** i));
+    }
+    return last;
+  };
+
+  function handleJob(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: string, id: number, secret: string): void {
+    //  본문을 먼저 다 받는다 — 게이트웨이 확인(claim)이 끝나야 앱으로 넘길 수 있다(작업 본문은 작다 · 상한 job_body_kb).
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (c: Buffer) => { size += c.length; if (size <= JOB_BODY_MAX) chunks.push(c); });
+    req.on("end", () => {
+      if (size > JOB_BODY_MAX) { sendJson(res, 413, "denied", { error: "job_body_too_large" }); return; }
+      runJob(req, res, url, id, secret, Buffer.concat(chunks)).catch((e) => {
+        console.error("[lively-guard] 작업 처리 실패", (e as Error)?.message ?? e);
+        if (!res.headersSent) sendJson(res, 500, "error", { error: "guard_error" }); else res.destroy();
+      });
+    });
+  }
+
+  async function runJob(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: string, id: number, secret: string, body: Buffer): Promise<void> {
+    const t0 = Date.now();
+    if (!API || !APP_TOKEN) { sendJson(res, 401, "denied", { error: "job_unconfigured", message: "이 함수엔 라이블리 주소 · 앱 서버 토큰이 없어 작업을 확인할 수 없습니다" }); return; }
+    //  ① 시작 확인 — 게이트웨이가 한 번만 넘긴다. 아니면 앱에 닿기 전에 끝(위조 · 재전송 · AWS 중복 전달 · 취소).
+    const c = await callApiRetry(`/api/app-jobs/${id}/claim`, { "x-lively-job-secret": secret }, {}, 4, 10_000);
+    const run = c.json && typeof c.json.run === "string" ? c.json.run : "";
+    if (c.status !== 200 || !run) {
+      const why = c.json && typeof c.json.reason === "string" ? c.json.reason : String(c.status);
+      console.error(`[lively-guard] 작업 ${id} 시작 확인 거부(${why})`);
+      const status = c.status === 409 ? 409 : c.status === 401 || c.status === 403 || c.status === 404 ? 401 : 503;
+      sendJson(res, status, status === 503 ? "error" : "denied", { error: status === 409 ? "job_replayed" : status === 401 ? "job_identity_invalid" : "job_claim_unavailable", reason: why });
+      return;
+    }
+    const j = c.json!;
+    const headers: Record<string, string | string[]> = {};
+    for (const [k, val] of Object.entries(req.headers)) {
+      if (val === undefined || HOP.has(k) || k === "content-length") continue;
+      if (k.startsWith("x-lively-")) continue;
+      headers[k] = val;
+    }
+    headers["x-lively-identity"] = run;
+    headers["x-lively-member"] = enc(String(j.member ?? ""));
+    headers["x-lively-member-name"] = enc(String(j.member_name ?? ""));
+    headers["x-lively-variant"] = j.variant === "draft" ? "draft" : "pub";
+    headers["x-lively-job"] = String(id);
+    headers["content-length"] = String(body.length);
+    const timeoutMs = Math.max(1, Math.floor(Number(j.timeout_s) || 900)) * 1000;
+    //  박동 간격은 게이트웨이가 정한다(claim 의 tick_s — app-jobs-plan JOB_TICK_SEC) · 1~60초 밖이면 20초.
+    const tickS = Math.floor(Number(j.tick_s));
+    const tickMs = (tickS >= 1 && tickS <= 60 ? tickS : 20) * 1000;
+    const runHdr = { "x-lively-job-run": run };
+    //  ② 앱으로 — 답을 끝까지 받는다(본문은 앞 64KB 만 남긴다). 시간 상한 · 취소면 끊는다.
+    let outcome = "";
+    let statusCode: number | null = null;
+    let contentType: string | null = null;
+    const kept: Buffer[] = [];
+    let keptBytes = 0, bytes = 0, truncated = false;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (o: string): void => { if (settled) return; settled = true; if (!outcome) outcome = o; clearTimeout(deadline); clearInterval(tick); resolve(); };
+      const preq = http.request({ host: APP_HOST, port: APP_PORT, method: req.method, path: url, headers, agent }, (pres) => {
+        statusCode = pres.statusCode ?? null;
+        const ct = pres.headers["content-type"];
+        contentType = typeof ct === "string" ? ct : null;
+        pres.on("data", (d: Buffer) => {
+          bytes += d.length;
+          const room = JOB_RESULT_MAX - keptBytes;
+          if (room > 0) { const part = d.length > room ? d.subarray(0, room) : d; kept.push(part); keptBytes += part.length; }
+          if (d.length > room) truncated = true;
+        });
+        pres.on("end", () => finish("response"));
+        pres.on("aborted", () => finish("app_unreachable"));
+        pres.on("error", () => finish("app_unreachable"));
+      });
+      preq.on("error", () => finish("app_unreachable"));
+      preq.on("upgrade", (_r, sock) => { sock.destroy(); finish("app_bad_response"); });
+      const deadline = setTimeout(() => { outcome = "timeout"; preq.destroy(); finish("timeout"); }, timeoutMs);
+      //  박동 — 게이트웨이가 취소를 알리거나(cancel) 이미 끝낸 작업이면(409 — 감시가 끝냄) 앱 요청을 끊는다.
+      const tick = setInterval(() => {
+        callApi(`/api/app-jobs/${id}/tick`, runHdr, {}, 10_000).then((r) => {
+          if ((r.status === 200 && r.json && r.json.cancel === true) || r.status === 409) { outcome = "canceled"; preq.destroy(); finish("canceled"); }
+        }, () => { /* 다음 박동에 */ });
+      }, tickMs);
+      try { preq.end(body); } catch { finish("app_bad_response"); }
+    });
+    //  ③ 결과 보고 — 함수의 응답보다 먼저(응답을 끝내면 Lambda 가 환경을 얼린다).
+    const report = {
+      outcome, status_code: statusCode, content_type: contentType, body_b64: kept.length ? Buffer.concat(kept).toString("base64") : null,
+      truncated, bytes, duration_ms: Date.now() - t0,
+    };
+    const r = await callApiRetry(`/api/app-jobs/${id}/result`, runHdr, report, 5, 15_000);
+    if (r.status !== 200) console.error(`[lively-guard] 작업 ${id} 결과 보고 실패(${r.status}) — 게이트웨이 감시가 끝낸다`);
+    sendJson(res, 200, "job-done", { job: id, outcome, reported: r.status === 200 });
   }
   server.keepAliveTimeout = 60_000;
   server.on("clientError", (_e, socket) => { try { socket.destroy(); } catch { /* 이미 닫혔다 */ } });

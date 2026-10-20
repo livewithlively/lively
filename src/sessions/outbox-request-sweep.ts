@@ -153,6 +153,15 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  실행을 끝낸다. 파괴적 동작 없음(DB 행만). ⚠ 테넌트 스코프 — 실행 행은 RLS 로 그 워크스페이스 것만 보인다.
   { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("../ai-runs/live.js").then(async (m) => (await import("../ai-runs/service.js")).sweepAiRuns(await m.liveAiRunDeps())) },
+  // 앱 백그라운드 작업 감시(#4486 앱 v2-7) — 대기 초과 · 부른 뒤 시작 없음(다시 부름) · 박동 없음 · 시간 초과를 끝내고, 자리가 나면 기다린 작업을 함수에 비동기로 부른다.
+  //  파괴적 동작 없음(DB 행 · 함수 부르기만 — 함수 안에서 도는 작업을 멈추지는 못한다). 사람이 없어도 돈다(CP 가 60초마다 테넌트를 부르고, 도는 작업의
+  //  검사 층이 20초마다 박동한다 — 둘 다 요청이라 이 정비를 깨운다). ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
+  { key: "app-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("../apps/app-jobs.js").then((m) => m.sweepAppJobs()) },
+  // 앱 백그라운드 작업 기록 보존(#4486) — 끝난 지 30일이 지난 작업 행(요청 본문 · 결과에 앱 데이터가 실린다)을 행째 지운다. 일 단위라 6시간이면 넉넉하다.
+  //  ⚠ 테넌트 스코프 — 작업 행은 그 워크스페이스 것이다(RLS).
+  { key: "app-job-prune", intervalMs: SIX_HOURS_MS,
+    run: () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,
